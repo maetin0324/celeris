@@ -94,3 +94,11 @@ completed: 2026-11-07
 - 失敗を繰り返す root_done の行に、回数か時間の上限を置く（上限を過ぎたら fallback を諦めて行を閉じ、受信箱に知らせる）。本番で上の「判定の分かれ目」の 2 つ目が出たときに、ADR の付記か新しい ADR で決める。
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+commit「root-done-fix: 修正の前後の計測と本番への移行を進捗に書く」の時点の HEAD で実行した（取り込み・rebase はしていない）。その後の commit はこの進捗ファイルの証拠の節だけを変える。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` → ADR・この進捗ファイル・`crates/task-dispatch/src/root_done_probe.rs`・`crates/task-dispatch/src/dispatcher/cos_chat/root_done.rs`・`crates/task-dispatch/src/dispatcher/tests/cos_chat_root_done.rs` の 5 path だけ。
+- `bash scripts/dev/test-affected.sh` → exit 0（対象は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。nextest 3,505 件 passed・11 件 skipped（452 秒）。repo-health は verdict=pass・new 0・worsened 0。script bundle の SKIP 0 件）
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- `sh scripts/dev/progress-index.sh --check` → ok
+- `cargo nextest run -p task-dispatch -E 'test(root_done) | test(store_span) | test(progress_markdown)'` → 13 件 passed（新しい 2 件を含む）
+- 写しの計測: `sh $TMPDIR/measure.sh wait reviewing 3 before after after before` と `sh $TMPDIR/measure.sh ready ready 1 before after after before`（各 run は `TICK_PROD_DB=$TMPDIR/prod/<variant>.sqlite3 TICK_PROD_TICKS=<n> <試験 binary> --ignored --nocapture --exact prod_copy_tick_steps`）→ 8 run とも exit 0。値は上の表。

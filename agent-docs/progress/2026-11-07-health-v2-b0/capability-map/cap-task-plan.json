@@ -1,0 +1,1855 @@
+{
+ "schema": "celeris.health-v2-b0.capability-map-fragment/1",
+ "base_sha": "5923a76c9aa0ec5a7b3f58abd06b456f2bdaaf93",
+ "group": "cap-task-plan",
+ "capabilities": [
+  {
+   "id": "task-lifecycle",
+   "name": "task lifecycle（作成・状態遷移・reopen・cancel・retry・subtree の一時停止）",
+   "owners": [
+    {
+     "crate": "task-core",
+     "module": "model",
+     "path": "crates/task-core/src/model.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "transition",
+     "path": "crates/task-core/src/transition.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::tasks",
+     "path": "crates/task-core/src/store/tasks.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::transition",
+     "path": "crates/task-core/src/store/transition.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::idempotency",
+     "path": "crates/task-core/src/store/idempotency.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "add",
+     "path": "crates/task-ops/src/add.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "plan",
+     "path": "crates/task-ops/src/plan.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "gate",
+     "path": "crates/task-ops/src/gate.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "comment (reopen)",
+     "path": "crates/task-ops/src/comment.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "retry",
+     "path": "crates/task-ops/src/retry.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "lifecycle",
+     "path": "crates/task-ops/src/lifecycle.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "atomic_state_event",
+     "text": "task の insert と Event::Created は TaskStore::create_task の単一 transaction で書く（ADR-0010 D2）",
+     "evidence_path": "crates/task-ops/src/add.rs"
+    },
+    {
+     "kind": "other",
+     "text": "状態は transition が許す遷移でだけ変わり、不正な遷移は Err で DB を変えない（ADR-0002）",
+     "evidence_path": "crates/task-core/src/transition.rs"
+    },
+    {
+     "kind": "fail_closed",
+     "text": "depends_on に存在しない・failed/cancelled の task があれば何も挿入しない",
+     "evidence_path": "crates/task-ops/src/add.rs"
+    },
+    {
+     "kind": "fail_closed",
+     "text": "cancel/approve 等は expected が現在の status と違えば遷移を試みず Conflict を返す",
+     "evidence_path": "crates/task-ops/src/gate.rs"
+    },
+    {
+     "kind": "other",
+     "text": "reopen は done/failed だけを ready に戻し、cancelled は 409（worktree とブランチを消してあるため）。reopen_with は遷移と also を同じ transaction で書く",
+     "evidence_path": "crates/task-ops/src/comment.rs"
+    },
+    {
+     "kind": "other",
+     "text": "retry は failed/cancelled を非終端へ戻す遷移を足さず、複製の新 task を作る",
+     "evidence_path": "crates/task-ops/src/retry.rs"
+    },
+    {
+     "kind": "restart_replay",
+     "text": "作成・retry の冪等キーは task と同じ transaction で保存し、再送で複製を増やさない",
+     "evidence_path": "crates/task-core/src/store/idempotency.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "http_api",
+     "name": "POST /api/v1/tasks",
+     "path": "crates/task-api/src/handlers.rs"
+    },
+    {
+     "kind": "http_api",
+     "name": "POST /api/v1/tasks/{id}/reopen",
+     "path": "crates/task-api/src/handlers.rs"
+    },
+    {
+     "kind": "http_api",
+     "name": "POST /api/v1/tasks/{id}/cancel",
+     "path": "crates/task-api/src/handlers.rs"
+    },
+    {
+     "kind": "http_api",
+     "name": "POST /api/v1/tasks/{id}/retry",
+     "path": "crates/task-api/src/handlers.rs"
+    },
+    {
+     "kind": "http_api",
+     "name": "POST /api/v1/tasks/{id}/approve",
+     "path": "crates/task-api/src/handlers.rs"
+    },
+    {
+     "kind": "http_api",
+     "name": "POST /api/v1/tasks/{id}/pause|resume",
+     "path": "crates/task-api/src/lifecycle.rs"
+    },
+    {
+     "kind": "store_fn",
+     "name": "TaskStore::create_task",
+     "path": "crates/task-core/src/store/task_store.rs"
+    },
+    {
+     "kind": "store_fn",
+     "name": "TaskStore::apply_transition",
+     "path": "crates/task-core/src/store/task_store.rs"
+    },
+    {
+     "kind": "fn",
+     "name": "task_ops::gate::cancel / comment::reopen / retry::retry_task",
+     "path": "crates/task-ops/src/gate.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "Created",
+     "path": "crates/task-core/src/model/events.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "Transitioned",
+     "path": "crates/task-core/src/model/events.rs"
+    },
+    {
+     "kind": "cli",
+     "name": "celerisctl add / cancel / retry",
+     "path": "crates/celerisctl/src/commands/add.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-core/src/transition/tests.rs",
+     "target": "task-core (lib unittests)",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    },
+    {
+     "path": "crates/task-core/src/store/tests.rs",
+     "target": "task-core (lib unittests)",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    },
+    {
+     "path": "crates/task-ops/src/add/tests.rs",
+     "target": "task-ops (lib unittests)",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/task-ops/src/gate/tests.rs",
+     "target": "task-ops (lib unittests)",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/task-ops/src/retry/tests.rs",
+     "target": "task-ops (lib unittests)",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/task-ops/src/lifecycle/tests.rs",
+     "target": "task-ops (lib unittests)",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/task-api/tests/lifecycle.rs",
+     "target": "task-api::test:lifecycle",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    },
+    {
+     "path": "crates/task-api/tests/task_management.rs",
+     "target": "task-api::test:task_management",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    },
+    {
+     "path": "crates/task-api/tests/task_idempotency.rs",
+     "target": "task-api::test:task_idempotency",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    }
+   ]
+  },
+  {
+   "id": "execution-plan-adoption",
+   "name": "ExecutionPlan の採用と検証（planner 出力・API・replan）",
+   "owners": [
+    {
+     "crate": "task-core",
+     "module": "execution_plan",
+     "path": "crates/task-core/src/execution_plan.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "execution_plan::validation",
+     "path": "crates/task-core/src/execution_plan/validation.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "execution_plan::plan_limits",
+     "path": "crates/task-core/src/execution_plan/plan_limits.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::execution::plans",
+     "path": "crates/task-core/src/store/execution/plans.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "execution",
+     "path": "crates/task-ops/src/execution.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::planner_flow",
+     "path": "crates/task-dispatch/src/dispatcher/planner_flow.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "fail_closed",
+     "text": "計画は validate_with（D14）を通らなければ採用しない。検証・scheduler は純粋関数で I/O を持たない",
+     "evidence_path": "crates/task-ops/src/execution.rs"
+    },
+    {
+     "kind": "atomic_state_event",
+     "text": "execution_plans・work_units の行と ExecutionPlanned は execution_plan_adopt で同じ transaction に書く",
+     "evidence_path": "crates/task-core/src/store/task_store.rs"
+    },
+    {
+     "kind": "other",
+     "text": "WorkUnit・task の完了は check か reviewer が決め、worker の自己申告だけでは完了にしない（ADR-0072）",
+     "evidence_path": "crates/task-core/src/execution_plan.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "http_api",
+     "name": "POST/GET /api/v1/tasks/{id}/execution-plan",
+     "path": "crates/task-api/src/execution.rs"
+    },
+    {
+     "kind": "http_api",
+     "name": "POST /api/v1/tasks/{id}/execution/decompose",
+     "path": "crates/task-api/src/execution.rs"
+    },
+    {
+     "kind": "store_fn",
+     "name": "TaskStore::execution_plan_adopt / execution_plan_adopt_tree",
+     "path": "crates/task-core/src/store/task_store.rs"
+    },
+    {
+     "kind": "fn",
+     "name": "task_core::execution_plan::validate_with",
+     "path": "crates/task-core/src/execution_plan/validation.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "ExecutionPlanned",
+     "path": "crates/task-core/src/model/events.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "ExecutionHintSet",
+     "path": "crates/task-core/src/model/events.rs"
+    },
+    {
+     "kind": "file",
+     "name": "docs/protocol/execution-plan.schema.json",
+     "path": "docs/protocol/execution-plan.schema.json"
+    },
+    {
+     "kind": "cli",
+     "name": "celerisctl execution plan set|show",
+     "path": "crates/celerisctl/src/commands/execution.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-core/src/execution_plan/tests.rs",
+     "target": "task-core (lib unittests)",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    },
+    {
+     "path": "crates/task-ops/src/execution/tests.rs",
+     "target": "task-ops (lib unittests)",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/task-ops/src/plan/tests.rs",
+     "target": "task-ops (lib unittests)",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/task-api/tests/execution.rs",
+     "target": "task-api::test:execution",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/planning_and_gate.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/finished_plan.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    }
+   ]
+  },
+  {
+   "id": "workunit-scheduling-stage-integration",
+   "name": "WorkUnit の scheduling・状態遷移と工程（段）の統合",
+   "owners": [
+    {
+     "crate": "task-core",
+     "module": "execution_plan::scheduling",
+     "path": "crates/task-core/src/execution_plan/scheduling.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::execution::work_units",
+     "path": "crates/task-core/src/store/execution/work_units.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "execution_scheduler",
+     "path": "crates/task-dispatch/src/execution_scheduler.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::work_units",
+     "path": "crates/task-dispatch/src/dispatcher/work_units.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::phase_integration",
+     "path": "crates/task-dispatch/src/dispatcher/phase_integration.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "integration",
+     "path": "crates/task-dispatch/src/integration.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::write_set_gate",
+     "path": "crates/task-dispatch/src/dispatcher/write_set_gate.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "atomic_state_event",
+     "text": "WU の新しい行と WorkUnitTransitioned は work_unit_transition で書く。execution_scheduler::decide は純粋で、store への書き込みは dispatcher の責務",
+     "evidence_path": "crates/task-dispatch/src/execution_scheduler.rs"
+    },
+    {
+     "kind": "restart_replay",
+     "text": "工程の統合は seq 順の merge --no-ff で、既に入った WU は飛ばし、MERGE_HEAD が残れば abort してやり直す（再起動後も冪等）。衝突は abort して repair WU に回す",
+     "evidence_path": "crates/task-dispatch/src/integration.rs"
+    },
+    {
+     "kind": "lease_exclusion",
+     "text": "expected write-set の重なる WorkUnit は同時に走らせない（ADR-0130）",
+     "evidence_path": "crates/task-dispatch/src/dispatcher/write_set_gate.rs"
+    },
+    {
+     "kind": "other",
+     "text": "ExecutionGated と routing は同じ transaction のまま書く",
+     "evidence_path": "crates/task-dispatch/src/dispatcher/work_units.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "fn",
+     "name": "task_dispatch::execution_scheduler::decide",
+     "path": "crates/task-dispatch/src/execution_scheduler.rs"
+    },
+    {
+     "kind": "fn",
+     "name": "task_core::newly_ready_with",
+     "path": "crates/task-core/src/execution_plan/scheduling.rs"
+    },
+    {
+     "kind": "store_fn",
+     "name": "TaskStore::work_unit_transition",
+     "path": "crates/task-core/src/store/task_store.rs"
+    },
+    {
+     "kind": "http_api",
+     "name": "GET /api/v1/tasks/{id}/work-units/{wu_id}/check-log",
+     "path": "crates/task-api/src/handlers.rs"
+    },
+    {
+     "kind": "http_api",
+     "name": "GET /api/v1/tasks/{id}/execution",
+     "path": "crates/task-api/src/execution.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "WorkUnitTransitioned",
+     "path": "crates/task-core/src/model/events.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "WorkUnitCommitted",
+     "path": "crates/task-core/src/model/events.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "PhaseIntegrated",
+     "path": "crates/task-core/src/model/events.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "RepairScheduled",
+     "path": "crates/task-core/src/model/events.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "AutoReplanRequested",
+     "path": "crates/task-core/src/model/events.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-dispatch/src/execution_scheduler/tests.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/integration/tests.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/work_units.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/stage_reopen.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/integration_ready_race.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/write_set_gate.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/work_unit_dependency_base.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-core/src/execution_plan/tests.rs",
+     "target": "task-core (lib unittests)",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    }
+   ]
+  },
+  {
+   "id": "decisions-plan-gate",
+   "name": "人への決定の要求・plan gate（root 計画の承認）・phase gate",
+   "owners": [
+    {
+     "crate": "task-core",
+     "module": "decision",
+     "path": "crates/task-core/src/decision.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::execution::decisions",
+     "path": "crates/task-core/src/store/execution/decisions.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "tree::approval",
+     "path": "crates/task-core/src/tree/approval.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "decision",
+     "path": "crates/task-ops/src/decision.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "plan_gate",
+     "path": "crates/task-ops/src/plan_gate.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "phase_gate",
+     "path": "crates/task-ops/src/phase_gate.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::planner_flow",
+     "path": "crates/task-dispatch/src/dispatcher/planner_flow.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::auto_leaf",
+     "path": "crates/task-dispatch/src/dispatcher/auto_leaf.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "human_authority",
+     "text": "人の決定が要る gate は決定が記録されるまで先へ進めない。plan gate の approve/replan/withdraw は人の操作で、状態の変更は apply_transition だけ",
+     "evidence_path": "crates/task-ops/src/plan_gate.rs"
+    },
+    {
+     "kind": "atomic_state_event",
+     "text": "回答は decision_resolve_apply の 1 transaction: open の確認、DecisionAnswered と表の行、待っていた unit の再評価、効き目の event を同時に積む",
+     "evidence_path": "crates/task-ops/src/decision.rs"
+    },
+    {
+     "kind": "fail_closed",
+     "text": "回答は決定が今も open のときだけ適用する。効き目は決定の種類と選択肢だけから決まる（answer_effect）",
+     "evidence_path": "crates/task-core/src/decision.rs"
+    },
+    {
+     "kind": "other",
+     "text": "root 計画の承認の要否は store の読み取りと PlanApprovalFacts の純粋判定で決め、LLM を使わない",
+     "evidence_path": "crates/task-core/src/tree/approval.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "http_api",
+     "name": "GET /api/v1/decisions, POST /api/v1/decisions/{id}/answer|withdraw|revise",
+     "path": "crates/task-api/src/decisions.rs"
+    },
+    {
+     "kind": "http_api",
+     "name": "POST /api/v1/tasks/{id}/execution/plan-gate|phase-gate",
+     "path": "crates/task-api/src/execution.rs"
+    },
+    {
+     "kind": "store_fn",
+     "name": "TaskStore::decision_resolve_apply",
+     "path": "crates/task-core/src/store/task_store.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "DecisionRequested",
+     "path": "crates/task-core/src/model/events.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "DecisionAnswered",
+     "path": "crates/task-core/src/model/events.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "DecisionWithdrawn",
+     "path": "crates/task-core/src/model/events.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "PlanApprovalRequested",
+     "path": "crates/task-core/src/model/events.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "PlanGateDecided",
+     "path": "crates/task-core/src/model/events.rs"
+    },
+    {
+     "kind": "file",
+     "name": "docs/protocol/decision.schema.json",
+     "path": "docs/protocol/decision.schema.json"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-core/src/decision/tests.rs",
+     "target": "task-core (lib unittests)",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    },
+    {
+     "path": "crates/task-ops/src/plan_gate.rs",
+     "target": "task-ops (lib unittests)",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/task-ops/src/phase_gate/tests.rs",
+     "target": "task-ops (lib unittests)",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/task-api/tests/decisions.rs",
+     "target": "task-api::test:decisions",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    },
+    {
+     "path": "crates/task-api/tests/cos_plan_conforms.rs",
+     "target": "task-api::test:cos_plan_conforms",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/tree_decisions.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/human_gates.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    }
+   ]
+  },
+  {
+   "id": "recursive-task-tree",
+   "name": "再帰 task 木（子 task の gate・作成・adopt・上限）",
+   "owners": [
+    {
+     "crate": "task-core",
+     "module": "tree",
+     "path": "crates/task-core/src/tree.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "tree::limits",
+     "path": "crates/task-core/src/tree/limits.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "tree::gate",
+     "path": "crates/task-core/src/tree/gate.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "tree::liveness",
+     "path": "crates/task-core/src/tree/liveness.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::execution::tree",
+     "path": "crates/task-core/src/store/execution/tree.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::tree_units",
+     "path": "crates/task-dispatch/src/dispatcher/tree_units.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::child_tasks",
+     "path": "crates/task-dispatch/src/dispatcher/child_tasks.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "tree",
+     "path": "crates/task-ops/src/tree.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "tree_adopt",
+     "path": "crates/task-ops/src/tree_adopt.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "tree_plan",
+     "path": "crates/task-ops/src/tree_plan.rs"
+    }
+   ],
+   "invariants": [
+    {
+     "kind": "budget",
+     "text": "計画の上限（段階数・段階あたりの unit・計画あたりの子 task・max_depth）を超える unit は保留し、上限の余裕は決定（raise-once）でだけ広げる",
+     "evidence_path": "crates/task-core/src/tree/limits.rs"
+    },
+    {
+     "kind": "atomic_state_event",
+     "text": "子 task の挿入・unit の行・親の event は tree_child_create の 1 transaction",
+     "evidence_path": "crates/task-ops/src/tree.rs"
+    },
+    {
+     "kind": "other",
+     "text": "委譲した子 task が終わるまで親 task は完了しない（ADR-0005）",
+     "evidence_path": "crates/task-dispatch/src/dispatcher/child_tasks.rs"
+    },
+    {
+     "kind": "fail_closed",
+     "text": "kind task の unit の repos は親の repos の部分集合でなければ子を作らない（check_task_unit_repos）",
+     "evidence_path": "crates/task-ops/src/tree.rs"
+    }
+   ],
+   "public_ports": [
+    {
+     "kind": "http_api",
+     "name": "GET /api/v1/tasks/{id}/tree, /tree/file",
+     "path": "crates/task-api/src/tree.rs"
+    },
+    {
+     "kind": "store_fn",
+     "name": "TaskStore::tree_child_create",
+     "path": "crates/task-core/src/store/task_store.rs"
+    },
+    {
+     "kind": "fn",
+     "name": "task_core::tree::plan_limit_holds",
+     "path": "crates/task-core/src/tree/limits.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "ChildTaskCreated",
+     "path": "crates/task-core/src/model/events.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "ChildAdopted",
+     "path": "crates/task-core/src/model/events.rs"
+    },
+    {
+     "kind": "event_kind",
+     "name": "UnitGateOverridden",
+     "path": "crates/task-core/src/model/events.rs"
+    }
+   ],
+   "tests": [
+    {
+     "path": "crates/task-core/src/tree/tests.rs",
+     "target": "task-core (lib unittests)",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    },
+    {
+     "path": "crates/task-core/src/tree/r3b_tests.rs",
+     "target": "task-core (lib unittests)",
+     "build_link_secs": 44.52,
+     "cost_source": "test-targets.json build_no_run[task-core].secs"
+    },
+    {
+     "path": "crates/task-ops/src/tree/tests.rs",
+     "target": "task-ops (lib unittests)",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/task-ops/src/tree_view/tests.rs",
+     "target": "task-ops (lib unittests)",
+     "build_link_secs": null,
+     "cost_source": "not measured in stage 1"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/tree.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/tree_gate.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/tree_approval.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-dispatch/src/dispatcher/tests/tree_replan.rs",
+     "target": "task-dispatch (lib unittests)",
+     "build_link_secs": 91.41,
+     "cost_source": "test-targets.json build_no_run[task-dispatch].secs"
+    },
+    {
+     "path": "crates/task-api/tests/task_tree.rs",
+     "target": "task-api::test:task_tree",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    },
+    {
+     "path": "crates/task-api/tests/tree_adopt.rs",
+     "target": "task-api::test:tree_adopt",
+     "build_link_secs": 84.93,
+     "cost_source": "test-targets.json build_no_run[task-api].secs"
+    }
+   ]
+  }
+ ],
+ "shared_state": [
+  {
+   "kind": "sqlite_table",
+   "name": "tasks",
+   "writers": [
+    {
+     "crate": "routing-eval",
+     "module": "manifest",
+     "path": "crates/routing-eval/src/manifest.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::override_op",
+     "path": "crates/task-core/src/chat/override_op.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "delivery",
+     "path": "crates/task-core/src/delivery.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::execution::work_units",
+     "path": "crates/task-core/src/store/execution/work_units.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::migrated_harness",
+     "path": "crates/task-core/src/store/migrated_harness.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::org",
+     "path": "crates/task-core/src/store/org.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::tasks",
+     "path": "crates/task-core/src/store/tasks.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::transition",
+     "path": "crates/task-core/src/store/transition.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "events",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::events",
+     "path": "crates/task-core/src/store/events.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::tasks",
+     "path": "crates/task-core/src/store/tasks.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::transition",
+     "path": "crates/task-core/src/store/transition.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "execution_plans",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::execution::plans",
+     "path": "crates/task-core/src/store/execution/plans.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::execution::repair",
+     "path": "crates/task-core/src/store/execution/repair.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "work_units",
+   "writers": [
+    {
+     "crate": "routing-eval",
+     "module": "manifest",
+     "path": "crates/routing-eval/src/manifest.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::override_op",
+     "path": "crates/task-core/src/chat/override_op.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::events",
+     "path": "crates/task-core/src/store/events.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::execution::work_units",
+     "path": "crates/task-core/src/store/execution/work_units.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::tasks",
+     "path": "crates/task-core/src/store/tasks.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::write_sets",
+     "path": "crates/task-core/src/store/write_sets.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "decisions",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::events",
+     "path": "crates/task-core/src/store/events.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::execution::decisions",
+     "path": "crates/task-core/src/store/execution/decisions.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "runs",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::events",
+     "path": "crates/task-core/src/store/events.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::execution::runs",
+     "path": "crates/task-core/src/store/execution/runs.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "task_idempotency_keys",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::idempotency",
+     "path": "crates/task-core/src/store/idempotency.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "milestones",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::approvals",
+     "path": "crates/task-core/src/store/approvals.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::projects",
+     "path": "crates/task-core/src/store/projects.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "task_unblocks",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::unblocks",
+     "path": "crates/task-core/src/store/unblocks.rs"
+    }
+   ]
+  },
+  {
+   "kind": "sqlite_table",
+   "name": "task_write_hints",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::write_sets",
+     "path": "crates/task-core/src/store/write_sets.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "Created",
+   "writers": [
+    {
+     "crate": "task-api",
+     "module": "changes",
+     "path": "crates/task-api/src/changes.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::approvals",
+     "path": "crates/task-core/src/store/approvals.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::execution::plans",
+     "path": "crates/task-core/src/store/execution/plans.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::execution::tree",
+     "path": "crates/task-core/src/store/execution/tree.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::task_store",
+     "path": "crates/task-core/src/store/task_store.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::tasks",
+     "path": "crates/task-core/src/store/tasks.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "add",
+     "path": "crates/task-ops/src/add.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "Transitioned",
+   "writers": [
+    {
+     "crate": "task-api",
+     "module": "console",
+     "path": "crates/task-api/src/console.rs"
+    },
+    {
+     "crate": "task-api",
+     "module": "cos::basis::review_rework",
+     "path": "crates/task-api/src/cos/basis/review_rework.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "chat::override_op",
+     "path": "crates/task-core/src/chat/override_op.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "execution_plan::scheduling",
+     "path": "crates/task-core/src/execution_plan/scheduling.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "model_router::feedback",
+     "path": "crates/task-core/src/model_router/feedback.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "retry_policy",
+     "path": "crates/task-core/src/retry_policy.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::task_store",
+     "path": "crates/task-core/src/store/task_store.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::tasks",
+     "path": "crates/task-core/src/store/tasks.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::transition",
+     "path": "crates/task-core/src/store/transition.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "transition",
+     "path": "crates/task-core/src/transition.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher",
+     "path": "crates/task-dispatch/src/dispatcher.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::child_tasks",
+     "path": "crates/task-dispatch/src/dispatcher/child_tasks.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::continuation_session",
+     "path": "crates/task-dispatch/src/dispatcher/continuation_session.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::cos_chat::root_done",
+     "path": "crates/task-dispatch/src/dispatcher/cos_chat/root_done.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::planner_flow",
+     "path": "crates/task-dispatch/src/dispatcher/planner_flow.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::project_guard",
+     "path": "crates/task-dispatch/src/dispatcher/project_guard.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::project_wake",
+     "path": "crates/task-dispatch/src/dispatcher/project_wake.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::review_spawn",
+     "path": "crates/task-dispatch/src/dispatcher/review_spawn.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::work_units",
+     "path": "crates/task-dispatch/src/dispatcher/work_units.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "comment",
+     "path": "crates/task-ops/src/comment.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "console",
+     "path": "crates/task-ops/src/console.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "delegate::child_wait",
+     "path": "crates/task-ops/src/delegate/child_wait.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "delivery",
+     "path": "crates/task-ops/src/delivery.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "derive",
+     "path": "crates/task-ops/src/derive.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "gate",
+     "path": "crates/task-ops/src/gate.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "lifecycle",
+     "path": "crates/task-ops/src/lifecycle.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "notify_feed",
+     "path": "crates/task-ops/src/notify_feed.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "phase_gate",
+     "path": "crates/task-ops/src/phase_gate.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "plan_gate",
+     "path": "crates/task-ops/src/plan_gate.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "plan_gate::stall",
+     "path": "crates/task-ops/src/plan_gate/stall.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "project_plan",
+     "path": "crates/task-ops/src/project_plan.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "project_snapshot",
+     "path": "crates/task-ops/src/project_snapshot.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "regate",
+     "path": "crates/task-ops/src/regate.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "root_done",
+     "path": "crates/task-ops/src/root_done.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "stranded::reintegrate",
+     "path": "crates/task-ops/src/stranded/reintegrate.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "tree",
+     "path": "crates/task-ops/src/tree.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "ExecutionPlanned",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "execution_plan::scheduling",
+     "path": "crates/task-core/src/execution_plan/scheduling.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::task_store",
+     "path": "crates/task-core/src/store/task_store.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::write_sets",
+     "path": "crates/task-core/src/store/write_sets.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::planner_flow",
+     "path": "crates/task-dispatch/src/dispatcher/planner_flow.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::review_verdict",
+     "path": "crates/task-dispatch/src/dispatcher/review_verdict.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "decision",
+     "path": "crates/task-ops/src/decision.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "execution",
+     "path": "crates/task-ops/src/execution.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "plan_gate",
+     "path": "crates/task-ops/src/plan_gate.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "plan_gate::stall",
+     "path": "crates/task-ops/src/plan_gate/stall.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "regate",
+     "path": "crates/task-ops/src/regate.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "tree",
+     "path": "crates/task-ops/src/tree.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "ExecutionHintSet",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::planner_flow",
+     "path": "crates/task-dispatch/src/dispatcher/planner_flow.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "decision",
+     "path": "crates/task-ops/src/decision.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "gate",
+     "path": "crates/task-ops/src/gate.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "plan_gate",
+     "path": "crates/task-ops/src/plan_gate.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "plan_gate::stall",
+     "path": "crates/task-ops/src/plan_gate/stall.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "regate",
+     "path": "crates/task-ops/src/regate.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "retry",
+     "path": "crates/task-ops/src/retry.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "WorkUnitTransitioned",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "chat::override_op",
+     "path": "crates/task-core/src/chat/override_op.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::execution::work_units",
+     "path": "crates/task-core/src/store/execution/work_units.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "credential_resume",
+     "path": "crates/task-dispatch/src/credential_resume.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::auto_leaf",
+     "path": "crates/task-dispatch/src/dispatcher/auto_leaf.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::cluster_job_wait",
+     "path": "crates/task-dispatch/src/dispatcher/cluster_job_wait.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::credential_gate",
+     "path": "crates/task-dispatch/src/dispatcher/credential_gate.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::phase_integration",
+     "path": "crates/task-dispatch/src/dispatcher/phase_integration.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::planner_flow",
+     "path": "crates/task-dispatch/src/dispatcher/planner_flow.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::review_verdict",
+     "path": "crates/task-dispatch/src/dispatcher/review_verdict.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::tree_units",
+     "path": "crates/task-dispatch/src/dispatcher/tree_units.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::work_units",
+     "path": "crates/task-dispatch/src/dispatcher/work_units.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::worker_finish",
+     "path": "crates/task-dispatch/src/dispatcher/worker_finish.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "decision",
+     "path": "crates/task-ops/src/decision.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "derive",
+     "path": "crates/task-ops/src/derive.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "execution",
+     "path": "crates/task-ops/src/execution.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "inbox",
+     "path": "crates/task-ops/src/inbox.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "integrate_task::phase",
+     "path": "crates/task-ops/src/integrate_task/phase.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "tree",
+     "path": "crates/task-ops/src/tree.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "tree_adopt",
+     "path": "crates/task-ops/src/tree_adopt.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "tree_plan",
+     "path": "crates/task-ops/src/tree_plan.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "WorkUnitCommitted",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::tree_units",
+     "path": "crates/task-dispatch/src/dispatcher/tree_units.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::work_units",
+     "path": "crates/task-dispatch/src/dispatcher/work_units.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "plan_gate::stall",
+     "path": "crates/task-ops/src/plan_gate/stall.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "PhaseIntegrated",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::phase_integration",
+     "path": "crates/task-dispatch/src/dispatcher/phase_integration.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "root_done",
+     "path": "crates/task-ops/src/root_done.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "RepairScheduled",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::phase_integration",
+     "path": "crates/task-dispatch/src/dispatcher/phase_integration.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::review_verdict",
+     "path": "crates/task-dispatch/src/dispatcher/review_verdict.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "execution",
+     "path": "crates/task-ops/src/execution.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "AutoReplanRequested",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::phase_integration",
+     "path": "crates/task-dispatch/src/dispatcher/phase_integration.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::work_units",
+     "path": "crates/task-dispatch/src/dispatcher/work_units.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::worker_finish",
+     "path": "crates/task-dispatch/src/dispatcher/worker_finish.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "plan_gate::stall",
+     "path": "crates/task-ops/src/plan_gate/stall.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "ExecutionGated",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::planner_flow",
+     "path": "crates/task-dispatch/src/dispatcher/planner_flow.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::tree_units",
+     "path": "crates/task-dispatch/src/dispatcher/tree_units.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::work_units",
+     "path": "crates/task-dispatch/src/dispatcher/work_units.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "regate",
+     "path": "crates/task-ops/src/regate.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "DecisionRequested",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "chat::override_op",
+     "path": "crates/task-core/src/chat/override_op.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::events",
+     "path": "crates/task-core/src/store/events.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::auto_leaf",
+     "path": "crates/task-dispatch/src/dispatcher/auto_leaf.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::planner_flow",
+     "path": "crates/task-dispatch/src/dispatcher/planner_flow.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::tree_units",
+     "path": "crates/task-dispatch/src/dispatcher/tree_units.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::worker_finish",
+     "path": "crates/task-dispatch/src/dispatcher/worker_finish.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "tree_plan",
+     "path": "crates/task-ops/src/tree_plan.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "DecisionAnswered",
+   "writers": [
+    {
+     "crate": "task-api",
+     "module": "cos::basis",
+     "path": "crates/task-api/src/cos/basis.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::events",
+     "path": "crates/task-core/src/store/events.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::auto_leaf",
+     "path": "crates/task-dispatch/src/dispatcher/auto_leaf.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::planner_flow",
+     "path": "crates/task-dispatch/src/dispatcher/planner_flow.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::project_wake",
+     "path": "crates/task-dispatch/src/dispatcher/project_wake.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "decision",
+     "path": "crates/task-ops/src/decision.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "DecisionWithdrawn",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "chat::override_op",
+     "path": "crates/task-core/src/chat/override_op.rs"
+    },
+    {
+     "crate": "task-core",
+     "module": "store::events",
+     "path": "crates/task-core/src/store/events.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "decision",
+     "path": "crates/task-ops/src/decision.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "tree_plan",
+     "path": "crates/task-ops/src/tree_plan.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "PlanApprovalRequested",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::planner_flow",
+     "path": "crates/task-dispatch/src/dispatcher/planner_flow.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "plan_gate",
+     "path": "crates/task-ops/src/plan_gate.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "PlanGateDecided",
+   "writers": [
+    {
+     "crate": "task-api",
+     "module": "cos::basis::plan_conforms",
+     "path": "crates/task-api/src/cos/basis/plan_conforms.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::project_wake",
+     "path": "crates/task-dispatch/src/dispatcher/project_wake.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "plan_gate",
+     "path": "crates/task-ops/src/plan_gate.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "ChildTaskCreated",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::events",
+     "path": "crates/task-core/src/store/events.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::tree_units",
+     "path": "crates/task-dispatch/src/dispatcher/tree_units.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "tree",
+     "path": "crates/task-ops/src/tree.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "ChildAdopted",
+   "writers": [
+    {
+     "crate": "task-core",
+     "module": "store::events",
+     "path": "crates/task-core/src/store/events.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "tree_adopt",
+     "path": "crates/task-ops/src/tree_adopt.rs"
+    }
+   ]
+  },
+  {
+   "kind": "event_kind",
+   "name": "UnitGateOverridden",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "dispatcher::auto_leaf",
+     "path": "crates/task-dispatch/src/dispatcher/auto_leaf.rs"
+    },
+    {
+     "crate": "task-ops",
+     "module": "tree_plan",
+     "path": "crates/task-ops/src/tree_plan.rs"
+    }
+   ]
+  },
+  {
+   "kind": "file",
+   "name": "<task_dir>/wu/<key>/repos/<name>/ (WU worktree と branch celeris-wu/<task_id>/<key>)",
+   "writers": [
+    {
+     "crate": "task-dispatch",
+     "module": "integration",
+     "path": "crates/task-dispatch/src/integration.rs"
+    }
+   ]
+  }
+ ],
+ "arch_map_diffs": [
+  {
+   "arch_map_line": 23,
+   "kind": "wrong_owner",
+   "observed": "owner は task-core::execution_plan だけだが、採用の I/O は task-ops::execution（crates/task-ops/src/execution.rs、POST /tasks/{id}/execution-plan）、行の書き込みは task-core::store::execution::plans（crates/task-core/src/store/execution/plans.rs）、planner 出力の採用は task-dispatch::dispatcher::planner_flow にある"
+  },
+  {
+   "arch_map_line": 23,
+   "kind": "missing_test",
+   "observed": "関連試験に crates/task-ops/src/execution/tests.rs と crates/task-api/tests/execution.rs が無い"
+  },
+  {
+   "arch_map_line": 53,
+   "kind": "missing_row",
+   "observed": "WU の状態遷移を決める純粋関数 task-dispatch::execution_scheduler（crates/task-dispatch/src/execution_scheduler.rs、試験 execution_scheduler/tests.rs）の行が地図のどこにも無い"
+  },
+  {
+   "arch_map_line": 78,
+   "kind": "wrong_owner",
+   "observed": "段の統合の git 操作 crates/task-dispatch/src/integration.rs は auto_resolve の行に付記されているだけで、工程統合の行（phase_integration）の entry point に無い。integration/tests.rs も工程統合の行の関連試験に無い"
+  },
+  {
+   "arch_map_line": 116,
+   "kind": "missing_test",
+   "observed": "関連試験に crates/task-core/src/decision/tests.rs と plan_gate.rs の inline 試験（mod tests）が無い。gate/tests.rs は承認・cancel の試験で、決定・plan gate の試験ではない"
+  },
+  {
+   "arch_map_line": 116,
+   "kind": "wrong_owner",
+   "observed": "owner が task-ops だけ。型と効き目（task-core::decision、answer_effect）、表 decisions の書き手（task-core::store::execution::decisions）、要求の発行（task-dispatch::dispatcher::{planner_flow,auto_leaf,tree_units,worker_finish}）が無い"
+  },
+  {
+   "arch_map_line": 57,
+   "kind": "missing_test",
+   "observed": "crates/task-dispatch/src/dispatcher/tests/tree_decisions.rs が関連試験に無い"
+  },
+  {
+   "arch_map_line": 57,
+   "kind": "missing_row",
+   "observed": "dispatcher::auto_leaf（crates/task-dispatch/src/dispatcher/auto_leaf.rs。DecisionRequested・UnitGateOverridden・WorkUnitTransitioned を書く）の行が無い"
+  },
+  {
+   "arch_map_line": 102,
+   "kind": "missing_row",
+   "observed": "task の作成（task-ops::add・plan）、cancel/approve（task-ops::gate）、reopen（task-ops::comment）、retry（task-ops::retry）、subtree の pause/resume（task-ops::lifecycle）の行が task-ops 節に無い"
+  },
+  {
+   "arch_map_line": 20,
+   "kind": "missing_invariant",
+   "observed": "状態機械の行は transition だけを指し、遷移と event を書く store::transition（crates/task-core/src/store/transition.rs）と、遷移を呼ぶ task-ops 層の expected 不一致の Conflict（fail_closed）が書かれていない"
+  }
+ ]
+}

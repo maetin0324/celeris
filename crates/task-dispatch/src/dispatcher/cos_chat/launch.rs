@@ -219,6 +219,8 @@ pub(crate) struct CosChatLaunch {
     /// Per-thread snapshot for the whole run, including its fallback attempts.
     pub(super) run_configs: HashMap<String, CosChatLaunchConfig>,
     pub(super) retries: RouteRetries,
+    /// 枠だけで route を選べず待っている run（`slot_wait.rs`）。
+    pub(super) slot_waits: super::slot_wait::SlotWaits,
     pub running: HashMap<String, tokio::task::JoinHandle<()>>,
     pub(crate) route_reservations: HashMap<
         String,
@@ -250,6 +252,7 @@ impl Dispatcher {
             config,
             run_configs: HashMap::new(),
             retries: Arc::new(Mutex::new(Vec::new())),
+            slot_waits: Default::default(),
             running: HashMap::new(),
             route_reservations: HashMap::new(),
             triage: super::triage::CosTriageState::default(),
@@ -296,6 +299,9 @@ impl Dispatcher {
             .retain(|thread, _| launch.running.contains_key(thread));
         launch.retry_routes(self);
         lap("cos.retry_routes");
+        // 枠待ちの run は、新しい claim より先に（待った順に）選び直す。
+        launch.retry_slot_waits(self);
+        lap("cos.retry_slot_waits");
         // Reconcile stop and ownerless runs before a new claim, so an old
         // process cannot overlap a new one in the same thread.
         launch.control_hook(self);
@@ -335,6 +341,7 @@ impl Dispatcher {
             let retries = launch.retries.lock().unwrap_or_else(|e| e.into_inner());
             launch.run_configs.retain(|thread, _| {
                 launch.running.contains_key(thread)
+                    || launch.slot_waits.values().any(|w| &w.thread_id == thread)
                     || retries.iter().any(|retry| &retry.thread_id == thread)
             });
         }

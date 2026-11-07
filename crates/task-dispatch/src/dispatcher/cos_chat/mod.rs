@@ -14,3 +14,4 @@ pub mod triage;
 pub(crate) mod workspace_files;
 
 mod routes;
+pub(crate) mod slot_wait;

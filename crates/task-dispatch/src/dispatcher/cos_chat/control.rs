@@ -156,6 +156,10 @@ impl CosChatLaunch {
                 {
                     continue;
                 }
+                // 枠待ちの run は worker が無くても所有者がいる（この daemon が tick ごとに選び直す）。
+                if self.slot_waits.contains_key(&run.id) {
+                    continue;
+                }
                 if !dispatcher.accepting_new_work || dispatcher.orphan_takeover.is_none() {
                     continue;
                 }

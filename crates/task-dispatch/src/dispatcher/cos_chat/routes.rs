@@ -179,6 +179,15 @@ impl CosChatLaunch {
             ..Default::default()
         };
         let (outcome, trace) = dispatcher.select_cos_route_from(&input, first);
+        // ADR 2026-11-06-cos-run-launch-accounting-and-drain D2: 除外理由が全部「枠」なら失敗にせず待つ。
+        // 理由は `RouteTrace` の構造化理由で決める（文字列は見ない）。起動済みの run の代替経路は従来どおり。
+        if previous.is_none()
+            && let Err(failure) = &outcome
+            && crate::dispatcher::route_select::slot_only_wait(failure, &trace)
+        {
+            self.hold_slot_wait(run, thread, first, now);
+            return;
+        }
         let metadata = trace.metadata(&input, outcome.as_ref().ok(), outcome.as_ref().err());
         let failover = previous.clone();
         let result = match outcome {

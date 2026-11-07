@@ -9,7 +9,7 @@ use task_core::chat::{
 };
 use task_worker::fake::FakeAdapter;
 
-fn fixture(
+pub(super) fn fixture(
     command: Vec<String>,
     max_cos_runs: usize,
 ) -> (
@@ -55,11 +55,11 @@ fn fixture(
     (dir, store, d)
 }
 
-fn thread(store: &SqliteStore, key: &str) -> String {
+pub(super) fn thread(store: &SqliteStore, key: &str) -> String {
     crate::test_support::project_cos_thread(store, key)
 }
 
-fn post(store: &SqliteStore, thread: &str, key: &str) {
+pub(super) fn post(store: &SqliteStore, thread: &str, key: &str) {
     store
         .chat_message_post(
             thread,
@@ -76,7 +76,7 @@ fn post(store: &SqliteStore, thread: &str, key: &str) {
         .expect("post");
 }
 
-async fn join(d: &mut Dispatcher, thread: &str) {
+pub(super) async fn join(d: &mut Dispatcher, thread: &str) {
     let task = d
         .cos_chat_launch
         .as_mut()
@@ -87,7 +87,7 @@ async fn join(d: &mut Dispatcher, thread: &str) {
     task.await.expect("worker did not panic");
 }
 
-fn active_run(store: &SqliteStore, thread: &str) -> task_core::chat::ChatRun {
+pub(super) fn active_run(store: &SqliteStore, thread: &str) -> task_core::chat::ChatRun {
     let id = store
         .chat_thread_get(thread)
         .expect("thread")
@@ -603,7 +603,7 @@ async fn cos_chat_run_control_pending_side_effect_waits_for_human() {
     join(&mut d, &t).await;
 }
 
-fn runs(store: &SqliteStore, thread: &str) -> Vec<task_core::chat::ChatRun> {
+pub(super) fn runs(store: &SqliteStore, thread: &str) -> Vec<task_core::chat::ChatRun> {
     let messages = store
         .chat_message_list(
             thread,

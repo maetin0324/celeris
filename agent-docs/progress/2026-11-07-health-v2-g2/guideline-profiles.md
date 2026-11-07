@@ -23,7 +23,8 @@ unit `profiles`（G2 の工程 write「汎用規約本文と Celeris profile の
 - 受け入れ条件 0 の検査（両 profile の `profile.validate`・`[review]` の有無・必須 7 class）→ `ok`、exit 0
 - `python3 -m unittest discover -s scripts/tests -p 'test_repo_health*.py'` → 62 件 OK、exit 0
 - `bash scripts/dev/check-health.sh` → exit 1。report の要点: verdict fail、`fail_grade=1 new=1 worsened=0 existing=716`。fail の rule は `policy.changed` だけで、変わった policy の file は `health/profile.py`・`profiles/celeris.toml`・`profiles/default.toml` の 3 件。ほかの必須 rule（arch-map.*・doc.links・adr.numbers・progress.index・human-text・source-size）は pass。
-- Python と TOML だけの変更なので cargo の試験・clippy・fmt は走らせていない（`test-affected.sh` は repo_health の Python 試験を上と同じく走らせる）。
+- `bash scripts/dev/test-affected.sh` → exit 1。最初に `check-health.sh` を呼び、同じ `policy.changed` で止まる（`--list` の対象 crate は 0 件）。
+- Python と TOML だけの変更なので cargo の clippy・fmt は走らせていない。
 
 ## 未解決
 - `git merge-base HEAD main` から HEAD の差分には、親 task の ADR と survey（`agent-docs/` の 3 file）も入る。親がまだ main に入っていないため。

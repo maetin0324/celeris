@@ -427,6 +427,48 @@ pub enum Event {
         timed_out: bool,
         pass: bool,
     },
+    /// ADR 2026-11-07-health-review-integration D3.5: risk が `high`・`unknown` の計画を採用の前に設計 review に
+    /// 回した。`plan` は計画の本文、`plan_sha256` はその JSON の SHA-256（`design_review::plan_sha256`）。
+    /// 同じ `plan_sha256` の `DesignReviewed` が無い間が「設計 review 待ち」で、ほかの表・列は持たない（I9）。
+    /// `policy_sha256` は判定に使った review 方針の `definition_sha256`（方針を読めない `unknown` では無い）。
+    /// 状態は変えない（`replay` は無視する）。
+    DesignReviewRequested {
+        plan_sha256: String,
+        plan: Box<crate::execution_plan::ExecutionPlanSpec>,
+        risk: crate::design_review::RiskAssessment,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        policy_sha256: Option<String>,
+    },
+    /// D3.5: 設計 review の reviewer run（`review_run`）の判定。`pass` なら同じ `plan_sha256` の
+    /// `DesignReviewRequested.plan` を採用し、不合格なら replan する。`findings` は reviewer の
+    /// `review.json` の `design.findings`（wire 型 `task_worker::protocol::HealthFindingOut` の JSON の写し。
+    /// task-core は task-worker に依存しないので型は wire 側が正本）。状態は変えない（`replay` は無視する）。
+    DesignReviewed {
+        plan_sha256: String,
+        review_run: String,
+        pass: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        findings: Vec<serde_json::Value>,
+    },
+    /// D4.3: final review の reviewer run（`review_run`）に渡す 1 repo の health の材料を作った。`input` は
+    /// `task_worker::protocol::HealthRepoInput` の JSON の写し（型は wire 側が正本）。同じ
+    /// `(repo_id, target_sha, reviewed_sha, definition_sha256)` の event があれば作り直さず `input` を使う
+    /// （I5）。状態は変えない（`replay` は無視する）。
+    HealthReviewInputBuilt {
+        review_run: String,
+        repo_id: String,
+        target_sha: String,
+        reviewed_sha: String,
+        definition_sha256: String,
+        input: serde_json::Value,
+    },
+    /// D4.4: final review で 1 repo の health の材料を作らなかった理由（remote workspace・review 方針が
+    /// `absent` など。`ReviewRequest.health` はその repo の分を持たない）。状態は変えない（`replay` は無視する）。
+    HealthReviewInputSkipped {
+        review_run: String,
+        repo_id: String,
+        reason: String,
+    },
     ApprovalRequested,
     ApprovalDecided {
         by: String,

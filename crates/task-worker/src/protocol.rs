@@ -67,6 +67,11 @@ pub struct ReviewRequest {
     /// にだけ渡す。`None`（WU の review・review 方針の無い repo・旧 daemon）の `request.json` は従来と同じ。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health: Option<HealthReviewInput>,
+    /// ADR 2026-11-07-health-review-integration D3.5: 採用前の設計 review の run だけ `Some`（`summary`・
+    /// `evidence`・`criteria` は空）。`RunContext` の直下でなくここに置く（欄の数の上限。進捗
+    /// `2026-11-07-health-v2-g2/dispatch/risk-events.md`）。final review・WU の review では `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design: Option<DesignReviewRequest>,
 }
 
 /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D6: reviewer に見せる検出 1 件（`Event::WorkerPolicyViolation` の写し）。
@@ -1032,6 +1037,10 @@ pub struct ReviewOutput {
     /// review では必須（無ければ不合格。I7）。旧 reviewer の `review.json` は省略で読める。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub health: Option<HealthVerdictOut>,
+    /// ADR 2026-11-07-health-review-integration D3.5: 設計 review の判定。`ReviewRequest.design` を渡した
+    /// review だけが書く。旧 reviewer の `review.json` は省略で読める。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design: Option<DesignVerdictOut>,
 }
 
 /// celeris → ワーカーの `run` メッセージ（1 行）。`{"type":"run", ...}`。
@@ -1344,6 +1353,8 @@ pub fn schema_value() -> serde_json::Value {
 
 mod campaign;
 pub use campaign::{CampaignRunPin, CampaignSelected};
+mod design_review;
+pub use design_review::{DesignReviewRequest, DesignVerdictOut};
 mod health;
 pub use health::{
     DiffStat, HealthFindingCounts, HealthFindingKind, HealthFindingOut, HealthFindingsSummary,

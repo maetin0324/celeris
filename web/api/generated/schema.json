@@ -12320,6 +12320,126 @@
           "type": "object"
         },
         {
+          "description": "ADR 2026-11-07-health-review-integration D3.5: risk が `high`・`unknown` の計画を採用の前に設計 review に\n回した。`plan` は計画の本文、`plan_sha256` はその JSON の SHA-256（`design_review::plan_sha256`）。\n同じ `plan_sha256` の `DesignReviewed` が無い間が「設計 review 待ち」で、ほかの表・列は持たない（I9）。\n`policy_sha256` は判定に使った review 方針の `definition_sha256`（方針を読めない `unknown` では無い）。\n状態は変えない（`replay` は無視する）。",
+          "properties": {
+            "plan": {
+              "$ref": "#/$defs/ExecutionPlanSpec"
+            },
+            "plan_sha256": {
+              "type": "string"
+            },
+            "policy_sha256": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "risk": {
+              "$ref": "#/$defs/RiskAssessment"
+            },
+            "type": {
+              "const": "design_review_requested",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "plan_sha256",
+            "plan",
+            "risk"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "D3.5: 設計 review の reviewer run（`review_run`）の判定。`pass` なら同じ `plan_sha256` の\n`DesignReviewRequested.plan` を採用し、不合格なら replan する。`findings` は reviewer の\n`review.json` の `design.findings`（wire 型 `task_worker::protocol::HealthFindingOut` の JSON の写し。\ntask-core は task-worker に依存しないので型は wire 側が正本）。状態は変えない（`replay` は無視する）。",
+          "properties": {
+            "findings": {
+              "items": true,
+              "type": "array"
+            },
+            "pass": {
+              "type": "boolean"
+            },
+            "plan_sha256": {
+              "type": "string"
+            },
+            "review_run": {
+              "type": "string"
+            },
+            "type": {
+              "const": "design_reviewed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "plan_sha256",
+            "review_run",
+            "pass"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "D4.3: final review の reviewer run（`review_run`）に渡す 1 repo の health の材料を作った。`input` は\n`task_worker::protocol::HealthRepoInput` の JSON の写し（型は wire 側が正本）。同じ\n`(repo_id, target_sha, reviewed_sha, definition_sha256)` の event があれば作り直さず `input` を使う\n（I5）。状態は変えない（`replay` は無視する）。",
+          "properties": {
+            "definition_sha256": {
+              "type": "string"
+            },
+            "input": true,
+            "repo_id": {
+              "type": "string"
+            },
+            "review_run": {
+              "type": "string"
+            },
+            "reviewed_sha": {
+              "type": "string"
+            },
+            "target_sha": {
+              "type": "string"
+            },
+            "type": {
+              "const": "health_review_input_built",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "review_run",
+            "repo_id",
+            "target_sha",
+            "reviewed_sha",
+            "definition_sha256",
+            "input"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "D4.4: final review で 1 repo の health の材料を作らなかった理由（remote workspace・review 方針が\n`absent` など。`ReviewRequest.health` はその repo の分を持たない）。状態は変えない（`replay` は無視する）。",
+          "properties": {
+            "reason": {
+              "type": "string"
+            },
+            "repo_id": {
+              "type": "string"
+            },
+            "review_run": {
+              "type": "string"
+            },
+            "type": {
+              "const": "health_review_input_skipped",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "review_run",
+            "repo_id",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
           "properties": {
             "type": {
               "const": "approval_requested",
@@ -26229,6 +26349,46 @@
         }
       },
       "type": "object"
+    },
+    "RiskAssessment": {
+      "description": "D3.3: risk の判定の結果。`reasons` は判定の根拠の機械向けの語（`review_policy_absent`・\n`review_policy_unavailable:<要約>`・`path_class:<class>+<欄>`・`new_fallback`・`brief_absent_human_plan`）。\n高 risk の path に触れない `Low` は空。",
+      "properties": {
+        "level": {
+          "$ref": "#/$defs/RiskLevel"
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "level"
+      ],
+      "type": "object"
+    },
+    "RiskLevel": {
+      "description": "D3.3: 計画の risk。`High` と `Unknown` は採用の前に設計 review に回す（D3.5）。`Low` と `None` は\n今までどおり採用する（D3.6）。",
+      "oneOf": [
+        {
+          "enum": [
+            "low",
+            "high"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "none",
+          "description": "review 方針の無い repo（`review_policy_absent`）。",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "review 方針を読めなかった（fail closed。`High` と同じく設計 review に回す）。",
+          "type": "string"
+        }
+      ]
     },
     "RoleConfigView": {
       "description": "`[[roles]]` 1 行の要約（ADR-0016 D1）。`instructions` は**本文を出さない**（プロンプトの中身は設定ファイルにだけ置く）。",

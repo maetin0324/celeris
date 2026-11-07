@@ -13,6 +13,9 @@ thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 schemars = "1"
+# ADR 2026-11-07-health-review-integration D3.3: review 方針の高 risk の path class（`re.search` の正規表現）を
+# 計画の write path に当てる。
+regex = "1"
 # ADR-0043 D4（Phase 52）: リポジトリの中の設定 `.config/celeris/workspace.toml` を読む。
 toml = "0.9"
 # ADR-0131 D1: cron job の IANA タイムゾーン計算（host の /usr/share/zoneinfo を読む）。

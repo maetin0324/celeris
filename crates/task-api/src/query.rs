@@ -137,7 +137,7 @@ pub(crate) fn parse_snake<T: DeserializeOwned>(what: &str, value: &str) -> Resul
 }
 
 /// `Event` の serde の `type` 名（`types` クエリの語彙）。
-pub(crate) const EVENT_TYPES: [&str; 86] = [
+pub(crate) const EVENT_TYPES: [&str; 90] = [
     "browser_updated",
     // ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: subagent 道具・別 LLM CLI/API の起動の検出。
     "worker_policy_violation",
@@ -155,6 +155,11 @@ pub(crate) const EVENT_TYPES: [&str; 86] = [
     "artifact_produced",
     "worker_finished",
     "review_verdict",
+    // ADR 2026-11-07-health-review-integration D3.5・D4.3・D4.4: 設計 review の依頼と判定、final review の health の材料。
+    "design_review_requested",
+    "design_reviewed",
+    "health_review_input_built",
+    "health_review_input_skipped",
     "review_target_synced",
     "review_target_advanced",
     // ADR-0120 D5: review 前同期の衝突の IntegrationRepair（起票・解消・打ち切り）。
@@ -283,6 +288,10 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::WorkerFinished { .. } => "worker_finished",
         Event::ReviewVerdict { .. } => "review_verdict",
         Event::ReviewCommandChecked { .. } => "review_command_checked",
+        Event::DesignReviewRequested { .. } => "design_review_requested",
+        Event::DesignReviewed { .. } => "design_reviewed",
+        Event::HealthReviewInputBuilt { .. } => "health_review_input_built",
+        Event::HealthReviewInputSkipped { .. } => "health_review_input_skipped",
         Event::ReviewTargetSynced { .. } => "review_target_synced",
         Event::RequiredChecksEvaluated { .. } => "required_checks_evaluated",
         Event::ReviewTargetAdvanced { .. } => "review_target_advanced",

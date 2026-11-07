@@ -981,6 +981,8 @@ impl ReviewHumanContext {
     /// reviewer run の `context.review`。対象 run の `done` の内容と人の文脈を 1 つにする。
     fn into_request(self, subject: &ReviewSubject, criteria: &[usize]) -> ReviewRequest {
         ReviewRequest {
+            // ADR 2026-11-07-health-review-integration D3.5: 設計 review の run だけが持つ（ここは final review）。
+            design: None,
             summary: subject.summary.clone(),
             evidence: subject.evidence.clone(),
             criteria: criteria.to_vec(),

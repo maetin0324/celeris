@@ -919,7 +919,7 @@ run は止めない。同じ内容は `worker_progress`（`kind = status`・`err
 `checkpoint_saved`、`execution_planned`、`work_unit_transitioned`、`work_unit_spec_overridden`、`work_unit_checks_failed`、
 `execution_gated`、`execution_hint_set`、`repair_scheduled`、`quota_estimated`、`pause_points_resolved`、`phase_reported`、
 `project_plan_proposed`、`project_plan_decided`、`child_task_created`、`child_adopted`、`unit_gate_overridden`、
-`decision_requested`、`decision_answered`、`decision_withdrawn`、`plan_approval_requested`、`stall_detected`、`delivery_skipped`。
+`decision_requested`、`decision_answered`、`decision_withdrawn`、`plan_approval_requested`、`stall_detected`、`delivery_skipped`、`design_review_requested`、`design_reviewed`、`health_review_input_built`、`health_review_input_skipped`。
 主なものの形:
 
 - `approvals_withdrawn`（`{approval_ids, task_status, reason}`）: タスクが終端になり、未決の認可の要求
@@ -933,6 +933,14 @@ run は止めない。同じ内容は `worker_progress`（`kind = status`・`err
 - `assigned`（`{node, score, reason}`。ADR-0046 D5）: `assignee` が無いタスクの担当を matching が決定的に決めたときに
   1 件だけ付く。`node` は決まった担当の id、`score` はタスクの `skills` とその担当の実効 `skills` の重なりの件数、
   `reason` は人が読める理由の文。GUI のタスク画面の「なぜこの担当か」はこれを表示する。
+- `design_review_requested`（`{plan_sha256, plan, risk: {level, reasons?}, policy_sha256?}`）・`design_reviewed`
+  （`{plan_sha256, review_run, pass, findings?}`）: risk が `high`・`unknown` の計画を採用の前に設計 review に回した・その
+  判定（[ADR 2026-11-07 health-review-integration](../../../agent-docs/adr/2026-11-07-health-review-integration.md) D3.5）。
+  `level` は `none` / `low` / `high` / `unknown`。同じ `plan_sha256` の `design_reviewed` が無い間が設計 review 待ち。
+  `findings` は reviewer の `review.json` の `design.findings` の写し。状態は変えない。
+- `health_review_input_built`（`{review_run, repo_id, target_sha, reviewed_sha, definition_sha256, input}`）・
+  `health_review_input_skipped`（`{review_run, repo_id, reason}`）: final review に渡す 1 repo の health の材料を作った・
+  作らなかった理由（同 ADR D4.3・D4.4）。`input` は worker protocol の `HealthRepoInput` の写し。状態は変えない。
 
 `work_unit_committed` / `phase_integrated` / `work_units_serialized` は応答の `items[]` には現れるが、`types` の語彙には無い（指定すると 400）。
 

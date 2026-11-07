@@ -56,6 +56,7 @@ fn sample_input() -> HealthReviewInput {
             },
             invariants: BTreeMap::from([("events-append-only".into(), "CLAUDE.md".into())]),
         }],
+        brief: None,
     }
 }
 
@@ -107,6 +108,7 @@ fn health_protocol_review_output_verdict_round_trips() {
                 reason: "threshold change justified".into(),
             }),
         }),
+        design: None,
     };
     let value = serde_json::to_value(&out).unwrap();
     assert_eq!(value["health"]["findings"][0]["kind"], "removal_missing");

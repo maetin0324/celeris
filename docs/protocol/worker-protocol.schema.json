@@ -1637,6 +1637,161 @@
       ],
       "type": "object"
     },
+    "DesignBrief": {
+      "additionalProperties": false,
+      "description": "ADR 2026-11-07-health-review-integration D3.1: 実装前に短く整理する設計 brief。risk の判定\n（`design_review::assess_risk`）は `new_*` の宣言と write path から決まる（D3.3）。",
+      "properties": {
+        "invariants": {
+          "description": "守る不変条件（名前は自由文）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "new_branch": {
+          "description": "新しく足す分岐。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "new_fallback": {
+          "description": "新しく足す fallback・新旧切替（宣言すれば path に依らず高 risk。D3.3）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "new_port": {
+          "description": "新しく足す外への口（CLI・API・wire の欄）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "new_state": {
+          "description": "新しく足す状態（表・列・event・メモリ上の状態）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "options": {
+          "description": "比べた選択肢。2 件以上、`chosen = true` はちょうど 1 件。",
+          "items": {
+            "$ref": "#/$defs/DesignOption"
+          },
+          "type": "array"
+        },
+        "owner": {
+          "description": "原因を直す責務の owner（module・file・subsystem）。空にできない。",
+          "type": "string"
+        },
+        "removals": {
+          "description": "同じ変更で消す旧い仕組み（コード経路・config 欄・API・試験・文書）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reuse": {
+          "description": "再利用する既存の仕組み。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "root_cause": {
+          "description": "症状ではなく直す原因。空にできない。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "root_cause",
+        "owner",
+        "options"
+      ],
+      "type": "object"
+    },
+    "DesignOption": {
+      "additionalProperties": false,
+      "description": "ADR 2026-11-07-health-review-integration D3.1: brief の選択肢。",
+      "properties": {
+        "chosen": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "chosen",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "DesignReviewRequest": {
+      "description": "D3.5: `ReviewRequest.design`。risk が `high`・`unknown` の計画の採用前に dispatcher が作る。",
+      "properties": {
+        "brief": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignBrief"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "計画の設計 brief（人の計画など brief の無い計画では省略）。"
+        },
+        "plan_summary": {
+          "description": "計画の要約（rationale・unit の key と題・write path）。",
+          "type": "string"
+        },
+        "review_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReviewPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "判定に使った base 側の review 方針（読めなかった `unknown` では省略）。"
+        },
+        "risk": {
+          "$ref": "#/$defs/RiskAssessment",
+          "description": "risk の判定と理由（`task_core::design_review::assess_risk`）。"
+        }
+      },
+      "required": [
+        "plan_summary",
+        "risk"
+      ],
+      "type": "object"
+    },
+    "DesignVerdictOut": {
+      "description": "D3.5: `ReviewOutput.design`。`pass = false` なら planner を replan で起こし、`findings` を planner の\nprior に渡す。",
+      "properties": {
+        "findings": {
+          "items": {
+            "$ref": "#/$defs/HealthFindingOut"
+          },
+          "type": "array"
+        },
+        "pass": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "pass"
+      ],
+      "type": "object"
+    },
     "DiffStat": {
       "description": "D4.1: `target_sha..reviewed_sha` の差分の統計。",
       "properties": {
@@ -2534,6 +2689,17 @@
     "HealthReviewInput": {
       "description": "D4.1: `ReviewRequest.health`。dispatcher が candidate SHA ごとに 1 回だけ作る（I5）。",
       "properties": {
+        "brief": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignBrief"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "採用した計画の設計 brief（reviewer は宣言した `removals` が実際に消えたかを確かめる）。brief の無い\n計画・計画の無い task では省略。"
+        },
         "repos": {
           "default": [],
           "description": "repo ごとの材料（task の repos の順）。",
@@ -3451,6 +3617,17 @@
     "ReviewOutput": {
       "description": "`Review` run がワークスペース直下 `artifacts/review.json` に書く出力（ADR-0007 D1/D5）。",
       "properties": {
+        "design": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignVerdictOut"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-11-07-health-review-integration D3.5: 設計 review の判定。`ReviewRequest.design` を渡した\nreview だけが書く。旧 reviewer の `review.json` は省略で読める。"
+        },
         "health": {
           "anyOf": [
             {
@@ -3475,7 +3652,7 @@
       "type": "object"
     },
     "ReviewPolicy": {
-      "description": "D2.4: 解決済みの review 方針。`source = absent`（base に `[review]` が無い）の repo では作らない\n（`RunContext.review_policy = None`）。",
+      "description": "D2.4: 解決済みの review 方針。`source = absent`（base に `[review]` が無い）の repo では作らない\n（`ExecutionPlannerContext.review_policy = None`）。",
       "properties": {
         "definition_sha256": {
           "description": "解決した profile の blob の内容から作った digest（D2.3）。health の材料の再利用の鍵に入る。",
@@ -3592,6 +3769,17 @@
           },
           "type": "array"
         },
+        "design": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DesignReviewRequest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-11-07-health-review-integration D3.5: 採用前の設計 review の run だけ `Some`（`summary`・\n`evidence`・`criteria` は空）。`RunContext` の直下でなくここに置く（欄の数の上限。進捗\n`2026-11-07-health-v2-g2/dispatch/risk-events.md`）。final review・WU の review では `None`。"
+        },
         "evidence": {
           "description": "対象 run の `done.evidence`。",
           "items": {
@@ -3661,6 +3849,46 @@
         "reason"
       ],
       "type": "object"
+    },
+    "RiskAssessment": {
+      "description": "D3.3: risk の判定の結果。`reasons` は判定の根拠の機械向けの語（`review_policy_absent`・\n`review_policy_unavailable:<要約>`・`path_class:<class>+<欄>`・`new_fallback`・`brief_absent_human_plan`）。\n高 risk の path に触れない `Low` は空。",
+      "properties": {
+        "level": {
+          "$ref": "#/$defs/RiskLevel"
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "level"
+      ],
+      "type": "object"
+    },
+    "RiskLevel": {
+      "description": "D3.3: 計画の risk。`High` と `Unknown` は採用の前に設計 review に回す（D3.5）。`Low` と `None` は\n今までどおり採用する（D3.6）。",
+      "oneOf": [
+        {
+          "enum": [
+            "low",
+            "high"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "none",
+          "description": "review 方針の無い repo（`review_policy_absent`）。",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "review 方針を読めなかった（fail closed。`High` と同じく設計 review に回す）。",
+          "type": "string"
+        }
+      ]
     },
     "RoleContext": {
       "description": "`context.role`（ADR-0016 D1 / M3）: タスクの役割と `[[roles]]` の指示文。アダプタはプロンプトの前置きにする。",

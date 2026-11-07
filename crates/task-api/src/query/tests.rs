@@ -213,7 +213,7 @@ fn cluster_job_wait_event_types_match_their_serde_names() {
     }
     let unique: std::collections::BTreeSet<&str> = EVENT_TYPES.iter().copied().collect();
     assert_eq!(unique.len(), EVENT_TYPES.len());
-    assert_eq!(EVENT_TYPES.len(), 86);
+    assert_eq!(EVENT_TYPES.len(), 90);
 }
 
 #[test]
@@ -422,7 +422,7 @@ fn routing_feedback_event_types_match_their_serde_names() {
         assert_eq!(serde_name, event_type_name(&event));
         assert!(EVENT_TYPES.contains(&serde_name), "{serde_name}");
     }
-    assert_eq!(EVENT_TYPES.len(), 86);
+    assert_eq!(EVENT_TYPES.len(), 90);
 }
 
 /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: `WorkerPolicyViolation` の `type` 名が serde の名前・
@@ -533,6 +533,49 @@ fn script_compare_event_types_match_their_serde_names() {
             version: 1,
             actor: "human:web".into(),
             reason: String::new(),
+        },
+    ];
+    for event in events {
+        let value = serde_json::to_value(&event).unwrap();
+        let serde_name = value["type"].as_str().unwrap();
+        assert_eq!(serde_name, event_type_name(&event));
+        assert!(EVENT_TYPES.contains(&serde_name), "{serde_name}");
+    }
+}
+
+/// ADR 2026-11-07-health-review-integration D3.5・D4.3・D4.4: 設計 review と health の材料の Event の `type` 名が
+/// serde の名前・`event_type_name`・`EVENT_TYPES` で一致する。
+#[test]
+fn health_review_event_types_match_their_serde_names() {
+    let plan = task_core::execution_plan::ExecutionPlanSpec::v1("r".into(), Vec::new());
+    let events = vec![
+        Event::DesignReviewRequested {
+            plan_sha256: task_core::design_review::plan_sha256(&plan),
+            plan: Box::new(plan),
+            risk: task_core::design_review::RiskAssessment {
+                level: task_core::design_review::RiskLevel::Unknown,
+                reasons: vec!["review_policy_unavailable:x".into()],
+            },
+            policy_sha256: None,
+        },
+        Event::DesignReviewed {
+            plan_sha256: "p".into(),
+            review_run: "r".into(),
+            pass: true,
+            findings: Vec::new(),
+        },
+        Event::HealthReviewInputBuilt {
+            review_run: "r".into(),
+            repo_id: "agent-platform".into(),
+            target_sha: "a".into(),
+            reviewed_sha: "b".into(),
+            definition_sha256: "d".into(),
+            input: serde_json::json!({}),
+        },
+        Event::HealthReviewInputSkipped {
+            review_run: "r".into(),
+            repo_id: "agent-platform".into(),
+            reason: "review_policy_absent".into(),
         },
     ];
     for event in events {

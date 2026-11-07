@@ -2551,6 +2551,31 @@ export type Event = {
   "timed_out": boolean;
   "type": "review_command_checked";
 } | {
+  "plan": ExecutionPlanSpec;
+  "plan_sha256": string;
+  "policy_sha256"?: string | null;
+  "risk": RiskAssessment;
+  "type": "design_review_requested";
+} | {
+  "findings"?: Array<unknown>;
+  "pass": boolean;
+  "plan_sha256": string;
+  "review_run": string;
+  "type": "design_reviewed";
+} | {
+  "definition_sha256": string;
+  "input": unknown;
+  "repo_id": string;
+  "review_run": string;
+  "reviewed_sha": string;
+  "target_sha": string;
+  "type": "health_review_input_built";
+} | {
+  "reason": string;
+  "repo_id": string;
+  "review_run": string;
+  "type": "health_review_input_skipped";
+} | {
   "type": "approval_requested";
 } | {
   "approved": boolean;
@@ -5255,6 +5280,13 @@ export type ReviewerConfigView = {
   "adapter"?: string | null;
   "tier"?: Tier | null;
 };
+
+export type RiskAssessment = {
+  "level": RiskLevel;
+  "reasons"?: Array<string>;
+};
+
+export type RiskLevel = "low" | "high" | "none" | "unknown";
 
 export type RoleConfigView = {
   "harness"?: string | null;

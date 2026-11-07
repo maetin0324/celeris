@@ -3190,6 +3190,7 @@ name = "task-core"
 version = "0.1.0"
 dependencies = [
  "jiff",
+ "regex",
  "rusqlite",
  "schemars",
  "serde",

@@ -46,3 +46,7 @@ completed: 2026-11-07
 | dispatch_ready.gates | 37 | 38 |
 | dispatch_ready.ready_tasks | 4 | 4 |
 | dispatch_ready.workspaces.is_git_repo | 3 | 3 |
+
+## 検査（提出時の HEAD）
+- `cargo fmt --all -- --check` exit 0、`cargo clippy --workspace -- -D warnings` exit 0、`cargo nextest run -p task-dispatch dispatch_ready_phases` 1 件 pass。
+- `bash scripts/dev/test-affected.sh` は exit 1。落ちたのは repo-health の source-size 1 件だけ（`size.responsibility-growth`: `crates/task-dispatch/src/dispatcher` module の本体の行 35370 が閾値 8000 超で worsened）。この module は既に閾値を超えており、計測の追加で正味 +36 行（新 file `ready_phases.rs` を含む）増えたため。`dispatcher.rs`・`work_units.rs`・`dispatch_one`・Dispatcher の method 数は増やしていない。**人の判断が要る**: baseline か例外の追加（policy の変更）で通すか、別の module を縮めて相殺するか。

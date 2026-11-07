@@ -795,6 +795,7 @@ async fn planner_children_become_delegated_child_tasks() {
             features: None,
             depends_on: vec![],
         }],
+        design_brief: None,
     };
     let adapter = Arc::new(PlannerScriptAdapter::new(
         vec![Some(serde_json::to_string(&spec).unwrap())],
@@ -1166,6 +1167,7 @@ fn planner_rejections_are_collected_since_the_last_adopted_plan() {
                     work_units: Vec::new(),
                     phases: Vec::new(),
                     children: Vec::new(),
+                    design_brief: None,
                 }),
             },
         ),
@@ -1385,6 +1387,7 @@ async fn reopened_delivery_task_dispatches_only_its_ready_repair_unit() {
             work_units: vec![main_spec],
             phases: Vec::new(),
             children: Vec::new(),
+            design_brief: None,
         },
         task_core::PlanOrigin::Fixture,
         None,

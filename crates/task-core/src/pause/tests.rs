@@ -62,6 +62,7 @@ fn plan_pause_points_include_review_human_stages() {
         stages: Vec::new(),
         units: Vec::new(),
         decisions: Vec::new(),
+        design_brief: None,
     };
     for policy in [
         PausePolicy::None,

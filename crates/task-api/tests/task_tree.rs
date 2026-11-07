@@ -96,6 +96,7 @@ fn plan(
         stages: vec![],
         units: vec![],
         decisions: vec![],
+        design_brief: None,
     };
     let rows = units
         .iter()

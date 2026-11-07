@@ -62,6 +62,7 @@ fn spec() -> ExecutionPlanSpec {
         ],
         units: Vec::new(),
         decisions: Vec::new(),
+        design_brief: None,
     }
 }
 

@@ -376,6 +376,7 @@ mod tests {
                 work_units: Vec::new(),
                 phases: Vec::new(),
                 children: Vec::new(),
+                design_brief: None,
             },
             created_at: created_at.into(),
             superseded_at: None,

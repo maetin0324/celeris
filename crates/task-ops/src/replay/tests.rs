@@ -429,6 +429,7 @@ fn rebuild_work_units_and_runs_matches_the_scheduler_written_index_for_the_e2_fi
         ],
         phases: Vec::new(),
         children: Vec::new(),
+        design_brief: None,
     };
     crate::execution::adopt_plan(
         &store,
@@ -822,6 +823,7 @@ fn check_and_apply_execution_fixes_a_corrupted_index() {
         work_units: vec![wu_spec("a", &[])],
         phases: Vec::new(),
         children: Vec::new(),
+        design_brief: None,
     };
     crate::execution::adopt_plan(
         &store,
@@ -966,6 +968,7 @@ fn check_and_apply_execution_rebuilds_the_replanned_execution_plans_history() {
         work_units: vec![wu_spec("a", &[])],
         phases: Vec::new(),
         children: Vec::new(),
+        design_brief: None,
     };
     let v1 = crate::execution::adopt_plan(
         &store,
@@ -987,6 +990,7 @@ fn check_and_apply_execution_rebuilds_the_replanned_execution_plans_history() {
         work_units: vec![wu_spec("a", &[]), wu_spec("b", &["a"])],
         phases: Vec::new(),
         children: Vec::new(),
+        design_brief: None,
     };
     let (v2, _diff) = crate::execution::replan(
         &store,
@@ -1122,6 +1126,7 @@ fn replay_rebuilds_units_dropped_or_rewritten_by_a_phased_replan() {
         ],
         phases: vec![phase("p1"), phase("p2")],
         children: Vec::new(),
+        design_brief: None,
     };
     crate::execution::adopt_plan(
         &store,
@@ -1146,6 +1151,7 @@ fn replay_rebuilds_units_dropped_or_rewritten_by_a_phased_replan() {
         ],
         phases: vec![phase("p1")],
         children: Vec::new(),
+        design_brief: None,
     };
     crate::execution::replan(
         &store,
@@ -1231,6 +1237,7 @@ fn assert_replay_matches_live_after_blocked_repair_superseded(reason: WorkUnitBl
         work_units: units,
         phases: vec![phase.clone()],
         children: Vec::new(),
+        design_brief: None,
     };
     let mut repair_spec = in_phase("repair-design-1", &[]);
     repair_spec.kind = task_core::WorkUnitKind::Repair;

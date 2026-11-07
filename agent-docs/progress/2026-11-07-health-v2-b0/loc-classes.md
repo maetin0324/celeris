@@ -81,12 +81,15 @@ git grep -I -c '' "$(git merge-base HEAD main)" | awk -F: '{s+=$NF} END{print s}
 ## 変更
 - `phase 1: source-size-report に全追跡行の排他的 class 分類を足す` — `--exclusive-classes`・`--rev`・`--files`、
   toml の `[exclusive_classes]`、unittest 22 件、この進捗と loc-baseline.json。
+- `phase 1: 排他的分類の試験の入力 path を doc link 検査の対象から外す` — 新しい試験の `docs/…` は分類器の入力値なので
+  `scripts/dev/check-doc-links.sh` の FOREIGN_DOCS に足した（既存の test_source_size_report.py と同じ扱い）。
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
 - `python3 -m unittest discover -s scripts/tests -p 'test_source_size*.py'` → exit 0（60 tests OK、うち新規 22）
 - `python3 scripts/dev/check-source-size.py` → exit 0（0 failure、3 debt warning、1 reasoned exception。変更前と同じ）
 - 既存の `run_report` を基準の版と今の版で同じ tree に走らせ、totals と warnings が一致（gate の判定の入力が不変）
 - `git diff "$(git merge-base HEAD main)" -- scripts/dev/source-size-baseline.json scripts/dev/check-source-size.py` → 差分 0
+- `sh scripts/dev/check-doc-links.sh` → ok、`--self-test` → exit 0
 - `git grep -I -c '' <基準>` の合計 1,512,205 = `totals.tracked_lines` = `totals.classified_lines`
 
 ## 未解決

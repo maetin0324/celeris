@@ -1,0 +1,204 @@
+{
+  "schema": "celeris.repo-health.report/1",
+  "tool": {
+    "name": "repo_health.py",
+    "version": "1.0"
+  },
+  "inputs": {
+    "base": "main",
+    "head": "66d9c1dae567",
+    "policy_version": "1",
+    "profile": {
+      "requested": null,
+      "resolved": "celeris",
+      "source": "repo"
+    },
+    "mode": "full"
+  },
+  "snapshot": {
+    "base": {
+      "sha": null,
+      "reachable": false
+    },
+    "head": {
+      "kind": "commit",
+      "sha": "66d9c1dae567ffc8b016579ebdb7c4541712ea6f",
+      "dirty": false
+    },
+    "shallow": true,
+    "submodules": []
+  },
+  "policy": {
+    "version": "1",
+    "source": "unavailable",
+    "changed": false,
+    "files": []
+  },
+  "rules": [
+    {
+      "id": "deps.violation",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "shallow",
+      "adapter": "rust"
+    },
+    {
+      "id": "deps.cycle",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "shallow",
+      "adapter": "rust"
+    },
+    {
+      "id": "size.responsibility-growth",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "shallow",
+      "adapter": "rust"
+    },
+    {
+      "id": "dup.contract",
+      "required": false,
+      "status": "not_applicable",
+      "reason": "shallow",
+      "adapter": "rust"
+    },
+    {
+      "id": "dup.state",
+      "required": false,
+      "status": "not_applicable",
+      "reason": "shallow",
+      "adapter": "rust"
+    },
+    {
+      "id": "dup.public-surface",
+      "required": false,
+      "status": "not_applicable",
+      "reason": "shallow",
+      "adapter": "rust"
+    },
+    {
+      "id": "link.unlinked",
+      "required": false,
+      "status": "not_applicable",
+      "reason": "shallow",
+      "adapter": "generic"
+    },
+    {
+      "id": "dup.test-fixture",
+      "required": false,
+      "status": "not_applicable",
+      "reason": "shallow",
+      "adapter": "generic"
+    },
+    {
+      "id": "migration.remnant",
+      "required": false,
+      "status": "not_applicable",
+      "reason": "shallow",
+      "adapter": "generic"
+    },
+    {
+      "id": "arch-map.missing_row",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "shallow",
+      "adapter": "docs"
+    },
+    {
+      "id": "arch-map.missing_test",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "shallow",
+      "adapter": "docs"
+    },
+    {
+      "id": "arch-map.wrong_owner",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "shallow",
+      "adapter": "docs"
+    },
+    {
+      "id": "arch-map.missing_invariant",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "shallow",
+      "adapter": "docs"
+    },
+    {
+      "id": "arch-map.stale",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "shallow",
+      "adapter": "docs"
+    },
+    {
+      "id": "arch-map.wrong_path",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "shallow",
+      "adapter": "docs"
+    },
+    {
+      "id": "doc.links",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "shallow",
+      "adapter": "docs",
+      "wraps": "scripts/dev/check-doc-links.sh"
+    },
+    {
+      "id": "adr.numbers",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "shallow",
+      "adapter": "docs",
+      "wraps": "scripts/dev/check-adr-numbers.sh"
+    },
+    {
+      "id": "progress.index",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "shallow",
+      "adapter": "docs",
+      "wraps": "scripts/dev/progress-index.sh"
+    },
+    {
+      "id": "human-text",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "shallow",
+      "adapter": "docs",
+      "wraps": "scripts/dev/check-human-text.py"
+    },
+    {
+      "id": "source-size",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "shallow",
+      "adapter": "rust",
+      "wraps": "scripts/dev/check-source-size.py"
+    },
+    {
+      "id": "policy.changed",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "shallow",
+      "adapter": "generic"
+    }
+  ],
+  "findings": [],
+  "summary": {
+    "verdict": "pass",
+    "exit_code": 0,
+    "reviewable": false,
+    "counts": {
+      "findings": 0,
+      "fail_grade": 0,
+      "new": 0,
+      "worsened": 0,
+      "existing": 0
+    }
+  }
+}

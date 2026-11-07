@@ -1,0 +1,204 @@
+{
+  "schema": "celeris.repo-health.report/1",
+  "tool": {
+    "name": "repo_health.py",
+    "version": "1.0"
+  },
+  "inputs": {
+    "base": "origin/main",
+    "head": "2222222222222222222222222222222222222222",
+    "policy_version": "generic-1",
+    "profile": {
+      "requested": null,
+      "resolved": "generic",
+      "source": "builtin"
+    },
+    "mode": "full"
+  },
+  "snapshot": {
+    "base": {
+      "sha": "1111111111111111111111111111111111111111",
+      "reachable": true
+    },
+    "head": {
+      "kind": "commit",
+      "sha": "2222222222222222222222222222222222222222",
+      "dirty": false
+    },
+    "shallow": false,
+    "submodules": []
+  },
+  "policy": {
+    "version": "generic-1",
+    "source": "builtin",
+    "changed": false,
+    "files": []
+  },
+  "rules": [
+    {
+      "id": "deps.violation",
+      "required": true,
+      "status": "unsupported",
+      "reason": "adapter_missing:generic has no language adapter",
+      "adapter": "rust"
+    },
+    {
+      "id": "deps.cycle",
+      "required": true,
+      "status": "unsupported",
+      "reason": "adapter_missing:generic has no language adapter",
+      "adapter": "rust"
+    },
+    {
+      "id": "size.responsibility-growth",
+      "required": true,
+      "status": "unsupported",
+      "reason": "adapter_missing:generic has no language adapter",
+      "adapter": "rust"
+    },
+    {
+      "id": "dup.contract",
+      "required": false,
+      "status": "unsupported",
+      "reason": "adapter_missing:generic has no language adapter",
+      "adapter": "rust"
+    },
+    {
+      "id": "dup.state",
+      "required": false,
+      "status": "unsupported",
+      "reason": "adapter_missing:generic has no language adapter",
+      "adapter": "rust"
+    },
+    {
+      "id": "dup.public-surface",
+      "required": false,
+      "status": "unsupported",
+      "reason": "adapter_missing:generic has no language adapter",
+      "adapter": "rust"
+    },
+    {
+      "id": "link.unlinked",
+      "required": false,
+      "status": "pass",
+      "reason": "",
+      "adapter": "generic"
+    },
+    {
+      "id": "dup.test-fixture",
+      "required": false,
+      "status": "pass",
+      "reason": "",
+      "adapter": "generic"
+    },
+    {
+      "id": "migration.remnant",
+      "required": false,
+      "status": "pass",
+      "reason": "",
+      "adapter": "generic"
+    },
+    {
+      "id": "arch-map.missing_row",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "profile generic has no arch_map.path",
+      "adapter": "docs"
+    },
+    {
+      "id": "arch-map.missing_test",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "profile generic has no arch_map.path",
+      "adapter": "docs"
+    },
+    {
+      "id": "arch-map.wrong_owner",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "profile generic has no arch_map.path",
+      "adapter": "docs"
+    },
+    {
+      "id": "arch-map.missing_invariant",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "profile generic has no arch_map.path",
+      "adapter": "docs"
+    },
+    {
+      "id": "arch-map.stale",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "profile generic has no arch_map.path",
+      "adapter": "docs"
+    },
+    {
+      "id": "arch-map.wrong_path",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "profile generic has no arch_map.path",
+      "adapter": "docs"
+    },
+    {
+      "id": "doc.links",
+      "required": true,
+      "status": "pass",
+      "reason": "",
+      "adapter": "docs",
+      "wraps": "scripts/dev/check-doc-links.sh"
+    },
+    {
+      "id": "adr.numbers",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "profile generic does not wrap this check",
+      "adapter": "docs",
+      "wraps": "scripts/dev/check-adr-numbers.sh"
+    },
+    {
+      "id": "progress.index",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "profile generic does not wrap this check",
+      "adapter": "docs",
+      "wraps": "scripts/dev/progress-index.sh"
+    },
+    {
+      "id": "human-text",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "profile generic does not wrap this check",
+      "adapter": "docs",
+      "wraps": "scripts/dev/check-human-text.py"
+    },
+    {
+      "id": "source-size",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "profile generic has no size thresholds",
+      "adapter": "rust",
+      "wraps": "scripts/dev/check-source-size.py"
+    },
+    {
+      "id": "policy.changed",
+      "required": true,
+      "status": "pass",
+      "reason": "",
+      "adapter": "generic"
+    }
+  ],
+  "findings": [],
+  "summary": {
+    "verdict": "error",
+    "exit_code": 2,
+    "reviewable": true,
+    "counts": {
+      "findings": 0,
+      "fail_grade": 0,
+      "new": 0,
+      "worsened": 0,
+      "existing": 0
+    }
+  }
+}

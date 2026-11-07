@@ -350,6 +350,13 @@ cmd_start() {
             echo "config=$DAEMON_CONFIG"
             echo "release=$RELEASE"
         } >"$LAUNCHER_META"
+        # fork 直後の子はまだ launcher 自身の cmdline で、nohup の exec が済むまで owned_alive の cmdline 照合が通らない。
+        # 負荷で exec が遅れると下の health 待ちが「daemon が落ちた」と誤判定して片付けるので、exec の完了（cmdline が
+        # daemon のものになる）か子の終了（zombie 含む）を出来事として待つ。
+        until case $(proc_cmdline "$pid") in *"--config $DAEMON_CONFIG"*) true ;; *) false ;; esac; do
+            case $(sed -e 's/^.*) //' "/proc/$pid/stat" 2>/dev/null | cut -c1) in '' | Z | X) break ;; esac
+            sleep 0.01
+        done
     fi
     # 出来事待ち（health が答えるまで）。上限は保険。
     i=0

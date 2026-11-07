@@ -94,3 +94,11 @@ updated: 2026-11-06
 - `scripts/dev/test-affected.sh` 自体を変えると「検証の道具の変更」として celeris-script とその逆依存（campaign を含む）が選ばれる。
   このため、scripts/dev だけの変更でも `test-affected.sh` の check は sandbox でこの試験に当たる。この unit の変更とは関係しない。
 - この試験は WU の check に入れない。userns を使える環境（release gate）で確かめる。
+
+## pin-wire-record の再計画 v3（test-affected.sh を引数なしで実行しない）
+- この unit では `bash scripts/dev/test-affected.sh` を引数なしで実行しない。`test-affected.sh` 自体を変える差分は検証の道具の変更として
+  celeris-script の逆依存 crate を選び、worker sandbox の userns 制約で `celeris-campaign` の
+  `a_swapped_daemon_binary_is_rejected_on_every_path…` が落ちる（単体では通る）。この unit の変更とは関係しない。
+- 代わりに `bash scripts/dev/test-affected.sh --list` で対象を確認し、lifecycle 試験・repro 試験・`test-affected-list.sh`・`test-cli-binary-preparation.sh`・
+  `test-parallel-fail-names.sh` を個別に実行した（結果は下の実行ログのとおり、提出時の HEAD で実行）。`crates/` に差分はなく、clippy・fmt は Rust 差分がないので省いた。
+- 未解決: 引数なしの `bash scripts/dev/test-affected.sh` は release gate と sandbox 外の操作に回す。sandbox では userns 試験が走らない。

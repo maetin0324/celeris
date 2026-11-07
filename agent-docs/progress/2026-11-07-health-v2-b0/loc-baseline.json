@@ -1,0 +1,698 @@
+{
+  "schema": "celeris.source-size-exclusive/1",
+  "classification": "source-size-exclusive/1",
+  "gate_classification": "source-size-report/1",
+  "config_sha256": "a0d5eca1025f123c6ee7a71caf108979eda391c3322b8c3db352c771059145d5",
+  "sha": "5923a76c9aa0ec5a7b3f58abd06b456f2bdaaf93",
+  "source": "rev",
+  "worktree_dirty": null,
+  "environment": {
+    "host": "home-dev",
+    "python": "3.13.3",
+    "platform": "Linux-6.8.12-9-pve-x86_64-with-glibc2.41",
+    "git": "git version 2.48.1"
+  },
+  "line_rule": "count of '\\n' plus an unterminated last line; binary (NUL in the first 8000 bytes) and symlink entries count 0",
+  "classes": [
+    "production",
+    "external_test",
+    "inline_test",
+    "generated",
+    "vendor",
+    "fixture",
+    "evaluation_infra",
+    "tooling",
+    "docs",
+    "schema",
+    "migration",
+    "lockfile"
+  ],
+  "languages": [
+    "rust",
+    "typescript",
+    "javascript",
+    "python",
+    "shell",
+    "sql",
+    "markdown",
+    "json",
+    "toml",
+    "yaml",
+    "other"
+  ],
+  "matrix": {
+    "production": {
+      "rust": {
+        "files": 760,
+        "lines": 320064
+      },
+      "typescript": {
+        "files": 260,
+        "lines": 34834
+      },
+      "javascript": {
+        "files": 20,
+        "lines": 4044
+      },
+      "python": {
+        "files": 6,
+        "lines": 4596
+      },
+      "shell": {
+        "files": 1,
+        "lines": 51
+      },
+      "sql": {
+        "files": 0,
+        "lines": 0
+      },
+      "markdown": {
+        "files": 0,
+        "lines": 0
+      },
+      "json": {
+        "files": 5,
+        "lines": 136
+      },
+      "toml": {
+        "files": 13,
+        "lines": 2125
+      },
+      "yaml": {
+        "files": 0,
+        "lines": 0
+      },
+      "other": {
+        "files": 13,
+        "lines": 327
+      }
+    },
+    "external_test": {
+      "rust": {
+        "files": 659,
+        "lines": 368793
+      },
+      "typescript": {
+        "files": 207,
+        "lines": 26571
+      },
+      "javascript": {
+        "files": 24,
+        "lines": 8050
+      },
+      "python": {
+        "files": 17,
+        "lines": 2977
+      },
+      "shell": {
+        "files": 47,
+        "lines": 7696
+      },
+      "sql": {
+        "files": 0,
+        "lines": 0
+      },
+      "markdown": {
+        "files": 0,
+        "lines": 0
+      },
+      "json": {
+        "files": 0,
+        "lines": 0
+      },
+      "toml": {
+        "files": 1,
+        "lines": 18
+      },
+      "yaml": {
+        "files": 0,
+        "lines": 0
+      },
+      "other": {
+        "files": 0,
+        "lines": 0
+      }
+    },
+    "inline_test": {
+      "rust": {
+        "files": 432,
+        "lines": 19266
+      },
+      "typescript": {
+        "files": 0,
+        "lines": 0
+      },
+      "javascript": {
+        "files": 0,
+        "lines": 0
+      },
+      "python": {
+        "files": 0,
+        "lines": 0
+      },
+      "shell": {
+        "files": 0,
+        "lines": 0
+      },
+      "sql": {
+        "files": 0,
+        "lines": 0
+      },
+      "markdown": {
+        "files": 0,
+        "lines": 0
+      },
+      "json": {
+        "files": 0,
+        "lines": 0
+      },
+      "toml": {
+        "files": 0,
+        "lines": 0
+      },
+      "yaml": {
+        "files": 0,
+        "lines": 0
+      },
+      "other": {
+        "files": 0,
+        "lines": 0
+      }
+    },
+    "generated": {
+      "rust": {
+        "files": 0,
+        "lines": 0
+      },
+      "typescript": {
+        "files": 2,
+        "lines": 7855
+      },
+      "javascript": {
+        "files": 0,
+        "lines": 0
+      },
+      "python": {
+        "files": 0,
+        "lines": 0
+      },
+      "shell": {
+        "files": 0,
+        "lines": 0
+      },
+      "sql": {
+        "files": 0,
+        "lines": 0
+      },
+      "markdown": {
+        "files": 0,
+        "lines": 0
+      },
+      "json": {
+        "files": 1,
+        "lines": 36040
+      },
+      "toml": {
+        "files": 0,
+        "lines": 0
+      },
+      "yaml": {
+        "files": 0,
+        "lines": 0
+      },
+      "other": {
+        "files": 0,
+        "lines": 0
+      }
+    },
+    "vendor": {
+      "rust": {
+        "files": 90,
+        "lines": 68395
+      },
+      "typescript": {
+        "files": 2,
+        "lines": 1469
+      },
+      "javascript": {
+        "files": 27,
+        "lines": 3284
+      },
+      "python": {
+        "files": 5,
+        "lines": 24287
+      },
+      "shell": {
+        "files": 1,
+        "lines": 70
+      },
+      "sql": {
+        "files": 0,
+        "lines": 0
+      },
+      "markdown": {
+        "files": 57,
+        "lines": 9342
+      },
+      "json": {
+        "files": 5,
+        "lines": 314
+      },
+      "toml": {
+        "files": 3,
+        "lines": 328
+      },
+      "yaml": {
+        "files": 1,
+        "lines": 5
+      },
+      "other": {
+        "files": 20,
+        "lines": 4442
+      }
+    },
+    "fixture": {
+      "rust": {
+        "files": 10,
+        "lines": 143
+      },
+      "typescript": {
+        "files": 7,
+        "lines": 397
+      },
+      "javascript": {
+        "files": 1,
+        "lines": 7
+      },
+      "python": {
+        "files": 16,
+        "lines": 1625
+      },
+      "shell": {
+        "files": 8,
+        "lines": 747
+      },
+      "sql": {
+        "files": 0,
+        "lines": 0
+      },
+      "markdown": {
+        "files": 39,
+        "lines": 331
+      },
+      "json": {
+        "files": 91,
+        "lines": 30170
+      },
+      "toml": {
+        "files": 2,
+        "lines": 13
+      },
+      "yaml": {
+        "files": 0,
+        "lines": 0
+      },
+      "other": {
+        "files": 14,
+        "lines": 2705
+      }
+    },
+    "evaluation_infra": {
+      "rust": {
+        "files": 240,
+        "lines": 120790
+      },
+      "typescript": {
+        "files": 0,
+        "lines": 0
+      },
+      "javascript": {
+        "files": 0,
+        "lines": 0
+      },
+      "python": {
+        "files": 52,
+        "lines": 16595
+      },
+      "shell": {
+        "files": 36,
+        "lines": 6541
+      },
+      "sql": {
+        "files": 0,
+        "lines": 0
+      },
+      "markdown": {
+        "files": 0,
+        "lines": 0
+      },
+      "json": {
+        "files": 18,
+        "lines": 919
+      },
+      "toml": {
+        "files": 3,
+        "lines": 71
+      },
+      "yaml": {
+        "files": 0,
+        "lines": 0
+      },
+      "other": {
+        "files": 3,
+        "lines": 34
+      }
+    },
+    "tooling": {
+      "rust": {
+        "files": 0,
+        "lines": 0
+      },
+      "typescript": {
+        "files": 4,
+        "lines": 177
+      },
+      "javascript": {
+        "files": 7,
+        "lines": 572
+      },
+      "python": {
+        "files": 15,
+        "lines": 4642
+      },
+      "shell": {
+        "files": 58,
+        "lines": 12530
+      },
+      "sql": {
+        "files": 0,
+        "lines": 0
+      },
+      "markdown": {
+        "files": 0,
+        "lines": 0
+      },
+      "json": {
+        "files": 10,
+        "lines": 517
+      },
+      "toml": {
+        "files": 15,
+        "lines": 474
+      },
+      "yaml": {
+        "files": 2,
+        "lines": 21
+      },
+      "other": {
+        "files": 21,
+        "lines": 654
+      }
+    },
+    "docs": {
+      "rust": {
+        "files": 2,
+        "lines": 234
+      },
+      "typescript": {
+        "files": 0,
+        "lines": 0
+      },
+      "javascript": {
+        "files": 0,
+        "lines": 0
+      },
+      "python": {
+        "files": 116,
+        "lines": 7078
+      },
+      "shell": {
+        "files": 30,
+        "lines": 2191
+      },
+      "sql": {
+        "files": 0,
+        "lines": 0
+      },
+      "markdown": {
+        "files": 2123,
+        "lines": 181566
+      },
+      "json": {
+        "files": 933,
+        "lines": 75712
+      },
+      "toml": {
+        "files": 16,
+        "lines": 1119
+      },
+      "yaml": {
+        "files": 1,
+        "lines": 20
+      },
+      "other": {
+        "files": 579,
+        "lines": 20475
+      }
+    },
+    "schema": {
+      "rust": {
+        "files": 0,
+        "lines": 0
+      },
+      "typescript": {
+        "files": 0,
+        "lines": 0
+      },
+      "javascript": {
+        "files": 0,
+        "lines": 0
+      },
+      "python": {
+        "files": 0,
+        "lines": 0
+      },
+      "shell": {
+        "files": 0,
+        "lines": 0
+      },
+      "sql": {
+        "files": 0,
+        "lines": 0
+      },
+      "markdown": {
+        "files": 0,
+        "lines": 0
+      },
+      "json": {
+        "files": 11,
+        "lines": 54438
+      },
+      "toml": {
+        "files": 0,
+        "lines": 0
+      },
+      "yaml": {
+        "files": 0,
+        "lines": 0
+      },
+      "other": {
+        "files": 0,
+        "lines": 0
+      }
+    },
+    "migration": {
+      "rust": {
+        "files": 0,
+        "lines": 0
+      },
+      "typescript": {
+        "files": 0,
+        "lines": 0
+      },
+      "javascript": {
+        "files": 0,
+        "lines": 0
+      },
+      "python": {
+        "files": 0,
+        "lines": 0
+      },
+      "shell": {
+        "files": 0,
+        "lines": 0
+      },
+      "sql": {
+        "files": 114,
+        "lines": 3229
+      },
+      "markdown": {
+        "files": 0,
+        "lines": 0
+      },
+      "json": {
+        "files": 0,
+        "lines": 0
+      },
+      "toml": {
+        "files": 0,
+        "lines": 0
+      },
+      "yaml": {
+        "files": 0,
+        "lines": 0
+      },
+      "other": {
+        "files": 0,
+        "lines": 0
+      }
+    },
+    "lockfile": {
+      "rust": {
+        "files": 0,
+        "lines": 0
+      },
+      "typescript": {
+        "files": 0,
+        "lines": 0
+      },
+      "javascript": {
+        "files": 0,
+        "lines": 0
+      },
+      "python": {
+        "files": 0,
+        "lines": 0
+      },
+      "shell": {
+        "files": 0,
+        "lines": 0
+      },
+      "sql": {
+        "files": 0,
+        "lines": 0
+      },
+      "markdown": {
+        "files": 0,
+        "lines": 0
+      },
+      "json": {
+        "files": 0,
+        "lines": 0
+      },
+      "toml": {
+        "files": 0,
+        "lines": 0
+      },
+      "yaml": {
+        "files": 2,
+        "lines": 5813
+      },
+      "other": {
+        "files": 3,
+        "lines": 4276
+      }
+    }
+  },
+  "class_totals": {
+    "production": 366177,
+    "external_test": 414105,
+    "inline_test": 19266,
+    "generated": 43895,
+    "vendor": 111936,
+    "fixture": 36138,
+    "evaluation_infra": 144950,
+    "tooling": 19587,
+    "docs": 288395,
+    "schema": 54438,
+    "migration": 3229,
+    "lockfile": 10089
+  },
+  "language_totals": {
+    "rust": 897685,
+    "typescript": 71303,
+    "javascript": 15957,
+    "python": 61800,
+    "shell": 29826,
+    "sql": 3229,
+    "markdown": 191239,
+    "json": 198246,
+    "toml": 4148,
+    "yaml": 5859,
+    "other": 32913
+  },
+  "totals": {
+    "files": 6849,
+    "binary_or_symlink_files": 22,
+    "tracked_lines": 1512205,
+    "classified_lines": 1512205,
+    "consistent": true
+  },
+  "views": {
+    "product_only": {
+      "label": "本体のみ（production、全言語）",
+      "classes": [
+        "production"
+      ],
+      "lines": 366177,
+      "rust_lines": 320064
+    },
+    "own_total_with_tests": {
+      "label": "自前総量（手書き code: 本体 + 試験 + tooling + 評価基盤 + migration）",
+      "classes": [
+        "production",
+        "inline_test",
+        "external_test",
+        "tooling",
+        "evaluation_infra",
+        "migration"
+      ],
+      "lines": 967314,
+      "rust_lines": 828913
+    },
+    "all_tracked": {
+      "label": "全追跡行（全 class・全言語）",
+      "classes": [
+        "production",
+        "inline_test",
+        "external_test",
+        "generated",
+        "vendor",
+        "fixture",
+        "evaluation_infra",
+        "tooling",
+        "docs",
+        "schema",
+        "migration",
+        "lockfile"
+      ],
+      "lines": 1512205,
+      "rust_lines": 897685
+    },
+    "external_split_candidates": {
+      "label": "外部分離候補（評価基盤 + vendor）",
+      "classes": [
+        "evaluation_infra",
+        "vendor"
+      ],
+      "lines": 256886,
+      "rust_lines": 189185
+    }
+  },
+  "reason_file_counts": {
+    "default": 1078,
+    "marker:This file was automatically generated": 1,
+    "rule:(^|/)(Cargo\\.lock|pnpm-lock\\.yaml|package-lock\\.json|yarn\\.lock|requirements\\.lock)$": 5,
+    "rule:(^|/)(fixtures?|testdata|mock-celeris)/|^crates/celeris/\\.tmp[^/]*/|(^|/)[^/]*_fixture\\.py$|^examples/": 188,
+    "rule:(^|/)(tests|e2e|benches|test)/|(^|/)(tests|[^/]*_tests?)\\.rs$|\\.(test|spec)\\.(ts|tsx|mts|js|mjs)$|(^|/)test_[^/]*\\.py$|(^|/)[^/]*_test\\.py$": 955,
+    "rule:(^|/)generated/[^/]*\\.(ts|tsx|js|mjs|json)$|\\.gen\\.(ts|tsx|js|rs)$": 2,
+    "rule:(^|/)migrations/": 114,
+    "rule:\\.schema\\.json$|(^|/)schemas?/": 11,
+    "rule:^(agent-docs|docs)/|\\.md$|(^|/)LICENSE$": 3800,
+    "rule:^(scripts|deploy|tools|web/scripts|\\.claude|\\.config)/|(^|/)(Cargo\\.toml|package\\.json|tsconfig[^/]*\\.json|pnpm-workspace\\.yaml|biome\\.json|components\\.json|(vite|vitest|playwright)\\.config\\.ts|\\.gitignore|\\.gitattributes|rust-toolchain(\\.toml)?)$|^crates/[^/]+/scripts/": 132,
+    "rule:^config/skills/(yomiyasu|shadcn|frontend-design|web-design|ui-ux-quality-gate)/": 81,
+    "rule:^crates/(campaign|routing-eval|jev-classifier)/|^scripts/(campaign|model-routing)/|^tests/e2e-bench/": 300,
+    "rule:^crates/[^/]+/vendor/": 130,
+    "rule:^scripts/dev/(long-horizon-pilot|llm-improve|daemon-soak|general-cos-compare)(/|\\.|-)|^scripts/dev/(test-long-horizon-[^/]*|general_cos_eval\\.py|test_general_cos_eval\\.py|cos-chat-bench[^/]*|cos_chat_answer_bench\\.py|test_cos_chat_answer_bench\\.py|cos-chat-live\\.sh|jev[-_][^/]*|edit-activate-[^/]*|long-run-soak\\.sh|long_run_soak_summary\\.py|script-gate-measure\\.sh|reflink-target-experiment\\.sh|ts-behavior-eval\\.sh|ts-pilot\\.sh)$": 52
+  }
+}

@@ -2698,7 +2698,7 @@
               "type": "null"
             }
           ],
-          "description": "採用した計画の設計 brief（reviewer は宣言した `removals` が実際に消えたかを確かめる）。brief の無い\n計画・計画の無い task では省略。"
+          "description": "採用した計画の設計 brief（reviewer は宣言した `removals` が実際に消えたかを確かめる）。brief の無い\n計画・計画の無い task では省略。`Box` は `RunContext` を大きくしないため（wire の形は変わらない）。"
         },
         "repos": {
           "default": [],
@@ -3778,7 +3778,7 @@
               "type": "null"
             }
           ],
-          "description": "ADR 2026-11-07-health-review-integration D3.5: 採用前の設計 review の run だけ `Some`（`summary`・\n`evidence`・`criteria` は空）。`RunContext` の直下でなくここに置く（欄の数の上限。進捗\n`2026-11-07-health-v2-g2/dispatch/risk-events.md`）。final review・WU の review では `None`。"
+          "description": "ADR 2026-11-07-health-review-integration D3.5: 採用前の設計 review の run だけ `Some`（`summary`・\n`evidence`・`criteria` は空）。`RunContext` の直下でなくここに置く（欄の数の上限。進捗\n`2026-11-07-health-v2-g2/dispatch/risk-events.md`）。final review・WU の review では `None`。\n`Box` は `RunContext` を大きくしないため（future の stack。wire の形は変わらない）。"
         },
         "evidence": {
           "description": "対象 run の `done.evidence`。",

@@ -57,7 +57,7 @@ fn request() -> DesignReviewRequest {
 fn health_review_design_protocol_request_round_trips() {
     let context = RunContext {
         review: Some(ReviewRequest {
-            design: Some(request()),
+            design: Some(Box::new(request())),
             ..Default::default()
         }),
         ..RunContext::default()
@@ -158,7 +158,7 @@ fn health_review_design_protocol_old_json_reads_and_omits_new_fields() {
     assert_eq!(serde_json::to_value(&input).unwrap(), json!({"repos": []}));
     let with_brief = HealthReviewInput {
         repos: Vec::new(),
-        brief: Some(brief()),
+        brief: Some(Box::new(brief())),
     };
     let value = serde_json::to_value(&with_brief).unwrap();
     assert_eq!(value["brief"]["removals"][0], "in-memory retry map");

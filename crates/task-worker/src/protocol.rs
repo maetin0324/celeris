@@ -70,8 +70,9 @@ pub struct ReviewRequest {
     /// ADR 2026-11-07-health-review-integration D3.5: 採用前の設計 review の run だけ `Some`（`summary`・
     /// `evidence`・`criteria` は空）。`RunContext` の直下でなくここに置く（欄の数の上限。進捗
     /// `2026-11-07-health-v2-g2/dispatch/risk-events.md`）。final review・WU の review では `None`。
+    /// `Box` は `RunContext` を大きくしないため（future の stack。wire の形は変わらない）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub design: Option<DesignReviewRequest>,
+    pub design: Option<Box<DesignReviewRequest>>,
 }
 
 /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D6: reviewer に見せる検出 1 件（`Event::WorkerPolicyViolation` の写し）。

@@ -20,9 +20,9 @@ pub struct HealthReviewInput {
     #[serde(default)]
     pub repos: Vec<HealthRepoInput>,
     /// 採用した計画の設計 brief（reviewer は宣言した `removals` が実際に消えたかを確かめる）。brief の無い
-    /// 計画・計画の無い task では省略。
+    /// 計画・計画の無い task では省略。`Box` は `RunContext` を大きくしないため（wire の形は変わらない）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub brief: Option<task_core::execution_plan::DesignBrief>,
+    pub brief: Option<Box<task_core::execution_plan::DesignBrief>>,
 }
 
 /// D4.1: 1 repo の base（target）→ candidate の材料。

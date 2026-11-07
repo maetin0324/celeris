@@ -31,7 +31,13 @@ ADR D1.4 は 7 項目（D5.1 の finding 種別と同じ順・同じ名前）と
 - ADR (6) D6.6 のとおり、profile を変えた branch（profiles）は人の承認で通した。`check-health.sh` に D6.2（policy の file だけの branch を exit 0 にする扱い）がまだ無いので、承認だけでは必須検査が通らず、operator が branch を main に merge して通した（[profiles の記録](guideline-profiles.md)）。
 
 ## 検査（提出時の HEAD で実行）
-結果は下の「最終の検査」節に書く。
+- `bash scripts/dev/test-affected.sh` → exit 0。先に呼ぶ check-health は上と同じ pass、続けて「試験対象の変更なし（docs のみ等）」。
+- `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0（Rust の変更は無い）。
+- task の受け入れ条件 0（`generic.md` に固有名が無く、両 profile に `[review]`）→ exit 0。
+- task の受け入れ条件 1: `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health*.py'` → 62 件 OK、`sh scripts/dev/tests/repo_health_gate.sh` → 5 件 OK、exit 0。
+- task の受け入れ条件 2: `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check` → exit 0。
+- `CLAUDE.md` の差分: `git diff --quiet $(git merge-base HEAD main) HEAD -- CLAUDE.md` と `$CELERIS_WU_BASE` 基準の同じ検査 → どちらも exit 0。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` → `docs/guides/source-health.md` とこの進捗の 2 file だけ。
 
 ## 未解決事項
 - D6.2 は未実装。G2 の残りの policy の変更（U2 の `--print-review-policy`、`check-health.sh` の D6.2、D7.3 の `check-health.sh` 冒頭注記の整理）を載せる branch は、main に入るまで `check-health.sh` と `test-affected.sh` が `policy.changed` で落ちる。profiles と同じく、人の承認と operator の手の merge が要る。

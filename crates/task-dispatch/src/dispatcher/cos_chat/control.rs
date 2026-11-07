@@ -9,8 +9,7 @@ use std::time::Duration;
 use task_core::SqliteStore;
 use task_core::chat::{
     ChatActor, ChatCard, ChatCardKind, ChatError, ChatPostMessageRequest, ChatPrelaunchReason,
-    ChatRecoveryCause, ChatRun, ChatRunState, ChatSendMode,
-    chat_run_state_is_terminal,
+    ChatRecoveryCause, ChatRun, ChatRunState, ChatSendMode, chat_run_state_is_terminal,
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 

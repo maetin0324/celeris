@@ -1,7 +1,7 @@
 ---
 title: 健全性v2 G2 dispatch risk-events — assess_risk・設計 review と health の event・設計 review の wire 型
 tasks: [01M6VTFG9K5HEE817EW05JASMZ]
-status: blocked
+status: done
 updated: 2026-11-07
 ---
 # 健全性v2 G2 dispatch risk-events — assess_risk・設計 review と health の event・設計 review の wire 型
@@ -34,18 +34,19 @@ WorkUnit `risk-events`。基準は `$CELERIS_WU_BASE`。設計は [ADR 2026-11-0
 - ADR の「brief の無い人の計画」は origin を引数に取らずに判定する。planner の計画は採用前の `require_design_brief` で差し戻されるので、class に合い brief の無い計画が `assess_risk` に来るのは planner 以外の計画だけ。daemon の repair の計画（/1）に `assess_risk` を使うかは design-gate の unit が決める。
 
 ## 証拠（提出時の HEAD で実行）
-- `cargo nextest run -p task-worker -p task-api -p task-core -E 'test(/schema/) | test(/health_review_/)'`（更新モード無し）→ 50 passed（`health_review_risk_` 9 件、`health_review_design_protocol_` 4 件、`committed_schema_matches_generated` を含む schema の試験）
-- `bash scripts/dev/test-affected.sh`（Cargo.lock が変わったので全 crate と web）→ exit 100。check-health は verdict=pass・new=0・worsened=0、web は 104 file・711 件 passed、test-ts-verify 20 passed、nextest は 7,913 件中 7,912 passed・1 failed。落ちたのは celeris-campaign `a_swapped_daemon_binary_is_rejected_on_every_path_and_stop_only_touches_the_launcher_pid`（daemon が healthy になる前に終わった）で、単独の再実行（`cargo nextest run -p celeris-campaign -E 'test(a_swapped_daemon_binary_is_rejected_on_every_path_and_stop_only_touches_the_launcher_pid)'`）は 1 passed。この変更の型に触れない試験で、全体実行の負荷でだけ落ちた。
-- その前の全体実行（Box にする前）で落ちた task-dispatch の 2 件は、Box の後の単独の再実行で 2 passed（`an_interrupted_integration_is_redone_idempotently_after_restart` は Box の前の単独実行でも通った）。
+計画を直した後の run（範囲 check が `Cargo.lock` と `web/api/realtime/` を許す版）で、提出時の HEAD に対して計画の 3 つの check を実行した。基準は `$CELERIS_WU_BASE`（範囲 check）と `git merge-base HEAD main`（check-health）。
+- 範囲 check（計画の文字列を `sh -c` で実行）→ exit 0（範囲外の path なし）
+- `cargo nextest run -p task-core -E 'test(health_review_risk_)' && cargo nextest run -p task-worker -E 'test(/health_review_design_protocol_|committed_schema_matches_generated/)'` → exit 0。task-core 9 passed（D3.3 の 6 つの場合を 1 件ずつ、write path と class の集め方、risk の JSON と `plan_sha256`、4 つの event の往復と任意欄の無い JSON の読み込み）、task-worker 5 passed（`health_review_design_protocol_` 4 件と `committed_schema_matches_generated`）
+- `bash scripts/dev/test-affected.sh`（Cargo.lock が変わったので全 crate と web）→ exit 0。check-health は verdict=pass・new=0・worsened=0。web は tsc -b が通り、unit 試験は 104 file・711 件 passed。test-ts-verify は 20 passed。nextest は 7,913 件すべて passed（23 skipped）。doc test も通った。
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
+- 前の run の全体実行で落ちた celeris-campaign `a_swapped_daemon_binary_is_rejected_on_every_path_and_stop_only_touches_the_launcher_pid` は、この全体実行では通った（前の run でも単独の再実行は通っていた）。
 
 ## 未解決
-- 計画の範囲 check（許す path は `crates/`・`docs/protocol/`・`docs/api/v1/`・`web/api/generated/`・この進捗の dir）が `Cargo.lock`・`web/api/realtime/event-kinds.ts`・`web/api/realtime/invalidation-map.ts` を範囲外として exit 1 で落ちる（2 回目の run で同じ cwd から再実行して確認）。3 つとも目的から外せない変更なので、計画の check を直す必要がある（plan_issue で申告した）。
-  - `Cargo.lock`: 基準の時点で workspace の crate は `regex` に直接依存していない。task-core で `re.search` の意味で path を当てるには `regex` を足すしかなく、task-core の依存の一覧に 1 行増える。
-  - `web/api/realtime/*.ts`: `Event` に 4 種を足して `web/api/generated` を再生成すると、`event-kinds.ts` の網羅の型検査（`_exhaustive`）で tsc -b が落ち、`invalidation-map.test.ts`（schema.json の種類と `EVENT_KINDS`・`EVENT_INVALIDATION` の一致）も落ちる。
-  - 直し方の案: 範囲 check の `grep -vE` に `Cargo\.lock$` と `web/api/realtime/` を足す。この案の check は提出時の HEAD で exit 0 になった（4 回目の run で確認）。
-  - 3 回目の run の申告は届いていない。`result.json` に `yield.plan_issue` と `summary` を両方書いたため、worker が done として扱った（`claude_code.rs` の優先順は `question` > `summary` > `yield`）。4 回目の run で `yield` だけの `result.json` を書いて申告し直した。
+- 計画の範囲 check は、初めの版が `Cargo.lock`・`web/api/realtime/event-kinds.ts`・`web/api/realtime/invalidation-map.ts` を許さず exit 1 で落ちた。どれも目的から外せない変更なので plan_issue で申告し、計画が直った（`grep -vE` に `Cargo\.lock$` と `web/api/realtime/` を追加）。
+  - `Cargo.lock`: 基準の時点で workspace の crate は `regex` に直接依存していない。task-core で `re.search` の意味で path を当てるため `regex` を足し、task-core の依存の一覧に 1 行増えた。
+  - `web/api/realtime/*.ts`: `Event` に 4 種を足して `web/api/generated` を再生成すると、`event-kinds.ts` の網羅の型検査（`_exhaustive`）で tsc -b が落ち、`invalidation-map.test.ts`（schema.json の種類と `EVENT_KINDS`・`EVENT_INVALIDATION` の一致）も落ちる。後続の統合 unit の範囲 check も同じ 2 つを許す必要がある。
+  - 1 度目の申告は届かなかった。`result.json` に `yield.plan_issue` と `summary` を両方書いたため、worker が done として扱った（`claude_code.rs` の優先順は `question` > `summary` > `yield`）。`yield` だけの `result.json` で申告し直して届いた。
 - `re.search` で当てるので、計画の write path が class より広い接頭辞（例 `crates/task-core/`）だと `^crates/task-core/src/store/` などの class に合わない。広い path を書いた計画は高 risk にならない。
 - 配線（方針の読み込み、planner_flow での `require_design_brief`・`assess_plan_risk` の呼び出し、event の追記、reviewer prompt の設計 review の節、`review.json` の `design` の読み込み）は後続の unit。
 

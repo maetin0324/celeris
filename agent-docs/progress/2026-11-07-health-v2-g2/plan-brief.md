@@ -12,7 +12,8 @@ completed: 2026-11-07
 WorkUnit `plan-brief`。[ADR 2026-11-07 health-review-integration](../../adr/2026-11-07-health-review-integration.md) の D3.1〜D3.3 のうち、計画の型と形の検証を実装した。基準は `$CELERIS_WU_BASE`。
 
 ## 変更
-- 件名「G2 plan-brief: plan /3 の設計 brief と検証」の commit。
+- 件名「G2 plan-brief: plan /3 の設計 brief と検証」「G2 plan-brief: 責務の大きい関数を伸ばさずに brief の検証を入れる」「G2 plan-brief: PlanValidationError の Display を Self:: の 1 行の arm にそろえる」の commit。
+- repo health の `size.responsibility-growth`（base で閾値を超えた単位は 1 行も増やせない）に合わせた: `validate_with`・`validate_v3` の欄の置き場の検査を `v3_fields_in_v1_v2`・`v3_plan_field_errors`（brief の形の検査を含む）に出した。`PlanValidationError::fmt` は `Self::` に書き換え、1 行に収まる arm を 1 行にした。dispatcher の repair 計画は新しい `ExecutionPlanSpec::v1(rationale, work_units)` で作る。
 - `crates/task-core/src/execution_plan.rs`: `DesignBrief`（`root_cause`・`owner`・`reuse`・`options`・`new_state`・`new_branch`・`new_fallback`・`new_port`・`removals`・`invariants`、`deny_unknown_fields`）と `DesignOption { name, chosen, reason }` を足した。`ExecutionPlanSpec.design_brief: Option<DesignBrief>`（`None` は JSON に出さない）。`DesignBrief::declared_new()` は空でない `new_*` の名前を返す（risk 判定の入力）。`internal_view` と差分の適用（`apply_delta`）は brief を持ち越す。
 - `crates/task-core/src/execution_plan/validation.rs`: `PlanValidationError::DesignBrief { field, reason }`・`DesignBriefMissing { classes }` を足した。/1・/2 に brief を書くと `V3FieldNotAllowed { field: "design_brief" }`。`validate_v3` は brief があるときだけ形を見る。
 - `crates/task-core/src/execution_plan/design_brief.rs`（新規）: 形の検証 `brief_shape_errors`（D3.2）と `require_design_brief(spec, origin, high_risk_classes)`（D3.3）。高 risk の class に触れる planner の計画に brief が無ければ `DesignBriefMissing` を返す。planner 以外（人の計画など）と、class が空の計画では brief を求めない。どの path がどの class に合うかは dispatch unit の `assess_risk` が決める（この unit では作らない）。
@@ -27,7 +28,8 @@ WorkUnit `plan-brief`。[ADR 2026-11-07 health-review-integration](../../adr/202
 - `cargo nextest run -p task-core -E 'test(design_brief_)'` → 7 passed。
 - `UPDATE_SCHEMA=1 cargo nextest run -p task-core -E 'test(schema)'`・同 task-api の後、更新モード無しで再実行 → 一致。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
-- `bash scripts/dev/test-affected.sh` → 結果は報告本文に書く。
+- `bash scripts/dev/check-health.sh` → verdict=pass（fail_grade=0、worsened=0）。
+- `bash scripts/dev/test-affected.sh` → exit 100。web 711 passed、test-ts-verify 20 passed、nextest 7849 件中 7848 passed・1 failed。落ちたのは `celeris-campaign::launcher a_swapped_daemon_binary_is_rejected_on_every_path_and_stop_only_touches_the_launcher_pid`（daemon が healthy になる前に終了）。単独の再実行（`cargo nextest run -p celeris-campaign -E 'test(a_swapped_daemon_binary_is_rejected)'`）では passed。この変更は campaign launcher に触れていない。
 
 ## 未解決事項
 - `assess_risk`・`ReviewPolicy`・planner_flow から `require_design_brief` を呼ぶ配線は dispatch unit の範囲。

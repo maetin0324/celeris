@@ -9,7 +9,7 @@ completed: 2026-11-07
 
 完了日: 2026-11-07。正本 ADR: [2026-11-06-cos-run-launch-accounting-and-drain](../../../adr/2026-11-06-cos-run-launch-accounting-and-drain.md)（D3・D5-3・D5-4）、
 付記 [2026-11-07-pilot-drain-shared-deadline](../../../adr/2026-11-07-pilot-drain-shared-deadline.md)（承認の wall は総量）。
-実 LLM・外部ネットワーク・本番操作・全 suite・web e2e は実行していない。基準は `git merge-base HEAD main`。「修正前」は task の base の版（`05522ee4`）の driver・judge・stub。
+実 LLM・外部ネットワーク・本番操作・全 suite・web e2e は実行していない。基準は `git merge-base HEAD main`。「修正前」は task の base（件名 `integrate wu/backend (phase backend)` の commit）の driver・judge・stub。
 
 ## 変更
 - `driver.py`: 共有の期限（`--approval-started-at`・`--approval-wall-secs`・`--approval-expires-at`。`wait_end`・drain・`[cos] max_wall_secs` が使う）、
@@ -21,15 +21,15 @@ completed: 2026-11-07
 - 試験: `test_pilot_drain.py`（新規、注入時計）、`test_driver_usage.py`・`test_pilot_gate.py` に追加、`long-horizon-pilot/test-pilot-drain.sh`（新規、実 daemon の config-stub）。`test-long-horizon-pilot.sh` の末尾から呼ぶ。
 
 ## 受け入れ条件ごとの証拠
-- 条件 0: `python3 -m unittest discover -s scripts/dev/long-horizon-pilot -p "test_*.py"` は 91 件 OK（下の最終検査の節を参照）。
-  新規は drain の 14 件（遅い CoS が期限直前に終わる・usage 永続化の遅れ・期限の境界・待機中に生まれる run・期限超過後の run・複数試行の残り時間）と、
+- 条件 0: `python3 -m unittest discover -s scripts/dev/long-horizon-pilot -p "test_*.py"` は 84 件 OK（下の最終検査の節を参照）。
+  新規は drain の 15 件（遅い CoS が期限直前に終わる・usage 永続化の遅れ・期限の境界・待機中に生まれる run・期限超過後の run・複数試行の残り時間）と、
   usage 集計 5 件（起動前 run は欠測でない・起動後 null は欠測・旧行と列挙外 reason は欠測・drain timeout・列の無い旧 DB）、judge 7 件（旧 raw の判定が変わらない・config-stub は pending）。
-- 条件 1: `bash scripts/dev/long-horizon-pilot/test-pilot-drain.sh --out <dir> --before-rev 05522ee4`（exit 0。LLM 0、実 daemon・一時 DB、約 8 分）。出力:
+- 条件 1: `bash scripts/dev/long-horizon-pilot/test-pilot-drain.sh --out <dir> --before-rev <task の base の commit>`（exit 0。LLM 0、実 daemon・一時 DB、約 8 分）。出力:
   - (1) 遅い CoS（返事 20 秒）: `drain waited 86.2 s; every CoS run has usage; g7 pending`。daemon を止める前に待ち、`usage.missing` は null。
   - (2) 供給元の `max_runs = 1`・worker を 5 秒遅らせる: `roles {'worker': 4, 'reviewer': 4, 'cos': 6} cos slot waits [0, 4, 5, 4, 1, 0]`。CoS は枠の解放を待ってから起動（全 run が `launch=launched`・usage あり）。root ごとに worker と reviewer が 1 本ずつで重複しない（root 4 件に worker 4・reviewer 4）。
   - (3) 期限超過（CoS 90 秒、試行の上限 75 秒）: `timed_out 2 missing cos_drain_timeout:2 verdict unknown`。facts の `drain.timed_out_runs` に run_id・state・reason。usd・tokens は null。judge の `drain` 検査は unknown、g7 は pending、`cos_drain_timeout` は null。
   - (4) 2 試行が承認の総量 100 秒を分け合う: `shared deadline 2026-11-07T08:16:14Z walls [73, 31] wall_limit_hit [False, True]`。2 本目の期限は 1 本目の開始から数え、wall の和は 104 秒（試行ごとにリセットすると約 150 秒）。2 本目の `drain` 検査は unknown。
-  - 修正前（`05522ee4` の driver・judge）で (1)(3) と同じ条件: `before before-slow-cos missing cos_usage_null:1 cos 1 cos_usage_null 1`、`before before-deadline missing cos_usage_null:1`。
+  - 修正前（task の base の driver・judge）で (1)(3) と同じ条件: `before before-slow-cos missing cos_usage_null:1 cos 1 cos_usage_null 1`、`before before-deadline missing cos_usage_null:1`。
     CoS run が daemon の SIGTERM で殺され usage が null になった（facts に `drain` 欄が無い。期限・理由は残らない）。修正後の同条件 (1) は usage が全部ある。
   - config-stub は全場面で G7 pending、`cos_usage_null=null`。実 LLM の合格は主張しない。
 - 条件 2: 下の最終検査の節。

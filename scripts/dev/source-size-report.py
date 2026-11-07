@@ -16,6 +16,15 @@ compile.
 Usage:
   scripts/dev/source-size-report.py [--root DIR] [--config FILE]
       [--format text|json] [--strict] [--out FILE]
+  scripts/dev/source-size-report.py --exclusive-classes [--rev REV] [--files]
+      [--format text|json] [--out FILE]
+
+--exclusive-classes assigns every line of every tracked file to exactly one
+class (production, external_test, inline_test, generated, vendor, fixture,
+evaluation_infra, tooling, docs, schema, migration, lockfile) with language as
+a second axis; rules live in [exclusive_classes] of the config. It exits 3 if
+the class totals do not add up to the tracked total. It does not touch the
+classification the gate (check-source-size.py) freezes.
 
 Exit code is always 0 unless --strict is given and a non-excepted warning
 was found (or the tool itself failed to run). This is a warning-only
@@ -512,6 +521,329 @@ def render_text(report: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+# --- exclusive class report (health v2 B0) ---------------------------------
+#
+# Separate from run_report above: run_report is what check-source-size.py
+# freezes in its baseline ("source-size-report/1") and must not change. This
+# mode assigns every line of every tracked file to exactly one class, with the
+# language as a second axis, so the class totals add up to the tracked total.
+
+EXCLUSIVE_SCHEMA = "celeris.source-size-exclusive/1"
+EXCLUSIVE_CLASSES = [
+    "production",
+    "external_test",
+    "inline_test",
+    "generated",
+    "vendor",
+    "fixture",
+    "evaluation_infra",
+    "tooling",
+    "docs",
+    "schema",
+    "migration",
+    "lockfile",
+]
+LANGUAGES = ["rust", "typescript", "javascript", "python", "shell", "sql", "markdown", "json", "toml", "yaml", "other"]
+_LANG_BY_EXT = {
+    ".rs": "rust",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".mts": "typescript",
+    ".cts": "typescript",
+    ".js": "javascript",
+    ".mjs": "javascript",
+    ".cjs": "javascript",
+    ".jsx": "javascript",
+    ".py": "python",
+    ".sh": "shell",
+    ".bash": "shell",
+    ".sql": "sql",
+    ".md": "markdown",
+    ".json": "json",
+    ".jsonl": "json",
+    ".toml": "toml",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+}
+BINARY_SNIFF_BYTES = 8000  # same window git uses to call a blob binary
+
+
+@dataclass
+class ExclusiveRule:
+    cls: str
+    pattern: re.Pattern
+    source: str
+
+
+@dataclass
+class ExclusiveConfig:
+    version: str
+    rules: list[ExclusiveRule]
+    markers: list[str]
+    marker_lines: int
+    before_markers: set[str]
+    views: dict[str, dict]
+    sha256: str
+
+
+def load_exclusive_config(config_path: str | None, root: str) -> ExclusiveConfig:
+    import hashlib
+
+    path = config_path or os.path.join(root, DEFAULT_CONFIG_RELPATH)
+    if tomllib is None:
+        raise RuntimeError("tomllib is unavailable; Python >= 3.11 is required to read the config")
+    with open(path, "rb") as f:
+        raw = f.read()
+    data = tomllib.loads(raw.decode("utf-8")).get("exclusive_classes")
+    if not data:
+        raise ValueError(f"{path}: no [exclusive_classes] section")
+    version = str(data.get("version", "")).strip()
+    if not version:
+        raise ValueError("[exclusive_classes] needs a non-empty version")
+    rules = []
+    for entry in data.get("rules", []):
+        cls = entry.get("class")
+        if cls not in EXCLUSIVE_CLASSES or cls == "inline_test":
+            raise ValueError(f"exclusive rule has unknown or non-path class {cls!r}")
+        if not entry.get("path"):
+            raise ValueError(f"exclusive rule for {cls!r} is missing 'path'")
+        rules.append(ExclusiveRule(cls=cls, pattern=re.compile(entry["path"]), source=entry["path"]))
+    before = set(data.get("before_markers", []))
+    unknown = before - set(EXCLUSIVE_CLASSES)
+    if unknown:
+        raise ValueError(f"before_markers has unknown classes {sorted(unknown)}")
+    views = {}
+    for key, view in data.get("views", {}).items():
+        classes = list(view.get("classes", []))
+        bad = [c for c in classes if c not in EXCLUSIVE_CLASSES]
+        if bad or not classes:
+            raise ValueError(f"view {key!r} has unknown or no classes: {bad}")
+        views[key] = {"label": view.get("label", key), "classes": classes}
+    return ExclusiveConfig(
+        version=version,
+        rules=rules,
+        markers=[str(m) for m in data.get("generated_markers", [])],
+        marker_lines=int(data.get("generated_marker_lines", 10)),
+        before_markers=before,
+        views=views,
+        sha256=hashlib.sha256(raw).hexdigest(),
+    )
+
+
+def detect_language(path: str, first_line: str) -> str:
+    ext = os.path.splitext(path)[1].lower()
+    if ext in _LANG_BY_EXT:
+        return _LANG_BY_EXT[ext]
+    if first_line.startswith("#!"):
+        if re.search(r"\b(ba|da|z)?sh\b", first_line):
+            return "shell"
+        if "python" in first_line:
+            return "python"
+        if "node" in first_line:
+            return "javascript"
+    return "other"
+
+
+def split_lines(text: str) -> list[str]:
+    """Lines as `wc -l` sees them, plus an unterminated last line. Only '\\n'
+    separates lines (str.splitlines would also split on \\f, \\x1c, U+2028 ...)."""
+    if not text:
+        return []
+    lines = text.split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    return lines
+
+
+def path_class(cfg: ExclusiveConfig, path: str, head: list[str]) -> tuple[str, str]:
+    """(class, reason) for a file before the Rust inline-test split."""
+    marker_checked = False
+
+    def marker() -> str | None:
+        window = "\n".join(head[: cfg.marker_lines])
+        for m in cfg.markers:
+            if m in window:
+                return m
+        return None
+
+    for rule in cfg.rules:
+        if not marker_checked and rule.cls not in cfg.before_markers:
+            marker_checked = True
+            m = marker()
+            if m:
+                return "generated", f"marker:{m}"
+        if rule.pattern.search(path):
+            return rule.cls, f"rule:{rule.source}"
+    if not marker_checked:
+        m = marker()
+        if m:
+            return "generated", f"marker:{m}"
+    return "production", "default"
+
+
+def classify_file_exclusive(cfg: ExclusiveConfig, path: str, data: bytes | None) -> dict:
+    """Per-file record: {path, language, binary, lines, classes: {cls: n}, reason}.
+    `data` None means a symlink/submodule entry: counted as a file with 0 lines."""
+    if data is None or b"\0" in data[:BINARY_SNIFF_BYTES]:
+        cls, reason = path_class(cfg, path, [])
+        return {"path": path, "language": detect_language(path, ""), "binary": True,
+                "lines": 0, "classes": {cls: 0}, "reason": reason}
+    text = data.decode("utf-8", errors="replace")
+    lines = split_lines(text)
+    lang = detect_language(path, lines[0] if lines else "")
+    cls, reason = path_class(cfg, path, lines)
+    n = len(lines)
+    classes = {cls: n}
+    if cls == "production" and lang == "rust":
+        info = analyze_rust_file(lines)
+        classes = {"production": info.prod_lines}
+        if info.inline_test_lines:
+            classes["inline_test"] = info.inline_test_lines
+    return {"path": path, "language": lang, "binary": False, "lines": n, "classes": classes, "reason": reason}
+
+
+def _iter_tracked_rev(root: str, rev: str):
+    """(path, bytes|None) for every entry of `rev`'s tree, read from the object store."""
+    listing = subprocess.run(["git", "-C", root, "ls-tree", "-r", "-z", "--full-tree", rev],
+                             capture_output=True, check=True).stdout
+    entries = []
+    for rec in listing.split(b"\0"):
+        if not rec:
+            continue
+        meta, path = rec.split(b"\t", 1)
+        mode, kind, oid = meta.split(b" ")
+        entries.append((path.decode("utf-8", errors="surrogateescape"), mode.decode(), kind.decode(), oid.decode()))
+    blobs = [e for e in entries if e[2] == "blob" and e[1] != "120000"]
+    proc = subprocess.Popen(["git", "-C", root, "cat-file", "--batch"], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    contents: dict[str, bytes] = {}
+    try:
+        assert proc.stdin and proc.stdout
+        for path, _mode, _kind, oid in blobs:
+            proc.stdin.write(oid.encode() + b"\n")
+            proc.stdin.flush()
+            header = proc.stdout.readline().split()
+            size = int(header[2])
+            contents[path] = proc.stdout.read(size)
+            proc.stdout.read(1)  # trailing LF
+    finally:
+        if proc.stdin:
+            proc.stdin.close()
+        if proc.stdout:
+            proc.stdout.close()
+        proc.wait()
+    for path, _mode, _kind, _oid in sorted(entries):
+        yield path, contents.get(path)
+
+
+def _iter_tracked_worktree(root: str):
+    listing = subprocess.run(["git", "-C", root, "ls-files", "-z", "--cached"], capture_output=True, check=True).stdout
+    for raw in sorted(set(p for p in listing.split(b"\0") if p)):
+        path = raw.decode("utf-8", errors="surrogateescape")
+        full = os.path.join(root, path)
+        if os.path.islink(full) or not os.path.isfile(full):
+            yield path, None
+            continue
+        with open(full, "rb") as fh:
+            yield path, fh.read()
+
+
+def run_exclusive_report(root: str, cfg: ExclusiveConfig, rev: str | None = None, with_files: bool = False) -> dict:
+    import platform
+    import socket
+
+    if rev:
+        sha = git(root, "rev-parse", "--verify", rev + "^{commit}").strip()
+        source = "rev"
+        items = _iter_tracked_rev(root, sha)
+        dirty = None
+    else:
+        sha = git(root, "rev-parse", "HEAD").strip()
+        source = "worktree"
+        items = _iter_tracked_worktree(root)
+        dirty = bool(git(root, "status", "--porcelain", "--untracked-files=no").strip())
+
+    matrix = {c: {l: {"files": 0, "lines": 0} for l in LANGUAGES} for c in EXCLUSIVE_CLASSES}
+    tracked_lines = files = binary = 0
+    reason_hits: dict[str, int] = {}
+    records = []
+    for path, data in items:
+        rec = classify_file_exclusive(cfg, path, data)
+        files += 1
+        binary += rec["binary"]
+        tracked_lines += rec["lines"]
+        reason_hits[rec["reason"]] = reason_hits.get(rec["reason"], 0) + 1
+        for cls, n in rec["classes"].items():
+            cell = matrix[cls][rec["language"]]
+            cell["files"] += 1
+            cell["lines"] += n
+        if with_files:
+            records.append(rec)
+
+    class_totals = {c: sum(v["lines"] for v in matrix[c].values()) for c in EXCLUSIVE_CLASSES}
+    lang_totals = {l: sum(matrix[c][l]["lines"] for c in EXCLUSIVE_CLASSES) for l in LANGUAGES}
+    classified = sum(class_totals.values())
+    views = {}
+    for key, view in cfg.views.items():
+        views[key] = {
+            "label": view["label"],
+            "classes": view["classes"],
+            "lines": sum(class_totals[c] for c in view["classes"]),
+            "rust_lines": sum(matrix[c]["rust"]["lines"] for c in view["classes"]),
+        }
+    report = {
+        "schema": EXCLUSIVE_SCHEMA,
+        "classification": cfg.version,
+        "gate_classification": "source-size-report/1",
+        "config_sha256": cfg.sha256,
+        "sha": sha,
+        "source": source,
+        "worktree_dirty": dirty,
+        "environment": {
+            "host": socket.gethostname(),
+            "python": platform.python_version(),
+            "platform": platform.platform(),
+            "git": git(root, "--version").strip(),
+        },
+        "line_rule": "count of '\\n' plus an unterminated last line; binary (NUL in the first 8000 bytes) and symlink entries count 0",
+        "classes": EXCLUSIVE_CLASSES,
+        "languages": LANGUAGES,
+        "matrix": matrix,
+        "class_totals": class_totals,
+        "language_totals": lang_totals,
+        "totals": {
+            "files": files,
+            "binary_or_symlink_files": binary,
+            "tracked_lines": tracked_lines,
+            "classified_lines": classified,
+            "consistent": classified == tracked_lines and sum(lang_totals.values()) == tracked_lines,
+        },
+        "views": views,
+        "reason_file_counts": dict(sorted(reason_hits.items())),
+    }
+    if with_files:
+        report["files"] = records
+    return report
+
+
+def render_exclusive_text(report: dict) -> str:
+    out = [f"source-size-report --exclusive-classes ({report['classification']})",
+           f"sha: {report['sha']} ({report['source']})", ""]
+    langs = [l for l in report["languages"] if report["language_totals"][l]]
+    out.append(f"{'class':<18}" + "".join(f"{l:>12}" for l in langs) + f"{'total':>12}")
+    for c in report["classes"]:
+        row = report["matrix"][c]
+        out.append(f"{c:<18}" + "".join(f"{row[l]['lines']:>12}" for l in langs) + f"{report['class_totals'][c]:>12}")
+    out.append(f"{'total':<18}" + "".join(f"{report['language_totals'][l]:>12}" for l in langs)
+               + f"{report['totals']['classified_lines']:>12}")
+    out.append("")
+    for key, v in report["views"].items():
+        out.append(f"{key:<28} {v['lines']:>10} lines (rust {v['rust_lines']})  {v['label']}")
+    t = report["totals"]
+    out.append("")
+    out.append(f"tracked lines {t['tracked_lines']}, classified {t['classified_lines']}, consistent={t['consistent']}")
+    return "\n".join(out) + "\n"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--root", default=".", help="repository root (default: cwd)")
@@ -519,9 +851,31 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--format", choices=["text", "json"], default="text")
     parser.add_argument("--out", default=None, help="write report to this file instead of stdout")
     parser.add_argument("--strict", action="store_true", help="exit 1 if any non-excepted warning was found")
+    parser.add_argument(
+        "--exclusive-classes",
+        action="store_true",
+        help="report every tracked line in exactly one class x language ([exclusive_classes] in the config)",
+    )
+    parser.add_argument("--rev", default=None, help="with --exclusive-classes: read this commit's tree instead of the worktree")
+    parser.add_argument("--files", action="store_true", help="with --exclusive-classes: include per-file records")
     args = parser.parse_args(argv)
 
     root = os.path.abspath(args.root)
+    if args.exclusive_classes:
+        try:
+            report = run_exclusive_report(root, load_exclusive_config(args.config, root), args.rev, args.files)
+        except Exception as exc:  # noqa: BLE001 - surface any failure as a clear non-zero exit
+            print(f"source-size-report: error: {exc}", file=sys.stderr)
+            return 2
+        out = json.dumps(report, ensure_ascii=False, indent=2) if args.format == "json" else render_exclusive_text(report)
+        if args.out:
+            with open(args.out, "w", encoding="utf-8") as fh:
+                fh.write(out if out.endswith("\n") else out + "\n")
+        else:
+            sys.stdout.write(out if out.endswith("\n") else out + "\n")
+        return 0 if report["totals"]["consistent"] else 3
+    if args.rev or args.files:
+        parser.error("--rev and --files need --exclusive-classes")
     try:
         prod_threshold, inline_threshold, exceptions = load_config(args.config, root)
         report = run_report(root, prod_threshold, inline_threshold, exceptions)

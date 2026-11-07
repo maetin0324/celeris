@@ -26,3 +26,101 @@ inline_test_lines = 300
 path = "crates/task-api/src/types.rs"
 reason = "flat API wire-type definitions; also the schemars source for docs/api/v1/*.schema.json (audit.md §9)"
 checks = ["production_size"]
+
+# --exclusive-classes report mode (health v2 B0). Every line of every tracked
+# file goes to exactly one class; language is a separate axis. This section is
+# read only by that mode: it does not change the warning inventory above, the
+# mandatory differential gate (check-source-size.py) or its baseline JSON.
+#
+# Rules are ordered; the first rule whose `path` regex matches (re.search on
+# the repo-relative path) wins. A file whose rules resolve to "production" and
+# whose language is Rust is split line by line: lines inside `#[cfg(test)]`
+# items (analyze_rust_file, the same heuristic the gate uses) go to
+# "inline_test", the rest stay "production". A file whose first
+# `generated_marker_lines` lines contain one of `generated_markers` is
+# "generated" unless an earlier-priority rule (vendor, lockfile) claimed it.
+# A path no rule matches is "production".
+[exclusive_classes]
+version = "source-size-exclusive/1"
+generated_markers = [
+  "@generated",
+  "This file was automatically generated",
+  "DO NOT EDIT",
+]
+generated_marker_lines = 10
+# Classes whose rules run before the generated-marker check.
+before_markers = ["vendor", "lockfile"]
+
+[[exclusive_classes.rules]]
+class = "vendor"
+path = '^crates/[^/]+/vendor/'
+why = "external crate copies via [patch.crates-io] (ADR 2026-11-02-deno-core-vendored-serde-json-features)"
+
+[[exclusive_classes.rules]]
+class = "vendor"
+path = '^config/skills/(yomiyasu|shadcn|frontend-design|web-design|ui-ux-quality-gate)/'
+why = "upstream skill copies; each SOURCE.md names source_url and commit"
+
+[[exclusive_classes.rules]]
+class = "lockfile"
+path = '(^|/)(Cargo\.lock|pnpm-lock\.yaml|package-lock\.json|yarn\.lock|requirements\.lock)$'
+
+[[exclusive_classes.rules]]
+class = "generated"
+path = '(^|/)generated/[^/]*\.(ts|tsx|js|mjs|json)$|\.gen\.(ts|tsx|js|rs)$'
+why = "codegen output; a Rust module that is merely named `generated` (task-dispatch auto_resolve::generated) is code"
+
+[[exclusive_classes.rules]]
+class = "migration"
+path = '(^|/)migrations/'
+
+[[exclusive_classes.rules]]
+class = "schema"
+path = '\.schema\.json$|(^|/)schemas?/'
+
+[[exclusive_classes.rules]]
+class = "fixture"
+path = '(^|/)(fixtures?|testdata|mock-celeris)/|^crates/celeris/\.tmp[^/]*/|(^|/)[^/]*_fixture\.py$|^examples/'
+why = "test/eval inputs; crates/celeris/.tmp* is a tracked leftover test knowledge base; examples/ holds sample crates for tests"
+
+[[exclusive_classes.rules]]
+class = "docs"
+path = '^(agent-docs|docs)/|\.md$|(^|/)LICENSE$'
+why = "agent-docs/ also holds progress raw records (json/jsonl/log); they are records, not code"
+
+[[exclusive_classes.rules]]
+class = "evaluation_infra"
+path = '^crates/(campaign|routing-eval|jev-classifier)/|^scripts/(campaign|model-routing)/|^tests/e2e-bench/'
+why = "measurement/evaluation crates and scripts (campaign, routing eval, jev); candidates to split out"
+
+[[exclusive_classes.rules]]
+class = "evaluation_infra"
+path = '^scripts/dev/(long-horizon-pilot|llm-improve|daemon-soak|general-cos-compare)(/|\.|-)|^scripts/dev/(test-long-horizon-[^/]*|general_cos_eval\.py|test_general_cos_eval\.py|cos-chat-bench[^/]*|cos_chat_answer_bench\.py|test_cos_chat_answer_bench\.py|cos-chat-live\.sh|jev[-_][^/]*|edit-activate-[^/]*|long-run-soak\.sh|long_run_soak_summary\.py|script-gate-measure\.sh|reflink-target-experiment\.sh|ts-behavior-eval\.sh|ts-pilot\.sh)$'
+why = "pilot / bench / soak / comparison drivers under scripts/dev"
+
+[[exclusive_classes.rules]]
+class = "external_test"
+path = '(^|/)(tests|e2e|benches|test)/|(^|/)(tests|[^/]*_tests?)\.rs$|\.(test|spec)\.(ts|tsx|mts|js|mjs)$|(^|/)test_[^/]*\.py$|(^|/)[^/]*_test\.py$'
+why = "same file-level test rules as is_external_rust_test / is_ts_test, plus Python unittest files"
+
+[[exclusive_classes.rules]]
+class = "tooling"
+path = '^(scripts|deploy|tools|web/scripts|\.claude|\.config)/|(^|/)(Cargo\.toml|package\.json|tsconfig[^/]*\.json|pnpm-workspace\.yaml|biome\.json|components\.json|(vite|vitest|playwright)\.config\.ts|\.gitignore|\.gitattributes|rust-toolchain(\.toml)?)$|^crates/[^/]+/scripts/'
+why = "build, check, deploy and dev scripts and build configuration"
+
+# The four views asked for by health v2 B0 (sums over classes; a view is not a class).
+[exclusive_classes.views.product_only]
+label = "本体のみ（production、全言語）"
+classes = ["production"]
+
+[exclusive_classes.views.own_total_with_tests]
+label = "自前総量（手書き code: 本体 + 試験 + tooling + 評価基盤 + migration）"
+classes = ["production", "inline_test", "external_test", "tooling", "evaluation_infra", "migration"]
+
+[exclusive_classes.views.all_tracked]
+label = "全追跡行（全 class・全言語）"
+classes = ["production", "inline_test", "external_test", "generated", "vendor", "fixture", "evaluation_infra", "tooling", "docs", "schema", "migration", "lockfile"]
+
+[exclusive_classes.views.external_split_candidates]
+label = "外部分離候補（評価基盤 + vendor）"
+classes = ["evaluation_infra", "vendor"]

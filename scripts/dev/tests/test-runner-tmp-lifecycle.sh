@@ -8,6 +8,8 @@
 # SIGKILL は捕捉できないので、直後に dir が消えることは試験しない。次回回収の条件（lock・pid+starttime・session・
 # boot_id・/proc 不明・若い dir・owner 不明・並行・symlink・別 UID）だけを固定する。
 # 試験が作った dir と process は、成功・失敗・中断のどれでも終了時に回収し、残っていないことを自分で確かめる（残れば exit 1）。
+# `sh <script>` で呼ばれても bash で動かす（dash は ${BASH_SOURCE[0]} を構文エラーにする）。
+[ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
 set -uo pipefail
 # fixture の runner が配線済みの検査（test-affected.sh の scripts/dev 変更時の検査）を再び呼ばないための guard。
 export CELERIS_RUNNER_TMP_TEST=1

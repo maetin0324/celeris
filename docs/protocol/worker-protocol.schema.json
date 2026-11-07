@@ -1637,6 +1637,41 @@
       ],
       "type": "object"
     },
+    "DiffStat": {
+      "description": "D4.1: `target_sha..reviewed_sha` の差分の統計。",
+      "properties": {
+        "deletions": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "files": {
+          "description": "変更した file の総数（`paths` を切り詰めても総数のまま）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "insertions": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "paths": {
+          "default": [],
+          "description": "file ごとの統計（上限 40 件）。binary の file は行数 0。",
+          "items": {
+            "$ref": "#/$defs/PathStat"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "files",
+        "insertions",
+        "deletions"
+      ],
+      "type": "object"
+    },
     "DirectRouteContext": {
       "description": "`context.direct_route`（ADR-0124 D4）: 直行と判定した根拠の要約。",
       "properties": {
@@ -2053,6 +2088,17 @@
           "description": "replan を起こした理由（WU failed / no-progress・continuation の上限 / 実質的な review 不合格、\nのいずれかの決定的な説明文。`replan = false` なら空文字列）。",
           "type": "string"
         },
+        "review_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReviewPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-11-07-health-review-integration D2.4・D3.4: repo 固有の review 方針（base（target）側の\nprofile の `[review]` 節の写し。owner 地図・高 risk の path class・不変条件）。planner は高 risk の\nclass を変える計画に設計 brief を書く。dispatcher が base 側から読めた repo だけ `Some`。`[review]` の\n無い repo・旧 daemon では `None` で `request.json` は従来と同じ。"
+        },
         "tree": {
           "anyOf": [
             {
@@ -2222,6 +2268,313 @@
         "filesystem",
         "mcp"
       ],
+      "type": "object"
+    },
+    "HealthFindingCounts": {
+      "description": "report の `summary.counts` の写し。",
+      "properties": {
+        "existing": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fail_grade": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "findings": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "new": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "worsened": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "findings",
+        "fail_grade",
+        "new",
+        "worsened",
+        "existing"
+      ],
+      "type": "object"
+    },
+    "HealthFindingKind": {
+      "description": "D5.1: 固定 7 種の finding 種別（I6）。説明の正本は ADR の表と汎用規約（`change_rules/generic.md`）。",
+      "oneOf": [
+        {
+          "const": "symptom_fix_outside_owner",
+          "description": "owner の外で症状を直した。",
+          "type": "string"
+        },
+        {
+          "const": "duplicate_implementation",
+          "description": "同じ仕様の二重実装。",
+          "type": "string"
+        },
+        {
+          "const": "local_hook_in_shared_interface",
+          "description": "共通 interface への局所 hook。",
+          "type": "string"
+        },
+        {
+          "const": "dual_source_of_truth",
+          "description": "状態の二重正本。",
+          "type": "string"
+        },
+        {
+          "const": "unapproved_fallback_or_switch",
+          "description": "未承認の fallback・新旧切替。",
+          "type": "string"
+        },
+        {
+          "const": "removal_missing",
+          "description": "旧経路の撤去漏れ。",
+          "type": "string"
+        },
+        {
+          "const": "test_change_unjustified",
+          "description": "試験の追加・削除の根拠が無い。",
+          "type": "string"
+        }
+      ]
+    },
+    "HealthFindingOut": {
+      "description": "D5.1: reviewer の health finding 1 件。",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/HealthFindingKind"
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "repair": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReviewRepairHint"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`removal_missing`・`test_change_unjustified` の blocking だけが `scope = \"local\"` で局所修復に写る（D5.3）。"
+        },
+        "severity": {
+          "$ref": "#/$defs/HealthSeverity"
+        }
+      },
+      "required": [
+        "kind",
+        "severity",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "HealthFindingsSummary": {
+      "description": "D4.1: repo health の report（`celeris.repo-health/1`）の要約。値の意味は report の schema\n（`scripts/dev/repo-health/schema/report-v1.schema.json`）のまま写す。",
+      "properties": {
+        "counts": {
+          "$ref": "#/$defs/HealthFindingCounts"
+        },
+        "new": {
+          "default": [],
+          "description": "`delta ∈ {new, worsened}` かつ `exception == null` の finding（上限 50 件）。",
+          "items": {
+            "$ref": "#/$defs/HealthReportFinding"
+          },
+          "type": "array"
+        },
+        "reviewable": {
+          "description": "report の `summary.reviewable`。`false` の report は材料にせず `new` を空にする（D4.2）。",
+          "type": "boolean"
+        },
+        "truncated": {
+          "default": 0,
+          "description": "上限で切り捨てた `new` の件数。",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "verdict": {
+          "description": "report の `summary.verdict`（`pass` | `fail` | `error`）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "verdict",
+        "reviewable",
+        "counts"
+      ],
+      "type": "object"
+    },
+    "HealthPolicyState": {
+      "description": "report の `policy` の要約（ADR repo-health-contract D2）。",
+      "properties": {
+        "changed": {
+          "description": "candidate が policy の file を変えたか。`true` なら reviewer は `HealthVerdictOut.policy` を必ず書く（D6.3）。",
+          "type": "boolean"
+        },
+        "files": {
+          "default": [],
+          "description": "変わった policy の file（repo 相対）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "source": {
+          "description": "`base` | `bootstrap` | `builtin` | `unavailable`。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "changed"
+      ],
+      "type": "object"
+    },
+    "HealthRepoInput": {
+      "description": "D4.1: 1 repo の base（target）→ candidate の材料。",
+      "properties": {
+        "diff": {
+          "$ref": "#/$defs/DiffStat"
+        },
+        "findings": {
+          "$ref": "#/$defs/HealthFindingsSummary"
+        },
+        "invariants": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {},
+          "description": "base 側の review 方針の不変条件（名前 → 根拠の file）。",
+          "type": "object"
+        },
+        "owner_rows": {
+          "default": [],
+          "description": "base 側の `owner_map` file のうち、変更 path を含む表の行（上限 40 件）。",
+          "items": {
+            "$ref": "#/$defs/OwnerRow"
+          },
+          "type": "array"
+        },
+        "policy": {
+          "$ref": "#/$defs/HealthPolicyState"
+        },
+        "repo_id": {
+          "type": "string"
+        },
+        "reviewed_sha": {
+          "description": "review する candidate の SHA。",
+          "type": "string"
+        },
+        "target_sha": {
+          "description": "review 前の同期で決めた target の SHA（ADR-0118）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "repo_id",
+        "target_sha",
+        "reviewed_sha",
+        "diff",
+        "findings",
+        "policy"
+      ],
+      "type": "object"
+    },
+    "HealthReportFinding": {
+      "description": "report の `findings[]` 1 件の要約。",
+      "properties": {
+        "delta": {
+          "description": "`new` | `worsened`。",
+          "type": "string"
+        },
+        "fingerprint": {
+          "type": "string"
+        },
+        "path": {
+          "description": "最初の evidence の path（repo 全体の finding では無い）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rule_id": {
+          "type": "string"
+        },
+        "severity": {
+          "description": "`error` | `warning` | `info`。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule_id",
+        "fingerprint",
+        "severity",
+        "delta"
+      ],
+      "type": "object"
+    },
+    "HealthReviewInput": {
+      "description": "D4.1: `ReviewRequest.health`。dispatcher が candidate SHA ごとに 1 回だけ作る（I5）。",
+      "properties": {
+        "repos": {
+          "default": [],
+          "description": "repo ごとの材料（task の repos の順）。",
+          "items": {
+            "$ref": "#/$defs/HealthRepoInput"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "HealthSeverity": {
+      "description": "D5.1: blocking は合否に使い、advisory は記録と次の run の `prior_review` だけに使う。",
+      "enum": [
+        "blocking",
+        "advisory"
+      ],
+      "type": "string"
+    },
+    "HealthVerdictOut": {
+      "description": "D5.1: `ReviewOutput.health`。`ReviewRequest.health` を渡した review では必須（I7）。",
+      "properties": {
+        "findings": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/HealthFindingOut"
+          },
+          "type": "array"
+        },
+        "policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PolicyVerdictOut"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "policy の file を変えた candidate（`HealthPolicyState.changed`）への判定。"
+        }
+      },
       "type": "object"
     },
     "IndexItem": {
@@ -2647,6 +3000,23 @@
       ],
       "type": "object"
     },
+    "OwnerRow": {
+      "description": "D4.1: owner 地図の 1 行（`row` は地図の表の行をそのまま写す）。",
+      "properties": {
+        "path": {
+          "description": "この行に当たった変更 path。",
+          "type": "string"
+        },
+        "row": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "row"
+      ],
+      "type": "object"
+    },
     "ParentUnit": {
       "additionalProperties": false,
       "description": "D4 (4): 子 task が親の計画のどの unit から作られたか（`Task.tree.parent_unit`）。",
@@ -2679,6 +3049,49 @@
         "plan_id",
         "unit_key",
         "stage"
+      ],
+      "type": "object"
+    },
+    "PathClass": {
+      "description": "D2.2: 高 risk の path class 1 件。`paths` は repo 相対 path に `re.search` で当てる正規表現。",
+      "properties": {
+        "class": {
+          "type": "string"
+        },
+        "paths": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "class",
+        "paths"
+      ],
+      "type": "object"
+    },
+    "PathStat": {
+      "description": "D4.1: 変更した file 1 件。",
+      "properties": {
+        "deletions": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "insertions": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "insertions",
+        "deletions"
       ],
       "type": "object"
     },
@@ -2747,6 +3160,22 @@
           "type": "string"
         }
       ]
+    },
+    "PolicyVerdictOut": {
+      "description": "D5.1・D6.3: policy の file の変更への reviewer の判定。`approved = true` でも人の承認を待つ（D6.4）。",
+      "properties": {
+        "approved": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "approved",
+        "reason"
+      ],
+      "type": "object"
     },
     "PostLoginRead": {
       "description": "ADR 2026-10-09 credential username / post-login D2-1・D2-5: what the agent may read after the\nlogin of an opted-in site. `read_origins` is the site policy's list narrowed to the task's\nallowed domains, `actions` the shim verbs of `post_login.actions` that the task policy (task ∩\ngrant) allows. Either empty means no opt-in (H3 until the session ends).",
@@ -3022,6 +3451,17 @@
     "ReviewOutput": {
       "description": "`Review` run がワークスペース直下 `artifacts/review.json` に書く出力（ADR-0007 D1/D5）。",
       "properties": {
+        "health": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HealthVerdictOut"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-11-07-health-review-integration D5.1: 構造化 health verdict。`ReviewRequest.health` を渡した\nreview では必須（無ければ不合格。I7）。旧 reviewer の `review.json` は省略で読める。"
+        },
         "verdicts": {
           "items": {
             "$ref": "#/$defs/ReviewVerdictOut"
@@ -3031,6 +3471,40 @@
       },
       "required": [
         "verdicts"
+      ],
+      "type": "object"
+    },
+    "ReviewPolicy": {
+      "description": "D2.4: 解決済みの review 方針。`source = absent`（base に `[review]` が無い）の repo では作らない\n（`RunContext.review_policy = None`）。",
+      "properties": {
+        "definition_sha256": {
+          "description": "解決した profile の blob の内容から作った digest（D2.3）。health の材料の再利用の鍵に入る。",
+          "type": "string"
+        },
+        "high_risk": {
+          "description": "高 risk の path class。",
+          "items": {
+            "$ref": "#/$defs/PathClass"
+          },
+          "type": "array"
+        },
+        "invariants": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "保護する不変条件の名前 → 根拠の file（repo 相対）。",
+          "type": "object"
+        },
+        "owner_map": {
+          "description": "変更 path の owner 行を引く file（repo 相対。例 `docs/architecture-map.md`）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "definition_sha256"
       ],
       "type": "object"
     },
@@ -3124,6 +3598,17 @@
             "$ref": "#/$defs/Evidence"
           },
           "type": "array"
+        },
+        "health": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HealthReviewInput"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-11-07-health-review-integration D4.1: base（target）→ candidate の diff 統計・owner 地図の行・\nrepo health の new findings の要約。dispatcher が candidate SHA ごとに 1 回だけ作り、final review\nにだけ渡す。`None`（WU の review・review 方針の無い repo・旧 daemon）の `request.json` は従来と同じ。"
         },
         "policy_violations": {
           "description": "ADR 2026-10-07-worker-no-subagents-no-llm-cli D6: 対象 run で検出された subagent 道具・別 LLM CLI / API の\n起動（dispatcher が `Event::WorkerPolicyViolation` から集める。LLM は関与しない）。",

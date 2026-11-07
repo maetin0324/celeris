@@ -10,8 +10,9 @@ head の tree で走らせ、非 0 の exit を finding に写す。どの scrip
 
 - 置換: `{root}` は head の tree の dir（worktree なら repo、commit なら $TMPDIR の展開先）、`{base}` は base の sha。
   root・base は snapshot が 1 か所で決め、script は自分で解決しない。
-- commit の head では、script の git は一時 index（head の tree）と repo の object を見る（GIT_DIR・GIT_WORK_TREE・
-  GIT_INDEX_FILE）。repo の index・作業ツリーには書かない。
+- commit の head では、展開先を独立した Git の作業ツリーにする（object は alternates で対象 repo を読み、branch の
+  ref を写す。HEAD は head の sha）。対象 repo の index・ref・config には書かない。command には GIT_* の環境変数を
+  渡さない（command の中の試験が作る一時 repo が対象 repo を書き換えないように）。
 - command が無ければ not_applicable（no_command）。argv[0] が PATH に無い・script の file が無い（exit 126・127）は
   unsupported。非 0 の exit は fail（finding 1 件。出力の `path:line:` の行を evidence にする。無ければ command の file）。
 - head だけで評価する（既存検査は今も「全部通る」が合格の条件なので、base に同じ失敗があっても new として数える）。
@@ -23,7 +24,6 @@ import os
 import re
 import shutil
 import subprocess
-import tempfile
 
 from health.gitio import git_text
 from health.rule import Hit, NotApplicable, Rule, Unsupported
@@ -45,18 +45,38 @@ def _commands(ctx) -> list[list[str]]:
     return raw
 
 
-def _env(ctx, tree, tmp: str) -> dict:
-    env = dict(os.environ)
+def _clean_env() -> dict:
+    """command に渡す環境。GIT_* は渡さない（command の中の試験が作る一時 repo が対象 repo を指さないように）。"""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     env.pop("CELERIS_WU_BASE", None)  # base は {base} で渡す。script が環境から別の base を拾わない
-    if tree.worktree:
-        return env
-    root = ctx.snapshot.root
-    git_dir = git_text(root, "rev-parse", "--absolute-git-dir")
-    index = os.path.join(tmp, "index")
-    subprocess.run(["git", "-C", root, "read-tree", ctx.snapshot.head_sha], check=True,
-                   env={**env, "GIT_INDEX_FILE": index}, capture_output=True)
-    env.update({"GIT_DIR": git_dir, "GIT_WORK_TREE": tree.checkout_dir(), "GIT_INDEX_FILE": index})
     return env
+
+
+def _git_checkout(ctx, tree, env: dict) -> None:
+    """commit の head の展開先を独立した Git の作業ツリーにする（対象 repo の index・ref・config には書かない）。
+
+    object は alternates で対象 repo のものを読み、branch の ref は写す（main との merge-base を引けるように）。
+    HEAD は head の sha（detached）、index は head の tree。
+    """
+    root = tree.checkout_dir()
+    if os.path.exists(os.path.join(root, ".git")):
+        return
+    src = ctx.snapshot.root
+    common = git_text(src, "rev-parse", "--path-format=absolute", "--git-common-dir")
+
+    def g(*args, stdin=None):
+        subprocess.run(["git", "-C", root, *args], check=True, env=env, input=stdin, capture_output=True,
+                       text=True)
+
+    g("init", "-q")
+    with open(os.path.join(root, ".git", "objects", "info", "alternates"), "w", encoding="utf-8") as fh:
+        fh.write(os.path.join(common, "objects") + "\n")
+    refs = git_text(src, "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads/")
+    g("update-ref", "--stdin", stdin="".join(f"update {r} {o}\n" for o, r in
+                                          (line.split(" ", 1) for line in refs.splitlines() if line)))
+    g("update-ref", "--no-deref", "HEAD", ctx.snapshot.head_sha)
+    g("read-tree", "HEAD")
+    subprocess.run(["git", "-C", root, "update-index", "-q", "--refresh"], env=env, capture_output=True)
 
 
 def _evidence(out: str, fallback: str, side: str) -> list[dict]:
@@ -79,26 +99,27 @@ def _rule(rule_id: str, kind: str) -> Rule:
         root = tree.checkout_dir()
         subs = {"{root}": root, "{base}": ctx.snapshot.base_sha or ""}
         hits = []
-        with tempfile.TemporaryDirectory(prefix="repo-health-cmd-") as tmp:
-            env = _env(ctx, tree, tmp)
-            for argv in commands:
-                argv = [subs.get(a, a) for a in argv]
-                if shutil.which(argv[0]) is None:
-                    raise Unsupported(f"tool_missing:{argv[0]}")
-                proc = subprocess.run(argv, cwd=root, env=env, capture_output=True, text=True, timeout=900)
-                shown = " ".join(a if a not in (root,) else "{root}" for a in argv)
-                if proc.returncode in (126, 127):
-                    raise Unsupported(f"command_missing: {shown} が起動できない（exit {proc.returncode}）")
-                if proc.returncode == 0:
-                    continue
-                script = next((a for a in argv[1:] if a.startswith("scripts/") or a.endswith((".sh", ".py"))),
-                              argv[0])
-                hits.append(Hit(
-                    evidence=_evidence(proc.stdout + "\n" + proc.stderr, script, tree.side),
-                    scope=("repo", "."),
-                    rationale=f"既存検査 {shown} が exit {proc.returncode} で終わった",
-                    key=f"command|{shown.replace(ctx.snapshot.base_sha or '{base}', '{base}')}",
-                ))
+        env = _clean_env()
+        if not tree.worktree:
+            _git_checkout(ctx, tree, env)
+        for argv in commands:
+            argv = [subs.get(a, a) for a in argv]
+            if shutil.which(argv[0]) is None:
+                raise Unsupported(f"tool_missing:{argv[0]}")
+            proc = subprocess.run(argv, cwd=root, env=env, capture_output=True, text=True, timeout=900)
+            shown = " ".join(a if a not in (root,) else "{root}" for a in argv)
+            if proc.returncode in (126, 127):
+                raise Unsupported(f"command_missing: {shown} が起動できない（exit {proc.returncode}）")
+            if proc.returncode == 0:
+                continue
+            script = next((a for a in argv[1:] if a.startswith("scripts/") or a.endswith((".sh", ".py"))),
+                          argv[0])
+            hits.append(Hit(
+                evidence=_evidence(proc.stdout + "\n" + proc.stderr, script, tree.side),
+                scope=("repo", "."),
+                rationale=f"既存検査 {shown} が exit {proc.returncode} で終わった",
+                key=f"command|{shown.replace(ctx.snapshot.base_sha or '{base}', '{base}')}",
+            ))
         return hits
 
     return Rule(id=rule_id, kind=kind, adapter="docs" if kind == "docs" else "generic", evaluate=evaluate,

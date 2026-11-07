@@ -112,7 +112,7 @@ echo "OK (4) weakening the profile or a wrapped checker -> exit 1 (policy.change
 # (5) doc-only: 文書だけの変更は構造の検査と unit 試験を起こさない（main を進め、base..作業ツリーを文書だけにする）
 git branch -f main HEAD
 echo 'more' >>README.md
-mkdir -p docs && echo '# guide' >docs/guide.md
+echo '# guide' >guide.md
 run 0 "(5) doc-only"
 [ "$(field 'r["inputs"]["mode"]')" = doc-only ] || fail "(5) mode が doc-only でない"
 [ "$(field '[x["status"] for x in r["rules"] if x["id"] == "source-size"][0]')" = not_applicable ] \

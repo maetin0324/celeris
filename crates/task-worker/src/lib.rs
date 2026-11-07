@@ -123,10 +123,13 @@ pub use process_group::{ProcessGroup, kill_tree, kill_tree_with};
 pub use protocol::{
     ActiveMilestoneContext, ActiveProjectContext, Answer, ChildSummary, ClusterContext,
     ClusterJobsContinuation, CommentContext, ContinuationContext, ConversationAddressee,
-    ConversationTurn, Evidence, GenreContext, GenreRoleContext, MemoryContext, MilestoneBrief,
-    MilestoneReviewContext, MilestoneTaskResult, NodeContext, OrgNodeContext, PROTOCOL_VERSION,
-    PriorReview, ProviderFailure, RecentWork, ReviewOutput, ReviewRequest, ReviewVerdictOut,
-    RoleContext, RunContext, RunRequest, SessionHandle, WorkerMessage,
+    ConversationTurn, DiffStat, Evidence, GenreContext, GenreRoleContext, HealthFindingCounts,
+    HealthFindingKind, HealthFindingOut, HealthFindingsSummary, HealthPolicyState, HealthRepoInput,
+    HealthReportFinding, HealthReviewInput, HealthSeverity, HealthVerdictOut, MemoryContext,
+    MilestoneBrief, MilestoneReviewContext, MilestoneTaskResult, NodeContext, OrgNodeContext,
+    OwnerRow, PROTOCOL_VERSION, PathStat, PolicyVerdictOut, PriorReview, ProviderFailure,
+    RecentWork, ReviewOutput, ReviewRequest, ReviewVerdictOut, RoleContext, RunContext, RunRequest,
+    SessionHandle, WorkerMessage,
 };
 pub use provider::classify_provider_failure;
 pub use result_report::{

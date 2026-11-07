@@ -21,25 +21,6 @@ pub struct DispatchRoutingSettings {
 impl Dispatcher {
     // Verify must skip snapshot tasks before dependency/child lookups and maintenance.
     // Filtering only in dispatch_one still scans the snapshot on every smoke tick.
-    /// `dispatch_one` の前の見送り判定。見送るなら `Ok(true)`。
-    pub(super) fn ready_candidate_held(&mut self, task: &Task) -> Result<bool, DispatchError> {
-        // ADR 2026-10-17-root-dependency-waits-for-integration: root 間の依存先の成果が既定 branch に入るまで待つ。
-        if let Some(wait) = task_ops::dep_integration::integration_wait(
-            self.store.as_ref(),
-            task,
-            &mut self.integrated_deps,
-        )? {
-            self.note_dispatch_wait(task.id, wait);
-            return Ok(true);
-        }
-        // ADR 2026-10-18-parent-waits-for-children: 委譲した子が未完了・再実行待ちの間、親は起こさない。
-        if self.parent_waits_for_children(task)? {
-            return Ok(true);
-        }
-        // ADR 2026-10-07-build-tmp-hygiene D1.4: 手動実行・queued から作られた保守 task も worker に渡さない。
-        self.run_maintenance_task(task)
-    }
-
     pub(super) fn eligible_ready_tasks(&self, window: usize) -> Result<Vec<Task>, DispatchError> {
         Ok(self
             .store
@@ -1750,4 +1731,21 @@ pub(super) fn tier_label(tier: task_core::Tier) -> &'static str {
         task_core::Tier::Standard => "standard",
         task_core::Tier::Cheap => "cheap",
     }
+}
+
+/// `dispatch_one` の前の見送り判定。見送るなら `Ok(true)`。
+pub(super) fn ready_candidate_held(d: &mut Dispatcher, task: &Task) -> Result<bool, DispatchError> {
+    // ADR 2026-10-17-root-dependency-waits-for-integration: root 間の依存先の成果が既定 branch に入るまで待つ。
+    if let Some(wait) =
+        task_ops::dep_integration::integration_wait(d.store.as_ref(), task, &mut d.integrated_deps)?
+    {
+        d.note_dispatch_wait(task.id, wait);
+        return Ok(true);
+    }
+    // ADR 2026-10-18-parent-waits-for-children: 委譲した子が未完了・再実行待ちの間、親は起こさない。
+    if d.parent_waits_for_children(task)? {
+        return Ok(true);
+    }
+    // ADR 2026-10-07-build-tmp-hygiene D1.4: 手動実行・queued から作られた保守 task も worker に渡さない。
+    d.run_maintenance_task(task)
 }

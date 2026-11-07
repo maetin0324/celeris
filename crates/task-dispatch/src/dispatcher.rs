@@ -2615,7 +2615,7 @@ impl Dispatcher {
                 continue;
             }
             let gates_started = Instant::now();
-            let held = self.ready_candidate_held(&task);
+            let held = dispatch_run::ready_candidate_held(self, &task);
             self.dispatch_ready_parts
                 .add("dispatch_ready.gates", gates_started);
             if held? {

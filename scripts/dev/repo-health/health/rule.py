@@ -17,7 +17,8 @@ rule は `scripts/dev/repo-health/rules/` の module に置き、module 変数 `
 - tools: 要る外部 tool の名前（PATH で探す）。無ければ unsupported（tool_missing:<name>）
 - candidate: 静的推定なら True。severity は warning 以下に切り下げる
 - head_only: base では評価しない（delta は常に new）。policy.changed のように差分そのものを見る rule
-- 判定できないときは `raise Unknown("<reason>")`、評価できない環境なら `raise Unsupported("<reason>")`。
+- 判定できないときは `raise Unknown("<reason>")`、評価できない環境なら `raise Unsupported("<reason>")`、
+  profile が対象を宣言していない（層の宣言が無い など）なら `raise NotApplicable("<reason>")`。
   それ以外の例外は error（crashed:<rule_id>:<例外の型>）。
 """
 
@@ -29,6 +30,10 @@ from typing import Callable
 
 class Unknown(Exception):
     """評価は終わったが判定できない（baseline が読めない など）。args[0] は reason。"""
+
+
+class NotApplicable(Exception):
+    """この repo・profile には評価の対象が無い（profile が層を宣言していない など）。args[0] は reason。"""
 
 
 class Unsupported(Exception):

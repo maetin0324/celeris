@@ -208,16 +208,15 @@ class RustFileInfo:
     external_mod_decls: list[str] = field(default_factory=list)
 
 
-def analyze_rust_file(lines: list[str]) -> RustFileInfo:
-    str_mask = rust_string_mask(lines)
+def rust_test_mask(lines: list[str], str_mask: list[bool] | None = None) -> tuple[list[bool], list[dict]]:
+    """Per-line mask of `#[cfg(test)]`-gated content and the inline test mods.
+
+    Shared with the repo-health rules (scripts/dev/repo-health/health/source_size.py)
+    so both count production lines the same way."""
+    if str_mask is None:
+        str_mask = rust_string_mask(lines)
     test_mask = [False] * len(lines)
     inline_test_mods: list[dict] = []
-    external_mod_decls: list[str] = []
-
-    for i, l in enumerate(lines):
-        m = MOD_DECL_RE.match(l)
-        if m and m.group(3) == ";":
-            external_mod_decls.append(m.group(2))
 
     for i, l in enumerate(lines):
         if not CFG_TEST_RE.match(l):
@@ -252,7 +251,17 @@ def analyze_rust_file(lines: list[str]) -> RustFileInfo:
                 end = j
             for k in range(i, end + 1):
                 test_mask[k] = True
+    return test_mask, inline_test_mods
 
+
+def analyze_rust_file(lines: list[str]) -> RustFileInfo:
+    external_mod_decls: list[str] = []
+    for l in lines:
+        m = MOD_DECL_RE.match(l)
+        if m and m.group(3) == ";":
+            external_mod_decls.append(m.group(2))
+
+    test_mask, inline_test_mods = rust_test_mask(lines)
     n = len(lines)
     inline_test_total = sum(1 for k in range(n) if test_mask[k])
     return RustFileInfo(

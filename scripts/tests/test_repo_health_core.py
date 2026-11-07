@@ -67,11 +67,19 @@ def git(cwd: Path, *args: str) -> str:
                           env=env).stdout.strip()
 
 
+def _core_rules_only(directory: str, names: list[str]) -> list[str]:
+    """写しの rules/ には core の rule（policy_changed.py）だけを残す。本物の rule は ID が試験用の rule と重なる。"""
+    skip = [n for n in names if n == "__pycache__"]
+    if Path(directory).name == "rules":
+        skip += [n for n in names if n.endswith(".py") and n != "policy_changed.py"]
+    return skip
+
+
 class RepoHealthCoreTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="rh-core-", dir=os.environ.get("TMPDIR")))
         self.tool = self.tmp / "tool"
-        shutil.copytree(TOOL_SRC, self.tool, ignore=shutil.ignore_patterns("__pycache__"))
+        shutil.copytree(TOOL_SRC, self.tool, ignore=_core_rules_only)
         (self.tool / "rules" / "zz_test_rules.py").write_text(TEST_RULES, encoding="utf-8")
         self.bin = self.tmp / "bin"
         self.bin.mkdir()

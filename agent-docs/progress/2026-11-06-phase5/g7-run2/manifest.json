@@ -1,0 +1,183 @@
+{
+ "schema": "celeris.g7-raw-manifest/1",
+ "run": "G7 2 回目（approval n1-g7-20261107-1、2026-11-07 18:30Z ごろ）",
+ "source_root": "/local/celeris/data/scratch/n1-g7",
+ "copied_by": "task 01M6VMSFP1R7DSH9T8PB4GND0Q の WU g7-run2-import（原本は読み取りだけ。1 file ずつコピー）",
+ "secret_scan": {
+  "commands": [
+   "credential 4 語（Anthropic key の接頭辞、OAuth の 2 種の token の欄名、Authorization の値の語）を raw-run2・run2.log・approval-run2b.json に grep -rc で実行。語そのものはこの file に書かない"
+  ],
+  "result": "4 語とも 0 件",
+  "redactions": []
+ },
+ "files": [
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/run2.log",
+   "dest": "run.log",
+   "bytes": 801,
+   "sha256": "1daa2dc4ae60615cd5a5df4f03636abdb2d8d488275c8d38b06fb39ce750fca0",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/approval-run2b.json",
+   "dest": "approval.json",
+   "bytes": 863,
+   "sha256": "4fbec7d3cd1b9c85c2b2b5fbbee013094c3086c8a23bba5ed68e5f62b64e458a",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw-run2/arm-map/49a77b52eb2fcefa.json",
+   "dest": "arm-map/49a77b52eb2fcefa.json",
+   "bytes": 41,
+   "sha256": "35c6528747b6ce6a70a941e45c6581de3e00f523a68b3b8f614425518711ad16",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw-run2/arm-map/7420dfe789f99af7.json",
+   "dest": "arm-map/7420dfe789f99af7.json",
+   "bytes": 41,
+   "sha256": "54188116d5ebf7cd6559162ee8f7a72dc3e7eb19c006eb00ed2421ec99813d7e",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw-run2/facts/49a77b52eb2fcefa.json",
+   "dest": "facts/49a77b52eb2fcefa.json",
+   "bytes": 11263,
+   "sha256": "74c369332eb11bc6f7eae805404f42c9a2222ca76c59eba69fbe6b8f104c9265",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw-run2/facts/7420dfe789f99af7.json",
+   "dest": "facts/7420dfe789f99af7.json",
+   "bytes": 16839,
+   "sha256": "9ec3bbddda304e7bc0e393d9bb0152da7a18d072e8b86080c108ee312098df11",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw-run2/grade/grades.jsonl",
+   "dest": "grade/grades.jsonl",
+   "bytes": 3931,
+   "sha256": "abf36111ed14b5528b1d2e8e7b2b65935b7a845379f97f027255b8e1a3b40161",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw-run2/grade/pilot-facts.json",
+   "dest": "grade/pilot-facts.json",
+   "bytes": 226,
+   "sha256": "f9e0520801e690b39a0cb050491a342c56ce80f5ca445d089b6308e24b64c58a",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw-run2/grade/pilot-gate.json",
+   "dest": "grade/pilot-gate.json",
+   "bytes": 4702,
+   "sha256": "2e3e3fcfd0499b5c7ae0b49ac38dfd167aa0a90b35d5d6ddb182d17ca4293be8",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw-run2/grade/summary.json",
+   "dest": "grade/summary.json",
+   "bytes": 1026,
+   "sha256": "1ba60abac99874050ed2f53a28384084c7d1af4ba7c7edd84d4b11124f6eee56",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw-run2/ops/49a77b52eb2fcefa.json",
+   "dest": "ops/49a77b52eb2fcefa.json",
+   "bytes": 10467,
+   "sha256": "1fc531ce39c17db38f9b17e347c20a2148a6f13094f8d0e4d85756de2b8b2bc2",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw-run2/ops/7420dfe789f99af7.json",
+   "dest": "ops/7420dfe789f99af7.json",
+   "bytes": 14139,
+   "sha256": "4259989c677e61976c906d85b08565e8fd50a9245483e503be9d114b9d21fb6c",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw-run2/ops/C06-new.log",
+   "dest": "ops/C06-new.log",
+   "bytes": 2431,
+   "sha256": "bdb93f241046de9694605207d336bae416822989fcff6de32e38b93c28b47daa",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw-run2/ops/C08-new.log",
+   "dest": "ops/C08-new.log",
+   "bytes": 2341,
+   "sha256": "bf6cbcbbe3ba8bc8e75a189eb36ec792c1339b2e10be1f12942bfc120597eb4c",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw-run2/trials/49a77b52eb2fcefa/repo/README.md",
+   "dest": "trials/49a77b52eb2fcefa/repo/README.md",
+   "bytes": 1487,
+   "sha256": "043f49c5d10966797fc82d2e8b312367818fbf6bbd34fb6d4328bcf3777b51e2",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw-run2/trials/49a77b52eb2fcefa/repo/minichunk.py",
+   "dest": "trials/49a77b52eb2fcefa/repo/minichunk.py",
+   "bytes": 3913,
+   "sha256": "9ed9dccac2aa9d2d2ffcda0788c80aa4555042e1e3ac07383d325b2cf87288bd",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw-run2/trials/49a77b52eb2fcefa/repo/out/o1.txt",
+   "dest": "trials/49a77b52eb2fcefa/repo/out/o1.txt",
+   "bytes": 114,
+   "sha256": "cae250b21c9c0df54728bc3e87f78d82432ab55ab7a563e6e0e323dbfc0332da",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw-run2/trials/49a77b52eb2fcefa/repo/out/o2.txt",
+   "dest": "trials/49a77b52eb2fcefa/repo/out/o2.txt",
+   "bytes": 114,
+   "sha256": "6162f6613f0f6899461b6a3633ffaa787e886f8a3d8957d608986bec3e6fcac7",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw-run2/trials/7420dfe789f99af7/repo/README.md",
+   "dest": "trials/7420dfe789f99af7/repo/README.md",
+   "bytes": 1487,
+   "sha256": "ec1a6702afaec28f271cc3aaab755f596fbc83540d4010ae2204c6fca0cf3c34",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw-run2/trials/7420dfe789f99af7/repo/minichunk.py",
+   "dest": "trials/7420dfe789f99af7/repo/minichunk.py",
+   "bytes": 3913,
+   "sha256": "9ed9dccac2aa9d2d2ffcda0788c80aa4555042e1e3ac07383d325b2cf87288bd",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw-run2/trials/7420dfe789f99af7/repo/out/o1.txt",
+   "dest": "trials/7420dfe789f99af7/repo/out/o1.txt",
+   "bytes": 114,
+   "sha256": "afb32e0489b0fdc93e9524926bb78bcc1622e1cb109c48eb46b83dff07c7fc0b",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw-run2/trials/7420dfe789f99af7/repo/out/o2.txt",
+   "dest": "trials/7420dfe789f99af7/repo/out/o2.txt",
+   "bytes": 114,
+   "sha256": "15945d4e3227faf855547299c70cff007b9fadb0b2b846f6f1a7d4e2e4cce068",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw-run2/trials/7420dfe789f99af7/repo/out/o3.txt",
+   "dest": "trials/7420dfe789f99af7/repo/out/o3.txt",
+   "bytes": 114,
+   "sha256": "3866731c83394b8ee56203f239a06136b983aab2f13fade24177b1a563756aa0",
+   "redacted": false
+  },
+  {
+   "source": "/local/celeris/data/scratch/n1-g7/raw-run2/trials/7420dfe789f99af7/repo/out/o4.txt",
+   "dest": "trials/7420dfe789f99af7/repo/out/o4.txt",
+   "bytes": 114,
+   "sha256": "5d66bebad3d8b1af90ffd9244b3ae686fd73be2e713b7722e8bafad5e5297691",
+   "redacted": false
+  }
+ ]
+}

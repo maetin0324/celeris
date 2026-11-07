@@ -1,0 +1,31 @@
+# repo health の Celeris profile（ADR 2026-11-07-repo-health-contract D2）。
+#
+# Celeris 固有の所在・名前・上限はこの file にだけ書く。検査器のコードは repo 名・案件名で分岐しない。
+# 項目の正本は health/profile.py の docstring。この file は policy の file で、評価には base 側の内容を使う。
+# rules-archmap WorkUnit が [arch_map] と arch-map.* を置いた。他の項目は celeris-profile WorkUnit が足す。
+version = "1"
+description = "celeris: agent-platform（Celeris）の repo profile"
+
+[arch_map]
+# 地図。scripts/dev/check-architecture-map.py の既定の検査と同じ file。
+path = "docs/architecture-map.md"
+# 対照: 健全性v2 B0 の capability-map（capability ごとの owner path・試験・不変条件の根拠）。
+reference = "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json"
+
+[rules."arch-map.missing_row"]
+required = true
+
+[rules."arch-map.missing_test"]
+required = true
+
+[rules."arch-map.wrong_owner"]
+required = true
+
+[rules."arch-map.missing_invariant"]
+required = true
+
+[rules."arch-map.stale"]
+required = true
+
+[rules."arch-map.wrong_path"]
+required = true

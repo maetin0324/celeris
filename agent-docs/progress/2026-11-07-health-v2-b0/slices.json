@@ -1,0 +1,1519 @@
+{
+ "schema": "celeris.health-v2-b0.slices/1",
+ "base_sha": "5923a76c9aa0ec5a7b3f58abd06b456f2bdaaf93",
+ "base_note": "着手時の git merge-base HEAD main。loc-baseline.json・test-targets.json・capability-map.json・dup-candidates.json・task-history.json と同じ値",
+ "parent_task_id": "01M6TYV9DTZESAJJMXRQVGZ56V",
+ "inputs": [
+  "agent-docs/progress/2026-11-07-health-v2-b0/loc-baseline.json",
+  "agent-docs/progress/2026-11-07-health-v2-b0/test-targets.json",
+  "agent-docs/progress/2026-11-07-health-v2-b0/task-history.md",
+  "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json",
+  "agent-docs/progress/2026-11-07-health-v2-b0/dup-candidates.json",
+  "agent-docs/progress/2026-11-07-health-v2-b0/module-deps.json",
+  "/local/celeris/data/workspaces/01M6TYVJSPEYA2P8B7G56HSQ73/artifacts/b0/task-history.json"
+ ],
+ "dependency_order": {
+  "G1": [
+   "B0"
+  ],
+  "G2": [
+   "G1"
+  ],
+  "G3": [
+   "G2"
+  ],
+  "G4": [
+   "G3"
+  ],
+  "R1": [
+   "G3"
+  ],
+  "R2": [
+   "R1"
+  ],
+  "R3": [
+   "G3"
+  ],
+  "R4": [
+   "R2",
+   "R3"
+  ],
+  "R5": [
+   "R1"
+  ],
+  "R6": [
+   "R2",
+   "R3",
+   "R4",
+   "R5"
+  ],
+  "V0": [
+   "G4",
+   "R6"
+  ]
+ },
+ "loc_views": {
+  "source": "agent-docs/progress/2026-11-07-health-v2-b0/loc-baseline.json#views",
+  "user_estimate_lines": {
+   "low": 200000,
+   "high": 300000
+  },
+  "gap_rule": "gap_to_N = lines - N（正なら見立てより多い）。external_split_candidates は repo の外へ出せる候補の量で、残る量は all_tracked から引いた値",
+  "views": {
+   "product_only": {
+    "label": "本体のみ（production、全言語）",
+    "lines": 366177,
+    "rust_lines": 320064,
+    "gap_to_200k": 166177,
+    "gap_to_300k": 66177
+   },
+   "own_total_with_tests": {
+    "label": "自前総量（手書き code: 本体 + 試験 + tooling + 評価基盤 + migration）",
+    "lines": 967314,
+    "rust_lines": 828913,
+    "gap_to_200k": 767314,
+    "gap_to_300k": 667314
+   },
+   "all_tracked": {
+    "label": "全追跡行（全 class・全言語）",
+    "lines": 1512205,
+    "rust_lines": 897685,
+    "gap_to_200k": 1312205,
+    "gap_to_300k": 1212205
+   },
+   "external_split_candidates": {
+    "label": "外部分離候補（評価基盤 + vendor）",
+    "lines": 256886,
+    "rust_lines": 189185,
+    "gap_to_200k": 56886,
+    "gap_to_300k": -43114
+   }
+  },
+  "reduction_target_is_acceptance": false,
+  "target_update_procedure": [
+   "目標の行数は G1〜V0 のどの slice の受け入れ条件にもしない。受け入れ条件は各 slice の checks と停止条件だけにする。",
+   "最初に done になった縦 slice（依存順で G1。行数を動かす最初の slice は R1）の review_pass の後、その commit を基準に `python3 scripts/dev/source-size-report.py` で 4 見方を同じ分類規則（source-size-exclusive/1）で再計測する。",
+   "削れた行数と、その slice で消した dup-candidates の件数・費やした review 費用を並べ、残りの slice の見込みを比例で出し直す。",
+   "出し直した見込みは親 task の進捗の『提案』節と artifacts/b0/plan.md の更新で人に示す。人が見立て（20〜30 万行）を改めるかを決める。slices.json の数値（基準値）は書き換えない。"
+  ]
+ },
+ "metrics": {
+  "review_cost": {
+   "source": "/local/celeris/data/workspaces/01M6TYVJSPEYA2P8B7G56HSQ73/artifacts/b0/task-history.json#reviewer_window",
+   "window": "2026-10-24T00:00Z..2026-11-07T12:00Z",
+   "claude_runs": 517,
+   "claude_cost_usd_median": 0.4521,
+   "claude_cost_usd_p90": 0.9155,
+   "claude_tokens_median": 494692,
+   "claude_tokens_p90": 1347122,
+   "gpt_tokens_median": 633586,
+   "note": "GPT 系 review run の USD は記録が 0 のため未計測。各 slice の比較は Claude の review run 1 本の USD と tokens の中央値で行う"
+  },
+  "edit_verify_secs": {
+   "source": "agent-docs/progress/2026-11-07-health-v2-b0/test-targets.json#edit_verify.round3_after_settle",
+   "rule": "crate の src/lib.rs に 1 行足してから test-affected の対象 crate 全部の nextest --no-run が終わるまでの秒（settle 後の 3 回目）",
+   "by_crate": {
+    "task-core": {
+     "secs": 142.25,
+     "affected_crates": 14
+    },
+    "task-dispatch": {
+     "secs": 79.84,
+     "affected_crates": 5
+    },
+    "task-api": {
+     "secs": 113.46,
+     "affected_crates": 7
+    },
+    "task-worker": {
+     "secs": 98.13,
+     "affected_crates": 7
+    },
+    "celeris": {
+     "secs": 85.06,
+     "affected_crates": 2
+    }
+   }
+  },
+  "test_targets": {
+   "source": "agent-docs/progress/2026-11-07-health-v2-b0/test-targets.json#inventory_totals",
+   "test_targets": 352,
+   "expected_test_binaries": 379,
+   "test_binaries_by_crate": {
+    "task-core": 3,
+    "task-dispatch": 2,
+    "task-api": 114,
+    "task-worker": 25,
+    "celeris": 57
+   }
+  }
+ },
+ "structural_metrics": {
+  "task_store_fn_decls": {
+   "value": 193,
+   "command": "grep -c '^    fn ' crates/task-core/src/store/task_store.rs",
+   "source": "agent-docs/progress/2026-11-07-health-v2-b0/task-history.md"
+  },
+  "task_store_supertraits": {
+   "value": 16,
+   "command": "awk '/^pub trait TaskStore:/{f=1;next} f&&/^\\{/{exit} f&&/\\+ crate::/{n++} END{print n}' crates/task-core/src/store/task_store.rs",
+   "source": "agent-docs/progress/2026-11-07-health-v2-b0/task-history.md"
+  },
+  "dispatcher_fields": {
+   "value": 115,
+   "command": "awk '/^pub struct Dispatcher *\\{/{f=1;next} f&&/^\\}/{exit} f&&/^    [a-z_0-9]+:/{n++} END{print n}' crates/task-dispatch/src/dispatcher.rs",
+   "source": "agent-docs/progress/2026-11-07-health-v2-b0/task-history.md"
+  },
+  "multi_writer_state": {
+   "value": 52,
+   "source": "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#summary"
+  },
+  "arch_map_diffs": {
+   "value": 51,
+   "source": "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#summary"
+  },
+  "module_cycles": {
+   "value": 3,
+   "source": "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#cycles"
+  },
+  "dup_candidates_open": {
+   "value": 40,
+   "source": "agent-docs/progress/2026-11-07-health-v2-b0/dup-candidates.json#summary.by_decision（delete+merge）"
+  }
+ },
+ "capability_owners": [
+  {
+   "id": "browser-policy-broker-approval",
+   "canonical_owner": "crates/task-worker/src/browser_policy.rs",
+   "owner_crate": "task-worker",
+   "other_writers": [
+    "crates/task-worker/src/browser_auth.rs",
+    "crates/task-worker/src/browser_credential.rs",
+    "crates/task-api/src/browser.rs",
+    "crates/task-core/src/browser_wait/sql.rs"
+   ],
+   "slice": "R2"
+  },
+  {
+   "id": "browser-launcher",
+   "canonical_owner": "crates/task-worker/src/browser_launcher/mod.rs",
+   "owner_crate": "task-worker",
+   "other_writers": [
+    "crates/task-worker/src/browser_launcher_run.rs",
+    "crates/task-worker/src/bin/celeris-browser-launcher.rs"
+   ],
+   "slice": "R2"
+  },
+  {
+   "id": "browser-egress-runtime",
+   "canonical_owner": "crates/task-worker/src/browser_egress.rs",
+   "owner_crate": "task-worker",
+   "other_writers": [
+    "crates/task-worker/src/browser_runtime.rs",
+    "crates/task-worker/src/browser_supervisor.rs",
+    "crates/task-worker/src/browser_relay.rs"
+   ],
+   "slice": "R2"
+  },
+  {
+   "id": "browser-live-view-control",
+   "canonical_owner": "crates/task-api/src/browser_live.rs",
+   "owner_crate": "task-api",
+   "other_writers": [
+    "crates/task-api/src/browser_control.rs",
+    "crates/task-worker/src/browser_live.rs",
+    "crates/task-core/src/browser_control_ops.rs",
+    "web/server/browser-live.js"
+   ],
+   "slice": "R2"
+  },
+  {
+   "id": "browser-site-policy-trusted-devices",
+   "canonical_owner": "crates/task-api/src/browser_site_policies.rs",
+   "owner_crate": "task-api",
+   "other_writers": [
+    "crates/task-api/src/browser_trusted_devices.rs",
+    "crates/task-core/src/store/site_policies.rs",
+    "crates/task-core/src/store/trusted_devices.rs",
+    "crates/task-worker/src/browser_conformance.rs"
+   ],
+   "slice": "R2"
+  },
+  {
+   "id": "campaign-eval",
+   "canonical_owner": "crates/campaign/src/manifest.rs",
+   "owner_crate": "celeris-campaign",
+   "other_writers": [
+    "crates/campaign/src/runner.rs",
+    "crates/campaign/src/grader.rs",
+    "crates/campaign/src/checker.rs",
+    "crates/campaign/src/lock_exec.rs",
+    "crates/campaign/src/global_ledger.rs",
+    "crates/campaign/src/export.rs"
+   ],
+   "slice": "R6"
+  },
+  {
+   "id": "jev-classifier",
+   "canonical_owner": "crates/jev-classifier/src/client.rs",
+   "owner_crate": "jev-classifier",
+   "other_writers": [
+    "crates/jev-classifier/src/breaker.rs",
+    "crates/celeris/src/daemon/classify_tick.rs",
+    "crates/celeris/src/config/jev.rs"
+   ],
+   "slice": "R6"
+  },
+  {
+   "id": "http-api-auth-principals",
+   "canonical_owner": "crates/task-api/src/handlers.rs",
+   "owner_crate": "task-api",
+   "other_writers": [
+    "crates/task-api/src/middleware.rs",
+    "crates/task-api/src/principal.rs"
+   ],
+   "slice": "R3"
+  },
+  {
+   "id": "celerisctl-cli",
+   "canonical_owner": "crates/celerisctl/src/main.rs",
+   "owner_crate": "celerisctl",
+   "other_writers": [
+    "crates/celerisctl/src/commands/mod.rs",
+    "crates/celerisctl/src/commands/workspace.rs"
+   ],
+   "slice": "R6"
+  },
+  {
+   "id": "celeris-mcp",
+   "canonical_owner": "crates/celeris-mcp/src/rpc.rs",
+   "owner_crate": "celeris-mcp",
+   "other_writers": [
+    "crates/celeris-mcp/src/tools/db.rs",
+    "crates/celeris-mcp/src/auth.rs"
+   ],
+   "slice": "none"
+  },
+  {
+   "id": "web-gateway",
+   "canonical_owner": "web/server/relay.js",
+   "owner_crate": "web",
+   "other_writers": [
+    "web/server/auth.js",
+    "web/server/origin.js",
+    "web/server/app.js"
+   ],
+   "slice": "none"
+  },
+  {
+   "id": "web-spa",
+   "canonical_owner": "web/api/client.ts",
+   "owner_crate": "web",
+   "other_writers": [
+    "web/routeTree.gen.ts",
+    "web/features/browser/browser-query.ts"
+   ],
+   "slice": "none"
+  },
+  {
+   "id": "cos-chat-threads-runs",
+   "canonical_owner": "crates/task-core/src/chat/mod.rs",
+   "owner_crate": "task-core",
+   "other_writers": [
+    "crates/task-core/src/chat/run_store.rs",
+    "crates/task-core/src/chat/session.rs",
+    "crates/task-core/src/chat/attachments.rs",
+    "crates/task-dispatch/src/dispatcher/cos_chat/mod.rs",
+    "crates/task-dispatch/src/sessions/cos_chat.rs",
+    "crates/task-worker/src/cos_chat.rs",
+    "crates/task-api/src/chat/mod.rs",
+    "crates/celeris/src/chat_gc.rs",
+    "crates/celeris/src/daemon/cos_launch.rs"
+   ],
+   "slice": "R6"
+  },
+  {
+   "id": "cos-inbox-triage-operations-audit",
+   "canonical_owner": "crates/task-core/src/chat/triage.rs",
+   "owner_crate": "task-core",
+   "other_writers": [
+    "crates/task-core/src/chat/operations.rs",
+    "crates/task-core/src/chat/override_op.rs",
+    "crates/task-core/src/chat/credential.rs",
+    "crates/task-dispatch/src/dispatcher/cos_chat/triage.rs",
+    "crates/task-dispatch/src/dispatcher/cos_chat/fallback.rs",
+    "crates/task-api/src/cos/operations.rs",
+    "crates/task-api/src/cos/inbox.rs",
+    "crates/task-api/src/cos/triage_view.rs"
+   ],
+   "slice": "R6"
+  },
+  {
+   "id": "notifications",
+   "canonical_owner": "crates/task-core/src/notify.rs",
+   "owner_crate": "task-core",
+   "other_writers": [
+    "crates/task-core/src/feed.rs",
+    "crates/task-ops/src/inbox.rs",
+    "crates/task-ops/src/human_inbox.rs",
+    "crates/task-ops/src/notify_feed.rs",
+    "crates/task-ops/src/root_done.rs",
+    "crates/task-core/src/store/root_done.rs",
+    "crates/celeris/src/notify.rs",
+    "crates/celeris/src/notify/triage.rs",
+    "crates/task-api/src/inbox_notifications.rs"
+   ],
+   "slice": "R2"
+  },
+  {
+   "id": "review-runs-final-review",
+   "canonical_owner": "crates/task-dispatch/src/review.rs",
+   "owner_crate": "task-dispatch",
+   "other_writers": [
+    "crates/task-dispatch/src/review/required.rs",
+    "crates/task-dispatch/src/dispatcher/review_spawn.rs",
+    "crates/task-dispatch/src/dispatcher/review_verdict.rs",
+    "crates/task-dispatch/src/dispatcher/planner_flow.rs"
+   ],
+   "slice": "G2"
+  },
+  {
+   "id": "delivery-merge-candidate",
+   "canonical_owner": "crates/task-core/src/delivery.rs",
+   "owner_crate": "task-core",
+   "other_writers": [
+    "crates/task-ops/src/delivery.rs",
+    "crates/celeris/src/delivery.rs",
+    "crates/celeris/src/config/delivery.rs",
+    "crates/task-core/src/store/task_integration_state.rs"
+   ],
+   "slice": "G3"
+  },
+  {
+   "id": "pre-review-sync-auto-resolve-integration-repair",
+   "canonical_owner": "crates/task-dispatch/src/auto_resolve.rs",
+   "owner_crate": "task-dispatch",
+   "other_writers": [
+    "crates/task-dispatch/src/integration.rs",
+    "crates/task-dispatch/src/dispatcher/phase_integration.rs",
+    "crates/celeris/src/delivery/auto_resolve.rs",
+    "crates/task-ops/src/changes.rs",
+    "crates/task-ops/src/integrate_task.rs",
+    "crates/task-ops/src/stranded/reintegrate.rs",
+    "crates/task-core/src/store/events.rs",
+    "crates/task-api/src/integrate_task.rs"
+   ],
+   "slice": "G3"
+  },
+  {
+   "id": "release-selfdeploy-wiring",
+   "canonical_owner": "crates/celeris/src/instance.rs",
+   "owner_crate": "celeris",
+   "other_writers": [
+    "crates/task-core/src/instance.rs",
+    "crates/task-core/src/store/instances.rs",
+    "crates/celeris/src/releases.rs",
+    "crates/celeris/src/releases/audit.rs",
+    "crates/celeris/src/release_notes.rs",
+    "crates/celeris/src/config/selfdeploy.rs",
+    "crates/task-api/src/releases.rs"
+   ],
+   "slice": "V0"
+  },
+  {
+   "id": "routing-lane-route",
+   "canonical_owner": "crates/task-core/src/route_select/mod.rs",
+   "owner_crate": "task-core",
+   "other_writers": [
+    "crates/task-core/src/model_policy.rs",
+    "crates/task-core/src/routing.rs",
+    "crates/task-core/src/llm_route.rs",
+    "crates/task-dispatch/src/dispatcher/route_select.rs",
+    "crates/task-dispatch/src/dispatcher/dispatch_run.rs",
+    "crates/task-dispatch/src/dispatcher/routing_context.rs"
+   ],
+   "slice": "R6"
+  },
+  {
+   "id": "accounts-quota",
+   "canonical_owner": "crates/task-dispatch/src/accounts.rs",
+   "owner_crate": "task-dispatch",
+   "other_writers": [
+    "crates/task-dispatch/src/dispatcher/quota_book.rs",
+    "crates/task-core/src/quota.rs",
+    "crates/task-core/src/accounts.rs",
+    "crates/task-core/src/store/account_limits.rs",
+    "crates/task-worker/src/opencode_account.rs",
+    "crates/celeris/src/accounts_admin.rs"
+   ],
+   "slice": "R6"
+  },
+  {
+   "id": "budget-pricing",
+   "canonical_owner": "crates/task-core/src/pricing.rs",
+   "owner_crate": "task-core",
+   "other_writers": [
+    "crates/task-ops/src/project_budget.rs",
+    "crates/task-dispatch/src/dispatcher/token_budget.rs"
+   ],
+   "slice": "G3"
+  },
+  {
+   "id": "llm-proxy",
+   "canonical_owner": "crates/llm-proxy/src/server.rs",
+   "owner_crate": "llm-proxy",
+   "other_writers": [
+    "crates/llm-proxy/src/fallback.rs",
+    "crates/llm-proxy/src/selection.rs",
+    "crates/llm-proxy/src/reservation.rs",
+    "crates/llm-proxy/src/credentials.rs",
+    "crates/llm-proxy/src/log.rs",
+    "crates/llm-proxy/src/routing_context.rs"
+   ],
+   "slice": "R6"
+  },
+  {
+   "id": "routing-eval",
+   "canonical_owner": "crates/routing-eval/src/manifest.rs",
+   "owner_crate": "routing-eval",
+   "other_writers": [
+    "crates/routing-eval/src/aggregate.rs",
+    "crates/routing-eval/src/recheck.rs",
+    "crates/task-core/src/routing_eval_trial.rs",
+    "crates/task-core/src/store/eval_trials.rs",
+    "crates/task-core/src/store/routing_evidence.rs",
+    "crates/task-core/src/completion_outcome.rs",
+    "crates/task-dispatch/src/dispatcher/eval_trials.rs",
+    "crates/task-api/src/routing_eval.rs",
+    "crates/task-ops/src/routing_stage.rs"
+   ],
+   "slice": "R6"
+  },
+  {
+   "id": "routing-audit-outcome",
+   "canonical_owner": "crates/task-core/src/model_router/feedback.rs",
+   "owner_crate": "task-core",
+   "other_writers": [
+    "crates/task-core/src/store/route_records.rs",
+    "crates/task-core/src/store/routing_log.rs",
+    "crates/task-ops/src/routing_outcome.rs",
+    "crates/task-ops/src/routing_audit.rs",
+    "crates/task-ops/src/routing_export.rs",
+    "crates/celeris/src/daemon/services.rs"
+   ],
+   "slice": "R6"
+  },
+  {
+   "id": "project-controller",
+   "canonical_owner": "crates/task-dispatch/src/dispatcher/project_wake.rs",
+   "owner_crate": "task-dispatch",
+   "other_writers": [
+    "crates/task-dispatch/src/dispatcher/project_decider_ts.rs",
+    "crates/task-dispatch/src/dispatcher/project_guard.rs",
+    "crates/task-dispatch/src/dispatcher/project_resume.rs",
+    "crates/task-dispatch/src/project_controller.rs",
+    "crates/task-core/src/store/project_wake.rs",
+    "crates/task-core/src/store/project_wake_effect.rs",
+    "crates/task-core/src/store/project_guard.rs",
+    "crates/task-core/src/store/project_retention.rs",
+    "crates/task-ops/src/project_controller_view.rs"
+   ],
+   "slice": "R4"
+  },
+  {
+   "id": "script-runtime",
+   "canonical_owner": "crates/script-runtime/src/handle.rs",
+   "owner_crate": "script-runtime",
+   "other_writers": [
+    "crates/script-runtime/src/actor.rs",
+    "crates/script-runtime/src/ops.rs",
+    "crates/script-runtime/src/manifest.rs",
+    "crates/script-runtime/src/generation.rs",
+    "crates/celeris/src/daemon/script_layer.rs",
+    "crates/celeris/src/daemon/script_guard.rs",
+    "crates/task-dispatch/src/dispatcher/script_compare.rs",
+    "crates/task-core/src/store/script_domains.rs",
+    "control-ts/src/main.ts"
+   ],
+   "slice": "none"
+  },
+  {
+   "id": "cron-jobs",
+   "canonical_owner": "crates/task-core/src/cron.rs",
+   "owner_crate": "task-core",
+   "other_writers": [
+    "crates/task-core/src/cron/store.rs",
+    "crates/task-ops/src/cron_jobs.rs",
+    "crates/task-dispatch/src/dispatcher/cron_tick.rs"
+   ],
+   "slice": "none"
+  },
+  {
+   "id": "run-claim-lease",
+   "canonical_owner": "crates/task-core/src/store/tasks.rs",
+   "owner_crate": "task-core",
+   "other_writers": [
+    "crates/task-core/src/store/task_store.rs",
+    "crates/task-core/src/store/execution/runs.rs",
+    "crates/task-dispatch/src/dispatcher/dispatch_run.rs",
+    "crates/task-dispatch/src/dispatcher/leases.rs"
+   ],
+   "slice": "R3"
+  },
+  {
+   "id": "orphan-takeover",
+   "canonical_owner": "crates/task-dispatch/src/orphan.rs",
+   "owner_crate": "task-dispatch",
+   "other_writers": [
+    "crates/task-dispatch/src/dispatcher/ownerless_runs.rs",
+    "crates/task-dispatch/src/dispatcher/leases.rs"
+   ],
+   "slice": "R4"
+  },
+  {
+   "id": "continuation-session-resume",
+   "canonical_owner": "crates/task-dispatch/src/sessions.rs",
+   "owner_crate": "task-dispatch",
+   "other_writers": [
+    "crates/task-dispatch/src/dispatcher/continuation_session.rs",
+    "crates/task-dispatch/src/checkpoint.rs",
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs",
+    "crates/task-core/src/node_session.rs"
+   ],
+   "slice": "R4"
+  },
+  {
+   "id": "worker-protocol-adapters",
+   "canonical_owner": "crates/task-worker/src/protocol.rs",
+   "owner_crate": "task-worker",
+   "other_writers": [
+    "crates/task-worker/src/adapter.rs",
+    "crates/task-worker/src/route.rs",
+    "crates/task-worker/src/claude_code.rs",
+    "crates/task-worker/src/codex.rs",
+    "crates/task-worker/src/acp.rs",
+    "crates/task-worker/src/pi.rs",
+    "crates/task-dispatch/src/dispatcher/sinks.rs",
+    "crates/task-dispatch/src/dispatcher/worker_task.rs"
+   ],
+   "slice": "R1"
+  },
+  {
+   "id": "sandbox-db-guard",
+   "canonical_owner": "crates/task-worker/src/db_guard.rs",
+   "owner_crate": "task-worker",
+   "other_writers": [
+    "crates/task-worker/src/subprocess.rs",
+    "crates/task-worker/src/tool_policy.rs"
+   ],
+   "slice": "R2"
+  },
+  {
+   "id": "required-rules-delivery",
+   "canonical_owner": "crates/task-worker/src/required_rules.rs",
+   "owner_crate": "task-worker",
+   "other_writers": [
+    "crates/task-worker/src/codex.rs",
+    "crates/task-worker/src/pi.rs",
+    "crates/task-worker/src/acp.rs"
+   ],
+   "slice": "G2"
+  },
+  {
+   "id": "credential-broker-resume",
+   "canonical_owner": "crates/celeris-credentiald/src/lib.rs",
+   "owner_crate": "celeris-credentiald",
+   "other_writers": [
+    "crates/celeris-credentiald/src/ipc.rs",
+    "crates/celeris-credentiald/src/injection_ipc.rs",
+    "crates/task-core/src/store/credential_wait.rs",
+    "crates/task-dispatch/src/dispatcher/credential_gate.rs",
+    "crates/task-dispatch/src/credential_resume.rs",
+    "crates/task-api/src/handlers/secrets.rs"
+   ],
+   "slice": "R2"
+  },
+  {
+   "id": "scratch-build-cache-disk-guard",
+   "canonical_owner": "crates/task-worker/src/scratch.rs",
+   "owner_crate": "task-worker",
+   "other_writers": [
+    "crates/task-worker/src/scratch/gc.rs",
+    "crates/task-worker/src/build_cache.rs",
+    "crates/task-worker/src/run_tmpdir.rs",
+    "crates/task-dispatch/src/scratch_gc.rs",
+    "crates/task-dispatch/src/dispatcher/housekeeping.rs",
+    "crates/task-dispatch/src/disk_watch.rs",
+    "crates/celerisctl/src/commands/scratch.rs"
+   ],
+   "slice": "R6"
+  },
+  {
+   "id": "task-lifecycle",
+   "canonical_owner": "crates/task-core/src/model.rs",
+   "owner_crate": "task-core",
+   "other_writers": [
+    "crates/task-core/src/transition.rs",
+    "crates/task-core/src/store/tasks.rs",
+    "crates/task-core/src/store/transition.rs",
+    "crates/task-core/src/store/idempotency.rs",
+    "crates/task-ops/src/add.rs",
+    "crates/task-ops/src/plan.rs",
+    "crates/task-ops/src/gate.rs",
+    "crates/task-ops/src/comment.rs",
+    "crates/task-ops/src/retry.rs",
+    "crates/task-ops/src/lifecycle.rs"
+   ],
+   "slice": "R3"
+  },
+  {
+   "id": "execution-plan-adoption",
+   "canonical_owner": "crates/task-core/src/execution_plan.rs",
+   "owner_crate": "task-core",
+   "other_writers": [
+    "crates/task-core/src/execution_plan/validation.rs",
+    "crates/task-core/src/execution_plan/plan_limits.rs",
+    "crates/task-core/src/store/execution/plans.rs",
+    "crates/task-ops/src/execution.rs",
+    "crates/task-dispatch/src/dispatcher/planner_flow.rs"
+   ],
+   "slice": "R3"
+  },
+  {
+   "id": "workunit-scheduling-stage-integration",
+   "canonical_owner": "crates/task-core/src/execution_plan/scheduling.rs",
+   "owner_crate": "task-core",
+   "other_writers": [
+    "crates/task-core/src/store/execution/work_units.rs",
+    "crates/task-dispatch/src/execution_scheduler.rs",
+    "crates/task-dispatch/src/dispatcher/work_units.rs",
+    "crates/task-dispatch/src/dispatcher/phase_integration.rs",
+    "crates/task-dispatch/src/integration.rs",
+    "crates/task-dispatch/src/dispatcher/write_set_gate.rs"
+   ],
+   "slice": "R4"
+  },
+  {
+   "id": "decisions-plan-gate",
+   "canonical_owner": "crates/task-core/src/decision.rs",
+   "owner_crate": "task-core",
+   "other_writers": [
+    "crates/task-core/src/store/execution/decisions.rs",
+    "crates/task-core/src/tree/approval.rs",
+    "crates/task-ops/src/decision.rs",
+    "crates/task-ops/src/plan_gate.rs",
+    "crates/task-ops/src/phase_gate.rs",
+    "crates/task-dispatch/src/dispatcher/planner_flow.rs",
+    "crates/task-dispatch/src/dispatcher/auto_leaf.rs"
+   ],
+   "slice": "R3"
+  },
+  {
+   "id": "recursive-task-tree",
+   "canonical_owner": "crates/task-core/src/tree.rs",
+   "owner_crate": "task-core",
+   "other_writers": [
+    "crates/task-core/src/tree/limits.rs",
+    "crates/task-core/src/tree/gate.rs",
+    "crates/task-core/src/tree/liveness.rs",
+    "crates/task-core/src/store/execution/tree.rs",
+    "crates/task-dispatch/src/dispatcher/tree_units.rs",
+    "crates/task-dispatch/src/dispatcher/child_tasks.rs",
+    "crates/task-ops/src/tree.rs",
+    "crates/task-ops/src/tree_adopt.rs",
+    "crates/task-ops/src/tree_plan.rs"
+   ],
+   "slice": "G3"
+  }
+ ],
+ "slices": [
+  {
+   "key": "G1",
+   "task_id": "01M6TYVJSRM3SFQ3VHWQE4MZ9M",
+   "title": "汎用 repo health 契約と決定的な差分検査",
+   "depends_on": [
+    "B0"
+   ],
+   "scope": {
+    "summary": "check-health.sh の中身（source-size・architecture-map・doc-links・adr-numbers・human-text・progress-index）を repo に依存しない契約（入力 = repo root と base、出力 = 違反の一覧と exit code）に切り出す。Celeris 固有の規則は設定 file に分ける。architecture-map の食い違い 51 件は検査が出せる形（missing_row・missing_test・wrong_owner・missing_invariant・stale・wrong_path）にする。",
+    "capabilities": [],
+    "consolidate_into_owner": [
+     "検査の入口を scripts/dev/check-health.sh 1 本に寄せ、各検査は repo-health の設定を読む"
+    ],
+    "remove": [
+     "check-health.sh と各検査 script に重複した repo root・base の解決"
+    ],
+    "dup_assignments": []
+   },
+   "write_set": [
+    "^scripts/dev/(check-health\\.sh|check-source-size\\.py|check-architecture-map\\.py|source-size-report\\.(py|toml)|check-doc-links\\.sh|check-adr-numbers\\.sh|progress-index\\.sh|check-human-text\\.py)$",
+    "^scripts/dev/repo-health/.*$",
+    "^scripts/tests/test_(repo_health|source_size|architecture_map)[a-z_]*\\.py$",
+    "^scripts/dev/tests/[a-z_]+\\.sh$",
+    "^docs/architecture-map\\.md$",
+    "^agent-docs/adr/2026-[0-9]{2}-[0-9]{2}-[a-z0-9-]+\\.md$",
+    "^agent-docs/progress/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+(\\.md|/.*)$"
+   ],
+   "checks": [
+    "bash scripts/dev/test-affected.sh",
+    "cargo clippy --workspace -- -D warnings",
+    "cargo fmt --all -- --check",
+    "bash scripts/dev/check-health.sh",
+    "sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check",
+    "git diff --name-only $(git merge-base HEAD main) | python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set G1 agent-docs/progress/2026-11-07-health-v2-b0/slices.json",
+    "python3 -m unittest discover -s scripts/tests -p 'test_repo_health*.py'"
+   ],
+   "stop_conditions": [
+    "不変条件の試験（capability-map.json の invariants の evidence_path にある試験、または check-health・test-affected の試験）が落ちる → 直せないなら delivery-repair、設計の誤りなら replan",
+    "write_set の外の path を変える必要が出る → 作業を止め plan_issue で申告し replan（範囲を広げて続けない）",
+    "検査器・policy・baseline（check-source-size の baseline、source-size-baseline.json、architecture-map の検査、test-affected の対象規則、required checks）を弱める・除外を足す必要が出る → 止めて replan、人の判断を求める",
+    "旧い仕組みを残す互換分岐・deprecated・新旧切替 flag が要る → 止めて replan（CLAUDE.md の破壊的変更の方針）"
+   ],
+   "baseline_metrics": [
+    "arch_map_diffs",
+    "all_tracked",
+    "product_only"
+   ]
+  },
+  {
+   "key": "G2",
+   "task_id": "01M6TYVJSTYGRPHERB93MM7J59",
+   "title": "汎用アーキテクチャレビューとエージェント規約を既存 planner/reviewer に組み込む",
+   "depends_on": [
+    "G1"
+   ],
+   "scope": {
+    "summary": "G1 の検査結果と capability-map の owner・不変条件を planner と reviewer の prompt に渡す。reviewer は write_set の外の変更・owner でない module への書き込み・旧経路の残りを指摘する。必須規則（required_rules）の配送はこの slice の owner に寄せる。",
+    "capabilities": [
+     "review-runs-final-review",
+     "required-rules-delivery"
+    ],
+    "consolidate_into_owner": [
+     "review 用の規約の正本を crates/task-dispatch/src/review/required.rs に、必須規則の配送を crates/task-worker/src/required_rules.rs に置く"
+    ],
+    "remove": [
+     "planner・reviewer の prompt に写された規約の重複文面"
+    ],
+    "dup_assignments": []
+   },
+   "write_set": [
+    "^crates/task-dispatch/src/(review|review/[a-z_]+|dispatcher/(review_spawn|review_verdict|planner_flow))\\.rs$",
+    "^crates/task-worker/src/(preamble|required_rules)\\.rs$",
+    "^crates/task-dispatch/src/(dispatcher/)?tests/[a-z_/]+\\.rs$",
+    "^crates/task-worker/tests/[a-z_]+\\.rs$",
+    "^config/skills/[a-z0-9-]+/.*$",
+    "^agent-docs/adr/2026-[0-9]{2}-[0-9]{2}-[a-z0-9-]+\\.md$",
+    "^agent-docs/progress/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+(\\.md|/.*)$"
+   ],
+   "checks": [
+    "bash scripts/dev/test-affected.sh",
+    "cargo clippy --workspace -- -D warnings",
+    "cargo fmt --all -- --check",
+    "bash scripts/dev/check-health.sh",
+    "sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check",
+    "git diff --name-only $(git merge-base HEAD main) | python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set G2 agent-docs/progress/2026-11-07-health-v2-b0/slices.json"
+   ],
+   "stop_conditions": [
+    "不変条件の試験（capability-map.json の invariants の evidence_path にある試験、または check-health・test-affected の試験）が落ちる → 直せないなら delivery-repair、設計の誤りなら replan",
+    "write_set の外の path を変える必要が出る → 作業を止め plan_issue で申告し replan（範囲を広げて続けない）",
+    "検査器・policy・baseline（check-source-size の baseline、source-size-baseline.json、architecture-map の検査、test-affected の対象規則、required checks）を弱める・除外を足す必要が出る → 止めて replan、人の判断を求める",
+    "旧い仕組みを残す互換分岐・deprecated・新旧切替 flag が要る → 止めて replan（CLAUDE.md の破壊的変更の方針）"
+   ],
+   "baseline_metrics": [
+    "review_cost",
+    "arch_map_diffs"
+   ]
+  },
+  {
+   "key": "G3",
+   "task_id": "01M6TYVJSWEY3ZE50S02ETYDNM",
+   "title": "通常の開発・統合ループへの強制、証跡の結び付け・修復・費用上限",
+   "depends_on": [
+    "G2"
+   ],
+   "scope": {
+    "summary": "G1 の検査を WU・段の統合・delivery の必須 check にし、検査証跡を候補 SHA に結び付け、落ちたら局所修復へ回し、修復と review の費用に上限を置く。P-9 対策（依存先の reopen で dependency_failed の後続を戻すか受信箱に知らせる）を推奨案 A としてここで扱う。",
+    "capabilities": [
+     "delivery-merge-candidate",
+     "pre-review-sync-auto-resolve-integration-repair",
+     "budget-pricing",
+     "recursive-task-tree"
+    ],
+    "consolidate_into_owner": [
+     "必須 check の結果と候補 SHA の結び付けを crates/task-core/src/delivery.rs の正本に寄せる",
+     "依存の cascade は crates/task-core/src/store/transition.rs の cascade_after_transition_tx 1 か所に置く"
+    ],
+    "remove": [
+     "統合経路ごとに別々に書かれた check の起動"
+    ],
+    "dup_assignments": []
+   },
+   "write_set": [
+    "^crates/task-core/src/(delivery|execution|transition|tree|tree/[a-z_]+)\\.rs$",
+    "^crates/task-core/src/store/(transition|tasks|task_integration_state|execution/[a-z_]+)\\.rs$",
+    "^crates/task-dispatch/src/(integration|auto_resolve|review/required|dispatcher/(phase_integration|work_units|review_verdict|token_budget))\\.rs$",
+    "^crates/task-ops/src/(delivery|changes|project_budget)\\.rs$",
+    "^crates/celeris/src/(delivery|delivery/[a-z_]+|config/delivery)\\.rs$",
+    "^crates/task-core/migrations/[0-9]{4}_[a-z0-9_]+\\.sql$",
+    "^crates/(task-core|task-dispatch|task-ops|celeris)/(tests/[a-z_/]+|src/([a-z_]+/)*tests(/[a-z_]+)?|src/([a-z_]+/)*[a-z_]+_tests)\\.rs$",
+    "^agent-docs/adr/2026-[0-9]{2}-[0-9]{2}-[a-z0-9-]+\\.md$",
+    "^agent-docs/progress/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+(\\.md|/.*)$"
+   ],
+   "checks": [
+    "bash scripts/dev/test-affected.sh",
+    "cargo clippy --workspace -- -D warnings",
+    "cargo fmt --all -- --check",
+    "bash scripts/dev/check-health.sh",
+    "sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check",
+    "git diff --name-only $(git merge-base HEAD main) | python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set G3 agent-docs/progress/2026-11-07-health-v2-b0/slices.json"
+   ],
+   "stop_conditions": [
+    "不変条件の試験（capability-map.json の invariants の evidence_path にある試験、または check-health・test-affected の試験）が落ちる → 直せないなら delivery-repair、設計の誤りなら replan",
+    "write_set の外の path を変える必要が出る → 作業を止め plan_issue で申告し replan（範囲を広げて続けない）",
+    "検査器・policy・baseline（check-source-size の baseline、source-size-baseline.json、architecture-map の検査、test-affected の対象規則、required checks）を弱める・除外を足す必要が出る → 止めて replan、人の判断を求める",
+    "旧い仕組みを残す互換分岐・deprecated・新旧切替 flag が要る → 止めて replan（CLAUDE.md の破壊的変更の方針）",
+    "P-9 の対策が events の書き換えを要する（events は追記専用）→ 止めて replan"
+   ],
+   "baseline_metrics": [
+    "review_cost",
+    "edit_verify_secs"
+   ]
+  },
+  {
+   "key": "G4",
+   "task_id": "01M6TYVJSXBZMSBC0YGAT2TTX0",
+   "title": "非 Celeris プロジェクトで汎用性とバイパス耐性を実証（isolated Git fixture）",
+   "depends_on": [
+    "G3"
+   ],
+   "scope": {
+    "summary": "Celeris 以外の小さな Git fixture repo に G1 の契約を当て、違反が検出されること・検査を外す変更（baseline の緩め、除外の追加）が review で落ちることを決定的な試験で示す。外部ネットワークに出ない。",
+    "capabilities": [],
+    "consolidate_into_owner": [
+     "fixture は scripts/dev/repo-health/fixtures/ の 1 か所に置く"
+    ],
+    "remove": [],
+    "dup_assignments": []
+   },
+   "write_set": [
+    "^scripts/dev/repo-health/.*$",
+    "^scripts/tests/test_repo_health[a-z_]*\\.py$",
+    "^crates/e2e/tests/repo_health[a-z_]*\\.rs$",
+    "^agent-docs/adr/2026-[0-9]{2}-[0-9]{2}-[a-z0-9-]+\\.md$",
+    "^agent-docs/progress/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+(\\.md|/.*)$"
+   ],
+   "checks": [
+    "bash scripts/dev/test-affected.sh",
+    "cargo clippy --workspace -- -D warnings",
+    "cargo fmt --all -- --check",
+    "bash scripts/dev/check-health.sh",
+    "sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check",
+    "git diff --name-only $(git merge-base HEAD main) | python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set G4 agent-docs/progress/2026-11-07-health-v2-b0/slices.json",
+    "python3 -m unittest discover -s scripts/tests -p 'test_repo_health*.py'"
+   ],
+   "stop_conditions": [
+    "不変条件の試験（capability-map.json の invariants の evidence_path にある試験、または check-health・test-affected の試験）が落ちる → 直せないなら delivery-repair、設計の誤りなら replan",
+    "write_set の外の path を変える必要が出る → 作業を止め plan_issue で申告し replan（範囲を広げて続けない）",
+    "検査器・policy・baseline（check-source-size の baseline、source-size-baseline.json、architecture-map の検査、test-affected の対象規則、required checks）を弱める・除外を足す必要が出る → 止めて replan、人の判断を求める",
+    "旧い仕組みを残す互換分岐・deprecated・新旧切替 flag が要る → 止めて replan（CLAUDE.md の破壊的変更の方針）"
+   ],
+   "baseline_metrics": [
+    "review_cost"
+   ]
+  },
+  {
+   "key": "R1",
+   "task_id": "01M6TYVJSZDSCB697193J01FYW",
+   "title": "Celeris adapter の結果契約（ResultFile/lenient_evidence）と実行共通処理の整理",
+   "depends_on": [
+    "G3"
+   ],
+   "scope": {
+    "summary": "harness ごとの adapter（claude_code・codex・pi・acp・aider）に散った result.json の読み取りと lenient_evidence の扱いを 1 つの結果契約にまとめ、実行の共通処理（起動・timeout・usage の回収）を共有する。",
+    "capabilities": [
+     "worker-protocol-adapters"
+    ],
+    "consolidate_into_owner": [
+     "result の解釈を crates/task-worker/src/result_report.rs 1 か所に寄せる",
+     "adapter 共通処理を crates/task-worker/src/adapter.rs に寄せる"
+    ],
+    "remove": [
+     "各 adapter の lenient_evidence の写し"
+    ],
+    "dup_assignments": [
+     {
+      "id": "unref-worktree-note",
+      "decision": "delete"
+     }
+    ]
+   },
+   "write_set": [
+    "^crates/task-worker/src/(adapter|result_report|result_location|protocol|route|preamble|claude_code|codex|pi|acp|aider|fake|subprocess)\\.rs$",
+    "^crates/task-worker/src/(claude_code|codex|pi|acp|aider)/[a-z_/]+\\.rs$",
+    "^crates/task-dispatch/src/dispatcher/worker_finish\\.rs$",
+    "^crates/task-worker/(tests/[a-z_]+|src/([a-z_]+/)*tests|src/[a-z_]+_tests)\\.rs$",
+    "^agent-docs/adr/2026-[0-9]{2}-[0-9]{2}-[a-z0-9-]+\\.md$",
+    "^agent-docs/progress/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+(\\.md|/.*)$"
+   ],
+   "checks": [
+    "bash scripts/dev/test-affected.sh",
+    "cargo clippy --workspace -- -D warnings",
+    "cargo fmt --all -- --check",
+    "bash scripts/dev/check-health.sh",
+    "sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check",
+    "git diff --name-only $(git merge-base HEAD main) | python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R1 agent-docs/progress/2026-11-07-health-v2-b0/slices.json"
+   ],
+   "stop_conditions": [
+    "不変条件の試験（capability-map.json の invariants の evidence_path にある試験、または check-health・test-affected の試験）が落ちる → 直せないなら delivery-repair、設計の誤りなら replan",
+    "write_set の外の path を変える必要が出る → 作業を止め plan_issue で申告し replan（範囲を広げて続けない）",
+    "検査器・policy・baseline（check-source-size の baseline、source-size-baseline.json、architecture-map の検査、test-affected の対象規則、required checks）を弱める・除外を足す必要が出る → 止めて replan、人の判断を求める",
+    "旧い仕組みを残す互換分岐・deprecated・新旧切替 flag が要る → 止めて replan（CLAUDE.md の破壊的変更の方針）"
+   ],
+   "baseline_metrics": [
+    "product_only",
+    "edit_verify_secs",
+    "dup_candidates_open"
+   ]
+  },
+  {
+   "key": "R2",
+   "task_id": "01M6TYVJT0Z1CBGNK8VTNK8ZJH",
+   "title": "EventSink/WorkerAdapter の能力分離（通知・観測と Browser の認可・制御・secret 操作）",
+   "depends_on": [
+    "R1"
+   ],
+   "scope": {
+    "summary": "adapter.rs の EventSink と WorkerAdapter から、通知・観測の能力と Browser の認可・制御・secret 操作の能力を別 trait に分ける。Browser の capability（policy broker・launcher・egress・live view・site policy）と credentiald の境界は分けた trait を通してだけ使う。",
+    "capabilities": [
+     "browser-policy-broker-approval",
+     "browser-launcher",
+     "browser-egress-runtime",
+     "browser-live-view-control",
+     "browser-site-policy-trusted-devices",
+     "notifications",
+     "sandbox-db-guard",
+     "credential-broker-resume"
+    ],
+    "consolidate_into_owner": [
+     "通知・観測は crates/task-core/src/notify.rs、Browser の認可は crates/task-worker/src/browser_policy.rs を正本にする"
+    ],
+    "remove": [
+     "Browser 用の dummy 実装を全 adapter に持たせる既定 method"
+    ],
+    "dup_assignments": [
+     {
+      "id": "browser-sandbox-inner-uid",
+      "decision": "merge"
+     },
+     {
+      "id": "unref-close-and-join",
+      "decision": "delete"
+     },
+     {
+      "id": "unref-from-result",
+      "decision": "delete"
+     },
+     {
+      "id": "unref-normalize-host-pattern",
+      "decision": "delete"
+     }
+    ]
+   },
+   "write_set": [
+    "^crates/task-worker/src/(adapter|browser|browser_[a-z_]+|db_guard|subprocess|tool_policy)\\.rs$",
+    "^crates/task-worker/src/(browser_[a-z_]+)/[a-z_/]+\\.rs$",
+    "^crates/task-worker/src/bin/celeris-browser-launcher\\.rs$",
+    "^crates/task-api/src/browser[a-z_]*\\.rs$",
+    "^crates/task-core/src/(browser[a-z_]*|notify|feed)\\.rs$",
+    "^crates/task-core/src/browser_wait/[a-z_]+\\.rs$",
+    "^crates/celeris-credentiald/src/[a-z_/]+\\.rs$",
+    "^crates/(task-worker|task-api|celeris-credentiald)/tests/[a-z_]+\\.rs$",
+    "^agent-docs/adr/2026-[0-9]{2}-[0-9]{2}-[a-z0-9-]+\\.md$",
+    "^agent-docs/progress/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+(\\.md|/.*)$"
+   ],
+   "checks": [
+    "bash scripts/dev/test-affected.sh",
+    "cargo clippy --workspace -- -D warnings",
+    "cargo fmt --all -- --check",
+    "bash scripts/dev/check-health.sh",
+    "sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check",
+    "git diff --name-only $(git merge-base HEAD main) | python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R2 agent-docs/progress/2026-11-07-health-v2-b0/slices.json"
+   ],
+   "stop_conditions": [
+    "不変条件の試験（capability-map.json の invariants の evidence_path にある試験、または check-health・test-affected の試験）が落ちる → 直せないなら delivery-repair、設計の誤りなら replan",
+    "write_set の外の path を変える必要が出る → 作業を止め plan_issue で申告し replan（範囲を広げて続けない）",
+    "検査器・policy・baseline（check-source-size の baseline、source-size-baseline.json、architecture-map の検査、test-affected の対象規則、required checks）を弱める・除外を足す必要が出る → 止めて replan、人の判断を求める",
+    "旧い仕組みを残す互換分岐・deprecated・新旧切替 flag が要る → 止めて replan（CLAUDE.md の破壊的変更の方針）",
+    "userns・実 browser の試験が要る（worker sandbox では完走しない）→ --no-run で build だけ確かめ、実行は release gate に回す。それで判定できなければ人の check を置く"
+   ],
+   "baseline_metrics": [
+    "product_only",
+    "edit_verify_secs",
+    "multi_writer_state"
+   ]
+  },
+  {
+   "key": "R3",
+   "task_id": "01M6TYVJT2HG9NY5FW9FMCZS9A",
+   "title": "TaskStore の consumer 駆動分割と domain/storage 境界",
+   "depends_on": [
+    "G3"
+   ],
+   "scope": {
+    "summary": "TaskStore（fn 宣言 193・supertrait 16）を consumer（task-ops・task-dispatch・task-api・celeris）ごとの port に分け、domain の型と SQLite の storage を分ける。task-api が直接書く表（cos_inbox_items・chat_client_requests・browser_task_policies）を task-core の store 関数へ寄せる。旧健全性 3 の objective を残課題として引き継ぐ。",
+    "capabilities": [
+     "http-api-auth-principals",
+     "run-claim-lease",
+     "task-lifecycle",
+     "execution-plan-adoption",
+     "decisions-plan-gate"
+    ],
+    "consolidate_into_owner": [
+     "表ごとの書き手を crates/task-core/src/store/ の 1 module に寄せる（capability-map の multi_writer_state 52 件を減らす）"
+    ],
+    "remove": [
+     "consumer の使わない TaskStore method",
+     "dup-candidates の未参照 store 関数"
+    ],
+    "dup_assignments": [
+     {
+      "id": "unref-authority-audit-record-tx",
+      "decision": "delete"
+     },
+     {
+      "id": "unref-chat-legacy-reply",
+      "decision": "delete"
+     },
+     {
+      "id": "unref-insert-route-judgment",
+      "decision": "delete"
+     },
+     {
+      "id": "unref-roadmap-last-status-tx",
+      "decision": "delete"
+     },
+     {
+      "id": "unref-route-decision-get",
+      "decision": "delete"
+     },
+     {
+      "id": "unref-route-judgment-get",
+      "decision": "delete"
+     },
+     {
+      "id": "unref-route-judgments-for-hashes",
+      "decision": "delete"
+     },
+     {
+      "id": "unref-route-outcome-get",
+      "decision": "delete"
+     },
+     {
+      "id": "unref-task-unit-leaf-shortfalls",
+      "decision": "delete"
+     }
+    ]
+   },
+   "write_set": [
+    "^crates/task-core/src/(lib|store|model|transition)\\.rs$",
+    "^crates/task-core/src/store/[a-z_/]+\\.rs$",
+    "^crates/task-core/src/(tree/gate|chat/[a-z_]+)\\.rs$",
+    "^crates/(task-ops|task-dispatch|task-api|celeris|celerisctl|celeris-mcp)/src/[a-z_/]+\\.rs$",
+    "^crates/[a-z-]+/tests/[a-z_/]+\\.rs$",
+    "^agent-docs/adr/2026-[0-9]{2}-[0-9]{2}-[a-z0-9-]+\\.md$",
+    "^agent-docs/progress/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+(\\.md|/.*)$"
+   ],
+   "checks": [
+    "bash scripts/dev/test-affected.sh",
+    "cargo clippy --workspace -- -D warnings",
+    "cargo fmt --all -- --check",
+    "bash scripts/dev/check-health.sh",
+    "sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check",
+    "git diff --name-only $(git merge-base HEAD main) | python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R3 agent-docs/progress/2026-11-07-health-v2-b0/slices.json"
+   ],
+   "stop_conditions": [
+    "不変条件の試験（capability-map.json の invariants の evidence_path にある試験、または check-health・test-affected の試験）が落ちる → 直せないなら delivery-repair、設計の誤りなら replan",
+    "write_set の外の path を変える必要が出る → 作業を止め plan_issue で申告し replan（範囲を広げて続けない）",
+    "検査器・policy・baseline（check-source-size の baseline、source-size-baseline.json、architecture-map の検査、test-affected の対象規則、required checks）を弱める・除外を足す必要が出る → 止めて replan、人の判断を求める",
+    "旧い仕組みを残す互換分岐・deprecated・新旧切替 flag が要る → 止めて replan（CLAUDE.md の破壊的変更の方針）",
+    "consumer 側の変更が import・trait 境界の付け替えを超えて振る舞いを変える → 止めて replan"
+   ],
+   "baseline_metrics": [
+    "task_store_fn_decls",
+    "task_store_supertraits",
+    "multi_writer_state",
+    "module_cycles",
+    "edit_verify_secs"
+   ],
+   "history": {
+    "cancelled_task_id": "01M5KWPW976PBWXG4B37TQ55XC",
+    "old_title": "健全性 3 TaskStore の consumer 別分割",
+    "status": "cancelled",
+    "reason": "dependency_failed",
+    "cancelled_at": "2026-10-23T10:01:45Z",
+    "runs": 0,
+    "finding": "依存先 01M5KWPP3YPZMZ71PZP6HAGNFD（健全性 2）の一時的な review_fail による自動 cancel。人・CoS の cancel ではなく、中身が原因ではない。着手前で run は 0 本、引き継ぐ成果物は無い。",
+    "starting_point": {
+     "task_store_fn_decls": 193,
+     "task_store_supertraits": 16,
+     "note": "同じ数え方（structural_metrics の command）で着手時に再計測する"
+    },
+    "p9_mitigation": {
+     "recommended": "A",
+     "placement": [
+      "G3",
+      "R6"
+     ],
+     "text": "案 A: 依存先の reopen で dependency_failed の後続を戻すか受信箱に知らせる仕組みを G3（なければ R6）に入れる。R3 が review で一度 failed になると R4 が自動 cancel され、R3 を reopen しても戻らないため。少なくとも親の closeout で cancelled の子を点検する。"
+    }
+   }
+  },
+  {
+   "key": "R4",
+   "task_id": "01M6TYVJT4S29ZMP6P0D4831JG",
+   "title": "Dispatcher の状態所有と判断/副作用の分割",
+   "depends_on": [
+    "R2",
+    "R3"
+   ],
+   "scope": {
+    "summary": "Dispatcher（field 115）の状態を所有者ごとの struct に分け、tick の判断（純粋関数）と副作用（DB 書き込み・spawn・通知）を分ける。旧健全性 4 の objective を残課題として引き継ぐ。",
+    "capabilities": [
+     "project-controller",
+     "orphan-takeover",
+     "continuation-session-resume",
+     "workunit-scheduling-stage-integration"
+    ],
+    "consolidate_into_owner": [
+     "判断は crates/task-dispatch/src/dispatcher/ の判断 module、副作用は R2・R3 で分けた port だけを通す"
+    ],
+    "remove": [
+     "Dispatcher の field のうち 1 module しか使わないもの（その module の struct へ移す）"
+    ],
+    "dup_assignments": []
+   },
+   "write_set": [
+    "^crates/task-dispatch/src/(dispatcher|orphan|sessions|checkpoint|execution_scheduler|project_controller|lib)\\.rs$",
+    "^crates/task-dispatch/src/dispatcher/[a-z_/]+\\.rs$",
+    "^crates/task-dispatch/tests/[a-z_]+\\.rs$",
+    "^crates/celeris/src/daemon(/[a-z_]+)?\\.rs$",
+    "^agent-docs/adr/2026-[0-9]{2}-[0-9]{2}-[a-z0-9-]+\\.md$",
+    "^agent-docs/progress/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+(\\.md|/.*)$"
+   ],
+   "checks": [
+    "bash scripts/dev/test-affected.sh",
+    "cargo clippy --workspace -- -D warnings",
+    "cargo fmt --all -- --check",
+    "bash scripts/dev/check-health.sh",
+    "sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check",
+    "git diff --name-only $(git merge-base HEAD main) | python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R4 agent-docs/progress/2026-11-07-health-v2-b0/slices.json"
+   ],
+   "stop_conditions": [
+    "不変条件の試験（capability-map.json の invariants の evidence_path にある試験、または check-health・test-affected の試験）が落ちる → 直せないなら delivery-repair、設計の誤りなら replan",
+    "write_set の外の path を変える必要が出る → 作業を止め plan_issue で申告し replan（範囲を広げて続けない）",
+    "検査器・policy・baseline（check-source-size の baseline、source-size-baseline.json、architecture-map の検査、test-affected の対象規則、required checks）を弱める・除外を足す必要が出る → 止めて replan、人の判断を求める",
+    "旧い仕組みを残す互換分岐・deprecated・新旧切替 flag が要る → 止めて replan（CLAUDE.md の破壊的変更の方針）",
+    "時間依存の試験が要る → tokio::time::pause・注入した時計・出来事待ちで決定的にする。CPU を焼く負荷はかけない"
+   ],
+   "baseline_metrics": [
+    "dispatcher_fields",
+    "edit_verify_secs",
+    "test_targets"
+   ],
+   "history": {
+    "cancelled_task_id": "01M5KWQ3WME71Q0ATMPTJA7XE7",
+    "old_title": "健全性 4 Dispatcher の判断と副作用の分離",
+    "status": "cancelled",
+    "reason": "dependency_failed",
+    "cancelled_at": "2026-10-23T10:01:45Z",
+    "runs": 0,
+    "finding": "健全性 3 と同じ秒に、依存先（健全性 2）の review_fail による自動 cancel。着手前で run は 0 本。",
+    "starting_point": {
+     "dispatcher_fields": 115,
+     "note": "親 objective の 113 から増えた。awk の概数で、着手時に同じ command で再計測する"
+    },
+    "p9_mitigation": {
+     "recommended": "A",
+     "placement": [
+      "G3",
+      "R6"
+     ],
+     "text": "R4 は R2・R3 に依存する。P-9 の対策が入るまで、R2・R3 が failed になったら R4 の cancel を親が点検して後継を起票する。"
+    }
+   }
+  },
+  {
+   "key": "R5",
+   "task_id": "01M6TYVJT53598CPKMGSQGA7XM",
+   "title": "テストの意味的整理と build/link 負荷の低減",
+   "depends_on": [
+    "R1"
+   ],
+   "scope": {
+    "summary": "task-api の test binary 114 個・celeris の 57 個を、capability ごとの結合試験 target にまとめて link の回数を減らす。試験の数（不変条件の試験）は減らさない。test-affected の crate の組が変わると workspace が作り直される点を対象にする。",
+    "capabilities": [],
+    "consolidate_into_owner": [
+     "試験は capability-map の tests の path を正本にし、同じ capability の試験を 1 target に集める"
+    ],
+    "remove": [
+     "同じ fixture を写した試験の重複"
+    ],
+    "dup_assignments": []
+   },
+   "write_set": [
+    "^crates/[a-z-]+/tests/[a-z_/]+\\.rs$",
+    "^crates/[a-z-]+/src/([a-z_]+/)*(tests|[a-z_]+_tests)\\.rs$",
+    "^crates/[a-z-]+/src/([a-z_]+/)*tests/[a-z_/]+\\.rs$",
+    "^crates/[a-z-]+/Cargo\\.toml$",
+    "^scripts/dev/(test-affected\\.sh|test-target-inventory\\.py)$",
+    "^\\.config/nextest\\.toml$",
+    "^agent-docs/adr/2026-[0-9]{2}-[0-9]{2}-[a-z0-9-]+\\.md$",
+    "^agent-docs/progress/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+(\\.md|/.*)$"
+   ],
+   "checks": [
+    "bash scripts/dev/test-affected.sh",
+    "cargo clippy --workspace -- -D warnings",
+    "cargo fmt --all -- --check",
+    "bash scripts/dev/check-health.sh",
+    "sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check",
+    "git diff --name-only $(git merge-base HEAD main) | python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R5 agent-docs/progress/2026-11-07-health-v2-b0/slices.json",
+    "python3 scripts/dev/test-target-inventory.py --json"
+   ],
+   "stop_conditions": [
+    "不変条件の試験（capability-map.json の invariants の evidence_path にある試験、または check-health・test-affected の試験）が落ちる → 直せないなら delivery-repair、設計の誤りなら replan",
+    "write_set の外の path を変える必要が出る → 作業を止め plan_issue で申告し replan（範囲を広げて続けない）",
+    "検査器・policy・baseline（check-source-size の baseline、source-size-baseline.json、architecture-map の検査、test-affected の対象規則、required checks）を弱める・除外を足す必要が出る → 止めて replan、人の判断を求める",
+    "旧い仕組みを残す互換分岐・deprecated・新旧切替 flag が要る → 止めて replan（CLAUDE.md の破壊的変更の方針）",
+    "試験関数の数が減る、または不変条件の試験を消す必要が出る → 止めて replan"
+   ],
+   "baseline_metrics": [
+    "test_targets",
+    "edit_verify_secs",
+    "own_total_with_tests"
+   ]
+  },
+  {
+   "key": "R6",
+   "task_id": "01M6TYVJT7EJ6WWHEF0EBH3JPS",
+   "title": "旧経路・移行残骸・周辺機能の収束",
+   "depends_on": [
+    "R2",
+    "R3",
+    "R4",
+    "R5"
+   ],
+   "scope": {
+    "summary": "dup-candidates の delete・merge のうち R1〜R3 に割り当てていないものを片付け、使われない config 欄を読み込みエラーにする。評価基盤（campaign・routing-eval・jev-classifier）を repo の外へ出すかを決める材料を作る。G3 に入らなければ P-9 対策をここで扱う。",
+    "capabilities": [
+     "campaign-eval",
+     "jev-classifier",
+     "celerisctl-cli",
+     "cos-chat-threads-runs",
+     "cos-inbox-triage-operations-audit",
+     "routing-lane-route",
+     "accounts-quota",
+     "llm-proxy",
+     "routing-eval",
+     "routing-audit-outcome",
+     "scratch-build-cache-disk-guard"
+    ],
+    "consolidate_into_owner": [
+     "celerisctl の API 解決を ApiConfig::from_config に寄せる",
+     "scratch の status schema 定数を crates/task-worker/src/scratch.rs に寄せる"
+    ],
+    "remove": [
+     "使われない config 欄（読み込みエラーにする）",
+     "未参照の pub item",
+     "scripts/scratch/u5/stats.py"
+    ],
+    "dup_assignments": [
+     {
+      "id": "account-check-result-vocabulary",
+      "decision": "merge"
+     },
+     {
+      "id": "api-scratch-cache-stats-field",
+      "decision": "delete"
+     },
+     {
+      "id": "celerisctl-api-endpoint-resolution",
+      "decision": "merge"
+     },
+     {
+      "id": "config-execution-cheap-local-first",
+      "decision": "delete"
+     },
+     {
+      "id": "config-scratch-l1-max-gb",
+      "decision": "delete"
+     },
+     {
+      "id": "route-record-route-decision",
+      "decision": "delete"
+     },
+     {
+      "id": "scratch-status-schema-const",
+      "decision": "merge"
+     },
+     {
+      "id": "script-scratch-u5-stats",
+      "decision": "delete"
+     },
+     {
+      "id": "task-features-content-hash",
+      "decision": "merge"
+     },
+     {
+      "id": "unref-accountlimitpatchbody",
+      "decision": "delete"
+     },
+     {
+      "id": "unref-cos-harness-capability-warnings",
+      "decision": "delete"
+     },
+     {
+      "id": "unref-cos-run-credential-issue",
+      "decision": "delete"
+     },
+     {
+      "id": "unref-from-responses-body",
+      "decision": "delete"
+     },
+     {
+      "id": "unref-has-reply",
+      "decision": "delete"
+     },
+     {
+      "id": "unref-is-on",
+      "decision": "delete"
+     },
+     {
+      "id": "unref-next-version",
+      "decision": "delete"
+     },
+     {
+      "id": "unref-page-file",
+      "decision": "delete"
+     },
+     {
+      "id": "unref-project-slugs",
+      "decision": "delete"
+     },
+     {
+      "id": "unref-replace-owner",
+      "decision": "delete"
+     },
+     {
+      "id": "unref-retryable-before-any-bytes",
+      "decision": "delete"
+     },
+     {
+      "id": "unref-scorebreakdown",
+      "decision": "delete"
+     },
+     {
+      "id": "unref-task-routing-audit",
+      "decision": "delete"
+     },
+     {
+      "id": "unref-to-key",
+      "decision": "delete"
+     },
+     {
+      "id": "unref-top-dirs",
+      "decision": "delete"
+     },
+     {
+      "id": "unref-unique-bytes",
+      "decision": "delete"
+     },
+     {
+      "id": "unref-unroutable-question",
+      "decision": "delete"
+     }
+    ]
+   },
+   "write_set": [
+    "^crates/[a-z-]+/src/[a-z_/]+\\.rs$",
+    "^crates/[a-z-]+/(tests/[a-z_/]+)\\.rs$",
+    "^crates/task-core/migrations/[0-9]{4}_[a-z0-9_]+\\.sql$",
+    "^config/[a-z0-9_.-]+\\.toml$",
+    "^scripts/scratch/.*$",
+    "^docs/[a-z0-9_/-]+\\.md$",
+    "^web/(api|features)/.*\\.(ts|tsx)$",
+    "^agent-docs/adr/2026-[0-9]{2}-[0-9]{2}-[a-z0-9-]+\\.md$",
+    "^agent-docs/progress/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+(\\.md|/.*)$"
+   ],
+   "checks": [
+    "bash scripts/dev/test-affected.sh",
+    "cargo clippy --workspace -- -D warnings",
+    "cargo fmt --all -- --check",
+    "bash scripts/dev/check-health.sh",
+    "sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check",
+    "git diff --name-only $(git merge-base HEAD main) | python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R6 agent-docs/progress/2026-11-07-health-v2-b0/slices.json"
+   ],
+   "stop_conditions": [
+    "不変条件の試験（capability-map.json の invariants の evidence_path にある試験、または check-health・test-affected の試験）が落ちる → 直せないなら delivery-repair、設計の誤りなら replan",
+    "write_set の外の path を変える必要が出る → 作業を止め plan_issue で申告し replan（範囲を広げて続けない）",
+    "検査器・policy・baseline（check-source-size の baseline、source-size-baseline.json、architecture-map の検査、test-affected の対象規則、required checks）を弱める・除外を足す必要が出る → 止めて replan、人の判断を求める",
+    "旧い仕組みを残す互換分岐・deprecated・新旧切替 flag が要る → 止めて replan（CLAUDE.md の破壊的変更の方針）",
+    "本番 config の書き換えが要る → 進捗の『本番への移行』節に書き、人の check を置く（本番 host は触らない）"
+   ],
+   "baseline_metrics": [
+    "dup_candidates_open",
+    "product_only",
+    "external_split_candidates",
+    "multi_writer_state"
+   ]
+  },
+  {
+   "key": "V0",
+   "task_id": "01M6TYVJT97XH88TEEAVRD7JK6",
+   "title": "統合評価・導入と完了判定（release 候補まで。本番昇格は人の承認）",
+   "depends_on": [
+    "G4",
+    "R6"
+   ],
+   "scope": {
+    "summary": "G1〜R6 の後に 4 見方の行数・review 費用・edit→verify 時間・test target 数を同じ手順で再計測し、基準値と並べる。release 候補を作り（release gate の全試験はここで走る）、本番昇格は人の承認に回す。",
+    "capabilities": [
+     "release-selfdeploy-wiring"
+    ],
+    "consolidate_into_owner": [
+     "評価の数値は親 task の artifacts と進捗に置き、repo には raw だけを置く"
+    ],
+    "remove": [],
+    "dup_assignments": []
+   },
+   "write_set": [
+    "^docs/(SPEC|architecture-map)\\.md$",
+    "^agent-docs/adr/2026-[0-9]{2}-[0-9]{2}-[a-z0-9-]+\\.md$",
+    "^agent-docs/progress/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9-]+(\\.md|/.*)$"
+   ],
+   "checks": [
+    "bash scripts/dev/test-affected.sh",
+    "cargo clippy --workspace -- -D warnings",
+    "cargo fmt --all -- --check",
+    "bash scripts/dev/check-health.sh",
+    "sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check",
+    "git diff --name-only $(git merge-base HEAD main) | python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set V0 agent-docs/progress/2026-11-07-health-v2-b0/slices.json"
+   ],
+   "stop_conditions": [
+    "不変条件の試験（capability-map.json の invariants の evidence_path にある試験、または check-health・test-affected の試験）が落ちる → 直せないなら delivery-repair、設計の誤りなら replan",
+    "write_set の外の path を変える必要が出る → 作業を止め plan_issue で申告し replan（範囲を広げて続けない）",
+    "検査器・policy・baseline（check-source-size の baseline、source-size-baseline.json、architecture-map の検査、test-affected の対象規則、required checks）を弱める・除外を足す必要が出る → 止めて replan、人の判断を求める",
+    "旧い仕組みを残す互換分岐・deprecated・新旧切替 flag が要る → 止めて replan（CLAUDE.md の破壊的変更の方針）",
+    "本番昇格・本番 host の操作が要る → 人の承認（decision）に回し、自分では実行しない"
+   ],
+   "baseline_metrics": [
+    "product_only",
+    "own_total_with_tests",
+    "all_tracked",
+    "external_split_candidates",
+    "review_cost",
+    "edit_verify_secs",
+    "test_targets"
+   ]
+  }
+ ]
+}

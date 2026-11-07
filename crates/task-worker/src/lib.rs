@@ -40,6 +40,8 @@ pub mod fake;
 pub mod human_text;
 /// ADR-0047 D4（Phase 62）: 知識整理 run（`langmem` の memory manager を包む）。
 pub mod langmem;
+#[cfg(test)]
+mod launch_notice_tests;
 pub mod local_deep_research;
 pub mod local_worktree;
 pub mod memory;

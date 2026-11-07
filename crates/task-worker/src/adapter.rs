@@ -208,6 +208,14 @@ pub trait EventSink: Send + Sync {
         _event: &task_core::browser_live::ScrubbedLiveEvent,
     ) {
     }
+    /// 起動前通知（ADR 2026-11-06-cos-run-launch-accounting-and-drain D1）。アダプタは harness の
+    /// process を spawn する**同じ関数の直前**にこれを 1 回呼ぶ。`Err` なら spawn しない（run は
+    /// `AdapterError::Other` で終わる）。spawn が失敗しても通知は取り消さない。route の failover で
+    /// 2 本目以降の起動でも呼ばれるので、実装は再送で初回の記録を書き換えないこと（冪等）。
+    /// 既定は何もしない（task run・`celerisctl worker run` など、起動の印を持たない文脈）。
+    fn before_spawn(&self) -> Result<(), String> {
+        Ok(())
+    }
     fn progress(&self, msg: &str);
     /// ADR-0048 D2（Phase 60a）: 構造化した進行（`kind` / `tool` / `summary` / `detail`）。
     /// 既定は `msg` だけを `progress` に流す（この口を実装していないシンクでも従来どおり動く）。

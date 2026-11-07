@@ -19,6 +19,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 TOOL_SRC = ROOT / "scripts/dev/repo-health"
 CHECKER_SRC = ROOT / "scripts/dev/check-architecture-map.py"
+# 全 rule を回す試験がある。deps.*・size.* は検査器の隣の source-size-report.py を読む（無ければ unsupported）
+SOURCE_SIZE = ROOT / "scripts/dev/source-size-report.py"
 KINDS = ("missing_row", "missing_test", "wrong_owner", "missing_invariant", "stale", "wrong_path")
 IDS = [f"arch-map.{k}" for k in KINDS]
 HEADER = ("| subsystem | owner crate/module | entry point | ADR / 設計 | 関連試験 | 不変条件 |\n"
@@ -47,6 +49,7 @@ class RepoHealthArchMapTests(unittest.TestCase):
         self.tool = self.tmp / "tool/scripts/dev/repo-health"
         shutil.copytree(TOOL_SRC, self.tool, ignore=shutil.ignore_patterns("__pycache__"))
         shutil.copy(CHECKER_SRC, self.tool.parent / "check-architecture-map.py")
+        shutil.copy(SOURCE_SIZE, self.tool.parent / "source-size-report.py")
         self.repo = self.tmp / "repo"
         self.repo.mkdir()
         git(self.repo, "init", "-q", "-b", "main")

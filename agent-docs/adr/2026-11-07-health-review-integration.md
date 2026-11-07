@@ -1,0 +1,213 @@
+---
+tasks: [01M6VBSKZQG2YWF7NWYH6GP9P7]
+---
+# ADR 2026-11-07: 健全性を設計と review に組み込む（規約配布・設計 brief・risk 判定・構造化 health verdict）
+
+- 日付: 2026-11-07
+- 状態: 採用（設計）。この ADR はコードを変えない。実装は健全性 v2 G2 の後続 unit（D8 の U1〜U6）。
+- 根拠: 前提調査 [G2 survey](../progress/2026-11-07-health-v2-g2/adr-survey.md) の (a)〜(h)。行番号は survey の時点のもの。
+- 関係: [ADR 2026-11-07 汎用 repo health の契約](2026-11-07-repo-health-contract.md)（D2: policy は base 側で評価、policy.changed）、[ADR 2026-11-07 repo health の Celeris profile](2026-11-07-repo-health-celeris-profile.md)、[ADR 2026-11-07 健全性 v2 の基準](2026-11-07-health-v2-baseline.md)、[ADR 2026-10-23 必須規則の prompt 配送](2026-10-23-required-rules-prompt-delivery.md)、[2026-10-11 破壊的変更を既定にする](2026-10-11-breaking-changes-by-default.md)、[ADR-0118](0118-review-target-sync-and-merge-candidate.md)（review 前の target 同期と candidate SHA）。
+
+## 結論
+- 変更の仕方の汎用規約は `crates/task-worker/src/change_rules/generic.md` の 1 file を正本にし、`include_str!` で `claude_code::prompt` の `prompt_header` から全 harness の prompt へ 1 回だけ入れる。repo 固有の規則は今までどおり `CLAUDE.md`（`required_rules`）で配る。2 つは互いに写さない。
+- repo 固有の review 方針は `scripts/dev/repo-health/profiles/<profile>.toml` の `[review]` 節に置き、dispatcher は `repo_health.py --print-review-policy` で **base（target）側**の版を読む。
+- planner の /3 計画に設計 brief（`ExecutionPlanSpec.design_brief`）を持たせ、risk を決定的に判定し、高 risk の計画だけ採用の前に既存の reviewer run で設計 review する。
+- 実装後の review には `ReviewRequest.health` を candidate SHA ごとに 1 回だけ作って渡し、reviewer は `ReviewOutput.health` に固定 7 種の finding を返す。blocking の finding は既存の `classify_review_failure`（局所修復）か `Trigger::ReviewFail`（replan）に写す。
+- policy の file を変える変更は policy の file だけの branch に分け、reviewer の policy verdict と人の承認で通す。
+
+## 根本原因
+- 健全性 v2 の B0・G1 で、変更が「どこで直すか・何を消すか」を決めないまま実装される事例を数えた（[健全性 v2 の基準](2026-11-07-health-v2-baseline.md)）。今の流れには設計を確かめる段が無い。planner の /3 計画は unit と check を書くだけで、原因・owner・撤去対象を書く欄が無い（survey (c)。`ExecutionPlanSpec`・`PlanUnitSpec` は `deny_unknown_fields`）。
+- reviewer は受け入れ条件ごとの pass/fail（`ReviewVerdictOut`）しか返さない（survey (b)）。「owner の外で症状を直した」「旧経路を消していない」は自由文の reason に埋もれ、dispatcher は repair と replan を分けられない。
+- reviewer は G1 の repo health の結果（new findings・policy.changed）を受け取らない。`ReviewRequest` に health の材料が無い（survey (b)・(e)）。
+- 変更の規約は `CLAUDE.md`・`docs/guides/source-health.md`・reviewer prompt・planner prompt に別々の文で写されている（survey (g)・(h)）。どれが正本か分からず、直すと食い違う。
+- G1 の契約で、policy の file を変える branch は policy.changed で必ず落ちる（survey (f)）。通す経路が決まっていないので、検査器・profile を変える G2 以降の branch は `test-affected.sh` を通れない。
+
+## 責務 owner
+| 責務 | owner（crate/module・file） | 理由 |
+|---|---|---|
+| 汎用規約の文 | `crates/task-worker/src/change_rules/generic.md` | binary に埋め込み、repo に依らない |
+| 規約を prompt に入れる | `crates/task-worker/src/claude_code/prompt.rs` の `prompt_header` | 全 harness の `build_prompt` が通る唯一の組み立て口（survey (a)） |
+| repo 固有の必須規則 | `CLAUDE.md` と `crates/task-worker/src/required_rules.rs` | 既存（ADR 2026-10-23） |
+| repo 固有の review 方針の文 | `scripts/dev/repo-health/profiles/<profile>.toml` の `[review]` | profile が repo 固有の値の唯一の置き場（G1 D3） |
+| profile の解釈（extends・base 側の読み込み） | `scripts/dev/repo-health/health/profile.py` | profile を読む実装は 1 つだけにする |
+| 設計 brief の型と形の検証 | `crates/task-core/src/execution_plan.rs`・`execution_plan/validation.rs` の `validate_v3` | 全経路（planner・人の計画・採用・replan・replay）が通る |
+| risk の判定（純粋関数） | `crates/task-core/src/design_review.rs`（新規） | I/O なしで試験できる |
+| 設計 review を起こす・結果で採用する | `crates/task-dispatch/src/dispatcher/planner_flow.rs` | 計画の検証と採用の流れの持ち主 |
+| health の材料を作る・再利用する | `crates/task-dispatch/src/dispatcher/review_health.rs`（新規。`review_spawn.rs` から呼ぶ） | `ReviewSync` で candidate SHA が決まる場所の直後 |
+| health verdict の読み込みと写像 | `crates/task-dispatch/src/review.rs`（読み込み）・`review_verdict.rs`（写像） | 既存の review.json 読み込みと repair/replan の分岐 |
+| wire の型 | `crates/task-worker/src/protocol.rs` | `ReviewRequest`・`ReviewOutput` の持ち主 |
+
+## 既存の再利用先
+- prompt: `prompt_header`（prompt.rs:150）。execute・plan・replan・execution plan・review の各 builder がこれを呼ぶ。Aider も `build_prompt` を通るので汎用規約は届く。
+- 計画: `ExecutionPlanSpec` の /3 専用欄の慣例（`skip_serializing_if`、/1・/2 の JSON を変えない）、`validate_v3`、`PlanValidationError`、schema の再生成（`docs/protocol/execution-plan.schema.json`、`UPDATE_SCHEMA=1`）。
+- 計画の書き方の指示: `build_execution_plan_prompt`（prompt.rs:912）。
+- reviewer の起動: `pick_reviewer`（review_spawn.rs:1381）・`run_reviewer_inner`（review.rs:1044）・`REVIEW_FILE_NAME`。設計 review も同じ run の形で起こす。新しい run 種別は作らない。
+- 候補 SHA に束ねた再利用: `Event::RequiredChecksEvaluated` と `required_checks::reusable_passes`・`definition_digest` の形。`reviewer_reuse`（review_spawn.rs:1155）で reviewer を省くときは health も作らない。
+- 失敗の写像: `FailedCheck { check: Check::Reviewer, reason, repair_hint }` → `classify_review_failure` → `RepairClass::ReviewerLocal(ReviewerRepairKind)` か `Substantive` → `Trigger::ReviewFail` → `replan_gate`。CoS の `review_rework` は verdict の reason の形 `reviewer(<id>): <text>` を読むので、health の reason も同じ形に乗せる。
+- 人の承認: `Trigger::PlanGate`・`Event::PlanApprovalRequested { plan_id, reasons }`・`PlanApproval.reasons` の機械可読な文字列。
+- repo health: `repo_health.py --base <rev> --head <commit>`、report の `findings[].delta`・`exception`・`summary.reviewable`・`policy.{source,changed,files}`（survey (e)）。
+
+## 選択肢
+1. 汎用規約の置き場所
+   - A（採用）: task-worker に埋め込む 1 file（`change_rules/generic.md`）。どの repo の run にも同じ文が届き、作業ツリーに依らない。
+   - B: 各 repo の `CLAUDE.md` に書く。repo ごとに写しが増え、Celeris 以外の repo では届かない。
+   - C: KB の skill にする。配送が harness と課の設定に依り、届かない run が出る。
+2. repo 固有の review 方針の置き場所
+   - A（採用）: profile の `[review]` 節。base 側で読む仕組みが既にある。
+   - B: `celeris.toml`（daemon の config）。repo の外にあり、変更が review を通らない。
+   - C: `docs/architecture-map.md` に列を足す。地図は owner の正本だが、高 risk の path class と保護する不変条件の名前は地図の行と一対一にならない。
+3. dispatcher が profile を読む方法
+   - A（採用）: `repo_health.py --print-review-policy` を base の SHA で呼ぶ。profile の解釈は `profile.py` の 1 つだけ。
+   - B: Rust で TOML を読む。`extends` の解決と base 側の読み込みを 2 つ目の実装として持つことになる。
+4. 設計 brief の位置
+   - A（採用）: 計画単位の `ExecutionPlanSpec.design_brief`。1 つの task の変更に原因と owner は 1 つ。
+   - B: unit ごと（`PlanUnitSpec`）。同じ原因を unit ごとに書き、食い違う。
+5. 設計 review の時点
+   - A（採用）: 計画の検証の後、採用（`adopt_plan_with_children`）の前。差し戻しで unit の行を作り直さない。
+   - B: 採用の後、unit の起動前（`root_plan_approval` の位置）。差し戻すと採用済みの unit を replan で消すことになる。
+   - C: 全計画に人の承認。人の負担が大きい。
+6. health の材料を作る時点
+   - A（採用）: task の review（`spawn_review`）で `ReviewSync` の後、candidate SHA ごとに 1 回。
+   - B: WU の check ごと。WU の数だけ repo health を走らせ、多くは捨てられる。
+7. health verdict の形
+   - A（採用）: `ReviewOutput.health` の固定 7 種の finding。blocking/advisory を finding ごとに持つ。
+   - B: 自由文の reason の書式で表す。dispatcher が文字列を解析することになる。
+8. policy の file を変える branch の通し方
+   - A（採用）: policy の file だけの branch に分け、reviewer の policy verdict と人の承認で通す。評価は base 側の policy のまま。
+   - B: `ReviewRequest.health` に載せて reviewer の verdict だけで通す。候補を作った側と同じ種類の agent だけで policy を弱められる。
+   - C: WU の check では policy.changed を advisory にし、final review でだけ必須にする。check に新旧切替の分岐が増える。
+
+## 新しい状態・分岐・fallback・port
+- 状態
+  - 「設計 review 待ちの計画」: 永続化するのは events だけ。`Event::DesignReviewRequested` があり、同じ `plan_sha256` の `Event::DesignReviewed` が無い間がこの状態（D3.5）。ほかの表・列は足さない。
+  - health の材料: `Event::HealthReviewInputBuilt`（D4.2）。再利用の判定は events から行う。
+- 分岐
+  - planner_flow: risk が `high` なら設計 review、`low` なら今までどおり採用。
+  - review_spawn: `[review]` があり review policy を読めたときだけ `ReviewRequest.health` を作る。
+  - review_verdict: health の blocking finding を局所修復か replan に振り分ける（D5.3 の表）。
+  - check-health.sh: policy の file だけの branch のとき exit 0 にして review に回す（D6.2）。
+- fallback: 新しく置かない。review policy を読めない（script の error、remote workspace）ときは理由付きで `risk = unknown` にし、高 risk と同じ扱いにする（fail closed）。`[review]` 節が無い repo は `risk = none`（その repo は設計 review を使わない）で、event に理由 `review_policy_absent` を残す。どちらも黙って省かない。
+- port（外への新しい口）
+  - CLI: `repo_health.py --print-review-policy --repo <dir> --base <sha> [--profile <name|path>]`。出力は JSON `celeris.repo-health.review-policy/1`（schema は `scripts/dev/repo-health/schema/review-policy-v1.schema.json`）。
+  - wire: `RunContext.design_review`、`ReviewRequest.health`、`ReviewOutput.design`、`ReviewOutput.health`（D3・D4・D5）。`PROTOCOL_VERSION` は 4 のまま（追加欄の慣例、protocol.rs:30-31）。`docs/protocol/worker-protocol.schema.json` を再生成する。
+  - 計画: `ExecutionPlanSpec.design_brief`（/3 のみ）。`docs/protocol/execution-plan.schema.json` を再生成する。
+
+## 撤去対象
+D7 に決定として書く。要点: reviewer prompt の進捗ファイルの hash 規則の写し、planner prompt のうち `CLAUDE.md` と同じ文、`docs/guides/source-health.md` の重複した説明、reviewer prompt の Result 節の旧い形。
+
+## 不変条件
+- I1: 汎用規約の文は 1 つの prompt に 1 回だけ現れる。正本は `generic.md` の 1 file で、ほかの source に写しを置かない。
+- I2: `generic.md` は repo 固有の名前（crate 名・`CLAUDE.md` の規則の本文・SQLite・events など）を含まない。repo 固有の規則は `CLAUDE.md` と profile にだけある。
+- I3: dispatcher が使う review policy と repo health の policy は、どちらも base（target）側の内容から読む。候補の内容で自分の review の条件を変えられない（契約 D2）。
+- I4: risk の判定は入力（review policy・write paths・brief）だけで決まる純粋関数で、LLM を呼ばない。
+- I5: health の材料は `(repo_id, target_sha, reviewed_sha, definition_sha256)` ごとに高々 1 回作る。WU の check・tick では作らない。
+- I6: health verdict の finding 種別は 7 つに固定。未知の種別は review.json の読み込みエラーとして扱う。
+- I7: `ReviewRequest.health` を渡した review で `ReviewOutput.health` が無い・壊れていれば、その review は合格しない。
+- I8: policy の file を変える candidate は、人の承認なしには合格しない。
+- I9: 設計 review の待ちは events だけで表し、worker・dispatcher のメモリに持たない（`CLAUDE.md` の禁止の節）。
+
+## 決定
+
+### (1) 汎用規約の正本と配送
+- D1.1 正本は `crates/task-worker/src/change_rules/generic.md` の 1 file。module は `crates/task-worker/src/change_rules.rs` に置き、`pub const GENERIC_RULES: &str = include_str!("change_rules/generic.md");` と `pub fn section() -> String`（見出し `## 変更の規約（汎用）` + 本文）を持つ。
+- D1.2 組み立て口は `claude_code::prompt` だけ。`prompt_header` の preamble（`crate::preamble::render`）の直後に `change_rules::section()` を 1 回入れる。execute・plan・replan・execution plan・review の全 builder が `prompt_header` を通るので、Claude Code・Codex・Pi・ACP・Aider の全 harness に届く。adapter（`codex.rs`・`pi.rs`・`acp.rs`・`aider.rs`・`claude_code.rs`）では足さない。
+- D1.3 CoS chat run（`build_cos_chat_parts`）には入れない。CoS は作業ツリーを変えず、判断の規則は CoS の skill と policy_version が持つ。
+- D1.4 `generic.md` の中身は repo に依らない一般形にする: 原因の owner で直す、同じ仕様を二重に実装しない、共通 interface に局所の hook を足さない、状態の正本を 1 つにする、承認の無い fallback・新旧切替を置かない、置き換えた旧経路を同じ変更で消す、試験の追加・削除に理由を書く、の 7 項目。D5.1 の finding 種別と同じ順・同じ名前にする。
+- D1.5 `CLAUDE.md`・`docs/guides/source-health.md` と重なる文は写さない。`generic.md` は「repo の必須規則と健全性の guide に具体があれば、それに従う」の 1 文で参照するだけにする。`CLAUDE.md` の「変更の方針」「禁止」節は Celeris の必須規則の正本のまま残す（ADR 2026-10-23。Codex・Pi・ACP にも写される）。`source-health.md` は D7.3 で ADR と入口への参照に縮める。
+- D1.6 Aider に `CLAUDE.md` が届かない穴（survey (a)）はこの ADR の範囲の外とし、進捗の提案に回す。
+
+### (2) repo 固有部: profile の `[review]` 節と base 側の読み込み
+- D2.1 `profile.py` の `_TOP_KEYS` に `review` を足し、docstring（項目の正本）に書く。未知の下位項目は読み込みエラー。
+- D2.2 節の形（`profiles/celeris.toml` に置く値の例）:
+  ```toml
+  [review]
+  owner_map = "docs/architecture-map.md"   # 変更 path の owner 行を引く file（地図の表の行）
+
+  [[review.high_risk]]
+  class = "dispatch-state"                 # 高 risk の path class の名前
+  paths = ["^crates/task-dispatch/src/dispatcher/", "^crates/task-core/src/model/", "^crates/task-store/"]
+
+  [review.invariants]                      # 保護する不変条件の名前 → 根拠の file
+  task-state-in-sqlite = "CLAUDE.md"
+  events-append-only = "CLAUDE.md"
+  no-llm-in-dispatcher = "CLAUDE.md"
+  ```
+  具体的な class と path の値は U2 が B0 の capability-map と architecture-map から決める。
+- D2.3 dispatcher は `repo_health.py --print-review-policy --repo <dir> --base <target_sha>` を呼び、JSON `celeris.repo-health.review-policy/1`（`source`: base|bootstrap|builtin|absent、`owner_map`、`high_risk[{class, paths}]`、`invariants{name: source}`、`definition_sha256`）を読む。`definition_sha256` は解決した profile の blob の内容から作る。候補（head）の profile は読まない。base に `[review]` が無いときは `source = absent`。
+- D2.4 Rust 側の型は `task_core::design_review::ReviewPolicy`（`owner_map: Option<String>`・`high_risk: Vec<PathClass { class, paths }>`・`invariants: BTreeMap<String, String>`・`definition_sha256: String`）。Rust では TOML を読まない。
+
+### (3) 設計 brief・risk の判定・設計 review
+- D3.1 型は `task_core::execution_plan::DesignBrief`（`deny_unknown_fields`）。欄:
+  `root_cause: String`・`owner: String`・`reuse: Vec<String>`・`options: Vec<DesignOption { name: String, chosen: bool, reason: String }>`・`new_state: Vec<String>`・`new_branch: Vec<String>`・`new_fallback: Vec<String>`・`new_port: Vec<String>`・`removals: Vec<String>`・`invariants: Vec<String>`。
+  `ExecutionPlanSpec.design_brief: Option<DesignBrief>`（/3 のみ。`skip_serializing_if = "Option::is_none"`。/1・/2 で書けば `PlanValidationError`）。
+- D3.2 形の検証は `validate_v3` に置く（brief があるときだけ）: `root_cause`・`owner` が空でない、`options` が 2 件以上で `chosen = true` がちょうど 1 件、各要素の文字列が空でない、`invariants` の名前は自由文でよい。エラーは `PlanValidationError::DesignBrief { field, reason }`。
+- D3.3 risk の判定は `task_core::design_review::assess_risk(policy: Option<&ReviewPolicy>, write_paths: &[String], brief: Option<&DesignBrief>) -> RiskAssessment { level: RiskLevel, reasons: Vec<String> }`。`RiskLevel` は `None | Low | High | Unknown`。
+  - write paths は計画の全 unit の `expected_write_paths` と leaf の `context` の path の和。
+  - policy が `absent` → `None`（理由 `review_policy_absent`）。policy を読めない → `Unknown`（理由 `review_policy_unavailable:<要約>`）。
+  - write path が `high_risk` のどれかの class に合い、かつ brief が `new_state`・`new_branch`・`new_fallback`・`new_port` のどれかを宣言している → `High`（理由 `path_class:<class>+new_state` など）。
+  - brief が `new_fallback` を宣言している → path に依らず `High`（理由 `new_fallback`）。
+  - write path が高 risk の class に合い、brief が無い → planner の計画では `PlanValidationError::DesignBriefMissing { classes }` で planner に差し戻す（既存の検証失敗の再試行と同じ経路）。人の計画（task-ops）は brief を必須にせず、無ければ `Low` として理由 `brief_absent_human_plan` を残す。
+  - それ以外 → `Low`。
+- D3.4 brief の書き方は `build_execution_plan_prompt` に 1 節足し、planner に「高 risk の path class を変える計画では brief を書く」と review policy の class 一覧を渡す（`RunContext` の planner 欄に `review_policy: Option<ReviewPolicy>` を足す）。
+- D3.5 設計 review の場所は `planner_flow.rs` の検証（:158）と `tree_plan_gate` の後、`adopt_plan_with_children`・`replan` の前。`High` と `Unknown` のとき:
+  1. `Event::DesignReviewRequested { plan_sha256, plan: ExecutionPlanSpec, risk: RiskAssessment, policy_sha256 }` を追記する（計画の本文は event に持つ）。
+  2. `pick_reviewer` で reviewer を選び、`run_reviewer_inner` と同じ形で reviewer run を起こす。`RunContext.review = None`、`RunContext.design_review = Some(DesignReviewRequest { brief, plan_summary, risk, review_policy })`。prompt は `build_review_prompt` の中で `design_review` があれば設計 review の節を出す。
+  3. reviewer は review.json に `ReviewOutput.design: Option<DesignVerdictOut { pass: bool, findings: Vec<HealthFindingOut> }>` を書く（finding 種別は D5.1 と同じ 7 つ）。
+  4. `Event::DesignReviewed { plan_sha256, review_run, pass, findings }` を追記する。`pass` なら event の計画を採用する。不合格なら planner を replan で起こし、findings を planner の prior に渡す。
+  5. 同じ task で設計 review の不合格が 2 回続いたら `Trigger::PlanGate` で人に回す（`PlanApproval.reasons` に `design_review_failed:<n>`）。
+- D3.6 `Low` と `None` は今までどおり採用する。`root_plan_approval` の判定は変えない。
+
+### (4) 実装後の `ReviewRequest.health` を candidate SHA ごとに 1 回
+- D4.1 型（protocol.rs）: `ReviewRequest.health: Option<HealthReviewInput>`（`serde(default, skip_serializing_if = "Option::is_none")`）。
+  `HealthReviewInput { repos: Vec<HealthRepoInput>, brief: Option<DesignBrief> }`。
+  `HealthRepoInput { repo_id, target_sha, reviewed_sha, diff: DiffStat { files, insertions, deletions, paths: Vec<PathStat> }, owner_rows: Vec<OwnerRow { path, row }>, findings: HealthFindingsSummary { verdict, reviewable, counts, new: Vec<HealthReportFinding { rule_id, fingerprint, severity, delta, path }> , truncated: usize }, policy: HealthPolicyState { source, changed, files }, invariants: BTreeMap<String, String> }`。
+  - `findings.new` は report の `findings[]` のうち `delta ∈ {new, worsened}` かつ `exception == null` のもの。上限 50 件、`paths` と `owner_rows` は上限 40 件。超えた数を `truncated` に書く。
+  - `owner_rows` は base 側の `owner_map` file から、変更 path を含む表の行を写す。
+  - `brief` は採用した計画の `design_brief`（reviewer は宣言した `removals` が実際に消えたかを確かめる）。
+- D4.2 作る場所は `crates/task-dispatch/src/dispatcher/review_health.rs` の `build_health_input`。`spawn_review` が `ReviewSync` を作った後（ADR-0118 の同期の後）に呼ぶ。repo health は `repo_health.py --repo <dir> --base <target_sha> --head <reviewed_sha> --policy-version 1 --out <daemon の state dir>` で 1 回走らせる。`summary.reviewable == false` の report は材料にせず、`findings` を空にして理由を残す。
+- D4.3 結果は `Event::HealthReviewInputBuilt { review_run, repo_id, target_sha, reviewed_sha, definition_sha256, input }` に追記する。同じ `(repo_id, target_sha, reviewed_sha, definition_sha256)` の event があれば作り直さず、その `input` を使う（reviewer run の再試行・失敗後の再 review）。`reviewer_reuse` で reviewer を省くときは作らない。
+- D4.4 WU の check・WU の review・tick・remote workspace では作らない。remote workspace と review policy が `absent` の repo では `ReviewRequest.health = None` にし、理由を `HealthReviewInputBuilt` でなく `Event::HealthReviewInputSkipped { review_run, repo_id, reason }` に残す。
+
+### (5) `ReviewOutput.health` の構造化 verdict と repair/replan への写像
+- D5.1 型（protocol.rs）: `ReviewOutput.health: Option<HealthVerdictOut>`、`HealthVerdictOut { findings: Vec<HealthFindingOut>, policy: Option<PolicyVerdictOut> }`、`HealthFindingOut { kind: HealthFindingKind, severity: HealthSeverity, path: Option<String>, reason: String, repair: Option<ReviewRepairHint> }`、`HealthSeverity = blocking | advisory`、`PolicyVerdictOut { approved: bool, reason: String }`。`HealthFindingKind` は serde の snake_case で固定 7 種:
+
+  | kind | 内容 | blocking にする条件 | blocking の写像 |
+  |---|---|---|---|
+  | `symptom_fix_outside_owner` | owner の外で症状を直した | owner 地図の行と直した場所が違い、原因が残る | substantive → replan |
+  | `duplicate_implementation` | 同じ仕様の二重実装 | 既存の実装と同じ入出力の関数・経路を新しく置いた | substantive → replan |
+  | `local_hook_in_shared_interface` | 共通 interface への局所 hook | 共通の型・trait・関数に特定の呼び出し元だけの分岐を足した | substantive → replan |
+  | `dual_source_of_truth` | 状態の二重正本 | 同じ状態を 2 か所に持ち、どちらを正とするかが決まっていない | substantive → replan |
+  | `unapproved_fallback_or_switch` | 未承認の fallback・新旧切替 | brief・ADR に無い fallback、新旧切替の flag・互換分岐 | substantive → replan |
+  | `removal_missing` | 旧経路の撤去漏れ | 置き換えた旧い経路・欄・試験・文書が残っている | `repair.scope = "local"` があれば局所修復、無ければ replan |
+  | `test_change_unjustified` | 試験の追加・削除の根拠が無い | 試験を消した・弱めた理由が差分・進捗に無い | `repair.scope = "local"` があれば局所修復、無ければ replan |
+
+  advisory の finding は合否に使わず、`Event::ReviewVerdict` の記録と次の run の `prior_review` に載せる。
+- D5.2 読み込み（review.rs）: `ReviewRequest.health` を渡した review で `output.health` が無い、または未知の kind・severity を含めば、既存の `fail_all` と同じく全 criterion を不合格にし、reason を `{tag}: health verdict missing or invalid in review.json` にする（I7）。
+- D5.3 写像（review_verdict.rs）: blocking の finding 1 件ごとに `Verdict { criterion_idx, pass: false, reason: "{tag}: health:<kind>: <reason>", repair_hint }` を足す。`criterion_idx` は `ReviewRequest.criteria` の最小の index（reviewer の受け入れ条件）。`repair_hint` は D5.1 の表で局所修復を許す 2 種だけ写し、ほかの 5 種は `None` にする。これで `classify_review_failure` は既存の規則のまま、全部が局所なら `RepairClass::ReviewerLocal`、1 件でも substantive なら `Trigger::ReviewFail` → replan になる。reason が `reviewer(<id>): …` の形なので CoS の `review_rework` の検査も変えない。
+- D5.4 reviewer prompt の Result 節（prompt.rs:1785-1791）を作り直し、`verdicts[].repair`・`health`・`design` の形と 7 種の表を 1 か所で出す。種別の説明文は `generic.md` の 7 項目を参照する。
+
+### (6) policy の file を変える branch の通し方
+- D6.1 policy の file（profile の `policy_paths`）を変える変更は、policy の file だけを変える task（branch）に分ける。candidate の report が `policy.changed` で、変更 path に policy の file 以外も含むとき、dispatcher は blocking と同じ扱いの `Verdict { reason: "{tag}: health:policy_mixed: …" }`（substantive → replan）を足す。planner は replan で policy の変更を別の task に分ける。
+- D6.2 `scripts/dev/check-health.sh` は、fail 級の finding が `policy.changed` だけで、`merge-base..HEAD` の変更 path が全部 `policy.files` に入るとき、exit 0 にして `policy review required: <files>` を出す。report の verdict は fail のまま（契約は変えない）。ほかの rule は base 側の policy で評価したまま。
+- D6.3 その task の review では `HealthRepoInput.policy.changed = true` になり、reviewer は `HealthVerdictOut.policy` を必ず書く（無ければ D5.2 と同じく不合格）。`approved = false` は substantive。
+- D6.4 `approved = true` でも、dispatcher は人の承認を要求する: `Check::Human` の既存の経路で「policy の変更の承認」を待ち、受信箱に policy の file と diff の要約を出す（I8）。人が承認したら合格、却下は substantive。
+- D6.5 main に入った後の branch は、新しい main を base にして新しい policy で評価される（契約 D2 のまま）。
+- D6.6 移行: G2 の実装のうち `scripts/dev/repo-health/`・`check-health.sh` を変える U2 は、それ自体が policy の file だけの branch になる。main の base には D6.2 の扱いがまだ無いので、U2 の最初の branch は D6.4 と同じ人の承認で通す（task の受け入れ条件に `{"type":"human"}` を置く）。`source-health.md:34-35` の「基準・閾値の変更は独立レビュー」はこの (6) を指す。
+
+### (7) 撤去する旧い仕組み
+- D7.1 `build_review_prompt` の「Commit references in progress files and reports」節（prompt.rs:1645-1655）を消す。同じ規則は `CLAUDE.md` にあり、全 harness に届く（Aider を除く。D1.6）。
+- D7.2 reviewer prompt の Result 節の旧い形（`{"verdicts":[{"criterion","pass","reason"}]}` だけを指示する文）を D5.4 の 1 節に置き換える。旧い形の文と、それを固定する試験を消す。
+- D7.3 `docs/guides/source-health.md` を入口と ADR への参照に縮める: 入口・base・policy の扱いは `check-health.sh` の usage と [repo health の契約](2026-11-07-repo-health-contract.md)・[Celeris profile](2026-11-07-repo-health-celeris-profile.md)、基準の変更の review はこの ADR の (6) を参照する。同じ変更で front matter を先頭に移し、:45 の link を実在する path に直す。`check-health.sh` の冒頭注記と `profile.py` の docstring のうち ADR と同じ説明は ADR への参照にする（`profile.py` の docstring は profile の項目の正本として残す）。
+- D7.4 `PLANNER_CHECK_GUIDANCE`（prompt.rs:1797-1870）から `CLAUDE.md` と同じ文（記録の場所、全体試験は release gate だけ、CPU を焼く負荷の禁止、hash を書かない）を消す。`CELERIS_WU_*`・scope check の書き方は Celeris の検査機構の手順で `CLAUDE.md` に無いので残す。`PRODUCTION_HOST_PLANNER_GUIDANCE`（:1874）は、planner の prompt に `preamble::fixed_notes` の production host の注意が入ることを U6 の試験で確かめたうえで消す。
+- D7.5 残すもの: reviewer prompt の policy violation の節（prompt.rs:1718-1735）は `ReviewRequest.policy_violations` の構造化された材料の説明で、ほかに写しが無い。
+- D7.6 新しい仕組みに切替 flag・無効化の config 欄を置かない。health の材料と verdict は `[review]` 節のある repo では常に使う。
+
+### 後続 unit の path・型名・試験名
+試験名の prefix は Rust の試験関数名・Python の `test_` の後に付ける。
+- U1 change_rules: `crates/task-worker/src/change_rules/generic.md`（新規）、`crates/task-worker/src/change_rules.rs`（新規。`GENERIC_RULES`・`section()`）、`crates/task-worker/src/claude_code/prompt.rs`（`prompt_header`）。試験 prefix `change_rules_`（例 `change_rules_generic_in_every_harness_prompt`・`change_rules_generic_appears_once`・`change_rules_absent_from_cos_chat`・`change_rules_generic_has_no_repo_specific_names`）。
+- U2 review policy（policy の branch。D6.6）: `scripts/dev/repo-health/health/profile.py`、`scripts/dev/repo-health/repo_health.py`（`--print-review-policy`）、`scripts/dev/repo-health/schema/review-policy-v1.schema.json`、`scripts/dev/repo-health/profiles/celeris.toml`（`[review]`）、`scripts/dev/check-health.sh`（D6.2）。試験 `scripts/tests/test_repo_health_review_policy.py`、prefix `test_health_review_`（例 `test_health_review_policy_reads_base_side`・`test_health_review_policy_only_branch_exits_zero`）。
+- U3 設計 brief と risk: `crates/task-core/src/execution_plan.rs`（`DesignBrief`・`DesignOption`・`ExecutionPlanSpec.design_brief`）、`crates/task-core/src/execution_plan/validation.rs`（`PlanValidationError::DesignBrief`・`DesignBriefMissing`）、`crates/task-core/src/design_review.rs`（`ReviewPolicy`・`PathClass`・`RiskLevel`・`RiskAssessment`・`assess_risk`）、`crates/task-core/src/model/events.rs`（`DesignReviewRequested`・`DesignReviewed`）、`crates/task-dispatch/src/dispatcher/planner_flow.rs`、`crates/task-worker/src/protocol.rs`（`RunContext.design_review`・`DesignReviewRequest`・`ReviewOutput.design`・`DesignVerdictOut`）、`docs/protocol/execution-plan.schema.json`。試験 prefix `design_brief_`（例 `design_brief_requires_one_chosen_option`・`design_brief_high_risk_path_with_new_state_is_high`・`design_brief_missing_on_high_risk_path_is_rejected`・`design_brief_review_runs_before_adoption`）。
+- U4 health の材料: `crates/task-worker/src/protocol.rs`（`ReviewRequest.health`・`HealthReviewInput`・`HealthRepoInput`・`DiffStat`・`PathStat`・`OwnerRow`・`HealthFindingsSummary`・`HealthReportFinding`・`HealthPolicyState`）、`crates/task-dispatch/src/dispatcher/review_health.rs`（`build_health_input`）、`review_spawn.rs`、`events.rs`（`HealthReviewInputBuilt`・`HealthReviewInputSkipped`）、`docs/protocol/worker-protocol.schema.json`。試験 prefix `health_review_`（例 `health_review_input_built_once_per_candidate`・`health_review_input_reused_on_reviewer_retry`・`health_review_input_not_built_for_work_units`）。
+- U5 health verdict: `crates/task-worker/src/protocol.rs`（`ReviewOutput.health`・`HealthVerdictOut`・`HealthFindingOut`・`HealthFindingKind`・`HealthSeverity`・`PolicyVerdictOut`）、`crates/task-dispatch/src/review.rs`、`crates/task-dispatch/src/dispatcher/review_verdict.rs`、`prompt.rs` の Result 節。試験 prefix `health_review_`（例 `health_review_verdict_missing_fails_review`・`health_review_removal_missing_local_repairs`・`health_review_dual_source_replans`・`health_review_policy_change_waits_for_human`）。
+- U6 撤去: `prompt.rs`（D7.1・D7.2・D7.4）、`docs/guides/source-health.md`、`scripts/dev/check-health.sh` の冒頭注記（D7.3。policy の file なので U2 と同じ branch に入れる）。試験 prefix `change_rules_`（例 `change_rules_review_prompt_has_no_commit_hash_copy`）。
+- 新しい module の inline 試験が source-size gate の上限に近づくなら、`<module>/tests.rs` を `#[path]` で分ける。

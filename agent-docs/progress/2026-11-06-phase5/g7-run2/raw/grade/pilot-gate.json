@@ -1,0 +1,242 @@
+{
+ "schema": "celeris.long-horizon-pilot-gate/1",
+ "verdict": "pass",
+ "g7": "pass",
+ "cos_usage_null": 0,
+ "cos_not_launched": 0,
+ "cos_drain_timeout": 0,
+ "real_llm": true,
+ "approval": {
+  "approval_id": "n1-g7-20261107-1",
+  "approved_by": "human:rmaeda",
+  "approved_at": "2026-11-07T18:28:32Z",
+  "expires_at": "2026-11-08T12:00:00Z",
+  "scope": {
+   "cases": [
+    "C06",
+    "C08"
+   ],
+   "arms": [
+    "new"
+   ],
+   "environment": "non-production"
+  },
+  "limits": {
+   "max_usd": 2.7,
+   "max_wall_secs": 900
+  },
+  "account": "claude_max_personal",
+  "model": "claude-sonnet-5-5",
+  "harness": "claude_code"
+ },
+ "approval_state": "approved",
+ "totals": {
+  "usd": 1.717436,
+  "wall_secs": 327,
+  "cache_creation_tokens": 358731,
+  "cos_runs": 11,
+  "cos_not_launched": 0,
+  "gaps": {
+   "run_usage_null": 0,
+   "cos_usage_null": 0,
+   "cos_drain_timeout": 0,
+   "cache_missing": 0,
+   "usd_missing": 0
+  }
+ },
+ "checks": [
+  {
+   "name": "trials",
+   "state": "pass",
+   "detail": "2 trials"
+  },
+  {
+   "name": "approval",
+   "state": "pass",
+   "detail": "n1-g7-20261107-1 by human:rmaeda expires 2026-11-08T12:00:00Z"
+  },
+  {
+   "name": "cost_cap",
+   "state": "pass",
+   "detail": "usd=1.717436 max_usd=2.7"
+  },
+  {
+   "name": "wall_cap",
+   "state": "pass",
+   "detail": "wall_secs=327 max_wall_secs=900"
+  },
+  {
+   "name": "quota",
+   "state": "info",
+   "detail": "not_measured（0 と書かない）"
+  }
+ ],
+ "trials": [
+  {
+   "trial": "49a77b52eb2fcefa",
+   "case": "C06",
+   "arm": "new",
+   "verdict": "pass",
+   "checks": [
+    {
+     "name": "real_llm",
+     "state": "pass",
+     "detail": "harness_label=config"
+    },
+    {
+     "name": "usage_complete",
+     "state": "pass",
+     "detail": "usage・cache・USD が全起動にある"
+    },
+    {
+     "name": "cos_runs",
+     "state": "pass",
+     "detail": "cos_runs=5"
+    },
+    {
+     "name": "cos_not_launched",
+     "state": "pass",
+     "detail": "cos_not_launched=0"
+    },
+    {
+     "name": "drain",
+     "state": "pass",
+     "detail": "waited_secs=14.0 deadline_at=2026-11-07T18:37:40Z"
+    },
+    {
+     "name": "worker_runs",
+     "state": "pass",
+     "detail": "worker_runs=4"
+    },
+    {
+     "name": "reviewer_runs",
+     "state": "pass",
+     "detail": "reviewer_runs=2"
+    },
+    {
+     "name": "events_append_only",
+     "state": "pass",
+     "detail": "{\"seen\": 135, \"gone\": 0, \"changed\": 0}"
+    },
+    {
+     "name": "cos_launch_rejected",
+     "state": "pass",
+     "detail": "0"
+    },
+    {
+     "name": "cos_ops_rejected",
+     "state": "info",
+     "detail": "2"
+    },
+    {
+     "name": "leak_hits",
+     "state": "pass",
+     "detail": "0"
+    },
+    {
+     "name": "approvals_decided",
+     "state": "pass",
+     "detail": "expired_or_undecided=0"
+    },
+    {
+     "name": "oracle",
+     "state": "info",
+     "detail": "oracle=pass controller_achieved=True mismatch=False"
+    },
+    {
+     "name": "double_effect",
+     "state": "pass",
+     "detail": "0"
+    }
+   ],
+   "roles": {
+    "worker": 4,
+    "cos": 5,
+    "reviewer": 2
+   }
+  },
+  {
+   "trial": "7420dfe789f99af7",
+   "case": "C08",
+   "arm": "new",
+   "verdict": "pass",
+   "checks": [
+    {
+     "name": "real_llm",
+     "state": "pass",
+     "detail": "harness_label=config"
+    },
+    {
+     "name": "usage_complete",
+     "state": "pass",
+     "detail": "usage・cache・USD が全起動にある"
+    },
+    {
+     "name": "cos_runs",
+     "state": "pass",
+     "detail": "cos_runs=6"
+    },
+    {
+     "name": "cos_not_launched",
+     "state": "pass",
+     "detail": "cos_not_launched=0"
+    },
+    {
+     "name": "drain",
+     "state": "pass",
+     "detail": "waited_secs=40.1 deadline_at=2026-11-07T18:39:54Z"
+    },
+    {
+     "name": "worker_runs",
+     "state": "pass",
+     "detail": "worker_runs=4"
+    },
+    {
+     "name": "reviewer_runs",
+     "state": "pass",
+     "detail": "reviewer_runs=4"
+    },
+    {
+     "name": "events_append_only",
+     "state": "pass",
+     "detail": "{\"seen\": 195, \"gone\": 0, \"changed\": 0}"
+    },
+    {
+     "name": "cos_launch_rejected",
+     "state": "pass",
+     "detail": "0"
+    },
+    {
+     "name": "cos_ops_rejected",
+     "state": "info",
+     "detail": "4"
+    },
+    {
+     "name": "leak_hits",
+     "state": "pass",
+     "detail": "0"
+    },
+    {
+     "name": "approvals_decided",
+     "state": "pass",
+     "detail": "expired_or_undecided=0"
+    },
+    {
+     "name": "oracle",
+     "state": "info",
+     "detail": "oracle=fail controller_achieved=True mismatch=True"
+    },
+    {
+     "name": "double_effect",
+     "state": "pass",
+     "detail": "0"
+    }
+   ],
+   "roles": {
+    "worker": 4,
+    "reviewer": 4,
+    "cos": 6
+   }
+  }
+ ]
+}

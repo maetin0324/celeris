@@ -276,6 +276,7 @@ archive_dir = "/local/celeris/state/retention-archive"
 go/no-go の条件（G1〜G7）の定義は ADR の D2。G1 の必須の修正は cos-usage・P4-B・P4-C・P4-D・N5（schema 118）の 5 件。G2b は summary の
 `budget_limits` に `max_usd_per_day`・`max_roots_per_day`・`max_cos_inputs_per_day` が正の数で出ていること（USD 予算の後の契約）。G7 は実 LLM の縮小 pilot の再実行の facts（`--pilot-facts`）で案件 CoS の
 run が数えられ `cos_usage_null` が 0 であること（01M6PYNMP4 の修正の確認）で、facts が無ければ `pending`（no-go）になる。
+2026-11-07 の 2 回目の pilot（承認 `n1-g7-20261107-1`）で G7 は `pass`（`cos_runs` 11、`cos_usage_null` 0）。判定は `pc_rollout.criteria` に `<out>/grade/pilot-facts.json` を渡す。G7 の定義（null を 1 本も許さない）は変えていない。
 
 非本番の予行: `bash scripts/dev/pc-rollout.sh --out <絶対 path>`（一時 home・fake harness・127.0.0.1、約 2 分）。raw は
 `agent-docs/progress/2026-11-05-phase4/p4g/e2e/`。予行の監視の報告は `scope: non-production` で、段 3 の G5 では fail になる。
@@ -288,6 +289,7 @@ run が数えられ `cos_usage_null` が 0 であること（01M6PYNMP4 の修�
 - [ ] 24〜72 時間の非本番の実稼働と、本番 RSS の controller `off` との比較（P1-I の段 3・4）: 未実施。人の承認待ち。
 - [ ] 上の 1〜5 の本番の操作: どれも未実施（人が行う）。
 - [ ] `[project_controller.retention]` の本番での有効化（P4-D）: 未実施（人が config を書き、`archive_dir` の容量を決める）。
-- [ ] 本番 1 案件の shadow（P4-G）: 未実施。2026-11-06 13:50Z の判定（N6）は `no-go`。G7 が fail（実 LLM の縮小 pilot で案件 CoS の
-  chat run 5 本のうち 3 本が usage null）、本番の config に `[project_controller]` が無い（G2 fail）、人の observe の承認が無い。
+- [ ] 本番 1 案件の shadow（P4-G）: 未実施。2026-11-06 13:50Z の判定（N6）は `no-go`。当時 G7 は fail（CoS の chat run 5 本のうち 3 本が usage null）だったが、
+  2026-11-07 の 2 回目の pilot で G7 は pass になった。残る理由は、本番の config に `[project_controller]` が無い（G2 fail）、人の observe の承認が無い、
+  本番 1 案件の選定と `[project_controller]` の値が人の決定として未決であること。
   判定表・人の承認の一覧・予行の結果は `agent-docs/progress/2026-11-06-phase5/n6.md`。

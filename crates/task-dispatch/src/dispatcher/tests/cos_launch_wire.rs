@@ -516,3 +516,28 @@ async fn human_stop_of_an_ownerless_unlaunched_run_is_stopped_before_launch() {
         Some(ChatPrelaunchReason::StoppedBeforeLaunch)
     );
 }
+
+/// route の failover（同じ run の 2 回目の起動）は初回の `launched_at` を書き換えない。
+#[tokio::test]
+async fn a_second_launch_keeps_the_first_launched_at() {
+    use crate::dispatcher::cos_chat::sink::{ChatClock, ChatRunSink};
+    let f = fake_fixture();
+    let t = f.thread("lw-failover");
+    f.post(&t, "one");
+    let first_at = f.d.now_utc();
+    let run = f
+        .store
+        .chat_run_claim_next(&t, "failover-run", &serde_json::json!({}), first_at)
+        .expect("claim")
+        .expect("run");
+    let at = |when: OffsetDateTime| -> ChatClock { Arc::new(move || when) };
+    let first = ChatRunSink::new(f.store.clone(), &t, &run.id, at(first_at), vec![]);
+    first.before_spawn().expect("first launch");
+    let later = first_at + time::Duration::seconds(90);
+    let second = ChatRunSink::new(f.store.clone(), &t, &run.id, at(later), vec![]);
+    second.before_spawn().expect("second launch");
+    let stored = f.run(&t, &run.id).launched_at.expect("launched_at");
+    let stored = OffsetDateTime::parse(&stored, &time::format_description::well_known::Rfc3339)
+        .expect("rfc3339");
+    assert_eq!(stored, first_at, "the first launch time stays");
+}

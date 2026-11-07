@@ -124,7 +124,7 @@ pub(super) fn bind_claim_tx(
         "UPDATE chat_threads SET next_seq=next_seq+1,updated_at=?2 WHERE id=?1",
         params![thread_id, at],
     )?;
-    tx.execute("INSERT INTO chat_runs(run_id,thread_id,input_message_id,state,started_at) VALUES(?1,?2,?3,'running',?4)", params![run_id,thread_id,message_id,at])?;
+    tx.execute("INSERT INTO chat_runs(run_id,thread_id,input_message_id,state,started_at,launch_tracked) VALUES(?1,?2,?3,'running',?4,1)", params![run_id,thread_id,message_id,at])?;
     for id in ids {
         tx.execute("UPDATE cos_inbox_items SET state='running',run_id=?2,message_id=?3,updated_at=?4 WHERE id=?1", params![id,run_id,message_id,at])?;
     }

@@ -170,6 +170,8 @@ struct SinkState {
     /// 未完の tool call（`(call_id, name)`）。古い順。
     open_calls: VecDeque<(String, String)>,
     signals: ChatSessionSignals,
+    /// この sink（= 1 attempt）が起動通知を永続化した。spawn を試みた attempt だけが usage の記録対象。
+    launched: bool,
 }
 
 /// CoS chat run 1 本分の `EventSink`。
@@ -269,8 +271,20 @@ impl ChatRunSink {
         });
     }
 
-    /// (stub: 接続前) attempt ごとの usage を永続化する。
-    pub(crate) fn record_attempt_usage(&self, _usage: Option<Usage>) {}
+    /// ADR 2026-11-06-cos-run-launch-accounting-and-drain D4-1: この attempt の usage を run に足す。
+    /// 起動通知を永続化した attempt だけが対象（spawn を試みていなければ attempt は無い）。`None`（usage が
+    /// 取れない・読めない）は run の費用を恒久的に不明にする。既知の attempt の usage は残す。
+    pub(crate) fn record_attempt_usage(&self, usage: Option<Usage>) {
+        if !self.state().launched {
+            return;
+        }
+        if let Err(error) = self
+            .store
+            .chat_run_record_attempt_usage(&self.run_id, usage.as_ref())
+        {
+            tracing::warn!(run_id = %self.run_id, %error, "CoS attempt usage was not recorded");
+        }
+    }
 
     /// run 途中の session の出来事の写し。
     pub(crate) fn signals(&self) -> ChatSessionSignals {
@@ -536,6 +550,17 @@ impl EventSink for ChatRunSink {
     fn artifact(&self, _artifact: &ArtifactRef) {}
 
     fn heartbeat(&self) {}
+
+    /// D1: route・account・skill・credential が揃った後、process を spawn する直前の永続通知。
+    /// `launched_at` は初回だけ書かれる（route の failover・再試行は初回の時刻のまま）。書けなければ
+    /// `Err` を返し、adapter は spawn しない。
+    fn before_spawn(&self) -> Result<(), String> {
+        self.store
+            .chat_run_mark_launched(&self.run_id, (self.clock)())
+            .map_err(|e| format!("launch boundary was not recorded: {e}"))?;
+        self.state().launched = true;
+        Ok(())
+    }
 
     fn session_established(&self, session_id: &str) {
         self.state().signals.established = Some(session_id.to_string());

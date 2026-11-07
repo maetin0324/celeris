@@ -8,7 +8,8 @@ use std::time::Duration;
 
 use task_core::SqliteStore;
 use task_core::chat::{
-    ChatActor, ChatCard, ChatCardKind, ChatPostMessageRequest, ChatRun, ChatRunState, ChatSendMode,
+    ChatActor, ChatCard, ChatCardKind, ChatError, ChatPostMessageRequest, ChatPrelaunchReason,
+    ChatRecoveryCause, ChatRun, ChatRunState, ChatSendMode,
     chat_run_state_is_terminal,
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -19,6 +20,52 @@ use crate::dispatcher::Dispatcher;
 
 /// The reason recorded on a run that the dispatcher took over as an orphan.
 pub(crate) const ORPHAN_TAKEOVER_REASON: &str = "orphan takeover; continuing in a new run";
+
+/// Close a run that a human stop or interrupt ended. A run whose process never launched closes with
+/// `stopped_before_launch` (ADR 2026-11-06-cos-run-launch-accounting-and-drain D4); a launched run
+/// and a row from before launch tracking close plainly (their usage stays an unknown cost).
+pub(super) fn close_stopped(
+    store: &SqliteStore,
+    run: &ChatRun,
+    now: OffsetDateTime,
+) -> Result<(), String> {
+    let intent = stop_intent(run);
+    if run.launched_at.is_none() {
+        let text = match intent {
+            ChatStopIntent::Stop => run.reason.as_deref().unwrap_or("stopped by human"),
+            _ => "interrupted",
+        };
+        let closed = match intent {
+            ChatStopIntent::Stop => store
+                .chat_run_recover(&run.id, ChatRecoveryCause::HumanStop, text, now)
+                .map(|_| ()),
+            _ => store
+                .chat_run_finish_prelaunch(
+                    &run.id,
+                    ChatRunState::Interrupted,
+                    ChatPrelaunchReason::StoppedBeforeLaunch,
+                    Some(text),
+                    now,
+                )
+                .map(|_| ()),
+        };
+        match closed {
+            Ok(()) => return Ok(()),
+            // A legacy row (no launch tracking) closes plainly below.
+            Err(ChatError::Conflict(_)) => {}
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    let state = if intent == ChatStopIntent::Stop {
+        ChatRunState::Stopped
+    } else {
+        ChatRunState::Interrupted
+    };
+    store
+        .chat_run_finish(&run.id, state, None, run.reason.as_deref(), now)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
 
 pub(super) fn stop_intent(run: &ChatRun) -> ChatStopIntent {
     if run.reason.as_deref() == Some("stopped by human") {
@@ -158,11 +205,10 @@ impl CosChatLaunch {
             // recorded. Keep the queue paused and ask a human to reconcile it.
             pending_review(&self.store, run, now)?;
             self.store
-                .chat_run_finish(
+                .chat_run_recover(
                     &run.id,
-                    ChatRunState::Interrupted,
-                    None,
-                    Some("operation outcome unknown; human review required"),
+                    ChatRecoveryCause::DaemonRestart,
+                    "operation outcome unknown; human review required",
                     now,
                 )
                 .map_err(|e| e.to_string())?;
@@ -173,13 +219,18 @@ impl CosChatLaunch {
         // stop request and remains ahead of ordinary queued messages.
         if run.reason.as_deref() == Some("stopped by human") {
             self.store
-                .chat_run_finish(&run.id, ChatRunState::Stopped, None, None, now)
+                .chat_run_recover(
+                    &run.id,
+                    ChatRecoveryCause::HumanStop,
+                    "stopped by human",
+                    now,
+                )
                 .map_err(|e| e.to_string())?;
             return Ok(());
         }
         if run.reason.as_deref() == Some("interrupt") {
             self.store
-                .chat_run_finish(&run.id, ChatRunState::Interrupted, None, None, now)
+                .chat_run_recover(&run.id, ChatRecoveryCause::DaemonRestart, "interrupt", now)
                 .map_err(|e| e.to_string())?;
             return Ok(());
         }
@@ -235,21 +286,35 @@ impl CosChatLaunch {
         // ADR 2026-10-07-cos-live-fixes D4: the terminal check, the continuation
         // and the interrupted state are one store transaction. A run that became
         // terminal meanwhile is left alone and no continuation run is queued.
+        let continuation = ChatPostMessageRequest {
+            client_message_id: format!("cos-recover:{}", run.id),
+            text: input.text,
+            attachment_ids: input.attachment_ids,
+            reply_to_id: Some(run.input_message_id.clone()),
+            mode: ChatSendMode::Interrupt,
+            resume_queue: false,
+        };
+        if run.launched_at.is_none() {
+            // ADR 2026-11-06-cos-run-launch-accounting-and-drain D4-4: `launched_at` is written before the
+            // spawn, so NULL means nothing spawned. The continuation is idempotent (its client id is the
+            // run's), so it goes first: a crash between the two steps repeats both safely and never loses
+            // the input. A legacy row (no launch tracking) closes plainly inside `chat_run_recover`.
+            self.store
+                .chat_message_post(&run.thread_id, &continuation, now)
+                .map_err(|e| e.to_string())?;
+            self.store
+                .chat_run_recover(
+                    &run.id,
+                    ChatRecoveryCause::DaemonRestart,
+                    ORPHAN_TAKEOVER_REASON,
+                    now,
+                )
+                .map_err(|e| e.to_string())?;
+            return Ok(());
+        }
         let taken = self
             .store
-            .chat_run_takeover(
-                &run.id,
-                &ChatPostMessageRequest {
-                    client_message_id: format!("cos-recover:{}", run.id),
-                    text: input.text,
-                    attachment_ids: input.attachment_ids,
-                    reply_to_id: Some(run.input_message_id.clone()),
-                    mode: ChatSendMode::Interrupt,
-                    resume_queue: false,
-                },
-                ORPHAN_TAKEOVER_REASON,
-                now,
-            )
+            .chat_run_takeover(&run.id, &continuation, ORPHAN_TAKEOVER_REASON, now)
             .map_err(|e| e.to_string())?;
         if taken.is_none() {
             tracing::debug!(run_id = %run.id, "CoS run finished before takeover; nothing to recover");

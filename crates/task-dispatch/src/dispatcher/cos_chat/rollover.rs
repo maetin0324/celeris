@@ -331,6 +331,8 @@ fn outcome_usage(outcome: &Result<RunOutcome, AdapterError>) -> Option<task_core
         Ok(RunOutcome {
             terminal:
                 Terminal::Done { usage, .. }
+                | Terminal::Question { usage, .. }
+                | Terminal::Error { usage, .. }
                 | Terminal::Yielded { usage, .. }
                 | Terminal::BudgetExhausted { usage, .. }
                 | Terminal::Waiting { usage, .. },
@@ -351,6 +353,7 @@ fn record_attempt(
     now: OffsetDateTime,
 ) {
     sink.record_usage(outcome_usage(outcome));
+    sink.record_attempt_usage(outcome_usage(outcome));
     if let Some(session_id) = sink.signals().established
         && let Err(error) = store.chat_session_set_id(session_row_id, &session_id)
     {

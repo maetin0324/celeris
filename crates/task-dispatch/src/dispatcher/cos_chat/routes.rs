@@ -1,5 +1,5 @@
 //! Explicit CoS route failover; no model judgment and no new input/run on retry.
-use task_core::chat::{ChatRun, ChatRunState, ChatStatusPhase};
+use task_core::chat::{ChatPrelaunchReason, ChatRun, ChatRunState, ChatStatusPhase};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::launch::CosChatLaunch;
@@ -66,15 +66,9 @@ impl CosChatLaunch {
             };
             let now = dispatcher.now_utc();
             if run.state == ChatRunState::Stopping {
-                let state =
-                    if super::control::stop_intent(&run) == super::sink::ChatStopIntent::Stop {
-                        ChatRunState::Stopped
-                    } else {
-                        ChatRunState::Interrupted
-                    };
-                let _ =
-                    self.store
-                        .chat_run_finish(&run.id, state, None, run.reason.as_deref(), now);
+                if let Err(error) = super::control::close_stopped(&self.store, &run, now) {
+                    tracing::warn!(%error, run_id = %run.id, "CoS stopped run was not closed");
+                }
                 continue;
             }
             if run.state != ChatRunState::Running {
@@ -96,6 +90,7 @@ impl CosChatLaunch {
                 self.fail_routes(
                     &run,
                     "CoS run の実行期限に達しました",
+                    ChatPrelaunchReason::WallExpiredBeforeLaunch,
                     Some(&retry.previous),
                     now,
                 );
@@ -124,6 +119,7 @@ impl CosChatLaunch {
                 self.fail_routes(
                     &run,
                     "CoS の再試行を開始できません（停止中・ディスク・設定を確認してください）",
+                    ChatPrelaunchReason::RouteUnavailable,
                     Some(&retry.previous),
                     now,
                 );
@@ -167,6 +163,7 @@ impl CosChatLaunch {
             self.fail_routes(
                 run,
                 "CoS run の実行期限に達しました",
+                ChatPrelaunchReason::WallExpiredBeforeLaunch,
                 previous.as_deref(),
                 now,
             );
@@ -183,51 +180,78 @@ impl CosChatLaunch {
         };
         let (outcome, trace) = dispatcher.select_cos_route_from(&input, first);
         let metadata = trace.metadata(&input, outcome.as_ref().ok(), outcome.as_ref().err());
-        let result = outcome.map_err(|e| e.reason()).and_then(|pick| {
-            self.launch_claimed(
+        let failover = previous.clone();
+        let result = match outcome {
+            Err(error) => Err(super::launch::LaunchFailure::from(error.reason())),
+            Ok(pick) => self.launch_claimed(
                 dispatcher, &cfg, first, previous, thread, &run.id, run, pick, metadata, now,
-            )
-        });
-        if let Err(reason) = result {
+            ),
+        };
+        if let Err(failure) = result {
             self.route_notice(
                 &run.id,
                 thread,
                 first,
                 "unavailable",
-                &format!("CoS route unavailable: {reason}"),
+                &format!("CoS route unavailable: {}", failure.text),
                 now,
             );
-            self.fail_routes(run, &reason, None, now);
+            self.fail_routes(run, &failure.text, failure.reason, failover.as_deref(), now);
         }
     }
 
+    /// Close a run that cannot (or can no longer) start a route. A run whose process never launched
+    /// closes with a `prelaunch_reason` (ADR 2026-11-06-cos-run-launch-accounting-and-drain D1), so the
+    /// budget does not count it as an unknown cost. A run that launched an earlier route keeps its
+    /// known partial usage and is never marked prelaunch.
     fn fail_routes(
         &mut self,
         run: &ChatRun,
         reason: &str,
+        prelaunch: ChatPrelaunchReason,
         previous: Option<&ChatRunSink>,
         now: OffsetDateTime,
     ) {
-        if let Ok(current) = self.store.chat_run_get(&run.thread_id, &run.id)
+        let current = self.store.chat_run_get(&run.thread_id, &run.id).ok();
+        if let Some(current) = current.as_ref()
             && current.state == ChatRunState::Stopping
         {
-            let state =
-                if super::control::stop_intent(&current) == super::sink::ChatStopIntent::Stop {
-                    ChatRunState::Stopped
-                } else {
-                    ChatRunState::Interrupted
-                };
-            let _ =
-                self.store
-                    .chat_run_finish(&run.id, state, None, current.reason.as_deref(), now);
+            if let Err(error) = super::control::close_stopped(&self.store, current, now) {
+                tracing::warn!(%error, run_id = %run.id, "CoS stopped run was not closed");
+            }
             return;
         }
         self.triage.digest_due = true;
-        let result = if let Some(sink) = previous {
+        let launched = current.as_ref().unwrap_or(run).launched_at.is_some();
+        let text = failure_text(reason);
+        let result = if !launched {
+            // The reader still sees why the CoS did not answer (the prelaunch close has no final text).
+            if let Err(error) = self.store.chat_run_append_text(&run.id, &text, now) {
+                tracing::debug!(%error, run_id = %run.id, "CoS failure text was not appended");
+            }
+            match self.store.chat_run_finish_prelaunch(
+                &run.id,
+                ChatRunState::Failed,
+                prelaunch,
+                Some(reason),
+                now,
+            ) {
+                // A row from before launch tracking has no recordable boundary: close it plainly.
+                Err(task_core::chat::ChatError::Conflict(_)) => self.store.chat_run_finish(
+                    &run.id,
+                    ChatRunState::Failed,
+                    None,
+                    Some(reason),
+                    now,
+                ),
+                other => other,
+            }
+            .map(|_| ())
+        } else if let Some(sink) = previous {
             sink.finish(
                 &super::sink::ChatFinish {
                     state: ChatRunState::Failed,
-                    final_text: Some(failure_text(reason)),
+                    final_text: Some(text),
                     reason: Some(reason.into()),
                     context_exhausted: false,
                 },
@@ -239,7 +263,7 @@ impl CosChatLaunch {
                 .chat_run_finish(
                     &run.id,
                     ChatRunState::Failed,
-                    Some(&failure_text(reason)),
+                    Some(&text),
                     Some(reason),
                     now,
                 )

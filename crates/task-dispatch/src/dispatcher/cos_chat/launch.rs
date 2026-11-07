@@ -177,6 +177,32 @@ pub struct CosChatLaunchConfig {
     pub triage: super::triage::CosTriageSettings,
 }
 
+/// 起動前に run を閉じる失敗（spawn の前に起きたもの）。`reason` は `prelaunch_reason` の閉じた列挙。
+/// route の選択・設定・credential などの失敗は `RouteUnavailable`、skill の配置は `SkillsUnavailable`。
+#[derive(Debug)]
+pub(super) struct LaunchFailure {
+    pub reason: task_core::chat::ChatPrelaunchReason,
+    pub text: String,
+}
+
+impl From<String> for LaunchFailure {
+    fn from(text: String) -> Self {
+        Self {
+            reason: task_core::chat::ChatPrelaunchReason::RouteUnavailable,
+            text,
+        }
+    }
+}
+
+impl LaunchFailure {
+    fn skills(text: String) -> Self {
+        Self {
+            reason: task_core::chat::ChatPrelaunchReason::SkillsUnavailable,
+            text,
+        }
+    }
+}
+
 pub(super) struct RouteRetry {
     pub thread_id: String,
     pub run_id: String,
@@ -409,7 +435,7 @@ impl CosChatLaunch {
         pick: RoutePick,
         selection_metadata: serde_json::Value,
         now: OffsetDateTime,
-    ) -> Result<(), String> {
+    ) -> Result<(), LaunchFailure> {
         let thread = self
             .store
             .chat_thread_get(thread_id)
@@ -447,15 +473,15 @@ impl CosChatLaunch {
         };
         let skill_names = cos_chat_skills(in_inbox_thread, &inbox_items);
         if let Some(reason) = cfg.unavailable_reason.clone() {
-            return Err(reason);
+            return Err(reason.into());
         }
         let (skills, missing_skills) =
             dispatcher.skills_context(&skill_names, task_ops::knowledge::SkillUse::Work);
         if !missing_skills.is_empty() {
-            return Err(format!(
+            return Err(LaunchFailure::skills(format!(
                 "CoS skills unavailable: {}",
                 missing_skills.join(", ")
-            ));
+            )));
         }
         // ADR 2026-10-28-cos-session-policy-key D1: the policy this run gets is part of the key.
         let policy_version = cfg.triage.policy_version.clone();
@@ -466,7 +492,7 @@ impl CosChatLaunch {
                 .map(|s| (s.name.clone(), PathBuf::from(&s.path)))
                 .collect::<Vec<_>>(),
         )
-        .map_err(|e| format!("CoS skills unavailable: {e}"))?;
+        .map_err(|e| LaunchFailure::skills(format!("CoS skills unavailable: {e}")))?;
         let provider = pick.candidate.source.to_string();
         let account = Some(pick.account.to_string());
         let selected_route = dispatcher
@@ -476,7 +502,7 @@ impl CosChatLaunch {
         let input = self.find_input(thread_id, &run.input_message_id)?;
         let workspace = match workspace_dir(&cfg.data_dir, thread_id) {
             Ok(path) => path,
-            Err(e) => return Err(format!("CoS workspace unavailable: {e}")),
+            Err(e) => return Err(format!("CoS workspace unavailable: {e}").into()),
         };
         let attachments = match task_core::chat::attachments::ChatAttachmentStore::open(
             &cfg.data_dir,
@@ -496,9 +522,9 @@ impl CosChatLaunch {
                         delivery: CosChatDelivery::for_media_type(&item.media_type),
                     })
                     .collect(),
-                Err(e) => return Err(format!("CoS attachment unavailable: {e}")),
+                Err(e) => return Err(format!("CoS attachment unavailable: {e}").into()),
             },
-            Err(e) => return Err(format!("CoS attachment store unavailable: {e}")),
+            Err(e) => return Err(format!("CoS attachment store unavailable: {e}").into()),
         };
         let session_key = ChatSessionKey {
             thread_id: thread_id.to_string(),
@@ -644,7 +670,7 @@ impl CosChatLaunch {
         let task = chat.transient_task(&workspace, budget, now);
         let artifacts_dir = workspace.join(".taskd").join("chat-runs").join(run_id);
         if let Err(e) = std::fs::create_dir_all(&artifacts_dir) {
-            return Err(format!("CoS artifacts unavailable: {e}"));
+            return Err(format!("CoS artifacts unavailable: {e}").into());
         }
         let context = RunContext {
             cos_chat: Some(chat),
@@ -697,7 +723,8 @@ impl CosChatLaunch {
             return Err(format!(
                 "CoS unavailable: harness {} cannot receive a run credential",
                 pick.harness
-            ));
+            )
+            .into());
         };
         let store = Arc::clone(&self.store);
         let session_row_id = session.id;
@@ -829,23 +856,7 @@ async fn run_claimed(
     // A stop may be committed between the claim and the spawned task's first poll.
     match store.chat_run_get(thread_id, run_id) {
         Ok(run) if run.state == ChatRunState::Stopping => {
-            let sink = ChatRunSink::new(
-                Arc::clone(&store),
-                thread_id,
-                run_id,
-                Arc::clone(&clock),
-                vec![token],
-            );
-            let finish = chat_finish_for(
-                &Err(task_worker::adapter::AdapterError::Other(
-                    "stopped before launch".into(),
-                )),
-                super::control::stop_intent(&run),
-            );
-            if let Err(error) = sink.finish(
-                &finish,
-                &task_worker::result_report::ParsedActions::default(),
-            ) {
+            if let Err(error) = super::control::close_stopped(&store, &run, (clock)()) {
                 tracing::warn!(%error, %run_id, "CoS chat pre-launch stop failed");
             }
             return;
@@ -886,6 +897,14 @@ async fn run_claimed(
             return;
         }
     };
+    if current.state == ChatRunState::Stopping && current.launched_at.is_none() {
+        // The stop won before the process spawned (the launch notice was refused): close prelaunch.
+        if let Err(error) = super::control::close_stopped(&store, &current, (clock)()) {
+            tracing::warn!(%error, %run_id, "CoS chat pre-launch stop failed");
+        }
+        let _ = store.cos_run_credential_revoke(run_id, (clock)());
+        return;
+    }
     if current.state == ChatRunState::Stopping {
         // A stop intent overrides the worker outcome (same mapping as before rollover).
         finish = chat_finish_for(

@@ -85,3 +85,12 @@ updated: 2026-11-06
   `dispatcher::tests::work_units::an_interrupted_integration_is_redone_idempotently_after_restart`（Blocked が Done にならない）。
   `crates/` に差分はなく、scripts/dev の変更とは関係しない。変更なしの再実行で通ったため、負荷起因の flake と判断した（原因の特定は未確認）。
 - 提出時の HEAD で再実行: `bash scripts/dev/test-affected.sh` → exit 0。`git diff $CELERIS_WU_BASE -- crates` は空。
+
+## pin-wire-record の再々実行（sandbox では userns 試験が走らない）
+- 提出時の HEAD で `bash scripts/dev/test-affected.sh` を 2 回走らせ、どちらも exit 100 だった。落ちたのは同じ 1 件
+  （`celeris-campaign::launcher a_swapped_daemon_binary_is_rejected_on_every_path_and_stop_only_touches_the_launcher_pid`、約 1 秒で失敗）で、他の 3540 件は通った。
+- この試験を単体で `cargo nextest run -p celeris-campaign --test launcher a_swapped_daemon` と走らせると通る。全体の並走の中だけで落ちる。
+  worker sandbox では userns を要する試験が走らない（または不安定）ためと見ており、原因の特定は未確認。
+- `scripts/dev/test-affected.sh` 自体を変えると「検証の道具の変更」として celeris-script とその逆依存（campaign を含む）が選ばれる。
+  このため、scripts/dev だけの変更でも `test-affected.sh` の check は sandbox でこの試験に当たる。この unit の変更とは関係しない。
+- この試験は WU の check に入れない。userns を使える環境（release gate）で確かめる。

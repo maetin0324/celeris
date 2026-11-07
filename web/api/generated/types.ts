@@ -3043,7 +3043,7 @@ export type EvidenceView = {
   "stdout_tail"?: string | null;
 };
 
-export type ExclusionReason = "UnknownSource" | "ModelNotDeclared" | "ModelHintMismatch" | "NoCompatibleRoute" | "AccountUnavailable" | "SourceQuota" | "AccountQuota" | "Cooldown" | "SourceConcurrency" | "AccountConcurrency" | "NoDeclaredDefault";
+export type ExclusionReason = "UnknownSource" | "ModelNotDeclared" | "ModelHintMismatch" | "NoCompatibleRoute" | "AccountUnavailable" | "SourceQuota" | "AccountQuota" | "Cooldown" | "SourceConcurrency" | "AccountConcurrency" | "NoDeclaredDefault" | "AuthFailed" | "CosReservation" | "CosRunLimit";
 
 export type ExecutionChildSpec = {
   "acceptance": Array<Criterion>;

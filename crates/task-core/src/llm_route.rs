@@ -344,6 +344,32 @@ pub enum ExclusionReason {
     SourceConcurrency,
     AccountConcurrency,
     NoDeclaredDefault,
+    /// account の認証失敗（OAuth 切れ・拒否）。再ログインまで解けない。
+    AuthFailed,
+    /// CoS の 5 時間枠の予約（worker が Claude の予約分に入れない）。
+    CosReservation,
+    /// `[execution] max_cos_runs` に達している（CoS 全体の上限）。
+    CosRunLimit,
+}
+impl ExclusionReason {
+    /// 同時実行数の枠だけが理由か（待てば空く）。cooldown・quota・予約・auth・未宣言は含まない。
+    /// 閉じた列挙なので `match` は網羅で書き、理由を足すとここが必ずコンパイルで止まる。
+    pub fn is_slot(&self) -> bool {
+        match self {
+            Self::SourceConcurrency | Self::AccountConcurrency | Self::CosRunLimit => true,
+            Self::UnknownSource
+            | Self::ModelNotDeclared
+            | Self::ModelHintMismatch
+            | Self::NoCompatibleRoute
+            | Self::AccountUnavailable
+            | Self::SourceQuota
+            | Self::AccountQuota
+            | Self::Cooldown
+            | Self::NoDeclaredDefault
+            | Self::AuthFailed
+            | Self::CosReservation => false,
+        }
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CandidateRejection {
@@ -415,6 +441,8 @@ pub struct QuotaSnapshot {
     pub source_headroom: BTreeMap<SourceId, f64>,
     pub account_remaining: BTreeMap<(SourceId, AccountId), f64>,
     pub cooling_down: BTreeSet<(SourceId, AccountId)>,
+    /// 認証失敗で除外された account（quota 枯渇とは別の理由で残す）。
+    pub auth_failed: BTreeSet<(SourceId, AccountId)>,
 }
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReservationSnapshot {
@@ -449,6 +477,10 @@ pub fn admit_source(
         let key = (candidate.source.clone(), account.clone());
         if quota.cooling_down.contains(&key) {
             reasons.push(ExclusionReason::Cooldown);
+            continue;
+        }
+        if quota.auth_failed.contains(&key) {
+            reasons.push(ExclusionReason::AuthFailed);
             continue;
         }
         if quota
@@ -487,10 +519,14 @@ pub fn admit_source(
             account_id: account.clone(),
         });
     }
+    // 枠以外の理由が 1 つでもあればそれを報告する（枠の account が先に並んでいても、枠待ちと誤判定しない。
+    // account の並びに結果が依らない）。
     Admission::Rejected(
         reasons
-            .into_iter()
-            .next()
+            .iter()
+            .find(|r| !r.is_slot())
+            .or(reasons.first())
+            .cloned()
             .unwrap_or(ExclusionReason::AccountUnavailable),
     )
 }

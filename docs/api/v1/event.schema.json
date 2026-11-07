@@ -5541,20 +5541,39 @@
       "type": "object"
     },
     "ExclusionReason": {
-      "enum": [
-        "UnknownSource",
-        "ModelNotDeclared",
-        "ModelHintMismatch",
-        "NoCompatibleRoute",
-        "AccountUnavailable",
-        "SourceQuota",
-        "AccountQuota",
-        "Cooldown",
-        "SourceConcurrency",
-        "AccountConcurrency",
-        "NoDeclaredDefault"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "UnknownSource",
+            "ModelNotDeclared",
+            "ModelHintMismatch",
+            "NoCompatibleRoute",
+            "AccountUnavailable",
+            "SourceQuota",
+            "AccountQuota",
+            "Cooldown",
+            "SourceConcurrency",
+            "AccountConcurrency",
+            "NoDeclaredDefault"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "AuthFailed",
+          "description": "account の認証失敗（OAuth 切れ・拒否）。再ログインまで解けない。",
+          "type": "string"
+        },
+        {
+          "const": "CosReservation",
+          "description": "CoS の 5 時間枠の予約（worker が Claude の予約分に入れない）。",
+          "type": "string"
+        },
+        {
+          "const": "CosRunLimit",
+          "description": "`[execution] max_cos_runs` に達している（CoS 全体の上限）。",
+          "type": "string"
+        }
+      ]
     },
     "ExecutionChildSpec": {
       "additionalProperties": false,

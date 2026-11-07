@@ -522,7 +522,9 @@ impl Dispatcher {
             Err(EvalRouteError::Deferred(
                 ExclusionReason::SourceQuota
                 | ExclusionReason::AccountQuota
-                | ExclusionReason::Cooldown,
+                | ExclusionReason::Cooldown
+                | ExclusionReason::AuthFailed
+                | ExclusionReason::CosReservation,
             )) => (0, 1, false),
             Err(EvalRouteError::Deferred(_)) => (1, 1, true),
         };

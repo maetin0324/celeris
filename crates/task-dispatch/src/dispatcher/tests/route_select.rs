@@ -312,7 +312,8 @@ fn route_select_admission_excludes_full_and_exhausted_accounts() {
             .rejections
             .iter()
             .any(|x| x.candidate.source == "claude_oauth".into()
-                && x.reason == ExclusionReason::AccountConcurrency)
+                // ca は枠いっぱい、cb は quota 枯渇。枠以外の理由があればそれを報告する（枠待ちにしない）。
+                && x.reason == ExclusionReason::AccountQuota)
     );
     // Nothing admissible anywhere: fail closed.
     state.accounts.available.clear();
@@ -1268,4 +1269,232 @@ fn route_priority_canary_override_reorders_only_its_harness() {
         .remove(&SourceId::from("codex_oauth"));
     let pick = route_select(&input("coding"), &r, &full).0.unwrap();
     assert_eq!(pick.candidate.source.as_ref(), "claude_oauth");
+}
+
+/// ADR 2026-11-06-cos-run-launch-accounting-and-drain D2: 枠待ちの判定は `RouteTrace` の候補ごとの
+/// 構造化理由（閉じた列挙）だけで決まる。
+mod slot_wait {
+    use super::*;
+    use crate::dispatcher::route_select::slot_only_wait;
+    use task_core::llm_route::{Candidate, CandidateRejection};
+
+    fn cos_input() -> RouteInput {
+        RouteInput {
+            task_id: "cos-thread".into(),
+            harness: task_core::llm_route::HarnessRequest {
+                harness: Some("claude_code".into()),
+                ..Default::default()
+            },
+            cos: true,
+            ..Default::default()
+        }
+    }
+
+    fn cos_registry() -> Registry {
+        let mut r = registry();
+        r.cos_route_candidates = vec![key("claude_oauth", "sonnet"), key("codex_oauth", "gpt")];
+        r
+    }
+
+    /// 全 account が枠いっぱい（limit 1・in_use 1）の状態。
+    fn full_state(r: &Registry) -> RouteState {
+        let mut state = all_available(r);
+        for (source, account) in [
+            ("claude_oauth", "ca"),
+            ("claude_oauth", "cb"),
+            ("codex_oauth", "xa"),
+        ] {
+            state.account_max_runs.insert(pair(source, account), 1);
+            state
+                .reservations
+                .account_in_use
+                .insert(pair(source, account), 1);
+        }
+        state
+    }
+
+    #[test]
+    fn every_candidate_excluded_by_slots_only_waits() {
+        let r = cos_registry();
+        let state = full_state(&r);
+        let (result, trace) = route_select(&cos_input(), &r, &state);
+        let failure = result.expect_err("all accounts are full");
+        assert!(trace.rejections.len() >= 2, "{:?}", trace.rejections);
+        assert!(
+            trace
+                .rejections
+                .iter()
+                .all(|x| x.reason == ExclusionReason::AccountConcurrency),
+            "{:?}",
+            trace.rejections
+        );
+        assert!(slot_only_wait(&failure, &trace));
+    }
+
+    #[test]
+    fn one_non_slot_reason_does_not_wait() {
+        let r = cos_registry();
+        let base = full_state(&r);
+        // cooldown: 1 つの候補の全 account が冷却中。
+        let mut cooled = base.clone();
+        cooled.quota.cooling_down.insert(pair("codex_oauth", "xa"));
+        // quota 枯渇。
+        let mut exhausted = base.clone();
+        exhausted
+            .quota
+            .account_remaining
+            .insert(pair("codex_oauth", "xa"), 0.0);
+        // 認証失敗。
+        let mut auth = base.clone();
+        auth.quota.auth_failed.insert(pair("codex_oauth", "xa"));
+        // 未ログイン（account が 1 つも無い）。
+        let mut logged_out = base.clone();
+        logged_out.accounts.available.remove(&"codex_oauth".into());
+        for (name, state) in [
+            ("cooldown", cooled),
+            ("quota", exhausted),
+            ("auth", auth),
+            ("logged_out", logged_out),
+        ] {
+            let (result, trace) = route_select(&cos_input(), &r, &state);
+            let failure = result.expect_err(name);
+            assert!(!slot_only_wait(&failure, &trace), "{name}: {trace:?}");
+        }
+    }
+
+    /// 同じ候補の account のうち 1 つが枠、もう 1 つが cooldown なら、枠だけとは言わない
+    /// （account の並びで結果が変わらない）。
+    #[test]
+    fn a_candidate_with_slot_and_cooldown_accounts_does_not_wait() {
+        let r = cos_registry();
+        for order in [["ca", "cb"], ["cb", "ca"]] {
+            let mut state = full_state(&r);
+            state.accounts.available.insert(
+                "claude_oauth".into(),
+                order.iter().map(|a| (*a).into()).collect(),
+            );
+            state.quota.cooling_down.insert(pair("claude_oauth", "cb"));
+            let (result, trace) = route_select(&cos_input(), &r, &state);
+            let failure = result.expect_err("full");
+            assert!(!slot_only_wait(&failure, &trace), "{order:?}: {trace:?}");
+        }
+    }
+
+    #[test]
+    fn undeclared_candidates_and_empty_traces_do_not_wait() {
+        let r = cos_registry();
+        let mut state = full_state(&r);
+        // 宣言が無い model を route に入れる。
+        let mut undeclared = r.clone();
+        undeclared.cos_route_candidates =
+            vec![key("claude_oauth", "nope"), key("codex_oauth", "gpt")];
+        let (result, trace) = route_select(&cos_input(), &undeclared, &state);
+        let failure = result.expect_err("undeclared plus full");
+        assert!(
+            trace
+                .rejections
+                .iter()
+                .any(|x| x.reason == ExclusionReason::ModelNotDeclared)
+        );
+        assert!(!slot_only_wait(&failure, &trace));
+        // 候補ゼロ・理由なし。
+        state.accounts.available.clear();
+        let empty = RouteTrace::default();
+        assert!(!slot_only_wait(
+            &RouteFailure::NoEligible("claude_code".into()),
+            &empty
+        ));
+        assert!(!slot_only_wait(
+            &RouteFailure::NoDeclaredDefault("claude_code".into()),
+            &empty
+        ));
+    }
+
+    /// 閉じた列挙の全値について、枠かどうかを 1 つずつ固定する。
+    #[test]
+    fn closed_enumeration_of_reasons() {
+        use ExclusionReason::*;
+        let table = [
+            (UnknownSource, false),
+            (ModelNotDeclared, false),
+            (ModelHintMismatch, false),
+            (NoCompatibleRoute, false),
+            (AccountUnavailable, false),
+            (SourceQuota, false),
+            (AccountQuota, false),
+            (Cooldown, false),
+            (SourceConcurrency, true),
+            (AccountConcurrency, true),
+            (NoDeclaredDefault, false),
+            (AuthFailed, false),
+            (CosReservation, false),
+            (CosRunLimit, true),
+        ];
+        for (reason, slot) in table {
+            let candidate = Candidate {
+                source: "claude_oauth".into(),
+                model: "sonnet".into(),
+                api_format: "claude_cli".into(),
+            };
+            let trace = RouteTrace {
+                harness: Some("claude_code".into()),
+                candidates: vec![candidate.key()],
+                rejections: vec![CandidateRejection {
+                    candidate,
+                    reason: reason.clone(),
+                }],
+                ..Default::default()
+            };
+            assert_eq!(
+                slot_only_wait(&RouteFailure::NoEligible("claude_code".into()), &trace),
+                slot,
+                "{reason:?}"
+            );
+        }
+    }
+
+    /// 同じ入力・同じ route 順は同じ結果（次の tick の再評価で順序が変わらない）。
+    #[test]
+    fn same_input_gives_the_same_order_and_result() {
+        let r = cos_registry();
+        let state = full_state(&r);
+        let first = route_select(&cos_input(), &r, &state);
+        for _ in 0..5 {
+            assert_eq!(route_select(&cos_input(), &r, &state), first);
+        }
+        // 枠が空けば、同じ入力が同じ先頭候補で通る。
+        let mut freed = state.clone();
+        freed
+            .reservations
+            .account_in_use
+            .insert(pair("claude_oauth", "ca"), 0);
+        let a = route_select(&cos_input(), &r, &freed);
+        let b = route_select(&cos_input(), &r, &freed);
+        assert_eq!(a, b);
+        assert_eq!(a.0.unwrap().candidate.key(), key("claude_oauth", "sonnet"));
+        assert_eq!(first.1.candidates, r.cos_route_candidates);
+    }
+
+    /// 実 account は +1、暗黙 account（プールを持たない source）は +1 しない。
+    #[test]
+    fn implicit_account_gets_no_extra_cos_slot() {
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let mut d = route_dispatcher(store, &RouteCapture::default(), true);
+        let implicit = pair("qwen", "shared");
+        let cos = d.route_state(true).account_max_runs[&implicit];
+        let leaf = d.route_state(false).account_max_runs[&implicit];
+        assert_eq!(cos, leaf, "implicit account must not get +1");
+    }
+
+    #[test]
+    fn real_account_gets_one_extra_cos_slot() {
+        let dir = accounts_fixture();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let mut d = pool_dispatcher(store, done_adapter(), None, dir.path().to_path_buf(), 2, 2);
+        let source: SourceId = task_core::AccountAdapter::ClaudeCode.as_str().into();
+        let key = (source, AccountId::from("a"));
+        let cos = d.route_state(true).account_max_runs[&key];
+        let leaf = d.route_state(false).account_max_runs[&key];
+        assert_eq!((leaf, cos), (2, 3));
+    }
 }

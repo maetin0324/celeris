@@ -237,6 +237,9 @@ pub fn route_select(
                 return (Ok(pick), aggregate);
             }
             Err(error) => {
+                if !current_trace.candidates.is_empty() {
+                    aggregate.candidates = current_trace.candidates.clone();
+                }
                 aggregate
                     .rejections
                     .extend(current_trace.rejections.clone());
@@ -263,6 +266,22 @@ pub fn route_select(
         .last()
         .map(|r| r.harness.clone());
     (Err(failure), aggregate)
+}
+
+/// 除外された全候補が枠（同時実行数）の理由だけか（ADR 2026-11-06-cos-run-launch-accounting-and-drain D2-2）。
+/// `RouteTrace` の構造化理由（[`ExclusionReason::is_slot`]）だけで決める。文字列は見ない。決定的（I/O・時計なし）。
+/// 真になるのは、失敗が `NoEligible` で、理由が 1 つ以上あり、全部が枠の理由のとき。1 つでも cooldown・quota・
+/// 予約・auth・未宣言があれば偽。候補ゼロ・理由なしも偽。
+pub fn slot_only_wait(failure: &RouteFailure, trace: &RouteTrace) -> bool {
+    let all_slots =
+        |rejections: &[CandidateRejection]| rejections.iter().all(|r| r.reason.is_slot());
+    matches!(failure, RouteFailure::NoEligible(_))
+        && !trace.rejections.is_empty()
+        && all_slots(&trace.rejections)
+        && trace
+            .harness_rejections
+            .iter()
+            .all(|h| !h.rejections.is_empty() && all_slots(&h.rejections))
 }
 
 /// harness の試行順を残量で並べ替える（ADR 2026-10-22 D1）。対象は `harness_balance_classes` にあるクラスで、
@@ -861,6 +880,9 @@ impl Dispatcher {
                             Some(ExcludedReason::Cooldown) => {
                                 state.quota.cooling_down.insert(key);
                             }
+                            Some(ExcludedReason::Rejected) => {
+                                state.quota.auth_failed.insert(key);
+                            }
                             Some(_) => {
                                 state.quota.account_remaining.insert(key, 0.0);
                             }
@@ -911,7 +933,9 @@ impl Dispatcher {
                         .and_then(|l| l.get(&key).copied());
                     let (effective, _) =
                         crate::capacity::effective_account_limit(stored, self.default_max_runs());
-                    let limit = crate::capacity::account_run_limit(effective, cos);
+                    // 暗黙 account（プールを持たない source）には CoS の +1 を付けない（ADR 2026-10-08 (c)・(e)）。
+                    let limit =
+                        crate::capacity::account_run_limit(effective, cos && adapter.is_some());
                     state
                         .account_max_runs
                         .insert(key, u32::try_from(limit).unwrap_or(u32::MAX));

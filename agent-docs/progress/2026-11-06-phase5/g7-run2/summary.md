@@ -73,7 +73,7 @@ wall は 2 試行の和が 327 秒。
 ## 受け入れ条件ごとの証拠
 - credential の grep 0 件: 上記（4 語とも 0、取り込み後も 0 file）。
 - G7 の判定: 上記のコマンドと出力。
-- 文書の更新: [n6.md](n6.md)（G1〜G7 の表・次の手の表）、[n1.md](n1.md)、`docs/ops/project-controller.md`（4a 節の G7 の説明と 6 節の状態）。
+- 文書の更新: [n6.md](../n6.md)（G1〜G7 の表・次の手の表）、[n1.md](../n1.md)、`docs/ops/project-controller.md`（4a 節の G7 の説明と 6 節の状態）。
 - 本番の 1 案件の選定と `[project_controller]` の値は、n6.md の次の手の表の 1 行目に人の決定として残した。
 
 ## 本番への移行

@@ -3,14 +3,15 @@
 //! 計測は毎 tick 固定の大きさの struct に足すだけで、確保はしない（D4）。`root_done_tick` 全体が閾値を
 //! 超えた tick だけ、`cos.root_done.*` の項目を tick_cos_chat_launch の内訳に足す（D3）。slow tick の警告
 //! （`tick_steps.rs` の "slow tick phases"）はその列を `steps_us` に出す。時間の項目は µs、行数・回数の項目は
-//! 名前の末尾が `_rows`・`_calls`・`_max`。store の呼び出しは待ち（接続を取るまで）と処理（残り）に分ける（D2）。
+//! 名前の末尾が `_rows`・`_calls`・`_max`。store の呼び出しは処理（この thread の CPU 時間）と待ち（経過時間の
+//! 残り。lock・`busy_timeout`・disk・run queue の待ち）に分ける（D2、付記「thread の CPU 時間」）。
 //! 測りながら事実を集める `collect_facts`（root_done の D4）と、そこから呼ぶ `progress_markdown` もここに置く。
 
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use task_core::{DeliveryStore, SqliteStore, TaskId, TaskStore, WorkspaceSpec, store_lock_wait};
+use task_core::{DeliveryStore, SqliteStore, TaskId, TaskStore, WorkspaceSpec};
 use task_ops::root_done::{self, ChildFact, RootDoneFacts, RootDoneInputs};
 
 /// これを超えた `root_done_tick` だけ内訳を出す（D3）。`CosChatLaunch::root_done_probe_threshold` の既定値。
@@ -28,20 +29,39 @@ pub(crate) struct StoreSpan {
     pub(crate) work_us: u64,
 }
 
+/// この thread がこれまでに使った CPU 時間。読めなければ `None`（そのときは呼び出し全体を処理に数える）。
+fn thread_cpu_time() -> Option<Duration> {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: `ts` は有効な書き込み先で、`clock_gettime` はそこに値を書くだけ。
+    let rc = unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) };
+    if rc != 0 {
+        return None;
+    }
+    let secs = u64::try_from(ts.tv_sec).ok()?;
+    let nanos = u32::try_from(ts.tv_nsec).ok()?;
+    Some(Duration::new(secs, nanos))
+}
+
 impl StoreSpan {
-    /// `f` を 1 回の store の呼び出しとして測る。待ちはこの thread の `store_lock_wait` の増分、
-    /// 処理は経過時間から待ちを引いた残り（SQLite の `busy_timeout` の待ちは処理に入る）。
+    /// `f` を 1 回の store の呼び出しとして測る。処理はこの間にこの thread が使った CPU 時間、
+    /// 待ちは経過時間から処理を引いた残り（Mutex・読み取りプール・`busy_timeout`・disk・run queue の待ち）。
     pub(crate) fn time<T>(&mut self, f: impl FnOnce() -> T) -> T {
-        let wait_before = store_lock_wait();
+        let cpu_before = thread_cpu_time();
         let started = Instant::now();
         let out = f();
         let elapsed = started.elapsed();
-        let wait = store_lock_wait().saturating_sub(wait_before);
+        let work = match (cpu_before, thread_cpu_time()) {
+            (Some(before), Some(after)) => after.saturating_sub(before).min(elapsed),
+            _ => elapsed,
+        };
         self.calls += 1;
-        self.wait_us = self.wait_us.saturating_add(us(wait));
-        self.work_us = self
-            .work_us
-            .saturating_add(us(elapsed.saturating_sub(wait)));
+        self.wait_us = self
+            .wait_us
+            .saturating_add(us(elapsed.saturating_sub(work)));
+        self.work_us = self.work_us.saturating_add(us(work));
         out
     }
 
@@ -333,15 +353,21 @@ pub(crate) fn collect_facts(
 mod tests {
     use super::*;
 
-    /// 待ちと処理の和は経過時間を超えず、回数は呼んだ数になる（store を呼ばない区間の待ちは 0）。
+    /// 回数は呼んだ数になる。眠っている間は CPU を使わないので、20 ms 眠る呼び出しは待ちが 10 ms 以上・
+    /// 処理が 10 ms 未満になる。眠る時間は下限としてだけ使い、負荷で遅れても結果は変わらない（ADR 付記）。
     #[test]
-    fn store_span_counts_calls_and_splits_wait_from_work() {
+    fn store_span_counts_calls_and_splits_off_cpu_wait_from_cpu_work() {
+        assert!(thread_cpu_time().is_some(), "CLOCK_THREAD_CPUTIME_ID");
         let mut span = StoreSpan::default();
         let v = span.time(|| 7);
-        span.time(|| ());
         assert_eq!(v, 7);
-        assert_eq!(span.calls, 2);
-        assert_eq!(span.wait_us, 0);
+        assert_eq!(span.calls, 1);
+        let mut slept = StoreSpan::default();
+        slept.time(|| std::thread::sleep(Duration::from_millis(20)));
+        assert_eq!(slept.calls, 1);
+        assert!(slept.wait_us + slept.work_us >= 20_000, "elapsed {slept:?}");
+        assert!(slept.wait_us >= 10_000, "{slept:?}");
+        assert!(slept.work_us < 10_000, "{slept:?}");
     }
 
     #[test]

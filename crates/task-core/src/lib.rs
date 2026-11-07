@@ -269,8 +269,6 @@ pub use store::{
     TaskStore, TerminalSessionEvent, TreeAdoption, backup_database, event_row_schema_value,
     integrity_check, is_busy_error, is_readonly_error,
 };
-mod lock_wait;
-pub use lock_wait::{store_lock_wait, store_writer_waiters};
 pub use transition::{InvalidTransition, Outcome, StateView, Trigger, transition};
 // ---- ADR-0072（Phase E1）: Run lifecycle / checkpoint / continuation ----
 pub use execution::{

@@ -955,13 +955,13 @@ impl SqliteStore {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         match &self.read_pool {
             Some(pool) => {
-                let conn = crate::lock_wait::timed(|| pool.checkout())?;
+                let conn = pool.checkout()?;
                 let result = f(&conn);
                 pool.checkin(conn);
                 result
             }
             None => {
-                let conn = crate::lock_wait::lock(&self.conn)?;
+                let conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
                 f(&conn)
             }
         }
@@ -1044,7 +1044,7 @@ impl SqliteStore {
         self.counters
             .writer
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        crate::lock_wait::lock_writer(&self.conn)
+        self.conn.lock().map_err(|_| StoreError::Poisoned)
     }
 
     /// 書き込みの transaction を 1 つ開いて `write` を走らせ、`Ok` なら commit する。`Err` なら rollback。

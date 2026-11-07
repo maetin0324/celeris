@@ -1,12 +1,12 @@
 ---
 title: 健全性v2 G2 profiles — profile の [review] 節
 tasks: [01M6VCXJCXEPBQCR5PNR195JCH]
-status: blocked
+status: done
 updated: 2026-11-07
 ---
 # 健全性v2 G2 profiles — profile の [review] 節
 
-完了日: 未。実装と人の承認（受け入れ条件 3）は済んだが、必須の repo 検査 `test-affected.sh` が `policy.changed` で落ち、人の決定を待つ（下の「未解決」）。
+完了日: 2026-11-07。実装と人の承認（受け入れ条件 3）は 2 回目の run までに済んだ。必須の repo 検査 `test-affected.sh` は `policy.changed` で落ちていたが、人の決定 `policy-branch-required-check` に従って operator がこの branch を main に merge し（2026-11-07 19:08Z、件名「integrate 01M6VCXJCX: profile の [review] 節（policy の branch、人の承認済み。ADR health-review-integration D6.6）」）、3 回目の run で通った（下の「3 回目の run」）。
 
 unit `profiles`（G2 の工程 write「汎用規約本文と Celeris profile の [review] 節を書く」の子）。[ADR 2026-11-07 健全性を設計と review に組み込む](../../adr/2026-11-07-health-review-integration.md) の D2.1・D2.2・D6.6 に従う。基準は `git merge-base HEAD main`。policy の file だけの branch（D6.1）で、受け入れには人の承認（`{"type":"human"}`）が要る。`--print-review-policy` は作っていない（U2 の別の範囲）。
 

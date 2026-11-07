@@ -3103,6 +3103,7 @@ mod cos_chat_launch;
 mod cos_chat_rollover;
 mod cos_chat_triage;
 mod cos_chat_triage_stagnation;
+mod cos_launch_cross;
 mod cos_launch_wire;
 mod cos_live_fix_d4;
 mod cos_slot_wait;

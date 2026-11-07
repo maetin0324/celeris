@@ -91,3 +91,50 @@ completed: 2026-11-07
 
 ### 再計画後の検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 - `bash scripts/dev/test-affected.sh`: exit 0（doctest ok）。`cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+
+## cross unit（横断試験: 起動通知 → dispatch → 案件予算の和）
+
+完了日: 2026-11-07。正本 ADR は同じ（D1・D2・D4）。新しい設計判断はなく、ADR は足していない。実装の不備は見つからず、本番コードは変えていない（変更は試験のみ）。D3 の driver（`pilot_gate.py` 等）・judge/drain には触れていない。
+
+### 変更（commit は件名で列挙）
+- `phase 1: 起動通知・枠待ち・回収・予算の横断試験を足す`
+
+- 新規 `task-dispatch/src/dispatcher/tests/cos_launch_cross.rs`（8 試験）。`mod.rs` に `mod cos_launch_cross;`。`cos_launch_wire.rs`・`cos_slot_wait.rs` は共有部品（fixture・adapter・helper）を `pub(super)` にしただけ（挙動の変更なし）。
+- 試験は実経路を通す: `tick_cos_chat_launch`・`tick`（実 dispatcher）、`ChatRunSink::before_spawn`（`launched_at` の永続化）、実 process の shell stub（claude-code adapter）、`project_budget::usage`（task-ops の和）。時計は注入、待ちは Semaphore と JoinHandle の join（sleep・負荷なし）。
+
+### 実装で試験に固定すること — 本 task（launch-and-wait）の範囲の対応表
+| ADR の項目 | 本 task の試験 | 補助（先行 unit の試験） |
+| --- | --- | --- |
+| 起動前の route 失敗が `not_launched` になり予算を止めない | `cos_launch_cross::route_failure_run_is_not_launched_and_does_not_stop_the_project_budget`（`not_launched_runs=1`・`usd_unknown_runs=0`・`exceeded=None`） | `cos_launch_wire::route_failure_closes_prelaunch_and_counts_as_not_launched` |
+| `launched_at` のある usage null は止める | `cos_launch_cross::spawn_failure_after_the_notice_and_usage_null_stop_the_budget`（spawn 失敗・usage null は `UsdUnknown`、既知 usage は 500000 micro-USD で止めない） | `cos_launch_wire::usage_null_after_launch_stays_unknown_and_known_usage_is_known`、`a_missing_attempt_usage_is_recorded_and_hides_the_known_part` |
+| 通知に失敗したら spawn しない | `cos_launch_cross::a_failed_launch_notice_prevents_the_spawn_and_leaves_no_usage`（DB 書き込み失敗の trigger。marker 無し・`launched_at` 無し・run 1 本） | `cos_launch_wire::a_launch_record_failure_prevents_the_spawn` |
+| 旧行（両欄 NULL）は止める | — | `cos_launch_wire::restart_recovery_splits_unlaunched_launched_and_legacy_rows`、task-ops `project_budget` の試験（budget unit） |
+| 枠だけの失敗は待つ（worker・reviewer との重なり） | `a_worker_holding_the_implicit_slot_…`、`a_reviewer_holding_the_implicit_slot_…`（暗黙 account max_runs=1。Waiting 1 件・3 tick で run/入力/失敗が増えない・解放後に同じ run が起動し usage が DB と予算に載る） | `cos_slot_wait::slot_only_wait_keeps_the_run_waiting_then_launches_the_same_run` |
+| source の cooldown は待たない | — | `cos_slot_wait::cooldown_does_not_wait` |
+| 暗黙 account に +1 しない | 上の暗黙 account 2 試験（worker・reviewer 1 件で CoS は待つ） | `route_select` の `implicit_account_gets_no_extra_cos_slot` |
+| 実 account は +1 まで載る | `a_real_account_admits_cos_at_the_limit_plus_one_and_waits_beyond_it`（max_runs_per_account=2、worker 2 本で in_use 2。上限を 1 に下げると 2 ≥ 1+1 で待ち、2 に戻すと 2 < 2+1 で同じ run が起動） | — |
+| `max_cos_runs` で待つ | `max_cos_runs_makes_the_next_input_wait_without_a_failed_run`（3 tick で run を作らない。解放後に起動し usage が予算に載る） | — |
+| 枠待ちの期限で `slot_wait_expired` | — | `cos_slot_wait::slot_wait_expires_at_the_run_deadline_and_is_not_extended` |
+| stop | — | `cos_slot_wait::stop_closes_a_waiting_run_before_launch`、`cos_launch_wire::human_stop_*` |
+| 再起動の回収の 2 分岐 | `a_restart_while_waiting_closes_before_launch_and_the_input_launches_later`（枠待ち中の再起動で `daemon_restart_before_launch`・`not_launched_runs=1`・予算を止めない。入力は積み直され、解放後に新しい run が起動して usage が載る） | `cos_launch_wire::restart_recovery_splits_unlaunched_launched_and_legacy_rows`（起動前/起動済み/旧行） |
+| drain の timeout が `cos_drain_timeout`・旧 raw の judge の結果 | 本 task の範囲外（D3 の driver・judge/drain。変更していない） | — |
+
+### 修正前の不合格と接続後の合格
+本番コードに不備は無く、試験は最初から合格した（接続済みの先行 unit の実装を横断で確かめる試験のため）。試験が実装を見張っていることを、実装を一時的に壊して確かめた（試験を適用した状態で壊し、確認後に `git checkout --` で戻した。戻した後の合格は下の「修正後」）。
+- 壊し方 1: `ChatRunSink::before_spawn` から `chat_run_mark_launched` を外す（通知せずに spawn）。コマンド `cargo test -p task-dispatch --lib cos_launch_cross`、exit 101、1 passed / 7 failed（通知失敗の試験は spawn marker が作られて落ちる。ほか 6 件は `launched_at` が無く落ちる）。
+- 壊し方 2: `slot_only_wait` を常に偽にする。同コマンド、exit 101、4 passed / 4 failed（worker・reviewer・実 account・再起動の 4 件。枠だけの失敗が即 Failed になる）。
+- 修正後（元の実装に戻して同じコマンド）: 8 passed, 0 failed。
+- 試験を書く途中で落ちた 6 件は試験側の誤りで、実装の不備ではない: ① 既知 usage の予算は model の単価が要る（model `m` の単価を試験で与えた）、② `launched_at` は worker が `before_spawn` を呼んだ後に書かれるので join 後に確かめる、③ `tick` は CoS launch tick を含み task 完了の triage run も同じ枠を使うため、解放後は他の CoS run の終わりを待ってから tick する。
+
+### 検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+- `cargo test -p task-dispatch --lib cos_launch_cross`: 8 passed。`cargo test -p task-dispatch --lib cos_launch_wire cos_slot_wait` は下の test-affected に含む。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+- `bash scripts/dev/test-affected.sh`: exit 0。nextest 3488 tests run, 3488 passed, 10 skipped、doctest ok、`progress_index_commit_hashes` ok。対象 crate は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。
+- 範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"`）の変更 path は task-dispatch の `tests/` 4 file とこの進捗ファイルだけ。`pilot_gate.py`・driver・judge/drain の差分なし（`git diff --name-only $CELERIS_WU_BASE` に該当 path なし）。
+
+### 未解決
+- slot-wait unit の記録にある既存の制約（CoS 同士が同じ account の枠を取り合う場合、launch tick の間は互いの予約が見えない）は残っている。本 task の受け入れ（worker・reviewer と CoS の重なり）の範囲外で、試験の握り手は worker・reviewer にした。
+- `CosReservation`（Claude 予約）・`CosRunLimit` を route_select が出す配線は未接続のまま（reason unit からの引き継ぎ）。
+
+### 提案
+- CoS 同士の枠の取り合いを効かせる別 task（launch tick の間も `route_reservations` を `route_state` に渡す）。

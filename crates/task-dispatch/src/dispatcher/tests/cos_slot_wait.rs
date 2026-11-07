@@ -25,11 +25,11 @@ fn blocking_command(leaf_fifo: &std::path::Path) -> Vec<String> {
     ]
 }
 
-fn workspace(dir: &std::path::Path, thread: &str) -> std::path::PathBuf {
+pub(super) fn workspace(dir: &std::path::Path, thread: &str) -> std::path::PathBuf {
     dir.join("cos/threads").join(thread).join("workspace")
 }
 
-fn make_fifo(dir: &std::path::Path, thread: &str) {
+pub(super) fn make_fifo(dir: &std::path::Path, thread: &str) {
     let ws = workspace(dir, thread);
     std::fs::create_dir_all(&ws).expect("workspace");
     assert!(
@@ -41,7 +41,7 @@ fn make_fifo(dir: &std::path::Path, thread: &str) {
     );
 }
 
-async fn release(dir: &std::path::Path, thread: &str) {
+pub(super) async fn release(dir: &std::path::Path, thread: &str) {
     let path = workspace(dir, thread).join("release.fifo");
     tokio::time::timeout(
         std::time::Duration::from_secs(10),
@@ -52,19 +52,19 @@ async fn release(dir: &std::path::Path, thread: &str) {
     .expect("release task");
 }
 
-fn advance(d: &Dispatcher, secs: i64) {
+pub(super) fn advance(d: &Dispatcher, secs: i64) {
     let clock = d.test_now.as_ref().expect("test clock");
     let mut now = clock.lock().unwrap();
     *now += time::Duration::seconds(secs);
 }
 
-fn run_of(store: &SqliteStore, thread: &str) -> ChatRun {
+pub(super) fn run_of(store: &SqliteStore, thread: &str) -> ChatRun {
     let mut all = runs(store, thread);
     assert_eq!(all.len(), 1, "exactly one run for the input");
     all.pop().unwrap()
 }
 
-fn waiting_notices(store: &SqliteStore, thread: &str, run: &str) -> usize {
+pub(super) fn waiting_notices(store: &SqliteStore, thread: &str, run: &str) -> usize {
     store
         .chat_events_page(
             thread,

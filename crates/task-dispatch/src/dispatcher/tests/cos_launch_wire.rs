@@ -13,22 +13,22 @@ use task_worker::claude_code::{ClaudeCodeAdapter, ClaudeCodeConfig};
 const TEXT_THEN_DONE: &str = "cat >/dev/null; \
      echo '{\"type\":\"done\",\"summary\":\"ok\",\"evidence\":[]}'";
 
-struct Fixture {
-    dir: crate::test_support::WritableTempDir,
-    db_path: PathBuf,
-    store: Arc<SqliteStore>,
-    d: Dispatcher,
+pub(super) struct Fixture {
+    pub(super) dir: crate::test_support::WritableTempDir,
+    pub(super) db_path: PathBuf,
+    pub(super) store: Arc<SqliteStore>,
+    pub(super) d: Dispatcher,
     /// Keeps the stub command's directory alive for the whole test.
     _stub: Option<crate::test_support::WritableTempDir>,
 }
 
-fn stub(dir: &Path, name: &str, body: &str) -> String {
+pub(super) fn stub(dir: &Path, name: &str, body: &str) -> String {
     let path = dir.join(name);
     crate::test_support::write_executable(&path, &format!("#!/bin/sh\nset -eu\n{body}\n"));
     path.to_string_lossy().into_owned()
 }
 
-fn fixture_with(harness: &str, adapter: Arc<dyn WorkerAdapter>) -> Fixture {
+pub(super) fn fixture_with(harness: &str, adapter: Arc<dyn WorkerAdapter>) -> Fixture {
     let dir = crate::test_support::WritableTempDir::new();
     let db_path = dir.path().join("celeris.db");
     let store = Arc::new(SqliteStore::open(&db_path).expect("store"));
@@ -80,7 +80,7 @@ fn fixture_with(harness: &str, adapter: Arc<dyn WorkerAdapter>) -> Fixture {
     }
 }
 
-fn fake_fixture() -> Fixture {
+pub(super) fn fake_fixture() -> Fixture {
     fixture_with(
         "fake",
         Arc::new(task_worker::fake::FakeAdapter::new(vec![
@@ -92,11 +92,11 @@ fn fake_fixture() -> Fixture {
 }
 
 impl Fixture {
-    fn thread(&self, key: &str) -> String {
+    pub(super) fn thread(&self, key: &str) -> String {
         crate::test_support::project_cos_thread(&self.store, key)
     }
 
-    fn post(&self, thread: &str, key: &str) {
+    pub(super) fn post(&self, thread: &str, key: &str) {
         self.store
             .chat_message_post(
                 thread,
@@ -113,20 +113,20 @@ impl Fixture {
             .expect("post");
     }
 
-    fn tick(&mut self) {
+    pub(super) fn tick(&mut self) {
         if let Some(clock) = &self.d.test_now {
             *clock.lock().expect("clock") += time::Duration::seconds(1);
         }
         self.d.tick_cos_chat_launch();
     }
 
-    fn expire_leases(&mut self) {
+    pub(super) fn expire_leases(&mut self) {
         if let Some(clock) = &self.d.test_now {
             *clock.lock().expect("clock") += time::Duration::hours(2);
         }
     }
 
-    fn sql(&self, sql: &str) {
+    pub(super) fn sql(&self, sql: &str) {
         rusqlite::Connection::open(&self.db_path)
             .expect("db")
             .execute(sql, [])
@@ -134,7 +134,7 @@ impl Fixture {
     }
 
     /// The run ids of a thread, oldest first.
-    fn run_ids(&self, thread: &str) -> Vec<String> {
+    pub(super) fn run_ids(&self, thread: &str) -> Vec<String> {
         let conn = rusqlite::Connection::open(&self.db_path).expect("db");
         let mut stmt = conn
             .prepare("SELECT run_id FROM chat_runs WHERE thread_id=?1 ORDER BY started_at, run_id")
@@ -145,11 +145,11 @@ impl Fixture {
             .expect("rows")
     }
 
-    fn run(&self, thread: &str, id: &str) -> ChatRun {
+    pub(super) fn run(&self, thread: &str, id: &str) -> ChatRun {
         self.store.chat_run_get(thread, id).expect("run")
     }
 
-    async fn join(&mut self, thread: &str) {
+    pub(super) async fn join(&mut self, thread: &str) {
         let handle = self
             .d
             .cos_chat_launch
@@ -165,13 +165,13 @@ impl Fixture {
     }
 
     /// Claim and start the queued message of `thread`; returns the run id (the worker has not polled yet).
-    fn start(&mut self, thread: &str, key: &str) -> String {
+    pub(super) fn start(&mut self, thread: &str, key: &str) -> String {
         self.post(thread, key);
         self.tick();
         self.run_ids(thread).pop().expect("claimed run")
     }
 
-    fn workspace(&self, thread: &str) -> PathBuf {
+    pub(super) fn workspace(&self, thread: &str) -> PathBuf {
         self.dir
             .path()
             .join("cos/threads")
@@ -180,7 +180,7 @@ impl Fixture {
     }
 }
 
-fn claude_fixture(script: &str) -> Fixture {
+pub(super) fn claude_fixture(script: &str) -> Fixture {
     let dir = crate::test_support::WritableTempDir::new();
     let command = stub(dir.path(), "claude.sh", script);
     let adapter = Arc::new(ClaudeCodeAdapter::new(ClaudeCodeConfig {
@@ -192,7 +192,7 @@ fn claude_fixture(script: &str) -> Fixture {
     f
 }
 
-const CLAUDE_OK: &str = r#"
+pub(super) const CLAUDE_OK: &str = r#"
 echo spawned >> spawned.marker
 cat > /dev/null
 printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}' '{"type":"result","subtype":"success","is_error":false,"result":"hi"}'
@@ -299,7 +299,7 @@ async fn missing_skills_close_prelaunch_as_skills_unavailable() {
 }
 
 /// A harness that launches (sends the pre-spawn notice) and then ends with the given usage.
-struct LaunchingAdapter(Option<task_core::Usage>);
+pub(super) struct LaunchingAdapter(pub(super) Option<task_core::Usage>);
 
 #[async_trait]
 impl WorkerAdapter for LaunchingAdapter {

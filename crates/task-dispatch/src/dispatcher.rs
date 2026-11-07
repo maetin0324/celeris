@@ -2405,7 +2405,7 @@ impl Dispatcher {
         } else {
             0
         };
-        steps.mark("dispatch_ready");
+        steps.mark_with("dispatch_ready", crate::phase_timing::take());
         // ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch）D3:
         // 評価 run は本番を先に配った後の予約枠（`[routing_eval] reserved_runs`）の中だけで起こす。
         if self.accepting_new_work && self.disk_ready {
@@ -2588,7 +2588,7 @@ impl Dispatcher {
         // 上位から見て見送りが続いても後続を試せるよう、窓は広めに取る。
         let window = self.ready_window();
         let ready_started = Instant::now();
-        let candidates = self.eligible_ready_tasks(window)?;
+        let candidates = crate::phase_timing::ready_tasks(|| self.eligible_ready_tasks(window))?;
         log_slow_step("ready_tasks", ready_started);
         // ADR-0130 D3: 終わった run の予約を捨て、長く待たされた候補を先に照合する。
         self.prune_write_set_state();
@@ -2624,7 +2624,7 @@ impl Dispatcher {
             if self.run_maintenance_task(&task)? {
                 continue;
             }
-            if self.dispatch_one(task, None, now)? {
+            if crate::phase_timing::dispatch_one(|| self.dispatch_one(task, None, now))? {
                 dispatched += 1;
             }
         }

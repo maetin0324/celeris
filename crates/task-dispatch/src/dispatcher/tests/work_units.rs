@@ -2968,7 +2968,22 @@ async fn an_interrupted_integration_is_redone_idempotently_after_restart() {
     );
     // 統合を走らせていたデーモンが落ちた（結果は届かない。merge が済んでいてもよい）。
     drop(d1);
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // 落ちた daemon の統合は spawn_blocking の git merge で、drop しても止まらない。その merge が済む前に
+    // d2 が統合をやり直すと同じ worktree の git が競合して Blocked になる（負荷で 200ms の sleep では足りない）。
+    // 時間で待たず、task branch に 2 件目の merge commit が載る（＝旧い統合の git 操作が終わる）のを待つ。
+    let task_branch = format!("celeris/{}", task.id);
+    let guard = Instant::now() + STATE_WAIT_GUARD;
+    while git_out(
+        repo.path(),
+        &["log", "--merges", "--format=%s", &task_branch],
+    )
+    .lines()
+    .count()
+        < 2
+    {
+        assert!(Instant::now() < guard, "旧い統合の merge が終わらない");
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
     let holder = store
         .get(task.id)
         .unwrap()
@@ -2991,7 +3006,6 @@ async fn an_interrupted_integration_is_redone_idempotently_after_restart() {
     d2.infra_backoff.clear();
     run_until_idle(&mut d2, 600).await;
     assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
-    let task_branch = format!("celeris/{}", task.id);
     let merges = git_out(
         repo.path(),
         &["log", "--merges", "--format=%s", &task_branch],

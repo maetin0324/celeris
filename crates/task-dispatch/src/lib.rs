@@ -21,6 +21,7 @@ pub mod execution_scheduler;
 pub mod integration;
 /// Phase F5-fix6: 居なくなったデーモンの run（孤児）を lease 失効を待たずに回収する判定。
 pub mod orphan;
+mod phase_timing;
 pub mod policy;
 pub mod project_controller;
 /// ADR 2026-11-04-project-controller A3: A1 の判定の口と A2 の TS の接続。

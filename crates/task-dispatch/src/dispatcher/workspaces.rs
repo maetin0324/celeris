@@ -307,7 +307,7 @@ impl Dispatcher {
                 && mode.unwrap_or_default() == task_core::WorkspaceMode::Worktree
                 && task_worker::is_git_repo(&source);
             let base = if wants_worktree {
-                self.worktree_base_for(task, &source)
+                crate::phase_timing::worktree_base(|| self.worktree_base_for(task, &source))
             } else {
                 None
             };

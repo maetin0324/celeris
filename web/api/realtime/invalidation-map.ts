@@ -86,6 +86,11 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   worker_finished: { sets: ["T", "R", "E", "L", "P", "N", "changes", "files", "artifacts", "metrics"] },
   review_verdict: { sets: ["T", "R", "E", "L"] },
   review_command_checked: { sets: ["T", "E"] },
+  // ADR 2026-11-07-health-review-integration: 状態を変えない記録。task の詳細と timeline だけ取り直す。
+  design_review_requested: { sets: ["T", "E"] },
+  design_reviewed: { sets: ["T", "E"] },
+  health_review_input_built: { sets: ["T", "E"] },
+  health_review_input_skipped: { sets: ["T", "E"] },
   approval_requested: { sets: ["T", "L", "N", "E", "P"] },
   approval_decided: { sets: ["T", "L", "N", "E", "P"] },
   approvals_withdrawn: { sets: ["T", "L", "N", "E", "P"] },

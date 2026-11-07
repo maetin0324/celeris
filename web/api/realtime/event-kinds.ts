@@ -30,6 +30,11 @@ export const EVENT_KINDS = [
   "worker_finished",
   "review_verdict",
   "review_command_checked",
+  // ADR 2026-11-07-health-review-integration D3.5・D4.3・D4.4: 設計 review の依頼と判定、final review の health の材料。
+  "design_review_requested",
+  "design_reviewed",
+  "health_review_input_built",
+  "health_review_input_skipped",
   "approval_requested",
   "approval_decided",
   "approvals_withdrawn",

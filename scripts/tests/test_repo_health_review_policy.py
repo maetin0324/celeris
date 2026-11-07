@@ -42,7 +42,7 @@ class HealthReviewProfileTests(unittest.TestCase):
 
     def test_health_review_valid_section_passes(self):
         profile.validate(_base({
-            "owner_map": "docs/map.md",
+            "owner_map": "OWNERS.md",
             "high_risk": [{"class": "store", "paths": ["^src/store/"]}],
             "invariants": {"events-append-only": "RULES.md"},
         }), "t.toml")
@@ -69,7 +69,7 @@ class HealthReviewProfileTests(unittest.TestCase):
         self.assert_invalid({"invariants": {"x": ""}}, "invariants")
 
     def test_health_review_section_must_be_table(self):
-        self.assert_invalid("docs/map.md", "review は表")
+        self.assert_invalid("OWNERS.md", "review は表")
 
     def test_health_review_celeris_profile_points_at_existing_paths(self):
         rv = _load("celeris")["review"]

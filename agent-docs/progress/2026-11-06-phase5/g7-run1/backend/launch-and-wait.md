@@ -82,3 +82,12 @@ completed: 2026-11-07
 
 ### 提案
 - 起動前の reason に `launch_unavailable`（設定・credential・workspace・attachment）を足すかを、slot-wait 後の統合で判断する。
+
+### 再計画で追加: triage claim の起動境界（launch-wire unit、完了日 2026-11-07）
+- `task-core/src/chat/triage.rs` の `bind_claim_tx`（`cos_triage_claim`・relay_rejudge・plan_rejudge が共有する唯一の `chat_runs` INSERT）に `launch_tracked=1` を付ける 1 行変更は前回までに入っている。他の task-core 変更は足していない。
+- 追加試験: `cargo test -p task-dispatch --lib a_triage_claimed_run_records_launched_at`（`cos_launch_wire.rs`）。inbox item を ingest → 起動 tick で triage run が claim され → 注入時計と一致する `launched_at` が書かれ、stub process が起動する。
+- 修正前（`launch_tracked` を一時的に外して実行）: exit 101、1 件失敗（`cos_launch_wire.rs:585` の assertion。triage run が旧行扱いで起動通知が `Conflict` になり spawn されない）。修正後: 1 passed, 0 failed。
+- 検査は下の「再計画後の検査」を参照。
+
+### 再計画後の検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+- `bash scripts/dev/test-affected.sh`: exit 0（doctest ok）。`cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。

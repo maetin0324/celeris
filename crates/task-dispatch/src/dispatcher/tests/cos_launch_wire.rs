@@ -541,3 +541,51 @@ async fn a_second_launch_keeps_the_first_launched_at() {
         .expect("rfc3339");
     assert_eq!(stored, first_at, "the first launch time stays");
 }
+
+// ---- triage claim の run も起動境界の印を持ち、launched_at が書かれる ----
+
+#[tokio::test]
+async fn a_triage_claimed_run_records_launched_at() {
+    let mut f = claude_fixture(CLAUDE_OK);
+    let now = f.d.now_utc();
+    f.store
+        .cos_triage_ingest_batch(
+            "launch-wire-test",
+            "item-1",
+            &[task_core::chat::triage::CosTriageSource {
+                source_kind: "notice".into(),
+                source_key: "item-1".into(),
+                source_revision: "1".into(),
+                source_event_id: None,
+                operation_id: None,
+                summary: "知らせ".into(),
+                detail: String::new(),
+                policy_version: "1".into(),
+                task_id: None,
+            }],
+            now,
+        )
+        .expect("ingest");
+    let general = f
+        .store
+        .cos_thread_open(
+            &task_core::chat::ChatOpenThreadRequest { project_id: None },
+            now,
+        )
+        .expect("general")
+        .thread
+        .id;
+    f.tick();
+    let id = f.run_ids(&general).pop().expect("triage run claimed");
+    let before = f.run(&general, &id);
+    assert!(before.launched_at.is_none(), "{before:?}");
+    let at = f.d.now_utc();
+    f.join(&general).await;
+    let run = f.run(&general, &id);
+    assert!(f.workspace(&general).join("spawned.marker").is_file());
+    let launched = run.launched_at.clone().expect("launched_at recorded");
+    let parsed =
+        OffsetDateTime::parse(&launched, &time::format_description::well_known::Rfc3339).unwrap();
+    assert_eq!(parsed, at, "{run:?}");
+    assert_eq!(run.prelaunch_reason, None);
+}

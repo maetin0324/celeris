@@ -110,3 +110,21 @@ updated: 2026-11-06
 - flaky の疑い（原因は未確認）: 前回 check で `crates/campaign/tests/launcher.rs` の `a_swapped_daemon_binary_is_rejected_on_every_path_and_stop_only_touches_the_launcher_pid` だけが落ちた。メッセージは「pid … is not the daemon this launcher started (starttime/cmdline/image differ)」で daemon が healthy になる前に終了していた。この試験は `scripts/dev` の変更とは無関係で、再現と原因の切り分けはしていない。
 - 範囲外のため未変更: `crates/` 以下の Rust、worker、release gate は変更していない。この WU の変更は本進捗ファイルだけ。
 - 未解決: 上記 launcher 試験の flaky 原因の調査（別 task で扱う）。最終 check は main 取り込み後の HEAD で再実行が要る。
+
+## record-flaky: launcher 試験の flaky の記録
+
+### 未解決
+- `crates/campaign/tests/launcher.rs` の `a_swapped_daemon_binary_is_rejected_on_every_path_and_stop_only_touches_the_launcher_pid` が、`bash scripts/dev/test-affected.sh` の全体実行（引数なし、約 3541 件の並走）で落ちた。同じ試験を `cargo nextest run -p celeris-campaign --test launcher a_swapped_daemon` で単独実行すると 1 passed だった。
+- 失敗時のメッセージ: `start: measure-launcher: pid … is not the daemon this launcher started (starttime/cmdline/image differ): not signalling` と `daemon exited before becoming healthy`（launcher.rs:598）。daemon が healthy になる前に終了している。
+- 原因は未確認。並走の負荷、sandbox の userns 制限、試験内の時間依存のどれかは切り分けていない。この task の範囲外で、Rust は変更していない。`scripts/dev` の一時領域管理とも関係は確認していない。
+
+### 提案
+- 別 task で、この launcher 試験の flaky を調べて直す。手順の案は次のとおり。
+  1. 負荷を焼かず、`SIGSTOP`/`SIGCONT` や注入した遅延で daemon 起動前後の競合を決定的に再現する（`agent-docs/guides/testing.md`）。
+  2. daemon の終了理由を `daemon.log` から読み、待ちを「出来事待ち」に直す。
+  3. 直したら、単独実行と全体実行の両方で確かめる。
+
+### 検査（提出時の HEAD で実行。最後の同期の後には再実行していない）
+- `bash scripts/dev/tests/test-runner-tmp-lifecycle.sh && bash scripts/dev/tests/test-runner-tmp-repro.sh`: exit 0。
+- `sh scripts/dev/tests/test-affected-list.sh && bash scripts/dev/test-cli-binary-preparation.sh && bash scripts/dev/tests/test-parallel-fail-names.sh`: exit 0。
+- `git diff $CELERIS_WU_BASE -- crates scripts`: 差分なし。

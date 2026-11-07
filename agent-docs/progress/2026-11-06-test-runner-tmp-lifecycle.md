@@ -102,3 +102,11 @@ updated: 2026-11-06
 - 代わりに `bash scripts/dev/test-affected.sh --list` で対象を確認し、lifecycle 試験・repro 試験・`test-affected-list.sh`・`test-cli-binary-preparation.sh`・
   `test-parallel-fail-names.sh` を個別に実行した（結果は下の実行ログのとおり、提出時の HEAD で実行）。`crates/` に差分はなく、clippy・fmt は Rust 差分がないので省いた。
 - 未解決: 引数なしの `bash scripts/dev/test-affected.sh` は release gate と sandbox 外の操作に回す。sandbox では userns 試験が走らない。
+
+## verify-rerun: test-affected.sh の再実行（提出時 HEAD で実行）
+
+- 実行: `bash scripts/dev/test-affected.sh` を foreground で 1 回。exit 0。出力の末尾は「test-affected: 試験対象の変更なし（docs のみ等）」。この WU の base（`$CELERIS_WU_BASE`）と HEAD が同じで差分が無いため、cargo の試験は 0 件で、前回 check で落ちた launcher 試験は走っていない。
+- そのため `cargo nextest run -p celeris-campaign --test launcher a_swapped_daemon_binary` の単独実行は行っていない（今回は失敗が無く、対象外）。
+- flaky の疑い（原因は未確認）: 前回 check で `crates/campaign/tests/launcher.rs` の `a_swapped_daemon_binary_is_rejected_on_every_path_and_stop_only_touches_the_launcher_pid` だけが落ちた。メッセージは「pid … is not the daemon this launcher started (starttime/cmdline/image differ)」で daemon が healthy になる前に終了していた。この試験は `scripts/dev` の変更とは無関係で、再現と原因の切り分けはしていない。
+- 範囲外のため未変更: `crates/` 以下の Rust、worker、release gate は変更していない。この WU の変更は本進捗ファイルだけ。
+- 未解決: 上記 launcher 試験の flaky 原因の調査（別 task で扱う）。最終 check は main 取り込み後の HEAD で再実行が要る。

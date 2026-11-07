@@ -44,7 +44,8 @@ WorkUnit `risk-events`。基準は `$CELERIS_WU_BASE`。設計は [ADR 2026-11-0
 - 計画の範囲 check（許す path は `crates/`・`docs/protocol/`・`docs/api/v1/`・`web/api/generated/`・この進捗の dir）が `Cargo.lock`・`web/api/realtime/event-kinds.ts`・`web/api/realtime/invalidation-map.ts` を範囲外として exit 1 で落ちる（2 回目の run で同じ cwd から再実行して確認）。3 つとも目的から外せない変更なので、計画の check を直す必要がある（plan_issue で申告した）。
   - `Cargo.lock`: 基準の時点で workspace の crate は `regex` に直接依存していない。task-core で `re.search` の意味で path を当てるには `regex` を足すしかなく、task-core の依存の一覧に 1 行増える。
   - `web/api/realtime/*.ts`: `Event` に 4 種を足して `web/api/generated` を再生成すると、`event-kinds.ts` の網羅の型検査（`_exhaustive`）で tsc -b が落ち、`invalidation-map.test.ts`（schema.json の種類と `EVENT_KINDS`・`EVENT_INVALIDATION` の一致）も落ちる。
-  - 直し方の案: 範囲 check の `grep -vE` に `Cargo\.lock$` と `web/api/realtime/` を足す。
+  - 直し方の案: 範囲 check の `grep -vE` に `Cargo\.lock$` と `web/api/realtime/` を足す。この案の check は提出時の HEAD で exit 0 になった（4 回目の run で確認）。
+  - 3 回目の run の申告は届いていない。`result.json` に `yield.plan_issue` と `summary` を両方書いたため、worker が done として扱った（`claude_code.rs` の優先順は `question` > `summary` > `yield`）。4 回目の run で `yield` だけの `result.json` を書いて申告し直した。
 - `re.search` で当てるので、計画の write path が class より広い接頭辞（例 `crates/task-core/`）だと `^crates/task-core/src/store/` などの class に合わない。広い path を書いた計画は高 risk にならない。
 - 配線（方針の読み込み、planner_flow での `require_design_brief`・`assess_plan_risk` の呼び出し、event の追記、reviewer prompt の設計 review の節、`review.json` の `design` の読み込み）は後続の unit。
 

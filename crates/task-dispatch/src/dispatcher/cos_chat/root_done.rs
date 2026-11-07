@@ -15,20 +15,18 @@
 //! 行の状態は一方向（new → queued → notified | fallback）。DB に残るので、再起動後は未確定の行から続く。
 
 use std::collections::HashSet;
-use std::path::PathBuf;
-use std::process::Command;
 
 use task_core::chat::{ChatPostMessageRequest, ChatRunState, ChatSendMode, cos_thread_label};
 use task_core::{
-    DeliveryState, DeliveryStore, Event, NoticeStore, NotificationKind, NotificationStore,
-    RootDoneState, RootDoneSummary, TaskId, TaskStore, WorkspaceSpec,
+    DeliveryState, Event, NoticeStore, NotificationKind, NotificationStore, RootDoneState,
+    RootDoneSummary, TaskId, TaskStore,
 };
-use task_ops::root_done::{self, ChildFact, RootDoneFacts, RootDoneInputs};
+use task_ops::root_done::{self, RootDoneFacts};
 use time::OffsetDateTime;
 
 use super::launch::CosChatLaunch;
-use super::root_done_probe::{FactsProbe, RootDoneProbe, us};
 use crate::dispatcher::Dispatcher;
+use crate::root_done_probe::{FactsProbe, RootDoneProbe, collect_facts, us};
 
 /// `feed_cursor` の名前。
 pub const ROOT_DONE_CURSOR: &str = "root_done_summary";
@@ -64,46 +62,6 @@ fn truncate(text: &str, max: usize) -> String {
     let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
     out.push('…');
     out
-}
-
-/// 統合 commit の tree（delivery の head）から、この task を `tasks:` に持つ進捗ファイルを探して本文を返す。
-/// 読めなければ `None`（事実には「不明」と出る）。`git_calls` に起こした git の process の数を足す
-/// （ADR 2026-11-07-root-done-tick-phase-timing D1）。
-fn progress_markdown(
-    repo: &std::path::Path,
-    head: &str,
-    task_id: TaskId,
-    git_calls: &mut u64,
-) -> Option<String> {
-    let mut git = |args: &[&str]| -> Option<String> {
-        *git_calls += 1;
-        let out = Command::new("git")
-            .arg("-C")
-            .arg(repo)
-            .args(args)
-            .output()
-            .ok()?;
-        out.status
-            .success()
-            .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
-    };
-    let listing = git(&[
-        "ls-tree",
-        "-r",
-        "--name-only",
-        head,
-        "--",
-        "agent-docs/progress",
-    ])?;
-    for path in listing.lines().filter(|p| p.ends_with(".md")) {
-        let Some(text) = git(&["show", &format!("{head}:{path}")]) else {
-            continue;
-        };
-        if root_done::progress_mentions_task(&text, task_id) {
-            return Some(text);
-        }
-    }
-    None
 }
 
 impl CosChatLaunch {
@@ -241,62 +199,6 @@ impl CosChatLaunch {
         Ok(())
     }
 
-    /// D4: DB の行と進捗ファイルだけから事実を集める。段の時間は `probe` に足す
-    /// （ADR 2026-11-07-root-done-tick-phase-timing D1）。
-    fn root_done_facts(
-        &self,
-        task_id: TaskId,
-        probe: &mut FactsProbe,
-    ) -> Result<RootDoneFacts, String> {
-        let store = &self.store;
-        let task = probe
-            .get
-            .time(|| store.get(task_id))
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("task {task_id} is gone"))?;
-        let events = probe
-            .events_for
-            .time(|| store.events_for(task_id))
-            .map_err(|e| e.to_string())?;
-        probe.events_for_max = probe.events_for_max.max(events.len() as u64);
-        let delivery = probe
-            .delivery_get
-            .time(|| store.delivery_get(task_id))
-            .map_err(|e| e.to_string())?;
-        let children: Vec<ChildFact> = probe
-            .children
-            .time(|| store.children(task_id))
-            .map_err(|e| e.to_string())?
-            .into_iter()
-            .map(|c| ChildFact {
-                title: c.title,
-                status: c.status,
-            })
-            .collect();
-        let progress = delivery.as_ref().and_then(|d| {
-            let repo = probe
-                .repo_get
-                .time(|| store.repo_get(d.repo_id))
-                .ok()
-                .flatten()?;
-            let path: PathBuf = match repo.location {
-                WorkspaceSpec::Local { path, .. } => path,
-                _ => return None,
-            };
-            let started = std::time::Instant::now();
-            let text = progress_markdown(&path, &d.head, task_id, &mut probe.progress_git_calls);
-            probe.progress_us = probe.progress_us.saturating_add(us(started.elapsed()));
-            text
-        });
-        Ok(root_done::collect(RootDoneInputs {
-            task: &task,
-            events: &events,
-            delivery: delivery.as_ref(),
-            children: &children,
-            progress_markdown: progress.as_deref(),
-        }))
-    }
-
     fn root_done_advance(
         &mut self,
         row: &RootDoneSummary,
@@ -306,7 +208,7 @@ impl CosChatLaunch {
         let age = (now - row.created_at).whole_seconds();
         match row.state {
             RootDoneState::New => {
-                let facts = self.root_done_facts(row.task_id, probe)?;
+                let facts = collect_facts(&self.store, row.task_id, probe)?;
                 // 取り込み・release 準備が動いている間は、統合 commit・release が出るのを待つ（上限あり）。
                 if matches!(
                     facts.delivery_state,
@@ -402,7 +304,7 @@ impl CosChatLaunch {
                                 .map_err(|e| e.to_string())?,
                             None => String::new(),
                         };
-                        let facts = self.root_done_facts(row.task_id, probe)?;
+                        let facts = collect_facts(&self.store, row.task_id, probe)?;
                         if text.trim().is_empty() {
                             return self.root_done_fallback(row, &facts, Some(thread_id), now);
                         }
@@ -412,7 +314,7 @@ impl CosChatLaunch {
                         ChatRunState::Failed | ChatRunState::Stopped | ChatRunState::Interrupted,
                         _,
                     )) => {
-                        let facts = self.root_done_facts(row.task_id, probe)?;
+                        let facts = collect_facts(&self.store, row.task_id, probe)?;
                         self.root_done_fallback(row, &facts, Some(thread_id), now)
                     }
                     Some(_) => Ok(()),
@@ -424,7 +326,7 @@ impl CosChatLaunch {
                         }
                         // 未着手のまま待ちすぎた（容量待ち・停止）: 入力を取り下げて決定的な短文に切り替える。
                         let _ = self.store.chat_message_cancel(thread_id, input_id, now);
-                        let facts = self.root_done_facts(row.task_id, probe)?;
+                        let facts = collect_facts(&self.store, row.task_id, probe)?;
                         self.root_done_fallback(row, &facts, Some(thread_id), now)
                     }
                 }

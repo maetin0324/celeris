@@ -29,4 +29,7 @@ tasks: [01M6VQH1GY87Q79J406DFNQP6G]
 
 ## 試験
 - 閾値を 0 にした dispatcher で `tick_cos_chat_launch` と `tick` を回し、`cos.root_done.*` の項目が `step_us` に出ることを確かめる。閾値を最大にしたときは出ないことを確かめる。時計・sleep・負荷は使わない。
-- store の待ちの累積は、別の thread が書き込み接続を持っている間に書き込みを呼び、待ちが正になることを確かめる。待っている thread の数（`writer_waiters`）を見てから lock を放すので、負荷で順序が崩れても結果は変わらない。
+- store の待ちの累積は、別の thread が書き込み接続を持っている間に書き込みを呼び、待ちが正になることを確かめる。待っている thread の数（`store_writer_waiters`）を見てから lock を放すので、負荷で順序が崩れても結果は変わらない。
+
+## 付記（2026-11-07）: 置き場所
+- repo health の size.responsibility-growth が、閾値を超えている既存の単位（task-dispatch の `dispatcher` module、task-core の `store` module、`SqliteStore` の method 数）の増加を worsened として落とす。計測の code は crate 直下の新しい module に置く: `crates/task-core/src/lock_wait.rs`（`store_lock_wait`・`store_writer_waiters`。`SqliteStore` は接続を取る 3 か所でここを呼ぶだけで、method を足さない）と `crates/task-dispatch/src/root_done_probe.rs`（`RootDoneProbe` と、測りながら事実を集める `collect_facts`・`progress_markdown`。root_done.rs から移す）。

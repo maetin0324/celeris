@@ -260,7 +260,7 @@ impl Dispatcher {
             route_reservations: HashMap::new(),
             triage: super::triage::CosTriageState::default(),
             project_controller: None,
-            root_done_probe_threshold: super::root_done_probe::ROOT_DONE_PROBE_THRESHOLD,
+            root_done_probe_threshold: crate::root_done_probe::ROOT_DONE_PROBE_THRESHOLD,
         });
     }
 

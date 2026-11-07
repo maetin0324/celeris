@@ -29,6 +29,8 @@ pub mod project_decider_ts;
 /// ADR-0033 D3（Phase 25）: run の終端から決定的に作る報告。
 pub(crate) mod reports;
 pub mod review;
+/// ADR 2026-11-07-root-done-tick-phase-timing: root_done_tick の段別計測と事実の収集。
+pub(crate) mod root_done_probe;
 /// ADR-0075 D2 / D6（Phase G1）: scratch pool の走査・GC の実行・削除と測定のスレッド・状態の組み立て。
 pub mod scratch_gc;
 /// ADR 2026-11-02-ts-control-layer-boundary 付記 S2: TS 制御層の判定を呼ぶ口（`PolicyScript`）と compare の判定。

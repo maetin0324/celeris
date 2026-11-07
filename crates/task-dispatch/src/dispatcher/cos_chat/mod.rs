@@ -9,7 +9,6 @@ mod relay_rejudge;
 pub(crate) mod review;
 pub(crate) mod rollover;
 pub(crate) mod root_done;
-mod root_done_probe;
 pub(crate) mod sink;
 pub mod triage;
 pub(crate) mod workspace_files;

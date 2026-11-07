@@ -4,30 +4,34 @@
 //! 超えた tick だけ、`cos.root_done.*` の項目を tick_cos_chat_launch の内訳に足す（D3）。slow tick の警告
 //! （`tick_steps.rs` の "slow tick phases"）はその列を `steps_us` に出す。時間の項目は µs、行数・回数の項目は
 //! 名前の末尾が `_rows`・`_calls`・`_max`。store の呼び出しは待ち（接続を取るまで）と処理（残り）に分ける（D2）。
+//! 測りながら事実を集める `collect_facts`（root_done の D4）と、そこから呼ぶ `progress_markdown` もここに置く。
 
+use std::path::PathBuf;
+use std::process::Command;
 use std::time::{Duration, Instant};
 
-use task_core::{TaskId, store_lock_wait};
+use task_core::{DeliveryStore, SqliteStore, TaskId, TaskStore, WorkspaceSpec, store_lock_wait};
+use task_ops::root_done::{self, ChildFact, RootDoneFacts, RootDoneInputs};
 
 /// これを超えた `root_done_tick` だけ内訳を出す（D3）。`CosChatLaunch::root_done_probe_threshold` の既定値。
 pub(crate) const ROOT_DONE_PROBE_THRESHOLD: Duration = Duration::from_millis(100);
 
-pub(super) fn us(d: Duration) -> u64 {
+pub(crate) fn us(d: Duration) -> u64 {
     u64::try_from(d.as_micros()).unwrap_or(u64::MAX)
 }
 
 /// store の呼び出しの回数・待ち・処理（µs）。
 #[derive(Debug, Default, Clone, Copy)]
-pub(super) struct StoreSpan {
-    pub(super) calls: u64,
-    pub(super) wait_us: u64,
-    pub(super) work_us: u64,
+pub(crate) struct StoreSpan {
+    pub(crate) calls: u64,
+    pub(crate) wait_us: u64,
+    pub(crate) work_us: u64,
 }
 
 impl StoreSpan {
     /// `f` を 1 回の store の呼び出しとして測る。待ちはこの thread の `store_lock_wait` の増分、
     /// 処理は経過時間から待ちを引いた残り（SQLite の `busy_timeout` の待ちは処理に入る）。
-    pub(super) fn time<T>(&mut self, f: impl FnOnce() -> T) -> T {
+    pub(crate) fn time<T>(&mut self, f: impl FnOnce() -> T) -> T {
         let wait_before = store_lock_wait();
         let started = Instant::now();
         let out = f();
@@ -54,21 +58,21 @@ impl StoreSpan {
 
 /// `root_done_facts` 1 回分（または合計）の内訳。
 #[derive(Debug, Default, Clone, Copy)]
-pub(super) struct FactsProbe {
-    pub(super) get: StoreSpan,
-    pub(super) events_for: StoreSpan,
+pub(crate) struct FactsProbe {
+    pub(crate) get: StoreSpan,
+    pub(crate) events_for: StoreSpan,
     /// `events_for` が返した件数の最大。
-    pub(super) events_for_max: u64,
-    pub(super) delivery_get: StoreSpan,
-    pub(super) children: StoreSpan,
-    pub(super) repo_get: StoreSpan,
+    pub(crate) events_for_max: u64,
+    pub(crate) delivery_get: StoreSpan,
+    pub(crate) children: StoreSpan,
+    pub(crate) repo_get: StoreSpan,
     /// `progress_markdown` の時間（git の process を含む）と git の起動回数。
-    pub(super) progress_us: u64,
-    pub(super) progress_git_calls: u64,
+    pub(crate) progress_us: u64,
+    pub(crate) progress_git_calls: u64,
 }
 
 impl FactsProbe {
-    pub(super) fn total_us(&self) -> u64 {
+    pub(crate) fn total_us(&self) -> u64 {
         [
             self.get.total_us(),
             self.events_for.total_us(),
@@ -97,34 +101,34 @@ impl FactsProbe {
 
 /// 1 回の `root_done_tick` の内訳。
 #[derive(Debug, Default)]
-pub(super) struct RootDoneProbe {
-    pub(super) ingest_us: u64,
-    pub(super) cursor_get: StoreSpan,
-    pub(super) events_since: StoreSpan,
-    pub(super) events_since_rows: u64,
+pub(crate) struct RootDoneProbe {
+    pub(crate) ingest_us: u64,
+    pub(crate) cursor_get: StoreSpan,
+    pub(crate) events_since: StoreSpan,
+    pub(crate) events_since_rows: u64,
     /// done 遷移の event を持つ task（頁の中で重複を除いた数）。
-    pub(super) candidate_rows: u64,
-    pub(super) candidate_get: StoreSpan,
-    pub(super) candidate_events_for: StoreSpan,
-    pub(super) candidate_events_for_max: u64,
-    pub(super) insert: StoreSpan,
-    pub(super) cursor_set: StoreSpan,
-    pub(super) advance_us: u64,
-    pub(super) open: StoreSpan,
-    pub(super) open_rows: u64,
-    pub(super) facts: FactsProbe,
-    pub(super) facts_row_max_us: u64,
+    pub(crate) candidate_rows: u64,
+    pub(crate) candidate_get: StoreSpan,
+    pub(crate) candidate_events_for: StoreSpan,
+    pub(crate) candidate_events_for_max: u64,
+    pub(crate) insert: StoreSpan,
+    pub(crate) cursor_set: StoreSpan,
+    pub(crate) advance_us: u64,
+    pub(crate) open: StoreSpan,
+    pub(crate) open_rows: u64,
+    pub(crate) facts: FactsProbe,
+    pub(crate) facts_row_max_us: u64,
 }
 
 impl RootDoneProbe {
     /// 1 行分の事実づくりを合計に足す。
-    pub(super) fn add_row(&mut self, row: &FactsProbe) {
+    pub(crate) fn add_row(&mut self, row: &FactsProbe) {
         self.facts.add(row);
         self.facts_row_max_us = self.facts_row_max_us.max(row.total_us());
     }
 
     /// 閾値を超えた行の警告（D3）。task・state・段の µs・件数を 1 行に出す。
-    pub(super) fn warn_row(task: TaskId, state: &str, row: &FactsProbe) {
+    pub(crate) fn warn_row(task: TaskId, state: &str, row: &FactsProbe) {
         tracing::warn!(
             task = %task,
             state,
@@ -145,7 +149,7 @@ impl RootDoneProbe {
     }
 
     /// `cos.root_done.*` の項目（D3）。
-    pub(super) fn parts(&self) -> Vec<(&'static str, u64)> {
+    pub(crate) fn parts(&self) -> Vec<(&'static str, u64)> {
         let f = &self.facts;
         let advance_other = self
             .advance_us
@@ -228,6 +232,101 @@ impl RootDoneProbe {
             ("cos.root_done.advance_other_us", advance_other),
         ]
     }
+}
+
+/// 統合 commit の tree（delivery の head）から、この task を `tasks:` に持つ進捗ファイルを探して本文を返す。
+/// 読めなければ `None`（事実には「不明」と出る）。`git_calls` に起こした git の process の数を足す
+/// （ADR 2026-11-07-root-done-tick-phase-timing D1）。
+fn progress_markdown(
+    repo: &std::path::Path,
+    head: &str,
+    task_id: TaskId,
+    git_calls: &mut u64,
+) -> Option<String> {
+    let mut git = |args: &[&str]| -> Option<String> {
+        *git_calls += 1;
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .output()
+            .ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+    let listing = git(&[
+        "ls-tree",
+        "-r",
+        "--name-only",
+        head,
+        "--",
+        "agent-docs/progress",
+    ])?;
+    for path in listing.lines().filter(|p| p.ends_with(".md")) {
+        let Some(text) = git(&["show", &format!("{head}:{path}")]) else {
+            continue;
+        };
+        if root_done::progress_mentions_task(&text, task_id) {
+            return Some(text);
+        }
+    }
+    None
+}
+
+/// D4: DB の行と進捗ファイルだけから事実を集める。段の時間は `probe` に足す
+/// （ADR 2026-11-07-root-done-tick-phase-timing D1）。
+pub(crate) fn collect_facts(
+    store: &SqliteStore,
+    task_id: TaskId,
+    probe: &mut FactsProbe,
+) -> Result<RootDoneFacts, String> {
+    let task = probe
+        .get
+        .time(|| store.get(task_id))
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("task {task_id} is gone"))?;
+    let events = probe
+        .events_for
+        .time(|| store.events_for(task_id))
+        .map_err(|e| e.to_string())?;
+    probe.events_for_max = probe.events_for_max.max(events.len() as u64);
+    let delivery = probe
+        .delivery_get
+        .time(|| store.delivery_get(task_id))
+        .map_err(|e| e.to_string())?;
+    let children: Vec<ChildFact> = probe
+        .children
+        .time(|| store.children(task_id))
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|c| ChildFact {
+            title: c.title,
+            status: c.status,
+        })
+        .collect();
+    let progress = delivery.as_ref().and_then(|d| {
+        let repo = probe
+            .repo_get
+            .time(|| store.repo_get(d.repo_id))
+            .ok()
+            .flatten()?;
+        let path: PathBuf = match repo.location {
+            WorkspaceSpec::Local { path, .. } => path,
+            _ => return None,
+        };
+        let started = Instant::now();
+        let text = progress_markdown(&path, &d.head, task_id, &mut probe.progress_git_calls);
+        probe.progress_us = probe.progress_us.saturating_add(us(started.elapsed()));
+        text
+    });
+    Ok(root_done::collect(RootDoneInputs {
+        task: &task,
+        events: &events,
+        delivery: delivery.as_ref(),
+        children: &children,
+        progress_markdown: progress.as_deref(),
+    }))
 }
 
 #[cfg(test)]

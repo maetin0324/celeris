@@ -3,13 +3,21 @@
 //! 書き込み接続の `Mutex` を取るまでの時間と、読み取りプールから接続を借りるまでの時間を、呼んだ thread の
 //! 累積値に足す。呼び出し側は前後の差を取り、「待ち」と「処理（経過時間 − 待ち）」を分けて記録する。
 //! SQLite の file lock の `busy_timeout` の待ちは SQL の実行の内側にあるので、ここには入らない。
+//! store の module（`store/`）の外に置き、`SqliteStore` は接続を取る 3 か所でここを呼ぶだけにする。
 
 use std::cell::Cell;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
+
+use crate::StoreError;
 
 thread_local! {
     static WAIT_NS: Cell<u64> = const { Cell::new(0) };
 }
+
+/// 書き込み接続の `Mutex` を今待っている thread の数（process 内の全 store の合計）。
+static WRITER_WAITERS: AtomicU64 = AtomicU64::new(0);
 
 /// この thread が store の接続（書き込み接続の `Mutex`・読み取りプール）を取るまでに待った時間の累積。
 /// 単調に増える。区間の待ちは前後の差で求める。
@@ -17,10 +25,31 @@ pub fn store_lock_wait() -> Duration {
     Duration::from_nanos(WAIT_NS.with(Cell::get))
 }
 
-/// `since` から今までを、この thread の待ちに足す。
-pub(super) fn add_since(since: Instant) {
-    let ns = u64::try_from(since.elapsed().as_nanos()).unwrap_or(u64::MAX);
+/// 書き込み接続の `Mutex` を今待っている thread の数（試験と診断用の観測値）。
+pub fn store_writer_waiters() -> u64 {
+    WRITER_WAITERS.load(Ordering::Relaxed)
+}
+
+/// `f`（接続を取る処理）にかかった時間を、この thread の待ちに足す。
+pub(crate) fn timed<T>(f: impl FnOnce() -> T) -> T {
+    let started = Instant::now();
+    let out = f();
+    let ns = u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX);
     WAIT_NS.with(|c| c.set(c.get().saturating_add(ns)));
+    out
+}
+
+/// `Mutex` を取り、待った時間をこの thread の待ちに足す。
+pub(crate) fn lock<T>(m: &Mutex<T>) -> Result<MutexGuard<'_, T>, StoreError> {
+    timed(|| m.lock()).map_err(|_| StoreError::Poisoned)
+}
+
+/// 書き込み接続の `Mutex` を取る。待っている間は `store_writer_waiters` に数える。
+pub(crate) fn lock_writer<T>(m: &Mutex<T>) -> Result<MutexGuard<'_, T>, StoreError> {
+    WRITER_WAITERS.fetch_add(1, Ordering::Relaxed);
+    let guard = lock(m);
+    WRITER_WAITERS.fetch_sub(1, Ordering::Relaxed);
+    guard
 }
 
 #[cfg(test)]
@@ -67,7 +96,7 @@ mod tests {
         };
         // waiter が `lock()` に入って待ちを数え始めるまで、上限付きで出来事を待つ。
         let deadline = Instant::now() + Duration::from_secs(60);
-        while store.writer_waiters() == 0 {
+        while store_writer_waiters() == 0 {
             assert!(
                 Instant::now() < deadline,
                 "waiter never queued on the writer mutex"
@@ -80,6 +109,6 @@ mod tests {
         assert!(waited >= Duration::from_millis(20), "{waited:?}");
         // 待ったのは waiter の thread で、この thread の累積は増えていない。
         assert!(store_lock_wait() - before < Duration::from_millis(500));
-        assert_eq!(store.writer_waiters(), 0);
+        assert_eq!(store_writer_waiters(), 0);
     }
 }

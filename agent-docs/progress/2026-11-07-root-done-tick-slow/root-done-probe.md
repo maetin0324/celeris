@@ -19,8 +19,8 @@ completed: 2026-11-07
 ## 変更（commit は件名。基準は `$CELERIS_WU_BASE`）
 - `root-done-probe: root_done_tick の段別計測の ADR` — `agent-docs/adr/2026-11-07-root-done-tick-phase-timing.md`。実装より前の commit。
 - `root-done-probe: root_done_tick の段別計測を slow tick の内訳に出す（cos.root_done.*、store の待ちと処理を分ける）`
-  - task-core: `store_lock_wait()`（`crates/task-core/src/store/lock_wait.rs`）。thread ごとに、書き込み接続の `Mutex` を取るまでの時間と読み取りプールから接続を借りるまでの時間を累積する。`SqliteStore::lock()` と `with_read_conn()` が足す。試験の観測用に `SqliteStore::writer_waiters()`（Mutex を待っている thread の数）を足した。
-  - task-dispatch: `RootDoneProbe`（`crates/task-dispatch/src/dispatcher/cos_chat/root_done_probe.rs`）。`root_done_tick` が 100 ms（`ROOT_DONE_PROBE_THRESHOLD`）以上かかった tick だけ、`cos.root_done.*` の項目を tick_cos_chat_launch の内訳の末尾に足す。`TickReport::step_us` に載るので、slow tick の警告 "slow tick phases" の `steps_us` に出る。事実づくりが閾値を超えた行は、別に "slow root-done row" の警告を 1 行出す（task・state・段ごとの µs・events_for の件数・git の起動回数）。閾値より速い tick は今までと同じ列で、加わる費用は store の呼び出しごとの `Instant::now()` 2 回と固定の大きさの struct への加算だけ。
+  - task-core: `store_lock_wait()`（`crates/task-core/src/lock_wait.rs`）。thread ごとに、書き込み接続の `Mutex` を取るまでの時間と読み取りプールから接続を借りるまでの時間を累積する。`SqliteStore::lock()` と `with_read_conn()` の接続を取る 3 か所がこの module を呼ぶ。試験の観測用に `store_writer_waiters()`（書き込み接続の Mutex を待っている thread の数）を足した。
+  - task-dispatch: `RootDoneProbe`（`crates/task-dispatch/src/root_done_probe.rs`）。事実の収集（`collect_facts`、旧 `CosChatLaunch::root_done_facts`）と `progress_markdown` も root_done.rs からこの module へ移した。`root_done_tick` が 100 ms（`ROOT_DONE_PROBE_THRESHOLD`）以上かかった tick だけ、`cos.root_done.*` の項目を tick_cos_chat_launch の内訳の末尾に足す。`TickReport::step_us` に載るので、slow tick の警告 "slow tick phases" の `steps_us` に出る。事実づくりが閾値を超えた行は、別に "slow root-done row" の警告を 1 行出す（task・state・段ごとの µs・events_for の件数・git の起動回数）。閾値より速い tick は今までと同じ列で、加わる費用は store の呼び出しごとの `Instant::now()` 2 回と固定の大きさの struct への加算だけ。
 - この進捗ファイルの commit。
 
 ### 出る項目（時間は µs。`_rows`・`_calls`・`_max` で終わる項目は件数）
@@ -30,8 +30,11 @@ completed: 2026-11-07
 
 ### 試験
 - `root_done_probe_parts_reach_the_tick_steps_only_over_the_threshold`（task-dispatch、`dispatcher::tests::cos_chat_triage::root_done`）: 閾値を最大にした pass では `cos.root_done.*` が出ないこと、閾値 0 の pass では取り込み・前進の全段と件数（events_since_calls 1、candidate_rows 1、insert_calls 1、open_rows 1、facts_calls 1、progress_git_calls 0）が出ること、通常の `Dispatcher::tick()` の `TickReport::step_us`（"slow tick phases" が出す列）にも載ることを確かめる。閾値は欄の差し替えで、時計・sleep・負荷は使わない。
-- `writer_mutex_wait_is_counted_for_the_waiting_thread_only`（task-core、`store::lock_wait`）: 別の thread が書き込み接続を持っている間の書き込みで、待ちが 20 ms 以上になり、待たなかった thread の累積は増えないことを確かめる。`writer_waiters()` が 1 になるのを見てから lock を放すので、負荷で順序が崩れても結果は変わらない。
+- `writer_mutex_wait_is_counted_for_the_waiting_thread_only`（task-core、`lock_wait`）: 別の thread が書き込み接続を持っている間の書き込みで、待ちが 20 ms 以上になり、待たなかった thread の累積は増えないことを確かめる。`store_writer_waiters()` が 1 になるのを見てから lock を放すので、負荷で順序が崩れても結果は変わらない。
 - `store_span_counts_calls_and_splits_wait_from_work`・`parts_are_prefixed_and_unique`（task-dispatch、`root_done_probe`）。
+
+### repo health（size.responsibility-growth）への対応
+最初の実装は計測の code を `crates/task-dispatch/src/dispatcher/`・`crates/task-core/src/store/` の中に足したので、閾値を超えている既存の単位（dispatcher の module 35,609 行、store の module 20,056 行、`SqliteStore` の method 733）を増やし、`check-health.sh` が worsened 3 件で落ちた。計測の code と事実の収集を crate 直下の新しい module（`crates/task-dispatch/src/root_done_probe.rs`・`crates/task-core/src/lock_wait.rs`）へ移し、`SqliteStore` には method を足さない形にした。その後の `check-health.sh` は worsened 0（verdict=pass）。
 
 ## 本番 DB の写しでの測定
 手順: backup `/local/celeris/state/backups/20261107-182359-pre-66d9c1dae567.sqlite3` を `$TMPDIR` に複製した（元の file・本番 DB・state dir には書いていない）。その複製から 3 つの版を作り、`crates/celeris/tests/tick_prod_copy_steps.rs`（`TICK_PROD_DB=<版> cargo nextest run -p celeris --test tick_prod_copy_steps --run-ignored all --no-capture`）で測った。試験はさらに一時 dir へ複製して開く。cluster・browser・通知・remote・LLM・外部接続は config に無い。CPU の負荷はかけていない。
@@ -71,7 +74,7 @@ delivery の head の tree の進捗ファイルは 1,564〜1,584 件で、こ�
 - 本番の 18:30〜19:25Z に待ちの状態の new 行が何行あったかは確かめていない（本番 DB は読まない。この計測が入った release の slow tick の行で `cos.root_done.open_rows` と `facts.progress_git_calls` を見れば決まる）。
 - SQLite の `busy_timeout` の待ち（他の接続・process の書き込みの file lock）は `work_us` の側に入り、`wait_us` とは分けられない。`progress_markdown` 以外の段の `work_us` が本番だけで大きければ、この待ちを疑う。
 - dispatch_ready の段別は WU dispatch-ready-probe の範囲で、この WU では測っていない。
-- 並行する WU dispatch-ready-probe も store の待ちの計測を task-core に足すと、`crates/task-core/src/store/mod.rs` の `lock()`・`with_read_conn()` で衝突しうる。統合のときに 1 つにまとめる。
+- 並行する WU dispatch-ready-probe も store の待ちの計測を task-core に足すと、`crates/task-core/src/store/mod.rs` の `lock()`・`with_read_conn()` で衝突しうる。統合のときは `crate::lock_wait` の 1 つにまとめる。
 
 ## 提案（WU root-done-fix 向け。決めるのは ADR の付記か新しい ADR）
 - 案 1: delivery の待ちの間は `progress_markdown` を呼ばない。待ちの判定に要るのは `delivery_state` だけなので、先に `delivery_get` だけを読み、待ちが続くなら事実を作らずに戻る。待ちが終わった tick に 1 回だけ全部の事実を作る。費用は待ちの間 0 回、行ごとに 1 回になる。

@@ -66,6 +66,7 @@ updated: 2026-11-08
 ## 場所
 - `crates/task-core/src/model.rs:137` `WorkspaceSpec::local_mode` は `Remote` に `Shared` を返す（ADR-0041 D1「Remote は従来の経路（Shared 相当）」）。
 - `crates/task-core/src/execution_gate.rs:185` `out_of_scope_rule` は `local_mode() == Shared` を gate の対象外（`atomic/out-of-scope`）にする。この判定は人の明示（`execution_hint` の explicit compound）より先に効く。
+  - 同じ条件の 2 つ目の項 `remote_mode() == Shared`（186 行）は、1 つ目の項が `Remote` を全部 `Shared` として拾うので、どの task でも結果を変えない。2 つ目の項は「`Remote` のうち `mode: Shared` のものだけを対象外にする」意図で書かれた可能性がある。この意図は ADR で確かめていない（未確認）。
 - 人が後から compound に変える経路も無い。`crates/task-ops/src/regate.rs:100` の `set_execution_mode`（人の再 gate・replan の依頼）は同じ規則で `Validation` を返し、`regate.rs:186` の `record_human_plan_gate` は何もしない。
 - remote の task が計画を持つのは、人が計画を採用した（`PUT /tasks/{id}/execution-plan`）場合だけ。そのとき planner が走るのは WU の失敗などによる自動の replan だけになる。この経路は試していない（未確認）。
 
@@ -91,3 +92,10 @@ updated: 2026-11-08
 - (A) gate で remote workspace の task も compound にできるようにする。例: `out_of_scope_rule` の `Shared` の判定を `Local` の mode だけに当てる（remote の WU は `parallel_mode` で既に並列 1 に落ちる）。その後、下書きの前置きを外して試験を足す。product code（`crates/task-core/`）の変更なので、範囲 check に `crates/task-core/` が要る。付記 (d) の前提（remote の task が planner の計画を持つ）に合う。
 - (B) remote workspace の task は atomic のままにし、付記 (d) D1〜D3 を「remote の task は planner の計画を持たない（人の計画の自動 replan のときだけ設計 review が起きる）」に改める。remote の試験は自動 replan の経路で書くか、atomic のまま走ることを確かめる試験にする。
 - どちらでも、付記 (d) D3 の「remote の task は計画ごとに reviewer の run が 1 回増える」は今の gate では起きない。
+
+## 再実行（check の不合格の後）
+- 前回の run は replan の依頼を `result.json` の summary に書いた。celeris はその run を done として扱い、計画の check 2 本を走らせ、どちらも exit 1 で落ちた。
+  - 件数の check: `health_review_flow_ tests: 2`（3 件以上が要る）。
+  - `grep -q 'WorkspaceSpec::Remote' … flow_tests.rs && grep -q 'fn health_review_flow_remote_workspace' …`: 試験が無いので落ちた。
+- この run も gate の規則（`execution_gate.rs:185`）が変わっていないことを確かめた。この 2 本の check は product code（`crates/task-core/`）を変えないと通らない。Objective は product code の変更を禁じている。そこで今回は done を返さず、`result.json` に `yield.plan_issue` を書いて replan を求める。
+- 下書きの試験（run の成果物 dir の `remote-flow-draft.patch`）は今回も branch に入れていない。本番で作れない前置き（`routing.execution` に人の compound の判定を前もって入れる）を持つ試験で件数の check を通すと、受け入れ条件を誤って満たすことになるため。

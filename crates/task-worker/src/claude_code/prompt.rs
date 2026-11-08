@@ -1665,6 +1665,11 @@ fn build_review_prompt(task: &Task, context: &RunContext, run_id: &str, artifact
     out.push('\n');
     out.push_str(&harness_artifacts_section_for_review(context));
     match &context.review {
+        // 付記 (a) A1・A2: 設計 review の run は採用前の計画を判定する。受け入れ条件の判定と worker の evidence の
+        // 節は出さない。
+        Some(review) if review.design.is_some() => {
+            out.push_str(&crate::change_rules::review::design_section(Some(review)));
+        }
         Some(review) => {
             if !review.decisions.is_empty() || !review.answers.is_empty() {
                 out.push_str("## Human decisions and answers (authoritative)\n\

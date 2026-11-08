@@ -210,42 +210,15 @@ impl SqliteStore {
     /// 2. `Approval` 以外が終端 → 終端でない直接の `Approval` 子を `Cancel`（P-37）
     /// 3. failed/cancelled → 終端でない後続（`depends_on` に含むタスク）を `DependencyFailed`（P-9、推移的）
     /// 4. 終端 → 終端でない（reopen・rereview・後続の復帰）→ 3 で cancel された後続を `DependencyReopened` で戻す
-    ///    （ADR 2026-11-08-health-enforcement-loop D7、推移的）
+    ///    （ADR 2026-11-08-health-enforcement-loop D7、推移的。`crate::dependency_reopen`）
     pub(super) fn cascade_after_transition_tx(
         tx: &Connection,
         task: &Task,
         from: Status,
         to: Status,
     ) -> Result<(), StoreError> {
-        // ADR 2026-11-08-health-enforcement-loop D7（P-9・決定 p9-scope）: 依存先が終端から戻ったら、その失敗で
-        // `dependency_failed` の cancel になった後続を戻す。戻すのは新しい `Transitioned` の追記だけで、cancel の
-        // event は書き換えない。人・CoS・連鎖の中止（`cancel`・`parent_cancelled` など）で cancel された後続と、
-        // ほかの依存先がまだ failed・cancelled の後続は戻さない（後者は、その依存先が戻ったときにここを通る）。
-        // 戻した後続の遷移がさらに `from.is_terminal()` の枝を通り、その後続を同じ条件で戻す。
-        if from.is_terminal() && !to.is_terminal() {
-            for dependent in Self::dependents_of_tx(tx, task.id)? {
-                let Some(dep_task) = Self::get_locked(tx, dependent)? else {
-                    continue;
-                };
-                let Some(before) = Self::dependency_cancelled_from_tx(tx, &dep_task)? else {
-                    continue;
-                };
-                if Self::has_unsuccessful_dependency_tx(tx, &dep_task, task.id)? {
-                    continue;
-                }
-                Self::apply_transition_tx(
-                    tx,
-                    dependent,
-                    Trigger::DependencyReopened {
-                        draft: before == Status::Draft,
-                    },
-                    vec![],
-                )?;
-            }
-            return Ok(());
-        }
         if from.is_terminal() || !to.is_terminal() {
-            return Ok(());
+            return crate::dependency_reopen::restore_dependents_tx(tx, task.id, from, to);
         }
         let unsuccessful = matches!(to, Status::Failed | Status::Cancelled);
         if task.kind == TaskKind::Approval {
@@ -358,8 +331,8 @@ impl SqliteStore {
         Ok(out)
     }
 
-    /// `depends_on` に `dep_id` を含むタスク（状態を問わない）。Phase 31（やり直し）が使う。
-    pub(super) fn dependents_of_tx(
+    /// `depends_on` に `dep_id` を含むタスク（状態を問わない）。Phase 31（やり直し）と依存先の reopen が使う。
+    pub(crate) fn dependents_of_tx(
         tx: &Connection,
         dep_id: TaskId,
     ) -> Result<Vec<TaskId>, StoreError> {
@@ -382,59 +355,6 @@ impl SqliteStore {
         tx: &Connection,
         task_id: TaskId,
     ) -> Result<Option<String>, StoreError> {
-        Ok(Self::last_transitioned_tx(tx, task_id)?.map(|(_, reason)| reason))
-    }
-
-    /// `task_id` の最後の `Event::Transitioned` の `(from, reason)`。無ければ `None`。
-    fn last_transitioned_tx(
-        tx: &Connection,
-        task_id: TaskId,
-    ) -> Result<Option<(Status, String)>, StoreError> {
-        let mut stmt = tx.prepare(
-            "SELECT json FROM events WHERE task_id = ?1 AND json LIKE '%\"type\":\"transitioned\"%' ORDER BY seq DESC LIMIT 1",
-        )?;
-        let json: Option<String> = stmt
-            .query_row(params![task_id.to_string()], |row| row.get(0))
-            .optional()?;
-        let Some(json) = json else {
-            return Ok(None);
-        };
-        let event: Event = serde_json::from_str(&json)?;
-        match event {
-            Event::Transitioned { from, reason, .. } => Ok(Some((from, reason))),
-            _ => Ok(None),
-        }
-    }
-
-    /// `task` が依存先の失敗で cancel されたままか（`cancelled` で、最後の遷移が `dependency_failed`）。
-    /// そうなら cancel の前の状態を返す。cancel の後に遷移は無い（`cancelled` から出るのは retry の付け替えと
-    /// `DependencyReopened` だけで、どちらも最後の遷移の理由を変える）ので、人・CoS の cancel（`cancel`）や
-    /// 連鎖の中止（`parent_cancelled` など）とはここで分かれる。retry の付け替え（`retry_task_tx`）と依存先の
-    /// reopen による復帰（`cascade_after_transition_tx`）が同じ判定を使う（ADR 2026-11-08-health-enforcement-loop D7.2）。
-    pub(super) fn dependency_cancelled_from_tx(
-        tx: &Connection,
-        task: &Task,
-    ) -> Result<Option<Status>, StoreError> {
-        if task.status != Status::Cancelled {
-            return Ok(None);
-        }
-        Ok(Self::last_transitioned_tx(tx, task.id)?
-            .filter(|(_, reason)| reason == Trigger::DependencyFailed.name())
-            .map(|(from, _)| from))
-    }
-
-    /// `task` の依存先のうち `except` 以外に failed・cancelled（または見つからない）ものがあるか。
-    fn has_unsuccessful_dependency_tx(
-        tx: &Connection,
-        task: &Task,
-        except: TaskId,
-    ) -> Result<bool, StoreError> {
-        for dep in task.depends_on.iter().filter(|d| **d != except) {
-            match Self::task_status_tx(tx, *dep)? {
-                Some(Status::Failed | Status::Cancelled) | None => return Ok(true),
-                Some(_) => {}
-            }
-        }
-        Ok(false)
+        Ok(crate::dependency_reopen::last_transitioned_tx(tx, task_id)?.map(|(_, reason)| reason))
     }
 }

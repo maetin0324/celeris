@@ -612,7 +612,9 @@ impl SqliteStore {
             };
             let eligible = match dep.status {
                 Status::Draft | Status::Ready | Status::Blocked => true,
-                Status::Cancelled => Self::dependency_cancelled_from_tx(tx, &dep)?.is_some(),
+                Status::Cancelled => {
+                    crate::dependency_reopen::cancelled_by_dependency_from_tx(tx, &dep)?.is_some()
+                }
                 _ => false,
             };
             if !eligible {

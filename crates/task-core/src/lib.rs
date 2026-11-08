@@ -27,6 +27,8 @@ pub mod browser_store;
 pub mod browser_wait;
 /// ADR-0090: クラスタ job（PBS / Slurm）の durable wait（`cluster_job_waits`・poll の出力の parser）。
 pub mod cluster_job;
+/// ADR 2026-11-08-health-enforcement-loop D7（P-9）: 依存先の reopen で `dependency_failed` の後続を戻す。
+pub(crate) mod dependency_reopen;
 pub use browser::{
     AgentBrowserActionPolicy, AllowedOrigin, BrowserAction, BrowserCapability, BrowserDomainMode,
     BrowserPolicyBinding, BrowserPolicyError, BrowserRun, BrowserRunState, BrowserTaskPolicy,

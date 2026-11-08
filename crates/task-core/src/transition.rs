@@ -268,37 +268,20 @@ pub fn transition(s: &StateView, t: &Trigger) -> Result<Outcome, InvalidTransiti
             }
         }
 
-        // ADR 2026-11-08-health-enforcement-loop D7（P-9）: 依存先の reopen で後続を cancel の前へ戻す。
-        // `cancelled` からだけ（人の Cancel や連鎖の中止と区別するのは呼び出し側の event 履歴の判定）。
-        Trigger::DependencyReopened { draft } => {
-            if s.status == Status::Cancelled {
-                Ok(Outcome {
-                    next: if *draft { Status::Draft } else { Status::Ready },
-                    attempts: s.attempts,
-                    reason: t.name(),
-                })
-            } else {
-                Err(invalid(s, t))
-            }
-        }
+        // ADR 2026-11-08-health-enforcement-loop D7（P-9）: cancelled からだけ（人の Cancel・連鎖の中止と分けるのは
+        // `crate::dependency_reopen` の event 履歴の判定）。cancel の前が draft なら draft に戻す。
+        Trigger::DependencyReopened { draft } if s.status == Status::Cancelled => Ok(Outcome {
+            next: if *draft { Status::Draft } else { Status::Ready },
+            attempts: s.attempts,
+            reason: t.name(),
+        }),
+        Trigger::DependencyReopened { .. } => Err(invalid(s, t)),
 
         // ADR-0010 D1（P-21）: 供給側失敗は attempts を消費せず ready に戻す。
         // ADR-0070 D3（Phase 116）: インフラ都合の失敗も同じ形（別のカウンタで数える。dispatcher 側）。
-        Trigger::Requeue | Trigger::InfraRequeue => {
-            if s.status == Status::Running {
-                Ok(Outcome {
-                    next: Status::Ready,
-                    attempts: s.attempts,
-                    reason: t.name(),
-                })
-            } else {
-                Err(invalid(s, t))
-            }
-        }
-
-        // ADR-0072 D6/D11（Phase E1）: 予算切れ・yield の続き。attempts は消費しない
+        // ADR-0072 D6/D11（Phase E1）: 予算切れ・yield の続き（`Continue`）も同じ形。attempts は消費しない
         // （`retry_policy::attempt_history` は `reason` がここで返す静的な名前を試行に数えない）。
-        Trigger::Continue { .. } => {
+        Trigger::Requeue | Trigger::InfraRequeue | Trigger::Continue { .. } => {
             if s.status == Status::Running {
                 Ok(Outcome {
                     next: Status::Ready,

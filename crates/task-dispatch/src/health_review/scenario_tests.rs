@@ -20,8 +20,8 @@ use task_core::design_review::{ReviewPolicyState, RiskLevel};
 use task_worker::protocol::HealthReviewInput;
 
 const DIGEST: &str = "5ce7a210000000000000000000000000000000000000000000000000000000ab";
-const NORMAL_PATH: &str = "crates/foo/src/lib.rs";
-const STORE_PATH: &str = "crates/task-store/src/rows.rs";
+pub(super) const NORMAL_PATH: &str = "crates/foo/src/lib.rs";
+pub(super) const STORE_PATH: &str = "crates/task-store/src/rows.rs";
 const OWNER_MAP: &str = "owners/map.md";
 
 /// stub の report（new の finding 1 件・existing 1 件）。
@@ -74,7 +74,7 @@ fn project_repo(with_policy: bool) -> tempfile::TempDir {
 }
 
 /// /3 の計画（leaf 1 つ、write path は `path`）。`new_state` を宣言した設計 brief を付けるかを選ぶ。
-fn plan(path: &str, new_state: bool) -> String {
+pub(super) fn plan(path: &str, new_state: bool) -> String {
     let mut unit = super::tree::leaf("a", "s1", &[]);
     unit["context"] = serde_json::json!({"paths": [path]});
     let mut plan: serde_json::Value = serde_json::from_str(&super::tree::v3_plan(
@@ -98,15 +98,15 @@ fn plan(path: &str, new_state: bool) -> String {
 
 /// planner は `plans` を順に出し、設計 review は合格を返し、WU は `change`（計画の write path）に file を書いて
 /// commit し、final review は `ReviewRequest.health` を記録して `health_findings` を `ReviewOutput.health` に返す。
-struct ScenarioAdapter {
+pub(super) struct ScenarioAdapter {
     plans: StdMutex<std::collections::VecDeque<String>>,
     change: &'static str,
     health_findings: Vec<serde_json::Value>,
-    seen: StdMutex<Vec<task_worker::RunContext>>,
+    pub(super) seen: StdMutex<Vec<task_worker::RunContext>>,
 }
 
 impl ScenarioAdapter {
-    fn new(
+    pub(super) fn new(
         plans: Vec<String>,
         change: &'static str,
         health_findings: Vec<serde_json::Value>,
@@ -120,7 +120,7 @@ impl ScenarioAdapter {
     }
 }
 
-fn done(summary: &str) -> RunOutcome {
+pub(super) fn done(summary: &str) -> RunOutcome {
     RunOutcome {
         terminal: Terminal::Done {
             summary: summary.into(),
@@ -193,23 +193,27 @@ impl WorkerAdapter for ScenarioAdapter {
             let file = tree.join(self.change);
             std::fs::create_dir_all(file.parent().unwrap()).unwrap();
             std::fs::write(&file, "pub fn changed() {}\n").unwrap();
-            git_out(&tree, &["add", "-A"]);
-            git_out(&tree, &["commit", "-q", "-m", self.change]);
+            // remote workspace の手元の写し（git でない）には file を書くだけ。
+            if tree.join(".git").exists() {
+                git_out(&tree, &["add", "-A"]);
+                git_out(&tree, &["commit", "-q", "-m", self.change]);
+            }
         }
         Ok(done("ok"))
     }
 }
 
-struct Outcome {
-    store: Arc<dyn TaskStore>,
-    task: Task,
-    seen: Vec<task_worker::RunContext>,
-    _repo: tempfile::TempDir,
-    _root: tempfile::TempDir,
+pub(super) struct Outcome {
+    pub(super) store: Arc<dyn TaskStore>,
+    pub(super) task: Task,
+    pub(super) seen: Vec<task_worker::RunContext>,
+    /// 案件の repo（remote workspace の流れでは作業場所の dir）と workspace root。試験の間だけ残す。
+    pub(super) _repo: tempfile::TempDir,
+    pub(super) _root: tempfile::TempDir,
 }
 
 impl Outcome {
-    fn events(&self) -> Vec<Event> {
+    pub(super) fn events(&self) -> Vec<Event> {
         self.store
             .events_for(self.task.id)
             .unwrap()
@@ -217,13 +221,13 @@ impl Outcome {
             .map(|(_, e)| e)
             .collect()
     }
-    fn planner_runs(&self) -> usize {
+    pub(super) fn planner_runs(&self) -> usize {
         self.seen
             .iter()
             .filter(|c| c.execution_planner.is_some())
             .count()
     }
-    fn design_review_runs(&self) -> usize {
+    pub(super) fn design_review_runs(&self) -> usize {
         self.seen
             .iter()
             .filter(|c| c.review.as_ref().is_some_and(|r| r.design.is_some()))
@@ -240,14 +244,14 @@ impl Outcome {
     fn reviewer_runs(&self) -> usize {
         self.seen.iter().filter(|c| c.review.is_some()).count()
     }
-    fn work_unit_runs(&self) -> usize {
+    pub(super) fn work_unit_runs(&self) -> usize {
         self.seen.iter().filter(|c| c.work_unit.is_some()).count()
     }
     /// 最初に `pred` に当たる event の位置。
-    fn position(&self, pred: impl Fn(&Event) -> bool) -> Option<usize> {
+    pub(super) fn position(&self, pred: impl Fn(&Event) -> bool) -> Option<usize> {
         self.events().iter().position(pred)
     }
-    fn status(&self) -> Status {
+    pub(super) fn status(&self) -> Status {
         self.store.get(self.task.id).unwrap().unwrap().status
     }
 }
@@ -259,6 +263,17 @@ async fn run_flow(
     change: &'static str,
     new_state: bool,
     health_findings: Vec<serde_json::Value>,
+) -> Outcome {
+    let adapter = ScenarioAdapter::new(vec![plan(change, new_state)], change, health_findings);
+    run_flow_with(with_policy, adapter.clone(), adapter).await
+}
+
+/// [`run_flow`] の本体。run は `adapter`（`scenario` を包んだ adapter でよい）が受け、`Outcome.seen` は `scenario`
+/// が記録した run の文脈になる（`health_review_flow_` の試験は reviewer の run だけを自分で受ける）。
+pub(super) async fn run_flow_with(
+    with_policy: bool,
+    scenario: Arc<ScenarioAdapter>,
+    adapter: Arc<dyn WorkerAdapter>,
 ) -> Outcome {
     let repo = project_repo(with_policy);
     let root = tempfile::tempdir().unwrap();
@@ -277,12 +292,11 @@ async fn run_flow(
         check: Check::Reviewer,
     });
     store.insert(&task).unwrap();
-    let adapter = ScenarioAdapter::new(vec![plan(change, new_state)], change, health_findings);
-    let mut d = worktree_dispatcher(store.clone(), adapter.clone(), root.path(), None);
+    let mut d = worktree_dispatcher(store.clone(), adapter, root.path(), None);
     d.config.execution.gate = task_core::GateMode::On;
     d.config.execution.limits = super::tree::tree_limits();
     run_until_idle(&mut d, 400).await;
-    let seen = adapter.seen.lock().unwrap().clone();
+    let seen = scenario.seen.lock().unwrap().clone();
     Outcome {
         store,
         task,

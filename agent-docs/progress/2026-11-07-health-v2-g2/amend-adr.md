@@ -15,7 +15,8 @@ WorkUnit `amend-adr`。task 01M6TYVJSTYGRPHERB93MM7J59 の二度目の final rev
 - ADR の状態行を「実装済み」から「一部実装（二度目の差し戻しの修正中）」に変えた。
 - ADR の末尾に付記を足した。決めたことは次の (a)〜(e) と流れ全体の試験の作り方。
 - この進捗 file を足した。
-- commit の件名: 「G2 amend-adr: ADR に二度目の差し戻しへの方針の付記を足し、状態を一部実装にする」。
+- commit の件名: 「G2 amend-adr: ADR に二度目の差し戻しへの方針の付記を足し、状態を一部実装にする」、「G2 amend-adr: 付記の C1 を木の集計（Reviewer の run は reviewer_runs に数える）に合わせる」。
+- C1 の訂正: `task_core::tree` の集計は Reviewer の run を `runs`（`max_tree_runs` の対象）でなく `reviewer_runs` に数え、費用と token には数える（`crates/task-core/src/tree/limits.rs`）。付記にはそのとおり書いた。
 
 ## 決めたこと（要点。本文は ADR の付記）
 - (a) `change_rules/review.rs` に `design_section` を足し、`ReviewRequest.design` の brief の全欄・`plan_summary`・risk の level と理由・方針（owner_map・high_risk・invariants、読めなければその理由）を描く。Result 節は `result_section` の 1 節にし、設計 review では `{"verdicts":[],"design":{…}}`、final review では `repair` を含む `verdicts` と（あれば）`health` の形を出す。例の JSON は placeholder を使わず、`ReviewOutput` で読めることを試験で固定する。担当 design-prompt。

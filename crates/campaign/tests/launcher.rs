@@ -1002,6 +1002,31 @@ fn a_swapped_daemon_binary_is_rejected_on_every_path_and_stop_only_touches_the_l
     let _ = prod.wait();
 }
 
+/// execve の最中は `/proc/<pid>/cmdline` が一瞬空になる。starttime が一致する生きた daemon の空 cmdline を
+/// 「daemon が落ちた」と誤判定して片付けない（負荷での断続失敗: start が `daemon exited before becoming healthy`、
+/// daemon.log は空）。launcher の試験専用フック（LAUNCHER_TEST_BLANK_CMDLINE_FILE）で、health 待ちの間の
+/// owned_alive が読む cmdline を決められた回数だけ空にして、実 process を止めずに決定的に再現する。
+#[test]
+fn a_transiently_blank_cmdline_during_exec_is_not_taken_for_a_dead_daemon() {
+    let f = fixture();
+    let counter = f.d().join("blank-cmdline-reads");
+    fs::write(&counter, "5").unwrap();
+    f.write_env(&format!(
+        "LAUNCHER_TEST_BLANK_CMDLINE_FILE={}\n",
+        counter.display()
+    ));
+    ok(&f, "prepare");
+    ok(&f, "start");
+    assert_eq!(
+        fs::read_to_string(&counter).unwrap().trim(),
+        "0",
+        "the hook was not exercised"
+    );
+    assert!(f.owned_pid().is_some_and(alive));
+    assert!(f.healthy());
+    stop(&f);
+}
+
 /// 固定 toolchain（cap-env の ro_mounts）の同名 file の内容だけを変える。path・file 名・mount 構成は同じで、
 /// 必要能力 probe（stub は何でも合格）は通るが、同じ測定の再開（watch / start）は env-lock で外部実行 0 件のまま拒否される。
 /// 内容を戻せば再開でき、読取不能は検証不能として同じく止まる（root では chmod が効かないので skip）。

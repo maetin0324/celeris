@@ -32,7 +32,7 @@ task 01M6VTFG9K5HEE817EW05JASMZ の記録。設計は [ADR 2026-11-07 健全性�
 - policy-review: 「G2 policy-review: policy の変更を別 review にする（policy_mixed・policy verdict の必須化・人の承認）」「G2 policy-review: 進捗（変更・判断・証拠・未解決・提案）」。記録は [policy-review](dispatch/policy-review.md)。
 - follow 段の統合: 「integrate wu/design-verdict (phase follow)」「integrate wu/policy-review (phase follow)」。
 - scenario: 「G2 scenario: 通常変更と高 risk 変更を流れ全体で区別する試験と本物の --print-review-policy の読み込みの試験」「G2 scenario: 進捗（変更・判断・証拠・未解決・提案）」。記録は [scenario](dispatch/scenario.md)。
-- close（この WorkUnit）: 「G2 close: architecture-map の行・ADR の付記・task の進捗」。`docs/architecture-map.md` の 2 行（「planner/reviewer の起動・判定」と「健全性の review」）に関連試験と不変条件（I3・I4・I5・I7・I8・I9）を書き、ADR に付記を足し、この file を書いた。コードは変えていない。
+- close（この WorkUnit）: 「G2 close: architecture-map の行・ADR の付記・task の進捗」「G2 close: 進捗に提出時の検査を書く」。`docs/architecture-map.md` の 2 行（「planner/reviewer の起動・判定」と「健全性の review」）に関連試験と不変条件（I3・I4・I5・I7・I8・I9）を書き、ADR に付記を足し、この file を書いた。コードは変えていない。
 
 ## 人の承認と main への取り込みの経緯
 - ADR D6.6 のとおり、`scripts/dev/repo-health/` と `scripts/dev/check-health.sh` を変える U2 は policy の file だけの branch で、人の承認で通した。main の base には D6.2 の扱いがまだ無く、policy の file を変えた branch は必須検査 `test-affected.sh`（先頭で `check-health.sh` を呼ぶ）が `policy.changed` で落ちるためである。
@@ -41,7 +41,13 @@ task 01M6VTFG9K5HEE817EW05JASMZ の記録。設計は [ADR 2026-11-07 健全性�
 - 人の merge で main に先に入った commit は、子 task の branch にあった「G2 review-policy-cli: --print-review-policy と policy の file だけの変更の扱い（D2.3・D6.2・D7.3）」「G2 review-policy-cli: 進捗（実装・検査結果・取り込み待ち）」「G2 review-policy-cli: 進捗の main..HEAD の commit 数を直す」の 3 件。`git merge-base HEAD main` は 3 件目になり、ほかの WorkUnit の commit（Rust を含む）はまだ main に無い（提出時の HEAD で `git log` を確かめた）。
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
-EVIDENCE_PLACEHOLDER
+- `bash scripts/dev/test-affected.sh` → exit 0。先頭の `check-health.sh` は `mode=full`・base は `git merge-base HEAD main`・`verdict=pass`・`new=0`・`worsened=0`・`existing=718`、arch-map の 6 rule は全部 pass（missing_row 1・missing_test 77・wrong_owner 32・missing_invariant 32・stale 0・wrong_path 0 で、変更前と同じ数）。この WorkUnit の差分は文書だけなので「試験対象の変更なし（docs のみ等）」。
+- `bash scripts/dev/check-health.sh` → exit 0（同じ verdict）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo nextest run -p task-dispatch -p task-core -p task-worker -E 'test(/health_review_/)' --no-fail-fast` → exit 0、69 tests run: 69 passed（task-dispatch 56・task-core 9・task-worker 4）。流れ全体の `health_review_scenario_normal_change`・`health_review_scenario_high_risk_change`・`health_review_scenario_real_cli` を含む（`cargo nextest list` で確かめた）。
+- `python3 scripts/dev/check-architecture-map.py` → exit 0（「OK: 954 件のパスを確認した」）。`--diffs --reference agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json` の食い違いは変更の前後とも 142 件で、新しく出たもの・消えたものは 0 件（kind と key の集合で比べた）。
+- `bash scripts/dev/check-doc-links.sh` → exit 0（ok）。`sh scripts/dev/progress-index.sh --check` → exit 0（ok）。
 
 ## 未解決
 - prompt の 2 点はこの task の範囲外で、まだ無い（prompts task 01M6VTFGWFVE57YXDKHR2E436G の範囲）。提出時の HEAD の `crates/task-worker/src/claude_code/prompt.rs` で確かめた。

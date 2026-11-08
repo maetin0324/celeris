@@ -884,6 +884,16 @@ async fn parent_waits_for_unfinished_children_without_counting_continuations() {
             .filter(|(_, e)| matches!(e, Event::WorkerFinished { role: None, .. }))
             .count()
     };
+    // 1 回目の run の終わり（予算切れで ready に戻る）を状態で待つ（ADR-0125 (b)。tick の回数で打ち切らない）。
+    let status = |store: &Arc<dyn TaskStore>| store.get(parent_id).unwrap().unwrap().status;
+    assert!(
+        run_until_state(&mut d, || finished(&store) >= 1
+            && status(&store) == Status::Ready)
+        .await,
+        "1 回目の run が終わらない: {:?}",
+        store.events_for(parent_id).unwrap()
+    );
+    // 子待ちの間は tick を重ねても 2 回目の run を起こさない。
     for _ in 0..60 {
         d.tick().unwrap();
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -893,22 +903,17 @@ async fn parent_waits_for_unfinished_children_without_counting_continuations() {
         1,
         "子待ちの間は 2 回目の run を起こさない"
     );
-    let stored = store.get(parent_id).unwrap().unwrap();
-    assert_eq!(stored.status, Status::Ready, "{stored:?}");
+    assert_eq!(status(&store), Status::Ready);
 
     // 子が終わると親が再開する。
     store
         .apply_transition(child_id, Trigger::Cancel, None)
         .unwrap();
     assert!(store.get(child_id).unwrap().unwrap().status.is_terminal());
-    for _ in 0..60 {
-        d.tick().unwrap();
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        if finished(&store) >= 2 {
-            break;
-        }
-    }
-    assert!(finished(&store) >= 2, "子の完了で親が dispatch される");
+    assert!(
+        run_until_state(&mut d, || finished(&store) >= 2).await,
+        "子の完了で親が dispatch される"
+    );
 }
 
 /// ADR 2026-10-18-parent-waits-for-children 付記（2026-10-27、BenchFS 01M5WARE6D56 の再現）: 子が `failed` で
@@ -944,14 +949,7 @@ async fn parent_stays_asleep_for_a_failed_child_while_told_to_wait_for_its_rerun
     };
     let status = |store: &Arc<dyn TaskStore>| store.get(parent_id).unwrap().unwrap().status;
     // 印の無い失敗した子は終端: 親は起き、進捗なしで人に質問する（ADR-0072）。
-    for _ in 0..200 {
-        d.tick().unwrap();
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        if status(&store) == Status::Blocked {
-            break;
-        }
-    }
-    assert_eq!(status(&store), Status::Blocked);
+    assert!(run_until_state(&mut d, || status(&store) == Status::Blocked).await);
     let before = runs(&store);
     assert!(before >= 1);
     let continues = |store: &Arc<dyn TaskStore>| {
@@ -1008,14 +1006,10 @@ async fn parent_stays_asleep_for_a_failed_child_while_told_to_wait_for_its_rerun
         store.apply_transition(child_id, trigger, None).unwrap();
     }
     assert_eq!(store.get(child_id).unwrap().unwrap().status, Status::Done);
-    for _ in 0..60 {
-        d.tick().unwrap();
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        if runs(&store) > before {
-            break;
-        }
-    }
-    assert!(runs(&store) > before, "子の完了で親が dispatch される");
+    assert!(
+        run_until_state(&mut d, || runs(&store) > before).await,
+        "子の完了で親が dispatch される"
+    );
 }
 
 /// ADR-0072 (a)(b)(e)(g): 予算切れは `Trigger::Continue` で `Ready` に戻り attempts を消費しない。

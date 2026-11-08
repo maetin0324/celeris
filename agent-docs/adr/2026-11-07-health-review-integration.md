@@ -4,7 +4,7 @@ tasks: [01M6VBSKZQG2YWF7NWYH6GP9P7]
 # ADR 2026-11-07: 健全性を設計と review に組み込む（規約配布・設計 brief・risk 判定・構造化 health verdict）
 
 - 日付: 2026-11-07
-- 状態: 実装済み（2026-11-08、健全性 v2 G2 の task 01M6TYVJSTYGRPHERB93MM7J59。二度目の final review の差し戻しの修正を含む。記録は [G2 の進捗](../progress/2026-11-07-health-v2-g2.md)）。決定節との食い違いは末尾の付記（dispatch の実装・G2 の完了時の突き合わせ）に、二度目の差し戻しへの方針と決定を改めた点（D7.1・D7.4）は「二度目の final review の差し戻しへの方針」の付記に、その方針と実装の違いと残る穴は最後の付記「差し戻しの修正の完了時の突き合わせ」に書く。
+- 状態: 実装済み（2026-11-08、健全性 v2 G2 の task 01M6TYVJSTYGRPHERB93MM7J59。二度目と三度目の final review の差し戻しの修正を含む。記録は [G2 の進捗](../progress/2026-11-07-health-v2-g2.md)）。決定節との食い違いは末尾の付記（dispatch の実装・G2 の完了時の突き合わせ）に、二度目の差し戻しへの方針と決定を改めた点（D7.1・D7.4）は「二度目の final review の差し戻しへの方針」の付記に、その方針と実装の違いと残る穴は付記「差し戻しの修正の完了時の突き合わせ」に、三度目の差し戻し（architecture-map の 2 行と doc comment の旧い名前）の修正は最後の付記「三度目の final review の差し戻しの修正」に書く。
 - 根拠: 前提調査 [G2 survey](../progress/2026-11-07-health-v2-g2/adr-survey.md) の (a)〜(h)。行番号は survey の時点のもの。
 - 関係: [ADR 2026-11-07 汎用 repo health の契約](2026-11-07-repo-health-contract.md)（D2: policy は base 側で評価、policy.changed）、[ADR 2026-11-07 repo health の Celeris profile](2026-11-07-repo-health-celeris-profile.md)、[ADR 2026-11-07 健全性 v2 の基準](2026-11-07-health-v2-baseline.md)、[ADR 2026-10-23 必須規則の prompt 配送](2026-10-23-required-rules-prompt-delivery.md)、[2026-10-11 破壊的変更を既定にする](2026-10-11-breaking-changes-by-default.md)、[ADR-0118](0118-review-target-sync-and-merge-candidate.md)（review 前の target 同期と candidate SHA）。
 
@@ -422,3 +422,26 @@ task 01M6TYVJSTYGRPHERB93MM7J59 の二度目の final review（reviewer run 01M6
   - remote workspace の task の最初の計画は gate で atomic になる（上の (d)）。
   - `generic.md` の規約 7〜9 に対応する `HealthFindingKind` が無い（付記「G2 の完了時の突き合わせ」の (1)）。
   - `TreeLimitKind::is_run_time` の doc comment の旧い名前（上の (c)）。
+
+## 付記（2026-11-08、三度目の final review の差し戻しの修正）
+三度目の final review（reviewer run 01M6Y1RWMFQHQCWV2Z69BGMT9M）は、task の受け入れ条件 3 だけを不合格にした。理由は、この task が置き換えた仕組みの説明が 3 か所に残っていたこと（`CLAUDE.md` の「review では旧い仕組みの残りを不備として指摘する」、`generic.md` の規約 6）。WorkUnit map-rows と limits-doc が並行して直した。変えたのは地図の 2 行と doc comment の 1 行だけで、決定節と付記の仕組みは変えていない。各 unit の記録は [map-rows](../progress/2026-11-07-health-v2-g2/map-rows.md)・[limits-doc](../progress/2026-11-07-health-v2-g2/limits-doc.md)。
+
+### (1) 地図の「健全性の review」の行（map-rows）
+- 差し戻し: `docs/architecture-map.md` の行は、もう無い `Dispatcher::planner_review_policy` を入口に挙げ、方針の渡し先を「planner への受け渡し」と書いていた。worker の run への配布、設計 review の予算、`flow_tests`・`design_budget` の試験が載っていなかった。
+- 概要: 「planner・worker の run への配布〈`RunContext.workspace.review_policy`〉」に改め、設計 review の run への木の run・費用の上限と token 予算を足した。
+- 入口: `planner_review_policy` を消し、付記 (b) の経路（`health_review/worker_profile.rs` の `Dispatcher::run_workspace`・`Dispatcher::review_policy_target`、run の起動で `RunWorkspace::into_context` が `load_review_policy` を 1 回呼ぶ）と、付記 (c) の経路（`design_review_hold` → `tree_limit_hold_for`、`start_design_review` → `token_budget::run_watch`、adapter は `review::run_within_token_budget` の下で走る）を書いた。名前と場所は map-rows が実装を読んで確かめた。
+- ADR の欄に方針の付記の (b)・(c) を足した。関連試験に `health_review/worker_profile/tests.rs`・`health_review/flow_tests.rs`・`dispatcher/tests/health_review_design_budget.rs` を足した。不変条件に付記 (b)（方針は run の起動で 1 回だけ読み、読めなければ入れない）と付記 (c)（設計 review の run も木の上限と token 予算の下で走る）の 2 文を足した。
+
+### (2) 『共通 agent 指示と配布』の汎用規約と review 方針の配布の行（map-rows）
+- 差し戻し: 節に汎用規約の正本 `change_rules/generic.md` とその配布（`prompt_header`）の行が無かった。
+- 必須規則の行の直後に 1 行を足した（地図は 213 行から 214 行）。入口は `crates/task-worker/src/change_rules.rs`（正本 `change_rules/generic.md`、`GENERIC_RULES`・`section`・`repo_section`）、組み立て口の `claude_code/prompt.rs` の `prompt_header`、方針の配布の `health_review/worker_profile.rs`（`Dispatcher::run_workspace`・`RunWorkspace::into_context`）。関連試験は `change_rules_generic_`・`change_rules_worker_profile_`・`health_review_worker_profile_` の file。不変条件は D1 と付記 (b)（正本は 1 file で `CLAUDE.md` と互いに写さない、方針は base 側から読み、読めなければ節を出さない）。
+
+### (3) `limits.rs` の doc comment の旧い名前（limits-doc）
+- 差し戻し: `crates/task-core/src/tree/limits.rs:86` の `TreeLimitKind::is_run_time` の doc comment が、design-budget が置き換えた `tree_run_limit_hold` を指していた。
+- `Dispatcher::tree_limit_hold_for` に直した。task-core から task-dispatch の非公開の method へは rustdoc の link を作れないので、backtick の名前で書いた。コードの振る舞いは変えていない。`crates/` に `tree_run_limit_hold` は 0 件。
+- 付記「差し戻しの修正の完了時の突き合わせ」の (c) の「旧い名前の残り」と「状態と残る穴」の最後の項目のうち、doc comment は直した。ADR の本文（この ADR の方針の付記、ADR-0079、[2026-10-11-task-wait-reasons](2026-10-11-task-wait-reasons.md)、[2026-10-22-plan-issue-answer-replans](2026-10-22-plan-issue-answer-replans.md)）と過去の進捗 file の旧い名前は、当時の記録として残す。
+
+### 状態と残る穴
+- 状態行は実装済みのまま、三度目の差し戻しの修正を含むことを書き足した。
+- `check-architecture-map.py` は表の path の実在と列数しか見ないので、(1)・(2) を検出しなかった。地図の行の `<型>::<fn>` の名前を入口の file と照らす検査の案は、map-rows の提案と [G2 の進捗](../progress/2026-11-07-health-v2-g2.md) の提案にある。
+- 付記「差し戻しの修正の完了時の突き合わせ」の「状態と残る穴」のうち、doc comment の項目を除く 3 項目は残る。地図は 214 行で、文書の 200 行の目安を超えている。

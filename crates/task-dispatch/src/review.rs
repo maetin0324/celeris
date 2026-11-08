@@ -24,8 +24,8 @@ use task_worker::artifact::sha256_file;
 use crate::policy::ProviderOutcome;
 use task_worker::protocol::{ReviewCheckResult, ReviewDecision, ReviewPolicyViolation};
 use task_worker::{
-    Answer, EventSink, Evidence, PROTOCOL_VERSION, ReviewOutput, ReviewRequest, RunContext,
-    RunLimits, RunOutcome, RunRequest, Terminal, WorkerAdapter, Workspace,
+    Answer, EventSink, Evidence, PROTOCOL_VERSION, ReviewRequest, RunContext, RunLimits,
+    RunOutcome, RunRequest, Terminal, WorkerAdapter, Workspace,
 };
 
 /// 条件 1 件の判定結果。`Event::ReviewVerdict` にそのまま写す。
@@ -1140,6 +1140,7 @@ async fn run_reviewer_inner(
         },
     };
     let tag = format!("reviewer({})", run.run_id);
+    let health = matches!(&req.context.review, Some(r) if r.health.is_some());
     // ADR 2026-11-06-misplaced-report-recovery-generalized D3: 誤配置した review.json の回収の基準時刻。
     let run_started = std::time::SystemTime::now();
     // reviewer の process にも run 専用の `TMPDIR` を与える（この関数を抜けると消える）。
@@ -1286,40 +1287,8 @@ async fn run_reviewer_inner(
         Ok(t) => t,
         Err(e) => return fail_all(format!("{tag}: {review_rel} not found or unreadable: {e}")),
     };
-    let output: ReviewOutput = match serde_json::from_str(&text) {
-        Ok(o) => o,
-        Err(e) => {
-            return fail_all(format!(
-                "{tag}: {review_rel} is not a valid ReviewOutput: {e}"
-            ));
-        }
-    };
-    Ok(criteria
-        .iter()
-        .map(
-            |&idx| match output.verdicts.iter().rev().find(|v| v.criterion == idx) {
-                Some(v) => Verdict {
-                    criterion_idx: idx,
-                    pass: v.pass,
-                    reason: format!("{tag}: {}", v.reason),
-                    // ADR-0072 D16（Phase E4）: reviewer 自身が申告した repair ヒントをそのまま写す
-                    // （`pass = true` のときは呼び出し側〈`classify_review_failure`〉が使わない）。
-                    repair_hint: v.repair.as_ref().map(|r| {
-                        task_core::execution::ReviewRepairHint {
-                            scope: r.scope.clone(),
-                            class: r.class.clone(),
-                        }
-                    }),
-                },
-                None => Verdict {
-                    criterion_idx: idx,
-                    pass: false,
-                    reason: format!("{tag}: no verdict for criterion {idx} in {review_rel}"),
-                    repair_hint: None,
-                },
-            },
-        )
-        .collect())
+    // ADR 2026-11-07-health-review-integration D5: health を渡した review は health verdict も読んで写す。
+    Verdict::from_review_json(&text, health, criteria, &tag, &review_rel).or_else(fail_all)
 }
 
 /// ADR 2026-10-18-artifact-exists-directory: ディレクトリの成果物の要約。`dir` 以下の通常ファイル

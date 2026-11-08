@@ -632,8 +632,6 @@ impl Dispatcher {
             tree: tree_planner
                 .then(|| self.tree_planner_context(task))
                 .transpose()?,
-            // ADR 2026-11-07-health-review-integration D2.3・I3: base（target）側の検査器で読めた方針だけを渡す。
-            review_policy: self.planner_review_policy(task).policy().cloned(),
         })
     }
 

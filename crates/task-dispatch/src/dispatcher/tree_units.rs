@@ -530,7 +530,7 @@ impl Dispatcher {
     /// ADR-0079 D9（Phase R2b）/ D7（Phase R3a）: この節点が出した未回答の決定で `needed_before: [self]` のもの
     /// （`plan_invalid`・atomic の run の worker の `self`）がある task は run を起こさない（`ready` のまま。名指しの
     /// 待ち = その決定）。回答（`task_ops::decision::answer`）で決定が閉じれば次の tick から走る。`kind: limit` の
-    /// `self`（run 時の木の上限・節点の replan の上限）はここでは止めない: run を起こすときに `tree_run_limit_hold` /
+    /// `self`（run 時の木の上限・節点の replan の上限）はここでは止めない: run を起こすときに `tree_limit_hold_for` /
     /// `replan_gate` が回答の余裕込みで見直す（R2a 付記 9.: 走っている run・判定・統合は止めない）。木が無効なら
     /// 常に `false`（従来と 1 バイトも変わらない）。
     pub(super) fn decision_self_hold(&self, task: &Task) -> Result<bool, DispatchError> {
@@ -784,30 +784,20 @@ impl Dispatcher {
             .is_some_and(|p| p.spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V3))
     }
 
-    /// ADR-0079 D3（Phase R2a）: この dispatch が起こす run（worker / planner / repair。統合と「何もしない」は
-    /// 数えない）が木の上限（`max_tree_runs` / `max_tree_usd` / replan なら `max_tree_replans`）を超えるなら
-    /// `true`（呼び出し側は run を起こさない。Task は今の状態のまま待つ）。超えたときは `kind: limit` の決定の
-    /// 要求を**木に 1 件だけ**出す（同じ key の未回答の決定が木にあれば出さない。tick ごとに増やさない）。
+    /// ADR-0079 D3（Phase R2a）: 次に起こす run（`next`。`dispatch_one` は [`next_run`] で gate から決める）が木の
+    /// 上限（`max_tree_runs` / `max_tree_usd` / replan なら `max_tree_replans`）を超えるなら `true`（呼び出し側は
+    /// run を起こさない。Task は今の状態のまま待つ。兄弟の走っている run は続く）。超えたときは `kind: limit` の
+    /// 決定の要求を**木に 1 件だけ**出す（同じ key の未回答の決定が木にあれば出さない。tick ごとに増やさない）。
     /// 木が無効・木の節点でなければ常に `false`（従来と 1 バイトも変わらない）。
-    pub(super) fn tree_run_limit_hold(
+    /// ADR 2026-11-07-health-review-integration の付記（二度目の final review の差し戻しへの方針）C1: 設計 review の
+    /// run（`design_review_hold`）も `NextRun::Worker` でここを通る。その run は runs 索引の Reviewer の行で、木の
+    /// 集計では run 数でなく `reviewer_runs` に数え、費用には数える。
+    pub(super) fn tree_limit_hold_for(
         &self,
         task: &Task,
-        gate: &WuDispatchGate,
+        next: task_core::NextRun,
     ) -> Result<bool, DispatchError> {
-        let tree = self.config.execution.limits.tree;
-        if !tree.enabled {
-            return Ok(false);
-        }
-        let next = match gate {
-            WuDispatchGate::Atomic | WuDispatchGate::RunWorkUnit(_) => task_core::NextRun::Worker,
-            WuDispatchGate::RunPlanner { replan } => {
-                task_core::NextRun::Planner { replan: *replan }
-            }
-            WuDispatchGate::StartIntegration(_)
-            | WuDispatchGate::FinalReview
-            | WuDispatchGate::Skip => return Ok(false),
-        };
-        if !self.is_tree_node(task)? {
+        if !self.config.execution.limits.tree.enabled || !self.is_tree_node(task)? {
             return Ok(false);
         }
         let root_id = task_core::tree::root_id_of(task);
@@ -1352,6 +1342,20 @@ impl Dispatcher {
                 .work_units_apply(task.id, Vec::new(), rows, events)?;
         }
         Ok(())
+    }
+}
+
+/// ADR-0079 D3（Phase R2a）: `dispatch_one` の gate が起こす run の種類（木の上限の判定 `tree_limit_hold_for` に渡す）。
+/// 統合・最終レビュー・「何もしない」は run を起こさないので `None`（木の上限で止めない）。
+pub(super) fn next_run(gate: &WuDispatchGate) -> Option<task_core::NextRun> {
+    match gate {
+        WuDispatchGate::Atomic | WuDispatchGate::RunWorkUnit(_) => Some(task_core::NextRun::Worker),
+        WuDispatchGate::RunPlanner { replan } => {
+            Some(task_core::NextRun::Planner { replan: *replan })
+        }
+        WuDispatchGate::StartIntegration(_)
+        | WuDispatchGate::FinalReview
+        | WuDispatchGate::Skip => None,
     }
 }
 

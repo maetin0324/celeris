@@ -2243,17 +2243,6 @@
           "description": "replan を起こした理由（WU failed / no-progress・continuation の上限 / 実質的な review 不合格、\nのいずれかの決定的な説明文。`replan = false` なら空文字列）。",
           "type": "string"
         },
-        "review_policy": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ReviewPolicy"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "ADR 2026-11-07-health-review-integration D2.4・D3.4: repo 固有の review 方針（base（target）側の\nprofile の `[review]` 節の写し。owner 地図・高 risk の path class・不変条件）。planner は高 risk の\nclass を変える計画に設計 brief を書く。dispatcher が base 側から読めた repo だけ `Some`。`[review]` の\n無い repo・旧 daemon では `None` で `request.json` は従来と同じ。"
-        },
         "tree": {
           "anyOf": [
             {
@@ -3659,7 +3648,7 @@
       "type": "object"
     },
     "ReviewPolicy": {
-      "description": "D2.4: 解決済みの review 方針。`source = absent`（base に `[review]` が無い）の repo では作らない\n（`ExecutionPlannerContext.review_policy = None`）。",
+      "description": "D2.4: 解決済みの review 方針。`source = absent`（base に `[review]` が無い）の repo では作らない\n（`RunContext.workspace.review_policy = None`）。",
       "properties": {
         "definition_sha256": {
           "description": "解決した profile の blob の内容から作った digest（D2.3）。health の材料の再利用の鍵に入る。",
@@ -4321,12 +4310,16 @@
           ],
           "description": "ADR-0072 D9/D21: 計画のある Task の WorkUnit の run のときだけ `Some`。`## Objective` は\nTask 全体の目的ではなく、この WorkUnit の `objective` に差し替わる（`preamble`/`claude_code`\nが読む）。暗黙の WorkUnit（計画の無い Task）の run では常に `None`\n（プロンプトは E1 までと 1 バイトも変わらない）。"
         },
-        "workspace_note": {
-          "description": "Phase 43（ADR-0039 D3）: **案件が作業場所を決めている run** にだけ載る 1 行（そのコードがどこに\nあるか）。ディスパッチャが `projects.workspace` から決定的に組む（`preamble::workspace_note`）。\n作業場所を決めていない案件・案件に属さないタスクでは `None` で、プロンプトは Phase 42 までと\nバイト単位で同じ。",
-          "type": [
-            "string",
-            "null"
-          ]
+        "workspace": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RunWorkspaceContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-11-07-health-review-integration 付記 B1: dispatcher が task の作業場所から決めた、この run の作業場所の\n情報（場所の説明と、repo の review 方針）。どちらも無い run（対話 run・作業場所を決めていない案件の run・\nreviewer の run）では `None`。"
         }
       },
       "required": [
@@ -4347,6 +4340,30 @@
               "type": "null"
             }
           ]
+        }
+      },
+      "type": "object"
+    },
+    "RunWorkspaceContext": {
+      "description": "`context.workspace`（ADR 2026-11-07-health-review-integration 付記 B1）: この run の作業場所の情報。2 つの欄は\nどちらも dispatcher が task の作業場所から決定的に決める（LLM は呼ばない）。",
+      "properties": {
+        "note": {
+          "description": "Phase 43（ADR-0039 D3）: **案件が作業場所を決めている run** にだけ載る説明（そのコードがどこにあるか。\n作業ツリーを切る run はリポジトリ一覧・検査コマンド・成果物の置き場も）。ディスパッチャが\n`projects.workspace` から決定的に組む（`preamble::workspace_note`）。前置きの「作業場所」の節になる。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "review_policy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReviewPolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "付記 B2〜B5・D2.4: repo 固有の review 方針（task の先頭の repo の target（base）側の profile の `[review]`\n節の写し。owner 地図・高 risk の path class・不変条件）。worker の run（atomic task・WU・repair）と planner の\nrun にだけ、dispatcher が base 側から読めたときだけ `Some`。汎用規約の直後に repo 固有の規約の節として出る。\n`[review]` の無い repo・読めない repo（remote workspace を含む）では `None` で、節は出ない。"
         }
       },
       "type": "object"

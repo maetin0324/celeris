@@ -7,7 +7,7 @@ use task_core::design_review::{PathClass, ReviewPolicy};
 
 use super::*;
 use crate::protocol::{
-    ExecutionPlannerContext, ReviewOutput, ReviewRequest, ReviewVerdictOut, schema_value,
+    ReviewOutput, ReviewRequest, ReviewVerdictOut, RunContext, RunWorkspaceContext, schema_value,
 };
 
 fn sample_input() -> HealthReviewInput {
@@ -119,26 +119,38 @@ fn health_protocol_review_output_verdict_round_trips() {
     assert_eq!(back, out);
 }
 
+/// 付記 B1: review 方針は `RunContext.workspace.review_policy` に載り、作業場所の説明（`workspace.note`）と同じ
+/// 欄にまとまる。旧い置き場所（`workspace_note`・`execution_planner.review_policy`）には書き出さない。
 #[test]
-fn health_protocol_planner_review_policy_round_trips() {
-    let ctx = ExecutionPlannerContext {
-        review_policy: Some(ReviewPolicy {
-            owner_map: Some("docs/architecture-map.md".into()),
-            high_risk: vec![PathClass {
-                class: "dispatch-state".into(),
-                paths: vec!["^crates/task-store/".into()],
-            }],
-            invariants: BTreeMap::from([("task-state-in-sqlite".into(), "CLAUDE.md".into())]),
-            definition_sha256: "c".repeat(64),
+fn health_protocol_run_workspace_review_policy_round_trips() {
+    let ctx = RunContext {
+        workspace: Some(RunWorkspaceContext {
+            note: Some("repo は手元".into()),
+            review_policy: Some(ReviewPolicy {
+                owner_map: Some("docs/architecture-map.md".into()),
+                high_risk: vec![PathClass {
+                    class: "dispatch-state".into(),
+                    paths: vec!["^crates/task-store/".into()],
+                }],
+                invariants: BTreeMap::from([("task-state-in-sqlite".into(), "CLAUDE.md".into())]),
+                definition_sha256: "c".repeat(64),
+            }),
         }),
+        execution_planner: Some(Default::default()),
         ..Default::default()
     };
     let value = serde_json::to_value(&ctx).unwrap();
     assert_eq!(
-        value["review_policy"]["high_risk"][0]["class"],
+        value["workspace"]["review_policy"]["high_risk"][0]["class"],
         "dispatch-state"
     );
-    let back: ExecutionPlannerContext = serde_json::from_value(value).unwrap();
+    assert_eq!(value["workspace"]["note"], "repo は手元");
+    assert!(value.get("workspace_note").is_none(), "{value}");
+    assert!(
+        value["execution_planner"].get("review_policy").is_none(),
+        "{value}"
+    );
+    let back: RunContext = serde_json::from_value(value).unwrap();
     assert_eq!(back, ctx);
 }
 
@@ -161,16 +173,10 @@ fn health_protocol_omitted_fields_default_and_are_not_written() {
         json!({"verdicts": [{"criterion": 0, "pass": true, "reason": "ok"}]})
     );
 
-    let mut planner = serde_json::to_value(ExecutionPlannerContext::default()).unwrap();
-    planner.as_object_mut().unwrap().remove("review_policy");
-    let ctx: ExecutionPlannerContext = serde_json::from_value(planner).unwrap();
-    assert_eq!(ctx.review_policy, None);
-    assert!(
-        serde_json::to_value(&ctx)
-            .unwrap()
-            .get("review_policy")
-            .is_none()
-    );
+    let ctx = serde_json::to_value(RunContext::default()).unwrap();
+    assert!(ctx.get("workspace").is_none(), "{ctx}");
+    let ctx: RunContext = serde_json::from_value(ctx).unwrap();
+    assert_eq!(ctx.workspace, None);
 
     // 中の欄の既定: health の verdict は findings も policy も省略できる。
     let empty: HealthVerdictOut = serde_json::from_value(json!({})).unwrap();

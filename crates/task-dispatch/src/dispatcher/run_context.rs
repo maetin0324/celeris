@@ -2,6 +2,10 @@
 
 use super::*;
 
+/// 付記 (b): worker と planner の run の作業場所の情報（review 方針）。file は size の制約で `health_review/` に置く。
+#[path = "../health_review/worker_profile.rs"]
+pub(super) mod worker_profile;
+
 /// 試行の作業場所の中の試行用 KB（campaign runner の `build_seed` が置く `kb/`）。
 const TRIAL_KB_DIR: &str = "kb";
 /// worker の `celerisctl knowledge` が最優先で読む根の env（ADR-0047 D3。`--root` の次）。
@@ -385,7 +389,7 @@ impl Dispatcher {
             work_genre,
             recent_work,
             milestone_review,
-            workspace_note,
+            workspace: self.run_workspace(task, workspace_note, conversation_addressee.is_none()),
             profile,
             mode,
             comments,

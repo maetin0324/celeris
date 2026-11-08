@@ -459,8 +459,8 @@ pub(super) async fn run_worker(
             recent_work: extras.recent_work,
             // Phase 41（ADR-0038 D1）: 途中目標レビューの対話 run だけに入る。
             milestone_review: extras.milestone_review,
-            // Phase 43（ADR-0039 D3）: 案件が作業場所を決めている run だけに入る。
-            workspace_note: extras.workspace_note,
+            // ADR-0039 D3 の作業場所の説明と、base 側の review 方針（付記 B2。ここで読み、tick を止めない）。
+            workspace: extras.workspace.into_context(task_id).await,
             knowledge: extras.knowledge,
             // ADR-0044 D2（Phase 53）: コメントの糸と、直前の run を止めた人のコメント。
             comments: extras.comments,

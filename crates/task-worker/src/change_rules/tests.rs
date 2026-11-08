@@ -11,16 +11,16 @@ use task_core::design_review::{PathClass, ReviewPolicy};
 use super::*;
 use crate::claude_code::{build_cos_chat_parts, build_prompt};
 use crate::protocol::{
-    CosChatContext, ExecutionPlannerContext, ReviewRequest, RunContext, TreePlannerContext,
-    WorkUnitPromptContext,
+    CosChatContext, ExecutionPlannerContext, ReviewRequest, RunContext, RunWorkspaceContext,
+    TreePlannerContext, WorkUnitPromptContext,
 };
 use crate::test_support::{assert_generic_rules_once, repo_claude_md};
 
-const CLASS: &str = "dispatch-state";
+pub(super) const CLASS: &str = "dispatch-state";
 const CLASS_PATH: &str = "^crates/task-dispatch/src/dispatcher/";
 const INVARIANT: &str = "events-append-only";
 
-fn policy() -> ReviewPolicy {
+pub(super) fn policy() -> ReviewPolicy {
     ReviewPolicy {
         owner_map: Some("docs/architecture-map.md".to_string()),
         high_risk: vec![PathClass {
@@ -32,7 +32,7 @@ fn policy() -> ReviewPolicy {
     }
 }
 
-fn tree_planner(review_policy: Option<ReviewPolicy>) -> ExecutionPlannerContext {
+pub(super) fn tree_planner() -> ExecutionPlannerContext {
     ExecutionPlannerContext {
         max_work_units: 8,
         tree: Some(TreePlannerContext {
@@ -41,24 +41,38 @@ fn tree_planner(review_policy: Option<ReviewPolicy>) -> ExecutionPlannerContext 
             remaining_depth: 2,
             ..TreePlannerContext::default()
         }),
-        review_policy,
         ..ExecutionPlannerContext::default()
     }
 }
 
-fn prompt_for(kind: TaskKind, labels: &[&str], context: &RunContext) -> String {
+/// 付記 B1: dispatcher が run の作業場所の情報に入れる review 方針。
+pub(super) fn workspace_with(review_policy: Option<ReviewPolicy>) -> Option<RunWorkspaceContext> {
+    Some(RunWorkspaceContext {
+        note: None,
+        review_policy,
+    })
+}
+
+pub(super) fn planner_context(
+    planner: ExecutionPlannerContext,
+    policy: Option<ReviewPolicy>,
+) -> RunContext {
+    RunContext {
+        execution_planner: Some(planner),
+        workspace: workspace_with(policy),
+        ..RunContext::default()
+    }
+}
+
+pub(super) fn prompt_for(kind: TaskKind, labels: &[&str], context: &RunContext) -> String {
     let mut task = crate::protocol::tests::sample_task();
     task.kind = kind;
     task.labels = labels.iter().map(|l| l.to_string()).collect();
     build_prompt(&task, context, "run-change-rules", "artifacts")
 }
 
-fn planner_prompt(planner: ExecutionPlannerContext) -> String {
-    let context = RunContext {
-        execution_planner: Some(planner),
-        ..RunContext::default()
-    };
-    prompt_for(TaskKind::Execute, &[], &context)
+fn planner_prompt(planner: ExecutionPlannerContext, policy: Option<ReviewPolicy>) -> String {
+    prompt_for(TaskKind::Execute, &[], &planner_context(planner, policy))
 }
 
 /// D1.2・I1: execute（task・WU）・plan・案件計画・案件 replan・execution plan（/1・/3）・その replan・review の
@@ -121,16 +135,19 @@ fn change_rules_generic_once_in_every_run_kind() {
             "tree plan",
             TaskKind::Execute,
             vec![],
-            planner(tree_planner(None)),
+            planner(tree_planner()),
         ),
         (
             "tree replan",
             TaskKind::Execute,
             vec![],
-            planner(ExecutionPlannerContext {
-                replan: true,
-                ..tree_planner(Some(policy()))
-            }),
+            planner_context(
+                ExecutionPlannerContext {
+                    replan: true,
+                    ..tree_planner()
+                },
+                Some(policy()),
+            ),
         ),
         (
             "review",
@@ -167,7 +184,8 @@ fn change_rules_generic_absent_from_cos_chat() {
             ..CosChatContext::default()
         }),
         conversation_addressee: Some(crate::protocol::ConversationAddressee::Secretary),
-        execution_planner: Some(tree_planner(Some(policy()))),
+        execution_planner: Some(tree_planner()),
+        workspace: workspace_with(Some(policy())),
         ..RunContext::default()
     };
     let task = crate::protocol::tests::sample_task();
@@ -237,12 +255,9 @@ fn change_rules_generic_and_required_rules_do_not_copy_each_other() {
 /// 直後に 1 回出る。方針が無い・中身が空なら何も出ない。
 #[test]
 fn change_rules_generic_repo_section_follows_only_with_a_review_policy() {
-    let with = planner_prompt(tree_planner(Some(policy())));
+    let with = planner_prompt(tree_planner(), Some(policy()));
     let generic = section();
-    let repo = repo_section(&RunContext {
-        execution_planner: Some(tree_planner(Some(policy()))),
-        ..RunContext::default()
-    });
+    let repo = repo_section(&planner_context(tree_planner(), Some(policy())));
     assert!(repo.starts_with(REPO_RULES_HEADING), "{repo}");
     for needle in [
         CLASS,
@@ -262,13 +277,13 @@ fn change_rules_generic_repo_section_follows_only_with_a_review_policy() {
     let heading_line = format!("\n{REPO_RULES_HEADING}\n");
     assert_eq!(with.matches(&heading_line).count(), 1, "{with}");
 
-    let without = planner_prompt(tree_planner(None));
+    let without = planner_prompt(tree_planner(), None);
     assert!(!without.contains(REPO_RULES_HEADING), "{without}");
     let empty = ReviewPolicy {
         definition_sha256: "d".to_string(),
         ..ReviewPolicy::default()
     };
-    let empty = planner_prompt(tree_planner(Some(empty)));
+    let empty = planner_prompt(tree_planner(), Some(empty));
     assert!(!empty.contains(REPO_RULES_HEADING), "{empty}");
     assert!(
         !prompt_for(TaskKind::Execute, &[], &RunContext::default()).contains(REPO_RULES_HEADING)
@@ -294,9 +309,9 @@ fn generic_brief_items() -> usize {
 /// class の一覧は repo 固有の節にだけあり、brief の節には再掲しない。
 #[test]
 fn change_rules_planner_brief_section_with_a_review_policy() {
-    let planner = tree_planner(Some(policy()));
-    let brief = design_brief_section(&planner);
-    let prompt = planner_prompt(planner);
+    let context = planner_context(tree_planner(), Some(policy()));
+    let brief = design_brief_section(&context);
+    let prompt = prompt_for(TaskKind::Execute, &[], &context);
     assert_eq!(prompt.matches(&brief).count(), 1, "{prompt}");
     assert_eq!(generic_brief_items(), 7);
     let fields = [
@@ -347,10 +362,10 @@ fn change_rules_planner_brief_section_with_a_review_policy() {
 /// ときの扱い（任意・方針を読めなければ Unknown で設計 review）を書く。/1 の planner には brief の節が無い。
 #[test]
 fn change_rules_planner_brief_section_without_a_review_policy() {
-    let with = design_brief_section(&tree_planner(Some(policy())));
-    let planner = tree_planner(None);
-    let brief = design_brief_section(&planner);
-    let prompt = planner_prompt(planner);
+    let with = design_brief_section(&planner_context(tree_planner(), Some(policy())));
+    let context = planner_context(tree_planner(), None);
+    let brief = design_brief_section(&context);
+    let prompt = prompt_for(TaskKind::Execute, &[], &context);
     assert_eq!(prompt.matches(&brief).count(), 1, "{prompt}");
     assert_ne!(brief, with);
     assert!(!brief.contains("DesignBriefMissing"), "{brief}");
@@ -363,11 +378,13 @@ fn change_rules_planner_brief_section_without_a_review_policy() {
     assert!(with.starts_with(heading), "{with}");
 
     // /1（木でない）の planner は `design_brief` を書けないので節を出さない。repo 固有の節は出る。
-    let flat = planner_prompt(ExecutionPlannerContext {
-        max_work_units: 8,
-        review_policy: Some(policy()),
-        ..ExecutionPlannerContext::default()
-    });
+    let flat = planner_prompt(
+        ExecutionPlannerContext {
+            max_work_units: 8,
+            ..ExecutionPlannerContext::default()
+        },
+        Some(policy()),
+    );
     assert!(!flat.contains(heading), "{flat}");
     assert!(flat.contains(REPO_RULES_HEADING), "{flat}");
 }

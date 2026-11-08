@@ -269,7 +269,7 @@ async fn the_preamble_note_names_the_worktree_the_branch_and_the_base() {
     let extras = d
         .run_extras(&task, Some(&worktree), None, "claude-code")
         .unwrap();
-    let note = extras.workspace_note.expect("workspace_note");
+    let note = extras.workspace.note.expect("workspace.note");
     let tree = root.path().join(task.id.to_string()).join("tree");
     assert!(note.contains(&format!("→ `{}`", tree.display())), "{note}");
     assert!(
@@ -674,7 +674,8 @@ async fn a_task_with_several_repos_gets_one_worktree_per_git_repo_and_a_link_for
     let note = d
         .run_extras(&task, Some(&workspaces), None, "claude-code")
         .unwrap()
-        .workspace_note
+        .workspace
+        .note
         .expect("note");
     for name in ["benchfs", "benchfs-paper", "data"] {
         assert!(note.contains(&format!("- `{name}` →")), "{note}");

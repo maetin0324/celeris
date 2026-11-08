@@ -1058,8 +1058,8 @@ struct RunExtras {
     recent_work: Vec<RecentWork>,
     /// Phase 41（ADR-0038 D1）: **途中目標レビューの対話 run** にだけ、その途中目標とそこまでの成果。
     milestone_review: Option<MilestoneReviewContext>,
-    /// Phase 43（ADR-0039 D3）: 案件が作業場所を決めている run にだけ、その場所を説明する 1 行。
-    workspace_note: Option<String>,
+    /// ADR-0039 D3 の作業場所の説明と、review 方針を読む target（付記 B2。`health_review/worker_profile.rs`）。
+    workspace: run_context::worker_profile::RunWorkspace,
     /// ADR-0044 D2（Phase 53）: そのタスクのコメント（最新 20 件、古い順）。
     comments: Vec<CommentContext>,
     /// ADR-0044 D2: 直前の run を止めた人のコメント（あれば前置きの先頭に「人からの割り込み」として出る）。

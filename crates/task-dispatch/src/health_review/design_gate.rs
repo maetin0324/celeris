@@ -13,8 +13,9 @@
 //!    判定の最も高い level が `none`・`low` なら今までどおり採用する（追加の run なし。D3.6）。`high`・`unknown` なら
 //!    `Event::DesignReviewRequested` を追記し、計画を採用せずに task を `ready` に戻す（D3.5 1.）。
 //! 3. [`Dispatcher::design_review_hold`]（`dispatch_one`）: 待っている設計 review がある task には planner も WU も
-//!    起こさない。まだ reviewer run を起こしていなければ `pick_reviewer` で選んで起こす（D3.5 2.）。待ちは events
-//!    だけで決まるので、デーモンの再起動の後も同じ判定になる（I9）。
+//!    起こさない。まだ reviewer run を起こしていなければ `pick_reviewer` で選んで起こす（D3.5 2.）。ただし木の run・
+//!    費用の上限を超えていれば起こさず、`kind: limit` の決定を要求する（`tree_limit_hold_for`。付記 C1）。待ちは
+//!    events だけで決まるので、デーモンの再起動の後も同じ判定になる（I9）。
 //! 4. [`Dispatcher::on_design_review_finished`]: 設計 review の run の終わりは `Completion::DesignReview` で届き、
 //!    `WorkerFinished`（role reviewer）・quota・runs 索引を記録してから `design_verdict::settle_design_review` に渡す
 //!    （`review.json` の `design` → `DesignReviewed` → 採用 / replan / `PlanGate`。D3.5 3〜5）。task の final review の
@@ -52,7 +53,7 @@ pub(super) struct DesignPolicies {
 impl Dispatcher {
     /// task の repo ごとの review 方針（`names` の repo だけ。名前 `""` は案件の repo の無い作業場所）。target は
     /// review 前の同期と同じ `review_target_ref`、案件の repo の無い task は worktree の base。remote は
-    /// `Unavailable`、git の repo が無ければ `Absent`（`policy::task_review_policy` と同じ規則を repo ごとに当てる）。
+    /// `Unavailable`、git の repo が無ければ `Absent`（`policy::review_policy_target` と同じ規則を repo ごとに当てる）。
     fn repo_review_policies(
         &self,
         task: &Task,
@@ -182,7 +183,7 @@ impl Dispatcher {
     /// I9・D3.5 2.: 待っている設計 review がある task には run を起こさない（`true`）。起こした reviewer run がまだ
     /// 終わっていなければその結果を待つ。終わったのに判定が無い（`done` で終わらなかった・失われて孤児の回収が閉じた）
     /// なら `[review] max_reviewer_retries` までもう一度起こし、超えたら不合格として記録する（`record_design_verdict`）。
-    /// 待っていなければ `false`。
+    /// run を起こす前に木の上限（`tree_limit_hold_for`）を見て、超えていれば起こさない。待っていなければ `false`。
     pub(super) fn design_review_hold(&mut self, task: &Task) -> Result<bool, DispatchError> {
         let events = self.store.events_for(task.id)?;
         let Some((seq, request)) = pending_design_review(&events) else {
@@ -204,6 +205,12 @@ impl Dispatcher {
                 runs.len()
             );
             self.record_design_verdict(task, &planner_run, plan_sha256, plan, last, Err(why))?;
+            return Ok(true);
+        }
+        // 付記（二度目の final review の差し戻しへの方針）C1: 設計 review の run も木の run・費用の上限に掛ける。判定と
+        // `kind: limit` の決定の要求（木に 1 件）は `dispatch_one` と同じ `tree_limit_hold_for`。超えていれば run を
+        // 起こさず待つ（人が上限を上げれば次の tick で起きる）。
+        if self.tree_limit_hold_for(task, task_core::NextRun::Worker)? {
             return Ok(true);
         }
         let Event::DesignReviewRequested {
@@ -272,7 +279,10 @@ impl Dispatcher {
                 _ => None,
             })
             .unwrap_or_default();
-        let Some(reviewer) = self.pick_reviewer(task, &subject) else {
+        // 付記 C2: final review と同じ task 木の token 予算の watch（`run_watch`）を run と sink に付ける。読めなければ
+        // run を起こさず次の tick でやり直す（`?`。C1 の判定と同じ扱い）。
+        let watch = token_budget::run_watch(self.store.as_ref(), task, None)?;
+        let Some(reviewer) = self.pick_reviewer(task, &subject, Ok(watch)) else {
             tracing::debug!(task_id = %task.id, "design review deferred (no admissible reviewer route)");
             return Ok(());
         };
@@ -477,9 +487,9 @@ async fn run_design_reviewer(
         crate::review::with_run_tmpdir(&run.adapter, workspace_dir, &run.run_id);
     run.sink
         .progress(&format!("design review started (adapter={})", adapter.id()));
-    adapter
-        .run(req, &run.run_id, run.limits, run.sink.as_ref())
-        .await
+    // 付記 C3・C4: final review と同じ watch の処理。予算で止めた run（`BudgetExhausted{Tokens}`）は `done` で終わらない
+    // run として `settle_design_review` が次の dispatch の起こし直しに回す（予算が尽きた後の run は adapter を起こさない）。
+    crate::review::run_within_token_budget(&adapter, req, &run).await
 }
 
 /// task の先頭の repo の名前（worker の cwd。案件の repo の無い task は `""`）。

@@ -1705,7 +1705,7 @@ fn git_task(repo: &std::path::Path, mode: Option<task_core::WorkspaceMode>, chec
 
 // ---- ADR-0066 D1（Phase 110b）: 共有ビルドキャッシュの `CARGO_TARGET_DIR` ----
 
-/// `req.context.workspace_note` を記録するだけのアダプタ。
+/// `req.context.workspace.note` を記録するだけのアダプタ。
 struct WorkspaceNoteAdapter {
     seen: Arc<StdMutex<Vec<Option<String>>>>,
 }
@@ -1722,7 +1722,10 @@ impl WorkerAdapter for WorkspaceNoteAdapter {
         _limits: RunLimits,
         _sink: &dyn EventSink,
     ) -> Result<RunOutcome, AdapterError> {
-        self.seen.lock().unwrap().push(req.context.workspace_note);
+        self.seen
+            .lock()
+            .unwrap()
+            .push(req.context.workspace_note().cloned());
         Ok(RunOutcome {
             terminal: Terminal::Done {
                 summary: "ok".into(),
@@ -3170,6 +3173,9 @@ mod stale_priority;
 /// （`src/dispatcher/tests/write_set_gate.rs`）。
 mod write_set_gate;
 
+/// ADR 2026-11-07-health-review-integration の付記（二度目の final review の差し戻しへの方針）C1: 設計 review の run を
+/// 木の run・費用の上限に掛ける（`src/dispatcher/tests/health_review_design_budget.rs`）。
+mod health_review_design_budget;
 mod health_review_design_gate;
 /// ADR 2026-11-07-health-review-integration D3.5（3〜5）・I9: 設計 review の結果で計画を採用・replan・人に回す
 /// （`src/dispatcher/tests/health_review_design_verdict.rs`）。
@@ -3178,8 +3184,8 @@ mod health_review_design_verdict;
 /// 作り、reviewer の再試行で使い回す。WU・reviewer の無い review・`reviewer_reuse` では作らない
 /// （`src/dispatcher/tests/health_review_input.rs`）。
 mod health_review_input;
-/// ADR 2026-11-07-health-review-integration D2.3・I3: base 側の検査器で読んだ review 方針が planner の `RunContext` に
-/// 入る（`src/dispatcher/tests/health_review_policy.rs`）。
+/// ADR 2026-11-07-health-review-integration D2.3・I3・付記 (b): base 側の検査器で読んだ review 方針が worker と planner の
+/// `RunContext.workspace` に入る（`src/dispatcher/tests/health_review_policy.rs`）。
 mod health_review_policy;
 /// ADR 2026-11-07-health-review-integration (6): 通常変更と高 risk 変更を流れ全体で区別する（本物の
 /// `--print-review-policy` の読み込みを含む。`src/health_review/scenario_tests.rs`）。

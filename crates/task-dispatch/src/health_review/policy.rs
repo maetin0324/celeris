@@ -12,9 +12,9 @@
 //! - target を解決できない・非 0 exit・壊れた JSON・schema 違い・時間切れ・`source = bootstrap`（head の profile。
 //!   `--print-review-policy` は head を読まないので出ないはずの値）・remote workspace → `Unavailable(理由)`。
 //!
-//! どれも黙って省かない（risk の判定では `Unavailable` は `unknown` になる。D3.3）。dispatcher からは planner run の
-//! 起動時に 1 回だけ呼ぶ（[`Dispatcher::planner_review_policy`]）。全体の時間に上限（[`REVIEW_POLICY_TIMEOUT`]）を置き、
-//! tick を長く止めない。LLM は呼ばない。
+//! どれも黙って省かない（risk の判定では `Unavailable` は `unknown` になる。D3.3）。worker と planner の run には、tick が
+//! [`Dispatcher::review_policy_target`] で repo と target を決め、run の起動の非同期部分で 1 回だけ読む（付記 B2。
+//! `health_review/worker_profile.rs`）。全体の時間に上限（[`REVIEW_POLICY_TIMEOUT`]）を置き、tick を止めない。LLM は呼ばない。
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -269,50 +269,46 @@ impl Drop for Scratch {
 }
 
 impl Dispatcher {
-    /// D2.3: planner run の起動時に 1 回（`execution_planner_context`）、task の先頭の repo（worker の cwd）の
-    /// target 側で review 方針を読む。`Unavailable` は理由を log に残す（planner の `RunContext` には `Present` だけ
-    /// を入れる。risk の判定は後続の design-gate）。
-    pub(crate) fn planner_review_policy(&self, task: &Task) -> ReviewPolicyState {
-        let state = self.task_review_policy(task);
-        if let ReviewPolicyState::Unavailable(why) = &state {
-            tracing::warn!(task_id = %task.id, reason = %why, "review policy unavailable");
-        }
-        state
-    }
-
+    /// D2.3・付記 B2: worker と planner の run で review 方針を読む repo と target を、tick の中で決める（読み込みは
+    /// しない。[`load_review_policy`] は run の起動の非同期部分が呼ぶ。`health_review/worker_profile.rs`）。repo は task の
+    /// 先頭の repo（worker の cwd）。WU の run でも target は task の target（WU の base ではない）。
+    ///
     /// target は review 前の同期と同じ（`review_target_ref`: 木の子は親の branch、ほかは repo の既定 branch）。
-    /// 案件の repo の無い task（作業場所そのものの worktree）は worktree の base。git の repo が無い task は
-    /// 方針を読む repo が無いので `Absent`。remote は `Unavailable`（D4.4 と同じく remote では読まない）。
-    fn task_review_policy(&self, task: &Task) -> ReviewPolicyState {
+    /// 案件の repo の無い task（作業場所そのものの worktree）は worktree の base。`Ok(None)` は方針を読む repo が無い
+    /// （git の repo が無い task。`Absent`）。`Err` は `Unavailable` の理由（remote は D4.4 と同じく読まない）。
+    pub(crate) fn review_policy_target(
+        &self,
+        task: &Task,
+    ) -> Result<Option<(PathBuf, String)>, String> {
         if matches!(task.workspace, WorkspaceSpec::Remote { .. }) {
-            return ReviewPolicyState::Unavailable("remote workspace".into());
+            return Err("remote workspace".into());
         }
         let Some(workspaces) = self.task_workspaces_for(task) else {
             if task.repos.is_empty() {
-                return ReviewPolicyState::Absent;
+                return Ok(None);
             }
-            return ReviewPolicyState::Unavailable(
+            return Err(
                 "作業場所の repo を解決できない（remote の repo・消えた repo の行）".into(),
             );
         };
         let Some(primary) = workspaces.repos.into_iter().next() else {
-            return ReviewPolicyState::Absent;
+            return Ok(None);
         };
         let Some(worktree) = primary.worktree else {
-            return ReviewPolicyState::Absent;
+            return Ok(None);
         };
         let target = match task.repos.iter().find(|r| r.name == primary.name) {
             Some(reference) => {
                 match self.review_target_ref(task, reference.repo_id, &worktree.repo) {
                     Ok(Some(target)) => target,
                     Ok(None) => {
-                        return ReviewPolicyState::Unavailable(format!(
+                        return Err(format!(
                             "repo {} の target branch を解決できない",
                             primary.name
                         ));
                     }
                     Err(e) => {
-                        return ReviewPolicyState::Unavailable(format!(
+                        return Err(format!(
                             "repo {} の target branch を読めない: {e}",
                             primary.name
                         ));
@@ -321,7 +317,7 @@ impl Dispatcher {
             }
             None => worktree.base.sha.clone(),
         };
-        load_review_policy(&worktree.repo, &target, REVIEW_POLICY_TIMEOUT)
+        Ok(Some((worktree.repo, target)))
     }
 }
 

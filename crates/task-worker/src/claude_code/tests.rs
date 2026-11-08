@@ -2388,13 +2388,16 @@ fn the_artifact_convention_is_absent_without_a_harness_genre() {
 fn build_prompt_states_the_project_workspace_when_the_project_has_one() {
     let task = crate::protocol::tests::sample_task();
     let context = RunContext {
-        workspace_note: Some(crate::preamble::workspace_note(
-            &task_core::WorkspaceSpec::Remote {
-                cluster: "pegasus".into(),
-                path: std::path::PathBuf::from("/work/NBB/rmaeda/workspace/rust/benchfs"),
-                mode: None,
-            },
-        )),
+        workspace: Some(crate::protocol::RunWorkspaceContext {
+            note: Some(crate::preamble::workspace_note(
+                &task_core::WorkspaceSpec::Remote {
+                    cluster: "pegasus".into(),
+                    path: std::path::PathBuf::from("/work/NBB/rmaeda/workspace/rust/benchfs"),
+                    mode: None,
+                },
+            )),
+            review_policy: None,
+        }),
         ..RunContext::default()
     };
     let prompt = build_prompt(&task, &context, "run-ws-1", "artifacts");
@@ -2417,12 +2420,15 @@ fn build_prompt_states_the_project_workspace_when_the_project_has_one() {
 
     // Local の案件では「クラスタ」とは言わない。
     let local = RunContext {
-        workspace_note: Some(crate::preamble::workspace_note(
-            &task_core::WorkspaceSpec::Local {
-                path: std::path::PathBuf::from("/home/rmaeda/workspace/rust/pluvio-poc"),
-                mode: None,
-            },
-        )),
+        workspace: Some(crate::protocol::RunWorkspaceContext {
+            note: Some(crate::preamble::workspace_note(
+                &task_core::WorkspaceSpec::Local {
+                    path: std::path::PathBuf::from("/home/rmaeda/workspace/rust/pluvio-poc"),
+                    mode: None,
+                },
+            )),
+            review_policy: None,
+        }),
         ..RunContext::default()
     };
     let prompt = build_prompt(&task, &local, "run-ws-2", "artifacts");
@@ -2444,12 +2450,15 @@ fn build_plan_prompt_states_the_workspace_children_inherit_only_when_the_project
     assert!(!bare.contains("## 作業場所"), "{bare}");
 
     let context = RunContext {
-        workspace_note: Some(crate::preamble::workspace_note(
-            &task_core::WorkspaceSpec::Local {
-                path: std::path::PathBuf::from("/home/rmaeda/workspace/rust/pluvio-poc"),
-                mode: None,
-            },
-        )),
+        workspace: Some(crate::protocol::RunWorkspaceContext {
+            note: Some(crate::preamble::workspace_note(
+                &task_core::WorkspaceSpec::Local {
+                    path: std::path::PathBuf::from("/home/rmaeda/workspace/rust/pluvio-poc"),
+                    mode: None,
+                },
+            )),
+            review_policy: None,
+        }),
         ..RunContext::default()
     };
     let prompt = build_prompt(&task, &context, "run-ws-3", "artifacts");

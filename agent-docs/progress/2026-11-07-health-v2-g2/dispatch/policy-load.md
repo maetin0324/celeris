@@ -31,7 +31,14 @@ WorkUnit `policy-load`。基準は `$CELERIS_WU_BASE`（範囲 check）と `git 
 `crates/task-dispatch/src/dispatcher/` に足した本体の行は 0（`planner_flow.rs` は 2 行を 2 行に置き換え、ほかは可視性の語だけ）。新しい処理は `health_review/` に置いた。`check-health.sh` は verdict=pass・new=0・worsened=0。
 
 ## 証拠（提出時の HEAD で実行）
-（下の「検査結果」節を参照）
+この WU では main の取り込み・rebase をしていない。下の検査は最後の code の commit の後に実行した（後の commit は進捗の file だけ）。
+- 範囲 check（計画の文字列。`CELERIS_WU_SCOPE_PATHS` の path を許可の正規表現で除く）→ exit 0（範囲外の path なし。変更は `crates/task-dispatch/` の 12 file と `docs/architecture-map.md`、この進捗）
+- `cargo nextest run -p task-dispatch -E 'test(health_review_policy_)'` → exit 0、12 passed（1463 skipped）
+- `bash scripts/dev/test-affected.sh`（対象 crate: celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch）→ exit 0。check-health は verdict=pass・new=0・worsened=0（existing 718）、repo_health_gate の試験は全部通過、nextest は 3511 passed・11 skipped、doc test も通過。
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- `python3 scripts/dev/check-architecture-map.py` → exit 0（939 件の path を確認）
+- `sh scripts/dev/progress-index.sh --check` → exit 0
 
 ## 未解決
 - 方針を読むのは task の先頭の repo（worker の cwd）だけ。複数の repo を持つ task の 2 つ目以降の repo の方針は planner に渡らない（`ExecutionPlannerContext.review_policy` が 1 つのため）。

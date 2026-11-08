@@ -11,7 +11,7 @@ updated: 2026-11-08
 WorkUnit `policy-load`。基準は `$CELERIS_WU_BASE`（範囲 check）と `git merge-base HEAD main`（check-health）。設計は [ADR 2026-11-07 健全性を設計と review に組み込む](../../../adr/2026-11-07-health-review-integration.md) の D2.3・I3。
 
 ## 変更
-件名「G2 policy-load: base 側の検査器で review 方針を読み planner の RunContext に渡す」の commit と、この進捗の commit。
+件名「G2 policy-load: base 側の検査器で review 方針を読み planner の RunContext に渡す」の commit、件名「G2 policy-load: 再起動後の統合やり直しの試験で d1 の統合の終わりを待つ（負荷で merge が重なり Blocked になる）」の commit（2 回目の run。下の「前回の check の不合格」）と、この進捗の commit。
 - `crates/task-dispatch/src/health_review.rs`（新しい top-level module）: 下位 module `policy`・`design`・`input`・`verdict` を宣言。`design.rs`・`input.rs`・`verdict.rs` は後続の leaf（design-gate・health-input・health-verdict）のための module doc だけの file。
 - `crates/task-dispatch/src/health_review/policy.rs`:
   - `load_review_policy(repo, target, timeout) -> ReviewPolicyState`: `git rev-parse --verify <target>^{commit}` で target を sha にし、`git cat-file -e <sha>:scripts/dev/repo-health/repo_health.py` で base に script があるかを確かめ、`git archive <sha> -- scripts/dev/repo-health [scripts/dev/source-size-report.py]`（side の file は base にあるときだけ）を一時 dir（`$TMPDIR/celeris-review-policy-<ulid>`、drop で消す）に展開し、`python3 -I -B <一時 dir>/scripts/dev/repo-health/repo_health.py --print-review-policy --repo <repo> --base <sha>` を起こす。候補（head・作業ツリー）の検査器と profile は使わない。
@@ -30,13 +30,17 @@ WorkUnit `policy-load`。基準は `$CELERIS_WU_BASE`（範囲 check）と `git 
 ## size の制約
 `crates/task-dispatch/src/dispatcher/` に足した本体の行は 0（`planner_flow.rs` は 2 行を 2 行に置き換え、ほかは可視性の語だけ）。新しい処理は `health_review/` に置いた。`check-health.sh` は verdict=pass・new=0・worsened=0。
 
+## 前回の check の不合格（2 回目の run）
+1 回目の run の後に celeris が走らせた check（`bash scripts/dev/test-affected.sh && cargo clippy … && cargo fmt … --check`）は exit 100 だった。原因はこの WU の変更ではなく、負荷で落ちる時間依存の試験 2 件。どちらも planner を起こさないので、この WU の唯一の挙動の変更（planner の文脈の `review_policy`）を通らない。
+- `celeris-campaign` の `launcher::a_swapped_daemon_binary_is_rejected_on_every_path_and_stop_only_touches_the_launcher_pid`（celeris の check で失敗）: 単独では通る（8 秒）。推定の原因（未確認）: `scripts/campaign/measure-launcher.sh` の health 待ちが `owned_alive`（`/proc/<pid>/cmdline` に `--config` を含むか）を 0.1 秒ごとに見ており、nohup → wrapper → 試験 binary の exec の途中で cmdline を読み損ねると「daemon が落ちた」と判定して片付ける（失敗の出力「pid … is not the daemon this launcher started … daemon exited before becoming healthy」、daemon.log は空）。`scripts/campaign/` はこの WU の範囲 check の外なので直していない（下の「提案」）。
+- `task-dispatch` の `dispatcher::tests::work_units::an_interrupted_integration_is_redone_idempotently_after_restart`（2 回目の run の再実行で失敗。`Blocked` ≠ `Done`）: 単独では 5 回とも通る。原因: 試験は d1 を捨てて固定の 200 ms 待つだけで、d1 が spawn した統合（merge）は捨てた後も走り続ける。負荷で d1 の merge が d2 のやり直しと同じ worktree で重なると、d2 の merge が `index.lock` で失敗し、`integration_gives_up` で `Blocked` になる。決定的な再現: PATH の先頭に置いた `git` の wrapper が最初の `git merge` の前に worktree の `index.lock` を 1.5 秒持つ（merge 中の d1 を模す）と、直す前は 2 回とも同じ行（work_units.rs の `assert_eq!(…status, Status::Done)`）で失敗した。直し方: d1 を捨てる前に `d1.integrating` から統合の `JoinHandle` を取り出して終わりを待つ（落ちたデーモンの統合はデーモンと一緒に止まる。固定の sleep は消した）。直した後は wrapper ありで 3 回、なしで 3 回とも通る。
+
 ## 証拠（提出時の HEAD で実行）
-この WU では main の取り込み・rebase をしていない。下の検査は最後の code の commit の後に実行した（後の commit は進捗の file だけ）。
-- 範囲 check（計画の文字列。`CELERIS_WU_SCOPE_PATHS` の path を許可の正規表現で除く）→ exit 0（範囲外の path なし。変更は `crates/task-dispatch/` の 12 file と `docs/architecture-map.md`、この進捗）
+この WU では main の取り込み・rebase をしていない。下の検査は最後の code の commit（件名「G2 policy-load: 再起動後の統合やり直しの試験で …」）の後に実行した（後の commit は進捗の file だけ）。
+- `bash scripts/dev/test-affected.sh && cargo clippy --workspace -- -D warnings && cargo fmt --all -- --check`（前回不合格の check と同じ文字列、同じ cwd）→ exit 0。対象 crate は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。check-health は verdict=pass・new=0・worsened=0（existing 718）、repo_health_gate の試験は全部通過、nextest は 3511 passed・11 skipped、doc test も通過。
+- 範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"` の path を許可の正規表現で除く）→ 範囲外の path なし（変更は `crates/task-dispatch/` の 13 file と `docs/architecture-map.md`、この進捗）
 - `cargo nextest run -p task-dispatch -E 'test(health_review_policy_)'` → exit 0、12 passed（1463 skipped）
-- `bash scripts/dev/test-affected.sh`（対象 crate: celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch）→ exit 0。check-health は verdict=pass・new=0・worsened=0（existing 718）、repo_health_gate の試験は全部通過、nextest は 3511 passed・11 skipped、doc test も通過。
-- `cargo clippy --workspace -- -D warnings` → exit 0
-- `cargo fmt --all -- --check` → exit 0
+- `cargo nextest run -p task-dispatch -E 'test(an_interrupted_integration_is_redone_idempotently_after_restart)'` → wrapper あり 3 回・なし 3 回とも 1 passed
 - `python3 scripts/dev/check-architecture-map.py` → exit 0（939 件の path を確認）
 - `sh scripts/dev/progress-index.sh --check` → exit 0
 
@@ -45,6 +49,9 @@ WorkUnit `policy-load`。基準は `$CELERIS_WU_BASE`（範囲 check）と `git 
 - git の repo の無い task は `Absent` にした（`review_policy_absent` で risk は `none`）。`Unavailable` にすると、repo を触らない task がすべて設計 review に回る。
 - design-gate は計画の採用時に `ReviewPolicyState` を要る。planner run の起動時に読んだ状態は保存していないので、design-gate は `Dispatcher::planner_review_policy` をもう一度呼ぶか、状態の受け渡し方を決める必要がある（この unit では決めていない）。
 - 本物の `--print-review-policy` は main（integrate 01M6VVB2X5）にあり、この WU の基準にはまだ無い。dispatcher の試験は stub で確かめた。本物の script との結合は統合後の scenario で確かめる。
+- `measure-launcher.sh` の起動直後の誤判定（上の推定の原因）は直していない。affected の試験に `celeris-campaign` が入る WU では、負荷の高いときに同じ試験が落ちうる。
+- 本番で統合中にデーモンが kill されると、残った `git` の process か残った `index.lock` が新しいデーモンの統合のやり直しを `Blocked` にしうる（未確認。試験の直しは同じ process の中の重なりだけを扱う）。
 
 ## 提案
+- `scripts/campaign/measure-launcher.sh` の health 待ちで、死んだ判定を「`/proc/<pid>` が無い、または状態が Z・X」に限り、identity（starttime・cmdline・実行像）の照合は health が答えた後の 1 回にする（exec の途中の cmdline で誤判定しない）。試験は exec を遅らせる wrapper（`sleep` してから `exec`）で決定的に再現する。`scripts/campaign/` を範囲に持つ別の task で扱う。
 - design-gate で `Unavailable` の理由を event（`DesignReviewRequested.risk.reasons`）に残すとき、この unit の理由の文（`base <sha12> に scripts/dev/repo-health/repo_health.py が無い` など）をそのまま使う。

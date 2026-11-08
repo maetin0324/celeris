@@ -572,7 +572,11 @@ impl Dispatcher {
             let id = key.task;
             let current = self.store.get(id)?;
             let still_ours = match (&current, self.running.get(&key)) {
-                (Some(t), Some(entry)) => self.run_holds_lease(t, &entry.run_id)?,
+                // ADR 2026-11-07-health-review-integration D3.5: 設計 review の run は lease を持たない（task は `ready`）。
+                (Some(t), Some(entry)) => {
+                    self.run_holds_lease(t, &entry.run_id)?
+                        || self.holds_design_review(t, &entry.run_id)?
+                }
                 _ => false,
             };
             if !still_ours && let Some(entry) = self.running.remove(&key) {

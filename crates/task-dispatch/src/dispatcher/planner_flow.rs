@@ -2,6 +2,10 @@
 
 use super::*;
 
+/// 計画の採用の共通部（設計 review を通った計画と共有）。file は size の制約で `health_review/` に置く。
+#[path = "../health_review/plan_adoption.rs"]
+pub(super) mod plan_adoption;
+
 impl Dispatcher {
     /// ADR-0072 D14（Phase E3）: task-local な planner run の終わり方を判定する。`current_wu` が無い
     /// （計画がまだ無い）Task の `RunRole::Planner` run はすべてここを通る。
@@ -170,75 +174,29 @@ impl Dispatcher {
 
         match validation {
             Ok((validated, gate)) => {
-                // ADR-0079 D4 (3)（Phase R2a）: /3 の各 unit に unit の gate をかけ、leaf を task に上げる・task を leaf に下げる（採用する計画の
-                // spec に当てる）。子 task にできない深さの compound な leaf と、上限を超える unit は採用の直後に決定の要求で止める（`apply_tree_plan_holds`）。
-                let (validated, tree_plan) =
-                    self.tree_plan_gate(task, validated, &done_work_units, &mut adopt_limits);
-                let outcome_str = format!(
-                    "done: {} work unit(s) planned",
-                    validated.spec.work_units.len()
-                );
+                let replan = active_plan.is_some();
                 let finished = Event::WorkerFinished {
                     run_id: run_id.clone(),
-                    outcome: outcome_str,
+                    outcome: format!(
+                        "done: {} work unit(s) planned",
+                        validated.spec.work_units.len()
+                    ),
                     usage,
                     role: Some(RunRole::Planner),
                     metrics,
                     end: run_end,
                 };
-                // ADR-0074 D3.7（Phase F4b (f)）: planner の `children` を既存の委譲の検証に通す
-                // （初回の採用だけ。replan で新しい子を足すことはしない — 既存の子の key だけを許す）。
-                let children = if active_plan.is_some() {
-                    let existing: std::collections::BTreeSet<String> = self
-                        .store
-                        .children(task_id)?
-                        .into_iter()
-                        .flat_map(|c| c.labels.into_iter())
-                        .collect();
-                    match validated
-                        .spec
-                        .children
-                        .iter()
-                        .find(|c| !existing.contains(&task_core::child_label(&c.key)))
-                    {
-                        Some(c) => Err(format!(
-                            "child {} is new; children can only be added when the plan is first adopted",
-                            c.key
-                        )),
-                        None => Ok(task_ops::delegate::ChildrenPlan::Ready(Vec::new())),
-                    }
-                } else {
-                    task_ops::delegate::plan_children(
-                        self.store.as_ref(),
-                        task,
-                        &validated.spec.children,
-                        &self.config.roles,
-                        &self.config.genres,
-                        &self.config.delegation,
-                        now,
-                    )
-                };
-                // ADR-0079 D2 / D4 (4)（Phase R1b）: /3 の kind task の unit は、repos が親の部分集合で
-                // あること、部をまたぐ子の認可（ADR-0074 F4b と同じ規則）を採用の前に確かめる。
-                let children = match children {
-                    Ok(task_ops::delegate::ChildrenPlan::Ready(c))
-                        if validated.spec.schema == task_core::EXECUTION_PLAN_SCHEMA_V3 =>
-                    {
-                        self.tree_plan_checks(task, &validated.spec, now)
-                            .map(|plan| match plan {
-                                task_ops::delegate::ChildrenPlan::Ready(_) => {
-                                    task_ops::delegate::ChildrenPlan::Ready(c)
-                                }
-                                other => other,
-                            })
-                    }
-                    other => other,
-                };
-                let children = match children {
-                    Ok(task_ops::delegate::ChildrenPlan::Ready(children)) => children,
-                    Ok(task_ops::delegate::ChildrenPlan::NeedsAuthorization(questions)) => {
-                        // SPEC §3.1 / ADR-0033 D4・D5: 部をまたぐ子は秘書（人）への質問。認可されたら
-                        // planner をもう一度走らせ、同じ子が認可済みとして通る。
+                // unit の gate・子 task の検証・採用・root の承認の判定は `plan_adoption`（設計 review を通った計画と共有）。
+                let prepared = match self.prepare_adoption(
+                    task,
+                    validated,
+                    replan,
+                    &done_work_units,
+                    adopt_limits,
+                    now,
+                ) {
+                    Ok(prepared) => prepared,
+                    Err(plan_adoption::AdoptionHold::NeedsAuthorization(questions)) => {
                         let question = questions.join("\n");
                         let progress = Event::worker_progress(run_id.clone(), question.clone());
                         self.store.apply_transition_with_events(
@@ -258,7 +216,7 @@ impl Dispatcher {
                         }
                         return Ok(());
                     }
-                    Err(reason) => {
+                    Err(plan_adoption::AdoptionHold::Invalid(reason)) => {
                         self.give_up_or_retry_planner(
                             task_id,
                             task,
@@ -271,96 +229,44 @@ impl Dispatcher {
                     }
                 };
                 // D3.5・D3.6: 高 risk・unknown の計画は採用せず、設計 review を待つ（`health_review/design_gate.rs`）。
-                if self.design_gate(task, gate, &validated.spec, [&finished, &quota_event])? {
+                if self.design_gate(
+                    task,
+                    gate,
+                    &prepared.validated.spec,
+                    [&finished, &quota_event],
+                )? {
                     return Ok(());
                 }
-                let adopted = if active_plan.is_some() {
-                    // ADR-0072 D17（Phase E4）: replan。done の WU は保持し、旧版を supersede する。
-                    task_ops::execution::replan(
-                        self.store.as_ref(),
-                        task_id,
-                        validated.spec,
-                        "replan (planner run)".to_string(),
-                        task_core::PlanOrigin::Planner,
-                        Some(run_id.clone()),
-                        adopt_limits,
-                        now,
-                    )
-                    .map(|(plan, _diff)| plan)
-                } else {
-                    task_ops::execution::adopt_plan_with_children(
-                        self.store.as_ref(),
-                        task_id,
-                        validated.spec,
-                        task_core::PlanOrigin::Planner,
-                        Some(run_id.clone()),
-                        adopt_limits,
-                        now,
-                        children,
-                    )
-                };
-                match adopted {
-                    Ok(plan) => {
-                        if let Some(tree_plan) = tree_plan
-                            && let Err(e) =
-                                self.apply_tree_plan_holds(task, &plan, &run_id, tree_plan, now)
-                        {
-                            tracing::warn!(%task_id, %run_id, error = %e, "failed to record the unit gate / tree limit holds of the adopted plan (ADR-0079 R2a)");
-                        }
-                        // ADR-0079 D8（Phase R3b）: root の /3 の計画は、決定を含む・`review: human` の段階・上限に近い、のどれかなら人の承認を待つ
-                        // （`PlanGate`、unit を 1 つも起こさない）。そうでなければ進め、報告の流れに 1 件だけ残す（Discord は鳴らさない。U-R3）。
-                        let approval = match self.root_plan_approval(task, &plan) {
-                            Ok(a) => a,
-                            Err(e) => {
-                                tracing::warn!(%task_id, %run_id, error = %e, "failed to evaluate the root plan approval; asking a human to be safe (ADR-0079 D8)");
-                                Some(task_core::PlanApproval {
-                                    required: true,
-                                    reasons: vec![format!("evaluation_failed:{e}")],
-                                })
-                            }
-                        };
-                        match approval {
-                            Some(a) if a.required => {
-                                tracing::info!(%task_id, plan_id = %plan.id, reasons = ?a.reasons, "the root plan needs a human approval (ADR-0079 D8)");
-                                self.store.apply_transition_with_events(
-                                    task_id,
-                                    Trigger::PlanGate {
+                match self.adopt_prepared(task, &run_id, prepared, replan, now) {
+                    Ok(plan) => match self.plan_approval_of(task, &plan, &run_id) {
+                        Some(a) if a.required => {
+                            tracing::info!(%task_id, plan_id = %plan.id, reasons = ?a.reasons, "the root plan needs a human approval (ADR-0079 D8)");
+                            self.store.apply_transition_with_events(
+                                task_id,
+                                Trigger::PlanGate {
+                                    plan_id: plan.id.clone(),
+                                },
+                                vec![
+                                    finished,
+                                    quota_event,
+                                    Event::PlanApprovalRequested {
                                         plan_id: plan.id.clone(),
+                                        reasons: a.reasons,
                                     },
-                                    vec![
-                                        finished,
-                                        quota_event,
-                                        Event::PlanApprovalRequested {
-                                            plan_id: plan.id.clone(),
-                                            reasons: a.reasons,
-                                        },
-                                    ],
-                                )?;
-                            }
-                            approval => {
-                                self.store.apply_transition_with_events(
-                                    task_id,
-                                    Trigger::Continue {
-                                        why: task_core::ContinueWhy::Planned,
-                                    },
-                                    vec![finished, quota_event],
-                                )?;
-                                if approval.is_some() {
-                                    let (headline, body) =
-                                        task_ops::plan_gate::plan_notice(&plan.spec);
-                                    if let Err(e) = task_ops::plan_gate::record_plan_notice(
-                                        self.store.as_ref(),
-                                        task,
-                                        &headline,
-                                        &body,
-                                        now,
-                                    ) {
-                                        tracing::warn!(%task_id, error = %e, "failed to record the plan notice report (ADR-0079 D8)");
-                                    }
-                                }
-                            }
+                                ],
+                            )?;
                         }
-                    }
+                        approval => {
+                            self.store.apply_transition_with_events(
+                                task_id,
+                                Trigger::Continue {
+                                    why: task_core::ContinueWhy::Planned,
+                                },
+                                vec![finished, quota_event],
+                            )?;
+                            self.record_plan_adopted_notice(task, &plan, approval, now);
+                        }
+                    },
                     Err(e) => {
                         // 採用そのものが失敗した（既に有効な計画がある等、通常起きない）: 不正な
                         // 試行として retry/give-up の判断に合流させる。
@@ -942,6 +848,16 @@ impl Dispatcher {
                         out.push_str(&format!("; the child's last checkpoint: {cp}"));
                     }
                     return Ok(out);
+                }
+                // ADR 2026-11-07-health-review-integration D3.5 4.: 設計 review の不合格からの replan（findings が理由）。
+                Event::DesignReviewed {
+                    pass: false,
+                    findings,
+                    ..
+                } => {
+                    return Ok(design_gate::design_verdict::design_review_failed_reason(
+                        findings,
+                    ));
                 }
                 // ADR-0072「Phase F6 実装時の決定」: 人が後から依頼した replan（「人の指示: <note>」）。
                 Event::ExecutionHintSet {

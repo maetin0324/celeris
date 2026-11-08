@@ -16,15 +16,19 @@
 //!    起こさない。まだ reviewer run を起こしていなければ `pick_reviewer` で選んで起こす（D3.5 2.）。待ちは events
 //!    だけで決まるので、デーモンの再起動の後も同じ判定になる（I9）。
 //! 4. [`Dispatcher::on_design_review_finished`]: 設計 review の run の終わりは `Completion::DesignReview` で届き、
-//!    `WorkerFinished`（role reviewer）・quota・runs 索引だけを記録する。task の final review の判定
-//!    （`on_review_finished`・`review_verdict`）には流さない。`review.json` の `design` の読み込みと計画の採用・
-//!    replan は後続の design-verdict。
+//!    `WorkerFinished`（role reviewer）・quota・runs 索引を記録してから `design_verdict::settle_design_review` に渡す
+//!    （`review.json` の `design` → `DesignReviewed` → 採用 / replan / `PlanGate`。D3.5 3〜5）。task の final review の
+//!    判定（`on_review_finished`・`review_verdict`）には流さない。
 
 use super::*;
 
+/// 設計 review の結果の扱い（採用・replan・人に回す）。この module の子として読む。
+#[path = "design_verdict.rs"]
+pub(super) mod design_verdict;
+
 use crate::health_review::design::{
-    brief_required_classes, design_review_started, merge_risk, pending_design_review, plan_summary,
-    write_paths_by_repo,
+    brief_required_classes, design_review_in_flight, design_review_runs, merge_risk,
+    pending_design_review, plan_summary, planner_run_before, write_paths_by_repo,
 };
 use crate::health_review::policy::{REVIEW_POLICY_TIMEOUT, load_review_policy};
 use task_core::ExecutionPlanSpec;
@@ -175,14 +179,31 @@ impl Dispatcher {
         Ok(true)
     }
 
-    /// I9・D3.5 2.: 待っている設計 review がある task には run を起こさない（`true`）。まだ reviewer run を起こして
-    /// いなければ起こす（選べなければ次の tick にもう一度試す）。待っていなければ `false`。
+    /// I9・D3.5 2.: 待っている設計 review がある task には run を起こさない（`true`）。起こした reviewer run がまだ
+    /// 終わっていなければその結果を待つ。終わったのに判定が無い（`done` で終わらなかった・失われて孤児の回収が閉じた）
+    /// なら `[review] max_reviewer_retries` までもう一度起こし、超えたら不合格として記録する（`record_design_verdict`）。
+    /// 待っていなければ `false`。
     pub(super) fn design_review_hold(&mut self, task: &Task) -> Result<bool, DispatchError> {
         let events = self.store.events_for(task.id)?;
         let Some((seq, request)) = pending_design_review(&events) else {
             return Ok(false);
         };
-        if design_review_started(&events, seq) {
+        if design_review_in_flight(&events, seq).is_some() {
+            return Ok(true);
+        }
+        let runs = design_review_runs(&events, seq);
+        if let Some(last) = runs.last()
+            && runs.len() > self.config.max_reviewer_retries as usize
+            && let Event::DesignReviewRequested {
+                plan_sha256, plan, ..
+            } = request
+        {
+            let planner_run = planner_run_before(&events, seq).unwrap_or(last).to_string();
+            let why = format!(
+                "設計 review の run が {} 回とも判定を書かずに終わった（最後の run {last}）",
+                runs.len()
+            );
+            self.record_design_verdict(task, &planner_run, plan_sha256, plan, last, Err(why))?;
             return Ok(true);
         }
         let Event::DesignReviewRequested {
@@ -211,6 +232,18 @@ impl Dispatcher {
         };
         self.start_design_review(task, request)?;
         Ok(true)
+    }
+
+    /// `abort_stale_runs` 用: `run_id` がこの task の待っている設計 review の run（まだ終わっていない）なら `true`。
+    /// 設計 review の run は task が `ready` のまま走り lease を持たないので、lease の有無だけで止めない。
+    pub(super) fn holds_design_review(
+        &self,
+        task: &Task,
+        run_id: &str,
+    ) -> Result<bool, DispatchError> {
+        let events = self.store.events_for(task.id)?;
+        Ok(pending_design_review(&events)
+            .is_some_and(|(seq, _)| design_review_in_flight(&events, seq) == Some(run_id)))
     }
 
     /// D3.5 2.: `pick_reviewer` で reviewer を選び、`run_reviewer_inner` と同じ形の reviewer run を起こす（新しい run
@@ -339,8 +372,9 @@ impl Dispatcher {
         Ok(())
     }
 
-    /// 設計 review の run の終わり。`WorkerFinished`（role reviewer）・quota・runs 索引だけを記録し、task の状態は
-    /// 変えない。task の final review の判定（`on_review_finished`・`review_verdict`）には流さない。
+    /// 設計 review の run の終わり。`WorkerFinished`（role reviewer）・quota・runs 索引を記録し、判定の扱い（`review.json`
+    /// の `design` → `DesignReviewed` → 採用 / replan / `PlanGate`）は `design_verdict::settle_design_review`。task の
+    /// final review の判定（`on_review_finished`・`review_verdict`）には流さない。
     pub(super) fn on_design_review_finished(
         &mut self,
         end: DesignReviewEnd,
@@ -373,7 +407,7 @@ impl Dispatcher {
             peak_context_tokens: None,
             turns: None,
         });
-        tracing::info!(%task_id, %run_id, %outcome, "design review run finished (the verdict is read by the design-verdict step, not by the final review)");
+        tracing::info!(%task_id, %run_id, %outcome, "design review run finished (the verdict is read by design_verdict, not by the final review)");
         self.store.append_event(
             task_id,
             &Event::WorkerFinished {
@@ -399,7 +433,7 @@ impl Dispatcher {
         ) {
             tracing::warn!(%task_id, %run_id, error = %e, "failed to finish the runs index row for the design review run");
         }
-        Ok(())
+        self.settle_design_review(task_id, &run_id, &result)
     }
 }
 

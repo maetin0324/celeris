@@ -5,8 +5,8 @@
 //!   unit の `context.repo` ごとに分け（[`write_paths_by_repo`]）、repo ごとの判定から最も高い level を採る
 //!   （[`merge_risk`]）。
 //! - 設計 review の待ちは events だけで表す（I9）: [`pending_design_review`] は最後の `DesignReviewRequested` と同じ
-//!   `plan_sha256` の `DesignReviewed` が無い間を「待ち」とし、[`design_review_started`] はその後に reviewer run を
-//!   起こしたかを events から読む。
+//!   `plan_sha256` の `DesignReviewed` が無い間を「待ち」とし、[`design_review_in_flight`] はその後に起こした reviewer run
+//!   がまだ終わっていないかを events から読む（結果の扱いは `design_verdict.rs`）。
 //!
 //! Dispatcher の状態（実行中の run・完了の channel）を使う配線は `design_gate.rs`（`dispatcher` の子 module）にある。
 //! review 方針は [`super::policy::load_review_policy`] が base 側から読んだものを使う。LLM は呼ばない。
@@ -157,19 +157,107 @@ pub(crate) fn pending_design_review(events: &[(u64, Event)]) -> Option<(u64, &Ev
     (!reviewed).then_some((*seq, request))
 }
 
-/// I9: `seq` の `DesignReviewRequested` の後に reviewer run を起こしたか（`WorkerStarted { role: reviewer }`）。
-/// 起こしていれば、その run の結果（design-verdict）を待つ。もう 1 本は起こさない。
-pub(crate) fn design_review_started(events: &[(u64, Event)], seq: u64) -> bool {
-    events.iter().any(|(s, e)| {
-        *s > seq
-            && matches!(
-                e,
-                Event::WorkerStarted {
-                    role: Some(task_core::RunRole::Reviewer),
-                    ..
-                }
-            )
+/// I9: `seq` の `DesignReviewRequested` の後に起こした reviewer run（`WorkerStarted { role: reviewer }`）の run id を
+/// 順に返す。最後の run にまだ `WorkerFinished` が無ければ、その run の結果（design-verdict）を待つ（もう 1 本は
+/// 起こさない）。デーモンの再起動で失われた run は孤児の回収（`ownerless_runs`）が `WorkerFinished{interrupted}` で
+/// 閉じるので、その後の dispatch が起こし直す。
+pub(crate) fn design_review_runs(events: &[(u64, Event)], seq: u64) -> Vec<&str> {
+    events
+        .iter()
+        .filter(|(s, _)| *s > seq)
+        .filter_map(|(_, e)| match e {
+            Event::WorkerStarted {
+                run_id,
+                role: Some(task_core::RunRole::Reviewer),
+                ..
+            } => Some(run_id.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// I9: `seq` の後に起こした設計 review の run のうち、まだ終わっていない（`WorkerFinished` の無い）run の id。
+pub(crate) fn design_review_in_flight(events: &[(u64, Event)], seq: u64) -> Option<&str> {
+    design_review_runs(events, seq).into_iter().find(|run_id| {
+        !events
+            .iter()
+            .any(|(_, e)| matches!(e, Event::WorkerFinished { run_id: done, .. } if done == run_id))
     })
+}
+
+/// D3.5 5.: 同じ task で続いた設計 review の不合格の数。最後の計画の採用（`ExecutionPlanned`）か合格
+/// （`DesignReviewed { pass: true }`）より後の `DesignReviewed { pass: false }` を数える。
+pub(crate) fn consecutive_design_review_failures(events: &[(u64, Event)]) -> usize {
+    events
+        .iter()
+        .rev()
+        .take_while(|(_, e)| {
+            !matches!(
+                e,
+                Event::ExecutionPlanned { .. } | Event::DesignReviewed { pass: true, .. }
+            )
+        })
+        .filter(|(_, e)| matches!(e, Event::DesignReviewed { pass: false, .. }))
+        .count()
+}
+
+/// `seq` の `DesignReviewRequested` を出した planner run の id（その前の最後の `WorkerStarted { role: planner }`）。
+pub(crate) fn planner_run_before(events: &[(u64, Event)], seq: u64) -> Option<&str> {
+    events.iter().rev().find_map(|(s, e)| match e {
+        Event::WorkerStarted {
+            run_id,
+            role: Some(task_core::RunRole::Planner),
+            ..
+        } if *s < seq => Some(run_id.as_str()),
+        _ => None,
+    })
+}
+
+/// D3.5 4.: 不合格の findings を planner の prior（再試行の理由）に渡す 1 行。`<kind>(<severity>)[ <path>]: <reason>` を
+/// `; ` で結ぶ。findings が無ければ `why`（review.json が無い・壊れている等）。
+pub(crate) fn design_findings_line(
+    findings: &[task_worker::protocol::HealthFindingOut],
+    why: &str,
+) -> String {
+    if findings.is_empty() {
+        return why.to_string();
+    }
+    findings
+        .iter()
+        .map(|f| {
+            let path = f
+                .path
+                .as_deref()
+                .map(|p| format!(" {p}"))
+                .unwrap_or_default();
+            format!(
+                "{}({}){path}: {}",
+                serde_json::to_value(f.kind)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_string))
+                    .unwrap_or_default(),
+                serde_json::to_value(f.severity)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_string))
+                    .unwrap_or_default(),
+                f.reason
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// D3.5 4.: `DesignReviewed { pass: false }` からの replan の理由（`ExecutionPlannerContext.replan_reason`）。`findings` は
+/// event の JSON の写し（`HealthFindingOut`）。読めない要素は数に入れない。
+pub(crate) fn design_review_failed_reason(findings: &[serde_json::Value]) -> String {
+    let parsed: Vec<task_worker::protocol::HealthFindingOut> = findings
+        .iter()
+        .filter_map(|v| serde_json::from_value(v.clone()).ok())
+        .collect();
+    format!(
+        "design review failed: {}",
+        design_findings_line(&parsed, "reviewer の判定が不合格（findings なし）")
+    )
 }
 
 /// `DesignReviewRequest.plan_summary`: 計画の rationale、unit（/3）と WorkUnit（/1・/2）の key・題・write path。

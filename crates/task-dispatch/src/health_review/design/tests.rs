@@ -147,9 +147,9 @@ fn health_review_design_gate_pending_review_is_read_from_events() {
     let mut events = vec![(1, requested)];
     let (seq, _) = pending_design_review(&events).expect("pending");
     assert_eq!(seq, 1);
-    assert!(!design_review_started(&events, seq));
+    assert!(design_review_in_flight(&events, seq).is_none());
     events.push((2, started));
-    assert!(design_review_started(&events, seq));
+    assert_eq!(design_review_in_flight(&events, seq), Some("r1"));
     events.push((3, reviewed("other")));
     assert!(
         pending_design_review(&events).is_some(),
@@ -157,4 +157,48 @@ fn health_review_design_gate_pending_review_is_read_from_events() {
     );
     events.push((4, reviewed("p1")));
     assert!(pending_design_review(&events).is_none());
+}
+
+/// D3.5 4.・5.: 続いた不合格は最後の採用か合格より後の `DesignReviewed { pass: false }` の数。replan の理由は findings の
+/// 種別・severity・path・理由を 1 行にする。
+#[test]
+fn health_review_design_verdict_consecutive_failures_and_reason_line() {
+    let reviewed = |pass: bool| Event::DesignReviewed {
+        plan_sha256: "p".into(),
+        review_run: "r".into(),
+        pass,
+        findings: vec![serde_json::json!({
+            "kind": "dual_source_of_truth",
+            "severity": "blocking",
+            "path": "crates/task-store/src/rows.rs",
+            "reason": "rows and events both hold the revision",
+        })],
+    };
+    let planned = Event::ExecutionPlanned {
+        plan_id: "x".into(),
+        version: 1,
+        origin: task_core::PlanOrigin::Planner,
+        supersedes: None,
+        reason: None,
+        plan: Box::new(spec(serde_json::json!([leaf("a", &["x"], None)]), None)),
+    };
+    let mut events = vec![(1, reviewed(false)), (2, reviewed(false))];
+    assert_eq!(consecutive_design_review_failures(&events), 2);
+    events.push((3, planned));
+    assert_eq!(consecutive_design_review_failures(&events), 0);
+    events.push((4, reviewed(false)));
+    events.push((5, reviewed(true)));
+    events.push((6, reviewed(false)));
+    assert_eq!(consecutive_design_review_failures(&events), 1);
+    let Event::DesignReviewed { findings, .. } = reviewed(false) else {
+        unreachable!()
+    };
+    assert_eq!(
+        design_review_failed_reason(&findings),
+        "design review failed: dual_source_of_truth(blocking) crates/task-store/src/rows.rs: rows and events both hold the revision"
+    );
+    assert_eq!(
+        design_review_failed_reason(&[]),
+        "design review failed: reviewer の判定が不合格（findings なし）"
+    );
 }

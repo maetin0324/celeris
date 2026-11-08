@@ -160,14 +160,20 @@ async fn health_review_design_gate_low_risk_plan_is_adopted_without_a_reviewer_r
 
 /// D3.5: 高 risk の path に触れ brief が `new_state` を宣言した計画は採用されず、`DesignReviewRequested` が書かれ、
 /// 設計 review の reviewer run が 1 本だけ起きる（文脈は `ReviewRequest.design` だけ）。その run の終わりは task の
-/// final review の判定に流れない（`ReviewVerdict` が無く、task は `ready` のまま、WU も planner も起きない）。
+/// final review の判定に流れない（`ReviewVerdict` が無く、WU は起きない）。この試験の reviewer は `review.json` を
+/// 書かないので判定は不合格（`DesignReviewed { pass: false }`。design-verdict）で、planner がもう一度起きる（2 回目は
+/// 計画を出さず、採用は無い）。
 #[tokio::test]
 async fn health_review_design_gate_high_risk_plan_requests_a_design_review_before_adoption() {
     let out = run(&stub("base"), vec![v3_plan_with(STORE_PATH, true)], true).await;
-    assert_eq!(out.planner_runs(), 1);
+    assert_eq!(
+        out.planner_runs(),
+        2,
+        "the planner runs once for the plan and once more after the failed design review"
+    );
     assert!(
         !out.adopted(),
-        "the high-risk plan is not adopted before the design review"
+        "the high-risk plan is not adopted without a passing design review"
     );
     let requested = out.requested();
     assert_eq!(requested.len(), 1);
@@ -221,11 +227,11 @@ async fn health_review_design_gate_high_risk_plan_requests_a_design_review_befor
         )),
         "the design review run does not reach the final review verdict or adopt the plan"
     );
-    let task = out.store.get(out.task.id).unwrap().unwrap();
-    assert_eq!(
-        task.status,
-        Status::Ready,
-        "the task waits for the design verdict"
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::DesignReviewed { pass: false, .. })),
+        "a reviewer that writes no design verdict fails the design review"
     );
     assert!(
         out.seen

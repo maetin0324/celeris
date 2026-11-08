@@ -3170,13 +3170,16 @@ mod stale_priority;
 /// （`src/dispatcher/tests/write_set_gate.rs`）。
 mod write_set_gate;
 
+mod health_review_design_gate;
+/// ADR 2026-11-07-health-review-integration D3.5（3〜5）・I9: 設計 review の結果で計画を採用・replan・人に回す
+/// （`src/dispatcher/tests/health_review_design_verdict.rs`）。
+mod health_review_design_verdict;
 /// ADR 2026-11-07-health-review-integration D4・I5: final review の `ReviewRequest.health` を candidate SHA ごとに 1 回
 /// 作り、reviewer の再試行で使い回す。WU・reviewer の無い review・`reviewer_reuse` では作らない
 /// （`src/dispatcher/tests/health_review_input.rs`）。
 mod health_review_input;
 /// ADR 2026-11-07-health-review-integration D2.3・I3: base 側の検査器で読んだ review 方針が planner の `RunContext` に
 /// 入る（`src/dispatcher/tests/health_review_policy.rs`）。
-mod health_review_design_gate;
 mod health_review_policy;
 mod orphan_work_units;
 /// ADR 2026-10-27-project-stagnation-inbox D3: dispatcher の停滞の判定（偽の時計・一時 releases_dir）

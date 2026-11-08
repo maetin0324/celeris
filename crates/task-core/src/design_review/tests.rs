@@ -341,6 +341,11 @@ fn health_review_risk_events_round_trip_and_read_without_optional_fields() {
             review_run: "run-rv".into(),
             repo_id: "agent-platform".into(),
             reason: "remote_workspace".into(),
+            target_sha: "a".repeat(40),
+            reviewed_sha: "b".repeat(40),
+            policy: Some(
+                serde_json::json!({"source": "unavailable", "changed": false, "files": []}),
+            ),
         },
     ];
     let names = [

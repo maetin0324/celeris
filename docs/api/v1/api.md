@@ -939,8 +939,12 @@ run は止めない。同じ内容は `worker_progress`（`kind = status`・`err
   `level` は `none` / `low` / `high` / `unknown`。同じ `plan_sha256` の `design_reviewed` が無い間が設計 review 待ち。
   `findings` は reviewer の `review.json` の `design.findings` の写し。状態は変えない。
 - `health_review_input_built`（`{review_run, repo_id, target_sha, reviewed_sha, definition_sha256, input}`）・
-  `health_review_input_skipped`（`{review_run, repo_id, reason}`）: final review に渡す 1 repo の health の材料を作った・
-  作らなかった理由（同 ADR D4.3・D4.4）。`input` は worker protocol の `HealthRepoInput` の写し。状態は変えない。
+  `health_review_input_skipped`（`{review_run, repo_id, reason, target_sha?, reviewed_sha?, policy?}`）: final review に
+  渡す 1 repo の health の材料を作った・作らなかった理由（同 ADR D4.3・D4.4）。`input` は worker protocol の
+  `HealthRepoInput` の写し、`policy` は `HealthPolicyState` の写し（base に検査器がある repo だけ。candidate
+  `target_sha..reviewed_sha` の policy の状態で、policy の関門（同 ADR I8・D6.4）が読む）。`policy.source` が
+  `unavailable` の記録は policy の状態を決められなかった（不明）ことを表し、関門は変更と同じに人の承認を求める。
+  状態は変えない。
 
 `work_unit_committed` / `phase_integrated` / `work_units_serialized` は応答の `items[]` には現れるが、`types` の語彙には無い（指定すると 400）。
 

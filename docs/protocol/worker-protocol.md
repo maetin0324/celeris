@@ -769,7 +769,10 @@ new: [{rule_id, fingerprint, severity, delta, path?}], truncated}, policy: {sour
 `removals` が実際に消えたかを確かめる。
 `findings.new` は repo health の report のうち `delta` が `new`・`worsened` で例外の無いもの（上限 50 件。超えた数が
 `truncated`）、`diff.paths` と `owner_rows` は上限 40 件。`findings` と `policy` の値は repo health の report
-（`scripts/dev/repo-health/schema/report-v1.schema.json`）の値をそのまま写す。
+（`scripts/dev/repo-health/schema/report-v1.schema.json`）の値をそのまま写す。report を作れない（時間切れ・report が
+無い・壊れた）ときは `findings` が `{verdict: "error", reviewable: false, reason}`、`policy.source` が `unavailable`
+（policy の状態が不明）になる。不明の repo には reviewer の `health.policy` を求めず、dispatcher が人の承認を求める
+（ADR I8・D6.4。fail closed）。
 
 `health` を渡された reviewer は `review.json` に `health` を必ず書く（無い・壊れていれば dispatcher は全条件を不合格にする。ADR D5.2）:
 

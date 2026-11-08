@@ -30,6 +30,14 @@ fn report() -> serde_json::Value {
 
 /// main に stub の検査器（方針の `source`）と owner 地図を commit した repo と、report の実行を数える log。
 fn health_repo(source: &str) -> (tempfile::TempDir, tempfile::TempDir, PathBuf) {
+    health_repo_with(source, Some(report()))
+}
+
+/// [`health_repo`] の report を選べる形（`None` は report を書かずに exit 2）。
+fn health_repo_with(
+    source: &str,
+    report: Option<serde_json::Value>,
+) -> (tempfile::TempDir, tempfile::TempDir, PathBuf) {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let scratch = tempfile::tempdir().unwrap();
@@ -39,10 +47,10 @@ fn health_repo(source: &str) -> (tempfile::TempDir, tempfile::TempDir, PathBuf) 
         "invariants": {"events-append-only": "CLAUDE.md"}, "definition_sha256": DIGEST,
     });
     let script = format!(
-        "import sys\nargs = sys.argv[1:]\nif '--print-review-policy' in args:\n    sys.stdout.write({policy:?})\n    sys.exit(0)\nopen({log:?}, 'a').write(' '.join(args) + '\\n')\nopen(args[args.index('--out') + 1], 'w').write({report:?})\nsys.exit(1)\n",
+        "import sys\nargs = sys.argv[1:]\nif '--print-review-policy' in args:\n    sys.stdout.write({policy:?})\n    sys.exit(0)\nopen({log:?}, 'a').write(' '.join(args) + '\\n')\nreport = {report:?}\nif not report:\n    sys.exit(2)\nopen(args[args.index('--out') + 1], 'w').write(report)\nsys.exit(1)\n",
         policy = policy.to_string(),
         log = log.display().to_string(),
-        report = report().to_string(),
+        report = report.map(|r| r.to_string()).unwrap_or_default(),
     );
     let path = repo.path().join(CHECKER_SCRIPT);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -112,6 +120,7 @@ impl WorkerAdapter for HealthReviewer {
 }
 
 struct Reviewed {
+    store: Arc<dyn TaskStore>,
     seen: Vec<Option<HealthReviewInput>>,
     events: Vec<Event>,
     task: Task,
@@ -160,6 +169,7 @@ async fn review_flow(
     let events = events_of(&store, &task);
     let seen = seen.lock().unwrap().clone();
     Reviewed {
+        store,
         seen,
         events,
         task,
@@ -289,6 +299,7 @@ async fn health_review_input_reused_on_reviewer_retry() {
 }
 
 /// review 方針が absent の repo は作らず、`HealthReviewInputSkipped` に理由を残す（`ReviewRequest.health` は無い）。
+/// policy の関門のため repo health は 1 回走り、policy の状態（ここでは変更なし）を同じ event に残す。
 #[tokio::test]
 async fn health_review_input_policy_absent_is_skipped() {
     let (repo, _scratch, log) = health_repo("absent");
@@ -296,17 +307,69 @@ async fn health_review_input_policy_absent_is_skipped() {
     assert_eq!(r.status, Status::Done, "{:?}", r.events);
     assert_eq!(r.seen, vec![None]);
     assert!(built(&r.events).is_empty());
-    assert!(log_lines(&log).is_empty());
-    let reasons: Vec<_> = r
+    assert_eq!(log_lines(&log).len(), 1);
+    let skipped: Vec<_> = r
         .events
         .iter()
         .filter_map(|e| match e {
-            Event::HealthReviewInputSkipped { reason, .. } => Some(reason.clone()),
+            Event::HealthReviewInputSkipped {
+                reason,
+                reviewed_sha,
+                policy,
+                ..
+            } => Some((reason.clone(), reviewed_sha.clone(), policy.clone())),
             _ => None,
         })
         .collect();
-    assert_eq!(reasons.len(), 1, "{reasons:?}");
-    assert!(reasons[0].contains("absent"), "{reasons:?}");
+    assert_eq!(skipped.len(), 1, "{skipped:?}");
+    assert!(skipped[0].0.contains("absent"), "{skipped:?}");
+    assert_eq!(skipped[0].1, r.head);
+    assert_eq!(
+        skipped[0].2.as_ref().map(|p| p["changed"].clone()),
+        Some(false.into())
+    );
+}
+
+/// I8・D6.4（fail closed）: report を書かない repo health の candidate は、reviewer が合格を書いても done に
+/// ならない。policy の状態を不明として candidate の SHA に結び付けて記録し、承認の子を作って reviewing のまま待つ。
+#[tokio::test]
+async fn health_review_policy_unknown_flow_missing_report_waits_for_a_human() {
+    let (repo, _scratch, log) = health_repo_with("base", None);
+    let r = review_flow(repo.path(), true, false, None).await;
+    assert_eq!(r.status, Status::Reviewing, "{:?}", r.events);
+    assert_eq!(log_lines(&log).len(), 1);
+    let health = r.seen[0]
+        .as_ref()
+        .expect("the reviewer gets the health input");
+    assert_eq!(health.repos[0].policy.source, "unavailable");
+    let run = reviewer_runs(&r.events).remove(0);
+    assert_eq!(
+        built(&r.events),
+        vec![(run, r.target.clone(), r.head.clone())]
+    );
+    let approvals: Vec<Task> = r
+        .store
+        .children(r.task.id)
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.kind == TaskKind::Approval)
+        .collect();
+    assert_eq!(approvals.len(), 1, "{:?}", r.events);
+    assert_eq!(
+        approvals[0].title,
+        format!(
+            "Policy change approval: {} @ {}",
+            r.task.repos[0].repo_id,
+            &r.head[..12]
+        )
+    );
+    assert!(
+        approvals[0]
+            .objective
+            .contains("policy state unknown: repo_health.py が report を書かなかった"),
+        "{}",
+        approvals[0].objective
+    );
 }
 
 /// reviewer 条件の無い review（決定的 check だけ）と、その間の tick では作らない。

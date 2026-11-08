@@ -464,10 +464,19 @@ pub enum Event {
     },
     /// D4.4: final review で 1 repo の health の材料を作らなかった理由（remote workspace・review 方針が
     /// `absent` など。`ReviewRequest.health` はその repo の分を持たない）。状態は変えない（`replay` は無視する）。
+    /// base に検査器がある repo は、policy の関門（I8・D6.4）のために candidate（`target_sha..reviewed_sha`）の
+    /// `policy`（`task_worker::protocol::HealthPolicyState` の JSON の写し。`source = "unavailable"` は決められ
+    /// なかった）も持つ。検査器の無い repo・同期の無い repo は持たない。
     HealthReviewInputSkipped {
         review_run: String,
         repo_id: String,
         reason: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        target_sha: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        reviewed_sha: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        policy: Option<serde_json::Value>,
     },
     ApprovalRequested,
     ApprovalDecided {

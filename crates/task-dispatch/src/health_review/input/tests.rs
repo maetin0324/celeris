@@ -226,7 +226,8 @@ fn health_review_input_built_once_per_candidate() {
     assert_eq!((built, skipped), (1, 2), "{events:?}");
 }
 
-/// 方針が absent の repo は作らず `HealthReviewInputSkipped` に理由を残す（repo health は走らない）。
+/// 方針が absent の repo は作らず `HealthReviewInputSkipped` に理由を残す。policy の関門のため、repo health は
+/// 1 回走り、candidate の policy の状態を同じ event に残す（同じ candidate の 2 回目は記録を使う）。
 #[test]
 fn health_review_input_policy_absent_is_skipped() {
     let scratch = tempfile::tempdir().unwrap();
@@ -235,25 +236,48 @@ fn health_review_input_policy_absent_is_skipped() {
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let w = work(&store, "review-1", &candidate, scratch.path());
     assert_eq!(build_health_input(&w), None);
-    assert_eq!(log_lines(&log), 0);
-    let reasons: Vec<String> = store
+    assert_eq!(build_health_input(&w), None);
+    assert_eq!(
+        log_lines(&log),
+        1,
+        "the policy state is decided once per candidate"
+    );
+    let skipped: Vec<(String, String, Option<HealthPolicyState>)> = store
         .events_for(w.task_id)
         .unwrap()
         .into_iter()
         .filter_map(|(_, e)| match e {
             Event::HealthReviewInputSkipped {
-                repo_id, reason, ..
-            } if repo_id == "repo-1" => Some(reason),
+                repo_id,
+                reason,
+                reviewed_sha,
+                policy,
+                ..
+            } if repo_id == "repo-1" => Some((
+                reason,
+                reviewed_sha,
+                policy.map(|p| serde_json::from_value(p).unwrap()),
+            )),
             _ => None,
         })
         .collect();
-    assert_eq!(reasons.len(), 1);
-    assert!(reasons[0].contains("absent"), "{reasons:?}");
+    assert_eq!(skipped.len(), 2);
+    let (reason, reviewed, policy) = &skipped[0];
+    assert_eq!(reason, POLICY_ABSENT);
+    assert_eq!(reviewed, &candidate.reviewed_sha);
+    let policy = policy.as_ref().unwrap();
+    assert!(policy.changed);
+    assert_eq!(
+        policy.files,
+        vec!["scripts/dev/repo-health/profiles/celeris.toml".to_string()]
+    );
+    assert_eq!(skipped[0], skipped[1]);
 }
 
-/// report を書かない repo health（exit 2）は理由付きの空の要約を渡し、記録しない（次の再試行でやり直す）。
+/// report を書かない repo health（exit 2）は理由付きの空の要約を渡し、policy の状態を不明（`unavailable`）として
+/// 記録する（policy の関門のため）。不明の記録は再利用せず、次の review で走らせ直す（D4.3）。
 #[test]
-fn health_review_input_failed_report_is_not_recorded() {
+fn health_review_input_failed_report_is_recorded_as_unknown() {
     let scratch = tempfile::tempdir().unwrap();
     let log = scratch.path().join("runs.log");
     let (_repo, candidate) = stub_repo("base", None, &log);
@@ -266,14 +290,19 @@ fn health_review_input_failed_report_is_not_recorded() {
         ("error", false)
     );
     assert!(findings.reason.as_deref().unwrap().contains("report"));
-    assert_eq!(input.repos[0].policy.source, "unavailable");
+    assert_eq!(input.repos[0].policy.source, POLICY_UNKNOWN);
     build_health_input(&w).unwrap();
     assert_eq!(log_lines(&log), 2, "not reused");
-    let built = store
+    let built: Vec<HealthRepoInput> = store
         .events_for(w.task_id)
         .unwrap()
-        .iter()
-        .filter(|(_, e)| matches!(e, Event::HealthReviewInputBuilt { .. }))
-        .count();
-    assert_eq!(built, 0);
+        .into_iter()
+        .filter_map(|(_, e)| match e {
+            Event::HealthReviewInputBuilt { input, .. } => serde_json::from_value(input).ok(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(built.len(), 2);
+    assert!(built.iter().all(|i| i.policy.source == POLICY_UNKNOWN));
+    assert_eq!(built[0].reviewed_sha, candidate.reviewed_sha);
 }

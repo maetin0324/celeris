@@ -7,8 +7,9 @@
 //!
 //! 流れ（`Check::Human` の既存の経路を使う）:
 //! - [`Dispatcher::policy_review_gate`]（`on_review_finished` が合否を数える前）: reviewer が判定した candidate の
-//!   `HealthReviewInputBuilt` が `policy.changed` で、ほかの判定が全部合格なら、candidate ごとの `Approval` の子を
-//!   探す。無ければ作る（`ApprovalRequested` → 受信箱。本文に policy の file と diff の要約）。子が終端でない間は
+//!   policy の状態（`HealthReviewInputBuilt` の `input.policy`・`HealthReviewInputSkipped` の `policy`）が
+//!   `changed` か不明（report を作れない・方針を読めない・diff を取れない。fail closed）で、ほかの判定が全部合格なら、
+//!   candidate ごとの `Approval` の子を探す（不明には D6.3 の reviewer の policy verdict を求めない）。無ければ作る（`ApprovalRequested` → 受信箱。本文に policy の file と diff の要約）。子が終端でない間は
 //!   既存の「委譲した子の待ち」で reviewing のまま待つ。人の承認（done）は合格の verdict、却下（failed・
 //!   cancelled）は substantive の不合格（→ replan）を足す。
 //! - [`Dispatcher::policy_approval_pending`]（`resolve_human_approvals` の先頭）: 承認の子が終端でない間は review を
@@ -16,11 +17,13 @@
 //! - [`Dispatcher::policy_rereview`]（`settle_awaiting_children`）: 承認の子が終端になったら直接 `ReviewPass` に
 //!   せず、review をやり直して上の判定に通す（reviewer の合格は ADR 2026-10-27 D2 で再利用される）。
 //!
-//! 判定に使う policy の状態は `HealthReviewInputBuilt`（base 側の検査器で作った材料。I3）だけから読む。LLM は呼ばない。
+//! 判定に使う policy の状態は base 側の検査器で作った event（I3）だけから読む。同じ candidate に既知の状態が
+//! あればそれを使い（後の review で report を作り直せた）、無ければ不明の記録を使う。LLM は呼ばない。
 
 use super::*;
+use crate::health_review::input::POLICY_UNKNOWN;
 use crate::review::RequiredCheckBinding;
-use task_worker::protocol::HealthRepoInput;
+use task_worker::protocol::{DiffStat, HealthPolicyState, HealthRepoInput};
 
 /// policy の変更の承認を待つ `Approval` の子の title の接頭辞（`derive::human_approval_title` と重ならない）。
 pub(crate) const POLICY_APPROVAL_TITLE: &str = "Policy change approval: ";
@@ -28,17 +31,36 @@ pub(crate) const POLICY_APPROVAL_TITLE: &str = "Policy change approval: ";
 /// 人の却下の不合格に付ける repair の class（scope は substantive。局所修復にしない）。
 const POLICY_REJECTED_CLASS: &str = "policy_rejected";
 
-/// reviewer が判定した 1 repo の policy の変更。
+/// reviewer が判定した 1 repo の policy の変更（または決められなかった状態）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PolicyChange {
+    pub repo_id: String,
+    pub target_sha: String,
     /// reviewer が見た candidate の SHA（承認は candidate ごと）。
     pub reviewed_sha: String,
-    /// その candidate の health の材料（base 側の検査器で作ったもの）。
-    pub input: HealthRepoInput,
+    /// 変わった policy の file（不明なら空）。
+    pub files: Vec<String>,
+    /// reviewer に渡した材料の diff（材料を渡さなかった repo は `None`）。
+    pub diff: Option<DiffStat>,
+    /// policy の状態を決められなかった理由（`Some` は不明。I8 の fail closed で変更と同じに扱う）。
+    pub unknown: Option<String>,
 }
 
-/// この review で reviewer が判定した candidate のうち、policy の file を変えたもの。`reviewer_ran` が false の
-/// review（reviewer の合格を再利用した）は、`ReviewerPassReused` の元の candidate を見る。
+impl PolicyChange {
+    /// verdict の reason に載せる対象（policy の file か、不明の理由）。
+    fn subject(&self) -> String {
+        match &self.unknown {
+            Some(why) => format!(
+                "policy state unknown ({})",
+                why.chars().take(300).collect::<String>()
+            ),
+            None => self.files.join(", "),
+        }
+    }
+}
+
+/// この review で reviewer が判定した candidate のうち、policy の file を変えたもの・policy の状態が不明なもの。
+/// `reviewer_ran` が false の review（reviewer の合格を再利用した）は、`ReviewerPassReused` の元の candidate を見る。
 pub(crate) fn policy_changes<'a>(
     events: &[(u64, Event)],
     reviewer_ran: bool,
@@ -69,59 +91,119 @@ pub(crate) fn policy_changes<'a>(
         let Some((target, reviewed)) = judged else {
             continue;
         };
-        let repo = b.repo_id.to_string();
-        let input = events.iter().rev().find_map(|(_, e)| match e {
+        out.extend(candidate_policy(
+            events,
+            &b.repo_id.to_string(),
+            &target,
+            &reviewed,
+        ));
+    }
+    out
+}
+
+/// 1 candidate の policy の状態の記録のうち、最後の既知の状態（変更があれば `Some`）。既知の記録が無ければ最後の
+/// 不明の記録（`unknown` 付き）。記録が無い（base に検査器が無い・材料を作っていない）なら `None`。
+fn candidate_policy(
+    events: &[(u64, Event)],
+    repo: &str,
+    target: &str,
+    reviewed: &str,
+) -> Option<PolicyChange> {
+    let mut unknown = None;
+    for (_, e) in events.iter().rev() {
+        let recorded: Result<(HealthPolicyState, Option<DiffStat>, String), String> = match e {
             Event::HealthReviewInputBuilt {
                 repo_id,
                 target_sha,
                 reviewed_sha,
                 input,
                 ..
-            } if *repo_id == repo && *target_sha == target && *reviewed_sha == reviewed => {
-                serde_json::from_value::<HealthRepoInput>(input.clone()).ok()
+            } if repo_id == repo && target_sha == target && reviewed_sha == reviewed => {
+                serde_json::from_value::<HealthRepoInput>(input.clone())
+                    .map(|i| {
+                        (
+                            i.policy,
+                            Some(i.diff),
+                            i.findings.reason.unwrap_or_default(),
+                        )
+                    })
+                    .map_err(|e| format!("HealthReviewInputBuilt の input を読めない: {e}"))
             }
-            _ => None,
-        });
-        if let Some(input) = input.filter(|i| i.policy.changed) {
-            out.push(PolicyChange {
-                reviewed_sha: reviewed,
-                input,
-            });
+            Event::HealthReviewInputSkipped {
+                repo_id,
+                target_sha,
+                reviewed_sha,
+                policy: Some(policy),
+                reason,
+                ..
+            } if repo_id == repo && target_sha == target && reviewed_sha == reviewed => {
+                serde_json::from_value::<HealthPolicyState>(policy.clone())
+                    .map(|p| (p, None, reason.clone()))
+                    .map_err(|e| format!("HealthReviewInputSkipped の policy を読めない: {e}"))
+            }
+            _ => continue,
+        };
+        let change = |files, diff, why| PolicyChange {
+            repo_id: repo.to_string(),
+            target_sha: target.to_string(),
+            reviewed_sha: reviewed.to_string(),
+            files,
+            diff,
+            unknown: why,
+        };
+        match recorded {
+            Ok((policy, diff, _)) if policy.source != POLICY_UNKNOWN => {
+                return policy.changed.then(|| change(policy.files, diff, None));
+            }
+            Ok((_, diff, why)) => {
+                unknown.get_or_insert_with(|| change(Vec::new(), diff, Some(why)));
+            }
+            Err(why) => {
+                unknown.get_or_insert_with(|| change(Vec::new(), None, Some(why)));
+            }
         }
     }
-    out
+    unknown
 }
 
 /// candidate ごとの承認の子の title（照合のキー）。
 pub(crate) fn approval_title(change: &PolicyChange) -> String {
     format!(
         "{POLICY_APPROVAL_TITLE}{} @ {}",
-        change.input.repo_id,
+        change.repo_id,
         &change.reviewed_sha[..change.reviewed_sha.len().min(12)]
     )
 }
 
-/// 受信箱に出す本文: policy の file・diff の要約・reviewer の承認の理由。
+/// 受信箱に出す本文: policy の file（不明ならその理由）・diff の要約・reviewer の承認の理由。
 pub(crate) fn approval_objective(change: &PolicyChange, reviewer_reason: Option<&str>) -> String {
-    let i = &change.input;
+    let c = change;
     let mut lines = vec![
-        "The reviewer approved a change to the repo-health policy files. It passes only with a human approval (ADR 2026-11-07-health-review-integration D6.4). Reject to send it back for a replan.".to_string(),
+        match &c.unknown {
+            None => "The reviewer approved a change to the repo-health policy files. It passes only with a human approval (ADR 2026-11-07-health-review-integration D6.4). Reject to send it back for a replan.",
+            Some(_) => "The repo-health policy state of this candidate could not be determined, so it is treated as a policy change (fail closed, ADR 2026-11-07-health-review-integration I8・D6.4). It passes only with a human approval. Reject to send it back for a replan.",
+        }
+        .to_string(),
         format!(
             "repo {}: base {} → candidate {}",
-            i.repo_id, i.target_sha, i.reviewed_sha
+            c.repo_id, c.target_sha, c.reviewed_sha
         ),
-        format!("policy files: {}", i.policy.files.join(", ")),
-        format!(
-            "diff: {} files, +{} -{}",
-            i.diff.files, i.diff.insertions, i.diff.deletions
-        ),
+        match &c.unknown {
+            None => format!("policy files: {}", c.files.join(", ")),
+            Some(why) => format!("policy state unknown: {why}"),
+        },
     ];
-    lines.extend(
-        i.diff
-            .paths
-            .iter()
-            .map(|p| format!("- {} (+{} -{})", p.path, p.insertions, p.deletions)),
-    );
+    if let Some(diff) = &c.diff {
+        lines.push(format!(
+            "diff: {} files, +{} -{}",
+            diff.files, diff.insertions, diff.deletions
+        ));
+        lines.extend(
+            diff.paths
+                .iter()
+                .map(|p| format!("- {} (+{} -{})", p.path, p.insertions, p.deletions)),
+        );
+    }
     if let Some(reason) = reviewer_reason {
         lines.push(format!("reviewer: {reason}"));
     }
@@ -203,7 +285,7 @@ impl Dispatcher {
         let children = self.store.children(task.id)?;
         for change in &changes {
             let title = approval_title(change);
-            let files = change.input.policy.files.join(", ");
+            let files = change.subject();
             match children
                 .iter()
                 .find(|c| is_policy_approval(c) && c.title == title)
@@ -242,3 +324,7 @@ impl Dispatcher {
 #[cfg(test)]
 #[path = "policy_review/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "policy_review/unknown_tests.rs"]
+mod unknown_tests;

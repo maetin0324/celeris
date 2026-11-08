@@ -12415,8 +12415,9 @@
           "type": "object"
         },
         {
-          "description": "D4.4: final review で 1 repo の health の材料を作らなかった理由（remote workspace・review 方針が\n`absent` など。`ReviewRequest.health` はその repo の分を持たない）。状態は変えない（`replay` は無視する）。",
+          "description": "D4.4: final review で 1 repo の health の材料を作らなかった理由（remote workspace・review 方針が\n`absent` など。`ReviewRequest.health` はその repo の分を持たない）。状態は変えない（`replay` は無視する）。\nbase に検査器がある repo は、policy の関門（I8・D6.4）のために candidate（`target_sha..reviewed_sha`）の\n`policy`（`task_worker::protocol::HealthPolicyState` の JSON の写し。`source = \"unavailable\"` は決められ\nなかった）も持つ。検査器の無い repo・同期の無い repo は持たない。",
           "properties": {
+            "policy": true,
             "reason": {
               "type": "string"
             },
@@ -12424,6 +12425,12 @@
               "type": "string"
             },
             "review_run": {
+              "type": "string"
+            },
+            "reviewed_sha": {
+              "type": "string"
+            },
+            "target_sha": {
               "type": "string"
             },
             "type": {

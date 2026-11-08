@@ -2571,9 +2571,12 @@ export type Event = {
   "target_sha": string;
   "type": "health_review_input_built";
 } | {
+  "policy"?: unknown;
   "reason": string;
   "repo_id": string;
   "review_run": string;
+  "reviewed_sha"?: string;
+  "target_sha"?: string;
   "type": "health_review_input_skipped";
 } | {
   "type": "approval_requested";

@@ -48,10 +48,10 @@ WorkUnit `ci-script`（task 01M6Y8EG6QN8S421XYJNVDCPTA の unit `ci-entry`）。
 - merge の時点で `git diff --stat HEAD main` は差分 0（この branch と main の検査器は同じ）。main は取り込んでいない。
 
 ## merge の後の検査（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
-- `bash scripts/dev/check-health.sh` → exit 0。base は `git merge-base HEAD main`（件名「integrate wu/ci-script (phase impl)」の commit）。verdict pass、rule 21 件がすべて pass、`policy.changed` は pass（`policy.changed` false）、`fail_grade=0 new=0 worsened=0`。merge の前の exit 1（`policy.changed` fail）が解けた。
-- `bash scripts/dev/test-affected.sh` → exit 0（check-health.sh が通り、`--list` の対象は 0 件。変更はこの進捗だけ）。
+- `bash scripts/dev/check-health.sh`（test-affected.sh の最初の段）→ exit 0。base は `git merge-base HEAD main`（件名「integrate wu/ci-script (phase impl)」の commit）。変更はこの進捗だけなので doc-only の軽い経路: verdict pass、`policy.changed` は pass（report の `policy.changed` は false）、rule 21 件のうち pass でない 10 件は not_applicable（fail は 0 件）、`fail_grade=0 new=0 worsened=0`。この進捗を書く前（base との差分 0）の実行でも exit 0 で、rule 21 件がすべて pass だった。merge の前の exit 1（`policy.changed` fail）が解けた。
+- `bash scripts/dev/test-affected.sh`（`CELERIS_WU_BASE` を外し、基準を `git merge-base HEAD main` にした）→ exit 0、`test-affected: 試験対象の変更なし（docs のみ等）`。`--list` の対象は 0 件（`CELERIS_WU_BASE` のままでも 0 件）。
 - `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0。
-- `sh scripts/dev/tests/repo_health_gate.sh` → exit 0、`OK (1)`〜`OK (7)` と `repo_health_gate: all checks passed`。
+- `sh scripts/dev/tests/repo_health_gate.sh` → exit 0、`OK (1)`〜`OK (7)` の 7 行と `repo_health_gate: all checks passed`（doc-only の check-health.sh はこの試験を省くので、別に走らせた）。
 - 文書検査 3 本（`bash scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`・`sh scripts/dev/progress-index.sh --check`） → 3 本とも exit 0。
 
 ## 未解決

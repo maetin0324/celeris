@@ -145,7 +145,7 @@ async fn run(stub: &str, plans: Vec<String>, tree: bool) -> Outcome {
 /// D3.6: 低 risk の計画（高 risk の class に合わない path）は今までどおり採用され、reviewer run は 1 本も増えない。
 #[tokio::test]
 async fn health_review_design_gate_low_risk_plan_is_adopted_without_a_reviewer_run() {
-    let out = run(&stub("base"), vec![v2_plan("docs/notes.md")], false).await;
+    let out = run(&stub("base"), vec![v2_plan("notes/plan.md")], false).await;
     assert_eq!(out.planner_runs(), 1);
     assert!(out.adopted(), "the low-risk plan is adopted");
     assert!(out.requested().is_empty(), "no design review is requested");
@@ -239,7 +239,7 @@ async fn health_review_design_gate_high_risk_plan_requests_a_design_review_befor
 /// されずに設計 review が起きる。
 #[tokio::test]
 async fn health_review_design_gate_unavailable_policy_fails_closed_to_a_design_review() {
-    let out = run(FAILING_STUB, vec![v2_plan("docs/notes.md")], false).await;
+    let out = run(FAILING_STUB, vec![v2_plan("notes/plan.md")], false).await;
     assert!(!out.adopted());
     let requested = out.requested();
     assert_eq!(requested.len(), 1);
@@ -274,7 +274,7 @@ async fn health_review_design_gate_missing_brief_retries_the_planner() {
         &stub("base"),
         vec![
             v3_plan_with(STORE_PATH, false),
-            v3_plan_with("docs/notes.md", false),
+            v3_plan_with("notes/plan.md", false),
         ],
         true,
     )

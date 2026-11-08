@@ -72,7 +72,7 @@ fn health_review_design_gate_paths_are_grouped_by_unit_repo() {
 fn health_review_design_gate_takes_the_highest_level_across_repos() {
     let plan = spec(
         serde_json::json!([
-            leaf("a", &["docs/a.md"], None),
+            leaf("a", &["notes/a.md"], None),
             leaf("b", &["store/b.rs"], Some("web"))
         ]),
         Some(brief_with_new_state()),

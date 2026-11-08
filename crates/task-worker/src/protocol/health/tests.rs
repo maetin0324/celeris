@@ -48,6 +48,7 @@ fn sample_input() -> HealthReviewInput {
                     path: Some("crates/task-store/src/lib.rs".into()),
                 }],
                 truncated: 0,
+                reason: None,
             },
             policy: HealthPolicyState {
                 source: "base".into(),

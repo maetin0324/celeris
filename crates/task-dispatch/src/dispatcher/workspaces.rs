@@ -244,7 +244,7 @@ impl Dispatcher {
     /// **`runs/` `inputs/` `artifacts/` を置く場所**は `<root>/<task_id>` になる
     /// （作業ツリーそのものは `<そこ>/tree`。`git status --porcelain` を汚さないため外に出す）。
     /// `<root>` は `task_root`（ADR 2026-10-14-local-machine-settings D5）。
-    pub(super) fn task_dir(&self, task: &Task) -> Option<PathBuf> {
+    pub(crate) fn task_dir(&self, task: &Task) -> Option<PathBuf> {
         match &task.workspace {
             WorkspaceSpec::Local { path, .. } => Some(match self.task_workspaces_for(task) {
                 Some(ws) => ws.task_dir,

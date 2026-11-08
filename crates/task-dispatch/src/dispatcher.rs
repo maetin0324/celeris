@@ -128,7 +128,7 @@ mod ownerless_runs;
 mod phase_integration;
 mod planner_flow;
 mod quota_book;
-mod review_spawn;
+pub(crate) mod review_spawn;
 mod review_verdict;
 mod route_failure;
 mod route_launch;

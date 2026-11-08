@@ -76,6 +76,10 @@ pub struct ReviewerRun {
     /// ADR 2026-10-20-mlsys-main2-fixes D1-3: 対象 task の木に token 予算があれば、この reviewer run を途中の
     /// 累積 usage で止める watch（sink が同じ watch に `UsageProgress` を渡す）。予算が無ければ `None`。
     pub(crate) token_budget: Option<Arc<crate::dispatcher::token_budget::TokenBudgetWatch>>,
+    /// ADR 2026-11-07-health-review-integration D4: final review の health の材料（`ReviewRequest.health`）。
+    /// `spawn_review` が reviewer run の非同期 task の中で入れる（`health_review::input`）。WU の review・
+    /// health を作らない review では `None`。
+    pub health: Option<task_worker::protocol::HealthReviewInput>,
 }
 
 /// `Plan` kind の検証パラメータ（ADR-0007 D2/D4, ADR-0028 D3）。
@@ -979,7 +983,12 @@ struct ReviewHumanContext {
 
 impl ReviewHumanContext {
     /// reviewer run の `context.review`。対象 run の `done` の内容と人の文脈を 1 つにする。
-    fn into_request(self, subject: &ReviewSubject, criteria: &[usize]) -> ReviewRequest {
+    fn into_request(
+        self,
+        subject: &ReviewSubject,
+        criteria: &[usize],
+        health: Option<task_worker::protocol::HealthReviewInput>,
+    ) -> ReviewRequest {
         ReviewRequest {
             // ADR 2026-11-07-health-review-integration D3.5: 設計 review の run だけが持つ（ここは final review）。
             design: None,
@@ -990,8 +999,8 @@ impl ReviewHumanContext {
             answers: self.answers,
             checks: self.checks,
             policy_violations: self.policy_violations,
-            // ADR 2026-11-07-health-review-integration D4.2: 材料を作る配線は後続の dispatch unit。
-            health: None,
+            // ADR 2026-11-07-health-review-integration D4.2: candidate SHA ごとに 1 回作った材料。
+            health,
         }
     }
 }
@@ -1113,7 +1122,7 @@ async fn run_reviewer_inner(
             inputs: produced.to_vec(),
             // ADR-0117 D1: `RunContext.answers` は worker run 用。人の回答は `ReviewRequest.answers` に載せる。
             answers: vec![],
-            review: Some(human_context.into_request(subject, criteria)),
+            review: Some(human_context.into_request(subject, criteria, run.health.clone())),
             role: None,
             children: Vec::new(),
             // ADR-0027 D1: Reviewer run は委譲しない（M8 相当）。

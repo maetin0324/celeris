@@ -123,14 +123,14 @@ fn fallback_head(events: &[(u64, Event)], repo_id: task_core::RepoId) -> Option<
     })?
 }
 
-struct ReviewSync {
-    repo_id: task_core::RepoId,
+pub(crate) struct ReviewSync {
+    pub(crate) repo_id: task_core::RepoId,
     name: String,
-    dir: PathBuf,
+    pub(crate) dir: PathBuf,
     target_ref: String,
-    target_sha: String,
+    pub(crate) target_sha: String,
     before_sha: String,
-    reviewed_sha: String,
+    pub(crate) reviewed_sha: String,
 }
 
 /// An integration repair is resolved only after its WU is done and a new target
@@ -722,6 +722,7 @@ impl Dispatcher {
             account_adapter = None;
             reviewer_reuse = Some(reason);
         }
+        let health = self.health_job(&task, &synced, remote_workspace, reviewer_run.as_ref());
         // ADR-0117 D1: reviewer run には対象 task と祖先の人の決定・回答を渡す（store から集める。LLM は呼ばない）。
         let (decisions, answers) = if reviewer_run.is_some() {
             self.review_human_inputs(&task)?
@@ -923,12 +924,7 @@ impl Dispatcher {
         // ADR-0074 F5-fix: reviewer の checks は Task の worktree で走るので `<repo-key>`
         // （Task 単位の run と同じ target）。
         let review_check_env = self.check_cargo_target_env(&task, None);
-        let events: Vec<Event> = self
-            .store
-            .events_for(task_id)?
-            .into_iter()
-            .map(|(_, e)| e)
-            .collect();
+        let events: Vec<Event> = events.into_iter().map(|(_, e)| e).collect();
         let mut repo_checks = Vec::new();
         if let Some(workspaces) = self.task_workspaces_for(&task) {
             for (index, repo) in workspaces.repos.iter().enumerate() {
@@ -1031,7 +1027,7 @@ impl Dispatcher {
             let extras = ReviewExtras {
                 subject,
                 plan,
-                reviewer: reviewer_run,
+                reviewer: health.attach(reviewer_run).await,
                 human,
                 aggregate,
                 // ADR-0043 D4: リポジトリの `[commands] check`（必須。acceptance で置き換えない）。
@@ -1432,10 +1428,9 @@ impl Dispatcher {
 
         let route_input = RouteInput {
             task_id: task.id.to_string(),
-            harness: {
-                let mut request = reviewer_harness_request(task);
-                request.execution_class = Some("review".into());
-                request
+            harness: task_core::llm_route::HarnessRequest {
+                execution_class: Some("review".into()),
+                ..reviewer_harness_request(task)
             },
             model_hint: None,
             lane: serde_json::to_value(reviewer_lane)
@@ -1598,6 +1593,7 @@ impl Dispatcher {
                 session,
                 session_diff,
                 token_budget,
+                health: None,
             },
             pick,
         })

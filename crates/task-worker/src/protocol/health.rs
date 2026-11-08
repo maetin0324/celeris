@@ -87,6 +87,10 @@ pub struct HealthFindingsSummary {
     /// 上限で切り捨てた `new` の件数。
     #[serde(default)]
     pub truncated: usize,
+    /// `new` を空にした理由（report の `reviewable = false`・repo health を時間内に走らせられなかった・report を
+    /// 読めなかった）。材料にした report では省略。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// report の `summary.counts` の写し。

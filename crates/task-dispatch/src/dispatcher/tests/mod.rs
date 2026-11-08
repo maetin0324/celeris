@@ -3170,6 +3170,10 @@ mod stale_priority;
 /// （`src/dispatcher/tests/write_set_gate.rs`）。
 mod write_set_gate;
 
+/// ADR 2026-11-07-health-review-integration D4・I5: final review の `ReviewRequest.health` を candidate SHA ごとに 1 回
+/// 作り、reviewer の再試行で使い回す。WU・reviewer の無い review・`reviewer_reuse` では作らない
+/// （`src/dispatcher/tests/health_review_input.rs`）。
+mod health_review_input;
 /// ADR 2026-11-07-health-review-integration D2.3・I3: base 側の検査器で読んだ review 方針が planner の `RunContext` に
 /// 入る（`src/dispatcher/tests/health_review_policy.rs`）。
 mod health_review_design_gate;

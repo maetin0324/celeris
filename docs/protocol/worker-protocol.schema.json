@@ -2554,6 +2554,13 @@
           },
           "type": "array"
         },
+        "reason": {
+          "description": "`new` を空にした理由（report の `reviewable = false`・repo health を時間内に走らせられなかった・report を\n読めなかった）。材料にした report では省略。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "reviewable": {
           "description": "report の `summary.reviewable`。`false` の report は材料にせず `new` を空にする（D4.2）。",
           "type": "boolean"

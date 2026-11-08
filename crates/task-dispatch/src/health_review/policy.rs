@@ -53,7 +53,9 @@ struct ReviewPolicyOut {
 /// `repo` の `target`（commit の sha か ref）の版の検査器で review 方針を読む。`timeout` は全体の上限。
 pub fn load_review_policy(repo: &Path, target: &str, timeout: Duration) -> ReviewPolicyState {
     let deadline = Instant::now() + timeout;
-    match run_base_checker(repo, target, deadline) {
+    match with_base_checker(repo, target, deadline, |checker| {
+        checker.print_review_policy(repo)
+    }) {
         Ok(Some(stdout)) => parse_review_policy(&stdout),
         Ok(None) => ReviewPolicyState::Absent,
         Err(why) => ReviewPolicyState::Unavailable(why),
@@ -109,12 +111,59 @@ pub fn parse_review_policy(stdout: &str) -> ReviewPolicyState {
     }
 }
 
-/// base の検査器を一時 dir に出して起こし、stdout を返す。base に検査器が無ければ `None`。失敗は理由の文。
-fn run_base_checker(
+/// target の commit から出した検査器（一時 dir。[`with_base_checker`] の間だけある）。
+pub(crate) struct BaseChecker {
+    /// target を解決した commit の sha。
+    pub sha: String,
+    tree: PathBuf,
+    deadline: Instant,
+}
+
+impl BaseChecker {
+    /// 出した `repo_health.py` を `args` で起こす（cwd は一時 dir、残りの時間が上限）。非 0 exit も返す。
+    pub(crate) fn run(&self, args: &[&str], what: &str) -> Result<CmdOutput, String> {
+        let script = self.tree.join(CHECKER_SCRIPT);
+        let script_arg = script.to_string_lossy();
+        let mut argv = vec!["-I", "-B", &*script_arg];
+        argv.extend_from_slice(args);
+        finished(
+            run_with_timeout(&self.tree, "python3", &argv, left(self.deadline)?),
+            what,
+        )
+    }
+
+    /// `--print-review-policy --repo <repo> --base <sha>` の stdout。非 0 exit は理由の文。
+    pub(crate) fn print_review_policy(&self, repo: &Path) -> Result<String, String> {
+        let repo_arg = repo.to_string_lossy();
+        let printed = self.run(
+            &[
+                "--print-review-policy",
+                "--repo",
+                &repo_arg,
+                "--base",
+                &self.sha,
+            ],
+            "repo_health.py --print-review-policy",
+        )?;
+        if !printed.ok {
+            return Err(format!(
+                "repo_health.py --print-review-policy が失敗: {}",
+                printed.why()
+            ));
+        }
+        Ok(printed.stdout)
+    }
+}
+
+/// `repo` の `target` の版の検査器を一時 dir に出し、`run` に渡す（戻ると一時 dir を消す）。base に検査器が無ければ
+/// `run` を呼ばず `None`。失敗は理由の文。
+/// 候補（head・作業ツリー）の検査器は使わない（I3）。`deadline` は ref の解決・archive・展開・`run` の全体の締め切り。
+pub(crate) fn with_base_checker<T>(
     repo: &Path,
     target: &str,
     deadline: Instant,
-) -> Result<Option<String>, String> {
+    run: impl FnOnce(&BaseChecker) -> Result<T, String>,
+) -> Result<Option<T>, String> {
     let rev = format!("{target}^{{commit}}");
     let resolved = finished(
         git(
@@ -176,49 +225,25 @@ fn run_base_checker(
     if !extracted.ok {
         return Err(format!("検査器の展開に失敗: {}", extracted.why()));
     }
-    let script = tree.join(CHECKER_SCRIPT);
-    let (script_arg, repo_arg) = (script.to_string_lossy(), repo.to_string_lossy());
-    let printed = finished(
-        run_with_timeout(
-            &tree,
-            "python3",
-            &[
-                "-I",
-                "-B",
-                &script_arg,
-                "--print-review-policy",
-                "--repo",
-                &repo_arg,
-                "--base",
-                &sha,
-            ],
-            left(deadline)?,
-        ),
-        "repo_health.py --print-review-policy",
-    )?;
-    if !printed.ok {
-        return Err(format!(
-            "repo_health.py --print-review-policy が失敗: {}",
-            printed.why()
-        ));
-    }
-    Ok(Some(printed.stdout))
+    run(&BaseChecker {
+        sha,
+        tree,
+        deadline,
+    })
+    .map(Some)
 }
 
 /// 締め切りまでの残り。過ぎていれば時間切れの理由。
-fn left(deadline: Instant) -> Result<Duration, String> {
+pub(crate) fn left(deadline: Instant) -> Result<Duration, String> {
     let left = deadline.saturating_duration_since(Instant::now());
     if left.is_zero() {
-        return Err(format!(
-            "review 方針の読み込みが {} 秒の上限を超えた",
-            REVIEW_POLICY_TIMEOUT.as_secs()
-        ));
+        return Err("base の検査器の実行が時間の上限を超えた".to_string());
     }
     Ok(left)
 }
 
 /// 起動できなかった・時間切れを理由の文にする（終わったものはそのまま返す）。
-fn finished(out: Option<CmdOutput>, what: &str) -> Result<CmdOutput, String> {
+pub(crate) fn finished(out: Option<CmdOutput>, what: &str) -> Result<CmdOutput, String> {
     match out {
         None => Err(format!("{what} を起こせない")),
         Some(out) if out.timed_out => Err(format!("{what} が時間内に終わらない")),

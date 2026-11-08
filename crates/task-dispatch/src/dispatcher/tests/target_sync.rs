@@ -1,6 +1,6 @@
 use super::*;
 
-fn reviewing_task(repo: &std::path::Path, store: &Arc<dyn TaskStore>) -> Task {
+pub(super) fn reviewing_task(repo: &std::path::Path, store: &Arc<dyn TaskStore>) -> Task {
     reviewing_task_integrating(repo, store, false)
 }
 
@@ -25,7 +25,7 @@ fn reviewing_task_integrating(
     task
 }
 
-fn commit_file(repo: &std::path::Path, path: &str, content: &str) -> String {
+pub(super) fn commit_file(repo: &std::path::Path, path: &str, content: &str) -> String {
     std::fs::write(repo.join(path), content).unwrap();
     git_out(repo, &["add", path]);
     git_out(repo, &["commit", "-q", "-m", path]);
@@ -246,14 +246,14 @@ impl WorkerAdapter for ReviewShaAdapter {
     }
 }
 
-fn set_check(task: &mut Task, cmd: String) {
+pub(super) fn set_check(task: &mut Task, cmd: String) {
     task.acceptance[0].check = Check::Command {
         cmd,
         expect_exit: 0,
     };
 }
 
-fn events_of(store: &Arc<dyn TaskStore>, task: &Task) -> Vec<Event> {
+pub(super) fn events_of(store: &Arc<dyn TaskStore>, task: &Task) -> Vec<Event> {
     store
         .events_for(task.id)
         .unwrap()
@@ -1101,7 +1101,7 @@ impl WorkerAdapter for CountingReviewer {
 }
 
 /// 1 回目の検査の最中にだけ、main に `file` を `blob_cmd` の内容で置く commit を作る check（worktree は触らない）。
-fn bump_main_writing(flag: &std::path::Path, file: &str, blob_cmd: &str) -> String {
+pub(super) fn bump_main_writing(flag: &std::path::Path, file: &str, blob_cmd: &str) -> String {
     format!(
         "test -e {f} || {{ touch {f} && b=$({blob_cmd} | git hash-object -w --stdin) && export GIT_INDEX_FILE={f}.idx && git read-tree refs/heads/main && git update-index --add --cacheinfo 100644,$b,{file} && t=$(git write-tree) && git update-ref refs/heads/main \"$(git commit-tree $t -p refs/heads/main -m other)\"; }}",
         f = flag.display()

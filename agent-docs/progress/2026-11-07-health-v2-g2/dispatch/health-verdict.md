@@ -36,19 +36,26 @@ WorkUnit `health-verdict`。基準は `$CELERIS_WU_BASE`（範囲 check）と `g
 - 写像は ADR の `review_verdict.rs`（dispatcher/）でなく task の計画どおり `health_review/verdict.rs` に置いた。`review.rs` からは `crate::health_review::…` の path でなく `Verdict` の関数として呼ぶ。path で呼んだ最初の版は、`review` → `health_review` → `dispatcher`（policy-load の `impl Dispatcher`）→ `review` の循環になり、check-health の `deps.cycle` が worsened（循環の単位 3 → 4）で落ちた。policy-load の `impl Dispatcher` と同じく、`health_review` に `impl Verdict` を置いた。
 - advisory の記録は新しい event の種類を作らず、合格の `Event::ReviewVerdict` にした（ADR D5.1 の「`Event::ReviewVerdict` の記録と次の run の `prior_review`」）。同じ criterion の最後の verdict を採る読み手（`task-ops` の `root_done.rs`・`view.rs`）が advisory を判定と読まないように、advisory は reviewer 自身の判定より前に置く。
 
+## 前回の check の不合格（2 回目の run）
+
+1 回目の run の後の check（`bash scripts/dev/test-affected.sh && cargo clippy … && cargo fmt … --check`）が exit 100 で落ちた。落ちたのは `dispatcher::tests::tick_and_dispatch::parent_waits_for_unfinished_children_without_counting_continuations`（「子の完了で親が dispatch される」、5.11 秒）。この unit の変更（`review.rs`・`health_review/verdict.rs`）は通らない経路で、単独では 1.9 秒で通る。子の完了の後の親の 2 回目の run を 60 tick × 20 ms（約 1.2 秒）で打ち切る、時間依存の試験だった。
+
+件名「G2 health-verdict: 子待ちの親の試験 2 件を tick の回数でなく状態で待つ（負荷で 2 回目の run が 1.2 秒に間に合わない）」の commit で、ADR-0125 (b) の `run_until_state`（壁時計 60 秒の保険）に置き換えた。同じ形の隣の試験 `parent_stays_asleep_for_a_failed_child_while_told_to_wait_for_its_rerun` の 2 か所（blocked への到達、子の完了後の親の dispatch）も同じに直した。1 つ目の試験の「子待ちの間は 2 回目の run を起こさない」の確認は、1 回目の run の終わり（`WorkerFinished` と ready）を状態で待ってから従来どおり 60 tick を重ねる。負荷の下での再現は CPU を焼く負荷になるので行っていない（未確認）。
+
 ## size の制約
 
 `review.rs` は 5 行増え 36 行減った（差し引き 31 行減。増えたのは import の折り返し 2 行、`health` の 1 行、注記と呼び出しの 2 行）。新しい処理は `health_review/verdict.rs`（166 行）と試験（326 行）。check-health は verdict=pass・new=0・worsened=0。
 
 ## 証拠（提出時の HEAD で実行）
 
-実装の commit の HEAD で実行した。その後の commit は、この進捗 file だけを変える。基準は `$CELERIS_WU_BASE`（範囲 check）と `git merge-base HEAD main`（check-health・test-affected）。
+試験の直しの commit の HEAD で実行した。その後の commit は、この進捗 file だけを変える（`sh scripts/dev/progress-index.sh --check` と check-health はその後の HEAD でも実行）。基準は `$CELERIS_WU_BASE`（範囲 check）と `git merge-base HEAD main`（check-health・test-affected）。
 
-- `cargo nextest run -p task-dispatch -E 'test(health_review_verdict_) | test(/^review::tests::/)'` → exit 0、42 passed（`health_review_verdict_` 8 件、既存の review の試験 34 件）
-- `bash scripts/dev/test-affected.sh` → exit 0（対象 crate: celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch）。check-health は verdict=pass・new=0・worsened=0。nextest 3,519 件 passed（11 skipped）。doc test も通った。script bundle SKIP 0 件。
+- `cargo nextest run -p task-dispatch --lib parent_waits_for_unfinished_children parent_stays_asleep_for_a_failed_child` → exit 0、2 passed
+- `cargo nextest run -p task-dispatch --lib -E 'test(health_review_verdict_)'` → exit 0、8 passed（受け入れ条件 0: `seven_kinds_follow_the_d5_1_table`・`removal_missing_with_local_scope_repairs_locally`・`dual_source_of_truth_replans`、条件 1: `missing_health_fails_every_criterion`・`unknown_kind_or_severity_fails_every_criterion`、条件 2: `advisory_only_passes_and_is_recorded`）
+- `bash scripts/dev/test-affected.sh` → exit 0（対象 crate: celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch）。check-health は verdict=pass・new=0・worsened=0。nextest 3,519 件 passed（11 skipped、366.9 秒）。doc test も通った。script bundle SKIP 0 件。
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
-- 範囲 check（`git diff --name-only $CELERIS_WU_BASE HEAD` を計画の許可 path で絞る）→ 範囲外の path なし。`sh "$CELERIS_WU_SCOPE_PATHS"` の変更 path は `health_review/verdict.rs`・`health_review/verdict/tests.rs`・`review.rs`（とこの進捗 file）。
+- 範囲 check: `sh "$CELERIS_WU_SCOPE_PATHS"` の変更 path は `health_review/verdict.rs`・`health_review/verdict/tests.rs`・`review.rs`・`dispatcher/tests/tick_and_dispatch.rs` とこの進捗 file。計画の許可 path（`crates/`・進捗）の外は無い。
 
 ## 未解決
 

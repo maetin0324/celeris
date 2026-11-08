@@ -22,7 +22,7 @@ fn report() -> serde_json::Value {
         "findings": [
             finding("size.responsibility-growth", "new", "crates/foo/src/lib.rs"),
             finding("deps.violation", "worsened", "crates/foo/Cargo.toml"),
-            finding("arch-map.missing_invariant", "existing", "docs/map.md"),
+            finding("arch-map.missing_invariant", "existing", "owners/map.md"),
         ],
         "policy": {"version": "1", "source": "base", "changed": false, "files": []},
     })
@@ -35,7 +35,7 @@ fn health_repo(source: &str) -> (tempfile::TempDir, tempfile::TempDir, PathBuf) 
     let scratch = tempfile::tempdir().unwrap();
     let log = scratch.path().join("report-runs.log");
     let policy = serde_json::json!({
-        "schema": REVIEW_POLICY_SCHEMA, "source": source, "owner_map": "docs/map.md", "high_risk": [],
+        "schema": REVIEW_POLICY_SCHEMA, "source": source, "owner_map": "owners/map.md", "high_risk": [],
         "invariants": {"events-append-only": "CLAUDE.md"}, "definition_sha256": DIGEST,
     });
     let script = format!(
@@ -47,9 +47,9 @@ fn health_repo(source: &str) -> (tempfile::TempDir, tempfile::TempDir, PathBuf) 
     let path = repo.path().join(CHECKER_SCRIPT);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, script).unwrap();
-    std::fs::create_dir_all(repo.path().join("docs")).unwrap();
+    std::fs::create_dir_all(repo.path().join("owners")).unwrap();
     std::fs::write(
-        repo.path().join("docs/map.md"),
+        repo.path().join("owners/map.md"),
         "| subsystem | entry |\n|---|---|\n| foo | `crates/foo/src/{lib.rs,bar.rs}` |\n| other | `crates/other/` |\n",
     )
     .unwrap();

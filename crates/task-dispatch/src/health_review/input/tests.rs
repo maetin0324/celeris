@@ -87,14 +87,14 @@ fn health_review_input_owner_rows_match_changed_paths() {
 |---|---|---|
 | foo | foo | `crates/foo/src/{lib.rs,bar.rs}` |
 | dispatch | d | `crates/d/src/dispatcher.rs`（`Dispatcher::tick`） |
-| docs | - | `docs/` |
+| docs | - | `notes/` |
 | other | o | `crates/other/` |
 not a row `crates/foo/src/lib.rs`
 ";
     let changed = [
         "crates/foo/src/lib.rs",
         "crates/d/src/dispatcher/review_spawn.rs",
-        "docs/a.md",
+        "notes/a.md",
     ]
     .map(String::from);
     let rows = owner_rows(map, &changed);
@@ -102,7 +102,7 @@ not a row `crates/foo/src/lib.rs`
     assert_eq!(got, changed.iter().map(String::as_str).collect::<Vec<_>>());
     assert!(rows[0].row.contains("{lib.rs,bar.rs}"));
     let many: String = (0..50)
-        .map(|n| format!("| r{n} | x | `docs/` |\n"))
+        .map(|n| format!("| r{n} | x | `notes/` |\n"))
         .collect();
     assert_eq!(owner_rows(&many, &changed).len(), MAX_OWNER_ROWS);
 }
@@ -134,7 +134,7 @@ fn stub_repo(
     git(&["config", "user.email", "t@example.com"]);
     git(&["config", "user.name", "t"]);
     let policy = serde_json::json!({
-        "schema": REVIEW_POLICY_SCHEMA, "source": source, "owner_map": "docs/map.md",
+        "schema": REVIEW_POLICY_SCHEMA, "source": source, "owner_map": "owners/map.md",
         "high_risk": [], "invariants": {"events-append-only": "CLAUDE.md"}, "definition_sha256": DIGEST,
     });
     let report = report.map(|r| r.to_string()).unwrap_or_default();
@@ -146,8 +146,8 @@ fn stub_repo(
     let path = dir.join(CHECKER_SCRIPT);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, script).unwrap();
-    std::fs::create_dir_all(dir.join("docs")).unwrap();
-    std::fs::write(dir.join("docs/map.md"), "| a | `src/` |\n").unwrap();
+    std::fs::create_dir_all(dir.join("owners")).unwrap();
+    std::fs::write(dir.join("owners/map.md"), "| a | `src/` |\n").unwrap();
     git(&["add", "-A"]);
     git(&["commit", "-q", "-m", "base"]);
     let target_sha = git(&["rev-parse", "HEAD"]);

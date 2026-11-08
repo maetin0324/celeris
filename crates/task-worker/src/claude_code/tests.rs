@@ -542,6 +542,89 @@ fn build_prompt_for_review_kind_includes_review_json_and_context() {
     assert!(prompt_none.contains("artifacts/review.json"));
 }
 
+/// ADR 2026-11-07-health-review-integration 付記 E2・E4: reviewer prompt の commit の参照の節は判定の規則
+/// （hash の食い違いで不合格にしない、件名を `git log` で照合する）だけを持ち、worker が書く側の規則の文
+/// （件名で書く・base を `git merge-base HEAD main` と書く・提出時の HEAD で検査を記録する）は無い。
+#[test]
+fn change_rules_retire_review_prompt_keeps_only_the_commit_judging_rule() {
+    let mut task = crate::protocol::tests::sample_task();
+    task.kind = task_core::TaskKind::Review;
+    let with_review = RunContext {
+        review: Some(crate::protocol::ReviewRequest::default()),
+        ..RunContext::default()
+    };
+    for (name, context) in [
+        ("no review", RunContext::default()),
+        ("review", with_review),
+    ] {
+        let prompt = build_prompt(&task, &context, "run-review-commit-refs", "artifacts");
+        let heading = "## Commit references in progress files and reports\n";
+        assert_eq!(prompt.matches(heading).count(), 1, "{name}");
+        let start = prompt.find(heading).unwrap() + heading.len();
+        let section = &prompt[start..start + prompt[start..].find("\n## ").unwrap()];
+        for kept in [
+            "celeris rebases the task branch onto main before review",
+            "Do not fail a criterion because a commit hash, a tested SHA or a fixed merge-base hash is missing or differs from the current HEAD.",
+            "Judge a commit listed by subject by whether a commit with that subject is in `git log $(git merge-base HEAD main)..HEAD`",
+            "judge check results by rerunning them or by the deterministic checks below.",
+        ] {
+            assert!(
+                section.contains(kept),
+                "{name}: missing {kept:?} in {section:?}"
+            );
+        }
+        for removed in [
+            "Progress files and reports name commits by subject",
+            "name commits by subject and the base as",
+            "(`$CELERIS_WU_BASE` for a work unit)",
+            "record checks as run on the HEAD at submission",
+        ] {
+            assert!(!prompt.contains(removed), "{name}: still has {removed:?}");
+        }
+    }
+}
+
+/// ADR 2026-11-07-health-review-integration 付記 E3: planner の「check の書き方」から repo の必須規則と同じ
+/// 2 箇条（記録の場所と hash を書かない、全体試験は release gate だけ）を消し、検査機構の箇条
+/// （`CELERIS_WU_*`・scope check）と共用 host の CPU 負荷の箇条は残す。
+#[test]
+fn change_rules_retire_planner_check_guidance_drops_the_repo_rule_copies() {
+    let task = crate::protocol::tests::sample_task();
+    let context = RunContext {
+        execution_planner: Some(crate::protocol::ExecutionPlannerContext {
+            gate_rule_id: "human/explicit".to_string(),
+            max_work_units: 8,
+            parallel: true,
+            max_phases: 5,
+            max_plan_json_bytes: 24 * 1024,
+            ..Default::default()
+        }),
+        ..RunContext::default()
+    };
+    let prompt = build_prompt(&task, &context, "run-planner-retire", "artifacts");
+    let start = prompt.find("### check の書き方").unwrap();
+    let section = &prompt[start..start + prompt[start..].find("\n\n").unwrap()];
+    for removed in [
+        "Records follow ADR-0128",
+        "Never append to `agent-docs/PROGRESS.md`",
+        "Progress files name commits by subject, not hash",
+        "never write a criterion that asks to record a tested or final SHA",
+        "Whole-workspace tests",
+        "run only in the release gate (`release.sh`)",
+        "(changed crates and their reverse dependencies)",
+    ] {
+        assert!(!prompt.contains(removed), "still has {removed:?}");
+    }
+    for kept in [
+        "`{\"cmd\":\"...\",\"expect_exit\":0,\"scope\":true}`",
+        "Any check whose `cmd` uses `$CELERIS_WU_BASE`, `$CELERIS_WU_TARGET` or another `CELERIS_WU_*` variable",
+        "sh \"$CELERIS_WU_SCOPE_PATHS\";",
+        "Do not run CPU-burning load scripts (busy loops, stress-ng, parallel cargo load) in checks or acceptance",
+    ] {
+        assert!(section.contains(kept), "missing {kept:?}");
+    }
+}
+
 #[test]
 fn review_prompt_includes_human_decisions_and_check_results() {
     let mut task = crate::protocol::tests::sample_task();
@@ -3637,13 +3720,8 @@ fn planner_prompt_has_the_check_writing_section() {
         "Never compare with a hard-coded sha or `$(git merge-base HEAD main)`",
         "use the integration base (not the scope snapshot) for commit-history checks",
         "never write the silent `test -z \"$(...)\"` form",
-        // ADR-0128 D3・D5・D7: 記録の置き場所と land 系 check の 3 本。
-        "a new ADR is `agent-docs/adr/YYYY-MM-DD-<slug>.md` (no new ADR numbers)",
-        "`agent-docs/progress/YYYY-MM-DD-<slug>/<unit key>.md`. Never append to `agent-docs/PROGRESS.md` (frozen).",
+        // ADR-0128 D5・D7: land 系 check の 3 本。
         "`sh scripts/dev/check-doc-links.sh`, `sh scripts/dev/check-adr-numbers.sh` and `sh scripts/dev/progress-index.sh --check`",
-        // ADR 2026-10-23-commit-refs-by-subject: 進捗は commit を件名で書き、検証 SHA の記録を条件にしない。
-        "Progress files name commits by subject, not hash",
-        "never write a criterion that asks to record a tested or final SHA",
         "Do not pass extra positional arguments to `pnpm -C <dir> test` or `cargo test`",
         "corepack pnpm@<version from package.json packageManager> -C <dir>",
         "A non-scope diff check may compare against `$(git merge-base HEAD main)`",
@@ -3659,8 +3737,6 @@ fn planner_prompt_has_the_check_writing_section() {
         "Checks run with `/bin/sh` (dash), so do not use bash-only syntax such as `${s:0:12}`, `[[ ]]`, or arrays.",
         "run them with CELERIS_USERNS_TESTS=1 in the daemon's integration check (release gate), not in a leaf.",
         "Keep each leaf small enough for one run, and do not pack implementation work into a recording or close-out leaf.",
-        "run only in the release gate (`release.sh`)",
-        "`bash scripts/dev/test-affected.sh` (changed crates and their reverse dependencies)",
         "use a check that `crates/` has no diff",
         "Include the planned ADR and recording locations from the start in acceptance criteria and diff-check path scopes.",
         "Do not run CPU-burning load scripts (busy loops, stress-ng, parallel cargo load) in checks or acceptance; reproduce timing bugs deterministically (paused or injected clock, event waits, SIGSTOP/SIGCONT, test-only delay hooks; see agent-docs/guides/testing.md).",
@@ -3716,21 +3792,14 @@ fn planner_prompt_has_the_check_writing_section() {
     }
 }
 
-/// ADR-0095 付記 D-d: /2 と /3 の planner のプロンプトに「本番 host の操作は人が実行する手順として書く」の
-/// 節が出て、`systemctl --user` / `systemd-run` / `~/.config/celeris` / `~/.local/celeris/releases` に
-/// 触れる WorkUnit を計画しない旨が明示される。
+/// ADR 2026-11-07-health-review-integration 付記 E3・E4（ADR-0095 付記 D-d）: /2 と /3 の planner の
+/// プロンプトの「本番 host の操作は人が実行する手順として書く」は `preamble::fixed_notes` の節だけで、
+/// ちょうど 1 回出る。planner 用の写し（`### 本番 host の操作` の節）は無い。
 #[test]
-fn planner_prompt_declares_production_host_changes_as_a_human_procedure() {
+fn change_rules_retire_planner_prompt_has_the_production_host_note_once() {
     let task = crate::protocol::tests::sample_task();
-    let needles = [
-        "### 本番 host の操作",
-        "systemctl --user",
-        "systemd-run",
-        "~/.config/celeris",
-        "~/.local/celeris/releases",
-        "`/local`",
-        "/local/celeris/state/releases",
-    ];
+    let note = crate::preamble::production_host_note();
+    assert!(crate::preamble::fixed_notes().contains(&note));
     let v2 = crate::protocol::ExecutionPlannerContext {
         gate_rule_id: "human/explicit".to_string(),
         max_work_units: 8,
@@ -3758,10 +3827,19 @@ fn planner_prompt_declares_production_host_changes_as_a_human_procedure() {
             ..RunContext::default()
         };
         let prompt = build_prompt(&task, &context, "run-planner-production-host", "artifacts");
-        for needle in needles {
+        assert_eq!(prompt.matches(note.as_str()).count(), 1, "{name}");
+        for needle in [
+            "systemctl --user",
+            "systemd-run",
+            "~/.config/celeris",
+            "~/.local/celeris/releases",
+            "/local/celeris/state/releases",
+            "人の決定（decisions）または人の check を置く",
+        ] {
             assert!(prompt.contains(needle), "{name}: missing {needle:?}");
         }
-        assert_eq!(prompt.matches("### 本番 host の操作").count(), 1, "{name}");
+        assert_eq!(prompt.matches("## 本番 host の操作").count(), 1, "{name}");
+        assert!(!prompt.contains("### 本番 host の操作"), "{name}");
     }
 }
 

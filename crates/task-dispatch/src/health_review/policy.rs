@@ -6,9 +6,10 @@
 //! `--print-review-policy --repo <repo> --base <target_sha>` で起こす。候補（head・作業ツリー）の検査器と profile は
 //! 使わない（候補が自分の review の条件を変えられない。I3）。出力 `celeris.repo-health.review-policy/1` は
 //! [`ReviewPolicyState`] に写す:
-//! - `source = absent` → `Absent`（その repo は設計 review を使わない）。
+//! - `source = absent`、または base に検査器（`repo_health.py`）が無い → `Absent`（その repo は `[review]` 節を持たず、
+//!   設計 review を使わない。候補が検査器を足しても base には無いので変わらない。I3）。
 //! - `source = base`・`builtin` → `Present`。
-//! - base に script が無い・非 0 exit・壊れた JSON・schema 違い・時間切れ・`source = bootstrap`（head の profile。
+//! - target を解決できない・非 0 exit・壊れた JSON・schema 違い・時間切れ・`source = bootstrap`（head の profile。
 //!   `--print-review-policy` は head を読まないので出ないはずの値）・remote workspace → `Unavailable(理由)`。
 //!
 //! どれも黙って省かない（risk の判定では `Unavailable` は `unknown` になる。D3.3）。dispatcher からは planner run の
@@ -53,7 +54,8 @@ struct ReviewPolicyOut {
 pub fn load_review_policy(repo: &Path, target: &str, timeout: Duration) -> ReviewPolicyState {
     let deadline = Instant::now() + timeout;
     match run_base_checker(repo, target, deadline) {
-        Ok(stdout) => parse_review_policy(&stdout),
+        Ok(Some(stdout)) => parse_review_policy(&stdout),
+        Ok(None) => ReviewPolicyState::Absent,
         Err(why) => ReviewPolicyState::Unavailable(why),
     }
 }
@@ -107,8 +109,12 @@ pub fn parse_review_policy(stdout: &str) -> ReviewPolicyState {
     }
 }
 
-/// base の検査器を一時 dir に出して起こし、stdout を返す。失敗は理由の文。
-fn run_base_checker(repo: &Path, target: &str, deadline: Instant) -> Result<String, String> {
+/// base の検査器を一時 dir に出して起こし、stdout を返す。base に検査器が無ければ `None`。失敗は理由の文。
+fn run_base_checker(
+    repo: &Path,
+    target: &str,
+    deadline: Instant,
+) -> Result<Option<String>, String> {
     let rev = format!("{target}^{{commit}}");
     let resolved = finished(
         git(
@@ -132,7 +138,8 @@ fn run_base_checker(repo: &Path, target: &str, deadline: Instant) -> Result<Stri
         Ok(out.ok)
     };
     if !on_base(CHECKER_SCRIPT)? {
-        return Err(format!("base {short} に {CHECKER_SCRIPT} が無い"));
+        tracing::debug!(base = %short, "no {CHECKER_SCRIPT} on the base; the repo has no review policy");
+        return Ok(None);
     }
     let scratch = Scratch::create()?;
     let archive = scratch.0.join("checker.tar");
@@ -195,7 +202,7 @@ fn run_base_checker(repo: &Path, target: &str, deadline: Instant) -> Result<Stri
             printed.why()
         ));
     }
-    Ok(printed.stdout)
+    Ok(Some(printed.stdout))
 }
 
 /// 締め切りまでの残り。過ぎていれば時間切れの理由。

@@ -5,7 +5,8 @@
 //! 整理で相殺する。どの下位 module も LLM を呼ばない（I4）。
 //!
 //! - [`policy`]: review 方針を base（target）側の検査器で読み、planner の `RunContext` に渡す（D2.3・I3）。
-//! - [`design`]: 計画の採用前の risk 判定と高 risk だけの設計 review（D3.3・D3.5）。
+//! - [`design`]: 計画の採用前の risk 判定と高 risk だけの設計 review（D3.3・D3.5）の純粋な部分。Dispatcher の状態（実行中の
+//!   run・完了の channel）を使う配線は `health_review/design_gate.rs` で、`dispatcher` の子 module として `#[path]` で読む。
 //! - [`input`]: final review の health 文脈を candidate SHA ごとに 1 回作る（D4）。
 //! - [`verdict`]: 構造化 health verdict の blocking を不合格にし repair/replan に写す（D5）。
 

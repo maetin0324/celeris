@@ -196,18 +196,14 @@ fn health_review_policy_bootstrap_and_unknown_sources_are_unavailable() {
     assert!(unavailable(parse_review_policy(&unknown)).contains("\"head\""));
 }
 
-/// base に script が無ければ、作業ツリーに script があっても `Unavailable`（作業ツリーの検査器を起こさない）。
-/// 解決できない target も `Unavailable`。
+/// base に script が無ければ、作業ツリーに script があっても `Absent`（その repo は `[review]` 節を持たない。作業ツリーの
+/// 検査器を起こさない）。解決できない target は `Unavailable`。
 #[test]
-fn health_review_policy_script_missing_on_base_is_unavailable() {
+fn health_review_policy_script_missing_on_base_is_absent() {
     let dir = init_repo();
     write(dir.path(), CHECKER_SCRIPT, STUB);
     write(dir.path(), PROFILE_PATH, &present_json("worktree"));
-    let why = unavailable(load(dir.path(), "main"));
-    assert!(
-        why.contains(CHECKER_SCRIPT) && why.contains("無い"),
-        "{why}"
-    );
+    assert_eq!(load(dir.path(), "main"), ReviewPolicyState::Absent);
     let why = unavailable(load(dir.path(), "no-such-branch"));
     assert!(why.contains("no-such-branch"), "{why}");
 }

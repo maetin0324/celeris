@@ -110,9 +110,9 @@ impl Dispatcher {
             Some(wu) => WuDispatchGate::RunWorkUnit(Box::new(wu)),
             None => self.wu_dispatch_gate(task.id)?,
         };
-        // ADR-0079 D9（Phase R2b）/ D7（Phase R3a）: `needed_before: [self]` の未回答の決定（plan_invalid・run 時の
-        // 木の上限・worker の self）を待つ task は run を起こさない。
-        if !second_pass && self.decision_self_hold(&task)? {
+        // ADR-0079 D9（Phase R2b）/ D7（Phase R3a）: `needed_before: [self]` の未回答の決定（plan_invalid・run 時の木の上限・worker の self）
+        // を待つ task と、設計 review を待つ task（ADR 2026-11-07-health-review-integration D3.5。`design_review_hold`）は run を起こさない。
+        if !second_pass && (self.decision_self_hold(&task)? || self.design_review_hold(&task)?) {
             return Ok(false);
         }
         // ADR-0079 D3（Phase R2a）: 木の上限（run・トークン・replan）。超えるなら新しい run を起こさず、

@@ -24,75 +24,10 @@ impl Dispatcher {
     ) -> Result<(), DispatchError> {
         let now = OffsetDateTime::now_utc();
 
-        let (run_end, describe, usage): (
-            Option<task_core::RunEnd>,
-            String,
-            Option<task_core::Usage>,
-        ) = match &result {
-            Ok(RunOutcome {
-                terminal: Terminal::Done { summary, usage, .. },
-                ..
-            }) => (
-                Some(task_core::RunEnd::Completed),
-                format!("done: {summary}"),
-                *usage,
-            ),
-            Ok(RunOutcome {
-                terminal: Terminal::Question { text, .. },
-                ..
-            }) => (
-                Some(task_core::RunEnd::Question),
-                format!("question: {text}"),
-                None,
-            ),
-            Ok(RunOutcome {
-                terminal: Terminal::Error { message, retryable, .. },
-                ..
-            }) => (
-                Some(task_core::RunEnd::Failed {
-                    retryable: *retryable,
-                }),
-                format!("error(retryable={retryable}): {message}"),
-                None,
-            ),
-            Ok(RunOutcome {
-                terminal: Terminal::Yielded { usage, .. },
-                ..
-            }) => (
-                Some(task_core::RunEnd::Yielded),
-                "yielded (planner runs are not continued; treated as an invalid attempt)"
-                    .to_string(),
-                *usage,
-            ),
-            // ADR-0090: planner run は job を待たない（不正な試行として扱う）。
-            Ok(RunOutcome {
-                terminal: Terminal::Waiting { usage, .. },
-                ..
-            }) => (
-                Some(task_core::RunEnd::Failed { retryable: true }),
-                "error(retryable=true): planner runs cannot wait for cluster jobs; treated as an invalid attempt"
-                    .to_string(),
-                *usage,
-            ),
-            Ok(RunOutcome {
-                terminal:
-                    Terminal::BudgetExhausted {
-                        kind,
-                        message,
-                        usage,
-                    },
-                ..
-            }) => (
-                Some(task_core::RunEnd::BudgetExhausted { kind: *kind }),
-                format!("budget_exhausted({kind:?}): {message}"),
-                *usage,
-            ),
-            Err(e) => (None, format!("infra error: {e}"), None),
-        };
+        let (run_end, describe, usage) = design_gate::run_end_of(&result, "planner");
 
-        // ADR-0076: planner run の quota 消費も worker と同じ `resolve_quota_estimate` で見積もる。
-        // 以降の `?` で抜けても `QuotaActivity` が閉じているよう、分岐より前に一度だけ求め、
-        // `WorkerFinished` を保存するすべての分岐で同じトランザクションに添える。
+        // ADR-0076: planner run の quota 消費も worker と同じ `resolve_quota_estimate` で見積もる。以降の `?` で抜けても
+        // `QuotaActivity` が閉じているよう、分岐より前に一度だけ求め、`WorkerFinished` を保存するすべての分岐で同じトランザクションに添える。
         let quota_event = {
             let model = self.started_model_of(task_id, &run_id);
             self.resolve_quota_estimate(
@@ -107,9 +42,8 @@ impl Dispatcher {
             )
         };
 
-        // ADR-0072 D17（Phase E4）: この run が replan（既に `active` な計画がある）なら、done の
-        // WU の key/spec が変わっていないことも検証する（D14「replan のときは done の WU の key と
-        // spec が変わっていないこと」）。
+        // ADR-0072 D17（Phase E4）: この run が replan（既に `active` な計画がある）なら、done の WU の key/spec が変わっていないことも
+        // 検証する（D14「replan のときは done の WU の key と spec が変わっていないこと」）。
         let active_plan = self.store.execution_plan_active(task_id)?;
         // ADR-0074 F5-fix（不具合 2）: daemon が足した WU（`kind = integrate`・統合の repair WU）は
         // planner の視野に無いので対象から外す（`task_ops::execution::replan` と同じ規則）。
@@ -120,12 +54,10 @@ impl Dispatcher {
         } else {
             Vec::new()
         };
-        // D14: 計画の検証は run が `Terminal::Done` で終わったときだけ試みる（それ以外は無条件に
-        // 「不正な試行」として扱う）。
-        // ADR-0079 D3 / D4 (3)（Phase R2a）: /3 の計画が計画の上限（段階の数・段階あたりの unit・子 task・
-        // `max_depth`）だけで不正なら、1 回目は従来どおり不正な試行（planner に理由を渡して再試行）、最後の
-        // 試行では上限を緩めて採用し、超えた分の unit を `kind: limit` の決定の要求で止める（黙って切らない・
-        // atomic に倒さない）。採用に使う上限を `adopt_limits` に返す。
+        // D14: 計画の検証は run が `Terminal::Done` で終わったときだけ試みる（それ以外は無条件に「不正な試行」として扱う）。
+        // ADR-0079 D3 / D4 (3)（Phase R2a）: /3 の計画が計画の上限（段階の数・段階あたりの unit・子 task・`max_depth`）だけで不正なら、
+        // 1 回目は従来どおり不正な試行（planner に理由を渡して再試行）、最後の試行では上限を緩めて採用し、超えた分の unit を
+        // `kind: limit` の決定の要求で止める（黙って切らない・atomic に倒さない）。採用に使う上限を `adopt_limits` に返す。
         let mut adopt_limits = self.config.execution.limits;
         let validation: Result<task_core::execution_plan::ValidatedPlan, String> = if matches!(
             result,
@@ -197,9 +129,8 @@ impl Dispatcher {
         } else {
             Err(format!("planner run did not finish cleanly: {describe}"))
         };
-        // ADR-0079 付記「R7-3」D3: replan の計画が退役した（superseded / cancelled の）行の key を再利用していれば、採用の
-        // 前に検証の理由として planner に返す（再試行・`plan_invalid` の経路）。以前は段階の統合 WU の key の重なりが
-        // 採用の中で sqlite の `UNIQUE constraint failed: work_units.task_id, key` に落ちていた（08:15Z）。
+        // ADR-0079 付記「R7-3」D3: replan の計画が退役した（superseded / cancelled の）行の key を再利用していれば、採用の前に検証の理由として
+        // planner に返す（再試行・`plan_invalid` の経路）。以前は段階の統合 WU の key の重なりが採用の中で sqlite の `UNIQUE constraint failed: work_units.task_id, key` に落ちていた（08:15Z）。
         let validation = match validation {
             Ok(v) if let Some(active) = active_plan.as_ref() => {
                 let rows = self.store.work_units_for(task_id)?;
@@ -218,6 +149,8 @@ impl Dispatcher {
             }
             other => other,
         };
+        // ADR 2026-11-07-health-review-integration D3.3: 高 risk の class の path を書く planner の計画に brief が無ければ再試行に回す。
+        let validation = self.design_brief_gate(task, &run_id, validation);
 
         let metrics = run_since.map(|since| task_core::RunMetrics {
             wall_ms: wall_ms_since(since),
@@ -236,10 +169,9 @@ impl Dispatcher {
         }
 
         match validation {
-            Ok(validated) => {
-                // ADR-0079 D4 (3)（Phase R2a）: /3 の各 unit に unit の gate をかけ、leaf を task に上げる・
-                // task を leaf に下げる（採用する計画の spec に当てる）。子 task にできない深さの compound な
-                // leaf と、上限を超える unit は採用の直後に決定の要求で止める（`apply_tree_plan_holds`）。
+            Ok((validated, gate)) => {
+                // ADR-0079 D4 (3)（Phase R2a）: /3 の各 unit に unit の gate をかけ、leaf を task に上げる・task を leaf に下げる（採用する計画の
+                // spec に当てる）。子 task にできない深さの compound な leaf と、上限を超える unit は採用の直後に決定の要求で止める（`apply_tree_plan_holds`）。
                 let (validated, tree_plan) =
                     self.tree_plan_gate(task, validated, &done_work_units, &mut adopt_limits);
                 let outcome_str = format!(
@@ -338,6 +270,10 @@ impl Dispatcher {
                         return Ok(());
                     }
                 };
+                // D3.5・D3.6: 高 risk・unknown の計画は採用せず、設計 review を待つ（`health_review/design_gate.rs`）。
+                if self.design_gate(task, gate, &validated.spec, [&finished, &quota_event])? {
+                    return Ok(());
+                }
                 let adopted = if active_plan.is_some() {
                     // ADR-0072 D17（Phase E4）: replan。done の WU は保持し、旧版を supersede する。
                     task_ops::execution::replan(
@@ -371,9 +307,8 @@ impl Dispatcher {
                         {
                             tracing::warn!(%task_id, %run_id, error = %e, "failed to record the unit gate / tree limit holds of the adopted plan (ADR-0079 R2a)");
                         }
-                        // ADR-0079 D8（Phase R3b）: root の /3 の計画は、決定を含む・`review: human` の段階・上限に
-                        // 近い、のどれかなら人の承認を待つ（`PlanGate`、unit を 1 つも起こさない）。そうでなければ
-                        // 進め、報告の流れに 1 件だけ残す（Discord は鳴らさない。U-R3）。
+                        // ADR-0079 D8（Phase R3b）: root の /3 の計画は、決定を含む・`review: human` の段階・上限に近い、のどれかなら人の承認を待つ
+                        // （`PlanGate`、unit を 1 つも起こさない）。そうでなければ進め、報告の流れに 1 件だけ残す（Discord は鳴らさない。U-R3）。
                         let approval = match self.root_plan_approval(task, &plan) {
                             Ok(a) => a,
                             Err(e) => {

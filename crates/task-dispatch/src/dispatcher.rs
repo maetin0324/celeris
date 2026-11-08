@@ -148,6 +148,8 @@ mod wu_base;
 #[cfg(test)]
 use work_units::previous_check_failure_lines;
 use work_units::{WorkUnitCheckFailure, WorkUnitCheckRun};
+#[path = "health_review/design_gate.rs"]
+mod design_gate;
 mod worker_finish;
 mod worker_task;
 mod workspaces;
@@ -758,17 +760,17 @@ enum Completion {
         work_unit_id: String,
         result: Box<Result<IntegrationRun, String>>,
     },
-    /// ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch）D4/D5:
-    /// 評価 run（`eval_trials`）の adapter が終わった。tasks 行を持たないので `task_id` は持たない
-    /// （run id から `eval_trials` の行を引く）。採点（hidden check）は次の段が行う。
+    /// ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch）D4/D5: 評価 run（`eval_trials`）の
+    /// adapter が終わった。tasks 行を持たないので `task_id` は持たない（run id から `eval_trials` の行を引く）。採点（hidden check）は次の段が行う。
     EvalWorker {
         run_id: String,
         result: Result<RunOutcome, AdapterError>,
     },
+    /// ADR 2026-11-07-health-review-integration D3.5: 設計 review の reviewer run が終わった（final review の判定には流さない）。
+    DesignReview(Box<design_gate::DesignReviewEnd>),
 }
 
-/// ADR-0074 D1.5（Phase F2）: `running` の鍵。`work_unit` は v2 の並列 WU の run だけ `Some(work_units.id)`
-/// （atomic・planner・v1 の WU の run は `None`。v1 の挙動は 1 バイトも変えない）。
+/// ADR-0074 D1.5（Phase F2）: `running` の鍵。`work_unit` は v2 の並列 WU の run だけ `Some(work_units.id)`（atomic・planner・v1 の WU の run は `None`。v1 の挙動は 1 バイトも変えない）。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct RunKey {
     task: TaskId,
@@ -2440,9 +2442,8 @@ impl Dispatcher {
                     provider,
                     result,
                 } => {
-                    // Phase F5-fix2: 完了の確定に失敗しても（DB・作業ツリーの一時的な失敗など）、
-                    // 残りの完了の処理は続け、この run は「インフラ都合の失敗」として記録する
-                    // （`?` で tick ごと抜けると、受信済みの完了が消えて run が `running` のまま残る）。
+                    // Phase F5-fix2: 完了の確定に失敗しても（DB・作業ツリーの一時的な失敗など）、残りの完了の処理は続け、
+                    // この run は「インフラ都合の失敗」として記録する（`?` で tick ごと抜けると、受信済みの完了が消えて run が `running` のまま残る）。
                     if let Err(e) =
                         self.on_worker_finished(task_id, run_id.clone(), provider, result)
                     {
@@ -2500,18 +2501,17 @@ impl Dispatcher {
                     self.on_integration_finished(task_id, &work_unit_id, *result)?;
                     self.record_routing_outcomes(task_id);
                 }
-                // 評価 run（tasks 行を持たない）: run を閉じて試行を `scoring` へ。本番の
-                // `finished` には数えない（ADR 付記 eval-dispatch D4/D5）。
+                // 評価 run（tasks 行を持たない）: run を閉じて試行を `scoring` へ。本番の `finished` には数えない（ADR 付記 eval-dispatch D4/D5）。
                 Completion::EvalWorker { run_id, result } => {
                     self.on_eval_worker_finished(run_id, result);
                 }
+                Completion::DesignReview(end) => self.on_design_review_finished(*end)?,
             }
         }
         Ok((finished, reviewed))
     }
 
-    /// 実行中の run と、プロバイダを使っているレビュー run の合計（並列度の分母）。
-    /// ADR-0089（Phase R6-5）: CoS の対話 run は数えない（`cos_in_flight` で別に数える）。
+    /// 実行中の run と、プロバイダを使っているレビュー run の合計（並列度の分母）。ADR-0089（Phase R6-5）: CoS の対話 run は数えない（`cos_in_flight` で別に数える）。
     fn workers_in_flight(&self) -> usize {
         self.running.values().filter(|e| !e.cos).count()
             + self

@@ -4,7 +4,7 @@ tasks: [01M6VBSKZQG2YWF7NWYH6GP9P7]
 # ADR 2026-11-07: 健全性を設計と review に組み込む（規約配布・設計 brief・risk 判定・構造化 health verdict）
 
 - 日付: 2026-11-07
-- 状態: 実装済み（2026-11-08、健全性 v2 G2 の task 01M6TYVJSTYGRPHERB93MM7J59。記録は [G2 の進捗](../progress/2026-11-07-health-v2-g2.md)）。決定節との食い違いと未実装の部分は末尾の付記（dispatch の実装・G2 の完了時の突き合わせ）に書く。
+- 状態: 一部実装（二度目の差し戻しの修正中。2026-11-08、健全性 v2 G2 の task 01M6TYVJSTYGRPHERB93MM7J59。記録は [G2 の進捗](../progress/2026-11-07-health-v2-g2.md)）。決定節との食い違いと未実装の部分は末尾の付記（dispatch の実装・G2 の完了時の突き合わせ）に、二度目の final review の差し戻しへの方針は最後の付記に書く。
 - 根拠: 前提調査 [G2 survey](../progress/2026-11-07-health-v2-g2/adr-survey.md) の (a)〜(h)。行番号は survey の時点のもの。
 - 関係: [ADR 2026-11-07 汎用 repo health の契約](2026-11-07-repo-health-contract.md)（D2: policy は base 側で評価、policy.changed）、[ADR 2026-11-07 repo health の Celeris profile](2026-11-07-repo-health-celeris-profile.md)、[ADR 2026-11-07 健全性 v2 の基準](2026-11-07-health-v2-baseline.md)、[ADR 2026-10-23 必須規則の prompt 配送](2026-10-23-required-rules-prompt-delivery.md)、[2026-10-11 破壊的変更を既定にする](2026-10-11-breaking-changes-by-default.md)、[ADR-0118](0118-review-target-sync-and-merge-candidate.md)（review 前の target 同期と candidate SHA）。
 
@@ -288,3 +288,78 @@ G2 の全 unit（adr・guideline・plan-brief・protocol・dispatch・prompts）
 - 設計 review の reviewer prompt（D3.5 2.・D5.4 の `design` の部分）: dispatcher は `ReviewRequest.design` を渡して reviewer run を起こすが、`build_review_prompt` と `change_rules::review` に `ReviewRequest.design` を描く節も、Result 節に `design: {pass, findings}` の形も無い。本物の reviewer は `design` を書かないので、dispatcher は判定を読めない不合格に数え、不合格が `MAX_DESIGN_REVIEW_FAILURES`（2）回続くと計画を採用して `PlanGate` で人に回す。合格はしない（fail closed）が、高 risk の計画は人の承認を経る。流れ全体の試験（`health_review_scenario_high_risk_change`）は偽の reviewer が `review.json` に `design` を直接書くので、この穴を検出しない。
 - (7) の撤去のうち D7.1（reviewer prompt の「Commit references in progress files and reports」節）・D7.2（health の無い review の Result 節は旧い形のまま）・D7.4（`PLANNER_CHECK_GUIDANCE` の `CLAUDE.md` と同じ文、`PRODUCTION_HOST_PLANNER_GUIDANCE`）。G2 の計画に U6 の unit が無かった。
 - D1.6（Aider に `CLAUDE.md` が届かない）は決定どおり範囲外。
+
+## 付記（2026-11-08、二度目の final review の差し戻しへの方針）
+task 01M6TYVJSTYGRPHERB93MM7J59 の二度目の final review（reviewer run 01M6XA5X9W8V2DCAXMQ0631PR9）は受け入れ条件 0・2・3 を不合格にした。理由は次の 5 つ。
+1. 設計 review の reviewer prompt に `ReviewRequest.design` を描く節が無く、Result 節にも `design` の形が無い。本物の reviewer は `design` を書かないので、高 risk と unknown（remote workspace を含む）の計画は、失敗の決まった reviewer run と planner の再試行を経て人の承認（`PlanGate`）に回る。上の「付記（G2 の完了時の突き合わせ）」の「未実装」の 1 つ目。
+2. project profile（`[review]` 節）が worker の run に届かない（D1.2 の付記）。
+3. 設計 review の run は `dispatch_one` の中で `tree_run_limit_hold` より前の `design_review_hold` から起き、木の run・token の上限の判定と `TokenBudgetWatch` を通らない。
+4. (7) の D7.1・D7.2・D7.4 が残っているのに、状態が「実装済み」だった。
+5. 進捗の「変更」節の件名の一部が、rebase の後の `git log $(git merge-base HEAD main)..HEAD` に無い。
+
+この付記で (a)〜(e) の方針を決める。実装は後続の WorkUnit（design-prompt・retire-legacy・worker-profile・design-budget・flow-tests）が行い、reclose が実装と突き合わせて状態を戻し、5. の件名を直す。この付記を書いた unit（amend-adr）はコードを変えていない。
+
+### (a) 設計 review の reviewer prompt（D3.5 2.・D5.4・D7.2）
+- A1 `crates/task-worker/src/change_rules/review.rs` に `design_section(review: Option<&ReviewRequest>) -> String` を足し、`build_review_prompt` から呼ぶ。`ReviewRequest.design` が `Some` のときだけ出す。中身は次のとおり。
+  - review の対象は実装でなく、採用前の計画であること。作業ツリーは読み取り専用で読んでよい（owner 地図・既存の実装の確認に使う）。
+  - `plan_summary` をそのまま出す。
+  - `brief` の全欄: `root_cause`・`owner`・`reuse`・`options`（`name`・`chosen`・`reason`）・`new_state`・`new_branch`・`new_fallback`・`new_port`・`removals`・`invariants`。空の欄は「無し」と出す。`brief` が `None` なら「brief 無し」と書く。
+  - `risk` の `level` と `reasons` の全件。
+  - 方針: `review_policy` が `Some` なら、`owner_map` の path、`high_risk` の class と paths（正規表現）、`invariants`（名前と根拠の file）を出す。`None` なら「この repo の review 方針を読めなかった」と書き、`risk.reasons` の `review_policy_unavailable:<要約>` を理由として示し、汎用規約と brief だけで判定するよう指示する（(d)）。
+  - 判定の観点: 汎用規約の項目（D5.1 の 7 種）に照らして brief と計画を見る。brief が宣言した `new_*` と `removals` が、触る path class と不変条件に対して足りているかを見る。
+- A2 Result 節は `result_section` の 1 節だけにする。形は run の種類で変える。
+  - 設計 review（`design` が `Some`）: `{"verdicts":[],"design":{"pass":…,"findings":[…]}}`。`ReviewOutput.verdicts` は必須の欄で、設計 review には判定する受け入れ条件が無いので空の配列を書かせる。finding は `HealthFindingOut` と同じ形で、`kind` は 7 種、`severity` は `blocking`・`advisory`。blocking が 1 件でもあれば `pass: false`。`repair` は書かせない（計画の不合格は planner の再試行で直し、局所修復は無い）。違反が無ければ `"findings":[]`。設計 review の prompt には受け入れ条件の判定の節（"Criteria you must judge in this run"）を出さない。
+  - final review（`design` が `None`）: `verdicts[]` の各要素に `criterion`・`pass`・`reason` と任意の `repair`（`{"scope":"local","class":…,"hint":…}`）を書く形を常に出す。`health` が `Some` なら、今の `health_verdict_lines` を続ける。
+  - D7.2: 旧い文面（`{"verdicts":[{"criterion","pass","reason"}]}` だけを示す文）と、それを固定する試験 `change_rules_review_without_health_keeps_the_legacy_prompt` を消す。代わりの試験は、health の無い final review の Result 節が `repair` を含む形を示すことを確かめる。
+- A3 例の JSON は protocol の `ReviewOutput` で読めることを試験で固定する。Result 節の例は placeholder（`<index>`・`<bool>`）を使わず、そのまま JSON として読める値で書く（例: `"criterion":0`、`"pass":false`）。取りうる値の説明は例の外の箇条に書く。試験は描いた Result 節から例の JSON を取り出し、`serde_json::from_str::<ReviewOutput>` で読む。そのうえで、設計 review では `design` が `Some`、health 付きの final review では `health` と `verdicts[0].repair` が `Some` であることを確かめる（`ReviewOutput` は未知の欄を黙って捨てるので、欄名の誤りは `Some` の確認で検出する）。
+- A4 dispatcher の読み込みと判定（`health_review/design_verdict.rs`）は変えない。
+- 試験名の prefix は `change_rules_review_design_`（`design_section` の全欄、方針が `None` のときの文面）と `change_rules_review_result_example_`（A3）。担当は design-prompt。
+
+### (b) worker の run への project profile
+- B1 置き場所: `RunContext.workspace_note: Option<String>` を `RunContext.workspace: Option<RunWorkspaceContext>` に置き換える。`RunWorkspaceContext { note: Option<String>, review_policy: Option<ReviewPolicy> }`（どちらも `serde(default, skip_serializing_if = "Option::is_none")`）。`RunContext` の直下の欄数は 40 のまま変わらない。`ExecutionPlannerContext.review_policy` は消す（この欄へ移す）。2 つはどちらも dispatcher が task の作業場所から決める「この run の作業場所の情報」なので、同じ意味の物としてまとめる。
+  - 退けた案: `RunContext` の直下に欄を足す（41 欄になり `size.responsibility-growth` が fail する）。`WorkUnitPromptContext` と `ExecutionPlannerContext` の両方に置く（atomic task の run に届かず、同じ状態を 2 か所に持つ）。`RunContext.profile` に入れる（org の実効 profile で、意味が違う）。`type_fields` の閾値を上げる（policy の file の変更で人の承認が要り、閾値を緩めて通すことになる）。
+  - wire の破壊的変更: `workspace_note` の欄は無くなる。互換の読み替えは置かない（[破壊的変更を既定にする](2026-10-11-breaking-changes-by-default.md)）。`docs/protocol/worker-protocol.schema.json` を再生成する。
+- B2 方針の読み方: 今の `task_review_policy` の規則（target は review 前の同期と同じ `review_target_ref`、base 側の検査器、`load_review_policy`）を再利用する。LLM は呼ばない。処理を次の 2 つに分ける。
+  - dispatcher（tick の中、同期）は target の解決だけを行う。`task_review_policy` を `review_policy_target(task) -> Result<Option<(PathBuf, String)>, String>`（`Ok(None)` = `Absent`、`Err` = `Unavailable` の理由）と読み込みに分け、結果を `RunExtras` に入れる。
+  - 読み込み（`git archive` と python。上限は `REVIEW_POLICY_TIMEOUT` の 20 秒）は `run_worker` の非同期部分で `spawn_blocking` を使って行う。scratch target の割り当てと同じ形で、tick を止めない。
+  - 読むのは run の起動時に 1 回だけ。WU ごと・tick ごとに LLM で repo を読まない。cache は置かない（新しい状態を足さない）。
+  - `planner_review_policy` と、`execution_planner_context` の中の同期の読み込みは消す。planner の run も同じ経路で読む。
+- B3 入れる run: task の作業場所に git の worktree がある run のうち、worker の run（atomic task の execute、WU の run、WU の repair・integration_repair）と planner の run（/1・/2・/3、replan）。reviewer の run には入れない。設計 review は `DesignReviewRequest.review_policy`、final review は `HealthRepoInput.owner_rows`・`invariants` で方針を受け取るので、同じ方針を 1 つの prompt に 2 回描かない。CoS chat には入れない（D1.3）。方針を読む repo は今の planner と同じく task の先頭の repo（worker の cwd）。WU の run でも target は task の target（WU の base ではない）。
+- B4 `change_rules::repo_section` と `design_brief_section` は `context.workspace` の `review_policy` を読む。`ExecutionPlannerContext` は見ない。
+- B5 読めないとき: `Unavailable`（remote workspace・target を解決できない・検査器の失敗・時間切れ）と `Absent` は `review_policy = None` で、prompt に repo 固有の節を出さない。`Unavailable` の理由は今の planner と同じく warn の log に残す。worker・planner の prompt の節は情報で、関門ではない。fail closed の関門は別にある: 計画の採用は `design_gate`（unknown → 設計 review）、候補は `policy_review_gate`（不明 → D6.4 の人の承認）。
+- 試験名の prefix は `change_rules_worker_profile_`（atomic の execute・WU の run・planner の run の prompt に repo 固有の節が 1 回出る、reviewer の run と CoS chat に出ない、方針が無いと節が無い）と `health_review_worker_profile_`（dispatcher 側。`RunExtras` に target が入る、remote workspace では入らない）。担当は worker-profile。
+
+### (c) 設計 review の run の予算
+- C1 木の run・token の上限: `tree_run_limit_hold` を、gate から `task_core::NextRun` を決める部分と、`NextRun` を受けて判定し `kind: limit` の決定を要求する部分 `tree_limit_hold_for(task, next)` に分ける。`design_review_hold` は、設計 review の run を起こす直前（実行中の run が無く、再試行の上限に達していないとき）に `tree_limit_hold_for(task, NextRun::Worker)` を呼ぶ。true なら run を起こさず `Ok(true)`（hold のまま）を返す。決定の要求は既存の `open_decision` の重複止めで木に 1 件だけ出る。`NextRun` に種類は足さない。設計 review の run は runs 索引の Reviewer の行で、`task_core::tree` の集計では run 数（`runs`）でなく `reviewer_runs` に数え、費用（USD）と token には数える。したがってこの判定は、木の run 数が既に上限に達している・費用が上限を超えた（または費用不明の run がある）ときに設計 review の run を止める。replan の上限は掛けない。人が上限を上げれば、次の tick で設計 review の run が起きる。
+- C2 token 予算の watch: `review_spawn.rs` の組み立て（`budget_scope` → `tree_tokens_used` → `TokenBudgetWatch::new`）を `dispatcher/token_budget.rs` の 1 つの関数 `run_watch(store, task, exclude_run: Option<&str>) -> Result<Option<Arc<TokenBudgetWatch>>, StoreError>` に移す。使うのは `review_spawn.rs`（final review）・`dispatch_run.rs`（worker・planner の run）・`health_review/design_gate.rs`（設計 review）の 3 か所。error の扱いは呼び出し側が決める。`dispatch_run.rs` は今のとおり `?`。`review_spawn.rs` は今のとおり warn を出して watch 無しで走る（[ADR 2026-10-20-mlsys-main2-fixes](2026-10-20-mlsys-main2-fixes.md) D1-3 の既存の挙動で、この付記では変えない）。`design_gate.rs` は `?`（run を起こさず、次の tick でやり直す。C1 の判定と同じ扱い）。
+- C3 `run_design_reviewer` は watch を受け取る。`review.rs` の reviewer run と同じく、途中で上限に達したら process tree を止めて `BudgetExhausted{Tokens}` で終え、既に上限なら adapter を起こさない。この処理は `review.rs` の reviewer run と共通の関数にし、同じ仕様を二重に実装しない。
+- C4 `BudgetExhausted{Tokens}` で終わった設計 review の run は、今の「done で終わらない run」と同じに扱う（`max_reviewer_retries` まで起こし直し、超えたら `DesignReviewed { pass: false, findings: [] }`）。新しい分岐は足さない。予算が尽きた後の起こし直しは adapter を起こさないので、LLM を呼ばず token も使わない。その後の planner の run は既存の token 予算の経路で止まる。代償として、予算の尽きた task では LLM を呼ばない run の行が最大 `max_reviewer_retries + 1` 件増える。
+- 試験名の prefix は `health_review_design_budget_`（木の上限を超えると run を起こさず limit の決定が 1 件出る、上限の内なら run が起きる、run に watch が付く、予算が尽きていれば adapter を起こさない）。担当は design-budget。
+
+### (d) remote workspace
+- D1 remote workspace の task の方針は今のまま `Unavailable("remote workspace")` で、risk は `unknown`、計画は設計 review に回る（fail closed）。`Absent` には変えない。remote にすれば方針を逃れられる経路を作らないため。
+- D2 A1 の節が方針を読めない理由を reviewer に示し、reviewer は汎用規約と brief で判定する。本物の reviewer が `design.pass = true` を書けるので、remote workspace の計画は設計 review の 1 run を経て採用される。人の承認に回るのは、設計 review の不合格が 2 回続いたとき（D3.5 5.）だけになる。
+- D3 代償: remote workspace の task は、planner の計画ごとに reviewer の run が 1 回増える。
+- 流れ全体の試験（下）の remote workspace の場合で確かめる。
+
+### (e) (7) の撤去
+- E1 D7.2 は撤去する（A2）。担当は design-prompt。
+- E2 D7.1 は決定を改め、「Commit references in progress files and reports」の節は撤去しない。理由は 2 つ。
+  - D7.1 の前提「同じ規則は `CLAUDE.md` にあり全 harness に届く」は agent-platform の repo にしか当たらない。review 前の rebase（[ADR-0118](0118-review-target-sync-and-merge-candidate.md)）はどの repo の task にも起きるが、ほかの repo の `CLAUDE.md` にこの規則は無い。
+  - `CLAUDE.md` が書くのは書く側の規則（commit を件名で書く・hash を書かない）だけで、「古い hash を理由に reviewer が不合格にしない」という判定の規則は reviewer prompt のこの節にしか無い。節を消すと、repo 一般に適用するという親 task の原則に反する。
+  - 消すのは、書く側の規則を写した 1 文（"Progress files and reports name commits by subject and the base as `git merge-base HEAD main` (`$CELERIS_WU_BASE` for a work unit), and record checks as run on the HEAD at submission."）だけ。ほかの repo の worker はこの規則を受け取らないので、その repo の review ではこの文が事実と合わない。
+  - 節の正本は [ADR 2026-10-23-commit-refs-by-subject](2026-10-23-commit-refs-by-subject.md) の D1・D6。旧い仕組みでなく現行の reviewer への指示なので、撤去条件は置かない。1 文の削除の担当は retire-legacy。
+- E3 D7.4:
+  - 消す: `PLANNER_CHECK_GUIDANCE` の「Records follow ADR-0128 …」の箇条（記録の場所・hash を書かない）と「Whole-workspace tests … run only in the release gate …」の箇条。どちらも agent-platform の `CLAUDE.md` にあり、ほかの repo では当たらない path（`agent-docs/`・`release.sh`・`test-affected.sh`）を指す。
+  - 消す: `PRODUCTION_HOST_PLANNER_GUIDANCE`。planner の prompt にも `preamble::fixed_notes` の「本番 host の操作」節が入り、計画では人の決定・人の check を置くことまで書いている。消す前に、/3 の execution plan の prompt にその節がちょうど 1 回あることを試験で確かめる。
+  - 撤去しない: 「Do not run CPU-burning load scripts …」の箇条。これは人が決めた共用 host の規則（KB `user/stress-shared-host-rules.md`）で、この host で走る全 repo の run に当たる。今この規則を持つのは agent-platform の `CLAUDE.md` とこの箇条だけで、消すとほかの repo の planner に届かなくなる。host の規則を 1 か所（例: `preamble::fixed_notes`）に移すかは人が決める（task の進捗の提案に書く）。責任者は人（operator）。撤去条件: host の規則を 1 か所に移す変更で、同じ変更でこの箇条を消す。
+  - `PLANNER_CHECK_GUIDANCE` のほかの agent-platform 固有の箇条（`check-doc-links.sh`・`corepack pnpm`・`cargo fmt`・`web/`・`docs/` の diff の check）は D7.4 の範囲の外。profile の `[review]` 節などへ移す案を task の進捗の提案に書く。
+  - 担当は retire-legacy。
+- E4 試験名の prefix は `change_rules_retire_`（D7.1 の節に書く側の規則の文が無く判定の規則は残る、`PLANNER_CHECK_GUIDANCE` に消した 2 箇条が無い、planner の prompt に本番 host の節が 1 回）。
+
+### 流れ全体の試験（flow-tests）
+- 今の `health_review_scenario_high_risk_change` は、偽の reviewer が `review.json` に `design` を直接書くので、prompt の穴を検出しなかった。新しい試験の偽の reviewer は `review.json` を自分で組まない。受け取った `RunContext` から本物の `build_review_prompt` で prompt を組み、設計 review の節に brief・risk・方針（または読めない理由）があることを確かめ、prompt の Result 節の例の JSON を書く（判定の値だけを差し替える）。
+- 場合は 3 つ: 高 risk（合格で採用される）、remote workspace（unknown → 合格で採用され、人の承認に回らない）、通常の変更（設計 review の run が起きない）。prefix は `health_review_scenario_`。
+
+### 状態
+- 状態行を「一部実装（二度目の差し戻しの修正中）」にした。上の後続 unit が終わった後、reclose が決定節とこの付記を実装と突き合わせ、状態を戻す。

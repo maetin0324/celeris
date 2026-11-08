@@ -36,6 +36,13 @@ pub enum Trigger {
     Requeue,
     /// 先行タスクが `failed`/`cancelled` になった後続: 非終端 → `cancelled`（ADR-0010 D1, P-9）。
     DependencyFailed,
+    /// ADR 2026-11-08-health-enforcement-loop D7（P-9）: `DependencyFailed` で cancel された後続を、依存先の
+    /// reopen（終端から終端でない状態への遷移）で戻す。`cancelled → ready`、cancel の前が `draft`
+    /// （人がまだ受け入れていない）なら `cancelled → draft`。attempts 据え置き、`reason = "dependency_reopened"`。
+    /// 対象の判定は `SqliteStore::cascade_after_transition_tx` が行う（この状態機械は event 履歴を持たない）。
+    DependencyReopened {
+        draft: bool,
+    },
     /// 委譲した子が全て終端になり、集約 run を行う親: `reviewing → ready`、attempts 据え置き（ADR-0016 D3 / M1）。
     Aggregate,
     /// 委譲した子が失敗した親（ADR-0021 D1）: やり直せるなら `reviewing → ready`（attempts 消費）、
@@ -152,6 +159,7 @@ impl Trigger {
             Trigger::Cancel => "cancel",
             Trigger::Requeue => "requeue",
             Trigger::DependencyFailed => "dependency_failed",
+            Trigger::DependencyReopened { .. } => "dependency_reopened",
             Trigger::Aggregate => "aggregate",
             Trigger::ChildFailed => "child_failed",
             Trigger::Interrupt => "interrupt",
@@ -257,6 +265,20 @@ pub fn transition(s: &StateView, t: &Trigger) -> Result<Outcome, InvalidTransiti
                         t.name()
                     },
                 })
+            }
+        }
+
+        // ADR 2026-11-08-health-enforcement-loop D7（P-9）: 依存先の reopen で後続を cancel の前へ戻す。
+        // `cancelled` からだけ（人の Cancel や連鎖の中止と区別するのは呼び出し側の event 履歴の判定）。
+        Trigger::DependencyReopened { draft } => {
+            if s.status == Status::Cancelled {
+                Ok(Outcome {
+                    next: if *draft { Status::Draft } else { Status::Ready },
+                    attempts: s.attempts,
+                    reason: t.name(),
+                })
+            } else {
+                Err(invalid(s, t))
             }
         }
 

@@ -612,10 +612,7 @@ impl SqliteStore {
             };
             let eligible = match dep.status {
                 Status::Draft | Status::Ready | Status::Blocked => true,
-                Status::Cancelled => {
-                    Self::last_transitioned_reason_tx(tx, dep_id)?.as_deref()
-                        == Some(Trigger::DependencyFailed.name())
-                }
+                Status::Cancelled => Self::dependency_cancelled_from_tx(tx, &dep)?.is_some(),
                 _ => false,
             };
             if !eligible {

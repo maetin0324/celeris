@@ -143,6 +143,13 @@ tasks: [01M6TYVJSWEY3ZE50S02ETYDNM]
   - D7.4 events は書き換えない。戻す遷移も知らせも新しい event の追記。
 - 採らなかった B: 後続が止まったまま人の操作を待つ。v2 の R3→R4 のように依存でつないだ子が、reopen のたびに人手の retry を要する。
 - 採らなかった C: 点検を忘れると後続が黙って止まる（B0 の task-history の事例）。
+- 付記（2026-11-08、unit p9）: 採った案 A の実装と、D7.1〜D7.4 との突き合わせ。人の回答（決定 p9-scope）は「後続を pending に戻し、受信箱にも記録する。戻した後続は受信箱の項目に task id と依存先を書き、後継を手で起票済みのときに人が重複を cancel できるようにする」。
+  - D7.1 の実装: `cascade_after_transition_tx` の先頭に `from.is_terminal() && !to.is_terminal()` の枝を置いた。終端から戻る遷移は `Trigger::Reopen`（done・failed → ready）、`Trigger::Rereview`（done・failed → reviewing）、`Trigger::DependencyReopened` の 3 つで、どれもこの枝を通る。枝は `depends_on` にこの task を含む後続のうち、下の述語に合い、ほかの依存先に failed・cancelled（または見つからない task）が無いものへ `Trigger::DependencyReopened` を適用する。戻した後続の遷移が同じ枝を通るので、推移的に戻る。ほかの依存先がまだ failed の後続は、その依存先が戻ったときに戻る。
+  - D7.1 との違い: 戻す先は「cancel の前が draft なら draft、それ以外は ready」にした（`DependencyReopened { draft }`）。人がまだ受け入れていない draft を、依存先の reopen だけで ready にしないため。人の回答の「pending」は、依存先の完了を待つ ready（`ready_tasks` が依存先の done を待つ）として実装した。
+  - D7.2 の実装: 述語は `SqliteStore::dependency_cancelled_from_tx`（`store/transition.rs`）の 1 つで、cancelled かつ最後の `Transitioned` の理由が `dependency_failed` なら cancel の前の状態を返す。`retry_task_tx` の付け替えも同じ関数を使う。cancelled から出る遷移は retry の付け替えと `DependencyReopened` だけで、どちらも最後の遷移の理由を変えるので、「cancel の後に人・CoS の遷移が無い」はこの述語に含まれる。人・CoS の cancel（理由 `cancel`）と連鎖の中止（`parent_cancelled`・`project_cancelled`・`milestone_cancelled`）は戻さない。
+  - D7.4 の実装: 戻す遷移は `Transitioned { from: cancelled, to: ready | draft, reason: "dependency_reopened" }` の追記だけで、cancel の event は変えない。attempts は据え置き（replay の畳み込みとも合う）。試験は `crates/task-core/src/store/dependency_reopen_tests.rs` の `dependency_reopen_` 5 件。
+  - D7.3 と人の回答の受信箱の項目: unit p9 では未実装。項目の正本にする新しい event の種類は `crates/task-api/src/query.rs` の網羅の `event_type_name` に、新しい受信箱の種類は `crates/task-api/src/inbox_notifications.rs` の網羅の match と `web/features/inbox/inbox-model.ts` の種類の一覧に行が要る。どれも unit p9 の範囲 check の外なので、計画の問題として範囲の拡張を申告した（記録は [p9 の進捗](../progress/2026-11-07-health-v2-g3/p9.md)）。
+  - 残る制約: 人が後続を手で retry して後継を作った後でも、元の後続は `dependency_failed` の cancel のままなので、依存先の reopen で戻る。retry の記録（`Retried`）は新しい task の側にあり、見分けるには events の全走査が要る。人の回答どおり、受信箱の項目で重複を cancel してもらう。
 
 ### (8) write_set: slices.json の G3 に足す path と理由
 - 決定: slices.json の G3 の write_set に下の表の path を足す（slices.json 自体は変えず、各 unit の範囲 check で許す）。

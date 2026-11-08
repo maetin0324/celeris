@@ -234,6 +234,14 @@ fn expected_simple(kind: TaskKind, status: Status, trigger: &Trigger) -> Expecte
                 expect_err()
             }
         }
+        // ADR 2026-11-08-health-enforcement-loop D7（P-9）: 依存先の reopen による後続の復帰は cancelled からだけ。
+        Trigger::DependencyReopened { draft } => {
+            if status == Status::Cancelled {
+                expect_ok(if *draft { Status::Draft } else { Status::Ready })
+            } else {
+                expect_err()
+            }
+        }
         // ADR 2026-10-20-mlsys-main2-fixes D1-4: token 予算の到達は次の run・reviewer を起こさず failed へ。
         Trigger::TokenBudgetExhausted => {
             if matches!(status, Status::Ready | Status::Running | Status::Reviewing) {
@@ -302,6 +310,9 @@ fn table_simple_triggers_full_cross_product() {
         Trigger::BrowserPrereqResume,
         // ADR 2026-10-20-mlsys-main2-fixes D1-4: token 予算の到達（attempts 据え置き）。
         Trigger::TokenBudgetExhausted,
+        // ADR 2026-11-08-health-enforcement-loop D7（P-9）: 依存先の reopen による後続の復帰（attempts 据え置き）。
+        Trigger::DependencyReopened { draft: false },
+        Trigger::DependencyReopened { draft: true },
     ];
 
     let mut count = 0usize;
@@ -356,8 +367,9 @@ fn table_simple_triggers_full_cross_product() {
     // F5-fix8（ADR-0074 付記）で PlanComplete、ブラウザ capability Phase 2（ADR-0080 D4）で
     // BrowserWait×2 / BrowserResume / BrowserFail×2、ADR-0090 D2 で ClusterJobWait / ClusterJobResume、
     // ADR 2026-10-08-browser-prod-enablement D2 で BrowserPrereqBlock / BrowserPrereqResume、
-    // ADR 2026-10-20-mlsys-main2-fixes D1-4 で TokenBudgetExhausted を追加）
-    assert_eq!(count, 4 * 8 * 32);
+    // ADR 2026-10-20-mlsys-main2-fixes D1-4 で TokenBudgetExhausted、ADR 2026-11-08-health-enforcement-loop D7 で
+    // DependencyReopened×2 を追加）
+    assert_eq!(count, 4 * 8 * 34);
 }
 
 /// ADR-0072 D6（Phase E1）: `Trigger::Continue` の `reason` は `why` ごとに静的な名前になる

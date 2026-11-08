@@ -33,6 +33,7 @@ WorkUnit `ci-script`（task 01M6Y8EG6QN8S421XYJNVDCPTA の unit `ci-entry`）。
 - 試験が効くことの確認（手元で一時に ci.sh を書き換え、元に戻した）: `--head "$head_sha"` を `--head worktree` に変えると (7a) が exit 1 で落ちる。
 - `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health*.py'` → 73 件 OK、exit 0。
 - `sh scripts/dev/repo-health/ci.sh --base HEAD~1`（この repo の HEAD の commit を検査）→ exit 0、verdict pass、`reviewable=true`、head は commit。`--help` → exit 0、`--base` なし・未知の引数・値の無い `--base` → exit 2。
+- `sh scripts/dev/repo-health/ci.sh --base main`（この branch の HEAD の commit を検査）→ exit 1、`reviewable=true`。fail 級の finding は `policy.changed`（`scripts/dev/repo-health/ci.sh`）の 1 件だけ。
 - `bash scripts/dev/check-health.sh` → exit 1。必須 rule のうち pass でないのは `policy.changed`（fail）だけ（ほかの 14 件は pass）。fail 級の finding は `policy.changed` の 1 件で、`policy.files` のうち base と head の blob が違うのは `scripts/dev/repo-health/ci.sh`（base に無い）だけ。`fail_grade=1 new=1 worsened=0`。D6.2 は働かない（policy の file でない gate の試験と進捗も変えている）。
 - `bash scripts/dev/test-affected.sh` → exit 1。最初に呼ぶ check-health.sh が同じ `policy.changed` だけで止まる（`--list` の対象は 0 件。crate と web は変えていない）。exit 1 は `policy.changed` だけによる（D6.6）。
 - `bash scripts/dev/check-health.sh --base HEAD`（この branch の HEAD を base にする。branch を main に merge した後の main に当たる）→ exit 0、`policy.changed` pass、doc-only。

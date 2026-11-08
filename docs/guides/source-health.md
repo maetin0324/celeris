@@ -1,5 +1,5 @@
 ---
-tasks: [01M5KWPP2W6FZAGWXFDFBQJ5S0, 01M6VCR06J339SH4JTK3Q8XHEP]
+tasks: [01M5KWPP2W6FZAGWXFDFBQJ5S0, 01M6VCR06J339SH4JTK3Q8XHEP, 01M6TYVJSWEY3ZE50S02ETYDNM]
 ---
 # ソース健全性の必須差分ゲート
 
@@ -9,6 +9,7 @@ tasks: [01M5KWPP2W6FZAGWXFDFBQJ5S0, 01M6VCR06J339SH4JTK3Q8XHEP]
 - 単一の入口は `bash scripts/dev/check-health.sh [--base <rev>] [--out <report.json>]`。report JSON（`celeris.repo-health.report/1`）を書いてその path を出し、exit 0（合格）・1（必須 rule の fail）・2（error・欠測・使い方の誤り）で終わる。使い方は [check-health.sh](../../scripts/dev/check-health.sh) の冒頭注記、rule の状態と exit code の意味は [repo health の契約](../../agent-docs/adr/2026-11-07-repo-health-contract.md) の D3。
 - `bash scripts/dev/test-affected.sh` は crate を選ぶ前に `check-health.sh` を必ず実行する。文書だけの変更も同じで、`--list` は対象を表示するだけ。workspace の必須検査はこれと clippy・fmt の 3 本（`.config/celeris/workspace.toml`）。
 - base の既定は `--base auto`（`git merge-base HEAD main`）。決め方は [repo health の Celeris profile](../../agent-docs/adr/2026-11-07-repo-health-celeris-profile.md) の D1。
+- repo の CI から同じ検査器を呼ぶ入口は `sh scripts/dev/repo-health/ci.sh --base <rev> [--head <rev>] [--out <report.json>]`。commit を検査し、policy の file だけの変更も exit 1 にする。導入の手順・CI の設定例・Celeris が強制できない範囲は [repo の CI から repo health を呼ぶ導入手順](repo-health-ci.md)。
 
 ## 検査の中身と上限
 - 既存検査（source-size・architecture-map・doc-links・adr-numbers・human-text・progress-index）の command と Celeris の上限（crate の層と依存・size・例外）は [profiles/celeris.toml](../../scripts/dev/repo-health/profiles/celeris.toml) にだけ書く。`profiles/default.toml` は `extends = "celeris"` で選ぶだけ。profile の項目の意味は `scripts/dev/repo-health/health/profile.py` の docstring が正本。

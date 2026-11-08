@@ -8,6 +8,9 @@
 #   (5) doc-only の変更は軽量経路: 構造の rule（source-size）の command を起こさず、unit 試験も走らせず exit 0
 #   (6) policy の file だけの変更（作業ツリー・commit 済み）は exit 0 で `policy review required: <files>` を出し、
 #       report の verdict は fail のまま。policy の file 以外も変えれば exit 1（ADR 2026-11-07-health-review-integration D6.2）
+#   (7) CI の入口 repo-health/ci.sh: commit の head を検査する。pass で exit 0（report は validate_report.py を通り
+#       reviewable=true、未 commit の変更を見ない）、包んだ検査の fail を commit すれば exit 1、shallow clone で base に
+#       届かなければ exit 2 で stderr に `git fetch --deepen` の手順。--help は exit 0、--base が無ければ exit 2
 # 外部ネットワークに出ない。CPU を焼く負荷はかけない。
 set -eu
 
@@ -139,5 +142,56 @@ run 1 "(6c) policy and code"
 ! grep -q 'policy review required' "$tmp/log" || fail "(6c) policy 以外も変えたのに policy review required が出た"
 git checkout -q -- app.py
 echo "OK (6) policy-only change -> exit 0 with 'policy review required', mixed change -> exit 1"
+
+# (7) CI の入口 ci.sh: 作業ツリーでなく commit の head を検査し、repo_health.py の exit code を返す
+ci_run() {  # ci_run <want exit> <label> [ci.sh の引数]。report は必ず書かれ、契約に合い、path が stdout に出る
+    want=$1; label=$2; shift 2
+    rm -f "$out" "$GATE_MARK"
+    rc=0
+    sh scripts/dev/repo-health/ci.sh --out "$out" "$@" >"$tmp/log" 2>"$tmp/err" || rc=$?
+    [ "$rc" -eq "$want" ] || { cat "$tmp/log" "$tmp/err" >&2; fail "$label: exit $rc, want $want"; }
+    [ -f "$out" ] || fail "$label: report が無い"
+    python3 -I "$repo_root/scripts/dev/repo-health/validate_report.py" "$out" >/dev/null \
+        || fail "$label: report が契約に合わない"
+    grep -qx "ci.sh: report=$out" "$tmp/log" || fail "$label: report の path が出ていない"
+}
+rc=0
+sh scripts/dev/repo-health/ci.sh --help >"$tmp/log" 2>&1 || rc=$?
+[ "$rc" -eq 0 ] && grep -q '^usage: ' "$tmp/log" || fail "(7) --help: exit $rc か使い方が出ていない"
+rc=0
+sh scripts/dev/repo-health/ci.sh --out "$out" >"$tmp/log" 2>"$tmp/err" || rc=$?
+[ "$rc" -eq 2 ] && grep -q '^usage: ' "$tmp/err" || fail "(7) --base なし: exit $rc か使い方が stderr に出ていない"
+git branch -f main HEAD
+echo 'print("ci")' >app.py
+git commit -qam "ci code"
+: >BAD  # 未 commit の file。作業ツリーを見れば doc.links が落ちる
+ci_run 0 "(7a) ci pass" --base main
+[ "$(field 'r["summary"]["reviewable"]')" = True ] || fail "(7a) reviewable が true でない"
+[ "$(field 'r["snapshot"]["head"]["kind"]')" = commit ] || fail "(7a) head が commit でない"
+[ "$(field 'r["snapshot"]["head"]["sha"]')" = "$(git rev-parse HEAD)" ] || fail "(7a) head の sha が HEAD でない"
+[ "$(field 'r["snapshot"]["head"]["dirty"]')" = False ] || fail "(7a) dirty が立っている"
+[ "$(field '[x["status"] for x in r["rules"] if x["id"] == "doc.links"][0]')" = pass ] \
+    || fail "(7a) 未 commit の BAD を見た"
+[ -f "$GATE_MARK" ] || fail "(7a) full で構造の検査が走っていない"
+git add BAD
+git commit -qm "bad"
+ci_run 1 "(7b) ci fail" --base main
+[ "$(field '[x["status"] for x in r["rules"] if x["id"] == "doc.links"][0]')" = fail ] || fail "(7b) doc.links が fail でない"
+[ "$(field 'r["summary"]["reviewable"]')" = True ] || fail "(7b) reviewable が true でない"
+git reset -q --hard HEAD~1
+# shallow clone の ci.sh を repo の外から呼ぶ（repo は script の場所から決まる）
+rm -rf "$tmp/shallow"
+git clone -q --depth 1 --branch task "file://$repo" "$tmp/shallow"
+base_sha=$(git rev-parse main)
+rm -f "$out"
+rc=0
+( cd "$tmp" && sh shallow/scripts/dev/repo-health/ci.sh --base "$base_sha" --out "$out" ) \
+    >"$tmp/log" 2>"$tmp/err" || rc=$?
+[ "$rc" -eq 2 ] || { cat "$tmp/log" "$tmp/err" >&2; fail "(7c) shallow: exit $rc, want 2"; }
+grep -q 'git -C .* fetch --deepen=' "$tmp/err" || { cat "$tmp/err" >&2; fail "(7c) stderr に git fetch --deepen が無い"; }
+python3 -I "$repo_root/scripts/dev/repo-health/validate_report.py" "$out" >/dev/null || fail "(7c) report が契約に合わない"
+[ "$(field 'r["snapshot"]["shallow"]')" = True ] || fail "(7c) shallow が記録されていない"
+[ "$(field 'r["snapshot"]["base"]["reachable"]')" = False ] || fail "(7c) base が届いたことになっている"
+echo "OK (7) ci.sh: commit head pass -> exit 0 (reviewable, ignores uncommitted), committed fail -> exit 1, shallow -> exit 2 with git fetch --deepen"
 
 echo "repo_health_gate: all checks passed"

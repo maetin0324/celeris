@@ -12,6 +12,9 @@
 //!   warn の log に残す（B5）。prompt の節は情報で、関門は `design_gate`（計画）と `policy_review_gate`（候補）にある。
 //!
 //! LLM は呼ばない。候補（head・作業ツリー）の profile は読まない（I3）。
+//!
+//! `dispatcher::run_context` の子 module として `#[path]` で読む（`run_context.rs` の `mod worker_profile`）。file を
+//! `health_review/` に置くのは、`dispatcher/` の module が size の閾値を超えているため（`health_review` の module 注釈）。
 
 use std::path::PathBuf;
 
@@ -19,8 +22,8 @@ use task_core::design_review::ReviewPolicyState;
 use task_core::{Task, TaskId};
 use task_worker::protocol::RunWorkspaceContext;
 
-use super::policy::{REVIEW_POLICY_TIMEOUT, load_review_policy};
 use crate::dispatcher::Dispatcher;
+use crate::health_review::policy::{REVIEW_POLICY_TIMEOUT, load_review_policy};
 
 /// tick が決めた、この run の作業場所の情報（`RunExtras.workspace`）。
 #[derive(Debug)]

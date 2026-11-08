@@ -14,7 +14,7 @@
 //!
 //! どれも黙って省かない（risk の判定では `Unavailable` は `unknown` になる。D3.3）。worker と planner の run には、tick が
 //! [`Dispatcher::review_policy_target`] で repo と target を決め、run の起動の非同期部分で 1 回だけ読む（付記 B2。
-//! `health_review::worker_profile`）。全体の時間に上限（[`REVIEW_POLICY_TIMEOUT`]）を置き、tick を止めない。LLM は呼ばない。
+//! `health_review/worker_profile.rs`）。全体の時間に上限（[`REVIEW_POLICY_TIMEOUT`]）を置き、tick を止めない。LLM は呼ばない。
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -270,7 +270,7 @@ impl Drop for Scratch {
 
 impl Dispatcher {
     /// D2.3・付記 B2: worker と planner の run で review 方針を読む repo と target を、tick の中で決める（読み込みは
-    /// しない。[`load_review_policy`] は run の起動の非同期部分が呼ぶ。`health_review::worker_profile`）。repo は task の
+    /// しない。[`load_review_policy`] は run の起動の非同期部分が呼ぶ。`health_review/worker_profile.rs`）。repo は task の
     /// 先頭の repo（worker の cwd）。WU の run でも target は task の target（WU の base ではない）。
     ///
     /// target は review 前の同期と同じ（`review_target_ref`: 木の子は親の branch、ほかは repo の既定 branch）。

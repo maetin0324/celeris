@@ -4,7 +4,7 @@ tasks: [01M6VBSKZQG2YWF7NWYH6GP9P7]
 # ADR 2026-11-07: 健全性を設計と review に組み込む（規約配布・設計 brief・risk 判定・構造化 health verdict）
 
 - 日付: 2026-11-07
-- 状態: 一部実装（二度目の差し戻しの修正中。2026-11-08、健全性 v2 G2 の task 01M6TYVJSTYGRPHERB93MM7J59。記録は [G2 の進捗](../progress/2026-11-07-health-v2-g2.md)）。決定節との食い違いと未実装の部分は末尾の付記（dispatch の実装・G2 の完了時の突き合わせ）に、二度目の final review の差し戻しへの方針は最後の付記に書く。
+- 状態: 実装済み（2026-11-08、健全性 v2 G2 の task 01M6TYVJSTYGRPHERB93MM7J59。二度目の final review の差し戻しの修正を含む。記録は [G2 の進捗](../progress/2026-11-07-health-v2-g2.md)）。決定節との食い違いは末尾の付記（dispatch の実装・G2 の完了時の突き合わせ）に、二度目の差し戻しへの方針と決定を改めた点（D7.1・D7.4）は「二度目の final review の差し戻しへの方針」の付記に、その方針と実装の違いと残る穴は最後の付記「差し戻しの修正の完了時の突き合わせ」に書く。
 - 根拠: 前提調査 [G2 survey](../progress/2026-11-07-health-v2-g2/adr-survey.md) の (a)〜(h)。行番号は survey の時点のもの。
 - 関係: [ADR 2026-11-07 汎用 repo health の契約](2026-11-07-repo-health-contract.md)（D2: policy は base 側で評価、policy.changed）、[ADR 2026-11-07 repo health の Celeris profile](2026-11-07-repo-health-celeris-profile.md)、[ADR 2026-11-07 健全性 v2 の基準](2026-11-07-health-v2-baseline.md)、[ADR 2026-10-23 必須規則の prompt 配送](2026-10-23-required-rules-prompt-delivery.md)、[2026-10-11 破壊的変更を既定にする](2026-10-11-breaking-changes-by-default.md)、[ADR-0118](0118-review-target-sync-and-merge-candidate.md)（review 前の target 同期と candidate SHA）。
 
@@ -363,3 +363,62 @@ task 01M6TYVJSTYGRPHERB93MM7J59 の二度目の final review（reviewer run 01M6
 
 ### 状態
 - 状態行を「一部実装（二度目の差し戻しの修正中）」にした。上の後続 unit が終わった後、reclose が決定節とこの付記を実装と突き合わせ、状態を戻す。
+
+## 付記（2026-11-08、差し戻しの修正の完了時の突き合わせ）
+後続の WorkUnit（design-prompt・retire-legacy・worker-profile・design-budget・flow-tests）を統合した後の HEAD で、決定節と上の付記「二度目の final review の差し戻しへの方針」（以下、方針の付記）を実装と突き合わせた。各 unit の記録は [design-prompt](../progress/2026-11-07-health-v2-g2/design-prompt.md)・[retire-legacy](../progress/2026-11-07-health-v2-g2/retire-legacy.md)・[worker-profile](../progress/2026-11-07-health-v2-g2/worker-profile.md)・[design-budget](../progress/2026-11-07-health-v2-g2/design-budget.md)・[flow-tests](../progress/2026-11-07-health-v2-g2/flow-tests.md)。どの unit も ADR を編集していないので、方針の付記との違いをここに写す。試験の件数はこの付記を書いた時点の HEAD で `cargo nextest list` が出した関数名を数えた（task-worker の `change_rules_` 25 件、task-dispatch の `health_review_` 80 件）。
+
+### 前の付記の「未実装」と差し戻しの理由の扱い
+- 付記「G2 の完了時の突き合わせ」の「未実装」の 1 つ目（設計 review の reviewer prompt、D3.5 2.・D5.4 の `design`）: 済み。design-prompt が `change_rules::review::design_section` と、Result 節の `design` の形を足した（方針の付記の (a)）。
+- 同じく 2 つ目（(7) の D7.1・D7.2・D7.4）: 済み。D7.2 は撤去した。D7.1 と D7.4 は方針の付記の (e) E2・E3 で決定を改め、改めた範囲を retire-legacy が撤去した（下の (e)）。
+- 同じく 3 つ目（D1.6、Aider に `CLAUDE.md` が届かない）: 決定どおり範囲外のまま。
+- 付記「G2 の完了時の突き合わせ」の (1) の D1.2（repo 固有の review 方針の節は /3 の planner の run にだけ出る）: 済み。worker-profile が方針を `RunContext.workspace.review_policy` に移し、worker の run と planner の run の両方に出す（下の (b)）。
+- 差し戻しの理由 3.（設計 review の run が木の上限と `TokenBudgetWatch` を通らない）: 済み（下の (c)）。
+- 差し戻しの理由 5.（進捗の「変更」節の件名）: reclose が [G2 の進捗](../progress/2026-11-07-health-v2-g2.md) の「変更」節を、`git log --no-merges --format=%s $(git merge-base HEAD main)..HEAD` にある件名だけに直した。
+
+### (a) 設計 review の reviewer prompt（design-prompt）
+- 実装の場所は方針の付記のとおり（`change_rules/review.rs` の `design_section`・`result_section`、`claude_code/prompt.rs` の `build_review_prompt` は `review.design` が `Some` のとき `design_section` を出す）。D7.2 の旧い文面、定数 `LEGACY_RESULT`、試験 `change_rules_review_without_health_keeps_the_legacy_prompt` は消した。代わりの試験は `change_rules_review_final_result_without_health_shows_repair`。
+- 試験名の prefix: 方針の付記は `change_rules_review_design_` と `change_rules_review_result_example_` を挙げた。実装は unit の受け入れ条件に合わせて `change_rules_design_review_` の 4 件に揃えた。`…_prompt_shows_the_plan_and_the_design_shape`・`…_without_policy_or_brief_explains_why` が前者、`…_result_examples_parse_as_review_output` が後者に当たる。`…_absent_from_final_review` は final review に設計 review の節が出ないことを確かめる。
+- A3 の例の JSON: 文字列で書かず、`protocol::ReviewOutput` の値を作って `serde_json::to_string` で書き出す。型と例が食い違わない。
+- 設計 review の prompt で出さない節: 方針の付記が挙げた「Criteria you must judge in this run」に加え、worker の summary・evidence・health の節も出さない（設計 review の `ReviewRequest` ではどれも空）。「Acceptance criteria of the task under review」（対象 task の受け入れ条件の一覧）は計画を判定する材料として残した。
+- A4: dispatcher の読み込みと判定（`health_review/design_verdict.rs`）は変えていない。
+
+### (b) worker の run への project profile（worker-profile）
+- B1〜B5 は方針の付記のとおり実装した。`RunContext.workspace: Option<RunWorkspaceContext { note, review_policy }>` が `RunContext.workspace_note` を置き換えた（[ADR-0039](0039-project-workspace.md) の `workspace_note` は `RunContext.workspace.note` になった）。`ExecutionPlannerContext.review_policy`・`Dispatcher::planner_review_policy`・`Dispatcher::task_review_policy`・`change_rules::review_policy` は消した。`RunContext` の直下の欄は 40 のまま。読み口は `RunContext::workspace_note()` と `RunContext::review_policy()`。schema は再生成した。
+- module の置き場所（方針の付記は決めていない）: `health_review/worker_profile.rs` に置き、`dispatcher/run_context.rs` から `#[path]` で子 module として読む（`design_gate.rs` と同じ形）。`dispatcher/` の module の本体の行が閾値を超えているため、また `dispatcher` から `health_review` への依存の辺を足さないため。
+- 対話 run（task の会話の宛先がある run）: 方針の付記の B3 は触れていない。実装は対話 run に方針を入れない（`run_workspace` の `with_policy = conversation_addressee.is_none()`）。作業場所の説明（`note`）は従来どおり入る。
+- repair・integration_repair の run: 呼び出し口は `dispatch_run.rs` の `run_extras` の 1 か所で、同じ経路を通る。repair の run だけを対象にした試験は無い。
+- 試験: `change_rules_worker_profile_` 2 件（task-worker）、`health_review_worker_profile_` 4 件（task-dispatch）。方針の付記の `health_review_worker_profile_` は「`RunExtras` に target が入る」までだったが、実装の試験は adapter が受け取った `RunContext` まで確かめる。
+- 残る点: 方針を読む repo は task の先頭の repo だけ（B3 のとおり）。読み込みは run の起動ごとに 1 回で cache は無く、1 回あたりの時間は実測していない。
+
+### (c) 設計 review の run の予算（design-budget）
+- C1: `Dispatcher::tree_run_limit_hold` を消し、判定と決定の要求を `Dispatcher::tree_limit_hold_for(task, next)` に、gate から `NextRun` を決める部分を `dispatcher/tree_units.rs` の free fn `next_run(gate)` に分けた（方針の付記は置き場所を決めていない。`Dispatcher` の method 数を増やさないため）。`design_review_hold` は、実行中の run の待ちと再試行の上限の分岐の後、review 方針の読み込みと `DesignReviewRequest` の組み立ての前に判定する（止める場合に方針を読まないため。条件と結果は方針の付記と同じ）。
+- C1 の「token の上限」: 木の上限（`TreeLimits`）に token 数の種類は無い。token の使用量から単価で計算した費用の上限 `max_tree_usd` として試験した。
+- C2: `dispatcher/token_budget.rs` の `run_watch` が唯一の `TokenBudgetWatch::new` の呼び出し口。`pick_reviewer` は `run_watch` の結果（`Result`）を引数で受け取り、final review は `Err` のとき warn を出して watch 無しで走り、設計 review は `?` の後の `Ok` だけを渡す。方針の付記に無い変更として、`token_budget::exhausted` も `run_watch` を使う形にした（同じ組み立ての重複を消す。挙動は同じ）。
+- C3: 共通の関数の名前は `review::run_within_token_budget(adapter, req, run: &ReviewerRun)`（方針の付記は名前を決めていない）。`run_reviewer_inner`（final review）と `run_design_reviewer`（設計 review）の両方が呼ぶ。
+- C4: 新しい分岐は足していない。起こし直しのたびに `start_design_review` が `run_watch` を読み直すので、予算が尽きた後の起こし直しは adapter を起こさない。
+- 試験: `health_review_design_budget_` 8 件（C1 が 3 件、C2〜C4 が 5 件）。
+- 旧い名前の残り: `crates/task-core/src/tree/limits.rs:86` の `TreeLimitKind::is_run_time` の doc comment が `tree_run_limit_hold` を指す。ADR-0079・[2026-10-11-task-wait-reasons](2026-10-11-task-wait-reasons.md)・[2026-10-22-plan-issue-answer-replans](2026-10-22-plan-issue-answer-replans.md) の本文も旧い名前を書く。ADR の本文は当時の記録として変えない。doc comment は design-budget の範囲（`crates/task-dispatch/src/`）と reclose の範囲（文書だけ）の外にあり、直していない。
+
+### (d) remote workspace（flow-tests の remote-flow）
+- D1・D2 は方針の付記のとおり成り立つ。試験 `health_review_flow_remote_workspace_plan_is_adopted_after_one_design_review` は、remote workspace の task の計画が risk `unknown`（reasons に `review_policy_unavailable:remote workspace`）で設計 review に回り、本物の prompt（`claude_code::build_prompt`）に方針を読めない理由と brief が出て、1 run の合格で採用されることを確かめる。`PlanApprovalRequested`・`PlanGateDecided`・`DecisionRequested` の event も、人への受信箱の項目も無い。
+- 方針の付記との違い: 方針の付記の D1〜D3 は、remote workspace の task が planner の計画を持つことを前提に書いた。今の Complexity Gate は remote workspace の task を最初の dispatch で atomic にする。`crates/task-core/src/execution_gate.rs` の `out_of_scope_rule` の `task.workspace.local_mode() == WorkspaceMode::Shared`（185 行）が、`WorkspaceSpec::local_mode` が `Remote` に `Shared` を返すため、どの remote の task にも当たる（人の明示の compound より先に効く）。そのため remote の task で planner が走るのは、人が採用した計画（`PUT /tasks/{id}/execution-plan`）の WU が `yield.plan_issue` を返した後などの replan だけで、試験もこの経路で planner を起こす。D3 の代償（計画ごとに reviewer の run が 1 回増える）も、この replan のときだけ起きる。
+- この付記は今の挙動を記録するだけで、gate を変えるかは決めていない。remote の task の最初の計画を compound にできるよう gate を直す案は [G2 の進捗](../progress/2026-11-07-health-v2-g2.md) の提案に書いた（`crates/task-core/` の変更なので別の task）。同じ条件の 2 つ目の項 `remote_mode() == Shared`（186 行）は 1 つ目の項が `Remote` を全部拾うので結果を変えない。「`Remote` のうち `mode: Shared` だけを対象外にする」意図だったかは未確認。
+
+### (e) (7) の撤去（retire-legacy）
+- D7.1（E2）: reviewer prompt の「Commit references in progress files and reports」節から、書く側の規則を写した 1 文だけを消した。見出しと判定の規則は残る。方針の付記との違い: 節の文は `crates/task-worker/src/claude_code/prompt/commit_refs.rs` の定数 `REVIEW_SECTION` に移し、`build_review_prompt` はそれを出す。unit の受け入れ条件（`prompt.rs` に `Commit references in progress files` が無い）は元の D7.1 に合わせて書かれ、E2（節を残す）と食い違うため、文の置き場所を変えて両方を満たした。reviewer prompt に出る文は、消した 1 文を除いて変わらない。節の正本はこの file。
+- D7.4（E3）: `PLANNER_CHECK_GUIDANCE` から「Records follow ADR-0128 …」と「Whole-workspace tests … run only in the release gate …」の 2 箇条を消し、本番 host の planner 用の定数 `PRODUCTION_HOST_PLANNER_GUIDANCE` とその呼び出しを消した。planner の prompt には `preamble::fixed_notes` の「本番 host の操作」節がちょうど 1 回入る。方針の付記は確認を /3 の prompt だけと書くが、試験は /2・/3 の両方で確かめる。E4 の「`PLANNER_CHECK_GUIDANCE` に消した 2 箇条が無い」は、定数を直接読まず、`build_prompt` で作った planner の prompt の「check の書き方」節で確かめる。
+- 残したもの: 「Do not run CPU-burning load scripts …」の箇条（E3 のとおり。責任者は人、撤去条件は host の規則を 1 か所に移す変更）。`CELERIS_WU_*`・scope check の箇条。`PLANNER_CHECK_GUIDANCE` のほかの agent-platform 固有の箇条（D7.4 の範囲の外。移す案は進捗の提案）。
+- 試験: `change_rules_retire_` 3 件。消した文を固定していた `planner_prompt_declares_production_host_changes_as_a_human_procedure` は消し、`change_rules_retire_planner_prompt_has_the_production_host_note_once` に置き換えた。`prompt.rs` は 1,886 行から 1,859 行。
+
+### 流れ全体の試験（flow-tests）
+- 3 つの場合を `crates/task-dispatch/src/health_review/flow_tests.rs` に置いた（`dispatcher/tests/mod.rs` から `#[path]` で `mod health_review_flow` として読む）。偽の reviewer `FlowAdapter` は `review.json` を自分で組まず、受け取った `RunRequest` から本物の prompt を組み、設計 review の節の値と Result 節の形を確かめ、Result 節の例の JSON の判定の値だけを差し替えて書く。高 risk（`…_high_risk_plan_is_adopted_after_the_prompt_review`）、通常の変更（`…_normal_change_puts_repo_rules_in_the_work_unit_prompt_only`）、remote workspace（上の (d)）。
+- 方針の付記との違い: 試験名の prefix は `health_review_scenario_` でなく `health_review_flow_`（3 件。unit の受け入れ条件の check がこの prefix を数える）。既存の `health_review_scenario_` の 3 件は残した。prompt は `build_review_prompt`（`claude_code::prompt` の private な関数）でなく公開の入口 `task_worker::claude_code::build_prompt` で組む。reviewer の run では `build_prompt` が `build_review_prompt` に分岐する（claude_code adapter の本番の経路と同じ）。
+- 検出力の確認: flow-tests は `design_section` から risk の行を手元で外すと高 risk の試験が落ちることを確かめた（commit には含まない）。
+
+### 状態と残る穴
+- 状態行を「実装済み」に戻した。決定節（D7.1・D7.4 は方針の付記で改めた形）と方針の付記の (a)〜(e) は、上に書いた違いを除いて実装と合う。
+- 決定節・付記の範囲の外に残る穴（実装の未了ではない）:
+  - policy の関門: 材料作りの非同期 task の panic では event が残らず関門が掛からない。同期の無い repo と remote workspace の repo は candidate の SHA が決まらず、記録も関門も無い（付記「dispatch の実装」のまま）。
+  - remote workspace の task の最初の計画は gate で atomic になる（上の (d)）。
+  - `generic.md` の規約 7〜9 に対応する `HealthFindingKind` が無い（付記「G2 の完了時の突き合わせ」の (1)）。
+  - `TreeLimitKind::is_run_time` の doc comment の旧い名前（上の (c)）。

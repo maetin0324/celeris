@@ -7,11 +7,11 @@ use super::*;
 
 use crate::health_review::policy::{CHECKER_SCRIPT, REVIEW_POLICY_SCHEMA};
 
-const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-const STORE_PATH: &str = "crates/task-store/src/rows.rs";
+pub(super) const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+pub(super) const STORE_PATH: &str = "crates/task-store/src/rows.rs";
 
 /// `source` の方針（高 risk の class `store` = `^crates/task-store/`）を出す stub。
-fn stub(source: &str) -> String {
+pub(super) fn stub(source: &str) -> String {
     let json = serde_json::json!({
         "schema": REVIEW_POLICY_SCHEMA,
         "source": source,
@@ -24,7 +24,7 @@ fn stub(source: &str) -> String {
 
 const FAILING_STUB: &str = "import sys\nsys.stderr.write('boom\\n')\nsys.exit(3)\n";
 
-fn checker_repo(stub: &str) -> tempfile::TempDir {
+pub(super) fn checker_repo(stub: &str) -> tempfile::TempDir {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let script = repo.path().join(CHECKER_SCRIPT);
@@ -43,7 +43,7 @@ fn v2_plan(path: &str) -> String {
 }
 
 /// /3 の計画（leaf 1 つ、write path は `path`）。`new_state` を宣言した brief を付けるかを選ぶ。
-fn v3_plan_with(path: &str, brief: bool) -> String {
+pub(super) fn v3_plan_with(path: &str, brief: bool) -> String {
     let mut unit = super::tree::leaf("a", "s1", &[]);
     unit["context"] = serde_json::json!({"paths": [path]});
     let mut plan: serde_json::Value = serde_json::from_str(&super::tree::v3_plan(

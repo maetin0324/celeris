@@ -1192,7 +1192,13 @@ async fn auto_leaf_repeated_session_rollovers_and_new_context_exhaustion_are_cou
 }
 
 /// 木の run 1 本（model と 4 種の token を指定。保存済みの `cost_usd` は入れない）。
-fn seed_tree_run(store: &Arc<dyn TaskStore>, task: &Task, id: &str, model: &str, tokens: [u64; 4]) {
+pub(super) fn seed_tree_run(
+    store: &Arc<dyn TaskStore>,
+    task: &Task,
+    id: &str,
+    model: &str,
+    tokens: [u64; 4],
+) {
     store
         .run_index_start(task_core::RunRow {
             run_id: id.to_string(),
@@ -1235,6 +1241,28 @@ fn usd_hold_fixture(
     (dir, store, d, root)
 }
 
+/// ADR-0079 D3: `dispatch_one` は gate が起こす run の種類だけを木の上限に掛ける（統合・最終レビュー・「何もしない」は
+/// 掛けない）。replan の planner run だけが `max_tree_replans` を見る。
+#[test]
+fn tree_run_limit_next_run_follows_the_dispatch_gate() {
+    use super::super::tree_units::next_run;
+    use task_core::NextRun;
+    let task = new_task(std::path::Path::new("/nonexistent"), Check::Human, 0);
+    let wu = || Box::new(super::credential_gate::unit(&task, "a", 1));
+    assert_eq!(next_run(&WuDispatchGate::Atomic), Some(NextRun::Worker));
+    assert_eq!(
+        next_run(&WuDispatchGate::RunWorkUnit(wu())),
+        Some(NextRun::Worker)
+    );
+    assert_eq!(
+        next_run(&WuDispatchGate::RunPlanner { replan: true }),
+        Some(NextRun::Planner { replan: true })
+    );
+    assert_eq!(next_run(&WuDispatchGate::StartIntegration(wu())), None);
+    assert_eq!(next_run(&WuDispatchGate::FinalReview), None);
+    assert_eq!(next_run(&WuDispatchGate::Skip), None);
+}
+
 /// ADR 2026-11-06-budget-usd-caps D1・D2-4（受け入れ 5）: 木の上限は換算費用で判定する。cache read は
 /// cache read の単価（claude-sonnet-5 は input の 1/10）で数えるので、cache が 200 万 token の run を足しても
 /// 上限（3 USD）に届かず run は起こせる。cache read をさらに 300 万 token 足すと 3.0 USD に達し、`max_tree_usd`
@@ -1242,7 +1270,7 @@ fn usd_hold_fixture(
 #[tokio::test]
 async fn tree_usd_limit_prices_cache_tokens_by_their_rates() {
     let (_dir, store, d, root) = usd_hold_fixture(3_000_000);
-    let gate = WuDispatchGate::Atomic;
+    let next = task_core::NextRun::Worker;
     // 1M input = 2.0 USD、cache read 2M = 0.4 USD（input と同じ重さなら 4 USD で上限を超える）。
     seed_tree_run(
         &store,
@@ -1251,12 +1279,12 @@ async fn tree_usd_limit_prices_cache_tokens_by_their_rates() {
         "claude-sonnet-5",
         [1_000_000, 0, 2_000_000, 0],
     );
-    assert!(!d.tree_run_limit_hold(&root, &gate).unwrap());
+    assert!(!d.tree_limit_hold_for(&root, next).unwrap());
     assert!(store.decisions_list(Some(root.id)).unwrap().is_empty());
     // cache read 3M = 0.6 USD。合計 3.0 USD で上限に達する。
     seed_tree_run(&store, &root, "w2", "claude-sonnet-5", [0, 0, 3_000_000, 0]);
-    assert!(d.tree_run_limit_hold(&root, &gate).unwrap());
-    assert!(d.tree_run_limit_hold(&root, &gate).unwrap());
+    assert!(d.tree_limit_hold_for(&root, next).unwrap());
+    assert!(d.tree_limit_hold_for(&root, next).unwrap());
     let decisions = store.decisions_list(Some(root.id)).unwrap();
     assert_eq!(decisions.len(), 1, "{decisions:?}");
     assert_eq!(decisions[0].key, "limit:max_tree_usd");
@@ -1272,9 +1300,9 @@ async fn tree_usd_limit_prices_cache_tokens_by_their_rates() {
 #[tokio::test]
 async fn tree_usd_limit_stops_on_unknown_cost_runs_unless_a_rate_is_configured() {
     let (_dir, store, mut d, root) = usd_hold_fixture(10_000_000);
-    let gate = WuDispatchGate::Atomic;
+    let next = task_core::NextRun::Worker;
     seed_tree_run(&store, &root, "q1", "local-qwen-3", [1_000, 1_000, 0, 0]);
-    assert!(d.tree_run_limit_hold(&root, &gate).unwrap());
+    assert!(d.tree_limit_hold_for(&root, next).unwrap());
     let decisions = store.decisions_list(Some(root.id)).unwrap();
     assert_eq!(decisions.len(), 1, "{decisions:?}");
     assert_eq!(decisions[0].key, "limit:max_tree_usd");
@@ -1298,5 +1326,5 @@ async fn tree_usd_limit_stops_on_unknown_cost_runs_unless_a_rate_is_configured()
         )])
         .unwrap(),
     );
-    assert!(!d.tree_run_limit_hold(&root, &gate).unwrap());
+    assert!(!d.tree_limit_hold_for(&root, next).unwrap());
 }

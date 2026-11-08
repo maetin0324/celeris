@@ -115,9 +115,9 @@ impl Dispatcher {
         if !second_pass && (self.decision_self_hold(&task)? || self.design_review_hold(&task)?) {
             return Ok(false);
         }
-        // ADR-0079 D3（Phase R2a）: 木の上限（run・トークン・replan）。超えるなら新しい run を起こさず、
-        // `kind: limit` の決定の要求を出して（木に 1 件）この節点だけを止める（兄弟の走っている run は続く）。
-        if self.tree_run_limit_hold(&task, &gate)? {
+        if let Some(next) = tree_units::next_run(&gate)
+            && self.tree_limit_hold_for(&task, next)?
+        {
             return Ok(false);
         }
         let current_wu = match gate {

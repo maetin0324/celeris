@@ -13,8 +13,9 @@
 //!    判定の最も高い level が `none`・`low` なら今までどおり採用する（追加の run なし。D3.6）。`high`・`unknown` なら
 //!    `Event::DesignReviewRequested` を追記し、計画を採用せずに task を `ready` に戻す（D3.5 1.）。
 //! 3. [`Dispatcher::design_review_hold`]（`dispatch_one`）: 待っている設計 review がある task には planner も WU も
-//!    起こさない。まだ reviewer run を起こしていなければ `pick_reviewer` で選んで起こす（D3.5 2.）。待ちは events
-//!    だけで決まるので、デーモンの再起動の後も同じ判定になる（I9）。
+//!    起こさない。まだ reviewer run を起こしていなければ `pick_reviewer` で選んで起こす（D3.5 2.）。ただし木の run・
+//!    費用の上限を超えていれば起こさず、`kind: limit` の決定を要求する（`tree_limit_hold_for`。付記 C1）。待ちは
+//!    events だけで決まるので、デーモンの再起動の後も同じ判定になる（I9）。
 //! 4. [`Dispatcher::on_design_review_finished`]: 設計 review の run の終わりは `Completion::DesignReview` で届き、
 //!    `WorkerFinished`（role reviewer）・quota・runs 索引を記録してから `design_verdict::settle_design_review` に渡す
 //!    （`review.json` の `design` → `DesignReviewed` → 採用 / replan / `PlanGate`。D3.5 3〜5）。task の final review の
@@ -182,7 +183,7 @@ impl Dispatcher {
     /// I9・D3.5 2.: 待っている設計 review がある task には run を起こさない（`true`）。起こした reviewer run がまだ
     /// 終わっていなければその結果を待つ。終わったのに判定が無い（`done` で終わらなかった・失われて孤児の回収が閉じた）
     /// なら `[review] max_reviewer_retries` までもう一度起こし、超えたら不合格として記録する（`record_design_verdict`）。
-    /// 待っていなければ `false`。
+    /// run を起こす前に木の上限（`tree_limit_hold_for`）を見て、超えていれば起こさない。待っていなければ `false`。
     pub(super) fn design_review_hold(&mut self, task: &Task) -> Result<bool, DispatchError> {
         let events = self.store.events_for(task.id)?;
         let Some((seq, request)) = pending_design_review(&events) else {
@@ -204,6 +205,12 @@ impl Dispatcher {
                 runs.len()
             );
             self.record_design_verdict(task, &planner_run, plan_sha256, plan, last, Err(why))?;
+            return Ok(true);
+        }
+        // 付記（二度目の final review の差し戻しへの方針）C1: 設計 review の run も木の run・費用の上限に掛ける。判定と
+        // `kind: limit` の決定の要求（木に 1 件）は `dispatch_one` と同じ `tree_limit_hold_for`。超えていれば run を
+        // 起こさず待つ（人が上限を上げれば次の tick で起きる）。
+        if self.tree_limit_hold_for(task, task_core::NextRun::Worker)? {
             return Ok(true);
         }
         let Event::DesignReviewRequested {

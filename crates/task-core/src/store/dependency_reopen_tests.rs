@@ -84,7 +84,11 @@ fn dependency_reopen_restores_cancelled_dependents_transitively() {
         );
         let after = store.events_for(id).unwrap();
         assert_eq!(after.len(), before.len() + 1, "1 件だけ追記する");
-        assert_eq!(&after[..before.len()], &before[..], "既存の event は変わらない");
+        assert_eq!(
+            &after[..before.len()],
+            &before[..],
+            "既存の event は変わらない"
+        );
         assert_eq!(
             after[before.len()].1,
             Event::Transitioned {
@@ -95,7 +99,12 @@ fn dependency_reopen_restores_cancelled_dependents_transitively() {
         );
     }
     // 戻った後続は依存先 A の完了を待つ（A は ready で、done ではない）。
-    let ready: Vec<TaskId> = store.ready_tasks(100).unwrap().iter().map(|t| t.id).collect();
+    let ready: Vec<TaskId> = store
+        .ready_tasks(100)
+        .unwrap()
+        .iter()
+        .map(|t| t.id)
+        .collect();
     assert!(ready.contains(&a));
     assert!(!ready.contains(&b) && !ready.contains(&c));
 }
@@ -132,7 +141,9 @@ fn dependency_reopen_keeps_manually_cancelled_dependent() {
     let a = insert_failable(&store);
     let manual = insert_dependent(&store, Status::Ready, vec![a]);
     let by_parent = insert_dependent(&store, Status::Ready, vec![a]);
-    store.apply_transition(manual, Trigger::Cancel, None).unwrap();
+    store
+        .apply_transition(manual, Trigger::Cancel, None)
+        .unwrap();
     store
         .apply_transition(by_parent, Trigger::ParentCancelled, None)
         .unwrap();
@@ -179,11 +190,17 @@ fn dependency_reopen_on_rereview_and_cancels_again_on_failure() {
     assert_eq!(status(&store, a), Status::Reviewing);
     assert_eq!(status(&store, b), Status::Ready);
 
-    store.apply_transition(a, Trigger::ReviewFail, None).unwrap();
+    store
+        .apply_transition(a, Trigger::ReviewFail, None)
+        .unwrap();
     assert_eq!(status(&store, a), Status::Failed);
     assert_eq!(status(&store, b), Status::Cancelled);
     assert_eq!(
         reasons(&store, b),
-        vec!["dependency_failed", "dependency_reopened", "dependency_failed"]
+        vec![
+            "dependency_failed",
+            "dependency_reopened",
+            "dependency_failed"
+        ]
     );
 }

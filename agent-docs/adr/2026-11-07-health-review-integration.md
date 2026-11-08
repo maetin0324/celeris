@@ -4,7 +4,7 @@ tasks: [01M6VBSKZQG2YWF7NWYH6GP9P7]
 # ADR 2026-11-07: 健全性を設計と review に組み込む（規約配布・設計 brief・risk 判定・構造化 health verdict）
 
 - 日付: 2026-11-07
-- 状態: 採用（設計）。この ADR はコードを変えない。実装は健全性 v2 G2 の後続 unit（D8 の U1〜U6）。
+- 状態: 実装済み（2026-11-08、健全性 v2 G2 の task 01M6TYVJSTYGRPHERB93MM7J59。記録は [G2 の進捗](../progress/2026-11-07-health-v2-g2.md)）。決定節との食い違いと未実装の部分は末尾の付記（dispatch の実装・G2 の完了時の突き合わせ）に書く。
 - 根拠: 前提調査 [G2 survey](../progress/2026-11-07-health-v2-g2/adr-survey.md) の (a)〜(h)。行番号は survey の時点のもの。
 - 関係: [ADR 2026-11-07 汎用 repo health の契約](2026-11-07-repo-health-contract.md)（D2: policy は base 側で評価、policy.changed）、[ADR 2026-11-07 repo health の Celeris profile](2026-11-07-repo-health-celeris-profile.md)、[ADR 2026-11-07 健全性 v2 の基準](2026-11-07-health-v2-baseline.md)、[ADR 2026-10-23 必須規則の prompt 配送](2026-10-23-required-rules-prompt-delivery.md)、[2026-10-11 破壊的変更を既定にする](2026-10-11-breaking-changes-by-default.md)、[ADR-0118](0118-review-target-sync-and-merge-candidate.md)（review 前の target 同期と candidate SHA）。
 
@@ -265,3 +265,26 @@ final review は、I8 と (1) の「fallback: 新しく置かない。読めな�
 - 時間: reviewer の無い final review は、検査（`review_task`）の前に base の検査器の report を待つ（上限は `HEALTH_INPUT_TIMEOUT` の 600 秒）。base に検査器がある repo（この repo など）では、`Check::Reviewer` の無い task の final review が repo health の実行時間だけ遅れる。同じ candidate の 2 回目以降は記録を使うので遅れない。
 - 試験名の prefix は `health_review_policy_unknown_` と `health_review_policy_no_reviewer_`。前者は `crates/task-dispatch/src/health_review/policy_review/unknown_tests.rs` に 5 件、`crates/task-dispatch/src/dispatcher/tests/health_review_input.rs` に流れ全体の 1 件。後者は `crates/task-dispatch/src/health_review/policy_review/no_reviewer_tests.rs` に 5 件、`crates/task-dispatch/src/dispatcher/tests/health_review_input.rs` に流れ全体の 2 件。
 - 残る穴（未実装）: 材料作りの非同期 task が panic した（`spawn_blocking` の失敗）ときは event が残らず、関門が掛からない。同期の無い repo（同期を省いた・失敗した）と remote workspace の repo は candidate の SHA が決まらないので、記録も関門も無い（D4.4 のとおり）。
+
+## 付記（2026-11-08、G2 の完了時の突き合わせ）
+G2 の全 unit（adr・guideline・plan-brief・protocol・dispatch・prompts）を統合した後の HEAD で、決定節を実装と突き合わせた。上の「付記（dispatch の実装）」に書いた違いはここで繰り返さない。その付記の「この task の範囲外で未実装」のうち、D3.4 の brief の節（`change_rules::design_brief_section`）、reviewer prompt の health の節、Result 節の `health` の形は prompts task（01M6VTFGWFVE57YXDKHR2E436G）が実装した。残りは下の「未実装」に書く。記録は [G2 の進捗](../progress/2026-11-07-health-v2-g2.md)。
+
+### (1) 汎用規約
+- D1.1: module は `crates/task-worker/src/change_rules.rs`。`generic.md` を `include_str!` で埋め込む。reviewer の health の節と Result 節は子 module `change_rules/review.rs`（`health_section`・`result_section`）に置いた。`prompt.rs` が 2,000 行の上限に近く（約 1,880 行）、描画を足せないため。
+- D1.4: `generic.md` は `## 規約` 10 項目と `## 実装前 brief` 7 項目にした（決定節は 7 項目）。task の受け入れ条件が 10 項目を求めたため。D5.1 の 7 kind に当たるのは規約 1〜6 と 10 で、kind 名を括弧で付けて D5.1 の表と同じ順に置いた。規約 7〜9（移行の撤去条件と責任者・共通化は同じ意味のものだけ・範囲で根本修正できなければ repair/replan）に対応する kind は無く、違反の返し方は未決。
+- D1.2: `prompt_header` は汎用規約の直後に repo 固有の review 方針の節を出す。方針は `ExecutionPlannerContext.review_policy` にしか無いので、この節が出るのは /3 の planner の run だけ。worker の run には出ない。reviewer には方針の不変条件と owner 行が `HealthRepoInput` で届く。
+- U1 の試験名は例と違う（`change_rules_generic_reaches_{claude_code,codex,pi,acp}_…`・`change_rules_generic_once_in_every_run_kind`・`change_rules_generic_and_required_rules_do_not_copy_each_other` など。`change_rules_` は 16 件）。
+
+### (2) profile の `[review]` 節
+- D2.2 の値: `profiles/celeris.toml` の high_risk は 7 class（credential・sandbox・store・events・lease・budget・selfdeploy）、invariants は 13 件。`profiles/default.toml` は下位項目の無い `[review]`。
+- D2.3・D6.2・D7.3（`check-health.sh` の冒頭注記と `profile.py` の docstring）は dispatch task の子 task review-policy-cli が 1 つの policy の branch で実装し、人の承認の後に operator が main に merge した（D6.6）。試験は `scripts/tests/test_repo_health_review_policy.py` の `test_health_review_` 19 件。
+- D6.2 の条件「変更 path が全部 `policy.files`」では、進捗 file と検査器の試験は policy の file に入らない。進捗を書く Celeris の branch は D6.2 の exit 0 にならず、policy の branch は人の承認と operator の merge で通した。
+
+### (3)・(4)・(5) の型
+- D3.1・D3.2: `DesignBrief` の形の検証は新しい file `crates/task-core/src/execution_plan/design_brief.rs`（`brief_shape_errors`・`require_design_brief`）。/1・/2 に brief を書いたときのエラーは `PlanValidationError::DesignBrief` でなく既存の `V3FieldNotAllowed { field: "design_brief" }`。brief 専用の大きさの上限は置かず、`max_plan_json_bytes_v3` に数える。試験は `design_brief_` 7 件。
+- D4.1: `HealthReportFinding.severity`・`delta`、`HealthFindingsSummary.verdict`、`HealthPolicyState.source` は enum でなく文字列にした。値の正本は repo health の report の schema で、Rust に同じ enum を二重に持たない。wire 型は `crates/task-worker/src/protocol/health.rs`。
+
+### 未実装（決定節にあるが無いもの）
+- 設計 review の reviewer prompt（D3.5 2.・D5.4 の `design` の部分）: dispatcher は `ReviewRequest.design` を渡して reviewer run を起こすが、`build_review_prompt` と `change_rules::review` に `ReviewRequest.design` を描く節も、Result 節に `design: {pass, findings}` の形も無い。本物の reviewer は `design` を書かないので、dispatcher は判定を読めない不合格に数え、不合格が `MAX_DESIGN_REVIEW_FAILURES`（2）回続くと計画を採用して `PlanGate` で人に回す。合格はしない（fail closed）が、高 risk の計画は人の承認を経る。流れ全体の試験（`health_review_scenario_high_risk_change`）は偽の reviewer が `review.json` に `design` を直接書くので、この穴を検出しない。
+- (7) の撤去のうち D7.1（reviewer prompt の「Commit references in progress files and reports」節）・D7.2（health の無い review の Result 節は旧い形のまま）・D7.4（`PLANNER_CHECK_GUIDANCE` の `CLAUDE.md` と同じ文、`PRODUCTION_HOST_PLANNER_GUIDANCE`）。G2 の計画に U6 の unit が無かった。
+- D1.6（Aider に `CLAUDE.md` が届かない）は決定どおり範囲外。

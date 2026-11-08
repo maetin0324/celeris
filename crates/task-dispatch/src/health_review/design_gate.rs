@@ -279,7 +279,10 @@ impl Dispatcher {
                 _ => None,
             })
             .unwrap_or_default();
-        let Some(reviewer) = self.pick_reviewer(task, &subject) else {
+        // 付記 C2: final review と同じ task 木の token 予算の watch（`run_watch`）を run と sink に付ける。読めなければ
+        // run を起こさず次の tick でやり直す（`?`。C1 の判定と同じ扱い）。
+        let watch = token_budget::run_watch(self.store.as_ref(), task, None)?;
+        let Some(reviewer) = self.pick_reviewer(task, &subject, Ok(watch)) else {
             tracing::debug!(task_id = %task.id, "design review deferred (no admissible reviewer route)");
             return Ok(());
         };
@@ -484,9 +487,9 @@ async fn run_design_reviewer(
         crate::review::with_run_tmpdir(&run.adapter, workspace_dir, &run.run_id);
     run.sink
         .progress(&format!("design review started (adapter={})", adapter.id()));
-    adapter
-        .run(req, &run.run_id, run.limits, run.sink.as_ref())
-        .await
+    // 付記 C3・C4: final review と同じ watch の処理。予算で止めた run（`BudgetExhausted{Tokens}`）は `done` で終わらない
+    // run として `settle_design_review` が次の dispatch の起こし直しに回す（予算が尽きた後の run は adapter を起こさない）。
+    crate::review::run_within_token_budget(&adapter, req, &run).await
 }
 
 /// task の先頭の repo の名前（worker の cwd。案件の repo の無い task は `""`）。

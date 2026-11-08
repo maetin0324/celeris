@@ -51,16 +51,27 @@ pub(super) fn tree_tokens_used(
     Ok(total)
 }
 
+/// run の watch（`budget_scope` → `tree_tokens_used` → `TokenBudgetWatch::new`。ADR 2026-11-07-health-review-integration
+/// 付記 C2）。予算の無い task は `None`。`exclude_run` は途中値を自分で足す run。error の扱いは呼び出し側が決める。
+pub(crate) fn run_watch(
+    store: &dyn TaskStore,
+    task: &Task,
+    exclude_run: Option<&str>,
+) -> Result<Option<Arc<TokenBudgetWatch>>, StoreError> {
+    let Some((root, max)) = budget_scope(store, task)? else {
+        return Ok(None);
+    };
+    let prior = tree_tokens_used(store, root, exclude_run)?;
+    Ok(Some(Arc::new(TokenBudgetWatch::new(prior, max))))
+}
+
 /// 予算に達していれば `(used, max)`。予算の無い task は常に `None`。
 pub(super) fn exhausted(
     store: &dyn TaskStore,
     task: &Task,
 ) -> Result<Option<(u64, u64)>, StoreError> {
-    let Some((root, max)) = budget_scope(store, task)? else {
-        return Ok(None);
-    };
-    let used = tree_tokens_used(store, root, None)?;
-    Ok((used >= max).then_some((used, max)))
+    let watch = run_watch(store, task, None)?;
+    Ok(watch.filter(|w| w.exceeded()).map(|w| (w.prior, w.max)))
 }
 
 /// `WorkerFinished.outcome` / 遷移の理由に書く文（`token_budget_exhausted: <used>/<max>`）。

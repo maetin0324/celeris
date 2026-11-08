@@ -3181,6 +3181,10 @@ mod health_review_input;
 /// ADR 2026-11-07-health-review-integration D2.3・I3: base 側の検査器で読んだ review 方針が planner の `RunContext` に
 /// 入る（`src/dispatcher/tests/health_review_policy.rs`）。
 mod health_review_policy;
+/// ADR 2026-11-07-health-review-integration (6): 通常変更と高 risk 変更を流れ全体で区別する（本物の
+/// `--print-review-policy` の読み込みを含む。`src/health_review/scenario_tests.rs`）。
+#[path = "../../health_review/scenario_tests.rs"]
+mod health_review_scenario;
 mod orphan_work_units;
 /// ADR 2026-10-27-project-stagnation-inbox D3: dispatcher の停滞の判定（偽の時計・一時 releases_dir）
 /// （`src/dispatcher/tests/stagnation.rs`）。

@@ -54,6 +54,20 @@ WorkUnit `ci-script`（task 01M6Y8EG6QN8S421XYJNVDCPTA の unit `ci-entry`）。
 - `sh scripts/dev/tests/repo_health_gate.sh` → exit 0、`OK (1)`〜`OK (7)` の 7 行と `repo_health_gate: all checks passed`（doc-only の check-health.sh はこの試験を省くので、別に走らせた）。
 - 文書検査 3 本（`bash scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`・`sh scripts/dev/progress-index.sh --check`） → 3 本とも exit 0。
 
+## final review の policy_mixed と親の branch の main 追従（WorkUnit `parent-sync`）
+- 差し戻しの reason: final review の criterion 5 が `health:policy_mixed: 01M2XPE3NZ1FZE061FKDY4A9PK: policy files [scripts/dev/repo-health/ci.sh] changed together with other files [agent-docs/progress/2026-11-07-health-v2-g3/ci-entry.md, scripts/dev/tests/repo_health_gate.sh]; move the policy change into its own task` で fail になった（criterion 0〜4・6〜8 と criterion 5 のほかの 2 件は pass）。
+- 原因: final review は review 前の同期の target と候補の diff から health を作る。この task の target は親 G3 task（01M6TYVJSWEY3ZE50S02ETYDNM）の branch `celeris/01M6TYVJSWEY3ZE50S02ETYDNM` である（`crates/task-dispatch/src/dispatcher/behind_target.rs` の `review_target_ref`）。親の branch は、ci.sh を main に入れる前の commit（件名「integrate wu/reclose-docs (phase close3)」）のままだった。そのため、main に入った ci.sh が gate の試験・進捗と同じ差分に出て、`crates/task-dispatch/src/health_review/verdict.rs` の `policy_mixed`（ADR health-review-integration D6.1）が fail を出した。main を基準にすれば差分は進捗 1 file だけだった。
+- 人の決定 parent-follow-main: 「承認する。operator が親 G3 の worktree で `git merge --ff-only` を実行してから答える（推奨どおり）」。
+- operator の操作: 親 G3 の worktree（作業ツリーは clean、run は無し）で `git merge --ff-only` を実行し、親の branch を main の merge commit（件名「integrate 01M6Y8EG6Q: CI の入口 scripts/dev/repo-health/ci.sh（policy の branch、人の承認済み。ADR health-review-integration D6.6）」）まで進めた。この unit は親の branch を merge せず、main も取り込んでいない。
+
+### 検査（提出時の HEAD で実行。基準は `git merge-base HEAD refs/heads/celeris/01M6TYVJSWEY3ZE50S02ETYDNM`）
+- 親の branch が ci.sh を含む: `git merge-base --is-ancestor "$(git log --format=%H --diff-filter=A -1 HEAD -- scripts/dev/repo-health/ci.sh)" refs/heads/celeris/01M6TYVJSWEY3ZE50S02ETYDNM` → exit 0（件名「G3 ci-entry: CI の入口 scripts/dev/repo-health/ci.sh とゲートの試験 (7)」の commit は親の branch の祖先）。`git cat-file -e refs/heads/celeris/01M6TYVJSWEY3ZE50S02ETYDNM:scripts/dev/repo-health/ci.sh` → exit 0。親の branch の先端は上の operator の merge commit で、main の先端と同じ。`git diff --quiet refs/heads/celeris/01M6TYVJSWEY3ZE50S02ETYDNM HEAD -- scripts/ crates/` → exit 0。
+- 親の branch から見た差分: merge-base は件名「integrate wu/ci-script (phase impl)」の commit。`git diff --stat <merge-base> HEAD` は進捗 1 file（この file）だけ。
+- review と同じ base..head の検査: `sh scripts/dev/repo-health/ci.sh --base "$(git merge-base HEAD refs/heads/celeris/01M6TYVJSWEY3ZE50S02ETYDNM)" --head HEAD --out "$TMPDIR/parent-sync-health.json"` → exit 0、`verdict=pass reviewable=true fail_grade=0 new=0 worsened=0`、doc-only の軽い経路。report の `policy.changed` は false、`policy.changed` rule は pass、validate_report.py を通った。
+- `bash scripts/dev/test-affected.sh`（基準は `$CELERIS_WU_BASE`）→ exit 0。最初の check-health.sh は doc-only で verdict pass、`policy.changed` pass、`fail_grade=0 new=0 worsened=0`。続けて `test-affected: 試験対象の変更なし（docs のみ等）`。
+- 文書検査 3 本（`bash scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`・`sh scripts/dev/progress-index.sh --check`）→ 3 本とも exit 0。final review の criterion 4 の `sh scripts/dev/check-adr-numbers.sh` → exit 0（410 files）。
+- この unit が変えた file はこの進捗だけ（`crates/` と `scripts/` は変えていない）。
+
 ## 未解決
 - 解けた: merge の前の「必須検査 `test-affected.sh` と `check-health.sh` は main に入るまで `policy.changed` で exit 1」（D6.6）は、上の merge で解けた。
 - D6.2 は働かない: この branch は policy の file（ci.sh）のほかに、ゲートの試験（`scripts/dev/tests/repo_health_gate.sh`）とこの進捗を変える。どちらも policy の file でない（前例 review-policy-cli の「未解決」と同じ）。
@@ -61,3 +75,5 @@ WorkUnit `ci-script`（task 01M6Y8EG6QN8S421XYJNVDCPTA の unit `ci-entry`）。
 
 ## 提案
 - 後続の `ci-guide` の文書では、CI の checkout の深さ（全履歴か、base まで届く深さ）を前提条件に書く。
+- 子 task の policy の branch を main に merge したら、親の branch も同じ merge commit まで進める。手順: operator が main に no-ff merge した直後に、親 task の worktree が clean で run が無いことを確かめ、`git -C <親の worktree> merge --ff-only <main の merge commit>` を実行し、`git merge-base --is-ancestor <main の merge commit> <親の branch>` が 0 であることを確かめる。親の branch が main から分かれていて ff できないときは、人の決定を置いてから親の branch に main を merge する。この手順を operator の手順書（ADR health-review-integration D6.6 の節）に足す。
+- 別案: dispatcher が子の review の差分から、main に入った policy の file の変更を除く。子の候補の policy の file の blob が main の blob と同じなら、`policy_mixed` の判定でその file を数えない。手順が要らなくなるが、review の差分の作り方（`review_target_ref`）と health の入力の両方を変えるので、ADR の付記で決めてから実装する。

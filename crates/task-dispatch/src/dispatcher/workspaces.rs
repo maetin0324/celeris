@@ -269,7 +269,7 @@ impl Dispatcher {
     ///    （`<task_dir>/tree`）。条件は 3 つ: `Local`、`mode = worktree`（既定）、`path` が git リポジトリ。
     ///
     /// base の決め方は `task_worker::resolve_base`（`main` / 本番の `current` / `HEAD`。ADR-0041 D1）。
-    pub(super) fn task_workspaces_for(&self, task: &Task) -> Option<task_worker::TaskWorkspaces> {
+    pub(crate) fn task_workspaces_for(&self, task: &Task) -> Option<task_worker::TaskWorkspaces> {
         let root = self.task_root(task);
         let task_dir = root.join(task.id.to_string());
         if task.repos.is_empty() {

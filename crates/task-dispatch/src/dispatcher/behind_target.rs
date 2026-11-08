@@ -35,7 +35,7 @@ impl Dispatcher {
     /// ADR-0118 review sync target of one repo: the parent task branch for a tree child,
     /// otherwise the repo's default branch. `None` when the default branch cannot be resolved
     /// (ADR 2026-10-11-stranded-done-branches F1): the repo is left out of the review sync.
-    pub(super) fn review_target_ref(
+    pub(crate) fn review_target_ref(
         &self,
         task: &Task,
         repo_id: RepoId,

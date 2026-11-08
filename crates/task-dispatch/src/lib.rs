@@ -17,6 +17,8 @@ pub mod disk_watch;
 pub mod dispatcher;
 /// ADR-0072 D6/D11/D12/D15（Phase E2）: WorkUnit の状態遷移の決定（純粋関数）。
 pub mod execution_scheduler;
+/// ADR 2026-11-07-health-review-integration: 健全性の review（review 方針の読み込み・設計 review・health 文脈・verdict）。
+pub mod health_review;
 /// ADR-0074 D1.2 / D1.4（Phase F2）: WU の worktree と工程の統合（daemon 側の git 操作だけ。LLM なし）。
 pub mod integration;
 /// Phase F5-fix6: 居なくなったデーモンの run（孤児）を lease 失効を待たずに回収する判定。

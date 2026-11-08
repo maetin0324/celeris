@@ -432,7 +432,7 @@ impl Dispatcher {
         // 途中確認の replan・replan の上限を使い切った後の質問への回答）は `max_replans` に数えず、常に受ける
         // （以前は上限を使い切っていると黙って捨て、今の版の unit を進めていた。21:22Z の P-R5b-4 の再現では
         // 承認されていない版の unit がそのまま子を作った）。木の上限（`max_tree_replans`）は dispatch の
-        // `tree_run_limit_hold` が今どおり見る。
+        // `tree_limit_hold_for` が今どおり見る。
         if task_ops::regate::pending_replan_request(&events).is_some()
             || task_ops::phase_gate::last_transition_reason(&events)
                 == Some(task_core::PhaseResumeMode::Replan.name())

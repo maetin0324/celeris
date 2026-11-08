@@ -115,9 +115,9 @@ impl Dispatcher {
         if !second_pass && (self.decision_self_hold(&task)? || self.design_review_hold(&task)?) {
             return Ok(false);
         }
-        // ADR-0079 D3（Phase R2a）: 木の上限（run・トークン・replan）。超えるなら新しい run を起こさず、
-        // `kind: limit` の決定の要求を出して（木に 1 件）この節点だけを止める（兄弟の走っている run は続く）。
-        if self.tree_run_limit_hold(&task, &gate)? {
+        if let Some(next) = tree_units::next_run(&gate)
+            && self.tree_limit_hold_for(&task, next)?
+        {
             return Ok(false);
         }
         let current_wu = match gate {
@@ -826,10 +826,7 @@ impl Dispatcher {
             self.run_extras(&task, worktree.as_ref(), account.as_deref(), &adapter_id)?;
         // ADR 2026-10-20-mlsys-main2-fixes D1-3: task 木に token 予算があれば、この run 以外の消費を前置きに
         // 途中の累積 usage を監視する（既に上限なら run は adapter を起こさずに `BudgetExhausted{Tokens}`）。
-        if let Some((root, max)) = token_budget::budget_scope(self.store.as_ref(), &task)? {
-            let prior = token_budget::tree_tokens_used(self.store.as_ref(), root, Some(&run_id))?;
-            extras.token_budget = Some(Arc::new(token_budget::TokenBudgetWatch::new(prior, max)));
-        }
+        extras.token_budget = token_budget::run_watch(self.store.as_ref(), &task, Some(&run_id))?;
         // ADR-0056 D3（Phase 79）: mount 名にあったが KB に見つからなかった skill を `status` の
         // 進行イベントで 1 行ずつ報告する（run は落とさない）。
         for name in &extras.missing_skills {

@@ -1,6 +1,7 @@
 //! review run の起動（`spawn_review`・`pick_reviewer`・最終レビュー）。per-task file lock は verdict の保存まで持ち続ける。ADR-0082 の L2。
 
 use super::route_select::{RouteInput, RoutePick, RouteTrace, account_adapter_for_source_kind};
+use super::token_budget::run_watch;
 use super::*;
 
 /// ADR-0118 D4 付記 / ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3・D4: 直近の遷移（自動の
@@ -431,7 +432,7 @@ impl Dispatcher {
                 && !task_core::tree::is_tree_child(&task)
         });
         let reviewer = if needs_reviewer_run(&task) || delivery_requires_reviewer_run {
-            match self.pick_reviewer(&task, &run_id) {
+            match self.pick_reviewer(&task, &run_id, run_watch(&*self.store, &task, None)) {
                 Some(r) => Some(r),
                 None => {
                     tracing::debug!(%task_id, "reviewer run deferred (no admissible route)");
@@ -1378,6 +1379,7 @@ impl Dispatcher {
         &mut self,
         task: &Task,
         subject_run_id: &str,
+        token_budget: Result<Option<Arc<token_budget::TokenBudgetWatch>>, StoreError>,
     ) -> Option<ReviewerPick> {
         if self.workers_in_flight() >= self.max_concurrency {
             return None;
@@ -1515,23 +1517,12 @@ impl Dispatcher {
         let session_key = department
             .clone()
             .map(|dept_id| (dept_id, task_core::SessionKind::Lead, None));
-        // ADR 2026-10-20-mlsys-main2-fixes D1-3: reviewer run も task 木の token 予算で途中停止する。
-        let token_budget = match token_budget::budget_scope(self.store.as_ref(), task) {
-            Ok(Some((root, max))) => {
-                match token_budget::tree_tokens_used(self.store.as_ref(), root, None) {
-                    Ok(prior) => Some(Arc::new(token_budget::TokenBudgetWatch::new(prior, max))),
-                    Err(e) => {
-                        tracing::warn!(task_id = %task.id, error = %e, "failed to read the token budget use; reviewing without the mid-run stop");
-                        None
-                    }
-                }
-            }
-            Ok(None) => None,
-            Err(e) => {
-                tracing::warn!(task_id = %task.id, error = %e, "failed to read the token budget; reviewing without the mid-run stop");
-                None
-            }
-        };
+        // ADR 2026-10-20-mlsys-main2-fixes D1-3: reviewer run も task 木の token 予算（呼び出し側の `run_watch`）で
+        // 途中停止する。読めなければ watch 無しで走る（設計 review は `Ok` だけを渡す。付記 C2）。
+        let token_budget = token_budget.unwrap_or_else(|e| {
+            tracing::warn!(task_id = %task.id, error = %e, "failed to read the token budget; reviewing without the mid-run stop");
+            None
+        });
         let sink = ReviewerSink {
             token_budget: token_budget.clone(),
             store: self.store.clone(),

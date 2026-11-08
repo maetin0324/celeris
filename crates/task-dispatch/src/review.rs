@@ -1068,6 +1068,39 @@ pub(crate) fn with_run_tmpdir(
     }
 }
 
+/// ADR 2026-10-20-mlsys-main2-fixes D1-3・ADR 2026-11-07-health-review-integration 付記 C3: reviewer の run（final review
+/// と設計 review）の adapter を `run.token_budget` の watch の下で走らせる。task 木の token 予算が既に尽きていれば adapter
+/// を起こさず、途中で達したら process tree を止める。どちらも `BudgetExhausted{Tokens}`（usage は最後の累積値）で終える。
+/// watch は sink（`UsageProgress` を `observe` する）と同じ `Arc` であること。watch が無ければ adapter の run を待つだけ。
+pub(crate) async fn run_within_token_budget(
+    adapter: &Arc<dyn WorkerAdapter>,
+    req: RunRequest,
+    run: &ReviewerRun,
+) -> Result<RunOutcome, task_worker::AdapterError> {
+    let running = adapter.run(req, &run.run_id, run.limits, run.sink.as_ref());
+    let Some(watch) = &run.token_budget else {
+        return running.await;
+    };
+    let stopped = || RunOutcome {
+        terminal: watch.terminal(),
+        exit_code: None,
+    };
+    if watch.exceeded() {
+        return Ok(stopped());
+    }
+    tokio::pin!(running);
+    tokio::select! {
+        biased;
+        _ = watch.wake.notified() => {
+            if task_worker::kill_tree_with(&run.run_id, run.limits.kill_grace, None) {
+                tokio::time::sleep(run.limits.kill_grace).await;
+            }
+            Ok(stopped())
+        },
+        outcome = &mut running => outcome,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_reviewer_inner(
     task: &Task,
@@ -1147,32 +1180,8 @@ async fn run_reviewer_inner(
     let (adapter, _run_tmp) = with_run_tmpdir(&run.adapter, workspace_dir, &run.run_id);
     run.sink
         .progress(&format!("started (adapter={})", adapter.id()));
-    let running = adapter.run(req, &run.run_id, run.limits, run.sink.as_ref());
-    // ADR 2026-10-20-mlsys-main2-fixes D1-3: task 木の token 予算に途中で達したら process tree を止め、
-    // `BudgetExhausted{Tokens}`（usage は最後の累積値）として扱う（下の予算切れの経路 → 次の入口で failed）。
-    let result = match &run.token_budget {
-        Some(watch) if watch.exceeded() => Ok(RunOutcome {
-            terminal: watch.terminal(),
-            exit_code: None,
-        }),
-        Some(watch) => {
-            tokio::pin!(running);
-            tokio::select! {
-                biased;
-                _ = watch.wake.notified() => {
-                    if task_worker::kill_tree_with(&run.run_id, run.limits.kill_grace, None) {
-                        tokio::time::sleep(run.limits.kill_grace).await;
-                    }
-                    Ok(RunOutcome {
-                        terminal: watch.terminal(),
-                        exit_code: None,
-                    })
-                },
-                outcome = &mut running => outcome,
-            }
-        }
-        None => running.await,
-    };
+    // 予算切れは下の `BudgetExhausted` の経路（次の入口で failed）。
+    let result = run_within_token_budget(&adapter, req, &run).await;
     let outcome = match result {
         Ok(o) => o,
         Err(e) => {

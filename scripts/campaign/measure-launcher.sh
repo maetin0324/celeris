@@ -198,6 +198,20 @@ proc_cmdline() {
     tr '\0' ' ' <"/proc/$1/cmdline" 2>/dev/null || true
 }
 
+# owned_alive が読む cmdline。
+owned_cmdline() {
+    # 試験専用のフック: カウンタ file の値が 1 以上の間、cmdline を空で返す（execve の最中に /proc/<pid>/cmdline が
+    # 一瞬空になる競合を、実 process を止めずに決定的に再現する。本番の env には置かない）。
+    if [ -n "${LAUNCHER_TEST_BLANK_CMDLINE_FILE:-}" ] && [ -f "$LAUNCHER_TEST_BLANK_CMDLINE_FILE" ]; then
+        n=$(cat "$LAUNCHER_TEST_BLANK_CMDLINE_FILE")
+        if [ "${n:-0}" -ge 1 ] 2>/dev/null; then
+            echo $((n - 1)) >"$LAUNCHER_TEST_BLANK_CMDLINE_FILE"
+            return 0
+        fi
+    fi
+    proc_cmdline "$1"
+}
+
 # launcher が起動した daemon であることの照合（pid の再利用・別 process を弾く）。成り立てば 0。
 owned_alive() {
     [ -f "$LAUNCHER_PID" ] && [ -f "$LAUNCHER_META" ] || return 1
@@ -207,8 +221,20 @@ owned_alive() {
     [ -d "/proc/$pid" ] || return 1
     want_start=$(sed -n 's/^starttime=//p' "$LAUNCHER_META")
     [ -n "$want_start" ] && [ "$(proc_starttime "$pid")" = "$want_start" ] || return 1
-    case $(proc_cmdline "$pid") in *"--config $DAEMON_CONFIG"*) return 0 ;; esac
-    return 1
+    # execve の最中は /proc/<pid>/cmdline が一瞬空になる（新しい mm の arg_start が決まるまで）。starttime が一致する
+    # 生きた process の空 cmdline は「照合不能」であって別 process の証拠ではないので、出来事（cmdline が埋まる・
+    # process が消える・zombie になる）を待つ。上限は保険。
+    tries=0
+    while :; do
+        cl=$(owned_cmdline "$pid")
+        case $cl in *"--config $DAEMON_CONFIG"*) return 0 ;; esac
+        [ -z "$cl" ] || return 1
+        case $(sed -e 's/^.*) //' "/proc/$pid/stat" 2>/dev/null | cut -c1) in '' | Z | X) return 1 ;; esac
+        [ "$(proc_starttime "$pid")" = "$want_start" ] || return 1
+        tries=$((tries + 1))
+        [ "$tries" -lt 500 ] || return 1
+        sleep 0.01
+    done
 }
 
 sha256_of() {

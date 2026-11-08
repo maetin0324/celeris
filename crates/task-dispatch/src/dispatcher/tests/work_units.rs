@@ -2967,7 +2967,11 @@ async fn an_interrupted_integration_is_redone_idempotently_after_restart() {
             == Some(task_core::WorkUnitStatus::Running))
         .await
     );
-    // 統合を走らせていたデーモンが落ちた（結果は届かない。merge が済んでいてもよい）。
+    // 統合を走らせていたデーモンが落ちた（結果は届かない。merge は済んでいる）。落ちたデーモンの統合はそのデーモンと
+    // 一緒に止まるので、spawn 済みの統合の終わりを待ってから捨てる（固定の sleep だと負荷で d1 の merge が d2 の
+    // やり直しと同じ worktree で重なり、index.lock で統合が失敗して Blocked になる）。
+    let in_flight = d1.integrating.remove(&id).expect("integration in flight");
+    in_flight.handle.await.unwrap();
     drop(d1);
     // 落ちた daemon の統合は spawn_blocking の git merge で、drop しても止まらない。その merge が済む前に
     // d2 が統合をやり直すと同じ worktree の git が競合して Blocked になる（負荷で 200ms の sleep では足りない）。

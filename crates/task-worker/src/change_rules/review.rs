@@ -1,10 +1,13 @@
-//! ADR 2026-11-07-health-review-integration D4.1・D5.1・D5.4・D6.3: final review の prompt に health の材料
-//! （`ReviewRequest.health`）を出し、`review.json` に構造化 health verdict（`ReviewOutput.health`）を書かせる。
+//! ADR 2026-11-07-health-review-integration D3.5・D4.1・D5.1・D5.4・D6.3・D7.2 と付記『二度目の final review の
+//! 差し戻しへの方針』(a): reviewer prompt に health の材料（`ReviewRequest.health`）と設計 review の材料
+//! （`ReviewRequest.design`）を出し、`review.json` に構造化 verdict（`ReviewOutput.health`・`.design`）を書かせる。
 //!
 //! - `health_section` は `ReviewRequest.health` が `Some` のときだけ節を出す。`None`（WU の review・review 方針の
-//!   無い repo・通常の小さい変更）では空文字列で、reviewer prompt は変わらない。
-//! - `result_section` は reviewer prompt の Result 節を組む唯一の関数。health が無ければ従来の文面だけを出し、
-//!   あれば同じ節に `health` の形を足す。
+//!   無い repo・通常の小さい変更）では空文字列。
+//! - `design_section` は `ReviewRequest.design` が `Some`（採用前の設計 review の run）のときだけ節を出す。
+//! - `result_section` は reviewer prompt の Result 節を組む唯一の関数。設計 review では `design` の形、final review
+//!   では `verdicts`（任意の `repair` を含む）の形と、health があれば `health` の形を 1 節で出す。例の JSON は
+//!   `ReviewOutput` を serde で書き出し、placeholder を使わない。
 //! - finding 種別は `HealthFindingKind::ALL` から列挙し、局所修復を許す種別は `allows_local_repair` から選ぶ。
 //!   種別の意味は汎用規約（`GENERIC_RULES`）の各項目の括弧内の名前で指し、説明文をここに写さない。
 //!
@@ -12,10 +15,14 @@
 
 use std::collections::BTreeMap;
 
+use task_core::design_review::{ReviewPolicy, RiskAssessment};
+use task_core::execution_plan::DesignBrief;
+
 use super::GENERIC_RULES;
 use crate::protocol::{
-    DiffStat, HealthFindingKind, HealthFindingsSummary, HealthPolicyState, HealthRepoInput,
-    HealthReviewInput, OwnerRow, ReviewRequest,
+    DesignVerdictOut, DiffStat, HealthFindingKind, HealthFindingOut, HealthFindingsSummary,
+    HealthPolicyState, HealthRepoInput, HealthReviewInput, HealthSeverity, HealthVerdictOut,
+    OwnerRow, PolicyVerdictOut, ReviewOutput, ReviewRepairHint, ReviewRequest, ReviewVerdictOut,
 };
 
 /// health の材料の節の見出し（Result 節はこの見出しの名前で材料を指す）。
@@ -160,25 +167,304 @@ fn invariant_lines(invariants: &BTreeMap<String, String>) -> String {
     out
 }
 
-/// D5.4: reviewer prompt の Result 節。`review.health` が無ければ従来の文面だけを返す。
+/// 付記 (a) A1（D3.5 2.）: 設計 review の節の見出し。
+pub const DESIGN_HEADING: &str = "## 設計 review（採用前の計画）";
+
+/// `risk.reasons` のうち、review 方針を読めなかった理由の語の頭（`task_core::design_review::assess_risk`）。
+const POLICY_UNAVAILABLE_PREFIX: &str = "review_policy_unavailable:";
+
+/// 付記 (a) A1: 設計 review の節。`ReviewRequest.design` が `Some` のときだけ出し、ほかは空文字列。
+/// 対象は採用前の計画で、計画の要約・設計 brief の全欄・risk・review 方針（読めなければその理由）と判定の観点を出す。
+pub fn design_section(review: Option<&ReviewRequest>) -> String {
+    let Some(design) = review.and_then(|r| r.design.as_deref()) else {
+        return String::new();
+    };
+    let mut out = format!(
+        "{DESIGN_HEADING}\n\
+         この run の review の対象は実装ではなく、planner が作った採用前の計画（下の要約と設計 brief）である。\
+         作業ツリーはまだこの計画の変更を含まない。作業ツリーは読み取り専用で読んでよい（owner 地図と既存の実装の\
+         確認に使う）が、file を変えない。受け入れ条件ごとの判定はしない。計画を上の「{generic}」と下の brief・\
+         risk・review 方針に照らして判定し、結果を下の Result 節の `design` に書く。\n\n\
+         ### 計画の要約\n{summary}\n\n",
+        generic = generic_heading(),
+        summary = design.plan_summary.trim_end(),
+    );
+    out.push_str(&brief_lines(design.brief.as_ref()));
+    out.push_str(&risk_lines(&design.risk));
+    out.push_str(&review_policy_lines(
+        design.review_policy.as_ref(),
+        &design.risk,
+    ));
+    out.push_str(&design_viewpoint_lines());
+    out
+}
+
+fn brief_lines(brief: Option<&DesignBrief>) -> String {
+    let Some(brief) = brief else {
+        return "### 設計 brief\n\
+                brief 無し（この計画は設計 brief を持たない）。計画の要約から原因・owner・撤去対象を読み取って判定する。\n\n"
+            .to_string();
+    };
+    let mut out = String::from("### 設計 brief（planner が書いたもの）\n");
+    out.push_str(&text_field("root_cause", &brief.root_cause));
+    out.push_str(&text_field("owner", &brief.owner));
+    out.push_str(&list_field("reuse", &brief.reuse));
+    if brief.options.is_empty() {
+        out.push_str("- options: 無し\n");
+    } else {
+        out.push_str("- options:\n");
+        for option in &brief.options {
+            out.push_str(&format!(
+                "  - `{}`（chosen={}）: {}\n",
+                option.name, option.chosen, option.reason
+            ));
+        }
+    }
+    for (name, items) in [
+        ("new_state", &brief.new_state),
+        ("new_branch", &brief.new_branch),
+        ("new_fallback", &brief.new_fallback),
+        ("new_port", &brief.new_port),
+        ("removals", &brief.removals),
+        ("invariants", &brief.invariants),
+    ] {
+        out.push_str(&list_field(name, items));
+    }
+    out.push('\n');
+    out
+}
+
+fn text_field(name: &str, value: &str) -> String {
+    if value.trim().is_empty() {
+        format!("- {name}: 無し\n")
+    } else {
+        format!("- {name}: {}\n", value.trim_end())
+    }
+}
+
+fn list_field(name: &str, items: &[String]) -> String {
+    if items.is_empty() {
+        return format!("- {name}: 無し\n");
+    }
+    let mut out = format!("- {name}:\n");
+    for item in items {
+        out.push_str(&format!("  - {item}\n"));
+    }
+    out
+}
+
+fn risk_lines(risk: &RiskAssessment) -> String {
+    let level = serde_json::to_value(risk.level)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .unwrap_or_default();
+    let mut out = format!("### risk（dispatcher の決定的な判定）\n- level: `{level}`\n");
+    if risk.reasons.is_empty() {
+        out.push_str("- reasons: 無し\n");
+    } else {
+        out.push_str("- reasons:\n");
+        for reason in &risk.reasons {
+            out.push_str(&format!("  - `{reason}`\n"));
+        }
+    }
+    out.push('\n');
+    out
+}
+
+fn review_policy_lines(policy: Option<&ReviewPolicy>, risk: &RiskAssessment) -> String {
+    let mut out =
+        String::from("### この repo の review 方針（target 側の profile の `[review]` 節）\n");
+    let Some(policy) = policy else {
+        let reasons: Vec<String> = risk
+            .reasons
+            .iter()
+            .filter(|r| r.starts_with(POLICY_UNAVAILABLE_PREFIX))
+            .map(|r| format!("`{r}`"))
+            .collect();
+        out.push_str("この repo の review 方針を読めなかった。");
+        if reasons.is_empty() {
+            out.push_str("読めなかった理由は risk の reasons に無い。\n");
+        } else {
+            out.push_str(&format!("理由: {}。\n", reasons.join("、")));
+        }
+        out.push_str(&format!(
+            "owner 地図・高 risk の path class・保護する不変条件の一覧は無い。方針の代わりに、上の「{}」と\
+             設計 brief だけで判定する。\n\n",
+            generic_heading()
+        ));
+        return out;
+    };
+    match &policy.owner_map {
+        Some(path) => out.push_str(&format!(
+            "- owner 地図: `{path}`（計画が触る path の owner 行をこの file で引く）\n"
+        )),
+        None => out.push_str("- owner 地図: 無し\n"),
+    }
+    if policy.high_risk.is_empty() {
+        out.push_str("- 高 risk の path class: 無し\n");
+    } else {
+        out.push_str("- 高 risk の path class（paths は repo 相対 path に当てる正規表現）:\n");
+        for class in &policy.high_risk {
+            let paths: Vec<String> = class.paths.iter().map(|p| format!("`{p}`")).collect();
+            out.push_str(&format!("  - `{}`: {}\n", class.class, paths.join("、")));
+        }
+    }
+    out.push_str(&invariant_lines(&policy.invariants));
+    out.push('\n');
+    out
+}
+
+fn design_viewpoint_lines() -> String {
+    format!(
+        "### 判定の観点\n\
+         - 上の「{generic}」の規約に照らして brief と計画を見る。末尾の括弧に名前のある {count} 項目（{kinds}）が、\
+         Result 節の `design.findings[].kind` になる。\n\
+         - brief が宣言した `new_state`・`new_branch`・`new_fallback`・`new_port` と `removals` が、計画の触る \
+         path class と保護する不変条件に対して足りているかを見る。宣言の無い新しい状態・分岐・fallback・外への口を\
+         計画が足すなら、それも finding にする。\n\
+         - `root_cause` を `owner` で直す計画かを見る。owner 地図があれば、計画の write path の owner 行を作業ツリーで\
+         引いて確かめる。\n\n",
+        generic = generic_heading(),
+        count = HealthFindingKind::ALL.len(),
+        kinds = quoted(HealthFindingKind::ALL.iter().copied()),
+    )
+}
+
+/// D5.4・付記 (a) A2: reviewer prompt の Result 節を組む唯一の関数。設計 review（`design` が `Some`）は
+/// `verdicts` を空にして `design` を書く形、final review は `verdicts`（任意の `repair` を含む）の形と、
+/// health があれば `health` の形を出す。例の JSON は `ReviewOutput` を serde で書き出したもので、そのまま読める（A3）。
 pub fn result_section(review: Option<&ReviewRequest>, artifacts: &str) -> String {
     let mut out = format!(
         "## Result\n\
-         Write your verdicts to `{artifacts}/review.json` (create the `{artifacts}/` directory if it does \
-         not exist yet) as a single JSON object of exactly this shape: \
-         `{{\"verdicts\":[{{\"criterion\":<index>,\"pass\":<bool>,\"reason\":\"...\"}}]}}`. You must write \
-         exactly one verdict for each criterion listed under \"Criteria you must judge in this run\" \
-         above.\n\n"
+         Write your verdicts to `{artifacts}/review.json` (create the `{artifacts}/` directory if it does not \
+         exist yet) as a single JSON object. 次の行の JSON は形の例で、そのまま JSON として読める。値は自分の\
+         判定に置き換える。\n"
     );
-    if let Some(health) = review.and_then(|r| r.health.as_ref()) {
-        out.push_str(&health_verdict_lines(health));
+    if review.is_some_and(|r| r.design.is_some()) {
+        out.push_str(&format!("`{}`\n", example_json(&design_example())));
+        out.push_str(&design_verdict_lines());
+        return out;
     }
+    let health = review.and_then(|r| r.health.as_ref());
+    let criterion = review
+        .and_then(|r| r.criteria.first().copied())
+        .unwrap_or(0);
+    out.push_str(&format!(
+        "`{}`\n",
+        example_json(&final_example(criterion, health))
+    ));
+    out.push_str(
+        "- `verdicts` には上の \"Criteria you must judge in this run\" の criterion ごとにちょうど 1 件を書く。\
+         `criterion` はその index（整数）、`pass` は `true` か `false`、`reason` は判定の理由。\n\
+         - `repair` は任意で、`pass` が `false` のときだけ意味を持つ。計画を作り直さずに直せる局所的な不合格なら \
+         `{\"scope\":\"local\",\"class\":…,\"hint\":…}` を書く。`class` は `format`・`lint`・`test`・`doc`・`other` の\
+         どれか、`hint` は直し方の手掛かり。局所的に直せない不合格と合格の verdict では `repair` を省く。\n",
+    );
+    match health {
+        Some(health) => out.push_str(&health_verdict_lines(health)),
+        None => out.push('\n'),
+    }
+    out
+}
+
+/// 例の値。種別は `HealthFindingKind` から選び、source に名前を書かない。
+const EXAMPLE_PATH: &str = "src/example.rs";
+
+fn example_json(output: &ReviewOutput) -> String {
+    serde_json::to_string(output).unwrap_or_default()
+}
+
+fn design_example() -> ReviewOutput {
+    ReviewOutput {
+        verdicts: Vec::new(),
+        health: None,
+        design: Some(DesignVerdictOut {
+            pass: false,
+            findings: vec![HealthFindingOut {
+                kind: HealthFindingKind::ALL[0],
+                severity: HealthSeverity::Blocking,
+                path: Some(EXAMPLE_PATH.to_string()),
+                reason: "brief と計画のどこが規約に反するか".to_string(),
+                repair: None,
+            }],
+        }),
+    }
+}
+
+fn final_example(criterion: usize, health: Option<&HealthReviewInput>) -> ReviewOutput {
+    let local_repair = || ReviewRepairHint {
+        scope: "local".to_string(),
+        class: "test".to_string(),
+        hint: Some("直し方の手掛かり".to_string()),
+    };
+    let health = health.map(|health| {
+        let kind = HealthFindingKind::ALL
+            .iter()
+            .copied()
+            .find(|k| k.allows_local_repair())
+            .unwrap_or(HealthFindingKind::ALL[0]);
+        HealthVerdictOut {
+            findings: vec![HealthFindingOut {
+                kind,
+                severity: HealthSeverity::Blocking,
+                path: Some(EXAMPLE_PATH.to_string()),
+                reason: "差分のどこが規約に反するか".to_string(),
+                repair: Some(local_repair()),
+            }],
+            policy: health
+                .repos
+                .iter()
+                .any(|r| r.policy.changed)
+                .then(|| PolicyVerdictOut {
+                    approved: true,
+                    reason: "policy の変更を認める理由".to_string(),
+                }),
+        }
+    });
+    ReviewOutput {
+        verdicts: vec![ReviewVerdictOut {
+            criterion,
+            pass: false,
+            reason: "判定の理由（確かめたコマンドと出力の要点）".to_string(),
+            repair: Some(local_repair()),
+        }],
+        health,
+        design: None,
+    }
+}
+
+/// 種別の一覧の行（health と design で共通）。
+fn kind_line() -> String {
+    format!(
+        "- `kind` は次の {count} 種のどれか: {kinds}。各種別の意味は、上の「{generic}」で末尾の括弧に同じ名前を\
+         書いた項目を見る。\n",
+        count = HealthFindingKind::ALL.len(),
+        kinds = quoted(HealthFindingKind::ALL.iter().copied()),
+        generic = generic_heading(),
+    )
+}
+
+/// 付記 (a) A2: 設計 review の `design` の書き方。`repair` は書かせない（局所修復は無い）。
+fn design_verdict_lines() -> String {
+    let mut out = String::from(
+        "- この run は設計 review なので、`verdicts` は空の配列 `[]` のまま書く（判定する受け入れ条件が無い）。\
+         判定は `design` に書く。\n",
+    );
+    out.push_str(&kind_line());
+    out.push_str(
+        "- `severity` は `blocking`（1 件でもあれば計画は不合格）か `advisory`（記録と planner への申し送りだけに\
+         使う）。blocking が 1 件でもあれば `\"pass\":false`、無ければ `\"pass\":true` と書く。\n\
+         - `path` は任意。計画が触る repo 相対 path を書き、無ければ欄ごと省く。\n\
+         - `repair` は書かない。計画の不合格は planner が計画を作り直して直し、局所修復は無い。\n\
+         - 違反が無ければ `\"pass\":true,\"findings\":[]` と書く。`design` は省かない。\n\
+         - `design` が無い review.json と、`kind`・`severity` に上の値以外を書いた review.json は、判定を読めない\
+         不合格に数える。\n\n",
+    );
     out
 }
 
 /// D5.1・D6.3: `review.json` の `health` の書き方。種別は型から列挙する。
 fn health_verdict_lines(health: &HealthReviewInput) -> String {
-    let kinds = quoted(HealthFindingKind::ALL.iter().copied());
     let local = quoted(
         HealthFindingKind::ALL
             .iter()
@@ -186,22 +472,19 @@ fn health_verdict_lines(health: &HealthReviewInput) -> String {
             .filter(|k| k.allows_local_repair()),
     );
     let mut out = format!(
-        "この review には上の「{heading}」が付いているので、同じ object に `verdicts` と並べて `health` も書く:\n\
-         `{{\"verdicts\":[...],\"health\":{{\"findings\":[{{\"kind\":\"<種別>\",\"severity\":\"blocking|advisory\",\
-         \"path\":\"<repo 相対 path。無ければ欄ごと省く>\",\"reason\":\"...\",\
-         \"repair\":{{\"scope\":\"local\",\"class\":\"format|lint|test|doc|other\",\"hint\":\"...\"}}}}],\
-         \"policy\":{{\"approved\":<bool>,\"reason\":\"...\"}}}}}}`\n\
-         - `kind` は次の {count} 種のどれか: {kinds}。各種別の意味は、上の「{generic}」で末尾の括弧に同じ名前を\
-         書いた項目を見る。\n\
-         - `severity` は `blocking`（合否に使う。1 件でもあれば review は不合格）か `advisory`（記録と次の run への\
+        "この review には上の「{heading}」が付いているので、同じ object に `verdicts` と並べて `health` も書く\
+         （上の例の `health`）:\n",
+        heading = HEALTH_HEADING.trim_start_matches('#').trim(),
+    );
+    out.push_str(&kind_line());
+    out.push_str(&format!(
+        "- `severity` は `blocking`（合否に使う。1 件でもあれば review は不合格）か `advisory`（記録と次の run への\
          申し送りだけに使う）。\n\
+         - `path` は任意。repo 相対 path を書き、無ければ欄ごと省く。\n\
          - `repair` は任意。`\"scope\":\"local\"` を書けるのは {local} の blocking だけで、その finding は局所修復に回る。\
          ほかの種別の blocking と、`repair` の無い blocking は計画の作り直し（replan）になる。\n\
-         - 違反が無ければ `\"findings\":[]` と書く。`health` は省かない。\n",
-        heading = HEALTH_HEADING.trim_start_matches('#').trim(),
-        count = HealthFindingKind::ALL.len(),
-        generic = generic_heading(),
-    );
+         - 違反が無ければ `\"findings\":[]` と書く。`health` は省かない。\n"
+    ));
     let changed: Vec<String> = health
         .repos
         .iter()

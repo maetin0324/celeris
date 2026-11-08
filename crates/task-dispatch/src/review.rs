@@ -1140,7 +1140,7 @@ async fn run_reviewer_inner(
         },
     };
     let tag = format!("reviewer({})", run.run_id);
-    let health = matches!(&req.context.review, Some(r) if r.health.is_some());
+    let health = req.context.review.as_ref().and_then(|r| r.health.clone());
     // ADR 2026-11-06-misplaced-report-recovery-generalized D3: 誤配置した review.json の回収の基準時刻。
     let run_started = std::time::SystemTime::now();
     // reviewer の process にも run 専用の `TMPDIR` を与える（この関数を抜けると消える）。
@@ -1288,7 +1288,7 @@ async fn run_reviewer_inner(
         Err(e) => return fail_all(format!("{tag}: {review_rel} not found or unreadable: {e}")),
     };
     // ADR 2026-11-07-health-review-integration D5: health を渡した review は health verdict も読んで写す。
-    Verdict::from_review_json(&text, health, criteria, &tag, &review_rel).or_else(fail_all)
+    Verdict::from_review_json(&text, health.as_ref(), criteria, &tag, &review_rel).or_else(fail_all)
 }
 
 /// ADR 2026-10-18-artifact-exists-directory: ディレクトリの成果物の要約。`dir` 以下の通常ファイル

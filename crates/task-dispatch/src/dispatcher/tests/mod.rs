@@ -36,7 +36,7 @@ impl WorkerAdapter for InstantAdapter {
     }
 }
 
-fn new_task(dir: &std::path::Path, check: Check, max_retries: u32) -> Task {
+pub(super) fn new_task(dir: &std::path::Path, check: Check, max_retries: u32) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
         harness_id: None,
@@ -89,7 +89,7 @@ fn new_task(dir: &std::path::Path, check: Check, max_retries: u32) -> Task {
     }
 }
 
-fn dispatcher(
+pub(super) fn dispatcher(
     store: Arc<dyn TaskStore>,
     adapter: Arc<dyn WorkerAdapter>,
     max_concurrency: usize,
@@ -954,7 +954,7 @@ fn remote_task(
     task
 }
 
-fn done_adapter() -> Arc<dyn WorkerAdapter> {
+pub(super) fn done_adapter() -> Arc<dyn WorkerAdapter> {
     Arc::new(InstantAdapter {
         terminal: Terminal::Done {
             summary: "ok".into(),

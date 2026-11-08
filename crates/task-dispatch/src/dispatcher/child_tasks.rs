@@ -2,6 +2,10 @@
 
 use super::*;
 
+/// health D6.4: policy の変更の承認の子（`Approval`）の作成・待ち・判定。file は `health_review/` に置く。
+#[path = "../health_review/policy_review.rs"]
+mod policy_review;
+
 impl Dispatcher {
     /// ADR 2026-10-18-parent-waits-for-children（2026-10-27 付記）: 親が待つ子
     /// （`task_ops::delegate::child_wait::awaited_children`）。未解決の escalated 項目は CoS の受信箱から読む
@@ -272,8 +276,11 @@ impl Dispatcher {
             let Some(waiting) = self.awaiting_children.remove(&task_id) else {
                 continue;
             };
-            // ADR-0021 D1: 子が失敗していたら、集約・完了より先に「やり直す or 人に聞く」。
-            if self.escalate_failed_children(&task, &waiting.run_id, &mut Vec::new())? {
+            // ADR-0021 D1: 子が失敗していたら、集約・完了より先に「やり直す or 人に聞く」。health D6.4: policy の
+            // 変更の承認を待った task は review をやり直す（`policy_review`）。
+            if self.policy_rereview(&task)?
+                || self.escalate_failed_children(&task, &waiting.run_id, &mut Vec::new())?
+            {
                 continue;
             }
             if self.needs_aggregate_run(&task)? {
@@ -337,12 +344,15 @@ impl Dispatcher {
     }
 
     /// `task.acceptance` の各 `Check::Human` について `Approval` 子タスクを解決する（ADR-0008 D2）。
-    /// 子が無ければ作る。いずれかがまだ未決（`Ready`/`Draft`）なら `Ok(None)`（レビュー全体を延期）。
-    /// 全て終端に達していれば `idx -> (pass, reason)` を返す（`Human` criterion が無ければ空の map）。
+    /// 子が無ければ作る。いずれかがまだ未決（`Ready`/`Draft`）なら `Ok(None)`（レビュー全体を延期）。policy の変更の
+    /// 承認（health D6.4）が未決でも延期。全て終端なら `idx -> (pass, reason)`（`Human` が無ければ空の map）。
     pub(super) fn resolve_human_approvals(
         &self,
         task: &Task,
     ) -> Result<Option<HumanVerdicts>, DispatchError> {
+        if self.policy_approval_pending(task)? {
+            return Ok(None);
+        }
         let human_indices: Vec<usize> = task
             .acceptance
             .iter()
@@ -362,43 +372,33 @@ impl Dispatcher {
                 c.parent_id == Some(task.id) && c.kind == TaskKind::Approval && c.title == title
             }) {
                 Some(c) => c.clone(),
-                None => self.create_human_approval_child(task, idx, &title)?,
-            };
-            match child.status {
-                Status::Done => {
-                    resolved.insert(
-                        idx,
-                        (true, format!("approved (approval task {})", child.id)),
-                    );
+                None => {
+                    self.create_human_approval_child(task, &title, &task.acceptance[idx].text)?
                 }
+            };
+            let verdict = match child.status {
+                Status::Done => (true, format!("approved (approval task {})", child.id)),
                 Status::Failed => {
                     let note = approval_decision_note(&self.store.events_for(child.id)?);
-                    resolved.insert(
-                        idx,
-                        (
-                            false,
-                            format!("rejected (approval task {}){note}", child.id),
-                        ),
-                    );
+                    (
+                        false,
+                        format!("rejected (approval task {}){note}", child.id),
+                    )
                 }
-                Status::Cancelled => {
-                    resolved.insert(
-                        idx,
-                        (false, format!("approval task {} was cancelled", child.id)),
-                    );
-                }
+                Status::Cancelled => (false, format!("approval task {} was cancelled", child.id)),
                 _ => return Ok(None),
-            }
+            };
+            resolved.insert(idx, verdict);
         }
         Ok(Some(resolved))
     }
 
-    /// `Human` criterion のための `Approval` 子タスクを新規作成する（ADR-0008 D2）。
+    /// `Human` criterion（ADR-0008 D2）・policy の変更（health D6.4）のための `Approval` 子タスクを新規作成する。
     pub(super) fn create_human_approval_child(
         &self,
         task: &Task,
-        idx: usize,
         title: &str,
+        objective: &str,
     ) -> Result<Task, DispatchError> {
         let now = OffsetDateTime::now_utc();
         let approval = Task {
@@ -412,7 +412,7 @@ impl Dispatcher {
             parent_id: Some(task.id),
             kind: TaskKind::Approval,
             title: title.to_string(),
-            objective: task.acceptance[idx].text.clone(),
+            objective: objective.to_string(),
             acceptance: vec![],
             inputs: vec![],
             depends_on: vec![],
@@ -442,7 +442,7 @@ impl Dispatcher {
         // ADR-0010 D2: 挿入・Created・ApprovalRequested を 1 トランザクションで。
         self.store
             .create_task(&approval, vec![Event::ApprovalRequested])?;
-        tracing::info!(task_id = %task.id, approval_id = %approval.id, criterion_idx = idx, "created approval child for human check");
+        tracing::info!(task_id = %task.id, approval_id = %approval.id, %title, "created approval child for human check");
         Ok(approval)
     }
 }

@@ -133,6 +133,10 @@ impl Dispatcher {
             );
             return Ok(());
         }
+        // 判定を束ねる review run（reviewer を省いた review は worker の run。以下の event と stale の延期で共有）。
+        let review_run = completed_review_run
+            .clone()
+            .unwrap_or_else(|| run_id.clone());
         // ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D1: reviewer 条件を全部合格にしたら、その
         // snapshot（必須検査と同じ束縛）に束ねて残す。検査後の stale でも reviewer が見た commit と基底は確定して
         // いるので先に残す（次の同期で target の進みが候補の差分と重ならなければ reviewer を省く材料）。
@@ -152,9 +156,6 @@ impl Dispatcher {
                         .any(|v| v.criterion_idx == *idx && v.pass)
                 })
             {
-                let review_run = completed_review_run
-                    .clone()
-                    .unwrap_or_else(|| run_id.clone());
                 for result in &outcome.required_checks {
                     if let Some(binding) = &result.binding {
                         self.store.append_event(
@@ -174,9 +175,6 @@ impl Dispatcher {
         // ADR-0118 D4 付記: 検査中に review snapshot が変わった判定は適用しない（stale は不合格ではない）。
         // attempts を消費せず reviewing のまま、次の tick の review 入口で再 sync → 再 check → 再 review。
         if let Some(stale) = outcome.target_stale.take() {
-            let review_run = completed_review_run
-                .clone()
-                .unwrap_or_else(|| run_id.clone());
             self.defer_stale_review(
                 task_id,
                 &run_id,
@@ -205,9 +203,6 @@ impl Dispatcher {
         // ADR 2026-10-23-required-checks-bound-to-candidate: 必須検査の結果を、この review が固定した
         // 基底 SHA・候補 SHA に束ねて残す（reviewer が延期でも、合格は同じ束縛の再 review で再利用される）。
         {
-            let review_run = completed_review_run
-                .clone()
-                .unwrap_or_else(|| run_id.clone());
             for result in &outcome.required_checks {
                 if let Some(binding) = &result.binding {
                     self.store.append_event(
@@ -347,6 +342,8 @@ impl Dispatcher {
             }
             outcome.verdicts.sort_by_key(|v| v.criterion_idx);
         }
+        // health D6.4: policy の file を変えた candidate は人の承認を待つ・承認・却下を verdict に足す。
+        self.policy_review_gate(&task, completed_review_run.as_deref(), &mut outcome)?;
         let all_pass = outcome.all_pass();
         // ADR 2026-11-05-a9-llm-pilot-findings D4: 決定的な検査が落ちているのに reviewer が合格を返した
         // 食い違いは、検査の結果を優先して done にせず（上の `all_pass` は全 verdict の AND）、event に残す。

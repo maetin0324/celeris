@@ -36,8 +36,16 @@ fn health(findings: &[String]) -> String {
     format!(r#"{{"findings":[{}]}}"#, findings.join(","))
 }
 
+/// `health_requested` なら policy の変更の無い材料（repo 無し）を渡す。
 fn verdicts(text: &str, health_requested: bool) -> Result<Vec<Verdict>, String> {
-    Verdict::from_review_json(text, health_requested, &CRITERIA, TAG, REL)
+    let input = HealthReviewInput::default();
+    Verdict::from_review_json(
+        text,
+        health_requested.then_some(&input),
+        &CRITERIA,
+        TAG,
+        REL,
+    )
 }
 
 /// ディスパッチャ（`review_verdict.rs` の `maybe_schedule_review_repair`）と同じ分類。不合格が無ければ `None`。

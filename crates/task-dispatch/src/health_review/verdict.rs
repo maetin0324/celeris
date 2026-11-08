@@ -8,17 +8,30 @@
 //!   `Trigger::ReviewFail`（replan）になる。
 //! - advisory は合否に使わない。合格の [`Verdict`] として `Event::ReviewVerdict` と次の run の `prior_review` に残す。
 //!
+//! - D6.1: candidate の report が `policy.changed` で、変更 path に policy の file 以外も含めば、blocking と同じ扱いの
+//!   `{tag}: health:policy_mixed: …`（substantive → replan）を足す（[`policy_mixed`]）。
+//! - D6.3・I7: `policy.changed` の repo がある review で `health.policy` が無ければ全 criterion を不合格にする。
+//!   `approved = false` は substantive の不合格。`approved = true` は合格の記録だけで、人の承認（D6.4・I8）は
+//!   `dispatcher::policy_review` が待つ。
+//!
 //! `health` を渡していない review（`[review]` の無い repo、WU の review）は、従来どおり `ReviewOutput` 全体を
 //! 1 回で読み、`health` を見ない。
 
 use task_core::execution::ReviewRepairHint;
 use task_worker::ReviewOutput;
-use task_worker::protocol::{HealthFindingOut, HealthSeverity, HealthVerdictOut};
+use task_worker::protocol::{
+    HealthFindingOut, HealthRepoInput, HealthReviewInput, HealthSeverity, HealthVerdictOut,
+    PolicyVerdictOut,
+};
 
 use crate::review::Verdict;
 
 /// I7 の不合格の reason（`{tag}: ` の後ろ）。
 pub(crate) const HEALTH_VERDICT_INVALID: &str = "health verdict missing or invalid in review.json";
+
+/// D6.3 の不合格の reason（`{tag}: ` の後ろ。後ろに変わった policy の file が続く）。
+pub(crate) const POLICY_VERDICT_MISSING: &str =
+    "health.policy verdict missing in review.json for the changed policy files";
 
 /// 局所修復に写らない blocking の finding に付ける repair の scope。`classify_review_failure` は `"local"` 以外の
 /// scope を substantive として扱う。repair を `None` にすると reason の文面（`fmt`・`lint` など）から局所修復と
@@ -29,15 +42,15 @@ pub(crate) const SUBSTANTIVE_SCOPE: &str = "substantive";
 // の path の参照を作ると、`health_review` → `dispatcher` → `review` と合わせて module の循環（`deps.cycle`）になる。
 impl Verdict {
     /// `review.json` の本文 `text` を、reviewer の受け入れ条件 `criteria` の verdict にする。`Err` は全 criterion を
-    /// 不合格にする reason（呼び出し側の `fail_all` に渡す）。`health_requested` は `ReviewRequest.health` を渡したか。
+    /// 不合格にする reason（呼び出し側の `fail_all` に渡す）。`health_input` は reviewer に渡した `ReviewRequest.health`。
     pub(crate) fn from_review_json(
         text: &str,
-        health_requested: bool,
+        health_input: Option<&HealthReviewInput>,
         criteria: &[usize],
         tag: &str,
         review_rel: &str,
     ) -> Result<Vec<Verdict>, String> {
-        let (output, health) = match parse(text, health_requested) {
+        let (output, health) = match parse(text, health_input.is_some()) {
             Ok(parsed) => parsed,
             Err(Unreadable::Output(e)) => {
                 return Err(format!(
@@ -47,10 +60,13 @@ impl Verdict {
             Err(Unreadable::Health) => return Err(format!("{tag}: {HEALTH_VERDICT_INVALID}")),
         };
         let verdicts = criterion_verdicts(&output, criteria, tag, review_rel);
-        Ok(match health {
-            Some(health) => with_health(verdicts, &health, criteria, tag),
-            None => verdicts,
-        })
+        match (health, health_input) {
+            (Some(health), Some(input)) => {
+                let verdicts = with_health(verdicts, &health, criteria, tag);
+                with_policy(verdicts, input, health.policy.as_ref(), criteria, tag)
+            }
+            _ => Ok(verdicts),
+        }
     }
 }
 
@@ -145,6 +161,108 @@ fn with_health(
         repair_hint: Some(blocking_repair_hint(f)),
     });
     advisory.chain(verdicts).chain(blocking).collect()
+}
+
+/// D6.1・D6.3: policy の file を変えた repo の扱い。`Err` は全 criterion を不合格にする reason（D6.3 の欠落）。
+fn with_policy(
+    mut verdicts: Vec<Verdict>,
+    input: &HealthReviewInput,
+    policy: Option<&PolicyVerdictOut>,
+    criteria: &[usize],
+    tag: &str,
+) -> Result<Vec<Verdict>, String> {
+    let changed: Vec<&HealthRepoInput> = input.repos.iter().filter(|r| r.policy.changed).collect();
+    let Some(&idx) = criteria.iter().min() else {
+        return Ok(verdicts);
+    };
+    if changed.is_empty() {
+        return Ok(verdicts);
+    }
+    let files = changed
+        .iter()
+        .flat_map(|r| r.policy.files.iter().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let Some(policy) = policy else {
+        return Err(format!("{tag}: {POLICY_VERDICT_MISSING}: {files}"));
+    };
+    let blocking = |reason: String, class: &str| Verdict {
+        criterion_idx: idx,
+        pass: false,
+        reason,
+        repair_hint: Some(ReviewRepairHint {
+            scope: SUBSTANTIVE_SCOPE.to_string(),
+            class: class.to_string(),
+        }),
+    };
+    for mixed in changed.iter().filter_map(|r| policy_mixed(r)) {
+        verdicts.push(blocking(
+            format!("{tag}: health:policy_mixed: {mixed}"),
+            "policy_mixed",
+        ));
+    }
+    if policy.approved {
+        // 合格の記録（advisory と同じく reviewer 自身の判定より前）。合否は人の承認で決まる（D6.4）。
+        verdicts.insert(
+            0,
+            Verdict {
+                criterion_idx: idx,
+                pass: true,
+                reason: format!(
+                    "{tag}: health:policy (approved by reviewer; human approval required): {files}: {}",
+                    policy.reason
+                ),
+                repair_hint: None,
+            },
+        );
+    } else {
+        verdicts.push(blocking(
+            format!("{tag}: health:policy: {files}: {}", policy.reason),
+            "policy",
+        ));
+    }
+    Ok(verdicts)
+}
+
+/// D6.1: `policy.changed` の repo の変更 path に policy の file 以外が含まれていれば、その説明を返す。`diff.paths`
+/// は上限で切り詰めるので、総数（`diff.files`）から見えない path の数も数える。
+pub(crate) fn policy_mixed(repo: &HealthRepoInput) -> Option<String> {
+    if !repo.policy.changed {
+        return None;
+    }
+    let is_policy = |path: &str| repo.policy.files.iter().any(|f| f == path);
+    let others: Vec<&str> = repo
+        .diff
+        .paths
+        .iter()
+        .map(|p| p.path.as_str())
+        .filter(|p| !is_policy(p))
+        .collect();
+    let listed_policy = repo
+        .diff
+        .paths
+        .iter()
+        .filter(|p| is_policy(&p.path))
+        .count();
+    let unlisted = usize::try_from(repo.diff.files)
+        .unwrap_or(usize::MAX)
+        .saturating_sub(repo.diff.paths.len());
+    let unlisted_others =
+        unlisted.saturating_sub(repo.policy.files.len().saturating_sub(listed_policy));
+    if others.is_empty() && unlisted_others == 0 {
+        return None;
+    }
+    let more = if unlisted_others > 0 {
+        format!(" (+{unlisted_others} more)")
+    } else {
+        String::new()
+    };
+    Some(format!(
+        "{}: policy files [{}] changed together with other files [{}]{more}; move the policy change into its own task",
+        repo.repo_id,
+        repo.policy.files.join(", "),
+        others.join(", ")
+    ))
 }
 
 /// D5.1 の表: `removal_missing`・`test_change_unjustified` で `repair.scope = "local"` のものだけ reviewer の

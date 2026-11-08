@@ -83,7 +83,7 @@ impl TreeLimitKind {
         .find(|k| k.as_str() == name)
     }
 
-    /// ADR-0079 D7（Phase R3a）: run を起こす時に数える上限（`tree_run_limit_hold` / 節点の replan）。
+    /// ADR-0079 D7（Phase R3a）: run を起こす時に数える上限（`Dispatcher::tree_limit_hold_for` / 節点の replan）。
     /// これらの `raise-once` / `replan` の回答は、上限に余裕を足す（[`limit_allowance_step`]）。計画の採用時の
     /// 上限（段階・段階あたり・子 task・深さ・木の leaf）は止めた unit を進めるだけ。
     pub fn is_run_time(self) -> bool {

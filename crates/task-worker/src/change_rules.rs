@@ -5,16 +5,14 @@
 //! - 組み立て口は `claude_code::prompt` の `prompt_header` だけ（D1.2）。全 run kind（execute・plan・replan・
 //!   execution plan・review）がそこを通るので、汎用規約はどの harness の prompt にも 1 回だけ入る。adapter
 //!   （codex・pi・acp・aider・claude_code）と CoS chat（`build_cos_chat_parts`）では足さない（D1.3）。
-//! - repo 固有の規約（`repo_section`）は `RunContext` が持つ review 方針（いまは planner の
-//!   `ExecutionPlannerContext.review_policy`）から、汎用規約の直後に出す。無ければ何も出さない。
+//! - repo 固有の規約（`repo_section`）は `RunContext.workspace` の review 方針（付記 B1・B4。dispatcher が worker と
+//!   planner の run にだけ base 側から読んで入れる）から、汎用規約の直後に出す。無ければ何も出さない。
 //! - `design_brief_section` は /3 の planner に設計 brief（`ExecutionPlanSpec.design_brief`）の書き方を示す（D3.4）。
 //! - reviewer prompt の health の材料と Result 節は `review`（D4.1・D5.4・D6.3）。
 //!
 //! ここは純粋関数だけで、I/O も LLM も無い。
 
-use task_core::design_review::ReviewPolicy;
-
-use crate::protocol::{ExecutionPlannerContext, RunContext};
+use crate::protocol::RunContext;
 
 pub mod review;
 
@@ -32,7 +30,7 @@ pub fn section() -> String {
 /// 汎用規約の直後に出す repo 固有の規約（owner 地図・高 risk の path class・保護する不変条件）。
 /// `RunContext` に review 方針が無い・中身が空なら空文字列（prompt は変わらない）。
 pub fn repo_section(context: &RunContext) -> String {
-    let Some(policy) = review_policy(context) else {
+    let Some(policy) = context.review_policy() else {
         return String::new();
     };
     if policy.owner_map.is_none() && policy.high_risk.is_empty() && policy.invariants.is_empty() {
@@ -67,13 +65,10 @@ pub fn repo_section(context: &RunContext) -> String {
     out
 }
 
-fn review_policy(context: &RunContext) -> Option<&ReviewPolicy> {
-    context.execution_planner.as_ref()?.review_policy.as_ref()
-}
-
 /// D3.4: /3 の planner に設計 brief（`design_brief`）の書き方を示す節。欄は汎用規約の「実装前 brief」の
 /// 7 項目に対応させる。高 risk の path class の一覧は `repo_section` の節を指し、ここには再掲しない。
-pub fn design_brief_section(planner: &ExecutionPlannerContext) -> String {
+/// 方針は `repo_section` と同じ `RunContext.workspace` から読む（付記 B4）。
+pub fn design_brief_section(context: &RunContext) -> String {
     let mut out = String::from(
         "### 設計 brief（`design_brief`）\n\
          /3 の計画は最上位に `design_brief` を 1 つ書ける。上の汎用規約の「実装前 brief」の 7 項目を、次の欄に書く:\n\
@@ -88,7 +83,7 @@ pub fn design_brief_section(planner: &ExecutionPlannerContext) -> String {
          7. 不変条件 → `invariants`（守る条件と、それを確かめる試験）\n\
          どの文字列も空にしない。形の誤った brief は計画ごと拒否される。\n",
     );
-    match &planner.review_policy {
+    match context.review_policy() {
         Some(policy) => {
             let classes = if policy.high_risk.is_empty() {
                 "この repo の review 方針には高 risk の path class が無い。".to_string()
@@ -120,3 +115,7 @@ pub fn design_brief_section(planner: &ExecutionPlannerContext) -> String {
 #[cfg(test)]
 #[path = "change_rules/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "change_rules/worker_profile_tests.rs"]
+mod worker_profile_tests;

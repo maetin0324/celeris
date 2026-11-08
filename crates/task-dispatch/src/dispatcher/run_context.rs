@@ -385,7 +385,7 @@ impl Dispatcher {
             work_genre,
             recent_work,
             milestone_review,
-            workspace_note,
+            workspace: self.run_workspace(task, workspace_note, conversation_addressee.is_none()),
             profile,
             mode,
             comments,

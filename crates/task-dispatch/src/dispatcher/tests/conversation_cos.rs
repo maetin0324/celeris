@@ -849,7 +849,7 @@ fn run_extras_carry_the_projects_workspace_note() {
     task.project_id = Some(with_workspace.id);
     let extras = d.run_extras(&task, None, None, "claude-code").unwrap();
     assert_eq!(
-        extras.workspace_note.as_deref(),
+        extras.workspace.note.as_deref(),
         Some(
             "この案件のコードはクラスタ pegasus の `/work/NBB/rmaeda/workspace/rust/benchfs` にある。\
              いまのカレントディレクトリはその写しで、celeris が run の前後で同期する。"
@@ -860,14 +860,16 @@ fn run_extras_carry_the_projects_workspace_note() {
     assert_eq!(
         d.run_extras(&task, None, None, "claude-code")
             .unwrap()
-            .workspace_note,
+            .workspace
+            .note,
         None
     );
     task.project_id = None;
     assert_eq!(
         d.run_extras(&task, None, None, "claude-code")
             .unwrap()
-            .workspace_note,
+            .workspace
+            .note,
         None
     );
 
@@ -887,7 +889,8 @@ fn run_extras_carry_the_projects_workspace_note() {
     assert_eq!(
         d.run_extras(&conversation, None, None, "claude-code")
             .unwrap()
-            .workspace_note,
+            .workspace
+            .note,
         None
     );
 }

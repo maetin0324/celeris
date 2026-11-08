@@ -4,7 +4,7 @@
 //! 値の正本は repo の `scripts/dev/repo-health/profiles/<profile>.toml` の `[review]` 節で、dispatcher は
 //! `repo_health.py --print-review-policy` が base（target）側の版から出した JSON
 //! （`celeris.repo-health.review-policy/1`）を読んでこの型にする。Rust では TOML を読まない。
-//! 型は worker protocol の `ExecutionPlannerContext.review_policy` にそのまま載る（planner の prompt への写し）。
+//! 型は worker protocol の `RunContext.workspace.review_policy` にそのまま載る（worker と planner の prompt への写し）。
 //!
 //! D3.1 の設計 brief の型（[`DesignBrief`]。`execution_plan` が再公開する）と D3.3 の risk の判定（[`assess_risk`]）も
 //! ここに置く。判定は入力（review 方針の状態・write path・設計 brief）だけで決まる純粋関数で、LLM も I/O も使わない
@@ -19,7 +19,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// D2.4: 解決済みの review 方針。`source = absent`（base に `[review]` が無い）の repo では作らない
-/// （`ExecutionPlannerContext.review_policy = None`）。
+/// （`RunContext.workspace.review_policy = None`）。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ReviewPolicy {
     /// 変更 path の owner 行を引く file（repo 相対。例 `docs/architecture-map.md`）。

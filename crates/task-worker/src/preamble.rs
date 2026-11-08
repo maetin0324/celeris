@@ -696,7 +696,7 @@ fn clusters_section(context: &RunContext) -> String {
 }
 
 /// ADR-0039 D3: 案件の作業場所から、前置きに出す 1 行を組む（純粋関数。ディスパッチャがこれを
-/// `RunContext::workspace_note` に入れる）。`Remote` は ADR-0018 D1 の「クラスタ側が正、手元は写し」を書く。
+/// `RunContext.workspace.note` に入れる）。`Remote` は ADR-0018 D1 の「クラスタ側が正、手元は写し」を書く。
 pub fn workspace_note(spec: &task_core::WorkspaceSpec) -> String {
     match spec {
         task_core::WorkspaceSpec::Local { path, .. } => {
@@ -711,7 +711,7 @@ pub fn workspace_note(spec: &task_core::WorkspaceSpec) -> String {
 }
 
 /// ADR-0041 D1: タスクごとの worktree を前置きに書く 1 行（純粋関数。ディスパッチャが
-/// `workspace_note` の後ろに足す）。「このブランチにコミットせよ」までをここに書く。
+/// `workspace.note` の後ろに足す）。「このブランチにコミットせよ」までをここに書く。
 pub fn worktree_note(
     repo: &std::path::Path,
     dir: &std::path::Path,
@@ -765,7 +765,7 @@ pub fn shared_build_cache_note() -> &'static str {
 }
 
 /// ADR-0043 D2 / D8: タスクが複数のリポジトリを持つときの「作業場所」の本文（純粋関数）。
-/// ディスパッチャが ADR-0039 D3 の `workspace_note` の代わりにこれを入れる。
+/// ディスパッチャが ADR-0039 D3 の `workspace.note` の代わりにこれを入れる。
 ///
 /// 出る順は `repos` の順（先頭がカレントディレクトリ）。`repos` が空なら空文字列。
 pub fn repos_note(repos: &[RepoNote]) -> String {
@@ -888,7 +888,7 @@ fn join_repo_path(dir: &str, rel: &str) -> String {
 /// 実機の事故（2026-09-18）: 空の workspace に置かれた子タスクが、自分で `ssh` してリモートの
 /// 作業ツリーに直接書いた。SPEC §3.7 追記「手元で編集してリモートで検証」をここで明示する。
 fn workspace_section(context: &RunContext) -> String {
-    let Some(note) = &context.workspace_note else {
+    let Some(note) = context.workspace_note() else {
         return String::new();
     };
     format!(

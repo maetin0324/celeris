@@ -497,12 +497,11 @@ pub struct RunContext {
     /// ファイル名を基準にレビュアーが不合格にした事故から）。決定的（設定を引くだけ）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject_genre: Option<GenreContext>,
-    /// Phase 43（ADR-0039 D3）: **案件が作業場所を決めている run** にだけ載る 1 行（そのコードがどこに
-    /// あるか）。ディスパッチャが `projects.workspace` から決定的に組む（`preamble::workspace_note`）。
-    /// 作業場所を決めていない案件・案件に属さないタスクでは `None` で、プロンプトは Phase 42 までと
-    /// バイト単位で同じ。
+    /// ADR 2026-11-07-health-review-integration 付記 B1: dispatcher が task の作業場所から決めた、この run の作業場所の
+    /// 情報（場所の説明と、repo の review 方針）。どちらも無い run（対話 run・作業場所を決めていない案件の run・
+    /// reviewer の run）では `None`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub workspace_note: Option<String>,
+    pub workspace: Option<RunWorkspaceContext>,
     // ---- ADR-0044 D2（Phase 53）: タスク単位のコメント。ここから ----
     /// ADR-0044 D2: そのタスクのコメントの**最新 20 件**（古い順）。空なら省略され、
     /// 「コメント」の節も出ない。
@@ -772,12 +771,35 @@ pub struct ExecutionPlannerContext {
     /// プロンプトは R2b より前と 1 バイトも変わらない。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tree: Option<TreePlannerContext>,
-    /// ADR 2026-11-07-health-review-integration D2.4・D3.4: repo 固有の review 方針（base（target）側の
-    /// profile の `[review]` 節の写し。owner 地図・高 risk の path class・不変条件）。planner は高 risk の
-    /// class を変える計画に設計 brief を書く。dispatcher が base 側から読めた repo だけ `Some`。`[review]` の
-    /// 無い repo・旧 daemon では `None` で `request.json` は従来と同じ。
+}
+
+/// `context.workspace`（ADR 2026-11-07-health-review-integration 付記 B1）: この run の作業場所の情報。2 つの欄は
+/// どちらも dispatcher が task の作業場所から決定的に決める（LLM は呼ばない）。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RunWorkspaceContext {
+    /// Phase 43（ADR-0039 D3）: **案件が作業場所を決めている run** にだけ載る説明（そのコードがどこにあるか。
+    /// 作業ツリーを切る run はリポジトリ一覧・検査コマンド・成果物の置き場も）。ディスパッチャが
+    /// `projects.workspace` から決定的に組む（`preamble::workspace_note`）。前置きの「作業場所」の節になる。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    /// 付記 B2〜B5・D2.4: repo 固有の review 方針（task の先頭の repo の target（base）側の profile の `[review]`
+    /// 節の写し。owner 地図・高 risk の path class・不変条件）。worker の run（atomic task・WU・repair）と planner の
+    /// run にだけ、dispatcher が base 側から読めたときだけ `Some`。汎用規約の直後に repo 固有の規約の節として出る。
+    /// `[review]` の無い repo・読めない repo（remote workspace を含む）では `None` で、節は出ない。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review_policy: Option<task_core::design_review::ReviewPolicy>,
+}
+
+impl RunContext {
+    /// 作業場所の説明（`workspace.note`）。
+    pub fn workspace_note(&self) -> Option<&String> {
+        self.workspace.as_ref()?.note.as_ref()
+    }
+
+    /// repo の review 方針（`workspace.review_policy`）。
+    pub fn review_policy(&self) -> Option<&task_core::design_review::ReviewPolicy> {
+        self.workspace.as_ref()?.review_policy.as_ref()
+    }
 }
 
 /// `context.execution_planner.tree`（ADR-0079 D4 (2) / D12。Phase R2b）: /3 の planner に渡す木の中の位置・

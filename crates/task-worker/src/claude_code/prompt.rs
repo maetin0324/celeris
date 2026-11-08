@@ -581,7 +581,7 @@ fn followups_instructions(artifacts: &str) -> String {
 /// ADR-0039 D3: 案件が作業場所を決めている run にだけ、委譲の指示に「子は同じ作業場所を継ぐ」を足す。
 /// 決めていない案件では空文字列（Phase 42 までと 1 バイトも変わらない）。
 pub(super) fn delegate_workspace_instruction(context: &RunContext) -> String {
-    if context.workspace_note.is_none() {
+    if context.workspace_note().is_none() {
         return String::new();
     }
     "Children you delegate inherit this project's workspace (the location described above), so do not \
@@ -594,7 +594,7 @@ pub(super) fn delegate_workspace_instruction(context: &RunContext) -> String {
 /// ADR-0039 D3: 計画 run（`build_plan_prompt`）用。子タスクが継ぐ作業場所と、`plan.json` の `workspace` の
 /// 使いどころを伝える。案件が作業場所を決めていない run では空文字列（従来どおりの文面）。
 pub(super) fn workspace_section_for_plan(context: &RunContext) -> String {
-    let Some(note) = &context.workspace_note else {
+    let Some(note) = context.workspace_note() else {
         return String::new();
     };
     format!(
@@ -971,7 +971,7 @@ fn build_execution_plan_prompt(
         // ADR-0079 D4 (2)（Phase R2b）: 木の節点の planner は /3（段階・unit = leaf | 子 task・決定）を書く。
         out.push_str(&tree_plan_shape_section(planner, tree, artifacts));
         // ADR 2026-11-07-health-review-integration D3.4: /3 の設計 brief の書き方。
-        out.push_str(&crate::change_rules::design_brief_section(planner));
+        out.push_str(&crate::change_rules::design_brief_section(context));
     } else {
         out.push_str(&format!(
         "Write your plan to `{artifacts}/execution-plan.json` (create the `{artifacts}/` directory if it \

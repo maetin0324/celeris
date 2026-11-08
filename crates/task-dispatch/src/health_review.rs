@@ -4,7 +4,8 @@
 //! この top-level module に置く。`dispatcher/` に足すのは呼び出しの配線だけで、その行は同じ file の既存の行の
 //! 整理で相殺する。どの下位 module も LLM を呼ばない（I4）。
 //!
-//! - [`policy`]: review 方針を base（target）側の検査器で読み、planner の `RunContext` に渡す（D2.3・I3）。
+//! - [`policy`]: review 方針を base（target）側の検査器で読む（D2.3・I3）。
+//! - [`worker_profile`]: 読んだ方針を worker と planner の run の `RunContext.workspace` に渡す（付記 B1〜B5）。
 //! - [`design`]: 計画の採用前の risk 判定と高 risk だけの設計 review（D3.3・D3.5）の純粋な部分。Dispatcher の状態（実行中の
 //!   run・完了の channel）を使う配線は `health_review/design_gate.rs` で、`dispatcher` の子 module として `#[path]` で読む。
 //! - [`input`]: final review の health 文脈を candidate SHA ごとに 1 回作る（D4）。
@@ -14,3 +15,4 @@ pub(crate) mod design;
 pub(crate) mod input;
 pub mod policy;
 pub(crate) mod verdict;
+pub(crate) mod worker_profile;

@@ -52,7 +52,7 @@ pub(super) struct DesignPolicies {
 impl Dispatcher {
     /// task の repo ごとの review 方針（`names` の repo だけ。名前 `""` は案件の repo の無い作業場所）。target は
     /// review 前の同期と同じ `review_target_ref`、案件の repo の無い task は worktree の base。remote は
-    /// `Unavailable`、git の repo が無ければ `Absent`（`policy::task_review_policy` と同じ規則を repo ごとに当てる）。
+    /// `Unavailable`、git の repo が無ければ `Absent`（`policy::review_policy_target` と同じ規則を repo ごとに当てる）。
     fn repo_review_policies(
         &self,
         task: &Task,

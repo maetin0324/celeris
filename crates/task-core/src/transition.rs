@@ -39,7 +39,7 @@ pub enum Trigger {
     /// ADR 2026-11-08-health-enforcement-loop D7（P-9）: `DependencyFailed` で cancel された後続を、依存先の
     /// reopen（終端から終端でない状態への遷移）で戻す。`cancelled → ready`、cancel の前が `draft`
     /// （人がまだ受け入れていない）なら `cancelled → draft`。attempts 据え置き、`reason = "dependency_reopened"`。
-    /// 対象の判定は `SqliteStore::cascade_after_transition_tx` が行う（この状態機械は event 履歴を持たない）。
+    /// 対象の判定は `dependency_reopen_trigger`（呼ぶのは `SqliteStore::cascade_after_transition_tx` だけ）。
     DependencyReopened {
         draft: bool,
     },
@@ -269,7 +269,7 @@ pub fn transition(s: &StateView, t: &Trigger) -> Result<Outcome, InvalidTransiti
         }
 
         // ADR 2026-11-08-health-enforcement-loop D7（P-9）: cancelled からだけ（人の Cancel・連鎖の中止と分けるのは
-        // `crate::dependency_reopen` の event 履歴の判定）。cancel の前が draft なら draft に戻す。
+        // event 履歴を見る `dependency_reopen_trigger`）。cancel の前が draft なら draft に戻す。
         Trigger::DependencyReopened { draft } if s.status == Status::Cancelled => Ok(Outcome {
             next: if *draft { Status::Draft } else { Status::Ready },
             attempts: s.attempts,
@@ -693,6 +693,44 @@ pub fn transition(s: &StateView, t: &Trigger) -> Result<Outcome, InvalidTransiti
             }
         }
     }
+}
+
+/// ADR 2026-11-08-health-enforcement-loop D7.2（P-9）: 状態 `status`・最後の `Event::Transitioned` の `(from, reason)`
+/// が `last` の task が、依存先の失敗で cancel されたままか。そうなら cancel の前の状態を返す。依存先の reopen での復帰
+/// （`dependency_reopen_trigger`）と retry の依存の付け替え（`SqliteStore::retry_task_tx`）が共有する述語。
+/// `cancelled` から出る遷移は retry の付け替えと `DependencyReopened` だけで、どちらも最後の遷移の理由を変えるので、
+/// 「cancel の後に人・CoS の遷移が無い」もこの判定に含まれる。人・CoS の cancel（`cancel`）と連鎖の中止
+/// （`parent_cancelled`・`project_cancelled`・`milestone_cancelled`）はここで外れる。
+pub(crate) fn cancelled_by_dependency(
+    status: Status,
+    last: Option<&(Status, String)>,
+) -> Option<Status> {
+    match last {
+        Some((from, reason))
+            if status == Status::Cancelled && reason == Trigger::DependencyFailed.name() =>
+        {
+            Some(*from)
+        }
+        _ => None,
+    }
+}
+
+/// ADR 2026-11-08-health-enforcement-loop D7.1（P-9）: 依存先が終端から戻ったとき、その後続に適用する遷移。
+/// 後続が `cancelled_by_dependency` に合い、ほかの依存先の状態 `others`（見つからない task は `None`）に
+/// failed・cancelled・`None` が無ければ `DependencyReopened`（cancel の前が draft なら draft へ）。それ以外は `None`
+/// （ほかの依存先がまだ failed の後続は、その依存先が戻ったときに戻る）。
+pub(crate) fn dependency_reopen_trigger(
+    status: Status,
+    last: Option<&(Status, String)>,
+    others: &[Option<Status>],
+) -> Option<Trigger> {
+    let before = cancelled_by_dependency(status, last)?;
+    let blocked = others
+        .iter()
+        .any(|s| matches!(s, None | Some(Status::Failed | Status::Cancelled)));
+    (!blocked).then_some(Trigger::DependencyReopened {
+        draft: before == Status::Draft,
+    })
 }
 
 #[cfg(test)]

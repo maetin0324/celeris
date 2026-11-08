@@ -3,7 +3,7 @@ use time::OffsetDateTime;
 
 use crate::message::is_conversation;
 use crate::model::{Event, Status, Task, TaskId, TaskKind};
-use crate::transition::{Outcome, StateView, Trigger, transition};
+use crate::transition::{Outcome, StateView, Trigger, dependency_reopen_trigger, transition};
 
 use super::{SqliteStore, StoreError, format_rfc3339, kind_str, status_str};
 
@@ -210,15 +210,31 @@ impl SqliteStore {
     /// 2. `Approval` 以外が終端 → 終端でない直接の `Approval` 子を `Cancel`（P-37）
     /// 3. failed/cancelled → 終端でない後続（`depends_on` に含むタスク）を `DependencyFailed`（P-9、推移的）
     /// 4. 終端 → 終端でない（reopen・rereview・後続の復帰）→ 3 で cancel された後続を `DependencyReopened` で戻す
-    ///    （ADR 2026-11-08-health-enforcement-loop D7、推移的。`crate::dependency_reopen`）
+    ///    （ADR 2026-11-08-health-enforcement-loop D7。判定は `transition::dependency_reopen_trigger`。戻した後続の
+    ///    遷移もここを通るので推移的。戻すのは新しい `Transitioned` の追記だけで、cancel の event は変えない）
     pub(super) fn cascade_after_transition_tx(
         tx: &Connection,
         task: &Task,
         from: Status,
         to: Status,
     ) -> Result<(), StoreError> {
+        if from.is_terminal() && !to.is_terminal() {
+            for dependent in Self::dependents_of_tx(tx, task.id, false)? {
+                let Some(dep) = Self::get_locked(tx, dependent)? else {
+                    continue;
+                };
+                let last = Self::last_transitioned_tx(tx, dependent)?;
+                let others = (dep.depends_on.iter().filter(|d| **d != task.id))
+                    .map(|d| Self::task_status_tx(tx, *d))
+                    .collect::<Result<Vec<_>, _>>()?;
+                if let Some(trigger) = dependency_reopen_trigger(dep.status, last.as_ref(), &others)
+                {
+                    Self::apply_transition_tx(tx, dependent, trigger, vec![])?;
+                }
+            }
+        }
         if from.is_terminal() || !to.is_terminal() {
-            return crate::dependency_reopen::restore_dependents_tx(tx, task.id, from, to);
+            return Ok(());
         }
         let unsuccessful = matches!(to, Status::Failed | Status::Cancelled);
         if task.kind == TaskKind::Approval {
@@ -241,7 +257,7 @@ impl SqliteStore {
             }
         }
         if unsuccessful {
-            for dependent in Self::non_terminal_dependents_tx(tx, task.id)? {
+            for dependent in Self::dependents_of_tx(tx, task.id, true)? {
                 // P-78（ADR-0033 D4 / Phase 28）: 対話タスクは `DependencyFailed` の対象から外す
                 // （直列化の順番待ちだけなので、前の対話タスクの失敗を理由に次を `cancelled` にしない。
                 // `ready_tasks` 側が「終端に達していれば進めてよい」を見る）。
@@ -308,17 +324,19 @@ impl SqliteStore {
         ids.iter().map(|s| Self::parse_id(s)).collect()
     }
 
-    /// `depends_on` に `dep_id` を含む、終端でないタスク。JSON 列を `LIKE` で絞ってから型で確認する。
-    pub(super) fn non_terminal_dependents_tx(
+    /// `depends_on` に `dep_id` を含むタスク（`non_terminal` なら終端でないものだけ）。JSON 列を `LIKE` で絞ってから
+    /// 型で確認する。依存の cascade（失敗の伝播と reopen での復帰）と Phase 31（やり直しの付け替え）が使う。
+    pub(super) fn dependents_of_tx(
         tx: &Connection,
         dep_id: TaskId,
+        non_terminal: bool,
     ) -> Result<Vec<TaskId>, StoreError> {
         let sql = format!(
-            "SELECT json FROM tasks WHERE {} AND json LIKE ?1",
+            "SELECT json FROM tasks WHERE json LIKE ?1 AND (?2 = 0 OR {})",
             Self::NON_TERMINAL_SQL
         );
         let mut stmt = tx.prepare(&sql)?;
-        let rows = stmt.query_map(params![format!("%{dep_id}%")], |row| {
+        let rows = stmt.query_map(params![format!("%{dep_id}%"), non_terminal], |row| {
             row.get::<_, String>(0)
         })?;
         let mut out = Vec::new();
@@ -331,30 +349,25 @@ impl SqliteStore {
         Ok(out)
     }
 
-    /// `depends_on` に `dep_id` を含むタスク（状態を問わない）。Phase 31（やり直し）と依存先の reopen が使う。
-    pub(crate) fn dependents_of_tx(
-        tx: &Connection,
-        dep_id: TaskId,
-    ) -> Result<Vec<TaskId>, StoreError> {
-        let mut stmt = tx.prepare("SELECT json FROM tasks WHERE json LIKE ?1")?;
-        let rows = stmt.query_map(params![format!("%{dep_id}%")], |row| {
-            row.get::<_, String>(0)
-        })?;
-        let mut out = Vec::new();
-        for row in rows {
-            let t = Self::row_to_task(row?)?;
-            if t.id != dep_id && t.depends_on.contains(&dep_id) {
-                out.push(t.id);
-            }
-        }
-        Ok(out)
-    }
-
-    /// `task_id` の最後の `Event::Transitioned` の `reason`。無ければ `None`。
-    pub(crate) fn last_transitioned_reason_tx(
+    /// `task_id` の最後の `Event::Transitioned` の `(from, reason)`。無ければ `None`。依存の cascade と Phase 31
+    /// （`transition::cancelled_by_dependency`）、browser の前提 gate の判定が使う。
+    pub(crate) fn last_transitioned_tx(
         tx: &Connection,
         task_id: TaskId,
-    ) -> Result<Option<String>, StoreError> {
-        Ok(crate::dependency_reopen::last_transitioned_tx(tx, task_id)?.map(|(_, reason)| reason))
+    ) -> Result<Option<(Status, String)>, StoreError> {
+        let mut stmt = tx.prepare(
+            "SELECT json FROM events WHERE task_id = ?1 AND json LIKE '%\"type\":\"transitioned\"%' ORDER BY seq DESC LIMIT 1",
+        )?;
+        let json: Option<String> = stmt
+            .query_row(params![task_id.to_string()], |row| row.get(0))
+            .optional()?;
+        let Some(json) = json else {
+            return Ok(None);
+        };
+        let event: Event = serde_json::from_str(&json)?;
+        match event {
+            Event::Transitioned { from, reason, .. } => Ok(Some((from, reason))),
+            _ => Ok(None),
+        }
     }
 }

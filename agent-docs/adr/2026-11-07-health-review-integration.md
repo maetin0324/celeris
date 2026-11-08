@@ -211,3 +211,40 @@ D7 に決定として書く。要点: reviewer prompt の進捗ファイルの h
 - U5 health verdict: `crates/task-worker/src/protocol.rs`（`ReviewOutput.health`・`HealthVerdictOut`・`HealthFindingOut`・`HealthFindingKind`・`HealthSeverity`・`PolicyVerdictOut`）、`crates/task-dispatch/src/review.rs`、`crates/task-dispatch/src/dispatcher/review_verdict.rs`、`prompt.rs` の Result 節。試験 prefix `health_review_`（例 `health_review_verdict_missing_fails_review`・`health_review_removal_missing_local_repairs`・`health_review_dual_source_replans`・`health_review_policy_change_waits_for_human`）。
 - U6 撤去: `prompt.rs`（D7.1・D7.2・D7.4）、`docs/guides/source-health.md`、`scripts/dev/check-health.sh` の冒頭注記（D7.3。policy の file なので U2 と同じ branch に入れる）。試験 prefix `change_rules_`（例 `change_rules_review_prompt_has_no_commit_hash_copy`）。
 - 新しい module の inline 試験が source-size gate の上限に近づくなら、`<module>/tests.rs` を `#[path]` で分ける。
+
+## 付記（2026-11-08、dispatch の実装）
+task 01M6VTFG9K5HEE817EW05JASMZ（dispatcher: risk 判定・高 risk 設計 review・final review の health 文脈と構造化 verdict）で D2.3・D3.3・D3.5・D3.6・D4・D5.2・D5.3・D6.1・D6.3・D6.4 を実装した。記録は [dispatch の進捗](../progress/2026-11-07-health-v2-g2/dispatch.md)。上の決定節との違いを次に書く。
+
+### 置き場所: `dispatcher/review_health.rs` でなく `crates/task-dispatch/src/health_review/`
+- D4.2 の `dispatcher/review_health.rs`、D5.3 の `review_verdict.rs` の写像、D3.5 の `planner_flow.rs` の中の処理は、新しい top-level module `crates/task-dispatch/src/health_review/` に置いた。理由は repo health の `size.responsibility-growth`。この rule は Rust の module を `<pkg>/src/<第 1 要素>` の単位で数え、`crates/task-dispatch/src/dispatcher/` は base の時点で module 全体が `module_lines = 8000`（`scripts/dev/repo-health/profiles/celeris.toml`）を超えている。`dispatcher/` に file を足すと worsened になり、`check-health.sh` が落ちる。
+- `health_review/{policy,design,input,verdict}.rs` は top-level の下位 module。Dispatcher の private な状態（実行中の run・完了の channel）を使う `design_gate.rs`・`design_verdict.rs` は `dispatcher.rs` の、`plan_adoption.rs` は `dispatcher/planner_flow.rs` の、`policy_review.rs`（D6.4）は `dispatcher/child_tasks.rs` の子 module として `#[path]` で読む。file は `health_review/` にあるので、行は `health_review` の module に数えられる。
+- `dispatcher/` に足したのは呼び出しの配線だけで、その行は同じ file の既存の行を移して相殺した（`on_planner_finished` の run の終わり方の写像を `design_gate.rs` の `run_end_of` へ、計画の採用の手順を `plan_adoption.rs` へ。後者は設計 review を通った計画の採用と共通にし、二重実装を避ける）。
+- health verdict の写像は `health_review/verdict.rs` の `impl Verdict` に置き、`review.rs` からは `Verdict` の関数として呼ぶ。`crate::health_review::…` の path で呼ぶと `review` → `health_review` → `dispatcher` → `review` の循環になり、`deps.cycle` が worsened になる。
+
+### 設計 review の wire 欄の置き場所
+- D3.5 2. の `RunContext.design_review` は作らず、`ReviewRequest.design: Option<Box<DesignReviewRequest>>`（`context.review.design`。`crates/task-worker/src/protocol.rs`）に置いた。`RunContext` の直下は既に 40 欄で、`type_fields = 40` の閾値に当たる。設計 review の run は reviewer run なので、`context.review` が `Some` の run への既存の扱い（browser を渡さない判定など）がそのまま効く。
+- D3.4 の planner 欄 `review_policy` も `RunContext` の直下でなく `ExecutionPlannerContext.review_policy` に置いた（同じ理由）。
+- `DesignReviewRequest.brief`・`review_policy` と `DesignReviewRequested.policy_sha256` は `Option`（方針を読めない `unknown` では値が無い）。`DesignReviewRequested` は方針の本文を持たないので、dispatcher は reviewer run を起こすときに base 側から読み直し、`definition_sha256` が event の `policy_sha256` と同じときだけ渡す。
+- `DesignReviewed.findings` と `HealthReviewInputBuilt.input` は `serde_json::Value`（wire 型の JSON の写し）。wire 型は task-worker にあり、task-core は task-worker に依存しないため、task-core に同じ形の型を二重に置かない。
+- `DesignBrief`・`DesignOption` は `task_core::design_review` に置き、`task_core::execution_plan` から `pub use` する（module の循環を避けるため）。`assess_risk` の第 1 引数は `Option<&ReviewPolicy>` でなく `&ReviewPolicyState`（`Present`・`Absent`・`Unavailable(理由)`）で、absent と読めないを区別する。path class の正規表現を Rust の `regex` で読めないときは `unknown`（fail closed）。
+
+### 試験名の prefix
+- 上の「後続 unit の path・型名・試験名」は U3 を `design_brief_`、U4・U5 を `health_review_` に分けていたが、dispatcher の試験は設計 review を含めて全部 `health_review_` にした（task の目的 (6)）。関数名が `health_review_` で始まるものは task-dispatch に 56 件、`crates/task-core/src/design_review/tests.rs` に 9 件、`crates/task-worker/src/protocol/design_review/tests.rs` に 4 件ある。brief の形の検証（`crates/task-core/src/execution_plan/design_brief_tests.rs`）は `design_brief_` のまま。
+- 流れ全体の試験は `crates/task-dispatch/src/health_review/scenario_tests.rs` の `health_review_scenario_normal_change`（追加の run なし・health 文脈だけ）・`health_review_scenario_high_risk_change`（設計 review が起き、blocking で不合格）・`health_review_scenario_real_cli`（base の本物の `--print-review-policy`）。`dispatcher::tests` の private な道具を使うので、`dispatcher/tests/mod.rs` から `#[path]` で読む。
+
+### 検査器も base の版を使う
+- D2.3・D4.2 は base 側の profile を読むと書いたが、検査器（`repo_health.py` と同じ dir の module）も base の版を使う（I3）。`health_review/policy.rs` の `with_base_checker` が、target を `git rev-parse --verify <target>^{commit}` で commit に解決し、`git cat-file -e` で base に `scripts/dev/repo-health/repo_health.py` があるかを確かめ、`git archive` で base の `scripts/dev/repo-health/` と `scripts/dev/source-size-report.py` を一時 dir に出して展開し、その script を起こす。方針の読み込みは `--print-review-policy --repo <repo> --base <target_sha>`、health 文脈は `--repo <repo> --base <target_sha> --head <reviewed_sha> --policy-version 1 --out <dir>`。候補（head・作業ツリー）の検査器と profile は使わない。
+- base に検査器が無い repo は `Unavailable` でなく `Absent`（risk は `none`、health 文脈は `HealthReviewInputSkipped`）にした。候補が検査器を足しても base には無いので、候補は自分の条件を変えられない。`Unavailable` にすると、検査器を持たない repo（Celeris 以外の案件の repo）の計画がすべて設計 review に回る。
+- 時間の上限は方針の読み込みが 20 秒（`REVIEW_POLICY_TIMEOUT`）、health 文脈が 600 秒（`HEALTH_INPUT_TIMEOUT`）。health 文脈は reviewer run を起こす非同期 task の中（`spawn_blocking`）で作り、tick を止めない。
+
+### そのほかの違い
+- D3.5 の待ち: 設計 review の間、task は `ready` に戻り、`dispatch_one` の hold が planner・WU を起こさない。新しい状態・列は足していない（I9）。`done` で終わらない設計 review の run（adapter の失敗・中断・質問・予算切れ）は不合格に数えず、`[review] max_reviewer_retries` まで起こし直す。超えたら `DesignReviewed { pass: false, findings: [] }` を書く。
+- D3.5 4. の「replan で起こす」は、planner の既存の再試行（`WorkerProgress` の再試行の文 → `planner_retry_pending`）で表した。findings はその文に入り、planner の prior になる。D3.5 5. の `PlanGate` は、その計画を採用してから引く（`Trigger::PlanGate` は採用した計画の id を要る）。
+- risk の level の順位は none < low < unknown < high。repo ごとの判定のうち最も高いものを採る。
+- D4.3 の「高々 1 回」は event に記録した材料について。repo health を走らせられなかった（時間切れ・report が無い・壊れた）材料は記録せず、reviewer には `verdict = error` と理由を渡し、次の再試行で走らせ直す。
+- D5.3 の「ほかの 5 種は `repair_hint = None`」は `Some({scope: "substantive", class: <kind>})` にした。`None` だと `classify_reviewer_reason` が reason の文面（`format`・`lint` などの語）から局所修復と推測しうる。写像の結果（局所修復か replan か）は D5.1 の表のとおり。
+- D5.1 の advisory は合格の `Verdict` として `Event::ReviewVerdict` に残し、reviewer 自身の判定より前に置く（同じ criterion の最後の verdict を読む task-ops が advisory を判定と読まないため）。新しい event の種類は足していない。
+- D6.1 の `policy_mixed` は `review.json` を読めた review にだけ足す。決定的な検査が落ちて reviewer を起こさなかった review には足さない（その不合格は既に substantive で replan に回る）。
+- D6.4 の人の承認: `Approval` の子 task の題は candidate の SHA で鍵を作る（同じ candidate の再 review は同じ子を使い、SHA が変われば新しい承認を求める）。待ちは既存の子待ちと `resolve_human_approvals` の延期を使い、子が終端になったら review をやり直す。却下の reason は `human(approval task <id>):` で始め、CoS の `review_rework` の対象にしない。
+- planner run に渡す方針（`ExecutionPlannerContext.review_policy`）は task の先頭の repo の 1 つだけ。計画の採用前の判定（`design_gate`）は repo ごとに方針を読む。
+- この task の範囲外で未実装: D3.4 の `build_execution_plan_prompt` の brief の節、D5.4 の reviewer prompt の Result 節（`health`・`design` の形と 7 種の表）、reviewer prompt の health 文脈・設計 review の依頼の節。prompt の組み立ては task-worker の prompts task（01M6VTFGWFVE57YXDKHR2E436G）が受け持つ。

@@ -94,6 +94,7 @@ fn repo(repo_id: &str, policy_changed: bool) -> HealthRepoInput {
                 },
             ],
             truncated: 0,
+            reason: None,
         },
         policy: HealthPolicyState {
             source: "base".to_string(),
@@ -170,6 +171,7 @@ fn change_rules_review_without_health_keeps_the_legacy_prompt() {
 fn change_rules_review_with_health_shows_every_field() {
     let health = HealthReviewInput {
         repos: vec![repo("alpha", true), repo("beta", false)],
+        brief: None,
     };
     let prompt = review_prompt(Some(request(Some(health))));
     assert_eq!(prompt.matches(HEALTH_HEADING).count(), 1);
@@ -217,6 +219,7 @@ fn change_rules_review_with_health_shows_every_field() {
 fn change_rules_review_result_section_asks_for_the_health_verdict() {
     let changed = request(Some(HealthReviewInput {
         repos: vec![repo("alpha", true), repo("beta", false)],
+        brief: None,
     }));
     let result = result_section(Some(&changed), "artifacts");
     assert!(result.starts_with(LEGACY_RESULT));
@@ -254,6 +257,7 @@ fn change_rules_review_result_section_asks_for_the_health_verdict() {
 
     let unchanged = request(Some(HealthReviewInput {
         repos: vec![repo("beta", false)],
+        brief: None,
     }));
     let result = result_section(Some(&unchanged), "artifacts");
     assert!(result.contains("`policy` は省く"));
@@ -280,6 +284,7 @@ fn change_rules_review_kind_descriptions_are_not_copied() {
     const PROTOCOL: &str = include_str!("../../protocol/health.rs");
     let prompt = review_prompt(Some(request(Some(HealthReviewInput {
         repos: vec![repo("alpha", true)],
+        brief: None,
     }))));
     for (kind, description) in generic_kind_descriptions() {
         assert!(description.chars().count() >= 12, "{description:?}");
@@ -326,6 +331,7 @@ fn change_rules_review_truncated_material_is_shown() {
     truncated.findings.new.clear();
     let section = health_section(&request(Some(HealthReviewInput {
         repos: vec![truncated],
+        brief: None,
     })));
     assert!(
         section.contains("  - ほか 43 file は上限で省略\n"),
@@ -339,7 +345,10 @@ fn change_rules_review_truncated_material_is_shown() {
     whole.diff.files = 2;
     whole.owner_rows.clear();
     whole.invariants.clear();
-    let section = health_section(&request(Some(HealthReviewInput { repos: vec![whole] })));
+    let section = health_section(&request(Some(HealthReviewInput {
+        repos: vec![whole],
+        brief: None,
+    })));
     assert!(!section.contains("上限で省略"), "{section}");
     assert!(!section.contains("reviewable=false"));
     assert!(section.contains("- owner 地図の行: 無し"));

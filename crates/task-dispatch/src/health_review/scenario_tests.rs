@@ -193,19 +193,23 @@ impl WorkerAdapter for ScenarioAdapter {
             let file = tree.join(self.change);
             std::fs::create_dir_all(file.parent().unwrap()).unwrap();
             std::fs::write(&file, "pub fn changed() {}\n").unwrap();
-            git_out(&tree, &["add", "-A"]);
-            git_out(&tree, &["commit", "-q", "-m", self.change]);
+            // remote workspace の手元の写し（git でない）には file を書くだけ。
+            if tree.join(".git").exists() {
+                git_out(&tree, &["add", "-A"]);
+                git_out(&tree, &["commit", "-q", "-m", self.change]);
+            }
         }
         Ok(done("ok"))
     }
 }
 
 pub(super) struct Outcome {
-    store: Arc<dyn TaskStore>,
-    task: Task,
-    seen: Vec<task_worker::RunContext>,
-    _repo: tempfile::TempDir,
-    _root: tempfile::TempDir,
+    pub(super) store: Arc<dyn TaskStore>,
+    pub(super) task: Task,
+    pub(super) seen: Vec<task_worker::RunContext>,
+    /// 案件の repo（remote workspace の流れでは作業場所の dir）と workspace root。試験の間だけ残す。
+    pub(super) _repo: tempfile::TempDir,
+    pub(super) _root: tempfile::TempDir,
 }
 
 impl Outcome {

@@ -1,10 +1,12 @@
 ---
 title: 健全性v2 G2 flow-tests — 本物の prompt を通した設計 review の流れ全体の試験
 tasks: [01M6XS6T6GN5YKGCHFHH6CP5A4]
-status: blocked
+status: done
 updated: 2026-11-08
 ---
 # 健全性v2 G2 flow-tests — 本物の prompt を通した設計 review の流れ全体の試験
+
+完了日: 2026-11-08
 
 [ADR 2026-11-07 health-review-integration](../../adr/2026-11-07-health-review-integration.md) の付記「二度目の final review の差し戻しへの方針」の「流れ全体の試験（flow-tests）」を実装する。前回の流れの試験（`health_review_scenario_high_risk_change`）は偽の reviewer が `review.json` に `design` を直接書くので、prompt の欠落を検出できなかった。この task の試験の偽の reviewer は、dispatcher が渡した `RunRequest` から本物の prompt を組み、その文面を確かめてから Result 節の例の JSON を書く。ADR は編集していない（付記との違いは下に書き、unit reclose が ADR に写す）。
 
@@ -52,50 +54,54 @@ updated: 2026-11-08
 ## 提案
 - なし。
 
-# WorkUnit remote-flow（remote workspace）— 止めて replan を求める
+# WorkUnit remote-flow（remote workspace）
 
 ## 結論
-- remote workspace の task は今の Complexity Gate で常に atomic になり、planner の run が起きない。この WorkUnit の流れ（planner の計画 → `unknown` → 設計 review → 採用）は product code を変えないと起こせない。Objective の指示どおり product code は直さず、replan を求める。
-- branch に試験は足していない（この WorkUnit のコードの変更は無い）。下書きの試験は run の成果物 dir の `remote-flow-draft.patch`（`flow_tests.rs` と `scenario_tests.rs` の差分）に残した。
+- 試験 `health_review_flow_remote_workspace_plan_is_adopted_after_one_design_review` を足した。remote workspace の task の計画は、設計 review の 1 run の合格で採用される。PlanGate・plan 承認の決定・人への受信箱の項目は起きない（付記 (d) D2 のとおり）。
+- ただし今の Complexity Gate は remote workspace の task を最初の dispatch で atomic にする。remote の task で planner が走るのは、人が採用した計画（`PUT /tasks/{id}/execution-plan`）の WU が `yield.plan_issue` を返した後などの replan だけ。試験はこの本番の経路で planner を起こす。付記 (d) との違いと、人が決めることは下の「付記との違い」「未解決」に書いた。
+- product code は変えていない。
 
-## 症状
-下書きの試験 `health_review_flow_remote_workspace_plan_is_adopted_after_one_design_review`（`crates/task-dispatch/src/health_review/flow_tests.rs`）:
-- task は `compound_task`（人の明示の compound の hint）で、`WorkspaceSpec::Remote { cluster: "sirius", path: "/work/x", mode: None }`。dispatcher にクラスタ `sirius` を設定し、ssh・rsync を `true` に差し替えた（`session_resume` の remote の試験と同じ設定）。planner は brief 付きの計画を出す（`plan(NORMAL_PATH, true)`）。
-- 結果: events は `ExecutionGated { mode: Atomic, source: Policy, rule_id: "atomic/out-of-scope" }` → `ExecutionRouted` → worker の run 1 回（role なし）→ 受け入れ条件の command → `Done`。planner の run も `DesignReviewRequested` も無い。試験は `DesignReviewRequested` の件数の assert（left 0、right 1）で落ちた。
+## 経緯
+- 1 回目と 2 回目の run は、gate が remote の task を atomic にして planner に届かないことを見つけ、product code を変えずに replan を求めた。
+- 2 回目の run は `result.json` に `summary` と `yield` を両方書いた。`crates/task-worker/src/claude_code.rs` の result.json の読み取りは `question` > `summary` > `yield` の順なので、celeris はその run を done として扱い、計画の check（件数と grep）がまた落ちた。
+- 3 回目（この run）は、remote の task が planner に届く本番の経路を探した。人が採用した計画の WU の `plan_issue` から replan が起きる経路（`dispatcher/tests/work_units.rs` の `a_plan_issue_checkpoint_triggers_a_replan_and_v2_is_adopted` と同じ仕組み）で試験を書いた。前回の下書きの前置き（`routing.execution` に人の compound の判定を前もって入れる。本番では作れない状態）は使っていない。
 
-## 場所
-- `crates/task-core/src/model.rs:137` `WorkspaceSpec::local_mode` は `Remote` に `Shared` を返す（ADR-0041 D1「Remote は従来の経路（Shared 相当）」）。
-- `crates/task-core/src/execution_gate.rs:185` `out_of_scope_rule` は `local_mode() == Shared` を gate の対象外（`atomic/out-of-scope`）にする。この判定は人の明示（`execution_hint` の explicit compound）より先に効く。
-  - 同じ条件の 2 つ目の項 `remote_mode() == Shared`（186 行）は、1 つ目の項が `Remote` を全部 `Shared` として拾うので、どの task でも結果を変えない。2 つ目の項は「`Remote` のうち `mode: Shared` のものだけを対象外にする」意図で書かれた可能性がある。この意図は ADR で確かめていない（未確認）。
-- 人が後から compound に変える経路も無い。`crates/task-ops/src/regate.rs:100` の `set_execution_mode`（人の再 gate・replan の依頼）は同じ規則で `Validation` を返し、`regate.rs:186` の `record_human_plan_gate` は何もしない。
-- remote の task が計画を持つのは、人が計画を採用した（`PUT /tasks/{id}/execution-plan`）場合だけ。そのとき planner が走るのは WU の失敗などによる自動の replan だけになる。この経路は試していない（未確認）。
+## 変更
+- commit「G2 flow-tests remote-flow: remote workspace の task の replan の計画が設計 review の 1 run の合格で人の承認なしに採用される流れの試験を足す」
+  - `crates/task-dispatch/src/health_review/flow_tests.rs`
+    - `run_remote_flow`: task は `compound_task` で、workspace は `WorkspaceSpec::Remote { cluster: "sirius", path: "/work/x", mode: None }`。store に入れた後、`task_ops::execution::adopt_plan`（`PUT /tasks/{id}/execution-plan` と同じ関数、origin `Human`）で brief の無い計画（unit `a`、path `crates/foo/src/lib.rs`）を採用する。dispatcher にクラスタ `sirius` を設定し、ssh・rsync を `true` に差し替える（`session_resume` の remote の試験と同じ設定。外部ネットワークに出ない）。
+    - `PlanIssueOnce`: 最初の WU の run だけ `Terminal::Yielded { checkpoint: {"plan_issue": …} }` を返し、ほかの run は `FlowAdapter` に渡す。replan の planner は brief 付きの計画（`plan(NORMAL_PATH, true)`）を出す。
+    - `inbox_kinds_for`: `task_ops::human_inbox::human_inbox` の項目のうち、この task に触れるものの種類。
+    - `flow_adapter`: `FlowAdapter` を作る補助（`run_prompt_flow` と共用）。
+  - `crates/task-dispatch/src/health_review/scenario_tests.rs`: `Outcome` の欄を `pub(super)` にした（flow_tests.rs が組む）。`ScenarioAdapter` の WU の run は、作業ツリーが git でない（remote workspace の手元の写し）ときは file を書くだけにした（commit しない）。既存の scenario 試験の挙動は変えていない。
 
-## 診断: gate の後の流れは付記 (d) D2 のとおり動く
-下書きの試験で `task.routing.execution` に人の compound の判定（`source: Human`、`rule_id: human/explicit`）を前もって入れると（本番では作れない状態）、試験は通った。確かめた事:
+## 足した試験（prefix `health_review_flow_`、1 件。合計 3 件）
+`health_review_flow_remote_workspace_plan_is_adopted_after_one_design_review` が確かめる事:
 - `DesignReviewRequested` は 1 件で、`risk.level` は `Unknown`、reasons に `review_policy_unavailable:remote workspace` がある。
-- 設計 review の prompt に「この repo の review 方針を読めなかった。理由: `review_policy_unavailable:remote workspace`。」、`` - level: `unknown` ``、brief の値が出る。owner 地図の行は出ない。Result 節の例の JSON は `verdicts: []` で、`design` に `pass`・`findings` がある。
-- `DesignReviewed { pass: true }` の後に `ExecutionPlanned`。planner の run 1 回、設計 review の run 1 回。
-- `PlanApprovalRequested`・`PlanGateDecided`・`DecisionRequested` の event と、task に触れる人への受信箱の項目（`task_ops::human_inbox::human_inbox`）が無い。
-- `cargo nextest run -p task-dispatch --lib -E 'test(/health_review_flow_/)'` → 3 件合格（prompt-flow の 2 件と下書き）。下書きを外した提出時の HEAD では 2 件。
+- 設計 review の prompt（本物の `claude_code::build_prompt`）に `` - level: `unknown` ``、「この repo の review 方針を読めなかった。理由: `review_policy_unavailable:remote workspace`。」、「設計 brief だけで判定する」、brief の値（`rows are rewritten in place`・`` `append a column`（chosen=true） ``）が出る。owner 地図の行は出ない。Result 節の例の JSON は `verdicts: []` で、`design` に `pass`・`findings` がある。`FlowAdapter` の prompt の検査（`design_prompt_problems`）も通る。
+- `ExecutionPlanned` は origin `Human`（人の計画）、`Planner`（replan）の順に 2 件で、`DesignReviewed { pass: true }` はその間にある。不合格の `DesignReviewed` は無い。
+- planner の run は 1 回（再試行なし）、設計 review の run は 1 回。
+- `PlanApprovalRequested`・`PlanGateDecided`・`DecisionRequested` の event が無い。run が止まった後の人への受信箱に、この task の項目が無い。
+- 採用の後（WU・final review）の挙動は確かめていない（Objective のとおり）。
 
 ## 証拠（提出時の HEAD で実行。check-health の基準は `git merge-base HEAD main`、範囲の基準は `$CELERIS_WU_BASE`）
-- `bash scripts/dev/test-affected.sh` → exit 0。check-health は `verdict=pass new=0 worsened=0 existing=717`。この WorkUnit の変更はこの進捗 file だけなので「試験対象の変更なし」。
+- `cargo nextest run -p task-dispatch --lib -E 'test(/health_review_flow_/)'` → 3 件合格（prompt-flow の 2 件とこの 1 件）。
+- 計画の check: 件数 `health_review_flow_ tests: 3` の後の `cargo nextest run -p task-dispatch -E 'test(/health_review_flow_/)'` → exit 0。`grep -q 'WorkspaceSpec::Remote' … && grep -q 'fn health_review_flow_remote_workspace' …` → exit 0。
+- 範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"`）→ `flow_tests.rs`・`scenario_tests.rs`・この進捗 file だけで、範囲外は無い。
+- `bash scripts/dev/test-affected.sh` → exit 0。check-health は `verdict=pass new=0 worsened=0 existing=717`。nextest は 3587 件合格・11 件 skip。
 - `cargo clippy --workspace -- -D warnings` → exit 0。
 - `cargo fmt --all -- --check` → exit 0。
-- `sh scripts/dev/progress-index.sh --check` → ok。
-- `git diff --name-only $CELERIS_WU_BASE` と `sh "$CELERIS_WU_SCOPE_PATHS"`（範囲）→ この進捗 file だけ。
 
-## 未解決
-- remote workspace の task の計画の流れの試験（task の受け入れ条件の 3 件目の `health_review_flow_`）は無い。`health_review_flow_` は 2 件。
+## 付記との違い
+- 付記 (d) D1〜D3 は、remote workspace の task が planner の計画を持つことを前提に書かれている。今の gate では、`crates/task-core/src/execution_gate.rs` の `out_of_scope_rule`（185 行）が remote の task を `atomic/out-of-scope` にする（`crates/task-core/src/model.rs:137` の `WorkspaceSpec::local_mode` が `Remote` に `Shared` を返す）。この規則は人の明示の compound（`execution_hint` の explicit）より先に効く。remote の task で planner が走るのは、人が採用した計画の replan だけ。試験はこの経路を使った。
+- 付記 (d) D3 の「remote の task は計画ごとに reviewer の run が 1 回増える」は、この replan のときだけ起きる。
+- 試験名の prefix は `health_review_flow_`（付記は `health_review_scenario_`。prompt-flow と同じ理由）。
 
-## 提案（replan で決めること）
-- (A) gate で remote workspace の task も compound にできるようにする。例: `out_of_scope_rule` の `Shared` の判定を `Local` の mode だけに当てる（remote の WU は `parallel_mode` で既に並列 1 に落ちる）。その後、下書きの前置きを外して試験を足す。product code（`crates/task-core/`）の変更なので、範囲 check に `crates/task-core/` が要る。付記 (d) の前提（remote の task が planner の計画を持つ）に合う。
-- (B) remote workspace の task は atomic のままにし、付記 (d) D1〜D3 を「remote の task は planner の計画を持たない（人の計画の自動 replan のときだけ設計 review が起きる）」に改める。remote の試験は自動 replan の経路で書くか、atomic のまま走ることを確かめる試験にする。
-- どちらでも、付記 (d) D3 の「remote の task は計画ごとに reviewer の run が 1 回増える」は今の gate では起きない。
+## 未解決（人が決めること）
+- remote workspace の task の最初の計画をどう扱うかが決まっていない。次の (A) か (B) を選ぶ必要がある。この WorkUnit はどちらも行っていない。
+- remote の task に人が明示した compound は、gate で黙って atomic になる。`crates/task-ops/src/regate.rs` の `set_execution_mode`（人の再 gate・decompose の依頼）は remote の task への依頼を `Validation` で拒む。
+- 同じ条件の 2 つ目の項 `remote_mode() == Shared`（`execution_gate.rs:186`）は、1 つ目の項が `Remote` を全部拾うので、どの task でも結果を変えない。「`Remote` のうち `mode: Shared` のものだけを対象外にする」意図だった可能性がある（ADR では確かめていない。未確認）。
 
-## 再実行（check の不合格の後）
-- 前回の run は replan の依頼を `result.json` の summary に書いた。celeris はその run を done として扱い、計画の check 2 本を走らせ、どちらも exit 1 で落ちた。
-  - 件数の check: `health_review_flow_ tests: 2`（3 件以上が要る）。
-  - `grep -q 'WorkspaceSpec::Remote' … flow_tests.rs && grep -q 'fn health_review_flow_remote_workspace' …`: 試験が無いので落ちた。
-- この run も gate の規則（`execution_gate.rs:185`）が変わっていないことを確かめた。この 2 本の check は product code（`crates/task-core/`）を変えないと通らない。Objective は product code の変更を禁じている。そこで今回は done を返さず、`result.json` に `yield.plan_issue` を書いて replan を求める。
-- 下書きの試験（run の成果物 dir の `remote-flow-draft.patch`）は今回も branch に入れていない。本番で作れない前置き（`routing.execution` に人の compound の判定を前もって入れる）を持つ試験で件数の check を通すと、受け入れ条件を誤って満たすことになるため。
+## 提案
+- (A) gate で remote workspace の task も compound にできるようにする。例: `out_of_scope_rule` の `Shared` の判定を `Local` の mode と `Remote` の `mode: Shared` だけに当てる（remote の WU は `parallel_mode` で既に並列 1 に落ちる）。`crates/task-core/` の変更なので、別の task にする。そのときは最初の計画の流れ（gate → planner → 設計 review）の試験を、この試験に足す。
+- (B) remote workspace の task は atomic のままにし、付記 (d) D1〜D3 を「remote の task は人の計画の replan のときだけ planner の計画を持ち、そのときに設計 review が起きる」に改める。unit reclose が ADR に写す。

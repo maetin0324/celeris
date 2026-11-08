@@ -6,8 +6,8 @@
 //! 超えているため。待ちは `Approval` の子 task（SQLite）だけで表し、dispatcher のメモリに持たない（I9 と同じ）。
 //!
 //! 流れ（`Check::Human` の既存の経路を使う）:
-//! - [`Dispatcher::policy_review_gate`]（`on_review_finished` が合否を数える前）: reviewer が判定した candidate の
-//!   policy の状態（`HealthReviewInputBuilt` の `input.policy`・`HealthReviewInputSkipped` の `policy`）が
+//! - [`Dispatcher::policy_review_gate`]（`on_review_finished` が合否を数える前）: review が判定した candidate の
+//!   （`Check::Reviewer` の無い task・reviewer run の無い review も含む。I8）policy の状態（`HealthReviewInputBuilt` の `input.policy`・`HealthReviewInputSkipped` の `policy`）が
 //!   `changed` か不明（report を作れない・方針を読めない・diff を取れない。fail closed）で、ほかの判定が全部合格なら、
 //!   candidate ごとの `Approval` の子を探す（不明には D6.3 の reviewer の policy verdict を求めない）。無ければ作る（`ApprovalRequested` → 受信箱。本文に policy の file と diff の要約）。子が終端でない間は
 //!   既存の「委譲した子の待ち」で reviewing のまま待つ。人の承認（done）は合格の verdict、却下（failed・
@@ -21,7 +21,7 @@
 //! あればそれを使い（後の review で report を作り直せた）、無ければ不明の記録を使う。LLM は呼ばない。
 
 use super::*;
-use crate::health_review::input::POLICY_UNKNOWN;
+use crate::health_review::input::{POLICY_UNKNOWN, reused_from};
 use crate::review::RequiredCheckBinding;
 use task_worker::protocol::{DiffStat, HealthPolicyState, HealthRepoInput};
 
@@ -59,8 +59,9 @@ impl PolicyChange {
     }
 }
 
-/// この review で reviewer が判定した candidate のうち、policy の file を変えたもの・policy の状態が不明なもの。
-/// `reviewer_ran` が false の review（reviewer の合格を再利用した）は、`ReviewerPassReused` の元の candidate を見る。
+/// この review で判定した candidate のうち、policy の file を変えたもの・policy の状態が不明なもの。
+/// `reviewer_ran` が false の review は、reviewer の合格を再利用した candidate（`ReviewerPassReused`）なら元の
+/// candidate を見て、それ以外（reviewer run の無い review。I8）はその candidate を見る。
 pub(crate) fn policy_changes<'a>(
     events: &[(u64, Event)],
     reviewer_ran: bool,
@@ -68,28 +69,11 @@ pub(crate) fn policy_changes<'a>(
 ) -> Vec<PolicyChange> {
     let mut out = Vec::new();
     for b in bindings {
-        let judged = if reviewer_ran {
-            Some((b.target_sha.clone(), b.reviewed_sha.clone()))
+        let own = || (b.target_sha.clone(), b.reviewed_sha.clone());
+        let (target, reviewed) = if reviewer_ran {
+            own()
         } else {
-            events.iter().rev().find_map(|(_, e)| match e {
-                Event::ReviewerPassReused {
-                    repo_id,
-                    target_sha,
-                    reviewed_sha,
-                    from_target_sha,
-                    from_reviewed_sha,
-                    ..
-                } if *repo_id == b.repo_id
-                    && *target_sha == b.target_sha
-                    && *reviewed_sha == b.reviewed_sha =>
-                {
-                    Some((from_target_sha.clone(), from_reviewed_sha.clone()))
-                }
-                _ => None,
-            })
-        };
-        let Some((target, reviewed)) = judged else {
-            continue;
+            reused_from(events, b.repo_id, &b.target_sha, &b.reviewed_sha).unwrap_or_else(own)
         };
         out.extend(candidate_policy(
             events,
@@ -180,7 +164,8 @@ pub(crate) fn approval_objective(change: &PolicyChange, reviewer_reason: Option<
     let c = change;
     let mut lines = vec![
         match &c.unknown {
-            None => "The reviewer approved a change to the repo-health policy files. It passes only with a human approval (ADR 2026-11-07-health-review-integration D6.4). Reject to send it back for a replan.",
+            None if reviewer_reason.is_some() => "The reviewer approved a change to the repo-health policy files. It passes only with a human approval (ADR 2026-11-07-health-review-integration D6.4). Reject to send it back for a replan.",
+            None => "This candidate changes the repo-health policy files. It passes only with a human approval (ADR 2026-11-07-health-review-integration I8・D6.4). Reject to send it back for a replan.",
             Some(_) => "The repo-health policy state of this candidate could not be determined, so it is treated as a policy change (fail closed, ADR 2026-11-07-health-review-integration I8・D6.4). It passes only with a human approval. Reject to send it back for a replan.",
         }
         .to_string(),
@@ -244,13 +229,29 @@ pub(crate) fn approval_verdict(
     }
 }
 
+/// 人の承認・却下の verdict を付ける criterion: `Check::Reviewer` の条件があればその条件（従来どおり）。無ければ
+/// この review の verdict の最大の `criterion_idx` の次（acceptance の外の暗黙の条件。delivery の reviewer の条件・
+/// plan・必須検査の暗黙の条件と重ならない）。acceptance の外の不合格は `try_review_repair` が `Check::Human` と同じに
+/// 扱う（修復しない = substantive → replan）ので、却下が `Check::Command` の局所修復に化けない。
+pub(crate) fn policy_criterion(task: &Task, outcome: &ReviewOutcome) -> usize {
+    let reviewer = task
+        .acceptance
+        .iter()
+        .position(|c| matches!(c.check, Check::Reviewer));
+    reviewer.unwrap_or_else(|| {
+        let next = outcome.verdicts.iter().map(|v| v.criterion_idx + 1).max();
+        next.unwrap_or(0).max(task.acceptance.len())
+    })
+}
+
 fn is_policy_approval(task: &Task) -> bool {
     task.kind == TaskKind::Approval && task.title.starts_with(POLICY_APPROVAL_TITLE)
 }
 
 impl Dispatcher {
     /// `on_review_finished` が `all_pass` を数える前に呼ぶ。policy の変更が無い review・不合格を含む review では
-    /// 何もしない（不合格は従来どおり repair/replan）。
+    /// 何もしない（不合格は従来どおり repair/replan）。`Check::Reviewer` の無い task（reviewer run の無い review。
+    /// I8）にも掛ける。verdict を付ける criterion は [`policy_criterion`]。
     pub(crate) fn policy_review_gate(
         &self,
         task: &Task,
@@ -262,13 +263,10 @@ impl Dispatcher {
             .iter()
             .filter_map(|r| r.binding.as_ref())
             .collect();
-        let criterion = task
-            .acceptance
-            .iter()
-            .position(|c| matches!(c.check, Check::Reviewer));
-        let (Some(criterion), false) = (criterion, bindings.is_empty()) else {
+        if bindings.is_empty() {
             return Ok(());
-        };
+        }
+        let criterion = policy_criterion(task, outcome);
         let changes = policy_changes(
             &self.store.events_for(task.id)?,
             review_run.is_some(),
@@ -328,3 +326,7 @@ mod tests;
 #[cfg(test)]
 #[path = "policy_review/unknown_tests.rs"]
 mod unknown_tests;
+
+#[cfg(test)]
+#[path = "policy_review/no_reviewer_tests.rs"]
+mod no_reviewer_tests;

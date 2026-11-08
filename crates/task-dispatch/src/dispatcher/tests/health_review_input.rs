@@ -136,6 +136,20 @@ async fn review_flow(
     fail_first: bool,
     check: Option<String>,
 ) -> Reviewed {
+    let path = "crates/foo/src/lib.rs";
+    review_flow_at(repo, reviewer, fail_first, check, path)
+        .await
+        .0
+}
+
+/// [`review_flow`] で worktree の `path` を変える形。続きを流せるよう dispatcher と worktree の root も返す。
+async fn review_flow_at(
+    repo: &std::path::Path,
+    reviewer: bool,
+    fail_first: bool,
+    check: Option<String>,
+    path: &str,
+) -> (Reviewed, Dispatcher, tempfile::TempDir) {
     let ws = tempfile::tempdir().unwrap();
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = reviewing_task(repo, &store);
@@ -157,8 +171,8 @@ async fn review_flow(
     let mut d = worktree_dispatcher(store.clone(), adapter, ws.path(), None);
     let wt = d.local_worktree_for(&task).unwrap();
     wt.ensure_blocking().unwrap();
-    std::fs::create_dir_all(wt.dir.join("crates/foo/src")).unwrap();
-    let head = commit_file(&wt.dir, "crates/foo/src/lib.rs", "pub fn foo() {}\n");
+    std::fs::create_dir_all(wt.dir.join(path).parent().unwrap()).unwrap();
+    let head = commit_file(&wt.dir, path, "pub fn foo() {}\n");
     let target = git_out(repo, &["rev-parse", "refs/heads/main"]);
     assert!(
         d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
@@ -168,7 +182,7 @@ async fn review_flow(
     let status = store.get(task.id).unwrap().unwrap().status;
     let events = events_of(&store, &task);
     let seen = seen.lock().unwrap().clone();
-    Reviewed {
+    let reviewed = Reviewed {
         store,
         seen,
         events,
@@ -176,7 +190,8 @@ async fn review_flow(
         target,
         head,
         status,
-    }
+    };
+    (reviewed, d, ws)
 }
 
 fn built(events: &[Event]) -> Vec<(String, String, String)> {
@@ -372,18 +387,183 @@ async fn health_review_policy_unknown_flow_missing_report_waits_for_a_human() {
     );
 }
 
-/// reviewer 条件の無い review（決定的 check だけ）と、その間の tick では作らない。
+/// policy の file（repo health の profile）を変えたと書く report（stub の検査器が書く）。
+fn policy_changed_report() -> serde_json::Value {
+    let mut report = report();
+    report["policy"] = serde_json::json!({"version": "1", "source": "base", "changed": true, "files": [
+        {"path": POLICY_FILE, "base_blob": "a".repeat(40), "head_blob": "b".repeat(40)},
+    ]});
+    report
+}
+
+const POLICY_FILE: &str = "scripts/dev/repo-health/profiles/celeris.toml";
+
+/// `HealthReviewInputSkipped` のうち policy の状態を持つもの（`review_run`・candidate・`policy`）。
+fn policy_records(events: &[Event]) -> Vec<(String, String, String, serde_json::Value)> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::HealthReviewInputSkipped {
+                review_run,
+                target_sha,
+                reviewed_sha,
+                policy: Some(policy),
+                ..
+            } => Some((
+                review_run.clone(),
+                target_sha.clone(),
+                reviewed_sha.clone(),
+                policy.clone(),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+fn policy_approvals(store: &Arc<dyn TaskStore>, task: &Task) -> Vec<Task> {
+    store
+        .children(task.id)
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.kind == TaskKind::Approval)
+        .collect()
+}
+
+/// I8・受け入れ条件 1: `Check::Reviewer` の無い task（command の条件だけ）で policy 不変の通常変更は、承認の子なしで
+/// 合格する。reviewer には何も渡さず（reviewer run も材料の `HealthReviewInputBuilt` も無い）、repo health は
+/// candidate ごとに 1 回だけ走り、policy の状態を `HealthReviewInputSkipped`（`review_run` は worker run）に残す。
+/// 同じ candidate でもう一度作っても repo health は走らない（記録を再利用する）。
 #[tokio::test]
-async fn health_review_input_not_built_by_ticks_or_reviews_without_a_reviewer() {
-    let (repo, _scratch, log) = health_repo("base");
+async fn health_review_policy_no_reviewer_normal_change_passes_without_approval() {
+    use crate::health_review::input::{
+        CandidateRepo, HEALTH_INPUT_TIMEOUT, HealthInputWork, NO_REVIEWER, build_health_input,
+    };
+    let (repo, scratch, log) = health_repo("base");
     let r = review_flow(repo.path(), false, false, None).await;
     assert_eq!(r.status, Status::Done, "{:?}", r.events);
-    assert!(r.seen.is_empty());
-    assert!(log_lines(&log).is_empty());
-    assert!(!r.events.iter().any(|e| matches!(
-        e,
-        Event::HealthReviewInputBuilt { .. } | Event::HealthReviewInputSkipped { .. }
-    )));
+    assert!(r.seen.is_empty() && reviewer_runs(&r.events).is_empty());
+    assert!(built(&r.events).is_empty());
+    assert_eq!(
+        log_lines(&log).len(),
+        1,
+        "repo health ran once for the candidate"
+    );
+    assert!(log_lines(&log)[0].contains(&format!("--base {} --head {}", r.target, r.head)));
+    let records = policy_records(&r.events);
+    assert_eq!(records.len(), 1, "{:?}", r.events);
+    let (run, target, head, policy) = &records[0];
+    assert_eq!((run.as_str(), target, head), ("worker", &r.target, &r.head));
+    assert_eq!(policy["changed"], false);
+    assert_eq!(policy["source"], "base");
+    assert!(r.events.iter().any(|e| matches!(e,
+        Event::HealthReviewInputSkipped { reason, .. } if reason == NO_REVIEWER)));
+    assert!(policy_approvals(&r.store, &r.task).is_empty());
+
+    let again = HealthInputWork {
+        store: r.store.clone(),
+        task_id: r.task.id,
+        review_run: "worker-2".into(),
+        policy_only: true,
+        candidates: vec![CandidateRepo {
+            repo_id: r.task.repos[0].repo_id.to_string(),
+            dir: repo.path().to_path_buf(),
+            target_sha: r.target.clone(),
+            reviewed_sha: r.head.clone(),
+        }],
+        skipped: vec![],
+        out_dir: scratch.path().join("again"),
+        timeout: HEALTH_INPUT_TIMEOUT,
+    };
+    assert!(build_health_input(&again).is_none());
+    assert_eq!(log_lines(&log).len(), 1, "the recorded state is reused");
+    assert_eq!(policy_records(&events_of(&r.store, &r.task)).len(), 1);
+}
+
+/// I8・受け入れ条件 0: `Check::Reviewer` の無い task で policy の file だけを変えた candidate は、決定的な検査が全部
+/// 合格しても承認の子を作って reviewing のまま待つ（人の承認なしには合格しない）。人が承認すると review をやり直して
+/// 合格する。やり直しの review は同じ candidate の記録を使い、repo health を走らせない。
+#[tokio::test]
+async fn health_review_policy_no_reviewer_policy_file_candidate_needs_a_human() {
+    let (repo, _scratch, log) = health_repo_with("base", Some(policy_changed_report()));
+    let (r, mut d, _ws) = review_flow_at(repo.path(), false, false, None, POLICY_FILE).await;
+    assert_eq!(r.status, Status::Reviewing, "{:?}", r.events);
+    assert!(r.seen.is_empty() && reviewer_runs(&r.events).is_empty());
+    assert_eq!(log_lines(&log).len(), 1);
+    let approvals = policy_approvals(&r.store, &r.task);
+    assert_eq!(approvals.len(), 1, "{:?}", r.events);
+    let child = &approvals[0];
+    assert_eq!(
+        child.title,
+        format!(
+            "Policy change approval: {} @ {}",
+            r.task.repos[0].repo_id,
+            &r.head[..12]
+        )
+    );
+    assert!(
+        child
+            .objective
+            .contains(&format!("policy files: {POLICY_FILE}"))
+            && child
+                .objective
+                .contains("This candidate changes the repo-health policy files"),
+        "{}",
+        child.objective
+    );
+    assert!(
+        !r.events
+            .iter()
+            .any(|e| matches!(e, Event::ReviewVerdict { reason, .. }
+        if reason.contains("health:policy")))
+    );
+    // 承認の子が終端でない間は tick を回しても合格しない。
+    assert!(run_until_idle(&mut d, 50).await.idle);
+    assert_eq!(
+        r.store.get(r.task.id).unwrap().unwrap().status,
+        Status::Reviewing
+    );
+
+    r.store
+        .apply_transition(
+            child.id,
+            Trigger::Approve,
+            Some(Event::ApprovalDecided {
+                by: "human".into(),
+                approved: true,
+                note: None,
+            }),
+        )
+        .unwrap();
+    assert!(run_until_idle(&mut d, 200).await.idle);
+    let events = events_of(&r.store, &r.task);
+    assert_eq!(
+        r.store.get(r.task.id).unwrap().unwrap().status,
+        Status::Done,
+        "{events:?}"
+    );
+    let approved: Vec<usize> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::ReviewVerdict {
+                criterion_idx,
+                pass: true,
+                reason,
+                ..
+            } if reason.contains("health:policy approved by a human") => Some(*criterion_idx),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(approved.len(), 1, "{events:?}");
+    assert!(
+        approved[0] >= r.task.acceptance.len(),
+        "not on the command criterion"
+    );
+    assert_eq!(
+        log_lines(&log).len(),
+        1,
+        "the re-review reused the candidate's record"
+    );
+    assert_eq!(policy_approvals(&r.store, &r.task).len(), 1);
 }
 
 /// `reviewer_reuse`（target の進みが候補の差分と重ならない）で reviewer を省いた再 review では作らない。

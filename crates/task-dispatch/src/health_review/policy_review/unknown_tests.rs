@@ -18,12 +18,12 @@ use crate::health_review::input::{
 use crate::health_review::policy::{CHECKER_SCRIPT, REVIEW_POLICY_SCHEMA};
 use crate::review::RequiredRepoResult;
 
-const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-const POLICY_FILE: &str = "scripts/dev/repo-health/profiles/celeris.toml";
+pub(super) const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+pub(super) const POLICY_FILE: &str = "scripts/dev/repo-health/profiles/celeris.toml";
 
 /// stub の検査器の振る舞い。
 #[derive(Clone, Copy)]
-enum Policy {
+pub(super) enum Policy {
     /// `[review]` あり（`source = base`）。
     Present,
     /// `[review]` なし（`source = absent`）。
@@ -34,7 +34,7 @@ enum Policy {
 
 /// stub の report の書き方。
 #[derive(Clone, Copy)]
-enum Report {
+pub(super) enum Report {
     /// 正しい report（`policy.changed` は引数）。
     Valid(bool),
     /// report を書かずに exit 2。
@@ -115,29 +115,47 @@ fn stub_repo(dir: &Path, checker: Option<(Policy, Report)>, changed: &str) -> (S
     (target, git(dir, &["rev-parse", "HEAD"]))
 }
 
-struct Case {
-    store: Arc<dyn TaskStore>,
-    d: Dispatcher,
-    task: Task,
-    repo: RepoId,
-    target: String,
-    reviewed: String,
+pub(super) struct Case {
+    pub store: Arc<dyn TaskStore>,
+    pub d: Dispatcher,
+    pub task: Task,
+    pub repo: RepoId,
+    pub target: String,
+    pub reviewed: String,
+    /// task が `Check::Reviewer` を持ち reviewer run（`r1`）が判定した review か（false は command の条件だけの
+    /// task で reviewer run の無い review。材料作りは `policy_only`）。
+    pub reviewer: bool,
     _dirs: (tempfile::TempDir, tempfile::TempDir),
 }
 
 /// reviewer の条件（index 0）を持つ reviewing の task で、stub の検査器を本当に起こして final review の材料を作る。
 fn case(checker: Option<(Policy, Report)>, changed: &str) -> Case {
+    case_for(checker, changed, true)
+}
+
+/// [`case`] の reviewer の有無を選べる形。`reviewer = false` は command の条件（index 0）だけの task で、材料作りは
+/// reviewer run の無い review（`policy_only`、`review_run` は worker run の `worker`）。
+pub(super) fn case_for(checker: Option<(Policy, Report)>, changed: &str, reviewer: bool) -> Case {
     let (repo_dir, scratch) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let (target, reviewed) = stub_repo(repo_dir.path(), checker, changed);
     let store: Arc<dyn TaskStore> = Arc::new(task_core::SqliteStore::open_in_memory().unwrap());
-    let mut task = new_task(scratch.path(), Check::Reviewer, 2);
+    let check = if reviewer {
+        Check::Reviewer
+    } else {
+        Check::Command {
+            cmd: "true".into(),
+            expect_exit: 0,
+        }
+    };
+    let mut task = new_task(scratch.path(), check, 2);
     task.status = Status::Reviewing;
     store.insert(&task).unwrap();
     let repo = RepoId::new();
     let work = HealthInputWork {
         store: store.clone(),
         task_id: task.id,
-        review_run: "r1".into(),
+        review_run: if reviewer { "r1" } else { "worker" }.into(),
+        policy_only: !reviewer,
         candidates: vec![CandidateRepo {
             repo_id: repo.to_string(),
             dir: repo_dir.path().to_path_buf(),
@@ -157,18 +175,25 @@ fn case(checker: Option<(Policy, Report)>, changed: &str) -> Case {
         repo,
         target,
         reviewed,
+        reviewer,
         _dirs: (repo_dir, scratch),
     }
 }
 
 impl Case {
-    /// reviewer が合格を書いた review の outcome（reviewer の policy verdict は無い）。
-    fn outcome(&self) -> ReviewOutcome {
+    /// reviewer が合格を書いた review（reviewer の policy verdict は無い）、または command の条件が合格した review の
+    /// outcome。
+    pub(super) fn outcome(&self) -> ReviewOutcome {
         ReviewOutcome {
             verdicts: vec![Verdict {
                 criterion_idx: 0,
                 pass: true,
-                reason: "reviewer(r1): ok".into(),
+                reason: if self.reviewer {
+                    "reviewer(r1): ok"
+                } else {
+                    "exit 0"
+                }
+                .into(),
                 repair_hint: None,
             }],
             plan: None,
@@ -189,15 +214,16 @@ impl Case {
     }
 
     /// 関門に通した outcome。
-    fn gate(&self) -> ReviewOutcome {
+    pub(super) fn gate(&self) -> ReviewOutcome {
         let mut outcome = self.outcome();
+        let review_run = self.reviewer.then_some("r1");
         self.d
-            .policy_review_gate(&self.task, Some("r1"), &mut outcome)
+            .policy_review_gate(&self.task, review_run, &mut outcome)
             .unwrap();
         outcome
     }
 
-    fn approvals(&self) -> Vec<Task> {
+    pub(super) fn approvals(&self) -> Vec<Task> {
         self.store
             .children(self.task.id)
             .unwrap()
@@ -207,7 +233,7 @@ impl Case {
     }
 
     /// 承認の子を作って待つ（合格にならない）ことを確かめ、その子を返す。
-    fn assert_waits(&self) -> Task {
+    pub(super) fn assert_waits(&self) -> Task {
         let outcome = self.gate();
         assert_eq!(outcome.verdicts.len(), 1, "{:?}", outcome.verdicts);
         let approvals = self.approvals();
@@ -231,7 +257,7 @@ impl Case {
         child
     }
 
-    fn decide(&self, child: &Task, approved: bool) {
+    pub(super) fn decide(&self, child: &Task, approved: bool) {
         let trigger = if approved {
             Trigger::Approve
         } else {

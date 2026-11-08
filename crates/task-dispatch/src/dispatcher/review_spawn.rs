@@ -722,7 +722,7 @@ impl Dispatcher {
             account_adapter = None;
             reviewer_reuse = Some(reason);
         }
-        let health = self.health_job(&task, &synced, remote_workspace, reviewer_run.as_ref());
+        let health = self.health_job(&task, &synced, &run_id, reviewer_run.as_ref());
         // ADR-0117 D1: reviewer run には対象 task と祖先の人の決定・回答を渡す（store から集める。LLM は呼ばない）。
         let (decisions, answers) = if reviewer_run.is_some() {
             self.review_human_inputs(&task)?

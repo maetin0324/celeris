@@ -176,6 +176,7 @@ fn work(
         store: store.clone(),
         task_id: TaskId::new(),
         review_run: review_run.into(),
+        policy_only: false,
         candidates: vec![candidate.clone()],
         skipped: vec![("repo-remote".into(), "remote workspace".into())],
         out_dir: out.to_path_buf(),

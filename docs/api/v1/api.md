@@ -944,7 +944,9 @@ run は止めない。同じ内容は `worker_progress`（`kind = status`・`err
   `HealthRepoInput` の写し、`policy` は `HealthPolicyState` の写し（base に検査器がある repo だけ。candidate
   `target_sha..reviewed_sha` の policy の状態で、policy の関門（同 ADR I8・D6.4）が読む）。`policy.source` が
   `unavailable` の記録は policy の状態を決められなかった（不明）ことを表し、関門は変更と同じに人の承認を求める。
-  状態は変えない。
+  reviewer run の無い final review（`Check::Reviewer` の無い task）は reviewer に何も渡さず、candidate ごとに
+  `health_review_input_skipped`（`review_run` は worker run の id、`policy` 付き）だけを残す（同じ candidate の既知の
+  記録があれば残さない）。状態は変えない。
 
 `work_unit_committed` / `phase_integrated` / `work_units_serialized` は応答の `items[]` には現れるが、`types` の語彙には無い（指定すると 400）。
 

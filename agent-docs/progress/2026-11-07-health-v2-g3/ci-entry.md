@@ -1,12 +1,12 @@
 ---
 title: 健全性v2 G3 ci-entry — CI から呼ぶ入口 scripts/dev/repo-health/ci.sh
 tasks: [01M6Y8EG6QN8S421XYJNVDCPTA]
-status: running
+status: done
 updated: 2026-11-08
 ---
 # 健全性v2 G3 ci-entry — CI から呼ぶ入口 scripts/dev/repo-health/ci.sh
 
-完了日: 未完（policy の変更の人の承認と、operator によるこの branch の main への no-ff merge を待つ）
+完了日: 2026-11-08（人が決定 ci-entry-policy-merge で policy の変更を承認し、operator がこの branch を main に no-ff merge した。merge の後の確認は WorkUnit `land`）
 
 WorkUnit `ci-script`（task 01M6Y8EG6QN8S421XYJNVDCPTA の unit `ci-entry`）。[ADR 2026-11-07 健全性を設計と review に組み込む](../../adr/2026-11-07-health-review-integration.md) の D6.1〜D6.6 に従う。`scripts/dev/repo-health/ci.sh` は Celeris profile の `policy_paths`（`^scripts/dev/repo-health/`）に当たる policy の file なので、この branch は policy の file を変える branch になる。前例は [G2 profiles](../2026-11-07-health-v2-g2/guideline-profiles.md) と [G2 review-policy-cli](../2026-11-07-health-v2-g2/dispatch/review-policy-cli.md)。基準は `$CELERIS_WU_BASE`（統合後は `git merge-base HEAD main`）。導入手順の文書は後続の unit `ci-guide` が書く。
 
@@ -41,8 +41,21 @@ WorkUnit `ci-script`（task 01M6Y8EG6QN8S421XYJNVDCPTA の unit `ci-entry`）。
 - `sh "$CELERIS_WU_SCOPE_PATHS"` → この進捗、`scripts/dev/repo-health/ci.sh`、`scripts/dev/tests/repo_health_gate.sh` の 3 件だけ。`repo_health.py`・`validate_report.py`・`health/`・`schema/`・`rules/`・`profiles/` の差分は無い。
 - `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0（Rust は変えていない）。
 
+## main への merge（WorkUnit `land`）
+- 人は決定 ci-entry-policy-merge で「承認する。operator がこの branch を main に no-ff merge してから再開する」を選んだ。
+- operator の merge commit の件名は「integrate 01M6Y8EG6Q: CI の入口 scripts/dev/repo-health/ci.sh（policy の branch、人の承認済み。ADR health-review-integration D6.6）」。main の前の先端（件名「integrate wu/reclose-docs (phase close3)」）とこの branch の先端（件名「integrate wu/ci-script (phase impl)」）の 2 親を持つ。
+- `git merge-base --is-ancestor "$(git log -1 --format=%H -- scripts/dev/repo-health/ci.sh)" main` → exit 0（件名「G3 ci-entry: CI の入口 scripts/dev/repo-health/ci.sh とゲートの試験 (7)」の commit は main の祖先）。`git cat-file -e main:scripts/dev/repo-health/ci.sh` → exit 0。
+- merge の時点で `git diff --stat HEAD main` は差分 0（この branch と main の検査器は同じ）。main は取り込んでいない。
+
+## merge の後の検査（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
+- `bash scripts/dev/check-health.sh` → exit 0。base は `git merge-base HEAD main`（件名「integrate wu/ci-script (phase impl)」の commit）。verdict pass、rule 21 件がすべて pass、`policy.changed` は pass（`policy.changed` false）、`fail_grade=0 new=0 worsened=0`。merge の前の exit 1（`policy.changed` fail）が解けた。
+- `bash scripts/dev/test-affected.sh` → exit 0（check-health.sh が通り、`--list` の対象は 0 件。変更はこの進捗だけ）。
+- `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/tests/repo_health_gate.sh` → exit 0、`OK (1)`〜`OK (7)` と `repo_health_gate: all checks passed`。
+- 文書検査 3 本（`bash scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`・`sh scripts/dev/progress-index.sh --check`） → 3 本とも exit 0。
+
 ## 未解決
-- 必須検査 `test-affected.sh` と `check-health.sh` は、この branch が main に入るまで `policy.changed` で exit 1 になる（D6.6 の想定どおり）。task の計画では、人が policy の変更を承認した後、operator がこの branch を main に no-ff merge する（unit `land` が merge の後の確認と進捗の done を受け持つ）。
+- 解けた: merge の前の「必須検査 `test-affected.sh` と `check-health.sh` は main に入るまで `policy.changed` で exit 1」（D6.6）は、上の merge で解けた。
 - D6.2 は働かない: この branch は policy の file（ci.sh）のほかに、ゲートの試験（`scripts/dev/tests/repo_health_gate.sh`）とこの進捗を変える。どちらも policy の file でない（前例 review-policy-cli の「未解決」と同じ）。
 - ci.sh は深さの不足を report の `snapshot.base.reachable` が false であることで知る。repo_health.py は base と head の tree 同士を比べるので、base の commit が clone にあれば、間の履歴が無くても深さを求めない。
 

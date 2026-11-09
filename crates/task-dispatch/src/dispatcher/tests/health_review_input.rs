@@ -370,7 +370,9 @@ async fn health_review_input_policy_absent_is_skipped() {
 async fn health_review_policy_unknown_flow_missing_report_is_not_a_pass() {
     let (repo, _scratch, log) = health_repo_with("base", None);
     let r = review_flow(repo.path(), true, false, None).await;
-    assert_eq!(r.status, Status::Failed, "{:?}", r.events);
+    // health enforcement loop D3.4（limits review-wire）: health の Error は ReviewFail（retry 切れの Failed）にせず、
+    // `ReviewBlocked` で Blocked にして `health_check_error: <理由>` を人に聞く。
+    assert_eq!(r.status, Status::Blocked, "{:?}", r.events);
     assert_eq!(
         log_lines(&log).len(),
         1,

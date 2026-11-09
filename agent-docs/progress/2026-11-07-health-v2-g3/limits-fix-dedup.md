@@ -45,7 +45,9 @@ WorkUnit `fix-dedup`（task 01M70C8NHEANARRKZD9RGKZ87D）。final review の不�
 - `cargo nextest list --workspace -E 'test(/health_limits_/)' --message-format oneline | grep -c health_limits_` → 39
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
-- `bash scripts/dev/test-affected.sh` → 下の「test-affected」
+- `bash scripts/dev/test-affected.sh`（対象 celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch）→ exit 0。nextest 3685 passed・11 skipped、check-health は `repo_health_gate: all checks passed`
+- `sh scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-adr-numbers.sh`・`sh scripts/dev/progress-index.sh --check` → いずれも exit 0
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → 変更は上の「変更」の 8 file だけ
 
 ## 未解決
 - `limits.md`（limits の記録）の未解決 2・3・4 は、この直しの後の事実と合わない（hash の規則・2 つの語・review の文字列）。Objective どおり `limits.md` は変えず、reclose が改める。

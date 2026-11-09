@@ -467,7 +467,7 @@ impl HealthGateOutcome {
 /// D1.2・D1.3: 経路共通の入口。`repo_facts` → `applicability` → `run_health_check` の順に呼び、結果を分ける。
 /// `request.timeout` は事実の読み取りと評価の全体の上限。同梱の検査器は `request.bundled` だけを使う。LLM は呼ばない。
 pub fn health_gate(request: &HealthGateRequest<'_>) -> HealthGateOutcome {
-    let deadline = Instant::now() + request.timeout;
+    let deadline = Instant::now() + test_timeout::cap(request.worktree, request.timeout);
     let blank = |verdict, reason: String| HealthEvidence {
         repo_id: request.repo_id,
         base_sha: request.base.to_string(),
@@ -954,3 +954,37 @@ pub(super) fn sha256_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 #[path = "gate_tests.rs"]
 pub(crate) mod tests;
+
+/// 試験専用の口（D4.2）: 経路は `HEALTH_INPUT_TIMEOUT`（600 秒）を渡すので、時間切れの試験は登録した作業ツリーの下の
+/// 評価だけ上限を縮める（終わらない stub と組み合わせ、600 秒待たずに時間切れを作る）。鍵は作業ツリーの path なので、
+/// 同じ process の他の試験の評価には効かない。本番の build では上限を変えない。
+#[cfg(test)]
+pub(crate) mod test_timeout {
+    use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    static CAPS: Mutex<Vec<(PathBuf, Duration)>> = Mutex::new(Vec::new());
+
+    /// `root` の下の作業ツリーの評価の上限を `timeout` 以下にする。
+    pub(crate) fn cap_under(root: &Path, timeout: Duration) {
+        CAPS.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((root.to_path_buf(), timeout));
+    }
+
+    pub(super) fn cap(worktree: &Path, timeout: Duration) -> Duration {
+        let caps = CAPS.lock().unwrap_or_else(|e| e.into_inner());
+        (caps.iter())
+            .filter(|(root, _)| worktree.starts_with(root))
+            .map(|(_, t)| *t)
+            .fold(timeout, Duration::min)
+    }
+}
+
+#[cfg(not(test))]
+mod test_timeout {
+    pub(super) fn cap(_: &std::path::Path, timeout: std::time::Duration) -> std::time::Duration {
+        timeout
+    }
+}

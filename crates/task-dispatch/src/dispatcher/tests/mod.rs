@@ -3240,3 +3240,4 @@ mod orphan_work_units;
 /// （`src/dispatcher/tests/stagnation.rs`）。
 mod stagnation;
 mod variant_pin;
+mod health_limits_budget;

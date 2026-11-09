@@ -104,6 +104,7 @@ mod config_events;
 mod decision_log;
 mod events;
 mod execution;
+pub mod health_inventory;
 mod idempotency;
 mod instances;
 mod integrations;

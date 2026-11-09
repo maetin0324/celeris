@@ -296,6 +296,17 @@ pub struct HealthEvidence {
     pub reviewable: bool,
 }
 
+/// Blocking finding の説明。fail 級かどうかの正本は `HealthEvidence.blocking` だけ。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct HealthBlockingDetail {
+    pub fingerprint: String,
+    pub rule_id: String,
+    pub paths: Vec<String>,
+    /// report に message が無ければ空文字列。
+    #[serde(default)]
+    pub message: String,
+}
+
 /// 検査器の版（D2.3）: domain `celeris.repo-health.checker/1` で、[`CHECKER_DIR`] の tree id と
 /// [`SOURCE_SIZE_REPORT`] の blob id（無ければ `absent`）を長さ付きで入れた sha256 hex。base の版は
 /// `git rev-parse <base>:<path>` の値、同梱の版は `CHECKER_TREE` の値を渡す。

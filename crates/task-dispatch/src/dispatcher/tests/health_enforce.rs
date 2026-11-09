@@ -21,6 +21,9 @@ use task_core::required_checks::health::{
 
 /// base の stub の検査器。`--print-review-policy` は `[review]` の無い repo の方針。report の mode は、作業ツリー
 /// （`--repo`）に `FIXED` があれば合格、無ければ隣の `stub.json` の `exit` と report（fail 級の `deps.violation`）。
+/// finding の fingerprint は作業ツリーの `FINDING` の 1 行。無ければ `deps.violation:` に作業ツリーの `FP` の数（無ければ 1）
+/// を 16 桁で続けたもの（既定は `deps.violation:0000000000000001`）。往復の試験〈`health_limits_integration.rs`〉は `FP`、
+/// 修復ごとに指摘を変える試験〈`health_limits_review_*`〉は `FINDING` を書く。
 const STUB: &str = r#"import json, os, sys
 here = os.path.dirname(os.path.abspath(__file__))
 argv = sys.argv[1:]
@@ -32,8 +35,14 @@ with open(os.path.join(here, "stub.json")) as f:
     stub = json.load(f)
 repo = argv[argv.index("--repo") + 1]
 fixed = os.path.exists(os.path.join(repo, "FIXED"))
+fp_file = os.path.join(repo, "FP")
+number = int(open(fp_file).read()) if os.path.exists(fp_file) else 1
 code = 0 if fixed else stub["exit"]
-findings = [] if fixed else [{"rule_id": "deps.violation", "fingerprint": "deps.violation:0000000000000001",
+fp = "deps.violation:%016d" % number
+if os.path.exists(os.path.join(repo, "FINDING")):
+    with open(os.path.join(repo, "FINDING")) as f:
+        fp = f.read().strip()
+findings = [] if fixed else [{"rule_id": "deps.violation", "fingerprint": fp,
     "severity": "error", "delta": "new", "exception": None, "evidence": [{"path": "src/lib.rs"}]}]
 report = {"schema": "celeris.repo-health.report/1", "tool": {"name": "repo_health.py", "version": "stub"},
     "inputs": {"profile": {"resolved": "builtin", "source": "builtin"}},
@@ -87,14 +96,14 @@ fn write_checker(root: &Path, exit: i32) {
 }
 
 /// 試験の repo に stub の検査器（`exit` は FIXED が無いときの exit）を commit する。
-fn commit_base_checker(repo: &Path, exit: i32) {
+pub(super) fn commit_base_checker(repo: &Path, exit: i32) {
     write_checker(repo, exit);
     git(repo, &["add", "-A"]);
     git(repo, &["commit", "-q", "-m", "checker"]);
 }
 
 /// `(work_unit_id, cmd, pass, health)` の health の項目の終了 event（WU の check と段の統合の両方）。
-fn health_items(events: &[Event]) -> Vec<(String, bool, HealthEvidence)> {
+pub(super) fn health_items(events: &[Event]) -> Vec<(String, bool, HealthEvidence)> {
     events
         .iter()
         .filter_map(|e| match e {
@@ -117,7 +126,11 @@ fn health_items(events: &[Event]) -> Vec<(String, bool, HealthEvidence)> {
         .collect()
 }
 
-fn unit(store: &Arc<dyn TaskStore>, task_id: TaskId, key: &str) -> task_core::WorkUnitRow {
+pub(super) fn unit(
+    store: &Arc<dyn TaskStore>,
+    task_id: TaskId,
+    key: &str,
+) -> task_core::WorkUnitRow {
     store
         .work_units_for(task_id)
         .unwrap()
@@ -126,7 +139,7 @@ fn unit(store: &Arc<dyn TaskStore>, task_id: TaskId, key: &str) -> task_core::Wo
         .unwrap_or_else(|| panic!("unit {key}"))
 }
 
-fn with_check(mut spec: task_core::WorkUnitSpec) -> task_core::WorkUnitSpec {
+pub(super) fn with_check(mut spec: task_core::WorkUnitSpec) -> task_core::WorkUnitSpec {
     spec.checks = vec![task_core::WorkUnitCheck {
         cmd: "true".into(),
         expect_exit: 0,
@@ -472,7 +485,7 @@ fn configure_failing_bundled_checker() -> (tempfile::TempDir, CheckerId) {
 }
 
 /// 合格の stub を設定しない土台の dispatcher（同梱の検査器は [`configure_failing_bundled_checker`] が設定したもの）。
-fn non_celeris_dispatcher(
+pub(super) fn non_celeris_dispatcher(
     store: Arc<dyn TaskStore>,
     adapter: Arc<dyn WorkerAdapter>,
     root: &Path,
@@ -487,7 +500,7 @@ fn non_celeris_dispatcher(
 }
 
 /// 作業ツリーに FIXED を書いて commit する（health の修復の代わり）。
-fn commit_fixed(dir: &Path) {
+pub(super) fn commit_fixed(dir: &Path) {
     std::fs::write(dir.join("FIXED"), "fixed\n").unwrap();
     git(dir, &["add", "-A"]);
     git(dir, &["commit", "-q", "-m", "fix the health finding"]);
@@ -593,7 +606,7 @@ async fn health_enforce_non_celeris_direct_review_routes_to_repair() {
     let mut task = super::target_sync::reviewing_task(repo.path(), &store);
     super::target_sync::set_check(&mut task, format!("sh {NON_CELERIS_TEST}"));
     store.insert(&task).unwrap();
-    let adapter = Arc::new(RepairCommitAdapter(WuScriptAdapter::new(HashMap::new())));
+    let adapter = Arc::new(RepairActionAdapter::new(|dir, _| commit_fixed(dir)));
     let mut d = non_celeris_dispatcher(store.clone(), adapter, ws.path(), 1);
     let wt = d.local_worktree_for(&task).unwrap();
     wt.ensure_blocking().unwrap();
@@ -669,13 +682,26 @@ async fn health_enforce_non_celeris_direct_review_routes_to_repair() {
     assert_eq!(classes, vec!["health:deps.violation"], "{events:?}");
 }
 
-/// review の repair の WU（key `repair-*`）で作業ツリーに FIXED を commit する adapter（ほかは [`WuScriptAdapter`]）。
-struct RepairCommitAdapter(WuScriptAdapter);
+/// review の repair の WU（key `repair-*`）の run の後に、その作業ツリーと key で `on_repair` を呼ぶ adapter（修復の代わり。
+/// ほかは [`WuScriptAdapter`]）。
+pub(super) struct RepairActionAdapter {
+    inner: WuScriptAdapter,
+    on_repair: Box<dyn Fn(&Path, &str) + Send + Sync>,
+}
+
+impl RepairActionAdapter {
+    pub(super) fn new(on_repair: impl Fn(&Path, &str) + Send + Sync + 'static) -> Self {
+        Self {
+            inner: WuScriptAdapter::new(HashMap::new()),
+            on_repair: Box::new(on_repair),
+        }
+    }
+}
 
 #[async_trait]
-impl WorkerAdapter for RepairCommitAdapter {
+impl WorkerAdapter for RepairActionAdapter {
     fn id(&self) -> &str {
-        self.0.id()
+        self.inner.id()
     }
     async fn run(
         &self,
@@ -688,11 +714,12 @@ impl WorkerAdapter for RepairCommitAdapter {
             .context
             .work_unit
             .as_ref()
-            .is_some_and(|w| w.key.starts_with("repair-"));
+            .map(|w| w.key.clone())
+            .filter(|key| key.starts_with("repair-"));
         let cwd = req.cwd().to_path_buf();
-        let result = self.0.run(req, run_id, limits, sink).await;
-        if repair {
-            commit_fixed(&cwd);
+        let result = self.inner.run(req, run_id, limits, sink).await;
+        if let Some(key) = repair {
+            (self.on_repair)(&cwd, &key);
         }
         result
     }

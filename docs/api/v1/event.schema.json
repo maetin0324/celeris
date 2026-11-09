@@ -2215,6 +2215,40 @@
           "type": "object"
         },
         {
+          "description": "ADR 2026-11-08-health-enforcement-loop D4.3: 修復の後も同じ health の指摘が残った（または消えた指摘が\n戻った）ので、源の task `source_task` を Blocked にして repair を起こさなかった。追記先は木の root\n（`task_ops::inbox::health_repeat::record_findings_repeated`）。状態は変えない。受信箱 `health_repeat` の元\n（`(root, set_sha256)` ごとに 1 件）。作るのは `Event::health_findings_repeated`（集合を正規化する）。",
+          "properties": {
+            "fingerprints": {
+              "description": "重複を除き辞書順。",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "set_sha256": {
+              "description": "`fingerprints` の集合の sha256（`crate::health_repeat::fingerprint_set_sha256`）。",
+              "type": "string"
+            },
+            "site": {
+              "$ref": "#/$defs/HealthRepeatSite"
+            },
+            "source_task": {
+              "$ref": "#/$defs/TaskId"
+            },
+            "type": {
+              "const": "health_findings_repeated",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "source_task",
+            "site",
+            "fingerprints",
+            "set_sha256"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR 2026-10-27-done-task-auto-reintegrate D3・D6: done の後に main が進んで unintegrated になった task を、\nstranded sweep が `Trigger::Rereview` で reviewing に戻した（遷移と同じ transaction）。`class` は\n`disjoint`（main 側の変更 file が task の差分と重ならない）か `overlap`。`attempt` は 1 始まり。",
           "properties": {
             "attempt": {
@@ -6313,6 +6347,58 @@
         "reviewable"
       ],
       "type": "object"
+    },
+    "HealthRepeatSite": {
+      "description": "往復を見つけた位置（源の task の中のどこの評価か）。",
+      "oneOf": [
+        {
+          "description": "WorkUnit の check（`key` は WU の key）。",
+          "properties": {
+            "key": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "work_unit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "key"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "段の統合（`key` は段の key）。",
+          "properties": {
+            "key": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "phase",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "key"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "task の review。",
+          "properties": {
+            "kind": {
+              "const": "review",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "HealthVerdict": {
       "description": "health の項目の判定（D2.1・D3.1）。",

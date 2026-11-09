@@ -87,6 +87,14 @@ impl Verdict {
             _ => task_core::Check::Human,
         }
     }
+
+    /// D3.4: the reason (`health_check_error: <reason>`) of a failing health item that is Error or Unavailable, for a
+    /// verdict outside the acceptance. `try_review_repair` blocks the task on it instead of repairing or retrying.
+    pub fn health_check_error(&self) -> Option<&str> {
+        let rest = self.reason.strip_prefix(HEALTH_CHECK_ERROR)?;
+        (!self.pass && self.repair_hint.is_none() && rest.starts_with(':'))
+            .then_some(self.reason.as_str())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

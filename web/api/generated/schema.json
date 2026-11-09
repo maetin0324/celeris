@@ -1678,6 +1678,47 @@
           "type": "object"
         },
         {
+          "description": "ADR 2026-11-08-health-enforcement-loop D4.3: 修復の後も同じ health の指摘が残り、源の task を Blocked に\nした（木の root の `Event::HealthFindingsRepeated` の写し。`health_repeat::attention_items` が作る）。\n`(root, set_sha256)` ごとに 1 件で、`task` は root。源がすべて Blocked を出るか root が終端になると消える。",
+          "properties": {
+            "at": {
+              "description": "最も古い源の event の時刻（待ちの始まり）。",
+              "type": "string"
+            },
+            "fingerprints": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "set_sha256": {
+              "type": "string"
+            },
+            "sources": {
+              "description": "まだ Blocked の源（task id 順）。",
+              "items": {
+                "$ref": "#/$defs/HealthRepeatSource"
+              },
+              "type": "array"
+            },
+            "task": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": {
+              "const": "health_repeat",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task",
+            "set_sha256",
+            "fingerprints",
+            "sources",
+            "at"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR D4: 未回答の統合依頼。正本は IntegrationRequested / IntegrationAnswered。",
           "properties": {
             "at": {
@@ -11590,6 +11631,40 @@
           "type": "object"
         },
         {
+          "description": "ADR 2026-11-08-health-enforcement-loop D4.3: 修復の後も同じ health の指摘が残った（または消えた指摘が\n戻った）ので、源の task `source_task` を Blocked にして repair を起こさなかった。追記先は木の root\n（`task_ops::inbox::health_repeat::record_findings_repeated`）。状態は変えない。受信箱 `health_repeat` の元\n（`(root, set_sha256)` ごとに 1 件）。作るのは `Event::health_findings_repeated`（集合を正規化する）。",
+          "properties": {
+            "fingerprints": {
+              "description": "重複を除き辞書順。",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "set_sha256": {
+              "description": "`fingerprints` の集合の sha256（`crate::health_repeat::fingerprint_set_sha256`）。",
+              "type": "string"
+            },
+            "site": {
+              "$ref": "#/$defs/HealthRepeatSite"
+            },
+            "source_task": {
+              "$ref": "#/$defs/TaskId"
+            },
+            "type": {
+              "const": "health_findings_repeated",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "source_task",
+            "site",
+            "fingerprints",
+            "set_sha256"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR 2026-10-27-done-task-auto-reintegrate D3・D6: done の後に main が進んで unintegrated になった task を、\nstranded sweep が `Trigger::Rereview` で reviewing に戻した（遷移と同じ transaction）。`class` は\n`disjoint`（main 側の変更 file が task の差分と重ならない）か `overlap`。`attempt` は 1 始まり。",
           "properties": {
             "attempt": {
@@ -17140,6 +17215,79 @@
       ],
       "type": "object"
     },
+    "HealthRepeatSite": {
+      "description": "往復を見つけた位置（源の task の中のどこの評価か）。",
+      "oneOf": [
+        {
+          "description": "WorkUnit の check（`key` は WU の key）。",
+          "properties": {
+            "key": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "work_unit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "key"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "段の統合（`key` は段の key）。",
+          "properties": {
+            "key": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "phase",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "key"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "task の review。",
+          "properties": {
+            "kind": {
+              "const": "review",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "HealthRepeatSource": {
+      "description": "`AttentionItem::HealthRepeat.sources[]`: まだ Blocked の源 1 件。",
+      "properties": {
+        "at": {
+          "description": "この源の最後の `HealthFindingsRepeated` の時刻（RFC 3339）。",
+          "type": "string"
+        },
+        "site": {
+          "$ref": "#/$defs/HealthRepeatSite"
+        },
+        "task": {
+          "$ref": "#/$defs/TaskRef"
+        }
+      },
+      "required": [
+        "task",
+        "site",
+        "at"
+      ],
+      "type": "object"
+    },
     "HealthVerdict": {
       "description": "health の項目の判定（D2.1・D3.1）。",
       "oneOf": [
@@ -17660,6 +17808,7 @@
         "release_unpromoted",
         "task_unscheduled",
         "review_resync_halted",
+        "health_repeat",
         "script_control"
       ],
       "type": "string"

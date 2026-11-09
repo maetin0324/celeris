@@ -340,6 +340,17 @@ fn fixture() -> Fixture {
             resyncs: 3,
             at: AT.to_string(),
         },
+        AttentionItem::HealthRepeat {
+            task: tref.clone(),
+            set_sha256: task_core::health_repeat::fingerprint_set_sha256(&["fp-a".into()]),
+            fingerprints: vec!["fp-a".into()],
+            sources: vec![crate::inbox::health_repeat::HealthRepeatSource {
+                task: tref.clone(),
+                site: task_core::HealthRepeatSite::Review,
+                at: AT.to_string(),
+            }],
+            at: AT.to_string(),
+        },
     ];
     inbox
         .browser_waits
@@ -634,6 +645,7 @@ fn variant_index(kind: InboxKind) -> usize {
         InboxKind::TaskUnscheduled => 21,
         InboxKind::ReviewResyncHalted => 22,
         InboxKind::ScriptControl => 23,
+        InboxKind::HealthRepeat => 24,
     }
 }
 
@@ -643,7 +655,7 @@ fn human_inbox_all_contains_every_variant_once() {
     seen.sort_unstable();
     assert_eq!(
         seen,
-        (0..=23).collect::<Vec<_>>(),
+        (0..=24).collect::<Vec<_>>(),
         "ALL must list every variant once"
     );
 }

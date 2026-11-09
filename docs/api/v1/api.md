@@ -3,6 +3,10 @@
 実行・計画・木・決定の要求のエンドポイントは §3.125 にある。
 
 - 状態: **Accepted**（人間の決定 H1 / H5〜H7。celeris 側の ADR-0013、GUI 側の ADR-GUI-0001）。改訂日 2026-09-14
+- 改訂: 2026-11-09（ADR 2026-11-08-health-enforcement-loop D4.3）— **追加。v1 のまま**。task の event に `health_findings_repeated`
+  （`source_task`・`site`（`{kind: work_unit|phase, key}` か `{kind: review}`）・`fingerprints`（重複を除き辞書順）・`set_sha256`）を足した。追記先は
+  木の root。`Inbox.attention[]` に type `health_repeat`（`task`・`set_sha256`・`fingerprints`・`sources[]`（`task`・`site`・`at`）・`at`）、受信箱の
+  kind `health_repeat` を足した（受信箱では答えない。answer は 409 `native_action_required`。人は源の task に comment して再開する）。
 - 改訂: 2026-11-04（ADR 2026-11-04-lane-rules-exhaustive-evidence D6・D7）— **追加。v1 のまま**。エンドポイント 236・237
   （`POST`・`GET /script/domains/{domain}/exhaustive-runs`。§3.134.6）を足した。昇格の 422 `script_canary_not_ready` の
   `readiness` に欄 `exhaustive`（網羅の証拠の立場）を足し、`lane_rules` の `required` は証拠が `passed` のとき 100 になる。
@@ -657,10 +661,12 @@ browser の制御（`crate::browser_control`）の 6 本は、route を定数 `B
 計算規則は §5.1。クエリ無し（あれば 400）。応答は `task_ops::inbox::Inbox`:
 `{approvals, questions, drafts, attention, browser_waits, decisions, counts}`（`counts` は各配列の件数と
 DB 全体の status 別件数 `by_status`）。`attention[]` は `type` で区別する（`failed` / `requeue_limit_near` /
-`unroutable` / `cluster_unavailable` / `phase_checkpoint` / `plan_approval` / `delivery_skipped` / `stalled` / `review_resync_halted`）。
+`unroutable` / `cluster_unavailable` / `phase_checkpoint` / `plan_approval` / `delivery_skipped` / `stalled` / `review_resync_halted` /
+`health_repeat`）。
 `type: "unroutable"` はデーモンのスナップショット（3.20）の `task_waits[]` の `unroutable` から合成する。スナップショットがまだ無ければ出ない。
 `type: "stalled"` はスナップショットの `stalled_tasks[]`（生存確認が `StallDetected` を出し、その後まだ何も起きていない task）のうち `ready` の task から合成する。
 `type: "review_resync_halted"` はスナップショットの `review_resync_halted[]`（review 前の再同期が上限 `MAX_TARGET_RESYNCS` を超えて `ReviewResyncHalted` を残した task）のうち `reviewing` の task から合成する（ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3）。
+`type: "health_repeat"` は木の root の event `health_findings_repeated` から `(root, set_sha256)` ごとに 1 件合成する（`task` は root、`sources[]` はまだ Blocked の源の task と位置 `site`（`{kind: work_unit|phase, key}` か `{kind: review}`）。源がすべて Blocked を出たか root が終端なら出ない。ADR 2026-11-08-health-enforcement-loop D4.3）。
 
 - `questions[].approval_id`: その質問に対応する**未決の** `approvals` の id（§3.56）。GUI はこれで
   `POST /approvals/{id}/decide`（3.57）へ直接リンクできる。行がまだ無い、または既に決定済みなら `null`。

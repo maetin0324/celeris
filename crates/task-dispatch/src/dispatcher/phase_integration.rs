@@ -1078,7 +1078,8 @@ impl Dispatcher {
     }
 
     /// ADR-0074 D1.4 4.（Phase F2b）: 統合後の検査の失敗。D16 の分類に当たれば repair WU を Task の
-    /// worktree に作り（`max_repairs`・同じ class の上限の内なら）、当たらなければ replan。
+    /// worktree に作り（`max_repairs`・同じ class の上限の内なら）、当たらなければ replan。health だけの不合格の同じ指摘の
+    /// 往復と上限の使い切りは repair も replan もせず Blocked にする（ADR 2026-11-08-health-enforcement-loop D4.3・D4.4）。
     pub(super) fn schedule_integration_check_repair(
         &mut self,
         task: &Task,
@@ -1138,9 +1139,14 @@ impl Dispatcher {
             .collect();
         // ADR 2026-11-08-health-enforcement-loop D3.2・D4.1: health の修復は rule ごと（`health:<rule_id>`）に数える。
         let (bucket, same_class) = check_item::repair_count(class, &summary, &repairs);
-        if repairs.len() as u32 >= self.config.execution.max_repairs
-            || same_class as u32 >= self.config.execution.max_repairs_per_class
-        {
+        let exhausted = repairs.len() as u32 >= self.config.execution.max_repairs
+            || same_class as u32 >= self.config.execution.max_repairs_per_class;
+        // D4.3・D4.4: health だけの不合格の往復・上限の使い切りは、replan しない質問（`stops_without_replan`）で止める。
+        let used = exhausted.then_some((bucket.as_str(), repairs.len(), same_class));
+        if let Some(stop) = self.phase_health_stop(task, &phase, class, used, &summary)? {
+            return self.integration_gives_up_with(task, integ, &stop, Some(failure));
+        }
+        if exhausted {
             return self.integration_gives_up_with(task, integ, &why, Some(failure));
         }
         let prefix = format!("repair-{phase}-");
@@ -1317,8 +1323,8 @@ impl Dispatcher {
             &failure,
         );
         let stalled_stop = stalled >= task_ops::plan_gate::STALLED_REPLAN_LIMIT;
-        // ADR 2026-11-08-health-enforcement-loop D3.4: health の Error は replan で直らないので人に聞く。
-        let may_replan = !why.starts_with(check_item::HEALTH_CHECK_ERROR);
+        // ADR 2026-11-08-health-enforcement-loop D3.4・D4.3・D4.4: health の Error・往復・上限の使い切りは replan せず人に聞く。
+        let may_replan = !check_item::stops_without_replan(why);
         let can_replan =
             may_replan && !stalled_stop && replans_so_far < self.effective_max_replans(task.id)?;
         let question_text = if stalled_stop {

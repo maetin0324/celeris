@@ -10,6 +10,8 @@
 //! - [`design`]: 計画の採用前の risk 判定と高 risk だけの設計 review（D3.3・D3.5）の純粋な部分。Dispatcher の状態（実行中の
 //!   run・完了の channel）を使う配線は `health_review/design_gate.rs` で、`dispatcher` の子 module として `#[path]` で読む。
 //! - [`input`]: final review の health 文脈を candidate SHA ごとに 1 回作る（D4）。
+//! - [`limits`]: health の同じ指摘の往復（修復の後も同じ fingerprint の集合が残る・消えたものが再び現れる）を events から
+//!   判定する純粋関数（ADR 2026-11-08-health-enforcement-loop D4.3）。
 //! - `health_review/check_item.rs`: WU の check と段の統合の検査の列の項目の記録と health の項目（ADR
 //!   2026-11-08-health-enforcement-loop D1.2・D3.2・D3.4）。`dispatcher::phase_integration` の子 module として `#[path]` で読む。
 //! - [`verdict`]: 構造化 health verdict の blocking を不合格にし repair/replan に写す（D5）。
@@ -21,6 +23,7 @@
 pub(crate) mod design;
 pub mod gate;
 pub(crate) mod input;
+pub mod limits;
 pub mod policy;
 pub mod review_item;
 pub mod stub_checker;

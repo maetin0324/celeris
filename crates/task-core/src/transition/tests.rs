@@ -242,6 +242,14 @@ fn expected_simple(kind: TaskKind, status: Status, trigger: &Trigger) -> Expecte
                 expect_err()
             }
         }
+        // ADR 2026-11-08-health-enforcement-loop D3.4・D4.3・D4.4: 人に聞く review の不合格は reviewing からだけ。
+        Trigger::ReviewBlocked => {
+            if status == Status::Reviewing {
+                expect_ok(Status::Blocked)
+            } else {
+                expect_err()
+            }
+        }
         // ADR 2026-10-20-mlsys-main2-fixes D1-4: token 予算の到達は次の run・reviewer を起こさず failed へ。
         Trigger::TokenBudgetExhausted => {
             if matches!(status, Status::Ready | Status::Running | Status::Reviewing) {
@@ -313,6 +321,8 @@ fn table_simple_triggers_full_cross_product() {
         // ADR 2026-11-08-health-enforcement-loop D7（P-9）: 依存先の reopen による後続の復帰（attempts 据え置き）。
         Trigger::DependencyReopened { draft: false },
         Trigger::DependencyReopened { draft: true },
+        // ADR 2026-11-08-health-enforcement-loop D3.4・D4.3・D4.4: 人に聞く review の不合格（attempts 据え置き）。
+        Trigger::ReviewBlocked,
     ];
 
     let mut count = 0usize;
@@ -368,8 +378,8 @@ fn table_simple_triggers_full_cross_product() {
     // BrowserWait×2 / BrowserResume / BrowserFail×2、ADR-0090 D2 で ClusterJobWait / ClusterJobResume、
     // ADR 2026-10-08-browser-prod-enablement D2 で BrowserPrereqBlock / BrowserPrereqResume、
     // ADR 2026-10-20-mlsys-main2-fixes D1-4 で TokenBudgetExhausted、ADR 2026-11-08-health-enforcement-loop D7 で
-    // DependencyReopened×2 を追加）
-    assert_eq!(count, 4 * 8 * 34);
+    // DependencyReopened×2、同 D3.4・D4.3・D4.4 で ReviewBlocked を追加）
+    assert_eq!(count, 4 * 8 * 35);
 }
 
 /// ADR-0072 D6（Phase E1）: `Trigger::Continue` の `reason` は `why` ごとに静的な名前になる

@@ -21,8 +21,8 @@ use crate::gate::TransitionResult;
 
 mod stall;
 pub use stall::{
-    REPLAN_STALLED_QUESTION_PREFIX, STALLED_REPLAN_LIMIT, failure_signature, normalize_check_cmd,
-    pending_integration_auto_replan, replan_stalled_question, stalled_replans,
+    REPLAN_STALLED_QUESTION_PREFIX, STALLED_REPLAN_LIMIT, failure_signature, is_human_resume,
+    normalize_check_cmd, pending_integration_auto_replan, replan_stalled_question, stalled_replans,
 };
 
 /// `Trigger::PlanGate` の `Transitioned.reason`。

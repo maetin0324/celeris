@@ -267,6 +267,18 @@ pub enum AttentionItem {
         resyncs: u32,
         at: String,
     },
+    /// ADR 2026-11-08-health-enforcement-loop D4.3: 修復の後も同じ health の指摘が残り、源の task を Blocked に
+    /// した（木の root の `Event::HealthFindingsRepeated` の写し。`health_repeat::attention_items` が作る）。
+    /// `(root, set_sha256)` ごとに 1 件で、`task` は root。源がすべて Blocked を出るか root が終端になると消える。
+    HealthRepeat {
+        task: TaskRef,
+        set_sha256: String,
+        fingerprints: Vec<String>,
+        /// まだ Blocked の源（task id 順）。
+        sources: Vec<health_repeat::HealthRepeatSource>,
+        /// 最も古い源の event の時刻（待ちの始まり）。
+        at: String,
+    },
     /// ADR D4: 未回答の統合依頼。正本は IntegrationRequested / IntegrationAnswered。
     IntegrationRequest {
         task: TaskRef,
@@ -401,6 +413,7 @@ fn attention_task(item: &AttentionItem) -> Option<TaskId> {
         | AttentionItem::DeliverySkipped { task, .. }
         | AttentionItem::Stalled { task, .. }
         | AttentionItem::ReviewResyncHalted { task, .. }
+        | AttentionItem::HealthRepeat { task, .. }
         | AttentionItem::BrowserPrerequisite { task, .. } => Some(task.id),
         // 統合依頼は Done task にも届くため、終端 task の attention 整理規則で隠さない。
         AttentionItem::ClusterUnavailable { .. }
@@ -420,6 +433,7 @@ fn attention_at(item: &AttentionItem) -> &str {
         AttentionItem::DeliverySkipped { at, .. } => at,
         AttentionItem::Stalled { at, .. } => at,
         AttentionItem::ReviewResyncHalted { at, .. } => at,
+        AttentionItem::HealthRepeat { at, .. } => at,
         AttentionItem::IntegrationRequest { at, .. } => at,
         AttentionItem::BrowserPrerequisite { at, .. } => at,
         AttentionItem::Unintegrated { at, .. } => at,
@@ -619,6 +633,7 @@ fn build_questions(
         .filter(|t| t.status == Status::Blocked && in_focus(focus, t))
     {
         let rows = store.event_rows_for(t.id, None, view::ALL_EVENTS)?;
+        blocked_attention.health_repeat.observe(t.id, &rows);
         let events = view::seq_pairs(&rows);
         if let Some(item) = phase_checkpoint_item(store, t, &rows, &events)? {
             blocked_attention.phases.push(item);
@@ -1151,9 +1166,7 @@ fn build_attention(
     }
 
     // Questions and gates were derived together, one Task's event history at a time.
-    items.extend(blocked_attention.phases);
-    items.extend(blocked_attention.prerequisites);
-    items.extend(blocked_attention.plans);
+    items.extend(blocked_attention.into_items(store, all_tasks, by_id, focus)?);
 
     // ADR-0121 D3: 完了した root で取り込みを見送ったもの。期限は設けない（成果が main に入っていない）。
     let latest_skipped = store.latest_delivery_skipped_rows()?;
@@ -1411,6 +1424,7 @@ pub fn inbox(
     InboxTaskSnapshot::read(store)?.parts(snapshot, ctx, now, evidence, None)
 }
 
+pub mod health_repeat;
 mod read;
 pub use read::InboxTaskSnapshot;
 pub(crate) use read::question_for_task;

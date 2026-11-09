@@ -354,8 +354,8 @@ impl Dispatcher {
 
     /// ADR-0072 D14/D6・E4 (g): `spawn_work_unit_checks` の結果を受けて、`finish_worker_result` に引き継ぐ。1 つでも `pass = false`
     /// があれば、この run を `Terminal::Error{retryable: true}`（WU の retry。`execution_scheduler::decide` が
-    /// `RunEnd::Failed{retryable:true}` として扱う）にすり替える（health の項目の Fail も WU の repair。Error は retry にせず質問〈Blocked〉
-    /// にする。ADR 2026-11-08-health-enforcement-loop D3.2・D3.4、`settle_health_row`）。全部 pass なら元の `result` をそのまま使う。
+    /// `RunEnd::Failed{retryable:true}` として扱う）にすり替える（health の項目の Fail も WU の repair。Error・同じ指摘の往復・health だけの
+    /// 不合格の retry の使い切りは質問〈Blocked〉にする。ADR 2026-11-08-health-enforcement-loop D3.2・D3.4・D4.3・D4.4、`settle_health_row`）。全部 pass なら元の `result`。
     #[allow(clippy::too_many_arguments)]
     pub(super) fn on_work_unit_checks_finished(
         &mut self,
@@ -382,7 +382,7 @@ impl Dispatcher {
             u.status == task_core::WorkUnitStatus::Running
                 && u.last_run_id.as_deref() == Some(run_id.as_str())
         });
-        let (result, check_run) = Self::settle_health_row(result, check_run);
+        let (result, check_run) = self.settle_health_row(&task, &current_wu, result, check_run)?;
         // ADR-0079 付記 R7-5: 不合格の検査（cmd・期待する exit・判定文）と走らせた所を残し、run の usage を落とさない。
         let failure = check_run.failure(&result);
         let result = match &failure {

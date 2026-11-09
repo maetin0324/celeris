@@ -55,13 +55,16 @@ pub enum InboxKind {
     TaskUnscheduled,
     // ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3: review の再同期が上限で止まっている task。
     ReviewResyncHalted,
+    // ADR 2026-11-08-health-enforcement-loop D4.3: 修復の後も同じ health の指摘が残り源の task を Blocked にした
+    // （木の root ごと・指摘の集合ごとに 1 件。受信箱では答えない）。
+    HealthRepeat,
     // ADR 2026-11-02-ts-control-layer-boundary 付記 S5-7: script の自動の戻し・無効化・停止（受信箱では答えない）。
     ScriptControl,
     // 人の決定 2026-10-08: KB の取り込み待ち（旧 `knowledge_review`）は受信箱に出さない。知識画面で扱う。
 }
 
 impl InboxKind {
-    pub const ALL: [InboxKind; 24] = [
+    pub const ALL: [InboxKind; 25] = [
         InboxKind::Decision,
         InboxKind::PlanGate,
         InboxKind::PhaseGate,
@@ -85,6 +88,7 @@ impl InboxKind {
         InboxKind::ReleaseUnpromoted,
         InboxKind::TaskUnscheduled,
         InboxKind::ReviewResyncHalted,
+        InboxKind::HealthRepeat,
         InboxKind::ScriptControl,
     ];
 
@@ -143,6 +147,7 @@ impl InboxKind {
             InboxKind::ReleaseUnpromoted => "release_unpromoted",
             InboxKind::TaskUnscheduled => "task_unscheduled",
             InboxKind::ReviewResyncHalted => "review_resync_halted",
+            InboxKind::HealthRepeat => "health_repeat",
             InboxKind::ScriptControl => "script_control",
         }
     }
@@ -254,6 +259,7 @@ pub fn route_attention(item: &AttentionItem) -> Option<InboxKind> {
         AttentionItem::Unintegrated { .. } => Some(InboxKind::Unintegrated),
         AttentionItem::Stalled { .. } => Some(InboxKind::Stalled),
         AttentionItem::ReviewResyncHalted { .. } => Some(InboxKind::ReviewResyncHalted),
+        AttentionItem::HealthRepeat { .. } => Some(InboxKind::HealthRepeat),
         // ADR 2026-10-08-browser-prod-enablement D2: browser の前提で止まった task。人の手は task 詳細の
         // browser 節（policy の編集）か release・台帳の作り直しなので、browser の人手の種類に入れる。
         AttentionItem::BrowserPrerequisite { .. } => Some(InboxKind::BrowserWait),
@@ -883,6 +889,68 @@ impl Builder<'_> {
         )
     }
 
+    /// ADR 2026-11-08-health-enforcement-loop D4.3: 受信箱では答えない（native なし。答えると 409）。人は源の task に
+    /// comment して再開する（Blocked の源への comment は回答 `Trigger::Answer`）。選択肢は Blocked の源に効く口だけを出す
+    /// （`POST /tasks/{id}/retry` は Failed・Cancelled しか受けない）。源がすべて Blocked を出るか root が終端になると消える。
+    fn health_repeat(&self, a: &AttentionItem) -> Option<InboxItem> {
+        let AttentionItem::HealthRepeat {
+            task,
+            set_sha256,
+            fingerprints,
+            sources,
+            at,
+        } = a
+        else {
+            return None;
+        };
+        let first = sources.first().map_or(task.id, |s| s.task.id);
+        let listed: Vec<String> = sources
+            .iter()
+            .map(|s| format!("{}（{}、{}）", s.task.title, s.task.id, s.site.label()))
+            .collect();
+        let mut links: Vec<InboxLink> = sources
+            .iter()
+            .map(|s| link("源の task", format!("/tasks/{}", s.task.id)))
+            .collect();
+        links.push(link("root の task", format!("/tasks/{}", task.id)));
+        Some(self.finish(Draft {
+                    id: format!(
+                        "health_repeat-{}-{}",
+                        task.id,
+                        set_sha256.get(..16).unwrap_or(set_sha256)
+                    ),
+                    kind: InboxKind::HealthRepeat,
+                    title: format!("修復の後も同じ health の指摘が残る: {}", task.title),
+                    detail: clip(&format!(
+                        "health の指摘 {n} 件が修復の後も残ったので、repair を起こさず源の task {m} 件を Blocked にした。源: {src}。指摘: {fps}。源の task に comment で直し方を伝えると再開し、源がすべて Blocked を出るとこの項目は消える",
+                        n = fingerprints.len(),
+                        m = sources.len(),
+                        src = listed.join("、"),
+                        fps = fingerprints.join(", "),
+                    )),
+                    options: vec![opt(
+                        "comment",
+                        "源の task に comment して再開する",
+                        false,
+                        &format!("POST /tasks/{first}/comments（task 詳細から）"),
+                    )],
+                    recommended: Some("comment".to_string()),
+                    due_at: None,
+                    blocking: InboxBlocking {
+                        tasks: sources.iter().map(|s| s.task.clone()).collect(),
+                        units: Vec::new(),
+                        root: Some(task.clone()),
+                        summary: format!("源の task {} 件", sources.len()),
+                    },
+                    blocked_by: Vec::new(),
+                    native: None,
+                    project_id: self.project_of(task.id),
+                    task: Some(task.clone()),
+                    created_at: at.clone(),
+                    links,
+                }))
+    }
+
     fn attention(
         &self,
         a: &AttentionItem,
@@ -1230,12 +1298,7 @@ impl Builder<'_> {
                     blocking: self.only_task(task),
                     blocked_by: Vec::new(),
                     native: integrate_task_offered
-                        .then(|| {
-                            native(
-                                "POST",
-                                integrate_task_path(task.id, request_id),
-                            )
-                        })
+                        .then(|| native("POST", integrate_task_path(task.id, request_id)))
                         .flatten(),
                     project_id: self.project_of(task.id),
                     task: Some(task.clone()),
@@ -1314,6 +1377,7 @@ impl Builder<'_> {
                 created_at: at.clone(),
                 links: vec![link("task 詳細", format!("/tasks/{}", task.id))],
             }),
+            AttentionItem::HealthRepeat { .. } => return self.health_repeat(a),
             AttentionItem::Unintegrated {
                 task,
                 repo_id,

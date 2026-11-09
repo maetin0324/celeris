@@ -329,6 +329,14 @@ fn reset_to_ready(wu: &WorkUnitRow) -> WuDecision {
     }
 }
 
+/// D11 の retry の上限: WU `wu` にまだ retry の余地があるか（`retries` が `max_retries` 未満）。[`failed`] と、WU の check の
+/// health だけの不合格を上限の使い切りで止める `health_review::check_item`（ADR 2026-11-08-health-enforcement-loop D4.4）が
+/// 共に呼ぶ（上限の判定はここだけに置く）。`max_retries` は呼び出し側が [`WuLimits::max_retries`] に渡す値
+/// （`task.budget.max_retries`）。
+pub(crate) fn retries_remain(wu: &WorkUnitRow, max_retries: u32) -> bool {
+    wu.retries < max_retries
+}
+
 /// D12 の 3 / D11 の retry: WU が失敗したとき、retry の余地があれば `ready` に戻し（retries+1）、
 /// 無ければ `failed` にして依存先を `blocked(dependency_failed)` にする（E2 に planner は無いので
 /// replan できず、Task は `WorkerError{retryable:false}` で `failed` にする。D12）。
@@ -338,7 +346,7 @@ fn failed(
     retryable: bool,
     limits: WuLimits,
 ) -> WuDecision {
-    if retryable && wu.retries < limits.max_retries {
+    if retryable && retries_remain(wu, limits.max_retries) {
         let mut updated = now_wu(wu.clone(), WorkUnitStatus::Ready);
         updated.retries += 1;
         return WuDecision {

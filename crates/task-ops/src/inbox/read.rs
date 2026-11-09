@@ -5,6 +5,27 @@ pub(super) struct BlockedAttention {
     pub(super) phases: Vec<AttentionItem>,
     pub(super) prerequisites: Vec<AttentionItem>,
     pub(super) plans: Vec<AttentionItem>,
+    pub(super) health_repeat: super::health_repeat::BlockedReads,
+}
+
+impl BlockedAttention {
+    /// Blocked の task の走査から作る attention（工程・前提・計画の承認と、その読み出しを使う往復の集約 D4.3）。
+    pub(super) fn into_items(
+        self,
+        store: &dyn TaskStore,
+        all_tasks: &[Task],
+        by_id: &HashMap<TaskId, Task>,
+        focus: Option<&HashSet<TaskId>>,
+    ) -> Result<Vec<AttentionItem>, OpsError> {
+        let repeats = super::health_repeat::attention_items(
+            store,
+            all_tasks,
+            by_id,
+            focus,
+            &self.health_repeat,
+        )?;
+        Ok([self.phases, self.prerequisites, self.plans, repeats].concat())
+    }
 }
 
 /// Task list shared only within a read pass. Never use this for leases or writes.

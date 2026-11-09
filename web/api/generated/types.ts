@@ -337,6 +337,13 @@ export type AttentionItem = {
   "type": "review_resync_halted";
 } | {
   "at": string;
+  "fingerprints": Array<string>;
+  "set_sha256": string;
+  "sources": Array<HealthRepeatSource>;
+  "task": TaskRef;
+  "type": "health_repeat";
+} | {
+  "at": string;
   "integrate_task_escalated"?: string | null;
   "integrate_task_offered": boolean;
   "request": IntegrationRequest;
@@ -2419,6 +2426,12 @@ export type Event = {
   "review_run": string;
   "type": "review_resync_resumed";
 } | {
+  "fingerprints": Array<string>;
+  "set_sha256": string;
+  "site": HealthRepeatSite;
+  "source_task": TaskId;
+  "type": "health_findings_repeated";
+} | {
   "attempt": number;
   "class": string;
   "head_sha": string;
@@ -3454,6 +3467,22 @@ export type HealthEvidence = {
   "verdict": HealthVerdict;
 };
 
+export type HealthRepeatSite = {
+  "key": string;
+  "kind": "work_unit";
+} | {
+  "key": string;
+  "kind": "phase";
+} | {
+  "kind": "review";
+};
+
+export type HealthRepeatSource = {
+  "at": string;
+  "site": HealthRepeatSite;
+  "task": TaskRef;
+};
+
 export type HealthVerdict = "pass" | "fail" | "error" | "policy_only" | "not_applicable";
 
 export type HumanAttestation = {
@@ -3565,7 +3594,7 @@ export type InboxItem = {
   "title": string;
 };
 
-export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "credential_wait" | "disk_full" | "delivery_skipped" | "integration_request" | "unintegrated" | "stalled" | "project_stalled" | "human_wait_aging" | "release_unpromoted" | "task_unscheduled" | "review_resync_halted" | "script_control";
+export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "credential_wait" | "disk_full" | "delivery_skipped" | "integration_request" | "unintegrated" | "stalled" | "project_stalled" | "human_wait_aging" | "release_unpromoted" | "task_unscheduled" | "review_resync_halted" | "health_repeat" | "script_control";
 
 export type InboxLink = {
   "href": string;

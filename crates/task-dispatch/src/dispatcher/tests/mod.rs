@@ -3068,6 +3068,7 @@ mod cron_jobs;
 mod dispatch_ready_phases;
 mod git_workspace;
 mod health_enforce;
+mod health_limits_integration;
 mod integration_check_progress;
 mod integration_ready_race;
 mod jev_synth_e2e;
@@ -3215,6 +3216,8 @@ mod write_set_gate;
 /// 作り、reviewer の再試行で使い回す。WU・reviewer の無い review・`reviewer_reuse` では作らない
 /// （`src/dispatcher/tests/health_review_input.rs`）。
 mod health_inventory;
+mod health_limits_budget;
+mod health_limits_review;
 /// ADR 2026-11-07-health-review-integration の付記（二度目の final review の差し戻しへの方針）C1: 設計 review の run を
 /// 木の run・費用の上限に掛ける（`src/dispatcher/tests/health_review_design_budget.rs`）。
 mod health_review_design_budget;

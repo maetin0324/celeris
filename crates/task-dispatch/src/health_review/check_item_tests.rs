@@ -65,3 +65,44 @@ fn health_enforce_phase_integration_rows_keep_auto_resolve_without_checks() {
         vec![("cargo test".to_string(), true, "ok".to_string())]
     );
 }
+
+/// 不変条件（D3.4・D4.3・D4.4）: 統合を replan せずに止めるのは health の Error・往復・上限の使い切りの質問（先頭の語の後に
+/// `:`）だけで、他の検査の失敗の文や語の一部が同じ文は replan の判定のまま。dispatcher の試験は 3 種の止まりを 1 つずつ
+/// 通すが、似た語の誤認（replan を止めすぎる）までは見ない。
+#[test]
+fn health_limits_stops_without_replan_only_health_stops() {
+    for why in [
+        "health_check_error: checker_missing",
+        "health_findings_repeated: 段 build の統合: …",
+        "health_repair_limit: 段 build の統合: …",
+    ] {
+        assert!(stops_without_replan(why), "{why}");
+    }
+    for why in [
+        "phase build の統合後の検査が失敗しました: health:deps.violation:0000000000000001",
+        "integration_check_timeout: phase build の統合後の検査が失敗しました",
+        "health_check_errors are not this",
+        "health_repair_limited",
+    ] {
+        assert!(!stops_without_replan(why), "{why}");
+    }
+}
+
+/// 不変条件（D4.3）: WU の check を往復で止めるのは、不合格がすべて health の項目のときだけ。health でない失敗が混ざる・
+/// 不合格が無い列は往復の判定に入らない（health でない失敗の retry を変えない）。
+#[test]
+fn health_limits_only_health_fails_ignores_mixed_rows() {
+    assert!(only_health_fails([
+        ("true", true),
+        (HEALTH_CHECK_ID, false)
+    ]));
+    assert!(!only_health_fails([
+        ("false", false),
+        (HEALTH_CHECK_ID, false)
+    ]));
+    assert!(!only_health_fails([
+        ("true", true),
+        (HEALTH_CHECK_ID, true)
+    ]));
+    assert!(!only_health_fails(std::iter::empty::<(&str, bool)>()));
+}

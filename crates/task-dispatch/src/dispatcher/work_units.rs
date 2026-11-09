@@ -74,24 +74,13 @@ impl Dispatcher {
         }
         .with_cargo_env(check_env);
         let checks = wu.spec.checks.clone();
-        // ADR 2026-11-08-health-enforcement-loop D1.2: WU の作業ツリーで、base は `wu.base_commit`、head は WU の HEAD。
-        // 基点の無い WU（Task の作業ツリーで走る repair など）は段の統合で評価する。
-        let health = wu.base_commit.clone().map(|base| {
-            let repo_id = self.task_workspaces_for(&task).and_then(|ws| {
-                let repo = ws.repos.into_iter().find(|r| r.is_git())?;
-                task.repos
-                    .iter()
-                    .find(|reference| reference.name == repo.name)
-                    .map(|reference| reference.repo_id)
-            });
-            crate::health_review::check_item::HealthTarget {
-                repo_id: super::phase_integration::health_repo_id(repo_id),
-                worktree: ws.work_dir().to_path_buf(),
-                base,
-                head: "HEAD".to_string(),
-                bundled: crate::health_review::gate::bundled_checker().cloned(),
-            }
-        });
+        // ADR 2026-11-08-health-enforcement-loop D1.2: base は `wu.base_commit`、head は WU の作業ツリーの HEAD。
+        let health = crate::health_review::check_item::work_unit_target(
+            &task,
+            self.task_workspaces_for(&task),
+            wu.base_commit.as_deref(),
+            ws.work_dir(),
+        );
         let timeout = self.config.review_timeout;
         let tx = self.tx.clone();
         let checking_run_id = run_id.clone();
@@ -409,32 +398,16 @@ impl Dispatcher {
             u.status == task_core::WorkUnitStatus::Running
                 && u.last_run_id.as_deref() == Some(run_id.as_str())
         });
-        // ADR 2026-11-08-health-enforcement-loop D3.4: health の Error・Unavailable は合格にも WU の repair にもせず、
-        // task を Blocked にして人に聞く（質問は `health_check_error: <理由>`。人が環境を直して回答で再開する）。
-        if let Some(text) = check_run.health_error() {
-            let usage = match &result {
-                Ok(RunOutcome {
-                    terminal: Terminal::Done { usage, .. },
-                    ..
-                }) => *usage,
-                _ => None,
-            };
-            let question = Ok(RunOutcome {
-                terminal: Terminal::Question { text, usage },
-                exit_code: None,
-            });
-            return self.finish_worker_result_with(
-                task,
-                current_wu,
-                run_id,
-                account,
-                account_adapter,
-                run_since,
-                provider,
-                question,
-                None,
-            );
-        }
+        // ADR 2026-11-08-health-enforcement-loop D3.4: health の Error は repair にせず Blocked（人に聞く）。
+        let question = crate::health_review::check_item::error_question(
+            &check_run.checks,
+            &check_run.results,
+            &result,
+        );
+        let (result, check_run) = match question {
+            Some(question) => (question, WorkUnitCheckRun::default()),
+            None => (result, check_run),
+        };
         // ADR-0079 付記 R7-5: 不合格の検査（cmd・期待する exit・判定文）と走らせた所を残し、run の usage を落とさない。
         let failure = check_run.failure(&result);
         let result = match &failure {
@@ -2121,6 +2094,7 @@ pub(super) fn previous_check_failure_lines(
 const CHECK_FAILURE_SUMMARY_MAX_CHARS: usize = 1500;
 
 /// ADR-0079 付記 R7-5 D1: WU の checks を走らせた結果（`Completion::WorkUnitChecks` の中身）。
+#[derive(Default)]
 pub(super) struct WorkUnitCheckRun {
     /// 走らせた checks（`results` と同じ順）。
     pub(super) checks: Vec<task_core::WorkUnitCheck>,
@@ -2131,17 +2105,6 @@ pub(super) struct WorkUnitCheckRun {
 }
 
 impl WorkUnitCheckRun {
-    /// health の項目が Error（D3.4）なら、その質問の文（`health_check_error: <理由>`）。
-    pub(super) fn health_error(&self) -> Option<String> {
-        self.checks
-            .iter()
-            .zip(&self.results)
-            .find_map(|(c, (pass, reason))| {
-                crate::health_review::check_item::check_error(&c.cmd, *pass, reason)
-            })
-            .map(str::to_string)
-    }
-
     /// 1 つでも不合格があれば、その記録（worker が `Done` で返した usage も持つ）。全部合格なら `None`。
     pub(super) fn failure(
         &self,

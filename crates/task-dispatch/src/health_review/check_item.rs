@@ -142,6 +142,210 @@ pub fn work_unit_check() -> task_core::WorkUnitCheck {
     }
 }
 
+/// `dispatcher::phase_integration::run_integration_checks` の結果。`health` は列に足す health の行（`(pass, reason)`。NotApplicable・対象外は `None`）。
+pub(crate) struct IntegrationChecks {
+    pub results: Vec<(bool, String)>,
+    pub health: Option<(bool, String)>,
+}
+
+/// health の項目を 1 回評価し、開始・終了の event（`health` 欄に証跡）を残す（`(work_unit_id, key, run_id)` の
+/// `run_id` が `Some` なら葉の WU の check の event、`None` なら段の統合の event）。
+pub(crate) async fn run_item(
+    store: &dyn task_core::TaskStore,
+    task_id: task_core::TaskId,
+    (work_unit_id, key, run_id): (&str, &str, Option<&str>),
+    target: HealthTarget,
+    index: u32,
+    total: u32,
+) -> Option<(bool, String)> {
+    let cmd = task_core::required_checks::health::HEALTH_CHECK_ID.to_string();
+    let started_at = now_rfc3339();
+    let started = match run_id {
+        Some(run_id) => task_core::Event::WorkUnitCheckStarted {
+            work_unit_id: work_unit_id.to_string(),
+            key: key.to_string(),
+            run_id: run_id.to_string(),
+            index,
+            total,
+            cmd: cmd.clone(),
+            log_path: String::new(),
+            started_at,
+        },
+        None => task_core::Event::IntegrationCheckStarted {
+            work_unit_id: work_unit_id.to_string(),
+            key: key.to_string(),
+            index,
+            total,
+            cmd: cmd.clone(),
+            log_path: String::new(),
+            started_at,
+        },
+    };
+    if let Err(e) = store.append_event(task_id, &started) {
+        tracing::warn!(%task_id, work_unit = %key, error = %e, "could not record the health check start");
+    }
+    let clock = std::time::Instant::now();
+    let item = match tokio::task::spawn_blocking(move || evaluate(&target)).await {
+        Ok(item) => item,
+        // 評価の thread が落ちた: 合格にせず Error として止める（D3.4）。
+        Err(e) => {
+            let reason = format!("{HEALTH_CHECK_ERROR}: health evaluation task failed: {e}");
+            return Some((false, reason));
+        }
+    };
+    let duration_ms = u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let evidence = Some(Box::new(item.evidence.clone()));
+    let finished = match run_id {
+        Some(run_id) => task_core::Event::WorkUnitCheckFinished {
+            work_unit_id: work_unit_id.to_string(),
+            key: key.to_string(),
+            run_id: run_id.to_string(),
+            index,
+            total,
+            cmd,
+            pass: item.pass,
+            exit: item.exit,
+            timed_out: false,
+            duration_ms,
+            health: evidence,
+        },
+        None => task_core::Event::IntegrationCheckFinished {
+            work_unit_id: work_unit_id.to_string(),
+            key: key.to_string(),
+            index,
+            total,
+            cmd,
+            pass: item.pass,
+            exit: item.exit,
+            timed_out: false,
+            duration_ms,
+            health: evidence,
+        },
+    };
+    if let Err(e) = store.append_event(task_id, &finished) {
+        tracing::warn!(%task_id, work_unit = %key, error = %e, "could not record the health check finish");
+    }
+    item.counted.then_some((item.pass, item.reason))
+}
+
+/// ADR 2026-11-08-health-enforcement-loop D1.2: 段 `phase` の基点（health の base）。その段の葉・子の unit のうち
+/// 最も前（`seq`）の unit が切られた commit（`base_commit`）。段の unit は段の始まりの Task のブランチから切られる
+/// ので、統合と修復を繰り返しても同じ基点になる。どの unit も基点を持たなければ `None`。
+fn phase_base_commit(units: &[task_core::WorkUnitRow], phase: &str) -> Option<String> {
+    units
+        .iter()
+        .filter(|u| {
+            u.phase.as_deref() == Some(phase)
+                && !matches!(
+                    u.kind,
+                    task_core::WorkUnitKind::Integrate | task_core::WorkUnitKind::Repair
+                )
+        })
+        .filter_map(|u| u.base_commit.clone().map(|base| (u.seq, base)))
+        .min_by_key(|(seq, _)| *seq)
+        .map(|(_, base)| base)
+}
+
+/// `dir` の HEAD（統合の前。段の unit が基点を持たないときの health の base）。読めなければ `HEAD`（評価で base を解決
+/// できなければ証跡は Error になり、合格にしない）。
+fn git_head(dir: &std::path::Path) -> String {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["rev-parse", "--verify", "HEAD^{commit}"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_else(|| "HEAD".to_string())
+}
+
+/// health の証跡の repo の id。案件の repo の参照（`task.repos` の同じ名前）があればその id。参照の無い作業場所
+/// （task の `repos` が空の単一の作業場所）は固定の id（全桁 0）にする（作業場所は 1 つなので取り違えない）。
+pub(crate) fn health_repo_id(repo_id: Option<task_core::RepoId>) -> task_core::RepoId {
+    repo_id.unwrap_or(task_core::RepoId(ulid::Ulid::nil()))
+}
+
+/// 段の統合の health の `(作業ツリー, repo の id, base)`（base は段の基点、無ければ統合の前の HEAD）。
+pub(crate) fn phase_base(
+    units: &[task_core::WorkUnitRow],
+    phase: &str,
+    dir: &std::path::Path,
+    repo_id: Option<RepoId>,
+) -> (PathBuf, RepoId, String) {
+    let base = phase_base_commit(units, phase).unwrap_or_else(|| git_head(dir));
+    (dir.to_path_buf(), health_repo_id(repo_id), base)
+}
+
+/// 段の統合の health の対象（[`phase_base`] の `(作業ツリー, repo の id, base)` と統合の HEAD。空なら `HEAD`）。
+pub(crate) fn at_head(
+    (worktree, repo_id, base): (PathBuf, RepoId, String),
+    head: &str,
+    bundled: Option<BundledChecker>,
+) -> HealthTarget {
+    let head = if head.is_empty() { "HEAD" } else { head };
+    HealthTarget {
+        repo_id,
+        worktree,
+        base,
+        head: head.to_string(),
+        bundled,
+    }
+}
+
+/// WU の check の health の対象（base は `wu.base_commit`、head は WU の作業ツリー `worktree` の HEAD）。基点の無い WU
+/// （Task の作業ツリーで走る repair など）は `None`（段の統合で評価する）。repo の id は作業場所の先頭の git の repo の参照。
+pub(crate) fn work_unit_target(
+    task: &task_core::Task,
+    workspaces: Option<task_worker::TaskWorkspaces>,
+    base_commit: Option<&str>,
+    worktree: &std::path::Path,
+) -> Option<HealthTarget> {
+    let repo_id = workspaces.and_then(|ws| {
+        let repo = ws.repos.into_iter().find(|r| r.is_git())?;
+        let reference = task.repos.iter().find(|r| r.name == repo.name)?;
+        Some(reference.repo_id)
+    });
+    Some(HealthTarget {
+        repo_id: health_repo_id(repo_id),
+        worktree: worktree.to_path_buf(),
+        base: base_commit?.to_string(),
+        head: "HEAD".to_string(),
+        bundled: gate::bundled_checker().cloned(),
+    })
+}
+
+/// D3.4: WU の check の列（`checks` と `results` は同じ順）の health の項目が Error なら、run の結果を質問
+/// （`health_check_error: <理由>`。worker が `Done` で返した usage は落とさない）にすり替えた結果。
+pub(crate) fn error_question(
+    checks: &[task_core::WorkUnitCheck],
+    results: &[(bool, String)],
+    result: &Result<task_worker::RunOutcome, task_worker::AdapterError>,
+) -> Option<Result<task_worker::RunOutcome, task_worker::AdapterError>> {
+    let text = checks
+        .iter()
+        .zip(results)
+        .find_map(|(c, (pass, reason))| check_error(&c.cmd, *pass, reason))?
+        .to_string();
+    let usage = match result {
+        Ok(task_worker::RunOutcome {
+            terminal: task_worker::Terminal::Done { usage, .. },
+            ..
+        }) => *usage,
+        _ => None,
+    };
+    Some(Ok(task_worker::RunOutcome {
+        terminal: task_worker::Terminal::Question { text, usage },
+        exit_code: None,
+    }))
+}
+
+fn now_rfc3339() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 #[path = "check_item_tests.rs"]
 mod tests;

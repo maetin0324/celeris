@@ -1,5 +1,6 @@
 use super::*;
-use crate::required_checks::health::{CheckerId, CheckerSource};
+use crate::required_checks::health::{CheckerId, CheckerSource, HealthVerdict};
+use crate::store::SqliteStore;
 
 fn record(job_id: CronJobId, repo_id: RepoId) -> HealthInventoryRun {
     HealthInventoryRun {

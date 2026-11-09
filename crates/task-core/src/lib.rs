@@ -62,6 +62,7 @@ pub mod execution_plan;
 pub mod feed;
 /// ADR-0046 D3（Phase 59）: ハーネス = 実行契約（`[[harnesses]]`。旧 `[[genres]]` + `[[roles]]`）。
 pub mod harness;
+pub mod health_inventory;
 /// ADR-0040 D4（Phase 47）: celeris のインスタンスの役割（`daemon_instances`）。
 pub mod instance;
 /// 統合の依頼とその表示用の情報（ADR parallel integration D4）。
@@ -84,6 +85,7 @@ pub mod matching_candidates;
 /// ADR-0056 D1 / D4（Phase 78）: MCP サーバーの認証（`mcp_clients`）とログ（`mcp_calls`）。
 pub mod mcp;
 pub mod message;
+mod migration_registry;
 pub mod model;
 /// ADR-0064 D1（Phase 110a）: `/proc/self/mountinfo` からマウント点のファイルシステム種別・ソースを
 /// 引く純関数（DB がネットワーク越し／loop デバイス上にあることを警告するため）。

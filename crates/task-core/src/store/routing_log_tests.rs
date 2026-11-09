@@ -4,8 +4,8 @@ use std::path::Path;
 
 use rusqlite::{Connection, params};
 
-use super::migrations::RESERVED_VERSIONS;
 use super::*;
+use crate::migration_registry::RESERVED_VERSIONS;
 
 /// 0048 より前の版数（この版の DB を daemon が本番で持っている形）。
 const OLD_VERSION: u32 = 47;

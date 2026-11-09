@@ -301,7 +301,7 @@ fn notification_feed_migration_skips_reserved_versions_and_fills_gaps() {
     };
     let v = versions(&path);
     assert_eq!(v.last(), Some(&crate::store::SCHEMA_VERSION));
-    for reserved in crate::store::migrations::RESERVED_VERSIONS {
+    for reserved in crate::migration_registry::RESERVED_VERSIONS {
         assert!(!v.contains(reserved), "reserved {reserved} recorded");
     }
     // 0041 の記録が無い DB（38〜40 は予約で飛び、42〜45 は当たり済み）を開くと

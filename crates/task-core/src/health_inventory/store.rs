@@ -1,47 +1,13 @@
-//! Append-only inventory evidence (ADR 2026-11-08-health-enforcement-loop D6).
-//! Counts are derived from these rows; no second persisted summary or verdict exists.
+//! `SqliteStore` の棚卸しの固有 method（追記・最後に評価できた行・発火ごとの数）。
+//! 既存の行は置き換えず、更新・削除の method を持たない。
 use rusqlite::params;
-use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
-use ulid::Ulid;
 
-use super::{SqliteStore, StoreError, format_rfc3339, parse_rfc3339};
+use super::{HealthInventoryFireCounts, HealthInventoryOutcome, HealthInventoryRun};
+use crate::RepoId;
 use crate::cron::CronJobId;
-use crate::required_checks::health::{HealthEvidence, HealthVerdict};
-use crate::{RepoId, TaskId};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum HealthInventoryOutcome {
-    Evaluated,
-    Unchanged,
-    NotApplicable,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HealthInventoryRun {
-    pub id: Ulid,
-    pub job_id: CronJobId,
-    pub scheduled_for: OffsetDateTime,
-    pub repo_id: RepoId,
-    pub outcome: HealthInventoryOutcome,
-    pub evidence: Option<HealthEvidence>,
-    pub task_ids: Vec<TaskId>,
-    pub existing_skipped: u64,
-    pub limit_remaining: u64,
-    pub created_at: OffsetDateTime,
-}
-
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct HealthInventoryFireCounts {
-    pub repos: u64,
-    pub evaluated: u64,
-    pub unchanged: u64,
-    pub not_applicable: u64,
-    pub tasks_created: u64,
-    pub existing_skipped: u64,
-    pub limit_remaining: u64,
-}
+use crate::required_checks::health::HealthVerdict;
+use crate::store::{SqliteStore, StoreError, format_rfc3339, parse_rfc3339};
 
 impl SqliteStore {
     /// Append one repo's record. Existing rows are never replaced.
@@ -125,7 +91,7 @@ impl SqliteStore {
         Ok(counts)
     }
 
-    fn health_inventory_rows(
+    pub(super) fn health_inventory_rows(
         &self,
         job_id: CronJobId,
     ) -> Result<Vec<HealthInventoryRun>, StoreError> {
@@ -172,7 +138,3 @@ impl SqliteStore {
         })
     }
 }
-
-#[cfg(test)]
-#[path = "health_inventory_tests.rs"]
-mod tests;

@@ -8,6 +8,7 @@ use crate::execution_plan::{
 };
 use crate::integrations::{IntegrationMethod, IntegrationState, TaskIntegration};
 use crate::message::{Message, MessageId, MessageRole};
+use crate::migration_registry::migration_sql;
 use crate::model::{ArtifactRef, Budget, Check, Criterion, Tier, WorkerHint, WorkspaceSpec};
 use crate::org::{OrgError, OrgKind, OrgNode, Project, ProjectId, ProjectStatus};
 use crate::repos::{ProjectRepo, RepoId, RepoRun};
@@ -1220,7 +1221,7 @@ fn open_migrates_legacy_v1_db_and_is_idempotent() {
 
     {
         let conn = Connection::open(&path).unwrap();
-        conn.execute_batch(MIGRATION_0001).unwrap();
+        conn.execute_batch(migration_sql(1).unwrap()).unwrap();
         insert_legacy_task(&conn, &a);
         insert_legacy_task(&conn, &b);
 
@@ -1334,10 +1335,10 @@ fn open_migrates_schema_4_db_and_old_rows_read_back_with_genre_none() {
 
     {
         let conn = Connection::open(&path).unwrap();
-        conn.execute_batch(MIGRATION_0001).unwrap();
-        conn.execute_batch(MIGRATION_0002).unwrap();
-        conn.execute_batch(MIGRATION_0003).unwrap();
-        conn.execute_batch(MIGRATION_0004).unwrap();
+        conn.execute_batch(migration_sql(1).unwrap()).unwrap();
+        conn.execute_batch(migration_sql(2).unwrap()).unwrap();
+        conn.execute_batch(migration_sql(3).unwrap()).unwrap();
+        conn.execute_batch(migration_sql(4).unwrap()).unwrap();
         conn.execute_batch(
             "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);\
              INSERT INTO schema_migrations (version, applied_at) VALUES \
@@ -2468,11 +2469,11 @@ fn open_migrates_schema_5_db_to_the_current_version_and_reapplying_is_idempotent
     {
         let conn = Connection::open(&path).unwrap();
         for sql in [
-            MIGRATION_0001,
-            MIGRATION_0002,
-            MIGRATION_0003,
-            MIGRATION_0004,
-            MIGRATION_0005,
+            migration_sql(1).unwrap(),
+            migration_sql(2).unwrap(),
+            migration_sql(3).unwrap(),
+            migration_sql(4).unwrap(),
+            migration_sql(5).unwrap(),
         ] {
             conn.execute_batch(sql).unwrap();
         }
@@ -2545,12 +2546,12 @@ fn migration_0007_turns_the_empty_project_sentinel_into_null_and_adds_message_ta
     {
         let conn = Connection::open(&path).unwrap();
         for sql in [
-            MIGRATION_0001,
-            MIGRATION_0002,
-            MIGRATION_0003,
-            MIGRATION_0004,
-            MIGRATION_0005,
-            MIGRATION_0006,
+            migration_sql(1).unwrap(),
+            migration_sql(2).unwrap(),
+            migration_sql(3).unwrap(),
+            migration_sql(4).unwrap(),
+            migration_sql(5).unwrap(),
+            migration_sql(6).unwrap(),
         ] {
             conn.execute_batch(sql).unwrap();
         }
@@ -2621,13 +2622,13 @@ fn migration_0008_adds_the_notifications_table_to_a_schema_7_db() {
     {
         let conn = Connection::open(&path).unwrap();
         for sql in [
-            MIGRATION_0001,
-            MIGRATION_0002,
-            MIGRATION_0003,
-            MIGRATION_0004,
-            MIGRATION_0005,
-            MIGRATION_0006,
-            MIGRATION_0007,
+            migration_sql(1).unwrap(),
+            migration_sql(2).unwrap(),
+            migration_sql(3).unwrap(),
+            migration_sql(4).unwrap(),
+            migration_sql(5).unwrap(),
+            migration_sql(6).unwrap(),
+            migration_sql(7).unwrap(),
         ] {
             conn.execute_batch(sql).unwrap();
         }
@@ -3156,15 +3157,15 @@ fn migration_0010_adds_the_projects_workspace_column_to_a_schema_9_db() {
     {
         let conn = Connection::open(&path).unwrap();
         for sql in [
-            MIGRATION_0001,
-            MIGRATION_0002,
-            MIGRATION_0003,
-            MIGRATION_0004,
-            MIGRATION_0005,
-            MIGRATION_0006,
-            MIGRATION_0007,
-            MIGRATION_0008,
-            MIGRATION_0009,
+            migration_sql(1).unwrap(),
+            migration_sql(2).unwrap(),
+            migration_sql(3).unwrap(),
+            migration_sql(4).unwrap(),
+            migration_sql(5).unwrap(),
+            migration_sql(6).unwrap(),
+            migration_sql(7).unwrap(),
+            migration_sql(8).unwrap(),
+            migration_sql(9).unwrap(),
         ] {
             conn.execute_batch(sql).unwrap();
         }
@@ -3221,17 +3222,17 @@ fn migration_0012_copies_each_project_workspace_into_a_primary_repo() {
     {
         let conn = Connection::open(&path).unwrap();
         for sql in [
-            MIGRATION_0001,
-            MIGRATION_0002,
-            MIGRATION_0003,
-            MIGRATION_0004,
-            MIGRATION_0005,
-            MIGRATION_0006,
-            MIGRATION_0007,
-            MIGRATION_0008,
-            MIGRATION_0009,
-            MIGRATION_0010,
-            MIGRATION_0011,
+            migration_sql(1).unwrap(),
+            migration_sql(2).unwrap(),
+            migration_sql(3).unwrap(),
+            migration_sql(4).unwrap(),
+            migration_sql(5).unwrap(),
+            migration_sql(6).unwrap(),
+            migration_sql(7).unwrap(),
+            migration_sql(8).unwrap(),
+            migration_sql(9).unwrap(),
+            migration_sql(10).unwrap(),
+            migration_sql(11).unwrap(),
         ] {
             conn.execute_batch(sql).unwrap();
         }

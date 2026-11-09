@@ -23,7 +23,7 @@ fn table_count(path: &Path) -> i64 {
 fn previous_version() -> u32 {
     (1..SCHEMA_VERSION)
         .rev()
-        .find(|v| !migrations::RESERVED_VERSIONS.contains(v))
+        .find(|v| !crate::migration_registry::RESERVED_VERSIONS.contains(v))
         .unwrap()
 }
 

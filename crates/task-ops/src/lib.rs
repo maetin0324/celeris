@@ -35,6 +35,8 @@ pub mod execution;
 pub mod followup;
 pub mod gate;
 pub mod graph;
+/// ADR 2026-11-08-health-enforcement-loop D6.6・D6.7: 棚卸しの評価から debt の draft task を起票する。
+pub mod health_debt;
 pub mod human_inbox;
 pub mod inbox;
 pub mod integrate_task;

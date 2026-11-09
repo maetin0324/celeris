@@ -74,6 +74,24 @@ impl Dispatcher {
         }
         .with_cargo_env(check_env);
         let checks = wu.spec.checks.clone();
+        // ADR 2026-11-08-health-enforcement-loop D1.2: WU の作業ツリーで、base は `wu.base_commit`、head は WU の HEAD。
+        // 基点の無い WU（Task の作業ツリーで走る repair など）は段の統合で評価する。
+        let health = wu.base_commit.clone().map(|base| {
+            let repo_id = self.task_workspaces_for(&task).and_then(|ws| {
+                let repo = ws.repos.into_iter().find(|r| r.is_git())?;
+                task.repos
+                    .iter()
+                    .find(|reference| reference.name == repo.name)
+                    .map(|reference| reference.repo_id)
+            });
+            crate::health_review::check_item::HealthTarget {
+                repo_id: super::phase_integration::health_repo_id(repo_id),
+                worktree: ws.work_dir().to_path_buf(),
+                base,
+                head: "HEAD".to_string(),
+                bundled: crate::health_review::gate::bundled_checker().cloned(),
+            }
+        });
         let timeout = self.config.review_timeout;
         let tx = self.tx.clone();
         let checking_run_id = run_id.clone();
@@ -100,15 +118,23 @@ impl Dispatcher {
             provider.clone(),
         );
         let handle = tokio::spawn(async move {
-            let check_results = super::phase_integration::run_integration_checks(
+            let ran = super::phase_integration::run_integration_checks(
                 store.as_ref(),
                 task_id,
                 &observed,
                 &ws,
                 &checks,
                 timeout,
+                health,
             )
             .await;
+            // health の行は列の最後の項目（不合格なら WU の repair〈retry〉、Error なら Blocked。
+            // `on_work_unit_checks_finished`）。
+            let (mut check_results, mut checks) = (ran.results, checks);
+            if let Some(row) = ran.health {
+                check_results.push(row);
+                checks.push(crate::health_review::check_item::work_unit_check());
+            }
             let _ = tx.send(Completion::WorkUnitChecks {
                 task_id,
                 run_id,
@@ -383,6 +409,32 @@ impl Dispatcher {
             u.status == task_core::WorkUnitStatus::Running
                 && u.last_run_id.as_deref() == Some(run_id.as_str())
         });
+        // ADR 2026-11-08-health-enforcement-loop D3.4: health の Error・Unavailable は合格にも WU の repair にもせず、
+        // task を Blocked にして人に聞く（質問は `health_check_error: <理由>`。人が環境を直して回答で再開する）。
+        if let Some(text) = check_run.health_error() {
+            let usage = match &result {
+                Ok(RunOutcome {
+                    terminal: Terminal::Done { usage, .. },
+                    ..
+                }) => *usage,
+                _ => None,
+            };
+            let question = Ok(RunOutcome {
+                terminal: Terminal::Question { text, usage },
+                exit_code: None,
+            });
+            return self.finish_worker_result_with(
+                task,
+                current_wu,
+                run_id,
+                account,
+                account_adapter,
+                run_since,
+                provider,
+                question,
+                None,
+            );
+        }
         // ADR-0079 付記 R7-5: 不合格の検査（cmd・期待する exit・判定文）と走らせた所を残し、run の usage を落とさない。
         let failure = check_run.failure(&result);
         let result = match &failure {
@@ -2079,6 +2131,17 @@ pub(super) struct WorkUnitCheckRun {
 }
 
 impl WorkUnitCheckRun {
+    /// health の項目が Error（D3.4）なら、その質問の文（`health_check_error: <理由>`）。
+    pub(super) fn health_error(&self) -> Option<String> {
+        self.checks
+            .iter()
+            .zip(&self.results)
+            .find_map(|(c, (pass, reason))| {
+                crate::health_review::check_item::check_error(&c.cmd, *pass, reason)
+            })
+            .map(str::to_string)
+    }
+
     /// 1 つでも不合格があれば、その記録（worker が `Done` で返した usage も持つ）。全部合格なら `None`。
     pub(super) fn failure(
         &self,

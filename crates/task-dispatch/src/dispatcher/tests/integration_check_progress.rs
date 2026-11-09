@@ -163,8 +163,10 @@ async fn a_running_integration_check_has_a_started_event_and_a_readable_partial_
             &ws,
             &checks,
             Duration::from_secs(30),
+            None,
         )
         .await
+        .results
     });
     // Started が積まれ、ログに前半が出るまで待つ。
     let mut log_path = None;

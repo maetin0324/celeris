@@ -14,6 +14,7 @@
 //! - [`stub_checker`]: health を測らない process（dispatcher 試験の土台・dagbench の driver）が設定する、合格の stub の
 //!   同梱の検査器（ADR 2026-11-08-health-enforcement-loop D1.4 の代わり。本番の daemon は使わない）。
 
+pub mod check_item;
 pub(crate) mod design;
 pub mod gate;
 pub(crate) mod input;

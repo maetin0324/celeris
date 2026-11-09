@@ -48,7 +48,7 @@ async fn checks_at(
     runs: Vec<HealthRun>,
 ) -> RequiredRepoChecks {
     let mut repo = vec![site(binding, dir)];
-    review_item::evaluate_all(&mut repo, runs, remote, None).await;
+    review_item::evaluate_all(&mut repo, runs, remote, None, Vec::new()).await;
     repo.remove(0)
 }
 

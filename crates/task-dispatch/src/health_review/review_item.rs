@@ -13,19 +13,33 @@
 //!   Unavailable・Error は `health_check_error: <理由>` の不合格で、repair に回さない（`Verdict::implicit_check`）。
 //! - NotApplicable（Git 管理でない・remote workspace）と候補の無い repo は項目を足さず、理由を残す（`HealthItem::note`）。
 //!
+//! - 再利用（D2.5。reviewer の合格の再利用・同期の後の再 review・統合の修復の後を含む）: 束縛の同じ G2 の評価が無ければ、
+//!   同じ task の event の証跡を [`task_core::required_checks::reuse_health`] で引く。同じ `(base, head の tree, policy,
+//!   検査器)` の Pass だけを今の `(base, head)` に束縛し直して `reused_from` を書き、検査器を起こさない。tree・base・
+//!   検査器・policy が違えば、同期（rebase）で head の tree が変わったときも、入口 [`gate::health_gate`] で評価し直す。
+//!   reviewer を省いても health は省かない（束縛が合うときだけ写す）。[`reusable_checks`] は必須検査の cmd の再利用に同じ
+//!   適用判定の検査器を渡す（定義指紋が検査器を含むため）。
+//!
 //! LLM は呼ばない。
 
+use std::collections::BTreeSet;
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Instant;
 
-use task_core::PhaseCheckResult;
-use task_core::ReviewRepairHint;
-use task_core::required_checks::health::{HEALTH_CHECK_ID, HealthApplicability};
+use task_core::required_checks::health::{
+    CheckerId, HEALTH_CHECK_ID, HealthApplicability, HealthEvidence,
+};
+use task_core::required_checks::{
+    HealthCandidate, HealthRequirement, reusable_passes, reuse_health,
+};
+use task_core::{Event, PhaseCheckResult, ReviewRepairHint};
 
 use super::gate::{
     self, BundledChecker, HealthGateDecision, HealthGateOutcome, HealthGateRequest, HealthRun,
 };
 use super::input::{HEALTH_INPUT_TIMEOUT, NOT_SYNCED};
+use super::policy::git_stdout;
 use crate::review::{
     HEALTH_CHECK_ERROR, HealthItem, RepoHealth, RequiredCheckBinding, RequiredRepoChecks,
 };
@@ -42,7 +56,9 @@ pub async fn evaluate_all(
     mut runs: Vec<HealthRun>,
     remote: bool,
     bundled: Option<&'static BundledChecker>,
+    events: Vec<Event>,
 ) {
+    let events = Arc::new(events);
     for check in checks.iter_mut() {
         let Some(RepoHealth::At(dir)) = check.health.take() else {
             continue;
@@ -52,8 +68,9 @@ pub async fn evaluate_all(
             .as_ref()
             .and_then(|b| runs.iter().position(|run| binds(run, b)))
             .map(|i| runs.swap_remove(i));
+        let recorded = Arc::clone(&events);
         let item = tokio::task::spawn_blocking(move || {
-            evaluate(&dir, binding.as_ref(), remote, bundled, prior)
+            evaluate(&dir, binding.as_ref(), remote, bundled, prior, &recorded)
         })
         .await
         .unwrap_or_else(|e| error_item(&format!("検査を起こせない: {e}")));
@@ -74,6 +91,7 @@ fn evaluate(
     remote: bool,
     bundled: Option<&'static BundledChecker>,
     prior: Option<HealthRun>,
+    events: &[Event],
 ) -> HealthItem {
     let Some(binding) = binding else {
         return HealthItem {
@@ -81,9 +99,17 @@ fn evaluate(
             ..HealthItem::default()
         };
     };
-    let outcome = match prior {
-        Some(run) => HealthGateOutcome::Evaluated(run),
-        None => gate::health_gate(&HealthGateRequest {
+    let reused = match prior {
+        Some(_) => None,
+        None => reuse(dir, binding, !remote, bundled, events),
+    };
+    let outcome = match (prior, reused) {
+        (Some(run), _) => HealthGateOutcome::Evaluated(run),
+        (None, Some(evidence)) => HealthGateOutcome::Evaluated(HealthRun {
+            evidence,
+            failures: Vec::new(),
+        }),
+        (None, None) => gate::health_gate(&HealthGateRequest {
             repo_id: binding.repo_id,
             worktree: dir,
             base: &binding.target_sha,
@@ -94,6 +120,86 @@ fn evaluate(
         }),
     };
     item(&outcome)
+}
+
+/// 今の候補に束縛し直して写せる health の証跡（D2.5）。適用判定が `Applies` で head の tree を読め、同じ task の event に
+/// 同じ `(base, tree, policy, 検査器)` の Pass があるときだけ。読めない・合わないときは `None`（入口で評価し直す）。
+fn reuse(
+    dir: &Path,
+    binding: &RequiredCheckBinding,
+    integrated_by_celeris: bool,
+    bundled: Option<&BundledChecker>,
+    events: &[Event],
+) -> Option<HealthEvidence> {
+    let (checker, tree) = requirement_of(dir, binding, integrated_by_celeris, bundled)?;
+    reuse_health(
+        events,
+        &HealthCandidate {
+            repo_id: binding.repo_id,
+            base_sha: &binding.target_sha,
+            head_sha: &binding.reviewed_sha,
+            head_tree: &tree,
+            checker_sha256: &checker.sha256,
+        },
+    )
+}
+
+/// 候補 `binding` の適用判定の検査器と、`reviewed_sha` の tree（適用判定が `Applies` で tree を読めたときだけ）。
+fn requirement_of(
+    dir: &Path,
+    binding: &RequiredCheckBinding,
+    integrated_by_celeris: bool,
+    bundled: Option<&BundledChecker>,
+) -> Option<(CheckerId, String)> {
+    let deadline = Instant::now() + HEALTH_INPUT_TIMEOUT;
+    let HealthApplicability::Applies { checker } = gate::applicable(
+        dir,
+        &binding.target_sha,
+        integrated_by_celeris,
+        bundled,
+        deadline,
+    ) else {
+        return None;
+    };
+    let tree = git_stdout(
+        dir,
+        &[
+            "rev-parse",
+            "--verify",
+            &format!("{}^{{tree}}", binding.reviewed_sha),
+        ],
+        deadline,
+    )
+    .ok()?;
+    Some((checker, tree.trim().to_string()))
+}
+
+/// `spawn_review` が repo ごとに呼ぶ、同じ束縛で合格済みの必須検査の cmd。health の要求（今の適用判定の検査器）を
+/// `reusable_passes` に渡す（定義指紋が検査器を含む）。要求を作れない（Applies でない・tree を読めない）ときは
+/// `NotRequired` で、health の当たる候補の証跡とは指紋が合わず再利用しない（fail closed）。
+pub fn reusable_checks(
+    events: &[Event],
+    binding: &RequiredCheckBinding,
+    dir: &Path,
+    remote: bool,
+    cmds: &[String],
+) -> BTreeSet<String> {
+    let required = requirement_of(dir, binding, !remote, gate::bundled_checker());
+    let health = match &required {
+        Some((checker, tree)) => HealthRequirement::Applies {
+            checker,
+            reviewed_tree: tree,
+        },
+        None => HealthRequirement::NotRequired,
+    };
+    reusable_passes(
+        events,
+        binding.repo_id,
+        &binding.target_sha,
+        &binding.reviewed_sha,
+        cmds,
+        health,
+    )
 }
 
 fn error_item(reason: &str) -> HealthItem {

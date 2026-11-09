@@ -97,10 +97,37 @@ fn the_latest_bound_evidence_wins() {
 fn only_same_binding_passes_are_reusable() {
     let repo = RepoId::new();
     let events = [evidence(repo, "t", "c", &[("a", true), ("b", false)])];
-    let reuse = reusable_passes(&events, repo, "t", "c", &required());
+    let reuse = reusable_passes(
+        &events,
+        repo,
+        "t",
+        "c",
+        &required(),
+        HealthRequirement::NotRequired,
+    );
     assert_eq!(reuse.into_iter().collect::<Vec<_>>(), vec!["a".to_string()]);
-    assert!(reusable_passes(&events, repo, "t", "c2", &required()).is_empty());
-    assert!(reusable_passes(&events, repo, "t2", "c", &required()).is_empty());
+    assert!(
+        reusable_passes(
+            &events,
+            repo,
+            "t",
+            "c2",
+            &required(),
+            HealthRequirement::NotRequired
+        )
+        .is_empty()
+    );
+    assert!(
+        reusable_passes(
+            &events,
+            repo,
+            "t2",
+            "c",
+            &required(),
+            HealthRequirement::NotRequired
+        )
+        .is_empty()
+    );
 }
 
 #[test]
@@ -121,7 +148,17 @@ fn changed_definition_invalidates_evidence_and_reuse() {
             .unwrap_err()
             .contains("指紋")
     );
-    assert!(reusable_passes(&events, repo, "t", "c", &changed).is_empty());
+    assert!(
+        reusable_passes(
+            &events,
+            repo,
+            "t",
+            "c",
+            &changed,
+            HealthRequirement::NotRequired
+        )
+        .is_empty()
+    );
 }
 
 #[test]
@@ -130,7 +167,17 @@ fn second_repo_requires_its_own_complete_passing_evidence() {
     let second = RepoId::new();
     let mut events = vec![evidence(first, "t", "c", &[("a", true), ("b", true)])];
     assert!(verify(&events, second, "t", "c", &required()).is_err());
-    assert!(reusable_passes(&events, second, "t", "c", &required()).is_empty());
+    assert!(
+        reusable_passes(
+            &events,
+            second,
+            "t",
+            "c",
+            &required(),
+            HealthRequirement::NotRequired
+        )
+        .is_empty()
+    );
     events.push(evidence(second, "t", "c", &[("a", true)]));
     assert!(
         verify(&events, second, "t", "c", &required())
@@ -160,7 +207,17 @@ fn ambiguous_multiline_commands_and_pre_v2_evidence_cannot_be_reused() {
         *definition_sha256 = format!("{:x}", Sha256::digest(b"a\nb\n"));
     }
     assert!(verify(&[event.clone()], repo, "t", "c", &required()).is_err());
-    assert!(reusable_passes(&[event], repo, "t", "c", &required()).is_empty());
+    assert!(
+        reusable_passes(
+            &[event],
+            repo,
+            "t",
+            "c",
+            &required(),
+            HealthRequirement::NotRequired
+        )
+        .is_empty()
+    );
 }
 
 #[test]
@@ -417,7 +474,17 @@ fn health_evidence_v2_definition_digest_is_invalid() {
         *definition_sha256 = health::domain_sha256("celeris.required-checks/2", ["a", "b"]);
     }
     assert!(verify(&[event.clone()], repo, "t", "c", &required()).is_err());
-    assert!(reusable_passes(&[event], repo, "t", "c", &required()).is_empty());
+    assert!(
+        reusable_passes(
+            &[event],
+            repo,
+            "t",
+            "c",
+            &required(),
+            HealthRequirement::NotRequired
+        )
+        .is_empty()
+    );
 }
 
 #[test]
@@ -649,6 +716,152 @@ fn health_evidence_reusable_passes_never_copies_health() {
             health_item(Some(pass_health(repo)), true),
         ],
     };
-    let reuse = reusable_passes(&[event], repo, "t", "c", &required());
+    let reuse = reusable_passes(
+        &[event],
+        repo,
+        "t",
+        "c",
+        &required(),
+        HealthRequirement::NotRequired,
+    );
     assert_eq!(reuse.into_iter().collect::<Vec<_>>(), vec!["a".to_string()]);
+}
+
+fn candidate<'a>(
+    base: &'a str,
+    head: &'a str,
+    tree: &'a str,
+    checker: &'a str,
+) -> HealthCandidate<'a> {
+    HealthCandidate {
+        repo_id: RepoId::new(),
+        base_sha: base,
+        head_sha: head,
+        head_tree: tree,
+        checker_sha256: checker,
+    }
+}
+
+/// 守る不変条件: 写した証跡は今の `(base_sha, head_sha)` に束縛し直され、`reused_from` に元の head を書く。同じ
+/// tree・base・検査器・policy のときだけ写す。既存の `reusable_health` は束縛し直しを呼び出し元に任せるので、
+/// 束縛し直し（と policy の鍵の導出）の取り違えは検出できない。
+#[test]
+fn health_enforce_reviewer_reuse_rebinds_to_the_current_candidate() {
+    let repo = RepoId::new();
+    let recorded = pass_health(repo);
+    let events = [reviewed(repo, &recorded)];
+    let now = HealthCandidate {
+        repo_id: repo,
+        ..candidate("t", "c2", TREE, CHECKER)
+    };
+    let copied = reuse_health(&events, &now).expect("same tree reuses");
+    assert_eq!(copied.head_sha, "c2");
+    assert_eq!(copied.base_sha, "t");
+    assert_eq!(copied.reused_from.as_deref(), Some("c"));
+    assert_eq!(copied.report_sha256, recorded.report_sha256);
+    assert_eq!(copied.verdict, HealthVerdict::Pass);
+    // 写した証跡の再利用は、元の head（今の直前の head）を reused_from に書く。
+    let again = HealthCandidate {
+        head_sha: "c3",
+        ..now
+    };
+    let events = [reviewed(repo, &recorded), wu_check(&copied)];
+    assert_eq!(
+        reuse_health(&events, &again)
+            .unwrap()
+            .reused_from
+            .as_deref(),
+        Some("c2")
+    );
+}
+
+/// 守る不変条件: head の tree・base・検査器・policy のどれかが違えば写さない（評価し直す）。
+#[test]
+fn health_enforce_reviewer_reuse_invalidates_on_any_binding_change() {
+    let repo = RepoId::new();
+    let recorded = pass_health(repo);
+    let events = [reviewed(repo, &recorded)];
+    let same = HealthCandidate {
+        repo_id: repo,
+        ..candidate("t", "c2", TREE, CHECKER)
+    };
+    assert!(reuse_health(&events, &same).is_some());
+    for changed in [
+        HealthCandidate {
+            head_tree: "tree-other",
+            ..same
+        },
+        HealthCandidate {
+            base_sha: "t2",
+            ..same
+        },
+        HealthCandidate {
+            checker_sha256: "checker-2",
+            ..same
+        },
+        HealthCandidate {
+            repo_id: RepoId::new(),
+            ..same
+        },
+    ] {
+        assert_eq!(reuse_health(&events, &changed), None, "{changed:?}");
+    }
+    // policy が変わった（同じ base・検査器で、その後の証跡の policy が違う）ときは、元の tree の証跡を写さない。
+    let other_policy = HealthEvidence {
+        head_tree: "tree-d".into(),
+        policy_sha256: "policy-2".into(),
+        ..recorded.clone()
+    };
+    let events = [reviewed(repo, &recorded), wu_check(&other_policy)];
+    assert_eq!(reuse_health(&events, &same), None);
+    // Fail・Error・dirty な証跡は写さない。
+    for bad in [
+        HealthEvidence {
+            verdict: HealthVerdict::Fail,
+            ..recorded.clone()
+        },
+        HealthEvidence {
+            verdict: HealthVerdict::Error,
+            ..recorded.clone()
+        },
+        HealthEvidence {
+            reviewable: false,
+            ..recorded.clone()
+        },
+    ] {
+        assert_eq!(reuse_health(&[wu_check(&bad)], &same), None);
+    }
+}
+
+/// 守る不変条件: `reusable_passes` の定義指紋は health の要求の検査器を含む。検査器が違えば必須検査の合格も写さない。
+#[test]
+fn health_enforce_reviewer_reuse_passes_follow_the_checker_digest() {
+    let repo = RepoId::new();
+    let recorded = pass_health(repo);
+    let events = [reviewed(repo, &recorded)];
+    let applies = |sha: &'static str| (checker(sha), TREE);
+    let (c1, tree) = applies(CHECKER);
+    let same = HealthRequirement::Applies {
+        checker: &c1,
+        reviewed_tree: tree,
+    };
+    let got = reusable_passes(&events, repo, "t", "c", &required(), same);
+    assert_eq!(got, ["a".to_string(), "b".to_string()].into());
+    let (c2, tree) = applies("checker-2");
+    let other = HealthRequirement::Applies {
+        checker: &c2,
+        reviewed_tree: tree,
+    };
+    assert!(reusable_passes(&events, repo, "t", "c", &required(), other).is_empty());
+    assert!(
+        reusable_passes(
+            &events,
+            repo,
+            "t",
+            "c",
+            &required(),
+            HealthRequirement::NotRequired
+        )
+        .is_empty()
+    );
 }

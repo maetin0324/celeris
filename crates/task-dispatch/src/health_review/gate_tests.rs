@@ -615,3 +615,6 @@ mod entry;
 
 #[path = "review_item_tests.rs"]
 mod review_item;
+
+#[path = "reuse_tests.rs"]
+mod reuse;

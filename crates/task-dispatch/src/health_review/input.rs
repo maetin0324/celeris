@@ -122,6 +122,7 @@ impl HealthInputJob {
         self,
         run: Option<ReviewerRun>,
         checks: &mut [RequiredRepoChecks],
+        events: Vec<Event>,
     ) -> Option<ReviewerRun> {
         let (health, runs) = match self.work {
             Some(work) => {
@@ -139,7 +140,7 @@ impl HealthInputJob {
             }
             None => (None, Vec::new()),
         };
-        review_item::evaluate_all(checks, runs, self.remote, gate::bundled_checker()).await;
+        review_item::evaluate_all(checks, runs, self.remote, gate::bundled_checker(), events).await;
         let mut run = run?;
         run.health = health;
         Some(run)

@@ -1,7 +1,7 @@
 //! ADR 2026-11-08-health-enforcement-loop D1.2・D2.4・D3.1〜D3.4: atomic/direct の task の review（`review::review_task` の
 //! 必須検査の列）の health の項目の試験（試験名は `health_enforce_direct_review_` と `health_enforce_integration_repair_review_`）。
 //! `gate_tests` の子 module で、同じ stub の検査器（base に commit した `repo_health.py` と `health/engine.py`）を使う。
-//! 同梱の検査器は `RequiredHealth.bundled` に直接渡す（process の設定を読まない）。外部ネットワークに出ず、LLM を呼ばない。
+//! 同梱の検査器は `evaluate_all` の `bundled` に直接渡す（process の設定を読まない）。外部ネットワークに出ず、LLM を呼ばない。
 //!
 //! 既存の `health_enforce_entry_*` は入口の分類だけを見る。これらは review の必須検査の列に項目が入ること・定義指紋に
 //! 検査器が入ること・Fail が repair の材料を持つこと・Error が合格にならないこと・G2 の評価を同じ候補で使い回すことを
@@ -14,22 +14,12 @@ use task_core::required_checks::health::{HEALTH_CHECK_ID, HealthVerdict};
 use task_core::{Check, RepoId};
 
 use super::*;
-use crate::health_review::review_item::{
-    self, HEALTH_CHECK_ERROR, HEALTH_POLICY_ONLY, RequiredHealth,
-};
+use crate::health_review::review_item::{self, HEALTH_POLICY_ONLY};
 use crate::review::{
-    RequiredCheckBinding, RequiredRepoChecks, ReviewExtras, ReviewOutcome, review_task,
+    HEALTH_CHECK_ERROR, RepoHealth, RequiredCheckBinding, RequiredRepoChecks, ReviewExtras,
+    ReviewOutcome, review_task,
 };
 use task_worker::workspace::LocalWorkspace;
-
-fn site(dir: &Path, bundled: Option<&'static BundledChecker>) -> RequiredHealth {
-    RequiredHealth {
-        dir: dir.to_path_buf(),
-        remote: false,
-        bundled,
-        prior: None,
-    }
-}
 
 fn bound(repo_id: RepoId, base: &str, head: &str) -> Option<RequiredCheckBinding> {
     Some(RequiredCheckBinding {
@@ -39,14 +29,31 @@ fn bound(repo_id: RepoId, base: &str, head: &str) -> Option<RequiredCheckBinding
     })
 }
 
-fn checks(binding: Option<RequiredCheckBinding>, health: RequiredHealth) -> RequiredRepoChecks {
+/// `spawn_review` が置く未評価の health（`RepoHealth::At(dir)`）を持つ必須検査（コマンドは無し）。
+fn site(binding: Option<RequiredCheckBinding>, dir: &Path) -> RequiredRepoChecks {
     RequiredRepoChecks {
         binding,
         commands: Ok(Vec::new()),
         reusable: Default::default(),
         workspace: None,
-        health: Some(health),
+        health: Some(RepoHealth::At(dir.to_path_buf())),
     }
+}
+
+/// `HealthInputJob::attach` と同じ `evaluate_all` で評価した必須検査（`runs` は G2 の材料の評価）。
+async fn checks_at(
+    binding: Option<RequiredCheckBinding>,
+    dir: &Path,
+    remote: bool,
+    runs: Vec<HealthRun>,
+) -> RequiredRepoChecks {
+    let mut repo = vec![site(binding, dir)];
+    review_item::evaluate_all(&mut repo, runs, remote, None).await;
+    repo.remove(0)
+}
+
+async fn checks(binding: Option<RequiredCheckBinding>, dir: &Path) -> RequiredRepoChecks {
+    checks_at(binding, dir, false, Vec::new()).await
 }
 
 /// 計画なしの直行経路の review（acceptance は空、必須検査は health の項目だけ）。
@@ -86,7 +93,7 @@ async fn health_enforce_direct_review_pass_records_item_and_checker_digest() {
 
     let outcome = review(
         dir.path(),
-        checks(bound(repo_id, &base, &head), site(dir.path(), None)),
+        checks(bound(repo_id, &base, &head), dir.path()).await,
     )
     .await;
 
@@ -117,7 +124,7 @@ async fn health_enforce_direct_review_policy_only_goes_to_policy_gate() {
 
     let outcome = review(
         dir.path(),
-        checks(bound(RepoId::new(), &base, &head), site(dir.path(), None)),
+        checks(bound(RepoId::new(), &base, &head), dir.path()).await,
     )
     .await;
 
@@ -144,7 +151,7 @@ async fn health_enforce_direct_review_fail_routes_to_repair() {
 
     let outcome = review(
         dir.path(),
-        checks(bound(RepoId::new(), &base, &head), site(dir.path(), None)),
+        checks(bound(RepoId::new(), &base, &head), dir.path()).await,
     )
     .await;
 
@@ -162,7 +169,7 @@ async fn health_enforce_direct_review_fail_routes_to_repair() {
     assert_eq!(hint.scope, HEALTH_CHECK_ID);
     assert_eq!(hint.class, "health:deps.violation");
     assert_eq!(
-        review_item::implicit_check(verdict),
+        verdict.implicit_check(),
         Check::Command {
             cmd: HEALTH_CHECK_ID.to_string(),
             expect_exit: 0
@@ -179,7 +186,7 @@ async fn health_enforce_direct_review_error_is_not_pass() {
     let head = commit(dir.path(), &[(SRC, "fn b() {}\n")], "change");
     let missing = review(
         dir.path(),
-        checks(bound(RepoId::new(), &base, &head), site(dir.path(), None)),
+        checks(bound(RepoId::new(), &base, &head), dir.path()).await,
     )
     .await;
 
@@ -187,10 +194,7 @@ async fn health_enforce_direct_review_error_is_not_pass() {
     let ehead = commit(errored.path(), &[(SRC, "fn b() {}\n")], "change");
     let exit2 = review(
         errored.path(),
-        checks(
-            bound(RepoId::new(), &ebase, &ehead),
-            site(errored.path(), None),
-        ),
+        checks(bound(RepoId::new(), &ebase, &ehead), errored.path()).await,
     )
     .await;
 
@@ -208,15 +212,24 @@ async fn health_enforce_direct_review_error_is_not_pass() {
         );
         assert!(!outcome.all_pass());
         assert!(outcome.verdicts[0].repair_hint.is_none());
-        assert_eq!(
-            review_item::implicit_check(&outcome.verdicts[0]),
-            Check::Human
-        );
+        assert_eq!(outcome.verdicts[0].implicit_check(), Check::Human);
     }
     // Unavailable は検査器が無いので、定義指紋に検査器を入れない。
     assert_eq!(
         missing.required_checks[0].definition_sha256,
         definition_digest(&[], None)
+    );
+    // 評価されなかった health（`RepoHealth::At` のまま。attach を通らない）も合格にしない（fail closed）。
+    let unevaluated = review(
+        dir.path(),
+        site(bound(RepoId::new(), &base, &head), dir.path()),
+    )
+    .await;
+    let item = health_result(&unevaluated);
+    assert!(!item.pass);
+    assert!(
+        item.summary
+            .starts_with(&format!("{HEALTH_CHECK_ERROR}: not evaluated"))
     );
 }
 
@@ -226,16 +239,15 @@ async fn health_enforce_direct_review_error_is_not_pass() {
 async fn health_enforce_direct_review_non_git_repo_adds_no_item() {
     let plain = tempfile::tempdir().unwrap();
     std::fs::write(plain.path().join("README.md"), "plain\n").unwrap();
-    let outcome = review(plain.path(), checks(None, site(plain.path(), None))).await;
+    let outcome = review(plain.path(), checks(None, plain.path()).await).await;
     let repo = &outcome.required_checks[0];
     assert!(repo.results.is_empty(), "{repo:?}");
     assert_eq!(repo.health_note.as_deref(), Some("not_a_git_repo"));
     assert_eq!(repo.definition_sha256, definition_digest(&[], None));
     assert!(outcome.all_pass());
 
-    let mut remote = site(plain.path(), None);
-    remote.remote = true;
-    let outcome = review(plain.path(), checks(None, remote)).await;
+    let remote = checks_at(None, plain.path(), true, Vec::new()).await;
+    let outcome = review(plain.path(), remote).await;
     assert!(outcome.required_checks[0].results.is_empty());
     assert_eq!(
         outcome.required_checks[0].health_note.as_deref(),
@@ -269,12 +281,14 @@ async fn health_enforce_direct_review_uses_the_g2_evaluation_of_the_same_candida
     let (dir, base) = repo_with_checker(&stub_json(0, Some(&text)), true);
     let head = commit(dir.path(), &[(SRC, "fn b() {}\n")], "change");
     let repo_id = RepoId::new();
-    let mut repo_checks = vec![checks(bound(repo_id, &base, &head), site(dir.path(), None))];
-    review_item::adopt(
-        &mut repo_checks,
-        vec![marked_run(dir.path(), repo_id, &base, &head)],
-    );
-    let repo = repo_checks.remove(0);
+    let marked = marked_run(dir.path(), repo_id, &base, &head);
+    let repo = checks_at(
+        bound(repo_id, &base, &head),
+        dir.path(),
+        false,
+        vec![marked],
+    )
+    .await;
 
     let outcome = review(dir.path(), repo).await;
 
@@ -297,23 +311,16 @@ async fn health_enforce_integration_repair_review_reevaluates_the_new_head() {
     let repo_id = RepoId::new();
     let mut stale = marked_run(dir.path(), repo_id, &base, &before);
     stale.evidence.verdict = HealthVerdict::Fail;
-    let mut repo_checks = vec![checks(
+    // 修復の前の head の評価（束縛が違う）を G2 の材料の評価として渡しても使わない。
+    let repo = checks_at(
         bound(repo_id, &base, &repaired),
-        site(dir.path(), None),
-    )];
-    review_item::adopt(&mut repo_checks, vec![stale.clone()]);
-    assert!(
-        repo_checks[0]
-            .health
-            .as_ref()
-            .is_some_and(|h| h.prior.is_none())
-    );
-    // 束縛の違う評価を直接持たせても使わない。
-    if let Some(health) = repo_checks[0].health.as_mut() {
-        health.prior = Some(stale);
-    }
+        dir.path(),
+        false,
+        vec![stale],
+    )
+    .await;
 
-    let outcome = review(dir.path(), repo_checks.remove(0)).await;
+    let outcome = review(dir.path(), repo).await;
 
     let item = health_result(&outcome);
     let evidence = item.health.as_deref().expect("health evidence");

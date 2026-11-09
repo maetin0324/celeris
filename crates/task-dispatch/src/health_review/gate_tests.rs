@@ -52,6 +52,17 @@ def policy_review_files(report, changed):
     return sorted(changed)
 "#;
 
+/// stub の検査器の repo に `health/engine.py`（[`ENGINE`]）を置く。report の exit 1 を分類する入口（`policy_review`）が
+/// 同じ検査器の `policy_review_files` を呼ぶので、exit 1 の report を書く stub の検査器はこれが要る（dispatcher の試験の
+/// 土台も使う）。
+pub(crate) fn write_engine(repo: &Path) {
+    for (path, text) in [(ENGINE_PATH, ENGINE), (INIT_PATH, "")] {
+        let path = repo.join(path);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+}
+
 const STUB_JSON: &str = "scripts/dev/repo-health/stub.json";
 const ENGINE_PATH: &str = "scripts/dev/repo-health/health/engine.py";
 const INIT_PATH: &str = "scripts/dev/repo-health/health/__init__.py";

@@ -1,84 +1,63 @@
 //! ADR 2026-11-08-health-enforcement-loop D1.2・D3.1〜D3.4: atomic/direct の task の review（`Dispatcher::spawn_review` →
-//! `review::review_task`。計画なしの直行経路を含む）の health の項目。`review/required.rs` の `evaluate` が必須検査の列の
-//! 1 項目として呼ぶ。評価は経路共通の入口（[`gate::health_gate`]）だけで、検査器の起動をここに書かない。
+//! `review::review_task`。計画なしの直行経路を含む）の health の項目。`spawn_review` が repo ごとに評価する作業ツリー
+//! （`RepoHealth::At`）を置き、`HealthInputJob::attach`（review の非同期 task の中。G2 の材料の後）が [`evaluate_all`] で
+//! 評価して `RepoHealth::Evaluated` にする。`review/required.rs` の `evaluate` がそれを必須検査の列の 1 項目にする。
+//! 評価は経路共通の入口（[`gate::health_gate`]）だけで、検査器の起動をここに書かない。
 //!
 //! - 候補（review 前の同期の `(target_sha, reviewed_sha)`）がある repo: base=`target_sha`・head=`reviewed_sha` で評価する。
 //!   同じ候補で G2 の材料（`health_review::input`）が評価していれば、その評価（`gate::check_with` の `HealthRun`）を
-//!   使い、検査器を 2 回起こさない（[`adopt`]）。束縛（repo・base・head）が違う評価は使わない。統合の修復
+//!   使い、検査器を 2 回起こさない。束縛（repo・base・head）が違う評価は使わない。統合の修復
 //!   （`IntegrationRepairScheduled`）の後の review は新しい候補で評価し直す（前の評価は束縛が違う）。
 //! - 項目: Applies なら `cmd =` [`HEALTH_CHECK_ID`] の項目を足し、指紋に検査器を入れる。Pass と PolicyOnly（G2 の
-//!   `policy_review_gate` が人の承認を求める）は合格、Fail は不合格で repair の材料（[`repair_hint`]）を持つ。
-//!   Unavailable・Error は `health_check_error: <理由>` の不合格で、repair に回さない（[`implicit_check`]）。
-//! - NotApplicable（Git 管理でない・remote workspace）と候補の無い repo は項目を足さず、理由を残す（[`HealthItem::note`]）。
+//!   `policy_review_gate` が人の承認を求める）は合格、Fail は不合格で repair の材料（`HealthItem::repair_hint`）を持つ。
+//!   Unavailable・Error は `health_check_error: <理由>` の不合格で、repair に回さない（`Verdict::implicit_check`）。
+//! - NotApplicable（Git 管理でない・remote workspace）と候補の無い repo は項目を足さず、理由を残す（`HealthItem::note`）。
 //!
 //! LLM は呼ばない。
 
-use std::path::PathBuf;
+use std::path::Path;
 use std::time::Instant;
 
-use task_core::required_checks::health::{CheckerId, HEALTH_CHECK_ID, HealthApplicability};
-use task_core::{Check, PhaseCheckResult, ReviewRepairHint};
+use task_core::PhaseCheckResult;
+use task_core::ReviewRepairHint;
+use task_core::required_checks::health::{HEALTH_CHECK_ID, HealthApplicability};
 
 use super::gate::{
     self, BundledChecker, HealthGateDecision, HealthGateOutcome, HealthGateRequest, HealthRun,
 };
 use super::input::{HEALTH_INPUT_TIMEOUT, NOT_SYNCED};
-use crate::review::{RequiredCheckBinding, RequiredRepoChecks, Verdict};
+use crate::review::{
+    HEALTH_CHECK_ERROR, HealthItem, RepoHealth, RequiredCheckBinding, RequiredRepoChecks,
+};
 
-/// Error・Unavailable の項目の理由の接頭辞（D3.4）。
-pub const HEALTH_CHECK_ERROR: &str = "health_check_error";
 /// PolicyOnly の項目の理由（合格。人の承認は G2 の `policy_review_gate` が求める）。
 pub const HEALTH_POLICY_ONLY: &str =
     "health: policy_only（policy の file だけの変更。policy_review_gate が人の承認を求める）";
 
-/// review の repo の health の評価の場所。`spawn_review` が tick の中で作る（git も検査器も起こさない）。
-#[derive(Debug)]
-pub struct RequiredHealth {
-    /// 評価する作業ツリー（候補があれば同期した worktree）。
-    pub dir: PathBuf,
-    /// ssh の remote workspace（Celeris が統合しない。NotApplicable）。
-    pub remote: bool,
-    /// release に同梱した検査器（daemon が起動で設定したもの。経路の外側で読んで渡す）。
-    pub bundled: Option<&'static BundledChecker>,
-    /// 同じ候補で G2 の材料が評価した結果（[`adopt`] が入れる）。
-    pub prior: Option<HealthRun>,
-}
-
-impl RequiredHealth {
-    /// `spawn_review` の repo の評価の場所（同梱の検査器は process に設定されたもの）。
-    pub fn new(dir: PathBuf, remote: bool) -> Self {
-        RequiredHealth {
-            dir,
-            remote,
-            bundled: gate::bundled_checker(),
-            prior: None,
-        }
-    }
-}
-
-/// 1 repo の health の結果。
-#[derive(Debug, Default)]
-pub struct HealthItem {
-    /// 必須検査の列に足す項目（NotApplicable・候補の無い repo は `None`）。
-    pub result: Option<PhaseCheckResult>,
-    /// 定義指紋に入れる検査器（適用判定が Applies のときだけ）。
-    pub checker: Option<CheckerId>,
-    /// Fail の repair の材料（`Verdict.repair_hint`）。
-    pub repair_hint: Option<ReviewRepairHint>,
-    /// 項目を足さない理由（NotApplicable の `HealthApplicability::reason()`・候補が無い）。
-    pub note: Option<String>,
-}
-
-/// G2 の材料が評価した `runs` のうち、候補の束縛（repo・base=`target_sha`・head=`reviewed_sha`）が同じものを
-/// `checks` の [`RequiredHealth::prior`] に入れる。束縛の違う評価（修復の前の head など）は入れない。
-pub fn adopt(checks: &mut [RequiredRepoChecks], runs: Vec<HealthRun>) {
-    for run in runs {
-        let found = checks
-            .iter_mut()
-            .find(|c| c.health.is_some() && c.binding.as_ref().is_some_and(|b| binds(&run, b)));
-        if let Some(health) = found.and_then(|c| c.health.as_mut()) {
-            health.prior = Some(run);
-        }
+/// D1.2: `checks` の未評価の health（`RepoHealth::At`）を評価する。`runs` は G2 の材料が同じ review で評価した結果で、
+/// 束縛（repo・base=`target_sha`・head=`reviewed_sha`）が同じものだけを使う。`remote` は ssh の remote workspace
+/// （Celeris が統合しない。NotApplicable）。`bundled` は base に検査器の無い repo に当てる同梱の検査器。
+pub async fn evaluate_all(
+    checks: &mut [RequiredRepoChecks],
+    mut runs: Vec<HealthRun>,
+    remote: bool,
+    bundled: Option<&'static BundledChecker>,
+) {
+    for check in checks.iter_mut() {
+        let Some(RepoHealth::At(dir)) = check.health.take() else {
+            continue;
+        };
+        let binding = check.binding.clone();
+        let prior = binding
+            .as_ref()
+            .and_then(|b| runs.iter().position(|run| binds(run, b)))
+            .map(|i| runs.swap_remove(i));
+        let item = tokio::task::spawn_blocking(move || {
+            evaluate(&dir, binding.as_ref(), remote, bundled, prior)
+        })
+        .await
+        .unwrap_or_else(|e| error_item(&format!("検査を起こせない: {e}")));
+        check.health = Some(RepoHealth::Evaluated(item));
     }
 }
 
@@ -88,61 +67,51 @@ fn binds(run: &HealthRun, binding: &RequiredCheckBinding) -> bool {
         && run.evidence.head_sha == binding.reviewed_sha
 }
 
-/// D1.2: review の 1 repo の health を評価する（blocking な git・検査器は `spawn_blocking` で走らせる）。
-pub async fn evaluate(
-    health: RequiredHealth,
+/// 1 repo の評価（blocking。git と検査器を起こす）。`prior` は束縛の同じ G2 の評価（あれば検査器を起こさない）。
+fn evaluate(
+    dir: &Path,
     binding: Option<&RequiredCheckBinding>,
+    remote: bool,
+    bundled: Option<&'static BundledChecker>,
+    prior: Option<HealthRun>,
 ) -> HealthItem {
-    let Some(binding) = binding.cloned() else {
-        let note = tokio::task::spawn_blocking(move || unbound_note(&health))
-            .await
-            .unwrap_or_else(|e| format!("health の適用判定を起こせない: {e}"));
+    let Some(binding) = binding else {
         return HealthItem {
-            note: Some(note),
+            note: Some(unbound_note(dir, remote, bundled)),
             ..HealthItem::default()
         };
     };
-    let outcome = match health.prior {
-        Some(run) if binds(&run, &binding) => Ok(HealthGateOutcome::Evaluated(run)),
-        _ => {
-            tokio::task::spawn_blocking(move || {
-                gate::health_gate(&HealthGateRequest {
-                    repo_id: binding.repo_id,
-                    worktree: &health.dir,
-                    base: &binding.target_sha,
-                    head: &binding.reviewed_sha,
-                    integrated_by_celeris: !health.remote,
-                    bundled: health.bundled,
-                    timeout: HEALTH_INPUT_TIMEOUT,
-                })
-            })
-            .await
-        }
+    let outcome = match prior {
+        Some(run) => HealthGateOutcome::Evaluated(run),
+        None => gate::health_gate(&HealthGateRequest {
+            repo_id: binding.repo_id,
+            worktree: dir,
+            base: &binding.target_sha,
+            head: &binding.reviewed_sha,
+            integrated_by_celeris: !remote,
+            bundled,
+            timeout: HEALTH_INPUT_TIMEOUT,
+        }),
     };
-    match outcome {
-        Ok(outcome) => item(&outcome),
-        Err(e) => HealthItem {
-            result: Some(PhaseCheckResult::new(
-                HEALTH_CHECK_ID.into(),
-                false,
-                format!("{HEALTH_CHECK_ERROR}: 検査を起こせない: {e}"),
-            )),
-            ..HealthItem::default()
-        },
+    item(&outcome)
+}
+
+fn error_item(reason: &str) -> HealthItem {
+    HealthItem {
+        result: Some(PhaseCheckResult::new(
+            HEALTH_CHECK_ID.into(),
+            false,
+            format!("{HEALTH_CHECK_ERROR}: {reason}"),
+        )),
+        ..HealthItem::default()
     }
 }
 
 /// 候補の無い repo: 適用判定（同じ `repo_facts` → `applicability`）が NotApplicable ならその理由、それ以外は
 /// 候補の SHA が無いので評価しない理由（delivery の照合も候補の無い review を通さない）。
-fn unbound_note(health: &RequiredHealth) -> String {
+fn unbound_note(dir: &Path, remote: bool, bundled: Option<&BundledChecker>) -> String {
     let deadline = Instant::now() + HEALTH_INPUT_TIMEOUT;
-    match gate::applicable(
-        &health.dir,
-        "HEAD",
-        !health.remote,
-        health.bundled,
-        deadline,
-    ) {
+    match gate::applicable(dir, "HEAD", !remote, bundled, deadline) {
         applies @ HealthApplicability::NotApplicable { .. } => applies.reason().unwrap_or_default(),
         _ => NOT_SYNCED.to_string(),
     }
@@ -189,18 +158,5 @@ pub fn item(outcome: &HealthGateOutcome) -> HealthItem {
         checker,
         repair_hint,
         note: None,
-    }
-}
-
-/// `try_review_repair` が acceptance の外の verdict に当てる検査（D3.2）。health の Fail（[`HealthItem::repair_hint`]
-/// を持つ verdict）は `Check::Command { cmd: HEALTH_CHECK_ID }` として `classify_review_failure` に渡し、ほかの暗黙の条件
-/// （Plan・aggregate・必須検査・research・health の Error）は従来どおり `Check::Human`（修復しない）。
-pub fn implicit_check(verdict: &Verdict) -> Check {
-    match &verdict.repair_hint {
-        Some(hint) if hint.scope == HEALTH_CHECK_ID => Check::Command {
-            cmd: HEALTH_CHECK_ID.to_string(),
-            expect_exit: 0,
-        },
-        _ => Check::Human,
     }
 }

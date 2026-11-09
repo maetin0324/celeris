@@ -24,16 +24,17 @@ pub(super) const NORMAL_PATH: &str = "crates/foo/src/lib.rs";
 pub(super) const STORE_PATH: &str = "crates/task-store/src/rows.rs";
 const OWNER_MAP: &str = "owners/map.md";
 
-/// stub の report（new の finding 1 件・existing 1 件）。
+/// stub の report（new の finding 1 件・existing 1 件。warning なので review の health の項目は合格する）。
 fn report() -> serde_json::Value {
     let finding = |rule: &str, delta: &str, path: &str| {
         serde_json::json!({"rule_id": rule, "fingerprint": format!("{rule}:00000000000000aa"),
-            "severity": "error", "delta": delta, "exception": null, "evidence": [{"path": path}]})
+            "severity": "warning", "delta": delta, "exception": null, "evidence": [{"path": path}]})
     };
     serde_json::json!({
         "schema": "celeris.repo-health.report/1",
-        "summary": {"verdict": "fail", "exit_code": 1, "reviewable": true,
-            "counts": {"findings": 2, "fail_grade": 1, "new": 1, "worsened": 0, "existing": 1}},
+        "summary": {"verdict": "pass", "exit_code": 0, "reviewable": true,
+            "counts": {"findings": 2, "fail_grade": 0, "new": 1, "worsened": 0, "existing": 1}},
+        "rules": [],
         "findings": [
             finding("size.responsibility-growth", "new", NORMAL_PATH),
             finding("arch-map.missing_invariant", "existing", OWNER_MAP),
@@ -56,7 +57,7 @@ fn project_repo(with_policy: bool) -> tempfile::TempDir {
         "invariants": {"events-append-only": "CLAUDE.md"}, "definition_sha256": DIGEST,
     });
     let script = format!(
-        "import sys\nargs = sys.argv[1:]\nif '--print-review-policy' in args:\n    sys.stdout.write({policy:?})\n    sys.exit(0)\nopen(args[args.index('--out') + 1], 'w').write({report:?})\nsys.exit(1)\n",
+        "import sys\nargs = sys.argv[1:]\nif '--print-review-policy' in args:\n    sys.stdout.write({policy:?})\n    sys.exit(0)\nopen(args[args.index('--out') + 1], 'w').write({report:?})\nsys.exit(0)\n",
         policy = policy.to_string(),
         report = report().to_string(),
     );

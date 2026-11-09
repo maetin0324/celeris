@@ -206,7 +206,10 @@ pub fn reviewer_hint() -> WorkerHint {
 }
 
 mod required;
-pub use required::{RequiredCheckBinding, RequiredRepoChecks, RequiredRepoResult};
+pub use required::{
+    HEALTH_CHECK_ERROR, HealthItem, RepoHealth, RequiredCheckBinding, RequiredRepoChecks,
+    RequiredRepoResult,
+};
 
 /// `review_task` の Phase 5 追加入力（ADR-0007）。
 #[derive(Default)]

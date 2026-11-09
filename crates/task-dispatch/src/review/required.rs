@@ -15,8 +15,78 @@ pub struct RequiredRepoChecks {
     pub reusable: std::collections::BTreeSet<String>,
     /// None uses the acceptance workspace; other repositories supply their own workspace.
     pub workspace: Option<Box<dyn Workspace>>,
-    /// ADR 2026-11-08-health-enforcement-loop D1.2: where the repo health item is evaluated (`None` adds no item).
-    pub health: Option<crate::health_review::review_item::RequiredHealth>,
+    /// ADR 2026-11-08-health-enforcement-loop D1.2: the repo health item (`None` adds no item).
+    pub health: Option<RepoHealth>,
+}
+
+impl From<&crate::dispatcher::review_spawn::ReviewSync> for RequiredCheckBinding {
+    /// The candidate of the pre-review sync (ADR-0118): base = `target_sha`, head = `reviewed_sha`.
+    fn from(sync: &crate::dispatcher::review_spawn::ReviewSync) -> Self {
+        RequiredCheckBinding {
+            repo_id: sync.repo_id,
+            target_sha: sync.target_sha.clone(),
+            reviewed_sha: sync.reviewed_sha.clone(),
+        }
+    }
+}
+
+/// Prefix of the reason of a health item that is Error or Unavailable (never a pass, never repaired. D3.4).
+pub const HEALTH_CHECK_ERROR: &str = "health_check_error";
+
+/// D1.2: the health item of one repository. `spawn_review` sets where to evaluate; `HealthInputJob::attach`
+/// (`health_review::review_item::evaluate_all`) evaluates it through the shared entry before the review runs.
+#[derive(Debug)]
+pub enum RepoHealth {
+    /// Not evaluated yet: the worktree to evaluate (the synced worktree when there is a candidate).
+    At(std::path::PathBuf),
+    Evaluated(HealthItem),
+}
+
+/// The evaluated health of one repository.
+#[derive(Debug, Default)]
+pub struct HealthItem {
+    /// The item added to the required checks (`None` for NotApplicable and for a repo without a candidate).
+    pub result: Option<task_core::PhaseCheckResult>,
+    /// The checker put in the definition digest (only when the applicability is Applies. D2.4).
+    pub checker: Option<task_core::required_checks::health::CheckerId>,
+    /// Repair material of a Fail (`Verdict.repair_hint`. D3.2).
+    pub repair_hint: Option<task_core::ReviewRepairHint>,
+    /// Why no item was added (`HealthApplicability::reason()` of NotApplicable, or no candidate).
+    pub note: Option<String>,
+}
+
+impl HealthItem {
+    /// The required checks of `health` (fail closed: a site that was never evaluated is not a pass).
+    fn of(health: Option<RepoHealth>) -> Self {
+        match health {
+            None => HealthItem::default(),
+            Some(RepoHealth::Evaluated(item)) => item,
+            Some(RepoHealth::At(dir)) => HealthItem {
+                result: Some(task_core::PhaseCheckResult::new(
+                    task_core::required_checks::health::HEALTH_CHECK_ID.into(),
+                    false,
+                    format!("{HEALTH_CHECK_ERROR}: not evaluated ({})", dir.display()),
+                )),
+                ..HealthItem::default()
+            },
+        }
+    }
+}
+
+impl Verdict {
+    /// D3.2: the check `try_review_repair` gives `classify_review_failure` for a verdict outside the acceptance. A
+    /// health Fail (it carries the [`HealthItem::repair_hint`]) is `Check::Command { cmd: HEALTH_CHECK_ID }`; other
+    /// implicit conditions (plan, aggregate, required checks, research, health Error) are `Check::Human` (no repair).
+    pub fn implicit_check(&self) -> task_core::Check {
+        let id = task_core::required_checks::health::HEALTH_CHECK_ID;
+        match &self.repair_hint {
+            Some(hint) if hint.scope == id => task_core::Check::Command {
+                cmd: id.to_string(),
+                expect_exit: 0,
+            },
+            _ => task_core::Check::Human,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,7 +123,7 @@ pub(super) async fn evaluate(
     let mut acceptance_passes = HashMap::new();
     for checks in repo_checks {
         let mut digest = String::new();
-        let mut health = crate::health_review::review_item::HealthItem::default();
+        let mut health = HealthItem::of(checks.health);
         let mut results = Vec::new();
         let mut binding = checks.binding;
         match checks.commands {
@@ -67,10 +137,6 @@ pub(super) async fn evaluate(
             }
             Ok(commands) => {
                 // D1.2・D2.4: the health item joins the required checks; Applies puts the checker in the digest.
-                if let Some(site) = checks.health {
-                    health =
-                        crate::health_review::review_item::evaluate(site, binding.as_ref()).await;
-                }
                 digest = task_core::required_checks::definition_digest(
                     &commands,
                     health.checker.as_ref(),

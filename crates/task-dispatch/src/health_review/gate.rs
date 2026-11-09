@@ -953,4 +953,4 @@ pub(super) fn sha256_hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 #[path = "gate_tests.rs"]
-mod tests;
+pub(crate) mod tests;

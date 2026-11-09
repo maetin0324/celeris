@@ -636,7 +636,7 @@ impl Dispatcher {
                     // 暗黙の条件（Plan/aggregate/repo_checks/research）は task.acceptance に無く、
                     // D16 の分類表にも無いので修復できない（`Check::Human` と同じ扱いに倒す）。health の Fail
                     // だけは `Check::Command { cmd: HEALTH_CHECK_ID }`（health enforcement loop D3.2）。
-                    .unwrap_or_else(|| crate::health_review::review_item::implicit_check(v));
+                    .unwrap_or_else(|| v.implicit_check());
                 task_core::FailedCheck {
                     check,
                     reason: v.reason.clone(),

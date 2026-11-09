@@ -350,7 +350,7 @@ fn assert_stopped(s: &Scenario, question_prefix: &str) -> Vec<Event> {
 
 /// D4.1（`max_repairs`）: task の修復の合計は health と health でない修復が同じ数で使う。fmt の修復（health でない）で
 /// `max_repairs` = 1 を使い切った後の health の Fail は、health の bucket が 0 回でも修復を足さず
-/// `health_repair_cap` で止まる。
+/// `health_repair_limit` で止まる。
 #[tokio::test]
 async fn health_limits_cap_max_repairs_shared_with_non_health_repairs() {
     let mut s = Scenario::new(
@@ -366,15 +366,15 @@ async fn health_limits_cap_max_repairs_shared_with_non_health_repairs() {
     commit_file(&s.dir, "FIXED", "ok\n");
     s.d.config.execution.max_repairs = 1;
     s.review().await;
-    let events = assert_stopped(&s, "health_repair_cap: ");
+    let events = assert_stopped(&s, "health_repair_limit: review: ");
     assert_eq!(
         verdicts(&events),
         vec![HealthVerdict::Pass, HealthVerdict::Fail]
     );
     assert_eq!(s.repair_titles(), vec!["repair (format): 修復".to_string()]);
     let q = raised(&events).pop().unwrap();
-    assert!(q.contains("bucket health:deps.violation: 0 回"), "{q}");
-    assert!(q.contains("修復の合計 1 回 / max_repairs 1"), "{q}");
+    assert!(q.contains("health:deps.violation の修復 0/2 回"), "{q}");
+    assert!(q.contains("修復の合計 1/1 回"), "{q}");
 }
 
 /// D4.1（`max_repairs_per_class`）: health の修復は rule ごと（`health:<rule_id>`）に数える。`health:deps.violation` を
@@ -390,7 +390,7 @@ async fn health_limits_cap_per_class_counts_each_rule() {
     });
     s.d.config.execution.max_repairs_per_class = 1;
     s.review().await;
-    let events = assert_stopped(&s, "health_repair_cap: ");
+    let events = assert_stopped(&s, "health_repair_limit: review: ");
     assert_eq!(
         s.repair_titles(),
         vec![
@@ -400,10 +400,7 @@ async fn health_limits_cap_per_class_counts_each_rule() {
     );
     assert_eq!(verdicts(&events), vec![HealthVerdict::Fail; 3]);
     let q = raised(&events).pop().unwrap();
-    assert!(
-        q.contains("bucket health:deps.violation: 1 回 / max_repairs_per_class 1"),
-        "{q}"
-    );
+    assert!(q.contains("health:deps.violation の修復 1/1 回"), "{q}");
 }
 
 /// 木の上限の場面: 木の節点（`tree` を持つ root）で、修復の前に木の run・費用を `seed` で積んでおく。health の Fail の
@@ -518,13 +515,13 @@ async fn health_limits_cap_token_budget_counts_health_repair_runs() {
 
 /// D4.1（`MAX_TARGET_RESYNCS`）: health の修復の後の評価し直しは review 前の同期の数（`ReviewTargetAdvanced`）を
 /// 増やさない。`MAX_TARGET_RESYNCS` を超える回数の review を回しても `ReviewResyncHalted` で止まらず、修復の上限
-/// （`max_repairs` = 3）で `health_repair_cap` に止まる。
+/// （`max_repairs` = 3）で `health_repair_limit` に止まる。
 #[tokio::test]
 async fn health_limits_cap_reevaluation_does_not_count_target_resyncs() {
     let mut s = Scenario::atomic(next_finding);
     s.d.config.execution.max_repairs_per_class = 3;
     s.review().await;
-    let events = assert_stopped(&s, "health_repair_cap: ");
+    let events = assert_stopped(&s, "health_repair_limit: review: ");
     let reviews = verdicts(&events).len();
     assert_eq!(reviews, 4);
     assert!(reviews as u32 > task_ops::delivery::MAX_TARGET_RESYNCS + 1);
@@ -550,7 +547,7 @@ async fn health_limits_cap_review_rework_sees_only_non_health_failures() {
     let mut only = Scenario::atomic(next_finding);
     only.d.config.execution.max_repairs = 1;
     only.review().await;
-    assert_stopped(&only, "health_repair_cap: ");
+    assert_stopped(&only, "health_repair_limit: review: ");
     assert!(!only.inbox_kinds().contains(&InboxKind::Failed));
 
     const REVIEW_REWORK_MAX: usize = 2;
@@ -623,7 +620,7 @@ async fn health_limits_cap_exhausted_error_unknown_unsupported_are_not_pass() {
     let mut s = Scenario::atomic(next_finding);
     s.d.config.execution.max_repairs = 1;
     s.review().await;
-    assert_stopped(&s, "health_repair_cap: ");
+    assert_stopped(&s, "health_repair_limit: review: ");
     for status in ["error", "unknown", "unsupported"] {
         commit_file(&s.dir, "STATUS", &format!("{status}\n"));
         s.comment("検査器を見直した");

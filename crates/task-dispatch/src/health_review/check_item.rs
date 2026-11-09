@@ -12,9 +12,12 @@
 //!   [`repair_buckets`]（`health:<rule_id>`）。
 //! - Error（Unavailable を含む）: 不合格。reason は `health_check_error: <理由>`（[`check_error`] が読む）。repair・replan に
 //!   回さず、経路は task を Blocked にする（D3.4）。
-//! - health だけの不合格（Repair）の往復（D4.3。[`limits::judge`]）と、段の統合の修復の上限の使い切り（D4.4）: WU の
-//!   retry・統合の repair・replan に回さず、`health_findings_repeated:`・`health_repair_limit:` の質問で Blocked にする
+//! - health だけの不合格（Repair）の往復（D4.3。[`limits::judge`]）と、修復の上限の使い切り（D4.4。WU の check は WU の
+//!   retry の上限〈`execution_scheduler::retries_remain`〉、段の統合は統合の修復の上限）: WU の retry・統合の repair・
+//!   replan に回さず、`health_findings_repeated:`・`health_repair_limit:` の質問で Blocked にする
 //!   （[`stops_without_replan`]）。往復は木の root に `HealthFindingsRepeated` を追記する（受信箱の `health_repeat` 1 件）。
+//!   往復の判定・root への追記・質問の文は [`health_repeat_stop`]、上限の使い切りの質問の文は [`limit_question`]
+//!   の 1 か所で作り、task の review（`review_limits.rs`）も同じ関数を呼ぶ。
 //! - NotApplicable: 列に足さない（event には理由を持つ証跡を残す）。
 //!
 //! 修復の後の再評価は、経路が新しい head で [`run_item`] を呼び直す（前の証跡を使わない。ここは何も覚えない）。
@@ -36,7 +39,8 @@ use task_core::{HealthRepeatSite, RepoId};
 pub(in super::super) const HEALTH_CHECK_ERROR: &str = "health_check_error";
 /// D4.3: 同じ指摘の往復で止めた質問の先頭の語（`health_findings_repeated: <位置>: …`）。
 pub(in super::super) const HEALTH_FINDINGS_REPEATED: &str = "health_findings_repeated";
-/// D4.4: 段の統合の health の修復の上限を使い切って止めた質問の先頭の語（`health_repair_limit: <位置>: …`）。
+/// D4.4: health の修復の上限を使い切って止めた質問の先頭の語（`health_repair_limit: <位置>: …`。段の統合と task の
+/// review の両方。[`repair_limit_question`]）。
 pub(in super::super) const HEALTH_REPAIR_LIMIT: &str = "health_repair_limit";
 
 /// 統合を止める理由 `why` が replan で直らない health の止まり（D3.4 の Error・D4.3 の往復・D4.4 の上限の使い切り）か。
@@ -58,9 +62,73 @@ pub(super) fn stops_without_replan(why: &str) -> bool {
 /// Blocked を人が comment・回答で再開する口になる。
 fn repeated_question(site: &HealthRepeatSite, fingerprints: &[String]) -> String {
     format!(
-        "{HEALTH_FINDINGS_REPEATED}: {}: 修復の後も同じ health の指摘が残りました（{}）。repair・retry・replan をせずに止めました（木の root の受信箱に 1 件上げています）",
+        "{HEALTH_FINDINGS_REPEATED}: {}: 修復の後も同じ health の指摘が残りました（{}）。repair・retry・replan をせずに止めました（木の root の受信箱に 1 件上げています）。直し方を comment で書くと再開します。",
         site.label(),
         fingerprints.join(", ")
+    )
+}
+
+/// D4.3: 範囲 `site` の今の health の評価が同じ指摘の往復（[`limits::judge`]。task の events を読む）なら、木の root に
+/// `HealthFindingsRepeated` を追記し（`task_ops::inbox::health_repeat::record_findings_repeated`。集合ごとに受信箱 1 件）、
+/// 止める質問の文を返す。往復でなければ `None`（今の repair・retry の判定のまま）。WU の check・段の統合・task の review
+/// の 3 経路がこれだけを呼ぶ（止め方〈質問を run の結果にする・統合を止める・review を Blocked にする〉は経路が決める）。
+pub(in crate::dispatcher) fn health_repeat_stop(
+    store: &dyn task_core::TaskStore,
+    task: &Task,
+    site: HealthRepeatSite,
+) -> Result<Option<String>, DispatchError> {
+    let events = store.events_for(task.id)?;
+    let scope = match &site {
+        HealthRepeatSite::WorkUnit { key } => HealthScope::WorkUnit(key),
+        HealthRepeatSite::Phase { key } => HealthScope::Phase(key),
+        HealthRepeatSite::Review => HealthScope::Review,
+    };
+    let RepeatVerdict::Repeat { fingerprints } = limits::judge(&events, scope) else {
+        return Ok(None);
+    };
+    let text = repeated_question(&site, &fingerprints);
+    tracing::warn!(task_id = %task.id, site = %site.label(), ?fingerprints, "the same health findings came back after a repair; blocking instead of repairing again (ADR 2026-11-08-health-enforcement-loop D4.3)");
+    task_ops::inbox::health_repeat::record_findings_repeated(store, task, site, &fingerprints)
+        .map_err(ops_to_store)?;
+    Ok(Some(text))
+}
+
+/// D4.4: 範囲 `site` の health の修復が上限を使い切って止めた質問の文（WU の check・段の統合・task の review で共通）。
+/// `used` は使い切った上限の数え（[`repair_limit_question`]・[`retry_limit_question`] が作る）、`summary` は不合格の理由。
+fn limit_question(site: &HealthRepeatSite, used: &str, summary: &[String]) -> String {
+    format!(
+        "{HEALTH_REPAIR_LIMIT}: {}: health の修復が上限に達しました（{used}）。repair も replan もせずに止めました。直し方を comment で書くと再開します。指摘: {}",
+        site.label(),
+        summary.join("; ")
+    )
+}
+
+/// D4.4: 段の統合と task の review の修復の上限の使い切りの質問の文（[`limit_question`]）。`bucket` は health の不合格の
+/// bucket（`health:<rule_id>` を `,` で並べたもの）、`all` は（修復の合計, `max_repairs`）、`same` は（bucket の修復の数,
+/// `max_repairs_per_class`）。
+pub(in crate::dispatcher) fn repair_limit_question(
+    site: &HealthRepeatSite,
+    bucket: &str,
+    (all, max_repairs): (usize, u32),
+    (same, per_class): (usize, u32),
+    summary: &[String],
+) -> String {
+    let used = format!("修復の合計 {all}/{max_repairs} 回、{bucket} の修復 {same}/{per_class} 回");
+    limit_question(site, &used, summary)
+}
+
+/// D4.4: WU の check の health だけの不合格が WU の retry の上限（`max_retries`。retry の余地の判定は
+/// `execution_scheduler::retries_remain`）を使い切った質問の文（[`limit_question`]）。`retries` は WU の retry の回数。
+fn retry_limit_question(
+    site: &HealthRepeatSite,
+    retries: u32,
+    max_retries: u32,
+    summary: &[String],
+) -> String {
+    limit_question(
+        site,
+        &format!("WU の retry {retries}/{max_retries} 回"),
+        summary,
     )
 }
 
@@ -442,8 +510,11 @@ impl Dispatcher {
 
     /// WU の check の結果の health の行を扱う。列の最後の余りの行（`run_integration_checks` が `checks` の後に足す）に
     /// health の項目の check を付ける。その行が Error（D3.4）か、不合格が health だけで WU `wu` の範囲の同じ指摘の往復
-    /// （D4.3。木の root に追記する）なら、run の結果を質問（`health_check_error: <理由>`・`health_findings_repeated: …`。
-    /// worker が `Done` で返した usage は落とさない）にすり替え、検査の記録を空にする（WU の repair〈retry〉にしない）。
+    /// （D4.3。木の root に追記する）か、不合格が health だけで WU の retry の上限を使い切った（D4.4。
+    /// `execution_scheduler::retries_remain` が偽。上限は `execution_scheduler::decide` に渡る `task.budget.max_retries`）
+    /// なら、run の結果を質問（`health_check_error: <理由>`・`health_findings_repeated: …`・`health_repair_limit: …`。
+    /// worker が `Done` で返した usage は落とさない）にすり替え、検査の記録を空にする（WU の repair〈retry〉にも、retry の
+    /// 使い切りの後の WU の Failed〈replan〉にもしない）。health でない失敗が混ざる不合格は今どおり retry・replan に進む。
     pub(in super::super) fn settle_health_row(
         &self,
         task: &Task,
@@ -468,7 +539,24 @@ impl Dispatcher {
                 let site = HealthRepeatSite::WorkUnit {
                     key: wu.key.clone(),
                 };
-                self.health_repeat_stop(task, site)?
+                let max_retries = task.budget.max_retries;
+                match health_repeat_stop(self.store.as_ref(), task, site.clone())? {
+                    Some(text) => Some(text),
+                    None if !crate::execution_scheduler::retries_remain(wu, max_retries) => {
+                        let summary: Vec<String> = rows()
+                            .filter(|(_, (pass, _))| !pass)
+                            .map(|(_, (_, reason))| reason.clone())
+                            .collect();
+                        tracing::warn!(task_id = %task.id, work_unit = %wu.key, retries = wu.retries, max_retries, "a health-only work unit check failure used up the work unit retries; blocking instead of failing into a replan (ADR 2026-11-08-health-enforcement-loop D4.4)");
+                        Some(retry_limit_question(
+                            &site,
+                            wu.retries,
+                            max_retries,
+                            &summary,
+                        ))
+                    }
+                    None => None,
+                }
             }
             (None, _) => None,
         };
@@ -494,35 +582,6 @@ impl Dispatcher {
         Ok((question, cleared))
     }
 
-    /// D4.3: 範囲 `site` の今の health の評価が同じ指摘の往復（[`limits::judge`]。task の events を読む）なら、木の root に
-    /// `HealthFindingsRepeated` を追記し（`task_ops::inbox::health_repeat::record_findings_repeated`。集合ごとに受信箱 1 件）、
-    /// 止める質問の文を返す。往復でなければ `None`（今の repair・retry の判定のまま）。
-    fn health_repeat_stop(
-        &self,
-        task: &Task,
-        site: HealthRepeatSite,
-    ) -> Result<Option<String>, DispatchError> {
-        let events = self.store.events_for(task.id)?;
-        let scope = match &site {
-            HealthRepeatSite::WorkUnit { key } => HealthScope::WorkUnit(key),
-            HealthRepeatSite::Phase { key } => HealthScope::Phase(key),
-            HealthRepeatSite::Review => HealthScope::Review,
-        };
-        let RepeatVerdict::Repeat { fingerprints, .. } = limits::judge(&events, scope) else {
-            return Ok(None);
-        };
-        let text = repeated_question(&site, &fingerprints);
-        tracing::warn!(task_id = %task.id, site = %site.label(), ?fingerprints, "the same health findings came back after a repair; blocking instead of repairing again (ADR 2026-11-08-health-enforcement-loop D4.3)");
-        task_ops::inbox::health_repeat::record_findings_repeated(
-            self.store.as_ref(),
-            task,
-            site,
-            &fingerprints,
-        )
-        .map_err(ops_to_store)?;
-        Ok(Some(text))
-    }
-
     /// D4.3・D4.4: 段 `phase` の統合の health だけの不合格（`class` が Health）を repair の前に止めるか。同じ指摘の往復なら
     /// 木の root に追記して往復の質問を、修復の上限を使い切った（`used` が `Some((bucket, 統合の修復の数, bucket の修復の
     /// 数))`）なら上限の質問を返す。どちらも [`stops_without_replan`] に当たり、統合は repair も replan もせず Blocked で
@@ -541,18 +600,16 @@ impl Dispatcher {
         let site = HealthRepeatSite::Phase {
             key: phase.to_string(),
         };
-        let label = site.label();
-        if let Some(text) = self.health_repeat_stop(task, site)? {
+        if let Some(text) = health_repeat_stop(self.store.as_ref(), task, site.clone())? {
             return Ok(Some(text));
         }
         let limit = &self.config.execution;
         Ok(used.map(|(bucket, all, same)| {
-            format!(
-                "{HEALTH_REPAIR_LIMIT}: {label}: health の修復が上限に達しました（統合の修復 {all}/{} 回、{bucket} の修復 {same}/{} 回）。repair も replan もせずに止めました: {}",
-                limit.max_repairs,
-                limit.max_repairs_per_class,
-                summary.join("; ")
-            )
+            let (all, same) = (
+                (all, limit.max_repairs),
+                (same, limit.max_repairs_per_class),
+            );
+            repair_limit_question(&site, bucket, all, same, summary)
         }))
     }
 }

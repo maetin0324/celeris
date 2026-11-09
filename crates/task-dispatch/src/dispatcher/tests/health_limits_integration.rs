@@ -230,6 +230,169 @@ async fn health_limits_work_unit_mixed_failure_keeps_retry() {
     assert!(repeats_on(&store, task.id).is_empty());
 }
 
+/// `ExecutionPlanned`（計画の版の追加）の数と、planner の run の `WorkerStarted` の数。
+fn plans_and_planner_runs(events: &[Event]) -> (usize, usize) {
+    let plans = events
+        .iter()
+        .filter(|e| matches!(e, Event::ExecutionPlanned { .. }))
+        .count();
+    let planner = events
+        .iter()
+        .filter(|e| {
+            matches!(
+                e,
+                Event::WorkerStarted {
+                    role: Some(task_core::RunRole::Planner),
+                    ..
+                }
+            )
+        })
+        .count();
+    (plans, planner)
+}
+
+/// WU の run の結果をすり替えた質問の本文（`WorkerFinished.outcome` の `question: ` の後）。
+fn run_questions(events: &[Event]) -> Vec<&str> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::WorkerFinished { outcome, .. } => outcome.strip_prefix("question: "),
+            _ => None,
+        })
+        .collect()
+}
+
+/// WU `a` の run ごとに作業ツリーの `FP` を 1, 2, 3, … にする adapter（health の指摘の fingerprint が run ごとに変わる）。
+fn changing_findings_adapter() -> Arc<ParallelWuAdapter> {
+    let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    Arc::new(
+        ParallelWuAdapter::new(Duration::from_millis(5)).with_action("a", move |dir| {
+            let n = runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            std::fs::write(dir.join("FP"), n.to_string()).unwrap();
+        }),
+    )
+}
+
+/// 不変条件（D4.4）: WU の check の health だけの不合格は、指摘が毎回変わって（往復でなく）WU の retry の上限
+/// （`task.budget.max_retries` = 2）を使い切っても、WU を Failed にして既存の自動 replan（計画の版の追加・planner の run）
+/// に入らず、WU と task を Blocked（質問 `health_repair_limit: WU a の check: …`）で止める。段の統合の上限の使い切り
+/// （`health_limits_integration_repair_cap_blocks`）と止まり方をそろえる。
+/// `health_limits_work_unit_different_findings_still_retry` は retry が続くことと往復で止めないことしか見ず、上限の
+/// 使い切りの後の行き先（replan か Blocked か）を検出できない。`health_limits_work_unit_same_fingerprint_blocks` は
+/// 上限の内の往復で止まる経路しか通らない。
+#[tokio::test]
+async fn health_limits_work_unit_retry_cap_blocks_without_replan() {
+    let repo = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = work_unit_task(repo.path(), &store, (1, "true"), None);
+    assert_eq!(task.budget.max_retries, 2);
+    let (plans_before, _) = plans_and_planner_runs(&events_of(&store, task.id));
+    let mut d = parallel_dispatcher(
+        store.clone(),
+        changing_findings_adapter(),
+        root.path(),
+        2,
+        2,
+        2,
+    );
+    run_until_idle(&mut d, 800).await;
+
+    let stored = store.get(task.id).unwrap().unwrap();
+    assert_eq!(stored.status, Status::Blocked, "{stored:?}");
+    let a = unit(&store, task.id, "a");
+    assert_eq!(a.status, task_core::WorkUnitStatus::Blocked, "{a:?}");
+    assert_eq!(
+        a.blocked_reason,
+        Some(task_core::WorkUnitBlockedReason::Question)
+    );
+    assert_eq!(a.retries, 2, "{a:?}");
+    let events = events_of(&store, task.id);
+    let sets: Vec<Vec<String>> = health_items(&events)
+        .into_iter()
+        .filter(|(id, ..)| *id == a.id)
+        .map(|(_, pass, h)| {
+            assert!(!pass);
+            assert_eq!(h.verdict, HealthVerdict::Fail, "{h:?}");
+            h.blocking
+        })
+        .collect();
+    let fp = |n: u32| vec![format!("deps.violation:{n:016}")];
+    assert_eq!(
+        sets,
+        vec![fp(1), fp(2), fp(3)],
+        "the third evaluation (retries used up) must be the last one"
+    );
+    assert_eq!(
+        work_unit_retries(&events, &a.id),
+        2,
+        "only the two Fails within max_retries retry"
+    );
+    assert!(repeats_on(&store, task.id).is_empty(), "not a repeat");
+    let asked = run_questions(&events);
+    assert_eq!(asked.len(), 1, "{asked:?}");
+    let q = asked[0];
+    assert!(q.starts_with("health_repair_limit: WU a の check: "), "{q}");
+    assert!(q.contains("WU の retry 2/2 回"), "{q}");
+    assert!(q.contains("health:deps.violation:0000000000000003"), "{q}");
+    assert!(
+        !replanned(&events),
+        "a used-up health retry must not replan"
+    );
+    let (plans_after, planner_runs) = plans_and_planner_runs(&events);
+    assert_eq!(plans_after, plans_before, "no new plan version");
+    assert_eq!(planner_runs, 0, "no planner run");
+    let active = store.execution_plan_active(task.id).unwrap().unwrap();
+    assert_eq!(active.version, 1, "{active:?}");
+}
+
+/// 不変条件（D4.4 の外）: WU の check の不合格に health でない検査の失敗（`false`）が混ざるなら、health の指摘が毎回
+/// 変わって WU の retry の上限を使い切っても `health_repair_limit:` で止めず、今どおり WU を Failed にして既存の自動
+/// replan（`AutoReplanRequested`）に進む（health の上限の止め方が health でない失敗の扱いを変えないこと）。
+/// `health_limits_work_unit_mixed_failure_keeps_retry` は上限の内の retry しか見ず、使い切りの後の行き先を検出できない。
+#[tokio::test]
+async fn health_limits_work_unit_mixed_failure_cap_keeps_replan() {
+    let repo = tempfile::tempdir().unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = work_unit_task(repo.path(), &store, (1, "false"), None);
+    let mut d = parallel_dispatcher(
+        store.clone(),
+        changing_findings_adapter(),
+        root.path(),
+        2,
+        2,
+        2,
+    );
+    run_until_idle(&mut d, 800).await;
+
+    let events = events_of(&store, task.id);
+    let a_id = events
+        .iter()
+        .find_map(|e| match e {
+            Event::WorkUnitChecksFailed { work_unit_id, .. } => Some(work_unit_id.clone()),
+            _ => None,
+        })
+        .expect("the first work unit a check failed");
+    assert!(
+        work_unit_retries(&events, &a_id) > 2,
+        "the mixed failure must use up the retries and fail the unit: {events:?}"
+    );
+    let auto_replan = events.iter().find_map(|e| match e {
+        Event::AutoReplanRequested { key, source, .. } => Some((key.clone(), *source)),
+        _ => None,
+    });
+    assert_eq!(
+        auto_replan,
+        Some(("a".to_string(), task_core::AutoReplanSource::WorkUnit)),
+        "{events:?}"
+    );
+    let text = serde_json::to_string(&events).unwrap();
+    assert!(!text.contains("health_repair_limit:"), "{text}");
+    assert!(!text.contains("health_findings_repeated:"), "{text}");
+    assert!(repeats_on(&store, task.id).is_empty());
+}
+
 /// 不変条件（D4.3）: 2 つの WU（同じ木の別の子 task）が同じ fingerprint の集合で往復したら、どちらも Blocked になり、
 /// 往復は木の root に 2 件追記されるが、root の受信箱の `health_repeat` は `(root, 集合)` ごとに 1 件で、源に 2 つの task が
 /// 並ぶ。task-ops の受信箱の試験は event を直接書くので、経路が root を求めて書くこと（子の task 自身に書かない）を

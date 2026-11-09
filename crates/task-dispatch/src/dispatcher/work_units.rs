@@ -354,8 +354,8 @@ impl Dispatcher {
 
     /// ADR-0072 D14/D6・E4 (g): `spawn_work_unit_checks` の結果を受けて、`finish_worker_result` に引き継ぐ。1 つでも `pass = false`
     /// があれば、この run を `Terminal::Error{retryable: true}`（WU の retry。`execution_scheduler::decide` が
-    /// `RunEnd::Failed{retryable:true}` として扱う）にすり替える（health の項目の Fail も WU の repair。Error と同じ指摘の往復は retry
-    /// にせず質問〈Blocked〉にする。ADR 2026-11-08-health-enforcement-loop D3.2・D3.4・D4.3、`settle_health_row`）。全部 pass なら元の `result`。
+    /// `RunEnd::Failed{retryable:true}` として扱う）にすり替える（health の項目の Fail も WU の repair。Error・同じ指摘の往復・health だけの
+    /// 不合格の retry の使い切りは質問〈Blocked〉にする。ADR 2026-11-08-health-enforcement-loop D3.2・D3.4・D4.3・D4.4、`settle_health_row`）。全部 pass なら元の `result`。
     #[allow(clippy::too_many_arguments)]
     pub(super) fn on_work_unit_checks_finished(
         &mut self,

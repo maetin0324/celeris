@@ -3,6 +3,9 @@
 use super::*;
 use std::collections::BTreeMap;
 
+/// ADR 2026-11-08-health-enforcement-loop: 検査の列の項目の記録と health の項目。file は size の制約で `health_review/` に置く。
+#[path = "../health_review/check_item.rs"]
+pub(super) mod check_item;
 pub(super) mod merge_repair;
 
 /// ADR-0118 D4 / D5: 同じ子の merge candidate が古くなったときの自動の再 sync・再レビューの回数
@@ -120,49 +123,37 @@ pub(crate) struct ObservedIntegration {
 /// `IntegrationCheckFinished` を追記し、出力をログファイルへ逐次書く。判定は `run_work_unit_checks` と同じ
 /// （再実行・merge-base の修復を含む）。event を書けなくても検査は続ける（見るための記録で、判定には使わない）。
 ///
-/// ADR 2026-11-08-health-enforcement-loop D1.2・D2.2: `health` があれば、検査の後に経路共通の入口
-/// （`health_review::check_item::evaluate`）で repo health を 1 回評価し、同じ列の最後の項目（cmd `HEALTH_CHECK_ID`）
-/// として `WorkUnitCheckFinished`・`IntegrationCheckFinished` の `health` 欄に証跡を残す。WU の check と段の統合はここだけを
-/// 通り、経路ごとに検査器を起こさない。
-pub(crate) async fn run_integration_checks(
+/// ADR 2026-11-08-health-enforcement-loop D1.2・D2.2: `health` があれば、検査の後に経路共通の入口で repo health を 1 回
+/// 評価し（`check_item::run_item`）、同じ列の最後の項目（cmd `HEALTH_CHECK_ID`）として `WorkUnitCheckFinished`・
+/// `IntegrationCheckFinished` の `health` 欄に証跡を残す。列に足す行（NotApplicable でなければ）は戻り値の `checks` の後の
+/// 1 行。WU の check と段の統合はここだけを通り、経路ごとに検査器を起こさない。
+pub(super) async fn run_integration_checks(
     store: &dyn task_core::TaskStore,
     task_id: TaskId,
     observed: &ObservedIntegration,
     ws: &task_worker::LocalWorkspace,
     checks: &[task_core::WorkUnitCheck],
     command_timeout: Duration,
-    health: Option<crate::health_review::check_item::HealthTarget>,
-) -> IntegrationChecks {
+    health: Option<check_item::HealthTarget>,
+) -> Vec<(bool, String)> {
     let total = u32::try_from(checks.len() + usize::from(health.is_some())).unwrap_or(u32::MAX);
     let attempt_ms = OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000;
-    let mut out = Vec::with_capacity(checks.len());
+    let mut out = Vec::with_capacity(checks.len() + 1);
     for (i, c) in checks.iter().enumerate() {
         let index = u32::try_from(i).unwrap_or(u32::MAX);
         let log_path = observed.log_dir.join(format!("{attempt_ms}-{index}.log"));
-        let started = match &observed.run_id {
-            Some(run_id) => Event::WorkUnitCheckStarted {
-                work_unit_id: observed.work_unit_id.clone(),
-                key: observed.key.clone(),
-                run_id: run_id.clone(),
-                index,
-                total,
-                cmd: c.cmd.clone(),
-                log_path: log_path.display().to_string(),
-                started_at: rfc3339(OffsetDateTime::now_utc()),
-            },
-            None => Event::IntegrationCheckStarted {
-                work_unit_id: observed.work_unit_id.clone(),
-                key: observed.key.clone(),
-                index,
-                total,
-                cmd: c.cmd.clone(),
-                log_path: log_path.display().to_string(),
-                started_at: rfc3339(OffsetDateTime::now_utc()),
-            },
+        let at = check_item::ItemAt {
+            index,
+            total,
+            cmd: &c.cmd,
         };
-        if let Err(e) = store.append_event(task_id, &started) {
-            tracing::warn!(%task_id, work_unit = %observed.key, error = %e, "could not record the integration check start");
-        }
+        check_item::record_start(
+            store,
+            task_id,
+            observed,
+            &at,
+            log_path.display().to_string(),
+        );
         let clock = std::time::Instant::now();
         let check_ws = ws.clone().with_output_log(&log_path);
         let outcome = crate::review::exec_check_outcome(
@@ -173,60 +164,20 @@ pub(crate) async fn run_integration_checks(
             "",
         )
         .await;
-        let duration_ms = u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let finished = match &observed.run_id {
-            Some(run_id) => Event::WorkUnitCheckFinished {
-                work_unit_id: observed.work_unit_id.clone(),
-                key: observed.key.clone(),
-                run_id: run_id.clone(),
-                index,
-                total,
-                cmd: c.cmd.clone(),
-                pass: outcome.pass,
-                exit: outcome.exit,
-                timed_out: outcome.timed_out,
-                duration_ms,
-                health: None,
-            },
-            None => Event::IntegrationCheckFinished {
-                work_unit_id: observed.work_unit_id.clone(),
-                key: observed.key.clone(),
-                index,
-                total,
-                cmd: c.cmd.clone(),
-                pass: outcome.pass,
-                exit: outcome.exit,
-                timed_out: outcome.timed_out,
-                duration_ms,
-                health: None,
-            },
+        let end = check_item::ItemEnd {
+            pass: outcome.pass,
+            exit: outcome.exit,
+            timed_out: outcome.timed_out,
+            duration_ms: u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX),
+            health: None,
         };
-        if let Err(e) = store.append_event(task_id, &finished) {
-            tracing::warn!(%task_id, work_unit = %observed.key, error = %e, "could not record the integration check finish");
-        }
+        check_item::record_finish(store, task_id, observed, &at, end);
         out.push((outcome.pass, outcome.reason));
     }
-    let health = match health {
-        Some(target) => {
-            let index = u32::try_from(checks.len()).unwrap_or(u32::MAX);
-            let run_id = observed.run_id.as_deref();
-            let unit = (
-                observed.work_unit_id.as_str(),
-                observed.key.as_str(),
-                run_id,
-            );
-            crate::health_review::check_item::run_item(store, task_id, unit, target, index, total)
-                .await
-        }
-        None => None,
-    };
-    IntegrationChecks {
-        results: out,
-        health,
-    }
+    let index = u32::try_from(checks.len()).unwrap_or(u32::MAX);
+    out.extend(check_item::run_item(store, task_id, observed, health, (index, total)).await);
+    out
 }
-
-pub(crate) use crate::health_review::check_item::IntegrationChecks;
 
 impl Dispatcher {
     /// ADR parallel integration D4: 統合の依頼を追記事象として一件残す。同じ組の未回答依頼があれば追記しない
@@ -666,12 +617,8 @@ impl Dispatcher {
             .collect();
         // D1.4 の 4: その工程の WU の checks（重複を除く。範囲 check は除く）と workspace.toml の check。
         let checks = integration_checks_for_phase(&units, &phase, self.default_checks(task));
-        // ADR 2026-11-08-health-enforcement-loop D1.2: 統合後の作業ツリー（検査と同じ先頭の git の repo）で、base は段の
-        // 基点、head は統合の HEAD（merge の後に決まる）。修復の後の再統合もここを通り、新しい head で評価し直す。
-        let health_base = repo_items.first().map(|(dir, repo_id, _)| {
-            crate::health_review::check_item::phase_base(&units, &phase, dir, *repo_id)
-        });
-        let bundled = crate::health_review::gate::bundled_checker().cloned();
+        // ADR 2026-11-08-health-enforcement-loop D1.2: base は段の基点、head は統合の HEAD（修復の後の再統合も新しい head）。
+        let health = check_item::phase_target(&units, &phase, &repo_items);
         let task_dir = ws.task_dir.clone();
         // ADR-0074 F5-fix: 統合 WU の検査は Task の worktree で走るので `<repo-key>`。
         let check_env = self.check_cargo_target_env(task, None);
@@ -752,9 +699,8 @@ impl Dispatcher {
                         _ => task_worker::LocalWorkspace::new(&task_dir),
                     }
                     .with_cargo_env(check_env);
-                    let health = health_base
-                        .map(|b| crate::health_review::check_item::at_head(b, &run.head, bundled));
-                    let ran = run_integration_checks(
+                    let health = health.map(|t| t.at_head(&run.head));
+                    let results = run_integration_checks(
                         store.as_ref(),
                         task_id,
                         &observed,
@@ -764,18 +710,7 @@ impl Dispatcher {
                         health,
                     )
                     .await;
-                    // 検査が無ければ auto_resolve の行を残す（従来どおり）。health の行は最後に足す。
-                    if !checks.is_empty() {
-                        run.checks = checks
-                            .iter()
-                            .zip(ran.results)
-                            .map(|(c, (pass, reason))| (c.cmd.clone(), pass, reason))
-                            .collect();
-                    }
-                    if let Some((pass, reason)) = ran.health {
-                        let cmd = task_core::required_checks::health::HEALTH_CHECK_ID;
-                        run.checks.push((cmd.to_string(), pass, reason));
-                    }
+                    check_item::put_rows(&mut run.checks, &checks, results);
                     Ok(run)
                 }
                 other => other,
@@ -860,10 +795,7 @@ impl Dispatcher {
         }
         // ADR 2026-11-08-health-enforcement-loop D3.4: health の Error・Unavailable は合格にも repair・replan にもせず、
         // 統合を止めて人に聞く（Blocked。受信箱の質問は `health_check_error: <理由>`）。
-        if let Some(why) = run.checks.iter().find_map(|(cmd, pass, reason)| {
-            crate::health_review::check_item::check_error(cmd, *pass, reason)
-        }) {
-            let why = why.to_string();
+        if let Some(why) = check_item::health_error(&run.checks) {
             return self.integration_gives_up(&task, &integ, &why);
         }
         if run.checks.iter().any(|(_, pass, _)| !pass) {
@@ -1205,32 +1137,12 @@ impl Dispatcher {
             .filter(|u| u.kind == task_core::WorkUnitKind::Repair)
             .collect();
         // ADR 2026-11-08-health-enforcement-loop D3.2・D4.1: health の修復は rule ごと（`health:<rule_id>`）に数える。
-        let buckets: Vec<String> = match class {
-            task_core::RepairClass::Health => summary
-                .iter()
-                .flat_map(|r| crate::health_review::check_item::repair_buckets(r))
-                .collect(),
-            other => vec![other.bucket().to_string()],
-        };
-        let same_class = buckets
-            .iter()
-            .map(|bucket| {
-                repairs
-                    .iter()
-                    .filter(|u| {
-                        Self::repair_bucket_of_title(&u.spec.title)
-                            .is_some_and(|t| t.split(',').any(|b| b == bucket))
-                    })
-                    .count()
-            })
-            .max()
-            .unwrap_or(0);
+        let (bucket, same_class) = check_item::repair_count(class, &summary, &repairs);
         if repairs.len() as u32 >= self.config.execution.max_repairs
             || same_class as u32 >= self.config.execution.max_repairs_per_class
         {
             return self.integration_gives_up_with(task, integ, &why, Some(failure));
         }
-        let bucket = buckets.join(",");
         let prefix = format!("repair-{phase}-");
         let n = units.iter().filter(|u| u.key.starts_with(&prefix)).count() + 1;
         let diff_stat = self
@@ -1406,7 +1318,7 @@ impl Dispatcher {
         );
         let stalled_stop = stalled >= task_ops::plan_gate::STALLED_REPLAN_LIMIT;
         // ADR 2026-11-08-health-enforcement-loop D3.4: health の Error は replan で直らないので人に聞く。
-        let may_replan = !why.starts_with(crate::health_review::check_item::HEALTH_CHECK_ERROR);
+        let may_replan = !why.starts_with(check_item::HEALTH_CHECK_ERROR);
         let can_replan =
             may_replan && !stalled_stop && replans_so_far < self.effective_max_replans(task.id)?;
         let question_text = if stalled_stop {

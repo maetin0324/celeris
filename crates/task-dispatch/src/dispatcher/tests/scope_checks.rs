@@ -276,8 +276,7 @@ async fn a_silent_failing_scope_check_gets_a_hint_in_its_detail() {
         Duration::from_secs(30),
         None,
     )
-    .await
-    .results;
+    .await;
     assert!(results.iter().all(|(pass, _)| !pass), "{results:?}");
     let run = super::super::work_units::WorkUnitCheckRun {
         checks,

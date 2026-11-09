@@ -1,5 +1,5 @@
 //! ADR 2026-11-08-health-enforcement-loop D1.2・D2.2・D3.2・D3.4: WU の check・段の統合・統合の修復の後が、同じ入口
-//! （`run_integration_checks` → `health_review::check_item::evaluate` → `gate::health_gate`）で repo health を評価し、
+//! （`run_integration_checks` → `check_item::run_item` → `gate::health_gate`）で repo health を評価し、
 //! `WorkUnitCheckFinished`・`IntegrationCheckFinished` の `health` 欄に証跡を残し、Fail を既存の repair へ、Error・
 //! Unavailable を Blocked（`health_check_error:`）に回す流れの試験。
 //!

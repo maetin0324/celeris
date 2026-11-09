@@ -1,59 +1,75 @@
-//! ADR 2026-11-08-health-enforcement-loop D1.2・D2.2・D3.2・D3.4: WU の check と段の統合が必須検査の列に足す health の
-//! 項目（`cmd` は [`HEALTH_CHECK_ID`]）。
+//! ADR 2026-11-08-health-enforcement-loop D1.2・D2.2・D3.2・D3.4: WU の check と段の統合の検査の列の 1 項目の記録（開始・
+//! 終了の event）と、列の最後に足す health の項目（`cmd` は [`HEALTH_CHECK_ID`]）。
 //!
-//! 両方の経路は `dispatcher::phase_integration::run_integration_checks` を通り、そこがこの module の [`evaluate`] を
-//! 1 回呼ぶ（経路ごとに検査器を起こさない）。[`evaluate`] は経路共通の入口 [`gate::health_gate`] を呼び、扱い
-//! （[`HealthGateDecision`]）を検査の列の 1 行（`pass`・`reason`）に写す。写しの規則はここだけに置く:
+//! 両方の経路は `dispatcher::phase_integration::run_integration_checks` を通り、そこが検査の各項目を [`record_start`]・
+//! [`record_finish`] で残し、最後に [`run_item`] で health を 1 回評価する（経路ごとに検査器を起こさない）。[`evaluate`] は
+//! 経路共通の入口 [`gate::health_gate`] を呼び、扱い（[`HealthGateDecision`]）を列の 1 行（`pass`・`reason`）に写す。
+//! 写しの規則はここだけに置く:
 //!
 //! - Pass・PolicyOnly: 合格（PolicyOnly は WU・段の統合では先へ進める。D3.1）。
 //! - Repair: 不合格。reason は rule ごとの `health:<rule_id>:<hash>[,…]（evidence: …）` を `; ` で並べた文で、
 //!   `task_core::classify_review_failure` が `RepairClass::Health` に分ける（D3.2）。class の数え方は
 //!   [`repair_buckets`]（`health:<rule_id>`）。
-//! - Error（Unavailable を含む）: 不合格。reason は `health_check_error: <理由>`（[`check_error`] が読む）。repair に回さず、
-//!   経路は task を Blocked にする（D3.4）。
+//! - Error（Unavailable を含む）: 不合格。reason は `health_check_error: <理由>`（[`check_error`] が読む）。repair・replan に
+//!   回さず、経路は task を Blocked にする（D3.4）。
 //! - NotApplicable: 列に足さない（event には理由を持つ証跡を残す）。
 //!
-//! 修復の後の再評価は、経路が新しい head で [`evaluate`] を呼び直す（前の証跡を使わない。ここは何も覚えない）。
+//! 修復の後の再評価は、経路が新しい head で [`run_item`] を呼び直す（前の証跡を使わない。ここは何も覚えない）。
+//!
+//! この file は `dispatcher::phase_integration` の子 module として `#[path]` で読む（dispatcher の size の制約と、
+//! `dispatcher` → `health_review` の依存を足さないため。`design_gate.rs` と同じ）。LLM は呼ばない。
 
-use std::path::PathBuf;
+use std::path::Path;
 
+use super::super::*;
+use super::ObservedIntegration;
+use crate::health_review::gate::{self, BundledChecker, HealthGateDecision, HealthGateRequest};
+use crate::health_review::input::HEALTH_INPUT_TIMEOUT;
 use task_core::RepoId;
 use task_core::required_checks::health::{HEALTH_CHECK_ID, HealthEvidence};
 
-use super::gate::{self, BundledChecker, HealthGateDecision, HealthGateRequest};
-use super::input::HEALTH_INPUT_TIMEOUT;
-
 /// D3.4: Error・Unavailable の項目の reason の先頭の語（`health_check_error: <理由>`）。
-pub const HEALTH_CHECK_ERROR: &str = "health_check_error";
+pub(in super::super) const HEALTH_CHECK_ERROR: &str = "health_check_error";
 
 /// health を評価する 1 つの repo の作業ツリーと範囲（経路が組み立てる。D1.2 の表）。
 #[derive(Debug, Clone)]
-pub struct HealthTarget {
-    pub repo_id: RepoId,
+pub(in super::super) struct HealthTarget {
+    repo_id: RepoId,
     /// git と検査器を実行する作業ツリー（WU は WU の作業ツリー、段の統合は統合後の Task の作業ツリー）。
-    pub worktree: PathBuf,
+    worktree: PathBuf,
     /// WU は `wu.base_commit`、段の統合は段の基点。
-    pub base: String,
+    base: String,
     /// WU は WU の HEAD、段の統合は統合の HEAD（証跡には解決した sha が残る）。
-    pub head: String,
+    head: String,
     /// release に同梱した検査器（経路の外側で読んだ値）。
-    pub bundled: Option<BundledChecker>,
+    bundled: Option<BundledChecker>,
+}
+
+impl HealthTarget {
+    /// 段の統合の対象の head を統合の HEAD にする（merge の後に決まる。空なら `HEAD`）。
+    pub(super) fn at_head(self, head: &str) -> Self {
+        let head = if head.is_empty() { "HEAD" } else { head };
+        Self {
+            head: head.to_string(),
+            ..self
+        }
+    }
 }
 
 /// 検査の列に足す health の 1 行と、event に残す証跡。
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HealthItem {
+struct HealthItem {
     /// 列に足すか（NotApplicable は `false`。event には `evidence` を残す）。
-    pub counted: bool,
-    pub pass: bool,
+    counted: bool,
+    pass: bool,
     /// Pass は `Some(0)`、Repair は `Some(1)`、Error と NotApplicable は `None`。
-    pub exit: Option<i32>,
-    pub reason: String,
-    pub evidence: HealthEvidence,
+    exit: Option<i32>,
+    reason: String,
+    evidence: HealthEvidence,
 }
 
 /// D1.2: `target` を経路共通の入口で 1 回評価し、列の 1 行に写す（blocking。git と検査器の子 process を起こす）。
-pub fn evaluate(target: &HealthTarget) -> HealthItem {
+fn evaluate(target: &HealthTarget) -> HealthItem {
     let outcome = gate::health_gate(&HealthGateRequest {
         repo_id: target.repo_id,
         worktree: &target.worktree,
@@ -64,36 +80,20 @@ pub fn evaluate(target: &HealthTarget) -> HealthItem {
         timeout: HEALTH_INPUT_TIMEOUT,
     });
     let evidence = outcome.evidence().clone();
+    let why = evidence.reason.clone().unwrap_or_default();
     let (counted, pass, exit, reason) = match outcome.decision() {
-        HealthGateDecision::NotApplicable => (
-            false,
-            true,
-            None,
-            format!(
-                "health: not applicable: {}",
-                evidence.reason.as_deref().unwrap_or_default()
-            ),
-        ),
+        HealthGateDecision::NotApplicable => {
+            (false, true, None, format!("health: not applicable: {why}"))
+        }
         HealthGateDecision::Pass => (true, true, Some(0), "health: pass".to_string()),
-        HealthGateDecision::PolicyOnly => (
-            true,
-            true,
-            Some(0),
-            format!(
-                "health: {}",
-                evidence.reason.as_deref().unwrap_or("policy_only")
-            ),
-        ),
-        HealthGateDecision::Repair(repairs) => (
-            true,
-            false,
-            Some(1),
-            repairs
-                .iter()
-                .map(|r| r.reason.as_str())
-                .collect::<Vec<_>>()
-                .join("; "),
-        ),
+        HealthGateDecision::PolicyOnly => {
+            let why = if why.is_empty() { "policy_only" } else { &why };
+            (true, true, Some(0), format!("health: {why}"))
+        }
+        HealthGateDecision::Repair(repairs) => {
+            let reasons: Vec<&str> = repairs.iter().map(|r| r.reason.as_str()).collect();
+            (true, false, Some(1), reasons.join("; "))
+        }
         HealthGateDecision::Error { reason } => {
             (true, false, None, format!("{HEALTH_CHECK_ERROR}: {reason}"))
         }
@@ -108,14 +108,21 @@ pub fn evaluate(target: &HealthTarget) -> HealthItem {
 }
 
 /// 列の 1 行が health の Error（D3.4）なら、その reason（`health_check_error: <理由>`）。
-pub fn check_error<'a>(cmd: &str, pass: bool, reason: &'a str) -> Option<&'a str> {
+fn check_error<'a>(cmd: &str, pass: bool, reason: &'a str) -> Option<&'a str> {
     let rest = reason.strip_prefix(HEALTH_CHECK_ERROR)?;
     (cmd == HEALTH_CHECK_ID && !pass && rest.starts_with(':')).then_some(reason)
 }
 
+/// 段の統合の記録の行 `(cmd, pass, reason)` に health の Error（D3.4）があれば、その reason。
+pub(super) fn health_error(rows: &[(String, bool, String)]) -> Option<String> {
+    rows.iter()
+        .find_map(|(cmd, pass, reason)| check_error(cmd, *pass, reason))
+        .map(str::to_string)
+}
+
 /// D3.2・D4.1: health の Repair の reason（[`evaluate`] が作る）から、`max_repairs_per_class` を数える rule ごとの
 /// bucket（`health:<rule_id>`、重複なし・順は reason のまま）。health の Repair でなければ空。
-pub fn repair_buckets(reason: &str) -> Vec<String> {
+fn repair_buckets(reason: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for part in reason.split("; ") {
         let Some(item) = part.strip_prefix(task_core::execution::HEALTH_REPAIR_REASON_PREFIX)
@@ -133,99 +140,183 @@ pub fn repair_buckets(reason: &str) -> Vec<String> {
     out
 }
 
-/// WU の check の列に足す health の項目の check（`WorkUnitCheckFinished` の cmd と不合格の記録に使う）。
-pub fn work_unit_check() -> task_core::WorkUnitCheck {
-    task_core::WorkUnitCheck {
-        cmd: HEALTH_CHECK_ID.to_string(),
-        expect_exit: 0,
-        scope: false,
-    }
+/// 段の統合の修復の bucket（repair WU の title の `repair (<bucket>)`）と、その bucket の既にある修復の数。health の修復は
+/// rule ごと（`health:<rule_id>` を `,` で並べる）に数え、数は rule ごとの最大（D3.2・D4.1）。他の class は class の bucket。
+pub(super) fn repair_count(
+    class: task_core::RepairClass,
+    summary: &[String],
+    repairs: &[&task_core::WorkUnitRow],
+) -> (String, usize) {
+    let buckets: Vec<String> = match class {
+        task_core::RepairClass::Health => summary.iter().flat_map(|r| repair_buckets(r)).collect(),
+        other => vec![other.bucket().to_string()],
+    };
+    let count = |bucket: &String| {
+        let title_has = |t: &str| t.split(',').any(|b| b == bucket);
+        repairs
+            .iter()
+            .filter(|u| Dispatcher::repair_bucket_of_title(&u.spec.title).is_some_and(title_has))
+            .count()
+    };
+    let most = buckets.iter().map(count).max().unwrap_or(0);
+    (buckets.join(","), most)
 }
 
-/// `dispatcher::phase_integration::run_integration_checks` の結果。`health` は列に足す health の行（`(pass, reason)`。NotApplicable・対象外は `None`）。
-pub(crate) struct IntegrationChecks {
-    pub results: Vec<(bool, String)>,
-    pub health: Option<(bool, String)>,
+/// 検査の列の 1 項目の位置（0 始まり）・列の長さ・cmd。
+pub(super) struct ItemAt<'a> {
+    pub(super) index: u32,
+    pub(super) total: u32,
+    pub(super) cmd: &'a str,
 }
 
-/// health の項目を 1 回評価し、開始・終了の event（`health` 欄に証跡）を残す（`(work_unit_id, key, run_id)` の
-/// `run_id` が `Some` なら葉の WU の check の event、`None` なら段の統合の event）。
-pub(crate) async fn run_item(
+/// 検査の列の 1 項目の結果（終了の event に残す）。`health` は health の項目の証跡（他の項目は `None`）。
+pub(super) struct ItemEnd {
+    pub(super) pass: bool,
+    pub(super) exit: Option<i32>,
+    pub(super) timed_out: bool,
+    pub(super) duration_ms: u64,
+    pub(super) health: Option<Box<HealthEvidence>>,
+}
+
+/// 項目の開始を event に残す（葉の WU の check〈`observed.run_id` が `Some`〉は `WorkUnitCheckStarted`、段の統合は
+/// `IntegrationCheckStarted`）。書けなくても検査は続ける（見るための記録で、判定には使わない）。
+pub(super) fn record_start(
     store: &dyn task_core::TaskStore,
-    task_id: task_core::TaskId,
-    (work_unit_id, key, run_id): (&str, &str, Option<&str>),
-    target: HealthTarget,
-    index: u32,
-    total: u32,
-) -> Option<(bool, String)> {
-    let cmd = task_core::required_checks::health::HEALTH_CHECK_ID.to_string();
-    let started_at = now_rfc3339();
-    let started = match run_id {
-        Some(run_id) => task_core::Event::WorkUnitCheckStarted {
-            work_unit_id: work_unit_id.to_string(),
-            key: key.to_string(),
-            run_id: run_id.to_string(),
+    task_id: TaskId,
+    observed: &ObservedIntegration,
+    at: &ItemAt<'_>,
+    log_path: String,
+) {
+    let (work_unit_id, key) = (observed.work_unit_id.clone(), observed.key.clone());
+    let (index, total, cmd) = (at.index, at.total, at.cmd.to_string());
+    let started_at = rfc3339(OffsetDateTime::now_utc());
+    let started = match &observed.run_id {
+        Some(run_id) => Event::WorkUnitCheckStarted {
+            work_unit_id,
+            key,
+            run_id: run_id.clone(),
             index,
             total,
-            cmd: cmd.clone(),
-            log_path: String::new(),
+            cmd,
+            log_path,
             started_at,
         },
-        None => task_core::Event::IntegrationCheckStarted {
-            work_unit_id: work_unit_id.to_string(),
-            key: key.to_string(),
+        None => Event::IntegrationCheckStarted {
+            work_unit_id,
+            key,
             index,
             total,
-            cmd: cmd.clone(),
-            log_path: String::new(),
+            cmd,
+            log_path,
             started_at,
         },
     };
     if let Err(e) = store.append_event(task_id, &started) {
-        tracing::warn!(%task_id, work_unit = %key, error = %e, "could not record the health check start");
+        tracing::warn!(%task_id, work_unit = %observed.key, error = %e, "could not record the integration check start");
     }
-    let clock = std::time::Instant::now();
-    let item = match tokio::task::spawn_blocking(move || evaluate(&target)).await {
-        Ok(item) => item,
-        // 評価の thread が落ちた: 合格にせず Error として止める（D3.4）。
-        Err(e) => {
-            let reason = format!("{HEALTH_CHECK_ERROR}: health evaluation task failed: {e}");
-            return Some((false, reason));
-        }
-    };
-    let duration_ms = u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX);
-    let evidence = Some(Box::new(item.evidence.clone()));
-    let finished = match run_id {
-        Some(run_id) => task_core::Event::WorkUnitCheckFinished {
-            work_unit_id: work_unit_id.to_string(),
-            key: key.to_string(),
-            run_id: run_id.to_string(),
+}
+
+/// 項目の終了を event に残す（[`record_start`] と同じ event の組。health の項目は `health` 欄に証跡を持つ）。
+pub(super) fn record_finish(
+    store: &dyn task_core::TaskStore,
+    task_id: TaskId,
+    observed: &ObservedIntegration,
+    at: &ItemAt<'_>,
+    end: ItemEnd,
+) {
+    let (work_unit_id, key) = (observed.work_unit_id.clone(), observed.key.clone());
+    let (index, total, cmd) = (at.index, at.total, at.cmd.to_string());
+    let ItemEnd {
+        pass,
+        exit,
+        timed_out,
+        duration_ms,
+        health,
+    } = end;
+    let finished = match &observed.run_id {
+        Some(run_id) => Event::WorkUnitCheckFinished {
+            work_unit_id,
+            key,
+            run_id: run_id.clone(),
             index,
             total,
             cmd,
-            pass: item.pass,
-            exit: item.exit,
-            timed_out: false,
+            pass,
+            exit,
+            timed_out,
             duration_ms,
-            health: evidence,
+            health,
         },
-        None => task_core::Event::IntegrationCheckFinished {
-            work_unit_id: work_unit_id.to_string(),
-            key: key.to_string(),
+        None => Event::IntegrationCheckFinished {
+            work_unit_id,
+            key,
             index,
             total,
             cmd,
-            pass: item.pass,
-            exit: item.exit,
-            timed_out: false,
+            pass,
+            exit,
+            timed_out,
             duration_ms,
-            health: evidence,
+            health,
         },
     };
     if let Err(e) = store.append_event(task_id, &finished) {
-        tracing::warn!(%task_id, work_unit = %key, error = %e, "could not record the health check finish");
+        tracing::warn!(%task_id, work_unit = %observed.key, error = %e, "could not record the integration check finish");
     }
-    item.counted.then_some((item.pass, item.reason))
+}
+
+/// health の項目を 1 回評価し、開始・終了の event（`health` 欄に証跡）を残す。列に足す行（`(pass, reason)`）を返す
+/// （対象が無い・NotApplicable なら `None`）。評価の thread が落ちたら合格にせず Error にする（D3.4）。
+pub(super) async fn run_item(
+    store: &dyn task_core::TaskStore,
+    task_id: TaskId,
+    observed: &ObservedIntegration,
+    target: Option<HealthTarget>,
+    (index, total): (u32, u32),
+) -> Option<(bool, String)> {
+    let target = target?;
+    let at = ItemAt {
+        index,
+        total,
+        cmd: HEALTH_CHECK_ID,
+    };
+    record_start(store, task_id, observed, &at, String::new());
+    let clock = std::time::Instant::now();
+    let item = tokio::task::spawn_blocking(move || evaluate(&target))
+        .await
+        .map_err(|e| format!("{HEALTH_CHECK_ERROR}: health evaluation task failed: {e}"));
+    let end = ItemEnd {
+        pass: item.as_ref().is_ok_and(|i| i.pass),
+        exit: item.as_ref().ok().and_then(|i| i.exit),
+        timed_out: false,
+        duration_ms: u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX),
+        health: item.as_ref().ok().map(|i| Box::new(i.evidence.clone())),
+    };
+    record_finish(store, task_id, observed, &at, end);
+    match item {
+        Ok(item) => item.counted.then_some((item.pass, item.reason)),
+        Err(reason) => Some((false, reason)),
+    }
+}
+
+/// 段の統合の検査の結果 `results`（`run_integration_checks` の戻り。`checks` の後に health の行が 1 行あり得る）を、
+/// 統合の記録の行 `(cmd, pass, reason)` として `rows` に入れる。検査が無ければ auto_resolve の行を残して health の行だけ足す。
+pub(super) fn put_rows(
+    rows: &mut Vec<(String, bool, String)>,
+    checks: &[task_core::WorkUnitCheck],
+    results: Vec<(bool, String)>,
+) {
+    if !checks.is_empty() {
+        rows.clear();
+    }
+    let cmds = checks
+        .iter()
+        .map(|c| c.cmd.as_str())
+        .chain([HEALTH_CHECK_ID]);
+    rows.extend(
+        cmds.zip(results)
+            .map(|(c, (pass, reason))| (c.to_string(), pass, reason)),
+    );
 }
 
 /// ADR 2026-11-08-health-enforcement-loop D1.2: 段 `phase` の基点（health の base）。その段の葉・子の unit のうち
@@ -248,7 +339,7 @@ fn phase_base_commit(units: &[task_core::WorkUnitRow], phase: &str) -> Option<St
 
 /// `dir` の HEAD（統合の前。段の unit が基点を持たないときの health の base）。読めなければ `HEAD`（評価で base を解決
 /// できなければ証跡は Error になり、合格にしない）。
-fn git_head(dir: &std::path::Path) -> String {
+fn git_head(dir: &Path) -> String {
     std::process::Command::new("git")
         .arg("-C")
         .arg(dir)
@@ -262,88 +353,89 @@ fn git_head(dir: &std::path::Path) -> String {
 
 /// health の証跡の repo の id。案件の repo の参照（`task.repos` の同じ名前）があればその id。参照の無い作業場所
 /// （task の `repos` が空の単一の作業場所）は固定の id（全桁 0）にする（作業場所は 1 つなので取り違えない）。
-pub(crate) fn health_repo_id(repo_id: Option<task_core::RepoId>) -> task_core::RepoId {
-    repo_id.unwrap_or(task_core::RepoId(ulid::Ulid::nil()))
+fn health_repo_id(repo_id: Option<RepoId>) -> RepoId {
+    repo_id.unwrap_or(RepoId(ulid::Ulid::nil()))
 }
 
-/// 段の統合の health の `(作業ツリー, repo の id, base)`（base は段の基点、無ければ統合の前の HEAD）。
-pub(crate) fn phase_base(
+/// D1.2: 段の統合の health の対象。統合後の作業ツリー（検査と同じ先頭の git の repo `repo_items[0]`）で、base は段の基点
+/// （無ければ統合の前の HEAD）。head は merge の後に [`HealthTarget::at_head`] で統合の HEAD にする。git の repo が無ければ `None`。
+pub(super) fn phase_target<T>(
     units: &[task_core::WorkUnitRow],
     phase: &str,
-    dir: &std::path::Path,
-    repo_id: Option<RepoId>,
-) -> (PathBuf, RepoId, String) {
-    let base = phase_base_commit(units, phase).unwrap_or_else(|| git_head(dir));
-    (dir.to_path_buf(), health_repo_id(repo_id), base)
-}
-
-/// 段の統合の health の対象（[`phase_base`] の `(作業ツリー, repo の id, base)` と統合の HEAD。空なら `HEAD`）。
-pub(crate) fn at_head(
-    (worktree, repo_id, base): (PathBuf, RepoId, String),
-    head: &str,
-    bundled: Option<BundledChecker>,
-) -> HealthTarget {
-    let head = if head.is_empty() { "HEAD" } else { head };
-    HealthTarget {
-        repo_id,
-        worktree,
-        base,
-        head: head.to_string(),
-        bundled,
-    }
-}
-
-/// WU の check の health の対象（base は `wu.base_commit`、head は WU の作業ツリー `worktree` の HEAD）。基点の無い WU
-/// （Task の作業ツリーで走る repair など）は `None`（段の統合で評価する）。repo の id は作業場所の先頭の git の repo の参照。
-pub(crate) fn work_unit_target(
-    task: &task_core::Task,
-    workspaces: Option<task_worker::TaskWorkspaces>,
-    base_commit: Option<&str>,
-    worktree: &std::path::Path,
+    repo_items: &[(PathBuf, Option<RepoId>, T)],
 ) -> Option<HealthTarget> {
-    let repo_id = workspaces.and_then(|ws| {
-        let repo = ws.repos.into_iter().find(|r| r.is_git())?;
-        let reference = task.repos.iter().find(|r| r.name == repo.name)?;
-        Some(reference.repo_id)
-    });
+    let (dir, repo_id, _) = repo_items.first()?;
     Some(HealthTarget {
-        repo_id: health_repo_id(repo_id),
-        worktree: worktree.to_path_buf(),
-        base: base_commit?.to_string(),
+        repo_id: health_repo_id(*repo_id),
+        worktree: dir.clone(),
+        base: phase_base_commit(units, phase).unwrap_or_else(|| git_head(dir)),
         head: "HEAD".to_string(),
         bundled: gate::bundled_checker().cloned(),
     })
 }
 
-/// D3.4: WU の check の列（`checks` と `results` は同じ順）の health の項目が Error なら、run の結果を質問
-/// （`health_check_error: <理由>`。worker が `Done` で返した usage は落とさない）にすり替えた結果。
-pub(crate) fn error_question(
-    checks: &[task_core::WorkUnitCheck],
-    results: &[(bool, String)],
-    result: &Result<task_worker::RunOutcome, task_worker::AdapterError>,
-) -> Option<Result<task_worker::RunOutcome, task_worker::AdapterError>> {
-    let text = checks
-        .iter()
-        .zip(results)
-        .find_map(|(c, (pass, reason))| check_error(&c.cmd, *pass, reason))?
-        .to_string();
-    let usage = match result {
-        Ok(task_worker::RunOutcome {
-            terminal: task_worker::Terminal::Done { usage, .. },
-            ..
-        }) => *usage,
-        _ => None,
-    };
-    Some(Ok(task_worker::RunOutcome {
-        terminal: task_worker::Terminal::Question { text, usage },
-        exit_code: None,
-    }))
-}
+impl Dispatcher {
+    /// D1.2: WU の check の health の対象（base は `wu.base_commit`、head は WU の作業ツリー `worktree` の HEAD）。基点の
+    /// 無い WU（Task の作業ツリーで走る repair など）は `None`（段の統合で評価する）。repo の id は作業場所の先頭の git の
+    /// repo の参照。
+    pub(in super::super) fn work_unit_health(
+        &self,
+        task: &Task,
+        wu: &task_core::WorkUnitRow,
+        worktree: &Path,
+    ) -> Option<HealthTarget> {
+        let base = wu.base_commit.clone()?;
+        let repo_id = self.task_workspaces_for(task).and_then(|ws| {
+            let repo = ws.repos.into_iter().find(|r| r.is_git())?;
+            let reference = task.repos.iter().find(|r| r.name == repo.name)?;
+            Some(reference.repo_id)
+        });
+        Some(HealthTarget {
+            repo_id: health_repo_id(repo_id),
+            worktree: worktree.to_path_buf(),
+            base,
+            head: "HEAD".to_string(),
+            bundled: gate::bundled_checker().cloned(),
+        })
+    }
 
-fn now_rfc3339() -> String {
-    time::OffsetDateTime::now_utc()
-        .format(&time::format_description::well_known::Rfc3339)
-        .unwrap_or_default()
+    /// WU の check の結果の health の行を扱う。列の最後の余りの行（`run_integration_checks` が `checks` の後に足す）に
+    /// health の項目の check を付ける。その行が Error（D3.4）なら、run の結果を質問（`health_check_error: <理由>`。
+    /// worker が `Done` で返した usage は落とさない）にすり替え、検査の記録を空にする（WU の repair〈retry〉にしない）。
+    pub(in super::super) fn settle_health_row(
+        result: Result<RunOutcome, AdapterError>,
+        mut check_run: WorkUnitCheckRun,
+    ) -> (Result<RunOutcome, AdapterError>, WorkUnitCheckRun) {
+        if check_run.results.len() > check_run.checks.len() {
+            check_run.checks.push(task_core::WorkUnitCheck {
+                cmd: HEALTH_CHECK_ID.to_string(),
+                expect_exit: 0,
+                scope: false,
+            });
+        }
+        let error = (check_run.checks.iter().zip(&check_run.results))
+            .find_map(|(c, (pass, reason))| check_error(&c.cmd, *pass, reason));
+        let Some(text) = error.map(str::to_string) else {
+            return (result, check_run);
+        };
+        let usage = match &result {
+            Ok(RunOutcome {
+                terminal: Terminal::Done { usage, .. },
+                ..
+            }) => *usage,
+            _ => None,
+        };
+        let question = Ok(RunOutcome {
+            terminal: Terminal::Question { text, usage },
+            exit_code: None,
+        });
+        let cleared = WorkUnitCheckRun {
+            checks: Vec::new(),
+            results: Vec::new(),
+            cwd: check_run.cwd,
+        };
+        (question, cleared)
+    }
 }
 
 #[cfg(test)]

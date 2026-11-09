@@ -33,3 +33,35 @@ fn health_enforce_integration_repair_error_is_read_only_from_health_item() {
         None
     );
 }
+
+/// 不変条件: 段の統合の記録の行は、検査の後の余りの 1 行を health の項目（`HEALTH_CHECK_ID`）として足し、検査の無い段では
+/// merge の auto_resolve の行を消さない（D1.2。health の項目を足したことで統合の記録が減らない）。流れの試験は検査のある段
+/// だけを通るので、検査の無い段の行の扱いはここで見る。
+#[test]
+fn health_enforce_phase_integration_rows_keep_auto_resolve_without_checks() {
+    let auto = ("auto_resolve".to_string(), true, "{}".to_string());
+    let mut rows = vec![auto.clone()];
+    put_rows(&mut rows, &[], vec![(true, "health: pass".to_string())]);
+    assert_eq!(
+        rows,
+        vec![
+            auto.clone(),
+            (
+                HEALTH_CHECK_ID.to_string(),
+                true,
+                "health: pass".to_string()
+            )
+        ]
+    );
+    let check = task_core::WorkUnitCheck {
+        cmd: "cargo test".to_string(),
+        expect_exit: 0,
+        scope: false,
+    };
+    let mut rows = vec![auto];
+    put_rows(&mut rows, &[check], vec![(true, "ok".to_string())]);
+    assert_eq!(
+        rows,
+        vec![("cargo test".to_string(), true, "ok".to_string())]
+    );
+}

@@ -10,11 +10,12 @@
 //! - [`design`]: 計画の採用前の risk 判定と高 risk だけの設計 review（D3.3・D3.5）の純粋な部分。Dispatcher の状態（実行中の
 //!   run・完了の channel）を使う配線は `health_review/design_gate.rs` で、`dispatcher` の子 module として `#[path]` で読む。
 //! - [`input`]: final review の health 文脈を candidate SHA ごとに 1 回作る（D4）。
+//! - `health_review/check_item.rs`: WU の check と段の統合の検査の列の項目の記録と health の項目（ADR
+//!   2026-11-08-health-enforcement-loop D1.2・D3.2・D3.4）。`dispatcher::phase_integration` の子 module として `#[path]` で読む。
 //! - [`verdict`]: 構造化 health verdict の blocking を不合格にし repair/replan に写す（D5）。
 //! - [`stub_checker`]: health を測らない process（dispatcher 試験の土台・dagbench の driver）が設定する、合格の stub の
 //!   同梱の検査器（ADR 2026-11-08-health-enforcement-loop D1.4 の代わり。本番の daemon は使わない）。
 
-pub mod check_item;
 pub(crate) mod design;
 pub mod gate;
 pub(crate) mod input;

@@ -160,7 +160,7 @@ fn stub_repo(
     git(&["commit", "-q", "-m", "cand"]);
     let reviewed_sha = git(&["rev-parse", "HEAD"]);
     let candidate = CandidateRepo {
-        repo_id: "repo-1".into(),
+        repo_id: task_core::RepoId::new().to_string(),
         dir: dir.to_path_buf(),
         target_sha,
         reviewed_sha,
@@ -256,7 +256,7 @@ fn health_review_input_policy_absent_is_skipped() {
                 reviewed_sha,
                 policy,
                 ..
-            } if repo_id == "repo-1" => Some((
+            } if repo_id == candidate.repo_id => Some((
                 reason,
                 reviewed_sha,
                 policy.map(|p| serde_json::from_value(p).unwrap()),
@@ -308,4 +308,151 @@ fn health_review_input_failed_report_is_recorded_as_unknown() {
     assert_eq!(built.len(), 2);
     assert!(built.iter().all(|i| i.policy.source == POLICY_UNKNOWN));
     assert_eq!(built[0].reviewed_sha, candidate.reviewed_sha);
+}
+
+/// base に検査器の無い一時 git repo（Celeris でない repo）: main に README、branch `cand` に 1 commit。
+fn plain_repo() -> (tempfile::TempDir, CandidateRepo) {
+    let repo = tempfile::tempdir().unwrap();
+    let dir = repo.path();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.email", "t@example.com"]);
+    git(&["config", "user.name", "t"]);
+    std::fs::write(dir.join("README.md"), "base\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "base"]);
+    let target_sha = git(&["rev-parse", "HEAD"]);
+    git(&["checkout", "-q", "-b", "cand"]);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src/a.rs"), "fn a() {}\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "cand"]);
+    let reviewed_sha = git(&["rev-parse", "HEAD"]);
+    let candidate = CandidateRepo {
+        repo_id: task_core::RepoId::new().to_string(),
+        dir: dir.to_path_buf(),
+        target_sha,
+        reviewed_sha,
+    };
+    (repo, candidate)
+}
+
+/// `HealthReviewInputSkipped` の理由と policy の状態。
+fn skips(store: &Arc<dyn TaskStore>, task: TaskId) -> Vec<(String, Option<HealthPolicyState>)> {
+    store
+        .events_for(task)
+        .unwrap()
+        .into_iter()
+        .filter_map(|(_, e)| match e {
+            Event::HealthReviewInputSkipped { reason, policy, .. }
+                if reason != "remote workspace" =>
+            {
+                Some((reason, policy.map(|p| serde_json::from_value(p).unwrap())))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// health_enforce_g2_（ADR 2026-11-08-health-enforcement-loop D1.1・D1.3・J3）: base に検査器の無い repo では、G2 の
+/// 材料（reviewer あり）と policy の状態（reviewer なし）を、呼び出し側が渡した同梱の検査器で作る。材料の report は
+/// 経路共通の評価（`gate::check_with`）が読んだもので、同じ candidate で検査器（report）は 1 回だけ起きる。同梱も
+/// 無ければ材料を作らず、policy の状態を不明（`checker_missing`）で記録する（合格にしない）。以前は base に検査器が
+/// 無いと何も作らず何も記録しなかった（`NO_CHECKER`）ので、既存の試験はこの経路を通らない。
+#[test]
+fn health_enforce_g2_bundled_checker_builds_material_and_policy_state() {
+    let scratch = tempfile::tempdir().unwrap();
+    let log = scratch.path().join("runs.log");
+    let mut rep = report(true, vec![finding("new", false, 1)]);
+    rep["policy"]["changed"] = false.into();
+    let (stub, _) = stub_repo("base", Some(rep), &log);
+    let bundle = tempfile::tempdir().unwrap();
+    let script = bundle.path().join(CHECKER_SCRIPT);
+    std::fs::create_dir_all(script.parent().unwrap()).unwrap();
+    std::fs::copy(stub.path().join(CHECKER_SCRIPT), &script).unwrap();
+    let bundled = BundledChecker {
+        dir: bundle.path().to_path_buf(),
+        id: task_core::required_checks::health::CheckerId {
+            source: task_core::required_checks::health::CheckerSource::Bundled,
+            sha256: "b".repeat(64),
+        },
+    };
+    let (_repo, candidate) = plain_repo();
+
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let w = work(
+        &store,
+        "review-1",
+        &candidate,
+        &scratch.path().join("material"),
+    );
+    let built =
+        build_health_input_with(&w, Some(&bundled)).expect("material from the bundled checker");
+    assert_eq!(log_lines(&log), 1, "the checker ran once for the candidate");
+    let repo = &built.repos[0];
+    assert_eq!(
+        (repo.diff.files, repo.findings.new.len()),
+        (1, 1),
+        "{repo:?}"
+    );
+    assert_eq!(
+        (repo.policy.source.as_str(), repo.policy.changed),
+        ("base", false)
+    );
+    assert_eq!(build_health_input_with(&w, Some(&bundled)), Some(built));
+    assert_eq!(log_lines(&log), 1, "the recorded material is reused");
+
+    let only: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut w = work(
+        &only,
+        "worker",
+        &candidate,
+        &scratch.path().join("policy-only"),
+    );
+    w.policy_only = true;
+    assert_eq!(build_health_input_with(&w, Some(&bundled)), None);
+    assert_eq!(
+        log_lines(&log),
+        2,
+        "one report for the policy-only candidate"
+    );
+    let recorded = skips(&only, w.task_id);
+    assert_eq!(recorded.len(), 1, "{recorded:?}");
+    assert_eq!(recorded[0].0, NO_REVIEWER);
+    assert_eq!(
+        recorded[0]
+            .1
+            .as_ref()
+            .map(|p| (p.source.as_str(), p.changed)),
+        Some(("base", false))
+    );
+
+    for policy_only in [false, true] {
+        let none: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let mut w = work(&none, "review-1", &candidate, &scratch.path().join("none"));
+        w.policy_only = policy_only;
+        assert_eq!(build_health_input_with(&w, None), None);
+        let recorded = skips(&none, w.task_id);
+        assert_eq!(recorded.len(), 1, "{recorded:?}");
+        assert!(
+            recorded[0]
+                .0
+                .contains(&format!("{CHECKER_UNAVAILABLE}: checker_missing")),
+            "{recorded:?}"
+        );
+        assert_eq!(
+            recorded[0].1.as_ref().map(|p| p.source.as_str()),
+            Some(POLICY_UNKNOWN)
+        );
+    }
+    assert_eq!(log_lines(&log), 2, "no checker runs without a checker");
 }

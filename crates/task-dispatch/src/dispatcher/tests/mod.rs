@@ -97,7 +97,43 @@ pub(super) fn dispatcher(
     dispatcher_with_test_clock(store, adapter, max_concurrency, false)
 }
 
+/// 試験の process に合格の stub の同梱の検査器（`health_review::stub_checker`）を設定する。試験の一時 repo は base に
+/// 検査器を持たないので、設定しないと health の適用判定が `Unavailable(checker_missing)` になり、計画は設計 review
+/// に、review は policy の承認待ちに回る（`Unavailable` は合格にしない）。stub は `[review]` の無い repo の方針と
+/// 合格の report を返すので、試験は通常の repo の流れを通る。`Dispatcher::new` の前に呼ぶ。同梱の検査器の無い場合を
+/// 確かめる試験は [`dispatcher_without_bundled_checker`] を使う。
+pub(super) fn use_passing_stub_checker() {
+    if let Err(why) = crate::health_review::stub_checker::configure_passing_stub_checker() {
+        panic!("合格の stub の同梱の検査器を設定できない: {why}");
+    }
+}
+
+/// 同梱の検査器を設定しない [`dispatcher`]（同梱の検査器の無い場合を確かめる試験の土台）。process の同梱の検査器が
+/// 既に設定されていれば panic する（試験の前提が崩れている）。
+pub(super) fn dispatcher_without_bundled_checker(
+    store: Arc<dyn TaskStore>,
+    adapter: Arc<dyn WorkerAdapter>,
+    max_concurrency: usize,
+) -> Dispatcher {
+    assert_eq!(
+        crate::health_review::gate::bundled_checker(),
+        None,
+        "同梱の検査器の無い場合の試験なのに、process に同梱の検査器が設定されている"
+    );
+    new_test_dispatcher(store, adapter, max_concurrency, false)
+}
+
 fn dispatcher_with_test_clock(
+    store: Arc<dyn TaskStore>,
+    adapter: Arc<dyn WorkerAdapter>,
+    max_concurrency: usize,
+    use_test_clock: bool,
+) -> Dispatcher {
+    use_passing_stub_checker();
+    new_test_dispatcher(store, adapter, max_concurrency, use_test_clock)
+}
+
+fn new_test_dispatcher(
     store: Arc<dyn TaskStore>,
     adapter: Arc<dyn WorkerAdapter>,
     max_concurrency: usize,
@@ -1228,6 +1264,7 @@ fn pool_dispatcher_with_requeues(
     if let Some((id, _)) = &second_provider {
         route_sources.push((id, "test"));
     }
+    use_passing_stub_checker();
     let mut d = Dispatcher::new(
         store,
         DispatchConfig {

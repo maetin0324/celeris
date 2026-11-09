@@ -14,6 +14,11 @@
 //! - R13 events / runs / SQLite 永続: 状態の真実は一時 DB の SQLite（`TaskStore`）。driver は読むだけ。
 //! - stub worker: `tests/celeris_exec.rs`・dispatcher 試験（`dispatcher/tests/cluster_job_wait.rs` の
 //!   `ScriptedAdapter`・`TreeWaitAdapter`）と同じ「台本の `WorkerAdapter`」。LLM 呼び出しは 0。
+//! - repo health: dagbench は health を測らない（測るのは DAG の実行・待ち・障害復旧）。一時 repo の base には
+//!   検査器が無いので、driver は `Dispatcher::new` の前に合格の stub の同梱の検査器
+//!   （`task_dispatch::health_review::stub_checker`。`[review]` の無い repo の方針と合格の report を返す）を process に
+//!   設定する。設定しないと適用判定が `Unavailable(checker_missing)` になり、計画は設計 review に、review は policy の
+//!   承認待ちに回って、DAG の点が測れない（`Unavailable` を合格にしない規則は変えない）。
 //!
 //! 時間: 論理時計（`logical_secs`）は driver が離散事象として進める。全ての in-flight の run と poll が論理時計
 //! 待ち（sleeper）になり、tick を回しても何も起きない（静止）ときだけ、最も早い期限まで進める。sleep の長さで
@@ -905,7 +910,8 @@ impl CelerisSide {
 
     /// 外部 stub の操作面を差し込んで組む。`backend` は in-process の [`ExtSim`] でも、別 process の ExtSim を
     /// 持つ IPC 実装（`dagbench::ipc::IpcExt`）でもよい。`paths.ext_ledger` は backend が書く ledger と同じ path
-    /// （同一 host の file。再開時に読み直す）。
+    /// （同一 host の file。再開時に読み直す）。dispatcher を組む前に合格の stub の同梱の検査器を process に設定する
+    /// （dagbench は health を測らない。module の doc の「repo health」）。
     pub fn with_backend(
         spec: RunSpec,
         paths: Paths,
@@ -947,6 +953,7 @@ impl CelerisSide {
             verify_failed: Default::default(),
             validated: Mutex::new(resume.validated),
         });
+        task_dispatch::health_review::stub_checker::configure_passing_stub_checker()?;
         let mut dispatcher = build_dispatcher(&shared, &paths, store.clone());
         register_instance(&mut dispatcher, &store)?;
         Ok(CelerisSide {
@@ -1484,7 +1491,6 @@ fn build_dispatcher(shared: &Arc<Shared>, paths: &Paths, store: Arc<dyn TaskStor
     // 既存の `[tree] max_stages`（既定 5）: 位相レベルごとの stage（k2-* は 7 段）が上限・上限近くの人の承認に
     // 掛からない値にする（測定 config の設定。人の承認を台本で挟まない）。
     execution.limits.tree.max_stages = 16;
-    let max_wait = task_core::cluster_job::MAX_WAIT_SECS_CEILING;
     let cluster = ClusterSpec {
         id: CLUSTER.into(),
         host: CLUSTER.into(),
@@ -1502,7 +1508,7 @@ fn build_dispatcher(shared: &Arc<Shared>, paths: &Paths, store: Arc<dyn TaskStor
         liveness_probe_secs: 0,
         job_wait: task_core::cluster_job::ClusterJobWaitLimits {
             poll_secs: shared.spec.poll_secs,
-            max_wait_secs: max_wait,
+            max_wait_secs: task_core::cluster_job::MAX_WAIT_SECS_CEILING,
         },
     };
     let mut d = Dispatcher::new(

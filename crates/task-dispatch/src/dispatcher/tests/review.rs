@@ -536,6 +536,7 @@ async fn department_reviewer_runs_share_and_continue_one_lead_session() {
         review_json: r#"{"verdicts":[{"criterion":0,"pass":true,"reason":"ok"}]}"#.into(),
         delay: Duration::from_millis(5),
     });
+    use_passing_stub_checker();
     let mut d = Dispatcher::new(
         store.clone(),
         DispatchConfig {
@@ -654,6 +655,7 @@ async fn a_rejected_lead_session_resume_retires_it_and_the_next_review_starts_fr
     let adapter = Arc::new(ResumeRejectingReviewAdapter {
         review_json: r#"{"verdicts":[{"criterion":0,"pass":true,"reason":"ok"}]}"#.into(),
     });
+    use_passing_stub_checker();
     let mut d = Dispatcher::new(
         store.clone(),
         DispatchConfig {
@@ -775,6 +777,7 @@ async fn a_resume_rejection_that_still_produced_a_result_self_heals_and_the_retr
         calls: AtomicUsize::new(0),
     });
     let adapter_handle = adapter.clone();
+    use_passing_stub_checker();
     let mut d = Dispatcher::new(
         store.clone(),
         DispatchConfig {

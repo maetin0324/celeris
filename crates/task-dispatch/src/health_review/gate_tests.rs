@@ -58,6 +58,8 @@ const INIT_PATH: &str = "scripts/dev/repo-health/health/__init__.py";
 const PROFILE: &str = "scripts/dev/repo-health/profiles/celeris.toml";
 const SRC: &str = "src/lib.rs";
 const TIMEOUT: Duration = Duration::from_secs(60);
+/// 同梱の検査器を渡さない（base の検査器の試験）。
+const BUNDLED: Option<&BundledChecker> = None;
 
 fn git_in(dir: &Path, args: &[&str]) -> Result<String, String> {
     let out = std::process::Command::new("git")
@@ -211,7 +213,16 @@ fn health_evidence_gate_pass_binds_each_field() {
     assert_eq!(checker.source, CheckerSource::Base);
     let repo_id = RepoId::new();
 
-    let ev = run_health_check(repo_id, dir.path(), &base, "main", &checker, TIMEOUT);
+    let ev = run_health_check(
+        repo_id,
+        dir.path(),
+        &base,
+        "main",
+        &checker,
+        BUNDLED,
+        TIMEOUT,
+    )
+    .evidence;
 
     assert_eq!(ev.verdict, HealthVerdict::Pass, "{ev:?}");
     assert_eq!(ev.repo_id, repo_id);
@@ -263,7 +274,16 @@ fn health_evidence_gate_exit1_is_fail_with_sorted_blocking() {
     let head = commit(dir.path(), &[(SRC, "fn b() {}\n")], "change");
     let checker = applied(dir.path(), &base, None);
 
-    let ev = run_health_check(RepoId::new(), dir.path(), &base, &head, &checker, TIMEOUT);
+    let ev = run_health_check(
+        RepoId::new(),
+        dir.path(),
+        &base,
+        &head,
+        &checker,
+        BUNDLED,
+        TIMEOUT,
+    )
+    .evidence;
 
     assert_eq!(ev.verdict, HealthVerdict::Fail, "{ev:?}");
     assert_eq!(ev.blocking.len(), MAX_BLOCKING);
@@ -298,7 +318,16 @@ fn health_evidence_gate_policy_only() {
     let head = commit(dir.path(), &[(PROFILE, "[review]\nx = 1\n")], "policy");
     let checker = applied(dir.path(), &base, None);
 
-    let ev = run_health_check(RepoId::new(), dir.path(), &base, &head, &checker, TIMEOUT);
+    let ev = run_health_check(
+        RepoId::new(),
+        dir.path(),
+        &base,
+        &head,
+        &checker,
+        BUNDLED,
+        TIMEOUT,
+    )
+    .evidence;
 
     assert_eq!(ev.verdict, HealthVerdict::PolicyOnly, "{ev:?}");
     assert_eq!(
@@ -320,7 +349,16 @@ fn health_evidence_gate_policy_mixed_is_fail() {
     );
     let checker = applied(dir.path(), &base, None);
 
-    let ev = run_health_check(RepoId::new(), dir.path(), &base, &head, &checker, TIMEOUT);
+    let ev = run_health_check(
+        RepoId::new(),
+        dir.path(),
+        &base,
+        &head,
+        &checker,
+        BUNDLED,
+        TIMEOUT,
+    )
+    .evidence;
 
     assert_eq!(ev.verdict, HealthVerdict::Fail, "{ev:?}");
     assert_eq!(ev.blocking, vec![format!("policy.changed:{:016x}", 1)]);
@@ -339,7 +377,16 @@ fn health_evidence_gate_exit2_is_error() {
     let head = commit(dir.path(), &[(SRC, "fn b() {}\n")], "change");
     let checker = applied(dir.path(), &base, None);
 
-    let ev = run_health_check(RepoId::new(), dir.path(), &base, &head, &checker, TIMEOUT);
+    let ev = run_health_check(
+        RepoId::new(),
+        dir.path(),
+        &base,
+        &head,
+        &checker,
+        BUNDLED,
+        TIMEOUT,
+    )
+    .evidence;
 
     assert_eq!(ev.verdict, HealthVerdict::Error, "{ev:?}");
     let reason = ev.reason.clone().unwrap_or_default();
@@ -375,7 +422,16 @@ fn health_evidence_gate_missing_or_broken_report_is_error() {
             TIMEOUT
         };
 
-        let ev = run_health_check(RepoId::new(), dir.path(), &base, &head, &checker, timeout);
+        let ev = run_health_check(
+            RepoId::new(),
+            dir.path(),
+            &base,
+            &head,
+            &checker,
+            BUNDLED,
+            timeout,
+        )
+        .evidence;
 
         assert_eq!(ev.verdict, HealthVerdict::Error, "{token}: {ev:?}");
         let reason = ev.reason.clone().unwrap_or_default();
@@ -386,7 +442,7 @@ fn health_evidence_gate_missing_or_broken_report_is_error() {
 
 /// 不変条件: base に検査器の無い repo は、適用判定が同梱の検査器を返し、gate はそれ（release の `repo-health/`。base から
 /// 出したときと同じ配置）で評価する。同梱の版は CHECKER_TREE から計算し、同じ commit の検査器の base の版と同じ値。
-/// 設定と違う版の同梱の CheckerId は Error。
+/// 渡した同梱の検査器と違う版の CheckerId は Error。
 #[test]
 fn health_evidence_gate_bundled_checker() {
     let text = report(
@@ -429,7 +485,16 @@ fn health_evidence_gate_bundled_checker() {
     let checker = applied(dir.path(), &base, Some(&configured.id));
     assert_eq!(checker, configured.id);
 
-    let ev = run_health_check(RepoId::new(), dir.path(), &base, &head, &checker, TIMEOUT);
+    let ev = run_health_check(
+        RepoId::new(),
+        dir.path(),
+        &base,
+        &head,
+        &checker,
+        Some(configured),
+        TIMEOUT,
+    )
+    .evidence;
     assert_eq!(ev.verdict, HealthVerdict::Pass, "{ev:?}");
     assert_eq!(ev.checker, Some(configured.id.clone()));
     assert_eq!(ev.report_sha256, sha256_of(&text));
@@ -438,7 +503,16 @@ fn health_evidence_gate_bundled_checker() {
         source: CheckerSource::Bundled,
         sha256: "0".repeat(64),
     };
-    let ev = run_health_check(RepoId::new(), dir.path(), &base, &head, &other, TIMEOUT);
+    let ev = run_health_check(
+        RepoId::new(),
+        dir.path(),
+        &base,
+        &head,
+        &other,
+        Some(configured),
+        TIMEOUT,
+    )
+    .evidence;
     assert_eq!(ev.verdict, HealthVerdict::Error);
     assert!(
         ev.reason
@@ -458,7 +532,16 @@ fn health_evidence_gate_no_profile_policy_is_builtin() {
     let head = commit(dir.path(), &[(SRC, "fn b() {}\n")], "change");
     let checker = applied(dir.path(), &base, None);
 
-    let ev = run_health_check(RepoId::new(), dir.path(), &base, &head, &checker, TIMEOUT);
+    let ev = run_health_check(
+        RepoId::new(),
+        dir.path(),
+        &base,
+        &head,
+        &checker,
+        BUNDLED,
+        TIMEOUT,
+    )
+    .evidence;
 
     assert_eq!(ev.verdict, HealthVerdict::Pass, "{ev:?}");
     let identity = |profiles_tree| PolicyIdentity {
@@ -500,9 +583,21 @@ fn health_evidence_gate_ignores_candidate_checker() {
     );
     let checker = applied(dir.path(), &base, None);
 
-    let ev = run_health_check(RepoId::new(), dir.path(), &base, &head, &checker, TIMEOUT);
+    let ev = run_health_check(
+        RepoId::new(),
+        dir.path(),
+        &base,
+        &head,
+        &checker,
+        BUNDLED,
+        TIMEOUT,
+    )
+    .evidence;
 
     assert_eq!(ev.verdict, HealthVerdict::Fail, "{ev:?}");
     assert_eq!(ev.report_sha256, sha256_of(&failing));
     assert_eq!(ev.blocking, vec![format!("size.x:{:016x}", 1)]);
 }
+
+#[path = "entry_tests.rs"]
+mod entry;

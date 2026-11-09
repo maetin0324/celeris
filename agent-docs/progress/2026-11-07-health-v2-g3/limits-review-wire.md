@@ -1,14 +1,15 @@
 ---
 title: 健全性v2 G3 limits review-wire — task の review の health の Error・往復・修復の上限の使い切りを Blocked と受信箱の質問で止める
 tasks: [01M70C8NHEANARRKZD9RGKZ87D]
-status: blocked
+status: done
 updated: 2026-11-09
+completed: 2026-11-09
 ---
 # 健全性v2 G3 limits review-wire — task の review の health の Error・往復・修復の上限の使い切りを Blocked と受信箱の質問で止める
 
 WorkUnit `review-wire`（task 01M70C8NHEANARRKZD9RGKZ87D）。[ADR 2026-11-08](../../adr/2026-11-08-health-enforcement-loop.md) の D3.4・D4.3・D4.4 を task の review の経路（`Dispatcher::try_review_repair`）に配線する。基準は `$CELERIS_WU_BASE`。
 
-結論: 実装と試験 7 件は済み、提出時の HEAD で test-affected・clippy・fmt・試験の check がすべて exit 0。ただし最終形はこの unit の範囲の外の 2 path を使うので、範囲 check だけが落ちる（下の「未解決」1）。範囲の拡張を `yield.plan_issue` で申告した。範囲に 2 path が入れば、branch の今の形のまま 4 つの check が通る。
+結論: 完了。review の health の Error・Unavailable、同じ指摘の往復、修復の上限の使い切りを `Trigger::ReviewBlocked`（attempts 不変）と受信箱の質問 1 件で止め、repair・再実行・replan・review_rework を起こさない。試験 7 件 `health_limits_review_*` が合格し、提出時の HEAD で範囲 check・試験の check・fmt と clippy・test-affected の 4 つが exit 0。
 
 ## 実装前 brief
 1. 根本原因: task の review の不合格は `try_review_repair` が `None` を返すと呼び出し側が `Trigger::ReviewFail`（`retry_or_fail`）に進む。health の Error・Unavailable は修復できない種類なので `ReviewFail` に落ち、retry（atomic は再実行、compound は最終レビューの後の replan）か、retry 切れで Failed → CoS の review_rework になる。health の Fail が修復の上限に達したときも同じ経路に落ち、同じ指摘の往復は判定されていない。
@@ -23,7 +24,7 @@ WorkUnit `review-wire`（task 01M70C8NHEANARRKZD9RGKZ87D）。[ADR 2026-11-08](.
 - health の Error・Unavailable（`health_check_error: <理由>`）の review: 以前は `ReviewFail`（`max_retries` が 0 なら Failed → CoS の review_rework）。今は `ReviewBlocked` で Blocked、受信箱に `health_check_error: <理由>` の質問 1 件。task の種類を問わず、他の不合格より先に見る。
 - health だけの不合格が `max_repairs`・`max_repairs_per_class`（`health:<rule_id>`）を使い切った review: 以前は `ReviewFail`（attempts+1 の再実行、compound は replan、retry 切れで Failed → review_rework）。今は `ReviewBlocked` で Blocked、受信箱に `health_repair_cap: …`（bucket・bucket の修復の数・`max_repairs_per_class`・修復の合計・`max_repairs`・指摘）の質問 1 件。
 - 同じ指摘の往復（`limits::judge` の範囲 review が `Repeat`）: 以前は上限まで repair を作り続けた。今は repair を作らず Blocked、`health_findings_repeated: …` の質問を出し、木の root に `HealthFindingsRepeated`（位置 review）を追記する（root の受信箱の `health_repeat` 1 件）。
-- 既存の試験 `health_review_policy_unknown_flow_missing_report_is_not_a_pass`（`dispatcher/tests/health_review_input.rs`）は Error の review を Failed と確かめていた。契約の変更に合わせて Blocked に直した（範囲の外。未解決 1）。`health_enforce_direct_review_*`（`review_item_tests.rs`）は `review_task` の項目だけを見て遷移を見ないので、変える必要は無かった。
+- 既存の試験 `health_review_policy_unknown_flow_missing_report_is_not_a_pass`（`dispatcher/tests/health_review_input.rs`）は Error の review を Failed と確かめていた。契約の変更に合わせて Blocked に直した（v2 の計画で範囲に足した。下の「範囲の決着」）。`health_enforce_direct_review_*`（`review_item_tests.rs`）は `review_task` の項目だけを見て遷移を見ないので、変える必要は無かった。
 
 ## 変更（commit の件名）
 - 「G3 limits review-wire: review の health の Error・往復・修復の上限の使い切りを ReviewBlocked と受信箱の質問で止める」
@@ -34,7 +35,7 @@ WorkUnit `review-wire`（task 01M70C8NHEANARRKZD9RGKZ87D）。[ADR 2026-11-08](.
   - `crates/task-dispatch/src/dispatcher/tests/health_limits_review.rs`（新規）と `tests/mod.rs` の末尾の 1 行。
 - 「G3 limits review-wire: transition の Blocked → Ready の同形の分岐を 1 つにまとめ、関数の行を基準より減らす」: check-health の `size.responsibility-growth`（`fn transition` が閾値 200 行を超えたまま 455 → 465 行に伸びた）を直すため、本体の同じ `Answer`・`PhaseResume`・`BrowserResume`・`ClusterJobResume`・`BrowserPrereqResume` の 5 分岐を 1 つにした（動作は同じ。表の試験が全組で確かめる）。`fn transition` は 425 行（基準 452 行）。
 - 「G3 limits review-wire: health の止め方を free 関数の module にまとめ、Dispatcher の method と dispatcher の行を増やさない」: 下の「範囲の拡張の後の形」の module を暫定で `review_verdict.rs` の inline module `review_limits` にした。`try_review_repair` の `failing` の組み立てを短くし、空の `failing` の早期 return を外した（空なら `classify_review_failure` が `Substantive` を返すので動作は同じ）。
-- 「G3 limits review-wire: health の止め方を health_review/review_limits.rs に移して #[path] で読み、health_review_input の Error の試験を Blocked に直す」: inline module の本体を `crates/task-dispatch/src/health_review/review_limits.rs` に移し、`review_verdict.rs` は `#[path = "../health_review/review_limits.rs"] mod review_limits;` で読む（`check_item.rs`・`policy_review.rs` と同じ形）。`health_review_input.rs` の 1 行を `Status::Blocked` にした。2 file とも範囲の外（未解決 1）。
+- 「G3 limits review-wire: health の止め方を health_review/review_limits.rs に移して #[path] で読み、health_review_input の Error の試験を Blocked に直す」: inline module の本体を `crates/task-dispatch/src/health_review/review_limits.rs` に移し、`review_verdict.rs` は `#[path = "../health_review/review_limits.rs"] mod review_limits;` で読む（`check_item.rs`・`policy_review.rs` と同じ形）。`health_review_input.rs` の 1 行を `Status::Blocked` にした。2 file は v2 の計画で範囲に足された（下の「範囲の決着」）。
 
 ## 試験（守る不変条件）
 既存の試験は review の項目と修復の 1 往復だけを見て、Error・往復・上限の使い切りの後の遷移を通らない。`health_limits_repeat_*` は判定の純粋関数、`health_limits_inbox_*` は受信箱の導出だけを見る。ここは dispatcher の流れで見る。時計は使わず、`run_until_idle`（出来事が尽きるまで tick を回す）で決まる。外部ネットワークに出ず、LLM を呼ばない。
@@ -47,17 +48,19 @@ WorkUnit `review-wire`（task 01M70C8NHEANARRKZD9RGKZ87D）。[ADR 2026-11-08](.
 - `health_limits_review_blocked_resumes_on_comment`: Error で止めた task に環境を直して comment すると `answer` で Ready（attempts 0）、次の review で Pass になり Done。
 
 ## 証拠（提出時の HEAD で実行。最後の同期の後に再実行する）
-- `bash scripts/dev/test-affected.sh` → exit 0（約 11 分）。nextest `8110 tests run: 8110 passed (13 slow), 23 skipped`。web の vitest `Test Files 104 passed`・`Tests 711 passed`。check-health `repo-health: verdict=pass exit=0 fail_grade=0 new=2 worsened=0`（new の 2 件は warning の `dup.contract`（`UnavailableReason`）と `dup.public-surface`（`fn judge`）で、どちらも前の unit の変更）。
-- `bash scripts/dev/check-health.sh` を inline module の形（前の commit）で実行すると exit 1: `deps.cycle` が 3 単位 → 4 単位（`dispatcher` → `health_review` の辺で health_review が base の循環 {dispatcher, review, undeclared_artifacts} に入る）、`size.responsibility-growth` の dispatcher module の本体の行が 35163 → 35206。今の形では両方とも基準のまま（worsened 0）。
+- 範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"` を計画 v2 の正規表現で絞る）→ exit 0、範囲外の path なし。
 - `cargo nextest run -p task-core -p task-dispatch --no-tests=fail -E 'test(/health_limits_/) | test(/health_enforce_/)'`（WU の check 1。7 件の `fn` の grep を含む）→ exit 0、`65 tests run: 65 passed, 2891 skipped`。
-- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
-- 範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"` を計画の正規表現で絞る）→ exit 1。範囲外は `crates/task-dispatch/src/dispatcher/tests/health_review_input.rs` と `crates/task-dispatch/src/health_review/review_limits.rs` の 2 件だけ。
+- `cargo fmt --all -- --check && cargo clippy --workspace -- -D warnings` → exit 0。
+- `bash scripts/dev/test-affected.sh` → exit 0。nextest `8110 tests run: 8110 passed (13 slow), 23 skipped`。web の vitest `Test Files 104 passed`・`Tests 711 passed`。check-health `repo-health: verdict=pass exit=0 fail_grade=0 new=2 worsened=0`（new の 2 件は warning の `dup.contract`（`UnavailableReason`）と `dup.public-surface`（`fn judge`）で、どちらも前の unit の変更）。
+- 参考: `bash scripts/dev/check-health.sh` を inline module の形（「health の止め方を free 関数の module にまとめ…」の commit）で実行すると exit 1。`deps.cycle` が 3 単位 → 4 単位（`dispatcher` → `health_review` の辺で health_review が base の循環 {dispatcher, review, undeclared_artifacts} に入る）、`size.responsibility-growth` の dispatcher module の本体の行が 35163 → 35206。今の形では両方とも基準のまま（worsened 0）。
+
+## 範囲の決着
+- 最初の計画の範囲には `crates/task-dispatch/src/health_review/review_limits.rs` と `crates/task-dispatch/src/dispatcher/tests/health_review_input.rs` が無く、`yield.plan_issue` で申告した。計画 v2 が key と依存を保ったまま、2 path を範囲 check の正規表現に足した。
+  - `review_limits.rs`: health の止め方（`stop_on_error`・`stop_on_repeat`・`stop_on_cap`・`block`）を free 関数で置き、`review_verdict.rs` が `#[path = "../health_review/review_limits.rs"] mod review_limits;` で読む（`check_item.rs`・`policy_review.rs` と同じ形）。dispatcher の file に置くと上の 2 つの finding で check-health が落ちる。範囲の中の `review_item.rs` は health_review の module なので、dispatcher から呼ぶと同じ辺ができる。
+  - `health_review_input.rs`: `health_review_policy_unknown_flow_missing_report_is_not_a_pass` の `Status::Failed` を `Status::Blocked` にした（D3.4 の契約の変更。他の確かめは変えていない）。
 
 ## 未解決
-1. 範囲の外の 2 path が要る（`yield.plan_issue` で申告した）:
-   - `crates/task-dispatch/src/health_review/review_limits.rs`（新規）: health の止め方（`stop_on_error`・`stop_on_repeat`・`stop_on_cap`・`block`）を free 関数で置き、`review_verdict.rs` が `#[path = "../health_review/review_limits.rs"] mod review_limits;` で読む（`check_item.rs`・`policy_review.rs` と同じ形）。dispatcher の file に置くと `crate::health_review::limits` を読む辺が `deps.cycle`（dispatcher・health_review・review・undeclared_artifacts の 4 単位）を広げ、dispatcher module の行の合計（基準 35163）が増えて check-health が落ちる。
-   - `crates/task-dispatch/src/dispatcher/tests/health_review_input.rs`: `health_review_policy_unknown_flow_missing_report_is_not_a_pass` の `Status::Failed` を `Status::Blocked` にする（D3.4 の契約の変更。他の確かめは今のまま合格する）。
-   - 2 path は branch に置いた。範囲の正規表現に `crates/task-dispatch/src/health_review/review_limits\.rs` と `crates/task-dispatch/src/dispatcher/tests/health_review_input\.rs` を足せば、今の branch のまま 4 つの check が通る（上の証拠）。範囲の中だけで済ませる形は無い: 範囲の中の health_review の file（`review_item.rs`）は health_review の module なので、dispatcher から呼ぶと `deps.cycle` が広がる。dispatcher の file に置くと行と辺の両方で落ちる。試験の 1 行は契約の変更そのもの。
+- 無し（受信箱の件数と CoS の扱いは「提案」に書いた）。
 
 ## 提案
 - 受信箱: 往復で止めた源の task は Blocked なので、root の `health_repeat` とは別に源の質問の項目が出る（escalation の設計では人は源への comment で再開する）。root が源と同じ task でも 2 件になる。源が往復の源である間は質問の項目を出さない絞り込みを task-ops の受信箱に足すかを、record の unit で決めるとよい。

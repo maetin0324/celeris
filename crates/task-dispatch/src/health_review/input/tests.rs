@@ -183,6 +183,7 @@ fn work(
         skipped: vec![("repo-remote".into(), "remote workspace".into())],
         out_dir: out.to_path_buf(),
         timeout: HEALTH_INPUT_TIMEOUT,
+        evaluated: Default::default(),
     }
 }
 

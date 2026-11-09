@@ -601,3 +601,6 @@ fn health_evidence_gate_ignores_candidate_checker() {
 
 #[path = "entry_tests.rs"]
 mod entry;
+
+#[path = "review_item_tests.rs"]
+mod review_item;

@@ -18,5 +18,6 @@ pub(crate) mod design;
 pub mod gate;
 pub(crate) mod input;
 pub mod policy;
+pub mod review_item;
 pub mod stub_checker;
 pub(crate) mod verdict;

@@ -44,11 +44,12 @@ use task_worker::protocol::{
     HealthReviewInput, OwnerRow, PathStat,
 };
 
-use super::gate::{self, BundledChecker, CheckerChoice, RepoHealthReport};
+use super::gate::{self, BundledChecker, CheckerChoice, HealthRun, RepoHealthReport};
 use super::policy::{BaseChecker, finished, left, parse_review_policy};
+use super::review_item;
 use crate::dispatcher::Dispatcher;
 use crate::dispatcher::review_spawn::ReviewSync;
-use crate::review::ReviewerRun;
+use crate::review::{RequiredRepoChecks, ReviewerRun};
 use task_core::RepoId;
 use task_core::required_checks::health::CheckerId;
 
@@ -100,6 +101,9 @@ pub struct HealthInputWork {
     /// report の書き先の dir（daemon の task dir の `runs/health/`）。
     pub out_dir: PathBuf,
     pub timeout: Duration,
+    /// 検査器で評価した候補（[`gate::check_with`] の `HealthRun`）。review の health の項目が同じ評価を使う
+    /// （`health_review::review_item::adopt`。同じ candidate で検査器を 2 回起こさない）。
+    pub evaluated: std::sync::Mutex<Vec<HealthRun>>,
 }
 
 /// `spawn_review` が reviewer run を起こす非同期 task に持ち込む仕事（`None` なら何もしない）。
@@ -107,20 +111,37 @@ pub struct HealthInputJob(pub Option<HealthInputWork>);
 
 impl HealthInputJob {
     /// 仕事があれば材料を作り（`policy_only` なら policy の状態だけを記録し）、reviewer run があれば
-    /// `run.health` に入れて返す。
-    pub(crate) async fn attach(self, run: Option<ReviewerRun>) -> Option<ReviewerRun> {
+    /// `run.health` に入れて返す。検査器で評価した候補は `checks` の health の項目に渡す（`review_item::adopt`）。
+    pub(crate) async fn attach(
+        self,
+        run: Option<ReviewerRun>,
+        checks: &mut [RequiredRepoChecks],
+    ) -> Option<ReviewerRun> {
         let Some(work) = self.0 else {
             return run;
         };
         let task_id = work.task_id;
-        let built = tokio::task::spawn_blocking(move || build_health_input(&work)).await;
-        let mut run = run?;
-        match built {
-            Ok(health) => run.health = health,
+        let built = tokio::task::spawn_blocking(move || {
+            let health = build_health_input(&work);
+            let runs = work
+                .evaluated
+                .into_inner()
+                .unwrap_or_else(|e| e.into_inner());
+            (health, runs)
+        })
+        .await;
+        let health = match built {
+            Ok((health, runs)) => {
+                review_item::adopt(checks, runs);
+                health
+            }
             Err(e) => {
                 tracing::warn!(%task_id, error = %e, "health input builder failed; reviewing without health");
+                None
             }
-        }
+        };
+        let mut run = run?;
+        run.health = health;
         Some(run)
     }
 }
@@ -147,6 +168,7 @@ impl Dispatcher {
             skipped,
             out_dir: task_dir.join("runs").join("health"),
             timeout: HEALTH_INPUT_TIMEOUT,
+            evaluated: Default::default(),
         };
         let Some(run) = reviewer else {
             return self.policy_only_job(task, synced, run_id, work);
@@ -461,7 +483,7 @@ impl HealthInputWork {
             short(&c.reviewed_sha)
         );
         let out = self.out_dir.join(name);
-        gate::check_with(
+        let gate::CheckedRun { run, report } = gate::check_with(
             checker,
             id,
             repo_id,
@@ -469,8 +491,11 @@ impl HealthInputWork {
             &c.reviewed_sha,
             Some(&out),
             deadline,
-        )
-        .report
+        );
+        if let Ok(mut evaluated) = self.evaluated.lock() {
+            evaluated.push(run);
+        }
+        report
     }
 }
 

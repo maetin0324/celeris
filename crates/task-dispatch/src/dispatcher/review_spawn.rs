@@ -977,6 +977,10 @@ impl Dispatcher {
                         target_sha: s.target_sha.clone(),
                         reviewed_sha: s.reviewed_sha.clone(),
                     }),
+                    health: Some(crate::health_review::review_item::RequiredHealth::new(
+                        snapshot.map_or_else(|| repo.dir.clone(), |s| s.dir.clone()),
+                        remote_settings.is_some(),
+                    )),
                     commands,
                     reusable,
                     workspace: if index == 0 {
@@ -1028,7 +1032,7 @@ impl Dispatcher {
             let extras = ReviewExtras {
                 subject,
                 plan,
-                reviewer: health.attach(reviewer_run).await,
+                reviewer: health.attach(reviewer_run, &mut repo_checks).await,
                 human,
                 aggregate,
                 // ADR-0043 D4: リポジトリの `[commands] check`（必須。acceptance で置き換えない）。

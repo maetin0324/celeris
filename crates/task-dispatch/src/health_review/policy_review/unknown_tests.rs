@@ -166,6 +166,7 @@ pub(super) fn case_for(checker: Option<(Policy, Report)>, changed: &str, reviewe
         skipped: vec![],
         out_dir: scratch.path().join("health"),
         timeout: HEALTH_INPUT_TIMEOUT,
+        evaluated: Default::default(),
     };
     build_health_input(&work);
     // 同梱の検査器は設定しない（`checker = None` の repo は base にも同梱にも検査器が無い場合）。
@@ -210,6 +211,8 @@ impl Case {
                 }),
                 definition_sha256: DIGEST.into(),
                 results: vec![],
+                health_repair_hint: None,
+                health_note: None,
             }],
             command_checks: vec![],
         }

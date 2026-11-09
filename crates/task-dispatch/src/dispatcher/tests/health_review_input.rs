@@ -473,6 +473,7 @@ async fn health_review_policy_no_reviewer_normal_change_passes_without_approval(
         }],
         skipped: vec![],
         out_dir: scratch.path().join("again"),
+        evaluated: Default::default(),
         timeout: HEALTH_INPUT_TIMEOUT,
     };
     assert!(build_health_input(&again).is_none());

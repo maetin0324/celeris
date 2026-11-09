@@ -164,6 +164,11 @@ pub(crate) fn validate_answer(item: &InboxItem, input: &InboxAnswerBody) -> Resu
 
 // Build a request to the existing domain endpoint so validation, audit, and state
 // transitions remain in one place. The path comes only from the derived InboxItem.
+/// 受信箱の項目に直接の操作が無い（委ね先の画面・endpoint で答える）ときの 409。
+fn native_required(detail: &'static str) -> ApiProblem {
+    ApiProblem::new(StatusCode::CONFLICT, "native_action_required", detail)
+}
+
 pub(crate) fn delegated_request(
     item: &InboxItem,
     input: &InboxAnswerBody,
@@ -176,35 +181,17 @@ pub(crate) fn delegated_request(
     let (method, path, body) = match item.kind {
         InboxKind::Decision => (
             Method::POST,
-            base.ok_or_else(|| {
-                ApiProblem::new(
-                    StatusCode::CONFLICT,
-                    "native_action_required",
-                    "this item has no direct domain action",
-                )
-            })?,
+            base.ok_or_else(|| native_required("this item has no direct domain action"))?,
             serde_json::json!({"option":input.option,"note":input.note}),
         ),
         InboxKind::Authorization => (
             Method::POST,
-            base.ok_or_else(|| {
-                ApiProblem::new(
-                    StatusCode::CONFLICT,
-                    "native_action_required",
-                    "this item has no direct domain action",
-                )
-            })?,
+            base.ok_or_else(|| native_required("this item has no direct domain action"))?,
             serde_json::json!({"decision":input.option,"answer":note,"scope":input.payload.as_ref().and_then(|p|p.get("scope"))}),
         ),
         InboxKind::Question => (
             Method::POST,
-            base.ok_or_else(|| {
-                ApiProblem::new(
-                    StatusCode::CONFLICT,
-                    "native_action_required",
-                    "this item has no direct domain action",
-                )
-            })?,
+            base.ok_or_else(|| native_required("this item has no direct domain action"))?,
             // ADR 2026-10-22-plan-issue-answer-replans D5: 「計画を直す」は回答の意図 `replan`。
             if input.option == "replan" {
                 serde_json::json!({"answer":note,"intent":"replan"})
@@ -214,13 +201,7 @@ pub(crate) fn delegated_request(
         ),
         InboxKind::AcceptanceCheck => {
             let p = base
-                .ok_or_else(|| {
-                    ApiProblem::new(
-                        StatusCode::CONFLICT,
-                        "native_action_required",
-                        "this item has no direct domain action",
-                    )
-                })?
+                .ok_or_else(|| native_required("this item has no direct domain action"))?
                 .replace(
                     "/approve",
                     if input.option == "reject" {
@@ -258,34 +239,16 @@ pub(crate) fn delegated_request(
         }
         InboxKind::PlanGate | InboxKind::PhaseGate => (
             Method::POST,
-            base.ok_or_else(|| {
-                ApiProblem::new(
-                    StatusCode::CONFLICT,
-                    "native_action_required",
-                    "this item has no direct domain action",
-                )
-            })?,
+            base.ok_or_else(|| native_required("this item has no direct domain action"))?,
             serde_json::json!({"action":input.option,"note":input.note}),
         ),
         InboxKind::ProjectPlan => (
             Method::POST,
-            base.ok_or_else(|| {
-                ApiProblem::new(
-                    StatusCode::CONFLICT,
-                    "native_action_required",
-                    "this item has no direct domain action",
-                )
-            })?,
+            base.ok_or_else(|| native_required("this item has no direct domain action"))?,
             serde_json::json!({"decision":input.option,"note":input.note}),
         ),
         InboxKind::BrowserWait => {
-            let p = base.ok_or_else(|| {
-                ApiProblem::new(
-                    StatusCode::CONFLICT,
-                    "native_action_required",
-                    "this item has no direct domain action",
-                )
-            })?;
+            let p = base.ok_or_else(|| native_required("this item has no direct domain action"))?;
             let p = if input.option == "registered" {
                 p.replace("/credential", "/registered")
             } else {
@@ -332,13 +295,7 @@ pub(crate) fn delegated_request(
             }
         }
         InboxKind::Unintegrated => {
-            let base = base.ok_or_else(|| {
-                ApiProblem::new(
-                    StatusCode::CONFLICT,
-                    "native_action_required",
-                    "integration action is unavailable",
-                )
-            })?;
+            let base = base.ok_or_else(|| native_required("integration action is unavailable"))?;
             let action = match input.option.as_str() {
                 "merge" | "discard" | "hold" | "reopen" => input.option.as_str(),
                 _ => return Err(ApiProblem::bad_request("unsupported integration action")),
@@ -346,13 +303,7 @@ pub(crate) fn delegated_request(
             let path = base
                 .strip_suffix("merge")
                 .map(|prefix| format!("{prefix}{action}"))
-                .ok_or_else(|| {
-                    ApiProblem::new(
-                        StatusCode::CONFLICT,
-                        "native_action_required",
-                        "integration action path is invalid",
-                    )
-                })?;
+                .ok_or_else(|| native_required("integration action path is invalid"))?;
             (
                 Method::POST,
                 path,
@@ -363,11 +314,7 @@ pub(crate) fn delegated_request(
             if input.option == task_core::integration_request::INTEGRATE_TASK_OPTION =>
         {
             let path = base.ok_or_else(|| {
-                ApiProblem::new(
-                    StatusCode::CONFLICT,
-                    "native_action_required",
-                    "this integration request cannot be given to an integrate task",
-                )
+                native_required("this integration request cannot be given to an integrate task")
             })?;
             (Method::POST, path, serde_json::json!({"note": input.note}))
         }
@@ -381,12 +328,9 @@ pub(crate) fn delegated_request(
         | InboxKind::ReleaseUnpromoted
         | InboxKind::TaskUnscheduled
         | InboxKind::ScriptControl
+        | InboxKind::HealthRepeat
         | InboxKind::CredentialWait => {
-            return Err(ApiProblem::new(
-                StatusCode::CONFLICT,
-                "native_action_required",
-                "use the linked domain action",
-            ));
+            return Err(native_required("use the linked domain action"));
         }
     };
     Ok((method, path, body))

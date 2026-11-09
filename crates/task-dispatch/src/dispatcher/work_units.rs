@@ -3,10 +3,10 @@
 use super::*;
 
 impl Dispatcher {
-    /// ADR-0072 D14/D6・E4 (g): `wu.spec.checks` を `review::run_work_unit_checks`（review.rs の
-    /// `Check::Command` 実行を再利用）で実行し、終わったら `Completion::WorkUnitChecks` を送る。
-    /// `self.running` からは既に取り除かれている（`on_worker_finished` の冒頭）ので、ここでは
-    /// lease の維持や snapshot への影響は無い（review run の Command 実行と同じ扱い）。
+    /// ADR-0072 D14/D6・E4 (g): `wu.spec.checks` を `review::run_work_unit_checks`（review.rs の `Check::Command` 実行を再利用）で
+    /// 実行し、列の最後に health の項目（ADR 2026-11-08-health-enforcement-loop D1.2。base は `wu.base_commit`、head は WU の HEAD）を
+    /// 足して、終わったら `Completion::WorkUnitChecks` を送る。`self.running` からは既に取り除かれている（`on_worker_finished` の
+    /// 冒頭）ので、ここでは lease の維持や snapshot への影響は無い（review run の Command 実行と同じ扱い）。
     #[allow(clippy::too_many_arguments)]
     pub(super) fn spawn_work_unit_checks(
         &mut self,
@@ -36,8 +36,7 @@ impl Dispatcher {
                 result,
             );
         };
-        // ADR-0074 D1.2（Phase F2b）: v2 の WU の checks は WU の作業ツリーで走らせ、検査の間も WU の
-        // lease（と Task の lease）を延ばしておく（検査中に照合で WU を戻さないため）。
+        // ADR-0074 D1.2（Phase F2b）: v2 の WU の checks は WU の作業ツリーで走らせ、検査の間も WU の lease（と Task の lease）を延ばしておく（検査中に照合で WU を戻さないため）。
         let work_dir = match self.work_unit_trees(&task, &wu)?.into_iter().next() {
             Some((tree, _)) => Some(tree),
             None => self.work_dir_for(&task),
@@ -52,8 +51,7 @@ impl Dispatcher {
                 tracing::warn!(%task_id, %run_id, error = %e, "could not extend the work unit lease for its checks");
             }
         }
-        // ADR-0074 F5-fix（不具合 1）: 検査も run と同じ `CARGO_TARGET_DIR` で走らせる（自分の
-        // worktree の WU は `<repo-key>/wu-<id>`、それ以外は `<repo-key>`）。
+        // ADR-0074 F5-fix（不具合 1）: 検査も run と同じ `CARGO_TARGET_DIR` で走らせる（自分の worktree の WU は `<repo-key>/wu-<id>`、それ以外は `<repo-key>`）。
         let own_tree = !self.work_unit_trees(&task, &wu)?.is_empty();
         let mut check_env = self.check_cargo_target_env(&task, own_tree.then_some(wu.id.as_str()));
         // ADR-0074 付記 2026-10-05 D3: 範囲 check が基点・統合先を知れるように。
@@ -74,6 +72,7 @@ impl Dispatcher {
         }
         .with_cargo_env(check_env);
         let checks = wu.spec.checks.clone();
+        let health = self.work_unit_health(&task, &wu, ws.work_dir());
         let timeout = self.config.review_timeout;
         let tx = self.tx.clone();
         let checking_run_id = run_id.clone();
@@ -107,6 +106,7 @@ impl Dispatcher {
                 &ws,
                 &checks,
                 timeout,
+                health,
             )
             .await;
             let _ = tx.send(Completion::WorkUnitChecks {
@@ -352,10 +352,10 @@ impl Dispatcher {
         Ok(())
     }
 
-    /// ADR-0072 D14/D6・E4 (g): `spawn_work_unit_checks` の結果を受けて、`finish_worker_result` に
-    /// 引き継ぐ。1 つでも `pass = false` があれば、この run を `Terminal::Error{retryable: true}`
-    /// （WU の retry。`execution_scheduler::decide` が `RunEnd::Failed{retryable:true}` として扱う）に
-    /// すり替える。全部 pass なら元の `result`（`Terminal::Done`）をそのまま使う。
+    /// ADR-0072 D14/D6・E4 (g): `spawn_work_unit_checks` の結果を受けて、`finish_worker_result` に引き継ぐ。1 つでも `pass = false`
+    /// があれば、この run を `Terminal::Error{retryable: true}`（WU の retry。`execution_scheduler::decide` が
+    /// `RunEnd::Failed{retryable:true}` として扱う）にすり替える（health の項目の Fail も WU の repair。Error は retry にせず質問〈Blocked〉
+    /// にする。ADR 2026-11-08-health-enforcement-loop D3.2・D3.4、`settle_health_row`）。全部 pass なら元の `result` をそのまま使う。
     #[allow(clippy::too_many_arguments)]
     pub(super) fn on_work_unit_checks_finished(
         &mut self,
@@ -372,8 +372,7 @@ impl Dispatcher {
             tracing::warn!(%task_id, %run_id, "work unit checks finished for unknown task");
             return Ok(());
         };
-        // ADR-0002 D9 / ADR-0005 D4: checks の実行中にリースが失効・タスクが cancel されていたら、
-        // stale worker result と同じ扱いで捨てる。
+        // ADR-0002 D9 / ADR-0005 D4: checks の実行中にリースが失効・タスクが cancel されていたら、stale worker result と同じ扱いで捨てる。
         let lease_matches = self.run_holds_lease(&task, &run_id)?;
         if !lease_matches {
             tracing::warn!(%task_id, %run_id, status = ?task.status, "stale work unit check result discarded");
@@ -383,6 +382,7 @@ impl Dispatcher {
             u.status == task_core::WorkUnitStatus::Running
                 && u.last_run_id.as_deref() == Some(run_id.as_str())
         });
+        let (result, check_run) = Self::settle_health_row(result, check_run);
         // ADR-0079 付記 R7-5: 不合格の検査（cmd・期待する exit・判定文）と走らせた所を残し、run の usage を落とさない。
         let failure = check_run.failure(&result);
         let result = match &failure {

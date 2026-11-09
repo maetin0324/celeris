@@ -467,7 +467,7 @@ impl HealthGateOutcome {
 /// D1.2・D1.3: 経路共通の入口。`repo_facts` → `applicability` → `run_health_check` の順に呼び、結果を分ける。
 /// `request.timeout` は事実の読み取りと評価の全体の上限。同梱の検査器は `request.bundled` だけを使う。LLM は呼ばない。
 pub fn health_gate(request: &HealthGateRequest<'_>) -> HealthGateOutcome {
-    let deadline = Instant::now() + test_timeout::cap(request.worktree, request.timeout);
+    let deadline = Instant::now() + request.timeout;
     let blank = |verdict, reason: String| HealthEvidence {
         repo_id: request.repo_id,
         base_sha: request.base.to_string(),
@@ -590,6 +590,7 @@ fn with_checker<T>(
     run: impl FnOnce(&BaseChecker) -> Result<T, String>,
 ) -> Result<T, String> {
     let site = checker_site(checker, bundled)?;
+    let deadline = test_timeout::cap(repo, deadline);
     with_base_checker(repo, base, site, deadline, run)?
         .ok_or_else(|| "checker_missing: base に検査器が無い（適用判定と食い違う）".to_string())
 }
@@ -955,36 +956,37 @@ pub(super) fn sha256_hex(bytes: &[u8]) -> String {
 #[path = "gate_tests.rs"]
 pub(crate) mod tests;
 
-/// 試験専用の口（D4.2）: 経路は `HEALTH_INPUT_TIMEOUT`（600 秒）を渡すので、時間切れの試験は登録した作業ツリーの下の
-/// 評価だけ上限を縮める（終わらない stub と組み合わせ、600 秒待たずに時間切れを作る）。鍵は作業ツリーの path なので、
-/// 同じ process の他の試験の評価には効かない。本番の build では上限を変えない。
+/// 試験専用の口（D4.2）: 経路は `HEALTH_INPUT_TIMEOUT`（600 秒）の締め切りで検査器を起こすので、時間切れの試験は登録した
+/// 作業ツリーの下の検査器の締め切りだけ早める（終わらない stub と組み合わせ、600 秒待たずに時間切れを作る）。検査器を
+/// 起こす口は [`with_checker`] の 1 か所（入口の評価と G2 の材料の評価が共有）なので、ここで縮めれば両方に効く。鍵は
+/// 作業ツリーの path なので、同じ process の他の試験の評価には効かない。本番の build では締め切りを変えない。
 #[cfg(test)]
 pub(crate) mod test_timeout {
     use std::path::{Path, PathBuf};
     use std::sync::Mutex;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     static CAPS: Mutex<Vec<(PathBuf, Duration)>> = Mutex::new(Vec::new());
 
-    /// `root` の下の作業ツリーの評価の上限を `timeout` 以下にする。
+    /// `root` の下の作業ツリーの検査器の締め切りを、今から `timeout` 以内にする。
     pub(crate) fn cap_under(root: &Path, timeout: Duration) {
         CAPS.lock()
             .unwrap_or_else(|e| e.into_inner())
             .push((root.to_path_buf(), timeout));
     }
 
-    pub(super) fn cap(worktree: &Path, timeout: Duration) -> Duration {
+    pub(super) fn cap(worktree: &Path, deadline: Instant) -> Instant {
         let caps = CAPS.lock().unwrap_or_else(|e| e.into_inner());
         (caps.iter())
             .filter(|(root, _)| worktree.starts_with(root))
-            .map(|(_, t)| *t)
-            .fold(timeout, Duration::min)
+            .map(|(_, t)| Instant::now() + *t)
+            .fold(deadline, Instant::min)
     }
 }
 
 #[cfg(not(test))]
 mod test_timeout {
-    pub(super) fn cap(_: &std::path::Path, timeout: std::time::Duration) -> std::time::Duration {
-        timeout
+    pub(super) fn cap(_: &std::path::Path, deadline: std::time::Instant) -> std::time::Instant {
+        deadline
     }
 }

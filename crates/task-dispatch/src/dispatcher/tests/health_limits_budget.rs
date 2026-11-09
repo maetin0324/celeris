@@ -176,6 +176,28 @@ impl Scenario {
         assert!(run_until_idle(&mut self.d, 800).await.idle);
     }
 
+    /// 決定を待って run を止めた task は `ready` のまま残るので `idle` にならない（`tree_gate.rs` の
+    /// `run_until_quiet` と同じ扱い）。run・判定・統合が 50 tick 続けて無ければ落ち着いたとみなし、800 tick の内に
+    /// 落ち着かなければ落ちる（終わらない run・修復の連鎖があれば落ちる）。
+    async fn settle_quiet(&mut self) {
+        let mut quiet = 0;
+        for _ in 0..800 {
+            let r = self.d.tick().unwrap();
+            if r.idle {
+                return;
+            }
+            let busy = r.reclaimed + r.dispatched + r.finished + r.reviewed + r.in_flight > 0
+                || !self.store.list(Some(Status::Running)).unwrap().is_empty()
+                || !self.store.list(Some(Status::Reviewing)).unwrap().is_empty();
+            quiet = if busy { 0 } else { quiet + 1 };
+            if quiet >= 50 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("the dispatcher never settled");
+    }
+
     fn stored(&self) -> Task {
         self.store.get(self.task.id).unwrap().unwrap()
     }
@@ -287,7 +309,10 @@ fn health_evidence(events: &[Event]) -> Vec<(HealthVerdict, String)> {
 }
 
 fn verdicts(events: &[Event]) -> Vec<HealthVerdict> {
-    health_evidence(events).into_iter().map(|(v, _)| v).collect()
+    health_evidence(events)
+        .into_iter()
+        .map(|(v, _)| v)
+        .collect()
 }
 
 /// 上限の使い切りの止まり方（既存の扱い）: `review_blocked` で Blocked（attempts 不変）、受信箱に質問が 1 件、止めた後に
@@ -328,11 +353,16 @@ fn assert_stopped(s: &Scenario, question_prefix: &str) -> Vec<Event> {
 /// `health_repair_cap` で止まる。
 #[tokio::test]
 async fn health_limits_cap_max_repairs_shared_with_non_health_repairs() {
-    let mut s = Scenario::new("test -f FMT_OK # cargo fmt --check", |_| {}, 0, |dir, _| {
-        commit_file(dir, "FMT_OK", "ok\n");
-        git_out(dir, &["rm", "-q", "FIXED"]);
-        git_out(dir, &["commit", "-q", "-m", "unfix health"]);
-    });
+    let mut s = Scenario::new(
+        "test -f FMT_OK # cargo fmt --check",
+        |_| {},
+        0,
+        |dir, _| {
+            commit_file(dir, "FMT_OK", "ok\n");
+            git_out(dir, &["rm", "-q", "FIXED"]);
+            git_out(dir, &["commit", "-q", "-m", "unfix health"]);
+        },
+    );
     commit_file(&s.dir, "FIXED", "ok\n");
     s.d.config.execution.max_repairs = 1;
     s.review().await;
@@ -378,8 +408,12 @@ async fn health_limits_cap_per_class_counts_each_rule() {
 
 /// 木の上限の場面: 木の節点（`tree` を持つ root）で、修復の前に木の run・費用を `seed` で積んでおく。health の Fail の
 /// 修復の WU は作られるが、その run は `dispatch_one` の `tree_limit_hold_for` で起きず、root に `limit:<key>` の決定の
-/// 要求が 1 件だけ出る（既存の木の上限の扱い。task は run を起こさずに待ち、tick は idle になる）。
-async fn tree_limit_holds_repair(limit_key: &str, configure: impl FnOnce(&mut Dispatcher), seed: [u64; 4]) {
+/// 要求が 1 件だけ出る（既存の木の上限の扱い。task は run を起こさずに決定を待ち、tick を回しても run も修復も増えない）。
+async fn tree_limit_holds_repair(
+    limit_key: &str,
+    configure: impl FnOnce(&mut Dispatcher),
+    seed: [u64; 4],
+) {
     let mut s = Scenario::new(
         "true",
         |t| t.tree = Some(task_core::TreeInfo::root(t.id)),
@@ -389,16 +423,27 @@ async fn tree_limit_holds_repair(limit_key: &str, configure: impl FnOnce(&mut Di
     s.d.config.execution.limits.tree.enabled = true;
     configure(&mut s.d);
     super::tree_gate::seed_tree_run(&s.store, &s.task, "w-before", "claude-sonnet-5", seed);
-    s.review().await;
-    s.settle().await;
+    assert!(
+        s.d.spawn_review(s.task.id, "worker".into(), &ReviewSubject::default())
+            .unwrap()
+    );
+    s.settle_quiet().await;
     let events = s.events();
     assert_eq!(verdicts(&events), vec![HealthVerdict::Fail]);
     assert_eq!(repairs_scheduled(&events), 1, "{events:?}");
-    assert_eq!(worker_runs(&events), 0, "the repair run is held: {events:?}");
+    assert_eq!(
+        worker_runs(&events),
+        0,
+        "the repair run is held: {events:?}"
+    );
     let decisions = s.store.decisions_list(Some(s.task.id)).unwrap();
     assert_eq!(decisions.len(), 1, "{decisions:?}");
     assert_eq!(decisions[0].key, limit_key);
-    assert!(s.inbox_kinds().contains(&InboxKind::Decision), "{:?}", s.inbox_kinds());
+    assert!(
+        s.inbox_kinds().contains(&InboxKind::Decision),
+        "{:?}",
+        s.inbox_kinds()
+    );
     assert_ne!(s.stored().status, Status::Done);
 }
 
@@ -438,16 +483,18 @@ async fn health_limits_cap_token_budget_counts_health_repair_runs() {
     s.review().await;
     let events = s.events();
     assert_eq!(repairs_scheduled(&events), 1, "{events:?}");
-    let repair_runs: Vec<task_core::RunRow> = (s.store.runs_for_task(s.task.id).unwrap().into_iter())
-        .filter(|r| r.work_unit_id.is_some())
-        .collect();
+    let repair_runs: Vec<task_core::RunRow> =
+        (s.store.runs_for_task(s.task.id).unwrap().into_iter())
+            .filter(|r| r.work_unit_id.is_some())
+            .collect();
     assert_eq!(repair_runs.len(), 1, "{repair_runs:?}");
     assert_eq!(
         repair_runs[0].usage.as_ref().map(|u| u.budget_tokens()),
         Some(5_000)
     );
     assert_eq!(
-        crate::dispatcher::token_budget::tree_tokens_used(s.store.as_ref(), s.task.id, None).unwrap(),
+        crate::dispatcher::token_budget::tree_tokens_used(s.store.as_ref(), s.task.id, None)
+            .unwrap(),
         5_000
     );
     let stored = s.stored();
@@ -457,8 +504,16 @@ async fn health_limits_cap_token_budget_counts_health_repair_runs() {
         "{:?}",
         reasons(&events)
     );
-    assert_eq!(verdicts(&events), vec![HealthVerdict::Fail], "no second review");
-    assert!(s.inbox_kinds().contains(&InboxKind::Failed), "{:?}", s.inbox_kinds());
+    assert_eq!(
+        verdicts(&events),
+        vec![HealthVerdict::Fail],
+        "no second review"
+    );
+    assert!(
+        s.inbox_kinds().contains(&InboxKind::Failed),
+        "{:?}",
+        s.inbox_kinds()
+    );
 }
 
 /// D4.1（`MAX_TARGET_RESYNCS`）: health の修復の後の評価し直しは review 前の同期の数（`ReviewTargetAdvanced`）を
@@ -484,10 +539,12 @@ async fn health_limits_cap_reevaluation_does_not_count_target_resyncs() {
     assert_eq!(repairs_scheduled(&events), 3);
 }
 
-/// CoS の `review_rework`（上限 2 回、task-api の `REVIEW_REWORK_MAX`）は Failed の task だけに当たる。health だけの
-/// 不合格は修復の上限の後も Failed にならず（Blocked と質問）、`review_rework` に入らない。health でない失敗と、health
-/// の Fail と health でない失敗が混ざる不合格は今どおり 1 回の `review_fail` で Failed（attempts 1）になり、修復も
-/// 質問も足さない（上限の数え方は `cos_review_rework.rs` の `health_limits_cap_*`）。
+/// CoS の `review_rework`（上限 2 回。task-api の `REVIEW_REWORK_MAX` が、CoS が適用した reopen の数で数える）は Failed
+/// の task だけに当たる。health だけの不合格は修復の上限の後も Failed にならず（Blocked と質問）、`review_rework` に
+/// 入らない。health でない失敗と、health の Fail と health でない失敗が混ざる不合格は、1 回の評価で `review_fail` が
+/// 1 回だけ出て Failed になり、修復も質問も足さない。CoS と同じ `Trigger::Reopen` で 2 回 reopen しても、dispatcher は
+/// reopen を足さず（Failed の数 = 1 + reopen の数）、最後の Failed のまま止まる（task-api の上限の数を増やさず、
+/// 上限を回り込む reopen も作らない）。
 #[tokio::test]
 async fn health_limits_cap_review_rework_sees_only_non_health_failures() {
     let mut only = Scenario::atomic(next_finding);
@@ -496,25 +553,50 @@ async fn health_limits_cap_review_rework_sees_only_non_health_failures() {
     assert_stopped(&only, "health_repair_cap: ");
     assert!(!only.inbox_kinds().contains(&InboxKind::Failed));
 
+    const REVIEW_REWORK_MAX: usize = 2;
     for fixed in [true, false] {
         let mut s = Scenario::new("false", |_| {}, 0, |_, _| {});
         if fixed {
             commit_file(&s.dir, "FIXED", "ok\n");
         }
         s.review().await;
-        let events = s.events();
-        let expected = if fixed { HealthVerdict::Pass } else { HealthVerdict::Fail };
-        assert_eq!(verdicts(&events), vec![expected]);
-        let stored = s.stored();
-        assert_eq!((stored.status, stored.attempts), (Status::Failed, 1), "{stored:?}");
-        let fails = reasons(&events)
-            .iter()
-            .filter(|r| *r == Trigger::ReviewFail.name())
-            .count();
-        assert_eq!(fails, 1);
-        assert_eq!(repairs_scheduled(&events), 0);
-        assert!(raised(&events).is_empty(), "{events:?}");
-        assert!(s.inbox_kinds().contains(&InboxKind::Failed), "{:?}", s.inbox_kinds());
+        for round in 0..=REVIEW_REWORK_MAX {
+            if round > 0 {
+                task_ops::comment::reopen(s.store.as_ref(), s.task.id, Some(Status::Failed))
+                    .unwrap();
+                s.settle().await;
+            }
+            let events = s.events();
+            let expected = if fixed {
+                HealthVerdict::Pass
+            } else {
+                HealthVerdict::Fail
+            };
+            assert_eq!(
+                verdicts(&events),
+                vec![expected; round + 1],
+                "{fixed} {round}"
+            );
+            let stored = s.stored();
+            assert_eq!(stored.status, Status::Failed, "{stored:?}");
+            let reasons = reasons(&events);
+            let fails = reasons
+                .iter()
+                .filter(|r| *r == Trigger::ReviewFail.name())
+                .count();
+            let reopens = reasons
+                .iter()
+                .filter(|r| *r == Trigger::Reopen.name())
+                .count();
+            assert_eq!((fails, reopens), (round + 1, round), "{reasons:?}");
+            assert_eq!(repairs_scheduled(&events), 0);
+            assert!(raised(&events).is_empty(), "{events:?}");
+            assert!(
+                s.inbox_kinds().contains(&InboxKind::Failed),
+                "{:?}",
+                s.inbox_kinds()
+            );
+        }
     }
 }
 
@@ -549,7 +631,10 @@ async fn health_limits_cap_exhausted_error_unknown_unsupported_are_not_pass() {
         let events = assert_stopped(&s, "health_check_error: ");
         let (verdict, reason) = health_evidence(&events).pop().unwrap();
         assert_eq!(verdict, HealthVerdict::Error, "{status}");
-        assert!(reason.contains(&format!("{status}:deps.violation")), "{reason}");
+        assert!(
+            reason.contains(&format!("{status}:deps.violation")),
+            "{reason}"
+        );
         assert_eq!(repairs_scheduled(&events), 1, "{status}");
         assert_ne!(s.stored().status, Status::Done);
     }

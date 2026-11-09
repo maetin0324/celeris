@@ -37,7 +37,11 @@ WorkUnit `reuse-sync`（task 01M6ZDF9Q4BWD9DX6S9KX3KKS1、unit loop-points の�
 - `health_enforce_pre_review_sync_rebase_changes_the_tree_and_reevaluates`: rebase で tree が変わる／target が進んで base の sha だけ変わるとき、同期の前の証跡を写さず同期の後の束縛で評価し直す。
 
 ## 証拠（提出時の HEAD で実行）
-後段に記録する（下の「検査」節）。
+- `cargo nextest run -p task-core --lib -E 'test(/required_checks/)'` → exit 0（48 passed。`health_enforce_reviewer_reuse_` 3 件を含む）
+- `cargo nextest run -p task-dispatch --lib --no-tests=fail -E 'test(/health_enforce_/)'` → exit 0（31 passed。`health_enforce_reviewer_reuse_` 3 件・`health_enforce_pre_review_sync_` 1 件を含む）
+- `bash scripts/dev/test-affected.sh` → exit 0（nextest 8073 passed・23 skipped、check-health は verdict=pass fail_grade=0 worsened=0、new=1 は他の unit の warning `dup.contract`）。1 回目は deps.cycle（dispatcher → health_review の新しい辺）で落ち、`reusable` の決定を `evaluate_all` に移して直した
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
 
 ## 未解決
 - 無し。ただし D3.4（Error で task を Blocked にし受信箱へ）は review-path の未解決のとおり、この unit の範囲外。

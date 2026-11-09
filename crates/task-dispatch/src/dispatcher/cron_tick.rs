@@ -5,6 +5,9 @@
 use super::Dispatcher;
 use super::cos_chat::review::CosReviewSink;
 
+/// ADR 2026-11-08-health-enforcement-loop D6: 全体棚卸しの runner と Busy の印（file は `health_review/`）。
+#[path = "../health_review/inventory.rs"]
+pub(crate) mod inventory;
 /// A6: 判定の前の guard（`project_wake.rs` の行を増やさない）。
 #[path = "project_guard.rs"]
 pub(crate) mod project_guard;
@@ -36,6 +39,7 @@ impl Dispatcher {
         let mut sink = CosReviewSink {
             launch: self.cos_chat_launch.as_ref(),
             findings: &self.stagnation.findings,
+            inventory: &mut self.health_inventory,
             now,
         };
         let mut fired = Vec::new();

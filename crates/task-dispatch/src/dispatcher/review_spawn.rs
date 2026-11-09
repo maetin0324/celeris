@@ -962,23 +962,13 @@ impl Dispatcher {
                         .unwrap_or_else(|| Ok(Default::default()))
                         .map(|cfg| cfg.commands.check)
                 };
-                let reusable = match (snapshot, &commands) {
-                    (Some(s), Ok(cmds)) => crate::health_review::review_item::reusable_checks(
-                        &events,
-                        &crate::review::RequiredCheckBinding::from(s),
-                        &s.dir,
-                        remote_settings.is_some(),
-                        cmds,
-                    ),
-                    _ => Default::default(),
-                };
                 repo_checks.push(crate::review::RequiredRepoChecks {
                     binding: snapshot.map(crate::review::RequiredCheckBinding::from),
                     health: Some(RepoHealth::At(
                         snapshot.map_or(&repo.dir, |s| &s.dir).clone(),
                     )),
                     commands,
-                    reusable,
+                    reusable: Default::default(),
                     workspace: if index == 0 {
                         None
                     } else {

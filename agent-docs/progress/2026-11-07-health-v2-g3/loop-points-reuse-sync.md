@@ -15,15 +15,15 @@ WorkUnit `reuse-sync`（task 01M6ZDF9Q4BWD9DX6S9KX3KKS1、unit loop-points の�
 3. 既存の再利用先: `reusable_health`・`HealthReuseKey`・`HealthRequirement`・入口 `gate::health_gate`・`gate::applicable`。
 4. 選択肢: (a) `reusable_health` の鍵の policy を呼び出し側が report から作る案は、report は検査器を起こさないと無いので使えない。(b) 採用: policy は base 側で評価される（同じ base・同じ検査器なら同じ値）ので、同じ `(repo, base, 検査器)` の最新の証跡の policy を鍵に使う `reuse_health` を task-core に置く。
 5. 新しい状態・分岐・fallback・port: 無し。
-6. 撤去対象: `spawn_review` が `reusable_passes` を直接呼んでいた分岐（`reusable_checks` に置き換えた）。互換分岐・flag は残していない。
+6. 撤去対象: `spawn_review` が `reusable_passes` を直接呼んでいた分岐（`evaluate_all` の `reusable_checks` に移した。dispatcher から health_review への辺を作らないため）。互換分岐・flag は残していない。
 7. 不変条件: health は (repo, base, head の tree, policy, 検査器) が同じ Pass のときだけ写し、写したら今の `(base, head)` に束縛し直して `reused_from` を書く。それ以外・同期で tree が変わったときは入口で評価し直す。試験は下の 6 件。
 
 ## 変更
 - 件名「G3 loop-points reuse-sync: health の再利用を束縛どおりにし reused_from を書く」の commit
   - `crates/task-core/src/required_checks.rs`: `reusable_passes` に引数 `health: HealthRequirement` を足し、指紋を `definition_digest(required, health.checker())` で比べる。`HealthCandidate` と `reuse_health(events, &candidate) -> Option<HealthEvidence>` を足した（`reusable_health` を引き、今の `(base_sha, head_sha)` に束縛し直して `reused_from` に元の head_sha を書く）。
-  - `crates/task-dispatch/src/health_review/review_item.rs`: `evaluate_all` に同じ task の `events` を渡す。束縛の同じ G2 の評価が無ければ `reuse_health` を引き、合えば検査器を起こさず写し、合わなければ入口 `health_gate` で評価し直す。`reusable_checks` は `spawn_review` が repo ごとに呼ぶ必須検査の再利用で、今の適用判定の検査器を `reusable_passes` に渡す（適用判定が `Applies` でない・tree を読めなければ `NotRequired` で、health の当たる候補の指紋とは合わず再利用しない＝fail closed）。
+  - `crates/task-dispatch/src/health_review/review_item.rs`: `evaluate_all` に同じ task の `events` を渡す。束縛の同じ G2 の評価が無ければ `reuse_health` を引き、合えば検査器を起こさず写し、合わなければ入口 `health_gate` で評価し直す。`reusable_checks` は `evaluate_all` が repo ごとに決める必須検査の再利用で、今の適用判定の検査器を `reusable_passes` に渡す（適用判定が `Applies` でない・tree を読めなければ `NotRequired` で、health の当たる候補の指紋とは合わず再利用しない＝fail closed）。
   - `crates/task-dispatch/src/health_review/input.rs`: `attach` が `events` を受けて `evaluate_all` に渡す。
-  - `crates/task-dispatch/src/dispatcher/review_spawn.rs`: `reusable_passes` の直接呼びを `reusable_checks` に置き換え、`attach` に `events` を渡す（行数は増えない）。
+  - `crates/task-dispatch/src/dispatcher/review_spawn.rs`: `reusable_passes` の呼びを消し（`reusable` は `evaluate_all` が決める）、`attach` に `events` を渡す（行数は減る）。
   - 経路の流れ: `reviewer_reuse`（reviewer を省く）・`defer_stale_review` の後・`ReviewSync` の後は、いずれも同期の後の `(target_sha, reviewed_sha)` を束縛にして `evaluate_all` を通る。reviewer を省いても health の項目は付き、写せなければ評価し直す。head の tree は評価の時点で `git rev-parse <reviewed_sha>^{tree}` を読むので、rebase で tree が変われば前の証跡は引かれない。
 - 件名「G3 loop-points reuse-sync: 進捗」の commit: この file。
 

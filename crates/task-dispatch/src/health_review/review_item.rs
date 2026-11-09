@@ -17,7 +17,7 @@
 //!   同じ task の event の証跡を [`task_core::required_checks::reuse_health`] で引く。同じ `(base, head の tree, policy,
 //!   検査器)` の Pass だけを今の `(base, head)` に束縛し直して `reused_from` を書き、検査器を起こさない。tree・base・
 //!   検査器・policy が違えば、同期（rebase）で head の tree が変わったときも、入口 [`gate::health_gate`] で評価し直す。
-//!   reviewer を省いても health は省かない（束縛が合うときだけ写す）。[`reusable_checks`] は必須検査の cmd の再利用に同じ
+//!   reviewer を省いても health は省かない（束縛が合うときだけ写す）。[`reusable_checks`]（`evaluate_all` が呼ぶ）は必須検査の cmd の再利用に同じ
 //!   適用判定の検査器を渡す（定義指紋が検査器を含むため）。
 //!
 //! LLM は呼ばない。
@@ -64,16 +64,28 @@ pub async fn evaluate_all(
             continue;
         };
         let binding = check.binding.clone();
+        let commands = check.commands.as_ref().ok().cloned();
         let prior = binding
             .as_ref()
             .and_then(|b| runs.iter().position(|run| binds(run, b)))
             .map(|i| runs.swap_remove(i));
         let recorded = Arc::clone(&events);
-        let item = tokio::task::spawn_blocking(move || {
-            evaluate(&dir, binding.as_ref(), remote, bundled, prior, &recorded)
+        let evaluated = tokio::task::spawn_blocking(move || {
+            let reusable = match (&binding, &commands) {
+                (Some(b), Some(cmds)) => reusable_checks(&recorded, b, &dir, remote, cmds),
+                _ => BTreeSet::new(),
+            };
+            let item = evaluate(&dir, binding.as_ref(), remote, bundled, prior, &recorded);
+            (item, reusable)
         })
-        .await
-        .unwrap_or_else(|e| error_item(&format!("検査を起こせない: {e}")));
+        .await;
+        let (item, reusable) = evaluated.unwrap_or_else(|e| {
+            (
+                error_item(&format!("検査を起こせない: {e}")),
+                BTreeSet::new(),
+            )
+        });
+        check.reusable = reusable;
         check.health = Some(RepoHealth::Evaluated(item));
     }
 }
@@ -174,7 +186,7 @@ fn requirement_of(
     Some((checker, tree.trim().to_string()))
 }
 
-/// `spawn_review` が repo ごとに呼ぶ、同じ束縛で合格済みの必須検査の cmd。health の要求（今の適用判定の検査器）を
+/// [`evaluate_all`] が repo ごとに決める、同じ束縛で合格済みの必須検査の cmd（`RequiredRepoChecks.reusable`）。health の要求（今の適用判定の検査器）を
 /// `reusable_passes` に渡す（定義指紋が検査器を含む）。要求を作れない（Applies でない・tree を読めない）ときは
 /// `NotRequired` で、health の当たる候補の証跡とは指紋が合わず再利用しない（fail closed）。
 pub fn reusable_checks(

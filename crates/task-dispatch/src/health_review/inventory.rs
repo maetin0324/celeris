@@ -379,5 +379,5 @@ fn error_inventory(
 mod tests;
 
 #[cfg(test)]
-#[path = "inventory_e2e_tests.rs"]
-mod e2e_tests;
+#[path = "inventory_filing_tests.rs"]
+mod filing_tests;

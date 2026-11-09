@@ -27,7 +27,7 @@ WorkUnit `e2e`（task 01M6ZDF99MKHFN57PN0H7G6Z9Z、unit inventory の子）。[G
   - `Port`・`InventoryRuns::port` を足し、`start_inventory` は `CronFireContext` を受け取って roles・genres を写す。
 - `crates/task-dispatch/src/dispatcher/cos_chat/review.rs`: 欄 `inventory` の型を `inventory::Port<'a>` に替えた（1 行の置き換え）。
 - `crates/task-dispatch/src/dispatcher/cron_tick.rs`: sink の初期化を `self.health_inventory.port(&ctx)` に替えた（1 行の置き換え）。
-- 試験: `health_review/inventory_e2e_tests.rs`（新規、4 件）、`dispatcher/tests/health_inventory.rs`（1 件を足し、Dispatcher の組み立てを `setup` に出した）、`health_review/inventory_tests.rs`（`InventoryFire` の欄と `start_inventory`・`record` の引数の追従だけ。判定は変えていない）。
+- 試験: `health_review/inventory_filing_tests.rs`（新規、4 件）、`dispatcher/tests/health_inventory.rs`（1 件を足し、Dispatcher の組み立てを `setup` に出した）、`health_review/inventory_tests.rs`（`InventoryFire` の欄と `start_inventory`・`record` の引数の追従だけ。判定は変えていない）。
 
 ## size の扱い
 - `dispatcher` module（`crates/task-dispatch/src/dispatcher`）の本体のコード行の増減は 0（`review.rs` と `cron_tick.rs` は 1 行ずつの置き換え）。`dispatcher.rs` は変えていない。
@@ -55,7 +55,9 @@ WorkUnit `e2e`（task 01M6ZDF99MKHFN57PN0H7G6Z9Z、unit inventory の子）。[G
 - `bash scripts/dev/test-affected.sh` → exit 0（576 秒）。対象は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。冒頭の check-health は verdict pass・exit 0・fail_grade 0・worsened 0・existing 717、`repo_health_gate: all checks passed`。new 1 件は `dup.contract` の warning（`crates/task-core/src/required_checks/health.rs` と `crates/task-core/src/route_select/availability.rs`。どちらもこの unit で変えていない）。`reviewable=false` は `$CELERIS_WU_BASE` が HEAD の祖先でないため。cargo nextest 3619 passed・11 skipped、doc test 合格、script bundle の SKIP 0 件。
 - `sh scripts/dev/progress-index.sh --check`・`sh scripts/dev/check-doc-links.sh`・`git diff --check` → exit 0。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
-- 範囲（`sh "$CELERIS_WU_SCOPE_PATHS"`）: 変更は `crates/task-dispatch/src/{dispatcher/cron_tick.rs,dispatcher/cos_chat/review.rs,dispatcher/tests/health_inventory.rs,health_review/{inventory,inventory_tests,inventory_e2e_tests}.rs}` とこの file だけ。
+- 範囲（`sh "$CELERIS_WU_SCOPE_PATHS"`）: 変更は `crates/task-dispatch/src/{dispatcher/cron_tick.rs,dispatcher/cos_chat/review.rs,dispatcher/tests/health_inventory.rs,health_review/{inventory,inventory_tests,inventory_filing_tests}.rs}` とこの file だけ。
+
+- 前回の run の範囲 check の不合格: 試験の file 名 `inventory_e2e_tests.rs` の数字 `2` が範囲の正規表現 `health_review/[a-z_]+\.rs` に合わなかった。file を `inventory_filing_tests.rs`、module を `filing_tests` に改名して直した（試験の中身は同じ）。
 
 ## 未解決事項
 - 枠（3 件）で残した finding は、次の発火で base が進むので `existing` になり、後から起票されない（ADR D6.6 の設計のまま。数は行の `limit_remaining` に残る）。後から拾うには人が行の数を見て起票するか、枠の扱いを ADR で決め直す。

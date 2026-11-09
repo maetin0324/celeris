@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 pub(crate) const CONFORMANCE_FILE_ENV: &str = "CELERIS_BROWSER_CONFORMANCE_FILE";
 
 /// 台帳の path を決める。順は (1) env `CELERIS_BROWSER_CONFORMANCE_FILE`（空は無い扱い）
-/// (2) `--release <sha12>` で動くとき `current_exe()` の親の親（release dir）の `browser/conformance.json`
+/// (2) `--release <sha12>` で動くとき release dir（`super::release_dir::release_dir_for`）の `browser/conformance.json`
 /// (3) どちらも無ければ `None`（未配置。daemon は起動し、gate が browser task だけを止める）。
 pub(crate) fn conformance_path_for(
     env: Option<OsString>,
@@ -18,9 +18,7 @@ pub(crate) fn conformance_path_for(
     if let Some(value) = env.filter(|v| !v.is_empty()) {
         return Some(PathBuf::from(value));
     }
-    release.map(str::trim).filter(|r| !r.is_empty())?;
-    // `<releases>/<sha12>/bin/celeris` → `<releases>/<sha12>`
-    let release_dir = exe?.parent()?.parent()?;
+    let release_dir = super::release_dir::release_dir_for(exe, release)?;
     Some(release_dir.join("browser").join("conformance.json"))
 }
 
@@ -30,7 +28,7 @@ pub(crate) fn configure_from_process(cli_release: Option<&str>) {
         .map(str::trim)
         .filter(|r| !r.is_empty())
         .map(str::to_string);
-    let exe = std::env::current_exe().ok();
+    let exe = super::release_dir::running_exe();
     match conformance_path_for(
         std::env::var_os(CONFORMANCE_FILE_ENV),
         exe.as_deref(),

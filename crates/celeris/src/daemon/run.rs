@@ -120,9 +120,9 @@ async fn run_inner(
             .as_deref(),
     )?;
     warn_if_db_on_network_filesystem(&config.db.path);
-    // ADR 2026-10-08-browser-prod-enablement D1.4: 適合台帳の path を決めて worker に渡す
-    // （未配置でも起動は止めない。dispatcher の gate が browser task だけを止める）。
+    // D1.4（ADR 2026-10-08-browser-prod-enablement・2026-11-08-health-enforcement-loop）: 適合台帳と同梱の検査器の所在を 1 回設定する（未配置でも起動は止めない）。
     super::browser_ledger_path::configure_from_process(opts.release.as_deref());
+    super::repo_health_path::configure_from_process(opts.release.as_deref());
     // ADR-0047 D3 / D4（P-61-i、Phase 62）: 起動時に索引が無ければ作る（`_inbox` の変化を tick ごとに
     // 見る仕組みは無いが、知識整理 run が `apply_candidates` の後に必ず `reindex` するので、起動後は
     // それで追随する）。`--mode verify` では KB に触れない。

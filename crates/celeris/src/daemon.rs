@@ -35,6 +35,8 @@ pub(crate) mod config_admin;
 mod cos_launch;
 pub(crate) mod jev_key;
 pub(crate) mod process_memory;
+pub(crate) mod release_dir;
+pub(crate) mod repo_health_path;
 pub(crate) mod routing_guardrail;
 pub(crate) mod run;
 pub(crate) mod script_exhaustive;

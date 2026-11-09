@@ -37,9 +37,10 @@ WorkUnit `fix-inbox`（task 01M70C8NHEANARRKZD9RGKZ87D）。final review の気�
 - `cargo nextest run -p task-ops --no-tests=fail -E 'test(/health_limits_inbox_/)'` → exit 0（6 passed）
 - `! grep -rnE 'comment ?(するか|か|・) ?retry' docs/api/v1/api.md agent-docs/adr/2026-11-08-health-enforcement-loop.md crates/task-ops/src/human_inbox.rs crates/task-ops/src/inbox/health_repeat.rs crates/task-ops/src/inbox/health_repeat && grep -qE 'health_repeat.*comment して再開' docs/api/v1/api.md` → exit 0
 - 範囲の検査（`sh "$CELERIS_WU_SCOPE_PATHS"` の path が Objective の 7 path の中）→ 範囲外 0 件
-- `bash scripts/dev/test-affected.sh` → 結果は下の「提出時の検査」に書く
-- `cargo clippy --workspace -- -D warnings` → 同上
-- `cargo fmt --all -- --check` → 同上
+- `bash scripts/dev/test-affected.sh` → exit 0。対象は celeris・celeris-campaign・celeris-mcp・celerisctl・llm-proxy・task-api・task-dispatch・task-ops・task-worker と web（docs/api/ と task-ops の変更による）。nextest 6551 passed・23 skipped、web の型検査（`tsc -b`）と unit 104 file・711 件が合格、check-health の source-size を含む全検査が pass（`repo_health_gate: all checks passed`）。web/node_modules は先に `pnpm install --offline --frozen-lockfile` で入れた
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- 上の 3 つはコードの commit の後に実行した。その後の commit はこの記録の証拠の追記だけ
 
 ## 未解決
 - `agent-docs/progress/2026-11-07-health-v2-g3/limits-escalation.md` の変更の記録は、当時の選択肢（comment と retry）をそのまま書いている。この unit の範囲の外で、過去の作業の記録なので変えていない。今の動きはこの記録と ADR D3.4 が正しい。

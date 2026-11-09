@@ -131,6 +131,43 @@ sd_bundle_selfdeploy_scripts() {
   [ -f "$dest/snapshot_db.py" ] || sd_die "bundled scripts/snapshot_db.py is missing (verify.sh needs it)"
 }
 
+# ---- repo health の検査器をリリースに同梱する ------------------------------------
+# ADR 2026-11-08-health-enforcement-loop D1.4: base に検査器の無い repo には、release に同梱した検査器を使う。
+# <build> の HEAD（build した commit）から scripts/dev/repo-health/（profiles/ を除く）と scripts/dev/source-size-report.py を
+# `git archive` で出し、<dest>（<release>/repo-health）の下に repo 相対の path のまま置く（task-dispatch の
+# health_review::policy::with_base_checker が base から出すときと同じ取り出し方・同じ相対配置）。
+# profiles/ を写さないのは、Celeris の profile（celeris.toml）を他の repo に当てないため（profile は対象 repo の base か、
+# 組み込み generic）。<dest>/CHECKER_TREE には daemon が git なしで checker.sha256（ADR D2.2）を計算する 2 行を書く:
+#   repo-health <HEAD:scripts/dev/repo-health の tree id>
+#   source-size-report <HEAD:scripts/dev/source-size-report.py の blob id>
+# 写せないとき（git でない・file が無い・archive/展開の失敗）は sd_die する（黙って省かない）。
+# 試験: scripts/selfdeploy/tests/repo_health_bundle.sh
+SD_REPO_HEALTH_DIR="scripts/dev/repo-health"
+SD_REPO_HEALTH_SIDE="scripts/dev/source-size-report.py"
+sd_bundle_repo_health() {
+  local build="$1" dest="$2" tree blob archive
+  tree="$(git -C "$build" rev-parse --verify --quiet "HEAD:$SD_REPO_HEALTH_DIR" 2>/dev/null)" \
+    && [ "$(git -C "$build" cat-file -t "$tree" 2>/dev/null)" = tree ] \
+    || sd_die "bundle repo-health: $build has no $SD_REPO_HEALTH_DIR directory at HEAD"
+  blob="$(git -C "$build" rev-parse --verify --quiet "HEAD:$SD_REPO_HEALTH_SIDE" 2>/dev/null)" \
+    && [ "$(git -C "$build" cat-file -t "$blob" 2>/dev/null)" = blob ] \
+    || sd_die "bundle repo-health: $build has no $SD_REPO_HEALTH_SIDE file at HEAD"
+  git -C "$build" cat-file -e "HEAD:$SD_REPO_HEALTH_DIR/repo_health.py" 2>/dev/null \
+    || sd_die "bundle repo-health: $build has no $SD_REPO_HEALTH_DIR/repo_health.py at HEAD"
+  rm -rf "$dest"
+  mkdir -p "$dest" || sd_die "bundle repo-health: cannot create $dest"
+  archive="$dest/.checker.tar"
+  git -C "$build" archive --format=tar --output="$archive" HEAD -- "$SD_REPO_HEALTH_DIR" "$SD_REPO_HEALTH_SIDE" \
+    || sd_die "bundle repo-health: git archive of $SD_REPO_HEALTH_DIR failed in $build"
+  tar -xf "$archive" -C "$dest" || sd_die "bundle repo-health: cannot extract the checker into $dest"
+  rm -f "$archive"
+  rm -rf "${dest:?}/$SD_REPO_HEALTH_DIR/profiles"
+  [ -f "$dest/$SD_REPO_HEALTH_DIR/repo_health.py" ] || sd_die "bundle repo-health: $dest/$SD_REPO_HEALTH_DIR/repo_health.py is missing"
+  [ -f "$dest/$SD_REPO_HEALTH_SIDE" ] || sd_die "bundle repo-health: $dest/$SD_REPO_HEALTH_SIDE is missing"
+  printf 'repo-health %s\nsource-size-report %s\n' "$tree" "$blob" >"$dest/CHECKER_TREE" \
+    || sd_die "bundle repo-health: cannot write $dest/CHECKER_TREE"
+}
+
 # ---- credentiald の切り替え --------------------------------------------------
 # 本番の drop-in（celeris@.service.d/50-credentiald.conf の Wants=）は、新しい daemon と一緒に同じ release の
 # celeris-credentiald@<新> を起こす。旧 broker は旧 daemon が draining の間も socket を持ち続けるので、新は

@@ -606,15 +606,15 @@ impl SqliteStore {
         Self::inherit_browser_policy_tx(tx, original, new_task.id)?;
 
         let mut rewired = Vec::new();
-        for dep_id in Self::dependents_of_tx(tx, original)? {
+        for dep_id in Self::dependents_of_tx(tx, original, false)? {
             let Some(dep) = Self::get_locked(tx, dep_id)? else {
                 continue;
             };
             let eligible = match dep.status {
                 Status::Draft | Status::Ready | Status::Blocked => true,
                 Status::Cancelled => {
-                    Self::last_transitioned_reason_tx(tx, dep_id)?.as_deref()
-                        == Some(Trigger::DependencyFailed.name())
+                    let last = Self::last_transitioned_tx(tx, dep_id)?;
+                    crate::transition::cancelled_by_dependency(dep.status, last.as_ref()).is_some()
                 }
                 _ => false,
             };

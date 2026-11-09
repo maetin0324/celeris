@@ -21,6 +21,8 @@ WorkUnit `core-types`（task 01M6YJF7HJ9J0EQHRM5SN5TWV4）。[ADR 2026-11-08 rep
   - `crates/task-core/src/model/events.rs`: `PhaseCheckResult`・`WorkUnitCheckFinished`・`IntegrationCheckFinished` に任意欄 `health: Option<Box<HealthEvidence>>`（`serde(default)`、`None` は出力しない）。新しい Event の種類は足していない。
   - 既存の構築箇所に `health: None` を足した（挙動は変えない）: `task-dispatch` の `dispatcher/phase_integration.rs`（WU・段の統合の検査の終わりの event 2 か所と `PhaseIntegrated.checks[]`）・`review/required.rs`（2 か所）、試験の `task-core` `required_checks/tests.rs`・`model_router/feedback/tests.rs`、`task-ops` `view/tests.rs`、`celeris` `delivery/tests.rs`、`task-api` `src/handlers/task_io.rs`（試験 module の中）・`src/query/tests.rs`・`tests/files.rs`。
   - schema の再生成: `UPDATE_SCHEMA=1 cargo test -p task-core --lib schema`・`UPDATE_SCHEMA=1 cargo test -p task-api committed_schema_matches_generated` で `docs/api/v1/event.schema.json`・`docs/api/v1/api-v1.schema.json`、`node web/scripts/gen-types.mjs` で `web/api/generated/schema.json`・`types.ts`（`HealthEvidence`・`CheckerId`・`CheckerSource`・`HealthVerdict` と 3 か所の `health?`）。
+- 件名「G3 evidence core-types: health の無い検査結果は PhaseCheckResult::new で作る」の commit
+  - `PhaseCheckResult::new(cmd, pass, summary)`（`health` は `None`）を足し、`review/required.rs` の 2 か所と `PhaseIntegrated.checks[]` の組み立てをこれに替えた。`dispatcher/phase_integration.rs` に `health: None` の行を足すと、repo health の `size.responsibility-growth`（単位 `crates/task-dispatch/src/dispatcher` は閾値 8000 行に対し 35166 行）が worsened で fail になった。構築を関数にして単位の行数を base と同じにした。
 
 ## event の正本の決定
 - health の証跡の正本は経路ごとに 1 つにした。task の review は `RequiredChecksEvaluated.results[].health`、WU の check は `WorkUnitCheckFinished.health`、段の統合は `IntegrationCheckFinished.health`。
@@ -63,7 +65,8 @@ WorkUnit `core-types`（task 01M6YJF7HJ9J0EQHRM5SN5TWV4）。[ADR 2026-11-08 rep
 - `cargo test --workspace --no-run` → exit 0
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
-- `bash scripts/dev/test-affected.sh` → 結果は報告本文に書く
+- `bash scripts/dev/test-affected.sh` → exit 0。check-health は `verdict=pass exit=0 fail_grade=0 worsened=0`、nextest は `7993 tests run: 7993 passed, 23 skipped`、web は `Test Files 104 passed`・`Tests 711 passed`、`test-ts-verify: 20 passed, 0 failed`
+- `sh scripts/dev/progress-index.sh --check` → exit 0
 
 ## 未解決
 - 無し（束縛・再利用・照合は `core-binding`、起動の口は `checker-gate` の範囲）。

@@ -84,7 +84,7 @@ WorkUnit `core-binding`（task 01M6YJF7HJ9J0EQHRM5SN5TWV4）。[ADR 2026-11-08 r
 - `cargo test -p task-core --lib required_checks && cargo test -p celeris --lib delivery && cargo test -p task-dispatch --lib review`（check 2）: exit 0、42 / 39 / 210 passed。
 - `cargo clippy --workspace -- -D warnings`: exit 0（vendored `deno_core` の既存の deprecated 警告 1 件だけ）。
 - `cargo fmt --all -- --check`: exit 0。
-- `bash scripts/dev/test-affected.sh`: 結果は報告本文に書く。
+- `bash scripts/dev/test-affected.sh`: exit 0。check-health は `verdict=pass exit=0 fail_grade=0 new=1 worsened=0`（作業ツリーの評価なので `reviewable=false`）。nextest は 8012 passed・23 skipped、web は 104 files・711 tests passed、test-ts-verify は 20 passed。
 - 範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"` と計画の正規表現）: 範囲外の path なし。
 
 ## 未解決事項

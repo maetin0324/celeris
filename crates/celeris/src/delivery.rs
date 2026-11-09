@@ -297,7 +297,12 @@ fn check_required_evidence(
         .map(|(_, e)| e)
         .collect();
     Ok(task_core::required_checks::verify_required_checks(
-        &events, d.repo_id, target, reviewed, &required,
+        &events,
+        d.repo_id,
+        target,
+        reviewed,
+        &required,
+        task_core::required_checks::HealthRequirement::NotRequired,
     ))
 }
 

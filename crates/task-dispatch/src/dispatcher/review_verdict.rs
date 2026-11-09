@@ -1,7 +1,6 @@
 //! review の判定の適用（`on_review_finished`・`try_review_repair`）。Plan の子の挿入と `ReviewPass` は同じ transaction に入れる。ADR-0082 の L3。
 
 use super::*;
-use crate::health_review::limits::{self, HealthScope, RepeatVerdict};
 
 struct IntegrationRepairInput<'a> {
     repo_id: task_core::RepoId,
@@ -632,56 +631,33 @@ impl Dispatcher {
         verdicts: &[Verdict],
         events: &mut Vec<Event>,
     ) -> Result<Option<task_core::Outcome>, DispatchError> {
-        let task_id = task.id;
-        let implicit = |v: &&Verdict| v.criterion_idx >= task.acceptance.len();
-        let errors: Vec<&str> = (verdicts.iter().filter(implicit))
-            .filter_map(Verdict::health_check_error)
-            .collect();
-        if !errors.is_empty() {
-            return self.block_review(task, errors.join("; "), events).map(Some);
+        let (task_id, store) = (task.id, self.store.as_ref());
+        if let Some(outcome) = review_limits::stop_on_error(store, task, verdicts, events)? {
+            return Ok(Some(outcome));
         }
         if task.kind != TaskKind::Execute {
             return Ok(None);
         }
-        let failing: Vec<task_core::FailedCheck> = verdicts
-            .iter()
-            .filter(|v| !v.pass)
-            .map(|v| {
-                let check = task
+        let failing: Vec<task_core::FailedCheck> = (verdicts.iter().filter(|v| !v.pass))
+            .map(|v| task_core::FailedCheck {
+                // 暗黙の条件（Plan/aggregate/repo_checks/research）は task.acceptance に無く、D16 の分類表にも無いので
+                // 修復できない（`Check::Human` と同じ扱いに倒す）。health の Fail だけは `Check::Command { cmd:
+                // HEALTH_CHECK_ID }`（health enforcement loop D3.2）。不合格が無ければ分類は `Substantive`。
+                check: (task
                     .acceptance
                     .get(v.criterion_idx)
-                    .map(|c| c.check.clone())
-                    // 暗黙の条件（Plan/aggregate/repo_checks/research）は task.acceptance に無く、
-                    // D16 の分類表にも無いので修復できない（`Check::Human` と同じ扱いに倒す）。health の Fail
-                    // だけは `Check::Command { cmd: HEALTH_CHECK_ID }`（health enforcement loop D3.2）。
-                    .unwrap_or_else(|| v.implicit_check());
-                task_core::FailedCheck {
-                    check,
-                    reason: v.reason.clone(),
-                    repair_hint: v.repair_hint.clone(),
-                }
+                    .map(|c| c.check.clone()))
+                .unwrap_or_else(|| v.implicit_check()),
+                reason: v.reason.clone(),
+                repair_hint: v.repair_hint.clone(),
             })
             .collect();
-        if failing.is_empty() {
-            return Ok(None);
-        }
         let class = match task_core::classify_review_failure(&failing) {
             task_core::RepairDecision::Repairable(c) => c,
             task_core::RepairDecision::Substantive => return Ok(None),
         };
         let health = class == task_core::RepairClass::Health;
-        if health
-            && let RepeatVerdict::Repeat { fingerprints, .. } =
-                limits::judge(&self.store.events_for(task_id)?, HealthScope::Review)
-        {
-            let outcome = self.block_review(task, repeat_question(&fingerprints), events)?;
-            task_ops::inbox::health_repeat::record_findings_repeated(
-                self.store.as_ref(),
-                task,
-                task_core::HealthRepeatSite::Review,
-                &fingerprints,
-            )
-            .map_err(ops_to_store)?;
+        if health && let Some(outcome) = review_limits::stop_on_repeat(store, task, events)? {
             return Ok(Some(outcome));
         }
 
@@ -698,17 +674,18 @@ impl Dispatcher {
         // （`health:<rule_id>`）に数え、repair WU の title（`RepairScheduled.class` の元）にも同じ bucket を書く。
         let (bucket, same_class) =
             super::phase_integration::check_item::repair_count(class, &failing_details, &repairs);
-        let (max_repairs, per_class) = (
-            self.config.execution.max_repairs,
-            self.config.execution.max_repairs_per_class,
-        );
-        if repairs.len() as u32 >= max_repairs || same_class as u32 >= per_class {
-            if !health {
-                return Ok(None);
-            }
-            let counts = (repairs.len(), max_repairs, same_class, per_class);
-            let text = cap_question(&bucket, counts, &failing_details);
-            return self.block_review(task, text, events).map(Some);
+        let limits = &self.config.execution;
+        if repairs.len() as u32 >= limits.max_repairs
+            || same_class as u32 >= limits.max_repairs_per_class
+        {
+            let used = (
+                repairs.len(),
+                limits.max_repairs,
+                same_class,
+                limits.max_repairs_per_class,
+            );
+            let health = health.then_some(bucket.as_str());
+            return review_limits::stop_on_cap(store, task, health, used, &failing_details, events);
         }
 
         let (max_turns, max_wall_secs) = class.budget();
@@ -752,40 +729,6 @@ impl Dispatcher {
         };
         self.apply_review_repair(task, &units, spec, "review_repair", None, events)
             .map(Some)
-    }
-
-    /// health enforcement loop D3.4・D4.3・D4.4: review を `Trigger::ReviewBlocked`（`Reviewing → Blocked`、attempts 不変）で
-    /// 止め、受信箱に `question` を 1 件出す（`QuestionRaised` と承認待ちの行。`escalate_failed_children` と同じ形）。人は
-    /// 既存の comment・answer（`Trigger::Answer`）で再開する。`events`（review の判定の記録）は同じ transaction に入れる。
-    fn block_review(
-        &self,
-        task: &Task,
-        question: String,
-        events: &mut Vec<Event>,
-    ) -> Result<task_core::Outcome, DispatchError> {
-        // 質問のきっかけは判定した run（`ReviewVerdict.run_id`。review の判定の記録は `events` にある）。
-        let run_id = (events.iter())
-            .find_map(|e| match e {
-                Event::ReviewVerdict { run_id, .. } => Some(run_id.clone()),
-                _ => None,
-            })
-            .unwrap_or_default();
-        if let Err(e) = crate::approvals::record_question_approval(
-            self.store.as_ref(),
-            task,
-            &question,
-            OffsetDateTime::now_utc(),
-        ) {
-            tracing::warn!(task_id = %task.id, error = %e, "failed to record the approval for the blocked review");
-        }
-        let mut all = std::mem::take(events);
-        all.push(Event::QuestionRaised {
-            run_id,
-            text: question,
-        });
-        Ok(self
-            .store
-            .apply_transition_with_events(task.id, Trigger::ReviewBlocked, all)?)
     }
 
     fn review_repair_scope(
@@ -1063,24 +1006,6 @@ impl Dispatcher {
     }
 }
 
-/// D4.3: 同じ health の指摘の往復で止めたときの質問（木の root の受信箱には `health_repeat` が 1 件出る）。
-fn repeat_question(fingerprints: &[String]) -> String {
-    format!(
-        "health_findings_repeated: review の修復の後も同じ health の指摘が残った（{}）。repair をもう起こさず、木の root の受信箱に 1 件にまとめた。直し方を comment で書くと再開する。",
-        fingerprints.join(", ")
-    )
-}
-
-/// D4.4: health の修復の上限を使い切って止めたときの質問。`counts` は（修復の数, `max_repairs`, bucket の修復の数,
-/// `max_repairs_per_class`）。
-fn cap_question(bucket: &str, counts: (usize, u32, usize, u32), failing: &[String]) -> String {
-    let (repairs, max_repairs, same_class, per_class) = counts;
-    format!(
-        "health_repair_cap: health の修復が上限に達した（bucket {bucket}: {same_class} 回 / max_repairs_per_class {per_class}、修復の合計 {repairs} 回 / max_repairs {max_repairs}）。repair・再実行・replan をもう起こさない。直し方を comment で書くと再開する。指摘: {}",
-        failing.join("; ")
-    )
-}
-
 /// reviewer の条件が合格なのに、決定的な検査（reviewer 以外の判定）が落ちているときの記録文。
 /// 食い違いが無ければ `None`。reviewer の reason（`reviewer(<run>): …`）と落ちた検査の reason を含める。
 fn review_discrepancy(task: &Task, verdicts: &[Verdict]) -> Option<String> {
@@ -1111,4 +1036,120 @@ fn review_discrepancy(task: &Task, verdicts: &[Verdict]) -> Option<String> {
         join(&passed),
         join(&failed)
     ))
+}
+
+/// ADR 2026-11-08-health-enforcement-loop D3.4・D4.3・D4.4: task の review（`Dispatcher::try_review_repair`）で health の
+/// 不合格を止める。repair にも `ReviewFail`（attempts+1 の再実行、compound の最終レビューの後の replan、retry 切れの
+/// Failed → CoS の review_rework）にもせず、`Trigger::ReviewBlocked`（`Reviewing → Blocked`、attempts 不変）で止めて
+/// 受信箱に質問を 1 件出す（`QuestionRaised` と承認待ちの行。`escalate_failed_children` と同じ形）。人は既存の
+/// comment・answer（`Trigger::Answer`）で再開する。
+///
+/// - [`stop_on_error`]（D3.4）: health の Error・Unavailable（`health_check_error: <理由>`）。task の種類を問わず、他の
+///   不合格より先に見る（測れない health は合格にも修復にもしない。J4）。
+/// - [`stop_on_repeat`]（D4.3）: 不合格がすべて health の Fail で、[`limits::judge`]（範囲 review）が往復と判定した。
+///   木の root に `HealthFindingsRepeated` を追記する（root の受信箱の `health_repeat` 1 件。escalation の
+///   `task_ops::inbox::health_repeat::record_findings_repeated`）。
+/// - [`stop_on_cap`]（D4.4）: 不合格がすべて health の Fail で、`max_repairs`・`max_repairs_per_class`
+///   （`health:<rule_id>`）を使い切った。health でない class は `None`（呼び出し側が今どおり `ReviewFail` へ進む）。
+///
+/// この file は `dispatcher::review_verdict` の子 module として `#[path]` で読む（`check_item.rs` と同じ。dispatcher の
+/// size の制約と、`dispatcher` → `health_review` の依存を足さないため）。LLM は呼ばない。
+///
+/// 暫定: この module は `health_review/review_limits.rs`（`#[path]` で読む）に移す（範囲の申告中。limits-review-wire.md の未解決）。
+mod review_limits {
+    use super::super::*;
+    use crate::health_review::limits::{self, HealthScope, RepeatVerdict};
+
+    /// 止めたときは `Some`（`ReviewBlocked` の遷移の結果）、止めないときは `None`。
+    type Stopped = Result<Option<task_core::Outcome>, DispatchError>;
+
+    /// D3.4: acceptance の外の不合格に health の Error・Unavailable があれば、その理由を `; ` でつないだ質問で止める。
+    pub(super) fn stop_on_error(
+        store: &dyn TaskStore,
+        task: &Task,
+        verdicts: &[Verdict],
+        events: &mut Vec<Event>,
+    ) -> Stopped {
+        let errors: Vec<&str> = (verdicts.iter())
+            .filter(|v| v.criterion_idx >= task.acceptance.len())
+            .filter_map(Verdict::health_check_error)
+            .collect();
+        if errors.is_empty() {
+            return Ok(None);
+        }
+        block(store, task, errors.join("; "), events).map(Some)
+    }
+
+    /// D4.3: 今の review の health の Fail が修復の前と同じ指摘の往復なら止め、木の root に 1 件だけ上げる。
+    pub(super) fn stop_on_repeat(
+        store: &dyn TaskStore,
+        task: &Task,
+        events: &mut Vec<Event>,
+    ) -> Stopped {
+        let RepeatVerdict::Repeat { fingerprints, .. } =
+            limits::judge(&store.events_for(task.id)?, HealthScope::Review)
+        else {
+            return Ok(None);
+        };
+        let question = format!(
+            "health_findings_repeated: review の修復の後も同じ health の指摘が残った（{}）。repair をもう起こさず、木の root の受信箱に 1 件にまとめた。直し方を comment で書くと再開する。",
+            fingerprints.join(", ")
+        );
+        let outcome = block(store, task, question, events)?;
+        task_ops::inbox::health_repeat::record_findings_repeated(
+            store,
+            task,
+            task_core::HealthRepeatSite::Review,
+            &fingerprints,
+        )
+        .map_err(ops_to_store)?;
+        Ok(Some(outcome))
+    }
+
+    /// D4.4: 修復の上限を使い切った。`health_bucket` は health の不合格の bucket（`health:<rule_id>` を `,` で並べたもの。
+    /// health でなければ `None` で止めない）。`used` は（修復の数, `max_repairs`, bucket の修復の数, `max_repairs_per_class`）。
+    pub(super) fn stop_on_cap(
+        store: &dyn TaskStore,
+        task: &Task,
+        health_bucket: Option<&str>,
+        used: (usize, u32, usize, u32),
+        failing: &[String],
+        events: &mut Vec<Event>,
+    ) -> Stopped {
+        let Some(bucket) = health_bucket else {
+            return Ok(None);
+        };
+        let (repairs, max_repairs, same_class, per_class) = used;
+        let question = format!(
+            "health_repair_cap: health の修復が上限に達した（bucket {bucket}: {same_class} 回 / max_repairs_per_class {per_class}、修復の合計 {repairs} 回 / max_repairs {max_repairs}）。repair・再実行・replan をもう起こさない。直し方を comment で書くと再開する。指摘: {}",
+            failing.join("; ")
+        );
+        block(store, task, question, events).map(Some)
+    }
+
+    /// review を `Trigger::ReviewBlocked` で止め、受信箱に `question` を 1 件出す。`events`（review の判定の記録）は同じ
+    /// transaction に入れる。質問のきっかけの run は判定した run（`ReviewVerdict.run_id`）。
+    fn block(
+        store: &dyn TaskStore,
+        task: &Task,
+        question: String,
+        events: &mut Vec<Event>,
+    ) -> Result<task_core::Outcome, DispatchError> {
+        let run_id = (events.iter())
+            .find_map(|e| match e {
+                Event::ReviewVerdict { run_id, .. } => Some(run_id.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let now = OffsetDateTime::now_utc();
+        if let Err(e) = crate::approvals::record_question_approval(store, task, &question, now) {
+            tracing::warn!(task_id = %task.id, error = %e, "failed to record the approval for the blocked review");
+        }
+        let mut all = std::mem::take(events);
+        all.push(Event::QuestionRaised {
+            run_id,
+            text: question,
+        });
+        Ok(store.apply_transition_with_events(task.id, Trigger::ReviewBlocked, all)?)
+    }
 }

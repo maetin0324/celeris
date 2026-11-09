@@ -136,7 +136,18 @@ closeout が ADR の付記に写すための一覧。1・2・4・6 は ADR の�
 - 人の操作は要らない。
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
-（reclose が提出時の HEAD で実行した結果をここに書く。）
+reclose はコードを変えていない（変えた path はこの file と ADR 2026-11-08 の付記の 1 行）。下の検査は、段 fix の統合の後の HEAD に reclose の「G3 limits reclose: limits の記録を段 fix の後の事実に改め、ADR の付記に WU の check の使い切りを足す」を載せた commit で実行した。その後の commit は、この節を書いた差分だけで、その HEAD で文書の検査と WU の範囲の test-affected を再実行した。`$CELERIS_WU_BASE` の差分は文書だけなので、test-affected は `env -u CELERIS_WU_BASE` で task 全体の変更（基準は `git merge-base HEAD main`）を対象にした。
+- `env -u CELERIS_WU_BASE bash scripts/dev/test-affected.sh` → exit 0（615 秒）。
+  - 対象: crate 14 個（celeris・celeris-campaign・celeris-credentiald・celeris-mcp・celeris-script・celerisctl・e2e・llm-proxy・routing-eval・task-api・task-core・task-dispatch・task-ops・task-worker）、web の型検査と unit 試験、test-ts-verify。
+  - check-health: `repo-health: verdict=pass exit=0 reviewable=false findings=718 fail_grade=0 new=2 worsened=0 existing=716`。必須 rule はすべて pass（`source-size`・`doc.links`・`progress.index`・`human-text` など）。new の 2 件は warning の `dup.contract`（`UnavailableReason`）と `dup.public-surface`（`fn judge`）で、「未解決」3。`repo_health_gate: all checks passed`。
+  - nextest: `8131 tests run: 8131 passed (12 slow), 23 skipped`。script bundle の SKIP は 0 件。web: `Test Files 104 passed (104)`・`Tests 711 passed (711)`。`test-ts-verify: 20 passed, 0 failed`。
+- `cargo nextest run -p task-core -p task-ops -p task-dispatch --no-tests=fail -E 'test(/health_limits_/)'` → exit 0、`42 tests run: 42 passed, 3588 skipped`（3.4 秒）。`cargo nextest list --workspace -E 'test(/health_limits_/)' --message-format oneline | grep -c health_limits_` → 42。`grep -rhoE "fn health_limits_[a-z0-9_]+" crates/ | sort -u | wc -l` → 42。
+- `cargo clippy --workspace -- -D warnings` → exit 0（vendored `deno_core` の既存の warning 1 件だけ）。
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- 文書の検査 3 本: `sh scripts/dev/check-doc-links.sh` → `check-doc-links: ok`、`sh scripts/dev/check-adr-numbers.sh` → `check-adr-numbers: ok (411 files)`、`sh scripts/dev/progress-index.sh --check` → `progress-index --check: ok`（3 本とも exit 0。この節を書いた後の HEAD でも再実行した）。`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`（`check-doc-layout: ok`）と `python3 scripts/dev/check-human-text.py`（0 findings）も exit 0。
+- `git grep -c health_repair_cap -- agent-docs/progress/2026-11-07-health-v2-g3/limits.md` → 該当なし（exit 1）。
+- 新しい上限の欄が無いこと: 上の「新しい上限の欄が無いことの確かめ」の `git diff --name-only` → 0 件。
+- D1.5 の計測は上の節（record の提出時の HEAD で `bash scripts/dev/check-health.sh` 3 回、exit 0、中央値 99.5 秒）。reclose は計測し直していない。
 
 ## 未解決
 1. 往復で止めた源の task は Blocked なので、受信箱には root の `health_repeat` とは別に源の質問の項目が出る。root が源と同じ task でも 2 件になる（review-wire の提案 1）。

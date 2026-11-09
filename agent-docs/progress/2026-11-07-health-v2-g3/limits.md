@@ -145,7 +145,7 @@ reclose はコードを変えていない（変えた path はこの file と AD
 - `cargo clippy --workspace -- -D warnings` → exit 0（vendored `deno_core` の既存の warning 1 件だけ）。
 - `cargo fmt --all -- --check` → exit 0（差分なし）。
 - 文書の検査 3 本: `sh scripts/dev/check-doc-links.sh` → `check-doc-links: ok`、`sh scripts/dev/check-adr-numbers.sh` → `check-adr-numbers: ok (411 files)`、`sh scripts/dev/progress-index.sh --check` → `progress-index --check: ok`（3 本とも exit 0。この節を書いた後の HEAD でも再実行した）。`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`（`check-doc-layout: ok`）と `python3 scripts/dev/check-human-text.py`（0 findings）も exit 0。
-- `git grep -c health_repair_cap -- agent-docs/progress/2026-11-07-health-v2-g3/limits.md` → 該当なし（exit 1）。
+- この file の上限の使い切りの語は `health_repair_limit` だけ。review-wire が使っていた旧い語をこの file に `git grep` しても該当なし（exit 1）。
 - 新しい上限の欄が無いこと: 上の「新しい上限の欄が無いことの確かめ」の `git diff --name-only` → 0 件。
 - D1.5 の計測は上の節（record の提出時の HEAD で `bash scripts/dev/check-health.sh` 3 回、exit 0、中央値 99.5 秒）。reclose は計測し直していない。
 

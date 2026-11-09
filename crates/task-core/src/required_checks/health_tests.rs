@@ -6,11 +6,15 @@ const BASE: &str = "b0";
 const TREE: &str = "1111111111111111111111111111111111111111";
 const SCRIPT_BLOB: &str = "2222222222222222222222222222222222222222";
 const SIDE_BLOB: &str = "3333333333333333333333333333333333333333";
+/// git が親 dir まで探して作業ツリーが無かったときの stderr（git 2.x の実の文）。
+const NOT_A_REPO: &str = "fatal: not a git repository (or any of the parent directories): .git\n";
 
 /// git の object を持つ偽の repo（`objects` は base の path → object id）。呼ばれた git の引数を `calls` に残す。
 #[derive(Default)]
 struct FakeRepo {
     not_a_repo: bool,
+    /// `rev-parse --show-toplevel` が返す失敗（`not_a_repo` 以外の読み取りの失敗）。
+    rev_parse_error: Option<String>,
     git_broken: bool,
     ls_tree_fails: bool,
     /// `cat-file -e`・`rev-parse` が失敗するが `ls-tree` には出る path。
@@ -47,11 +51,11 @@ impl FakeRepo {
             return Err("git: command not found".into());
         }
         match args {
-            ["--version"] => Ok("git version 2.47.0\n".into()),
-            ["rev-parse", "--show-toplevel"] if self.not_a_repo => {
-                Err("fatal: not a git repository".into())
-            }
-            ["rev-parse", "--show-toplevel"] => Ok("/work/repo\n".into()),
+            ["rev-parse", "--show-toplevel"] if self.not_a_repo => Err(NOT_A_REPO.into()),
+            ["rev-parse", "--show-toplevel"] => match &self.rev_parse_error {
+                Some(error) => Err(error.clone()),
+                None => Ok("/work/repo\n".into()),
+            },
             ["cat-file", "-e", object] => self
                 .readable(object)
                 .map(|_| String::new())
@@ -141,7 +145,6 @@ fn health_evidence_applicability_ignores_project_and_repo_name() {
     let mut allowed: Vec<String> = [
         "rev-parse",
         "--show-toplevel",
-        "--version",
         "cat-file",
         "-e",
         "ls-tree",
@@ -305,6 +308,189 @@ fn health_evidence_unreadable_facts_are_unavailable() {
         ..FakeRepo::default()
     };
     assert!(base_has_file(BASE, CHECKER_SCRIPT, |args| broken.git(args)).is_err());
+}
+
+/// 実の git を `dir` で起こす closure の中身。文を英語に固定し（`LC_ALL=C`）、`ceiling` より上の repo を探さない
+/// （`GIT_CEILING_DIRECTORIES`。試験の一時 dir が他の作業ツリーの下にあっても「Git 管理でない」を作れる）。
+fn real_git(
+    program: &std::path::Path,
+    dir: &std::path::Path,
+    ceiling: &std::path::Path,
+    args: &[&str],
+) -> Result<String, String> {
+    let out = std::process::Command::new(program)
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("LC_ALL", "C")
+        .env("GIT_CEILING_DIRECTORIES", ceiling)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).to_string())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).to_string())
+    }
+}
+
+/// `facts` が「読めない」で、理由に `fragment` を含み、同梱の検査器があっても合格の側（`Applies`）に行かないこと。
+fn assert_unreadable(name: &str, facts: &HealthRepoFacts, fragment: &str) {
+    assert!(!facts.git, "{name}: git must stay unconfirmed");
+    let reason = unavailable_reason(&applicability(facts));
+    assert!(
+        reason.starts_with("facts_unreadable:git rev-parse --show-toplevel を読めない: "),
+        "{name}: {reason}"
+    );
+    assert!(reason.contains(fragment.trim()), "{name}: {reason}");
+}
+
+// 守る不変条件: `not_a_git_repo`（health を当てない）は、git が Git 管理でないと答えたときだけ。既存の
+// `health_evidence_non_git_repo_is_not_applicable` は偽の repo の文だけを見るので、実の git の文と合うかは検出しない。
+#[test]
+fn health_enforce_facts_confirmed_non_repo_is_not_applicable() {
+    let messages = [
+        NOT_A_REPO.to_string(),
+        "fatal: not a git repository (or any parent up to mount point /work)\n\
+         Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).\n"
+            .to_string(),
+    ];
+    for message in messages {
+        let mut repo = FakeRepo {
+            rev_parse_error: Some(message.clone()),
+            ..FakeRepo::with_checker()
+        };
+        let facts = facts_of(&mut repo, Some(&bundled()));
+        assert!(!facts.git && facts.unreadable.is_none(), "{message}");
+        assert_eq!(
+            applicability(&facts),
+            HealthApplicability::NotApplicable {
+                reason: NotApplicableReason::NotAGitRepo,
+            },
+            "{message}"
+        );
+        // rev-parse の答えで決まり、base も git の版も見ない。
+        assert_eq!(repo.calls, vec![vec!["rev-parse", "--show-toplevel"]]);
+    }
+
+    // 実の git が Git 管理でない dir で返す文も同じ判定になる。
+    let root = tempfile::tempdir().unwrap();
+    let plain = root.path().join("plain");
+    std::fs::create_dir(&plain).unwrap();
+    let git = std::path::Path::new("git");
+    let facts = repo_facts(true, BASE, Some(&bundled()), |args| {
+        real_git(git, &plain, root.path(), args)
+    });
+    assert!(!facts.git && facts.unreadable.is_none(), "{facts:?}");
+    assert_eq!(
+        applicability(&facts).reason().as_deref(),
+        Some("not_a_git_repo")
+    );
+}
+
+// 守る不変条件: rev-parse の一時的な失敗（時間切れ・壊れた作業ツリー・所有者の検査など）は Git 管理でないと
+// 確かめたことにならず、`facts_unreadable` で合格にしない（D1.1 の fail closed）。旧い実装は `git --version` が
+// 通れば `not_a_git_repo` にしていたので、既存の試験（git が起動できない場合だけ）はこの穴を検出しなかった。
+#[test]
+fn health_enforce_facts_transient_rev_parse_failure_is_unavailable() {
+    let cases = [
+        // `celeris::delivery` の git の時間切れの文。
+        (
+            "timed out",
+            "git rev-parse --show-toplevel timed out after 20s (killed)",
+        ),
+        (
+            "broken gitfile",
+            "fatal: not a git repository: '/work/repo/.git/worktrees/gone'\n",
+        ),
+        (
+            "dubious ownership",
+            "fatal: detected dubious ownership in repository at '/work/repo'\n",
+        ),
+        (
+            "cwd gone",
+            "fatal: Unable to read current working directory: No such file or directory\n",
+        ),
+        ("empty stderr", ""),
+    ];
+    for (name, message) in cases {
+        let mut repo = FakeRepo {
+            rev_parse_error: Some(message.to_string()),
+            ..FakeRepo::with_checker()
+        };
+        let facts = facts_of(&mut repo, Some(&bundled()));
+        assert_unreadable(name, &facts, message);
+        assert_eq!(
+            repo.calls,
+            vec![vec!["rev-parse", "--show-toplevel"]],
+            "{name}"
+        );
+    }
+
+    // 実の git: gitdir の消えた worktree（`.git` の file が無い dir を指す）は Git 管理でないとは確かめられない。
+    let root = tempfile::tempdir().unwrap();
+    let broken = root.path().join("broken");
+    std::fs::create_dir(&broken).unwrap();
+    let gone = root.path().join("gone-gitdir");
+    std::fs::write(broken.join(".git"), format!("gitdir: {}\n", gone.display())).unwrap();
+    let git = std::path::Path::new("git");
+    let facts = repo_facts(true, BASE, Some(&bundled()), |args| {
+        real_git(git, &broken, root.path(), args)
+    });
+    assert_unreadable("real broken gitfile", &facts, "not a git repository: ");
+}
+
+// 守る不変条件: git を起動できない（実行 file が無い・権限が無い）ときも `facts_unreadable` で、rev-parse の失敗だけで
+// 決まる（別の probe を足さない）。
+#[test]
+fn health_enforce_facts_git_cannot_start_is_unavailable() {
+    for (name, mut repo) in [
+        (
+            "fake git missing",
+            FakeRepo {
+                git_broken: true,
+                ..FakeRepo::with_checker()
+            },
+        ),
+        (
+            // `celeris::delivery` の git が起動できないときの文。
+            "delivery spawn failure",
+            FakeRepo {
+                rev_parse_error: Some("git を起動できません".into()),
+                ..FakeRepo::with_checker()
+            },
+        ),
+    ] {
+        let facts = facts_of(&mut repo, Some(&bundled()));
+        let fragment = if repo.git_broken {
+            "git: command not found"
+        } else {
+            "git を起動できません"
+        };
+        assert_unreadable(name, &facts, fragment);
+        assert_eq!(
+            repo.calls,
+            vec![vec!["rev-parse", "--show-toplevel"]],
+            "{name}"
+        );
+    }
+
+    // 実の起動の失敗（無い実行 file）。
+    let root = tempfile::tempdir().unwrap();
+    let missing = root.path().join("no-such-git");
+    let mut calls = 0;
+    let facts = repo_facts(true, BASE, Some(&bundled()), |args| {
+        calls += 1;
+        real_git(&missing, root.path(), root.path(), args)
+    });
+    assert_eq!(calls, 1);
+    assert!(!facts.git, "{facts:?}");
+    let reason = unavailable_reason(&applicability(&facts));
+    assert!(
+        reason.starts_with("facts_unreadable:git rev-parse --show-toplevel を読めない: "),
+        "{reason}"
+    );
 }
 
 #[test]

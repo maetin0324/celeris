@@ -52,8 +52,12 @@ WorkUnit `runner`（task 01M6ZDF99MKHFN57PN0H7G6Z9Z、unit inventory の子）�
 - runner の module の位置は上の「size と依存の扱い」のとおり（ADR (8) の `health_review/` の path に収まる）。
 - 行の `created_at` は発火の時刻（注入した時計）。
 
-## 検査（提出時の HEAD で実行）
-- 後で追記する。
+## 検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+- `cargo nextest run -p task-dispatch --no-tests=fail -E 'test(/health_inventory_|health_evidence_gate|cron/)'` → exit 0、37 passed（`health_inventory_` 7 件、gate の 9 件、cron の既存の試験）。
+- `bash scripts/dev/test-affected.sh` → exit 0（654 秒）。対象は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。冒頭の check-health は verdict pass・exit 0・fail_grade 0・worsened 0（new 1 件はこの unit で変えていない path の finding）、`repo_health_gate: all checks passed`。cargo nextest 3614 passed・11 skipped、doc test 合格、script bundle の SKIP 0 件。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check`・`sh scripts/dev/check-doc-links.sh`・`git diff --check` → exit 0。
+- 範囲（`sh "$CELERIS_WU_SCOPE_PATHS"`）: 変更は `crates/task-dispatch/src/{dispatcher.rs,dispatcher/cron_tick.rs,dispatcher/cos_chat/review.rs,dispatcher/tests/{health_inventory,mod}.rs,health_review.rs,health_review/{gate,gate_tests,inventory,inventory_tests}.rs}` とこの file だけ。
 
 ## 未解決事項
 - 起票（`task_ops::health_debt::file_health_debts`）は繋いでいない（unit e2e）。`RepoInventory.details` と `record` の間に入れる。

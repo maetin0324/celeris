@@ -44,9 +44,12 @@ ADR 本文は変えていない（G3 closeout が付記する）。
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
-- `cargo nextest run -p task-ops health_inventory_` → exit 0、6 passed。
-- `cargo clippy -p task-ops --all-targets -- -D warnings` → exit 0。
-- 残りの検査（範囲 check、`bash scripts/dev/test-affected.sh`、`cargo clippy --workspace -- -D warnings`、`cargo fmt --all -- --check`、文書の検査）の結果は下の「提出時の検査」節に書く。
+- `cargo nextest run -p task-ops health_inventory_` → exit 0、6 passed。`cargo nextest list -p task-ops health_inventory_` の件数 6（6 以上）。
+- plan の範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"` と plan の正規表現）→ 範囲外の path 無し。変更は `crates/task-ops/src/health_debt.rs`・`health_debt/tests.rs`・`lib.rs`・この file だけ。
+- plan の grep の check（`health-debt:`・`blocking`・進捗の file）→ exit 0。
+- `bash scripts/dev/test-affected.sh` → exit 0（542 秒）。対象は celeris・celeris-campaign・celeris-mcp・celerisctl・llm-proxy・task-api・task-dispatch・task-ops・task-worker と web。冒頭の check-health は verdict pass・exit 0・fail_grade 0・new 1・worsened 0・existing 717（new の 1 件は `dup.contract` の候補の warning で、`required_checks/health.rs` と `route_select/availability.rs` の `UnavailableReason`。どちらもこの unit で変えていない）。`reviewable=false` は `$CELERIS_WU_BASE`（WU の範囲の基点の commit）が HEAD の祖先でないため。cargo nextest 6472 passed・23 skipped、doc test 合格、web の unit 試験 104 file 711 passed、script bundle の SKIP 0 件。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check`・`sh scripts/dev/check-doc-links.sh`・`git diff --check` → exit 0。
 
 ## 本番への移行
 

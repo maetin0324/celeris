@@ -41,7 +41,7 @@ WorkUnit `kind`（task 01M6ZDF99MKHFN57PN0H7G6Z9Z、unit inventory の子）。[
 - `cargo nextest run -p task-ops cron_jobs`: exit 0、23 tests passed（新しい 6 件と既存の 17 件）。
 - `cargo fmt --all -- --check`: exit 0。
 - `cargo clippy --workspace -- -D warnings`: exit 0。
-- `bash scripts/dev/test-affected.sh`: 結果は下の「test-affected の結果」に書く。
+- `bash scripts/dev/test-affected.sh`: exit 0。nextest 6472 tests passed・23 skipped（task-ops とその逆依存の crate）、web の unit 104 files・711 tests passed、`repo_health_gate: all checks passed`。
 
 ## ADR との違い
 - D6.1 は「`crates/task-ops/src/cron_jobs.rs` に種類を足す」と書くが、本体は `cron_jobs/health_inventory.rs`、共通の検証は `cron_jobs/input_kind.rs` に置き、`cron_jobs.rs` には mod 宣言・分岐・1 行の委譲だけを足した。理由: task の objective の指示と、check-health の `size.responsibility-growth` を悪化させないため。write_set の `^crates/task-ops/src/cron_jobs(\.rs|/[a-z_]+\.rs)$` の範囲に収まる。

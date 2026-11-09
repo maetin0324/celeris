@@ -37,18 +37,18 @@ pub(super) async fn evaluate(
         let digest = checks
             .commands
             .as_ref()
-            .map(|cmds| task_core::required_checks::definition_digest(cmds))
+            .map(|cmds| task_core::required_checks::definition_digest(cmds, None))
             .unwrap_or_default();
         let mut results = Vec::new();
         let mut binding = checks.binding;
         match checks.commands {
             Err(reason) => {
                 binding = None;
-                results.push(task_core::PhaseCheckResult {
-                    cmd: "workspace.toml definition".into(),
-                    pass: false,
-                    summary: reason,
-                });
+                results.push(task_core::PhaseCheckResult::new(
+                    "workspace.toml definition".into(),
+                    false,
+                    reason,
+                ));
             }
             Ok(commands) => {
                 let check_workspace = checks.workspace.as_deref().unwrap_or(workspace);
@@ -77,11 +77,11 @@ pub(super) async fn evaluate(
                     if checks.workspace.is_none() {
                         acceptance_passes.insert(cmd.clone(), outcome.clone());
                     }
-                    results.push(task_core::PhaseCheckResult {
+                    results.push(task_core::PhaseCheckResult::new(
                         cmd,
-                        pass: outcome.pass,
-                        summary: tail(&outcome.reason, REASON_TAIL).to_string(),
-                    });
+                        outcome.pass,
+                        tail(&outcome.reason, REASON_TAIL).to_string(),
+                    ));
                 }
             }
         }

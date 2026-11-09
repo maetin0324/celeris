@@ -1,5 +1,6 @@
 use super::*;
 use std::fs;
+use task_core::required_checks::health::CheckerId;
 use task_core::{ProjectId, RepoId, TaskId};
 
 fn record() -> Delivery {
@@ -90,6 +91,11 @@ fn overlapping_untracked_files_block_merge_without_loss() {
     assert_eq!(sha(dir.path(), "HEAD").unwrap(), d.base);
 }
 fn stored_delivery() -> (task_core::SqliteStore, Delivery) {
+    stored_delivery_in_mode(task_core::TaskMode::Production)
+}
+
+/// `mode` の task の配送（[`stored_delivery`] と同じ組織・案件）。
+fn stored_delivery_in_mode(mode: task_core::TaskMode) -> (task_core::SqliteStore, Delivery) {
     use task_core::*;
     let store = SqliteStore::open_in_memory().unwrap();
     let now = OffsetDateTime::now_utc();
@@ -127,7 +133,8 @@ fn stored_delivery() -> (task_core::SqliteStore, Delivery) {
         updated_at: now,
     };
     store.project_create(&p).unwrap();
-    let spec:task_ops::add::NewTaskSpec=serde_json::from_value(serde_json::json!({"title":"fix","objective":"implement","acceptance":[],"project_id":p.id,"assignee":"engineering"})).unwrap();
+    let mut spec: task_ops::add::NewTaskSpec = serde_json::from_value(serde_json::json!({"title":"fix","objective":"implement","acceptance":[],"project_id":p.id,"assignee":"engineering"})).unwrap();
+    spec.mode = Some(mode);
     let task = task_ops::add::create_support_task(&store, spec, &[], &[], now).unwrap();
     for trigger in [Trigger::Dispatch, Trigger::WorkerDone, Trigger::ReviewPass] {
         store.apply_transition(task.id, trigger, None).unwrap();
@@ -194,7 +201,7 @@ fn preparation_requires_all_gates_and_notifies_cos_only_when_ready() {
     fs::write(rel.join("verify.json"), r#"{"ok":true}"#).unwrap();
     fs::write(rel.join("manifest.json"), r#"{"sha":"wrong"}"#).unwrap();
     store.delivery_save(None, &d).unwrap();
-    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
     let blocked = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(blocked.state, State::Blocked);
     store.delivery_save(Some(&blocked), &d).unwrap();
@@ -203,12 +210,12 @@ fn preparation_requires_all_gates_and_notifies_cos_only_when_ready() {
         serde_json::json!({"sha":d.head}).to_string(),
     )
     .unwrap();
-    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
     let ready = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(ready.state, State::Ready);
-    advance(&store, &cfg, &ready, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &ready, OffsetDateTime::now_utc()).unwrap();
     let notified = store.delivery_get(d.task_id).unwrap().unwrap();
-    advance(&store, &cfg, &notified, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &notified, OffsetDateTime::now_utc()).unwrap();
     assert_eq!(
         store
             .message_list("cos", Some(d.project_id), 20)
@@ -226,14 +233,14 @@ fn other_gate_failure_keeps_legacy_reopen_once() {
     d.state = State::Blocked;
     d.detail = "ビルドの検査失敗".into();
     store.delivery_save(None, &d).unwrap();
-    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
     assert_eq!(store.get(d.task_id).unwrap().unwrap().status, Status::Ready);
-    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
     assert_eq!(store.comments_for(d.task_id).unwrap().len(), 1);
     for trigger in [Trigger::Dispatch, Trigger::WorkerDone, Trigger::ReviewPass] {
         store.apply_transition(d.task_id, trigger, None).unwrap();
     }
-    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
     assert_eq!(store.get(d.task_id).unwrap().unwrap().status, Status::Done);
     assert_eq!(
         store
@@ -277,7 +284,7 @@ fn technical_failure_is_repaired_once_with_no_cos_review_or_message() {
     )
     .unwrap();
     store.delivery_save(None, &d).unwrap();
-    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
     assert_eq!(store.get(d.task_id).unwrap().unwrap().status, Status::Ready);
     let units = store.work_units_for(d.task_id).unwrap();
     assert_eq!(units.len(), 2);
@@ -322,7 +329,7 @@ fn technical_failure_is_repaired_once_with_no_cos_review_or_message() {
             },
         )
         .unwrap();
-    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
     let requeued = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(requeued.state, State::MergeQueued);
     let mut failed_again = requeued.clone();
@@ -330,7 +337,7 @@ fn technical_failure_is_repaired_once_with_no_cos_review_or_message() {
     failed_again.detail = d.detail.clone();
     failed_again.release = d.release.clone();
     store.delivery_save(Some(&requeued), &failed_again).unwrap();
-    advance(&store, &cfg, &failed_again, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &failed_again, OffsetDateTime::now_utc()).unwrap();
     assert!(
         store
             .delivery_get(d.task_id)
@@ -359,10 +366,10 @@ fn merge_base_repair_revalidates_and_delivers_only_the_repaired_branch() {
     // A moved main is no longer a merge failure: it asks for a re-review (ADR-0118 D4).
     fs::write(dir.path().join("feature"), "human draft").unwrap();
     let main_head = sha(dir.path(), "main").unwrap();
-    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
     let blocked = store.delivery_get(d.task_id).unwrap().unwrap();
     assert!(blocked.detail.starts_with(MERGE_BASE_FAILURE));
-    advance(&store, &cfg, &blocked, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &blocked, OffsetDateTime::now_utc()).unwrap();
     assert_eq!(store.get(d.task_id).unwrap().unwrap().status, Status::Ready);
     let units = store.work_units_for(d.task_id).unwrap();
     assert_eq!(units.len(), 2);
@@ -411,13 +418,13 @@ fn merge_base_repair_revalidates_and_delivers_only_the_repaired_branch() {
         store.apply_transition(d.task_id, trigger, None).unwrap();
     }
     let now = OffsetDateTime::now_utc();
-    advance(&store, &cfg, &blocked, now).unwrap();
+    advance_bundled(&store, &cfg, &blocked, now).unwrap();
     let requeued = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(requeued.state, State::MergeQueued);
     assert_eq!(requeued.base, main_head);
     assert_eq!(requeued.head, repaired_head);
     // The repaired head was never reviewed: it is not merged and goes back to review.
-    advance(&store, &cfg, &requeued, now).unwrap();
+    advance_bundled(&store, &cfg, &requeued, now).unwrap();
     let rereview = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(rereview.state, State::Reviewing);
     assert_eq!(sha(dir.path(), "main").unwrap(), main_head);
@@ -433,7 +440,7 @@ fn merge_base_repair_revalidates_and_delivers_only_the_repaired_branch() {
     requeued.reviewed_sha = Some(repaired_head.clone());
     requeued.merge_candidate_sha = Some(repaired_head.clone());
     assert!(store.delivery_save(Some(&rereview), &requeued).unwrap());
-    record_evidence(&store, &requeued, &[]);
+    record_evidence(&store, dir.path(), &requeued, &[]);
     store
         .apply_transition(d.task_id, Trigger::ReviewPass, None)
         .unwrap();
@@ -446,7 +453,7 @@ fn merge_base_repair_revalidates_and_delivers_only_the_repaired_branch() {
         .join("current/scripts/prepare.sh");
     fs::create_dir_all(script.parent().unwrap()).unwrap();
     fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
-    advance(&store, &cfg, &requeued, now).unwrap();
+    advance_bundled(&store, &cfg, &requeued, now).unwrap();
     let delivered = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(delivered.state, State::Preparing);
     assert_eq!(sha(dir.path(), "main").unwrap(), repaired_head);
@@ -502,13 +509,20 @@ fn push_merged_skips_when_remote_is_already_up_to_date() {
 /// 組み合わせ、`State::MergeQueued` から `advance` を通す。
 fn merge_queued_delivery() -> (task_core::SqliteStore, tempfile::TempDir, Delivery) {
     let (store, dir, d) = merge_queued_without_evidence();
-    record_evidence(&store, &d, &[]);
+    record_evidence(&store, dir.path(), &d, &[]);
     (store, dir, d)
 }
 
 fn merge_queued_without_evidence() -> (task_core::SqliteStore, tempfile::TempDir, Delivery) {
+    merge_queued_in_mode(task_core::TaskMode::Production)
+}
+
+/// `mode` の task の `State::MergeQueued` の配送（証跡なし）。
+fn merge_queued_in_mode(
+    mode: task_core::TaskMode,
+) -> (task_core::SqliteStore, tempfile::TempDir, Delivery) {
     use task_core::DeliveryStore;
-    let (store, mut d) = stored_delivery();
+    let (store, mut d) = stored_delivery_in_mode(mode);
     let (dir, repo_d) = repository();
     d.base = repo_d.base;
     d.head = repo_d.head;
@@ -522,16 +536,104 @@ fn merge_queued_without_evidence() -> (task_core::SqliteStore, tempfile::TempDir
     (store, dir, d)
 }
 
-/// review が記録する必須検査の証跡（`d` の基底・候補に束縛）。
-fn record_evidence(store: &task_core::SqliteStore, d: &Delivery, results: &[(&str, bool)]) {
-    record_evidence_with_definition(store, d, results, &[]);
+/// 試験の同梱の検査器。一時 repo の基底には検査器が無いので、適用判定はこの同梱の検査器で `Applies` になる
+/// （ADR 2026-11-08-health-enforcement-loop D1.4。process の OnceLock は使わず、`advance` の引数で渡す）。
+fn bundled() -> CheckerId {
+    CheckerId {
+        source: health::CheckerSource::Bundled,
+        sha256: "b".repeat(64),
+    }
+}
+
+/// 同梱の検査器を [`bundled`] にして配送を 1 回進める（`advance` の引数を毎回書かない）。
+fn advance_bundled(
+    store: &task_core::SqliteStore,
+    cfg: &Config,
+    d: &Delivery,
+    now: OffsetDateTime,
+) -> Result<(), StoreError> {
+    advance(store, cfg, d, now, Some(&bundled()))
+}
+
+/// `repo` での `sha` の tree（読めない SHA は空。束縛の違う証跡を作るときに使う）。
+fn tree_of(repo: &Path, sha: &str) -> String {
+    git_text(repo, &["rev-parse", &format!("{sha}^{{tree}}")]).unwrap_or_default()
+}
+
+/// `d` の基底・候補（tree は `repo` で引く）を `checker` で評価した health の証跡（verdict は `verdict`）。
+fn health_evidence(
+    repo: &Path,
+    d: &Delivery,
+    checker: &CheckerId,
+    verdict: health::HealthVerdict,
+) -> health::HealthEvidence {
+    let reviewed = d.reviewed_sha.clone().unwrap();
+    health::HealthEvidence {
+        repo_id: d.repo_id,
+        base_sha: d.target_sha.clone().unwrap(),
+        head_tree: tree_of(repo, &reviewed),
+        head_sha: reviewed,
+        policy_sha256: "p".repeat(64),
+        checker: Some(checker.clone()),
+        report_sha256: "r".repeat(64),
+        tool_version: "test".into(),
+        verdict,
+        blocking: Vec::new(),
+        reason: None,
+        reused_from: None,
+        reviewable: true,
+    }
+}
+
+/// health の項目（`cmd` は [`health::HEALTH_CHECK_ID`]、合否は verdict が Pass か）。
+fn health_item(evidence: health::HealthEvidence) -> task_core::PhaseCheckResult {
+    task_core::PhaseCheckResult {
+        cmd: health::HEALTH_CHECK_ID.into(),
+        pass: evidence.verdict == health::HealthVerdict::Pass,
+        summary: String::new(),
+        health: Some(Box::new(evidence)),
+    }
+}
+
+/// review が記録する必須検査の証跡（`d` の基底・候補に束縛）。health の項目は [`bundled`] の Pass。
+fn record_evidence(
+    store: &task_core::SqliteStore,
+    repo: &Path,
+    d: &Delivery,
+    results: &[(&str, bool)],
+) {
+    record_evidence_with_definition(store, repo, d, results, &[]);
 }
 
 fn record_evidence_with_definition(
     store: &task_core::SqliteStore,
+    repo: &Path,
     d: &Delivery,
     results: &[(&str, bool)],
     definition: &[String],
+) {
+    let health = health_item(health_evidence(
+        repo,
+        d,
+        &bundled(),
+        health::HealthVerdict::Pass,
+    ));
+    let mut results: Vec<task_core::PhaseCheckResult> = results
+        .iter()
+        .map(|(cmd, pass)| task_core::PhaseCheckResult::new((*cmd).into(), *pass, String::new()))
+        .collect();
+    results.push(health);
+    record_results(store, d, results, definition, Some(&bundled()));
+}
+
+/// `d` の基底・候補に束縛した `RequiredChecksEvaluated`。定義指紋は `definition` と `checker`（health の項目の
+/// 検査器。`None` は health の項目を要らない定義）から作る。
+fn record_results(
+    store: &task_core::SqliteStore,
+    d: &Delivery,
+    results: Vec<task_core::PhaseCheckResult>,
+    definition: &[String],
+    checker: Option<&CheckerId>,
 ) {
     use task_core::TaskStore;
     store
@@ -542,15 +644,10 @@ fn record_evidence_with_definition(
                 repo_id: d.repo_id,
                 target_sha: d.target_sha.clone().unwrap(),
                 reviewed_sha: d.reviewed_sha.clone().unwrap(),
-                definition_sha256: task_core::required_checks::definition_digest(definition),
-                results: results
-                    .iter()
-                    .map(|(cmd, pass)| task_core::PhaseCheckResult {
-                        cmd: (*cmd).into(),
-                        pass: *pass,
-                        summary: String::new(),
-                    })
-                    .collect(),
+                definition_sha256: task_core::required_checks::definition_digest(
+                    definition, checker,
+                ),
+                results,
             },
         )
         .unwrap();
@@ -562,11 +659,11 @@ fn record_evidence_with_definition(
 fn merge_requires_passing_evidence_bound_to_the_candidate_and_base() {
     use task_core::DeliveryStore;
     let tmp = tempfile::tempdir().unwrap();
-    let rejected = |setup: &dyn Fn(&task_core::SqliteStore, &Delivery), name: &str| {
+    let rejected = |setup: &dyn Fn(&task_core::SqliteStore, &Path, &Delivery), name: &str| {
         let (store, dir, d) = merge_queued_without_evidence();
-        setup(&store, &d);
+        setup(&store, dir.path(), &d);
         let cfg = cfg_for(dir.path(), &tmp.path().join(name));
-        advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+        advance_bundled(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
         assert_eq!(sha(dir.path(), "main").unwrap(), d.base, "{name}");
         let after = store.delivery_get(d.task_id).unwrap().unwrap();
         assert_eq!(after.state, State::Reviewing, "{name}");
@@ -574,30 +671,30 @@ fn merge_requires_passing_evidence_bound_to_the_candidate_and_base() {
         after.detail
     };
     // 証跡が無い（旧 review）。
-    rejected(&|_, _| {}, "none");
+    rejected(&|_, _, _| {}, "none");
     // 不合格の証跡。
     let detail = rejected(
-        &|s, d| record_evidence(s, d, &[("cargo fmt", false)]),
+        &|s, r, d| record_evidence(s, r, d, &[("cargo fmt", false)]),
         "failed",
     );
     assert!(detail.contains("cargo fmt"), "{detail}");
     // 別の基底・候補に束縛された合格だけがある。
     rejected(
-        &|s, d| {
+        &|s, r, d| {
             let mut other = d.clone();
             other.target_sha = Some("0".repeat(40));
-            record_evidence(s, &other, &[]);
+            record_evidence(s, r, &other, &[]);
             other.target_sha = d.target_sha.clone();
             other.reviewed_sha = Some("1".repeat(40));
-            record_evidence(s, &other, &[]);
+            record_evidence(s, r, &other, &[]);
         },
         "other-binding",
     );
     // 束縛どおりの合格は ff する。
     let (store, dir, d) = merge_queued_without_evidence();
-    record_evidence(&store, &d, &[]);
+    record_evidence(&store, dir.path(), &d, &[]);
     let cfg = cfg_for(dir.path(), &tmp.path().join("ok"));
-    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
     assert_eq!(sha(dir.path(), "main").unwrap(), d.head);
 }
 
@@ -629,11 +726,12 @@ fn merge_rejects_evidence_missing_a_required_check_of_the_candidate() {
     // 証跡は cmd-a だけ（cmd-b が acceptance 等で置き換わった）。
     record_evidence_with_definition(
         &store,
+        p,
         &d,
         &[("cmd-a", true)],
         &["cmd-a".into(), "cmd-b".into()],
     );
-    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
     assert_eq!(sha(p, "main").unwrap(), d.base);
     let after = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(after.state, State::Reviewing);
@@ -680,7 +778,7 @@ fn non_self_repo_is_merged_without_release_or_push() {
     let tmp = tempfile::tempdir().unwrap();
     let releases = tmp.path().join("releases");
     let cfg = cfg_for(self_repo.path(), &releases);
-    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
     let after = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(after.state, State::Ready);
     assert!(after.release.is_none());
@@ -699,7 +797,7 @@ fn non_self_repo_is_merged_without_release_or_push() {
     );
     // 次の tick で取り込み完了を人（秘書）に 1 度だけ知らせる。release のリンクは付かない。
     let ready = store.delivery_get(d.task_id).unwrap().unwrap();
-    advance(&store, &cfg, &ready, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &ready, OffsetDateTime::now_utc()).unwrap();
     let notified = store.delivery_get(d.task_id).unwrap().unwrap();
     assert!(notified.notification.is_some());
     let messages = store.message_list("cos", Some(d.project_id), 10).unwrap();
@@ -722,7 +820,7 @@ fn non_self_repo_with_a_remote_is_pushed_but_still_has_no_release() {
     let self_repo = tempfile::tempdir().unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let cfg = cfg_for(self_repo.path(), &tmp.path().join("releases"));
-    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
     let after = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(after.state, State::Ready);
     assert!(after.release.is_none() && after.prepare_pid.is_none());
@@ -730,7 +828,7 @@ fn non_self_repo_with_a_remote_is_pushed_but_still_has_no_release() {
     assert_eq!(sha(bare.path(), "refs/heads/main").unwrap(), after.head);
 }
 
-/// `tick` は案件の `auto_integrate`（DB）が有効な配送だけを進める。無効なら従来どおり取り込まない。
+/// `tick`（[`tick_with`]）は案件の `auto_integrate`（DB）が有効な配送だけを進める。無効なら従来どおり取り込まない。
 #[test]
 fn tick_advances_only_projects_with_auto_integrate() {
     use task_core::{DeliveryStore, TaskStore};
@@ -745,7 +843,7 @@ fn tick_advances_only_projects_with_auto_integrate() {
             .project_set_auto_integrate(d.project_id, false)
             .unwrap()
     );
-    tick(&store, &cfg, OffsetDateTime::now_utc()).unwrap();
+    tick_with(&store, &cfg, OffsetDateTime::now_utc(), Some(&bundled())).unwrap();
     let off = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(off.state, State::MergeQueued);
     assert_eq!(sha(dir.path(), "refs/heads/main").unwrap(), before);
@@ -754,7 +852,7 @@ fn tick_advances_only_projects_with_auto_integrate() {
             .project_set_auto_integrate(d.project_id, true)
             .unwrap()
     );
-    tick(&store, &cfg, OffsetDateTime::now_utc()).unwrap();
+    tick_with(&store, &cfg, OffsetDateTime::now_utc(), Some(&bundled())).unwrap();
     let on = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(on.state, State::Ready);
     assert_eq!(sha(dir.path(), "refs/heads/main").unwrap(), on.head);
@@ -773,7 +871,7 @@ fn advance_pushes_to_origin_right_after_merge_before_release_prep() {
     .unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let cfg = cfg_for(dir.path(), &tmp.path().join("releases"));
-    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
     let after = store.delivery_get(d.task_id).unwrap().unwrap();
     assert!(after.pushed_at.is_some());
     assert!(after.push_error.is_none());
@@ -794,7 +892,7 @@ fn push_failure_after_merge_does_not_block_release_prep_and_retries_once() {
     let tmp = tempfile::tempdir().unwrap();
     let cfg = cfg_for(dir.path(), &tmp.path().join("releases"));
 
-    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
     let after_merge = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(after_merge.state, State::Preparing, "release準備は進む");
     assert!(after_merge.pushed_at.is_none());
@@ -805,7 +903,7 @@ fn push_failure_after_merge_does_not_block_release_prep_and_retries_once() {
     assert!(!first_err.starts_with(PUSH_RETRIED_PREFIX));
 
     // 次のtickで1度だけ再試行。
-    advance(&store, &cfg, &after_merge, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &after_merge, OffsetDateTime::now_utc()).unwrap();
     let after_retry = store.delivery_get(d.task_id).unwrap().unwrap();
     assert!(after_retry.pushed_at.is_none());
     let retried_err = after_retry
@@ -815,7 +913,7 @@ fn push_failure_after_merge_does_not_block_release_prep_and_retries_once() {
     assert!(retried_err.starts_with(PUSH_RETRIED_PREFIX));
 
     // それでも失敗したら以後は触らない: もう一度 advance しても push_error は変わらない。
-    advance(&store, &cfg, &after_retry, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &after_retry, OffsetDateTime::now_utc()).unwrap();
     let after_third = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(after_third.push_error, after_retry.push_error);
     assert!(after_third.pushed_at.is_none());
@@ -861,10 +959,10 @@ fn ready_notification_reports_successful_push() {
     )
     .unwrap();
     store.delivery_save(None, &d).unwrap();
-    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
     let ready = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(ready.state, State::Ready);
-    advance(&store, &cfg, &ready, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &ready, OffsetDateTime::now_utc()).unwrap();
     let messages = store.message_list("cos", Some(d.project_id), 20).unwrap();
     assert_eq!(messages.len(), 1);
     assert!(messages[0].text.contains("origin へ push 済み"));
@@ -899,10 +997,10 @@ fn ready_notification_reports_push_failure_without_the_retry_marker() {
     )
     .unwrap();
     store.delivery_save(None, &d).unwrap();
-    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
     let ready = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(ready.state, State::Ready);
-    advance(&store, &cfg, &ready, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &ready, OffsetDateTime::now_utc()).unwrap();
     let messages = store.message_list("cos", Some(d.project_id), 20).unwrap();
     assert_eq!(messages.len(), 1);
     assert!(messages[0].text.contains("push に失敗"));
@@ -932,7 +1030,7 @@ fn target_advanced_before_merge_requests_rereview_instead_of_stale_reviewed_sha(
     git_text(dir.path(), &["commit", "--allow-empty", "-m", "main moved"]).unwrap();
     let moved = sha(dir.path(), "main").unwrap();
 
-    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
 
     // No ff-only merge and no merge_base repair: the stale review simply does not count.
     assert_eq!(sha(dir.path(), "main").unwrap(), moved);
@@ -957,7 +1055,7 @@ fn target_advanced_before_merge_requests_rereview_instead_of_stale_reviewed_sha(
         }]
     );
     // While the task is being re-reviewed the delivery waits; nothing is merged or blocked.
-    advance(&store, &cfg, &after, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &after, OffsetDateTime::now_utc()).unwrap();
     assert_eq!(store.delivery_get(d.task_id).unwrap().unwrap(), after);
 }
 
@@ -987,7 +1085,7 @@ fn target_advanced_rereview_beyond_limit_still_requests_rereview() {
     };
     for attempt in 1..=task_ops::delivery::MAX_TARGET_RESYNCS {
         git_text(dir.path(), &["commit", "--allow-empty", "-m", "main moved"]).unwrap();
-        advance(&store, &cfg, &current, now).unwrap();
+        advance_bundled(&store, &cfg, &current, now).unwrap();
         let after = store.delivery_get(d.task_id).unwrap().unwrap();
         assert_eq!(after.state, State::Reviewing, "attempt {attempt}");
         current = reviewed_again(&after);
@@ -1000,7 +1098,7 @@ fn target_advanced_rereview_beyond_limit_still_requests_rereview() {
     )
     .unwrap();
     let moved = sha(dir.path(), "main").unwrap();
-    advance(&store, &cfg, &current, now).unwrap();
+    advance_bundled(&store, &cfg, &current, now).unwrap();
     let again = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(again.state, State::Reviewing);
     assert!(!again.detail.starts_with("[needs-human]"));
@@ -1021,7 +1119,7 @@ fn target_advanced_rereview_beyond_limit_still_requests_rereview() {
             if *attempt == task_ops::delivery::MAX_TARGET_RESYNCS + 1 && *target_sha == moved
     ));
     // While the task is re-reviewed the delivery waits; nothing is merged or blocked.
-    advance(&store, &cfg, &again, now).unwrap();
+    advance_bundled(&store, &cfg, &again, now).unwrap();
     assert_eq!(store.delivery_get(d.task_id).unwrap().unwrap(), again);
     assert!(store.work_units_for(d.task_id).unwrap().is_empty());
 }
@@ -1036,7 +1134,7 @@ fn target_advanced_absent_merges_only_the_matching_reviewed_sha_candidate() {
     let mut mismatched = d.clone();
     mismatched.reviewed_sha = Some(d.base.clone());
     assert!(store.delivery_save(Some(&d), &mismatched).unwrap());
-    advance(&store, &cfg, &mismatched, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &mismatched, OffsetDateTime::now_utc()).unwrap();
     assert_eq!(sha(dir.path(), "main").unwrap(), d.base);
     assert_eq!(
         store.delivery_get(d.task_id).unwrap().unwrap().state,
@@ -1048,7 +1146,7 @@ fn target_advanced_absent_merges_only_the_matching_reviewed_sha_candidate() {
     git_text(dir.path(), &["checkout", "feature"]).unwrap();
     git_text(dir.path(), &["commit", "--allow-empty", "-m", "unreviewed"]).unwrap();
     git_text(dir.path(), &["checkout", "main"]).unwrap();
-    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
     assert_eq!(sha(dir.path(), "main").unwrap(), d.base);
     assert_eq!(
         store.delivery_get(d.task_id).unwrap().unwrap().state,
@@ -1062,12 +1160,12 @@ fn target_advanced_absent_merges_only_the_matching_reviewed_sha_candidate() {
     legacy.reviewed_sha = None;
     legacy.merge_candidate_sha = None;
     assert!(store.delivery_save(Some(&d), &legacy).unwrap());
-    advance(&store, &cfg, &legacy, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &legacy, OffsetDateTime::now_utc()).unwrap();
     assert_eq!(sha(dir.path(), "main").unwrap(), d.base);
     // The matching candidate on an unchanged target is fast-forwarded exactly.
     let (store, dir, d) = merge_queued_delivery();
     let cfg = cfg_for(dir.path(), &tmp.path().join("releases"));
-    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
     assert_eq!(sha(dir.path(), "main").unwrap(), d.head);
     let merged = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(merged.state, State::Preparing);
@@ -1102,7 +1200,7 @@ fn pre_review_sync_conflict_unsynced_candidate_goes_to_merge_base_repair() {
     diverged.base = moved.clone();
     assert!(store.delivery_save(Some(&d), &diverged).unwrap());
 
-    advance(&store, &cfg, &diverged, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &diverged, OffsetDateTime::now_utc()).unwrap();
 
     assert_eq!(sha(dir.path(), "main").unwrap(), moved);
     assert_eq!(sha(dir.path(), "feature").unwrap(), d.head);
@@ -1191,7 +1289,7 @@ fn integration_repair_fallback_delivers() {
     assert_eq!(fallback.merge_candidate_sha, None);
 
     // 候補なし・target が HEAD の祖先でない: 再レビューに戻さず [merge-base] へ。
-    advance(&store, &cfg, &fallback, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &fallback, OffsetDateTime::now_utc()).unwrap();
     let blocked = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(blocked.state, State::Blocked);
     assert!(
@@ -1202,7 +1300,7 @@ fn integration_repair_fallback_delivers() {
     assert!(target_advanced_events(&store, &d).is_empty());
     assert_eq!(sha(p, "main").unwrap(), diverged);
     // 局所修復（make_repair）を起こす。
-    advance(&store, &cfg, &blocked, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &blocked, OffsetDateTime::now_utc()).unwrap();
     let units = store.work_units_for(d.task_id).unwrap();
     let repair = units
         .iter()
@@ -1244,7 +1342,7 @@ fn integration_repair_fallback_delivers() {
     let blocked = store.delivery_get(d.task_id).unwrap().unwrap();
     let (synced, released) = review_pass(&blocked);
     assert!(released);
-    record_evidence(&store, &synced, &[]);
+    record_evidence(&store, dir.path(), &synced, &[]);
     assert_eq!(
         synced.merge_candidate_sha.as_deref(),
         Some(repaired.as_str())
@@ -1288,7 +1386,7 @@ fn integration_repair_fallback_delivers() {
         );
         assert_eq!(open_integration_count(&store, d.task_id), 1);
     }
-    advance(&store, &cfg, &synced, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &synced, OffsetDateTime::now_utc()).unwrap();
     let delivered = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(delivered.state, State::Preparing, "{}", delivered.detail);
     assert_eq!(sha(p, "main").unwrap(), repaired);
@@ -1428,7 +1526,7 @@ fn auto_resolve_progress_append_conflict_is_resolved_and_regated() {
     let main_before = sha(p, "main").unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let cfg = cfg_for(p, &tmp.path().join("releases"));
-    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
 
     let requeued = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(requeued.state, State::MergeQueued);
@@ -1472,7 +1570,7 @@ fn auto_resolve_progress_append_conflict_is_resolved_and_regated() {
 
     // The auto-resolved commit has not been reviewed. Candidate validation sends it
     // through a fresh review before any ff-only delivery.
-    advance(&store, &cfg, &requeued, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &requeued, OffsetDateTime::now_utc()).unwrap();
     let reviewing = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(reviewing.state, State::Reviewing);
     assert_eq!(reviewing.merge_candidate_sha, None);
@@ -1491,7 +1589,7 @@ fn auto_resolve_code_conflict_requests_integration_and_aborts_merge() {
     let p = dir.path();
     let tmp = tempfile::tempdir().unwrap();
     let cfg = cfg_for(p, &tmp.path().join("releases"));
-    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
     assert_eq!(sha(p, "feature").unwrap(), d.head);
     assert_eq!(git_text(p, &["status", "--porcelain"]).unwrap(), "");
     let comments = auto_resolve_comments(&store, &d);
@@ -1514,7 +1612,7 @@ fn auto_resolve_code_conflict_requests_integration_and_aborts_merge() {
             .count(),
         1
     );
-    advance(&store, &cfg, &still, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &still, OffsetDateTime::now_utc()).unwrap();
     // 再 tick でも同じ両端の依頼は 1 件のまま。
     assert_eq!(open_integration_count(&store, d.task_id), 1);
     assert!(no_integration_notice(&store));
@@ -1553,7 +1651,7 @@ fn auto_resolve_stops_at_max_attempts_and_when_disabled() {
                 .unwrap();
         }
         let before = auto_resolve_comments(&store, &d).len();
-        advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+        advance_bundled(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
         assert_eq!(sha(p, "feature").unwrap(), d.head, "disabled={disabled}");
         assert_eq!(auto_resolve_comments(&store, &d).len(), before);
         assert_eq!(
@@ -1598,7 +1696,7 @@ fn auto_resolve_local_repair_limit_requests_integration() {
     let mut cfg = cfg_for(dir.path(), &tmp.path().join("releases"));
     cfg.selfdeploy.delivery.auto_resolve.enabled = false;
     cfg.execution.max_repairs = 0;
-    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
     let still = store.delivery_get(d.task_id).unwrap().unwrap();
     assert!(still.detail.starts_with("[needs-human] 統合の依頼:"));
     let request = open_integration_request(&store, d.task_id);
@@ -1628,7 +1726,7 @@ fn auto_resolve_clean_main_follow_is_counted_and_left_to_the_legacy_path() {
     git_text(p, &["commit", "-m", "other"]).unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let cfg = cfg_for(p, &tmp.path().join("releases"));
-    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
     assert_eq!(sha(p, "feature").unwrap(), d.head);
     let comments = auto_resolve_comments(&store, &d);
     assert_eq!(comments.len(), 1, "{comments:?}");
@@ -1722,7 +1820,7 @@ fn auto_resolve_cargo_lock_conflict_is_regenerated_and_regated() {
     let main_before = sha(p, "main").unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let cfg = cfg_for(p, &tmp.path().join("releases"));
-    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
 
     let requeued = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(
@@ -1765,7 +1863,7 @@ fn auto_resolve_cargo_lock_conflict_is_regenerated_and_regated() {
     )
     .unwrap();
     // 確定は既存の検査（再 review）を通ってから。
-    advance(&store, &cfg, &requeued, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &requeued, OffsetDateTime::now_utc()).unwrap();
     let reviewing = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(reviewing.state, State::Reviewing);
     assert_eq!(sha(p, "main").unwrap(), main_before);
@@ -1778,7 +1876,7 @@ fn auto_resolve_cargo_lock_with_cargo_toml_conflict_requests_integration() {
     let p = dir.path();
     let tmp = tempfile::tempdir().unwrap();
     let cfg = cfg_for(p, &tmp.path().join("releases"));
-    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    advance_bundled(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
     assert_eq!(sha(p, "feature").unwrap(), d.head);
     assert_eq!(git_text(p, &["status", "--porcelain"]).unwrap(), "");
     let still = store.delivery_get(d.task_id).unwrap().unwrap();
@@ -1797,22 +1895,22 @@ fn auto_resolve_cargo_lock_with_cargo_toml_conflict_requests_integration() {
 #[test]
 fn required_definition_absence_is_allowed_but_git_and_parse_failures_are_rejected() {
     let (store, dir, mut d) = merge_queued_without_evidence();
-    record_evidence(&store, &d, &[]);
+    record_evidence(&store, dir.path(), &d, &[]);
     // The candidate tree has no config; its own empty definition is valid.
     assert_eq!(
-        check_required_evidence(&store, dir.path(), &d).unwrap(),
+        check_required_evidence(&store, dir.path(), &d, Some(&bundled())).unwrap(),
         Ok(())
     );
     let missing = dir.path().join("missing-repository");
     assert!(
-        check_required_evidence(&store, &missing, &d)
+        check_required_evidence(&store, &missing, &d, Some(&bundled()))
             .unwrap()
             .is_err()
     );
     let saved = d.head.clone();
     d.head = "not-a-candidate".into();
     assert!(
-        check_required_evidence(&store, dir.path(), &d)
+        check_required_evidence(&store, dir.path(), &d, Some(&bundled()))
             .unwrap()
             .is_err()
     );
@@ -1827,7 +1925,7 @@ fn required_definition_absence_is_allowed_but_git_and_parse_failures_are_rejecte
     git_text(dir.path(), &["add", "."]).unwrap();
     git_text(dir.path(), &["commit", "-m", "malformed check definition"]).unwrap();
     d.head = sha(dir.path(), "HEAD").unwrap();
-    let error = check_required_evidence(&store, dir.path(), &d)
+    let error = check_required_evidence(&store, dir.path(), &d, Some(&bundled()))
         .unwrap()
         .unwrap_err();
     assert!(error.contains("invalid required checks"), "{error}");
@@ -1860,3 +1958,6 @@ fn prepare_child_counts_as_in_flight_until_it_exits() {
         std::thread::sleep(Duration::from_millis(10));
     }
 }
+
+#[path = "health_evidence_tests.rs"]
+mod health_evidence;

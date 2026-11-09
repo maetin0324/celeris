@@ -1,8 +1,8 @@
 //! ADR 2026-11-07-health-review-integration D2.3・I3: review 方針（profile の `[review]` 節）を base（target）側の
 //! 検査器で読む。
 //!
-//! [`load_review_policy`] の手順: target の commit から検査器（[`CHECKER_DIR`] と、検査器が同じ checkout から読む
-//! [`CHECKER_SIDE_FILES`]）を `git archive` で一時 dir に出し、その `repo_health.py` を
+//! [`load_review_policy`] の手順: target の commit から検査器（`task_core::required_checks::health` の [`CHECKER_DIR`] と、
+//! 検査器が同じ checkout から読む [`CHECKER_SIDE_FILES`]）を `git archive` で一時 dir に出し、その `repo_health.py` を
 //! `--print-review-policy --repo <repo> --base <target_sha>` で起こす。候補（head・作業ツリー）の検査器と profile は
 //! 使わない（候補が自分の review の条件を変えられない。I3）。出力 `celeris.repo-health.review-policy/1` は
 //! [`ReviewPolicyState`] に写す:
@@ -15,6 +15,11 @@
 //! どれも黙って省かない（risk の判定では `Unavailable` は `unknown` になる。D3.3）。worker と planner の run には、tick が
 //! [`Dispatcher::review_policy_target`] で repo と target を決め、run の起動の非同期部分で 1 回だけ読む（付記 B2。
 //! `health_review/worker_profile.rs`）。全体の時間に上限（[`REVIEW_POLICY_TIMEOUT`]）を置き、tick を止めない。LLM は呼ばない。
+//!
+//! 検査器の起動の口は [`with_base_checker`] の 1 つ（ADR 2026-11-08-health-enforcement-loop D1.3）。[`CheckerSite::Base`] は
+//! 上の手順で base から出し、[`CheckerSite::Bundled`] は Celeris の release に同梱した検査器（base から出したときと同じ
+//! repo 相対の配置。D1.4）をそのまま使う。同梱を使うのは `health_review::gate` だけで、review 方針と G2 の材料・policy の
+//! 関門は base の検査器だけを使う（base に無ければ当てない）。
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -22,6 +27,9 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use task_core::design_review::{PathClass, ReviewPolicy, ReviewPolicyState};
+use task_core::required_checks::health::{
+    CHECKER_DIR, CHECKER_SCRIPT, CHECKER_SIDE_FILES, base_has_file,
+};
 use task_core::{Task, WorkspaceSpec};
 use task_ops::changes::{CmdOutput, git, run_with_timeout};
 
@@ -29,12 +37,6 @@ use crate::dispatcher::Dispatcher;
 
 /// `--print-review-policy` の出力の schema（`scripts/dev/repo-health/schema/review-policy-v1.schema.json`）。
 pub const REVIEW_POLICY_SCHEMA: &str = "celeris.repo-health.review-policy/1";
-/// base から出す検査器の dir（repo 相対）。
-pub const CHECKER_DIR: &str = "scripts/dev/repo-health";
-/// 起こす script（repo 相対）。base に無ければ `Unavailable`。
-pub const CHECKER_SCRIPT: &str = "scripts/dev/repo-health/repo_health.py";
-/// 検査器が同じ checkout から読む file（repo 相対）。base にあれば検査器と一緒に出す（無い base もある）。
-pub const CHECKER_SIDE_FILES: &[&str] = &["scripts/dev/source-size-report.py"];
 /// 1 回の読み込み全体（ref の解決・`git archive`・展開・script）の時間の上限。
 pub const REVIEW_POLICY_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -53,7 +55,7 @@ struct ReviewPolicyOut {
 /// `repo` の `target`（commit の sha か ref）の版の検査器で review 方針を読む。`timeout` は全体の上限。
 pub fn load_review_policy(repo: &Path, target: &str, timeout: Duration) -> ReviewPolicyState {
     let deadline = Instant::now() + timeout;
-    match with_base_checker(repo, target, deadline, |checker| {
+    match with_base_checker(repo, target, CheckerSite::Base, deadline, |checker| {
         checker.print_review_policy(repo)
     }) {
         Ok(Some(stdout)) => parse_review_policy(&stdout),
@@ -111,7 +113,16 @@ pub fn parse_review_policy(stdout: &str) -> ReviewPolicyState {
     }
 }
 
-/// target の commit から出した検査器（一時 dir。[`with_base_checker`] の間だけある）。
+/// [`with_base_checker`] が起こす検査器の出どころ（D1.3・D1.4）。
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum CheckerSite<'a> {
+    /// target の commit の検査器を一時 dir に出す（base に無ければ `run` を呼ばず `None`）。
+    Base,
+    /// Celeris の release に同梱した検査器の dir（`<release>/repo-health`。base から出したときと同じ repo 相対の配置）。
+    Bundled(&'a Path),
+}
+
+/// 起こす検査器（[`with_base_checker`] の間だけある）。target の commit から出した一時 dir か、同梱の dir。
 pub(crate) struct BaseChecker {
     /// target を解決した commit の sha。
     pub sha: String,
@@ -120,16 +131,28 @@ pub(crate) struct BaseChecker {
 }
 
 impl BaseChecker {
-    /// 出した `repo_health.py` を `args` で起こす（cwd は一時 dir、残りの時間が上限）。非 0 exit も返す。
+    /// 出した `repo_health.py` を `args` で起こす（cwd は検査器の dir、残りの時間が上限）。非 0 exit も返す。
     pub(crate) fn run(&self, args: &[&str], what: &str) -> Result<CmdOutput, String> {
         let script = self.tree.join(CHECKER_SCRIPT);
         let script_arg = script.to_string_lossy();
-        let mut argv = vec!["-I", "-B", &*script_arg];
+        let mut argv = vec![&*script_arg];
         argv.extend_from_slice(args);
+        self.python(&argv, what)
+    }
+
+    /// 同じ検査器の dir を cwd にして `python3 -I -B <argv>` を起こす（残りの時間が上限）。非 0 exit も返す。
+    pub(crate) fn python(&self, argv: &[&str], what: &str) -> Result<CmdOutput, String> {
+        let mut full = vec!["-I", "-B"];
+        full.extend_from_slice(argv);
         finished(
-            run_with_timeout(&self.tree, "python3", &argv, left(self.deadline)?),
+            run_with_timeout(&self.tree, "python3", &full, left(self.deadline)?),
             what,
         )
+    }
+
+    /// 検査器の package の dir（`<tree>/scripts/dev/repo-health`。`health` package の親）。
+    pub(crate) fn checker_dir(&self) -> PathBuf {
+        self.tree.join(CHECKER_DIR)
     }
 
     /// `--print-review-policy --repo <repo> --base <sha>` の stdout。非 0 exit は理由の文。
@@ -155,12 +178,14 @@ impl BaseChecker {
     }
 }
 
-/// `repo` の `target` の版の検査器を一時 dir に出し、`run` に渡す（戻ると一時 dir を消す）。base に検査器が無ければ
-/// `run` を呼ばず `None`。失敗は理由の文。
-/// 候補（head・作業ツリー）の検査器は使わない（I3）。`deadline` は ref の解決・archive・展開・`run` の全体の締め切り。
+/// `repo` の `target` を commit に解決し、`site` の検査器を `run` に渡す。[`CheckerSite::Base`] は `target` の版の
+/// 検査器を一時 dir に出し（戻ると消す）、base に検査器が無ければ `run` を呼ばず `None`。[`CheckerSite::Bundled`] は
+/// 同梱の dir をそのまま渡す（base は見ない）。失敗は理由の文。
+/// 候補（head・作業ツリー）の検査器は使わない（I3・J3）。`deadline` は ref の解決・archive・展開・`run` の全体の締め切り。
 pub(crate) fn with_base_checker<T>(
     repo: &Path,
     target: &str,
+    site: CheckerSite<'_>,
     deadline: Instant,
     run: impl FnOnce(&BaseChecker) -> Result<T, String>,
 ) -> Result<Option<T>, String> {
@@ -177,20 +202,21 @@ pub(crate) fn with_base_checker<T>(
         return Err(format!("target {target} を commit に解決できない"));
     }
     let sha = resolved.stdout.trim().to_string();
+    if let CheckerSite::Bundled(dir) = site {
+        return run(&BaseChecker {
+            sha,
+            tree: dir.to_path_buf(),
+            deadline,
+        })
+        .map(Some);
+    }
     let short = &sha[..sha.len().min(12)];
-    let on_base = |path: &str| -> Result<bool, String> {
-        let spec = format!("{sha}:{path}");
-        let out = finished(
-            git(repo, &["cat-file", "-e", &spec], left(deadline)?),
-            "git cat-file",
-        )?;
-        Ok(out.ok)
-    };
+    let on_base = |path: &str| base_has_file(&sha, path, |args| git_stdout(repo, args, deadline));
     if !on_base(CHECKER_SCRIPT)? {
         tracing::debug!(base = %short, "no {CHECKER_SCRIPT} on the base; the repo has no review policy");
         return Ok(None);
     }
-    let scratch = Scratch::create()?;
+    let scratch = Scratch::create("celeris-review-policy")?;
     let archive = scratch.0.join("checker.tar");
     let output = format!("--output={}", archive.display());
     let mut args = vec![
@@ -233,6 +259,17 @@ pub(crate) fn with_base_checker<T>(
     .map(Some)
 }
 
+/// `repo` で git を締め切りまで実行した stdout（非 0 exit・起動の失敗・時間切れは理由の文）。task_core の判定関数
+/// （`base_has_file` など）に渡す closure の形。
+pub(crate) fn git_stdout(repo: &Path, args: &[&str], deadline: Instant) -> Result<String, String> {
+    let out = finished(git(repo, args, left(deadline)?), "git")?;
+    if out.ok {
+        Ok(out.stdout)
+    } else {
+        Err(out.why())
+    }
+}
+
 /// 締め切りまでの残り。過ぎていれば時間切れの理由。
 pub(crate) fn left(deadline: Instant) -> Result<Duration, String> {
     let left = deadline.saturating_duration_since(Instant::now());
@@ -251,12 +288,12 @@ pub(crate) fn finished(out: Option<CmdOutput>, what: &str) -> Result<CmdOutput, 
     }
 }
 
-/// 検査器を出す一時 dir（drop で消す）。
-struct Scratch(PathBuf);
+/// 検査器・report を置く一時 dir（drop で消す）。
+pub(crate) struct Scratch(pub PathBuf);
 
 impl Scratch {
-    fn create() -> Result<Self, String> {
-        let dir = std::env::temp_dir().join(format!("celeris-review-policy-{}", ulid::Ulid::new()));
+    pub(crate) fn create(prefix: &str) -> Result<Self, String> {
+        let dir = std::env::temp_dir().join(format!("{prefix}-{}", ulid::Ulid::new()));
         std::fs::create_dir_all(&dir).map_err(|e| format!("一時 dir を作れない: {e}"))?;
         Ok(Scratch(dir))
     }

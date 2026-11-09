@@ -2,8 +2,10 @@
 
 use super::*;
 
-use crate::health_review::policy::{CHECKER_SCRIPT, REVIEW_POLICY_SCHEMA};
+use crate::health_review::gate::REPORT_SCHEMA;
+use crate::health_review::policy::REVIEW_POLICY_SCHEMA;
 use task_core::SqliteStore;
+use task_core::required_checks::health::CHECKER_SCRIPT;
 
 const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 

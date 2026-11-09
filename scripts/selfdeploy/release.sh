@@ -585,6 +585,12 @@ write_changes_json "$STAGE/changes.json"
 # verify.sh の helper（snapshot_db.py）も写す。必須の file が無ければ sd_die（sd_bundle_selfdeploy_scripts、lib.sh）。
 sd_bundle_selfdeploy_scripts "$BUILD/scripts/selfdeploy" "$STAGE/scripts"
 
+# ADR 2026-11-08-health-enforcement-loop D1.4: repo health の検査器（profiles/ を除く）を <release>/repo-health/ に同梱し、
+# CHECKER_TREE（tree id と blob id の 2 行）を書く。base に検査器の無い repo は daemon がこれを使う。
+# 写せなければ sd_die（release を失敗にする。lib.sh の sd_bundle_repo_health）。
+sd_bundle_repo_health "$BUILD" "$STAGE/repo-health"
+sd_log "repo-health: bundled the checker into $STAGE/repo-health ($(tr '\n' ' ' <"$STAGE/repo-health/CHECKER_TREE"))"
+
 BUNDLE_JSON="{\"secs\": $(sd_secs_since "$BUNDLE_T0"), \"web_bundle_secs\": $WEB_BUNDLE_SECS, \"release_total_secs\": $(sd_secs_since "$RELEASE_T0")}"
 write_gate_json "$STAGE/gate.json"
 

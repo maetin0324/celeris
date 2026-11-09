@@ -1042,6 +1042,13 @@ export type Check = {
   "type": "human";
 };
 
+export type CheckerId = {
+  "sha256": string;
+  "source": CheckerSource;
+};
+
+export type CheckerSource = "base" | "bundled";
+
 export type Checkpoint = {
   "artifact_refs"?: Array<CheckpointArtifactRef>;
   "completed"?: Array<string>;
@@ -2820,6 +2827,7 @@ export type Event = {
   "cmd": string;
   "duration_ms": number;
   "exit"?: number | null;
+  "health"?: HealthEvidence | null;
   "index": number;
   "key": string;
   "pass": boolean;
@@ -2841,6 +2849,7 @@ export type Event = {
   "cmd": string;
   "duration_ms": number;
   "exit"?: number | null;
+  "health"?: HealthEvidence | null;
   "index": number;
   "key": string;
   "pass": boolean;
@@ -3428,6 +3437,24 @@ export type Health = {
   "schema_version": number;
   "started_at": string;
 };
+
+export type HealthEvidence = {
+  "base_sha": string;
+  "blocking"?: Array<string>;
+  "checker"?: CheckerId | null;
+  "head_sha": string;
+  "head_tree": string;
+  "policy_sha256": string;
+  "reason"?: string | null;
+  "repo_id": RepoId;
+  "report_sha256": string;
+  "reused_from"?: string | null;
+  "reviewable": boolean;
+  "tool_version": string;
+  "verdict": HealthVerdict;
+};
+
+export type HealthVerdict = "pass" | "fail" | "error" | "policy_only" | "not_applicable";
 
 export type HumanAttestation = {
   "payload": string;
@@ -4441,6 +4468,7 @@ export type Permissions = {
 
 export type PhaseCheckResult = {
   "cmd": string;
+  "health"?: HealthEvidence | null;
   "pass": boolean;
   "summary": string;
 };

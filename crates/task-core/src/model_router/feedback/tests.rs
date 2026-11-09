@@ -226,6 +226,7 @@ fn routing_outcome_reads_work_unit_checks_by_run() {
         exit: Some(if pass { 0 } else { 1 }),
         timed_out: false,
         duration_ms: 1,
+        health: None,
     };
     let base = vec![
         started("r1"),

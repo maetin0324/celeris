@@ -490,6 +490,7 @@ mod check_log_tests {
                     exit: Some(3),
                     timed_out: false,
                     duration_ms: 42,
+                    health: None,
                 },
             ),
             (3, started("w", 1, &p1)),

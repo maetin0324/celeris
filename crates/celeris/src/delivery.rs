@@ -6,6 +6,7 @@ use std::{
     process::{Command, Stdio},
     time::Duration,
 };
+use task_core::required_checks::health;
 use task_core::{
     Delivery, DeliveryState as State, Event, Message, MessageId, MessageRole, RepairClass, Status,
     StoreError, TaskStore, Trigger, WorkUnitKind, WorkUnitStatus,
@@ -203,6 +204,19 @@ fn has_remote(repo: &Path, remote: &str) -> bool {
 }
 
 pub fn tick(store: &dyn TaskStore, config: &Config, now: OffsetDateTime) -> Result<(), StoreError> {
+    // ADR 2026-11-08-health-enforcement-loop D1.2: 同梱の検査器（process に 1 回設定する OnceLock）を読むのは
+    // ここだけ。以降は引数で渡す（試験は OnceLock を共有せず、引数で同梱の検査器を与える）。
+    let bundled = task_dispatch::health_review::gate::bundled_checker().map(|b| &b.id);
+    tick_with(store, config, now, bundled)
+}
+
+/// [`tick`] の本体。`bundled` は同梱の検査器（[`check_required_evidence`] の適用判定に使う）。
+fn tick_with(
+    store: &dyn TaskStore,
+    config: &Config,
+    now: OffsetDateTime,
+    bundled: Option<&health::CheckerId>,
+) -> Result<(), StoreError> {
     for delivery in store.delivery_list()? {
         // ADR-0079 D6（Phase R1c）: 木の子 task は main に取り込まない（`task_ops::delivery::begin` が行を
         // 作らない。旧い行が残っていても merge / release に進めない保険）。
@@ -217,7 +231,7 @@ pub fn tick(store: &dyn TaskStore, config: &Config, now: OffsetDateTime) -> Resu
             .project_get(delivery.project_id)?
             .is_some_and(|p| p.auto_integrate)
         {
-            advance(store, config, &delivery, now)?;
+            advance(store, config, &delivery, now, bundled)?;
         }
     }
     Ok(())
@@ -270,10 +284,17 @@ fn check_candidate(repo: &Path, d: &Delivery) -> Result<Candidate, String> {
 /// ADR 2026-10-23-required-checks-bound-to-candidate: 候補の HEAD にある必須検査（`workspace.toml` の
 /// `[commands] check`。`mode = prototype` は review と同じく空）が、この配送の基底・候補に束縛された
 /// 合格の証跡（`RequiredChecksEvaluated`）で満たされているかを照合する。内側の `Err` は再 review の理由。
+///
+/// ADR 2026-11-08-health-enforcement-loop D1.2・D2.6: 基底（`target_sha`）の事実と引数の同梱の検査器 `bundled`
+/// で適用判定（[`health::applicability`]）を呼ぶ。`Applies` なら health の項目の証跡（候補の tree・検査器の版・
+/// Pass）を必須にし、`NotApplicable` なら要らない。`Unavailable` は再 review の理由にする（合格にしない）。
+/// 案件・repo 名・`self_improve`・selfdeploy・task の mode では分岐しない（`mode = prototype` が外すのは
+/// `workspace.toml` の必須検査だけ）。
 fn check_required_evidence(
     store: &dyn TaskStore,
     repo: &Path,
     d: &Delivery,
+    bundled: Option<&health::CheckerId>,
 ) -> Result<Result<(), String>, StoreError> {
     let (Some(target), Some(reviewed)) = (&d.target_sha, &d.reviewed_sha) else {
         return Ok(Err("検査済みの基底・候補が記録されていません".into()));
@@ -291,13 +312,43 @@ fn check_required_evidence(
             Err(reason) => return Ok(Err(reason)),
         }
     };
+    // 配送の行は Celeris が手元で統合する作業ツリーだけにある（remote workspace は配送しない。ADR-0079 D5）。
+    let facts = health::repo_facts(true, target, bundled, |args| git_text(repo, args));
+    let checker = match health::applicability(&facts) {
+        health::HealthApplicability::Applies { checker } => Some(checker),
+        health::HealthApplicability::NotApplicable { .. } => None,
+        health::HealthApplicability::Unavailable { reason } => {
+            return Ok(Err(format!(
+                "基底 {target} の repo health を評価できません（{reason}）"
+            )));
+        }
+    };
+    let reviewed_tree = match &checker {
+        Some(_) => match git_text(repo, &["rev-parse", &format!("{reviewed}^{{tree}}")]) {
+            Ok(tree) => tree,
+            Err(e) => return Ok(Err(format!("候補 {reviewed} の tree を読めません: {e}"))),
+        },
+        None => String::new(),
+    };
+    let requirement = match &checker {
+        Some(checker) => task_core::required_checks::HealthRequirement::Applies {
+            checker,
+            reviewed_tree: &reviewed_tree,
+        },
+        None => task_core::required_checks::HealthRequirement::NotRequired,
+    };
     let events: Vec<Event> = store
         .events_for(d.task_id)?
         .into_iter()
         .map(|(_, e)| e)
         .collect();
     Ok(task_core::required_checks::verify_required_checks(
-        &events, d.repo_id, target, reviewed, &required,
+        &events,
+        d.repo_id,
+        target,
+        reviewed,
+        &required,
+        requirement,
     ))
 }
 
@@ -580,11 +631,38 @@ fn make_repair(
     Ok(Some(key))
 }
 
+/// ADR-0118 D4: ff を試みる前の照合。target 再進行・候補の不一致は ff-only を試みずに再レビューへ戻す。
+/// ref を読めない失敗は従来どおり merge_reviewed の失敗（局所修復の対象）に任せる（`None`）。
+/// 再レビューに戻すなら `(既定ブランチの SHA, 理由)` を返す。
+fn rereview_before_merge(
+    store: &dyn TaskStore,
+    repo: &Path,
+    old: &Delivery,
+    bundled: Option<&health::CheckerId>,
+) -> Result<Option<(String, String)>, StoreError> {
+    match check_candidate(repo, old) {
+        Ok(Candidate::Stale { target, reason }) => Ok(Some((target, reason))),
+        // ADR 2026-10-23-required-checks-bound-to-candidate: 検査済みの候補でも、必須検査の証跡が
+        // 現在の基底・候補に束縛されていなければ ff を試みず再 review（再実行は同じ束縛の合格を再利用）。
+        Ok(Candidate::Fresh) if old.merge_candidate_sha.is_some() => {
+            let Err(reason) = check_required_evidence(store, repo, old, bundled)? else {
+                return Ok(None);
+            };
+            let target =
+                sha(repo, &format!("refs/heads/{}", old.default_branch)).unwrap_or_default();
+            Ok(Some((target, reason)))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// `bundled` は同梱の検査器（[`tick`] が読んで渡す。[`check_required_evidence`] の適用判定に使う）。
 fn advance(
     store: &dyn TaskStore,
     config: &Config,
     old: &Delivery,
     now: OffsetDateTime,
+    bundled: Option<&health::CheckerId>,
 ) -> Result<(), StoreError> {
     // ADR-0051 Phase 106追記: mergeが既に済んでいてpushが未成功・未再試行なら、状態遷移とは独立に
     // 1度だけ再試行する（`old` を最新の永続状態に差し替えてから通常の遷移へ進む）。
@@ -629,22 +707,8 @@ fn advance(
             }
         }
         State::MergeQueued => {
-            // ADR-0118 D4: target 再進行・候補の不一致は ff-only を試みずに再レビューへ戻す。
-            // ref を読めない失敗は従来どおり merge_reviewed の失敗（局所修復の対象）に任せる。
-            match check_candidate(repo, old) {
-                Ok(Candidate::Stale { target, reason }) => {
-                    return request_rereview(store, old, &target, &reason);
-                }
-                // ADR 2026-10-23-required-checks-bound-to-candidate: 検査済みの候補でも、必須検査の証跡が
-                // 現在の基底・候補に束縛されていなければ ff を試みず再 review（再実行は同じ束縛の合格を再利用）。
-                Ok(Candidate::Fresh) if old.merge_candidate_sha.is_some() => {
-                    if let Err(reason) = check_required_evidence(store, repo, old)? {
-                        let target = sha(repo, &format!("refs/heads/{}", old.default_branch))
-                            .unwrap_or_default();
-                        return request_rereview(store, old, &target, &reason);
-                    }
-                }
-                _ => {}
+            if let Some((target, reason)) = rereview_before_merge(store, repo, old, bundled)? {
+                return request_rereview(store, old, &target, &reason);
             }
             d.state = State::Merging;
             if !store.delivery_save(Some(old), &d)? {

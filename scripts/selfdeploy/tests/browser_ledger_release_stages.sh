@@ -155,6 +155,11 @@ chmod +x "$repo/scripts/selfdeploy/"*.sh
 mkdir -p "$repo/scripts/dev" "$repo/tools/nextest"
 cp "$here/../dev/test-parallel.sh" "$repo/scripts/dev/"
 cp "$here/../dev/source-size-report.py" "$repo/scripts/dev/"
+# test-parallel.sh が読む helper と、release.sh が同梱する検査器（sd_bundle_repo_health は repo_health.py と
+# source-size-report.py の無い build を失敗にする）。
+mkdir -p "$repo/scripts/dev/lib" "$repo/scripts/dev/repo-health"
+cp "$here/../dev/lib/test-tmp-lifecycle.sh" "$repo/scripts/dev/lib/"
+cp "$here/../dev/repo-health/repo_health.py" "$repo/scripts/dev/repo-health/"
 cp "$here/../../tools/nextest/VERSION" "$repo/tools/nextest/"
 . "$here/tests/fixtures/web-release.sh"
 git init -q "$repo"
@@ -173,6 +178,11 @@ chmod +x "$repo/scripts/selfdeploy/"*.sh
 mkdir -p "$repo/scripts/dev" "$repo/tools/nextest"
 cp "$here/../dev/test-parallel.sh" "$repo/scripts/dev/"
 cp "$here/../dev/source-size-report.py" "$repo/scripts/dev/"
+# test-parallel.sh が読む helper と、release.sh が同梱する検査器（sd_bundle_repo_health は repo_health.py と
+# source-size-report.py の無い build を失敗にする）。
+mkdir -p "$repo/scripts/dev/lib" "$repo/scripts/dev/repo-health"
+cp "$here/../dev/lib/test-tmp-lifecycle.sh" "$repo/scripts/dev/lib/"
+cp "$here/../dev/repo-health/repo_health.py" "$repo/scripts/dev/repo-health/"
 cp "$here/../../tools/nextest/VERSION" "$repo/tools/nextest/"
 . "$here/tests/fixtures/web-release.sh"
 git init -q "$repo"

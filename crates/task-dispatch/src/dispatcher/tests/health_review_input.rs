@@ -5,7 +5,8 @@
 use super::target_sync::{bump_main_writing, commit_file, events_of, reviewing_task, set_check};
 use super::*;
 
-use crate::health_review::policy::{CHECKER_SCRIPT, REVIEW_POLICY_SCHEMA};
+use crate::health_review::policy::REVIEW_POLICY_SCHEMA;
+use task_core::required_checks::health::CHECKER_SCRIPT;
 use task_worker::protocol::HealthReviewInput;
 
 const DIGEST: &str = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";

@@ -53,6 +53,7 @@ WorkUnit `g2-sites`（task 01M6ZDF9Q4BWD9DX6S9KX3KKS1、unit loop-points の子�
   - `cargo nextest run -p celeris-campaign --no-fail-fast -E 'test(/dagbench/) | binary(/dagbench/)'`: `crates/campaign/src/dagbench/celeris_side.rs` の `Dispatcher::new` の前で stub を設定すると `139 tests run: 139 passed`。
   - したがって 83 件は「試験の土台・dagbench の driver が同梱の検査器を持たない」ことだけで落ちる。直す場所は範囲外の上の 2 file（と、値で渡すなら `dispatcher.rs`・daemon の構築）。
 - 前回の run は `result.json` に `yield.plan_issue` を書かずに done を返したため、replan の申告が届かず、check の `test-affected.sh` が exit 100 で落ちた。2 回目の run は `yield.plan_issue` で申告し直した。
+- 3 回目の run（2026-11-09）: 計画（`artifacts/execution-plan.json`）は 2 回目の申告より前の物のままで、g2-sites の範囲は `crates/task-dispatch/src/health_review/**` と進捗 file だけだった。同じ HEAD で範囲の check・`CheckerSite::Base` 0 件・`health_enforce_g2_|health_review` 99 件・fmt・clippy が通ること、`dispatcher::tests::(target_sync|tree_branches)` が 39 件中 16 件落ちることを確かめ直した（原因は上と同じ）。コードは変えず、`yield.plan_issue` の申告と、範囲の扱い（g2-sites の範囲に試験の土台を足すか、別の unit を前に置くか）を人の決定（`decisions`）として出した。
 
 ## 未解決
 - 上の 83 件（task-dispatch 32・celeris-campaign 51）。直すには範囲外の path（下の「提案」）が要るので、この unit では直さない（範囲を広げない）。`crates/campaign/src/dagbench/celeris_side.rs` は試験だけでなく dagbench の計測の driver でもあるので、計測でも同梱の検査器が要る。

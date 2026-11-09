@@ -15,8 +15,9 @@ use crate::dispatcher::tests::{dispatcher, done_adapter, new_task};
 use crate::health_review::input::{
     CandidateRepo, HEALTH_INPUT_TIMEOUT, HealthInputWork, build_health_input,
 };
-use crate::health_review::policy::{CHECKER_SCRIPT, REVIEW_POLICY_SCHEMA};
+use crate::health_review::policy::REVIEW_POLICY_SCHEMA;
 use crate::review::RequiredRepoResult;
+use task_core::required_checks::health::CHECKER_SCRIPT;
 
 pub(super) const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 pub(super) const POLICY_FILE: &str = "scripts/dev/repo-health/profiles/celeris.toml";

@@ -180,6 +180,7 @@ pub(crate) async fn run_integration_checks(
                 exit: outcome.exit,
                 timed_out: outcome.timed_out,
                 duration_ms,
+                health: None,
             },
             None => Event::IntegrationCheckFinished {
                 work_unit_id: observed.work_unit_id.clone(),
@@ -191,6 +192,7 @@ pub(crate) async fn run_integration_checks(
                 exit: outcome.exit,
                 timed_out: outcome.timed_out,
                 duration_ms,
+                health: None,
             },
         };
         if let Err(e) = store.append_event(task_id, &finished) {
@@ -1489,10 +1491,9 @@ impl Dispatcher {
             checks: run
                 .checks
                 .iter()
-                .map(|(cmd, pass, summary)| task_core::PhaseCheckResult {
-                    cmd: cmd.clone(),
-                    pass: *pass,
-                    summary: summary.clone(),
+                // The health evidence of a phase integration lives in IntegrationCheckFinished only.
+                .map(|(cmd, pass, summary)| {
+                    task_core::PhaseCheckResult::new(cmd.clone(), *pass, summary.clone())
                 })
                 .collect(),
         };

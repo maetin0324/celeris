@@ -5,7 +5,8 @@
 
 use super::*;
 
-use crate::health_review::policy::{CHECKER_SCRIPT, REVIEW_POLICY_SCHEMA};
+use crate::health_review::policy::REVIEW_POLICY_SCHEMA;
+use task_core::required_checks::health::CHECKER_SCRIPT;
 
 pub(super) const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 pub(super) const STORE_PATH: &str = "crates/task-store/src/rows.rs";

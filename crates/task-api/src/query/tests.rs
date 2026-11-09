@@ -140,6 +140,7 @@ fn tree_event_types_match_their_serde_names() {
             exit: Some(0),
             timed_out: false,
             duration_ms: 12,
+            health: None,
         },
         Event::StallDetected {
             task_id: child,

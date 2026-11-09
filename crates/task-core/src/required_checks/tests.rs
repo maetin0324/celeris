@@ -13,6 +13,7 @@ fn evidence(repo: RepoId, target: &str, reviewed: &str, results: &[(&str, bool)]
                 cmd: (*cmd).into(),
                 pass: *pass,
                 summary: String::new(),
+                health: None,
             })
             .collect(),
     }

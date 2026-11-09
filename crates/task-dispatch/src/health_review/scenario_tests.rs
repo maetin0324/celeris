@@ -13,10 +13,10 @@
 use super::*;
 
 use crate::health_review::policy::{
-    CHECKER_DIR, CHECKER_SCRIPT, CHECKER_SIDE_FILES, REVIEW_POLICY_SCHEMA, REVIEW_POLICY_TIMEOUT,
-    load_review_policy,
+    REVIEW_POLICY_SCHEMA, REVIEW_POLICY_TIMEOUT, load_review_policy,
 };
 use task_core::design_review::{ReviewPolicyState, RiskLevel};
+use task_core::required_checks::health::{CHECKER_DIR, CHECKER_SCRIPT, CHECKER_SIDE_FILES};
 use task_worker::protocol::HealthReviewInput;
 
 const DIGEST: &str = "5ce7a210000000000000000000000000000000000000000000000000000000ab";

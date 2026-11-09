@@ -120,7 +120,16 @@ closeout が ADR の付記に写すための一覧。詳しい理由は各 unit 
 - config・DB の表・migration の変更は無い。event には任意欄を足しただけで、旧い event はそのまま読める。
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
-（検査の後に書く）
+この unit はコードを変えていない（変えた path はこの file だけ。`sh "$CELERIS_WU_SCOPE_PATHS"` の出力もこの file の 1 行）。下の検査は「G3 evidence record: evidence の記録と提出時の検査」の commit で実行した。その後の commit は、この節を書いた差分だけ。
+- `env -u CELERIS_WU_BASE bash scripts/dev/test-affected.sh` → exit 0（607 秒）。基準は `git merge-base HEAD main` で、task 全体の変更が対象。
+  - 対象: crate 14 個（celeris・celeris-campaign・celeris-credentiald・celeris-mcp・celeris-script・celerisctl・e2e・llm-proxy・routing-eval・task-api・task-core・task-dispatch・task-ops・task-worker）、web の型検査と unit 試験、test-ts-verify。
+  - check-health: `verdict=pass exit=0 reviewable=false findings=718 fail_grade=0 new=1 worsened=0 existing=717`。new の 1 件は warning の `dup.contract`（`required_checks/health.rs` の `UnavailableReason` と `route_select/availability.rs` の同名の型。core-types の変更で、合否には使わない。「loop-points への引き継ぎ」に書いた）。必須 rule はすべて pass、`policy.changed` も pass。
+  - `repo_health_gate: all checks passed`（ci.sh の場合を含む 7 項目）。
+  - nextest: `8032 tests run: 8032 passed (10 slow), 23 skipped`。web: `Test Files 104 passed`・`Tests 711 passed`。`test-ts-verify: 20 passed, 0 failed`。
+- `cargo nextest run -p task-core -p task-dispatch -p celeris -E 'test(/health_evidence_/)'` → exit 0、`51 tests run: 51 passed`。
+- `cargo clippy --workspace -- -D warnings` → exit 0（vendored `deno_core` の既存の warning 1 件だけ）。
+- `cargo fmt --all -- --check` → exit 0。
+- 文書の検査 3 本: `bash scripts/dev/check-doc-links.sh` → `check-doc-links: ok`、`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → `check-doc-layout: ok`、`sh scripts/dev/progress-index.sh --check` → `progress-index --check: ok`（3 本とも exit 0。この節を書いた後の HEAD でも再実行した）。
 
 ## 未解決
 - 無し（経路への配線は loop-points の範囲）。

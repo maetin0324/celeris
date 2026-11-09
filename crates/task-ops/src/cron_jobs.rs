@@ -105,6 +105,11 @@ pub const CRON_KIND_COS_REVIEW: &str = "cos_review";
 /// ADR 2026-11-04-project-controller A1: 案件の controller の定期の再評価。task も chat も作らず、発火ごとに
 /// 案件の wake（`cron:<job>:<予定時刻>`）を 1 件積む（`extra.project_id` が対象。積むのは dispatcher）。
 pub const CRON_KIND_PROJECT_RECONCILE: &str = "project_reconcile";
+pub use health_inventory::CRON_KIND_HEALTH_INVENTORY;
+pub use input_kind::{INPUT_KIND_TASK_FIELDS, template_project_id, validate_input_kind};
+
+mod health_inventory;
+mod input_kind;
 
 /// job が発火で作るもの。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +120,8 @@ pub enum CronJobKind {
     CosReview,
     /// 案件の controller に再評価の wake を積む（ADR 2026-11-04-project-controller A1）。
     ProjectReconcile,
+    /// 案件の repo の健全性の棚卸しを積む（ADR 2026-11-08-health-enforcement-loop (6)）。
+    HealthInventory,
 }
 
 /// 雛形の `extra["kind"]` を読む（無ければ [`CronJobKind::Task`]）。
@@ -125,82 +132,31 @@ pub fn template_kind(template: &CronTaskTemplate) -> Result<CronJobKind, String>
         Some(v) if v.as_str() == Some(CRON_KIND_PROJECT_RECONCILE) => {
             Ok(CronJobKind::ProjectReconcile)
         }
+        Some(v) if v.as_str() == Some(CRON_KIND_HEALTH_INVENTORY) => {
+            Ok(CronJobKind::HealthInventory)
+        }
         Some(v) => Err(format!(
-            "template extra.kind must be {CRON_KIND_COS_REVIEW:?}, {CRON_KIND_PROJECT_RECONCILE:?} or absent, got {v}"
+            "template extra.kind must be {CRON_KIND_COS_REVIEW:?}, {CRON_KIND_PROJECT_RECONCILE:?}, {CRON_KIND_HEALTH_INVENTORY:?} or absent, got {v}"
         )),
     }
 }
 
-/// `project_reconcile` の雛形の検証: `cos_review` と同じく task の欄は書けず、重ね掛けは `skip` だけ。
+/// `project_reconcile` の雛形の検証: task を作らない種類の共通の検証（[`validate_input_kind`]）と、
 /// `extra.project_id` は必須（文字列）。
 fn validate_project_reconcile(job: &CronJob) -> Result<(), OpsError> {
-    let t = &job.template;
-    let task_fields = [
-        ("acceptance", !t.acceptance.is_empty()),
-        ("assignee", t.assignee.is_some()),
-        ("harness", t.harness.is_some()),
-        ("lane", t.lane.is_some()),
-        ("project", t.project.is_some()),
-        ("repos", !t.repos.is_empty()),
-        ("priority", t.priority.is_some()),
-        ("extra.mode", t.extra.contains_key("mode")),
-        ("extra.action", t.extra.contains_key("action")),
-    ];
-    if let Some((field, _)) = task_fields.iter().find(|(_, set)| *set) {
-        return Err(OpsError::Validation(format!(
-            "template.{field} is a task field; a {CRON_KIND_PROJECT_RECONCILE} job does not create a task"
-        )));
-    }
-    if job.overlap != CronOverlap::Skip {
-        return Err(OpsError::Validation(format!(
-            "a {CRON_KIND_PROJECT_RECONCILE} job must use overlap \"skip\""
-        )));
-    }
-    if reconcile_project_id(job).is_none() {
-        return Err(OpsError::Validation(format!(
-            "a {CRON_KIND_PROJECT_RECONCILE} job needs template.extra.project_id (a string)"
-        )));
-    }
-    Ok(())
+    validate_input_kind(job, CRON_KIND_PROJECT_RECONCILE)?;
+    input_kind::require_project_id(job, CRON_KIND_PROJECT_RECONCILE).map(|_| ())
 }
 
-/// `project_reconcile` の対象の案件 id（`extra.project_id`）。
+/// `project_reconcile` の対象の案件 id（`extra.project_id`。読み取りは [`template_project_id`]）。
 pub fn reconcile_project_id(job: &CronJob) -> Option<String> {
-    job.template
-        .extra
-        .get("project_id")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
+    template_project_id(job)
 }
 
-/// `cos_review` の雛形の検証: task の欄（acceptance・担当・分野・lane・案件・repo・優先度・mode・action）は
-/// 使わないので書けない。重ね掛けは `skip` だけ（溜めた入力は CoS の待ち行列にあるので `queue` は持たない）。
+/// `cos_review` の雛形の検証: task を作らない種類の共通の検証（[`validate_input_kind`]）と、題は空にできない。
 fn validate_cos_review(job: &CronJob) -> Result<(), OpsError> {
-    let t = &job.template;
-    let task_fields = [
-        ("acceptance", !t.acceptance.is_empty()),
-        ("assignee", t.assignee.is_some()),
-        ("harness", t.harness.is_some()),
-        ("lane", t.lane.is_some()),
-        ("project", t.project.is_some()),
-        ("repos", !t.repos.is_empty()),
-        ("priority", t.priority.is_some()),
-        ("extra.mode", t.extra.contains_key("mode")),
-        ("extra.action", t.extra.contains_key("action")),
-    ];
-    if let Some((field, _)) = task_fields.iter().find(|(_, set)| *set) {
-        return Err(OpsError::Validation(format!(
-            "template.{field} is a task field; a {CRON_KIND_COS_REVIEW} job does not create a task"
-        )));
-    }
-    if job.overlap != CronOverlap::Skip {
-        return Err(OpsError::Validation(format!(
-            "a {CRON_KIND_COS_REVIEW} job must use overlap \"skip\""
-        )));
-    }
-    if t.title.trim().is_empty() {
+    validate_input_kind(job, CRON_KIND_COS_REVIEW)?;
+    if job.template.title.trim().is_empty() {
         return Err(OpsError::Validation(
             "template.title must not be blank".into(),
         ));
@@ -237,6 +193,16 @@ pub trait CronInputSink {
         Err(format!(
             "{CRON_KIND_PROJECT_RECONCILE} wakes are posted only by the daemon tick"
         ))
+    }
+
+    /// `health_inventory` の 1 回の発火: 案件 `project_id` の棚卸しを積む（同じ予定時刻は 1 件）。
+    fn post_health_inventory(
+        &mut self,
+        _job: &CronJob,
+        _scheduled_for: OffsetDateTime,
+        _project_id: &str,
+    ) -> Result<CronInputPost, String> {
+        Err(health_inventory::no_sink())
     }
 }
 
@@ -473,6 +439,7 @@ pub fn validate_job(
         CronJobKind::Task => build_task(store, ctx, job, now, now).map(|_| ()),
         CronJobKind::CosReview => validate_cos_review(job),
         CronJobKind::ProjectReconcile => validate_project_reconcile(job),
+        CronJobKind::HealthInventory => health_inventory::validate(job),
     }
 }
 
@@ -779,7 +746,9 @@ pub fn fire_job(
             CronJobKind::Task => decide_fire(store, ctx, job, due.latest, trigger, now)?,
             // 積んでから履歴と `next_fire_at` を書く。間で落ちても、再起動後の同じ予定時刻の発火は
             // sink の冪等キーで同じ入力に束なる（ADR 2026-10-27-cron-cos-review D3）。
-            CronJobKind::CosReview | CronJobKind::ProjectReconcile => (
+            CronJobKind::CosReview
+            | CronJobKind::ProjectReconcile
+            | CronJobKind::HealthInventory => (
                 decide_post(store, sink, job, due.latest, trigger, now)?,
                 None,
             ),
@@ -837,6 +806,9 @@ pub fn check_manual_run(job: &CronJob) -> Result<(), OpsError> {
         return Err(OpsError::Validation(format!(
             "a {CRON_KIND_PROJECT_RECONCILE} job fires only on its schedule (the daemon tick posts the wake)"
         )));
+    }
+    if kind == CronJobKind::HealthInventory {
+        return Err(health_inventory::manual_run_refused());
     }
     if kind == CronJobKind::CosReview {
         return Err(OpsError::Validation(format!(
@@ -929,7 +901,8 @@ fn decide_fire(
     }
 }
 
-/// `cos_review` の 1 回の発火: sink に入力を積ませ、その結果を履歴 1 行にする（task は作らない）。
+/// task を作らない種類（`cos_review`・`project_reconcile`・`health_inventory`）の 1 回の発火: sink に入力を
+/// 積ませ、その結果を履歴 1 行にする（task は作らない）。
 fn decide_post(
     store: &dyn TaskStore,
     sink: &mut dyn CronInputSink,
@@ -946,6 +919,7 @@ fn decide_post(
             Some(project) => sink.post_project_reconcile(job, scheduled_for, &project),
             None => Err("template.extra.project_id is missing".into()),
         },
+        CronJobKind::HealthInventory => health_inventory::post(sink, job, scheduled_for),
         _ => sink.post_cos_review(job, scheduled_for, previous),
     };
     let (outcome, detail) = match posted {
@@ -1092,5 +1066,7 @@ fn format_time(t: OffsetDateTime) -> String {
         .unwrap_or_else(|_| t.to_string())
 }
 
+#[cfg(test)]
+mod health_inventory_tests;
 #[cfg(test)]
 mod tests;

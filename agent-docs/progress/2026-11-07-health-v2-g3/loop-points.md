@@ -121,7 +121,16 @@ closeout が ADR の付記に写すための一覧。1〜3 は ADR の「状態�
 - evidence と loop-points は同じ release に入れる（ADR の「本番への移行」）。loop-points の前の evidence だけでは、review が health の項目を記録しないので配送が再 review に戻る。
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
-（提出時の検査の後に書く）
+この unit はコードを変えていない（変えた path はこの file と ADR の 1 行だけ）。下の検査は「G3 loop-points record: loop-points の記録・ADR の付記と提出時の検査」の commit で実行した。その後の commit は、この節を書いた差分だけ。`$CELERIS_WU_BASE` はこの WU の開始時の HEAD と同じ tree なので、test-affected は `env -u CELERIS_WU_BASE` で task 全体の変更を対象にした。
+- `env -u CELERIS_WU_BASE bash scripts/dev/test-affected.sh` → exit 0（643 秒）。
+  - 対象: crate 14 個（celeris・celeris-campaign・celeris-credentiald・celeris-mcp・celeris-script・celerisctl・e2e・llm-proxy・routing-eval・task-api・task-core・task-dispatch・task-ops・task-worker）、web の型検査と unit 試験、test-ts-verify。
+  - check-health: `verdict=pass exit=0 reviewable=false findings=718 fail_grade=0 new=1 worsened=0 existing=717`。必須 rule はすべて pass。new の 1 件は warning の `dup.contract`（`crates/task-core/src/required_checks/health.rs` の `UnavailableReason`。「limits への引き継ぎ」に書いた）。`repo_health_gate: all checks passed`。
+  - nextest: `8088 tests run: 8088 passed (11 slow), 23 skipped`。script bundle の SKIP は 0 件。web: `Test Files 104 passed`・`Tests 711 passed`。`test-ts-verify: 20 passed, 0 failed`。
+- `cargo nextest run -p task-core -p task-dispatch -p celeris --no-tests=fail -E 'test(/health_enforce_/)'` → exit 0、`52 tests run: 52 passed`。
+- `! grep -n 'CheckerSite::Base' crates/task-dispatch/src/health_review/input.rs crates/task-dispatch/src/health_review/policy.rs` → exit 0（0 件）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（vendored `deno_core` の既存の warning 1 件だけ）。
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- 文書の検査 3 本: `bash scripts/dev/check-doc-links.sh` → `check-doc-links: ok`、`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → `check-doc-layout: ok`、`sh scripts/dev/progress-index.sh --check` → `progress-index --check: ok`（3 本とも exit 0。この節を書いた後の HEAD でも再実行した）。`sh scripts/dev/check-adr-numbers.sh` も exit 0。
 
 ## 未解決
 1. review の Error で task が Blocked にならず Failed になる（上の「ADR との違い」4。limits へ引き継いだ）。

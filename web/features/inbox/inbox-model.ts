@@ -28,6 +28,7 @@ export const INBOX_KINDS: readonly InboxKind[] = [
   "release_unpromoted",
   "task_unscheduled",
   "review_resync_halted",
+  "health_repeat",
   "script_control",
 ];
 
@@ -55,6 +56,7 @@ export const KIND_LABELS: Record<InboxKind, string> = {
   release_unpromoted: "release が昇格されていない",
   task_unscheduled: "ready のまま起きない",
   review_resync_halted: "レビューの再同期が止まっている",
+  health_repeat: "修復の後も同じ health の指摘が残る",
   script_control: "script の自動の戻し・停止",
 };
 

@@ -183,6 +183,10 @@ pub use knowledge_run::{
     KnowledgeRun, KnowledgeRunState, KnowledgeRunStore, KnowledgeRunSummary, VIA_LANGMEM,
     via_fallback, via_is_fallback,
 };
+// ---- ADR 2026-11-08-health-enforcement-loop D4.3: health の指摘の往復（event の payload。events.rs の隣） ----
+#[path = "model/health_repeat.rs"]
+pub mod health_repeat;
+pub use health_repeat::HealthRepeatSite;
 // ---- ADR-0043 D5（Phase 54）: 変更の取り込み ----
 pub use integrations::{IntegrationId, IntegrationMethod, IntegrationState, TaskIntegration};
 pub use message::{

@@ -50,17 +50,28 @@ pub fn tree_depth(store: &dyn TaskStore, task: &Task) -> Result<u32, OpsError> {
 
 /// 木の根の ID。
 pub fn tree_root(store: &dyn TaskStore, task: &Task) -> Result<TaskId, OpsError> {
-    let mut current = task.clone();
+    tree_root_by(task, |id| Ok(store.get(id)?.map(|t| t.parent_id)))
+}
+
+/// [`tree_root`] の辿り方（親を最大 64 段）。`parent_of(id)` は task `id` があればその `parent_id` を返す。
+/// 受信箱は読み込み済みの task の表で引く（`inbox::health_repeat`）。
+pub fn tree_root_by<E>(
+    task: &Task,
+    mut parent_of: impl FnMut(TaskId) -> Result<Option<Option<TaskId>>, E>,
+) -> Result<TaskId, E> {
+    let mut current = task.id;
+    let mut parent = task.parent_id;
     for _ in 0..64 {
-        match current.parent_id {
-            Some(parent_id) => match store.get(parent_id)? {
-                Some(parent) => current = parent,
-                None => break,
-            },
+        let Some(parent_id) = parent else { break };
+        match parent_of(parent_id)? {
+            Some(grand) => {
+                current = parent_id;
+                parent = grand;
+            }
             None => break,
         }
     }
-    Ok(current.id)
+    Ok(current)
 }
 
 /// 根とその全子孫の `Event::WorkerStarted { role: None, .. }`（ワーカー run）の合計。

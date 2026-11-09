@@ -215,6 +215,18 @@ pub enum Event {
         repo_id: crate::RepoId,
         reason: String,
     },
+    /// ADR 2026-11-08-health-enforcement-loop D4.3: 修復の後も同じ health の指摘が残った（または消えた指摘が
+    /// 戻った）ので、源の task `source_task` を Blocked にして repair を起こさなかった。追記先は木の root
+    /// （`task_ops::inbox::health_repeat::record_findings_repeated`）。状態は変えない。受信箱 `health_repeat` の元
+    /// （`(root, set_sha256)` ごとに 1 件）。作るのは `Event::health_findings_repeated`（集合を正規化する）。
+    HealthFindingsRepeated {
+        source_task: TaskId,
+        site: crate::health_repeat::HealthRepeatSite,
+        /// 重複を除き辞書順。
+        fingerprints: Vec<String>,
+        /// `fingerprints` の集合の sha256（`crate::health_repeat::fingerprint_set_sha256`）。
+        set_sha256: String,
+    },
     /// ADR 2026-10-27-done-task-auto-reintegrate D3・D6: done の後に main が進んで unintegrated になった task を、
     /// stranded sweep が `Trigger::Rereview` で reviewing に戻した（遷移と同じ transaction）。`class` は
     /// `disjoint`（main 側の変更 file が task の差分と重ならない）か `overlap`。`attempt` は 1 始まり。

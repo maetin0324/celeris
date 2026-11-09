@@ -1,5 +1,5 @@
 ---
-tasks: [01M3YF3NS2EGTZD2BBWNPG1K28]
+tasks: [01M3YF3NS2EGTZD2BBWNPG1K28, 01M6ZDF99MKHFN57PN0H7G6Z9Z]
 ---
 # 定期実行（cron job）基盤と daily-curation — 運用手順（人が実行する）
 
@@ -335,3 +335,137 @@ $CELERISCTL cron --config "$CELERIS_CONFIG" list
 受信箱の決定論的な片付け（置き換え済み `failed` 子を attention から外す等）は `task_ops::inbox` に実装済みで、
 人の操作は不要（daemon 側で常時効く）。受信箱・通知の分離 task（`01M3YFCJKMNWQ13HRS52M5BSWW`）はこの規則を
 そのまま使う前提なので、同じ規則をそちらで重複実装しないこと。
+
+## 9. 全体棚卸し `health_inventory`（任意・既定で無効）
+
+- 対象: [ADR 2026-11-08 repo health の強制](../../agent-docs/adr/2026-11-08-health-enforcement-loop.md) の (6)。
+  記録は [agent-docs/progress/2026-11-07-health-v2-g3/inventory.md](../../agent-docs/progress/2026-11-07-health-v2-g3/inventory.md)。
+- 実行者: 人。job を作る・有効にする・止める操作は本番の挙動を変えるので、この節の手順どおり人が行う。
+
+### 9.1 何をするか
+
+発火ごとに、雛形の `project_id` の案件にある Git の repo（`kind = git`）を 1 つずつ棚卸しする。daemon の tick は
+棚卸しを始めるだけで、検査器は tick の外で走る。LLM・run・chat は起こさない。
+
+- 差分検査: repo の既定の branch の HEAD を head、同じ job で最後に評価できた行の head を base にして、task の review と
+  同じ適用判定・実行の口で repo health の検査器を走らせる。初回（評価できた行が無い）は base = head で、行を足すだけで
+  起票しない。検査器は base の `scripts/dev/repo-health/` があればそれ、無ければ release に同梱の検査器を使う。
+  ssh の remote workspace の repo は検査器を走らせない（`not_applicable`）。repo の ref・作業ツリーは変えない
+  （HEAD を読むだけ）。
+- 未変更 repo の省略: head の tree と検査器の版（`checker.sha256`）が最後に評価できた行と同じ repo は検査器を
+  走らせず、`unchanged` の行だけを足す。
+- 起票: 検査器が fail 級と判定した finding（証跡の `blocking`）だけを、1 件の finding につき 1 件の下書き（draft）の
+  task にする。label は `health-debt`、冪等キーは `health-debt:<repo_id>:<fingerprint>:<head_sha>`。同じ repo・
+  fingerprint の終端でない debt があれば起票しない。候補の finding（`dup.*` など）と検査器の例外の付いた finding は
+  起票しない。
+- 上限: 1 回の発火の起票は repo をまたいで 3 件まで。超えた数は行の `limit_remaining` に残る。次の発火では base が
+  進むので、残した finding は `existing` になり、後から自動では起票されない。
+- 書き換えを自動で始めない: 起票は draft だけで、人か CoS が受け入れるまで走らない。objective はその finding の
+  path だけを挙げ、計画・子 task・複数の debt をまとめた書き換えを作らない。
+- 重ね掛けは `skip` だけ。前回の棚卸しが走っている間の発火は `skipped_overlap` になる。
+- 手動実行はできない（`cron run`・Web の「手動実行」・`POST …/run` は 422。棚卸しを積めるのは daemon の tick だけ）。
+
+### 9.2 既定では無効
+
+- job は既定で作られない。`config/*.toml` の例にも `[[cron.seed]]` にも無いので、人が job を作るまで本番の挙動は
+  変わらない。
+- 前提: 表 `health_inventory_runs` を足す migration 0121 を含む release を [selfdeploy.md](selfdeploy.md) の手順で
+  昇格してあること（`GET /health` の `schema_version` が 121 以上）。config の変更は要らない。
+
+### 9.3 有効にする（人）
+
+今の Web の cron 画面（`/cron`・`/cron/<name>`）でできるのは、一覧と詳細の表示・「一時停止」・「再開」・「手動実行」
+だけで、job を作る操作は無い。そこで job は `celerisctl cron create`（中身は `POST /api/v1/cron-jobs`）で作り、
+確かめと有効化を Web で行う。本番では `[[cron.seed]]` は使えない（seed は `cron_jobs` 表が空のときだけ読まれ、
+`daily-curation` などの job がある本番では読まれない）。
+
+1. 停止中の job を作る。雛形に書くのは `title`・`kind`・`project_id` の 3 つだけ（案件は `project` でなく
+   `project_id` に書く）:
+
+   ```bash
+   export CELERISCTL="$HOME/.local/celeris/releases/<sha12>/bin/celerisctl"
+   export CELERIS_CONFIG="$HOME/.config/celeris/config.toml"
+   export PROJECT=<棚卸しする案件の ULID>   # Web の案件の画面か celerisctl project list で確認する
+
+   $CELERISCTL cron --config "$CELERIS_CONFIG" create \
+     --name health-inventory-agent-platform \
+     --schedule "0 5 * * 1" \
+     --timezone Asia/Tokyo \
+     --overlap skip \
+     --catch-up latest \
+     --enabled false \
+     --template "{\"title\":\"全体棚卸し\",\"kind\":\"health_inventory\",\"project_id\":\"${PROJECT}\"}"
+   ```
+
+   - 推奨の周期は週 1 回（例は毎週月曜 05:00 JST）。重ね掛けは `skip`（`queue` は 422）。
+   - 雛形に task の欄（`acceptance`・`assignee`・`harness`・`lane`・`project`・`repos`・`priority`・`mode`・`action`）を
+     書くと 422。`project_id` が無い・文字列でないときも 422。
+   - 1 つの案件に job は 1 件だけにする。同じ案件の job が 2 件あると、別の head で同じ fingerprint の debt を
+     二重に起票しうる（同じ head は冪等キーで防ぐ）。
+2. Web の「定期実行」（`/cron`）で作った job を開き、「仕事の雛形」を開いて `kind` が `health_inventory`、
+   `project_id` が対象の案件であることを確かめる。状態が「停止中」、「次回」が「予定なし」であること。
+3. 同じ画面で「再開」を押す。状態が「有効」になり、「次回」に日時が入ることを確かめる。
+
+### 9.4 止める（人）
+
+- Web の `/cron/<name>` で「一時停止」を押す。状態が「停止中」、「次回」が「予定なし」になる。走っている最中の
+  棚卸しは止まらず、最後の repo まで走って行を書く。もう一度動かすときは「再開」を押す。
+- job を消すときは §7 の `DELETE`（CLI と Web に削除の操作は無い）。表の行と起票された task は残る。作り直した job は
+  新しい job id になり、初回（base = head・起票なし）から始まる。
+
+### 9.5 確かめ方
+
+1. cron の履歴（Web の `/cron/<name>` の「実行履歴」、CLI は `cron history <name>`）には、始めたことだけが残る。
+   detail は `started the health inventory of project <案件 id>: <n> git repo(s)` で、outcome は `created`
+   （Web の表示は「タスクを作成」だが、task は作らない）。評価・省略・起票の数は書かない（評価は tick の後で終わるため）。
+   `skipped_overlap` は前回の棚卸しがまだ走っている。`error` は detail に理由がある。
+2. 発火ごとの数の正本は表 `health_inventory_runs`（repo ごとに 1 行、追記だけ）。API と Web の画面は無いので、
+   DB を読み取り専用で開いて集計する（`DB` は本番 `config.toml` の `[db].path` の値）:
+
+   ```bash
+   DB=<[db].path の値>
+   JOB=health-inventory-agent-platform
+   sqlite3 "file:$DB?mode=ro" "
+   SELECT scheduled_for,
+          count(*)                              AS repos,
+          sum(outcome = 'evaluated')            AS evaluated,
+          sum(outcome = 'unchanged')            AS unchanged,
+          sum(outcome = 'not_applicable')       AS not_applicable,
+          sum(json_array_length(task_ids_json)) AS filed,
+          sum(existing_skipped)                 AS existing_skipped,
+          sum(limit_remaining)                  AS limit_remaining
+   FROM health_inventory_runs
+   WHERE job_id = (SELECT id FROM cron_jobs WHERE name = '$JOB')
+   GROUP BY scheduled_for ORDER BY scheduled_for DESC LIMIT 5;"
+   ```
+
+   - `repos` が履歴の detail の `<n> git repo(s)` より少なければ、その repo の棚卸しか起票が失敗して行を書いていない。
+     daemon の log の `health inventory of a repo failed` を見る（次の発火で同じ base から評価し直す）。
+   - repo ごとの判定は次で読む。`verdict` が `error` の行は次の base に使われない（`reason` に理由。前回の head の
+     commit が repo から消えた場合も `error` が続く）:
+
+     ```bash
+     sqlite3 "file:$DB?mode=ro" "
+     SELECT scheduled_for, repo_id, outcome,
+            json_extract(evidence_json, '\$.verdict')  AS verdict,
+            json_extract(evidence_json, '\$.base_sha') AS base,
+            json_extract(evidence_json, '\$.head_sha') AS head,
+            json_array_length(json_extract(evidence_json, '\$.blocking')) AS blocking,
+            json_extract(evidence_json, '\$.reason')   AS reason
+     FROM health_inventory_runs
+     WHERE job_id = (SELECT id FROM cron_jobs WHERE name = '$JOB')
+     ORDER BY created_at DESC LIMIT 20;"
+     ```
+3. 起票された draft は Web の受信箱に「下書きの受け入れ」として出る（label `health-debt`、題と objective に repo・
+   rule_id・path・message）。発火ごとの task id は次で引き、Web の `/tasks/<task_id>` で開く:
+
+   ```bash
+   sqlite3 "file:$DB?mode=ro" "
+   SELECT r.scheduled_for, r.repo_id, t.value AS task_id
+   FROM health_inventory_runs r, json_each(r.task_ids_json) t
+   WHERE r.job_id = (SELECT id FROM cron_jobs WHERE name = '$JOB')
+   ORDER BY r.scheduled_for DESC;"
+   ```
+
+   受け入れた debt は通常の task として走る（routing・計画・review）。直さない debt は取り消す。取り消して終端に
+   なった debt は、head が変わってその fingerprint が再び new か worsened になったときだけ起票し直される。

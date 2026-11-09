@@ -30,8 +30,8 @@
 //! - `mod.rs`: `SqliteStore` の基盤（`open`/`open_with`/pragma 設定/`ReadPool`/`migrate`/`lock`/
 //!   `parse_id`/`NON_TERMINAL_SQL`）、`StoreError`・`StoreOptions` などの共有型と列値の変換
 //!   （`TaskStore` の実装は持たない）。
-//! - `migrations.rs`: `MIGRATION_0001..0033`（`include_str!` で読む SQL 本体）・`SCHEMA_VERSION`・
-//!   `apply_migration_version`/`migration_sql`（版数 → SQL の対応）。
+//! - `migrations.rs`: `SCHEMA_VERSION`・`apply_migration_version`（版数 → SQL の対応と飛ばす版数は
+//!   `crate::migration_registry` の表）。
 //! - `query.rs`: `TaskStore::list_page` 系の一覧部品（`ListFilter`・`ListOrder`・`Page`・
 //!   `CursorPayload`・cursor の符号化・`filter_predicate`・keyset 述語）。
 //! - `task_store.rs`: `trait TaskStore` の宣言。
@@ -185,12 +185,8 @@ mod trusted_devices;
 mod unblocks;
 mod write_sets;
 
+use crate::migration_registry::RESERVED_VERSIONS;
 pub use migrations::SCHEMA_VERSION;
-#[cfg(test)]
-use migrations::{
-    MIGRATION_0001, MIGRATION_0002, MIGRATION_0003, MIGRATION_0004, MIGRATION_0005, MIGRATION_0006,
-    MIGRATION_0007, MIGRATION_0008, MIGRATION_0009, MIGRATION_0010, MIGRATION_0011,
-};
 pub use query::{ListFilter, ListOrder, Page};
 pub use route_records::{
     RouteDecisionRow, StoredRouteDecision, StoredRouteJudgment, StoredRouteOutcome,
@@ -1020,7 +1016,7 @@ impl SqliteStore {
                 .collect::<Result<_, _>>()?
         };
         for version in 1..=SCHEMA_VERSION {
-            if applied.contains(&version) || migrations::RESERVED_VERSIONS.contains(&version) {
+            if applied.contains(&version) || RESERVED_VERSIONS.contains(&version) {
                 continue;
             }
             Self::apply_migration_version(conn, version)?;

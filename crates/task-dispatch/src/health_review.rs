@@ -11,6 +11,8 @@
 //!   run・完了の channel）を使う配線は `health_review/design_gate.rs` で、`dispatcher` の子 module として `#[path]` で読む。
 //! - [`input`]: final review の health 文脈を candidate SHA ごとに 1 回作る（D4）。
 //! - [`verdict`]: 構造化 health verdict の blocking を不合格にし repair/replan に写す（D5）。
+//! - `health_review/inventory.rs`: cron の全体棚卸しの runner（ADR 2026-11-08-health-enforcement-loop D6）。Dispatcher の欄
+//!   （Busy の印）が型を使うので、`dispatcher::cron_tick` の子 module として `#[path]` で読む。
 
 pub(crate) mod design;
 pub mod gate;

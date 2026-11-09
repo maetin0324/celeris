@@ -20,8 +20,8 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use task_core::RepoId;
 use task_core::required_checks::health::{
-    CHECKER_SCRIPT, CheckerId, CheckerSource, HealthEvidence, HealthVerdict, MAX_BLOCKING,
-    PROFILES_DIR, PolicyIdentity, base_has_file, checker_sha256, policy_sha256,
+    CHECKER_SCRIPT, CheckerId, CheckerSource, HealthBlockingDetail, HealthEvidence, HealthVerdict,
+    MAX_BLOCKING, PROFILES_DIR, PolicyIdentity, base_has_file, checker_sha256, policy_sha256,
 };
 use task_worker::protocol::HealthFindingCounts;
 
@@ -101,6 +101,9 @@ pub struct RepoHealthFinding {
     pub exception: Option<serde_json::Value>,
     #[serde(default)]
     pub evidence: Vec<RepoHealthEvidence>,
+    /// 判定根拠（[`HealthBlockingDetail::message`] に写す）。
+    #[serde(default)]
+    pub rationale: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -292,6 +295,7 @@ pub fn read_bundled_checker(dir: &Path) -> Result<BundledChecker, String> {
 /// D1.3: `repo` の `base..head` を `checker`（適用判定が返したもの）で 1 回評価し、証跡を作る。`timeout` は全体
 /// （git・検査器・policy の判定）の上限。評価できなければ verdict は [`HealthVerdict::Error`] で、`reason` に理由
 /// （`checker_not_run`・`report_missing`・`report_invalid`・`unknown`・`unsupported` など）を書く（J4）。
+/// [`run_health_check_with_details`] の説明を捨てる形。
 pub fn run_health_check(
     repo_id: RepoId,
     repo: &Path,
@@ -300,6 +304,20 @@ pub fn run_health_check(
     checker: &CheckerId,
     timeout: Duration,
 ) -> HealthEvidence {
+    run_health_check_with_details(repo_id, repo, base, head, checker, timeout).0
+}
+
+/// [`run_health_check`] と同じ 1 回の評価で、証跡と、`blocking` の fingerprint ごとの説明（同じ report の
+/// finding の rule_id・evidence の path・rationale。`blocking` の順）を返す。棚卸し（D6）の起票の文面に使う。
+/// 説明は判定の正本ではない（fail 級かは `blocking` だけが決める）。
+pub fn run_health_check_with_details(
+    repo_id: RepoId,
+    repo: &Path,
+    base: &str,
+    head: &str,
+    checker: &CheckerId,
+    timeout: Duration,
+) -> (HealthEvidence, Vec<HealthBlockingDetail>) {
     let mut evidence = HealthEvidence {
         repo_id,
         base_sha: base.to_string(),
@@ -315,11 +333,13 @@ pub fn run_health_check(
         reused_from: None,
         reviewable: false,
     };
-    if let Err(why) = evaluate(repo, checker, Instant::now() + timeout, &mut evidence) {
+    let mut details = Vec::new();
+    let deadline = Instant::now() + timeout;
+    if let Err(why) = evaluate(repo, checker, deadline, &mut evidence, &mut details) {
         evidence.verdict = HealthVerdict::Error;
         evidence.reason = Some(why);
     }
-    evidence
+    (evidence, details)
 }
 
 /// [`run_health_check`] の本体。読めた値から順に `evidence` に書き、評価できなければ理由を返す。
@@ -328,6 +348,7 @@ fn evaluate(
     checker: &CheckerId,
     deadline: Instant,
     evidence: &mut HealthEvidence,
+    details: &mut Vec<HealthBlockingDetail>,
 ) -> Result<(), String> {
     let git = |args: &[&str]| git_stdout(repo, args, deadline);
     let head_commit = format!("{}^{{commit}}", evidence.head_sha);
@@ -356,17 +377,19 @@ fn evaluate(
     let base = evidence.base_sha.clone();
     let ran = with_base_checker(repo, &base, site, deadline, |c| {
         evidence.base_sha = c.sha.clone();
-        judge(c, repo, deadline, evidence)
+        judge(c, repo, deadline, evidence, details)
     })?;
     ran.ok_or_else(|| "checker_missing: base に検査器が無い（適用判定と食い違う）".to_string())
 }
 
-/// 検査器で report を作り、D2.3 の値と D3.1 の判定を `evidence` に書く。
+/// 検査器で report を作り、D2.3 の値と D3.1 の判定を `evidence` に、`blocking` の説明を同じ report から
+/// `details` に書く。
 fn judge(
     c: &BaseChecker,
     repo: &Path,
     deadline: Instant,
     evidence: &mut HealthEvidence,
+    details: &mut Vec<HealthBlockingDetail>,
 ) -> Result<(), String> {
     let scratch = Scratch::create("celeris-health-gate")?;
     let out = scratch.0.join("report.json");
@@ -386,6 +409,7 @@ fn judge(
             blocking.sort();
             let over = blocking.len().saturating_sub(MAX_BLOCKING);
             blocking.truncate(MAX_BLOCKING);
+            *details = blocking_details(report, &blocking);
             evidence.blocking = blocking;
             let more = (over > 0).then(|| format!("（ほかに fail 級の finding が {over} 件）"));
             match judged.policy_files.filter(|files| !files.is_empty()) {
@@ -409,6 +433,31 @@ fn judge(
         }
     }
     Ok(())
+}
+
+/// `blocking` の fingerprint の説明（同じ report の finding。evidence の path は重複を除いて出た順）。
+fn blocking_details(report: &RepoHealthReport, blocking: &[String]) -> Vec<HealthBlockingDetail> {
+    blocking
+        .iter()
+        .filter_map(|fingerprint| {
+            let finding = report
+                .findings
+                .iter()
+                .find(|f| &f.fingerprint == fingerprint)?;
+            let mut paths: Vec<String> = Vec::new();
+            for path in finding.evidence.iter().filter_map(|e| e.path.as_ref()) {
+                if !paths.contains(path) {
+                    paths.push(path.clone());
+                }
+            }
+            Some(HealthBlockingDetail {
+                fingerprint: fingerprint.clone(),
+                rule_id: finding.rule_id.clone(),
+                paths,
+                message: finding.rationale.clone(),
+            })
+        })
+        .collect()
 }
 
 /// exit 2 の理由: 必須 rule のうち `error`・`unknown`・`unsupported` のもの（`<status>:<rule id>(<reason>)`）。
@@ -562,4 +611,4 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 #[path = "gate_tests.rs"]
-mod tests;
+pub(crate) mod tests;

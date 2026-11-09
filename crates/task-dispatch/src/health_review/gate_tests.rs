@@ -25,6 +25,9 @@ for name in ("--repo", "--base", "--head", "--policy-version", "--out"):
         sys.exit(2)
 with open(os.path.join(here, "stub.json")) as f:
     stub = json.load(f)
+if stub.get("count"):
+    with open(stub["count"], "a") as f:
+        f.write("run\n")
 if stub.get("sleep"):
     import time
     time.sleep(stub["sleep"])
@@ -56,10 +59,10 @@ const STUB_JSON: &str = "scripts/dev/repo-health/stub.json";
 const ENGINE_PATH: &str = "scripts/dev/repo-health/health/engine.py";
 const INIT_PATH: &str = "scripts/dev/repo-health/health/__init__.py";
 const PROFILE: &str = "scripts/dev/repo-health/profiles/celeris.toml";
-const SRC: &str = "src/lib.rs";
-const TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const SRC: &str = "src/lib.rs";
+pub(crate) const TIMEOUT: Duration = Duration::from_secs(60);
 
-fn git_in(dir: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) fn git_in(dir: &Path, args: &[&str]) -> Result<String, String> {
     let out = std::process::Command::new("git")
         .arg("-C")
         .arg(dir)
@@ -73,7 +76,7 @@ fn git_in(dir: &Path, args: &[&str]) -> Result<String, String> {
     }
 }
 
-fn sh_git(dir: &Path, args: &[&str]) -> String {
+pub(crate) fn sh_git(dir: &Path, args: &[&str]) -> String {
     git_in(dir, args)
         .unwrap_or_else(|e| panic!("git {args:?}: {e}"))
         .trim()
@@ -87,7 +90,7 @@ fn write(dir: &Path, path: &str, body: &str) {
 }
 
 /// `files` を書いて commit し、HEAD の sha を返す。
-fn commit(dir: &Path, files: &[(&str, &str)], message: &str) -> String {
+pub(crate) fn commit(dir: &Path, files: &[(&str, &str)], message: &str) -> String {
     for (path, body) in files {
         write(dir, path, body);
     }
@@ -96,7 +99,7 @@ fn commit(dir: &Path, files: &[(&str, &str)], message: &str) -> String {
     sh_git(dir, &["rev-parse", "HEAD"])
 }
 
-fn init_repo() -> tempfile::TempDir {
+pub(crate) fn init_repo() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     sh_git(dir.path(), &["init", "-q", "-b", "main"]);
     sh_git(dir.path(), &["config", "user.email", "t@example.com"]);
@@ -110,12 +113,12 @@ fn init_repo() -> tempfile::TempDir {
 }
 
 /// stub の設定（`report` は `--out` に書く文字列。`None` なら書かない）。
-fn stub_json(exit: i32, report: Option<&str>) -> String {
+pub(crate) fn stub_json(exit: i32, report: Option<&str>) -> String {
     json!({"exit": exit, "report": report}).to_string()
 }
 
 /// 検査器の file（stub・engine・side）と `stub`。`profile` なら profile の file も。
-fn checker_files(stub: &str, profile: bool) -> Vec<(&'static str, String)> {
+pub(crate) fn checker_files(stub: &str, profile: bool) -> Vec<(&'static str, String)> {
     let mut files = vec![
         (CHECKER_SCRIPT, STUB.to_string()),
         (STUB_JSON, stub.to_string()),
@@ -130,7 +133,7 @@ fn checker_files(stub: &str, profile: bool) -> Vec<(&'static str, String)> {
 }
 
 /// base に検査器を commit した repo と base の sha。
-fn repo_with_checker(stub: &str, profile: bool) -> (tempfile::TempDir, String) {
+pub(crate) fn repo_with_checker(stub: &str, profile: bool) -> (tempfile::TempDir, String) {
     let dir = init_repo();
     let files = checker_files(stub, profile);
     let refs: Vec<(&str, &str)> = files.iter().map(|(p, b)| (*p, b.as_str())).collect();
@@ -139,14 +142,14 @@ fn repo_with_checker(stub: &str, profile: bool) -> (tempfile::TempDir, String) {
 }
 
 /// 適用判定（`repo_facts` → `applicability`）が返す検査器。
-fn applied(dir: &Path, base: &str, bundled: Option<&CheckerId>) -> CheckerId {
+pub(crate) fn applied(dir: &Path, base: &str, bundled: Option<&CheckerId>) -> CheckerId {
     match applicability(&repo_facts(true, base, bundled, |args| git_in(dir, args))) {
         HealthApplicability::Applies { checker } => checker,
         other => panic!("not applicable: {other:?}"),
     }
 }
 
-fn finding(rule: &str, n: usize, severity: &str, delta: &str, exception: bool) -> Value {
+pub(crate) fn finding(rule: &str, n: usize, severity: &str, delta: &str, exception: bool) -> Value {
     json!({
         "rule_id": rule,
         "fingerprint": format!("{rule}:{n:016x}"),
@@ -158,7 +161,7 @@ fn finding(rule: &str, n: usize, severity: &str, delta: &str, exception: bool) -
 }
 
 /// report/1 の文字列。`policy_files` は `policy.files`、`rules` は `rules`。
-fn report(
+pub(crate) fn report(
     verdict: &str,
     exit: i32,
     findings: Vec<Value>,
@@ -179,13 +182,13 @@ fn report(
     .to_string()
 }
 
-fn base_policy(changed: bool) -> Value {
+pub(crate) fn base_policy(changed: bool) -> Value {
     json!({"version": "1", "source": "base", "changed": changed, "files": [
         {"path": PROFILE, "base_blob": "a".repeat(40), "head_blob": if changed { "b".repeat(40) } else { "a".repeat(40) }},
     ]})
 }
 
-fn rule(id: &str, status: &str, reason: &str) -> Value {
+pub(crate) fn rule(id: &str, status: &str, reason: &str) -> Value {
     json!({"id": id, "required": true, "status": status, "reason": reason})
 }
 

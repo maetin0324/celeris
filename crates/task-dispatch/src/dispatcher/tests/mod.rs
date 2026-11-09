@@ -3173,6 +3173,10 @@ mod stale_priority;
 /// （`src/dispatcher/tests/write_set_gate.rs`）。
 mod write_set_gate;
 
+/// ADR 2026-11-07-health-review-integration D4・I5: final review の `ReviewRequest.health` を candidate SHA ごとに 1 回
+/// 作り、reviewer の再試行で使い回す。WU・reviewer の無い review・`reviewer_reuse` では作らない
+/// （`src/dispatcher/tests/health_review_input.rs`）。
+mod health_inventory;
 /// ADR 2026-11-07-health-review-integration の付記（二度目の final review の差し戻しへの方針）C1: 設計 review の run を
 /// 木の run・費用の上限に掛ける（`src/dispatcher/tests/health_review_design_budget.rs`）。
 mod health_review_design_budget;
@@ -3184,9 +3188,6 @@ mod health_review_design_verdict;
 /// reviewer が本物の `claude_code::build_prompt` の prompt を読んで `review.json` を書く（`src/health_review/flow_tests.rs`）。
 #[path = "../../health_review/flow_tests.rs"]
 mod health_review_flow;
-/// ADR 2026-11-07-health-review-integration D4・I5: final review の `ReviewRequest.health` を candidate SHA ごとに 1 回
-/// 作り、reviewer の再試行で使い回す。WU・reviewer の無い review・`reviewer_reuse` では作らない
-/// （`src/dispatcher/tests/health_review_input.rs`）。
 mod health_review_input;
 /// ADR 2026-11-07-health-review-integration D2.3・I3・付記 (b): base 側の検査器で読んだ review 方針が worker と planner の
 /// `RunContext.workspace` に入る（`src/dispatcher/tests/health_review_policy.rs`）。

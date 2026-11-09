@@ -1750,12 +1750,13 @@ fn script_generation_rejected_rows_migrate_to_invalid() {
              ALTER TABLE chat_runs DROP COLUMN launch_tracked; \
              ALTER TABLE chat_runs DROP COLUMN attempts_recorded; \
              ALTER TABLE chat_runs DROP COLUMN attempts_usage_missing; \
+             DROP TABLE health_inventory_runs; \
              DELETE FROM schema_migrations WHERE version >= 103;",
         )
         .unwrap();
-        conn.execute_batch(crate::store::migrations::MIGRATION_0103)
+        conn.execute_batch(crate::migration_registry::migration_sql(103).unwrap())
             .unwrap();
-        conn.execute_batch(crate::store::migrations::MIGRATION_0104)
+        conn.execute_batch(crate::migration_registry::migration_sql(104).unwrap())
             .unwrap();
         conn.execute_batch(
             "INSERT INTO schema_migrations (version, applied_at) VALUES \

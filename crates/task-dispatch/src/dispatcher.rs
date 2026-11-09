@@ -1256,6 +1256,8 @@ pub struct Dispatcher {
     /// ADR-0079 D10（Phase R3b）: 最後に生存確認をした時刻（[`LIVENESS_CHECK_INTERVAL_SECS`] ごと）。
     liveness_checked_at: Option<OffsetDateTime>,
     stagnation: tree_units::StagnationWatch,
+    /// ADR 2026-11-08-health-enforcement-loop D6: 実行中の全体棚卸し（cron の job ごとの Busy の印）。
+    health_inventory: cron_tick::inventory::InventoryRuns,
     /// ADR-0079 付記「R6-1」D4: 最後に終端の task の未完了 run と統合依頼を照合した時刻（起動後の最初の
     /// tick と [`RUNS_RECONCILE_INTERVAL_SECS`] ごと）。
     terminal_records_reconciled_at: Option<OffsetDateTime>,
@@ -1614,6 +1616,7 @@ impl Dispatcher {
             review_resync_halted: std::collections::BTreeMap::new(),
             liveness_checked_at: None,
             stagnation: Default::default(),
+            health_inventory: Default::default(),
             terminal_records_reconciled_at: None,
             ownerless_reconciled_at: None,
             lost_review_watch: std::collections::HashSet::new(),
@@ -1824,15 +1827,13 @@ impl Dispatcher {
     /// 評価 run（`eval_runs`）も数える。live 昇格の旧 instance は評価 run の完了（`on_eval_worker_finished` が
     /// `runs` 行を閉じて試行を `scoring` にする）まで draining に留まる（ADR 2026-10-14-eval-verify-isolation D3.2）。
     pub fn in_flight(&self) -> usize {
-        self.running.len()
+        self.running.values().filter(|e| !e.cos).count()
+            + self.cos_in_flight()
             + self.reviewing.len()
             + self.checking.len()
             + self.integrating.len()
             + self.eval_runs.len()
-            + self
-                .cos_chat_launch
-                .as_ref()
-                .map_or(0, |chat| chat.running.len())
+            + self.health_inventory.in_flight()
     }
 
     /// ADR 2026-10-22-dynamic-config D2: 設定ファイルから組み直した `DispatchConfig` のうち、動的な欄を稼働中の

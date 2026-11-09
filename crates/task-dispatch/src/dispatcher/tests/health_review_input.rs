@@ -371,7 +371,11 @@ async fn health_review_policy_unknown_flow_missing_report_is_not_a_pass() {
     let (repo, _scratch, log) = health_repo_with("base", None);
     let r = review_flow(repo.path(), true, false, None).await;
     assert_eq!(r.status, Status::Failed, "{:?}", r.events);
-    assert_eq!(log_lines(&log).len(), 1, "the review item uses the G2 evaluation");
+    assert_eq!(
+        log_lines(&log).len(),
+        1,
+        "the review item uses the G2 evaluation"
+    );
     // 材料（policy の状態は不明）は candidate の SHA に結び付けて記録する。必須検査が落ちたので reviewer は起きない。
     let policy: Vec<&serde_json::Value> = r
         .events
@@ -381,7 +385,12 @@ async fn health_review_policy_unknown_flow_missing_report_is_not_a_pass() {
             _ => None,
         })
         .collect();
-    assert_eq!(policy, [&serde_json::json!("unavailable")], "{:?}", r.events);
+    assert_eq!(
+        policy,
+        [&serde_json::json!("unavailable")],
+        "{:?}",
+        r.events
+    );
     let builds = built(&r.events);
     assert_eq!(
         builds.iter().map(|b| (&b.1, &b.2)).collect::<Vec<_>>(),

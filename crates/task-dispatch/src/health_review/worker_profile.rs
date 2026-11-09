@@ -51,7 +51,12 @@ impl RunWorkspace {
             Ok(None) => ReviewPolicyState::Absent,
             Err(why) => ReviewPolicyState::Unavailable(why),
             Ok(Some((repo, target))) => tokio::task::spawn_blocking(move || {
-                load_review_policy(&repo, &target, REVIEW_POLICY_TIMEOUT)
+                load_review_policy(
+                    &repo,
+                    &target,
+                    crate::health_review::gate::bundled_checker(),
+                    REVIEW_POLICY_TIMEOUT,
+                )
             })
             .await
             .unwrap_or_else(|e| ReviewPolicyState::Unavailable(format!("読み込みの task: {e}"))),

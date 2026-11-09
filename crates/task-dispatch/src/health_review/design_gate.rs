@@ -97,7 +97,12 @@ impl Dispatcher {
                 }
                 None => worktree.base.sha.clone(),
             };
-            load_review_policy(&worktree.repo, &target, REVIEW_POLICY_TIMEOUT)
+            load_review_policy(
+                &worktree.repo,
+                &target,
+                crate::health_review::gate::bundled_checker(),
+                REVIEW_POLICY_TIMEOUT,
+            )
         };
         names.iter().map(|n| (n.clone(), state_of(n))).collect()
     }

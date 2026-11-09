@@ -11,7 +11,7 @@ use std::path::Path;
 use task_core::{FailedCheck, RepairDecision, RepoId, classify_review_failure};
 
 use super::*;
-use crate::dispatcher::tests::{dispatcher, done_adapter, new_task};
+use crate::dispatcher::tests::{dispatcher_without_bundled_checker, done_adapter, new_task};
 use crate::health_review::input::{
     CandidateRepo, HEALTH_INPUT_TIMEOUT, HealthInputWork, build_health_input,
 };
@@ -166,9 +166,11 @@ pub(super) fn case_for(checker: Option<(Policy, Report)>, changed: &str, reviewe
         skipped: vec![],
         out_dir: scratch.path().join("health"),
         timeout: HEALTH_INPUT_TIMEOUT,
+        evaluated: Default::default(),
     };
     build_health_input(&work);
-    let d = dispatcher(store.clone(), done_adapter(), 1);
+    // 同梱の検査器は設定しない（`checker = None` の repo は base にも同梱にも検査器が無い場合）。
+    let d = dispatcher_without_bundled_checker(store.clone(), done_adapter(), 1);
     Case {
         store,
         d,
@@ -209,6 +211,8 @@ impl Case {
                 }),
                 definition_sha256: DIGEST.into(),
                 results: vec![],
+                health_repair_hint: None,
+                health_note: None,
             }],
             command_checks: vec![],
         }
@@ -424,11 +428,11 @@ fn health_review_policy_unknown_absent_policy_change_needs_approval() {
     );
 }
 
-/// 受け入れ条件 2: 検査器の無い repo と、policy を変えない通常変更は承認の子を作らない（verdict も変えない）。
+/// 受け入れ条件 2: policy を変えない通常変更は承認の子を作らない（verdict も変えない）。検査器の無い repo は
+/// 合格にしない（`health_enforce_g2_unavailable_is_not_pass`）。
 #[test]
-fn health_review_policy_unknown_no_checker_and_normal_change_pass_without_approval() {
+fn health_review_policy_unknown_normal_change_passes_without_approval() {
     for checker in [
-        None,
         Some((Policy::Present, Report::Valid(false))),
         Some((Policy::Absent, Report::Valid(false))),
     ] {
@@ -438,5 +442,24 @@ fn health_review_policy_unknown_no_checker_and_normal_change_pass_without_approv
         assert!(outcome.all_pass());
         assert!(c.approvals().is_empty());
         assert!(!c.d.policy_rereview(&c.task).unwrap());
+    }
+}
+
+/// health_enforce_g2_（ADR 2026-11-08-health-enforcement-loop D1.1・D1.2・J4）: base にも同梱にも検査器が無い repo は、
+/// 当てないのではなく合格にしない。G2 の材料（reviewer あり）と policy の状態（reviewer なし）のどちらも、policy の
+/// 状態を不明（理由 `checker_missing`）として candidate に結び付けて記録し、ほかが全部合格でも承認の子を作って待つ
+/// （`assert_waits`: 終端でない子がある間は合格しない）。
+/// 以前は「検査器の無い repo は何も記録せず合格」で、同じ入力で承認を求めない（この試験が検出する退行）。
+#[test]
+fn health_enforce_g2_unavailable_is_not_pass() {
+    for reviewer in [true, false] {
+        let c = case_for(None, "crates/x/src/lib.rs", reviewer);
+        let child = c.assert_waits();
+        assert!(
+            child.objective.contains("policy state unknown")
+                && child.objective.contains("checker_missing"),
+            "{}",
+            child.objective
+        );
     }
 }

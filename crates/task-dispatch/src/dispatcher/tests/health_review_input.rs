@@ -1,6 +1,8 @@
 //! ADR 2026-11-07-health-review-integration D4・I5: final review の `ReviewRequest.health` を candidate SHA ごとに 1 回
 //! 作る。本物の repo health の代わりに一時 git repo の main に stub の `repo_health.py` を commit する（report の
-//! mode では log に 1 行足して固定の report を書く）。外部ネットワークに出ない。
+//! mode では log に 1 行足して固定の report を書き、report の `summary.exit_code` で終わる）。report の finding は warning
+//! で、review の health の項目（health enforcement loop D1.2）は合格する（G3 の強制は `health_enforce_direct_review_*`
+//! が見る）。外部ネットワークに出ない。
 
 use super::target_sync::{bump_main_writing, commit_file, events_of, reviewing_task, set_check};
 use super::*;
@@ -14,12 +16,13 @@ const DIGEST: &str = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876
 fn report() -> serde_json::Value {
     let finding = |rule: &str, delta: &str, path: &str| {
         serde_json::json!({"rule_id": rule, "fingerprint": format!("{rule}:0123456789abcdef"),
-            "severity": "error", "delta": delta, "exception": null, "evidence": [{"path": path}]})
+            "severity": "warning", "delta": delta, "exception": null, "evidence": [{"path": path}]})
     };
     serde_json::json!({
         "schema": "celeris.repo-health.report/1",
-        "summary": {"verdict": "fail", "exit_code": 1, "reviewable": true,
-            "counts": {"findings": 3, "fail_grade": 2, "new": 1, "worsened": 1, "existing": 1}},
+        "summary": {"verdict": "pass", "exit_code": 0, "reviewable": true,
+            "counts": {"findings": 3, "fail_grade": 0, "new": 1, "worsened": 1, "existing": 1}},
+        "rules": [],
         "findings": [
             finding("size.responsibility-growth", "new", "crates/foo/src/lib.rs"),
             finding("deps.violation", "worsened", "crates/foo/Cargo.toml"),
@@ -48,11 +51,13 @@ fn health_repo_with(
         "invariants": {"events-append-only": "CLAUDE.md"}, "definition_sha256": DIGEST,
     });
     let script = format!(
-        "import sys\nargs = sys.argv[1:]\nif '--print-review-policy' in args:\n    sys.stdout.write({policy:?})\n    sys.exit(0)\nopen({log:?}, 'a').write(' '.join(args) + '\\n')\nreport = {report:?}\nif not report:\n    sys.exit(2)\nopen(args[args.index('--out') + 1], 'w').write(report)\nsys.exit(1)\n",
+        "import sys\nargs = sys.argv[1:]\nif '--print-review-policy' in args:\n    sys.stdout.write({policy:?})\n    sys.exit(0)\nopen({log:?}, 'a').write(' '.join(args) + '\\n')\nreport = {text:?}\nif not report:\n    sys.exit(2)\nopen(args[args.index('--out') + 1], 'w').write(report)\nsys.exit({exit})\n",
         policy = policy.to_string(),
         log = log.display().to_string(),
-        report = report.map(|r| r.to_string()).unwrap_or_default(),
+        text = report.as_ref().map(|r| r.to_string()).unwrap_or_default(),
+        exit = report.map_or(2, |r| r["summary"]["exit_code"].as_i64().unwrap_or(2)),
     );
+    crate::health_review::gate::tests::write_engine(repo.path());
     let path = repo.path().join(CHECKER_SCRIPT);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, script).unwrap();
@@ -71,6 +76,17 @@ fn log_lines(log: &std::path::Path) -> Vec<String> {
     std::fs::read_to_string(log)
         .map(|s| s.lines().map(str::to_string).collect())
         .unwrap_or_default()
+}
+
+/// G2 の材料の repo health の実行（report を task dir の `runs/health/` に書く）。review の health の項目（health
+/// enforcement loop D1.2）は、同じ review で材料が評価しなかった候補（記録した材料の再利用・reviewer の合格の再利用・
+/// WU の review）では自分の scratch に report を書いて評価する。その実行は数えない（記録した health の証跡の再利用は
+/// reuse-sync の `reusable_health` の範囲）。
+fn material_runs(log: &std::path::Path) -> Vec<String> {
+    log_lines(log)
+        .into_iter()
+        .filter(|l| l.contains("/runs/health/"))
+        .collect()
 }
 
 /// reviewer の run の `ReviewRequest.health` を記録し、合格の `review.json` を書く。`fail_first` なら 1 回目は
@@ -258,7 +274,7 @@ async fn health_review_input_reaches_the_reviewer_request() {
     assert_eq!(input.owner_rows.len(), 1);
     assert_eq!(input.owner_rows[0].path, "crates/foo/src/lib.rs");
     assert!(input.owner_rows[0].row.contains("{lib.rs,bar.rs}"));
-    assert_eq!(input.findings.verdict, "fail");
+    assert_eq!(input.findings.verdict, "pass");
     assert!(input.findings.reviewable);
     let rules: Vec<_> = input
         .findings
@@ -311,7 +327,7 @@ async fn health_review_input_reused_on_reviewer_retry() {
     assert_eq!(r.seen[0], r.seen[1]);
     assert_eq!(reviewer_runs(&r.events).len(), 2);
     assert_eq!(built(&r.events).len(), 1);
-    assert_eq!(log_lines(&log).len(), 1, "repo health ran once");
+    assert_eq!(material_runs(&log).len(), 1, "repo health ran once");
 }
 
 /// review 方針が absent の repo は作らず、`HealthReviewInputSkipped` に理由を残す（`ReviewRequest.health` は無い）。
@@ -346,51 +362,67 @@ async fn health_review_input_policy_absent_is_skipped() {
     );
 }
 
-/// I8・D6.4（fail closed）: report を書かない repo health の candidate は、reviewer が合格を書いても done に
-/// ならない。policy の状態を不明として candidate の SHA に結び付けて記録し、承認の子を作って reviewing のまま待つ。
+/// I8・D6.4（fail closed）と health enforcement loop D3.4: report を書かない repo health の candidate は、reviewer が
+/// 合格を書いても done にならない。G2 の材料は policy の状態を不明として candidate の SHA に結び付けて記録し、review の
+/// health の項目は同じ評価（検査器は 1 回）を `health_check_error: report_missing` の不合格にする。review が不合格なので
+/// policy の関門（承認の子）には進まない。
 #[tokio::test]
-async fn health_review_policy_unknown_flow_missing_report_waits_for_a_human() {
+async fn health_review_policy_unknown_flow_missing_report_is_not_a_pass() {
     let (repo, _scratch, log) = health_repo_with("base", None);
     let r = review_flow(repo.path(), true, false, None).await;
-    assert_eq!(r.status, Status::Reviewing, "{:?}", r.events);
-    assert_eq!(log_lines(&log).len(), 1);
-    let health = r.seen[0]
-        .as_ref()
-        .expect("the reviewer gets the health input");
-    assert_eq!(health.repos[0].policy.source, "unavailable");
-    let run = reviewer_runs(&r.events).remove(0);
+    assert_eq!(r.status, Status::Failed, "{:?}", r.events);
     assert_eq!(
-        built(&r.events),
-        vec![(run, r.target.clone(), r.head.clone())]
+        log_lines(&log).len(),
+        1,
+        "the review item uses the G2 evaluation"
     );
-    let approvals: Vec<Task> = r
-        .store
-        .children(r.task.id)
-        .unwrap()
-        .into_iter()
-        .filter(|c| c.kind == TaskKind::Approval)
+    // 材料（policy の状態は不明）は candidate の SHA に結び付けて記録する。必須検査が落ちたので reviewer は起きない。
+    let policy: Vec<&serde_json::Value> = r
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            Event::HealthReviewInputBuilt { input, .. } => Some(&input["policy"]["source"]),
+            _ => None,
+        })
         .collect();
-    assert_eq!(approvals.len(), 1, "{:?}", r.events);
     assert_eq!(
-        approvals[0].title,
-        format!(
-            "Policy change approval: {} @ {}",
-            r.task.repos[0].repo_id,
-            &r.head[..12]
-        )
+        policy,
+        [&serde_json::json!("unavailable")],
+        "{:?}",
+        r.events
     );
+    let builds = built(&r.events);
+    assert_eq!(
+        builds.iter().map(|b| (&b.1, &b.2)).collect::<Vec<_>>(),
+        [(&r.target, &r.head)]
+    );
+    let items: Vec<&task_core::PhaseCheckResult> = r
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            Event::RequiredChecksEvaluated { results, .. } => Some(results),
+            _ => None,
+        })
+        .flatten()
+        .filter(|c| c.cmd == task_core::required_checks::health::HEALTH_CHECK_ID)
+        .collect();
+    assert_eq!(items.len(), 1, "{:?}", r.events);
+    assert!(!items[0].pass);
     assert!(
-        approvals[0]
-            .objective
-            .contains("policy state unknown: repo_health.py が report を書かなかった"),
+        items[0]
+            .summary
+            .starts_with("health_check_error: report_missing"),
         "{}",
-        approvals[0].objective
+        items[0].summary
     );
+    assert!(policy_approvals(&r.store, &r.task).is_empty());
 }
 
 /// policy の file（repo health の profile）を変えたと書く report（stub の検査器が書く）。
 fn policy_changed_report() -> serde_json::Value {
     let mut report = report();
+    report["summary"]["verdict"] = "fail".into();
+    report["summary"]["exit_code"] = 1.into();
     report["policy"] = serde_json::json!({"version": "1", "source": "base", "changed": true, "files": [
         {"path": POLICY_FILE, "base_blob": "a".repeat(40), "head_blob": "b".repeat(40)},
     ]});
@@ -473,6 +505,7 @@ async fn health_review_policy_no_reviewer_normal_change_passes_without_approval(
         }],
         skipped: vec![],
         out_dir: scratch.path().join("again"),
+        evaluated: Default::default(),
         timeout: HEALTH_INPUT_TIMEOUT,
     };
     assert!(build_health_input(&again).is_none());
@@ -560,7 +593,7 @@ async fn health_review_policy_no_reviewer_policy_file_candidate_needs_a_human() 
         "not on the command criterion"
     );
     assert_eq!(
-        log_lines(&log).len(),
+        material_runs(&log).len(),
         1,
         "the re-review reused the candidate's record"
     );
@@ -589,7 +622,7 @@ async fn health_review_input_not_built_when_the_reviewer_pass_is_reused() {
     let builds = built(&r.events);
     assert_eq!(builds.len(), 1, "{builds:?}");
     assert_eq!(builds[0].1, r.target, "only the first candidate");
-    assert_eq!(log_lines(&log).len(), 1);
+    assert_eq!(material_runs(&log).len(), 1);
 }
 
 /// WU の check と WU の run（計画の採用から統合まで）では作らない。作るのは final review の reviewer run だけで、
@@ -649,7 +682,7 @@ async fn health_review_input_not_built_for_work_units() {
         "{builds:?}"
     );
     assert!(builds.len() <= 1, "{builds:?}");
-    assert_eq!(log_lines(&log).len(), builds.len());
+    assert_eq!(material_runs(&log).len(), builds.len());
     let wu_runs = adapter
         .seen
         .lock()

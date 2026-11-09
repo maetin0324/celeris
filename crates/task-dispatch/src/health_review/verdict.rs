@@ -3,7 +3,7 @@
 //!
 //! - D5.2・I6・I7: `ReviewRequest.health` を渡した review で `health` が無い・壊れている（未知の kind・severity）
 //!   なら、`review.json` が読めないときと同じく全 criterion を不合格にする（reason は [`HEALTH_VERDICT_INVALID`]）。
-//! - D5.3: blocking の finding 1 件ごとに、reviewer の受け入れ条件の最小の index へ不合格の [`Verdict`] を足す。
+//! - D5.3・G3 D3.3: 差分内の path と根拠がある blocking の finding 1 件ごとに、reviewer の受け入れ条件の最小の index へ不合格の [`Verdict`] を足す。
 //!   `classify_review_failure` は変えない。全部が局所なら `RepairClass::ReviewerLocal`、1 件でも substantive なら
 //!   `Trigger::ReviewFail`（replan）になる。
 //! - advisory は合否に使わない。合格の [`Verdict`] として `Event::ReviewVerdict` と次の run の `prior_review` に残す。
@@ -62,7 +62,7 @@ impl Verdict {
         let verdicts = criterion_verdicts(&output, criteria, tag, review_rel);
         match (health, health_input) {
             (Some(health), Some(input)) => {
-                let verdicts = with_health(verdicts, &health, criteria, tag);
+                let verdicts = with_health(verdicts, &health, input, criteria, tag);
                 with_policy(verdicts, input, health.policy.as_ref(), criteria, tag)
             }
             _ => Ok(verdicts),
@@ -136,31 +136,88 @@ fn criterion_verdicts(
 fn with_health(
     verdicts: Vec<Verdict>,
     health: &HealthVerdictOut,
+    input: &HealthReviewInput,
     criteria: &[usize],
     tag: &str,
 ) -> Vec<Verdict> {
     let Some(&idx) = criteria.iter().min() else {
         return verdicts;
     };
-    let of = |severity: HealthSeverity| {
-        health
-            .findings
-            .iter()
-            .filter(move |f| f.severity == severity)
+    let mut advisory = Vec::new();
+    let mut blocking = Vec::new();
+    for f in &health.findings {
+        let ungrounded = f.severity == HealthSeverity::Blocking && !grounded(f, input);
+        let pass = f.severity == HealthSeverity::Advisory || ungrounded;
+        let marker = if ungrounded {
+            " (advisory; health:ungrounded)"
+        } else if pass {
+            " (advisory)"
+        } else {
+            ""
+        };
+        let verdict = Verdict {
+            criterion_idx: idx,
+            pass,
+            reason: format!("{tag}: health:{}{marker}: {}", f.kind.as_str(), f.reason),
+            repair_hint: (!pass).then(|| blocking_repair_hint(f)),
+        };
+        if pass {
+            advisory.push(verdict);
+        } else {
+            blocking.push(verdict);
+        }
+    }
+    advisory
+        .into_iter()
+        .chain(verdicts)
+        .chain(blocking)
+        .collect()
+}
+
+/// G3 D3.3: 根拠は finding の path を含む repo の材料と照合する。空の anchor は根拠にしない。
+/// path と行の具体的な引用は `path:12` または `path#L12`。ファイルを読み直さず候補の材料だけを使う。
+fn grounded(finding: &HealthFindingOut, input: &HealthReviewInput) -> bool {
+    let Some(path) = finding.path.as_deref().filter(|p| !p.is_empty()) else {
+        return false;
     };
-    let advisory = of(HealthSeverity::Advisory).map(|f| Verdict {
-        criterion_idx: idx,
-        pass: true,
-        reason: format!("{tag}: health:{} (advisory): {}", f.kind.as_str(), f.reason),
-        repair_hint: None,
-    });
-    let blocking = of(HealthSeverity::Blocking).map(|f| Verdict {
-        criterion_idx: idx,
-        pass: false,
-        reason: format!("{tag}: health:{}: {}", f.kind.as_str(), f.reason),
-        repair_hint: Some(blocking_repair_hint(f)),
-    });
-    advisory.chain(verdicts).chain(blocking).collect()
+    let cites = |anchor: &str| !anchor.trim().is_empty() && finding.reason.contains(anchor);
+    input.repos.iter().any(|repo| {
+        repo.diff.paths.iter().any(|p| p.path == path)
+            && ((repo.findings.reviewable
+                && repo.findings.new.iter().any(|f| cites(&f.fingerprint)))
+                || repo
+                    .owner_rows
+                    .iter()
+                    .any(|r| r.path == path && cites(&r.row))
+                || input
+                    .brief
+                    .as_ref()
+                    .is_some_and(|b| b.removals.iter().any(|r| cites(r)))
+                || cites_line(&finding.reason, path))
+    })
+}
+
+/// path の末尾だけの一致や行 0 は引用にしない。
+fn cites_line(reason: &str, path: &str) -> bool {
+    reason.match_indices(path).any(|(start, _)| {
+        if reason[..start]
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || matches!(c, '/' | '_' | '-' | '.'))
+        {
+            return false;
+        }
+        let suffix = &reason[start + path.len()..];
+        let Some(line) = suffix
+            .strip_prefix(':')
+            .or_else(|| suffix.strip_prefix("#L"))
+        else {
+            return false;
+        };
+        let digits: String = line.chars().take_while(char::is_ascii_digit).collect();
+        digits.parse::<u64>().is_ok_and(|n| n > 0)
+            && !line[digits.len()..].starts_with(|c: char| c.is_alphanumeric() || c == '_')
+    })
 }
 
 /// D6.1・D6.3: policy の file を変えた repo の扱い。`Err` は全 criterion を不合格にする reason（D6.3 の欠落）。

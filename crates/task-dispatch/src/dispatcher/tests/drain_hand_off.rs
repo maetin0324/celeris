@@ -128,10 +128,15 @@ async fn a_draining_instance_leaves_the_work_unit_checks_to_the_new_active() {
     let outcomes = worker_finished_outcomes(&store, task.id, &run_id);
     assert_eq!(outcomes.len(), 1, "{outcomes:?}");
     assert!(outcomes[0].starts_with("done: "), "{outcomes:?}");
+    // 2 件の検査の後に health の項目（ADR 2026-11-08-health-enforcement-loop D1.2。command を走らせないので log は無い）。
     let starts = wu_check_starts(&store, task.id);
-    assert_eq!(starts.len(), 2, "{starts:?}");
-    assert!(starts.iter().all(|s| s.0 == run_id && s.2 == 2));
-    assert_eq!((starts[0].1, starts[1].1), (0, 1));
+    assert_eq!(starts.len(), 3, "{starts:?}");
+    assert!(starts.iter().all(|s| s.0 == run_id && s.2 == 3));
+    assert_eq!((starts[0].1, starts[1].1, starts[2].1), (0, 1, 2));
+    assert_eq!(
+        (starts[2].3.as_str(), starts[2].4.as_str()),
+        (task_core::required_checks::health::HEALTH_CHECK_ID, "")
+    );
     // 2026-10-11 WU 検査ログの置き場所: `<workspace_root>/<task_id>/work-unit-checks/<key>`（作業ツリーの外）。
     assert!(
         Path::new(&starts[1].4).starts_with(
@@ -160,7 +165,11 @@ async fn a_draining_instance_leaves_the_work_unit_checks_to_the_new_active() {
             _ => None,
         })
         .collect();
-    assert_eq!(finished, vec![(0, true, Some(0)), (1, true, Some(0))]);
+    // health の項目は合格の stub の同梱の検査器（試験の土台）で Pass（exit 0）。
+    assert_eq!(
+        finished,
+        vec![(0, true, Some(0)), (1, true, Some(0)), (2, true, Some(0))]
+    );
     let row = store.run_index_get(&run_id).unwrap().unwrap();
     assert_eq!(row.status, task_core::RunIndexStatus::Completed, "{row:?}");
 }

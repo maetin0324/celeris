@@ -294,8 +294,15 @@ impl InventoryFire {
                 details: Vec::new(),
             });
         }
-        let (evidence, details) =
-            run_health_check_with_details(repo.id, &path, &base, &head.sha, &checker, self.timeout);
+        let (evidence, details) = run_health_check_with_details(
+            repo.id,
+            &path,
+            &base,
+            &head.sha,
+            &checker,
+            bundled_checker(),
+            self.timeout,
+        );
         Ok(RepoInventory {
             outcome: HealthInventoryOutcome::Evaluated,
             evidence: Some(evidence),

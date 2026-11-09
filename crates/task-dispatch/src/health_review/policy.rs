@@ -1,25 +1,27 @@
 //! ADR 2026-11-07-health-review-integration D2.3・I3: review 方針（profile の `[review]` 節）を base（target）側の
 //! 検査器で読む。
 //!
-//! [`load_review_policy`] の手順: target の commit から検査器（`task_core::required_checks::health` の [`CHECKER_DIR`] と、
-//! 検査器が同じ checkout から読む [`CHECKER_SIDE_FILES`]）を `git archive` で一時 dir に出し、その `repo_health.py` を
+//! [`load_review_policy`] の手順: 検査器は経路共通の選び方（`health_review::gate::with_applicable_checker`。ADR
+//! 2026-11-08-health-enforcement-loop D1.1・D1.3）で決める。target の commit に検査器（`task_core::required_checks::health`
+//! の [`CHECKER_DIR`] と、検査器が同じ checkout から読む [`CHECKER_SIDE_FILES`]）があればそれを `git archive` で一時 dir に
+//! 出し、無ければ呼び出し側が渡した Celeris の release の同梱の検査器を使う（J3）。その `repo_health.py` を
 //! `--print-review-policy --repo <repo> --base <target_sha>` で起こす。候補（head・作業ツリー）の検査器と profile は
 //! 使わない（候補が自分の review の条件を変えられない。I3）。出力 `celeris.repo-health.review-policy/1` は
 //! [`ReviewPolicyState`] に写す:
-//! - `source = absent`、または base に検査器（`repo_health.py`）が無い → `Absent`（その repo は `[review]` 節を持たず、
-//!   設計 review を使わない。候補が検査器を足しても base には無いので変わらない。I3）。
+//! - `source = absent`（その repo は `[review]` 節を持たず、設計 review を使わない）、または適用判定が `NotApplicable`
+//!   （Git 管理でない作業場所） → `Absent`。
 //! - `source = base`・`builtin` → `Present`。
-//! - target を解決できない・非 0 exit・壊れた JSON・schema 違い・時間切れ・`source = bootstrap`（head の profile。
-//!   `--print-review-policy` は head を読まないので出ないはずの値）・remote workspace → `Unavailable(理由)`。
+//! - 適用判定が `Unavailable`（base にも同梱にも検査器が無い `checker_missing`、事実を読めない `facts_unreadable:<理由>`）、
+//!   target を解決できない・非 0 exit・壊れた JSON・schema 違い・時間切れ・`source = bootstrap`（head の profile。
+//!   `--print-review-policy` は head を読まないので出ないはずの値）・remote workspace → `Unavailable(理由)`。当てないの
+//!   ではなく合格にしない（risk の判定では `unknown`。G2 D3.3）。
 //!
-//! どれも黙って省かない（risk の判定では `Unavailable` は `unknown` になる。D3.3）。worker と planner の run には、tick が
-//! [`Dispatcher::review_policy_target`] で repo と target を決め、run の起動の非同期部分で 1 回だけ読む（付記 B2。
-//! `health_review/worker_profile.rs`）。全体の時間に上限（[`REVIEW_POLICY_TIMEOUT`]）を置き、tick を止めない。LLM は呼ばない。
+//! どれも黙って省かない。worker と planner の run には、tick が [`Dispatcher::review_policy_target`] で repo と target を
+//! 決め、run の起動の非同期部分で 1 回だけ読む（付記 B2。`health_review/worker_profile.rs`）。全体の時間に上限
+//! （[`REVIEW_POLICY_TIMEOUT`]）を置き、tick を止めない。LLM は呼ばない。
 //!
-//! 検査器の起動の口は [`with_base_checker`] の 1 つ（ADR 2026-11-08-health-enforcement-loop D1.3）。[`CheckerSite::Base`] は
-//! 上の手順で base から出し、[`CheckerSite::Bundled`] は Celeris の release に同梱した検査器（base から出したときと同じ
-//! repo 相対の配置。D1.4）をそのまま使う。同梱を使うのは `health_review::gate` だけで、review 方針と G2 の材料・policy の
-//! 関門は base の検査器だけを使う（base に無ければ当てない）。
+//! 検査器を出す口は [`with_base_checker`] の 1 つ（D1.3）。site の写し（`CheckerId` の出どころ → [`CheckerSite`]）は
+//! `health_review::gate` の中だけにあり、ここと G2 の材料（`health_review::input`）は写しを持たない。
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -33,6 +35,7 @@ use task_core::required_checks::health::{
 use task_core::{Task, WorkspaceSpec};
 use task_ops::changes::{CmdOutput, git, run_with_timeout};
 
+use super::gate::{self, BundledChecker, CheckerChoice};
 use crate::dispatcher::Dispatcher;
 
 /// `--print-review-policy` の出力の schema（`scripts/dev/repo-health/schema/review-policy-v1.schema.json`）。
@@ -52,15 +55,23 @@ struct ReviewPolicyOut {
     definition_sha256: String,
 }
 
-/// `repo` の `target`（commit の sha か ref）の版の検査器で review 方針を読む。`timeout` は全体の上限。
-pub fn load_review_policy(repo: &Path, target: &str, timeout: Duration) -> ReviewPolicyState {
+/// `repo` の `target`（commit の sha か ref）で適用判定が選んだ検査器（base の版、無ければ `bundled`）で review 方針を
+/// 読む。`bundled` は呼び出し側が `gate::bundled_checker()` で渡す。`timeout` は事実の読み取りを含む全体の上限。
+pub fn load_review_policy(
+    repo: &Path,
+    target: &str,
+    bundled: Option<&BundledChecker>,
+    timeout: Duration,
+) -> ReviewPolicyState {
     let deadline = Instant::now() + timeout;
-    match with_base_checker(repo, target, CheckerSite::Base, deadline, |checker| {
-        checker.print_review_policy(repo)
-    }) {
-        Ok(Some(stdout)) => parse_review_policy(&stdout),
-        Ok(None) => ReviewPolicyState::Absent,
-        Err(why) => ReviewPolicyState::Unavailable(why),
+    let chosen = gate::with_applicable_checker(repo, target, true, bundled, deadline, |c, _| {
+        c.print_review_policy(repo)
+    });
+    match chosen {
+        CheckerChoice::NotApplicable(_) => ReviewPolicyState::Absent,
+        CheckerChoice::Unavailable(reason) => ReviewPolicyState::Unavailable(reason.to_string()),
+        CheckerChoice::Ran(Ok(stdout)) => parse_review_policy(&stdout),
+        CheckerChoice::Ran(Err(why)) => ReviewPolicyState::Unavailable(why),
     }
 }
 
@@ -113,7 +124,8 @@ pub fn parse_review_policy(stdout: &str) -> ReviewPolicyState {
     }
 }
 
-/// [`with_base_checker`] が起こす検査器の出どころ（D1.3・D1.4）。
+/// [`with_base_checker`] が起こす検査器の出どころ（D1.3・D1.4）。`CheckerId` からの写しは `health_review::gate` だけが
+/// 作る。
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum CheckerSite<'a> {
     /// target の commit の検査器を一時 dir に出す（base に無ければ `run` を呼ばず `None`）。
@@ -178,9 +190,9 @@ impl BaseChecker {
     }
 }
 
-/// `repo` の `target` を commit に解決し、`site` の検査器を `run` に渡す。[`CheckerSite::Base`] は `target` の版の
-/// 検査器を一時 dir に出し（戻ると消す）、base に検査器が無ければ `run` を呼ばず `None`。[`CheckerSite::Bundled`] は
-/// 同梱の dir をそのまま渡す（base は見ない）。失敗は理由の文。
+/// `repo` の `target` を commit に解決し、`site` の検査器を `run` に渡す。site が `Base` なら `target` の版の検査器を
+/// 一時 dir に出し（戻ると消す）、base に検査器が無ければ `run` を呼ばず `None`。`Bundled` なら同梱の dir をそのまま
+/// 渡す（base は見ない）。失敗は理由の文。site を選ぶのは `health_review::gate` の適用判定だけ。
 /// 候補（head・作業ツリー）の検査器は使わない（I3・J3）。`deadline` は ref の解決・archive・展開・`run` の全体の締め切り。
 pub(crate) fn with_base_checker<T>(
     repo: &Path,

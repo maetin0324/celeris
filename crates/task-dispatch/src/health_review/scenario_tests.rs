@@ -24,38 +24,44 @@ pub(super) const NORMAL_PATH: &str = "crates/foo/src/lib.rs";
 pub(super) const STORE_PATH: &str = "crates/task-store/src/rows.rs";
 const OWNER_MAP: &str = "owners/map.md";
 
-/// stub の report（new の finding 1 件・existing 1 件）。
+/// stub の report（new の finding 1 件・existing 1 件。verdict pass・exit 0 なので review の health の項目は合格する）。
+///
+/// 新しい finding は fail 級でない warning（verdict pass、exit 0）にする。fail 級の new の error は WU の check・段の統合の
+/// health の項目が final review の前に repair へ回す（ADR 2026-11-08-health-enforcement-loop D3.2。その流れは
+/// `dispatcher/tests/health_enforce.rs`）ので、final review まで届く材料は統合を止めない finding になる。
 fn report() -> serde_json::Value {
-    let finding = |rule: &str, delta: &str, path: &str| {
+    let finding = |rule: &str, severity: &str, delta: &str, path: &str| {
         serde_json::json!({"rule_id": rule, "fingerprint": format!("{rule}:00000000000000aa"),
-            "severity": "error", "delta": delta, "exception": null, "evidence": [{"path": path}]})
+            "severity": severity, "delta": delta, "exception": null, "evidence": [{"path": path}]})
     };
     serde_json::json!({
         "schema": "celeris.repo-health.report/1",
-        "summary": {"verdict": "fail", "exit_code": 1, "reviewable": true,
-            "counts": {"findings": 2, "fail_grade": 1, "new": 1, "worsened": 0, "existing": 1}},
+        "summary": {"verdict": "pass", "exit_code": 0, "reviewable": true,
+            "counts": {"findings": 2, "fail_grade": 0, "new": 1, "worsened": 0, "existing": 1}},
+        "rules": [],
         "findings": [
-            finding("size.responsibility-growth", "new", NORMAL_PATH),
-            finding("arch-map.missing_invariant", "existing", OWNER_MAP),
+            finding("size.responsibility-growth", "warning", "new", NORMAL_PATH),
+            finding("arch-map.missing_invariant", "error", "existing", OWNER_MAP),
         ],
         "policy": {"version": "1", "source": "base", "changed": false, "files": []},
     })
 }
 
-/// main に `[review]` を持つ stub の検査器と owner 地図を commit した repo（`with_policy = false` なら README だけ）。
+/// main に stub の検査器と owner 地図を commit した repo。`with_policy = false` なら検査器の方針は `[review]` の無い
+/// `source = absent`。
 fn project_repo(with_policy: bool) -> tempfile::TempDir {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
-    if !with_policy {
-        return repo;
-    }
+    // `[review]` の無い repo も base に検査器を持つ（source = absent）。検査器の無い repo は適用判定が Unavailable で
+    // 合格にしない（ADR 2026-11-08-health-enforcement-loop D1.1）ので、従来の流れの比較には使えない。
+    let source = if with_policy { "base" } else { "absent" };
     let policy = serde_json::json!({
-        "schema": REVIEW_POLICY_SCHEMA, "source": "base", "owner_map": OWNER_MAP,
+        "schema": REVIEW_POLICY_SCHEMA, "source": source, "owner_map": OWNER_MAP,
         "high_risk": [{"class": "store", "paths": ["^crates/task-store/"]}],
         "invariants": {"events-append-only": "CLAUDE.md"}, "definition_sha256": DIGEST,
     });
     let script = format!(
-        "import sys\nargs = sys.argv[1:]\nif '--print-review-policy' in args:\n    sys.stdout.write({policy:?})\n    sys.exit(0)\nopen(args[args.index('--out') + 1], 'w').write({report:?})\nsys.exit(1)\n",
+        "import sys\nargs = sys.argv[1:]\nif '--print-review-policy' in args:\n    sys.stdout.write({policy:?})\n    sys.exit(0)\nopen(args[args.index('--out') + 1], 'w').write({report:?})\nsys.exit(0)\n",
         policy = policy.to_string(),
         report = report().to_string(),
     );
@@ -388,7 +394,7 @@ async fn health_review_scenario_normal_change() {
 async fn health_review_scenario_high_risk_change() {
     let blocking = serde_json::json!({
         "kind": "dual_source_of_truth", "severity": "blocking", "path": STORE_PATH,
-        "reason": "rows.revision and the events both hold the revision",
+        "reason": format!("{STORE_PATH}:1 rows.revision and the events both hold the revision"),
     });
     let out = run_flow(true, STORE_PATH, true, vec![blocking]).await;
 
@@ -545,7 +551,7 @@ fn health_review_scenario_real_cli() {
         "version = \"1\"\n",
     )
     .unwrap();
-    let state = load_review_policy(repo.path(), &base, REVIEW_POLICY_TIMEOUT);
+    let state = load_review_policy(repo.path(), &base, None, REVIEW_POLICY_TIMEOUT);
     let ReviewPolicyState::Present(policy) = state else {
         panic!("the real --print-review-policy output is not readable: {state:?}");
     };

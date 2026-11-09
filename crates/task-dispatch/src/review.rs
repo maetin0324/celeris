@@ -206,7 +206,10 @@ pub fn reviewer_hint() -> WorkerHint {
 }
 
 mod required;
-pub use required::{RequiredCheckBinding, RequiredRepoChecks, RequiredRepoResult};
+pub use required::{
+    HEALTH_CHECK_ERROR, HealthItem, RepoHealth, RequiredCheckBinding, RequiredRepoChecks,
+    RequiredRepoResult,
+};
 
 /// `review_task` の Phase 5 追加入力（ADR-0007）。
 #[derive(Default)]
@@ -780,7 +783,7 @@ pub async fn review_task(
                 criterion_idx: idx,
                 pass: result.pass,
                 reason: result.summary.clone(),
-                repair_hint: None,
+                repair_hint: repo.repair_hint(result),
             });
         }
     }
@@ -1341,4 +1344,4 @@ fn dir_artifact_digest(dir: &Path) -> std::io::Result<(usize, Vec<String>, Strin
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

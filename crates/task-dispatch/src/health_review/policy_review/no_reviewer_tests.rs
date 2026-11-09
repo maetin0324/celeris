@@ -129,12 +129,11 @@ fn health_review_policy_no_reviewer_approval_passes_and_rejection_replans() {
     assert!(repair.is_none() && events.is_empty());
 }
 
-/// 受け入れ条件 1: 検査器の無い repo は何も記録せず、policy を変えない通常変更は状態（変更なし）を記録して、どちらも
-/// 承認の子を作らず verdict も変えない。
+/// 受け入れ条件 1: policy を変えない通常変更は状態（変更なし）を記録して、承認の子を作らず verdict も変えない。
+/// 検査器の無い repo は合格にしない（`health_enforce_g2_unavailable_is_not_pass`）。
 #[test]
-fn health_review_policy_no_reviewer_no_checker_and_normal_change_pass_without_approval() {
+fn health_review_policy_no_reviewer_normal_change_passes_without_approval() {
     for (checker, recorded) in [
-        (None, 0),
         (Some((Policy::Present, Report::Valid(false))), 1),
         (Some((Policy::Fails, Report::Valid(false))), 1),
     ] {

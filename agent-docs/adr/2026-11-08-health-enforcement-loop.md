@@ -192,3 +192,4 @@ B0 の G3 の `write_set` に次を足す。足す作業は unit closeout が sl
 
 ## 状態の記録
 - 2026-11-08: 提案。G3 の unit adr で書いた。実装と食い違いが出たら close-out で付記に書く。
+- 2026-11-09: 付記（loop-points、task 01M6ZDF9Q4BWD9DX6S9KX3KKS1）。D1.2 の 7 経路を配線した（[記録](../progress/2026-11-07-health-v2-g3/loop-points.md)）。(a) 試験名の prefix は task の目的文の `health_enforce_` で、「後続 unit の path・試験名の prefix」節の `health_gate_path_` は使っていない。(b) D3.3 の根拠の判定は limits でなく loop-points（unit grounding、`health_review/verdict.rs`、試験 `health_enforce_llm_finding_`）が実装した。task の目的文に合わせ、候補の差分の path と行番号の引用も根拠にする。(c) delivery は PolicyOnly の証跡を通さない（core-binding の提案 1 の決着）。D2.6 の「G2 の承認があれば通す」は、承認を `(repo, target_sha, reviewed_sha)` に結び付ける event が無いので実装していない。状態は closeout が改める。

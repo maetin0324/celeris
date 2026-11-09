@@ -240,6 +240,8 @@ impl Gate {
                 }),
                 definition_sha256: "def".into(),
                 results: vec![],
+                health_repair_hint: None,
+                health_note: None,
             }],
             command_checks: vec![],
         }

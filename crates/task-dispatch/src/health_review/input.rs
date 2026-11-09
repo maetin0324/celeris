@@ -8,22 +8,26 @@
 //!   remote workspace の repo と同期の無い repo は「作らない理由」になる。`reviewer_reuse` で reviewer を省いた
 //!   candidate（`ReviewerPassReused` がある）は作らない（policy の関門は元の candidate の記録を見る）。
 //! - reviewer run の無い review（`Check::Reviewer` の無い task。I8）は `policy_only`: reviewer には何も渡さず、
-//!   candidate の policy の状態だけを base の検査器の report で決めて `HealthReviewInputSkipped` の `policy` に残す
-//!   （同じ candidate の既知の状態があれば repo health を走らせない）。base に検査器が無い repo は何も残さない。
+//!   candidate の policy の状態だけを適用判定が選んだ検査器の report で決めて `HealthReviewInputSkipped` の `policy` に
+//!   残す（同じ candidate の既知の状態があれば repo health を走らせない）。health を当てない repo（適用判定が
+//!   `NotApplicable`）は何も残さない。
 //! - [`HealthInputJob::attach`]（review の非同期 task の中）: [`build_health_input`] を `spawn_blocking` で走らせ、
 //!   結果を `ReviewerRun.health`（reviewer の `ReviewRequest.health`）に入れる。reviewer run が無くても走らせる
 //!   （`policy_only`。review はその分だけ遅れる）。子 process は全体で [`HEALTH_INPUT_TIMEOUT`] の締め切りを共有する。
 //!   tick は止めない。
-//! - [`build_health_input`]: repo ごとに base（target）側の検査器（[`with_base_checker`]）で review 方針を読み、
+//! - [`build_health_input`]: repo ごとに経路共通の検査器の選び方（`health_review::gate::with_applicable_checker`。ADR
+//!   2026-11-08-health-enforcement-loop D1.1・D1.3: target の版の検査器、無ければ同梱の検査器）で review 方針を読み、
 //!   同じ `(repo_id, target_sha, reviewed_sha, definition_sha256)` の `Event::HealthReviewInputBuilt` があればその
 //!   `input` を使う（reviewer run の再試行・stale 再同期の後の再 review）。無ければ diff 統計・owner 地図の行・
-//!   repo health の report（`health_review::gate::run_report`）から作って追記する。
-//!   方針が `absent`・読めない repo、remote workspace・同期の無い repo は `Event::HealthReviewInputSkipped` に
-//!   理由を残す（その repo の分は `ReviewRequest.health` に入らない）。
-//! - policy の関門（I8・D6.4。`dispatcher::policy_review`）のため、base に検査器がある repo は candidate の policy の
+//!   repo health の report から作って追記する。report は経路共通の評価（`health_review::gate::check_with`。entry の
+//!   入口 `run_health_check` と同じ評価）が読んだものを使い、同じ candidate で検査器を 2 回起こさない。
+//!   方針が `absent`・読めない repo、health を当てない repo、remote workspace・同期の無い repo は
+//!   `Event::HealthReviewInputSkipped` に理由を残す（その repo の分は `ReviewRequest.health` に入らない）。
+//! - policy の関門（I8・D6.4。`dispatcher::policy_review`）のため、health を当てる repo は candidate の policy の
 //!   状態を必ず event に残す: 材料を作った repo は `HealthReviewInputBuilt` の `input.policy`、作らなかった repo は
 //!   `HealthReviewInputSkipped` の `policy`。方針が `absent` の repo も report を走らせて決める（reviewer には渡さない）。
-//!   report を作れない・方針を読めない・diff を取れないときは `source =` [`POLICY_UNKNOWN`]（不明）にする。不明の
+//!   適用判定が `Unavailable`（base にも同梱にも検査器が無い・事実を読めない）・report を作れない・方針を読めない・
+//!   diff を取れないときは `source =` [`POLICY_UNKNOWN`]（不明）にする（当てないのではなく合格にしない。J4）。不明の
 //!   材料は再利用しない（次の review で作り直す。D4.3）。
 //!
 //! WU の check・WU の review（`work_units`・`phase_integration` の検査）はここを通らない（D4.4）。LLM は呼ばない。
@@ -40,13 +44,14 @@ use task_worker::protocol::{
     HealthReviewInput, OwnerRow, PathStat,
 };
 
-use super::gate::{self, RepoHealthReport};
-use super::policy::{
-    BaseChecker, CheckerSite, finished, left, parse_review_policy, with_base_checker,
-};
+use super::gate::{self, BundledChecker, CheckerChoice, HealthRun, RepoHealthReport};
+use super::policy::{BaseChecker, finished, left, parse_review_policy};
+use super::review_item;
 use crate::dispatcher::Dispatcher;
 use crate::dispatcher::review_spawn::ReviewSync;
-use crate::review::ReviewerRun;
+use crate::review::{RequiredRepoChecks, ReviewerRun};
+use task_core::RepoId;
+use task_core::required_checks::health::CheckerId;
 
 /// 1 回の材料作り（全 repo の方針の読み込み・diff・owner 地図・repo health）の時間の上限。
 pub const HEALTH_INPUT_TIMEOUT: Duration = Duration::from_secs(600);
@@ -59,8 +64,11 @@ pub const MAX_OWNER_ROWS: usize = 40;
 
 /// 同期の無い repo の理由（同期を省いた・失敗した repo は target と候補の SHA が決まらない）。
 pub const NOT_SYNCED: &str = "review 前の同期が無い（target と候補の SHA が決まらない）";
-/// base に検査器が無い repo の理由（policy の関門も無い）。
-pub const NO_CHECKER: &str = "review 方針が absent（base に検査器が無い）";
+/// health を当てない repo（適用判定が `NotApplicable`: Git 管理でない作業場所）の理由の接頭辞（policy の関門も無い）。
+pub const NOT_APPLICABLE: &str = "repo health を当てない";
+/// 適用判定が `Unavailable`（base にも同梱にも検査器が無い・事実を読めない）の repo の理由の接頭辞。policy の状態は
+/// 不明（[`POLICY_UNKNOWN`]）にして関門に掛ける（合格にしない）。
+pub const CHECKER_UNAVAILABLE: &str = "検査器を当てられない";
 /// 方針が absent の repo の理由（policy の状態は report で決めて関門に掛ける）。
 pub const POLICY_ABSENT: &str = "review 方針が absent（base の profile に [review] が無い）";
 /// reviewer run の無い review の理由（policy の状態は report で決めて関門に掛ける）。
@@ -93,27 +101,48 @@ pub struct HealthInputWork {
     /// report の書き先の dir（daemon の task dir の `runs/health/`）。
     pub out_dir: PathBuf,
     pub timeout: Duration,
+    /// 検査器で評価した候補（[`gate::check_with`] の `HealthRun`）。review の health の項目が同じ評価を使う
+    /// （`review_item::evaluate_all`。同じ candidate で検査器を 2 回起こさない）。
+    pub evaluated: std::sync::Mutex<Vec<HealthRun>>,
 }
 
-/// `spawn_review` が reviewer run を起こす非同期 task に持ち込む仕事（`None` なら何もしない）。
-pub struct HealthInputJob(pub Option<HealthInputWork>);
+/// `spawn_review` が reviewer run を起こす非同期 task に持ち込む仕事。
+pub struct HealthInputJob {
+    /// G2 の材料の仕事（`None` なら材料を作らない）。
+    pub work: Option<HealthInputWork>,
+    /// ssh の remote workspace の task（health enforcement loop D1.1: Celeris が統合しない。NotApplicable）。
+    pub remote: bool,
+}
 
 impl HealthInputJob {
     /// 仕事があれば材料を作り（`policy_only` なら policy の状態だけを記録し）、reviewer run があれば
-    /// `run.health` に入れて返す。
-    pub(crate) async fn attach(self, run: Option<ReviewerRun>) -> Option<ReviewerRun> {
-        let Some(work) = self.0 else {
-            return run;
-        };
-        let task_id = work.task_id;
-        let built = tokio::task::spawn_blocking(move || build_health_input(&work)).await;
-        let mut run = run?;
-        match built {
-            Ok(health) => run.health = health,
-            Err(e) => {
-                tracing::warn!(%task_id, error = %e, "health input builder failed; reviewing without health");
+    /// `run.health` に入れて返す。その後 `checks` の health の項目を評価する（health enforcement loop D1.2。
+    /// 材料が同じ候補で評価した結果を使う。`review_item::evaluate_all`）。
+    pub(crate) async fn attach(
+        self,
+        run: Option<ReviewerRun>,
+        checks: &mut [RequiredRepoChecks],
+        events: Vec<Event>,
+    ) -> Option<ReviewerRun> {
+        let (health, runs) = match self.work {
+            Some(work) => {
+                let task_id = work.task_id;
+                let built = tokio::task::spawn_blocking(move || {
+                    let health = build_health_input(&work);
+                    let runs = work.evaluated.into_inner();
+                    (health, runs.unwrap_or_else(|e| e.into_inner()))
+                })
+                .await;
+                built.unwrap_or_else(|e| {
+                    tracing::warn!(%task_id, error = %e, "health input builder failed; reviewing without health");
+                    (None, Vec::new())
+                })
             }
-        }
+            None => (None, Vec::new()),
+        };
+        review_item::evaluate_all(checks, runs, self.remote, gate::bundled_checker(), events).await;
+        let mut run = run?;
+        run.health = health;
         Some(run)
     }
 }
@@ -128,9 +157,20 @@ impl Dispatcher {
         run_id: &str,
         reviewer: Option<&ReviewerRun>,
     ) -> HealthInputJob {
-        let Some(task_dir) = self.task_dir(task) else {
-            return HealthInputJob(None);
-        };
+        HealthInputJob {
+            work: self.health_work(task, synced, run_id, reviewer),
+            remote: matches!(task.workspace, task_core::WorkspaceSpec::Remote { .. }),
+        }
+    }
+
+    fn health_work(
+        &self,
+        task: &Task,
+        synced: &[ReviewSync],
+        run_id: &str,
+        reviewer: Option<&ReviewerRun>,
+    ) -> Option<HealthInputWork> {
+        let task_dir = self.task_dir(task)?;
         let work = |review_run: String, candidates, skipped, policy_only| HealthInputWork {
             store: self.store(),
             task_id: task.id,
@@ -140,6 +180,7 @@ impl Dispatcher {
             skipped,
             out_dir: task_dir.join("runs").join("health"),
             timeout: HEALTH_INPUT_TIMEOUT,
+            evaluated: Default::default(),
         };
         let Some(run) = reviewer else {
             return self.policy_only_job(task, synced, run_id, work);
@@ -161,9 +202,9 @@ impl Dispatcher {
             }
         }
         if candidates.is_empty() && skipped.is_empty() {
-            return HealthInputJob(None);
+            return None;
         }
-        HealthInputJob(Some(work(run.run_id.clone(), candidates, skipped, false)))
+        Some(work(run.run_id.clone(), candidates, skipped, false))
     }
 
     /// reviewer run の無い review（I8）: 同期した candidate のうち、reviewer の合格の再利用（`ReviewerPassReused`）
@@ -174,7 +215,7 @@ impl Dispatcher {
         synced: &[ReviewSync],
         run_id: &str,
         work: impl FnOnce(String, Vec<CandidateRepo>, Vec<(String, String)>, bool) -> HealthInputWork,
-    ) -> HealthInputJob {
+    ) -> Option<HealthInputWork> {
         let events = self.store().events_for(task.id).unwrap_or_else(|e| {
             tracing::warn!(task_id = %task.id, error = %e, "cannot read events for the policy-only health job");
             Vec::new()
@@ -190,15 +231,24 @@ impl Dispatcher {
             })
             .collect();
         if candidates.is_empty() {
-            return HealthInputJob(None);
+            return None;
         }
-        HealthInputJob(Some(work(run_id.to_string(), candidates, Vec::new(), true)))
+        Some(work(run_id.to_string(), candidates, Vec::new(), true))
     }
 }
 
 /// D4: 材料を作る本体（blocking）。作れた repo が 1 つも無ければ `None`（`ReviewRequest.health` を持たない）。
-/// `policy_only` なら policy の状態を記録するだけで常に `None`。
+/// `policy_only` なら policy の状態を記録するだけで常に `None`。同梱の検査器は daemon が起動で設定したもの
+/// （`gate::bundled_checker()`）を渡す。
 pub fn build_health_input(work: &HealthInputWork) -> Option<HealthReviewInput> {
+    build_health_input_with(work, gate::bundled_checker())
+}
+
+/// [`build_health_input`] の本体。`bundled` は base に検査器の無い repo に当てる同梱の検査器。
+pub(crate) fn build_health_input_with(
+    work: &HealthInputWork,
+    bundled: Option<&BundledChecker>,
+) -> Option<HealthReviewInput> {
     let deadline = Instant::now() + work.timeout;
     for (repo_id, reason) in &work.skipped {
         work.skip(repo_id, reason, None);
@@ -212,13 +262,13 @@ pub fn build_health_input(work: &HealthInputWork) -> Option<HealthReviewInput> {
     };
     if work.policy_only {
         for candidate in &work.candidates {
-            work.record_policy_only(candidate, &recorded, deadline);
+            work.record_policy_only(candidate, &recorded, bundled, deadline);
         }
         return None;
     }
     let mut repos = Vec::new();
     for candidate in &work.candidates {
-        match work.repo_input(candidate, &recorded, deadline) {
+        match work.repo_input(candidate, &recorded, bundled, deadline) {
             Ok(input) => repos.push(input),
             Err((reason, policy)) => {
                 let policy = policy.map(|p| (candidate, p));
@@ -270,25 +320,27 @@ impl HealthInputWork {
         }
     }
 
-    /// 1 repo の材料。方針が `Present` でなければ理由と policy の状態（skip）。base の検査器を出せない・方針を
-    /// 読めない・diff を取れないときの policy の状態は不明（[`POLICY_UNKNOWN`]）。
+    /// 1 repo の材料。方針が `Present` でなければ理由と policy の状態（skip）。適用判定が `Unavailable`・検査器を
+    /// 出せない・方針を読めない・diff を取れないときの policy の状態は不明（[`POLICY_UNKNOWN`]）。
     fn repo_input(
         &self,
         candidate: &CandidateRepo,
         recorded: &[(u64, Event)],
+        bundled: Option<&BundledChecker>,
         deadline: Instant,
     ) -> Result<HealthRepoInput, Skip> {
         let c = candidate;
-        let built = with_base_checker(
+        let chosen = gate::with_applicable_checker(
             &c.dir,
             &c.target_sha,
-            CheckerSite::Base,
+            true,
+            bundled,
             deadline,
-            |checker| {
+            |checker, id| {
                 let policy = match parse_review_policy(&checker.print_review_policy(&c.dir)?) {
                     ReviewPolicyState::Present(policy) => policy,
                     ReviewPolicyState::Absent => {
-                        return Ok(Err(self.absent_policy(checker, c, recorded)));
+                        return Ok(Err(self.absent_policy(checker, id, c, recorded, deadline)));
                     }
                     ReviewPolicyState::Unavailable(why) => {
                         return Err(format!("review 方針を読めない: {why}"));
@@ -305,7 +357,7 @@ impl HealthInputWork {
                     .and_then(|map| show_at(&c.dir, &c.target_sha, map, deadline))
                     .map(|text| owner_rows(&text, &changed))
                     .unwrap_or_default();
-                let (findings, policy_state) = match self.run_report(checker, c) {
+                let (findings, policy_state) = match self.run_report(checker, id, c, deadline) {
                     Ok(report) => summarize_report(report),
                     Err(why) => unavailable_report(why),
                 };
@@ -325,34 +377,56 @@ impl HealthInputWork {
                 Ok(Ok(input))
             },
         );
-        match built {
-            Ok(Some(result)) => result,
-            Ok(None) => Err((NO_CHECKER.into(), None)),
-            Err(why) => Err((why, Some(unknown_policy()))),
+        match chosen {
+            CheckerChoice::NotApplicable(reason) => {
+                Err((format!("{NOT_APPLICABLE}: {}", reason.as_str()), None))
+            }
+            CheckerChoice::Unavailable(reason) => Err((
+                format!("{CHECKER_UNAVAILABLE}: {reason}"),
+                Some(unknown_policy()),
+            )),
+            CheckerChoice::Ran(Ok(result)) => result,
+            CheckerChoice::Ran(Err(why)) => Err((why, Some(unknown_policy()))),
         }
     }
 
     /// reviewer run の無い review の 1 candidate: 既知の policy の状態が記録済みなら何もしない（repo health は
-    /// candidate ごとに 1 回）。無ければ base の検査器の report で決めて記録する（作れなければ不明）。base に検査器が
-    /// 無い repo は関門が無いので記録しない。方針（`--print-review-policy`）は reviewer の材料にしか使わないので読まない。
-    fn record_policy_only(&self, c: &CandidateRepo, recorded: &[(u64, Event)], deadline: Instant) {
+    /// candidate ごとに 1 回）。無ければ適用判定が選んだ検査器の report で決めて記録する（`Unavailable`・作れなければ
+    /// 不明）。health を当てない repo は関門が無いので記録しない。方針（`--print-review-policy`）は reviewer の材料に
+    /// しか使わないので読まない。
+    fn record_policy_only(
+        &self,
+        c: &CandidateRepo,
+        recorded: &[(u64, Event)],
+        bundled: Option<&BundledChecker>,
+        deadline: Instant,
+    ) {
         if find_recorded_policy(recorded, c).is_some() {
             return;
         }
-        let ran = with_base_checker(
+        let chosen = gate::with_applicable_checker(
             &c.dir,
             &c.target_sha,
-            CheckerSite::Base,
+            true,
+            bundled,
             deadline,
-            |checker| Ok(self.run_report(checker, c)),
+            |checker, id| Ok(self.run_report(checker, id, c, deadline)),
         );
-        let (reason, policy) = match ran {
-            Ok(None) => return,
-            Ok(Some(Ok(report))) => (NO_REVIEWER.to_string(), summarize_report(report).1),
-            Ok(Some(Err(why))) | Err(why) => (
+        let unknown = |why: &dyn std::fmt::Display| {
+            (
                 format!("{NO_REVIEWER}。policy の状態を決められない: {why}"),
                 unknown_policy(),
-            ),
+            )
+        };
+        let (reason, policy) = match chosen {
+            CheckerChoice::NotApplicable(_) => return,
+            CheckerChoice::Unavailable(reason) => {
+                unknown(&format!("{CHECKER_UNAVAILABLE}: {reason}"))
+            }
+            CheckerChoice::Ran(Ok(Ok(report))) => {
+                (NO_REVIEWER.to_string(), summarize_report(report).1)
+            }
+            CheckerChoice::Ran(Ok(Err(why)) | Err(why)) => unknown(&why),
         };
         self.skip(&c.repo_id, &reason, Some((c, policy)));
     }
@@ -362,13 +436,15 @@ impl HealthInputWork {
     fn absent_policy(
         &self,
         checker: &BaseChecker,
+        id: &CheckerId,
         c: &CandidateRepo,
         recorded: &[(u64, Event)],
+        deadline: Instant,
     ) -> Skip {
         if let Some(known) = find_recorded_policy(recorded, c) {
             return (POLICY_ABSENT.into(), Some(known));
         }
-        match self.run_report(checker, c) {
+        match self.run_report(checker, id, c, deadline) {
             Ok(report) => (POLICY_ABSENT.into(), Some(summarize_report(report).1)),
             Err(why) => (
                 format!("{POLICY_ABSENT}。policy の状態を決められない: {why}"),
@@ -398,13 +474,20 @@ impl HealthInputWork {
         }
     }
 
-    /// base の検査器で repo health を 1 回走らせ、report を読む（起動と読み込みは [`gate::run_report`]）。report は
-    /// daemon の task dir の `runs/health/<repo>-<target>-<reviewed>.json` に書く。
+    /// 適用判定が選んだ検査器（`checker`・`id`）で candidate を 1 回評価し、その report を読む（評価は経路共通の
+    /// [`gate::check_with`]。entry の入口と同じ評価で、検査器の起動は 1 回）。report は daemon の task dir の
+    /// `runs/health/<repo>-<target>-<reviewed>.json` に書く。
     fn run_report(
         &self,
         checker: &BaseChecker,
+        id: &CheckerId,
         c: &CandidateRepo,
+        deadline: Instant,
     ) -> Result<RepoHealthReport, String> {
+        let repo_id: RepoId = c
+            .repo_id
+            .parse()
+            .map_err(|e| format!("repo の id {:?} を読めない: {e}", c.repo_id))?;
         let name = format!(
             "{}-{}-{}.json",
             c.repo_id,
@@ -412,9 +495,19 @@ impl HealthInputWork {
             short(&c.reviewed_sha)
         );
         let out = self.out_dir.join(name);
-        gate::run_report(checker, &c.dir, &c.target_sha, &c.reviewed_sha, &out)
-            .map(|ran| ran.report)
-            .map_err(|e| e.to_string())
+        let gate::CheckedRun { run, report } = gate::check_with(
+            checker,
+            id,
+            repo_id,
+            &c.dir,
+            &c.reviewed_sha,
+            Some(&out),
+            deadline,
+        );
+        if let Ok(mut evaluated) = self.evaluated.lock() {
+            evaluated.push(run);
+        }
+        report
     }
 }
 

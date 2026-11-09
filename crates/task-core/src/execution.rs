@@ -618,6 +618,10 @@ pub enum RepairClass {
     /// ADR 2026-10-22-stalled-auto-replan D6: 検査の出力が compile error（Kotlin の `e: file://…` /
     /// `Compilation error`、rustc の `error[E…]` / `error: could not compile`）。
     Build,
+    /// ADR 2026-11-08-health-enforcement-loop D3.2: repo health の項目（`cmd` が `HEALTH_CHECK_ID`）が決定的な検査の
+    /// fail 級の finding で不合格（reason が `health:<rule_id>:<hash>`）。呼び出し側は `max_repairs_per_class` を
+    /// rule ごと（`health:<rule_id>`）に数える。Error（`health_check_error:`）は修復できない（D3.4）。
+    Health,
 }
 
 impl RepairClass {
@@ -634,6 +638,7 @@ impl RepairClass {
             RepairClass::MergeConflict => "merge_conflict",
             RepairClass::IntegrationConflict => INTEGRATION_REPAIR_BUCKET,
             RepairClass::Build => "build",
+            RepairClass::Health => "health",
         }
     }
 
@@ -646,7 +651,8 @@ impl RepairClass {
             | RepairClass::MergeBase
             | RepairClass::MergeConflict
             | RepairClass::IntegrationConflict
-            | RepairClass::Build => (30, 1800),
+            | RepairClass::Build
+            | RepairClass::Health => (30, 1800),
             RepairClass::ReviewerLocal(kind) => match kind {
                 ReviewerRepairKind::Format => (12, 600),
                 ReviewerRepairKind::Lint => (20, 1200),
@@ -756,6 +762,13 @@ const COMMAND_TIMEOUT_PREFIX: &str = "command timed out after";
 const MERGE_BASE_ANCESTOR_WORDS: [&str; 2] = ["merge-base", "--is-ancestor"];
 
 fn classify_command(cmd: &str, reason: &str) -> Option<RepairClass> {
+    // ADR 2026-11-08-health-enforcement-loop D3.2・D3.4: health の項目は cmd の語で分類しない。fail 級の finding
+    // （`health:<rule_id>:<hash>`）だけが修復でき、Error（`health_check_error:`）・時間切れは修復しない。
+    if cmd == crate::required_checks::health::HEALTH_CHECK_ID {
+        return reason
+            .starts_with(HEALTH_REPAIR_REASON_PREFIX)
+            .then_some(RepairClass::Health);
+    }
     // ADR-0074 D6.1: reason（daemon が既に 2 倍の timeout で再試行した後の結果）が timeout を
     // 示していれば、cmd の中身に関わらず review_timeout（fmt/lint/test のコマンドが遅いだけの
     // 環境要因を、コードの再実装ではなく検査環境の再現で直す性質のものとして別扱いする）。
@@ -871,6 +884,9 @@ fn classify_one(f: &FailedCheck) -> Option<RepairClass> {
         _ => None,
     }
 }
+
+/// ADR 2026-11-08-health-enforcement-loop D3.2: health の項目の Fail の reason の先頭（`health:<rule_id>:<hash>`）。
+pub const HEALTH_REPAIR_REASON_PREFIX: &str = "health:";
 
 /// D16: 不合格の verdict をすべて見て、**全部が同じ修復できる class** のときだけ
 /// `RepairDecision::Repairable` にする（1 つでも修復できない、または class が混在すれば

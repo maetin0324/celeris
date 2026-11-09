@@ -634,8 +634,9 @@ impl Dispatcher {
                     .get(v.criterion_idx)
                     .map(|c| c.check.clone())
                     // 暗黙の条件（Plan/aggregate/repo_checks/research）は task.acceptance に無く、
-                    // D16 の分類表にも無いので修復できない（`Check::Human` と同じ扱いに倒す）。
-                    .unwrap_or(task_core::Check::Human);
+                    // D16 の分類表にも無いので修復できない（`Check::Human` と同じ扱いに倒す）。health の Fail
+                    // だけは `Check::Command { cmd: HEALTH_CHECK_ID }`（health enforcement loop D3.2）。
+                    .unwrap_or_else(|| v.implicit_check());
                 task_core::FailedCheck {
                     check,
                     reason: v.reason.clone(),
@@ -662,16 +663,16 @@ impl Dispatcher {
         if repairs.len() as u32 >= self.config.execution.max_repairs {
             return Ok(None);
         }
-        let same_class = repairs
-            .iter()
-            .filter(|u| Self::repair_bucket_of_title(&u.spec.title) == Some(class.bucket()))
-            .count();
+        let failing_details: Vec<String> = failing.iter().map(|f| f.reason.clone()).collect();
+        // ADR 2026-11-08-health-enforcement-loop D3.2・D4.1: 段の統合と同じ数え方。health の修復は rule ごと
+        // （`health:<rule_id>`）に数え、repair WU の title（`RepairScheduled.class` の元）にも同じ bucket を書く。
+        let (bucket, same_class) =
+            super::phase_integration::check_item::repair_count(class, &failing_details, &repairs);
         if same_class as u32 >= self.config.execution.max_repairs_per_class {
             return Ok(None);
         }
 
         let (max_turns, max_wall_secs) = class.budget();
-        let failing_details: Vec<String> = failing.iter().map(|f| f.reason.clone()).collect();
         let workspaces = self.task_workspaces_for(task);
         let cwd = workspaces.as_ref().and_then(|w| w.cwd());
         let branch = workspaces
@@ -695,7 +696,7 @@ impl Dispatcher {
         let spec = task_core::WorkUnitSpec {
             key: format!("repair-{n}"),
             kind: task_core::WorkUnitKind::Repair,
-            title: format!("repair ({}): 修復", class.bucket()),
+            title: format!("repair ({bucket}): 修復"),
             objective,
             depends_on: vec![],
             done_when: vec![],

@@ -2,8 +2,11 @@
 //! `Event::AutoReplanRequested{key, failure}` を積み（D1）、同じ WU・同じ失敗の識別子（D2）の自動 replan が、間に
 //! 葉の進展（変更のある `WorkUnitCommitted`。D3）なしに [`STALLED_REPLAN_LIMIT`] 回続いたら、次は自動 replan をやめて
 //! 人に聞く（D4 / D5）。events を読むだけ（LLM も I/O も無い）。
+//!
+//! 連なりを切る人の再開の判定 [`is_human_resume`] は、health の同じ指摘の往復の判定
+//! （`task_dispatch::health_review::limits`、ADR 2026-11-08-health-enforcement-loop D4.3）と共有する正本。
 
-use task_core::{AutoReplanSource, Event, PhaseResumeMode};
+use task_core::{AutoReplanSource, Event, PhaseResumeMode, Trigger};
 
 /// D4: 同じ `(key, failure)` の自動 replan が進展なしにこの回数続いたら、次の失敗では自動 replan をしない
 /// （1 回目の失敗で replan、同じ失敗の 2 回目でもう 1 回、3 回目で止める）。
@@ -228,7 +231,7 @@ pub fn failure_signature<S: AsRef<str>>(cmds: &[S], output: &str) -> String {
     format!("{h:016x}")
 }
 
-/// D3: 人の replan の依頼（連なりを切る）。
+/// D3: 人の replan の依頼と回答。[`pending_integration_auto_replan`] はこれだけで切る（comment・reopen では切らない）。
 fn is_human_replan_request(e: &Event) -> bool {
     match e {
         Event::ExecutionHintSet { replan: true, .. } => true,
@@ -241,19 +244,29 @@ fn is_human_replan_request(e: &Event) -> bool {
     }
 }
 
+/// D3（ADR 2026-11-08-health-enforcement-loop D4.3 で広げた）: 人の再開（連なりを切る）。人の replan の依頼と回答
+/// （[`is_human_replan_request`]）に加え、人の comment（`Trigger::Interrupt` の reason `comment`）と reopen
+/// （`Trigger::Reopen`）。[`stalled_replans`] と health の往復の判定（`task_dispatch::health_review::limits`）の両方が使う。
+/// 2026-11-09 から `stalled_replans` も comment・reopen で切れる（人が手を入れた後の自動 replan は新しい連なり）。
+pub fn is_human_resume(e: &Event) -> bool {
+    is_human_replan_request(e)
+        || matches!(e, Event::Transitioned { reason, .. }
+            if reason == Trigger::Interrupt.reason() || reason == Trigger::Reopen.reason())
+}
+
 /// D3: 葉の進展（変更のある commit）。`base` が無い commit は変更ありとみる。
 fn is_progress(e: &Event) -> bool {
     matches!(e, Event::WorkUnitCommitted { base, commit, .. } if base.as_deref() != Some(commit.as_str()))
 }
 
-/// D4: 末尾から見て、同じ `(key, failure)` の自動 replan が進展（[`is_progress`]）も人の依頼も挟まずに何回続いたか
+/// D4: 末尾から見て、同じ `(key, failure)` の自動 replan が進展（[`is_progress`]）も人の再開（[`is_human_resume`]）も挟まずに何回続いたか
 /// （最後の自動 replan の後に進展があれば 0）。呼び出し側は [`STALLED_REPLAN_LIMIT`] 以上なら自動 replan をしない。
 pub fn stalled_replans(events: &[(u64, Event)], key: &str, failure: &str) -> u32 {
     let mut chain = 0u32;
     let mut last: Option<(&str, &str)> = None;
     let mut progressed = false;
     for (_, e) in events {
-        if is_human_replan_request(e) {
+        if is_human_resume(e) {
             last = None;
             chain = 0;
             continue;
@@ -435,6 +448,54 @@ mod tests {
             hint_replan(),
         ]);
         assert_eq!(stalled_replans(&events, "integrate-build", sig), 0);
+    }
+
+    /// `is_human_resume` の comment・reopen が連なりを切ること（2026-11-09 の契約の変更）。既存の
+    /// `a_human_replan_request_resets_the_count` は replan の依頼だけを見るので、comment・reopen の抜けを検出できない。
+    #[test]
+    fn a_human_comment_or_reopen_resets_the_count() {
+        let sig = "abc";
+        for reason in [Trigger::Interrupt.reason(), Trigger::Reopen.reason()] {
+            let resumed = Event::Transitioned {
+                from: task_core::Status::Running,
+                to: task_core::Status::Ready,
+                reason: reason.to_string(),
+            };
+            assert!(is_human_resume(&resumed), "{reason}");
+            let events = numbered(vec![
+                auto("integrate-build", sig),
+                auto("integrate-build", sig),
+                resumed.clone(),
+            ]);
+            assert_eq!(
+                stalled_replans(&events, "integrate-build", sig),
+                0,
+                "{reason}"
+            );
+            // 再開の後の同じ失敗は 1 回目から数え直す。
+            let events = numbered(vec![
+                auto("integrate-build", sig),
+                auto("integrate-build", sig),
+                resumed,
+                auto("integrate-build", sig),
+            ]);
+            assert_eq!(
+                stalled_replans(&events, "integrate-build", sig),
+                1,
+                "{reason}"
+            );
+        }
+        // 人でない遷移（review の不合格の再実行）は切らない。
+        let events = numbered(vec![
+            auto("integrate-build", sig),
+            Event::Transitioned {
+                from: task_core::Status::Reviewing,
+                to: task_core::Status::Ready,
+                reason: Trigger::ReviewFail.name().to_string(),
+            },
+            auto("integrate-build", sig),
+        ]);
+        assert_eq!(stalled_replans(&events, "integrate-build", sig), 2);
     }
 
     #[test]

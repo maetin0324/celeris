@@ -59,6 +59,7 @@ WorkUnit `escalation`（task 01M70C8NHEANARRKZD9RGKZ87D）。[ADR 2026-11-08](..
   - `web/api/realtime/event-kinds.ts` の `EVENT_KINDS` の `"review_resync_resumed",` の後に `"health_findings_repeated",`。
   - `web/api/realtime/invalidation-map.ts` の `EVENT_INVALIDATION` の `review_resync_resumed` の後に `health_findings_repeated: { sets: ["T", "L"] },`（root の timeline と受信箱が変わる）と注釈 1 行。
   replan で計画の範囲の正規表現に `web/api/realtime/(event-kinds|invalidation-map)\.ts` を足せば、次の run はこの 2 行と提出時の検査だけで終わる。
+- 前の run は申告を checkpoint にだけ書き、result を done で返した。WU の check `bash scripts/dev/test-affected.sh` は同じ 2 件の tsc のエラーで exit 1 になり、WU は retry（1/2）になった（範囲・試験・fmt・clippy の check は合格）。`EventKind` は生成型 `Event["type"]` から導かれ、2 file はそれを網羅で検査するので、範囲の中の変更だけでは直らない。retry の run が `yield.plan_issue` で申告し直した。
 
 ## 提案
 - `HealthRepeatSite` の module は `model.rs` が範囲の外のため `lib.rs` の `#[path = "model/health_repeat.rs"]` で読んでいる。`model.rs` を変えてよい後続の unit（record など）で `model.rs` の `mod health_repeat;` と `pub use` に移すとよい。

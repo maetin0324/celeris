@@ -142,7 +142,7 @@ fn repair_buckets(reason: &str) -> Vec<String> {
 
 /// 段の統合の修復の bucket（repair WU の title の `repair (<bucket>)`）と、その bucket の既にある修復の数。health の修復は
 /// rule ごと（`health:<rule_id>` を `,` で並べる）に数え、数は rule ごとの最大（D3.2・D4.1）。他の class は class の bucket。
-pub(super) fn repair_count(
+pub(in crate::dispatcher) fn repair_count(
     class: task_core::RepairClass,
     summary: &[String],
     repairs: &[&task_core::WorkUnitRow],

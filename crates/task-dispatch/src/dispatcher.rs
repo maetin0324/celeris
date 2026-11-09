@@ -2402,13 +2402,10 @@ impl Dispatcher {
             tracing::warn!(error = %e, "browser prerequisite re-evaluation failed");
         }
         steps.mark("cron_and_browser_prereq");
-        // ADR 2026-11-09-unscheduled-restart-hold D1: 走査が終われば、メモリの待ち（M1〜M10）が揃った。
-        report.dispatched = if self.accepting_new_work && self.disk_ready {
-            self.dispatch_ready()
-                .inspect(|_| self.stagnation.waits_known = true)?
-        } else {
-            0
-        };
+        if self.accepting_new_work && self.disk_ready {
+            report.dispatched = self.dispatch_ready()?;
+            self.stagnation.waits_known = true; // ADR 2026-11-09-unscheduled-restart-hold D1: メモリの待ちが揃った。
+        }
         steps.mark_with("dispatch_ready", crate::phase_timing::take());
         // ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch）D3:
         // 評価 run は本番を先に配った後の予約枠（`[routing_eval] reserved_runs`）の中だけで起こす。

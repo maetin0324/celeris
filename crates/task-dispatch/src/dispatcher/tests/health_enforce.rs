@@ -20,7 +20,8 @@ use task_core::required_checks::health::{
 };
 
 /// base の stub の検査器。`--print-review-policy` は `[review]` の無い repo の方針。report の mode は、作業ツリー
-/// （`--repo`）に `FIXED` があれば合格、無ければ隣の `stub.json` の `exit` と report（fail 級の `deps.violation`）。
+/// （`--repo`）に `FIXED` があれば合格、無ければ隣の `stub.json` の `exit` と report（fail 級の `deps.violation`。
+/// fingerprint の番号は作業ツリーの `FP` の数、無ければ 1。往復の試験〈`health_limits_integration.rs`〉が指摘を変える）。
 const STUB: &str = r#"import json, os, sys
 here = os.path.dirname(os.path.abspath(__file__))
 argv = sys.argv[1:]
@@ -32,8 +33,10 @@ with open(os.path.join(here, "stub.json")) as f:
     stub = json.load(f)
 repo = argv[argv.index("--repo") + 1]
 fixed = os.path.exists(os.path.join(repo, "FIXED"))
+fp = os.path.join(repo, "FP")
+number = int(open(fp).read()) if os.path.exists(fp) else 1
 code = 0 if fixed else stub["exit"]
-findings = [] if fixed else [{"rule_id": "deps.violation", "fingerprint": "deps.violation:0000000000000001",
+findings = [] if fixed else [{"rule_id": "deps.violation", "fingerprint": "deps.violation:%016d" % number,
     "severity": "error", "delta": "new", "exception": None, "evidence": [{"path": "src/lib.rs"}]}]
 report = {"schema": "celeris.repo-health.report/1", "tool": {"name": "repo_health.py", "version": "stub"},
     "inputs": {"profile": {"resolved": "builtin", "source": "builtin"}},
@@ -87,14 +90,14 @@ fn write_checker(root: &Path, exit: i32) {
 }
 
 /// 試験の repo に stub の検査器（`exit` は FIXED が無いときの exit）を commit する。
-fn commit_base_checker(repo: &Path, exit: i32) {
+pub(super) fn commit_base_checker(repo: &Path, exit: i32) {
     write_checker(repo, exit);
     git(repo, &["add", "-A"]);
     git(repo, &["commit", "-q", "-m", "checker"]);
 }
 
 /// `(work_unit_id, cmd, pass, health)` の health の項目の終了 event（WU の check と段の統合の両方）。
-fn health_items(events: &[Event]) -> Vec<(String, bool, HealthEvidence)> {
+pub(super) fn health_items(events: &[Event]) -> Vec<(String, bool, HealthEvidence)> {
     events
         .iter()
         .filter_map(|e| match e {
@@ -117,7 +120,11 @@ fn health_items(events: &[Event]) -> Vec<(String, bool, HealthEvidence)> {
         .collect()
 }
 
-fn unit(store: &Arc<dyn TaskStore>, task_id: TaskId, key: &str) -> task_core::WorkUnitRow {
+pub(super) fn unit(
+    store: &Arc<dyn TaskStore>,
+    task_id: TaskId,
+    key: &str,
+) -> task_core::WorkUnitRow {
     store
         .work_units_for(task_id)
         .unwrap()
@@ -126,7 +133,7 @@ fn unit(store: &Arc<dyn TaskStore>, task_id: TaskId, key: &str) -> task_core::Wo
         .unwrap_or_else(|| panic!("unit {key}"))
 }
 
-fn with_check(mut spec: task_core::WorkUnitSpec) -> task_core::WorkUnitSpec {
+pub(super) fn with_check(mut spec: task_core::WorkUnitSpec) -> task_core::WorkUnitSpec {
     spec.checks = vec![task_core::WorkUnitCheck {
         cmd: "true".into(),
         expect_exit: 0,

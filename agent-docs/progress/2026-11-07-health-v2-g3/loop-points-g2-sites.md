@@ -47,9 +47,15 @@ WorkUnit `g2-sites`（task 01M6ZDF9Q4BWD9DX6S9KX3KKS1、unit loop-points の子�
   - task-dispatch 32 件: `dispatcher/tests/` の `target_sync`（11）・`tree_branches`（5）・`git_workspace`（4）・`work_units`・`stale_priority`・`stage_reopen`・`phase_effect_ab::review_sync`（各 2）など。
   - celeris-campaign 51 件: `crates/campaign/tests/dagbench_*`（harness 19・overhead 8・accept 5・fault 5・process 4 など）。
   - 原因は 1 つ。試験の process には同梱の検査器が無く（`configure_bundled_checker` を呼ばない）、一時 repo の base にも検査器が無い。そのため適用判定が `Unavailable(checker_missing)` になり、planner の計画は risk unknown で設計 review（`design_review_failed:2` → `awaiting_plan_approval` の Blocked）に、review は policy の状態が不明で承認の子の待ちになる。
+- 原因の切り分け（2026-11-09、2 回目の run。範囲外の試験の土台に一時的に stub の同梱の検査器を入れて確かめ、確認後に戻した。branch には残していない）
+  - stub: `configure_bundled_checker` に渡す dir に `CHECKER_TREE`（`repo-health <40 桁>`）と `repo_health.py`（`--print-review-policy` は `source = absent`、report の mode は合格の report を書いて exit 0）を置く。
+  - `cargo nextest run -p task-dispatch --no-fail-fast -E 'test(/dispatcher::tests::(target_sync|tree_branches|git_workspace|work_units|stale_priority|stage_reopen|phase_effect_ab)/)'`: stub なしは `126 tests run: 97 passed, 29 failed`、`dispatcher/tests/mod.rs` の `dispatcher_with_test_clock` と 2 つ目の `Dispatcher::new` の前で stub を設定すると `126 passed`。
+  - `cargo nextest run -p celeris-campaign --no-fail-fast -E 'test(/dagbench/) | binary(/dagbench/)'`: `crates/campaign/src/dagbench/celeris_side.rs` の `Dispatcher::new` の前で stub を設定すると `139 tests run: 139 passed`。
+  - したがって 83 件は「試験の土台・dagbench の driver が同梱の検査器を持たない」ことだけで落ちる。直す場所は範囲外の上の 2 file（と、値で渡すなら `dispatcher.rs`・daemon の構築）。
+- 前回の run は `result.json` に `yield.plan_issue` を書かずに done を返したため、replan の申告が届かず、check の `test-affected.sh` が exit 100 で落ちた。2 回目の run は `yield.plan_issue` で申告し直した。
 
 ## 未解決
-- 上の 83 件。直すには範囲外の path（下の「提案」）が要るので、この unit では直さない（範囲を広げない）。
+- 上の 83 件（task-dispatch 32・celeris-campaign 51）。直すには範囲外の path（下の「提案」）が要るので、この unit では直さない（範囲を広げない）。`crates/campaign/src/dagbench/celeris_side.rs` は試験だけでなく dagbench の計測の driver でもあるので、計測でも同梱の検査器が要る。
 - G2 の材料が作った証跡（`CheckedRun.run`）は今は捨てている。review-path が review の health の項目に同じ評価を使えば、同じ candidate で検査器を 2 回起こさずに済む（`CandidateRepo.repo_id` は文字列なので、RepoId を持たせるか、review-path が材料作りの結果を受け取る形にする）。
 
 ## 提案

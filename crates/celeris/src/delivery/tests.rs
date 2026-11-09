@@ -542,7 +542,7 @@ fn record_evidence_with_definition(
                 repo_id: d.repo_id,
                 target_sha: d.target_sha.clone().unwrap(),
                 reviewed_sha: d.reviewed_sha.clone().unwrap(),
-                definition_sha256: task_core::required_checks::definition_digest(definition),
+                definition_sha256: task_core::required_checks::definition_digest(definition, None),
                 results: results
                     .iter()
                     .map(|(cmd, pass)| task_core::PhaseCheckResult {

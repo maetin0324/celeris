@@ -1511,7 +1511,7 @@ async fn review_records_each_repositories_own_definition_and_worktree_results() 
             assert_eq!(evidence.0[0].pass, pass);
             assert_eq!(
                 *evidence.1,
-                task_core::required_checks::definition_digest(&[command.into()])
+                task_core::required_checks::definition_digest(&[command.into()], None)
             );
         }
         assert_eq!(

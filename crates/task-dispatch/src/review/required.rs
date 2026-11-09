@@ -37,7 +37,7 @@ pub(super) async fn evaluate(
         let digest = checks
             .commands
             .as_ref()
-            .map(|cmds| task_core::required_checks::definition_digest(cmds))
+            .map(|cmds| task_core::required_checks::definition_digest(cmds, None))
             .unwrap_or_default();
         let mut results = Vec::new();
         let mut binding = checks.binding;

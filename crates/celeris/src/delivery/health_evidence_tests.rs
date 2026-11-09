@@ -5,7 +5,7 @@ use super::*;
 
 /// 配送を 1 回進める。取り込み先は案件の repo 行（Celeris 自身の repo ではない）。ff したら `None`、ff せず
 /// 再 review に戻したらその理由を返す。
-fn deliver(
+pub(super) fn deliver(
     store: &task_core::SqliteStore,
     repo: &Path,
     d: &Delivery,
@@ -29,7 +29,7 @@ fn deliver(
 }
 
 /// `checker` の health の項目だけを持つ合格の証跡（定義指紋も `checker` で作る）を `d` に記録する。
-fn record_health(
+pub(super) fn record_health(
     store: &task_core::SqliteStore,
     d: &Delivery,
     evidence: health::HealthEvidence,

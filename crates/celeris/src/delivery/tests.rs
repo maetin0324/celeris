@@ -1961,3 +1961,6 @@ fn prepare_child_counts_as_in_flight_until_it_exits() {
 
 #[path = "health_evidence_tests.rs"]
 mod health_evidence;
+
+#[path = "health_enforce_tests.rs"]
+mod health_enforce;

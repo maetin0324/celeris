@@ -6,7 +6,7 @@
 - 改訂: 2026-11-09（ADR 2026-11-08-health-enforcement-loop D4.3）— **追加。v1 のまま**。task の event に `health_findings_repeated`
   （`source_task`・`site`（`{kind: work_unit|phase, key}` か `{kind: review}`）・`fingerprints`（重複を除き辞書順）・`set_sha256`）を足した。追記先は
   木の root。`Inbox.attention[]` に type `health_repeat`（`task`・`set_sha256`・`fingerprints`・`sources[]`（`task`・`site`・`at`）・`at`）、受信箱の
-  kind `health_repeat` を足した（受信箱では答えない。answer は 409 `native_action_required`。人は源の task に comment するか retry する）。
+  kind `health_repeat` を足した（受信箱では答えない。answer は 409 `native_action_required`。人は源の task に comment して再開する）。
 - 改訂: 2026-11-04（ADR 2026-11-04-lane-rules-exhaustive-evidence D6・D7）— **追加。v1 のまま**。エンドポイント 236・237
   （`POST`・`GET /script/domains/{domain}/exhaustive-runs`。§3.134.6）を足した。昇格の 422 `script_canary_not_ready` の
   `readiness` に欄 `exhaustive`（網羅の証拠の立場）を足し、`lane_rules` の `required` は証拠が `passed` のとき 100 になる。

@@ -890,7 +890,8 @@ impl Builder<'_> {
     }
 
     /// ADR 2026-11-08-health-enforcement-loop D4.3: 受信箱では答えない（native なし。答えると 409）。人は源の task に
-    /// comment するか retry して再開する。源がすべて Blocked を出るか root が終端になると消える。
+    /// comment して再開する（Blocked の源への comment は回答 `Trigger::Answer`）。選択肢は Blocked の源に効く口だけを出す
+    /// （`POST /tasks/{id}/retry` は Failed・Cancelled しか受けない）。源がすべて Blocked を出るか root が終端になると消える。
     fn health_repeat(&self, a: &AttentionItem) -> Option<InboxItem> {
         let AttentionItem::HealthRepeat {
             task,
@@ -921,26 +922,18 @@ impl Builder<'_> {
                     kind: InboxKind::HealthRepeat,
                     title: format!("修復の後も同じ health の指摘が残る: {}", task.title),
                     detail: clip(&format!(
-                        "health の指摘 {n} 件が修復の後も残ったので、repair を起こさず源の task {m} 件を Blocked にした。源: {src}。指摘: {fps}。源の task に comment で直し方を伝えるか retry すると再開し、源がすべて Blocked を出るとこの項目は消える",
+                        "health の指摘 {n} 件が修復の後も残ったので、repair を起こさず源の task {m} 件を Blocked にした。源: {src}。指摘: {fps}。源の task に comment で直し方を伝えると再開し、源がすべて Blocked を出るとこの項目は消える",
                         n = fingerprints.len(),
                         m = sources.len(),
                         src = listed.join("、"),
                         fps = fingerprints.join(", "),
                     )),
-                    options: vec![
-                        opt(
-                            "comment",
-                            "源の task に comment して再開する",
-                            false,
-                            &format!("POST /tasks/{first}/comments（task 詳細から）"),
-                        ),
-                        opt(
-                            "retry",
-                            "源の task を retry する",
-                            false,
-                            &format!("POST /tasks/{first}/retry（task 詳細から）"),
-                        ),
-                    ],
+                    options: vec![opt(
+                        "comment",
+                        "源の task に comment して再開する",
+                        false,
+                        &format!("POST /tasks/{first}/comments（task 詳細から）"),
+                    )],
                     recommended: Some("comment".to_string()),
                     due_at: None,
                     blocking: InboxBlocking {

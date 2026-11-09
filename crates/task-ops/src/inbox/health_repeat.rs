@@ -4,8 +4,8 @@
 //!   `Event::HealthFindingsRepeated` を追記する。WU の check・段の統合・task の review の経路はこれだけを呼ぶ。
 //! - [`attention_items`]: 受信箱の `health_repeat`（`AttentionItem::HealthRepeat`）を root の events から導く。
 //!   項目の鍵は `(root, set_sha256)`。別の leaf・別の経路が同じ集合に当たっても 1 件にまとめ、源を並べる。
-//!   源がすべて Blocked を出たか root が終端なら出さない。受信箱では答えない（人は源の task への comment・retry で
-//!   再開する）。新しい表・config の欄は無く、正本は追記専用の events。
+//!   源がすべて Blocked を出たか root が終端なら出さない。受信箱では答えない（人は源の task への comment で再開する。
+//!   Blocked の源への comment は回答 `Trigger::Answer`）。新しい表・config の欄は無く、正本は追記専用の events。
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::convert::Infallible;
 
@@ -171,7 +171,7 @@ pub(super) fn attention_items(
 }
 
 /// 源が往復の event（行 id `event_id`）の後も Blocked に留まっているか。今 Blocked でも、その後に一度
-/// Blocked を出ていれば（人の comment・retry で再開した後に別の理由で止まった）この往復の源ではない。
+/// Blocked を出ていれば（人の comment で再開した後に別の理由で止まった）この往復の源ではない。
 /// `reads` に無い源（範囲つきの組み立てで範囲の外）だけを読む。
 fn still_blocked(
     store: &dyn TaskStore,

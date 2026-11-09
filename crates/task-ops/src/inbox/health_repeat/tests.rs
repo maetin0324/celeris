@@ -194,7 +194,7 @@ fn health_limits_inbox_different_sets_two_items() {
     assert_ne!(items[0].id, items[1].id);
 }
 
-/// 源が Blocked を出たら（人の comment・retry の再開）その源は外れ、全部出たら項目は消える。出た後に別の理由で
+/// 源が Blocked を出たら（人の comment の再開。回答 `Trigger::Answer`）その源は外れ、全部出たら項目は消える。出た後に別の理由で
 /// また Blocked になっても、古い往復の源には戻らない。
 #[test]
 fn health_limits_inbox_source_leaving_blocked_clears() {
@@ -297,4 +297,73 @@ fn health_limits_inbox_touching_matches_full_inbox() {
         assert_eq!(items.len(), 1, "touching {touching}");
         assert_eq!(items[0], &full_item);
     }
+}
+
+/// 不変条件（D4.3）: `health_repeat` の項目の選択肢は Blocked の源に効く口（comment）だけ。`POST /tasks/{id}/retry`
+/// は Failed・Cancelled しか受けず（`crate::retry::plan_retry`）、Blocked の源には 409 になるので出さない。
+/// 既存の `health_limits_inbox_` の試験は項目の数・源・消え方と native の無いことだけを見て、選択肢の key も、
+/// 選択肢の口が源の今の状態で受け付けられるかも見ないので、Blocked の源に効かない選択肢が混ざっても検出できない。
+/// ここでは選択肢の key を固定し、出した口（comment）が回答 `Trigger::Answer` で源を Blocked から出して項目を消すこと、
+/// 出さない口（retry）が Blocked の源を拒むことを確かめる。
+#[test]
+fn health_limits_inbox_options_resume_blocked_source() {
+    let store = SqliteStore::open_in_memory().expect("store");
+    let root = insert(&store, None, Status::Running);
+    let a = insert(&store, Some(root.id), Status::Blocked);
+    record_findings_repeated(
+        &store,
+        &a,
+        HealthRepeatSite::WorkUnit { key: "wu-a".into() },
+        &fps(&["fp-x"]),
+    )
+    .expect("record");
+
+    let out = inbox(&store);
+    let items = repeats(&out);
+    assert_eq!(items.len(), 1, "{items:?}");
+    let item = items[0];
+    let keys: Vec<&str> = item.options.iter().map(|o| o.key.as_str()).collect();
+    assert_eq!(keys, vec!["comment"], "{:?}", item.options);
+    assert_eq!(item.recommended.as_deref(), Some("comment"));
+    assert!(
+        item.options[0]
+            .effect
+            .contains(&format!("/tasks/{}/comments", a.id)),
+        "{:?}",
+        item.options
+    );
+    assert!(
+        item.options.iter().all(|o| !o.effect.contains("/retry")),
+        "{:?}",
+        item.options
+    );
+    assert!(
+        !item.detail.as_deref().unwrap_or_default().contains("retry"),
+        "{:?}",
+        item.detail
+    );
+
+    // 出さない口: retry は Blocked の源を拒む（案内すると人の操作は 409 になる）。
+    let err = crate::retry::plan_retry(&store, a.id, false, None, false, OffsetDateTime::now_utc())
+        .expect_err("a blocked source is not retryable");
+    assert!(
+        matches!(err, crate::error::OpsError::InvalidState { .. }),
+        "{err:?}"
+    );
+
+    // 出した口: comment は回答（`Trigger::Answer`）で源を Blocked から出し、項目は消える。
+    let result = crate::comment::post_human_comment_as(
+        &store,
+        a.id,
+        Some("human:web".into()),
+        "検査器の入力を直した".into(),
+        OffsetDateTime::now_utc(),
+    )
+    .expect("comment");
+    let resumed = result
+        .transition
+        .expect("the comment resumes the blocked source");
+    assert_eq!((resumed.from, resumed.to), (Status::Blocked, Status::Ready));
+    assert_eq!(resumed.reason, Trigger::Answer.name());
+    assert!(repeats(&inbox(&store)).is_empty());
 }

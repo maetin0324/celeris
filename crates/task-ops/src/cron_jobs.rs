@@ -148,11 +148,6 @@ fn validate_project_reconcile(job: &CronJob) -> Result<(), OpsError> {
     input_kind::require_project_id(job, CRON_KIND_PROJECT_RECONCILE).map(|_| ())
 }
 
-/// `project_reconcile` の対象の案件 id（`extra.project_id`。読み取りは [`template_project_id`]）。
-pub fn reconcile_project_id(job: &CronJob) -> Option<String> {
-    template_project_id(job)
-}
-
 /// `cos_review` の雛形の検証: task を作らない種類の共通の検証（[`validate_input_kind`]）と、題は空にできない。
 fn validate_cos_review(job: &CronJob) -> Result<(), OpsError> {
     validate_input_kind(job, CRON_KIND_COS_REVIEW)?;
@@ -915,7 +910,7 @@ fn decide_post(
         .cron_job_run_last_created(job.id)?
         .map(|r| r.scheduled_for);
     let posted = match template_kind(&job.template).map_err(OpsError::Validation)? {
-        CronJobKind::ProjectReconcile => match reconcile_project_id(job) {
+        CronJobKind::ProjectReconcile => match template_project_id(job) {
             Some(project) => sink.post_project_reconcile(job, scheduled_for, &project),
             None => Err("template.extra.project_id is missing".into()),
         },

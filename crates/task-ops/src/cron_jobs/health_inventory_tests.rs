@@ -316,10 +316,7 @@ fn health_inventory_shares_input_kind_validation() {
         )
         .expect(kind);
     }
-    // project_reconcile and health_inventory read the target with the same function.
+    // project_reconcile reads its target with the same function as health_inventory.
     let reconcile = as_job(&input_job(CRON_KIND_PROJECT_RECONCILE, CronOverlap::Skip));
-    assert_eq!(
-        reconcile_project_id(&reconcile),
-        template_project_id(&reconcile)
-    );
+    assert_eq!(template_project_id(&reconcile).as_deref(), Some(PROJECT));
 }

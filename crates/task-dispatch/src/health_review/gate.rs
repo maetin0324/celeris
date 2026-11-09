@@ -944,7 +944,7 @@ fn policy_review(
         .map_err(|e| format!("policy_review_failed: 判定の出力を読めない: {e}"))
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+pub(super) fn sha256_hex(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
         .map(|b| format!("{b:02x}"))

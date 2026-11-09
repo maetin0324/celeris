@@ -11,9 +11,12 @@
 //!   run・完了の channel）を使う配線は `health_review/design_gate.rs` で、`dispatcher` の子 module として `#[path]` で読む。
 //! - [`input`]: final review の health 文脈を candidate SHA ごとに 1 回作る（D4）。
 //! - [`verdict`]: 構造化 health verdict の blocking を不合格にし repair/replan に写す（D5）。
+//! - [`stub_checker`]: health を測らない process（dispatcher 試験の土台・dagbench の driver）が設定する、合格の stub の
+//!   同梱の検査器（ADR 2026-11-08-health-enforcement-loop D1.4 の代わり。本番の daemon は使わない）。
 
 pub(crate) mod design;
 pub mod gate;
 pub(crate) mod input;
 pub mod policy;
+pub mod stub_checker;
 pub(crate) mod verdict;

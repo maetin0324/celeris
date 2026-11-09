@@ -11,7 +11,7 @@ use std::path::Path;
 use task_core::{FailedCheck, RepairDecision, RepoId, classify_review_failure};
 
 use super::*;
-use crate::dispatcher::tests::{dispatcher, done_adapter, new_task};
+use crate::dispatcher::tests::{dispatcher_without_bundled_checker, done_adapter, new_task};
 use crate::health_review::input::{
     CandidateRepo, HEALTH_INPUT_TIMEOUT, HealthInputWork, build_health_input,
 };
@@ -168,7 +168,8 @@ pub(super) fn case_for(checker: Option<(Policy, Report)>, changed: &str, reviewe
         timeout: HEALTH_INPUT_TIMEOUT,
     };
     build_health_input(&work);
-    let d = dispatcher(store.clone(), done_adapter(), 1);
+    // 同梱の検査器は設定しない（`checker = None` の repo は base にも同梱にも検査器が無い場合）。
+    let d = dispatcher_without_bundled_checker(store.clone(), done_adapter(), 1);
     Case {
         store,
         d,

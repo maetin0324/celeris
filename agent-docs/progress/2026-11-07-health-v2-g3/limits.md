@@ -114,7 +114,16 @@ closeout が ADR の付記に写すための一覧。1・2・4 は ADR の「状
 - 人の操作は要らない。
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
-（検査の後に書く）
+この unit はコードを変えていない（変えた path はこの file と ADR 2 本の 1 行ずつ）。下の検査は「G3 limits record: limits の記録・ADR の付記・check-health の所要時間」の commit で実行した。その後の commit は、この節を書いた差分だけ。`$CELERIS_WU_BASE` はこの WU の開始時の HEAD と同じ tree なので、test-affected は `env -u CELERIS_WU_BASE` で task 全体の変更（基準は `git merge-base HEAD main`）を対象にした。
+- `env -u CELERIS_WU_BASE bash scripts/dev/test-affected.sh` → exit 0（613 秒）。
+  - 対象: crate 14 個（celeris・celeris-campaign・celeris-credentiald・celeris-mcp・celeris-script・celerisctl・e2e・llm-proxy・routing-eval・task-api・task-core・task-dispatch・task-ops・task-worker）、web の型検査と unit 試験、test-ts-verify。
+  - check-health: `repo-health: verdict=pass exit=0 reviewable=false findings=718 fail_grade=0 new=2 worsened=0 existing=716`。必須 rule はすべて pass（`source-size`・`doc.links`・`progress.index`・`human-text` など）。new の 2 件は warning の `dup.contract`（`UnavailableReason`）と `dup.public-surface`（`fn judge`）で、「未解決」6。`repo_health_gate: all checks passed`。
+  - nextest: `8128 tests run: 8128 passed (10 slow), 23 skipped`。script bundle の SKIP は 0 件。web: `Test Files 104 passed (104)`・`Tests 711 passed (711)`。`test-ts-verify: 20 passed, 0 failed`。
+- `cargo nextest run -p task-core -p task-ops -p task-dispatch --no-tests=fail -E 'test(/health_limits_/)'` → exit 0、`39 tests run: 39 passed, 3588 skipped`（3.2 秒）。`grep -rhoE "fn health_limits_[a-z0-9_]+" crates/ | sort -u | wc -l` → 39。
+- `cargo clippy --workspace -- -D warnings` → exit 0（vendored `deno_core` の既存の warning 1 件だけ）。
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- 文書の検査 3 本: `bash scripts/dev/check-doc-links.sh` → `check-doc-links: ok`、`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → `check-doc-layout: ok`、`sh scripts/dev/progress-index.sh --check` → `progress-index --check: ok`（3 本とも exit 0。この節を書いた後の HEAD でも再実行した）。`sh scripts/dev/check-adr-numbers.sh` も exit 0（411 files）。
+- D1.5 の計測は上の節（`bash scripts/dev/check-health.sh` 3 回、exit 0、中央値 99.5 秒）。
 
 ## 未解決
 1. WU の check の health だけの不合格で指摘が毎回変わり、WU の retry（`max_retries`）を使い切った場合は今どおり WU が Failed になる。その後に自動 replan が起きるか（D4.4「health のために replan を足さない」に当たるか）は試験で確かめていない（未確認。integration-wire の未解決 1 を budgets は扱っていない）。

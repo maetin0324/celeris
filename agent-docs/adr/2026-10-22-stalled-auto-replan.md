@@ -30,6 +30,7 @@ check の書き方（`bash -c` の包み・`set -e`・`JAVA_HOME` の export）�
 - D3（進展）: 2 つの自動 replan の間の「葉の進展」は `WorkUnitCommitted` のうち `commit` が `base` と違う（変更があった）もの。
   WU の run・repair WU の run のどちらでもよい。人の replan の依頼（`ExecutionHintSet{replan: true}`、遷移 `plan_replan` /
   `phase_replan` / `answer`）は連なりを切る（人が手を入れた後は数え直す）。
+  - 付記（2026-11-09、根拠は [health-enforcement-loop](2026-11-08-health-enforcement-loop.md) の D4.3、task 01M70C8NHEANARRKZD9RGKZ87D）: `stalled_replans` の連なりを数え直す起点は、人の replan の依頼・`answer` に加えて、人の comment（遷移 `comment`）と reopen（遷移 `reopen`）にも広がった。判定は `plan_gate::stall` の `is_human_resume` の 1 か所で、health の同じ指摘の往復の判定 `health_review::limits` と共有する（`pending_integration_auto_replan` は今どおり replan の依頼・`answer` だけで切る）。
 - D4（回数）: `plan_gate::stalled_replans(events, key, failure)` は、末尾から見て同じ `(key, failure)` の自動 replan が進展なしで
   何回続いたかを返す。`STALLED_REPLAN_LIMIT = 2` に達したら（1 回目の失敗で replan、同じ失敗の 2 回目でもう 1 回 replan、
   3 回目で止める。`counted_replans` は 2 以下）自動 replan をやめる。`max_replans` に余りがあっても止める。

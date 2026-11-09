@@ -1491,12 +1491,9 @@ impl Dispatcher {
             checks: run
                 .checks
                 .iter()
-                .map(|(cmd, pass, summary)| task_core::PhaseCheckResult {
-                    cmd: cmd.clone(),
-                    pass: *pass,
-                    summary: summary.clone(),
-                    // The health evidence of a phase integration lives in IntegrationCheckFinished only.
-                    health: None,
+                // The health evidence of a phase integration lives in IntegrationCheckFinished only.
+                .map(|(cmd, pass, summary)| {
+                    task_core::PhaseCheckResult::new(cmd.clone(), *pass, summary.clone())
                 })
                 .collect(),
         };

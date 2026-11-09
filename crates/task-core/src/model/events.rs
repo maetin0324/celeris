@@ -1213,6 +1213,18 @@ pub struct PhaseCheckResult {
     pub health: Option<Box<crate::required_checks::health::HealthEvidence>>,
 }
 
+impl PhaseCheckResult {
+    /// health の証跡を持たない検査 1 件（`health` は `None`）。
+    pub fn new(cmd: String, pass: bool, summary: String) -> Self {
+        PhaseCheckResult {
+            cmd,
+            pass,
+            summary,
+            health: None,
+        }
+    }
+}
+
 impl Event {
     /// 従来どおりの文字列だけの進行（ADR-0048 D2 の構造化フィールドは付けない）。
     pub fn worker_progress(run_id: impl Into<String>, msg: impl Into<String>) -> Self {

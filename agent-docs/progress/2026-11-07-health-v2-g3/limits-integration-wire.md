@@ -56,7 +56,10 @@ dispatcher の試験は `run_until_idle`（dispatcher が静まるまで tick �
 - task-dispatch の `health_enforce_` の試験はすべて変更なしで合格した（stub の `FP` は既存の試験では書かれないので、fingerprint は前と同じ `deps.violation:0000000000000001`）。
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
-提出時の検査の結果は下の「提出時の検査」に書く。
+- `cargo nextest run -p task-dispatch --no-tests=fail -E 'test(/health_limits_/) | test(/health_enforce_/)'` → exit 0: 60 tests run: 60 passed。WU の check の名前の確かめ（plan の check の `grep -rqE "fn <名前>\b"` の loop）で 6 件とも見つかる。
+- `bash scripts/dev/test-affected.sh` → exit 0。nextest 3669 tests run: 3669 passed（11 skipped）。repo-health verdict=pass（fail_grade 0、new 2、worsened 0、`source-size` pass）。new の 2 件は optional の warning（`dup.contract`: `required_checks::health::UnavailableReason` と `route_select::availability::UnavailableReason`、`dup.public-surface`: `campaign/src/jev_smoke.rs` と `health_review/limits.rs`）で、この unit が変えた file ではない。
+- `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace -- -D warnings` → exit 0。
+- 範囲 check（plan の `scope: true` の cmd を `sh "$CELERIS_WU_SCOPE_PATHS"` で）→ 範囲外の path なし。
 
 ## 本番への移行
 - config・表・migration・API の変更は無い。release に入ると、WU の check と段の統合の health の往復で task が Blocked になり、受信箱に源の task の質問と root の `health_repeat` が出る。人は源の task への comment・回答で再開する（`limits` は人の再開の後の最初の評価を往復と数えない）。

@@ -28,7 +28,7 @@ fn finding(kind: &str, severity: &str, repair: Option<&str>) -> String {
         .map(|scope| format!(r#","repair":{{"scope":"{scope}","class":"doc"}}"#))
         .unwrap_or_default();
     format!(
-        r#"{{"kind":"{kind}","severity":"{severity}","path":"crates/x/src/lib.rs","reason":"{kind} found"{repair}}}"#
+        r#"{{"kind":"{kind}","severity":"{severity}","path":"crates/x/src/lib.rs","reason":"{kind} found at crates/x/src/lib.rs:12"{repair}}}"#
     )
 }
 
@@ -36,9 +36,9 @@ fn health(findings: &[String]) -> String {
     format!(r#"{{"findings":[{}]}}"#, findings.join(","))
 }
 
-/// `health_requested` なら policy の変更の無い材料（repo 無し）を渡す。
+/// `health_requested` なら policy の変更の無い候補の材料を渡す。
 fn verdicts(text: &str, health_requested: bool) -> Result<Vec<Verdict>, String> {
-    let input = HealthReviewInput::default();
+    let input = grounded_input();
     Verdict::from_review_json(
         text,
         health_requested.then_some(&input),
@@ -124,7 +124,7 @@ fn health_review_verdict_removal_missing_with_local_scope_repairs_locally() {
     assert_eq!(failing[0].criterion_idx, 1);
     assert_eq!(
         failing[0].reason,
-        "reviewer(r1): health:removal_missing: removal_missing found"
+        "reviewer(r1): health:removal_missing: removal_missing found at crates/x/src/lib.rs:12"
     );
     assert_eq!(
         failing[0].repair_hint,
@@ -154,7 +154,7 @@ fn health_review_verdict_dual_source_of_truth_replans() {
     assert_eq!(failing.len(), 1);
     assert_eq!(
         failing[0].reason,
-        "reviewer(r1): health:dual_source_of_truth: dual_source_of_truth found"
+        "reviewer(r1): health:dual_source_of_truth: dual_source_of_truth found at crates/x/src/lib.rs:12"
     );
     assert_eq!(
         failing[0].repair_hint.as_ref().map(|h| h.scope.as_str()),
@@ -213,7 +213,7 @@ fn health_review_verdict_seven_kinds_follow_the_d5_1_table() {
 /// substantive の種別は文面に依らず replan のまま。
 #[test]
 fn health_review_verdict_substantive_reason_mentioning_format_still_replans() {
-    let h = r#"{"findings":[{"kind":"duplicate_implementation","severity":"blocking","reason":"the config format is parsed twice"}]}"#;
+    let h = r#"{"findings":[{"kind":"duplicate_implementation","severity":"blocking","path":"crates/x/src/lib.rs","reason":"the config format is parsed twice at crates/x/src/lib.rs:12"}]}"#;
     let v = verdicts(&review_json(Some(h)), true).expect("valid");
     assert_eq!(classify(&v), Some(RepairDecision::Substantive));
     // 比較: 同じ reason でヒントの無い reviewer の不合格は、既存の規則で format の局所修復と推測される。
@@ -241,7 +241,7 @@ fn health_review_verdict_advisory_only_passes_and_is_recorded() {
     assert_eq!(v.len(), 4);
     assert_eq!(
         v[0].reason,
-        "reviewer(r1): health:duplicate_implementation (advisory): duplicate_implementation found"
+        "reviewer(r1): health:duplicate_implementation (advisory): duplicate_implementation found at crates/x/src/lib.rs:12"
     );
     assert_eq!(v[0].criterion_idx, 1);
     assert_eq!(v[0].repair_hint, None);
@@ -331,4 +331,170 @@ fn health_review_verdict_without_health_request_keeps_previous_behavior() {
     let unknown_kind = health(&[finding("new_kind", "blocking", None)]);
     let err = verdicts(&review_json(Some(&unknown_kind)), false).expect_err("invalid");
     assert!(err.starts_with("reviewer(r1): artifacts/review.json is not a valid ReviewOutput: "));
+}
+
+// G3: 既存の試験は repair 分類だけを確認し、根拠の有無を区別していなかった。
+fn grounded_input() -> HealthReviewInput {
+    use task_worker::protocol::{DiffStat, PathStat};
+    HealthReviewInput {
+        repos: vec![HealthRepoInput {
+            diff: DiffStat {
+                files: 1,
+                paths: vec![PathStat {
+                    path: "crates/x/src/lib.rs".into(),
+                    insertions: 1,
+                    deletions: 0,
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+fn finding_verdict(input: &HealthReviewInput, path: Option<&str>, reason: &str) -> Vec<Verdict> {
+    let health = serde_json::json!({"findings": [{
+        "kind": "removal_missing", "severity": "blocking", "path": path,
+        "reason": reason, "repair": {"scope": "local", "class": "doc"}
+    }]});
+    Verdict::from_review_json(
+        &review_json(Some(&health.to_string())),
+        Some(input),
+        &CRITERIA,
+        TAG,
+        REL,
+    )
+    .expect("valid review")
+}
+
+#[test]
+fn health_enforce_llm_finding_grounded_line_blocks() {
+    for reason in [
+        "crates/x/src/lib.rs:12 retains old code",
+        "see `crates/x/src/lib.rs#L2`",
+    ] {
+        let v = finding_verdict(&grounded_input(), Some("crates/x/src/lib.rs"), reason);
+        assert_eq!(v.iter().filter(|v| !v.pass).count(), 1);
+        assert!(is_local(&classify(&v)));
+    }
+}
+
+#[test]
+fn health_enforce_llm_finding_ungrounded_is_retained_as_advisory() {
+    for reason in [
+        "old code remains",
+        "crates/x/src/lib.rs:0",
+        "crates/x/src/lib.rs:12abc",
+        "other/crates/x/src/lib.rs:12",
+        "crates/x/src/lib.rs has 12 lines",
+    ] {
+        let mut v = finding_verdict(&grounded_input(), Some("crates/x/src/lib.rs"), reason);
+        assert_eq!(classify(&v), None, "{reason}");
+        assert_eq!(v.len(), 3);
+        assert!(v[0].reason.contains("health:ungrounded"));
+        assert!(v[0].reason.ends_with(reason));
+        assert!(v[0].repair_hint.is_none());
+        v.sort_by_key(|v| v.criterion_idx);
+        assert_eq!(
+            v.iter().rfind(|v| v.criterion_idx == 1).unwrap().reason,
+            "reviewer(r1): ok-1"
+        );
+    }
+}
+
+#[test]
+fn health_enforce_llm_finding_outside_diff_is_advisory() {
+    for path in [None, Some(""), Some("other.rs")] {
+        let v = finding_verdict(&grounded_input(), path, "other.rs:12 old code");
+        assert_eq!(classify(&v), None);
+        assert!(v[0].reason.contains("health:ungrounded"));
+    }
+}
+
+#[test]
+fn health_enforce_llm_finding_report_fingerprint_blocks_only_in_matching_repo() {
+    use task_worker::protocol::HealthReportFinding;
+    let mut input = grounded_input();
+    input.repos[0].findings.reviewable = true;
+    input.repos[0].findings.new.push(HealthReportFinding {
+        rule_id: "deps.violation".into(),
+        fingerprint: "deps.violation:abcdef".into(),
+        severity: "error".into(),
+        delta: "new".into(),
+        path: Some("crates/x/src/lib.rs".into()),
+    });
+    let run = |i: &HealthReviewInput| {
+        finding_verdict(i, Some("crates/x/src/lib.rs"), "see deps.violation:abcdef")
+    };
+    assert!(is_local(&classify(&run(&input))));
+    input.repos[0].findings.reviewable = false;
+    assert_eq!(classify(&run(&input)), None);
+    input.repos[0].findings.reviewable = true;
+    let mut other = input.repos[0].clone();
+    other.diff.paths.clear();
+    input.repos[0].findings.new.clear();
+    input.repos.push(other);
+    assert_eq!(classify(&run(&input)), None);
+}
+
+#[test]
+fn health_enforce_llm_finding_owner_row_blocks_only_for_its_path() {
+    use task_worker::protocol::OwnerRow;
+    let mut input = grounded_input();
+    input.repos[0].owner_rows.push(OwnerRow {
+        path: "crates/x/src/lib.rs".into(),
+        row: "| x | owner | entry |".into(),
+    });
+    let run = |i: &HealthReviewInput| {
+        finding_verdict(
+            i,
+            Some("crates/x/src/lib.rs"),
+            "contradicts | x | owner | entry |",
+        )
+    };
+    assert!(is_local(&classify(&run(&input))));
+    input.repos[0].owner_rows[0].path = "other.rs".into();
+    assert_eq!(classify(&run(&input)), None);
+    input.repos[0].owner_rows[0].path = "crates/x/src/lib.rs".into();
+    input.repos[0].owner_rows[0].row.clear();
+    assert_eq!(classify(&run(&input)), None);
+}
+
+#[test]
+fn health_enforce_llm_finding_declared_removal_blocks() {
+    let mut input = grounded_input();
+    input.brief = Some(Box::new(
+        serde_json::from_value(serde_json::json!({
+            "root_cause": "duplicate state", "owner": "x", "options": [],
+            "removals": ["legacy retry map"]
+        }))
+        .unwrap(),
+    ));
+    let run = |i: &HealthReviewInput| {
+        finding_verdict(i, Some("crates/x/src/lib.rs"), "legacy retry map remains")
+    };
+    assert!(is_local(&classify(&run(&input))));
+    input.brief.as_mut().unwrap().removals = vec!["".into()];
+    assert_eq!(classify(&run(&input)), None);
+}
+
+#[test]
+fn health_enforce_llm_finding_advisory_does_not_override_failed_criterion() {
+    let text = review_json(Some(&health(&[finding(
+        "removal_missing",
+        "blocking",
+        None,
+    )])))
+    .replace("\"pass\":true", "\"pass\":false");
+    let v = Verdict::from_review_json(
+        &text,
+        Some(&HealthReviewInput::default()),
+        &CRITERIA,
+        TAG,
+        REL,
+    )
+    .unwrap();
+    assert!(v[0].pass && v[0].reason.contains("health:ungrounded"));
+    assert_eq!(v.iter().filter(|v| !v.pass).count(), 2);
 }

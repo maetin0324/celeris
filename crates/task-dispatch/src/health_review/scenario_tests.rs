@@ -389,7 +389,7 @@ async fn health_review_scenario_normal_change() {
 async fn health_review_scenario_high_risk_change() {
     let blocking = serde_json::json!({
         "kind": "dual_source_of_truth", "severity": "blocking", "path": STORE_PATH,
-        "reason": "rows.revision and the events both hold the revision",
+        "reason": format!("{STORE_PATH}:1 rows.revision and the events both hold the revision"),
     });
     let out = run_flow(true, STORE_PATH, true, vec![blocking]).await;
 

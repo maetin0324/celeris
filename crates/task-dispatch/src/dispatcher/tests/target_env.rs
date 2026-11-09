@@ -220,7 +220,10 @@ async fn target_env_integration_check_uses_the_task_scratch_target() {
     let logs: Vec<String> = events
         .iter()
         .filter_map(|e| match e {
-            Event::IntegrationCheckStarted { log_path, .. } => {
+            // health の項目（`HEALTH_CHECK_ID`）は command を走らせないので log が無い。
+            Event::IntegrationCheckStarted { log_path, cmd, .. }
+                if cmd != task_core::required_checks::health::HEALTH_CHECK_ID =>
+            {
                 Some(std::fs::read_to_string(log_path).unwrap_or_default())
             }
             _ => None,

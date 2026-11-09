@@ -25,18 +25,22 @@ pub(super) const STORE_PATH: &str = "crates/task-store/src/rows.rs";
 const OWNER_MAP: &str = "owners/map.md";
 
 /// stub の report（new の finding 1 件・existing 1 件）。
+///
+/// 新しい finding は fail 級でない warning（verdict pass、exit 0）にする。fail 級の new の error は WU の check・段の統合の
+/// health の項目が final review の前に repair へ回す（ADR 2026-11-08-health-enforcement-loop D3.2。その流れは
+/// `dispatcher/tests/health_enforce.rs`）ので、final review まで届く材料は統合を止めない finding になる。
 fn report() -> serde_json::Value {
-    let finding = |rule: &str, delta: &str, path: &str| {
+    let finding = |rule: &str, severity: &str, delta: &str, path: &str| {
         serde_json::json!({"rule_id": rule, "fingerprint": format!("{rule}:00000000000000aa"),
-            "severity": "error", "delta": delta, "exception": null, "evidence": [{"path": path}]})
+            "severity": severity, "delta": delta, "exception": null, "evidence": [{"path": path}]})
     };
     serde_json::json!({
         "schema": "celeris.repo-health.report/1",
-        "summary": {"verdict": "fail", "exit_code": 1, "reviewable": true,
-            "counts": {"findings": 2, "fail_grade": 1, "new": 1, "worsened": 0, "existing": 1}},
+        "summary": {"verdict": "pass", "exit_code": 0, "reviewable": true,
+            "counts": {"findings": 2, "fail_grade": 0, "new": 1, "worsened": 0, "existing": 1}},
         "findings": [
-            finding("size.responsibility-growth", "new", NORMAL_PATH),
-            finding("arch-map.missing_invariant", "existing", OWNER_MAP),
+            finding("size.responsibility-growth", "warning", "new", NORMAL_PATH),
+            finding("arch-map.missing_invariant", "error", "existing", OWNER_MAP),
         ],
         "policy": {"version": "1", "source": "base", "changed": false, "files": []},
     })
@@ -56,7 +60,7 @@ fn project_repo(with_policy: bool) -> tempfile::TempDir {
         "invariants": {"events-append-only": "CLAUDE.md"}, "definition_sha256": DIGEST,
     });
     let script = format!(
-        "import sys\nargs = sys.argv[1:]\nif '--print-review-policy' in args:\n    sys.stdout.write({policy:?})\n    sys.exit(0)\nopen(args[args.index('--out') + 1], 'w').write({report:?})\nsys.exit(1)\n",
+        "import sys\nargs = sys.argv[1:]\nif '--print-review-policy' in args:\n    sys.stdout.write({policy:?})\n    sys.exit(0)\nopen(args[args.index('--out') + 1], 'w').write({report:?})\nsys.exit(0)\n",
         policy = policy.to_string(),
         report = report().to_string(),
     );

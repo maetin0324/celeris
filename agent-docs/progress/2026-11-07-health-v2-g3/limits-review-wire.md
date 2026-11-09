@@ -51,7 +51,7 @@ WorkUnit `review-wire`（task 01M70C8NHEANARRKZD9RGKZ87D）。[ADR 2026-11-08](.
 - 範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"` を計画 v2 の正規表現で絞る）→ exit 0、範囲外の path なし。
 - `cargo nextest run -p task-core -p task-dispatch --no-tests=fail -E 'test(/health_limits_/) | test(/health_enforce_/)'`（WU の check 1。7 件の `fn` の grep を含む）→ exit 0、`65 tests run: 65 passed, 2891 skipped`。
 - `cargo fmt --all -- --check && cargo clippy --workspace -- -D warnings` → exit 0。
-- `bash scripts/dev/test-affected.sh` → exit 0。nextest `8110 tests run: 8110 passed (13 slow), 23 skipped`。web の vitest `Test Files 104 passed`・`Tests 711 passed`。check-health `repo-health: verdict=pass exit=0 fail_grade=0 new=2 worsened=0`（new の 2 件は warning の `dup.contract`（`UnavailableReason`）と `dup.public-surface`（`fn judge`）で、どちらも前の unit の変更）。
+- `bash scripts/dev/test-affected.sh` → exit 0。nextest `8110 tests run: 8110 passed (10 slow), 23 skipped`。web の vitest `Test Files 104 passed`・`Tests 711 passed`。check-health `repo-health: verdict=pass exit=0 fail_grade=0 new=2 worsened=0`（new の 2 件は warning の `dup.contract`（`UnavailableReason`）と `dup.public-surface`（`fn judge`）で、どちらも前の unit の変更）。
 - 参考: `bash scripts/dev/check-health.sh` を inline module の形（「health の止め方を free 関数の module にまとめ…」の commit）で実行すると exit 1。`deps.cycle` が 3 単位 → 4 単位（`dispatcher` → `health_review` の辺で health_review が base の循環 {dispatcher, review, undeclared_artifacts} に入る）、`size.responsibility-growth` の dispatcher module の本体の行が 35163 → 35206。今の形では両方とも基準のまま（worsened 0）。
 
 ## 範囲の決着

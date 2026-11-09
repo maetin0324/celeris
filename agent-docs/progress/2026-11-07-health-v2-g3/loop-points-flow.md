@@ -30,15 +30,12 @@ WorkUnit `flow`（task 01M6ZDF9Q4BWD9DX6S9KX3KKS1）。[ADR 2026-11-08](../../ad
 - 7 経路と non_celeris の `fn health_enforce_<経路>_` の grep（計画の check と同じ loop）→ exit 0（欠けなし）。
 - 範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"` と計画の正規表現）→ 範囲外の path なし（変更は `dispatcher/tests/health_enforce.rs` とこの進捗 file）。
 - `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace -- -D warnings` → exit 0。
-- `bash scripts/dev/test-affected.sh` → 下の「test-affected」に結果を書く。
+- `bash scripts/dev/test-affected.sh` → exit 100。check-health は verdict pass・exit 0（fail_grade 0、new 1）。nextest は 3652 件中 3651 passed・1 failed・11 skipped（不合格は上の既知の 1 件だけ）。
 
 ## 未解決
 - 本体と ADR の食い違い（plan_issue で replan を申告した）: ADR D3.2 は「task の review の `repair_hint` は bucket `health:<rule_id>` を持つ（rule ごとに `max_repairs_per_class` を数えるため）」、D4.1 は「`max_repairs_per_class` の class は `health:<rule_id>`」と書く。段の統合の修復は `health_review::check_item::repair_count` で rule ごとの bucket を作り、`RepairScheduled.class` に `health:deps.violation` を書く。一方、task の review の修復（`crates/task-dispatch/src/dispatcher/review_verdict.rs` の `try_review_repair`）は `classify_review_failure` が返す `RepairClass::Health` の `bucket()`（`health`）で同じ class の修復を数え、repair WU の title（`repair (health): 修復`）と `RepairScheduled.class` にも `health` を書く。health の項目の `repair_hint.class`（`health:deps.violation`）は使われていない。結果として、review の経路では違う rule の Fail が 1 つの上限を分け合い、記録の class も段の統合と揃わない。合格にしてしまう穴ではない（上限が厳しくなる側）。
   - 直す場所の案: `try_review_repair` の同じ class の数えと title を、段の統合と同じ `check_item::repair_count`（reason の `health:<rule_id>:…` から bucket を作る）に通す。dispatcher module の行の純増を避けるなら、数えの部分を `health_review::check_item` 側の関数に寄せる。必要な範囲は `crates/task-dispatch/src/dispatcher/review_verdict.rs`（と、関数を寄せるなら `crates/task-dispatch/src/health_review/check_item.rs`）。この試験はそのまま回帰の試験になる。
-- `bash scripts/dev/test-affected.sh` はこの run で実行した（結果は下）。上の 1 件は既知の不合格。
-
-## test-affected
-- （実行後に追記する）
+- `bash scripts/dev/test-affected.sh` の不合格は上の 1 件だけ。本体が直れば exit 0 になる見込み（未確認）。
 
 ## 提案
 - 無し（上の修正は replan で unit を足す）。

@@ -526,7 +526,13 @@ pub fn transition(s: &StateView, t: &Trigger) -> Result<Outcome, InvalidTransiti
             }
         }
 
-        Trigger::Answer => {
+        // 人の回答、ADR-0074 D2.2/D2.4 の人の「続ける」/「replan」、ADR-0080 D4 の browser の wait の解決、ADR-0090 D2 の
+        // クラスタ job の終了、ADR 2026-10-08-browser-prod-enablement D2 の browser の前提の解決。attempts は変えない。
+        Trigger::Answer
+        | Trigger::PhaseResume { .. }
+        | Trigger::BrowserResume
+        | Trigger::ClusterJobResume
+        | Trigger::BrowserPrereqResume => {
             if s.status == Status::Blocked {
                 Ok(Outcome {
                     next: Status::Ready,
@@ -604,35 +610,11 @@ pub fn transition(s: &StateView, t: &Trigger) -> Result<Outcome, InvalidTransiti
             }
         }
 
-        // ADR-0074 D2.2/D2.4: 人の「続ける」/「replan」。attempts は変えない。
-        Trigger::PhaseResume { .. } => {
-            if s.status == Status::Blocked {
-                Ok(Outcome {
-                    next: Status::Ready,
-                    attempts: s.attempts,
-                    reason: t.name(),
-                })
-            } else {
-                Err(invalid(s, t))
-            }
-        }
-
         // ADR-0080 D4: browser の人待ち。Status の variant は増やさず `Blocked` を使う。
         Trigger::BrowserWait { .. } => {
             if s.status == Status::Running {
                 Ok(Outcome {
                     next: Status::Blocked,
-                    attempts: s.attempts,
-                    reason: t.name(),
-                })
-            } else {
-                Err(invalid(s, t))
-            }
-        }
-        Trigger::BrowserResume => {
-            if s.status == Status::Blocked {
-                Ok(Outcome {
-                    next: Status::Ready,
                     attempts: s.attempts,
                     reason: t.name(),
                 })
@@ -663,33 +645,11 @@ pub fn transition(s: &StateView, t: &Trigger) -> Result<Outcome, InvalidTransiti
                 Err(invalid(s, t))
             }
         }
-        Trigger::ClusterJobResume => {
-            if s.status == Status::Blocked {
-                Ok(Outcome {
-                    next: Status::Ready,
-                    attempts: s.attempts,
-                    reason: t.name(),
-                })
-            } else {
-                Err(invalid(s, t))
-            }
-        }
         // ADR 2026-10-08-browser-prod-enablement D2: browser の前提待ち（Status は増やさず `Blocked`）。
         Trigger::BrowserPrereqBlock => {
             if matches!(s.status, Status::Ready | Status::Running) {
                 Ok(Outcome {
                     next: Status::Blocked,
-                    attempts: s.attempts,
-                    reason: t.name(),
-                })
-            } else {
-                Err(invalid(s, t))
-            }
-        }
-        Trigger::BrowserPrereqResume => {
-            if s.status == Status::Blocked {
-                Ok(Outcome {
-                    next: Status::Ready,
                     attempts: s.attempts,
                     reason: t.name(),
                 })

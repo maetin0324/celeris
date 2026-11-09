@@ -85,6 +85,11 @@ pub enum Trigger {
     /// `Reviewing → Ready`、attempts は据え置き（同じ `Event::Transitioned{reason:"review_repair"}`
     /// のトランザクションで、呼び出し側〈`task_ops::execution`〉が repair の WorkUnit を作る）。
     ReviewRepair,
+    /// ADR 2026-11-08-health-enforcement-loop D3.4・D4.3・D4.4: 最終レビューの不合格を repair にも `ReviewFail` にも
+    /// せず人に聞く（health の Error・Unavailable、同じ指摘の往復、health の修復の上限の使い切り）。`Reviewing → Blocked`、
+    /// attempts は据え置き（`retry_or_fail` を通さない。再実行・replan・review_rework に進めない）、
+    /// `reason = "review_blocked"`。再開は既存の `Answer`（comment・answer）。
+    ReviewBlocked,
     /// ADR-0074 D2.2（Phase F3 途中確認）: 停止点の工程の統合の後。`Running → Blocked`、
     /// `reason = "awaiting_human"`、attempts 不変。`phase` はどの工程の後かを運ぶだけ
     /// （遷移そのものの判定には使わない）。
@@ -172,6 +177,7 @@ impl Trigger {
             Trigger::InfraRequeue => "infra_requeue",
             Trigger::Continue { why } => why.name(),
             Trigger::ReviewRepair => "review_repair",
+            Trigger::ReviewBlocked => "review_blocked",
             Trigger::PhaseGate { .. } => "awaiting_human",
             Trigger::PhaseResume { mode } => mode.name(),
             Trigger::BrowserWait { approval: false } => "waiting_for_auth",
@@ -507,7 +513,26 @@ pub fn transition(s: &StateView, t: &Trigger) -> Result<Outcome, InvalidTransiti
             }
         }
 
-        Trigger::Answer => {
+        // health enforcement loop D3.4・D4.3・D4.4: 人に聞く review の不合格（attempts 不変）。
+        Trigger::ReviewBlocked => {
+            if s.status == Status::Reviewing {
+                Ok(Outcome {
+                    next: Status::Blocked,
+                    attempts: s.attempts,
+                    reason: t.name(),
+                })
+            } else {
+                Err(invalid(s, t))
+            }
+        }
+
+        // 人の回答、ADR-0074 D2.2/D2.4 の人の「続ける」/「replan」、ADR-0080 D4 の browser の wait の解決、ADR-0090 D2 の
+        // クラスタ job の終了、ADR 2026-10-08-browser-prod-enablement D2 の browser の前提の解決。attempts は変えない。
+        Trigger::Answer
+        | Trigger::PhaseResume { .. }
+        | Trigger::BrowserResume
+        | Trigger::ClusterJobResume
+        | Trigger::BrowserPrereqResume => {
             if s.status == Status::Blocked {
                 Ok(Outcome {
                     next: Status::Ready,
@@ -585,35 +610,11 @@ pub fn transition(s: &StateView, t: &Trigger) -> Result<Outcome, InvalidTransiti
             }
         }
 
-        // ADR-0074 D2.2/D2.4: 人の「続ける」/「replan」。attempts は変えない。
-        Trigger::PhaseResume { .. } => {
-            if s.status == Status::Blocked {
-                Ok(Outcome {
-                    next: Status::Ready,
-                    attempts: s.attempts,
-                    reason: t.name(),
-                })
-            } else {
-                Err(invalid(s, t))
-            }
-        }
-
         // ADR-0080 D4: browser の人待ち。Status の variant は増やさず `Blocked` を使う。
         Trigger::BrowserWait { .. } => {
             if s.status == Status::Running {
                 Ok(Outcome {
                     next: Status::Blocked,
-                    attempts: s.attempts,
-                    reason: t.name(),
-                })
-            } else {
-                Err(invalid(s, t))
-            }
-        }
-        Trigger::BrowserResume => {
-            if s.status == Status::Blocked {
-                Ok(Outcome {
-                    next: Status::Ready,
                     attempts: s.attempts,
                     reason: t.name(),
                 })
@@ -644,33 +645,11 @@ pub fn transition(s: &StateView, t: &Trigger) -> Result<Outcome, InvalidTransiti
                 Err(invalid(s, t))
             }
         }
-        Trigger::ClusterJobResume => {
-            if s.status == Status::Blocked {
-                Ok(Outcome {
-                    next: Status::Ready,
-                    attempts: s.attempts,
-                    reason: t.name(),
-                })
-            } else {
-                Err(invalid(s, t))
-            }
-        }
         // ADR 2026-10-08-browser-prod-enablement D2: browser の前提待ち（Status は増やさず `Blocked`）。
         Trigger::BrowserPrereqBlock => {
             if matches!(s.status, Status::Ready | Status::Running) {
                 Ok(Outcome {
                     next: Status::Blocked,
-                    attempts: s.attempts,
-                    reason: t.name(),
-                })
-            } else {
-                Err(invalid(s, t))
-            }
-        }
-        Trigger::BrowserPrereqResume => {
-            if s.status == Status::Blocked {
-                Ok(Outcome {
-                    next: Status::Ready,
                     attempts: s.attempts,
                     reason: t.name(),
                 })

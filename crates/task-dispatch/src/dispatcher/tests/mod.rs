@@ -3212,6 +3212,7 @@ mod stale_priority;
 /// （`src/dispatcher/tests/write_set_gate.rs`）。
 mod write_set_gate;
 
+mod health_limits_review;
 /// ADR 2026-11-07-health-review-integration の付記（二度目の final review の差し戻しへの方針）C1: 設計 review の run を
 /// 木の run・費用の上限に掛ける（`src/dispatcher/tests/health_review_design_budget.rs`）。
 mod health_review_design_budget;

@@ -2,6 +2,11 @@
 
 use super::*;
 
+/// health の Error・往復・修復の上限の使い切りで review を止める（health enforcement loop D3.4・D4.3・D4.4）。file は
+/// size の制約と依存の向き（`dispatcher` → `health_review` を足さない）のため `health_review/` に置く。
+#[path = "../health_review/review_limits.rs"]
+mod review_limits;
+
 struct IntegrationRepairInput<'a> {
     repo_id: task_core::RepoId,
     target_ref: &'a str,
@@ -483,15 +488,14 @@ impl Dispatcher {
                 return self.schedule_aggregate_run(task_id, &run_id, events);
             }
         }
-        // ADR-0072 D16（Phase E4）: 修復できる不合格（class が揃っていて、repair の上限内）なら、
-        // `ReviewFail` の代わりに `ReviewRepair`（attempts 据え置き）+ 最小の context の repair WU で
-        // 直す。上限を超えている・修復できない種類が混ざっていれば `None`（従来どおり `ReviewFail` へ）。
+        // ADR-0072 D16（Phase E4）: 修復できる不合格は `ReviewRepair`（attempts 据え置き）+ repair WU で直す。health の
+        // Error・往復・修復の上限の使い切りは `ReviewBlocked` で人に聞く（health enforcement loop D3.4・D4.3・D4.4）。
+        // それ以外（修復できない種類が混ざる・health でない失敗の上限超え）は `None`（従来どおり `ReviewFail` へ）。
         if !all_pass
-            && task.kind == TaskKind::Execute
             && let Some(repair_outcome) =
                 self.try_review_repair(&task, &outcome.verdicts, &mut events)?
         {
-            tracing::info!(%task_id, %run_id, next = ?repair_outcome.next, "review failed but repaired locally (ADR-0072 D16)");
+            tracing::info!(%task_id, %run_id, next = ?repair_outcome.next, reason = repair_outcome.reason, "review failed; repaired locally or blocked for a human");
             return Ok(());
         }
         // ADR-0007 D3/D4: Plan が全 pass なら子タスクの挿入と ReviewPass を同一トランザクションで行う。
@@ -618,39 +622,49 @@ impl Dispatcher {
     /// ADR-0072 D16（Phase E4）: 最終レビューの不合格を分類し、修復できて上限内なら repair WU を
     /// 実体化して `Trigger::ReviewRepair` を適用する（`Some` を返す）。修復できない・上限を超えて
     /// いれば `events` に触れずに `None` を返す（呼び出し側が従来どおり `ReviewFail` へ進む）。
+    ///
+    /// ADR 2026-11-08-health-enforcement-loop: 次の 3 つは repair にも `ReviewFail`（再実行・compound の replan・
+    /// retry 切れの Failed → review_rework）にもせず、`Trigger::ReviewBlocked`（attempts 不変）で止めて受信箱に質問を
+    /// 1 件出す（`Some` を返す）。
+    /// - D3.4: health の Error・Unavailable（`health_check_error: <理由>`。task の種類を問わず、他の不合格より先）。
+    /// - D4.3: 不合格がすべて health の Fail で、`health_review::limits` の範囲 review が往復（`Repeat`）。木の root に
+    ///   `HealthFindingsRepeated` を追記する（root の受信箱の `health_repeat` 1 件）。
+    /// - D4.4: 不合格がすべて health の Fail で、`max_repairs`・`max_repairs_per_class`（`health:<rule_id>`）を使い切った。
     pub(super) fn try_review_repair(
         &self,
         task: &Task,
         verdicts: &[Verdict],
         events: &mut Vec<Event>,
     ) -> Result<Option<task_core::Outcome>, DispatchError> {
-        let task_id = task.id;
-        let failing: Vec<task_core::FailedCheck> = verdicts
-            .iter()
-            .filter(|v| !v.pass)
-            .map(|v| {
-                let check = task
-                    .acceptance
-                    .get(v.criterion_idx)
-                    .map(|c| c.check.clone())
-                    // 暗黙の条件（Plan/aggregate/repo_checks/research）は task.acceptance に無く、
-                    // D16 の分類表にも無いので修復できない（`Check::Human` と同じ扱いに倒す）。health の Fail
-                    // だけは `Check::Command { cmd: HEALTH_CHECK_ID }`（health enforcement loop D3.2）。
-                    .unwrap_or_else(|| v.implicit_check());
-                task_core::FailedCheck {
-                    check,
-                    reason: v.reason.clone(),
-                    repair_hint: v.repair_hint.clone(),
-                }
-            })
-            .collect();
-        if failing.is_empty() {
+        let (task_id, store) = (task.id, self.store.as_ref());
+        if let Some(outcome) = review_limits::stop_on_error(store, task, verdicts, events)? {
+            return Ok(Some(outcome));
+        }
+        if task.kind != TaskKind::Execute {
             return Ok(None);
         }
+        let failing: Vec<task_core::FailedCheck> = (verdicts.iter().filter(|v| !v.pass))
+            .map(|v| task_core::FailedCheck {
+                // 暗黙の条件（Plan/aggregate/repo_checks/research）は task.acceptance に無く、D16 の分類表にも無いので
+                // 修復できない（`Check::Human` と同じ扱いに倒す）。health の Fail だけは `Check::Command { cmd:
+                // HEALTH_CHECK_ID }`（health enforcement loop D3.2）。不合格が無ければ分類は `Substantive`。
+                check: (task
+                    .acceptance
+                    .get(v.criterion_idx)
+                    .map(|c| c.check.clone()))
+                .unwrap_or_else(|| v.implicit_check()),
+                reason: v.reason.clone(),
+                repair_hint: v.repair_hint.clone(),
+            })
+            .collect();
         let class = match task_core::classify_review_failure(&failing) {
             task_core::RepairDecision::Repairable(c) => c,
             task_core::RepairDecision::Substantive => return Ok(None),
         };
+        let health = class == task_core::RepairClass::Health;
+        if health && let Some(outcome) = review_limits::stop_on_repeat(store, task, events)? {
+            return Ok(Some(outcome));
+        }
 
         let units = self.store.work_units_for(task_id)?;
         let repairs: Vec<&task_core::WorkUnitRow> = units
@@ -660,16 +674,23 @@ impl Dispatcher {
                     && !task_core::is_integration_repair_unit(u.kind, &u.spec.title)
             })
             .collect();
-        if repairs.len() as u32 >= self.config.execution.max_repairs {
-            return Ok(None);
-        }
         let failing_details: Vec<String> = failing.iter().map(|f| f.reason.clone()).collect();
         // ADR 2026-11-08-health-enforcement-loop D3.2・D4.1: 段の統合と同じ数え方。health の修復は rule ごと
         // （`health:<rule_id>`）に数え、repair WU の title（`RepairScheduled.class` の元）にも同じ bucket を書く。
         let (bucket, same_class) =
             super::phase_integration::check_item::repair_count(class, &failing_details, &repairs);
-        if same_class as u32 >= self.config.execution.max_repairs_per_class {
-            return Ok(None);
+        let limits = &self.config.execution;
+        if repairs.len() as u32 >= limits.max_repairs
+            || same_class as u32 >= limits.max_repairs_per_class
+        {
+            let used = (
+                repairs.len(),
+                limits.max_repairs,
+                same_class,
+                limits.max_repairs_per_class,
+            );
+            let health = health.then_some(bucket.as_str());
+            return review_limits::stop_on_cap(store, task, health, used, &failing_details, events);
         }
 
         let (max_turns, max_wall_secs) = class.budget();

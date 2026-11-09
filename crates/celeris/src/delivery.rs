@@ -349,7 +349,41 @@ fn check_required_evidence(
         reviewed,
         &required,
         requirement,
-    ))
+    )
+    .and_then(|()| health_evaluated_target(&events, d.repo_id, target, reviewed)))
+}
+
+/// ADR 2026-11-08-health-enforcement-loop D2.6: `(repo, target, reviewed)` に束縛された最新の証跡（
+/// `verify_required_checks` が照合したもの）の health の項目は、証跡自身の `base_sha` でも基底 `target` を評価して
+/// いなければならない。event の `target_sha` だけが合い、health が別の基底を評価した証跡は再 review の理由にする。
+fn health_evaluated_target(
+    events: &[Event],
+    repo: task_core::RepoId,
+    target: &str,
+    reviewed: &str,
+) -> Result<(), String> {
+    let bound = events.iter().rev().find_map(|e| match e {
+        Event::RequiredChecksEvaluated {
+            repo_id,
+            target_sha,
+            reviewed_sha,
+            results,
+            ..
+        } if *repo_id == repo && target_sha == target && reviewed_sha == reviewed => Some(results),
+        _ => None,
+    });
+    match bound
+        .into_iter()
+        .flatten()
+        .filter_map(|r| r.health.as_deref())
+        .find(|h| h.base_sha != target)
+    {
+        Some(h) => Err(format!(
+            "health の証跡の基底 {} が束縛の基底 {target} と一致しません",
+            h.base_sha
+        )),
+        None => Ok(()),
+    }
 }
 
 /// ADR-0118 D4: stale な合格を取り込まず、task を再レビュー（同期→checks→reviewer）へ戻す。

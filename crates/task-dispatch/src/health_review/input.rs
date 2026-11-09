@@ -44,11 +44,12 @@ use task_worker::protocol::{
     HealthReviewInput, OwnerRow, PathStat,
 };
 
-use super::gate::{self, BundledChecker, CheckerChoice, RepoHealthReport};
+use super::gate::{self, BundledChecker, CheckerChoice, HealthRun, RepoHealthReport};
 use super::policy::{BaseChecker, finished, left, parse_review_policy};
+use super::review_item;
 use crate::dispatcher::Dispatcher;
 use crate::dispatcher::review_spawn::ReviewSync;
-use crate::review::ReviewerRun;
+use crate::review::{RequiredRepoChecks, ReviewerRun};
 use task_core::RepoId;
 use task_core::required_checks::health::CheckerId;
 
@@ -100,27 +101,47 @@ pub struct HealthInputWork {
     /// report の書き先の dir（daemon の task dir の `runs/health/`）。
     pub out_dir: PathBuf,
     pub timeout: Duration,
+    /// 検査器で評価した候補（[`gate::check_with`] の `HealthRun`）。review の health の項目が同じ評価を使う
+    /// （`review_item::evaluate_all`。同じ candidate で検査器を 2 回起こさない）。
+    pub evaluated: std::sync::Mutex<Vec<HealthRun>>,
 }
 
-/// `spawn_review` が reviewer run を起こす非同期 task に持ち込む仕事（`None` なら何もしない）。
-pub struct HealthInputJob(pub Option<HealthInputWork>);
+/// `spawn_review` が reviewer run を起こす非同期 task に持ち込む仕事。
+pub struct HealthInputJob {
+    /// G2 の材料の仕事（`None` なら材料を作らない）。
+    pub work: Option<HealthInputWork>,
+    /// ssh の remote workspace の task（health enforcement loop D1.1: Celeris が統合しない。NotApplicable）。
+    pub remote: bool,
+}
 
 impl HealthInputJob {
     /// 仕事があれば材料を作り（`policy_only` なら policy の状態だけを記録し）、reviewer run があれば
-    /// `run.health` に入れて返す。
-    pub(crate) async fn attach(self, run: Option<ReviewerRun>) -> Option<ReviewerRun> {
-        let Some(work) = self.0 else {
-            return run;
-        };
-        let task_id = work.task_id;
-        let built = tokio::task::spawn_blocking(move || build_health_input(&work)).await;
-        let mut run = run?;
-        match built {
-            Ok(health) => run.health = health,
-            Err(e) => {
-                tracing::warn!(%task_id, error = %e, "health input builder failed; reviewing without health");
+    /// `run.health` に入れて返す。その後 `checks` の health の項目を評価する（health enforcement loop D1.2。
+    /// 材料が同じ候補で評価した結果を使う。`review_item::evaluate_all`）。
+    pub(crate) async fn attach(
+        self,
+        run: Option<ReviewerRun>,
+        checks: &mut [RequiredRepoChecks],
+    ) -> Option<ReviewerRun> {
+        let (health, runs) = match self.work {
+            Some(work) => {
+                let task_id = work.task_id;
+                let built = tokio::task::spawn_blocking(move || {
+                    let health = build_health_input(&work);
+                    let runs = work.evaluated.into_inner();
+                    (health, runs.unwrap_or_else(|e| e.into_inner()))
+                })
+                .await;
+                built.unwrap_or_else(|e| {
+                    tracing::warn!(%task_id, error = %e, "health input builder failed; reviewing without health");
+                    (None, Vec::new())
+                })
             }
-        }
+            None => (None, Vec::new()),
+        };
+        review_item::evaluate_all(checks, runs, self.remote, gate::bundled_checker()).await;
+        let mut run = run?;
+        run.health = health;
         Some(run)
     }
 }
@@ -135,9 +156,20 @@ impl Dispatcher {
         run_id: &str,
         reviewer: Option<&ReviewerRun>,
     ) -> HealthInputJob {
-        let Some(task_dir) = self.task_dir(task) else {
-            return HealthInputJob(None);
-        };
+        HealthInputJob {
+            work: self.health_work(task, synced, run_id, reviewer),
+            remote: matches!(task.workspace, task_core::WorkspaceSpec::Remote { .. }),
+        }
+    }
+
+    fn health_work(
+        &self,
+        task: &Task,
+        synced: &[ReviewSync],
+        run_id: &str,
+        reviewer: Option<&ReviewerRun>,
+    ) -> Option<HealthInputWork> {
+        let task_dir = self.task_dir(task)?;
         let work = |review_run: String, candidates, skipped, policy_only| HealthInputWork {
             store: self.store(),
             task_id: task.id,
@@ -147,6 +179,7 @@ impl Dispatcher {
             skipped,
             out_dir: task_dir.join("runs").join("health"),
             timeout: HEALTH_INPUT_TIMEOUT,
+            evaluated: Default::default(),
         };
         let Some(run) = reviewer else {
             return self.policy_only_job(task, synced, run_id, work);
@@ -168,9 +201,9 @@ impl Dispatcher {
             }
         }
         if candidates.is_empty() && skipped.is_empty() {
-            return HealthInputJob(None);
+            return None;
         }
-        HealthInputJob(Some(work(run.run_id.clone(), candidates, skipped, false)))
+        Some(work(run.run_id.clone(), candidates, skipped, false))
     }
 
     /// reviewer run の無い review（I8）: 同期した candidate のうち、reviewer の合格の再利用（`ReviewerPassReused`）
@@ -181,7 +214,7 @@ impl Dispatcher {
         synced: &[ReviewSync],
         run_id: &str,
         work: impl FnOnce(String, Vec<CandidateRepo>, Vec<(String, String)>, bool) -> HealthInputWork,
-    ) -> HealthInputJob {
+    ) -> Option<HealthInputWork> {
         let events = self.store().events_for(task.id).unwrap_or_else(|e| {
             tracing::warn!(task_id = %task.id, error = %e, "cannot read events for the policy-only health job");
             Vec::new()
@@ -197,9 +230,9 @@ impl Dispatcher {
             })
             .collect();
         if candidates.is_empty() {
-            return HealthInputJob(None);
+            return None;
         }
-        HealthInputJob(Some(work(run_id.to_string(), candidates, Vec::new(), true)))
+        Some(work(run_id.to_string(), candidates, Vec::new(), true))
     }
 }
 
@@ -461,7 +494,7 @@ impl HealthInputWork {
             short(&c.reviewed_sha)
         );
         let out = self.out_dir.join(name);
-        gate::check_with(
+        let gate::CheckedRun { run, report } = gate::check_with(
             checker,
             id,
             repo_id,
@@ -469,8 +502,11 @@ impl HealthInputWork {
             &c.reviewed_sha,
             Some(&out),
             deadline,
-        )
-        .report
+        );
+        if let Ok(mut evaluated) = self.evaluated.lock() {
+            evaluated.push(run);
+        }
+        report
     }
 }
 

@@ -1076,9 +1076,14 @@ async fn the_repository_check_commands_are_the_reviewers_default() {
             })
             .collect()
     };
-    // 条件 0（`artifact_exists`）は落ち、暗黙の条件 1（リポジトリの `check`）は通る。
+    // 条件 0（`artifact_exists`）は落ち、暗黙の条件 1（リポジトリの `check`）と 2（repo health の項目。試験の土台の
+    // 合格の stub の同梱の検査器。health enforcement loop D1.2）は通る。
     let mine = verdicts(task.id);
-    assert_eq!(mine.len(), 2, "{mine:?}");
+    assert_eq!(mine.len(), 3, "{mine:?}");
+    assert_eq!(
+        (mine[2].0, mine[2].1, mine[2].2.as_str()),
+        (2, true, "health: pass")
+    );
     assert_eq!(mine[0].0, 0);
     assert!(!mine[0].1, "{mine:?}");
     assert_eq!(mine[1].0, 1);
@@ -1087,7 +1092,8 @@ async fn the_repository_check_commands_are_the_reviewers_default() {
 
     // 自分で検査コマンドを書いたタスクにも、リポジトリの `check` は暗黙の条件として足される。
     let theirs = verdicts(explicit.id);
-    assert_eq!(theirs.len(), 2, "{theirs:?}");
+    assert_eq!(theirs.len(), 3, "{theirs:?}");
+    assert!(theirs[2].1, "{theirs:?}");
     assert!(theirs[0].1, "{theirs:?}");
     assert_eq!(theirs[1].0, 1);
     assert!(
@@ -1506,12 +1512,21 @@ async fn review_records_each_repositories_own_definition_and_worktree_results() 
                     _ => None,
                 })
                 .expect("each repository must have its own evidence");
-            assert_eq!(evidence.0.len(), 1);
+            // repo ごとの必須検査の後に repo health の項目（D1.2）。指紋は適用判定の検査器を入れる（D2.4）。
+            assert_eq!(evidence.0.len(), 2);
             assert_eq!(evidence.0[0].cmd, command);
             assert_eq!(evidence.0[0].pass, pass);
+            let health = &evidence.0[1];
+            assert_eq!(
+                health.cmd,
+                task_core::required_checks::health::HEALTH_CHECK_ID
+            );
+            assert!(health.pass, "{health:?}");
+            let checker = health.health.as_deref().and_then(|h| h.checker.as_ref());
+            assert!(checker.is_some(), "{health:?}");
             assert_eq!(
                 *evidence.1,
-                task_core::required_checks::definition_digest(&[command.into()], None)
+                task_core::required_checks::definition_digest(&[command.into()], checker)
             );
         }
         assert_eq!(

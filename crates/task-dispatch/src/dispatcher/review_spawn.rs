@@ -3,6 +3,7 @@
 use super::route_select::{RouteInput, RoutePick, RouteTrace, account_adapter_for_source_kind};
 use super::token_budget::run_watch;
 use super::*;
+use crate::review::RepoHealth;
 
 /// ADR-0118 D4 付記 / ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3・D4: 直近の遷移（自動の
 /// 再レビューの遷移を除く）または再開（`ReviewResyncResumed`）以後の stale（`ReviewTargetAdvanced`）の数、
@@ -972,11 +973,10 @@ impl Dispatcher {
                     _ => Default::default(),
                 };
                 repo_checks.push(crate::review::RequiredRepoChecks {
-                    binding: snapshot.map(|s| crate::review::RequiredCheckBinding {
-                        repo_id: s.repo_id,
-                        target_sha: s.target_sha.clone(),
-                        reviewed_sha: s.reviewed_sha.clone(),
-                    }),
+                    binding: snapshot.map(crate::review::RequiredCheckBinding::from),
+                    health: Some(RepoHealth::At(
+                        snapshot.map_or(&repo.dir, |s| &s.dir).clone(),
+                    )),
                     commands,
                     reusable,
                     workspace: if index == 0 {
@@ -1028,7 +1028,7 @@ impl Dispatcher {
             let extras = ReviewExtras {
                 subject,
                 plan,
-                reviewer: health.attach(reviewer_run).await,
+                reviewer: health.attach(reviewer_run, &mut repo_checks).await,
                 human,
                 aggregate,
                 // ADR-0043 D4: リポジトリの `[commands] check`（必須。acceptance で置き換えない）。

@@ -24,7 +24,7 @@ pub(super) const NORMAL_PATH: &str = "crates/foo/src/lib.rs";
 pub(super) const STORE_PATH: &str = "crates/task-store/src/rows.rs";
 const OWNER_MAP: &str = "owners/map.md";
 
-/// stub の report（new の finding 1 件・existing 1 件）。
+/// stub の report（new の finding 1 件・existing 1 件。verdict pass・exit 0 なので review の health の項目は合格する）。
 ///
 /// 新しい finding は fail 級でない warning（verdict pass、exit 0）にする。fail 級の new の error は WU の check・段の統合の
 /// health の項目が final review の前に repair へ回す（ADR 2026-11-08-health-enforcement-loop D3.2。その流れは
@@ -38,6 +38,7 @@ fn report() -> serde_json::Value {
         "schema": "celeris.repo-health.report/1",
         "summary": {"verdict": "pass", "exit_code": 0, "reviewable": true,
             "counts": {"findings": 2, "fail_grade": 0, "new": 1, "worsened": 0, "existing": 1}},
+        "rules": [],
         "findings": [
             finding("size.responsibility-growth", "warning", "new", NORMAL_PATH),
             finding("arch-map.missing_invariant", "error", "existing", OWNER_MAP),

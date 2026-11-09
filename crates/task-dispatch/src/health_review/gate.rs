@@ -512,7 +512,7 @@ pub fn health_gate(request: &HealthGateRequest<'_>) -> HealthGateOutcome {
 }
 
 /// D1.1: `worktree` の `base` の事実（`repo_facts`。git は締め切りまで）で `applicability` を呼ぶ。
-fn applicable(
+pub(crate) fn applicable(
     worktree: &Path,
     base: &str,
     integrated_by_celeris: bool,
@@ -953,4 +953,4 @@ pub(super) fn sha256_hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 #[path = "gate_tests.rs"]
-mod tests;
+pub(crate) mod tests;

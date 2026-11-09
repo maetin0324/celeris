@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use task_core::*;
 use task_worker::{AdapterError, ExecResult, LocalWorkspace, RunOutcome, WorkspaceError};
 
-fn task_with(checks: Vec<Check>, dir: &Path) -> Task {
+pub(crate) fn task_with(checks: Vec<Check>, dir: &Path) -> Task {
     let now = time::OffsetDateTime::now_utc();
     Task {
         harness_id: None,
@@ -1442,6 +1442,7 @@ async fn review_with_repo_checks(
                 commands: Ok(repo_checks.iter().map(|c| (*c).to_string()).collect()),
                 reusable: reusable.iter().map(|c| (*c).to_string()).collect(),
                 workspace: None,
+                health: None,
             }],
             ..ReviewExtras::default()
         },
@@ -1587,12 +1588,14 @@ async fn each_repository_runs_its_own_checks_and_cannot_share_another_repos_pass
                     commands: Ok(vec!["same".into()]),
                     reusable: ["same".into()].into_iter().collect(),
                     workspace: None,
+                    health: None,
                 },
                 RequiredRepoChecks {
                     binding: binding(second_id),
                     commands: Ok(vec!["same".into()]),
                     reusable: Default::default(),
                     workspace: Some(Box::new(second)),
+                    health: None,
                 },
             ],
             ..Default::default()
@@ -1636,6 +1639,7 @@ async fn unreadable_second_repository_definition_fails_review_without_evidence()
                 commands: Err("definition unavailable".into()),
                 reusable: Default::default(),
                 workspace: None,
+                health: None,
             }],
             ..Default::default()
         },
@@ -1754,6 +1758,7 @@ async fn acceptance_command_shared_with_a_repo_check_keeps_the_record() {
                 commands: Ok(vec!["exit 4".into(), "already-passed".into()]),
                 reusable: ["already-passed".to_string()].into_iter().collect(),
                 workspace: None,
+                health: None,
             }],
             ..ReviewExtras::default()
         },

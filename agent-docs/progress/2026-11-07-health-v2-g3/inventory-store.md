@@ -46,7 +46,9 @@ migration 0121 に伴い、版数を固定した試験（store/tests.rs・route_
 - plan の file 検査（migration 1 つ・表・HealthBlockingDetail・2 module・`include_str!` 無し・`SCHEMA_VERSION` が store/migrations.rs・`sd_schema_version_of_tree .`）→ exit 0、`schema=121 max=121`。
 - `git diff --quiet "$CELERIS_WU_BASE" -- crates/task-core/src/store/task_store.rs scripts/selfdeploy` → exit 0。
 - 範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"` と plan の正規表現）→ 範囲外の path 無し。
-- test-affected・clippy・fmt の結果は報告本文に書く。
+- `bash scripts/dev/test-affected.sh` → exit 0（15 分 35 秒）。冒頭の check-health 合格、cargo nextest 8042 passed・23 skipped、doc test 合格、web の offline install・`tsc -b`・unit 試験 104 file 711 passed、test-ts-verify 20 passed、script bundle の SKIP 0 件。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/check-doc-links.sh`・`sh scripts/dev/progress-index.sh --check`・`sh scripts/dev/check-adr-numbers.sh`・`git diff --check` → exit 0。
 
 ## 本番への移行
 
@@ -58,7 +60,7 @@ migration 0121 に伴い、版数を固定した試験（store/tests.rs・route_
 
 ## 未解決
 
-- 前回の run では web の offline install（`pnpm install --offline --frozen-lockfile`）が collapsible の package の欠落で落ちた。今回の test-affected の結果は報告本文に書く。
+無し。前回の run で落ちた web の offline install は、今回の test-affected では成功した。
 
 ## 提案
 

@@ -12,8 +12,12 @@
 //!   `check_required_evidence` と同じ）。base は最後に評価できた行（verdict が Error でない `evaluated`）の head_sha、
 //!   初回は base = head。`(head_tree, checker.sha256)` が最後に評価できた行と同じなら検査器を走らせない。
 //!   検査器は 1 repo につき 1 回（`gate::run_health_check_with_details`）。
+//! - [`InventoryFire::file`]（D6.6・D6.7）: 同じ検査器の実行が返した `HealthEvidence` と `HealthBlockingDetail` を
+//!   そのまま `task_ops::health_debt::file_health_debts` に渡す（検査器を走らせ直さず、report を読み直さない）。
+//!   起票の枠 [`MAX_DEBTS_PER_FIRE`] は 1 回の発火の repo をまたいで数える。起票した task id・既存で省いた数・
+//!   上限で残した数は、その repo の行に入れて 1 回だけ追記する（行は更新しない）。
 //!
-//! LLM・run・chat を起こさない（I4）。起票（`task_ops::health_debt`）はここでは繋がない（unit e2e）。
+//! LLM・run・chat を起こさない（I4）。起票は draft の task だけで、計画・子 task・run を作らない。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -26,10 +30,13 @@ use task_core::required_checks::health::{
     applicability, repo_facts,
 };
 use task_core::{
-    CronJob, CronJobId, ProjectId, ProjectRepo, RepoId, RepoKind, SqliteStore, TaskStore,
-    WorkspaceSpec,
+    CronJob, CronJobId, GenreSpec, ProjectId, ProjectRepo, RepoId, RepoKind, RoleSpec, SqliteStore,
+    TaskStore, WorkspaceSpec,
 };
-use task_ops::cron_jobs::CronInputPost;
+use task_ops::cron_jobs::{CronFireContext, CronInputPost};
+use task_ops::health_debt::{
+    FiledHealthDebts, HealthDebtInput, MAX_DEBTS_PER_FIRE, file_health_debts,
+};
 use time::OffsetDateTime;
 use tokio::task::JoinHandle;
 use ulid::Ulid;
@@ -58,6 +65,11 @@ impl InventoryRuns {
         self.running.contains_key(&job)
     }
 
+    /// tick の sink に渡す口（印と、起票に使う `[[roles]]`・`[[genres]]` を持つ tick の文脈）。
+    pub(crate) fn port<'a>(&'a mut self, ctx: &'a CronFireContext<'a>) -> Port<'a> {
+        Port { runs: self, ctx }
+    }
+
     /// `work` を tick の外（tokio の blocking pool）で始め、`job` の印にする。
     pub(crate) fn start(
         &mut self,
@@ -79,6 +91,12 @@ impl InventoryRuns {
     }
 }
 
+/// `CosReviewSink` の欄 `inventory`: Busy の印と tick の文脈（起票は cron の task と同じ role・genre の既定を使う）。
+pub(crate) struct Port<'a> {
+    pub runs: &'a mut InventoryRuns,
+    pub ctx: &'a CronFireContext<'a>,
+}
+
 /// `CronInputSink::post_health_inventory` の daemon の実装（D6.1。`CosReviewSink` が 1 行で委譲する）。
 pub(crate) fn post(
     sink: &mut CosReviewSink<'_>,
@@ -89,7 +107,8 @@ pub(crate) fn post(
     let store = sink.launch.map(|launch| &launch.store);
     start_inventory(
         store,
-        sink.inventory,
+        &mut *sink.inventory.runs,
+        sink.inventory.ctx,
         job,
         scheduled_for,
         project_id,
@@ -101,6 +120,7 @@ pub(crate) fn post(
 pub(crate) fn start_inventory(
     store: Option<&Arc<SqliteStore>>,
     runs: &mut InventoryRuns,
+    ctx: &CronFireContext<'_>,
     job: &CronJob,
     scheduled_for: OffsetDateTime,
     project_id: &str,
@@ -129,10 +149,13 @@ pub(crate) fn start_inventory(
     );
     let fire = InventoryFire {
         job_id: job.id,
+        project_id: project,
         scheduled_for,
         now,
         bundled: bundled_checker().map(|b| b.id.clone()),
         timeout: HEALTH_INPUT_TIMEOUT,
+        roles: ctx.roles.to_vec(),
+        genres: ctx.genres.to_vec(),
     };
     let store = Arc::clone(store);
     runs.start(job.id, move || fire.run(&store, &repos))?;
@@ -143,6 +166,8 @@ pub(crate) fn start_inventory(
 #[derive(Debug, Clone)]
 pub(crate) struct InventoryFire {
     pub job_id: CronJobId,
+    /// 起票の task の案件（job の `extra.project_id`）。
+    pub project_id: ProjectId,
     pub scheduled_for: OffsetDateTime,
     /// 行の `created_at`（発火の時刻。注入した時計の値）。
     pub now: OffsetDateTime,
@@ -150,6 +175,9 @@ pub(crate) struct InventoryFire {
     pub bundled: Option<CheckerId>,
     /// 1 repo の git の読み取りと検査器の実行の上限（review の health 文脈と同じ）。
     pub timeout: Duration,
+    /// 起票の組み立て（`POST /tasks` と同じ既定）に使う `[[roles]]`・`[[genres]]` の写し（tick の外へ持ち出す）。
+    pub roles: Vec<RoleSpec>,
+    pub genres: Vec<GenreSpec>,
 }
 
 /// 1 repo の棚卸しの結果（行に書く前の形）。`details` は同じ検査器の実行の blocking の説明（起票の文面）。
@@ -167,16 +195,46 @@ struct Head {
 }
 
 impl InventoryFire {
-    /// repo の順に評価し、repo ごとに 1 行を追記する。1 repo の失敗は記録して次の repo へ進む。
+    /// repo の順に評価・起票し、repo ごとに 1 行を追記する。起票の枠は repo をまたいで数える。1 repo の失敗は
+    /// log に残して次の repo へ進む。起票に失敗した repo は行を書かない（次の発火が同じ base から評価し直し、
+    /// 作れた debt は冪等キーで `existing_skipped` になる）。
     pub(crate) fn run(&self, store: &SqliteStore, repos: &[ProjectRepo]) {
+        let mut remaining = MAX_DEBTS_PER_FIRE;
         for repo in repos {
-            let done = self
-                .inventory_repo(store, repo)
-                .and_then(|inventory| self.record(store, repo.id, inventory));
+            let done = self.inventory_repo(store, repo).and_then(|inventory| {
+                let filed = self.file(store, &inventory, remaining)?;
+                remaining = remaining.saturating_sub(filed.task_ids.len());
+                self.record(store, repo.id, inventory, &filed)
+            });
             if let Err(error) = done {
                 tracing::warn!(job_id = %self.job_id, repo = %repo.name, error = %error, "health inventory of a repo failed");
             }
         }
+    }
+
+    /// 1 repo の評価から debt の draft を起票する（D6.6・D6.7）。証跡と説明は `inventory_repo` の同じ検査器の
+    /// 実行のもの。評価しなかった repo（`unchanged`・`not_applicable`）は何もしない。
+    pub(crate) fn file(
+        &self,
+        store: &SqliteStore,
+        inventory: &RepoInventory,
+        remaining: usize,
+    ) -> Result<FiledHealthDebts, String> {
+        let Some(evidence) = &inventory.evidence else {
+            return Ok(FiledHealthDebts::default());
+        };
+        let input = HealthDebtInput {
+            project_id: self.project_id,
+            evidence,
+            details: &inventory.details,
+            remaining,
+        };
+        let filed = file_health_debts(store, &input, &self.roles, &self.genres, self.now)
+            .map_err(|e| format!("health debt filing: {e}"))?;
+        if filed.missing_detail > 0 {
+            tracing::warn!(job_id = %self.job_id, repo_id = %evidence.repo_id, missing_detail = filed.missing_detail, "health inventory: blocking findings without a path were not filed");
+        }
+        Ok(filed)
     }
 
     /// 1 repo の差分検査（D6.3・D6.4）。
@@ -245,12 +303,13 @@ impl InventoryFire {
         })
     }
 
-    /// 1 repo の行を追記する（D6.5。起票の欄は 0。起票は unit e2e が繋ぐ）。
+    /// 1 repo の行を 1 回だけ追記する（D6.5。起票の結果も同じ行に入れ、後から更新しない）。
     pub(crate) fn record(
         &self,
         store: &SqliteStore,
         repo_id: RepoId,
         inventory: RepoInventory,
+        filed: &FiledHealthDebts,
     ) -> Result<(), String> {
         store
             .health_inventory_append(&HealthInventoryRun {
@@ -260,9 +319,9 @@ impl InventoryFire {
                 repo_id,
                 outcome: inventory.outcome,
                 evidence: inventory.evidence,
-                task_ids: Vec::new(),
-                existing_skipped: 0,
-                limit_remaining: 0,
+                task_ids: filed.task_ids.clone(),
+                existing_skipped: filed.existing_skipped,
+                limit_remaining: filed.limit_remaining,
                 created_at: self.now,
             })
             .map_err(|e| e.to_string())
@@ -318,3 +377,7 @@ fn error_inventory(
 #[cfg(test)]
 #[path = "inventory_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "inventory_e2e_tests.rs"]
+mod e2e_tests;

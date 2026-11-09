@@ -50,8 +50,8 @@ pub(crate) fn review_key(job: CronJobId, scheduled_for: OffsetDateTime) -> Strin
 pub(crate) struct CosReviewSink<'a> {
     pub launch: Option<&'a CosChatLaunch>,
     pub findings: &'a [StagnationFinding],
-    /// ADR 2026-11-08-health-enforcement-loop D6: 棚卸しの Busy の印（Dispatcher の欄）。
-    pub inventory: &'a mut inventory::InventoryRuns,
+    /// ADR 2026-11-08-health-enforcement-loop D6: 棚卸しの Busy の印（Dispatcher の欄）と起票の tick の文脈。
+    pub inventory: inventory::Port<'a>,
     pub now: OffsetDateTime,
 }
 

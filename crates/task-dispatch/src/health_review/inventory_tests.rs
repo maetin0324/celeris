@@ -72,10 +72,13 @@ impl Fixture {
 fn fire(job_id: CronJobId, minute: i64, bundled: Option<CheckerId>) -> InventoryFire {
     InventoryFire {
         job_id,
+        project_id: ProjectId::new(),
         scheduled_for: at(minute),
         now: at(minute),
         bundled,
         timeout: TIMEOUT,
+        roles: Vec::new(),
+        genres: Vec::new(),
     }
 }
 
@@ -204,7 +207,7 @@ fn health_inventory_evaluates_previous_head_as_base() {
         details: Vec::new(),
     };
     fire(job, 2, None)
-        .record(&f.store, repo.id, error_row)
+        .record(&f.store, repo.id, error_row, &FiledHealthDebts::default())
         .expect("error row");
 
     let head = commit(dir.path(), &[(SRC, "fn later() {}\n")], "later");
@@ -236,6 +239,7 @@ async fn health_inventory_busy_while_running() {
     let busy = start_inventory(
         Some(&f.store),
         &mut runs,
+        &CronFireContext::default(),
         &job,
         at(1),
         &f.project.to_string(),
@@ -250,6 +254,7 @@ async fn health_inventory_busy_while_running() {
     let posted = start_inventory(
         Some(&f.store),
         &mut runs,
+        &CronFireContext::default(),
         &job,
         at(2),
         &f.project.to_string(),
@@ -265,7 +270,9 @@ async fn health_inventory_busy_while_running() {
         .health_inventory_fire_counts(job.id, at(2))
         .expect("counts");
     assert_eq!((counts.repos, counts.evaluated), (1, 1));
-    assert!(start_inventory(None, &mut runs, &job, at(3), &f.project.to_string(), at(3)).is_err());
+    let ctx = CronFireContext::default();
+    let no_store = start_inventory(None, &mut runs, &ctx, &job, at(3), "p", at(3));
+    assert!(no_store.is_err());
 }
 
 fn inventory_job(store: &SqliteStore, project: ProjectId) -> CronJob {

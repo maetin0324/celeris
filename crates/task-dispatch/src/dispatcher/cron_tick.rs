@@ -39,7 +39,7 @@ impl Dispatcher {
         let mut sink = CosReviewSink {
             launch: self.cos_chat_launch.as_ref(),
             findings: &self.stagnation.findings,
-            inventory: &mut self.health_inventory,
+            inventory: self.health_inventory.port(&ctx),
             now,
         };
         let mut fired = Vec::new();

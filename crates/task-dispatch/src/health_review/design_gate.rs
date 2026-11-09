@@ -500,6 +500,23 @@ fn primary_repo(task: &Task) -> String {
         .unwrap_or_default()
 }
 
+/// ADR 2026-11-09-planner-turn-limit-and-comment-interrupt D1: planner run の終わり方のうち、`artifacts/execution-plan.json`
+/// を検証（と設計 review）にかけるもの。完了と turn の上限（claude-code の `--max-turns` は turn を終えてから止まるので、
+/// file の書き込みは途中で切れない）。壁時計・context・token の上限、yield・質問・error は不正な試行のまま。
+pub(super) fn plan_file_checked(result: &Result<RunOutcome, AdapterError>) -> bool {
+    matches!(
+        result,
+        Ok(RunOutcome {
+            terminal: Terminal::Done { .. }
+                | Terminal::BudgetExhausted {
+                    kind: task_core::BudgetKind::Turns,
+                    ..
+                },
+            ..
+        })
+    )
+}
+
 /// planner run と設計 review の run の終わり方（`RunEnd`・`WorkerFinished.outcome` の文・usage）。どちらの run も
 /// 続き（continuation）にも job の待ちにもならないので、yield と job の待ち（ADR-0090）は不正な試行として扱う。
 /// `role` は文に入る run の名前（`planner` など）。

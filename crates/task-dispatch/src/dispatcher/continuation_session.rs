@@ -189,7 +189,7 @@ impl Dispatcher {
 /// （`Transitioned{reason: "comment", to: ready}`）の後に `abort_stale_runs` が `interrupted: aborted …` で閉じる。
 /// 後者は、その `WorkerFinished` の直前の `Transitioned` がコメントの割り込みであることで見分ける
 /// （cancel・lease 回収・shutdown は別の理由の遷移か `interrupted: <別の理由>` なので当たらない）。
-fn interrupted_by_comment(events: &[(u64, Event)], run_id: &str) -> bool {
+pub(super) fn interrupted_by_comment(events: &[(u64, Event)], run_id: &str) -> bool {
     let Some(idx) = events
         .iter()
         .rposition(|(_, e)| matches!(e, Event::WorkerFinished { run_id: r, .. } if r == run_id))

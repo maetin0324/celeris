@@ -549,6 +549,7 @@ fn record_evidence_with_definition(
                         cmd: (*cmd).into(),
                         pass: *pass,
                         summary: String::new(),
+                        health: None,
                     })
                     .collect(),
             },

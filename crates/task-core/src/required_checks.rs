@@ -6,6 +6,8 @@ use crate::{Event, PhaseCheckResult, RepoId};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
+pub mod health;
+
 /// 必須検査の定義の指紋（v2 domain と長さ付き cmd 列の sha256 hex）。
 pub fn definition_digest(cmds: &[String]) -> String {
     let mut hasher = Sha256::new();

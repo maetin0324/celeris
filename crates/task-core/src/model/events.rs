@@ -836,6 +836,9 @@ pub enum Event {
         #[serde(default)]
         timed_out: bool,
         duration_ms: u64,
+        /// ADR 2026-11-08-health-enforcement-loop D2.2: 段の統合の health の項目の証跡の正本（他の項目は `None`）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        health: Option<Box<crate::required_checks::health::HealthEvidence>>,
     },
     /// 2026-10-04 WU 検査の引き継ぎ D3: 葉の WU の受け入れ検査（`spec.checks`）が検査 1 件を始めた。形は
     /// `IntegrationCheckStarted` と同じで、検査を起こした worker run の `run_id` を足す。状態は変えない。
@@ -863,6 +866,9 @@ pub enum Event {
         #[serde(default)]
         timed_out: bool,
         duration_ms: u64,
+        /// ADR 2026-11-08-health-enforcement-loop D2.2: WU の check の health の項目の証跡の正本（他の項目は `None`）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        health: Option<Box<crate::required_checks::health::HealthEvidence>>,
     },
     /// ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）D1: draining の旧 instance で worker run が終わり、受け入れ
     /// 検査を始めずに手を離した。WU は `running`・lease はその run のまま残り、結果は `runs/<run_id>/result.json`
@@ -1190,12 +1196,21 @@ pub struct PhaseMerged {
     pub parent_head: Option<String>,
 }
 
-/// `Event::PhaseIntegrated.checks[]`（ADR-0074 D1.4 の 4）。
+/// `Event::PhaseIntegrated.checks[]`（ADR-0074 D1.4 の 4）と `Event::RequiredChecksEvaluated.results[]` の検査 1 件。
+///
+/// `health` は repo health の項目（`cmd` が `required_checks::health::HEALTH_CHECK_ID`）の証跡（ADR
+/// 2026-11-08-health-enforcement-loop D2.2）。health の証跡の正本は経路ごとに 1 つで、task の review は
+/// `RequiredChecksEvaluated.results[].health`、WU の check は `WorkUnitCheckFinished.health`、段の統合は
+/// `IntegrationCheckFinished.health`。`PhaseIntegrated.checks[].health` は `dispatcher/phase_integration.rs` が常に
+/// `None` で書き、誰も読まない（段の統合の証跡は `IntegrationCheckFinished` にあり、2 つ目を作らない）。
+/// `Box` は `Event` の大きさを保つため（JSON の形は変わらない）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct PhaseCheckResult {
     pub cmd: String,
     pub pass: bool,
     pub summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health: Option<Box<crate::required_checks::health::HealthEvidence>>,
 }
 
 impl Event {

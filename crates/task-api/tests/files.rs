@@ -642,6 +642,7 @@ async fn work_unit_check_log_reads_a_leaf_acceptance_check() {
             exit: Some(0),
             timed_out: false,
             duration_ms: 1200,
+            health: None,
         },
         started(1, "corepack pnpm -C web e2e", &second),
     ] {

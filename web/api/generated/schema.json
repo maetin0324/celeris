@@ -4925,6 +4925,37 @@
         }
       ]
     },
+    "CheckerId": {
+      "description": "検査器の版。`sha256` は [`checker_sha256`] の値で、同じ commit の検査器なら base でも同梱でも同じ。",
+      "properties": {
+        "sha256": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/CheckerSource"
+        }
+      },
+      "required": [
+        "source",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "CheckerSource": {
+      "description": "検査器の出どころ（D1.4）。",
+      "oneOf": [
+        {
+          "const": "base",
+          "description": "評価する repo の base の commit にある検査器。",
+          "type": "string"
+        },
+        {
+          "const": "bundled",
+          "description": "Celeris の release に同梱した検査器（`<release>/repo-health/`）。",
+          "type": "string"
+        }
+      ]
+    },
     "Checkpoint": {
       "description": "D8: daemon が確定させた checkpoint（`celeris.checkpoint/1`）。`CheckpointSaved` イベントと\n`runs/<run_id>/checkpoint.json` に残す。",
       "properties": {
@@ -13806,6 +13837,17 @@
                 "null"
               ]
             },
+            "health": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/HealthEvidence"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ADR 2026-11-08-health-enforcement-loop D2.2: 段の統合の health の項目の証跡の正本（他の項目は `None`）。"
+            },
             "index": {
               "format": "uint32",
               "minimum": 0,
@@ -13912,6 +13954,17 @@
                 "integer",
                 "null"
               ]
+            },
+            "health": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/HealthEvidence"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ADR 2026-11-08-health-enforcement-loop D2.2: WU の check の health の項目の証跡の正本（他の項目は `None`）。"
             },
             "index": {
               "format": "uint32",
@@ -17004,6 +17057,118 @@
         "pricing_version"
       ],
       "type": "object"
+    },
+    "HealthEvidence": {
+      "description": "health の結果を候補に結び付ける証跡（D2.1）。束縛は `(repo_id, base_sha, head_sha, head_tree, policy_sha256,\nchecker.sha256)` と `report_sha256`（J2）。作れなかった値（report の無い Error など）は空文字列か `None`。",
+      "properties": {
+        "base_sha": {
+          "description": "評価の base の commit。",
+          "type": "string"
+        },
+        "blocking": {
+          "description": "fail 級の finding の fingerprint（sort 済み、[`MAX_BLOCKING`] 件まで）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "checker": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CheckerId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "評価に使った検査器（`NotApplicable` と、検査器の無い `Error` は `None`）。"
+        },
+        "head_sha": {
+          "description": "評価した候補の commit。",
+          "type": "string"
+        },
+        "head_tree": {
+          "description": "`git rev-parse <head_sha>^{tree}`。",
+          "type": "string"
+        },
+        "policy_sha256": {
+          "description": "[`policy_sha256`] の値。",
+          "type": "string"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo_id": {
+          "$ref": "#/$defs/RepoId"
+        },
+        "report_sha256": {
+          "description": "report の file の byte 列の sha256（report が無ければ空）。",
+          "type": "string"
+        },
+        "reused_from": {
+          "description": "同じ tree の別の commit の証跡を写したときの元の `head_sha`（D2.5）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reviewable": {
+          "description": "report の `summary.reviewable`。false（dirty な作業ツリー）の証跡は再利用と delivery に使わない（D2.7）。",
+          "type": "boolean"
+        },
+        "tool_version": {
+          "description": "report の `tool.version`（report が無ければ空）。",
+          "type": "string"
+        },
+        "verdict": {
+          "$ref": "#/$defs/HealthVerdict"
+        }
+      },
+      "required": [
+        "repo_id",
+        "base_sha",
+        "head_sha",
+        "head_tree",
+        "policy_sha256",
+        "report_sha256",
+        "tool_version",
+        "verdict",
+        "reviewable"
+      ],
+      "type": "object"
+    },
+    "HealthVerdict": {
+      "description": "health の項目の判定（D2.1・D3.1）。",
+      "oneOf": [
+        {
+          "const": "pass",
+          "description": "report の exit 0。",
+          "type": "string"
+        },
+        {
+          "const": "fail",
+          "description": "exit 1 で、policy の file だけの変更ではない。",
+          "type": "string"
+        },
+        {
+          "const": "error",
+          "description": "exit 2・report が無い・時間切れ・壊れた report・評価できない（`Unavailable`）。合格にしない（J4）。",
+          "type": "string"
+        },
+        {
+          "const": "policy_only",
+          "description": "exit 1 で、fail 級の finding が policy の file の変更だけ（G2 D6.2）。",
+          "type": "string"
+        },
+        {
+          "const": "not_applicable",
+          "description": "適用判定が `NotApplicable`（`reason` に理由）。",
+          "type": "string"
+        }
+      ]
     },
     "HumanAttestation": {
       "additionalProperties": false,
@@ -22125,10 +22290,20 @@
       "type": "object"
     },
     "PhaseCheckResult": {
-      "description": "`Event::PhaseIntegrated.checks[]`（ADR-0074 D1.4 の 4）。",
+      "description": "`Event::PhaseIntegrated.checks[]`（ADR-0074 D1.4 の 4）と `Event::RequiredChecksEvaluated.results[]` の検査 1 件。\n\n`health` は repo health の項目（`cmd` が `required_checks::health::HEALTH_CHECK_ID`）の証跡（ADR\n2026-11-08-health-enforcement-loop D2.2）。health の証跡の正本は経路ごとに 1 つで、task の review は\n`RequiredChecksEvaluated.results[].health`、WU の check は `WorkUnitCheckFinished.health`、段の統合は\n`IntegrationCheckFinished.health`。`PhaseIntegrated.checks[].health` は `dispatcher/phase_integration.rs` が常に\n`None` で書き、誰も読まない（段の統合の証跡は `IntegrationCheckFinished` にあり、2 つ目を作らない）。\n`Box` は `Event` の大きさを保つため（JSON の形は変わらない）。",
       "properties": {
         "cmd": {
           "type": "string"
+        },
+        "health": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HealthEvidence"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "pass": {
           "type": "boolean"

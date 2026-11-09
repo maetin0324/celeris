@@ -48,6 +48,7 @@ pub(super) async fn evaluate(
                     cmd: "workspace.toml definition".into(),
                     pass: false,
                     summary: reason,
+                    health: None,
                 });
             }
             Ok(commands) => {
@@ -81,6 +82,7 @@ pub(super) async fn evaluate(
                         cmd,
                         pass: outcome.pass,
                         summary: tail(&outcome.reason, REASON_TAIL).to_string(),
+                        health: None,
                     });
                 }
             }

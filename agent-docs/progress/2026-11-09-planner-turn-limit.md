@@ -47,7 +47,13 @@ ADR: `agent-docs/adr/2026-11-09-planner-turn-limit-and-comment-interrupt.md`（�
   （dispatcher module のコード行は純減。`on_planner_finished` も短くなった）
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
-- `bash scripts/dev/test-affected.sh` → 結果は下の「最終の検査」に書く
+- `bash scripts/dev/test-affected.sh`（実装の commit の HEAD。この後の commit は本ファイルだけ）→ exit 100。
+  check-health は pass。nextest は 7985 本のうち 7984 passed・23 skipped・**1 本 timed out**:
+  `celeris-campaign::k4_cells_validity real_k4_archive_grades_thirty_of_thirty_two`（600 秒の上限で打ち切り。
+  実行中の host の load average は 66〜72）。web の typecheck+unit と test-ts-verify（20 passed）は通った。
+- 上の 1 本を単独で再実行: `cargo nextest run -p celeris-campaign --test k4_cells_validity -E 'test(real_k4_archive_grades_thirty_of_thirty_two)'`
+  → 1 passed（398 秒、load average 42〜71）。この試験は実 K4 原票の採点で、今回の変更（planner の判定・既定値・prompt）を
+  通らない。task-core の逆依存として対象に入った。
 
 ## 本番への移行
 - 本番 config に `[execution.planner]` の上書きは無い（operator の集計）。promote すると既定 40 turn / 1,200 秒が効く。
@@ -61,9 +67,14 @@ ADR: `agent-docs/adr/2026-11-09-planner-turn-limit-and-comment-interrupt.md`（�
 - `plan_invalid` の決定の件数と、その直前の planner run に `interrupted: comment` が含まれる件数（D2 の後は 0 のはず）。
 
 ## 未解決
+- `real_k4_archive_grades_thirty_of_thirty_two` は単独でも約 400 秒かかり、全体の並列実行と高い load の下では
+  nextest の一律の上限（`.config/nextest.toml` の 60 秒 × 10 = 600 秒）を超える。reviewer の test-affected.sh の再実行でも、
+  host の負荷しだいで同じ打ち切りが起きうる（main で同じかは未確認）。凍結した評価（K4）の試験なので、この task では触れていない。
 - cancel・pause・daemon の停止・孤児の回収で止まった planner run は、今も試行に数える（ADR D2 の範囲外。本番の事実が無い）。
 
 ## 提案
+- `real_k4_archive_grades_thirty_of_thirty_two` に nextest の個別の上限（`[[profile.default.overrides]]` の slow-timeout）を
+  置くか、試験を軽くする task を立てる（K4 の凍結に触れない範囲で、持ち主の判断が要る）。
 - 上の値で `error_max_turns` が減らなければ、planner の prompt に入る G2 の文脈（規約・design_brief・health）の量を測り、
   planner に渡す範囲を絞る（turn をさらに上げる前に）。
 - pause で止まった planner run も計画の失敗ではないので、D2 と同じく数えない案を検討する。

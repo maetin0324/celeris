@@ -1,14 +1,16 @@
 ---
 title: 健全性v2 G3 limits escalation — 同じ health の指摘の往復を event HealthFindingsRepeated と木の root の受信箱 1 件に集約する
 tasks: [01M70C8NHEANARRKZD9RGKZ87D]
-status: blocked
+status: done
 updated: 2026-11-09
 ---
 # 健全性v2 G3 limits escalation — 同じ health の指摘の往復を event HealthFindingsRepeated と木の root の受信箱 1 件に集約する
 
+完了日: 2026-11-09
+
 WorkUnit `escalation`（task 01M70C8NHEANARRKZD9RGKZ87D）。[ADR 2026-11-08](../../adr/2026-11-08-health-enforcement-loop.md) の D4.3 の受信箱の項目を作った（経路への配線は段 wire）。基準は `$CELERIS_WU_BASE`。
 
-結論: 範囲の中の実装・試験・schema の再生成は終わった。残りは範囲の外の 2 file（`web/api/realtime/event-kinds.ts`・`web/api/realtime/invalidation-map.ts`）に 1 行ずつ。新しい event の種類があるとこの 2 file の網羅の型検査で web の `tsc -b` が落ちるので、`yield.plan_issue` で範囲の拡張を申告した。足す行は検証済み（下の「未解決」）。
+結論: 完了。event `HealthFindingsRepeated`、木の root に追記する `task_ops::inbox::health_repeat::record_findings_repeated`、受信箱の `health_repeat`（(root, set_sha256) ごとに 1 件）、API の欄と生成型、web の表示と realtime の 2 file を入れ、提出時の HEAD で test-affected・clippy・fmt・`health_limits_inbox_` の 6 件が exit 0。経路への配線は段 wire が行う。
 
 ## 実装前 brief
 1. 根本原因: D4.3 の「同じ指摘の往復」を上げる先が無い。repair の後も同じ fingerprint の集合が残ったとき、木の root に 1 件だけ出す記録と受信箱の項目が無い。
@@ -30,6 +32,8 @@ WorkUnit `escalation`（task 01M70C8NHEANARRKZD9RGKZ87D）。[ADR 2026-11-08](..
   - `crates/task-ops/src/delegate.rs`: `tree_root` の辿り方を `tree_root_by`（親の引き方を引数で受ける）に切り出した。`tree_root` の動作は同じ。
   - `crates/task-api/src/inbox_notifications.rs`: `health_repeat` の answer は 409 `native_action_required`。同じ 409 の組み立て 11 か所を `native_required` にまとめた（文言は同じ）。`crates/task-api/src/query.rs` の `event_type_name` に 1 行。
   - `docs/api/v1/api-v1.schema.json`・`event.schema.json`・`web/api/generated/{schema.json,types.ts}` の再生成、`docs/api/v1/api.md` の改訂の行と §3.2 の説明、`web/features/inbox/inbox-model.ts` の種類と表示名「修復の後も同じ health の指摘が残る」。
+- 「G3 limits escalation: 進捗に範囲の外の 2 file の申告のやり直しを書く」: 進捗の「未解決」に範囲の拡張の申告を書いた（下の「経緯」）。
+- 「G3 limits escalation: web の realtime の種類と invalidation に health_findings_repeated を足す」（replan で範囲に入った 2 file）: `web/api/realtime/event-kinds.ts` の `EVENT_KINDS` に `"health_findings_repeated"`、`web/api/realtime/invalidation-map.ts` の `EVENT_INVALIDATION` に `health_findings_repeated: { sets: ["T", "L"] }`（root の timeline と受信箱が変わる）と ADR を指す注釈 1 行。
 - 最初の test-affected で check-health の `size.responsibility-growth` が 3 件（`build_attention`・`Builder::attention`・`delegated_request` は閾値 200 行を既に超えており、arm と呼び出しで伸びた）で落ちた。上の `into_items`・`Builder::health_repeat`・`native_required` で 3 関数とも基準より伸びない形にし、worsened 0 で通した。`fn record` の同名の警告（`dup.public-surface`）は `record_findings_repeated` に改名して消した。
 
 ## 試験（守る不変条件）
@@ -43,23 +47,21 @@ WorkUnit `escalation`（task 01M70C8NHEANARRKZD9RGKZ87D）。[ADR 2026-11-08](..
 - 既存の `inbox_blocked_events_are_read_once_per_build`（Blocked の root 1 件につき events の読み出し 1 回）が最初の実装（root と源を読み足す）で落ちたので、上の `BlockedReads` で読み出しを共有して合格させた。
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
-- `cargo nextest run -p task-core -p task-ops -p task-api --no-tests=fail -E 'test(/health_limits_inbox_/) | test(/inbox/) | test(/item_task/) | test(/delegate/) | test(/schema/)'` → exit 0: 168 tests run: 168 passed。
-- `grep -rhoE 'fn health_limits_inbox_[a-z0-9_]+' crates/ | sort -u | wc -l` → 6。
-- 範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"` と計画の正規表現）→ 範囲外の path なし。
+- `corepack pnpm@12.6.0 -C web exec tsc -b` → exit 0。
+- `bash scripts/dev/test-affected.sh` → exit 0。nextest 8094 tests run: 8094 passed（23 skipped）、web の型検査（tsc -b）合格、web の unit 試験 104 files・711 tests passed、`test-ts-verify` 20 passed、repo-health verdict=pass（fail_grade 0、new 1、worsened 0、`source-size` pass）。new の 1 件は optional の `dup.contract` の warning（`required_checks::health::UnavailableReason` と `route_select::availability::UnavailableReason` の同名）で、この unit の変更ではない。
+- `cargo nextest run -p task-core -p task-ops -p task-api --no-tests=fail -E 'test(/health_limits_inbox_/)'` → exit 0: 6 tests run: 6 passed。`grep -rhoE 'fn health_limits_inbox_[a-z0-9_]+' crates/ | sort -u | wc -l` → 6。
+- 前の run の `cargo nextest run -p task-core -p task-ops -p task-api --no-tests=fail -E 'test(/health_limits_inbox_/) | test(/inbox/) | test(/item_task/) | test(/delegate/) | test(/schema/)'` → 168 passed（この run の test-affected の 8094 件に含まれる）。
 - `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace -- -D warnings` → exit 0。
-- `bash scripts/dev/check-health.sh` → verdict pass・exit 0（fail_grade 0、new 1、worsened 0）。new の 1 件は optional の `dup.contract` の warning（`required_checks::health::UnavailableReason` と `route_select::availability::UnavailableReason` の同名）で、この unit の変更ではない。
-- `corepack pnpm@12.6.0 -C web exec tsc -b` → exit 1。エラーは範囲の外の `web/api/realtime/event-kinds.ts(133)`（`EVENT_KINDS` の網羅）と `web/api/realtime/invalidation-map.ts(77)`（`Record<EventKind, KindSpec>` に `health_findings_repeated` が無い）の 2 件だけ。
-- 上の 2 file に 1 行ずつ足した一時の状態（commit していない）で: `tsc -b` → exit 0、`pnpm -C web run test` → 104 files・711 tests passed、`bash scripts/dev/test-affected.sh` → exit 0（nextest 8094 tests run: 8094 passed、web の型検査と unit 試験が合格、check-health pass）。その後 2 file を戻した。
+- 範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"` と、replan 後の計画の正規表現に `web/api/realtime/(event-kinds|invalidation-map)\.ts` を足したもの）→ 範囲外の path なし。
 
 ## 本番への移行
 - config・表・migration の変更は無い。新しい event の種類と受信箱の種類が増えるだけで、古い events はそのまま読める。この unit だけでは event を書く経路が無い（段 wire が `record_findings_repeated` を呼ぶ）ので、release に入っても受信箱に項目は出ない。
 
 ## 未解決
-- 範囲の外の 2 file が要る（`yield.plan_issue` で申告）。足す行:
-  - `web/api/realtime/event-kinds.ts` の `EVENT_KINDS` の `"review_resync_resumed",` の後に `"health_findings_repeated",`。
-  - `web/api/realtime/invalidation-map.ts` の `EVENT_INVALIDATION` の `review_resync_resumed` の後に `health_findings_repeated: { sets: ["T", "L"] },`（root の timeline と受信箱が変わる）と注釈 1 行。
-  replan で計画の範囲の正規表現に `web/api/realtime/(event-kinds|invalidation-map)\.ts` を足せば、次の run はこの 2 行と提出時の検査だけで終わる。
-- 前の run は申告を checkpoint にだけ書き、result を done で返した。WU の check `bash scripts/dev/test-affected.sh` は同じ 2 件の tsc のエラーで exit 1 になり、WU は retry（1/2）になった（範囲・試験・fmt・clippy の check は合格）。`EventKind` は生成型 `Event["type"]` から導かれ、2 file はそれを網羅で検査するので、範囲の中の変更だけでは直らない。retry の run が `yield.plan_issue` で申告し直した。
+- 無し。
+
+## 経緯
+- 最初の範囲には `web/api/realtime/event-kinds.ts`・`invalidation-map.ts` が無かった。`EventKind` は生成型 `Event["type"]` から導かれ、2 file はそれを網羅で検査するので、新しい event の種類を足すと web の `tsc -b` が落ちる。前の run は申告を checkpoint にだけ書いて result を done で返し、WU の check `bash scripts/dev/test-affected.sh` が同じ 2 件の tsc のエラーで exit 1 になって WU が retry（1/2）になった。retry の run が `yield.plan_issue` で申告し直し、replan で範囲に 2 file が入った。この run が 2 行を足して提出時の検査を通した。
 
 ## 提案
 - `HealthRepeatSite` の module は `model.rs` が範囲の外のため `lib.rs` の `#[path = "model/health_repeat.rs"]` で読んでいる。`model.rs` を変えてよい後続の unit（record など）で `model.rs` の `mod health_repeat;` と `pub use` に移すとよい。

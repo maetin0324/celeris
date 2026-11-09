@@ -6,12 +6,16 @@
 //!   Fail は rule ごとの [`HealthRepair`]（reason `health:<rule_id>:<hash>[,…]` と evidence の path、bucket
 //!   `health:<rule_id>`）になる。同梱の検査器は引数（[`HealthGateRequest::bundled`]）で受け、process の
 //!   [`bundled_checker`] を読まない。
+//! - [`with_applicable_checker`]: 検査器の選び方の唯一の口。`repo_facts` → `applicability` を呼び、`Applies` なら
+//!   `CheckerId` の出どころ（base・同梱）を `health_review::policy::CheckerSite` に写して（写しはこの file の
+//!   `checker_site` だけ）`health_review::policy::with_base_checker` で検査器を出す。[`health_gate`] と G2 の 3 か所
+//!   （review 方針の `load_review_policy`、G2 の材料と policy の関門が読む policy の状態。`health_review::input`）が
+//!   呼ぶ。`NotApplicable` は当てず、`Unavailable` は合格にしない（呼び出し側が理由を残す）。
+//! - [`check_with`]: 選んだ検査器で `base..head` を 1 回評価し、[`HealthEvidence`] を作り（D2.3 の値、D3.1 の判定）、
+//!   評価で読んだ report も返す。`run_health_check`（[`health_gate`] が呼ぶ）と G2 の材料が共有し、同じ candidate で
+//!   検査器（report）を 2 回起こさない。
 //! - [`run_report`]: 検査器（[`BaseChecker`]）で `repo_health.py --repo --base --head --policy-version 1 --out` を 1 回
-//!   起こし、schema を確かめて [`RepoHealthReport`] に読む。G2 の材料（`health_review::input`）と `run_health_check` が
-//!   共有する唯一の起動。
-//! - `run_health_check`（[`health_gate`] だけが呼ぶ）: 適用判定が返した検査器で 1 回評価し、[`HealthEvidence`] を作る
-//!   （D2.3 の値、D3.1 の判定）。検査器の有無は調べ直さず、`CheckerId` の出どころ（base・同梱）をそのまま使う。起動は
-//!   `health_review::policy::with_base_checker` の 1 つの口を通る。
+//!   起こし、schema を確かめて [`RepoHealthReport`] に読む（[`check_with`] だけが呼ぶ）。
 //! - [`configure_bundled_checker`]・[`bundled_checker`]: release に同梱した検査器（`<release>/repo-health/`。D1.4）の所在を
 //!   process に 1 回設定し、読む（読むのは daemon の起動と経路の外側の 1 か所だけ）。環境変数での上書きは置かない。
 //!
@@ -138,6 +142,7 @@ pub struct PolicyBlobs {
 }
 
 /// [`run_report`] の 1 回の実行の結果。
+#[derive(Debug)]
 pub(crate) struct ReportRun {
     /// `repo_health.py` の exit code（signal で終われば `None`）。
     pub code: Option<i32>,
@@ -463,12 +468,6 @@ impl HealthGateOutcome {
 /// `request.timeout` は事実の読み取りと評価の全体の上限。同梱の検査器は `request.bundled` だけを使う。LLM は呼ばない。
 pub fn health_gate(request: &HealthGateRequest<'_>) -> HealthGateOutcome {
     let deadline = Instant::now() + request.timeout;
-    let facts = repo_facts(
-        request.integrated_by_celeris,
-        request.base,
-        request.bundled.map(|b| &b.id),
-        |args| git_stdout(request.worktree, args, deadline),
-    );
     let blank = |verdict, reason: String| HealthEvidence {
         repo_id: request.repo_id,
         base_sha: request.base.to_string(),
@@ -484,7 +483,14 @@ pub fn health_gate(request: &HealthGateRequest<'_>) -> HealthGateOutcome {
         reused_from: None,
         reviewable: false,
     };
-    match applicability(&facts) {
+    let applies = applicable(
+        request.worktree,
+        request.base,
+        request.integrated_by_celeris,
+        request.bundled,
+        deadline,
+    );
+    match applies {
         HealthApplicability::NotApplicable { reason } => HealthGateOutcome::NotApplicable {
             evidence: blank(HealthVerdict::NotApplicable, reason.as_str().to_string()),
             reason,
@@ -505,6 +511,89 @@ pub fn health_gate(request: &HealthGateRequest<'_>) -> HealthGateOutcome {
     }
 }
 
+/// D1.1: `worktree` の `base` の事実（`repo_facts`。git は締め切りまで）で `applicability` を呼ぶ。
+fn applicable(
+    worktree: &Path,
+    base: &str,
+    integrated_by_celeris: bool,
+    bundled: Option<&BundledChecker>,
+    deadline: Instant,
+) -> HealthApplicability {
+    let facts = repo_facts(
+        integrated_by_celeris,
+        base,
+        bundled.map(|b| &b.id),
+        |args| git_stdout(worktree, args, deadline),
+    );
+    applicability(&facts)
+}
+
+/// [`with_applicable_checker`] の結果（D1.1・D1.2）。
+#[derive(Debug)]
+pub(crate) enum CheckerChoice<T> {
+    /// 当てない（Git 管理でない作業場所・remote workspace）。
+    NotApplicable(NotApplicableReason),
+    /// 当てるべきだが評価できない（`checker_missing`・`facts_unreadable:<理由>`）。合格にしない（J4）。
+    Unavailable(UnavailableReason),
+    /// 適用判定が選んだ検査器で `run` を呼んだ。`Err` は検査器を出せない・`run` が失敗した理由。
+    Ran(Result<T, String>),
+}
+
+/// D1.3: 検査器の選び方の唯一の口。`worktree` の `base` で `repo_facts` → `applicability` を呼び、`Applies` なら選んだ
+/// 検査器（base の版を一時 dir に出したもの、または `bundled` の dir）と `CheckerId` を `run` に渡す。同梱の検査器は
+/// `bundled`（呼び出し側が渡す）だけを使う。`deadline` は事実の読み取り・検査器を出す・`run` の全体の締め切り。
+pub(crate) fn with_applicable_checker<T>(
+    worktree: &Path,
+    base: &str,
+    integrated_by_celeris: bool,
+    bundled: Option<&BundledChecker>,
+    deadline: Instant,
+    run: impl FnOnce(&BaseChecker, &CheckerId) -> Result<T, String>,
+) -> CheckerChoice<T> {
+    match applicable(worktree, base, integrated_by_celeris, bundled, deadline) {
+        HealthApplicability::NotApplicable { reason } => CheckerChoice::NotApplicable(reason),
+        HealthApplicability::Unavailable { reason } => CheckerChoice::Unavailable(reason),
+        HealthApplicability::Applies { checker } => CheckerChoice::Ran(with_checker(
+            worktree,
+            base,
+            &checker,
+            bundled,
+            deadline,
+            |c| run(c, &checker),
+        )),
+    }
+}
+
+/// D1.3・D1.4: `CheckerId` の出どころを起こす検査器の場所に写す（写しはここだけ）。同梱は `bundled` の版が
+/// 適用判定と同じときだけ使う。
+fn checker_site<'a>(
+    checker: &CheckerId,
+    bundled: Option<&'a BundledChecker>,
+) -> Result<CheckerSite<'a>, String> {
+    match checker.source {
+        CheckerSource::Base => Ok(CheckerSite::Base),
+        CheckerSource::Bundled => match bundled {
+            Some(bundled) if bundled.id == *checker => Ok(CheckerSite::Bundled(&bundled.dir)),
+            Some(_) => Err("checker_mismatch: 渡された同梱の検査器の版が適用判定と違う".into()),
+            None => Err("checker_missing: 同梱の検査器が渡されていない".into()),
+        },
+    }
+}
+
+/// 適用判定が返した `checker` を出して `run` に渡す（base の版は戻ると消す）。
+fn with_checker<T>(
+    repo: &Path,
+    base: &str,
+    checker: &CheckerId,
+    bundled: Option<&BundledChecker>,
+    deadline: Instant,
+    run: impl FnOnce(&BaseChecker) -> Result<T, String>,
+) -> Result<T, String> {
+    let site = checker_site(checker, bundled)?;
+    with_base_checker(repo, base, site, deadline, run)?
+        .ok_or_else(|| "checker_missing: base に検査器が無い（適用判定と食い違う）".to_string())
+}
+
 /// D1.3: `repo` の `base..head` を `checker`（適用判定が返したもの）で 1 回評価し、証跡を作る。`timeout` は全体
 /// （git・検査器・policy の判定）の上限。同梱の検査器は `bundled`（[`health_gate`] が受けた値）だけを使う。評価できなければ
 /// verdict は [`HealthVerdict::Error`] で、`reason` に理由（`checker_not_run`・`report_missing`・`report_invalid`・
@@ -518,39 +607,87 @@ fn run_health_check(
     bundled: Option<&BundledChecker>,
     timeout: Duration,
 ) -> HealthRun {
-    let mut run = HealthRun {
-        evidence: HealthEvidence {
-            repo_id,
-            base_sha: base.to_string(),
-            head_sha: head.to_string(),
-            head_tree: String::new(),
-            policy_sha256: String::new(),
-            checker: Some(checker.clone()),
-            report_sha256: String::new(),
-            tool_version: String::new(),
-            verdict: HealthVerdict::Error,
-            blocking: Vec::new(),
-            reason: None,
-            reused_from: None,
-            reviewable: false,
-        },
-        failures: Vec::new(),
-    };
-    if let Err(why) = evaluate(repo, checker, bundled, Instant::now() + timeout, &mut run) {
-        run.evidence.verdict = HealthVerdict::Error;
-        run.evidence.reason = Some(why);
-        run.failures.clear();
+    let deadline = Instant::now() + timeout;
+    let checked = with_checker(repo, base, checker, bundled, deadline, |c| {
+        Ok(check_with(c, checker, repo_id, repo, head, None, deadline))
+    });
+    match checked {
+        Ok(checked) => checked.run,
+        Err(why) => {
+            let mut run = HealthRun {
+                evidence: error_evidence(repo_id, base, head, checker),
+                failures: Vec::new(),
+            };
+            run.evidence.reason = Some(why);
+            run
+        }
     }
-    run
 }
 
-/// `run_health_check` の本体。読めた値から順に `run` に書き、評価できなければ理由を返す。
-fn evaluate(
-    repo: &Path,
+/// 評価の前の証跡（verdict は Error。読めた値から順に書く）。
+fn error_evidence(repo_id: RepoId, base: &str, head: &str, checker: &CheckerId) -> HealthEvidence {
+    HealthEvidence {
+        repo_id,
+        base_sha: base.to_string(),
+        head_sha: head.to_string(),
+        head_tree: String::new(),
+        policy_sha256: String::new(),
+        checker: Some(checker.clone()),
+        report_sha256: String::new(),
+        tool_version: String::new(),
+        verdict: HealthVerdict::Error,
+        blocking: Vec::new(),
+        reason: None,
+        reused_from: None,
+        reviewable: false,
+    }
+}
+
+/// [`check_with`] の結果: 証跡と、評価で読んだ report（G2 の材料が同じ report を使う）。
+#[derive(Debug)]
+pub(crate) struct CheckedRun {
+    pub run: HealthRun,
+    /// 読めた report。検査器を起こせない・report が無い・壊れている（または report を作る前に止まった）なら理由。
+    /// report を読めた後の判定（policy の判定など）が失敗しても report は返す（`run` は Error）。
+    pub report: Result<RepoHealthReport, String>,
+}
+
+/// D1.3・D2.3・D3.1: `c`（適用判定が選んだ `checker` を出したもの）で `repo` の `c.sha..head` を 1 回評価する。
+/// report は `report_out`（無ければ一時 dir）に書く。`run_health_check` と G2 の材料（`health_review::input`）が共有する
+/// 唯一の評価で、検査器の起動（`run_report`）は 1 回。
+pub(crate) fn check_with(
+    c: &BaseChecker,
     checker: &CheckerId,
-    bundled: Option<&BundledChecker>,
+    repo_id: RepoId,
+    repo: &Path,
+    head: &str,
+    report_out: Option<&Path>,
+    deadline: Instant,
+) -> CheckedRun {
+    let mut run = HealthRun {
+        evidence: error_evidence(repo_id, &c.sha, head, checker),
+        failures: Vec::new(),
+    };
+    let mut report = None;
+    let evaluated = evaluate(c, repo, report_out, deadline, &mut run, &mut report);
+    if let Err(why) = &evaluated {
+        run.evidence.verdict = HealthVerdict::Error;
+        run.evidence.reason = Some(why.clone());
+        run.failures.clear();
+    }
+    let report = report.unwrap_or_else(|| Err(evaluated.err().unwrap_or_default()));
+    CheckedRun { run, report }
+}
+
+/// [`check_with`] の本体。読めた値から順に `run` に書き、検査器を起こしたら report（読めなければ理由の文。証跡の
+/// `reason` と違い先頭の語を付けない）を `report` に置く。評価できなければ理由を返す。
+fn evaluate(
+    c: &BaseChecker,
+    repo: &Path,
+    report_out: Option<&Path>,
     deadline: Instant,
     run: &mut HealthRun,
+    report: &mut Option<Result<RepoHealthReport, String>>,
 ) -> Result<(), String> {
     let evidence = &mut run.evidence;
     let git = |args: &[&str]| git_stdout(repo, args, deadline);
@@ -567,36 +704,31 @@ fn evaluate(
         .map_err(|e| format!("head_unreadable: {head_tree} を読めない: {e}"))?
         .trim()
         .to_string();
-    let site = match checker.source {
-        CheckerSource::Base => CheckerSite::Base,
-        CheckerSource::Bundled => match bundled {
-            Some(bundled) if bundled.id == *checker => CheckerSite::Bundled(&bundled.dir),
-            Some(_) => {
-                return Err("checker_mismatch: 渡された同梱の検査器の版が適用判定と違う".into());
-            }
-            None => return Err("checker_missing: 同梱の検査器が渡されていない".into()),
-        },
+    let scratch = Scratch::create("celeris-health-gate")?;
+    let out = report_out.map_or_else(|| scratch.0.join("report.json"), Path::to_path_buf);
+    let ran = match run_report(c, repo, &evidence.base_sha, &evidence.head_sha, &out) {
+        Ok(ran) => ran,
+        Err(e) => {
+            *report = Some(Err(e.to_string()));
+            return Err(format!("{}: {e}", e.token()));
+        }
     };
-    let base = run.evidence.base_sha.clone();
-    let ran = with_base_checker(repo, &base, site, deadline, |c| {
-        run.evidence.base_sha = c.sha.clone();
-        judge(c, repo, deadline, run)
-    })?;
-    ran.ok_or_else(|| "checker_missing: base に検査器が無い（適用判定と食い違う）".to_string())
+    let judged = judge(c, repo, deadline, run, &ran, &out, &scratch);
+    *report = Some(Ok(ran.report));
+    judged
 }
 
-/// 検査器で report を作り、D2.3 の値と D3.1 の判定を `run` に書く（Fail は fail 級の finding も。D3.2）。
+/// 検査器が書いた report（`out`）から D2.3 の値と D3.1 の判定を `run` に書く（Fail は fail 級の finding も。D3.2）。
 fn judge(
     c: &BaseChecker,
     repo: &Path,
     deadline: Instant,
     run: &mut HealthRun,
+    ran: &ReportRun,
+    out: &Path,
+    scratch: &Scratch,
 ) -> Result<(), String> {
     let evidence = &mut run.evidence;
-    let scratch = Scratch::create("celeris-health-gate")?;
-    let out = scratch.0.join("report.json");
-    let ran = run_report(c, repo, &evidence.base_sha, &evidence.head_sha, &out)
-        .map_err(|e| format!("{}: {e}", e.token()))?;
     let report = &ran.report;
     evidence.report_sha256 = sha256_hex(&ran.bytes);
     evidence.tool_version = report.tool.version.clone();
@@ -606,7 +738,7 @@ fn judge(
         Some(0) => evidence.verdict = HealthVerdict::Pass,
         Some(1) => {
             let changed = changed_paths(repo, &evidence.base_sha, &evidence.head_sha, deadline)?;
-            let judged = policy_review(c, &out, &changed, &scratch.0)?;
+            let judged = policy_review(c, out, &changed, &scratch.0)?;
             let mut blocking = judged.blocking;
             blocking.sort();
             let over = blocking.len().saturating_sub(MAX_BLOCKING);

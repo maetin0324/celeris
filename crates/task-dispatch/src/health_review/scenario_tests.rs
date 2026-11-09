@@ -42,15 +42,16 @@ fn report() -> serde_json::Value {
     })
 }
 
-/// main に `[review]` を持つ stub の検査器と owner 地図を commit した repo（`with_policy = false` なら README だけ）。
+/// main に stub の検査器と owner 地図を commit した repo。`with_policy = false` なら検査器の方針は `[review]` の無い
+/// `source = absent`。
 fn project_repo(with_policy: bool) -> tempfile::TempDir {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
-    if !with_policy {
-        return repo;
-    }
+    // `[review]` の無い repo も base に検査器を持つ（source = absent）。検査器の無い repo は適用判定が Unavailable で
+    // 合格にしない（ADR 2026-11-08-health-enforcement-loop D1.1）ので、従来の流れの比較には使えない。
+    let source = if with_policy { "base" } else { "absent" };
     let policy = serde_json::json!({
-        "schema": REVIEW_POLICY_SCHEMA, "source": "base", "owner_map": OWNER_MAP,
+        "schema": REVIEW_POLICY_SCHEMA, "source": source, "owner_map": OWNER_MAP,
         "high_risk": [{"class": "store", "paths": ["^crates/task-store/"]}],
         "invariants": {"events-append-only": "CLAUDE.md"}, "definition_sha256": DIGEST,
     });
@@ -545,7 +546,7 @@ fn health_review_scenario_real_cli() {
         "version = \"1\"\n",
     )
     .unwrap();
-    let state = load_review_policy(repo.path(), &base, REVIEW_POLICY_TIMEOUT);
+    let state = load_review_policy(repo.path(), &base, None, REVIEW_POLICY_TIMEOUT);
     let ReviewPolicyState::Present(policy) = state else {
         panic!("the real --print-review-policy output is not readable: {state:?}");
     };

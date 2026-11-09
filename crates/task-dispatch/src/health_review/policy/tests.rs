@@ -93,7 +93,7 @@ fn repo_with(profile: &str, side: bool) -> (tempfile::TempDir, String) {
 }
 
 fn load(dir: &Path, target: &str) -> ReviewPolicyState {
-    load_review_policy(dir, target, REVIEW_POLICY_TIMEOUT)
+    load_review_policy(dir, target, None, REVIEW_POLICY_TIMEOUT)
 }
 
 fn unavailable(state: ReviewPolicyState) -> String {
@@ -196,14 +196,34 @@ fn health_review_policy_bootstrap_and_unknown_sources_are_unavailable() {
     assert!(unavailable(parse_review_policy(&unknown)).contains("\"head\""));
 }
 
-/// base に script が無ければ、作業ツリーに script があっても `Absent`（その repo は `[review]` 節を持たない。作業ツリーの
-/// 検査器を起こさない）。解決できない target は `Unavailable`。
+/// health_enforce_g2_（ADR 2026-11-08-health-enforcement-loop D1.1・J3・J4）: base に script が無い repo では、適用判定が
+/// 選んだ同梱の検査器で方針を読む（作業ツリーの検査器は起こさない）。同梱も無ければ `Absent`（当てない）ではなく
+/// `Unavailable(checker_missing)`（risk は unknown で合格にしない）。解決できない target は `Unavailable`。以前の
+/// 「base に無ければ Absent」は同梱の検査器を見ず、Unavailable を Absent に写していた（この試験が検出する退行）。
 #[test]
-fn health_review_policy_script_missing_on_base_is_absent() {
+fn health_enforce_g2_review_policy_without_base_checker() {
     let dir = init_repo();
     write(dir.path(), CHECKER_SCRIPT, STUB);
     write(dir.path(), PROFILE_PATH, &present_json("worktree"));
-    assert_eq!(load(dir.path(), "main"), ReviewPolicyState::Absent);
+    let why = unavailable(load(dir.path(), "main"));
+    assert_eq!(why, "checker_missing");
+
+    let bundle = tempfile::tempdir().unwrap();
+    write(bundle.path(), CHECKER_SCRIPT, STUB);
+    write(bundle.path(), PROFILE_PATH, &present_json("bundled"));
+    let bundled = crate::health_review::gate::BundledChecker {
+        dir: bundle.path().to_path_buf(),
+        id: task_core::required_checks::health::CheckerId {
+            source: task_core::required_checks::health::CheckerSource::Bundled,
+            sha256: "b".repeat(64),
+        },
+    };
+    let state = load_review_policy(dir.path(), "main", Some(&bundled), REVIEW_POLICY_TIMEOUT);
+    let ReviewPolicyState::Present(policy) = state else {
+        panic!("not present: {state:?}");
+    };
+    assert_eq!(policy.high_risk[0].class, "bundled", "{policy:?}");
+
     let why = unavailable(load(dir.path(), "no-such-branch"));
     assert!(why.contains("no-such-branch"), "{why}");
 }
@@ -255,6 +275,7 @@ fn health_review_policy_timeout_is_unavailable() {
     let why = unavailable(load_review_policy(
         dir.path(),
         "main",
+        None,
         Duration::from_secs(2),
     ));
     assert!(

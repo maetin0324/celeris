@@ -50,7 +50,8 @@ D4.1 の残りの上限は他の unit の試験が持つ: `max_replans` は `hea
 ## 証拠（提出時の HEAD で実行。最後の同期の後に再実行する）
 - WU の check 1（`fn health_limits_cap_` の grep が 9 件 ≥ 8、`cargo nextest run -p task-dispatch -p task-ops -p task-api --no-tests=fail -E 'test(/health_limits_cap_/)'`）→ exit 0、`9 tests run: 9 passed, 3155 skipped`、2.6 秒。
 - `cargo fmt --all -- --check && cargo clippy --workspace -- -D warnings` → exit 0。
-- `bash scripts/dev/test-affected.sh` → 結果は下の「提出時の検査」に書く。
+- `bash scripts/dev/test-affected.sh` → exit 0。nextest `3685 tests run: 3685 passed (10 slow), 11 skipped`。check-health `repo-health: verdict=pass exit=0 fail_grade=0 new=2 worsened=0`（new の 2 件は warning の `dup.contract`（`required_checks/health.rs`）と `dup.public-surface`（`health_review/limits.rs`）で、どちらも前の unit の変更）。
+- `sh scripts/dev/check-doc-links.sh --root .` → ok。`sh scripts/dev/progress-index.sh --check` → ok。
 
 ## 未解決
 - 無し。

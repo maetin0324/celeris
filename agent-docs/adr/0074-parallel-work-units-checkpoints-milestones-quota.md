@@ -514,6 +514,8 @@ ADR-0033 D2 監査 D-3）。新しい案件計画（D3.3）はマイルストー
   `source = System`（組織の天井で丸めない扱いは今と同じ）。人の明示（Task の `tier:frontier`）があればそれに従う。
 - `[execution.planner] max_turns` 既定 40 → **24**、`max_wall_secs` 1,200 → **900**。プロンプトに「計画 run はコードの調査をしない。
   調査が要るなら investigate の WU にせよ」と書く（E6-4 の時間の多くは探索）。
+  - 付記（2026-11-09）: 既定は ADR 2026-11-09-planner-turn-limit-and-comment-interrupt D3 で 40 turn / 1,200 秒に戻した（G2 の後に 24 turn で
+    13 件が `error_max_turns`）。lane・prompt・計画のサイズの上限はこの節のまま。
 - **計画のサイズの上限**（`validate` で拒否。1 回だけ再試行 → それでも駄目なら ADR-0072 D14 のとおり atomic に倒す / replan なら blocked）:
   `rationale` ≤ 1,500 文字、WU の `objective` ≤ 2,000 文字、`title` ≤ 120 文字、`done_when` ≤ 8 件 × 300 文字、`checks` ≤ 6 件、
   計画の JSON 全体 ≤ 24 KiB。

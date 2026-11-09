@@ -3068,6 +3068,7 @@ mod cron_jobs;
 mod dispatch_ready_phases;
 mod git_workspace;
 mod health_enforce;
+mod health_limits_integration;
 mod integration_check_progress;
 mod integration_ready_race;
 mod jev_synth_e2e;

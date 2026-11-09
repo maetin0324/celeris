@@ -12,6 +12,9 @@
 //!   [`repair_buckets`]（`health:<rule_id>`）。
 //! - Error（Unavailable を含む）: 不合格。reason は `health_check_error: <理由>`（[`check_error`] が読む）。repair・replan に
 //!   回さず、経路は task を Blocked にする（D3.4）。
+//! - health だけの不合格（Repair）の往復（D4.3。[`limits::judge`]）と、段の統合の修復の上限の使い切り（D4.4）: WU の
+//!   retry・統合の repair・replan に回さず、`health_findings_repeated:`・`health_repair_limit:` の質問で Blocked にする
+//!   （[`stops_without_replan`]）。往復は木の root に `HealthFindingsRepeated` を追記する（受信箱の `health_repeat` 1 件）。
 //! - NotApplicable: 列に足さない（event には理由を持つ証跡を残す）。
 //!
 //! 修復の後の再評価は、経路が新しい head で [`run_item`] を呼び直す（前の証跡を使わない。ここは何も覚えない）。
@@ -25,11 +28,48 @@ use super::super::*;
 use super::ObservedIntegration;
 use crate::health_review::gate::{self, BundledChecker, HealthGateDecision, HealthGateRequest};
 use crate::health_review::input::HEALTH_INPUT_TIMEOUT;
-use task_core::RepoId;
+use crate::health_review::limits::{self, HealthScope, RepeatVerdict};
 use task_core::required_checks::health::{HEALTH_CHECK_ID, HealthEvidence};
+use task_core::{HealthRepeatSite, RepoId};
 
 /// D3.4: Error・Unavailable の項目の reason の先頭の語（`health_check_error: <理由>`）。
 pub(in super::super) const HEALTH_CHECK_ERROR: &str = "health_check_error";
+/// D4.3: 同じ指摘の往復で止めた質問の先頭の語（`health_findings_repeated: <位置>: …`）。
+pub(in super::super) const HEALTH_FINDINGS_REPEATED: &str = "health_findings_repeated";
+/// D4.4: 段の統合の health の修復の上限を使い切って止めた質問の先頭の語（`health_repair_limit: <位置>: …`）。
+pub(in super::super) const HEALTH_REPAIR_LIMIT: &str = "health_repair_limit";
+
+/// 統合を止める理由 `why` が replan で直らない health の止まり（D3.4 の Error・D4.3 の往復・D4.4 の上限の使い切り）か。
+/// 当たれば `integration_gives_up_with` は replan せず Blocked（質問）にする（D4.4: health のために replan を足さない）。
+pub(super) fn stops_without_replan(why: &str) -> bool {
+    [
+        HEALTH_CHECK_ERROR,
+        HEALTH_FINDINGS_REPEATED,
+        HEALTH_REPAIR_LIMIT,
+    ]
+    .iter()
+    .any(|p| {
+        why.strip_prefix(p)
+            .is_some_and(|rest| rest.starts_with(':'))
+    })
+}
+
+/// D4.3: 往復で止めた task の質問の文。木の root の受信箱の `health_repeat`（集合ごとに 1 件）とは別に、止めた task の
+/// Blocked を人が comment・回答で再開する口になる。
+fn repeated_question(site: &HealthRepeatSite, fingerprints: &[String]) -> String {
+    format!(
+        "{HEALTH_FINDINGS_REPEATED}: {}: 修復の後も同じ health の指摘が残りました（{}）。repair・retry・replan をせずに止めました（木の root の受信箱に 1 件上げています）",
+        site.label(),
+        fingerprints.join(", ")
+    )
+}
+
+/// WU の check の列 `(cmd, pass)` の不合格がすべて health の項目か（不合格が無ければ `false`）。health でない失敗が混ざる
+/// 不合格は往復で止めず、今どおり WU の retry にする。
+fn only_health_fails<'a>(rows: impl IntoIterator<Item = (&'a str, bool)>) -> bool {
+    let mut failing = rows.into_iter().filter(|(_, pass)| !pass).peekable();
+    failing.peek().is_some() && failing.all(|(cmd, _)| cmd == HEALTH_CHECK_ID)
+}
 
 /// health を評価する 1 つの repo の作業ツリーと範囲（経路が組み立てる。D1.2 の表）。
 #[derive(Debug, Clone)]
@@ -140,8 +180,9 @@ fn repair_buckets(reason: &str) -> Vec<String> {
     out
 }
 
-/// 段の統合の修復の bucket（repair WU の title の `repair (<bucket>)`）と、その bucket の既にある修復の数。health の修復は
-/// rule ごと（`health:<rule_id>` を `,` で並べる）に数え、数は rule ごとの最大（D3.2・D4.1）。他の class は class の bucket。
+/// 段の統合と task の review の修復の bucket（repair WU の title の `repair (<bucket>)`）と、その bucket の既にある修復の数。
+/// health の修復は rule ごと（`health:<rule_id>` を `,` で並べる）に数え、数は rule ごとの最大（D3.2・D4.1）。他の class は
+/// class の bucket。
 pub(in crate::dispatcher) fn repair_count(
     class: task_core::RepairClass,
     summary: &[String],
@@ -400,12 +441,16 @@ impl Dispatcher {
     }
 
     /// WU の check の結果の health の行を扱う。列の最後の余りの行（`run_integration_checks` が `checks` の後に足す）に
-    /// health の項目の check を付ける。その行が Error（D3.4）なら、run の結果を質問（`health_check_error: <理由>`。
+    /// health の項目の check を付ける。その行が Error（D3.4）か、不合格が health だけで WU `wu` の範囲の同じ指摘の往復
+    /// （D4.3。木の root に追記する）なら、run の結果を質問（`health_check_error: <理由>`・`health_findings_repeated: …`。
     /// worker が `Done` で返した usage は落とさない）にすり替え、検査の記録を空にする（WU の repair〈retry〉にしない）。
     pub(in super::super) fn settle_health_row(
+        &self,
+        task: &Task,
+        wu: &Option<task_core::WorkUnitRow>,
         result: Result<RunOutcome, AdapterError>,
         mut check_run: WorkUnitCheckRun,
-    ) -> (Result<RunOutcome, AdapterError>, WorkUnitCheckRun) {
+    ) -> Result<(Result<RunOutcome, AdapterError>, WorkUnitCheckRun), DispatchError> {
         if check_run.results.len() > check_run.checks.len() {
             check_run.checks.push(task_core::WorkUnitCheck {
                 cmd: HEALTH_CHECK_ID.to_string(),
@@ -413,10 +458,22 @@ impl Dispatcher {
                 scope: false,
             });
         }
-        let error = (check_run.checks.iter().zip(&check_run.results))
-            .find_map(|(c, (pass, reason))| check_error(&c.cmd, *pass, reason));
-        let Some(text) = error.map(str::to_string) else {
-            return (result, check_run);
+        let rows = || check_run.checks.iter().zip(&check_run.results);
+        let error = rows().find_map(|(c, (pass, reason))| check_error(&c.cmd, *pass, reason));
+        let repeat = match (error, wu) {
+            (Some(text), _) => Some(text.to_string()),
+            (None, Some(wu))
+                if only_health_fails(rows().map(|(c, (p, _))| (c.cmd.as_str(), *p))) =>
+            {
+                let site = HealthRepeatSite::WorkUnit {
+                    key: wu.key.clone(),
+                };
+                self.health_repeat_stop(task, site)?
+            }
+            (None, _) => None,
+        };
+        let Some(text) = repeat else {
+            return Ok((result, check_run));
         };
         let usage = match &result {
             Ok(RunOutcome {
@@ -434,7 +491,69 @@ impl Dispatcher {
             results: Vec::new(),
             cwd: check_run.cwd,
         };
-        (question, cleared)
+        Ok((question, cleared))
+    }
+
+    /// D4.3: 範囲 `site` の今の health の評価が同じ指摘の往復（[`limits::judge`]。task の events を読む）なら、木の root に
+    /// `HealthFindingsRepeated` を追記し（`task_ops::inbox::health_repeat::record_findings_repeated`。集合ごとに受信箱 1 件）、
+    /// 止める質問の文を返す。往復でなければ `None`（今の repair・retry の判定のまま）。
+    fn health_repeat_stop(
+        &self,
+        task: &Task,
+        site: HealthRepeatSite,
+    ) -> Result<Option<String>, DispatchError> {
+        let events = self.store.events_for(task.id)?;
+        let scope = match &site {
+            HealthRepeatSite::WorkUnit { key } => HealthScope::WorkUnit(key),
+            HealthRepeatSite::Phase { key } => HealthScope::Phase(key),
+            HealthRepeatSite::Review => HealthScope::Review,
+        };
+        let RepeatVerdict::Repeat { fingerprints, .. } = limits::judge(&events, scope) else {
+            return Ok(None);
+        };
+        let text = repeated_question(&site, &fingerprints);
+        tracing::warn!(task_id = %task.id, site = %site.label(), ?fingerprints, "the same health findings came back after a repair; blocking instead of repairing again (ADR 2026-11-08-health-enforcement-loop D4.3)");
+        task_ops::inbox::health_repeat::record_findings_repeated(
+            self.store.as_ref(),
+            task,
+            site,
+            &fingerprints,
+        )
+        .map_err(ops_to_store)?;
+        Ok(Some(text))
+    }
+
+    /// D4.3・D4.4: 段 `phase` の統合の health だけの不合格（`class` が Health）を repair の前に止めるか。同じ指摘の往復なら
+    /// 木の root に追記して往復の質問を、修復の上限を使い切った（`used` が `Some((bucket, 統合の修復の数, bucket の修復の
+    /// 数))`）なら上限の質問を返す。どちらも [`stops_without_replan`] に当たり、統合は repair も replan もせず Blocked で
+    /// 止まる。health でない不合格と、上限の内の往復でない指摘は `None`（今の repair・replan の判定のまま）。
+    pub(super) fn phase_health_stop(
+        &self,
+        task: &Task,
+        phase: &str,
+        class: task_core::RepairClass,
+        used: Option<(&str, usize, usize)>,
+        summary: &[String],
+    ) -> Result<Option<String>, DispatchError> {
+        if class != task_core::RepairClass::Health {
+            return Ok(None);
+        }
+        let site = HealthRepeatSite::Phase {
+            key: phase.to_string(),
+        };
+        let label = site.label();
+        if let Some(text) = self.health_repeat_stop(task, site)? {
+            return Ok(Some(text));
+        }
+        let limit = &self.config.execution;
+        Ok(used.map(|(bucket, all, same)| {
+            format!(
+                "{HEALTH_REPAIR_LIMIT}: {label}: health の修復が上限に達しました（統合の修復 {all}/{} 回、{bucket} の修復 {same}/{} 回）。repair も replan もせずに止めました: {}",
+                limit.max_repairs,
+                limit.max_repairs_per_class,
+                summary.join("; ")
+            )
+        }))
     }
 }
 

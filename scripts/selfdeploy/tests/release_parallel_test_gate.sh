@@ -109,6 +109,11 @@ chmod +x "$repo/scripts/selfdeploy/"*.sh
 mkdir -p "$repo/scripts/dev" "$repo/tools/nextest"
 cp "$here/../dev/test-parallel.sh" "$repo/scripts/dev/"
 cp "$here/../dev/source-size-report.py" "$repo/scripts/dev/"
+# test-parallel.sh が読む helper と、release.sh が同梱する検査器（sd_bundle_repo_health は repo_health.py と
+# source-size-report.py の無い build を失敗にする）。
+mkdir -p "$repo/scripts/dev/lib" "$repo/scripts/dev/repo-health"
+cp "$here/../dev/lib/test-tmp-lifecycle.sh" "$repo/scripts/dev/lib/"
+cp "$here/../dev/repo-health/repo_health.py" "$repo/scripts/dev/repo-health/"
 cp "$here/../../tools/nextest/VERSION" "$repo/tools/nextest/"
 printf 'pub const SCHEMA_VERSION: u32 = 7;\n' >"$repo/crates/task-core/src/store/migrations.rs"
 printf '[package]\nname = "celeris"\nversion = "0.1.0"\n' >"$repo/crates/celeris/Cargo.toml"
@@ -155,6 +160,12 @@ gate_is "$g" "{k: g['cargo_test'][k] for k in ('runner', 'binaries', 'nextest_bi
 grep -q -- '^nextest run --workspace --no-fail-fast .*--test-threads 3' "$root/cargo.log" || fail "nextest did not get --test-threads 3: $(cat "$root/cargo.log")"
 grep -qx 'test --doc --workspace --color never' "$root/cargo.log" || fail "doc-tests did not run"
 if grep -qx 'test --workspace' "$root/cargo.log"; then fail "plain cargo test --workspace ran with the nextest runner"; fi
+# ADR 2026-11-08-health-enforcement-loop D1.4: 作った release に検査器と CHECKER_TREE が入る（中身の照合は repo_health_bundle.sh）。
+rh="$root/state/releases/$c12/repo-health"
+[ -f "$rh/scripts/dev/repo-health/repo_health.py" ] && [ -f "$rh/scripts/dev/source-size-report.py" ] \
+  || fail "release lacks the bundled repo-health checker under $rh"
+[ "$(cut -d' ' -f1 "$rh/CHECKER_TREE" | tr '\n' ' ')" = "repo-health source-size-report " ] \
+  || fail "release repo-health/CHECKER_TREE is wrong: $(cat "$rh/CHECKER_TREE" 2>&1)"
 
 # ---- 2. nextest のテストが落ちる → gate が cargo-test で落ち、リリースは無く、失敗数が残る ----
 c="$(new_commit)"

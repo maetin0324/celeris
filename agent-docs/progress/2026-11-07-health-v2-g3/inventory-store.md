@@ -58,6 +58,19 @@ D6.5 の列を objective の指定どおり outcome・既存で省いた数・�
 
 web の依存不足も未解決。必要な package を用意した環境で、逆依存と web を含む test-affected を再実行する必要がある。
 
+## 二度目の run（attempt 1、2026-11-09）の確認
+
+前回の run の後の check 2 件の不合格を確かめた。どちらも成果の直し方では通らない計画の問題で、yield.plan_issue で申告した。
+
+- 範囲 check: migration を 1 つ足すと SCHEMA_VERSION が 121 になり、`crates/task-core/src/cluster_job/tests.rs`・`crates/task-core/src/cron/store_tests.rs`・`crates/task-core/src/delivery.rs`（`#[cfg(test)]` の試験）の `assert_eq!(SCHEMA_VERSION, 120)` が落ちる。直さないと test-affected が落ち、直すと範囲 check が落ちる。
+- check-health: size.responsibility-growth の単位は `<pkg>/src/<src 直下の第 1 要素>` で、`store/` の下の dir に分けても単位は `crates/task-core/src/store` のまま。base で module の本体行 20025（閾値 8000）、`store::SqliteStore` の method 731（閾値 60）。`store/` に 1 行でも足すと worsened になる。新しい migration に必ず要る `store/migrations.rs` の `121 =>` の 3 行だけでも worsened になる。ADR (8) の write_set（`^crates/task-core/src/store/[a-z_]+\.rs$`）は G1 の検査器が入る前の配置の前提で書かれている。
+
 ## 提案
 
 親の計画に store の責務縮小を担当する unit を置き、method 数と module 本体行の既存超過を減らしてから本 unit を再検査する。別の方針を採るなら、指定する store API と健全性 policy の整合を設計で決める。migration に伴う cluster_job/tests.rs・cron/store_tests.rs・delivery.rs の試験更新も範囲 check に含める。
+
+具体案（plan_issue と同じ）:
+
+1. 範囲 check に `crates/task-core/src/(cluster_job/tests|cron/store_tests|delivery)\.rs` を足す。
+2. 棚卸しの SqliteStore の impl を `store/` の外の領域 module に置く（既存の例: `chat/store.rs`・`browser_wait/sql.rs`）。単位が別になり、method 3 件と本体行は閾値の下に収まる。
+3. migration の登録の 3 行は 2 の後も store の worsened になる。人の決定で、(a) policy だけの branch で例外を置くか、(b) migration の登録（`store/migrations.rs`）を `store/` の外の module に移す unit を先に置くかを選ぶ。どちらも ADR (8) との違いを G3 closeout が付記する。

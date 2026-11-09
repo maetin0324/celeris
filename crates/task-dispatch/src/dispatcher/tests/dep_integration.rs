@@ -41,8 +41,8 @@ fn true_task(dir: &std::path::Path) -> Task {
 }
 
 /// 一時 git repo（main に 1 commit）を案件に登録し、done の依存先 root と、それを待つ ready の root を作る。
-/// 依存先の branch `celeris/<id>` には main に無い commit がある。
-fn setup(
+/// 依存先の branch `celeris/<id>` には main に無い commit がある。`unscheduled_restart.rs` も使う。
+pub(super) fn setup(
     dir: &std::path::Path,
     pred_tree: Option<TreeInfo>,
 ) -> (Arc<dyn TaskStore>, std::path::PathBuf, Task, Task, String) {

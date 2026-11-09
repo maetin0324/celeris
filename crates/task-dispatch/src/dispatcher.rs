@@ -2402,8 +2402,10 @@ impl Dispatcher {
             tracing::warn!(error = %e, "browser prerequisite re-evaluation failed");
         }
         steps.mark("cron_and_browser_prereq");
+        // ADR 2026-11-09-unscheduled-restart-hold D1: 走査が終われば、メモリの待ち（M1〜M10）が揃った。
         report.dispatched = if self.accepting_new_work && self.disk_ready {
-            self.dispatch_ready()?
+            self.dispatch_ready()
+                .inspect(|_| self.stagnation.waits_known = true)?
         } else {
             0
         };

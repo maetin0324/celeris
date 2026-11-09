@@ -131,6 +131,21 @@ fn reached(since: OffsetDateTime, threshold_secs: u64, now: OffsetDateTime) -> b
         && (now - since).whole_seconds() >= i64::try_from(threshold_secs).unwrap_or(i64::MAX)
 }
 
+/// ADR 2026-11-09-unscheduled-restart-hold D2: 停滞の判定を今走らせるか（間隔と起動直後の保留の 1 か所）。
+/// `waits_known` はこの process で dispatcher の `dispatch_ready` が 1 回でも終わったか（メモリの待ち M1〜M10 が
+/// 揃ったか）。揃う前は走らせない（ready の task の待ちが空に見え、`task_unscheduled` を誤って出すため）。
+pub fn scan_due(
+    checked_at: Option<OffsetDateTime>,
+    scan_interval_secs: u64,
+    waits_known: bool,
+    now: OffsetDateTime,
+) -> bool {
+    waits_known
+        && checked_at.is_none_or(|last| {
+            (now - last).whole_seconds() >= i64::try_from(scan_interval_secs).unwrap_or(i64::MAX)
+        })
+}
+
 fn duration_ja(secs: i64) -> String {
     let secs = secs.max(0);
     let (h, m) = (secs / 3600, (secs % 3600) / 60);

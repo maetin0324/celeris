@@ -50,7 +50,8 @@ pub struct CheckerId {
 /// [`applicability`] の入力。repo の事実だけを持つ（J1。案件・repo 名・mode の欄を足さない）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HealthRepoFacts {
-    /// 作業ツリーが Git 管理（`git rev-parse --show-toplevel` が通る）。
+    /// 作業ツリーが Git 管理（`git rev-parse --show-toplevel` が通る）。`false` は Git 管理でないと確かめられた
+    /// ときだけ（[`repo_facts`]。確かめられない失敗は `unreadable`）。
     pub git: bool,
     /// Celeris が branch を統合する作業ツリー（ssh の remote workspace は false。ADR-0079 D5）。
     pub integrated_by_celeris: bool,
@@ -156,10 +157,21 @@ pub fn applicability(facts: &HealthRepoFacts) -> HealthApplicability {
     }
 }
 
+/// git が「Git 管理でない」と答えたときの stderr の語句。`git rev-parse` が作業ツリーを親 dir まで探して見つから
+/// なかったときの 2 つの文（`not a git repository (or any of the parent directories): .git` と、file system の境界で
+/// 止まった `not a git repository (or any parent up to mount point …)`）だけに合う。壊れた gitfile・`GIT_DIR` の
+/// 誤り（`not a git repository: '<path>'`）・所有者の検査（`dubious ownership`）・時間切れ・起動失敗には合わない。
+/// git の文が翻訳される locale でも合わないが、その場合は `unreadable` になり合格にはならない（fail closed）。
+const NOT_A_GIT_REPO_STDERR: &str = "not a git repository (or any ";
+
 /// [`applicability`] の事実を集める（D1.1）。`git` は repo で git を実行して stdout を返す closure
-/// （[`super::candidate_required_checks`] と同じ形。非 0 exit・起動失敗は `Err`）。`bundled` は release に同梱した
-/// 検査器（source は [`CheckerSource::Bundled`]）。remote workspace（`integrated_by_celeris == false`）では git を
-/// 呼ばない（手元に統合する作業ツリーが無い）。読めない事実は `unreadable` に理由を書く。
+/// （[`super::candidate_required_checks`] と同じ形。非 0 exit は stderr を、時間切れ・起動失敗はその理由を `Err` に
+/// 入れる）。`bundled` は release に同梱した検査器（source は [`CheckerSource::Bundled`]）。remote workspace
+/// （`integrated_by_celeris == false`）では git を呼ばない（手元に統合する作業ツリーが無い）。
+///
+/// `git rev-parse --show-toplevel` の失敗は、git が「Git 管理でない」と答えたとき（[`NOT_A_GIT_REPO_STDERR`]）だけ
+/// `git = false` にする。それ以外の失敗（時間切れ・起動失敗・壊れた作業ツリーなど）は Git 管理でないと確かめられて
+/// いないので `unreadable` に理由を書く（fail closed）。読めない事実は全て `unreadable` に理由を書く。
 pub fn repo_facts(
     integrated_by_celeris: bool,
     base_sha: &str,
@@ -176,10 +188,12 @@ pub fn repo_facts(
     if !integrated_by_celeris {
         return facts;
     }
-    if git(&["rev-parse", "--show-toplevel"]).is_err() {
-        // A failed rev-parse alone cannot tell "not a repository" from "git cannot run".
-        if let Err(error) = git(&["--version"]) {
-            facts.unreadable = Some(format!("git を起動できない: {error}"));
+    if let Err(error) = git(&["rev-parse", "--show-toplevel"]) {
+        if !error.contains(NOT_A_GIT_REPO_STDERR) {
+            facts.unreadable = Some(format!(
+                "git rev-parse --show-toplevel を読めない: {}",
+                error.trim()
+            ));
         }
         return facts;
     }

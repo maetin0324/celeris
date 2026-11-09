@@ -962,23 +962,13 @@ impl Dispatcher {
                         .unwrap_or_else(|| Ok(Default::default()))
                         .map(|cfg| cfg.commands.check)
                 };
-                let reusable = match (snapshot, &commands) {
-                    (Some(s), Ok(cmds)) => task_core::required_checks::reusable_passes(
-                        &events,
-                        s.repo_id,
-                        &s.target_sha,
-                        &s.reviewed_sha,
-                        cmds,
-                    ),
-                    _ => Default::default(),
-                };
                 repo_checks.push(crate::review::RequiredRepoChecks {
                     binding: snapshot.map(crate::review::RequiredCheckBinding::from),
                     health: Some(RepoHealth::At(
                         snapshot.map_or(&repo.dir, |s| &s.dir).clone(),
                     )),
                     commands,
-                    reusable,
+                    reusable: Default::default(),
                     workspace: if index == 0 {
                         None
                     } else {
@@ -1028,7 +1018,7 @@ impl Dispatcher {
             let extras = ReviewExtras {
                 subject,
                 plan,
-                reviewer: health.attach(reviewer_run, &mut repo_checks).await,
+                reviewer: health.attach(reviewer_run, &mut repo_checks, events).await,
                 human,
                 aggregate,
                 // ADR-0043 D4: リポジトリの `[commands] check`（必須。acceptance で置き換えない）。

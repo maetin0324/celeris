@@ -96,17 +96,19 @@ fn latest_bound<'a>(
     })
 }
 
-/// 同じ束縛で既に合格した必須検査の cmd（再 review で再実行しない）。health の項目は返さない（health の再利用は
-/// [`reusable_health`] だけが決める）。
+/// 同じ束縛で既に合格した必須検査の cmd（再 review で再実行しない）。`health` は今の適用判定から作った要求で、定義指紋
+/// に検査器の版を入れる（D2.4）ので、検査器が違う証跡の cmd は返さない。health の項目は返さない（health の再利用は
+/// [`reusable_health`]・[`reuse_health`] だけが決める）。
 pub fn reusable_passes(
     events: &[Event],
     repo: RepoId,
     target_sha: &str,
     reviewed_sha: &str,
     required: &[String],
+    health: HealthRequirement<'_>,
 ) -> BTreeSet<String> {
     latest_bound(events, repo, target_sha, reviewed_sha)
-        .filter(|(_, digest)| *digest == definition_digest(required, None))
+        .filter(|(_, digest)| *digest == definition_digest(required, health.checker()))
         .map(|(results, _)| {
             results
                 .iter()
@@ -143,6 +145,47 @@ pub fn reusable_health<'a>(
         .rev()
         .find_map(|e| recorded_health(e).into_iter().rev().find(|h| key.binds(h)))
         .filter(|h| h.verdict == HealthVerdict::Pass && h.reviewable && !h.report_sha256.is_empty())
+}
+
+/// [`reuse_health`] の入力: 今の候補。`head_tree` は `head_sha` の tree、`checker_sha256` は今の適用判定の検査器の版。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HealthCandidate<'a> {
+    pub repo_id: RepoId,
+    pub base_sha: &'a str,
+    pub head_sha: &'a str,
+    pub head_tree: &'a str,
+    pub checker_sha256: &'a str,
+}
+
+/// D2.5: `candidate` で写してよい health の証跡を、今の `(base_sha, head_sha)` に束縛し直して返す（`reused_from` に
+/// 元の `head_sha`）。無ければ `None`（呼び出し元は経路共通の入口で評価し直す）。policy の指紋は report からしか
+/// 作れず、policy は base 側で評価される（同じ base・同じ検査器なら同じ値）ので、同じ `(repo, base, 検査器)` で最新の
+/// 証跡の値を鍵に使う。base・検査器が違えば鍵の証跡が無く、head の tree が違えば [`reusable_health`] が引かない。
+pub fn reuse_health(events: &[Event], candidate: &HealthCandidate<'_>) -> Option<HealthEvidence> {
+    let policy_sha256 = events.iter().rev().find_map(|e| {
+        recorded_health(e).into_iter().rev().find_map(|h| {
+            (h.repo_id == candidate.repo_id
+                && h.base_sha == candidate.base_sha
+                && !h.policy_sha256.is_empty()
+                && h.checker
+                    .as_ref()
+                    .is_some_and(|c| c.sha256 == candidate.checker_sha256))
+            .then_some(h.policy_sha256.as_str())
+        })
+    })?;
+    let key = HealthReuseKey {
+        repo_id: candidate.repo_id,
+        base_sha: candidate.base_sha,
+        head_tree: candidate.head_tree,
+        policy_sha256,
+        checker_sha256: candidate.checker_sha256,
+    };
+    let recorded = reusable_health(events, &key)?;
+    Some(HealthEvidence {
+        head_sha: candidate.head_sha.to_string(),
+        reused_from: Some(recorded.head_sha.clone()),
+        ..recorded.clone()
+    })
 }
 
 /// main へ取り込む前の照合。`required` は候補の HEAD にある必須検査の定義、`health` は今の適用判定から作った

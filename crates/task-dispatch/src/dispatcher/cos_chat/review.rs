@@ -12,9 +12,13 @@ use task_core::{CronJob, CronJobId, SqliteStore, TaskStore};
 use task_ops::cron_jobs::{CronInputPost, CronInputSink};
 use task_ops::stagnation::StagnationFinding;
 use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
 use super::launch::CosChatLaunch;
+use crate::dispatcher::cron_tick::{inventory, project_wake::post_reconcile_wake};
+use crate::dispatcher::rfc3339;
+
+/// A cron sink's answer.
+type Post = Result<CronInputPost, String>;
 
 /// Items of each list an input carries (the rest is counted, CoS reads details on demand).
 pub(crate) const REVIEW_LIST_MAX: usize = 20;
@@ -46,6 +50,8 @@ pub(crate) fn review_key(job: CronJobId, scheduled_for: OffsetDateTime) -> Strin
 pub(crate) struct CosReviewSink<'a> {
     pub launch: Option<&'a CosChatLaunch>,
     pub findings: &'a [StagnationFinding],
+    /// ADR 2026-11-08-health-enforcement-loop D6: 棚卸しの Busy の印（Dispatcher の欄）と起票の tick の文脈。
+    pub inventory: inventory::Port<'a>,
     pub now: OffsetDateTime,
 }
 
@@ -56,14 +62,13 @@ impl CronInputSink for CosReviewSink<'_> {
         job: &CronJob,
         scheduled_for: OffsetDateTime,
         project_id: &str,
-    ) -> Result<task_ops::cron_jobs::CronInputPost, String> {
-        crate::dispatcher::cron_tick::project_wake::post_reconcile_wake(
-            self.launch,
-            job,
-            scheduled_for,
-            project_id,
-            self.now,
-        )
+    ) -> Result<CronInputPost, String> {
+        post_reconcile_wake(self.launch, job, scheduled_for, project_id, self.now)
+    }
+
+    /// ADR 2026-11-08-health-enforcement-loop D6.1: 本体は `health_review/inventory.rs`。
+    fn post_health_inventory(&mut self, job: &CronJob, at: OffsetDateTime, project: &str) -> Post {
+        inventory::post(self, job, at, project)
     }
 
     fn post_cos_review(
@@ -183,10 +188,6 @@ fn last_reviewed(
             let secs = m.client_message_id.as_deref()?.strip_prefix(&prefix)?;
             OffsetDateTime::from_unix_timestamp(secs.parse().ok()?).ok()
         }))
-}
-
-fn rfc3339(at: OffsetDateTime) -> String {
-    at.format(&Rfc3339).unwrap_or_default()
 }
 
 fn cut(text: &str, max: usize) -> String {

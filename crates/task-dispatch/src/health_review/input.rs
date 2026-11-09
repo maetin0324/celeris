@@ -17,7 +17,7 @@
 //! - [`build_health_input`]: repo ごとに base（target）側の検査器（[`with_base_checker`]）で review 方針を読み、
 //!   同じ `(repo_id, target_sha, reviewed_sha, definition_sha256)` の `Event::HealthReviewInputBuilt` があればその
 //!   `input` を使う（reviewer run の再試行・stale 再同期の後の再 review）。無ければ diff 統計・owner 地図の行・
-//!   repo health の report（`repo_health.py --repo --base --head --policy-version 1 --out`）から作って追記する。
+//!   repo health の report（`health_review::gate::run_report`）から作って追記する。
 //!   方針が `absent`・読めない repo、remote workspace・同期の無い repo は `Event::HealthReviewInputSkipped` に
 //!   理由を残す（その repo の分は `ReviewRequest.health` に入らない）。
 //! - policy の関門（I8・D6.4。`dispatcher::policy_review`）のため、base に検査器がある repo は candidate の policy の
@@ -32,26 +32,24 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use serde::Deserialize;
 use task_core::design_review::ReviewPolicyState;
 use task_core::{Event, Task, TaskId, TaskStore};
 use task_ops::changes::git;
 use task_worker::protocol::{
-    DiffStat, HealthFindingCounts, HealthFindingsSummary, HealthPolicyState, HealthRepoInput,
-    HealthReportFinding, HealthReviewInput, OwnerRow, PathStat,
+    DiffStat, HealthFindingsSummary, HealthPolicyState, HealthRepoInput, HealthReportFinding,
+    HealthReviewInput, OwnerRow, PathStat,
 };
 
-use super::policy::{BaseChecker, finished, left, parse_review_policy, with_base_checker};
+use super::gate::{self, RepoHealthReport};
+use super::policy::{
+    BaseChecker, CheckerSite, finished, left, parse_review_policy, with_base_checker,
+};
 use crate::dispatcher::Dispatcher;
 use crate::dispatcher::review_spawn::ReviewSync;
 use crate::review::ReviewerRun;
 
 /// 1 回の材料作り（全 repo の方針の読み込み・diff・owner 地図・repo health）の時間の上限。
 pub const HEALTH_INPUT_TIMEOUT: Duration = Duration::from_secs(600);
-/// `repo_health.py --policy-version` に渡す版。
-pub const POLICY_VERSION: &str = "1";
-/// 読む report の schema。
-pub const REPORT_SCHEMA: &str = "celeris.repo-health.report/1";
 /// `findings.new` の上限（超えた数は `findings.truncated`）。
 pub const MAX_FINDINGS: usize = 50;
 /// `diff.paths` の上限（`diff.files` は総数のまま）。
@@ -281,46 +279,52 @@ impl HealthInputWork {
         deadline: Instant,
     ) -> Result<HealthRepoInput, Skip> {
         let c = candidate;
-        let built = with_base_checker(&c.dir, &c.target_sha, deadline, |checker| {
-            let policy = match parse_review_policy(&checker.print_review_policy(&c.dir)?) {
-                ReviewPolicyState::Present(policy) => policy,
-                ReviewPolicyState::Absent => {
-                    return Ok(Err(self.absent_policy(checker, c, recorded)));
+        let built = with_base_checker(
+            &c.dir,
+            &c.target_sha,
+            CheckerSite::Base,
+            deadline,
+            |checker| {
+                let policy = match parse_review_policy(&checker.print_review_policy(&c.dir)?) {
+                    ReviewPolicyState::Present(policy) => policy,
+                    ReviewPolicyState::Absent => {
+                        return Ok(Err(self.absent_policy(checker, c, recorded)));
+                    }
+                    ReviewPolicyState::Unavailable(why) => {
+                        return Err(format!("review 方針を読めない: {why}"));
+                    }
+                };
+                let definition = policy.definition_sha256.clone();
+                if let Some(input) = find_recorded(recorded, c, &definition) {
+                    return Ok(Ok(input));
                 }
-                ReviewPolicyState::Unavailable(why) => {
-                    return Err(format!("review 方針を読めない: {why}"));
-                }
-            };
-            let definition = policy.definition_sha256.clone();
-            if let Some(input) = find_recorded(recorded, c, &definition) {
-                return Ok(Ok(input));
-            }
-            let (diff, changed) = diff_stat(c, deadline)?;
-            let owner_rows = policy
-                .owner_map
-                .as_deref()
-                .and_then(|map| show_at(&c.dir, &c.target_sha, map, deadline))
-                .map(|text| owner_rows(&text, &changed))
-                .unwrap_or_default();
-            let (findings, policy_state) = match self.run_report(checker, c) {
-                Ok(report) => summarize_report(report),
-                Err(why) => unavailable_report(why),
-            };
-            let input = HealthRepoInput {
-                repo_id: c.repo_id.clone(),
-                target_sha: c.target_sha.clone(),
-                reviewed_sha: c.reviewed_sha.clone(),
-                diff,
-                owner_rows,
-                findings,
-                policy: policy_state,
-                invariants: policy.invariants,
-            };
-            // 走らせられなかった report（時間切れ・壊れた report）も policy の関門のために記録する（不明）。
-            // 再利用はしない（`find_recorded`）ので次の review でやり直す。
-            self.record(c, definition, &input);
-            Ok(Ok(input))
-        });
+                let (diff, changed) = diff_stat(c, deadline)?;
+                let owner_rows = policy
+                    .owner_map
+                    .as_deref()
+                    .and_then(|map| show_at(&c.dir, &c.target_sha, map, deadline))
+                    .map(|text| owner_rows(&text, &changed))
+                    .unwrap_or_default();
+                let (findings, policy_state) = match self.run_report(checker, c) {
+                    Ok(report) => summarize_report(report),
+                    Err(why) => unavailable_report(why),
+                };
+                let input = HealthRepoInput {
+                    repo_id: c.repo_id.clone(),
+                    target_sha: c.target_sha.clone(),
+                    reviewed_sha: c.reviewed_sha.clone(),
+                    diff,
+                    owner_rows,
+                    findings,
+                    policy: policy_state,
+                    invariants: policy.invariants,
+                };
+                // 走らせられなかった report（時間切れ・壊れた report）も policy の関門のために記録する（不明）。
+                // 再利用はしない（`find_recorded`）ので次の review でやり直す。
+                self.record(c, definition, &input);
+                Ok(Ok(input))
+            },
+        );
         match built {
             Ok(Some(result)) => result,
             Ok(None) => Err((NO_CHECKER.into(), None)),
@@ -335,9 +339,13 @@ impl HealthInputWork {
         if find_recorded_policy(recorded, c).is_some() {
             return;
         }
-        let ran = with_base_checker(&c.dir, &c.target_sha, deadline, |checker| {
-            Ok(self.run_report(checker, c))
-        });
+        let ran = with_base_checker(
+            &c.dir,
+            &c.target_sha,
+            CheckerSite::Base,
+            deadline,
+            |checker| Ok(self.run_report(checker, c)),
+        );
         let (reason, policy) = match ran {
             Ok(None) => return,
             Ok(Some(Ok(report))) => (NO_REVIEWER.to_string(), summarize_report(report).1),
@@ -390,14 +398,13 @@ impl HealthInputWork {
         }
     }
 
-    /// base の検査器で repo health を 1 回走らせ、report を読む。exit 1（fail）・2（error）でも report があれば読む。
+    /// base の検査器で repo health を 1 回走らせ、report を読む（起動と読み込みは [`gate::run_report`]）。report は
+    /// daemon の task dir の `runs/health/<repo>-<target>-<reviewed>.json` に書く。
     fn run_report(
         &self,
         checker: &BaseChecker,
         c: &CandidateRepo,
     ) -> Result<RepoHealthReport, String> {
-        std::fs::create_dir_all(&self.out_dir)
-            .map_err(|e| format!("report の dir を作れない: {e}"))?;
         let name = format!(
             "{}-{}-{}.json",
             c.repo_id,
@@ -405,39 +412,9 @@ impl HealthInputWork {
             short(&c.reviewed_sha)
         );
         let out = self.out_dir.join(name);
-        let _ = std::fs::remove_file(&out);
-        let (repo_arg, out_arg) = (c.dir.to_string_lossy(), out.to_string_lossy());
-        let ran = checker.run(
-            &[
-                "--repo",
-                &repo_arg,
-                "--base",
-                &c.target_sha,
-                "--head",
-                &c.reviewed_sha,
-                "--policy-version",
-                POLICY_VERSION,
-                "--out",
-                &out_arg,
-            ],
-            "repo_health.py",
-        )?;
-        let text = std::fs::read_to_string(&out).map_err(|e| {
-            format!(
-                "repo_health.py が report を書かなかった（exit {:?}: {}）: {e}",
-                ran.code,
-                ran.why()
-            )
-        })?;
-        let report: RepoHealthReport =
-            serde_json::from_str(&text).map_err(|e| format!("report を読めない: {e}"))?;
-        if report.schema != REPORT_SCHEMA {
-            return Err(format!(
-                "report の schema が {REPORT_SCHEMA} でない: {:?}",
-                report.schema
-            ));
-        }
-        Ok(report)
+        gate::run_report(checker, &c.dir, &c.target_sha, &c.reviewed_sha, &out)
+            .map(|ran| ran.report)
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -636,59 +613,6 @@ fn covers(token: &str, changed: &str) -> bool {
     };
     !token.is_empty()
         && (changed == token || under(token) || token.strip_suffix(".rs").is_some_and(under))
-}
-
-/// report（`celeris.repo-health.report/1`）のうち読む欄。
-#[derive(Debug, Deserialize)]
-pub struct RepoHealthReport {
-    pub schema: String,
-    pub summary: RepoHealthSummary,
-    #[serde(default)]
-    pub findings: Vec<RepoHealthFinding>,
-    pub policy: RepoHealthPolicy,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct RepoHealthSummary {
-    pub verdict: String,
-    pub reviewable: bool,
-    pub counts: HealthFindingCounts,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct RepoHealthFinding {
-    pub rule_id: String,
-    pub fingerprint: String,
-    pub severity: String,
-    pub delta: String,
-    #[serde(default)]
-    pub exception: Option<serde_json::Value>,
-    #[serde(default)]
-    pub evidence: Vec<RepoHealthEvidence>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct RepoHealthEvidence {
-    #[serde(default)]
-    pub path: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct RepoHealthPolicy {
-    pub source: String,
-    pub changed: bool,
-    /// report の `policy.files`（file ごとの base と head の blob）。
-    #[serde(default, rename = "files")]
-    pub blobs: Vec<PolicyBlobs>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct PolicyBlobs {
-    pub path: String,
-    #[serde(default)]
-    pub base_blob: Option<String>,
-    #[serde(default)]
-    pub head_blob: Option<String>,
 }
 
 /// report を要約する: `delta ∈ {new, worsened}` かつ `exception == null` の finding を [`MAX_FINDINGS`] 件まで

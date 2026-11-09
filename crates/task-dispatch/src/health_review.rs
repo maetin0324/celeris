@@ -13,6 +13,7 @@
 //! - [`verdict`]: 構造化 health verdict の blocking を不合格にし repair/replan に写す（D5）。
 
 pub(crate) mod design;
+pub mod gate;
 pub(crate) mod input;
 pub mod policy;
 pub(crate) mod verdict;

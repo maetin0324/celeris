@@ -330,12 +330,9 @@ async fn health_limits_review_repair_cap_blocks_without_rerun() {
     let questions = s.questions();
     assert_eq!(questions.len(), 1, "{questions:?}");
     let q = &questions[0];
-    assert!(q.starts_with("health_repair_cap: "), "{q}");
-    assert!(
-        q.contains("bucket health:deps.violation: 1 回 / max_repairs_per_class 1"),
-        "{q}"
-    );
-    assert!(q.contains("修復の合計 1 回 / max_repairs 3"), "{q}");
+    assert!(q.starts_with("health_repair_limit: review: "), "{q}");
+    assert!(q.contains("health:deps.violation の修復 1/1 回"), "{q}");
+    assert!(q.contains("修復の合計 1/3 回"), "{q}");
 }
 
 /// 不変条件（D4.4、compound）: 計画のある task の最終レビューで、health だけの不合格が `max_repairs` を使い切っても、
@@ -389,10 +386,7 @@ async fn health_limits_review_compound_repair_cap_does_not_replan() {
     );
     let questions = s.questions();
     assert_eq!(questions.len(), 1, "{questions:?}");
-    assert!(
-        questions[0].contains("修復の合計 1 回 / max_repairs 1"),
-        "{questions:?}"
-    );
+    assert!(questions[0].contains("修復の合計 1/1 回"), "{questions:?}");
 }
 
 /// 不変条件（D3.2・D4.4 の外）: health の Fail に health でない失敗（acceptance の `false`）が混ざる不合格は修復できない

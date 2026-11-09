@@ -29,7 +29,6 @@
 
 use std::collections::BTreeSet;
 
-use sha2::{Digest, Sha256};
 use task_core::execution::RepairOrigin;
 use task_core::required_checks::health::{HEALTH_CHECK_ID, HealthEvidence, HealthVerdict};
 use task_core::{Event, RepoId, Trigger};
@@ -51,12 +50,12 @@ pub enum HealthScope<'a> {
 pub enum RepeatVerdict {
     /// 往復ではない（初回・別の集合・Pass・判定の外の Error など）。repair に回すかは呼び出し側の既存の判定のまま。
     Proceed,
-    /// 同じ指摘の往復。repair をもう起こさず、Blocked にして木の root の受信箱に 1 件だけ出す。
+    /// 同じ指摘の往復。repair をもう起こさず、Blocked にして木の root の受信箱に 1 件だけ出す。受信箱の項目の鍵の
+    /// 集合の hash はここで求めず、`task_core::health_repeat::fingerprint_set_sha256`（`Event::health_findings_repeated`
+    /// が呼ぶ）の 1 か所が求める。
     Repeat {
         /// 往復した repo の今の評価の blocking の fingerprint（昇順・重複なし）。
         fingerprints: Vec<String>,
-        /// `fingerprints` を改行でつないだ byte 列の sha256 の hex（受信箱の項目の鍵の一部）。
-        set_sha256: String,
     },
 }
 
@@ -105,11 +104,8 @@ pub fn judge(events: &[(u64, Event)], scope: HealthScope<'_>) -> RepeatVerdict {
     if repeated.is_empty() {
         return RepeatVerdict::Proceed;
     }
-    let fingerprints: Vec<String> = repeated.into_iter().collect();
-    let set_sha256 = set_sha256(&fingerprints);
     RepeatVerdict::Repeat {
-        fingerprints,
-        set_sha256,
+        fingerprints: repeated.into_iter().collect(),
     }
 }
 
@@ -218,11 +214,6 @@ fn repeated_set(items: &[Item]) -> Option<BTreeSet<String>> {
         before.difference(after).any(|f| set.contains(f))
     });
     reappeared.then(|| set.clone())
-}
-
-/// D4.3: 昇順・重複なしの fingerprint を改行でつないだ byte 列の sha256 の hex。
-fn set_sha256(fingerprints: &[String]) -> String {
-    format!("{:x}", Sha256::digest(fingerprints.join("\n").as_bytes()))
 }
 
 #[cfg(test)]

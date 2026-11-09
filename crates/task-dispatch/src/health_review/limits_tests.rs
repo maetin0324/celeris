@@ -2,8 +2,8 @@
 //! だけで、時計・I/O・検査器・LLM を使わない。
 //!
 //! 守る不変条件: 修復の後に同じ集合が残る・前の修復で消えた fingerprint が再び現れたときだけ Repeat、初回・別の集合・
-//! 判定の外（Error）は Proceed、集合の sha は順と重複に依らない、人の再開（comment・answer・reopen）の後の最初の評価は
-//! Proceed。既存の `plan_gate::stall` の試験は `(key, 失敗の署名)` と commit の有無だけを見るので、fingerprint の集合の
+//! 判定の外（Error）は Proceed、fingerprints は順と重複に依らない（受信箱の鍵の hash は task-core の 1 か所が求める）、
+//! 人の再開（comment・answer・reopen）の後の最初の評価は Proceed。既存の `plan_gate::stall` の試験は `(key, 失敗の署名)` と commit の有無だけを見るので、fingerprint の集合の
 //! 往復を検出できない。
 
 use super::*;
@@ -142,16 +142,9 @@ fn numbered(events: Vec<Event>) -> Vec<(u64, Event)> {
         .collect()
 }
 
-fn sha_of(text: &str) -> String {
-    format!("{:x}", Sha256::digest(text.as_bytes()))
-}
-
 fn repeat(fingerprints: &[&str]) -> RepeatVerdict {
-    let fingerprints: Vec<String> = fingerprints.iter().map(|s| s.to_string()).collect();
-    let set_sha256 = sha_of(&fingerprints.join("\n"));
     RepeatVerdict::Repeat {
-        fingerprints,
-        set_sha256,
+        fingerprints: fingerprints.iter().map(|s| s.to_string()).collect(),
     }
 }
 
@@ -281,6 +274,9 @@ fn health_limits_repeat_first_evaluation_proceeds() {
     );
 }
 
+/// 不変条件: [`judge`] の fingerprints は評価の並び・重複に依らず昇順・重複なしで、受信箱の鍵の hash
+/// （`task_core::health_repeat::fingerprint_set_sha256`。`Event::health_findings_repeated` が求める唯一の実装）も同じ値に
+/// なる。task-core の試験は hash の関数だけを見るので、judge の出力をそのまま渡したときの一致は検出できない。
 #[test]
 fn health_limits_repeat_set_sha_does_not_depend_on_order() {
     let repo = RepoId::new();
@@ -292,19 +288,23 @@ fn health_limits_repeat_set_sha_does_not_depend_on_order() {
         ]);
         judge(&events, HealthScope::WorkUnit(WU))
     };
-    let sorted = judged(&["fp-a", "fp-b", "fp-c"]);
-    assert_eq!(judged(&["fp-c", "fp-a", "fp-b"]), sorted);
-    assert_eq!(judged(&["fp-b", "fp-c", "fp-a", "fp-b"]), sorted);
-    let RepeatVerdict::Repeat {
-        fingerprints,
-        set_sha256,
-    } = sorted
-    else {
-        panic!("expected a repeat");
+    let fingerprints_of = |blocking: &[&str]| match judged(blocking) {
+        RepeatVerdict::Repeat { fingerprints } => fingerprints,
+        RepeatVerdict::Proceed => panic!("expected a repeat for {blocking:?}"),
     };
-    assert_eq!(fingerprints, vec!["fp-a", "fp-b", "fp-c"]);
-    assert_eq!(set_sha256, sha_of("fp-a\nfp-b\nfp-c"));
-    assert_eq!(set_sha256.len(), 64);
+    let sorted = fingerprints_of(&["fp-a", "fp-b", "fp-c"]);
+    assert_eq!(sorted, vec!["fp-a", "fp-b", "fp-c"]);
+    let shuffled = fingerprints_of(&["fp-c", "fp-a", "fp-b"]);
+    let duplicated = fingerprints_of(&["fp-b", "fp-c", "fp-a", "fp-b"]);
+    assert_eq!(shuffled, sorted);
+    assert_eq!(duplicated, sorted);
+    let key = task_core::health_repeat::fingerprint_set_sha256;
+    assert_eq!(key(&shuffled), key(&sorted));
+    assert_eq!(key(&duplicated), key(&sorted));
+    assert_eq!(
+        key(&sorted),
+        key(&["fp-c".into(), "fp-b".into(), "fp-a".into()])
+    );
 }
 
 #[test]

@@ -6,17 +6,19 @@
 //!
 //! - [`stop_on_error`]（D3.4）: health の Error・Unavailable（`health_check_error: <理由>`）。task の種類を問わず、他の
 //!   不合格より先に見る（測れない health は合格にも修復にもしない。J4）。
-//! - [`stop_on_repeat`]（D4.3）: 不合格がすべて health の Fail で、[`limits::judge`]（範囲 review）が往復と判定した。
-//!   木の root に `HealthFindingsRepeated` を追記する（root の受信箱の `health_repeat` 1 件。escalation の
-//!   `task_ops::inbox::health_repeat::record_findings_repeated`）。
+//! - [`stop_on_repeat`]（D4.3）: 不合格がすべて health の Fail で、範囲 review の評価が同じ指摘の往復。判定・木の root への
+//!   `HealthFindingsRepeated` の追記（root の受信箱の `health_repeat` 1 件）・質問の文は WU の check・段の統合と同じ
+//!   `check_item::health_repeat_stop` が持ち、ここは止めるだけ。
 //! - [`stop_on_cap`]（D4.4）: 不合格がすべて health の Fail で、`max_repairs`・`max_repairs_per_class`
-//!   （`health:<rule_id>`）を使い切った。health でない class は `None`（呼び出し側が今どおり `ReviewFail` へ進む）。
+//!   （`health:<rule_id>`）を使い切った。質問の文は段の統合と同じ `check_item::repair_limit_question`（先頭の語は
+//!   `check_item::HEALTH_REPAIR_LIMIT`）。health でない class は `None`（呼び出し側が今どおり `ReviewFail` へ進む）。
 //!
 //! この file は `dispatcher::review_verdict` の子 module として `#[path]` で読む（`check_item.rs` と同じ。dispatcher の
 //! size の制約と、`dispatcher` → `health_review` の依存を足さないため）。LLM は呼ばない。
 
+use super::super::phase_integration::check_item;
 use super::super::*;
-use crate::health_review::limits::{self, HealthScope, RepeatVerdict};
+use task_core::HealthRepeatSite;
 
 /// 止めたときは `Some`（`ReviewBlocked` の遷移の結果）、止めないときは `None`。
 type Stopped = Result<Option<task_core::Outcome>, DispatchError>;
@@ -38,30 +40,17 @@ pub(super) fn stop_on_error(
     block(store, task, errors.join("; "), events).map(Some)
 }
 
-/// D4.3: 今の review の health の Fail が修復の前と同じ指摘の往復なら止め、木の root に 1 件だけ上げる。
+/// D4.3: 今の review の health の Fail が修復の前と同じ指摘の往復なら止める（木の root への 1 件の追記と質問の文は
+/// `check_item::health_repeat_stop`）。
 pub(super) fn stop_on_repeat(
     store: &dyn TaskStore,
     task: &Task,
     events: &mut Vec<Event>,
 ) -> Stopped {
-    let RepeatVerdict::Repeat { fingerprints, .. } =
-        limits::judge(&store.events_for(task.id)?, HealthScope::Review)
-    else {
-        return Ok(None);
-    };
-    let question = format!(
-        "health_findings_repeated: review の修復の後も同じ health の指摘が残った（{}）。repair をもう起こさず、木の root の受信箱に 1 件にまとめた。直し方を comment で書くと再開する。",
-        fingerprints.join(", ")
-    );
-    let outcome = block(store, task, question, events)?;
-    task_ops::inbox::health_repeat::record_findings_repeated(
-        store,
-        task,
-        task_core::HealthRepeatSite::Review,
-        &fingerprints,
-    )
-    .map_err(ops_to_store)?;
-    Ok(Some(outcome))
+    match check_item::health_repeat_stop(store, task, HealthRepeatSite::Review)? {
+        Some(question) => block(store, task, question, events).map(Some),
+        None => Ok(None),
+    }
 }
 
 /// D4.4: 修復の上限を使い切った。`health_bucket` は health の不合格の bucket（`health:<rule_id>` を `,` で並べたもの。
@@ -78,9 +67,12 @@ pub(super) fn stop_on_cap(
         return Ok(None);
     };
     let (repairs, max_repairs, same_class, per_class) = used;
-    let question = format!(
-        "health_repair_cap: health の修復が上限に達した（bucket {bucket}: {same_class} 回 / max_repairs_per_class {per_class}、修復の合計 {repairs} 回 / max_repairs {max_repairs}）。repair・再実行・replan をもう起こさない。直し方を comment で書くと再開する。指摘: {}",
-        failing.join("; ")
+    let question = check_item::repair_limit_question(
+        &HealthRepeatSite::Review,
+        bucket,
+        (repairs, max_repairs),
+        (same_class, per_class),
+        failing,
     );
     block(store, task, question, events).map(Some)
 }

@@ -141,6 +141,7 @@ reclose はコードを変えていない（変えた path はこの file と AD
   - 対象: crate 14 個（celeris・celeris-campaign・celeris-credentiald・celeris-mcp・celeris-script・celerisctl・e2e・llm-proxy・routing-eval・task-api・task-core・task-dispatch・task-ops・task-worker）、web の型検査と unit 試験、test-ts-verify。
   - check-health: `repo-health: verdict=pass exit=0 reviewable=false findings=718 fail_grade=0 new=2 worsened=0 existing=716`。必須 rule はすべて pass（`source-size`・`doc.links`・`progress.index`・`human-text` など）。new の 2 件は warning の `dup.contract`（`UnavailableReason`）と `dup.public-surface`（`fn judge`）で、「未解決」3。`repo_health_gate: all checks passed`。
   - nextest: `8131 tests run: 8131 passed (12 slow), 23 skipped`。script bundle の SKIP は 0 件。web: `Test Files 104 passed (104)`・`Tests 711 passed (711)`。`test-ts-verify: 20 passed, 0 failed`。
+- WU の範囲の `bash scripts/dev/test-affected.sh`（この節を書いた後の HEAD）→ exit 0（96 秒）。check-health は上と同じ `verdict=pass exit=0 … new=2 worsened=0`、`repo_health_gate: all checks passed`、続けて `試験対象の変更なし（docs のみ等）`。
 - `cargo nextest run -p task-core -p task-ops -p task-dispatch --no-tests=fail -E 'test(/health_limits_/)'` → exit 0、`42 tests run: 42 passed, 3588 skipped`（3.4 秒）。`cargo nextest list --workspace -E 'test(/health_limits_/)' --message-format oneline | grep -c health_limits_` → 42。`grep -rhoE "fn health_limits_[a-z0-9_]+" crates/ | sort -u | wc -l` → 42。
 - `cargo clippy --workspace -- -D warnings` → exit 0（vendored `deno_core` の既存の warning 1 件だけ）。
 - `cargo fmt --all -- --check` → exit 0（差分なし）。

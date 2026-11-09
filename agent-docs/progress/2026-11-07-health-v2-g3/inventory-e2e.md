@@ -52,7 +52,8 @@ WorkUnit `e2e`（task 01M6ZDF99MKHFN57PN0H7G6Z9Z、unit inventory の子）。[G
 
 ## 検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 - `cargo nextest run -p task-dispatch --no-tests=fail -E 'test(/health_inventory_|health_evidence_gate|cron/)'` → exit 0、42 passed（`health_inventory_` 12 件）。
-- `bash scripts/dev/test-affected.sh` → exit 0（576 秒）。対象は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。冒頭の check-health は verdict pass・exit 0・fail_grade 0・worsened 0・existing 717、`repo_health_gate: all checks passed`。new 1 件は `dup.contract` の warning（`crates/task-core/src/required_checks/health.rs` と `crates/task-core/src/route_select/availability.rs`。どちらもこの unit で変えていない）。`reviewable=false` は `$CELERIS_WU_BASE` が HEAD の祖先でないため。cargo nextest 3619 passed・11 skipped、doc test 合格、script bundle の SKIP 0 件。
+- 改名の後: `cargo nextest run -p task-dispatch --no-tests=fail -E 'test(/health_inventory_/)'` → exit 0、12 passed。
+- `bash scripts/dev/test-affected.sh` → exit 0（改名の後に再実行、957 秒）。対象は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。冒頭の check-health は verdict pass・exit 0・fail_grade 0・worsened 0・existing 717、`repo_health_gate: all checks passed`。new 1 件は `dup.contract` の warning（`crates/task-core/src/required_checks/health.rs` と `crates/task-core/src/route_select/availability.rs`。どちらもこの unit で変えていない）。`reviewable=false` は `$CELERIS_WU_BASE` が HEAD の祖先でないため。cargo nextest 3619 passed・11 skipped、doc test 合格、script bundle の SKIP 0 件。
 - `sh scripts/dev/progress-index.sh --check`・`sh scripts/dev/check-doc-links.sh`・`git diff --check` → exit 0。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 - 範囲（`sh "$CELERIS_WU_SCOPE_PATHS"`）: 変更は `crates/task-dispatch/src/{dispatcher/cron_tick.rs,dispatcher/cos_chat/review.rs,dispatcher/tests/health_inventory.rs,health_review/{inventory,inventory_tests,inventory_filing_tests}.rs}` とこの file だけ。

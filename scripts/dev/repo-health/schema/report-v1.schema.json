@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "celeris.repo-health.report/1",
   "title": "repo health report v1",
-  "description": "scripts/dev/repo-health/repo_health.py が書く report の形（ADR 2026-11-07-repo-health-contract）。形の外の整合（集約・snapshot の一致・候補の severity など）は validate_report.py の意味規則 S1〜S12 が見る。同じ入力（repo の内容・base・head・policy 版・profile）からは byte 単位で同じ JSON が出る。時刻・絶対 path・乱数を入れる欄は無い。",
+  "description": "scripts/dev/repo-health/repo_health.py が書く report の形（ADR 2026-11-07-repo-health-contract）。形の外の整合（集約・snapshot の一致・候補の severity など）は validate_report.py の意味規則 S1〜S13 が見る。同じ入力（repo の内容・base・head・policy 版・profile）からは byte 単位で同じ JSON が出る。時刻・絶対 path・乱数を入れる欄は無い。",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema", "tool", "inputs", "snapshot", "policy", "rules", "findings", "summary"],
@@ -59,7 +59,8 @@
               "head_blob": { "type": ["string", "null"], "pattern": "^[0-9a-f]{40}$" }
             }
           }
-        }
+        },
+        "exceptions_as_of": { "type": ["string", "null"], "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", "description": "例外の期限の基準日（base の commit の committer date の UTC の日付。実行時の時計は使わない）。日付が無ければ null で、期限付きの例外は全部期限切れ。profile に expires 付きの例外があるときだけ書く（無い profile の report には欄が無い）" }
       }
     },
     "rules": {
@@ -113,6 +114,17 @@
   },
   "$defs": {
     "sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "date": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$", "description": "YYYY-MM-DD" },
+    "exception_source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "line"],
+      "properties": {
+        "path": { "$ref": "#/$defs/repo_path" },
+        "line": { "type": "integer", "minimum": 1 }
+      },
+      "description": "例外を書いた profile の file と行"
+    },
     "repo_path": { "type": "string", "pattern": "^(?!/)(?!\\.\\./)(?!.*/\\.\\./)(?!.*/\\.\\.$)[^\\x00]+$", "description": "repo root からの相対 path。先頭 / と .. は不可" },
     "rule_id": {
       "type": "string",
@@ -210,17 +222,21 @@
           "required": ["reason", "source"],
           "properties": {
             "reason": { "type": "string", "minLength": 1 },
-            "source": {
-              "type": "object",
-              "additionalProperties": false,
-              "required": ["path", "line"],
-              "properties": {
-                "path": { "$ref": "#/$defs/repo_path" },
-                "line": { "type": "integer", "minimum": 1 }
-              }
-            }
+            "source": { "$ref": "#/$defs/exception_source" },
+            "expires": { "$ref": "#/$defs/date", "description": "期限付きの例外の期限（その日まで有効）。policy.exceptions_as_of 以前。期限の無い例外には欄が無い" }
           },
-          "description": "base 側の profile にある例外。null なら例外なし。例外のある finding は fail に数えない"
+          "description": "base 側の profile にある期限内の例外。null なら免除する例外なし（期限切れの例外は expired_exception）。例外のある finding は fail に数えない"
+        },
+        "expired_exception": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reason", "source", "expires"],
+          "properties": {
+            "reason": { "type": "string", "minLength": 1 },
+            "source": { "$ref": "#/$defs/exception_source" },
+            "expires": { "$ref": "#/$defs/date", "description": "policy.exceptions_as_of より前の日付" }
+          },
+          "description": "一致したが期限を過ぎた base 側の profile の例外（免除しない）。この欄のある finding の exception は null で、fail 級の式のまま数える。期限切れの例外が無ければ欄が無い"
         },
         "rationale": { "type": "string", "minLength": 1, "description": "判定根拠。閾値・baseline の値・比べた対象を含める" },
         "baseline": {

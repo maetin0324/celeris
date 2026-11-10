@@ -92,10 +92,14 @@ def print_summary(report: dict) -> None:
         reason = f" — {r['reason']}" if r["reason"] else ""
         print(f"  {r['id']:<28} {r['status']:<15} {req:<8} findings={counts.get(r['id'], 0)}{reason}")
     for f in report["findings"]:
-        if f["severity"] == "error" and f["delta"] in ("new", "worsened") and f["exception"] is None:
+        if engine.is_fail_grade(f):
             ev = f["evidence"][0]
             loc = f"{ev['path']}:{ev['line']}" if "line" in ev else ev["path"]
             print(f"  FAIL {f['rule_id']} {loc}: {f['rationale']}")
+            ee = f.get("expired_exception")
+            if ee is not None:
+                print(f"       例外は期限切れ: expires={ee['expires']} 基準日={report['policy'].get('exceptions_as_of')}"
+                      f" {ee['source']['path']}:{ee['source']['line']}（{ee['reason']}）")
             for e in f["evidence"][:20]:
                 if e.get("excerpt"):
                     print(f"       {e['excerpt']}")

@@ -1,0 +1,79 @@
+---
+title: 健全性v2 G4 exc-expiry — profile の例外の期限（expires）と期限切れの例外の扱い
+tasks: [01M72DBBE7AFCNXYWSB5M0YZW9]
+status: done
+updated: 2026-11-10
+---
+# 健全性v2 G4 exc-expiry — profile の例外の期限（expires）と期限切れの例外の扱い
+
+完了日: 2026-11-10（人が決定 policy-approve で policy の差分を承認し、operator がこの task の branch を main に no-ff merge した。merge の後の確認は WorkUnit `land-main`）
+
+WorkUnit `expiry`（task 01M72DBBE7AFCNXYWSB5M0YZW9）。人の決定 exception-expiry「G4 で実装する（子 task exc-expiry）」による。決め事は [ADR 2026-11-07 repo health の契約](../../adr/2026-11-07-repo-health-contract.md) の「付記（2026-11-10、期限付き例外）」。変えた検査器は Celeris profile の `policy_paths`（`^scripts/dev/repo-health/`）に当たる policy の file なので、この branch は policy の branch になる（前例は [G3 ci-entry](../2026-11-07-health-v2-g3/ci-entry.md)）。基準は `$CELERIS_WU_BASE`（統合後は `git merge-base HEAD main`）。
+
+## 変更
+- 件名「G4 exc-expiry: 契約の ADR に期限付き例外の付記を書く」の commit: ADR に付記 1〜6（欄の意味・判定に使う profile・基準日・report の形・検証器 S13・試験名）と採らなかった案 3 件を書いた。
+- 件名「G4 exc-expiry: profile の例外の expires と期限切れの例外の report（base 側で判定）」の commit:
+  - `health/profile.py`: `[[rules."<id>".exceptions]]` に任意の `expires`（TOML の日付）。`type(v) is datetime.date` で確かめ、文字列・日時・時刻・数は `profile_invalid`（exit 2、report を書かない）。`Exception_.expired(as_of)`（基準日 > expires、基準日が無ければ期限付きは期限切れ）と `Profile.has_expiring_exceptions`。docstring に欄を足した。
+  - `health/snapshot.py`: `Snapshot.base_date` = base の commit の `%ct`（UTC の epoch 秒）を UTC の日付にしたもの。base に届かなければ None。
+  - `health/engine.py`: `_exception` は一致する例外のうち期限内の先頭を返し、無ければ期限切れの先頭を返す。期限切れなら finding の `exception` は null、`expired_exception` = `{reason, source, expires}`。期限内で期限付きなら `exception.expires`。profile に期限付きの例外があるときだけ `policy.exceptions_as_of`。`is_fail_grade` は変えていない。
+  - `repo_health.py`: 要約の fail 級の式の写しを `engine.is_fail_grade(f)` の呼び出しに置き換えた。期限切れの例外の finding の FAIL 行の下に「例外は期限切れ: expires=… 基準日=… <profile>:<行>（理由）」を出す。
+  - `validate_report.py`: 意味規則 S13（`expired_exception` と `exception` の排他、期限付きの例外があれば `policy.exceptions_as_of` がある、期限内は基準日 ≦ expires、期限切れは基準日が null か > expires）。
+  - `schema/report-v1.schema.json`: `policy.exceptions_as_of`、`exception.expires`、`expired_exception` と `$defs` の `date`・`exception_source`。例 `examples/exception-expiry.json`（期限切れ 1 件と期限内 1 件。本物の検査器の出力）、不正な例 4 件（`expired-exception-with-exception`・`exception-expires-before-as-of`・`expired-exception-not-yet-expired`・`exception-expires-without-as-of`。どれも S13 だけで落ちる）。
+  - `scripts/tests/test_repo_health_exception_expiry.py`（新規）: 試験 5 件と module 関数 `make_expiry_repo(root, case)`・`run_checker(repo, base, head, out)`。本物の検査器と本物の rule `size.responsibility-growth`（`file_lines = 3`）を一時 repo に当てる。commit の日付は `GIT_COMMITTER_DATE`、作者は `GIT_AUTHOR_*`・`GIT_COMMITTER_*` で固定するので、同じ case からは同じ sha が出る。
+- `crates/`・`web/`・`docs/` は変えていない。既存の examples 12 件・bad-examples 21 件・既存の試験は変えていない。
+
+### make_expiry_repo の 3 例（unit record が材料に使う）
+| case | base の commit の日付 | 基準日（UTC） | base の expires | head の expires | head の commit の日付 | 結果 |
+|---|---|---|---|---|---|---|
+| expired | 2026-03-02T10:00:00+09:00 | 2026-03-02 | 2026-03-01 | 2026-03-01 | 2026-02-01 | exit 1。size の finding は `exception` null・`expired_exception.expires` 2026-03-01、fail 級 1 件 |
+| in_term | 2026-03-02T01:00:00+09:00 | 2026-03-01 | 2026-03-01 | 2026-03-01 | 2026-12-01 | exit 0。`exception.expires` 2026-03-01（当日まで有効）、fail 級 0 件 |
+| extended | 2026-03-02T10:00:00+09:00 | 2026-03-02 | 2026-03-01 | 2027-03-01 | 2026-03-03 | exit 1。size の finding は base の期限で期限切れ、`policy.changed` も fail、fail 級 2 件 |
+
+head の日付で判定すれば expired と in_term の結果が逆になる。in_term の base の日付は JST では 2026-03-02 で、UTC で判定するときだけ期限の当日になる。
+
+## merge の前の証拠（WorkUnit `expiry` の提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`、ci.sh は `git merge-base HEAD main`）
+- `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health_exception_expiry.py' -v` → exit 0、5 件 ok（`test_exception_expired_finding_counts_as_fail`・`test_exception_expiry_in_term_exempts_finding`・`test_exception_expiry_extension_by_candidate_does_not_pass`・`test_exception_expiry_rejects_invalid_value`・`test_exception_expiry_report_validates`）。
+- `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health*.py'` → exit 0、78 件 OK（変更前の 73 件 + 5 件）。
+- `python3 -I scripts/dev/repo-health/validate_report.py scripts/dev/repo-health/schema/examples/*.json` → exit 0、`13 valid, 0 invalid`。不正な例 25 件は 1 件ずつ exit 1（`test_repo_health_contract` の `test_bad_examples_each_invalid_with_location` が合格）。
+- 期限の無い profile の report が変更前と byte 単位で同じ: `$CELERIS_WU_BASE` の `scripts/dev/repo-health`・`source-size-report.py`・`check-architecture-map.py` を `git archive` で `$TMPDIR` に展開した旧い検査器と、この branch の検査器で同じ入力を評価し `cmp` → 差分 0。入力は (a) 期限の無い例外を持つ一時 repo（例外の付いた finding あり、7315 byte）、(b) この repo の `--base main~1 --head main`（Celeris profile、185583 byte）。
+- `sh scripts/dev/repo-health/ci.sh --base "$(git merge-base HEAD main)"` → exit 1、`verdict=fail reviewable=true fail_grade=1 new=1 worsened=0`。fail 級の finding は `policy.changed` の 1 件だけ（変えた policy の file 11 件: `health/engine.py`・`health/profile.py`・`health/snapshot.py`・`repo_health.py`・`validate_report.py`・`schema/report-v1.schema.json`・例 1 件・不正な例 4 件）。必須 rule で pass でないのは `policy.changed`（fail）だけ。Celeris profile には期限付きの例外が無いので、report に `policy.exceptions_as_of` は無い。
+- `bash scripts/dev/test-affected.sh` → exit 1。最初の段の check-health.sh が上と同じ `policy.changed` だけで exit 1 になる（D6.6。`--list` の対象は 0 件で、crate と web は変えていない）。
+- `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0（Rust は変えていない）。
+- `sh scripts/dev/progress-index.sh --check` → exit 0。
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → ADR、`scripts/dev/repo-health/` の下の 11 件、`scripts/tests/test_repo_health_exception_expiry.py`、この進捗だけ。
+
+## 承認の材料（WorkUnit record、2026-11-10）
+- 置き場所: `/local/celeris/data/workspaces/01M72DBBE7AFCNXYWSB5M0YZW9/wu/record/artifacts/exc-expiry-policy-diff.md`（WorkUnit record の成果物ディレクトリ。WU の sandbox は task 直下の artifacts/ に書けないため。repo の中には置いていない）。
+- 中身: (a) `git diff --stat $(git merge-base HEAD main) -- scripts/dev/repo-health/ scripts/tests/` の出力（12 file、+2078 −22）と `scripts/dev/repo-health/` の diff の本文（11 file、2026 行、sha256 `d8e07776f99c567796d44fa5bfd1405b14f532ffd2de4f60a31b93d85b7cf98e`。code と schema 381 行を先、例と不正な例 1645 行を後に置いた）。(b) 試験名と結果。(c) 見出し「期限切れ」「期限内」「延長」の 3 例の report の抜粋（finding の `exception`・`expired_exception`、`policy.changed`・`policy.exceptions_as_of`、`summary.verdict`・`exit_code`）。(d) 人の承認の後に operator が行う手順（差分の sha256 の照合、task の branch の main への no-ff merge、親 G4 の branch の ff-only、main の祖先と check-health.sh の確認）。末尾に抜粋を作った台本の全文。
+- 3 例は `make_expiry_repo(root, case)` で `$TMPDIR` に作った一時 repo に、本物の検査器を `--policy-version 1` で当てた結果: 期限切れ（expired）exit 1・`exception` null・`expired_exception.expires` 2026-03-01・`policy.exceptions_as_of` 2026-03-02・fail 級 1。期限内（in_term）exit 0・`exception.expires` 2026-03-01・`policy.exceptions_as_of` 2026-03-01・fail 級 0。延長（extended）exit 1・size の finding は base の期限で期限切れ・`policy.changed` true で rule `policy.changed` も fail・fail 級 2。どれも上の「make_expiry_repo の 3 例」の表と一致した。
+- 試験（WorkUnit record の worktree で実行。policy の file は WorkUnit expiry の HEAD と同じ）:
+  - `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health*.py' -k exception_expir -v` → exit 0、5 件 ok（`test_exception_expired_finding_counts_as_fail`・`test_exception_expiry_extension_by_candidate_does_not_pass`・`test_exception_expiry_in_term_exempts_finding`・`test_exception_expiry_rejects_invalid_value`・`test_exception_expiry_report_validates`）。
+  - `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health*.py'` → exit 0、78 件 OK。
+- WorkUnit record は `scripts/`・`crates/` を変えていない（変えたのはこの進捗だけ）。
+
+## main への merge（人の決定 policy-approve、2026-11-10）
+- 人が承認の材料 exc-expiry-policy-diff.md で policy の差分を確かめて承認した（`scripts/dev/repo-health/` の差分の sha256 は材料の `d8e07776f99c567796d44fa5bfd1405b14f532ffd2de4f60a31b93d85b7cf98e` と一致）。この決定は v1 の決定 policy-merge に代わる。
+- operator がこの task の branch（`celeris/01M72DBBE7AFCNXYWSB5M0YZW9`）を main に no-ff merge した。merge commit の件名は「integrate 01M72DBBE7: repo health の期限付き例外（policy の branch、人の承認済み。G4 exc-expiry）」。merge の 2 つ目の親は件名「integrate wu/record (phase impl)」の commit（task の branch の先端）。
+- operator は親 G4（task 01M6TYVJSXBZMSBC0YGAT2TTX0）の branch `celeris/01M6TYVJSXBZMSBC0YGAT2TTX0` を同じ merge commit まで `git merge --ff-only` で進めた。
+
+## main への merge の後の確認（WorkUnit `land-main`。提出時の HEAD で実行。基準は `git merge-base HEAD main`）
+v1 の WorkUnit `land` の仕事を引き継いだ。この WorkUnit は main を取り込まず、branch を merge せず、`scripts/` を変えていない（変えたのはこの進捗だけ）。
+- expiry の commit（`scripts/dev/repo-health/health/profile.py` を最後に変えた commit。件名「G4 exc-expiry: profile の例外の expires と期限切れの例外の report（base 側で判定）」）は `git merge-base HEAD main` の祖先（`git merge-base --is-ancestor` → exit 0）。`git diff $(git merge-base HEAD main) HEAD -- scripts/` は 0 行。
+- `git merge-base --is-ancestor HEAD main` → exit 0、`git merge-base --is-ancestor celeris/01M72DBBE7AFCNXYWSB5M0YZW9 main` → exit 0（task の branch の先端は main の祖先）。
+- 親 G4 の branch は main の merge commit を含む: `git merge-base --is-ancestor <merge commit> celeris/01M6TYVJSXBZMSBC0YGAT2TTX0` → exit 0。確認の時点で親の branch の先端は main の先端と同じ commit（上の merge commit）だった。final review の基準（review_target_ref）が merge commit を含むので、health:policy_mixed にはならない見込み（G3 ci-entry の parent-sync と同じ形）。
+- 下の「merge の後の検査」に検査の結果を書く。merge の前に `policy.changed` で exit 1 だった `check-health.sh`・`test-affected.sh` は exit 0 になった。
+
+## merge の後の検査（WorkUnit `land-main` の提出時の HEAD で実行。基準は `git merge-base HEAD main`）
+- `bash scripts/dev/check-health.sh` → exit 0。この進捗を書く前（`git merge-base HEAD main` と HEAD が同じ commit、件名「G4 exc-expiry: 進捗に承認の材料の置き場所と試験の結果を書く」）の full の経路: rule 21 件がすべて pass、`policy.changed` は pass、`verdict=pass fail_grade=0 new=0 worsened=0`。同じ実行の中で `test_repo_health*.py` 78 件が OK、`repo_health_gate.sh` の `OK (1)`〜`OK (7)` が合格。merge の前の exit 1（`policy.changed` fail）が解けた。
+- `bash scripts/dev/test-affected.sh` → exit 0。最初の段の check-health.sh は doc-only の経路（変更はこの進捗だけ）で `verdict=pass fail_grade=0`、`policy.changed` は pass。続けて `test-affected: 試験対象の変更なし（docs のみ等）`。`--list` の対象は 0 件。
+- `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health*.py'` → exit 0、78 件 OK。`-k exception_expir -v` → exit 0、5 件 ok。
+- `sh scripts/dev/tests/repo_health_gate.sh` → exit 0、`repo_health_gate: all checks passed`（doc-only の check-health.sh はこの試験を省くので、別に走らせた）。
+- `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0（Rust は変えていない）。
+- 文書検査 3 本（`bash scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`・`sh scripts/dev/progress-index.sh --check`）→ 3 本とも exit 0。
+
+## 未解決
+- 無し。merge の前の未解決 4 件のうち、`policy.changed` による exit 1、人の承認と operator の no-ff merge、親 G4 の branch の ff-only の 3 件は上の「main への merge」と「main への merge の後の確認」で解けた。
+- 今の Celeris profile（`profiles/celeris.toml`）の例外 2 件には期限を付けていない。付けるかどうかは決めていない（この task の範囲の外。下の「提案」を参照）。
+
+## 提案
+- 期限切れが近い例外を前もって知らせる仕組み（例: 基準日から 14 日以内に切れる例外を report の warning にする）は、この付記に含めていない。要るなら別の付記で、期限の何日前から知らせるかを決めてから足す。

@@ -290,3 +290,31 @@ fn health_review_policy_timeout_is_unavailable() {
         started.elapsed()
     );
 }
+
+/// ADR 2026-11-08-health-enforcement-loop 付記 2026-11-10（hotfix）: base の検査器を一時 dir に出すとき、検査器が
+/// 自分の dir の外から読む file（[`CHECKER_SIDE_FILES`]。size の report と arch-map の検査器）も全部出る。arch-map
+/// の検査器が出ないと、本番の review と WU の check で必須の rule arch-map.* が `checker_missing` の unsupported になり、
+/// どの task も `health_check_error` で止まった。
+#[test]
+fn health_review_base_checker_extracts_every_side_file() {
+    use task_core::required_checks::health::ARCH_MAP_CHECKER;
+
+    assert!(CHECKER_SIDE_FILES.contains(&ARCH_MAP_CHECKER));
+    let dir = init_repo();
+    let mut files = vec![(CHECKER_SCRIPT, STUB)];
+    files.extend(CHECKER_SIDE_FILES.iter().map(|side| (*side, "# side\n")));
+    commit(dir.path(), &files, "checker with side files");
+    let deadline = std::time::Instant::now() + REVIEW_POLICY_TIMEOUT;
+    let found = with_base_checker(dir.path(), "main", CheckerSite::Base, deadline, |c| {
+        Ok(CHECKER_SIDE_FILES
+            .iter()
+            .map(|side| (*side, c.tree.join(side).is_file()))
+            .collect::<Vec<_>>())
+    })
+    .expect("the base checker is extracted");
+    let expected: Vec<_> = CHECKER_SIDE_FILES
+        .iter()
+        .map(|side| (*side, true))
+        .collect();
+    assert_eq!(found, Some(expected));
+}

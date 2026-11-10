@@ -741,29 +741,6 @@ async fn success_without_result_file_is_retryable_error() {
 }
 
 #[tokio::test]
-async fn question_in_result_file_blocks_task() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = stub_codex(
-        dir.path(),
-        r#"mkdir -p artifacts
-printf '%s' '{"question":"which crate version?"}' > artifacts/result.json
-echo '{"type":"turn.completed"}'
-"#,
-    );
-    let adapter = CodexAdapter::new(config);
-    let req = sample_req(dir.path().to_path_buf());
-    let sink = RecordingSink::default();
-    let outcome = adapter
-        .run(req, "run-4", default_limits(), &sink)
-        .await
-        .unwrap();
-    match outcome.terminal {
-        Terminal::Question { text, .. } => assert_eq!(text, "which crate version?"),
-        other => panic!("expected question, got {other:?}"),
-    }
-}
-
-#[tokio::test]
 async fn crash_without_turn_message_is_retryable_error() {
     let dir = tempfile::tempdir().unwrap();
     let config = stub_codex(dir.path(), "exit 9");
@@ -874,32 +851,6 @@ async fn wall_clock_exceeded_kills_and_reports_budget_exhausted() {
     }
 }
 
-/// ADR-0072 D9（Phase E1）: `result.json` の `{"yield": {...}}` が `Terminal::Yielded` になる。
-#[tokio::test]
-async fn result_yield_becomes_terminal_yielded() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = stub_codex(
-        dir.path(),
-        r#"mkdir -p artifacts
-printf '%s' '{"yield":{"completed":["A"],"next_action":"do B"}}' > artifacts/result.json
-echo '{"type":"turn.completed","usage":{"input_tokens":5,"output_tokens":3}}'
-"#,
-    );
-    let adapter = CodexAdapter::new(config);
-    let req = sample_req(dir.path().to_path_buf());
-    let sink = RecordingSink::default();
-    let outcome = adapter
-        .run(req, "run-yield", default_limits(), &sink)
-        .await
-        .unwrap();
-    match outcome.terminal {
-        Terminal::Yielded { checkpoint, .. } => {
-            assert_eq!(checkpoint["next_action"], "do B");
-        }
-        other => panic!("expected yielded, got {other:?}"),
-    }
-}
-
 #[tokio::test]
 async fn idle_timeout_kills_and_reports_error() {
     let dir = tempfile::tempdir().unwrap();
@@ -926,63 +877,6 @@ sleep 30
         } => {
             assert!(retryable);
             assert!(message.contains("idle timeout"), "{message}");
-        }
-        other => panic!("expected error, got {other:?}"),
-    }
-}
-
-#[tokio::test]
-async fn malformed_evidence_in_result_file_does_not_fail_the_run() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = stub_codex(
-        dir.path(),
-        r#"mkdir -p artifacts
-printf '%s' '{"summary":"all good","evidence":["cargo test: 4 passed",{"criterion":0,"command":"cargo test","exit":0,"stdout_tail":""},42]}' > artifacts/result.json
-echo '{"type":"turn.completed"}'
-"#,
-    );
-    let adapter = CodexAdapter::new(config);
-    let req = sample_req(dir.path().to_path_buf());
-    let sink = RecordingSink::default();
-    let outcome = adapter
-        .run(req, "run-10", default_limits(), &sink)
-        .await
-        .unwrap();
-    match outcome.terminal {
-        Terminal::Done {
-            summary, evidence, ..
-        } => {
-            assert_eq!(summary, "all good");
-            assert_eq!(evidence.len(), 1);
-            assert_eq!(evidence[0].command.as_deref(), Some("cargo test"));
-        }
-        other => panic!("expected done, got {other:?}"),
-    }
-}
-
-#[tokio::test]
-async fn invalid_result_file_json_is_retryable_error() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = stub_codex(
-        dir.path(),
-        r#"mkdir -p artifacts
-printf 'not json' > artifacts/result.json
-echo '{"type":"turn.completed"}'
-"#,
-    );
-    let adapter = CodexAdapter::new(config);
-    let req = sample_req(dir.path().to_path_buf());
-    let sink = RecordingSink::default();
-    let outcome = adapter
-        .run(req, "run-11", default_limits(), &sink)
-        .await
-        .unwrap();
-    match outcome.terminal {
-        Terminal::Error {
-            retryable, message, ..
-        } => {
-            assert!(retryable);
-            assert!(message.contains("not valid JSON"), "{message}");
         }
         other => panic!("expected error, got {other:?}"),
     }

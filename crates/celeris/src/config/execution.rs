@@ -376,13 +376,12 @@ fn default_planner_permission_mode() -> String {
 fn default_planner_tier() -> Tier {
     Tier::Standard
 }
-/// ADR-0074 D5.3（Phase F1）: 40 -> 24（既定）。
+/// 既定は `task_core::PlannerConfig::default`（ADR 2026-11-09-planner-turn-limit-and-comment-interrupt D3。正本は 1 か所）。
 fn default_planner_max_turns() -> u32 {
-    24
+    task_core::PlannerConfig::default().max_turns
 }
-/// ADR-0074 D5.3（Phase F1）: 1,200 -> 900 秒（既定）。
 fn default_planner_max_wall_secs() -> u64 {
-    900
+    task_core::PlannerConfig::default().max_wall_secs
 }
 
 impl ExecutionTomlConfig {

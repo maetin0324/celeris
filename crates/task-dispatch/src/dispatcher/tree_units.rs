@@ -240,6 +240,8 @@ impl Dispatcher {
             scan_interval_secs,
             // 取り込み側が照合済みの generation と食い違うよう、作り直しても番号は戻さない。
             generation: self.stagnation.generation,
+            // 閾値を差し替えても、メモリの待ちが揃ったという事実は変わらない（ADR 2026-11-09-unscheduled-restart-hold D1）。
+            waits_known: self.stagnation.waits_known,
             budget_rates: std::mem::take(&mut self.stagnation.budget_rates),
             ..Default::default()
         };
@@ -286,11 +288,9 @@ impl Dispatcher {
     /// `project_stalled`・`release_unpromoted`・`task_unscheduled` を判定して snapshot の `stagnation` を作り直す。
     /// 読み取りだけで、状態は変えず event も書かない（LLM なし）。
     pub(super) fn check_stagnation(&mut self) -> Result<(), DispatchError> {
-        let now = self.now_utc();
-        if let Some(last) = self.stagnation.checked_at
-            && (now - last).whole_seconds()
-                < i64::try_from(self.stagnation.scan_interval_secs).unwrap_or(i64::MAX)
-        {
+        let (now, s) = (self.now_utc(), &self.stagnation);
+        // ADR 2026-11-09-unscheduled-restart-hold D1/D2: 起動後に `dispatch_ready` が終わるまで（メモリの待ちが揃うまで）保留。
+        if !task_ops::stagnation::scan_due(s.checked_at, s.scan_interval_secs, s.waits_known, now) {
             return Ok(());
         }
         self.stagnation.checked_at = Some(now);
@@ -1372,6 +1372,8 @@ pub(crate) struct StagnationWatch {
     pub(crate) available: bool,
     /// 判定が成功するたびに 1 進む（同 D3）。
     pub(crate) generation: u64,
+    /// ADR 2026-11-09-unscheduled-restart-hold D1: この process で `dispatch_ready` が 1 回でも終わったか（`tick` が立てる）。
+    pub(crate) waits_known: bool,
     /// ADR 2026-11-06-budget-usd-caps D2: `[budget_rates]`（単価表に無い model の換算単価）。案件の日次上限と木の
     /// 上限の判定が使う（`dispatcher.rs` に欄を足さない行数のため、木の状態のここに置く）。`set_budget_rates` で入る。
     pub(crate) budget_rates: task_core::pricing::BudgetRates,
@@ -1386,6 +1388,7 @@ impl Default for StagnationWatch {
             checked_at: None,
             available: false,
             generation: 0,
+            waits_known: false,
             budget_rates: task_core::pricing::BudgetRates::default(),
         }
     }

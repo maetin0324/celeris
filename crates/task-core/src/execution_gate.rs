@@ -322,9 +322,10 @@ impl Default for PlannerConfig {
         PlannerConfig {
             permission_mode: "plan".to_string(),
             tier: crate::model::Tier::Standard,
-            // ADR-0074 D5.3（Phase F1）: 40 -> 24 turns, 1,200 -> 900 秒。
-            max_turns: 24,
-            max_wall_secs: 900,
+            // ADR-0074 D5.3（Phase F1）で 40 -> 24 turns, 1,200 -> 900 秒にし、ADR 2026-11-09-planner-turn-limit-and-comment-interrupt
+            // D3 で 40 / 1,200 に戻した。既定の正本はここ（celeris の `[execution.planner]` の既定もここから導く）。
+            max_turns: 40,
+            max_wall_secs: 1200,
         }
     }
 }

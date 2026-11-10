@@ -547,6 +547,22 @@ fn budget_preamble(task: &Task, artifacts: &str) -> String {
     )
 }
 
+/// ADR 2026-11-09-planner-turn-limit-and-comment-interrupt D4: planner run の予算と、turn の上限で終わったときの
+/// 計画 file の扱い（D1）。planner の run には dispatcher が `[execution.planner]` の予算を `task.budget` に載せる。
+/// execute の run の予算の節（`budget_preamble` の yield と checkpoint）は planner には出さない（続きを起こさない）。
+fn planner_budget_section(task: &Task, artifacts: &str) -> String {
+    let (turns, secs) = (task.budget.max_turns, task.budget.max_wall_secs);
+    format!(
+        "## 予算 (budget)\n\
+         この planner run の上限: 最大 {turns} turn（claude-code はこれを `--max-turns` で実際に強制する）/ \
+         最大 {secs} 秒。turn の上限で終わっても、`{artifacts}/execution-plan.json` が完全な JSON で残っていれば、\
+         daemon はそれを通常の検証と設計 review にかける。file が無い・読めないまま終わると、この run は不正な試行に\
+         数えられる。読む資料を絞り、約 {half} turn までに計画を一度 `{artifacts}/execution-plan.json` に書き切ること。\
+         読み直しと自前の検証はその後に行い、直すときは同じ file を上書きする。\n\n",
+        half = turns / 2
+    )
+}
+
 /// 実行中の委譲の方法（ADR-0016 D2 / M8, ADR-0027 D1）。
 fn delegation_instructions(artifacts: &str) -> String {
     format!(
@@ -930,6 +946,7 @@ fn build_execution_plan_prompt(
          further than the goal actually requires. You are planning, not doing the work yourself: do not \
          write code or run the actual implementation in this run.\n\n",
     );
+    out.push_str(&planner_budget_section(task, artifacts));
     // ADR-0074 D1.1（Phase F2b）: `[execution] parallel = true` のときだけ v2 を書かせる。
     let parallel = context
         .execution_planner

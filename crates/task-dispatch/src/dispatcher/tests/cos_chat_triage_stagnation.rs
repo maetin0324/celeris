@@ -69,6 +69,9 @@ fn fixture() -> Fixture {
             },
         },
     );
+    // 一度 active で dispatch の走査を終え（メモリの待ちが揃い。ADR 2026-11-09-unscheduled-restart-hold D1）、その後は
+    // 新しい run を起こさない instance。ready の task は起きずに残る。
+    d.tick().expect("first tick");
     d.set_accepting_new_work(false);
     d.set_stagnation(
         task_ops::stagnation::StagnationPolicy {

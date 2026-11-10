@@ -388,3 +388,24 @@ fn gather_reads_project_and_ready_task_facts_from_the_store() {
     let f = gather(&store, None, &p, late, &none, &none, &memory).expect("gather");
     assert!(f.ready_tasks[0].waiting);
 }
+
+/// ADR 2026-11-09-unscheduled-restart-hold D2: 起動直後（`dispatch_ready` が 1 回も終わっていない）は、
+/// 一度も判定していなくても走らせない。揃った後は最初の判定を即座に、以後は `scan_interval_secs` ごとに走らせる。
+/// 既存の試験は dispatcher の tick を通した間隔しか見ておらず、保留の条件を単独では確かめていない。
+#[test]
+fn unscheduled_restart_scan_due_waits_for_memory_waits_then_keeps_the_interval() {
+    assert!(
+        !scan_due(None, 60, false, t0()),
+        "held before dispatch_ready ran"
+    );
+    assert!(
+        !scan_due(Some(t0()), 60, false, t0() + secs(3600)),
+        "held even when the interval has passed"
+    );
+    assert!(
+        scan_due(None, 60, true, t0()),
+        "first scan once waits are known"
+    );
+    assert!(!scan_due(Some(t0()), 60, true, t0() + secs(59)));
+    assert!(scan_due(Some(t0()), 60, true, t0() + secs(60)));
+}

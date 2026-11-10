@@ -3158,6 +3158,8 @@ mod cos_slot_wait;
 mod dep_integration;
 mod human_gates;
 mod task_waits;
+/// ADR 2026-11-09-unscheduled-restart-hold: 再起動直後の停滞の判定の保留。
+mod unscheduled_restart;
 
 /// ADR-0079 付記 R7-5: WU の checks の不合格の記録・次の run と replan への伝達・usage
 /// （`src/dispatcher/tests/work_unit_check_failures.rs`）。

@@ -11,8 +11,9 @@ impl Dispatcher {
     /// （計画がまだ無い）Task の `RunRole::Planner` run はすべてここを通る。
     ///
     /// `artifacts/execution-plan.json` を D14 で検証し、
-    /// - 妥当（かつ run が `Terminal::Done` で終わった）なら採用して `Trigger::Continue{Planned}`。
-    /// - 不正・run 自体が異常終了（error/question/budget_exhausted/yielded）なら、1 回だけ再試行する
+    /// - 妥当（かつ run が `Terminal::Done` か turn の上限で終わった。ADR 2026-11-09-planner-turn-limit-and-comment-interrupt
+    ///   D1）なら採用して `Trigger::Continue{Planned}`（設計 review・root の承認の待ちを経る場合がある）。
+    /// - 不正・run 自体が異常終了（error/question/turn 以外の budget_exhausted/yielded）なら、1 回だけ再試行する
     ///   （もう一度 planner run を起こす。2 回目もだめなら計画を作らず atomic に倒す。D14「1 回だけ
     ///   再試行し、それでも不正なら atomic に倒す」）。Task は失敗させない（D12）。
     #[allow(clippy::too_many_arguments)]
@@ -58,18 +59,13 @@ impl Dispatcher {
         } else {
             Vec::new()
         };
-        // D14: 計画の検証は run が `Terminal::Done` で終わったときだけ試みる（それ以外は無条件に「不正な試行」として扱う）。
+        // D14: 計画の検証は run が `Terminal::Done` か turn の上限で終わったときだけ試みる（ADR 2026-11-09-planner-turn-limit-and-comment-interrupt
+        // D1。それ以外は無条件に「不正な試行」として扱う）。
         // ADR-0079 D3 / D4 (3)（Phase R2a）: /3 の計画が計画の上限（段階の数・段階あたりの unit・子 task・`max_depth`）だけで不正なら、
         // 1 回目は従来どおり不正な試行（planner に理由を渡して再試行）、最後の試行では上限を緩めて採用し、超えた分の unit を
         // `kind: limit` の決定の要求で止める（黙って切らない・atomic に倒さない）。採用に使う上限を `adopt_limits` に返す。
         let mut adopt_limits = self.config.execution.limits;
-        let validation: Result<task_core::execution_plan::ValidatedPlan, String> = if matches!(
-            result,
-            Ok(RunOutcome {
-                terminal: Terminal::Done { .. },
-                ..
-            })
-        ) {
+        let validation: Result<_, String> = if design_gate::plan_file_checked(&result) {
             let workspace_dir = self.task_dir(task);
             let artifacts_dir = workspace_dir.as_ref().map(|d| self.artifacts_dir(task, d));
             match artifacts_dir
@@ -77,7 +73,10 @@ impl Dispatcher {
                 .map(|d| d.join("execution-plan.json"))
                 .and_then(|p| std::fs::read_to_string(p).ok())
             {
-                None => Err("artifacts/execution-plan.json が見つからない".to_string()),
+                // D1: run の終わり方（turn の上限か）を理由に添え、次の planner に渡す。
+                None => Err(format!(
+                    "artifacts/execution-plan.json が見つからない（{describe}）"
+                )),
                 Some(text) => match parse_planner_output(
                     &text,
                     active_plan.as_ref(),
@@ -507,7 +506,7 @@ impl Dispatcher {
     }
 
     /// ADR-0072 D14: 直近の `ExecutionPlanned`（無ければ Task の最初）から数えた planner run の試行
-    /// （`WorkerStarted{role: Planner}` の件数。この run 自身を含む）。
+    /// （`WorkerStarted{role: Planner}` の件数。この run 自身を含む。人の comment の割り込みで止まった run は除く）。
     pub(super) fn planner_attempts_in_window(
         &self,
         task_id: TaskId,
@@ -522,14 +521,17 @@ impl Dispatcher {
         Ok(events
             .iter()
             .enumerate()
+            // ADR 2026-11-09-planner-turn-limit-and-comment-interrupt D2: 人の comment の割り込みで止まった run は計画の
+            // 試行ではないので数えない（判定は ADR-0140 付記の comment-resume と同じ `interrupted_by_comment`）。
             .filter(|(i, (_, e))| {
                 since_idx.is_none_or(|s| *i > s)
                     && matches!(
                         e,
                         Event::WorkerStarted {
+                            run_id,
                             role: Some(RunRole::Planner),
                             ..
-                        }
+                        } if !continuation_session::interrupted_by_comment(&events, run_id)
                     )
             })
             .count())

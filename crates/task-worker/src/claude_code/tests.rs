@@ -4744,3 +4744,51 @@ echo '{{"type":"result","subtype":"success","is_error":false}}'
         "{prompt}"
     );
 }
+
+/// ADR 2026-11-09-planner-turn-limit-and-comment-interrupt D4: planner の prompt は dispatcher が `task.budget` に載せた
+/// `[execution.planner]` の turn・秒と、turn の上限で終わっても完全な計画 file は検証と設計 review にかかること、
+/// 約半分の turn までに計画を書き切ることを書く。execute の prompt には出さない。守る不変条件: planner は自分の予算と
+/// 計画 file の扱いを知っている。既存の試験は planner の prompt の予算の文を見ていなかった（以前は予算を書いていなかった）。
+#[test]
+fn planner_budget_prompt_states_the_turn_budget_and_the_plan_file_rule() {
+    let mut task = crate::protocol::tests::sample_task();
+    task.budget.max_turns = 40;
+    task.budget.max_wall_secs = 1200;
+    let planner = build_prompt(
+        &task,
+        &RunContext {
+            execution_planner: Some(crate::protocol::ExecutionPlannerContext {
+                max_work_units: 8,
+                ..Default::default()
+            }),
+            ..RunContext::default()
+        },
+        "run-p",
+        "artifacts",
+    );
+    assert!(
+        planner.contains("この planner run の上限: 最大 40 turn"),
+        "{planner}"
+    );
+    assert!(planner.contains("最大 1200 秒"), "{planner}");
+    assert!(
+        planner.contains("通常の検証と設計 review にかける"),
+        "{planner}"
+    );
+    assert!(planner.contains("この run は不正な試行に"), "{planner}");
+    assert!(
+        planner.contains("約 20 turn までに計画を一度 `artifacts/execution-plan.json` に書き切る"),
+        "{planner}"
+    );
+    let instructions_at = planner.find("## Instructions").expect("instructions");
+    let budget_at = planner.find("## 予算 (budget)").expect("budget");
+    let shape_at = planner
+        .find("execution-plan.json` (create")
+        .expect("plan shape");
+    assert!(
+        instructions_at < budget_at && budget_at < shape_at,
+        "{planner}"
+    );
+    let execute = build_prompt(&task, &RunContext::default(), "run-x", "artifacts");
+    assert!(!execute.contains("この planner run の上限"), "{execute}");
+}

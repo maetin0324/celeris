@@ -710,23 +710,6 @@ pub fn workspace_note(spec: &task_core::WorkspaceSpec) -> String {
     }
 }
 
-/// ADR-0041 D1: タスクごとの worktree を前置きに書く 1 行（純粋関数。ディスパッチャが
-/// `workspace.note` の後ろに足す）。「このブランチにコミットせよ」までをここに書く。
-pub fn worktree_note(
-    repo: &std::path::Path,
-    dir: &std::path::Path,
-    branch: &str,
-    base_sha12: &str,
-    base_kind: &str,
-) -> String {
-    format!(
-        "作業ツリー `{}`（`{}` の worktree）、ブランチ `{branch}`、base `{base_sha12}`（{base_kind}）。\
-         このブランチにコミットせよ。`main` に直接コミットするな。`git checkout` でブランチを変えるな。",
-        dir.display(),
-        repo.display()
-    )
-}
-
 /// ADR-0043 D2 / D8: 前置きの「作業場所」に出すリポジトリ 1 件（純粋なデータ。ディスパッチャが組む）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RepoNote {

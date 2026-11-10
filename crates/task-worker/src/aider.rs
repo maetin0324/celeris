@@ -15,7 +15,7 @@
 //! `Cost: $X message, $Y session.` を最良努力で拾う（無ければ `None`。ADR-0061「取得可能な範囲」）。
 //! 実機（`aider-chat` 0.86.2、モック OpenAI 互換エンドポイント）で書式を確認済み（`agent-docs/PROGRESS.md`
 //! Phase 104 参照）。`Cost:` 行があればそれをそのまま使い、無ければ `model` が分かるときだけ
-//! `task_core::estimate_cost_usd` の静的単価表で推定する（aider 自身の実測値を優先する）。
+//! `adapter::with_estimated_cost`（静的単価表）で推定する（aider 自身の実測値を優先する）。
 
 use std::process::Stdio;
 use std::sync::Arc;
@@ -27,15 +27,18 @@ use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tracing::warn;
 
-use crate::adapter::{AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter};
+use crate::adapter::{
+    AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter, deadline_terminal,
+    spawn_capture_stderr, with_estimated_cost,
+};
 use crate::claude_code::build_prompt;
-use crate::delegate_file::{clear_delegate_file, forward_delegate_file};
+use crate::delegate_file::forward_delegate_file;
 use crate::protocol::RunRequest;
 use crate::provider::classify_provider_failure;
 use crate::result_report::{ResultFileRead, interpret_result_text, read_result_file};
 use crate::subprocess::{
-    LineOutcome, MAX_LINE_BYTES, kill_now, read_line_limited, read_tail, reap_after_terminal,
-    write_result_json,
+    LineOutcome, MAX_LINE_BYTES, finish_run, kill_now, prepare_run, read_line_limited, read_tail,
+    reap_after_terminal,
 };
 
 /// `[adapters.aider]`（config.toml, ADR-0061）。
@@ -120,19 +123,12 @@ async fn run_aider(
     limits: &RunLimits,
     sink: &dyn EventSink,
 ) -> Result<RunOutcome, AdapterError> {
-    let run_dir = req.workspace.join("runs").join(run_id);
-    tokio::fs::create_dir_all(&run_dir).await?;
-    let artifacts_rel = req.artifacts_rel();
-    let result_path = req.artifact_path("result.json");
-    // 前回の run（リトライ）が残した結果ファイルを今回のものと誤読しない（ADR-0006 D3 と同じ理由）。
-    let _ = tokio::fs::remove_file(&result_path).await;
-    clear_delegate_file(&req.artifacts_dir).await;
+    let paths = prepare_run(req, run_id, "stdout.log").await?;
+    let run_dir = &paths.run_dir;
     tokio::fs::create_dir_all(&req.artifacts_dir).await?;
 
-    let prompt = build_prompt(&req.task, &req.context, run_id, &artifacts_rel);
-    crate::campaign_pin::enforce(&run_dir, req).await?;
-    crate::subprocess::write_run_request(&run_dir, req, run_id).await;
-    crate::subprocess::write_run_prompt(&run_dir, &prompt, run_id).await;
+    let prompt = build_prompt(&req.task, &req.context, run_id, &paths.artifacts_rel);
+    crate::subprocess::write_run_prompt(run_dir, &prompt, run_id).await;
 
     let mut command = Command::new(&config.command);
     command
@@ -164,10 +160,10 @@ async fn run_aider(
         &config.env,
         config.model.as_deref(),
         &config.extra_args,
-        &run_dir,
+        run_dir,
         req,
     );
-    crate::routing_context_transport::record(&run_dir, req, context_settings.is_some()).await;
+    crate::routing_context_transport::record(run_dir, req, context_settings.is_some()).await;
     // ★ ADR-0043 D3 の差し込み点（コンテナ実行）。`None` ならそのまま（ホスト実行は変わらない）。
     let mut command = crate::db_guard::launch(command, config.container.as_deref());
     command
@@ -186,27 +182,9 @@ async fn run_aider(
         .stdout
         .take()
         .ok_or_else(|| AdapterError::Other("worker stdout was not piped".into()))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| AdapterError::Other("worker stderr was not piped".into()))?;
+    let stderr_task = spawn_capture_stderr(&mut child, &paths.stderr_log, run_id)?;
 
-    let stdout_log_path = run_dir.join("stdout.log");
-    let stderr_log_path = run_dir.join("stderr.log");
-    let stderr_log_path_for_task = stderr_log_path.clone();
-    let stderr_task = tokio::spawn(async move {
-        let mut reader = stderr;
-        match tokio::fs::File::create(&stderr_log_path_for_task).await {
-            Ok(mut file) => {
-                if let Err(e) = tokio::io::copy(&mut reader, &mut file).await {
-                    warn!("failed to write worker stderr.log: {e}");
-                }
-            }
-            Err(e) => warn!("failed to create worker stderr.log: {e}"),
-        }
-    });
-
-    let mut stdout_file = tokio::fs::File::create(&stdout_log_path).await?;
+    let mut stdout_file = tokio::fs::File::create(&paths.stdout_log).await?;
     let mut reader = BufReader::new(stdout);
 
     let start = Instant::now();
@@ -216,30 +194,16 @@ async fn run_aider(
     let mut stdout_text = String::new();
 
     loop {
-        let wall_elapsed = start.elapsed();
-        if wall_elapsed >= limits.wall_clock {
-            // ADR-0072 D7/§6 (i)（Phase E1）: aider には turn の上限が無いので、wall-clock の打ち切り
-            // が continuation の唯一の入口になる（`Terminal::BudgetExhausted{kind: WallClock}`）。
-            timeout_terminal = Some(Terminal::BudgetExhausted {
-                kind: task_core::BudgetKind::WallClock,
-                message: "wall clock exceeded".into(),
-                usage: None,
-            });
-            force_kill = true;
-            break;
-        }
-        let idle_elapsed = last_activity.elapsed();
-        if idle_elapsed >= limits.idle_timeout {
-            // ADR-0072 D7: idle timeout は E1 では harness_error に分類変更しない（§7 U7）。
-            timeout_terminal = Some(Terminal::Error {
-                message: "idle timeout".into(),
-                retryable: true,
-                usage: None,
-            });
-            force_kill = true;
-            break;
-        }
-        let wait = (limits.wall_clock - wall_elapsed).min(limits.idle_timeout - idle_elapsed);
+        // aider には turn の上限が無いので、wall-clock の打ち切りが continuation の唯一の入口になる。
+        let wait =
+            match deadline_terminal(start, last_activity, limits.wall_clock, limits.idle_timeout) {
+                Ok(wait) => wait,
+                Err(terminal) => {
+                    timeout_terminal = Some(*terminal);
+                    force_kill = true;
+                    break;
+                }
+            };
 
         let outcome = match tokio::time::timeout(
             wait,
@@ -292,10 +256,10 @@ async fn run_aider(
     let (terminal, provider_failure) = if let Some(t) = timeout_terminal {
         (t, None)
     } else {
-        let usage = usage_with_cost(parse_aider_usage(&stdout_text), config.model.as_deref());
+        let usage = with_estimated_cost(parse_aider_usage(&stdout_text), config.model.as_deref());
         let terminal = terminal_from_result(req, start, usage).await;
         let provider_failure = if matches!(terminal, Terminal::Error { .. }) {
-            let tail = read_tail(&stderr_log_path, 4096).await;
+            let tail = read_tail(&paths.stderr_log, 4096).await;
             classify_provider_failure(&tail).or_else(|| classify_provider_failure(&stdout_text))
         } else {
             None
@@ -303,16 +267,7 @@ async fn run_aider(
         (terminal, provider_failure)
     };
 
-    write_result_json(&run_dir, &terminal, provider_failure).await?;
-
-    if let (Terminal::Error { message, .. }, Some(pf)) = (&terminal, provider_failure) {
-        return Err(AdapterError::from_provider_failure(pf, message));
-    }
-
-    Ok(RunOutcome {
-        terminal,
-        exit_code: exit_status.code(),
-    })
+    finish_run(run_dir, terminal, provider_failure, exit_status).await
 }
 
 /// 結果ファイルの読み取り結果から終端を合成する。本文の解釈は結果契約の正本
@@ -392,19 +347,6 @@ fn dollar_amount_before(text: &str, label: &str) -> Option<f64> {
         .take_while(|c| c.is_ascii_digit() || *c == '.')
         .collect();
     amount.parse().ok()
-}
-
-/// `Cost:` 行が取れなかったときだけ、`model` が分かる場合に静的単価表（`task_core::estimate_cost_usd`）
-/// で埋める。aider 自身が報告した実測コストがあればそれを常に優先する（ADR-0061）。
-fn usage_with_cost(usage: Option<Usage>, model: Option<&str>) -> Option<Usage> {
-    usage.map(|mut u| {
-        if u.cost_usd.is_none()
-            && let Some(model) = model
-        {
-            u.cost_usd = task_core::estimate_cost_usd(model, &u);
-        }
-        u
-    })
 }
 
 #[cfg(test)]

@@ -396,3 +396,114 @@ async fn artifact_path_escaping_workspace_is_ignored() {
         other => panic!("expected done, got {other:?}"),
     }
 }
+
+// 実行共通処理（ADR 2026-11-10-adapter-result-contract D2・(4) 4b）の `prepare_run`・`finish_run`。harness
+// adapter 5 本が 1 か所で呼ぶので、run の準備と終端の書き出しの規則はここで正本を直接試す。
+
+/// 不変条件: `prepare_run` は前回の run が残した `artifacts/result.json`・`delegate.json` を消し（今回の結果と
+/// 誤読しない。ADR-0006 D3）、`runs/<run_id>/request.json` を書く。browser の run は log を `/dev/null` にする。
+/// これまで adapter ごとの写しで、codex・pi・aider には browser の log の分岐が無かった。
+#[tokio::test]
+async fn run_common_prepare_run_clears_previous_result_and_delegate() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut req = sample_req(dir.path().to_path_buf());
+    std::fs::create_dir_all(&req.artifacts_dir).expect("artifacts dir");
+    let result = req.artifacts_dir.join("result.json");
+    let delegate = req
+        .artifacts_dir
+        .join(crate::delegate_file::DELEGATE_FILE_NAME);
+    std::fs::write(&result, r#"{"summary":"stale"}"#).expect("stale result");
+    std::fs::write(&delegate, r#"{"tasks":[]}"#).expect("stale delegate");
+
+    let paths = prepare_run(&req, "run-1", "stdout.log")
+        .await
+        .expect("prepare");
+    let run_dir = dir.path().join("runs").join("run-1");
+    assert_eq!(
+        paths,
+        RunPaths {
+            run_dir: run_dir.clone(),
+            stdout_log: run_dir.join("stdout.log"),
+            stderr_log: run_dir.join("stderr.log"),
+            result_path: result.clone(),
+            artifacts_rel: req.artifacts_rel(),
+        }
+    );
+    assert!(!result.exists());
+    assert!(!delegate.exists());
+    assert!(run_dir.join("request.json").is_file());
+
+    req.context.browser = Some(crate::browser::BrowserContext {
+        credential_used: false,
+        approval_actions: Vec::new(),
+        approved_operation: None,
+        post_login: None,
+        run: task_core::BrowserRun {
+            task_id: req.task.id,
+            run_id: "run-2".into(),
+            session_id: "isolated-test".into(),
+            state: task_core::BrowserRunState::Running,
+            live_view_url: None,
+            policy: None,
+        },
+        cli: dir.path().join("celeris-browser.py"),
+    });
+    let browser = prepare_run(&req, "run-2", "stdout.jsonl")
+        .await
+        .expect("prepare browser run");
+    assert_eq!(browser.stdout_log, Path::new("/dev/null"));
+    assert_eq!(browser.stderr_log, Path::new("/dev/null"));
+}
+
+/// 不変条件: `finish_run` は終端を `runs/<run_id>/result.json` に書いてから、`Error` と供給側失敗の組だけを
+/// `Err(AdapterError)`（account の cooldown の入口）にする。供給側失敗の無い `Error` と他の終端は `Ok`。
+/// 写しのどれかが書き出しを飛ばしても、adapter の試験は戻り値しか見ないので検出できなかった。
+#[tokio::test]
+async fn run_common_finish_run_maps_provider_failure_to_adapter_error() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let error = Terminal::Error {
+        message: "401 Unauthorized".into(),
+        retryable: true,
+        usage: None,
+    };
+    let outcome = finish_run(
+        dir.path(),
+        error.clone(),
+        Some(ProviderFailure::AuthFailed),
+        std::os::unix::process::ExitStatusExt::from_raw(1 << 8),
+    )
+    .await;
+    assert!(
+        matches!(&outcome, Err(AdapterError::AuthFailed(m)) if m == "401 Unauthorized"),
+        "{outcome:?}"
+    );
+    let written = std::fs::read_to_string(dir.path().join("result.json")).expect("result.json");
+    assert!(written.contains("401 Unauthorized"), "{written}");
+
+    let outcome = finish_run(
+        dir.path(),
+        error.clone(),
+        None,
+        std::os::unix::process::ExitStatusExt::from_raw(1 << 8),
+    )
+    .await
+    .expect("an error without a provider failure stays a terminal");
+    assert_eq!(outcome.terminal, error);
+    assert_eq!(outcome.exit_code, Some(1));
+
+    let done = Terminal::Done {
+        summary: "ok".into(),
+        evidence: Vec::new(),
+        usage: None,
+    };
+    let outcome = finish_run(
+        dir.path(),
+        done.clone(),
+        Some(ProviderFailure::Exhausted),
+        std::os::unix::process::ExitStatusExt::from_raw(0),
+    )
+    .await
+    .expect("a provider failure only matters with an error terminal");
+    assert_eq!(outcome.terminal, done);
+    assert_eq!(outcome.exit_code, Some(0));
+}

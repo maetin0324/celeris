@@ -17,15 +17,18 @@ use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tracing::warn;
 
-use crate::adapter::{AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter};
-use crate::delegate_file::{clear_delegate_file, forward_delegate_file};
+use crate::adapter::{
+    AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter, deadline_terminal,
+    spawn_capture_stderr, with_estimated_cost,
+};
+use crate::delegate_file::forward_delegate_file;
 use crate::progress;
 use crate::protocol::{Answer, ProviderFailure, RunContext, RunRequest};
 use crate::provider::classify_provider_failure;
 use crate::result_report::{ResultFileRead, interpret_result_text};
 use crate::subprocess::{
-    LineOutcome, MAX_LINE_BYTES, kill_now, read_line_limited, read_tail, reap_after_terminal,
-    write_result_json,
+    LineOutcome, MAX_LINE_BYTES, finish_run, kill_now, prepare_run, read_line_limited, read_tail,
+    reap_after_terminal,
 };
 
 /// `[adapters.claude_code]`（config.toml, ADR-0006 D6）。
@@ -457,40 +460,19 @@ async fn run_claude_code(
     sink: &dyn EventSink,
 ) -> Result<RunOutcome, AdapterError> {
     let run_started = std::time::SystemTime::now();
-    let run_dir = req.workspace.join("runs").join(run_id);
-    tokio::fs::create_dir_all(&run_dir).await?;
-    crate::routing_context_transport::record(&run_dir, req, false).await;
-    // Browser commands and page content must not be persisted through the harness's raw
-    // stream capture. Parsing still uses the pipes; the browser supervisor emits safe audit events.
-    let (stdout_log_path, stderr_log_path) = if req.context.browser.is_some() {
-        (
-            Path::new("/dev/null").to_path_buf(),
-            Path::new("/dev/null").to_path_buf(),
-        )
-    } else {
-        (run_dir.join("stdout.jsonl"), run_dir.join("stderr.log"))
-    };
-    // `stderr_task` (below) moves a copy into its `async move` block; this one stays available for
-    // the crash-classification read after the loop (ADR-0010 D5).
-    let stderr_log_path_for_task = stderr_log_path.clone();
-
-    // 前回の run（リトライ）が残した結果ファイルを、今回の run の結果と誤読しないよう先に消す
-    // （監査で指摘。ADR-0006 D3 は「この run が書いたファイル」を前提にしている）。
-    // ADR-0036 D1/D2: 置き場はディスパッチャが決めた `artifacts_dir`（共有 workspace ではタスクごと）。
-    let artifacts_rel = req.artifacts_rel();
-    let result_path = req.artifact_path("result.json");
-    let _ = tokio::fs::remove_file(&result_path).await;
-    clear_delegate_file(&req.artifacts_dir).await;
+    let paths = prepare_run(req, run_id, "stdout.jsonl").await?;
+    let (run_dir, artifacts_rel) = (&paths.run_dir, &paths.artifacts_rel);
+    crate::routing_context_transport::record(run_dir, req, false).await;
 
     // ADR 2026-10-08-cos-chat-prompt-cache D6: a CoS chat run puts its fixed Core in the system
     // prompt (after HEADLESS_RUN_NOTE, one argument) and only the run specific part on stdin.
-    let cos_parts = build_cos_chat_parts(&req.task, &req.context, run_id, &artifacts_rel);
+    let cos_parts = build_cos_chat_parts(&req.task, &req.context, run_id, artifacts_rel);
     let work_note = work_dir_note(req);
     let prompt = match &cos_parts {
         Some(parts) => format!("{work_note}{}", parts.variable),
         None => format!(
             "{work_note}{}",
-            build_prompt(&req.task, &req.context, run_id, &artifacts_rel)
+            build_prompt(&req.task, &req.context, run_id, artifacts_rel)
         ),
     };
     let append_system_prompt = match &cos_parts {
@@ -510,9 +492,7 @@ async fn run_claude_code(
     } else {
         prompt.clone()
     };
-    // ADR-0023 D2 / M1: この run で何を渡したかを残す（`request.json` は構造、`prompt.txt` は実際の文面）。
-    crate::campaign_pin::enforce(&run_dir, req).await?;
-    crate::subprocess::write_run_request(&run_dir, req, run_id).await;
+    // ADR-0023 D2 / M1: この run で実際に渡した文面を残す（`request.json` は `prepare_run` が書いた）。
     let recorded = match &cos_parts {
         Some(parts) => crate::cos_chat::prompt_record(
             "--append-system-prompt, after HEADLESS_RUN_NOTE",
@@ -521,7 +501,7 @@ async fn run_claude_code(
         ),
         None => prompt.clone(),
     };
-    crate::subprocess::write_run_prompt(&run_dir, &recorded, run_id).await;
+    crate::subprocess::write_run_prompt(run_dir, &recorded, run_id).await;
     // ADR-0056 D3（Phase 79）: mount された skills を `.claude/skills/<name>/` に写す（claude-code が
     // 自動で読む形式。run が失敗しても打ち切らない。読み取れる限りは失敗しない見込み — 失敗すれば
     // ワーカー起動前の警告としてログに残す）。
@@ -667,24 +647,9 @@ async fn run_claude_code(
         .stdout
         .take()
         .ok_or_else(|| AdapterError::Other("worker stdout was not piped".into()))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| AdapterError::Other("worker stderr was not piped".into()))?;
+    let stderr_task = spawn_capture_stderr(&mut child, &paths.stderr_log, run_id)?;
 
-    let stderr_task = tokio::spawn(async move {
-        let mut reader = stderr;
-        match tokio::fs::File::create(&stderr_log_path_for_task).await {
-            Ok(mut file) => {
-                if let Err(e) = tokio::io::copy(&mut reader, &mut file).await {
-                    warn!("failed to write worker stderr.log: {e}");
-                }
-            }
-            Err(e) => warn!("failed to create worker stderr.log: {e}"),
-        }
-    });
-
-    let mut stdout_file = tokio::fs::File::create(&stdout_log_path).await?;
+    let mut stdout_file = tokio::fs::File::create(&paths.stdout_log).await?;
     let mut reader = BufReader::new(stdout);
 
     let start = Instant::now();
@@ -708,31 +673,16 @@ async fn run_claude_code(
             });
 
     loop {
-        let wall_elapsed = start.elapsed();
-        if wall_elapsed >= limits.wall_clock {
-            // ADR-0072 D7（Phase E1）: wall-clock の打ち切りは予算切れ（continuation の対象）。
-            // usage はここでは取れない（`result` メッセージを観測する前に打ち切っている）。
-            timeout_terminal = Some(Terminal::BudgetExhausted {
-                kind: task_core::BudgetKind::WallClock,
-                message: "wall clock exceeded".into(),
-                usage: None,
-            });
-            force_kill = true;
-            break;
-        }
-        let idle_elapsed = last_activity.elapsed();
-        if idle_elapsed >= limits.idle_timeout {
-            // ADR-0072 D7（Phase E1）: idle timeout は E1 では harness_error に分類変更しない
-            // （§7 U7。従来どおり retryable な `Error` のまま attempts を消費する）。
-            timeout_terminal = Some(Terminal::Error {
-                message: "idle timeout".into(),
-                retryable: true,
-                usage: None,
-            });
-            force_kill = true;
-            break;
-        }
-        let wait = (limits.wall_clock - wall_elapsed).min(limits.idle_timeout - idle_elapsed);
+        // 打ち切りの usage は後で `exploration` の累積から載せる（`result` を観測する前に打ち切っている）。
+        let wait =
+            match deadline_terminal(start, last_activity, limits.wall_clock, limits.idle_timeout) {
+                Ok(wait) => wait,
+                Err(terminal) => {
+                    timeout_terminal = Some(*terminal);
+                    force_kill = true;
+                    break;
+                }
+            };
 
         let outcome = match tokio::time::timeout(
             wait,
@@ -824,7 +774,7 @@ async fn run_claude_code(
                 Some(code) => code.to_string(),
                 None => "signal".to_string(),
             };
-            let tail = read_tail(&stderr_log_path, 4096).await;
+            let tail = read_tail(&paths.stderr_log, 4096).await;
             let pf = classify_provider_failure(&tail);
             // ADR-0054 D1（Phase 67）: resume を頼んだ run が、セッションを拒否されたように見える
             // crash なら報告する（ディスパッチャが `node_sessions` を retire し、次の run は新規
@@ -845,7 +795,7 @@ async fn run_claude_code(
         (None, Some(meta)) => {
             let mut outcome = terminal_from_result(
                 crate::result_report::read_result_file(req, run_started).await,
-                &artifacts_rel,
+                artifacts_rel,
                 meta,
                 config.model.as_deref(),
             );
@@ -881,7 +831,7 @@ async fn run_claude_code(
                     Terminal::Done {
                         summary,
                         evidence: Vec::new(),
-                        usage: usage_with_cost(meta.usage, config.model.as_deref()),
+                        usage: with_estimated_cost(meta.usage, config.model.as_deref()),
                     },
                     None,
                 );
@@ -906,7 +856,7 @@ async fn run_claude_code(
                                 &meta.outstanding_background,
                             )
                             .await,
-                            usage: usage_with_cost(meta.usage, config.model.as_deref()),
+                            usage: with_estimated_cost(meta.usage, config.model.as_deref()),
                         },
                         None,
                     );
@@ -938,7 +888,7 @@ async fn run_claude_code(
             // run が `error_during_execution`/`is_error` で終わったときは、stderr の末尾と
             // `result` メッセージ自身の文面の両方を resume 拒否の文言と照らす。
             if is_resuming && meta.is_error && meta.subtype == "error_during_execution" {
-                let tail = read_tail(&stderr_log_path, 4096).await;
+                let tail = read_tail(&paths.stderr_log, 4096).await;
                 let result_text = meta.result.as_deref().unwrap_or("");
                 if crate::provider::looks_like_resume_rejection(&tail)
                     || crate::provider::looks_like_resume_rejection(result_text)
@@ -977,25 +927,17 @@ async fn run_claude_code(
             _ => {}
         }
     }
-    write_result_json(&run_dir, &terminal, provider_failure).await?;
-
-    if let (Terminal::Error { message, .. }, Some(pf)) = (&terminal, provider_failure) {
-        return Err(AdapterError::from_provider_failure(pf, message));
-    }
+    let outcome = finish_run(run_dir, terminal, provider_failure, exit_status).await?;
     // ADR-0072 E2（P-E0-2 の修正）: `result.json` そのものが無かった run（`RESULT_JSON_MISSING_MARKER`）
     // は `ProviderFailure` を持たない `Err(AdapterError)` にする。`provider_failure_outcome` は
     // これを分類できない失敗として扱い、ディスパッチャは ADR-0070 D3 の `InfraRequeue`
     // （attempts を消費しない。上限に達したときだけ `WorkerError{retryable:false}`）に倒す。
-    if let Terminal::Error { message, .. } = &terminal
+    if let Terminal::Error { message, .. } = &outcome.terminal
         && message.starts_with(RESULT_JSON_MISSING_MARKER)
     {
         return Err(AdapterError::Other(message.clone()));
     }
-
-    Ok(RunOutcome {
-        terminal,
-        exit_code: exit_status.code(),
-    })
+    Ok(outcome)
 }
 
 /// 壁時計の Unix 秒（ADR-0024 D4: 観測時刻は celeris の壁時計）。`claude_account` の確認・ログイン中継からも使う。
@@ -1324,21 +1266,6 @@ fn tool_result_text(item: &serde_json::Value) -> String {
     content.to_string()
 }
 
-/// `result` メッセージと結果ファイルから終端を合成する（ADR-0006 D3/D4, ADR-0010 D5）。呼び出し元は
-/// `result` メッセージを一度でも観測できた場合にのみこれを呼ぶ（観測できなかった場合は
-/// クラッシュとして扱い、この関数を呼ばずに `Error` にする。ADR-0006 D4）。`is_error`/`subtype != "success"`
-/// のときは `result` のテキスト（無ければ `subtype`）を供給側失敗として分類する。
-/// ADR-0061（Phase 104）: model が分かる時だけ静的単価表から USD を推定して埋める（不明なモデル・
-/// token 欠落は `None` のまま。ここでは断定しない）。
-fn usage_with_cost(usage: Option<Usage>, model: Option<&str>) -> Option<Usage> {
-    usage.map(|mut u| {
-        if let Some(model) = model {
-            u.cost_usd = task_core::estimate_cost_usd(model, &u);
-        }
-        u
-    })
-}
-
 /// ADR-0072 E2（P-E0-2 の修正）: `result` メッセージは観測できたのに `result.json` 自体が無いときの
 /// `Terminal::Error.message` の接頭辞。`run` がこの接頭辞を見て `Err(AdapterError)`（InfraRequeue）に
 /// 倒す（他の `result.json` の失敗〈壊れた JSON・必須欄の欠落〉は worker 自身の誤りのまま）。
@@ -1360,7 +1287,10 @@ const DISABLE_BACKGROUND_TASKS_ENV: &str = "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS
 /// F5-fix5: Claude Code CLI の Bash の `timeout` の上限（ミリ秒。既定 600000）。
 const BASH_MAX_TIMEOUT_ENV: &str = "BASH_MAX_TIMEOUT_MS";
 
-/// `result` メッセージと `artifacts/result.json` の読み取り結果から終端を合成する。誤配置は `ResultMeta` の
+/// `result` メッセージと `artifacts/result.json` の読み取り結果から終端を合成する（ADR-0006 D3/D4,
+/// ADR-0010 D5）。呼び出し元は `result` メッセージを一度でも観測できた場合にのみこれを呼ぶ（観測できなかった
+/// 場合はクラッシュとして扱い、この関数を呼ばずに `Error` にする。ADR-0006 D4）。`is_error`/`subtype != "success"`
+/// のときは `result` のテキスト（無ければ `subtype`）を供給側失敗として分類する。誤配置は `ResultMeta` の
 /// 判定より先に勝つ（呼び出し元の cos_chat・background task の分岐より前でもある）。本文の解釈は結果契約の
 /// 正本（`result_report::interpret_result_text`。ADR 2026-11-10-adapter-result-contract D1）に任せる。
 fn terminal_from_result(
@@ -1380,7 +1310,7 @@ fn terminal_from_result(
         // の loop の timeout で検出する）。それ以外の `is_error`/`subtype != success` は、`result` の
         // 文言が context 超過の語彙に当たれば `BudgetExhausted{kind: Context}`（§7 U1: 実機の文言は
         // 未確認。分類できなければ従来どおり `Error`）。usage は予算切れでも運ぶ（従来は捨てていた）。
-        let usage = usage_with_cost(last_result.usage, model);
+        let usage = with_estimated_cost(last_result.usage, model);
         if last_result.subtype == "error_max_turns" {
             return (
                 Terminal::BudgetExhausted {
@@ -1445,7 +1375,7 @@ fn terminal_from_result(
         interpret_result_text(
             &text,
             artifacts_rel,
-            usage_with_cost(last_result.usage, model),
+            with_estimated_cost(last_result.usage, model),
         ),
         None,
     )

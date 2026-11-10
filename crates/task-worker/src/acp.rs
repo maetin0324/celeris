@@ -40,20 +40,23 @@ use tracing::warn;
 use base64::Engine;
 use task_core::ProgressKind;
 
-use crate::adapter::{AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter};
+use crate::adapter::{
+    AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter, deadline_terminal,
+    spawn_capture_stderr,
+};
 use crate::claude_code::build_prompt_with_skill_list;
 use crate::cos_chat::capabilities::{
     Continuation, HarnessCapabilities, ImageDelivery, MissingCapability, capability_reason,
     image_delivery, image_delivery_reason,
 };
-use crate::delegate_file::{clear_delegate_file, forward_delegate_file};
+use crate::delegate_file::forward_delegate_file;
 use crate::progress;
 use crate::protocol::{ProviderFailure, RunRequest};
 use crate::provider::classify_provider_failure;
 use crate::result_report::{ResultFileRead, interpret_result_text, read_result_file};
 use crate::subprocess::{
-    LineOutcome, MAX_LINE_BYTES, kill_now, read_line_limited, read_tail, reap_after_terminal,
-    send_signal_to_group, write_result_json,
+    LineOutcome, MAX_LINE_BYTES, RunPaths, finish_run, kill_now, prepare_run, read_line_limited,
+    read_tail, reap_after_terminal, send_signal_to_group,
 };
 
 /// `session/request_permission` への即答（ADR-0026 D4）。
@@ -578,26 +581,16 @@ async fn wait_for_response(
     chunks: &mut ChunkBuffer,
 ) -> Result<WaitOutcome, AdapterError> {
     loop {
-        let wall_elapsed = start.elapsed();
-        if wall_elapsed >= limits.wall_clock {
-            // ADR-0072 D7/§6 (i)（Phase E1）: acp には turn の上限が無いので、wall-clock の打ち切り
-            // が continuation の唯一の入口になる（`Terminal::BudgetExhausted{kind: WallClock}`）。
-            return Ok(WaitOutcome::TimedOut(Box::new(Terminal::BudgetExhausted {
-                kind: task_core::BudgetKind::WallClock,
-                message: "wall clock exceeded".into(),
-                usage: None,
-            })));
-        }
-        let idle_elapsed = last_activity.elapsed();
-        if idle_elapsed >= limits.idle_timeout {
-            // ADR-0072 D7: idle timeout は E1 では harness_error に分類変更しない（§7 U7）。
-            return Ok(WaitOutcome::TimedOut(Box::new(Terminal::Error {
-                message: "idle timeout".into(),
-                retryable: true,
-                usage: None,
-            })));
-        }
-        let wait = (limits.wall_clock - wall_elapsed).min(limits.idle_timeout - idle_elapsed);
+        // acp には turn の上限が無いので、wall-clock の打ち切りが continuation の唯一の入口になる。
+        let wait = match deadline_terminal(
+            start,
+            *last_activity,
+            limits.wall_clock,
+            limits.idle_timeout,
+        ) {
+            Ok(wait) => wait,
+            Err(terminal) => return Ok(WaitOutcome::TimedOut(terminal)),
+        };
         let pumped = match tokio::time::timeout(
             wait,
             pump_one_line(reader, stdin, stdout_file, sink, config, run_id, chunks),
@@ -674,9 +667,9 @@ enum RawOutcome {
 
 /// プロセスを止め（タイムアウトなら `session/cancel` → `kill_grace` 後 SIGKILL、そうでなければ穏やかな
 /// 刈り取り。ADR-0026 D4）、結果ファイル（`<artifacts_dir>/result.json`）から終端を合成し、`runs/<run_id>/result.json` に書く
-/// （ADR-0006 D3, ADR-0010 D10）。
+/// （ADR-0006 D3、書き出しは `subprocess::finish_run`）。
 #[allow(clippy::too_many_arguments)]
-async fn finish_run(
+async fn finish_session(
     child: &mut Child,
     mut stdin: ChildStdin,
     session_id: &str,
@@ -781,16 +774,7 @@ async fn finish_run(
     };
 
     forward_delegate_file(artifacts_dir, sink).await;
-    write_result_json(run_dir, &terminal, provider_failure).await?;
-
-    if let (Terminal::Error { message, .. }, Some(pf)) = (&terminal, provider_failure) {
-        return Err(AdapterError::from_provider_failure(pf, message));
-    }
-
-    Ok(RunOutcome {
-        terminal,
-        exit_code: exit_status.code(),
-    })
+    finish_run(run_dir, terminal, provider_failure, exit_status).await
 }
 
 /// 結果ファイル（`<artifacts_dir>/result.json`）から終端を合成する（ADR-0026 D3 手順 7、ADR-0036 D2）。
@@ -858,27 +842,13 @@ async fn run_acp(
             ..config.clone()
         }
     };
-    let run_dir = req.workspace.join("runs").join(run_id);
-    tokio::fs::create_dir_all(&run_dir).await?;
-    // Browser commands and page content must not be persisted through the harness's raw
-    // stream capture. Parsing still uses the pipes; the browser supervisor emits safe audit events.
-    let (stdout_log_path, stderr_log_path) = if req.context.browser.is_some() {
-        (
-            Path::new("/dev/null").to_path_buf(),
-            Path::new("/dev/null").to_path_buf(),
-        )
-    } else {
-        (run_dir.join("stdout.jsonl"), run_dir.join("stderr.log"))
-    };
-    let stderr_log_path_for_task = stderr_log_path.clone();
-
-    // 前回の run（リトライ）が残した結果ファイルを、今回の run の結果と誤読しないよう先に消す
-    // （claude_code / codex と同じ。ADR-0006 D3）。
-    // ADR-0036 D1/D2: 置き場はディスパッチャが決めた `artifacts_dir`（共有 workspace ではタスクごと）。
-    let artifacts_rel = req.artifacts_rel();
-    let result_path = req.artifact_path("result.json");
-    let _ = tokio::fs::remove_file(&result_path).await;
-    clear_delegate_file(&req.artifacts_dir).await;
+    let RunPaths {
+        run_dir,
+        stdout_log: stdout_log_path,
+        stderr_log: stderr_log_path,
+        artifacts_rel,
+        ..
+    } = prepare_run(req, run_id, "stdout.jsonl").await?;
 
     // 必須規則（作業場所の CLAUDE.md）は prompt の先頭に写す。opencode は AGENTS.md があると CLAUDE.md を
     // 読まないので、作業ツリーの file に頼らない。読めなければ run を落とす。
@@ -893,8 +863,6 @@ async fn run_acp(
     if let Err(e) = crate::skills::deliver_agent_skills(req.cwd(), &req.context.skills).await {
         warn!("run {run_id}: failed to deliver skills to .agents/skills: {e}");
     }
-    crate::campaign_pin::enforce(&run_dir, req).await?;
-    crate::subprocess::write_run_request(&run_dir, req, run_id).await;
     crate::subprocess::write_run_prompt(&run_dir, &prompt, run_id).await;
 
     let mut command = Command::new(&config.command);
@@ -945,22 +913,7 @@ async fn run_acp(
         .stdout
         .take()
         .ok_or_else(|| AdapterError::Other("worker stdout was not piped".into()))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| AdapterError::Other("worker stderr was not piped".into()))?;
-
-    let stderr_task = tokio::spawn(async move {
-        let mut reader = stderr;
-        match tokio::fs::File::create(&stderr_log_path_for_task).await {
-            Ok(mut file) => {
-                if let Err(e) = tokio::io::copy(&mut reader, &mut file).await {
-                    warn!("failed to write worker stderr.log: {e}");
-                }
-            }
-            Err(e) => warn!("failed to create worker stderr.log: {e}"),
-        }
-    });
+    let stderr_task = spawn_capture_stderr(&mut child, &stderr_log_path, run_id)?;
 
     let mut stdout_file = tokio::fs::File::create(&stdout_log_path).await?;
     let mut reader = BufReader::new(stdout);
@@ -1383,7 +1336,7 @@ async fn run_acp(
                         }
                     }
                     Ok(WaitOutcome::Eof) => {
-                        return finish_run(
+                        return finish_session(
                             &mut child,
                             stdin,
                             &session_id,
@@ -1403,7 +1356,7 @@ async fn run_acp(
                         .await;
                     }
                     Ok(WaitOutcome::TimedOut(terminal)) => {
-                        return finish_run(
+                        return finish_session(
                             &mut child,
                             stdin,
                             &session_id,
@@ -1543,7 +1496,7 @@ async fn run_acp(
         },
     };
 
-    finish_run(
+    finish_session(
         &mut child,
         stdin,
         &session_id,

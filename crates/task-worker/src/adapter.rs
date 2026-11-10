@@ -2,11 +2,15 @@
 //! アダプタはワーカー固有の事情を閉じ込め、結果を `RunOutcome` に正規化して返す。
 //! 状態遷移の判断はアダプタでは行わない（task-dispatch の責務）。
 
+use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use task_core::{ArtifactRef, ProgressFields, RateLimitObservation, Usage};
+use tokio::process::Child;
+use tokio::task::JoinHandle;
+use tracing::warn;
 
 use crate::protocol::{Evidence, ProviderFailure, RunRequest};
 
@@ -123,6 +127,76 @@ impl AdapterError {
             ProviderFailure::Exhausted => AdapterError::Exhausted(message.to_string()),
         }
     }
+}
+
+/// 監視 loop の締め切り（ADR-0003 D4、ADR-0072 D7）。超過していなければ次に待つ時間（wall clock と idle の
+/// 残りの小さい方）。wall clock の超過は予算切れ `BudgetExhausted{WallClock}`（continuation の対象。文言は
+/// dispatcher の `classify_budget_kind_from_text` が見る語）、idle の超過は harness_error に分類変更しない
+/// retryable な `Error`（ADR-0072 §7 U7）。両方が超過なら wall clock。usage は載せない（観測できる adapter が
+/// 自分で載せる）。`idle_timeout` は値で受ける（adapter ごとに縮めることがある。ADR-0047 D4）。終端は
+/// `Terminal` が大きいので箱に入れる（clippy `result_large_err`）。
+pub(crate) fn deadline_terminal(
+    start: Instant,
+    last_activity: Instant,
+    wall_clock: Duration,
+    idle_timeout: Duration,
+) -> Result<Duration, Box<Terminal>> {
+    let wall_elapsed = start.elapsed();
+    if wall_elapsed >= wall_clock {
+        return Err(Box::new(Terminal::BudgetExhausted {
+            kind: task_core::BudgetKind::WallClock,
+            message: "wall clock exceeded".into(),
+            usage: None,
+        }));
+    }
+    let idle_elapsed = last_activity.elapsed();
+    if idle_elapsed >= idle_timeout {
+        return Err(Box::new(Terminal::Error {
+            message: "idle timeout".into(),
+            retryable: true,
+            usage: None,
+        }));
+    }
+    Ok((wall_clock - wall_elapsed).min(idle_timeout - idle_elapsed))
+}
+
+/// harness の stderr を `path` に写す task（終わった後の供給側失敗の分類は `subprocess::read_tail` で
+/// その file を読む。ADR-0010 D5）。stderr が pipe でなければ `AdapterError::Other`。
+pub(crate) fn spawn_capture_stderr(
+    child: &mut Child,
+    path: &Path,
+    run_id: &str,
+) -> Result<JoinHandle<()>, AdapterError> {
+    let mut reader = child
+        .stderr
+        .take()
+        .ok_or_else(|| AdapterError::Other("worker stderr was not piped".into()))?;
+    let path = path.to_path_buf();
+    let run_id = run_id.to_string();
+    Ok(tokio::spawn(async move {
+        match tokio::fs::File::create(&path).await {
+            Ok(mut file) => {
+                if let Err(e) = tokio::io::copy(&mut reader, &mut file).await {
+                    warn!("run {run_id}: failed to write worker stderr.log: {e}");
+                }
+            }
+            Err(e) => warn!("run {run_id}: failed to create worker stderr.log: {e}"),
+        }
+    }))
+}
+
+/// usage に cost が無く model が分かるときだけ、静的単価表（`task_core::estimate_cost_usd`。ADR-0061）で
+/// 埋める。harness が報告した実測の cost は上書きしない。単価表に無い model・token の欠けは `None` のまま
+/// （不明は不明のまま。予算の会計を推測で埋めない）。
+pub(crate) fn with_estimated_cost(usage: Option<Usage>, model: Option<&str>) -> Option<Usage> {
+    usage.map(|mut u| {
+        if u.cost_usd.is_none()
+            && let Some(model) = model
+        {
+            u.cost_usd = task_core::estimate_cost_usd(model, &u);
+        }
+        u
+    })
 }
 
 /// run 途中のイベント受け口。ディスパッチャがストアへ `WorkerProgress` / `ArtifactProduced` を追記する。
@@ -328,3 +402,7 @@ pub trait WorkerAdapter: Send + Sync {
         None
     }
 }
+
+#[cfg(test)]
+#[path = "adapter_tests.rs"]
+mod run_common_tests;

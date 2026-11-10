@@ -2,9 +2,13 @@
 //! stub の `repo_health.py`（隣の `stub.json` の report の文字列をそのまま `--out` に書き、`exit` で終わる）と
 //! `health/engine.py`（本物と同じ `is_fail_grade`・`policy_review_files`）を commit して使う。検査器は適用判定
 //! （`repo_facts` → `applicability`）が返したものを渡す。外部ネットワークに出ず、LLM を呼ばない。
+//!
+//! 時間切れの試験の stub は 10 秒だけ眠る（`stub.json` の `sleep`）。検査器は `process_group(0)` の別の group で
+//! 動くので、試験の process が締め切りの kill より先に終わる・殺されると、親への signal が届かずに眠りの終わりまで残る。
+//! 眠りを短くして残る時間を抑え、締め切りで消えたことは [`assert_checkers_reaped`] で確かめる。
 
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 use task_core::RepoId;
@@ -28,9 +32,18 @@ with open(os.path.join(here, "stub.json")) as f:
 if stub.get("count"):
     with open(stub["count"], "a") as f:
         f.write("run\n")
+WOKE = "import os, sys, time\ntime.sleep(int(sys.argv[1]))\nwith open(sys.argv[2], 'a') as f:\n    f.write('%d woke\\n' % os.getpid())\n"
+if stub.get("pids"):
+    import subprocess, time
+    child = subprocess.Popen([sys.executable, "-I", "-c", WOKE, str(stub["sleep"]), stub["pids"]])
+    with open(stub["pids"], "a") as f:
+        f.write("%d %f\n%d %f\n" % (os.getpid(), time.time(), child.pid, time.time()))
 if stub.get("sleep"):
     import time
     time.sleep(stub["sleep"])
+    if stub.get("pids"):
+        with open(stub["pids"], "a") as f:
+            f.write("%d woke\n" % os.getpid())
 if stub.get("report") is not None:
     with open(argv[argv.index("--out") + 1], "w") as f:
         f.write(stub["report"])
@@ -422,7 +435,7 @@ fn health_evidence_gate_missing_or_broken_report_is_error() {
         (stub_json(0, Some("not json")), "report_invalid:"),
         (stub_json(0, Some(&wrong_schema)), "report_invalid:"),
         (
-            json!({"exit": 0, "sleep": 30, "report": null}).to_string(),
+            json!({"exit": 0, "sleep": 10, "report": null}).to_string(),
             "checker_not_run:",
         ),
     ];
@@ -452,6 +465,113 @@ fn health_evidence_gate_missing_or_broken_report_is_error() {
         assert!(reason.starts_with(token), "{token}: {reason}");
         assert!(!ev.reviewable);
     }
+}
+
+/// 時間切れの試験の stub が `file` に書いた行（`<pid> <起動の UNIX 秒>`。孫の行も同じ形。眠りを終えた印
+/// `<pid> woke` は数に入れない）。
+fn recorded_checkers(file: &Path) -> Vec<(u32, f64)> {
+    let text = std::fs::read_to_string(file).unwrap_or_default();
+    (text.lines())
+        .filter_map(|line| {
+            let (pid, at) = line.split_once(' ')?;
+            Some((pid.parse().ok()?, at.parse().ok()?))
+        })
+        .collect()
+}
+
+/// `/proc/<pid>` が無いか、state が Z（殺された後で親の回収を待つだけ）。
+fn reaped(pid: u32) -> bool {
+    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Err(_) => true,
+        Ok(stat) => {
+            (stat.rsplit_once(')')).is_some_and(|(_, rest)| rest.trim_start().starts_with('Z'))
+        }
+    }
+}
+
+fn unix_now() -> f64 {
+    (SystemTime::now().duration_since(UNIX_EPOCH))
+        .map(|d| d.as_secs_f64())
+        .unwrap_or_default()
+}
+
+/// 不変条件の確かめ: stub が `file` に書いた検査器の pid（孫を含む）が、最も早い起動から `deadline` + 1 秒の内に
+/// すべて消えた（`/proc/<pid>` が無いか state が Z）。stub は 10 秒眠るので、締め切りの kill が抜けるとこの上限の
+/// 時点（起動から 3 秒。締め切り 2 秒のとき）でまだ眠っていて落ちる。1 秒の余裕は kill の起動と回収と待ちの刻みの分。
+/// 呼び出し側が stub の終わりまで待った場合（kill が抜けても評価は子の終わりを待って戻る）は、上限の前に消えていても
+/// 眠りを終えた印 `<pid> woke` が残るので落ちる。待ちは 50ms の sleep の繰り返し（CPU を焼かない）。
+pub(crate) async fn assert_checkers_reaped(file: &Path, deadline: Duration) {
+    let checkers = recorded_checkers(file);
+    assert!(
+        !checkers.is_empty(),
+        "the stub checker never recorded its pid in {}",
+        file.display()
+    );
+    let started = (checkers.iter().map(|(_, at)| *at)).fold(f64::INFINITY, f64::min);
+    let until = started + (deadline + Duration::from_secs(1)).as_secs_f64();
+    loop {
+        let alive: Vec<u32> = (checkers.iter().map(|(pid, _)| *pid))
+            .filter(|pid| !reaped(*pid))
+            .collect();
+        if alive.is_empty() {
+            let text = std::fs::read_to_string(file).unwrap_or_default();
+            assert!(
+                !text.lines().any(|line| line.ends_with(" woke")),
+                "a checker process slept to the end instead of being killed: {text}"
+            );
+            return;
+        }
+        assert!(
+            unix_now() < until,
+            "checker processes {alive:?} outlived the deadline ({deadline:?}) + 1s"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// 不変条件（D4.2）: 呼び出し側が評価を待つのをやめても（本番の経路は `spawn_blocking` の評価を review・WU の check の
+/// 非同期 task が待ち、その task は abort・drop され得る）、締め切りで検査器の process group（孫を含む）が殺される。
+/// 既存の時間切れの試験は評価の戻りを待つので、待ちをやめた後の kill と孫の kill を見ていない。
+#[tokio::test]
+async fn health_evidence_gate_timeout_kills_group_after_caller_stops_waiting() {
+    let pids_dir = tempfile::tempdir().unwrap();
+    let pids = pids_dir.path().join("pids");
+    let stub = json!({"exit": 0, "sleep": 10, "report": null, "pids": pids}).to_string();
+    let (dir, base) = repo_with_checker(&stub, true);
+    let head = commit(dir.path(), &[(SRC, "fn b() {}\n")], "change");
+    let checker = applied(dir.path(), &base, None);
+    let deadline = Duration::from_secs(2);
+    let repo = dir.path().to_path_buf();
+    let waiting = tokio::spawn(async move {
+        tokio::task::spawn_blocking(move || {
+            run_health_check(
+                RepoId::new(),
+                &repo,
+                &base,
+                &head,
+                &checker,
+                BUNDLED,
+                deadline,
+            )
+        })
+        .await
+    });
+    // stub と孫の 2 行が書かれるまで待つ（評価は締め切りで必ず戻るので、戻ったら起動しなかったとして落ちる）。
+    while recorded_checkers(&pids).len() < 2 {
+        assert!(
+            !waiting.is_finished(),
+            "the check ended before the stub started"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    waiting.abort();
+    let stopped = waiting
+        .await
+        .expect_err("the caller stops waiting before the deadline");
+    assert!(stopped.is_cancelled(), "{stopped:?}");
+
+    assert_checkers_reaped(&pids, deadline).await;
 }
 
 /// 不変条件: base に検査器の無い repo は、適用判定が同梱の検査器を返し、gate はそれ（release の `repo-health/`。base から

@@ -262,13 +262,15 @@ fn health_review_policy_base_side_wins_over_candidate_and_worktree() {
     assert_eq!(policy.high_risk[0].class, "candidate-class");
 }
 
-/// 時間の上限を超えた script は殺して `Unavailable`（tick を止め続けない）。
+/// 時間の上限を超えた script は殺して `Unavailable`（tick を止め続けない）。stub は 10 秒だけ眠る（試験の process が
+/// 締め切りの kill より先に終わっても、別の process group の stub が残るのはそこまで）。kill が抜ければ戻りは stub の
+/// 終わり（10 秒）まで遅れるので、戻りの時間の上限（8 秒）で見分ける。
 #[test]
 fn health_review_policy_timeout_is_unavailable() {
     let dir = init_repo();
     commit(
         dir.path(),
-        &[(CHECKER_SCRIPT, "import time\ntime.sleep(120)\n")],
+        &[(CHECKER_SCRIPT, "import time\ntime.sleep(10)\n")],
         "slow checker",
     );
     let started = std::time::Instant::now();
@@ -283,7 +285,7 @@ fn health_review_policy_timeout_is_unavailable() {
         "{why}"
     );
     assert!(
-        started.elapsed() < Duration::from_secs(60),
+        started.elapsed() < Duration::from_secs(8),
         "{:?}",
         started.elapsed()
     );

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import importlib.util
 import os
@@ -124,11 +125,22 @@ def _collect(rule: Rule, ctx: Context, tree: Tree) -> dict[str, Hit]:
     return hits
 
 
-def _exception(profile: Profile, rule_id: str, fp: str, paths: list[str]) -> Exception_ | None:
+def _exception(profile: Profile, rule_id: str, fp: str, paths: list[str],
+               as_of: datetime.date | None) -> tuple[Exception_ | None, Exception_ | None]:
+    """(免除する例外, 期限切れの例外)。期限内の一致があれば先頭のものだけを返し、無ければ期限切れの先頭を返す。
+
+    期限は base 側（policy の側）の profile の expires と基準日 as_of（base の commit の UTC の日付）で決める。
+    head の profile と実行時の時計は使わない（ADR 2026-11-07-repo-health-contract 付記 2026-11-10）。
+    """
+    expired: Exception_ | None = None
     for exc in profile.exceptions.get(rule_id, []):
-        if exc.matches(fp, paths):
-            return exc
-    return None
+        if not exc.matches(fp, paths):
+            continue
+        if not exc.expired(as_of):
+            return exc, None
+        if expired is None:
+            expired = exc
+    return None, expired
 
 
 def _finding(rule: Rule, fp: str, hit: Hit, base: Hit | None, ctx: Context, snap: Snapshot) -> dict:
@@ -143,7 +155,7 @@ def _finding(rule: Rule, fp: str, hit: Hit, base: Hit | None, ctx: Context, snap
     else:
         delta = "existing"
     evidence = _evidence(hit.evidence)
-    exc = _exception(ctx.profile, rule.id, fp, [e["path"] for e in evidence])
+    exc, expired = _exception(ctx.profile, rule.id, fp, [e["path"] for e in evidence], snap.base_date)
     finding = {
         "rule_id": rule.id,
         "fingerprint": fp,
@@ -154,8 +166,10 @@ def _finding(rule: Rule, fp: str, hit: Hit, base: Hit | None, ctx: Context, snap
         "snapshot": snap.finding_snapshot(),
         "scope": {"kind": hit.scope[0], "id": hit.scope[1]},
         "exception": exc.as_report() if exc else None,
-        "rationale": hit.rationale,
     }
+    if expired is not None:  # exception は null のまま（is_fail_grade は変えずに fail 級に数える）
+        finding["expired_exception"] = expired.as_report()
+    finding["rationale"] = hit.rationale
     if hit.value is not None and base is not None and base.value is not None:
         bl = {"value": base.value, "head_value": hit.value}
         if hit.threshold is not None:
@@ -382,6 +396,8 @@ def build_report(snap: Snapshot, profile: Profile | None, policy_version: str, r
             "changed": any(f["base_blob"] != f["head_blob"] for f in policy_files),
             "files": policy_files,
         }
+        if profile.has_expiring_exceptions:
+            policy["exceptions_as_of"] = snap.base_date.isoformat() if snap.base_date else None
         for rid in _select(registry, profile.mentioned_rules(), only):
             rule = registry.get(rid)
             cfg = profile.rule_config(rid)

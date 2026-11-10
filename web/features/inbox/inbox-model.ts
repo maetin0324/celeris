@@ -29,6 +29,7 @@ export const INBOX_KINDS: readonly InboxKind[] = [
   "task_unscheduled",
   "review_resync_halted",
   "health_repeat",
+  "dependents_reopened",
   "script_control",
 ];
 
@@ -57,6 +58,7 @@ export const KIND_LABELS: Record<InboxKind, string> = {
   task_unscheduled: "ready のまま起きない",
   review_resync_halted: "レビューの再同期が止まっている",
   health_repeat: "修復の後も同じ health の指摘が残る",
+  dependents_reopened: "依存先の復帰で戻した後続",
   script_control: "script の自動の戻し・停止",
 };
 
@@ -77,8 +79,13 @@ const DESTRUCTIVE_KEYS = new Set([
   "drop",
 ]);
 
+/**
+ * 対象を key に持つ選択（`<操作>:<対象>`）は操作の部分で見分ける。受信箱 `dependents_reopened` の
+ * `cancel:<戻した後続の task id>`（ADR 2026-11-08-health-enforcement-loop D7.3）。
+ */
 export function isDestructive(option: InboxOption): boolean {
-  return DESTRUCTIVE_KEYS.has(option.key);
+  const action = option.key.split(":", 1)[0] ?? option.key;
+  return DESTRUCTIVE_KEYS.has(action);
 }
 
 /** 画面から答えられず、専用画面で操作する種類（answer が 409 native_action_required を返す）。 */

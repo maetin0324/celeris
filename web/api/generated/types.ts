@@ -344,6 +344,13 @@ export type AttentionItem = {
   "type": "health_repeat";
 } | {
   "at": string;
+  "kept": Array<KeptDependent>;
+  "pending": Array<PendingDependent>;
+  "seq": number;
+  "task": TaskRef;
+  "type": "dependents_reopened";
+} | {
+  "at": string;
   "integrate_task_escalated"?: string | null;
   "integrate_task_offered": boolean;
   "request": IntegrationRequest;
@@ -3598,7 +3605,7 @@ export type InboxItem = {
   "title": string;
 };
 
-export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "credential_wait" | "disk_full" | "delivery_skipped" | "integration_request" | "unintegrated" | "stalled" | "project_stalled" | "human_wait_aging" | "release_unpromoted" | "task_unscheduled" | "review_resync_halted" | "health_repeat" | "script_control";
+export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "credential_wait" | "disk_full" | "delivery_skipped" | "integration_request" | "unintegrated" | "stalled" | "project_stalled" | "human_wait_aging" | "release_unpromoted" | "task_unscheduled" | "review_resync_halted" | "health_repeat" | "dependents_reopened" | "script_control";
 
 export type InboxLink = {
   "href": string;
@@ -4507,6 +4514,11 @@ export type PausePolicy = {
 };
 
 export type PauseSource = "human" | "agent";
+
+export type PendingDependent = {
+  "depends_on": Array<TaskId>;
+  "task": TaskRef;
+};
 
 export type Permissions = {
   "approvals"?: Array<string>;

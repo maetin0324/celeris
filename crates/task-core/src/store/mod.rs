@@ -157,6 +157,7 @@ pub use credential_wait::{
     CredentialWaitStore, EnterWaitOutcome,
 };
 pub use decision_log::CampaignResend;
+pub use events::LatestEventKind;
 pub use idempotency::{IdempotencyClaim, IdempotencyLookup, RetryClaimed};
 pub use root_done::{RootDoneState, RootDoneSummary};
 pub use script_behavior_changes::BehaviorChangeApproval;

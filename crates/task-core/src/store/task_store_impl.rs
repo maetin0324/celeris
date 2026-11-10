@@ -443,8 +443,8 @@ impl TaskStore for SqliteStore {
         self.event_rows_for_impl(task_id, after_seq, limit)
     }
 
-    fn latest_delivery_skipped_rows(&self) -> Result<Vec<EventRow>, StoreError> {
-        self.latest_delivery_skipped_rows_impl()
+    fn latest_event_rows(&self, kind: super::LatestEventKind) -> Result<Vec<EventRow>, StoreError> {
+        self.with_read_conn(|conn| super::events::latest_event_rows(conn, kind))
     }
 
     fn open_integration_requests(&self) -> Result<Vec<EventRow>, StoreError> {

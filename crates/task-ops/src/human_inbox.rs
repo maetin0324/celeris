@@ -58,13 +58,16 @@ pub enum InboxKind {
     // ADR 2026-11-08-health-enforcement-loop D4.3: 修復の後も同じ health の指摘が残り源の task を Blocked にした
     // （木の root ごと・指摘の集合ごとに 1 件。受信箱では答えない）。
     HealthRepeat,
+    // ADR 2026-11-08-health-enforcement-loop D7.3・決定 p9-scope: 依存先の終端からの復帰で戻した後続がまだ動いていない
+    // （依存先ごとに 1 件。選択肢は戻した後続ごとの cancel）。
+    DependentsReopened,
     // ADR 2026-11-02-ts-control-layer-boundary 付記 S5-7: script の自動の戻し・無効化・停止（受信箱では答えない）。
     ScriptControl,
     // 人の決定 2026-10-08: KB の取り込み待ち（旧 `knowledge_review`）は受信箱に出さない。知識画面で扱う。
 }
 
 impl InboxKind {
-    pub const ALL: [InboxKind; 25] = [
+    pub const ALL: [InboxKind; 26] = [
         InboxKind::Decision,
         InboxKind::PlanGate,
         InboxKind::PhaseGate,
@@ -89,6 +92,7 @@ impl InboxKind {
         InboxKind::TaskUnscheduled,
         InboxKind::ReviewResyncHalted,
         InboxKind::HealthRepeat,
+        InboxKind::DependentsReopened,
         InboxKind::ScriptControl,
     ];
 
@@ -148,6 +152,7 @@ impl InboxKind {
             InboxKind::TaskUnscheduled => "task_unscheduled",
             InboxKind::ReviewResyncHalted => "review_resync_halted",
             InboxKind::HealthRepeat => "health_repeat",
+            InboxKind::DependentsReopened => "dependents_reopened",
             InboxKind::ScriptControl => "script_control",
         }
     }
@@ -260,6 +265,7 @@ pub fn route_attention(item: &AttentionItem) -> Option<InboxKind> {
         AttentionItem::Stalled { .. } => Some(InboxKind::Stalled),
         AttentionItem::ReviewResyncHalted { .. } => Some(InboxKind::ReviewResyncHalted),
         AttentionItem::HealthRepeat { .. } => Some(InboxKind::HealthRepeat),
+        AttentionItem::DependentsReopened { .. } => Some(InboxKind::DependentsReopened),
         // ADR 2026-10-08-browser-prod-enablement D2: browser の前提で止まった task。人の手は task 詳細の
         // browser 節（policy の編集）か release・台帳の作り直しなので、browser の人手の種類に入れる。
         AttentionItem::BrowserPrerequisite { .. } => Some(InboxKind::BrowserWait),
@@ -1378,6 +1384,7 @@ impl Builder<'_> {
                 links: vec![link("task 詳細", format!("/tasks/{}", task.id))],
             }),
             AttentionItem::HealthRepeat { .. } => return self.health_repeat(a),
+            AttentionItem::DependentsReopened { .. } => return self.dependents_reopened(a),
             AttentionItem::Unintegrated {
                 task,
                 repo_id,
@@ -1890,6 +1897,8 @@ pub(crate) use read::retain_touching;
 
 mod item_task;
 pub use item_task::item_task_id;
+
+pub mod dependents_reopened;
 
 #[cfg(test)]
 mod tests;

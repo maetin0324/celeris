@@ -10,11 +10,11 @@
 //! Phase 3 のディスパッチャが `transition()` の結果をこのストアに書き戻す）。
 //!
 //! ## module map（audit.md §6.2 案A、責務別の切り出し）
-//! 領域ファイルはどれも `impl SqliteStore` ブロックに `_tx`/`_locked`/行変換の内部 helper と、
-//! `TaskStore` の method 本体（`<method>_impl`）を置く（可視性は `pub(super)`、`execution/` 配下は
-//! `pub(in crate::store)`、既存の `pub(crate)` はそのまま）。`impl TaskStore for SqliteStore` は
-//! `task_store_impl.rs` の 1 ブロックだけで、全 method が `self.<method>_impl(..)` の 1 行転送
-//! （macro は使わない。method 名で grep すれば本体に届く）。
+//! 領域ファイルは `impl SqliteStore` ブロックに `_tx`/`_locked`/行変換の内部 helper と、
+//! 領域固有の `<method>_impl` を置く（可視性は `pub(super)`、`execution/` 配下は
+//! `pub(in crate::store)`、既存の `pub(crate)` はそのまま）。能力 trait の method は trait file の
+//! `impl … for SqliteStore` に本体を置く。残る `TaskStore` method は `task_store_impl.rs` の
+//! 1 ブロックで helper へ転送する（macro は使わない）。
 //!
 //! 依存の向き: 領域 → `mod.rs` 基盤、`execution/*` → `tasks`/`events`/`transition`、
 //! `approvals`/`messages` → `transition`、`transition` → `tasks`/`events`、`events` → `execution`（行変換）。
@@ -35,26 +35,27 @@
 //! - `query.rs`: `TaskQuery::list_page` 系の一覧部品（`ListFilter`・`ListOrder`・`Page`・
 //!   `CursorPayload`・cursor の符号化・`filter_predicate`・keyset 述語）。
 //! - `task_store.rs`: `trait TaskStore` の宣言。
-//! - `task_store_impl.rs`: `impl TaskStore for SqliteStore`（1 ブロック、1 行転送だけ）。
-//! - `org_directory.rs`・`task_query.rs`: `TaskStore` の supertrait（名簿の読み出し・task の一覧と event 行）。
-//!   consumer が依存する宣言と `impl … for SqliteStore`（SQL の本体はここ）。
+//! - `task_store_impl.rs`: `impl TaskStore for SqliteStore`（1 ブロック、残る method の転送）。
+//! - `org_directory.rs`: `OrgDirectory`（`org_list`/`org_get`/`org_upsert`、`project_list`/`project_get`/
+//!   `milestone_list`）。SQL 本体は `impl OrgDirectory for SqliteStore` にあり、`org.rs` の
+//!   `org_list_tx`・`org_upsert_tx` を使う。
+//! - `task_query.rs`: `TaskQuery`（`list_page`・`event_rows_for`）。SQL 本体は `impl TaskQuery for SqliteStore` にある。
 //! - `tasks.rs`: task 行の読み書き（`get_locked`/`insert_tx`/`update_task_tx`/`rewrite_task_tx`）と、
-//!   task・lease の `TaskStore` 本体（`insert`/`get`/`list`/`list_page`/`count_by_status`/`children`/
+//!   task・lease の `TaskStore` 本体（`insert`/`get`/`list`/`count_by_status`/`children`/
 //!   `create_task`/`delegate_children`/`retry_task`/`update_task`/`acquire_lease`/`renew_lease`/
 //!   `extend_task_lease`/`release_lease`/`ready_tasks`/`halted_by_pause`）。
 //! - `events.rs`: `append_event_tx`（events への追記）と、同じ tx で書く Event 由来の投影
 //!   （`runs` 行の終端化・木の `work_units.child_task_id`・`decisions` 行と `decisions` の行変換）、
 //!   events を読む/追記する `TaskStore` 本体（`append_event`/`events_for*`/`events_since`/
-//!   `latest_event_id`/`event_rows_for`）。
+//!   `latest_event_id`）。
 //! - `approvals.rs`: 遷移と判断の適用（`apply_transition_with_events`、Plan の承認 `complete_plan`）。
 //!   どれも 1 つの IMMEDIATE tx で `apply_transition_tx`/`append_event_tx` を呼ぶ（`transition.rs` は tx 内の
 //!   部品、ここは入口）。
 //! - `transition.rs`: `apply_transition_tx`（状態機械の適用と Event の追記を同じ tx で行う）と
 //!   終端遷移の cascade・非終端の子/依存の探索。
-//! - `org.rs`: 組織ノードの行変換・`profile_json`・`celerisctl org migrate-v2` 用の低レベル書き換えと
-//!   `org_*` の本体（ADR-0033 D1）。
-//! - `projects.rs`: 案件・途中目標の行変換、slug の検査/backfill、停止中の祖先の判定と
-//!   `project_*`/`milestone_*` の本体（ADR-0033 D2）。
+//! - `org.rs`: 組織ノードの行変換・`profile_json`・`org_list_tx`/`org_upsert_tx` と
+//!   `celerisctl org migrate-v2` 用の低レベル書き換え（ADR-0033 D1）。
+//! - `projects.rs`: 案件・途中目標の行変換、slug の検査/backfill、停止中の祖先の判定。
 //! - `repos.rs`: 案件のリポジトリ（`project_repos`）の行と backfill、`repo_*` の本体（ADR-0043 D1）。
 //! - `integrations.rs`: 変更の取り込み（`task_integrations`）の行と `integration_*` の本体（ADR-0043 D5）。
 //! - `messages.rs`: 対話（`messages`）とコメント（`task_comments`）の行変換、`message_*`・

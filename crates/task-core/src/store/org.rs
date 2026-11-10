@@ -173,14 +173,6 @@ impl SqliteStore {
         pin.check_org(&nodes).map_err(StoreError::Invalid)
     }
 
-    pub(super) fn org_list_impl(&self) -> Result<Vec<OrgNode>, StoreError> {
-        self.with_read_conn(Self::org_list_tx)
-    }
-
-    pub(super) fn org_upsert_impl(&self, node: &OrgNode) -> Result<OrgNode, StoreError> {
-        self.org_upsert_with_actor(node, None)
-    }
-
     /// Persist a browser settings change and its org audit event atomically.
     pub fn org_upsert_browser_settings(
         &self,

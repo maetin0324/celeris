@@ -2,8 +2,8 @@ use super::*;
 use task_core::approval::ApprovalStore;
 use task_core::org::{OrgKind, OrgNode};
 use task_core::{
-    Budget, Check, Criterion, SqliteStore, Status, Task, TaskId, TaskKind, Tier, WorkerHint,
-    WorkspaceSpec,
+    Budget, Check, Criterion, OrgDirectory, SqliteStore, Status, Task, TaskId, TaskKind, Tier,
+    WorkerHint, WorkspaceSpec,
 };
 
 fn node(id: &str, kind: OrgKind) -> OrgNode {

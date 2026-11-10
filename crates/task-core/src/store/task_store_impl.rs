@@ -459,15 +459,6 @@ impl TaskStore for SqliteStore {
         self.count_by_status_impl()
     }
 
-    // ---- ADR-0033 D1: 組織 ----
-    fn org_list(&self) -> Result<Vec<OrgNode>, StoreError> {
-        self.org_list_impl()
-    }
-
-    fn org_upsert(&self, node: &OrgNode) -> Result<OrgNode, StoreError> {
-        self.org_upsert_impl(node)
-    }
-
     fn org_seed(&self, nodes: &[OrgNode]) -> Result<(), StoreError> {
         self.org_seed_impl(nodes)
     }

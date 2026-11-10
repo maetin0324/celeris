@@ -17,6 +17,7 @@ completed: 2026-11-10
 - mcp-port: 済み。計画 v2 の形（1 行転送）では repo-health の `size.responsibility-growth` が落ちたので plan_issue で返し、計画 v3 の案 (a) で直した（下の「mcp-port の check の不合格と直し」）。
 - record: 済み。前後の計測（下の「前後の計測」）、ADR の付記（実装との突き合わせ）、提案節の引き継ぎを書いた。crates/ は変えていない。
 - mcp-ports（task 01M73HCEX581ACXN6W7VP4M26Q）: 済み。final review の指摘（celeris-mcp の tool 本体が `McpState::blocking` から具体型の store を受け、fake に替えられない）を直した（下の「mcp-ports の結果」）。
+- move-org（この WU）: org_list・org_upsert を OrgDirectory に移し、承認済みの write-set 外 4 file を変更した（下の「move-org の結果」）。
 
 ## 前後の計測（record、提出時の HEAD で実行）
 - 後の値は [after.json](2026-11-10-taskstore-consumer-ports/after.json)（`measure.py --json`、`head_subject` は「integrate wu/table-writers (phase impl)」）、前の値は着手時の [baseline.json](2026-11-10-taskstore-consumer-ports/baseline.json)。store の行は `bash scripts/dev/check-health.sh`（base は auto、`git merge-base HEAD main`）の report の `size.responsibility-growth` の `baseline.value`（前）と `head_value`（後）。
@@ -178,6 +179,7 @@ task 01M73HCEX581ACXN6W7VP4M26Q の WU mcp-ports。前回の final review の指
 - `bash scripts/dev/check-health.sh --base "$CELERIS_WU_BASE"` → exit 0（mode full、verdict pass、fail 級 0、new 0、worsened 0）
 
 ### 変更（commit の件名）
+- `phase 1: move org_list and org_upsert into OrgDirectory`
 - `mcp-ports: McpState に OrgDirectory・TaskQuery の handle と blocking_on を置き、projects と task 一覧の本体を狭い trait で受ける`
 - `mcp-ports: 進捗に mcp-ports の結果を書く`
 
@@ -187,13 +189,28 @@ task 01M73HCEX581ACXN6W7VP4M26Q の WU mcp-ports。前回の final review の指
 - `route_judgments` 表は crates/ に読み手も書き手も無い（store-prune の後）。表を消すかは、本番の DB で行が 0 件であることを確かめてから、migration を足す別の task で決める（データを失わない規則）。
 - check-health の `dup.state`（warning、worsened、候補）: 表 `t` の書き手として `measure.py` の docstring（23・24 行目の `INSERT … INTO t` の説明）が数えられた。ports-design で入った誤検出で、verdict には影響しない。
 
+## move-org の結果
+
+実装前 brief:
+
+1. 根本原因: 名簿の能力が OrgDirectory（org_get・project_*・milestone_list）と TaskStore（org_list・org_upsert）に分かれ、celeris-mcp の resources.rs・tools/org.rs が TaskStore を名指していた。
+2. 責務 owner: `crates/task-core/src/store/org_directory.rs`。再利用する SQL helper は `store/org.rs` にある。
+3. 既存の再利用先: `org_list_tx`・`org_upsert_tx`、および `store/model_catalog.rs` の trait 実装。
+4. 選択肢: TaskStore に残す案と OrgDirectory に統合する案を比較し、人の決定に従って統合した。
+5. 追加状態・分岐・fallback: 無し。`org_upsert` は既存の `org_upsert_tx` を同じ IMMEDIATE transaction で呼ぶ。
+6. 撤去対象: TaskStore の宣言、`org_list_impl`・`org_upsert_impl`、`task_store_impl.rs` の転送、古い module map の説明。
+7. 不変条件: SQL・validation・transaction の境界を保ち、org の状態更新と監査 event を原子的に保つ。
+
+- 変更 file は 34 個（R3 write-set 内 30 個、承認済みの外 4 個）。名簿の宣言・本体・転送・module map、MCP fake、既存呼び手の trait import/UFCS を修正した。
+- write-set 外の変更は人が認めた 4 file のみ。`approval/tests.rs`・`report/tests.rs` は UFCS の trait 名だけを OrgDirectory に変更し、`celerisctl/tests/org_migrate_v2.rs`・`celeris/tests/trial_context_canary_e2e.rs` は OrgDirectory import を追加した。前者 2 file は他の行を変更していない。`slices.json` は変更していない。
+- store module 本体の行数（空行・注釈・use・mod 宣言を除く）は `$CELERIS_WU_BASE` の 19371 行から提出時の HEAD の 19369 行へ 2 行減った（`check-health.sh` の `size.responsibility-growth` の値）。
+- 検査: `cargo check --workspace --all-targets --keep-going`・`cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check`・`bash scripts/dev/check-health.sh --base "$CELERIS_WU_BASE"` は提出時の HEAD で pass。repo-health は fail_grade=0・new=0・worsened=0。`test-affected.sh --list` は workspace crate 群・web typecheck+unit・ts-verify を列挙した。
+- `bash scripts/dev/test-affected.sh` は終了コード 1。web unit は 104 file / 712 tests pass、Node は 113 tests pass。web `tsc -b` は wrapper に終了され、後続 `test-ts-verify` は temp clone の pnpm offline install が `why-is-node-running@2.3.0` の tarball 不在で失敗した。CELERIS_SCRIPT_RUNNER_CACHE を run の `$TMPDIR` に向けた再実行でも同じ offline tarball 欠落が残った。外部ネットワークを使う再試行はしていない。
+- `slices-check.py --write-set R3` は 4 path を write-set 外と報告した。4 path はいずれも人が承認した例外（task-core approval/report tests、celerisctl org_migrate_v2、celeris trial_context_canary_e2e）。他の変更 path は R3 write-set 内。
+- 未解決事項: `test-affected.sh` の web typecheck / ts-verify が環境要因で pass していない。
+
 ## 提案（次の工程へ渡す事項）
-- **`org_list`・`org_upsert` を `OrgDirectory` へ移すには、R3 の write_set の外の path を先に write_set へ入れる。**
-  - UFCS で呼ぶ 2 file: `crates/task-core/src/approval/tests.rs`（`TaskStore::org_upsert(&store, …)`）と `crates/task-core/src/report/tests.rs`（`crate::store::TaskStore::org_upsert(&store, …)`）。supertrait へ移すと E0782 になり、trait 名を `OrgDirectory` に直す必要がある。
-  - 数字を含む名前の試験 2 file: `crates/celerisctl/tests/org_migrate_v2.rs`（`org_list`）と `crates/celeris/tests/trial_context_canary_e2e.rs`（`org_upsert`）。どちらも具体型で呼ぶので import が要る。
-  - 原因: B0 の `slices.json` の R3 の write_set の試験の正規表現 `^crates/[a-z-]+/tests/[a-z_/]+\.rs$` は file 名の数字を通さない。task-core の src は `lib|store|model|transition`・`store/`・`tree/gate`・`chat/` だけで、`approval/tests.rs`・`report/tests.rs` は入らない。
-  - 計画 v1 では write_set の外を 6 path と数えた。残る 2 path（`crates/task-core/src/org.rs`・`org/directory.rs`）は `OrgDirectory` を `crate::org` に置く案の分で、`store/org_directory.rs` に置いた今は要らない。今の時点で要るのは上の 4 path（`grep -rlE 'org_list|org_upsert' crates` の結果を write_set の正規表現に当てて確かめた）。
-  - write_set を変えるには `slices.json` の変更が要る。検査器・baseline の変更なので、移動の段とは別の review にかける。移した後、celeris-mcp で `TaskStore` を名指す file は `tools/tasks.rs`（`get`）だけになる。
+- `org_list`・`org_upsert` は OrgDirectory へ移動済み。write_set の変更は不要で、承認済み 4 file の修正だけで完了した。
 - **`get` を `TaskQuery` へ移すのは R2 の後の段にする。** 具体型で `get` を呼ぶ `crates/task-worker/src` の試験 3 file（`browser_tests.rs`・`workspace_prune/tests.rs`・`workspace_targets/tests.rs`）を直す必要があり、`browser_tests.rs` は R2 の write_set に入る。具体型で `get` を呼ぶ file の候補（上限）は 266。
 - **store/ の下に port の trait を足すときは、転送の層を作らず、本体を trait の impl に置く。** store module の本体の行は閾値 8000 を超えていて、repo-health の `size.responsibility-growth` は WU base より 1 行でも増えると落ちる。`_impl` への 1 行転送の形では trait 1 つにつき 5 行（trait と impl の見出し・閉じ括弧、supertrait の行）が増える。本体を `impl <trait> for SqliteStore` に移して `_impl` と転送を消すと減る（前例 `store/model_catalog.rs`、今回の `store/org_directory.rs`・`store/task_query.rs`）。1 つの trait の impl は 1 block にしか置けないので、本体を trait の file にまとめ、領域の file の helper は `pub(super)` にして使う。WU の check に `bash scripts/dev/check-health.sh --base "$CELERIS_WU_BASE"` を置くと、celeris が走らせる WU の repo-health と同じ base で確かめられる。
 - **task-dispatch の port は R4 で扱う。** R4（Dispatcher の状態所有と判断/副作用の分割、`depends_on` R2・R3）は「副作用は R2・R3 で分けた port だけを通す」と決めている。task-dispatch は `TaskStore` 直の method を 91 個呼ぶ（after.json）。R4 の write_set に入る `dispatcher/cos_chat/projects.rs`・`cos_chat/review.rs`・`project_wake.rs` は、この task で `OrgDirectory` の import だけを足した。

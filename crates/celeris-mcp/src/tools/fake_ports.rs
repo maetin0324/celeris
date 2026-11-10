@@ -5,6 +5,7 @@
 //! 試験が確かめる。`list_page` は道具が使う形（`ListOrder::UpdatedDesc`・cursor なし・`statuses` と
 //! `project_id` の絞り込み）だけを実装し、それ以外の並びと cursor は `StoreError::Invalid` で断る。
 
+use std::sync::Mutex;
 use task_core::{
     Budget, EventRow, ListFilter, ListOrder, Milestone, MilestoneId, MilestoneStatus, OrgDirectory,
     OrgNode, Page, Project, ProjectId, ProjectStatus, Status, StoreError, Task, TaskId, TaskKind,
@@ -17,7 +18,7 @@ use super::tasks::list_tasks;
 
 #[derive(Default)]
 struct FakePorts {
-    org_nodes: Vec<OrgNode>,
+    org_nodes: Mutex<Vec<OrgNode>>,
     projects: Vec<Project>,
     milestones: Vec<Milestone>,
     tasks: Vec<Task>,
@@ -122,8 +123,24 @@ impl FakePorts {
 }
 
 impl OrgDirectory for FakePorts {
+    fn org_list(&self) -> Result<Vec<OrgNode>, StoreError> {
+        let mut out = self
+            .org_nodes
+            .lock()
+            .map_err(|_| StoreError::Invalid("fake org list lock poisoned".to_string()))?
+            .clone();
+        out.sort_by_key(|node| (node.position, node.id.clone()));
+        Ok(out)
+    }
+
     fn org_get(&self, id: &str) -> Result<Option<OrgNode>, StoreError> {
-        Ok(self.org_nodes.iter().find(|n| n.id == id).cloned())
+        Ok(self
+            .org_nodes
+            .lock()
+            .map_err(|_| StoreError::Invalid("fake org get lock poisoned".to_string()))?
+            .iter()
+            .find(|n| n.id == id)
+            .cloned())
     }
 
     fn project_list(&self) -> Result<Vec<Project>, StoreError> {
@@ -145,6 +162,19 @@ impl OrgDirectory for FakePorts {
             .collect();
         out.sort_by_key(|m| m.seq);
         Ok(out)
+    }
+
+    fn org_upsert(&self, node: &OrgNode) -> Result<OrgNode, StoreError> {
+        let mut nodes = self
+            .org_nodes
+            .lock()
+            .map_err(|_| StoreError::Invalid("fake org upsert lock poisoned".to_string()))?;
+        if let Some(existing) = nodes.iter_mut().find(|existing| existing.id == node.id) {
+            *existing = node.clone();
+        } else {
+            nodes.push(node.clone());
+        }
+        Ok(node.clone())
     }
 }
 
@@ -191,6 +221,37 @@ impl TaskQuery for FakePorts {
 
 fn ids<T>(items: &[T], id: impl Fn(&T) -> &str) -> Vec<String> {
     items.iter().map(|i| id(i).to_string()).collect()
+}
+
+#[test]
+fn port_fake_org_upsert_updates_in_memory_directory() {
+    let fake = FakePorts::default();
+    let now = OffsetDateTime::UNIX_EPOCH;
+    let node = |name: &str, position| OrgNode {
+        profile: Default::default(),
+        id: "ops".to_string(),
+        parent_id: None,
+        name: name.to_string(),
+        kind: task_core::org::OrgKind::Department,
+        genre: None,
+        brief: String::new(),
+        position,
+        created_at: now,
+        updated_at: now,
+    };
+
+    fake.org_upsert(&node("Operations", 2)).expect("insert org");
+    fake.org_upsert(&node("Cluster operations", 1))
+        .expect("update org");
+
+    let rows = fake.org_list().expect("list org");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].name, "Cluster operations");
+    assert_eq!(rows[0].position, 1);
+    assert_eq!(
+        fake.org_get("ops").expect("get org").unwrap().name,
+        "Cluster operations"
+    );
 }
 
 #[test]

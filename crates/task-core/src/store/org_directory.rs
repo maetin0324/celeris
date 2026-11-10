@@ -4,18 +4,22 @@
 //! 名簿を読むだけの consumer（celeris-mcp の `tools/org`・`tools/projects`）はこの trait に依存する。
 //! 実装（SQL）は下の `impl OrgDirectory for SqliteStore` にだけある（前例は `model_catalog.rs`）。行の変換は
 //! `org.rs` の `org_row`・`projects.rs` の `project_row`・`milestone_row` を使う。
-//! `org_list`・`org_upsert` は `TaskStore` に残す（UFCS `TaskStore::org_upsert` と具体型の呼び手が
-//! R3 の write_set の外にあるため。ADR の付記 2026-11-10 v2）。
+//! org の一覧・取得・upsert と案件/途中目標の名簿操作を集約する。SQL 本体はこの trait の実装に置く。
 
-use rusqlite::{OptionalExtension, params};
+use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 use crate::org::{Milestone, OrgNode, Project, ProjectId};
 
 use super::{SqliteStore, StoreError};
 
 pub trait OrgDirectory: Send + Sync {
+    /// 全ノードを `position`、同値なら `id` の昇順で返す（木は呼び出し側が `parent_id` で組む）。
+    fn org_list(&self) -> Result<Vec<OrgNode>, StoreError>;
     /// ADR-0033 D1: 組織のノード 1 つ。無ければ `None`。
     fn org_get(&self, id: &str) -> Result<Option<OrgNode>, StoreError>;
+    /// 挿入または更新。`crate::org::validate_upsert` を通してから書く（secretary は 1 つ、親は既存、
+    /// 自分を祖先にできない、secretary > department > section）。`created_at` は既存行のものを保つ。
+    fn org_upsert(&self, node: &OrgNode) -> Result<OrgNode, StoreError>;
     /// ADR-0033 D2: 案件を `created_at` の降順（新しい案件が先）で返す。
     fn project_list(&self) -> Result<Vec<Project>, StoreError>;
     fn project_get(&self, id: ProjectId) -> Result<Option<Project>, StoreError>;
@@ -24,6 +28,10 @@ pub trait OrgDirectory: Send + Sync {
 }
 
 impl OrgDirectory for SqliteStore {
+    fn org_list(&self) -> Result<Vec<OrgNode>, StoreError> {
+        self.with_read_conn(Self::org_list_tx)
+    }
+
     fn org_get(&self, id: &str) -> Result<Option<OrgNode>, StoreError> {
         self.with_read_conn(|conn| {
             let row = conn
@@ -36,6 +44,14 @@ impl OrgDirectory for SqliteStore {
                 .optional()?;
             row.transpose()
         })
+    }
+
+    fn org_upsert(&self, node: &OrgNode) -> Result<OrgNode, StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let stored = Self::org_upsert_tx(&tx, node, None)?;
+        tx.commit()?;
+        Ok(stored)
     }
 
     fn project_list(&self) -> Result<Vec<Project>, StoreError> {

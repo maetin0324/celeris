@@ -897,3 +897,57 @@ fn browser_wait_triggers_only_from_expected_states() {
         }
     }
 }
+
+/// ADR 2026-11-08-health-enforcement-loop D7.2・D7.3（P-9）: 依存先の reopen の判定は、戻す（cancel の前が draft なら
+/// draft へ）・retry の後継があるので戻さない・ほかの依存先が未解決なので戻さない・依存先の失敗の cancel でない、を
+/// 区別して返す。後継と未解決の依存先の id は kept の理由に入る。store の試験は後継・未解決の依存先がそれぞれ 1 つの
+/// 組しか作らないので、ここで判定の順（後継が未解決の依存先より先）と未解決の依存先の並びを固定する。
+#[test]
+fn dependency_reopen_trigger_distinguishes_kept_reasons() {
+    let failed = (Status::Ready, "dependency_failed".to_string());
+    let from_draft = (Status::Draft, "dependency_failed".to_string());
+    let manual = (Status::Ready, "cancel".to_string());
+    let (b2, e, f, g) = (TaskId::new(), TaskId::new(), TaskId::new(), TaskId::new());
+    let resolved = [(g, Some(Status::Done))];
+    let unresolved = [
+        (e, Some(Status::Failed)),
+        (g, Some(Status::Ready)),
+        (f, None),
+    ];
+    let c = Status::Cancelled;
+
+    assert_eq!(
+        cancelled_by_dependency(c, Some(&failed), None),
+        DependencyCancel::Restore(Status::Ready)
+    );
+    assert_eq!(
+        dependency_reopen_trigger(c, Some(&from_draft), None, &resolved),
+        DependencyCancel::Restore(Trigger::DependencyReopened { draft: true })
+    );
+    for others in [&resolved[..], &unresolved[..]] {
+        assert_eq!(
+            dependency_reopen_trigger(c, Some(&failed), Some(b2), others),
+            DependencyCancel::Kept(KeptReason::Retried { successor: b2 })
+        );
+    }
+    assert_eq!(
+        dependency_reopen_trigger(c, Some(&failed), None, &unresolved),
+        DependencyCancel::Kept(KeptReason::OtherDependency {
+            unresolved: vec![e, f]
+        })
+    );
+    for (status, last) in [
+        (c, Some(&manual)),
+        (c, None),
+        (Status::Ready, Some(&failed)),
+    ] {
+        assert_eq!(
+            cancelled_by_dependency(status, last, Some(b2)),
+            DependencyCancel::Other
+        );
+        assert_eq!(
+            dependency_reopen_trigger(status, last, None, &unresolved),
+            DependencyCancel::Other
+        );
+    }
+}

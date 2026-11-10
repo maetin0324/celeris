@@ -1,9 +1,13 @@
+use std::collections::HashMap;
+
 use rusqlite::{Connection, OptionalExtension, params};
 use time::OffsetDateTime;
 
 use crate::message::is_conversation;
 use crate::model::{Event, Status, Task, TaskId, TaskKind};
-use crate::transition::{Outcome, StateView, Trigger, dependency_reopen_trigger, transition};
+use crate::transition::{
+    DependencyCancel, Outcome, StateView, Trigger, dependency_reopen_trigger, transition,
+};
 
 use super::{SqliteStore, StoreError, format_rfc3339, kind_str, status_str};
 
@@ -11,15 +15,7 @@ impl SqliteStore {
     /// The current status of a task read on `tx` (`None` when it does not exist), for cascades
     /// that re-check each task inside one caller-owned transaction.
     pub fn task_status_tx(tx: &Connection, task_id: TaskId) -> Result<Option<Status>, StoreError> {
-        let json: Option<String> = tx
-            .query_row(
-                "SELECT json FROM tasks WHERE id = ?1",
-                params![task_id.to_string()],
-                |row| row.get(0),
-            )
-            .optional()?;
-        json.map(|json| Self::row_to_task(json).map(|task| task.status))
-            .transpose()
+        Ok(Self::get_locked(tx, task_id)?.map(|task| task.status))
     }
 
     /// `apply_transition_with_events` の本体（ADR-0004 D1 / ADR-0005 D4）。`tx` 内で任意のトリガーを
@@ -33,18 +29,9 @@ impl SqliteStore {
         // ADR-0004 D1 / ADR-0005 D4: 任意のトリガーを検証し、tasks の更新と
         // Event::Transitioned (+ extra_events) の追記を単一トランザクションで行う。
 
-        let json: Option<String> = tx
-            .query_row(
-                "SELECT json FROM tasks WHERE id = ?1",
-                params![task_id.to_string()],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let json = match json {
-            Some(j) => j,
-            None => return Err(StoreError::Invalid(format!("task not found: {task_id}"))),
+        let Some(mut task) = Self::get_locked(tx, task_id)? else {
+            return Err(StoreError::Invalid(format!("task not found: {task_id}")));
         };
-        let mut task = Self::row_to_task(json)?;
 
         let view = StateView {
             kind: task.kind,
@@ -133,44 +120,14 @@ impl SqliteStore {
             )?;
         }
 
-        let mut next_seq: i64 = tx.query_row(
-            "SELECT COALESCE(MAX(seq), -1) + 1 FROM events WHERE task_id = ?1",
-            params![task_id.to_string()],
-            |row| row.get(0),
-        )?;
-
+        // 遷移の event と extra_events は `append_event_tx`（seq は同じ transaction の続き番号、派生の行も書く）で追記する。
         let transitioned = Event::Transitioned {
             from: view.status,
             to: outcome.next,
             reason: outcome.reason.to_string(),
         };
-        let ts = format_rfc3339(OffsetDateTime::now_utc())?;
-        tx.execute(
-            "INSERT INTO events (task_id, seq, ts, json) VALUES (?1, ?2, ?3, ?4)",
-            params![
-                task_id.to_string(),
-                next_seq,
-                ts,
-                serde_json::to_string(&transitioned)?
-            ],
-        )?;
-        next_seq += 1;
-
-        for event in extra_events {
-            let ts = format_rfc3339(OffsetDateTime::now_utc())?;
-            tx.execute(
-                "INSERT INTO events (task_id, seq, ts, json) VALUES (?1, ?2, ?3, ?4)",
-                params![
-                    task_id.to_string(),
-                    next_seq,
-                    ts,
-                    serde_json::to_string(&event)?
-                ],
-            )?;
-            Self::close_run_row_for_event_tx(tx, &event, &ts)?;
-            Self::apply_tree_event_tx(tx, task_id, &event, &ts)?;
-            crate::cluster_job::apply_event_tx(tx, task_id, &event, &ts)?;
-            next_seq += 1;
+        for event in std::iter::once(transitioned).chain(extra_events) {
+            Self::append_event_tx(tx, task_id, &event)?;
         }
 
         // Phase F7（ADR-0033 D5 追記 2026-09-28）: 終端になったら、このタスクの未決の認可の要求を
@@ -184,17 +141,13 @@ impl SqliteStore {
                 crate::approval::WITHDRAWN_BY_TRANSITION,
                 now,
             )?;
-        }
-        // ADR-0080 D4: 終端（cancel・連鎖の中止を含む）になったら、未解決の browser wait を
-        // `cancelled` に閉じる（未消費の承認も同時に失効する）。
-        if !view.status.is_terminal() && outcome.next.is_terminal() {
+            // ADR-0080 D4: 終端（cancel・連鎖の中止を含む）になったら、未解決の browser wait を
+            // `cancelled` に閉じる（未消費の承認も同時に失効する）。
             crate::browser_wait::cancel_open_for_task_tx(tx, task_id, now)?;
             // ADR-0090 D6: クラスタ job の wait も `cancelled` に閉じる（job は qdel しない）。
             crate::cluster_job::cancel_open_for_task_tx(tx, task_id)?;
-        }
-        // ADR-0079 付記「R6-1」D4: 終端になったら、この task の `runs` 索引の `running` の行を同じトランザクションで
-        // 閉じる（本番: 失敗した task 01M3PBAVFAYPDWMQMDBXPTE2V8 の reviewer run が `running` のまま残った）。
-        if !view.status.is_terminal() && outcome.next.is_terminal() {
+            // ADR-0079 付記「R6-1」D4: 終端になったら、この task の `runs` 索引の `running` の行を同じトランザクションで
+            // 閉じる（本番: 失敗した task 01M3PBAVFAYPDWMQMDBXPTE2V8 の reviewer run が `running` のまま残った）。
             Self::close_open_runs_tx(tx, task_id, outcome.next)?;
             // 終端 task に人の判断待ちを残さない。統合成功とは区別して task_terminal で閉じる。
             Self::close_open_integration_requests_tx(tx, task_id)?;
@@ -211,7 +164,9 @@ impl SqliteStore {
     /// 3. failed/cancelled → 終端でない後続（`depends_on` に含むタスク）を `DependencyFailed`（P-9、推移的）
     /// 4. 終端 → 終端でない（reopen・rereview・後続の復帰）→ 3 で cancel された後続を `DependencyReopened` で戻す
     ///    （ADR 2026-11-08-health-enforcement-loop D7。判定は `transition::dependency_reopen_trigger`。戻した後続の
-    ///    遷移もここを通るので推移的。戻すのは新しい `Transitioned` の追記だけで、cancel の event は変えない）
+    ///    遷移もここを通るので推移的。戻すのは新しい `Transitioned` の追記だけで、cancel の event は変えない）。
+    ///    retry の後継を持つ後続は戻さない（D7.2。後継は `retry_successors_tx` が引き、`retry_task_tx` の付け替えと
+    ///    同じ述語・同じ入力で判定する）
     pub(super) fn cascade_after_transition_tx(
         tx: &Connection,
         task: &Task,
@@ -219,15 +174,19 @@ impl SqliteStore {
         to: Status,
     ) -> Result<(), StoreError> {
         if from.is_terminal() && !to.is_terminal() {
-            for dependent in Self::dependents_of_tx(tx, task.id, false)? {
+            let dependents = Self::dependents_of_tx(tx, task.id, false)?;
+            let successors = retry_successors_tx(tx, &dependents)?;
+            for dependent in dependents {
                 let Some(dep) = Self::get_locked(tx, dependent)? else {
                     continue;
                 };
                 let last = Self::last_transitioned_tx(tx, dependent)?;
                 let others = (dep.depends_on.iter().filter(|d| **d != task.id))
-                    .map(|d| Self::task_status_tx(tx, *d))
-                    .collect::<Result<Vec<_>, _>>()?;
-                if let Some(trigger) = dependency_reopen_trigger(dep.status, last.as_ref(), &others)
+                    .map(|d| Ok((*d, Self::task_status_tx(tx, *d)?)))
+                    .collect::<Result<Vec<_>, StoreError>>()?;
+                let successor = successors.get(&dependent).copied();
+                if let DependencyCancel::Restore(trigger) =
+                    dependency_reopen_trigger(dep.status, last.as_ref(), successor, &others)
                 {
                     Self::apply_transition_tx(tx, dependent, trigger, vec![])?;
                 }
@@ -350,24 +309,55 @@ impl SqliteStore {
     }
 
     /// `task_id` の最後の `Event::Transitioned` の `(from, reason)`。無ければ `None`。依存の cascade と Phase 31
-    /// （`transition::cancelled_by_dependency`）、browser の前提 gate の判定が使う。
+    /// （`transition::cancelled_by_dependency`）、browser の前提 gate の判定が使う。読み出しは `last_event_tx`。
     pub(crate) fn last_transitioned_tx(
         tx: &Connection,
         task_id: TaskId,
     ) -> Result<Option<(Status, String)>, StoreError> {
-        let mut stmt = tx.prepare(
-            "SELECT json FROM events WHERE task_id = ?1 AND json LIKE '%\"type\":\"transitioned\"%' ORDER BY seq DESC LIMIT 1",
-        )?;
-        let json: Option<String> = stmt
-            .query_row(params![task_id.to_string()], |row| row.get(0))
-            .optional()?;
-        let Some(json) = json else {
-            return Ok(None);
-        };
-        let event: Event = serde_json::from_str(&json)?;
-        match event {
-            Event::Transitioned { from, reason, .. } => Ok(Some((from, reason))),
+        match last_event_tx(tx, task_id, "transitioned")? {
+            Some(Event::Transitioned { from, reason, .. }) => Ok(Some((from, reason))),
             _ => Ok(None),
         }
     }
+}
+
+/// `task_id` の events のうち、種類 `kind`（`Event` の JSON の `type`。例 `transitioned`・`retried`）の最新の 1 件。
+/// 無ければ `None`。1 つの task の最新の 1 件を種類で読む SQL はここだけで、`UNIQUE(task_id, seq)` の index を
+/// seq の降順に辿り、ほかの task の events は読まない。`instr` で比べるので、`kind` の `_` は LIKE の wildcard に
+/// ならない。JSON の中の入れ子の `type` に当たった行が最新なら、呼び出し側の variant の照合で `None` になる（旧い
+/// `last_transitioned_tx` の LIKE と同じ）。
+pub(super) fn last_event_tx(
+    tx: &Connection,
+    task_id: TaskId,
+    kind: &str,
+) -> Result<Option<Event>, StoreError> {
+    let json: Option<String> = tx
+        .query_row(
+            "SELECT json FROM events WHERE task_id = ?1 AND instr(json, ?2) > 0 \
+             ORDER BY seq DESC LIMIT 1",
+            params![task_id.to_string(), format!("\"type\":\"{kind}\"")],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(json.map(|json| serde_json::from_str(&json)).transpose()?)
+}
+
+/// ADR 2026-11-08-health-enforcement-loop D7.2（P-9）: 依存先の後続 `dependents`（`SqliteStore::dependents_of_tx`
+/// の結果）から、retry の元の task → 後継 の対応を作る。retry（`plan_retry`）は `depends_on` を写すので、依存先の
+/// 後続 B の後継 B' も同じ依存先の後続に入る。後続ごとに最新の `Event::Retried` を `last_event_tx` で 1 件読み、
+/// `from` → その後続 を返す（同じ元に後継が複数あれば新しい id）。人が後継の `depends_on` から依存先を外すと、後継は
+/// `dependents` に入らず、元の後続は後継を持たない扱いになる。`retry_task_tx` の付け替えと
+/// `cascade_after_transition_tx` の復帰が、この結果を `transition::cancelled_by_dependency` の入力にする。
+pub(super) fn retry_successors_tx(
+    tx: &Connection,
+    dependents: &[TaskId],
+) -> Result<HashMap<TaskId, TaskId>, StoreError> {
+    let mut successors: HashMap<TaskId, TaskId> = HashMap::new();
+    for &id in dependents {
+        if let Some(Event::Retried { from, .. }) = last_event_tx(tx, id, "retried")? {
+            let newest = successors.get(&from).map_or(id, |s| (*s).max(id));
+            successors.insert(from, newest);
+        }
+    }
+    Ok(successors)
 }

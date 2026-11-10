@@ -1015,8 +1015,8 @@ pub fn truncate_detail(detail: &str) -> (String, bool) {
 
 mod events;
 pub use events::{
-    AutoReplanSource, CreatedOrigin, Event, FailedWorkUnitCheck, PhaseCheckResult, PhaseMerged,
-    ProposedMilestone, TargetSweepByReason, TargetSweepMode, TargetSweepRootReport,
+    AutoReplanSource, CreatedOrigin, Event, FailedWorkUnitCheck, KeptReason, PhaseCheckResult,
+    PhaseMerged, ProposedMilestone, TargetSweepByReason, TargetSweepMode, TargetSweepRootReport,
     TargetSweepSkip,
 };
 

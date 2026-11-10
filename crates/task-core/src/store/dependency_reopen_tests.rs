@@ -5,14 +5,20 @@
 //! cancel と、ほかの依存先がまだ failed・cancelled の後続は戻らない。戻すのは新しい `Transitioned` の追記で、
 //! 既存の event は変わらない。既存の試験（`dependency_failure_cancels_dependents_transitively`）は cancel の向き
 //! だけを見ており、reopen の後に後続が cancelled のまま残る不具合（P-9）を検出できない。
+//!
+//! D7.2（retry の後継）: 依存先の失敗で cancel された後続 B を人が retry して後継 B' を作っていたら、依存先 A の
+//! reopen でも retry でも B を戻さず付け替えない（B と B' の 2 つが同じ仕事を走らせない）。判定は
+//! `retry_successors_tx` と `transition::cancelled_by_dependency` を両経路が同じ入力で使う。上の 5 件はどれも
+//! 後継のある後続を作らないので、後継のある B が A の reopen・retry で戻る重複を検出できない。
 
 use std::time::Duration as StdDuration;
 
 use super::SqliteStore;
 use super::tests::sample_task;
-use crate::model::{Event, Status, TaskId};
+use super::transition::retry_successors_tx;
+use crate::model::{Event, KeptReason, Status, TaskId};
 use crate::store::TaskStore;
-use crate::transition::Trigger;
+use crate::transition::{DependencyCancel, Trigger, dependency_reopen_trigger};
 
 fn status(store: &SqliteStore, id: TaskId) -> Status {
     store.get(id).unwrap().unwrap().status
@@ -203,4 +209,128 @@ fn dependency_reopen_on_rereview_and_cancels_again_on_failure() {
             "dependency_failed"
         ]
     );
+}
+
+/// 人が `failed`・`cancelled` の `original` を retry して後継を作る。`plan_retry` と同じく `depends_on` を写し、
+/// 後継は draft で始まる。
+fn retry(store: &SqliteStore, original: TaskId) -> TaskId {
+    let mut next = sample_task(Status::Draft);
+    next.depends_on = store.get(original).unwrap().unwrap().depends_on;
+    store.retry_task(original, &next, "human:web").unwrap();
+    next.id
+}
+
+/// 依存先 `dep` の reopen が後続 `id` に下す判定（`cascade_after_transition_tx` と同じ読み出しと述語）。
+fn reopen_verdict(store: &SqliteStore, dep: TaskId, id: TaskId) -> DependencyCancel<Trigger> {
+    let conn = store.lock().unwrap();
+    let dependents = SqliteStore::dependents_of_tx(&conn, dep, false).unwrap();
+    let successors = retry_successors_tx(&conn, &dependents).unwrap();
+    let task = SqliteStore::get_locked(&conn, id).unwrap().unwrap();
+    let last = SqliteStore::last_transitioned_tx(&conn, id).unwrap();
+    let others: Vec<(TaskId, Option<Status>)> = (task.depends_on.iter().filter(|d| **d != dep))
+        .map(|d| (*d, SqliteStore::task_status_tx(&conn, *d).unwrap()))
+        .collect();
+    dependency_reopen_trigger(
+        task.status,
+        last.as_ref(),
+        successors.get(&id).copied(),
+        &others,
+    )
+}
+
+/// D7.2: A の失敗で cancel された B を人が retry して後継 B'（`depends_on` に A を写す）を作った後、A を reopen しても
+/// B は cancelled のまま残り、判定は `Kept(Retried { successor: B' })` になる。B' は draft のまま触られない。
+/// 後継の無い後続 C は今までどおり戻る。
+#[test]
+fn dependency_reopen_keeps_dependent_with_retry_successor() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let a = insert_failable(&store);
+    let b = insert_dependent(&store, Status::Ready, vec![a]);
+    let c = insert_dependent(&store, Status::Ready, vec![a]);
+    fail(&store, a);
+    let b2 = retry(&store, b);
+    assert_eq!(store.get(b2).unwrap().unwrap().depends_on, vec![a]);
+    assert_eq!(
+        reopen_verdict(&store, a, b),
+        DependencyCancel::Kept(KeptReason::Retried { successor: b2 })
+    );
+    let b2_before = store.events_for(b2).unwrap();
+
+    store.apply_transition(a, Trigger::Reopen, None).unwrap();
+    assert_eq!(status(&store, b), Status::Cancelled);
+    assert_eq!(reasons(&store, b), vec!["dependency_failed"]);
+    assert_eq!(status(&store, b2), Status::Draft);
+    assert_eq!(
+        store.events_for(b2).unwrap(),
+        b2_before,
+        "後継の event は増えない"
+    );
+    assert_eq!(status(&store, c), Status::Ready);
+    assert_eq!(
+        reasons(&store, c),
+        vec!["dependency_failed", "dependency_reopened"]
+    );
+}
+
+/// D7.2: A の retry（A → A'）で、後継 B' を持つ B は A' に付け替えず cancelled のまま残し、B' は A' に付け替わる
+/// （draft のまま）。後継の無い C は今までどおり A' に付け替わって draft に戻る。
+#[test]
+fn dependency_reopen_retry_skips_dependent_with_successor() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let a = insert_failable(&store);
+    let b = insert_dependent(&store, Status::Ready, vec![a]);
+    let c = insert_dependent(&store, Status::Ready, vec![a]);
+    fail(&store, a);
+    let b2 = retry(&store, b);
+
+    let a2 = sample_task(Status::Draft);
+    let mut rewired = store.retry_task(a, &a2, "human:web").unwrap();
+    rewired.sort();
+    let mut expected = vec![b2, c];
+    expected.sort();
+    assert_eq!(rewired, expected, "B は付け替えない");
+
+    let b_task = store.get(b).unwrap().unwrap();
+    assert_eq!(b_task.status, Status::Cancelled);
+    assert_eq!(b_task.depends_on, vec![a]);
+    assert_eq!(reasons(&store, b), vec!["dependency_failed"]);
+    let b2_task = store.get(b2).unwrap().unwrap();
+    assert_eq!(b2_task.status, Status::Draft);
+    assert_eq!(b2_task.depends_on, vec![a2.id]);
+    let c_task = store.get(c).unwrap().unwrap();
+    assert_eq!(c_task.status, Status::Draft);
+    assert_eq!(c_task.depends_on, vec![a2.id]);
+    assert_eq!(reasons(&store, c), vec!["dependency_failed", "retried"]);
+}
+
+/// D7.2: 人が後継 B' の `depends_on` から A を外すと、B' は A の後続でなくなり、B は後継を持たない扱いになる。A を
+/// reopen すると B は戻り（cancel の前の ready へ）、B' は触られない。
+#[test]
+fn dependency_reopen_restores_when_successor_drops_dependency() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let a = insert_failable(&store);
+    let b = insert_dependent(&store, Status::Ready, vec![a]);
+    fail(&store, a);
+    let b2 = retry(&store, b);
+    let mut edited = store.get(b2).unwrap().unwrap();
+    edited.depends_on.clear();
+    let event = Event::Edited {
+        fields: vec!["depends_on".to_string()],
+        by: "human".to_string(),
+    };
+    store.update_task(&edited, event).unwrap();
+    assert!(matches!(
+        reopen_verdict(&store, a, b),
+        DependencyCancel::Restore(Trigger::DependencyReopened { draft: false })
+    ));
+
+    store.apply_transition(a, Trigger::Reopen, None).unwrap();
+    assert_eq!(status(&store, b), Status::Ready);
+    assert_eq!(
+        reasons(&store, b),
+        vec!["dependency_failed", "dependency_reopened"]
+    );
+    let b2_task = store.get(b2).unwrap().unwrap();
+    assert_eq!(b2_task.status, Status::Draft);
+    assert!(b2_task.depends_on.is_empty());
 }

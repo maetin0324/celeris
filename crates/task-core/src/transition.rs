@@ -1,7 +1,7 @@
 //! タスク状態機械の純粋関数。DESIGN.md / ADR-0002 D2,D3,D8 で定義された
 //! 遷移規則をそのまま実装する。I/O・時計・乱数は一切使わない（ADR-0001 D2）。
 
-use crate::model::{Status, TaskKind};
+use crate::model::{KeptReason, Status, TaskId, TaskKind};
 
 /// `transition` の入力となる現在状態のスナップショット。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -674,42 +674,72 @@ pub fn transition(s: &StateView, t: &Trigger) -> Result<Outcome, InvalidTransiti
     }
 }
 
+/// ADR 2026-11-08-health-enforcement-loop D7.2・D7.3（P-9）: `cancelled_by_dependency`（`T` = cancel の前の状態）と
+/// `dependency_reopen_trigger`（`T` = 適用する遷移）の判定。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DependencyCancel<T> {
+    /// 依存先の失敗の cancel でない（cancelled でない、人・CoS の cancel、連鎖の中止）。対象外で、kept にも入れない。
+    Other,
+    /// 依存先の失敗で cancel されたままで、戻せる。
+    Restore(T),
+    /// 依存先の失敗で cancel されたが、戻さない（理由と、後継または未解決の依存先）。
+    Kept(KeptReason),
+}
+
 /// ADR 2026-11-08-health-enforcement-loop D7.2（P-9）: 状態 `status`・最後の `Event::Transitioned` の `(from, reason)`
-/// が `last` の task が、依存先の失敗で cancel されたままか。そうなら cancel の前の状態を返す。依存先の reopen での復帰
-/// （`dependency_reopen_trigger`）と retry の依存の付け替え（`SqliteStore::retry_task_tx`）が共有する述語。
-/// `cancelled` から出る遷移は retry の付け替えと `DependencyReopened` だけで、どちらも最後の遷移の理由を変えるので、
-/// 「cancel の後に人・CoS の遷移が無い」もこの判定に含まれる。人・CoS の cancel（`cancel`）と連鎖の中止
-/// （`parent_cancelled`・`project_cancelled`・`milestone_cancelled`）はここで外れる。
+/// が `last`・retry の後継が `successor`（`store::transition::retry_successors_tx` が引く）の task が、依存先の失敗で
+/// cancel されたままか。依存先の reopen での復帰（`dependency_reopen_trigger`）と retry の依存の付け替え
+/// （`SqliteStore::retry_task_tx`）が同じ入力で共有する述語。
+/// - `Restore(cancel の前の状態)`: cancelled で最後の遷移の理由が `dependency_failed`、後継が無い。`cancelled` から出る
+///   遷移は retry の付け替えと `DependencyReopened` だけで、どちらも最後の遷移の理由を変えるので、「cancel の後に
+///   人・CoS の遷移が無い」もこの判定に含まれる。
+/// - `Kept(Retried)`: 同じ cancel だが retry の後継がある（後継が同じ仕事を持つので、戻すと重複する）。
+/// - `Other`: 人・CoS の cancel（`cancel`）、連鎖の中止（`parent_cancelled`・`project_cancelled`・
+///   `milestone_cancelled`）、cancelled でない task。
 pub(crate) fn cancelled_by_dependency(
     status: Status,
     last: Option<&(Status, String)>,
-) -> Option<Status> {
-    match last {
-        Some((from, reason))
-            if status == Status::Cancelled && reason == Trigger::DependencyFailed.name() =>
+    successor: Option<TaskId>,
+) -> DependencyCancel<Status> {
+    match (last, successor) {
+        (Some((_, reason)), _)
+            if status != Status::Cancelled || reason != Trigger::DependencyFailed.name() =>
         {
-            Some(*from)
+            DependencyCancel::Other
         }
-        _ => None,
+        (None, _) => DependencyCancel::Other,
+        (Some(_), Some(successor)) => DependencyCancel::Kept(KeptReason::Retried { successor }),
+        (Some((from, _)), None) => DependencyCancel::Restore(*from),
     }
 }
 
 /// ADR 2026-11-08-health-enforcement-loop D7.1（P-9）: 依存先が終端から戻ったとき、その後続に適用する遷移。
-/// 後続が `cancelled_by_dependency` に合い、ほかの依存先の状態 `others`（見つからない task は `None`）に
-/// failed・cancelled・`None` が無ければ `DependencyReopened`（cancel の前が draft なら draft へ）。それ以外は `None`
-/// （ほかの依存先がまだ failed の後続は、その依存先が戻ったときに戻る）。
+/// 後続が `cancelled_by_dependency` で `Restore` になり、ほかの依存先 `others`（id と状態。見つからない task は
+/// `None`）に failed・cancelled・`None` が無ければ `Restore(DependencyReopened)`（cancel の前が draft なら draft へ）。
+/// ほかの依存先が未解決なら `Kept(OtherDependency { unresolved })`（その依存先が戻ったときに戻る）。
+/// `Kept(Retried)` と `Other` は `cancelled_by_dependency` の判定のまま返す。
 pub(crate) fn dependency_reopen_trigger(
     status: Status,
     last: Option<&(Status, String)>,
-    others: &[Option<Status>],
-) -> Option<Trigger> {
-    let before = cancelled_by_dependency(status, last)?;
-    let blocked = others
-        .iter()
-        .any(|s| matches!(s, None | Some(Status::Failed | Status::Cancelled)));
-    (!blocked).then_some(Trigger::DependencyReopened {
-        draft: before == Status::Draft,
-    })
+    successor: Option<TaskId>,
+    others: &[(TaskId, Option<Status>)],
+) -> DependencyCancel<Trigger> {
+    let before = match cancelled_by_dependency(status, last, successor) {
+        DependencyCancel::Restore(before) => before,
+        DependencyCancel::Kept(reason) => return DependencyCancel::Kept(reason),
+        DependencyCancel::Other => return DependencyCancel::Other,
+    };
+    let unresolved: Vec<TaskId> = (others.iter())
+        .filter(|(_, s)| matches!(s, None | Some(Status::Failed | Status::Cancelled)))
+        .map(|(id, _)| *id)
+        .collect();
+    if unresolved.is_empty() {
+        DependencyCancel::Restore(Trigger::DependencyReopened {
+            draft: before == Status::Draft,
+        })
+    } else {
+        DependencyCancel::Kept(KeptReason::OtherDependency { unresolved })
+    }
 }
 
 #[cfg(test)]

@@ -26,6 +26,12 @@ updated: 2026-11-10
 - 作業ツリーで 8 method（`get` を除く）の宣言を `OrgDirectory`・`TaskQuery` 相当の trait へ移し、`cargo check --workspace --all-targets --keep-going` の誤り（E0599・E0782）が 0 になるまで import を足した。4 回で 0 になった。試した変更は `git checkout -- crates` で戻した。
 - 結果 [port-fix-files.json](2026-11-10-taskstore-consumer-ports/port-fix-files.json): 64 file（task-api 23・task-ops 12・celeris 11・task-core 5・celeris-mcp 5・task-dispatch 5・celerisctl 3）、task-worker 0、R2 の write-set 8、R4 の write-set 3。
 
+## table-writers の結果
+詳細は [table-writers.md](2026-11-10-taskstore-consumer-ports/table-writers.md)。
+- `cos_inbox_items` の印は task-core `chat::triage::cos_triage_resolve_tx(&Transaction, …)` が書き、task-api `cos/operations.rs` は `cos_operation_apply` の transaction でこれを呼ぶ。`chat_client_requests` の `attachment_ref` の記録は task-core `ChatAttachmentStore::add_ref_request` が pin と同じ transaction で書く。
+- `measure.py --check-writers cos_inbox_items,chat_client_requests` → exit 0。原子性の試験 `cos_chat_triage_mark_and_audit_commit_together`（task-api `tests/cos_triage.rs`）を足した。
+- 範囲外: task-api に残る読みの SQL（`cos/triage_view.rs` の読み 3 関数、`chat/attachments.rs` の SELECT）。
+
 ## 証拠コマンドと結果（提出時の HEAD で実行）
 - `python3 agent-docs/progress/2026-11-10-taskstore-consumer-ports/measure.py --json $TMPDIR/m.json` → exit 0、key 5 つあり
 - `… measure.py --check-writers cos_inbox_items,chat_client_requests` → exit 1（`task-api/src/cos/triage_view.rs`・`task-api/src/chat/attachments.rs`）

@@ -50,7 +50,7 @@ use crate::delegate_file::{clear_delegate_file, forward_delegate_file};
 use crate::progress;
 use crate::protocol::{ProviderFailure, RunRequest};
 use crate::provider::classify_provider_failure;
-use crate::result_report::{ResultFileRead, interpret_result_text};
+use crate::result_report::{ResultFileRead, interpret_result_text, read_result_file};
 use crate::subprocess::{
     LineOutcome, MAX_LINE_BYTES, kill_now, read_line_limited, read_tail, reap_after_terminal,
     send_signal_to_group, write_result_json,
@@ -684,10 +684,9 @@ async fn finish_run(
     stderr_task: tokio::task::JoinHandle<()>,
     mut stdout_file: tokio::fs::File,
     run_dir: &Path,
-    // ADR-0036 D1/D2: 成果物と結果ファイルの置き場は `req.artifacts_dir`。`run_started` は誤配置の回収
-    // （`result_report::read_result_file`）が候補を絞る run の開始時刻。
+    // ADR-0036 D1/D2: 成果物と結果ファイルの置き場は `req.artifacts_dir`。`start` は監視 loop の開始。
     req: &RunRequest,
-    run_started: std::time::SystemTime,
+    start: Instant,
     stderr_log_path: &Path,
     sink: &dyn EventSink,
     outcome: RawOutcome,
@@ -775,7 +774,7 @@ async fn finish_run(
                         usage: None,
                     }
                 }
-                _ => terminal_from_result_file(req, run_started, &stop_reason).await,
+                _ => terminal_from_result_file(req, start, &stop_reason).await,
             };
             (terminal, None)
         }
@@ -799,9 +798,11 @@ async fn finish_run(
 /// 常にこのファイルを見る。ファイルが無ければ `stopReason` を理由として `Error{retryable:true}` にする。
 /// 本文の解釈は結果契約の正本（`result_report::interpret_result_text`。ADR 2026-11-10-adapter-result-contract
 /// D1）に任せる。
+/// `start` は監視 loop の開始（spawn の直後）。誤配置の候補は、それを壁時計に直した時刻より後に書かれた file に絞る
+/// （`result_location::misplaced_report` は 2 秒の余裕を取る）。
 async fn terminal_from_result_file(
     req: &RunRequest,
-    run_started: std::time::SystemTime,
+    start: Instant,
     stop_reason: &str,
 ) -> Terminal {
     // ADR-0072 D7/§6 (i)（Phase E1）: `stopReason == "max_turn_requests"` は turn の上限に当たったと
@@ -815,7 +816,7 @@ async fn terminal_from_result_file(
         };
     }
     let artifacts_rel = req.artifacts_rel();
-    match crate::result_report::read_result_file(req, run_started).await {
+    match read_result_file(req, std::time::SystemTime::now() - start.elapsed()).await {
         ResultFileRead::Misplaced(error) => *error,
         ResultFileRead::Missing => Terminal::Error {
             message: format!(
@@ -837,7 +838,6 @@ async fn run_acp(
     limits: &RunLimits,
     sink: &dyn EventSink,
 ) -> Result<RunOutcome, AdapterError> {
-    let run_started = std::time::SystemTime::now();
     // CoS chat has full tool permission within the worker's existing sandbox. The older
     // Secretary conversation path keeps its ADR-0054 blanket Deny exactly as before.
     let config = &if req.context.cos_chat.is_none()
@@ -1392,7 +1392,7 @@ async fn run_acp(
                             stdout_file,
                             &run_dir,
                             req,
-                            run_started,
+                            start,
                             &stderr_log_path,
                             sink,
                             RawOutcome::Eof {
@@ -1412,7 +1412,7 @@ async fn run_acp(
                             stdout_file,
                             &run_dir,
                             req,
-                            run_started,
+                            start,
                             &stderr_log_path,
                             sink,
                             RawOutcome::TimedOut(terminal),
@@ -1552,7 +1552,7 @@ async fn run_acp(
         stdout_file,
         &run_dir,
         req,
-        run_started,
+        start,
         &stderr_log_path,
         sink,
         outcome,

@@ -15,7 +15,7 @@ use crate::claude_code::build_prompt_with_skill_list;
 use crate::delegate_file::{clear_delegate_file, forward_delegate_file};
 use crate::protocol::RunRequest;
 use crate::provider::classify_provider_failure;
-use crate::result_report::{ResultFileRead, interpret_result_text};
+use crate::result_report::{ResultFileRead, interpret_result_text, read_result_file};
 use crate::subprocess::{
     LineOutcome, MAX_LINE_BYTES, kill_now, read_line_limited, read_tail, reap_after_terminal,
     write_result_json,
@@ -165,7 +165,6 @@ async fn run_pi(
     limits: &RunLimits,
     sink: &dyn EventSink,
 ) -> Result<RunOutcome, AdapterError> {
-    let run_started = std::time::SystemTime::now();
     config.validate().map_err(AdapterError::Other)?;
     let extensions: Vec<_> = config
         .extensions
@@ -461,11 +460,7 @@ async fn run_pi(
             usage: stream.usage,
         }
     } else {
-        terminal_from_result(
-            crate::result_report::read_result_file(req, run_started).await,
-            &artifacts_rel,
-            stream.usage,
-        )
+        terminal_from_result(req, start, stream.usage).await
     };
     let provider_failure = if matches!(terminal, Terminal::Error { .. }) {
         pi_failure(stream.error.as_deref().unwrap_or("")).or_else(|| pi_failure(&stderr_tail))
@@ -488,19 +483,18 @@ async fn run_pi(
 /// 結果ファイルの読み取り結果から終端を合成する。本文の解釈は結果契約の正本
 /// （`result_report::interpret_result_text`。ADR 2026-11-10-adapter-result-contract D1）に任せ、ここは
 /// 結果ファイルが無いときの pi の文言だけを持つ。
-fn terminal_from_result(
-    read: ResultFileRead,
-    artifacts_rel: &str,
-    usage: Option<Usage>,
-) -> Terminal {
-    match read {
+/// `start` は監視 loop の開始（spawn の直後）。誤配置の候補は、それを壁時計に直した時刻より後に書かれた file に絞る
+/// （`result_location::misplaced_report` は 2 秒の余裕を取る）。
+async fn terminal_from_result(req: &RunRequest, start: Instant, usage: Option<Usage>) -> Terminal {
+    let artifacts_rel = req.artifacts_rel();
+    match read_result_file(req, std::time::SystemTime::now() - start.elapsed()).await {
         ResultFileRead::Misplaced(error) => *error,
         ResultFileRead::Missing => Terminal::Error {
             message: format!("pi exited without {artifacts_rel}/result.json"),
             retryable: true,
             usage: None,
         },
-        ResultFileRead::Text(text) => interpret_result_text(&text, artifacts_rel, usage),
+        ResultFileRead::Text(text) => interpret_result_text(&text, &artifacts_rel, usage),
     }
 }
 

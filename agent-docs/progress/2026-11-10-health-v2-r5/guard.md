@@ -66,8 +66,16 @@ unittest が台本の欠陥を検出できることを、台本を一時的に�
 - `grep '^\s*#\[\s*([A-Za-z_]+::)*test\b'` の行数と比べた。差は文字列の中の fixture（campaign 2 件）、macro の定義の属性と呼び出しの展開（campaign `point_test!` 7 件、task-dispatch `bench_case!` 10 回 × 4 件）、rstest（script-runtime の vendor 4 件）で、すべて説明がつく。
 - R1 の result-contract の前の commit（件名「R1 result-contract: result.json の解釈を result_report.rs の結果契約 1 つにし、5 adapter の写しを消す」の親）を base にして task-worker を見ると exit 1 で、R1 が消した不変条件の試験 5 名（`invalid_result_file_json_is_retryable_error`・`malformed_evidence_in_result_file_does_not_fail_the_run`・`pi_adapter_result_question_yield_and_invalid_json`・`question_in_result_file_blocks_task`・`result_yield_becomes_terminal_yielded`）を挙げた。R5 の base は R1 の後なので、R5 の unit には影響しない。
 
-## 証拠（提出時の HEAD で実行）
+## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`、slices-check は `git merge-base HEAD main`）
 - `python3 agent-docs/progress/2026-11-10-health-v2-r5/test_guard.py` → exit 0（Ran 16 tests、OK）
+- `python3 agent-docs/progress/2026-11-10-health-v2-r5/cases.py --crate <14 crate のそれぞれ> --base "$CELERIS_WU_BASE"` → すべて exit 0
+- `bash scripts/dev/test-affected.sh` → exit 0（「試験対象の変更なし（docs のみ等）」。repo-health verdict=pass、new=0・worsened=0）
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- `bash scripts/dev/check-health.sh` → exit 0（doc-only）
+- `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check` → exit 0
+- `git diff --name-only $(git merge-base HEAD main) | python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R5 agent-docs/progress/2026-11-07-health-v2-b0/slices.json` → `write-set R5: ok`
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → 変えた path は `agent-docs/progress/2026-11-10-health-v2-r5/` の 4 file だけ
 
 ## 未解決
 - 表の行は試験関数の本体の中の配列だけを数える。module の `const CASES: [..] = [..]` を回す表（例 `crates/campaign/tests/long_horizon_public_contract.rs`）と、JSONL 等の外部 file の case は数えない。後の unit がそれらを減らすときは removals に自分で書く。

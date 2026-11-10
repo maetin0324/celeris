@@ -474,20 +474,8 @@ impl HealthGateOutcome {
 /// `request.timeout` は事実の読み取りと評価の全体の上限。同梱の検査器は `request.bundled` だけを使う。LLM は呼ばない。
 pub fn health_gate(request: &HealthGateRequest<'_>) -> HealthGateOutcome {
     let deadline = Instant::now() + request.timeout;
-    let blank = |verdict, reason: String| HealthEvidence {
-        repo_id: request.repo_id,
-        base_sha: request.base.to_string(),
-        head_sha: request.head.to_string(),
-        head_tree: String::new(),
-        policy_sha256: String::new(),
-        checker: None,
-        report_sha256: String::new(),
-        tool_version: String::new(),
-        verdict,
-        blocking: Vec::new(),
-        reason: Some(reason),
-        reused_from: None,
-        reviewable: false,
+    let blank = |verdict, reason: String| {
+        blank_evidence(request.repo_id, request.base, request.head, verdict, reason)
     };
     let applies = applicable(
         request.worktree,
@@ -501,10 +489,9 @@ pub fn health_gate(request: &HealthGateRequest<'_>) -> HealthGateOutcome {
             evidence: blank(HealthVerdict::NotApplicable, reason.as_str().to_string()),
             reason,
         },
-        HealthApplicability::Unavailable { reason } => HealthGateOutcome::Unavailable {
-            evidence: blank(HealthVerdict::Error, reason.to_string()),
-            reason,
-        },
+        HealthApplicability::Unavailable { reason } => {
+            HealthGateOutcome::unavailable(request.repo_id, request.base, request.head, reason)
+        }
         HealthApplicability::Applies { checker } => HealthGateOutcome::Evaluated(run_health_check(
             request.repo_id,
             request.worktree,
@@ -514,6 +501,53 @@ pub fn health_gate(request: &HealthGateRequest<'_>) -> HealthGateOutcome {
             request.bundled,
             deadline.saturating_duration_since(Instant::now()),
         )),
+    }
+}
+
+/// 検査器を起こす前の証跡（`verdict` と理由だけを持つ。NotApplicable・Unavailable）。
+fn blank_evidence(
+    repo_id: RepoId,
+    base: &str,
+    head: &str,
+    verdict: HealthVerdict,
+    reason: String,
+) -> HealthEvidence {
+    HealthEvidence {
+        repo_id,
+        base_sha: base.to_string(),
+        head_sha: head.to_string(),
+        head_tree: String::new(),
+        policy_sha256: String::new(),
+        checker: None,
+        report_sha256: String::new(),
+        tool_version: String::new(),
+        verdict,
+        blocking: Vec::new(),
+        reason: Some(reason),
+        reused_from: None,
+        reviewable: false,
+    }
+}
+
+impl HealthGateOutcome {
+    /// 評価できない（`reason`）結果。証跡の verdict は Error で、経路は合格にしない（J4・D3.4）。[`health_gate`] の
+    /// 適用判定の Unavailable と、経路が base の事実を読めなかったとき（段の統合の base。D1.2 の付記 2026-11-10）が使う。
+    pub(crate) fn unavailable(
+        repo_id: RepoId,
+        base: &str,
+        head: &str,
+        reason: UnavailableReason,
+    ) -> Self {
+        HealthGateOutcome::Unavailable {
+            evidence: blank_evidence(
+                repo_id,
+                base,
+                head,
+                HealthVerdict::Error,
+                reason.to_string(),
+            ),
+            reason,
+        }
     }
 }
 

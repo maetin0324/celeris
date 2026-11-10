@@ -29,10 +29,12 @@ use std::path::Path;
 
 use super::super::*;
 use super::ObservedIntegration;
-use crate::health_review::gate::{self, BundledChecker, HealthGateDecision, HealthGateRequest};
+use crate::health_review::gate::{
+    self, BundledChecker, HealthGateDecision, HealthGateOutcome, HealthGateRequest,
+};
 use crate::health_review::input::HEALTH_INPUT_TIMEOUT;
 use crate::health_review::limits::{self, HealthScope, RepeatVerdict};
-use task_core::required_checks::health::{HEALTH_CHECK_ID, HealthEvidence};
+use task_core::required_checks::health::{HEALTH_CHECK_ID, HealthEvidence, UnavailableReason};
 use task_core::{HealthRepeatSite, RepoId};
 
 /// D3.4: Error・Unavailable の項目の reason の先頭の語（`health_check_error: <理由>`）。
@@ -145,8 +147,9 @@ pub(in super::super) struct HealthTarget {
     repo_id: RepoId,
     /// git と検査器を実行する作業ツリー（WU は WU の作業ツリー、段の統合は統合後の Task の作業ツリー）。
     worktree: PathBuf,
-    /// WU は `wu.base_commit`、段の統合は段の基点。
-    base: String,
+    /// WU は `wu.base_commit`、段の統合は [`phase_health_base`] が決めた base。`Err` は base を決められなかった理由
+    /// （評価せず Unavailable の Error にする。合格にしない）。
+    base: Result<String, String>,
     /// WU は WU の HEAD、段の統合は統合の HEAD（証跡には解決した sha が残る）。
     head: String,
     /// release に同梱した検査器（経路の外側で読んだ値）。
@@ -178,15 +181,23 @@ struct HealthItem {
 
 /// D1.2: `target` を経路共通の入口で 1 回評価し、列の 1 行に写す（blocking。git と検査器の子 process を起こす）。
 fn evaluate(target: &HealthTarget) -> HealthItem {
-    let outcome = gate::health_gate(&HealthGateRequest {
-        repo_id: target.repo_id,
-        worktree: &target.worktree,
-        base: &target.base,
-        head: &target.head,
-        integrated_by_celeris: true,
-        bundled: target.bundled.as_ref(),
-        timeout: HEALTH_INPUT_TIMEOUT,
-    });
+    let outcome = match &target.base {
+        Ok(base) => gate::health_gate(&HealthGateRequest {
+            repo_id: target.repo_id,
+            worktree: &target.worktree,
+            base,
+            head: &target.head,
+            integrated_by_celeris: true,
+            bundled: target.bundled.as_ref(),
+            timeout: HEALTH_INPUT_TIMEOUT,
+        }),
+        Err(why) => HealthGateOutcome::unavailable(
+            target.repo_id,
+            "",
+            &target.head,
+            UnavailableReason::FactsUnreadable(why.clone()),
+        ),
+    };
     let evidence = outcome.evidence().clone();
     let why = evidence.reason.clone().unwrap_or_default();
     let (counted, pass, exit, reason) = match outcome.decision() {
@@ -428,10 +439,10 @@ pub(super) fn put_rows(
     );
 }
 
-/// ADR 2026-11-08-health-enforcement-loop D1.2: 段 `phase` の基点（health の base）。その段の葉・子の unit のうち
-/// 最も前（`seq`）の unit が切られた commit（`base_commit`）。段の unit は段の始まりの Task のブランチから切られる
-/// ので、統合と修復を繰り返しても同じ基点になる。どの unit も基点を持たなければ `None`。
-fn phase_base_commit(units: &[task_core::WorkUnitRow], phase: &str) -> Option<String> {
+/// ADR 2026-11-08-health-enforcement-loop D1.2: 段 `phase` の基点 P。その段の葉・子の unit のうち最も前（`seq`）の
+/// unit が切られた commit（`base_commit`）。段の unit は段の始まりの Task のブランチから切られるので、統合と修復を
+/// 繰り返しても同じ基点になる。どの unit も基点を持たなければ `None`。health の base は [`phase_health_base`] が決める。
+pub(super) fn phase_base_commit(units: &[task_core::WorkUnitRow], phase: &str) -> Option<String> {
     units
         .iter()
         .filter(|u| {
@@ -446,18 +457,53 @@ fn phase_base_commit(units: &[task_core::WorkUnitRow], phase: &str) -> Option<St
         .map(|(_, base)| base)
 }
 
-/// `dir` の HEAD（統合の前。段の unit が基点を持たないときの health の base）。読めなければ `HEAD`（評価で base を解決
-/// できなければ証跡は Error になり、合格にしない）。
-fn git_head(dir: &Path) -> String {
-    std::process::Command::new("git")
+/// `dir` で git を実行し、`(exit code, stdout の trim)` を返す。起動できなければ `Err`。
+fn git_in(dir: &Path, args: &[&str]) -> Result<(Option<i32>, String), String> {
+    let out = std::process::Command::new("git")
         .arg("-C")
         .arg(dir)
-        .args(["rev-parse", "--verify", "HEAD^{commit}"])
+        .args(args)
         .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_else(|| "HEAD".to_string())
+        .map_err(|e| format!("git {} を起動できない: {e}", args.join(" ")))?;
+    let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if out.status.success() || out.status.code() == Some(1) {
+        return Ok((out.status.code(), stdout));
+    }
+    Err(format!(
+        "git {} が失敗した（exit {:?}）: {}",
+        args.join(" "),
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr).trim()
+    ))
+}
+
+/// D1.2（付記 2026-11-10）: 段の統合の health の base。`dir` は統合の作業ツリーで、統合の前（merge の前）に呼ぶ。
+/// 統合の前の HEAD を H、段の基点を P（`start`。無ければ H）、H と review target `target`（`Ok(None)` は target の無い
+/// 作業場所）の merge-base を M とし、P が M の祖先なら M、そうでなければ P を返す。段の途中で Task の branch に
+/// 取り込んだ target の commit（`P..M`。target から辿れる承認済みの側）だけを base に入れ、worker の変更は `M..head`
+/// に残す（I3）。target を解決できない・H を読めない・git が失敗したら `Err`（合格にしない）。共通の祖先が無い
+/// （merge-base の exit 1）なら取り込みが無いので P。
+fn phase_health_base(
+    dir: &Path,
+    start: Option<String>,
+    target: Result<Option<String>, String>,
+) -> Result<String, String> {
+    let fail = |why: String| format!("phase_base: {why}");
+    let (code, head) = git_in(dir, &["rev-parse", "--verify", "HEAD^{commit}"]).map_err(fail)?;
+    if code != Some(0) || head.is_empty() {
+        return Err(fail("統合の前の HEAD を読めない".to_string()));
+    }
+    let start = start.unwrap_or_else(|| head.clone());
+    let Some(target) = target.map_err(fail)? else {
+        return Ok(start);
+    };
+    let (code, merge_base) = git_in(dir, &["merge-base", &head, &target]).map_err(fail)?;
+    if code != Some(0) || merge_base.is_empty() {
+        return Ok(start);
+    }
+    let (code, _) =
+        git_in(dir, &["merge-base", "--is-ancestor", &start, &merge_base]).map_err(fail)?;
+    Ok(if code == Some(0) { merge_base } else { start })
 }
 
 /// health の証跡の repo の id。案件の repo の参照（`task.repos` の同じ名前）があればその id。参照の無い作業場所
@@ -467,17 +513,19 @@ fn health_repo_id(repo_id: Option<RepoId>) -> RepoId {
 }
 
 /// D1.2: 段の統合の health の対象。統合後の作業ツリー（検査と同じ先頭の git の repo `repo_items[0]`）で、base は段の基点
-/// （無ければ統合の前の HEAD）。head は merge の後に [`HealthTarget::at_head`] で統合の HEAD にする。git の repo が無ければ `None`。
+/// `start`（[`phase_base_commit`]）と review target `target`（[`Dispatcher::phase_review_target`]）から
+/// [`phase_health_base`] が統合の前に決める。head は merge の後に [`HealthTarget::at_head`] で統合の HEAD にする。git の
+/// repo が無ければ `None`。
 pub(super) fn phase_target<T>(
-    units: &[task_core::WorkUnitRow],
-    phase: &str,
+    start: Option<String>,
     repo_items: &[(PathBuf, Option<RepoId>, T)],
+    target: Result<Option<String>, String>,
 ) -> Option<HealthTarget> {
     let (dir, repo_id, _) = repo_items.first()?;
     Some(HealthTarget {
         repo_id: health_repo_id(*repo_id),
         worktree: dir.clone(),
-        base: phase_base_commit(units, phase).unwrap_or_else(|| git_head(dir)),
+        base: phase_health_base(dir, start, target),
         head: "HEAD".to_string(),
         bundled: gate::bundled_checker().cloned(),
     })
@@ -502,10 +550,38 @@ impl Dispatcher {
         Some(HealthTarget {
             repo_id: health_repo_id(repo_id),
             worktree: worktree.to_path_buf(),
-            base,
+            base: Ok(base),
             head: "HEAD".to_string(),
             bundled: gate::bundled_checker().cloned(),
         })
+    }
+
+    /// D1.2（付記 2026-11-10）: 段の統合の health の review target。統合の作業ツリー `ws` の先頭の git の repo の、review
+    /// 前の同期と同じ target（[`Dispatcher::review_target_ref`]: 木の子は親の branch、ほかは repo の既定 branch）。案件の
+    /// repo の参照が無い作業場所（review 前の同期の対象でない）は `Ok(None)`。参照があるのに target を解決できない・
+    /// 読めないときは `Err`（段の統合の health を合格にしない）。
+    pub(in super::super) fn phase_review_target(
+        &self,
+        task: &Task,
+        ws: &task_worker::TaskWorkspaces,
+    ) -> Result<Option<String>, String> {
+        let Some(repo) = ws.repos.iter().find(|r| r.is_git()) else {
+            return Ok(None);
+        };
+        let Some(reference) = task.repos.iter().find(|r| r.name == repo.name) else {
+            return Ok(None);
+        };
+        match self.review_target_ref(task, reference.repo_id, &repo.source) {
+            Ok(Some(target)) => Ok(Some(target)),
+            Ok(None) => Err(format!(
+                "repo {} の review target を解決できない",
+                repo.name
+            )),
+            Err(e) => Err(format!(
+                "repo {} の review target を読めない: {e}",
+                repo.name
+            )),
+        }
     }
 
     /// WU の check の結果の health の行を扱う。列の最後の余りの行（`run_integration_checks` が `checks` の後に足す）に
@@ -617,3 +693,7 @@ impl Dispatcher {
 #[cfg(test)]
 #[path = "check_item_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "check_item_phase_base_tests.rs"]
+mod phase_base_tests;

@@ -120,7 +120,7 @@ pub(super) fn restore_base(dir: &std::path::Path, base: &str) {
 }
 
 /// fixture の base → head で変わった path（evidence の path の照合に使う。fixture の内容を写さない）。
-fn changed_paths(repo: &std::path::Path, fx: &Fixture) -> Vec<String> {
+pub(super) fn changed_paths(repo: &std::path::Path, fx: &Fixture) -> Vec<String> {
     git_out(repo, &["diff", "--name-only", fx.base(), fx.head()])
         .lines()
         .map(str::to_string)
@@ -128,7 +128,7 @@ fn changed_paths(repo: &std::path::Path, fx: &Fixture) -> Vec<String> {
 }
 
 /// review の health の項目（`RequiredChecksEvaluated.results[]` の `HEALTH_CHECK_ID`）を `(pass, evidence)` で順に。
-fn review_health(events: &[Event]) -> Vec<(bool, HealthEvidence)> {
+pub(super) fn review_health(events: &[Event]) -> Vec<(bool, HealthEvidence)> {
     events
         .iter()
         .filter_map(|e| match e {
@@ -143,7 +143,7 @@ fn review_health(events: &[Event]) -> Vec<(bool, HealthEvidence)> {
 
 /// dep-inversion の fail 級の finding の rule（ADR (2) の表）。層の逆向きは `deps.violation`。rust は core の
 /// `Cargo.toml` が app に依存し、app が core に依存するので Cargo の循環 `deps.cycle` も fail 級になる（検査器の実測）。
-fn dep_inversion_rules(kind: &str) -> Vec<&'static str> {
+pub(super) fn dep_inversion_rules(kind: &str) -> Vec<&'static str> {
     match kind {
         "rust" => vec!["deps.cycle", "deps.violation"],
         _ => vec!["deps.violation"],
@@ -151,7 +151,7 @@ fn dep_inversion_rules(kind: &str) -> Vec<&'static str> {
 }
 
 /// fail 級の finding の rule の集合（fingerprint `<rule_id>:<hash>` の rule の部分）。
-fn blocking_rules(evidence: &HealthEvidence) -> Vec<&str> {
+pub(super) fn blocking_rules(evidence: &HealthEvidence) -> Vec<&str> {
     let mut rules: Vec<&str> = evidence
         .blocking
         .iter()
@@ -163,7 +163,7 @@ fn blocking_rules(evidence: &HealthEvidence) -> Vec<&str> {
 }
 
 /// 本物の検査器（同梱）が dep-inversion の候補に出した Fail（fail 級の rule は [`dep_inversion_rules`] だけ）。
-fn assert_dep_inversion_fail(
+pub(super) fn assert_dep_inversion_fail(
     kind: &str,
     evidence: &HealthEvidence,
     bundled: &CheckerId,
@@ -180,7 +180,7 @@ fn assert_dep_inversion_fail(
 }
 
 /// 本物の検査器の Pass（fail 級 0）。
-fn assert_pass(evidence: &HealthEvidence, bundled: &CheckerId) {
+pub(super) fn assert_pass(evidence: &HealthEvidence, bundled: &CheckerId) {
     assert_eq!(evidence.verdict, HealthVerdict::Pass, "{evidence:?}");
     assert_eq!(evidence.checker.as_ref(), Some(bundled), "{evidence:?}");
     assert!(evidence.blocking.is_empty(), "{evidence:?}");
@@ -195,7 +195,7 @@ fn repair_class(kind: &str) -> String {
         .join(",")
 }
 
-fn repair_classes(events: &[Event]) -> Vec<String> {
+pub(super) fn repair_classes(events: &[Event]) -> Vec<String> {
     events
         .iter()
         .filter_map(|e| match e {
@@ -464,7 +464,7 @@ fn review_task(repo: &std::path::Path, store: &Arc<dyn TaskStore>, flags: Option
 }
 
 /// reviewer の合格の `review.json`（acceptance[1] が `Check::Reviewer`）。
-const REVIEW_PASS: &str =
+pub(super) const REVIEW_PASS: &str =
     r#"{"verdicts":[{"criterion":1,"pass":true,"reason":"fine"}],"health":{"findings":[]}}"#;
 
 /// fixture の候補を task の worktree に入れて review を起こし、止まるまで流す。review の repair（key `repair-*`）は

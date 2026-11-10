@@ -1,6 +1,6 @@
 //! ADR 2026-10-27-project-brief: 案件の状態の要約（`PUT /projects/{id}/status`・CoS op
 //! `project.status_put`）と、`GET /projects` の要約・件数・最終活動時刻・人待ち。
-mod common;
+use crate::common;
 
 use common::cos_ops::{OPS, db, op_body};
 use common::*;

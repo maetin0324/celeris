@@ -3,7 +3,7 @@
 //! and GitHub, so through `/cos/operations` they are C-class: pending before the effect, applied
 //! after it, and a resent request never runs git or `gh` again. GitHub is a fake `gh` script that
 //! logs its calls; `origin` is a local bare repository (no network).
-mod common;
+use crate::common;
 
 use common::cos_ops::{OPS, audit_events, cos_bearer, op_body};
 use common::*;

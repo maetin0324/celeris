@@ -1,7 +1,7 @@
 //! ADR 2026-10-05 cos-chat-home D4: a file pinned to a KB inbox candidate keeps its provenance
 //! (hash, chat thread/message, the request text) on the candidate list and detail, and a pin to an
 //! owner that does not exist is 404 on both the REST route and the CoS operation.
-mod common;
+use crate::common;
 
 use axum::body::Body;
 use axum::http::Request;

@@ -1,6 +1,6 @@
 //! ADR 2026-10-28-cos-review-back-thread D1/D4'/D6: the review run's report operation
 //! (`chat.review_report`), the read-only review thread and `GET /cos/review-thread`.
-mod common;
+use crate::common;
 use axum::body::Body;
 use axum::http::Request;
 use common::cos_ops::{OPS, cos_bearer, db, op_body};

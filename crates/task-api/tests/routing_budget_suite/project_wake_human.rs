@@ -1,6 +1,6 @@
 //! ADR 2026-11-04-project-controller D12・I7: 人の操作と `human_epoch` は同じ transaction で書く。数えるのは
 //! `Principal::Human` の要求だけ（接頭辞 `project_wake_api_human_`）。
-mod common;
+use crate::common;
 
 use common::cos_ops::{OPS, op_body};
 use common::*;

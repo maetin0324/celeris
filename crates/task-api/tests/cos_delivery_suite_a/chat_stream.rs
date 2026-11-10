@@ -2,7 +2,7 @@
 //! the store (cos-run's role). Time is paused: the poll/heartbeat timers advance only when the
 //! runtime is idle, and every wait is an event wait with a long safety bound (ADR-0125).
 
-mod common;
+use crate::common;
 
 use std::time::Duration;
 

@@ -1,5 +1,5 @@
 //! ADR 2026-10-05 D2/D3: `POST /api/v1/cos/operations` and `GET /api/v1/cos/operations/{o}`.
-mod common;
+use crate::common;
 
 use common::cos_ops::{documented_default_basis, with_basis};
 use common::*;

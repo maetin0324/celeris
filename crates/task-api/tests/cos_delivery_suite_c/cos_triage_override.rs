@@ -1,5 +1,5 @@
 //! Human correction of CoS answers: no network or timer waits.
-mod common;
+use crate::common;
 use common::*;
 use serde_json::{Value, json};
 use task_core::chat::{

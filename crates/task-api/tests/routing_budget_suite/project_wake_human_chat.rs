@@ -1,6 +1,6 @@
 //! ADR 2026-11-04-project-controller D12・付記 A1 の 9: 案件 thread の人の発言・`…/relays`・`chat.relay_forward`・
 //! 人の受信箱の回答は、書き込みと同じ transaction で `human_epoch` を増やす。CoS 自身の発言・回答は数えない。
-mod common;
+use crate::common;
 
 use common::cos_ops::{OPS, op_body};
 use common::*;

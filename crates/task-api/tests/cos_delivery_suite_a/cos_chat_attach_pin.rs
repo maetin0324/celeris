@@ -1,7 +1,7 @@
 //! ADR 2026-10-05 cos-chat-home D4: a CoS run pins a chat attachment to the task or KB inbox
 //! candidate it created, through the audited `/cos/operations` (the direct references route is 422
 //! for a CoS credential).
-mod common;
+use crate::common;
 
 use axum::body::Body;
 use axum::http::Request;

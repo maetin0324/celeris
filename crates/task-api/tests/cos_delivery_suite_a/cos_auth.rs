@@ -1,5 +1,5 @@
 //! ADR 2026-10-05 D2/D3: CoS run credential middleware and the checkpoint API.
-mod common;
+use crate::common;
 
 use common::*;
 use serde_json::{Value, json};

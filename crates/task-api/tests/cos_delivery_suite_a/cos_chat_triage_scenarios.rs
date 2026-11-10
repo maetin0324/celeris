@@ -3,7 +3,7 @@
 //! credential で resolve を呼ぶ偽 harness が務める（外部 LLM・外部ネットワーク無し）。待ちの取り込みは
 //! dispatcher と同じ導出（`task_ops::human_inbox` の kind・id・created_at）で store に入れる。
 //! 時刻は注入した値で、sleep しない。
-mod common;
+use crate::common;
 
 use common::*;
 use serde_json::{Value, json};

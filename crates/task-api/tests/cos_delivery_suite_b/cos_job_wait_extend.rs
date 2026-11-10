@@ -5,7 +5,7 @@
 //! worker is a fake harness: the test calls the API with a live CoS run credential (no LLM, no
 //! network). Waits and approvals are fixtures written through the store like the dispatcher's
 //! timeout (`time_out_cluster_job_wait`).
-mod common;
+use crate::common;
 
 use common::cos_ops::{audit_events, cos_bearer};
 use common::*;

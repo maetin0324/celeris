@@ -3,7 +3,7 @@
 //! C-class operations — a pending record before the git effect, applied after it, a refusal that
 //! changed nothing settles `rejected`, and a resent request never commits again. Direct calls with
 //! the CoS credential are 422. Every repository is a local git repository in a tempdir (no network).
-mod common;
+use crate::common;
 
 use common::cos_ops::{OPS, audit_events, cos_bearer, op_body};
 use common::*;

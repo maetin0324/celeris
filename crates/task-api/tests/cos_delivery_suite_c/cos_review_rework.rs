@@ -3,7 +3,7 @@
 //! never for a repeated rejection, a human check, a human_required label or a failure that is not a
 //! reviewer verdict. The CoS worker is a fake harness: the test calls the API with a live CoS run
 //! credential (no LLM, no network).
-mod common;
+use crate::common;
 
 use common::cos_ops::{audit_events, cos_bearer};
 use common::*;

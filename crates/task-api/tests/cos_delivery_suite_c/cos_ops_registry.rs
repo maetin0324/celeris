@@ -1,5 +1,5 @@
 //! Registry foundation: ADR exclusions are rejected with audit and no secret payload persistence.
-mod common;
+use crate::common;
 use common::cos_ops::{OPS, audit_events, cos_bearer, db, op_body};
 use common::*;
 use serde_json::json;

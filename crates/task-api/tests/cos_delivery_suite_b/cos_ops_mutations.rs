@@ -1,7 +1,7 @@
 //! ADR 2026-10-09-cos-operations-all-mutations D3/D6: the required representatives. Each operation is
 //! refused when called directly with the CoS credential (422 + rejected audit row) and applied through
 //! `/cos/operations` with its row, audit envelope event and chat card; the domain write carries `cos`.
-mod common;
+use crate::common;
 
 use common::cos_ops::{OPS, audit_events, cos_bearer, op_body, run_domain};
 use common::*;

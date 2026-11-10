@@ -2,7 +2,7 @@
 //! frame with a basis, and everything else is refused so CoS escalates. The CoS worker is a fake
 //! harness: the test calls the API with a live CoS run credential (no LLM, no network). Waits are
 //! fixtures written through the store; the derived inbox keys them like the dispatcher's intake.
-mod common;
+use crate::common;
 
 use common::cos_ops::{audit_events, cos_bearer};
 use common::*;

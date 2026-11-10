@@ -8,7 +8,7 @@
 //! so the person never picks a mode. When `CELERIS_GCC_E2E_OUT` is set, each test appends one
 //! raw record (`celeris.general-cos-consult/1`) that `scripts/dev/test-general-cos-consult-e2e.sh`
 //! checks.
-mod common;
+use crate::common;
 
 use common::*;
 use serde_json::{Value, json};

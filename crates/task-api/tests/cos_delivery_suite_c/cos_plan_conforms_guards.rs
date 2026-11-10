@@ -4,7 +4,7 @@
 //! acceptance since the previous approval are refused, for `plan_conforms` and for
 //! `within_approved_frame` alike. The CoS worker is a fake harness: the test calls the API with a
 //! live CoS run credential (no LLM, no network).
-mod common;
+use crate::common;
 
 use common::cos_ops::cos_bearer;
 use common::*;

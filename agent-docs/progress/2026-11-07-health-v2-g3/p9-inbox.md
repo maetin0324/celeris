@@ -61,6 +61,12 @@ task の受け入れ条件 0 の 6 件の内容と、それを確かめる試験
 - 文書の検査・`bash scripts/dev/test-affected.sh`・`cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check` の結果は下の「提出時の検査」に書く。
 
 ## 提出時の検査
+提出時の HEAD（この unit の commit の後）で実行した。この unit の変更は文書 3 file だけ（範囲 check `sh "$CELERIS_WU_SCOPE_PATHS"` の出力は ADR・この file・p9.md の 3 件）。
+- `sh scripts/dev/progress-index.sh --check` → exit 0（ok）。
+- `sh scripts/dev/check-doc-links.sh` → exit 0。`sh scripts/dev/check-adr-numbers.sh` → exit 0（413 files）。`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → exit 0。
+- `python3 scripts/dev/check-human-text.py` → exit 0（0 findings）。`python3 scripts/dev/check-architecture-map.py` → OK（990 件）。
+- `bash scripts/dev/test-affected.sh` → exit 0。「試験対象の変更なし（docs のみ等）」で nextest は走らない。先頭の check-health は verdict=pass、fail 級 0、worsened 0。new の 2 件は unit successors 以降の進捗と同じ warning の候補（この unit が変えていない file）。`repo_health_gate: all checks passed`。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 
 ## 未解決
 - 計画を持つ後続（木の親）が戻っても、その子 task（`parent_cancelled`）と work unit は戻らない（[p9](p9.md) の「未解決」の 3 点目のまま。この task の範囲の外）。

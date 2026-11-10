@@ -159,11 +159,27 @@ fn latest_record(store: &SqliteStore, id: TaskId) -> Option<Event> {
         .map(|r| r.event)
 }
 
-/// A の reopen で項目が出て、本文に戻した後続 B の id と依存先、kept の理由（retry の後継・未解決の依存先）がある。
-/// B が running になると消える。別の依存先 X の項目は、戻した後続 Y を人が cancel する（終端）と消える。kept だけの
-/// event（K の reopen で戻せる後続が無い）では項目が出ない。
-#[test]
-fn dependents_reopened_inbox_item_lifecycle() {
+/// 3 件の試験が共有する準備。依存先 A・X・K（と、ほかの依存先 E）を失敗させて後続を cancel し、C を retry して後継 C2
+/// を作ってから A・X・K を reopen する。
+/// - A: B は戻り（restored）、C は後継 C2 で、D はほかの依存先 E が failed なので戻らない（kept）。
+/// - X: Y が戻る（restored）。
+/// - K: L はほかの依存先 E が failed なので戻らない（kept だけ）。
+///
+/// 準備の途中の確かめ（cancel の連鎖・復帰の前に項目が無い・復帰の後の状態）は、どの試験でも走る。
+struct Reopened {
+    store: SqliteStore,
+    a: TaskId,
+    b: TaskId,
+    c: TaskId,
+    c2: TaskId,
+    d: TaskId,
+    e: TaskId,
+    x: TaskId,
+    y: TaskId,
+    k: TaskId,
+}
+
+fn reopened() -> Reopened {
     let store = SqliteStore::open_in_memory().expect("store");
     let a = insert(&store, "dependency a", Vec::new());
     let e = insert(&store, "other dependency e", Vec::new());
@@ -192,6 +208,42 @@ fn dependents_reopened_inbox_item_lifecycle() {
     assert_eq!(status(&store, b), Status::Ready);
     assert_eq!(status(&store, y), Status::Ready);
     assert_eq!(status(&store, l), Status::Cancelled);
+    Reopened {
+        store,
+        a,
+        b,
+        c,
+        c2,
+        d,
+        e,
+        x,
+        y,
+        k,
+    }
+}
+
+/// A の reopen で A に 1 件の項目が出る。本文に戻した後続 B の id と依存先 A、戻さなかった後続の理由（C は retry の
+/// 後継 C2、D はほかの依存先 E）がある。選択肢は戻した B の cancel だけで、native の操作は B の cancel の API。
+///
+/// 守る不変条件: 項目は戻した後続（restored）を task id と依存先つきで挙げ、kept は理由と併記するだけで cancel の
+/// 対象にしない（`cancel_target` は戻していない D を返さない）。項目の id から依存先 A を引ける。
+///
+/// 既存の 5 件で検出できない理由: unit p9 の task-core の 5 件（`dependency_reopen_restores_cancelled_dependents_transitively`・
+/// `keeps_dependent_while_another_dependency_failed`・`keeps_manually_cancelled_dependent`・
+/// `returns_draft_dependent_to_draft`・`on_rereview_and_cancels_again_on_failure`）は store の後続の状態と events
+/// だけを見て、受信箱を組み立てない。本文・選択肢・native の path の誤りは、その 5 件では合格のまま起きる。
+#[test]
+fn dependency_reopen_inbox_lists_restored_and_kept() {
+    let Reopened {
+        store,
+        a,
+        b,
+        c,
+        c2,
+        d,
+        e,
+        ..
+    } = reopened();
 
     // A: 戻した後続 B と、戻さなかった C（retry の後継 C2）・D（未解決の依存先 E）。
     let item = item_of(&store, a).expect("A の項目");
@@ -238,17 +290,23 @@ fn dependents_reopened_inbox_item_lifecycle() {
         Some(a),
         "項目の id から依存先 A を引ける"
     );
+}
 
-    // K: kept だけの event（L はほかの依存先 E が failed のまま）。event はあるが項目は出ない。
-    let Some(Event::DependentsReopened { restored, kept }) = latest_record(&store, k) else {
-        panic!("K に DependentsReopened が無い");
-    };
-    assert!(restored.is_empty());
-    assert_eq!(kept.len(), 1);
-    assert!(
-        item_of(&store, k).is_none(),
-        "kept だけの event は項目を出さない"
-    );
+/// 戻した後続が動き出すか終端になると項目が消える。X の項目は戻した Y を人が cancel する（終端）と消える。A の項目は
+/// 戻した B が running になると消え、B が `infra_requeue` で ready に戻っても出ない。
+///
+/// 守る不変条件: 項目は戻した後続がまだ動いていない（今 draft・ready で、最後の遷移が `dependency_reopened`）間だけ
+/// 出る（ADR-0133 の「答えると消える」）。動いた後の ready は戻した後続として数えない。
+///
+/// 既存の 5 件で検出できない理由: unit p9 の task-core の 5 件（`dependency_reopen_restores_cancelled_dependents_transitively`・
+/// `keeps_dependent_while_another_dependency_failed`・`keeps_manually_cancelled_dependent`・
+/// `returns_draft_dependent_to_draft`・`on_rereview_and_cancels_again_on_failure`）は受信箱を組み立てず、戻した後続を
+/// 復帰の後に動かさない。項目が残り続ける・requeue で出直す不具合は、その 5 件では合格のまま起きる。
+#[test]
+fn dependency_reopen_inbox_item_resolves_when_dependents_move() {
+    let Reopened {
+        store, a, b, x, y, ..
+    } = reopened();
 
     // X: 戻した後続 Y がある間は出て、人が Y を cancel する（終端）と消える。
     assert!(item_of(&store, x).is_some());
@@ -261,6 +319,7 @@ fn dependents_reopened_inbox_item_lifecycle() {
     );
 
     // A: B が動き出す（running）と消える。今 ready に戻っても、最後の遷移が dependency_reopened でなければ出ない。
+    assert!(item_of(&store, a).is_some());
     start(&store, b);
     assert!(item_of(&store, a).is_none(), "戻した後続が動き出すと消える");
     store
@@ -272,4 +331,31 @@ fn dependents_reopened_inbox_item_lifecycle() {
         "動いた後の ready は戻した後続ではない"
     );
     assert!(items(&store).is_empty());
+}
+
+/// K の reopen では後続 L がほかの依存先 E の failed で戻らない。K に restored が空で kept が 1 件の
+/// `DependentsReopened` はあるが、受信箱の項目は出ない。
+///
+/// 守る不変条件: kept だけの event は項目を出さない（retried は重複を防いだので答えることが無く、other_dependency は
+/// 未解決の依存先の項目に任せる）。同じ store の A には項目が出ているので、項目を作る経路そのものは働いている。
+///
+/// 既存の 5 件で検出できない理由: unit p9 の task-core の 5 件（`dependency_reopen_restores_cancelled_dependents_transitively`・
+/// `keeps_dependent_while_another_dependency_failed`・`keeps_manually_cancelled_dependent`・
+/// `returns_draft_dependent_to_draft`・`on_rereview_and_cancels_again_on_failure`）は受信箱を組み立てない。kept だけの
+/// event から答えようの無い項目が出る不具合は、その 5 件では合格のまま起きる。
+#[test]
+fn dependency_reopen_kept_only_event_has_no_inbox_item() {
+    let Reopened { store, a, k, .. } = reopened();
+
+    // K: kept だけの event（L はほかの依存先 E が failed のまま）。event はあるが項目は出ない。
+    let Some(Event::DependentsReopened { restored, kept }) = latest_record(&store, k) else {
+        panic!("K に DependentsReopened が無い");
+    };
+    assert!(restored.is_empty());
+    assert_eq!(kept.len(), 1);
+    assert!(
+        item_of(&store, k).is_none(),
+        "kept だけの event は項目を出さない"
+    );
+    assert!(item_of(&store, a).is_some(), "戻した後続のある A には出る");
 }

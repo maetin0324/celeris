@@ -39,6 +39,8 @@ WorkUnit `successors`（P-9 (a)）。G3 の final review の差し戻し (1) と
 - `dependency_reopen_restores_when_successor_drops_dependency`: 人が B' の `depends_on` から A を外す（`update_task`）と、判定は `Restore(DependencyReopened { draft: false })` になる。A の reopen で B は ready に戻り、B' は触られない。
 - `dependency_reopen_trigger_distinguishes_kept_reasons`（純粋関数）: `Restore`（draft の前は draft）、`Kept(Retried)`（未解決の依存先があっても後継を先に見る）、`Kept(OtherDependency { unresolved })`（failed と見つからない依存先の id を順に入れる）、`Other`（人の cancel、遷移の記録が無い、cancelled でない）を区別する。
 
+付記（2026-11-10）: unit [test-names](p9-inbox-test-names.md) が、上の 1 件目を `dependency_reopen_keeps_retried_dependent`、2 件目を `dependency_reopen_retry_skips_retried_dependent` に改名した（task の受け入れ条件 0 の名前。確かめる内容は同じで、assert を足した）。
+
 ## 証拠（提出時の HEAD で実行）
 - `cargo nextest run -p task-core --no-tests=fail -E 'test(/dependency_reopen_|retry/)'`: exit 0、26 passed（dependency_reopen_ の 9 件を含む）。
 - 健全性の値（base → head。`size.responsibility-growth` と同じ数え方）: store の module の行 19736 → 19720、`SqliteStore` の method 730 → 730。

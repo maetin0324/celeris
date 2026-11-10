@@ -257,8 +257,16 @@ fn reopen_verdict(store: &SqliteStore, dep: TaskId, id: TaskId) -> DependencyCan
 /// D7.2: A の失敗で cancel された B を人が retry して後継 B'（`depends_on` に A を写す）を作った後、A を reopen しても
 /// B は cancelled のまま残り、判定は `Kept(Retried { successor: B' })` になる。B' は draft のまま触られない。
 /// 後継の無い後続 C は今までどおり戻る。
+///
+/// 守る不変条件: retry の後継を持つ後続は依存先の reopen で戻らず（B と B' が同じ仕事を走らせない）、A の記録
+/// `DependentsReopened` の kept に理由 `retried` と後継 B' で入る。restored は戻した C だけ。
+///
+/// 既存の 5 件で検出できない理由: unit p9 の 5 件（`restores_cancelled_dependents_transitively`・
+/// `keeps_dependent_while_another_dependency_failed`・`keeps_manually_cancelled_dependent`・
+/// `returns_draft_dependent_to_draft`・`on_rereview_and_cancels_again_on_failure`）はどれも後続を retry せず、後継を
+/// 持つ後続を作らない。後継のある B が A の reopen で戻る重複も、kept の理由の取り違えも、その 5 件は合格のまま通す。
 #[test]
-fn dependency_reopen_keeps_dependent_with_retry_successor() {
+fn dependency_reopen_keeps_retried_dependent() {
     let store = SqliteStore::open_in_memory().unwrap();
     let a = insert_failable(&store);
     let b = insert_dependent(&store, Status::Ready, vec![a]);
@@ -286,12 +294,35 @@ fn dependency_reopen_keeps_dependent_with_retry_successor() {
         reasons(&store, c),
         vec!["dependency_failed", "dependency_reopened"]
     );
+    assert_eq!(
+        reopened_records(&store, a),
+        vec![Event::DependentsReopened {
+            restored: vec![RestoredDependent {
+                task_id: c,
+                depends_on: vec![a],
+            }],
+            kept: vec![KeptDependent {
+                task_id: b,
+                why: KeptReason::Retried { successor: b2 },
+            }],
+        }],
+        "kept に B が retried と後継 B' で入る"
+    );
 }
 
 /// D7.2: A の retry（A → A'）で、後継 B' を持つ B は A' に付け替えず cancelled のまま残し、B' は A' に付け替わる
 /// （draft のまま）。後継の無い C は今までどおり A' に付け替わって draft に戻る。
+///
+/// 守る不変条件: 依存先の retry（`retry_task_tx` の付け替え）は reopen と同じ判定（`retry_successors_tx` と
+/// `cancelled_by_dependency`）を使い、後継を持つ後続を付け替えず draft に戻さない。後継のほうが新しい依存先に付く。
+///
+/// 既存の 5 件で検出できない理由: unit p9 の 5 件（`restores_cancelled_dependents_transitively`・
+/// `keeps_dependent_while_another_dependency_failed`・`keeps_manually_cancelled_dependent`・
+/// `returns_draft_dependent_to_draft`・`on_rereview_and_cancels_again_on_failure`）は依存先を reopen・rereview で
+/// 戻すだけで、依存先の retry の付け替えの経路を通らない。後続の retry もしないので、B が A' に付け替わって B' と
+/// 重なる不具合は、その 5 件では起きない。
 #[test]
-fn dependency_reopen_retry_skips_dependent_with_successor() {
+fn dependency_reopen_retry_skips_retried_dependent() {
     let store = SqliteStore::open_in_memory().unwrap();
     let a = insert_failable(&store);
     let b = insert_dependent(&store, Status::Ready, vec![a]);
@@ -372,8 +403,8 @@ fn reopened_records(store: &SqliteStore, id: TaskId) -> Vec<Event> {
 /// D7.3: A の reopen（failed → ready）で、A の events に記録が 1 件だけ追記される。restored は戻した C（依存先 `[A]`）、
 /// kept は後継 B' を持つ B（`retried`）と、ほかの依存先 E が failed の D（`other_dependency`）。人が cancel した M と
 /// 木の親の中止で cancel された P は A の失敗と無関係なので kept に無く、draft の後継 B' も入らない。後続の cancel・
-/// B' の `Retried` の event は変わらない。done の依存先 X の reopen・rereview では、ほかの依存先の失敗で cancel された
-/// 後続 Y も kept に数えないので、restored が空なら X に記録を書かない。
+/// B' の `Retried` の event は変わらない。done の依存先の復帰で記録を書かないことは
+/// `dependency_reopen_rereview_does_not_repeat_event` が確かめる。
 #[test]
 fn dependency_reopen_records_restored_and_kept() {
     let store = SqliteStore::open_in_memory().unwrap();
@@ -428,7 +459,26 @@ fn dependency_reopen_records_restored_and_kept() {
         )
         .collect();
     assert_eq!(after, before, "cancel と Retried の event は変わらない");
+}
 
+/// D7.3: 依存先の復帰の記録を、書くべきでないときに書かず、同じ内容を重ねない。
+///
+/// 守る不変条件:
+/// - done の依存先 X の rereview（done → reviewing）でも、その後の reopen（done → ready）でも、人が cancel した後続と、
+///   ほかの依存先 F の失敗で cancel された後続 Y があっても、X の events に `DependentsReopened` を書かない（kept は
+///   依存先の終端が failed・cancelled のときだけ数え、人の cancel は数えない）。
+/// - ほかの依存先 E が failed の D だけを kept に持つ A を rereview → 不合格 → rereview と 2 回戻しても、記録は 1 件。
+///   2 回目は restored が空で kept が直前の記録と同じなので、遷移の 1 件だけを追記する。
+/// - 戻す後続も kept も無い依存先（人が cancel した後続だけを持つ Z）の reopen は何も書かない。
+///
+/// 既存の 5 件で検出できない理由: unit p9 の 5 件（`restores_cancelled_dependents_transitively`・
+/// `keeps_dependent_while_another_dependency_failed`・`keeps_manually_cancelled_dependent`・
+/// `returns_draft_dependent_to_draft`・`on_rereview_and_cancels_again_on_failure`）は後続の状態と後続の events だけを
+/// 見て、依存先の側の events を読まない。done の依存先の rereview はどれも作らず、`on_rereview_and_cancels_again_on_failure`
+/// も rereview を 1 回しかしない。余計な記録や重なった記録は、その 5 件では合格のまま起きる。
+#[test]
+fn dependency_reopen_rereview_does_not_repeat_event() {
+    let store = SqliteStore::open_in_memory().unwrap();
     let x = insert_dependent(&store, Status::Done, vec![]);
     let f = insert_failable(&store);
     let y = insert_dependent(&store, Status::Ready, vec![x, f]);
@@ -440,6 +490,10 @@ fn dependency_reopen_records_restored_and_kept() {
     assert_eq!(status(&store, y), Status::Cancelled);
     store.apply_transition(x, Trigger::Rereview, None).unwrap();
     assert_eq!(status(&store, x), Status::Reviewing);
+    assert!(
+        reopened_records(&store, x).is_empty(),
+        "done からの rereview では記録を書かない"
+    );
     store
         .apply_transition(x, Trigger::ReviewPass, None)
         .unwrap();
@@ -450,14 +504,7 @@ fn dependency_reopen_records_restored_and_kept() {
         reopened_records(&store, x).is_empty(),
         "done からの復帰では kept を書かない"
     );
-}
 
-/// D7.3: 同じ内容の記録を重ねない。ほかの依存先 E が failed の D だけを kept に持つ A を、rereview → 不合格 → rereview
-/// と 2 回戻しても、2 回目は restored が空で kept が直前の記録と同じなので追記しない。戻す後続も kept も無い依存先
-/// （人が cancel した後続だけを持つ Z）の reopen は何も書かない。
-#[test]
-fn dependency_reopen_skips_unchanged_record() {
-    let store = SqliteStore::open_in_memory().unwrap();
     let a = insert_failable(&store);
     let e = insert_failable(&store);
     let d = insert_dependent(&store, Status::Ready, vec![a, e]);

@@ -38,6 +38,8 @@ WorkUnit `event`（P-9 (b)）。ADR [2026-11-08-health-enforcement-loop](../../a
 - `dependency_reopen_restores_when_successor_drops_dependency`（確かめを追加）: 戻った B が A の記録の restored に依存先 `[A]` と一緒に入り、kept は空。
 - `dependency_reopen_restores_cancelled_dependents_transitively`（期待を変更）: B の復帰が C を戻すので、B の events には遷移の後に restored C（依存先 `[B]`）の記録が続く。旧い期待「B に 1 件だけ追記する」は D7.3 で契約が変わった（戻した後続の遷移も同じ枝を通り、推移的に戻した後続も記録する）。既存の event が変わらないこと、C には遷移の 1 件だけが足されることは引き続き確かめる。A の記録が B だけを持つことも足した。
 
+付記（2026-11-10）: unit [test-names](p9-inbox-test-names.md) が、上の 2 件目を `dependency_reopen_rereview_does_not_repeat_event` に改名し、1 件目の done の X の部分をそこへ移した（1 件目の名前は変えていない）。
+
 ## 証拠（提出時の HEAD で実行）
 - `cargo nextest run -p task-core --no-tests=fail -E 'test(/dependency_reopen_/)'`: exit 0、11 passed。
 - `cargo test -p task-api --lib schema`・`cargo nextest run -p task-core -E 'test(event_row_schema_matches_committed)'`: 合格（schema の差分ゼロ）。

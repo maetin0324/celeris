@@ -62,6 +62,8 @@ WorkUnit `inbox`（P-9 (c)）。ADR [2026-11-08-health-enforcement-loop](../../a
   - 受信箱の組み立ての読み取りは 1 回増える（`latest_event_rows` の 1 回）。加えて、まだ動いていない後続 1 件につき 1 回増える。
   - `inbox_blocked_events_are_read_once_per_build` は 11 件と 1 件の差を見るので、定数の 1 回は差に出ない。`request_lock_counts` の上限（task 1 件あたり 2 回）にも収まる。どちらも提出時の test-affected で合格した。
 
+付記（2026-11-10）: unit [test-names](p9-inbox-test-names.md) が、上の 1 件目（task-ops）を `dependency_reopen_inbox_lists_restored_and_kept`・`dependency_reopen_inbox_item_resolves_when_dependents_move`・`dependency_reopen_kept_only_event_has_no_inbox_item` の 3 件に分けた（task の受け入れ条件 0 の名前）。
+
 ## 証拠（提出時の HEAD で実行）
 - `cargo nextest run -p task-ops --no-tests=fail -E 'test(/dependents_reopened|human_inbox_/)'`: exit 0、25 passed。
 - `cargo nextest run -p task-api --no-tests=fail -E 'test(/dependents_reopened|schema/)'`: exit 0。新しい試験 1 件と schema の試験 4 件が合格した。

@@ -42,7 +42,7 @@ ADR が統一を決めたもの（D1「誤配置の回収は 1 つの関数」�
 | claude_code | `malformed_evidence_in_result_file_does_not_fail_the_run` | `result_contract_lenient_evidence`（prompt の「plain strings are not accepted」の確認は `build_prompt_includes_objective_criteria_and_result_file_instructions` に移した） |
 | claude_code | `question_in_result_file_blocks_task` | `result_contract_priority_order`・`result_contract_usage_passthrough` |
 | claude_code | `result_yield_becomes_terminal_yielded` | `result_contract_priority_order` |
-| claude_code | `result_wait_becomes_terminal_waiting` | `result_contract_priority_order`・`result_contract_no_known_field_is_retryable_error`（不正な wait）・`result_contract_usage_passthrough`（dispatcher の `cluster_job_wait` の試験が `Waiting` の扱いを別に固定） |
+| claude_code | `result_wait_becomes_terminal_waiting`（unit wait-line が前半を戻した） | run dir の wait の行: `run_common_finish_run_writes_wait_line_for_waiting`（`finish_run` の写像と `wait_terminal` での読み直し）と、戻した `result_wait_becomes_terminal_waiting`（結線: `Terminal::Waiting` と `runs/run-wait/result.json` の行と jobs）。不正な wait と question の優先: `result_contract_priority_order`・`result_contract_no_known_field_is_retryable_error`。当初の代わりとした dispatcher の `cluster_job_wait` の試験は run dir の行を通らないので代わりにならなかった（[wait-line.md](wait-line.md)） |
 | codex | `invalid_result_file_json_is_retryable_error` | `result_contract_invalid_json_is_retryable_error` |
 | codex | `malformed_evidence_in_result_file_does_not_fail_the_run` | `result_contract_lenient_evidence` |
 | codex | `question_in_result_file_blocks_task` | `result_contract_priority_order` |

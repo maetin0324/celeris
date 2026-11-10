@@ -200,6 +200,7 @@ dispatcher 側（`dispatcher/worker_task.rs`。R1 の write_set の外）は、`
 
 - 2026-11-10: 提案。unit adr（WU `adr`）が書いた。実装の unit が終わったら「実装済み」に変え、実装との食い違いを付記する。
 - 2026-11-10: 実装済み。unit result-contract（D1・D3・4a・4c）と unit run-common（D2・D3・4b）が実装し、unit record が下の付記を書いた。
+- 2026-11-10: final review の差し戻し（criterion 1）を受け、unit wait-line が 4b に試験を足し、4c で消した試験を戻した（付記 (i)）。
 
 ## 付記（2026-11-10、実装との突き合わせ）
 
@@ -229,3 +230,9 @@ unit result-contract・run-common の実装（[result-contract の進捗](../pro
 (g) (4) の試験の数。決定は「10 件を足し、写し 13 件を消して純減 3 件」だったが、実際は 11 件を足した（4a の 5 件、(a) の `read_result_file_…` 1 件、4b の 5 件）。消した試験関数は 12 件（claude_code 5・codex 4・acp 2・aider 1）。pi の `pi_adapter_result_question_yield_and_invalid_json` は消さずに question の 1 組に縮め、`pi_adapter_result_file_question_becomes_terminal_question` に改名した（決定の 13 件はこの関数を数えていた）。`crates/task-worker/src` の `#[test]`・`#[tokio::test]` は base の 1192 から 1191 になった（純減 1 件）。
 
 (h) 検証節の nextest の filter `test(/^result_contract_|^run_common_/)` は 0 件に当たる（`cargo nextest list -p task-worker -E …` で確かめた）。nextest の試験名は `result_report::result_contract_tests::result_contract_priority_order` のように module の path を含むので、`^` で始まる正規表現は当たらない。正しい filter は `test(/::(result_contract|run_common)_[a-z0-9_]+$/)` で、10 件（4a の 5 件と 4b の 5 件）に当たり、10 件とも通る。module 名 `result_contract_tests` にも当たる `test(/run_common_|result_contract_/)` は、(a) の `read_result_file_…` を含めて 11 件になる。
+
+(i) 4b の試験の追加と 4c の訂正（unit wait-line、[wait-line の進捗](../progress/2026-11-10-health-v2-r1/wait-line.md)）。4c は claude_code の `result_wait_becomes_terminal_waiting` を「dispatcher の `cluster_job_wait` の試験が `Waiting` の扱いを別に固定している」として消したが、この理由は誤りだった。消した試験は、adapter が `Terminal::Waiting` で終えた run の `runs/<run_id>/result.json` に `{"type":"wait",...}` の 1 行（`finish_run` → `write_result_json` の `Terminal::Waiting` → `WorkerMessage::Wait` の写像）が書かれることを確かめる唯一の試験だった。この行は daemon の再起動と orphan の引き継ぎで task-dispatch の `terminal_from_run_dir` が `adapter::wait_terminal` で `Terminal::Waiting` に戻す。dispatcher の `cluster_job_wait` の試験は scripted adapter が `Terminal` を直接返すので、run dir の行を書きも読みもしない。
+- 4b に `run_common_finish_run_writes_wait_line_for_waiting`（`crates/task-worker/src/subprocess/tests.rs`）を足した。守る不変条件: `finish_run` に `Terminal::Waiting`（cluster・jobs 2 件・scheduler pbs・poll_secs・timeout_secs・checkpoint・summary・usage）を渡すと `Ok` の `RunOutcome` が同じ `Waiting` を持ち、run dir の `result.json` が 1 行の JSON で `type=wait`・`kind=cluster_job` と各欄を持ち、その行を `terminal_from_run_dir` と同じ手順（`serde_json::Value` に読み、`usage` を `task_core::Usage` に読み、`wait_terminal`）で読むと元と同じ request・checkpoint・usage に戻る。
+- 4c の結線の試験に claude_code の `result_wait_becomes_terminal_waiting` を戻した（base の試験の前半: stub の claude が wait を書くと `Terminal::Waiting` になり、`runs/run-wait/result.json` に `type=wait` の行と jobs が残る）。不正な wait と question の優先は 4a の `result_contract_priority_order`・`result_contract_no_known_field_is_retryable_error` が見るので戻していない。
+- (g) の数はこれで、足した試験 12 件（4a の 5 件、(a) の 1 件、4b の 6 件）、消した試験関数 11 件（claude_code 4・codex 4・acp 2・aider 1）になった。`crates/task-worker/src` の `#[test]`・`#[tokio::test]` は base の 1192 から 1193（純増 1 件）。(h) の filter `test(/::(result_contract|run_common)_[a-z0-9_]+$/)` は 11 件、`test(/run_common_|result_contract_/)` は 12 件に当たる。
+- `subprocess.rs` の写像は変えていない（試験は欠陥を見つけなかった）。

@@ -11,7 +11,7 @@
 use std::sync::Arc;
 
 use serde::Serialize;
-use task_core::{McpScope, TaskStore};
+use task_core::{McpScope, OrgDirectory};
 
 use crate::auth::AuthedClient;
 use crate::state::McpState;

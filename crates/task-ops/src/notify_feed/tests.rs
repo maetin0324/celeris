@@ -1,6 +1,7 @@
 use super::*;
 use task_core::{
-    Budget, NoticeQuery, SqliteStore, Task, TaskId, TaskKind, Tier, WorkerHint, WorkspaceSpec,
+    Budget, NoticeQuery, OrgDirectory, SqliteStore, Task, TaskId, TaskKind, Tier, WorkerHint,
+    WorkspaceSpec,
 };
 
 fn task(status: Status) -> Task {

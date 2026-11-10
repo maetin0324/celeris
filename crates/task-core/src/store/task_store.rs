@@ -388,11 +388,6 @@ pub trait TaskStore:
 
     // ---- ADR-0033 D1: 組織（`org_nodes`）。DB が正で、設定は空のときの種蒔きにしか使わない ----
 
-    /// 全ノードを `position`、同値なら `id` の昇順で返す（木は呼び出し側が `parent_id` で組む）。
-    fn org_list(&self) -> Result<Vec<OrgNode>, StoreError>;
-    /// 挿入または更新。`crate::org::validate_upsert` を通してから書く（secretary は 1 つ、親は既存、
-    /// 自分を祖先にできない、secretary > department > section）。`created_at` は既存行のものを保つ。
-    fn org_upsert(&self, node: &OrgNode) -> Result<OrgNode, StoreError>;
     /// 監査 D-4: 設定からの種蒔き専用。`nodes` を渡された順に検証しながら**1 トランザクション**で書く
     /// （後の要素は前の要素を `existing` に含めて検証できるので、`secretary` → `department` → `section`
     /// の順に並んでいれば通る）。途中の 1 件でも `crate::org::validate_upsert` に落ちたら、それより前の

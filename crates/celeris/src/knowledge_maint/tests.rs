@@ -1,4 +1,5 @@
 use super::*;
+use task_core::OrgDirectory;
 use task_core::org::{OrgKind, OrgNode};
 use task_core::report::{Report, ReportId, ReportKind, ReportStore};
 use task_core::{

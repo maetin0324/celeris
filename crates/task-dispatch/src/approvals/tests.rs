@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use task_core::approval::ApprovalStore;
 use task_core::org::{OrgKind as OK, OrgNode};
 use task_core::{
-    Budget, ProjectId, SqliteStore, Status, TaskId, TaskKind, Tier, WorkerHint, WorkspaceSpec,
+    Budget, OrgDirectory, ProjectId, SqliteStore, Status, TaskId, TaskKind, Tier, WorkerHint,
+    WorkspaceSpec,
 };
 
 fn node(id: &str, parent: Option<&str>, kind: OK) -> OrgNode {

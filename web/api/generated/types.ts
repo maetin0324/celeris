@@ -344,6 +344,13 @@ export type AttentionItem = {
   "type": "health_repeat";
 } | {
   "at": string;
+  "kept": Array<KeptDependent>;
+  "pending": Array<PendingDependent>;
+  "seq": number;
+  "task": TaskRef;
+  "type": "dependents_reopened";
+} | {
+  "at": string;
   "integrate_task_escalated"?: string | null;
   "integrate_task_offered": boolean;
   "request": IntegrationRequest;
@@ -2432,6 +2439,10 @@ export type Event = {
   "source_task": TaskId;
   "type": "health_findings_repeated";
 } | {
+  "kept": Array<KeptDependent>;
+  "restored": Array<RestoredDependent>;
+  "type": "dependents_reopened";
+} | {
   "attempt": number;
   "class": string;
   "head_sha": string;
@@ -3594,7 +3605,7 @@ export type InboxItem = {
   "title": string;
 };
 
-export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "credential_wait" | "disk_full" | "delivery_skipped" | "integration_request" | "unintegrated" | "stalled" | "project_stalled" | "human_wait_aging" | "release_unpromoted" | "task_unscheduled" | "review_resync_halted" | "health_repeat" | "script_control";
+export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "credential_wait" | "disk_full" | "delivery_skipped" | "integration_request" | "unintegrated" | "stalled" | "project_stalled" | "human_wait_aging" | "release_unpromoted" | "task_unscheduled" | "review_resync_halted" | "health_repeat" | "dependents_reopened" | "script_control";
 
 export type InboxLink = {
   "href": string;
@@ -3718,6 +3729,19 @@ export type IntegrationView = {
 };
 
 export type IntegrationWaitCause = "unmerged" | "delivery_skipped" | "held" | "discarded";
+
+export type KeptDependent = {
+  "task_id": TaskId;
+  "why": KeptReason;
+};
+
+export type KeptReason = {
+  "reason": "retried";
+  "successor": TaskId;
+} | {
+  "reason": "other_dependency";
+  "unresolved": Array<TaskId>;
+};
 
 export type KnowledgeAcceptBody = {
   "overwrite"?: boolean;
@@ -4490,6 +4514,11 @@ export type PausePolicy = {
 };
 
 export type PauseSource = "human" | "agent";
+
+export type PendingDependent = {
+  "depends_on": Array<TaskId>;
+  "task": TaskRef;
+};
 
 export type Permissions = {
   "approvals"?: Array<string>;
@@ -5295,6 +5324,11 @@ export type ResolvedRouting = {
   "mode": RoutingMode;
   "online_update": boolean;
   "source": ModeSource;
+};
+
+export type RestoredDependent = {
+  "depends_on": Array<TaskId>;
+  "task_id": TaskId;
 };
 
 export type RetryBody = {

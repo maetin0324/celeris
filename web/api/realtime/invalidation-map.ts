@@ -189,6 +189,8 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   review_resync_resumed: { sets: ["T", "E", "R"] },
   // ADR 2026-11-08-health-enforcement-loop D4.3: 同じ health の指摘の往復（root の timeline と受信箱 health_repeat が変わる）。
   health_findings_repeated: { sets: ["T", "L"] },
+  // 同 D7.3: 依存先の終端からの復帰で戻した後続と戻さなかった後続の記録（依存先の timeline と受信箱が変わる）。
+  dependents_reopened: { sets: ["T", "L"] },
   // ADR 2026-10-27-done-task-auto-reintegrate: done 後の自動の再取り込み（開始は状態が reviewing に戻る、見送りは受信箱 unintegrated の理由が変わる）。
   done_reintegration_started: { sets: ["T", "E", "R"] },
   done_reintegration_deferred: { sets: ["T", "E", "R"] },

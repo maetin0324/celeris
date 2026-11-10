@@ -1400,18 +1400,20 @@ fn open_migrates_schema_4_db_and_old_rows_read_back_with_genre_none() {
 fn open_rejects_db_with_schema_version_newer_than_supported() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("toonew.sqlite3");
+    // この binary の版の 1 つ先（版を上げるたびに書き換えない）。
+    let newer = SCHEMA_VERSION + 1;
     {
         let conn = Connection::open(&path).unwrap();
-        conn.execute_batch(
+        conn.execute_batch(&format!(
             "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);\
-             INSERT INTO schema_migrations (version, applied_at) VALUES (122, '2020-01-01T00:00:00Z');",
-        )
+             INSERT INTO schema_migrations (version, applied_at) VALUES ({newer}, '2020-01-01T00:00:00Z');",
+        ))
         .unwrap();
     }
     let result = SqliteStore::open(&path);
     assert!(matches!(
         result,
-        Err(StoreError::SchemaTooNew { found: 122, supported }) if supported == SCHEMA_VERSION
+        Err(StoreError::SchemaTooNew { found, supported }) if found == newer && supported == SCHEMA_VERSION
     ));
 }
 
@@ -1819,64 +1821,41 @@ fn event_rows_for_returns_one_tasks_rows_with_ids_after_seq() {
     );
 }
 
-#[test]
-fn latest_delivery_skipped_rows_returns_latest_per_task_only() {
+/// 受信箱の正本の読み出し `TaskStore::latest_event_rows(kind)`（ADR-0121 付記・ADR 2026-11-08-health-enforcement-loop
+/// D7.3）の不変条件: (1) 問い合わせは種類の部分 index `index` を使い、events を全件 SCAN しない。index が無い・式が
+/// migration の式と食い違うと SQLite は黙って events を全件読み、返る行は同じなので、行だけを比べる試験では検出
+/// できない。問い合わせと試験は同じ文字列 `events::latest_event_rows_sql(kind)` を使う。(2) task ごとに最新の 1 件だけを global `id` の
+/// 昇順で返し、同じ task のほかの種類の event を混ぜない。`make(n)` は種類 `kind` の見分けのつく n 番目の event。
+fn assert_latest_rows_use_partial_index(
+    kind: LatestEventKind,
+    index: &str,
+    make: impl Fn(usize) -> Event,
+) {
     let store = SqliteStore::open_in_memory().unwrap();
-    let a = sample_task(Status::Draft);
-    let b = sample_task(Status::Draft);
+    let (a, b) = (sample_task(Status::Draft), sample_task(Status::Draft));
     store.insert(&a).unwrap();
     store.insert(&b).unwrap();
-    let skipped = |detail: &str| Event::DeliverySkipped {
-        reason: crate::DeliverySkipReason::NoMarker,
-        detail: detail.to_string(),
-        head: None,
+    let other_kind = match kind {
+        LatestEventKind::DeliverySkipped => Event::DependentsReopened {
+            restored: vec![],
+            kept: vec![],
+        },
+        LatestEventKind::DependentsReopened => Event::DeliverySkipped {
+            reason: crate::DeliverySkipReason::NoMarker,
+            detail: "other kind".into(),
+            head: None,
+        },
     };
-    store.append_event(a.id, &skipped("old")).unwrap();
+    store.append_event(a.id, &make(0)).unwrap();
     store.append_event(a.id, &Event::ApprovalRequested).unwrap();
     store.append_event(b.id, &Event::ApprovalRequested).unwrap();
-    store.append_event(a.id, &skipped("latest")).unwrap();
-    store.append_event(b.id, &skipped("other task")).unwrap();
+    store.append_event(a.id, &make(1)).unwrap();
+    store.append_event(b.id, &make(2)).unwrap();
+    store.append_event(a.id, &other_kind).unwrap();
 
-    let rows = store.latest_delivery_skipped_rows().unwrap();
-    assert_eq!(rows.len(), 2);
-    let by_task = rows
-        .into_iter()
-        .map(|row| (row.task_id, row))
-        .collect::<HashMap<_, _>>();
-    assert!(matches!(
-        &by_task[&a.id].event,
-        Event::DeliverySkipped { detail, .. } if detail == "latest"
-    ));
-    assert!(matches!(
-        &by_task[&b.id].event,
-        Event::DeliverySkipped { detail, .. } if detail == "other task"
-    ));
-}
-
-/// ADR-0121 付記: inbox の `latest_delivery_skipped_rows` は events 全件の full scan をせず、
-/// migration 0037 の部分 index `idx_events_delivery_skipped` を使う（問い合わせと試験で同じ SQL
-/// 文字列 `events::latest_delivery_skipped_sql()` を使うので、式がずれて index を落とすことはない）。
-#[test]
-fn latest_delivery_skipped_rows_uses_partial_index() {
-    let store = SqliteStore::open_in_memory().unwrap();
-    let a = sample_task(Status::Draft);
-    let b = sample_task(Status::Draft);
-    store.insert(&a).unwrap();
-    store.insert(&b).unwrap();
-    let skipped = |detail: &str| Event::DeliverySkipped {
-        reason: crate::DeliverySkipReason::NoMarker,
-        detail: detail.to_string(),
-        head: None,
-    };
-    store.append_event(a.id, &skipped("old")).unwrap();
-    store.append_event(a.id, &Event::ApprovalRequested).unwrap();
-    store.append_event(b.id, &Event::ApprovalRequested).unwrap();
-    store.append_event(a.id, &skipped("latest")).unwrap();
-    store.append_event(b.id, &skipped("other task")).unwrap();
-
-    let plan_details = store
+    let plan = store
         .with_read_conn(|conn| {
-            let sql = super::events::latest_delivery_skipped_sql();
+            let sql = super::events::latest_event_rows_sql(kind);
             let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
             let mut rows = stmt.query([])?;
             let mut details = Vec::new();
@@ -1886,28 +1865,57 @@ fn latest_delivery_skipped_rows_uses_partial_index() {
             Ok(details)
         })
         .unwrap();
+    // index の無い plan は `SCAN events USING INDEX sqlite_autoindex_events_1`（UNIQUE(task_id, seq) で全件を読む）。
+    // events を読む SCAN は部分 index を通るものだけにする（`SCAN latest` は副問い合わせの結果）。
+    let uses_index = |d: &String| d.contains(&format!("INDEX {index}"));
     assert!(
-        plan_details.iter().any(|detail| {
-            detail.contains("USING INDEX idx_events_delivery_skipped")
-                || detail.contains("USING COVERING INDEX idx_events_delivery_skipped")
-        }),
-        "query plan did not use idx_events_delivery_skipped: {plan_details:?}"
+        plan.iter().any(uses_index),
+        "query plan did not use {index}: {plan:?}"
+    );
+    assert!(
+        plan.iter()
+            .filter(|d| d.starts_with("SCAN e"))
+            .all(uses_index),
+        "query plan scans events: {plan:?}"
     );
 
-    let rows = store.latest_delivery_skipped_rows().unwrap();
-    assert_eq!(rows.len(), 2);
-    let by_task = rows
-        .into_iter()
-        .map(|row| (row.task_id, row))
-        .collect::<HashMap<_, _>>();
-    assert!(matches!(
-        &by_task[&a.id].event,
-        Event::DeliverySkipped { detail, .. } if detail == "latest"
-    ));
-    assert!(matches!(
-        &by_task[&b.id].event,
-        Event::DeliverySkipped { detail, .. } if detail == "other task"
-    ));
+    let rows = store.latest_event_rows(kind).unwrap();
+    let got: Vec<_> = rows.into_iter().map(|r| (r.task_id, r.event)).collect();
+    assert_eq!(got, vec![(a.id, make(1)), (b.id, make(2))]);
+}
+
+/// ADR-0121 付記: 受信箱の `delivery_skipped` は migration 0037 の `idx_events_delivery_skipped` で task ごとの最新を
+/// 読む（不変条件は `assert_latest_rows_use_partial_index`）。
+#[test]
+fn delivery_skipped_latest_rows_use_partial_index() {
+    assert_latest_rows_use_partial_index(
+        LatestEventKind::DeliverySkipped,
+        "idx_events_delivery_skipped",
+        |n| Event::DeliverySkipped {
+            reason: crate::DeliverySkipReason::NoMarker,
+            detail: format!("skip {n}"),
+            head: None,
+        },
+    );
+}
+
+/// ADR 2026-11-08-health-enforcement-loop D7.3: 受信箱 `dependents_reopened` の正本（各 task の最新の
+/// `DependentsReopened`）は migration 0122 の `idx_events_dependents_reopened` で読む（不変条件は
+/// `assert_latest_rows_use_partial_index`）。0122 が無い・式がずれると、行は同じまま events の全件 scan になる。
+#[test]
+fn dependents_reopened_latest_rows_use_partial_index() {
+    let ids: Vec<TaskId> = (0..3).map(|_| TaskId::new()).collect();
+    assert_latest_rows_use_partial_index(
+        LatestEventKind::DependentsReopened,
+        "idx_events_dependents_reopened",
+        |n| Event::DependentsReopened {
+            restored: vec![crate::RestoredDependent {
+                task_id: ids[n],
+                depends_on: vec![ids[(n + 1) % ids.len()]],
+            }],
+            kept: vec![],
+        },
+    );
 }
 
 fn sample_integration_request(
@@ -2644,7 +2652,7 @@ fn migration_0008_adds_the_notifications_table_to_a_schema_7_db() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 121);
+    assert_eq!(SCHEMA_VERSION, 122);
     let now = OffsetDateTime::from_unix_timestamp(1_760_000_000).unwrap();
     assert!(
         store
@@ -3187,7 +3195,7 @@ fn migration_0010_adds_the_projects_workspace_column_to_a_schema_9_db() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 121);
+    assert_eq!(SCHEMA_VERSION, 122);
     // 導入前の案件は「作業場所なし」= 従来どおり。
     assert_eq!(store.project_get(legacy).unwrap().unwrap().workspace, None);
     let spec = WorkspaceSpec::Local {
@@ -3678,7 +3686,7 @@ fn migration_0015_adds_the_lifecycle_columns_to_a_schema_14_db() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 121);
+    assert_eq!(SCHEMA_VERSION, 122);
 
     let project = store.project_get(project_id).unwrap().expect("project");
     assert_eq!(project.status, ProjectStatus::Active);
@@ -3744,7 +3752,7 @@ fn migration_0017_adds_message_metadata_and_console_action_runs_to_a_schema_16_d
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 121);
+    assert_eq!(SCHEMA_VERSION, 122);
 
     // 導入前の行は `metadata = None` として読める。
     let messages = store.message_list("secretary", None, 10).unwrap();
@@ -3837,7 +3845,7 @@ fn migration_0013_adds_task_comments_and_the_label_columns_to_a_schema_11_db() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 121);
+    assert_eq!(SCHEMA_VERSION, 122);
     {
         let conn = store.lock().unwrap();
         let (labels, category): (String, String) = conn
@@ -4297,7 +4305,7 @@ fn migration_0026_adds_the_execution_tables_to_a_schema_25_db() {
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 121);
+    assert_eq!(SCHEMA_VERSION, 122);
 
     // 新しい表が使える（round trip）。
     let task = sample_task(Status::Draft);
@@ -4544,7 +4552,7 @@ fn migration_31_adds_tree_columns_without_rewriting_rows() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 121);
+    assert_eq!(SCHEMA_VERSION, 122);
 
     let conn = Connection::open(&path).unwrap();
     // 既存の task の行は 1 バイトも変わらず、`root_id` は NULL のまま（埋め戻さない）。
@@ -4795,7 +4803,7 @@ fn migration_27_adds_work_unit_lease_columns() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 121);
+    assert_eq!(SCHEMA_VERSION, 122);
 
     let conn = Connection::open(&path).unwrap();
     let mut columns: Vec<String> = Vec::new();

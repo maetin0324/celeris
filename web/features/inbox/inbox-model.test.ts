@@ -6,6 +6,7 @@ import {
   browserWaitBadge,
   isDestructive,
   isInboxKind,
+  KIND_LABELS,
   nativeTarget,
   needsNativeScreen,
 } from "./inbox-model";
@@ -36,6 +37,18 @@ describe("inbox model", () => {
     for (const key of ["withdraw", "cancel", "reject", "deny"])
       expect(isDestructive({ key, label: key, effect: "", needs_note: false })).toBe(true);
     expect(isDestructive({ key: "approve", label: "", effect: "", needs_note: false })).toBe(false);
+  });
+
+  // 守る不変条件: 戻した後続ごとの cancel（key `cancel:<task id>`）は確認を挟む破壊的な選択で、種類は受信箱の種類と
+  // 表示名を持つ。既存の試験は key そのものが操作名の選択しか見ず、対象付きの key を通らない。
+  it("dependents_reopened の後続ごとの cancel を破壊的な選択として見分ける", () => {
+    const cancel = { key: "cancel:01M71K2HHSJ20836QAMXJ0YMEW", label: "B を取り消す", effect: "", needs_note: false };
+    expect(isDestructive(cancel)).toBe(true);
+    expect(isDestructive({ ...cancel, key: "keep:01M71K2HHSJ20836QAMXJ0YMEW" })).toBe(false);
+    expect(isInboxKind("dependents_reopened")).toBe(true);
+    expect(KIND_LABELS.dependents_reopened).toBe("依存先の復帰で戻した後続");
+    const restored = item({ kind: "dependents_reopened", options: [cancel] });
+    expect(needsNativeScreen(restored)).toBe(false);
   });
 
   it("search param の種類を検証する", () => {

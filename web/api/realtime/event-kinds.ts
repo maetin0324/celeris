@@ -92,6 +92,7 @@ export const EVENT_KINDS = [
   "review_resync_halted",
   "review_resync_resumed",
   "health_findings_repeated",
+  "dependents_reopened",
   "done_reintegration_started",
   "done_reintegration_deferred",
   "integrate_task_requested",

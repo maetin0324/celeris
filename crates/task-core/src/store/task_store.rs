@@ -370,8 +370,10 @@ pub trait TaskStore:
         after_seq: Option<u64>,
         limit: usize,
     ) -> Result<Vec<EventRow>, StoreError>;
-    /// ADR-0121 D3: 各タスクの最新 `delivery_skipped` イベントだけを返す。
-    fn latest_delivery_skipped_rows(&self) -> Result<Vec<EventRow>, StoreError>;
+    /// 各タスクの最新の `kind` のイベントだけを、global `id` の昇順で返す（受信箱の `delivery_skipped`（ADR-0121 D3）と
+    /// `dependents_reopened`（ADR 2026-11-08-health-enforcement-loop D7.3）の正本）。種類ごとの部分 index を引き、
+    /// events 全体は走査しない。
+    fn latest_event_rows(&self, kind: super::LatestEventKind) -> Result<Vec<EventRow>, StoreError>;
     /// 未回答の統合依頼を、一組の task と両側の head につき一件返す。
     fn open_integration_requests(&self) -> Result<Vec<EventRow>, StoreError>;
     /// 同じ組の未回答依頼があれば追記しない。追記したときだけ true。同じ `origin` の別の組の未回答依頼は

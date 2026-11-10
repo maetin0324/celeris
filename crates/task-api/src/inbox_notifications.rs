@@ -294,6 +294,19 @@ pub(crate) fn delegated_request(
                 (Method::PATCH, format!("/api/v1/tasks/{id}"), payload)
             }
         }
+        // ADR 2026-11-08-health-enforcement-loop D7.3・決定 p9-scope: 選択肢は戻した後続ごとの cancel。項目が挙げた
+        // 戻した後続に無い id は写さない。
+        InboxKind::DependentsReopened => {
+            let id = task_ops::human_inbox::dependents_reopened::cancel_target(item, &input.option)
+                .ok_or_else(|| {
+                    ApiProblem::bad_request("option does not name a dependent this item restored")
+                })?;
+            (
+                Method::POST,
+                format!("/api/v1/tasks/{id}/cancel"),
+                serde_json::json!({}),
+            )
+        }
         InboxKind::Unintegrated => {
             let base = base.ok_or_else(|| native_required("integration action is unavailable"))?;
             let action = match input.option.as_str() {

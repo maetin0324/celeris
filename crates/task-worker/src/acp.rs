@@ -41,8 +41,8 @@ use base64::Engine;
 use task_core::ProgressKind;
 
 use crate::adapter::{
-    AdapterError, EventSink, RunLimits, RunOutcome, RunPaths, Terminal, WorkerAdapter,
-    deadline_terminal, prepare_run, spawn_capture_stderr,
+    AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter, deadline_terminal,
+    spawn_capture_stderr,
 };
 use crate::claude_code::build_prompt_with_skill_list;
 use crate::cos_chat::capabilities::{
@@ -55,8 +55,8 @@ use crate::protocol::{ProviderFailure, RunRequest};
 use crate::provider::classify_provider_failure;
 use crate::result_report::{ResultFileRead, interpret_result_text, read_result_file};
 use crate::subprocess::{
-    LineOutcome, MAX_LINE_BYTES, kill_now, read_line_limited, read_tail, reap_after_terminal,
-    send_signal_to_group,
+    LineOutcome, MAX_LINE_BYTES, RunPaths, finish_run, kill_now, prepare_run, read_line_limited,
+    read_tail, reap_after_terminal, send_signal_to_group,
 };
 
 /// `session/request_permission` への即答（ADR-0026 D4）。
@@ -667,7 +667,7 @@ enum RawOutcome {
 
 /// プロセスを止め（タイムアウトなら `session/cancel` → `kill_grace` 後 SIGKILL、そうでなければ穏やかな
 /// 刈り取り。ADR-0026 D4）、結果ファイル（`<artifacts_dir>/result.json`）から終端を合成し、`runs/<run_id>/result.json` に書く
-/// （ADR-0006 D3、書き出しは `adapter::finish_run`）。
+/// （ADR-0006 D3、書き出しは `subprocess::finish_run`）。
 #[allow(clippy::too_many_arguments)]
 async fn finish_session(
     child: &mut Child,
@@ -774,7 +774,7 @@ async fn finish_session(
     };
 
     forward_delegate_file(artifacts_dir, sink).await;
-    crate::adapter::finish_run(run_dir, terminal, provider_failure, exit_status).await
+    finish_run(run_dir, terminal, provider_failure, exit_status).await
 }
 
 /// 結果ファイル（`<artifacts_dir>/result.json`）から終端を合成する（ADR-0026 D3 手順 7、ADR-0036 D2）。

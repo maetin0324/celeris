@@ -12,7 +12,7 @@ use tracing::warn;
 
 use crate::adapter::{
     AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter, deadline_terminal,
-    finish_run, prepare_run, spawn_capture_stderr,
+    spawn_capture_stderr,
 };
 use crate::claude_code::build_prompt_with_skill_list;
 use crate::delegate_file::forward_delegate_file;
@@ -20,7 +20,8 @@ use crate::protocol::RunRequest;
 use crate::provider::classify_provider_failure;
 use crate::result_report::{ResultFileRead, interpret_result_text, read_result_file};
 use crate::subprocess::{
-    LineOutcome, MAX_LINE_BYTES, kill_now, read_line_limited, read_tail, reap_after_terminal,
+    LineOutcome, MAX_LINE_BYTES, finish_run, kill_now, prepare_run, read_line_limited, read_tail,
+    reap_after_terminal,
 };
 
 #[derive(Debug, Clone)]

@@ -19,7 +19,7 @@ use tracing::warn;
 
 use crate::adapter::{
     AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter, deadline_terminal,
-    finish_run, prepare_run, spawn_capture_stderr, with_estimated_cost,
+    spawn_capture_stderr, with_estimated_cost,
 };
 use crate::delegate_file::forward_delegate_file;
 use crate::progress;
@@ -27,7 +27,8 @@ use crate::protocol::{Answer, ProviderFailure, RunContext, RunRequest};
 use crate::provider::classify_provider_failure;
 use crate::result_report::{ResultFileRead, interpret_result_text};
 use crate::subprocess::{
-    LineOutcome, MAX_LINE_BYTES, kill_now, read_line_limited, read_tail, reap_after_terminal,
+    LineOutcome, MAX_LINE_BYTES, finish_run, kill_now, prepare_run, read_line_limited, read_tail,
+    reap_after_terminal,
 };
 
 /// `[adapters.claude_code]`（config.toml, ADR-0006 D6）。

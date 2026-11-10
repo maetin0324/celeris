@@ -2,8 +2,7 @@
 //! アダプタはワーカー固有の事情を閉じ込め、結果を `RunOutcome` に正規化して返す。
 //! 状態遷移の判断はアダプタでは行わない（task-dispatch の責務）。
 
-use std::path::{Path, PathBuf};
-use std::process::ExitStatus;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -130,52 +129,6 @@ impl AdapterError {
     }
 }
 
-/// 1 回の run の置き場（ADR 2026-11-10-adapter-result-contract D2）。`prepare_run` が作る。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct RunPaths {
-    /// `runs/<run_id>/`（`request.json`・`prompt.txt`・`result.json` の置き場）。
-    pub(crate) run_dir: PathBuf,
-    /// harness の stdout の写し。browser の run は `/dev/null`。
-    pub(crate) stdout_log: PathBuf,
-    /// harness の stderr の写し（`spawn_capture_stderr` の行き先）。browser の run は `/dev/null`。
-    pub(crate) stderr_log: PathBuf,
-    /// worker が書く `<artifacts_dir>/result.json`（ADR-0036 D1/D2）。
-    pub(crate) result_path: PathBuf,
-    /// prompt と結果契約の文言に出す `artifacts_dir` の相対 path。
-    pub(crate) artifacts_rel: String,
-}
-
-/// harness adapter の run の準備（ADR 2026-11-10-adapter-result-contract D2）: run dir を作り、前回の run
-/// （リトライ）が残した `result.json`・`delegate.json` を今回のものと誤読しないよう消し（ADR-0006 D3）、
-/// campaign の pin を照合し、`request.json` を書く（ADR-0023 D2）。`stdout_name` は adapter ごとの log 名
-/// （JSON 行なら `stdout.jsonl`、平文なら `stdout.log`）。browser の run は harness の生の stream に
-/// page の内容や命令を残さないよう、stdout・stderr の log を `/dev/null` にする（解析は pipe で続く）。
-pub(crate) async fn prepare_run(
-    req: &RunRequest,
-    run_id: &str,
-    stdout_name: &str,
-) -> Result<RunPaths, AdapterError> {
-    let run_dir = req.workspace.join("runs").join(run_id);
-    tokio::fs::create_dir_all(&run_dir).await?;
-    let (stdout_log, stderr_log) = if req.context.browser.is_some() {
-        (PathBuf::from("/dev/null"), PathBuf::from("/dev/null"))
-    } else {
-        (run_dir.join(stdout_name), run_dir.join("stderr.log"))
-    };
-    let result_path = req.artifact_path("result.json");
-    let _ = tokio::fs::remove_file(&result_path).await;
-    crate::delegate_file::clear_delegate_file(&req.artifacts_dir).await;
-    crate::campaign_pin::enforce(&run_dir, req).await?;
-    crate::subprocess::write_run_request(&run_dir, req, run_id).await;
-    Ok(RunPaths {
-        run_dir,
-        stdout_log,
-        stderr_log,
-        result_path,
-        artifacts_rel: req.artifacts_rel(),
-    })
-}
-
 /// 監視 loop の締め切り（ADR-0003 D4、ADR-0072 D7）。超過していなければ次に待つ時間（wall clock と idle の
 /// 残りの小さい方）。wall clock の超過は予算切れ `BudgetExhausted{WallClock}`（continuation の対象。文言は
 /// dispatcher の `classify_budget_kind_from_text` が見る語）、idle の超過は harness_error に分類変更しない
@@ -243,25 +196,6 @@ pub(crate) fn with_estimated_cost(usage: Option<Usage>, model: Option<&str>) -> 
             u.cost_usd = task_core::estimate_cost_usd(model, &u);
         }
         u
-    })
-}
-
-/// run の終端を書き出して返す（ADR-0010 D10）: `runs/<run_id>/result.json` に 1 行の `WorkerMessage` を書き、
-/// `Error` と供給側失敗の組は `Err(AdapterError::from_provider_failure)`（ディスパッチャが account の
-/// cooldown に記録する。ADR-0010 D5）、それ以外は `Ok(RunOutcome)`。
-pub(crate) async fn finish_run(
-    run_dir: &Path,
-    terminal: Terminal,
-    provider_failure: Option<ProviderFailure>,
-    exit_status: ExitStatus,
-) -> Result<RunOutcome, AdapterError> {
-    crate::subprocess::write_result_json(run_dir, &terminal, provider_failure).await?;
-    if let (Terminal::Error { message, .. }, Some(pf)) = (&terminal, provider_failure) {
-        return Err(AdapterError::from_provider_failure(pf, message));
-    }
-    Ok(RunOutcome {
-        terminal,
-        exit_code: exit_status.code(),
     })
 }
 

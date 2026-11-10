@@ -23,8 +23,13 @@ pub const CHECKER_DIR: &str = "scripts/dev/repo-health";
 pub const CHECKER_SCRIPT: &str = "scripts/dev/repo-health/repo_health.py";
 /// 検査器が同じ checkout から読む size の report（repo 相対）。無い base もある。
 pub const SOURCE_SIZE_REPORT: &str = "scripts/dev/source-size-report.py";
-/// 検査器と一緒に取り出す file（repo 相対）。
-pub const CHECKER_SIDE_FILES: &[&str] = &[SOURCE_SIZE_REPORT];
+/// 検査器の rule arch-map.* が同じ checkout から import する地図の検査器（repo 相対。`rules/arch_map.py` の `CHECKER`）。
+/// 無い base もある。
+pub const ARCH_MAP_CHECKER: &str = "scripts/dev/check-architecture-map.py";
+/// 検査器と一緒に取り出す file（repo 相対）。検査器が自分の dir の外（`<検査器の dir>/..`）から読む file は全部ここに
+/// 置く。抜けると base の検査器を一時 dir に出したときだけ、その rule が `checker_missing` の unsupported になる
+/// （ADR 2026-11-08-health-enforcement-loop 付記 2026-11-10 hotfix）。
+pub const CHECKER_SIDE_FILES: &[&str] = &[SOURCE_SIZE_REPORT, ARCH_MAP_CHECKER];
 /// repo の profile の dir（repo 相対）。無ければ組み込み generic で評価する（契約 D2）。
 pub const PROFILES_DIR: &str = "scripts/dev/repo-health/profiles";
 /// [`HealthEvidence::blocking`] に残す fingerprint の数の上限（D2.1。超えた数は `reason` に書く）。

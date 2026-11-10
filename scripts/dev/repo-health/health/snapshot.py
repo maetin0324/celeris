@@ -3,6 +3,8 @@
 - 1 回の実行は 1 つの Git 作業ツリー。submodule（gitlink）は両側の sha を記録するだけで中に入らない。
 - base が解決できず repo が shallow なら base は不達（reachable=false）。shallow でなければ使い方誤り。
 - head は commit（ref・sha）か `worktree`（未 commit の変更と ignore されない未追跡 file を含む）。
+- base の日付（`base_date`）は base の commit の committer date の UTC の日付。例外の期限の基準日にする
+  （実行時の時計は使わない。ADR 2026-11-07-repo-health-contract 付記 2026-11-10）。不達なら None。
 - base の既定（`--base auto`）はここ 1 か所で決める: `git merge-base HEAD refs/heads/main`（承認済みの main 側。
   ADR 2026-11-07-repo-health-celeris-profile D1）。既存検査の script は自分で root・base を解決せず、
   `--root`・`--base` を受け取る（単独で走らせるときは `repo_health.py --print-base` を呼ぶ）。
@@ -10,6 +12,7 @@
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import os
 import re
@@ -109,6 +112,7 @@ class Snapshot:
     head_input: str
     base_sha: str | None
     base_reachable: bool
+    base_date: datetime.date | None  # base の commit の committer date（UTC の日付）。不達なら None
     head_kind: str  # commit | worktree
     head_sha: str
     dirty: bool
@@ -162,6 +166,12 @@ def _resolve_commit(root: str, rev: str) -> str | None:
     if not git_ok(root, "cat-file", "-e", f"{sha}^{{tree}}"):
         return None
     return sha
+
+
+def _committer_date(root: str, sha: str) -> datetime.date:
+    """commit の committer date を UTC の日付にする（%ct は UTC の epoch 秒なので、commit の時差に依らない）。"""
+    epoch = int(git_text(root, "show", "-s", "--format=%ct", sha))
+    return datetime.datetime.fromtimestamp(epoch, tz=datetime.timezone.utc).date()
 
 
 def _ls_tree(root: str, sha: str) -> tuple[dict[str, str], dict[str, str]]:
@@ -272,11 +282,13 @@ def resolve(repo: str, base: str, head: str) -> Snapshot:
         raise UsageError(f"base_not_found: --base {base} が commit に解決できない")
     reachable = base_sha is not None
     base_tree: Tree | None = None
+    base_date: datetime.date | None = None
     base_subs: dict[str, str] = {}
     changed: list[str] = []
     changed_lines: dict[str, list[tuple[int, int]]] = {}
     if reachable:
         assert base_sha is not None
+        base_date = _committer_date(root, base_sha)
         files, base_subs = _ls_tree(root, base_sha)
         base_tree = Tree("base", root, dict(files), reader)
         diff_args = [base_sha] if kind == "worktree" else [base_sha, head_sha]
@@ -308,6 +320,7 @@ def resolve(repo: str, base: str, head: str) -> Snapshot:
         head_input=head,
         base_sha=base_sha,
         base_reachable=reachable,
+        base_date=base_date,
         head_kind=kind,
         head_sha=head_sha,
         dirty=dirty,

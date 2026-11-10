@@ -32,8 +32,15 @@ WorkUnit `adr`（段 design）。段 survey の成果（`inventory.json`・`base
 - `sh scripts/dev/check-doc-links.sh` → exit 0、`sh scripts/dev/check-adr-numbers.sh` → exit 0（415 files）
 - ほかの検査の結果は下の「検査」に書く。
 
-## 検査
-（下に追記）
+## 検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+- `bash scripts/dev/check-health.sh --base "$CELERIS_WU_BASE"` → exit 0（verdict=pass、new=0・worsened=0、doc-only）
+- `bash scripts/dev/test-affected.sh` → exit 0（「試験対象の変更なし（docs のみ等）」。repo-health verdict=pass）
+- `cargo clippy --workspace -- -D warnings` → exit 0（59 秒）
+- `cargo fmt --all -- --check` → exit 0
+- `python3 scripts/dev/check-human-text.py --root .` → exit 0（0 findings）、`sh scripts/dev/progress-index.sh --check` → exit 0
+- `{ git diff --name-only "$CELERIS_WU_BASE"; git ls-files --others --exclude-standard; } | python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R5 …` → `write-set R5: ok`
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → ADR とこの file の 2 path だけ
+- 受け入れ条件 1（束ねの表と inventory.json の担当 leaf の一致）: ADR の表の行を読んで `inventory.json` の `crate`・`leaf`・`bundle` ごとの target の集合と比べる一時の Python（repo には置かない）で、25 束すべて一致・不一致 0 件
 
 ## 未解決事項
 - doc test の件数と秒は未計測（ADR D6-3 の概数 31 件は doc comment の fence の数からの推定）。`affected-features` が measure.sh に足して記録する。

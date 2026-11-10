@@ -71,4 +71,4 @@ clippy・fmt・test-affected・check-health は件名「R1 run-common: aider の
 ## 提案
 1. record で ADR に付記する: D2 の `RunPaths`・`prepare_run`・`finish_run` の置き場は `subprocess.rs`（`deps.cycle` を増やさないため）、`deadline_terminal` は `Box<Terminal>` を返す、`spawn_capture_stderr` は `Result` を返す、run の準備の順の変化（上の「観測できる挙動の変化」3）。
 2. record で `result_report_tests.rs:246` を `RunContext { cos_chat: Some(Default::default()), ..Default::default() }` に直す（`--all-targets` の clippy を通すため）。
-3. R6 へ: langmem・LDR・paperqa の run 関数も締め切りの写しを持つ。`deadline_terminal` は `idle_timeout` を値で受けるので、langmem の `[adapters.langmem].idle_timeout_secs` で縮めた値をそのまま渡せる。
+3. R6 へ: langmem・LDR・paperqa の run 関数も締め切りの写しを持つ（`wall clock exceeded`・`idle timeout` の文言が各 file に 2 か所）。ただし wall clock の超過は `BudgetExhausted` でなく retryable な `Error` にしている（langmem.rs の監視 loop で確認）。`deadline_terminal` に寄せると予算切れの分類が変わるので、R6 で分類を決めてから寄せる。`deadline_terminal` は `idle_timeout` を値で受けるので、langmem の `[adapters.langmem].idle_timeout_secs` で縮めた値をそのまま渡せる。

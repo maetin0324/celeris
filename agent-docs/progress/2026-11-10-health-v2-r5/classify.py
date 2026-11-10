@@ -22,8 +22,11 @@ Usage (run from the repository root):
 
 Leaf rules (first match wins; the reasons are kept in `leaf_reasons`):
   1. keep  — needs its own binary or cannot move inside the R5 write set:
-             a process global operation; a suite named by scripts/ (--test, -E)
-             or .config/nextest.toml (binary_id); a digit in the file name
+             a process global operation; a suite named by scripts/ (--test, -E,
+             or the target's file path as a whole word on a line that is not a
+             `#` comment: the script's behaviour depends on the path, and
+             scripts/ other than test-affected.sh are outside the R5 write set) or
+             .config/nextest.toml (binary_id); a digit in the file name
              (B0 R5 write set is tests/[a-z_/]+.rs); a file compiled into another
              target (#[path]) or including one; a crate with no R5 bundle
              leaf; an R2〜R4 conflict in a crate with no adjust leaf.
@@ -320,11 +323,18 @@ def external_refs(tree: Tree, targets: list[dict]) -> dict[str, dict]:
                 dest = posixpath.normpath(posixpath.join(here, link.split("#", 1)[0]))
                 if dest in by_path:
                     refs[dest]["md_links"].append(f"{md}:{i}")
-    # scripts/: `--test <name>` (crate from `-p` on the same line when present) and -E filters.
+    # scripts/: `--test <name>` (crate from `-p` on the same line when present), -E filters, and the
+    # target's file path on a line that is not a `#` comment (check-doc-links.sh names
+    # crates/task-api/tests/docs.rs in FOREIGN_DOCS: moving the file changes what the script does, and the
+    # script is outside the R5 write set). A path in a comment only describes; it does not change behaviour.
     scripts = [p for p in tree.blobs if p.startswith("scripts/")]
     tree.read_many(scripts)
+    path_res = {t["path"]: script_path_re(t["path"]) for t in targets}
     for sp in scripts:
         for i, ln in enumerate(tree.read(sp).splitlines(), 1):
+            for p, rx in path_res.items():
+                if p in ln and not ln.lstrip().startswith("#") and rx.search(ln):
+                    refs[p]["scripts"].append(f"{sp}:{i}")
             pkg = re.search(r"(?:-p|--package)[= ]+([A-Za-z0-9_-]+)", ln)
             for name in re.findall(r"--test[= ]+([A-Za-z0-9_]+)", ln):
                 for t in names.get(name, []):
@@ -337,6 +347,11 @@ def external_refs(tree: Tree, targets: list[dict]) -> dict[str, dict]:
         for t in filter_hits(ln, targets):
             refs[t["path"]]["nextest"].append(f"{NEXTEST}:{i}")
     return refs
+
+
+def script_path_re(path: str) -> re.Pattern:
+    """The repo-relative path as a whole word (an optional `./`); `$root/repo/crates/...` in a fixture does not count."""
+    return re.compile(r"(?<![\w/.$-])(?:\./)?" + re.escape(path) + r"(?![\w./-])")
 
 
 def filter_hits(expr: str, targets: list[dict]) -> list[dict]:

@@ -5,7 +5,7 @@
  "generator": "python3 agent-docs/progress/2026-11-10-health-v2-r5/classify.py --write agent-docs/progress/2026-11-10-health-v2-r5/inventory.json",
  "main_at_generation": "af3ac6a5b91b859e3ba3e48c3a98c75dc737cc7b",
  "rules": {
-  "leaf_order": "(first match wins; the reasons are kept in `leaf_reasons`):\n  1. keep  — needs its own binary or cannot move inside the R5 write set:\n             a process global operation; a suite named by scripts/ (--test, -E)\n             or .config/nextest.toml (binary_id); a digit in the file name\n             (B0 R5 write set is tests/[a-z_/]+.rs); a file compiled into another\n             target (#[path]) or including one; a crate with no R5 bundle\n             leaf; an R2〜R4 conflict in a crate with no adjust leaf.\n  2. r6    — named by a table row of docs/architecture-map.md (the paths\n             scripts/dev/check-architecture-map.py collects: brace lists\n             `a/{b,c}.rs` and the relative paths in `（…）` after a path count)\n             or linked from a tracked .md outside this inventory's own progress\n             directory (moving it needs a document outside the R5 write set).\n             --check re-collects the map and requires r6 for every named\n             target that rule 1 does not keep.\n  3. adjust-api / adjust-worker — task-api / task-worker targets with an\n             R2〜R4 conflict; task-worker targets are bundled only in the final\n             stage (R2's write set and interfaces cover them).\n  4. bundle-api-a (task-api, name starts with cos_ / chat_ / general_cos /\n     project_), bundle-api-b (other task-api), bundle-celeris, bundle-ctl.\n  Bundles: same crate, leaf, capability_key and fixture_key; at most\n  max_per_bundle targets, chunks balanced. A bundle-* group of one target is\n  keep (singleton_bundle_group): no other target shares its capability and\n  fixture, so it stays its own binary. adjust-* groups of one stay (the final\n  stage regroups them after R2〜R4 land).",
+  "leaf_order": "(first match wins; the reasons are kept in `leaf_reasons`):\n  1. keep  — needs its own binary or cannot move inside the R5 write set:\n             a process global operation; a suite named by scripts/ (--test, -E,\n             or the target's file path as a whole word on a line that is not a\n             `#` comment: the script's behaviour depends on the path, and\n             scripts/ other than test-affected.sh are outside the R5 write set) or\n             .config/nextest.toml (binary_id); a digit in the file name\n             (B0 R5 write set is tests/[a-z_/]+.rs); a file compiled into another\n             target (#[path]) or including one; a crate with no R5 bundle\n             leaf; an R2〜R4 conflict in a crate with no adjust leaf.\n  2. r6    — named by a table row of docs/architecture-map.md (the paths\n             scripts/dev/check-architecture-map.py collects: brace lists\n             `a/{b,c}.rs` and the relative paths in `（…）` after a path count)\n             or linked from a tracked .md outside this inventory's own progress\n             directory (moving it needs a document outside the R5 write set).\n             --check re-collects the map and requires r6 for every named\n             target that rule 1 does not keep.\n  3. adjust-api / adjust-worker — task-api / task-worker targets with an\n             R2〜R4 conflict; task-worker targets are bundled only in the final\n             stage (R2's write set and interfaces cover them).\n  4. bundle-api-a (task-api, name starts with cos_ / chat_ / general_cos /\n     project_), bundle-api-b (other task-api), bundle-celeris, bundle-ctl.\n  Bundles: same crate, leaf, capability_key and fixture_key; at most\n  max_per_bundle targets, chunks balanced. A bundle-* group of one target is\n  keep (singleton_bundle_group): no other target shares its capability and\n  fixture, so it stays its own binary. adjust-* groups of one stay (the final\n  stage regroups them after R2〜R4 land).",
   "max_per_bundle": 8,
   "bundle_key": "crate + leaf + capability_key + fixture_key",
   "capability_key": "group:<B0 capability group (cap-*)> of the target's capability: the capability-map tests entry when the path is listed there, otherwise the capability whose id / owner module tokens best match the file name tokens (first token counts double; capability_source says which); group:none when nothing matches",
@@ -106,8 +106,8 @@
   "task-api": {
    "adjust-api": 4,
    "bundle-api-a": 18,
-   "bundle-api-b": 38,
-   "keep": 17,
+   "bundle-api-b": 37,
+   "keep": 18,
    "r6": 36
   },
   "task-core": {
@@ -4199,7 +4199,8 @@
     ],
     "md_links": [],
     "scripts": [
-     "scripts/dev/test-long-horizon-bench.sh:83"
+     "scripts/dev/test-long-horizon-bench.sh:83",
+     "scripts/dev/test-long-horizon-bench.sh:177"
     ],
     "nextest": []
    },
@@ -4994,7 +4995,9 @@
    "external_refs": {
     "architecture_map": [],
     "md_links": [],
-    "scripts": [],
+    "scripts": [
+     "scripts/campaign/test_ops_r2_session.py:3"
+    ],
     "nextest": []
    },
    "digit_in_name": true,
@@ -5030,6 +5033,7 @@
    },
    "leaf": "keep",
    "leaf_reasons": [
+    "named_suite",
     "digit_in_name_outside_write_set",
     "crate_without_r5_bundle_leaf"
    ],
@@ -11192,7 +11196,9 @@
    "external_refs": {
     "architecture_map": [],
     "md_links": [],
-    "scripts": [],
+    "scripts": [
+     "scripts/dev/check-doc-links.sh:31"
+    ],
     "nextest": []
    },
    "digit_in_name": false,
@@ -11232,11 +11238,11 @@
      "conflict": false
     }
    },
-   "leaf": "bundle-api-b",
+   "leaf": "keep",
    "leaf_reasons": [
-    "task_api_other"
+    "named_suite"
    ],
-   "bundle": "unmapped_suite_a"
+   "bundle": null
   },
   {
    "path": "crates/task-api/tests/execution.rs",
@@ -18751,6 +18757,7 @@
     "architecture_map": [],
     "md_links": [],
     "scripts": [
+     "scripts/dev/daemon-soak/daemon_soak.py:4",
      "scripts/dev/long-run-soak.sh:45"
     ],
     "nextest": []

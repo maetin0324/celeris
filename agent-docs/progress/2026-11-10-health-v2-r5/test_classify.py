@@ -13,12 +13,22 @@ builds, so 19 targets named through brace lists were put in bundle / adjust leav
 inventory's own --check agreed (it compared against the same search).
 test_legacy_substring_search_misses_brace_and_paren keeps that blind spot on record.
 
+ScriptPathRule: rule 1 (keep, named_suite) also covers a script under scripts/ that names the
+target's file path. scripts/dev/check-doc-links.sh lists crates/task-api/tests/docs.rs in
+FOREIGN_DOCS (its raw docs/ paths are inputs of a temporary repo, not references of this repo);
+moving the file to tests/<bundle>/docs.rs drops it out of that list and the doc-link check fails,
+and the script is outside the R5 write set. The earlier scan only read `--test` and `-E`, so the
+target went to the bundle-api-b leaf; test_flag_scan_alone_misses_the_path keeps that on record.
+A path in a `#` comment line only describes the target (scripts/dev/tests/script-compare.sh names
+crates/celeris/tests/script_compare_report.rs that way) and does not count.
+
 Run from the repository root:
   python3 agent-docs/progress/2026-11-10-health-v2-r5/test_classify.py
 """
 from __future__ import annotations
 
 import os
+import re
 import sys
 import unittest
 
@@ -173,5 +183,55 @@ class Collector(unittest.TestCase):
         self.assertEqual(classify.archmap_paths("see `crates/celerisctl/tests/{pipe,cos_ops}.rs`\n"), {})
 
 
+
+DOC_LINKS = "scripts/dev/check-doc-links.sh"
+DOC_LINKS_SRC = (
+    'FOREIGN_DOCS="crates/task-api/src/docs.rs crates/task-api/tests/docs.rs crates/task-ops/src/docs.rs\n'
+    'web/e2e/"\n'
+)
+# A temporary repo's file with the same tail is not a reference to this repo's target.
+PRUNE_FIXTURE = "scripts/selfdeploy/tests/prune.sh"
+PRUNE_SRC = (
+    "printf 'fn x() {}' >\"$root/repo/crates/task-api/tests/notify.rs\"\n"
+    "cp a crates/task-api/tests/files.rs.bak\n"
+    "sh ./crates/task-api/tests/memory.rs\n"
+    "# the store-written records are checked by crates/task-api/tests/genres.rs\n"
+)
+
+
+class ScriptPathRule(unittest.TestCase):
+    def setUp(self):
+        self.paths = ["crates/task-api/tests/docs.rs", "crates/task-api/tests/notify.rs",
+                      "crates/task-api/tests/files.rs", "crates/task-api/tests/memory.rs",
+                      "crates/task-api/tests/genres.rs", UNNAMED]
+        self.targets = [target(p) for p in self.paths]
+        tree = FakeTree({classify.ARCHMAP: HEADER, classify.NEXTEST: "", DOC_LINKS: DOC_LINKS_SRC,
+                         PRUNE_FIXTURE: PRUNE_SRC})
+        self.refs = classify.external_refs(tree, self.targets)
+        self.by_path = {t["path"]: t for t in self.targets}
+
+    def test_script_naming_the_path_keeps_the_target(self):
+        p = "crates/task-api/tests/docs.rs"
+        self.assertEqual(self.refs[p]["scripts"], [f"{DOC_LINKS}:1"])
+        self.assertEqual(classify.assign(record(self.by_path[p], self.refs[p])), ("keep", ["named_suite"]))
+
+    def test_dot_slash_prefix_counts(self):
+        p = "crates/task-api/tests/memory.rs"
+        self.assertEqual(self.refs[p]["scripts"], [f"{PRUNE_FIXTURE}:3"])
+
+    def test_other_repo_longer_name_or_comment_does_not_count(self):
+        for p in ("crates/task-api/tests/notify.rs", "crates/task-api/tests/files.rs",
+                  "crates/task-api/tests/genres.rs", UNNAMED):
+            with self.subTest(p):
+                self.assertEqual(self.refs[p]["scripts"], [])
+                self.assertEqual(classify.assign(record(self.by_path[p], self.refs[p]))[0], "bundle-api-b")
+
+    def test_flag_scan_alone_misses_the_path(self):
+        # What the scan read before this fix: `--test <name>` and `-E '<filter>'` only.
+        line = DOC_LINKS_SRC.splitlines()[0]
+        self.assertEqual(re.findall(r"--test[= ]+([A-Za-z0-9_]+)", line), [])
+        self.assertEqual(re.findall(r"-E\s+['\"]([^'\"]+)['\"]", line), [])
+
+
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    unittest.main()

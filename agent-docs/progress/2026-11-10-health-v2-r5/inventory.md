@@ -21,6 +21,8 @@ WorkUnit `inventory`。workspace の全 test target（cargo metadata の kind=te
 
 ## 結果（352 target）
 
+- 訂正（unit reclass、2026-11-10）: 地図の参照の探し方を直し、20 target を r6 にした。下の表と数は inventory unit の時点のもので、今の数は [reclass.md](reclass.md) と `inventory.json` の `summary`。
+
 | crate | target | 束ねる leaf（target → 束） | adjust | keep | r6 |
 |---|---|---|---|---|---|
 | task-api | 113 | bundle-api-a 21 → 4、bundle-api-b 49 → 9 | adjust-api 5 → 2 | 18 | 20 |

@@ -1,0 +1,984 @@
+{
+ "schema": "celeris.health-v2-r5.contracts-mapping/1",
+ "fragment": "api-b",
+ "scope": "^crates/task-api/tests/[d-r]",
+ "scan": {
+  "commit": "e9ef080c62043b38abecb99068d6cad4bb47dfd1",
+  "crates_tree": "a94cbae58bd70c2172084c0fde7bd40fe7726478",
+  "trees": {
+   "task-api": "6a18a4c653a70e85fb401a57f69138834084cd73",
+   "celeris": "1854b5ea716699d333a6192178b8994571187901",
+   "celerisctl": "eff59f0f09c329a66f000c8455c0b2eb7ce9d64f"
+  },
+  "adr_tree": "c4655b86806c0143de23f035c7cc26d682775b07",
+  "capability_map_blob": "ac77c1e4f12b5053c3619618bb3fa8cbd8365e80",
+  "architecture_map_blob": "f2430cd3b005b09f90683f3081ca277e4f621624",
+  "architecture_map_checker_blob": "999f10bc0c656a1a5a1eb211211fa702ad761ad2"
+ },
+ "extra_capabilities": [],
+ "files": {
+  "crates/task-api/tests/daemon_clusters_config.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "clusters_combine_config_and_snapshot",
+    "clusters_endpoint_rejects_query_parameters",
+    "config_identity_is_authenticated_only_and_has_no_secret",
+    "config_is_returned_as_given_and_secrets_never_appear",
+    "daemon_view_is_null_until_a_snapshot_is_sent",
+    "schema_endpoint_returns_the_committed_file",
+    "stream_sends_daemon_events_when_the_snapshot_changes"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/decisions.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "decisions-plan-gate"
+   ],
+   "tests": [
+    "a_choice_decision_can_be_answered_with_only_a_note",
+    "a_limit_decision_without_an_option_is_422",
+    "answer_requires_a_token_when_one_is_configured_and_even_without_one",
+    "answer_with_invalid_json_body_is_400",
+    "answering_an_open_decision_resumes_and_records_the_event",
+    "answering_with_an_unknown_option_is_422_and_an_unknown_id_is_404",
+    "inbox_lists_the_open_decision_and_the_count_drops_after_answering",
+    "list_decisions_filters_by_open_and_root_id",
+    "list_decisions_on_an_empty_db_is_empty_not_404",
+    "revise_requires_an_answered_choice_decision",
+    "task_decisions_returns_the_subtree_and_404_for_unknown_task",
+    "the_daemon_snapshot_carries_the_open_decision_count",
+    "withdraw_closes_the_decision_and_a_further_answer_is_409"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/docs.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "a_dir_primary_is_replaced_by_a_documents_repository",
+    "a_project_without_a_repository_gets_a_documents_repository_on_init",
+    "an_artifact_can_be_promoted_to_a_page",
+    "an_unknown_project_is_404",
+    "editing_a_page_commits_on_the_default_branch_and_checks_the_etag",
+    "editing_while_the_default_branch_is_dirty_is_409",
+    "maintenance_approved_plan_attaches_to_review_task_and_stale_plan_is_refused",
+    "maintenance_audit_is_read_only_and_apply_requires_exact_approval",
+    "pages_are_searched_rendered_and_linked",
+    "promoting_needs_a_project",
+    "the_docs_root_comes_from_the_primary_repository"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/execution.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "execution-plan-adoption"
+   ],
+   "tests": [
+    "a_cyclic_plan_is_rejected_with_422",
+    "a_plan_with_an_unknown_harness_field_is_rejected_and_duplicate_keys_are_rejected",
+    "a_second_plan_for_the_same_task_is_rejected_with_409",
+    "a_v3_plan_is_rejected_with_422_while_the_tree_is_disabled",
+    "adopting_a_plan_creates_ready_and_pending_work_units",
+    "decompose_refuses_running_terminal_and_out_of_scope_tasks",
+    "decompose_sets_an_explicit_compound_hint_and_clears_the_gate_decision",
+    "execution_metrics_groups_by_gate_mode_by_default",
+    "execution_metrics_rejects_a_malformed_since",
+    "execution_metrics_rejects_an_unknown_group_by",
+    "execution_metrics_since_filters_out_tasks_updated_before_it",
+    "getting_a_replanned_task_returns_the_active_version_with_both_versions_listed",
+    "getting_a_task_without_a_plan_is_not_found",
+    "phase_gate_replan_without_a_note_is_422_and_continue_resumes",
+    "phase_gate_requires_a_token_and_awaiting_human",
+    "phase_gate_withdraw_cancels_the_task",
+    "plan_gate_replan_requests_a_planner_and_withdraw_cancels",
+    "plan_gate_status_codes_and_inbox",
+    "posting_to_an_unknown_task_is_not_found",
+    "posting_without_a_token_is_unauthorized",
+    "put_with_an_active_plan_is_a_human_replan_that_may_override_a_done_spec",
+    "retry_with_execution_marks_the_copy_and_drops_the_copied_gate_decision",
+    "task_execution_for_an_unknown_task_is_not_found",
+    "task_execution_reports_gate_plan_and_phase",
+    "task_execution_with_no_activity_returns_zeroed_metrics_and_no_plan"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/files.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "artifact_content_types_never_include_active_types",
+    "artifact_paths_escaping_the_workspace_are_forbidden_but_listed",
+    "local_retry_undeclared_artifacts_are_listed_and_downloadable_separately",
+    "missing_runs_files_workspaces_and_tasks_are_404",
+    "per_task_artifact_paths_under_dot_celeris_are_served",
+    "range_and_offset_requests_follow_the_spec",
+    "run_ids_that_are_not_ulids_are_forbidden",
+    "run_logs_are_served_with_closed_content_types",
+    "sha256_current_changes_when_the_artifact_is_modified",
+    "symlinked_run_directory_outside_the_workspace_is_forbidden",
+    "work_unit_check_log_reads_a_leaf_acceptance_check",
+    "work_unit_check_log_returns_the_tail_of_the_running_check"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/general_cos_consult.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "general_cos_consult_consult_answers_without_a_task",
+    "general_cos_consult_delegate_creates_one_task_traced_to_the_origin_thread",
+    "general_cos_consult_general_and_project_sessions_stay_separate",
+    "general_cos_consult_proposal_is_cos_words_and_never_an_instruction",
+    "general_cos_consult_read_completes_inside_the_run",
+    "general_cos_consult_relay_forward_with_cos_text_is_refused"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/genres.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "config_shows_genres",
+    "create_task_with_genre_and_matching_role_returns_201",
+    "create_task_with_role_not_in_genre_is_422",
+    "create_task_with_unknown_genre_is_422",
+    "create_task_with_valid_genre_returns_201_and_applies_genre_defaults",
+    "list_tasks_filters_by_genre"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/inbox_notifications.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "notifications"
+   ],
+   "tests": [
+    "a_decision_answer_uses_the_domain_endpoint_and_stale_id_is_gone",
+    "auto_close_drops_meaningless_items_and_keeps_failed_needing_a_decision",
+    "dependents_reopened_answer_cancels_restored_dependent",
+    "information_is_only_a_notice_and_read_reduces_count",
+    "integration_request_answer_appends_event_and_removes_only_its_inbox_item",
+    "judgment_is_only_in_inbox_and_answer_removes_it",
+    "legacy_report_read_also_marks_its_notice_read",
+    "phase_integration_request_answer_resumes_integration",
+    "phase_integration_request_of_a_finished_unit_is_answered_without_resuming",
+    "read_all_obeys_kind_and_project_filters"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/integration_api.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "delivery-merge-candidate"
+   ],
+   "tests": [
+    "integration_api_disposition_requires_human_auth_and_nonempty_reason",
+    "integration_api_inbox_unintegrated_items_are_per_repo_and_need_note",
+    "integration_api_lists_and_filters_states",
+    "integration_api_rejects_unknown_state_filter",
+    "integration_api_task_detail_and_list_include_unintegrated_state"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/integration_principals.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "all_dispositions_and_inbox_forwarding_preserve_token_principals",
+    "integration_request_answers_record_web_and_operator",
+    "integration_routes_apply_common_guard_without_changing_authorization"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/integration_repair.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "pre-review-sync-auto-resolve-integration-repair"
+   ],
+   "tests": [
+    "inbox_attention_failed_carries_integration_repair_separately_from_review_fail",
+    "task_detail_review_fail_has_no_integration_repair_history",
+    "task_detail_shows_integration_repair_scheduled_state"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/knowledge.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "a_gui_edit_marks_the_page_as_human_authored",
+    "a_page_is_rendered_with_its_front_matter_history_and_etag",
+    "an_uninitialized_knowledge_base_reads_empty_and_refuses_writes",
+    "candidates_can_be_accepted_or_rejected",
+    "candidates_never_appear_in_the_human_inbox",
+    "candidates_with_an_op_show_it_and_accept_behaves_per_op",
+    "the_tree_lists_pages_and_filters_by_scope_and_query",
+    "the_write_endpoints_are_admin_only",
+    "writing_a_page_checks_the_etag_and_the_path"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/legacy_routing_events.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "routing-audit-outcome"
+   ],
+   "tests": [
+    "accounts_list_survives_legacy_routing_events_without_evidence_mode"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/lifecycle.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "task-lifecycle"
+   ],
+   "tests": [
+    "an_existing_paused_milestone_still_stops_only_its_own_tasks",
+    "archive_requires_a_terminal_project_and_hides_it_and_its_tasks_by_default",
+    "cancelling_a_project_cascades_to_its_tasks_and_milestones",
+    "milestone_lifecycle_endpoints_are_gone",
+    "patch_cannot_set_paused_or_cancelled_on_a_project_and_milestones_are_gone",
+    "pausing_a_project_stops_dispatch_and_resume_restores_the_previous_status",
+    "unknown_and_malformed_ids_are_404"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/list_and_detail.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "browser_lifecycle_events_filter_and_page_with_task_execution_identity",
+    "detail_matches_task_ops_task_detail_byte_for_byte",
+    "detail_of_a_missing_task_is_404",
+    "global_events_page_by_id_with_task_and_type_filters",
+    "graph_returns_the_task_ops_graph_as_json",
+    "inbox_returns_the_task_ops_inbox_as_json",
+    "list_pages_through_250_tasks_in_every_order",
+    "list_rejects_bad_query_values_before_calling_task_ops",
+    "list_title_query_treats_percent_and_underscore_literally",
+    "runs_list_fills_files_from_the_run_directory",
+    "runs_of_a_missing_task_is_404",
+    "tampered_cursor_is_a_bad_request",
+    "task_counts_group_all_statuses_without_list_filters",
+    "task_events_page_by_seq_with_type_filter"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/llm_accounts_admin.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "accounts-quota"
+   ],
+   "tests": [
+    "account_admin_unavailable_error_maps_to_409_not_500",
+    "codex_source_without_codex_root_is_not_found",
+    "create_account_makes_a_directory_and_rejects_duplicates_and_bad_ids",
+    "create_account_under_codex_source_uses_the_codex_root_and_list_shows_both_sources",
+    "delete_account_in_use_is_conflict",
+    "delete_account_moves_the_directory_to_removed_and_missing_is_404",
+    "delete_account_without_admin_tx_is_accounts_unavailable",
+    "implicit_accounts_are_listed_and_patchable_by_source_and_refused_otherwise",
+    "list_accounts_merges_filesystem_snapshot_and_stats",
+    "login_code_is_not_supported_for_codex",
+    "management_endpoints_forward_the_source_as_its_adapter",
+    "management_routes_all_require_a_token",
+    "pool_account_limit_is_patchable_by_source_and_account",
+    "pool_without_root_lists_nothing_and_management_is_not_found",
+    "unknown_source_is_not_found"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/llm_routes_admin.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "harnesses::harness_list_detail_missing_and_unconfigured",
+    "run_selection::task_runs_expose_persisted_selection_and_legacy_unresolved"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/llm_sources.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "requires_a_bearer_token",
+    "returns_409_when_llm_proxy_is_not_configured",
+    "returns_source_detail_and_404_for_unknown_source",
+    "returns_the_readers_view_when_configured"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/local_settings_admin.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "local_settings_get_shows_local_row",
+    "local_settings_put_audit_and_apply",
+    "local_settings_put_validation_errors",
+    "local_settings_store_beats_config_in_response"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/long_horizon_pilot.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "long_horizon_pilot_api_human_check_stays_with_the_human",
+    "long_horizon_pilot_api_off_restores_the_legacy_cos_launch",
+    "long_horizon_pilot_api_production_gate_is_kept"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/mcp_admin.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "lists_calls_optionally_filtered_by_client",
+    "lists_clients_without_the_token_value",
+    "requires_a_bearer_token"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/memory.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "existing_notes_and_a_projects_drawer_are_returned_in_full",
+    "missing_files_read_as_empty_and_paths_are_returned",
+    "there_is_no_write_endpoint",
+    "unconfigured_memory_is_409_and_an_unknown_node_is_404"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/model_catalog.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "discover_calls_the_hook_with_the_source",
+    "discover_without_hook_is_accepted_with_unavailable",
+    "override_rejects_unknown_source_and_bad_tier",
+    "override_roundtrip_shows_in_list"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/notify.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "a_failed_send_is_reported_as_ok_false",
+    "celeris_side_unavailability_becomes_409",
+    "get_notify_omits_project_id_for_kinds_without_a_project",
+    "get_notify_reports_not_configured_without_a_secret",
+    "get_notify_shows_the_fingerprint_and_recent_sends_but_never_the_url",
+    "get_notify_status_exposes_route_settings_and_last_successful_sends",
+    "the_test_endpoint_is_409_when_no_webhook_is_registered",
+    "the_test_endpoint_is_409_without_a_secrets_section",
+    "the_test_endpoint_is_409_without_an_admin_channel",
+    "the_test_endpoint_requires_a_token",
+    "the_test_endpoint_requires_a_token_when_token_file_is_not_configured",
+    "the_test_endpoint_returns_200_with_the_outcome_from_celeris"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/operations.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "accept_moves_a_draft_task_to_ready_and_rejects_other_statuses",
+    "answer_covers_blocked_not_blocked_and_blank",
+    "approve_covers_accept_approve_and_both_invalid_cases",
+    "approving_the_same_task_twice_is_an_invalid_transition",
+    "browser_allowed_domains_api_create_rejects_missing_empty_and_invalid",
+    "browser_allowed_domains_api_patch_cannot_add_skill_without_origins",
+    "cancel_of_done_or_cancelled_is_invalid_and_failed_can_be_cancelled",
+    "cancelling_a_predecessor_lists_dependents_in_cascaded",
+    "create_plan_is_gone",
+    "create_task_max_tokens_lands_in_the_budget",
+    "create_task_returns_201_with_location_and_cli_defaults",
+    "create_task_validation_errors_insert_nothing",
+    "every_mutating_endpoint_requires_a_bearer_token",
+    "expected_status_mismatch_is_a_conflict_that_changes_nothing",
+    "operations_on_missing_tasks_are_404",
+    "project_and_milestone_mutations_require_a_bearer_token",
+    "reject_covers_approval_and_draft",
+    "rejecting_an_approval_lists_cancelled_children_in_cascaded",
+    "replay_reports_zero_mismatches_after_api_operations",
+    "retry_defaults_to_ready_when_accept_is_omitted",
+    "retry_duplicates_a_failed_task_and_rewires_dependents",
+    "retry_with_accept_starts_ready_and_non_terminal_or_done_is_409",
+    "retry_workspace_override_switches_to_local_and_validates_the_cluster"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/organization.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "a_local_project_workspace_can_choose_the_worktree_mode",
+    "a_project_can_carry_the_workspace_where_its_code_lives",
+    "browser_settings_event_has_no_secret_values",
+    "browser_settings_event_records_actor_and_before_after",
+    "browser_settings_generic_org_patch_uses_same_validation",
+    "browser_settings_patch_updates_profile",
+    "browser_settings_rejects_empty_domains_and_unknown_credential_policy",
+    "browser_settings_rejects_global_and_public_suffix_wildcards",
+    "browser_settings_rejects_invalid_scheme",
+    "browser_settings_rejects_userinfo_path_query_fragment",
+    "browser_settings_requires_admin_and_same_origin",
+    "deleting_a_node_that_still_has_work_is_a_conflict",
+    "org_admin_endpoints_require_a_token",
+    "org_admin_endpoints_require_a_token_when_token_file_is_not_configured",
+    "org_can_be_created_listed_patched_and_deleted",
+    "org_list_carries_lead_session_summaries_for_departments_with_a_continuing_session",
+    "org_validation_is_reported_as_422_and_duplicate_ids_as_409",
+    "posting_a_task_with_an_unknown_assignee_or_project_is_rejected",
+    "project_detail_returns_the_milestones_and_the_work_tree",
+    "projects_and_milestones_round_trip_through_the_api"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/project_auto_integrate.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "delivery-merge-candidate"
+   ],
+   "tests": [
+    "auto_integrate_is_a_project_attribute_switched_by_patch"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/project_brief.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "project_brief_admin_put_replaces_and_shows_in_list_and_detail",
+    "project_list_reports_task_counts_last_activity_and_human_waits",
+    "project_status_put_is_written_by_the_project_cos_only"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/project_controller.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "project-controller"
+   ],
+   "tests": [
+    "project_wake_api_budget_today_counts_not_launched_runs",
+    "project_wake_api_cos_may_only_turn_it_off",
+    "project_wake_api_get_defaults_to_off_and_404s_unknown_projects",
+    "project_wake_api_human_patch_bumps_human_epoch",
+    "project_wake_api_put_needs_allowlist_and_revision",
+    "project_wake_api_summary_shows_outcomes_wait_authority_and_next_wake",
+    "project_wake_api_wake_is_idempotent_and_inert_when_off"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/project_cos_guard.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "project_cos_brief_updated_by_the_project_cos",
+    "project_cos_controller_owns_launch",
+    "project_cos_dry_run_mode_is_human_requested",
+    "project_cos_irreversible_gate_only_in_autonomy",
+    "project_cos_refuses_goal_edit",
+    "project_cos_refuses_production",
+    "project_cos_refuses_request_edit",
+    "project_cos_triage_types_reused"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/project_plan.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "create_accepts_and_pins_routing_override",
+    "evidence_mode_round_trips_through_post_get_child_and_retry",
+    "is_root_task_and_stages_hint_are_exposed",
+    "project_detail_hides_frozen_milestones_by_default",
+    "project_plan_endpoints_are_gone",
+    "task_pause_and_resume_cover_the_subtree"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/project_roadmap.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "project_roadmap_brief_replace_does_not_change_the_roadmap",
+    "project_roadmap_cos_and_operator_cannot_decide",
+    "project_roadmap_human_approval_advances_and_supersedes",
+    "project_roadmap_ignores_task_milestone_and_phase",
+    "project_roadmap_legacy_milestones_stay_gone",
+    "project_roadmap_proposal_does_not_advance_the_version",
+    "project_roadmap_reject_keeps_the_current_version",
+    "project_roadmap_root_links_and_reached_need_rust_evidence",
+    "project_roadmap_stable_ids_cross_versions",
+    "project_roadmap_takes_precedence_over_the_request_block"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/project_wake_human.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "project_wake_api_human_bump_failure_rolls_the_write_back",
+    "project_wake_api_human_cos_is_not_counted",
+    "project_wake_api_human_each_route_bumps_once",
+    "project_wake_api_human_mcp_is_not_counted",
+    "project_wake_api_human_off_or_projectless_is_inert",
+    "project_wake_api_human_operator_is_not_counted",
+    "project_wake_api_human_refused_or_unchanged_requests_do_not_bump",
+    "project_wake_api_human_write_failure_keeps_the_epoch"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/project_wake_human_chat.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "project_wake_api_human_chat_bump_failure_rolls_the_message_back",
+    "project_wake_api_human_chat_cos_and_operator_messages_are_not_counted",
+    "project_wake_api_human_chat_forward_bumps_once_and_a_replay_does_not",
+    "project_wake_api_human_chat_message_bumps_once_and_a_resend_does_not",
+    "project_wake_api_human_chat_off_project_is_inert",
+    "project_wake_api_human_chat_refused_writes_do_not_bump",
+    "project_wake_api_human_chat_relay_bumps_once_and_a_resend_does_not",
+    "project_wake_api_human_inbox_bump_failure_rolls_the_answer_back",
+    "project_wake_api_human_inbox_cos_answer_and_resolve_are_not_counted",
+    "project_wake_api_human_inbox_each_answer_bumps_once",
+    "project_wake_api_human_inbox_operator_or_projectless_is_not_counted",
+    "project_wake_api_human_inbox_plan_withdraw_failure_keeps_the_epoch",
+    "project_wake_api_human_inbox_refused_answers_do_not_bump"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/relayed_instructions.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "celeris-mcp"
+   ],
+   "tests": [
+    "a_person_message_records_its_author_without_a_relay",
+    "operator_relay_grounds_the_project_cos_answer_and_separates_decider_from_executor",
+    "relay_after_escalation_is_answered_by_the_rejudging_run_once",
+    "relay_scope_maps_a_closed_authorization_item_to_its_task",
+    "triage_run_cites_a_relay_in_scope_and_refuses_out_of_scope_or_expired_ones"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/reports.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "admin_operations_are_401_even_without_a_configured_token",
+    "count_endpoints_count_every_row_beyond_the_page_limit",
+    "marking_reports_read_is_an_admin_operation",
+    "reports_are_listed_newest_first_and_can_be_filtered",
+    "the_daemon_snapshot_carries_the_unread_counts_and_the_notification_decision"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/repos.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "a_task_picks_repos_by_name_and_blocks_their_deletion_until_it_finishes",
+    "changing_repos_needs_the_admin_token_but_reading_does_not",
+    "invalid_repo_input_is_422_and_unknown_ids_are_404",
+    "mixing_a_remote_repo_with_a_local_one_is_rejected",
+    "repos_can_be_created_listed_repointed_and_deleted",
+    "the_tree_file_returns_text_and_only_the_size_for_binaries",
+    "the_tree_lists_every_repo_of_the_task",
+    "the_tree_refuses_to_leave_the_working_tree"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/repository_required.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "repository_required_cos_rejects_with_reason_and_audit_then_accepts_repos",
+    "repository_required_human_warning_and_patch_repair_are_atomic",
+    "repository_required_patch_repairs_blocked_children_but_not_running_tasks"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/request_lock_counts.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "main_reads_and_feed_sync_do_not_scale_with_event_volume"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/roles.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "config_shows_roles_without_instruction_text_and_delegation_limits",
+    "create_task_with_role_applies_role_defaults",
+    "task_values_win_over_role_defaults_and_aggregate_is_stored",
+    "unknown_role_is_stored_without_defaults"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/routing.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "routing-lane-route"
+   ],
+   "tests": [
+    "routing_is_empty_without_runs_and_404_for_unknown_tasks",
+    "routing_returns_per_run_audit_and_dropped_assignee",
+    "routing_shadow_audit_keeps_primary_outcome_separate"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/routing_eval.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "routing-eval"
+   ],
+   "tests": [
+    "cancel_moves_a_queued_trial_and_conflicts_afterwards",
+    "list_filters_by_batch_and_status",
+    "post_creates_a_batch_and_keeps_the_check_command_server_side",
+    "post_rejects_empty_unknown_route_and_missing_repo_with_400",
+    "reposting_the_same_trials_is_idempotent",
+    "writes_need_the_bearer_token_when_the_daemon_has_one"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/routing_source_state.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "routing_source_api_reports_freshness_and_cost_components",
+    "source_state_view_marks_expired_snapshot_stale"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/routing_stage.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "routing-eval"
+   ],
+   "tests": [
+    "stages_and_evidence_are_listed_and_enforce_requires_d1_evidence"
+   ],
+   "fns": {}
+  }
+ },
+ "groups": [
+  {
+   "id": "dup-0629b21af39d",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/task-api/tests/docs.rs::env",
+    "crates/task-api/tests/execution.rs::env",
+    "crates/task-api/tests/knowledge.rs::env",
+    "crates/task-api/tests/repos.rs::env",
+    "crates/task-api/tests/skills.rs::env"
+   ],
+   "names": [
+    "env"
+   ],
+   "users": [
+    "crates/task-api/tests/docs.rs::a_dir_primary_is_replaced_by_a_documents_repository",
+    "crates/task-api/tests/docs.rs::a_project_without_a_repository_gets_a_documents_repository_on_init",
+    "crates/task-api/tests/docs.rs::an_artifact_can_be_promoted_to_a_page",
+    "crates/task-api/tests/docs.rs::an_unknown_project_is_404",
+    "crates/task-api/tests/docs.rs::editing_a_page_commits_on_the_default_branch_and_checks_the_etag",
+    "crates/task-api/tests/docs.rs::editing_while_the_default_branch_is_dirty_is_409",
+    "crates/task-api/tests/docs.rs::maintenance_approved_plan_attaches_to_review_task_and_stale_plan_is_refused",
+    "crates/task-api/tests/docs.rs::maintenance_audit_is_read_only_and_apply_requires_exact_approval",
+    "crates/task-api/tests/docs.rs::pages_are_searched_rendered_and_linked",
+    "crates/task-api/tests/docs.rs::promoting_needs_a_project",
+    "crates/task-api/tests/docs.rs::the_docs_root_comes_from_the_primary_repository",
+    "crates/task-api/tests/execution.rs::a_cyclic_plan_is_rejected_with_422",
+    "crates/task-api/tests/execution.rs::a_plan_with_an_unknown_harness_field_is_rejected_and_duplicate_keys_are_rejected",
+    "crates/task-api/tests/execution.rs::a_second_plan_for_the_same_task_is_rejected_with_409",
+    "crates/task-api/tests/execution.rs::a_v3_plan_is_rejected_with_422_while_the_tree_is_disabled",
+    "crates/task-api/tests/execution.rs::adopting_a_plan_creates_ready_and_pending_work_units",
+    "crates/task-api/tests/execution.rs::decompose_refuses_running_terminal_and_out_of_scope_tasks",
+    "crates/task-api/tests/execution.rs::decompose_sets_an_explicit_compound_hint_and_clears_the_gate_decision",
+    "crates/task-api/tests/execution.rs::execution_metrics_groups_by_gate_mode_by_default",
+    "crates/task-api/tests/execution.rs::execution_metrics_rejects_a_malformed_since",
+    "crates/task-api/tests/execution.rs::execution_metrics_rejects_an_unknown_group_by",
+    "crates/task-api/tests/execution.rs::execution_metrics_since_filters_out_tasks_updated_before_it",
+    "crates/task-api/tests/execution.rs::getting_a_replanned_task_returns_the_active_version_with_both_versions_listed",
+    "crates/task-api/tests/execution.rs::getting_a_task_without_a_plan_is_not_found",
+    "crates/task-api/tests/execution.rs::phase_gate_replan_without_a_note_is_422_and_continue_resumes",
+    "crates/task-api/tests/execution.rs::phase_gate_requires_a_token_and_awaiting_human",
+    "crates/task-api/tests/execution.rs::phase_gate_withdraw_cancels_the_task",
+    "crates/task-api/tests/execution.rs::plan_gate_replan_requests_a_planner_and_withdraw_cancels",
+    "crates/task-api/tests/execution.rs::plan_gate_status_codes_and_inbox",
+    "crates/task-api/tests/execution.rs::posting_to_an_unknown_task_is_not_found",
+    "crates/task-api/tests/execution.rs::posting_without_a_token_is_unauthorized",
+    "crates/task-api/tests/execution.rs::put_with_an_active_plan_is_a_human_replan_that_may_override_a_done_spec",
+    "crates/task-api/tests/execution.rs::retry_with_execution_marks_the_copy_and_drops_the_copied_gate_decision",
+    "crates/task-api/tests/execution.rs::task_execution_for_an_unknown_task_is_not_found",
+    "crates/task-api/tests/execution.rs::task_execution_reports_gate_plan_and_phase",
+    "crates/task-api/tests/execution.rs::task_execution_with_no_activity_returns_zeroed_metrics_and_no_plan",
+    "crates/task-api/tests/knowledge.rs::a_gui_edit_marks_the_page_as_human_authored",
+    "crates/task-api/tests/knowledge.rs::a_page_is_rendered_with_its_front_matter_history_and_etag",
+    "crates/task-api/tests/knowledge.rs::an_uninitialized_knowledge_base_reads_empty_and_refuses_writes",
+    "crates/task-api/tests/knowledge.rs::candidates_can_be_accepted_or_rejected",
+    "crates/task-api/tests/knowledge.rs::candidates_never_appear_in_the_human_inbox",
+    "crates/task-api/tests/knowledge.rs::candidates_with_an_op_show_it_and_accept_behaves_per_op",
+    "crates/task-api/tests/knowledge.rs::the_tree_lists_pages_and_filters_by_scope_and_query",
+    "crates/task-api/tests/knowledge.rs::the_write_endpoints_are_admin_only",
+    "crates/task-api/tests/knowledge.rs::writing_a_page_checks_the_etag_and_the_path",
+    "crates/task-api/tests/repos.rs::a_task_picks_repos_by_name_and_blocks_their_deletion_until_it_finishes",
+    "crates/task-api/tests/repos.rs::changing_repos_needs_the_admin_token_but_reading_does_not",
+    "crates/task-api/tests/repos.rs::invalid_repo_input_is_422_and_unknown_ids_are_404",
+    "crates/task-api/tests/repos.rs::mixing_a_remote_repo_with_a_local_one_is_rejected",
+    "crates/task-api/tests/repos.rs::repos_can_be_created_listed_repointed_and_deleted",
+    "crates/task-api/tests/repos.rs::the_tree_file_returns_text_and_only_the_size_for_binaries",
+    "crates/task-api/tests/repos.rs::the_tree_lists_every_repo_of_the_task",
+    "crates/task-api/tests/repos.rs::the_tree_refuses_to_leave_the_working_tree",
+    "crates/task-api/tests/skills.rs::an_uninitialized_knowledge_base_lists_no_skills",
+    "crates/task-api/tests/skills.rs::mount_validates_the_node_and_the_skill_name_and_requires_admin",
+    "crates/task-api/tests/skills.rs::mounting_a_skill_on_a_node_shows_up_in_mounted_by_including_children",
+    "crates/task-api/tests/skills.rs::put_skill_creates_and_updates_and_requires_admin"
+   ],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-3b3dd18cd349",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/task-api/tests/project_brief.rs::bearer_for",
+    "crates/task-api/tests/project_controller.rs::bearer_for",
+    "crates/task-api/tests/project_roadmap.rs::bearer_for"
+   ],
+   "names": [
+    "bearer_for"
+   ],
+   "users": [
+    "crates/task-api/tests/project_brief.rs::project_status_put_is_written_by_the_project_cos_only",
+    "crates/task-api/tests/project_controller.rs::project_wake_api_cos_may_only_turn_it_off",
+    "crates/task-api/tests/project_roadmap.rs::project_roadmap_cos_and_operator_cannot_decide"
+   ],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-3dab5992ab4f",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/task-api/tests/organization.rs::pa",
+    "crates/task-api/tests/project_plan.rs::pa",
+    "crates/task-api/tests/repos.rs::pa"
+   ],
+   "names": [
+    "pa"
+   ],
+   "users": [
+    "crates/task-api/tests/organization.rs::a_local_project_workspace_can_choose_the_worktree_mode",
+    "crates/task-api/tests/organization.rs::a_project_can_carry_the_workspace_where_its_code_lives",
+    "crates/task-api/tests/organization.rs::browser_settings_generic_org_patch_uses_same_validation",
+    "crates/task-api/tests/organization.rs::org_can_be_created_listed_patched_and_deleted",
+    "crates/task-api/tests/organization.rs::org_validation_is_reported_as_422_and_duplicate_ids_as_409",
+    "crates/task-api/tests/organization.rs::projects_and_milestones_round_trip_through_the_api",
+    "crates/task-api/tests/project_plan.rs::project_plan_endpoints_are_gone",
+    "crates/task-api/tests/repos.rs::invalid_repo_input_is_422_and_unknown_ids_are_404",
+    "crates/task-api/tests/repos.rs::repos_can_be_created_listed_repointed_and_deleted"
+   ],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-5e6ec9f72bd6",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/task-api/tests/general_cos_consult.rs::env",
+    "crates/task-api/tests/project_cos_guard.rs::env"
+   ],
+   "names": [
+    "env"
+   ],
+   "users": [
+    "crates/task-api/tests/general_cos_consult.rs::general_cos_consult_consult_answers_without_a_task",
+    "crates/task-api/tests/general_cos_consult.rs::general_cos_consult_delegate_creates_one_task_traced_to_the_origin_thread",
+    "crates/task-api/tests/general_cos_consult.rs::general_cos_consult_general_and_project_sessions_stay_separate",
+    "crates/task-api/tests/general_cos_consult.rs::general_cos_consult_proposal_is_cos_words_and_never_an_instruction",
+    "crates/task-api/tests/general_cos_consult.rs::general_cos_consult_read_completes_inside_the_run",
+    "crates/task-api/tests/general_cos_consult.rs::general_cos_consult_relay_forward_with_cos_text_is_refused"
+   ],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-6f1147b9302e",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/task-api/tests/memory.rs::seed_secretary",
+    "crates/task-api/tests/project_plan.rs::seed_secretary"
+   ],
+   "names": [
+    "seed_secretary"
+   ],
+   "users": [
+    "crates/task-api/tests/memory.rs::existing_notes_and_a_projects_drawer_are_returned_in_full",
+    "crates/task-api/tests/memory.rs::missing_files_read_as_empty_and_paths_are_returned",
+    "crates/task-api/tests/memory.rs::there_is_no_write_endpoint",
+    "crates/task-api/tests/memory.rs::unconfigured_memory_is_409_and_an_unknown_node_is_404",
+    "crates/task-api/tests/project_plan.rs::is_root_task_and_stages_hint_are_exposed",
+    "crates/task-api/tests/project_plan.rs::project_detail_hides_frozen_milestones_by_default",
+    "crates/task-api/tests/project_plan.rs::project_plan_endpoints_are_gone"
+   ],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-8d936b305a9e",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/task-api/tests/docs.rs::pu",
+    "crates/task-api/tests/knowledge.rs::pu",
+    "crates/task-api/tests/skills.rs::pu"
+   ],
+   "names": [
+    "pu"
+   ],
+   "users": [
+    "crates/task-api/tests/docs.rs::editing_a_page_commits_on_the_default_branch_and_checks_the_etag",
+    "crates/task-api/tests/docs.rs::editing_while_the_default_branch_is_dirty_is_409",
+    "crates/task-api/tests/docs.rs::pages_are_searched_rendered_and_linked",
+    "crates/task-api/tests/knowledge.rs::a_gui_edit_marks_the_page_as_human_authored",
+    "crates/task-api/tests/knowledge.rs::a_page_is_rendered_with_its_front_matter_history_and_etag",
+    "crates/task-api/tests/knowledge.rs::an_uninitialized_knowledge_base_reads_empty_and_refuses_writes",
+    "crates/task-api/tests/knowledge.rs::writing_a_page_checks_the_etag_and_the_path",
+    "crates/task-api/tests/skills.rs::mounting_a_skill_on_a_node_shows_up_in_mounted_by_including_children",
+    "crates/task-api/tests/skills.rs::put_skill_creates_and_updates_and_requires_admin"
+   ],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-9ed4d4dc0e39",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/task-api/tests/general_cos_consult.rs::rfc3339",
+    "crates/task-api/tests/project_wake_human_chat.rs::rfc3339",
+    "crates/task-api/tests/relayed_instructions.rs::rfc3339",
+    "crates/task-api/tests/single_human_window.rs::rfc3339",
+    "crates/task-api/tests/unblocks.rs::rfc3339"
+   ],
+   "names": [
+    "rfc3339"
+   ],
+   "users": [
+    "crates/task-api/tests/general_cos_consult.rs::general_cos_consult_general_and_project_sessions_stay_separate",
+    "crates/task-api/tests/general_cos_consult.rs::general_cos_consult_proposal_is_cos_words_and_never_an_instruction",
+    "crates/task-api/tests/general_cos_consult.rs::general_cos_consult_relay_forward_with_cos_text_is_refused",
+    "crates/task-api/tests/relayed_instructions.rs::operator_relay_grounds_the_project_cos_answer_and_separates_decider_from_executor",
+    "crates/task-api/tests/relayed_instructions.rs::triage_run_cites_a_relay_in_scope_and_refuses_out_of_scope_or_expired_ones",
+    "crates/task-api/tests/single_human_window.rs::project_escalation_is_answered_through_the_general_cos_and_relayed_to_the_project_cos",
+    "crates/task-api/tests/unblocks.rs::unblocks_api_links_and_promotion_reopens_the_failed_task_once"
+   ],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-ad54b1ce2c16",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/task-api/tests/general_cos_consult.rs::run_bearer",
+    "crates/task-api/tests/single_human_window.rs::run_bearer"
+   ],
+   "names": [
+    "run_bearer"
+   ],
+   "users": [
+    "crates/task-api/tests/general_cos_consult.rs::general_cos_consult_proposal_is_cos_words_and_never_an_instruction",
+    "crates/task-api/tests/single_human_window.rs::project_escalation_is_answered_through_the_general_cos_and_relayed_to_the_project_cos"
+   ],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  }
+ ]
+}

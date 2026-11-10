@@ -1,0 +1,1956 @@
+{
+ "schema": "celeris.health-v2-r5.contracts-mapping/1",
+ "fragment": "cli",
+ "scope": "^crates/(celeris/tests/|celerisctl/)",
+ "scan": {
+  "commit": "e9ef080c62043b38abecb99068d6cad4bb47dfd1",
+  "crates_tree": "a94cbae58bd70c2172084c0fde7bd40fe7726478",
+  "trees": {
+   "task-api": "6a18a4c653a70e85fb401a57f69138834084cd73",
+   "celeris": "1854b5ea716699d333a6192178b8994571187901",
+   "celerisctl": "eff59f0f09c329a66f000c8455c0b2eb7ce9d64f"
+  },
+  "adr_tree": "c4655b86806c0143de23f035c7cc26d682775b07",
+  "capability_map_blob": "ac77c1e4f12b5053c3619618bb3fa8cbd8365e80",
+  "architecture_map_blob": "f2430cd3b005b09f90683f3081ca277e4f621624",
+  "architecture_map_checker_blob": "999f10bc0c656a1a5a1eb211211fa702ad761ad2"
+ },
+ "extra_capabilities": [],
+ "files": {
+  "crates/celeris/tests/actor_trace_flow1.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "authorized_project_cos_keeps_actor_and_consumption_through_evaluation"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/actor_trace_flow2.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "forwarded_requests_keep_the_human_decider_apart_from_cos_and_operator_executors"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/actor_trace_flow3.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "general_cos_escalates_stagnation_and_keeps_human_judgment_separate",
+    "general_cos_responds_to_stagnation_with_source_evidence"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/actor_trace_flow4.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "operator_deployment_and_rollback_join_release_decision_and_request"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/actor_trace_flow5.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "redelivery_and_restart_duplicate_no_operation_or_count"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/bin_smoke.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "help_exits_zero_and_missing_config_exits_two"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/browser_startup_reap.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "startup_reaps_dead_instance_and_preserves_live_instance"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/campaign_acceptance_e2e.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "arm_pin_is_set_on_the_task_through_the_api_not_by_the_global_config",
+    "budget_stop_cancels_through_the_api_and_stops_further_submissions",
+    "communication_failures_keep_tracking_and_never_double_submit",
+    "daemon_restart_resumes_the_same_tasks_without_resubmitting",
+    "final_accounting_is_regenerated_from_the_router_tree_with_jev_cos_gaps",
+    "final_accounting_shows_budget_view_versus_final_cutoff_after_a_budget_stop",
+    "normal_path_post_tasks_to_independent_grade_to_final_export",
+    "ungraded_trials_block_the_final_export_until_graded",
+    "wrong_artifact_completed_run_is_not_a_success"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/campaign_lock_e2e.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "changed_lock_or_inputs_refuse_to_resume_an_existing_measurement",
+    "locked_measurement_runs_through_task_api_to_the_final_export",
+    "swapped_grader_or_tests_are_rejected_at_grade_bind_and_export",
+    "wrong_initial_repo_submodule_materials_kb_or_inputs_cause_no_post_or_external_run"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/campaign_wiring_e2e.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "post_tasks_to_export_connects_children_retries_review_cos_jev_and_interventions"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/cap_probe_real_daemon.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "a_second_daemon_on_the_same_port_is_detected",
+    "daemon_missing_toolchain_or_variable_is_env_failure_even_if_cli_has_it",
+    "daemon_only_toolchain_and_variable_pass_through_the_real_worker_path",
+    "daemon_socket_and_mount_are_checked_from_the_worker",
+    "probe_runs_under_each_real_harness_adapter_env",
+    "unreachable_daemon_is_env_failure_not_a_pass"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/cluster_login_script.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "cluster_login_script_passes_control_persist_and_keepalive_to_the_master"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/cos_chat_stagnation_notify.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "human_wait_aging_is_live_held_and_withdrawn_when_answered",
+    "resolved_stagnation_is_withdrawn_before_post",
+    "stagnation_findings_are_live_held_and_withdrawn_on_revision"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/cos_chat_triage_notify.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "cos_chat_triage_cutover_supersedes_legacy_pending_and_is_idempotent",
+    "cos_chat_triage_escalation_packet_has_bounded_text_and_absolute_link",
+    "cos_chat_triage_long_packet_keeps_link_within_1900_characters",
+    "cos_chat_triage_notice_revision_is_checked_before_post",
+    "cos_chat_triage_only_escalation_and_fallback_are_sendable",
+    "cos_chat_triage_resolved_source_is_withdrawn_before_post",
+    "cos_chat_triage_three_send_failures_keep_the_unresolved_item",
+    "cos_chat_triage_webhook_disables_mentions_and_obeys_retry_after"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/cos_chat_triage_scenarios.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "cos-inbox-triage-operations-audit"
+   ],
+   "tests": [
+    "cos_chat_triage_b_webhook_packet_and_stop_after_human_answer",
+    "cos_chat_triage_unified_only_cos_escalation_reaches_the_webhook"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/credential_wait_notify.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "wait_notify_register_verify_and_resume_once_through_the_fake_webhook",
+    "webhook_ignores_eof_before_complete_request"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/daemon_ready_wait.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "finished_daemon_fails_without_waiting_for_the_limit",
+    "no_listener_fails_at_the_limit_with_elapsed_time",
+    "silent_connection_does_not_use_up_the_limit"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/daily_curation.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "knowledge_curation_job_apply_without_approval_commits_pushes_and_terminal_task_maintenance",
+    "knowledge_curation_job_dry_run_bundles_human_decisions_into_one_decision",
+    "knowledge_curation_job_seed_schedule_inputs_dry_run_and_summary"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/deployment_audit.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "release-selfdeploy-wiring"
+   ],
+   "tests": [
+    "deployment_scripts_require_provenance_and_preserve_history"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/evidence_mode_e2e.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "contradictory_evidence_mode_is_rejected_before_any_task_exists",
+    "none_survives_post_child_grandchild_retry_and_ignores_table_updates",
+    "ticked_runs_record_the_evidence_mode_and_the_table_version_actually_used"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/fake_http.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "async_one_shot_survives_noise_and_silent_connection",
+    "framing_requires_every_header_and_body_byte",
+    "sync_one_shot_survives_noise_and_silent_connection"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/instance_handoff.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "release-selfdeploy-wiring"
+   ],
+   "tests": [
+    "a_newer_release_takes_over_while_the_old_one_finishes_its_run",
+    "a_stale_heartbeat_does_not_replace_a_live_active_until_its_process_is_gone",
+    "normal_mode_does_not_inject_the_smoke_builtins",
+    "starting_the_same_release_twice_exits_three",
+    "the_builtin_smoke_role_and_genre_override_a_config_entry_of_the_same_id",
+    "the_cli_overrides_replace_the_config_values",
+    "two_listeners_bind_the_same_port_with_so_reuseport",
+    "verify_mode_never_dispatches_and_never_touches_daemon_instances"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/integration_api.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "delivery-merge-candidate"
+   ],
+   "tests": [
+    "integration_api_merge_conflict_keeps_main_unintegrated",
+    "integration_api_repoless_branch_in_main_is_integrated",
+    "integration_api_repoless_done_task_detected_in_inbox_and_detail_then_discarded",
+    "integration_api_repoless_task_without_branch_records_nothing",
+    "integration_api_stranded_branch_round_trip_through_routes_and_events"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/legacy_event_startup.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "startup_loads_legacy_routing_decided_event"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/long_run_soak.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "long_run_soak_enabled",
+    "long_run_soak_lease_holder",
+    "long_run_soak_off",
+    "long_run_soak_shadow",
+    "long_run_soak_v8_load"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/notify.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "notifications"
+   ],
+   "tests": [
+    "a_done_task_is_not_announced_by_the_scan",
+    "a_failing_webhook_is_retried_three_times_and_then_given_up",
+    "a_milestone_without_any_real_task_is_never_ready",
+    "a_pending_notification_is_posted_once_and_marked_sent",
+    "a_rate_limited_response_is_not_counted_as_an_attempt",
+    "a_root_plan_without_approval_posts_nothing",
+    "a_single_daemon_decision_uses_the_decision_key",
+    "a_store_without_bad_news_produces_nothing",
+    "a_task_blocked_after_startup_is_scanned_even_though_it_was_created_long_before",
+    "active_and_global_conversations_notify_each_new_reply_but_not_answered_replies",
+    "an_unreachable_webhook_never_reveals_the_host",
+    "answered_and_withdrawn_decisions_do_not_notify",
+    "approval_pending_fires_once_per_undecided_approval",
+    "bad_news_fires_once_for_level_zero_reports_only",
+    "child_events_do_not_notify",
+    "decisions_are_notified_once_per_plan",
+    "events_created_before_celeris_started_are_never_scanned_or_recorded",
+    "human_plan_decisions_are_bundled_per_plan",
+    "links_are_added_only_when_a_web_base_url_is_configured",
+    "milestone_ready_is_retired",
+    "milestone_without_cos_reply_no_longer_notifies",
+    "only_one_message_is_sent_per_tick_even_with_several_kinds_pending",
+    "open_decisions_are_reminded_once_after_24h",
+    "plan_approval_is_notified_once_with_the_plans_decisions",
+    "question_blocked_fires_once_and_defers_to_approval_pending",
+    "secretary_reply_fires_once_when_a_proposed_project_gets_a_node_message",
+    "send_test_posts_one_message_to_the_url_in_the_secrets_dir",
+    "task_failed_fires_once_and_is_classified_infra_or_work",
+    "task_failed_notes_when_the_task_was_already_delivered",
+    "the_fake_webhook_answers_a_connection_even_if_another_request_finishes_first",
+    "the_webhook_secret_is_read_from_the_secrets_dir",
+    "two_bad_news_are_bundled_into_one_message_and_both_rows_are_marked_ok",
+    "unresolved_approval_and_question_survive_restart_and_decided_approval_does_not_hide_question",
+    "without_a_secret_nothing_is_sent_and_no_pending_row_is_kept"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/ops_r1_attr.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "ops_r1_attr_excludes_runs_outside_trial_tree",
+    "ops_r1_attr_is_byte_identical_and_leaves_db_copy_unchanged",
+    "ops_r1_attr_rejects_bad_input_with_exit_2",
+    "ops_r1_attr_rows_and_totals_match_fixture",
+    "ops_r1_attr_unattributable_turns_are_null_with_reason",
+    "ops_r1_pipeline_attribution_v2_copies_model_and_harness_read_only"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/ops_r1_measure.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "ops_r1_measure_cos_path_with_stub_harness"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/ops_r1_pipeline.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "ops_r1_pipeline_all_stages_agree_and_two_passes_are_byte_identical",
+    "ops_r1_pipeline_passing_a_and_cut_off_b_agree"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/ops_r1_trace.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "ops_r1_trace_cutoff_hides_later_rows",
+    "ops_r1_trace_emits_all_six_stages",
+    "ops_r1_trace_is_byte_identical_and_leaves_db_copy_unchanged",
+    "ops_r1_trace_missing_report_is_null_with_reason",
+    "ops_r1_trace_rejects_bad_input_with_exit_2"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/project_controller_e2e.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "project_controller_core_escalation_categories_match_cos_triage",
+    "project_controller_core_s10_narrowed_acceptance_is_rejected",
+    "project_controller_core_s11_other_project_root_is_denied",
+    "project_controller_core_s12_paused_and_stale_never_launch",
+    "project_controller_core_s1_first_launches_root1",
+    "project_controller_core_s2_s3_root1_to_root2_to_achieved",
+    "project_controller_core_s4_concurrent_events_create_one_root",
+    "project_controller_core_s5_not_integrated_continues",
+    "project_controller_core_s5b_no_commits_root_is_not_achieved",
+    "project_controller_core_s6_review_failed_replans_once",
+    "project_controller_core_s7_infra_failure_waits",
+    "project_controller_core_s8_no_outcomes_asks_once",
+    "project_controller_core_s9_open_human_question_waits"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/project_controller_replay.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "project_controller_replay_resource_v8_100_projects"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/project_cos_shadow.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "project_cos_ts_change_without_rust",
+    "project_cos_ts_dry_run_compare_domain",
+    "project_cos_ts_failure_classified",
+    "project_cos_ts_injection_does_not_change_the_decision",
+    "project_cos_ts_review_failed_retries_after_brief"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/releases_api.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "release-selfdeploy-wiring"
+   ],
+   "tests": [
+    "get_deliveries_is_200_with_items",
+    "get_releases_carries_promoted_at_on_main_and_changes",
+    "get_releases_is_200_on_an_empty_directory",
+    "get_releases_sorts_newest_first_and_tolerates_broken_releases",
+    "promote_requires_a_token",
+    "promoting_a_verified_release_starts_the_bundled_script_and_returns_202",
+    "promoting_an_unknown_release_is_404",
+    "promoting_is_409_when_unverified_already_current_or_already_promoting",
+    "promoting_prefers_the_promote_script_of_the_current_release",
+    "promotion_preview_merges_releases_between_current_and_target"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/root_done_summary.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "notifications"
+   ],
+   "tests": [
+    "child_done_emits_nothing",
+    "cos_failure_uses_fallback_notice",
+    "restart_does_not_duplicate",
+    "root_done_runs_cos_once_and_notifies_once"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/routing_eval_run.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "routing-eval"
+   ],
+   "tests": [
+    "daemon_runs_two_stub_trials_with_hidden_checks_and_eval_records"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/script_compare_cos_digest.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "script_compare_cos_digest_compare_answers_ops_from_rust_snapshot",
+    "script_compare_cos_digest_daemon_restart_without_bundle_restores_rust",
+    "script_compare_cos_digest_daemon_ts_restart_keeps_one_message",
+    "script_compare_cos_digest_different_answer_keeps_rust_digest",
+    "script_compare_cos_digest_dispatch_match_replay_and_rollback",
+    "script_compare_cos_digest_real_host_matches_rust_on_all_fixtures",
+    "script_compare_cos_digest_throwing_bundle_keeps_rust_digest",
+    "script_compare_cos_digest_ts_mode_applies_ts_commands",
+    "script_compare_cos_digest_ts_mode_falls_back_to_rust"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/script_compare_execution_gate.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "script_compare_gate_different_answer_keeps_rust_decision_bytes",
+    "script_compare_gate_largest_input_still_matches",
+    "script_compare_gate_real_bundle_records_match_without_text",
+    "script_compare_gate_real_host_matches_rust_on_all_fixtures",
+    "script_compare_gate_reserved_rule_is_a_safety_violation",
+    "script_compare_gate_throwing_bundle_keeps_rust_and_withholds_text"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/script_compare_lane_rules.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "script_compare_daemon_injects_records_and_restores_rust",
+    "script_compare_different_answer_keeps_rust_decision_bytes",
+    "script_compare_dispatch_match_rollback_and_replay",
+    "script_compare_real_host_matches_rust_on_all_fixtures",
+    "script_compare_throwing_bundle_keeps_rust_lane"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/script_compare_report.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "script_compare_report_before_migration_exits_3",
+    "script_compare_report_classifies_every_outcome",
+    "script_compare_report_cos_gate_uses_the_log_table",
+    "script_compare_report_counts_explained_cos_records",
+    "script_compare_report_counts_rollbacks",
+    "script_compare_report_pure_gate_counts_real_records",
+    "script_compare_report_reads_dispatched_records",
+    "script_compare_report_refuses_counts_without_records"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/script_compare_route_priority.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "script_compare_fresh_bundle_follows_source",
+    "script_compare_route_priority_different_answer_keeps_rust_route",
+    "script_compare_route_priority_dispatch_match_rollback_and_replay",
+    "script_compare_route_priority_real_host_matches_rust_on_all_fixtures",
+    "script_compare_route_priority_throwing_bundle_keeps_rust_route",
+    "script_compare_route_priority_undeclared_candidate_keeps_rust_route",
+    "script_compare_stale_dist_matching_domains_is_used",
+    "script_compare_stale_dist_missing_domain_is_skipped",
+    "script_compare_stale_dist_required_panics",
+    "script_compare_stale_dist_unknown_domain_is_skipped",
+    "script_compare_unbuildable_bundle_is_skipped_and_logged"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/script_exhaustive.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "exhaustive_always_different_bundle_fails",
+    "exhaustive_does_not_move_live_counters",
+    "exhaustive_new_generation_invalidates_evidence",
+    "exhaustive_real_bundle_all_inputs_match_and_persist",
+    "exhaustive_restart_marks_running_aborted",
+    "exhaustive_tick_continues_while_running",
+    "exhaustive_waits_for_live_in_flight"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/script_generation_daemon.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "script_daemon_api_registers_and_switches_while_running",
+    "script_daemon_drain_cutoff_30s_generation_gone",
+    "script_daemon_register_before_deploy_is_retryable",
+    "script_daemon_registers_generation_in_new_isolate",
+    "script_daemon_store_refusal_discards_isolate",
+    "script_daemon_switch_drains_old_generation"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/script_generation_e2e.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "script_generation_e2e_switch_error_rollback_restart"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/script_runtime.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "script-runtime"
+   ],
+   "tests": [
+    "exit_holder_entry",
+    "script_runtime_absent_no_thread",
+    "script_runtime_daemon_restore_keeps_loaded_modes",
+    "script_runtime_daemon_restore_retires_unpointed_draining",
+    "script_runtime_daemon_shutdown_count_skips_unreaped_actor",
+    "script_runtime_no_pointed_generation_no_thread",
+    "script_runtime_restore_host_api_mismatch_rolls_back",
+    "script_runtime_restore_missing_bundle_rolls_back",
+    "script_runtime_restore_missing_capability_rolls_back",
+    "script_runtime_restore_pending_top_level_await_rolls_back",
+    "script_runtime_restore_tampered_bundle_rolls_back",
+    "script_runtime_restore_throwing_bundle_rolls_back",
+    "script_thread_census_counts_actor_read_before_its_own_naming",
+    "script_thread_census_counts_actors_in_turn_as_two",
+    "script_thread_census_counts_child_only_seen_renamed",
+    "script_thread_census_counts_two_actors_as_two",
+    "script_thread_census_daemon_sampler_detects_second_actor",
+    "script_thread_census_excludes_child_before_naming",
+    "script_thread_census_no_thread_is_zero",
+    "script_thread_census_real_child_inherits_then_renames",
+    "script_thread_count_skips_joined_but_listed_thread",
+    "script_thread_live_comm_reads_stat_lines"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/stranded_default_branch.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "stranded_default_branch_null_with_main_is_integrated",
+    "stranded_default_branch_null_with_origin_head_is_integrated_for_repoless_task",
+    "stranded_default_branch_unresolvable_is_unintegrated_with_reason"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/stranded_integration.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "pre-review-sync-auto-resolve-integration-repair"
+   ],
+   "tests": [
+    "stranded_detects_inbox_merge_discard_hold_and_promotion_independently"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/tick_prod_copy_steps.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "prod_copy_tick_steps"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/tick_scale_baseline.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tick_scale_baseline"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/trial_context_canary_e2e.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "reset_environment_gives_the_same_canary_result",
+    "resumed_daemon_gives_the_same_canary_result",
+    "trial_tasks_through_the_real_router_see_only_the_trial_kb"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/ui_ux_skills_delivery.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "ui_ux_skills_acp_delivery_copies_attachments_and_unmounts_owned_files",
+    "ui_ux_skills_mounts_resolve_from_org_example_toml",
+    "ui_ux_skills_reach_claude_code_workspace_with_real_bodies",
+    "ui_ux_skills_review_run_only_delivers_the_quality_gate"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/unpromoted_release.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "release-selfdeploy-wiring"
+   ],
+   "tests": [
+    "a_fresh_promoting_marker_authorizes_the_live_takeover",
+    "a_release_that_current_points_to_starts_as_before",
+    "an_unpromoted_release_does_not_migrate_an_old_schema_db",
+    "an_unpromoted_release_does_not_request_a_handoff",
+    "an_unpromoted_release_without_current_never_creates_the_db",
+    "old_promote_dead_lock_is_rejected_without_opening_the_db",
+    "old_promote_live_lock_authorizes_the_live_takeover",
+    "stale_or_foreign_promoting_markers_are_rejected",
+    "the_binary_exits_four_for_an_unpromoted_release",
+    "verify_mode_is_not_gated"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/variant_propagation.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "daemon_build_path_pins_observed_identity",
+    "foreign_assignee_is_not_accepted",
+    "missing_daemon_observation_blocks_the_run",
+    "org_drift_after_post_blocks_before_any_run",
+    "spec_off_normal_path_keeps_hash_and_org",
+    "spec_on_normal_path_keeps_hash_and_org"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/worker_db_guard_refuse.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "sandbox-db-guard"
+   ],
+   "tests": [
+    "worker_db_guard_refuse_real_binary_inside_worker_run",
+    "worker_db_guard_refuse_with_opt_out"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/workspace_roots.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "existing_workspace_unchanged_after_root_change",
+    "new_task_uses_store_workspace_root",
+    "running_run_workspace_stable_after_root_change"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/accept.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::run_on_invalid_id_returns_message_error",
+    "tests::run_on_missing_task_returns_message_error"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/add_tests.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "run_acceptance_order_is_accept_then_cmd_then_artifact_then_reviewer",
+    "run_inserts_task_and_created_event",
+    "run_with_approval_kind_starts_ready",
+    "run_with_genre_and_config_applies_genre_default_role_defaults",
+    "run_with_genre_but_no_config_stores_the_name_only",
+    "run_with_invalid_parent_id_returns_error",
+    "run_with_missing_dependency_errors_and_inserts_nothing",
+    "run_with_role_and_config_applies_role_defaults",
+    "run_with_role_but_no_config_stores_the_name_only",
+    "run_with_unknown_genre_or_role_genre_mismatch_errors_when_config_given",
+    "run_with_unreadable_config_errors_and_inserts_nothing",
+    "run_without_any_acceptance_criterion_errors_and_inserts_nothing"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/browser.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::approve_talks_one_line_to_a_private_socket",
+    "tests::challenge_format"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/build_cache.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::dry_run_preserves_cache_and_prune_removes_only_old_entry",
+    "tests::only_old_directories_directly_under_cargo_are_candidates"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/campaign.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::scrub_hides_secret_shapes_and_keeps_plain_text"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/cancel.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::run_on_invalid_id_returns_message_error",
+    "tests::run_on_missing_task_returns_message_error"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/cos_ops_tests.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "cos_chat_ops_ctl_credential_wraps_domain_mutation_and_uses_run_bearer",
+    "cos_chat_ops_ctl_missing_reason_fails_before_connection",
+    "cos_chat_ops_ctl_rejects_header_injection_before_connection",
+    "cos_chat_ops_ctl_without_credential_preserves_domain_request"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/cron_tests.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "cron_create_parses_template_and_calls_api",
+    "cron_history_calls_api",
+    "cron_list_calls_api",
+    "cron_pause_calls_api",
+    "cron_request_keeps_the_api_v1_prefix_separator",
+    "cron_resume_calls_api",
+    "cron_run_calls_api",
+    "cron_show_calls_api",
+    "cron_template_must_be_json_object",
+    "cron_update_calls_api"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/curation_tests.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "adding_inbox_id_does_not_authorize_a_proposal",
+    "diff_touching_unplanned_path_is_rejected",
+    "discovers_workspace_root_from_repo_worktree_cwd",
+    "edited_kb_with_rehashed_plan_is_rejected_but_content_only_edit_passes",
+    "inbox_proposal_for_unknown_task_is_rejected",
+    "input_mutation_or_missing_snapshot_cannot_pass_even_for_minimal_plan",
+    "minimal_plan_passes",
+    "more_than_max_inbox_candidates_is_rejected",
+    "worker_shape_of_2026_10_03_is_rejected_with_reason"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/db.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::backup_of_a_missing_source_is_a_clean_error",
+    "tests::backup_then_integrity_check_round_trip",
+    "tests::integrity_check_on_garbage_bytes_is_a_failure_not_a_panic"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/execution_tests.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "phase_gate_on_a_missing_task_is_an_error",
+    "set_adopts_a_v3_plan_with_the_configured_tree_limits",
+    "set_rejects_an_invalid_plan",
+    "set_rejects_an_unknown_task",
+    "set_then_show_round_trips",
+    "show_without_a_plan_succeeds_and_says_so",
+    "tree_adopt_needs_the_tree_and_put_is_an_alias_of_set"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/gate.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::run_answer_on_missing_task_returns_message_error",
+    "tests::run_approve_on_missing_task_returns_message_error"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/integration_tests.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "integration_api_actions_build_paths_and_bodies",
+    "integration_api_discard_and_hold_require_reason",
+    "integration_api_filter_and_table_render_items",
+    "integration_api_http_calls_reach_the_daemon_route",
+    "integration_api_list_paths_and_filters",
+    "integration_api_rejects_unknown_state_at_parse_time"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/knowledge_tests.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "cos_live_fix_d2_cli_direct_record_refuses_attachment_ids",
+    "cos_live_fix_d2_cli_idempotency_key_is_stable",
+    "cos_live_fix_d2_cli_record_with_cos_credential_calls_the_api",
+    "rerun_resets_the_knowledge_run_row_and_rejects_unknown_ids",
+    "the_cli_works_on_a_temporary_knowledge_base",
+    "the_root_flag_wins_over_an_unreadable_config"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/models.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::empty_catalog_points_at_discover",
+    "tests::table_shows_state_override_and_discovery"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/org.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::the_map_is_deterministic_and_merges_the_poc_section"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/plan.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::run_inserts_plan_task",
+    "tests::run_with_blank_goal_returns_error"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/plan_lint_tests.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "lints_draft_and_ready_tasks_but_not_other_statuses",
+    "no_violations_when_every_human_check_has_a_deliverable"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/projects.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::projects_plan_subcommand_is_removed",
+    "tests::run_ls_hides_archived_projects_unless_all",
+    "tests::run_show_reads_the_project_and_its_milestones"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/query_tests.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "run_log_without_follow_succeeds",
+    "run_ls_tree_groups_children_under_parent",
+    "run_ls_with_status_filter_matches_store_list",
+    "run_ls_without_filter_lists_all_tasks",
+    "run_show_found_task_succeeds",
+    "run_show_json_missing_task_errors",
+    "run_show_json_prints_task_detail_with_actions_and_matches_task_id",
+    "run_show_missing_task_errors",
+    "task_detail_json_is_parseable_and_contains_task_id_and_actions",
+    "task_detail_json_with_a_config_reports_the_worktree"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/release_tests.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "notes_fails_on_unknown_sha",
+    "notes_writes_json_and_markdown_without_api",
+    "parses_notes_args",
+    "parses_preview_args",
+    "preview_missing_release_is_none"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/replay.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::run_reports_failure_exit_code_on_drift",
+    "tests::run_reports_success_when_no_tasks"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/rereview.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::run_on_invalid_id_returns_message_error",
+    "tests::run_on_missing_task_returns_message_error"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/retry.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::run_on_invalid_id_returns_message_error",
+    "tests::run_on_missing_task_returns_message_error"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/routing.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::a_source_without_harnesses_or_routes_says_so",
+    "tests::show_prints_class_candidates",
+    "tests::shows_llm_sources_harnesses_and_routes"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/scratch_tests.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "scratch-build-cache-disk-guard"
+   ],
+   "tests": [
+    "disabled_scratch_makes_lease_fail_so_release_sh_falls_back",
+    "env_has_only_target_and_cargo_tuning",
+    "gc_dry_run_lists_without_removing",
+    "lease_touch_release_round_trip",
+    "status_has_no_sccache_or_cache_server"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/script_tests.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "script_canary_generations_and_guard_requests",
+    "script_cos_read_only_and_request_of_partition_every_subcommand",
+    "script_cos_read_only_guard_clear_help_names_403_and_422",
+    "script_cos_read_only_is_domains_generations_list_and_guard_status",
+    "script_cos_wrapped_requests_match_the_operations_table",
+    "script_domain_mode_request_carries_mode_version_and_generation",
+    "script_domain_table_shows_mode_version_and_short_bundle",
+    "script_exhaustive_cos_read_only_and_wrapped",
+    "script_exhaustive_table_shows_standing_and_counts",
+    "script_generation_table_and_guard_line"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/target_sweep_tests.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "target_sweep_cli_apply_with_root",
+    "target_sweep_cli_default_roots",
+    "target_sweep_cli_dry_run_json_deletes_nothing"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/worker_tests.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "normalize_outcome_maps_adapter_errors_to_provider_failure",
+    "normalize_outcome_maps_done_question_and_error_to_exit_codes",
+    "resolve_cluster_target_errors_when_cluster_missing",
+    "resolve_cluster_target_rejects_running_or_reviewing_task_even_with_workspace_arg",
+    "resolve_cluster_target_requires_workspace_arg_for_local_task",
+    "resolve_cluster_target_uses_task_remote_path_without_workspace_arg",
+    "resolve_cluster_target_warns_when_task_targets_a_different_cluster",
+    "resolve_cluster_target_workspace_arg_overrides_task_path",
+    "worker_route_cli_account_flag_narrows_the_pool",
+    "worker_route_cli_fails_closed",
+    "worker_route_cli_model_flag_selects_that_model",
+    "worker_route_cli_openai_compatible_source_carries_its_endpoint",
+    "worker_route_cli_uses_the_given_harness_and_the_first_declared_candidate"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/workspace_tests.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "celerisctl-cli"
+   ],
+   "tests": [
+    "backfill_artifacts_isolates_local_retry_and_original_tasks",
+    "backfill_artifacts_registers_remote_mirror_artifacts_once",
+    "backfill_artifacts_with_an_unknown_task_is_an_error",
+    "dry_run_lists_candidates_without_deleting",
+    "older_than_overrides_the_config",
+    "prune_deletes_and_records_the_event"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/main.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "celerisctl-cli"
+   ],
+   "tests": [
+    "cos_mapping_tests::cos_mapped_subcommands_match_registered_operations",
+    "cos_mapping_tests::cos_mapped_table_wraps_every_allowed_subcommand"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/tests/bin_smoke.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "celerisctl-cli"
+   ],
+   "tests": [
+    "help_exits_zero"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/tests/browser_doctor.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "browser-site-policy-trusted-devices"
+   ],
+   "tests": [
+    "browser_doctor_api_url_and_token_file_overrides_config",
+    "browser_doctor_daemon_unavailable_is_one_line_exit_two",
+    "browser_doctor_json_ok_warn_and_skip_exit_zero_with_env_config",
+    "browser_doctor_prints_one_line_per_missing_item_and_exits_one"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/tests/browser_ledger_release.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "browser_ledger_release_host_probe_uses_explicit_executable",
+    "browser_ledger_release_invalid",
+    "browser_ledger_release_json_keeps_public_backend_without_credential_proof",
+    "browser_ledger_release_missing",
+    "browser_ledger_release_no_conformant_backend",
+    "browser_ledger_release_ok_json_and_text_without_host_probe",
+    "browser_ledger_release_stale_agent_browser",
+    "browser_ledger_release_stale_release"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/tests/campaign_connected.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "connected_campaign_exports_every_joined_field_and_passes",
+    "empty_campaign_fails_the_connection_check",
+    "export_keeps_raw_run_and_call_keys_and_states",
+    "grade_row_joins_every_run_of_the_trial",
+    "grade_with_foreign_manifest_hash_is_rejected",
+    "missing_required_fields_or_unmetered_consumption_fail",
+    "run_without_routing_decision_may_lack_proposed_first",
+    "unobserved_usage_row_is_missing_not_zero",
+    "verify_connected_requires_grades"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/tests/campaign_export.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "celerisctl-cli"
+   ],
+   "tests": [
+    "campaign_export_is_deterministic_deduped_scoped_and_secret_free"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/tests/cli_resolution.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "embedded_path_is_the_fallback_without_runtime_mapping",
+    "invalid_mapping_values_fail_clearly",
+    "missing_runtime_mapping_target_fails_clearly_without_embedded_fallback",
+    "resolved_cli_is_the_real_binary",
+    "runtime_mapping_wins_over_stale_embedded_path",
+    "stale_embedded_path_without_mapping_fails_clearly"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/tests/cos_ops.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "cos_chat_ops_ctl_add_uses_audited_http_without_opening_database",
+    "cos_chat_ops_ctl_api_request_can_send_registered_comment_shape",
+    "cos_chat_ops_ctl_api_request_without_run_credential_does_not_send",
+    "cos_chat_ops_ctl_prefers_api_url_env_over_config",
+    "cos_chat_ops_ctl_reason_and_policy_can_come_from_environment",
+    "cos_chat_ops_ctl_unsupported_db_mutation_is_rejected_before_db_open",
+    "cos_chat_ops_ctl_without_policy_version_env_fails"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/tests/eval_requests.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "renotify_and_restart_do_not_add_rows"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/tests/followups.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "add_inside_a_run_queues_a_followup_instead_of_opening_the_db",
+    "add_to_another_db_or_outside_a_run_writes_the_db_as_before"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/tests/mcp_client_scopes.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "scopes_replaces_the_scope_list_and_keeps_the_token"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/tests/no_migrate.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "celerisctl-cli"
+   ],
+   "tests": [
+    "celerisctl_does_not_create_a_missing_db",
+    "celerisctl_reads_a_newer_db_but_refuses_to_write_it",
+    "celerisctl_reads_and_writes_a_db_at_its_own_version",
+    "celerisctl_refuses_an_older_db_and_leaves_its_schema_alone"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/tests/org_migrate_v2.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "config_to_harnesses_prints_the_new_shape_from_the_legacy_one",
+    "migrate_v2_maps_the_tree_and_rollback_restores_it_exactly"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/tests/pipe.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "ls_on_a_closed_pipe_exits_cleanly_without_panicking"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/tests/routing_cli.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "routing-audit-outcome"
+   ],
+   "tests": [
+    "routing_export_emits_one_training_row_and_supports_text_omission",
+    "routing_stage_set_refuses_enforce_without_evidence_then_lists_the_human_change"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/tests/skills_import.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "ui_ux_skills_cli_imports_config_skills_without_a_db"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/tests/terminal_pty.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "input_output_resize_and_exit_code",
+    "sigterm_ends_a_job_that_left_the_session_holding_the_tty",
+    "sigterm_ends_the_whole_session",
+    "stdin_eof_ends_a_job_that_left_the_session_holding_the_tty",
+    "stdin_eof_ends_the_whole_session"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/tests/worker_run.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "codex_route_reaches_the_cli_without_mutating_the_store",
+    "done_prints_progress_artifact_and_result_without_touching_the_store",
+    "error_with_provider_failure_exits_four_and_preserves_provider_failure",
+    "harness_flag_starts_the_declared_harness_command",
+    "manual_run_cannot_silently_drop_browser_capability",
+    "question_exits_three",
+    "running_task_requires_explicit_workspace",
+    "unknown_harness_errors"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/tests/worker_run_signal.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "sigterm_kills_the_worker_process_and_exits_130"
+   ],
+   "fns": {}
+  }
+ },
+ "groups": [
+  {
+   "id": "dup-0904376f7e74",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/campaign_acceptance_e2e.rs::dechunk",
+    "crates/celeris/tests/campaign_lock_e2e.rs::dechunk"
+   ],
+   "names": [
+    "dechunk"
+   ],
+   "users": [],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-10f3897537da",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/campaign_lock_e2e.rs::campaign_root",
+    "crates/celeris/tests/cap_probe_real_daemon.rs::campaign_root",
+    "crates/celeris/tests/ops_r1_pipeline.rs::campaign_root"
+   ],
+   "names": [
+    "campaign_root"
+   ],
+   "users": [],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-144d72381022",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/stranded_default_branch.rs::git",
+    "crates/celeris/tests/stranded_integration.rs::git"
+   ],
+   "names": [
+    "git"
+   ],
+   "users": [
+    "crates/celeris/tests/stranded_default_branch.rs::stranded_default_branch_null_with_main_is_integrated",
+    "crates/celeris/tests/stranded_default_branch.rs::stranded_default_branch_null_with_origin_head_is_integrated_for_repoless_task",
+    "crates/celeris/tests/stranded_integration.rs::stranded_detects_inbox_merge_discard_hold_and_promotion_independently"
+   ],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-198c3e7de362",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/long_run_soak.rs::threads",
+    "crates/celeris/tests/project_controller_replay.rs::threads"
+   ],
+   "names": [
+    "threads"
+   ],
+   "users": [
+    "crates/celeris/tests/project_controller_replay.rs::project_controller_replay_resource_v8_100_projects"
+   ],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-22354769b5d1",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/instance_handoff.rs::wait_until",
+    "crates/celeris/tests/unpromoted_release.rs::wait_until"
+   ],
+   "names": [
+    "wait_until"
+   ],
+   "users": [
+    "crates/celeris/tests/instance_handoff.rs::a_newer_release_takes_over_while_the_old_one_finishes_its_run",
+    "crates/celeris/tests/instance_handoff.rs::a_stale_heartbeat_does_not_replace_a_live_active_until_its_process_is_gone"
+   ],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-56a254cea5ba",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/script_compare_cos_digest.rs::general_thread",
+    "crates/celeris/tests/script_generation_e2e.rs::general_thread"
+   ],
+   "names": [
+    "general_thread"
+   ],
+   "users": [],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-62cc1d4b470e",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/campaign_acceptance_e2e.rs::ev_started",
+    "crates/celeris/tests/campaign_lock_e2e.rs::ev_started",
+    "crates/celeris/tests/campaign_wiring_e2e.rs::started"
+   ],
+   "names": [
+    "ev_started",
+    "started"
+   ],
+   "users": [
+    "crates/celeris/tests/campaign_wiring_e2e.rs::post_tasks_to_export_connects_children_retries_review_cos_jev_and_interventions"
+   ],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-69e6476ee890",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celerisctl/tests/mcp_client_scopes.rs::ctl",
+    "crates/celerisctl/tests/no_migrate.rs::ctl"
+   ],
+   "names": [
+    "ctl"
+   ],
+   "users": [
+    "crates/celerisctl/tests/mcp_client_scopes.rs::scopes_replaces_the_scope_list_and_keeps_the_token",
+    "crates/celerisctl/tests/no_migrate.rs::celerisctl_does_not_create_a_missing_db",
+    "crates/celerisctl/tests/no_migrate.rs::celerisctl_reads_a_newer_db_but_refuses_to_write_it",
+    "crates/celerisctl/tests/no_migrate.rs::celerisctl_reads_and_writes_a_db_at_its_own_version",
+    "crates/celerisctl/tests/no_migrate.rs::celerisctl_refuses_an_older_db_and_leaves_its_schema_alone"
+   ],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-712f03d8c8d3",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/campaign_acceptance_e2e.rs::ev_finished",
+    "crates/celeris/tests/campaign_lock_e2e.rs::ev_finished"
+   ],
+   "names": [
+    "ev_finished"
+   ],
+   "users": [],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-774ffe890ee1",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/cap_probe_real_daemon.rs::write_executable",
+    "crates/celeris/tests/ops_r1_measure.rs::write_executable"
+   ],
+   "names": [
+    "write_executable"
+   ],
+   "users": [],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-843a2fd1e3a4",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/script_compare_cos_digest.rs::run_daemon",
+    "crates/celeris/tests/script_compare_lane_rules.rs::run_daemon"
+   ],
+   "names": [
+    "run_daemon"
+   ],
+   "users": [
+    "crates/celeris/tests/script_compare_cos_digest.rs::script_compare_cos_digest_daemon_restart_without_bundle_restores_rust",
+    "crates/celeris/tests/script_compare_cos_digest.rs::script_compare_cos_digest_daemon_ts_restart_keeps_one_message",
+    "crates/celeris/tests/script_compare_lane_rules.rs::script_compare_daemon_injects_records_and_restores_rust"
+   ],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-8db4cd6a7654",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celerisctl/tests/followups.rs::text",
+    "crates/celerisctl/tests/no_migrate.rs::text"
+   ],
+   "names": [
+    "text"
+   ],
+   "users": [
+    "crates/celerisctl/tests/followups.rs::add_inside_a_run_queues_a_followup_instead_of_opening_the_db",
+    "crates/celerisctl/tests/followups.rs::add_to_another_db_or_outside_a_run_writes_the_db_as_before",
+    "crates/celerisctl/tests/no_migrate.rs::celerisctl_does_not_create_a_missing_db",
+    "crates/celerisctl/tests/no_migrate.rs::celerisctl_reads_a_newer_db_but_refuses_to_write_it",
+    "crates/celerisctl/tests/no_migrate.rs::celerisctl_reads_and_writes_a_db_at_its_own_version",
+    "crates/celerisctl/tests/no_migrate.rs::celerisctl_refuses_an_older_db_and_leaves_its_schema_alone"
+   ],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-908b0aaa67e2",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/ops_r1_measure.rs::repo_root",
+    "crates/celeris/tests/ops_r1_pipeline.rs::repo",
+    "crates/celeris/tests/support/script_compare.rs::repo_root"
+   ],
+   "names": [
+    "repo",
+    "repo_root"
+   ],
+   "users": [],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-94548694d704",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celerisctl/tests/campaign_connected.rs::cand",
+    "crates/celerisctl/tests/campaign_export.rs::cand"
+   ],
+   "names": [
+    "cand"
+   ],
+   "users": [],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-9724302dd110",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/ops_r1_attr.rs::sha",
+    "crates/celeris/tests/ops_r1_trace.rs::sha"
+   ],
+   "names": [
+    "sha"
+   ],
+   "users": [
+    "crates/celeris/tests/ops_r1_attr.rs::ops_r1_attr_is_byte_identical_and_leaves_db_copy_unchanged",
+    "crates/celeris/tests/ops_r1_attr.rs::ops_r1_attr_rows_and_totals_match_fixture",
+    "crates/celeris/tests/ops_r1_attr.rs::ops_r1_pipeline_attribution_v2_copies_model_and_harness_read_only",
+    "crates/celeris/tests/ops_r1_trace.rs::ops_r1_trace_emits_all_six_stages",
+    "crates/celeris/tests/ops_r1_trace.rs::ops_r1_trace_is_byte_identical_and_leaves_db_copy_unchanged"
+   ],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-bc38edb0ba29",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/script_compare_cos_digest.rs::is_timeout",
+    "crates/celeris/tests/script_generation_e2e.rs::is_timeout",
+    "crates/celeris/tests/support/script_compare.rs::is_timeout"
+   ],
+   "names": [
+    "is_timeout"
+   ],
+   "users": [
+    "crates/celeris/tests/script_compare_cos_digest.rs::script_compare_cos_digest_daemon_restart_without_bundle_restores_rust",
+    "crates/celeris/tests/script_compare_lane_rules.rs::script_compare_daemon_injects_records_and_restores_rust"
+   ],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-d504e49feb3f",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/long_run_soak.rs::status_kb",
+    "crates/celeris/tests/project_controller_replay.rs::status_kb"
+   ],
+   "names": [
+    "status_kb"
+   ],
+   "users": [
+    "crates/celeris/tests/project_controller_replay.rs::project_controller_replay_resource_v8_100_projects"
+   ],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-d5d47080695d",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/long_run_soak.rs::env_usize",
+    "crates/celeris/tests/tick_scale_baseline.rs::env_usize"
+   ],
+   "names": [
+    "env_usize"
+   ],
+   "users": [
+    "crates/celeris/tests/tick_scale_baseline.rs::tick_scale_baseline"
+   ],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-dee4f55b084a",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/actor_trace/support.rs::ts",
+    "crates/celeris/tests/ops_r1/trace_fixture.rs::ts"
+   ],
+   "names": [
+    "ts"
+   ],
+   "users": [],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-e49ce410e3fa",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/cos_chat_triage_scenarios.rs::hook",
+    "crates/celeris/tests/root_done_summary.rs::hook"
+   ],
+   "names": [
+    "hook"
+   ],
+   "users": [
+    "crates/celeris/tests/cos_chat_triage_scenarios.rs::cos_chat_triage_b_webhook_packet_and_stop_after_human_answer",
+    "crates/celeris/tests/cos_chat_triage_scenarios.rs::cos_chat_triage_unified_only_cos_escalation_reaches_the_webhook"
+   ],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-e4daf219e7b1",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/cos_chat_triage_notify.rs::config",
+    "crates/celeris/tests/cos_chat_triage_scenarios.rs::config"
+   ],
+   "names": [
+    "config"
+   ],
+   "users": [
+    "crates/celeris/tests/cos_chat_triage_notify.rs::cos_chat_triage_escalation_packet_has_bounded_text_and_absolute_link",
+    "crates/celeris/tests/cos_chat_triage_notify.rs::cos_chat_triage_long_packet_keeps_link_within_1900_characters"
+   ],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-ed20d226ff08",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/long_run_soak.rs::count",
+    "crates/celeris/tests/tick_scale_baseline.rs::count"
+   ],
+   "names": [
+    "count"
+   ],
+   "users": [],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-f65355edd1ac",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celerisctl/tests/campaign_export.rs::ctl",
+    "crates/celerisctl/tests/eval_requests.rs::ctl",
+    "crates/celerisctl/tests/routing_cli.rs::ctl"
+   ],
+   "names": [
+    "ctl"
+   ],
+   "users": [
+    "crates/celerisctl/tests/eval_requests.rs::renotify_and_restart_do_not_add_rows",
+    "crates/celerisctl/tests/routing_cli.rs::routing_export_emits_one_training_row_and_supports_text_omission",
+    "crates/celerisctl/tests/routing_cli.rs::routing_stage_set_refuses_enforce_without_evidence_then_lists_the_human_change"
+   ],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-fc3ff8d60204",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/stranded_default_branch.rs::now",
+    "crates/celeris/tests/workspace_roots.rs::now"
+   ],
+   "names": [
+    "now"
+   ],
+   "users": [
+    "crates/celeris/tests/workspace_roots.rs::existing_workspace_unchanged_after_root_change",
+    "crates/celeris/tests/workspace_roots.rs::new_task_uses_store_workspace_root",
+    "crates/celeris/tests/workspace_roots.rs::running_run_workspace_stable_after_root_change"
+   ],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-fc9d9545a731",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/long_run_soak.rs::pct",
+    "crates/celeris/tests/project_controller_replay.rs::pct"
+   ],
+   "names": [
+    "pct"
+   ],
+   "users": [
+    "crates/celeris/tests/project_controller_replay.rs::project_controller_replay_resource_v8_100_projects"
+   ],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "eq-22eed0cc9a76",
+   "kind": "equivalent_scenario",
+   "members": [
+    "crates/celerisctl/src/commands/query_tests.rs::run_show_found_task_succeeds",
+    "crates/celerisctl/src/commands/query_tests.rs::run_show_json_prints_task_detail_with_actions_and_matches_task_id"
+   ],
+   "basis": "same_file",
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "eq-8b8e2eda5104",
+   "kind": "equivalent_scenario",
+   "members": [
+    "crates/celerisctl/src/commands/query_tests.rs::run_show_json_missing_task_errors",
+    "crates/celerisctl/src/commands/query_tests.rs::run_show_missing_task_errors"
+   ],
+   "basis": "same_file",
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "eq-dccee8fda663",
+   "kind": "equivalent_scenario",
+   "members": [
+    "crates/celerisctl/src/commands/cos_ops_tests.rs::cos_chat_ops_ctl_missing_reason_fails_before_connection",
+    "crates/celerisctl/src/commands/cos_ops_tests.rs::cos_chat_ops_ctl_rejects_header_injection_before_connection"
+   ],
+   "basis": "same_file",
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "eq-ec5010cee9b2",
+   "kind": "equivalent_scenario",
+   "members": [
+    "crates/celeris/tests/variant_propagation.rs::spec_off_normal_path_keeps_hash_and_org",
+    "crates/celeris/tests/variant_propagation.rs::spec_on_normal_path_keeps_hash_and_org"
+   ],
+   "basis": "same_file",
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "eq-f044c8f087db",
+   "kind": "equivalent_scenario",
+   "members": [
+    "crates/celerisctl/tests/worker_run.rs::error_with_provider_failure_exits_four_and_preserves_provider_failure",
+    "crates/celerisctl/tests/worker_run.rs::question_exits_three"
+   ],
+   "basis": "same_file",
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  }
+ ]
+}

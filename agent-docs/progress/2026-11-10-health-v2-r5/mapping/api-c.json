@@ -1,0 +1,746 @@
+{
+ "schema": "celeris.health-v2-r5.contracts-mapping/1",
+ "fragment": "api-c",
+ "scope": "^crates/task-api/(tests/[s-z]|src/)",
+ "scan": {
+  "commit": "e9ef080c62043b38abecb99068d6cad4bb47dfd1",
+  "crates_tree": "a94cbae58bd70c2172084c0fde7bd40fe7726478",
+  "trees": {
+   "task-api": "6a18a4c653a70e85fb401a57f69138834084cd73",
+   "celeris": "1854b5ea716699d333a6192178b8994571187901",
+   "celerisctl": "eff59f0f09c329a66f000c8455c0b2eb7ce9d64f"
+  },
+  "adr_tree": "c4655b86806c0143de23f035c7cc26d682775b07",
+  "capability_map_blob": "ac77c1e4f12b5053c3619618bb3fa8cbd8365e80",
+  "architecture_map_blob": "f2430cd3b005b09f90683f3081ca277e4f621624",
+  "architecture_map_checker_blob": "999f10bc0c656a1a5a1eb211211fa702ad761ad2"
+ },
+ "extra_capabilities": [],
+ "files": {
+  "crates/task-api/src/accounts.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::scan_accounts_finds_valid_dirs_sorted_with_login_state",
+    "tests::scan_accounts_missing_root_is_empty",
+    "tests::valid_account_id_rejects_path_traversal_and_dots"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/browser.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "browser-policy-broker-approval"
+   ],
+   "tests": [
+    "tests::secret_text_debug_redacts_and_hex_decodes"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/browser_control.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "browser-live-view-control"
+   ],
+   "tests": [
+    "tests::control_errors_map_to_http",
+    "tests::routes_are_registered"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/browser_identity/tests.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "deleted_leaves_tombstone_and_seal_cannot_be_opened",
+    "expired_identities_are_revoked_on_read",
+    "problem_body_is_fixed_code_only",
+    "public_output_and_debug_never_include_sealed_state_or_cookie",
+    "register_defaults_to_seven_days_and_lists_metadata_only",
+    "register_rejects_with_fixed_codes",
+    "restore_for_session_binds_to_live_isolated_session",
+    "restore_in_session_delivers_only_to_controller_after_all_checks",
+    "restore_is_allowed_only_under_verified_isolation",
+    "restore_is_isolation_required_on_trusted_local",
+    "revoked_old_generation_cannot_be_opened",
+    "sealed_state_cannot_cross_project_or_identity"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/changes/tests.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "the_pull_request_body_is_deterministic_and_links_back_to_celeris",
+    "the_pull_request_body_summarises_the_latest_report"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/chat/stream.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::chat_stream_cursor_prefers_agreeing_sources"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/console.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::scopes_parse_all_project_and_node",
+    "tests::since_is_an_opaque_cursor"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/cos/basis/job_wait_extend.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::timed_out_wait_is_none_for_a_satisfied_wait_or_a_wait_after_the_question",
+    "tests::timed_out_wait_reads_the_wait_before_the_question",
+    "tests::timeouts_count_only_waits_sharing_a_job"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/cos/basis/plan_conforms.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::recent_versions_counts_the_window_and_unparsable_times"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/cos/basis/review_rework.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::rejection_is_none_without_a_reviewer_verdict_or_after_a_reopen",
+    "tests::rejection_reads_the_failing_reviewer_verdicts_of_the_last_run"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/cos/operations.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "cos-inbox-triage-operations-audit"
+   ],
+   "tests": [
+    "skill_table_tests::cos_operator_skill_table_matches_allowed"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/cos/ops/tests.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "cos_ops_every_allowed_row_is_reachable_through_match_operation",
+    "cos_ops_exclusions_match_all_named_parameters_and_report_adr_reason",
+    "cos_ops_registry_classifies_every_mutation_as_allowed_or_excluded",
+    "cos_ops_registry_matches_adr_domain_assignment_and_exclusions"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/cron_jobs.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::store_in_use_maps_to_distinct_conflict_codes"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/docs.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::page_paths_map_to_the_right_problem"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/files/tests.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "artifact_paths_that_are_not_workspace_relative_are_forbidden",
+    "content_disposition_escapes_filenames",
+    "content_type_table_is_closed",
+    "range_and_offset_planning_follows_the_spec",
+    "range_and_offset_together_are_a_bad_request",
+    "remote_task_artifacts_resolve_under_the_local_mirror",
+    "ulid_text_accepts_only_crockford_uppercase_26_chars"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/handlers/idempotency.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::hash_ignores_object_order_and_key_but_includes_path_and_content"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/handlers/task_io.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "check_log_tests::the_latest_started_check_is_running_until_its_finish_and_the_tail_is_utf8_safe"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/handlers/tests.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "credential-broker-resume",
+    "http-api-auth-principals"
+   ],
+   "tests": [
+    "metrics_scratch_matches_the_status_schema",
+    "replay_without_a_token_is_unauthorized",
+    "resolve_principal_distinguishes_config_tokens_and_mcp_clients",
+    "second_concurrent_replay_is_rejected_with_503",
+    "write_set_can_be_created_updated_and_read_through_task_api"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/knowledge.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::page_paths_map_to_the_right_problem"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/middleware.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "http-api-auth-principals"
+   ],
+   "tests": [
+    "tests::allowed_hosts_include_defaults_listen_host_and_extras",
+    "tests::constant_time_eq_compares_digests",
+    "tests::host_without_port_strips_ports_and_normalizes_case"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/principal.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "http-api-auth-principals"
+   ],
+   "tests": [
+    "tests::caller_requires_a_principal_from_the_guard",
+    "tests::token_debug_is_redacted",
+    "tests::token_principals_parse_and_render"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/problem.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::busy_sqlite_errors_map_to_db_busy_and_others_to_internal",
+    "tests::validation_field_is_inferred_from_task_ops_messages"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/query/tests.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "cluster_job_wait_event_types_match_their_serde_names",
+    "event_types_are_validated_against_the_event_vocabulary",
+    "health_review_event_types_match_their_serde_names",
+    "integration_repair_event_types_match_their_serde_names",
+    "integration_state_event_types_match_their_serde_names",
+    "limit_defaults_rejects_zero_and_clamps",
+    "lists_accept_repeated_and_comma_separated_values",
+    "review_target_event_types_match_their_serde_names",
+    "routing_feedback_event_types_match_their_serde_names",
+    "script_compare_event_types_match_their_serde_names",
+    "stranded_integration_status_serializes_for_api_clients",
+    "tree_event_types_match_their_serde_names",
+    "trusted_device_event_types_match_their_serde_names",
+    "unknown_and_repeated_keys_are_rejected",
+    "worker_policy_violation_event_type_matches_its_serde_name"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/releases.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "release-selfdeploy-wiring"
+   ],
+   "tests": [
+    "tests::cos_actor_follows_the_thread_kind_and_refuses_legacy_or_unreadable",
+    "tests::human_policy_ref_names_the_requested_release"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/routing_eval.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "routing-eval"
+   ],
+   "tests": [
+    "tests::cancel_problem_splits_not_found_and_conflict",
+    "tests::empty_known_ids_reject_routes",
+    "tests::validate_accepts_a_known_route_and_keeps_the_check_command",
+    "tests::validate_rejects_duplicates_and_bad_timeout",
+    "tests::validate_rejects_empty_batch_unknown_route_and_missing_repo"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/schema.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::committed_schema_matches_generated",
+    "tests::schema_uses_defs_once_for_shared_types"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/script_exhaustive.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::exhaustive_start_actor_check_precedes_runtime"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/secrets_tests.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "delete_secret_file_removes_the_file",
+    "fingerprint_is_first_8_hex_chars_of_sha256_and_does_not_reveal_the_value",
+    "list_secret_files_missing_dir_is_empty_not_an_error",
+    "list_secret_files_skips_hidden_and_invalid_names",
+    "secret_ids_reject_path_traversal_and_empty",
+    "trim_secret_value_drops_trailing_newlines_only",
+    "write_then_list_round_trips_with_0600_and_trims_trailing_newline"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/sse.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::frames_carry_event_name_optional_id_and_single_line_data",
+    "tests::start_position_resumes_resets_or_starts_now"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/stats/execution_metrics_comparison_tests.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "continuation_metrics_api_groups_task_and_work_unit_runs",
+    "indexed_summary_matches_event_reference_for_all_groups_and_since",
+    "indexed_summary_timing_2000_tasks_20_events"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/stats/tests.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "account_stats_are_attributed_by_account_and_ignore_pool_less_runs",
+    "account_stats_error_only_counts_the_error_outcome_kind",
+    "outcome_prefixes_are_classified"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/timeline.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::fractional_seconds_do_not_reverse_the_order",
+    "tests::items_are_sorted_by_time_and_ties_keep_their_order",
+    "tests::profile_timeline_against_a_db_copy"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/tree.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "tests::a_symlink_that_escapes_the_repo_root_is_forbidden",
+    "tests::relative_paths_reject_escapes"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/saved_credentials.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "saved_credential_management_is_attested_owner_scoped_and_removes_the_vault_entry"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/script_domains.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "canary_promote_with_exhaustive_100",
+    "canary_promote_without_exhaustive_422",
+    "script_behavior_change_approve_is_human_only_and_revoke_fails_closed",
+    "script_cos_read_only_gets_pass_with_run_credential",
+    "script_domain_guard_clear_human_only",
+    "script_domain_guard_clear_refused_for_cos",
+    "script_domain_list_starts_rust_without_generation",
+    "script_domain_mode_canary_requires_guard_ready",
+    "script_domain_mode_canary_requires_human",
+    "script_domain_mode_refused_while_halted",
+    "script_domain_mode_rollback_by_anyone",
+    "script_domain_mode_rust_compare_rust_round_trip",
+    "script_domain_mode_through_cos_operations",
+    "script_domain_mode_ts_requires_same_generation_canary",
+    "script_domain_rejects_unknown_domain_bad_generation_and_bad_body",
+    "script_domain_stale_version_is_409_without_change"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/script_exhaustive.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "exhaustive_list_shows_standing",
+    "exhaustive_start_refused_for_cos",
+    "exhaustive_start_rejects_each_conflict",
+    "exhaustive_start_requires_human_or_operator"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/script_generations.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "script-runtime"
+   ],
+   "tests": [
+    "script_domain_generation_limit_409",
+    "script_domain_generation_register_503_when_unwired",
+    "script_domain_generation_register_invalid_422",
+    "script_domain_generation_register_not_deployed_409_is_retryable",
+    "script_domain_generation_retire_active_409_and_unknown_404",
+    "script_domain_generation_through_cos_operations"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/secrets_admin.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "all_three_endpoints_are_409_when_secrets_is_not_configured",
+    "all_three_endpoints_require_a_token_even_on_loopback",
+    "all_three_endpoints_require_a_token_when_token_file_is_not_configured",
+    "delete_removes_the_file_and_second_delete_is_404",
+    "get_lists_items_with_used_by_and_never_the_value",
+    "put_and_delete_reject_invalid_ids_as_not_found",
+    "put_creates_a_0600_file_and_never_returns_the_value",
+    "put_does_not_reflect_the_value_in_a_parse_error",
+    "put_records_a_secret_stored_event_without_the_value",
+    "put_rejects_empty_or_whitespace_only_values",
+    "put_replaces_an_existing_secret",
+    "secret_values_never_appear_in_config_or_secrets_responses"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/single_human_window.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "project_escalation_is_answered_through_the_general_cos_and_relayed_to_the_project_cos"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/skills.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "an_uninitialized_knowledge_base_lists_no_skills",
+    "mount_validates_the_node_and_the_skill_name_and_requires_admin",
+    "mounting_a_skill_on_a_node_shows_up_in_mounted_by_including_children",
+    "put_skill_creates_and_updates_and_requires_admin"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/standby.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "draining_refuses_the_same_endpoints_and_plain_endpoints_keep_working",
+    "health_carries_the_release_the_mode_and_the_role",
+    "standby_refuses_the_dispatcher_admin_endpoints_with_503_and_retry_after"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/stream.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "cursors_far_behind_or_ahead_get_a_reset",
+    "disconnecting_stops_polling",
+    "heartbeat_and_task_filter",
+    "hello_then_created_event_arrives_within_two_seconds",
+    "last_event_id_resumes_without_gaps_or_duplicates",
+    "notification_change_emits_a_reload_hint",
+    "serve_binds_the_configured_address_and_reports_bind_errors",
+    "serve_over_loopback_tcp_streams_events_and_closes_on_shutdown",
+    "the_seventeenth_stream_is_rejected_with_503"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/task_idempotency.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "task-lifecycle"
+   ],
+   "tests": [
+    "campaign_resend_binds_new_key_to_request_content",
+    "cos_operations_reject_a_body_idempotency_key",
+    "create_resend_with_the_same_key_makes_one_task_and_other_content_is_409",
+    "failed_creation_does_not_reserve_key_and_old_field_is_rejected",
+    "retry_resend_with_the_same_key_makes_one_copy_and_other_content_is_409",
+    "simultaneous_create_and_retry_return_the_same_task"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/task_list_with.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "default_list_spawns_no_git",
+    "unknown_with_value_is_400",
+    "with_integrations_counts_do_not_scale_with_rows"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/task_management.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "task-lifecycle"
+   ],
+   "tests": [
+    "comment_validation_and_auth",
+    "list_tasks_filters_by_label_category_tier_priority_and_comment_text",
+    "patch_task_attaches_a_project_to_a_project_less_task_once",
+    "patch_task_changes_only_the_written_fields_and_records_an_edited_event",
+    "patch_task_validates_and_refuses_terminal_tasks",
+    "patch_task_workspace_switches_to_local_and_refuses_running_and_unknown_clusters",
+    "posting_a_human_comment_follows_the_effect_table",
+    "reopen_restarts_done_and_failed_tasks_only",
+    "the_timeline_lists_the_integrations_of_this_task",
+    "the_timeline_lists_the_releases_that_contain_this_tasks_commits",
+    "the_timeline_merges_events_comments_and_delegations_in_time_order",
+    "the_timeline_shows_the_knowledge_maintenance_run"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/task_tree.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "recursive-task-tree"
+   ],
+   "tests": [
+    "execution_metrics_group_by_depth_counts_reviewer_runs_per_depth",
+    "legacy_task_is_a_single_node_tree",
+    "project_detail_sums_the_root_task_subtrees",
+    "task_tree_limits_count_a_model_with_a_configured_budget_rate",
+    "task_tree_limits_report_usd_with_cache_priced_and_unknown_runs",
+    "task_tree_rolls_up_a_three_level_tree_by_hand"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/task_wait_api.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "task_wait_api_detail_carries_the_same_waits",
+    "task_wait_api_list_reports_children_depends_on_paused_and_snapshot_capacity",
+    "task_wait_api_run_state_splits_runnable_and_waiting",
+    "task_wait_api_stale_snapshot_adds_no_memory_waits",
+    "task_wait_api_tree_child_nodes_carry_waits",
+    "task_wait_api_tree_shows_unit_waiting_keys_and_stage_order"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/terminals.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "terminals_cluster_requires_connection_and_work_dir",
+    "terminals_local_open_and_close_are_recorded",
+    "terminals_only_human_web_can_open",
+    "terminals_without_tokens_config_is_forbidden"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/tree_adopt.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "recursive-task-tree"
+   ],
+   "tests": [
+    "adopt_endpoint_happy_path_and_refusals",
+    "adopt_endpoint_requires_the_tree_and_a_v3_plan",
+    "human_plan_adopt_refusals_write_nothing",
+    "human_put_v3_goes_through_the_tree_path_without_plan_gate",
+    "human_put_v3_is_422_while_the_tree_is_disabled",
+    "the_r5b_runbook_plans_are_accepted_as_written"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/trusted_devices.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [
+    "browser-site-policy-trusted-devices"
+   ],
+   "tests": [
+    "trusted_device_expired_with_fake_clock_is_rejected",
+    "trusted_device_invalid_assertion_is_rejected",
+    "trusted_device_limit_is_five_active_devices",
+    "trusted_device_list_has_no_hashes",
+    "trusted_device_old_secret_replay_revokes_device",
+    "trusted_device_readonly_verify_does_not_change_db",
+    "trusted_device_register_verify_rotates_secret",
+    "trusted_device_revoked_device_is_rejected",
+    "trusted_device_wrong_secret_is_rejected"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/unblocks.rs": {
+   "capability": "",
+   "contract": "",
+   "b0_hint": [],
+   "tests": [
+    "unblocks_api_links_and_promotion_reopens_the_failed_task_once",
+    "unblocks_api_rejects_unknown_and_duplicate_ids_and_creates_nothing",
+    "unblocks_cos_task_create_writes_the_link_in_the_audited_transaction"
+   ],
+   "fns": {}
+  }
+ },
+ "groups": [
+  {
+   "id": "dup-a320f5c95af4",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/task-api/tests/script_domains.rs::mode_path",
+    "crates/task-api/tests/script_exhaustive.rs::mode_path"
+   ],
+   "names": [
+    "mode_path"
+   ],
+   "users": [
+    "crates/task-api/tests/script_domains.rs::script_domain_mode_rollback_by_anyone",
+    "crates/task-api/tests/script_domains.rs::script_domain_mode_through_cos_operations"
+   ],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-f48e0db4164e",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/task-api/src/cos/basis/job_wait_extend.rs::tests::seq",
+    "crates/task-api/src/cos/basis/review_rework.rs::tests::seq"
+   ],
+   "names": [
+    "seq"
+   ],
+   "users": [
+    "crates/task-api/src/cos/basis/job_wait_extend.rs::tests::timed_out_wait_is_none_for_a_satisfied_wait_or_a_wait_after_the_question",
+    "crates/task-api/src/cos/basis/job_wait_extend.rs::tests::timed_out_wait_reads_the_wait_before_the_question",
+    "crates/task-api/src/cos/basis/job_wait_extend.rs::tests::timeouts_count_only_waits_sharing_a_job",
+    "crates/task-api/src/cos/basis/review_rework.rs::tests::rejection_is_none_without_a_reviewer_verdict_or_after_a_reopen",
+    "crates/task-api/src/cos/basis/review_rework.rs::tests::rejection_reads_the_failing_reviewer_verdicts_of_the_last_run"
+   ],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-fd90bf6dec0e",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/task-api/tests/script_exhaustive.rs::sha_of",
+    "crates/task-api/tests/script_generations.rs::sha"
+   ],
+   "names": [
+    "sha",
+    "sha_of"
+   ],
+   "users": [
+    "crates/task-api/tests/script_generations.rs::script_domain_generation_limit_409",
+    "crates/task-api/tests/script_generations.rs::script_domain_generation_register_503_when_unwired",
+    "crates/task-api/tests/script_generations.rs::script_domain_generation_register_invalid_422",
+    "crates/task-api/tests/script_generations.rs::script_domain_generation_register_not_deployed_409_is_retryable",
+    "crates/task-api/tests/script_generations.rs::script_domain_generation_retire_active_409_and_unknown_404",
+    "crates/task-api/tests/script_generations.rs::script_domain_generation_through_cos_operations"
+   ],
+   "adopt": null,
+   "reason": "",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  }
+ ]
+}

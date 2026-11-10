@@ -50,14 +50,14 @@ fn run_common_deadline_wall_clock_is_budget_exhausted() {
         usage: None,
     };
     let wall_only = deadline_terminal(ago(10), Instant::now(), Duration::from_secs(5), LONG);
-    assert_eq!(wall_only, Err(expected.clone()));
+    assert_eq!(wall_only, Err(Box::new(expected.clone())));
     let both = deadline_terminal(
         ago(10),
         ago(10),
         Duration::from_secs(5),
         Duration::from_secs(5),
     );
-    assert_eq!(both, Err(expected));
+    assert_eq!(both, Err(Box::new(expected)));
 }
 
 /// 不変条件: idle の超過は harness_error に分類変更しない retryable な `Error`（文言 `idle timeout`、
@@ -67,11 +67,11 @@ fn run_common_deadline_idle_is_retryable_error() {
     let idle = deadline_terminal(ago(1), ago(10), LONG, Duration::from_secs(5));
     assert_eq!(
         idle,
-        Err(Terminal::Error {
+        Err(Box::new(Terminal::Error {
             message: "idle timeout".into(),
             retryable: true,
             usage: None,
-        })
+        }))
     );
     // idle の残り（8 秒以下）が wall clock の残り（999 秒以下）より小さい。
     let wait = deadline_terminal(ago(1), ago(2), LONG, Duration::from_secs(10))

@@ -198,7 +198,7 @@ async fn run_aider(
             match deadline_terminal(start, last_activity, limits.wall_clock, limits.idle_timeout) {
                 Ok(wait) => wait,
                 Err(terminal) => {
-                    timeout_terminal = Some(terminal);
+                    timeout_terminal = Some(*terminal);
                     force_kill = true;
                     break;
                 }

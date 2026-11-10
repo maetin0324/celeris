@@ -180,28 +180,29 @@ pub(crate) async fn prepare_run(
 /// 残りの小さい方）。wall clock の超過は予算切れ `BudgetExhausted{WallClock}`（continuation の対象。文言は
 /// dispatcher の `classify_budget_kind_from_text` が見る語）、idle の超過は harness_error に分類変更しない
 /// retryable な `Error`（ADR-0072 §7 U7）。両方が超過なら wall clock。usage は載せない（観測できる adapter が
-/// 自分で載せる）。`idle_timeout` は値で受ける（adapter ごとに縮めることがある。ADR-0047 D4）。
+/// 自分で載せる）。`idle_timeout` は値で受ける（adapter ごとに縮めることがある。ADR-0047 D4）。終端は
+/// `Terminal` が大きいので箱に入れる（clippy `result_large_err`）。
 pub(crate) fn deadline_terminal(
     start: Instant,
     last_activity: Instant,
     wall_clock: Duration,
     idle_timeout: Duration,
-) -> Result<Duration, Terminal> {
+) -> Result<Duration, Box<Terminal>> {
     let wall_elapsed = start.elapsed();
     if wall_elapsed >= wall_clock {
-        return Err(Terminal::BudgetExhausted {
+        return Err(Box::new(Terminal::BudgetExhausted {
             kind: task_core::BudgetKind::WallClock,
             message: "wall clock exceeded".into(),
             usage: None,
-        });
+        }));
     }
     let idle_elapsed = last_activity.elapsed();
     if idle_elapsed >= idle_timeout {
-        return Err(Terminal::Error {
+        return Err(Box::new(Terminal::Error {
             message: "idle timeout".into(),
             retryable: true,
             usage: None,
-        });
+        }));
     }
     Ok((wall_clock - wall_elapsed).min(idle_timeout - idle_elapsed))
 }

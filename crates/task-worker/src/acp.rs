@@ -589,7 +589,7 @@ async fn wait_for_response(
             limits.idle_timeout,
         ) {
             Ok(wait) => wait,
-            Err(terminal) => return Ok(WaitOutcome::TimedOut(Box::new(terminal))),
+            Err(terminal) => return Ok(WaitOutcome::TimedOut(terminal)),
         };
         let pumped = match tokio::time::timeout(
             wait,

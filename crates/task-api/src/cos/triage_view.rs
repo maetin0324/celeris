@@ -1,5 +1,5 @@
 //! Read side of the CoS triage store (ADR 2026-10-06 cos-inbox-triage). The outcome mark is
-//! written by task-core (`task_core::chat::triage::cos_triage_mark_tx`) inside the same
+//! written by task-core (`task_core::chat::triage::cos_triage_resolve_tx`) inside the same
 //! `cos_operation_apply` transaction as the audit row (ADR 2026-11-10-taskstore-consumer-ports
 //! D5). Reads open their own connection on the daemon DB (same as chat attachments).
 use std::path::Path;

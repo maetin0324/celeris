@@ -268,15 +268,22 @@ impl OperationAudit {
                 &self.payload,
                 |tx, ctx| {
                     let result = write(tx)?;
-                    if let Some(mark) = &self.item {
-                        task_core::chat::triage::cos_triage_mark_tx(
+                    // A concurrent outcome (another resolve, a fallback, reconcile) rolls the
+                    // whole operation back as a conflict.
+                    if let Some(mark) = &self.item
+                        && !task_core::chat::triage::cos_triage_resolve_tx(
                             tx,
                             &mark.item_id,
                             mark.outcome,
-                            &ctx.operation_id,
-                            &ctx.reason,
+                            Some(&ctx.operation_id),
+                            Some(&ctx.reason),
                             time::OffsetDateTime::now_utc(),
-                        )?;
+                        )?
+                    {
+                        return Err(ChatError::Conflict(format!(
+                            "triage item {} was already resolved",
+                            mark.item_id
+                        )));
                     }
                     Ok(result)
                 },

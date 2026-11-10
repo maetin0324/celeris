@@ -521,9 +521,9 @@ async fn cos_chat_triage_observe_needs_no_judgment() {
     assert_eq!(outbox, 0, "observe sends nothing");
 }
 
-/// ADR 2026-11-10-taskstore-consumer-ports D5: the inbox mark (task-core `cos_triage_mark_tx`) and
-/// the applied audit row commit in one `cos_operation_apply` transaction, so neither stays without
-/// the other. Every other resolve test either succeeds (both written) or is refused before that
+/// ADR 2026-11-10-taskstore-consumer-ports D5: the inbox mark (task-core `cos_triage_resolve_tx`)
+/// and the applied audit row commit in one `cos_operation_apply` transaction, so neither stays
+/// without the other. Every other resolve test either succeeds (both written) or is refused before that
 /// transaction opens, so a mark moved to its own transaction or connection would still pass them;
 /// here a trigger makes one of the two writes fail inside the transaction.
 #[tokio::test]

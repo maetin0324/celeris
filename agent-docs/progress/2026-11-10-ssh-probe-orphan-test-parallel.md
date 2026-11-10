@@ -84,7 +84,11 @@ timeout の kill ではないので対象外にしたもの:
 - `task-ops/src/changes.rs`: 既に `process_group(0)` と group への SIGKILL。
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
-最終報告の本文に、受け入れ条件ごとのコマンドと結果を書く。ここには作業中の結果を書く。
+- `bash scripts/dev/test-affected.sh` → exit 0（対象 crate は celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker。`5861 tests run: 5861 passed (40 slow), 22 skipped`。runner-tmp-lifecycle 199 checks と repro も走った。1010 秒）
+- `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0
+- `cargo clippy -p task-worker --all-targets` の `src/ssh` の警告 → 0 件
+- `cargo nextest run -p task-worker -E 'test(command_probe_)'` → exit 0（3 passed）
+- `bash -n scripts/dev/test-parallel.sh && sh scripts/dev/progress-index.sh --check` → exit 0
 - `cargo nextest run -p task-worker -E 'test(command_probe_) | test(times_out_and_kills_the_ssh) | test(remote_command_)'` → exit 0（6 passed）
 - `cargo nextest run -p task-worker -E 'test(/^ssh::/) | test(/cluster/) | test(/remote/)'` → exit 0（61 passed）
 - `CELERIS_RUNNER_TMP_TEST=1 bash scripts/dev/tests/test-runner-tmp-lifecycle.sh` → exit 0（`runner-tmp-lifecycle: ok（199 checks）`）

@@ -58,12 +58,12 @@ class GenericBypassTests(unittest.TestCase):
                 self.assertNotIn('celeris', str(repo.relative_to(root)).lower())
                 yield kind, repo
 
-    def check(self, repo, base='main', head='candidate', tool=TOOL, valid=True):
+    def check(self, repo, base='main', head='candidate', tool=TOOL, valid=True, env=None):
         out = repo.parent / f'{repo.name}-{base.replace("~", "_")}-report.json'
         out.unlink(missing_ok=True)
         proc = subprocess.run([sys.executable, '-I', str(tool), '--repo', str(repo), '--base', base,
                                '--head', head, '--policy-version', '1', '--out', str(out)],
-                              text=True, capture_output=True)
+                              text=True, capture_output=True, env=env)
         report = json.loads(out.read_text()) if out.exists() else None
         if report is not None and valid:
             check = subprocess.run([sys.executable, '-I', str(VALIDATOR), str(out)], text=True, capture_output=True)
@@ -80,6 +80,22 @@ class GenericBypassTests(unittest.TestCase):
     def rules(report):
         return {r['id']: r for r in report['rules']}
 
+    def checker_without(self, module):
+        """A copy of the checker in $TMPDIR that lacks health/<module> (the shipped checker is not touched)."""
+        partial = self.tmp() / 'tool'
+        shutil.copytree(TOOL_DIR, partial)
+        (partial / 'health' / module).unlink()
+        return partial / 'repo_health.py'
+
+    def env_with_adr_tool(self):
+        """Environment whose PATH has a passing `orchard-adr-lint`, so only the absent script of doc.links is left."""
+        bin_dir = self.tmp() / 'bin'
+        bin_dir.mkdir()
+        stub = bin_dir / 'orchard-adr-lint'
+        stub.write_text('#!/bin/sh\nexit 0\n')
+        stub.chmod(0o755)
+        return dict(os.environ, PATH=str(bin_dir) + os.pathsep + os.environ.get('PATH', ''))
+
     # ------------------------------------------------------------------ (d)
 
     def test_generic_docs_only_not_applicable(self):
@@ -87,7 +103,7 @@ class GenericBypassTests(unittest.TestCase):
             for kind, repo in self.fixtures('docs-only', with_profile=configured):
                 with self.subTest(kind=kind, repo=repo.name, profile=configured):
                     changed = git(repo, 'diff', '--name-only', 'main', 'candidate').splitlines()
-                    self.assertEqual(sorted(changed), ['README.md', 'docs/guide.md'])
+                    self.assertEqual(sorted(changed), ['README.md', str(Path('docs') / 'guide.md')])
                     proc, report = self.check(repo)
                     self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
                     self.assertEqual(report['inputs']['mode'], 'doc-only')
@@ -116,22 +132,58 @@ class GenericBypassTests(unittest.TestCase):
                     self.assertFalse(out.exists())
 
     def test_generic_unsupported_required_not_pass(self):
-        """A good change cannot pass while a required wrapped check cannot run (ADR (2) unsupported-tool)."""
+        """A good change cannot pass while a required wrapped check cannot run (ADR (2) unsupported-tool).
+
+        The tool that is not on PATH (adr.numbers) is unsupported and makes the run an error (exit 2).  The
+        absent script of doc.links is then judged alone (orchard-adr-lint stubbed on PATH): it must not pass
+        either.  Its exact status (unsupported, not fail) is the checker gap G2, kept in
+        test_generic_missing_script_unsupported.
+        """
+        env = self.env_with_adr_tool()
         for kind, repo in self.fixtures('unsupported-tool'):
-            with self.subTest(kind=kind, repo=repo.name):
+            with self.subTest(kind=kind, repo=repo.name, missing='tool'):
                 proc, report = self.check(repo)
                 self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
                 self.assertEqual(report['summary']['verdict'], 'error')
-                rules = self.rules(report)
-                tool = rules['adr.numbers']
+                tool = self.rules(report)['adr.numbers']
                 self.assertTrue(tool['required'])
                 self.assertEqual((tool['status'], tool['reason']), ('unsupported', 'tool_missing:orchard-adr-lint'))
+            with self.subTest(kind=kind, repo=repo.name, missing='script'):
+                proc, report = self.check(repo, env=env)
+                self.assertNotEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+                self.assertNotEqual(report['summary']['verdict'], 'pass')
+                rules = self.rules(report)
+                # The stub really removes the missing tool, so only the absent script is left to judge.
+                self.assertEqual(rules['adr.numbers']['status'], 'pass', rules['adr.numbers'])
                 script = rules['doc.links']
                 self.assertTrue(script['required'])
-                # The script named by the base profile is absent: unsupported, not a finding to repair.
-                self.assertEqual(script['status'], 'unsupported', script)
-                self.assertTrue(script['reason'].startswith('command_missing'), script)
-                self.assertEqual(report['summary']['counts']['fail_grade'], 0, report['findings'])
+                self.assertNotIn(script['status'], ('pass', 'not_applicable'), script)
+
+    @unittest.expectedFailure
+    def test_generic_missing_script_unsupported(self):
+        """G2: a required wrapped check whose script is absent is unsupported (command_missing), not a finding.
+
+        Expected by ADR 2026-11-10-health-generic-fixtures (2) (unsupported-tool) and the docstring of
+        rules/existing_checks.py (a script file that is absent, exit 126/127, is unsupported).  Actual: /bin/sh
+        is dash, which exits 2 for a script it cannot open, so doc.links becomes fail with one fail-grade
+        finding, and Celeris would hand the absent script to repair as a finding to fix.  The run does not
+        pass either way (test_generic_unsupported_required_not_pass).  Unresolved G2 in
+        agent-docs/progress/2026-11-10-health-v2-g4/py-bypass.md; owner rules/existing_checks.py, a policy
+        file this unit does not change.  Remove expectedFailure when the policy-only task fixes G2; until
+        then an unexpected success reports that the decorator is stale.
+        """
+        env = self.env_with_adr_tool()
+        for kind, repo in self.fixtures('unsupported-tool'):
+            for stubbed in (False, True):
+                with self.subTest(kind=kind, repo=repo.name, adr_tool_stubbed=stubbed):
+                    proc, report = self.check(repo, env=env if stubbed else None)
+                    self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+                    self.assertEqual(report['summary']['verdict'], 'error')
+                    script = self.rules(report)['doc.links']
+                    self.assertTrue(script['required'])
+                    self.assertEqual(script['status'], 'unsupported', script)
+                    self.assertTrue(script['reason'].startswith('command_missing'), script)
+                    self.assertEqual(report['summary']['counts']['fail_grade'], 0, report['findings'])
 
     def test_generic_tool_failure_is_error(self):
         # A wrapped check that breaks (output is not UTF-8) is an error, not a pass or a finding.
@@ -157,13 +209,33 @@ class GenericBypassTests(unittest.TestCase):
                 for rid in ('deps.violation', 'deps.cycle'):
                     self.assertEqual(rules[rid]['status'], 'error', rules[rid])
                     self.assertEqual(rules[rid]['reason'], f'crashed:{rid}:RuntimeError')
-        # A checker copy that lacks a health/ module cannot write a report: exit 2 (ADR (3) table (d)).
-        partial = self.tmp() / 'tool'
-        shutil.copytree(TOOL_DIR, partial)
-        (partial / 'health/scan.py').unlink()
+        # A checker copy that lacks a health/ module writes no report and does not exit 0, so it cannot
+        # pass.  The exact exit code (2, an error) is the checker gap G1, kept in
+        # test_generic_checker_import_failure_is_error.
+        partial = self.checker_without('scan.py')
         for kind, repo in self.fixtures('good', kinds=('ts',)):
             with self.subTest(kind=kind, fault='missing-module'):
-                proc, report = self.check(repo, tool=partial / 'repo_health.py')
+                proc, report = self.check(repo, tool=partial)
+                self.assertIsNone(report)
+                self.assertNotEqual(proc.returncode, 0, proc.stderr[-400:])
+
+    @unittest.expectedFailure
+    def test_generic_checker_import_failure_is_error(self):
+        """G1: a checker that cannot import its own module is an error: exit 2 and no report.
+
+        Expected by ADR 2026-11-10-health-generic-fixtures (3) table (d) and the report contract (exit 1 is
+        only a required rule that fails; a fault of the checker is an error, exit 2).  Actual: the copy
+        without health/scan.py dies with a ModuleNotFoundError traceback, which Python turns into exit 1, so
+        the CLI and check-health.sh show a fail instead of an error.  It does not pass either way (no report,
+        non-zero exit: test_generic_tool_failure_is_error).  Unresolved G1 in
+        agent-docs/progress/2026-11-10-health-v2-g4/py-bypass.md; owner repo_health.py (its imports and
+        main), a policy file this unit does not change.  Remove expectedFailure when the policy-only task
+        fixes G1; until then an unexpected success reports that the decorator is stale.
+        """
+        partial = self.checker_without('scan.py')
+        for kind, repo in self.fixtures('good', kinds=('ts',)):
+            with self.subTest(kind=kind, fault='missing-module'):
+                proc, report = self.check(repo, tool=partial)
                 self.assertIsNone(report)
                 self.assertEqual(proc.returncode, 2, proc.stderr[-400:])
 
@@ -254,14 +326,14 @@ class GenericBypassTests(unittest.TestCase):
                 b0, h0, (pb0, ph0), d0, _ = snap()
                 self.assertEqual((b0, pb0), (git(repo, 'rev-parse', 'main'), ph0))
                 # candidate changes: head sha moves; base and policy stay.
-                write(repo, 'docs/notes.md', '# Notes\n')
+                write(repo, str(Path('docs') / 'notes.md'), '# Notes\n')
                 commit(repo, 'candidate: notes')
                 b1, h1, (pb1, _), d1, _ = snap()
                 self.assertNotEqual(h1, h0)
                 self.assertEqual((b1, pb1, d1), (b0, pb0, d0))
                 # base advances (no policy change): base sha moves; policy stays.
                 git(repo, 'switch', '-q', 'main')
-                write(repo, 'docs/changelog.md', '# Changelog\n')
+                write(repo, str(Path('docs') / 'changelog.md'), '# Changelog\n')
                 commit(repo, 'main: changelog')
                 git(repo, 'switch', '-q', 'candidate')
                 b2, h2, (pb2, _), d2, _ = snap()

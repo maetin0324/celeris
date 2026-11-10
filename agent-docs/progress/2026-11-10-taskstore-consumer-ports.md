@@ -46,6 +46,16 @@ completed: 2026-11-10
 | compile の単位の逆依存 | celeris-mcp は task-core に依存 | 同じ | 改善しない（`Cargo.toml`・`Cargo.lock` の差分なし。task-core を変えると celeris-mcp も再 compile される） |
 | Rust の file | 1829 | 1831 | 2 増えた（`store/org_directory.rs`・`store/task_query.rs`） |
 
+## 証拠コマンドと結果（record、提出時の HEAD で実行）
+- `python3 agent-docs/progress/2026-11-10-taskstore-consumer-ports/measure.py --json agent-docs/progress/2026-11-10-taskstore-consumer-ports/after.json` → exit 0（`task_store_fn_decls` 183、`task_store_supertraits` 18、`visible_methods_via_taskstore` 304、`duplicate_decls` 0）
+- `git diff --name-only $CELERIS_WU_BASE | python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R3 agent-docs/progress/2026-11-07-health-v2-b0/slices.json` → exit 0（`write-set R3: ok`。変えた path は ADR・この進捗・`after.json` の 3 つ）
+- `sh scripts/dev/check-doc-links.sh` → exit 0、`sh scripts/dev/check-adr-numbers.sh` → exit 0（414 files）、`sh scripts/dev/progress-index.sh --check` → exit 0、`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → exit 0
+- `bash scripts/dev/test-affected.sh` → exit 0（「試験対象の変更なし（docs のみ等）」。base は `$CELERIS_WU_BASE` で、crates/ の差分は無い）
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- `bash scripts/dev/check-health.sh --base "$CELERIS_WU_BASE"` → exit 0（mode doc-only、verdict pass、fail 級 0、new 0、worsened 0）
+- `bash scripts/dev/check-health.sh`（base は auto、`git merge-base HEAD main`）→ exit 0（verdict pass、fail 級 0、new 0、worsened 1 は未解決の `dup.state` の誤検出。store の本体の行 19371、`SqliteStore` の method 707）
+
 ## 着手時の計測（ports-design の時点）
 台本 [measure.py](2026-11-10-taskstore-consumer-ports/measure.py)、値 [baseline.json](2026-11-10-taskstore-consumer-ports/baseline.json)。
 - TaskStore の fn 宣言 193、supertrait 16（B0 と同じ command）。supertrait を含めて `dyn TaskStore` から見える method 308、宣言の重複 0。

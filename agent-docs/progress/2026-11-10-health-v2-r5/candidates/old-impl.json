@@ -1,0 +1,72 @@
+{
+  "schema": "celeris.health-v2-r5.old-impl/1",
+  "scan": {
+    "commit": "3f903604bfba63e28ed275833f03e38bc674e7f9",
+    "crates_tree": "a94cbae58bd70c2172084c0fde7bd40fe7726478",
+    "trees": {
+      "task-api": "6a18a4c653a70e85fb401a57f69138834084cd73",
+      "celeris": "1854b5ea716699d333a6192178b8994571187901",
+      "celerisctl": "eff59f0f09c329a66f000c8455c0b2eb7ce9d64f"
+    },
+    "adr_tree": "c4655b86806c0143de23f035c7cc26d682775b07",
+    "capability_map_blob": "ac77c1e4f12b5053c3619618bb3fa8cbd8365e80",
+    "architecture_map_blob": "f2430cd3b005b09f90683f3081ca277e4f621624",
+    "architecture_map_checker_blob": "999f10bc0c656a1a5a1eb211211fa702ad761ad2"
+  },
+  "candidates": [
+    {
+      "id": "old-incremental-backup-measurement",
+      "members": [
+        "crates/celeris/src/db_maintenance/tests.rs::incremental_backup_progress_restarts_after_other_connection_writes"
+      ],
+      "evidence": {
+        "commit_subject": "定期DBバックアップの再開始ループと中断遅延を解消",
+        "what": "定期 backup の旧方式（rusqlite の online backup を 1 page ずつ step する）。VACUUM INTO に置き換えた"
+      },
+      "keep_tests": [
+        "crates/celeris/src/db_maintenance/tests.rs::vacuum_backup_finishes_with_a_concurrent_writer_and_integrity_ok",
+        "crates/celeris/src/db_maintenance/tests.rs::vacuum_progress_handler_interrupts_an_active_copy"
+      ],
+      "action": "delete",
+      "plan": "旧方式の rusqlite Backup::step の再開始を計測するだけで celeris の code を呼ばない試験を消し、置き換えの理由は backup_once の注釈と commit に残す",
+      "mutation_target": "crates/celeris/src/db_maintenance.rs",
+      "not_replay_reason": "試験の中で作った一時 DB の page を rusqlite の旧 API で写すだけで、DB に残る旧い shape の event や行を読まない"
+    },
+    {
+      "id": "old-celerisctl-plan-legacy-path",
+      "members": [
+        "crates/celerisctl/src/commands/plan.rs::tests::run_inserts_plan_task",
+        "crates/celerisctl/src/commands/plan.rs::tests::run_with_blank_goal_returns_error"
+      ],
+      "evidence": {
+        "adr": "agent-docs/adr/0079-recursive-task-decomposition.md",
+        "what": "kind=plan の分解 task を作る入口。POST /plans は R5a で 410、celerisctl plan は自ら legacy path と注記して残る"
+      },
+      "keep_tests": [
+        "crates/celerisctl/src/commands/execution_tests.rs::set_adopts_a_v3_plan_with_the_configured_tree_limits",
+        "crates/celerisctl/src/commands/execution_tests.rs::set_rejects_an_invalid_plan"
+      ],
+      "action": "delete",
+      "plan": "celerisctl plan（plan.rs と main.rs の Plan 枝）を消す変更で 2 試験も消す。新しい仕事は root task と execution plan set（plan/3）で作る",
+      "mutation_target": "crates/celerisctl/src/commands/execution.rs",
+      "not_replay_reason": "空の in-memory DB に新しい plan task を書く経路の試験で、DB に残る旧い event や行は読まない"
+    },
+    {
+      "id": "old-console-milestone-review-block",
+      "members": [
+        "crates/task-api/tests/console.rs::approvals_milestones_and_questions_carry_their_state"
+      ],
+      "evidence": {
+        "adr": "agent-docs/adr/0079-recursive-task-decomposition.md",
+        "what": "途中目標の判定の対話（ADR-0038）。R5a 9 は Console の milestone_review の読み手を R5b/R6 の回収で外すと決めた"
+      },
+      "keep_tests": [
+        "crates/task-api/tests/project_plan.rs::project_detail_hides_frozen_milestones_by_default"
+      ],
+      "action": "merge",
+      "plan": "console.rs の途中目標の節（proposed_milestones と ConsoleBlock::Milestone）を消す変更で、この試験から milestone の assert を外し、認可・質問のブロックの assert は残す",
+      "mutation_target": "crates/task-api/src/console.rs",
+      "not_replay_reason": "試験が store に新しく proposed の milestone を書き、廃止した判定の対話の表示を確かめる。凍結行を読む契約は include_frozen の GET が持つ"
+    }
+  ]
+}

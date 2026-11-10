@@ -55,7 +55,8 @@ ADR が統一を決めたもの（D1「誤配置の回収は 1 つの関数」�
 残した結線の試験（fake の harness の実行で結果契約を通る）: claude_code・codex・acp の `happy_path_progress_and_done_from_result_file`、aider の `a_question_in_result_json_becomes_terminal_question`、pi の `pi_adapter_result_file_question_becomes_terminal_question`。provider 固有の分類の試験（result.json が無いとき・stale・cos_chat・Phase 112・background task）は全部残した。
 
 ## 検査（提出時の HEAD で実行。基準は $CELERIS_WU_BASE）
-- `cargo nextest run -p task-worker -E 'test(result_contract_)'` → exit 0、5 passed。`read_result_file` を足すと 6 passed。
+clippy・fmt・test-affected は件名「R1 result-contract: 進捗に結果契約の実装・観測できる変化・試験の入れ替え・検査を書く」の commit（clean な tree）で実行した。その後の commit はこの file の 1 行の訂正だけ。
+- `cargo nextest run -p task-worker -E 'test(result_contract_)'` → exit 0、6 passed（共通契約の 5 件と、同じ module `result_contract_tests` にある `read_result_file_recovers_strays_only_for_runs_that_require_the_file`）。
 - `cargo nextest run -p task-worker` → exit 0、1265 passed。
 - `bash scripts/dev/test-affected.sh` → exit 0。対象 crate は celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker。nextest 5847 passed（22 skipped）。repo-health は `verdict=pass`、`fail_grade=0`、`new=0`、`worsened=0`。
   - 1 回目（commit 1 の後）は `size.responsibility-growth` が 3 件 fail した（`pi::run_pi` 326 行・`acp::run_acp` 730 行・`aider::run_aider` 206 行。閾値 200 を超えた関数の行が基準より増えた）。commit 2 で `run_started` の行を消して直した。

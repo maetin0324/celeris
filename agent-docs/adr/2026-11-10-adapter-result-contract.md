@@ -1,11 +1,11 @@
 ---
-status: proposed
+status: accepted
 tasks: [01M6TYVJSZDSCB697193J01FYW]
 ---
 # harness adapter の結果契約（ResultFile・lenient_evidence・result.json の解釈）と実行共通処理を 1 つにする
 
 - 日付: 2026-11-10
-- 状態: 提案（健全性 v2 R1。この ADR ではコードを変えない。実装は同じ task の unit result-contract・run-common、記録は unit record）
+- 状態: 実装済み（2026-11-10、健全性 v2 R1 の task 01M6TYVJSZDSCB697193J01FYW。実装は unit result-contract・run-common、記録は [R1 の進捗](../progress/2026-11-10-health-v2-r1.md)）。決定節と実装の食い違いは末尾の付記「実装との突き合わせ」に書く
 - 関係: [ADR-0003 worker protocol](0003-worker-protocol.md)（`Terminal` と D4 の timeout の正規化）、ADR-0006 D3/D4（`artifacts/result.json` と `evidence` の寛容な読み方、`result` を観測できない run は file を信用しない）、ADR-0010 D5/D10（供給側失敗の分類、`runs/<run_id>/result.json`）、ADR-0036 D1/D2（`artifacts_dir`）、ADR-0061（静的単価表）、ADR-0072 D7/D9/E2（`BudgetExhausted`・`yield`・result.json 欠落の InfraRequeue）、ADR-0090 D1（`wait`）、[ADR 2026-11-06 誤配置した report の回収](2026-11-06-misplaced-report-recovery-generalized.md)、[ADR 2026-11-07 健全性 v2 の基準](2026-11-07-health-v2-baseline.md)（R1 の scope・write_set）、[ADR 2026-10-11 破壊的変更](2026-10-11-breaking-changes-by-default.md)
 
 ## 背景
@@ -193,9 +193,39 @@ dispatcher 側（`dispatcher/worker_task.rs`。R1 の write_set の外）は、`
 - `grep -rn "struct ResultFile\|fn lenient_evidence" crates/task-worker/src` が `result_report.rs` の 2 行だけ。
 - `grep -rn "fn result_file_wait" crates/` が 0 件。`grep -n "pub fn wait_terminal" crates/task-worker/src/adapter.rs` が 1 件。
 - `grep -n "fn worktree_note" crates/task-worker/src/preamble.rs` が 0 件。
-- 4a の 5 件と 4b の 3 件以上が `cargo nextest run -p task-worker -E 'test(/^result_contract_|^run_common_/)'` で通る。
+- 4a の 5 件と 4b の 3 件以上が `cargo nextest run -p task-worker -E 'test(/^result_contract_|^run_common_/)'` で通る（この filter は 0 件に当たる。付記の (h) の filter に直した）。
 - `git diff --name-only $CELERIS_WU_BASE | python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R1 agent-docs/progress/2026-11-07-health-v2-b0/slices.json` が exit 0。
 
 ## 状態の記録
 
 - 2026-11-10: 提案。unit adr（WU `adr`）が書いた。実装の unit が終わったら「実装済み」に変え、実装との食い違いを付記する。
+- 2026-11-10: 実装済み。unit result-contract（D1・D3・4a・4c）と unit run-common（D2・D3・4b）が実装し、unit record が下の付記を書いた。
+
+## 付記（2026-11-10、実装との突き合わせ）
+
+unit result-contract・run-common の実装（[result-contract の進捗](../progress/2026-11-10-health-v2-r1/result-contract.md)・[run-common の進捗](../progress/2026-11-10-health-v2-r1/run-common.md)）と決定節の食い違いを書く。決定（D1〜D3 の何を統一し何を provider 固有に残すか）は変えていない。
+
+(a) D1 の型と試験の置き場。`ResultFileRead::Misplaced` は `Box<Terminal>` を持つ（clippy の `large_enum_variant`）。4a の試験は `result_report.rs` の `mod tests` ではなく、別 file `crates/task-worker/src/result_report_tests.rs`（module `result_report::result_contract_tests`）に置いた。同じ module に `read_result_file_recovers_strays_only_for_runs_that_require_the_file`（誤配置の回収を要る run だけが通す。候補 1 つは写して読む、複数は `Misplaced`、無ければ `Missing`）を足した。
+
+(b) (1d) 8「二重の parse」の「変化なし」は誤り。`interpret_result_text` は本文を `serde_json::Value` に 1 回 parse し、`ResultFile` は `serde_json::from_value` で読む。このため serde の誤りの細部が 2 点変わった。
+- 欄の型が違う本文（例 `{"question": 1}`）の文言の末尾に、serde の「at line L column C」が付かなくなった。接頭辞「`<rel>/result.json is not valid JSON: `」と `Error{retryable: true, usage: None}` は同じ。
+- 同じ鍵が 2 回ある本文（例 `{"summary":"a","summary":"b"}`）は、「duplicate field」の `Error` ではなく後の値（`"b"`）で読む。`Value` の map が後の値で上書きするため。
+
+(c) D1 の「観測できる挙動の変化」は 2 点で書き足す。
+- pi・acp・aider が `read_result_file` に渡す時刻は run の開始ではなく、監視 loop の開始（spawn の後の `start: Instant`）を壁時計に直した値（`SystemTime::now() - start.elapsed()`）。誤配置の候補の窓はそこから 2 秒前まで。worker が result.json を書くのは spawn の後なので、候補から落ちる file は無い。`run_pi`・`run_acp`・`run_aider` は base の時点で 200 行を超えていて、`let run_started = …` の 1 行でも repo-health の `size.responsibility-growth` が fail になったため。claude_code・codex は run の開始のまま。
+- D1 は「task の終端は変わらない」と書いたが、誤配置の候補が 1 つのときは変わる。これまで pi・acp・aider の adapter は「exited without …」の `Error{retryable: true}` を返し、dispatcher（`worker_task.rs`）の `misplaced_report` は置き場に写すだけで `None` を返すので、終端は `Error` のまま再試行していた。今は claude_code・codex と同じく写した本文で終端を作る（例 `Done`）。候補が複数のときは従来どおり `Error{retryable: false}`（`MISPLACED_RESULT_MARKER`）。
+
+(d) D2 の置き場と署名。
+- `RunPaths`・`prepare_run`・`finish_run` は `adapter.rs` ではなく `crates/task-worker/src/subprocess.rs` に置いた。`adapter.rs` に置くと `adapter` が `campaign_pin`・`delegate_file`・`subprocess` を呼び、3 つとも `adapter` の型に依存するので、repo-health の `deps.cycle` が base の 3 単位（adapter・tool_policy・progress）から 6 単位に増えて fail した。`subprocess` は既に `adapter`・`campaign_pin` に依存し、`subprocess` に依存し返す module が無いので、循環は増えない。`deadline_terminal`・`spawn_capture_stderr`・`with_estimated_cost` は `adapter.rs` にある。
+- `deadline_terminal` は `Result<Duration, Box<Terminal>>` を返す（clippy の `result_large_err`）。
+- `spawn_capture_stderr` は `Result<JoinHandle<()>, AdapterError>` を返す（stderr が pipe でないときの `AdapterError::Other("worker stderr was not piped")` を保つ）。stderr の写しの失敗の warn に `run <run_id>:` が付いた。
+- `prepare_run(req, run_id, stdout_name)` は stdout の log 名を引数で受ける（D2 の表 4）。
+- acp の private な `finish_run` は `finish_session` に改名し、最後に `subprocess::finish_run` を呼ぶ。
+
+(e) D2 に書いていない観測できる変化: run の準備の順。`campaign_pin::enforce` と `request.json` の書き出しが、prompt を組む前に動く（codex・pi・acp では必須規則 `required_rules::preamble_for_run` の読み取りの前、claude_code では画像の入力の組み立ての前、pi では skill の配送の前）。必須規則が読めずに run が落ちたときも `request.json` は残る。両方が失敗する run では、返る誤りが campaign の pin の方になる。
+
+(f) 4b の試験の置き場。`run_common_deadline_wall_clock_is_budget_exhausted`・`run_common_deadline_idle_is_retryable_error`・`run_common_cost_estimate_keeps_reported_cost` は `crates/task-worker/src/adapter_tests.rs`（module `adapter::run_common_tests`）、`run_common_prepare_run_clears_previous_result_and_delegate`・`run_common_finish_run_maps_provider_failure_to_adapter_error` は `crates/task-worker/src/subprocess/tests.rs`（(d) の置き場に合わせた）。
+
+(g) (4) の試験の数。決定は「10 件を足し、写し 13 件を消して純減 3 件」だったが、実際は 11 件を足した（4a の 5 件、(a) の `read_result_file_…` 1 件、4b の 5 件）。消した試験関数は 12 件（claude_code 5・codex 4・acp 2・aider 1）。pi の `pi_adapter_result_question_yield_and_invalid_json` は消さずに question の 1 組に縮め、`pi_adapter_result_file_question_becomes_terminal_question` に改名した（決定の 13 件はこの関数を数えていた）。`crates/task-worker/src` の `#[test]`・`#[tokio::test]` は base の 1192 から 1191 になった（純減 1 件）。
+
+(h) 検証節の nextest の filter `test(/^result_contract_|^run_common_/)` は 0 件に当たる（`cargo nextest list -p task-worker -E …` で確かめた）。nextest の試験名は `result_report::result_contract_tests::result_contract_priority_order` のように module の path を含むので、`^` で始まる正規表現は当たらない。正しい filter は `test(/::(result_contract|run_common)_[a-z0-9_]+$/)` で、10 件（4a の 5 件と 4b の 5 件）に当たり、10 件とも通る。module 名 `result_contract_tests` にも当たる `test(/run_common_|result_contract_/)` は、(a) の `read_result_file_…` を含めて 11 件になる。

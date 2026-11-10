@@ -52,7 +52,7 @@ ADR D2 の表で統一と決めたものだけ。
 消した試験は無い。adapter の結線の試験（result-contract の進捗の「残した結線の試験」と、provider 固有の分類・timeout の試験）は全部そのまま通る。
 
 ## 検査（提出時の HEAD で実行。基準は $CELERIS_WU_BASE）
-clippy・fmt・test-affected・check-health は件名「R1 run-common: aider の module doc の cost 推定を adapter::with_estimated_cost に向ける」の commit（clean な tree）で実行した。その後の commit はこの file だけ。
+clippy・fmt・test-affected・check-health は件名「R1 run-common: aider の module doc の cost 推定を adapter::with_estimated_cost に向ける」の commit（clean な tree）で実行した。その後の commit はこの file だけ。Run #2 で件名「R1 run-common: 進捗の R6 への引き継ぎに runner の wall clock の分類の違いを書く」の commit（clean な tree）で再実行し、同じ結果だった: `bash scripts/dev/test-affected.sh` → exit 0、5852 passed（22 skipped）、repo-health `verdict=pass`・`fail_grade=0`・`worsened=0`。`cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。`run_common_|result_contract_` → 11 passed。受け入れ条件 0・1 の grep → 0 件。slices-check → `write-set R1: ok`。
 - `cargo nextest run -p task-worker -E 'test(/run_common_|result_contract_/)'` → exit 0、11 passed（`run_common_` 5 件、`result_contract_` 5 件と同じ module の `read_result_file_recovers_strays_only_for_runs_that_require_the_file`）。
 - `cargo nextest run -p task-worker` → exit 0、1270 passed（9 skipped）。途中の 1 回は `browser::launcher_run::tests::launcher_login::launcher_credential_*` の 4 件が落ちたが、adapter を通らない試験で、単独の再実行（`-E 'test(/launcher_credential_/)'`）で 37 件とも合格し、次の全体の実行でも合格した（並列の負荷による時間切れ）。
 - `bash scripts/dev/test-affected.sh` → exit 0。対象 crate は celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker。nextest 5852 passed（22 skipped）。repo-health は `verdict=pass`、`fail_grade=0`、`new=0`、`worsened=0`。

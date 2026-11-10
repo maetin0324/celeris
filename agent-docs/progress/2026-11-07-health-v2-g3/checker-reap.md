@@ -58,9 +58,13 @@ WorkUnit `checker-reap`（task 01M6TYVJSWEY3ZE50S02ETYDNM）。G3 の final revi
 - 時間切れの kill（group と子の両方）を外す: `health_limits_cap_checker_timeout_leaves_no_checker_process`（`a checker process slept to the end instead of being killed`）、`health_evidence_gate_timeout_kills_group_after_caller_stops_waiting`（`checker processes [stub, 孫] outlived the deadline (2s) + 1s`）、`health_review_policy_timeout_is_unavailable`（10.03 秒）が落ちた。既存の `health_limits_cap_checker_timeout_is_error_without_repair` と `health_evidence_gate_missing_or_broken_report_is_error` は合格のままだった。
 - group への kill だけを外す（子の pid への kill は残す）: `health_evidence_gate_timeout_kills_group_after_caller_stops_waiting` だけが落ちた（孫の pid が上限の時点で生きていた）。
 
-## 検査の結果（提出時の HEAD で実行）
-- `cargo nextest run -p task-dispatch --no-tests=fail -E 'test(/^(.*::)?(health_limits_|health_evidence_gate_|health_review_policy_timeout)/)'` → 合格（下の「提出時の検査」）。直後に `pgrep -af "repo_health.py|time.sleep"` で残りの stub が無いことを確かめた。
-- 提出時の検査は下の節に書く。
+## 検査の結果（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`、test-affected は `git merge-base HEAD main`）
+- `cargo nextest run -p task-dispatch --no-tests=fail -E 'test(/^(.*::)?(health_limits_|health_evidence_gate_|health_review_policy_timeout)/)'` → exit 0、47 passed。直後の `pgrep -af "repo_health.py|time.sleep"` は該当なし（stub は残っていない）。
+- `bash scripts/dev/test-affected.sh` → exit 0（476 秒。対象 crate は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。nextest 3706 passed、11 skipped。script bundle の SKIP 0 件）。同じ実行の check-health は `verdict=pass exit=0 fail_grade=0 new=2 worsened=0`。new の 2 件（`arch-map.wrong_path` の `docs/architecture-map.md` 3 行目、`policy.changed` の `scripts/dev/repo-health/` の file）はこの WU が変えていない file の指摘で、G3 の branch と main の差による。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- 参考: `cargo clippy -p task-dispatch --tests -- -D warnings` は exit 101。指摘 4 件は `dispatch_ready_phases.rs`・`health_enforce.rs`・`cos_chat_root_done.rs`・`cos_slot_wait.rs` で、この WU が変えた file には無い（gate の clippy は試験を含めない）。
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → 変えた path は上の「変更」の 5 file だけ。
 
 ## 未解決
 - `crates/task-dispatch/src/health_review/entry_tests.rs` の `health_entry_*` の時間切れの場合も、gate の試験と同じ stub に `"sleep": 30`（締め切り 3 秒）を渡している。この WU の依頼に挙がっていない file なので変えていない。試験の process が締め切りより先に死ぬと、最長 30 秒残り得る。

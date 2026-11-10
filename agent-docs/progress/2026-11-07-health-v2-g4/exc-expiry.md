@@ -64,7 +64,12 @@ v1 の WorkUnit `land` の仕事を引き継いだ。この WorkUnit は main �
 - 下の「merge の後の検査」に検査の結果を書く。merge の前に `policy.changed` で exit 1 だった `check-health.sh`・`test-affected.sh` は exit 0 になった。
 
 ## merge の後の検査（WorkUnit `land-main` の提出時の HEAD で実行。基準は `git merge-base HEAD main`）
-- （検査の実行中）
+- `bash scripts/dev/check-health.sh` → exit 0。この進捗を書く前（`git merge-base HEAD main` と HEAD が同じ commit、件名「G4 exc-expiry: 進捗に承認の材料の置き場所と試験の結果を書く」）の full の経路: rule 21 件がすべて pass、`policy.changed` は pass、`verdict=pass fail_grade=0 new=0 worsened=0`。同じ実行の中で `test_repo_health*.py` 78 件が OK、`repo_health_gate.sh` の `OK (1)`〜`OK (7)` が合格。merge の前の exit 1（`policy.changed` fail）が解けた。
+- `bash scripts/dev/test-affected.sh` → exit 0。最初の段の check-health.sh は doc-only の経路（変更はこの進捗だけ）で `verdict=pass fail_grade=0`、`policy.changed` は pass。続けて `test-affected: 試験対象の変更なし（docs のみ等）`。`--list` の対象は 0 件。
+- `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health*.py'` → exit 0、78 件 OK。`-k exception_expir -v` → exit 0、5 件 ok。
+- `sh scripts/dev/tests/repo_health_gate.sh` → exit 0、`repo_health_gate: all checks passed`（doc-only の check-health.sh はこの試験を省くので、別に走らせた）。
+- `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0（Rust は変えていない）。
+- 文書検査 3 本（`bash scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`・`sh scripts/dev/progress-index.sh --check`）→ 3 本とも exit 0。
 
 ## 未解決
 - 無し。merge の前の未解決 4 件のうち、`policy.changed` による exit 1、人の承認と operator の no-ff merge、親 G4 の branch の ff-only の 3 件は上の「main への merge」と「main への merge の後の確認」で解けた。

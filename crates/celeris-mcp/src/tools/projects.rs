@@ -1,4 +1,8 @@
 //! ADR-0056 D2: `projects_list` / `projects_get`（読むだけ）。
+//!
+//! ADR 2026-11-10-taskstore-consumer-ports: 本体（`list_projects`・`get_project`）は同期の関数で、
+//! `&dyn OrgDirectory`・`&dyn TaskQuery` だけを受ける（試験は `tools/fake_ports.rs` の fake を渡す）。
+//! async 側は引数を検査し、`McpState::blocking_on` で本体を 1 回呼ぶ。
 
 use std::future::Future;
 use std::pin::Pin;
@@ -7,7 +11,7 @@ use std::sync::Arc;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use task_core::{
-    ListFilter, McpScope, Milestone, OrgDirectory, ProjectId, ProjectStatus, TaskQuery,
+    ListFilter, ListOrder, McpScope, Milestone, OrgDirectory, ProjectId, ProjectStatus, TaskQuery,
 };
 
 use super::{ToolDef, ToolError, ToolOutput, clamp_limit, schema};
@@ -53,26 +57,35 @@ async fn list_impl(
         None => None,
     };
     let items = state
-        .blocking(move |store| -> Result<Vec<ProjectSummary>, ToolError> {
-            let mut items: Vec<_> = store
-                .project_list()
-                .map_err(|e| ToolError::internal(e.to_string()))?
-                .into_iter()
-                .filter(|p| match status {
-                    Some(s) => p.status == s,
-                    None => true,
-                })
-                .map(|p| ProjectSummary {
-                    id: p.id.to_string(),
-                    title: p.title,
-                    status: p.status,
-                })
-                .collect();
-            items.truncate(limit);
-            Ok(items)
+        .blocking_on(&state.org_directory, move |org| {
+            list_projects(org, status, limit)
         })
         .await?;
     ToolOutput::from_serialize(&ListOutput { items })
+}
+
+/// `projects_list` の本体: 案件を新しい順に読み、`status` で絞り、`limit` 件で切る。
+pub(super) fn list_projects(
+    org: &dyn OrgDirectory,
+    status: Option<ProjectStatus>,
+    limit: usize,
+) -> Result<Vec<ProjectSummary>, ToolError> {
+    let mut items: Vec<_> = org
+        .project_list()
+        .map_err(|e| ToolError::internal(e.to_string()))?
+        .into_iter()
+        .filter(|p| match status {
+            Some(s) => p.status == s,
+            None => true,
+        })
+        .map(|p| ProjectSummary {
+            id: p.id.to_string(),
+            title: p.title,
+            status: p.status,
+        })
+        .collect();
+    items.truncate(limit);
+    Ok(items)
 }
 
 fn list_call<'a>(
@@ -122,47 +135,10 @@ async fn get_impl(
         .id
         .parse()
         .map_err(|_| ToolError::invalid_params(format!("{:?} is not a project id", args.id)))?;
+    let tasks = Arc::clone(&state.task_query);
     let out = state
-        .blocking(move |store| -> Result<Option<GetOutput>, ToolError> {
-            let Some(project) = store
-                .project_get(id)
-                .map_err(|e| ToolError::internal(e.to_string()))?
-            else {
-                return Ok(None);
-            };
-            let milestones = store
-                .milestone_list(id)
-                .map_err(|e| ToolError::internal(e.to_string()))?;
-            let filter = ListFilter {
-                project_id: Some(id),
-                ..ListFilter::default()
-            };
-            let page = store
-                .list_page(&filter, task_core::ListOrder::UpdatedDesc, None, 100)
-                .map_err(|e| ToolError::internal(e.to_string()))?;
-            let tasks = page
-                .items
-                .into_iter()
-                .map(|t| super::tasks::TaskSummary {
-                    id: t.id.to_string(),
-                    title: t.title,
-                    status: t.status,
-                    assignee: t.assignee,
-                    project_id: t.project_id.map(|p| p.to_string()),
-                    updated_at: t
-                        .updated_at
-                        .format(&time::format_description::well_known::Rfc3339)
-                        .unwrap_or_default(),
-                })
-                .collect();
-            Ok(Some(GetOutput {
-                id: project.id.to_string(),
-                title: project.title,
-                request: project.request,
-                status: project.status,
-                milestones,
-                tasks,
-            }))
+        .blocking_on(&state.org_directory, move |org| {
+            get_project(org, tasks.as_ref(), id)
         })
         .await?;
     match out {
@@ -172,6 +148,46 @@ async fn get_impl(
             args.id
         ))),
     }
+}
+
+/// `projects_get` が返す task の数の上限（新しく更新された順）。
+const GET_TASKS_LIMIT: usize = 100;
+
+/// `projects_get` の本体: 案件 1 件と、その途中目標（`seq` 順）と task（更新の新しい順に
+/// `GET_TASKS_LIMIT` 件まで）。案件が無ければ `None`。
+pub(super) fn get_project(
+    org: &dyn OrgDirectory,
+    tasks: &dyn TaskQuery,
+    id: ProjectId,
+) -> Result<Option<GetOutput>, ToolError> {
+    let Some(project) = org
+        .project_get(id)
+        .map_err(|e| ToolError::internal(e.to_string()))?
+    else {
+        return Ok(None);
+    };
+    let milestones = org
+        .milestone_list(id)
+        .map_err(|e| ToolError::internal(e.to_string()))?;
+    let filter = ListFilter {
+        project_id: Some(id),
+        ..ListFilter::default()
+    };
+    let page = tasks
+        .list_page(&filter, ListOrder::UpdatedDesc, None, GET_TASKS_LIMIT)
+        .map_err(|e| ToolError::internal(e.to_string()))?;
+    Ok(Some(GetOutput {
+        id: project.id.to_string(),
+        title: project.title,
+        request: project.request,
+        status: project.status,
+        milestones,
+        tasks: page
+            .items
+            .into_iter()
+            .map(super::tasks::task_summary)
+            .collect(),
+    }))
 }
 
 fn get_call<'a>(

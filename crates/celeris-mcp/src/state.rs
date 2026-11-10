@@ -1,11 +1,15 @@
 //! `McpState`: ハンドラが共有するもの一式（ADR-0056 D5）。`task-api::ApiState` と同じ規律
 //! （専用の `SqliteStore` 接続、`spawn_blocking` で同期の store 呼び出しを逃がす）。
+//!
+//! ADR 2026-11-10-taskstore-consumer-ports: 名簿と task の一覧だけを読む道具（`tools/projects`・
+//! `tools/tasks` の一覧）は、同じ接続を狭い trait で見る handle（`org_directory`・`task_query`）を
+//! `blocking_on` に渡す。接続は `store` の 1 つだけで、handle はその `Arc` の写し。
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use task_core::{RoleSpec, SqliteStore, StoreOptions};
+use task_core::{OrgDirectory, RoleSpec, SqliteStore, StoreOptions, TaskQuery};
 
 use crate::ratelimit::RateLimiter;
 use crate::tools::api::ApiTarget;
@@ -20,6 +24,10 @@ pub enum McpStateError {
 
 pub struct McpState {
     pub(crate) store: Arc<SqliteStore>,
+    /// `store` と同じ接続を `OrgDirectory` として見る handle（新しい接続・状態ではない）。
+    pub(crate) org_directory: Arc<dyn OrgDirectory>,
+    /// `store` と同じ接続を `TaskQuery` として見る handle（新しい接続・状態ではない）。
+    pub(crate) task_query: Arc<dyn TaskQuery>,
     pub(crate) rate_limit_per_min: u32,
     pub(crate) limiter: Mutex<RateLimiter>,
     pub(crate) knowledge_root: Option<PathBuf>,
@@ -81,8 +89,12 @@ impl McpState {
         rate_limit_per_min: u32,
         knowledge_root: Option<PathBuf>,
     ) -> Arc<Self> {
+        let org_directory: Arc<dyn OrgDirectory> = store.clone();
+        let task_query: Arc<dyn TaskQuery> = store.clone();
         Arc::new(Self {
             store,
+            org_directory,
+            task_query,
             rate_limit_per_min,
             limiter: Mutex::new(RateLimiter::default()),
             knowledge_root,
@@ -110,8 +122,19 @@ impl McpState {
         T: Send + 'static,
         F: FnOnce(&SqliteStore) -> T + Send + 'static,
     {
-        let store = Arc::clone(&self.store);
-        match tokio::task::spawn_blocking(move || f(&store)).await {
+        self.blocking_on(&self.store, f).await
+    }
+
+    /// `handle`（`store` か、それを狭い trait で見る `org_directory`・`task_query`）を受ける同期の
+    /// 呼び出しをブロッキングスレッドへ逃がす。`spawn_blocking` を呼ぶのはここだけ。
+    pub(crate) async fn blocking_on<P, T, F>(&self, handle: &Arc<P>, f: F) -> T
+    where
+        P: ?Sized + Send + Sync + 'static,
+        T: Send + 'static,
+        F: FnOnce(&P) -> T + Send + 'static,
+    {
+        let handle = Arc::clone(handle);
+        match tokio::task::spawn_blocking(move || f(&handle)).await {
             Ok(v) => v,
             Err(e) => {
                 tracing::error!(error = %e, "celeris-mcp: blocking task panicked");

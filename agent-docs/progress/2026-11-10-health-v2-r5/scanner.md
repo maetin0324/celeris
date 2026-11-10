@@ -70,7 +70,10 @@ duplicate_setup の member は計 240 helper（最大の組は 14 file の `g`�
   - 埋めていない雛形の `--check-fragment` → exit 1（714 件の不備）。仮に埋めた 5 fragment と old-impl の `--check-fragment` → 全部 exit 0。
   - `--build --dir $TMPDIR/demo > contracts.json` → exit 0。`--check contracts.json --dir $TMPDIR/demo` → exit 0（`check: tests=1864 excluded=5 git_grep=1869 ok`）。
   - 負の例: equivalent_scenario を採らない → `--check` exit 1（`candidates.equivalent_scenario が 0 件`）。invariant の試験を old_impl の members に入れる・試験 file を mutation_target にする・履歴に無い commit 件名 → `--check-fragment` exit 1（3 件）。知らない capability → exit 1。contracts.json の masked_sha256 を書き換える → `--check` exit 1。
-- `bash scripts/dev/test-affected.sh --list` → 対象の crate なし（変更は agent-docs/ だけ）。
+- `bash scripts/dev/test-affected.sh` → exit 0（`試験対象の変更なし（docs のみ等）`、repo-health verdict=pass、new=0、worsened=0）。
+- `cargo clippy --workspace -- -D warnings` → 警告なしで Finished（1 分 8 秒）。`cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-adr-numbers.sh`・`sh scripts/dev/progress-index.sh --check` → いずれも exit 0。
+- `git diff --name-only $(git merge-base HEAD main) | python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R5 agent-docs/progress/2026-11-07-health-v2-b0/slices.json` → `write-set R5: ok`。
 - 範囲: `git diff --name-only $CELERIS_WU_BASE` は `agent-docs/progress/2026-11-10-health-v2-r5/` の 3 file だけ。crates/・scripts/・.config/ に差分なし。
 
 ## commit

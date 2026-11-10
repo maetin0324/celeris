@@ -43,7 +43,7 @@ WorkUnit `successors`（P-9 (a)）。G3 の final review の差し戻し (1) と
 - `cargo nextest run -p task-core --no-tests=fail -E 'test(/dependency_reopen_|retry/)'`: exit 0、26 passed（dependency_reopen_ の 9 件を含む）。
 - 健全性の値（base → head。`size.responsibility-growth` と同じ数え方）: store の module の行 19736 → 19720、`SqliteStore` の method 730 → 730。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
-- `bash scripts/dev/test-affected.sh`: 結果は下の追記。
+- `bash scripts/dev/test-affected.sh`: exit 0。先頭の check-health は verdict=pass、`size.responsibility-growth` は pass（worsened 0）、fail 級 0。new の 2 件（`dup.contract` の `UnavailableReason`、`dup.public-surface` の `fn judge`）は warning の候補で、この unit が変えていない file にある。nextest は 8171 passed・23 skipped、web は tsc -b 合格、vitest 104 file・711 件合格。
 
 ## 未解決
 - `cargo clippy -p task-core --all-targets -- -D warnings` は、base から変わっていない `crates/task-core/src/chat/store_tests.rs` の 1903 行・1975 行の `useless_conversion` で落ちる。repo の gate（`--all-targets` なし）は合格する。この unit の範囲の外なので直していない。

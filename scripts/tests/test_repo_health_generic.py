@@ -55,41 +55,80 @@ class GenericHealthTests(unittest.TestCase):
             self.assertEqual(report['summary']['verdict'], 'pass')
             self.assertEqual(report['summary']['counts']['fail_grade'], 0)
 
-    def detected(self, variant, rid):
+    def evidence_in_head(self, repo, finding):
+        changed = git(repo, 'diff', '--name-only', 'main', 'candidate').splitlines()
+        self.assertTrue(finding['rationale'])
+        self.assertTrue(any(e['path'] in changed for e in finding['evidence']))
+        for e in finding['evidence']:
+            self.assertGreater(e['line'], 0)
+            self.assertLessEqual(e['line'], len((repo / e['path']).read_text().splitlines()))
+
+    def candidate_found(self, variant, rid):
+        """dup.* are review candidates: never fail-grade, never change the verdict."""
         for configured, repo, code, report in self.reports(variant):
             with self.subTest(profile=configured, repo=repo.name, variant=variant):
                 findings = [f for f in report['findings'] if f['rule_id'] == rid]
-                self.assertTrue(findings, report['summary'])
-                if rid in ('dup.contract', 'dup.state'):
-                    self.assertEqual(len(findings), 1)
-                    language = 'rust' if (repo / 'Cargo.toml').exists() else 'typescript'
-                    key = f'shape:{language}:id,owner,state' if rid == 'dup.contract' else 'table:sessions'
-                    expected = rid + ':' + hashlib.sha256((rid + '\n' + key).encode()).hexdigest()[:16]
-                    self.assertEqual(findings[0]['fingerprint'], expected)
-                    if rid == 'dup.contract':
-                        self.assertEqual({e['symbol'] for e in findings[0]['evidence']}, {'Session', 'SessionView'})
-                changed = git(repo, 'diff', '--name-only', 'main', 'candidate').splitlines()
-                for f in findings:
-                    self.assertEqual(f['delta'], 'new')
-                    self.assertTrue(f['rationale'])
-                    self.assertTrue(any(e['path'] in changed for e in f['evidence']))
-                    for e in f['evidence']:
-                        self.assertGreater(e['line'], 0)
-                        self.assertLessEqual(e['line'], len((repo / e['path']).read_text().splitlines()))
-                if configured or rid == 'deps.violation':
-                    self.assertEqual(code, 1, report['summary'])
-                    self.assertTrue(any(fail_grade(f) for f in findings), findings)
-                else:
-                    self.assertEqual(code, 0, report['summary'])
+                self.assertEqual(len(findings), 1, report['summary'])
+                language = 'rust' if (repo / 'Cargo.toml').exists() else 'typescript'
+                key = f'shape:{language}:id,owner,state' if rid == 'dup.contract' else 'table:sessions'
+                expected = rid + ':' + hashlib.sha256((rid + '\n' + key).encode()).hexdigest()[:16]
+                f = findings[0]
+                self.assertEqual(f['fingerprint'], expected)
+                self.assertIs(f['candidate'], True)
+                self.assertEqual(f['severity'], 'warning')
+                self.assertEqual(f['delta'], 'new')
+                self.assertIsNone(f['exception'])
+                self.assertFalse(fail_grade(f))
+                self.evidence_in_head(repo, f)
+                if rid == 'dup.contract':
+                    self.assertEqual({e['symbol'] for e in f['evidence']}, {'Session', 'SessionView'})
+                self.assertEqual(code, 0, report['summary'])
+                self.assertEqual(report['summary']['verdict'], 'pass')
+                self.assertEqual(report['summary']['counts']['fail_grade'], 0)
 
     def test_generic_dup_contract_renamed_detected(self):
-        self.detected('dup-contract', 'dup.contract')
+        self.candidate_found('dup-contract', 'dup.contract')
 
     def test_generic_dup_state_detected(self):
-        self.detected('dup-state', 'dup.state')
+        self.candidate_found('dup-state', 'dup.state')
 
     def test_generic_dep_inversion_detected(self):
-        self.detected('dep-inversion', 'deps.violation')
+        """With layers declared in the base profile the inversion is fail-grade."""
+        for configured, repo, code, report in self.reports('dep-inversion'):
+            if not configured:
+                continue
+            with self.subTest(repo=repo.name):
+                findings = [f for f in report['findings'] if f['rule_id'] == 'deps.violation']
+                self.assertTrue(findings, report['summary'])
+                for f in findings:
+                    self.assertEqual(f['delta'], 'new')
+                    self.assertTrue(fail_grade(f), f)
+                    self.evidence_in_head(repo, f)
+                self.assertEqual(code, 1, report['summary'])
+                self.assertEqual(report['summary']['verdict'], 'fail')
+
+    def test_generic_dep_inversion_without_layers_not_applicable(self):
+        """No layer declaration: deps.violation is not_applicable (no_layers_declared).
+
+        Other rules are reported as measured: a Rust path dependency from core to
+        app is a cycle (deps.cycle, fail-grade); the TypeScript import is not.
+        """
+        for configured, repo, code, report in self.reports('dep-inversion'):
+            if configured:
+                continue
+            with self.subTest(repo=repo.name):
+                rules = {r['id']: r for r in report['rules']}
+                self.assertEqual(rules['deps.violation']['status'], 'not_applicable')
+                self.assertTrue(rules['deps.violation']['reason'].startswith('no_layers_declared'))
+                self.assertFalse([f for f in report['findings'] if f['rule_id'] == 'deps.violation'])
+                if (repo / 'Cargo.toml').exists():
+                    cycles = [f for f in report['findings'] if f['rule_id'] == 'deps.cycle']
+                    self.assertEqual(len(cycles), 1)
+                    self.assertTrue(fail_grade(cycles[0]))
+                    self.assertEqual(code, 1, report['summary'])
+                else:
+                    self.assertEqual(code, 0, report['summary'])
+                    self.assertEqual(report['summary']['verdict'], 'pass')
 
     def test_generic_security_double_check_kept(self):
         for configured, repo, code, report in self.reports('security-double'):

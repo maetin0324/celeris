@@ -65,20 +65,20 @@ tasks: [01M6TYVJSXBZMSBC0YGAT2TTX0]
 | variant | head が足すもの | 期待（fail 級の finding と exit） | 目的 |
 |---|---|---|---|
 | good | 許された向きの機能追加（app が core の新しい関数を呼ぶ。新しい型は 1 つ、SQL の書き手は増えない） | fail 級なし、exit 0 | (a) |
-| dup-contract | `src/app/session_view.ts`（rust は `crates/app/src/session_view.rs`）に、core の `Session` と同じ field の集合を持つ別名の型（product の class） | `dup.contract:shape:<言語>:<field の並び>`、new、exit 1 | (b) |
-| dup-state | app の module が `INSERT INTO sessions` を書く（書き手 2 module） | `dup.state:table:sessions`、new、exit 1 | (b) |
-| dep-inversion | core の file が app の module を import する（層の逆向き） | `deps.violation:<core の path>-><app の path>`、new、exit 1 | (b) |
+| dup-contract | `src/app/session_view.ts`（rust は `crates/app/src/session_view.rs`）に、core の `Session` と同じ field の集合を持つ別名の型（product の class） | `dup.contract:shape:<言語>:<field の並び>` が candidate=true・severity warning・delta new・exception null で 1 件。evidence の path と line が head の変更 file を指す。exit 0・verdict pass。final review の材料（`ReviewRequest.health` の new findings）に入る | (b) |
+| dup-state | app の module が `UPDATE sessions` を書く（書き手 2 module） | `dup.state:table:sessions` が dup-contract と同じ性質（candidate=true・warning・new・exception null）で 1 件。exit 0・verdict pass。final review の材料に入る | (b) |
+| dep-inversion | core の file が app の module を import する（層の逆向き。rust は core の Cargo.toml が app に依存する） | fixture の base の profile が層を宣言するとき、`deps.violation` が fail 級（error・new・candidate=false）で exit 1・verdict fail。profile 無し（層の宣言なし）では `deps.violation` は `not_applicable`（reason `no_layers_declared`）で finding 0。ほかの rule は実測どおり: ts は exit 0・pass、rust は Cargo の循環で `deps.cycle` が fail 級 1 件・exit 1 | (b) |
 | security-double | `src/broker/verify.ts`（rust は `crates/broker/src/verify.rs`）に auth と同形の検証の型と関数。base の profile に path の例外（reason あり） | finding は出るが `exception` が non-null で fail 級でない。exit 0。evidence の path を消す提案を含まない（検査器は削除しない） | (c) |
 | vendor-generated | `vendor/lib/types.ts` に core と同名の型（`exclude_paths` で外れる）、`src/generated/api.ts` に `@generated` の marker と同形の型（class generated で `dup.contract` の `classes = ["product"]` に入らない） | fail 級なし、exit 0 | (c) |
 | docs-only | `README.md`・`docs/` だけの変更 | `inputs.doc_only = true`、構造 rule は `not_applicable`、exit 0 | (d) |
 | non-git | builder が `.git` の無い dir（kind の base の tree だけ）を作る | 検査器は `UsageError`（exit 2）。Celeris は `NotApplicable { not_a_git_repo }` で health の項目を足さない | (d) |
 | unsupported-tool | base の profile が `doc.links` の command に無い script を書く | rule は `unsupported`、exit 2。Celeris は Error（合格にしない） | (d) |
-| policy-exclude | dup-contract の変更に加えて、head が base の profile の `exclude_paths` に `^src/app/` を足す | `policy.changed`（fail、`policy.files` に profile）、exit 1。dup-contract の finding は base の profile で評価するので残る | (f) |
-| policy-rule-off | dup-contract の変更に加えて、head が `dup.contract` の `required = false` にする | 同上 | (f) |
-| policy-exception | dup-contract の変更に加えて、head が例外（fingerprint）を足す | 同上 | (f) |
-| policy-threshold | dup-contract の変更に加えて、head が `min_fields` を大きくする | 同上 | (f) |
-| baseline-rewrite | dup-contract の変更に加えて、head が `policy_paths` の `size-baseline.json` を書き換える | `policy.changed`、exit 1 | (f) |
-| history-smuggle | candidate の branch が 2 commit で、先の commit で dup-contract を入れ、後の commit で無関係の変更をする。base は `main` のまま | base との差分で `delta = new`、exit 1（候補の branch の途中の commit を base にしない） | (f) |
+| policy-exclude | dep-inversion の変更に加えて、head が base の profile の `exclude_paths` に `^src/app/` を足す | `policy.changed`（fail、`policy.files` に profile）、exit 1。dep-inversion の `deps.violation` は base の profile で評価するので残る | (f) |
+| policy-rule-off | dep-inversion の変更に加えて、head が `deps.violation` の `required = false` にする | 同上 | (f) |
+| policy-exception | dep-inversion の変更に加えて、head が `deps.violation` の例外（fingerprint）を足す | 同上 | (f) |
+| policy-threshold | dep-inversion の変更に加えて、head が `deps.violation` の層の許可（`allow`）を広げる | 同上 | (f) |
+| baseline-rewrite | dep-inversion の変更に加えて、head が `policy_paths` の `size-baseline.json` を書き換える | `policy.changed`、exit 1 | (f) |
+| history-smuggle | candidate の branch が 2 commit で、先の commit で dep-inversion を入れ、後の commit で無関係の変更をする。base は `main` のまま | base との差分で `deps.violation` が `delta = new`・fail 級、exit 1（候補の branch の途中の commit を base にしない） | (f) |
 
 - D2.1 ts の fixture は JavaScript の file（`.js`）も 1 つ含める（adapter は `.js` を typescript として読む）。
 - D2.2 fixture の規模は kind ごとに 10 file・300 行の程度にとどめ、検査器 1 回が 1 秒の桁で終わるようにする（(4) の追加遅延の測定を試験の中で行うため）。
@@ -92,20 +92,20 @@ tasks: [01M6TYVJSXBZMSBC0YGAT2TTX0]
 | 目的 | 試験 file | prefix | unit | 確かめること |
 |---|---|---|---|---|
 | (a) 良い変更は通る | `scripts/tests/test_repo_health_generic.py` | `test_generic_` | py-detect | ts・rust・multi の good が exit 0、fail 級 0、`summary.verdict = pass` |
-| (b) 複製・不要な状態・依存逆転を根拠付きで検出 | `scripts/tests/test_repo_health_generic.py` | `test_generic_` | py-detect | dup-contract・dup-state・dep-inversion が exit 1、期待のラベルが fail 級に 1 件ずつ、`evidence[].path` と `line` が head の変更の file を指す |
+| (b) 複製・不要な状態・依存逆転を根拠付きで検出 | `scripts/tests/test_repo_health_generic.py` | `test_generic_` | py-detect | dup-contract・dup-state は期待のラベルの finding が candidate=true・warning・new・exception null で 1 件ずつ、exit 0・verdict pass、`evidence[].path` と `line` が head の変更の file を指す。dep-inversion は層を宣言した base の profile で `deps.violation` が fail 級・exit 1。profile 無しは `not_applicable`（`no_layers_declared`）（試験 `test_generic_dep_inversion_without_layers_not_applicable`） |
 | (c) 正当な二重検証・vendor/generated を誤って削らない | `scripts/tests/test_repo_health_generic.py` | `test_generic_` | py-detect | security-double は `exception` 付きで fail 級 0、vendor-generated は finding 0、どちらも exit 0 |
 | (d) docs-only・non-Git・unsupported・tool 故障の判定 | `scripts/tests/test_repo_health_generic_bypass.py` | `test_generic_` | py-bypass | docs-only は `doc_only` と `not_applicable`、non-git と unsupported-tool は exit 2 と `summary.verdict`、tool 故障（`health/` の module を欠いた写し）は exit 2 で report を書かない |
 | (f) policy・baseline・例外の弱化によるすり抜けの拒否（検査器の側） | `scripts/tests/test_repo_health_generic_bypass.py` | `test_generic_` | py-bypass | policy-exclude・policy-rule-off・policy-exception・policy-threshold・baseline-rewrite が `policy.changed` で exit 1 になり、dup-contract の finding も base の profile で残る。`--print-review-policy` が head の profile を読まない |
 | 束縛（policy の hash） | `scripts/tests/test_repo_health_generic_bypass.py` | `test_generic_` | py-bypass | `policy.files` の digest が base の profile から出ること（head の profile を変えても変わらない） |
-| (g) atomic/WU/review reuse の抜け道なし、複数 repo、flag の非依存 | `crates/task-dispatch/src/dispatcher/tests/health_generic.rs` | `health_generic_` | rs-paths | 本物の検査器（作業ツリーの `scripts/dev/repo-health/` を写した同梱の配置）と ts・rust の fixture で、WU の check・atomic の direct review・reviewer の合格の再利用の 3 経路が dup-contract を Fail にして repair に回し、good を Pass にする。multi は 2 repo のそれぞれに health の項目があり、片方の Fail で統合が止まる。K5 の flag を変えた同じ task で結果が同じ |
-| (e) candidate・base・policy の変更で古い合格を再利用しない | `crates/task-dispatch/src/dispatcher/tests/health_generic_stale.rs` | `health_generic_stale_` | rs-stale | good の Pass の後に head を変える（dup-contract を足す）・base を進める・base の profile を変える、のそれぞれで前の Pass を再利用せず検査器が再び走る（`RequiredChecksEvaluated` が増える） |
-| (f) baseline 改変で合格しない（dispatcher の側） | `crates/task-dispatch/src/dispatcher/tests/health_generic_stale.rs` | `health_generic_stale_` | rs-stale | baseline-rewrite と policy-exclude は PolicyOnly で統合を止め（G2 の D6）、history-smuggle は Fail。候補が `scripts/dev/repo-health/` を書き換えても検査器は同梱のものが走る（J3） |
-| (h) 反復上限・同じ指摘の往復・変更なし repo の棚卸しの抑制 | `crates/task-dispatch/src/dispatcher/tests/health_generic_limits.rs` | `health_generic_limits_` | rs-limits | dup-contract の repair が `max_repairs_per_class`（class `health:dup.contract`）で止まり Blocked と受信箱、同じ fingerprint の往復が root の受信箱に 1 件、`health_inventory` が同じ head_tree・policy・検査器の repo を 2 回目に省く |
+| (g) atomic/WU/review reuse の抜け道なし、複数 repo、flag の非依存 | `crates/task-dispatch/src/dispatcher/tests/health_generic.rs` | `health_generic_` | rs-paths | 本物の検査器（作業ツリーの `scripts/dev/repo-health/` を写した同梱の配置）と ts・rust の fixture で、WU の check・atomic の direct review・reviewer の合格の再利用の 3 経路が dep-inversion（class `health:deps.violation`）を Fail にして repair に回し、good を Pass にする。dup の候補（dup-contract・dup-state）は Fail にならず、final review の材料（`ReviewRequest.health` の new findings）に入る（試験名 prefix `review_input_`）。試験名の prefix は WU の check が `wu_check_`、atomic の direct review が `direct_review_`、reviewer の合格の再利用が `reviewer_reuse_`、複数 repo が `multi_repo_`。multi は 2 repo のそれぞれに health の項目があり、片方の Fail で統合が止まる。K5 の flag を変えた同じ task で結果が同じ |
+| (e) candidate・base・policy の変更で古い合格を再利用しない | `crates/task-dispatch/src/dispatcher/tests/health_generic_stale.rs` | `health_generic_stale_` | rs-stale | good の Pass の後に head を変える（dep-inversion を足す）・base を進める・base の profile を変える、のそれぞれで前の Pass を再利用せず検査器が再び走る（`RequiredChecksEvaluated` が増える） |
+| (f) baseline 改変で合格しない（dispatcher の側） | `crates/task-dispatch/src/dispatcher/tests/health_generic_stale.rs` | `health_generic_stale_` | rs-stale | `health_generic_stale.rs` の試験名の prefix は `stale_`・`baseline_weakening_not_pass`・`reviewer_reuse_`。baseline-rewrite と policy-exclude は PolicyOnly で統合を止め（G2 の D6）、history-smuggle は Fail。候補が `scripts/dev/repo-health/` を書き換えても検査器は同梱のものが走る（J3） |
+| (h) 反復上限・同じ指摘の往復・変更なし repo の棚卸しの抑制 | `crates/task-dispatch/src/dispatcher/tests/health_generic_limits.rs` | `health_generic_limits_` | rs-limits | dep-inversion の repair が `max_repairs_per_class`（class `health:deps.violation`）で止まり Blocked と受信箱、同じ fingerprint の往復が root の受信箱に 1 件、`health_inventory` が同じ head_tree・policy・検査器の repo を 2 回目に省く |
 | (h) 期限付き例外 | 子 task exc-expiry の policy の branch | （exc-expiry が決める） | exc-expiry | 決定 exception-expiry。G4 の branch では試験しない |
 
 - D3.1 Rust の試験 file は `dispatcher/tests/mod.rs` に `mod health_generic;` ほか 3 行を足す。試験の土台は `health_enforce.rs` の `non_celeris_dispatcher` を `pub(super)` のまま使う。本物の検査器の同梱の配置は `health_generic.rs` に 1 つの helper `configure_real_bundled_checker()` を置き、`CARGO_MANIFEST_DIR` から `scripts/dev/repo-health/` と `scripts/dev/source-size-report.py`（`CHECKER_SIDE_FILES`）を一時 dir に写して `CHECKER_TREE_FILE` を書く。stale・limits の file はこの helper を `pub(super)` で使う（3 か所に写さない）。
 - D3.2 Rust の試験が builder を呼ぶときは `python3 -I <CARGO_MANIFEST_DIR>/../../scripts/tests/repo_health_fixtures.py build <kind> <variant> <dest>` で、出力の JSON の `base`・`head` を task の branch と target に使う。python3 が無い環境では試験は失敗する（skip にしない。検査器も python3 を要する）。
-- D3.3 (g) の flag の非依存は 1 つの試験 `health_generic_flags_do_not_change_outcome` で、同じ fixture に対して (i) 案件名を `celeris` に、(ii) repo id を `celeris` に、(iii) task の mode を prototype に、(iv) `DispatchConfig` の selfdeploy に関わる欄を有効に、したそれぞれの task の health の判定と fail 級の finding の集合が、既定の task と等しいことを確かめる。欄の実名は rs-paths が進捗に書く。
+- D3.3 (g) の flag の非依存は 1 つの試験 `health_generic_flags_do_not_change_outcome` で、同じ fixture に対して (i) 案件名を `celeris` に、(ii) repo id を `celeris` に、(iii) task の mode を prototype に、(iv) `DispatchConfig` の selfdeploy に関わる欄を有効に、(v) 案件の `self_improve` を立てる、したそれぞれの task の health の判定と fail 級の finding の集合が、既定の task と等しいことを確かめる。欄の実名は rs-paths が進捗に書く。
 - D3.4 py-detect と py-bypass は `scripts/tests` の既存の discover（`-p 'test_repo_health*.py'`）に乗る。`test-affected.sh` は `scripts/tests` を対象にしないので、Phase 完了の検査では discover を別に走らせて進捗に書く（record）。
 - D3.5 期限付き例外は今の `Exception_` に期限の欄が無い（`reason`・`fingerprint`・`path` だけ。未知の欄は profile の読み込みエラー）。検査器と profile を変える変更なので、G2 の D6 のとおり policy だけの branch に置く。決定 exception-expiry の問いは「例外に期限（`expires`、UTC の日付）を必須にするか任意にするか」で、子 task exc-expiry が人の答えのもとで実装する。G4 の試験は期限の無い例外だけを使う。
 - 採らなかった: (e)(f) を Python だけで確かめる案。古い合格の再利用は dispatcher の束縛（`reusable_health`）の性質で、検査器だけでは確かめられない。
@@ -113,7 +113,7 @@ tasks: [01M6TYVJSXBZMSBC0YGAT2TTX0]
 
 ### (4) 精度・誤検出・追加遅延・費用の測り方
 - 決定: unit measure が kind × variant の行列を builder で作り、検査器を 1 回ずつ走らせて、次の 4 つを数える。報告は人向けの Markdown を成果物 dir に、機械向けの JSON を同じ dir に置く。repo には進捗 file の表だけを書く。
-- D4.1 精度（検出）: 期待のラベルがある variant（dup-contract・dup-state・dep-inversion・policy の 5 種・history-smuggle）で、期待のラベルが fail 級の finding に出た数 / 期待の数。kind ごとと合計。
+- D4.1 精度（検出）: 期待のラベルがある variant（dup-contract・dup-state は候補の finding、dep-inversion・policy の 5 種・history-smuggle は fail 級の finding）で、期待のラベルが該当の性質で出た数 / 期待の数。kind ごとと合計。
 - D4.2 誤検出: 期待のラベルが無い variant（good・security-double・vendor-generated・docs-only）で出た fail 級の finding の数（0 が目標）と、期待のラベルがある variant で期待の外に出た fail 級の finding の数。1 件ずつ rule_id と evidence の path を表に書く。
 - D4.3 追加遅延: 検査器 1 回の実時間（`time.monotonic()` で `repo_health.py` の起動から終了まで）を variant ごとに 3 回測った中央値。multi は 2 repo の和。基準は same host の `python3 -c pass` の起動時間。Celeris の review 1 回に対する追加分は「検査器 1 回の時間 × 経路の回数（WU の check 1・review 1・delivery の照合は再利用で 0）」で見積もり、実測は dispatcher の試験の `RequiredChecksEvaluated` の時刻の差を 1 件書く。
 - D4.4 費用: 検査器は LLM を呼ばないので、health の決定的な検査の費用は 0 USD。reviewer の LLM の費用（health の材料を増やしたことによる増分）は有料の再測定をしないので「未測定」と書き、既存の記録（G2・G3 の進捗の review_cost）があれば出典付きで引く。推測の数値を書かない。
@@ -144,6 +144,11 @@ tasks: [01M6TYVJSXBZMSBC0YGAT2TTX0]
 
 ## 本番への移行
 - なし。G4 は検査器・policy・config・DB を変えない。exc-expiry の policy の branch は人の承認の後に operator が main に merge する（G2 の D6、G3 の ci-entry の前例）。
+
+## 付記（2026-11-10、unit py-detect）: 契約との食い違いの訂正
+- 理由: 初版の D2 の表・D3・D4 は、`dup.*` が fail 級（exit 1）になり、`deps.violation` が層の宣言なしでも動く前提で書いた。契約 [ADR 2026-11-07 repo health の契約](2026-11-07-repo-health-contract.md) は違う。`dup.*` は candidate=true・severity warning 以下で verdict に影響せず（検証器 S4 は候補の error を拒否する）、`deps.violation` は層の宣言が無ければ `not_applicable`（`no_layers_declared`）になる。v1 の run は 12 件の不一致で落ちた。検査器は契約どおりに動いているので、検査器は変えずこの ADR と試験を直した。
+- 訂正: (1) dup-contract・dup-state の期待は「candidate の finding が 1 件、exit 0・verdict pass、final review の材料に入る」。(2) fail 級を前提にした行（policy 弱化 5 種・history-smuggle の土台、(e)(g)(h) の Fail と repair、repair の class）は dep-inversion と class `health:deps.violation` に移した。(3) dep-inversion は fixture の base の profile が層を宣言したときだけ fail 級。profile 無しは `not_applicable` で、ほかの rule（Rust の `deps.cycle` など）は実測どおり。(4) Rust の試験の割り当て: `health_generic.rs` に `wu_check_`・`direct_review_`・`review_input_`・`multi_repo_`・`flags_do_not_change_outcome`、`health_generic_stale.rs` に `stale_`・`baseline_weakening_not_pass`・`reviewer_reuse_`。flag に案件の `self_improve` を足した。
+- 試験: `test_generic_dep_inversion_without_layers_not_applicable` を足した。
 
 ## 状態の記録
 - 2026-11-10: 提案（unit adr）。実装の後、record が「実装済み」にし、実装との食い違いを付記に書く。

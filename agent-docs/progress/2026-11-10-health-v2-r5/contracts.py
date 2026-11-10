@@ -13,8 +13,9 @@ python3 の標準 library だけを使う。build・試験はしない。crates/
 
 走査の対象は crates/task-api・crates/celeris・crates/celerisctl の .rs。HEAD（--rev で変更可）の
 crate ごとの tree id を記録し、git cat-file で blob を読む（作業ツリーは読まない）。
-試験の数え方は git grep -E '#\\[test\\]|#\\[tokio::test' の行と同じ。一致した行のうち試験でないもの
-（コメント・文字列・macro_rules の雛形・fn 以外の item・crate root から届かない file）は excluded に理由付きで出す。
+試験の数え方は git grep -E '^[[:space:]]*#\\[(tokio::)?test' の行と同じ（行頭の空白の後に attribute が始まる行
+だけを数える。行の途中の `#[test]` は数えない）。一致した行のうち試験でないもの（コメント・文字列・macro_rules の
+雛形・fn 以外の item・試験でない attribute・crate root から届かない file）は excluded に理由付きで出す。
 """
 from __future__ import annotations
 
@@ -40,7 +41,9 @@ CRATES = ("task-api", "celeris", "celerisctl")
 CAPMAP_PATH = "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json"
 ARCHMAP_PATH = "docs/architecture-map.md"
 ARCHMAP_CHECKER = "scripts/dev/check-architecture-map.py"
-GREP_RE = re.compile(r"#\[test\]|#\[tokio::test")
+# git grep -E '^[[:space:]]*#\[(tokio::)?test' と同じ行に一致する（行頭から match で当てる。group 1 は # の位置）。
+GREP_RE = re.compile(r"[ \t\r\f\v]*(#)\[(?:tokio::)?test")
+GIT_GREP_PATTERN = r"^[[:space:]]*#\[(tokio::)?test"
 FRAGMENTS = [
     ("api-a", r"^crates/task-api/tests/[a-c]"),
     ("api-b", r"^crates/task-api/tests/[d-r]"),
@@ -625,11 +628,11 @@ def scan_sources(sources: dict[str, dict[str, str]], capmap: dict | None, archma
             for ln, ls in enumerate(line_starts, 1):
                 le = fi.src.find("\n", ls)
                 le = len(fi.src) if le < 0 else le
-                m = GREP_RE.search(fi.src, ls, le)
+                m = GREP_RE.match(fi.src, ls, le)
                 if not m:
                     continue
                 grep_lines += 1
-                k = bisect.bisect_right(tok_starts, m.start()) - 1
+                k = bisect.bisect_right(tok_starts, m.start(1)) - 1
                 kind = fi.toks[k][0]
                 ent = {"crate": crate, "path": path, "line": ln, "text": fi.src[ls:le].strip()[:160]}
                 if kind == "comment":
@@ -642,8 +645,11 @@ def scan_sources(sources: dict[str, dict[str, str]], capmap: dict | None, archma
                     excluded.append({**ent, "reason": "macro_rules: macro の雛形の中（展開先は走査しない）"})
                     continue
                 fn = fn_by_attr.get(k)
-                if fn is None or not fn["is_test"]:
+                if fn is None:
                     excluded.append({**ent, "reason": "not_fn: 試験の attribute の後に fn が無い"})
+                    continue
+                if not fn["is_test"]:
+                    excluded.append({**ent, "reason": "not_test_attr: #[test で始まる別の attribute（#[test] でも #[tokio::test] でもない）"})
                     continue
                 if finfo is None:
                     excluded.append({**ent, "reason": "unreachable: crate の root から mod 宣言で届かない file（compile されない）"})
@@ -973,7 +979,7 @@ def scan_recorded(meta: dict) -> dict:
 def git_grep_count(meta: dict) -> int:
     total = 0
     for c in CRATES:
-        r = subprocess.run(["git", "grep", "-c", "-E", r"#\[test\]|#\[tokio::test", meta["trees"][c], "--"],
+        r = subprocess.run(["git", "grep", "-c", "-E", GIT_GREP_PATTERN, meta["trees"][c], "--"],
                            capture_output=True, text=True, cwd=repo_root())
         for line in r.stdout.splitlines():
             total += int(line.rsplit(":", 1)[1])
@@ -1383,10 +1389,16 @@ mod tests {
     }
     #[tokio::test(flavor = "multi_thread")]
     async fn raw_string_case() {
-        let s = r#"fn x() { "}" } #[test] fn fake() {}"#;
-        // #[test] はコメントの中
+        let s = r#"fn x() { "}" }
+#[test] fn fake() {}
+"#;
+        // #[test] はコメントの中（行の途中なので数えない）
         assert!(s.contains('}'));
     }
+    /*
+    #[test]
+    fn in_block_comment() {}
+    */
     #[test]
     fn lit_a() { let v = fixture(); assert_eq!(v.check("alpha", 1), true); }
     #[test]
@@ -1410,6 +1422,7 @@ impl Fake {
     fn fixture() -> Store { Store::open("mem") }
 }
 fn write() {}
+/// 例: `#[tokio::test(flavor = "multi_thread")]` の形の試験と同じ setup を使う。
 #[test]
 fn store_case() { let _ = fixture(); std::fs::write("p", "x").unwrap(); }
 ''',
@@ -1417,7 +1430,18 @@ fn store_case() { let _ = fixture(); std::fs::write("p", "x").unwrap(); }
         "crates/demo/tests/api.rs": r'''
 mod common;
 const SRC: &str = "#[test]\nfn t() {}\n";
-macro_rules! gen { ($n:ident) => { #[test] fn $n() {} }; }
+const MULTI: &str = "
+#[tokio::test]
+async fn in_string() {}
+";
+macro_rules! gen {
+    ($n:ident) => {
+        #[test]
+        fn $n() {}
+    };
+}
+#[test_case(1)]
+fn tc(x: u32) { assert!(x > 0); }
 #[test]
 fn api_case() { common::boot(); }
 ''',
@@ -1448,8 +1472,11 @@ def cmd_self_test(_args) -> int:
     expect(st.get("mod_path") == "lib::store::tests" and st.get("subject") == "crates/demo/src/store.rs",
            f"#[path] の試験 module: {st}")
     reasons = sorted(e["reason"].split(":")[0] for e in res["excluded"])
-    expect(reasons == ["comment", "macro_rules", "string", "string", "unreachable"], f"excluded: {reasons}")
+    expect(reasons == ["comment", "macro_rules", "not_test_attr", "string", "string", "unreachable"],
+           f"excluded: {reasons}")
     expect(len(res["tests"]) + len(res["excluded"]) == res["grep_lines"], "tests + excluded = grep の行数")
+    # 行頭（空白の後）の #[test / #[tokio::test だけを数える。行の途中（// の後・"…" の中）の 3 か所は数えない
+    expect(res["grep_lines"] == 12 and len(res["tests"]) == 6, f"grep の行数: {res['grep_lines']} tests {len(res['tests'])}")
     dup = [g for g in res["groups"] if g["kind"] == "duplicate_setup"]
     expect(len(dup) == 1 and dup[0]["members"] == ["crates/demo/src/lib.rs::tests::fixture",
                                                    "crates/demo/src/store_tests.rs::fixture"],

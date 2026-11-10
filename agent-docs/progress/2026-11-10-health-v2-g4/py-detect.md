@@ -58,3 +58,10 @@ updated: 2026-11-10
 - `sh scripts/dev/progress-index.sh --check` は exit 0（ok）。`sh "$CELERIS_WU_SCOPE_PATHS"` は builder・汎用試験・本進捗の3 path のみ。`git diff --exit-code "$CELERIS_WU_BASE" -- scripts/dev/repo-health scripts/dev/check-health.sh` は exit 0、検査器・policy に差分無し。
 - `bash scripts/dev/test-affected.sh --list` は exit 0、対象 crate 無し。`bash scripts/dev/test-affected.sh` は exit 1。health report は verdict=pass、fail_grade=0（既存 finding 717件、新規・悪化0件）、続く architecture-map の1 test は OK、health の84 tests は上記12件で失敗。crate 試験には進んでいない。全体試験は実行していない。
 - 再実行の commit: `phase 1: fix fixture document reference and record checker limitations`。提出時の HEAD の内容で上記検査を実行した。最後の同期は無い。
+
+## 再現確認（2026-11-10、run 01M73A3RN4T6K80K0BE67B4TPT）
+- 前回の check を同じ cwd で実行した。`python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health_generic*.py' -v` は exit 1、6 tests、12 subtest failures（9.935秒）。良い変更・security・vendor/generated は合格。複製契約・状態の configured 各4件、profile 無しの依存逆転4件が失敗した。
+- 原因を本体でも確認した。`dup_contract.py` と `dup_state.py` は candidate=True/default_severity=warning、`health/engine.py` は candidate の error を warning に制限する。`rules/deps.py` は層の宣言が無い場合 no_layers_declared とする。fixture の調整で解消する不備ではない。
+- 検査器・policy を変えない制約と期待を維持する指示に従い、コード・試験は変更しない。同じ失敗の再試行を続けず plan_issue とする。別の policy 専用 branch で blocking 条件と generic の層宣言要件を解決し、その成果を取り込んでから再開する必要がある。
+- 今回は Phase 未完了。全体試験・LLM・外部ネットワーク・実ユーザー repo の操作は実行していない。
+- もう一方の指定 check `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health*.py'` も exit 1、84 tests、同じ12 subtest failures（33.434秒）。`git diff --exit-code "$CELERIS_WU_BASE" -- scripts/dev/repo-health scripts/dev/check-health.sh` は exit 0（差分無し）。進捗書式検査・`git diff --check` は exit 0。今回の commit は `phase 1: record repeated generic checker capability blockers`。最後の同期は無い。

@@ -42,9 +42,19 @@ head の日付で判定すれば expired と in_term の結果が逆になる。
 - `sh scripts/dev/progress-index.sh --check` → exit 0。
 - `sh "$CELERIS_WU_SCOPE_PATHS"` → ADR、`scripts/dev/repo-health/` の下の 11 件、`scripts/tests/test_repo_health_exception_expiry.py`、この進捗だけ。
 
+## 承認の材料（WorkUnit record、2026-11-10）
+- 置き場所: `/local/celeris/data/workspaces/01M72DBBE7AFCNXYWSB5M0YZW9/wu/record/artifacts/exc-expiry-policy-diff.md`（WorkUnit record の成果物ディレクトリ。WU の sandbox は task 直下の artifacts/ に書けないため。repo の中には置いていない）。
+- 中身: (a) `git diff --stat $(git merge-base HEAD main) -- scripts/dev/repo-health/ scripts/tests/` の出力（12 file、+2078 −22）と `scripts/dev/repo-health/` の diff の本文（11 file、2026 行、sha256 `d8e07776f99c567796d44fa5bfd1405b14f532ffd2de4f60a31b93d85b7cf98e`。code と schema 381 行を先、例と不正な例 1645 行を後に置いた）。(b) 試験名と結果。(c) 見出し「期限切れ」「期限内」「延長」の 3 例の report の抜粋（finding の `exception`・`expired_exception`、`policy.changed`・`policy.exceptions_as_of`、`summary.verdict`・`exit_code`）。(d) 人の承認の後に operator が行う手順（差分の sha256 の照合、task の branch の main への no-ff merge、親 G4 の branch の ff-only、main の祖先と check-health.sh の確認）。末尾に抜粋を作った台本の全文。
+- 3 例は `make_expiry_repo(root, case)` で `$TMPDIR` に作った一時 repo に、本物の検査器を `--policy-version 1` で当てた結果: 期限切れ（expired）exit 1・`exception` null・`expired_exception.expires` 2026-03-01・`policy.exceptions_as_of` 2026-03-02・fail 級 1。期限内（in_term）exit 0・`exception.expires` 2026-03-01・`policy.exceptions_as_of` 2026-03-01・fail 級 0。延長（extended）exit 1・size の finding は base の期限で期限切れ・`policy.changed` true で rule `policy.changed` も fail・fail 級 2。どれも上の「make_expiry_repo の 3 例」の表と一致した。
+- 試験（WorkUnit record の worktree で実行。policy の file は WorkUnit expiry の HEAD と同じ）:
+  - `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health*.py' -k exception_expir -v` → exit 0、5 件 ok（`test_exception_expired_finding_counts_as_fail`・`test_exception_expiry_extension_by_candidate_does_not_pass`・`test_exception_expiry_in_term_exempts_finding`・`test_exception_expiry_rejects_invalid_value`・`test_exception_expiry_report_validates`）。
+  - `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health*.py'` → exit 0、78 件 OK。
+- WorkUnit record は `scripts/`・`crates/` を変えていない（変えたのはこの進捗だけ）。
+
 ## 未解決
 - この branch は main に merge するまで、`ci.sh`・`check-health.sh`・`test-affected.sh` が `policy.changed` で exit 1 になる（ADR health-review-integration D6.6）。D6.2（policy の file だけの変更を exit 0 にする扱い）は働かない。試験（`scripts/tests/`）・ADR・進捗は policy の file でない。
-- 人の承認と operator の no-ff merge は後続の WorkUnit（record が承認の材料 exc-expiry-policy-diff.md を作り、land が merge の後に main の祖先と check-health.sh を確かめる）。
+- 人の承認と operator の no-ff merge はまだ。承認の材料 exc-expiry-policy-diff.md は WorkUnit record が作った。operator は材料の (d) の手順で merge し、WorkUnit land が merge の後に main の祖先と check-health.sh を確かめる。
+- 親 G4 の branch を ff-only で進められるのは、親の branch が main から分かれていないときだけ。材料の作成時は main・親の branch・task の branch の先端が同じ commit だったが、親 G4 の WorkUnit adr の branch は別の commit を指していた。親の段の統合が先に入れば ff できなくなり、人の決定が要る。
 - 今の Celeris profile（`profiles/celeris.toml`）の例外 2 件には期限を付けていない。付けるかどうかは決めていない。
 
 ## 提案

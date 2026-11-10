@@ -1,0 +1,2139 @@
+{
+ "schema": "celeris.health-v2-r5.contracts-mapping/1",
+ "fragment": "api-b",
+ "scope": "^crates/task-api/tests/[d-r]",
+ "scan": {
+  "commit": "e9ef080c62043b38abecb99068d6cad4bb47dfd1",
+  "crates_tree": "a94cbae58bd70c2172084c0fde7bd40fe7726478",
+  "trees": {
+   "task-api": "6a18a4c653a70e85fb401a57f69138834084cd73",
+   "celeris": "1854b5ea716699d333a6192178b8994571187901",
+   "celerisctl": "eff59f0f09c329a66f000c8455c0b2eb7ce9d64f"
+  },
+  "adr_tree": "c4655b86806c0143de23f035c7cc26d682775b07",
+  "capability_map_blob": "ac77c1e4f12b5053c3619618bb3fa8cbd8365e80",
+  "architecture_map_blob": "f2430cd3b005b09f90683f3081ca277e4f621624",
+  "architecture_map_checker_blob": "999f10bc0c656a1a5a1eb211211fa702ad761ad2"
+ },
+ "extra_capabilities": [
+  {
+   "id": "daemon-snapshot-config-api",
+   "name": "daemon の snapshot・watch stream・GET /config・/clusters・/schema の読み取り API",
+   "owner_paths": [
+    "crates/task-api/src/handlers/system.rs",
+    "crates/task-api/src/handlers/clusters.rs",
+    "crates/task-api/src/schema.rs",
+    "crates/task-api/src/sse.rs"
+   ],
+   "reason": "B0 は daemon の状態と設定を API で読む面を capability に分けていない"
+  },
+  {
+   "id": "project-docs",
+   "name": "案件の文書 repo の page の読み書き・成果物の昇格・文書整理（ADR-0044）",
+   "owner_paths": [
+    "crates/task-api/src/docs.rs",
+    "crates/task-ops/src/docs.rs"
+   ],
+   "reason": "B0 は案件の文書 API を capability にしていない"
+  },
+  {
+   "id": "task-files-artifacts",
+   "name": "run の log と成果物の file API（path 検査・Content-Type 表・Range・sha256）",
+   "owner_paths": [
+    "crates/task-api/src/files.rs"
+   ],
+   "reason": "B0 は run と成果物の file 配信を capability にしていない"
+  },
+  {
+   "id": "task-genres-roles",
+   "name": "task の genre・role の検証と既定の適用（[[genres]]・[[roles]]）",
+   "owner_paths": [
+    "crates/celeris/src/config/harness.rs",
+    "crates/task-api/src/handlers/tasks.rs",
+    "crates/task-core/src/model.rs"
+   ],
+   "reason": "B0 は genre・role の既定の適用を capability にしていない"
+  },
+  {
+   "id": "knowledge-base",
+   "name": "知識ベースの page・tree・候補（_inbox）の API と人の受け入れ（ADR-0068）",
+   "owner_paths": [
+    "crates/task-api/src/knowledge.rs",
+    "crates/task-ops/src/knowledge.rs",
+    "crates/task-core/src/knowledge.rs"
+   ],
+   "reason": "B0 は知識ベースの操作を capability にしていない"
+  },
+  {
+   "id": "task-read-views",
+   "name": "task の一覧・詳細・events・graph の読み取り view（task-ops::view、ADR-0004）",
+   "owner_paths": [
+    "crates/task-ops/src/view.rs",
+    "crates/task-api/src/query.rs"
+   ],
+   "reason": "B0 は task の読み取り view を capability にしていない"
+  },
+  {
+   "id": "local-machine-settings",
+   "name": "ローカルマシン設定（CLI > store > 設定 file の優先順位・PUT の監査と反映）",
+   "owner_paths": [
+    "crates/task-core/src/local_machine.rs",
+    "crates/task-core/src/store/local_machine.rs",
+    "crates/task-api/src/handlers/clusters.rs"
+   ],
+   "reason": "B0 はローカルマシン設定（ADR 2026-10-14）を capability にしていない"
+  },
+  {
+   "id": "worker-memory-read",
+   "name": "組織 node の記憶 file の読み取り API（ADR-0033 D6）",
+   "owner_paths": [
+    "crates/task-api/src/memory.rs",
+    "crates/task-ops/src/memory.rs"
+   ],
+   "reason": "B0 は記憶の読み取りを capability にしていない"
+  },
+  {
+   "id": "model-catalog",
+   "name": "model catalog の発見・人の上書き・routing への反映（ADR 2026-10-06）",
+   "owner_paths": [
+    "crates/task-core/src/model_catalog.rs",
+    "crates/task-core/src/store/model_catalog.rs",
+    "crates/task-api/src/model_catalog.rs"
+   ],
+   "reason": "B0 は model catalog を lane・route の選択と別の capability にしていない"
+  },
+  {
+   "id": "org-projects-reports",
+   "name": "組織・案件・途中目標・報告の API（DB が正本、ADR-0033）",
+   "owner_paths": [
+    "crates/task-core/src/org.rs",
+    "crates/task-core/src/store/org.rs",
+    "crates/task-core/src/store/projects.rs",
+    "crates/task-core/src/report.rs",
+    "crates/task-api/src/handlers/org.rs",
+    "crates/task-api/src/handlers/projects.rs",
+    "crates/task-api/src/reports.rs"
+   ],
+   "reason": "B0 は組織・案件・報告の API を capability にしていない"
+  },
+  {
+   "id": "project-repos-workspace",
+   "name": "案件の repo と task の作業場所（案件 × repo の worktree、ADR-0043）",
+   "owner_paths": [
+    "crates/task-core/src/repos.rs",
+    "crates/task-core/src/store/repos.rs",
+    "crates/task-api/src/repos.rs"
+   ],
+   "reason": "B0 は案件の repo と作業場所を capability にしていない"
+  }
+ ],
+ "files": {
+  "crates/task-api/tests/daemon_clusters_config.rs": {
+   "capability": "daemon-snapshot-config-api",
+   "contract": "daemon の snapshot・設定・schema の読み取り API は daemon が送った値をそのまま返し、secret を出さない",
+   "b0_hint": [],
+   "tests": [
+    "clusters_combine_config_and_snapshot",
+    "clusters_endpoint_rejects_query_parameters",
+    "config_identity_is_authenticated_only_and_has_no_secret",
+    "config_is_returned_as_given_and_secrets_never_appear",
+    "daemon_view_is_null_until_a_snapshot_is_sent",
+    "schema_endpoint_returns_the_committed_file",
+    "stream_sends_daemon_events_when_the_snapshot_changes"
+   ],
+   "fns": {
+    "clusters_combine_config_and_snapshot": {
+     "contract": "GET /clusters は設定のクラスタ一覧に snapshot の観測値を重ねて 1 行ずつ返す"
+    },
+    "clusters_endpoint_rejects_query_parameters": {
+     "contract": "GET /clusters は知らない query を受けたら 400 で断る"
+    },
+    "config_identity_is_authenticated_only_and_has_no_secret": {
+     "contract": "daemon の identity は認証付きの GET /config だけに載り、無認証の /health には出ず secret を含まない"
+    },
+    "config_is_returned_as_given_and_secrets_never_appear": {
+     "contract": "GET /config は daemon が渡した設定の要約をそのまま返し、secret の値はどの欄にも出ない"
+    },
+    "daemon_view_is_null_until_a_snapshot_is_sent": {
+     "contract": "daemon が snapshot を送るまで GET /daemon の view は null を返す"
+    },
+    "schema_endpoint_returns_the_committed_file": {
+     "contract": "GET /schema は repo に commit した schema file の中身を返す"
+    },
+    "stream_sends_daemon_events_when_the_snapshot_changes": {
+     "contract": "daemon の watch stream は snapshot が変わったときに daemon event を SSE で送る"
+    }
+   }
+  },
+  "crates/task-api/tests/decisions.rs": {
+   "capability": "decisions-plan-gate",
+   "contract": "人への決定は API で一覧・回答・取り下げ・改訂でき、回答は event に記録されて task を再開する",
+   "b0_hint": [
+    "decisions-plan-gate"
+   ],
+   "tests": [
+    "a_choice_decision_can_be_answered_with_only_a_note",
+    "a_limit_decision_without_an_option_is_422",
+    "answer_requires_a_token_when_one_is_configured_and_even_without_one",
+    "answer_with_invalid_json_body_is_400",
+    "answering_an_open_decision_resumes_and_records_the_event",
+    "answering_with_an_unknown_option_is_422_and_an_unknown_id_is_404",
+    "inbox_lists_the_open_decision_and_the_count_drops_after_answering",
+    "list_decisions_filters_by_open_and_root_id",
+    "list_decisions_on_an_empty_db_is_empty_not_404",
+    "revise_requires_an_answered_choice_decision",
+    "task_decisions_returns_the_subtree_and_404_for_unknown_task",
+    "the_daemon_snapshot_carries_the_open_decision_count",
+    "withdraw_closes_the_decision_and_a_further_answer_is_409"
+   ],
+   "fns": {
+    "a_choice_decision_can_be_answered_with_only_a_note": {
+     "contract": "選択式の決定は選択肢なしの note だけでも回答できる"
+    },
+    "a_limit_decision_without_an_option_is_422": {
+     "contract": "上限の決定に選択肢なしで回答すると 422 で何も変えない"
+    },
+    "answer_requires_a_token_when_one_is_configured_and_even_without_one": {
+     "contract": "決定への回答は token の設定の有無にかかわらず bearer が無ければ 401"
+    },
+    "answer_with_invalid_json_body_is_400": {
+     "contract": "決定への回答の本文が JSON として不正なら 400"
+    },
+    "answering_an_open_decision_resumes_and_records_the_event": {
+     "contract": "未回答の決定に答えると回答の event が記録され、待っていた task が再開する"
+    },
+    "answering_with_an_unknown_option_is_422_and_an_unknown_id_is_404": {
+     "contract": "知らない選択肢での回答は 422、知らない決定 id は 404"
+    },
+    "inbox_lists_the_open_decision_and_the_count_drops_after_answering": {
+     "contract": "未回答の決定は受信箱に出て、回答すると件数が減る"
+    },
+    "list_decisions_filters_by_open_and_root_id": {
+     "contract": "GET /decisions は open と root_id で絞り込める"
+    },
+    "list_decisions_on_an_empty_db_is_empty_not_404": {
+     "contract": "決定が 1 件も無い DB では GET /decisions は 404 でなく空の一覧を返す"
+    },
+    "revise_requires_an_answered_choice_decision": {
+     "contract": "決定の改訂は回答済みの選択式の決定にだけ許される"
+    },
+    "task_decisions_returns_the_subtree_and_404_for_unknown_task": {
+     "contract": "GET /tasks/{id}/decisions は子孫を含む subtree の決定を返し、知らない task は 404"
+    },
+    "the_daemon_snapshot_carries_the_open_decision_count": {
+     "contract": "daemon の snapshot は未回答の決定の件数を運ぶ"
+    },
+    "withdraw_closes_the_decision_and_a_further_answer_is_409": {
+     "contract": "決定を取り下げると閉じ、その後の回答は 409"
+    }
+   }
+  },
+  "crates/task-api/tests/docs.rs": {
+   "capability": "project-docs",
+   "contract": "案件の文書 API は primary repo の docs を git で読み書きし、etag と既定 branch の汚れで衝突を断る",
+   "b0_hint": [],
+   "tests": [
+    "a_dir_primary_is_replaced_by_a_documents_repository",
+    "a_project_without_a_repository_gets_a_documents_repository_on_init",
+    "an_artifact_can_be_promoted_to_a_page",
+    "an_unknown_project_is_404",
+    "editing_a_page_commits_on_the_default_branch_and_checks_the_etag",
+    "editing_while_the_default_branch_is_dirty_is_409",
+    "maintenance_approved_plan_attaches_to_review_task_and_stale_plan_is_refused",
+    "maintenance_audit_is_read_only_and_apply_requires_exact_approval",
+    "pages_are_searched_rendered_and_linked",
+    "promoting_needs_a_project",
+    "the_docs_root_comes_from_the_primary_repository"
+   ],
+   "fns": {
+    "a_dir_primary_is_replaced_by_a_documents_repository": {
+     "contract": "primary が git でない dir の案件は docs/init で文書 repo を作って primary を移す"
+    },
+    "a_project_without_a_repository_gets_a_documents_repository_on_init": {
+     "contract": "repo の無い案件の文書 API は 409、docs/init で文書 repo を作って primary にする"
+    },
+    "an_artifact_can_be_promoted_to_a_page": {
+     "contract": "成果物を page に昇格すると front matter に tasks が入り、timeline に逆リンクが出る"
+    },
+    "an_unknown_project_is_404": {
+     "contract": "知らない案件への文書 API は 404"
+    },
+    "editing_a_page_commits_on_the_default_branch_and_checks_the_etag": {
+     "contract": "page の作成・編集・削除は既定 branch に commit し、古い etag や etag 無しの編集は 409"
+    },
+    "editing_while_the_default_branch_is_dirty_is_409": {
+     "contract": "人が既定 branch を編集中（作業ツリーが汚れている）なら page の編集は 409 で何も触らない"
+    },
+    "maintenance_approved_plan_attaches_to_review_task_and_stale_plan_is_refused": {
+     "contract": "文書整理の承認済み計画は review task に付き、古くなった計画の適用は断られる"
+    },
+    "maintenance_audit_is_read_only_and_apply_requires_exact_approval": {
+     "contract": "文書整理の監査は読むだけで、適用は承認した計画と完全に一致するときだけ通る"
+    },
+    "pages_are_searched_rendered_and_linked": {
+     "contract": "?q= は大文字小文字を区別せずに page を探し、page は front matter・履歴・リンクを持って描画される"
+    },
+    "promoting_needs_a_project": {
+     "contract": "案件に属さない task の成果物の昇格は 409、知らない task は 404"
+    },
+    "the_docs_root_comes_from_the_primary_repository": {
+     "contract": "文書の root は primary repo の [outputs].docs で、既定は docs"
+    }
+   }
+  },
+  "crates/task-api/tests/execution.rs": {
+   "capability": "execution-plan-adoption",
+   "contract": "実行計画の API は計画を検証して採用し WorkUnit を作り、再計画・metrics・gate の状態を返す",
+   "b0_hint": [
+    "execution-plan-adoption"
+   ],
+   "tests": [
+    "a_cyclic_plan_is_rejected_with_422",
+    "a_plan_with_an_unknown_harness_field_is_rejected_and_duplicate_keys_are_rejected",
+    "a_second_plan_for_the_same_task_is_rejected_with_409",
+    "a_v3_plan_is_rejected_with_422_while_the_tree_is_disabled",
+    "adopting_a_plan_creates_ready_and_pending_work_units",
+    "decompose_refuses_running_terminal_and_out_of_scope_tasks",
+    "decompose_sets_an_explicit_compound_hint_and_clears_the_gate_decision",
+    "execution_metrics_groups_by_gate_mode_by_default",
+    "execution_metrics_rejects_a_malformed_since",
+    "execution_metrics_rejects_an_unknown_group_by",
+    "execution_metrics_since_filters_out_tasks_updated_before_it",
+    "getting_a_replanned_task_returns_the_active_version_with_both_versions_listed",
+    "getting_a_task_without_a_plan_is_not_found",
+    "phase_gate_replan_without_a_note_is_422_and_continue_resumes",
+    "phase_gate_requires_a_token_and_awaiting_human",
+    "phase_gate_withdraw_cancels_the_task",
+    "plan_gate_replan_requests_a_planner_and_withdraw_cancels",
+    "plan_gate_status_codes_and_inbox",
+    "posting_to_an_unknown_task_is_not_found",
+    "posting_without_a_token_is_unauthorized",
+    "put_with_an_active_plan_is_a_human_replan_that_may_override_a_done_spec",
+    "retry_with_execution_marks_the_copy_and_drops_the_copied_gate_decision",
+    "task_execution_for_an_unknown_task_is_not_found",
+    "task_execution_reports_gate_plan_and_phase",
+    "task_execution_with_no_activity_returns_zeroed_metrics_and_no_plan"
+   ],
+   "fns": {
+    "a_cyclic_plan_is_rejected_with_422": {
+     "contract": "依存が循環する計画は 422 で採用しない"
+    },
+    "a_plan_with_an_unknown_harness_field_is_rejected_and_duplicate_keys_are_rejected": {
+     "contract": "知らない harness 欄や重複した unit key を持つ計画は断る"
+    },
+    "a_second_plan_for_the_same_task_is_rejected_with_409": {
+     "contract": "計画のある task への 2 つ目の POST は 409"
+    },
+    "a_v3_plan_is_rejected_with_422_while_the_tree_is_disabled": {
+     "contract": "[execution.tree] が無効のときは人が書いた v3（子 task を持つ）計画を 422 で断る"
+    },
+    "adopting_a_plan_creates_ready_and_pending_work_units": {
+     "contract": "計画を採用すると依存の無い WorkUnit は ready、依存のあるものは pending で作られる"
+    },
+    "decompose_refuses_running_terminal_and_out_of_scope_tasks": {
+     "capability": "recursive-task-tree",
+     "contract": "実行中・終端・範囲外の task の decompose は断る"
+    },
+    "decompose_sets_an_explicit_compound_hint_and_clears_the_gate_decision": {
+     "capability": "recursive-task-tree",
+     "contract": "decompose は task に compound の明示 hint を付け、gate の判定を消す"
+    },
+    "execution_metrics_groups_by_gate_mode_by_default": {
+     "contract": "execution metrics は既定で gate_mode ごとに集計する"
+    },
+    "execution_metrics_rejects_a_malformed_since": {
+     "contract": "execution metrics の since が不正な時刻なら 400"
+    },
+    "execution_metrics_rejects_an_unknown_group_by": {
+     "contract": "execution metrics の知らない group_by は 400"
+    },
+    "execution_metrics_since_filters_out_tasks_updated_before_it": {
+     "contract": "execution metrics の since は updated_at がそれより前の task を除く"
+    },
+    "getting_a_replanned_task_returns_the_active_version_with_both_versions_listed": {
+     "contract": "再計画した task の GET は有効な版を返し、新旧の版を一覧に並べる"
+    },
+    "getting_a_task_without_a_plan_is_not_found": {
+     "contract": "計画の無い task の計画の GET は 404"
+    },
+    "phase_gate_replan_without_a_note_is_422_and_continue_resumes": {
+     "capability": "decisions-plan-gate",
+     "contract": "phase gate の replan は note が無ければ 422、continue は止まった段を再開する"
+    },
+    "phase_gate_requires_a_token_and_awaiting_human": {
+     "capability": "decisions-plan-gate",
+     "contract": "phase gate への回答は bearer と人の待ちの状態を要する"
+    },
+    "phase_gate_withdraw_cancels_the_task": {
+     "capability": "decisions-plan-gate",
+     "contract": "phase gate の withdraw は task を cancel する"
+    },
+    "plan_gate_replan_requests_a_planner_and_withdraw_cancels": {
+     "capability": "decisions-plan-gate",
+     "contract": "plan gate の replan は planner を頼み直し、withdraw は task を cancel する"
+    },
+    "plan_gate_status_codes_and_inbox": {
+     "capability": "decisions-plan-gate",
+     "contract": "plan gate は待ちの間だけ受信箱に出て、状態に合わない回答は 409・422 で断る"
+    },
+    "posting_to_an_unknown_task_is_not_found": {
+     "contract": "知らない task への計画の POST は 404"
+    },
+    "posting_without_a_token_is_unauthorized": {
+     "contract": "bearer の無い計画の POST は 401"
+    },
+    "put_with_an_active_plan_is_a_human_replan_that_may_override_a_done_spec": {
+     "contract": "有効な計画のある task への PUT は人の replan になり、done の WorkUnit の spec も上書きできる"
+    },
+    "retry_with_execution_marks_the_copy_and_drops_the_copied_gate_decision": {
+     "capability": "task-lifecycle",
+     "contract": "計画付き task の retry は複製に印を付け、写した gate の判定を落とす"
+    },
+    "task_execution_for_an_unknown_task_is_not_found": {
+     "contract": "知らない task の GET /tasks/{id}/execution は 404"
+    },
+    "task_execution_reports_gate_plan_and_phase": {
+     "contract": "GET /tasks/{id}/execution は gate の判定・計画の WorkUnit・版・段を返す"
+    },
+    "task_execution_with_no_activity_returns_zeroed_metrics_and_no_plan": {
+     "contract": "計画も gate の判定も無い task の execution は 200 で metrics を既定値にし plan を出さない"
+    }
+   }
+  },
+  "crates/task-api/tests/files.rs": {
+   "capability": "task-files-artifacts",
+   "contract": "run と成果物の file API は workspace の外への path を 403 で断り、閉じた Content-Type 表と Range で中身を返す",
+   "b0_hint": [],
+   "tests": [
+    "artifact_content_types_never_include_active_types",
+    "artifact_paths_escaping_the_workspace_are_forbidden_but_listed",
+    "local_retry_undeclared_artifacts_are_listed_and_downloadable_separately",
+    "missing_runs_files_workspaces_and_tasks_are_404",
+    "per_task_artifact_paths_under_dot_celeris_are_served",
+    "range_and_offset_requests_follow_the_spec",
+    "run_ids_that_are_not_ulids_are_forbidden",
+    "run_logs_are_served_with_closed_content_types",
+    "sha256_current_changes_when_the_artifact_is_modified",
+    "symlinked_run_directory_outside_the_workspace_is_forbidden",
+    "work_unit_check_log_reads_a_leaf_acceptance_check",
+    "work_unit_check_log_returns_the_tail_of_the_running_check"
+   ],
+   "fns": {
+    "artifact_content_types_never_include_active_types": {
+     "contract": "成果物の Content-Type に HTML・script など能動的な型を使わない"
+    },
+    "artifact_paths_escaping_the_workspace_are_forbidden_but_listed": {
+     "contract": "workspace の外を指す成果物の path は一覧には出るが中身の取得は 403"
+    },
+    "local_retry_undeclared_artifacts_are_listed_and_downloadable_separately": {
+     "contract": "retry の task 専用の未宣言の成果物は別の一覧に出て download できる"
+    },
+    "missing_runs_files_workspaces_and_tasks_are_404": {
+     "contract": "無い run・file・workspace・task は 404"
+    },
+    "per_task_artifact_paths_under_dot_celeris_are_served": {
+     "contract": "共有 workspace の task の成果物は workspace 相対の task 専用の dir から返す"
+    },
+    "range_and_offset_requests_follow_the_spec": {
+     "contract": "Range と offset の要求は api.md の規則どおりに部分を返す"
+    },
+    "run_ids_that_are_not_ulids_are_forbidden": {
+     "contract": "ULID でない run_id の file 要求は 403"
+    },
+    "run_logs_are_served_with_closed_content_types": {
+     "contract": "run の log は閉じた Content-Type 表の型で返す"
+    },
+    "sha256_current_changes_when_the_artifact_is_modified": {
+     "contract": "成果物を書き換えると X-Celeris-Sha256-Current が変わる"
+    },
+    "symlinked_run_directory_outside_the_workspace_is_forbidden": {
+     "contract": "workspace の外への symlink の run dir は 403"
+    },
+    "work_unit_check_log_reads_a_leaf_acceptance_check": {
+     "capability": "workunit-scheduling-stage-integration",
+     "contract": "葉の WU の受け入れ検査の log も check-log API で読め、path は event から引く"
+    },
+    "work_unit_check_log_returns_the_tail_of_the_running_check": {
+     "capability": "workunit-scheduling-stage-integration",
+     "contract": "統合 WU の実行中の検査の log の末尾を check-log API で読める"
+    }
+   }
+  },
+  "crates/task-api/tests/general_cos_consult.rs": {
+   "capability": "cos-chat-threads-runs",
+   "contract": "統括 CoS は相談に答え・run の中で読み・task を 1 件委ね、案件 CoS へは人の言葉と自分の提案を取り違えずに渡す",
+   "b0_hint": [],
+   "tests": [
+    "general_cos_consult_consult_answers_without_a_task",
+    "general_cos_consult_delegate_creates_one_task_traced_to_the_origin_thread",
+    "general_cos_consult_general_and_project_sessions_stay_separate",
+    "general_cos_consult_proposal_is_cos_words_and_never_an_instruction",
+    "general_cos_consult_read_completes_inside_the_run",
+    "general_cos_consult_relay_forward_with_cos_text_is_refused"
+   ],
+   "fns": {
+    "general_cos_consult_consult_answers_without_a_task": {
+     "contract": "統括 CoS への相談は task を作らずに答えで終わる"
+    },
+    "general_cos_consult_delegate_creates_one_task_traced_to_the_origin_thread": {
+     "contract": "統括 CoS の委任は元の thread をたどれる task をちょうど 1 件作る"
+    },
+    "general_cos_consult_general_and_project_sessions_stay_separate": {
+     "contract": "提案は案件 thread に run を積み、統括と案件の session は分かれたまま"
+    },
+    "general_cos_consult_proposal_is_cos_words_and_never_an_instruction": {
+     "contract": "統括 CoS の提案は案件 thread に role=system の CoS の言葉として届き、人の指示にはならない"
+    },
+    "general_cos_consult_read_completes_inside_the_run": {
+     "contract": "統括 CoS の読み取りの依頼は task を作らず run の中で完了する"
+    },
+    "general_cos_consult_relay_forward_with_cos_text_is_refused": {
+     "contract": "chat.relay_forward は人の発言だけを運び、CoS の文を含む本文は断られる"
+    }
+   }
+  },
+  "crates/task-api/tests/genres.rs": {
+   "capability": "task-genres-roles",
+   "contract": "task の genre は設定の [[genres]] で検証され、分野の roles・既定が作成時に効き、一覧で絞り込める",
+   "b0_hint": [],
+   "tests": [
+    "config_shows_genres",
+    "create_task_with_genre_and_matching_role_returns_201",
+    "create_task_with_role_not_in_genre_is_422",
+    "create_task_with_unknown_genre_is_422",
+    "create_task_with_valid_genre_returns_201_and_applies_genre_defaults",
+    "list_tasks_filters_by_genre"
+   ],
+   "fns": {
+    "config_shows_genres": {
+     "contract": "GET /config に genres[] が celeris 側の要約と同じ形で出る"
+    },
+    "create_task_with_genre_and_matching_role_returns_201": {
+     "contract": "genre とその分野の roles に含まれる role を持つ task の作成は 201"
+    },
+    "create_task_with_role_not_in_genre_is_422": {
+     "contract": "role が genre の roles に無い task の作成は 422"
+    },
+    "create_task_with_unknown_genre_is_422": {
+     "contract": "[[genres]] があるとき知らない genre の task の作成は 422"
+    },
+    "create_task_with_valid_genre_returns_201_and_applies_genre_defaults": {
+     "contract": "有効な genre の task は 201 で作られ、分野の default_role の既定が効く"
+    },
+    "list_tasks_filters_by_genre": {
+     "contract": "GET /tasks?genre= は genre の完全一致で絞り込む"
+    }
+   }
+  },
+  "crates/task-api/tests/inbox_notifications.rs": {
+   "capability": "notifications",
+   "contract": "受信箱は人の判断が要る項目だけを持ち、回答は domain の endpoint を通して記録され、知らせは通知に分かれる",
+   "b0_hint": [
+    "notifications"
+   ],
+   "tests": [
+    "a_decision_answer_uses_the_domain_endpoint_and_stale_id_is_gone",
+    "auto_close_drops_meaningless_items_and_keeps_failed_needing_a_decision",
+    "dependents_reopened_answer_cancels_restored_dependent",
+    "information_is_only_a_notice_and_read_reduces_count",
+    "integration_request_answer_appends_event_and_removes_only_its_inbox_item",
+    "judgment_is_only_in_inbox_and_answer_removes_it",
+    "legacy_report_read_also_marks_its_notice_read",
+    "phase_integration_request_answer_resumes_integration",
+    "phase_integration_request_of_a_finished_unit_is_answered_without_resuming",
+    "read_all_obeys_kind_and_project_filters"
+   ],
+   "fns": {
+    "a_decision_answer_uses_the_domain_endpoint_and_stale_id_is_gone": {
+     "contract": "受信箱の決定への回答は決定の endpoint を通り、古い項目 id は 410"
+    },
+    "auto_close_drops_meaningless_items_and_keeps_failed_needing_a_decision": {
+     "contract": "意味を失った受信箱の項目は inbox-rules で自動で閉じ、判断の要る failed は残す"
+    },
+    "dependents_reopened_answer_cancels_restored_dependent": {
+     "contract": "dependents_reopened への回答は選んだ戻した後続の task を cancel する"
+    },
+    "information_is_only_a_notice_and_read_reduces_count": {
+     "contract": "知らせは通知にだけ出て、既読にすると件数が減る"
+    },
+    "integration_request_answer_appends_event_and_removes_only_its_inbox_item": {
+     "contract": "統合依頼への回答は event を追記し、その依頼の受信箱の項目だけを消す"
+    },
+    "judgment_is_only_in_inbox_and_answer_removes_it": {
+     "contract": "判断の要る項目は受信箱にだけ出て、回答すると消える"
+    },
+    "legacy_report_read_also_marks_its_notice_read": {
+     "contract": "旧い報告の既読の操作は対応する通知も既読にする"
+    },
+    "phase_integration_request_answer_resumes_integration": {
+     "contract": "段の統合の依頼に答えると段の統合が再開する"
+    },
+    "phase_integration_request_of_a_finished_unit_is_answered_without_resuming": {
+     "contract": "統合 WU が既に再開・完了した段の依頼は再開せずに回答済みにする"
+    },
+    "read_all_obeys_kind_and_project_filters": {
+     "contract": "通知の一括既読は kind と project の絞り込みに従う"
+    }
+   }
+  },
+  "crates/task-api/tests/integration_api.rs": {
+   "capability": "delivery-merge-candidate",
+   "contract": "未統合の task の状態は API で一覧・絞り込みでき、処置は人の認証と空でない理由を要する",
+   "b0_hint": [
+    "delivery-merge-candidate"
+   ],
+   "tests": [
+    "integration_api_disposition_requires_human_auth_and_nonempty_reason",
+    "integration_api_inbox_unintegrated_items_are_per_repo_and_need_note",
+    "integration_api_lists_and_filters_states",
+    "integration_api_rejects_unknown_state_filter",
+    "integration_api_task_detail_and_list_include_unintegrated_state"
+   ],
+   "fns": {
+    "integration_api_disposition_requires_human_auth_and_nonempty_reason": {
+     "contract": "未統合の task の処置は人の認証と空でない理由が無ければ断る"
+    },
+    "integration_api_inbox_unintegrated_items_are_per_repo_and_need_note": {
+     "contract": "受信箱の未統合の項目は repo ごとに分かれ、回答に note を要する"
+    },
+    "integration_api_lists_and_filters_states": {
+     "contract": "統合の状態の一覧は state で絞り込める"
+    },
+    "integration_api_rejects_unknown_state_filter": {
+     "contract": "知らない state の絞り込みは 400"
+    },
+    "integration_api_task_detail_and_list_include_unintegrated_state": {
+     "contract": "task の詳細と一覧に未統合の状態が出る"
+    }
+   }
+  },
+  "crates/task-api/tests/integration_principals.rs": {
+   "capability": "http-api-auth-principals",
+   "contract": "統合の処置と受信箱からの転送は token の主体（web・operator）を event に残し、認可は変えない",
+   "b0_hint": [],
+   "tests": [
+    "all_dispositions_and_inbox_forwarding_preserve_token_principals",
+    "integration_request_answers_record_web_and_operator",
+    "integration_routes_apply_common_guard_without_changing_authorization"
+   ],
+   "fns": {
+    "all_dispositions_and_inbox_forwarding_preserve_token_principals": {
+     "contract": "すべての統合の処置と受信箱からの転送は token の主体をそのまま記録する"
+    },
+    "integration_request_answers_record_web_and_operator": {
+     "contract": "統合依頼への回答は web と operator の主体を区別して記録する"
+    },
+    "integration_routes_apply_common_guard_without_changing_authorization": {
+     "contract": "統合の route は共通の guard を通り、認可の結果は変わらない"
+    }
+   }
+  },
+  "crates/task-api/tests/integration_repair.rs": {
+   "capability": "pre-review-sync-auto-resolve-integration-repair",
+   "contract": "IntegrationRepair の状態は task 詳細と受信箱に review の失敗と分けて出る",
+   "b0_hint": [
+    "pre-review-sync-auto-resolve-integration-repair"
+   ],
+   "tests": [
+    "inbox_attention_failed_carries_integration_repair_separately_from_review_fail",
+    "task_detail_review_fail_has_no_integration_repair_history",
+    "task_detail_shows_integration_repair_scheduled_state"
+   ],
+   "fns": {
+    "inbox_attention_failed_carries_integration_repair_separately_from_review_fail": {
+     "contract": "受信箱の failed の項目は IntegrationRepair を review の失敗と別の欄で運ぶ"
+    },
+    "task_detail_review_fail_has_no_integration_repair_history": {
+     "contract": "review の失敗だけの task の詳細には IntegrationRepair の履歴が出ない"
+    },
+    "task_detail_shows_integration_repair_scheduled_state": {
+     "contract": "task 詳細は予定された IntegrationRepair の状態を返す"
+    }
+   }
+  },
+  "crates/task-api/tests/knowledge.rs": {
+   "capability": "knowledge-base",
+   "contract": "知識ベースの API は page を描画・検索し、変更は管理系で etag と path を検査し、候補は人の受け入れを経て正本に入る",
+   "b0_hint": [],
+   "tests": [
+    "a_gui_edit_marks_the_page_as_human_authored",
+    "a_page_is_rendered_with_its_front_matter_history_and_etag",
+    "an_uninitialized_knowledge_base_reads_empty_and_refuses_writes",
+    "candidates_can_be_accepted_or_rejected",
+    "candidates_never_appear_in_the_human_inbox",
+    "candidates_with_an_op_show_it_and_accept_behaves_per_op",
+    "the_tree_lists_pages_and_filters_by_scope_and_query",
+    "the_write_endpoints_are_admin_only",
+    "writing_a_page_checks_the_etag_and_the_path"
+   ],
+   "fns": {
+    "a_gui_edit_marks_the_page_as_human_authored": {
+     "contract": "人の GUI 編集は page に human:authored を付けて保存する"
+    },
+    "a_page_is_rendered_with_its_front_matter_history_and_etag": {
+     "contract": "page は front matter を分けて描画し、履歴と etag を返し、生 HTML を捨てる"
+    },
+    "an_uninitialized_knowledge_base_reads_empty_and_refuses_writes": {
+     "contract": "KB が無いときは何も作らず initialized=false を返し、変更系は 409"
+    },
+    "candidates_can_be_accepted_or_rejected": {
+     "contract": "_inbox の候補は accept・reject でき、その commit は git に残る"
+    },
+    "candidates_never_appear_in_the_human_inbox": {
+     "contract": "KB の候補は何件あっても人の受信箱に出ない"
+    },
+    "candidates_with_an_op_show_it_and_accept_behaves_per_op": {
+     "contract": "候補の一覧は op を出し、accept は op ごとに振る舞う"
+    },
+    "the_tree_lists_pages_and_filters_by_scope_and_query": {
+     "contract": "KB の tree は索引を返し、scope と q で絞れる"
+    },
+    "the_write_endpoints_are_admin_only": {
+     "contract": "KB の変更系は bearer が無ければ 401、読み取りは通る"
+    },
+    "writing_a_page_checks_the_etag_and_the_path": {
+     "contract": "page の PUT は古い etag を 409、.. を 403、.md 以外を 422、_inbox を 403 で断り、同じ中身は unchanged"
+    }
+   }
+  },
+  "crates/task-api/tests/legacy_routing_events.rs": {
+   "capability": "routing-audit-outcome",
+   "contract": "evidence_mode の無い旧い shape の routing event が DB にあっても GET /llm/accounts は 200 で usage を返す（replay の契約）",
+   "b0_hint": [
+    "routing-audit-outcome"
+   ],
+   "tests": [
+    "accounts_list_survives_legacy_routing_events_without_evidence_mode"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/lifecycle.rs": {
+   "capability": "task-lifecycle",
+   "contract": "案件の一時停止・再開・中止・archive は専用の endpoint でだけ行い、属する task と途中目標へ決まった形で波及する",
+   "b0_hint": [
+    "task-lifecycle"
+   ],
+   "tests": [
+    "an_existing_paused_milestone_still_stops_only_its_own_tasks",
+    "archive_requires_a_terminal_project_and_hides_it_and_its_tasks_by_default",
+    "cancelling_a_project_cascades_to_its_tasks_and_milestones",
+    "milestone_lifecycle_endpoints_are_gone",
+    "patch_cannot_set_paused_or_cancelled_on_a_project_and_milestones_are_gone",
+    "pausing_a_project_stops_dispatch_and_resume_restores_the_previous_status",
+    "unknown_and_malformed_ids_are_404"
+   ],
+   "fns": {
+    "an_existing_paused_milestone_still_stops_only_its_own_tasks": {
+     "contract": "既存の paused の途中目標はその途中目標の task だけを止める"
+    },
+    "archive_requires_a_terminal_project_and_hides_it_and_its_tasks_by_default": {
+     "contract": "archive は終端の案件にだけでき、既定の一覧から案件と task を隠す"
+    },
+    "cancelling_a_project_cascades_to_its_tasks_and_milestones": {
+     "contract": "案件の中止は非終端の task と途中目標を全部 cancelled にする"
+    },
+    "milestone_lifecycle_endpoints_are_gone": {
+     "contract": "途中目標の中止・一時停止・再開の endpoint は 410 で、行も task も変えない"
+    },
+    "patch_cannot_set_paused_or_cancelled_on_a_project_and_milestones_are_gone": {
+     "contract": "案件の PATCH では paused・cancelled にできず、途中目標の変更は 410"
+    },
+    "pausing_a_project_stops_dispatch_and_resume_restores_the_previous_status": {
+     "contract": "案件の pause は元の状態を覚えて dispatch を止め、resume がその状態へ戻す"
+    },
+    "unknown_and_malformed_ids_are_404": {
+     "contract": "知らない id と ULID でない id の案件・途中目標の操作は 404"
+    }
+   }
+  },
+  "crates/task-api/tests/list_and_detail.rs": {
+   "capability": "task-read-views",
+   "contract": "task の一覧・詳細・events・graph・受信箱の API は task-ops の view を JSON にして返し、DB を変えない",
+   "b0_hint": [],
+   "tests": [
+    "browser_lifecycle_events_filter_and_page_with_task_execution_identity",
+    "detail_matches_task_ops_task_detail_byte_for_byte",
+    "detail_of_a_missing_task_is_404",
+    "global_events_page_by_id_with_task_and_type_filters",
+    "graph_returns_the_task_ops_graph_as_json",
+    "inbox_returns_the_task_ops_inbox_as_json",
+    "list_pages_through_250_tasks_in_every_order",
+    "list_rejects_bad_query_values_before_calling_task_ops",
+    "list_title_query_treats_percent_and_underscore_literally",
+    "runs_list_fills_files_from_the_run_directory",
+    "runs_of_a_missing_task_is_404",
+    "tampered_cursor_is_a_bad_request",
+    "task_counts_group_all_statuses_without_list_filters",
+    "task_events_page_by_seq_with_type_filter"
+   ],
+   "fns": {
+    "browser_lifecycle_events_filter_and_page_with_task_execution_identity": {
+     "contract": "browser の lifecycle event は task・実行の identity で絞り込んで page を送れる"
+    },
+    "detail_matches_task_ops_task_detail_byte_for_byte": {
+     "contract": "GET /tasks/{id} は task_ops::task_detail と byte 単位で同じ JSON を返す"
+    },
+    "detail_of_a_missing_task_is_404": {
+     "contract": "無い task の詳細は 404"
+    },
+    "global_events_page_by_id_with_task_and_type_filters": {
+     "contract": "全体の events は id で page を送り、task と type で絞り込める"
+    },
+    "graph_returns_the_task_ops_graph_as_json": {
+     "contract": "GET /graph は task_ops の graph を JSON で返す"
+    },
+    "inbox_returns_the_task_ops_inbox_as_json": {
+     "contract": "GET /inbox は task_ops の受信箱を JSON で返す"
+    },
+    "list_pages_through_250_tasks_in_every_order": {
+     "contract": "task の一覧は 250 件をどの並び順でも欠けも重複もなく page で送る"
+    },
+    "list_rejects_bad_query_values_before_calling_task_ops": {
+     "contract": "一覧の不正な query は task_ops を呼ぶ前に 400 で断る"
+    },
+    "list_title_query_treats_percent_and_underscore_literally": {
+     "contract": "一覧の title 検索は % と _ を文字どおりに扱う"
+    },
+    "runs_list_fills_files_from_the_run_directory": {
+     "contract": "run の一覧は run dir の file を files に入れる"
+    },
+    "runs_of_a_missing_task_is_404": {
+     "contract": "無い task の run の一覧は 404"
+    },
+    "tampered_cursor_is_a_bad_request": {
+     "contract": "改ざんした cursor は 400"
+    },
+    "task_counts_group_all_statuses_without_list_filters": {
+     "contract": "task の件数は一覧の絞り込みに関わらず全状態を数える"
+    },
+    "task_events_page_by_seq_with_type_filter": {
+     "contract": "task の events は seq で page を送り、type で絞り込める"
+    }
+   }
+  },
+  "crates/task-api/tests/llm_accounts_admin.rs": {
+   "capability": "accounts-quota",
+   "contract": "LLM の account 管理 API は source ごとの pool root の dir と snapshot を合わせて返し、変更系は celeris へ委ねて credential を消さない",
+   "b0_hint": [
+    "accounts-quota"
+   ],
+   "tests": [
+    "account_admin_unavailable_error_maps_to_409_not_500",
+    "codex_source_without_codex_root_is_not_found",
+    "create_account_makes_a_directory_and_rejects_duplicates_and_bad_ids",
+    "create_account_under_codex_source_uses_the_codex_root_and_list_shows_both_sources",
+    "delete_account_in_use_is_conflict",
+    "delete_account_moves_the_directory_to_removed_and_missing_is_404",
+    "delete_account_without_admin_tx_is_accounts_unavailable",
+    "implicit_accounts_are_listed_and_patchable_by_source_and_refused_otherwise",
+    "list_accounts_merges_filesystem_snapshot_and_stats",
+    "login_code_is_not_supported_for_codex",
+    "management_endpoints_forward_the_source_as_its_adapter",
+    "management_routes_all_require_a_token",
+    "pool_account_limit_is_patchable_by_source_and_account",
+    "pool_without_root_lists_nothing_and_management_is_not_found",
+    "unknown_source_is_not_found"
+   ],
+   "fns": {
+    "account_admin_unavailable_error_maps_to_409_not_500": {
+     "contract": "celeris 側の Unavailable は 500 でなく 409 accounts_unavailable"
+    },
+    "codex_source_without_codex_root_is_not_found": {
+     "contract": "codex_dir の無い構成で codex_oauth の管理系は 404"
+    },
+    "create_account_makes_a_directory_and_rejects_duplicates_and_bad_ids": {
+     "contract": "account の作成は dir を作り、既存は 409 account_exists、不正な id は 400"
+    },
+    "create_account_under_codex_source_uses_the_codex_root_and_list_shows_both_sources": {
+     "contract": "codex_oauth の account は codex_dir に作られ、一覧に両方の source が出る"
+    },
+    "delete_account_in_use_is_conflict": {
+     "contract": "dispatcher が使用中と数える account の削除は 409"
+    },
+    "delete_account_moves_the_directory_to_removed_and_missing_is_404": {
+     "contract": "account の削除は celeris へ委ねて dir を removed へ移し、無い account は 404"
+    },
+    "delete_account_without_admin_tx_is_accounts_unavailable": {
+     "contract": "celeris への経路（admin_tx）が無い構成の削除は 409 accounts_unavailable"
+    },
+    "implicit_accounts_are_listed_and_patchable_by_source_and_refused_otherwise": {
+     "contract": "暗黙 account は一覧に出て source 単位で PATCH でき、それ以外の管理系は断る"
+    },
+    "list_accounts_merges_filesystem_snapshot_and_stats": {
+     "contract": "GET /llm/accounts は dir の走査・snapshot の観測値・統計を合わせて返す"
+    },
+    "login_code_is_not_supported_for_codex": {
+     "contract": "codex_oauth の login/code は 409 login_code_not_supported"
+    },
+    "management_endpoints_forward_the_source_as_its_adapter": {
+     "contract": "source 単位の管理系は対応する内部 adapter を celeris へ渡す"
+    },
+    "management_routes_all_require_a_token": {
+     "contract": "account の管理系は token_file が無くても bearer が無ければ 401"
+    },
+    "pool_account_limit_is_patchable_by_source_and_account": {
+     "contract": "pool の account の上限は PATCH で DB に保存され、一覧にすぐ出る"
+    },
+    "pool_without_root_lists_nothing_and_management_is_not_found": {
+     "contract": "pool の root が無い構成では一覧は空で、管理系は 404"
+    },
+    "unknown_source_is_not_found": {
+     "contract": "pool でも暗黙でもない source はどの管理系でも 404 account_not_found"
+    }
+   }
+  },
+  "crates/task-api/tests/llm_routes_admin.rs": {
+   "capability": "routing-lane-route",
+   "contract": "harness の一覧と task の run が保存した route の選択を API で読め、未解決の旧い run も返す",
+   "b0_hint": [],
+   "tests": [
+    "harnesses::harness_list_detail_missing_and_unconfigured",
+    "run_selection::task_runs_expose_persisted_selection_and_legacy_unresolved"
+   ],
+   "fns": {
+    "harnesses::harness_list_detail_missing_and_unconfigured": {
+     "contract": "harness の一覧と詳細は設定の有無を示し、無い harness は 404"
+    },
+    "run_selection::task_runs_expose_persisted_selection_and_legacy_unresolved": {
+     "contract": "task の run は保存した route の選択を出し、選択を持たない旧い run は unresolved と示す"
+    }
+   }
+  },
+  "crates/task-api/tests/llm_sources.rs": {
+   "capability": "llm-proxy",
+   "contract": "GET /llm/sources は llm-proxy の reader の view をそのまま返し、未設定は 409、bearer を要する",
+   "b0_hint": [],
+   "tests": [
+    "requires_a_bearer_token",
+    "returns_409_when_llm_proxy_is_not_configured",
+    "returns_source_detail_and_404_for_unknown_source",
+    "returns_the_readers_view_when_configured"
+   ],
+   "fns": {
+    "requires_a_bearer_token": {
+     "contract": "GET /llm/sources は bearer が無ければ 401"
+    },
+    "returns_409_when_llm_proxy_is_not_configured": {
+     "contract": "llm_sources が未設定なら 409 llm_proxy_unavailable"
+    },
+    "returns_source_detail_and_404_for_unknown_source": {
+     "contract": "source の詳細を返し、知らない source は 404"
+    },
+    "returns_the_readers_view_when_configured": {
+     "contract": "設定済みなら LlmSourcesReader::view の値をそのまま JSON にする"
+    }
+   }
+  },
+  "crates/task-api/tests/local_settings_admin.rs": {
+   "capability": "local-machine-settings",
+   "contract": "ローカルマシン設定の API は store の値を設定 file より優先して返し、PUT は検証・監査・反映をする",
+   "b0_hint": [],
+   "tests": [
+    "local_settings_get_shows_local_row",
+    "local_settings_put_audit_and_apply",
+    "local_settings_put_validation_errors",
+    "local_settings_store_beats_config_in_response"
+   ],
+   "fns": {
+    "local_settings_get_shows_local_row": {
+     "contract": "GET /clusters はローカルマシンの行を返す"
+    },
+    "local_settings_put_audit_and_apply": {
+     "contract": "PUT /clusters/local/settings は監査 event を残して設定を反映する"
+    },
+    "local_settings_put_validation_errors": {
+     "contract": "PUT /clusters/local/settings の不正な値は 422 で保存しない"
+    },
+    "local_settings_store_beats_config_in_response": {
+     "contract": "応答のローカル設定は store の値が設定 file の値より優先する"
+    }
+   }
+  },
+  "crates/task-api/tests/long_horizon_pilot.rs": {
+   "capability": "project-controller",
+   "contract": "自動運営が有効な案件でも本番の操作と人の確認は人に残り、off に戻すと CoS の起票は従来の検査に戻る",
+   "b0_hint": [],
+   "tests": [
+    "long_horizon_pilot_api_human_check_stays_with_the_human",
+    "long_horizon_pilot_api_off_restores_the_legacy_cos_launch",
+    "long_horizon_pilot_api_production_gate_is_kept"
+   ],
+   "fns": {
+    "long_horizon_pilot_api_human_check_stays_with_the_human": {
+     "contract": "自動運営の案件でも人の check は人だけが通せる"
+    },
+    "long_horizon_pilot_api_off_restores_the_legacy_cos_launch": {
+     "contract": "controller を off に戻すと CoS の起票は従来の検査に戻る"
+    },
+    "long_horizon_pilot_api_production_gate_is_kept": {
+     "contract": "自動運営の案件でも本番の門は人の承認を要する"
+    }
+   }
+  },
+  "crates/task-api/tests/mcp_admin.rs": {
+   "capability": "celeris-mcp",
+   "contract": "MCP の client と呼び出しの一覧 API は bearer を要し、token の値を出さず、client で絞れる",
+   "b0_hint": [],
+   "tests": [
+    "lists_calls_optionally_filtered_by_client",
+    "lists_clients_without_the_token_value",
+    "requires_a_bearer_token"
+   ],
+   "fns": {
+    "lists_calls_optionally_filtered_by_client": {
+     "contract": "GET /mcp/calls は呼び出しの log を返し、client= で絞り込める"
+    },
+    "lists_clients_without_the_token_value": {
+     "contract": "GET /mcp/clients は client の一覧に token の値を出さない"
+    },
+    "requires_a_bearer_token": {
+     "contract": "MCP の管理 API は bearer が無ければ 401"
+    }
+   }
+  },
+  "crates/task-api/tests/memory.rs": {
+   "capability": "worker-memory-read",
+   "contract": "組織 node の記憶は読み取りの API だけがあり、file の全文を返し、無ければ空、未設定は 409",
+   "b0_hint": [],
+   "tests": [
+    "existing_notes_and_a_projects_drawer_are_returned_in_full",
+    "missing_files_read_as_empty_and_paths_are_returned",
+    "there_is_no_write_endpoint",
+    "unconfigured_memory_is_409_and_an_unknown_node_is_404"
+   ],
+   "fns": {
+    "existing_notes_and_a_projects_drawer_are_returned_in_full": {
+     "contract": "notes.md と案件ごとの記憶 file を切らずに全文で返す"
+    },
+    "missing_files_read_as_empty_and_paths_are_returned": {
+     "contract": "記憶 file が無ければ空文字列を返し、path は返す"
+    },
+    "there_is_no_write_endpoint": {
+     "contract": "記憶への書き込みの API は無い"
+    },
+    "unconfigured_memory_is_409_and_an_unknown_node_is_404": {
+     "contract": "[memory] 未設定は 409 memory_unavailable、知らない node は 404"
+    }
+   }
+  },
+  "crates/task-api/tests/model_catalog.rs": {
+   "capability": "model-catalog",
+   "contract": "model catalog の API は発見の hook を呼び、人の上書きを検証して一覧に反映する",
+   "b0_hint": [],
+   "tests": [
+    "discover_calls_the_hook_with_the_source",
+    "discover_without_hook_is_accepted_with_unavailable",
+    "override_rejects_unknown_source_and_bad_tier",
+    "override_roundtrip_shows_in_list"
+   ],
+   "fns": {
+    "discover_calls_the_hook_with_the_source": {
+     "contract": "discover は指定の source で発見の hook を呼ぶ"
+    },
+    "discover_without_hook_is_accepted_with_unavailable": {
+     "contract": "hook の無い構成の discover は受理して unavailable を返す"
+    },
+    "override_rejects_unknown_source_and_bad_tier": {
+     "contract": "上書きは知らない source と不正な tier を断る"
+    },
+    "override_roundtrip_shows_in_list": {
+     "contract": "保存した上書きは model の一覧に出る"
+    }
+   }
+  },
+  "crates/task-api/tests/notify.rs": {
+   "capability": "notifications",
+   "contract": "通知の設定・送信試験の API は管理系で、webhook の URL を出さず、送れない構成を 409 で返す",
+   "b0_hint": [],
+   "tests": [
+    "a_failed_send_is_reported_as_ok_false",
+    "celeris_side_unavailability_becomes_409",
+    "get_notify_omits_project_id_for_kinds_without_a_project",
+    "get_notify_reports_not_configured_without_a_secret",
+    "get_notify_shows_the_fingerprint_and_recent_sends_but_never_the_url",
+    "get_notify_status_exposes_route_settings_and_last_successful_sends",
+    "the_test_endpoint_is_409_when_no_webhook_is_registered",
+    "the_test_endpoint_is_409_without_a_secrets_section",
+    "the_test_endpoint_is_409_without_an_admin_channel",
+    "the_test_endpoint_requires_a_token",
+    "the_test_endpoint_requires_a_token_when_token_file_is_not_configured",
+    "the_test_endpoint_returns_200_with_the_outcome_from_celeris"
+   ],
+   "fns": {
+    "a_failed_send_is_reported_as_ok_false": {
+     "contract": "送信の失敗は 200 の ok=false で返し、理由に URL を入れない"
+    },
+    "celeris_side_unavailability_becomes_409": {
+     "contract": "celeris 側が送れないと答えたら 409"
+    },
+    "get_notify_omits_project_id_for_kinds_without_a_project": {
+     "contract": "案件を持たない種の通知の応答は project_id を出さない"
+    },
+    "get_notify_reports_not_configured_without_a_secret": {
+     "contract": "webhook の secret が無ければ GET /notify は未設定と返す"
+    },
+    "get_notify_shows_the_fingerprint_and_recent_sends_but_never_the_url": {
+     "contract": "GET /notify は webhook の指紋と最近の送信を返し、URL は出さない"
+    },
+    "get_notify_status_exposes_route_settings_and_last_successful_sends": {
+     "contract": "GET /notify は送り先の設定と最後に成功した送信を返す"
+    },
+    "the_test_endpoint_is_409_when_no_webhook_is_registered": {
+     "contract": "webhook が無ければ送信試験は 409"
+    },
+    "the_test_endpoint_is_409_without_a_secrets_section": {
+     "contract": "[secrets] が無い構成でも送信試験は 500 でなく 409"
+    },
+    "the_test_endpoint_is_409_without_an_admin_channel": {
+     "contract": "celeris への経路（admin_tx）が無ければ送信試験は 409"
+    },
+    "the_test_endpoint_requires_a_token": {
+     "contract": "送信試験は token を設定した構成で bearer が無ければ 401"
+    },
+    "the_test_endpoint_requires_a_token_when_token_file_is_not_configured": {
+     "contract": "token_file が未設定でも送信試験は bearer が無ければ 401"
+    },
+    "the_test_endpoint_returns_200_with_the_outcome_from_celeris": {
+     "contract": "送信試験は celeris の結果を 200 で返す"
+    }
+   }
+  },
+  "crates/task-api/tests/operations.rs": {
+   "capability": "task-lifecycle",
+   "contract": "task の変更系 API（作成・承認・却下・回答・cancel・retry・accept）は状態遷移の規則で検証し、断った要求は何も変えない",
+   "b0_hint": [],
+   "tests": [
+    "accept_moves_a_draft_task_to_ready_and_rejects_other_statuses",
+    "answer_covers_blocked_not_blocked_and_blank",
+    "approve_covers_accept_approve_and_both_invalid_cases",
+    "approving_the_same_task_twice_is_an_invalid_transition",
+    "browser_allowed_domains_api_create_rejects_missing_empty_and_invalid",
+    "browser_allowed_domains_api_patch_cannot_add_skill_without_origins",
+    "cancel_of_done_or_cancelled_is_invalid_and_failed_can_be_cancelled",
+    "cancelling_a_predecessor_lists_dependents_in_cascaded",
+    "create_plan_is_gone",
+    "create_task_max_tokens_lands_in_the_budget",
+    "create_task_returns_201_with_location_and_cli_defaults",
+    "create_task_validation_errors_insert_nothing",
+    "every_mutating_endpoint_requires_a_bearer_token",
+    "expected_status_mismatch_is_a_conflict_that_changes_nothing",
+    "operations_on_missing_tasks_are_404",
+    "project_and_milestone_mutations_require_a_bearer_token",
+    "reject_covers_approval_and_draft",
+    "rejecting_an_approval_lists_cancelled_children_in_cascaded",
+    "replay_reports_zero_mismatches_after_api_operations",
+    "retry_defaults_to_ready_when_accept_is_omitted",
+    "retry_duplicates_a_failed_task_and_rewires_dependents",
+    "retry_with_accept_starts_ready_and_non_terminal_or_done_is_409",
+    "retry_workspace_override_switches_to_local_and_validates_the_cluster"
+   ],
+   "fns": {
+    "accept_moves_a_draft_task_to_ready_and_rejects_other_statuses": {
+     "contract": "accept は draft の task を ready にし、他の状態では断る"
+    },
+    "answer_covers_blocked_not_blocked_and_blank": {
+     "contract": "answer は blocked の task にだけ効き、blocked でない task と空の回答を断る"
+    },
+    "approve_covers_accept_approve_and_both_invalid_cases": {
+     "contract": "approve は承認待ちと draft を進め、それ以外の状態は不正な遷移として断る"
+    },
+    "approving_the_same_task_twice_is_an_invalid_transition": {
+     "contract": "同じ task を 2 回 approve すると 2 回目は不正な遷移"
+    },
+    "browser_allowed_domains_api_create_rejects_missing_empty_and_invalid": {
+     "capability": "browser-policy-broker-approval",
+     "contract": "browser task の作成は allowed_domains の欠落・空・不正を 422 で断る"
+    },
+    "browser_allowed_domains_api_patch_cannot_add_skill_without_origins": {
+     "capability": "browser-policy-broker-approval",
+     "contract": "browser の skill を origin 無しで task に足す PATCH は断る"
+    },
+    "cancel_of_done_or_cancelled_is_invalid_and_failed_can_be_cancelled": {
+     "contract": "done・cancelled の cancel は不正な遷移で、failed は cancel できる"
+    },
+    "cancelling_a_predecessor_lists_dependents_in_cascaded": {
+     "contract": "先行 task の cancel は波及した後続を cascaded に並べる"
+    },
+    "create_plan_is_gone": {
+     "capability": "execution-plan-adoption",
+     "contract": "POST /plans は 410 を返し、何も作らない"
+    },
+    "create_task_max_tokens_lands_in_the_budget": {
+     "capability": "budget-pricing",
+     "contract": "POST /tasks の max_tokens は task の budget に入る"
+    },
+    "create_task_returns_201_with_location_and_cli_defaults": {
+     "contract": "POST /tasks は 201 と Location を返し、書いていない値は CLI と同じ既定になる"
+    },
+    "create_task_validation_errors_insert_nothing": {
+     "contract": "検証に落ちた POST /tasks は何も挿入しない"
+    },
+    "every_mutating_endpoint_requires_a_bearer_token": {
+     "capability": "http-api-auth-principals",
+     "contract": "task の変更系の endpoint はすべて bearer が無ければ 401"
+    },
+    "expected_status_mismatch_is_a_conflict_that_changes_nothing": {
+     "contract": "expected_status が今の状態と違う要求は 409 で何も変えない"
+    },
+    "operations_on_missing_tasks_are_404": {
+     "contract": "無い task への操作は 404"
+    },
+    "project_and_milestone_mutations_require_a_bearer_token": {
+     "capability": "http-api-auth-principals",
+     "contract": "案件・途中目標の変更系は bearer が無ければ 401"
+    },
+    "reject_covers_approval_and_draft": {
+     "contract": "reject は承認待ちと draft の task を断る形で閉じる"
+    },
+    "rejecting_an_approval_lists_cancelled_children_in_cascaded": {
+     "contract": "承認の却下は cancel した子を cascaded に並べる"
+    },
+    "replay_reports_zero_mismatches_after_api_operations": {
+     "contract": "API の操作の後の replay は events から状態を作り直して食い違い 0 を返す"
+    },
+    "retry_defaults_to_ready_when_accept_is_omitted": {
+     "contract": "accept を省いた retry は複製を ready で始める"
+    },
+    "retry_duplicates_a_failed_task_and_rewires_dependents": {
+     "contract": "failed の task の retry は複製を作り、後続の依存を複製へ付け替える"
+    },
+    "retry_with_accept_starts_ready_and_non_terminal_or_done_is_409": {
+     "contract": "accept 付きの retry は ready で始め、非終端・done の task の retry は 409"
+    },
+    "retry_workspace_override_switches_to_local_and_validates_the_cluster": {
+     "contract": "retry の workspace 指定は local へ切り替えられ、知らない cluster は断る"
+    }
+   }
+  },
+  "crates/task-api/tests/organization.rs": {
+   "capability": "org-projects-reports",
+   "contract": "組織と案件の API は DB を正本として node・案件・途中目標を作成・一覧・変更・削除し、管理系は bearer を要する",
+   "b0_hint": [],
+   "tests": [
+    "a_local_project_workspace_can_choose_the_worktree_mode",
+    "a_project_can_carry_the_workspace_where_its_code_lives",
+    "browser_settings_event_has_no_secret_values",
+    "browser_settings_event_records_actor_and_before_after",
+    "browser_settings_generic_org_patch_uses_same_validation",
+    "browser_settings_patch_updates_profile",
+    "browser_settings_rejects_empty_domains_and_unknown_credential_policy",
+    "browser_settings_rejects_global_and_public_suffix_wildcards",
+    "browser_settings_rejects_invalid_scheme",
+    "browser_settings_rejects_userinfo_path_query_fragment",
+    "browser_settings_requires_admin_and_same_origin",
+    "deleting_a_node_that_still_has_work_is_a_conflict",
+    "org_admin_endpoints_require_a_token",
+    "org_admin_endpoints_require_a_token_when_token_file_is_not_configured",
+    "org_can_be_created_listed_patched_and_deleted",
+    "org_list_carries_lead_session_summaries_for_departments_with_a_continuing_session",
+    "org_validation_is_reported_as_422_and_duplicate_ids_as_409",
+    "posting_a_task_with_an_unknown_assignee_or_project_is_rejected",
+    "project_detail_returns_the_milestones_and_the_work_tree",
+    "projects_and_milestones_round_trip_through_the_api"
+   ],
+   "fns": {
+    "a_local_project_workspace_can_choose_the_worktree_mode": {
+     "contract": "kind=local の案件の作業場所は mode に worktree（既定）か shared を持てる"
+    },
+    "a_project_can_carry_the_workspace_where_its_code_lives": {
+     "contract": "案件の作業場所は POST・PATCH で受けて GET で返る"
+    },
+    "browser_settings_event_has_no_secret_values": {
+     "capability": "browser-policy-broker-approval",
+     "contract": "組織 node の browser 設定の変更 event に secret の値が入らない"
+    },
+    "browser_settings_event_records_actor_and_before_after": {
+     "capability": "browser-policy-broker-approval",
+     "contract": "browser 設定の変更 event は actor と変更前後の値を記録する"
+    },
+    "browser_settings_generic_org_patch_uses_same_validation": {
+     "capability": "browser-policy-broker-approval",
+     "contract": "汎用の org PATCH でも browser 設定は専用の endpoint と同じ検証を通る"
+    },
+    "browser_settings_patch_updates_profile": {
+     "capability": "browser-policy-broker-approval",
+     "contract": "browser 設定の PATCH は node の profile を更新する"
+    },
+    "browser_settings_rejects_empty_domains_and_unknown_credential_policy": {
+     "capability": "browser-policy-broker-approval",
+     "contract": "browser 設定は空の domain と知らない credential_policy を断る"
+    },
+    "browser_settings_rejects_global_and_public_suffix_wildcards": {
+     "capability": "browser-policy-broker-approval",
+     "contract": "browser 設定は全体と public suffix の wildcard を断る"
+    },
+    "browser_settings_rejects_invalid_scheme": {
+     "capability": "browser-policy-broker-approval",
+     "contract": "browser 設定は不正な scheme の origin を断る"
+    },
+    "browser_settings_rejects_userinfo_path_query_fragment": {
+     "capability": "browser-policy-broker-approval",
+     "contract": "browser 設定は userinfo・path・query・fragment を持つ origin を断る"
+    },
+    "browser_settings_requires_admin_and_same_origin": {
+     "capability": "browser-policy-broker-approval",
+     "contract": "browser 設定の変更は管理系の bearer と同じ origin を要する"
+    },
+    "deleting_a_node_that_still_has_work_is_a_conflict": {
+     "contract": "未終了の task か子を持つ組織 node の削除は 409"
+    },
+    "org_admin_endpoints_require_a_token": {
+     "capability": "http-api-auth-principals",
+     "contract": "組織の変更系は token を設定した構成で bearer が無ければ 401"
+    },
+    "org_admin_endpoints_require_a_token_when_token_file_is_not_configured": {
+     "capability": "http-api-auth-principals",
+     "contract": "token_file 未設定の構成でも組織の変更系は bearer が無ければ 401"
+    },
+    "org_can_be_created_listed_patched_and_deleted": {
+     "contract": "組織 node は作成・一覧・変更・削除できる"
+    },
+    "org_list_carries_lead_session_summaries_for_departments_with_a_continuing_session": {
+     "contract": "GET /org は継続 session を持つ部門長の session の要約を運ぶ"
+    },
+    "org_validation_is_reported_as_422_and_duplicate_ids_as_409": {
+     "contract": "組織の検証（秘書は 1 つ・親は既存・id の形）は 422、同じ id の再作成は 409"
+    },
+    "posting_a_task_with_an_unknown_assignee_or_project_is_rejected": {
+     "contract": "知らない assignee か無い案件を付けた POST /tasks は 422 で作らない"
+    },
+    "project_detail_returns_the_milestones_and_the_work_tree": {
+     "contract": "GET /projects/{id} は案件・途中目標・その案件の task の木を返す"
+    },
+    "projects_and_milestones_round_trip_through_the_api": {
+     "contract": "案件と途中目標は API で作って読むと同じ値が返る"
+    }
+   }
+  },
+  "crates/task-api/tests/project_auto_integrate.rs": {
+   "capability": "delivery-merge-candidate",
+   "contract": "auto_integrate は案件の属性で既定は無効、PATCH で切り替えると DB に残り GET に出て他の欄は変わらない",
+   "b0_hint": [
+    "delivery-merge-candidate"
+   ],
+   "tests": [
+    "auto_integrate_is_a_project_attribute_switched_by_patch"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/project_brief.rs": {
+   "capability": "org-projects-reports",
+   "contract": "案件の状態の要約は管理系の PUT と自案件の CoS の project.status_put だけが書き、GET /projects は件数・最終活動・人待ちを返す",
+   "b0_hint": [],
+   "tests": [
+    "project_brief_admin_put_replaces_and_shows_in_list_and_detail",
+    "project_list_reports_task_counts_last_activity_and_human_waits",
+    "project_status_put_is_written_by_the_project_cos_only"
+   ],
+   "fns": {
+    "project_brief_admin_put_replaces_and_shows_in_list_and_detail": {
+     "contract": "管理系の PUT /projects/{id}/status は要約を置き換え、一覧と詳細に出し、不正な値は断る"
+    },
+    "project_list_reports_task_counts_last_activity_and_human_waits": {
+     "contract": "GET /projects は task の件数・最終活動時刻・受信箱と同じ数え方の人待ちを返す"
+    },
+    "project_status_put_is_written_by_the_project_cos_only": {
+     "contract": "project.status_put は自案件の CoS だけが書け、他案件と統括の CoS は rejected で記録される"
+    }
+   }
+  },
+  "crates/task-api/tests/project_controller.rs": {
+   "capability": "project-controller",
+   "contract": "案件 controller の API は既定 off で、人の変更は human_epoch を進め、CoS は off にしかできず、要約は判定と同じ数え方をする",
+   "b0_hint": [
+    "project-controller"
+   ],
+   "tests": [
+    "project_wake_api_budget_today_counts_not_launched_runs",
+    "project_wake_api_cos_may_only_turn_it_off",
+    "project_wake_api_get_defaults_to_off_and_404s_unknown_projects",
+    "project_wake_api_human_patch_bumps_human_epoch",
+    "project_wake_api_put_needs_allowlist_and_revision",
+    "project_wake_api_summary_shows_outcomes_wait_authority_and_next_wake",
+    "project_wake_api_wake_is_idempotent_and_inert_when_off"
+   ],
+   "fns": {
+    "project_wake_api_budget_today_counts_not_launched_runs": {
+     "contract": "budget_today.not_launched_runs は起動前に終わった run を数える"
+    },
+    "project_wake_api_cos_may_only_turn_it_off": {
+     "contract": "CoS は controller を off にする変更だけができる"
+    },
+    "project_wake_api_get_defaults_to_off_and_404s_unknown_projects": {
+     "contract": "controller の GET は既定で off を返し、知らない案件は 404"
+    },
+    "project_wake_api_human_patch_bumps_human_epoch": {
+     "contract": "人の controller の PATCH は human_epoch を 1 進める"
+    },
+    "project_wake_api_put_needs_allowlist_and_revision": {
+     "contract": "controller の PUT は allowlist と revision の一致を要する"
+    },
+    "project_wake_api_summary_shows_outcomes_wait_authority_and_next_wake": {
+     "contract": "controller の summary は未達・達成・待機の理由・許可の範囲・次の wake を返す"
+    },
+    "project_wake_api_wake_is_idempotent_and_inert_when_off": {
+     "contract": "wake の要求は冪等で、off の案件では何もしない"
+    }
+   }
+  },
+  "crates/task-api/tests/project_cos_guard.rs": {
+   "capability": "project-controller",
+   "contract": "案件 CoS は人の目的・受け入れ条件・controller の起票・本番を独断で変えられず、人の発言を引いたときだけ通る",
+   "b0_hint": [],
+   "tests": [
+    "project_cos_brief_updated_by_the_project_cos",
+    "project_cos_controller_owns_launch",
+    "project_cos_dry_run_mode_is_human_requested",
+    "project_cos_irreversible_gate_only_in_autonomy",
+    "project_cos_refuses_goal_edit",
+    "project_cos_refuses_production",
+    "project_cos_refuses_request_edit",
+    "project_cos_triage_types_reused"
+   ],
+   "fns": {
+    "project_cos_brief_updated_by_the_project_cos": {
+     "contract": "案件 CoS は project.status_put で brief を更新でき、updated_by=cos:<thread> が残り依頼文は変わらない"
+    },
+    "project_cos_controller_owns_launch": {
+     "contract": "controller が off でない案件では task の起票は controller が持ち、案件 CoS の直接の起票は断る"
+    },
+    "project_cos_dry_run_mode_is_human_requested": {
+     "contract": "dry_run の mode は人だけが置け、置くと評価の wake が 1 件だけ積まれる"
+    },
+    "project_cos_irreversible_gate_only_in_autonomy": {
+     "contract": "controller が off の案件では外部公開・不可逆の門は当たらない"
+    },
+    "project_cos_refuses_goal_edit": {
+     "contract": "案件 CoS は人の発言を引かずに目的・受け入れ条件を変えられない（draft は直せる）"
+    },
+    "project_cos_refuses_production": {
+     "contract": "案件 CoS は本番 promote・secret・人だけの操作を独断で行えない"
+    },
+    "project_cos_refuses_request_edit": {
+     "contract": "案件 CoS は人の発言を引かずに依頼文を変えられない"
+    },
+    "project_cos_triage_types_reused": {
+     "contract": "受信箱の待ちへの代答は既存の 7 類型の basis が無ければ断られる"
+    }
+   }
+  },
+  "crates/task-api/tests/project_plan.rs": {
+   "capability": "org-projects-reports",
+   "contract": "案件計画の旧い API は 410・422 で行を消さず、task の root 判定・途中目標の凍結・subtree の停止・routing の指定は API に出る",
+   "b0_hint": [],
+   "tests": [
+    "create_accepts_and_pins_routing_override",
+    "evidence_mode_round_trips_through_post_get_child_and_retry",
+    "is_root_task_and_stages_hint_are_exposed",
+    "project_detail_hides_frozen_milestones_by_default",
+    "project_plan_endpoints_are_gone",
+    "task_pause_and_resume_cover_the_subtree"
+   ],
+   "fns": {
+    "create_accepts_and_pins_routing_override": {
+     "capability": "routing-lane-route",
+     "contract": "POST /tasks の routing_override は task_routing_overrides と routing_override_pinned event に残る"
+    },
+    "evidence_mode_round_trips_through_post_get_child_and_retry": {
+     "capability": "routing-lane-route",
+     "contract": "evidence_mode は POST で保存され、GET・子 task・retry に引き継がれる"
+    },
+    "is_root_task_and_stages_hint_are_exposed": {
+     "capability": "recursive-task-tree",
+     "contract": "is_root_task は案件直下の task だけが true で、一覧と詳細に同じ値が出る"
+    },
+    "project_detail_hides_frozen_milestones_by_default": {
+     "contract": "案件の詳細は既定で凍結した途中目標を隠し、include_frozen=true で返す"
+    },
+    "project_plan_endpoints_are_gone": {
+     "contract": "消した案件計画の API は 410・422 を返し、行も状態も変えない"
+    },
+    "task_pause_and_resume_cover_the_subtree": {
+     "capability": "task-lifecycle",
+     "contract": "POST /tasks/{id}/pause・resume は subtree を止め・戻し、詳細に paused_by を出す"
+    }
+   }
+  },
+  "crates/task-api/tests/project_roadmap.rs": {
+   "capability": "project-controller",
+   "contract": "案件の Roadmap は CoS と operator が提案だけでき、人の承認でだけ版が進み、到達は終わった root を根拠に要する",
+   "b0_hint": [],
+   "tests": [
+    "project_roadmap_brief_replace_does_not_change_the_roadmap",
+    "project_roadmap_cos_and_operator_cannot_decide",
+    "project_roadmap_human_approval_advances_and_supersedes",
+    "project_roadmap_ignores_task_milestone_and_phase",
+    "project_roadmap_legacy_milestones_stay_gone",
+    "project_roadmap_proposal_does_not_advance_the_version",
+    "project_roadmap_reject_keeps_the_current_version",
+    "project_roadmap_root_links_and_reached_need_rust_evidence",
+    "project_roadmap_stable_ids_cross_versions",
+    "project_roadmap_takes_precedence_over_the_request_block"
+   ],
+   "fns": {
+    "project_roadmap_brief_replace_does_not_change_the_roadmap": {
+     "contract": "brief の置き換えは Roadmap を変えない"
+    },
+    "project_roadmap_cos_and_operator_cannot_decide": {
+     "contract": "CoS は Roadmap を提案できるが決定は 422 human_only、operator の決定は 403"
+    },
+    "project_roadmap_human_approval_advances_and_supersedes": {
+     "contract": "人の承認は版を進めて前の版を superseded にし、土台の違う提案は 409"
+    },
+    "project_roadmap_ignores_task_milestone_and_phase": {
+     "contract": "Roadmap は task の旧 milestone と段を Outcome として読まない"
+    },
+    "project_roadmap_legacy_milestones_stay_gone": {
+     "contract": "旧い途中目標の API は Roadmap の導入後も消えたまま"
+    },
+    "project_roadmap_proposal_does_not_advance_the_version": {
+     "contract": "提案だけでは今の版は進まず、知らない欄は断る"
+    },
+    "project_roadmap_reject_keeps_the_current_version": {
+     "contract": "提案の却下は今の版を保つ"
+    },
+    "project_roadmap_root_links_and_reached_need_rust_evidence": {
+     "contract": "終わっていない root を根拠に Outcome を reached にできない"
+    },
+    "project_roadmap_stable_ids_cross_versions": {
+     "contract": "Outcome の id は版をまたいで変わらず、取り下げた Outcome は snapshot に出ない"
+    },
+    "project_roadmap_takes_precedence_over_the_request_block": {
+     "contract": "承認した Roadmap は依頼文の block より優先し、提案だけでは block のまま"
+    }
+   }
+  },
+  "crates/task-api/tests/project_wake_human.rs": {
+   "capability": "project-controller",
+   "contract": "人の API 操作だけが human_epoch を同じ transaction で 1 回進め、CoS・operator・MCP・断られた要求・off の案件は数えない",
+   "b0_hint": [],
+   "tests": [
+    "project_wake_api_human_bump_failure_rolls_the_write_back",
+    "project_wake_api_human_cos_is_not_counted",
+    "project_wake_api_human_each_route_bumps_once",
+    "project_wake_api_human_mcp_is_not_counted",
+    "project_wake_api_human_off_or_projectless_is_inert",
+    "project_wake_api_human_operator_is_not_counted",
+    "project_wake_api_human_refused_or_unchanged_requests_do_not_bump",
+    "project_wake_api_human_write_failure_keeps_the_epoch"
+   ],
+   "fns": {
+    "project_wake_api_human_bump_failure_rolls_the_write_back": {
+     "contract": "human_epoch の更新が落ちると人の書き込みも残らない"
+    },
+    "project_wake_api_human_cos_is_not_counted": {
+     "contract": "CoS の bearer の操作は直接でも /cos/operations 経由でも human_epoch を進めない"
+    },
+    "project_wake_api_human_each_route_bumps_once": {
+     "contract": "人の変更系の route はそれぞれ human_epoch を 1 回だけ進める"
+    },
+    "project_wake_api_human_mcp_is_not_counted": {
+     "contract": "MCP の主体の操作は human_epoch を進めない"
+    },
+    "project_wake_api_human_off_or_projectless_is_inert": {
+     "contract": "off・行なしの案件と案件の無い task への操作は何も書かない"
+    },
+    "project_wake_api_human_operator_is_not_counted": {
+     "contract": "operator の主体の操作は human_epoch を進めない"
+    },
+    "project_wake_api_human_refused_or_unchanged_requests_do_not_bump": {
+     "contract": "断られた要求と何も変えない繰り返しは human_epoch を進めない"
+    },
+    "project_wake_api_human_write_failure_keeps_the_epoch": {
+     "contract": "transaction の中で書き込みが落ちると human_epoch も wake も残らない"
+    }
+   }
+  },
+  "crates/task-api/tests/project_wake_human_chat.rs": {
+   "capability": "project-controller",
+   "contract": "人の chat の発言・転送・取り次ぎと受信箱の回答は human_epoch を同じ transaction で経路ごとに 1 回進め、CoS・operator・再送は数えない",
+   "b0_hint": [],
+   "tests": [
+    "project_wake_api_human_chat_bump_failure_rolls_the_message_back",
+    "project_wake_api_human_chat_cos_and_operator_messages_are_not_counted",
+    "project_wake_api_human_chat_forward_bumps_once_and_a_replay_does_not",
+    "project_wake_api_human_chat_message_bumps_once_and_a_resend_does_not",
+    "project_wake_api_human_chat_off_project_is_inert",
+    "project_wake_api_human_chat_refused_writes_do_not_bump",
+    "project_wake_api_human_chat_relay_bumps_once_and_a_resend_does_not",
+    "project_wake_api_human_inbox_bump_failure_rolls_the_answer_back",
+    "project_wake_api_human_inbox_cos_answer_and_resolve_are_not_counted",
+    "project_wake_api_human_inbox_each_answer_bumps_once",
+    "project_wake_api_human_inbox_operator_or_projectless_is_not_counted",
+    "project_wake_api_human_inbox_plan_withdraw_failure_keeps_the_epoch",
+    "project_wake_api_human_inbox_refused_answers_do_not_bump"
+   ],
+   "fns": {
+    "project_wake_api_human_chat_bump_failure_rolls_the_message_back": {
+     "contract": "human_epoch の書き込みが落ちると人の発言も残らない"
+    },
+    "project_wake_api_human_chat_cos_and_operator_messages_are_not_counted": {
+     "contract": "CoS の発言・operator の発言・統括 thread の人の発言は human_epoch を進めない"
+    },
+    "project_wake_api_human_chat_forward_bumps_once_and_a_replay_does_not": {
+     "contract": "人の発言の転送は human_epoch を 1 回進め、同じ転送の再実行は進めない"
+    },
+    "project_wake_api_human_chat_message_bumps_once_and_a_resend_does_not": {
+     "contract": "案件 thread への人の発言は human_epoch を 1 回進め、同じ発言の再送は進めない"
+    },
+    "project_wake_api_human_chat_off_project_is_inert": {
+     "contract": "状態の行が無い・off の案件への発言は human_epoch も wake も書かない"
+    },
+    "project_wake_api_human_chat_refused_writes_do_not_bump": {
+     "contract": "検査で断られた発言は human_epoch を進めない"
+    },
+    "project_wake_api_human_chat_relay_bumps_once_and_a_resend_does_not": {
+     "contract": "人の言葉の取り次ぎは human_epoch を 1 回進め、再送は進めない"
+    },
+    "project_wake_api_human_inbox_bump_failure_rolls_the_answer_back": {
+     "contract": "human_epoch の書き込みが落ちると受信箱の回答も残らない"
+    },
+    "project_wake_api_human_inbox_cos_answer_and_resolve_are_not_counted": {
+     "contract": "CoS の inbox.answer と /cos/inbox/{id}/resolve は human_epoch を進めない"
+    },
+    "project_wake_api_human_inbox_each_answer_bumps_once": {
+     "contract": "人の受信箱の回答は経路ごとに human_epoch を 1 進め wake を 1 件積む"
+    },
+    "project_wake_api_human_inbox_operator_or_projectless_is_not_counted": {
+     "contract": "operator の回答と案件を持たない task への回答は human_epoch を進めない"
+    },
+    "project_wake_api_human_inbox_plan_withdraw_failure_keeps_the_epoch": {
+     "contract": "plan gate の withdraw が transaction の中で落ちると human_epoch は進まない"
+    },
+    "project_wake_api_human_inbox_refused_answers_do_not_bump": {
+     "contract": "検査で断られた回答は human_epoch を進めない"
+    }
+   }
+  },
+  "crates/task-api/tests/relayed_instructions.rs": {
+   "capability": "celeris-mcp",
+   "contract": "operator が取り次いだ人の指示は案件 CoS の判断の根拠として記録され、決めた主体と実行した主体を分け、範囲外・期限切れは引けない",
+   "b0_hint": [
+    "celeris-mcp"
+   ],
+   "tests": [
+    "a_person_message_records_its_author_without_a_relay",
+    "operator_relay_grounds_the_project_cos_answer_and_separates_decider_from_executor",
+    "relay_after_escalation_is_answered_by_the_rejudging_run_once",
+    "relay_scope_maps_a_closed_authorization_item_to_its_task",
+    "triage_run_cites_a_relay_in_scope_and_refuses_out_of_scope_or_expired_ones"
+   ],
+   "fns": {
+    "a_person_message_records_its_author_without_a_relay": {
+     "contract": "人が API で直接送った発言は認証した主体を作者として記録し、取り次ぎを付けない"
+    },
+    "operator_relay_grounds_the_project_cos_answer_and_separates_decider_from_executor": {
+     "contract": "operator の取り次ぎは案件 CoS の回答の根拠になり、決めた人と実行した operator を分けて記録する"
+    },
+    "relay_after_escalation_is_answered_by_the_rejudging_run_once": {
+     "contract": "escalate した待ちへの取り次ぎは判断し直す run が 1 回だけ答える"
+    },
+    "relay_scope_maps_a_closed_authorization_item_to_its_task": {
+     "contract": "取り次ぎの範囲は閉じた認可の項目をその task に対応させる"
+    },
+    "triage_run_cites_a_relay_in_scope_and_refuses_out_of_scope_or_expired_ones": {
+     "contract": "統括 thread の triage run は範囲内の取り次ぎを引け、範囲外と期限切れは断られる"
+    }
+   }
+  },
+  "crates/task-api/tests/reports.rs": {
+   "capability": "org-projects-reports",
+   "contract": "報告は新しい順に一覧・絞り込みでき、既読と通知は管理系で、件数は page の上限を超えて全行を数える",
+   "b0_hint": [],
+   "tests": [
+    "admin_operations_are_401_even_without_a_configured_token",
+    "count_endpoints_count_every_row_beyond_the_page_limit",
+    "marking_reports_read_is_an_admin_operation",
+    "reports_are_listed_newest_first_and_can_be_filtered",
+    "the_daemon_snapshot_carries_the_unread_counts_and_the_notification_decision"
+   ],
+   "fns": {
+    "admin_operations_are_401_even_without_a_configured_token": {
+     "capability": "http-api-auth-principals",
+     "contract": "token_file が無い構成でも報告の既読・通知の管理系は bearer が無ければ 401"
+    },
+    "count_endpoints_count_every_row_beyond_the_page_limit": {
+     "contract": "報告と通知の件数の endpoint は page の上限を超える行も全部数える"
+    },
+    "marking_reports_read_is_an_admin_operation": {
+     "contract": "報告の既読は管理系の操作で bearer を要する"
+    },
+    "reports_are_listed_newest_first_and_can_be_filtered": {
+     "contract": "報告は新しい順に並び、node・案件・未読で絞り込める"
+    },
+    "the_daemon_snapshot_carries_the_unread_counts_and_the_notification_decision": {
+     "contract": "daemon の snapshot は未読の件数と通知の判定を運ぶ"
+    }
+   }
+  },
+  "crates/task-api/tests/repos.rs": {
+   "capability": "project-repos-workspace",
+   "contract": "案件の repo は管理系で作成・一覧・primary の付け替え・削除ができ、task は名前で repo を選び、tree の読み取りは worktree の外へ出ない",
+   "b0_hint": [],
+   "tests": [
+    "a_task_picks_repos_by_name_and_blocks_their_deletion_until_it_finishes",
+    "changing_repos_needs_the_admin_token_but_reading_does_not",
+    "invalid_repo_input_is_422_and_unknown_ids_are_404",
+    "mixing_a_remote_repo_with_a_local_one_is_rejected",
+    "repos_can_be_created_listed_repointed_and_deleted",
+    "the_tree_file_returns_text_and_only_the_size_for_binaries",
+    "the_tree_lists_every_repo_of_the_task",
+    "the_tree_refuses_to_leave_the_working_tree"
+   ],
+   "fns": {
+    "a_task_picks_repos_by_name_and_blocks_their_deletion_until_it_finishes": {
+     "contract": "POST /tasks は repos を名前で選び、未終端の task が使う repo の削除は 409"
+    },
+    "changing_repos_needs_the_admin_token_but_reading_does_not": {
+     "contract": "repo の変更系は bearer を要し、読み取りは要らない"
+    },
+    "invalid_repo_input_is_422_and_unknown_ids_are_404": {
+     "contract": "重複した名前・不正な slug・知らない cluster・sync=none の repo は 422、知らない id は 404"
+    },
+    "mixing_a_remote_repo_with_a_local_one_is_rejected": {
+     "contract": "remote の repo を local の repo と混ぜた task は 422"
+    },
+    "repos_can_be_created_listed_repointed_and_deleted": {
+     "contract": "repo は作成・一覧・primary の付け替え・変更・削除ができ、Project.workspace は primary の写し"
+    },
+    "the_tree_file_returns_text_and_only_the_size_for_binaries": {
+     "contract": "tree の file は text なら本文、binary と大きすぎる file は size だけを返す"
+    },
+    "the_tree_lists_every_repo_of_the_task": {
+     "contract": "tree は task のすべての repo を repo= で切り替えて一覧する"
+    },
+    "the_tree_refuses_to_leave_the_working_tree": {
+     "contract": "tree の .. ・絶対 path・symlink での worktree 外への脱出は 403、無いものは 404"
+    }
+   }
+  },
+  "crates/task-api/tests/repository_required.rs": {
+   "capability": "project-repos-workspace",
+   "contract": "coding の task は案件の repo が要り、CoS の起票は理由と監査付きで断られ、PATCH の修復は blocked の子だけを直す",
+   "b0_hint": [],
+   "tests": [
+    "repository_required_cos_rejects_with_reason_and_audit_then_accepts_repos",
+    "repository_required_human_warning_and_patch_repair_are_atomic",
+    "repository_required_patch_repairs_blocked_children_but_not_running_tasks"
+   ],
+   "fns": {
+    "repository_required_cos_rejects_with_reason_and_audit_then_accepts_repos": {
+     "contract": "CoS が repo の無い coding task を起票すると理由付きで断られて監査が残り、repo を付けると通る"
+    },
+    "repository_required_human_warning_and_patch_repair_are_atomic": {
+     "contract": "人の起票は警告付きで通り、PATCH での repo の後付けは原子的に効く"
+    },
+    "repository_required_patch_repairs_blocked_children_but_not_running_tasks": {
+     "contract": "repo の PATCH は blocked の子 task を直し、実行中の task は変えない"
+    }
+   }
+  },
+  "crates/task-api/tests/request_lock_counts.rs": {
+   "capability": "http-api-auth-principals",
+   "contract": "主要な GET と通知 feed の同期 1 回は events の量に比例して書き込み接続や SQL を増やさない",
+   "b0_hint": [],
+   "tests": [
+    "main_reads_and_feed_sync_do_not_scale_with_event_volume"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/roles.rs": {
+   "capability": "task-genres-roles",
+   "contract": "task の role は [[roles]] の既定を作成時に入れ、task に書いた値が優先し、知らない role は名前だけ保存する",
+   "b0_hint": [],
+   "tests": [
+    "config_shows_roles_without_instruction_text_and_delegation_limits",
+    "create_task_with_role_applies_role_defaults",
+    "task_values_win_over_role_defaults_and_aggregate_is_stored",
+    "unknown_role_is_stored_without_defaults"
+   ],
+   "fns": {
+    "config_shows_roles_without_instruction_text_and_delegation_limits": {
+     "contract": "GET /config は roles[] と delegation を出し、役割の指示文の本文は出さない"
+    },
+    "create_task_with_role_applies_role_defaults": {
+     "contract": "role を付けた task には [[roles]] の既定が入り、書いていない値は全体の既定のまま"
+    },
+    "task_values_win_over_role_defaults_and_aggregate_is_stored": {
+     "contract": "task に書いた値は役割の既定より優先し、adapter は役割から入り、aggregate はそのまま保存される"
+    },
+    "unknown_role_is_stored_without_defaults": {
+     "contract": "[[roles]] に無い role はエラーにせず名前だけ保存し、既定は全体の既定"
+    }
+   }
+  },
+  "crates/task-api/tests/routing.rs": {
+   "capability": "routing-audit-outcome",
+   "contract": "GET /tasks/{id}/routing は run ごとの routing の監査を返し、shadow の結果は primary の outcome と分ける",
+   "b0_hint": [
+    "routing-lane-route"
+   ],
+   "tests": [
+    "routing_is_empty_without_runs_and_404_for_unknown_tasks",
+    "routing_returns_per_run_audit_and_dropped_assignee",
+    "routing_shadow_audit_keeps_primary_outcome_separate"
+   ],
+   "fns": {
+    "routing_is_empty_without_runs_and_404_for_unknown_tasks": {
+     "contract": "run の無い task の routing は runs=[] の 200、知らない task は 404、不正な query は 400、bearer 無しは 401"
+    },
+    "routing_returns_per_run_audit_and_dropped_assignee": {
+     "contract": "routing は run ごとの監査と落とした assignee を返す"
+    },
+    "routing_shadow_audit_keeps_primary_outcome_separate": {
+     "contract": "shadow の失敗・timeout は primary の outcome・attempts・review に影響しない"
+    }
+   }
+  },
+  "crates/task-api/tests/routing_eval.rs": {
+   "capability": "routing-eval",
+   "contract": "評価 run の試行の API は投入を冪等にし、検証の失敗を 400 で返し、check_cmd を応答に出さない",
+   "b0_hint": [
+    "routing-eval"
+   ],
+   "tests": [
+    "cancel_moves_a_queued_trial_and_conflicts_afterwards",
+    "list_filters_by_batch_and_status",
+    "post_creates_a_batch_and_keeps_the_check_command_server_side",
+    "post_rejects_empty_unknown_route_and_missing_repo_with_400",
+    "reposting_the_same_trials_is_idempotent",
+    "writes_need_the_bearer_token_when_the_daemon_has_one"
+   ],
+   "fns": {
+    "cancel_moves_a_queued_trial_and_conflicts_afterwards": {
+     "contract": "queued の試行の cancel は状態を移し、その後の cancel は 409"
+    },
+    "list_filters_by_batch_and_status": {
+     "contract": "試行の一覧は batch と status で絞り込める"
+    },
+    "post_creates_a_batch_and_keeps_the_check_command_server_side": {
+     "contract": "試行の POST は batch を作り、check_cmd を応答に出さない"
+    },
+    "post_rejects_empty_unknown_route_and_missing_repo_with_400": {
+     "contract": "空・知らない route・無い repo の試行の POST は 400"
+    },
+    "reposting_the_same_trials_is_idempotent": {
+     "contract": "同じ試行の再投入は冪等で重複を作らない"
+    },
+    "writes_need_the_bearer_token_when_the_daemon_has_one": {
+     "contract": "daemon が token を持つとき試行の書き込みは bearer を要する"
+    }
+   }
+  },
+  "crates/task-api/tests/routing_source_state.rs": {
+   "capability": "accounts-quota",
+   "contract": "GET /llm/sources の deployments[] は注入した時刻で source の鮮度・unknown・請求と機会費用を分けて返す",
+   "b0_hint": [],
+   "tests": [
+    "routing_source_api_reports_freshness_and_cost_components",
+    "source_state_view_marks_expired_snapshot_stale"
+   ],
+   "fns": {
+    "routing_source_api_reports_freshness_and_cost_components": {
+     "contract": "deployments[] は観測の鮮度・latency・最小残量・最も早い reset と、請求と機会費用を別の欄で返す"
+    },
+    "source_state_view_marks_expired_snapshot_stale": {
+     "contract": "期限を過ぎた snapshot の source は stale と示す"
+    }
+   }
+  },
+  "crates/task-api/tests/routing_stage.rs": {
+   "capability": "routing-eval",
+   "contract": "routing の stage と evidence は一覧でき、enforce への移行は D1 の evidence を要する",
+   "b0_hint": [
+    "routing-eval"
+   ],
+   "tests": [
+    "stages_and_evidence_are_listed_and_enforce_requires_d1_evidence"
+   ],
+   "fns": {}
+  }
+ },
+ "groups": [
+  {
+   "id": "dup-0629b21af39d",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/task-api/tests/docs.rs::env",
+    "crates/task-api/tests/execution.rs::env",
+    "crates/task-api/tests/knowledge.rs::env",
+    "crates/task-api/tests/repos.rs::env",
+    "crates/task-api/tests/skills.rs::env"
+   ],
+   "names": [
+    "env"
+   ],
+   "users": [
+    "crates/task-api/tests/docs.rs::a_dir_primary_is_replaced_by_a_documents_repository",
+    "crates/task-api/tests/docs.rs::a_project_without_a_repository_gets_a_documents_repository_on_init",
+    "crates/task-api/tests/docs.rs::an_artifact_can_be_promoted_to_a_page",
+    "crates/task-api/tests/docs.rs::an_unknown_project_is_404",
+    "crates/task-api/tests/docs.rs::editing_a_page_commits_on_the_default_branch_and_checks_the_etag",
+    "crates/task-api/tests/docs.rs::editing_while_the_default_branch_is_dirty_is_409",
+    "crates/task-api/tests/docs.rs::maintenance_approved_plan_attaches_to_review_task_and_stale_plan_is_refused",
+    "crates/task-api/tests/docs.rs::maintenance_audit_is_read_only_and_apply_requires_exact_approval",
+    "crates/task-api/tests/docs.rs::pages_are_searched_rendered_and_linked",
+    "crates/task-api/tests/docs.rs::promoting_needs_a_project",
+    "crates/task-api/tests/docs.rs::the_docs_root_comes_from_the_primary_repository",
+    "crates/task-api/tests/execution.rs::a_cyclic_plan_is_rejected_with_422",
+    "crates/task-api/tests/execution.rs::a_plan_with_an_unknown_harness_field_is_rejected_and_duplicate_keys_are_rejected",
+    "crates/task-api/tests/execution.rs::a_second_plan_for_the_same_task_is_rejected_with_409",
+    "crates/task-api/tests/execution.rs::a_v3_plan_is_rejected_with_422_while_the_tree_is_disabled",
+    "crates/task-api/tests/execution.rs::adopting_a_plan_creates_ready_and_pending_work_units",
+    "crates/task-api/tests/execution.rs::decompose_refuses_running_terminal_and_out_of_scope_tasks",
+    "crates/task-api/tests/execution.rs::decompose_sets_an_explicit_compound_hint_and_clears_the_gate_decision",
+    "crates/task-api/tests/execution.rs::execution_metrics_groups_by_gate_mode_by_default",
+    "crates/task-api/tests/execution.rs::execution_metrics_rejects_a_malformed_since",
+    "crates/task-api/tests/execution.rs::execution_metrics_rejects_an_unknown_group_by",
+    "crates/task-api/tests/execution.rs::execution_metrics_since_filters_out_tasks_updated_before_it",
+    "crates/task-api/tests/execution.rs::getting_a_replanned_task_returns_the_active_version_with_both_versions_listed",
+    "crates/task-api/tests/execution.rs::getting_a_task_without_a_plan_is_not_found",
+    "crates/task-api/tests/execution.rs::phase_gate_replan_without_a_note_is_422_and_continue_resumes",
+    "crates/task-api/tests/execution.rs::phase_gate_requires_a_token_and_awaiting_human",
+    "crates/task-api/tests/execution.rs::phase_gate_withdraw_cancels_the_task",
+    "crates/task-api/tests/execution.rs::plan_gate_replan_requests_a_planner_and_withdraw_cancels",
+    "crates/task-api/tests/execution.rs::plan_gate_status_codes_and_inbox",
+    "crates/task-api/tests/execution.rs::posting_to_an_unknown_task_is_not_found",
+    "crates/task-api/tests/execution.rs::posting_without_a_token_is_unauthorized",
+    "crates/task-api/tests/execution.rs::put_with_an_active_plan_is_a_human_replan_that_may_override_a_done_spec",
+    "crates/task-api/tests/execution.rs::retry_with_execution_marks_the_copy_and_drops_the_copied_gate_decision",
+    "crates/task-api/tests/execution.rs::task_execution_for_an_unknown_task_is_not_found",
+    "crates/task-api/tests/execution.rs::task_execution_reports_gate_plan_and_phase",
+    "crates/task-api/tests/execution.rs::task_execution_with_no_activity_returns_zeroed_metrics_and_no_plan",
+    "crates/task-api/tests/knowledge.rs::a_gui_edit_marks_the_page_as_human_authored",
+    "crates/task-api/tests/knowledge.rs::a_page_is_rendered_with_its_front_matter_history_and_etag",
+    "crates/task-api/tests/knowledge.rs::an_uninitialized_knowledge_base_reads_empty_and_refuses_writes",
+    "crates/task-api/tests/knowledge.rs::candidates_can_be_accepted_or_rejected",
+    "crates/task-api/tests/knowledge.rs::candidates_never_appear_in_the_human_inbox",
+    "crates/task-api/tests/knowledge.rs::candidates_with_an_op_show_it_and_accept_behaves_per_op",
+    "crates/task-api/tests/knowledge.rs::the_tree_lists_pages_and_filters_by_scope_and_query",
+    "crates/task-api/tests/knowledge.rs::the_write_endpoints_are_admin_only",
+    "crates/task-api/tests/knowledge.rs::writing_a_page_checks_the_etag_and_the_path",
+    "crates/task-api/tests/repos.rs::a_task_picks_repos_by_name_and_blocks_their_deletion_until_it_finishes",
+    "crates/task-api/tests/repos.rs::changing_repos_needs_the_admin_token_but_reading_does_not",
+    "crates/task-api/tests/repos.rs::invalid_repo_input_is_422_and_unknown_ids_are_404",
+    "crates/task-api/tests/repos.rs::mixing_a_remote_repo_with_a_local_one_is_rejected",
+    "crates/task-api/tests/repos.rs::repos_can_be_created_listed_repointed_and_deleted",
+    "crates/task-api/tests/repos.rs::the_tree_file_returns_text_and_only_the_size_for_binaries",
+    "crates/task-api/tests/repos.rs::the_tree_lists_every_repo_of_the_task",
+    "crates/task-api/tests/repos.rs::the_tree_refuses_to_leave_the_working_tree",
+    "crates/task-api/tests/skills.rs::an_uninitialized_knowledge_base_lists_no_skills",
+    "crates/task-api/tests/skills.rs::mount_validates_the_node_and_the_skill_name_and_requires_admin",
+    "crates/task-api/tests/skills.rs::mounting_a_skill_on_a_node_shows_up_in_mounted_by_including_children",
+    "crates/task-api/tests/skills.rs::put_skill_creates_and_updates_and_requires_admin"
+   ],
+   "adopt": true,
+   "reason": "5 file の env() は common::admin_env() と同じ本体（TOKEN 付きの TestEnv）の写し",
+   "keep_tests": [
+    "crates/task-api/tests/docs.rs::editing_a_page_commits_on_the_default_branch_and_checks_the_etag",
+    "crates/task-api/tests/execution.rs::posting_without_a_token_is_unauthorized",
+    "crates/task-api/tests/knowledge.rs::the_write_endpoints_are_admin_only",
+    "crates/task-api/tests/repos.rs::changing_repos_needs_the_admin_token_but_reading_does_not",
+    "crates/task-api/tests/skills.rs::put_skill_creates_and_updates_and_requires_admin"
+   ],
+   "action": "delete",
+   "plan": "docs・execution・knowledge・repos・skills の局所の env() を消し、呼び出しを common::admin_env() に置き換える",
+   "mutation_target": "crates/task-api/src/middleware.rs"
+  },
+  {
+   "id": "dup-3b3dd18cd349",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/task-api/tests/project_brief.rs::bearer_for",
+    "crates/task-api/tests/project_controller.rs::bearer_for",
+    "crates/task-api/tests/project_roadmap.rs::bearer_for"
+   ],
+   "names": [
+    "bearer_for"
+   ],
+   "users": [
+    "crates/task-api/tests/project_brief.rs::project_status_put_is_written_by_the_project_cos_only",
+    "crates/task-api/tests/project_controller.rs::project_wake_api_cos_may_only_turn_it_off",
+    "crates/task-api/tests/project_roadmap.rs::project_roadmap_cos_and_operator_cannot_decide"
+   ],
+   "adopt": true,
+   "reason": "3 file の bearer_for は common/cos_ops.rs の cos_bearer の thread 作成より後ろ（発言・claim・bearer 発行・policy 記録）と同じ 25 行の写し",
+   "keep_tests": [
+    "crates/task-api/tests/project_brief.rs::project_status_put_is_written_by_the_project_cos_only",
+    "crates/task-api/tests/project_controller.rs::project_wake_api_cos_may_only_turn_it_off",
+    "crates/task-api/tests/project_roadmap.rs::project_roadmap_cos_and_operator_cannot_decide"
+   ],
+   "action": "merge",
+   "plan": "cos_bearer から thread id を受ける cos_run_bearer(env, thread_id, key) を common/cos_ops.rs に切り出し、3 file の bearer_for を消してそれを呼ぶ",
+   "mutation_target": "crates/task-api/src/cos/mod.rs"
+  },
+  {
+   "id": "dup-3dab5992ab4f",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/task-api/tests/organization.rs::pa",
+    "crates/task-api/tests/project_plan.rs::pa",
+    "crates/task-api/tests/repos.rs::pa"
+   ],
+   "names": [
+    "pa"
+   ],
+   "users": [
+    "crates/task-api/tests/organization.rs::a_local_project_workspace_can_choose_the_worktree_mode",
+    "crates/task-api/tests/organization.rs::a_project_can_carry_the_workspace_where_its_code_lives",
+    "crates/task-api/tests/organization.rs::browser_settings_generic_org_patch_uses_same_validation",
+    "crates/task-api/tests/organization.rs::org_can_be_created_listed_patched_and_deleted",
+    "crates/task-api/tests/organization.rs::org_validation_is_reported_as_422_and_duplicate_ids_as_409",
+    "crates/task-api/tests/organization.rs::projects_and_milestones_round_trip_through_the_api",
+    "crates/task-api/tests/project_plan.rs::project_plan_endpoints_are_gone",
+    "crates/task-api/tests/repos.rs::invalid_repo_input_is_422_and_unknown_ids_are_404",
+    "crates/task-api/tests/repos.rs::repos_can_be_created_listed_repointed_and_deleted"
+   ],
+   "adopt": true,
+   "reason": "3 file の pa() は common::patch_admin() と同じ要求（common の TOKEN の bearer 付き PATCH）を作る写し",
+   "keep_tests": [
+    "crates/task-api/tests/organization.rs::org_can_be_created_listed_patched_and_deleted",
+    "crates/task-api/tests/project_plan.rs::project_plan_endpoints_are_gone",
+    "crates/task-api/tests/repos.rs::repos_can_be_created_listed_repointed_and_deleted"
+   ],
+   "action": "delete",
+   "plan": "organization・project_plan・repos の局所の pa() を消し、呼び出しを common::patch_admin() に置き換える",
+   "mutation_target": "crates/task-api/src/handlers/projects.rs"
+  },
+  {
+   "id": "dup-5e6ec9f72bd6",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/task-api/tests/general_cos_consult.rs::env",
+    "crates/task-api/tests/project_cos_guard.rs::env"
+   ],
+   "names": [
+    "env"
+   ],
+   "users": [
+    "crates/task-api/tests/general_cos_consult.rs::general_cos_consult_consult_answers_without_a_task",
+    "crates/task-api/tests/general_cos_consult.rs::general_cos_consult_delegate_creates_one_task_traced_to_the_origin_thread",
+    "crates/task-api/tests/general_cos_consult.rs::general_cos_consult_general_and_project_sessions_stay_separate",
+    "crates/task-api/tests/general_cos_consult.rs::general_cos_consult_proposal_is_cos_words_and_never_an_instruction",
+    "crates/task-api/tests/general_cos_consult.rs::general_cos_consult_read_completes_inside_the_run",
+    "crates/task-api/tests/general_cos_consult.rs::general_cos_consult_relay_forward_with_cos_text_is_refused"
+   ],
+   "adopt": false,
+   "reason": "本体は同じだが WEB_TOKEN が file ごとに違う値の定数を指し、9 行の env を common へ移すには token を引数にする必要があり、2 file では build も読みやすさも変わらない",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-6f1147b9302e",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/task-api/tests/memory.rs::seed_secretary",
+    "crates/task-api/tests/project_plan.rs::seed_secretary"
+   ],
+   "names": [
+    "seed_secretary"
+   ],
+   "users": [
+    "crates/task-api/tests/memory.rs::existing_notes_and_a_projects_drawer_are_returned_in_full",
+    "crates/task-api/tests/memory.rs::missing_files_read_as_empty_and_paths_are_returned",
+    "crates/task-api/tests/memory.rs::there_is_no_write_endpoint",
+    "crates/task-api/tests/memory.rs::unconfigured_memory_is_409_and_an_unknown_node_is_404",
+    "crates/task-api/tests/project_plan.rs::is_root_task_and_stages_hint_are_exposed",
+    "crates/task-api/tests/project_plan.rs::project_detail_hides_frozen_milestones_by_default",
+    "crates/task-api/tests/project_plan.rs::project_plan_endpoints_are_gone"
+   ],
+   "adopt": true,
+   "reason": "memory と project_plan の seed_secretary は同じ秘書の組織 node を作る fixture の写し（中で使う p() も common::post_admin() と同じ要求）",
+   "keep_tests": [
+    "crates/task-api/tests/memory.rs::existing_notes_and_a_projects_drawer_are_returned_in_full",
+    "crates/task-api/tests/project_plan.rs::project_detail_hides_frozen_milestones_by_default"
+   ],
+   "action": "merge",
+   "plan": "seed_secretary(app) を post_admin() で書き直して tests/common に置き、memory.rs と project_plan.rs の写しを消す",
+   "mutation_target": "crates/task-api/src/handlers/org.rs"
+  },
+  {
+   "id": "dup-8d936b305a9e",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/task-api/tests/docs.rs::pu",
+    "crates/task-api/tests/knowledge.rs::pu",
+    "crates/task-api/tests/skills.rs::pu"
+   ],
+   "names": [
+    "pu"
+   ],
+   "users": [
+    "crates/task-api/tests/docs.rs::editing_a_page_commits_on_the_default_branch_and_checks_the_etag",
+    "crates/task-api/tests/docs.rs::editing_while_the_default_branch_is_dirty_is_409",
+    "crates/task-api/tests/docs.rs::pages_are_searched_rendered_and_linked",
+    "crates/task-api/tests/knowledge.rs::a_gui_edit_marks_the_page_as_human_authored",
+    "crates/task-api/tests/knowledge.rs::a_page_is_rendered_with_its_front_matter_history_and_etag",
+    "crates/task-api/tests/knowledge.rs::an_uninitialized_knowledge_base_reads_empty_and_refuses_writes",
+    "crates/task-api/tests/knowledge.rs::writing_a_page_checks_the_etag_and_the_path",
+    "crates/task-api/tests/skills.rs::mounting_a_skill_on_a_node_shows_up_in_mounted_by_including_children",
+    "crates/task-api/tests/skills.rs::put_skill_creates_and_updates_and_requires_admin"
+   ],
+   "adopt": true,
+   "reason": "docs・knowledge・skills の pu() は common の TOKEN の bearer 付き PUT を作る同じ写しで、common に put の管理系 helper が無い",
+   "keep_tests": [
+    "crates/task-api/tests/docs.rs::editing_a_page_commits_on_the_default_branch_and_checks_the_etag",
+    "crates/task-api/tests/knowledge.rs::writing_a_page_checks_the_etag_and_the_path",
+    "crates/task-api/tests/skills.rs::put_skill_creates_and_updates_and_requires_admin"
+   ],
+   "action": "merge",
+   "plan": "common に put_admin(path, body) を patch_admin() の隣に足し、3 file の局所の pu() を消してそれを呼ぶ",
+   "mutation_target": "crates/task-api/src/knowledge.rs"
+  },
+  {
+   "id": "dup-9ed4d4dc0e39",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/task-api/tests/general_cos_consult.rs::rfc3339",
+    "crates/task-api/tests/project_wake_human_chat.rs::rfc3339",
+    "crates/task-api/tests/relayed_instructions.rs::rfc3339",
+    "crates/task-api/tests/single_human_window.rs::rfc3339",
+    "crates/task-api/tests/unblocks.rs::rfc3339"
+   ],
+   "names": [
+    "rfc3339"
+   ],
+   "users": [
+    "crates/task-api/tests/general_cos_consult.rs::general_cos_consult_general_and_project_sessions_stay_separate",
+    "crates/task-api/tests/general_cos_consult.rs::general_cos_consult_proposal_is_cos_words_and_never_an_instruction",
+    "crates/task-api/tests/general_cos_consult.rs::general_cos_consult_relay_forward_with_cos_text_is_refused",
+    "crates/task-api/tests/relayed_instructions.rs::operator_relay_grounds_the_project_cos_answer_and_separates_decider_from_executor",
+    "crates/task-api/tests/relayed_instructions.rs::triage_run_cites_a_relay_in_scope_and_refuses_out_of_scope_or_expired_ones",
+    "crates/task-api/tests/single_human_window.rs::project_escalation_is_answered_through_the_general_cos_and_relayed_to_the_project_cos",
+    "crates/task-api/tests/unblocks.rs::unblocks_api_links_and_promotion_reopens_the_failed_task_once"
+   ],
+   "adopt": false,
+   "reason": "time の Rfc3339 書式を呼ぶだけの 2 行の変換で fixture を持たず、5 file の写しを common へ移しても build も読みやすさも変わらない",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-ad54b1ce2c16",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/task-api/tests/general_cos_consult.rs::run_bearer",
+    "crates/task-api/tests/single_human_window.rs::run_bearer"
+   ],
+   "names": [
+    "run_bearer"
+   ],
+   "users": [
+    "crates/task-api/tests/general_cos_consult.rs::general_cos_consult_proposal_is_cos_words_and_never_an_instruction",
+    "crates/task-api/tests/single_human_window.rs::project_escalation_is_answered_through_the_general_cos_and_relayed_to_the_project_cos"
+   ],
+   "adopt": true,
+   "reason": "general_cos_consult と single_human_window の run_bearer は既存の run に bearer を出して policy の版を記録する同じ写しで、bearer_for の組と同じ手順の後半",
+   "keep_tests": [
+    "crates/task-api/tests/general_cos_consult.rs::general_cos_consult_proposal_is_cos_words_and_never_an_instruction",
+    "crates/task-api/tests/single_human_window.rs::project_escalation_is_answered_through_the_general_cos_and_relayed_to_the_project_cos"
+   ],
+   "action": "merge",
+   "plan": "dup-3b3dd18cd349 で切り出す common/cos_ops.rs の helper に policy の版を引数で渡す bearer 発行を置き、2 file の run_bearer を消してそれを呼ぶ",
+   "mutation_target": "crates/task-api/src/cos/mod.rs"
+  }
+ ]
+}

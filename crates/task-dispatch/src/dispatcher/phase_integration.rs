@@ -617,13 +617,8 @@ impl Dispatcher {
             .collect();
         // D1.4 の 4: その工程の WU の checks（重複を除く。範囲 check は除く）と workspace.toml の check。
         let checks = integration_checks_for_phase(&units, &phase, self.default_checks(task));
-        // ADR 2026-11-08-health-enforcement-loop D1.2: base は段の基点（段の途中で取り込んだ review target の commit の分だけ
-        // 進める。付記 2026-11-10）、head は統合の HEAD（修復の後の再統合も新しい head）。merge の前に決める。
-        let health = check_item::phase_target(
-            check_item::phase_base_commit(&units, &phase),
-            &repo_items,
-            self.phase_review_target(task, &ws),
-        );
+        // ADR 2026-11-08-health-enforcement-loop D1.2: base は段の基点（取り込んだ target の分は進める）、head は統合の HEAD。
+        let health = self.phase_health(task, &ws, &units, &phase, &repo_items);
         let task_dir = ws.task_dir.clone();
         // ADR-0074 F5-fix: 統合 WU の検査は Task の worktree で走るので `<repo-key>`。
         let check_env = self.check_cargo_target_env(task, None);

@@ -442,7 +442,7 @@ pub(super) fn put_rows(
 /// ADR 2026-11-08-health-enforcement-loop D1.2: 段 `phase` の基点 P。その段の葉・子の unit のうち最も前（`seq`）の
 /// unit が切られた commit（`base_commit`）。段の unit は段の始まりの Task のブランチから切られるので、統合と修復を
 /// 繰り返しても同じ基点になる。どの unit も基点を持たなければ `None`。health の base は [`phase_health_base`] が決める。
-pub(super) fn phase_base_commit(units: &[task_core::WorkUnitRow], phase: &str) -> Option<String> {
+fn phase_base_commit(units: &[task_core::WorkUnitRow], phase: &str) -> Option<String> {
     units
         .iter()
         .filter(|u| {
@@ -515,8 +515,8 @@ fn health_repo_id(repo_id: Option<RepoId>) -> RepoId {
 /// D1.2: 段の統合の health の対象。統合後の作業ツリー（検査と同じ先頭の git の repo `repo_items[0]`）で、base は段の基点
 /// `start`（[`phase_base_commit`]）と review target `target`（[`Dispatcher::phase_review_target`]）から
 /// [`phase_health_base`] が統合の前に決める。head は merge の後に [`HealthTarget::at_head`] で統合の HEAD にする。git の
-/// repo が無ければ `None`。
-pub(super) fn phase_target<T>(
+/// repo が無ければ `None`。経路は [`Dispatcher::phase_health`] から呼ぶ。
+fn phase_target<T>(
     start: Option<String>,
     repo_items: &[(PathBuf, Option<RepoId>, T)],
     target: Result<Option<String>, String>,
@@ -560,7 +560,7 @@ impl Dispatcher {
     /// 前の同期と同じ target（[`Dispatcher::review_target_ref`]: 木の子は親の branch、ほかは repo の既定 branch）。案件の
     /// repo の参照が無い作業場所（review 前の同期の対象でない）は `Ok(None)`。参照があるのに target を解決できない・
     /// 読めないときは `Err`（段の統合の health を合格にしない）。
-    pub(in super::super) fn phase_review_target(
+    fn phase_review_target(
         &self,
         task: &Task,
         ws: &task_worker::TaskWorkspaces,
@@ -582,6 +582,20 @@ impl Dispatcher {
                 repo.name
             )),
         }
+    }
+
+    /// D1.2: 段 `phase` の統合の health の対象（[`phase_target`]）。統合の作業場所 `ws`・merge の前の `repo_items` で、段の
+    /// 基点（[`phase_base_commit`]）と review target（[`Self::phase_review_target`]）から base を決める。merge の前に呼ぶ。
+    pub(super) fn phase_health<T>(
+        &self,
+        task: &Task,
+        ws: &task_worker::TaskWorkspaces,
+        units: &[task_core::WorkUnitRow],
+        phase: &str,
+        repo_items: &[(PathBuf, Option<RepoId>, T)],
+    ) -> Option<HealthTarget> {
+        let target = self.phase_review_target(task, ws);
+        phase_target(phase_base_commit(units, phase), repo_items, target)
     }
 
     /// WU の check の結果の health の行を扱う。列の最後の余りの行（`run_integration_checks` が `checks` の後に足す）に

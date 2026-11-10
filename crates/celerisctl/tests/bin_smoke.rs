@@ -1,7 +1,7 @@
 //! `celerisctl` バイナリの最小テスト（`tests/e2e` が `target/debug/celerisctl replay` を使うため、
 //! `cargo test --workspace` でバイナリを必ずビルドさせる）。
 
-use crate::common;
+mod common;
 
 use std::process::Command;
 

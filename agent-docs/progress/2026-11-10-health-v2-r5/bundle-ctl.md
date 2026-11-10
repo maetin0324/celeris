@@ -10,41 +10,45 @@ updated: 2026-11-10
 1. 根本原因: target ごとに link と支援 module のコンパイルが必要になっている。
 2. 責務 owner: celerisctl/tests の test target 構成。architecture-map の「celerisctl（CLI。migration をしない open_client）」の行。
 3. 再利用先: common::celerisctl_path（実行時 CARGO_BIN_EXE_celerisctl を優先）、既存の cli_resolution と各 CLI の契約試験、http_sync fixture。
-4. 選択肢: 独立 target の維持と、ADR の分類どおりの束ね。分類済みの9 targetだけを2束に移し、共有支援 module を束ごとに1回宣言する。
+4. 選択肢: 独立 target の維持と、ADR の分類どおりの束ね。分類済みの6 targetだけを2束に移し、共有支援 module を束ごとに1回宣言する。
 5. 新しい状態・分岐・fallback・port: 無し。
-6. 撤去対象: 元の9 target と各 file の mod common、browser_doctor の重複 fixture 宣言。
+6. 撤去対象: 元の6 target と各 file の mod common、browser_doctor の重複 fixture 宣言。
 7. 不変条件: 試験本体・case数・不変条件の試験・CLI起動先を維持する。cases.py、nextest list、nextest run、束単位の cargo test で確認する。既存 nextest 単独では同一 process の干渉を検出できないため cargo test も行う。
 
+実装完了日: 2026-11-10。WU完了日は未確定（受け入れ条件2のdoc test待ち）。
+
 ## 変更
-- commit 件名: `phase 1: bundle celerisctl integration test targets`
-- browser_eval_surface_suite: bin_smoke、browser_doctor、browser_ledger_release、campaign_connected、cli_resolution、mcp_client_scopes、no_migrate。
+- commit 件名: `phase 1: bundle celerisctl integration test targets`（前回成果を cherry-pick）。
+- commit 件名: `phase 1: preserve referenced CLI test target paths`。
+- browser_eval_surface_suite: browser_doctor、browser_ledger_release、campaign_connected、mcp_client_scopes。
 - unmapped_suite: pipe、skills_import。
-- common と HTTP fixture は main.rs で宣言し、元の file は crate の module を参照する。試験本体は変更していない。
-- no_migrate は一時 DB の schema と子 CLI のみを操作する。親 process の env/CWD/signal を変更しないため、ADR の分類どおり束ねた。
-- terminal_pty は PTY と子 session の終了・signal、worker_run_signal は worker の signal と終了を検証するため独立維持。org_migrate_v2 は数字を含むため移動しない。campaign_export、routing_cli、eval_requests、followups は R6 担当で元の path を維持した。
+- reclass の分類に合わせ、bin_smoke・cli_resolution・no_migrate は元の path と base の内容へ戻した。
+- common と HTTP fixture は main.rs で宣言する。試験本体は変更していない。
+- 全6 file は common::celerisctl_path を呼び、実行時 CARGO_BIN_EXE_celerisctl と埋込みの同名変数で既存の binary を解決する。
+- terminal_pty と worker_run_signal は PTY・signal の独立性を保ち、org_migrate_v2 は数字を含むため動かさない。他の r6 target も元の path を維持する。
 
 ## 検査
 基準は `$CELERIS_WU_BASE`。提出時の HEAD で実行。
-- classify.py --verify-leaf bundle-ctl: exit 0、担当9 targetの移動、keep/r6 243 targetの元の配置、error 0。
-- cases.py --crate celerisctl --base "$CELERIS_WU_BASE": exit 0、試験関数205→205、表の行118→118、不変条件18（7 file）、removals 0。
-- cargo nextest list -p celerisctl --message-format json: 前後ともexit 0、試験205→205、binary19→12（integration target18→11）。
-- cargo nextest run -p celerisctl -E 'binary_id(celerisctl::browser_eval_surface_suite) | binary_id(celerisctl::unmapped_suite)': exit 0、35 passed。
-- cargo test -p celerisctl --test browser_eval_surface_suite --test unmapped_suite: exit 0、33 + 2 passed。同一processで束ごとの全試験が合格した。
-- CLI の起動先は既存の common::celerisctl_path を共有し、cli_resolution の6件を束の両実行方式で通した。runtime mapping 優先、埋込みpath、無効mapping拒否、実CLIのhelpを維持している。
-
-- bash scripts/dev/test-affected.sh --list: exit 0、対象celerisctlのみ。
-- bash scripts/dev/test-affected.sh: exit 1、冒頭のhealthでarch-map.wrong_path 3件。cargo試験には未到達。
-- bash scripts/dev/check-health.sh --base "$CELERIS_WU_BASE": exit 1、verdict=fail、fail_grade=3。
-- python3 scripts/dev/check-architecture-map.py: exit 1、bin_smoke・cli_resolution・no_migrate の旧path3件が存在しない。
-- cargo clippy --workspace -- -D warnings: exit 0。
-- cargo fmt --all -- --check: exit 0。
-- B0 slices-check.py --write-set R5: exit 0、write-set R5: ok。
-- sh scripts/dev/progress-index.sh --check / sh scripts/dev/check-doc-links.sh: ともにexit 0。
+- 分類検査: exit 0、担当6 target移動、keep/r6 262 target元の配置、error 0。
+- cases.py: exit 0、試験関数205→205、表の行118→118、不変条件18（7 file）、removals 0。
+- B0 slices-check.py --write-set R5: exit 0。
+- `cargo nextest list -p celerisctl --message-format json`: exit 0、205 tests、15 binaries。base の19 binariesから4減（integration target18→14、6 target→2束）。
+- `cargo test -p celerisctl --test browser_eval_surface_suite --test unmapped_suite`: exit 0、22＋2 passed。同一processで束ごとの全試験が合格。
+- `bash scripts/dev/test-affected.sh --list`: exit 0、対象celerisctlのみ。
+- `bash scripts/dev/test-affected.sh`: exit 101。health verdict=pass（fail_grade=0）、health unit 1＋78件とgate7件合格、nextest 205 passed / 15 binaries。doc testでlibrary targetなしのエラー。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `cargo fmt --all -- --check`: exit 0。
+- `cargo nextest run -p celerisctl -E 'binary_id(celerisctl::browser_eval_surface_suite) | binary_id(celerisctl::unmapped_suite)'`: exit 0、24 passed / 2 binaries。
+- `python3 scripts/dev/check-architecture-map.py`: exit 0、990 path確認。
+- `classify.py --check inventory.json`: exit 0、352 targets / 20 bundles / error 0。
+- `sh scripts/dev/progress-index.sh --check` と `sh scripts/dev/check-doc-links.sh`: exit 0。
+- `sh "$CELERIS_WU_SCOPE_PATHS"`: exit 0、変更は担当6 target・2 main.rs・この進捗のみ。
+- r6に復元した3 file のbaseとの差分はゼロ。
 
 ## 未解決事項
-health と test-affected が architecture-map の旧参照3件で exit 1。地図を直さないと受け入れ条件2を満たせないが、docs/architecture-map.md はR5のwrite set外。範囲外には変更せず plan_issue を申告する。分類器は brace 形式の参照を拾えておらず、この3 targetをbundle-ctlへ誤分類した可能性がある。検査器の変更もこのWUでは行わない。
-
-完了日は未確定。人またはplannerが、地図と分類を修正できる範囲のtask/WUを用意してから再開する。
+`test-affected` は試験205件に合格した後、`cargo test --doc -p celerisctl` が「no library targets found」で exit 101。
+この base には affected-features の変更がまだ入っていない。scripts/dev/test-affected.sh は別 WU の担当なので変更しない。
+受け入れ条件2は未達。affected-features の成果を統合後に再実行する必要がある。plan_issue として申告する。
 
 ## 提案
-architecture-map の CLI 行は brace 形式で no_migrate・cli_resolution・bin_smoke の元の path を参照している。inventory はこの3件を bundle-ctl に分類済みであり、今回の移動は承認済みのADRと分類に従った。地図はR5のwrite set外なので変更していない。R6への延期では今回のhealthが通らないため、計画の見直しが必要。地図の参照を同時に修正できる範囲を追加するか、分類とADRを修正してこの3 targetを元のpathに維持する。
+無し。

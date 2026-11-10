@@ -1,12 +1,12 @@
 ---
 title: 健全性v2 G4 exc-expiry — profile の例外の期限（expires）と期限切れの例外の扱い
 tasks: [01M72DBBE7AFCNXYWSB5M0YZW9]
-status: running
+status: done
 updated: 2026-11-10
 ---
 # 健全性v2 G4 exc-expiry — profile の例外の期限（expires）と期限切れの例外の扱い
 
-完了日: 未（WorkUnit `expiry` の実装と試験は 2026-11-10 に終えた。task は、人が承認の材料 exc-expiry-policy-diff.md で policy の差分を承認し、operator がこの branch を main に no-ff merge した後に、WorkUnit `land` が done にする）
+完了日: 2026-11-10（人が決定 policy-approve で policy の差分を承認し、operator がこの task の branch を main に no-ff merge した。merge の後の確認は WorkUnit `land-main`）
 
 WorkUnit `expiry`（task 01M72DBBE7AFCNXYWSB5M0YZW9）。人の決定 exception-expiry「G4 で実装する（子 task exc-expiry）」による。決め事は [ADR 2026-11-07 repo health の契約](../../adr/2026-11-07-repo-health-contract.md) の「付記（2026-11-10、期限付き例外）」。変えた検査器は Celeris profile の `policy_paths`（`^scripts/dev/repo-health/`）に当たる policy の file なので、この branch は policy の branch になる（前例は [G3 ci-entry](../2026-11-07-health-v2-g3/ci-entry.md)）。基準は `$CELERIS_WU_BASE`（統合後は `git merge-base HEAD main`）。
 
@@ -31,7 +31,7 @@ WorkUnit `expiry`（task 01M72DBBE7AFCNXYWSB5M0YZW9）。人の決定 exception-
 
 head の日付で判定すれば expired と in_term の結果が逆になる。in_term の base の日付は JST では 2026-03-02 で、UTC で判定するときだけ期限の当日になる。
 
-## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`、ci.sh は `git merge-base HEAD main`）
+## merge の前の証拠（WorkUnit `expiry` の提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`、ci.sh は `git merge-base HEAD main`）
 - `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health_exception_expiry.py' -v` → exit 0、5 件 ok（`test_exception_expired_finding_counts_as_fail`・`test_exception_expiry_in_term_exempts_finding`・`test_exception_expiry_extension_by_candidate_does_not_pass`・`test_exception_expiry_rejects_invalid_value`・`test_exception_expiry_report_validates`）。
 - `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health*.py'` → exit 0、78 件 OK（変更前の 73 件 + 5 件）。
 - `python3 -I scripts/dev/repo-health/validate_report.py scripts/dev/repo-health/schema/examples/*.json` → exit 0、`13 valid, 0 invalid`。不正な例 25 件は 1 件ずつ exit 1（`test_repo_health_contract` の `test_bad_examples_each_invalid_with_location` が合格）。
@@ -51,11 +51,24 @@ head の日付で判定すれば expired と in_term の結果が逆になる。
   - `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health*.py'` → exit 0、78 件 OK。
 - WorkUnit record は `scripts/`・`crates/` を変えていない（変えたのはこの進捗だけ）。
 
+## main への merge（人の決定 policy-approve、2026-11-10）
+- 人が承認の材料 exc-expiry-policy-diff.md で policy の差分を確かめて承認した（`scripts/dev/repo-health/` の差分の sha256 は材料の `d8e07776f99c567796d44fa5bfd1405b14f532ffd2de4f60a31b93d85b7cf98e` と一致）。この決定は v1 の決定 policy-merge に代わる。
+- operator がこの task の branch（`celeris/01M72DBBE7AFCNXYWSB5M0YZW9`）を main に no-ff merge した。merge commit の件名は「integrate 01M72DBBE7: repo health の期限付き例外（policy の branch、人の承認済み。G4 exc-expiry）」。merge の 2 つ目の親は件名「integrate wu/record (phase impl)」の commit（task の branch の先端）。
+- operator は親 G4（task 01M6TYVJSXBZMSBC0YGAT2TTX0）の branch `celeris/01M6TYVJSXBZMSBC0YGAT2TTX0` を同じ merge commit まで `git merge --ff-only` で進めた。
+
+## main への merge の後の確認（WorkUnit `land-main`。提出時の HEAD で実行。基準は `git merge-base HEAD main`）
+v1 の WorkUnit `land` の仕事を引き継いだ。この WorkUnit は main を取り込まず、branch を merge せず、`scripts/` を変えていない（変えたのはこの進捗だけ）。
+- expiry の commit（`scripts/dev/repo-health/health/profile.py` を最後に変えた commit。件名「G4 exc-expiry: profile の例外の expires と期限切れの例外の report（base 側で判定）」）は `git merge-base HEAD main` の祖先（`git merge-base --is-ancestor` → exit 0）。`git diff $(git merge-base HEAD main) HEAD -- scripts/` は 0 行。
+- `git merge-base --is-ancestor HEAD main` → exit 0、`git merge-base --is-ancestor celeris/01M72DBBE7AFCNXYWSB5M0YZW9 main` → exit 0（task の branch の先端は main の祖先）。
+- 親 G4 の branch は main の merge commit を含む: `git merge-base --is-ancestor <merge commit> celeris/01M6TYVJSXBZMSBC0YGAT2TTX0` → exit 0。確認の時点で親の branch の先端は main の先端と同じ commit（上の merge commit）だった。final review の基準（review_target_ref）が merge commit を含むので、health:policy_mixed にはならない見込み（G3 ci-entry の parent-sync と同じ形）。
+- 下の「merge の後の検査」に検査の結果を書く。merge の前に `policy.changed` で exit 1 だった `check-health.sh`・`test-affected.sh` は exit 0 になった。
+
+## merge の後の検査（WorkUnit `land-main` の提出時の HEAD で実行。基準は `git merge-base HEAD main`）
+- （検査の実行中）
+
 ## 未解決
-- この branch は main に merge するまで、`ci.sh`・`check-health.sh`・`test-affected.sh` が `policy.changed` で exit 1 になる（ADR health-review-integration D6.6）。D6.2（policy の file だけの変更を exit 0 にする扱い）は働かない。試験（`scripts/tests/`）・ADR・進捗は policy の file でない。
-- 人の承認と operator の no-ff merge はまだ。承認の材料 exc-expiry-policy-diff.md は WorkUnit record が作った。operator は材料の (d) の手順で merge し、WorkUnit land が merge の後に main の祖先と check-health.sh を確かめる。
-- 親 G4 の branch を ff-only で進められるのは、親の branch が main から分かれていないときだけ。材料の作成時は main・親の branch・task の branch の先端が同じ commit だったが、親 G4 の WorkUnit adr の branch は別の commit を指していた。親の段の統合が先に入れば ff できなくなり、人の決定が要る。
-- 今の Celeris profile（`profiles/celeris.toml`）の例外 2 件には期限を付けていない。付けるかどうかは決めていない。
+- 無し。merge の前の未解決 4 件のうち、`policy.changed` による exit 1、人の承認と operator の no-ff merge、親 G4 の branch の ff-only の 3 件は上の「main への merge」と「main への merge の後の確認」で解けた。
+- 今の Celeris profile（`profiles/celeris.toml`）の例外 2 件には期限を付けていない。付けるかどうかは決めていない（この task の範囲の外。下の「提案」を参照）。
 
 ## 提案
 - 期限切れが近い例外を前もって知らせる仕組み（例: 基準日から 14 日以内に切れる例外を report の warning にする）は、この付記に含めていない。要るなら別の付記で、期限の何日前から知らせるかを決めてから足す。

@@ -12,7 +12,6 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use base64::Engine;
-use serde::Deserialize;
 use task_core::{Check, RateLimitObservation, Task, TaskKind, Usage};
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::Command;
@@ -21,8 +20,9 @@ use tracing::warn;
 use crate::adapter::{AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter};
 use crate::delegate_file::{clear_delegate_file, forward_delegate_file};
 use crate::progress;
-use crate::protocol::{Answer, Evidence, ProviderFailure, RunContext, RunRequest};
+use crate::protocol::{Answer, ProviderFailure, RunContext, RunRequest};
 use crate::provider::classify_provider_failure;
+use crate::result_report::{ResultFileRead, interpret_result_text};
 use crate::subprocess::{
     LineOutcome, MAX_LINE_BYTES, kill_now, read_line_limited, read_tail, reap_after_terminal,
     write_result_json,
@@ -132,35 +132,6 @@ use prompt::{
     delegate_workspace_instruction, harness_artifacts_section_for_plan,
     harness_artifacts_section_for_review, workspace_section_for_plan,
 };
-
-/// `artifacts/result.json`（ADR-0006 D3）。
-#[derive(Debug, Deserialize)]
-struct ResultFile {
-    #[serde(default)]
-    summary: Option<String>,
-    #[serde(default)]
-    question: Option<String>,
-    /// 生の JSON で受け、`lenient_evidence` で整形する（ADR-0006 D3: `evidence` の内容の正確さは要求しない。
-    /// Phase 5 のドッグフードで、ワーカーが文字列の配列を書いて run 全体が `error` になる事故があった）。
-    #[serde(default)]
-    evidence: serde_json::Value,
-    /// ADR-0072 D9/D10（Phase E1）: graceful yield（`{"yield": {...checkpoint の意味の欄...}}`）。
-    /// 中身は寛容に読む（`task_core::WorkerCheckpointInput` と同じ形。生の JSON のまま保持し、
-    /// 検証・合成はディスパッチャ側の `task_core::merge_checkpoint` が行う）。
-    #[serde(default, rename = "yield")]
-    r#yield: Option<serde_json::Value>,
-}
-
-/// `evidence` のうち `Evidence` として読めた要素だけを残す。配列でない／要素が不正でも `done` を失敗にしない。
-fn lenient_evidence(value: serde_json::Value) -> Vec<Evidence> {
-    match value {
-        serde_json::Value::Array(items) => items
-            .into_iter()
-            .filter_map(|item| serde_json::from_value::<Evidence>(item).ok())
-            .collect(),
-        _ => Vec::new(),
-    }
-}
 
 /// stream-json の最後に観測した `{"type":"result",...}`（ADR-0006 D4）。
 #[derive(Debug, Clone)]
@@ -872,25 +843,12 @@ async fn run_claude_code(
             )
         }
         (None, Some(meta)) => {
-            let mut outcome = if req.requires_result_file()
-                && let Some(error) = crate::result_location::misplaced_report(
-                    crate::result_location::RESULT_FILE_NAME,
-                    &req.artifacts_dir,
-                    req.cwd(),
-                    run_started,
-                )
-                .await
-            {
-                (error, None)
-            } else {
-                terminal_from_result(
-                    &req.artifacts_dir,
-                    &artifacts_rel,
-                    meta,
-                    config.model.as_deref(),
-                )
-                .await
-            };
+            let mut outcome = terminal_from_result(
+                crate::result_report::read_result_file(req, run_started).await,
+                &artifacts_rel,
+                meta,
+                config.model.as_deref(),
+            );
             // F5-fix5: `result` は success（`stop_reason: end_turn`）なのに `result.json` が無く、
             // その `result` の時点で background task がまだ走っていた＝headless の run が「通知を
             // 待つ」と言って turn を終え、CLI がその task を殺した（本番 run 01M3KF2HFMHPJR7YEB5HMT38MQ）。
@@ -1402,12 +1360,20 @@ const DISABLE_BACKGROUND_TASKS_ENV: &str = "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS
 /// F5-fix5: Claude Code CLI の Bash の `timeout` の上限（ミリ秒。既定 600000）。
 const BASH_MAX_TIMEOUT_ENV: &str = "BASH_MAX_TIMEOUT_MS";
 
-async fn terminal_from_result(
-    artifacts_dir: &Path,
+/// `result` メッセージと `artifacts/result.json` の読み取り結果から終端を合成する。誤配置は `ResultMeta` の
+/// 判定より先に勝つ（呼び出し元の cos_chat・background task の分岐より前でもある）。本文の解釈は結果契約の
+/// 正本（`result_report::interpret_result_text`。ADR 2026-11-10-adapter-result-contract D1）に任せる。
+fn terminal_from_result(
+    read: ResultFileRead,
     artifacts_rel: &str,
     last_result: &ResultMeta,
     model: Option<&str>,
 ) -> (Terminal, Option<ProviderFailure>) {
+    let text = match read {
+        ResultFileRead::Misplaced(error) => return (*error, None),
+        ResultFileRead::Missing => None,
+        ResultFileRead::Text(text) => Some(text),
+    };
     if last_result.is_error || last_result.subtype != "success" {
         // ADR-0072 D7（Phase E1）: `error_max_turns` は `--max-turns` の上限に当たったという
         // claude-code 自身の分類なので、字句判定なしで構造化できる（wall-clock は別経路。上の呼び出し元
@@ -1457,71 +1423,32 @@ async fn terminal_from_result(
         );
     }
 
-    let result_path = artifacts_dir.join("result.json");
-    let text = match tokio::fs::read_to_string(&result_path).await {
-        Ok(t) => t,
-        Err(_) => {
-            // ADR-0072 E2（P-E0-2 の修正）: `result` メッセージは観測できた（= claude 自身は正常に
-            // 終わったと申告した）のに `result.json` そのものが無い（Phase 112 D3 / 115 D2 の
-            // work_dir 側の回収を試みた後もなお無い）。これは worker 自身の判断の誤りというより、
-            // 書き込みが間に合わなかった・消えたという供給側/インフラ側の事情に近い。呼び出し元
-            // （`run`）はこの文言（`RESULT_JSON_MISSING_MARKER`）を見て `Err(AdapterError)`
-            // （`ProviderFailure` は無し）に倒し、ADR-0070 D3 どおり attempts を消費しない
-            // `InfraRequeue` の経路に乗せる（従来は `Ok(Terminal::Error{retryable:true})` になり、
-            // `WorkerError{true}` として attempts を消費していた）。
-            return (
-                Terminal::Error {
-                    message: format!("{RESULT_JSON_MISSING_MARKER}{artifacts_rel}/result.json"),
-                    retryable: true,
-                    usage: None,
-                },
-                None,
-            );
-        }
+    let Some(text) = text else {
+        // ADR-0072 E2（P-E0-2 の修正）: `result` メッセージは観測できた（= claude 自身は正常に
+        // 終わったと申告した）のに `result.json` そのものが無い（Phase 112 D3 / 115 D2 の
+        // work_dir 側の回収を試みた後もなお無い）。これは worker 自身の判断の誤りというより、
+        // 書き込みが間に合わなかった・消えたという供給側/インフラ側の事情に近い。呼び出し元
+        // （`run`）はこの文言（`RESULT_JSON_MISSING_MARKER`）を見て `Err(AdapterError)`
+        // （`ProviderFailure` は無し）に倒し、ADR-0070 D3 どおり attempts を消費しない
+        // `InfraRequeue` の経路に乗せる（従来は `Ok(Terminal::Error{retryable:true})` になり、
+        // `WorkerError{true}` として attempts を消費していた）。
+        return (
+            Terminal::Error {
+                message: format!("{RESULT_JSON_MISSING_MARKER}{artifacts_rel}/result.json"),
+                retryable: true,
+                usage: None,
+            },
+            None,
+        );
     };
-
-    // ADR-0090 D1: クラスタ job の終了待ち（`question` が無ければ `summary` より優先）。
-    if let Some(terminal) =
-        crate::adapter::result_file_wait(&text, usage_with_cost(last_result.usage, model))
-    {
-        return (terminal, None);
-    }
-    let terminal = match serde_json::from_str::<ResultFile>(&text) {
-        Ok(rf) => {
-            // ADR-0072 D9: 優先順位は `question` > `summary` > `yield`（ADR-0090: `wait` は `summary` の前）。
-            if let Some(question) = rf.question {
-                Terminal::Question {
-                    text: question,
-                    usage: usage_with_cost(last_result.usage, model),
-                }
-            } else if let Some(summary) = rf.summary {
-                Terminal::Done {
-                    summary,
-                    evidence: lenient_evidence(rf.evidence),
-                    usage: usage_with_cost(last_result.usage, model),
-                }
-            } else if let Some(checkpoint) = rf.r#yield {
-                Terminal::Yielded {
-                    checkpoint,
-                    usage: usage_with_cost(last_result.usage, model),
-                }
-            } else {
-                Terminal::Error {
-                    message: format!(
-                        "{artifacts_rel}/result.json has neither 'summary', 'question' nor 'yield'"
-                    ),
-                    retryable: true,
-                    usage: None,
-                }
-            }
-        }
-        Err(e) => Terminal::Error {
-            message: format!("{artifacts_rel}/result.json is not valid JSON: {e}"),
-            retryable: true,
-            usage: None,
-        },
-    };
-    (terminal, None)
+    (
+        interpret_result_text(
+            &text,
+            artifacts_rel,
+            usage_with_cost(last_result.usage, model),
+        ),
+        None,
+    )
 }
 
 #[cfg(test)]

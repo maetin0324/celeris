@@ -48,8 +48,9 @@ use crate::cos_chat::capabilities::{
 };
 use crate::delegate_file::{clear_delegate_file, forward_delegate_file};
 use crate::progress;
-use crate::protocol::{Evidence, ProviderFailure, RunRequest};
+use crate::protocol::{ProviderFailure, RunRequest};
 use crate::provider::classify_provider_failure;
+use crate::result_report::{ResultFileRead, interpret_result_text};
 use crate::subprocess::{
     LineOutcome, MAX_LINE_BYTES, kill_now, read_line_limited, read_tail, reap_after_terminal,
     send_signal_to_group, write_result_json,
@@ -156,30 +157,6 @@ impl WorkerAdapter for AcpAdapter {
         let mut config = self.config.clone();
         config.container = Some(plan);
         Some(Arc::new(AcpAdapter::new(config)))
-    }
-}
-
-/// `artifacts/result.json`（`claude_code::ResultFile` と同じ規約。ADR-0006 D3, ADR-0026 D3）。
-#[derive(Debug, Deserialize)]
-struct ResultFile {
-    #[serde(default)]
-    summary: Option<String>,
-    #[serde(default)]
-    question: Option<String>,
-    #[serde(default)]
-    evidence: serde_json::Value,
-    /// ADR-0072 D9（Phase E1）: graceful yield（`claude_code::ResultFile::r#yield` と同じ規約）。
-    #[serde(default, rename = "yield")]
-    r#yield: Option<serde_json::Value>,
-}
-
-fn lenient_evidence(value: serde_json::Value) -> Vec<Evidence> {
-    match value {
-        serde_json::Value::Array(items) => items
-            .into_iter()
-            .filter_map(|item| serde_json::from_value::<Evidence>(item).ok())
-            .collect(),
-        _ => Vec::new(),
     }
 }
 
@@ -707,14 +684,16 @@ async fn finish_run(
     stderr_task: tokio::task::JoinHandle<()>,
     mut stdout_file: tokio::fs::File,
     run_dir: &Path,
-    // ADR-0036 D1/D2: 成果物と結果ファイルの置き場（`RunRequest.artifacts_dir`）と、その workspace 相対表記。
-    artifacts_dir: &Path,
-    artifacts_rel: &str,
+    // ADR-0036 D1/D2: 成果物と結果ファイルの置き場は `req.artifacts_dir`。`run_started` は誤配置の回収
+    // （`result_report::read_result_file`）が候補を絞る run の開始時刻。
+    req: &RunRequest,
+    run_started: std::time::SystemTime,
     stderr_log_path: &Path,
     sink: &dyn EventSink,
     outcome: RawOutcome,
     run_id: &str,
 ) -> Result<RunOutcome, AdapterError> {
+    let artifacts_dir = req.artifacts_dir.as_path();
     let force_kill = matches!(outcome, RawOutcome::TimedOut(_));
     let exit_status = if force_kill {
         // ADR-0026 D4: まず `session/cancel` を送り、`kill_grace` 待ってからプロセスグループへ SIGKILL。
@@ -796,7 +775,7 @@ async fn finish_run(
                         usage: None,
                     }
                 }
-                _ => terminal_from_result_file(artifacts_dir, artifacts_rel, &stop_reason).await,
+                _ => terminal_from_result_file(req, run_started, &stop_reason).await,
             };
             (terminal, None)
         }
@@ -818,9 +797,11 @@ async fn finish_run(
 /// 結果ファイル（`<artifacts_dir>/result.json`）から終端を合成する（ADR-0026 D3 手順 7、ADR-0036 D2）。
 /// ACP 自体には成功/失敗の強い意味論が無いので（D1: 運搬・観測・生存管理だけ）、`stopReason` に関わらず
 /// 常にこのファイルを見る。ファイルが無ければ `stopReason` を理由として `Error{retryable:true}` にする。
+/// 本文の解釈は結果契約の正本（`result_report::interpret_result_text`。ADR 2026-11-10-adapter-result-contract
+/// D1）に任せる。
 async fn terminal_from_result_file(
-    artifacts_dir: &Path,
-    artifacts_rel: &str,
+    req: &RunRequest,
+    run_started: std::time::SystemTime,
     stop_reason: &str,
 ) -> Terminal {
     // ADR-0072 D7/§6 (i)（Phase E1）: `stopReason == "max_turn_requests"` は turn の上限に当たったと
@@ -833,60 +814,19 @@ async fn terminal_from_result_file(
             usage: None,
         };
     }
-    let result_path = artifacts_dir.join("result.json");
-    let text = match tokio::fs::read_to_string(&result_path).await {
-        Ok(t) => t,
-        Err(_) => {
-            return Terminal::Error {
-                message: format!(
-                    "acp agent stopped ({stop_reason}) without {artifacts_rel}/result.json"
-                ),
-                retryable: true,
-                usage: None,
-            };
-        }
-    };
-    // ADR-0090 D1: クラスタ job の終了待ち（`question` が無ければ `summary` より優先）。
-    if let Some(terminal) = crate::adapter::result_file_wait(&text, None) {
-        return terminal;
-    }
-    match serde_json::from_str::<ResultFile>(&text) {
-        Ok(rf) => {
-            // ADR-0072 D9: 優先順位は `question` > `summary` > `yield`。
-            if let Some(question) = rf.question {
-                Terminal::Question {
-                    text: question,
-                    usage: None,
-                }
-            } else if let Some(summary) = rf.summary {
-                // ADR-0026: PromptResponse の token 使用量は `unstable_end_turn_token_usage`
-                // （安定版 ACP には無い）でしか運ばれず、opencode の実機確認でも観測されていないため
-                // 常に `None` にする（`usage` を埋める標準フィールドが無い）。
-                Terminal::Done {
-                    summary,
-                    evidence: lenient_evidence(rf.evidence),
-                    usage: None,
-                }
-            } else if let Some(checkpoint) = rf.r#yield {
-                Terminal::Yielded {
-                    checkpoint,
-                    usage: None,
-                }
-            } else {
-                Terminal::Error {
-                    message: format!(
-                        "{artifacts_rel}/result.json has neither 'summary', 'question' nor 'yield'"
-                    ),
-                    retryable: true,
-                    usage: None,
-                }
-            }
-        }
-        Err(e) => Terminal::Error {
-            message: format!("{artifacts_rel}/result.json is not valid JSON: {e}"),
+    let artifacts_rel = req.artifacts_rel();
+    match crate::result_report::read_result_file(req, run_started).await {
+        ResultFileRead::Misplaced(error) => *error,
+        ResultFileRead::Missing => Terminal::Error {
+            message: format!(
+                "acp agent stopped ({stop_reason}) without {artifacts_rel}/result.json"
+            ),
             retryable: true,
             usage: None,
         },
+        // ADR-0026: PromptResponse の token 使用量は `unstable_end_turn_token_usage`（安定版 ACP には無い）
+        // でしか運ばれず、opencode の実機確認でも観測されていないため常に `None` にする。
+        ResultFileRead::Text(text) => interpret_result_text(&text, &artifacts_rel, None),
     }
 }
 
@@ -897,6 +837,7 @@ async fn run_acp(
     limits: &RunLimits,
     sink: &dyn EventSink,
 ) -> Result<RunOutcome, AdapterError> {
+    let run_started = std::time::SystemTime::now();
     // CoS chat has full tool permission within the worker's existing sandbox. The older
     // Secretary conversation path keeps its ADR-0054 blanket Deny exactly as before.
     let config = &if req.context.cos_chat.is_none()
@@ -1450,8 +1391,8 @@ async fn run_acp(
                             stderr_task,
                             stdout_file,
                             &run_dir,
-                            &req.artifacts_dir,
-                            &artifacts_rel,
+                            req,
+                            run_started,
                             &stderr_log_path,
                             sink,
                             RawOutcome::Eof {
@@ -1470,8 +1411,8 @@ async fn run_acp(
                             stderr_task,
                             stdout_file,
                             &run_dir,
-                            &req.artifacts_dir,
-                            &artifacts_rel,
+                            req,
+                            run_started,
                             &stderr_log_path,
                             sink,
                             RawOutcome::TimedOut(terminal),
@@ -1610,8 +1551,8 @@ async fn run_acp(
         stderr_task,
         stdout_file,
         &run_dir,
-        &req.artifacts_dir,
-        &artifacts_rel,
+        req,
+        run_started,
         &stderr_log_path,
         sink,
         outcome,

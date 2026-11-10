@@ -54,19 +54,9 @@ pub enum Terminal {
     },
 }
 
-/// ADR-0090 D1: `result.json` の本文が wait の申告で、`question` を持たなければその終端（優先順位は
-/// `question` > `wait` > `summary` > `yield`。入れ子の形 `{"summary": .., "wait": {..}}` は `summary` を一緒に持つ）。
-/// JSON として読めない・申告が無ければ `None`。
-pub fn result_file_wait(text: &str, usage: Option<Usage>) -> Option<Terminal> {
-    let value = serde_json::from_str::<serde_json::Value>(text).ok()?;
-    if value.get("question").is_some_and(|q| q.is_string()) {
-        return None;
-    }
-    wait_terminal(&value, usage)
-}
-
 /// ADR-0090 D1: `result.json` の値が wait の申告なら、その終端（不正なら `Error{retryable: true}`）。
 /// 申告が無ければ `None`（呼び出し側は従来の `question` / `summary` / `yield` の読み方に進む）。
+/// harness adapter の結果ファイルは結果契約の正本（`result_report::interpret_result_text`）がこれを呼ぶ。
 pub fn wait_terminal(value: &serde_json::Value, usage: Option<Usage>) -> Option<Terminal> {
     match task_core::cluster_job::parse_wait_request(value)? {
         Ok((request, checkpoint)) => Some(Terminal::Waiting {

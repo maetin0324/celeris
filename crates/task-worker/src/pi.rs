@@ -5,7 +5,6 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use serde::Deserialize;
 use task_core::Usage;
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::Command;
@@ -14,8 +13,9 @@ use tracing::warn;
 use crate::adapter::{AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter};
 use crate::claude_code::build_prompt_with_skill_list;
 use crate::delegate_file::{clear_delegate_file, forward_delegate_file};
-use crate::protocol::{Evidence, RunRequest};
+use crate::protocol::RunRequest;
 use crate::provider::classify_provider_failure;
+use crate::result_report::{ResultFileRead, interpret_result_text};
 use crate::subprocess::{
     LineOutcome, MAX_LINE_BYTES, kill_now, read_line_limited, read_tail, reap_after_terminal,
     write_result_json,
@@ -147,28 +147,6 @@ impl WorkerAdapter for PiAdapter {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct ResultFile {
-    #[serde(default)]
-    summary: Option<String>,
-    #[serde(default)]
-    question: Option<String>,
-    #[serde(default)]
-    evidence: serde_json::Value,
-    #[serde(default, rename = "yield")]
-    r#yield: Option<serde_json::Value>,
-}
-
-fn lenient_evidence(value: serde_json::Value) -> Vec<Evidence> {
-    match value {
-        serde_json::Value::Array(items) => items
-            .into_iter()
-            .filter_map(|item| serde_json::from_value::<Evidence>(item).ok())
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
 /// ADR 2026-10-08-cos-chat-prompt-cache D6.2: the stdin of a CoS chat pi run — the skill list
 /// (pi runs with `--no-skills`, so the list stays in the input) followed by the run specific part.
 pub(crate) fn cos_chat_pi_input(skills: &[crate::protocol::SkillMount], variable: &str) -> String {
@@ -187,6 +165,7 @@ async fn run_pi(
     limits: &RunLimits,
     sink: &dyn EventSink,
 ) -> Result<RunOutcome, AdapterError> {
+    let run_started = std::time::SystemTime::now();
     config.validate().map_err(AdapterError::Other)?;
     let extensions: Vec<_> = config
         .extensions
@@ -482,7 +461,11 @@ async fn run_pi(
             usage: stream.usage,
         }
     } else {
-        terminal_from_result(&req.artifacts_dir, &artifacts_rel, stream.usage).await
+        terminal_from_result(
+            crate::result_report::read_result_file(req, run_started).await,
+            &artifacts_rel,
+            stream.usage,
+        )
     };
     let provider_failure = if matches!(terminal, Terminal::Error { .. }) {
         pi_failure(stream.error.as_deref().unwrap_or("")).or_else(|| pi_failure(&stderr_tail))
@@ -502,55 +485,22 @@ async fn run_pi(
     })
 }
 
-async fn terminal_from_result(
-    artifacts_dir: &std::path::Path,
+/// 結果ファイルの読み取り結果から終端を合成する。本文の解釈は結果契約の正本
+/// （`result_report::interpret_result_text`。ADR 2026-11-10-adapter-result-contract D1）に任せ、ここは
+/// 結果ファイルが無いときの pi の文言だけを持つ。
+fn terminal_from_result(
+    read: ResultFileRead,
     artifacts_rel: &str,
     usage: Option<Usage>,
 ) -> Terminal {
-    let result_path = artifacts_dir.join("result.json");
-    let text = match tokio::fs::read_to_string(&result_path).await {
-        Ok(t) => t,
-        Err(_) => {
-            return Terminal::Error {
-                message: format!("pi exited without {artifacts_rel}/result.json"),
-                retryable: true,
-                usage: None,
-            };
-        }
-    };
-    if let Some(terminal) = crate::adapter::result_file_wait(&text, usage) {
-        return terminal;
-    }
-    match serde_json::from_str::<ResultFile>(&text) {
-        Ok(rf) => {
-            if let Some(question) = rf.question {
-                Terminal::Question {
-                    text: question,
-                    usage,
-                }
-            } else if let Some(summary) = rf.summary {
-                Terminal::Done {
-                    summary,
-                    evidence: lenient_evidence(rf.evidence),
-                    usage,
-                }
-            } else if let Some(checkpoint) = rf.r#yield {
-                Terminal::Yielded { checkpoint, usage }
-            } else {
-                Terminal::Error {
-                    message: format!(
-                        "{artifacts_rel}/result.json has neither 'summary', 'question' nor 'yield'"
-                    ),
-                    retryable: true,
-                    usage: None,
-                }
-            }
-        }
-        Err(e) => Terminal::Error {
-            message: format!("{artifacts_rel}/result.json is not valid JSON: {e}"),
+    match read {
+        ResultFileRead::Misplaced(error) => *error,
+        ResultFileRead::Missing => Terminal::Error {
+            message: format!("pi exited without {artifacts_rel}/result.json"),
             retryable: true,
             usage: None,
         },
+        ResultFileRead::Text(text) => interpret_result_text(&text, artifacts_rel, usage),
     }
 }
 

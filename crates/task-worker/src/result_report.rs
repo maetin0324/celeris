@@ -168,6 +168,122 @@ pub fn milestone_proposal_from_result_json(text: &str) -> Option<MilestonePropos
     })
 }
 
+/// `artifacts/result.json` の終端の欄（ADR-0006 D3、ADR-0072 D9、ADR 2026-11-10-adapter-result-contract D1）。
+/// harness adapter はこの型を写さず、`interpret_result_text` を通して読む。
+#[derive(Debug, serde::Deserialize)]
+pub(crate) struct ResultFile {
+    #[serde(default)]
+    summary: Option<String>,
+    #[serde(default)]
+    question: Option<String>,
+    /// 生の JSON で受け、`lenient_evidence` で整形する（ADR-0006 D3: `evidence` の内容の正確さは要求しない。
+    /// Phase 5 のドッグフードで、ワーカーが文字列の配列を書いて run 全体が `error` になる事故があった）。
+    #[serde(default)]
+    evidence: serde_json::Value,
+    /// ADR-0072 D9/D10: graceful yield（`{"yield": {...checkpoint の意味の欄...}}`）。生の JSON のまま
+    /// 保持し、検証・合成はディスパッチャ側の `task_core::merge_checkpoint` が行う。
+    #[serde(default, rename = "yield")]
+    r#yield: Option<serde_json::Value>,
+}
+
+/// `evidence` のうち `Evidence` として読めた要素だけを残す。配列でない／要素が不正でも `done` を失敗にしない。
+pub(crate) fn lenient_evidence(value: serde_json::Value) -> Vec<crate::protocol::Evidence> {
+    match value {
+        serde_json::Value::Array(items) => items
+            .into_iter()
+            .filter_map(|item| serde_json::from_value(item).ok())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// `result.json` の本文から終端を作る（ADR 2026-11-10-adapter-result-contract D1）。本文は 1 回だけ parse する。
+///
+/// 優先順位は `question`（文字列）> `wait`（ADR-0090 D1。`crate::adapter::wait_terminal`）> `summary` > `yield`
+/// （ADR-0072 D9）。JSON でない・欄の型が違う・どの欄も無い・`wait` が不正は `Error{retryable: true}`。
+/// `usage` は Done・Question・Yielded・Waiting にそのまま載り、Error には載らない。
+pub(crate) fn interpret_result_text(
+    text: &str,
+    artifacts_rel: &str,
+    usage: Option<task_core::Usage>,
+) -> crate::adapter::Terminal {
+    use crate::adapter::Terminal;
+    let not_valid_json = |e: serde_json::Error| Terminal::Error {
+        message: format!("{artifacts_rel}/result.json is not valid JSON: {e}"),
+        retryable: true,
+        usage: None,
+    };
+    let value = match serde_json::from_str::<serde_json::Value>(text) {
+        Ok(value) => value,
+        Err(e) => return not_valid_json(e),
+    };
+    if !value.get("question").is_some_and(|q| q.is_string())
+        && let Some(terminal) = crate::adapter::wait_terminal(&value, usage)
+    {
+        return terminal;
+    }
+    let rf = match serde_json::from_value::<ResultFile>(value) {
+        Ok(rf) => rf,
+        Err(e) => return not_valid_json(e),
+    };
+    if let Some(text) = rf.question {
+        Terminal::Question { text, usage }
+    } else if let Some(summary) = rf.summary {
+        Terminal::Done {
+            summary,
+            evidence: lenient_evidence(rf.evidence),
+            usage,
+        }
+    } else if let Some(checkpoint) = rf.r#yield {
+        Terminal::Yielded { checkpoint, usage }
+    } else {
+        Terminal::Error {
+            message: format!(
+                "{artifacts_rel}/result.json has neither 'summary', 'question' nor 'yield'"
+            ),
+            retryable: true,
+            usage: None,
+        }
+    }
+}
+
+/// `read_result_file` の結果。`Missing` のときの終端（文言と分類）は adapter ごとに違うので adapter が作る
+/// （ADR 2026-11-10-adapter-result-contract (3)）。
+#[derive(Debug)]
+pub(crate) enum ResultFileRead {
+    /// 期待の置き場に無く、別の場所に書かれていた（`Error{retryable: false}`、`MISPLACED_RESULT_MARKER`）。
+    Misplaced(Box<crate::adapter::Terminal>),
+    /// 読めなかった（無い・読み取りに失敗した）。
+    Missing,
+    /// 本文（`interpret_result_text` に渡す）。
+    Text(String),
+}
+
+/// run の `artifacts/result.json` を読む（ADR 2026-11-10-adapter-result-contract D1）。結果ファイルを要る run
+/// （`RunRequest::requires_result_file`）は、先に誤配置の回収（`result_location::misplaced_report`。ADR
+/// 2026-11-06-misplaced-report-recovery-generalized D1）を通す。`run_started` は run を始めた時刻で、それより
+/// 古い file は誤配置の候補にしない。
+pub(crate) async fn read_result_file(
+    req: &crate::protocol::RunRequest,
+    run_started: std::time::SystemTime,
+) -> ResultFileRead {
+    use crate::result_location::{RESULT_FILE_NAME, misplaced_report};
+    if req.requires_result_file()
+        && let Some(error) =
+            misplaced_report(RESULT_FILE_NAME, &req.artifacts_dir, req.cwd(), run_started).await
+    {
+        return ResultFileRead::Misplaced(Box::new(error));
+    }
+    match tokio::fs::read_to_string(req.artifacts_dir.join(RESULT_FILE_NAME)).await {
+        Ok(text) => ResultFileRead::Text(text),
+        Err(_) => ResultFileRead::Missing,
+    }
+}
+
+#[cfg(test)]
+#[path = "result_report_tests.rs"]
+mod result_contract_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;

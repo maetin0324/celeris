@@ -19,7 +19,10 @@ use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tracing::warn;
 
-use crate::adapter::{AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter};
+use crate::adapter::{
+    AdapterError, EventSink, RunLimits, RunOutcome, RunPaths, Terminal, WorkerAdapter,
+    deadline_terminal, finish_run, prepare_run, spawn_capture_stderr, with_estimated_cost,
+};
 use crate::claude_code::{build_prompt, work_dir_note};
 use crate::delegate_file::{clear_delegate_file, forward_delegate_file};
 use crate::progress;
@@ -28,7 +31,6 @@ use crate::provider::classify_provider_failure;
 use crate::result_report::{ResultFileRead, interpret_result_text};
 use crate::subprocess::{
     LineOutcome, MAX_LINE_BYTES, kill_now, read_line_limited, read_tail, reap_after_terminal,
-    write_result_json,
 };
 
 /// `[adapters.codex] resume_mode`（ADR-0054 D1。Phase 67）: このインストールの `codex` が
@@ -241,17 +243,6 @@ pub(crate) fn now_unix_secs() -> i64 {
         .unwrap_or(0)
 }
 
-/// ADR-0061（Phase 104）: model が分かる時だけ静的単価表から USD を推定して埋める
-/// （不明なモデル・token 欠落は `None` のまま）。
-fn with_estimated_cost(usage: Option<Usage>, model: Option<&str>) -> Option<Usage> {
-    usage.map(|mut u| {
-        if let Some(model) = model {
-            u.cost_usd = task_core::estimate_cost_usd(model, &u);
-        }
-        u
-    })
-}
-
 /// `translate_resume_extra_args` の結果（ADR-0054 Phase 112 D1）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct ResumeArgTranslation {
@@ -416,9 +407,6 @@ async fn run_codex_once(
     stdout_log_path: &std::path::Path,
     stderr_log_path: &std::path::Path,
 ) -> Result<CodexAttempt, AdapterError> {
-    // `stderr_task` (below) moves a copy into its `async move` block; this one stays available for
-    // the crash-classification read after the loop (ADR-0010 D5).
-    let stderr_log_path_for_task = stderr_log_path.to_path_buf();
     let resume_id = resume_id.map(|s| s.to_string());
 
     // Install on every spawn, including resume and a fresh retry after a failed resume.
@@ -617,22 +605,7 @@ async fn run_codex_once(
         .stdout
         .take()
         .ok_or_else(|| AdapterError::Other("worker stdout was not piped".into()))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| AdapterError::Other("worker stderr was not piped".into()))?;
-
-    let stderr_task = tokio::spawn(async move {
-        let mut reader = stderr;
-        match tokio::fs::File::create(&stderr_log_path_for_task).await {
-            Ok(mut file) => {
-                if let Err(e) = tokio::io::copy(&mut reader, &mut file).await {
-                    warn!("failed to write worker stderr.log: {e}");
-                }
-            }
-            Err(e) => warn!("failed to create worker stderr.log: {e}"),
-        }
-    });
+    let stderr_task = spawn_capture_stderr(&mut child, stderr_log_path, run_id)?;
 
     let mut stdout_file = tokio::fs::File::create(stdout_log_path).await?;
     let mut reader = BufReader::new(stdout);
@@ -650,30 +623,16 @@ async fn run_codex_once(
     let mut saw_any_stdout_line = false;
 
     loop {
-        let wall_elapsed = start.elapsed();
-        if wall_elapsed >= limits.wall_clock {
-            // ADR-0072 D7/§6 (i)（Phase E1）: wall-clock の打ち切りは予算切れ（continuation の対象）。
-            // codex には turn の上限が無いので wall-clock だけがこの経路。
-            timeout_terminal = Some(Terminal::BudgetExhausted {
-                kind: task_core::BudgetKind::WallClock,
-                message: "wall clock exceeded".into(),
-                usage: None,
-            });
-            force_kill = true;
-            break;
-        }
-        let idle_elapsed = last_activity.elapsed();
-        if idle_elapsed >= limits.idle_timeout {
-            // ADR-0072 D7: idle timeout は E1 では harness_error に分類変更しない（§7 U7）。
-            timeout_terminal = Some(Terminal::Error {
-                message: "idle timeout".into(),
-                retryable: true,
-                usage: None,
-            });
-            force_kill = true;
-            break;
-        }
-        let wait = (limits.wall_clock - wall_elapsed).min(limits.idle_timeout - idle_elapsed);
+        // codex には turn の上限が無いので、wall-clock の打ち切りが予算切れの唯一の経路。
+        let wait =
+            match deadline_terminal(start, last_activity, limits.wall_clock, limits.idle_timeout) {
+                Ok(wait) => wait,
+                Err(terminal) => {
+                    timeout_terminal = Some(terminal);
+                    force_kill = true;
+                    break;
+                }
+            };
 
         let outcome = match tokio::time::timeout(
             wait,
@@ -759,16 +718,14 @@ async fn run_codex(
     sink: &dyn EventSink,
 ) -> Result<RunOutcome, AdapterError> {
     let run_started = std::time::SystemTime::now();
-    let run_dir = req.workspace.join("runs").join(run_id);
-    tokio::fs::create_dir_all(&run_dir).await?;
+    let RunPaths {
+        run_dir,
+        stdout_log: stdout_log_path,
+        stderr_log: mut stderr_log_path,
+        result_path,
+        artifacts_rel,
+    } = prepare_run(req, run_id, "stdout.jsonl").await?;
     crate::routing_context_transport::record(&run_dir, req, false).await;
-
-    // 前回の run（リトライ）が残した結果ファイルを、今回の run の結果と誤読しない（ADR-0006 D3 と同じ理由）。
-    // ADR-0036 D1/D2: 置き場はディスパッチャが決めた `artifacts_dir`（共有 workspace ではタスクごと）。
-    let artifacts_rel = req.artifacts_rel();
-    let result_path = req.artifact_path("result.json");
-    let _ = tokio::fs::remove_file(&result_path).await;
-    clear_delegate_file(&req.artifacts_dir).await;
 
     let cos_parts =
         crate::claude_code::build_cos_chat_parts(&req.task, &req.context, run_id, &artifacts_rel);
@@ -782,9 +739,7 @@ async fn run_codex(
             build_prompt(&req.task, &req.context, run_id, &artifacts_rel)
         ),
     };
-    // ADR-0023 D2 / M1: この run で何を渡したかを残す（`request.json` は構造、`prompt.txt` は実際の文面）。
-    crate::campaign_pin::enforce(&run_dir, req).await?;
-    crate::subprocess::write_run_request(&run_dir, req, run_id).await;
+    // ADR-0023 D2 / M1: この run で実際に渡した文面を残す（`request.json` は `prepare_run` が書いた）。
     let recorded = match &cos_parts {
         Some(parts) => {
             crate::cos_chat::prompt_record("-c developer_instructions", &parts.core, &prompt)
@@ -859,8 +814,6 @@ async fn run_codex(
         None => Vec::new(),
     };
 
-    let stdout_log_path = run_dir.join("stdout.jsonl");
-    let mut stderr_log_path = run_dir.join("stderr.log");
     let mut attempt = run_codex_once(
         config,
         req,
@@ -1061,16 +1014,7 @@ async fn run_codex(
 
     forward_delegate_file(&req.artifacts_dir, sink).await;
 
-    write_result_json(&run_dir, &terminal, provider_failure).await?;
-
-    if let (Terminal::Error { message, .. }, Some(pf)) = (&terminal, provider_failure) {
-        return Err(AdapterError::from_provider_failure(pf, message));
-    }
-
-    Ok(RunOutcome {
-        terminal,
-        exit_code: exit_status.code(),
-    })
+    finish_run(&run_dir, terminal, provider_failure, exit_status).await
 }
 
 /// CoS chat: did the dispatcher ask this adapter to resume a session?

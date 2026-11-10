@@ -22,8 +22,7 @@ use crate::write_set::WriteSetRecord;
 use super::{
     ClusterConnectionRecord, ClusterSettings, ConfigEventRow, EventRow, ExecutionMetricsTaskRow,
     ListFilter, ListOrder, LocalSettings, LocalSettingsEvent, LocalSettingsOverrides,
-    NewConfigEvent, Page, ProjectPlanApply, SqliteStore, StoreError, TaskStore, TaskWithEvents,
-    TreeAdoption,
+    NewConfigEvent, Page, SqliteStore, StoreError, TaskStore, TaskWithEvents, TreeAdoption,
 };
 
 impl TaskStore for SqliteStore {
@@ -365,29 +364,6 @@ impl TaskStore for SqliteStore {
         self.create_task_impl(task, origin, crate::DAEMON_ACTOR, extra_events)
     }
 
-    fn project_plan_decide_apply(
-        &self,
-        plan_task_id: TaskId,
-        milestones: &[MilestoneId],
-        milestone_status: MilestoneStatus,
-        tasks: &[TaskId],
-        trigger: Trigger,
-        decided_event: Event,
-    ) -> Result<(), StoreError> {
-        self.project_plan_decide_apply_impl(
-            plan_task_id,
-            milestones,
-            milestone_status,
-            tasks,
-            trigger,
-            decided_event,
-        )
-    }
-
-    fn project_plan_apply(&self, apply: &ProjectPlanApply) -> Result<(), StoreError> {
-        self.project_plan_apply_impl(apply)
-    }
-
     fn delegate_children(
         &self,
         parent_id: TaskId,
@@ -565,15 +541,6 @@ impl TaskStore for SqliteStore {
         self.project_set_slug_impl(id, slug)
     }
 
-    fn project_set_text(
-        &self,
-        id: ProjectId,
-        title: Option<&str>,
-        request: Option<&str>,
-    ) -> Result<bool, StoreError> {
-        self.project_set_text_impl(id, title, request)
-    }
-
     fn project_set_workspace(
         &self,
         id: ProjectId,
@@ -671,15 +638,6 @@ impl TaskStore for SqliteStore {
         status: MilestoneStatus,
     ) -> Result<bool, StoreError> {
         self.milestone_set_status_impl(id, status)
-    }
-
-    fn milestone_transition_status(
-        &self,
-        id: MilestoneId,
-        from: MilestoneStatus,
-        to: MilestoneStatus,
-    ) -> Result<bool, StoreError> {
-        self.milestone_transition_status_impl(id, from, to)
     }
 
     fn milestone_set_lifecycle(

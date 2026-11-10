@@ -517,17 +517,8 @@ impl SqliteStore {
         Ok(n > 0)
     }
 
-    pub(super) fn project_set_text_impl(
-        &self,
-        id: ProjectId,
-        title: Option<&str>,
-        request: Option<&str>,
-    ) -> Result<bool, StoreError> {
-        let conn = self.lock()?;
-        Self::project_set_text_tx(&conn, id, title, request)
-    }
-
-    /// `project_set_text` の本体。呼び出し側の transaction 内で使う（CoS の監査付き操作。ADR 2026-10-05 D3）。
+    /// ADR-0072「Phase F6 実装時の決定」P3: 案件の題名（`title`）と説明（依頼文 `request`）を書き換える。
+    /// `None` の欄は変えない。呼び出し側の transaction 内で使う（CoS の監査付き操作。ADR 2026-10-05 D3）。
     pub fn project_set_text_tx(
         conn: &rusqlite::Connection,
         id: ProjectId,
@@ -764,25 +755,6 @@ impl SqliteStore {
                 status.as_str(),
                 format_rfc3339(OffsetDateTime::now_utc())?,
                 id.to_string()
-            ],
-        )?;
-        Ok(affected == 1)
-    }
-
-    pub(super) fn milestone_transition_status_impl(
-        &self,
-        id: MilestoneId,
-        from: MilestoneStatus,
-        to: MilestoneStatus,
-    ) -> Result<bool, StoreError> {
-        let conn = self.lock()?;
-        let affected = conn.execute(
-            "UPDATE milestones SET status = ?1, updated_at = ?2 WHERE id = ?3 AND status = ?4",
-            params![
-                to.as_str(),
-                format_rfc3339(OffsetDateTime::now_utc())?,
-                id.to_string(),
-                from.as_str(),
             ],
         )?;
         Ok(affected == 1)

@@ -21,8 +21,8 @@ use crate::write_set::WriteSetRecord;
 use super::query::{ListFilter, ListOrder, Page};
 use super::{
     ClusterConnectionRecord, ClusterSettings, ConfigEventRow, EventRow, ExecutionMetricsTaskRow,
-    LocalSettings, LocalSettingsEvent, LocalSettingsOverrides, NewConfigEvent, ProjectPlanApply,
-    StoreError, TaskWithEvents, TreeAdoption,
+    LocalSettings, LocalSettingsEvent, LocalSettingsOverrides, NewConfigEvent, StoreError,
+    TaskWithEvents, TreeAdoption,
 };
 
 /// ADR-0033 D3: 報告（`reports`）の読み書きは `crate::report::ReportStore` にあり、`TaskStore` はそれを
@@ -308,28 +308,6 @@ pub trait TaskStore:
         extra_events: Vec<Event>,
     ) -> Result<(), StoreError>;
 
-    /// ADR-0074 D3.3（Phase F4a (c)）: 案件計画の提案の決定を **1 トランザクションで**適用する。
-    /// `milestones` を全て `milestone_status` にし、`tasks` のうちまだ `draft` のもの（`Trigger::Cancel`
-    /// のカスケードで既に終端になったもの等は飛ばす）に `trigger` を適用し、最後に `decided_event`
-    /// を `plan_task_id` の events に積む。途中で失敗すれば何も書かない。無い途中目標・Task は
-    /// `StoreError::Invalid`。
-    fn project_plan_decide_apply(
-        &self,
-        plan_task_id: TaskId,
-        milestones: &[MilestoneId],
-        milestone_status: MilestoneStatus,
-        tasks: &[TaskId],
-        trigger: Trigger,
-        decided_event: Event,
-    ) -> Result<(), StoreError>;
-
-    /// ADR-0074 D3.4（Phase F4b (e)）: 案件計画の決定（replan の差分を含む）を **1 トランザクションで**
-    /// 適用する。順に: 途中目標の状態・題名の更新 → Task の書き換え（`draft` / `ready` で lease の無い
-    /// ものだけ。dispatch 済みなら `StoreError::Invalid` で何も書かない）→ 遷移（`Accept` は `draft` の
-    /// ときだけ、それ以外は終端でないときだけ適用。`Cancel` のカスケードで先に終端になったものは飛ばす）
-    /// → `decided_event` を `plan_task_id` の events に積む。
-    fn project_plan_apply(&self, apply: &ProjectPlanApply) -> Result<(), StoreError>;
-
     /// ADR-0016 D2 / M2: 実行中の委譲。子タスク群を挿入（`Created` → `Accept` で `ready`）し、親に
     /// `Event::Delegated{run_id, task_ids}` を追記する。全体が 1 トランザクション。親の状態は変えない。
     /// 子の `parent_id` が `parent_id` と違えば `StoreError::Invalid`。
@@ -477,15 +455,6 @@ pub trait TaskStore:
     /// ADR 2026-10-16-project-auto-integrate D1: `projects.auto_integrate`（レビュー合格した root task を
     /// 既定ブランチへ自動で取り込む）を書く。無い案件は `Ok(false)`。
     fn project_set_auto_integrate(&self, id: ProjectId, enabled: bool) -> Result<bool, StoreError>;
-    /// ADR-0072「Phase F6 実装時の決定」P3: 案件の題名（`title`）と説明（依頼文 `request`）を
-    /// 人が書き換える。`None` の欄は変えない。検証（空でない・長さの上限）は呼び出し側（API）が行う。
-    /// 無い案件は `Ok(false)`。
-    fn project_set_text(
-        &self,
-        id: ProjectId,
-        title: Option<&str>,
-        request: Option<&str>,
-    ) -> Result<bool, StoreError>;
 
     // ---- ADR-0043 D1（Phase 52）: 案件のリポジトリ（`project_repos`）----
 
@@ -573,13 +542,6 @@ pub trait TaskStore:
         &self,
         id: MilestoneId,
         status: MilestoneStatus,
-    ) -> Result<bool, StoreError>;
-    /// 現在の状態が `from` のときだけ更新する。dispatch と自動到達が人の状態変更を上書きしないために使う。
-    fn milestone_transition_status(
-        &self,
-        id: MilestoneId,
-        from: MilestoneStatus,
-        to: MilestoneStatus,
     ) -> Result<bool, StoreError>;
     /// ADR-0044 D6（Phase 55）: 状態と `paused_from` を**同時に**書く（`pause` / `resume` / `cancel`）。
     /// `paused_from` は `Some(None)` で消し、`None` なら触らない。無い途中目標は `Ok(false)`。

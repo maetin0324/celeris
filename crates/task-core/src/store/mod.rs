@@ -44,9 +44,9 @@
 //!   （`runs` 行の終端化・木の `work_units.child_task_id`・`decisions` 行と `decisions` の行変換）、
 //!   events を読む/追記する `TaskStore` 本体（`append_event`/`events_for*`/`events_since`/
 //!   `latest_event_id`/`event_rows_for`）。
-//! - `approvals.rs`: 遷移と判断の適用（`apply_transition_with_events`、Plan の承認 `complete_plan`、
-//!   案件計画の Go/No-Go `project_plan_decide_apply`/`project_plan_apply`）。どれも 1 つの IMMEDIATE tx で
-//!   `apply_transition_tx`/`append_event_tx` を呼ぶ（`transition.rs` は tx 内の部品、ここは入口）。
+//! - `approvals.rs`: 遷移と判断の適用（`apply_transition_with_events`、Plan の承認 `complete_plan`）。
+//!   どれも 1 つの IMMEDIATE tx で `apply_transition_tx`/`append_event_tx` を呼ぶ（`transition.rs` は tx 内の
+//!   部品、ここは入口）。
 //! - `transition.rs`: `apply_transition_tx`（状態機械の適用と Event の追記を同じ tx で行う）と
 //!   終端遷移の cascade・非終端の子/依存の探索。
 //! - `org.rs`: 組織ノードの行変換・`profile_json`・`celerisctl org migrate-v2` 用の低レベル書き換えと
@@ -92,9 +92,9 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::execution_plan::{RunIndexRole, RunIndexStatus};
 use crate::model::{Event, Status, Task, TaskId, TaskKind, WorkspaceSpec};
-use crate::org::{MilestoneId, MilestoneStatus, OrgError};
+use crate::org::OrgError;
 use crate::repos::{RepoError, RepoKind};
-use crate::transition::{InvalidTransition, Trigger};
+use crate::transition::InvalidTransition;
 
 mod approvals;
 mod behind_targets;
@@ -189,32 +189,9 @@ mod write_sets;
 use crate::migration_registry::RESERVED_VERSIONS;
 pub use migrations::SCHEMA_VERSION;
 pub use query::{ListFilter, ListOrder, Page};
-pub use route_records::{
-    RouteDecisionRow, StoredRouteDecision, StoredRouteJudgment, StoredRouteOutcome,
-};
+pub use route_records::{RouteDecisionRow, StoredRouteDecision, StoredRouteOutcome};
 pub use routing_log::RoutingCorrelation;
 pub use task_store::TaskStore;
-
-/// ADR-0074 D3.4（Phase F4b (e)）: `TaskStore::project_plan_apply` の入力。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ProjectPlanApply {
-    /// `decided_event` を積む Plan タスク（提案の正本）。
-    pub plan_task_id: TaskId,
-    pub milestones: Vec<ProjectPlanMilestoneChange>,
-    /// 書き換える Task の新しい値（状態・attempts・lease はトランザクションの中で読んだ値を使う）。
-    pub task_updates: Vec<Task>,
-    pub transitions: Vec<(TaskId, Trigger)>,
-    pub decided_event: Event,
-}
-
-/// `ProjectPlanApply.milestones[]`。`title` / `description` は `Some` のときだけ書き換える。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ProjectPlanMilestoneChange {
-    pub id: MilestoneId,
-    pub status: MilestoneStatus,
-    pub title: Option<String>,
-    pub description: Option<String>,
-}
 
 /// ADR-0079 D15（Phase R5b-prep）: 既存の task を木の子として採用する書き換え（`TaskStore::execution_plan_adopt_tree`
 /// / `TaskStore::tree_adopt_apply` の入力）。`task` は `tree`（と、`parent_id` が無かったなら `parent_id`）を書いた後の

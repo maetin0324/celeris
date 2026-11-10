@@ -31,6 +31,12 @@ updated: 2026-11-10
 - `… measure.py --check-pruned agent-docs/progress/2026-11-10-taskstore-consumer-ports/prune-list.json` → exit 1（17 名が残る。store-prune の後に 0 になる）
 - `git diff --name-only $CELERIS_WU_BASE -- crates` → 0 行
 
+## store-prune の結果
+詳細は [store-prune.md](2026-11-10-taskstore-consumer-ports/store-prune.md)。
+- `prune-list.json` の 17 名を全部消した（TaskStore method 4・その `_impl` 4・B0 割り当て 9）。着手時の grep で呼び手が見つかった名前は無く、list から外した名前も無い。使い手が無くなった型 `ProjectPlanApply`・`ProjectPlanMilestoneChange`・`StoredRouteJudgment` も消した。消した試験は無い（17 名を呼ぶ試験が無かった）。
+- `task_store.rs` の fn 宣言 193 → 189。store module の本体の行（size rule の `module_lines`）19676 → 19396、物理行 40947 → 40618、`SqliteStore` の method 729 → 713。
+- `measure.py --check-pruned …/prune-list.json` → exit 0（`remaining=0`）、`--check-single-decl` → exit 0（`fns=304`）。
+
 ## 変更（commit の件名）
 - `ports-design: TaskStore の consumer 計測台本・着手時の計測・削除の対象・port の ADR`
 

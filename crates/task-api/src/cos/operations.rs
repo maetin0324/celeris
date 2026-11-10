@@ -269,7 +269,7 @@ impl OperationAudit {
                 |tx, ctx| {
                     let result = write(tx)?;
                     if let Some(mark) = &self.item {
-                        super::triage_view::mark_tx(
+                        task_core::chat::triage::cos_triage_mark_tx(
                             tx,
                             &mark.item_id,
                             mark.outcome,

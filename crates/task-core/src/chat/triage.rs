@@ -131,6 +131,42 @@ pub(super) fn bind_claim_tx(
     Ok(message_id)
 }
 
+/// Write a terminal outcome on one non-terminal item; `true` when the row changed. The single
+/// writer of the outcome columns: [`SqliteStore::cos_triage_resolve`] and [`cos_triage_mark_tx`].
+fn outcome_row(
+    conn: &rusqlite::Connection,
+    item_id: &str,
+    outcome: &str,
+    operation_id: Option<&str>,
+    reason: Option<&str>,
+    now: OffsetDateTime,
+) -> Result<bool, ChatError> {
+    Ok(conn.execute("UPDATE cos_inbox_items SET state=?2,operation_id=?3,reason=?4,updated_at=?5 WHERE id=?1 AND state IN ('pending','running')", params![item_id,outcome,operation_id,reason,chat_ts(now)])? == 1)
+}
+
+/// Mark one non-terminal item with the outcome of a CoS operation inside that operation's audit
+/// transaction (`cos_operation_apply`, ADR 2026-10-06 cos-inbox-triage), so the audit row and
+/// the mark commit or roll back together. A concurrent outcome (another CoS resolve, a fallback,
+/// reconcile) is a conflict, which rolls the whole transaction back.
+pub fn cos_triage_mark_tx(
+    tx: &Transaction<'_>,
+    item_id: &str,
+    outcome: &str,
+    operation_id: &str,
+    reason: &str,
+    now: OffsetDateTime,
+) -> Result<(), ChatError> {
+    if !matches!(outcome, "answered" | "observed" | "escalated") {
+        return Err(ChatError::Invalid("invalid triage outcome".into()));
+    }
+    if !outcome_row(tx, item_id, outcome, Some(operation_id), Some(reason), now)? {
+        return Err(ChatError::Conflict(format!(
+            "triage item {item_id} was already resolved"
+        )));
+    }
+    Ok(())
+}
+
 fn put_cursor(tx: &Transaction<'_>, name: &str, value: &str) -> Result<(), ChatError> {
     tx.execute(
         "INSERT INTO feed_cursor(name,value) VALUES(?1,?2) ON CONFLICT(name) DO UPDATE SET value=excluded.value",
@@ -312,7 +348,7 @@ impl SqliteStore {
             return Err(ChatError::Invalid("invalid triage outcome".into()));
         }
         let conn = writer(self)?;
-        Ok(conn.execute("UPDATE cos_inbox_items SET state=?2,operation_id=?3,reason=?4,updated_at=?5 WHERE id=?1 AND state IN ('pending','running')", params![item_id,outcome,operation_id,reason,chat_ts(now)])? == 1)
+        outcome_row(&conn, item_id, outcome, operation_id, reason, now)
     }
 
     /// Arbitration point shared by escalation and unavailable fallback.

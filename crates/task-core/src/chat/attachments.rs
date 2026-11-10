@@ -421,6 +421,33 @@ impl ChatAttachmentStore {
         Ok(())
     }
 
+    /// `POST /chat/attachments/{a}/references`: pin `id` to the owner and record the client
+    /// request (`chat_client_requests` kind `attachment_ref`, keyed by the attachment and
+    /// `idempotency_key`) in one transaction, so a pin never commits without its record. A resent
+    /// key keeps the first record.
+    pub fn add_ref_request(
+        &self,
+        id: &str,
+        owner_kind: &str,
+        owner_id: &str,
+        idempotency_key: &str,
+        request_hash: &str,
+        now: OffsetDateTime,
+    ) -> Result<(), AttachmentError> {
+        if idempotency_key.is_empty() {
+            return Err(AttachmentError::InvalidPath);
+        }
+        let mut conn = self.conn.lock().map_err(|_| AttachmentError::Poisoned)?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        add_ref_tx(&tx, id, owner_kind, owner_id, now)?;
+        tx.execute(
+            "INSERT OR IGNORE INTO chat_client_requests(kind,scope_id,key,request_hash,result_id,created_at) VALUES('attachment_ref',?1,?2,?3,?4,?5)",
+            params![id, idempotency_key, request_hash, owner_id, stamp(now)?],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn remove_ref(
         &self,
         id: &str,

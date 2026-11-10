@@ -36,7 +36,16 @@ unit result-contract は claude_code の `result_wait_becomes_terminal_waiting` 
 `crates/task-worker/src` の `#[test]`・`#[tokio::test]` は `$CELERIS_WU_BASE` の 1191 から 1193 になった（`git merge-base HEAD main` の 1192 から +1）。
 
 ## 検査（提出時の HEAD で実行。基準は $CELERIS_WU_BASE）
-（下の「検査の結果」に書く。）
+test-affected・clippy・nextest は件名「R1 wait-line: finish_run の Waiting の run dir の行を共通試験で固定し、claude_code の結線の試験を戻す」の commit（clean な tree）で実行した。その後の commit（件名「R1 wait-line: 進捗に提出時の HEAD での検査の結果を書く」）は進捗の文書だけを変えたので、文書の検査・fmt・slices-check・check-health をその HEAD でもう一度実行し、同じ結果だった。
+- `bash scripts/dev/test-affected.sh` → exit 0。対象 crate は celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker。nextest 5855 passed（22 skipped）、400 秒。repo-health は `verdict=pass`・`fail_grade=0`・`new=0`・`worsened=0`。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo clippy -p task-worker --all-targets -- -D warnings` → exit 0（`result_report_tests.rs` の警告 0 件）。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo nextest run -p task-worker -E 'test(/run_common_|result_contract_|result_wait_becomes_terminal_waiting/)'` → exit 0、13 passed（`run_common_` 6 件、`result_contract_` 5 件、`read_result_file_recovers_strays_only_for_runs_that_require_the_file`、`result_wait_becomes_terminal_waiting`）。
+- `sh scripts/dev/check-doc-links.sh` → exit 0。`sh scripts/dev/check-adr-numbers.sh` → exit 0（414 files。`--refs --base $CELERIS_WU_BASE` も exit 0）。`sh scripts/dev/progress-index.sh --check` → exit 0。`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → exit 0。`python3 scripts/dev/check-human-text.py` → exit 0（0 findings）。
+- `bash scripts/dev/check-health.sh` → exit 0（`repo_health_gate: all checks passed`）。
+- `git diff --name-only $CELERIS_WU_BASE | python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R1 agent-docs/progress/2026-11-07-health-v2-b0/slices.json` → exit 0（`write-set R1: ok`）。基準を `git merge-base HEAD main` にしても exit 0。
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → 変えた path は `crates/task-worker/src/{claude_code/tests,result_report_tests,subprocess/tests}.rs`、ADR、R1 の進捗、`2026-11-10-health-v2-r1/` の `result-contract.md`・`run-common.md`・`wait-line.md` だけ。
 
 ## 未解決
 - `cargo clippy --workspace --all-targets` は `crates/task-core/src/chat/store_tests.rs` の `useless_conversion` で落ちる（R1 の write_set の外。既存）。task-worker の分（`result_report_tests.rs`）はこの unit で直した。

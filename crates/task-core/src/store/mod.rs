@@ -37,7 +37,7 @@
 //! - `task_store.rs`: `trait TaskStore` の宣言。
 //! - `task_store_impl.rs`: `impl TaskStore for SqliteStore`（1 ブロック、1 行転送だけ）。
 //! - `org_directory.rs`・`task_query.rs`: `TaskStore` の supertrait（名簿の読み出し・task の一覧と event 行）。
-//!   consumer が依存する宣言と `impl … for SqliteStore` の 1 行転送だけ。
+//!   consumer が依存する宣言と `impl … for SqliteStore`（SQL の本体はここ）。
 //! - `tasks.rs`: task 行の読み書き（`get_locked`/`insert_tx`/`update_task_tx`/`rewrite_task_tx`）と、
 //!   task・lease の `TaskStore` 本体（`insert`/`get`/`list`/`list_page`/`count_by_status`/`children`/
 //!   `create_task`/`delegate_children`/`retry_task`/`update_task`/`acquire_lease`/`renew_lease`/

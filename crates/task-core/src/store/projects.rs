@@ -336,43 +336,6 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub(super) fn project_get_impl(&self, id: ProjectId) -> Result<Option<Project>, StoreError> {
-        self.with_read_conn(|conn| {
-            let row = conn
-                .query_row(
-                    "SELECT p.id, p.title, p.request, p.status, p.created_at, p.updated_at, \
-                     COALESCE((SELECT r.location_json FROM project_repos r \
-                               WHERE r.project_id = p.id AND r.is_primary = 1 \
-                               ORDER BY r.created_at ASC, r.id ASC LIMIT 1), p.workspace), \
-                     p.archived_at, p.paused_from, p.auto_advance, p.slug, p.auto_integrate \
-                     FROM projects p WHERE p.id = ?1",
-                    params![id.to_string()],
-                    Self::project_row,
-                )
-                .optional()?;
-            row.transpose()
-        })
-    }
-
-    pub(super) fn project_list_impl(&self) -> Result<Vec<Project>, StoreError> {
-        self.with_read_conn(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT p.id, p.title, p.request, p.status, p.created_at, p.updated_at, \
-                     COALESCE((SELECT r.location_json FROM project_repos r \
-                               WHERE r.project_id = p.id AND r.is_primary = 1 \
-                               ORDER BY r.created_at ASC, r.id ASC LIMIT 1), p.workspace), \
-                     p.archived_at, p.paused_from, p.auto_advance, p.slug, p.auto_integrate \
-                 FROM projects p ORDER BY p.created_at DESC, p.id DESC",
-            )?;
-            let rows = stmt.query_map([], Self::project_row)?;
-            let mut out = Vec::new();
-            for row in rows {
-                out.push(row??);
-            }
-            Ok(out)
-        })
-    }
-
     pub(super) fn project_set_status_impl(
         &self,
         id: ProjectId,
@@ -706,24 +669,6 @@ impl SqliteStore {
             ],
         )?;
         Ok(affected == 1)
-    }
-
-    pub(super) fn milestone_list_impl(
-        &self,
-        project_id: ProjectId,
-    ) -> Result<Vec<Milestone>, StoreError> {
-        self.with_read_conn(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id, project_id, seq, title, description, status, created_at, updated_at, paused_from, plan_key \
-                 FROM milestones WHERE project_id = ?1 ORDER BY seq ASC",
-            )?;
-            let rows = stmt.query_map(params![project_id.to_string()], Self::milestone_row)?;
-            let mut out = Vec::new();
-            for row in rows {
-                out.push(row??);
-            }
-            Ok(out)
-        })
     }
 
     pub(super) fn milestone_get_impl(

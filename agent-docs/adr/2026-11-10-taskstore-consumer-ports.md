@@ -3,7 +3,7 @@ tasks: [01M6TYVJT2HG9NY5FW9FMCZS9A]
 ---
 # ADR 2026-11-10: TaskStore の consumer 駆動の port — 最初の consumer は celeris-mcp
 
-- 状態: 採用（設計）。この ADR の WorkUnit（ports-design）ではコードを変えない。実装は同じ task の mcp-port・store-prune・table-writers、前後計測は record。
+- 状態: 採用・実装済み。実装は同じ task の mcp-port・store-prune・table-writers、前後計測は record。D2 の 8 method のうち 2 個（`org_list`・`org_upsert`）を移さなかったことと、D2 の「1 行転送」をやめたことは末尾の付記に書いた。
 - 計測と検査: `agent-docs/progress/2026-11-10-taskstore-consumer-ports/measure.py`（標準ライブラリだけ）、着手時の値 `baseline.json`、削除の対象 `prune-list.json`、直す file `port-fix-files.json`。基準は着手時の `$CELERIS_WU_BASE`（件名「integrate wu/final-record (phase reclose)」）。
 
 ## 文脈
@@ -79,3 +79,32 @@ tasks: [01M6TYVJT2HG9NY5FW9FMCZS9A]
 ## 結果
 - celeris-mcp は TaskStore の 308 method の代わりに、使う能力の trait だけに依存する（`get` の 1 か所を除く）。
 - 宣言は 1 か所、SQL は `_impl` に 1 か所のまま。state+event の原子性・migration・replay は変わらない。
+
+## 付記 2026-11-10: 実装との突き合わせ（record）
+前後の計測は `agent-docs/progress/2026-11-10-taskstore-consumer-ports/after.json`（`measure.py --json`）と `baseline.json`。表は進捗 [2026-11-10-taskstore-consumer-ports.md](../progress/2026-11-10-taskstore-consumer-ports.md) の「前後の計測」。
+
+### 移した 6 method と trait（D2 の実装）
+- `OrgDirectory`（`crates/task-core/src/store/org_directory.rs`）: `org_get`・`project_list`・`project_get`・`milestone_list` の 4 個。
+- `TaskQuery`（`crates/task-core/src/store/task_query.rs`）: `list_page`・`event_rows_for` の 2 個。D4 の表の `TaskRead` はこの名前で実装した。
+- どちらも `TaskStore` の supertrait。宣言は `task_store.rs` から消し、workspace に 1 か所だけある（`measure.py --check-single-decl` → exit 0、重複 0）。
+- 6 method はどれも読み出しだけ（`with_read_conn`）。SQL・transaction・schema・event の kind は変えていない（D5 のとおり）。
+
+### TaskStore に残した 3 method（D2 からの変更）
+- `org_list`・`org_upsert`: D2 では `OrgDirectory` へ移す予定だった。移すと R3 の write_set（B0 の `slices.json`）の外の 4 file を直す必要があるので残した。
+  - UFCS で呼ぶ 2 file: `crates/task-core/src/approval/tests.rs`（`TaskStore::org_upsert(&store, …)`）と `crates/task-core/src/report/tests.rs`（`crate::store::TaskStore::org_upsert(&store, …)`）。supertrait へ移すと trait 名を直す必要がある（E0782）。write_set の task-core の src は `lib|store|model|transition`・`store/`・`tree/gate`・`chat/` だけで、この 2 file は入らない。
+  - 具体型で呼ぶ試験 2 file: `crates/celerisctl/tests/org_migrate_v2.rs`（`org_list`）と `crates/celeris/tests/trial_context_canary_e2e.rs`（`org_upsert`）。write_set の試験の正規表現 `^crates/[a-z-]+/tests/[a-z_/]+\.rs$` は file 名の数字を通さない。
+  - 計画 v1 で write_set の外と数えた 6 path のうち、残る 2 path（`crates/task-core/src/org.rs`・`org/directory.rs`）は `OrgDirectory` を `crate::org` に置く案の分だった。`OrgDirectory` を `store/org_directory.rs` に置いたので、今は 4 path になった。
+- `get`: D2 のとおり移していない。具体型で `get` を呼ぶ `crates/task-worker/src` の試験 3 file（`browser_tests.rs`・`workspace_prune/tests.rs`・`workspace_targets/tests.rs`）を直す必要があり、D4 の条件（task-worker を直さない）に合わない。`browser_tests.rs` は R2 の write_set に入る。
+- 結果として、celeris-mcp の src で `TaskStore` を名指す file は `resources.rs`（`org_list`）・`tools/org.rs`（`org_list`・`org_upsert`）・`tools/tasks.rs`（`get`）の 3 つ。D6 の目標（`tools/tasks.rs` の 1 つ）には届いていない。
+
+### 本体を trait の impl に置き、`_impl` と 1 行転送を消した（D2 からの変更）
+- D2 は「`impl <trait> for SqliteStore` は既存の `<method>_impl` への 1 行転送にする」と決めた。この形で実装すると、celeris が WU ごとに走らせる repo-health（base は WU base、store-prune の後）の `size.responsibility-growth`（error）が落ちた。`crates/task-core/src/store` の本体の行（空行・注釈・use・mod 宣言を除く）が 19396 から 19406 へ 10 行増えた。増えたのは trait 2 つの見出し・閉じ括弧、impl の見出し・閉じ括弧と supertrait の行で、1 行転送の形では trait 1 つにつき 5 行が必ず増える。
+- そこで 6 method の本体を `impl OrgDirectory for SqliteStore`（`store/org_directory.rs`）と `impl TaskQuery for SqliteStore`（`store/task_query.rs`）へ写さずに移し、領域の file の `_impl` 6 個（`org.rs` の `org_get_impl`、`projects.rs` の `project_get_impl`・`project_list_impl`・`milestone_list_impl`、`tasks.rs` の `list_page_impl`、`events.rs` の `event_rows_for_impl`）と `task_store_impl.rs` の転送を消した。前例は `store/model_catalog.rs` の `impl ModelCatalogStore for SqliteStore`（本体を trait の impl に置く）。
+- 1 つの trait の impl は 1 block にしか置けないので、本体は trait の file にまとめた（`OrgDirectory` の本体は元は `org.rs` と `projects.rs`、`TaskQuery` は `tasks.rs` と `events.rs` にあった）。領域の file の helper は写さずに使い、可視性を変えたのは `events.rs` の `read_event_rows`（private → `pub(super)`）だけ。SQL の文字列と処理は変えていない。
+- store の本体の行は WU base の 19396 から 19371 になった（着手時は 19676、`SqliteStore` の method は 729 から 707）。この結果、「SQL は `_impl` に 1 か所」（結果の節）はこの 6 method については「SQL は trait の impl に 1 か所」と読む。どちらでも SQL の本体は 1 か所で、写しは無い。
+
+### D4・D6・D7 の見込みと実績
+- D4: 8 method の見込みは 64 file だった。6 method では 45 file を直した（宣言と trait の 7 file、import だけの 38 file）。task-worker は 0 file。
+- D6: `TaskStore` の fn 宣言は 193 → 183（目標 185。store-prune の 4 個と移した 6 個）。supertrait は 16 → 18。celeris-mcp の src の `TaskStore` の言及は 6 → 3（目標 1）、celeris-mcp が直に呼ぶ `TaskStore` の method は 9 → 3。`auth.rs` から見える method は 308 → 7（`McpClientStore`）、`tools/projects.rs` は 308 → 6（`OrgDirectory`・`TaskQuery`）。試験で SQLite を開く数は 7 → 7 で減らしていない（理由は進捗の mcp-port の節）。compile の単位の逆依存は変わらない（`Cargo.toml`・`Cargo.lock` の差分なし）。
+- D5: `measure.py --check-writers cos_inbox_items,chat_client_requests` → exit 0。task-api は 2 表を書かない。
+- D7: `prune-list.json` の 17 名を消した（`measure.py --check-pruned` → exit 0）。試験だけが呼ぶ 14 個は残した。

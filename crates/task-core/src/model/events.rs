@@ -20,6 +20,35 @@ pub enum CreatedOrigin {
     WorkerRun { task_id: TaskId, run_id: String },
 }
 
+/// ADR 2026-11-08-health-enforcement-loop D7.2・D7.3（P-9）: 依存先の失敗で cancel された後続を、依存先の終端からの
+/// 復帰（と retry の付け替え）で戻さなかった理由。判定は `transition::cancelled_by_dependency` と
+/// `transition::dependency_reopen_trigger` が返し、依存先の events の記録（kept）もこの型を使う。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "reason", rename_all = "snake_case")]
+pub enum KeptReason {
+    /// retry の後継 `successor`（`Event::Retried { from: 後続 }` を持つ task）がある。戻すと同じ仕事が 2 つになる。
+    Retried { successor: TaskId },
+    /// ほかの依存先 `unresolved` が failed・cancelled（または見つからない）。それが戻ったときに戻る。
+    OtherDependency { unresolved: Vec<TaskId> },
+}
+
+/// ADR 2026-11-08-health-enforcement-loop D7.3・決定 p9-scope: `Event::DependentsReopened.restored[]`。依存先の終端からの
+/// 復帰で戻した後続 `task_id` と、その後続の `depends_on`（戻した時点。人が後継を手で起票していたら重複を見分ける）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RestoredDependent {
+    pub task_id: TaskId,
+    pub depends_on: Vec<TaskId>,
+}
+
+/// 同 D7.3: `Event::DependentsReopened.kept[]`。依存先の失敗で cancel されたが戻さなかった後続 `task_id` と、その理由
+/// `why`（`reason` と、`successor` か `unresolved`）。`why` を平たく並べない（`flatten` の schema は `oneOf` と
+/// `properties` が同居し、web の生成型が `task_id` を落とす）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct KeptDependent {
+    pub task_id: TaskId,
+    pub why: KeptReason,
+}
+
 /// ADR-0079 付記 R7-5 D1: `Event::WorkUnitChecksFailed` の不合格の検査 1 件。`detail` は判定文そのもの
 /// （`cmd=… exit=… expected=… stdout_tail=… stderr_tail=…`、timeout・exec 失敗の文も同じ）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -226,6 +255,15 @@ pub enum Event {
         fingerprints: Vec<String>,
         /// `fingerprints` の集合の sha256（`crate::health_repeat::fingerprint_set_sha256`）。
         set_sha256: String,
+    },
+    /// ADR 2026-11-08-health-enforcement-loop D7.3・決定 p9-scope: 依存先（この event の task）が終端から戻った遷移と
+    /// 同じ transaction で、戻した後続 `restored` と、依存先の失敗で cancel されたが戻さなかった後続 `kept` を記録する
+    /// （`SqliteStore::cascade_after_transition_tx`。判定は `transition::dependents_reopened`）。`kept` は依存先の終端が
+    /// failed・cancelled のときだけ数え、人・CoS の cancel と連鎖の中止の後続は入れない。両方空なら書かず、`restored`
+    /// が空で `kept` が直前のこの event と同じなら書かない。状態は変えない。
+    DependentsReopened {
+        restored: Vec<RestoredDependent>,
+        kept: Vec<KeptDependent>,
     },
     /// ADR 2026-10-27-done-task-auto-reintegrate D3・D6: done の後に main が進んで unintegrated になった task を、
     /// stranded sweep が `Trigger::Rereview` で reviewing に戻した（遷移と同じ transaction）。`class` は

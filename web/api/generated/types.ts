@@ -2432,6 +2432,10 @@ export type Event = {
   "source_task": TaskId;
   "type": "health_findings_repeated";
 } | {
+  "kept": Array<KeptDependent>;
+  "restored": Array<RestoredDependent>;
+  "type": "dependents_reopened";
+} | {
   "attempt": number;
   "class": string;
   "head_sha": string;
@@ -3718,6 +3722,19 @@ export type IntegrationView = {
 };
 
 export type IntegrationWaitCause = "unmerged" | "delivery_skipped" | "held" | "discarded";
+
+export type KeptDependent = {
+  "task_id": TaskId;
+  "why": KeptReason;
+};
+
+export type KeptReason = {
+  "reason": "retried";
+  "successor": TaskId;
+} | {
+  "reason": "other_dependency";
+  "unresolved": Array<TaskId>;
+};
 
 export type KnowledgeAcceptBody = {
   "overwrite"?: boolean;
@@ -5295,6 +5312,11 @@ export type ResolvedRouting = {
   "mode": RoutingMode;
   "online_update": boolean;
   "source": ModeSource;
+};
+
+export type RestoredDependent = {
+  "depends_on": Array<TaskId>;
+  "task_id": TaskId;
 };
 
 export type RetryBody = {

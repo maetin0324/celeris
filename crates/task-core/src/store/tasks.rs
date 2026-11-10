@@ -605,8 +605,13 @@ impl SqliteStore {
         // ADR 2026-10-08-browser-prod-enablement D4: 元の task の保存 policy を引き継ぐ（無ければ自動付与のまま）。
         Self::inherit_browser_policy_tx(tx, original, new_task.id)?;
 
+        // ADR 2026-11-08-health-enforcement-loop D7.2（P-9）: 依存先の失敗で cancel された後続のうち、retry の後継を
+        // 持つものは付け替えない（後継が同じ仕事を持つ。後継は終端でなければ付け替わる）。判定は依存先の reopen での
+        // 復帰（`cascade_after_transition_tx`）と同じ `retry_successors_tx` と述語。
         let mut rewired = Vec::new();
-        for dep_id in Self::dependents_of_tx(tx, original, false)? {
+        let dependents = Self::dependents_of_tx(tx, original, false)?;
+        let successors = super::transition::retry_successors_tx(tx, &dependents)?;
+        for dep_id in dependents {
             let Some(dep) = Self::get_locked(tx, dep_id)? else {
                 continue;
             };
@@ -614,7 +619,15 @@ impl SqliteStore {
                 Status::Draft | Status::Ready | Status::Blocked => true,
                 Status::Cancelled => {
                     let last = Self::last_transitioned_tx(tx, dep_id)?;
-                    crate::transition::cancelled_by_dependency(dep.status, last.as_ref()).is_some()
+                    let successor = successors.get(&dep_id).copied();
+                    matches!(
+                        crate::transition::cancelled_by_dependency(
+                            dep.status,
+                            last.as_ref(),
+                            successor
+                        ),
+                        crate::transition::DependencyCancel::Restore(_)
+                    )
                 }
                 _ => false,
             };

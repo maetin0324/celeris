@@ -11665,6 +11665,33 @@
           "type": "object"
         },
         {
+          "description": "ADR 2026-11-08-health-enforcement-loop D7.3・決定 p9-scope: 依存先（この event の task）が終端から戻った遷移と\n同じ transaction で、戻した後続 `restored` と、依存先の失敗で cancel されたが戻さなかった後続 `kept` を記録する\n（`SqliteStore::cascade_after_transition_tx`。判定は `transition::dependents_reopened`）。`kept` は依存先の終端が\nfailed・cancelled のときだけ数え、人・CoS の cancel と連鎖の中止の後続は入れない。両方空なら書かず、`restored`\nが空で `kept` が直前のこの event と同じなら書かない。状態は変えない。",
+          "properties": {
+            "kept": {
+              "items": {
+                "$ref": "#/$defs/KeptDependent"
+              },
+              "type": "array"
+            },
+            "restored": {
+              "items": {
+                "$ref": "#/$defs/RestoredDependent"
+              },
+              "type": "array"
+            },
+            "type": {
+              "const": "dependents_reopened",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "restored",
+            "kept"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR 2026-10-27-done-task-auto-reintegrate D3・D6: done の後に main が進んで unintegrated になった task を、\nstranded sweep が `Trigger::Rereview` で reviewing に戻した（遷移と同じ transaction）。`class` は\n`disjoint`（main 側の変更 file が task の差分と重ならない）か `overlap`。`attempt` は 1 始まり。",
           "properties": {
             "attempt": {
@@ -18423,6 +18450,64 @@
           "const": "discarded",
           "description": "人が取り込まないと決めた。",
           "type": "string"
+        }
+      ]
+    },
+    "KeptDependent": {
+      "description": "同 D7.3: `Event::DependentsReopened.kept[]`。依存先の失敗で cancel されたが戻さなかった後続 `task_id` と、その理由\n`why`（`reason` と、`successor` か `unresolved`）。`why` を平たく並べない（`flatten` の schema は `oneOf` と\n`properties` が同居し、web の生成型が `task_id` を落とす）。",
+      "properties": {
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        },
+        "why": {
+          "$ref": "#/$defs/KeptReason"
+        }
+      },
+      "required": [
+        "task_id",
+        "why"
+      ],
+      "type": "object"
+    },
+    "KeptReason": {
+      "description": "ADR 2026-11-08-health-enforcement-loop D7.2・D7.3（P-9）: 依存先の失敗で cancel された後続を、依存先の終端からの\n復帰（と retry の付け替え）で戻さなかった理由。判定は `transition::cancelled_by_dependency` と\n`transition::dependency_reopen_trigger` が返し、依存先の events の記録（kept）もこの型を使う。",
+      "oneOf": [
+        {
+          "description": "retry の後継 `successor`（`Event::Retried { from: 後続 }` を持つ task）がある。戻すと同じ仕事が 2 つになる。",
+          "properties": {
+            "reason": {
+              "const": "retried",
+              "type": "string"
+            },
+            "successor": {
+              "$ref": "#/$defs/TaskId"
+            }
+          },
+          "required": [
+            "reason",
+            "successor"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ほかの依存先 `unresolved` が failed・cancelled（または見つからない）。それが戻ったときに戻る。",
+          "properties": {
+            "reason": {
+              "const": "other_dependency",
+              "type": "string"
+            },
+            "unresolved": {
+              "items": {
+                "$ref": "#/$defs/TaskId"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "reason",
+            "unresolved"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -26485,6 +26570,25 @@
         "lower_policy",
         "evidence_mode",
         "online_update"
+      ],
+      "type": "object"
+    },
+    "RestoredDependent": {
+      "description": "ADR 2026-11-08-health-enforcement-loop D7.3・決定 p9-scope: `Event::DependentsReopened.restored[]`。依存先の終端からの\n復帰で戻した後続 `task_id` と、その後続の `depends_on`（戻した時点。人が後継を手で起票していたら重複を見分ける）。",
+      "properties": {
+        "depends_on": {
+          "items": {
+            "$ref": "#/$defs/TaskId"
+          },
+          "type": "array"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        }
+      },
+      "required": [
+        "task_id",
+        "depends_on"
       ],
       "type": "object"
     },

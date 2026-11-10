@@ -4,7 +4,7 @@
 //! dispatcher の dispatch で作る。script は `sqlite3 -readonly` で読むだけで、DB の main file を変えないことも確かめる。
 //! 本番 DB には触れない。userns・外部ネットワークを使わない。
 
-mod support;
+use crate::support;
 
 use std::path::Path;
 use std::process::Command;

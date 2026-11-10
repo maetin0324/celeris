@@ -3,7 +3,7 @@
 //!
 //! `CELERIS_P2F_LATENCY_OUT=<file>` を渡すと (1) が 1 呼び出しの時間の raw（JSONL）を書く（計測専用）。
 
-mod support;
+use crate::support;
 
 use std::sync::Arc;
 use std::time::Duration;

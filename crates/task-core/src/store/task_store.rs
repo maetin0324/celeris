@@ -18,11 +18,10 @@ use crate::repos::{ProjectRepo, RepoId};
 use crate::transition::{Outcome, Trigger};
 use crate::write_set::WriteSetRecord;
 
-use super::query::{ListFilter, ListOrder, Page};
 use super::{
     ClusterConnectionRecord, ClusterSettings, ConfigEventRow, EventRow, ExecutionMetricsTaskRow,
-    LocalSettings, LocalSettingsEvent, LocalSettingsOverrides, NewConfigEvent, ProjectPlanApply,
-    StoreError, TaskWithEvents, TreeAdoption,
+    LocalSettings, LocalSettingsEvent, LocalSettingsOverrides, NewConfigEvent, StoreError,
+    TaskWithEvents, TreeAdoption,
 };
 
 /// ADR-0033 D3: 報告（`reports`）の読み書きは `crate::report::ReportStore` にあり、`TaskStore` はそれを
@@ -32,6 +31,8 @@ use super::{
 /// にある。
 /// ADR-0037 D1（Phase 39）: 通知の台帳（`notifications`）も同じ形で `crate::notify::NotificationStore` にある。
 /// ADR-0133 D6: dispatcher と daemon が同じ通知 feed を読むため `NoticeStore` も supertrait にする。
+/// ADR 2026-11-10-taskstore-consumer-ports D2: 名簿の読み出し（`OrgDirectory`）と task の一覧・event 行の
+/// 読み出し（`TaskQuery`）は能力ごとの trait にあり、それだけを使う consumer（celeris-mcp）はそちらに依存する。
 pub trait TaskStore:
     Send
     + Sync
@@ -51,6 +52,8 @@ pub trait TaskStore:
     + crate::cluster_job::ClusterJobWaitStore
     + crate::cron::CronJobStore
     + crate::store::ModelCatalogStore
+    + crate::store::OrgDirectory
+    + crate::store::TaskQuery
 {
     /// task とその終端の WorkUnit の完了単位を `completion_outcomes` へ冪等に書く（ADR 2026-10-22 D6）。
     fn completion_outcomes_project(
@@ -308,28 +311,6 @@ pub trait TaskStore:
         extra_events: Vec<Event>,
     ) -> Result<(), StoreError>;
 
-    /// ADR-0074 D3.3（Phase F4a (c)）: 案件計画の提案の決定を **1 トランザクションで**適用する。
-    /// `milestones` を全て `milestone_status` にし、`tasks` のうちまだ `draft` のもの（`Trigger::Cancel`
-    /// のカスケードで既に終端になったもの等は飛ばす）に `trigger` を適用し、最後に `decided_event`
-    /// を `plan_task_id` の events に積む。途中で失敗すれば何も書かない。無い途中目標・Task は
-    /// `StoreError::Invalid`。
-    fn project_plan_decide_apply(
-        &self,
-        plan_task_id: TaskId,
-        milestones: &[MilestoneId],
-        milestone_status: MilestoneStatus,
-        tasks: &[TaskId],
-        trigger: Trigger,
-        decided_event: Event,
-    ) -> Result<(), StoreError>;
-
-    /// ADR-0074 D3.4（Phase F4b (e)）: 案件計画の決定（replan の差分を含む）を **1 トランザクションで**
-    /// 適用する。順に: 途中目標の状態・題名の更新 → Task の書き換え（`draft` / `ready` で lease の無い
-    /// ものだけ。dispatch 済みなら `StoreError::Invalid` で何も書かない）→ 遷移（`Accept` は `draft` の
-    /// ときだけ、それ以外は終端でないときだけ適用。`Cancel` のカスケードで先に終端になったものは飛ばす）
-    /// → `decided_event` を `plan_task_id` の events に積む。
-    fn project_plan_apply(&self, apply: &ProjectPlanApply) -> Result<(), StoreError>;
-
     /// ADR-0016 D2 / M2: 実行中の委譲。子タスク群を挿入（`Created` → `Accept` で `ready`）し、親に
     /// `Event::Delegated{run_id, task_ids}` を追記する。全体が 1 トランザクション。親の状態は変えない。
     /// 子の `parent_id` が `parent_id` と違えば `StoreError::Invalid`。
@@ -362,14 +343,6 @@ pub trait TaskStore:
         &self,
         task_ids: &[TaskId],
     ) -> Result<std::collections::HashMap<TaskId, String>, StoreError>;
-    /// ADR-0013（Phase 9b）: 1 タスクのイベントを `seq` 昇順で、`after_seq` より後（`None` なら最初から）最大 `limit` 件、
-    /// グローバル `id` と `ts` 付きで返す（API の `GET /tasks/{id}/events` と run の要約が使う）。
-    fn event_rows_for(
-        &self,
-        task_id: TaskId,
-        after_seq: Option<u64>,
-        limit: usize,
-    ) -> Result<Vec<EventRow>, StoreError>;
     /// 各タスクの最新の `kind` のイベントだけを、global `id` の昇順で返す（受信箱の `delivery_skipped`（ADR-0121 D3）と
     /// `dependents_reopened`（ADR 2026-11-08-health-enforcement-loop D7.3）の正本）。種類ごとの部分 index を引き、
     /// events 全体は走査しない。
@@ -410,15 +383,6 @@ pub trait TaskStore:
         &self,
     ) -> Result<Vec<(TaskId, String)>, StoreError>;
 
-    /// ADR-0013 D10: `filter` に一致する `tasks` を `order` で keyset ページングして返す。`cursor` は
-    /// 前回の `Page::next_cursor`（不透明な文字列）。不正な `cursor` は `StoreError::Invalid`。
-    fn list_page(
-        &self,
-        filter: &ListFilter,
-        order: ListOrder,
-        cursor: Option<&str>,
-        limit: usize,
-    ) -> Result<Page<Task>, StoreError>;
     /// ADR-0013 D10: `tasks` の件数を `status` ごとに集計する（0 件の status は含まない）。
     fn count_by_status(&self) -> Result<Vec<(Status, u64)>, StoreError>;
 
@@ -426,8 +390,6 @@ pub trait TaskStore:
 
     /// 全ノードを `position`、同値なら `id` の昇順で返す（木は呼び出し側が `parent_id` で組む）。
     fn org_list(&self) -> Result<Vec<OrgNode>, StoreError>;
-    /// 1 ノード。無ければ `None`。
-    fn org_get(&self, id: &str) -> Result<Option<OrgNode>, StoreError>;
     /// 挿入または更新。`crate::org::validate_upsert` を通してから書く（secretary は 1 つ、親は既存、
     /// 自分を祖先にできない、secretary > department > section）。`created_at` は既存行のものを保つ。
     fn org_upsert(&self, node: &OrgNode) -> Result<OrgNode, StoreError>;
@@ -445,9 +407,6 @@ pub trait TaskStore:
 
     /// 案件を作る（`status` は呼び出し側が決める。API は `proposed`）。
     fn project_create(&self, project: &Project) -> Result<(), StoreError>;
-    fn project_get(&self, id: ProjectId) -> Result<Option<Project>, StoreError>;
-    /// `created_at` の降順（新しい案件が先）。
-    fn project_list(&self) -> Result<Vec<Project>, StoreError>;
     /// 状態だけを変える（`updated_at` も更新）。無い案件は `Ok(false)`。
     fn project_set_status(&self, id: ProjectId, status: ProjectStatus) -> Result<bool, StoreError>;
     /// ADR-0039 D1: 作業場所だけを変える（`None` で消す。`updated_at` も更新）。無い案件は `Ok(false)`。
@@ -477,15 +436,6 @@ pub trait TaskStore:
     /// ADR 2026-10-16-project-auto-integrate D1: `projects.auto_integrate`（レビュー合格した root task を
     /// 既定ブランチへ自動で取り込む）を書く。無い案件は `Ok(false)`。
     fn project_set_auto_integrate(&self, id: ProjectId, enabled: bool) -> Result<bool, StoreError>;
-    /// ADR-0072「Phase F6 実装時の決定」P3: 案件の題名（`title`）と説明（依頼文 `request`）を
-    /// 人が書き換える。`None` の欄は変えない。検証（空でない・長さの上限）は呼び出し側（API）が行う。
-    /// 無い案件は `Ok(false)`。
-    fn project_set_text(
-        &self,
-        id: ProjectId,
-        title: Option<&str>,
-        request: Option<&str>,
-    ) -> Result<bool, StoreError>;
 
     // ---- ADR-0043 D1（Phase 52）: 案件のリポジトリ（`project_repos`）----
 
@@ -564,8 +514,6 @@ pub trait TaskStore:
     /// ADR-0074 D3.3（Phase F4b）: 案件計画から作った途中目標に key を結ぶ（`milestones.plan_key`）。
     /// 無い途中目標は `Ok(false)`。
     fn milestone_set_plan_key(&self, id: MilestoneId, plan_key: &str) -> Result<bool, StoreError>;
-    /// その案件の途中目標を `seq` 昇順で返す。
-    fn milestone_list(&self, project_id: ProjectId) -> Result<Vec<Milestone>, StoreError>;
     /// ADR-0044 D6（Phase 55）: 途中目標を id 1 つで引く（案件を知らなくてよい）。
     fn milestone_get(&self, id: MilestoneId) -> Result<Option<Milestone>, StoreError>;
     /// 状態だけを変える。無い途中目標は `Ok(false)`。
@@ -573,13 +521,6 @@ pub trait TaskStore:
         &self,
         id: MilestoneId,
         status: MilestoneStatus,
-    ) -> Result<bool, StoreError>;
-    /// 現在の状態が `from` のときだけ更新する。dispatch と自動到達が人の状態変更を上書きしないために使う。
-    fn milestone_transition_status(
-        &self,
-        id: MilestoneId,
-        from: MilestoneStatus,
-        to: MilestoneStatus,
     ) -> Result<bool, StoreError>;
     /// ADR-0044 D6（Phase 55）: 状態と `paused_from` を**同時に**書く（`pause` / `resume` / `cancel`）。
     /// `paused_from` は `Some(None)` で消し、`None` なら触らない。無い途中目標は `Ok(false)`。

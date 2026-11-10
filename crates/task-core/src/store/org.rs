@@ -177,20 +177,6 @@ impl SqliteStore {
         self.with_read_conn(Self::org_list_tx)
     }
 
-    pub(super) fn org_get_impl(&self, id: &str) -> Result<Option<OrgNode>, StoreError> {
-        self.with_read_conn(|conn| {
-            let row = conn
-                .query_row(
-                    "SELECT id, parent_id, name, kind, genre, brief, position, created_at, updated_at, profile_json \
-                     FROM org_nodes WHERE id = ?1",
-                    params![id],
-                    Self::org_row,
-                )
-                .optional()?;
-            row.transpose()
-        })
-    }
-
     pub(super) fn org_upsert_impl(&self, node: &OrgNode) -> Result<OrgNode, StoreError> {
         self.org_upsert_with_actor(node, None)
     }

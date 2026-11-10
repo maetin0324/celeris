@@ -16,7 +16,9 @@ use std::sync::Arc;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use task_core::{Event, ListFilter, ListOrder, McpScope, ReportStore, Status, TaskId, TaskStore};
+use task_core::{
+    Event, ListFilter, ListOrder, McpScope, ReportStore, Status, TaskId, TaskQuery, TaskStore,
+};
 use task_ops::OpsError;
 use time::OffsetDateTime;
 

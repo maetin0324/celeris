@@ -8,7 +8,7 @@ use common::*;
 use serde_json::{Value, json};
 use task_api::{ApiToken, Principal};
 use task_core::project_wake::ControllerMode;
-use task_core::{Status, TaskKind, TaskStore};
+use task_core::{OrgDirectory, Status, TaskKind, TaskStore};
 
 use time::{Duration, OffsetDateTime};
 

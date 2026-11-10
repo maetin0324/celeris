@@ -11,7 +11,7 @@ mod common;
 
 use common::*;
 use serde_json::{Value, json};
-use task_core::{MilestoneStatus, Status, TaskKind, TaskStore};
+use task_core::{MilestoneStatus, OrgDirectory, Status, TaskKind, TaskStore};
 
 fn g(path: &str) -> axum::http::Request<axum::body::Body> {
     get_with(

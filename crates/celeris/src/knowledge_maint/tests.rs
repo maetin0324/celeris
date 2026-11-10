@@ -3,7 +3,7 @@ use task_core::org::{OrgKind, OrgNode};
 use task_core::report::{Report, ReportId, ReportKind, ReportStore};
 use task_core::{
     Budget, KnowledgeRunStore, ListFilter, ListOrder, Project, ProjectId, ProjectStatus,
-    SqliteStore, TaskId as CoreTaskId, Tier, WorkerHint, WorkspaceSpec,
+    SqliteStore, TaskId as CoreTaskId, TaskQuery, Tier, WorkerHint, WorkspaceSpec,
 };
 
 fn store_with_node() -> SqliteStore {

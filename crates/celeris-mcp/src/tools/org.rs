@@ -7,7 +7,8 @@ use std::sync::Arc;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use task_core::{
-    EffectiveProfile, McpScope, NodeSessionStore, OrgKind, OrgNode, Profile, SessionKind, TaskStore,
+    EffectiveProfile, McpScope, NodeSessionStore, OrgDirectory, OrgKind, OrgNode, Profile,
+    SessionKind, TaskStore,
 };
 use time::OffsetDateTime;
 

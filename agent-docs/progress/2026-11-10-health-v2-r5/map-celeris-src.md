@@ -110,7 +110,7 @@ map-api-b の branch はこの作業ツリーに入っていないので、`--ch
 - どれも組の members に入っていない（組は duplicate_setup だけで、members は helper）。
 
 ## 申告（走査は直していない）
-- `daemon/bootstrap_worker_db_guard_tests.rs` の 24 件（`sandbox-db-guard`、1 件は `browser-launcher`）は、worker run の中の daemon が本番 DB を開かないこと（repo の不変条件 `worker-db-read-only`、ADR-0095）を確かめる試験だが、B0 の `sandbox-db-guard` の tests・evidence にも architecture-map の関連試験にも無いため invariant=false になっている。今は組に入っていないので害は無い。後で整理の候補を作る段では、architecture-map の db_guard の行の関連試験にこの file を足すことを提案する（この unit の write set の外なので変えていない）。
+- `daemon/bootstrap_worker_db_guard_tests.rs` の 25 件（24 件は `sandbox-db-guard`、1 件は `browser-launcher`）は、worker run の中の daemon が本番 DB を開かないこと（repo の不変条件 `worker-db-read-only`、ADR-0095）を確かめる試験だが、B0 の `sandbox-db-guard` の tests・evidence にも architecture-map の関連試験にも無いため invariant=false になっている。今は組に入っていないので害は無い。後で整理の候補を作る段では、architecture-map の db_guard の行の関連試験にこの file を足すことを提案する（この unit の write set の外なので変えていない）。
 - `db_maintenance/tests.rs::incremental_backup_progress_restarts_after_other_connection_writes` は、doc の 1 行目が「Measure the old 1-page stepping mechanism」で、Celeris の code を呼ばずに rusqlite の online backup を 1 page ずつ進める旧い方式を計測している。old_impl の候補になりうるので、unit `old-impl` の判断の材料として挙げる（この unit は `candidates/old-impl.json` を書かない）。
 
 ## 証拠（提出時の HEAD で実行）

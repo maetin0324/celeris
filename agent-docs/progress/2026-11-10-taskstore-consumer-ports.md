@@ -1,6 +1,6 @@
 ---
 title: 健全性v2 R3 — TaskStore の consumer 駆動分割と domain/storage 境界
-tasks: [01M6TYVJT2HG9NY5FW9FMCZS9A]
+tasks: [01M6TYVJT2HG9NY5FW9FMCZS9A, 01M73HCEX581ACXN6W7VP4M26Q]
 status: done
 updated: 2026-11-10
 completed: 2026-11-10
@@ -16,6 +16,7 @@ completed: 2026-11-10
 - store-prune・table-writers: 済み（下の各節）。
 - mcp-port: 済み。計画 v2 の形（1 行転送）では repo-health の `size.responsibility-growth` が落ちたので plan_issue で返し、計画 v3 の案 (a) で直した（下の「mcp-port の check の不合格と直し」）。
 - record: 済み。前後の計測（下の「前後の計測」）、ADR の付記（実装との突き合わせ）、提案節の引き継ぎを書いた。crates/ は変えていない。
+- mcp-ports（task 01M73HCEX581ACXN6W7VP4M26Q）: 済み。final review の指摘（celeris-mcp の tool 本体が `McpState::blocking` から具体型の store を受け、fake に替えられない）を直した（下の「mcp-ports の結果」）。
 
 ## 前後の計測（record、提出時の HEAD で実行）
 - 後の値は [after.json](2026-11-10-taskstore-consumer-ports/after.json)（`measure.py --json`、`head_subject` は「integrate wu/table-writers (phase impl)」）、前の値は着手時の [baseline.json](2026-11-10-taskstore-consumer-ports/baseline.json)。store の行は `bash scripts/dev/check-health.sh`（base は auto、`git merge-base HEAD main`）の report の `size.responsibility-growth` の `baseline.value`（前）と `head_value`（後）。
@@ -149,6 +150,36 @@ completed: 2026-11-10
 - `mcp-port: 6 method の本体を impl OrgDirectory・impl TaskQuery for SqliteStore へ移し、_impl と 1 行の転送を消す`
 - `mcp-port: 進捗に本体の移動と store の行の前後を書く`
 - `record: 前後計測の after.json と表、ADR の実装との突き合わせの付記、進捗の完了と提案`
+
+## mcp-ports の結果
+task 01M73HCEX581ACXN6W7VP4M26Q の WU mcp-ports。前回の final review の指摘「celeris-mcp の tool 本体が `McpState::blocking` から具体型の store を受けるので fake に替えられない」を直した。task-core・`auth.rs`・`resources.rs`・`tools/org.rs`・`crates/celeris-mcp/tests/` は変えていない。
+
+- 変えた file（5 つ。どれも `crates/celeris-mcp/src`）:
+  - `state.rs`: `McpState` に `org_directory: Arc<dyn OrgDirectory>`・`task_query: Arc<dyn TaskQuery>` を足した。どちらも `new` で既存の `Arc<SqliteStore>` を clone して coerce したもので、新しい接続・状態ではない（`SqliteStore::open_with` の呼び出しは `open` の 1 か所のまま）。`blocking_on(&self, handle: &Arc<P>, f: FnOnce(&P) -> T)` を置き、`spawn_blocking` と panic の伝播（`resume_unwind`）をここへ移した。`blocking` は `self.blocking_on(&self.store, f)` を呼ぶだけになった。`open`・`from_store` の署名は変えていない。
+  - `tools/projects.rs`: 本体を同期の `list_projects(&dyn OrgDirectory, …)`・`get_project(&dyn OrgDirectory, &dyn TaskQuery, …)`（`pub(super)`）にした。async 側は `state.blocking_on(&state.org_directory, …)` を 1 回呼ぶ（`projects_get` は `task_query` の `Arc` を clone して closure に移す）。`.blocking(` を呼ばず、`SqliteStore`・`TaskStore` の語を書いていない。
+  - `tools/tasks.rs`: `tasks_list` の本体を `list_tasks(&dyn TaskQuery, &ListFilter, limit)` にし、`state.blocking_on(&state.task_query, …)` で呼ぶ。`Task` → `TaskSummary` の変換を `task_summary` の 1 関数にまとめ、`projects.rs` もこれを使う（前は 2 か所に同じ変換があった）。`tasks_get`・comment 等と `task_ops` への委譲は `McpState::blocking` の具体型のまま。
+  - `tools/mod.rs`: `#[cfg(test)]` の次の行に `mod fake_ports;`。
+  - `tools/fake_ports.rs`（新規）: `#[derive(Default)]` の fake。trait の impl は `OrgDirectory`（4 method: `org_get`・`project_list`・`project_get`・`milestone_list`）と `TaskQuery`（2 method: `list_page`・`event_rows_for`）の 2 つだけ（4+2）。`Task` は struct literal で作る（前例 `crates/celerisctl/src/commands/query_tests.rs` の `sample_task`）。fake の `list_page` は道具が使う形（`ListOrder::UpdatedDesc`・cursor なし・`statuses` と `project_id` の絞り込み）だけを実装し、他の並びと cursor は `StoreError::Invalid` で断る。
+- `port_fake_` の試験は 3 件。どれも本体の関数を fake で直に呼び、SQLite を開かない。
+  - `port_fake_projects_list_filters_by_status_and_limit`: 案件の一覧の並び（新しい順）・状態の絞り込み・上限・該当なし。
+  - `port_fake_projects_get_returns_milestones_and_tasks_or_none`: 途中目標（`seq` 順）と、その案件の task だけ（更新の新しい順）。`TaskSummary` の各欄。無い id は `None`。
+  - `port_fake_tasks_list_filters_by_status_project_and_limit`: task の一覧の並び・状態と案件の絞り込み・上限。
+  - 守る不変条件: 道具の本体は狭い trait の handle だけで動き、並び・絞り込み・上限・`TaskSummary` への変換を本体の中で行う。既存の試験（`crates/celeris-mcp/tests/` と store の試験）は `SqliteStore` を通してしか本体を呼べず、本体が具体型に依存していないことは確かめられない。SQL は task-core の store の試験が確かめる。
+- `spawn_blocking(` は `state.rs` では `blocking_on` の 1 か所だけ。crate 全体では `tools/db.rs` の 2 か所（`db_query`・`db_schema` が読み取り専用の DB を path から開く処理。store の handle を受けない）も残る。`tools/db.rs` はこの WU の範囲の外なので変えていない。
+
+### 証拠コマンドと結果（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+- `cargo nextest run -p celeris-mcp --lib -E 'test(/port_fake_/)'` → exit 0（3 passed、45 skipped）
+- `n=$(grep -rhoE 'fn port_fake_[a-z0-9_]+' crates/celeris-mcp/src | sort -u | wc -l)` → 3
+- Task の受け入れ条件 2 の grep（`projects.rs`・`auth.rs` に `SqliteStore`・`TaskStore` が無い、`projects.rs` に `.blocking(` が無い、`dyn OrgDirectory`・`dyn TaskQuery`・`Arc<dyn OrgDirectory`・`fn blocking_on` がある、`impl … TaskStore for` が無い、`fake_ports.rs` がある）→ exit 0
+- `grep -nE 'SqliteStore|TaskStore|open_in_memory|rusqlite|McpState' crates/celeris-mcp/src/tools/fake_ports.rs` → 0 行（exit 1）
+- `bash scripts/dev/test-affected.sh` → exit 0（対象 crate は celeris・celeris-mcp・celerisctl。nextest 1078 passed・2 skipped、repo_health_gate の試験も合格）
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo clippy -p celeris-mcp --all-targets -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- `bash scripts/dev/check-health.sh --base "$CELERIS_WU_BASE"` → exit 0（mode full、verdict pass、fail 級 0、new 0、worsened 0）
+
+### 変更（commit の件名）
+- `mcp-ports: McpState に OrgDirectory・TaskQuery の handle と blocking_on を置き、projects と task 一覧の本体を狭い trait で受ける`
+- `mcp-ports: 進捗に mcp-ports の結果を書く`
 
 ## 未解決
 - 試験だけが呼ぶ TaskStore method 14 個は消すかを決めていない（`prune-list.json` の `held_test_only`）。本番の代わりの経路を確かめた method から、後の段で契約の廃止を書いて消す。

@@ -271,7 +271,13 @@ fn parse_aider_usage_returns_none_when_nothing_matches() {
 #[test]
 fn with_model_returns_a_new_adapter_carrying_the_model() {
     let adapter = AiderAdapter::new(AiderConfig::default());
-    let with_model = adapter.with_model("claude-sonnet-5").unwrap();
+    let with_model = adapter
+        .configure(&AdapterSettings {
+            model: Some("claude-sonnet-5".into()),
+            ..AdapterSettings::default()
+        })
+        .adapter
+        .unwrap();
     assert_eq!(with_model.id(), AiderAdapter::ID);
 }
 

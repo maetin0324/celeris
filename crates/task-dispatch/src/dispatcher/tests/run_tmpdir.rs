@@ -59,13 +59,15 @@ impl WorkerAdapter for TmpProbeAdapter {
             exit_code: Some(0),
         })
     }
-    fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut env = self.env.clone();
-        env.extend(extra.iter().cloned());
-        Some(Arc::new(TmpProbeAdapter {
-            env,
-            ..self.clone()
-        }))
+    fn configure(&self, settings: &task_worker::AdapterSettings) -> task_worker::Configured {
+        settings.configured(&[task_worker::AdapterSetting::Env], || {
+            let mut env = self.env.clone();
+            settings.apply_env(&mut env);
+            Arc::new(TmpProbeAdapter {
+                env,
+                ..self.clone()
+            })
+        })
     }
 }
 

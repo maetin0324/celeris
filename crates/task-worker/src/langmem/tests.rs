@@ -194,7 +194,11 @@ async fn with_model_replaces_the_configured_model() {
     let mut config = stub_langmem(dir.path(), &fake_extractor_script());
     config.model = Some("old/configured-model".into());
     let adapter = LangMemAdapter::new(config)
-        .with_model("qwen/qwen3.8-27b")
+        .configure(&AdapterSettings {
+            model: Some("qwen/qwen3.8-27b".into()),
+            ..AdapterSettings::default()
+        })
+        .adapter
         .unwrap();
     let sink = RecordingSink::default();
     adapter
@@ -408,7 +412,7 @@ async fn idle_timeout_secs_cannot_exceed_the_harness_budget() {
     assert!(matches!(outcome.terminal, Terminal::Error { .. }));
 }
 
-/// `with_env` の追加分は既存の同名キーより後に環境を組み立てるので勝つ（他アダプタと同じ規則）。
+/// `configure` の env の追加分は既存の同名キーより後に環境を組み立てるので勝つ（他アダプタと同じ規則）。
 #[tokio::test]
 async fn with_env_overrides_a_same_name_key_already_in_config_env() {
     let dir = tempfile::tempdir().unwrap();
@@ -428,8 +432,12 @@ async fn with_env_overrides_a_same_name_key_already_in_config_env() {
         .push(("OPENAI_API_KEY".to_string(), "old-key".to_string()));
     let base = LangMemAdapter::new(config);
     let with_env = base
-        .with_env(&[("OPENAI_API_KEY".to_string(), "new-key".to_string())])
-        .expect("langmem supports with_env");
+        .configure(&AdapterSettings {
+            env: vec![("OPENAI_API_KEY".to_string(), "new-key".to_string())],
+            ..AdapterSettings::default()
+        })
+        .adapter
+        .expect("langmem takes env");
 
     let req = sample_req(dir.path().to_path_buf());
     let sink = RecordingSink::default();
@@ -470,10 +478,14 @@ async fn langmem_api_key_reaches_runner_env_with_and_without_a_stale_env() {
                 .push(("OPENAI_API_KEY".to_string(), "stale-row".to_string()));
         }
         let base = LangMemAdapter::new(config);
-        // dispatcher がアカウント等で重ねる env（`with_env`）も鍵を上書きしない。
+        // dispatcher がアカウント等で重ねる env（`configure`）も鍵を上書きしない。
         let adapter: Arc<dyn WorkerAdapter> = if provider_env {
-            base.with_env(&[("OPENAI_API_KEY".to_string(), "stale-extra".to_string())])
-                .unwrap()
+            base.configure(&AdapterSettings {
+                env: vec![("OPENAI_API_KEY".to_string(), "stale-extra".to_string())],
+                ..AdapterSettings::default()
+            })
+            .adapter
+            .unwrap()
         } else {
             Arc::new(base)
         };

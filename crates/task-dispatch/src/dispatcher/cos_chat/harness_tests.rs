@@ -386,10 +386,12 @@ impl WorkerAdapter for DeltaProbe {
         self.inner.run(req, run_id, limits, sink).await
     }
 
-    fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut next = self.clone();
-        next.inner = self.inner.with_env(extra)?;
-        Some(Arc::new(next))
+    fn configure(&self, settings: &task_worker::AdapterSettings) -> task_worker::Configured {
+        self.inner.configure(settings).map_adapter(|inner| {
+            let mut next = self.clone();
+            next.inner = inner;
+            Arc::new(next)
+        })
     }
 }
 
@@ -792,8 +794,10 @@ impl WorkerAdapter for UsageAdapter {
         })
     }
 
-    fn with_env(&self, _extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-        Some(Arc::new(UsageAdapter))
+    fn configure(&self, settings: &task_worker::AdapterSettings) -> task_worker::Configured {
+        settings.configured(&[task_worker::AdapterSetting::Env], || {
+            Arc::new(UsageAdapter)
+        })
     }
 }
 

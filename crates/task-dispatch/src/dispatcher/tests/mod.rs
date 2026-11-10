@@ -1161,7 +1161,7 @@ async fn wait_for_approval_child(
 
 // ---- ADR-0024: account pool ----
 
-/// 走った run の env を記録し、`with_env` を実装するテスト用アダプタ（ADR-0024 D2）。
+/// 走った run の env を記録し、`configure` で env を受けるテスト用アダプタ（ADR-0024 D2）。
 type CapturedEnvs = Arc<StdMutex<Vec<Vec<(String, String)>>>>;
 
 #[derive(Clone)]
@@ -1206,16 +1206,24 @@ impl WorkerAdapter for PoolAdapter {
             }),
         }
     }
-    fn with_model(&self, model: &str) -> Option<Arc<dyn WorkerAdapter>> {
-        self.with_env(&[("TEST_MODEL".into(), model.into())])
-    }
-    fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut env = self.env.clone();
-        env.extend(extra.iter().cloned());
-        Some(Arc::new(PoolAdapter {
-            env,
-            ..self.clone()
-        }))
+    fn configure(&self, settings: &task_worker::AdapterSettings) -> task_worker::Configured {
+        settings.configured(
+            &[
+                task_worker::AdapterSetting::Model,
+                task_worker::AdapterSetting::Env,
+            ],
+            || {
+                let mut env = self.env.clone();
+                if let Some(model) = &settings.model {
+                    env.push(("TEST_MODEL".into(), model.clone()));
+                }
+                settings.apply_env(&mut env);
+                Arc::new(PoolAdapter {
+                    env,
+                    ..self.clone()
+                })
+            },
+        )
     }
 }
 
@@ -2704,7 +2712,7 @@ async fn paused_after_design() -> (
     (store, d, adapter, task, repo, root)
 }
 
-/// ADR-0074 F5-fix（不具合 1）: `with_env` を受け、`runs/<run_id>/request.json` を書き（実アダプタの
+/// ADR-0074 F5-fix（不具合 1）: `configure` で env を受け、`runs/<run_id>/request.json` を書き（実アダプタの
 /// `write_run_request` と同じく `RunRequest` をそのまま）、与えられた `CARGO_TARGET_DIR` に cargo の
 /// 生成物の代わりのファイルを置く WU 用アダプタ。
 #[derive(Clone)]
@@ -2720,10 +2728,12 @@ impl WorkerAdapter for TargetDirAdapter {
     fn id(&self) -> &str {
         "instant"
     }
-    fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut next = self.clone();
-        next.env.extend(extra.iter().cloned());
-        Some(Arc::new(next))
+    fn configure(&self, settings: &task_worker::AdapterSettings) -> task_worker::Configured {
+        settings.configured(&[task_worker::AdapterSetting::Env], || {
+            let mut next = self.clone();
+            settings.apply_env(&mut next.env);
+            Arc::new(next)
+        })
     }
     async fn run(
         &self,

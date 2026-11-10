@@ -729,16 +729,7 @@ impl CosChatLaunch {
             }
         };
         let run_env = cos_run_env(&cfg.api_base_url, &token, &policy_version, run_tmp.as_ref());
-        let Some(adapter) = adapter.with_env(&run_env) else {
-            if let Err(error) = self.store.cos_run_credential_revoke(run_id, now) {
-                tracing::warn!(%error, %run_id, "CoS credential revoke after launch failure failed");
-            }
-            return Err(format!(
-                "CoS unavailable: harness {} cannot receive a run credential",
-                pick.harness
-            )
-            .into());
-        };
+        let adapter = self.adapter_with_run_env(&adapter, run_env, run_id, &pick.harness, now)?;
         let store = Arc::clone(&self.store);
         let session_row_id = session.id;
         let thread = thread_id.to_string();
@@ -816,6 +807,30 @@ impl CosChatLaunch {
         self.route_reservations
             .insert(thread_id.to_owned(), (pick.candidate.source, pick.account));
         Ok(())
+    }
+
+    /// The CoS run's env (with its run credential) applied in one `configure` (ADR
+    /// 2026-11-10-worker-capability-ports D3). A harness that cannot take env never launches
+    /// holding a live credential: the credential is revoked and the launch fails.
+    fn adapter_with_run_env(
+        &self,
+        adapter: &Arc<dyn WorkerAdapter>,
+        run_env: Vec<(String, String)>,
+        run_id: &str,
+        harness: &task_core::llm_route::HarnessId,
+        now: OffsetDateTime,
+    ) -> Result<Arc<dyn WorkerAdapter>, String> {
+        let settings = task_worker::AdapterSettings::env_only(run_env);
+        let (adapter, unsupported) = adapter.configure(&settings).resolve(adapter);
+        if unsupported.contains(&task_worker::AdapterSetting::Env) {
+            if let Err(error) = self.store.cos_run_credential_revoke(run_id, now) {
+                tracing::warn!(%error, %run_id, "CoS credential revoke after launch failure failed");
+            }
+            return Err(format!(
+                "CoS unavailable: harness {harness} cannot receive a run credential"
+            ));
+        }
+        Ok(adapter)
     }
 
     pub(super) fn find_input(

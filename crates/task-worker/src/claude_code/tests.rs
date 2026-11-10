@@ -2530,7 +2530,7 @@ echo '{"type":"result","subtype":"success","is_error":false}'
     assert_eq!(obs.status.as_deref(), Some("allowed"));
 }
 
-/// ADR-0024 D2: `with_env` の追加分は、既存の同名キーより後に環境を組み立てるので勝つ。
+/// ADR-0024 D2: `configure` の env の追加分は、既存の同名キーより後に環境を組み立てるので勝つ。
 #[tokio::test]
 async fn with_env_overrides_a_same_name_key_already_in_config_env() {
     let dir = tempfile::tempdir().unwrap();
@@ -2552,11 +2552,15 @@ echo '{{"type":"result","subtype":"success","is_error":false}}'
     ));
     let base = ClaudeCodeAdapter::new(config);
     let with_env = base
-        .with_env(&[(
-            "CLAUDE_SECURESTORAGE_CONFIG_DIR".to_string(),
-            "new-account-dir".to_string(),
-        )])
-        .expect("claude-code supports with_env");
+        .configure(&AdapterSettings {
+            env: vec![(
+                "CLAUDE_SECURESTORAGE_CONFIG_DIR".to_string(),
+                "new-account-dir".to_string(),
+            )],
+            ..AdapterSettings::default()
+        })
+        .adapter
+        .expect("claude-code takes env");
 
     let req = sample_req(dir.path().to_path_buf());
     let sink = RecordingSink::default();
@@ -2569,7 +2573,7 @@ echo '{{"type":"result","subtype":"success","is_error":false}}'
     assert_eq!(seen, "new-account-dir");
 }
 
-/// ADR-0072 D14（Phase E4b 項目3）: `with_permission_mode` の複製は `--permission-mode` の値を
+/// ADR-0072 D14（Phase E4b 項目3）: `configure` の permission mode を受けた複製は `--permission-mode` の値を
 /// 上書きする（`[execution.planner].permission_mode` を実際の CLI 引数に反映するための実行時配線。
 /// E3 実装時に見送っていたフック）。既定のアダプタ（`bypassPermissions`）の CLI 引数には出ない。
 #[tokio::test]
@@ -2590,8 +2594,12 @@ echo '{{"type":"result","subtype":"success","is_error":false}}'
     assert_eq!(config.permission_mode, "bypassPermissions");
     let base = ClaudeCodeAdapter::new(config);
     let planner_mode = base
-        .with_permission_mode("plan")
-        .expect("claude-code supports with_permission_mode");
+        .configure(&AdapterSettings {
+            permission_mode: Some("plan".into()),
+            ..AdapterSettings::default()
+        })
+        .adapter
+        .expect("claude-code takes a permission mode");
 
     let req = sample_req(dir.path().to_path_buf());
     let sink = RecordingSink::default();
@@ -2610,8 +2618,8 @@ echo '{{"type":"result","subtype":"success","is_error":false}}'
         "the adapter's default permission mode must not leak through: {seen}"
     );
 }
-/// ADR 2026-10-11 llm-source-harness-selection: the route's model (`with_model`) reaches the CLI's
-/// `--model` and survives the account environment layered on top (`with_env`).
+/// ADR 2026-10-11 llm-source-harness-selection: the route's model (`configure`) reaches the CLI's
+/// `--model` and survives the account environment applied in the same `configure`.
 #[tokio::test]
 async fn route_model_reaches_cli_model_argument_and_preserves_account_env() {
     let dir = tempfile::tempdir().unwrap();
@@ -2626,10 +2634,13 @@ printf '%s\n' '{"type":"turn.completed"}'
 "#,
     );
     let adapter = ClaudeCodeAdapter::new(config)
-        .with_model("route-model")
-        .expect("claude-code takes a model")
-        .with_env(&[("ROUTING_ACCOUNT".into(), "account-a".into())])
-        .expect("claude-code takes an env");
+        .configure(&AdapterSettings {
+            model: Some("route-model".into()),
+            env: vec![("ROUTING_ACCOUNT".into(), "account-a".into())],
+            ..AdapterSettings::default()
+        })
+        .adapter
+        .expect("claude-code takes a model and an env");
     let _ = adapter
         .run(
             sample_req(dir.path().to_path_buf()),

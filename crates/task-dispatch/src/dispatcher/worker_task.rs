@@ -31,84 +31,66 @@ pub(super) struct RunAdapterPrep {
 }
 
 /// ADR-0107（agent-docs/adr/0107-browser-fallback-candidate-preparation.md）D1: 主 adapter と browser
-/// fallback 候補の run ごとの準備を 1 か所にまとめる。順序は ADR-0075 の env 設定 →
-/// コンテナ（ADR-0043 D3）→ planner の permission mode（ADR-0072 D14）。モデルは選んだ route の
-/// model を `route_adapter` が載せ済み（lane から model を引かない）。
+/// fallback 候補の run ごとの準備を 1 か所にまとめる。ADR 2026-11-10-worker-capability-ports D3: env を
+/// cargo（ADR-0075・ADR-0129 (1)）→ followups（ADR-0098 D6）→ WU（ADR-0074 付記 2026-10-05）→ run の tmp
+/// （ADR 2026-10-07-build-tmp-hygiene D2）の順に 1 度組み立て、コンテナ（ADR-0043 D3）と planner の
+/// permission mode（ADR-0072 D14）と合わせて 1 回の `configure` で適用する。モデルは選んだ route の model を
+/// `route_adapter` が載せ済み（lane から model を引かない）。
 /// 戻り値の `bool` は env（`CARGO_TARGET_DIR`）が実際に適用されたかどうか。
 pub(super) fn prepare_run_adapter(
     adapter: Arc<dyn WorkerAdapter>,
     prep: &RunAdapterPrep,
     task_id: TaskId,
 ) -> (Arc<dyn WorkerAdapter>, bool) {
-    let (adapter, env_applied) = match &prep.env {
-        // ADR-0129 (1): 与える env を重ねるだけ。host から継いだ env（`RUSTC_WRAPPER` / `SCCACHE_*` を含む）は外さない。
-        Some(env) => match adapter.with_env(&env.set) {
-            Some(wrapped) => (wrapped, true),
-            None => {
-                tracing::debug!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support with_env; CARGO_TARGET_DIR was not applied (ADR-0066 D1)");
-                (adapter, false)
-            }
-        },
-        None => (adapter, false),
+    use task_worker::AdapterSetting;
+    // ADR-0129 (1): 与える env を重ねるだけ。host から継いだ env（`RUSTC_WRAPPER` / `SCCACHE_*` を含む）は外さない。
+    let env_parts = [
+        (
+            prep.env.as_ref().map(|env| env.set.as_slice()),
+            "CARGO_TARGET_DIR",
+        ),
+        (prep.followups_env.as_deref(), "CELERIS_FOLLOWUPS_FILE"),
+        (
+            prep.work_unit_env.as_deref(),
+            "CELERIS_WU_BASE / CELERIS_WU_TARGET",
+        ),
+        (prep.run_tmp_env.as_deref(), "the run TMPDIR"),
+    ];
+    let settings = task_worker::AdapterSettings {
+        env: env_parts
+            .iter()
+            .filter_map(|(env, _)| *env)
+            .flatten()
+            .cloned()
+            .collect(),
+        container: prep.container.clone(),
+        // planner run だけが `Some`。空の mode は渡さない。
+        permission_mode: prep.permission_mode.clone().filter(|mode| !mode.is_empty()),
+        ..task_worker::AdapterSettings::default()
     };
-    let adapter = match &prep.followups_env {
-        Some(env) => match adapter.with_env(env) {
-            Some(wrapped) => wrapped,
-            None => {
-                tracing::debug!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support with_env; CELERIS_FOLLOWUPS_FILE was not applied (ADR-0098 D6)");
-                adapter
+    let (configured, unsupported) = adapter.configure(&settings).resolve(&adapter);
+    for item in &unsupported {
+        match item {
+            AdapterSetting::Env => {
+                let skipped: Vec<&str> = env_parts
+                    .iter()
+                    .filter(|(env, _)| env.is_some())
+                    .map(|(_, what)| *what)
+                    .collect();
+                tracing::debug!(task_id = %task_id, adapter = %adapter.id(), not_applied = %skipped.join(", "), "adapter does not take env (ADR-0066 D1, ADR-0098 D6, ADR-0074 appendix 2026-10-05, ADR 2026-10-07-build-tmp-hygiene D2)");
             }
-        },
-        None => adapter,
-    };
-    let adapter = match &prep.work_unit_env {
-        Some(env) => match adapter.with_env(env) {
-            Some(wrapped) => wrapped,
-            None => {
-                tracing::debug!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support with_env; CELERIS_WU_BASE / CELERIS_WU_TARGET were not applied (ADR-0074 appendix 2026-10-05)");
-                adapter
-            }
-        },
-        None => adapter,
-    };
-    let adapter = match &prep.run_tmp_env {
-        Some(env) => match adapter.with_env(env) {
-            Some(wrapped) => wrapped,
-            None => {
-                tracing::debug!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support with_env; the run TMPDIR was not applied (ADR 2026-10-07-build-tmp-hygiene D2)");
-                adapter
-            }
-        },
-        None => adapter,
-    };
-    // ADR-0043 D3（Phase 56）: コンテナで走らせる run は、ここでアダプタを包んだ複製に差し替える
-    // （差し込み点はアダプタ側の `container::wrap` 1 か所）。この経路を持たないアダプタ
-    // （`with_container` が `None`）はホストのまま走る。
-    let adapter = match &prep.container {
-        Some(plan) => match adapter.with_container(Arc::clone(plan)) {
-            Some(wrapped) => wrapped,
-            None => {
+            AdapterSetting::Container => {
                 tracing::warn!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support containers; running on the host");
-                adapter
             }
-        },
-        None => adapter,
-    };
-    // ADR-0072 D14（Phase E4b 項目3）: planner run（`permission_mode` が `Some`）は
-    // `[execution.planner].permission_mode` を実際の CLI 引数として反映する。対応しないアダプタ
-    // （`with_permission_mode` が `None` を返す）はアダプタ既定の permission-mode のまま走る
-    // （E3 実装時の既定の動作と同じ。実害は無い）。
-    let adapter = match &prep.permission_mode {
-        Some(mode) if !mode.is_empty() => match adapter.with_permission_mode(mode) {
-            Some(wrapped) => wrapped,
-            None => {
-                tracing::debug!(task_id = %task_id, adapter = %adapter.id(), %mode, "adapter does not support with_permission_mode; planner permission_mode was not applied (ADR-0072 D14)");
-                adapter
+            AdapterSetting::PermissionMode => {
+                // 対応しない adapter は adapter 既定の permission-mode のまま走る（E3 実装時の既定の動作と同じ）。
+                tracing::debug!(task_id = %task_id, adapter = %adapter.id(), mode = ?settings.permission_mode, "adapter does not take a permission mode; planner permission_mode was not applied (ADR-0072 D14)");
             }
-        },
-        _ => adapter,
-    };
-    (adapter, env_applied)
+            AdapterSetting::Model | AdapterSetting::LlmEndpoint => {}
+        }
+    }
+    let env_applied = prep.env.is_some() && !unsupported.contains(&AdapterSetting::Env);
+    (configured, env_applied)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -644,9 +626,9 @@ pub(super) async fn run_worker(
                 .as_ref()
                 .is_some_and(|f| f.repo().is_some()))
     {
-        tracing::warn!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support with_env; CARGO_TARGET_DIR was not applied to a Rust repository (ADR 2026-10-07-build-tmp-hygiene A1)");
+        tracing::warn!(task_id = %task_id, adapter = %adapter.id(), "adapter does not take env; CARGO_TARGET_DIR was not applied to a Rust repository (ADR 2026-10-07-build-tmp-hygiene A1)");
         cargo_target_notes.push(format!(
-            "{CARGO_TARGET_NOTE_PREFIX} CARGO_TARGET_DIR not set: adapter {} does not support with_env",
+            "{CARGO_TARGET_NOTE_PREFIX} CARGO_TARGET_DIR not set: adapter {} does not take env",
             adapter.id()
         ));
     }

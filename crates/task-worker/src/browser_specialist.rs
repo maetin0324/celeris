@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use crate::adapter::{AdapterSettings, Configured};
 use crate::{AdapterError, EventSink, RunLimits, RunOutcome, RunRequest, WorkerAdapter};
 
 pub struct BrowserSpecialistAdapter {
@@ -15,10 +16,6 @@ impl BrowserSpecialistAdapter {
 
     pub fn new(inner: Arc<dyn WorkerAdapter>) -> Self {
         Self { inner }
-    }
-
-    fn wrap(inner: Option<Arc<dyn WorkerAdapter>>) -> Option<Arc<dyn WorkerAdapter>> {
-        inner.map(|inner| Arc::new(Self::new(inner)) as Arc<dyn WorkerAdapter>)
     }
 }
 
@@ -32,27 +29,12 @@ impl WorkerAdapter for BrowserSpecialistAdapter {
         self.inner.account_id()
     }
 
-    fn with_model(&self, model: &str) -> Option<Arc<dyn WorkerAdapter>> {
-        Self::wrap(self.inner.with_model(model))
-    }
-    fn with_llm_endpoint(
-        &self,
-        base_url: &str,
-        api_key: Option<&str>,
-    ) -> Option<Arc<dyn WorkerAdapter>> {
-        Self::wrap(self.inner.with_llm_endpoint(base_url, api_key))
-    }
-
-    fn with_permission_mode(&self, mode: &str) -> Option<Arc<dyn WorkerAdapter>> {
-        Self::wrap(self.inner.with_permission_mode(mode))
-    }
-
-    fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-        Self::wrap(self.inner.with_env(extra))
-    }
-
-    fn with_container(&self, plan: crate::container::SharedPlan) -> Option<Arc<dyn WorkerAdapter>> {
-        Self::wrap(self.inner.with_container(plan))
+    /// ADR 2026-11-10-worker-capability-ports D3: 内側の harness の `configure` へ転送し、複製を包み直す
+    /// （id は `browser-specialist` のまま）。`unsupported` は内側の報告をそのまま返す。
+    fn configure(&self, settings: &AdapterSettings) -> Configured {
+        self.inner
+            .configure(settings)
+            .map_adapter(|inner| Arc::new(Self::new(inner)))
     }
 
     async fn run(

@@ -870,6 +870,17 @@ async fn p4c_runner_record_routes_and_falls_back() {
     );
 }
 
+/// `env` を重ねた adapter（dispatcher の `prepare_run_adapter` と同じく `configure` 1 回で適用する）。
+fn adapter_with_env(
+    adapter: &Arc<dyn WorkerAdapter>,
+    env: Vec<(String, String)>,
+) -> Arc<dyn WorkerAdapter> {
+    adapter
+        .configure(&crate::AdapterSettings::env_only(env))
+        .adapter
+        .expect("the harness takes env")
+}
+
 /// The conformance runner supplies its measured ledger, real 0.38.1 executable and
 /// loopback origin. The primary ACP harness is SIGKILLed after navigation; the worker
 /// then starts Claude in a fresh browser session and completes the same fixture.
@@ -925,26 +936,26 @@ async fn p4c_fallback_real_harness_scenario() {
     let alternate_dir = root.join("alternate");
     std::fs::create_dir_all(&primary_dir).unwrap();
     std::fs::create_dir_all(&alternate_dir).unwrap();
-    let primary = primary.with_env(&env("open", &primary_dir)).unwrap();
-    let alternate = alternate
-        .with_env(&env("fallback", &alternate_dir))
-        .unwrap();
-    let primary = primary
-        .with_env(&[(
+    let primary = adapter_with_env(&primary, env("open", &primary_dir));
+    let alternate = adapter_with_env(&alternate, env("fallback", &alternate_dir));
+    let primary = adapter_with_env(
+        &primary,
+        vec![(
             "CELERIS_BROWSER_CLI".into(),
             root.join("runs/p4c-real-fallback/browser/celeris-browser.py")
                 .to_string_lossy()
                 .into_owned(),
-        )])
-        .unwrap();
-    let alternate = alternate
-        .with_env(&[(
+        )],
+    );
+    let alternate = adapter_with_env(
+        &alternate,
+        vec![(
             "CELERIS_BROWSER_CLI".into(),
             root.join("runs/p4c-real-fallback/browser-fallback-1/celeris-browser.py")
                 .to_string_lossy()
                 .into_owned(),
-        )])
-        .unwrap();
+        )],
+    );
     let mut req = request(&root);
     // Canonical origin (scheme, host, port): a bare "localhost" means https://localhost:443,
     // which neither intersects the task requirement nor reaches the loopback fixture.
@@ -1008,14 +1019,15 @@ async fn p4c_fallback_real_harness_scenario() {
         serde_json::to_vec(&no_alternate_ledger).unwrap(),
     )
     .unwrap();
-    let no_candidate_primary = primary
-        .with_env(&[(
+    let no_candidate_primary = adapter_with_env(
+        &primary,
+        vec![(
             "CELERIS_BROWSER_CLI".into(),
             root.join("runs/p4c-no-candidate/browser/celeris-browser.py")
                 .to_string_lossy()
                 .into_owned(),
-        )])
-        .unwrap();
+        )],
+    );
     let no_candidate = run_with_executable_candidates_record(
         no_candidate_primary,
         vec![alternate.clone()],

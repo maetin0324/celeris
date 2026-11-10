@@ -29,7 +29,10 @@ use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tracing::warn;
 
-use crate::adapter::{AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter};
+use crate::adapter::{
+    AdapterError, AdapterSetting, AdapterSettings, Configured, EventSink, RunLimits, RunOutcome,
+    Terminal, WorkerAdapter,
+};
 use crate::progress;
 use crate::protocol::RunRequest;
 use crate::provider::classify_provider_failure;
@@ -179,17 +182,14 @@ impl WorkerAdapter for LangMemAdapter {
         run_langmem(&self.config, &req, run_id, &limits, sink).await
     }
 
-    /// 他のアダプタと同じ規則: `extra` は `config.env` の末尾に足す（同名キーは `extra` が勝つ）。
-    fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut config = self.config.clone();
-        config.env.extend(extra.iter().cloned());
-        Some(Arc::new(LangMemAdapter::new(config)))
-    }
-
-    fn with_model(&self, model: &str) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut config = self.config.clone();
-        config.model = Some(model.to_owned());
-        Some(Arc::new(LangMemAdapter::new(config)))
+    /// ADR 2026-11-10-worker-capability-ports D3: model と env（同名キーは後勝ち）を受ける。コンテナは受けない。
+    fn configure(&self, settings: &AdapterSettings) -> Configured {
+        settings.configured(&[AdapterSetting::Model, AdapterSetting::Env], || {
+            let mut config = self.config.clone();
+            settings.apply_model(&mut config.model);
+            settings.apply_env(&mut config.env);
+            Arc::new(Self::new(config))
+        })
     }
 }
 

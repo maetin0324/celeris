@@ -4,7 +4,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::adapter::{AdapterError, EventSink, RunLimits, RunOutcome, WorkerAdapter};
+use crate::adapter::{
+    AdapterError, AdapterSetting, AdapterSettings, Configured, EventSink, RunLimits, RunOutcome,
+    WorkerAdapter,
+};
 use crate::protocol::RunRequest;
 use crate::subprocess::{SubprocessSpec, run_subprocess};
 
@@ -71,13 +74,6 @@ impl WorkerAdapter for FakeAdapter {
         Self::ID
     }
 
-    /// `fake` does not call a model provider, but accepting the selected model lets it serve as a
-    /// deterministic harness in routing and evaluation tests. The selected model remains recorded
-    /// by the caller; execution of the configured stub command is unchanged.
-    fn with_model(&self, _model: &str) -> Option<Arc<dyn WorkerAdapter>> {
-        Some(Arc::new(self.clone()))
-    }
-
     async fn run(
         &self,
         req: RunRequest,
@@ -88,16 +84,23 @@ impl WorkerAdapter for FakeAdapter {
         run_subprocess(&self.spec, &req, run_id, &limits, sink).await
     }
 
-    fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut next = self.clone();
-        next.spec.env.extend_from_slice(extra);
-        Some(Arc::new(next))
-    }
-
-    /// ADR-0043 D3（Phase 56）: コンテナの中で起こす複製（差し込み点は `subprocess::run_subprocess`）。
-    fn with_container(&self, plan: crate::container::SharedPlan) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut next = self.clone();
-        next.spec.container = Some(plan);
-        Some(Arc::new(next))
+    /// ADR 2026-11-10-worker-capability-ports D3: env（同名キーは後勝ち）とコンテナ（ADR-0043 D3。差し込み点は
+    /// `subprocess::run_subprocess`）を受ける。`fake` は model の provider を呼ばないが、model も受ける:
+    /// routing・評価の試験で決定的な harness として使えるようにするため。選んだ model は呼び出し側が
+    /// 記録し、設定したスタブのコマンドの実行は変わらない。
+    fn configure(&self, settings: &AdapterSettings) -> Configured {
+        settings.configured(
+            &[
+                AdapterSetting::Model,
+                AdapterSetting::Env,
+                AdapterSetting::Container,
+            ],
+            || {
+                let mut next = self.clone();
+                settings.apply_env(&mut next.spec.env);
+                settings.apply_container(&mut next.spec.container);
+                Arc::new(next)
+            },
+        )
     }
 }

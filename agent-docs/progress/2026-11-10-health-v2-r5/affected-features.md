@@ -54,7 +54,10 @@ WorkUnit `affected-features`。基準は `$CELERIS_WU_BASE`（段 design の統�
 - `cargo test --doc --workspace` → exit 0、23 秒、Compiling 0
 - `cargo clippy --workspace -- -D warnings` → exit 0、66 秒
 - `cargo fmt --all -- --check` → exit 0
-- `bash scripts/dev/check-health.sh --base "$CELERIS_WU_BASE"`、`slices-check.py --write-set R5`、`sh scripts/dev/progress-index.sh --check`、`sh scripts/dev/check-doc-links.sh` → 結果は WU の報告に書く
+- `bash scripts/dev/check-health.sh --base "$CELERIS_WU_BASE"` → exit 0、`repo_health_gate: all checks passed`
+- `git diff --name-only "$CELERIS_WU_BASE" | python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R5 agent-docs/progress/2026-11-07-health-v2-b0/slices.json` → exit 0、`write-set R5: ok`
+- `sh scripts/dev/progress-index.sh --check`・`sh scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-adr-numbers.sh` → いずれも exit 0
+- test-affected.sh・clippy・doc test は commit の前の作業ツリーで走らせた。その後に変えたのは進捗と ADR の付記と台本の file mode だけで、cargo の build と試験の入力は提出時の HEAD と同じ。rebuild-check.sh と上の文書・範囲の検査は提出時の HEAD で走らせた
 
 ## commit
 - R5 affected-features: test-affected の build を --workspace の features にし、作り直しを確かめる台本を足す

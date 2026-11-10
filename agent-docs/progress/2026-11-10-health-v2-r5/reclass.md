@@ -53,7 +53,14 @@ WorkUnit `reclass`（段 bundle）。`classify.py` が `docs/architecture-map.md
 - `python3 scripts/dev/check-architecture-map.py` → exit 0（990 件）。`git diff --quiet "$CELERIS_WU_BASE" -- docs/architecture-map.md scripts/dev/check-architecture-map.py` → exit 0（地図と検査器は変えていない）。
 
 ## 検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
-- 下の「検査の結果」に書く。
+- `bash scripts/dev/test-affected.sh` → exit 0（「試験対象の変更なし（docs のみ等）」。repo-health verdict=pass、new=0・worsened=0）
+- `bash scripts/dev/check-health.sh --base "$CELERIS_WU_BASE"` → exit 0（verdict=pass、new=0・worsened=0、doc-only）
+- `cargo clippy --workspace -- -D warnings` → exit 0（71 秒）
+- `cargo fmt --all -- --check` → exit 0
+- `python3 agent-docs/progress/2026-11-10-health-v2-r5/classify.py --verify-leaf r6 …inventory.json`・`--verify-leaf keep …` → exit 0（keep と r6 の 262 target が元の path にある）
+- `sh scripts/dev/check-doc-links.sh` → ok、`sh scripts/dev/check-adr-numbers.sh` → ok（415 files）、`python3 scripts/dev/check-human-text.py --root .` → exit 0（0 findings）、`sh scripts/dev/progress-index.sh --check` → ok
+- `{ git diff --name-only "$CELERIS_WU_BASE"; git ls-files --others --exclude-standard; } | python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R5 agent-docs/progress/2026-11-07-health-v2-b0/slices.json` → `write-set R5: ok`
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → ADR・classify.py・inventory.json・inventory.md・reclass.md・test_classify.py の 6 path だけ
 
 ## 未解決事項
 - 段 bundle の leaf（bundle-api-a・bundle-api-b・bundle-celeris・bundle-ctl）は `inventory.json` の束の名前で作業する（`classify.py --verify-leaf <leaf>`）。この unit で束の名前が変わったので、leaf の objective に古い束の名前（`cos_delivery_suite_d`・`unmapped_suite_c`・`task_plan_suite`・`browser_eval_surface_suite_a`・`_b` など）が書かれていれば、`inventory.json` と ADR の表が正しい。

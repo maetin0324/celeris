@@ -249,6 +249,7 @@ fn run_request(w: &World) -> RunRequest {
 
 /// dispatcher の `StoreSink` と同じ store 操作。worker 出力は全部 `output` に写す。
 struct StoreSink {
+    supervisor: CredentialSupervisor,
     store: SqliteStore,
     task_id: TaskId,
     output: Arc<Mutex<Vec<String>>>,
@@ -259,15 +260,89 @@ struct StoreSink {
     live: Mutex<Vec<String>>,
 }
 impl EventSink for StoreSink {
-    fn browser_control_gate(
-        &self,
-        _run_id: &str,
-        _session_id: &str,
-    ) -> Option<std::sync::Arc<dyn task_worker::browser_live::ControlGate>> {
-        Some(std::sync::Arc::new(
-            task_worker::browser_live::InMemoryGate::new(),
-        ))
+    fn progress(&self, msg: &str) {
+        self.output.lock().expect("test fixture").push(msg.into());
     }
+    fn progress_with(&self, msg: &str, fields: &ProgressFields) {
+        self.output.lock().expect("test fixture").push(format!(
+            "{msg} {}",
+            serde_json::to_string(fields).expect("test fixture")
+        ));
+    }
+    fn artifact(&self, artifact: &ArtifactRef) {
+        self.output
+            .lock()
+            .expect("test fixture")
+            .push(artifact.path.clone());
+    }
+}
+impl task_worker::BrowserAuthority for StoreSink {
+    fn browser_approval_consume(
+        &self,
+        wait: &BrowserWait,
+    ) -> Result<ConsumedBrowserApproval, String> {
+        task_core::browser_wait::consume_credential_approval(
+            &self.store,
+            self.task_id,
+            wait,
+            OffsetDateTime::now_utc(),
+        )
+        .map_err(String::from)
+    }
+    fn browser_operation_approval_consume(
+        &self,
+        _wait: &task_core::browser_wait::BrowserWait,
+    ) -> Result<task_core::browser_wait::ConsumedBrowserOperation, String> {
+        Err("browser wait store unavailable".into())
+    }
+    fn browser_saved_credential(
+        &self,
+        _policy_id: &str,
+        _origin: &str,
+    ) -> Option<task_worker::browser_credential::SavedCredential> {
+        None
+    }
+    fn browser_saved_credential_valid(&self, wait: &BrowserWait) -> bool {
+        let (Some(reference), Some(pinned), Some(runtime)) = (
+            &wait.credential,
+            &wait.trusted_login,
+            &self.supervisor.runtime_dir,
+        ) else {
+            return false;
+        };
+        if wait.owner_id.as_deref() != Some("owner")
+            || wait.origin != ORIGIN
+            || wait.credential_policy_id.as_deref() != Some("pol-login")
+            || reference.policy_id != "pol-login"
+        {
+            return false;
+        }
+        // Query the fixture's real broker; a stale credential or login must fail closed.
+        let request = serde_json::to_vec(
+            &json!({"op":"describe_policy", "reference":reference, "origin":wait.origin}),
+        )
+        .unwrap();
+        celeris_credentiald::ipc::call(&runtime.join("celeris-credentiald/control.sock"), &request)
+            .is_ok_and(|reply| reply.success && reply.trusted_login.as_ref() == Some(pinned))
+    }
+
+    fn browser_wait_open(
+        &self,
+        request: &task_core::browser_wait::NewBrowserWait,
+    ) -> Result<(), String> {
+        self.store
+            .browser_wait_open(self.task_id, request, OffsetDateTime::now_utc())
+            .map(|_| ())
+            .map_err(|e| e.code().into())
+    }
+    fn browser_waits(&self) -> Result<Vec<BrowserWait>, String> {
+        self.store
+            .browser_waits_for_task(self.task_id)
+            .map_err(|e| e.to_string())
+    }
+}
+
+impl task_worker::BrowserControl for StoreSink {
     fn browser_auth_section(
         &self,
         run_id: &str,
@@ -320,6 +395,15 @@ impl EventSink for StoreSink {
         ));
         Ok(())
     }
+    fn browser_control_gate(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+    ) -> Option<std::sync::Arc<dyn task_worker::browser_live::ControlGate>> {
+        Some(std::sync::Arc::new(
+            task_worker::browser_live::InMemoryGate::new(),
+        ))
+    }
     fn browser_live(
         &self,
         _run_id: &str,
@@ -331,32 +415,6 @@ impl EventSink for StoreSink {
             .expect("test fixture")
             .push(serde_json::to_string(event.as_persisted()).expect("test fixture"));
     }
-    fn browser_wait_open(
-        &self,
-        request: &task_core::browser_wait::NewBrowserWait,
-    ) -> Result<(), String> {
-        self.store
-            .browser_wait_open(self.task_id, request, OffsetDateTime::now_utc())
-            .map(|_| ())
-            .map_err(|e| e.code().into())
-    }
-    fn browser_waits(&self) -> Result<Vec<BrowserWait>, String> {
-        self.store
-            .browser_waits_for_task(self.task_id)
-            .map_err(|e| e.to_string())
-    }
-    fn browser_approval_consume(
-        &self,
-        wait: &BrowserWait,
-    ) -> Result<ConsumedBrowserApproval, String> {
-        task_core::browser_wait::consume_credential_approval(
-            &self.store,
-            self.task_id,
-            wait,
-            OffsetDateTime::now_utc(),
-        )
-        .map_err(String::from)
-    }
     fn browser_updated(&self, browser: &BrowserRun) {
         self.output
             .lock()
@@ -366,21 +424,6 @@ impl EventSink for StoreSink {
             .lock()
             .expect("test fixture")
             .push(browser.clone());
-    }
-    fn progress(&self, msg: &str) {
-        self.output.lock().expect("test fixture").push(msg.into());
-    }
-    fn progress_with(&self, msg: &str, fields: &ProgressFields) {
-        self.output.lock().expect("test fixture").push(format!(
-            "{msg} {}",
-            serde_json::to_string(fields).expect("test fixture")
-        ));
-    }
-    fn artifact(&self, artifact: &ArtifactRef) {
-        self.output
-            .lock()
-            .expect("test fixture")
-            .push(artifact.path.clone());
     }
 }
 
@@ -430,6 +473,7 @@ impl World {
                 .expect("test fixture")
         );
         let sink = StoreSink {
+            supervisor: self.supervisor.clone(),
             store: SqliteStore::open(&self.env.db_path).expect("test fixture"),
             task_id: self.task.id,
             output: self.worker_output.clone(),
@@ -496,6 +540,10 @@ impl World {
                 kill_grace: Duration::from_millis(100),
             },
             &sink,
+            Some(task_worker::BrowserPorts {
+                authority: &sink,
+                control: &sink,
+            }),
             &self.substrate,
             Some(&self.supervisor),
             &record,

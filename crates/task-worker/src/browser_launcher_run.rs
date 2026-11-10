@@ -14,12 +14,14 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+#[cfg(test)]
+use task_core::BrowserRun;
+use task_core::BrowserRunState;
 use task_core::browser_isolation::{
     CdpEndpoint, IsolationAttestation, LauncherSessionProof, Namespace, REQUIRED_NAMESPACES,
     RuntimeFacts, verify_isolation,
 };
 use task_core::browser_wait::{BrowserWait, BrowserWaitState};
-use task_core::{BrowserRun, BrowserRunState};
 
 use super::{BrowserContext, BrowserSink, CLI, EventSinkLive, forward_events, write_private};
 use crate::browser_action::{ActionExecutor, ActionRequest, ActionServer};
@@ -33,7 +35,9 @@ use crate::browser_launcher::{
     ActionArgs, ClientError, ErrorCode, LauncherClient, Observation, Outcome, Receipt,
     SessionFacts, SessionPolicy, SessionState, StartedSession, Verb,
 };
-use crate::{AdapterError, EventSink, RunLimits, RunOutcome, RunRequest, WorkerAdapter};
+use crate::{
+    AdapterError, BrowserPorts, EventSink, RunLimits, RunOutcome, RunRequest, WorkerAdapter,
+};
 
 pub(crate) const UNAVAILABLE: &str = "isolated_runtime_unavailable";
 /// v8 artifact transfer の固定理由（付記 2026-10-10e）。file の中身・path は入れない。
@@ -1158,6 +1162,7 @@ pub(super) async fn run(
     run_id: &str,
     limits: RunLimits,
     sink: &dyn EventSink,
+    ports: BrowserPorts<'_>,
     target: LauncherTarget<'_>,
     policy: &crate::browser_policy::PreparedBrowserPolicy,
     credentials: Option<&crate::browser_credential::CredentialSupervisor>,
@@ -1168,6 +1173,7 @@ pub(super) async fn run(
         run_id,
         limits,
         sink,
+        ports,
         target,
         policy,
         credentials,
@@ -1186,15 +1192,20 @@ pub(super) async fn run_registered(
     run_id: &str,
     limits: RunLimits,
     sink: &dyn EventSink,
+    ports: BrowserPorts<'_>,
     target: LauncherTarget<'_>,
     policy: &crate::browser_policy::PreparedBrowserPolicy,
     credentials: Option<&crate::browser_credential::CredentialSupervisor>,
     live_sessions: Option<Arc<task_core::browser_isolation::LiveSessions>>,
 ) -> Result<RunOutcome, AdapterError> {
     let unavailable = || AdapterError::Other(UNAVAILABLE.into());
+    let BrowserPorts {
+        authority: auth,
+        control,
+    } = ports;
     // The wait store must be readable before anything else; a CredentialUse run that cannot
     // read it is refused with the credential wording (fail closed before connecting).
-    let waits = match sink.browser_waits() {
+    let waits = match auth.browser_waits() {
         Ok(waits) => waits,
         Err(_)
             if policy
@@ -1218,7 +1229,7 @@ pub(super) async fn run_registered(
         &waits,
         policy,
         credentials,
-        sink,
+        ports,
     )? {
         return Ok(outcome);
     }
@@ -1238,8 +1249,8 @@ pub(super) async fn run_registered(
     // The approval must still match the task policy (same check as the daemon path); a stale
     // approval is refused before connecting and is not consumed.
     if let Some(wait) = approved_credential.as_ref() {
-        if !sink.browser_saved_credential_valid(wait) {
-            return super::credential_reentry(req.task.id, run_id, wait, policy, sink);
+        if !auth.browser_saved_credential_valid(wait) {
+            return super::credential_reentry(req.task.id, run_id, wait, policy, ports);
         }
         super::check_approved_credential(wait, policy, credentials)?;
     }
@@ -1285,7 +1296,7 @@ pub(super) async fn run_registered(
     let mut allowed: task_core::AgentBrowserActionPolicy =
         serde_json::from_slice(&action_policy)
             .map_err(|_| AdapterError::Other("browser policy rejected".into()))?;
-    let control_gate = sink
+    let control_gate = control
         .browser_control_gate(run_id, &session)
         .ok_or_else(|| AdapterError::Other("browser control store unavailable".into()))?;
     let launcher_allow = match &post_login_plan {
@@ -1333,7 +1344,7 @@ pub(super) async fn run_registered(
     // The launcher session is up; only now is the one-time approval spent.
     let approved_operation = match &approved {
         Some((wait, action)) => {
-            let consumed = match sink.browser_operation_approval_consume(wait) {
+            let consumed = match auth.browser_operation_approval_consume(wait) {
                 Ok(consumed) => consumed,
                 Err(_) => {
                     let stop_runtime = Arc::clone(&runtime);
@@ -1351,15 +1362,7 @@ pub(super) async fn run_registered(
         }
         None => None,
     };
-    let mut browser = BrowserRun {
-        task_id: req.task.id,
-        run_id: run_id.into(),
-        session_id: session,
-        state: BrowserRunState::Running,
-        live_view_url: None,
-        policy: Some(policy.binding.clone()),
-    };
-    sink.browser_updated(&browser);
+    let mut browser = super::running_browser(&req, run_id, session, policy, control);
     // 付記 2026-10-10b: credential login の前に frame 接続を開く（auth section 中も本人向けの slot
     // は流れる。H3 の観測停止は下の `LiveEmitter` の auth guard が持ち、frame はそこを通らない）。
     // 版が 8 未満・開けない場合は理由だけを持ち、session と他の機能は続ける。
@@ -1372,7 +1375,7 @@ pub(super) async fn run_registered(
     )
     .await;
     let live = crate::browser_live::LiveEmitter::new(EventSinkLive {
-        sink,
+        control,
         run_id: run_id.into(),
         session_id: browser.session_id.clone(),
     });
@@ -1417,7 +1420,7 @@ pub(super) async fn run_registered(
         };
         // A credential-use approval is spent through the credential consume (the operation
         // consume refuses `credential_use` by design).
-        let consumed = match sink.browser_approval_consume(wait) {
+        let consumed = match auth.browser_approval_consume(wait) {
             Ok(consumed) => consumed,
             Err(_) => return refuse(runtime, credential_denied()).await,
         };
@@ -1430,7 +1433,7 @@ pub(super) async fn run_registered(
             &req.task.id.to_string(),
             run_id,
             &browser.session_id,
-            sink,
+            control,
         )
         .await;
         let live_session = runtime.session_id().to_owned();
@@ -1443,7 +1446,7 @@ pub(super) async fn run_registered(
                     .is_ok_and(|r| r.is_ok());
                 unregister_live_session(credentiald_dir, &live_session, stopped);
                 browser.state = BrowserRunState::Failed;
-                sink.browser_updated(&browser);
+                control.browser_updated(&browser);
                 return Ok(RunOutcome {
                     terminal: crate::Terminal::Error {
                         message: "browser auth section could not be recorded".into(),
@@ -1482,7 +1485,7 @@ pub(super) async fn run_registered(
             unregister_live_session(credentiald_dir, &live_session, stopped);
             if stopped && auth_recorded {
                 // The session has ended; only now may the auth interval be released.
-                let _ = sink.browser_auth_section(run_id, &browser.session_id, false);
+                let _ = control.browser_auth_section(run_id, &browser.session_id, false);
             }
             drop(auth_guard);
             return super::credential_failure_reentry(
@@ -1490,7 +1493,7 @@ pub(super) async fn run_registered(
                 run_id,
                 wait,
                 policy,
-                sink,
+                ports,
                 sup,
                 stopped,
             );
@@ -1503,7 +1506,7 @@ pub(super) async fn run_registered(
         if let (Ok(login), Some((read, bytes))) = (&login_observation, &post_login_plan) {
             let outcome = match (login.observation, login.held_reason) {
                 (LoginObservation::Resumed, _) => {
-                    let reopened = sink
+                    let reopened = control
                         .browser_auth_section(run_id, &browser.session_id, false)
                         .is_ok()
                         && super::replace_private(&runtime_dir.join("policy.json"), bytes).is_ok()
@@ -1543,7 +1546,7 @@ pub(super) async fn run_registered(
                     .is_ok_and(|r| r.is_ok());
                 unregister_live_session(credentiald_dir, &live_session, stopped);
                 if stopped {
-                    let _ = sink.browser_auth_section(run_id, &browser.session_id, false);
+                    let _ = control.browser_auth_section(run_id, &browser.session_id, false);
                 }
                 drop(auth_guard);
                 return super::credential_failure_reentry(
@@ -1551,7 +1554,7 @@ pub(super) async fn run_registered(
                     run_id,
                     wait,
                     policy,
-                    sink,
+                    ports,
                     sup,
                     stopped,
                 );
@@ -1638,7 +1641,7 @@ pub(super) async fn run_registered(
         run_id,
         &browser.session_id,
         policy,
-        sink,
+        ports,
         outcome,
     );
     // registry から外し slot を閉じてから session を止める（停止の最初に外す。ADR-0108 D5）。
@@ -1667,7 +1670,7 @@ pub(super) async fn run_registered(
     if auth_recorded && stopped.is_ok() {
         // The session is gone; no observation can resume. A failed stop leaves the store's
         // auth section recorded (fail closed), as on the daemon path.
-        if sink
+        if control
             .browser_auth_section(run_id, &browser.session_id, false)
             .is_err()
         {
@@ -1697,7 +1700,7 @@ pub(super) async fn run_registered(
             _ => BrowserRunState::Failed,
         },
     };
-    sink.browser_updated(&browser);
+    control.browser_updated(&browser);
     outcome
 }
 
@@ -1811,7 +1814,7 @@ pub(crate) async fn launcher_credential_login(
     task_id: &str,
     run_id: &str,
     session: &str,
-    sink: &dyn EventSink,
+    control: &dyn crate::BrowserControl,
 ) -> CredentialLogin {
     let Some(trusted) = consumed.trusted_login.as_ref() else {
         return CredentialLogin::Failed("trusted_selector_missing");
@@ -1838,7 +1841,7 @@ pub(crate) async fn launcher_credential_login(
             return CredentialLogin::Failed("auth_begin_failed");
         }
     };
-    if sink.browser_auth_section(run_id, session, true).is_err() {
+    if control.browser_auth_section(run_id, session, true).is_err() {
         sup.broker.revoke(&lease, "supervisor");
         return CredentialLogin::NotRecorded;
     }

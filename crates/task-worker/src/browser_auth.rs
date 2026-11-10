@@ -557,7 +557,7 @@ pub(crate) fn shim_request_wait(
     run_id: &str,
     session_id: &str,
     policy: &crate::browser_policy::PreparedBrowserPolicy,
-    sink: &dyn EventSink,
+    ports: BrowserPorts<'_>,
     outcome: Result<RunOutcome, AdapterError>,
 ) -> (Result<RunOutcome, AdapterError>, Option<BrowserRunState>) {
     let question = |text: String| {
@@ -570,7 +570,8 @@ pub(crate) fn shim_request_wait(
         return match read_credential_request(&runtime.join("credential-request.json"), policy) {
             Ok(intent) => {
                 let mut wait = credential_wait(task_id, run_id, session_id, policy, &intent);
-                if let Some(saved) = sink
+                if let Some(saved) = ports
+                    .authority
                     .browser_saved_credential(&intent.policy_id, &intent.origin)
                     .filter(|s| origin_in_domains(&s.origin, policy.allowed_domains()))
                 {
@@ -587,7 +588,7 @@ pub(crate) fn shim_request_wait(
                     wait.resume_key = format!("reuse:{task_id}:{run_id}");
                 }
                 let reused = wait.reason == BrowserWaitReason::WaitingForApproval;
-                match sink.browser_wait_open(&wait) {
+                match ports.authority.browser_wait_open(&wait) {
                     Ok(()) => (
                         question(
                             if reused {
@@ -615,7 +616,7 @@ pub(crate) fn shim_request_wait(
         return match read_approval_request(&runtime.join("approval-request.json"), policy) {
             Ok((action, intent)) => {
                 let wait = operation_wait(task_id, run_id, session_id, policy, action, &intent);
-                match sink.browser_wait_open(&wait) {
+                match ports.authority.browser_wait_open(&wait) {
                     Ok(()) => (
                         question(format!("Browser {} approval requested", action.as_str())),
                         Some(BrowserRunState::WaitingForApproval),
@@ -635,7 +636,7 @@ pub(crate) fn credential_reentry(
     run_id: &str,
     previous: &task_core::browser_wait::BrowserWait,
     policy: &crate::browser_policy::PreparedBrowserPolicy,
-    sink: &dyn EventSink,
+    ports: BrowserPorts<'_>,
 ) -> Result<RunOutcome, AdapterError> {
     let intent = CredentialRequest {
         policy_id: previous
@@ -654,9 +655,11 @@ pub(crate) fn credential_reentry(
     );
     wait.owner_id = previous.owner_id.clone();
     wait.resume_key = format!("reentry:{}:{run_id}", previous.wait_id);
-    sink.browser_wait_open(&wait)
+    ports
+        .authority
+        .browser_wait_open(&wait)
         .map_err(|_| AdapterError::Other("browser credential wait could not be opened".into()))?;
-    sink.browser_updated(&BrowserRun {
+    ports.control.browser_updated(&BrowserRun {
         task_id,
         run_id: run_id.into(),
         session_id: wait.session_id,
@@ -679,7 +682,7 @@ pub(crate) fn credential_failure_reentry(
     run_id: &str,
     previous: &task_core::browser_wait::BrowserWait,
     policy: &crate::browser_policy::PreparedBrowserPolicy,
-    sink: &dyn EventSink,
+    ports: BrowserPorts<'_>,
     sup: &crate::browser_credential::CredentialSupervisor,
     stopped: bool,
 ) -> Result<RunOutcome, AdapterError> {
@@ -691,7 +694,7 @@ pub(crate) fn credential_failure_reentry(
     if !stopped {
         return Err(AdapterError::Other("browser session cleanup failed".into()));
     }
-    credential_reentry(task_id, run_id, previous, policy, sink)
+    credential_reentry(task_id, run_id, previous, policy, ports)
 }
 
 /// 承認済みの credential_use wait が今の task policy にまだ合うかの照合（daemon 経路と launcher 経路で
@@ -733,7 +736,7 @@ pub(crate) fn registered_credential_approval(
     waits: &[task_core::browser_wait::BrowserWait],
     policy: &crate::browser_policy::PreparedBrowserPolicy,
     credentials: Option<&crate::browser_credential::CredentialSupervisor>,
-    sink: &dyn EventSink,
+    ports: BrowserPorts<'_>,
 ) -> Result<Option<RunOutcome>, AdapterError> {
     let Some(registered) = waits
         .last()
@@ -767,14 +770,14 @@ pub(crate) fn registered_credential_approval(
         match crate::browser_credential::describe_policy(sup, &credential, &registered.origin) {
             Ok(trusted) => trusted,
             Err(_) => {
-                return credential_reentry(task_id, run_id, registered, policy, sink).map(Some);
+                return credential_reentry(task_id, run_id, registered, policy, ports).map(Some);
             }
         };
     {
         let mut check = registered.clone();
         check.trusted_login = Some(trusted_login.clone());
-        if !sink.browser_saved_credential_valid(&check) {
-            return credential_reentry(task_id, run_id, registered, policy, sink).map(Some);
+        if !ports.authority.browser_saved_credential_valid(&check) {
+            return credential_reentry(task_id, run_id, registered, policy, ports).map(Some);
         }
     }
     if trusted_login.policy_id != credential.policy_id {
@@ -801,9 +804,11 @@ pub(crate) fn registered_credential_approval(
         ttl_secs: None,
         resume_key: format!("approval:{}", registered.wait_id),
     };
-    sink.browser_wait_open(&wait)
+    ports
+        .authority
+        .browser_wait_open(&wait)
         .map_err(|_| AdapterError::Other("browser approval wait could not be opened".into()))?;
-    sink.browser_updated(&BrowserRun {
+    ports.control.browser_updated(&BrowserRun {
         task_id,
         run_id: run_id.into(),
         session_id: wait.session_id,

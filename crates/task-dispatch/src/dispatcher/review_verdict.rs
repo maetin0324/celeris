@@ -643,16 +643,29 @@ impl Dispatcher {
         if task.kind != TaskKind::Execute {
             return Ok(None);
         }
-        let failing: Vec<task_core::FailedCheck> = (verdicts.iter().filter(|v| !v.pass))
-            .map(|v| task_core::FailedCheck {
+        let failed: Vec<(&Verdict, Check)> = (verdicts.iter().filter(|v| !v.pass))
+            .map(|v| {
                 // 暗黙の条件（Plan/aggregate/repo_checks/research）は task.acceptance に無く、D16 の分類表にも無いので
                 // 修復できない（`Check::Human` と同じ扱いに倒す）。health の Fail だけは `Check::Command { cmd:
                 // HEALTH_CHECK_ID }`（health enforcement loop D3.2）。不合格が無ければ分類は `Substantive`。
-                check: (task
-                    .acceptance
-                    .get(v.criterion_idx)
-                    .map(|c| c.check.clone()))
-                .unwrap_or_else(|| v.implicit_check()),
+                let check = (task.acceptance.get(v.criterion_idx))
+                    .map(|c| c.check.clone())
+                    .unwrap_or_else(|| v.implicit_check());
+                (v, check)
+            })
+            .collect();
+        // D16 付記（G4-S1）: 決定的な不合格があると review は reviewer run を起こさず、`Check::Reviewer` の項目を
+        // `REVIEWER_NOT_EVALUATED_REASON` の不合格にする。reviewer の判定ではないので、分類の入力と repair の
+        // failing_details から外す（reviewer が実際に不合格にした項目は reason が違い、今までどおり数える）。
+        let deterministic_failed = failed.iter().any(|(_, c)| *c != Check::Reviewer);
+        let failing: Vec<task_core::FailedCheck> = (failed.into_iter())
+            .filter(|(v, c)| {
+                !(deterministic_failed
+                    && *c == Check::Reviewer
+                    && v.reason == crate::review::REVIEWER_NOT_EVALUATED_REASON)
+            })
+            .map(|(v, check)| task_core::FailedCheck {
+                check,
                 reason: v.reason.clone(),
                 repair_hint: v.repair_hint.clone(),
             })

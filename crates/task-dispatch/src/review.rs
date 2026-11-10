@@ -178,6 +178,12 @@ pub type HumanVerdicts = HashMap<usize, (bool, String)>;
 pub const PLAN_FILE_NAME: &str = "plan.json";
 pub const REVIEW_FILE_NAME: &str = "review.json";
 
+/// ADR-0007 D5 2.: 決定的な条件が 1 つでも落ちて reviewer run を起動しなかったときの、`Check::Reviewer` の項目の
+/// reason。reviewer の判定ではないので、`Dispatcher::try_review_repair` は決定的な不合格があるときこの項目を修復の
+/// 分類から外す（ADR-0072 D16 付記 G4-S1）。
+pub(crate) const REVIEWER_NOT_EVALUATED_REASON: &str =
+    "not evaluated: a deterministic check failed";
+
 const REASON_TAIL: usize = 1024;
 
 fn tail(s: &str, n: usize) -> &str {
@@ -815,7 +821,7 @@ pub async fn review_task(
                 .map(|&idx| Verdict {
                     criterion_idx: idx,
                     pass: false,
-                    reason: "not evaluated: a deterministic check failed".to_string(),
+                    reason: REVIEWER_NOT_EVALUATED_REASON.to_string(),
                     repair_hint: None,
                 })
                 .collect()

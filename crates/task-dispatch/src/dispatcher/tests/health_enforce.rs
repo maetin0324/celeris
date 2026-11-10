@@ -682,6 +682,77 @@ async fn health_enforce_non_celeris_direct_review_routes_to_repair() {
     assert_eq!(classes, vec!["health:deps.violation"], "{events:?}");
 }
 
+/// ADR-0072 D16 付記（G4-S1）。不変条件: `Check::Reviewer` のある task でも、決定的な health の Fail（base の stub の
+/// 検査器の `deps.violation`）は review の repair（`RepairScheduled` の class `health:deps.violation`、attempts 不変）に回る。
+/// health の Fail で reviewer run を起こさなかった reviewer の項目（`REVIEWER_NOT_EVALUATED_REASON`）は分類に入らない。
+/// 修復の後の review は health を Pass にし、reviewer の合格で task を done にする。上の
+/// `health_enforce_non_celeris_direct_review_routes_to_repair` は `Check::Reviewer` の無い task なので、未評価の reviewer
+/// の項目が health の Fail を `Substantive`（`ReviewFail`）にする欠けを検出できない。
+#[tokio::test]
+async fn review_repair_not_evaluated_reviewer_does_not_block_a_health_repair() {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    commit_base_checker(repo.path(), 1);
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut task = super::target_sync::reviewing_task(repo.path(), &store);
+    super::target_sync::set_check(&mut task, "true".into());
+    task.acceptance.push(Criterion {
+        text: "the change is complete".into(),
+        check: Check::Reviewer,
+    });
+    task.budget.max_retries = 0;
+    store.insert(&task).unwrap();
+    let adapter = Arc::new(
+        ParallelWuAdapter::new(Duration::ZERO)
+            .with_review(r#"{"verdicts":[{"criterion":1,"pass":true,"reason":"fine"}]}"#)
+            .with_action("repair-1", commit_fixed),
+    );
+    let mut d = non_celeris_dispatcher(store.clone(), adapter, ws.path(), 1);
+    let wt = d.local_worktree_for(&task).unwrap();
+    wt.ensure_blocking().unwrap();
+    std::fs::create_dir_all(wt.dir.join("src")).unwrap();
+    super::target_sync::commit_file(&wt.dir, "src/lib.rs", "pub fn foo() {}\n");
+    assert!(
+        d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
+            .unwrap()
+    );
+    assert!(run_until_idle(&mut d, 800).await.idle);
+    let events = events_of(&store, task.id);
+    assert!(
+        events.iter().any(|e| matches!(
+            e,
+            Event::ReviewVerdict { criterion_idx: 1, pass: false, reason, .. }
+                if reason == crate::review::REVIEWER_NOT_EVALUATED_REASON
+        )),
+        "{events:?}"
+    );
+    let classes: Vec<&str> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::RepairScheduled { class, origin, .. }
+                if *origin == task_core::execution::RepairOrigin::Review =>
+            {
+                Some(class.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(classes, vec!["health:deps.violation"], "{events:?}");
+    assert!(
+        !events
+            .iter()
+            .any(|e| matches!(e, Event::Transitioned { reason, .. } if reason == "review_fail")),
+        "{events:?}"
+    );
+    let stored = store.get(task.id).unwrap().unwrap();
+    assert_eq!(
+        (stored.status, stored.attempts),
+        (Status::Done, 0),
+        "{stored:?}"
+    );
+}
+
 /// review の repair の WU（key `repair-*`）の run の後に、その作業ツリーと key で `on_repair` を呼ぶ adapter（修復の代わり。
 /// ほかは [`WuScriptAdapter`]）。
 pub(super) struct RepairActionAdapter {

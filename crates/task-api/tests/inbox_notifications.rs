@@ -710,3 +710,97 @@ async fn phase_integration_request_of_a_finished_unit_is_answered_without_resumi
         .count();
     assert_eq!(answered, 1);
 }
+
+/// ADR 2026-11-08-health-enforcement-loop D7.3・決定 p9-scope: 受信箱の `dependents_reopened` の答えは、選んだ戻した
+/// 後続の `POST /api/v1/tasks/{id}/cancel` に写り、項目が戻した後続として挙げていない id は 400 で拒む。
+///
+/// 守る不変条件: 受信箱の答えで cancel できるのは、依存先の復帰で戻した後続のうちまだ動いていないものだけ。
+/// 既存の試験で検出できない理由: 既存の answer の試験は質問・決定・統合依頼の種類だけを通り、選択肢の key に task id
+/// を持つ種類の写し（id の取り出しと、戻した後続かどうかの照合）を通らない。
+#[tokio::test]
+async fn dependents_reopened_answer_cancels_restored_dependent() {
+    use std::time::Duration as StdDuration;
+    use task_core::{TaskId, Trigger};
+
+    let env = admin_env();
+    let insert = |depends_on: Vec<TaskId>| {
+        let mut t = new_task(TaskKind::Execute, Status::Ready);
+        t.budget.max_retries = 0;
+        t.depends_on = depends_on;
+        env.store.insert(&t).unwrap();
+        t.id
+    };
+    let status = |id: TaskId| env.store.get(id).unwrap().unwrap().status;
+    let a = insert(Vec::new());
+    let b = insert(vec![a]);
+    let c = insert(vec![a]);
+    let unrelated = insert(Vec::new());
+    assert!(
+        env.store
+            .acquire_lease(a, "run-a", StdDuration::from_secs(60))
+            .unwrap()
+    );
+    env.store
+        .apply_transition(a, Trigger::WorkerError { retryable: false }, None)
+        .unwrap();
+    assert_eq!(
+        (status(b), status(c)),
+        (Status::Cancelled, Status::Cancelled)
+    );
+    env.store
+        .apply_transition(a, Trigger::Reopen, None)
+        .unwrap();
+    assert_eq!((status(b), status(c)), (Status::Ready, Status::Ready));
+
+    let app = env.router();
+    let item = || async {
+        send(&app, get_admin("/api/v1/inbox/items")).await.json()["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|x| x["kind"] == "dependents_reopened")
+            .cloned()
+    };
+    let found = item().await.expect("dependents_reopened in inbox");
+    let id = found["id"].as_str().unwrap().to_string();
+    assert!(id.starts_with(&format!("dependents_reopened-{a}-")), "{id}");
+    let mut keys: Vec<String> = found["options"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["key"].as_str().unwrap().to_string())
+        .collect();
+    keys.sort();
+    let mut want = vec![format!("cancel:{b}"), format!("cancel:{c}")];
+    want.sort();
+    assert_eq!(keys, want);
+    let answer = |option: String| {
+        let app = app.clone();
+        let path = format!("/api/v1/inbox/items/{id}/answer");
+        async move { send(&app, post_admin(&path, &json!({ "option": option }))).await }
+    };
+
+    // 戻した後続でない task・依存先自身は cancel しない。
+    for other in [unrelated, a] {
+        let rejected = answer(format!("cancel:{other}")).await;
+        assert_eq!(rejected.status, 400, "{}", rejected.text());
+        assert_eq!(status(other), Status::Ready);
+    }
+
+    let first = answer(format!("cancel:{b}")).await;
+    assert_eq!(first.status, 200, "{}", first.text());
+    assert_eq!(
+        first.json()["result"]["delegated_to"],
+        format!("/api/v1/tasks/{b}/cancel")
+    );
+    assert_eq!(first.json()["removed"], false, "C がまだ動いていない");
+    assert_eq!((status(b), status(c)), (Status::Cancelled, Status::Ready));
+    let again = answer(format!("cancel:{b}")).await;
+    assert_eq!(again.status, 400, "cancel 済みの B はもう挙がっていない");
+
+    let last = answer(format!("cancel:{c}")).await;
+    assert_eq!(last.status, 200, "{}", last.text());
+    assert_eq!(last.json()["removed"], true);
+    assert_eq!(status(c), Status::Cancelled);
+    assert!(item().await.is_none());
+}

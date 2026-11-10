@@ -3,7 +3,7 @@
 use task_core::{TaskId, TaskStore};
 
 /// Kinds whose id is `<kind>-<task id>[-…]` (`Builder` in `human_inbox.rs`).
-const TASK_KEYED: [&str; 11] = [
+const TASK_KEYED: [&str; 12] = [
     "question",
     "failed",
     "unroutable",
@@ -14,6 +14,7 @@ const TASK_KEYED: [&str; 11] = [
     "stalled",
     "review_resync_halted",
     "health_repeat",
+    "dependents_reopened",
     "unintegrated",
 ];
 

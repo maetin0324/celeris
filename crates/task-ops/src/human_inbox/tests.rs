@@ -351,6 +351,16 @@ fn fixture() -> Fixture {
             }],
             at: AT.to_string(),
         },
+        AttentionItem::DependentsReopened {
+            task: tref.clone(),
+            pending: vec![crate::inbox::dependents_reopened::PendingDependent {
+                task: tref.clone(),
+                depends_on: vec![tref.id],
+            }],
+            kept: Vec::new(),
+            seq: 7,
+            at: AT.to_string(),
+        },
     ];
     inbox
         .browser_waits
@@ -646,6 +656,7 @@ fn variant_index(kind: InboxKind) -> usize {
         InboxKind::ReviewResyncHalted => 22,
         InboxKind::ScriptControl => 23,
         InboxKind::HealthRepeat => 24,
+        InboxKind::DependentsReopened => 25,
     }
 }
 
@@ -655,7 +666,7 @@ fn human_inbox_all_contains_every_variant_once() {
     seen.sort_unstable();
     assert_eq!(
         seen,
-        (0..=24).collect::<Vec<_>>(),
+        (0..=25).collect::<Vec<_>>(),
         "ALL must list every variant once"
     );
 }

@@ -280,6 +280,19 @@ pub enum AttentionItem {
         /// 最も古い源の event の時刻（待ちの始まり）。
         at: String,
     },
+    /// ADR 2026-11-08-health-enforcement-loop D7.3・決定 p9-scope: 依存先 `task` が終端から戻り、その失敗で cancel
+    /// されていた後続を戻した（`task` の最新の `Event::DependentsReopened` の写し。`dependents_reopened::attention_items`
+    /// が作る）。戻した後続のうちまだ動いていないものが 1 件以上ある間だけ出る。
+    DependentsReopened {
+        task: TaskRef,
+        /// 戻した後続のうちまだ動いていないもの（今 draft・ready で、最後の遷移が `dependency_reopened`）。
+        pending: Vec<dependents_reopened::PendingDependent>,
+        /// 戻さなかった後続と理由（event の `kept` の写し）。
+        kept: Vec<task_core::KeptDependent>,
+        /// 正本の event の `seq`（項目の id）。
+        seq: u64,
+        at: String,
+    },
     /// ADR D4: 未回答の統合依頼。正本は IntegrationRequested / IntegrationAnswered。
     IntegrationRequest {
         task: TaskRef,
@@ -416,8 +429,10 @@ fn attention_task(item: &AttentionItem) -> Option<TaskId> {
         | AttentionItem::ReviewResyncHalted { task, .. }
         | AttentionItem::HealthRepeat { task, .. }
         | AttentionItem::BrowserPrerequisite { task, .. } => Some(task.id),
-        // 統合依頼は Done task にも届くため、終端 task の attention 整理規則で隠さない。
+        // 統合依頼は Done task にも届くため、終端 task の attention 整理規則で隠さない。依存先が done になった後も
+        // 戻した後続が動くまでは重複を cancel できるので、`dependents_reopened` も依存先の状態で隠さない。
         AttentionItem::ClusterUnavailable { .. }
+        | AttentionItem::DependentsReopened { .. }
         | AttentionItem::IntegrationRequest { .. }
         | AttentionItem::Unintegrated { .. } => None,
     }
@@ -435,6 +450,7 @@ fn attention_at(item: &AttentionItem) -> &str {
         AttentionItem::Stalled { at, .. } => at,
         AttentionItem::ReviewResyncHalted { at, .. } => at,
         AttentionItem::HealthRepeat { at, .. } => at,
+        AttentionItem::DependentsReopened { at, .. } => at,
         AttentionItem::IntegrationRequest { at, .. } => at,
         AttentionItem::BrowserPrerequisite { at, .. } => at,
         AttentionItem::Unintegrated { at, .. } => at,
@@ -1168,6 +1184,7 @@ fn build_attention(
 
     // Questions and gates were derived together, one Task's event history at a time.
     items.extend(blocked_attention.into_items(store, all_tasks, by_id, focus)?);
+    items.extend(dependents_reopened::attention_items(store, by_id, focus)?);
 
     // ADR-0121 D3: 完了した root で取り込みを見送ったもの。期限は設けない（成果が main に入っていない）。
     let latest_skipped = store.latest_event_rows(LatestEventKind::DeliverySkipped)?;
@@ -1425,6 +1442,7 @@ pub fn inbox(
     InboxTaskSnapshot::read(store)?.parts(snapshot, ctx, now, evidence, None)
 }
 
+pub mod dependents_reopened;
 pub mod health_repeat;
 mod read;
 pub use read::InboxTaskSnapshot;

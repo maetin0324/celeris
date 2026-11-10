@@ -1719,6 +1719,50 @@
           "type": "object"
         },
         {
+          "description": "ADR 2026-11-08-health-enforcement-loop D7.3・決定 p9-scope: 依存先 `task` が終端から戻り、その失敗で cancel\nされていた後続を戻した（`task` の最新の `Event::DependentsReopened` の写し。`dependents_reopened::attention_items`\nが作る）。戻した後続のうちまだ動いていないものが 1 件以上ある間だけ出る。",
+          "properties": {
+            "at": {
+              "type": "string"
+            },
+            "kept": {
+              "description": "戻さなかった後続と理由（event の `kept` の写し）。",
+              "items": {
+                "$ref": "#/$defs/KeptDependent"
+              },
+              "type": "array"
+            },
+            "pending": {
+              "description": "戻した後続のうちまだ動いていないもの（今 draft・ready で、最後の遷移が `dependency_reopened`）。",
+              "items": {
+                "$ref": "#/$defs/PendingDependent"
+              },
+              "type": "array"
+            },
+            "seq": {
+              "description": "正本の event の `seq`（項目の id）。",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "task": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": {
+              "const": "dependents_reopened",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task",
+            "pending",
+            "kept",
+            "seq",
+            "at"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR D4: 未回答の統合依頼。正本は IntegrationRequested / IntegrationAnswered。",
           "properties": {
             "at": {
@@ -17836,6 +17880,7 @@
         "task_unscheduled",
         "review_resync_halted",
         "health_repeat",
+        "dependents_reopened",
         "script_control"
       ],
       "type": "string"
@@ -22509,6 +22554,26 @@
           "type": "string"
         }
       ]
+    },
+    "PendingDependent": {
+      "description": "`AttentionItem::DependentsReopened.pending[]`: 戻した後続のうちまだ動いていない 1 件。",
+      "properties": {
+        "depends_on": {
+          "description": "戻した時点の後続の依存先（`RestoredDependent.depends_on`）。",
+          "items": {
+            "$ref": "#/$defs/TaskId"
+          },
+          "type": "array"
+        },
+        "task": {
+          "$ref": "#/$defs/TaskRef"
+        }
+      },
+      "required": [
+        "task",
+        "depends_on"
+      ],
+      "type": "object"
     },
     "Permissions": {
       "additionalProperties": false,

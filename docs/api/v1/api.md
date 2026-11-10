@@ -6,6 +6,9 @@
 - 改訂: 2026-11-10（ADR 2026-11-08-health-enforcement-loop D7.3）— **追加。v1 のまま**。task の event に `dependents_reopened`
   （`restored[]`（`task_id`・`depends_on`）・`kept[]`（`task_id`・`why`（`{reason: retried, successor}` か `{reason: other_dependency, unresolved}`）））
   を足した。追記先は終端から戻った依存先の task で、戻した後続と、依存先の失敗で cancel されたが戻さなかった後続を記録する。
+  `Inbox.attention[]` に type `dependents_reopened`（`task`・`pending[]`（`task`・`depends_on`）・`kept[]`・`seq`・`at`）、受信箱の kind
+  `dependents_reopened` を足した（選択肢は戻した後続ごとの `cancel:<task id>`。answer は `POST /api/v1/tasks/{id}/cancel` に写し、
+  項目が挙げていない id は 400）。
 - 改訂: 2026-11-09（ADR 2026-11-08-health-enforcement-loop D4.3）— **追加。v1 のまま**。task の event に `health_findings_repeated`
   （`source_task`・`site`（`{kind: work_unit|phase, key}` か `{kind: review}`）・`fingerprints`（重複を除き辞書順）・`set_sha256`）を足した。追記先は
   木の root。`Inbox.attention[]` に type `health_repeat`（`task`・`set_sha256`・`fingerprints`・`sources[]`（`task`・`site`・`at`）・`at`）、受信箱の
@@ -665,11 +668,12 @@ browser の制御（`crate::browser_control`）の 6 本は、route を定数 `B
 `{approvals, questions, drafts, attention, browser_waits, decisions, counts}`（`counts` は各配列の件数と
 DB 全体の status 別件数 `by_status`）。`attention[]` は `type` で区別する（`failed` / `requeue_limit_near` /
 `unroutable` / `cluster_unavailable` / `phase_checkpoint` / `plan_approval` / `delivery_skipped` / `stalled` / `review_resync_halted` /
-`health_repeat`）。
+`health_repeat` / `dependents_reopened`）。
 `type: "unroutable"` はデーモンのスナップショット（3.20）の `task_waits[]` の `unroutable` から合成する。スナップショットがまだ無ければ出ない。
 `type: "stalled"` はスナップショットの `stalled_tasks[]`（生存確認が `StallDetected` を出し、その後まだ何も起きていない task）のうち `ready` の task から合成する。
 `type: "review_resync_halted"` はスナップショットの `review_resync_halted[]`（review 前の再同期が上限 `MAX_TARGET_RESYNCS` を超えて `ReviewResyncHalted` を残した task）のうち `reviewing` の task から合成する（ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3）。
 `type: "health_repeat"` は木の root の event `health_findings_repeated` から `(root, set_sha256)` ごとに 1 件合成する（`task` は root、`sources[]` はまだ Blocked の源の task と位置 `site`（`{kind: work_unit|phase, key}` か `{kind: review}`）。源がすべて Blocked を出たか root が終端なら出ない。ADR 2026-11-08-health-enforcement-loop D4.3）。
+`type: "dependents_reopened"` は依存先の task ごとに最新の event `dependents_reopened` から 1 件合成する（`task` は依存先、`pending[]` は `restored[]` のうちまだ動いていない後続（今 `draft`・`ready` で、最後の遷移の理由が `dependency_reopened`）と戻した時点の依存先、`kept[]` は event の写し）。`pending[]` が空なら出ない（`kept[]` だけの event も出ない）。ADR 2026-11-08-health-enforcement-loop D7.3）。
 
 - `questions[].approval_id`: その質問に対応する**未決の** `approvals` の id（§3.56）。GUI はこれで
   `POST /approvals/{id}/decide`（3.57）へ直接リンクできる。行がまだ無い、または既に決定済みなら `null`。

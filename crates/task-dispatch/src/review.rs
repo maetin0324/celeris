@@ -179,10 +179,42 @@ pub const PLAN_FILE_NAME: &str = "plan.json";
 pub const REVIEW_FILE_NAME: &str = "review.json";
 
 /// ADR-0007 D5 2.: 決定的な条件が 1 つでも落ちて reviewer run を起動しなかったときの、`Check::Reviewer` の項目の
-/// reason。reviewer の判定ではないので、`Dispatcher::try_review_repair` は決定的な不合格があるときこの項目を修復の
-/// 分類から外す（ADR-0072 D16 付記 G4-S1）。
+/// reason。reviewer の判定ではないので、[`repair_failing`] は決定的な不合格があるときこの項目を修復の分類から外す
+/// （ADR-0072 D16 付記 G4-S1）。
 pub(crate) const REVIEWER_NOT_EVALUATED_REASON: &str =
     "not evaluated: a deterministic check failed";
+
+/// ADR-0072 D16: `Dispatcher::try_review_repair` が `classify_review_failure` と repair の失敗した検査に渡す、不合格の
+/// verdict の一覧。暗黙の条件（Plan/aggregate/repo_checks/research）は task.acceptance に無く、D16 の分類表にも無いので
+/// 修復できない（`Check::Human` と同じ扱いに倒す）。health の Fail だけは `Check::Command { cmd: HEALTH_CHECK_ID }`
+/// （[`Verdict::implicit_check`]。health enforcement loop D3.2）。不合格が無ければ空（分類は `Substantive`）。
+///
+/// D16 付記（G4-S1）: 決定的な不合格（`Check::Reviewer` でない項目の不合格）があるとき、[`REVIEWER_NOT_EVALUATED_REASON`]
+/// の `Check::Reviewer` の項目は reviewer の判定ではないので外す。reviewer が実際に不合格にした項目（reason が違う）は
+/// 今までどおり入れる（修復できる決定的な不合格と混ざれば `Substantive`）。
+pub(crate) fn repair_failing(task: &Task, verdicts: &[Verdict]) -> Vec<task_core::FailedCheck> {
+    let failed: Vec<(&Verdict, Check)> = (verdicts.iter().filter(|v| !v.pass))
+        .map(|v| {
+            let check = (task.acceptance.get(v.criterion_idx))
+                .map(|c| c.check.clone())
+                .unwrap_or_else(|| v.implicit_check());
+            (v, check)
+        })
+        .collect();
+    let deterministic_failed = failed.iter().any(|(_, c)| *c != Check::Reviewer);
+    (failed.into_iter())
+        .filter(|(v, c)| {
+            !(deterministic_failed
+                && *c == Check::Reviewer
+                && v.reason == REVIEWER_NOT_EVALUATED_REASON)
+        })
+        .map(|(v, check)| task_core::FailedCheck {
+            check,
+            reason: v.reason.clone(),
+            repair_hint: v.repair_hint.clone(),
+        })
+        .collect()
+}
 
 const REASON_TAIL: usize = 1024;
 

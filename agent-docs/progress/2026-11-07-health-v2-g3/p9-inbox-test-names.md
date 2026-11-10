@@ -36,7 +36,12 @@ WorkUnit `test-names`。task の受け入れ条件 0 は 6 件の試験を関数
 改名・分割した 6 件の doc comment に、守る不変条件と、unit p9 の既存の `dependency_reopen_` の 5 件（`restores_cancelled_dependents_transitively`・`keeps_dependent_while_another_dependency_failed`・`keeps_manually_cancelled_dependent`・`returns_draft_dependent_to_draft`・`on_rereview_and_cancels_again_on_failure`）で検出できない理由を書いた。要点: 5 件は後続を retry せず（後継を持つ後続が無い）、依存先の retry の付け替えを通らず、依存先の側の events を読まず、done の依存先の rereview も 2 回目の rereview もせず、受信箱を組み立てない。
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
-（検査の後に書く）
+- 受け入れ条件 0 のコマンド（6 件の `fn` の grep と `cargo nextest run -p task-core -p task-ops -p task-api --no-tests=fail -E 'test(/dependency_reopen_/)'`）: exit 0、14 passed（task-core 11 件・task-ops 3 件）。
+- 旧名 4 件（`dependency_reopen_keeps_dependent_with_retry_successor`・`dependency_reopen_retry_skips_dependent_with_successor`・`dependency_reopen_skips_unchanged_record`・`dependents_reopened_inbox_item_lifecycle`）の `grep -rnE … crates/`: 一致なし（exit 1）。
+- `sh "$CELERIS_WU_SCOPE_PATHS"`: 変えた path は 2 つの試験 file とこの進捗 file の 3 つだけ。製品のコードの差分は無い。
+- `cargo fmt --all -- --check`: exit 0。`cargo clippy --workspace -- -D warnings`: exit 0。
+- `bash scripts/dev/test-affected.sh`: exit 0。先頭の check-health は verdict=pass、fail 級 0、worsened 0。new の 2 件（`dup.contract` の `UnavailableReason`、`dup.public-surface` の `fn judge`）は warning の候補で、この unit が変えていない file にある。nextest は 8177 passed・23 skipped。web は tsc -b 合格、vitest 104 file・712 件合格。
+- `sh scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-adr-numbers.sh`・`sh scripts/dev/progress-index.sh --check`: いずれも ok。
 
 ## 未解決
 - 無し。

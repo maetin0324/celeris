@@ -242,8 +242,10 @@ async fn read_result_file_recovers_strays_only_for_runs_that_require_the_file() 
     }
 
     // CoS chat の run は結果ファイルを要らないので、cwd を探さない。
-    let mut context = RunContext::default();
-    context.cos_chat = Some(Default::default());
+    let context = RunContext {
+        cos_chat: Some(Default::default()),
+        ..Default::default()
+    };
     let chat = request(dir.path(), context);
     assert!(!chat.requires_result_file());
     assert!(matches!(

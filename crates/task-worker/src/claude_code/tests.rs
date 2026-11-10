@@ -1260,6 +1260,55 @@ echo '{"type":"result","subtype":"error_max_turns","is_error":true,"usage":{"inp
     }
 }
 
+/// 結線（ADR-0090 D1、ADR 2026-11-10-adapter-result-contract (4) 4b）: `artifacts/result.json` の
+/// `{"type": "wait", "kind": "cluster_job", ...}` が結果契約を通って `Terminal::Waiting` になり、`finish_run` が
+/// run dir の `result.json` に `{"type":"wait",...}` の 1 行（jobs を含む）を残す。daemon の再起動・orphan の
+/// 引き継ぎは この行を `wait_terminal` で読み直す。不正な wait と question の優先は `result_contract_` が見る。
+#[tokio::test]
+async fn result_wait_becomes_terminal_waiting() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = stub_claude(
+        dir.path(),
+        r#"mkdir -p artifacts
+printf '%s' '{"type":"wait","kind":"cluster_job","cluster":"sirius","jobs":["42634","42635"],"scheduler":"pbs","poll_secs":300,"timeout_secs":43200,"checkpoint":{"completed":["submitted"],"next_action":"collect"},"summary":"submitted 2 jobs"}' > artifacts/result.json
+echo '{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":10,"output_tokens":20}}'
+"#,
+    );
+    let adapter = ClaudeCodeAdapter::new(config);
+    let req = sample_req(dir.path().to_path_buf());
+    let sink = RecordingSink::default();
+    let outcome = adapter
+        .run(req, "run-wait", default_limits(), &sink)
+        .await
+        .unwrap();
+    match outcome.terminal {
+        Terminal::Waiting {
+            request,
+            checkpoint,
+            usage,
+        } => {
+            assert_eq!(request.cluster.as_deref(), Some("sirius"));
+            assert_eq!(request.jobs, vec!["42634".to_string(), "42635".to_string()]);
+            assert_eq!(
+                request.scheduler,
+                task_core::cluster_job::ClusterScheduler::Pbs
+            );
+            assert_eq!(request.poll_secs, Some(300));
+            assert_eq!(request.timeout_secs, Some(43200));
+            assert_eq!(request.summary, "submitted 2 jobs");
+            assert_eq!(checkpoint.expect("checkpoint")["next_action"], "collect");
+            assert_eq!(usage.expect("usage").input_tokens, Some(10));
+        }
+        other => panic!("expected waiting, got {other:?}"),
+    }
+    let raw = std::fs::read_to_string(dir.path().join("runs/run-wait/result.json")).unwrap();
+    let line: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
+    assert_eq!(line["type"], "wait");
+    assert_eq!(line["kind"], "cluster_job");
+    assert_eq!(line["jobs"][0], "42634");
+    assert_eq!(line["jobs"][1], "42635");
+}
+
 /// `result.is_error`（or `subtype != "success"`) のとき `result` テキストを分類する（ADR-0010 D5）。
 /// `Throttled` が当たれば `AdapterError::Throttled` として返り、result.json は書かれる。
 #[tokio::test]

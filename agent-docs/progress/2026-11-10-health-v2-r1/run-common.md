@@ -65,10 +65,10 @@ clippy・fmt・test-affected・check-health は件名「R1 run-common: aider の
 - `sh "$CELERIS_WU_SCOPE_PATHS"` → 変えた path は `crates/task-worker/src/{acp,adapter,adapter_tests,aider,claude_code,codex,pi,preamble,subprocess}.rs`、`crates/task-worker/src/subprocess/tests.rs`、この file だけ。
 
 ## 未解決
-- `cargo clippy -p task-worker --all-targets -- -D warnings` は `result_report_tests.rs:246`（result-contract の試験）の `field_reassign_with_default` で落ちる。repo の検査（`--all-targets` 無し）には出ない。この unit の範囲外として触っていない。
+- 解決済み（unit wait-line）: `cargo clippy -p task-worker --all-targets -- -D warnings` は `result_report_tests.rs:246`（result-contract の試験）の `field_reassign_with_default` で落ちていた。unit wait-line が `RunContext` を struct 式で組むように直した（[wait-line.md](wait-line.md)）。
 - `cargo clippy --workspace --all-targets` は `crates/task-core/src/chat/store_tests.rs` の `useless_conversion` でも落ちる（R1 の write_set の外。既存）。
 
 ## 提案
 1. record で ADR に付記する: D2 の `RunPaths`・`prepare_run`・`finish_run` の置き場は `subprocess.rs`（`deps.cycle` を増やさないため）、`deadline_terminal` は `Box<Terminal>` を返す、`spawn_capture_stderr` は `Result` を返す、run の準備の順の変化（上の「観測できる挙動の変化」3）。
-2. record で `result_report_tests.rs:246` を `RunContext { cos_chat: Some(Default::default()), ..Default::default() }` に直す（`--all-targets` の clippy を通すため）。
+2. 済み（unit wait-line）: `result_report_tests.rs:246` を `RunContext { cos_chat: Some(Default::default()), ..Default::default() }` に直す（`--all-targets` の clippy を通すため）。
 3. R6 へ: langmem・LDR・paperqa の run 関数も締め切りの写しを持つ（`wall clock exceeded`・`idle timeout` の文言が各 file に 2 か所）。ただし wall clock の超過は `BudgetExhausted` でなく retryable な `Error` にしている（langmem.rs の監視 loop で確認）。`deadline_terminal` に寄せると予算切れの分類が変わるので、R6 で分類を決めてから寄せる。`deadline_terminal` は `idle_timeout` を値で受けるので、langmem の `[adapters.langmem].idle_timeout_secs` で縮めた値をそのまま渡せる。

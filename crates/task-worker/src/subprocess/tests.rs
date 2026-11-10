@@ -507,3 +507,75 @@ async fn run_common_finish_run_maps_provider_failure_to_adapter_error() {
     assert_eq!(outcome.terminal, done);
     assert_eq!(outcome.exit_code, Some(0));
 }
+
+/// 不変条件（ADR-0090 D1・D5、ADR 2026-11-10-adapter-result-contract (4) 4b）: `finish_run` は `Terminal::Waiting`
+/// を `runs/<run_id>/result.json` の 1 行の `{"type":"wait","kind":"cluster_job",...}`（cluster・scheduler・jobs・
+/// poll_secs・timeout_secs・checkpoint・summary・usage）に書き、その行を daemon の再起動・orphan の引き継ぎと
+/// 同じ手順（task-dispatch の `terminal_from_run_dir`: `serde_json::Value` に読み、`usage` を `task_core::Usage`
+/// に読み、`adapter::wait_terminal`）で読むと元と同じ `Terminal::Waiting` に戻る。adapter の結線の試験は戻り値と
+/// 行の一部しか見ず、dispatcher の cluster_job_wait の試験は scripted adapter が `Terminal` を直接返すので
+/// run dir の行を通らない。`write_result_json` の Waiting の写像が欄を落とすとここだけが落ちる。
+#[tokio::test]
+async fn run_common_finish_run_writes_wait_line_for_waiting() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let usage = task_core::Usage {
+        input_tokens: Some(10),
+        output_tokens: Some(20),
+        cache_read_tokens: Some(5),
+        cost_usd: Some(0.25),
+        ..Default::default()
+    };
+    let checkpoint = serde_json::json!({"completed": ["submitted"], "next_action": "collect"});
+    let request = task_core::cluster_job::ClusterJobWaitRequest {
+        cluster: Some("sirius".into()),
+        scheduler: task_core::cluster_job::ClusterScheduler::Pbs,
+        jobs: vec!["42634.sirius-pbs".into(), "42635".into()],
+        poll_secs: Some(300),
+        timeout_secs: Some(43_200),
+        summary: "submitted 2 jobs".into(),
+    };
+    let waiting = Terminal::Waiting {
+        request: request.clone(),
+        checkpoint: Some(checkpoint.clone()),
+        usage: Some(usage),
+    };
+
+    let outcome = finish_run(
+        dir.path(),
+        waiting.clone(),
+        None,
+        std::os::unix::process::ExitStatusExt::from_raw(0),
+    )
+    .await
+    .expect("a waiting terminal is not an adapter error");
+    assert_eq!(outcome.terminal, waiting);
+    assert_eq!(outcome.exit_code, Some(0));
+
+    let raw = std::fs::read_to_string(dir.path().join("result.json")).expect("result.json");
+    assert!(raw.ends_with('\n'), "{raw:?}");
+    assert_eq!(raw.trim_end().lines().count(), 1, "{raw:?}");
+    let line: serde_json::Value = serde_json::from_str(raw.trim()).expect("one JSON line");
+    assert_eq!(line["type"], "wait");
+    assert_eq!(line["kind"], task_core::cluster_job::WAIT_KIND_CLUSTER_JOB);
+    assert_eq!(line["cluster"], "sirius");
+    assert_eq!(line["scheduler"], "pbs");
+    assert_eq!(
+        line["jobs"],
+        serde_json::json!(["42634.sirius-pbs", "42635"])
+    );
+    assert_eq!(line["poll_secs"], 300);
+    assert_eq!(line["timeout_secs"], 43_200);
+    assert_eq!(line["checkpoint"], checkpoint);
+    assert_eq!(line["summary"], "submitted 2 jobs");
+    assert_eq!(line["usage"]["input_tokens"], 10);
+    assert_eq!(line["usage"]["cost_usd"], 0.25);
+
+    // task-dispatch の `terminal_from_run_dir` と同じ読み直し。
+    let reread_usage = line
+        .get("usage")
+        .and_then(|u| serde_json::from_value::<task_core::Usage>(u.clone()).ok());
+    assert_eq!(reread_usage, Some(usage));
+    let reread = crate::adapter::wait_terminal(&line, reread_usage)
+        .expect("the run dir line is a wait declaration");
+    assert_eq!(reread, waiting);
+}

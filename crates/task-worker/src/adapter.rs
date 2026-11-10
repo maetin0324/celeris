@@ -335,24 +335,6 @@ pub enum AdapterSetting {
     Container,
 }
 
-impl AdapterSetting {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Model => "model",
-            Self::LlmEndpoint => "llm_endpoint",
-            Self::PermissionMode => "permission_mode",
-            Self::Env => "env",
-            Self::Container => "container",
-        }
-    }
-}
-
-impl std::fmt::Display for AdapterSetting {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
 impl AdapterSettings {
     /// env だけを重ねる設定（reviewer の cargo env・run の TMPDIR・eval の target・CoS の run credential）。
     pub fn env_only(env: Vec<(String, String)>) -> Self {

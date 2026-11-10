@@ -8,21 +8,69 @@ use crate::model::{Event, Status, TaskId};
 use super::query::{u64_to_i64, usize_to_i64};
 use super::{EventRow, SqliteStore, StoreError, TaskWithEvents, format_rfc3339, status_str};
 
-/// ADR-0121 付記: migration 0037 の部分 index `idx_events_delivery_skipped` の WHERE 式と
-/// 字句まで同じにすること（でなければ SQLite がこの index を使わず events 全件を scan する）。
-pub(super) const DELIVERY_SKIPPED_PREDICATE: &str =
-    "json_extract(json,'$.type')='delivery_skipped'";
+/// 受信箱が task ごとの最新 1 件だけを読む event の種類（[`super::TaskStore::latest_event_rows`]）。種類ごとに
+/// migration の部分 index が 1 本ある: `delivery_skipped` は 0037（ADR-0121 付記）、`dependents_reopened` は 0122
+/// （ADR 2026-11-08-health-enforcement-loop D7.3。受信箱 `dependents_reopened` の正本）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LatestEventKind {
+    DeliverySkipped,
+    DependentsReopened,
+}
 
-/// `latest_delivery_skipped_rows_impl` の問い合わせそのもの。試験の EXPLAIN QUERY PLAN と
-/// 同じ文字列を使うため、ここに切り出す。
-pub(super) fn latest_delivery_skipped_sql() -> String {
+impl LatestEventKind {
+    /// 部分 index の WHERE 式。migration の式と字句まで同じにすること（でなければ SQLite がその index を使わず
+    /// events 全件を scan する）。式の一致は試験 `*_latest_rows_use_partial_index` が query plan で確かめる。
+    pub(super) fn index_predicate(self) -> &'static str {
+        match self {
+            Self::DeliverySkipped => "json_extract(json,'$.type')='delivery_skipped'",
+            Self::DependentsReopened => "json_extract(json,'$.type')='dependents_reopened'",
+        }
+    }
+}
+
+/// [`latest_event_rows`] の問い合わせそのもの。試験の EXPLAIN QUERY PLAN と同じ文字列を使うため、ここに切り出す。
+pub(super) fn latest_event_rows_sql(kind: LatestEventKind) -> String {
     format!(
         "SELECT e.id, e.task_id, e.seq, e.ts, e.json FROM events e \
          JOIN (SELECT task_id, MAX(seq) AS seq FROM events \
-               WHERE {DELIVERY_SKIPPED_PREDICATE} GROUP BY task_id) latest \
+               WHERE {} GROUP BY task_id) latest \
            ON latest.task_id = e.task_id AND latest.seq = e.seq \
-         ORDER BY e.id ASC"
+         ORDER BY e.id ASC",
+        kind.index_predicate()
     )
+}
+
+/// 各 task の最新の `kind` の event を 1 件ずつ、global `id` の昇順で返す。部分 index の `(task_id, seq)` を
+/// 引くだけで events 全体は走査しない（`SqliteStore` の method にしない。size.responsibility-growth）。
+pub(super) fn latest_event_rows(
+    conn: &Connection,
+    kind: LatestEventKind,
+) -> Result<Vec<EventRow>, StoreError> {
+    let mut stmt = conn.prepare(&latest_event_rows_sql(kind))?;
+    read_event_rows(stmt.query([])?)
+}
+
+/// `SELECT id, task_id, seq, ts, json FROM events …` の行を [`EventRow`] にする。読めない event 1 件で一覧全体が
+/// 失敗するときに、原因の行を特定できるよう id と task を残す。
+fn read_event_rows(mut rows: rusqlite::Rows<'_>) -> Result<Vec<EventRow>, StoreError> {
+    let mut out = Vec::new();
+    while let Some(row) = rows.next()? {
+        let id: i64 = row.get(0)?;
+        let task_id = SqliteStore::parse_id(&row.get::<_, String>(1)?)?;
+        let json: String = row.get(4)?;
+        let event = serde_json::from_str(&json).map_err(|e| {
+            StoreError::Invalid(format!("event {id} (task {task_id}) is unreadable: {e}"))
+        })?;
+        let seq: i64 = row.get(2)?;
+        out.push(EventRow {
+            id: id as u64,
+            task_id,
+            seq: seq as u64,
+            ts: row.get(3)?,
+            event,
+        });
+    }
+    Ok(out)
 }
 
 use crate::integration_request::{DELIVERY_ORIGIN, SUPERSEDED_ANSWER, TASK_TERMINAL_ANSWER};
@@ -79,27 +127,11 @@ impl SqliteStore {
             integration_request_rows_sql()
         };
         let mut stmt = conn.prepare(&sql)?;
-        let mut rows = if let Some(id) = task_id {
+        read_event_rows(if let Some(id) = task_id {
             stmt.query(params![id.to_string()])?
         } else {
             stmt.query([])?
-        };
-        let mut out = Vec::new();
-        while let Some(row) = rows.next()? {
-            let id: i64 = row.get(0)?;
-            let task_id: String = row.get(1)?;
-            let seq: i64 = row.get(2)?;
-            let ts: String = row.get(3)?;
-            let json: String = row.get(4)?;
-            out.push(EventRow {
-                id: id as u64,
-                task_id: Self::parse_id(&task_id)?,
-                seq: seq as u64,
-                ts,
-                event: serde_json::from_str(&json)?,
-            });
-        }
-        Ok(out)
+        })
     }
 
     pub(super) fn open_integration_requests_impl(&self) -> Result<Vec<EventRow>, StoreError> {
@@ -684,33 +716,7 @@ impl SqliteStore {
             let mut stmt = conn.prepare(
                 "SELECT id, task_id, seq, ts, json FROM events WHERE id > ?1 ORDER BY id ASC LIMIT ?2",
             )?;
-            let rows =
-                stmt.query_map(params![u64_to_i64(after_id), usize_to_i64(limit)], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, i64>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, String>(4)?,
-                    ))
-                })?;
-            let mut out = Vec::new();
-            for row in rows {
-                let (id, task_id, seq, ts, json) = row?;
-                let task_id = Self::parse_id(&task_id)?;
-                // 読めない event 1 件で一覧全体が失敗するときに、原因の行を特定できるよう id を残す。
-                let event: Event = serde_json::from_str(&json).map_err(|e| {
-                    StoreError::Invalid(format!("event {id} (task {task_id}) is unreadable: {e}"))
-                })?;
-                out.push(EventRow {
-                    id: id as u64,
-                    task_id,
-                    seq: seq as u64,
-                    ts,
-                    event,
-                });
-            }
-            Ok(out)
+            read_event_rows(stmt.query(params![u64_to_i64(after_id), usize_to_i64(limit)])?)
         })
     }
 
@@ -755,57 +761,7 @@ impl SqliteStore {
                 "SELECT id, task_id, seq, ts, json FROM events WHERE task_id = ?1 AND seq > ?2 ORDER BY seq ASC LIMIT ?3",
             )?;
             let after: i64 = after_seq.map(u64_to_i64).unwrap_or(-1);
-            let rows = stmt.query_map(
-                params![task_id.to_string(), after, usize_to_i64(limit)],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, i64>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, String>(4)?,
-                    ))
-                },
-            )?;
-            let mut out = Vec::new();
-            for row in rows {
-                let (id, seq, ts, json) = row?;
-                let event: Event = serde_json::from_str(&json)?;
-                out.push(EventRow {
-                    id: id as u64,
-                    task_id,
-                    seq: seq as u64,
-                    ts,
-                    event,
-                });
-            }
-            Ok(out)
-        })
-    }
-
-    pub(super) fn latest_delivery_skipped_rows_impl(&self) -> Result<Vec<EventRow>, StoreError> {
-        self.with_read_conn(|conn| {
-            let mut stmt = conn.prepare(&latest_delivery_skipped_sql())?;
-            let rows = stmt.query_map([], |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                ))
-            })?;
-            let mut out = Vec::new();
-            for row in rows {
-                let (id, task_id, seq, ts, json) = row?;
-                out.push(EventRow {
-                    id: id as u64,
-                    task_id: Self::parse_id(&task_id)?,
-                    seq: seq as u64,
-                    ts,
-                    event: serde_json::from_str(&json)?,
-                });
-            }
-            Ok(out)
+            read_event_rows(stmt.query(params![task_id.to_string(), after, usize_to_i64(limit)])?)
         })
     }
 }

@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use schemars::JsonSchema;
 use serde::Serialize;
+use task_core::store::LatestEventKind;
 use task_core::{
     ArtifactRef, Check, Event, EventRow, Status, Task, TaskId, TaskKind, TaskStore, WorkerHint,
     WorkspaceSpec,
@@ -1169,7 +1170,7 @@ fn build_attention(
     items.extend(blocked_attention.into_items(store, all_tasks, by_id, focus)?);
 
     // ADR-0121 D3: 完了した root で取り込みを見送ったもの。期限は設けない（成果が main に入っていない）。
-    let latest_skipped = store.latest_delivery_skipped_rows()?;
+    let latest_skipped = store.latest_event_rows(LatestEventKind::DeliverySkipped)?;
     for row in latest_skipped {
         let Some(t) = all_tasks.iter().find(|t| {
             t.id == row.task_id

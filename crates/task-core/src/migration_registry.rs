@@ -407,6 +407,11 @@ pub(crate) const MIGRATIONS: &[(u32, &str)] = &[
         121,
         include_str!("../migrations/0121_health_inventory_runs.sql"),
     ),
+    // ADR 2026-11-08-health-enforcement-loop D7.3: `idx_events_dependents_reopened`（受信箱の正本を走査せずに引く部分 index）。
+    (
+        122,
+        include_str!("../migrations/0122_events_dependents_reopened_index.sql"),
+    ),
 ];
 
 /// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0038 work_unit_sessions、

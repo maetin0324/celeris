@@ -1,6 +1,7 @@
 //! ADR-0116 D5: launcher 経由 runtime の daemon 側試験。偽 launcher は実の
 //! [`LauncherServer`] に偽の backend を差したもの（テスト内の Unix socket server）。
 
+use crate::{BrowserAuthority, BrowserControl};
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -1502,16 +1503,6 @@ impl RecordingWaitSink {
 }
 
 impl EventSink for RecordingWaitSink {
-    fn browser_wait_open(&self, request: &NewBrowserWait) -> Result<(), String> {
-        if !self.open_ok {
-            return Err("browser wait store unavailable".into());
-        }
-        self.waits.lock().expect("lock").push(request.clone());
-        Ok(())
-    }
-    fn browser_updated(&self, browser: &BrowserRun) {
-        self.browsers.lock().expect("lock").push(browser.clone());
-    }
     fn progress(&self, msg: &str) {
         self.events.lock().expect("lock").push(msg.to_owned());
     }
@@ -1520,6 +1511,68 @@ impl EventSink for RecordingWaitSink {
             .lock()
             .expect("lock")
             .push(format!("{artifact:?}"));
+    }
+}
+impl crate::BrowserAuthority for RecordingWaitSink {
+    fn browser_approval_consume(
+        &self,
+        _wait: &task_core::browser_wait::BrowserWait,
+    ) -> Result<task_core::browser_wait::ConsumedBrowserApproval, String> {
+        Err("browser wait store unavailable".into())
+    }
+    fn browser_operation_approval_consume(
+        &self,
+        _wait: &task_core::browser_wait::BrowserWait,
+    ) -> Result<task_core::browser_wait::ConsumedBrowserOperation, String> {
+        Err("browser wait store unavailable".into())
+    }
+    fn browser_saved_credential(
+        &self,
+        _policy_id: &str,
+        _origin: &str,
+    ) -> Option<crate::browser_credential::SavedCredential> {
+        None
+    }
+    fn browser_saved_credential_valid(&self, _wait: &task_core::browser_wait::BrowserWait) -> bool {
+        false
+    }
+    fn browser_wait_open(&self, request: &NewBrowserWait) -> Result<(), String> {
+        if !self.open_ok {
+            return Err("browser wait store unavailable".into());
+        }
+        self.waits.lock().expect("lock").push(request.clone());
+        Ok(())
+    }
+    fn browser_waits(&self) -> Result<Vec<task_core::browser_wait::BrowserWait>, String> {
+        Ok(Vec::new())
+    }
+}
+
+impl crate::BrowserControl for RecordingWaitSink {
+    fn browser_auth_section(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+        _active: bool,
+    ) -> Result<(), String> {
+        Err("browser control store unavailable".into())
+    }
+    fn browser_control_gate(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+    ) -> Option<std::sync::Arc<dyn crate::browser_live::ControlGate>> {
+        None
+    }
+    fn browser_live(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+        _event: &task_core::browser_live::ScrubbedLiveEvent,
+    ) {
+    }
+    fn browser_updated(&self, browser: &BrowserRun) {
+        self.browsers.lock().expect("lock").push(browser.clone());
     }
 }
 
@@ -1619,7 +1672,10 @@ fn launcher_credential_request_opens_a_waiting_for_auth_wait_and_questions() {
         "run-1",
         "celeris-s1",
         &policy,
-        &sink,
+        crate::BrowserPorts {
+            authority: &sink,
+            control: &sink,
+        },
         done_outcome(),
     );
     assert_eq!(state, Some(BrowserRunState::WaitingForAuth));
@@ -1690,7 +1746,10 @@ fn launcher_credential_request_outside_policy_is_refused_without_a_wait() {
             "run-1",
             "celeris-s1",
             &policy,
-            &sink,
+            crate::BrowserPorts {
+                authority: &sink,
+                control: &sink,
+            },
             done_outcome(),
         );
         assert_eq!(state, None, "{name}: no browser state");
@@ -1737,7 +1796,10 @@ fn launcher_credential_request_takes_priority_over_approval_request() {
         "run-1",
         "celeris-s1",
         &policy,
-        &sink,
+        crate::BrowserPorts {
+            authority: &sink,
+            control: &sink,
+        },
         done_outcome(),
     );
     assert_eq!(state, Some(BrowserRunState::WaitingForAuth));
@@ -1761,7 +1823,10 @@ fn launcher_credential_request_takes_priority_over_approval_request() {
         "run-1",
         "celeris-s1",
         &policy,
-        &sink,
+        crate::BrowserPorts {
+            authority: &sink,
+            control: &sink,
+        },
         done_outcome(),
     );
     assert_eq!(state, Some(BrowserRunState::WaitingForApproval));
@@ -1787,7 +1852,10 @@ fn launcher_credential_request_without_a_wait_store_is_an_error() {
         "run-1",
         "celeris-s1",
         &credential_policy(),
-        &sink,
+        crate::BrowserPorts {
+            authority: &sink,
+            control: &sink,
+        },
         done_outcome(),
     );
     assert_eq!(state, None);
@@ -1820,7 +1888,10 @@ fn launcher_credential_request_keeps_the_secret_out_of_wait_events_and_state() {
         "run-1",
         "celeris-s1",
         &policy,
-        &sink,
+        crate::BrowserPorts {
+            authority: &sink,
+            control: &sink,
+        },
         done_outcome(),
     );
     assert_eq!(state, None);
@@ -1849,7 +1920,10 @@ fn launcher_credential_request_keeps_the_secret_out_of_wait_events_and_state() {
         "run-1",
         "celeris-s1",
         &policy,
-        &sink,
+        crate::BrowserPorts {
+            authority: &sink,
+            control: &sink,
+        },
         done_outcome(),
     );
     let wait_state = state.expect("a wait is open");
@@ -1881,6 +1955,52 @@ struct LauncherRunSink {
 }
 
 impl EventSink for LauncherRunSink {
+    fn progress(&self, _msg: &str) {}
+    fn artifact(&self, _artifact: &task_core::ArtifactRef) {}
+}
+impl crate::BrowserAuthority for LauncherRunSink {
+    fn browser_approval_consume(
+        &self,
+        _wait: &task_core::browser_wait::BrowserWait,
+    ) -> Result<task_core::browser_wait::ConsumedBrowserApproval, String> {
+        Err("browser wait store unavailable".into())
+    }
+    fn browser_operation_approval_consume(
+        &self,
+        _wait: &task_core::browser_wait::BrowserWait,
+    ) -> Result<task_core::browser_wait::ConsumedBrowserOperation, String> {
+        Err("browser wait store unavailable".into())
+    }
+    fn browser_saved_credential(
+        &self,
+        _policy_id: &str,
+        _origin: &str,
+    ) -> Option<crate::browser_credential::SavedCredential> {
+        None
+    }
+    fn browser_saved_credential_valid(&self, _wait: &task_core::browser_wait::BrowserWait) -> bool {
+        false
+    }
+    fn browser_wait_open(
+        &self,
+        _request: &task_core::browser_wait::NewBrowserWait,
+    ) -> Result<(), String> {
+        Err("browser wait store unavailable".into())
+    }
+    fn browser_waits(&self) -> Result<Vec<task_core::browser_wait::BrowserWait>, String> {
+        Ok(Vec::new())
+    }
+}
+
+impl crate::BrowserControl for LauncherRunSink {
+    fn browser_auth_section(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+        _active: bool,
+    ) -> Result<(), String> {
+        Err("browser control store unavailable".into())
+    }
     fn browser_control_gate(
         &self,
         _run_id: &str,
@@ -1888,11 +2008,16 @@ impl EventSink for LauncherRunSink {
     ) -> Option<Arc<dyn crate::browser_live::ControlGate>> {
         Some(Arc::new(InMemoryGate::new()))
     }
+    fn browser_live(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+        _event: &task_core::browser_live::ScrubbedLiveEvent,
+    ) {
+    }
     fn browser_updated(&self, browser: &BrowserRun) {
         self.browsers.lock().expect("lock").push(browser.clone());
     }
-    fn progress(&self, _msg: &str) {}
-    fn artifact(&self, _artifact: &task_core::ArtifactRef) {}
 }
 
 fn launcher_run_request(workspace: &Path) -> RunRequest {
@@ -1931,6 +2056,10 @@ async fn launcher_run_creates_shim_files_once_and_reaches_the_harness() {
             kill_grace: Duration::from_secs(1),
         },
         &sink,
+        crate::BrowserPorts {
+            authority: &sink,
+            control: &sink,
+        },
         LauncherTarget {
             socket: &launcher.sock,
             refuse_test_loopback: false,
@@ -2121,8 +2250,39 @@ impl RegisteredSink {
 }
 
 impl EventSink for RegisteredSink {
-    fn browser_waits(&self) -> Result<Vec<BrowserWait>, String> {
-        Ok(self.waits.lock().expect("lock").clone())
+    fn progress(&self, _msg: &str) {}
+    fn artifact(&self, _artifact: &task_core::ArtifactRef) {}
+}
+impl crate::BrowserAuthority for RegisteredSink {
+    fn browser_approval_consume(
+        &self,
+        _wait: &task_core::browser_wait::BrowserWait,
+    ) -> Result<task_core::browser_wait::ConsumedBrowserApproval, String> {
+        Err("browser wait store unavailable".into())
+    }
+    fn browser_operation_approval_consume(
+        &self,
+        _wait: &task_core::browser_wait::BrowserWait,
+    ) -> Result<task_core::browser_wait::ConsumedBrowserOperation, String> {
+        Err("browser wait store unavailable".into())
+    }
+    fn browser_saved_credential(
+        &self,
+        _policy_id: &str,
+        _origin: &str,
+    ) -> Option<crate::browser_credential::SavedCredential> {
+        None
+    }
+    fn browser_saved_credential_valid(&self, wait: &task_core::browser_wait::BrowserWait) -> bool {
+        // Fake vault/site policy: validate the pinned identity and login, not the task policy.
+        // The supervisor must independently reject stale task-policy revisions.
+        wait.owner_id.as_deref() == Some("owner-1")
+            && wait.origin == "https://example.com"
+            && wait.credential_policy_id.as_deref() == Some("pol-example")
+            && wait.credential.as_ref().is_some_and(|r| {
+                r.credential_id == "cred-1" && r.policy_id == "pol-example" && r.provider == "local"
+            })
+            && wait.trusted_login.as_ref() == Some(&trusted_login())
     }
     fn browser_wait_open(&self, request: &NewBrowserWait) -> Result<(), String> {
         self.opened.lock().expect("lock").push(request.clone());
@@ -2140,6 +2300,20 @@ impl EventSink for RegisteredSink {
         waits.push(open);
         Ok(())
     }
+    fn browser_waits(&self) -> Result<Vec<BrowserWait>, String> {
+        Ok(self.waits.lock().expect("lock").clone())
+    }
+}
+
+impl crate::BrowserControl for RegisteredSink {
+    fn browser_auth_section(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+        _active: bool,
+    ) -> Result<(), String> {
+        Err("browser control store unavailable".into())
+    }
     fn browser_control_gate(
         &self,
         _run_id: &str,
@@ -2147,11 +2321,16 @@ impl EventSink for RegisteredSink {
     ) -> Option<Arc<dyn crate::browser_live::ControlGate>> {
         Some(Arc::new(InMemoryGate::new()))
     }
+    fn browser_live(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+        _event: &task_core::browser_live::ScrubbedLiveEvent,
+    ) {
+    }
     fn browser_updated(&self, browser: &BrowserRun) {
         self.browsers.lock().expect("lock").push(browser.clone());
     }
-    fn progress(&self, _msg: &str) {}
-    fn artifact(&self, _artifact: &task_core::ArtifactRef) {}
 }
 
 fn limits() -> RunLimits {
@@ -2186,6 +2365,10 @@ async fn launcher_registered_credential_opens_an_approval_wait_without_a_session
         "run-resumed",
         limits(),
         &sink,
+        crate::BrowserPorts {
+            authority: &sink,
+            control: &sink,
+        },
         LauncherTarget {
             socket: &sock,
             refuse_test_loopback: false,
@@ -2244,6 +2427,10 @@ async fn launcher_registered_credential_opens_an_approval_wait_without_a_session
         "run-again",
         limits(),
         &sink,
+        crate::BrowserPorts {
+            authority: &sink,
+            control: &sink,
+        },
         LauncherTarget {
             socket: &sock,
             refuse_test_loopback: false,
@@ -2280,6 +2467,10 @@ async fn launcher_registered_credential_outside_policy_fails_closed() {
             "run-x",
             limits(),
             &sink,
+            crate::BrowserPorts {
+                authority: &sink,
+                control: &sink,
+            },
             LauncherTarget {
                 socket: &sock,
                 refuse_test_loopback: false,
@@ -2324,6 +2515,10 @@ async fn launcher_stale_credential_approval_is_refused_before_connecting() {
         "run-y",
         limits(),
         &sink,
+        crate::BrowserPorts {
+            authority: &sink,
+            control: &sink,
+        },
         LauncherTarget {
             socket: &sock,
             refuse_test_loopback: false,
@@ -2581,6 +2776,49 @@ mod launcher_login {
     }
 
     impl EventSink for AuthSink {
+        fn progress(&self, msg: &str) {
+            self.calls.lock().expect("lock").push(msg.into());
+        }
+        fn artifact(&self, _artifact: &task_core::ArtifactRef) {}
+    }
+    impl crate::BrowserAuthority for AuthSink {
+        fn browser_approval_consume(
+            &self,
+            _wait: &task_core::browser_wait::BrowserWait,
+        ) -> Result<task_core::browser_wait::ConsumedBrowserApproval, String> {
+            Err("browser wait store unavailable".into())
+        }
+        fn browser_operation_approval_consume(
+            &self,
+            _wait: &task_core::browser_wait::BrowserWait,
+        ) -> Result<task_core::browser_wait::ConsumedBrowserOperation, String> {
+            Err("browser wait store unavailable".into())
+        }
+        fn browser_saved_credential(
+            &self,
+            _policy_id: &str,
+            _origin: &str,
+        ) -> Option<crate::browser_credential::SavedCredential> {
+            None
+        }
+        fn browser_saved_credential_valid(
+            &self,
+            _wait: &task_core::browser_wait::BrowserWait,
+        ) -> bool {
+            false
+        }
+        fn browser_wait_open(
+            &self,
+            _request: &task_core::browser_wait::NewBrowserWait,
+        ) -> Result<(), String> {
+            Err("browser wait store unavailable".into())
+        }
+        fn browser_waits(&self) -> Result<Vec<task_core::browser_wait::BrowserWait>, String> {
+            Ok(Vec::new())
+        }
+    }
+
+    impl crate::BrowserControl for AuthSink {
         fn browser_auth_section(
             &self,
             run_id: &str,
@@ -2593,10 +2831,21 @@ mod launcher_login {
                 .push(format!("auth_section {run_id} {session_id} {active}"));
             Ok(())
         }
-        fn progress(&self, msg: &str) {
-            self.calls.lock().expect("lock").push(msg.into());
+        fn browser_control_gate(
+            &self,
+            _run_id: &str,
+            _session_id: &str,
+        ) -> Option<std::sync::Arc<dyn crate::browser_live::ControlGate>> {
+            None
         }
-        fn artifact(&self, _artifact: &task_core::ArtifactRef) {}
+        fn browser_live(
+            &self,
+            _run_id: &str,
+            _session_id: &str,
+            _event: &task_core::browser_live::ScrubbedLiveEvent,
+        ) {
+        }
+        fn browser_updated(&self, _browser: &task_core::BrowserRun) {}
     }
 
     /// Registered → approval → Approved → launcher `auth_begin` / `authenticate`: the daemon grants
@@ -4062,7 +4311,10 @@ fn registered_credential_describe_failures_reopen_manual_registration() {
             std::slice::from_ref(&wait),
             &policy,
             Some(&supervisor(dir.path())),
-            &sink,
+            crate::BrowserPorts {
+                authority: &sink,
+                control: &sink,
+            },
         )
         .unwrap()
         .unwrap();
@@ -4080,7 +4332,10 @@ fn registered_credential_describe_failures_reopen_manual_registration() {
             std::slice::from_ref(&wait),
             &policy,
             Some(&supervisor(dir.path())),
-            &sink
+            crate::BrowserPorts {
+                authority: &sink,
+                control: &sink
+            }
         )
         .unwrap()
         .is_some()
@@ -4202,6 +4457,22 @@ fn saved_credential_reuse_waits_every_run_and_falls_back_without_secrets() {
         login: TrustedLogin,
     }
     impl EventSink for SavedSink<'_> {
+        fn progress(&self, _: &str) {}
+        fn artifact(&self, _: &task_core::ArtifactRef) {}
+    }
+    impl crate::BrowserAuthority for SavedSink<'_> {
+        fn browser_approval_consume(
+            &self,
+            _wait: &task_core::browser_wait::BrowserWait,
+        ) -> Result<task_core::browser_wait::ConsumedBrowserApproval, String> {
+            Err("browser wait store unavailable".into())
+        }
+        fn browser_operation_approval_consume(
+            &self,
+            _wait: &task_core::browser_wait::BrowserWait,
+        ) -> Result<task_core::browser_wait::ConsumedBrowserOperation, String> {
+            Err("browser wait store unavailable".into())
+        }
         fn browser_saved_credential(
             &self,
             policy: &str,
@@ -4217,12 +4488,46 @@ fn saved_credential_reuse_waits_every_run_and_falls_back_without_secrets() {
                 origin,
             )
         }
+        fn browser_saved_credential_valid(
+            &self,
+            _wait: &task_core::browser_wait::BrowserWait,
+        ) -> bool {
+            false
+        }
         fn browser_wait_open(&self, wait: &NewBrowserWait) -> Result<(), String> {
             self.recorded.browser_wait_open(wait)
         }
-        fn progress(&self, _: &str) {}
-        fn artifact(&self, _: &task_core::ArtifactRef) {}
+        fn browser_waits(&self) -> Result<Vec<task_core::browser_wait::BrowserWait>, String> {
+            Ok(Vec::new())
+        }
     }
+
+    impl crate::BrowserControl for SavedSink<'_> {
+        fn browser_auth_section(
+            &self,
+            _run_id: &str,
+            _session_id: &str,
+            _active: bool,
+        ) -> Result<(), String> {
+            Err("browser control store unavailable".into())
+        }
+        fn browser_control_gate(
+            &self,
+            _run_id: &str,
+            _session_id: &str,
+        ) -> Option<std::sync::Arc<dyn crate::browser_live::ControlGate>> {
+            None
+        }
+        fn browser_live(
+            &self,
+            _run_id: &str,
+            _session_id: &str,
+            _event: &task_core::browser_live::ScrubbedLiveEvent,
+        ) {
+        }
+        fn browser_updated(&self, _browser: &task_core::BrowserRun) {}
+    }
+
     let dir = crate::test_support::short_tempdir().unwrap();
     std::fs::set_permissions(
         dir.path(),
@@ -4314,7 +4619,10 @@ fn saved_credential_reuse_waits_every_run_and_falls_back_without_secrets() {
             &format!("next-run-{index}"),
             "session",
             &policy,
-            &sink,
+            crate::BrowserPorts {
+                authority: &sink,
+                control: &sink,
+            },
             done_outcome(),
         );
         assert!(matches!(
@@ -4374,7 +4682,10 @@ fn saved_credential_reuse_waits_every_run_and_falls_back_without_secrets() {
         "failed-login",
         &previous,
         &policy,
-        &sink,
+        crate::BrowserPorts {
+            authority: &sink,
+            control: &sink,
+        },
         &sup,
         true,
     )
@@ -4398,7 +4709,10 @@ fn saved_credential_reuse_waits_every_run_and_falls_back_without_secrets() {
         "after-failure",
         "session",
         &policy,
-        &sink,
+        crate::BrowserPorts {
+            authority: &sink,
+            control: &sink,
+        },
         done_outcome(),
     );
     assert_eq!(state, Some(BrowserRunState::WaitingForAuth));

@@ -707,9 +707,8 @@ pub(super) async fn run_worker(
     let requires_result_file = req.requires_result_file();
     let result_cwd = req.cwd().to_path_buf();
     let result_artifacts = req.artifacts_dir.clone();
-    let outcome = if task_core::browser::requests_browser(&req.task.skills)
-        && (remote.is_some() || container_plan.is_some())
-    {
+    let requests_browser = task_core::browser::requests_browser(&req.task.skills);
+    let outcome = if requests_browser && (remote.is_some() || container_plan.is_some()) {
         Err(AdapterError::Other(
             "browser capability currently requires a local host run".into(),
         ))
@@ -727,6 +726,7 @@ pub(super) async fn run_worker(
             run_id,
             limits,
             &sink,
+            requests_browser.then(|| task_worker::BrowserPorts::new(&sink)),
         );
         // ADR-0079 auto leaf（compaction の超過）と ADR 2026-10-20-mlsys-main2-fixes D1-3（token 予算の到達）は
         // 同じ停止経路を使う: どちらかの watch が鳴ったら process tree を止め、その watch の終端を返す。

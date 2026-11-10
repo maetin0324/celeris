@@ -15,11 +15,39 @@
 //!
 //! TODO: 実 `LiveSink`（task-api への POST）は未配線。ここでは trait と、テスト用の in-memory 実装まで。
 
+/// Trusted browser supervisor capability; implementations must explicitly enforce policy.
+pub trait BrowserControl: Send + Sync {
+    /// Record supervisor-produced capability lifecycle, never model text.
+    fn browser_updated(&self, browser: &task_core::BrowserRun);
+    /// Record the auth interval in session control state; takeover/renew remain refused.
+    /// Callers fail closed if recording fails.
+    fn browser_auth_section(
+        &self,
+        run_id: &str,
+        session_id: &str,
+        active: bool,
+    ) -> Result<(), String>;
+    /// Every shim action passes this gate. `None` refuses session startup.
+    fn browser_control_gate(
+        &self,
+        run_id: &str,
+        session_id: &str,
+    ) -> Option<std::sync::Arc<dyn crate::browser_live::ControlGate>>;
+    /// Record only scrubbed live events for the session.
+    fn browser_live(
+        &self,
+        run_id: &str,
+        session_id: &str,
+        event: &task_core::browser_live::ScrubbedLiveEvent,
+    );
+}
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use task_core::browser_control::{
-    BrowserControl, ControlCommand, ControlError, ControlOutcome, ControlPhase, ControlRequest,
+    BrowserControl as BrowserControlState, ControlCommand, ControlError, ControlOutcome,
+    ControlPhase, ControlRequest,
 };
 use task_core::browser_live::{LiveEvent, PersistedLiveEvent, ScrubbedLiveEvent};
 
@@ -39,7 +67,7 @@ pub trait SessionCloser: Send + Sync {
 
 #[derive(Clone, Default)]
 pub struct InMemoryGate {
-    inner: Arc<Mutex<BrowserControl>>,
+    inner: Arc<Mutex<BrowserControlState>>,
 }
 
 impl InMemoryGate {
@@ -47,7 +75,7 @@ impl InMemoryGate {
         Self::default()
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, BrowserControl> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, BrowserControlState> {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -128,7 +156,7 @@ impl StoreGate {
     fn call(
         &self,
         op: task_core::browser_control_ops::AgentActionOp,
-    ) -> Result<BrowserControl, task_core::browser_store::BrowserStoreError> {
+    ) -> Result<BrowserControlState, task_core::browser_store::BrowserStoreError> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());

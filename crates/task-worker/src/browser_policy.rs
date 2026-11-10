@@ -1,5 +1,50 @@
 //! Turn the administrator grant and task policy into agent-browser 0.38.1 inputs (ADR-0080 D1).
 //! Everything is decided before any substrate or harness process starts.
+/// Trusted browser supervisor capability; implementations must explicitly enforce policy.
+pub trait BrowserAuthority: Send + Sync {
+    /// Persist a trusted supervisor wait and release the worker lease.
+    fn browser_wait_open(
+        &self,
+        request: &task_core::browser_wait::NewBrowserWait,
+    ) -> Result<(), String>;
+    fn browser_waits(&self) -> Result<Vec<task_core::browser_wait::BrowserWait>, String>;
+    /// Read daemon-owned identity and current site policy, never harness input.
+    fn browser_saved_credential(
+        &self,
+        policy_id: &str,
+        origin: &str,
+    ) -> Option<crate::browser_credential::SavedCredential>;
+    /// Revalidate saved approvals against the current site policy and vault.
+    fn browser_saved_credential_valid(&self, wait: &task_core::browser_wait::BrowserWait) -> bool;
+    /// Consume credential-use approval exactly once.
+    fn browser_approval_consume(
+        &self,
+        wait: &task_core::browser_wait::BrowserWait,
+    ) -> Result<task_core::browser_wait::ConsumedBrowserApproval, String>;
+    /// Consume click/download approval exactly once.
+    fn browser_operation_approval_consume(
+        &self,
+        wait: &task_core::browser_wait::BrowserWait,
+    ) -> Result<task_core::browser_wait::ConsumedBrowserOperation, String>;
+}
+
+/// Browser capabilities injected only into browser orchestration.
+#[derive(Clone, Copy)]
+pub struct BrowserPorts<'a> {
+    pub authority: &'a dyn BrowserAuthority,
+    pub control: &'a dyn crate::browser_live::BrowserControl,
+}
+
+impl<'a> BrowserPorts<'a> {
+    /// Borrow both capabilities from an implementation without granting them to EventSink.
+    pub fn new<T: BrowserAuthority + crate::browser_live::BrowserControl>(source: &'a T) -> Self {
+        Self {
+            authority: source,
+            control: source,
+        }
+    }
+}
+
 use std::path::Path;
 
 use sha2::{Digest, Sha256};

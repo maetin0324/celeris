@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # 変更 crate とその逆依存 crate だけの試験を走らせる（ADR 2026-10-20 full-tests-at-release-only）。
 # 全体の試験（test-parallel.sh・web e2e・本物 browser/userns 試験）は release gate だけ。
-#   bash scripts/dev/test-affected.sh          nextest + doc test を対象 crate に走らせる
+#   bash scripts/dev/test-affected.sh          nextest を対象 crate に走らせ、doc test を全 crate に走らせる
+#                                              （build は --workspace の features。下の「cargo の呼び方」）
 #   bash scripts/dev/test-affected.sh --list   対象 crate 名を 1 行ずつ出し、web の検査が対象なら
 #                                              `web: typecheck+unit (理由: …)`・`control-ts: typecheck+test (理由: …)`
 #                                              の行を足す（何も走らせない）
@@ -28,6 +29,10 @@
 # 理由を 1 行出して渡さない。ただし control-ts/・docs/api/script-host/・crates/script-runtime/・script の試験と support・
 # daemon の script 層の変更では作れないことを失敗にする。bundle を読む試験の SKIP は CELERIS_SCRIPT_SKIP_LOG の file で
 # 数えて `script bundle SKIP: N 件` を出し、bundle を作れていて N > 0 なら非 0 で終わる。
+# cargo の呼び方（ADR 2026-11-10-test-target-bundles D6）: `cargo nextest run --workspace -E 'package(=<crate>) | …'` と
+# `cargo test --doc --workspace`。build は release gate（test-parallel.sh）と同じ --workspace の features で行い、走らせる
+# nextest の試験は対象 crate に filter で絞る。`-p` の組で build すると Cargo（resolver 2）は組の中だけで features を統合し、
+# 組ごとに共有 crate の別の版を作り直す。agent-docs/progress/2026-11-10-health-v2-r5/rebuild-check.sh がこの呼び方を確かめる。
 # 何も対象が無ければ（docs だけ等）何もせず exit 0。
 set -euo pipefail
 
@@ -403,8 +408,9 @@ if [ -n "$tsv_reason" ]; then
 fi
 
 if [ -n "$crates" ]; then
-  args=()
-  while IFS= read -r c; do args+=(-p "$c"); done <<<"$crates"
+  # 対象 crate だけを選ぶ nextest の filter（build の features は --workspace。上の「cargo の呼び方」）。
+  filter=""
+  while IFS= read -r c; do filter="${filter:+$filter | }package(=$c)"; done <<<"$crates"
   echo "test-affected: crates: $(echo "$crates" | tr '\n' ' ')" >&2
   # 試験の一時 dir は共通 helper（lib/test-tmp-lifecycle.sh、ADR 2026-11-06-test-runner-tmp-lifecycle）が短い path の
   # root（scratch か /tmp）に作る。Unix socket の sun_path は短く、深い TMPDIR の下では credentiald・browser の IPC 試験が
@@ -435,8 +441,8 @@ if [ -n "$crates" ]; then
       echo "test-affected: bundle を作れない（$why）。CELERIS_SCRIPT_BUNDLE_DIR を渡さない" >&2
     fi
   fi
-  ttl_run cargo nextest run "${args[@]}"
-  ttl_run cargo test --doc "${args[@]}"
+  ttl_run cargo nextest run --workspace -E "$filter"
+  ttl_run cargo test --doc --workspace
   if [ -n "$skip_log" ]; then
     skips="$(grep -c . "$skip_log" || true)"
     echo "test-affected: script bundle SKIP: ${skips} 件" >&2

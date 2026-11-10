@@ -62,12 +62,13 @@ completed: 2026-11-10
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
 - `bash scripts/dev/check-health.sh` → exit 0（`verdict=pass fail_grade=0 new=0 worsened=1`。worsened の 1 件は warning 級の `dup.state`（表名 `t`）で、ports-design が足した `measure.py` の docstring の例示が数えられたもの。この unit の変更ではない）
-- `bash scripts/dev/test-affected.sh` → exit 100。nextest 8179 件のうち 8176 合格・3 失敗・23 skip、web typecheck・unit（104 file・712 件）合格、ts-verify 20 合格。失敗 3 件は task-worker の browser login の試験（`launcher_credential_post_login_consent_page_is_held_with_its_reason`・`launcher_credential_login_navigates_injects_submits_and_consumes_the_granted_lease`・`daemon_post_login_unconfirmed_keeps_observation_stopped_and_names_the_reason`）で、走行中の load average は 80。
-- 上の 3 件を `cargo nextest run -p task-worker -E 'test(=…) | …' --test-threads 1` で単独に再実行 → exit 0（3 件合格）。task-worker は消した 17 名を使っていない（grep で 0 件）。
+- `bash scripts/dev/test-affected.sh` → exit 0。nextest 8179 件合格・23 skip、web typecheck・unit（104 file・712 件）合格、ts-verify 20 合格（Run #2、load average 20〜32）。
+- 1 回目（Run #1、load average 80）は exit 100 で、task-worker の browser login の試験 3 件（`launcher_credential_post_login_consent_page_is_held_with_its_reason`・`launcher_credential_login_navigates_injects_submits_and_consumes_the_granted_lease`・`daemon_post_login_unconfirmed_keeps_observation_stopped_and_names_the_reason`）が落ちた。3 件を `cargo nextest run -p task-worker -E 'test(=…) | …' --test-threads 1` で単独に再実行すると exit 0。task-worker は消した 17 名を使っていない（grep で 0 件）。
 
 ## 変更（commit の件名）
 - `store-prune: 呼び手の無い TaskStore method 4 個と B0 割り当ての未参照 store 関数 9 個を消す`
 - `store-prune: 進捗に削除の一覧と前後の計測を書く`
+- `store-prune: 進捗に test-affected の再実行の結果を書く`
 
 ## 未解決
 - `route_judgments` 表は migration に残り、crates/ に読み手も書き手も無くなった。migration と表には触れない範囲なので残した。

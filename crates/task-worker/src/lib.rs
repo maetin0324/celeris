@@ -151,3 +151,6 @@ pub use task_repos::{
     REPOS_DIR_NAME, SetupOutcome, TaskRepo, TaskWorkspaces, run_setup, run_setup_in,
 };
 pub use workspace::{ExecResult, LocalWorkspace, Workspace, WorkspaceError};
+
+pub use browser_live::BrowserControl;
+pub use browser_policy::{BrowserAuthority, BrowserPorts};

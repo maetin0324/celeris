@@ -2,6 +2,7 @@
 //! browser ブランチの統合後に facade から移した（L1。`worker_task` と `review_spawn` が組み立てる）。
 
 use super::*;
+use task_core::browser_wait::{consume_credential_approval, consume_operation_approval};
 
 /// run 途中のイベントをストアに追記するシンク。ワーカーの出力（heartbeat）があればリースを延長する（ADR-0010 D7）。
 pub(super) struct StoreSink {
@@ -195,136 +196,6 @@ impl StoreSink {
 }
 
 impl EventSink for StoreSink {
-    fn browser_saved_credential(
-        &self,
-        policy_id: &str,
-        origin: &str,
-    ) -> Option<task_worker::browser_credential::SavedCredential> {
-        // The single-instance human principal. Never use an agent-supplied actor or org assignee.
-        let (origin, login) = self.credential_site(policy_id, origin)?;
-        task_worker::browser_credential::find_saved("owner", login, &origin)
-    }
-    fn browser_saved_credential_valid(&self, wait: &task_core::browser_wait::BrowserWait) -> bool {
-        let (Some(policy_id), Some(reference), Some(pinned)) = (
-            &wait.credential_policy_id,
-            &wait.credential,
-            &wait.trusted_login,
-        ) else {
-            return false;
-        };
-        let Some((origin, current)) = self.credential_site(policy_id, &wait.origin) else {
-            return false;
-        };
-        wait.owner_id.as_deref() == Some("owner")
-            && origin == wait.origin
-            && current == *pinned
-            && task_worker::browser_credential::saved_is_valid(
-                "owner", reference, &current, &origin,
-            )
-    }
-    fn browser_wait_open(
-        &self,
-        request: &task_core::browser_wait::NewBrowserWait,
-    ) -> Result<(), String> {
-        self.store
-            .browser_wait_open(self.task_id, request, OffsetDateTime::now_utc())
-            .map(|_| ())
-            .map_err(|e| match e {
-                // The field name only (a fixed identifier), never the value.
-                task_core::browser_wait::BrowserWaitError::Invalid { field } => {
-                    format!("{}:{field}", e.code())
-                }
-                e => e.code().into(),
-            })
-    }
-    fn browser_waits(&self) -> Result<Vec<task_core::browser_wait::BrowserWait>, String> {
-        self.store
-            .browser_waits_for_task(self.task_id)
-            .map_err(|_| "browser wait store unavailable".into())
-    }
-    fn browser_approval_consume(
-        &self,
-        wait: &task_core::browser_wait::BrowserWait,
-    ) -> Result<task_core::browser_wait::ConsumedBrowserApproval, String> {
-        task_core::browser_wait::consume_credential_approval(
-            self.store.as_ref(),
-            self.task_id,
-            wait,
-            OffsetDateTime::now_utc(),
-        )
-        .map_err(String::from)
-    }
-    fn browser_operation_approval_consume(
-        &self,
-        wait: &task_core::browser_wait::BrowserWait,
-    ) -> Result<task_core::browser_wait::ConsumedBrowserOperation, String> {
-        task_core::browser_wait::consume_operation_approval(
-            self.store.as_ref(),
-            self.task_id,
-            wait,
-            OffsetDateTime::now_utc(),
-        )
-        .map_err(String::from)
-    }
-    fn browser_auth_section(
-        &self,
-        run_id: &str,
-        session_id: &str,
-        active: bool,
-    ) -> Result<(), String> {
-        let task_id = self.task_id.to_string();
-        self.store
-            .browser_session_auth_section(
-                task_core::browser_store::BrowserSessionKey {
-                    task_id: &task_id,
-                    run_id,
-                    session_id,
-                },
-                active,
-            )
-            .map(|_| ())
-            .map_err(|_| "browser control store unavailable".into())
-    }
-    fn browser_control_gate(
-        &self,
-        run_id: &str,
-        session_id: &str,
-    ) -> Option<Arc<dyn task_worker::browser_live::ControlGate>> {
-        Some(Arc::new(task_worker::browser_live::StoreGate::new(
-            self.store.clone(),
-            &self.task_id.to_string(),
-            run_id,
-            session_id,
-        )))
-    }
-    fn browser_live(
-        &self,
-        run_id: &str,
-        session_id: &str,
-        event: &task_core::browser_live::ScrubbedLiveEvent,
-    ) {
-        let task_id = self.task_id.to_string();
-        if let Err(e) = self.store.browser_session_live_append(
-            task_core::browser_store::BrowserSessionKey {
-                task_id: &task_id,
-                run_id,
-                session_id,
-            },
-            event,
-        ) {
-            tracing::warn!(task_id = %self.task_id, error = %e, "failed to record browser live event");
-        }
-    }
-    fn browser_updated(&self, browser: &task_core::BrowserRun) {
-        if let Err(e) = self.store.append_event(
-            self.task_id,
-            &Event::BrowserUpdated {
-                browser: browser.clone(),
-            },
-        ) {
-            tracing::warn!(task_id = %self.task_id, error = %e, "failed to record browser lifecycle");
-        }
-    }
     fn progress(&self, msg: &str) {
         let ev = Event::worker_progress(self.run_id.clone(), msg);
         if let Err(e) = self.store.append_event(self.task_id, &ev) {
@@ -521,6 +392,133 @@ impl EventSink for StoreSink {
             Err(e) => {
                 tracing::warn!(task_id = %self.task_id, error = %e, "failed to retire the session after a rejected resume");
             }
+        }
+    }
+}
+impl task_worker::BrowserAuthority for StoreSink {
+    fn browser_approval_consume(
+        &self,
+        wait: &task_core::browser_wait::BrowserWait,
+    ) -> Result<task_core::browser_wait::ConsumedBrowserApproval, String> {
+        let now = OffsetDateTime::now_utc();
+        consume_credential_approval(self.store.as_ref(), self.task_id, wait, now)
+            .map_err(String::from)
+    }
+    fn browser_operation_approval_consume(
+        &self,
+        wait: &task_core::browser_wait::BrowserWait,
+    ) -> Result<task_core::browser_wait::ConsumedBrowserOperation, String> {
+        let now = OffsetDateTime::now_utc();
+        consume_operation_approval(self.store.as_ref(), self.task_id, wait, now)
+            .map_err(String::from)
+    }
+    fn browser_saved_credential(
+        &self,
+        policy_id: &str,
+        origin: &str,
+    ) -> Option<task_worker::browser_credential::SavedCredential> {
+        // The single-instance human principal. Never use an agent-supplied actor or org assignee.
+        let (origin, login) = self.credential_site(policy_id, origin)?;
+        task_worker::browser_credential::find_saved("owner", login, &origin)
+    }
+    fn browser_saved_credential_valid(&self, wait: &task_core::browser_wait::BrowserWait) -> bool {
+        let (Some(policy_id), Some(reference), Some(pinned)) = (
+            &wait.credential_policy_id,
+            &wait.credential,
+            &wait.trusted_login,
+        ) else {
+            return false;
+        };
+        let Some((origin, current)) = self.credential_site(policy_id, &wait.origin) else {
+            return false;
+        };
+        wait.owner_id.as_deref() == Some("owner")
+            && origin == wait.origin
+            && current == *pinned
+            && task_worker::browser_credential::saved_is_valid(
+                "owner", reference, &current, &origin,
+            )
+    }
+    fn browser_wait_open(
+        &self,
+        request: &task_core::browser_wait::NewBrowserWait,
+    ) -> Result<(), String> {
+        self.store
+            .browser_wait_open(self.task_id, request, OffsetDateTime::now_utc())
+            .map(|_| ())
+            .map_err(|e| match e {
+                // The field name only (a fixed identifier), never the value.
+                task_core::browser_wait::BrowserWaitError::Invalid { field } => {
+                    format!("{}:{field}", e.code())
+                }
+                e => e.code().into(),
+            })
+    }
+    fn browser_waits(&self) -> Result<Vec<task_core::browser_wait::BrowserWait>, String> {
+        self.store
+            .browser_waits_for_task(self.task_id)
+            .map_err(|_| "browser wait store unavailable".into())
+    }
+}
+
+impl task_worker::BrowserControl for StoreSink {
+    fn browser_auth_section(
+        &self,
+        run_id: &str,
+        session_id: &str,
+        active: bool,
+    ) -> Result<(), String> {
+        let task_id = self.task_id.to_string();
+        self.store
+            .browser_session_auth_section(
+                task_core::browser_store::BrowserSessionKey {
+                    task_id: &task_id,
+                    run_id,
+                    session_id,
+                },
+                active,
+            )
+            .map(|_| ())
+            .map_err(|_| "browser control store unavailable".into())
+    }
+    fn browser_control_gate(
+        &self,
+        run_id: &str,
+        session_id: &str,
+    ) -> Option<Arc<dyn task_worker::browser_live::ControlGate>> {
+        Some(Arc::new(task_worker::browser_live::StoreGate::new(
+            self.store.clone(),
+            &self.task_id.to_string(),
+            run_id,
+            session_id,
+        )))
+    }
+    fn browser_live(
+        &self,
+        run_id: &str,
+        session_id: &str,
+        event: &task_core::browser_live::ScrubbedLiveEvent,
+    ) {
+        let task_id = self.task_id.to_string();
+        if let Err(e) = self.store.browser_session_live_append(
+            task_core::browser_store::BrowserSessionKey {
+                task_id: &task_id,
+                run_id,
+                session_id,
+            },
+            event,
+        ) {
+            tracing::warn!(task_id = %self.task_id, error = %e, "failed to record browser live event");
+        }
+    }
+    fn browser_updated(&self, browser: &task_core::BrowserRun) {
+        if let Err(e) = self.store.append_event(
+            self.task_id,
+            &Event::BrowserUpdated {
+                browser: browser.clone(),
+            },
+        ) {
+            tracing::warn!(task_id = %self.task_id, error = %e, "failed to record browser lifecycle");
         }
     }
 }

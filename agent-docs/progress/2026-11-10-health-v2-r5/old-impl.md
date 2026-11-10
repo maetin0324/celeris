@@ -84,7 +84,9 @@ replay の契約（DB に残る旧い shape の event・行を読む）:
 ## 証拠（提出時の HEAD で実行。基準は $CELERIS_WU_BASE）
 - `python3 agent-docs/progress/2026-11-10-health-v2-r5/contracts.py --scan > "$TMPDIR/scan.json"` → `tests=1864 excluded=2 git_grep_lines=1866 match=yes`、`invariant=true` は 874 件
 - `python3 agent-docs/progress/2026-11-10-health-v2-r5/contracts.py --check-fragment agent-docs/progress/2026-11-10-health-v2-r5/candidates/old-impl.json` → `ok`、exit 0
-- 範囲の確認は「commit」の後に書く
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → 変更 path は `candidates/old-impl.json` と `old-impl.md` の 2 つだけ、exit 0
+- `git diff --name-only $(git merge-base HEAD main) | python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R5 agent-docs/progress/2026-11-07-health-v2-b0/slices.json` → `write-set R5: ok`、exit 0
+- `sh scripts/dev/progress-index.sh --check` → `ok`、exit 0
 
 ## commit
 - 「wu/old-impl: old_impl の候補 3 件（旧 backup 計測・celerisctl plan・Console の途中目標）と進捗」

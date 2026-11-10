@@ -15,11 +15,149 @@
   "architecture_map_blob": "f2430cd3b005b09f90683f3081ca277e4f621624",
   "architecture_map_checker_blob": "999f10bc0c656a1a5a1eb211211fa702ad761ad2"
  },
- "extra_capabilities": [],
+ "extra_capabilities": [
+  {
+   "id": "config-load-validation",
+   "name": "celeris.toml の読み込み・既定値・相対 path の解決・検証（消した欄の拒否を含む）",
+   "owner_paths": [
+    "crates/celeris/src/config/mod.rs"
+   ],
+   "reason": "B0 は設定 file の読み込みと検証を各 capability の owner に割っておらず、節をまたぐ読み込みの契約を持たない"
+  },
+  {
+   "id": "config-runtime-edit",
+   "name": "設定の実行中の変更（欄の分類・秘密の伏せ字・comment を保つ書き戻し・再起動なしの反映）",
+   "owner_paths": [
+    "crates/celeris/src/config/edit.rs",
+    "crates/celeris/src/config/fields.rs",
+    "crates/celeris/src/daemon/config_admin.rs"
+   ],
+   "reason": "B0 は設定の動的変更（Web UI からの config 変更）を capability にしていない"
+  },
+  {
+   "id": "daemon-bootstrap-reload",
+   "name": "celeris daemon の起動・reload・停止と背景の周期 task の配線（config → dispatcher・API・log）",
+   "owner_paths": [
+    "crates/celeris/src/lib.rs",
+    "crates/celeris/src/daemon.rs",
+    "crates/celeris/src/daemon/bootstrap.rs",
+    "crates/celeris/src/daemon/admin.rs",
+    "crates/celeris/src/daemon/process_memory.rs"
+   ],
+   "reason": "B0 は daemon の起動・reload の配線を capability にしていない"
+  },
+  {
+   "id": "db-backup-maintenance",
+   "name": "本番 DB の backup・世代の保持・WAL checkpoint・VACUUM の保守",
+   "owner_paths": [
+    "crates/celeris/src/db_maintenance.rs"
+   ],
+   "reason": "B0 は DB の backup と保守を capability にしていない"
+  },
+  {
+   "id": "knowledge-curation-jobs",
+   "name": "知識の日次抽出・整理 job・知識整理 run・知識 GC（KB への適用と受信箱）",
+   "owner_paths": [
+    "crates/celeris/src/knowledge_curation.rs",
+    "crates/celeris/src/knowledge_maint.rs",
+    "crates/celeris/src/knowledge_gc.rs",
+    "crates/celeris/src/config/knowledge.rs"
+   ],
+   "reason": "B0 は知識の抽出・整理・GC の job を capability にしていない（cron-jobs は起動の枠だけ）"
+  },
+  {
+   "id": "doc-gardener",
+   "name": "案件の文書 repo の定期の文書整理（走査と review の予約）",
+   "owner_paths": [
+    "crates/celeris/src/doc_gardener.rs"
+   ],
+   "reason": "B0 は文書整理（ADR-0044）を capability にしていない"
+  },
+  {
+   "id": "browser-doctor",
+   "name": "browser 経路の本番前提（launcher・DNS・broker・台帳・鍵・site policy）の点検",
+   "owner_paths": [
+    "crates/celeris/src/browser_doctor.rs"
+   ],
+   "reason": "B0 の browser 系 capability は実行の経路で、前提を点検する doctor を持たない"
+  },
+  {
+   "id": "cluster-ssh-session",
+   "name": "クラスタへの ssh 接続（login session・ControlPath の点検・cluster 設定・最初の tick の接続）",
+   "owner_paths": [
+    "crates/celeris/src/cluster_admin.rs",
+    "crates/celeris/src/control_path.rs",
+    "crates/celeris/src/config/cluster.rs"
+   ],
+   "reason": "B0 はクラスタへの ssh 接続（ADR-0018・0032）を capability にしていない"
+  },
+  {
+   "id": "repo-health-checker-path",
+   "name": "daemon が release に同梱された repo health 検査器（CHECKER_TREE）の基底式を引く",
+   "owner_paths": [
+    "crates/celeris/src/daemon/repo_health_path.rs"
+   ],
+   "reason": "B0 は repo health の検査器の解決を capability にしていない（delivery は証跡を照合する側）"
+  },
+  {
+   "id": "task-genres-roles",
+   "name": "task の genre・role の検証と既定の適用（[[genres]]・[[roles]]）",
+   "owner_paths": [
+    "crates/celeris/src/config/harness.rs",
+    "crates/task-api/src/handlers/tasks.rs",
+    "crates/task-core/src/model.rs"
+   ],
+   "reason": "B0 は genre・role の既定の適用を capability にしていない"
+  },
+  {
+   "id": "local-machine-settings",
+   "name": "ローカルマシン設定（CLI > store > 設定 file の優先順位・PUT の監査と反映）",
+   "owner_paths": [
+    "crates/task-core/src/local_machine.rs",
+    "crates/task-core/src/store/local_machine.rs",
+    "crates/task-api/src/handlers/clusters.rs"
+   ],
+   "reason": "B0 はローカルマシン設定（ADR 2026-10-14）を capability にしていない"
+  },
+  {
+   "id": "model-catalog",
+   "name": "model catalog の発見・人の上書き・routing への反映（ADR 2026-10-06）",
+   "owner_paths": [
+    "crates/task-core/src/model_catalog.rs",
+    "crates/task-core/src/store/model_catalog.rs",
+    "crates/task-api/src/model_catalog.rs"
+   ],
+   "reason": "B0 は model catalog を lane・route の選択と別の capability にしていない"
+  },
+  {
+   "id": "org-projects-reports",
+   "name": "組織・案件・途中目標・報告の API（DB が正本、ADR-0033）",
+   "owner_paths": [
+    "crates/task-core/src/org.rs",
+    "crates/task-core/src/store/org.rs",
+    "crates/task-core/src/store/projects.rs",
+    "crates/task-core/src/report.rs",
+    "crates/task-api/src/handlers/org.rs",
+    "crates/task-api/src/handlers/projects.rs",
+    "crates/task-api/src/reports.rs"
+   ],
+   "reason": "B0 は組織・案件・報告の API を capability にしていない"
+  },
+  {
+   "id": "project-repos-workspace",
+   "name": "案件の repo と task の作業場所（案件 × repo の worktree、ADR-0043）",
+   "owner_paths": [
+    "crates/task-core/src/repos.rs",
+    "crates/task-core/src/store/repos.rs",
+    "crates/task-api/src/repos.rs"
+   ],
+   "reason": "B0 は案件の repo と作業場所を capability にしていない"
+  }
+ ],
  "files": {
   "crates/celeris/src/accounts_admin/tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "accounts-quota",
+   "contract": "accounts_admin の操作（login・削除・確認・usage 取得）は account の根ディレクトリと book と観測の event を更新して結果を返す",
    "b0_hint": [
     "accounts-quota"
    ],
@@ -37,11 +175,48 @@
     "spawn_check_reports_ok_and_records_observation_via_event",
     "usage_poll_skips_logged_out_and_logging_in_accounts_and_throttles_checks"
    ],
-   "fns": {}
+   "fns": {
+    "codex_login_start_returns_user_code_and_poll_detects_completion": {
+     "contract": "codex の login_start は user_code を返し、poll で完了を検出する（login/code を使わない）"
+    },
+    "expire_stale_codex_logins_cancels_sessions_older_than_the_injected_expiry": {
+     "contract": "codex の login session は呼び出し側が注入した期限より古ければ取り消される"
+    },
+    "expire_stale_logins_cancels_sessions_older_than_the_injected_expiry": {
+     "contract": "claude の login session は呼び出し側が注入した期限より古ければ取り消される"
+    },
+    "login_start_code_cancel_round_trip": {
+     "contract": "login は開始・code の送信・取消の順に session の状態が進む"
+    },
+    "remove_account_codex_uses_the_codex_root": {
+     "contract": "codex の remove_account は codex の根ディレクトリだけを見て、claude の根と混同しない"
+    },
+    "remove_account_missing_directory_is_not_found": {
+     "contract": "根ディレクトリの無い account の削除は not found になる"
+    },
+    "remove_account_moves_the_directory_cancels_login_and_clears_the_book": {
+     "contract": "account の削除はディレクトリを移し、進行中の login を取り消し、book から消す"
+    },
+    "spawn_check_codex_auth_failed": {
+     "contract": "未ログイン（401）の codex の確認は auth_failed を返す"
+    },
+    "spawn_check_codex_reports_ok_and_records_observation": {
+     "contract": "codex の確認は check_model を使わず check_account_codex に委ね、ok と観測を記録する"
+    },
+    "spawn_check_missing_account_is_not_found": {
+     "contract": "知らない account の確認は not found になる"
+    },
+    "spawn_check_reports_ok_and_records_observation_via_event": {
+     "contract": "claude の確認は ok を返し、観測を event で記録する"
+    },
+    "usage_poll_skips_logged_out_and_logging_in_accounts_and_throttles_checks": {
+     "contract": "usage の取得は未ログインと login 中の account を飛ばし、確認の間隔を空ける"
+    }
+   }
   },
   "crates/celeris/src/browser_doctor_tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "browser-doctor",
+   "contract": "browser doctor は launcher・DNS・broker・台帳・鍵・site policy の欠けや不一致を、本番を変えずに項目ごとの修正案付きで報告する",
    "b0_hint": [],
    "tests": [
     "browser_doctor_db_is_authoritative_warns_on_seed_difference_and_unknown_grant",
@@ -54,8 +229,8 @@
    "fns": {}
   },
   "crates/celeris/src/chat_gc_tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "cos-chat-threads-runs",
+   "contract": "chat GC は run 終了後の stream・upload 予約・参照の切れた blob を保持期限を過ぎたものだけ消し、注入した時計の間隔と gate に従って回る",
    "b0_hint": [
     "cos-chat-threads-runs"
    ],
@@ -70,8 +245,8 @@
    "fns": {}
   },
   "crates/celeris/src/cluster_admin/tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "cluster-ssh-session",
+   "contract": "cluster の login session の操作は manual・未知の cluster では ssh を起動せず 409・404 相当を返し、session が無い取消は成功する",
    "b0_hint": [],
    "tests": [
     "cancel_without_a_session_succeeds",
@@ -83,8 +258,8 @@
    "fns": {}
   },
   "crates/celeris/src/config/cos_tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "cos-chat-threads-runs",
+   "contract": "[cos.chat] の既定値・上書き・不正値と消した route 欄の拒否が設定の読み込みで決まり、例の設定は既定値を載せる",
    "b0_hint": [],
    "tests": [
     "chat_config_attachment_data_dir_is_db_dir",
@@ -99,11 +274,20 @@
     "cos_triage_authorization_safety_net_default_and_override",
     "cos_triage_human_required_uses_the_routine_answer_vocabulary"
    ],
-   "fns": {}
+   "fns": {
+    "cos_triage_authorization_safety_net_default_and_override": {
+     "capability": "cos-inbox-triage-operations-audit",
+     "contract": "認可の通知の安全網の秒数は既定で max_wall_secs+300 になり、書けば上書きされる"
+    },
+    "cos_triage_human_required_uses_the_routine_answer_vocabulary": {
+     "capability": "cos-inbox-triage-operations-audit",
+     "contract": "CoS triage の human_required の語彙と policy 版は定型の代答の語彙と一致する"
+    }
+   }
   },
   "crates/celeris/src/config/cron_tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "cron-jobs",
+   "contract": "[[cron.seed]] は読み込みで検証され、空の cron_jobs にだけ 1 回投入され、雛形の誤りは何も書かずに設定エラーになる",
    "b0_hint": [],
    "tests": [
     "cron_seed_example_toml_has_daily_curation_and_knowledge_curation_harness",
@@ -118,8 +302,8 @@
    "fns": {}
   },
   "crates/celeris/src/config/edit.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "config-runtime-edit",
+   "contract": "設定 file の書き換えは comment と順序を保ち、入れ子の key の表を作り、null で消し、不正な path を拒否する",
    "b0_hint": [],
    "tests": [
     "tests::arrays_of_tables_and_bad_paths",
@@ -129,8 +313,8 @@
    "fns": {}
   },
   "crates/celeris/src/config/fields.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "config-runtime-edit",
+   "contract": "設定の欄は最長一致で startup・dynamic に分類され（未知は startup）、配列は 1 欄、秘密は伏せ字で出る",
    "b0_hint": [],
    "tests": [
     "tests::flatten_keeps_arrays_as_one_field",
@@ -140,8 +324,8 @@
    "fns": {}
   },
   "crates/celeris/src/config/jev.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "jev-classifier",
+   "contract": "[jev] は表の有無によらず既定で無効で、全欄が往復し、無効でも不正値・未知欄は読み込みエラーになる",
    "b0_hint": [
     "jev-classifier"
    ],
@@ -154,8 +338,8 @@
    "fns": {}
   },
   "crates/celeris/src/config/llm_route.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "routing-lane-route",
+   "contract": "llm_sources・harness の宣言・lane の route_defaults は読み込みで検証され、route registry と harness balance に写る",
    "b0_hint": [],
    "tests": [
     "tests::execution_class_harness_requires_route_defaults",
@@ -168,11 +352,16 @@
     "tests::proxy_bound_harness_candidates_all_need_a_via_llm_proxy_route",
     "tests::wait_for_credential_builds_a_gate_and_requires_a_credential_ref"
    ],
-   "fns": {}
+   "fns": {
+    "tests::wait_for_credential_builds_a_gate_and_requires_a_credential_ref": {
+     "capability": "credential-broker-resume",
+     "contract": "source の wait_for_credential は credential_ref を必須にし、credential 待ちの gate を作る"
+    }
+   }
   },
   "crates/celeris/src/config/maintenance_tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "scratch-build-cache-disk-guard",
+   "contract": "[maintenance] の disk_watch・target_sweep は既定・上書き・相対 roots の解決が決まり、不正値は読み込みで落ちる",
    "b0_hint": [],
    "tests": [
     "disk_watch_config_defaults_and_overrides",
@@ -186,8 +375,8 @@
    "fns": {}
   },
   "crates/celeris/src/config/model_catalog.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "model-catalog",
+   "contract": "catalog に無い model は候補に残り、catalog で unavailable・disabled の model は候補から外れる",
    "b0_hint": [],
    "tests": [
     "tests::models_missing_from_the_catalog_are_left_alone",
@@ -196,8 +385,8 @@
    "fns": {}
   },
   "crates/celeris/src/config/project_controller.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "project-controller",
+   "contract": "[project_controller] の既定・未知欄・retention の必須欄が読み込みで検証される",
    "b0_hint": [],
    "tests": [
     "tests::budget_rates_need_all_four_fields_and_reject_priced_table_rows",
@@ -206,11 +395,24 @@
     "tests::project_controller_config_defaults_and_unknown_field",
     "tests::project_controller_retention_config_requires_archive_dir_and_positive_values"
    ],
-   "fns": {}
+   "fns": {
+    "tests::budget_rates_need_all_four_fields_and_reject_priced_table_rows": {
+     "capability": "budget-pricing",
+     "contract": "[budget_rates] の行は 4 欄が揃わなければ設定エラーになる"
+    },
+    "tests::legacy_token_cap_is_rejected_on_load": {
+     "capability": "budget-pricing",
+     "contract": "消した token 上限の旧欄は読み込みエラーで、message に旧欄名が出る"
+    },
+    "tests::max_usd_per_day_default_is_100_and_must_be_finite_positive": {
+     "capability": "budget-pricing",
+     "contract": "max_usd_per_day の既定は 100 で、有限の正数でなければ設定エラー"
+    }
+   }
   },
   "crates/celeris/src/config/routing_eval.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "routing-eval",
+   "contract": "[routing_eval] の reserved_runs は既定 0、未知欄は設定エラーで、書いた値は DispatchConfig.eval に届く",
    "b0_hint": [],
    "tests": [
     "tests::routing_eval_defaults_to_zero_reserved_runs",
@@ -220,8 +422,8 @@
    "fns": {}
   },
   "crates/celeris/src/config/routing_mode.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "jev-classifier",
+   "contract": "[routing] mode は fixed と jev を読み、表・欄を省けば fixed、未知の mode・欄は読み込みエラー",
    "b0_hint": [],
    "tests": [
     "tests::both_modes_parse",
@@ -231,8 +433,8 @@
    "fns": {}
   },
   "crates/celeris/src/config/script.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "script-runtime",
+   "contract": "[script] は既定で無く、値と既定を読み、不正値と消した active_bundle_sha256 欄は読み込みエラーになる",
    "b0_hint": [],
    "tests": [
     "tests::config_active_bundle_sha256_is_rejected",
@@ -243,8 +445,8 @@
    "fns": {}
   },
   "crates/celeris/src/config/tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "config-load-validation",
+   "contract": "celeris.toml の節は読み込みで既定値が入り、不正値・未知欄・消した欄は設定エラーになる",
    "b0_hint": [],
    "tests": [
     "accepts_acp_adapter_with_default_config",
@@ -357,11 +559,434 @@
     "verify_mode_config_does_not_serve_the_llm_proxy",
     "workspace_worktree_branch_prefix_defaults_to_celeris_slash_and_reaches_the_dispatcher"
    ],
-   "fns": {}
+   "fns": {
+    "accepts_acp_adapter_with_default_config": {
+     "capability": "worker-protocol-adapters",
+     "contract": "[adapters.acp] を省いた設定でも adapter は既定値で作られ、検証を通る"
+    },
+    "accepts_claude_code_adapter_with_default_config": {
+     "capability": "worker-protocol-adapters",
+     "contract": "[adapters.claude_code] を省いた設定でも adapter は既定値で作られ、検証を通る"
+    },
+    "accepts_codex_adapter_with_default_config": {
+     "capability": "worker-protocol-adapters",
+     "contract": "[adapters.codex] を省いた設定でも adapter は既定値で作られ、検証を通る"
+    },
+    "accepts_local_deep_research_adapter_with_default_config": {
+     "capability": "worker-protocol-adapters",
+     "contract": "[adapters.local_deep_research] を省いた設定でも adapter は既定値で作られ、検証を通る"
+    },
+    "accepts_paperqa_adapter_with_default_config": {
+     "capability": "worker-protocol-adapters",
+     "contract": "[adapters.paperqa] を省いた設定でも adapter は既定値で作られ、検証を通る"
+    },
+    "accounts_section_defaults_and_relative_dirs_are_resolved": {
+     "capability": "accounts-quota",
+     "contract": "[accounts] の既定値が入り、相対の claude_dir・codex_dir は設定 file 基準に解決される"
+    },
+    "accounts_section_rejects_zero_max_runs_and_unknown_keys": {
+     "capability": "accounts-quota",
+     "contract": "max_runs_per_account = 0・未知 key・根ディレクトリの欠けは設定エラーになる"
+    },
+    "adapter_subagents_setting_resolves_deterministically_and_defaults_to_deny": {
+     "capability": "worker-protocol-adapters",
+     "contract": "adapter の subagents の設定は決定的に解決され、既定は deny（worker は subagent を起こさない）"
+    },
+    "api_section_defaults_to_disabled_and_requires_token_off_loopback": {
+     "capability": "http-api-auth-principals",
+     "contract": "[api] は既定で無効で、loopback 以外で listen するなら token file が必須"
+    },
+    "apply_verify_smoke_drops_smoke_from_class_candidates": {
+     "capability": "routing-lane-route",
+     "contract": "apply_verify_smoke は execution class の候補から smoke の source を外す"
+    },
+    "backoff_and_reviewer_settings_map_to_dispatch_config": {
+     "capability": "review-runs-final-review",
+     "contract": "backoff と [reviewer] の既定値・指定値が DispatchConfig に写る"
+    },
+    "browser_runtime_defaults_to_daemon": {
+     "capability": "browser-launcher",
+     "contract": "[browser] runtime の既定は daemon"
+    },
+    "browser_runtime_launcher_uid_reaches_the_runtime_kind": {
+     "capability": "browser-launcher",
+     "contract": "launcher_uid は runtime の種類（launcher）まで届く"
+    },
+    "browser_runtime_launcher_with_socket_validates": {
+     "capability": "browser-launcher",
+     "contract": "socket を書いた runtime = launcher は検証を通る"
+    },
+    "browser_runtime_launcher_without_socket_is_rejected": {
+     "capability": "browser-launcher",
+     "contract": "socket の無い runtime = launcher は設定エラー"
+    },
+    "browser_runtime_unknown_value_is_rejected": {
+     "capability": "browser-launcher",
+     "contract": "未知の [browser] runtime は設定エラー"
+    },
+    "browser_settings_default_to_unconfigured_and_site_policy_validates": {
+     "capability": "browser-site-policy-trusted-devices",
+     "contract": "[browser] は既定で未設定で、site policy の種は読み込みで検証される"
+    },
+    "budget_rates_table_is_validated_by_config": {
+     "capability": "budget-pricing",
+     "contract": "top-level の [budget_rates] は Config::validate が 4 欄を検査する"
+    },
+    "class_candidates_are_validated_like_harness_candidates": {
+     "capability": "routing-lane-route",
+     "contract": "execution class の候補は harness の候補と同じく未宣言の source・model を設定エラーにする"
+    },
+    "claude_code_class_route_override_picks_opus_for_coding_only": {
+     "capability": "routing-lane-route",
+     "contract": "claude_code の coding class の route の上書きは coding だけの先頭 model を変える"
+    },
+    "cluster_auth_defaults_to_manual_and_only_three_values_are_accepted": {
+     "capability": "cluster-ssh-session",
+     "contract": "cluster の auth の既定は manual で、3 つの値だけを受ける"
+    },
+    "cluster_control_persist_defaults_to_yes_and_accepts_only_yes_or_positive_seconds": {
+     "capability": "cluster-ssh-session",
+     "contract": "control_persist の既定は yes で、yes か正の秒数だけを受ける"
+    },
+    "cluster_job_wait_defaults_and_validation": {
+     "capability": "cluster-ssh-session",
+     "contract": "cluster の job_wait は既定（poll 300 秒など）が入り、不正値は設定エラー"
+    },
+    "coding_harness_default_config_rejects_fixed_adapter_and_unknown_policy": {
+     "capability": "routing-lane-route",
+     "contract": "coding harness の adapter_policy は固定の adapter・conversation との併用と未知の値を設定エラーにする"
+    },
+    "config_examples_load": {
+     "contract": "例の設定（config/*.example.toml）は全部読めて、source・harness・route の参照が検証を通る"
+    },
+    "containers_build_dir_expands_home_and_resolves_relative_paths": {
+     "capability": "project-repos-workspace",
+     "contract": "[containers] build_dir は ~ を展開し、相対 path を設定 file 基準に解決する"
+    },
+    "containers_defaults_reach_the_dispatcher_and_bad_values_are_rejected": {
+     "capability": "project-repos-workspace",
+     "contract": "[containers] の既定値は dispatcher に届き、不正値は設定エラー"
+    },
+    "conversation_genre_defaults_to_secretary_and_an_unknown_genre_is_a_config_error": {
+     "capability": "task-genres-roles",
+     "contract": "[conversation] genre の既定は秘書の genre で、未知の genre は設定エラー"
+    },
+    "db_accepts_both_the_bare_path_string_and_the_table_form": {
+     "contract": "db は path の文字列でも [db] の表でも読める"
+    },
+    "delegation_on_child_failure_is_parsed_and_validated": {
+     "capability": "recursive-task-tree",
+     "contract": "on_child_failure は retry_then_ask（既定）と既知の値だけを受ける"
+    },
+    "delivery_auto_resolve_defaults_follow_the_parallel_integration_adr": {
+     "capability": "pre-review-sync-auto-resolve-integration-repair",
+     "contract": "[delivery.auto_resolve] の既定値は並列取り込みの ADR のとおり"
+    },
+    "delivery_auto_resolve_overrides_and_validation": {
+     "capability": "pre-review-sync-auto-resolve-integration-repair",
+     "contract": "[delivery.auto_resolve] の上書きが読め、不正値は設定エラー"
+    },
+    "dispatch_config_resolves_the_langmem_api_key_from_secrets": {
+     "capability": "knowledge-curation-jobs",
+     "contract": "dispatch_config().knowledge.langmem_api_key は secrets から解決される"
+    },
+    "dispatch_min_free_disk_mb_can_be_configured": {
+     "capability": "scratch-build-cache-disk-guard",
+     "contract": "dispatch の min_free_disk_mb は設定で変えられる"
+    },
+    "empty_class_candidates_are_a_config_error": {
+     "capability": "routing-lane-route",
+     "contract": "空の execution class の候補は設定エラー"
+    },
+    "ensure_accounts_dir_creates_the_directories_with_0700": {
+     "capability": "accounts-quota",
+     "contract": "ensure_accounts_dir は claude_dir・codex_dir をそれぞれ 0700 で作る"
+    },
+    "ensure_secrets_dir_creates_the_directory_with_0700": {
+     "contract": "ensure_secrets_dir は [secrets] dir を 0700 で作る"
+    },
+    "env_from_secrets_is_parsed_on_adapters": {
+     "capability": "worker-protocol-adapters",
+     "contract": "[adapters.*] の env_from_secrets を読み、未知 key は拒否する"
+    },
+    "example_org_routes_ui_work_to_ui_ux_and_api_work_to_software_engineering": {
+     "capability": "org-projects-reports",
+     "contract": "例の組織の matching は UI の仕事を ui-ux 課に、API の仕事を software-engineering 課に選ぶ"
+    },
+    "execution_continuation_hard_limit_default_validation_and_old_field_is_an_error": {
+     "capability": "continuation-session-resume",
+     "contract": "continuation の固い上限の既定は 12 で、範囲外と消した旧欄は設定エラー"
+    },
+    "execution_max_cos_runs_default_and_validation": {
+     "capability": "cos-chat-threads-runs",
+     "contract": "[execution] max_cos_runs の既定は 2 で、範囲外は設定エラー"
+    },
+    "execution_tree_defaults_and_validation": {
+     "capability": "recursive-task-tree",
+     "contract": "[execution.tree] は既定で無効で、深さなどの範囲外は設定エラー"
+    },
+    "genres_are_parsed_and_mapped": {
+     "capability": "task-genres-roles",
+     "contract": "[[genres]] を読み、task-core の GenreSpec に写す"
+    },
+    "github_defaults_to_gh_and_merge_and_rejects_other_merge_methods": {
+     "capability": "delivery-merge-candidate",
+     "contract": "[github] の既定は gh と merge で、ほかの merge 方式は設定エラー"
+    },
+    "hot_mount_check_refuses_a_plain_directory_on_the_root_filesystem": {
+     "capability": "scratch-build-cache-disk-guard",
+     "contract": "[storage] hot_mount が mount point でなく root fs の普通の dir なら拒否する"
+    },
+    "hot_paths_follow_the_adr_0136_keys_and_default_to_the_previous_locations": {
+     "capability": "scratch-build-cache-disk-guard",
+     "contract": "hot な path は既存の key で /local 側に変えられ、書かなければ従来の場所になる"
+    },
+    "langmem_api_key_config_uses_the_proxy_token_when_targeting_llm_proxy": {
+     "capability": "llm-proxy",
+     "contract": "langmem の base_url が同じ celeris の llm-proxy を指すなら api key は proxy の token になる"
+    },
+    "langmem_api_key_config_uses_the_secret_for_other_endpoints_and_warns_if_missing": {
+     "capability": "knowledge-curation-jobs",
+     "contract": "proxy 以外を指す langmem の api key は api_key_secret の値で、解決できなければ起動時に警告する"
+    },
+    "langmem_auth_warnings_config_reports_a_missing_proxy_bearer": {
+     "capability": "knowledge-curation-jobs",
+     "contract": "proxy を指す langmem に proxy の token が無ければ警告を出す"
+    },
+    "legacy_providers_rejected_with_new_config_guidance": {
+     "capability": "routing-lane-route",
+     "contract": "消した providers の欄は新しい書き方を示す読み込みエラーになる"
+    },
+    "legacy_token_caps_are_rejected_with_the_field_name": {
+     "capability": "budget-pricing",
+     "contract": "消した token 上限の旧欄は読み込みエラーで、message に旧欄名が出る"
+    },
+    "loads_acp_opencode_example_config": {
+     "contract": "acp（opencode）の例の設定 file が読め、設定の検証を通る"
+    },
+    "loads_aider_example_config": {
+     "contract": "aider の例の設定 file が読め、設定の検証を通る"
+    },
+    "loads_claude_code_dogfood_example_config": {
+     "contract": "claude-code の dogfood の例の設定 file が読め、設定の検証を通る"
+    },
+    "loads_codex_dogfood_example_config": {
+     "contract": "codex の dogfood の例の設定 file が読め、設定の検証を通る"
+    },
+    "loads_example_config_and_resolves_relative_paths": {
+     "contract": "例の設定 file が読め、相対 path は設定 file 基準に解決される"
+    },
+    "loads_research_example_config": {
+     "contract": "分野・調査 harness を載せた例の設定 file が読め、検証を通る"
+    },
+    "loads_the_org_example_and_maps_it_to_org_nodes": {
+     "capability": "org-projects-reports",
+     "contract": "例の組織の設定（org.example.toml）が読め、組織図の node に写る"
+    },
+    "loads_web_research_example_config": {
+     "contract": "Web 調査（Local Deep Research）の例の設定 file が読め、検証を通る"
+    },
+    "mcp_listeners_parse_and_validate_are_wired_into_config": {
+     "capability": "celeris-mcp",
+     "contract": "[[mcp.listeners]] は Config::validate で検証される"
+    },
+    "memory_dir_is_resolved_created_with_0700_and_passed_to_the_dispatcher": {
+     "contract": "[memory] dir は設定 file 基準で絶対化され、0700 で作られ、dispatcher に渡る"
+    },
+    "migration_runbook_toml_loads": {
+     "contract": "移行の手順書と進捗に載せた TOML の断片が設定として読める"
+    },
+    "model_routing_section_rejected_with_route_defaults_guidance": {
+     "capability": "routing-lane-route",
+     "contract": "消した [model_routing] は route_defaults を示す読み込みエラーになる"
+    },
+    "multi_account_example_mentions_account_pool_commented_out": {
+     "capability": "accounts-quota",
+     "contract": "例の設定の comment にした [accounts]・account_pool の節も外せば構文として妥当"
+    },
+    "notify_defaults_are_used_when_the_section_is_absent": {
+     "capability": "notifications",
+     "contract": "[notify] を書かなくても既定値が入り、送り出しの間隔を設定できる"
+    },
+    "omitted_paths_default_to_the_celeris_xdg_layout": {
+     "contract": "省いた db・workspace_root などの置き場は celeris の XDG の配置になる"
+    },
+    "opencode_go_example_config_loads_and_routes_as_opencode_go_subscription": {
+     "capability": "routing-lane-route",
+     "contract": "opencode-go の例の設定は読め、opencode-go の subscription の source として route される"
+    },
+    "opencode_model_namespace_deserializes_and_validates": {
+     "capability": "routing-lane-route",
+     "contract": "opencode の model_namespace は空と / を含む値を設定エラーにする"
+    },
+    "org_include_is_optional_but_must_exist_when_written": {
+     "capability": "org-projects-reports",
+     "contract": "org_include を書かなければ組織の種は空で、書いたのに file が無ければ設定エラー"
+    },
+    "paperqa_paths_are_resolved_relative_to_the_config_file": {
+     "capability": "worker-protocol-adapters",
+     "contract": "paperqa の paper_directory・index の path は設定 file 基準で絶対化される"
+    },
+    "parses_worktree_sync_and_maps_it_to_the_worker_settings": {
+     "capability": "cluster-ssh-session",
+     "contract": "sync = worktree は読めて、worktree の設定が worker の cluster 設定に写る"
+    },
+    "pi_harness_declaration_deserializes_extensions_tools_and_env": {
+     "capability": "routing-lane-route",
+     "contract": "pi の harness 宣言は extensions・tools・env を読む"
+    },
+    "plan_auto_accept_is_parsed_and_unknown_plan_keys_are_rejected": {
+     "capability": "decisions-plan-gate",
+     "contract": "plan の auto_accept を読み、[plan] の未知 key は設定エラー"
+    },
+    "planner_adapter_is_rejected_with_candidate_guidance": {
+     "capability": "routing-lane-route",
+     "contract": "消した planner の adapter 欄は候補の書き方を示す読み込みエラーになる"
+    },
+    "planner_without_adapter_keeps_its_budget_and_permission_settings": {
+     "capability": "execution-plan-adoption",
+     "contract": "adapter を書かない [execution.planner] も max_turns と permission_mode を持つ"
+    },
+    "proxy_tier_alias_rejected_in_celeris_config": {
+     "capability": "llm-proxy",
+     "contract": "消した [llm_proxy.models]（tier alias）は新しい書き方を示す読み込みエラーになる"
+    },
+    "reads_local_deep_research_adapter_settings": {
+     "capability": "worker-protocol-adapters",
+     "contract": "[adapters.local_deep_research] の mode・iterations・questions_per_iteration などが adapter の設定に写る"
+    },
+    "reads_local_deep_research_evidence_thresholds": {
+     "capability": "worker-protocol-adapters",
+     "contract": "[adapters.local_deep_research.evidence] の閾値が読める"
+    },
+    "reads_paperqa_acquire_and_evidence_tables": {
+     "capability": "worker-protocol-adapters",
+     "contract": "[adapters.paperqa.acquire] と evidence の表が読める"
+    },
+    "rejects_duplicate_genre_ids_and_genres_referencing_unknown_or_mismatched_roles": {
+     "capability": "task-genres-roles",
+     "contract": "genre id の重複と知らない・合わない role を指す genre は設定エラー"
+    },
+    "rejects_duplicate_roles_removed_role_adapter_and_zero_limits": {
+     "capability": "task-genres-roles",
+     "contract": "role id の重複・消した adapter 欄・0 の上限は設定エラー"
+    },
+    "rejects_org_seeds_that_do_not_form_one_tree": {
+     "capability": "org-projects-reports",
+     "contract": "知らない genre・重複 id・秘書が 0 か 2・知らない親の組織の種は設定エラー"
+    },
+    "rejects_unknown_acp_permission_value": {
+     "capability": "worker-protocol-adapters",
+     "contract": "acp の permission は AcpPermission の既知の値だけを受け、ほかは設定エラー"
+    },
+    "rejects_unknown_fields_in_acp_adapter_config": {
+     "capability": "worker-protocol-adapters",
+     "contract": "[adapters.acp] の未知の欄は設定エラーになる"
+    },
+    "rejects_unknown_fields_in_claude_code_adapter_config": {
+     "capability": "worker-protocol-adapters",
+     "contract": "[adapters.claude_code] の未知の欄は設定エラーになる"
+    },
+    "rejects_unknown_fields_in_codex_adapter_config": {
+     "capability": "worker-protocol-adapters",
+     "contract": "[adapters.codex] の未知の欄は設定エラーになる"
+    },
+    "rejects_unknown_fields_in_local_deep_research_adapter_config": {
+     "capability": "worker-protocol-adapters",
+     "contract": "[adapters.local_deep_research] の未知の欄は設定エラーになる"
+    },
+    "rejects_unknown_fields_in_local_deep_research_evidence_table": {
+     "capability": "worker-protocol-adapters",
+     "contract": "[adapters.local_deep_research.evidence] の未知の欄は設定エラーになる"
+    },
+    "rejects_unknown_fields_in_paperqa_adapter_config": {
+     "capability": "worker-protocol-adapters",
+     "contract": "[adapters.paperqa] の未知の欄は設定エラーになる"
+    },
+    "rejects_unknown_sync_modes_and_worktree_auto_removal": {
+     "capability": "cluster-ssh-session",
+     "contract": "sync の既定は rsync で、未知の sync と worktree の自動削除は設定エラー"
+    },
+    "rejects_zero_cooldown_and_unsafe_lease_grace": {
+     "capability": "run-claim-lease",
+     "contract": "cooldown 0 と lease の延長の前提を破る猶予は設定エラー"
+    },
+    "removed_scratch_cache_sections_are_load_errors": {
+     "capability": "scratch-build-cache-disk-guard",
+     "contract": "消した [scratch.sccache]・[scratch.l2]・[scratch.cache_server] は読み込みエラー"
+    },
+    "reviewer_adapter_must_name_a_declared_harness_and_unknown_reviewer_keys_fail": {
+     "capability": "review-runs-final-review",
+     "contract": "reviewer の adapter は宣言した harness を指さなければ設定エラーで、[reviewer] の未知 key も拒否する"
+    },
+    "roles_and_delegation_are_parsed_and_mapped": {
+     "capability": "task-genres-roles",
+     "contract": "[[roles]] と [delegation] を読み、task-core の型に写す"
+    },
+    "route_defaults_classes_build_the_registry": {
+     "capability": "routing-lane-route",
+     "contract": "route_defaults の classes は route registry の class 既定に写る"
+    },
+    "scratch_can_be_disabled": {
+     "capability": "scratch-build-cache-disk-guard",
+     "contract": "[scratch] enabled = false で scratch pool を使わない"
+    },
+    "scratch_cargo_defaults_disable_incremental": {
+     "capability": "scratch-build-cache-disk-guard",
+     "contract": "[scratch.cargo] は既定で有効で incremental を切り、消した cache 設定を worker に渡さない"
+    },
+    "scratch_defaults_follow_the_build_cache_parent": {
+     "capability": "scratch-build-cache-disk-guard",
+     "contract": "[scratch] dir の既定は build_cache_dir の親の下"
+    },
+    "scratch_mount_falls_back_to_default_dir_and_seed_reflink_defaults_off": {
+     "capability": "scratch-build-cache-disk-guard",
+     "contract": "[scratch] mount が mount されていなければ dir を既定に戻し、seed の reflink は既定で無効"
+    },
+    "secrets_dir_is_parsed_and_resolved_relative_to_the_config_file": {
+     "contract": "[secrets] dir を読み、相対 path を設定 file 基準に絶対化する"
+    },
+    "selfdeploy_delivery_projects_is_removed_and_rejected": {
+     "capability": "delivery-merge-candidate",
+     "contract": "消した [selfdeploy] delivery_projects は読み込みエラー（自動取り込みは案件の属性）"
+    },
+    "selfdeploy_push_defaults_to_true_and_origin_and_rejects_blank_remote": {
+     "capability": "release-selfdeploy-wiring",
+     "contract": "[selfdeploy] push の既定は true・origin で、空の push_remote は設定エラー"
+    },
+    "selfdeploy_releases_dir_defaults_to_the_state_dir_and_resolves_relative_paths": {
+     "capability": "release-selfdeploy-wiring",
+     "contract": "[selfdeploy] releases_dir の既定は state dir の下で、相対 path は設定 file 基準に解決される"
+    },
+    "the_knowledge_harness_fallback_is_configurable": {
+     "capability": "knowledge-curation-jobs",
+     "contract": "knowledge harness の fallback は設定で変えられる"
+    },
+    "the_knowledge_section_resolves_its_root_and_checks_the_default_mounts": {
+     "capability": "knowledge-curation-jobs",
+     "contract": "[knowledge] は既定でも root を持ち、root を解決して既定の mount を検査する"
+    },
+    "the_two_example_files_load_together_through_org_include": {
+     "capability": "org-projects-reports",
+     "contract": "例の設定 2 つは org_include で一緒に読める"
+    },
+    "unknown_execution_class_is_a_config_error": {
+     "capability": "routing-lane-route",
+     "contract": "未知の execution class は設定エラー"
+    },
+    "verify_mode_config_does_not_serve_the_llm_proxy": {
+     "capability": "llm-proxy",
+     "contract": "verify（本番の config を読む staging）は [llm_proxy] の listen を立てない"
+    },
+    "workspace_worktree_branch_prefix_defaults_to_celeris_slash_and_reaches_the_dispatcher": {
+     "capability": "project-repos-workspace",
+     "contract": "[workspace] の worktree の branch 接頭辞の既定は celeris/ で、dispatcher に届く"
+    }
+   }
   },
   "crates/celeris/src/control_path/tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "cluster-ssh-session",
+   "contract": "ssh の ControlPath の点検は 90 byte 超・親 dir の所有と 0700・ControlMaster/ControlPath の無効・linger を警告し、正常なら persist の情報だけ出す",
    "b0_hint": [],
    "tests": [
     "a_normal_setup_has_no_warnings_only_the_persist_info",
@@ -375,8 +1000,8 @@
    "fns": {}
   },
   "crates/celeris/src/daemon/adapters.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "worker-protocol-adapters",
+   "contract": "daemon は宣言した harness ごとに adapter を 1 つ作り、pi・opencode の宣言を設定と process まで届け、未知の harness kind を拒否する",
    "b0_hint": [],
    "tests": [
     "harness_adapter_tests::opencode_harness_passes_model_namespace",
@@ -388,19 +1013,32 @@
    "fns": {}
   },
   "crates/celeris/src/daemon/admin.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "daemon-bootstrap-reload",
+   "contract": "reload は設定の節を daemon に書き戻し、不正な変更では旧い設定を保つ",
    "b0_hint": [],
    "tests": [
     "cos_chat_config_tests::cos_chat_config_reload_keeps_old_config_on_invalid_mapping",
     "routing_mode_wire_tests::reload_writes_back_the_jev_section_so_the_next_tick_builds_the_stage",
     "routing_mode_wire_tests::routing_mode_reaches_the_dispatcher_through_bootstrap_and_reload"
    ],
-   "fns": {}
+   "fns": {
+    "cos_chat_config_tests::cos_chat_config_reload_keeps_old_config_on_invalid_mapping": {
+     "capability": "cos-chat-threads-runs",
+     "contract": "reload で [cos.chat] の mapping が不正なら旧い chat 設定を保つ"
+    },
+    "routing_mode_wire_tests::reload_writes_back_the_jev_section_so_the_next_tick_builds_the_stage": {
+     "capability": "jev-classifier",
+     "contract": "reload は [jev] を config.jev に書き戻し、次の tick で分類段が作られる"
+    },
+    "routing_mode_wire_tests::routing_mode_reaches_the_dispatcher_through_bootstrap_and_reload": {
+     "capability": "jev-classifier",
+     "contract": "[routing] mode は起動（build_dispatcher）と reload の両方で dispatcher に届く"
+    }
+   }
   },
   "crates/celeris/src/daemon/api_account_limits_tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "accounts-quota",
+   "contract": "account の同時実行上限は PATCH で検証・保存され、reload と再起動の後も残る（暗黙の source account を含む）",
    "b0_hint": [],
    "tests": [
     "implicit_source_account_limit_survives_reload",
@@ -409,8 +1047,8 @@
    "fns": {}
   },
   "crates/celeris/src/daemon/api_chat_tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "cos-chat-threads-runs",
+   "contract": "daemon の API 配線は chat の data dir と上限を API に渡し、store を開くとき旧い chat の migration を走らせる",
    "b0_hint": [],
    "tests": [
     "chat_wiring_daemon_store_open_runs_legacy_migration",
@@ -419,8 +1057,8 @@
    "fns": {}
   },
   "crates/celeris/src/daemon/bootstrap_worker_db_guard_tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "sandbox-db-guard",
+   "contract": "worker run の中の daemon は本番の DB・state dir・token を開く前に拒否し、試験用 DB は免除し、本番 config が読めなければ unknown にする",
    "b0_hint": [],
    "tests": [
     "egress_test_loopback_production_db_or_config_daemon_refuses_test_launcher",
@@ -449,11 +1087,16 @@
     "worker_guard_opt_out_refuses_production_inside_worker_run",
     "worker_guard_probe_production_without_marker"
    ],
-   "fns": {}
+   "fns": {
+    "egress_test_loopback_production_db_or_config_daemon_refuses_test_launcher": {
+     "capability": "browser-launcher",
+     "contract": "本番の DB か config で動く daemon は loopback 例外の試験用 launcher を拒否する"
+    }
+   }
   },
   "crates/celeris/src/daemon/browser_ledger_path_tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "browser-site-policy-trusted-devices",
+   "contract": "browser 適合台帳の path は env の上書き > 実行中の binary の release dir の順に決まり、どちらも無ければ None",
    "b0_hint": [],
    "tests": [
     "browser_ledger_release_env_override_wins",
@@ -463,8 +1106,8 @@
    "fns": {}
   },
   "crates/celeris/src/daemon/classify_stage/tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "jev-classifier",
+   "contract": "分類段は fixed では分類器を呼ばず、成功は jev_ok と hint、失敗は理由名付きで fixed に戻し、cheap へ下げず実 API 検証の印を立てない",
    "b0_hint": [],
    "tests": [
     "board_call_carries_response_versions_and_fallback_has_none",
@@ -476,11 +1119,18 @@
     "missing_key_hands_the_gate_to_the_existing_credential_wait",
     "success_is_jev_ok_with_a_hint_and_never_marks_the_real_api_verified"
    ],
-   "fns": {}
+   "fns": {
+    "classification_log_shows_specificity_and_confidence_but_no_input_text": {
+     "contract": "分類 log は subject・specificity・確信（欠測は missing）を出し、入力の本文を出さない"
+    },
+    "missing_key_hands_the_gate_to_the_existing_credential_wait": {
+     "contract": "key の無い分類は既存の credential 待ちに gate を渡す"
+    }
+   }
   },
   "crates/celeris/src/daemon/classify_tick/e2e.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "jev-classifier",
+   "contract": "未登録の key では credential 待ちと通知の後に 1 回だけ再開して分類し、rate limit は credential 待ちにしない",
    "b0_hint": [
     "jev-classifier"
    ],
@@ -491,8 +1141,8 @@
    "fns": {}
   },
   "crates/celeris/src/daemon/classify_tick/tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "jev-classifier",
+   "contract": "tick の分類段は有効なら ready の task と pending の WU を先に分類して board を埋め（冪等・run ごとに上限）、fixed・無効では分類しない",
    "b0_hint": [
     "jev-classifier"
    ],
@@ -509,8 +1159,8 @@
    "fns": {}
   },
   "crates/celeris/src/daemon/config_admin.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "config-runtime-edit",
+   "contract": "設定の変更 API は動的な欄を再起動なしで daemon に反映して comment を保って書き戻し、startup 欄・不正値は何も変えずに拒否する",
    "b0_hint": [],
    "tests": [
     "tests::account_max_runs_changes_without_restart_and_survives_a_config_change",
@@ -522,8 +1172,8 @@
    "fns": {}
   },
   "crates/celeris/src/daemon/jev_key.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "jev-classifier",
+   "contract": "Jev の key は呼ぶたびに読み直して bearer で送り、401・403 は credential を要求し、429・5xx は要求せず、値は debug 出力に出ない",
    "b0_hint": [],
    "tests": [
     "tests::auth_failures_401_403_request_credential_and_the_key_is_sent_as_bearer",
@@ -535,8 +1185,8 @@
    "fns": {}
   },
   "crates/celeris/src/daemon/jev_verifier.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "jev-classifier",
+   "contract": "Jev の疎通確認（noul ping）の本文は文字列の基準を持たない",
    "b0_hint": [],
    "tests": [
     "ping_body_tests::noul_ping_has_no_string_criteria"
@@ -544,8 +1194,8 @@
    "fns": {}
   },
   "crates/celeris/src/daemon/process_memory.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "daemon-bootstrap-reload",
+   "contract": "process_memory の log は /proc/self/status の欄を読み、V8 の generation の heap を合計する",
    "b0_hint": [],
    "tests": [
     "tests::process_memory_parses_proc_status_fields",
@@ -555,8 +1205,8 @@
    "fns": {}
   },
   "crates/celeris/src/daemon/repo_health_path_tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "repo-health-checker-path",
+   "contract": "daemon は --release の release dir の repo-health/ の CHECKER_TREE から同梱検査器の基底式を作り、無い・壊れている・release なしでは None",
    "b0_hint": [],
    "tests": [
     "health_evidence_bundled_checker_tree_gives_base_formula",
@@ -566,8 +1216,8 @@
    "fns": {}
   },
   "crates/celeris/src/daemon/routing_guardrail_tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "routing-eval",
+   "contract": "routing guardrail は enforce の組を停止条件で shadow に戻して event と通知を 1 回出し、quota 低下は通知だけにし、自動で enforce へ上げない",
    "b0_hint": [],
    "tests": [
     "plan_pair_keeps_enforce_below_thresholds_and_skips_shadow",
@@ -582,8 +1232,8 @@
    "fns": {}
   },
   "crates/celeris/src/daemon/script_exhaustive_tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "script-runtime",
+   "contract": "exhaustive 検証は全入力を正順・逆順で流し、不一致・安全違反・失敗率・timeout の連続・停止・generation 消失・壁時計で打ち切る",
    "b0_hint": [],
    "tests": [
     "exhaustive_drive_all_inputs_forward_then_reverse",
@@ -597,11 +1247,15 @@
     "exhaustive_wall_limit_aborts",
     "nearest_rank_percentiles"
    ],
-   "fns": {}
+   "fns": {
+    "nearest_rank_percentiles": {
+     "contract": "exhaustive の計測の percentile は nearest rank で求める"
+    }
+   }
   },
   "crates/celeris/src/daemon/script_guard_stop_tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "script-runtime",
+   "contract": "script guard は canary の不一致・失敗率・timeout・安全違反で rollback し、計数は再起動後も残り、自動で昇格しない",
    "b0_hint": [
     "script-runtime"
    ],
@@ -620,8 +1274,8 @@
    "fns": {}
   },
   "crates/celeris/src/daemon/script_guard_tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "script-runtime",
+   "contract": "script の受信箱の項目は event ごとに 1 回だけ作られ（再起動後も）、人の操作では作らずに開いた項目を閉じる",
    "b0_hint": [
     "script-runtime"
    ],
@@ -634,8 +1288,8 @@
    "fns": {}
   },
   "crates/celeris/src/daemon/script_layer_tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "script-runtime",
+   "contract": "script の restore は保存済みの checkpoint の版を manifest が含まない・使えない mode なら理由 code 付きで戻す",
    "b0_hint": [
     "script-runtime"
    ],
@@ -647,8 +1301,8 @@
    "fns": {}
   },
   "crates/celeris/src/daemon/script_ops_measure_tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "script-runtime",
+   "contract": "script の generation の再起動・drain・退役の周期を繰り返しても daemon の RSS が増え続けない",
    "b0_hint": [
     "script-runtime"
    ],
@@ -658,8 +1312,8 @@
    "fns": {}
   },
   "crates/celeris/src/daemon/script_policy.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "script-runtime",
+   "contract": "script policy の拒否は safety_violation の code に写り、error kind は script error の直列化と一致する",
    "b0_hint": [],
    "tests": [
     "tests::script_policy_denied_maps_to_safety_violation_code",
@@ -668,8 +1322,8 @@
    "fns": {}
   },
   "crates/celeris/src/daemon/services.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "routing-audit-outcome",
+   "contract": "daemon は 1 つの route registry を dispatcher と llm-proxy に共有し、proxy sink は相関のある要求だけを 1 回追記する",
    "b0_hint": [
     "routing-audit-outcome"
    ],
@@ -680,8 +1334,8 @@
    "fns": {}
   },
   "crates/celeris/src/daemon/stranded_sweep.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "pre-review-sync-auto-resolve-integration-repair",
+   "contract": "stranded sweep は起動直後と周期ごとに走り、repo ごとに head を 1 回読み、重なった tick で 2 本目を起こさず、panic の後も slot を返す",
    "b0_hint": [],
    "tests": [
     "tests::stranded_heads_are_read_once_per_repository",
@@ -692,8 +1346,8 @@
    "fns": {}
   },
   "crates/celeris/src/daemon/tick_loop.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "script-runtime",
+   "contract": "script の tick 待ちの log は 10 分ごとにだけ出る",
    "b0_hint": [],
    "tests": [
     "script_tick_wait_log_tests::script_tick_wait_log_is_due_every_ten_minutes"
@@ -701,8 +1355,8 @@
    "fns": {}
   },
   "crates/celeris/src/db_maintenance/tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "db-backup-maintenance",
+   "contract": "DB の backup は復元できる写しを書き、日・週・promote の世代を保持し、整合性が壊れたら何も消さず、checkpoint と周期 task は止められる",
    "b0_hint": [],
    "tests": [
     "backup_once_fails_clearly_when_the_backup_dir_is_missing",
@@ -720,11 +1374,54 @@
     "vacuum_backup_finishes_with_a_concurrent_writer_and_integrity_ok",
     "vacuum_progress_handler_interrupts_an_active_copy"
    ],
-   "fns": {}
+   "fns": {
+    "backup_once_fails_clearly_when_the_backup_dir_is_missing": {
+     "contract": "backup の dir が無ければ backup は理由の分かる error で失敗する"
+    },
+    "backup_once_writes_a_restorable_copy_and_keeps_recent_generations": {
+     "contract": "backup は復元できる写しを書き、直近の世代を残す"
+    },
+    "backup_retention_daily_and_weekly_generations_are_kept": {
+     "contract": "backup の保持は日ごと・週ごとの世代を残す"
+    },
+    "backup_retention_ignores_other_file_names": {
+     "contract": "backup の保持は backup の名前でない file に触らない"
+    },
+    "backup_retention_integrity_failure_skips_all_deletions": {
+     "contract": "整合性の検査に落ちた backup があれば保持は何も消さない"
+    },
+    "backup_retention_keeps_every_backup_inside_48_hours": {
+     "contract": "48 時間以内の backup は全部残す"
+    },
+    "backup_retention_protects_latest_per_kind_and_three_rollbacks": {
+     "contract": "種類ごとの最新と rollback 用の 3 世代は消さない"
+    },
+    "backup_retention_total_limit_prunes_periodic_before_promote": {
+     "contract": "総量の上限では周期の backup を promote の backup より先に消す"
+    },
+    "checkpoint_once_runs_on_a_fresh_wal_db_without_error": {
+     "contract": "新しい WAL の DB でも checkpoint は error なく走る"
+    },
+    "incomplete_backups_are_cleaned_and_cancel_does_not_publish": {
+     "contract": "途中の backup は片付け、取消では公開しない"
+    },
+    "incremental_backup_progress_restarts_after_other_connection_writes": {
+     "contract": "1 page ずつの旧い backup は別の接続の書き込みで進捗が戻る（旧方式の計測）"
+    },
+    "spawned_tasks_run_on_their_interval_and_stop_cleanly": {
+     "contract": "backup・checkpoint の周期 task は間隔ごとに走り、stop で止まる"
+    },
+    "vacuum_backup_finishes_with_a_concurrent_writer_and_integrity_ok": {
+     "contract": "VACUUM の backup は並行する書き込みがあっても終わり、整合性が保たれる"
+    },
+    "vacuum_progress_handler_interrupts_an_active_copy": {
+     "contract": "VACUUM の progress handler は走っている写しを中断できる"
+    }
+   }
   },
   "crates/celeris/src/delivery/health_enforce_tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "delivery-merge-candidate",
+   "contract": "delivery は health の証跡の base_sha の不一致と承認に結び付かない PolicyOnly を拒否し、review が作った証跡は通す",
    "b0_hint": [
     "delivery-merge-candidate",
     "pre-review-sync-auto-resolve-integration-repair"
@@ -737,8 +1434,8 @@
    "fns": {}
   },
   "crates/celeris/src/delivery/health_evidence_tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "delivery-merge-candidate",
+   "contract": "delivery は適用判定が Applies の repo で、同じ検査器の版・同じ tree の health 項目の Pass の証跡が無ければ取り込まない",
    "b0_hint": [
     "delivery-merge-candidate",
     "pre-review-sync-auto-resolve-integration-repair"
@@ -756,8 +1453,8 @@
    "fns": {}
   },
   "crates/celeris/src/delivery/tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "delivery-merge-candidate",
+   "contract": "delivery は候補と基底に結び付いた合格の証跡でだけ merge し、push・release 準備・通知を進め、基底や候補が動けば承認を再利用せず再 review にする",
    "b0_hint": [
     "delivery-merge-candidate",
     "pre-review-sync-auto-resolve-integration-repair"
@@ -799,11 +1496,106 @@
     "technical_failure_is_repaired_once_with_no_cos_review_or_message",
     "tick_advances_only_projects_with_auto_integrate"
    ],
-   "fns": {}
+   "fns": {
+    "auto_resolve_cargo_lock_conflict_is_regenerated_and_regated": {
+     "capability": "pre-review-sync-auto-resolve-integration-repair",
+     "contract": "auto_resolve は Cargo.lock だけの衝突を再生成して再 gate する"
+    },
+    "auto_resolve_cargo_lock_with_cargo_toml_conflict_requests_integration": {
+     "capability": "pre-review-sync-auto-resolve-integration-repair",
+     "contract": "auto_resolve は Cargo.toml を伴う Cargo.lock の衝突を人の統合依頼にする"
+    },
+    "auto_resolve_clean_main_follow_is_counted_and_left_to_the_legacy_path": {
+     "capability": "pre-review-sync-auto-resolve-integration-repair",
+     "contract": "衝突の無い main 追従は auto_resolve の回数に数え、従来の経路に任せる"
+    },
+    "auto_resolve_code_conflict_requests_integration_and_aborts_merge": {
+     "capability": "pre-review-sync-auto-resolve-integration-repair",
+     "contract": "code の衝突は merge を中止して統合依頼にする"
+    },
+    "auto_resolve_local_repair_limit_requests_integration": {
+     "capability": "pre-review-sync-auto-resolve-integration-repair",
+     "contract": "局所修復の上限に達したら統合依頼にする"
+    },
+    "auto_resolve_progress_append_conflict_is_resolved_and_regated": {
+     "capability": "pre-review-sync-auto-resolve-integration-repair",
+     "contract": "進捗 file の追記の衝突は両側を残して解消し、再 gate する"
+    },
+    "auto_resolve_stops_at_max_attempts_and_when_disabled": {
+     "capability": "pre-review-sync-auto-resolve-integration-repair",
+     "contract": "auto_resolve は試行の上限と無効の設定で止まる"
+    },
+    "delivery_failure_classification_is_limited_to_merge_base_and_format": {
+     "contract": "配送の失敗の分類は merge_base と format の 2 種に限る"
+    },
+    "integration_repair_fallback_delivers": {
+     "capability": "pre-review-sync-auto-resolve-integration-repair",
+     "contract": "IntegrationRepair を打ち切った fallback（未同期 HEAD の review）でも配送できる"
+    },
+    "maybe_retry_push_noop_when_push_disabled": {
+     "contract": "push が無効なら push のやり直しは何もしない"
+    },
+    "merge_base_repair_revalidates_and_delivers_only_the_repaired_branch": {
+     "capability": "pre-review-sync-auto-resolve-integration-repair",
+     "contract": "merge_base の修復は検証し直し、修復した branch だけを配送する"
+    },
+    "non_self_repo_is_merged_without_release_or_push": {
+     "contract": "自己 repo 以外（remote なし）は既定 branch へ merge し、release も push もしない"
+    },
+    "non_self_repo_with_a_remote_is_pushed_but_still_has_no_release": {
+     "contract": "remote のある自己 repo 以外は push するが release は作らない"
+    },
+    "other_gate_failure_keeps_legacy_reopen_once": {
+     "contract": "ほかの gate の失敗は従来どおり 1 回だけ reopen する"
+    },
+    "overlapping_untracked_files_block_merge_without_loss": {
+     "contract": "未追跡 file と重なる merge は止め、file を失わない"
+    },
+    "pre_review_sync_conflict_unsynced_candidate_goes_to_merge_base_repair": {
+     "capability": "pre-review-sync-auto-resolve-integration-repair",
+     "contract": "review 前同期が衝突で諦めた候補（NULL）は main が分岐していれば merge_base の修復に回る"
+    },
+    "preparation_requires_all_gates_and_notifies_cos_only_when_ready": {
+     "contract": "release 準備は全 gate を要し、Ready になったときだけ CoS に知らせる"
+    },
+    "prepare_child_counts_as_in_flight_until_it_exits": {
+     "capability": "release-selfdeploy-wiring",
+     "contract": "起動した release 準備の子 process は終わるまで in-flight に数える"
+    },
+    "push_failure_after_merge_does_not_block_release_prep_and_retries_once": {
+     "contract": "merge 後の push の失敗は release 準備を止めず、push を 1 回だけやり直す"
+    },
+    "push_merged_pushes_new_commits_to_a_bare_remote": {
+     "contract": "merge の後の push は新しい commit を remote に送る"
+    },
+    "push_merged_reports_failure_reason_when_remote_is_unreachable": {
+     "contract": "remote に届かない push は失敗の理由を返す"
+    },
+    "push_merged_skips_when_remote_is_already_up_to_date": {
+     "contract": "remote が最新なら push を飛ばす"
+    },
+    "ready_notification_reports_push_failure_without_the_retry_marker": {
+     "capability": "notifications",
+     "contract": "Ready の通知文は push の失敗を 1 行で示し、[retried] の印を見せない"
+    },
+    "ready_notification_reports_successful_push": {
+     "capability": "notifications",
+     "contract": "Ready の通知文は push の成功を 1 行で示す"
+    },
+    "reviewed_merge_preserves_unrelated_user_deletion_and_branch": {
+     "contract": "review 済みの merge は関係の無い人の削除と branch を保つ"
+    },
+    "technical_failure_is_repaired_once_with_no_cos_review_or_message": {
+     "contract": "技術的な失敗は CoS の review や message なしに 1 回だけ修復する"
+    },
+    "tick_advances_only_projects_with_auto_integrate": {
+     "contract": "delivery の tick は案件の auto_integrate が有効な配送だけを進める"
+    }
+   }
   },
   "crates/celeris/src/doc_gardener/tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "doc-gardener",
+   "contract": "文書整理は無効と間隔の境界を守り、managed な repo の走査で上限付きの review を予約し、状態を失っても重複しない",
    "b0_hint": [],
    "tests": [
     "disabled_and_interval_boundaries",
@@ -812,8 +1604,8 @@
    "fns": {}
   },
   "crates/celeris/src/instance/tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "release-selfdeploy-wiring",
+   "contract": "生きた active は同時に 1 つで、新しい版は古い版に drain を求め、heartbeat が止まっても process が生きていれば standby は昇格しない",
    "b0_hint": [
     "release-selfdeploy-wiring"
    ],
@@ -847,11 +1639,60 @@
     "the_tick_rules_are_symmetric",
     "two_actives_never_coexist_when_the_old_one_is_stale_but_alive"
    ],
-   "fns": {}
+   "fns": {
+    "a_dead_pid_or_pid_zero_in_promote_lock_is_rejected": {
+     "contract": "昇格していない release は current・新しい marker・生きた promote lock のどれも無ければ active を引き継がない（dev・unmanaged は除く）"
+    },
+    "a_fresh_matching_marker_authorizes_and_stale_or_foreign_ones_do_not": {
+     "contract": "昇格していない release は current・新しい marker・生きた promote lock のどれも無ければ active を引き継がない（dev・unmanaged は除く）"
+    },
+    "a_live_pid_and_a_fresh_promote_lock_authorize_the_old_promote_script": {
+     "contract": "昇格していない release は current・新しい marker・生きた promote lock のどれも無ければ active を引き継がない（dev・unmanaged は除く）"
+    },
+    "a_stale_or_future_promote_lock_is_rejected_even_with_a_live_pid": {
+     "contract": "昇格していない release は current・新しい marker・生きた promote lock のどれも無ければ active を引き継がない（dev・unmanaged は除く）"
+    },
+    "an_unreadable_promote_lock_is_rejected_with_its_reason": {
+     "contract": "昇格していない release は current・新しい marker・生きた promote lock のどれも無ければ active を引き継がない（dev・unmanaged は除く）"
+    },
+    "current_pointing_at_the_release_authorizes_by_name": {
+     "contract": "昇格していない release は current・新しい marker・生きた promote lock のどれも無ければ active を引き継がない（dev・unmanaged は除く）"
+    },
+    "dev_and_unmanaged_releases_skip_the_promotion_gate": {
+     "contract": "昇格していない release は current・新しい marker・生きた promote lock のどれも無ければ active を引き継がない（dev・unmanaged は除く）"
+    },
+    "read_promotion_evidence_reads_current_and_the_marker": {
+     "contract": "昇格していない release は current・新しい marker・生きた promote lock のどれも無ければ active を引き継がない（dev・unmanaged は除く）"
+    },
+    "read_promotion_evidence_reads_promote_lock_pid_liveness_and_mtime": {
+     "contract": "昇格していない release は current・新しい marker・生きた promote lock のどれも無ければ active を引き継がない（dev・unmanaged は除く）"
+    },
+    "rules_one_and_two_still_win_over_a_bad_promote_lock": {
+     "contract": "昇格していない release は current・新しい marker・生きた promote lock のどれも無ければ active を引き継がない（dev・unmanaged は除く）"
+    },
+    "starting_the_same_release_twice_is_refused_without_touching_the_table": {
+     "contract": "同じ版を 2 回起こすと行を書かずに Duplicate で拒否する"
+    },
+    "the_drain_timeout_does_not_abort_alive_runs_by_default": {
+     "contract": "drain timeout は既定（drain_force_abort = false）では走っている run を中断しない"
+    },
+    "the_drain_timeout_ends_the_drain_with_runs_left_when_force_abort_is_set": {
+     "contract": "drain_force_abort = true のときだけ drain timeout で run を残したまま drain を終える"
+    },
+    "the_freshness_window_is_three_ticks_plus_the_lease_grace": {
+     "contract": "heartbeat の鮮度の窓は 3 × tick + lease_grace"
+    },
+    "the_release_string_comes_from_the_flag_then_the_env_then_dev": {
+     "contract": "release 名は --release > CELERIS_RELEASE > dev の順で決まる"
+    },
+    "the_same_release_running_as_active_is_a_duplicate": {
+     "contract": "同じ版の生きた active がいれば heartbeat が古くても二重起動（exit 3）になる"
+    }
+   }
   },
   "crates/celeris/src/knowledge_curation/extraction_tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "knowledge-curation-jobs",
+   "contract": "日次の知識抽出は件数の上限と UTC 日の区切りで source を取り、失敗を見える形で残し、snapshot の前に走り、重複候補を作らない",
    "b0_hint": [],
    "tests": [
     "backfill_batches_ten_sources_and_continues_the_same_utc_day",
@@ -869,8 +1710,8 @@
    "fns": {}
   },
   "crates/celeris/src/knowledge_curation/tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "knowledge-curation-jobs",
+   "contract": "知識整理 job は入力を準備して差分を照合し、一致したときだけ承認なしに commit・push し、不一致・page の変更では適用しない",
    "b0_hint": [],
    "tests": [
     "curation_diff_match_moves_the_worker_diff_and_writes_the_canonical_one",
@@ -893,8 +1734,8 @@
    "fns": {}
   },
   "crates/celeris/src/knowledge_gc/tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "knowledge-curation-jobs",
+   "contract": "知識 GC は再起動をまたいで 1 回だけ予約し、create を拒否して update を受信箱に回し、出力の欠け・不正は review にしない",
    "b0_hint": [],
    "tests": [
     "failed_or_missing_output_is_not_reviewed_and_interval_is_consumed",
@@ -908,8 +1749,8 @@
    "fns": {}
   },
   "crates/celeris/src/knowledge_maint/tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "knowledge-curation-jobs",
+   "contract": "知識整理 run は done なら候補を適用し failed なら失敗にし、失敗は 1 回だけやり直し、終端の task からは作らない",
    "b0_hint": [],
    "tests": [
     "a_failed_run_is_retried_exactly_once",
@@ -921,8 +1762,8 @@
    "fns": {}
   },
   "crates/celeris/src/lib/tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "daemon-bootstrap-reload",
+   "contract": "daemon の起動と reload は設定を dispatcher・API・組織の種に反映する",
    "b0_hint": [],
    "tests": [
     "a_publickey_cluster_with_a_ready_task_does_not_panic_the_first_tick_phase_81",
@@ -941,11 +1782,71 @@
     "unknown_adapter_message_lists_langmem",
     "without_org_include_nothing_is_seeded"
    ],
-   "fns": {}
+   "fns": {
+    "a_publickey_cluster_with_a_ready_task_does_not_panic_the_first_tick_phase_81": {
+     "capability": "cluster-ssh-session",
+     "contract": "publickey の cluster と ready の task がある設定でも最初の tick は panic しない"
+    },
+    "a_totp_cluster_with_a_forward_does_not_panic_the_first_tick_phase_66b": {
+     "capability": "cluster-ssh-session",
+     "contract": "forward のある TOTP の cluster でも最初の tick は runtime の入れ子で panic しない"
+    },
+    "a_totp_cluster_with_a_live_master_skips_the_connector_but_ensures_the_forward_phase_84b": {
+     "capability": "cluster-ssh-session",
+     "contract": "生きた master のある TOTP の cluster では connector を飛ばし、forward だけを張る"
+    },
+    "api_settings_carries_secrets_dir_and_usage": {
+     "contract": "API の settings は秘密の dir と usage の参照を渡し、秘密の値を出さない"
+    },
+    "config_view_exposes_genre_capabilities_and_artifacts": {
+     "capability": "task-genres-roles",
+     "contract": "GET /config の view は genre の capabilities と入出力の成果物を出す"
+    },
+    "config_view_exposes_genres": {
+     "capability": "task-genres-roles",
+     "contract": "GET /config の view は genres を出す"
+    },
+    "implicit_account_limit_survives_reload_and_is_pruned_with_its_source": {
+     "capability": "accounts-quota",
+     "contract": "暗黙 account の同時実行上限は reload の後も残り、source を消すと一緒に消える"
+    },
+    "langmem_knowledge_config_defaults_to_disabled": {
+     "capability": "knowledge-curation-jobs",
+     "contract": "langmem の知識の設定は既定で無効"
+    },
+    "merged_env_with_secrets_follows_the_precedence_order_and_falls_back_when_a_secret_is_missing": {
+     "capability": "worker-protocol-adapters",
+     "contract": "adapter の env は [adapters.*].env < env_from_secrets < 行の env < 行の env_from_secrets の順に重なり、秘密が無ければ下位に戻る"
+    },
+    "reload_providers_keeps_the_startup_only_accounts_section_and_flags_a_pending_restart": {
+     "capability": "accounts-quota",
+     "contract": "[accounts] は reload で変えず、変わっていれば再起動待ちの印を立てる"
+    },
+    "reload_rereads_roles_genres_delegation_and_reports_notify_conversation": {
+     "capability": "task-genres-roles",
+     "contract": "reload は roles・genres・delegation・reports・notify・conversation を読み直し、次に作る子 task に効く"
+    },
+    "seed_org_if_empty_writes_nothing_when_one_node_breaks_the_tree": {
+     "capability": "org-projects-reports",
+     "contract": "組織の種の 1 node が木を壊すなら何も書かない"
+    },
+    "seeds_the_org_once_into_an_empty_db_and_never_again": {
+     "capability": "org-projects-reports",
+     "contract": "組織の種は空の DB に 1 回だけ投入され、2 回目は書かない"
+    },
+    "unknown_adapter_message_lists_langmem": {
+     "capability": "worker-protocol-adapters",
+     "contract": "未知の adapter は langmem を含む既知の一覧を示す message で拒否される"
+    },
+    "without_org_include_nothing_is_seeded": {
+     "capability": "org-projects-reports",
+     "contract": "org_include の無い設定では組織の種を投入しない"
+    }
+   }
   },
   "crates/celeris/src/main.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "daemon-bootstrap-reload",
+   "contract": "celeris の CLI は設定と store から実効値を決める",
    "b0_hint": [],
    "tests": [
     "cli_workspace_root_ignores_store_and_pins",
@@ -954,11 +1855,31 @@
     "effective_max_concurrency_store_beats_config",
     "tests::shutdown_timeout_gives_up_within_its_bound_even_with_a_stuck_background_task"
    ],
-   "fns": {}
+   "fns": {
+    "cli_workspace_root_ignores_store_and_pins": {
+     "capability": "local-machine-settings",
+     "contract": "CLI の workspace_root は store と pin より優先される"
+    },
+    "cluster_id_local_is_reserved_config_error": {
+     "capability": "cluster-ssh-session",
+     "contract": "cluster id local は予約語で設定エラーになる"
+    },
+    "config_identity_reports_effective_values_without_secrets": {
+     "capability": "config-load-validation",
+     "contract": "config identity は実効値を出し、秘密の値を出さない"
+    },
+    "effective_max_concurrency_store_beats_config": {
+     "capability": "local-machine-settings",
+     "contract": "同時実行数は store の値が設定 file の値より優先される"
+    },
+    "tests::shutdown_timeout_gives_up_within_its_bound_even_with_a_stuck_background_task": {
+     "contract": "shutdown は止まらない背景 task があっても上限の時間内に諦めて終わる"
+    }
+   }
   },
   "crates/celeris/src/model_discovery/tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "model-catalog",
+   "contract": "model の発見は source ごとの API・CLI から一覧を取り、失敗は catalog を変えずに報告し、差分を catalog に適用し、ticker は間隔・無効・重なりを守る",
    "b0_hint": [],
    "tests": [
     "claude_uses_the_oauth_bearer_and_beta_header",
@@ -973,11 +1894,45 @@
     "ticker_respects_interval_disable_and_overlap",
     "ticker_spawns_once_and_clears_the_flag"
    ],
-   "fns": {}
+   "fns": {
+    "claude_uses_the_oauth_bearer_and_beta_header": {
+     "contract": "claude の model 一覧の取得は OAuth の bearer と beta の header を付ける"
+    },
+    "claude_without_a_logged_in_account_or_with_an_expired_token_fails_cleanly": {
+     "contract": "ログイン済みの account が無いか token が切れていれば claude の取得は error で終わる"
+    },
+    "codex_pages_through_model_list_over_stdio": {
+     "contract": "codex の model 一覧は stdio の model/list を page 送りで読む"
+    },
+    "openai_compatible_sends_the_key_and_parses": {
+     "contract": "OpenAI 互換の source には key を送り、応答を model 一覧に読む"
+    },
+    "opencode_go_falls_back_to_the_cli_stdout": {
+     "contract": "opencode-go は gateway の取得に失敗すると CLI の stdout に戻る"
+    },
+    "opencode_go_reports_both_failures_without_touching_the_catalog": {
+     "contract": "opencode-go の 2 経路がどちらも失敗したら catalog を変えずに両方の失敗を報告する"
+    },
+    "opencode_go_uses_the_gateway_models_url": {
+     "contract": "opencode-go は gateway の models の URL を使う"
+    },
+    "run_discovery_applies_and_reports_deltas_for_one_source": {
+     "contract": "1 source の発見は差分を catalog に適用して報告する"
+    },
+    "targets_come_from_the_config_and_the_defaults_are_set": {
+     "contract": "発見の対象は設定の source から決まり、既定値が入る"
+    },
+    "ticker_respects_interval_disable_and_overlap": {
+     "contract": "発見の ticker は間隔・無効・重なりを守る"
+    },
+    "ticker_spawns_once_and_clears_the_flag": {
+     "contract": "発見の ticker は 1 回だけ起こし、終われば走行中の印を消す"
+    }
+   }
   },
   "crates/celeris/src/notify/tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "notifications",
+   "contract": "通知は Discord の 1 message に収め、base_url が無ければ link を省き、digest は間隔を待って束ね、消した link 設定を拒否し、root done の要約はそのまま送る",
    "b0_hint": [
     "notifications"
    ],
@@ -993,11 +1948,42 @@
     "root_done_summary_is_selected_and_rendered_as_is",
     "webhook_url_is_none_without_a_secrets_dir_or_file"
    ],
-   "fns": {}
+   "fns": {
+    "base_url_drops_the_trailing_slash_and_treats_empty_as_absent": {
+     "contract": "通知の base_url は末尾の / を落とし、空は未設定として扱う"
+    },
+    "content_is_clamped_to_one_discord_message": {
+     "contract": "通知の本文は Discord の 1 message の長さに切り詰める"
+    },
+    "defaults_match_the_adr": {
+     "contract": "[notify] の既定値は ADR のとおり"
+    },
+    "excerpt_cuts_by_characters_and_flattens_newlines": {
+     "contract": "通知の抜粋は文字数で切り、改行を平らにする"
+    },
+    "links_are_omitted_without_a_base_url": {
+     "contract": "base_url が無ければ通知に link を付けない"
+    },
+    "notify_digest_phase_checkpoint_is_batched_as_inbox_new": {
+     "contract": "工程の後の途中確認（awaiting_human）は受信箱の新着として digest に束ねる"
+    },
+    "notify_digest_waits_for_interval_and_never_sends_notice_kind_immediately": {
+     "contract": "digest は間隔を待って送り、notice の種類をすぐには送らない"
+    },
+    "notify_rejects_retired_link_config": {
+     "contract": "消した link の設定は読み込みで拒否する"
+    },
+    "root_done_summary_is_selected_and_rendered_as_is": {
+     "contract": "root done の要約は dispatcher が選んだ本文をそのまま送る"
+    },
+    "webhook_url_is_none_without_a_secrets_dir_or_file": {
+     "contract": "secrets の dir か file が無ければ webhook の URL は None"
+    }
+   }
   },
   "crates/celeris/src/release_notes/tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "release-selfdeploy-wiring",
+   "contract": "release notes は base の鎖を辿って release 間で task を重複なく集め、鎖が切れたら incomplete と報告する",
    "b0_hint": [
     "release-selfdeploy-wiring"
    ],
@@ -1015,11 +2001,48 @@
     "task_id_in_parses_branch_forms_and_rejects_non_ulids",
     "task_info_picks_the_last_done_worker_outcome"
    ],
-   "fns": {}
+   "fns": {
+    "aggregate_cuts_at_current_when_it_is_inside_the_target_first_parent": {
+     "contract": "集計は current が target の first parent の上にあれば current で切る"
+    },
+    "aggregate_dedupes_tasks_across_releases_with_the_same_base": {
+     "contract": "同じ base の release 間で task を重複させない"
+    },
+    "aggregate_follows_the_base_chain": {
+     "contract": "集計は release の base の鎖を辿る"
+    },
+    "aggregate_merges_child_tasks_once": {
+     "contract": "子 task は 1 回だけ親にまとめる"
+    },
+    "aggregate_reports_incomplete_when_the_chain_cannot_be_followed": {
+     "contract": "base の鎖を辿れなければ incomplete と報告する"
+    },
+    "fast_forward_delivery_attributes_only_down_to_delivery_base": {
+     "contract": "ff の配送は delivery の base までの commit だけをその task に帰す"
+    },
+    "markdown_renderers_contain_titles_and_schema": {
+     "contract": "markdown の出力は題名と schema を含む"
+    },
+    "notes_group_a_merged_task_branch_and_list_the_rest": {
+     "contract": "merge した task の branch はまとめ、残りの commit は一覧にする"
+    },
+    "notes_without_a_known_base_are_empty_but_valid": {
+     "contract": "base の分からない release notes は空だが妥当な形になる"
+    },
+    "preview_from_dir_reads_release_dirs_and_the_current_symlink": {
+     "contract": "preview は release の dir と current の symlink を読む"
+    },
+    "task_id_in_parses_branch_forms_and_rejects_non_ulids": {
+     "contract": "branch 名から task id を読み、ULID でないものを拒否する"
+    },
+    "task_info_picks_the_last_done_worker_outcome": {
+     "contract": "task の情報は最後の done の worker の結果を選ぶ"
+    }
+   }
   },
   "crates/celeris/src/releases/audit.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "release-selfdeploy-wiring",
+   "contract": "配備の履歴は出所と verify の snapshot を保ち、台本の環境に明示の文脈を渡す",
    "b0_hint": [
     "release-selfdeploy-wiring"
    ],
@@ -1030,8 +2053,8 @@
    "fns": {}
   },
   "crates/celeris/src/releases/tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "release-selfdeploy-wiring",
+   "contract": "releases の走査は壊れた json・build dir に耐えて新しい順に並べ、昇格は current に同梱の promote.sh を detached に起こして lock を書き、未検証・走行中の release を拒否する",
    "b0_hint": [
     "release-selfdeploy-wiring"
    ],
@@ -1058,11 +2081,75 @@
     "two_releases_are_sorted_newest_first_with_the_symlinks_applied",
     "verify_checks_and_gate_steps_are_carried_through"
    ],
-   "fns": {}
+   "fns": {
+    "broken_json_and_build_directories_do_not_break_the_scan": {
+     "contract": "壊れた json と build 中の dir があっても releases の走査は止まらない"
+    },
+    "changes_json_becomes_changes_with_stale_computed_against_current": {
+     "contract": "changes.json は changes になり、stale は今の current と比べて決まる"
+    },
+    "gate_failed_step_empty_string_is_normalized_to_none": {
+     "contract": "gate.json の failed_step の空文字は None に直す"
+    },
+    "missing_checks_and_gate_default_to_empty_without_breaking_the_scan": {
+     "contract": "checks・steps の無い release は空として扱い、走査を続ける"
+    },
+    "on_main_is_true_false_or_null": {
+     "contract": "on_main は sha が main の祖先かで true・false になり、判定できなければ null"
+    },
+    "promote_exec_command_inline_is_setsid": {
+     "contract": "Inline の昇格の argv は setsid <script> <sha12>"
+    },
+    "promote_exec_command_wraps_with_systemd_run": {
+     "contract": "昇格の argv は systemd-run で包む形に組み立てる（process は起こさない）"
+    },
+    "promote_failed_json_becomes_promote_failed": {
+     "contract": "promote_failed.json は promote_failed になり、昇格の失敗が画面に出る"
+    },
+    "promote_not_stale_when_lock_pid_is_alive": {
+     "contract": "lock の pid が生きていれば昇格は stale でない"
+    },
+    "promote_not_stale_when_promoted_json_exists": {
+     "contract": "promoted.json があれば pid が死んでいても昇格は stale でない"
+    },
+    "promote_stale_when_lock_pid_is_dead_and_not_promoted": {
+     "contract": "lock の pid が死に promoted.json も無ければ昇格は stale"
+    },
+    "promoted_json_becomes_promoted_at": {
+     "contract": "promoted.json は promoted_at になり、無ければ null"
+    },
+    "promoting_spawns_the_bundled_script_detached_and_writes_the_lock": {
+     "contract": "昇格は同梱の promote.sh を detached で起こし、lock を書く"
+    },
+    "promoting_via_fake_systemd_run_writes_the_lock_and_streams_the_log": {
+     "contract": "systemd-run 経由の昇格も lock を書き、log を流す"
+    },
+    "promotion_is_refused_for_unknown_unverified_current_and_running_releases": {
+     "contract": "知らない・未検証・current・昇格中の release の昇格は拒否する"
+    },
+    "promotion_runs_the_promote_script_of_the_current_release": {
+     "contract": "昇格に使う promote.sh は current の release に同梱されたもの"
+    },
+    "scanning_an_empty_or_missing_directory_yields_nothing_and_does_not_fail": {
+     "contract": "空か無い releases dir の走査は失敗せず空を返す"
+    },
+    "sha12_validation_rejects_path_traversal": {
+     "contract": "sha12 の検証は path traversal を拒否する"
+    },
+    "starting_a_new_promotion_clears_the_previous_failure_marker": {
+     "contract": "新しい昇格を始めると前回の失敗の印を消す"
+    },
+    "two_releases_are_sorted_newest_first_with_the_symlinks_applied": {
+     "contract": "release は新しい順に並び、current・previous の symlink が反映される"
+    },
+    "verify_checks_and_gate_steps_are_carried_through": {
+     "contract": "verify.json の checks と gate.json の steps が ReleaseVerify に写る"
+    }
+   }
   },
   "crates/celeris/src/reports/tests.rs": {
-   "capability": "",
-   "contract": "",
+   "capability": "org-projects-reports",
+   "contract": "報告のまとめ run は件数か古さの閾値で案件ごとに 1 本だけ作られ、失敗の後は compress_after_secs まで作り直さない",
    "b0_hint": [],
    "tests": [
     "a_recently_failed_compaction_task_backs_off_until_compress_after_secs_passes",
@@ -1094,8 +2181,8 @@
     "crates/celeris/src/daemon/classify_stage/tests.rs::missing_key_hands_the_gate_to_the_existing_credential_wait",
     "crates/celeris/src/daemon/classify_stage/tests.rs::success_is_jev_ok_with_a_hint_and_never_marks_the_real_api_verified"
    ],
-   "adopt": null,
-   "reason": "",
+   "adopt": false,
+   "reason": "同じ jev 分類段の 2 file が写す 7 行の ClassifyInput の literal で、1 か所にまとめても build・読みやすさは変わらない",
    "keep_tests": [],
    "action": "",
    "plan": "",
@@ -1114,12 +2201,14 @@
    "users": [
     "crates/celeris/tests/credential_wait_notify.rs::webhook_ignores_eof_before_complete_request"
    ],
-   "adopt": null,
-   "reason": "",
-   "keep_tests": [],
-   "action": "",
-   "plan": "",
-   "mutation_target": ""
+   "adopt": true,
+   "reason": "Discord webhook を受けて本文を貯める同じ 20 行の偽 server を unit 試験と integration 試験が写している",
+   "keep_tests": [
+    "crates/celeris/tests/credential_wait_notify.rs::webhook_ignores_eof_before_complete_request"
+   ],
+   "action": "merge",
+   "plan": "hook を既に両方が #[path] で読む tests/support/http_async.rs に webhook 受け口として移し、2 file の写しを消す",
+   "mutation_target": "crates/celeris/src/notify.rs"
   },
   {
    "id": "dup-5b4cbc64f28b",
@@ -1142,8 +2231,8 @@
     "crates/celeris/tests/cos_chat_triage_notify.rs::cos_chat_triage_three_send_failures_keep_the_unresolved_item",
     "crates/celeris/tests/cos_chat_triage_scenarios.rs::cos_chat_triage_unified_only_cos_escalation_reaches_the_webhook"
    ],
-   "adopt": null,
-   "reason": "",
+   "adopt": false,
+   "reason": "固定時刻を返す 1 行の helper で、まとめても build・読みやすさは変わらない",
    "keep_tests": [],
    "action": "",
    "plan": "",
@@ -1173,12 +2262,16 @@
     "crates/celeris/src/config/script.rs::tests::script_runtime_config_reads_values_and_defaults",
     "crates/celeris/src/config/script.rs::tests::script_runtime_config_rejects_invalid_values"
    ],
-   "adopt": null,
-   "reason": "",
-   "keep_tests": [],
-   "action": "",
-   "plan": "",
-   "mutation_target": ""
+   "adopt": true,
+   "reason": "config の 3 つの子 module の試験が、db 行を前に置いて Config::load を呼ぶ同じ 5 行の読み込み helper を写している",
+   "keep_tests": [
+    "crates/celeris/src/config/jev.rs::tests::every_field_round_trips",
+    "crates/celeris/src/config/routing_mode.rs::tests::both_modes_parse",
+    "crates/celeris/src/config/script.rs::tests::script_runtime_config_reads_values_and_defaults"
+   ],
+   "action": "merge",
+   "plan": "load を config の cfg(test) の共通 helper（pub(super)）に 1 つ置き、jev.rs・routing_mode.rs・script.rs の試験はそれを呼ぶ",
+   "mutation_target": "crates/celeris/src/config/mod.rs"
   },
   {
    "id": "dup-865e5f2cf2bd",
@@ -1200,8 +2293,8 @@
     "crates/task-api/tests/chat_stream.rs::chat_stream_last_event_id_reconnect_has_no_duplicate",
     "crates/task-api/tests/chat_stream.rs::chat_stream_replay_crosses_store_page_boundary"
    ],
-   "adopt": null,
-   "reason": "",
+   "adopt": false,
+   "reason": "OffsetDateTime::now_utc() を返す 1 行の helper で、3 つの試験 target をまたいでまとめる益が無い",
    "keep_tests": [],
    "action": "",
    "plan": "",
@@ -1225,12 +2318,15 @@
     "crates/celeris/src/knowledge_curation/tests.rs::knowledge_curation_legacy_awaiting_approval_is_applied_on_the_next_tick",
     "crates/celeris/tests/daily_curation.rs::knowledge_curation_job_apply_without_approval_commits_pushes_and_terminal_task_maintenance"
    ],
-   "adopt": null,
-   "reason": "",
-   "keep_tests": [],
-   "action": "",
-   "plan": "",
-   "mutation_target": ""
+   "adopt": true,
+   "reason": "試験の identity を付けて git を走らせ stdout を返す同じ 15 行の helper を unit 試験と integration 試験が写している",
+   "keep_tests": [
+    "crates/celeris/src/knowledge_curation/tests.rs::knowledge_curation_apply_commits_and_pushes_without_approval",
+    "crates/celeris/tests/daily_curation.rs::knowledge_curation_job_apply_without_approval_commits_pushes_and_terminal_task_maintenance"
+   ],
+   "action": "merge",
+   "plan": "git helper を tests/support/ の file に置き、knowledge_curation/tests.rs と tests/daily_curation.rs は #[path] で読む",
+   "mutation_target": "crates/celeris/src/knowledge_curation.rs"
   },
   {
    "id": "dup-a311a11b2ea5",
@@ -1245,8 +2341,8 @@
    "users": [
     "crates/celeris/src/daemon/script_ops_measure_tests.rs::script_ops_restart_drain_retire_cycles"
    ],
-   "adopt": null,
-   "reason": "",
+   "adopt": false,
+   "reason": "計測の試験と generation の試験が 1 本ずつ使う 9 欄の JSON literal で、まとめても build・読みやすさは変わらない",
    "keep_tests": [],
    "action": "",
    "plan": "",
@@ -1267,12 +2363,15 @@
     "crates/celeris/src/model_discovery/tests.rs::codex_pages_through_model_list_over_stdio",
     "crates/celeris/src/model_discovery/tests.rs::opencode_go_falls_back_to_the_cli_stdout"
    ],
-   "adopt": null,
-   "reason": "",
-   "keep_tests": [],
-   "action": "",
-   "plan": "",
-   "mutation_target": ""
+   "adopt": true,
+   "reason": "ETXTBSY を避けて sh 経由で実行 file を書く同じ helper を daemon/adapters.rs と model_discovery/tests.rs が写している",
+   "keep_tests": [
+    "crates/celeris/src/daemon/adapters.rs::harness_adapter_tests::pi_harness_declaration_reaches_pi_process",
+    "crates/celeris/src/model_discovery/tests.rs::codex_pages_through_model_list_over_stdio"
+   ],
+   "action": "merge",
+   "plan": "write_executable を celeris の cfg(test) の共通 helper 1 つにし、adapters.rs の試験 module と model_discovery/tests.rs はそれを呼ぶ",
+   "mutation_target": "crates/celeris/src/model_discovery.rs"
   },
   {
    "id": "dup-f929610723f1",
@@ -1286,8 +2385,8 @@
     "org_node"
    ],
    "users": [],
-   "adopt": null,
-   "reason": "",
+   "adopt": false,
+   "reason": "celeris と task-api の 2 crate の試験に跨り、共通化には task-core に試験用の公開 constructor を足す必要がある（規約 3）。celeris 側を使う試験も無い",
    "keep_tests": [],
    "action": "",
    "plan": "",

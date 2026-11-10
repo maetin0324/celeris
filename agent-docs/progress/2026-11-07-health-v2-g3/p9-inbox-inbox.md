@@ -68,7 +68,9 @@ WorkUnit `inbox`（P-9 (c)）。ADR [2026-11-08-health-enforcement-loop](../../a
 - `corepack pnpm@12.6.0 -C web exec tsc -b`: exit 0。`vitest run features/inbox`: 6 passed。
 - `python3 scripts/dev/check-architecture-map.py`: OK（990 件）。`sh scripts/dev/check-doc-links.sh`: ok。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
-- `bash scripts/dev/test-affected.sh`: 結果は下の追記。
+- `bash scripts/dev/test-affected.sh`: exit 0（約 6 分）。
+  - nextest は 6586 passed・23 skipped（ADR-0133 の `inbox_blocked_events_are_read_once_per_build`・`request_lock_counts` を含む）。
+  - web は tsc -b 合格、vitest は 104 file・712 件合格。`repo_health_gate: all checks passed`。
 
 ## 未解決
 - 無し。

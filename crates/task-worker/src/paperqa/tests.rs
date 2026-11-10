@@ -616,7 +616,7 @@ async fn ask_input_carries_model_only_when_set() {
     );
 }
 
-/// `with_env` の追加分は既存の同名キーより後に環境を組み立てるので勝つ（claude_code/codex と同じ規則）。
+/// `configure` の env の追加分は既存の同名キーより後に環境を組み立てるので勝つ（claude_code/codex と同じ規則）。
 #[tokio::test]
 async fn with_env_overrides_a_same_name_key_already_in_config_env() {
     let dir = tempfile::tempdir().unwrap();
@@ -634,8 +634,12 @@ async fn with_env_overrides_a_same_name_key_already_in_config_env() {
         .push(("OPENAI_BASE_URL".to_string(), "http://old:1".to_string()));
     let base = PaperQaAdapter::new(config);
     let with_env = base
-        .with_env(&[("OPENAI_BASE_URL".to_string(), "http://new:2".to_string())])
-        .expect("paperqa supports with_env");
+        .configure(&AdapterSettings {
+            env: vec![("OPENAI_BASE_URL".to_string(), "http://new:2".to_string())],
+            ..AdapterSettings::default()
+        })
+        .adapter
+        .expect("paperqa takes env");
 
     let req = sample_req(dir.path().to_path_buf());
     let sink = RecordingSink::default();

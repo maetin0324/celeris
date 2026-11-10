@@ -105,18 +105,27 @@ impl Dispatcher {
             .sources
             .get(&pick.candidate.source)
             .ok_or_else(|| RouteLaunchError::UnknownSource(pick.candidate.source.clone()))?;
-        let adapter = base
-            .with_model(pick.wire_model_id.as_ref())
-            .unwrap_or_else(|| Arc::clone(base));
-        match account_adapter_for_source_kind(source.kind.as_ref()) {
-            Some(account_adapter) => self
-                .adapter_for_account(&adapter, account_adapter, pick.account.as_ref())
-                .ok_or_else(|| RouteLaunchError::AccountUnavailable {
-                    source: pick.candidate.source.clone(),
-                    account: pick.account.to_string(),
-                }),
-            None => Ok(adapter),
+        let unavailable = || RouteLaunchError::AccountUnavailable {
+            source: pick.candidate.source.clone(),
+            account: pick.account.to_string(),
+        };
+        let mut settings = task_worker::AdapterSettings {
+            model: Some(pick.wire_model_id.to_string()),
+            ..task_worker::AdapterSettings::default()
+        };
+        if let Some(account_adapter) = account_adapter_for_source_kind(source.kind.as_ref()) {
+            let env = self
+                .account_env(account_adapter, pick.account.as_ref())
+                .ok_or_else(unavailable)?;
+            settings.env.push(env);
         }
+        // ADR 2026-11-10-worker-capability-ports D3 3b: a harness without a model option keeps
+        // its own configuration; an adapter that cannot take the account environment fails closed.
+        let (adapter, unsupported) = base.configure(&settings).resolve(base);
+        if unsupported.contains(&task_worker::AdapterSetting::Env) {
+            return Err(unavailable());
+        }
+        Ok(adapter)
     }
 
     /// [`selected_llm_route`] with this dispatcher's registry and `[accounts]` roots.

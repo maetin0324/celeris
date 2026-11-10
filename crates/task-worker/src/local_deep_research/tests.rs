@@ -795,7 +795,7 @@ async fn iterations_and_questions_are_null_when_unset() {
     assert!(seen["questions_per_iteration"].is_null());
 }
 
-/// `with_env` の追加分は既存の同名キーより後に環境を組み立てるので勝つ（他アダプタと同じ規則）。
+/// `configure` の env の追加分は既存の同名キーより後に環境を組み立てるので勝つ（他アダプタと同じ規則）。
 #[tokio::test]
 async fn with_env_overrides_a_same_name_key_already_in_config_env() {
     let dir = tempfile::tempdir().unwrap();
@@ -823,8 +823,12 @@ async fn with_env_overrides_a_same_name_key_already_in_config_env() {
     };
     let base = LdrAdapter::new(config);
     let with_env = base
-        .with_env(&[("OPENAI_BASE_URL".to_string(), "http://new:2".to_string())])
-        .expect("local-deep-research supports with_env");
+        .configure(&AdapterSettings {
+            env: vec![("OPENAI_BASE_URL".to_string(), "http://new:2".to_string())],
+            ..AdapterSettings::default()
+        })
+        .adapter
+        .expect("local-deep-research takes env");
 
     let req = sample_req(dir.path().to_path_buf());
     let sink = RecordingSink::default();

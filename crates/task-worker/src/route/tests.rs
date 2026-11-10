@@ -1,5 +1,7 @@
 use super::*;
-use crate::adapter::{AdapterError, EventSink, NullSink, RunLimits, RunOutcome, Terminal};
+use crate::adapter::{
+    AdapterError, Configured, EventSink, NullSink, RunLimits, RunOutcome, Terminal,
+};
 use crate::protocol::{LlmEndpointReference, PROTOCOL_VERSION, RunContext};
 use crate::{PiAdapter, PiConfig};
 use async_trait::async_trait;
@@ -50,27 +52,23 @@ impl WorkerAdapter for Recorder {
     fn model_namespace(&self) -> Option<&str> {
         self.namespace.as_deref()
     }
-    fn with_model(&self, model: &str) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut next = self.clone();
-        next.seen.model = Some(model.into());
-        Some(Arc::new(next))
-    }
-    fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut next = self.clone();
-        next.seen.env.extend(extra.iter().cloned());
-        Some(Arc::new(next))
-    }
-    fn with_llm_endpoint(
-        &self,
-        base_url: &str,
-        api_key: Option<&str>,
-    ) -> Option<Arc<dyn WorkerAdapter>> {
-        if !self.takes_endpoint {
-            return None;
+    fn configure(&self, settings: &AdapterSettings) -> Configured {
+        let mut accepts = vec![AdapterSetting::Model, AdapterSetting::Env];
+        if self.takes_endpoint {
+            accepts.push(AdapterSetting::LlmEndpoint);
         }
-        let mut next = self.clone();
-        next.seen.endpoint = Some((base_url.into(), api_key.map(str::to_string)));
-        Some(Arc::new(next))
+        settings.configured(&accepts, || {
+            let mut next = self.clone();
+            settings.apply_model(&mut next.seen.model);
+            settings.apply_env(&mut next.seen.env);
+            if self.takes_endpoint {
+                next.seen.endpoint = settings
+                    .llm_endpoint
+                    .as_ref()
+                    .map(|e| (e.base_url.clone(), e.api_key.clone()));
+            }
+            Arc::new(next)
+        })
     }
     async fn run(
         &self,
@@ -280,6 +278,69 @@ async fn worker_route_openai_compatible_endpoint_and_credential() {
         route_adapter(&adapters(&log), &r, &secret).err(),
         Some(RouteError::EndpointUnsupported {
             harness: "claude".into(),
+            base_url: "http://127.0.0.1:18000/v1".into()
+        })
+    );
+}
+
+/// A harness that takes no setting (the `configure` default).
+struct Bare;
+
+#[async_trait]
+impl WorkerAdapter for Bare {
+    fn id(&self) -> &str {
+        "bare"
+    }
+    async fn run(
+        &self,
+        _req: RunRequest,
+        _run_id: &str,
+        _limits: RunLimits,
+        _sink: &dyn EventSink,
+    ) -> Result<RunOutcome, AdapterError> {
+        Err(AdapterError::Other("bare".into()))
+    }
+}
+
+/// ADR 2026-11-10-worker-capability-ports D3 3b: one `configure` keeps the old per-item outcome.
+/// An unsupported model keeps the harness's own adapter; an account environment the harness
+/// cannot take fails closed with `AccountUnsupported`, reported before an unsupported endpoint
+/// (the old code applied the account env before the endpoint). No test covered
+/// `AccountUnsupported` before.
+#[test]
+fn adapter_settings_route_account_env_fails_closed_before_endpoint() {
+    let base: Arc<dyn WorkerAdapter> = Arc::new(Bare);
+    let map: HashMap<HarnessId, Arc<dyn WorkerAdapter>> =
+        HashMap::from([(HarnessId::from("bare"), Arc::clone(&base))]);
+    let mut r = route("bare", "m");
+    let adapter = route_adapter(&map, &r, &no_secret).unwrap();
+    assert!(
+        Arc::ptr_eq(&adapter, &base),
+        "model-only route keeps the base adapter"
+    );
+
+    r.credential = Some(CredentialReference::AccountDirectory {
+        path: PathBuf::from("/accounts/bare/acct"),
+        env: "BARE_ACCOUNT_DIR".into(),
+    });
+    let account = RouteError::AccountUnsupported {
+        harness: "bare".into(),
+        account: "acct".into(),
+    };
+    assert_eq!(
+        route_adapter(&map, &r, &no_secret).err(),
+        Some(account.clone())
+    );
+    r.endpoint = Some(LlmEndpointReference {
+        base_url: Some("http://127.0.0.1:18000/v1".into()),
+        api_format: "openai_compatible".into(),
+    });
+    assert_eq!(route_adapter(&map, &r, &no_secret).err(), Some(account));
+    r.credential = None;
+    assert_eq!(
+        route_adapter(&map, &r, &no_secret).err(),
+        Some(RouteError::EndpointUnsupported {
+            harness: "bare".into(),
             base_url: "http://127.0.0.1:18000/v1".into()
         })
     );

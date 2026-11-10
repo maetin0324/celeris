@@ -43,21 +43,20 @@ impl WorkerAdapter for RecordingAdapter {
     fn id(&self) -> &str {
         &self.label
     }
-    fn with_model(&self, model: &str) -> Option<Arc<dyn WorkerAdapter>> {
-        Some(RecordingAdapter::boxed(
-            &self.harness,
-            Some(model.into()),
-            self.env.clone(),
-        ))
-    }
-    fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut env = self.env.clone();
-        env.extend_from_slice(extra);
-        Some(RecordingAdapter::boxed(
-            &self.harness,
-            self.model.clone(),
-            env,
-        ))
+    fn configure(&self, settings: &task_worker::AdapterSettings) -> task_worker::Configured {
+        settings.configured(
+            &[
+                task_worker::AdapterSetting::Model,
+                task_worker::AdapterSetting::Env,
+            ],
+            || {
+                let mut model = self.model.clone();
+                settings.apply_model(&mut model);
+                let mut env = self.env.clone();
+                settings.apply_env(&mut env);
+                RecordingAdapter::boxed(&self.harness, model, env)
+            },
+        )
     }
     async fn run(
         &self,

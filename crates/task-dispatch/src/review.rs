@@ -1047,7 +1047,7 @@ async fn run_reviewer(
 
 /// ADR 2026-10-19-cos-registered-project-deploy D5: `runs/<run_id>/tmp` を作って adapter の env
 /// （`TMPDIR`・`TMP`・`TEMP`）に重ねる。返す `RunTmpDir` が生きている間だけ dir がある。作れない、
-/// または adapter が `with_env` を持たないときは元の adapter のまま（警告のみ）。
+/// または adapter が env を受けないときは元の adapter のまま（警告のみ）。
 pub(crate) fn with_run_tmpdir(
     adapter: &Arc<dyn WorkerAdapter>,
     workspace_dir: &Path,
@@ -1057,13 +1057,15 @@ pub(crate) fn with_run_tmpdir(
     Option<task_worker::run_tmpdir::RunTmpDir>,
 ) {
     match task_worker::run_tmpdir::RunTmpDir::create(workspace_dir, run_id) {
-        Ok(tmp) => match adapter.with_env(&tmp.env()) {
-            Some(wrapped) => (wrapped, Some(tmp)),
-            None => {
-                tracing::warn!(adapter = %adapter.id(), "adapter does not support with_env; the run TMPDIR was not applied");
-                (Arc::clone(adapter), None)
+        Ok(tmp) => {
+            let settings = task_worker::AdapterSettings::env_only(tmp.env());
+            let (wrapped, unsupported) = adapter.configure(&settings).resolve(adapter);
+            if unsupported.contains(&task_worker::AdapterSetting::Env) {
+                tracing::warn!(adapter = %adapter.id(), "adapter does not take env; the run TMPDIR was not applied");
+                return (wrapped, None);
             }
-        },
+            (wrapped, Some(tmp))
+        }
         Err(e) => {
             tracing::warn!(run_id, error = %e, "run tmpdir: could not create; TMPDIR is left unchanged");
             (Arc::clone(adapter), None)

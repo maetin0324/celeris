@@ -41,8 +41,8 @@ use base64::Engine;
 use task_core::ProgressKind;
 
 use crate::adapter::{
-    AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter, deadline_terminal,
-    spawn_capture_stderr,
+    AdapterError, AdapterSetting, AdapterSettings, Configured, EventSink, RunLimits, RunOutcome,
+    Terminal, WorkerAdapter, deadline_terminal, spawn_capture_stderr,
 };
 use crate::claude_code::build_prompt_with_skill_list;
 use crate::cos_chat::capabilities::{
@@ -142,24 +142,24 @@ impl WorkerAdapter for AcpAdapter {
         run_acp(&self.config, &req, run_id, &limits, sink).await
     }
 
-    /// `claude_code::ClaudeCodeAdapter::with_env` と同じ規則（同名キーは後勝ち）。ADR-0026 D5:
-    /// acp はアカウントプールを使わないが、`env` の上書き自体は他アダプタと同じ形で提供しておく。
-    fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut config = self.config.clone();
-        config.env.extend(extra.iter().cloned());
-        Some(Arc::new(AcpAdapter::new(config)))
-    }
-    /// route の model を `session/set_config_option` で渡す複製。
-    fn with_model(&self, model: &str) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut config = self.config.clone();
-        config.model = Some(model.to_owned());
-        Some(Arc::new(AcpAdapter::new(config)))
-    }
-    /// ADR-0043 D3（Phase 56）: コンテナの中で ACP エージェントを起こす複製。
-    fn with_container(&self, plan: crate::container::SharedPlan) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut config = self.config.clone();
-        config.container = Some(plan);
-        Some(Arc::new(AcpAdapter::new(config)))
+    /// ADR 2026-11-10-worker-capability-ports D3: route の model（`session/set_config_option` で渡す）、
+    /// env（同名キーは後勝ち。ADR-0026 D5: acp はアカウントプールを使わないが env の上書きは受ける）、
+    /// コンテナ（ADR-0043 D3）を受ける。
+    fn configure(&self, settings: &AdapterSettings) -> Configured {
+        settings.configured(
+            &[
+                AdapterSetting::Model,
+                AdapterSetting::Env,
+                AdapterSetting::Container,
+            ],
+            || {
+                let mut config = self.config.clone();
+                settings.apply_model(&mut config.model);
+                settings.apply_env(&mut config.env);
+                settings.apply_container(&mut config.container);
+                Arc::new(Self::new(config))
+            },
+        )
     }
 }
 

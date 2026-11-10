@@ -466,7 +466,7 @@ async fn health_review_scenario_high_risk_change() {
 }
 
 /// 本物の検査器の file（`scripts/dev/repo-health/` と side file）を `dest` に写す（`__pycache__` は除く）。
-fn copy_checker(src_root: &std::path::Path, dest: &std::path::Path) {
+pub(super) fn copy_checker(src_root: &std::path::Path, dest: &std::path::Path) {
     fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
         std::fs::create_dir_all(to).unwrap();
         for entry in std::fs::read_dir(from).unwrap() {

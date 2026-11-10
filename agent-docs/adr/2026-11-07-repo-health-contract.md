@@ -122,3 +122,21 @@ python3 scripts/dev/repo-health/repo_health.py --repo <path> --base <rev> --head
 - core: D1 の CLI、D2 の解決と base 側読み、D7 の mode・snapshot、D8 の決定性と report 出力。出力は必ず `validate_report.py` を通す試験を持つ。
 - rules-structure・rules-dup・rules-archmap: D5 の rule を実装し、finding は D4 の欄を埋める。候補は candidate=true・severity warning 以下。
 - celeris-profile: `profiles/celeris.toml` と `profiles/default.toml`、`check-health.sh` からの呼び出し、既存 script の root・base 解決の削除。
+
+## 付記（2026-11-10、期限付き例外）
+健全性 v2 G4 の task 01M72DBBE7AFCNXYWSB5M0YZW9（unit exc-expiry）。人の決定 exception-expiry「G4 で実装する」による。D2・D4・D6・D8 に次を足す。
+
+1. 欄: profile の `[[rules."<id>".exceptions]]` に任意の欄 `expires`（TOML の日付 `YYYY-MM-DD`）を置ける。その日まで有効で、基準日 ≦ `expires` なら免除し、基準日 > `expires` なら期限切れとして免除しない。`expires` の無い例外は今と同じく無期限。`expires` が TOML の日付でない（文字列 `"2026-03-01"`・日時 `2026-03-01T00:00:00`・時刻・数）なら profile の読み込みエラー（`profile_invalid`。report を書かず exit 2）。
+2. 判定に使う profile: D2 のまま base 側（base に profile が無い初回だけ bootstrap の head）。head が `expires` を延ばしても判定には使わない。延長は policy の file の変更なので `policy.changed`（必須、severity error）で fail になり、ほかの policy の変更と同じく別の review で承認する。
+3. 基準日: base の commit の committer date を UTC の日付にしたもの。実行時の時計・head の commit の日付・author date は使わない（D8 の決定性。同じ base・head・profile からは、いつ走らせても同じ report になる）。base に届かず日付が無いときは、期限付きの例外を全部期限切れとして扱う（D7 の base 不達では rule を評価しないので、今の検査器では finding に現れない）。
+4. report の形:
+   - 期限内の例外: finding の `exception` は `{reason, source: {path, line}, expires}`（`expires` は `"YYYY-MM-DD"`）。今と同じく fail に数えない。
+   - 期限切れの例外: finding の `exception` は null にし、欄 `expired_exception` = `{reason, source: {path, line}, expires}` を足す。fail 級の式（severity error・delta new か worsened・`exception` が null。`health/engine.py` の `is_fail_grade`、`validate_report.py` の S3、task-dispatch の `health_review`）は変えない。期限切れの例外の finding は、この式のまま fail 級に入る。
+   - 1 つの finding に一致する例外が複数あれば、期限内のうち profile の先頭に近いものを使う。期限内が無く期限切れがあれば、期限切れのうち先頭に近いものを `expired_exception` に書く。
+   - `policy.exceptions_as_of`: 基準日（`"YYYY-MM-DD"`、日付が無ければ null）。profile（extends の親を含む）に `expires` 付きの例外があるときだけ書く。
+   - 期限付きの例外の無い profile の report は、この付記の前の検査器の report と byte 単位で同じ（`expires`・`expired_exception`・`exceptions_as_of` を書かない）。
+5. 検証器: 意味規則 S13 を足す。`expired_exception` のある finding は `exception` が null。`exception.expires` か `expired_exception.expires` のある finding があれば `policy.exceptions_as_of` がある。期限内（`exception.expires`）は `exceptions_as_of` が null でなく `expires` 以前、期限切れ（`expired_exception.expires`）は `exceptions_as_of` が null か `expires` より後。examples は 13 件（`exception-expiry.json` を足した）、bad-examples は 25 件（`expired-exception-with-exception.json`・`exception-expires-before-as-of.json`・`expired-exception-not-yet-expired.json`・`exception-expires-without-as-of.json` を足した）。
+6. 試験: `scripts/tests/test_repo_health_exception_expiry.py` の `test_exception_expired_finding_counts_as_fail`（期限切れは免除せず exit 1）・`test_exception_expiry_in_term_exempts_finding`（期限の当日は免除して exit 0。基準日は UTC で、head の日付と時計を使わない）・`test_exception_expiry_extension_by_candidate_does_not_pass`（head が期限を延ばしても base の期限で期限切れのまま、`policy.changed` も fail）・`test_exception_expiry_rejects_invalid_value`（文字列・日時・時刻・数は exit 2 で report を書かない）・`test_exception_expiry_report_validates`（3 例の report が検証器を通り、S13 に反する改変は落ち、期限の無い profile の report に新しい欄が出ない）。同じ file の module 関数 `make_expiry_repo(root, case)`（case は expired・in_term・extended）が一時 repo を作り `(base_sha, head_sha)` を返す。base と head の commit の日付は `GIT_COMMITTER_DATE` で固定する。
+- 採らなかった: 実行時の時計で判定する案。D8 の決定性に反し、同じ commit の review の結論が走らせた日で変わる。
+- 採らなかった: head 側の profile の `expires` で判定する案。D2 の「採らなかった」と同じく、候補が期限を延ばして自分を合格にできる。
+- 採らなかった: 期限切れの例外を `exception` に残し、fail 級の式に期限の条件を足す案。式の写しが検査器・検証器・dispatcher の 3 か所にあり、3 か所を同時に変えないと判定が食い違う。

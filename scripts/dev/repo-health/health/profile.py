@@ -30,6 +30,11 @@ profile の項目（未知の項目は読み込みエラー。破壊的変更の
         [[rules."<id>".exceptions]]    # 例外。reason 必須、fingerprint か path（正規表現）のどちらか
         fingerprint = "<rule_id>:<hash>" / path = "<regex>"
         reason = "..."
+        expires = YYYY-MM-DD           # 任意。TOML の日付（文字列・日時・時刻・数はエラー）。その日まで有効。
+                                       # 基準日は base の commit の committer date の UTC の日付（実行時の時計は
+                                       # 使わない）。期限切れの例外は免除しない（engine が finding の exception を
+                                       # null にし expired_exception に書く。ADR 2026-11-07-repo-health-contract
+                                       # 付記 2026-11-10）
     [review]                           # 任意。repo 固有の設計 review の方針（ADR 2026-11-07-health-review-integration D2）
         owner_map = "<repo path>"      # 変更 path の owner 行を引く file（地図の表の行）
         [[review.high_risk]]           # 高 risk の path class。class は空でない文字列で重複不可
@@ -49,6 +54,7 @@ review policy（`--print-review-policy` の JSON、schema/review-policy-v1.schem
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import json
 import os
@@ -91,6 +97,7 @@ class Exception_:
     line: int
     fingerprint: str | None = None
     path_re: re.Pattern | None = None
+    expires: datetime.date | None = None  # その日まで有効。None は無期限
 
     def matches(self, fingerprint: str, evidence_paths: list[str]) -> bool:
         if self.fingerprint is not None:
@@ -98,8 +105,15 @@ class Exception_:
         assert self.path_re is not None
         return any(self.path_re.search(p) for p in evidence_paths)
 
+    def expired(self, as_of: datetime.date | None) -> bool:
+        """基準日 as_of（base の commit の UTC の日付）に期限を過ぎているか。日付が無ければ期限付きは期限切れ。"""
+        return self.expires is not None and (as_of is None or as_of > self.expires)
+
     def as_report(self) -> dict:
-        return {"reason": self.reason, "source": {"path": self.path, "line": self.line}}
+        out: dict = {"reason": self.reason, "source": {"path": self.path, "line": self.line}}
+        if self.expires is not None:
+            out["expires"] = self.expires.isoformat()
+        return out
 
 
 @dataclass
@@ -157,6 +171,11 @@ class Profile:
 
     def mentioned_rules(self) -> list[str]:
         return sorted(self.data.get("rules", {}))
+
+    @property
+    def has_expiring_exceptions(self) -> bool:
+        """期限付きの例外があるか（report の policy.exceptions_as_of を書くかどうか）。"""
+        return any(e.expires is not None for excs in self.exceptions.values() for e in excs)
 
     def definition_sha256(self) -> str:
         h = hashlib.sha256()
@@ -245,8 +264,12 @@ def validate(data: dict, where: str) -> None:
                 raise _err(where, f"rules.{rid}.exceptions[{i}] に reason が無い")
             if ("fingerprint" in exc) == ("path" in exc):
                 raise _err(where, f"rules.{rid}.exceptions[{i}] は fingerprint か path のどちらか 1 つ")
-            if set(exc) - {"fingerprint", "path", "reason"}:
+            if set(exc) - {"fingerprint", "path", "reason", "expires"}:
                 raise _err(where, f"rules.{rid}.exceptions[{i}] に未知の欄")
+            # datetime.datetime は datetime.date の subclass なので型そのものを比べる
+            if "expires" in exc and type(exc["expires"]) is not datetime.date:
+                raise _err(where, f"rules.{rid}.exceptions[{i}].expires は TOML の日付（YYYY-MM-DD。引用符を付けない）"
+                                  f"でなければならない（{type(exc['expires']).__name__} {exc['expires']!r}）")
             if "path" in exc:
                 _check_regexes(f"{where}:rules.{rid}.exceptions[{i}].path", [exc["path"]])
         if rid == "policy.changed" and cfg.get("exceptions"):
@@ -326,6 +349,7 @@ def _exception_lines(text: str, rid: str, exceptions: list[dict], path: str) -> 
             line=line,
             fingerprint=exc.get("fingerprint"),
             path_re=re.compile(exc["path"]) if "path" in exc else None,
+            expires=exc.get("expires"),
         ))
     return out
 

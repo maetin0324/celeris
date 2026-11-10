@@ -10,7 +10,7 @@ exit 1。file が読めない・JSON でない・引数が無いのも exit 1（
 1. 形: schema/report-v1.schema.json（JSON Schema 2020-12 の部分集合。type・const・enum・required・
    properties・additionalProperties・items・minItems・minLength・maxLength・minimum・pattern・$ref）。
    外部 package は使わない（Python 3 標準ライブラリだけ）。
-2. 意味（ADR 2026-11-07-repo-health-contract の集約規則）:
+2. 意味（ADR 2026-11-07-repo-health-contract の集約規則。S13 は付記 2026-11-10）:
    S1  finding の snapshot は report の snapshot と一致する
    S2  finding の rule_id は rules にある
    S3  rule の status と finding の整合: pass は fail 級 finding なし、fail は 1 件以上、
@@ -27,10 +27,15 @@ exit 1。file が読めない・JSON でない・引数が無いのも exit 1（
        not_applicable
    S11 fingerprint は report の中で一意で、先頭は自分の rule_id
    S12 rule の reason は pass 以外で空でない。exception 付き finding は fail 級に数えない
+   S13 期限付き例外: expired_exception のある finding は exception が null（期限切れは免除しない）。
+       exception.expires か expired_exception.expires があれば policy.exceptions_as_of がある。
+       期限内（exception.expires）は exceptions_as_of が null でなく expires 以前、
+       期限切れ（expired_exception.expires）は exceptions_as_of が null か expires より後
 """
 
 from __future__ import annotations
 
+import datetime
 import json
 import re
 import sys
@@ -242,6 +247,42 @@ def check_semantics(report: dict, out: Violations) -> None:
         for i, r in enumerate(rules):
             if r["id"].startswith(DOC_ONLY_NOT_APPLICABLE_PREFIXES) and r["status"] != "not_applicable":
                 out.add(f"/rules/{i}/status", f"S10: doc-only では {r['id']} は not_applicable")
+
+    check_expiry(policy, findings, out)
+
+
+def _date(value: str, pointer: str, out: Violations) -> datetime.date | None:
+    try:
+        return datetime.date.fromisoformat(value)
+    except ValueError:
+        out.add(pointer, f"S13: 日付でない（{value!r}）")
+        return None
+
+
+def check_expiry(policy: dict, findings: list[dict], out: Violations) -> None:
+    """S13: 期限付き例外（ADR 2026-11-07-repo-health-contract 付記 2026-11-10）。"""
+    as_of = None
+    if policy.get("exceptions_as_of") is not None:
+        as_of = _date(policy["exceptions_as_of"], "/policy/exceptions_as_of", out)
+    for i, f in enumerate(findings):
+        p = f"/findings/{i}"
+        exc, expired = f["exception"], f.get("expired_exception")
+        if expired is not None and exc is not None:
+            out.add(f"{p}/expired_exception", "S13: 期限切れの例外の finding は exception が null（免除しない）")
+        dated = [(f"{p}/exception/expires", exc["expires"], False)] if exc is not None and "expires" in exc else []
+        if expired is not None:
+            dated.append((f"{p}/expired_exception/expires", expired["expires"], True))
+        for pointer, value, is_expired in dated:
+            if "exceptions_as_of" not in policy:
+                out.add(pointer, "S13: 期限付きの例外があるのに policy.exceptions_as_of（基準日）が無い")
+                continue
+            expires = _date(value, pointer, out)
+            if expires is None:
+                continue
+            if is_expired and as_of is not None and as_of <= expires:
+                out.add(pointer, f"S13: 基準日 {as_of} は期限 {expires} を過ぎていない（期限内なら exception に書く）")
+            if not is_expired and (as_of is None or as_of > expires):
+                out.add(pointer, f"S13: 基準日 {as_of} は期限 {expires} を過ぎている（期限切れは免除しない）")
 
 
 

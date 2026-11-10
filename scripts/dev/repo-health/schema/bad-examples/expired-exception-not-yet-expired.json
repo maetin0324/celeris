@@ -1,0 +1,322 @@
+{
+  "schema": "celeris.repo-health.report/1",
+  "tool": {
+    "name": "repo_health.py",
+    "version": "1.0"
+  },
+  "inputs": {
+    "base": "708b8cfc62297cd2a9b18fa90036088bc618ff69",
+    "head": "8f17ecad2e1f9a354043bc49c0b3dbe789c45d66",
+    "policy_version": "1",
+    "profile": {
+      "requested": null,
+      "resolved": "default",
+      "source": "repo"
+    },
+    "mode": "full"
+  },
+  "snapshot": {
+    "base": {
+      "sha": "708b8cfc62297cd2a9b18fa90036088bc618ff69",
+      "reachable": true
+    },
+    "head": {
+      "kind": "commit",
+      "sha": "8f17ecad2e1f9a354043bc49c0b3dbe789c45d66",
+      "dirty": false
+    },
+    "shallow": false,
+    "submodules": []
+  },
+  "policy": {
+    "version": "1",
+    "source": "base",
+    "changed": false,
+    "files": [
+      {
+        "path": "scripts/dev/repo-health/profiles/default.toml",
+        "base_blob": "e9278e4a5e74c34be0c82799b2b0679f7e6cff80",
+        "head_blob": "e9278e4a5e74c34be0c82799b2b0679f7e6cff80"
+      }
+    ],
+    "exceptions_as_of": "2026-03-02"
+  },
+  "rules": [
+    {
+      "id": "deps.violation",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "no_layers_declared: profile の rules.\"deps.violation\".layers が空",
+      "adapter": "generic"
+    },
+    {
+      "id": "deps.cycle",
+      "required": true,
+      "status": "pass",
+      "reason": "",
+      "adapter": "generic"
+    },
+    {
+      "id": "size.responsibility-growth",
+      "required": true,
+      "status": "fail",
+      "reason": "1 fail-grade finding(s)",
+      "adapter": "generic"
+    },
+    {
+      "id": "dup.contract",
+      "required": false,
+      "status": "pass",
+      "reason": "",
+      "adapter": "generic"
+    },
+    {
+      "id": "dup.state",
+      "required": false,
+      "status": "pass",
+      "reason": "",
+      "adapter": "generic"
+    },
+    {
+      "id": "dup.public-surface",
+      "required": false,
+      "status": "pass",
+      "reason": "",
+      "adapter": "generic"
+    },
+    {
+      "id": "link.unlinked",
+      "required": false,
+      "status": "pass",
+      "reason": "",
+      "adapter": "generic"
+    },
+    {
+      "id": "dup.test-fixture",
+      "required": false,
+      "status": "pass",
+      "reason": "",
+      "adapter": "generic"
+    },
+    {
+      "id": "migration.remnant",
+      "required": false,
+      "status": "pass",
+      "reason": "",
+      "adapter": "generic"
+    },
+    {
+      "id": "arch-map.missing_row",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "no_arch_map: profile に arch_map.path が無い",
+      "adapter": "docs",
+      "wraps": "scripts/dev/check-architecture-map.py"
+    },
+    {
+      "id": "arch-map.missing_test",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "no_arch_map: profile に arch_map.path が無い",
+      "adapter": "docs",
+      "wraps": "scripts/dev/check-architecture-map.py"
+    },
+    {
+      "id": "arch-map.wrong_owner",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "no_arch_map: profile に arch_map.path が無い",
+      "adapter": "docs",
+      "wraps": "scripts/dev/check-architecture-map.py"
+    },
+    {
+      "id": "arch-map.missing_invariant",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "no_arch_map: profile に arch_map.path が無い",
+      "adapter": "docs",
+      "wraps": "scripts/dev/check-architecture-map.py"
+    },
+    {
+      "id": "arch-map.stale",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "no_arch_map: profile に arch_map.path が無い",
+      "adapter": "docs",
+      "wraps": "scripts/dev/check-architecture-map.py"
+    },
+    {
+      "id": "arch-map.wrong_path",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "no_arch_map: profile に arch_map.path が無い",
+      "adapter": "docs",
+      "wraps": "scripts/dev/check-architecture-map.py"
+    },
+    {
+      "id": "doc.links",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "no_command: profile の rules.<id>.commands が無い",
+      "adapter": "docs"
+    },
+    {
+      "id": "adr.numbers",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "no_command: profile の rules.<id>.commands が無い",
+      "adapter": "docs"
+    },
+    {
+      "id": "progress.index",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "no_command: profile の rules.<id>.commands が無い",
+      "adapter": "docs"
+    },
+    {
+      "id": "human-text",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "no_command: profile の rules.<id>.commands が無い",
+      "adapter": "docs"
+    },
+    {
+      "id": "source-size",
+      "required": true,
+      "status": "not_applicable",
+      "reason": "no_command: profile の rules.<id>.commands が無い",
+      "adapter": "generic"
+    },
+    {
+      "id": "policy.changed",
+      "required": true,
+      "status": "pass",
+      "reason": "",
+      "adapter": "generic"
+    }
+  ],
+  "findings": [
+    {
+      "rule_id": "link.unlinked",
+      "fingerprint": "link.unlinked:7da89682412520ca",
+      "severity": "warning",
+      "delta": "existing",
+      "candidate": true,
+      "evidence": [
+        {
+          "path": "scripts/dev/repo-health/profiles/default.toml",
+          "ref": "head"
+        }
+      ],
+      "snapshot": {
+        "base": "708b8cfc62297cd2a9b18fa90036088bc618ff69",
+        "head": "8f17ecad2e1f9a354043bc49c0b3dbe789c45d66",
+        "dirty": false,
+        "shallow": false
+      },
+      "scope": {
+        "kind": "file",
+        "id": "scripts/dev/repo-health/profiles/default.toml"
+      },
+      "exception": null,
+      "rationale": "script scripts/dev/repo-health/profiles/default.toml の名前（default.toml, default）が自分以外の追跡 file に出てこない。どこからも呼ばれない・読まれない候補"
+    },
+    {
+      "rule_id": "size.responsibility-growth",
+      "fingerprint": "size.responsibility-growth:095a199b93fe9916",
+      "severity": "error",
+      "delta": "new",
+      "candidate": false,
+      "evidence": [
+        {
+          "path": "src/wide.py",
+          "line": 1,
+          "ref": "head"
+        }
+      ],
+      "snapshot": {
+        "base": "708b8cfc62297cd2a9b18fa90036088bc618ff69",
+        "head": "8f17ecad2e1f9a354043bc49c0b3dbe789c45d66",
+        "dirty": false,
+        "shallow": false
+      },
+      "scope": {
+        "kind": "file",
+        "id": "src/wide.py"
+      },
+      "exception": {
+        "reason": "src/wide.py の分割は 2026-06 の段で行う（期限付き）",
+        "source": {
+          "path": "scripts/dev/repo-health/profiles/default.toml",
+          "line": 11
+        },
+        "expires": "2026-06-30"
+      },
+      "rationale": "file の本体の行 5 が閾値 3 を超えた（単位 src/wide.py）。"
+    },
+    {
+      "rule_id": "size.responsibility-growth",
+      "fingerprint": "size.responsibility-growth:2040a40b82daf215",
+      "severity": "error",
+      "delta": "new",
+      "candidate": false,
+      "evidence": [
+        {
+          "path": "src/big.py",
+          "line": 1,
+          "ref": "head"
+        }
+      ],
+      "snapshot": {
+        "base": "708b8cfc62297cd2a9b18fa90036088bc618ff69",
+        "head": "8f17ecad2e1f9a354043bc49c0b3dbe789c45d66",
+        "dirty": false,
+        "shallow": false
+      },
+      "scope": {
+        "kind": "file",
+        "id": "src/big.py"
+      },
+      "exception": null,
+      "expired_exception": {
+        "reason": "src/big.py の分割は 2026-02 の段で行う（期限付き）",
+        "source": {
+          "path": "scripts/dev/repo-health/profiles/default.toml",
+          "line": 6
+        },
+        "expires": "2026-03-02"
+      },
+      "rationale": "file の本体の行 6 が閾値 3 を超えた（単位 src/big.py）。"
+    }
+  ],
+  "summary": {
+    "verdict": "fail",
+    "exit_code": 1,
+    "reviewable": true,
+    "counts": {
+      "findings": 3,
+      "fail_grade": 1,
+      "new": 2,
+      "worsened": 0,
+      "existing": 1
+    }
+  },
+  "metrics": {
+    "diff": {
+      "changed_files": 2,
+      "changed_lines": 11
+    },
+    "head_files": {
+      "by_language": {
+        "data": 1,
+        "markdown": 1,
+        "python": 2
+      },
+      "by_class": {
+        "docs": 1,
+        "product": 3
+      }
+    }
+  }
+}

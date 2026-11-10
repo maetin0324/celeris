@@ -123,6 +123,8 @@ fn build_prompt_includes_objective_criteria_and_result_file_instructions() {
     assert!(prompt.contains(&task.objective));
     assert!(prompt.contains("cargo test exit 101"));
     assert!(prompt.contains("artifacts/result.json"));
+    // ADR-0006 D3: `evidence` の要素は object（寛容な読み方は `result_report::lenient_evidence`）。
+    assert!(prompt.contains("plain strings are not accepted"));
     assert!(prompt.contains("reviewer will independently re-run"));
     assert!(prompt.contains("run-xyz"));
     assert!(prompt.contains("attempt 1 of"));
@@ -1222,35 +1224,6 @@ async fn success_without_result_file_is_an_infra_failure_not_a_retryable_worker_
     // ことの確認をもって代える（`dispatcher.rs` 側の網羅テストが `None` → `InfraRequeue` を見る）。
 }
 
-#[tokio::test]
-async fn question_in_result_file_blocks_task() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = stub_claude(
-        dir.path(),
-        r#"mkdir -p artifacts
-printf '%s' '{"question":"which crate version?"}' > artifacts/result.json
-echo '{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":30,"output_tokens":40}}'
-"#,
-    );
-    let adapter = ClaudeCodeAdapter::new(config);
-    let req = sample_req(dir.path().to_path_buf());
-    let sink = RecordingSink::default();
-    let outcome = adapter
-        .run(req, "run-3", default_limits(), &sink)
-        .await
-        .unwrap();
-    match outcome.terminal {
-        Terminal::Question { text, usage } => {
-            assert_eq!(text, "which crate version?");
-            // question 終了でも result 行の usage を運ぶ（runs.usage_json / worker_finished に残る）。
-            let usage = usage.expect("question run carries usage");
-            assert_eq!(usage.input_tokens, Some(30));
-            assert_eq!(usage.output_tokens, Some(40));
-        }
-        other => panic!("expected question, got {other:?}"),
-    }
-}
-
 /// ADR-0072 D7（Phase E1）: `error_max_turns` は `result.json` が書けていても
 /// `Terminal::BudgetExhausted{kind: Turns}` になる（result.json より優先。継続の対象で、
 /// `Error` ではない）。usage があれば運ぶ（従来は捨てていた）。
@@ -1284,109 +1257,6 @@ echo '{"type":"result","subtype":"error_max_turns","is_error":true,"usage":{"inp
             assert_eq!(usage.output_tokens, Some(50));
         }
         other => panic!("expected budget_exhausted, got {other:?}"),
-    }
-}
-
-/// ADR-0072 D9（Phase E1）: `result.json` の `{"yield": {...}}` が `Terminal::Yielded` になる。
-#[tokio::test]
-async fn result_yield_becomes_terminal_yielded() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = stub_claude(
-        dir.path(),
-        r#"mkdir -p artifacts
-printf '%s' '{"yield":{"completed":["A"],"remaining":["B"],"next_action":"do B"}}' > artifacts/result.json
-echo '{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":10,"output_tokens":20}}'
-"#,
-    );
-    let adapter = ClaudeCodeAdapter::new(config);
-    let req = sample_req(dir.path().to_path_buf());
-    let sink = RecordingSink::default();
-    let outcome = adapter
-        .run(req, "run-yield", default_limits(), &sink)
-        .await
-        .unwrap();
-    match outcome.terminal {
-        Terminal::Yielded { checkpoint, usage } => {
-            assert_eq!(checkpoint["next_action"], "do B");
-            let usage = usage.expect("usage carried through");
-            assert_eq!(usage.input_tokens, Some(10));
-        }
-        other => panic!("expected yielded, got {other:?}"),
-    }
-}
-
-/// ADR-0090 D1: `result.json` の `{"type": "wait", "kind": "cluster_job", ...}` が `Terminal::Waiting` になり、
-/// 生の JSONL の `result.json`（run ディレクトリ）にも `{"type":"wait",...}` の 1 行が残る。不正な wait は
-/// `Error{retryable: true}`、`question` は wait より優先する。
-#[tokio::test]
-async fn result_wait_becomes_terminal_waiting() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = stub_claude(
-        dir.path(),
-        r#"mkdir -p artifacts
-printf '%s' '{"type":"wait","kind":"cluster_job","cluster":"sirius","jobs":["42634","42635"],"scheduler":"pbs","poll_secs":300,"timeout_secs":43200,"checkpoint":{"completed":["submitted"],"next_action":"collect"},"summary":"submitted 2 jobs"}' > artifacts/result.json
-echo '{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":10,"output_tokens":20}}'
-"#,
-    );
-    let adapter = ClaudeCodeAdapter::new(config);
-    let req = sample_req(dir.path().to_path_buf());
-    let sink = RecordingSink::default();
-    let outcome = adapter
-        .run(req, "run-wait", default_limits(), &sink)
-        .await
-        .unwrap();
-    match outcome.terminal {
-        Terminal::Waiting {
-            request,
-            checkpoint,
-            usage,
-        } => {
-            assert_eq!(request.cluster.as_deref(), Some("sirius"));
-            assert_eq!(request.jobs, vec!["42634".to_string(), "42635".to_string()]);
-            assert_eq!(
-                request.scheduler,
-                task_core::cluster_job::ClusterScheduler::Pbs
-            );
-            assert_eq!(request.poll_secs, Some(300));
-            assert_eq!(request.timeout_secs, Some(43200));
-            assert_eq!(request.summary, "submitted 2 jobs");
-            assert_eq!(checkpoint.expect("checkpoint")["next_action"], "collect");
-            assert_eq!(usage.expect("usage").input_tokens, Some(10));
-        }
-        other => panic!("expected waiting, got {other:?}"),
-    }
-    let raw = std::fs::read_to_string(dir.path().join("runs/run-wait/result.json")).unwrap();
-    let line: serde_json::Value = serde_json::from_str(raw.trim()).unwrap();
-    assert_eq!(line["type"], "wait");
-    assert_eq!(line["jobs"][1], "42635");
-
-    // 不正な wait（job id にシェルの文字）は retryable な error。
-    let dir = tempfile::tempdir().unwrap();
-    let config = stub_claude(
-        dir.path(),
-        r#"mkdir -p artifacts
-printf '%s' '{"type":"wait","kind":"cluster_job","jobs":["1;rm"]}' > artifacts/result.json
-echo '{"type":"result","subtype":"success","is_error":false}'
-"#,
-    );
-    let adapter = ClaudeCodeAdapter::new(config);
-    let outcome = adapter
-        .run(
-            sample_req(dir.path().to_path_buf()),
-            "run-bad-wait",
-            default_limits(),
-            &sink,
-        )
-        .await
-        .unwrap();
-    match outcome.terminal {
-        Terminal::Error {
-            message, retryable, ..
-        } => {
-            assert!(retryable);
-            assert!(message.contains("invalid cluster job wait"), "{message}");
-        }
-        other => panic!("expected error, got {other:?}"),
     }
 }
 
@@ -1442,34 +1312,6 @@ async fn crash_with_matching_stderr_is_classified_as_provider_failure() {
         .await
         .expect_err("expected a provider failure");
     assert!(matches!(err, AdapterError::AuthFailed(_)), "{err:?}");
-}
-
-#[tokio::test]
-async fn invalid_result_file_json_is_retryable_error() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = stub_claude(
-        dir.path(),
-        r#"mkdir -p artifacts
-printf 'not json' > artifacts/result.json
-echo '{"type":"result","subtype":"success","is_error":false}'
-"#,
-    );
-    let adapter = ClaudeCodeAdapter::new(config);
-    let req = sample_req(dir.path().to_path_buf());
-    let sink = RecordingSink::default();
-    let outcome = adapter
-        .run(req, "run-5", default_limits(), &sink)
-        .await
-        .unwrap();
-    match outcome.terminal {
-        Terminal::Error {
-            retryable, message, ..
-        } => {
-            assert!(retryable);
-            assert!(message.contains("not valid JSON"), "{message}");
-        }
-        other => panic!("expected error, got {other:?}"),
-    }
 }
 
 /// ADR-0072 D7（Phase E1）: wall-clock の打ち切りは `Terminal::BudgetExhausted{kind: WallClock}`
@@ -1622,44 +1464,6 @@ async fn stale_result_file_from_previous_run_is_cleared_before_this_run() {
             panic!("expected error (stale file must be cleared, not reused), got {other:?}")
         }
     }
-}
-
-/// Phase 5 ドッグフードの回帰: `evidence` が文字列の配列など不正な形でも、`summary` があれば `done`
-/// として扱い、読めない要素は捨てる（ADR-0006 D3）。
-#[tokio::test]
-async fn malformed_evidence_in_result_file_does_not_fail_the_run() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = stub_claude(
-        dir.path(),
-        r#"mkdir -p artifacts
-printf '%s' '{"summary":"all good","evidence":["cargo test: 4 passed",{"criterion":0,"command":"cargo test","exit":0,"stdout_tail":""},42]}' > artifacts/result.json
-echo '{"type":"result","subtype":"success","is_error":false}'
-"#,
-    );
-    let adapter = ClaudeCodeAdapter::new(config);
-    let req = sample_req(dir.path().to_path_buf());
-    let sink = RecordingSink::default();
-    let outcome = adapter
-        .run(req, "run-11", default_limits(), &sink)
-        .await
-        .unwrap();
-    match outcome.terminal {
-        Terminal::Done {
-            summary, evidence, ..
-        } => {
-            assert_eq!(summary, "all good");
-            assert_eq!(evidence.len(), 1);
-            assert_eq!(evidence[0].command.as_deref(), Some("cargo test"));
-        }
-        other => panic!("expected done, got {other:?}"),
-    }
-    let prompt = build_prompt(
-        &crate::protocol::tests::sample_task(),
-        &RunContext::default(),
-        "r",
-        "artifacts",
-    );
-    assert!(prompt.contains("plain strings are not accepted"));
 }
 
 /// ADR-0033 D4 / D6（Phase 24）: 前置き（役職と brief・記憶・直近のやり取り）がプロンプトに入り、

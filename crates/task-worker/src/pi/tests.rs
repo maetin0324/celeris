@@ -299,28 +299,21 @@ async fn pi_adapter_without_proxy_base_url_does_not_transport_context_header() {
     );
 }
 
+/// 結線: pi の run は結果ファイルを結果契約（`result_report::interpret_result_text`）で読む。優先順位・無効値の
+/// 組は共通試験（`result_contract_priority_order`・`result_contract_invalid_json_is_retryable_error`）が見る。
 #[tokio::test]
-async fn pi_adapter_result_question_yield_and_invalid_json() {
-    for (body, expected) in [
-        (r#"{"question":"which?","summary":"ignored"}"#, "question"),
-        (r#"{"yield":{"next_action":"continue"}}"#, "yield"),
-        ("not json", "error"),
-    ] {
-        let dir = tempfile::tempdir().unwrap();
-        let script = format!(
-            "mkdir -p artifacts\nprintf '%s' '{body}' > artifacts/result.json\nprintf '%s\\n' '{{\"type\":\"agent_end\"}}'"
-        );
-        let outcome = PiAdapter::new(config(dir.path(), &script))
-            .run(request(dir.path()), "result", limits(), &NullSink)
-            .await
-            .unwrap();
-        assert!(matches!(
-            (outcome.terminal, expected),
-            (Terminal::Question { .. }, "question")
-                | (Terminal::Yielded { .. }, "yield")
-                | (Terminal::Error { .. }, "error")
-        ));
-    }
+async fn pi_adapter_result_file_question_becomes_terminal_question() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = "mkdir -p artifacts\nprintf '%s' '{\"question\":\"which?\",\"summary\":\"ignored\"}' > artifacts/result.json\nprintf '%s\\n' '{\"type\":\"agent_end\"}'";
+    let outcome = PiAdapter::new(config(dir.path(), script))
+        .run(request(dir.path()), "result", limits(), &NullSink)
+        .await
+        .unwrap();
+    assert!(
+        matches!(outcome.terminal, Terminal::Question { ref text, .. } if text == "which?"),
+        "{:?}",
+        outcome.terminal
+    );
 }
 
 #[tokio::test]

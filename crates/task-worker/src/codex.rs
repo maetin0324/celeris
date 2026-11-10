@@ -14,7 +14,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use serde::Deserialize;
 use task_core::{RateLimitObservation, Usage};
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::Command;
@@ -24,8 +23,9 @@ use crate::adapter::{AdapterError, EventSink, RunLimits, RunOutcome, Terminal, W
 use crate::claude_code::{build_prompt, work_dir_note};
 use crate::delegate_file::{clear_delegate_file, forward_delegate_file};
 use crate::progress;
-use crate::protocol::{Evidence, ProviderFailure, RunRequest};
+use crate::protocol::{ProviderFailure, RunRequest};
 use crate::provider::classify_provider_failure;
+use crate::result_report::{ResultFileRead, interpret_result_text};
 use crate::subprocess::{
     LineOutcome, MAX_LINE_BYTES, kill_now, read_line_limited, read_tail, reap_after_terminal,
     write_result_json,
@@ -241,22 +241,8 @@ pub(crate) fn now_unix_secs() -> i64 {
         .unwrap_or(0)
 }
 
-/// `artifacts/result.json`（`claude_code::ResultFile` と同じ規約。ADR-0006 D3, ADR-0008 D3）。
-#[derive(Debug, Deserialize)]
-struct ResultFile {
-    #[serde(default)]
-    summary: Option<String>,
-    #[serde(default)]
-    question: Option<String>,
-    #[serde(default)]
-    evidence: serde_json::Value,
-    /// ADR-0072 D9（Phase E1）: graceful yield（`claude_code::ResultFile::r#yield` と同じ規約）。
-    #[serde(default, rename = "yield")]
-    r#yield: Option<serde_json::Value>,
-}
-
 /// ADR-0061（Phase 104）: model が分かる時だけ静的単価表から USD を推定して埋める
-/// （`claude_code::terminal_from_result` と同じやり方。不明なモデル・token 欠落は `None` のまま）。
+/// （不明なモデル・token 欠落は `None` のまま）。
 fn with_estimated_cost(usage: Option<Usage>, model: Option<&str>) -> Option<Usage> {
     usage.map(|mut u| {
         if let Some(model) = model {
@@ -264,16 +250,6 @@ fn with_estimated_cost(usage: Option<Usage>, model: Option<&str>) -> Option<Usag
         }
         u
     })
-}
-
-fn lenient_evidence(value: serde_json::Value) -> Vec<Evidence> {
-    match value {
-        serde_json::Value::Array(items) => items
-            .into_iter()
-            .filter_map(|item| serde_json::from_value::<Evidence>(item).ok())
-            .collect(),
-        _ => Vec::new(),
-    }
 }
 
 /// `translate_resume_extra_args` の結果（ADR-0054 Phase 112 D1）。
@@ -1023,17 +999,9 @@ async fn run_codex(
         (None, Some(TurnSignal::Completed { usage })) => {
             // A conversation can answer directly; work orders still require their artifacts.
             // A CoS chat run (transient task without `conversation`) also replies in the chat.
-            let terminal = if req.requires_result_file()
-                && let Some(error) = crate::result_location::misplaced_report(
-                    crate::result_location::RESULT_FILE_NAME,
-                    &req.artifacts_dir,
-                    req.cwd(),
-                    run_started,
-                )
-                .await
-            {
-                error
-            } else if exit_status.success()
+            let read = crate::result_report::read_result_file(req, run_started).await;
+            let terminal = if !matches!(read, ResultFileRead::Misplaced(_))
+                && exit_status.success()
                 && (req.task.conversation.is_some() || cos_chat.is_some())
                 && req.task.kind == task_core::TaskKind::Execute
                 && matches!(tokio::fs::metadata(&result_path).await,
@@ -1044,9 +1012,9 @@ async fn run_codex(
                 // `result.json` body (e.g. it could not write into `artifacts_dir`, as happens when
                 // `exec resume` drops the `--add-dir` grant it would otherwise need). If it parses
                 // as that shape (a non-empty `summary` string and an `actions` array), recover it:
-                // write it to `result.json` as if the model had written it itself, and re-derive the
-                // terminal from disk through the normal path (`terminal_from_result`) so
-                // `actions`/`memory`/`milestone_proposal` all pick it up via the existing,
+                // write it to `result.json` as if the model had written it itself, and derive the
+                // terminal from that same text through the result contract (`interpret_result_text`)
+                // so `actions`/`memory`/`milestone_proposal` all pick it up via the existing,
                 // disk-reading machinery instead of the raw JSON text being treated as inert prose.
                 // A CoS chat run must not use `result.actions`; its reply stays plain text.
                 if cos_chat.is_none()
@@ -1059,13 +1027,11 @@ async fn run_codex(
                                 "result recovered from the final message (result.json was \
                                  missing; ADR-0054 Phase 112 D3)",
                             );
-                            terminal_from_result(
-                                &req.artifacts_dir,
+                            interpret_result_text(
+                                &summary,
                                 &artifacts_rel,
-                                *usage,
-                                config.model.as_deref(),
+                                with_estimated_cost(*usage, config.model.as_deref()),
                             )
-                            .await
                         }
                         Err(e) => {
                             warn!(
@@ -1087,13 +1053,7 @@ async fn run_codex(
                     }
                 }
             } else {
-                terminal_from_result(
-                    &req.artifacts_dir,
-                    &artifacts_rel,
-                    *usage,
-                    config.model.as_deref(),
-                )
-                .await
+                terminal_from_result(read, &artifacts_rel, *usage, config.model.as_deref())
             };
             (terminal, None)
         }
@@ -1403,62 +1363,26 @@ fn truncate(s: &str, max: usize) -> String {
     format!("{}…", &s[..end])
 }
 
-/// `turn.completed` と結果ファイルから終端を合成する。呼び出し元は `turn.completed` を一度でも
-/// 観測できた場合にのみこれを呼ぶ（`claude_code::terminal_from_result` と同じ構造。ADR-0008 D3）。
-async fn terminal_from_result(
-    artifacts_dir: &std::path::Path,
+/// `turn.completed` と結果ファイルの読み取り結果から終端を合成する。呼び出し元は `turn.completed` を一度でも
+/// 観測できた場合にのみこれを呼ぶ（ADR-0008 D3）。本文の解釈は結果契約の正本
+/// （`result_report::interpret_result_text`。ADR 2026-11-10-adapter-result-contract D1）に任せ、ここは
+/// 結果ファイルが無いときの codex の文言だけを持つ。
+fn terminal_from_result(
+    read: ResultFileRead,
     artifacts_rel: &str,
     usage: Option<Usage>,
     model: Option<&str>,
 ) -> Terminal {
-    let usage = with_estimated_cost(usage, model);
-    let result_path = artifacts_dir.join("result.json");
-    let text = match tokio::fs::read_to_string(&result_path).await {
-        Ok(t) => t,
-        Err(_) => {
-            return Terminal::Error {
-                message: format!("codex exited without {artifacts_rel}/result.json"),
-                retryable: true,
-                usage: None,
-            };
-        }
-    };
-
-    // ADR-0090 D1: クラスタ job の終了待ち（`question` が無ければ `summary` より優先）。
-    if let Some(terminal) = crate::adapter::result_file_wait(&text, usage) {
-        return terminal;
-    }
-    match serde_json::from_str::<ResultFile>(&text) {
-        Ok(rf) => {
-            // ADR-0072 D9: 優先順位は `question` > `summary` > `yield`。
-            if let Some(question) = rf.question {
-                Terminal::Question {
-                    text: question,
-                    usage,
-                }
-            } else if let Some(summary) = rf.summary {
-                Terminal::Done {
-                    summary,
-                    evidence: lenient_evidence(rf.evidence),
-                    usage,
-                }
-            } else if let Some(checkpoint) = rf.r#yield {
-                Terminal::Yielded { checkpoint, usage }
-            } else {
-                Terminal::Error {
-                    message: format!(
-                        "{artifacts_rel}/result.json has neither 'summary', 'question' nor 'yield'"
-                    ),
-                    retryable: true,
-                    usage: None,
-                }
-            }
-        }
-        Err(e) => Terminal::Error {
-            message: format!("{artifacts_rel}/result.json is not valid JSON: {e}"),
+    match read {
+        ResultFileRead::Misplaced(error) => *error,
+        ResultFileRead::Missing => Terminal::Error {
+            message: format!("codex exited without {artifacts_rel}/result.json"),
             retryable: true,
             usage: None,
         },
+        ResultFileRead::Text(text) => {
+            interpret_result_text(&text, artifacts_rel, with_estimated_cost(usage, model))
+        }
     }
 }
 

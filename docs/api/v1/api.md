@@ -3,6 +3,9 @@
 実行・計画・木・決定の要求のエンドポイントは §3.125 にある。
 
 - 状態: **Accepted**（人間の決定 H1 / H5〜H7。celeris 側の ADR-0013、GUI 側の ADR-GUI-0001）。改訂日 2026-09-14
+- 改訂: 2026-11-10（ADR 2026-11-08-health-enforcement-loop D7.3）— **追加。v1 のまま**。task の event に `dependents_reopened`
+  （`restored[]`（`task_id`・`depends_on`）・`kept[]`（`task_id`・`why`（`{reason: retried, successor}` か `{reason: other_dependency, unresolved}`）））
+  を足した。追記先は終端から戻った依存先の task で、戻した後続と、依存先の失敗で cancel されたが戻さなかった後続を記録する。
 - 改訂: 2026-11-09（ADR 2026-11-08-health-enforcement-loop D4.3）— **追加。v1 のまま**。task の event に `health_findings_repeated`
   （`source_task`・`site`（`{kind: work_unit|phase, key}` か `{kind: review}`）・`fingerprints`（重複を除き辞書順）・`set_sha256`）を足した。追記先は
   木の root。`Inbox.attention[]` に type `health_repeat`（`task`・`set_sha256`・`fingerprints`・`sources[]`（`task`・`site`・`at`）・`at`）、受信箱の

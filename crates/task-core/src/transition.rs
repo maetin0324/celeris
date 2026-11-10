@@ -1,7 +1,7 @@
 //! タスク状態機械の純粋関数。DESIGN.md / ADR-0002 D2,D3,D8 で定義された
 //! 遷移規則をそのまま実装する。I/O・時計・乱数は一切使わない（ADR-0001 D2）。
 
-use crate::model::{KeptReason, Status, TaskId, TaskKind};
+use crate::model::{Event, KeptDependent, KeptReason, RestoredDependent, Status, TaskId, TaskKind};
 
 /// `transition` の入力となる現在状態のスナップショット。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -740,6 +740,39 @@ pub(crate) fn dependency_reopen_trigger(
     } else {
         DependencyCancel::Kept(KeptReason::OtherDependency { unresolved })
     }
+}
+
+/// ADR 2026-11-08-health-enforcement-loop D7.3・決定 p9-scope: 依存先が終端 `from` から戻ったときに依存先の events に
+/// 追記する `Event::DependentsReopened`（書かないなら `None`）。`verdicts` は後続ごとの（id、`depends_on`、
+/// `dependency_reopen_trigger` の判定）、`previous` は依存先の直前の `DependentsReopened`。
+/// - restored は `Restore`（戻した後続）。kept は `Kept`（依存先の失敗で cancel されたが戻さなかった後続）で、`from` が
+///   failed・cancelled のときだけ数える（done からの reopen・rereview では、後続の cancel は依存先の失敗と無関係）。
+///   `Other`（人・CoS の cancel、連鎖の中止、cancelled でない後続）はどちらにも入れない。
+/// - 両方空なら書かない。restored が空で kept が `previous` の kept と同じなら書かない（同じ記録を重ねない）。
+/// - 並びは task id 順（後続の読み出しの順に依らず、`previous` と比べられる）。
+pub(crate) fn dependents_reopened(
+    from: Status,
+    mut verdicts: Vec<(TaskId, Vec<TaskId>, DependencyCancel<Trigger>)>,
+    previous: Option<&Event>,
+) -> Option<Event> {
+    verdicts.sort_by_key(|(id, _, _)| *id);
+    let (mut restored, mut kept) = (Vec::new(), Vec::new());
+    for (task_id, depends_on, verdict) in verdicts {
+        match verdict {
+            DependencyCancel::Restore(_) => restored.push(RestoredDependent {
+                task_id,
+                depends_on,
+            }),
+            DependencyCancel::Kept(why) if matches!(from, Status::Failed | Status::Cancelled) => {
+                kept.push(KeptDependent { task_id, why })
+            }
+            DependencyCancel::Kept(_) | DependencyCancel::Other => {}
+        }
+    }
+    let unchanged =
+        matches!(previous, Some(Event::DependentsReopened { kept: prev, .. }) if *prev == kept);
+    let skip = restored.is_empty() && (kept.is_empty() || unchanged);
+    (!skip).then_some(Event::DependentsReopened { restored, kept })
 }
 
 #[cfg(test)]

@@ -198,14 +198,14 @@ pub use message::{
 };
 pub use model::{
     ArtifactRef, AutoReplanSource, BrowserRequirements, Budget, Check, CreatedOrigin, Criterion,
-    DEFAULT_PRIORITY, Event, FailedWorkUnitCheck, GenreSpec, HARNESS_ADAPTERS, KeptReason, Lease,
-    MAX_LABELS, MAX_SKILLS, PRIORITY_LABELS, PROGRESS_DETAIL_MAX_BYTES, PhaseCheckResult,
-    PhaseMerged, ProgressFields, ProgressKind, ProposedMilestone, RoleSpec, RunMetrics, RunRole,
-    Status, Task, TaskCategory, TaskId, TaskKind, TaskMode, TaskRequirements, TaskRouting, Tier,
-    TierSource, ToolPolicyKind, Usage, WorkerHint, WorkspaceMode, WorkspaceSpec,
-    artifact_entry_description, artifact_entry_name, expand_home, home_dir, is_valid_label,
-    normalize_labels, normalize_skills, priority_from_label, priority_label,
-    validate_human_checks_have_deliverable,
+    DEFAULT_PRIORITY, Event, FailedWorkUnitCheck, GenreSpec, HARNESS_ADAPTERS, KeptDependent,
+    KeptReason, Lease, MAX_LABELS, MAX_SKILLS, PRIORITY_LABELS, PROGRESS_DETAIL_MAX_BYTES,
+    PhaseCheckResult, PhaseMerged, ProgressFields, ProgressKind, ProposedMilestone,
+    RestoredDependent, RoleSpec, RunMetrics, RunRole, Status, Task, TaskCategory, TaskId, TaskKind,
+    TaskMode, TaskRequirements, TaskRouting, Tier, TierSource, ToolPolicyKind, Usage, WorkerHint,
+    WorkspaceMode, WorkspaceSpec, artifact_entry_description, artifact_entry_name, expand_home,
+    home_dir, is_valid_label, normalize_labels, normalize_skills, priority_from_label,
+    priority_label, validate_human_checks_have_deliverable,
 };
 // ---- ADR-0061（Phase 104）: harness routing 基盤（cost 推定・タスク特性ベースの routing）----
 pub mod model_catalog;

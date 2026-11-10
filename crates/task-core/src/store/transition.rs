@@ -6,7 +6,8 @@ use time::OffsetDateTime;
 use crate::message::is_conversation;
 use crate::model::{Event, Status, Task, TaskId, TaskKind};
 use crate::transition::{
-    DependencyCancel, Outcome, StateView, Trigger, dependency_reopen_trigger, transition,
+    DependencyCancel, Outcome, StateView, Trigger, dependency_reopen_trigger, dependents_reopened,
+    transition,
 };
 
 use super::{SqliteStore, StoreError, format_rfc3339, kind_str, status_str};
@@ -166,7 +167,9 @@ impl SqliteStore {
     ///    （ADR 2026-11-08-health-enforcement-loop D7。判定は `transition::dependency_reopen_trigger`。戻した後続の
     ///    遷移もここを通るので推移的。戻すのは新しい `Transitioned` の追記だけで、cancel の event は変えない）。
     ///    retry の後継を持つ後続は戻さない（D7.2。後継は `retry_successors_tx` が引き、`retry_task_tx` の付け替えと
-    ///    同じ述語・同じ入力で判定する）
+    ///    同じ述語・同じ入力で判定する）。戻した後続（restored）と、述語が `Kept` を返した後続（kept）を、この task の
+    ///    events に `Event::DependentsReopened` として同じ transaction で追記する（D7.3。書くか・何を書くかは
+    ///    `transition::dependents_reopened`。直前の記録は `last_event_tx` で 1 件だけ読む）
     pub(super) fn cascade_after_transition_tx(
         tx: &Connection,
         task: &Task,
@@ -176,6 +179,7 @@ impl SqliteStore {
         if from.is_terminal() && !to.is_terminal() {
             let dependents = Self::dependents_of_tx(tx, task.id, false)?;
             let successors = retry_successors_tx(tx, &dependents)?;
+            let mut verdicts = Vec::new();
             for dependent in dependents {
                 let Some(dep) = Self::get_locked(tx, dependent)? else {
                     continue;
@@ -185,11 +189,16 @@ impl SqliteStore {
                     .map(|d| Ok((*d, Self::task_status_tx(tx, *d)?)))
                     .collect::<Result<Vec<_>, StoreError>>()?;
                 let successor = successors.get(&dependent).copied();
-                if let DependencyCancel::Restore(trigger) =
-                    dependency_reopen_trigger(dep.status, last.as_ref(), successor, &others)
-                {
-                    Self::apply_transition_tx(tx, dependent, trigger, vec![])?;
+                let verdict =
+                    dependency_reopen_trigger(dep.status, last.as_ref(), successor, &others);
+                if let DependencyCancel::Restore(trigger) = &verdict {
+                    Self::apply_transition_tx(tx, dependent, trigger.clone(), vec![])?;
                 }
+                verdicts.push((dependent, dep.depends_on, verdict));
+            }
+            let previous = last_event_tx(tx, task.id, "dependents_reopened")?;
+            if let Some(event) = dependents_reopened(from, verdicts, previous.as_ref()) {
+                Self::append_event_tx(tx, task.id, &event)?;
             }
         }
         if from.is_terminal() || !to.is_terminal() {

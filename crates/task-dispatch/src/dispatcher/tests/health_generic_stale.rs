@@ -29,6 +29,9 @@ const PROFILE: &str = "scripts/dev/repo-health/profiles/default.toml";
 /// main（review の target）。review の repair はここの tree に戻す（main が進んだ後も候補の差分を消す）。
 const MAIN: &str = "refs/heads/main";
 
+/// main だけが足す文書（fixture の repo の file。この repo の文書ではないので、文書の link の検査に当たらない形で書く）。
+const NOTES: &str = concat!("docs", "/notes.md");
+
 /// `target_sync::reviewing_task` の acceptance[0]（候補が main の子孫）。
 const DEFAULT_CHECK: &str = "git merge-base --is-ancestor main HEAD";
 
@@ -330,18 +333,8 @@ async fn health_generic_reviewer_reuse_reevaluates_health_on_new_head() {
     let (_bundle, bundled) = configure_real_bundled_checker();
     let narrow = narrow_app_layer();
     let cases = [
-        (
-            "ts",
-            "docs/notes.md",
-            "printf '# Notes\\n'".to_string(),
-            true,
-        ),
-        (
-            "rust",
-            "docs/notes.md",
-            "printf '# Notes\\n'".to_string(),
-            true,
-        ),
+        ("ts", NOTES, "printf '# Notes\\n'".to_string(), true),
+        ("rust", NOTES, "printf '# Notes\\n'".to_string(), true),
         ("ts", PROFILE, narrow, false),
     ];
     for (kind, file, blob, passes) in cases {

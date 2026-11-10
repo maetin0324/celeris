@@ -8,12 +8,15 @@
 //!
 //! 検査器は試験の repo の base に commit した stub（[`STUB`]）。作業ツリー（`--repo`）の file で結果を決める:
 //! `FIXED` で合格、`STATUS`（`error`・`unknown`・`unsupported`）で exit 2、`FINDING` で fail 級の指摘の fingerprint
-//! （rule は fingerprint の `:` の前）、`HANG` で終わらない（時間切れの試験。上限は [`test_timeout::cap_under`] で縮める）。
+//! （rule は fingerprint の `:` の前）、`HANG` で 10 秒眠る（時間切れの試験。中身は stub が自分の pid と起動の時刻、
+//! 眠りを終えたら `<pid> woke` を書く file の path。上限は [`test_timeout::cap_under`] で 2 秒に縮める）。眠りが短いのは、
+//! 検査器が別の process group で動き、試験の process が締め切りの kill より先に終わると残るから（残っても 10 秒まで）。
 //! 時計は使わず、`run_until_idle`（出来事が尽きるまで tick を回す）で決まる。外部ネットワークに出ず、LLM を呼ばない。
 use super::health_enforce::{RepairActionAdapter, non_celeris_dispatcher};
 use super::target_sync::{commit_file, reviewing_task, set_check};
 use super::*;
 use crate::health_review::gate::test_timeout;
+use crate::health_review::gate::tests::assert_checkers_reaped;
 use task_core::required_checks::health::{
     CHECKER_SCRIPT, HEALTH_CHECK_ID, HealthVerdict, SOURCE_SIZE_REPORT,
 };
@@ -31,8 +34,13 @@ repo = argv[argv.index("--repo") + 1]
 def read(name):
     p = os.path.join(repo, name)
     return open(p).read().strip() if os.path.exists(p) else None
-if read("HANG") is not None:
-    time.sleep(3600)
+hang = read("HANG")
+if hang is not None:
+    with open(hang, "a") as f:
+        f.write("%d %f\n" % (os.getpid(), time.time()))
+    time.sleep(10)
+    with open(hang, "a") as f:
+        f.write("%d woke\n" % os.getpid())
 with open(os.path.join(here, "stub.json")) as f:
     stub = json.load(f)
 status = read("STATUS")
@@ -597,13 +605,24 @@ async fn health_limits_cap_review_rework_sees_only_non_health_failures() {
     }
 }
 
+/// 時間切れの試験で検査器の締め切り（[`test_timeout::cap_under`] で縮める。600 秒待たない）。
+const HANG_CAP: Duration = Duration::from_secs(2);
+
+/// 作業ツリーに `HANG`（中身は試験の一時 dir の pid の file の path）を commit する。返す一時 dir が pid の file を持つ。
+fn hang(s: &Scenario) -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let pids = dir.path().join("checker-pids");
+    commit_file(&s.dir, "HANG", &format!("{}\n", pids.display()));
+    (dir, pids)
+}
+
 /// D4.2: 検査器の 1 回の実行は `HEALTH_INPUT_TIMEOUT` が上限で、時間切れは Error（D3.4）。repair に回さず
-/// `health_check_error:` で止まる。終わらない stub と、作業ツリーの下だけ縮めた上限（2 秒）で作る（600 秒待たない）。
+/// `health_check_error:` で止まる。眠る stub と、作業ツリーの下だけ縮めた上限（2 秒）で作る（600 秒待たない）。
 #[tokio::test]
 async fn health_limits_cap_checker_timeout_is_error_without_repair() {
     let mut s = Scenario::atomic(|_, _| panic!("no repair on a timeout"));
-    test_timeout::cap_under(s.ws.path(), Duration::from_secs(2));
-    commit_file(&s.dir, "HANG", "1\n");
+    test_timeout::cap_under(s.ws.path(), HANG_CAP);
+    let _pids = hang(&s);
     s.review().await;
     let events = assert_stopped(&s, "health_check_error: ");
     let evidence = health_evidence(&events);
@@ -611,6 +630,26 @@ async fn health_limits_cap_checker_timeout_is_error_without_repair() {
     assert_eq!(evidence[0].0, HealthVerdict::Error);
     assert!(evidence[0].1.contains("時間"), "{evidence:?}");
     assert_eq!(repairs_scheduled(&events), 0);
+}
+
+/// D4.2: 時間切れの review の後に検査器の process が残らない。stub は自分の pid を試験の一時 dir に書き、時間切れの
+/// Error を見た後で、その pid が検査器の起動から締め切り + 1 秒（3 秒）の内に消えたことを確かめる。stub は 10 秒眠るので、
+/// 締め切りの kill が抜けると上限の時点でまだ眠っているか、眠りを終えた印（`<pid> woke`）が残って落ちる。上の試験は
+/// Error の止まり方だけを見て、検査器の process が殺されたかを見ていない（kill が抜けても評価は子の終わりを待ってから
+/// 時間切れの Error を返すので、上の試験は合格のまま）。
+#[tokio::test]
+async fn health_limits_cap_checker_timeout_leaves_no_checker_process() {
+    let mut s = Scenario::atomic(|_, _| panic!("no repair on a timeout"));
+    test_timeout::cap_under(s.ws.path(), HANG_CAP);
+    let (_dir, pids) = hang(&s);
+    s.review().await;
+    let events = assert_stopped(&s, "health_check_error: ");
+    let evidence = health_evidence(&events);
+    assert_eq!(evidence.len(), 1, "{evidence:?}");
+    assert_eq!(evidence[0].0, HealthVerdict::Error);
+    assert!(evidence[0].1.contains("時間"), "{evidence:?}");
+
+    assert_checkers_reaped(&pids, HANG_CAP).await;
 }
 
 /// D4.4・J4: 修復の上限を使い切った後に人が comment で再開しても、検査器の `error`・`unknown`・`unsupported`

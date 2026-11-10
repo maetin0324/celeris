@@ -67,22 +67,23 @@ updated: 2026-11-10
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 - `cargo nextest run -p task-dispatch -E 'test(health_generic_) | test(review_repair_not_evaluated_)'`: 22 passed（health_generic_ 19 件、うち 4 件は G4-R1 の `should_panic` のまま panic して合格。review_repair_not_evaluated_ 3 件）。
-- `bash scripts/dev/test-affected.sh`（2 つ目の commit の HEAD）: exit 100。check-health は pass（`verdict=pass fail_grade=0
-  new=0 worsened=0`）。対象 crate は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。nextest は 3728 本のうち
-  3725 passed・11 skipped・1 failed・2 timed out。
+- `bash scripts/dev/test-affected.sh`（`phase 1: record fix-s1 progress` の HEAD。この後の commit はこの file だけ）: exit 0。
+  check-health は pass（`verdict=pass fail_grade=0 new=0 worsened=0`）。対象 crate は celeris・celeris-campaign・celerisctl・
+  llm-proxy・task-dispatch。nextest は 3728 passed・11 skipped（577 秒、load average 23〜65）。health の unittest は 94 件 OK、
+  `OK (expected failures=2)`（G1・G2）。
+- 1 つ前の実行（2 つ目の commit の HEAD、同じ 3728 本）は exit 100 だった。1 failed・2 timed out で、どれも今回の分岐を通らない。
   - failed: `dispatcher::tests::git_workspace::the_repository_check_commands_are_the_reviewers_default`（`ReviewVerdict` が 0 件。
-    `run_until_idle(&mut d, 60)` の 60 tick の内に review まで進まなかった）。`Check::Reviewer` を持たず、今回の分岐を通らない。
-    単独で 3 回再実行し、3 回とも合格（2〜3 秒）。
+    `run_until_idle(&mut d, 60)` の 60 tick の内に review まで進まなかった）。単独で 3 回再実行し、3 回とも合格（2〜3 秒）。
   - timed out: `celeris-campaign::k4_cells_validity real_k4_archive_grades_thirty_of_thirty_two` と
     `celeris-campaign::k_cases_grade k3_k4_recompute_rejects_a_wrong_report_and_accepts_the_raw_derived_one`（600 秒の上限）。
-    実 K4 原票の採点で、review の修復を通らない。前者は単独でも約 400 秒かかり、高負荷で上限を超えることが
-    `agent-docs/progress/2026-11-09-planner-turn-limit.md` に記録されている。この run では単独の再実行をしていない（未確認）。
+    実 K4 原票の採点。高負荷で上限を超えることは `agent-docs/progress/2026-11-09-planner-turn-limit.md` に記録がある。
+    最後の実行では 3 件とも合格した。
 - `cargo clippy --workspace -- -D warnings`: exit 0。
 - `cargo fmt --all -- --check`: exit 0。
 - reason の文字列: `grep -rn 'not evaluated: a deterministic check failed' crates/` は `review.rs` の const の 1 行だけ。
 
 ## 未解決
-- 上の campaign の 2 件の時間超過（既知。持ち主の判断が要る。2026-11-09 の進捗の提案と同じ）。
+- 無し。campaign の実 K4 原票の試験が高負荷で 600 秒の上限を超えうることは既知（2026-11-09 の進捗の提案）で、この task の範囲の外。
 
 ## 提案
 - 無し。

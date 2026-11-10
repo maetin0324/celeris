@@ -8,7 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use task_core::{NodeSessionStore, OrgNode, TaskStore};
+use task_core::{NodeSessionStore, OrgDirectory, OrgNode, TaskStore};
 use time::OffsetDateTime;
 
 use crate::middleware::require_admin;

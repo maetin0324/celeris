@@ -22,8 +22,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use task_core::local_machine::WorkspaceRoots;
 use task_core::{
-    DeliveryStore, IntegrationMethod, IntegrationState, ProjectId, RepoId, ReportFilter,
-    ReportStore, Task, TaskId, TaskIntegration, TaskStore,
+    DeliveryStore, IntegrationMethod, IntegrationState, OrgDirectory, ProjectId, RepoId,
+    ReportFilter, ReportStore, Task, TaskId, TaskIntegration, TaskStore,
 };
 use task_ops::changes::{self as ops_changes, MergeOutcome};
 use time::OffsetDateTime;

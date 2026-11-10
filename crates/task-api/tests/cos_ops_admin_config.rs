@@ -108,7 +108,7 @@ const SKILL_MD: &str =
 async fn cos_ops_admin_config_org_and_skills_are_audited() {
     let env = admin_env();
     task_ops::knowledge::init(&env.knowledge_root).expect("knowledge init");
-    use task_core::TaskStore;
+    use task_core::OrgDirectory;
 
     let op = run_domain(
         &env,

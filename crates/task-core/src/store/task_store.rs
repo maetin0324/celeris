@@ -18,7 +18,6 @@ use crate::repos::{ProjectRepo, RepoId};
 use crate::transition::{Outcome, Trigger};
 use crate::write_set::WriteSetRecord;
 
-use super::query::{ListFilter, ListOrder, Page};
 use super::{
     ClusterConnectionRecord, ClusterSettings, ConfigEventRow, EventRow, ExecutionMetricsTaskRow,
     LocalSettings, LocalSettingsEvent, LocalSettingsOverrides, NewConfigEvent, StoreError,
@@ -32,6 +31,8 @@ use super::{
 /// にある。
 /// ADR-0037 D1（Phase 39）: 通知の台帳（`notifications`）も同じ形で `crate::notify::NotificationStore` にある。
 /// ADR-0133 D6: dispatcher と daemon が同じ通知 feed を読むため `NoticeStore` も supertrait にする。
+/// ADR 2026-11-10-taskstore-consumer-ports D2: 名簿の読み出し（`OrgDirectory`）と task の一覧・event 行の
+/// 読み出し（`TaskQuery`）は能力ごとの trait にあり、それだけを使う consumer（celeris-mcp）はそちらに依存する。
 pub trait TaskStore:
     Send
     + Sync
@@ -51,6 +52,8 @@ pub trait TaskStore:
     + crate::cluster_job::ClusterJobWaitStore
     + crate::cron::CronJobStore
     + crate::store::ModelCatalogStore
+    + crate::store::OrgDirectory
+    + crate::store::TaskQuery
 {
     /// task とその終端の WorkUnit の完了単位を `completion_outcomes` へ冪等に書く（ADR 2026-10-22 D6）。
     fn completion_outcomes_project(
@@ -340,14 +343,6 @@ pub trait TaskStore:
         &self,
         task_ids: &[TaskId],
     ) -> Result<std::collections::HashMap<TaskId, String>, StoreError>;
-    /// ADR-0013（Phase 9b）: 1 タスクのイベントを `seq` 昇順で、`after_seq` より後（`None` なら最初から）最大 `limit` 件、
-    /// グローバル `id` と `ts` 付きで返す（API の `GET /tasks/{id}/events` と run の要約が使う）。
-    fn event_rows_for(
-        &self,
-        task_id: TaskId,
-        after_seq: Option<u64>,
-        limit: usize,
-    ) -> Result<Vec<EventRow>, StoreError>;
     /// 各タスクの最新の `kind` のイベントだけを、global `id` の昇順で返す（受信箱の `delivery_skipped`（ADR-0121 D3）と
     /// `dependents_reopened`（ADR 2026-11-08-health-enforcement-loop D7.3）の正本）。種類ごとの部分 index を引き、
     /// events 全体は走査しない。
@@ -388,15 +383,6 @@ pub trait TaskStore:
         &self,
     ) -> Result<Vec<(TaskId, String)>, StoreError>;
 
-    /// ADR-0013 D10: `filter` に一致する `tasks` を `order` で keyset ページングして返す。`cursor` は
-    /// 前回の `Page::next_cursor`（不透明な文字列）。不正な `cursor` は `StoreError::Invalid`。
-    fn list_page(
-        &self,
-        filter: &ListFilter,
-        order: ListOrder,
-        cursor: Option<&str>,
-        limit: usize,
-    ) -> Result<Page<Task>, StoreError>;
     /// ADR-0013 D10: `tasks` の件数を `status` ごとに集計する（0 件の status は含まない）。
     fn count_by_status(&self) -> Result<Vec<(Status, u64)>, StoreError>;
 
@@ -404,8 +390,6 @@ pub trait TaskStore:
 
     /// 全ノードを `position`、同値なら `id` の昇順で返す（木は呼び出し側が `parent_id` で組む）。
     fn org_list(&self) -> Result<Vec<OrgNode>, StoreError>;
-    /// 1 ノード。無ければ `None`。
-    fn org_get(&self, id: &str) -> Result<Option<OrgNode>, StoreError>;
     /// 挿入または更新。`crate::org::validate_upsert` を通してから書く（secretary は 1 つ、親は既存、
     /// 自分を祖先にできない、secretary > department > section）。`created_at` は既存行のものを保つ。
     fn org_upsert(&self, node: &OrgNode) -> Result<OrgNode, StoreError>;
@@ -423,9 +407,6 @@ pub trait TaskStore:
 
     /// 案件を作る（`status` は呼び出し側が決める。API は `proposed`）。
     fn project_create(&self, project: &Project) -> Result<(), StoreError>;
-    fn project_get(&self, id: ProjectId) -> Result<Option<Project>, StoreError>;
-    /// `created_at` の降順（新しい案件が先）。
-    fn project_list(&self) -> Result<Vec<Project>, StoreError>;
     /// 状態だけを変える（`updated_at` も更新）。無い案件は `Ok(false)`。
     fn project_set_status(&self, id: ProjectId, status: ProjectStatus) -> Result<bool, StoreError>;
     /// ADR-0039 D1: 作業場所だけを変える（`None` で消す。`updated_at` も更新）。無い案件は `Ok(false)`。
@@ -533,8 +514,6 @@ pub trait TaskStore:
     /// ADR-0074 D3.3（Phase F4b）: 案件計画から作った途中目標に key を結ぶ（`milestones.plan_key`）。
     /// 無い途中目標は `Ok(false)`。
     fn milestone_set_plan_key(&self, id: MilestoneId, plan_key: &str) -> Result<bool, StoreError>;
-    /// その案件の途中目標を `seq` 昇順で返す。
-    fn milestone_list(&self, project_id: ProjectId) -> Result<Vec<Milestone>, StoreError>;
     /// ADR-0044 D6（Phase 55）: 途中目標を id 1 つで引く（案件を知らなくてよい）。
     fn milestone_get(&self, id: MilestoneId) -> Result<Option<Milestone>, StoreError>;
     /// 状態だけを変える。無い途中目標は `Ok(false)`。

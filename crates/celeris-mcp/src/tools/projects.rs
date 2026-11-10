@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use task_core::{ListFilter, McpScope, Milestone, ProjectId, ProjectStatus, TaskStore};
+use task_core::{
+    ListFilter, McpScope, Milestone, OrgDirectory, ProjectId, ProjectStatus, TaskQuery,
+};
 
 use super::{ToolDef, ToolError, ToolOutput, clamp_limit, schema};
 use crate::auth::AuthedClient;

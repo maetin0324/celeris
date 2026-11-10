@@ -154,4 +154,3 @@ tasks: [01M6TYVJT53598CPKMGSQGA7XM]
 
 ## 付記: 実装との突き合わせ
 - 2026-11-10（unit adr）: 設計のみ。`inventory.json` の束は段 survey の案のまま採った（名前・上限・鍵を変えていない）。実装の leaf が束を外した・分けたときはここに書く。
-- 2026-11-10（unit affected-features）: D6-2・D6-3 のとおり `scripts/dev/test-affected.sh` を `cargo nextest run --workspace -E 'package(=<crate>) | …'` と `cargo test --doc --workspace` にした。filter は `=` の一致で書く（glob にしない）。対象 crate の決め方は変えていない（`--list` は base の script と 16 個の基準で同じ）。D6-3 の doc test は 14 crate で 3 件が通り 2 件が ignore、nextest の build の後で 23 秒・Compiling 0。件数と秒は measure.sh の `edit_verify` に足さず `affected-features.md` に書いた（measure.sh の HEAD の呼び方は measure-build が決める）。D6-7 の確認は `rebuild-check.sh`（組 A = workspace の全 crate → 組 B = celeris,celerisctl → 組 A）で、1 回目と 2 回目の間に `crates/celeris/src/lib.rs` の mtime を進める。進めないと `-p` の版も target dir に残り、直す前も 3 回目が 0 になる。3 回目の Compiling は直す前 2（celeris・celerisctl）、直した後 0。

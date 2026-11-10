@@ -30,11 +30,11 @@ updated: 2026-11-10
 - `cargo fmt --all -- --check` → exit 0
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `bash scripts/dev/check-health.sh` → exit 0（fail 級 0、new 0、worsened 1。worsened は ports-design が置いた `measure.py` の文中の `INSERT INTO t` を数えた `dup.state` の warning）。commit 前の HEAD だけでは `size.responsibility-growth`（chat module 8062 > 8000）で exit 1 だったので、上の `operation_card_tx` で直した。
-- `bash scripts/dev/test-affected.sh` → exit 100。8180 件中 8179 passed、1 timed out（`celeris-campaign::k4_cells_validity real_k4_archive_grades_thirty_of_thirty_two`、600 s）、23 skipped。web の型検査と unit は 712 passed、ts-verify は 20 passed。時間切れの 1 件は変更した chat・cos の code を通らない。
+- `bash scripts/dev/test-affected.sh` → exit 100。8180 件中 8179 passed、1 timed out（`celeris-campaign::k4_cells_validity real_k4_archive_grades_thirty_of_thirty_two`、600 s）、23 skipped。web の型検査と unit は 712 passed、ts-verify は 20 passed。時間切れの 1 件は変更した chat・cos の code を通らず、`cargo nextest run -p celeris-campaign -E 'test(real_k4_archive_grades_thirty_of_thirty_two)'` で単独に再実行すると 1 passed（35.9 s）。全体の負荷による時間切れと判断した。
 - 最後の署名の変更（`cos_triage_resolve_tx` が `&Transaction` を受ける）の後に `cargo nextest run -p task-core -p task-api -E 'test(/triage|attachment|cos_operation|reference/)'` → 63 passed。
 
 ## 範囲外（今回は動かしていない）
 - task-api に残る読みの SQL: `cos/triage_view.rs` の `item_get`・`items`・`superseded`、`chat/attachments.rs` の `chat_client_requests` の SELECT（upload と attachment_ref の重複確認）。
 
 ## 未解決
-- `k4_cells_validity real_k4_archive_grades_thirty_of_thirty_two` の時間切れは、単独での再実行をまだしていない（未確認）。
+- 無し。

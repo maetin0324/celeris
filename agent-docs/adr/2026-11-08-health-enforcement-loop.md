@@ -162,7 +162,10 @@ tasks: [01M6TYVJSWEY3ZE50S02ETYDNM]
     - `attention_task` は `None` にした。A が done になった後も、戻した後続が動き出すまでは人が重複を cancel できるようにするため。A の状態で隠すと、その間に項目が消える。
     - kept だけの event は項目を出さない。ADR-0133 の受信箱は「答えると消える」派生の一覧で、項目は人が答えることを持つ。`retried` の後続は後継があるので戻しておらず、重複は起きていない。人が答えることが無い。`other_dependency` の後続は、未解決の依存先（failed なら受信箱の `failed` の項目）を人が扱い、それが戻ると後続も戻って restored として出る。kept は、restored がある項目の中に理由と並べて書くだけにした。
   - 最新行の読み出し: `TaskStore::latest_delivery_skipped_rows` を `TaskStore::latest_event_rows(LatestEventKind)` に一般化した（`LatestEventKind { DeliverySkipped, DependentsReopened }`、`crates/task-core/src/store/events.rs`）。種類ごとに部分 index を使い、task ごとの最新の 1 件だけを返す。`dependents_reopened` の部分 index は migration 0122 の `idx_events_dependents_reopened ON events(task_id, seq) WHERE json_extract(json,'$.type')='dependents_reopened'`（`SCHEMA_VERSION` は 122）。試験 `dependents_reopened_latest_rows_use_partial_index` が、EXPLAIN QUERY PLAN が events をこの index でだけ読むことを確かめる。
-  - 試験: `dependency_reopen_` は 11 件（unit p9 の 5 件に 6 件を足した）。受信箱は `dependents_reopened_inbox_item_lifecycle`（task-ops）・`dependents_reopened_answer_cancels_restored_dependent`（task-api）と web の `inbox-model.test.ts` の 1 件。
+  - 試験: 名前が `dependency_reopen_` で始まる試験は 14 件ある。task-core の 11 件（unit p9 の 5 件と、この付記の 6 件）と task-ops の 3 件。
+    - 後継の判定と記録（task-core）: `dependency_reopen_keeps_retried_dependent`（A の reopen で後継を持つ B は戻らず、kept に `retried` と後継が入る）、`dependency_reopen_retry_skips_retried_dependent`（A の retry で B は付け替わらず、B' は A' に付け替わる）、`dependency_reopen_rereview_does_not_repeat_event`（done の A の rereview では記録を書かず、同じ kept の復帰を繰り返しても記録は 1 件）。
+    - 受信箱（task-ops）: `dependency_reopen_inbox_lists_restored_and_kept`（項目に restored と kept と理由が出る）、`dependency_reopen_inbox_item_resolves_when_dependents_move`（戻した後続が動くと項目が消える）、`dependency_reopen_kept_only_event_has_no_inbox_item`（kept だけの event は項目を出さない）。
+    - 補う試験: `dependency_reopen_records_restored_and_kept`・`dependency_reopen_restores_when_successor_drops_dependency`・`dependency_reopen_trigger_distinguishes_kept_reasons`（task-core）、`dependents_reopened_latest_rows_use_partial_index`（task-core）、`dependents_reopened_answer_cancels_restored_dependent`（task-api）、web の `inbox-model.test.ts` の 1 件。
 
 ### (8) write_set: slices.json の G3 に足す path と理由
 - 決定: slices.json の G3 の write_set に下の表の path を足す（slices.json 自体は変えず、各 unit の範囲 check で許す）。

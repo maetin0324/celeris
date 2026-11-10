@@ -43,7 +43,8 @@ WorkUnit `event`（P-9 (b)）。ADR [2026-11-08-health-enforcement-loop](../../a
 - `cargo test -p task-api --lib schema`・`cargo nextest run -p task-core -E 'test(event_row_schema_matches_committed)'`: 合格（schema の差分ゼロ）。
 - web: `tsc -b` 合格、`vitest run api/realtime` 3 file・61 件合格。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
-- `bash scripts/dev/test-affected.sh`: 下に記す。
+- `bash scripts/dev/test-affected.sh`: exit 0。先頭の check-health は verdict=pass、`size.responsibility-growth` は pass（worsened 0）、fail 級 0。new の 2 件は unit successors の進捗と同じ warning の候補（この unit が変えていない file）。nextest は 8173 passed・23 skipped、web は tsc -b 合格、vitest 104 file・711 件合格。
+- 健全性の値（`size.responsibility-growth` と同じ数え方。base は `git merge-base HEAD main`）: store の module の行は base 20026、unit successors の後 19720、この unit の後 19727（+7）。`SqliteStore` の method は base 732、この unit の後 730（増えていない）。
 
 ## 未解決
 - 無し。

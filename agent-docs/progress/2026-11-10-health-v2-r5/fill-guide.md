@@ -11,7 +11,10 @@ map leaf（`map-api-a`・`map-api-b`・`map-api-c`・`map-celeris-src`・`map-cl
 下のコマンドは repo の root で実行する（`C=agent-docs/progress/2026-11-10-health-v2-r5/contracts.py`）。
 
 ## 1. 手順
-1. 雛形を作る: `python3 $C --scaffold <name>`。`mapping/<name>.json` に、scope の file・試験・この fragment が持つ組が入る。既にあれば上書きしないで止まる。作り直すときは file を消してから実行する。
+1. 雛形は commit 済みなので、map leaf は --scaffold を走らせない。commit 済みの `mapping/<name>.json`（scope の file・試験・この fragment が持つ組が入っている）をそのまま埋める。`scan` 欄（雛形を作った commit と tree の id。`--check-fragment` はこの tree で走査し直す）は変えない。
+   - `python3 $C --scaffold <name> > mapping/<name>.json` のように `>` で受けない。shell が台本より先に file を空にするので、commit 済みの雛形が壊れる（台本は既にある file を見て exit 2 で止まり、空の file が残る）。`--scaffold` は file を自分で書き、stdout には何も出さない。
+   - 雛形を作り直すときは、`mapping/<name>.json` を消してから `python3 $C --scaffold <name>` を走らせる（file が既にあると上書きしないで exit 2 で止まる）。作り直すと埋めた欄も空に戻る。
+   - 雛形を見比べるだけなら、`python3 $C --scaffold <name> --out <一時 dir>/<name>.json` で repo の外に書く。
 2. file ごとに `capability` と `contract` を書く。1 つの file の中で契約が違う試験だけ、`fns` に試験ごとの上書きを書く（3 節）。
 3. この fragment が持つ組（`groups`）を全部判断する（4 節）。
 4. `python3 $C --check-fragment agent-docs/progress/2026-11-10-health-v2-r5/mapping/<name>.json` が 0 で終わるまで直す。不備は 1 行に 1 件ずつ stdout に出る。

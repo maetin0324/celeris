@@ -15,7 +15,7 @@
 //! `Cost: $X message, $Y session.` を最良努力で拾う（無ければ `None`。ADR-0061「取得可能な範囲」）。
 //! 実機（`aider-chat` 0.86.2、モック OpenAI 互換エンドポイント）で書式を確認済み（`agent-docs/PROGRESS.md`
 //! Phase 104 参照）。`Cost:` 行があればそれをそのまま使い、無ければ `model` が分かるときだけ
-//! `task_core::estimate_cost_usd` の静的単価表で推定する（aider 自身の実測値を優先する）。
+//! `adapter::with_estimated_cost`（静的単価表）で推定する（aider 自身の実測値を優先する）。
 
 use std::process::Stdio;
 use std::sync::Arc;

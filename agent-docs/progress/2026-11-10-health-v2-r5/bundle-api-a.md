@@ -43,3 +43,14 @@ WorkUnit `bundle-api-a`（段 bundle）。task-api の CoS・chat・案件の結
 - `cargo nextest run -p task-api -E 'binary_id(task-api::cos_delivery_suite_a) | binary_id(task-api::cos_delivery_suite_b) | binary_id(task-api::routing_budget_suite)'` → exit 0、102 passed、0 skipped。
 - `cargo test -p task-api --test cos_delivery_suite_a --test cos_delivery_suite_b --test routing_budget_suite`（1 process の中で並行に実行）→ exit 0、42・36・24 passed。D3 で束から外す target は無かった。
 - `bash scripts/dev/check-health.sh --base "$CELERIS_WU_BASE"` → exit 0（「repo_health_gate: all checks passed」）。前回の `arch-map.wrong_path` 3 件は出ない。
+- 条件 2: `bash scripts/dev/test-affected.sh` → exit 0（18 分 38 秒）。対象は celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker と web。nextest 5860 tests run: 5860 passed、22 skipped。web は tsc -b が通り、vitest 104 file・712 tests passed。health gate は verdict=pass。
+- 条件 2: `cargo clippy --workspace -- -D warnings` → exit 0（1 分 18 秒）。`cargo fmt --all -- --check` → exit 0（出力なし）。
+- `python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R5 agent-docs/progress/2026-11-07-health-v2-b0/slices.json`（`git diff --no-renames --name-only "$CELERIS_WU_BASE" HEAD` の 40 path と未追跡 path を標準入力）→ exit 0、「write-set R5: ok」。`sh "$CELERIS_WU_SCOPE_PATHS"` の出力は束の 18 file・3 つの `main.rs`・この file だけ。
+- `python3 agent-docs/progress/2026-11-10-health-v2-r5/classify.py --check agent-docs/progress/2026-11-10-health-v2-r5/inventory.json` → exit 0（352 targets、20 bundles、0 error）。inventory は変えていない。
+- `sh scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-adr-numbers.sh`・`sh scripts/dev/progress-index.sh --check` → 各 exit 0。
+
+## 未解決
+無し。前回の plan_issue（r6 の 3 target を動かして `arch-map.wrong_path` で落ちた件）は reclass で解け、この leaf では 3 target を元の path に戻した。
+
+## 提案
+無し。ADR の束の表と実装は同じなので、ADR の付記は足していない。

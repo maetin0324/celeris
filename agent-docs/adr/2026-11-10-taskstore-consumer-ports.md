@@ -4,7 +4,6 @@ tasks: [01M6TYVJT2HG9NY5FW9FMCZS9A]
 # ADR 2026-11-10: TaskStore の consumer 駆動の port — 最初の consumer は celeris-mcp
 
 - 状態: 採用（設計）。この ADR の WorkUnit（ports-design）ではコードを変えない。実装は同じ task の mcp-port・store-prune・table-writers、前後計測は record。
-- 付記 2026-11-10: mcp-port は 8 method でなく 6 method を移した（末尾の付記）。
 - 計測と検査: `agent-docs/progress/2026-11-10-taskstore-consumer-ports/measure.py`（標準ライブラリだけ）、着手時の値 `baseline.json`、削除の対象 `prune-list.json`、直す file `port-fix-files.json`。基準は着手時の `$CELERIS_WU_BASE`（件名「integrate wu/final-record (phase reclose)」）。
 
 ## 文脈
@@ -80,9 +79,3 @@ tasks: [01M6TYVJT2HG9NY5FW9FMCZS9A]
 ## 結果
 - celeris-mcp は TaskStore の 308 method の代わりに、使う能力の trait だけに依存する（`get` の 1 か所を除く）。
 - 宣言は 1 か所、SQL は `_impl` に 1 か所のまま。state+event の原子性・migration・replay は変わらない。
-
-## 付記 2026-11-10: 計画 v2 の実装（mcp-port）— 移したのは 6 method
-- D2 の 8 method のうち `org_list`・`org_upsert` は `TaskStore` に残した。`get` も D2 のとおり残した。移したのは 6 method で、`OrgDirectory`（`crates/task-core/src/store/org_directory.rs`）は `org_get`・`project_list`・`project_get`・`milestone_list` の 4 個、`TaskQuery`（`crates/task-core/src/store/task_query.rs`）は `list_page`・`event_rows_for` の 2 個を持つ。どちらも `impl … for SqliteStore` は既存の `<method>_impl` への 1 行転送で、SQL は変えていない。
-- 残した理由: `org_upsert`・`org_list` を移すと、R3 の write_set（B0 の `slices.json`）の外の file を直す必要がある。`crates/task-core/src/approval/tests.rs`・`report/tests.rs` は UFCS の `TaskStore::org_upsert(&store, …)` を呼ぶ（edition 2024 では supertrait へ移すと E0782）。`crates/celerisctl/tests/org_migrate_v2.rs`・`crates/celeris/tests/trial_context_canary_e2e.rs` は具体型で呼び、file 名の数字が write_set の正規表現 `[a-z_/]+` に合わない。`get` は `crates/task-worker/src` の試験 3 file が具体型で呼ぶ。
-- その結果、celeris-mcp の src で `TaskStore` を名指す file は `resources.rs`（`org_list`）・`tools/org.rs`（`org_list`・`org_upsert`）・`tools/tasks.rs`（`get`）の 3 つになった。`auth.rs` は `&dyn McpClientStore`、`tools/projects.rs` は `OrgDirectory`・`TaskQuery` だけに依存する。D4 の 64 file の見込みは 8 method の場合で、6 method では import を足した file が 38（うち celeris-mcp 5）になった。
-- `OrgDirectory` に `org_list`・`org_upsert` を足す工程は、write_set の外の 4 file を直せる別の段で行う（進捗の提案節）。

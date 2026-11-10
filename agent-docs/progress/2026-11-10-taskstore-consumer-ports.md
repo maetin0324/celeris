@@ -10,8 +10,9 @@ updated: 2026-11-10
 
 ## 現在地
 - ports-design: 計測台本・着手時の計測・削除の対象・ADR を置いた。crates/ は変えていない。
-- store-prune・table-writers・mcp-port: 済み（下の各節）。mcp-port は計画 v2 のとおり 6 method を移した（ADR の付記 2026-11-10）。
-- 次: record（前後計測）。
+- store-prune・table-writers: 済み（下の各節）。
+- mcp-port: 6 method を移した commit はある。しかし WU の check の repo-health（`size.responsibility-growth`）が落ち、objective の形のままでは直せないので plan_issue で返した（下の「mcp-port の check の不合格と plan_issue」）。
+- 次: 計画の直し（replan）、その後 record（前後計測）。
 
 ## 着手時の計測（提出時の HEAD で実行）
 台本 [measure.py](2026-11-10-taskstore-consumer-ports/measure.py)、値 [baseline.json](2026-11-10-taskstore-consumer-ports/baseline.json)。
@@ -67,12 +68,29 @@ updated: 2026-11-10
 - `bash scripts/dev/test-affected.sh` → exit 0（nextest 8179 passed・23 skipped、web の vitest 712 passed、tsc -b 合格、ts-verify 20 passed）。実行は commit「mcp-port: org_get・…の宣言を store/ の OrgDirectory・TaskQuery へ移し…」の時点で、その後の commit は agent-docs だけを変える
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
-- `bash scripts/dev/check-health.sh` → exit 0（verdict pass、fail 級 0、new 0、worsened 1 は下の未解決）
+- `bash scripts/dev/check-health.sh` → exit 0（base は auto の 217bc325。verdict pass、fail 級 0、new 0、worsened 1 は下の未解決）
+- `bash scripts/dev/check-health.sh --base $CELERIS_WU_BASE` → exit 1（`size.responsibility-growth` が worsened、store の本体の行 19396 → 19406。次の節）
+
+## mcp-port の check の不合格と plan_issue
+- 前回の run の後に celeris が走らせた WU の check は 2 つ落ちた。
+  - 範囲 check: `agent-docs/adr/2026-11-10-taskstore-consumer-ports.md` が範囲の外だった。ADR に足した付記を消し（WU base の版に戻した）、内容は下の「ADR の付記の案」としてこの進捗に移した。範囲 check は再実行で exit 0。
+  - repo-health の `size.responsibility-growth`（error）: `crates/task-core/src/store` の本体の行（空行・注釈・use・mod 宣言を除く）が WU base（store-prune の後）の 19396 から 19406 へ 10 行増えた。`check-health.sh --base $CELERIS_WU_BASE` で同じ結果を再現した。base が auto（217bc325、store-prune の前）なら 19676 から減るので合格する。
+- 増えた 10 行は移した宣言と転送ではない。宣言 17 行と転送 29 行は同じ数のまま新しい file へ移った。増えたのは新しい trait 2 つの構造の行で、trait の見出しと閉じ括弧 4 行、`impl … for SqliteStore` の見出しと閉じ括弧 4 行、`TaskStore` の supertrait の 2 行（`+ crate::store::OrgDirectory`・`+ crate::store::TaskQuery`）。store/ の下に新しい trait を置き、既存の `_impl` へ 1 行で転送する形（objective と ADR D2）である限り、trait 1 つにつき 5 行は必ず増える。trait を 1 つにまとめても 5 行増える。
+- objective の制約の中では直せない。store/ の外に trait を置くこと、`_impl` の本体を動かすこと、store/ の他の code を消すことは objective が許していない。引数の名前を縮めて 1 行に収めるような見かけの削減はしない。
+- 直し方の案（計画で選ぶ）:
+  - (a) 6 method の本体を `impl OrgDirectory for SqliteStore`・`impl TaskQuery for SqliteStore` に直接置き、`org_get_impl`・`project_get_impl`・`project_list_impl`・`milestone_list_impl`・`list_page_impl`・`event_rows_for_impl` を消す（写さずに移す。SQL は変えない）。6 個の `_impl` はどれも転送からしか呼ばれていない（`grep -rn '<method>_impl' crates/` で確かめた）。前例は `store/model_catalog.rs` の `impl ModelCatalogStore for SqliteStore`（本体を直接持つ）。impl block は領域の file（`org.rs`・`projects.rs`・`tasks.rs`・`events.rs`）に置き、trait の file には宣言だけを置く。転送 29 行と trait の file の impl の見出し 4 行が消え、領域の file に impl の見出し 8 行ほどが増えるので、store の本体の行は 19381 前後になる見込み（未確認）。objective の「`_impl` への転送を移すだけ」と ADR D2 の「1 行転送」を変える必要がある。推奨。
+  - (b) この WU の repo-health の base を段の base（store-prune の前）にする。store-prune の 280 行の削除と合わせて見れば store は減っている。ただし WU の check の base は celeris が決めるので、計画では変えられない（未確認）。
+- (a) を選ぶなら、ADR の付記（下の案に (a) の 1 行を足したもの）は範囲 check が `agent-docs/adr/` を許す unit（record）で書く。
+
+## ADR の付記の案（record で ADR に写す）
+- D2 の 8 method のうち `org_list`・`org_upsert` は `TaskStore` に残した。`get` も D2 のとおり残した。移したのは 6 method で、`OrgDirectory`（`crates/task-core/src/store/org_directory.rs`）は `org_get`・`project_list`・`project_get`・`milestone_list` の 4 個、`TaskQuery`（`crates/task-core/src/store/task_query.rs`）は `list_page`・`event_rows_for` の 2 個を持つ。
+- 残した理由は提案節の「残した 3 method」。celeris-mcp の src で `TaskStore` を名指す file は `resources.rs`（`org_list`）・`tools/org.rs`（`org_list`・`org_upsert`）・`tools/tasks.rs`（`get`）の 3 つになった。D4 の 64 file の見込みは 8 method の場合で、6 method では import を足した file が 38（うち celeris-mcp 5）だった。
 
 ## 変更（commit の件名）
 - `ports-design: TaskStore の consumer 計測台本・着手時の計測・削除の対象・port の ADR`
 - `mcp-port: org_get・project_list・project_get・milestone_list・list_page・event_rows_for の宣言を store/ の OrgDirectory・TaskQuery へ移し、celeris-mcp を狭い trait に依存させる`
 - `mcp-port: ADR の付記と進捗に port の結果を書く`
+- `mcp-port: ADR の付記を進捗へ移し、repo-health の不合格と plan_issue を書く`
 
 ## 未解決
 - 試験だけが呼ぶ TaskStore method 14 個は消すかを決めていない（`prune-list.json` の `held_test_only`）。本番の代わりの経路を確かめた method から、後の段で契約の廃止を書いて消す。

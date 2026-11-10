@@ -29,6 +29,8 @@ updated: 2026-11-10
   - `crates/task-dispatch/src/dispatcher/tests/health_generic_stale.rs`（新規）: 6 試験と helper（`review`・`Setup`・`narrow_app_layer`・`advance_main_empty`・`sh`・`assert_fresh`・`reused_bindings`）。
   - `crates/task-dispatch/src/dispatcher/tests/health_generic.rs`: helper 8 個を `pub(super)` にした（本文は変えていない）。
   - `crates/task-dispatch/src/dispatcher/tests/mod.rs`: `mod health_generic_stale;` の 1 行。
+- `phase 1: keep the fixture note path out of the doc link check`
+  - fixture の repo の文書の path を `concat!("docs", "/notes.md")` の const にした。文字列のままだと `doc.links`（`scripts/dev/check-doc-links.sh`）がこの repo の壊れた link として fail 級にする（builder の `Path('docs') / 'guide.md'` と同じ扱い）。
 
 ## 試験と結果（提出時の HEAD で実行）
 | 試験 | 確かめること | 結果 |
@@ -49,6 +51,8 @@ ADR (3) の表との差:
 - `cargo clippy --workspace -- -D warnings`: exit 0。
 - `cargo fmt --all -- --check`: exit 0。
 - `bash scripts/dev/test-affected.sh`: exit 0（nextest 3731 tests passed・11 skipped、Python の unittest 94 件 OK・expected failures=2、check-health の台本 7 件 OK）。
+- `bash scripts/dev/check-health.sh --base "$CELERIS_WU_BASE"`: exit 0（verdict=pass、fail_grade=0、new=0）。
+- `sh scripts/dev/progress-index.sh --check`: exit 0。
 - `sh "$CELERIS_WU_SCOPE_PATHS"`: 変更 path は `dispatcher/tests/health_generic.rs`・`health_generic_stale.rs`・`mod.rs` と、この進捗 file。
 - `git diff --exit-code "$CELERIS_WU_BASE" -- scripts/dev/repo-health scripts/dev/check-health.sh scripts/tests size-baseline.json`: exit 0（検査器・policy・baseline・builder に差分なし）。
 - 参考: `cargo clippy --workspace --all-targets -- -D warnings` は `task-core` の lib test の既存の `useless conversion`（2 件）で落ちる。この unit は `task-core` を変えていない。

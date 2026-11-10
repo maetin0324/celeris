@@ -643,9 +643,14 @@ impl Dispatcher {
         if task.kind != TaskKind::Execute {
             return Ok(None);
         }
-        // 暗黙の条件・health の Fail の check と、reviewer run を起こさなかった reviewer の項目を外すこと（D16 付記
-        // G4-S1）は `review::repair_failing` が持つ。
-        let failing = crate::review::repair_failing(task, verdicts);
+        // D16 付記（G4-S1）: 決定的な不合格（`Check::Reviewer` でない項目の不合格）があれば、reviewer run を起こさなかった
+        // `Check::Reviewer` の項目（reason が `REVIEWER_NOT_EVALUATED_REASON`）は reviewer の判定ではないので、分類と
+        // `failing_details` から外す。reviewer が実際に不合格にした項目（reason が違う）は数える（混ざれば `Substantive`）。
+        let mut failing = crate::review::failed_checks(task, verdicts);
+        if failing.iter().any(|f| f.check != Check::Reviewer) {
+            let not_evaluated = crate::review::REVIEWER_NOT_EVALUATED_REASON;
+            failing.retain(|f| !(f.check == Check::Reviewer && f.reason == not_evaluated));
+        }
         let class = match task_core::classify_review_failure(&failing) {
             task_core::RepairDecision::Repairable(c) => c,
             task_core::RepairDecision::Substantive => return Ok(None),

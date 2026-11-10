@@ -26,16 +26,19 @@ updated: 2026-11-10
    （`with_review`・`with_file`・`with_action`）、`instant_done_dispatcher`、`health_enforce.rs` の `commit_base_checker`・
    `commit_fixed`・`non_celeris_dispatcher`、`target_sync.rs` の `reviewing_task`・`set_check`・`commit_file`。
 4. 選択肢: (i) task-core の分類で reason を見る案は採らなかった。reason の意味は review の持ち物で、objective も task-core を
-   変えないとしている。(ii) `try_review_repair` の中に filter を足す案は、最初の commit で実装したが、dispatcher module の本体の
-   行が 35120 → 35130 に増え、`size.responsibility-growth` が worsened になった（check-health の exit 1）。(iii) 採用: 不合格の
-   一覧を作る処理を `review::repair_failing`（reason の const と同じ file）に移し、`try_review_repair` はそれを呼ぶ。暗黙の
-   条件の写し（`implicit_check`）と未評価の除外は、どちらも「review の verdict が分類に対して何を意味するか」で、review
-   module の責務に当たる。行を別 file に付け替えただけの移動ではなく、reason を作る module が、その reason を分類から外す
-   規則も持つようにした。
+   変えないとしている。(ii) `try_review_repair` の中の `FailedCheck` の組み立てに filter を足す案は、最初の commit で実装したが、
+   dispatcher module の本体の行が 35120 → 35130 に増え、`size.responsibility-growth` が worsened になった（check-health の
+   exit 1）。(iii) 前回の run は、不合格の一覧を作る処理と除外を両方 `review::repair_failing` に移した。計画の check は
+   `dispatcher/review_verdict.rs` に const の名前が要り、objective も除外を `try_review_repair` に置くとしているので、この
+   check が exit 1 になった。(iv) 採用: verdict を `FailedCheck` に写す処理（`Verdict::implicit_check` を使う既存の処理）だけを
+   `review::failed_checks` に移し、除外は `try_review_repair` に置いて const を使う。写し方は review の verdict の意味なので
+   review module に、どの不合格を修復の判断に使うかは修復を決める `try_review_repair` に置く。dispatcher module の本体の行は
+   base より減る（組み立ての 11 行 → 呼び出しと除外の 5 行）。
 5. 新しい状態・分岐・fallback・port: 分岐 1 つ（決定的な不合格があり、`Check::Reviewer` で reason が const の項目を外す）。
    状態・fallback・port は無し。
 6. 撤去対象: reason の文字列リテラルの 2 か所目（`dispatcher/tests/ownerless_runs.rs` の試験の比較）を const に置き換えた。
-   `try_review_repair` の中の `FailedCheck` の組み立ては `repair_failing` に移して消した。
+   `try_review_repair` の中の `FailedCheck` の組み立ては `review::failed_checks` に移して消した。前回の run の
+   `review::repair_failing` は消した（除外は `try_review_repair` に戻した）。
 7. 不変条件: 下の 3 試験。reviewer の判定を飛ばして done にはしない（修復の後の review で reviewer run がもう一度走る。
    試験 (1) と (3) は reviewer の合格の `review.json` を書いてから done になることを確かめる）。
 
@@ -50,6 +53,9 @@ updated: 2026-11-10
   - `review.rs` に `repair_failing(task, verdicts)` を置き、`dispatcher/review_verdict.rs` の `try_review_repair` はそれを呼ぶ。
     ADR の付記も置き場所に合わせて直した。
 - `phase 1: record fix-s1 progress` — この file。
+- `phase 1: exclude not-evaluated reviewer items in try_review_repair using the review.rs const`
+  - 計画の check（`review_verdict.rs` に `REVIEWER_NOT_EVALUATED_REASON` が要る）の exit 1 を直した。`review::repair_failing` を
+    `review::failed_checks`（写すだけ）に変え、除外を `try_review_repair` に戻した。ADR の付記も合わせて直した。
 
 ## 試験
 | 試験 | 守る不変条件 | 既存の試験で検出できない理由 |
@@ -58,7 +64,8 @@ updated: 2026-11-10
 | (2) `review_repair_not_evaluated_only_skips_the_not_evaluated_reason`（`tests/review.rs`） | reviewer が実際に不合格にした項目（reason が const でない）と fmt の不合格が混ざると、今までどおり repair にならず `review_fail`（max_retries 0 で failed）。WU も作らない | (1) だけでは「`Check::Reviewer` の項目をすべて外す」誤った直し方を検出できない |
 | (3) `review_repair_not_evaluated_reviewer_does_not_block_a_health_repair`（`tests/health_enforce.rs`） | base の stub の検査器の health の Fail が、`Check::Reviewer` のある task でも `RepairScheduled` の class `health:deps.violation` になり、修復の後に health が Pass、reviewer の合格で done・attempts 0 | `health_enforce_non_celeris_direct_review_routes_to_repair` は `Check::Reviewer` の無い task |
 
-試験が欠けを検出することの確認（提出前に一時的に本体を変えて実行し、元に戻した。sha256 で照合）:
+試験が欠けを検出することの確認（提出前に一時的に `try_review_repair` の除外を変えて実行し、元に戻した。sha256 で照合。
+除外を `try_review_repair` に戻した後にもう一度行った）:
 - 除外を無効にすると (1)・(3) が落ち、(2) は合格した。
 - `Check::Reviewer` の項目をすべて外すように変えると (2) だけが落ちた。
 

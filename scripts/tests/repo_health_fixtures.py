@@ -7,15 +7,23 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import asdict, dataclass
+import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 
 PROFILE = 'scripts/dev/repo-health/profiles/default.toml'
+BASELINE = 'size-baseline.json'
 KINDS = ('ts', 'rust', 'multi')
+# Head edits that weaken the base policy on top of dep-inversion (ADR 2026-11-10-health-generic-fixtures (2)).
+WEAKENINGS = ('policy-exclude', 'policy-rule-off', 'policy-exception', 'policy-threshold', 'baseline-rewrite')
+# Variants whose base profile configures wrapped checks that cannot run (unsupported) or break (error).
+TOOL_VARIANTS = ('unsupported-tool', 'tool-failure')
 VARIANTS = ('good', 'dup-contract', 'dup-state', 'dep-inversion',
-            'security-double', 'vendor-generated')
+            'security-double', 'vendor-generated', 'docs-only', 'non-git', *TOOL_VARIANTS,
+            *WEAKENINGS, 'history-smuggle')
 
 
 def git(repo: Path, *args: str) -> str:
@@ -42,8 +50,8 @@ def commit(repo: Path, subject: str) -> str:
 
 @dataclass
 class Fixture:
-    base: str
-    head: str
+    base: str | None  # None for non-git (no commit exists)
+    head: str | None
     repos: list[str]
     expected: list[str]
 
@@ -54,28 +62,64 @@ def contract(kind: str, name: str, fields=('id', 'owner', 'state')) -> str:
     return f'pub struct {name} {{\n' + ''.join(f'    pub {f}: String,\n' for f in fields) + '}\n'
 
 
-def profile(kind: str) -> str:
+def violation_key(kind: str) -> str:
+    """deps.violation key of the dep-inversion edge (rules/deps.py: <from>-><to>|<file>|<unit>)."""
+    return ('core->app|src/core/inverted.ts|src/app/index.ts' if kind == 'ts' else
+            'core->app|crates/core/Cargo.toml|crates/app')
+
+
+def violation_fingerprint(kind: str) -> str:
+    """Contract fingerprint <rule_id>:sha256(<rule_id>\\n<key>)[:16] of the dep-inversion finding."""
+    rid = 'deps.violation'
+    return rid + ':' + hashlib.sha256(f'{rid}\n{violation_key(kind)}'.encode()).hexdigest()[:16]
+
+
+def profile(kind: str, weaken: str | None = None, tools: str | None = None) -> str:
+    """The fixture profile. weaken is one of WEAKENINGS (written by the head), tools one of TOOL_VARIANTS."""
     prefix = 'src' if kind == 'ts' else 'crates'
     broker = r'^src/broker/verify\.ts$' if kind == 'ts' else r'^crates/broker/src/verify\.rs$'
     language = 'typescript' if kind == 'ts' else 'rust'
+    exclude = ['^vendor/'] + ([f'^{prefix}/core/'] if weaken == 'policy-exclude' else [])
     body = f'''version = "1"
-exclude_paths = ['^vendor/']
+exclude_paths = {json.dumps(exclude)}
 policy_paths = ['^scripts/dev/repo-health/', '^size-baseline\\.json$']
 [adapters]
 enabled = ["{language}", "markdown"]
 '''
     for rid in ('policy.changed', 'dup.contract', 'dup.state', 'dup.public-surface', 'deps.cycle', 'deps.violation'):
-        body += f'\n[rules."{rid}"]\nrequired = true\n'
+        required = 'false' if (weaken == 'policy-rule-off' and rid == 'deps.violation') else 'true'
+        body += f'\n[rules."{rid}"]\nrequired = {required}\n'
     for layer, allow in (('core', []), ('auth', ['core']), ('app', ['core', 'auth'])):
+        if weaken == 'policy-threshold' and layer == 'core':
+            allow = ['app']
         body += f'''\n[[rules."deps.violation".layers]]
 name = "{layer}"
 paths = ['^{prefix}/{layer}/']
 allow = {json.dumps(allow)}
 '''
-    return body + f'''\n[[rules."dup.contract".exceptions]]
+    if weaken == 'policy-exception':
+        body += f'''\n[[rules."deps.violation".exceptions]]
+fingerprint = "{violation_fingerprint(kind)}"
+reason = "移行中の依存（候補が自分で足した例外）"
+'''
+    body += f'''\n[[rules."dup.contract".exceptions]]
 path = '{broker}'
 reason = "security 境界の独立検証"
 '''
+    if tools == 'unsupported-tool':
+        # doc.links runs a script that is absent; adr.numbers runs a tool that is not on PATH.
+        body += '''\n[rules."doc.links"]
+commands = [["sh", "tools/check-docs.sh", "--root", "{root}"]]
+
+[rules."adr.numbers"]
+commands = [["orchard-adr-lint", "--root", "{root}"]]
+'''
+    elif tools == 'tool-failure':
+        # The wrapped script exists but emits bytes that are not UTF-8 (a broken check).
+        body += '''\n[rules."doc.links"]
+commands = [["sh", "tools/check-docs.sh", "--root", "{root}"]]
+'''
+    return body
 
 
 def _single(kind: str, variant: str, repo: Path, with_profile: bool) -> Fixture:
@@ -112,12 +156,20 @@ def _single(kind: str, variant: str, repo: Path, with_profile: bool) -> Fixture:
             mods = {'core': 'pub mod session;\npub mod store;\npub fn session_count() -> usize { 1 }\n',
                     'auth': 'pub mod verify;\n', 'app': 'pub fn count() -> usize { orchard_core::session_count() }\n'}
             write(repo, f'crates/{module}/src/lib.rs', mods[module])
+    # A policy file named by the profile's policy_paths; weakening it must not pass (baseline-rewrite).
+    write(repo, BASELINE, '{"max_lines": {"core": 300, "app": 300}}\n')
     if with_profile:
-        write(repo, PROFILE, profile(kind))
+        write(repo, PROFILE, profile(kind, tools=variant if variant in TOOL_VARIANTS else None))
+    if variant == 'tool-failure':
+        write(repo, 'tools/check-docs.sh', "printf 'guide:1: \\377\\376 broken\\n'\nexit 1\n")
     base = commit(repo, 'fixture base')
+    if variant == 'non-git':
+        # Only the base tree remains; the checker must refuse it (not_a_git_repo, exit 2).
+        shutil.rmtree(repo / '.git')
+        return Fixture(None, None, ['.'], [])
     git(repo, 'switch', '-q', '-c', 'candidate')
     expected = []
-    if variant == 'good':
+    if variant in ('good', *TOOL_VARIANTS):
         write(repo, source('app', 'summary'), contract(kind, 'Summary', ('total',)))
         if kind == 'ts':
             write(repo, 'src/core/count.ts', 'export function countSessions() { return 1; }\n')
@@ -134,13 +186,25 @@ def _single(kind: str, variant: str, repo: Path, with_profile: bool) -> Fixture:
               'export const updateSession = "UPDATE sessions SET state = ? WHERE id = ?";\n' if kind == 'ts' else
               'pub const UPDATE_SESSION: &str = "UPDATE sessions SET state = ? WHERE id = ?";\n')
         expected = ['dup.state:table:sessions']
-    elif variant == 'dep-inversion':
+    elif variant in ('dep-inversion', 'history-smuggle', *WEAKENINGS):
         if kind == 'ts':
             write(repo, 'src/core/inverted.ts', "import { label } from '../app/index';\nexport const inverted = label;\n")
         else:
             path = repo / 'crates/core/Cargo.toml'
             path.write_text(path.read_text() + '[dependencies]\norchard-app = { path = "../app" }\n')
         expected = ['deps.violation:core->app']
+        if variant == 'history-smuggle':
+            # The inversion lands in an earlier candidate commit; the last commit is unrelated.
+            commit(repo, 'fixture dep-inversion')
+            write(repo, 'README.md', '# Orchard sample\n\nRelease notes are in docs/.\n')
+        elif variant == 'baseline-rewrite':
+            write(repo, BASELINE, '{"max_lines": {"core": 100000, "app": 100000}}\n')
+            expected = [f'policy.changed:policy-files:{BASELINE}', *expected]
+        elif variant in WEAKENINGS:
+            if not with_profile:
+                raise ValueError(f'{variant} weakens the base profile; build it with the profile')
+            write(repo, PROFILE, profile(kind, weaken=variant))
+            expected = [f'policy.changed:policy-files:{PROFILE}', *expected]
     elif variant == 'security-double':
         write(repo, source('broker', 'verify'), contract(kind, 'BoundaryProof', ('issuer', 'signature', 'subject')) +
               ('export function checkBoundary(token: string) { return token.length > 0; }\n' if kind == 'ts' else
@@ -149,6 +213,11 @@ def _single(kind: str, variant: str, repo: Path, with_profile: bool) -> Fixture:
     elif variant == 'vendor-generated':
         write(repo, f'vendor/lib/types.{ext}', contract(kind, 'Session'))
         write(repo, source('generated', 'api'), '// @generated\n' + contract(kind, 'GeneratedSession'))
+    elif variant == 'docs-only':
+        write(repo, 'README.md', '# Orchard sample\n\nSee the guide for setup.\n')
+        write(repo, str(Path('docs') / 'guide.md'), '# Guide\n\nRun the app with the default settings.\n')
+    if variant in TOOL_VARIANTS and not with_profile:
+        raise ValueError(f'{variant} configures wrapped checks in the base profile; build it with the profile')
     head = commit(repo, 'fixture ' + variant)
     return Fixture(base, head, ['.'], expected)
 

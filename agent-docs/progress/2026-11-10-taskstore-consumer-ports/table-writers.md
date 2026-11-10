@@ -25,13 +25,14 @@ updated: 2026-11-10
 - `chat_client_requests.created_at`（kind `attachment_ref`）の書式は、同じ表のもう 1 つの書き手（kind `upload`）と同じ `stamp` の形（RFC 3339、ナノ秒 9 桁、`Z`）になった。以前は `OffsetDateTime` の Display の形だった。この欄を読む code は無い。
 - CoS の resolve の経路で受ける outcome の検査は、`cos_triage_resolve` と同じ 5 値（answered・observed・escalated・fallback・resolved）になった。呼び手の `ItemMark.outcome` は `cos/inbox.rs` が answered・observed・escalated の 3 値だけを入れる `&'static str` なので、実際に通る値は変わらない。
 
-## 証拠（WU の提出時の作業ツリーで実行。基準は `$CELERIS_WU_BASE`）
+## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+review の health_check_error（検査器 `check-architecture-map.py` が review の木に無かった）は検査器の起動の不具合で、人が hotfix を入れた。差し戻しの後の run で次を再実行した。
 - `python3 agent-docs/progress/2026-11-10-taskstore-consumer-ports/measure.py --check-writers cos_inbox_items,chat_client_requests` → exit 0（`ok: writers … are only under crates/task-core/src/`）
 - `cargo fmt --all -- --check` → exit 0
 - `cargo clippy --workspace -- -D warnings` → exit 0
-- `bash scripts/dev/check-health.sh` → exit 0（fail 級 0、new 0、worsened 1。worsened は ports-design が置いた `measure.py` の文中の `INSERT INTO t` を数えた `dup.state` の warning）。commit 前の HEAD だけでは `size.responsibility-growth`（chat module 8062 > 8000）で exit 1 だったので、上の `operation_card_tx` で直した。
-- `bash scripts/dev/test-affected.sh` → exit 100。8180 件中 8179 passed、1 timed out（`celeris-campaign::k4_cells_validity real_k4_archive_grades_thirty_of_thirty_two`、600 s）、23 skipped。web の型検査と unit は 712 passed、ts-verify は 20 passed。時間切れの 1 件は変更した chat・cos の code を通らず、`cargo nextest run -p celeris-campaign -E 'test(real_k4_archive_grades_thirty_of_thirty_two)'` で単独に再実行すると 1 passed（35.9 s）。全体の負荷による時間切れと判断した。
-- 最後の署名の変更（`cos_triage_resolve_tx` が `&Transaction` を受ける）の後に `cargo nextest run -p task-core -p task-api -E 'test(/triage|attachment|cos_operation|reference/)'` → 63 passed。
+- `bash scripts/dev/check-health.sh` → exit 0（`verdict=pass`、fail_grade 0、new 0、worsened 1。worsened は ports-design が置いた `measure.py` の文中の `INSERT INTO t` を数えた `dup.state` の warning）。chat module の本体の行が 8062 で `size.responsibility-growth`（閾値 8000）に掛かったので、上の `operation_card_tx` で直してある。
+- `bash scripts/dev/test-affected.sh` → exit 0。nextest 8180 件すべて passed（23 skipped）、web の型検査と unit は 712 passed、ts-verify は 20 passed。前の run で時間切れだった `celeris-campaign::k4_cells_validity real_k4_archive_grades_thirty_of_thirty_two` も今回は合格した。
+- `cargo nextest run -p task-api --test cos_triage -E 'test(cos_chat_triage_mark_and_audit_commit_together)'` → 1 passed。
 
 ## 範囲外（今回は動かしていない）
 - task-api に残る読みの SQL: `cos/triage_view.rs` の `item_get`・`items`・`superseded`、`chat/attachments.rs` の `chat_client_requests` の SELECT（upload と attachment_ref の重複確認）。

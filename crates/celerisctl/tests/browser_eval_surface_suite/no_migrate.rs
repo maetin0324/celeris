@@ -1,7 +1,7 @@
 //! ADR-0095 D6: `celerisctl` は migration をしない（本番 2026-09-30 22:37:52Z、ブランチの celerisctl が本番 DB を
 //! schema 35 にした事故の再発防止）。実バイナリで、古い DB・新しい DB・無い DB・同じ版の DB を開く。
 
-mod common;
+use crate::common;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

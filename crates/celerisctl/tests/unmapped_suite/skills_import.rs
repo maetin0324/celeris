@@ -1,7 +1,7 @@
 //! ADR-0122 D1: `celerisctl skills import <dir>` が repo の `config/skills/` を KB に取り込む
 //! （DB を開かない。mount はしない）。
 
-mod common;
+use crate::common;
 
 use std::path::Path;
 use std::process::Command;

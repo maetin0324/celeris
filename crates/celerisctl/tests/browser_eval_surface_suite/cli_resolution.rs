@@ -1,7 +1,6 @@
 //! 実 CLI の解決（`common::resolve_cli`）の回帰試験。環境変数は書き換えず、純関数に値を渡して決定的に確かめる。
-mod common;
 
-use common::{celerisctl_path, resolve_cli};
+use crate::common::{celerisctl_path, resolve_cli};
 use std::ffi::OsString;
 use std::process::Command;
 

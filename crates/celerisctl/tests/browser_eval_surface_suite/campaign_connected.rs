@@ -1,6 +1,6 @@
 //! `campaign export --verify-connected`: mock 実行の campaign を一時 DB に作り、結合済み export が
 //! 全欄を持てば成功、空・必須欄の欠測・消費未計上なら非 0 で失敗することを確かめる（実 API・実クラスタなし）。
-mod common;
+use crate::common;
 
 use serde_json::Value;
 use std::process::{Command, Output};

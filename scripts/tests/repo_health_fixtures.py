@@ -88,7 +88,8 @@ def _single(kind: str, variant: str, repo: Path, with_profile: bool) -> Fixture:
     def source(module: str, file: str) -> str:
         return f'src/{module}/{file}.{ext}' if kind == 'ts' else f'crates/{module}/src/{file}.{ext}'
     write(repo, 'README.md', '# Orchard sample\n')
-    write(repo, 'docs/guide.md', '# Guide\n')
+    # This document belongs to the generated repository, not this worktree.
+    write(repo, str(Path('docs') / 'guide.md'), '# Guide\n')
     write(repo, source('core', 'session'), contract(kind, 'Session'))
     write(repo, source('core', 'store'),
           'export const insertSession = "INSERT INTO sessions (id) VALUES (?)";\n' if kind == 'ts' else

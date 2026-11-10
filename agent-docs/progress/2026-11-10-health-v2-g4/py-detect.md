@@ -46,3 +46,15 @@ updated: 2026-11-10
 ## 提案
 - 別の policy だけの branch で、静的候補を blocking にする条件を設計・承認して実装するか、ADR の期待と現行契約の矛盾を人が解決する。required=true だけで安全に断定できるとは未確認。一般的な候補を一律 error に変更する判断はこの WU では行わない。
 - 後続 py-bypass の builder variant 追加は既存 builder を拡張し、fixture の内容を別 file に複製しない。
+
+## 再実行（2026-11-10、run attempt 1）
+- 前回 check の失敗を先に再現した。`python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health_generic*.py' -v` は exit 1、6 tests、12 subtest failures（96.660秒）。good・security-double・vendor-generated は合格。失敗の内訳と原因は上の「未解決」と一致し、検査器の契約は変わっていない。
+- `doc.links` は builder の文字列にある一時 repo の文書パスを、この worktree の参照として検査していた。生成先の文書パスを `Path` の結合で表した。fixture の内容と試験の期待は変えず、検査器の除外リストも変更していない。`sh scripts/dev/check-doc-links.sh scripts/tests/repo_health_fixtures.py` は exit 0（ok）。
+- 実装前 brief の補足: 原因 owner は fixture の文書パスの表記。既存の `Path` と `write()` を再利用する。検査器への特例追加は採らない。新しい状態・分岐・fallback・port と撤去対象は無し。一時 repo の文書内容を維持し、CLI と実検査器の試験で確認する。
+- `cargo clippy --workspace -- -D warnings` は exit 0（vendored deno_core の既存 deprecated warning 1件）。`cargo fmt --all -- --check` は exit 0。
+- この再実行でも完了にはしない。必要な修正は検査器・policy の owner にあり、本 WU の許可範囲外。期待を弱めず plan_issue を再申告する。
+- CLI の全18組（3 kind × 6 variant）を別々の一時 dir で再実行し、全件 exit 0、各 repo の main/candidate が存在することを確認した。
+- `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health*.py'` は exit 1、84 tests、12 subtest failures（58.570秒）。新規試験の上記12件以外の失敗は無い。
+- `sh scripts/dev/progress-index.sh --check` は exit 0（ok）。`sh "$CELERIS_WU_SCOPE_PATHS"` は builder・汎用試験・本進捗の3 path のみ。`git diff --exit-code "$CELERIS_WU_BASE" -- scripts/dev/repo-health scripts/dev/check-health.sh` は exit 0、検査器・policy に差分無し。
+- `bash scripts/dev/test-affected.sh --list` は exit 0、対象 crate 無し。`bash scripts/dev/test-affected.sh` は exit 1。health report は verdict=pass、fail_grade=0（既存 finding 717件、新規・悪化0件）、続く architecture-map の1 test は OK、health の84 tests は上記12件で失敗。crate 試験には進んでいない。全体試験は実行していない。
+- 再実行の commit: `phase 1: fix fixture document reference and record checker limitations`。提出時の HEAD の内容で上記検査を実行した。最後の同期は無い。

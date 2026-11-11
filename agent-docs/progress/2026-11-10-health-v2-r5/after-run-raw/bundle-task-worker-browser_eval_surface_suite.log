@@ -1,0 +1,37 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running tests/browser_eval_surface_suite/main.rs (/local/celeris/data/scratch/targets/task-01M76AG298YER7PJB6M781C77X/wu-01M76B4XA4NDSPES1FRPZKRGZW/target/debug/deps/browser_eval_surface_suite-0241ebe81fa08485)
+
+running 30 tests
+test browser_prod_admission::launcher_identity_mismatch_is_rejected ... ok
+test browser_loopback_prod_build::daemon_runtime_has_no_test_loopback_allow_in_non_test_build ... ok
+test browser_prod_admission::launcher_proven_separate_uid_session_is_admitted ... ok
+test browser_prod_admission::launcher_isolation_not_ok_is_rejected ... ok
+test browser_prod_admission::missing_namespace_is_rejected ... ok
+test browser_prod_admission::non_isolated_with_valid_proof_is_rejected ... ok
+test browser_prod_admission::other_isolation_failures_are_rejected ... ok
+test browser_prod_admission::attested_without_launcher_proof_is_rejected_even_if_isolated ... ok
+test browser_prod_admission::pid_mismatch_is_rejected ... ok
+test browser_prod_admission::proof_owned_by_daemon_is_rejected ... ok
+test browser_prod_admission::proof_for_another_session_is_rejected ... ok
+test browser_prod_admission::same_uid_is_rejected ... ok
+test browser_prod_admission::same_uid_owned_by_daemon_is_rejected ... ok
+test browser_prod_admission::same_uid_without_proof_reports_all_violations ... ok
+test browser_prod_admission::starttime_mismatch_is_rejected ... ok
+test browser_prod_admission::supervisor_default_is_attested ... ok
+test browser_prod_admission::unknown_userns_owner_is_rejected ... ok
+test browser_prod_admission::userns_owned_by_daemon_is_rejected ... ok
+test browser_prod_admission::writable_root_is_rejected ... ok
+test browser_live_cross::browser_launcher_v7_daemon_v8_launcher_never_opens_frames_and_logs_in ... ok
+test browser_live_cross::browser_launcher_v8_daemon_v7_launcher_disables_live_view_and_logs_in ... ok
+test browser_live_cross::browser_live_frame_no_persist_secret_marker_or_frame_bytes ... ok
+test browser_live_cross::browser_live_frame_auth_section_owner_only_credential_login ... ok
+test browser_control_gate_wire::gate_wire_running_actions_reach_the_browser ... ok
+test browser_control_gate_wire::gate_wire_human_control_blocks_agent_until_resume ... ok
+test browser_control_gate_wire::gate_wire_stopped_closes_session_once_and_never_runs_actions ... ok
+test browser_control_gate_wire::gate_wire_auth_section_blocks_agent_until_left ... ok
+test browser_control_gate_wire::gate_wire_pause_converges_after_in_flight_then_blocks ... ok
+test browser_shared_cdp_events::relay_delivers_events_emitted_after_the_reply ... ok
+test browser_live_cross::browser_launcher_live_view_rejects_input_mouse_keyboard_control ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.01s
+

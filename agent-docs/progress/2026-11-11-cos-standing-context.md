@@ -104,6 +104,21 @@ ADR の D4 を実装に合わせて書き直した（分類は `job_wait_extend`
   裏付けが消える。`cargo nextest run -p task-api --test cos_job_wait_extend`: 4 件合格。
 - `task-core` の `authority_ledger_scope_cover_is_narrow` に global の範囲を足した。
 
+## attempt 3 の検査（提出時の HEAD で実行）
+
+基準は `git merge-base HEAD main`。
+
+- 1 回目の `bash scripts/dev/test-affected.sh` は repo health で exit 1（store・chat の module 行数、SqliteStore の method 数、
+  `create_operation`・`resolve` の行数）。判定を `task_core::authority` の純関数（`grant_shape_problem`・`grant_backs`・
+  `forward_gap`・`proposal_title`）へ移し、SqliteStore の method を足さず、操作の後始末を `goal_guard::settle_after` にまとめた。
+- 件名「phase 1: 取り次ぎの許可の行の読み出しを store の free 関数にし、chat の行を減らす」の commit で
+  `bash scripts/dev/test-affected.sh`: exit 100。nextest 8224 件中 8223 件合格、23 skipped、失敗 1 件は
+  `task-api schema::tests::committed_schema_matches_generated`（`ChatForwardRequest` の `#[serde(default)]` を外した後の
+  生成物の更新漏れ）。web 712 件合格。repo health は単独の `bash scripts/dev/check-health.sh` で verdict=pass。
+- 件名「phase 1: API schema の生成物を作り直す」の commit で schema と web の生成型を作り直し、その試験を単独で再実行して合格。
+  test-affected 全体（約 30 分）の再実行は run の壁時計が足りず、この run ではしていない。
+- `cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check`・`sh scripts/dev/progress-index.sh --check`: 下の result に記録。
+
 ## D4 の実装前 brief
 
 1. 根本原因: ledger は案件・期限 366 日に限られ、取り次ぎは task と期限を必須にしていた。恒久の人の委任を表せず、job 待ちの

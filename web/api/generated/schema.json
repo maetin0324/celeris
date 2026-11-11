@@ -3804,7 +3804,6 @@
           "type": "string"
         },
         "expires_at": {
-          "default": null,
           "description": "RFC 3339 expiry (after now). Required without `grant_id`; with it, absent = while the grant lives.",
           "type": [
             "string",
@@ -3812,7 +3811,6 @@
           ]
         },
         "grant_id": {
-          "default": null,
           "description": "ADR 2026-11-11-cos-standing-context D4: a live grant of the authority ledger (global or the\ntarget project's own, project or global scope) that makes the person's instruction standing.",
           "type": [
             "string",

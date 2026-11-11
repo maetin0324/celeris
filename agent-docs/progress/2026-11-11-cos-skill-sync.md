@@ -1,13 +1,12 @@
 ---
 title: CoS の skill を昇格で KB に写し、版が config と違えば CoS run を起こさない
 tasks: [01M75722RHE7ZQ6KS09FMSXD3V]
-status: done
+status: running
 updated: 2026-11-11
-completed: 2026-11-11
 ---
 # CoS の skill を昇格で KB に写し、版が config と違えば CoS run を起こさない
 
-完了日: 2026-11-11
+未完了（run 1 で区切った）。
 
 設計判断は [ADR 2026-11-11 cos-skill-sync](../adr/2026-11-11-cos-skill-sync.md)。基準は `git merge-base HEAD main`。
 
@@ -52,6 +51,12 @@ completed: 2026-11-11
 4. 消した config 欄は無い。
 
 ## 未解決事項
+
+- run 1 の時点で落ちる試験が 3 本ある（CoS を有効にして KB の skill を置かない fixture で、照合の知らせが増えた）:
+  `dispatcher::tests::credential_e2e::credential_wait_notifies_through_the_outbox_without_any_run_over_full_ticks`（credential_e2e.rs:625）、
+  `dispatcher::tests::project_wake::project_wake_idle_7days`（project_wake.rs:659）、`project_wake_cron_idle`（project_wake.rs:688）。
+  fixture（credential_e2e.rs:553、project_wake.rs:124 の `set_cos_chat_launch` の前）で `knowledge.root` を一時 dir にし `write_fixture` を呼ぶのが直し方の見込み（未確認）。
+- `bash scripts/dev/test-affected.sh` は run 1 では未実行。
 
 - KB の git の commit の author は `celeris selfdeploy <selfdeploy@celeris.invalid>`（`SD_KB_GIT_NAME`・`SD_KB_GIT_EMAIL` で変えられる）。
   curation の commit と同じ author にするかは未確認。

@@ -43,7 +43,7 @@ task 01M74X0XAN0MCFJ4KZ3VVFT2QA の進捗。工程は contract → input-owner �
 - 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の変更 path は、`agent-docs/adr/` の 3 file とこの進捗の 1 file だけ。検査器・profile・baseline・TaskStore・campaign は変えていない。
 
 ## 工程 2: input-owner（共通構築で汎用候補を渡し旧省略経路を撤去する）
-状態: 実装と commit は済み。範囲外の試験 12 件が落ちるので、unit の check（`test-affected.sh`・`health_review_policy_`）は不合格。範囲外の file を直す必要があるので plan_issue で返した（ADR の R6 の見込みどおり）。
+状態: 実装と commit は済み。範囲外の試験 12 件が落ちるので、unit の check（`test-affected.sh`・`health_review_policy_`）は不合格。範囲外の file を直す必要がある（ADR の R6 の見込みどおり）。1 回目の run は plan_issue と書いたが done を返したので、celeris が check を走らせて不合格になった。2 回目の run（下の「再確認」）で同じ 12 件を確かめ、`yield.plan_issue` で返した。
 
 ### 変更
 - `phase 2: Absent の材料を共通構築に合流し旧省略経路を撤去する`
@@ -77,13 +77,22 @@ task 01M74X0XAN0MCFJ4KZ3VVFT2QA の進捗。工程は contract → input-owner �
   - `crates/task-dispatch/src/dispatcher/tests/phase_effect_ab/review_sync.rs`: `phase_effect_ab_review_sync_phase2_integration_repair_keeps_attempts`、`phase_effect_ab_review_sync_pre_review_sync_reduces_runs`
   - `crates/task-dispatch/src/dispatcher/tests/phase_effect_ab/stale_priority.rs`: `phase_effect_ab_stale_priority_syncs_the_long_stale_task_first`
   - 直し方（R6）: 偽の reviewer の `review.json` に `"health":{"findings":[]}` を足す。I7 を弱める、stub の検査器の方針を変えて `Absent` を避ける、は採らない。
+- 数え直し: 試験 file は 6 個（(A) 2 個・(B) 4 個）。1 回目の checkpoint の「7 file」は誤り。ほかに doc comment だけの範囲外が 2 個ある（下の「未解決（工程 2）」）。
+
+### 再確認（2 回目の run。提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+コードは変えていない。1 回目の run の check の不合格が範囲外の試験だけによることを確かめた。
+- `cargo nextest run -p task-dispatch --no-fail-fast -E 'test(health_review_input_) | test(health_generic_review_input_) | test(health_review_policy_) | test(target_sync::) | test(health_enforce::review_repair_not_evaluated) | test(phase_effect_ab_review_sync_) | test(phase_effect_ab_stale_priority_) | test(health_review_scenario_normal_change)'` → exit 100。86 件のうち 74 件合格、12 件不合格。不合格は上の (A)・(B) の 12 件と一致する。範囲内の試験（`health_review_input_`・`health_generic_review_input_`・4 件の `…_reaches_reviewer`）は全件合格。
+  - `target_sync.rs` の偽の reviewer（233 行・1087 行）は `{"verdicts":[…]}` だけを書き、`health` を書かない。`health_enforce.rs` の失敗の log は `health verdict missing or invalid in review.json`（`health_review::verdict::HEALTH_VERDICT_INVALID`）。
+  - `scenario_tests.rs:346` は `baseline.final_reviews() == vec![None]`（`Absent` では材料を渡さない旧い契約）を固定している。
+  - `unknown_tests.rs:320` は `(Absent, Missing)` の本文に旧い `POLICY_ABSENT` の文「policy の状態を決められない」を、`:421` は `HealthReviewInputBuilt` が無いことを期待している。
+- 範囲内だけで通す手（`POLICY_ABSENT` の文を残す、stub の検査器を `present` にする、I7 を弱める）は、ADR の R4・R1 に反する回避策なので採らない。
 
 ## 未解決（工程 2）
-- 上の 12 件（7 file）が `expected_write_paths` の外にある。計画にこの 7 file を足すか、直す unit を足す必要がある（plan_issue）。
+- 上の 12 件（試験 file 6 個）が `expected_write_paths` の外にある。input-owner の `expected_write_paths` と範囲 check の正規表現に、次の 6 file を足す必要がある（plan_issue）。`crates/task-dispatch/src/health_review/policy_review/unknown_tests.rs`、`crates/task-dispatch/src/health_review/scenario_tests.rs`、`crates/task-dispatch/src/dispatcher/tests/target_sync.rs`、`crates/task-dispatch/src/dispatcher/tests/health_enforce.rs`、`crates/task-dispatch/src/dispatcher/tests/phase_effect_ab/review_sync.rs`、`crates/task-dispatch/src/dispatcher/tests/phase_effect_ab/stale_priority.rs`。別の unit に分けると、input-owner の check（`test-affected.sh`）が先に落ちるので、同じ unit の範囲に足す。
 - `task_core::design_review::ReviewPolicy::definition_sha256` の doc comment は「health の材料の再利用の鍵に入る」のまま。鍵には使わなくなった（R2.3）。`crates/task-core/src/model/events.rs` の `HealthReviewInputSkipped` の doc comment（R4）と合わせて範囲外。
 
 ## 未解決
-- 計画の後続 unit の範囲（`expected_write_paths`）に無いが変える必要のある path がある（ADR の R6）。`crates/task-dispatch/src/health_review/policy_review/unknown_tests.rs` の `health_review_policy_unknown_absent_policy_change_needs_approval` は Absent で `HealthReviewInputBuilt` を作らないことを assert していて、input-owner の変更で落ちる。共通の stub の検査器は `source = absent` を返すので、`health` を書かない偽の reviewer を持つ dispatcher 試験（候補: `target_sync.rs`・`health_enforce.rs`・`work_units.rs`）が I7 で落ちる見込み（未確認）。`crates/task-core/src/model/events.rs` の doc comment も古くなる。
+- 計画の後続 unit の範囲（`expected_write_paths`）に無いが変える必要のある path がある（ADR の R6）。`crates/task-dispatch/src/health_review/policy_review/unknown_tests.rs` の `health_review_policy_unknown_absent_policy_change_needs_approval` は Absent で `HealthReviewInputBuilt` を作らないことを assert していて、input-owner の変更で落ちる。共通の stub の検査器は `source = absent` を返すので、`health` を書かない偽の reviewer を持つ dispatcher 試験が I7 で落ちる（工程 2 で確認。落ちたのは `target_sync.rs`・`health_enforce.rs`・`phase_effect_ab/review_sync.rs`・`phase_effect_ab/stale_priority.rs` で、契約の工程の候補に挙げた `work_units.rs` は落ちなかった）。`crates/task-core/src/model/events.rs` の doc comment も古くなる。
 
 ## 提案
-- input-owner の範囲に、上の 3 つの試験 file と `crates/task-dispatch/src/health_review/policy_review/unknown_tests.rs`、`crates/task-core/src/model/events.rs`（doc comment だけ）を足す。範囲を広げないなら、input-owner は `bash scripts/dev/test-affected.sh` で落ちた試験の一覧を付けて plan_issue で返す。
+- input-owner の範囲に、「未解決（工程 2）」の試験 file 6 個を足す。直し方は「範囲外で落ちる試験」の (A)・(B) のとおりで、I7・stub の検査器・`POLICY_ABSENT` の撤去は変えない。doc comment だけの `crates/task-core/src/model/events.rs`（`HealthReviewInputSkipped`）と `task_core::design_review::ReviewPolicy::definition_sha256` も同じ unit か record の範囲に足す。

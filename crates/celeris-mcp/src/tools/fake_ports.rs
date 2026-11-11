@@ -1,6 +1,7 @@
 //! ADR 2026-11-10-taskstore-consumer-ports: `OrgDirectory`・`TaskQuery` の試験用の fake と、
-//! `tools/org`・`tools/projects`・`resources` の組織の列挙・`tools/tasks` の一覧の本体をこの fake で
-//! 確かめる試験（SQLite を開かない）。
+//! `tools/org`・`tools/projects`・`tools/tasks` の一覧の本体をこの fake で確かめる試験（SQLite を開かない）。
+//! `resources` の組織の列挙の試験は `resources.rs` にあり、`FakePorts`・`org_fake` を使う（`tools` から
+//! `resources` への依存を作らないため）。
 //!
 //! fake はメモリの `Vec` を持つだけで、SQL の振る舞い（並び・絞り込み・cursor・upsert の検査）は task-core
 //! の store の試験が確かめる（名簿は `store::tests::org_nodes_round_trip_and_upsert_keeps_created_at`・
@@ -22,10 +23,9 @@ use super::org::{
 };
 use super::projects::{get_project, list_projects};
 use super::tasks::list_tasks;
-use crate::resources::org_resources;
 
 #[derive(Default)]
-struct FakePorts {
+pub(crate) struct FakePorts {
     org_nodes: Mutex<Vec<OrgNode>>,
     projects: Vec<Project>,
     milestones: Vec<Milestone>,
@@ -398,7 +398,7 @@ fn org_node(
 }
 
 /// secretary `cos` > department `eng`・`ops` > section `backend`（`eng` の下）の名簿を持つ fake。
-fn org_fake() -> FakePorts {
+pub(crate) fn org_fake() -> FakePorts {
     let fake = FakePorts::default();
     for node in [
         org_node("cos", None, OrgKind::Secretary, &["triage"], 0),
@@ -567,28 +567,4 @@ fn port_fake_org_mount_skill_adds_and_removes_the_mount_or_not_found() {
     let err =
         set_node_skill_mount(&fake, "nope", "yomiyasu", true, at(1000)).expect_err("missing node");
     assert_eq!(err.code, ToolErrorCode::NotFound);
-}
-
-#[test]
-fn port_fake_resources_org_list_has_one_json_resource_per_node() {
-    let fake = org_fake();
-
-    let resources = org_resources(&fake).expect("resources");
-
-    let uris: Vec<_> = resources.iter().map(|r| r.uri.as_str()).collect();
-    assert_eq!(
-        uris,
-        vec![
-            "celeris://org/cos",
-            "celeris://org/eng",
-            "celeris://org/ops",
-            "celeris://org/backend"
-        ]
-    );
-    assert_eq!(resources[1].name, "eng name");
-    assert!(resources.iter().all(|r| r.mime_type == "application/json"));
-    assert!(resources.iter().all(|r| r.description.is_none()));
-
-    let empty = org_resources(&FakePorts::default()).expect("no nodes");
-    assert!(empty.is_empty());
 }

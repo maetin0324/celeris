@@ -8,7 +8,7 @@ pub mod console;
 pub mod db;
 pub mod decisions;
 #[cfg(test)]
-mod fake_ports;
+pub(crate) mod fake_ports;
 pub mod knowledge;
 pub mod org;
 pub mod projects;

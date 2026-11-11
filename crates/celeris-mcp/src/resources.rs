@@ -125,3 +125,33 @@ pub async fn read(
     }
     (def.call)(state, client, args).await
 }
+
+#[cfg(test)]
+mod tests {
+    use super::org_resources;
+    use crate::tools::fake_ports::{FakePorts, org_fake};
+
+    #[test]
+    fn port_fake_resources_org_list_has_one_json_resource_per_node() {
+        let fake = org_fake();
+
+        let resources = org_resources(&fake).expect("resources");
+
+        let uris: Vec<_> = resources.iter().map(|r| r.uri.as_str()).collect();
+        assert_eq!(
+            uris,
+            vec![
+                "celeris://org/cos",
+                "celeris://org/eng",
+                "celeris://org/ops",
+                "celeris://org/backend"
+            ]
+        );
+        assert_eq!(resources[1].name, "eng name");
+        assert!(resources.iter().all(|r| r.mime_type == "application/json"));
+        assert!(resources.iter().all(|r| r.description.is_none()));
+
+        let empty = org_resources(&FakePorts::default()).expect("no nodes");
+        assert!(empty.is_empty());
+    }
+}

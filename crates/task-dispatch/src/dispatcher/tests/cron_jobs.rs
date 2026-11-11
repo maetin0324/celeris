@@ -491,3 +491,48 @@ async fn verify_skips_ineligible_ready_tasks_before_pre_dispatch_work() {
         Status::Ready
     );
 }
+
+/// 不変条件: pool が他の持ち主に占有されても tick は終わり、保守 task は Ready のまま次回に回る。
+/// 既存の掃除試験は cargo lock のみを競合させ、pool lock の待機を検出しない。
+#[tokio::test]
+async fn target_sweep_tick_defers_while_pool_is_locked() {
+    let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let tmp = tempfile::tempdir().unwrap();
+    let adapter = Arc::new(InstantAdapter {
+        terminal: Terminal::Done {
+            summary: "ok".into(),
+            evidence: vec![],
+            usage: None,
+        },
+        delay: Duration::ZERO,
+    });
+    let mut d = dispatcher(store.clone(), adapter, 1);
+    let settings = scratch_on(&mut d, &tmp.path().join("scratch"));
+    std::fs::create_dir_all(settings.pool().targets_dir()).unwrap();
+    d.set_target_sweep(task_worker::target_sweep::SweepParams {
+        roots: vec![],
+        ..Default::default()
+    });
+    let mut task = new_task(tmp.path(), Check::Reviewer, 0);
+    task.labels = vec![
+        "maintenance-action-target-sweep".into(),
+        "mode-apply".into(),
+    ];
+    store.insert(&task).unwrap();
+    let held = settings.pool().lock().unwrap();
+    let (finished, receive) = std::sync::mpsc::channel();
+    // 保険の期限で lock を解放する。旧実装でも永久停止せず、期限に頼った場合は失敗にする。
+    let guard = std::thread::spawn(move || {
+        let progressed = receive.recv_timeout(Duration::from_secs(30)).is_ok();
+        drop(held);
+        progressed
+    });
+    let tick = d.tick();
+    let deferred = store.get(task.id).unwrap().unwrap().status;
+    let _ = finished.send(());
+    assert!(guard.join().unwrap(), "tick waited for the pool lock");
+    tick.unwrap();
+    assert_eq!(deferred, Status::Ready);
+    d.tick().unwrap();
+    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+}

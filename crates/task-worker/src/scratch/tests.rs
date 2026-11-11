@@ -1697,6 +1697,21 @@ fn seed_gc_keeps_current_and_removes_stale_generations_and_abandoned_builds() {
     .unwrap();
     std::fs::create_dir_all(repo_dir.join("gen-000000000000-2/target")).unwrap();
     let registered: BTreeSet<String> = [key.clone()].into();
+    // 不変条件: pool が Busy なら削除せず戻り、解放後の GC で回収する。
+    // 従来の claim 競合だけでは pool の待機を検出できない。
+    let pool_lock = pool.lock().unwrap();
+    assert!(pool.try_lock().unwrap().is_none());
+    let (finished, receive) = std::sync::mpsc::channel();
+    let guard = std::thread::spawn(move || {
+        let progressed = receive.recv_timeout(Duration::from_secs(30)).is_ok();
+        drop(pool_lock);
+        progressed
+    });
+    let deferred = seed_gc(&pool, &registered, at(T0 + 30));
+    let _ = finished.send(());
+    assert!(guard.join().unwrap(), "seed GC waited for the pool lock");
+    assert_eq!(deferred, SeedGcResult::default());
+    assert!(repo_dir.join("gen-000000000000-2").is_dir());
     // build 中（`claim_seed` を他が持つ）なら build も旧世代も触らない。
     let held = claim_seed(&repo_dir).unwrap().unwrap();
     let r = seed_gc(&pool, &registered, at(T0 + 60));

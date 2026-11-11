@@ -324,8 +324,14 @@ pub fn execute(pool: &Pool, plan: &GcPlan, scan: &Scan, emergency: bool) -> Exec
             reclaimed_bytes: 0,
         };
     }
-    let _lock = match pool.lock() {
-        Ok(l) => l,
+    let _lock = match pool.try_lock() {
+        Ok(Some(l)) => l,
+        Ok(None) => {
+            return Executed {
+                removed,
+                reclaimed_bytes: 0,
+            };
+        }
         Err(e) => {
             tracing::warn!(dir = %pool.root().display(), error = %e, "scratch: could not take the pool lock; GC skipped");
             return Executed {

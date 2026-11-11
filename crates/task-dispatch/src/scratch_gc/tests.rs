@@ -73,6 +73,20 @@ fn gc_dry_run_lists_without_removing_and_execute_renames() {
         &BTreeSet::new(),
         true,
     );
+    // 不変条件: pool の競合中は退避せず即座に戻り、解放後に同じ plan を実行できる。
+    // cargo lock だけの既存試験は pool の待機を検出できない。
+    let held = pool.lock().unwrap();
+    let (finished, receive) = std::sync::mpsc::channel();
+    let guard = std::thread::spawn(move || {
+        let progressed = receive.recv_timeout(Duration::from_secs(30)).is_ok();
+        drop(held);
+        progressed
+    });
+    let deferred = execute(&pool, &run.plan, &run.scan, false);
+    let _ = finished.send(());
+    assert!(guard.join().unwrap(), "GC waited for the pool lock");
+    assert!(deferred.removed.is_empty());
+    assert!(pool.target_dir(&owner).exists());
     assert_eq!(run.plan.selected.len(), 1);
     assert!(run.executed.is_none());
     assert!(pool.target_dir(&owner).exists());

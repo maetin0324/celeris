@@ -459,8 +459,9 @@ pub fn seed_gc(pool: &Pool, registered: &BTreeSet<String>, now: SystemTime) -> S
         .filter(|n| !n.starts_with('.'))
         .collect();
     keys.sort();
-    let _lock = match pool.lock() {
-        Ok(l) => l,
+    let _lock = match pool.try_lock() {
+        Ok(Some(l)) => l,
+        Ok(None) => return out,
         Err(e) => {
             tracing::warn!(dir = %pool.root().display(), error = %e, "scratch: could not take the pool lock; seed GC skipped");
             return out;

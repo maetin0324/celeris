@@ -432,16 +432,40 @@ impl Pool {
         self.owner_dir(owner).join(LEASE_FILE)
     }
 
-    /// `.lock` を排他で取る（無ければ作る）。
-    pub fn lock(&self) -> io::Result<PoolLock> {
+    fn open_lock_file(&self) -> io::Result<std::fs::File> {
         std::fs::create_dir_all(&self.root)?;
-        let file = std::fs::OpenOptions::new()
+        std::fs::OpenOptions::new()
             .create(true)
             .truncate(false)
             .write(true)
-            .open(self.root.join(LOCK_FILE))?;
+            .open(self.root.join(LOCK_FILE))
+    }
+
+    /// `.lock` を排他で取る（無ければ作る）。
+    #[track_caller]
+    pub fn lock(&self) -> io::Result<PoolLock> {
+        let file = self.open_lock_file()?;
+        let started = std::time::Instant::now();
         file.lock()?;
+        let waited = started.elapsed();
+        if waited >= Duration::from_secs(1) {
+            tracing::warn!(pool = %self.root.display(), caller = %std::panic::Location::caller(), wait_secs = waited.as_secs_f64(), "scratch: pool lock acquired after waiting");
+        }
         Ok(PoolLock { _file: file })
+    }
+
+    /// tick の掃除用。競合したら待たずに `None` を返し、呼び出し側が次回に回す。
+    #[track_caller]
+    pub fn try_lock(&self) -> io::Result<Option<PoolLock>> {
+        let file = self.open_lock_file()?;
+        match file.try_lock() {
+            Ok(()) => Ok(Some(PoolLock { _file: file })),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                tracing::debug!(pool = %self.root.display(), caller = %std::panic::Location::caller(), "scratch: pool lock busy; deferring to the next tick");
+                Ok(None)
+            }
+            Err(std::fs::TryLockError::Error(error)) => Err(error),
+        }
     }
 
     /// `targets/` の下の owner のディレクトリを列挙する（`task-*` の中の `wu-*` も）。`.deleting-*` は除く。

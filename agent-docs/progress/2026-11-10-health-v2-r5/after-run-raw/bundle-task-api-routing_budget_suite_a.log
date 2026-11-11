@@ -1,0 +1,27 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running tests/routing_budget_suite_a/main.rs (/local/celeris/data/scratch/targets/task-01M76AG298YER7PJB6M781C77X/wu-01M76B4XA4MZRYHBP348ZP7R49/target/debug/deps/routing_budget_suite_a-5d3a79b6994c8425)
+
+running 20 tests
+test routing_source_state::source_state_view_marks_expired_snapshot_stale ... ok
+test routing_source_state::routing_source_api_reports_freshness_and_cost_components ... ok
+test cron_jobs::create_get_list_and_lookup_by_name ... ok
+test cron_jobs::patch_updates_fields_and_recomputes_next_fire ... ok
+test cron_jobs::cos_review_job_is_created_without_task_fields_and_refuses_a_manual_run ... ok
+test cron_jobs::manual_run_creates_a_task_and_skips_while_previous_is_running ... ok
+test cron_jobs::create_rejects_duplicates_and_invalid_input ... ok
+test cron_jobs::token_is_required_when_configured ... ok
+test routing::routing_returns_per_run_audit_and_dropped_assignee ... ok
+test cron_jobs::delete_removes_job_and_history_but_keeps_tasks ... ok
+test routing::routing_shadow_audit_keeps_primary_outcome_separate ... ok
+test cron_jobs::pause_and_resume ... ok
+test routing::routing_is_empty_without_runs_and_404_for_unknown_tasks ... ok
+test saved_credentials::saved_credential_management_is_attested_owner_scoped_and_removes_the_vault_entry ... ok
+test legacy_routing_events::accounts_list_survives_legacy_routing_events_without_evidence_mode ... ok
+test routing_stage::stages_and_evidence_are_listed_and_enforce_requires_d1_evidence ... ok
+test script_exhaustive::exhaustive_start_rejects_each_conflict ... ok
+test script_exhaustive::exhaustive_list_shows_standing ... ok
+test script_exhaustive::exhaustive_start_refused_for_cos ... ok
+test script_exhaustive::exhaustive_start_requires_human_or_operator ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s
+

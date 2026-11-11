@@ -194,6 +194,8 @@ task 01M74X0XAN0MCFJ4KZ3VVFT2QA の進捗。工程は contract → input-owner �
 - `cargo clippy --workspace -- -D warnings` → exit 0。
 - `cargo fmt --all -- --check` → exit 0。
 - 範囲（計画の check 4）→ exit 0。変更 path は `health_generic.rs`・`health_review_input.rs`・この進捗だけ。
+- 実行した HEAD: `test-affected.sh` は commit『phase 4: WU 統合後の final review・複数 repo・Absent の再利用と policy の関門で adapter が受けた材料と合否を固定する』の時点で実行した。その後の commit『phase 4: request-integrated の試験・対応表・検査結果を進捗に記録する』は `health_generic.rs` の doc comment 2 か所（既存の `health_review_input_not_built_for_work_units` の不足の説明を、読んで確かめた事実に直した）とこの進捗だけを変えた。提出時の HEAD で check 1（91 件合格）・clippy・fmt・`progress-index.sh --check`・`git diff --check`・範囲の check を再実行し、すべて exit 0。
+- `sh scripts/dev/progress-index.sh --check`・`python3 scripts/dev/check-human-text.py` → exit 0。
 
 ## 未解決（工程 2）
 - 範囲外で落ちた 12 件は直した。残りは注釈だけで、どれも動作に影響しない。

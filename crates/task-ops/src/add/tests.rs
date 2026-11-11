@@ -1,5 +1,5 @@
 use super::*;
-use task_core::{Event, SqliteStore};
+use task_core::{Event, OrgDirectory, SqliteStore};
 
 #[test]
 fn browser_task_routes_to_claude_code_by_default_and_accepts_acp() {

@@ -19,8 +19,9 @@ use async_trait::async_trait;
 use celeris::{ClusterMasters, Config, api_settings, build_dispatcher};
 use serde_json::{Value, json};
 use task_core::{
-    ApprovalStore, DaemonMode, InstanceRole, Message, MessageId, MessageRole, OrgKind, OrgNode,
-    SharedRole, SqliteStore, StandingRule, StandingRuleId, TaskId, TaskKind, TaskStore,
+    ApprovalStore, DaemonMode, InstanceRole, Message, MessageId, MessageRole, OrgDirectory,
+    OrgKind, OrgNode, SharedRole, SqliteStore, StandingRule, StandingRuleId, TaskId, TaskKind,
+    TaskStore,
 };
 use task_dispatch::Dispatcher;
 use task_worker::{
@@ -87,10 +88,12 @@ impl WorkerAdapter for CaptureAdapter {
         "capture"
     }
 
-    fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut next = self.clone();
-        next.env.extend(extra.iter().cloned());
-        Some(Arc::new(next))
+    fn configure(&self, settings: &task_worker::AdapterSettings) -> task_worker::Configured {
+        settings.configured(&[task_worker::AdapterSetting::Env], || {
+            let mut next = self.clone();
+            settings.apply_env(&mut next.env);
+            Arc::new(next)
+        })
     }
 
     async fn run(

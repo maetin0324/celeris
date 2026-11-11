@@ -3,7 +3,7 @@
 //! rejected audit row) and applied through the envelope with its row, audit event and chat card.
 //! Daemon-channel and external operations (C) use fakes: the daemon admin channel, the release
 //! source and the discovery hook are test doubles, so nothing outside the test process is touched.
-mod common;
+use crate::common;
 
 use common::cos_ops::{OPS, cos_bearer, db, op_body, run_domain, run_external};
 use common::*;
@@ -108,7 +108,7 @@ const SKILL_MD: &str =
 async fn cos_ops_admin_config_org_and_skills_are_audited() {
     let env = admin_env();
     task_ops::knowledge::init(&env.knowledge_root).expect("knowledge init");
-    use task_core::TaskStore;
+    use task_core::OrgDirectory;
 
     let op = run_domain(
         &env,

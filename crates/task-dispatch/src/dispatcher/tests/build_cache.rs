@@ -880,10 +880,12 @@ async fn reviewer_cargo_target_env_and_request_use_subject_owner() {
         fn id(&self) -> &str {
             "instant"
         }
-        fn with_env(&self, env: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-            let mut next = self.clone();
-            next.env.extend_from_slice(env);
-            Some(Arc::new(next))
+        fn configure(&self, settings: &task_worker::AdapterSettings) -> task_worker::Configured {
+            settings.configured(&[task_worker::AdapterSetting::Env], || {
+                let mut next = self.clone();
+                settings.apply_env(&mut next.env);
+                Arc::new(next)
+            })
         }
         async fn run(
             &self,

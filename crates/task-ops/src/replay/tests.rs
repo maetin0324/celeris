@@ -1,8 +1,8 @@
 use super::*;
 use std::path::PathBuf;
 use task_core::{
-    ArtifactRef, Budget, Check, Criterion, SqliteStore, TaskKind, Tier, Trigger, WorkerHint,
-    WorkspaceSpec,
+    ArtifactRef, Budget, Check, Criterion, SqliteStore, TaskKind, TaskQuery, Tier, Trigger,
+    WorkerHint, WorkspaceSpec,
 };
 use time::OffsetDateTime;
 

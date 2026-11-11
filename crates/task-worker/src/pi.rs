@@ -11,8 +11,8 @@ use tokio::process::Command;
 use tracing::warn;
 
 use crate::adapter::{
-    AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter, deadline_terminal,
-    spawn_capture_stderr,
+    AdapterError, AdapterSetting, AdapterSettings, Configured, EventSink, RunLimits, RunOutcome,
+    Terminal, WorkerAdapter, deadline_terminal, spawn_capture_stderr,
 };
 use crate::claude_code::build_prompt_with_skill_list;
 use crate::delegate_file::forward_delegate_file;
@@ -115,38 +115,32 @@ impl WorkerAdapter for PiAdapter {
         run_pi(&self.config, &req, run_id, &limits, sink).await
     }
 
-    fn with_model(&self, model: &str) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut config = self.config.clone();
-        config.model = Some(model.to_owned());
-        Some(Arc::new(Self::new(config)))
-    }
-
-    fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut config = self.config.clone();
-        config.env.extend(extra.iter().cloned());
-        Some(Arc::new(Self::new(config)))
-    }
-
-    fn with_llm_endpoint(
-        &self,
-        base_url: &str,
-        api_key: Option<&str>,
-    ) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut config = self.config.clone();
-        config.base_url = Some(base_url.to_owned());
-        if let Some(key) = api_key {
-            config.env.retain(|(k, _)| k != "CELERIS_PI_API_KEY");
-            config
-                .env
-                .push(("CELERIS_PI_API_KEY".into(), key.to_owned()));
-        }
-        Some(Arc::new(Self::new(config)))
-    }
-
-    fn with_container(&self, plan: crate::container::SharedPlan) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut config = self.config.clone();
-        config.container = Some(plan);
-        Some(Arc::new(Self::new(config)))
+    /// ADR 2026-11-10-worker-capability-ports D3: model、env（同名キーは後勝ち）、選んだ source の endpoint
+    /// （ADR 2026-10-11 llm-source-harness-selection。鍵は env の後に `CELERIS_PI_API_KEY` として置き直す）、
+    /// コンテナを受ける。
+    fn configure(&self, settings: &AdapterSettings) -> Configured {
+        settings.configured(
+            &[
+                AdapterSetting::Model,
+                AdapterSetting::LlmEndpoint,
+                AdapterSetting::Env,
+                AdapterSetting::Container,
+            ],
+            || {
+                let mut config = self.config.clone();
+                settings.apply_model(&mut config.model);
+                settings.apply_env(&mut config.env);
+                if let Some(endpoint) = &settings.llm_endpoint {
+                    config.base_url = Some(endpoint.base_url.clone());
+                    if let Some(key) = &endpoint.api_key {
+                        config.env.retain(|(k, _)| k != "CELERIS_PI_API_KEY");
+                        config.env.push(("CELERIS_PI_API_KEY".into(), key.clone()));
+                    }
+                }
+                settings.apply_container(&mut config.container);
+                Arc::new(Self::new(config))
+            },
+        )
     }
 }
 

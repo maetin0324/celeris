@@ -3,12 +3,12 @@
 //! credential (422 + rejected audit row) and applied through the envelope with its row, audit event
 //! and chat card. `cron_job.run` is an external-effect operation (C): pending then applied, and a
 //! resent request returns the recorded operation without firing the job again.
-mod common;
+use crate::common;
 
 use common::cos_ops::{OPS, audit_events, cos_bearer, db, op_body, run_domain};
 use common::*;
 use serde_json::{Value, json};
-use task_core::{CronJobStore, TaskStore};
+use task_core::{CronJobStore, OrgDirectory, TaskStore};
 
 fn job(env: &TestEnv, name: &str) -> Option<task_core::CronJob> {
     env.store.cron_job_get_by_name(name).expect("get")

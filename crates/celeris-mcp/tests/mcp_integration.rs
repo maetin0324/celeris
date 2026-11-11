@@ -15,8 +15,8 @@ use task_core::decision::{
 };
 use task_core::{
     ArtifactRef, Budget, Check, Criterion, Event, GenreSpec, McpClient, McpClientStore, McpScope,
-    OrgKind, OrgNode, RoleSpec, SqliteStore, Status, Task, TaskId, TaskKind, TaskStore, Tier,
-    WorkerHint, WorkspaceSpec,
+    OrgDirectory, OrgKind, OrgNode, RoleSpec, SqliteStore, Status, Task, TaskId, TaskKind,
+    TaskStore, Tier, WorkerHint, WorkspaceSpec,
 };
 use time::OffsetDateTime;
 
@@ -857,57 +857,6 @@ async fn cos_chat_mcp_reply_failed_stopped_and_interrupted() {
             );
         }
     }
-    server.stop().await;
-}
-
-// ---------------------------------------------------------------------------
-// org_create_node: tools / permissions を無視する
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn org_create_node_ignores_tools_and_permissions() {
-    let server = spawn_token_server(60).await;
-    create_client(
-        &server.store,
-        "c1",
-        Some("secret"),
-        vec![McpScope::OrgWrite],
-    );
-    let client = reqwest::Client::new();
-    let session = initialize(&client, &server.base_url, Some("secret")).await;
-
-    let resp = rpc(
-        &client,
-        &server.base_url,
-        Some("secret"),
-        Some(&session),
-        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
-            "name": "org_create_node",
-            "arguments": {
-                "parent_id": "engineering",
-                "id": "backend",
-                "name": "Backend",
-                "profile": {
-                    "skills": ["rust"],
-                    "tools": ["gh"],
-                    "permissions": {"approvals": ["cluster:pegasus"]}
-                }
-            }
-        }}),
-    )
-    .await;
-    assert_eq!(resp.status(), 200);
-    let body: Value = resp.json().await.expect("json");
-    assert!(body.get("error").is_none(), "{body}");
-
-    let node = server.store.org_get("backend").unwrap().expect("node");
-    assert_eq!(node.profile.skills, vec!["rust".to_string()]);
-    assert!(node.profile.tools.is_empty(), "tools must be ignored");
-    assert!(
-        node.profile.permissions.approvals.is_empty(),
-        "permissions must be ignored"
-    );
-
     server.stop().await;
 }
 

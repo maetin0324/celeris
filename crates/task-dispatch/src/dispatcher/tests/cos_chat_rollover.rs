@@ -123,11 +123,13 @@ impl WorkerAdapter for RefusingFake {
         self.inner.run(req, run_id, limits, sink).await
     }
 
-    fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut next = self.clone();
-        next.inner = self.inner.with_env(extra)?;
-        next.token = extra.first().map(|(_, v)| v.clone());
-        Some(Arc::new(next))
+    fn configure(&self, settings: &task_worker::AdapterSettings) -> task_worker::Configured {
+        self.inner.configure(settings).map_adapter(|inner| {
+            let mut next = self.clone();
+            next.inner = inner;
+            next.token = settings.env.first().map(|(_, v)| v.clone());
+            Arc::new(next)
+        })
     }
 }
 

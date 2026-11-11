@@ -1,0 +1,222 @@
+{
+ "schema": "taskstore-consumer-ports/prune-list/1",
+ "checker": "python3 agent-docs/progress/2026-11-10-taskstore-consumer-ports/measure.py --check-pruned agent-docs/progress/2026-11-10-taskstore-consumer-ports/prune-list.json（各 name が crates/ に `fn <name>` で残れば exit 1）",
+ "fns": [
+  {
+   "name": "milestone_transition_status",
+   "kind": "task_store_method",
+   "source": "baseline.json#unreferenced_methods",
+   "reason": "TaskStore の method。宣言と転送の外に呼び手が無い（試験も呼ばない）。"
+  },
+  {
+   "name": "milestone_transition_status_impl",
+   "kind": "store_impl",
+   "source": "crates/task-core/src/store の本体",
+   "reason": "`milestone_transition_status` の転送だけが呼ぶ本体。宣言と転送を消すと呼び手が無くなる。"
+  },
+  {
+   "name": "project_plan_apply",
+   "kind": "task_store_method",
+   "source": "baseline.json#unreferenced_methods",
+   "reason": "TaskStore の method。呼び手が無い。案件計画の Go/No-Go は ADR-0079（再帰 task 化）で廃止済みで、契約は残っていない。"
+  },
+  {
+   "name": "project_plan_apply_impl",
+   "kind": "store_impl",
+   "source": "crates/task-core/src/store の本体",
+   "reason": "`project_plan_apply` の転送だけが呼ぶ本体。宣言と転送を消すと呼び手が無くなる。"
+  },
+  {
+   "name": "project_plan_decide_apply",
+   "kind": "task_store_method",
+   "source": "baseline.json#unreferenced_methods",
+   "reason": "TaskStore の method。呼び手が無い。案件計画の Go/No-Go は ADR-0079 で廃止済み。"
+  },
+  {
+   "name": "project_plan_decide_apply_impl",
+   "kind": "store_impl",
+   "source": "crates/task-core/src/store の本体",
+   "reason": "`project_plan_decide_apply` の転送だけが呼ぶ本体。宣言と転送を消すと呼び手が無くなる。"
+  },
+  {
+   "name": "project_set_text",
+   "kind": "task_store_method",
+   "source": "baseline.json#unreferenced_methods",
+   "reason": "TaskStore の method。呼び手が無い。CoS の監査付き操作は transaction を受ける別の関数を使い、そちらは残す。"
+  },
+  {
+   "name": "project_set_text_impl",
+   "kind": "store_impl",
+   "source": "crates/task-core/src/store の本体",
+   "reason": "`project_set_text` の転送だけが呼ぶ本体。宣言と転送を消すと呼び手が無くなる。"
+  },
+  {
+   "name": "authority_audit_record_tx",
+   "kind": "b0_dup_candidate",
+   "source": "agent-docs/progress/2026-11-07-health-v2-b0/dup-candidates.json#unref-authority-audit-record-tx",
+   "reason": "B0 の R3 割り当て（decision=delete）。git grep -w で定義の 1 行だけ（2026-11-10 に再確認）。"
+  },
+  {
+   "name": "chat_legacy_reply",
+   "kind": "b0_dup_candidate",
+   "source": "agent-docs/progress/2026-11-07-health-v2-b0/dup-candidates.json#unref-chat-legacy-reply",
+   "reason": "B0 の R3 割り当て（decision=delete）。git grep -w で定義の 1 行だけ（2026-11-10 に再確認）。"
+  },
+  {
+   "name": "insert_route_judgment",
+   "kind": "b0_dup_candidate",
+   "source": "agent-docs/progress/2026-11-07-health-v2-b0/dup-candidates.json#unref-insert-route-judgment",
+   "reason": "B0 の R3 割り当て（decision=delete）。git grep -w で定義の 1 行だけ（2026-11-10 に再確認）。"
+  },
+  {
+   "name": "roadmap_last_status_tx",
+   "kind": "b0_dup_candidate",
+   "source": "agent-docs/progress/2026-11-07-health-v2-b0/dup-candidates.json#unref-roadmap-last-status-tx",
+   "reason": "B0 の R3 割り当て（decision=delete）。git grep -w で定義の 1 行だけ（2026-11-10 に再確認）。"
+  },
+  {
+   "name": "route_decision_get",
+   "kind": "b0_dup_candidate",
+   "source": "agent-docs/progress/2026-11-07-health-v2-b0/dup-candidates.json#unref-route-decision-get",
+   "reason": "B0 の R3 割り当て（decision=delete）。git grep -w で定義の 1 行だけ（2026-11-10 に再確認）。"
+  },
+  {
+   "name": "route_judgment_get",
+   "kind": "b0_dup_candidate",
+   "source": "agent-docs/progress/2026-11-07-health-v2-b0/dup-candidates.json#unref-route-judgment-get",
+   "reason": "B0 の R3 割り当て（decision=delete）。git grep -w で定義の 1 行だけ（2026-11-10 に再確認）。"
+  },
+  {
+   "name": "route_judgments_for_hashes",
+   "kind": "b0_dup_candidate",
+   "source": "agent-docs/progress/2026-11-07-health-v2-b0/dup-candidates.json#unref-route-judgments-for-hashes",
+   "reason": "B0 の R3 割り当て（decision=delete）。git grep -w で定義の 1 行だけ（2026-11-10 に再確認）。"
+  },
+  {
+   "name": "route_outcome_get",
+   "kind": "b0_dup_candidate",
+   "source": "agent-docs/progress/2026-11-07-health-v2-b0/dup-candidates.json#unref-route-outcome-get",
+   "reason": "B0 の R3 割り当て（decision=delete）。git grep -w で定義の 1 行だけ（2026-11-10 に再確認）。"
+  },
+  {
+   "name": "task_unit_leaf_shortfalls",
+   "kind": "b0_dup_candidate",
+   "source": "agent-docs/progress/2026-11-07-health-v2-b0/dup-candidates.json#unref-task-unit-leaf-shortfalls",
+   "reason": "B0 の R3 割り当て（decision=delete）。git grep -w で定義の 1 行だけ（2026-11-10 に再確認）。"
+  }
+ ],
+ "held_test_only": [
+  {
+   "name": "integration_get",
+   "test_files": [
+    "crates/task-core/src/store/tests.rs"
+   ],
+   "reason": "試験だけが呼ぶ（task-core の store 試験）。契約の廃止を書ける根拠を確かめていないので消さない。"
+  },
+  {
+   "name": "milestone_set_lifecycle",
+   "test_files": [
+    "crates/task-api/tests/lifecycle.rs",
+    "crates/task-core/src/store/tests.rs",
+    "crates/task-ops/src/lifecycle/tests.rs"
+   ],
+   "reason": "試験だけが呼ぶ。本番の代わりの経路と契約の廃止を確かめていないので消さない（試験の土台が状態を作るのに使う）。"
+  },
+  {
+   "name": "milestone_set_plan_key",
+   "test_files": [
+    "crates/task-dispatch/src/dispatcher/tests/planning_and_gate.rs"
+   ],
+   "reason": "試験だけが呼ぶ。本番の代わりの経路と契約の廃止を確かめていないので消さない（試験の土台が状態を作るのに使う）。"
+  },
+  {
+   "name": "milestone_set_status",
+   "test_files": [
+    "crates/task-core/src/store/tests.rs"
+   ],
+   "reason": "試験だけが呼ぶ（task-core の store 試験）。契約の廃止を書ける根拠を確かめていないので消さない。"
+  },
+  {
+   "name": "project_set_archived_at",
+   "test_files": [
+    "crates/task-api/tests/project_wake_human.rs",
+    "crates/task-core/src/store/tests.rs"
+   ],
+   "reason": "試験だけが呼ぶ。本番の代わりの経路と契約の廃止を確かめていないので消さない（試験の土台が状態を作るのに使う）。"
+  },
+  {
+   "name": "project_set_auto_integrate",
+   "test_files": [
+    "crates/celeris/src/delivery/tests.rs",
+    "crates/task-ops/src/delivery/tests.rs"
+   ],
+   "reason": "試験だけが呼ぶ。本番の代わりの経路と契約の廃止を確かめていないので消さない（試験の土台が状態を作るのに使う）。"
+  },
+  {
+   "name": "project_set_lifecycle",
+   "test_files": [
+    "crates/task-api/tests/project_wake_human.rs",
+    "crates/task-core/src/store/tests.rs",
+    "crates/task-ops/src/lifecycle/tests.rs"
+   ],
+   "reason": "試験だけが呼ぶ。本番の代わりの経路と契約の廃止を確かめていないので消さない（試験の土台が状態を作るのに使う）。"
+  },
+  {
+   "name": "project_set_slug",
+   "test_files": [
+    "crates/task-core/src/store/tests.rs"
+   ],
+   "reason": "試験だけが呼ぶ（task-core の store 試験）。契約の廃止を書ける根拠を確かめていないので消さない。"
+  },
+  {
+   "name": "project_set_status",
+   "test_files": [
+    "crates/celeris/tests/notify.rs",
+    "crates/celeris/tests/project_controller_e2e.rs",
+    "crates/task-api/tests/project_wake_human.rs",
+    "crates/task-core/src/store/tests.rs",
+    "crates/task-dispatch/src/dispatcher/tests/long_horizon_pilot.rs",
+    "crates/task-dispatch/src/dispatcher/tests/project_controller_replay.rs",
+    "crates/task-dispatch/src/dispatcher/tests/project_recovery.rs",
+    "crates/task-dispatch/src/dispatcher/tests/project_wake_effects.rs"
+   ],
+   "reason": "試験だけが呼ぶ。本番の代わりの経路と契約の廃止を確かめていないので消さない（試験の土台が状態を作るのに使う）。"
+  },
+  {
+   "name": "project_set_workspace",
+   "test_files": [
+    "crates/task-core/src/store/tests.rs"
+   ],
+   "reason": "試験だけが呼ぶ（task-core の store 試験）。契約の廃止を書ける根拠を確かめていないので消さない。"
+  },
+  {
+   "name": "release_lease",
+   "test_files": [
+    "crates/task-core/src/store/tests.rs"
+   ],
+   "reason": "試験だけが呼ぶが lease の高 risk class（lease-single-holder）に属する。廃止の根拠を確かめていないので消さない。"
+  },
+  {
+   "name": "repo_active_tasks",
+   "test_files": [
+    "crates/task-core/src/store/tests.rs"
+   ],
+   "reason": "試験だけが呼ぶ（task-core の store 試験）。契約の廃止を書ける根拠を確かめていないので消さない。"
+  },
+  {
+   "name": "task_expected_write_paths",
+   "test_files": [
+    "crates/task-core/src/store/write_sets.rs"
+   ],
+   "reason": "試験だけが呼ぶ。本番の代わりの経路と契約の廃止を確かめていないので消さない（試験の土台が状態を作るのに使う）。"
+  },
+  {
+   "name": "unblocks_of",
+   "test_files": [
+    "crates/task-api/tests/unblocks.rs",
+    "crates/task-ops/src/unblocks/tests.rs"
+   ],
+   "reason": "試験だけが呼ぶ。本番の代わりの経路と契約の廃止を確かめていないので消さない（試験の土台が状態を作るのに使う）。"
+  }
+ ]
+}

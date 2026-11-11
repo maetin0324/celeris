@@ -1,7 +1,7 @@
 //! ADR 2026-10-05 D3: every registered domain of `/api/v1/cos/operations` (task・comment・decision・
 //! approval・execution・project・knowledge) runs its handler's shared operation function with the audit
 //! context, and the same mutation called directly with the CoS run credential is 422.
-mod common;
+use crate::common;
 
 use common::cos_ops::{
     OPS, cos_bearer, documented_default_basis, op_body, raise_decision, run_domain,
@@ -10,7 +10,7 @@ use common::cos_ops::{
 use common::*;
 use serde_json::json;
 use task_core::approval::{Approval, ApprovalId, ApprovalStore, Decision};
-use task_core::{Event, Status, TaskKind, TaskStore};
+use task_core::{Event, OrgDirectory, Status, TaskKind, TaskStore};
 use time::OffsetDateTime;
 
 #[tokio::test]

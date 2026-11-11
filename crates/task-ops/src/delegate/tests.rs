@@ -1,8 +1,8 @@
 use super::*;
 use std::path::PathBuf;
 use task_core::{
-    Budget, Check, Criterion, Event, RunRole, SqliteStore, Task, TaskKind, Tier, WorkerHint,
-    WorkspaceSpec,
+    Budget, Check, Criterion, Event, OrgDirectory, RunRole, SqliteStore, Task, TaskKind, Tier,
+    WorkerHint, WorkspaceSpec,
 };
 
 fn now() -> OffsetDateTime {

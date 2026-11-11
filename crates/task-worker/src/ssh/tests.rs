@@ -493,39 +493,113 @@ fn command_probe_fails_when_the_remote_command_exits_nonzero() {
     ));
 }
 
+// ---- ADR 2026-11-10-ssh-timeout-kills-process-group: timeout は子の group と子孫ごと止める ----
+
+/// 偽 ssh が応答せずハングし続ける。shell は子（`sleep 3600`。ProxyCommand・wrapper の子の代わり）を背景で起こし、
+/// shell と子の pid を `state` に書いてから子を待つ。
+fn hanging_ssh_with_a_child(dir: &Path, state: &Path) -> Vec<String> {
+    let script = format!(
+        "#!/bin/sh\nsleep 3600 &\necho $! > {state:?}/child\necho $$ > {state:?}/pid\nwait\n",
+    );
+    fake_ssh_probe(dir, &script)
+}
+
+/// `/proc/<pid>/stat` の状態が zombie 以外なら生きている（孤児の zombie は init が回収するまで見えるため）。
+fn process_running(pid: u32) -> bool {
+    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+        return false;
+    };
+    stat.rsplit_once(')')
+        .and_then(|(_, rest)| rest.split_whitespace().next())
+        .is_some_and(|state| state != "Z")
+}
+
+/// 試験の終わり（panic を含む）に、偽 ssh の子の `sleep` がまだ居れば SIGKILL する。直す前の実装で試験が落ちても
+/// 1 時間の孤児を残さない（2026-11-10 の release gate を止めた残り方）。pid の再利用に当たらないよう comm を確かめる。
+struct KillLeftoverSleep(u32);
+
+impl Drop for KillLeftoverSleep {
+    fn drop(&mut self) {
+        let comm = std::fs::read_to_string(format!("/proc/{}/comm", self.0)).unwrap_or_default();
+        if comm.trim() == "sleep" && process_running(self.0) {
+            let _ = nix::sys::signal::kill(
+                nix::unistd::Pid::from_raw(self.0 as i32),
+                nix::sys::signal::Signal::SIGKILL,
+            );
+        }
+    }
+}
+
+fn read_pid(state: &Path, name: &str) -> u32 {
+    let raw = std::fs::read_to_string(state.join(name))
+        .unwrap_or_else(|e| panic!("fake ssh did not write {name} before the timeout: {e}"));
+    raw.trim().parse().expect("pid")
+}
+
+/// shell（偽 ssh）とその子の両方が期限（10 秒）までに消えたことを確かめる。期限待ちは 20ms 間隔の確認。
+fn assert_shell_and_child_gone(state: &Path) {
+    let shell = read_pid(state, "pid");
+    let child = read_pid(state, "child");
+    let _cleanup = KillLeftoverSleep(child);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while (process_running(shell) || process_running(child)) && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        !process_running(shell),
+        "hanging ssh process {shell} was not killed"
+    );
+    assert!(
+        !process_running(child),
+        "the child {child} of the hanging ssh was left behind (only the direct child was killed)"
+    );
+}
+
 /// NAT の idle timeout で TCP が黙って死んだ状況を模す: ssh が応答せずハングし続ける。
-/// `timeout` を超えたら kill されて `false` になる（ハングしたまま残らない）。
+/// `timeout` を超えたら ssh の group と子孫ごと kill されて `false` になる（shell も子もハングしたまま残らない）。
 #[test]
 fn command_probe_times_out_and_kills_a_hanging_ssh() {
     let dir = tempfile::tempdir().unwrap();
     let state = tempfile::tempdir().unwrap();
-    let script = format!(
-        "#!/bin/sh\necho $$ > {state:?}/pid\nwhile true; do sleep 3600; done\n",
-        state = state.path()
-    );
-    let ssh = fake_ssh_probe(dir.path(), &script);
+    let ssh = hanging_ssh_with_a_child(dir.path(), state.path());
     let start = std::time::Instant::now();
     assert!(!control_master_command_probe_blocking(
         &ssh,
         "cluster-host",
-        Duration::from_millis(300)
+        Duration::from_secs(2)
     ));
     assert!(
-        start.elapsed() < Duration::from_secs(5),
+        start.elapsed() < Duration::from_secs(10),
         "probe must not block past the timeout"
     );
-    let pid: u32 = std::fs::read_to_string(state.path().join("pid"))
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
-    for _ in 0..150 {
-        if !std::path::Path::new(&format!("/proc/{pid}")).exists() {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    panic!("hanging ssh process {pid} was not killed");
+    assert_shell_and_child_gone(state.path());
+}
+
+/// ADR-0090 D2 の poll も同じ: timeout で ssh の group と子孫ごと止め、`Err` を返す。
+#[test]
+fn remote_command_times_out_and_kills_the_ssh_process_group() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let ssh = hanging_ssh_with_a_child(dir.path(), state.path());
+    let err = run_remote_command_blocking(&ssh, "sirius", "qstat -xf 1", Duration::from_secs(2))
+        .expect_err("a hanging ssh times out");
+    assert!(err.contains("timed out after 2s"), "{err}");
+    assert_shell_and_child_gone(state.path());
+}
+
+/// `SshWorkspace` の ssh・rsync（`run_command`）も同じ: timeout で group と子孫ごと止め、`timed_out` を返す。
+#[tokio::test]
+async fn run_command_times_out_and_kills_the_ssh_process_group() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = tempfile::tempdir().unwrap();
+    let ssh = hanging_ssh_with_a_child(dir.path(), state.path());
+    let out = run_command(&ssh, Duration::from_secs(2))
+        .await
+        .expect("ran");
+    assert!(out.timed_out, "{out:?}");
+    assert_eq!(out.exit, None);
+    assert_shell_and_child_gone(state.path());
 }
 
 // ---- Phase R6-3: クラスタの worktree は git submodule を初期化する ----

@@ -19,7 +19,7 @@ use task_core::project_proposal::{
     SnapshotProject, SnapshotRoot, SnapshotWait, SnapshotWake, parse_outcomes,
 };
 use task_core::store::{IdempotencyClaim, SqliteStore};
-use task_core::{Check, Event, ProjectId, Status, Task, TaskId, TaskStore};
+use task_core::{Check, Event, OrgDirectory, ProjectId, Status, Task, TaskId, TaskStore};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 

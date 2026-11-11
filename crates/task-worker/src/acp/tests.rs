@@ -969,7 +969,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":4,"result":{"stopReason":"end_turn"}}'
     assert!(received.contains("\"configId\":\"model\""), "{received}");
 }
 
-/// `with_model` の複製は、config の model を置き換えて `session/set_config_option` に渡す。
+/// `configure` の model を受けた複製は、config の model を置き換えて `session/set_config_option` に渡す。
 #[tokio::test]
 async fn opencode_receives_qualified_route_model_id() {
     let dir = tempfile::tempdir().unwrap();
@@ -994,8 +994,12 @@ printf '%s\n' '{"jsonrpc":"2.0","id":4,"result":{"stopReason":"end_turn"}}'
         )
     };
     let adapter = AcpAdapter::new(config)
-        .with_model("qwen-local/replacement-model")
-        .expect("acp supports with_model");
+        .configure(&AdapterSettings {
+            model: Some("qwen-local/replacement-model".into()),
+            ..AdapterSettings::default()
+        })
+        .adapter
+        .expect("acp takes a model");
     let req = sample_req(dir.path().to_path_buf());
     let sink = RecordingSink::default();
     let outcome = adapter
@@ -1094,9 +1098,9 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":3,"error":{{"code":-32000,"message":"401 U
     assert!(dir.path().join("runs/run-14/result.json").is_file());
 }
 
-/// ADR-0024/0026 と同じ規則: `with_env` の追加分は既存の同名キーより後に環境を組み立てるので勝つ。
+/// ADR-0024/0026 と同じ規則: `configure` の env の追加分は既存の同名キーより後に環境を組み立てるので勝つ。
 #[tokio::test]
-async fn with_env_overrides_a_same_name_key_already_in_config_env() {
+async fn configure_env_overrides_a_same_name_key_already_in_config_env() {
     let dir = tempfile::tempdir().unwrap();
     let out_file = dir.path().join("env-seen.txt");
     let mut config = stub_acp(
@@ -1115,13 +1119,17 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
         .env
         .push(("ACP_TEST_VAR".to_string(), "old".to_string()));
     let base = AcpAdapter::new(config);
-    let with_env = base
-        .with_env(&[("ACP_TEST_VAR".to_string(), "new".to_string())])
-        .expect("acp supports with_env");
+    let configured = base
+        .configure(&AdapterSettings {
+            env: vec![("ACP_TEST_VAR".to_string(), "new".to_string())],
+            ..AdapterSettings::default()
+        })
+        .adapter
+        .expect("acp takes env");
 
     let req = sample_req(dir.path().to_path_buf());
     let sink = RecordingSink::default();
-    let outcome = with_env
+    let outcome = configured
         .run(req, "run-15", default_limits(), &sink)
         .await
         .unwrap();

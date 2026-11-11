@@ -41,6 +41,43 @@ pub struct CosOperation {
     pub event_id: Option<i64>,
 }
 
+/// The operation card of `ctx` in its thread for one state of the operation (the audit protocol's
+/// chat side): appended in the caller's transaction, linked from the row (`event_id`), and the row
+/// read back.
+fn operation_card_tx(
+    tx: &rusqlite::Connection,
+    ctx: &AuditContext,
+    action: &str,
+    state: &str,
+    at: &str,
+) -> Result<CosOperation, ChatError> {
+    let card = ChatCard {
+        kind: ChatCardKind::Operation,
+        id: ctx.operation_id.clone(),
+        title: action.into(),
+        state: state.into(),
+        href: format!("/cos/operations/{}", ctx.operation_id),
+        actor: ChatActor::Cos,
+        reason: Some(ctx.reason.clone()),
+        operation_id: Some(ctx.operation_id.clone()),
+    };
+    let event_id = append_event(
+        tx,
+        &ctx.thread_id,
+        Some(&ctx.run_id),
+        None,
+        ChatEventType::Card,
+        &ChatEventData::Card(ChatCardData { card }),
+        at,
+    )?;
+    tx.execute(
+        "UPDATE cos_operations SET event_id=?2 WHERE id=?1",
+        params![ctx.operation_id, event_id],
+    )?;
+    get_conn(tx, &ctx.operation_id)?
+        .ok_or_else(|| ChatError::not_found("operation", &ctx.operation_id))
+}
+
 fn get_conn(conn: &rusqlite::Connection, id: &str) -> Result<Option<CosOperation>, ChatError> {
     let raw = conn
         .query_row(
@@ -245,31 +282,7 @@ impl SqliteStore {
             &stamp,
         )?;
         audit_event(&tx, ctx, target_kind, target_id, "pending")?;
-        let card = ChatCard {
-            kind: ChatCardKind::Operation,
-            id: ctx.operation_id.clone(),
-            title: action.into(),
-            state: "pending".into(),
-            href: format!("/cos/operations/{}", ctx.operation_id),
-            actor: ChatActor::Cos,
-            reason: Some(ctx.reason.clone()),
-            operation_id: Some(ctx.operation_id.clone()),
-        };
-        let event_id = append_event(
-            &tx,
-            &ctx.thread_id,
-            Some(&ctx.run_id),
-            None,
-            ChatEventType::Card,
-            &ChatEventData::Card(ChatCardData { card }),
-            &stamp,
-        )?;
-        tx.execute(
-            "UPDATE cos_operations SET event_id=?2 WHERE id=?1",
-            params![ctx.operation_id, event_id],
-        )?;
-        let op = get_conn(&tx, &ctx.operation_id)?
-            .ok_or_else(|| ChatError::not_found("operation", &ctx.operation_id))?;
+        let op = operation_card_tx(&tx, ctx, action, "pending", &stamp)?;
         tx.commit()?;
         Ok((op, true))
     }
@@ -315,31 +328,7 @@ impl SqliteStore {
         tx.execute("UPDATE cos_operations SET state=?4,result_json=?2,updated_at=?3 WHERE id=?1 AND state='pending'",
             params![ctx.operation_id,result.to_string(),stamp,state])?;
         audit_event(&tx, ctx, &op.target_kind, &op.target_id, state)?;
-        let card = ChatCard {
-            kind: ChatCardKind::Operation,
-            id: ctx.operation_id.clone(),
-            title: op.action.clone(),
-            state: state.into(),
-            href: format!("/cos/operations/{}", ctx.operation_id),
-            actor: ChatActor::Cos,
-            reason: Some(ctx.reason.clone()),
-            operation_id: Some(ctx.operation_id.clone()),
-        };
-        let event_id = append_event(
-            &tx,
-            &ctx.thread_id,
-            Some(&ctx.run_id),
-            None,
-            ChatEventType::Card,
-            &ChatEventData::Card(ChatCardData { card }),
-            &stamp,
-        )?;
-        tx.execute(
-            "UPDATE cos_operations SET event_id=?2 WHERE id=?1",
-            params![ctx.operation_id, event_id],
-        )?;
-        op = get_conn(&tx, &ctx.operation_id)?
-            .ok_or_else(|| ChatError::not_found("operation", &ctx.operation_id))?;
+        op = operation_card_tx(&tx, ctx, &op.action, state, &stamp)?;
         tx.commit()?;
         Ok(op)
     }
@@ -574,31 +563,7 @@ impl SqliteStore {
                 &now,
             )?;
             audit_event_at(&tx, ctx, target_kind, target_id, "applied", at)?;
-            let card = ChatCard {
-                kind: ChatCardKind::Operation,
-                id: ctx.operation_id.clone(),
-                title: action.into(),
-                state: "applied".into(),
-                href: format!("/cos/operations/{}", ctx.operation_id),
-                actor: ChatActor::Cos,
-                reason: Some(ctx.reason.clone()),
-                operation_id: Some(ctx.operation_id.clone()),
-            };
-            let event_id = append_event(
-                &tx,
-                &ctx.thread_id,
-                Some(&ctx.run_id),
-                None,
-                ChatEventType::Card,
-                &ChatEventData::Card(ChatCardData { card }),
-                &now,
-            )?;
-            tx.execute(
-                "UPDATE cos_operations SET event_id=?2 WHERE id=?1",
-                params![ctx.operation_id, event_id],
-            )?;
-            get_conn(&tx, &ctx.operation_id)?
-                .ok_or_else(|| ChatError::not_found("operation", &ctx.operation_id))
+            operation_card_tx(&tx, ctx, action, "applied", &now)
         })();
         match applied {
             Ok(row) => {

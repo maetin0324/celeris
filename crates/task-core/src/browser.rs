@@ -721,20 +721,6 @@ fn valid_identifier(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.' | b':'))
 }
 
-/// Lowercase ASCII DNS name, optionally with a leading `*.` (subdomains only, not apex).
-pub fn normalize_host_pattern(pattern: &str) -> Result<String, BrowserPolicyError> {
-    if !pattern.is_ascii() {
-        return Err(BrowserPolicyError::InvalidDomain);
-    }
-    let lower = pattern.to_ascii_lowercase();
-    let host = lower.strip_prefix("*.").unwrap_or(&lower);
-    // A single-label wildcard base (`*.com`) would cover a public suffix.
-    if !valid_host(host) || (host.len() != lower.len() && !host.contains('.')) {
-        return Err(BrowserPolicyError::InvalidDomain);
-    }
-    Ok(lower)
-}
-
 /// Canonical `https://host[:port]` (default port elided), or None.
 pub fn normalize_https_origin(origin: &str) -> Option<String> {
     let rest = origin.strip_prefix("https://")?;

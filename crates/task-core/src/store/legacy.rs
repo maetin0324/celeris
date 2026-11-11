@@ -37,27 +37,6 @@ struct OldMessage {
 }
 
 impl SqliteStore {
-    /// MCP console_reply resolves its reserved task id through the chat run.
-    pub fn chat_legacy_reply(
-        &self,
-        task_id: TaskId,
-    ) -> Result<Option<(String, Option<String>)>, ChatError> {
-        read_tx(self, |conn| {
-            conn.query_row(
-                "SELECT COALESCE(r.state,'queued'),o.text FROM messages m \
-             JOIN chat_messages i ON i.legacy_message_id=m.id \
-             LEFT JOIN chat_runs r ON r.input_message_id=i.id \
-             LEFT JOIN chat_messages o ON o.id=r.output_message_id \
-             WHERE m.task_id=?1 AND m.role='user' AND m.node_id='cos' \
-             ORDER BY r.started_at DESC LIMIT 1",
-                [task_id.to_string()],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .optional()
-            .map_err(ChatError::from)
-        })
-    }
-
     /// New CoS chat rows visible in the old Console. Projected legacy rows are
     /// already present in `messages`; run id also suppresses a duplicate reply.
     pub fn chat_legacy_console_messages(

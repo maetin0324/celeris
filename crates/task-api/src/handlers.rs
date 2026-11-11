@@ -10,7 +10,7 @@ use axum::routing::{delete, get, patch, post, put};
 use futures_util::StreamExt;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use task_core::{OrgNode, ProjectId, SqliteStore, TaskStore};
+use task_core::{OrgDirectory, OrgNode, ProjectId, SqliteStore};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 

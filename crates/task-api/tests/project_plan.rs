@@ -11,7 +11,7 @@ mod common;
 
 use common::*;
 use serde_json::{Value, json};
-use task_core::{MilestoneStatus, Status, TaskKind, TaskStore};
+use task_core::{MilestoneStatus, OrgDirectory, Status, TaskKind, TaskStore};
 
 async fn create_project(app: &axum::Router, title: &str, request: &str) -> String {
     let resp = send(

@@ -1,11 +1,11 @@
 //! ADR 2026-10-16-project-auto-integrate D1/D4: `PATCH /projects/{id} {auto_integrate}`。
 //! 既定は無効、切り替えは `GET /projects/{id}` に出て DB（store）に残り、他の欄は変えない。
 
-mod common;
+use crate::common;
 
 use common::*;
 use serde_json::json;
-use task_core::TaskStore;
+use task_core::OrgDirectory;
 
 #[tokio::test]
 async fn auto_integrate_is_a_project_attribute_switched_by_patch() {

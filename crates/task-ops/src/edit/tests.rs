@@ -1,7 +1,7 @@
 use super::*;
 use task_core::{
-    ArtifactRef, Check, Criterion, OrgKind, OrgNode, Profile, SqliteStore, TaskKind, WorkerHint,
-    WorkspaceSpec,
+    ArtifactRef, Check, Criterion, OrgDirectory, OrgKind, OrgNode, Profile, SqliteStore, TaskKind,
+    WorkerHint, WorkspaceSpec,
 };
 
 fn task_with(status: Status) -> Task {

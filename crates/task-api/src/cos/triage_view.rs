@@ -1,13 +1,11 @@
-//! Read side of the CoS triage store and the in-transaction outcome mark used by the resolve API
-//! (ADR 2026-10-06 cos-inbox-triage). The resolve API writes the item outcome inside the same
-//! `cos_operation_apply` transaction as the audit row, its envelope event and its chat card.
-//! Reads open their own connection on the daemon DB (same as chat attachments), so task-core's
-//! store API stays as the store leaf left it.
+//! Read side of the CoS triage store (ADR 2026-10-06 cos-inbox-triage). The outcome mark is
+//! written by task-core (`task_core::chat::triage::cos_triage_resolve_tx`) inside the same
+//! `cos_operation_apply` transaction as the audit row (ADR 2026-11-10-taskstore-consumer-ports
+//! D5). Reads open their own connection on the daemon DB (same as chat attachments).
 use std::path::Path;
 
-use rusqlite::{Connection, OptionalExtension, Row, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Row, params};
 use task_core::chat::ChatError;
-use time::OffsetDateTime;
 
 const ITEM_COLUMNS: &str = "id,source_kind,source_key,source_revision,source_event_id,thread_id,message_id,state,run_id,reason,policy_version,operation_id,created_at,updated_at";
 
@@ -62,21 +60,6 @@ fn open(db: &Path) -> Result<Connection, ChatError> {
     Ok(conn)
 }
 
-/// Same text form as task-core's chat timestamps (`updated_at` is compared as text).
-fn chat_ts(now: OffsetDateTime) -> String {
-    let t = now.to_offset(time::UtcOffset::UTC);
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
-        t.year(),
-        u8::from(t.month()),
-        t.day(),
-        t.hour(),
-        t.minute(),
-        t.second(),
-        t.millisecond()
-    )
-}
-
 pub(crate) fn item_get(db: &Path, id: &str) -> Result<Option<CosInboxItem>, ChatError> {
     let conn = open(db)?;
     Ok(conn
@@ -113,30 +96,4 @@ pub(crate) fn superseded(db: &Path, item: &CosInboxItem) -> Result<bool, ChatErr
         params![item.source_kind, item.source_key, item.id, item.created_at],
         |r| r.get(0),
     )?)
-}
-
-/// Mark one non-terminal item inside the caller's transaction. A concurrent outcome (another
-/// CoS resolve, a fallback, reconcile) makes this a conflict so the whole transaction rolls back.
-pub(crate) fn mark_tx(
-    tx: &Transaction<'_>,
-    item_id: &str,
-    outcome: &str,
-    operation_id: &str,
-    reason: &str,
-    now: OffsetDateTime,
-) -> Result<(), ChatError> {
-    if !matches!(outcome, "answered" | "observed" | "escalated") {
-        return Err(ChatError::Invalid("invalid triage outcome".into()));
-    }
-    let changed = tx.execute(
-        "UPDATE cos_inbox_items SET state=?2,operation_id=?3,reason=?4,updated_at=?5 \
-         WHERE id=?1 AND state IN ('pending','running')",
-        params![item_id, outcome, operation_id, reason, chat_ts(now)],
-    )?;
-    if changed != 1 {
-        return Err(ChatError::Conflict(format!(
-            "triage item {item_id} was already resolved"
-        )));
-    }
-    Ok(())
 }

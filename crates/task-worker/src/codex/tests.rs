@@ -1047,9 +1047,9 @@ echo '{"type":"turn.completed"}'
     assert_eq!(obs.seven_day.map(|w| w.utilization), Some(0.24));
 }
 
-/// ADR-0025 D2: `with_env` の追加分（`CODEX_HOME`）は既存の同名キーより後に環境を組み立てるので勝つ。
+/// ADR-0025 D2: `configure` の env の追加分（`CODEX_HOME`）は既存の同名キーより後に環境を組み立てるので勝つ。
 #[tokio::test]
-async fn with_env_overrides_a_same_name_key_already_in_config_env() {
+async fn configure_env_overrides_a_same_name_key_already_in_config_env() {
     let dir = tempfile::tempdir().unwrap();
     let out_file = dir.path().join("env-seen.txt");
     let mut config = CodexConfig {
@@ -1070,13 +1070,17 @@ async fn with_env_overrides_a_same_name_key_already_in_config_env() {
         .env
         .push(("CODEX_HOME".to_string(), "old-account-dir".to_string()));
     let base = CodexAdapter::new(config);
-    let with_env = base
-        .with_env(&[("CODEX_HOME".to_string(), "new-account-dir".to_string())])
-        .expect("codex supports with_env");
+    let configured = base
+        .configure(&AdapterSettings {
+            env: vec![("CODEX_HOME".to_string(), "new-account-dir".to_string())],
+            ..AdapterSettings::default()
+        })
+        .adapter
+        .expect("codex takes env");
 
     let req = sample_req(dir.path().to_path_buf());
     let sink = RecordingSink::default();
-    let outcome = with_env
+    let outcome = configured
         .run(req, "run-env-1", default_limits(), &sink)
         .await
         .unwrap();
@@ -1084,8 +1088,8 @@ async fn with_env_overrides_a_same_name_key_already_in_config_env() {
     let seen = std::fs::read_to_string(&out_file).unwrap();
     assert_eq!(seen, dir.path().join("new-account-dir").to_string_lossy());
 }
-/// ADR 2026-10-11 llm-source-harness-selection: the route's model (`with_model`) reaches the CLI's
-/// `--model` and survives the account environment layered on top (`with_env`).
+/// ADR 2026-10-11 llm-source-harness-selection: the route's model (`configure`) reaches the CLI's
+/// `--model` and survives the account environment applied in the same `configure`.
 #[tokio::test]
 async fn route_model_reaches_cli_model_argument_and_preserves_account_env() {
     let dir = tempfile::tempdir().unwrap();
@@ -1100,10 +1104,13 @@ printf '%s\n' '{"type":"turn.completed"}'
 "#,
     );
     let adapter = CodexAdapter::new(config)
-        .with_model("route-model")
-        .expect("codex takes a model")
-        .with_env(&[("ROUTING_ACCOUNT".into(), "account-a".into())])
-        .expect("codex takes an env");
+        .configure(&AdapterSettings {
+            model: Some("route-model".into()),
+            env: vec![("ROUTING_ACCOUNT".into(), "account-a".into())],
+            ..AdapterSettings::default()
+        })
+        .adapter
+        .expect("codex takes a model and an env");
     let _ = adapter
         .run(
             sample_req(dir.path().to_path_buf()),
@@ -1698,17 +1705,23 @@ fn f5_fix4_git_admin_dirs_ignores_subdirectories_and_plain_dirs() {
 // ---- ADR-0075 R7-8（本番 run 01M3VCWE54P73CPFG09ZSW6Q6M: `…/scratch/targets/<owner>/target/debug` が
 // `Read-only file system`）: fresh の `workspace-write` run は env の `CARGO_TARGET_DIR` も `--add-dir` で足す。ここから ----
 
-/// dispatcher と同じく `with_env` で scratch の env を重ねた adapter（`WorkerAdapter` のまま返す）。
+/// dispatcher と同じく `configure` で scratch の env を重ねた adapter（`WorkerAdapter` のまま返す）。
 fn adapter_with_env(config: CodexConfig, env: &[(&str, String)]) -> Arc<dyn WorkerAdapter> {
     let env: Vec<(String, String)> = env
         .iter()
         .map(|(k, v)| ((*k).to_string(), v.clone()))
         .collect();
-    CodexAdapter::new(config).with_env(&env).unwrap()
+    CodexAdapter::new(config)
+        .configure(&AdapterSettings {
+            env,
+            ..AdapterSettings::default()
+        })
+        .adapter
+        .unwrap()
 }
 
 /// fresh の `workspace-write` run: `--add-dir <artifacts> --add-dir <CARGO_TARGET_DIR>`。存在しない target は先に作る
-/// （codex は存在しない root を書けるようにしない）。同名の `CARGO_TARGET_DIR` は後勝ち（`with_env` の規則）。
+/// （codex は存在しない root を書けるようにしない）。同名の `CARGO_TARGET_DIR` は後勝ち（`configure` の env の規則）。
 #[tokio::test]
 async fn r7_8_fresh_workspace_write_run_adds_the_cargo_target_dir() {
     let dir = tempfile::tempdir().unwrap();

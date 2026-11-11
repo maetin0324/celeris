@@ -336,43 +336,6 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub(super) fn project_get_impl(&self, id: ProjectId) -> Result<Option<Project>, StoreError> {
-        self.with_read_conn(|conn| {
-            let row = conn
-                .query_row(
-                    "SELECT p.id, p.title, p.request, p.status, p.created_at, p.updated_at, \
-                     COALESCE((SELECT r.location_json FROM project_repos r \
-                               WHERE r.project_id = p.id AND r.is_primary = 1 \
-                               ORDER BY r.created_at ASC, r.id ASC LIMIT 1), p.workspace), \
-                     p.archived_at, p.paused_from, p.auto_advance, p.slug, p.auto_integrate \
-                     FROM projects p WHERE p.id = ?1",
-                    params![id.to_string()],
-                    Self::project_row,
-                )
-                .optional()?;
-            row.transpose()
-        })
-    }
-
-    pub(super) fn project_list_impl(&self) -> Result<Vec<Project>, StoreError> {
-        self.with_read_conn(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT p.id, p.title, p.request, p.status, p.created_at, p.updated_at, \
-                     COALESCE((SELECT r.location_json FROM project_repos r \
-                               WHERE r.project_id = p.id AND r.is_primary = 1 \
-                               ORDER BY r.created_at ASC, r.id ASC LIMIT 1), p.workspace), \
-                     p.archived_at, p.paused_from, p.auto_advance, p.slug, p.auto_integrate \
-                 FROM projects p ORDER BY p.created_at DESC, p.id DESC",
-            )?;
-            let rows = stmt.query_map([], Self::project_row)?;
-            let mut out = Vec::new();
-            for row in rows {
-                out.push(row??);
-            }
-            Ok(out)
-        })
-    }
-
     pub(super) fn project_set_status_impl(
         &self,
         id: ProjectId,
@@ -517,17 +480,8 @@ impl SqliteStore {
         Ok(n > 0)
     }
 
-    pub(super) fn project_set_text_impl(
-        &self,
-        id: ProjectId,
-        title: Option<&str>,
-        request: Option<&str>,
-    ) -> Result<bool, StoreError> {
-        let conn = self.lock()?;
-        Self::project_set_text_tx(&conn, id, title, request)
-    }
-
-    /// `project_set_text` の本体。呼び出し側の transaction 内で使う（CoS の監査付き操作。ADR 2026-10-05 D3）。
+    /// ADR-0072「Phase F6 実装時の決定」P3: 案件の題名（`title`）と説明（依頼文 `request`）を書き換える。
+    /// `None` の欄は変えない。呼び出し側の transaction 内で使う（CoS の監査付き操作。ADR 2026-10-05 D3）。
     pub fn project_set_text_tx(
         conn: &rusqlite::Connection,
         id: ProjectId,
@@ -717,24 +671,6 @@ impl SqliteStore {
         Ok(affected == 1)
     }
 
-    pub(super) fn milestone_list_impl(
-        &self,
-        project_id: ProjectId,
-    ) -> Result<Vec<Milestone>, StoreError> {
-        self.with_read_conn(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id, project_id, seq, title, description, status, created_at, updated_at, paused_from, plan_key \
-                 FROM milestones WHERE project_id = ?1 ORDER BY seq ASC",
-            )?;
-            let rows = stmt.query_map(params![project_id.to_string()], Self::milestone_row)?;
-            let mut out = Vec::new();
-            for row in rows {
-                out.push(row??);
-            }
-            Ok(out)
-        })
-    }
-
     pub(super) fn milestone_get_impl(
         &self,
         id: MilestoneId,
@@ -764,25 +700,6 @@ impl SqliteStore {
                 status.as_str(),
                 format_rfc3339(OffsetDateTime::now_utc())?,
                 id.to_string()
-            ],
-        )?;
-        Ok(affected == 1)
-    }
-
-    pub(super) fn milestone_transition_status_impl(
-        &self,
-        id: MilestoneId,
-        from: MilestoneStatus,
-        to: MilestoneStatus,
-    ) -> Result<bool, StoreError> {
-        let conn = self.lock()?;
-        let affected = conn.execute(
-            "UPDATE milestones SET status = ?1, updated_at = ?2 WHERE id = ?3 AND status = ?4",
-            params![
-                to.as_str(),
-                format_rfc3339(OffsetDateTime::now_utc())?,
-                id.to_string(),
-                from.as_str(),
             ],
         )?;
         Ok(affected == 1)

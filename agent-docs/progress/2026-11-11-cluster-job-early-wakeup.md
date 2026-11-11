@@ -1,7 +1,7 @@
 ---
 title: クラスタ job の失敗・長い Q/H による早期再開
 tasks: [01M752V5864CMYZZ2QHYAJ4X0E]
-status: blocked
+status: done
 updated: 2026-11-11
 ---
 # クラスタ job の失敗・長い Q/H による早期再開
@@ -74,6 +74,18 @@ attempt 1 の review では、条件 5 と workspace.toml の `bash scripts/dev/
 - `cargo fmt --all -- --check` と `cargo clippy --workspace -- -D warnings` は提出時の HEAD で exit 0。
 - test-affected が 3 回続けて通らなかった（attempt 1 の review、attempt 2 の実測 2 回）ため、CLAUDE.md の規則に従い、進め方を人に質問する。
 
+## attempt 3: 人の回答に従った提出
+
+人の回答は「再検査」だった。host の負荷が下がった（load average 20 前後）ので、operator が 1 件ずつ順に再検査に回す。
+回答の指示は「コードを変えず、提出時の HEAD の検査結果が進捗にあるなら、負荷を増やさないため test-affected を走らせ直さずに提出してよい（review が走らせる）」。
+
+- コードは変えていない。commit『phase 1: wake cluster job waits on failure and queue stalls』の後の commit は、この進捗ファイルだけを変えている（`git diff --stat` で 1 file を確認）。
+- test-affected は、回答に従ってこの run では走らせていない。同じコードでの合格の記録は上の「証拠」節（attempt 1、8224 passed、exit 0）にある。
+- 提出時の HEAD で実行（2026-11-11 19:11 UTC、load average 11〜20）:
+  - `cargo fmt --all -- --check` → exit 0。
+  - `cargo clippy --workspace -- -D warnings` → exit 0（55 秒）。
+  - `sh scripts/dev/progress-index.sh --check` → exit 0。
+
 ## 本番への移行
 
 `queued_wake_secs` は、そのキーを知る release の昇格後に人が本番設定へ追加する。
@@ -81,7 +93,7 @@ attempt 1 の review では、条件 5 と workspace.toml の `bash scripts/dev/
 
 ## 未解決
 
-- 受け入れ条件 5（`bash scripts/dev/test-affected.sh` exit 0）が host の負荷で通らない。進め方を人に質問した。
+- 受け入れ条件 5（`bash scripts/dev/test-affected.sh` exit 0）は、負荷の低い時の review の再検査で確かめる（人の回答）。
 - 実クラスタの job 操作は実行していない。
 
 ## 提案

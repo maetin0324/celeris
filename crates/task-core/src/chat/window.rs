@@ -246,9 +246,8 @@ pub fn chat_relay_forward_tx(
     }
     let grant = forward_grant(tx, req.grant_id.as_deref())?;
     let scoped = !req.task_ids.is_empty() && req.expires_at.is_some();
-    if let Some(why) = forward_gap(grant, scoped, to.project_id.as_deref(), now) {
-        return Err(ChatError::Invalid(format!("forward refused: {why}")));
-    }
+    forward_gap(grant, scoped, to.project_id.as_deref(), now)
+        .map_err(|why| ChatError::Invalid(format!("forward refused: {why}")))?;
     let relay_req = ChatRelayRequest {
         client_message_id: req.client_message_id.clone(),
         text: source.text.clone(),

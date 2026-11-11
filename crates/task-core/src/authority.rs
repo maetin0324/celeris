@@ -293,20 +293,20 @@ pub fn grant_backs(grant: &AuthorityGrant, project: &str, now: OffsetDateTime) -
     grant_denial(grant, now).map(str::to_owned)
 }
 
-/// D4: 取り次ぎ（`chat.relay_forward`）が足りない理由。`grant` は `grant_id` を書いたときの台帳の行（無い id は
-/// `Some(None)`）、`scoped` は task と期限を書いたか。`grant_id` が無ければ task と期限が要り、あれば `grant` が
-/// 取り次ぎ先の案件全体を裏付けること（[`grant_backs`]）。取り次ぎを `instructed_by` に使うたびにも照合する。
+/// D4: 取り次ぎ（`chat.relay_forward`）が足りるか。足りなければ `Err` に理由。`grant` は `grant_id` を書いたときの
+/// 台帳の行（無い id は `Some(None)`）、`scoped` は task と期限を書いたか。`grant_id` が無ければ task と期限が要り、
+/// あれば `grant` が取り次ぎ先の案件全体を裏付けること（[`grant_backs`]）。取り次ぎを `instructed_by` に使うたびにも照合する。
 pub fn forward_gap(
     grant: Option<Option<AuthorityGrant>>,
     scoped: bool,
     project: Option<&str>,
     now: OffsetDateTime,
-) -> Option<String> {
+) -> Result<(), String> {
     match grant {
-        None if scoped => None,
-        None => Some("a forward without grant_id needs task_ids and expires_at".into()),
-        Some(None) => Some("no such grant".into()),
-        Some(Some(g)) => grant_backs(&g, project.unwrap_or_default(), now),
+        None if scoped => Ok(()),
+        None => Err("a forward without grant_id needs task_ids and expires_at".into()),
+        Some(None) => Err("no such grant".into()),
+        Some(Some(g)) => grant_backs(&g, project.unwrap_or_default(), now).map_or(Ok(()), Err),
     }
 }
 

@@ -681,7 +681,7 @@ async fn standing_job_wait_grant_from_the_general_thread_answers_the_project_wai
             OffsetDateTime::now_utc(),
         )
     };
-    assert_eq!(backs(&env), None);
+    assert_eq!(backs(&env), Ok(()));
     let revoked = send(
         &app,
         post_json_with(
@@ -692,5 +692,5 @@ async fn standing_job_wait_grant_from_the_general_thread_answers_the_project_wai
     )
     .await;
     assert_eq!(revoked.status.as_u16(), 200, "{}", revoked.text());
-    assert_eq!(backs(&env).as_deref(), Some("grant_revoked"));
+    assert_eq!(backs(&env).err().as_deref(), Some("grant_revoked"));
 }

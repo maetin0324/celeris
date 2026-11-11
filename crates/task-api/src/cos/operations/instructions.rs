@@ -209,7 +209,7 @@ pub(super) fn instructed_message(
                 .authority_grant(grant)
                 .map_err(|e| format!("authority ledger unreadable: {e}"))?;
             let project = relay.scope.project_id.as_deref();
-            if let Some(why) = task_core::authority::forward_gap(Some(row), true, project, now) {
+            if let Err(why) = task_core::authority::forward_gap(Some(row), true, project, now) {
                 return Err(format!(
                     "instructed_by {message_id} is backed by grant {grant}, which no longer holds: {why}"
                 ));

@@ -54,7 +54,7 @@ attempt 2 の検査（提出時の HEAD で実行）:
 - `cargo nextest run -p celeris --test instance_handoff --test unpromoted_release` → 18 passed（実 daemon の handoff）。
 - `cargo nextest run -p task-worker --lib -E 'test(/scratch::tests/)'` → 42 passed（`seed_copy_runs_without_the_pool_lock_and_gc_keeps_the_pinned_generation` を含む）。
 - `cargo nextest run -p task-dispatch --lib -E 'test(/scratch_gc/) | test(target_sweep_tick_defers)'` → 9 passed。
-- `bash scripts/dev/test-affected.sh` は attempt 2 では未実行（壁時計の残りが足りない）。
+- `bash scripts/dev/test-affected.sh` → exit 0。nextest 5,880 passed・22 skipped（747 秒）、repo-health は verdict=pass・new 0・worsened 0。実行時の /local 使用率は 94%、load average は 117。
 
 ## 未解決
 

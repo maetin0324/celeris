@@ -46,17 +46,7 @@ fn health_repo_with(
     init_test_repo(repo.path());
     let scratch = tempfile::tempdir().unwrap();
     let log = scratch.path().join("report-runs.log");
-    let policy = serde_json::json!({
-        "schema": REVIEW_POLICY_SCHEMA, "source": source, "owner_map": "owners/map.md", "high_risk": [],
-        "invariants": {"events-append-only": "CLAUDE.md"}, "definition_sha256": DIGEST,
-    });
-    let script = format!(
-        "import sys\nargs = sys.argv[1:]\nif '--print-review-policy' in args:\n    sys.stdout.write({policy:?})\n    sys.exit(0)\nopen({log:?}, 'a').write(' '.join(args) + '\\n')\nreport = {text:?}\nif not report:\n    sys.exit(2)\nopen(args[args.index('--out') + 1], 'w').write(report)\nsys.exit({exit})\n",
-        policy = policy.to_string(),
-        log = log.display().to_string(),
-        text = report.as_ref().map(|r| r.to_string()).unwrap_or_default(),
-        exit = report.map_or(2, |r| r["summary"]["exit_code"].as_i64().unwrap_or(2)),
-    );
+    let script = checker_script(source, &log, report);
     crate::health_review::gate::tests::write_engine(repo.path());
     let path = repo.path().join(CHECKER_SCRIPT);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -70,6 +60,26 @@ fn health_repo_with(
     git_out(repo.path(), &["add", "-A"]);
     git_out(repo.path(), &["commit", "-q", "-m", "checker"]);
     (repo, scratch, log)
+}
+
+/// stub の `repo_health.py` の本文（方針の `source`、report の実行を `log` に 1 行足す、`report` が `None` なら
+/// report を書かずに exit 2）。
+fn checker_script(
+    source: &str,
+    log: &std::path::Path,
+    report: Option<serde_json::Value>,
+) -> String {
+    let policy = serde_json::json!({
+        "schema": REVIEW_POLICY_SCHEMA, "source": source, "owner_map": "owners/map.md", "high_risk": [],
+        "invariants": {"events-append-only": "CLAUDE.md"}, "definition_sha256": DIGEST,
+    });
+    format!(
+        "import sys\nargs = sys.argv[1:]\nif '--print-review-policy' in args:\n    sys.stdout.write({policy:?})\n    sys.exit(0)\nopen({log:?}, 'a').write(' '.join(args) + '\\n')\nreport = {text:?}\nif not report:\n    sys.exit(2)\nopen(args[args.index('--out') + 1], 'w').write(report)\nsys.exit({exit})\n",
+        policy = policy.to_string(),
+        log = log.display().to_string(),
+        text = report.as_ref().map(|r| r.to_string()).unwrap_or_default(),
+        exit = report.map_or(2, |r| r["summary"]["exit_code"].as_i64().unwrap_or(2)),
+    )
 }
 
 fn log_lines(log: &std::path::Path) -> Vec<String> {
@@ -167,6 +177,18 @@ async fn review_flow_at(
     check: Option<String>,
     path: &str,
 ) -> (Reviewed, Dispatcher, tempfile::TempDir) {
+    review_flow_with(repo, reviewer, fail_first, check, path, "pub fn foo() {}\n").await
+}
+
+/// [`review_flow_at`] で worktree の `path` に書く中身 `content` を選べる形。
+async fn review_flow_with(
+    repo: &std::path::Path,
+    reviewer: bool,
+    fail_first: bool,
+    check: Option<String>,
+    path: &str,
+    content: &str,
+) -> (Reviewed, Dispatcher, tempfile::TempDir) {
     let ws = tempfile::tempdir().unwrap();
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = reviewing_task(repo, &store);
@@ -189,7 +211,7 @@ async fn review_flow_at(
     let wt = d.local_worktree_for(&task).unwrap();
     wt.ensure_blocking().unwrap();
     std::fs::create_dir_all(wt.dir.join(path).parent().unwrap()).unwrap();
-    let head = commit_file(&wt.dir, path, "pub fn foo() {}\n");
+    let head = commit_file(&wt.dir, path, content);
     let target = git_out(repo, &["rev-parse", "refs/heads/main"]);
     assert!(
         d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
@@ -222,12 +244,47 @@ fn built(events: &[Event]) -> Vec<(String, String, String)> {
                 definition_sha256,
                 ..
             } => {
-                assert_eq!(definition_sha256, DIGEST);
+                // 鍵は選んだ検査器の版（ADR 2026-11-11-health-generic-review-input R2）で、方針の digest ではない。
+                assert_ne!(definition_sha256, DIGEST);
                 Some((review_run.clone(), target_sha.clone(), reviewed_sha.clone()))
             }
             _ => None,
         })
         .collect()
+}
+
+/// `HealthReviewInputBuilt` の `definition_sha256`。
+fn definitions(events: &[Event]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::HealthReviewInputBuilt {
+                definition_sha256, ..
+            } => Some(definition_sha256.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// base（`target`）の検査器の版から作る材料の再利用の鍵（R2: `definition_digest(&[], Some(&checker))`）。
+fn checker_definition(repo: &std::path::Path, target: &str) -> String {
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(args)
+            .output()
+            .map_err(|e| e.to_string())?;
+        if out.status.success() {
+            Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).into_owned())
+        }
+    };
+    let id = task_core::required_checks::health::base_checker(target, git)
+        .unwrap()
+        .expect("the base has a checker");
+    task_core::required_checks::definition_digest(&[], Some(&id))
 }
 
 fn reviewer_runs(events: &[Event]) -> Vec<String> {
@@ -302,6 +359,10 @@ async fn health_review_input_reaches_the_reviewer_request() {
         built(&r.events),
         vec![(runs[0].clone(), r.target.clone(), r.head.clone())]
     );
+    assert_eq!(
+        definitions(&r.events),
+        vec![checker_definition(repo.path(), &r.target)]
+    );
     let lines = log_lines(&log);
     assert_eq!(lines.len(), 1, "repo health ran once: {lines:?}");
     let want = format!(
@@ -330,36 +391,65 @@ async fn health_review_input_reused_on_reviewer_retry() {
     assert_eq!(material_runs(&log).len(), 1, "repo health ran once");
 }
 
-/// review 方針が absent の repo は作らず、`HealthReviewInputSkipped` に理由を残す（`ReviewRequest.health` は無い）。
-/// policy の関門のため repo health は 1 回走り、policy の状態（ここでは変更なし）を同じ event に残す。
+/// 不変条件（ADR 2026-11-11-health-generic-review-input R1）: review 方針が `Absent` の repo の final review でも、
+/// reviewer の `ReviewRequest.health` に diff・候補の finding（evidence の path は候補が変えた file）・policy の状態が
+/// 入り、`owner_rows`・`invariants` だけが空。`HealthReviewInputBuilt` は 1 回で鍵は base の検査器の
+/// `definition_digest`、`HealthReviewInputSkipped` は残さない。repo health は 1 回だけ走る。
+/// 既存の試験で足りない理由: 旧い `health_review_input_policy_absent_is_skipped` は `Absent` で reviewer に何も
+/// 渡らないこと（`seen == [None]`）を固定していた。`reaches_the_reviewer_request` は方針が `Present` だけを見る。
 #[tokio::test]
-async fn health_review_input_policy_absent_is_skipped() {
+async fn health_review_input_policy_absent_reaches_the_reviewer_request() {
     let (repo, _scratch, log) = health_repo("absent");
     let r = review_flow(repo.path(), true, false, None).await;
     assert_eq!(r.status, Status::Done, "{:?}", r.events);
-    assert_eq!(r.seen, vec![None]);
-    assert!(built(&r.events).is_empty());
-    assert_eq!(log_lines(&log).len(), 1);
-    let skipped: Vec<_> = r
-        .events
-        .iter()
-        .filter_map(|e| match e {
-            Event::HealthReviewInputSkipped {
-                reason,
-                reviewed_sha,
-                policy,
-                ..
-            } => Some((reason.clone(), reviewed_sha.clone(), policy.clone())),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(skipped.len(), 1, "{skipped:?}");
-    assert!(skipped[0].0.contains("absent"), "{skipped:?}");
-    assert_eq!(skipped[0].1, r.head);
+    assert_eq!(r.seen.len(), 1);
+    let health = r.seen[0].clone().expect("absent repos get health");
+    assert_eq!(health.repos.len(), 1);
+    let input = &health.repos[0];
+    assert_eq!(input.repo_id, r.task.repos[0].repo_id.to_string());
     assert_eq!(
-        skipped[0].2.as_ref().map(|p| p["changed"].clone()),
-        Some(false.into())
+        (&input.target_sha, &input.reviewed_sha),
+        (&r.target, &r.head)
     );
+    assert_eq!(input.diff.files, 1);
+    assert_eq!(input.diff.paths[0].path, "crates/foo/src/lib.rs");
+    let found: Vec<_> = input
+        .findings
+        .new
+        .iter()
+        .map(|f| (f.rule_id.as_str(), f.path.as_deref()))
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("size.responsibility-growth", Some("crates/foo/src/lib.rs")),
+            ("deps.violation", Some("crates/foo/Cargo.toml")),
+        ]
+    );
+    assert_eq!(
+        (input.policy.source.as_str(), input.policy.changed),
+        ("base", false)
+    );
+    assert!(input.owner_rows.is_empty(), "{input:?}");
+    assert!(input.invariants.is_empty(), "{input:?}");
+    let runs = reviewer_runs(&r.events);
+    assert_eq!(
+        built(&r.events),
+        vec![(runs[0].clone(), r.target.clone(), r.head.clone())]
+    );
+    assert_eq!(
+        definitions(&r.events),
+        vec![checker_definition(repo.path(), &r.target)]
+    );
+    assert!(
+        !r.events
+            .iter()
+            .any(|e| matches!(e, Event::HealthReviewInputSkipped { .. })),
+        "{:?}",
+        r.events
+    );
+    assert_eq!(material_runs(&log).len(), 1, "repo health ran once");
+    assert!(policy_approvals(&r.store, &r.task).is_empty());
 }
 
 /// I8・D6.4（fail closed）と health enforcement loop D3.4: report を書かない repo health の candidate は、reviewer が
@@ -693,4 +783,131 @@ async fn health_review_input_not_built_for_work_units() {
         .filter(|c| c.execution_planner.is_none() && c.review.is_none())
         .count();
     assert!(wu_runs >= 2, "the work units ran");
+}
+
+// ---- G4-R1: 方針の無い repo（`Absent`）の再利用と policy の関門 ----
+//
+// 再利用の鍵と失効（ADR 2026-11-11-health-generic-review-input R2）の単体の試験は `health_review::input::tests` の
+// `health_review_input_reuse_is_bound_to_candidate_base_and_policy`（candidate・base・base の方針）と
+// `health_review_input_reuse_is_bound_to_the_checker_version`（検査器の版）にある。そこは `build_health_input` を
+// 直に呼び、dispatcher の reviewer run のやり直し・reviewer の合格の再利用・policy の関門を通らない。上の
+// `health_review_input_reused_on_reviewer_retry`・`…_not_built_when_the_reviewer_pass_is_reused` は方針が `Present`
+// の repo だけを流す。ここでは `Absent` の repo で、adapter が受けた `ReviewRequest.health` と task の状態を見る。
+
+/// 不変条件（ADR 2026-11-11-health-generic-review-input R2、ADR 2026-11-07-health-review-integration D4.3）: 方針が
+/// `Absent` の repo でも、reviewer run が一時的に失敗してやり直した同じ candidate では、記録した材料を使い回して
+/// 同じ `ReviewRequest.health` を渡し、repo health（材料の report）は 1 回だけ走る。`HealthReviewInputBuilt` は 1 件。
+/// 既存の試験で足りない理由: `health_review_input_reused_on_reviewer_retry` は方針が `Present` の repo だけで、旧い
+/// 契約では `Absent` は材料を作らなかったので再利用の経路を通らなかった。単体の試験は reviewer run のやり直しを通らない。
+#[tokio::test]
+async fn g4_r1_review_request_absent_reused_on_reviewer_retry() {
+    let (repo, _scratch, log) = health_repo("absent");
+    let r = review_flow(repo.path(), true, true, None).await;
+    assert_eq!(r.status, Status::Done, "{:?}", r.events);
+    assert_eq!(r.seen.len(), 2, "the reviewer ran again");
+    let first = r.seen[0].as_ref().expect("absent repos get health");
+    assert_eq!(r.seen[0], r.seen[1], "the retry gets the same material");
+    let input = &first.repos[0];
+    assert!(input.owner_rows.is_empty() && input.invariants.is_empty());
+    assert_eq!(
+        (&input.target_sha, &input.reviewed_sha),
+        (&r.target, &r.head)
+    );
+    assert_eq!(reviewer_runs(&r.events).len(), 2);
+    assert_eq!(built(&r.events).len(), 1);
+    assert_eq!(material_runs(&log).len(), 1, "repo health ran once");
+}
+
+/// 不変条件（ADR 2026-11-07-health-review-integration D4・`health_job`）: 方針が `Absent` の repo でも、target の進みが
+/// 候補の差分と重ならず reviewer の合格を再利用した再 review（`ReviewerPassReused`）では材料を作らない。材料は
+/// 1 回目の review の candidate（target は元の main）の 1 件だけで、reviewer run も 1 回だけ。
+/// 既存の試験で足りない理由: `health_review_input_not_built_when_the_reviewer_pass_is_reused` は方針が `Present` の
+/// repo だけを流す。
+#[tokio::test]
+async fn g4_r1_review_request_absent_not_built_when_the_reviewer_pass_is_reused() {
+    let (repo, _scratch, log) = health_repo("absent");
+    let flag = tempfile::tempdir().unwrap();
+    let check = bump_main_writing(&flag.path().join("advanced"), "other.txt", "printf other");
+    let r = review_flow(repo.path(), true, false, Some(check)).await;
+    assert_eq!(r.status, Status::Done, "{:?}", r.events);
+    assert_eq!(
+        r.seen.len(),
+        1,
+        "the second review reused the reviewer pass"
+    );
+    assert!(r.seen[0].is_some(), "the first review gets health");
+    assert!(
+        r.events
+            .iter()
+            .any(|e| matches!(e, Event::ReviewerPassReused { .. }))
+    );
+    let builds = built(&r.events);
+    assert_eq!(builds.len(), 1, "{builds:?}");
+    assert_eq!(builds[0].1, r.target, "only the first candidate");
+    assert_eq!(material_runs(&log).len(), 1);
+}
+
+/// 不変条件（ADR 2026-11-11-health-generic-review-input R2・R3、ADR 2026-11-07-health-review-integration I8・D6.4）:
+/// 方針が `Absent` の repo で、候補が検査器（`repo_health.py`。方針の出どころ）を `[review]` を持つ版（`source =
+/// base`・owner 地図・不変条件あり）に書き換えても、材料の方針は base の版（`Absent`）から作り、reviewer が受けた
+/// `owner_rows`・`invariants` は空のまま。report が `policy.changed = true`（policy の file の変更）を書いた候補は、
+/// reviewer が acceptance の合格と空の health を書いても、変わった policy の file への `health.policy` の判定が無いので
+/// review が不合格になり、Done にならない（fail closed。I8・D5.2）。
+/// 既存の試験で足りない理由: `health_review_policy_no_reviewer_policy_file_candidate_needs_a_human` と
+/// `health_review_policy_unknown_absent_policy_change_needs_approval` は reviewer run の無い review（`policy_only`）で、
+/// reviewer の受けた材料を見ない。`health_review_input_policy_absent_reaches_the_reviewer_request` は候補が方針を
+/// 変えない。
+#[tokio::test]
+async fn g4_r1_review_request_absent_candidate_policy_is_not_trusted() {
+    // 検査器の判定は合格（fail 級 0・exit 0）で、policy の file の変更だけを書く report。exit 1 で fail 級の無い
+    // `policy_changed_report` は report の故障（`report_invalid`）として review を Blocked にし、関門まで進まない。
+    let mut changed = policy_changed_report();
+    changed["summary"]["verdict"] = "pass".into();
+    changed["summary"]["exit_code"] = 0.into();
+    let (repo, scratch, log) = health_repo_with("absent", Some(changed));
+    let present = checker_script(
+        "base",
+        &scratch.path().join("candidate.log"),
+        Some(report()),
+    );
+    let (r, _d, _ws) =
+        review_flow_with(repo.path(), true, false, None, CHECKER_SCRIPT, &present).await;
+    assert_eq!(r.seen.len(), 1, "{:?}", r.events);
+    let health = r.seen[0].as_ref().expect("absent repos get health");
+    let input = &health.repos[0];
+    assert_eq!(
+        (&input.target_sha, &input.reviewed_sha),
+        (&r.target, &r.head)
+    );
+    assert!(
+        input.owner_rows.is_empty() && input.invariants.is_empty(),
+        "the candidate's [review] is not trusted: {input:?}"
+    );
+    assert!(input.policy.changed, "{:?}", input.policy);
+    assert_eq!(input.policy.files, [POLICY_FILE]);
+    assert_eq!(
+        definitions(&r.events),
+        vec![checker_definition(repo.path(), &r.target)],
+        "the key is the base checker's version"
+    );
+    assert_eq!(material_runs(&log).len(), 1, "the base checker ran");
+    assert!(
+        !scratch.path().join("candidate.log").exists(),
+        "the candidate's checker never runs"
+    );
+    let missing = format!(
+        "health.policy verdict missing in review.json for the changed policy files: {POLICY_FILE}"
+    );
+    assert!(
+        r.events.iter().any(|e| matches!(e,
+            Event::ReviewVerdict { pass: false, reason, .. } if reason.contains(&missing))),
+        "{:?}",
+        r.events
+    );
+    assert!(
+        !r.events
+            .iter()
+            .any(|e| matches!(e, Event::Transitioned { reason, .. } if reason == "review_pass"))
+    );
+    assert_eq!(r.status, Status::Failed, "{:?}", r.events);
 }

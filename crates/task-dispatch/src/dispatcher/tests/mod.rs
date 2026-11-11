@@ -3069,6 +3069,7 @@ mod dispatch_ready_phases;
 mod git_workspace;
 mod health_enforce;
 mod health_generic;
+mod health_generic_limits;
 mod health_generic_stale;
 mod health_limits_integration;
 mod integration_check_progress;

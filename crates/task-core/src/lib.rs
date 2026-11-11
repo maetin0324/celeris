@@ -136,7 +136,6 @@ pub mod tree_metrics;
 /// ADR 2026-10-27-unblocks-reopen-on-promotion: 修正 task と待っている task の結び。
 pub mod unblocks;
 // ADR 2026-10-11-task-wait-reasons: task の待ちの理由（dispatcher と画面が同じ関数を使う）。
-pub mod task_deps;
 pub mod wait;
 /// ADR-0043 D4（Phase 52）: リポジトリの中の設定 `.config/celeris/workspace.toml`。
 pub mod workspace_config;
@@ -334,10 +333,14 @@ pub use wait::{
     halt_waits, plan_stall, plan_waits, resolve_children, unit_waits,
 };
 // ---- ADR 2026-11-11-unit-task-dependencies: unit の `task:<id>` 依存 ----
-pub use task_deps::{
-    TASK_DEP_PREFIX, TaskDependencyCause, TaskDependencyContext, TaskDependencyFact,
-    TaskDependencyResolution, TaskDependencyWait, is_task_dependency, plan_task_dependencies,
-    resolve_task_dependencies, task_dependency_errors, task_dependency_id, task_dependency_key,
+pub use execution_plan::{
+    TASK_DEP_PREFIX, TaskDependencyContext, TaskDependencyError, TaskDependencyRejection,
+    is_task_dependency, plan_task_dependencies, task_dependency_errors, task_dependency_id,
+    task_dependency_key, unit_task_dependencies,
+};
+pub use wait::{
+    TaskDependencyCause, TaskDependencyFact, TaskDependencyResolution, TaskDependencyWait,
+    resolve_task_dependencies,
 };
 // ---- ADR-0072 D13（Phase E3）: Complexity Gate ----
 pub use direct_route::{

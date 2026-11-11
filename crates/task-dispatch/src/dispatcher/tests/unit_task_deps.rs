@@ -174,17 +174,17 @@ fn publish(d: &mut Dispatcher) -> tokio::sync::watch::Receiver<Option<DaemonSnap
     rx
 }
 
-fn wait_of(
-    rx: &tokio::sync::watch::Receiver<Option<DaemonSnapshot>>,
-    id: TaskId,
-) -> Option<TaskWait> {
-    rx.borrow()
-        .as_ref()
-        .expect("snapshot")
-        .task_waits
-        .iter()
-        .find(|w| w.task_id == id)
-        .map(|w| w.wait.clone())
+/// 一覧・詳細の `waits`（task-ops の `task_waits`。M11 はここで組む）のうち `task_dependency`。
+fn wait_of(store: &Arc<dyn TaskStore>, id: TaskId) -> Option<TaskWait> {
+    let task = store.get(id).unwrap().unwrap();
+    task_ops::wait::task_waits_one(
+        store.as_ref(),
+        &task,
+        &task_ops::wait::MemoryWaits::default(),
+    )
+    .unwrap()
+    .into_iter()
+    .find(|w| matches!(w, TaskWait::TaskDependency { .. }))
 }
 
 fn stalls(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<String> {
@@ -212,13 +212,12 @@ async fn unit_task_dependency_waits_while_the_dependency_is_not_done() {
         2,
         2,
     );
-    let rx = publish(&mut d);
     assert_eq!(d.tick().unwrap().dispatched, 0);
     assert_eq!(
         unit_status(&fx.store, fx.owner.id, "final"),
         task_core::WorkUnitStatus::Pending
     );
-    match wait_of(&rx, fx.owner.id) {
+    match wait_of(&fx.store, fx.owner.id) {
         Some(TaskWait::TaskDependency {
             task_id,
             cause: task_core::TaskDependencyCause::Unfinished,
@@ -245,9 +244,8 @@ async fn unit_task_dependency_starts_on_the_tick_after_the_dependency_is_integra
         2,
         2,
     );
-    let rx = publish(&mut d);
     assert_eq!(d.tick().unwrap().dispatched, 0);
-    match wait_of(&rx, fx.owner.id) {
+    match wait_of(&fx.store, fx.owner.id) {
         Some(TaskWait::TaskDependency {
             task_id,
             cause: task_core::TaskDependencyCause::Unmerged,
@@ -349,7 +347,7 @@ async fn ended_task_dependency_keeps_the_unit_and_notifies_once() {
 }
 
 /// (e) task 依存の待ちは人の操作待ちではない: `human_wait_secs`（既定 2 時間）を大きく過ぎても、受信箱に
-/// `human_wait_aging` も、この task の人の操作待ちの項目も出ない。
+/// `human_wait_aging` も、人の操作待ちの項目も、`task_unscheduled` も出ない。
 #[tokio::test]
 async fn task_dependency_wait_does_not_raise_human_wait_aging() {
     let dir = tempfile::tempdir().unwrap();
@@ -371,7 +369,7 @@ async fn task_dependency_wait_does_not_raise_human_wait_aging() {
     *clock.lock().unwrap() = later;
     d.tick().unwrap();
     assert!(matches!(
-        wait_of(&rx, fx.owner.id),
+        wait_of(&fx.store, fx.owner.id),
         Some(TaskWait::TaskDependency { .. })
     ));
     let snapshot = rx.borrow().clone();
@@ -394,7 +392,9 @@ async fn task_dependency_wait_does_not_raise_human_wait_aging() {
     .unwrap();
     assert!(
         !inbox.items.iter().any(|i| {
+            // 待ちの理由があるので `task_unscheduled`（理由なく予定されない）にもならない。
             i.kind == task_ops::human_inbox::InboxKind::HumanWaitAging
+                || i.kind == task_ops::human_inbox::InboxKind::TaskUnscheduled
                 || task_ops::human_inbox::InboxKind::HUMAN_WAITS.contains(&i.kind)
         }),
         "{:?}",
@@ -441,30 +441,20 @@ async fn plan_validation_rejects_missing_own_tree_other_project_and_cycle() {
         p3.depends_on.push(task_core::task_dependency_key(id));
         spec
     };
-    let errors = |id: TaskId| {
-        task_ops::unit_task_deps::plan_errors(store.as_ref(), &owner, &spec_with(id)).unwrap()
+    let errors = |id: TaskId| -> Vec<task_core::TaskDependencyRejection> {
+        task_ops::unit_task_deps::plan_errors(store.as_ref(), &owner, &spec_with(id))
+            .unwrap()
+            .into_iter()
+            .map(|e| e.reason)
+            .collect()
     };
+    use task_core::TaskDependencyRejection as R;
     let missing = TaskId::new();
-    assert!(matches!(
-        errors(missing).as_slice(),
-        [PlanValidationError::TaskDependencyNotFound { task_id, .. }] if *task_id == missing
-    ));
-    assert!(matches!(
-        errors(child.id).as_slice(),
-        [PlanValidationError::TaskDependencyInOwnTree { .. }]
-    ));
-    assert!(matches!(
-        errors(owner.id).as_slice(),
-        [PlanValidationError::TaskDependencyInOwnTree { .. }]
-    ));
-    assert!(matches!(
-        errors(other.id).as_slice(),
-        [PlanValidationError::TaskDependencyOtherProject { .. }]
-    ));
-    assert!(matches!(
-        errors(waits_back.id).as_slice(),
-        [PlanValidationError::TaskDependencyCycle { .. }]
-    ));
+    assert_eq!(errors(missing), vec![R::NotFound]);
+    assert_eq!(errors(child.id), vec![R::InOwnTree]);
+    assert_eq!(errors(owner.id), vec![R::InOwnTree]);
+    assert_eq!(errors(other.id), vec![R::OtherProject]);
+    assert_eq!(errors(waits_back.id), vec![R::Cycle]);
     assert!(errors(fx.dep.id).is_empty());
 
     // 人の採用（task-ops の経路）も同じ検証で拒む。

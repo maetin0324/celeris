@@ -170,7 +170,7 @@ async fn task_wait_parent_waiting_on_child_uses_the_shared_resolution() {
         "2026-10-11T00:00:00Z".into(),
     )];
     let d = dispatcher(store.clone(), slow_adapter(), 1);
-    let (changed, waiting, _) = d.resolve_child_dependencies(parent.id, &units).unwrap();
+    let (changed, waiting) = d.resolve_child_dependencies(parent.id, &units).unwrap();
     assert!(!changed);
     assert!(waiting, "the dispatcher holds the parent for its child");
 

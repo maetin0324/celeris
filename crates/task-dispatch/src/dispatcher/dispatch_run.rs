@@ -140,10 +140,6 @@ impl Dispatcher {
                 None
             }
             WuDispatchGate::Skip => return Ok(false),
-            WuDispatchGate::Wait(wait) => {
-                self.note_dispatch_wait(task.id, *wait);
-                return Ok(false);
-            }
         };
         // ADR-0072 D14（Phase E3）/ D17（Phase E4）: gate が compound と判定し、`gate = "on"` で、
         // まだ計画が無い（`current_wu` が None = atomic 経路）なら、この run は task-local な

@@ -12,12 +12,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::execution_plan::{
     CHILD_DEP_PREFIX, WorkUnitBlockedReason, WorkUnitKind, WorkUnitRow, WorkUnitStatus,
-    newly_ready_with, phase_ranks, runnable_work_units,
+    is_task_dependency, newly_ready_with, phase_ranks, runnable_work_units,
 };
 use crate::message::is_conversation;
 use crate::model::{Status, Task, TaskId, TaskKind};
 use crate::org::{MilestoneId, ProjectId};
-use crate::task_deps::{TaskDependencyCause, is_task_dependency};
 
 /// 案件・途中目標が dispatch を止めている状態。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -680,6 +679,9 @@ pub fn plan_waits(
     }
     out
 }
+
+mod task_deps;
+pub use task_deps::*;
 
 #[cfg(test)]
 mod tests;

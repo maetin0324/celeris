@@ -3,8 +3,11 @@
 
 use super::*;
 use crate::execution_plan::{
-    ExecutionLimits, WorkUnitContext, WorkUnitKind, WorkUnitSpec, newly_ready_with, validate,
+    ExecutionLimits, ExecutionPlanSpec, TaskDependencyContext, TaskDependencyRejection,
+    WorkUnitContext, WorkUnitKind, WorkUnitSpec, newly_ready_with, plan_task_dependencies,
+    task_dependency_errors, validate,
 };
+use crate::org::ProjectId;
 use crate::tree::{LivenessClass, LivenessUnitFacts, NodeLivenessFacts, TreeSnapshot, liveness};
 
 fn row(key: &str, seq: u32, status: WorkUnitStatus, depends_on: &[String]) -> WorkUnitRow {
@@ -189,23 +192,22 @@ fn v3_with_dep(dep: &str) -> ExecutionPlanSpec {
     spec
 }
 
-/// D1: /3 は `task:<ULID>` を受け、段の規則に数えない。id の形が違えば拒む。/1・/2 では未知の依存。
+/// D1: /3 の `validate` は `task:<ULID>` を段の規則に数えずに受ける。形の違う id は `task_dependency_errors` が拒む。
 #[test]
 fn v3_accepts_task_dependency_and_rejects_a_malformed_id() {
     let id = TaskId::new();
     let spec = v3_with_dep(&task_dependency_key(id));
     assert!(validate(&spec, tree_on(), &[]).is_ok());
-    assert_eq!(plan_task_dependencies(&spec), vec![("p3".to_string(), id)]);
+    assert_eq!(
+        plan_task_dependencies(&spec),
+        vec![("p3".to_string(), task_dependency_key(id), Some(id))]
+    );
 
     let bad = v3_with_dep("task:not-a-ulid");
-    let errors = validate(&bad, tree_on(), &[]).expect_err("malformed id");
-    assert!(
-        errors.contains(&PlanValidationError::InvalidTaskDependency {
-            key: "p3".into(),
-            depends_on: "task:not-a-ulid".into()
-        }),
-        "{errors:?}"
-    );
+    let errors = task_dependency_errors(&bad, &TaskDependencyContext::default());
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].reason, TaskDependencyRejection::Malformed);
+    assert!(errors[0].to_string().contains("task:not-a-ulid"));
 }
 
 /// (d): 存在しない task・自分の木の task・別の案件・循環を拒み、木の外の同じ案件の task は通す。
@@ -231,52 +233,40 @@ fn task_dependency_errors_reject_missing_own_tree_other_project_and_cycle() {
         ]),
         waits_on: BTreeMap::from([(waits_back, vec![sibling]), (sibling, vec![me])]),
     };
-    let errors_of =
-        |id: TaskId| task_dependency_errors(&v3_with_dep(&task_dependency_key(id)), &ctx);
-    let key = || "p3".to_string();
+    let reasons = |id: TaskId, ctx: &TaskDependencyContext| -> Vec<TaskDependencyRejection> {
+        task_dependency_errors(&v3_with_dep(&task_dependency_key(id)), ctx)
+            .into_iter()
+            .map(|e| e.reason)
+            .collect()
+    };
     assert_eq!(
-        errors_of(missing),
-        vec![PlanValidationError::TaskDependencyNotFound {
-            key: key(),
-            task_id: missing
-        }]
+        reasons(missing, &ctx),
+        vec![TaskDependencyRejection::NotFound]
     );
     assert_eq!(
-        errors_of(root),
-        vec![PlanValidationError::TaskDependencyInOwnTree {
-            key: key(),
-            task_id: root
-        }]
+        reasons(root, &ctx),
+        vec![TaskDependencyRejection::InOwnTree]
     );
     assert_eq!(
-        errors_of(other),
-        vec![PlanValidationError::TaskDependencyOtherProject {
-            key: key(),
-            task_id: other
-        }]
+        reasons(other, &ctx),
+        vec![TaskDependencyRejection::OtherProject]
     );
     assert_eq!(
-        errors_of(waits_back),
-        vec![PlanValidationError::TaskDependencyCycle {
-            key: key(),
-            task_id: waits_back
-        }]
+        reasons(waits_back, &ctx),
+        vec![TaskDependencyRejection::Cycle]
     );
     let free = TaskId::new();
     let ok = TaskDependencyContext {
         targets: BTreeMap::from([(free, Some(project))]),
         ..ctx.clone()
     };
-    assert!(task_dependency_errors(&v3_with_dep(&task_dependency_key(free)), &ok).is_empty());
+    assert!(reasons(free, &ok).is_empty());
     let no_project = TaskDependencyContext {
         project: None,
         ..ok
     };
     assert_eq!(
-        task_dependency_errors(&v3_with_dep(&task_dependency_key(free)), &no_project),
-        vec![PlanValidationError::TaskDependencyOtherProject {
-            key: key(),
-            task_id: free
-        }]
+        reasons(free, &no_project),
+        vec![TaskDependencyRejection::OtherProject]
     );
 }

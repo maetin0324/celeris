@@ -6,9 +6,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use task_core::{
-    ExecutionPlanSpec, PlanValidationError, StoreError, Task, TaskDependencyContext,
-    TaskDependencyFact, TaskDependencyResolution, TaskId, TaskStore, TaskWait, WorkUnitRow,
-    WorkUnitStatus,
+    Event, ExecutionPlanSpec, StoreError, Task, TaskDependencyContext, TaskDependencyError,
+    TaskDependencyFact, TaskDependencyResolution, TaskId, TaskStore, WorkUnitBlockedReason,
+    WorkUnitRow, WorkUnitStatus,
 };
 
 use crate::dep_integration::dependency_integration;
@@ -27,7 +27,7 @@ pub fn resolve(
     let ids: BTreeSet<TaskId> = units
         .iter()
         .filter(|u| u.status == WorkUnitStatus::Pending)
-        .flat_map(|u| task_core::task_deps::unit_task_dependencies(u).collect::<Vec<_>>())
+        .flat_map(|u| task_core::unit_task_dependencies(u).collect::<Vec<_>>())
         .collect();
     if ids.is_empty() {
         return Ok(TaskDependencyResolution::default());
@@ -47,14 +47,111 @@ pub fn resolve(
     Ok(task_core::resolve_task_dependencies(units, &facts))
 }
 
-/// D5: 解決のまだ満たされない最初の依存先（task_id 順）を M11 の待ちの理由にする。
-pub fn first_wait(resolution: &TaskDependencyResolution) -> Option<TaskWait> {
-    resolution.waits.first().map(|w| TaskWait::TaskDependency {
-        task_id: w.task_id,
-        cause: w.cause,
-        detail: w.detail.clone(),
-        unit_keys: w.unit_keys.clone(),
+/// [`settle_external`] の結果。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ExternalSettle {
+    /// unit の行を書き換えた（呼び出し側は読み直す）。
+    pub changed: bool,
+    /// まだ終わっていない子（`child:<key>`）を待つ pending の unit がある。
+    pub waiting_on_children: bool,
+}
+
+/// ADR-0074 D3.7（Phase F4b (f)）: `depends_on: ["child:<key>"]` の WU を、子 Task（`child-<key>` の印を持つ
+/// `parent_id = task_id` の Task）の状態で進める。子が `done` なら（他の依存も満たされていれば）`pending → ready`、
+/// 子が `failed` / `cancelled` なら `pending → blocked(dependency_failed)`（D17 の replan の対象）。
+/// ADR 2026-11-11-unit-task-dependencies D2・D3: `task:<id>`（木の外の task）の依存も同じ所で解く（[`resolve`]）。満たされた
+/// unit は `pending → ready`（`task_dependency_met`）。依存先の失敗では上げも止めもしない（人に知らせるのは生存確認）。
+/// dispatcher の `resolve_child_dependencies` が呼ぶ（`integrated` は M10 と同じ取り込み済みの記憶の写し）。
+pub fn settle_external(
+    store: &dyn TaskStore,
+    task_id: TaskId,
+    units: &[WorkUnitRow],
+    integrated: &BTreeSet<TaskId>,
+) -> Result<ExternalSettle, StoreError> {
+    let prefix = task_core::CHILD_DEP_PREFIX;
+    let has_child_deps = |u: &WorkUnitRow| u.depends_on.iter().any(|d| d.starts_with(prefix));
+    let has_task_deps = |u: &WorkUnitRow| task_core::unit_task_dependencies(u).next().is_some();
+    if !units
+        .iter()
+        .any(|u| u.status == WorkUnitStatus::Pending && (has_child_deps(u) || has_task_deps(u)))
+    {
+        return Ok(ExternalSettle::default());
+    }
+    let task_deps = match store.get(task_id)? {
+        Some(task) => resolve(store, &task, units, &mut integrated.clone())?,
+        None => TaskDependencyResolution::default(),
+    };
+    // ADR 2026-10-11-task-wait-reasons D3: 子の状態での解決と「子待ち」は task-core の `resolve_children`
+    // （一覧・木の `Children` と同じ関数）。
+    let children: Vec<task_core::ChildFacts> = store
+        .children(task_id)?
+        .into_iter()
+        .map(|c| task_core::ChildFacts {
+            task_id: c.id,
+            status: c.status,
+            labels: c.labels,
+        })
+        .collect();
+    let task_core::ChildResolution {
+        mut done,
+        failed,
+        waiting_units,
+    } = task_core::resolve_children(units, &children);
+    done.extend(task_deps.met.iter().cloned());
+    let mut changed = false;
+    for u in units.iter().filter(|u| {
+        u.status == WorkUnitStatus::Pending && u.depends_on.iter().any(|d| failed.contains(d))
+    }) {
+        let mut row = u.clone();
+        row.status = WorkUnitStatus::Blocked;
+        row.blocked_reason = Some(WorkUnitBlockedReason::DependencyFailed);
+        transition(store, task_id, u, row, "dependency_failed")?;
+        changed = true;
+    }
+    if !changed {
+        for id in task_core::newly_ready_with(units, &done) {
+            let Some(u) = units.iter().find(|u| u.id == id) else {
+                continue;
+            };
+            let reason = if has_child_deps(u) {
+                "child_done"
+            } else if has_task_deps(u) {
+                "task_dependency_met"
+            } else {
+                continue;
+            };
+            let mut row = u.clone();
+            row.status = WorkUnitStatus::Ready;
+            transition(store, task_id, u, row, reason)?;
+            changed = true;
+        }
+    }
+    Ok(ExternalSettle {
+        changed,
+        waiting_on_children: !waiting_units.is_empty(),
     })
+}
+
+fn transition(
+    store: &dyn TaskStore,
+    task_id: TaskId,
+    from: &WorkUnitRow,
+    row: WorkUnitRow,
+    reason: &str,
+) -> Result<(), StoreError> {
+    let to = row.status;
+    store.work_unit_transition(
+        task_id,
+        row,
+        Event::WorkUnitTransitioned {
+            work_unit_id: from.id.clone(),
+            key: from.key.clone(),
+            from: from.status,
+            to,
+            reason: reason.to_string(),
+            run_id: None,
+        },
+    )
 }
 
 /// D4: 採用の前の検証。計画を持つ `task` の木・案件と、依存先から辿れる「待つ」辺を store から読み、task-core の
@@ -63,7 +160,7 @@ pub fn plan_errors(
     store: &dyn TaskStore,
     task: &Task,
     spec: &ExecutionPlanSpec,
-) -> Result<Vec<PlanValidationError>, StoreError> {
+) -> Result<Vec<TaskDependencyError>, StoreError> {
     let deps = task_core::plan_task_dependencies(spec);
     if deps.is_empty() {
         return Ok(Vec::new());
@@ -84,11 +181,11 @@ pub fn plan_errors(
         ..Default::default()
     };
     let mut queue: Vec<TaskId> = Vec::new();
-    for (_, id) in &deps {
-        if ctx.targets.contains_key(id) {
+    for id in deps.iter().filter_map(|(_, _, id)| *id) {
+        if ctx.targets.contains_key(&id) {
             continue;
         }
-        if let Some(t) = store.get(*id)? {
+        if let Some(t) = store.get(id)? {
             ctx.targets.insert(t.id, t.project_id);
             queue.push(t.id);
         }
@@ -117,7 +214,7 @@ fn waits_on(store: &dyn TaskStore, id: TaskId) -> Result<Vec<TaskId>, StoreError
     let mut out: BTreeMap<TaskId, ()> = t.depends_on.iter().map(|d| (*d, ())).collect();
     for u in store.work_units_for(id)? {
         if u.status.is_active() && !u.status.is_terminal() {
-            out.extend(task_core::task_deps::unit_task_dependencies(&u).map(|d| (d, ())));
+            out.extend(task_core::unit_task_dependencies(&u).map(|d| (d, ())));
         }
     }
     Ok(out.into_keys().collect())

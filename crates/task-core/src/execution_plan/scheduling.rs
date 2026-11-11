@@ -865,7 +865,7 @@ pub fn dependency_without_row_errors(
     {
         for d in &u.depends_on {
             if d.starts_with(CHILD_DEP_PREFIX)
-                || crate::task_deps::is_task_dependency(d)
+                || super::is_task_dependency(d)
                 || live.contains(d.as_str())
             {
                 continue;

@@ -61,11 +61,25 @@ fn validate_for_task(
 ) -> Result<task_core::ValidatedPlan, OpsError> {
     let validated = validate_with(spec, limits, done_work_units, ctx)
         .map_err(|errors| OpsError::Validation(describe_validation_errors(&errors)))?;
-    let errors = crate::unit_task_deps::plan_errors(store, task, &validated.spec)?;
-    if !errors.is_empty() {
-        return Err(OpsError::Validation(describe_validation_errors(&errors)));
-    }
-    Ok(validated)
+    describe_task_dependency_errors(&crate::unit_task_deps::plan_errors(
+        store,
+        task,
+        &validated.spec,
+    )?)
+    .map_or(Ok(validated), |m| Err(OpsError::Validation(m)))
+}
+
+/// ADR 2026-11-11-unit-task-dependencies D4: 拒んだ `task:` 依存の理由（無ければ `None`）。dispatcher の planner の検査も使う。
+pub fn describe_task_dependency_errors(
+    errors: &[task_core::TaskDependencyError],
+) -> Option<String> {
+    (!errors.is_empty()).then(|| {
+        errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ")
+    })
 }
 
 pub fn adopt_plan(

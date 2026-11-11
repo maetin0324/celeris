@@ -1355,8 +1355,7 @@ pub(super) fn next_run(gate: &WuDispatchGate) -> Option<task_core::NextRun> {
         }
         WuDispatchGate::StartIntegration(_)
         | WuDispatchGate::FinalReview
-        | WuDispatchGate::Skip
-        | WuDispatchGate::Wait(_) => None,
+        | WuDispatchGate::Skip => None,
     }
 }
 

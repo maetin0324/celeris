@@ -3,7 +3,6 @@
 use super::design_brief::missing_message;
 use super::plan_limits::planner_portion_v3;
 use super::*;
-use crate::task_deps::TASK_DEP_PREFIX;
 
 // ---------------------------------------------------------------------------
 // D14: 検証
@@ -326,31 +325,6 @@ pub enum PlanValidationError {
         stage: Option<String>,
     },
     /// ADR-0079 付記「R7-12」D3: daemon の足した生きた WU（配送 / 最終レビュー / 統合の repair WU）の key を計画に書いた。
-    /// ADR 2026-11-11-unit-task-dependencies D1: `task:` の後が task id（ULID）でない。
-    InvalidTaskDependency {
-        key: String,
-        depends_on: String,
-    },
-    /// 同 D4: `task:<id>` の task が無い。
-    TaskDependencyNotFound {
-        key: String,
-        task_id: crate::model::TaskId,
-    },
-    /// 同 D4: `task:<id>` が自分の木（自分・祖先・子孫・同じ木）の task を指す。
-    TaskDependencyInOwnTree {
-        key: String,
-        task_id: crate::model::TaskId,
-    },
-    /// 同 D4: `task:<id>` が別の案件の task を指す（計画を持つ task が案件に属さないときも）。
-    TaskDependencyOtherProject {
-        key: String,
-        task_id: crate::model::TaskId,
-    },
-    /// 同 D4: `task:<id>` の task が（`depends_on` か計画の `task:` 依存を辿って）この task の木を待つ。
-    TaskDependencyCycle {
-        key: String,
-        task_id: crate::model::TaskId,
-    },
     DaemonAddedKeyReused {
         key: String,
     },
@@ -689,26 +663,6 @@ impl std::fmt::Display for PlanValidationError {
             Self::DependencyWithoutRow { key, depends_on } => write!(
                 f,
                 "work unit {key} depends on {depends_on}, which has no live work unit row (superseded, cancelled or never created); it would wait forever（{key} の依存 {depends_on} に有効な行が無く、満たされない。ADR 2026-10-23-stage-order-and-plan-stall D3）"
-            ),
-            Self::InvalidTaskDependency { key, depends_on } => write!(
-                f,
-                "unit {key}: depends_on {depends_on:?} must be \"{TASK_DEP_PREFIX}<task id>\" with a 26-character task id（木の外の task は task:<task id> で書く。ADR 2026-11-11-unit-task-dependencies D1）"
-            ),
-            Self::TaskDependencyNotFound { key, task_id } => write!(
-                f,
-                "unit {key}: depends_on {TASK_DEP_PREFIX}{task_id}: no such task（依存先の task が無い。ADR 2026-11-11-unit-task-dependencies D4）"
-            ),
-            Self::TaskDependencyInOwnTree { key, task_id } => write!(
-                f,
-                "unit {key}: depends_on {TASK_DEP_PREFIX}{task_id} points into this task's own tree; depend on the unit key instead（自分の木の task は unit の key で書く。D4）"
-            ),
-            Self::TaskDependencyOtherProject { key, task_id } => write!(
-                f,
-                "unit {key}: depends_on {TASK_DEP_PREFIX}{task_id} is not a task of this task's project（別の案件の task は待てない。D4）"
-            ),
-            Self::TaskDependencyCycle { key, task_id } => write!(
-                f,
-                "unit {key}: depends_on {TASK_DEP_PREFIX}{task_id} would wait in a cycle (that task waits for this task's tree)（循環する。D4）"
             ),
             Self::DaemonAddedKeyReused { key } => write!(
                 f,
@@ -1733,23 +1687,12 @@ fn validate_v3(
         .collect();
     for u in &spec.units {
         let mut intra_stage_deps = 0usize;
-        for dep in &u.depends_on {
+        for dep in u.depends_on.iter().filter(|d| !is_task_dependency(d)) {
             if dep.starts_with(CHILD_DEP_PREFIX) {
                 errors.push(PlanValidationError::ChildDependencyNotAllowed {
                     key: u.key.clone(),
                     depends_on: dep.clone(),
                 });
-                continue;
-            }
-            // ADR 2026-11-11-unit-task-dependencies D1: 木の外の task（段の規則に数えない。存在・木・案件・循環は D4 の
-            // `task_dependency_errors` が DB の事実で見る）。
-            if crate::task_deps::is_task_dependency(dep) {
-                if crate::task_deps::task_dependency_id(dep).is_none() {
-                    errors.push(PlanValidationError::InvalidTaskDependency {
-                        key: u.key.clone(),
-                        depends_on: dep.clone(),
-                    });
-                }
                 continue;
             }
             if !known_keys.contains(dep.as_str()) {

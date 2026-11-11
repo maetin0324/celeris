@@ -1024,9 +1024,6 @@ enum WuDispatchGate {
     FinalReview,
     /// この tick では何もしない（`Stuck`（replan の余地なし）／replan の上限に到達）。
     Skip,
-    /// ADR 2026-11-11-unit-task-dependencies D5: 起こせる unit が無く、unit が木の外の task（`task:<id>`）を待っている
-    /// （M11 の待ちの理由を記録して何もしない）。
-    Wait(Box<task_core::TaskWait>),
 }
 
 /// run 開始時に決める、ワーカーに渡す追加の文脈（ADR-0016 D1 / D3, ADR-0027 D1）。
@@ -2680,10 +2677,7 @@ impl Dispatcher {
                 || self.cluster_waiting.contains(&t.id)
                 || matches!(
                     self.dispatch_waits.get(&t.id),
-                    Some(
-                        task_core::TaskWait::DependsOnIntegration { .. }
-                            | task_core::TaskWait::TaskDependency { .. }
-                    )
+                    Some(task_core::TaskWait::DependsOnIntegration { .. })
                 )
         }))
     }

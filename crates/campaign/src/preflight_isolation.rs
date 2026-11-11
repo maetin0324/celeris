@@ -19,6 +19,11 @@ use crate::{
 
 pub const CHECK: &str = "deny_readable";
 
+/// `--probe-program` が無いときの probe の写し元。kernel がこの process の実行ファイルとして持つ file を開くので、
+/// 起動した path が消えた・置き換わった後も、走っている binary そのものを写せる（path の文字列は ` (deleted)` 付きになり、
+/// そこから写すと ENOENT になる）。開けないときは stage が失敗し、`deny_readable` で止まる（fail-closed）。
+pub const SELF_EXE: &str = "/proc/self/exe";
+
 /// `ops-r2-sandbox.sh` に渡す許可表（B の測定 daemon・外部 operator の専用 session）。
 #[derive(Clone, Debug, Default)]
 pub struct ScriptSandbox {
@@ -48,7 +53,7 @@ pub struct IsolationInputs {
     pub sandbox_script: Option<PathBuf>,
     pub b: ScriptSandbox,
     pub operator: ScriptSandbox,
-    /// probe を走らせる `celeris-campaign`（既定はこの process の実行ファイル）。
+    /// probe を走らせる `celeris-campaign`（既定は `SELF_EXE`。この process の実行ファイル）。
     pub probe_program: Option<PathBuf>,
 }
 
@@ -69,7 +74,7 @@ pub enum Wrap {
 #[derive(Clone, Debug)]
 pub struct ProbeRequest {
     pub principal: &'static str,
-    /// `probe-read` を持つ実行ファイル。包みの中へ stage して起動する。
+    /// `probe-read` を持つ実行ファイル（既定は `SELF_EXE`）。包みの中へ stage して起動する。
     pub program: PathBuf,
     pub wrap: Wrap,
     pub deny: Vec<PathBuf>,
@@ -127,13 +132,10 @@ pub fn requests(
             Err(e) => return vec![Err(format!("{CHECK}:{e}"))],
         },
     };
-    let program = match iso.probe_program.clone().map_or_else(
-        || std::env::current_exe().map_err(|e| format!("{CHECK}:probe binary: {e}")),
-        Ok,
-    ) {
-        Ok(p) => p,
-        Err(e) => return vec![Err(e)],
-    };
+    let program = iso
+        .probe_program
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(SELF_EXE));
     let mut out = Vec::new();
     if m.is_active(ConfigId::A) {
         out.push(a_request(cap_env, a_real, (ws, cfg), &deny, &program));

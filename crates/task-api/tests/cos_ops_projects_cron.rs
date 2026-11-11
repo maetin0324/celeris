@@ -8,7 +8,7 @@ mod common;
 use common::cos_ops::{OPS, audit_events, cos_bearer, db, op_body, run_domain};
 use common::*;
 use serde_json::{Value, json};
-use task_core::{CronJobStore, TaskStore};
+use task_core::{CronJobStore, OrgDirectory, TaskStore};
 
 fn job_body(name: &str) -> Value {
     json!({

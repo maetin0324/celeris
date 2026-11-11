@@ -406,12 +406,15 @@ async fn add_reference(
         .blocking(move |store| owner_checked(store, kb_root, owner_kind, &owner_id))
         .await?;
     open(&state)?
-        .add_ref(&id, kind, &req.owner_id, OffsetDateTime::now_utc())
+        .add_ref_request(
+            &id,
+            kind,
+            &req.owner_id,
+            &req.idempotency_key,
+            &request_hash,
+            OffsetDateTime::now_utc(),
+        )
         .map_err(error)?;
-    conn.execute(
-        "INSERT OR IGNORE INTO chat_client_requests(kind,scope_id,key,request_hash,result_id,created_at) VALUES('attachment_ref',?1,?2,?3,?4,?5)",
-        params![id, req.idempotency_key, request_hash, req.owner_id, OffsetDateTime::now_utc().to_string()],
-    ).map_err(|e| error(AttachmentError::Db(e)))?;
     Ok(json_response(
         StatusCode::OK,
         &ChatReferenceResponse {

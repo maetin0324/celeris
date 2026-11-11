@@ -19,8 +19,9 @@ use async_trait::async_trait;
 use celeris::{ClusterMasters, Config, api_settings, build_dispatcher};
 use serde_json::{Value, json};
 use task_core::{
-    ApprovalStore, DaemonMode, InstanceRole, Message, MessageId, MessageRole, OrgKind, OrgNode,
-    SharedRole, SqliteStore, StandingRule, StandingRuleId, TaskId, TaskKind, TaskStore,
+    ApprovalStore, DaemonMode, InstanceRole, Message, MessageId, MessageRole, OrgDirectory,
+    OrgKind, OrgNode, SharedRole, SqliteStore, StandingRule, StandingRuleId, TaskId, TaskKind,
+    TaskStore,
 };
 use task_dispatch::Dispatcher;
 use task_worker::{

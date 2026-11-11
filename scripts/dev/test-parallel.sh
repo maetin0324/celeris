@@ -89,7 +89,11 @@ run_tee() {
   # tee は lock の fd を継がない（継ぐと、signal の後始末で「まだ参照されている」と見て dir を消せない）
   exec {tfd}> >(eval "exec ${TTL_LOCK_FD}>&-"; exec tee "$log")
   tpid=$!
-  ttl_run "$@" >&"$tfd" 2>&1 || rc=$?
+  # cmd の側では元の $tfd を閉じ、tee への pipe は cmd の stdout・stderr だけが持つ（bash の {var}> は CLOEXEC を
+  # 付けない）。閉じないと、stdout を /dev/null にした子孫（ssh probe の試験の孤児 sleep 3600）まで pipe を握り、
+  # tee が EOF を受けず `wait "$tpid"` が戻らない（2026-11-10 の release gate）。lock の fd（TTL_LOCK_FD）は
+  # ADR 2026-11-06-test-runner-tmp-lifecycle D2 のとおり子孫に継がせる（使用中の dir を回収から守る印）。
+  ttl_run "$@" >&"$tfd" 2>&1 {tfd}>&- || rc=$?
   exec {tfd}>&-
   wait "$tpid" 2>/dev/null || true
   return "$rc"

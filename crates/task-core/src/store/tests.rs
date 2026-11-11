@@ -10,8 +10,11 @@ use crate::integrations::{IntegrationMethod, IntegrationState, TaskIntegration};
 use crate::message::{Message, MessageId, MessageRole};
 use crate::migration_registry::migration_sql;
 use crate::model::{ArtifactRef, Budget, Check, Criterion, Tier, WorkerHint, WorkspaceSpec};
-use crate::org::{OrgError, OrgKind, OrgNode, Project, ProjectId, ProjectStatus};
+use crate::org::{
+    MilestoneId, MilestoneStatus, OrgError, OrgKind, OrgNode, Project, ProjectId, ProjectStatus,
+};
 use crate::repos::{ProjectRepo, RepoId, RepoRun};
+use crate::transition::Trigger;
 
 use super::*;
 

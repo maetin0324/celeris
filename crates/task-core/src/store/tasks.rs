@@ -1,20 +1,14 @@
 use std::time::Duration as StdDuration;
 
-use rusqlite::types::Value as SqlValue;
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params, params_from_iter};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use time::OffsetDateTime;
 
 use crate::message::is_conversation;
 use crate::model::{Event, Status, Task, TaskId, TaskKind};
 use crate::transition::{InvalidTransition, Trigger};
 
-use super::query::{
-    CursorPayload, decode_cursor, encode_cursor, filter_predicate, keyset_predicate, order_by_sql,
-    parse_status, usize_to_i64,
-};
-use super::{
-    ListFilter, ListOrder, Page, SqliteStore, StoreError, format_rfc3339, kind_str, status_str,
-};
+use super::query::parse_status;
+use super::{SqliteStore, StoreError, format_rfc3339, kind_str, status_str};
 
 impl SqliteStore {
     pub(super) fn row_to_task(json: String) -> Result<Task, StoreError> {
@@ -743,68 +737,6 @@ impl SqliteStore {
         )?;
         tx.commit()?;
         Ok(affected == 1)
-    }
-
-    pub(super) fn list_page_impl(
-        &self,
-        filter: &ListFilter,
-        order: ListOrder,
-        cursor: Option<&str>,
-        limit: usize,
-    ) -> Result<Page<Task>, StoreError> {
-        self.with_read_conn(|conn| {
-            let (filter_sql, filter_params) = filter_predicate(filter);
-
-            let total: i64 = {
-                let sql = format!("SELECT COUNT(*) FROM tasks WHERE {filter_sql}");
-                conn.query_row(&sql, params_from_iter(filter_params.iter()), |row| {
-                    row.get(0)
-                })?
-            };
-
-            let mut where_sql = format!("({filter_sql})");
-            let mut query_params = filter_params;
-            if let Some(c) = cursor {
-                let payload = decode_cursor(c)?;
-                let (keyset_sql, keyset_params) = keyset_predicate(order, &payload);
-                where_sql.push_str(&format!(" AND ({keyset_sql})"));
-                query_params.extend(keyset_params);
-            }
-
-            let order_sql = order_by_sql(order);
-            let fetch_limit = usize_to_i64(limit.saturating_add(1));
-            let sql =
-                format!("SELECT json FROM tasks WHERE {where_sql} ORDER BY {order_sql} LIMIT ?");
-            query_params.push(SqlValue::Integer(fetch_limit));
-
-            let mut stmt = conn.prepare(&sql)?;
-            let rows = stmt.query_map(params_from_iter(query_params.iter()), |row| {
-                row.get::<_, String>(0)
-            })?;
-            let mut items = Vec::new();
-            for row in rows {
-                items.push(Self::row_to_task(row?)?);
-            }
-
-            let has_more = items.len() > limit;
-            if has_more {
-                items.truncate(limit);
-            }
-            let next_cursor = if has_more {
-                match items.last() {
-                    Some(last) => Some(encode_cursor(&CursorPayload::from_task(last)?)?),
-                    None => None,
-                }
-            } else {
-                None
-            };
-
-            Ok(Page {
-                items,
-                next_cursor,
-                total: total as u64,
-            })
-        })
     }
 
     pub(super) fn count_by_status_impl(&self) -> Result<Vec<(Status, u64)>, StoreError> {

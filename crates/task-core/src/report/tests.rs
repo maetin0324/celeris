@@ -213,7 +213,7 @@ fn notification_waits_two_hours_unless_there_is_bad_news() {
 fn store_with_org() -> SqliteStore {
     let store = SqliteStore::open_in_memory().expect("open");
     for n in org() {
-        crate::store::TaskStore::org_upsert(&store, &n).expect("seed org");
+        crate::store::OrgDirectory::org_upsert(&store, &n).expect("seed org");
     }
     store
 }

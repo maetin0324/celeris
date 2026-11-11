@@ -26,8 +26,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use task_core::local_machine::WorkspaceRoots;
 use task_core::{
-    Project, ProjectId, ProjectRepo, RepoId, RepoKind, RepoRun, SqliteStore, Task, TaskStore,
-    WorkspaceSpec,
+    OrgDirectory, Project, ProjectId, ProjectRepo, RepoId, RepoKind, RepoRun, SqliteStore, Task,
+    TaskQuery, TaskStore, WorkspaceSpec,
 };
 use task_ops::changes as ops_changes;
 use task_ops::docs::{self as ops_docs, DocCommit, PageEdit, PathError, WriteOutcome};

@@ -758,14 +758,6 @@ impl SqliteStore {
     }
 
     /// 許可を使わない監査の行（人の発言の取り次ぎ、controller の拒否、問いの抑止）。同じ key は 1 行。
-    pub fn authority_audit_record_tx(
-        conn: &Connection,
-        row: &NewAuthorityAudit,
-        now: OffsetDateTime,
-    ) -> Result<String, StoreError> {
-        audit_insert(conn, row, now)
-    }
-
     pub fn authority_audit_record(
         &self,
         row: &NewAuthorityAudit,

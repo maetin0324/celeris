@@ -1,7 +1,7 @@
 use super::*;
 use task_core::{
-    CONVERSATION_GENRE, Check, Criterion, DelegateTask, OrgKind, Project, ProjectStatus,
-    SqliteStore,
+    CONVERSATION_GENRE, Check, Criterion, DelegateTask, OrgDirectory, OrgKind, Project,
+    ProjectStatus, SqliteStore,
 };
 
 fn now() -> OffsetDateTime {

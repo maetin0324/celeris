@@ -1,7 +1,7 @@
 use super::*;
 use task_core::{
-    ArtifactRef, Budget, Check, Criterion, ListFilter, ListOrder, SqliteStore, Task, TaskKind,
-    Tier, WorkerHint, WorkspaceSpec,
+    ArtifactRef, Budget, Check, Criterion, ListFilter, ListOrder, OrgDirectory, SqliteStore, Task,
+    TaskKind, TaskQuery, Tier, WorkerHint, WorkspaceSpec,
 };
 
 fn act(

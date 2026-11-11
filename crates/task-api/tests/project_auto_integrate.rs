@@ -5,7 +5,7 @@ mod common;
 
 use common::*;
 use serde_json::{Value, json};
-use task_core::TaskStore;
+use task_core::OrgDirectory;
 
 fn auth() -> [(&'static str, String); 1] {
     [("authorization", format!("Bearer {TOKEN}"))]

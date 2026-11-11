@@ -189,7 +189,7 @@ async fn langmem_proxy_model_name_preserves_qwen_source() {
 }
 
 #[tokio::test]
-async fn with_model_replaces_the_configured_model() {
+async fn configure_model_replaces_the_configured_model() {
     let dir = tempfile::tempdir().unwrap();
     let mut config = stub_langmem(dir.path(), &fake_extractor_script());
     config.model = Some("old/configured-model".into());
@@ -414,7 +414,7 @@ async fn idle_timeout_secs_cannot_exceed_the_harness_budget() {
 
 /// `configure` の env の追加分は既存の同名キーより後に環境を組み立てるので勝つ（他アダプタと同じ規則）。
 #[tokio::test]
-async fn with_env_overrides_a_same_name_key_already_in_config_env() {
+async fn configure_env_overrides_a_same_name_key_already_in_config_env() {
     let dir = tempfile::tempdir().unwrap();
     let out_file = dir.path().join("env-seen.txt");
     let script = format!(
@@ -431,7 +431,7 @@ async fn with_env_overrides_a_same_name_key_already_in_config_env() {
         .env
         .push(("OPENAI_API_KEY".to_string(), "old-key".to_string()));
     let base = LangMemAdapter::new(config);
-    let with_env = base
+    let configured = base
         .configure(&AdapterSettings {
             env: vec![("OPENAI_API_KEY".to_string(), "new-key".to_string())],
             ..AdapterSettings::default()
@@ -441,7 +441,7 @@ async fn with_env_overrides_a_same_name_key_already_in_config_env() {
 
     let req = sample_req(dir.path().to_path_buf());
     let sink = RecordingSink::default();
-    let outcome = with_env
+    let outcome = configured
         .run(req, "run-8", default_limits(), &sink)
         .await
         .unwrap();

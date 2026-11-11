@@ -275,8 +275,15 @@ task の `expected_write_paths` は `crates/task-dispatch/src/health_review/`・
 | 4 試験 `…_reaches_reviewer` が通常の成功の試験として通る | `health_generic_review_input_{ts,rust}_{dup_contract,dup_state}_reaches_reviewer`（4 件） |
 | Unavailable・report の故障・policy_only・合格の再利用・policy の関門の fail closed は変わらない | `health_review_policy_unknown_*`・`health_review_policy_no_reviewer_*`・`health_review_input_failed_report_is_recorded_as_unknown`・`health_review_input_not_built_when_the_reviewer_pass_is_reused`・`g4_r1_review_request_absent_not_built_when_the_reviewer_pass_is_reused`・`g4_r1_review_request_absent_candidate_policy_is_not_trusted` |
 
-### 文書検査（この工程の commit の後の HEAD で実行）
-- （commit の後に追記する）
+### 文書検査と範囲（この工程の commit の後の HEAD で実行）
+commit『phase 5: 提出時の HEAD の受け入れ証拠を記録し ADR を実装済みにする』の後に実行した。その後の commit『phase 5: 文書検査の結果を進捗に書く』はこの節と「未解決」の 1 行だけを変え、同じ検査を再実行した。
+- `sh scripts/dev/check-doc-links.sh` → exit 0（ok）。
+- `sh scripts/dev/check-adr-numbers.sh` → exit 0（ok、420 file）。
+- `sh scripts/dev/progress-index.sh --check` → exit 0（ok）。
+- 参考: `python3 scripts/dev/check-human-text.py` → exit 0（11 file、指摘 0 件）。`python3 scripts/dev/check-architecture-map.py` → exit 0（999 path）。`git diff --check` → exit 0。
+- 監査の check（上の「監査」の 1 行目）→ exit 0。
+- 範囲（計画の scope の check。`sh "$CELERIS_WU_SCOPE_PATHS"`）→ exit 0。変更 path は ADR 2026-11-11-health-generic-review-input とこの進捗の 2 file だけ。
+- WorkUnit の基準（`$CELERIS_WU_BASE`）の `bash scripts/dev/test-affected.sh` → exit 0（125 秒）。「試験対象の変更なし（docs のみ等）」の経路で、repo-health は verdict pass・new 0・worsened 0、検査器自身の 94 試験は OK（expected failures 2 件）、repo_health_gate は 7 件すべて OK。
 
 ## 未解決（工程 2）
 - 範囲外で落ちた 12 件は直した。残りは注釈だけで、どれも動作に影響しない。
@@ -285,7 +292,7 @@ task の `expected_write_paths` は `crates/task-dispatch/src/health_review/`・
 
 ## 未解決
 - 無し。工程 2 の古い注釈 3 か所は「提案」に回した。この task の受け入れ条件と計画の check は満たしている（工程 5）。
-- この WorkUnit の daemon の check の `bash scripts/dev/test-affected.sh` は、基準が `$CELERIS_WU_BASE`（開始時の snapshot）なので docs だけの軽い経路になる見込み。task 全体の affected tests は、工程 5 で基準を `git merge-base HEAD main` にして実行した（exit 0）。
+- この WorkUnit の daemon の check の `bash scripts/dev/test-affected.sh` は、基準が `$CELERIS_WU_BASE`（開始時の snapshot）なので docs だけの軽い経路を通る（工程 5 で exit 0 を確かめた）。task 全体の affected tests は、工程 5 で基準を `git merge-base HEAD main` にして実行した（exit 0）。
 
 ## 提案
 - 案件の repo（`task.repos`）を持たない task（workspace だけの task）の final review は、review 前の同期が無く health の材料も作らない（工程 4 の観察）。`NOT_SYNCED` の Skipped も残らないので、材料が無いことが event に出ない。意図した契約かを ADR 2026-11-07-health-review-integration の D4 の担当（G4 の親 task）が決め、意図どおりなら D4.4 に明記し、そうでなければ別の task で直す。

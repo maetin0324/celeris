@@ -62,3 +62,7 @@ task 01M6TYVJT0Z1CBGNK8VTNK8ZJH の repair WorkUnit repair-settings-2 の記録�
 ## 提案
 
 - repair WU の範囲外差分の検査は、段の統合の health の指摘なら段の write_set（または operator が認めた範囲）から作る。
+
+## 影響試験
+
+- `bash scripts/dev/test-affected.sh`（提出時の HEAD で実行。対象は celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker）: 前段の repo-health は verdict=pass。nextest は 5869 件中 5866 件合格、22 件 skip。残る 3 件（`dispatcher::tests::project_wake::soak::project_controller_soak_72h_{enabled,shadow,off}`）は、run の壁時計に収めるため外から付けた `timeout 780` の SIGTERM で約 82 秒の時点で打ち切られた。試験自身の失敗ではないが、合格も未確認。exit は 124（timeout）。この 3 件は adapter の env の経路を通らない。再実行は次の検査（統合の check）に任せる。

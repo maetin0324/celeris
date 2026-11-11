@@ -1,10 +1,12 @@
 ---
 title: CoS 不在の直接通知（CosFallback）を一次対応の後だけ送る（全種類）
 tasks: [01M756VNCZAB8DSPKB1RCPJXTB]
-status: running
+status: done
 updated: 2026-11-11
 ---
 # CoS 不在の直接通知（CosFallback）を一次対応の後だけ送る（全種類）
+
+完了日: 2026-11-11
 
 ADR: [2026-11-11-cos-fallback-timing](../adr/2026-11-11-cos-fallback-timing.md)
 
@@ -26,6 +28,12 @@ ADR: [2026-11-11-cos-fallback-timing](../adr/2026-11-11-cos-fallback-timing.md)
   task-api `cos::resolve`（268 → 278 行）で落ちたので、`FirstResponseWait`・`TriageSkip` を `task_ops::cos_first_response` に、
   D2 の SQL を `task_core::cos_fallback` に、resolve の判定を `terminal_conflict` に移した。挙動は変えていない。
 
+- `phase 1: fallback の取り下げを書き込みから始め、script_generation_e2e の digest を全 page で数える` —
+  `withdraw_unsent` が読みから始めていたので、deferred transaction の resolve が別 process の書き込みと競って
+  `SQLITE_BUSY_SNAPSHOT` で落ちた（`script_generation_e2e` の 1259 行の `expect("resolve")`）。UPDATE を先にした。
+  daemon が待ちのある thread を毎 tick 拾う（D3）ので general thread の message が 1 page（200 件）を超え、試験の
+  `digests()` が古い digest を見落とした（1033 行）。`after_seq` で全 page を読むようにした。単独で 3 回続けて合格。
+
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
 - 対象の試験: `cargo nextest run -p task-dispatch -p task-core -p celeris -p task-api -E 'test(/cos_chat_triage|cos_fallback_timing|cos_chat_root_done|root_done_summary|cos_triage|cos_chat_authorization|cos_reload|cos_inbox/)'` → 結果は下の「検査」に書く。
 - 受け入れ条件 3 の試験:
@@ -35,9 +43,18 @@ ADR: [2026-11-11-cos-fallback-timing](../adr/2026-11-11-cos-fallback-timing.md)
     `cos_fallback_timing_pickable_clock_starts_at_the_end_of_the_last_run`
   - (d) `task-core` の `cos_triage_judgment_before_the_send_withdraws_the_fallback`
   - (e) `root_done_summary_waits_for_the_safety_net_when_cos_cannot_start`・`root_done_summary_waits_for_its_live_run_up_to_the_safety_net`
-- 検査: 未実行（次の run で `bash scripts/dev/test-affected.sh`・clippy・fmt・`sh scripts/dev/progress-index.sh --check` を実行して書く）。
+- `bash scripts/dev/test-affected.sh` → exit 100。nextest 8227 件中 8226 件合格、23 件 skip、失敗 1 件は
+  `dispatcher::tests::git_workspace::review_records_each_repositories_own_definition_and_worktree_results`
+  （「each repository must have its own evidence」。`run_until_idle(&mut d, 60)` で tick 数を上限に待つ既知の負荷時の失敗で、
+  この変更の範囲外）。同じ試験を単独で再実行して 1 passed。web の tsc・vitest（Test Files 103 passed・6 passed）、
+  control-ts の型検査、repo-health（verdict=pass）は合格。
+- `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0。
+- `cargo nextest run -p celeris --test script_generation_e2e` → 3 回続けて exit 0。
+- `bash scripts/dev/check-health.sh` → exit 0（verdict=pass）。
 
 ## 未解決
+- `git_workspace::review_records_each_repositories_own_definition_and_worktree_results` は負荷で落ちる（tick 数の上限待ち）。
+  G4（01M6TYVJSXBZMSBC0YGAT2TTX0）の branch に出来事待ちへの直しがあり、main に入れば解消する見込み（未確認）。
 - 本番の「thread も枠も空いているのに 120 秒以上拾われない」8 件の原因は決めきれていない。推測（未確認）: 他の process の run が
   SQLite に残っている間に claim が拒まれ、`triage.dirty` が消えて新しい件が来るまで拾われなかった。この型は
   `cos_fallback_timing_idle_thread_after_a_foreign_run_is_picked` で再現し、`dirty` を消して毎 tick SQLite から読むようにした。

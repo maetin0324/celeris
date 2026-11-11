@@ -919,7 +919,7 @@ pub struct ClusterJobsContinuation {
     pub cluster: String,
     /// `pbs` | `slurm`。
     pub scheduler: String,
-    /// wait の終わり方（`satisfied` | `timed_out` | `cancelled`）。
+    /// wait の再開理由（`satisfied` | `job_failed` | `queue_stalled` | `timed_out` | `cancelled`）。
     pub state: String,
     /// job ごとの 1 行（`42634: finished (Exit_status 0 / scheduler: F)` の形。申告の順）。
     pub jobs: Vec<String>,

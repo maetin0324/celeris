@@ -168,10 +168,7 @@ fn setup(
     d.set_cluster_liveness_probe(Arc::new(|_: &[String], _: &str| true));
     d.config.clusters.insert(
         "sirius".into(),
-        cluster(task_core::cluster_job::ClusterJobWaitLimits {
-            poll_secs: 30,
-            max_wait_secs: 3600,
-        }),
+        cluster(task_core::cluster_job::ClusterJobWaitLimits::new(30, 3600)),
     );
     let seen = Arc::new(StdMutex::new(Vec::new()));
     d.set_cluster_job_poller(fake_poller(
@@ -630,6 +627,7 @@ fn inbox_questions(store: &Arc<dyn TaskStore>) -> Vec<TaskId> {
 
 /// planner run には計画を書き、leaf `a` の最初の run だけ wait で終わる（他の run は `Done`）。
 struct TreeWaitAdapter {
+    wait_jobs: Vec<String>,
     plan: StdMutex<Option<String>>,
     waited: std::sync::atomic::AtomicBool,
     seen: Arc<StdMutex<Vec<task_worker::RunContext>>>,
@@ -657,7 +655,14 @@ impl WorkerAdapter for TreeWaitAdapter {
             && !self.waited.swap(true, std::sync::atomic::Ordering::SeqCst)
         {
             return Ok(RunOutcome {
-                terminal: wait_terminal(&["42634"], None),
+                terminal: wait_terminal(
+                    &self
+                        .wait_jobs
+                        .iter()
+                        .map(String::as_str)
+                        .collect::<Vec<_>>(),
+                    None,
+                ),
                 exit_code: Some(0),
             });
         }
@@ -687,6 +692,7 @@ async fn a_leaf_unit_waits_alone_and_liveness_names_the_wait() {
         vec![leaf("a", "s1", &[]), leaf("b", "s1", &[])],
     );
     let adapter = Arc::new(TreeWaitAdapter {
+        wait_jobs: vec!["42634".into()],
         plan: StdMutex::new(Some(plan)),
         waited: std::sync::atomic::AtomicBool::new(false),
         seen: Arc::new(StdMutex::new(Vec::new())),
@@ -695,10 +701,7 @@ async fn a_leaf_unit_waits_alone_and_liveness_names_the_wait() {
     d.set_cluster_liveness_probe(Arc::new(|_: &[String], _: &str| true));
     d.config.clusters.insert(
         "sirius".into(),
-        cluster(task_core::cluster_job::ClusterJobWaitLimits {
-            poll_secs: 30,
-            max_wait_secs: 7200,
-        }),
+        cluster(task_core::cluster_job::ClusterJobWaitLimits::new(30, 7200)),
     );
     // 尽きたら最後の出力（R）を繰り返す。
     let polls = Arc::new(StdMutex::new(VecDeque::from(vec![qstat(&[(
@@ -822,6 +825,7 @@ async fn a_leaf_unit_blocked_on_cluster_jobs_always_has_its_wait_row_after_a_hal
     store.create_task(&root, vec![]).unwrap();
     let plan = v3_plan(vec![stage("s1", false)], vec![leaf("a", "s1", &[])]);
     let adapter = Arc::new(TreeWaitAdapter {
+        wait_jobs: vec!["42634".into()],
         plan: StdMutex::new(Some(plan)),
         waited: std::sync::atomic::AtomicBool::new(false),
         seen: Arc::new(StdMutex::new(Vec::new())),
@@ -830,10 +834,7 @@ async fn a_leaf_unit_blocked_on_cluster_jobs_always_has_its_wait_row_after_a_hal
     d.test_halt_after_wu_transition = true;
     d.config.clusters.insert(
         "sirius".into(),
-        cluster(task_core::cluster_job::ClusterJobWaitLimits {
-            poll_secs: 30,
-            max_wait_secs: 7200,
-        }),
+        cluster(task_core::cluster_job::ClusterJobWaitLimits::new(30, 7200)),
     );
     tick_until(&mut d, |_| {
         store.work_units_for(root_id).unwrap().iter().any(|u| {
@@ -1022,4 +1023,216 @@ async fn notice_wait_progress_notice_records_change_once() {
         .count();
     assert_eq!(polled, 1);
     assert_eq!(finished_count(&store, id), 0);
+}
+
+/// Existing all-finished tests cannot detect a failed job hidden behind live jobs.
+#[tokio::test]
+async fn partial_failure_resumes_atomic_with_every_job_and_can_wait_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, mut d, task, adapter, _) = setup(
+        dir.path(),
+        vec![
+            wait_terminal(&["1", "2", "3"], None),
+            wait_terminal(&["2", "3", "4"], None),
+        ],
+        vec![qstat(&[
+            ("1", "F", Some(-14)),
+            ("2", "Q", None),
+            ("3", "R", None),
+        ])],
+    );
+    tick_until(&mut d, |_| {
+        store.cluster_job_waits_for_task(task.id).unwrap().len() == 2
+    })
+    .await;
+    let waits = store.cluster_job_waits_for_task(task.id).unwrap();
+    assert_eq!(waits[1].jobs, ["2", "3", "4"]);
+    let seen = adapter.seen.lock().unwrap();
+    let context = seen[1]
+        .continuation
+        .as_ref()
+        .unwrap()
+        .cluster_jobs
+        .as_ref()
+        .unwrap();
+    assert_eq!(context.state, "job_failed");
+    assert_eq!(context.jobs.len(), 3);
+    assert!(context.jobs[0].contains("Exit_status -14"));
+    assert!(context.jobs[1].contains("Q"));
+    assert!(context.jobs[2].contains("R"));
+    let prompt = task_worker::preamble::continuation_section(&seen[1]);
+    assert!(prompt.contains("他の job の終了を待たず"));
+    assert!(prompt.contains("qstat -x"));
+    let events = store.events_for(task.id).unwrap();
+    assert_eq!(consecutive_continuations(&events), 0);
+    assert_eq!(task_ops::derive::no_progress_streak(&events, None), 0);
+}
+
+/// Queue wakeup must carry scheduling evidence and survive a re-wait without storms.
+#[tokio::test]
+async fn queued_job_wakes_once_across_rewait_with_scheduling_evidence() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut output = qstat(&[("1", "Q", None), ("2", "R", None)]);
+    output.stdout = output.stdout.replacen("    queue = regular", "    Resource_List.select = 1:host=a15\n\t:ncpus=32\n    Resource_List.place = scatter\n    comment = Not Running: Insufficient amount of resource\n    estimated.start_time = Thu Nov 12 14:34:00 2026\n    queue = regular", 1);
+    let (store, mut d, task, adapter, _) = setup(
+        dir.path(),
+        vec![
+            wait_terminal(&["1", "2"], None),
+            wait_terminal(&["1", "2"], None),
+        ],
+        vec![
+            output.clone(),
+            task_worker::RemoteCommandOutput {
+                stdout: output.stdout.replacen("job_state = Q", "job_state = H", 1),
+                ..output
+            },
+        ],
+    );
+    d.config
+        .clusters
+        .get_mut("sirius")
+        .unwrap()
+        .job_wait
+        .queued_wake_secs = 60;
+    tick_until(&mut d, |_| {
+        store
+            .cluster_job_waits_for_task(task.id)
+            .unwrap()
+            .first()
+            .is_some_and(|w| w.last_status.len() == 2)
+    })
+    .await;
+    // Recreate the dispatcher: queue timing must come from SQLite, not its memory.
+    let clock = d.test_now.clone();
+    let poller = d.cluster_job_poller.clone().unwrap();
+    d = dispatcher_with_test_clock(store.clone(), adapter.clone(), 1, true);
+    d.test_now = clock;
+    d.config.clusters.insert(
+        "sirius".into(),
+        cluster(task_core::cluster_job::ClusterJobWaitLimits {
+            poll_secs: 30,
+            max_wait_secs: 3600,
+            queued_wake_secs: 60,
+        }),
+    );
+    d.set_cluster_liveness_probe(Arc::new(|_: &[String], _: &str| true));
+    d.set_cluster_job_poller(poller);
+    advance(&d, 59);
+    d.tick().unwrap();
+    settle_polls(&mut d).await;
+    assert_eq!(adapter.seen.lock().unwrap().len(), 1);
+    advance(&d, 31);
+    tick_until(&mut d, |_| {
+        store.cluster_job_waits_for_task(task.id).unwrap().len() == 2
+    })
+    .await;
+    {
+        let seen = adapter.seen.lock().unwrap();
+        let jobs = seen[1]
+            .continuation
+            .as_ref()
+            .unwrap()
+            .cluster_jobs
+            .as_ref()
+            .unwrap();
+        assert_eq!(jobs.state, "queue_stalled");
+        assert!(jobs.jobs[0].contains("1:host=a15:ncpus=32"));
+        assert!(jobs.jobs[0].contains("Resource_List.place = scatter"));
+        assert!(jobs.jobs[0].contains("Not Running: Insufficient"));
+        assert!(jobs.jobs[0].contains("estimated.start_time"));
+        assert!(jobs.jobs[1].contains("R"));
+    }
+    settle_polls(&mut d).await;
+    advance(&d, 120);
+    d.tick().unwrap();
+    settle_polls(&mut d).await;
+    assert_eq!(adapter.seen.lock().unwrap().len(), 2);
+    assert_eq!(
+        store.cluster_job_waits_for_task(task.id).unwrap()[1].state,
+        ClusterJobWaitState::Waiting
+    );
+    let events = store.events_for(task.id).unwrap();
+    assert_eq!(consecutive_continuations(&events), 0);
+    assert_eq!(task_ops::derive::no_progress_streak(&events, None), 0);
+}
+
+/// v2 and v3 must wake the waiting unit, carrying all jobs through the real run context.
+#[tokio::test]
+async fn partial_failure_resumes_v2_and_v3_work_units() {
+    let mut v2: serde_json::Value =
+        serde_json::from_str(&plan_json(vec![v2_wu("a", "s1", &[])])).unwrap();
+    v2["schema"] = task_core::EXECUTION_PLAN_SCHEMA_V2.into();
+    v2["phases"] = serde_json::json!([{"key": "s1", "kind": "implement", "title": "s1"}]);
+    for plan in [
+        v2.to_string(),
+        v3_plan(vec![stage("s1", false)], vec![leaf("a", "s1", &[])]),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let root = compound_task(dir.path());
+        store.create_task(&root, vec![]).unwrap();
+        let adapter = Arc::new(TreeWaitAdapter {
+            wait_jobs: vec!["1".into(), "2".into(), "3".into()],
+            plan: StdMutex::new(Some(plan)),
+            waited: std::sync::atomic::AtomicBool::new(false),
+            seen: Arc::new(StdMutex::new(Vec::new())),
+        });
+        let mut d = tree_dispatcher(&store, adapter.clone());
+        d.set_cluster_liveness_probe(Arc::new(|_: &[String], _: &str| true));
+        d.config
+            .clusters
+            .insert("sirius".into(), cluster(Default::default()));
+        d.set_cluster_job_poller(fake_poller(
+            Arc::new(StdMutex::new(VecDeque::from(vec![qstat(&[
+                ("1", "F", Some(1)),
+                ("2", "Q", None),
+                ("3", "R", None),
+            ])]))),
+            Arc::new(StdMutex::new(Vec::new())),
+        ));
+        tick_until(&mut d, |_| {
+            adapter.seen.lock().unwrap().iter().any(|c| {
+                c.continuation
+                    .as_ref()
+                    .and_then(|c| c.cluster_jobs.as_ref())
+                    .is_some_and(|j| j.state == "job_failed")
+            })
+        })
+        .await;
+        let seen = adapter.seen.lock().unwrap();
+        let context = seen
+            .iter()
+            .find(|c| {
+                c.continuation
+                    .as_ref()
+                    .and_then(|c| c.cluster_jobs.as_ref())
+                    .is_some_and(|j| j.state == "job_failed")
+            })
+            .unwrap();
+        let jobs = context
+            .continuation
+            .as_ref()
+            .unwrap()
+            .cluster_jobs
+            .as_ref()
+            .unwrap();
+        assert_eq!(jobs.jobs.len(), 3);
+        assert!(jobs.jobs[0].contains("Exit_status 1"));
+        assert!(jobs.jobs[1].contains("Q"));
+        assert!(jobs.jobs[2].contains("R"));
+        let prompt = task_worker::preamble::continuation_section(context);
+        assert!(prompt.contains("他の job の終了を待たず"));
+        let units = store.work_units_for(root.id).unwrap();
+        let waiting_unit = unit(&units, "a");
+        assert_eq!(waiting_unit.continuations, 0);
+        assert_eq!(
+            task_ops::derive::no_progress_streak(
+                &store.events_for(root.id).unwrap(),
+                Some(&waiting_unit.id)
+            ),
+            0
+        );
+        drop(seen);
+        assert_replay_is_clean(&store);
+    }
 }

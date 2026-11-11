@@ -111,7 +111,7 @@ fn poll_commands_only_carry_valid_ids() {
     );
     assert_eq!(
         poll_command(ClusterScheduler::Slurm, &ids(&["1", "2"])),
-        "sacct -n -P -X -o JobID,State,ExitCode -j 1,2"
+        "sacct -n -P -X -o JobID,State%64,ExitCode -j 1,2"
     );
     assert_eq!(
         poll_command(ClusterScheduler::Pbs, &ids(&["1; rm -rf ~", "2"])),
@@ -285,6 +285,9 @@ fn events_project_into_the_table_and_terminal_transitions_cancel() {
             state: ClusterJobState::Running,
             exit_status: None,
             raw_state: Some("R".into()),
+            scheduling: Vec::new(),
+            queued_since: None,
+            queue_notified: false,
         },
         ClusterJobStatus::unknown("42635"),
     ];
@@ -473,10 +476,7 @@ fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
 
 #[test]
 fn limits_clamp_and_validate() {
-    let limits = ClusterJobWaitLimits {
-        poll_secs: 300,
-        max_wait_secs: 86_400,
-    };
+    let limits = ClusterJobWaitLimits::new(300, 86_400);
     assert!(limits.validate().is_ok());
     let req = |poll: Option<u64>, timeout: Option<u64>| ClusterJobWaitRequest {
         cluster: None,
@@ -489,28 +489,123 @@ fn limits_clamp_and_validate() {
     assert_eq!(limits.clamp(&req(None, None)), (300, 86_400));
     assert_eq!(limits.clamp(&req(Some(10), Some(10))), (300, 300));
     assert_eq!(limits.clamp(&req(Some(900), Some(999_999))), (900, 86_400));
+    assert!(ClusterJobWaitLimits::new(5, 100).validate().is_err());
+    assert!(ClusterJobWaitLimits::new(300, 60).validate().is_err());
     assert!(
-        ClusterJobWaitLimits {
-            poll_secs: 5,
-            max_wait_secs: 100
-        }
-        .validate()
-        .is_err()
+        ClusterJobWaitLimits::new(300, MAX_WAIT_SECS_CEILING + 1)
+            .validate()
+            .is_err()
     );
-    assert!(
-        ClusterJobWaitLimits {
-            poll_secs: 300,
-            max_wait_secs: 60
-        }
-        .validate()
-        .is_err()
+}
+
+/// A scheduler failure can have exit 0, and a signal is distinct from success.
+#[test]
+fn slurm_failure_states_and_signals_are_not_success() {
+    let jobs = ids(&["1", "2", "3", "4", "5", "6", "7"]);
+    let statuses = parse_slurm_sacct(
+        "1|FAILED|0:0\n2|NODE_FAIL|0:0\n3|TIMEOUT|0:0\n4|OUT_OF_MEMORY|0:0\n5|CANCELLED by 123|0:0\n6|COMPLETED|0:9\n7|RUNNING|0:0\n",
+        &jobs,
     );
-    assert!(
-        ClusterJobWaitLimits {
-            poll_secs: 300,
-            max_wait_secs: MAX_WAIT_SECS_CEILING + 1
-        }
-        .validate()
-        .is_err()
+    let mut wait = wait_for(task(crate::Status::Running).id);
+    wait.jobs = jobs;
+    let now = time::OffsetDateTime::now_utc();
+    for failed in &statuses[..6] {
+        let mut jobs = vec![failed.clone(), statuses[6].clone()];
+        assert_eq!(
+            wakeup::observe(&wait, &[], &mut jobs, now, 60),
+            Some("job_failed")
+        );
+    }
+    assert_eq!(statuses[5].exit_status, Some(-9));
+}
+
+/// Observed running/unknown breaks the queue clock; durable receipts are scoped to the owner.
+#[test]
+fn queue_clock_resets_and_receipts_survive_serialization() {
+    let now = time::OffsetDateTime::now_utc();
+    let mut wait = wait_for(task(crate::Status::Running).id);
+    wait.jobs = ids(&["1"]);
+    let observe = |wait: &ClusterJobWait, state: &str, at: i64| {
+        let mut statuses = parse_pbs_qstat_xf(
+            &format!("Job Id: 1\n job_state = {state}\n"),
+            "",
+            &wait.jobs,
+        );
+        let reason = wakeup::observe(
+            wait,
+            &[wait.clone()],
+            &mut statuses,
+            now + time::Duration::seconds(at),
+            60,
+        );
+        (reason, statuses)
+    };
+    let (reason, statuses) = observe(&wait, "Q", 0);
+    assert_eq!(reason, None);
+    wait.last_status = statuses;
+    let (reason, statuses) = observe(&wait, "R", 59);
+    assert_eq!(reason, None);
+    assert!(statuses[0].queued_since.is_none());
+    wait.last_status = statuses;
+    let (_, statuses) = observe(&wait, "H", 60);
+    wait.last_status = statuses;
+    assert_eq!(observe(&wait, "Q", 119).0, None);
+    let (reason, statuses) = observe(&wait, "Q", 120);
+    assert_eq!(reason, Some("queue_stalled"));
+    wait.last_status = statuses;
+    let restored: ClusterJobWait =
+        serde_json::from_str(&serde_json::to_string(&wait).unwrap()).unwrap();
+    assert_eq!(observe(&restored, "H", 240).0, None);
+    let mut qualified = restored.clone();
+    qualified.wait_id = "qualified-rewait".into();
+    qualified.jobs = ids(&["1.sirius-pbs"]);
+    qualified.last_status.clear();
+    let mut statuses = parse_pbs_qstat_xf(
+        "Job Id: 1.sirius-pbs\n job_state = Q\n",
+        "",
+        &qualified.jobs,
+    );
+    assert_eq!(
+        wakeup::observe(
+            &qualified,
+            &[restored.clone()],
+            &mut statuses,
+            now + time::Duration::seconds(300),
+            60
+        ),
+        None
+    );
+    assert!(statuses[0].queue_notified);
+    let mut next = restored.clone();
+    next.wait_id = "another-wait".into();
+    next.work_unit_id = Some("another-owner".into());
+    next.last_status.clear();
+    let mut statuses = parse_pbs_qstat_xf("Job Id: 1\n job_state = Q\n", "", &next.jobs);
+    assert_eq!(
+        wakeup::observe(&next, &[restored], &mut statuses, now, 60),
+        None
+    );
+    assert!(!statuses[0].queue_notified);
+}
+
+/// Only queue wakeups are deduplicated: failed jobs may be rerun using the same ID.
+#[test]
+fn failure_is_not_suppressed_when_the_same_job_is_waited_again() {
+    let mut wait = wait_for(task(crate::Status::Running).id);
+    wait.jobs = ids(&["1", "2"]);
+    let mut statuses = parse_pbs_qstat_xf(
+        "Job Id: 1\n job_state = F\n Exit_status = -14\nJob Id: 2\n job_state = R\n",
+        "",
+        &wait.jobs,
+    );
+    let now = time::OffsetDateTime::now_utc();
+    assert_eq!(
+        wakeup::observe(&wait, &[], &mut statuses, now, 60),
+        Some("job_failed")
+    );
+    wait.last_status = statuses.clone();
+    assert_eq!(
+        wakeup::observe(&wait, &[wait.clone()], &mut statuses, now, 60),
+        Some("job_failed")
     );
 }

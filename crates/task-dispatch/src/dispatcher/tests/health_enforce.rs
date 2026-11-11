@@ -703,9 +703,14 @@ async fn review_repair_not_evaluated_reviewer_does_not_block_a_health_repair() {
     });
     task.budget.max_retries = 0;
     store.insert(&task).unwrap();
+    // `health` も書く: reviewer に health の材料を渡した review は `health` の判定を求める（I7、ADR
+    // 2026-11-07-health-review-integration D5.2）。ADR 2026-11-11-health-generic-review-input の R1 で `[review]` の
+    // 無い（absent）repo も材料を受けるので、この偽の reviewer も空の判定を書く（R6）。試験が守る不変条件は変えない。
     let adapter = Arc::new(
         ParallelWuAdapter::new(Duration::ZERO)
-            .with_review(r#"{"verdicts":[{"criterion":1,"pass":true,"reason":"fine"}]}"#)
+            .with_review(
+                r#"{"verdicts":[{"criterion":1,"pass":true,"reason":"fine"}],"health":{"findings":[]}}"#,
+            )
             .with_action("repair-1", commit_fixed),
     );
     let mut d = non_celeris_dispatcher(store.clone(), adapter, ws.path(), 1);

@@ -48,9 +48,12 @@ impl WorkerAdapter for ReviewAdapter {
     ) -> Result<RunOutcome, AdapterError> {
         assert_eq!(req.task.kind, TaskKind::Review, "only reviews run here");
         std::fs::create_dir_all(&req.artifacts_dir).unwrap();
+        // `health` も書く: reviewer に health の材料を渡した review は `health` の判定を求める（I7、ADR
+        // 2026-11-07-health-review-integration D5.2）。ADR 2026-11-11-health-generic-review-input の R1 で `[review]` の
+        // 無い（absent）repo も材料を受けるので、この偽の reviewer も空の判定を書く（R6）。試験が守る不変条件は変えない。
         std::fs::write(
             req.artifacts_dir.join("review.json"),
-            r#"{"verdicts":[{"criterion":1,"pass":true,"reason":"ok"}]}"#,
+            r#"{"verdicts":[{"criterion":1,"pass":true,"reason":"ok"}],"health":{"findings":[]}}"#,
         )
         .unwrap();
         let started = self.clock.fetch_add(REVIEW_RUN_SECS, Ordering::SeqCst);

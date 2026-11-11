@@ -1,5 +1,47 @@
 use super::*;
 
+/// ADR-0125 (b): review の結果を読む試験の待ち。`ids` の task がすべて終端の状態（Done に限らない）になり、`ready` が
+/// 真になるまで tick を駆動する。review の必須検査は tick の外の task で走るので、tick の回数は進捗の尺度にならない。
+/// 上限は [`STATE_WAIT_GUARD`] の保険だけで、超えたら最後の状態と event を出して落とす。
+async fn run_until_terminal_and(
+    d: &mut Dispatcher,
+    store: &Arc<dyn TaskStore>,
+    ids: &[TaskId],
+    mut ready: impl FnMut() -> bool,
+) {
+    let settled = run_until_state(d, || {
+        ids.iter().all(|id| {
+            store
+                .get(*id)
+                .unwrap()
+                .expect("task exists")
+                .status
+                .is_terminal()
+        }) && ready()
+    })
+    .await;
+    let last_state = || -> Vec<_> {
+        ids.iter()
+            .map(|id| {
+                (
+                    store.get(*id).unwrap().map(|task| task.status),
+                    store.events_for(*id).unwrap(),
+                )
+            })
+            .collect()
+    };
+    assert!(
+        settled,
+        "not settled within {STATE_WAIT_GUARD:?}: {:?}",
+        last_state()
+    );
+}
+
+/// [`run_until_terminal_and`] の、終端の状態だけを待つ形。
+async fn run_until_terminal(d: &mut Dispatcher, store: &Arc<dyn TaskStore>, ids: &[TaskId]) {
+    run_until_terminal_and(d, store, ids, || true).await;
+}
+
 /// ADR-0059 D3: `mode` 省略・`repos` 無し（コードを触らない仕事）で worktree 準備が exit 65 になったら、
 /// 失敗にせず `shared`（`SyncMode::None`）として続行し、`Event::WorkspaceModeDowngraded` を残し、
 /// `task.workspace.mode` を `Some(Shared)` に書き戻す。
@@ -123,7 +165,7 @@ async fn a_local_git_workspace_runs_in_a_per_task_worktree_on_its_own_branch() {
         files: vec!["in-tree".into()],
     });
     let mut d = worktree_dispatcher(store.clone(), adapter, root.path(), None);
-    run_until_idle(&mut d, 60).await;
+    run_until_terminal(&mut d, &store, &[task.id]).await;
 
     let task_dir = root.path().join(task.id.to_string());
     let tree = task_dir.join("tree");
@@ -220,6 +262,8 @@ async fn git_worktree_task_registers_report_md_as_an_artifact() {
         root.path(),
         None,
     );
+    run_until_terminal(&mut d, &store, &[task_id]).await;
+    // review の結果は出ている。残りの片付けで idle になることだけを確かめる。
     let report = run_until_idle(&mut d, 400).await;
     assert!(report.idle, "{report:?}");
     assert_eq!(store.get(task_id).unwrap().unwrap().status, Status::Done);
@@ -490,7 +534,7 @@ async fn a_dirty_worktree_is_kept_and_a_progress_line_is_appended() {
         files: vec!["left-behind".into()],
     });
     let mut d = worktree_dispatcher(store.clone(), adapter, root.path(), None);
-    run_until_idle(&mut d, 60).await;
+    run_until_terminal(&mut d, &store, &[task.id]).await;
     d.tick().unwrap();
 
     let tree = root.path().join(task.id.to_string()).join("tree");
@@ -830,7 +874,7 @@ async fn a_compaction_task_does_not_get_a_worktree_even_when_its_project_has_a_p
         "compaction task should not get any worktree"
     );
 
-    run_until_idle(&mut d, 60).await;
+    run_until_terminal(&mut d, &store, &[task.id]).await;
     assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
 
     let task_dir = ws_root.path().join(task.id.to_string());
@@ -978,7 +1022,7 @@ async fn a_host_task_still_runs_when_no_container_runtime_is_available() {
     let mut d = worktree_dispatcher(store.clone(), adapter, root.path(), None);
     // 既定（`RuntimeProbe::default()` = 何も使えない）のまま走らせる。
     assert!(!d.container_probe().is_available());
-    run_until_idle(&mut d, 60).await;
+    run_until_terminal(&mut d, &store, &[task.id]).await;
     assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
     assert_eq!(
         seen.lock().unwrap().len(),
@@ -1058,7 +1102,7 @@ async fn the_repository_check_commands_are_the_reviewers_default() {
         d.default_checks(&store.get(task.id).unwrap().unwrap()),
         vec!["test -f in-tree".to_string()]
     );
-    run_until_idle(&mut d, 60).await;
+    run_until_terminal(&mut d, &store, &[task.id, explicit.id]).await;
 
     let verdicts = |id: TaskId| -> Vec<(usize, bool, String)> {
         store
@@ -1273,7 +1317,7 @@ async fn a_parallel_unit_runs_in_its_own_worktree_with_its_own_artifacts() {
     adopt_v2_plan(&store, task.id, &["build"], vec![v2_wu("a", "build", &[])]);
     let adapter = Arc::new(ParallelWuAdapter::new(Duration::from_millis(10)));
     let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 3, 3, 3);
-    run_until_idle(&mut d, 300).await;
+    run_until_terminal(&mut d, &store, &[task.id]).await;
     let task_dir = root.path().join(task.id.to_string());
     let seen = adapter.seen.lock().unwrap().clone();
     assert_eq!(seen.len(), 1);
@@ -1324,7 +1368,7 @@ async fn a_v1_plan_stays_serial_without_work_unit_worktrees() {
     .unwrap();
     let adapter = Arc::new(ParallelWuAdapter::new(Duration::from_millis(100)));
     let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 3, 3, 3);
-    run_until_idle(&mut d, 600).await;
+    run_until_terminal(&mut d, &store, &[task.id]).await;
     assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
     assert_eq!(adapter.max_active(), 1, "v1 は直列");
     let units = store.work_units_for(task.id).unwrap();
@@ -1486,7 +1530,19 @@ async fn review_records_each_repositories_own_definition_and_worktree_results() 
             files: vec![],
         });
         let mut d = worktree_dispatcher(store.clone(), adapter, ws_root.path(), None);
-        run_until_idle(&mut d, 60).await;
+        // `second_passes` が false の回は Done にならないので、終端の状態と両 repo の evidence を待つ（ADR-0125 (b)）。
+        run_until_terminal_and(&mut d, &store, &[task.id], || {
+            let events = store.events_for(task.id).unwrap();
+            repos.iter().all(|repo| {
+                events.iter().any(|(_, event)| {
+                    matches!(
+                        event,
+                        Event::RequiredChecksEvaluated { repo_id, .. } if *repo_id == repo.id
+                    )
+                })
+            })
+        })
+        .await;
         let events = store.events_for(task.id).unwrap();
         for (index, command, pass) in [
             (0, "test -f first-only", true),

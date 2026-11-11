@@ -14,8 +14,16 @@
 #   bash <this> features <out.json> <crate,...> <crate,...>
 #       2 つの組 A・B について cargo tree -e features の (package, feature) の差を出し、
 #       A → B → A → B の順に cargo nextest run --no-run を走らせて各回の Compiling 行を記録する（作り直しの原因の確認）。
+#   bash <this> compare <out.json> <crate,...>
+#       base（git merge-base HEAD main）と HEAD を同じ run で交互に測る（試験は走らせない）。base は $TMPDIR の下に
+#       git worktree add した写しで測り、終わったら git worktree remove する。crate ごとに base と HEAD の順を入れ替える。
+#       targets    : cargo metadata の target の数（kind ごと。build しない）
+#       build      : cargo nextest run -p <crate> --no-run で settle した後、src の mtime を進めて同じ build を測る
+#                    （その crate の lib と全 test target の作り直し・link）。呼び方は両側で同じ。
+#       edit_verify: run の edit_verify と同じ手順だが、build はその側の scripts/dev/test-affected.sh の nextest の行
+#                    （base は -p の組、HEAD は --workspace -E の filter）を --no-run で走らせる。その後に同じ側の doc test の行も測る。
 #   bash <this> --validate <out.json>
-#       run の出力に必要な欄があれば 0。測れなかった項目は skipped 欄（crate・item・reason）に理由があれば通す。
+#       run・compare の出力に必要な欄があれば 0。測れなかった項目は skipped 欄（crate・item・reason）に理由があれば通す。
 #
 # 環境変数:
 #   MEASURE_DEADLINE  epoch 秒。これを過ぎたら残りの段を走らせず、skipped に理由を書く（run の壁時計に収めるため）。
@@ -36,6 +44,54 @@ try:
 except Exception as e:
     print(f"invalid: cannot read {p}: {e}"); sys.exit(1)
 errs = []
+if d.get("schema") == "health-v2-r5-build-compare/1":
+    # compare の出力: base と HEAD の両方に、同じ crate の targets・build・edit_verify がある（無い項目は skipped に理由）。
+    for k in ("label", "git_head", "merge_base_main", "loadavg_before", "loadavg_after", "order", "sides", "skipped"):
+        if k not in d:
+            errs.append(f"missing top-level field: {k}")
+    skipped = set()
+    for s in d.get("skipped", []):
+        if not str(s.get("reason", "")).strip():
+            errs.append(f"skipped entry without reason: {s}")
+        skipped.add((s.get("side"), s.get("crate"), s.get("item")))
+    req = {
+        "targets": ("test_targets", "kinds"),
+        "build": ("cmd", "secs", "exit", "compiled_units", "test_binaries", "linked_test_binaries",
+                  "loadavg_before", "loadavg_after"),
+        "edit_verify": ("edited_file", "affected", "cmd", "settle_secs", "list_secs", "rebuild_secs", "rebuild_exit",
+                        "rebuild_compiled_units", "test_binaries", "linked_test_binaries", "edit_to_verify_secs",
+                        "loadavg_before", "loadavg_after"),
+    }
+    sides = d.get("sides", {})
+    crates = [o.get("crate") for o in d.get("order", [])]
+    if set(sides) != {"base", "head"}:
+        errs.append(f"sides must be base and head: {sorted(sides)}")
+    if not crates:
+        errs.append("order is empty")
+    both = 0
+    for c in dict.fromkeys(crates):
+        built = 0
+        for side in ("base", "head"):
+            m = sides.get(side, {}).get("crates", {}).get(c, {})
+            for item, fields in req.items():
+                if (side, c, item) in skipped:
+                    continue
+                v = m.get(item)
+                if not isinstance(v, dict):
+                    errs.append(f"{side}.{c}.{item}: missing (and not in skipped)")
+                    continue
+                errs.extend(f"{side}.{c}.{item}: missing field {f}" for f in fields if f not in v)
+            built += isinstance(m.get("build"), dict)
+        both += built == 2
+    if crates and both == 0:
+        errs.append("no crate has build values on both base and head")
+    for side in ("base", "head"):
+        if not sides.get(side, {}).get("git_head"):
+            errs.append(f"{side}: missing git_head")
+    if errs:
+        print("invalid:"); [print("  " + e) for e in errs]; sys.exit(1)
+    print(f"ok: compare {len(set(crates))} crates (both sides built: {both}), {len(skipped)} skipped item(s)")
+    sys.exit(0)
 for k in ("schema", "label", "git_head", "loadavg_before", "loadavg_after", "crates", "skipped"):
     if k not in d:
         errs.append(f"missing top-level field: {k}")
@@ -83,7 +139,9 @@ case "$mode" in
        label="$2"; out="$3"; crates_csv="$4" ;;
   features) [ $# -eq 4 ] || { echo "usage: $0 features <out.json> <crate,...> <crate,...>" >&2; exit 2; }
        out="$2"; set_a="$3"; set_b="$4" ;;
-  *) echo "usage: $0 run|features|--validate ..." >&2; exit 2 ;;
+  compare) [ $# -eq 3 ] || { echo "usage: $0 compare <out.json> <crate,...>" >&2; exit 2; }
+       out="$2"; crates_csv="$3"; label=compare ;;
+  *) echo "usage: $0 run|features|compare|--validate ..." >&2; exit 2 ;;
 esac
 
 out="$(realpath -m "$out")"
@@ -201,6 +259,165 @@ PY
     step "_build" "$i-$s" "$(python3 -I -c 'import json,sys; print(json.dumps({"set":sys.argv[1],"exit":int(sys.argv[2]),"secs":round(float(sys.argv[4])-float(sys.argv[3]),2),"compiled":json.loads(sys.argv[5]),"loadavg_before":sys.argv[6],"loadavg_after":sys.argv[7]}))' "$set_csv" "$rc" "$t0" "$t1" "$(compiled_names "$lg")" "$l0" "$(la)")"
   done
   assemble; cat "$out"; exit 0
+fi
+
+# ---- compare モード ------------------------------------------------------------------------------------
+if [ "$mode" = compare ]; then
+  [ -n "$base_sha" ] || { echo "measure: git merge-base HEAD main が無い" >&2; exit 2; }
+  head_tree="$(git rev-parse --show-toplevel)"
+  base_tree="$(mktemp -d "${TMPDIR:?TMPDIR が要る}/r5-measure-base.XXXXXX")" && rmdir "$base_tree"
+  git worktree add --detach "$base_tree" "$base_sha" >"$raw/worktree.log" 2>&1 || { cat "$raw/worktree.log" >&2; exit 2; }
+  cleanup() { git -C "$head_tree" worktree remove --force "$base_tree" >>"$raw/worktree.log" 2>&1; echo "worktree remove: exit $?" >>"$raw/worktree.log"; }
+  trap cleanup EXIT
+  tree_of() { if [ "$1" = head ]; then echo "$head_tree"; else echo "$base_tree"; fi; }
+  IFS=, read -ra crates <<<"$crates_csv"
+  order_json="$(python3 -I -c 'import json,sys; cs=sys.argv[1].split(","); print(json.dumps([{"crate":c,"side":s} for i,c in enumerate(cs) for s in (("base","head") if i%2==0 else ("head","base"))]))' "$crates_csv")"
+  assemble_cmp() {
+    python3 -I - "$steps" "$out" "$head_sha" "$base_sha" "$la_start" "$(la)" "$t_start" "$host" "$order_json" <<'PY'
+import json, sys, time
+steps, out, head, base, la0, la1, t0, host, order = sys.argv[1:10]
+d = {"schema": "health-v2-r5-build-compare/1", "label": "compare", "git_head": head, "merge_base_main": base,
+     "base_tree": "git worktree add --detach $TMPDIR/r5-measure-base.* <merge_base_main>（計測の後に git worktree remove）",
+     "host": json.loads(host), "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(t0))),
+     "elapsed_secs": round(time.time() - float(t0), 1), "loadavg_before": la0, "loadavg_after": la1,
+     "order": json.loads(order), "skipped": [],
+     "sides": {"base": {"git_head": base, "crates": {}}, "head": {"git_head": head, "crates": {}}}}
+for line in open(steps):
+    s = json.loads(line)
+    if "skip" in s:
+        d["skipped"].append({"side": s["side"], "crate": s["crate"], "item": s["item"], "reason": s["skip"]})
+    elif s["crate"] == "_side":
+        d["sides"][s["side"]][s["item"]] = s["data"]
+    else:
+        d["sides"][s["side"]]["crates"].setdefault(s["crate"], {})[s["item"]] = s["data"]
+json.dump(d, open(out, "w"), indent=1, ensure_ascii=False)
+PY
+  }
+  cstep() { python3 -I -c 'import json,sys; print(json.dumps({"side":sys.argv[1],"crate":sys.argv[2],"item":sys.argv[3],"data":json.loads(sys.argv[4])}))' "$@" >>"$steps"; assemble_cmp; }
+  cskip() { python3 -I -c 'import json,sys; print(json.dumps({"side":sys.argv[1],"crate":sys.argv[2],"item":sys.argv[3],"skip":sys.argv[4]}))' "$@" >>"$steps"; assemble_cmp; }
+  # bins <json> <t0> <crate,...>: 一覧の binary の数、うち指定 crate の数、指定 crate で t0 以後に書かれた数、全体で t0 以後に書かれた数
+  bins() {
+    python3 -I - "$@" <<'PY'
+import json, os, sys
+try:
+    b = json.load(open(sys.argv[1]))["rust-binaries"]
+except Exception:
+    print("null null null null"); sys.exit(0)
+t0, pk = float(sys.argv[2]), set(sys.argv[3].split(","))
+new = lambda v: os.path.exists(v["binary-path"]) and os.path.getmtime(v["binary-path"]) >= t0
+mine = [v for v in b.values() if v["binary-id"].split("::")[0] in pk]
+print(len(b), len(mine), sum(map(new, mine)), sum(map(new, b.values())))
+PY
+  }
+  # その側の test-affected.sh から、対象 crate の引数を作る行と nextest・doc test の行を取り出す（呼び方の写しを持たない）。
+  for side in base head; do
+    ta="$(tree_of "$side")/scripts/dev/test-affected.sh"
+    grep -E '^\s*(args=\(\)|filter=""|while IFS= read -r c; do (args|filter).*<<<"\$crates")\s*$' "$ta" >"$raw/inv-$side.prep"
+    grep -E '^\s*ttl_run cargo nextest run ' "$ta" | sed -E 's/^\s*ttl_run //' >"$raw/inv-$side.nextest"
+    grep -E '^\s*ttl_run cargo test --doc' "$ta" | sed -E 's/^\s*ttl_run //' >"$raw/inv-$side.doc"
+    if [ "$(wc -l <"$raw/inv-$side.prep")" -ne 2 ] || [ "$(wc -l <"$raw/inv-$side.nextest")" -ne 1 ] || [ "$(wc -l <"$raw/inv-$side.doc")" -ne 1 ]; then
+      echo "measure: $ta から nextest・doc test の呼び方を取り出せない（$raw/inv-$side.*）" >&2; exit 2
+    fi
+    cstep "$side" _side invocation "$(python3 -I -c 'import json,sys; print(json.dumps({"prep":[l.strip() for l in open(sys.argv[1])],"nextest":open(sys.argv[2]).read().strip(),"doc_test":open(sys.argv[3]).read().strip()}))' "$raw/inv-$side.prep" "$raw/inv-$side.nextest" "$raw/inv-$side.doc")"
+    (cd "$(tree_of "$side")" && cargo metadata --no-deps --format-version 1 2>/dev/null) >"$TMPDIR/r5-metadata-$side.json"
+    for c in "${crates[@]}"; do
+      cstep "$side" "$c" targets "$(python3 -I - "$TMPDIR/r5-metadata-$side.json" "$c" <<'PY'
+import json, sys, collections
+m = json.load(open(sys.argv[1]))
+p = next(p for p in m["packages"] if p["name"] == sys.argv[2])
+kinds = collections.Counter(k for t in p["targets"] for k in t["kind"])
+print(json.dumps({"kinds": dict(sorted(kinds.items())), "test_targets": kinds.get("test", 0),
+                  "test_target_names": sorted(t["name"] for t in p["targets"] if "test" in t["kind"])}))
+PY
+)"
+    done
+  done
+  # side_run <side> <nextest|list|doc> <crates（改行区切り）>: その側の tree で、その側の test-affected.sh の行を実行する。
+  side_run() {
+    local side="$1" kind="$2" crates="$3" cmd
+    cmd="$(cat "$raw/inv-$side.$( [ "$kind" = doc ] && echo doc || echo nextest)")"
+    case "$kind" in
+      nextest) cmd="timed 30 $cmd --no-run" ;;
+      list) cmd="${cmd/cargo nextest run/cargo nextest list --list-type binaries-only --message-format json}" ;;
+      doc) cmd="timed 30 $cmd" ;;
+    esac
+    (cd "$(tree_of "$side")" && eval "$(cat "$raw/inv-$side.prep")" && eval "$cmd")
+  }
+  probe=$'\n// edit-verify probe (R5 measure.sh compare)\n'
+  measure_one() {
+    local side="$1" c="$2" tree f pre rc src lrc drc l0 l1 t0 t1 t2 t3 t4 nb nm nl na aff
+    tree="$(tree_of "$side")"; pre="$raw/$side-$c"
+    f="crates/$c/src/lib.rs"; git -C "$tree" ls-files --error-unmatch "$f" >/dev/null 2>&1 || f="crates/$c/src/main.rs"
+    # build: 両側とも -p <crate>。settle の後に src の mtime を進め、その crate と test target の作り直しを測る。
+    (cd "$tree" && timed 60 cargo nextest run -p "$c" --no-run) >"$pre-build-settle.log" 2>&1; src=$?
+    if [ "$src" -ge 124 ] && [ "$src" -le 137 ]; then
+      cskip "$side" "$c" build "settle の build が MEASURE_DEADLINE までに終わらない（exit $src）"
+    else
+      touch "$tree/$f"; l0="$(la)"; t0="$(now)"
+      (cd "$tree" && timed 30 cargo nextest run -p "$c" --no-run) >"$pre-build.log" 2>&1; rc=$?; t1="$(now)"
+      (cd "$tree" && cargo nextest list -p "$c" --list-type binaries-only --message-format json 2>/dev/null) >"$pre-build.binaries.json"
+      read -r nb nm nl na <<<"$(bins "$pre-build.binaries.json" "$t0" "$c")"
+      cstep "$side" "$c" build "$(python3 -I -c 'import json,sys; a=sys.argv; c=json.loads(a[5]); n=lambda x: None if x=="null" else int(x); print(json.dumps({"cmd":"cargo nextest run -p "+a[10]+" --no-run（settle の後に "+a[11]+" の mtime を進める）","exit":int(a[1]),"timed_out":a[1] in ("124","137"),"settle_exit":int(a[4]),"secs":round(float(a[3])-float(a[2]),2),"compiled_units":len(c),"compiled":c,"test_binaries":n(a[6]),"linked_test_binaries":n(a[7]),"loadavg_before":a[8],"loadavg_after":a[9]}))' \
+        "$rc" "$t0" "$t1" "$src" "$(compiled_names "$pre-build.log")" "$nm" "$nl" "$l0" "$(la)" "$c" "$f")"
+    fi
+    # edit_verify: 対象 crate を決め、その組で settle してから、編集 → --list → その側の nextest の行（--no-run）→ doc test の行。
+    printf '%s' "$probe" >>"$tree/$f"
+    (cd "$tree" && CELERIS_WU_BASE=HEAD bash scripts/dev/test-affected.sh --list) >"$pre-edit.list" 2>"$pre-edit.list.err"
+    git -C "$tree" checkout -- "$f"
+    aff="$(grep -v ':' "$pre-edit.list")"
+    if [ -z "$aff" ]; then cskip "$side" "$c" edit_verify "test-affected.sh --list が crate を返さなかった（$pre-edit.list.err）"; return; fi
+    t0="$(now)"; side_run "$side" nextest "$aff" >"$pre-edit-settle.log" 2>&1; src=$?
+    if [ "$src" -ge 124 ] && [ "$src" -le 137 ]; then
+      cskip "$side" "$c" edit_verify "settle の build が MEASURE_DEADLINE までに終わらない（exit $src）"; return
+    fi
+    l0="$(la)"; printf '%s' "$probe" >>"$tree/$f"; t1="$(now)"
+    (cd "$tree" && CELERIS_WU_BASE=HEAD bash scripts/dev/test-affected.sh --list) >"$pre-edit.list2" 2>>"$pre-edit.list.err"; lrc=$?
+    t2="$(now)"
+    side_run "$side" nextest "$aff" >"$pre-edit.log" 2>&1; rc=$?; t3="$(now)"
+    if [ "$rc" = 125 ]; then
+      git -C "$tree" checkout -- "$f"
+      cskip "$side" "$c" edit_verify "MEASURE_DEADLINE までの残りが 30 秒未満で、編集の後の再 build を走らせなかった（settle は済み）"; return
+    fi
+    side_run "$side" doc "$aff" >"$pre-doc.log" 2>&1; drc=$?; t4="$(now)"
+    side_run "$side" list "$aff" >"$pre-edit.binaries.json" 2>/dev/null
+    git -C "$tree" checkout -- "$f"; l1="$(la)"
+    read -r nb nm nl na <<<"$(bins "$pre-edit.binaries.json" "$t2" "$(echo "$aff" | paste -sd,)")"
+    cstep "$side" "$c" edit_verify "$(python3 -I - "$f" "$pre-edit.list2" "$lrc" "$rc" "$src" "$t0" "$t1" "$t2" "$t3" "$t4" "$drc" \
+      "$(compiled_names "$pre-edit-settle.log")" "$(compiled_names "$pre-edit.log")" "$(compiled_names "$pre-doc.log")" \
+      "$nb" "$nm" "$nl" "$na" "$l0" "$l1" "$pre-doc.log" "$raw/inv-$side.nextest" "$raw/inv-$side.doc" "$pre-edit-settle.log" <<'PY'
+import json, re, sys
+a = sys.argv
+lines = open(a[2]).read().splitlines()
+settle_c, reb_c, doc_c = json.loads(a[12]), json.loads(a[13]), json.loads(a[14])
+n = lambda x: None if x == "null" else int(x)
+doc = open(a[21], errors="replace").read()
+res = [tuple(map(int, m.groups())) for m in re.finditer(r"test result: \w+\. (\d+) passed; (\d+) failed; (\d+) ignored", doc)]
+print(json.dumps({"edited_file": a[1], "affected": [l for l in lines if ":" not in l],
+  "extra_checks": [l for l in lines if ":" in l],
+  "cmd": open(a[22]).read().strip() + " --no-run", "doc_test_cmd": open(a[23]).read().strip(),
+  "settle_exit": int(a[5]), "settle_secs": round(float(a[7]) - float(a[6]), 2), "settle_compiled_units": len(settle_c), "settle_compiled": settle_c,
+  "list_exit": int(a[3]), "list_secs": round(float(a[8]) - float(a[7]), 2),
+  "rebuild_exit": int(a[4]), "rebuild_timed_out": a[4] in ("124", "137"),
+  "rebuild_secs": round(float(a[9]) - float(a[8]), 2),
+  "rebuild_compiled_units": len(reb_c), "rebuild_compiled": reb_c,
+  "listed_binaries": n(a[15]), "test_binaries": n(a[16]), "linked_test_binaries": n(a[17]), "linked_binaries_all": n(a[18]),
+  "edit_to_verify_secs": round(float(a[9]) - float(a[7]), 2),
+  "doc_test_exit": int(a[11]), "doc_test_secs": round(float(a[10]) - float(a[9]), 2),
+  "doc_test_compiled_units": len(doc_c), "doc_test_passed": sum(r[0] for r in res), "doc_test_failed": sum(r[1] for r in res),
+  "doc_test_ignored": sum(r[2] for r in res), "edit_to_verify_with_doc_secs": round(float(a[10]) - float(a[7]), 2),
+  "loadavg_before": a[19], "loadavg_after": a[20]}))
+PY
+)"
+  }
+  i=0
+  for c in "${crates[@]}"; do
+    if [ $((i % 2)) -eq 0 ]; then sides="base head"; else sides="head base"; fi
+    for side in $sides; do measure_one "$side" "$c"; done
+    i=$((i + 1))
+  done
+  assemble_cmp
+  cat "$out"
+  validate "$out"; exit $?
 fi
 
 # ---- run モード ----------------------------------------------------------------------------------------

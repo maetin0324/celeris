@@ -40,6 +40,8 @@ release と昇格を通す。KB の他のページ（curation が書いた `proj
   `skills/<name>/` と丸ごと置き換え（release に無い file は消す）、その path だけを `git add` して、差があれば
   `selfdeploy: sync CoS skills from release <sha12>` で commit する。他の path は stage しないので、curation の未 commit の変更も
   commit されない。KB が git でなければ写すだけ。`rollback.sh` も戻した先の release で同じ段を呼ぶ。
+- この ADR より前に作った release（rollback の戻り先など）は `skills/` を持たない。そのときは KB を変えずに log に残して終わる（exit 0）。
+  KB が config と合わなければ D3 が CoS run を止めて知らせる。release.sh は束ねられなければ release を作らないので、新しい release は必ず `skills/` を持つ。
 - 写しの失敗は昇格を取り消さない（daemon は既に新しい）。exit 4 と log で知らせ、D3 が CoS run を止めて受信箱に出す。
 - 時機を昇格の後にした理由: 昇格の前に写すと、昇格が失敗して旧 daemon に戻ったときに KB だけが新しくなる。
   昇格の後なら、新しい daemon が起きてから写すまでの間（数秒）だけ D3 が CoS run を止める。

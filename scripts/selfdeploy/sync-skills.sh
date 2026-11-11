@@ -11,7 +11,12 @@ set -euo pipefail
 REL="$1"
 KB="$2"
 SRC="$REL/skills"
-[ -d "$SRC" ] || { echo "sync-skills: $SRC is missing (release built before the CoS skill bundle?)" >&2; exit 1; }
+# A release built before ADR 2026-11-11-cos-skill-sync (e.g. the target of a rollback) has no
+# bundle: the KB is left as it is, and the claim gate (D3) holds CoS runs if its skills do not fit.
+if [ ! -d "$SRC" ]; then
+  echo "sync-skills: $SRC is missing (release built before the CoS skill bundle); the KB is left as it is"
+  exit 0
+fi
 mkdir -p "$KB/skills"
 paths=()
 for dir in "$SRC"/*/; do

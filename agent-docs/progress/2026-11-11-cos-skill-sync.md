@@ -52,11 +52,12 @@ updated: 2026-11-11
 
 ## 未解決事項
 
-- run 1 の時点で落ちる試験が 3 本ある（CoS を有効にして KB の skill を置かない fixture で、照合の知らせが増えた）:
-  `dispatcher::tests::credential_e2e::credential_wait_notifies_through_the_outbox_without_any_run_over_full_ticks`（credential_e2e.rs:625）、
-  `dispatcher::tests::project_wake::project_wake_idle_7days`（project_wake.rs:659）、`project_wake_cron_idle`（project_wake.rs:688）。
-  fixture（credential_e2e.rs:553、project_wake.rs:124 の `set_cos_chat_launch` の前）で `knowledge.root` を一時 dir にし `write_fixture` を呼ぶのが直し方の見込み（未確認）。
-- `bash scripts/dev/test-affected.sh` は run 1 では未実行。
+- run 3 の test-affected（8266 件、4 失敗・1 TIMEOUT）の後に直したもの: ADR の link（ADR-0127 へ）、`actor_trace_flow4`・`deployment_audit`
+  （試験の偽 release に `skills/` が無く promote が exit 4。`skills/` の無い古い release では KB を変えずに exit 0 にした。ADR D2 に追記）、
+  `tick_scale_baseline`（script_compare の Env の KB を一時 dir にし照合を通る skill を置いた）。この 3 本は個別に合格。
+- 残る 2 本は未確認: `task-worker browser::post_login_tests::daemon_post_login_unconfirmed_keeps_observation_stopped_and_names_the_reason`（FAIL）と
+  `celeris-campaign::k4_cells_validity real_k4_archive_grades_thirty_of_thirty_two`（600 秒 TIMEOUT）。どちらも CoS の照合と関係の無い経路で、負荷の影響と見ているが未確認。
+- 直した後の `bash scripts/dev/test-affected.sh` の再実行は未了。
 
 - KB の git の commit の author は `celeris selfdeploy <selfdeploy@celeris.invalid>`（`SD_KB_GIT_NAME`・`SD_KB_GIT_EMAIL` で変えられる）。
   curation の commit と同じ author にするかは未確認。

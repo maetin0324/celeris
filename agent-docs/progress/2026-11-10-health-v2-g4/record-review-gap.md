@@ -70,38 +70,46 @@ task 01M6TYVJSXBZMSBC0YGAT2TTX0 の WorkUnit record-review-gap の記録。コ�
 - `phase 6: record-review-gap の進捗を置く`
 - `phase 6: G4-R1 修正後の目的ごとの結果と提出証拠を記録する`
 - `phase 6: 規定の検査の結果を進捗に書く`
+- `phase 6: run の後の check の不合格（v8 の build 環境）と再実行の結果を進捗に書く`
+
+## run の後の check の不合格と対処（attempt 3）
+- 症状: attempt 2 の run の後に celeris が走らせた計画の check 1（`cargo nextest run -p task-dispatch --lib -E 'test(/health_generic_/) | test(/health_review_input_/) | test(/g4_r1_review_request_/)'`）が、v8 の lib のコンパイルで `could not find native static library rusty_v8` になり、exit 101 で落ちた。試験は 1 件も走っていない。
+- 原因: この WorkUnit の `CARGO_TARGET_DIR` は scratch seed の写し（`target-origin.json` は `origin: seed`、写し元は `target-origin.json` の `seed` が指す seed の古い世代、作成は 2026-11-11 20:35:42Z）。v8 の build script の出力 `debug/build/v8-*/output` の `cargo:rustc-link-search` が、その古い世代の `target/debug/gn_out/obj` を指していた。seed の pool には 20:46 に `current` が指した現行の世代の dir しか無く、指す先の dir は無かった。features の違う `-p task-dispatch --lib` の build で v8 の lib を作り直すときに link が落ちる。[fix-v8-env.md](fix-v8-env.md) と同じ既知の build 環境の不具合で、repo のコードの欠陥ではない。
+- 対処: この WorkUnit の target で `cargo clean -p v8` を実行した（38 file、230.1 MiB を削除）。次の build で v8 の build script が `~/.cargo/config.toml` の `RUSTY_V8_ARCHIVE` から offline で作り直し、link-search は target 自身の `debug/gn_out/obj` を指すようになった（[fix-v8-env.md](fix-v8-env.md) の検査 1 の台本で `EXISTS` 1 件、`MISSING` 0 件）。repo のコード・試験・検査器・policy は変えていない。
+- 注意: celeris の check が別の target（seed の新しい写し）で走り、その後に seed の世代が替わると、同じ不具合がもう一度起きうる。恒久の直しは seed の仕組みの側にある（G4 の範囲外。[G4 のまとめ](../2026-11-10-health-v2-g4.md) の提案 5）。
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
 - 基準について: この WorkUnit の `$CELERIS_WU_BASE` は開始時の snapshot で、そこからの code の差分は無い。そのまま走らせると docs だけの軽い経路になるので、task 全体の証拠にするため `env -u CELERIS_WU_BASE` で基準を `git merge-base HEAD main` にした。対象（`--list`）は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。
 - 最終同期について: この WorkUnit では main を merge していない。WU の中で main を取り込むと WU の health の base に対して main の policy file の変更が `policy.changed` になるので、main の取り込みは final review の前の celeris の同期に任せる。この WorkUnit の最後の同期は、開始時の基点（commit『integrate wu/record (phase record)』）。
-- 実行した HEAD: test-affected と G4 の試験は commit『phase 6: record-review-gap の進捗を置く』の後に実行した。その後の commit『phase 6: G4-R1 修正後の目的ごとの結果と提出証拠を記録する』は 2 つの進捗 file だけを変える（code の差分 0）。clippy・fmt・文書検査・範囲の check は、その commit の後の HEAD で実行した。
-- `env -u CELERIS_WU_BASE bash scripts/dev/test-affected.sh` → exit 0（790 秒。load average の 1 分平均は開始時 4.6、終了時 23）。nextest 3764 件すべて合格（524.9 秒、slow 32 件）、11 件 skip。対象 package の doc test も合格。repo-health は verdict pass・exit 0・fail 級 0・new 0・worsened 0（既存 711 件）。検査器自身の試験 94 件は `OK (expected failures=2)`（G1・G2 の 2 件だけ）、repo_health_gate は 7 件すべて OK、script bundle の SKIP は 0 件。
-- `cargo nextest run -p celeris -p celeris-campaign -p celerisctl -p llm-proxy -p task-dispatch --no-fail-fast -E 'package(task-dispatch) & (test(/g4_r1_review_request_/) | test(/health_generic_/))'` → exit 0。45 件すべて合格（`g4_r1_review_request_` 17 件、`health_generic_` 28 件。4 件の `…_reaches_reviewer` を含む）。
-  - 注: `cargo nextest run -p task-dispatch --lib …` 単独は `could not find native static library rusty_v8`（exit 101）で build が落ちた。scratch seed の世代交代で v8 の link-search が消えた path を指す既知の build 環境の不具合（[fix-v8-env.md](fix-v8-env.md)）で、試験の失敗ではない。test-affected と同じ package の組で呼ぶと build を再利用して通った。
+- 実行した HEAD: この節の結果は attempt 3 の run が、commit『phase 6: 規定の検査の結果を進捗に書く』の後の HEAD で実行した（2026-11-11 21:07〜21:21 UTC）。その後の commit『phase 6: run の後の check の不合格（v8 の build 環境）と再実行の結果を進捗に書く』は 2 つの進捗 file だけを変える（code の差分 0）。その commit の後に再実行した検査は WorkUnit の result.json の evidence に書いた。
+- 計画の check 1 `cargo nextest run -p task-dispatch --lib -E 'test(/health_generic_/) | test(/health_review_input_/) | test(/g4_r1_review_request_/)'` → exit 0（1 分 19 秒。`Compiling v8 v150.4.0` を含み、link の失敗は無い）。60 件すべて合格（`health_generic_` 28 件、`health_review_input_` 15 件、`g4_r1_review_request_` 17 件。`health_generic_review_input_{ts,rust}_{dup_contract,dup_state}_reaches_reviewer` の 4 件を含む）、1645 件 skip。
+- `env -u CELERIS_WU_BASE bash scripts/dev/test-affected.sh` → exit 0（726 秒。load average の 1 分平均は開始時 7.8、終了時 26）。nextest 3764 件すべて合格（467.0 秒、slow 19 件）、11 件 skip。対象 package の doc test も合格。repo-health は verdict pass・exit 0・fail 級 0・new 0・worsened 0（既存 711 件）。検査器自身の試験 94 件は `OK (expected failures=2)`（G1・G2 の 2 件だけ）、`repo_health_gate: all checks passed`、script bundle の SKIP は 0 件。
+- attempt 2 の run も同じ code で test-affected を実行し、exit 0（790 秒、nextest 3764 件合格）だった。
 - `grep -c should_panic crates/task-dispatch/src/dispatcher/tests/health_generic.rs` → 0。`git grep -n -e POLICY_ABSENT -e 'fn absent_policy' -- crates/` → 出力なし（旧い省略経路は無い）。
 - `cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check`・文書検査・範囲 → 下の「規定の検査（最後の commit の後）」。
 - 全体試験（nextest の全件・doc test・web e2e・実 browser/userns）は実行していない（release gate だけで走らせる規則）。
 
 ## 規定の検査（最後の commit の後）
-commit『phase 6: G4-R1 修正後の目的ごとの結果と提出証拠を記録する』の後の HEAD で実行した。その後の commit『phase 6: 規定の検査の結果を進捗に書く』はこの節だけを変える（code の差分 0）。その commit の後に文書検査・fmt・範囲を再実行し、結果は WorkUnit の result.json の evidence に書いた。
-- `cargo clippy --workspace -- -D warnings` → exit 0（62 秒）。
-- `cargo fmt --all -- --check` → exit 0。差分なし。
-- `bash scripts/dev/test-affected.sh`（WorkUnit の基準 `$CELERIS_WU_BASE`。daemon の WU の check と同じ）→ exit 0（148 秒）。docs だけの軽い経路で、repo-health は verdict pass・fail 級 0・new 0・worsened 0、検査器自身の試験 94 件は `OK (expected failures=2)`、repo_health_gate は 7 件 OK。
-- `bash scripts/dev/check-health.sh --base "$CELERIS_WU_BASE"` → exit 0（mode doc-only、verdict pass、fail 級 0）。
-- `sh scripts/dev/check-doc-links.sh` → exit 0（ok）。`sh scripts/dev/check-adr-numbers.sh` → exit 0（ok、420 file）。`sh scripts/dev/progress-index.sh --check` → exit 0（ok）。`python3 scripts/dev/check-human-text.py --root .` → exit 0（指摘 0 件）。`git diff --check` → exit 0。
+attempt 3 の run が、上の「証拠」と同じ HEAD（commit『phase 6: 規定の検査の結果を進捗に書く』の後）で計画の check 2〜6 を実行した。その後の commit『phase 6: run の後の check の不合格（v8 の build 環境）と再実行の結果を進捗に書く』は進捗 file だけを変える（code の差分 0）。その commit の後の再実行の結果は WorkUnit の result.json の evidence に書いた。
+- `bash scripts/dev/test-affected.sh`（WorkUnit の基準 `$CELERIS_WU_BASE`。計画の check 2）→ exit 0（150 秒）。`試験対象の変更なし（docs のみ等）` の軽い経路で、repo-health は verdict pass・fail 級 0・new 0・worsened 0、検査器自身の試験 94 件は `OK (expected failures=2)`、`repo_health_gate: all checks passed`。
+- `cargo clippy --workspace -- -D warnings && cargo fmt --all -- --check`（check 3）→ exit 0（23 秒）。fmt の差分なし。
+- `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check`（check 4）→ exit 0（`check-doc-links: ok`、`check-adr-numbers: ok (420 files)`、`progress-index --check: ok`）。
+- `test -f …/record-review-gap.md && python3 -m unittest discover -s scripts/tests -p 'test_repo_health_generic*.py'`（check 5）→ exit 0。16 件、`OK (expected failures=2)`（G1・G2）。
+- attempt 2 の run では、ほかに `bash scripts/dev/check-health.sh --base "$CELERIS_WU_BASE"`（exit 0、mode doc-only、verdict pass）、`python3 scripts/dev/check-human-text.py --root .`（exit 0、指摘 0 件）、`git diff --check`（exit 0）も実行した。
 - 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` → exit 0。変更 path はこの file と [G4 のまとめ](../2026-11-10-health-v2-g4.md) の 2 file だけ。`git diff --quiet "$CELERIS_WU_BASE" HEAD -- crates/ scripts/` → exit 0（code・検査器の差分なし）。
 - 禁止範囲: `git diff --quiet $(git merge-base HEAD main) HEAD -- crates/task-core/ crates/campaign/ scripts/dev/repo-health/ scripts/dev/check-health.sh scripts/dev/source-size-baseline.json` → exit 0（task 全体で task-core・campaign・検査器・baseline に差分なし）。
 
 ## 受け入れ条件ごとの証拠（この WorkUnit）
 | 条件 | 実行したコマンド | 結果 |
 |---|---|---|
-| 0. G4-R1 の配送と reviewer 評価が通常の成功試験で確認され、旧い未解決の説明が訂正されている | 上の nextest の filter、`grep -c should_panic …/health_generic.rs` | exit 0、45 件合格、`should_panic` 0 件。G4 のまとめの訂正は「訂正した記述」 |
+| 0. G4-R1 の配送と reviewer 評価が通常の成功試験で確認され、旧い未解決の説明が訂正されている | 計画の check 1（上の nextest の filter）、`grep -c should_panic …/health_generic.rs` | exit 0、60 件合格（`…_reaches_reviewer` の 4 件と `g4_r1_review_request_` の 17 件を含む）、`should_panic` 0 件。G4 のまとめの訂正は「訂正した記述」 |
 | 1. (a)〜(h) の証拠と未測定・G1/G2 の保留が区別されている | — | 「(a)〜(h) の結果」の結果の列（測った・保留）と「測定」の未測定の行 |
-| 2. 最終同期後の規定検査の結果を提出時 HEAD の証拠として記録している | test-affected・clippy・fmt | 上の「証拠」と「規定の検査」 |
+| 2. 最終同期後の規定検査の結果を提出時 HEAD の証拠として記録している | test-affected（基準 `git merge-base HEAD main` と `$CELERIS_WU_BASE`）・clippy・fmt・文書検査・範囲 | 上の「証拠」と「規定の検査」。すべて exit 0 |
 
 ## 未解決
 - G1・G2（検査器の欠け）。人の決定 checker-gaps=a で保留。
 - 未測定: reviewer の LLM の費用のうち health の材料による増分、`RequiredChecksEvaluated` の時刻の差、実在する OSS の repo での精度。
+- scratch seed の世代交代で、seed から写した target の v8 の link-search が消えた path を指す不具合（G4 の範囲外）。この WorkUnit の target でも起き、`cargo clean -p v8` で直した（上の「run の後の check の不合格と対処」）。
 
 ## 本番への移行
 - 無し。この WorkUnit は進捗の文書だけを変えた。

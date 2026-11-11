@@ -1,0 +1,18 @@
+warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGER` causes the socket to block the thread on drop
+   --> crates/script-runtime/vendor/deno_core/uv_compat/tcp.rs:818:17
+    |
+818 |       && stream.set_linger(Some(std::time::Duration::ZERO)).is_err()
+    |                 ^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: `deno_core` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.86s
+     Running tests/unmapped_suite/main.rs (/local/celeris/data/scratch/targets/task-01M76AG298YER7PJB6M781C77X/wu-01M76B4XA4RBGFFV5HXXSER5SF/target/debug/deps/unmapped_suite-6de9a4e195b585ac)
+
+running 2 tests
+test skills_import::ui_ux_skills_cli_imports_config_skills_without_a_db ... ok
+test pipe::ls_on_a_closed_pipe_exits_cleanly_without_panicking ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.51s
+

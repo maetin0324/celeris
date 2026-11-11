@@ -1,0 +1,153 @@
+{
+ "schema": "health-v2-r5-measure/1",
+ "label": "head",
+ "git_head": "41f307ade619e39c67b7c680e5a45cb83fe88905",
+ "merge_base_main": "e20edfa7ec0aa51b41ab795148ec44bd031b1ff9",
+ "measured_src_equals_merge_base": false,
+ "host": {
+  "nproc": 24,
+  "uname": "Linux 6.8.12-9-pve",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+  "nextest": "cargo-nextest 0.9.146 (8af696ddc 2026-09-21)",
+  "cargo_target_dir": "/local/celeris/data/scratch/targets/task-01M76AG298YER7PJB6M781C77X/wu-01M76B4XA4RBGFFV5HXXSER5SF/target"
+ },
+ "started_at": "2026-11-11T22:30:52Z",
+ "elapsed_secs": 110.6,
+ "loadavg_before": "49.24 32.95 35.66",
+ "loadavg_after": "50.35 38.82 37.52",
+ "crates": {
+  "celerisctl": {
+   "session": {
+    "label": "head",
+    "git_head": "41f307ade619e39c67b7c680e5a45cb83fe88905",
+    "merge_base_main": "e20edfa7ec0aa51b41ab795148ec44bd031b1ff9",
+    "measured_src_equals_merge_base": false,
+    "started_at": "2026-11-11T22:30:52Z",
+    "loadavg_start": "49.24 32.95 35.66",
+    "cargo_target_dir": "/local/celeris/data/scratch/targets/task-01M76AG298YER7PJB6M781C77X/wu-01M76B4XA4RBGFFV5HXXSER5SF/target"
+   },
+   "build": {
+    "exit": 0,
+    "timed_out": false,
+    "secs": 48.88,
+    "compiled_units": 3,
+    "compiled": [
+     "task-api",
+     "celeris",
+     "celerisctl"
+    ],
+    "test_binaries": 15,
+    "linked_test_binaries": 15,
+    "loadavg_before": "49.24 32.95 35.66",
+    "loadavg_after": "50.97 36.04 36.58"
+   },
+   "edit_verify": {
+    "edited_file": "crates/celerisctl/src/main.rs",
+    "affected": [
+     "celerisctl"
+    ],
+    "extra_checks": [],
+    "settle_exit": 0,
+    "settle_secs": 5.53,
+    "settle_compiled_units": 1,
+    "settle_compiled": [
+     "celerisctl"
+    ],
+    "list_exit": 0,
+    "list_secs": 0.19,
+    "rebuild_exit": 0,
+    "rebuild_timed_out": false,
+    "rebuild_secs": 6.57,
+    "rebuild_compiled_units": 1,
+    "rebuild_compiled": [
+     "celerisctl"
+    ],
+    "test_binaries": 15,
+    "linked_test_binaries": 1,
+    "edit_to_verify_secs": 6.76,
+    "loadavg_before": "50.09 36.11 36.60",
+    "loadavg_after": "49.68 36.26 36.65"
+   },
+   "run1": {
+    "exit": 0,
+    "timed_out": false,
+    "secs": 7.37,
+    "nextest_summary_secs": 5.962,
+    "tests_run": 205,
+    "passed": 205,
+    "failed": 0,
+    "timed_out_tests": 0,
+    "skipped_tests": 0,
+    "failed_tests": [],
+    "loadavg_before": "55.14 37.84 37.15",
+    "loadavg_after": "52.58 37.86 37.17"
+   },
+   "run2": {
+    "exit": 0,
+    "timed_out": false,
+    "secs": 13.65,
+    "nextest_summary_secs": 10.832,
+    "tests_run": 205,
+    "passed": 205,
+    "failed": 0,
+    "timed_out_tests": 0,
+    "skipped_tests": 0,
+    "failed_tests": [],
+    "loadavg_before": "52.58 37.86 37.17",
+    "loadavg_after": "54.26 38.70 37.45"
+   },
+   "bundles": {
+    "glob": "crates/celerisctl/tests/*/main.rs",
+    "cmd": "cargo test -p celerisctl --test <bundle>",
+    "found": [
+     "browser_eval_surface_suite",
+     "unmapped_suite"
+    ],
+    "results": {
+     "browser_eval_surface_suite": {
+      "cmd": "cargo test -p celerisctl --test browser_eval_surface_suite",
+      "build_exit": 0,
+      "build_secs": 0.79,
+      "exit": 0,
+      "timed_out": false,
+      "harness_finished": true,
+      "passed": 22,
+      "failed": 0,
+      "ignored": 0,
+      "failed_tests": [],
+      "secs": 7.75,
+      "loadavg_before": "52.80 38.66 37.44",
+      "loadavg_after": "52.10 38.75 37.48"
+     },
+     "unmapped_suite": {
+      "cmd": "cargo test -p celerisctl --test unmapped_suite",
+      "build_exit": 0,
+      "build_secs": 1.37,
+      "exit": 0,
+      "timed_out": false,
+      "harness_finished": true,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "failed_tests": [],
+      "secs": 6.62,
+      "loadavg_before": "52.10 38.75 37.48",
+      "loadavg_after": "50.35 38.82 37.52"
+     }
+    },
+    "loadavg_before": "54.26 38.70 37.45",
+    "loadavg_after": "50.35 38.82 37.52"
+   },
+   "base_run": {
+    "baseline": "agent-docs/progress/2026-11-10-health-v2-r5/baseline.json",
+    "baseline_loadavg_1m_max": 29.0,
+    "head_loadavg_1m_max": 55.14,
+    "ratio": 1.901,
+    "threshold": 2,
+    "needed": false,
+    "reason": "HEAD の 1 分値の最大 55.14 は baseline の 29.0 の 1.901 倍（2 倍以下）"
+   }
+  }
+ },
+ "skipped": []
+}

@@ -187,6 +187,8 @@ async fn run_variant(variant: Variant) -> (AbMetric, u64) {
 
 /// off は到着順で fresh が先に review され、長く stale な task は reviewer run 1 本ぶん待つ。on は stale を
 /// 先に同期・review するので待ちが 0 になる（run 数・合計時間は同じ）。
+/// 不変条件: 長く stale な task を先に同期して review 待ちを減らす。
+/// 変更理由: ADR R1・R6 により Absent でも材料が届くため、偽 reviewer にも health 判定が要る。
 #[tokio::test]
 async fn phase_effect_ab_stale_priority_syncs_the_long_stale_task_first() {
     let (off, off_wait) = run_variant(Variant::Off).await;

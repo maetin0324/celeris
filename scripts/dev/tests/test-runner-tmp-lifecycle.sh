@@ -472,6 +472,12 @@ s.bind(d + "/" + name)
 open(sys.argv[2], "w").write("bound %d\n" % len(d + "/" + name))
 ' "$TMPDIR" "$FAKE_STATE/sock" || exit 9
     fi
+    if [ -n "${FAKE_ORPHAN:-}" ]; then
+      # stdin・stdout・stderr を /dev/null にした子孫を残して終わる（ssh probe の試験が残した sleep 3600 の代わり）。
+      # 書き手の来ない fifo の read で止まる（CPU を使わない）。試験が kill し、漏れても 120 秒で終わる。
+      bash -c 'read -r -t 120 _ <>"$1"' _ "$FAKE_STATE/orphan-hold" </dev/null >/dev/null 2>&1 &
+      echo "$!" >"$FAKE_STATE/orphan"
+    fi
     if [ -n "${FAKE_HOLD:-}" ]; then
       echo "$$ $TMPDIR" >"$FAKE_READY"     # ready 通知（controller が読むまで書き込みは FIFO に残る）
       read -r _ <"$FAKE_RELEASE"            # release まで止まる
@@ -636,6 +642,48 @@ expect "test-parallel leftovers: warning kept" grep -q 'test-parallel: warning: 
 expect "test-parallel leftovers: summary tmp_leftovers 2" grep -q '"tmp_leftovers": 2' "$OUT/out"
 expect_eq "test-parallel leftovers: dir removed after the warning" "$(rr_entries "$ROOT")" 0
 expect_eq "test-parallel leftovers: last line ok" "$(tail -n 1 "$OUT/out")" "test-parallel: ok"
+# (i) run_tee: nextest（偽 cargo）が stdout・stderr を /dev/null にした子孫を残して終わっても、run_tee は戻り doc test へ進む。
+#     2026-11-10 の release gate では、孤児が run_tee の元の fd（tee への pipe）を継いで握り、tee が EOF を受けず止まった。
+#     子孫は lock の fd だけを継ぎ（ADR 2026-11-06 D2）、tee への pipe は持たない。runner の dir は子孫が居る間は残り、
+#     子孫を止めた後の回収で消える。
+mkdir -p "$base/o-pa-orphan"
+mkfifo "$base/o-pa-orphan/orphan-hold"
+rr_launch pa-orphan test-parallel FAKE_ORPHAN=1
+wait_gone "$RPID"   # runner の終わりを出来事待ち（期限 60 秒）
+orphan="$(cat "$OUT/orphan" 2>/dev/null)"
+[ -z "$orphan" ] || echo "$orphan" >>"$PIDS"   # 途中で落ちても EXIT の cleanup が kill する
+o_hung=0
+if pid_alive "$RPID"; then
+  o_hung=1
+  bad "test-parallel orphan: run_tee did not return while a descendant with stdout on /dev/null was alive"
+  [ -z "$orphan" ] || kill -KILL "$orphan" 2>/dev/null   # 子孫を止めて runner を終わらせる
+fi
+rr_wait
+expect_eq "test-parallel orphan: exit 0" "$RC" 0
+expect "test-parallel orphan: went on to the doc tests" grep -q '^test-parallel: cargo test --doc --workspace$' "$OUT/out"
+expect "test-parallel orphan: ok line" grep -q '^test-parallel: ok$' "$OUT/out"
+# 子孫は cargo の session に居るので、EXIT の後始末は dir を消さずに残す（D3 の回収に任せる）
+expect "test-parallel orphan: dir kept at exit for the live descendant" grep -q '(child still running or unknown)$' "$OUT/out"
+expect "test-parallel orphan: descendant was recorded" test -n "$orphan"
+if [ -n "$orphan" ] && pid_alive "$orphan"; then
+  ok
+  O_DIR="$(dirname "$(cat "$OUT/tmpdir")")"
+  o_pipes=0 o_lock=0
+  for f in /proc/"$orphan"/fd/*; do
+    l="$(readlink "$f" 2>/dev/null)" || continue
+    case "$l" in pipe:*) o_pipes=$((o_pipes + 1)) ;; "$O_DIR/lock") o_lock=1 ;; esac
+  done
+  expect_eq "test-parallel orphan: descendant holds no pipe (the tee fd was closed on the cmd side)" "$o_pipes" 0
+  expect_eq "test-parallel orphan: descendant keeps the lock fd (ADR 2026-11-06 D2)" "$o_lock" 1
+  expect "test-parallel orphan: run dir kept while the descendant lives" test -d "$O_DIR/t"
+  kill -KILL "$orphan" 2>/dev/null
+  wait_gone "$orphan"
+  expect_not "test-parallel orphan: descendant killed by the test" pid_alive "$orphan"
+  bash -c '. "$1"; ttl_sweep "$2"' _ "$LIB" "$ROOT" 2>/dev/null
+  expect_not "test-parallel orphan: run dir collected after the descendant ended" test -e "$O_DIR"
+elif [ "$o_hung" = 0 ]; then
+  bad "test-parallel orphan: descendant was not alive when the runner returned (the case did not reproduce)"
+fi
 # 旧 mktemp -d /tmp/celeris-test-* と旧 trap は両 runner に無い
 expect_not "old mktemp /tmp/celeris-test-* removed from test-affected.sh" grep -q 'celeris-test-affected\.' "$here/scripts/dev/test-affected.sh"
 expect_not "old mktemp /tmp/celeris-test-* removed from test-parallel.sh" grep -q 'celeris-test-parallel\.\|cleanup_logdir' "$here/scripts/dev/test-parallel.sh"

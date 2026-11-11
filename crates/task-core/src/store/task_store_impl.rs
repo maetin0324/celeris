@@ -21,9 +21,8 @@ use crate::write_set::WriteSetRecord;
 
 use super::{
     ClusterConnectionRecord, ClusterSettings, ConfigEventRow, EventRow, ExecutionMetricsTaskRow,
-    ListFilter, ListOrder, LocalSettings, LocalSettingsEvent, LocalSettingsOverrides,
-    NewConfigEvent, Page, ProjectPlanApply, SqliteStore, StoreError, TaskStore, TaskWithEvents,
-    TreeAdoption,
+    LocalSettings, LocalSettingsEvent, LocalSettingsOverrides, NewConfigEvent, SqliteStore,
+    StoreError, TaskStore, TaskWithEvents, TreeAdoption,
 };
 
 impl TaskStore for SqliteStore {
@@ -365,29 +364,6 @@ impl TaskStore for SqliteStore {
         self.create_task_impl(task, origin, crate::DAEMON_ACTOR, extra_events)
     }
 
-    fn project_plan_decide_apply(
-        &self,
-        plan_task_id: TaskId,
-        milestones: &[MilestoneId],
-        milestone_status: MilestoneStatus,
-        tasks: &[TaskId],
-        trigger: Trigger,
-        decided_event: Event,
-    ) -> Result<(), StoreError> {
-        self.project_plan_decide_apply_impl(
-            plan_task_id,
-            milestones,
-            milestone_status,
-            tasks,
-            trigger,
-            decided_event,
-        )
-    }
-
-    fn project_plan_apply(&self, apply: &ProjectPlanApply) -> Result<(), StoreError> {
-        self.project_plan_apply_impl(apply)
-    }
-
     fn delegate_children(
         &self,
         parent_id: TaskId,
@@ -432,15 +408,6 @@ impl TaskStore for SqliteStore {
         task_ids: &[TaskId],
     ) -> Result<std::collections::HashMap<TaskId, String>, StoreError> {
         self.latest_event_ts_impl(task_ids)
-    }
-
-    fn event_rows_for(
-        &self,
-        task_id: TaskId,
-        after_seq: Option<u64>,
-        limit: usize,
-    ) -> Result<Vec<EventRow>, StoreError> {
-        self.event_rows_for_impl(task_id, after_seq, limit)
     }
 
     fn latest_event_rows(&self, kind: super::LatestEventKind) -> Result<Vec<EventRow>, StoreError> {
@@ -488,31 +455,8 @@ impl TaskStore for SqliteStore {
         self.close_integration_requests_of_terminal_tasks_impl()
     }
 
-    fn list_page(
-        &self,
-        filter: &ListFilter,
-        order: ListOrder,
-        cursor: Option<&str>,
-        limit: usize,
-    ) -> Result<Page<Task>, StoreError> {
-        self.list_page_impl(filter, order, cursor, limit)
-    }
-
     fn count_by_status(&self) -> Result<Vec<(Status, u64)>, StoreError> {
         self.count_by_status_impl()
-    }
-
-    // ---- ADR-0033 D1: 組織 ----
-    fn org_list(&self) -> Result<Vec<OrgNode>, StoreError> {
-        self.org_list_impl()
-    }
-
-    fn org_get(&self, id: &str) -> Result<Option<OrgNode>, StoreError> {
-        self.org_get_impl(id)
-    }
-
-    fn org_upsert(&self, node: &OrgNode) -> Result<OrgNode, StoreError> {
-        self.org_upsert_impl(node)
     }
 
     fn org_seed(&self, nodes: &[OrgNode]) -> Result<(), StoreError> {
@@ -526,14 +470,6 @@ impl TaskStore for SqliteStore {
     // ---- ADR-0033 D2: 案件と途中目標 ----
     fn project_create(&self, project: &Project) -> Result<(), StoreError> {
         self.project_create_impl(project)
-    }
-
-    fn project_get(&self, id: ProjectId) -> Result<Option<Project>, StoreError> {
-        self.project_get_impl(id)
-    }
-
-    fn project_list(&self) -> Result<Vec<Project>, StoreError> {
-        self.project_list_impl()
     }
 
     fn project_set_status(&self, id: ProjectId, status: ProjectStatus) -> Result<bool, StoreError> {
@@ -563,15 +499,6 @@ impl TaskStore for SqliteStore {
 
     fn project_set_slug(&self, id: ProjectId, slug: &str) -> Result<bool, StoreError> {
         self.project_set_slug_impl(id, slug)
-    }
-
-    fn project_set_text(
-        &self,
-        id: ProjectId,
-        title: Option<&str>,
-        request: Option<&str>,
-    ) -> Result<bool, StoreError> {
-        self.project_set_text_impl(id, title, request)
     }
 
     fn project_set_workspace(
@@ -657,10 +584,6 @@ impl TaskStore for SqliteStore {
         self.milestone_set_plan_key_impl(id, plan_key)
     }
 
-    fn milestone_list(&self, project_id: ProjectId) -> Result<Vec<Milestone>, StoreError> {
-        self.milestone_list_impl(project_id)
-    }
-
     fn milestone_get(&self, id: MilestoneId) -> Result<Option<Milestone>, StoreError> {
         self.milestone_get_impl(id)
     }
@@ -671,15 +594,6 @@ impl TaskStore for SqliteStore {
         status: MilestoneStatus,
     ) -> Result<bool, StoreError> {
         self.milestone_set_status_impl(id, status)
-    }
-
-    fn milestone_transition_status(
-        &self,
-        id: MilestoneId,
-        from: MilestoneStatus,
-        to: MilestoneStatus,
-    ) -> Result<bool, StoreError> {
-        self.milestone_transition_status_impl(id, from, to)
     }
 
     fn milestone_set_lifecycle(

@@ -12,7 +12,7 @@ use task_ops::knowledge as kb;
 
 use super::{ToolDef, ToolError, ToolOutput, schema};
 use crate::auth::AuthedClient;
-use crate::state::McpState;
+use crate::state::{McpState, run_blocking};
 
 fn kb_root(state: &McpState) -> Result<PathBuf, ToolError> {
     state
@@ -44,17 +44,16 @@ async fn list_impl(
     _args: serde_json::Value,
 ) -> Result<ToolOutput, ToolError> {
     let root = kb_root(state)?;
-    let items = state
-        .blocking(move |_store| {
-            kb::skills_list(&root)
-                .into_iter()
-                .map(|s| SkillSummaryView {
-                    name: s.name,
-                    description: s.description,
-                })
-                .collect::<Vec<_>>()
-        })
-        .await;
+    let items = run_blocking(move || {
+        kb::skills_list(&root)
+            .into_iter()
+            .map(|s| SkillSummaryView {
+                name: s.name,
+                description: s.description,
+            })
+            .collect::<Vec<_>>()
+    })
+    .await;
     ToolOutput::from_serialize(&ListOutput { items })
 }
 
@@ -99,9 +98,7 @@ async fn get_impl(
     let args: GetArgs =
         serde_json::from_value(args).map_err(|e| ToolError::invalid_params(e.to_string()))?;
     let root = kb_root(state)?;
-    let detail = state
-        .blocking(move |_store| kb::skills_get(&root, &args.name))
-        .await;
+    let detail = run_blocking(move || kb::skills_get(&root, &args.name)).await;
     match detail {
         Some(d) => ToolOutput::from_serialize(&GetOutput {
             name: d.name,
@@ -166,11 +163,10 @@ async fn put_impl(
         .into_iter()
         .map(|f| (f.path, f.content))
         .collect();
-    let outcome = state
-        .blocking(move |_store| {
-            kb::skills_put(&root, &args.name, &args.skill_md, &files, Some(&source))
-        })
-        .await;
+    let outcome = run_blocking(move || {
+        kb::skills_put(&root, &args.name, &args.skill_md, &files, Some(&source))
+    })
+    .await;
     match outcome {
         Ok(path) => ToolOutput::from_serialize(&PutOutput { path }),
         Err(e) => Err(ToolError::invalid_params(e.to_string())),

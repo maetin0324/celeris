@@ -93,7 +93,7 @@ fn run_show(store: &dyn TaskStore, args: ProjectsShowArgs) -> Result<ExitCode, C
 #[cfg(test)]
 mod tests {
     use super::*;
-    use task_core::{Project, ProjectStatus, SqliteStore};
+    use task_core::{OrgDirectory, Project, ProjectStatus, SqliteStore};
     use time::OffsetDateTime;
 
     fn sample_project(status: ProjectStatus, archived: bool) -> Project {

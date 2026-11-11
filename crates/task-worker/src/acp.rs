@@ -40,19 +40,23 @@ use tracing::warn;
 use base64::Engine;
 use task_core::ProgressKind;
 
-use crate::adapter::{AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter};
+use crate::adapter::{
+    AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter, deadline_terminal,
+    spawn_capture_stderr,
+};
 use crate::claude_code::build_prompt_with_skill_list;
 use crate::cos_chat::capabilities::{
     Continuation, HarnessCapabilities, ImageDelivery, MissingCapability, capability_reason,
     image_delivery, image_delivery_reason,
 };
-use crate::delegate_file::{clear_delegate_file, forward_delegate_file};
+use crate::delegate_file::forward_delegate_file;
 use crate::progress;
-use crate::protocol::{Evidence, ProviderFailure, RunRequest};
+use crate::protocol::{ProviderFailure, RunRequest};
 use crate::provider::classify_provider_failure;
+use crate::result_report::{ResultFileRead, interpret_result_text, read_result_file};
 use crate::subprocess::{
-    LineOutcome, MAX_LINE_BYTES, kill_now, read_line_limited, read_tail, reap_after_terminal,
-    send_signal_to_group, write_result_json,
+    LineOutcome, MAX_LINE_BYTES, RunPaths, finish_run, kill_now, prepare_run, read_line_limited,
+    read_tail, reap_after_terminal, send_signal_to_group,
 };
 
 /// `session/request_permission` への即答（ADR-0026 D4）。
@@ -156,30 +160,6 @@ impl WorkerAdapter for AcpAdapter {
         let mut config = self.config.clone();
         config.container = Some(plan);
         Some(Arc::new(AcpAdapter::new(config)))
-    }
-}
-
-/// `artifacts/result.json`（`claude_code::ResultFile` と同じ規約。ADR-0006 D3, ADR-0026 D3）。
-#[derive(Debug, Deserialize)]
-struct ResultFile {
-    #[serde(default)]
-    summary: Option<String>,
-    #[serde(default)]
-    question: Option<String>,
-    #[serde(default)]
-    evidence: serde_json::Value,
-    /// ADR-0072 D9（Phase E1）: graceful yield（`claude_code::ResultFile::r#yield` と同じ規約）。
-    #[serde(default, rename = "yield")]
-    r#yield: Option<serde_json::Value>,
-}
-
-fn lenient_evidence(value: serde_json::Value) -> Vec<Evidence> {
-    match value {
-        serde_json::Value::Array(items) => items
-            .into_iter()
-            .filter_map(|item| serde_json::from_value::<Evidence>(item).ok())
-            .collect(),
-        _ => Vec::new(),
     }
 }
 
@@ -601,26 +581,16 @@ async fn wait_for_response(
     chunks: &mut ChunkBuffer,
 ) -> Result<WaitOutcome, AdapterError> {
     loop {
-        let wall_elapsed = start.elapsed();
-        if wall_elapsed >= limits.wall_clock {
-            // ADR-0072 D7/§6 (i)（Phase E1）: acp には turn の上限が無いので、wall-clock の打ち切り
-            // が continuation の唯一の入口になる（`Terminal::BudgetExhausted{kind: WallClock}`）。
-            return Ok(WaitOutcome::TimedOut(Box::new(Terminal::BudgetExhausted {
-                kind: task_core::BudgetKind::WallClock,
-                message: "wall clock exceeded".into(),
-                usage: None,
-            })));
-        }
-        let idle_elapsed = last_activity.elapsed();
-        if idle_elapsed >= limits.idle_timeout {
-            // ADR-0072 D7: idle timeout は E1 では harness_error に分類変更しない（§7 U7）。
-            return Ok(WaitOutcome::TimedOut(Box::new(Terminal::Error {
-                message: "idle timeout".into(),
-                retryable: true,
-                usage: None,
-            })));
-        }
-        let wait = (limits.wall_clock - wall_elapsed).min(limits.idle_timeout - idle_elapsed);
+        // acp には turn の上限が無いので、wall-clock の打ち切りが continuation の唯一の入口になる。
+        let wait = match deadline_terminal(
+            start,
+            *last_activity,
+            limits.wall_clock,
+            limits.idle_timeout,
+        ) {
+            Ok(wait) => wait,
+            Err(terminal) => return Ok(WaitOutcome::TimedOut(terminal)),
+        };
         let pumped = match tokio::time::timeout(
             wait,
             pump_one_line(reader, stdin, stdout_file, sink, config, run_id, chunks),
@@ -697,9 +667,9 @@ enum RawOutcome {
 
 /// プロセスを止め（タイムアウトなら `session/cancel` → `kill_grace` 後 SIGKILL、そうでなければ穏やかな
 /// 刈り取り。ADR-0026 D4）、結果ファイル（`<artifacts_dir>/result.json`）から終端を合成し、`runs/<run_id>/result.json` に書く
-/// （ADR-0006 D3, ADR-0010 D10）。
+/// （ADR-0006 D3、書き出しは `subprocess::finish_run`）。
 #[allow(clippy::too_many_arguments)]
-async fn finish_run(
+async fn finish_session(
     child: &mut Child,
     mut stdin: ChildStdin,
     session_id: &str,
@@ -707,14 +677,15 @@ async fn finish_run(
     stderr_task: tokio::task::JoinHandle<()>,
     mut stdout_file: tokio::fs::File,
     run_dir: &Path,
-    // ADR-0036 D1/D2: 成果物と結果ファイルの置き場（`RunRequest.artifacts_dir`）と、その workspace 相対表記。
-    artifacts_dir: &Path,
-    artifacts_rel: &str,
+    // ADR-0036 D1/D2: 成果物と結果ファイルの置き場は `req.artifacts_dir`。`start` は監視 loop の開始。
+    req: &RunRequest,
+    start: Instant,
     stderr_log_path: &Path,
     sink: &dyn EventSink,
     outcome: RawOutcome,
     run_id: &str,
 ) -> Result<RunOutcome, AdapterError> {
+    let artifacts_dir = req.artifacts_dir.as_path();
     let force_kill = matches!(outcome, RawOutcome::TimedOut(_));
     let exit_status = if force_kill {
         // ADR-0026 D4: まず `session/cancel` を送り、`kill_grace` 待ってからプロセスグループへ SIGKILL。
@@ -796,31 +767,26 @@ async fn finish_run(
                         usage: None,
                     }
                 }
-                _ => terminal_from_result_file(artifacts_dir, artifacts_rel, &stop_reason).await,
+                _ => terminal_from_result_file(req, start, &stop_reason).await,
             };
             (terminal, None)
         }
     };
 
     forward_delegate_file(artifacts_dir, sink).await;
-    write_result_json(run_dir, &terminal, provider_failure).await?;
-
-    if let (Terminal::Error { message, .. }, Some(pf)) = (&terminal, provider_failure) {
-        return Err(AdapterError::from_provider_failure(pf, message));
-    }
-
-    Ok(RunOutcome {
-        terminal,
-        exit_code: exit_status.code(),
-    })
+    finish_run(run_dir, terminal, provider_failure, exit_status).await
 }
 
 /// 結果ファイル（`<artifacts_dir>/result.json`）から終端を合成する（ADR-0026 D3 手順 7、ADR-0036 D2）。
 /// ACP 自体には成功/失敗の強い意味論が無いので（D1: 運搬・観測・生存管理だけ）、`stopReason` に関わらず
 /// 常にこのファイルを見る。ファイルが無ければ `stopReason` を理由として `Error{retryable:true}` にする。
+/// 本文の解釈は結果契約の正本（`result_report::interpret_result_text`。ADR 2026-11-10-adapter-result-contract
+/// D1）に任せる。
+/// `start` は監視 loop の開始（spawn の直後）。誤配置の候補は、それを壁時計に直した時刻より後に書かれた file に絞る
+/// （`result_location::misplaced_report` は 2 秒の余裕を取る）。
 async fn terminal_from_result_file(
-    artifacts_dir: &Path,
-    artifacts_rel: &str,
+    req: &RunRequest,
+    start: Instant,
     stop_reason: &str,
 ) -> Terminal {
     // ADR-0072 D7/§6 (i)（Phase E1）: `stopReason == "max_turn_requests"` は turn の上限に当たったと
@@ -833,60 +799,19 @@ async fn terminal_from_result_file(
             usage: None,
         };
     }
-    let result_path = artifacts_dir.join("result.json");
-    let text = match tokio::fs::read_to_string(&result_path).await {
-        Ok(t) => t,
-        Err(_) => {
-            return Terminal::Error {
-                message: format!(
-                    "acp agent stopped ({stop_reason}) without {artifacts_rel}/result.json"
-                ),
-                retryable: true,
-                usage: None,
-            };
-        }
-    };
-    // ADR-0090 D1: クラスタ job の終了待ち（`question` が無ければ `summary` より優先）。
-    if let Some(terminal) = crate::adapter::result_file_wait(&text, None) {
-        return terminal;
-    }
-    match serde_json::from_str::<ResultFile>(&text) {
-        Ok(rf) => {
-            // ADR-0072 D9: 優先順位は `question` > `summary` > `yield`。
-            if let Some(question) = rf.question {
-                Terminal::Question {
-                    text: question,
-                    usage: None,
-                }
-            } else if let Some(summary) = rf.summary {
-                // ADR-0026: PromptResponse の token 使用量は `unstable_end_turn_token_usage`
-                // （安定版 ACP には無い）でしか運ばれず、opencode の実機確認でも観測されていないため
-                // 常に `None` にする（`usage` を埋める標準フィールドが無い）。
-                Terminal::Done {
-                    summary,
-                    evidence: lenient_evidence(rf.evidence),
-                    usage: None,
-                }
-            } else if let Some(checkpoint) = rf.r#yield {
-                Terminal::Yielded {
-                    checkpoint,
-                    usage: None,
-                }
-            } else {
-                Terminal::Error {
-                    message: format!(
-                        "{artifacts_rel}/result.json has neither 'summary', 'question' nor 'yield'"
-                    ),
-                    retryable: true,
-                    usage: None,
-                }
-            }
-        }
-        Err(e) => Terminal::Error {
-            message: format!("{artifacts_rel}/result.json is not valid JSON: {e}"),
+    let artifacts_rel = req.artifacts_rel();
+    match read_result_file(req, std::time::SystemTime::now() - start.elapsed()).await {
+        ResultFileRead::Misplaced(error) => *error,
+        ResultFileRead::Missing => Terminal::Error {
+            message: format!(
+                "acp agent stopped ({stop_reason}) without {artifacts_rel}/result.json"
+            ),
             retryable: true,
             usage: None,
         },
+        // ADR-0026: PromptResponse の token 使用量は `unstable_end_turn_token_usage`（安定版 ACP には無い）
+        // でしか運ばれず、opencode の実機確認でも観測されていないため常に `None` にする。
+        ResultFileRead::Text(text) => interpret_result_text(&text, &artifacts_rel, None),
     }
 }
 
@@ -917,27 +842,13 @@ async fn run_acp(
             ..config.clone()
         }
     };
-    let run_dir = req.workspace.join("runs").join(run_id);
-    tokio::fs::create_dir_all(&run_dir).await?;
-    // Browser commands and page content must not be persisted through the harness's raw
-    // stream capture. Parsing still uses the pipes; the browser supervisor emits safe audit events.
-    let (stdout_log_path, stderr_log_path) = if req.context.browser.is_some() {
-        (
-            Path::new("/dev/null").to_path_buf(),
-            Path::new("/dev/null").to_path_buf(),
-        )
-    } else {
-        (run_dir.join("stdout.jsonl"), run_dir.join("stderr.log"))
-    };
-    let stderr_log_path_for_task = stderr_log_path.clone();
-
-    // 前回の run（リトライ）が残した結果ファイルを、今回の run の結果と誤読しないよう先に消す
-    // （claude_code / codex と同じ。ADR-0006 D3）。
-    // ADR-0036 D1/D2: 置き場はディスパッチャが決めた `artifacts_dir`（共有 workspace ではタスクごと）。
-    let artifacts_rel = req.artifacts_rel();
-    let result_path = req.artifact_path("result.json");
-    let _ = tokio::fs::remove_file(&result_path).await;
-    clear_delegate_file(&req.artifacts_dir).await;
+    let RunPaths {
+        run_dir,
+        stdout_log: stdout_log_path,
+        stderr_log: stderr_log_path,
+        artifacts_rel,
+        ..
+    } = prepare_run(req, run_id, "stdout.jsonl").await?;
 
     // 必須規則（作業場所の CLAUDE.md）は prompt の先頭に写す。opencode は AGENTS.md があると CLAUDE.md を
     // 読まないので、作業ツリーの file に頼らない。読めなければ run を落とす。
@@ -952,8 +863,6 @@ async fn run_acp(
     if let Err(e) = crate::skills::deliver_agent_skills(req.cwd(), &req.context.skills).await {
         warn!("run {run_id}: failed to deliver skills to .agents/skills: {e}");
     }
-    crate::campaign_pin::enforce(&run_dir, req).await?;
-    crate::subprocess::write_run_request(&run_dir, req, run_id).await;
     crate::subprocess::write_run_prompt(&run_dir, &prompt, run_id).await;
 
     let mut command = Command::new(&config.command);
@@ -1004,22 +913,7 @@ async fn run_acp(
         .stdout
         .take()
         .ok_or_else(|| AdapterError::Other("worker stdout was not piped".into()))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| AdapterError::Other("worker stderr was not piped".into()))?;
-
-    let stderr_task = tokio::spawn(async move {
-        let mut reader = stderr;
-        match tokio::fs::File::create(&stderr_log_path_for_task).await {
-            Ok(mut file) => {
-                if let Err(e) = tokio::io::copy(&mut reader, &mut file).await {
-                    warn!("failed to write worker stderr.log: {e}");
-                }
-            }
-            Err(e) => warn!("failed to create worker stderr.log: {e}"),
-        }
-    });
+    let stderr_task = spawn_capture_stderr(&mut child, &stderr_log_path, run_id)?;
 
     let mut stdout_file = tokio::fs::File::create(&stdout_log_path).await?;
     let mut reader = BufReader::new(stdout);
@@ -1442,7 +1336,7 @@ async fn run_acp(
                         }
                     }
                     Ok(WaitOutcome::Eof) => {
-                        return finish_run(
+                        return finish_session(
                             &mut child,
                             stdin,
                             &session_id,
@@ -1450,8 +1344,8 @@ async fn run_acp(
                             stderr_task,
                             stdout_file,
                             &run_dir,
-                            &req.artifacts_dir,
-                            &artifacts_rel,
+                            req,
+                            start,
                             &stderr_log_path,
                             sink,
                             RawOutcome::Eof {
@@ -1462,7 +1356,7 @@ async fn run_acp(
                         .await;
                     }
                     Ok(WaitOutcome::TimedOut(terminal)) => {
-                        return finish_run(
+                        return finish_session(
                             &mut child,
                             stdin,
                             &session_id,
@@ -1470,8 +1364,8 @@ async fn run_acp(
                             stderr_task,
                             stdout_file,
                             &run_dir,
-                            &req.artifacts_dir,
-                            &artifacts_rel,
+                            req,
+                            start,
                             &stderr_log_path,
                             sink,
                             RawOutcome::TimedOut(terminal),
@@ -1602,7 +1496,7 @@ async fn run_acp(
         },
     };
 
-    finish_run(
+    finish_session(
         &mut child,
         stdin,
         &session_id,
@@ -1610,8 +1504,8 @@ async fn run_acp(
         stderr_task,
         stdout_file,
         &run_dir,
-        &req.artifacts_dir,
-        &artifacts_rel,
+        req,
+        start,
         &stderr_log_path,
         sink,
         outcome,

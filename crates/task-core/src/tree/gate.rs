@@ -161,38 +161,6 @@ pub fn structural_reasons(
     out
 }
 
-/// D4 (2) の leaf の基準のうち、kind task の unit が満たさないもの（空なら leaf に下げられる）。
-/// (a) 1 run: 子が継ぐ予算（親の予算）が leaf の上限以内、(b) リポジトリは高々 1、(c) 機械的な検査
-/// （`Check::Command` の acceptance）が 1 本以上。gate の atomic は呼び出し側が見る。
-pub fn task_unit_leaf_shortfalls(
-    parent: &Task,
-    unit: &crate::execution_plan::PlanUnitSpec,
-    work_unit_max_turns: u32,
-    work_unit_max_wall_secs: u64,
-) -> Vec<String> {
-    let mut out = Vec::new();
-    let inherited = tree_child_budget(&parent.budget);
-    if inherited.max_turns > work_unit_max_turns
-        || inherited.max_wall_secs > work_unit_max_wall_secs
-    {
-        out.push(format!(
-            "the inherited budget ({} turns / {} s) exceeds one run ({work_unit_max_turns} / {work_unit_max_wall_secs})",
-            inherited.max_turns, inherited.max_wall_secs
-        ));
-    }
-    if unit.repos.len() > 1 {
-        out.push(format!("{} repos", unit.repos.len()));
-    }
-    if !unit
-        .acceptance
-        .iter()
-        .any(|c| matches!(c.check, crate::model::Check::Command { .. }))
-    {
-        out.push("no command check".to_string());
-    }
-    out
-}
-
 /// ADR-0079「R6-2」（R5b-fix3 を改める）: kind task の unit から作る子 task の `routing.execution_hint`（unit の
 /// gate も同じ値を使う）。**計画の書き手（人・planner）によらず明示**（`explicit = true`、gate は
 /// `human/explicit`）で、`mode` は unit の `gate`（無ければ `compound`: kind task を選んだこと自体が「自分の計画が

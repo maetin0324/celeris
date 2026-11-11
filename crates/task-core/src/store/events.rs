@@ -52,7 +52,7 @@ pub(super) fn latest_event_rows(
 
 /// `SELECT id, task_id, seq, ts, json FROM events …` の行を [`EventRow`] にする。読めない event 1 件で一覧全体が
 /// 失敗するときに、原因の行を特定できるよう id と task を残す。
-fn read_event_rows(mut rows: rusqlite::Rows<'_>) -> Result<Vec<EventRow>, StoreError> {
+pub(super) fn read_event_rows(mut rows: rusqlite::Rows<'_>) -> Result<Vec<EventRow>, StoreError> {
     let mut out = Vec::new();
     while let Some(row) = rows.next()? {
         let id: i64 = row.get(0)?;
@@ -747,21 +747,6 @@ impl SqliteStore {
                 row.get(0)
             })?;
             Ok(id as u64)
-        })
-    }
-
-    pub(super) fn event_rows_for_impl(
-        &self,
-        task_id: TaskId,
-        after_seq: Option<u64>,
-        limit: usize,
-    ) -> Result<Vec<EventRow>, StoreError> {
-        self.with_read_conn(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id, task_id, seq, ts, json FROM events WHERE task_id = ?1 AND seq > ?2 ORDER BY seq ASC LIMIT ?3",
-            )?;
-            let after: i64 = after_seq.map(u64_to_i64).unwrap_or(-1);
-            read_event_rows(stmt.query(params![task_id.to_string(), after, usize_to_i64(limit)])?)
         })
     }
 }

@@ -14,21 +14,24 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use serde::Deserialize;
 use task_core::{RateLimitObservation, Usage};
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tracing::warn;
 
-use crate::adapter::{AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter};
+use crate::adapter::{
+    AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter, deadline_terminal,
+    spawn_capture_stderr, with_estimated_cost,
+};
 use crate::claude_code::{build_prompt, work_dir_note};
 use crate::delegate_file::{clear_delegate_file, forward_delegate_file};
 use crate::progress;
-use crate::protocol::{Evidence, ProviderFailure, RunRequest};
+use crate::protocol::{ProviderFailure, RunRequest};
 use crate::provider::classify_provider_failure;
+use crate::result_report::{ResultFileRead, interpret_result_text};
 use crate::subprocess::{
-    LineOutcome, MAX_LINE_BYTES, kill_now, read_line_limited, read_tail, reap_after_terminal,
-    write_result_json,
+    LineOutcome, MAX_LINE_BYTES, RunPaths, finish_run, kill_now, prepare_run, read_line_limited,
+    read_tail, reap_after_terminal,
 };
 
 /// `[adapters.codex] resume_mode`（ADR-0054 D1。Phase 67）: このインストールの `codex` が
@@ -241,41 +244,6 @@ pub(crate) fn now_unix_secs() -> i64 {
         .unwrap_or(0)
 }
 
-/// `artifacts/result.json`（`claude_code::ResultFile` と同じ規約。ADR-0006 D3, ADR-0008 D3）。
-#[derive(Debug, Deserialize)]
-struct ResultFile {
-    #[serde(default)]
-    summary: Option<String>,
-    #[serde(default)]
-    question: Option<String>,
-    #[serde(default)]
-    evidence: serde_json::Value,
-    /// ADR-0072 D9（Phase E1）: graceful yield（`claude_code::ResultFile::r#yield` と同じ規約）。
-    #[serde(default, rename = "yield")]
-    r#yield: Option<serde_json::Value>,
-}
-
-/// ADR-0061（Phase 104）: model が分かる時だけ静的単価表から USD を推定して埋める
-/// （`claude_code::terminal_from_result` と同じやり方。不明なモデル・token 欠落は `None` のまま）。
-fn with_estimated_cost(usage: Option<Usage>, model: Option<&str>) -> Option<Usage> {
-    usage.map(|mut u| {
-        if let Some(model) = model {
-            u.cost_usd = task_core::estimate_cost_usd(model, &u);
-        }
-        u
-    })
-}
-
-fn lenient_evidence(value: serde_json::Value) -> Vec<Evidence> {
-    match value {
-        serde_json::Value::Array(items) => items
-            .into_iter()
-            .filter_map(|item| serde_json::from_value::<Evidence>(item).ok())
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
 /// `translate_resume_extra_args` の結果（ADR-0054 Phase 112 D1）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct ResumeArgTranslation {
@@ -440,9 +408,6 @@ async fn run_codex_once(
     stdout_log_path: &std::path::Path,
     stderr_log_path: &std::path::Path,
 ) -> Result<CodexAttempt, AdapterError> {
-    // `stderr_task` (below) moves a copy into its `async move` block; this one stays available for
-    // the crash-classification read after the loop (ADR-0010 D5).
-    let stderr_log_path_for_task = stderr_log_path.to_path_buf();
     let resume_id = resume_id.map(|s| s.to_string());
 
     // Install on every spawn, including resume and a fresh retry after a failed resume.
@@ -641,22 +606,7 @@ async fn run_codex_once(
         .stdout
         .take()
         .ok_or_else(|| AdapterError::Other("worker stdout was not piped".into()))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| AdapterError::Other("worker stderr was not piped".into()))?;
-
-    let stderr_task = tokio::spawn(async move {
-        let mut reader = stderr;
-        match tokio::fs::File::create(&stderr_log_path_for_task).await {
-            Ok(mut file) => {
-                if let Err(e) = tokio::io::copy(&mut reader, &mut file).await {
-                    warn!("failed to write worker stderr.log: {e}");
-                }
-            }
-            Err(e) => warn!("failed to create worker stderr.log: {e}"),
-        }
-    });
+    let stderr_task = spawn_capture_stderr(&mut child, stderr_log_path, run_id)?;
 
     let mut stdout_file = tokio::fs::File::create(stdout_log_path).await?;
     let mut reader = BufReader::new(stdout);
@@ -674,30 +624,16 @@ async fn run_codex_once(
     let mut saw_any_stdout_line = false;
 
     loop {
-        let wall_elapsed = start.elapsed();
-        if wall_elapsed >= limits.wall_clock {
-            // ADR-0072 D7/§6 (i)（Phase E1）: wall-clock の打ち切りは予算切れ（continuation の対象）。
-            // codex には turn の上限が無いので wall-clock だけがこの経路。
-            timeout_terminal = Some(Terminal::BudgetExhausted {
-                kind: task_core::BudgetKind::WallClock,
-                message: "wall clock exceeded".into(),
-                usage: None,
-            });
-            force_kill = true;
-            break;
-        }
-        let idle_elapsed = last_activity.elapsed();
-        if idle_elapsed >= limits.idle_timeout {
-            // ADR-0072 D7: idle timeout は E1 では harness_error に分類変更しない（§7 U7）。
-            timeout_terminal = Some(Terminal::Error {
-                message: "idle timeout".into(),
-                retryable: true,
-                usage: None,
-            });
-            force_kill = true;
-            break;
-        }
-        let wait = (limits.wall_clock - wall_elapsed).min(limits.idle_timeout - idle_elapsed);
+        // codex には turn の上限が無いので、wall-clock の打ち切りが予算切れの唯一の経路。
+        let wait =
+            match deadline_terminal(start, last_activity, limits.wall_clock, limits.idle_timeout) {
+                Ok(wait) => wait,
+                Err(terminal) => {
+                    timeout_terminal = Some(*terminal);
+                    force_kill = true;
+                    break;
+                }
+            };
 
         let outcome = match tokio::time::timeout(
             wait,
@@ -783,16 +719,14 @@ async fn run_codex(
     sink: &dyn EventSink,
 ) -> Result<RunOutcome, AdapterError> {
     let run_started = std::time::SystemTime::now();
-    let run_dir = req.workspace.join("runs").join(run_id);
-    tokio::fs::create_dir_all(&run_dir).await?;
+    let RunPaths {
+        run_dir,
+        stdout_log: stdout_log_path,
+        stderr_log: mut stderr_log_path,
+        result_path,
+        artifacts_rel,
+    } = prepare_run(req, run_id, "stdout.jsonl").await?;
     crate::routing_context_transport::record(&run_dir, req, false).await;
-
-    // 前回の run（リトライ）が残した結果ファイルを、今回の run の結果と誤読しない（ADR-0006 D3 と同じ理由）。
-    // ADR-0036 D1/D2: 置き場はディスパッチャが決めた `artifacts_dir`（共有 workspace ではタスクごと）。
-    let artifacts_rel = req.artifacts_rel();
-    let result_path = req.artifact_path("result.json");
-    let _ = tokio::fs::remove_file(&result_path).await;
-    clear_delegate_file(&req.artifacts_dir).await;
 
     let cos_parts =
         crate::claude_code::build_cos_chat_parts(&req.task, &req.context, run_id, &artifacts_rel);
@@ -806,9 +740,7 @@ async fn run_codex(
             build_prompt(&req.task, &req.context, run_id, &artifacts_rel)
         ),
     };
-    // ADR-0023 D2 / M1: この run で何を渡したかを残す（`request.json` は構造、`prompt.txt` は実際の文面）。
-    crate::campaign_pin::enforce(&run_dir, req).await?;
-    crate::subprocess::write_run_request(&run_dir, req, run_id).await;
+    // ADR-0023 D2 / M1: この run で実際に渡した文面を残す（`request.json` は `prepare_run` が書いた）。
     let recorded = match &cos_parts {
         Some(parts) => {
             crate::cos_chat::prompt_record("-c developer_instructions", &parts.core, &prompt)
@@ -883,8 +815,6 @@ async fn run_codex(
         None => Vec::new(),
     };
 
-    let stdout_log_path = run_dir.join("stdout.jsonl");
-    let mut stderr_log_path = run_dir.join("stderr.log");
     let mut attempt = run_codex_once(
         config,
         req,
@@ -1023,17 +953,9 @@ async fn run_codex(
         (None, Some(TurnSignal::Completed { usage })) => {
             // A conversation can answer directly; work orders still require their artifacts.
             // A CoS chat run (transient task without `conversation`) also replies in the chat.
-            let terminal = if req.requires_result_file()
-                && let Some(error) = crate::result_location::misplaced_report(
-                    crate::result_location::RESULT_FILE_NAME,
-                    &req.artifacts_dir,
-                    req.cwd(),
-                    run_started,
-                )
-                .await
-            {
-                error
-            } else if exit_status.success()
+            let read = crate::result_report::read_result_file(req, run_started).await;
+            let terminal = if !matches!(read, ResultFileRead::Misplaced(_))
+                && exit_status.success()
                 && (req.task.conversation.is_some() || cos_chat.is_some())
                 && req.task.kind == task_core::TaskKind::Execute
                 && matches!(tokio::fs::metadata(&result_path).await,
@@ -1044,9 +966,9 @@ async fn run_codex(
                 // `result.json` body (e.g. it could not write into `artifacts_dir`, as happens when
                 // `exec resume` drops the `--add-dir` grant it would otherwise need). If it parses
                 // as that shape (a non-empty `summary` string and an `actions` array), recover it:
-                // write it to `result.json` as if the model had written it itself, and re-derive the
-                // terminal from disk through the normal path (`terminal_from_result`) so
-                // `actions`/`memory`/`milestone_proposal` all pick it up via the existing,
+                // write it to `result.json` as if the model had written it itself, and derive the
+                // terminal from that same text through the result contract (`interpret_result_text`)
+                // so `actions`/`memory`/`milestone_proposal` all pick it up via the existing,
                 // disk-reading machinery instead of the raw JSON text being treated as inert prose.
                 // A CoS chat run must not use `result.actions`; its reply stays plain text.
                 if cos_chat.is_none()
@@ -1059,13 +981,11 @@ async fn run_codex(
                                 "result recovered from the final message (result.json was \
                                  missing; ADR-0054 Phase 112 D3)",
                             );
-                            terminal_from_result(
-                                &req.artifacts_dir,
+                            interpret_result_text(
+                                &summary,
                                 &artifacts_rel,
-                                *usage,
-                                config.model.as_deref(),
+                                with_estimated_cost(*usage, config.model.as_deref()),
                             )
-                            .await
                         }
                         Err(e) => {
                             warn!(
@@ -1087,13 +1007,7 @@ async fn run_codex(
                     }
                 }
             } else {
-                terminal_from_result(
-                    &req.artifacts_dir,
-                    &artifacts_rel,
-                    *usage,
-                    config.model.as_deref(),
-                )
-                .await
+                terminal_from_result(read, &artifacts_rel, *usage, config.model.as_deref())
             };
             (terminal, None)
         }
@@ -1101,16 +1015,7 @@ async fn run_codex(
 
     forward_delegate_file(&req.artifacts_dir, sink).await;
 
-    write_result_json(&run_dir, &terminal, provider_failure).await?;
-
-    if let (Terminal::Error { message, .. }, Some(pf)) = (&terminal, provider_failure) {
-        return Err(AdapterError::from_provider_failure(pf, message));
-    }
-
-    Ok(RunOutcome {
-        terminal,
-        exit_code: exit_status.code(),
-    })
+    finish_run(&run_dir, terminal, provider_failure, exit_status).await
 }
 
 /// CoS chat: did the dispatcher ask this adapter to resume a session?
@@ -1403,62 +1308,26 @@ fn truncate(s: &str, max: usize) -> String {
     format!("{}…", &s[..end])
 }
 
-/// `turn.completed` と結果ファイルから終端を合成する。呼び出し元は `turn.completed` を一度でも
-/// 観測できた場合にのみこれを呼ぶ（`claude_code::terminal_from_result` と同じ構造。ADR-0008 D3）。
-async fn terminal_from_result(
-    artifacts_dir: &std::path::Path,
+/// `turn.completed` と結果ファイルの読み取り結果から終端を合成する。呼び出し元は `turn.completed` を一度でも
+/// 観測できた場合にのみこれを呼ぶ（ADR-0008 D3）。本文の解釈は結果契約の正本
+/// （`result_report::interpret_result_text`。ADR 2026-11-10-adapter-result-contract D1）に任せ、ここは
+/// 結果ファイルが無いときの codex の文言だけを持つ。
+fn terminal_from_result(
+    read: ResultFileRead,
     artifacts_rel: &str,
     usage: Option<Usage>,
     model: Option<&str>,
 ) -> Terminal {
-    let usage = with_estimated_cost(usage, model);
-    let result_path = artifacts_dir.join("result.json");
-    let text = match tokio::fs::read_to_string(&result_path).await {
-        Ok(t) => t,
-        Err(_) => {
-            return Terminal::Error {
-                message: format!("codex exited without {artifacts_rel}/result.json"),
-                retryable: true,
-                usage: None,
-            };
-        }
-    };
-
-    // ADR-0090 D1: クラスタ job の終了待ち（`question` が無ければ `summary` より優先）。
-    if let Some(terminal) = crate::adapter::result_file_wait(&text, usage) {
-        return terminal;
-    }
-    match serde_json::from_str::<ResultFile>(&text) {
-        Ok(rf) => {
-            // ADR-0072 D9: 優先順位は `question` > `summary` > `yield`。
-            if let Some(question) = rf.question {
-                Terminal::Question {
-                    text: question,
-                    usage,
-                }
-            } else if let Some(summary) = rf.summary {
-                Terminal::Done {
-                    summary,
-                    evidence: lenient_evidence(rf.evidence),
-                    usage,
-                }
-            } else if let Some(checkpoint) = rf.r#yield {
-                Terminal::Yielded { checkpoint, usage }
-            } else {
-                Terminal::Error {
-                    message: format!(
-                        "{artifacts_rel}/result.json has neither 'summary', 'question' nor 'yield'"
-                    ),
-                    retryable: true,
-                    usage: None,
-                }
-            }
-        }
-        Err(e) => Terminal::Error {
-            message: format!("{artifacts_rel}/result.json is not valid JSON: {e}"),
+    match read {
+        ResultFileRead::Misplaced(error) => *error,
+        ResultFileRead::Missing => Terminal::Error {
+            message: format!("codex exited without {artifacts_rel}/result.json"),
             retryable: true,
             usage: None,
         },
+        ResultFileRead::Text(text) => {
+            interpret_result_text(&text, artifacts_rel, with_estimated_cost(usage, model))
+        }
     }
 }
 

@@ -2,7 +2,7 @@
 
 use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
-use task_core::{EventRow, SqliteStore, StoreError, Task, TaskId, TaskStore};
+use task_core::{EventRow, SqliteStore, StoreError, Task, TaskId, TaskQuery, TaskStore};
 
 use crate::files::{self, FileRequest, FileTarget, RunFile};
 use crate::problem::{ApiProblem, ops_problem, store_problem};

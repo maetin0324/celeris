@@ -1,7 +1,7 @@
 use super::*;
 use task_core::{
-    ArtifactRef, Budget, Check, Criterion, Event, MessageId, SqliteStore, TaskKind, Tier, Trigger,
-    WorkerHint,
+    ArtifactRef, Budget, Check, Criterion, Event, MessageId, OrgDirectory, SqliteStore, TaskKind,
+    Tier, Trigger, WorkerHint,
 };
 
 fn store() -> SqliteStore {

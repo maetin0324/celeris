@@ -11,7 +11,7 @@ use axum::extract::{RawQuery, State};
 use axum::http::StatusCode;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use task_core::TaskStore;
+use task_core::OrgDirectory;
 
 use crate::handlers::{ApiResult, Params, json_response};
 use crate::problem::{ApiProblem, store_problem};

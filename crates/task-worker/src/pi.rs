@@ -5,20 +5,23 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use serde::Deserialize;
 use task_core::Usage;
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tracing::warn;
 
-use crate::adapter::{AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter};
+use crate::adapter::{
+    AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter, deadline_terminal,
+    spawn_capture_stderr,
+};
 use crate::claude_code::build_prompt_with_skill_list;
-use crate::delegate_file::{clear_delegate_file, forward_delegate_file};
-use crate::protocol::{Evidence, RunRequest};
+use crate::delegate_file::forward_delegate_file;
+use crate::protocol::RunRequest;
 use crate::provider::classify_provider_failure;
+use crate::result_report::{ResultFileRead, interpret_result_text, read_result_file};
 use crate::subprocess::{
-    LineOutcome, MAX_LINE_BYTES, kill_now, read_line_limited, read_tail, reap_after_terminal,
-    write_result_json,
+    LineOutcome, MAX_LINE_BYTES, finish_run, kill_now, prepare_run, read_line_limited, read_tail,
+    reap_after_terminal,
 };
 
 #[derive(Debug, Clone)]
@@ -147,28 +150,6 @@ impl WorkerAdapter for PiAdapter {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct ResultFile {
-    #[serde(default)]
-    summary: Option<String>,
-    #[serde(default)]
-    question: Option<String>,
-    #[serde(default)]
-    evidence: serde_json::Value,
-    #[serde(default, rename = "yield")]
-    r#yield: Option<serde_json::Value>,
-}
-
-fn lenient_evidence(value: serde_json::Value) -> Vec<Evidence> {
-    match value {
-        serde_json::Value::Array(items) => items
-            .into_iter()
-            .filter_map(|item| serde_json::from_value::<Evidence>(item).ok())
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
 /// ADR 2026-10-08-cos-chat-prompt-cache D6.2: the stdin of a CoS chat pi run — the skill list
 /// (pi runs with `--no-skills`, so the list stays in the input) followed by the run specific part.
 pub(crate) fn cos_chat_pi_input(skills: &[crate::protocol::SkillMount], variable: &str) -> String {
@@ -207,37 +188,31 @@ async fn run_pi(
             )));
         }
     }
-    let run_dir = req.workspace.join("runs").join(run_id);
-    tokio::fs::create_dir_all(&run_dir).await?;
-    let artifacts_rel = req.artifacts_rel();
-    let result_path = req.artifact_path("result.json");
-    let _ = tokio::fs::remove_file(&result_path).await;
-    clear_delegate_file(&req.artifacts_dir).await;
+    let paths = prepare_run(req, run_id, "stdout.log").await?;
+    let (run_dir, artifacts_rel) = (&paths.run_dir, &paths.artifacts_rel);
     tokio::fs::create_dir_all(&req.artifacts_dir).await?;
 
     // ADR 2026-10-08-cos-chat-prompt-cache D6.2: a CoS chat run gives pi the fixed Core with
     // `--append-system-prompt` (pi appends it right after its own base prompt, ahead of the project
     // context files and the cwd line) and only the skill list and the run specific part on stdin.
     let cos_parts =
-        crate::claude_code::build_cos_chat_parts(&req.task, &req.context, run_id, &artifacts_rel);
+        crate::claude_code::build_cos_chat_parts(&req.task, &req.context, run_id, artifacts_rel);
     // 必須規則（作業場所の CLAUDE.md）は prompt の先頭に写す。pi は AGENTS.md があると CLAUDE.md を
     // 読まないので、作業ツリーの file に頼らない。読めなければ run を落とす。
     let rules = crate::required_rules::preamble_for_run(req.cwd()).await?;
     let prompt = match &cos_parts {
         Some(parts) => cos_chat_pi_input(&req.context.skills, &parts.variable),
-        None => build_prompt_with_skill_list(&req.task, &req.context, run_id, &artifacts_rel),
+        None => build_prompt_with_skill_list(&req.task, &req.context, run_id, artifacts_rel),
     };
     let prompt = format!("{rules}{prompt}");
     crate::skills::deliver_agent_skills(req.cwd(), &req.context.skills).await?;
-    crate::campaign_pin::enforce(&run_dir, req).await?;
-    crate::subprocess::write_run_request(&run_dir, req, run_id).await;
     let recorded = match &cos_parts {
         Some(parts) => {
             crate::cos_chat::prompt_record("--append-system-prompt", &parts.core, &prompt)
         }
         None => prompt.clone(),
     };
-    crate::subprocess::write_run_prompt(&run_dir, &recorded, run_id).await;
+    crate::subprocess::write_run_prompt(run_dir, &recorded, run_id).await;
 
     let agent_dir = run_dir.join("pi-agent");
     tokio::fs::create_dir_all(&agent_dir).await?;
@@ -320,7 +295,7 @@ async fn run_pi(
         let models = serde_json::json!({"providers": {provider: custom}});
         tokio::fs::write(agent_dir.join("models.json"), serde_json::to_vec(&models)?).await?;
     }
-    crate::routing_context_transport::record(&run_dir, req, context_transport).await;
+    crate::routing_context_transport::record(run_dir, req, context_transport).await;
     let mut command = crate::db_guard::launch(command, config.container.as_deref());
     command
         .stdin(Stdio::piped())
@@ -347,27 +322,9 @@ async fn run_pi(
         .stdout
         .take()
         .ok_or_else(|| AdapterError::Other("worker stdout was not piped".into()))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| AdapterError::Other("worker stderr was not piped".into()))?;
+    let stderr_task = spawn_capture_stderr(&mut child, &paths.stderr_log, run_id)?;
 
-    let stdout_log_path = run_dir.join("stdout.log");
-    let stderr_log_path = run_dir.join("stderr.log");
-    let stderr_log_path_for_task = stderr_log_path.clone();
-    let stderr_task = tokio::spawn(async move {
-        let mut reader = stderr;
-        match tokio::fs::File::create(&stderr_log_path_for_task).await {
-            Ok(mut file) => {
-                if let Err(e) = tokio::io::copy(&mut reader, &mut file).await {
-                    warn!("failed to write worker stderr.log: {e}");
-                }
-            }
-            Err(e) => warn!("failed to create worker stderr.log: {e}"),
-        }
-    });
-
-    let mut stdout_file = tokio::fs::File::create(&stdout_log_path).await?;
+    let mut stdout_file = tokio::fs::File::create(&paths.stdout_log).await?;
     let mut reader = BufReader::new(stdout);
 
     let start = Instant::now();
@@ -377,27 +334,15 @@ async fn run_pi(
     let mut stream = PiStream::default();
 
     loop {
-        let wall_elapsed = start.elapsed();
-        if wall_elapsed >= limits.wall_clock {
-            timeout_terminal = Some(Terminal::BudgetExhausted {
-                kind: task_core::BudgetKind::WallClock,
-                message: "wall clock exceeded".into(),
-                usage: None,
-            });
-            force_kill = true;
-            break;
-        }
-        let idle_elapsed = last_activity.elapsed();
-        if idle_elapsed >= limits.idle_timeout {
-            timeout_terminal = Some(Terminal::Error {
-                message: "idle timeout".into(),
-                retryable: true,
-                usage: None,
-            });
-            force_kill = true;
-            break;
-        }
-        let wait = (limits.wall_clock - wall_elapsed).min(limits.idle_timeout - idle_elapsed);
+        let wait =
+            match deadline_terminal(start, last_activity, limits.wall_clock, limits.idle_timeout) {
+                Ok(wait) => wait,
+                Err(terminal) => {
+                    timeout_terminal = Some(*terminal);
+                    force_kill = true;
+                    break;
+                }
+            };
 
         let outcome = match tokio::time::timeout(
             wait,
@@ -446,7 +391,7 @@ async fn run_pi(
     let _ = prompt_task.await;
     forward_delegate_file(&req.artifacts_dir, sink).await;
 
-    let stderr_tail = read_tail(&stderr_log_path, 4096).await;
+    let stderr_tail = read_tail(&paths.stderr_log, 4096).await;
     let extension_failed = stderr_tail.contains("Failed to load extension")
         || stderr_tail.contains("Extension error (");
     let terminal = if let Some(mut terminal) = timeout_terminal {
@@ -482,7 +427,7 @@ async fn run_pi(
             usage: stream.usage,
         }
     } else {
-        terminal_from_result(&req.artifacts_dir, &artifacts_rel, stream.usage).await
+        terminal_from_result(req, start, stream.usage).await
     };
     let provider_failure = if matches!(terminal, Terminal::Error { .. }) {
         pi_failure(stream.error.as_deref().unwrap_or("")).or_else(|| pi_failure(&stderr_tail))
@@ -490,67 +435,24 @@ async fn run_pi(
         None
     };
 
-    write_result_json(&run_dir, &terminal, provider_failure).await?;
-
-    if let (Terminal::Error { message, .. }, Some(pf)) = (&terminal, provider_failure) {
-        return Err(AdapterError::from_provider_failure(pf, message));
-    }
-
-    Ok(RunOutcome {
-        terminal,
-        exit_code: exit_status.code(),
-    })
+    finish_run(run_dir, terminal, provider_failure, exit_status).await
 }
 
-async fn terminal_from_result(
-    artifacts_dir: &std::path::Path,
-    artifacts_rel: &str,
-    usage: Option<Usage>,
-) -> Terminal {
-    let result_path = artifacts_dir.join("result.json");
-    let text = match tokio::fs::read_to_string(&result_path).await {
-        Ok(t) => t,
-        Err(_) => {
-            return Terminal::Error {
-                message: format!("pi exited without {artifacts_rel}/result.json"),
-                retryable: true,
-                usage: None,
-            };
-        }
-    };
-    if let Some(terminal) = crate::adapter::result_file_wait(&text, usage) {
-        return terminal;
-    }
-    match serde_json::from_str::<ResultFile>(&text) {
-        Ok(rf) => {
-            if let Some(question) = rf.question {
-                Terminal::Question {
-                    text: question,
-                    usage,
-                }
-            } else if let Some(summary) = rf.summary {
-                Terminal::Done {
-                    summary,
-                    evidence: lenient_evidence(rf.evidence),
-                    usage,
-                }
-            } else if let Some(checkpoint) = rf.r#yield {
-                Terminal::Yielded { checkpoint, usage }
-            } else {
-                Terminal::Error {
-                    message: format!(
-                        "{artifacts_rel}/result.json has neither 'summary', 'question' nor 'yield'"
-                    ),
-                    retryable: true,
-                    usage: None,
-                }
-            }
-        }
-        Err(e) => Terminal::Error {
-            message: format!("{artifacts_rel}/result.json is not valid JSON: {e}"),
+/// 結果ファイルの読み取り結果から終端を合成する。本文の解釈は結果契約の正本
+/// （`result_report::interpret_result_text`。ADR 2026-11-10-adapter-result-contract D1）に任せ、ここは
+/// 結果ファイルが無いときの pi の文言だけを持つ。
+/// `start` は監視 loop の開始（spawn の直後）。誤配置の候補は、それを壁時計に直した時刻より後に書かれた file に絞る
+/// （`result_location::misplaced_report` は 2 秒の余裕を取る）。
+async fn terminal_from_result(req: &RunRequest, start: Instant, usage: Option<Usage>) -> Terminal {
+    let artifacts_rel = req.artifacts_rel();
+    match read_result_file(req, std::time::SystemTime::now() - start.elapsed()).await {
+        ResultFileRead::Misplaced(error) => *error,
+        ResultFileRead::Missing => Terminal::Error {
+            message: format!("pi exited without {artifacts_rel}/result.json"),
             retryable: true,
             usage: None,
         },
+        ResultFileRead::Text(text) => interpret_result_text(&text, &artifacts_rel, usage),
     }
 }
 

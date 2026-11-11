@@ -1,6 +1,6 @@
 use super::*;
 use crate::org::{OrgKind, OrgNode};
-use crate::store::TaskStore;
+use crate::store::{OrgDirectory, TaskStore};
 
 fn node(id: &str, parent: Option<&str>, kind: OrgKind) -> OrgNode {
     let now = OffsetDateTime::now_utc();
@@ -25,7 +25,7 @@ fn store_with_org() -> SqliteStore {
         node("coding", Some("secretary"), OrgKind::Department),
         node("coding-poc", Some("coding"), OrgKind::Section),
     ] {
-        TaskStore::org_upsert(&store, &n).expect("seed org");
+        OrgDirectory::org_upsert(&store, &n).expect("seed org");
     }
     store
 }

@@ -430,35 +430,6 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
     }
 }
 
-/// ADR-0072 D9（Phase E1）: `result.json` の `{"yield": {...}}` が `Terminal::Yielded` になる。
-#[tokio::test]
-async fn result_yield_becomes_terminal_yielded() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = stub_acp(
-        dir.path(),
-        &format!(
-            r#"{HANDSHAKE}
-read -r _prompt
-printf '%s' '{{"yield":{{"completed":["A"],"next_action":"do B"}}}}' > artifacts/result.json
-printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
-"#
-        ),
-    );
-    let adapter = AcpAdapter::new(config);
-    let req = sample_req(dir.path().to_path_buf());
-    let sink = RecordingSink::default();
-    let outcome = adapter
-        .run(req, "run-yield", default_limits(), &sink)
-        .await
-        .unwrap();
-    match outcome.terminal {
-        Terminal::Yielded { checkpoint, .. } => {
-            assert_eq!(checkpoint["next_action"], "do B");
-        }
-        other => panic!("expected yielded, got {other:?}"),
-    }
-}
-
 /// 付属ファイル（入れ子を含む）を持つ skill を KB 側に作る。本文には印の文字列を入れる。
 fn skills_fixture_kb(kb: &Path, name: &str) -> crate::protocol::SkillMount {
     let skill_dir = kb.join(name);
@@ -628,32 +599,6 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
         prompt.contains(".taskd/artifacts/T1/result.json"),
         "{prompt}"
     );
-}
-
-#[tokio::test]
-async fn question_in_result_file_blocks_task() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = stub_acp(
-        dir.path(),
-        &format!(
-            r#"{HANDSHAKE}
-read -r _prompt
-printf '%s' '{{"question":"which crate version?"}}' > artifacts/result.json
-printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
-"#
-        ),
-    );
-    let adapter = AcpAdapter::new(config);
-    let req = sample_req(dir.path().to_path_buf());
-    let sink = RecordingSink::default();
-    let outcome = adapter
-        .run(req, "run-2", default_limits(), &sink)
-        .await
-        .unwrap();
-    match outcome.terminal {
-        Terminal::Question { text, .. } => assert_eq!(text, "which crate version?"),
-        other => panic!("expected question, got {other:?}"),
-    }
 }
 
 #[tokio::test]

@@ -1,4 +1,5 @@
 use super::*;
+use task_core::OrgDirectory;
 use task_core::org::OrgKind;
 use task_core::report::{ReportKind, ReportStore};
 use task_core::{Report, ReportFilter, ReportId, SqliteStore};

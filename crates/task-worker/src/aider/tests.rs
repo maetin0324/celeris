@@ -255,31 +255,6 @@ async fn wall_clock_timeout_kills_the_process_and_becomes_budget_exhausted() {
     }
 }
 
-/// ADR-0072 D9（Phase E1）: `result.json` の `{"yield": {...}}` が `Terminal::Yielded` になる。
-#[tokio::test]
-async fn result_yield_becomes_terminal_yielded() {
-    let dir = tempfile::tempdir().unwrap();
-    let config = stub_aider(
-        dir.path(),
-        r#"mkdir -p artifacts
-printf '%s' '{"yield":{"completed":["A"],"next_action":"do B"}}' > artifacts/result.json
-"#,
-    );
-    let adapter = AiderAdapter::new(config);
-    let req = sample_req(dir.path().to_path_buf());
-    let sink = RecordingSink::default();
-    let outcome = adapter
-        .run(req, "run-yield", default_limits(), &sink)
-        .await
-        .unwrap();
-    match outcome.terminal {
-        Terminal::Yielded { checkpoint, .. } => {
-            assert_eq!(checkpoint["next_action"], "do B");
-        }
-        other => panic!("expected yielded, got {other:?}"),
-    }
-}
-
 #[test]
 fn parse_aider_usage_ignores_abbreviated_token_counts() {
     let usage = parse_aider_usage("blah\nTokens: 1.2k sent, 340 received.\n");

@@ -13,7 +13,7 @@ use task_core::decision::{
     CostOfReversal, DecisionKind, DecisionOption, DecisionOrigin, DecisionPathEntry,
     DecisionRaisedBy, DecisionRequest, DecisionStatus,
 };
-use task_core::{Event, Status, TaskKind, TaskStore};
+use task_core::{Event, OrgDirectory, Status, TaskKind, TaskStore};
 use time::OffsetDateTime;
 
 fn raise_decision(env: &TestEnv, task: &task_core::Task, id: &str) {

@@ -9,6 +9,10 @@
 //! 二重実装をしない）。書き込みの主体は `mcp:<client_id>`（`knowledge_propose` と同じ流儀。
 //! `task_retry` / `task_cancel` は下敷きの `task-ops` 関数がそもそも actor を持たないので、監査は
 //! `mcp_calls` に任せる — `docs/guides/mcp.md` §4 参照）。
+//!
+//! ADR 2026-11-10-taskstore-consumer-ports: `tasks_list` の本体（`list_tasks`）は `&dyn TaskQuery` だけを
+//! 受ける同期の関数（試験は `tools/fake_ports.rs` の fake を渡す）。`tasks_get` と `task_ops` への委譲は
+//! `McpState::blocking` の具体型の store のまま。
 
 use std::future::Future;
 use std::pin::Pin;
@@ -16,7 +20,9 @@ use std::sync::Arc;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use task_core::{Event, ListFilter, ListOrder, McpScope, ReportStore, Status, TaskId, TaskStore};
+use task_core::{
+    Event, ListFilter, ListOrder, McpScope, ReportStore, Status, Task, TaskId, TaskQuery, TaskStore,
+};
 use task_ops::OpsError;
 use time::OffsetDateTime;
 
@@ -116,26 +122,39 @@ async fn list_impl(
         project_id,
         ..ListFilter::default()
     };
-    let page = state
-        .blocking(move |store| store.list_page(&filter, ListOrder::UpdatedDesc, None, limit))
-        .await
-        .map_err(|e| ToolError::internal(e.to_string()))?;
-    let items = page
-        .items
-        .into_iter()
-        .map(|t| TaskSummary {
-            id: t.id.to_string(),
-            title: t.title,
-            status: t.status,
-            assignee: t.assignee,
-            project_id: t.project_id.map(|p| p.to_string()),
-            updated_at: t
-                .updated_at
-                .format(&time::format_description::well_known::Rfc3339)
-                .unwrap_or_default(),
+    let items = state
+        .blocking_on(&state.task_query, move |tasks| {
+            list_tasks(tasks, &filter, limit)
         })
-        .collect();
+        .await?;
     ToolOutput::from_serialize(&ListOutput { items })
+}
+
+/// `tasks_list` の本体: `filter` に合う task を更新の新しい順に `limit` 件まで読む。
+pub(super) fn list_tasks(
+    tasks: &dyn TaskQuery,
+    filter: &ListFilter,
+    limit: usize,
+) -> Result<Vec<TaskSummary>, ToolError> {
+    let page = tasks
+        .list_page(filter, ListOrder::UpdatedDesc, None, limit)
+        .map_err(|e| ToolError::internal(e.to_string()))?;
+    Ok(page.items.into_iter().map(task_summary).collect())
+}
+
+/// `Task` → 一覧の 1 行（`tasks_list` と `projects_get` の task の一覧が使う）。
+pub(super) fn task_summary(t: Task) -> TaskSummary {
+    TaskSummary {
+        id: t.id.to_string(),
+        title: t.title,
+        status: t.status,
+        assignee: t.assignee,
+        project_id: t.project_id.map(|p| p.to_string()),
+        updated_at: t
+            .updated_at
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap_or_default(),
+    }
 }
 
 fn list_call<'a>(

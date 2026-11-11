@@ -10,11 +10,11 @@
 //! Phase 3 のディスパッチャが `transition()` の結果をこのストアに書き戻す）。
 //!
 //! ## module map（audit.md §6.2 案A、責務別の切り出し）
-//! 領域ファイルはどれも `impl SqliteStore` ブロックに `_tx`/`_locked`/行変換の内部 helper と、
-//! `TaskStore` の method 本体（`<method>_impl`）を置く（可視性は `pub(super)`、`execution/` 配下は
-//! `pub(in crate::store)`、既存の `pub(crate)` はそのまま）。`impl TaskStore for SqliteStore` は
-//! `task_store_impl.rs` の 1 ブロックだけで、全 method が `self.<method>_impl(..)` の 1 行転送
-//! （macro は使わない。method 名で grep すれば本体に届く）。
+//! 領域ファイルは `impl SqliteStore` ブロックに `_tx`/`_locked`/行変換の内部 helper と、
+//! 領域固有の `<method>_impl` を置く（可視性は `pub(super)`、`execution/` 配下は
+//! `pub(in crate::store)`、既存の `pub(crate)` はそのまま）。能力 trait の method は trait file の
+//! `impl … for SqliteStore` に本体を置く。残る `TaskStore` method は `task_store_impl.rs` の
+//! 1 ブロックで helper へ転送する（macro は使わない）。
 //!
 //! 依存の向き: 領域 → `mod.rs` 基盤、`execution/*` → `tasks`/`events`/`transition`、
 //! `approvals`/`messages` → `transition`、`transition` → `tasks`/`events`、`events` → `execution`（行変換）。
@@ -32,27 +32,30 @@
 //!   （`TaskStore` の実装は持たない）。
 //! - `migrations.rs`: `SCHEMA_VERSION`・`apply_migration_version`（版数 → SQL の対応と飛ばす版数は
 //!   `crate::migration_registry` の表）。
-//! - `query.rs`: `TaskStore::list_page` 系の一覧部品（`ListFilter`・`ListOrder`・`Page`・
+//! - `query.rs`: `TaskQuery::list_page` 系の一覧部品（`ListFilter`・`ListOrder`・`Page`・
 //!   `CursorPayload`・cursor の符号化・`filter_predicate`・keyset 述語）。
 //! - `task_store.rs`: `trait TaskStore` の宣言。
-//! - `task_store_impl.rs`: `impl TaskStore for SqliteStore`（1 ブロック、1 行転送だけ）。
+//! - `task_store_impl.rs`: `impl TaskStore for SqliteStore`（1 ブロック、残る method の転送）。
+//! - `org_directory.rs`: `OrgDirectory`（`org_list`/`org_get`/`org_upsert`、`project_list`/`project_get`/
+//!   `milestone_list`）。SQL 本体は `impl OrgDirectory for SqliteStore` にあり、`org.rs` の
+//!   `org_list_tx`・`org_upsert_tx` を使う。
+//! - `task_query.rs`: `TaskQuery`（`list_page`・`event_rows_for`）。SQL 本体は `impl TaskQuery for SqliteStore` にある。
 //! - `tasks.rs`: task 行の読み書き（`get_locked`/`insert_tx`/`update_task_tx`/`rewrite_task_tx`）と、
-//!   task・lease の `TaskStore` 本体（`insert`/`get`/`list`/`list_page`/`count_by_status`/`children`/
+//!   task・lease の `TaskStore` 本体（`insert`/`get`/`list`/`count_by_status`/`children`/
 //!   `create_task`/`delegate_children`/`retry_task`/`update_task`/`acquire_lease`/`renew_lease`/
 //!   `extend_task_lease`/`release_lease`/`ready_tasks`/`halted_by_pause`）。
 //! - `events.rs`: `append_event_tx`（events への追記）と、同じ tx で書く Event 由来の投影
 //!   （`runs` 行の終端化・木の `work_units.child_task_id`・`decisions` 行と `decisions` の行変換）、
 //!   events を読む/追記する `TaskStore` 本体（`append_event`/`events_for*`/`events_since`/
-//!   `latest_event_id`/`event_rows_for`）。
-//! - `approvals.rs`: 遷移と判断の適用（`apply_transition_with_events`、Plan の承認 `complete_plan`、
-//!   案件計画の Go/No-Go `project_plan_decide_apply`/`project_plan_apply`）。どれも 1 つの IMMEDIATE tx で
-//!   `apply_transition_tx`/`append_event_tx` を呼ぶ（`transition.rs` は tx 内の部品、ここは入口）。
+//!   `latest_event_id`）。
+//! - `approvals.rs`: 遷移と判断の適用（`apply_transition_with_events`、Plan の承認 `complete_plan`）。
+//!   どれも 1 つの IMMEDIATE tx で `apply_transition_tx`/`append_event_tx` を呼ぶ（`transition.rs` は tx 内の
+//!   部品、ここは入口）。
 //! - `transition.rs`: `apply_transition_tx`（状態機械の適用と Event の追記を同じ tx で行う）と
 //!   終端遷移の cascade・非終端の子/依存の探索。
-//! - `org.rs`: 組織ノードの行変換・`profile_json`・`celerisctl org migrate-v2` 用の低レベル書き換えと
-//!   `org_*` の本体（ADR-0033 D1）。
-//! - `projects.rs`: 案件・途中目標の行変換、slug の検査/backfill、停止中の祖先の判定と
-//!   `project_*`/`milestone_*` の本体（ADR-0033 D2）。
+//! - `org.rs`: 組織ノードの行変換・`profile_json`・`org_list_tx`/`org_upsert_tx` と
+//!   `celerisctl org migrate-v2` 用の低レベル書き換え（ADR-0033 D1）。
+//! - `projects.rs`: 案件・途中目標の行変換、slug の検査/backfill、停止中の祖先の判定。
 //! - `repos.rs`: 案件のリポジトリ（`project_repos`）の行と backfill、`repo_*` の本体（ADR-0043 D1）。
 //! - `integrations.rs`: 変更の取り込み（`task_integrations`）の行と `integration_*` の本体（ADR-0043 D5）。
 //! - `messages.rs`: 対話（`messages`）とコメント（`task_comments`）の行変換、`message_*`・
@@ -92,9 +95,9 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::execution_plan::{RunIndexRole, RunIndexStatus};
 use crate::model::{Event, Status, Task, TaskId, TaskKind, WorkspaceSpec};
-use crate::org::{MilestoneId, MilestoneStatus, OrgError};
+use crate::org::OrgError;
 use crate::repos::{RepoError, RepoKind};
-use crate::transition::{InvalidTransition, Trigger};
+use crate::transition::InvalidTransition;
 
 mod approvals;
 mod behind_targets;
@@ -125,6 +128,8 @@ mod migrated_harness;
 mod migration_harness_tests;
 pub(crate) mod migrations;
 mod org;
+mod org_directory;
+pub use org_directory::OrgDirectory;
 mod project_briefs;
 mod project_guard;
 #[cfg(test)]
@@ -179,7 +184,9 @@ pub use script_domains::{
 };
 pub use script_exhaustive::{ScriptExhaustiveFinish, current_reference_sha256};
 pub use terminal_sessions::TerminalSessionEvent;
+mod task_query;
 mod task_store_impl;
+pub use task_query::TaskQuery;
 mod tasks;
 mod transition;
 mod trusted_devices;
@@ -189,32 +196,9 @@ mod write_sets;
 use crate::migration_registry::RESERVED_VERSIONS;
 pub use migrations::SCHEMA_VERSION;
 pub use query::{ListFilter, ListOrder, Page};
-pub use route_records::{
-    RouteDecisionRow, StoredRouteDecision, StoredRouteJudgment, StoredRouteOutcome,
-};
+pub use route_records::{RouteDecisionRow, StoredRouteDecision, StoredRouteOutcome};
 pub use routing_log::RoutingCorrelation;
 pub use task_store::TaskStore;
-
-/// ADR-0074 D3.4（Phase F4b (e)）: `TaskStore::project_plan_apply` の入力。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ProjectPlanApply {
-    /// `decided_event` を積む Plan タスク（提案の正本）。
-    pub plan_task_id: TaskId,
-    pub milestones: Vec<ProjectPlanMilestoneChange>,
-    /// 書き換える Task の新しい値（状態・attempts・lease はトランザクションの中で読んだ値を使う）。
-    pub task_updates: Vec<Task>,
-    pub transitions: Vec<(TaskId, Trigger)>,
-    pub decided_event: Event,
-}
-
-/// `ProjectPlanApply.milestones[]`。`title` / `description` は `Some` のときだけ書き換える。
-#[derive(Debug, Clone, PartialEq)]
-pub struct ProjectPlanMilestoneChange {
-    pub id: MilestoneId,
-    pub status: MilestoneStatus,
-    pub title: Option<String>,
-    pub description: Option<String>,
-}
 
 /// ADR-0079 D15（Phase R5b-prep）: 既存の task を木の子として採用する書き換え（`TaskStore::execution_plan_adopt_tree`
 /// / `TaskStore::tree_adopt_apply` の入力）。`task` は `tree`（と、`parent_id` が無かったなら `parent_id`）を書いた後の

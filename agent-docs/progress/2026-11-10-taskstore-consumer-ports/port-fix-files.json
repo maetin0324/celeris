@@ -1,0 +1,291 @@
+{
+ "schema": "taskstore-consumer-ports/port-fix-files/1",
+ "how": "作業ツリーで 8 method の宣言を TaskStore から OrgDirectory・TaskRead へ移し、OrgDirectory・TaskRead を TaskStore の supertrait にして、`cargo check --workspace --all-targets --keep-going` の E0599（trait が scope に無い）と E0782（TaskStore::<method> の UFCS）が消えるまで file に import を足した。誤りが 0 になった file の集合。試した変更は git checkout で戻した（crates/ の差分は 0）。",
+ "method_count": 8,
+ "file_count": 64,
+ "by_crate": {
+  "celeris": 11,
+  "celeris-mcp": 5,
+  "celerisctl": 3,
+  "task-api": 23,
+  "task-core": 5,
+  "task-dispatch": 5,
+  "task-ops": 12
+ },
+ "test_files": 36,
+ "in_r2_write_set": [
+  "crates/task-api/tests/approvals.rs",
+  "crates/task-api/tests/browser_site_policy_db.rs",
+  "crates/task-api/tests/cos_operations_domains.rs",
+  "crates/task-api/tests/cos_ops_admin_config.rs",
+  "crates/task-api/tests/cos_ops_projects_cron.rs",
+  "crates/task-api/tests/project_auto_integrate.rs",
+  "crates/task-api/tests/project_cos_guard.rs",
+  "crates/task-api/tests/project_plan.rs"
+ ],
+ "in_r4_write_set": [
+  "crates/task-dispatch/src/dispatcher/cos_chat/projects.rs",
+  "crates/task-dispatch/src/dispatcher/cos_chat/review.rs",
+  "crates/task-dispatch/src/dispatcher/project_wake.rs"
+ ],
+ "methods": {
+  "org_list": {
+   "trait": "OrgDirectory",
+   "files": [
+    "crates/celeris-mcp/src/resources.rs",
+    "crates/celeris-mcp/src/tools/org.rs",
+    "crates/celeris/src/browser_doctor.rs",
+    "crates/celeris/src/browser_doctor_tests.rs",
+    "crates/celeris/src/lib/tests.rs",
+    "crates/celeris/tests/variant_propagation.rs",
+    "crates/celerisctl/src/commands/org.rs",
+    "crates/celerisctl/tests/org_migrate_v2.rs",
+    "crates/task-api/src/console.rs",
+    "crates/task-api/src/conversation.rs",
+    "crates/task-api/src/handlers/org.rs",
+    "crates/task-api/src/skills.rs",
+    "crates/task-ops/src/add/tests.rs",
+    "crates/task-ops/src/conversation/tests.rs"
+   ],
+   "ufcs": [],
+   "in_r2_write_set": [],
+   "in_r4_write_set": [],
+   "in_task_worker_src": []
+  },
+  "org_get": {
+   "trait": "OrgDirectory",
+   "files": [
+    "crates/celeris-mcp/src/tools/org.rs",
+    "crates/celeris-mcp/tests/mcp_integration.rs",
+    "crates/celeris/src/lib/tests.rs",
+    "crates/task-api/src/console.rs",
+    "crates/task-api/src/conversation.rs",
+    "crates/task-api/src/handlers.rs",
+    "crates/task-api/src/handlers/org.rs",
+    "crates/task-api/src/memory.rs",
+    "crates/task-api/tests/browser_site_policy_db.rs",
+    "crates/task-api/tests/cos_ops_admin_config.rs"
+   ],
+   "ufcs": [],
+   "in_r2_write_set": [
+    "crates/task-api/tests/browser_site_policy_db.rs",
+    "crates/task-api/tests/cos_ops_admin_config.rs"
+   ],
+   "in_r4_write_set": [],
+   "in_task_worker_src": []
+  },
+  "org_upsert": {
+   "trait": "OrgDirectory",
+   "files": [
+    "crates/celeris-mcp/src/tools/org.rs",
+    "crates/celeris-mcp/tests/mcp_integration.rs",
+    "crates/celeris/src/browser_doctor_tests.rs",
+    "crates/celeris/src/knowledge_curation/tests.rs",
+    "crates/celeris/src/knowledge_gc/tests.rs",
+    "crates/celeris/src/knowledge_maint/tests.rs",
+    "crates/celeris/src/lib/tests.rs",
+    "crates/celeris/src/reports/tests.rs",
+    "crates/celeris/tests/daily_curation.rs",
+    "crates/celeris/tests/notify.rs",
+    "crates/celeris/tests/trial_context_canary_e2e.rs",
+    "crates/task-api/src/handlers/org.rs",
+    "crates/task-api/tests/approvals.rs",
+    "crates/task-core/src/approval/tests.rs",
+    "crates/task-core/src/report/tests.rs",
+    "crates/task-dispatch/src/approvals/tests.rs",
+    "crates/task-dispatch/src/reports/tests.rs",
+    "crates/task-ops/src/actions/tests.rs",
+    "crates/task-ops/src/add/tests.rs",
+    "crates/task-ops/src/approval/tests.rs",
+    "crates/task-ops/src/conversation/tests.rs",
+    "crates/task-ops/src/delegate/tests.rs",
+    "crates/task-ops/src/edit/tests.rs",
+    "crates/task-ops/src/notify_feed/tests.rs",
+    "crates/task-ops/src/retry/tests.rs",
+    "crates/task-ops/tests/browser_policy_autoattach.rs"
+   ],
+   "ufcs": [
+    "crates/task-core/src/approval/tests.rs",
+    "crates/task-core/src/report/tests.rs"
+   ],
+   "in_r2_write_set": [
+    "crates/task-api/tests/approvals.rs"
+   ],
+   "in_r4_write_set": [],
+   "in_task_worker_src": []
+  },
+  "project_list": {
+   "trait": "OrgDirectory",
+   "files": [
+    "crates/celeris-mcp/src/tools/projects.rs",
+    "crates/celerisctl/src/commands/projects.rs",
+    "crates/task-api/src/console.rs",
+    "crates/task-api/src/handlers/projects.rs",
+    "crates/task-api/tests/cos_ops_projects_cron.rs",
+    "crates/task-dispatch/src/dispatcher/cos_chat/projects.rs",
+    "crates/task-dispatch/src/dispatcher/cos_chat/review.rs",
+    "crates/task-ops/src/actions/tests.rs"
+   ],
+   "ufcs": [],
+   "in_r2_write_set": [
+    "crates/task-api/tests/cos_ops_projects_cron.rs"
+   ],
+   "in_r4_write_set": [
+    "crates/task-dispatch/src/dispatcher/cos_chat/projects.rs",
+    "crates/task-dispatch/src/dispatcher/cos_chat/review.rs"
+   ],
+   "in_task_worker_src": []
+  },
+  "project_get": {
+   "trait": "OrgDirectory",
+   "files": [
+    "crates/celeris-mcp/src/tools/projects.rs",
+    "crates/celeris-mcp/tests/mcp_integration.rs",
+    "crates/task-api/src/changes.rs",
+    "crates/task-api/src/docs.rs",
+    "crates/task-api/src/handlers/authority.rs",
+    "crates/task-api/src/handlers/project_controller.rs",
+    "crates/task-api/src/handlers/projects.rs",
+    "crates/task-api/src/handlers/roadmap.rs",
+    "crates/task-api/src/repos.rs",
+    "crates/task-api/tests/cos_operations_domains.rs",
+    "crates/task-api/tests/cos_ops_projects_cron.rs",
+    "crates/task-api/tests/project_auto_integrate.rs",
+    "crates/task-api/tests/project_cos_guard.rs",
+    "crates/task-core/src/store/roadmap_tests.rs",
+    "crates/task-dispatch/src/dispatcher/project_wake.rs",
+    "crates/task-ops/src/actions/tests.rs",
+    "crates/task-ops/src/project_snapshot.rs"
+   ],
+   "ufcs": [],
+   "in_r2_write_set": [
+    "crates/task-api/tests/cos_operations_domains.rs",
+    "crates/task-api/tests/cos_ops_projects_cron.rs",
+    "crates/task-api/tests/project_auto_integrate.rs",
+    "crates/task-api/tests/project_cos_guard.rs"
+   ],
+   "in_r4_write_set": [
+    "crates/task-dispatch/src/dispatcher/project_wake.rs"
+   ],
+   "in_task_worker_src": []
+  },
+  "milestone_list": {
+   "trait": "OrgDirectory",
+   "files": [
+    "crates/celeris-mcp/src/tools/projects.rs",
+    "crates/task-api/src/console.rs",
+    "crates/task-api/src/handlers/projects.rs",
+    "crates/task-api/tests/project_plan.rs",
+    "crates/task-ops/src/add/tests.rs",
+    "crates/task-ops/src/lifecycle/tests.rs"
+   ],
+   "ufcs": [],
+   "in_r2_write_set": [
+    "crates/task-api/tests/project_plan.rs"
+   ],
+   "in_r4_write_set": [],
+   "in_task_worker_src": []
+  },
+  "list_page": {
+   "trait": "TaskRead",
+   "files": [
+    "crates/celeris-mcp/src/tools/projects.rs",
+    "crates/celeris-mcp/src/tools/tasks.rs",
+    "crates/celeris/src/knowledge_maint/tests.rs",
+    "crates/task-api/src/console.rs",
+    "crates/task-api/src/handlers/projects.rs",
+    "crates/task-core/src/store/mod.rs",
+    "crates/task-core/src/store/query.rs",
+    "crates/task-ops/src/lifecycle/tests.rs"
+   ],
+   "ufcs": [
+    "crates/task-core/src/store/mod.rs",
+    "crates/task-core/src/store/query.rs"
+   ],
+   "in_r2_write_set": [],
+   "in_r4_write_set": [],
+   "in_task_worker_src": []
+  },
+  "event_rows_for": {
+   "trait": "TaskRead",
+   "files": [
+    "crates/celeris-mcp/src/tools/tasks.rs",
+    "crates/task-api/src/console.rs",
+    "crates/task-api/src/docs.rs",
+    "crates/task-api/src/handlers/task_io.rs",
+    "crates/task-api/src/timeline.rs",
+    "crates/task-ops/src/replay/tests.rs"
+   ],
+   "ufcs": [],
+   "in_r2_write_set": [],
+   "in_r4_write_set": [],
+   "in_task_worker_src": []
+  }
+ },
+ "files": [
+  "crates/celeris-mcp/src/resources.rs",
+  "crates/celeris-mcp/src/tools/org.rs",
+  "crates/celeris-mcp/src/tools/projects.rs",
+  "crates/celeris-mcp/src/tools/tasks.rs",
+  "crates/celeris-mcp/tests/mcp_integration.rs",
+  "crates/celeris/src/browser_doctor.rs",
+  "crates/celeris/src/browser_doctor_tests.rs",
+  "crates/celeris/src/knowledge_curation/tests.rs",
+  "crates/celeris/src/knowledge_gc/tests.rs",
+  "crates/celeris/src/knowledge_maint/tests.rs",
+  "crates/celeris/src/lib/tests.rs",
+  "crates/celeris/src/reports/tests.rs",
+  "crates/celeris/tests/daily_curation.rs",
+  "crates/celeris/tests/notify.rs",
+  "crates/celeris/tests/trial_context_canary_e2e.rs",
+  "crates/celeris/tests/variant_propagation.rs",
+  "crates/celerisctl/src/commands/org.rs",
+  "crates/celerisctl/src/commands/projects.rs",
+  "crates/celerisctl/tests/org_migrate_v2.rs",
+  "crates/task-api/src/changes.rs",
+  "crates/task-api/src/console.rs",
+  "crates/task-api/src/conversation.rs",
+  "crates/task-api/src/docs.rs",
+  "crates/task-api/src/handlers.rs",
+  "crates/task-api/src/handlers/authority.rs",
+  "crates/task-api/src/handlers/org.rs",
+  "crates/task-api/src/handlers/project_controller.rs",
+  "crates/task-api/src/handlers/projects.rs",
+  "crates/task-api/src/handlers/roadmap.rs",
+  "crates/task-api/src/handlers/task_io.rs",
+  "crates/task-api/src/memory.rs",
+  "crates/task-api/src/repos.rs",
+  "crates/task-api/src/skills.rs",
+  "crates/task-api/src/timeline.rs",
+  "crates/task-api/tests/approvals.rs",
+  "crates/task-api/tests/browser_site_policy_db.rs",
+  "crates/task-api/tests/cos_operations_domains.rs",
+  "crates/task-api/tests/cos_ops_admin_config.rs",
+  "crates/task-api/tests/cos_ops_projects_cron.rs",
+  "crates/task-api/tests/project_auto_integrate.rs",
+  "crates/task-api/tests/project_cos_guard.rs",
+  "crates/task-api/tests/project_plan.rs",
+  "crates/task-core/src/approval/tests.rs",
+  "crates/task-core/src/report/tests.rs",
+  "crates/task-core/src/store/mod.rs",
+  "crates/task-core/src/store/query.rs",
+  "crates/task-core/src/store/roadmap_tests.rs",
+  "crates/task-dispatch/src/approvals/tests.rs",
+  "crates/task-dispatch/src/dispatcher/cos_chat/projects.rs",
+  "crates/task-dispatch/src/dispatcher/cos_chat/review.rs",
+  "crates/task-dispatch/src/dispatcher/project_wake.rs",
+  "crates/task-dispatch/src/reports/tests.rs",
+  "crates/task-ops/src/actions/tests.rs",
+  "crates/task-ops/src/add/tests.rs",
+  "crates/task-ops/src/approval/tests.rs",
+  "crates/task-ops/src/conversation/tests.rs",
+  "crates/task-ops/src/delegate/tests.rs",
+  "crates/task-ops/src/edit/tests.rs",
+  "crates/task-ops/src/lifecycle/tests.rs",
+  "crates/task-ops/src/notify_feed/tests.rs",
+  "crates/task-ops/src/project_snapshot.rs",
+  "crates/task-ops/src/replay/tests.rs",
+  "crates/task-ops/src/retry/tests.rs",
+  "crates/task-ops/tests/browser_policy_autoattach.rs"
+ ]
+}

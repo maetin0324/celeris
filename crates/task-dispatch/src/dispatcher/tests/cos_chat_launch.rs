@@ -25,15 +25,12 @@ pub(super) fn fixture(
     d.config.execution.max_cos_runs = max_cos_runs;
     d.config.min_free_disk_mb = 0;
     d.config.knowledge.root = dir.path().join("knowledge");
-    for name in ["cos-operator", "cos-inbox-triage"] {
-        let skill_dir = d.config.knowledge.root.join("skills").join(name);
-        std::fs::create_dir_all(&skill_dir).expect("skill dir");
-        std::fs::write(
-            skill_dir.join("SKILL.md"),
-            format!("---\nname: {name}\ndescription: test skill\n---\n# {name}\n"),
-        )
-        .expect("skill");
-    }
+    task_ops::cos_skill_gate::write_fixture(
+        &d.config.knowledge.root.join("skills"),
+        "cos-inbox-triage",
+        "1",
+    )
+    .expect("CoS skills");
     d.set_cos_chat_launch(
         store.clone(),
         CosChatLaunchConfig {
@@ -829,30 +826,6 @@ async fn cos_chat_run_launch_no_candidate_records_unavailable() {
         run.reason
             .as_deref()
             .is_some_and(|reason| reason.contains("no compatible provider"))
-    );
-}
-
-#[tokio::test]
-async fn cos_chat_run_launch_missing_required_skill_is_unavailable() {
-    let (_dir, store, mut d) = fixture(FakeAdapter::default_command(), 2);
-    std::fs::remove_file(d.config.knowledge.root.join("skills/cos-operator/SKILL.md"))
-        .expect("remove skill");
-    let t = thread(&store, "missing-skill");
-    post(&store, &t, "one");
-    d.tick_cos_chat_launch();
-    assert!(
-        d.cos_chat_launch
-            .as_ref()
-            .expect("launch")
-            .running
-            .is_empty()
-    );
-    let run = runs(&store, &t).pop().expect("failed run");
-    assert_eq!(run.state, ChatRunState::Failed);
-    assert!(
-        run.reason
-            .as_deref()
-            .is_some_and(|reason| reason.contains("cos-operator"))
     );
 }
 

@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 task-core = { path = "../task-core" }
 time = { version = "0.3", features = ["formatting", "parsing"] }
+tracing = "0.1"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 schemars = "1"

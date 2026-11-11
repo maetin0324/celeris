@@ -583,9 +583,16 @@ else
 fi
 sd_log "the working checkout was NOT touched. If main is behind this release, a human runs: git -C $SD_REPO merge --ff-only $SHA12"
 
+# ADR 2026-11-11-cos-skill-sync D2: 昇格を記録した後で release の CoS の skill を KB に写す（失敗は exit 4）。
+SKILLS_SYNCED=true
+sd_sync_cos_skills "$REL" || SKILLS_SYNCED=false
 # credentiald の切り替え（ADR 2026-10-27-promote-switches-credentiald）。live・stop-start・引き継ぎの再開の
 # どれでも、昇格を記録した後に行う。失敗は昇格を取り消さず credentiald_switch_failed.json と exit 3 で知らせる。
 if ! sd_credentiald_after_switch "$REL" "$SHA12" "$OLD"; then
   echo "promote.sh: $SHA12 is promoted, but the credentiald switch failed (see $REL/credentiald_switch_failed.json)" >&2
   exit 3
+fi
+if [ "$SKILLS_SYNCED" != true ]; then
+  echo "promote.sh: $SHA12 is promoted, but sync-skills.sh failed (see $SD_LOG_FILE)" >&2
+  exit 4
 fi

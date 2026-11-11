@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use task_ops::knowledge::SkillUse;
 
 use serde_json::json;
 use task_core::SqliteStore;
@@ -236,6 +237,8 @@ pub(crate) struct CosChatLaunch {
     /// ADR 2026-11-07-root-done-tick-phase-timing D3/D4: `root_done_tick` がこれ以上かかった tick だけ
     /// `cos.root_done.*` の内訳を出す。試験だけが差し替える。
     pub(crate) root_done_probe_threshold: std::time::Duration,
+    /// ADR 2026-11-11-cos-skill-sync D3: no CoS run is claimed while the KB's skills drift.
+    pub(super) skill_gate: task_ops::cos_skill_gate::SkillGate,
 }
 
 /// Which durable claim binds the new run to its input message.
@@ -261,6 +264,7 @@ impl Dispatcher {
             triage: super::triage::CosTriageState::default(),
             project_controller: None,
             root_done_probe_threshold: crate::root_done_probe::ROOT_DONE_PROBE_THRESHOLD,
+            skill_gate: Default::default(),
         });
     }
 
@@ -320,7 +324,13 @@ impl Dispatcher {
         // ADR 2026-11-07-root-done-tick-phase-timing D3: the breakdown is non-empty only for a slow pass.
         let root_done_parts = launch.root_done_tick(self);
         lap("cos.root_done_tick");
-        if self.accepting_new_work && self.disk_ready && launch.config.enabled {
+        // ADR 2026-11-11-cos-skill-sync D3: a run already claimed keeps its retries; nothing new
+        // is claimed while the KB's CoS skills do not fit `[cos.triage]`.
+        let t = &launch.config.triage;
+        let policy = (t.policy_skill.as_str(), t.policy_version.as_str());
+        let (store, kb, now) = (&*self.store, &self.config.knowledge.root, self.now_utc());
+        let ready = launch.config.enabled && launch.skill_gate.ready(store, kb, policy, now);
+        if self.accepting_new_work && self.disk_ready && ready {
             if let Err(error) = launch.claim_queued(self) {
                 tracing::warn!(%error, "CoS chat launch tick failed");
             }
@@ -488,14 +498,8 @@ impl CosChatLaunch {
         if let Some(reason) = cfg.unavailable_reason.clone() {
             return Err(reason.into());
         }
-        let (skills, missing_skills) =
-            dispatcher.skills_context(&skill_names, task_ops::knowledge::SkillUse::Work);
-        if !missing_skills.is_empty() {
-            return Err(LaunchFailure::skills(format!(
-                "CoS skills unavailable: {}",
-                missing_skills.join(", ")
-            )));
-        }
+        // ADR 2026-11-11-cos-skill-sync D3: the gate before the claim found every SKILL.md.
+        let (skills, _) = dispatcher.skills_context(&skill_names, SkillUse::Work);
         // ADR 2026-10-28-cos-session-policy-key D1: the policy this run gets is part of the key.
         let policy_version = cfg.triage.policy_version.clone();
         let policy_key = super::policy::policy_key(

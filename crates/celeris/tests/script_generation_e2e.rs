@@ -156,15 +156,12 @@ impl World {
     fn config(&self, cos: bool) -> Config {
         let home = self.env.dir.path();
         let knowledge = home.join("knowledge");
-        for name in ["cos-operator", "cos-inbox-triage"] {
-            let skill = knowledge.join("skills").join(name);
-            std::fs::create_dir_all(&skill).expect("skill dir");
-            std::fs::write(
-                skill.join("SKILL.md"),
-                format!("---\nname: {name}\ndescription: test skill\n---\n# {name}\n"),
-            )
-            .expect("skill");
-        }
+        task_ops::cos_skill_gate::write_fixture(
+            &knowledge.join("skills"),
+            "cos-inbox-triage",
+            "11",
+        )
+        .expect("CoS skills");
         let cos = if cos {
             format!(
                 "[cos]\nenabled = true\nmax_turns = 2\nmax_wall_secs = 600\n\

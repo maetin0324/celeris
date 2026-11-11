@@ -1602,8 +1602,14 @@ async fn eval_trial_tick_does_not_wait_for_a_held_pool_lock() {
     d.tick().unwrap();
     let trial = only_trial(&store, &batch_id);
     let (target, lease) = trial_target(temp.path(), &trial.trial_id);
-    assert!(seen.lock().unwrap().is_empty(), "the run waits for its target");
-    assert!(!lease.exists(), "no lease is written while the lock is held");
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "the run waits for its target"
+    );
+    assert!(
+        !lease.exists(),
+        "no lease is written while the lock is held"
+    );
 
     // The holder lets go: the target is made off the tick and the run starts.
     drop(held);
@@ -1612,7 +1618,10 @@ async fn eval_trial_tick_does_not_wait_for_a_held_pool_lock() {
         .expect("the run starts once the pool lock is free");
     assert!(target.is_dir(), "{}", target.display());
     let written = task_worker::scratch::read_lease(&lease).unwrap().unwrap();
-    assert!(written.ttl_secs.is_some(), "the trial's lease carries its TTL");
+    assert!(
+        written.ttl_secs.is_some(),
+        "the trial's lease carries its TTL"
+    );
 
     // Scoring and clean-up under a held lock still settle the trial.
     let held = pool.lock().unwrap();

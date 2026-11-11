@@ -22,6 +22,8 @@ updated: 2026-11-11
 - `phase 1: health の悪化を直す（task_deps を既存の単位へ、解決を task-ops へ移す）`
 - `phase 1: validate_for_task の doc を adopt_plan の doc から離す（clippy doc_lazy_continuation）`
 - `phase 1: 検証が委譲の親・祖先と子を経由する循環を拒む（review の差し戻し）`
+- `phase 1: unit_task_deps::resolve を resolve_pending_units に改名（公開面の名前の重複を増やさない）`
+- `phase 1: 進捗に attempt 2 の commit を足す`
 
 ## review の差し戻しへの対応（attempt 2）
 - 指摘: 検証が委譲の親（`tree` を持たない子の `parent_id`）を指す `task:` 依存を通し、依存先の子を経由する循環も通した。

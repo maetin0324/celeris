@@ -43,7 +43,7 @@ task 01M74X0XAN0MCFJ4KZ3VVFT2QA の進捗。工程は contract → input-owner �
 - 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の変更 path は、`agent-docs/adr/` の 3 file とこの進捗の 1 file だけ。検査器・profile・baseline・TaskStore・campaign は変えていない。
 
 ## 工程 2: input-owner（共通構築で汎用候補を渡し旧省略経路を撤去する）
-状態: 実装と commit は済み。範囲外の試験 12 件が落ちるので、unit の check（`test-affected.sh`・`health_review_policy_`）は不合格。範囲外の file を直す必要がある（ADR の R6 の見込みどおり）。1 回目の run は plan_issue と書いたが done を返したので、celeris が check を走らせて不合格になった。2 回目の run（下の「再確認」）で同じ 12 件を確かめ、`yield.plan_issue` で返した。
+状態: 完了。実装と、範囲外で落ちた試験 12 件（試験 file 6 個）の直しを commit した。unit の check はすべて exit 0（下の「範囲外の試験の直し」）。経緯: 1 回目の run は範囲外の 12 件が落ちたまま done を返し、check が不合格になった。2 回目の run は同じ 12 件を確かめて `yield.plan_issue` で返した。replan で input-owner の範囲に 6 file が入り、3 回目の run で直した。
 
 ### 変更
 - `phase 2: Absent の材料を共通構築に合流し旧省略経路を撤去する`
@@ -87,12 +87,32 @@ task 01M74X0XAN0MCFJ4KZ3VVFT2QA の進捗。工程は contract → input-owner �
   - `unknown_tests.rs:320` は `(Absent, Missing)` の本文に旧い `POLICY_ABSENT` の文「policy の状態を決められない」を、`:421` は `HealthReviewInputBuilt` が無いことを期待している。
 - 範囲内だけで通す手（`POLICY_ABSENT` の文を残す、stub の検査器を `present` にする、I7 を弱める）は、ADR の R4・R1 に反する回避策なので採らない。
 
+### 範囲外の試験の直し（3 回目の run。replan 後）
+- `phase 2: 旧い契約を固定する試験 3 件を新しい契約に替え、偽の reviewer 9 件に health を書かせる` — 次の 6 file。どれも試験だけで、本体の code・I7（`health_review/verdict.rs`）・stub の検査器・`POLICY_ABSENT` の撤去は変えていない。
+  - (A) `crates/task-dispatch/src/health_review/policy_review/unknown_tests.rs`
+    - `health_review_policy_unknown_absent_policy_change_needs_approval`: 「`HealthReviewInputBuilt` を作らない」の assert を、`HealthReviewInputBuilt` が 1 件あり `input.policy.changed = true`、`owner_rows`・`invariants` が空であることの assert に替えた。承認の子の assert（本文の `policy files:`）は残した。
+    - `health_review_policy_unknown_candidates_wait_for_a_human`: `(Absent, Missing)` の期待文を「repo_health.py が report を書かなかった」にした。不明の理由（`could not be determined`・`policy state unknown: `・candidate の SHA）と、同じ candidate で子を作り直さない assert は変えていない。
+  - (A) `crates/task-dispatch/src/health_review/scenario_tests.rs` の `health_review_scenario_normal_change`: `baseline.final_reviews() == vec![None]` を、`[review]` の無い repo の final review が受けた `ReviewRequest.health` に diff（変更 path）・findings（new 1 件）・policy（`source = base`・`changed = false`）が入り、`owner_rows`・`invariants` が空で、task が Done になることの assert に替えた。
+  - (B) 偽の reviewer の `review.json` に `"health":{"findings":[]}` を足した（9 件）。`dispatcher/tests/target_sync.rs` の `ReviewShaAdapter` と `CountingReviewer`（5 件）、`dispatcher/tests/health_enforce.rs` の `review_repair_not_evaluated_reviewer_does_not_block_a_health_repair`（1 件）、`dispatcher/tests/phase_effect_ab/review_sync.rs` の `SyncScenarioAdapter`（2 件）、`dispatcher/tests/phase_effect_ab/stale_priority.rs` の `ReviewAdapter`（1 件）。
+- 試験ごとの不変条件と変えた理由は doc comment・注釈に書いた。(A) は旧い契約（absent では材料を作らない）を ADR 2026-11-11-health-generic-review-input の R4 で撤去したので、新しい契約（R1）の中身を確かめる形に替えた。守る不変条件（I8・D6.4 の fail closed、`policy.changed` の承認）は変えていない。(B) は I7（ADR 2026-11-07-health-review-integration D5.2）が health の材料を受けた review に health の判定を求め、R1 で absent の repo も材料を受けるようになったので、偽の reviewer も空の判定を書く（R6）。各試験が守る不変条件（target の同期・reviewer の合格の再利用・health の repair・review の同期の回数・stale の優先順）は変えていない。
+- task の `expected_write_paths` の外の 5 file（`dispatcher/tests/health_review_input.rs`・`target_sync.rs`・`health_enforce.rs`・`phase_effect_ab/review_sync.rs`・`phase_effect_ab/stale_priority.rs`）を変えた理由: task の受け入れ条件 2（提出時の affected tests の合格）を満たすには、`test-affected.sh` が走らせるこれらの試験を新しい契約に合わせる必要がある（ADR の R6 の見込みどおり）。`health_review_input.rs` は工程 2 の実装の commit で旧試験を置き換えた file（計画の input-owner の範囲）、残りの 4 file は (B) の偽の reviewer の file。
+
+### 証拠（3 回目の run。提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+- `cargo nextest run -p task-dispatch --no-fail-fast -E 'test(health_review_input_) | test(health_generic_review_input_) | test(health_review_policy_) | test(health_review_scenario_) | test(target_sync::) | test(health_enforce::) | test(phase_effect_ab_)'` → exit 0。103 件すべて合格。
+- `bash scripts/dev/test-affected.sh` → exit 0。nextest 3747 件すべて合格、11 件 skip。repo-health は verdict pass・exit 0・new 0・worsened 0。repo_health_gate の試験 7 件は OK。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。差分なし。
+- `! git grep -n -e POLICY_ABSENT -e 'fn absent_policy' -- crates/`、`health_generic.rs` に `#[should_panic` が無く `_reaches_reviewer()` が 4 件、`git diff --quiet $(git merge-base HEAD main) -- …/verdict.rs …/verdict …/stub_checker.rs …/stub_checker crates/task-core/ crates/campaign/ scripts/dev/repo-health/ scripts/dev/check-health.sh scripts/dev/source-size-baseline.json`（計画の check 3）→ exit 0。
+- 範囲（計画の check 4）→ exit 0。変更 path は input-owner の `expected_write_paths` の 11 file の中だけ。検査器・profile・baseline・TaskStore・campaign は変えていない。
+- `sh scripts/dev/progress-index.sh --check` → exit 0。
+
 ## 未解決（工程 2）
-- 上の 12 件（試験 file 6 個）が `expected_write_paths` の外にある。input-owner の `expected_write_paths` と範囲 check の正規表現に、次の 6 file を足す必要がある（plan_issue）。`crates/task-dispatch/src/health_review/policy_review/unknown_tests.rs`、`crates/task-dispatch/src/health_review/scenario_tests.rs`、`crates/task-dispatch/src/dispatcher/tests/target_sync.rs`、`crates/task-dispatch/src/dispatcher/tests/health_enforce.rs`、`crates/task-dispatch/src/dispatcher/tests/phase_effect_ab/review_sync.rs`、`crates/task-dispatch/src/dispatcher/tests/phase_effect_ab/stale_priority.rs`。別の unit に分けると、input-owner の check（`test-affected.sh`）が先に落ちるので、同じ unit の範囲に足す。
-- `task_core::design_review::ReviewPolicy::definition_sha256` の doc comment は「health の材料の再利用の鍵に入る」のまま。鍵には使わなくなった（R2.3）。`crates/task-core/src/model/events.rs` の `HealthReviewInputSkipped` の doc comment（R4）と合わせて範囲外。
+- 範囲外で落ちた 12 件は直した。残りは注釈だけで、どれも動作に影響しない。
+  - `crates/task-core/src/model/events.rs` の `HealthReviewInputSkipped` の doc comment と、`task_core::design_review::ReviewPolicy::definition_sha256` の doc comment（「health の材料の再利用の鍵に入る」。R2.3 で鍵に使わなくなった）が古い。task の受け入れ条件が `crates/task-core/` の無変更を求めるので変えていない。
+  - `crates/task-dispatch/src/health_review/verdict.rs` の module doc の「`health` を渡していない review（`[review]` の無い repo、WU の review）」が古い。今は `[review]` の無い repo にも渡す。計画の check 3 が `verdict.rs` の無変更を求めるので変えていない。
 
 ## 未解決
-- 計画の後続 unit の範囲（`expected_write_paths`）に無いが変える必要のある path がある（ADR の R6）。`crates/task-dispatch/src/health_review/policy_review/unknown_tests.rs` の `health_review_policy_unknown_absent_policy_change_needs_approval` は Absent で `HealthReviewInputBuilt` を作らないことを assert していて、input-owner の変更で落ちる。共通の stub の検査器は `source = absent` を返すので、`health` を書かない偽の reviewer を持つ dispatcher 試験が I7 で落ちる（工程 2 で確認。落ちたのは `target_sync.rs`・`health_enforce.rs`・`phase_effect_ab/review_sync.rs`・`phase_effect_ab/stale_priority.rs` で、契約の工程の候補に挙げた `work_units.rs` は落ちなかった）。`crates/task-core/src/model/events.rs` の doc comment も古くなる。
+- 無し（工程 2 の注釈 3 か所は「提案」に回した）。
 
 ## 提案
-- input-owner の範囲に、「未解決（工程 2）」の試験 file 6 個を足す。直し方は「範囲外で落ちる試験」の (A)・(B) のとおりで、I7・stub の検査器・`POLICY_ABSENT` の撤去は変えない。doc comment だけの `crates/task-core/src/model/events.rs`（`HealthReviewInputSkipped`）と `task_core::design_review::ReviewPolicy::definition_sha256` も同じ unit か record の範囲に足す。
+- 古い注釈 3 か所（`events.rs` の `HealthReviewInputSkipped`、`ReviewPolicy::definition_sha256`、`health_review/verdict.rs` の module doc）を、`crates/task-core/` と `verdict.rs` を変えてよい別の task で直す。どれも説明だけの変更。

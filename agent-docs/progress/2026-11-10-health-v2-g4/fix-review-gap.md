@@ -27,8 +27,20 @@ task 01M74X0XAN0MCFJ4KZ3VVFT2QA の進捗。工程は contract → input-owner �
 - 候補が profile・baseline・検査器を変える → `reviewed_sha` で作り直す。値は base の版から作り、`policy.changed = true` で人の承認（I8）。
 - policy の状態が不明の材料は再利用しない（今のまま）。
 
-### 証拠（工程 1 の HEAD で実行）
-（検査の後に書く）
+### 証拠（工程 1 の提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+変えたのは文書だけなので、`test-affected.sh` は軽い経路（docs のみ）を通った。Rust の試験は走っていない（対象の crate が無い）。
+- `bash scripts/dev/test-affected.sh --list` → exit 0。対象の crate・package は 0 件。
+- `bash scripts/dev/test-affected.sh` → exit 0。「試験対象の変更なし（docs のみ等）」。repo_health_gate の試験 7 件は OK。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。差分なし。
+- `bash scripts/dev/check-health.sh --base $CELERIS_WU_BASE` → exit 0。verdict pass、mode doc-only、fail 級 0、new 0・worsened 0。`policy.changed` は pass。
+- `sh scripts/dev/progress-index.sh --check` → exit 0（ok）。
+- `bash scripts/dev/check-adr-numbers.sh` → exit 0（420 file）。
+- `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → exit 0。
+- `bash scripts/dev/check-doc-links.sh` → exit 0。
+- `python3 scripts/dev/check-architecture-map.py` → exit 0（999 path）。
+- `python3 scripts/dev/check-human-text.py` → exit 0（指摘 0 件）。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の変更 path は、`agent-docs/adr/` の 3 file とこの進捗の 1 file だけ。検査器・profile・baseline・TaskStore・campaign は変えていない。
 
 ## 未解決
 - 計画の後続 unit の範囲（`expected_write_paths`）に無いが変える必要のある path がある（ADR の R6）。`crates/task-dispatch/src/health_review/policy_review/unknown_tests.rs` の `health_review_policy_unknown_absent_policy_change_needs_approval` は Absent で `HealthReviewInputBuilt` を作らないことを assert していて、input-owner の変更で落ちる。共通の stub の検査器は `source = absent` を返すので、`health` を書かない偽の reviewer を持つ dispatcher 試験（候補: `target_sync.rs`・`health_enforce.rs`・`work_units.rs`）が I7 で落ちる見込み（未確認）。`crates/task-core/src/model/events.rs` の doc comment も古くなる。

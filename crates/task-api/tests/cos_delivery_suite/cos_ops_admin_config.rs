@@ -3,7 +3,7 @@
 //! rejected audit row) and applied through the envelope with its row, audit event and chat card.
 //! Daemon-channel and external operations (C) use fakes: the daemon admin channel, the release
 //! source and the discovery hook are test doubles, so nothing outside the test process is touched.
-mod common;
+use crate::common;
 
 use common::cos_ops::{OPS, cos_bearer, db, op_body, run_domain, run_external};
 use common::*;

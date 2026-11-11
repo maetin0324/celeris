@@ -62,7 +62,17 @@ task 01M6TYVJT0Z1CBGNK8VTNK8ZJH の WorkUnit inject-wait の記録。基準は `
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
-（検査の後に書く）
+`bash scripts/dev/test-affected.sh` は commit `phase 2: record inject-wait evidence` の時点で実行した。その後の commit はこの記録の証拠欄だけを変える。他の検査は提出時の HEAD で実行した。
+
+- `bash scripts/dev/test-affected.sh` → exit 0（nextest 5958 tests run: 5958 passed、22 skipped、対象は celeris-credentiald と逆依存の crate。web は tsc -b と vitest 104 files・712 tests passed。`repo_health_gate: all checks passed`）
+- `cargo test -p celeris-credentiald --test injection_ipc` → 19 passed（既存 17 + `concurrent_first_request_` 2）
+- `cargo test -p celeris-credentiald --lib first_request_tests` → 2 passed（既存の 2 試験）
+- `cargo test -p celeris-credentiald --lib accept_tests` → 2 passed
+- `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0
+- `bash scripts/dev/check-doc-links.sh`・`bash scripts/dev/check-adr-numbers.sh`・`sh scripts/dev/progress-index.sh --check` → いずれも exit 0
+- `repo_health.py --repo . --base "$CELERIS_WU_BASE" --head HEAD --profile celeris --policy-version 1 --rules size.responsibility-growth --out …` → exit 0（verdict=pass、new=0、worsened=0）
+- `grep -rn 'ADR-0109 D1 付記 2026-11-11' crates/` → 該当なし（exit 1）
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → ADR・この記録・`ipc.rs`・`injection_ipc.rs`（src）・`tests/injection_ipc.rs` の 5 件
 
 ## 未解決
 

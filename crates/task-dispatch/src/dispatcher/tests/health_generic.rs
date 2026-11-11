@@ -555,9 +555,7 @@ async fn review_flow(
         Reviewer::Pass => {
             Arc::new(ParallelWuAdapter::new(Duration::from_millis(5)).with_review(REVIEW_PASS))
         }
-        Reviewer::Candidates => Arc::new(CandidateReviewer {
-            requests: requests.clone(),
-        }),
+        Reviewer::Candidates => Arc::new(CandidateReviewer::new(requests.clone())),
     };
     let mut d = non_celeris_dispatcher(store.clone(), adapter, ws.path(), 1);
     let releases = tempfile::tempdir().unwrap();
@@ -871,12 +869,25 @@ const CANDIDATE_KINDS: [(&str, HealthFindingKind); 2] = [
 /// `findings.new` の候補（[`CANDIDATE_KINDS`] の rule）ごとに blocking の finding（path は候補の path、reason は候補の
 /// fingerprint を引く）を `review.json` に書く。候補が無ければ空の health の判定で合格にする。fixture・作業ツリーは
 /// 読まず、受けた材料だけで決める（材料が届かなければ合格を書くので、届かない不具合は Done で表に出る）。ほかの run
-/// （worker のやり直し）は何も変えずに終わる。
+/// （worker のやり直し・WU の run）は `ReviewRequest.health` の有無を `work_runs` に記録し、`apply` があれば WU の
+/// run の作業ツリーを fixture の候補まで進める（[`apply_candidate`]。WU の作業の代わり）。
 struct CandidateReviewer {
     requests: Arc<StdMutex<Vec<Option<HealthReviewInput>>>>,
+    /// reviewer でない run の `(WU の key か "atomic", ReviewRequest.health を受けたか)`（順に）。
+    work_runs: Arc<StdMutex<Vec<(String, bool)>>>,
+    /// WU の run が作業ツリーに入れる候補の commit（[`integrated_flow`]）。
+    apply: Option<String>,
 }
 
 impl CandidateReviewer {
+    fn new(requests: Arc<StdMutex<Vec<Option<HealthReviewInput>>>>) -> Self {
+        CandidateReviewer {
+            requests,
+            work_runs: Arc::new(StdMutex::new(Vec::new())),
+            apply: None,
+        }
+    }
+
     /// 受けた材料 `health` への `review.json`（acceptance[1] が `Check::Reviewer`）。
     fn review_json(health: Option<&HealthReviewInput>) -> String {
         let findings: Vec<serde_json::Value> = health
@@ -923,6 +934,20 @@ impl WorkerAdapter for CandidateReviewer {
             )
             .unwrap();
             self.requests.lock().unwrap().push(health);
+        } else {
+            let key = req.context.work_unit.as_ref().map(|w| w.key.clone());
+            if let (Some(head), Some(_)) = (&self.apply, &key) {
+                apply_candidate(req.cwd(), head);
+            }
+            let got = req
+                .context
+                .review
+                .as_ref()
+                .is_some_and(|r| r.health.is_some());
+            self.work_runs
+                .lock()
+                .unwrap()
+                .push((key.unwrap_or_else(|| "atomic".into()), got));
         }
         Ok(RunOutcome {
             terminal: Terminal::Done {
@@ -938,36 +963,68 @@ impl WorkerAdapter for CandidateReviewer {
 /// adapter が受けた 1 回目の reviewer run の `ReviewRequest.health` から、task の唯一の repo の材料を返す。repo・
 /// base（= fixture の base）・head（= 候補）・diff（= 候補が変えた path の全部）・空の `owner_rows`/`invariants`
 /// （base の profile に `[review]` が無い）・policy の状態（`source` は `policy_source`、`changed = false`）・材料に
-/// した report を確かめる。同じ候補の `HealthReviewInputBuilt` の `input` が受けた材料と同じことも確かめる（event は
-/// 受信の写しとして照合するだけ）。
+/// した report を確かめる（[`assert_repo_input`]）。
 fn received_input<'a>(flow: &'a ReviewFlow, policy_source: &str) -> &'a HealthRepoInput {
-    let skipped: Vec<&String> = flow
-        .events
+    let health = delivered(&flow.requests, &flow.events);
+    assert!(health.brief.is_none(), "an atomic task has no plan");
+    assert_eq!(health.repos.len(), 1, "{health:?}");
+    let repo = &health.repos[0];
+    let want = RepoExpect {
+        repo_id: flow.task.repos[0].repo_id.to_string(),
+        target: flow.fx.base(),
+        reviewed: flow.fx.head(),
+        changed: &flow.changed,
+        policy_source,
+    };
+    assert_repo_input(repo, &flow.events, &want);
+    repo
+}
+
+/// 全部の reviewer run が `ReviewRequest.health` を受け、`HealthReviewInputSkipped` が無いことを確かめ、1 回目の
+/// reviewer run が受けた材料を返す。
+fn delivered<'a>(
+    requests: &'a [Option<HealthReviewInput>],
+    events: &[Event],
+) -> &'a HealthReviewInput {
+    let skipped: Vec<&String> = events
         .iter()
         .filter_map(|e| match e {
             Event::HealthReviewInputSkipped { reason, .. } => Some(reason),
             _ => None,
         })
         .collect();
+    assert!(!requests.is_empty(), "no reviewer run: {events:?}");
     assert!(
-        !flow.requests.is_empty(),
-        "no reviewer run: {:?}",
-        flow.events
-    );
-    assert!(
-        flow.requests.iter().all(Option::is_some),
+        requests.iter().all(Option::is_some),
         "every reviewer run gets ReviewRequest.health (skipped: {skipped:?})"
     );
-    let health = flow.requests[0].as_ref().expect("checked above");
-    assert!(health.brief.is_none(), "an atomic task has no plan");
-    assert_eq!(health.repos.len(), 1, "{health:?}");
-    let repo = &health.repos[0];
-    assert_eq!(repo.repo_id, flow.task.repos[0].repo_id.to_string());
-    assert_eq!(repo.target_sha, flow.fx.base());
-    assert_eq!(repo.reviewed_sha, flow.fx.head());
+    assert!(skipped.is_empty(), "{skipped:?}");
+    requests[0].as_ref().expect("checked above")
+}
+
+/// 1 repo の材料の期待（[`assert_repo_input`]）。
+struct RepoExpect<'a> {
+    repo_id: String,
+    /// review の target（= その repo の fixture の base）。
+    target: &'a str,
+    /// review の候補（atomic では fixture の候補、WU の統合後は task の branch の HEAD）。
+    reviewed: &'a str,
+    /// base → 候補で変わった path の全部。
+    changed: &'a [String],
+    /// `policy.source`（profile あり `base`、profile 無し `builtin`）。
+    policy_source: &'a str,
+}
+
+/// adapter が受けた 1 repo の材料が `want` の repo・base・head・diff を持ち、`owner_rows`・`invariants` が空で、
+/// policy は不変（`changed = false`）、report は `pass` で reviewable であることを確かめる。同じ repo・候補の
+/// `HealthReviewInputBuilt` は 1 件で、その `input` は受けた材料と同じ（event は受信の写しとして照合するだけ）。
+fn assert_repo_input(repo: &HealthRepoInput, events: &[Event], want: &RepoExpect<'_>) {
+    assert_eq!(repo.repo_id, want.repo_id);
+    assert_eq!(repo.target_sha, want.target, "{}", want.repo_id);
+    assert_eq!(repo.reviewed_sha, want.reviewed, "{}", want.repo_id);
     let mut diff: Vec<&str> = repo.diff.paths.iter().map(|p| p.path.as_str()).collect();
     diff.sort_unstable();
-    let mut changed: Vec<&str> = flow.changed.iter().map(String::as_str).collect();
+    let mut changed: Vec<&str> = want.changed.iter().map(String::as_str).collect();
     changed.sort_unstable();
     assert!(!changed.is_empty());
     assert_eq!(diff, changed, "{:?}", repo.diff);
@@ -976,7 +1033,7 @@ fn received_input<'a>(flow: &'a ReviewFlow, policy_source: &str) -> &'a HealthRe
         repo.owner_rows.is_empty() && repo.invariants.is_empty(),
         "no [review] in the base profile: {repo:?}"
     );
-    assert_eq!(repo.policy.source, policy_source, "{:?}", repo.policy);
+    assert_eq!(repo.policy.source, want.policy_source, "{:?}", repo.policy);
     assert!(
         !repo.policy.changed && repo.policy.files.is_empty(),
         "{:?}",
@@ -988,22 +1045,77 @@ fn received_input<'a>(flow: &'a ReviewFlow, policy_source: &str) -> &'a HealthRe
         repo.findings
     );
     assert_eq!(repo.findings.verdict, "pass", "{:?}", repo.findings);
-    assert!(skipped.is_empty(), "{skipped:?}");
-    let built: Vec<&serde_json::Value> = flow
-        .events
+    let built: Vec<&serde_json::Value> = events
         .iter()
         .filter_map(|e| match e {
             Event::HealthReviewInputBuilt {
+                repo_id,
                 reviewed_sha,
                 input,
                 ..
-            } if reviewed_sha == flow.fx.head() => Some(input),
+            } if *repo_id == want.repo_id && reviewed_sha == want.reviewed => Some(input),
             _ => None,
         })
         .collect();
     assert_eq!(built.len(), 1, "one material per candidate");
     assert_eq!(*built[0], serde_json::to_value(repo).unwrap());
-    repo
+}
+
+/// 受けた材料 `repo` の `findings.new` に `rule` の候補が 1 件（warning・new、evidence の path は `changed` の 1 つ）
+/// あり、reviewer がそれを根拠に返した blocking の health finding（`health:<kind>`、候補の fingerprint を引く）で
+/// review が不合格になったことを確かめる。
+fn assert_candidate_fails_review(
+    repo: &HealthRepoInput,
+    rule: &str,
+    changed: &[String],
+    events: &[Event],
+) {
+    let candidates: Vec<_> = repo
+        .findings
+        .new
+        .iter()
+        .filter(|f| f.rule_id == rule)
+        .collect();
+    assert_eq!(candidates.len(), 1, "{rule}: {:?}", repo.findings);
+    let candidate = candidates[0];
+    assert_eq!(
+        (candidate.severity.as_str(), candidate.delta.as_str()),
+        ("warning", "new"),
+        "{candidate:?}"
+    );
+    let path = candidate.path.as_deref().unwrap_or_default();
+    assert!(
+        changed.iter().any(|c| c == path),
+        "the candidate's evidence {path:?} must be a changed file {changed:?}"
+    );
+    let (_, finding_kind) = CANDIDATE_KINDS
+        .iter()
+        .find(|(r, _)| *r == rule)
+        .unwrap_or_else(|| panic!("{rule} is not a candidate rule"));
+    let tag = format!("health:{}", finding_kind.as_str());
+    let failed = failed_verdicts(events, &tag);
+    assert!(
+        !failed.is_empty(),
+        "the reviewer's blocking {tag} must fail the review: {events:?}"
+    );
+    assert!(
+        failed
+            .iter()
+            .all(|r| r.contains(&candidate.fingerprint) && !r.contains("ungrounded")),
+        "the blocking finding is grounded on the received candidate: {failed:?}"
+    );
+}
+
+/// 受けた材料 `repo` に二重化の候補（`dup.contract`・`dup.state`）が無い。
+fn assert_no_candidate(repo: &HealthRepoInput) {
+    assert!(
+        repo.findings
+            .new
+            .iter()
+            .all(|f| CANDIDATE_KINDS.iter().all(|(rule, _)| *rule != f.rule_id)),
+        "no duplication candidate for a good change: {:?}",
+        repo.findings
+    );
 }
 
 /// review の不合格の verdict のうち reason に `tag` を含むもの。
@@ -1058,43 +1170,7 @@ async fn request_candidate_blocks_done(kind: &str, variant: &str, without_profil
     let flow = request_flow(&bundled, kind, variant, without_profile).await;
     let source = if without_profile { "builtin" } else { "base" };
     let repo = received_input(&flow, source);
-    let rule = expected_rule(&flow.fx);
-    let candidates: Vec<_> = repo
-        .findings
-        .new
-        .iter()
-        .filter(|f| f.rule_id == rule)
-        .collect();
-    assert_eq!(candidates.len(), 1, "{rule}: {:?}", repo.findings);
-    let candidate = candidates[0];
-    assert_eq!(
-        (candidate.severity.as_str(), candidate.delta.as_str()),
-        ("warning", "new"),
-        "{candidate:?}"
-    );
-    let path = candidate.path.as_deref().unwrap_or_default();
-    assert!(
-        flow.changed.iter().any(|c| c == path),
-        "the candidate's evidence {path:?} must be a changed file {:?}",
-        flow.changed
-    );
-    let (_, finding_kind) = CANDIDATE_KINDS
-        .iter()
-        .find(|(r, _)| *r == rule)
-        .unwrap_or_else(|| panic!("{rule} is not a candidate rule"));
-    let tag = format!("health:{}", finding_kind.as_str());
-    let failed = failed_verdicts(&flow.events, &tag);
-    assert!(
-        !failed.is_empty(),
-        "the reviewer's blocking {tag} must fail the review: {:?}",
-        flow.events
-    );
-    assert!(
-        failed
-            .iter()
-            .all(|r| r.contains(&candidate.fingerprint) && !r.contains("ungrounded")),
-        "the blocking finding is grounded on the received candidate: {failed:?}"
-    );
+    assert_candidate_fails_review(repo, &expected_rule(&flow.fx), &flow.changed, &flow.events);
     let items = review_health(&flow.events);
     assert!(
         !items.is_empty() && items.iter().all(|(pass, _)| *pass),
@@ -1147,15 +1223,7 @@ async fn request_good_is_done(kind: &str, without_profile: bool) {
     let flow = request_flow(&bundled, kind, "good", without_profile).await;
     assert!(flow.fx.expected.is_empty(), "{:?}", flow.fx);
     let source = if without_profile { "builtin" } else { "base" };
-    let repo = received_input(&flow, source);
-    assert!(
-        repo.findings
-            .new
-            .iter()
-            .all(|f| CANDIDATE_KINDS.iter().all(|(rule, _)| *rule != f.rule_id)),
-        "no duplication candidate for a good change: {:?}",
-        repo.findings
-    );
+    assert_no_candidate(received_input(&flow, source));
     assert_eq!(flow.requests.len(), 1, "one reviewer run");
     assert!(
         flow.events
@@ -1183,6 +1251,225 @@ async fn g4_r1_review_request_builtin_generic_good_is_done() {
     request_good_is_done("ts", true).await;
 }
 
+// ---- WU の統合後の final review（G4-R1） ----
+//
+// atomic の試験（上の `g4_r1_review_request_*`）は計画の無い task の direct review で、WU の check・WU の統合を通らない。
+// 既存の `health_review_input_not_built_for_work_units` は材料の event を `if let Some` と `builds.len() <= 1` で見るので、
+// final review の reviewer run に届かなくても（材料の event が 0 件でも）合格し、受信の材料も見ない。ここでは採用済みの計画（1 段 1 WU、WU の run が fixture の
+// 候補を入れる）を流し、WU の check・統合の後の final review の reviewer が実際に受けた `ReviewRequest.health` を見る。
+
+/// WU の統合後の final review を流した結果（fixture と worktree の root は試験の終わりまで持つ）。
+struct IntegratedFlow {
+    _dirs: (tempfile::TempDir, tempfile::TempDir),
+    fx: Fixture,
+    changed: Vec<String>,
+    task: Task,
+    /// final review の時の task の branch の HEAD（WU の統合の結果）。
+    integrated: String,
+    unit: task_core::WorkUnitRow,
+    events: Vec<Event>,
+    status: Status,
+    requests: Vec<Option<HealthReviewInput>>,
+    work_runs: Vec<(String, bool)>,
+}
+
+/// 1 段 1 WU（check あり）の採用済みの計画の task（acceptance[1] が `Check::Reviewer`、やり直し無し）を流す。WU の
+/// run が fixture の候補を WU の作業ツリーに入れ、WU の check・段の統合の後に final review の reviewer run
+/// （[`CandidateReviewer`]）が受けた材料を記録する。
+async fn integrated_flow(kind: &str, variant: &str, without_profile: bool) -> IntegratedFlow {
+    let fixtures = tempfile::tempdir().unwrap();
+    let repo = fixtures.path().join(kind);
+    let fx = if without_profile {
+        build_fixture_without_profile(kind, variant, &repo)
+    } else {
+        build_fixture(kind, variant, &repo)
+    };
+    let changed = changed_paths(&repo, &fx);
+    let root = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut task = parallel_task(&repo, "true");
+    // review 前の同期（ADR-0118）と材料は案件の repo（`task.repos`）ごと。案件の repo の無い task は同期せず、材料も
+    // 作らない（`NOT_SYNCED` の記録も無い）ので、atomic の試験（`target_sync::reviewing_task`）と同じく案件の repo にする。
+    let (project, repos) = project_with_repos(&store, &[(kind, &repo, task_core::RepoKind::Git)]);
+    task.project_id = Some(project);
+    task.repos = repos.iter().map(task_core::RepoRef::of).collect();
+    task.budget.max_retries = 0;
+    task.acceptance.push(Criterion {
+        text: "reviewer".into(),
+        check: Check::Reviewer,
+    });
+    store.insert(&task).unwrap();
+    adopt_v2_plan(
+        &store,
+        task.id,
+        &["build"],
+        vec![with_check(v2_wu("a", "build", &[]))],
+    );
+    let requests = Arc::new(StdMutex::new(Vec::new()));
+    let mut reviewer = CandidateReviewer::new(requests.clone());
+    reviewer.apply = Some(fx.head().to_string());
+    let work_runs = reviewer.work_runs.clone();
+    let mut d = non_celeris_dispatcher(store.clone(), Arc::new(reviewer), root.path(), 2);
+    assert!(run_until_idle(&mut d, 800).await.idle);
+    let wt = d.local_worktree_for(&task).unwrap();
+    let integrated = git_out(&wt.dir, &["rev-parse", "HEAD"]);
+    let unit = unit(&store, task.id, "a");
+    let events = events_of(&store, task.id);
+    let status = store.get(task.id).unwrap().unwrap().status;
+    let requests = requests.lock().unwrap().clone();
+    let work_runs = work_runs.lock().unwrap().clone();
+    IntegratedFlow {
+        _dirs: (fixtures, root),
+        fx,
+        changed,
+        task,
+        integrated,
+        unit,
+        events,
+        status,
+        requests,
+        work_runs,
+    }
+}
+
+/// WU の統合後の final review の材料を確かめて返す。WU は done で、WU の check は health を評価した（証跡あり）が、
+/// WU の run は `ReviewRequest.health` を受けず、`HealthReviewInputBuilt` は final review の reviewer run の分だけで
+/// 最初の reviewer run より前に無い（D4.4: WU の check・WU の run では材料を作らない）。reviewer は 1 回だけ起き、
+/// 受けた材料は task の repo・base（= fixture の base）・候補（= 統合後の task の branch の HEAD。fixture の候補を
+/// 含む）・diff（= fixture の候補が変えた path の全部）を持つ。
+fn integrated_input<'a>(flow: &'a IntegratedFlow, policy_source: &str) -> &'a HealthRepoInput {
+    assert_eq!(
+        flow.unit.status,
+        task_core::WorkUnitStatus::Done,
+        "{:?}",
+        flow.events
+    );
+    assert!(
+        health_items(&flow.events)
+            .iter()
+            .any(|(id, ..)| *id == flow.unit.id),
+        "the work unit check evaluates health: {:?}",
+        flow.events
+    );
+    assert!(
+        flow.work_runs.iter().any(|(key, _)| key == "a"),
+        "{:?}",
+        flow.work_runs
+    );
+    assert!(
+        flow.work_runs.iter().all(|(_, got)| !got),
+        "no work unit run gets ReviewRequest.health: {:?}",
+        flow.work_runs
+    );
+    let reviewers: Vec<(usize, &String)> = flow
+        .events
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| match e {
+            Event::WorkerStarted {
+                run_id,
+                role: Some(task_core::RunRole::Reviewer),
+                ..
+            } => Some((i, run_id)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reviewers.len(),
+        1,
+        "one final reviewer run: {:?}",
+        flow.events
+    );
+    let builds: Vec<(usize, &String)> = flow
+        .events
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| match e {
+            Event::HealthReviewInputBuilt { review_run, .. } => Some((i, review_run)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(builds.len(), 1, "{:?}", flow.events);
+    assert!(
+        builds[0].0 > reviewers[0].0 && builds[0].1 == reviewers[0].1,
+        "the material belongs to the final reviewer run: {:?}",
+        flow.events
+    );
+    let health = delivered(&flow.requests, &flow.events);
+    assert_eq!(flow.requests.len(), 1, "one reviewer run");
+    assert_eq!(health.repos.len(), 1, "{health:?}");
+    let repo = &health.repos[0];
+    let dir = &flow.task.workspace;
+    let WorkspaceSpec::Local { path, .. } = dir else {
+        panic!("a local workspace: {dir:?}")
+    };
+    git_out(
+        path,
+        &[
+            "merge-base",
+            "--is-ancestor",
+            flow.fx.head(),
+            &flow.integrated,
+        ],
+    );
+    let want = RepoExpect {
+        repo_id: flow.task.repos[0].repo_id.to_string(),
+        target: flow.fx.base(),
+        reviewed: &flow.integrated,
+        changed: &flow.changed,
+        policy_source,
+    };
+    assert_repo_input(repo, &flow.events, &want);
+    repo
+}
+
+/// 不変条件（ADR 2026-11-11-health-generic-review-input R1・R5、ADR 2026-11-07-health-review-integration D4.4・D5.3）:
+/// 計画の task で WU が汎用 repo（review 方針が無い）に候補を入れて統合された後、final review の reviewer が実際に
+/// 受けた `ReviewRequest.health` に、統合後の候補の diff と本物の検査器の候補の finding（evidence の path は候補が
+/// 変えた file）が入り、`owner_rows`・`invariants` は空。WU の check・WU の run は材料を作らず受けない。受けた候補を
+/// 根拠にした reviewer の blocking の不合格で、task は Done にならない。
+/// 既存の試験で足りない理由: atomic の `g4_r1_review_request_*` は WU の check・統合を通らない。
+/// `health_review_input_not_built_for_work_units` は材料の event が 0 件でも合格し、受信の材料を見ない。`health_generic_wu_check_*` は WU の check の証跡だけを見る。
+async fn integrated_candidate_blocks_done(kind: &str, variant: &str, without_profile: bool) {
+    let (_bundle, _bundled) = configure_real_bundled_checker();
+    let flow = integrated_flow(kind, variant, without_profile).await;
+    let source = if without_profile { "builtin" } else { "base" };
+    let repo = integrated_input(&flow, source);
+    assert_candidate_fails_review(repo, &expected_rule(&flow.fx), &flow.changed, &flow.events);
+    assert!(!review_passed(&flow.events), "{:?}", flow.events);
+    assert_eq!(flow.status, Status::Failed, "{:?}", flow.events);
+}
+
+#[tokio::test]
+async fn g4_r1_review_request_integrated_ts_dup_contract_fails_review() {
+    integrated_candidate_blocks_done("ts", "dup-contract", false).await;
+}
+
+#[tokio::test]
+async fn g4_r1_review_request_integrated_builtin_generic_dup_state_fails_review() {
+    integrated_candidate_blocks_done("rust", "dup-state", true).await;
+}
+
+/// 不変条件（同じ ADR の R1・R5）: 良い変更の WU を統合した後の final review でも、reviewer が受けた材料は同じ形で
+/// 二重化の候補を持たず、同じ reviewer は不合格を返さず task は Done になる。
+/// 既存の試験で足りない理由: 候補の試験だけでは、reviewer が材料に関係なく不合格にする場合と区別できない。
+/// `health_generic_wu_check_*_good_passes` は reviewer run を起こさない。
+#[tokio::test]
+async fn g4_r1_review_request_integrated_good_is_done() {
+    let (_bundle, _bundled) = configure_real_bundled_checker();
+    let flow = integrated_flow("ts", "good", false).await;
+    assert_no_candidate(integrated_input(&flow, "base"));
+    assert!(
+        flow.events
+            .iter()
+            .all(|e| !matches!(e, Event::ReviewVerdict { pass: false, .. })),
+        "{:?}",
+        flow.events
+    );
+    assert!(review_passed(&flow.events), "{:?}", flow.events);
+    assert_eq!(flow.status, Status::Done, "{:?}", flow.events);
+}
+
 // ---- 複数 repo ----
 
 /// `(repo_id, pass, evidence)` の review の health の項目。
@@ -1204,11 +1491,19 @@ fn review_health_by_repo(events: &[Event]) -> Vec<(task_core::RepoId, bool, Heal
         .collect()
 }
 
+/// 2 repo の review の結果。`requests` は `candidates` の reviewer が受けた `ReviewRequest.health`（順に）。
+struct MultiFlow {
+    events: Vec<Event>,
+    status: Status,
+    repos: Vec<task_core::ProjectRepo>,
+    requests: Vec<Option<HealthReviewInput>>,
+}
+
 /// 2 repo（`ts`・`rust` の順）の atomic の task を reviewing で作り、各 repo の worktree に `fixtures` の候補を入れて
-/// review を流す。review の repair は 2 つ目の repo の worktree を base に戻す。
-async fn multi_repo_flow(
-    fixtures: &[(&std::path::Path, &Fixture)],
-) -> (Vec<Event>, Status, Vec<task_core::ProjectRepo>) {
+/// review を流す。`candidates` が偽なら reviewer は無く、review の repair は 2 つ目の repo の worktree を base に戻す。
+/// 真なら acceptance[1] に `Check::Reviewer` を足し、reviewer は [`CandidateReviewer`]（受けた材料を記録し、候補を
+/// 根拠に blocking の health finding を書く）。
+async fn multi_repo_flow(fixtures: &[(&std::path::Path, &Fixture)], candidates: bool) -> MultiFlow {
     let ws = tempfile::tempdir().unwrap();
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let specs: Vec<(&str, &std::path::Path, task_core::RepoKind)> = ["ts", "rust"]
@@ -1228,12 +1523,21 @@ async fn multi_repo_flow(
     task.project_id = Some(project);
     task.repos = repos.iter().map(task_core::RepoRef::of).collect();
     task.status = Status::Reviewing;
+    let requests = Arc::new(StdMutex::new(Vec::new()));
+    let adapter: Arc<dyn WorkerAdapter> = if candidates {
+        task.acceptance.push(Criterion {
+            text: "reviewer".into(),
+            check: Check::Reviewer,
+        });
+        Arc::new(CandidateReviewer::new(requests.clone()))
+    } else {
+        let second_base = fixtures[1].1.base().to_string();
+        Arc::new(RepairActionAdapter::new(move |dir, _| {
+            let second = dir.parent().expect("repos dir").join("rust");
+            restore_base(&second, &second_base);
+        }))
+    };
     store.insert(&task).unwrap();
-    let second_base = fixtures[1].1.base().to_string();
-    let adapter = Arc::new(RepairActionAdapter::new(move |dir, _| {
-        let second = dir.parent().expect("repos dir").join("rust");
-        restore_base(&second, &second_base);
-    }));
     let mut d = non_celeris_dispatcher(store.clone(), adapter, ws.path(), 1);
     let workspaces = d.task_workspaces_for(&task).expect("workspaces");
     assert_eq!(workspaces.repos.len(), 2);
@@ -1251,7 +1555,13 @@ async fn multi_repo_flow(
     );
     assert!(run_until_idle(&mut d, 800).await.idle);
     let status = store.get(task.id).unwrap().unwrap().status;
-    (events_of(&store, task.id), status, repos)
+    let requests = requests.lock().unwrap().clone();
+    MultiFlow {
+        events: events_of(&store, task.id),
+        status,
+        repos,
+        requests,
+    }
 }
 
 /// 不変条件 (g): builder の multi（ts と rust の 2 repo）の良い変更では、review は 2 つの repo のそれぞれで本物の
@@ -1274,7 +1584,12 @@ async fn health_generic_multi_repo_each_repo_checked() {
         .collect();
     let pairs: Vec<(&std::path::Path, &Fixture)> =
         dirs.iter().map(PathBuf::as_path).zip(&per_repo).collect();
-    let (events, status, repos) = multi_repo_flow(&pairs).await;
+    let MultiFlow {
+        events,
+        status,
+        repos,
+        ..
+    } = multi_repo_flow(&pairs, false).await;
     let items = review_health_by_repo(&events);
     for (repo, fx) in repos.iter().zip(&per_repo) {
         let (_, pass, evidence) = items
@@ -1300,8 +1615,12 @@ async fn health_generic_multi_repo_second_repo_violation_blocks_integration() {
     let (ts, rust) = (fixtures.path().join("ts"), fixtures.path().join("rust"));
     let good = build_fixture("ts", "good", &ts);
     let inverted = build_fixture("rust", "dep-inversion", &rust);
-    let (events, status, repos) =
-        multi_repo_flow(&[(ts.as_path(), &good), (rust.as_path(), &inverted)]).await;
+    let MultiFlow {
+        events,
+        status,
+        repos,
+        ..
+    } = multi_repo_flow(&[(ts.as_path(), &good), (rust.as_path(), &inverted)], false).await;
     let items = review_health_by_repo(&events);
     let of = |repo: &task_core::ProjectRepo| -> Vec<(bool, HealthEvidence)> {
         items
@@ -1338,6 +1657,121 @@ async fn health_generic_multi_repo_second_repo_violation_blocks_integration() {
         "the task must not pass review before the second repo is repaired: {events:?}"
     );
     assert_eq!(status, Status::Done);
+}
+
+/// 2 repo の task の final review で reviewer が受けた材料を repo ごとに確かめ、task の repos の順に返す。材料は
+/// repo ごとに 1 件で、repo_id・base・head・diff はその repo の fixture のもの（[`assert_repo_input`]）。evidence の
+/// path を持つ finding は、その repo の候補の tree にある file を指し、もう一方の repo の候補が変えた path を指さない
+/// （repo と finding の取り違えが無い）。
+fn multi_received<'a>(
+    flow: &'a MultiFlow,
+    dirs: &[&std::path::Path],
+    fixtures: &[&Fixture],
+) -> Vec<&'a HealthRepoInput> {
+    let health = delivered(&flow.requests, &flow.events);
+    assert_eq!(flow.requests.len(), 1, "one reviewer run");
+    assert_eq!(health.repos.len(), 2, "{health:?}");
+    let changed: Vec<Vec<String>> = dirs
+        .iter()
+        .zip(fixtures)
+        .map(|(dir, fx)| changed_paths(dir, fx))
+        .collect();
+    let mut out = Vec::new();
+    for (i, repo) in flow.repos.iter().enumerate() {
+        let input = health
+            .repos
+            .iter()
+            .find(|r| r.repo_id == repo.id.to_string())
+            .unwrap_or_else(|| panic!("no material for the repo {}: {health:?}", repo.name));
+        let want = RepoExpect {
+            repo_id: repo.id.to_string(),
+            target: fixtures[i].base(),
+            reviewed: fixtures[i].head(),
+            changed: &changed[i],
+            policy_source: "base",
+        };
+        assert_repo_input(input, &flow.events, &want);
+        let other = &changed[1 - i];
+        for f in &input.findings.new {
+            let Some(path) = f.path.as_deref() else {
+                continue;
+            };
+            git_out(
+                dirs[i],
+                &["cat-file", "-e", &format!("{}:{path}", fixtures[i].head())],
+            );
+            assert!(
+                !other.iter().any(|p| p == path),
+                "{} reports {path:?} changed in the other repo: {f:?}",
+                repo.name
+            );
+        }
+        out.push(input);
+    }
+    out
+}
+
+/// 不変条件（ADR 2026-11-11-health-generic-review-input R1・R5、ADR 2026-11-07-health-review-integration D4.1）: 2 repo
+/// （ts の dup-contract の候補と rust の良い変更）の task の final review で、reviewer が実際に受けた
+/// `ReviewRequest.health` は repo ごとにその repo の repo_id・base・head・diff・finding を持ち、dup-contract の候補は
+/// ts の材料にだけ（evidence の path は ts の候補が変えた file）入る。一方の repo の候補を根拠にした reviewer の
+/// blocking の不合格で、もう一方の repo が良くても task 全体は Done にならない。
+/// 既存の試験で足りない理由: `health_generic_multi_repo_*` は reviewer run を起こさず、検査器の health の項目（証跡）
+/// だけを repo ごとに見る。reviewer に 2 repo の材料が取り違えなく届くことと、1 repo の候補による reviewer の不合格が
+/// task 全体を止めることは確かめない。
+#[tokio::test]
+async fn g4_r1_review_request_multi_repo_candidate_fails_review() {
+    let (_bundle, _bundled) = configure_real_bundled_checker();
+    let fixtures = tempfile::tempdir().unwrap();
+    let (ts, rust) = (fixtures.path().join("ts"), fixtures.path().join("rust"));
+    let dup = build_fixture("ts", "dup-contract", &ts);
+    let good = build_fixture("rust", "good", &rust);
+    let flow = multi_repo_flow(&[(ts.as_path(), &dup), (rust.as_path(), &good)], true).await;
+    let inputs = multi_received(&flow, &[&ts, &rust], &[&dup, &good]);
+    let ts_changed = changed_paths(&ts, &dup);
+    assert_candidate_fails_review(inputs[0], &expected_rule(&dup), &ts_changed, &flow.events);
+    assert_no_candidate(inputs[1]);
+    assert!(!review_passed(&flow.events), "{:?}", flow.events);
+    assert_eq!(flow.status, Status::Failed, "{:?}", flow.events);
+}
+
+/// 不変条件（同じ ADR の R1・R5、D4.1）: builder の multi の良い変更（ts と rust）の final review で、reviewer は
+/// 2 repo の材料をそれぞれの repo の base・head・diff で受け、二重化の候補は無く、不合格を返さず task は Done になる。
+/// 既存の試験で足りない理由: 候補の試験だけでは、reviewer が 2 repo の材料に関係なく不合格にする場合と区別できない。
+/// `health_generic_multi_repo_each_repo_checked` は reviewer run を起こさない。
+#[tokio::test]
+async fn g4_r1_review_request_multi_repo_good_is_done() {
+    let (_bundle, _bundled) = configure_real_bundled_checker();
+    let fixtures = tempfile::tempdir().unwrap();
+    let fx = build_fixture("multi", "good", fixtures.path());
+    assert_eq!(fx.repos, ["ts", "rust"]);
+    let dirs: Vec<PathBuf> = fx.repos.iter().map(|r| fixtures.path().join(r)).collect();
+    let per_repo: Vec<Fixture> = dirs
+        .iter()
+        .map(|dir| Fixture {
+            base: Some(git_out(dir, &["rev-parse", "main"])),
+            head: Some(git_out(dir, &["rev-parse", "candidate"])),
+            repos: vec![".".into()],
+            expected: Vec::new(),
+        })
+        .collect();
+    let pairs: Vec<(&std::path::Path, &Fixture)> =
+        dirs.iter().map(PathBuf::as_path).zip(&per_repo).collect();
+    let flow = multi_repo_flow(&pairs, true).await;
+    let dir_refs: Vec<&std::path::Path> = dirs.iter().map(PathBuf::as_path).collect();
+    let fx_refs: Vec<&Fixture> = per_repo.iter().collect();
+    for input in multi_received(&flow, &dir_refs, &fx_refs) {
+        assert_no_candidate(input);
+    }
+    assert!(
+        flow.events
+            .iter()
+            .all(|e| !matches!(e, Event::ReviewVerdict { pass: false, .. })),
+        "{:?}",
+        flow.events
+    );
+    assert!(review_passed(&flow.events), "{:?}", flow.events);
+    assert_eq!(flow.status, Status::Done, "{:?}", flow.events);
 }
 
 // ---- Celeris 固有の欄 ----

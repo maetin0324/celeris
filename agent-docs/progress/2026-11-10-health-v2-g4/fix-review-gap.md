@@ -149,6 +149,54 @@ task 01M74X0XAN0MCFJ4KZ3VVFT2QA の進捗。工程は contract → input-owner �
 - 範囲（計画の check 4）→ exit 0。変更 path は `health_generic.rs` とこの進捗だけ。
 - 参考（必須の検査ではない）: `cargo clippy -p task-dispatch --tests -- -D warnings` は既存の 4 件（`dispatch_ready_phases.rs`・`health_enforce.rs`・`cos_chat_root_done.rs`・`cos_slot_wait.rs`）で exit 101。`health_generic.rs` の指摘は 0 件。
 
+## 工程 4: request-integrated（統合後 final review・複数 repo・再利用を検証する）
+状態: 完了。変えたのは試験 2 file（`crates/task-dispatch/src/dispatcher/tests/health_generic.rs`・`health_review_input.rs`）とこの進捗。本体の code・検査器・profile・baseline・TaskStore・campaign は変えていない。本体の変更は要らなかった（owner 修復の申告は無し）。
+
+### 変更
+- `phase 4: WU 統合後の final review・複数 repo・Absent の再利用と policy の関門で adapter が受けた材料と合否を固定する`
+  - `health_generic.rs`: 工程 3 の `CandidateReviewer` に、WU の run で fixture の候補を作業ツリーに入れる `apply` と、reviewer でない run が `ReviewRequest.health` を受けたかの記録 `work_runs` を足した（試験の中だけ。本体に hook は足していない）。工程 3 の受信の検査を `delivered`・`assert_repo_input`（repo ごとの repo/base/head/diff/空の owner_rows・invariants/policy/report と、同じ repo・候補の `HealthReviewInputBuilt` との照合）・`assert_candidate_fails_review`・`assert_no_candidate` に分け、atomic・統合後・複数 repo で共用した。`multi_repo_flow` は reviewer の有無を選べる形にした（既存 2 試験の動きは同じ）。
+  - `health_review_input.rs`: stub の検査器の本文を `checker_script` に切り出し、候補の file の中身を選べる `review_flow_with` を足した（既存の `review_flow_at` はこれを呼ぶ）。
+  - 新しい試験 7 件（どれも通常の成功試験。`should_panic` は 0 件）。不変条件と既存の試験で足りない理由は各試験の doc comment に書いた。
+    - `g4_r1_review_request_integrated_ts_dup_contract_fails_review`・`g4_r1_review_request_integrated_builtin_generic_dup_state_fails_review`: 採用済みの計画（1 段 1 WU、check あり）の task で、WU の run が候補を入れ、WU の check（health の証跡あり）と段の統合の後に final review の reviewer が受けた材料を見る。WU の run は `ReviewRequest.health` を受けず、`HealthReviewInputBuilt` は 1 件で final review の reviewer run の後・その run の分。受けた材料は repo・base（= fixture の base）・候補（= 統合後の task の branch の HEAD。fixture の候補を祖先に持つ）・diff（= fixture の候補が変えた path の全部）・空の `owner_rows`/`invariants`・`policy.source`（`base`/`builtin`）を持ち、候補の finding の path は候補が変えた file。受けた候補を根拠にした reviewer の blocking で review は不合格、task は Failed（`max_retries = 0`）。
+    - `g4_r1_review_request_integrated_good_is_done`: 同じ流れの良い変更で、材料に二重化の候補は無く、不合格の verdict も無く Done。
+    - `g4_r1_review_request_multi_repo_candidate_fails_review`: 2 repo（ts の dup-contract・rust の good）の final review で、reviewer は 2 repo の材料を 1 回の run で受け、repo ごとに repo_id・base・head・diff はその repo の fixture のもの。evidence の path を持つ finding はその repo の候補の tree にある file で、もう一方の repo の変更 path を指さない。dup-contract の候補は ts の材料にだけあり、それによる reviewer の blocking で task 全体は Failed（rust は良くても Done にならない）。
+    - `g4_r1_review_request_multi_repo_good_is_done`: builder の multi の良い変更で、2 repo とも候補なしの材料を受けて Done。
+    - `g4_r1_review_request_absent_reused_on_reviewer_retry`（`health_review_input.rs`）: 方針が `Absent` の repo で reviewer run が一時的に失敗してやり直しても、2 回の reviewer run が同じ材料を受け、`HealthReviewInputBuilt` は 1 件、材料の report は 1 回だけ走る。
+    - `g4_r1_review_request_absent_not_built_when_the_reviewer_pass_is_reused`: 方針が `Absent` の repo で target の進みが候補と重ならず reviewer の合格を再利用した再 review（`ReviewerPassReused`）では材料を作らない（1 回目の candidate の 1 件だけ、reviewer run は 1 回）。
+    - `g4_r1_review_request_absent_candidate_policy_is_not_trusted`: 方針が `Absent` の repo で、候補が検査器（`repo_health.py`。方針の出どころ）を `[review]` を持つ版に書き換えても、材料は base の検査器から作り（鍵は base の検査器の版、候補の検査器は 1 度も走らない）、reviewer が受けた `owner_rows`・`invariants` は空。report の `policy.changed = true` の候補は、reviewer が `health.policy` の判定を書かないので review が不合格（「health.policy verdict missing in review.json for the changed policy files」）で Failed になり、Done にならない。
+- 観察（試験を作る途中で確かめた事実）: 案件の repo（`task.repos`）を持たない task（`parallel_task` の既定。workspace だけの task）は、final review で `HealthReviewInputBuilt`・`HealthReviewInputSkipped` のどちらも残さず、reviewer は材料を受けなかった。review 前の同期（ADR-0118）と材料が案件の repo ごとだからで、統合後の試験は atomic の試験と同じく案件の repo を持たせた。これが意図した契約かは未確認（下の「提案」）。
+
+### 変異の確認（commit していない一時の変更）
+- `CandidateReviewer` が受けた材料を無視する（`review_json(None)`）ように一時的に変えて、統合後と複数 repo の 5 件を流した。候補の 3 件（`…_integrated_ts_dup_contract_…`・`…_integrated_builtin_generic_dup_state_…`・`…_multi_repo_candidate_…`）は「the reviewer's blocking health:… must fail the review」で落ち、good の 2 件は合格した（exit 100、5 件中 3 件不合格）。変更は `git checkout` で戻した。
+
+### 再利用・失効・policy の関門の対応表（受け入れ条件 1）
+鍵は `(repo_id, target_sha, reviewed_sha, definition_digest(&[], Some(&checker)))`（ADR 2026-11-11-health-generic-review-input R2）。「新」は工程 4 で足した試験、「単体」は `health_review::{input,policy,policy_review}` の module の試験（dispatcher を通らない）。「—」はその列の専用の試験が無い（鍵は `Present`・`Absent` で同じ）。
+
+| 事象 | 期待する動き | 試験（`Present` の repo） | 試験（`Absent` の repo・汎用 fixture） |
+|---|---|---|---|
+| 同じ candidate で reviewer run をやり直す | 記録した材料を使い、同じ `ReviewRequest.health` を渡す。report は 1 回 | `health_review_input_reused_on_reviewer_retry`、単体 `health_review_input_built_once_per_candidate` | 新 `g4_r1_review_request_absent_reused_on_reviewer_retry`、単体 `health_review_input_reuse_is_bound_to_candidate_base_and_policy` |
+| reviewer の合格を再利用した再 review | 材料を作らない（1 回目の candidate の分だけ） | `health_review_input_not_built_when_the_reviewer_pass_is_reused` | 新 `g4_r1_review_request_absent_not_built_when_the_reviewer_pass_is_reused` |
+| candidate が変わる | 作り直す | — | 単体 `health_review_input_reuse_is_bound_to_candidate_base_and_policy` |
+| base（target）が変わる | 作り直す | — | 単体 `health_review_input_reuse_is_bound_to_candidate_base_and_policy` |
+| base の方針が変わる（`Absent` → `Present`） | 作り直す（base の profile は `target_sha` で束縛） | — | 単体 `health_review_input_reuse_is_bound_to_candidate_base_and_policy` |
+| 検査器の版が変わる | 作り直す | — | 単体 `health_review_input_reuse_is_bound_to_the_checker_version` |
+| report の故障（policy 不明） | 不明として記録し、再利用しない | 単体 `health_review_input_failed_report_is_recorded_as_unknown` | 単体 `health_review_input_policy_absent_failed_report_is_not_reused` |
+| 候補が方針・検査器を書き換える | 方針は base の版から作る（候補の値を信用しない）。`policy.changed` は fail closed | 単体 `health_review_policy_base_side_wins_over_candidate_and_worktree`、単体 `health_review_policy_review_missing_policy_verdict_fails` | 新 `g4_r1_review_request_absent_candidate_policy_is_not_trusted` |
+| policy の状態が不明（report 無し・`Unavailable`） | 合格にしない（Blocked・承認待ち・Skipped の `unavailable`） | `health_review_policy_unknown_flow_missing_report_is_not_a_pass` | `health_review_policy_unknown_candidates_wait_for_a_human`、単体 `health_review_input_reuse_is_bound_to_the_checker_version`（`Unavailable`） |
+| reviewer 無し（policy-only）・通常の変更 | 材料を作らず reviewer にも渡さない。policy の状態を Skipped に残し、承認なしで Done | `health_review_policy_no_reviewer_normal_change_passes_without_approval` | — |
+| reviewer 無し・policy の file の変更 | 承認の子を作り reviewing で待つ。人の承認で Done | `health_review_policy_no_reviewer_policy_file_candidate_needs_a_human` | `health_review_policy_unknown_absent_policy_change_needs_approval` |
+| WU の check・WU の run | 材料を作らず、WU の run は `ReviewRequest.health` を受けない。作るのは final review の reviewer run だけ | `health_review_input_not_built_for_work_units`（材料 0 件でも合格する弱い形） | 新 `g4_r1_review_request_integrated_*`（3 件） |
+| 複数 repo | repo ごとにその repo の base/head/diff/finding。1 repo の候補の不合格で全体が止まる | — | 新 `g4_r1_review_request_multi_repo_*`（2 件） |
+
+### 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+- `cargo nextest run -p task-dispatch -E 'test(g4_r1_review_request_) | test(health_review_input_) | test(health_review_policy_) | test(health_enforce_reviewer_reuse_) | test(health_enforce_pre_review_sync_) | test(health_generic_)'`（計画の check 1）→ exit 0。91 件すべて合格（16.6 秒）。新しい 7 件と、上の表の既存の試験を含む。
+- `bash scripts/dev/test-affected.sh` → exit 0（836 秒、load average 約 20〜48）。対象は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。nextest 3764 件すべて合格、11 件 skip。対象 package の doc test も合格。health は verdict pass・fail 級 0・new 0・worsened 0。検査器自身の 94 試験は OK（expected failures 2 件）、repo_health_gate は 7 件すべて OK。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- 範囲（計画の check 4）→ exit 0。変更 path は `health_generic.rs`・`health_review_input.rs`・この進捗だけ。
+- 実行した HEAD: `test-affected.sh` は commit『phase 4: WU 統合後の final review・複数 repo・Absent の再利用と policy の関門で adapter が受けた材料と合否を固定する』の時点で実行した。その後の commit『phase 4: request-integrated の試験・対応表・検査結果を進捗に記録する』は `health_generic.rs` の doc comment 2 か所（既存の `health_review_input_not_built_for_work_units` の不足の説明を、読んで確かめた事実に直した）とこの進捗だけを変えた。提出時の HEAD で check 1（91 件合格）・clippy・fmt・`progress-index.sh --check`・`git diff --check`・範囲の check を再実行し、すべて exit 0。
+- `sh scripts/dev/progress-index.sh --check`・`python3 scripts/dev/check-human-text.py` → exit 0。
+
 ## 未解決（工程 2）
 - 範囲外で落ちた 12 件は直した。残りは注釈だけで、どれも動作に影響しない。
   - `crates/task-core/src/model/events.rs` の `HealthReviewInputSkipped` の doc comment と、`task_core::design_review::ReviewPolicy::definition_sha256` の doc comment（「health の材料の再利用の鍵に入る」。R2.3 で鍵に使わなくなった）が古い。task の受け入れ条件が `crates/task-core/` の無変更を求めるので変えていない。
@@ -158,4 +206,5 @@ task 01M74X0XAN0MCFJ4KZ3VVFT2QA の進捗。工程は contract → input-owner �
 - 無し（工程 2 の注釈 3 か所は「提案」に回した）。
 
 ## 提案
+- 案件の repo（`task.repos`）を持たない task（workspace だけの task）の final review は、review 前の同期が無く health の材料も作らない（工程 4 の観察）。`NOT_SYNCED` の Skipped も残らないので、材料が無いことが event に出ない。意図した契約かを ADR 2026-11-07-health-review-integration の D4 の担当（G4 の親 task）が決め、意図どおりなら D4.4 に明記し、そうでなければ別の task で直す。
 - 古い注釈 3 か所（`events.rs` の `HealthReviewInputSkipped`、`ReviewPolicy::definition_sha256`、`health_review/verdict.rs` の module doc）を、`crates/task-core/` と `verdict.rs` を変えてよい別の task で直す。どれも説明だけの変更。

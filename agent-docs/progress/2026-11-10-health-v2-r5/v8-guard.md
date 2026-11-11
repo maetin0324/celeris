@@ -36,8 +36,8 @@ updated: 2026-11-11
 - workspace 全体の build（test-affected）は通り、`-p task-dispatch` 単独の build だけが落ちた。v8 の lib の作り直しが features の組で決まるためと考える（features の組の違いで共有 crate が作り直される件は [affected-features.md](affected-features.md)）。
 
 ## 原因の根拠
-- この WU の target の v8 の output（`$CARGO_TARGET_DIR/debug/build/v8-17bc602cfaabab8b/output`）の 29 行は `cargo:rustc-link-search=/local/celeris/data/scratch/seeds/agent-platform-f1d3fe5cc3/gen-174e4b8169b5-1794415936849066278/target/debug/gn_out/obj` だった。owner の target でなく seed 世代の path を絶対 path で指す。この WU の target は 17:41 にその世代から写された（owner の `target-origin.json` の `seed`）。
-- `/local/celeris/data/scratch/seeds/agent-platform-f1d3fe5cc3/` に残る世代は `gen-174e4b8169b5-1794415936849066278`（16:55 作成、`current` の指す先）だけ。この task の他の WU の `target-origin.json` が写し元に挙げる世代（`gen-af3ac6a5b91b-…`・`gen-e20edfa7ec0a-…`・`gen-2166a2655636-…`）は残っていない。
+- この WU の target の v8 の output（`$CARGO_TARGET_DIR/debug/build/v8-<hash>/output`）の 29 行は `cargo:rustc-link-search=/local/celeris/data/scratch/seeds/<repo key>/<世代 A>/target/debug/gn_out/obj`（`<repo key>` は `agent-platform-` に続く repo の key、`<世代 A>` は下の今の世代） だった。owner の target でなく seed 世代の path を絶対 path で指す。この WU の target は 17:41 にその世代から写された（owner の `target-origin.json` の `seed`）。
+- `/local/celeris/data/scratch/seeds/<repo key>/` に残る世代は 1 つ（以下 世代 A。16:55 作成、`current` の指す先、seed の commit は 2026-11-11 時点の main）だけ。この task の他の WU の `target-origin.json` が写し元に挙げる 3 つの古い世代（2026-11-10 17:33〜2026-11-11 14:55 に写したもの）は残っていない。
 - `crates/task-worker/src/scratch/seed.rs` の module の説明は「cargo が試験 binary や dep-info に焼く絶対 path が確定後も存在するよう、build 後に rename しない」と書き、seed の自分の path の安定は守っている。一方で GC は「current 以外の世代」を消すので、古い世代から写した owner の target が参照する path は消える。
 - この WU の target では、同じ nextest が v8 の lib を作り直し（`Compiling v8 v150.4.0`）、今の世代の `gn_out/obj` の `librusty_v8.a` で link できた。指す世代が残っていれば通り、退避されていれば落ちる、という説明と合う。
 - 未確認: 統合の target が写された世代の名前。統合の target は落ちた後（17:35:48）に今の世代から作り直され、落ちた時点の v8 の output は残っていない。
@@ -51,7 +51,10 @@ updated: 2026-11-11
 - check 2（偽の target）: exit 0。`native=<d>/ok` は `ok（… 1 件）` で exit 0、`<d>/gone` は `NG stale v8 link-search` と output・dir・直し方を出して exit 1。
 - 追加の確認（dash）: `cargo::` 形式・`release` の profile・seed 世代の path は `seed 世代: …（退避済み）` と `cargo clean -p v8 --release` を出して exit 1。output の無い target は exit 0。引数を渡すと exit 2。偽の target の file は実行の前後で変わらない（`find -newer` で 0 件）。
 - check 1（この WU の target）: `sh …/v8-target-check.sh` は exit 0（v8 の build output 1 件）。awk は exit 0。`cargo nextest run -p task-dispatch -E 'test(/git_workspace::/)'` は exit 0、`23 tests run: 23 passed, 1638 skipped`。build を含め 188 秒、load average 71 → 65（17:43〜17:47 UTC）。実行後も台本は exit 0。
-- check 3（write set）・check 4（文書）・check 5（範囲）の結果は result の evidence に書く。
+- check 3（`slices-check.py --write-set R5`）: exit 0、`write-set R5: ok`。
+- check 4（`check-doc-links.sh` と `progress-index.sh --check`）: exit 0。最初は seed 世代名と build dir 名の hex を commit hash と見なされて落ちたので、本文ではそれらを `<repo key>`・`<世代 A>`・`<hash>` と書いた。
+- check 5（範囲）: 変更 path は `v8-guard.md` と `v8-target-check.sh` の 2 つで、範囲外は 0 件。
+- commit: 「R5 v8-guard: 退避済みの seed 世代を指す v8 の link-search を検出する台本と進捗を足す」「R5 v8-guard: 進捗の世代名を hash に見えない書き方にし、検査の結果を書く」。
 
 ## 未解決事項
 - scratch の owner の修正（下の提案）。R5 では直さない。

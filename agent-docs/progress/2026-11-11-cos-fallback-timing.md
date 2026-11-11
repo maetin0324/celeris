@@ -43,11 +43,7 @@ ADR: [2026-11-11-cos-fallback-timing](../adr/2026-11-11-cos-fallback-timing.md)
     `cos_fallback_timing_pickable_clock_starts_at_the_end_of_the_last_run`
   - (d) `task-core` の `cos_triage_judgment_before_the_send_withdraws_the_fallback`
   - (e) `root_done_summary_waits_for_the_safety_net_when_cos_cannot_start`・`root_done_summary_waits_for_its_live_run_up_to_the_safety_net`
-- `bash scripts/dev/test-affected.sh` → exit 100。nextest 8227 件中 8226 件合格、23 件 skip、失敗 1 件は
-  `dispatcher::tests::git_workspace::review_records_each_repositories_own_definition_and_worktree_results`
-  （「each repository must have its own evidence」。`run_until_idle(&mut d, 60)` で tick 数を上限に待つ既知の負荷時の失敗で、
-  この変更の範囲外）。同じ試験を単独で再実行して 1 passed。web の tsc・vitest（Test Files 103 passed・6 passed）、
-  control-ts の型検査、repo-health（verdict=pass）は合格。
+- `bash scripts/dev/test-affected.sh` → exit 0（attempt 2、load average 48、約 27 分）。web の vitest（Test Files 103 passed・6 passed）、repo-health（all checks passed）も合格。
 - `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0。
 - `cargo nextest run -p celeris --test script_generation_e2e` → 3 回続けて exit 0。
 - `bash scripts/dev/check-health.sh` → exit 0（verdict=pass）。

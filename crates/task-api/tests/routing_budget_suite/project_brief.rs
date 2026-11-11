@@ -2,10 +2,10 @@
 //! `project.status_put`）と、`GET /projects` の要約・件数・最終活動時刻・人待ち。
 use crate::common;
 
-use common::cos_ops::{OPS, db, op_body};
+use common::cos_ops::{OPS, cos_run_bearer, db, op_body};
 use common::*;
 use serde_json::{Value, json};
-use task_core::chat::{ChatOpenThreadRequest, ChatPostMessageRequest, ChatSendMode};
+use task_core::chat::ChatOpenThreadRequest;
 use task_core::{ProjectId, Status, TaskKind, TaskStore};
 use time::{Duration, OffsetDateTime};
 
@@ -18,36 +18,6 @@ fn brief_body(state: &str) -> Value {
         "waiting_on": [{"kind": "external", "target": "sirius", "note": "保守"}],
         "evidence_refs": ["run:e3-measure"],
     })
-}
-
-/// A live CoS run of `thread_id`: `"Bearer …"`.
-fn bearer_for(env: &TestEnv, thread_id: &str, key: &str) -> String {
-    let now = OffsetDateTime::now_utc();
-    env.store
-        .chat_message_post(
-            thread_id,
-            &ChatPostMessageRequest {
-                client_message_id: format!("message-{key}"),
-                text: "input".into(),
-                attachment_ids: vec![],
-                reply_to_id: None,
-                mode: ChatSendMode::Queue,
-                resume_queue: false,
-            },
-            now,
-        )
-        .expect("message");
-    let run = format!("run-{key}");
-    env.store
-        .chat_run_claim_next(thread_id, &run, &json!({}), now)
-        .expect("claim")
-        .expect("run");
-    let bearer = task_api::cos::issue_run_bearer(&env.store, thread_id, &run, Duration::hours(1))
-        .expect("issue");
-    env.store
-        .chat_run_record_policy(&run, "1", "test")
-        .expect("policy");
-    format!("Bearer {bearer}")
 }
 
 fn project_of(thread: &task_core::chat::ChatThread) -> ProjectId {
@@ -219,7 +189,7 @@ async fn project_status_put_is_written_by_the_project_cos_only() {
     let path = format!("/api/v1/projects/{project}/status");
 
     // The project's own CoS: applied, audited, `updated_by = cos:<thread>`.
-    let bearer = bearer_for(&env, &thread.id, "own");
+    let bearer = cos_run_bearer(&env, &thread.id, "own");
     let headers = [("authorization", bearer.as_str())];
     let direct = send(&app, put_json_with(&path, &brief_body("一"), &headers)).await;
     assert_problem(&direct, 422, "cos_audit_context_required");
@@ -256,7 +226,7 @@ async fn project_status_put_is_written_by_the_project_cos_only() {
         .expect("general")
         .thread;
     for (key, thread_id) in [("other", other.id.clone()), ("general", general.id.clone())] {
-        let bearer = bearer_for(&env, &thread_id, key);
+        let bearer = cos_run_bearer(&env, &thread_id, key);
         let headers = [("authorization", bearer.as_str())];
         let resp = send(
             &app,

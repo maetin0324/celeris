@@ -7,10 +7,6 @@ use task_core::{
     TaskKind, TaskRepoIntegrationState, TaskRepoIntegrationStatus, TaskStore, WorkspaceSpec,
 };
 
-fn admin() -> [(&'static str, &'static str); 1] {
-    [("authorization", "Bearer s3cret-token-value")]
-}
-
 #[tokio::test]
 async fn integration_api_lists_and_filters_states() {
     let env = TestEnv::with(EnvOptions {
@@ -19,7 +15,7 @@ async fn integration_api_lists_and_filters_states() {
     });
     let response = send(
         &env.router(),
-        get_with("/api/v1/integrations?state=unintegrated", &admin()),
+        get_with("/api/v1/integrations?state=unintegrated", &admin_headers()),
     )
     .await;
     assert_eq!(response.status, 200, "{}", response.text());
@@ -40,7 +36,7 @@ async fn integration_api_disposition_requires_human_auth_and_nonempty_reason() {
     assert_eq!(denied.status, 401);
     let empty = send(
         &env.router(),
-        post_json_with(&path, &json!({"reason":"  "}), &admin()),
+        post_json_with(&path, &json!({"reason":"  "}), &admin_headers()),
     )
     .await;
     assert_eq!(empty.status, 400, "{}", empty.text());
@@ -54,7 +50,7 @@ async fn integration_api_rejects_unknown_state_filter() {
     });
     let response = send(
         &env.router(),
-        get_with("/api/v1/integrations?state=unknown", &admin()),
+        get_with("/api/v1/integrations?state=unknown", &admin_headers()),
     )
     .await;
     assert_eq!(response.status, 400, "{}", response.text());
@@ -172,13 +168,13 @@ async fn integration_api_task_detail_and_list_include_unintegrated_state() {
 
     let detail = send(
         &env.router(),
-        get_with(&format!("/api/v1/tasks/{}", task.id), &admin()),
+        get_with(&format!("/api/v1/tasks/{}", task.id), &admin_headers()),
     )
     .await;
     assert_eq!(detail.status, 200, "{}", detail.text());
     assert_eq!(detail.json()["integrations"][0]["state"], "unintegrated");
     // ADR 2026-10-21: 既定の一覧は付けない。`with=integrations` のときだけ付く。
-    let plain = send(&env.router(), get_with("/api/v1/tasks", &admin())).await;
+    let plain = send(&env.router(), get_with("/api/v1/tasks", &admin_headers())).await;
     assert_eq!(plain.status, 200, "{}", plain.text());
     assert!(
         plain.json()["items"]
@@ -189,7 +185,7 @@ async fn integration_api_task_detail_and_list_include_unintegrated_state() {
     );
     let list = send(
         &env.router(),
-        get_with("/api/v1/tasks?with=integrations", &admin()),
+        get_with("/api/v1/tasks?with=integrations", &admin_headers()),
     )
     .await;
     assert_eq!(list.status, 200, "{}", list.text());
@@ -212,7 +208,7 @@ async fn integration_api_task_detail_and_list_include_unintegrated_state() {
         .expect("integrated state");
     let integrated = send(
         &env.router(),
-        get_with(&format!("/api/v1/tasks/{}", task.id), &admin()),
+        get_with(&format!("/api/v1/tasks/{}", task.id), &admin_headers()),
     )
     .await;
     assert_eq!(integrated.status, 200, "{}", integrated.text());
@@ -296,7 +292,11 @@ async fn integration_api_inbox_unintegrated_items_are_per_repo_and_need_note() {
     }
 
     // 1 task × 未取り込み repo 2 つ → 受信箱には repo ごとに ID の異なる item が 2 つ出る。
-    let inbox = send(&env.router(), get_with("/api/v1/inbox/items", &admin())).await;
+    let inbox = send(
+        &env.router(),
+        get_with("/api/v1/inbox/items", &admin_headers()),
+    )
+    .await;
     assert_eq!(inbox.status, 200, "{}", inbox.text());
     let items = unintegrated_items_for(&inbox.json(), task.id);
     assert_eq!(items.len(), 2, "{}", inbox.text());
@@ -334,12 +334,19 @@ async fn integration_api_inbox_unintegrated_items_are_per_repo_and_need_note() {
         json!({"option": "discard", "note": "  "}),
         json!({"option": "hold", "note": ""}),
     ] {
-        let refused = send(&env.router(), post_json_with(&answer, &body, &admin())).await;
+        let refused = send(
+            &env.router(),
+            post_json_with(&answer, &body, &admin_headers()),
+        )
+        .await;
         assert_eq!(refused.status, 400, "{body}: {}", refused.text());
     }
     let states = send(
         &env.router(),
-        get_with(&format!("/api/v1/tasks/{}/integrations", task.id), &admin()),
+        get_with(
+            &format!("/api/v1/tasks/{}/integrations", task.id),
+            &admin_headers(),
+        ),
     )
     .await;
     assert_eq!(states.status, 200, "{}", states.text());
@@ -355,14 +362,17 @@ async fn integration_api_inbox_unintegrated_items_are_per_repo_and_need_note() {
         post_json_with(
             &answer,
             &json!({"option": "discard", "note": "重複 branch"}),
-            &admin(),
+            &admin_headers(),
         ),
     )
     .await;
     assert_eq!(discarded.status, 200, "{}", discarded.text());
     let states = send(
         &env.router(),
-        get_with(&format!("/api/v1/tasks/{}/integrations", task.id), &admin()),
+        get_with(
+            &format!("/api/v1/tasks/{}/integrations", task.id),
+            &admin_headers(),
+        ),
     )
     .await;
     let states = states.json();
@@ -392,7 +402,11 @@ async fn integration_api_inbox_unintegrated_items_are_per_repo_and_need_note() {
     )));
 
     // 残った repo-a の item は別 item のまま。discard 済みの repo-b は受信箱から消える。
-    let inbox = send(&env.router(), get_with("/api/v1/inbox/items", &admin())).await;
+    let inbox = send(
+        &env.router(),
+        get_with("/api/v1/inbox/items", &admin_headers()),
+    )
+    .await;
     let remaining = unintegrated_items_for(&inbox.json(), task.id);
     assert_eq!(remaining.len(), 1, "{}", inbox.text());
     assert_eq!(remaining[0]["id"], item_a["id"]);

@@ -8,43 +8,12 @@ use crate::common;
 use common::*;
 use serde_json::{Value, json};
 
-fn g(path: &str) -> axum::http::Request<axum::body::Body> {
-    get_with(
-        path,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
-fn p(path: &str, body: &Value) -> axum::http::Request<axum::body::Body> {
-    post_json_with(
-        path,
-        body,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
 fn env_with_memory(dir: &std::path::Path) -> TestEnv {
     TestEnv::with(EnvOptions {
         token: Some(TOKEN.into()),
         memory_dir: Some(dir.to_path_buf()),
         ..Default::default()
     })
-}
-
-fn env_without_memory() -> TestEnv {
-    TestEnv::with(EnvOptions {
-        token: Some(TOKEN.into()),
-        ..Default::default()
-    })
-}
-
-async fn seed_secretary(app: &axum::Router) {
-    let resp = send(
-        app,
-        p("/api/v1/org", &json!({"id": "secretary", "name": "秘書", "kind": "secretary", "brief": "案件を受け取る"})),
-    )
-    .await;
-    assert_eq!(resp.status.as_u16(), 201, "{}", resp.text());
 }
 
 #[tokio::test]
@@ -54,7 +23,7 @@ async fn missing_files_read_as_empty_and_paths_are_returned() {
     let app = env.router();
     seed_secretary(&app).await;
 
-    let resp = send(&app, g("/api/v1/org/secretary/memory")).await;
+    let resp = send(&app, get_admin("/api/v1/org/secretary/memory")).await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
     let body = resp.json();
     assert_eq!(body["notes"], "");
@@ -85,7 +54,7 @@ async fn existing_notes_and_a_projects_drawer_are_returned_in_full() {
     let app = env.router();
     seed_secretary(&app).await;
 
-    let resp = send(&app, g("/api/v1/org/secretary/memory?project=P1")).await;
+    let resp = send(&app, get_admin("/api/v1/org/secretary/memory?project=P1")).await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
     let body = resp.json();
     assert_eq!(
@@ -106,11 +75,11 @@ async fn existing_notes_and_a_projects_drawer_are_returned_in_full() {
 
 #[tokio::test]
 async fn unconfigured_memory_is_409_and_an_unknown_node_is_404() {
-    let env = env_without_memory();
+    let env = admin_env();
     let app = env.router();
     seed_secretary(&app).await;
 
-    let resp = send(&app, g("/api/v1/org/secretary/memory")).await;
+    let resp = send(&app, get_admin("/api/v1/org/secretary/memory")).await;
     assert_eq!(resp.status.as_u16(), 409, "{}", resp.text());
     assert_eq!(resp.json()["code"], "memory_unavailable");
 
@@ -118,7 +87,7 @@ async fn unconfigured_memory_is_409_and_an_unknown_node_is_404() {
     let env = env_with_memory(memory_dir.path());
     let app = env.router();
     seed_secretary(&app).await;
-    let resp = send(&app, g("/api/v1/org/ghost/memory")).await;
+    let resp = send(&app, get_admin("/api/v1/org/ghost/memory")).await;
     assert_eq!(resp.status.as_u16(), 404, "{}", resp.text());
     assert_eq!(resp.json()["code"], "org_node_not_found");
 }
@@ -133,7 +102,7 @@ async fn there_is_no_write_endpoint() {
 
     let resp = send(
         &app,
-        p("/api/v1/org/secretary/memory", &json!({"notes": "x"})),
+        post_admin("/api/v1/org/secretary/memory", &json!({"notes": "x"})),
     )
     .await;
     assert_eq!(resp.status.as_u16(), 405, "{}", resp.text());

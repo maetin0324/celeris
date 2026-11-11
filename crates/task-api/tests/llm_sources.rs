@@ -10,13 +10,6 @@ use std::sync::Arc;
 use common::*;
 use task_api::{LlmSourceView, LlmSourcesReader, LlmSourcesView};
 
-fn g(path: &str) -> axum::http::Request<axum::body::Body> {
-    get_with(
-        path,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
 struct FakeReader;
 
 #[async_trait::async_trait]
@@ -49,18 +42,11 @@ fn env_with_llm_sources() -> TestEnv {
     })
 }
 
-fn env_without_llm_sources() -> TestEnv {
-    TestEnv::with(EnvOptions {
-        token: Some(TOKEN.into()),
-        ..Default::default()
-    })
-}
-
 #[tokio::test]
 async fn returns_409_when_llm_proxy_is_not_configured() {
-    let env = env_without_llm_sources();
+    let env = admin_env();
     let app = env.router();
-    let resp = send(&app, g("/api/v1/llm/sources")).await;
+    let resp = send(&app, get_admin("/api/v1/llm/sources")).await;
     assert_eq!(resp.status.as_u16(), 409, "{}", resp.text());
     assert_eq!(resp.json()["code"], "llm_proxy_unavailable");
 }
@@ -69,7 +55,7 @@ async fn returns_409_when_llm_proxy_is_not_configured() {
 async fn returns_the_readers_view_when_configured() {
     let env = env_with_llm_sources();
     let app = env.router();
-    let resp = send(&app, g("/api/v1/llm/sources")).await;
+    let resp = send(&app, get_admin("/api/v1/llm/sources")).await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
     let body = resp.json();
     assert_eq!(body["sources"][0]["id"], "openai-compatible:qwen");
@@ -81,11 +67,15 @@ async fn returns_the_readers_view_when_configured() {
 async fn returns_source_detail_and_404_for_unknown_source() {
     let env = env_with_llm_sources();
     let app = env.router();
-    let resp = send(&app, g("/api/v1/llm/sources/openai-compatible%3Aqwen")).await;
+    let resp = send(
+        &app,
+        get_admin("/api/v1/llm/sources/openai-compatible%3Aqwen"),
+    )
+    .await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
     assert_eq!(resp.json()["kind"], "openai-compatible");
 
-    let resp = send(&app, g("/api/v1/llm/sources/missing")).await;
+    let resp = send(&app, get_admin("/api/v1/llm/sources/missing")).await;
     assert_eq!(resp.status.as_u16(), 404, "{}", resp.text());
 }
 

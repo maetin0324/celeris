@@ -125,13 +125,6 @@ fn raw_json_post_admin(path: &str, raw: &str) -> Request<Body> {
         .expect("request")
 }
 
-fn admin_env() -> TestEnv {
-    TestEnv::with(EnvOptions {
-        token: Some(TOKEN.into()),
-        ..Default::default()
-    })
-}
-
 // ---------------------------------------------------------------------------
 // GET /decisions・GET /tasks/{id}/decisions
 // ---------------------------------------------------------------------------

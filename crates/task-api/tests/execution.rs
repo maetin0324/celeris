@@ -26,23 +26,9 @@ fn plan_body() -> Value {
     })
 }
 
-fn g(path: &str) -> axum::http::Request<axum::body::Body> {
-    get_with(
-        path,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
-fn env() -> TestEnv {
-    TestEnv::with(EnvOptions {
-        token: Some(TOKEN.into()),
-        ..EnvOptions::default()
-    })
-}
-
 #[tokio::test]
 async fn adopting_a_plan_creates_ready_and_pending_work_units() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let task = new_task(TaskKind::Execute, Status::Draft);
     env.seed(&task);
@@ -69,7 +55,7 @@ async fn adopting_a_plan_creates_ready_and_pending_work_units() {
 
     let got = send(
         &app,
-        g(&format!("/api/v1/tasks/{}/execution-plan", task.id)),
+        get_admin(&format!("/api/v1/tasks/{}/execution-plan", task.id)),
     )
     .await;
     assert_eq!(got.status, 200, "{}", got.text());
@@ -78,7 +64,7 @@ async fn adopting_a_plan_creates_ready_and_pending_work_units() {
 
 #[tokio::test]
 async fn posting_without_a_token_is_unauthorized() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let task = new_task(TaskKind::Execute, Status::Draft);
     env.seed(&task);
@@ -94,7 +80,7 @@ async fn posting_without_a_token_is_unauthorized() {
 
 #[tokio::test]
 async fn posting_to_an_unknown_task_is_not_found() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let missing = task_core::TaskId::new();
     let resp = send(
@@ -110,13 +96,13 @@ async fn posting_to_an_unknown_task_is_not_found() {
 
 #[tokio::test]
 async fn getting_a_task_without_a_plan_is_not_found() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let task = new_task(TaskKind::Execute, Status::Draft);
     env.seed(&task);
     let resp = send(
         &app,
-        g(&format!("/api/v1/tasks/{}/execution-plan", task.id)),
+        get_admin(&format!("/api/v1/tasks/{}/execution-plan", task.id)),
     )
     .await;
     assert_eq!(resp.status, 404, "{}", resp.text());
@@ -124,7 +110,7 @@ async fn getting_a_task_without_a_plan_is_not_found() {
 
 #[tokio::test]
 async fn a_cyclic_plan_is_rejected_with_422() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let task = new_task(TaskKind::Execute, Status::Draft);
     env.seed(&task);
@@ -151,7 +137,7 @@ async fn a_cyclic_plan_is_rejected_with_422() {
 /// `celeris.execution-plan/3` も 422 で拒否され、理由（有効にする設定）が本文に出る。計画は作られない。
 #[tokio::test]
 async fn a_v3_plan_is_rejected_with_422_while_the_tree_is_disabled() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let task = new_task(TaskKind::Execute, Status::Draft);
     env.seed(&task);
@@ -172,7 +158,7 @@ async fn a_v3_plan_is_rejected_with_422_while_the_tree_is_disabled() {
     );
     let resp = send(
         &app,
-        g(&format!("/api/v1/tasks/{}/execution-plan", task.id)),
+        get_admin(&format!("/api/v1/tasks/{}/execution-plan", task.id)),
     )
     .await;
     assert_eq!(resp.status, 404, "{}", resp.text());
@@ -180,7 +166,7 @@ async fn a_v3_plan_is_rejected_with_422_while_the_tree_is_disabled() {
 
 #[tokio::test]
 async fn a_plan_with_an_unknown_harness_field_is_rejected_and_duplicate_keys_are_rejected() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let task = new_task(TaskKind::Execute, Status::Draft);
     env.seed(&task);
@@ -220,7 +206,7 @@ async fn a_plan_with_an_unknown_harness_field_is_rejected_and_duplicate_keys_are
 
 #[tokio::test]
 async fn a_second_plan_for_the_same_task_is_rejected_with_409() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let task = new_task(TaskKind::Execute, Status::Draft);
     env.seed(&task);
@@ -251,7 +237,7 @@ async fn a_second_plan_for_the_same_task_is_rejected_with_409() {
 /// plan_id を指していることも events から確認する（D17「版の履歴が監査できる」）。
 #[tokio::test]
 async fn getting_a_replanned_task_returns_the_active_version_with_both_versions_listed() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let task = new_task(TaskKind::Execute, Status::Draft);
     env.seed(&task);
@@ -293,7 +279,7 @@ async fn getting_a_replanned_task_returns_the_active_version_with_both_versions_
 
     let got = send(
         &app,
-        g(&format!("/api/v1/tasks/{}/execution-plan", task.id)),
+        get_admin(&format!("/api/v1/tasks/{}/execution-plan", task.id)),
     )
     .await;
     assert_eq!(got.status, 200, "{}", got.text());
@@ -380,22 +366,30 @@ fn gate_decision(mode: task_core::ExecutionMode) -> task_core::ExecutionGateDeci
 
 #[tokio::test]
 async fn task_execution_for_an_unknown_task_is_not_found() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let missing = task_core::TaskId::new();
-    let resp = send(&app, g(&format!("/api/v1/tasks/{missing}/execution"))).await;
+    let resp = send(
+        &app,
+        get_admin(&format!("/api/v1/tasks/{missing}/execution")),
+    )
+    .await;
     assert_eq!(resp.status, 404, "{}", resp.text());
 }
 
 /// 計画も gate の判定も無いタスクでも 200（metrics は既定値。D20 の「直接実行」に対応）。
 #[tokio::test]
 async fn task_execution_with_no_activity_returns_zeroed_metrics_and_no_plan() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let task = new_task(TaskKind::Execute, Status::Done);
     env.seed(&task);
 
-    let resp = send(&app, g(&format!("/api/v1/tasks/{}/execution", task.id))).await;
+    let resp = send(
+        &app,
+        get_admin(&format!("/api/v1/tasks/{}/execution", task.id)),
+    )
+    .await;
     assert_eq!(resp.status, 200, "{}", resp.text());
     let body = resp.json();
     assert!(body["plan"].is_null(), "{body}");
@@ -407,7 +401,7 @@ async fn task_execution_with_no_activity_returns_zeroed_metrics_and_no_plan() {
 /// gate と計画のあるタスク: `plan.work_units`・`versions`・`phase` が出る。
 #[tokio::test]
 async fn task_execution_reports_gate_plan_and_phase() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let mut task = new_task(TaskKind::Execute, Status::Running);
     task.routing = Some(task_core::TaskRouting {
@@ -431,7 +425,11 @@ async fn task_execution_reports_gate_plan_and_phase() {
     )
     .expect("adopt_plan");
 
-    let resp = send(&app, g(&format!("/api/v1/tasks/{}/execution", task.id))).await;
+    let resp = send(
+        &app,
+        get_admin(&format!("/api/v1/tasks/{}/execution", task.id)),
+    )
+    .await;
     assert_eq!(resp.status, 200, "{}", resp.text());
     let body = resp.json();
     assert_eq!(body["gate"]["mode"], "compound");
@@ -447,24 +445,28 @@ async fn task_execution_reports_gate_plan_and_phase() {
 
 #[tokio::test]
 async fn execution_metrics_rejects_an_unknown_group_by() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
-    let resp = send(&app, g("/api/v1/metrics/execution?group_by=bogus")).await;
+    let resp = send(&app, get_admin("/api/v1/metrics/execution?group_by=bogus")).await;
     assert_eq!(resp.status, 400, "{}", resp.text());
 }
 
 #[tokio::test]
 async fn execution_metrics_rejects_a_malformed_since() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
-    let resp = send(&app, g("/api/v1/metrics/execution?since=not-a-date")).await;
+    let resp = send(
+        &app,
+        get_admin("/api/v1/metrics/execution?since=not-a-date"),
+    )
+    .await;
     assert_eq!(resp.status, 400, "{}", resp.text());
 }
 
 /// gate の判定分布（既定の `group_by = gate_mode`）: atomic 1 件・compound 1 件が別グループになる。
 #[tokio::test]
 async fn execution_metrics_groups_by_gate_mode_by_default() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
 
     let mut atomic_task = new_task(TaskKind::Execute, Status::Done);
@@ -481,7 +483,7 @@ async fn execution_metrics_groups_by_gate_mode_by_default() {
     });
     env.seed(&compound_task);
 
-    let resp = send(&app, g("/api/v1/metrics/execution")).await;
+    let resp = send(&app, get_admin("/api/v1/metrics/execution")).await;
     assert_eq!(resp.status, 200, "{}", resp.text());
     let body = resp.json();
     assert_eq!(body["group_by"], "gate_mode");
@@ -504,7 +506,7 @@ async fn execution_metrics_groups_by_gate_mode_by_default() {
 /// `since` は `updated_at` で絞る（未来の `since` なら何も残らない）。
 #[tokio::test]
 async fn execution_metrics_since_filters_out_tasks_updated_before_it() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let task = new_task(TaskKind::Execute, Status::Done);
     env.seed(&task);
@@ -514,7 +516,7 @@ async fn execution_metrics_since_filters_out_tasks_updated_before_it() {
         .unwrap();
     let resp = send(
         &app,
-        g(&format!("/api/v1/metrics/execution?since={future}")),
+        get_admin(&format!("/api/v1/metrics/execution?since={future}")),
     )
     .await;
     assert_eq!(resp.status, 200, "{}", resp.text());
@@ -552,7 +554,7 @@ fn paused_task(env: &TestEnv) -> task_core::Task {
 
 #[tokio::test]
 async fn phase_gate_requires_a_token_and_awaiting_human() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let task = paused_task(&env);
     let path = format!("/api/v1/tasks/{}/execution/phase-gate", task.id);
@@ -601,7 +603,7 @@ async fn phase_gate_requires_a_token_and_awaiting_human() {
 
 #[tokio::test]
 async fn phase_gate_replan_without_a_note_is_422_and_continue_resumes() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let task = paused_task(&env);
     let path = format!("/api/v1/tasks/{}/execution/phase-gate", task.id);
@@ -616,7 +618,7 @@ async fn phase_gate_replan_without_a_note_is_422_and_continue_resumes() {
     assert_eq!(env.status_of(task.id), Status::Blocked);
 
     // 受信箱: questions ではなく attention の phase_checkpoint。
-    let inbox = send(&app, g("/api/v1/inbox")).await;
+    let inbox = send(&app, get_admin("/api/v1/inbox")).await;
     assert_eq!(inbox.status, 200, "{}", inbox.text());
     let inbox = inbox.json();
     assert_eq!(inbox["questions"].as_array().map(Vec::len), Some(0));
@@ -629,7 +631,11 @@ async fn phase_gate_replan_without_a_note_is_422_and_continue_resumes() {
     assert_eq!(item["next_phase"], "build");
 
     // Execution 節: phase = awaiting_human、途中報告つき。
-    let exec = send(&app, g(&format!("/api/v1/tasks/{}/execution", task.id))).await;
+    let exec = send(
+        &app,
+        get_admin(&format!("/api/v1/tasks/{}/execution", task.id)),
+    )
+    .await;
     assert_eq!(exec.status, 200, "{}", exec.text());
     let exec = exec.json();
     assert_eq!(exec["phase"], "awaiting_human", "{exec}");
@@ -653,7 +659,7 @@ async fn phase_gate_replan_without_a_note_is_422_and_continue_resumes() {
 
 #[tokio::test]
 async fn phase_gate_withdraw_cancels_the_task() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let task = paused_task(&env);
     let resp = send(
@@ -695,7 +701,7 @@ fn awaiting_plan_task(env: &TestEnv) -> task_core::Task {
 
 #[tokio::test]
 async fn plan_gate_status_codes_and_inbox() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let task = awaiting_plan_task(&env);
     let path = format!("/api/v1/tasks/{}/execution/plan-gate", task.id);
@@ -761,7 +767,7 @@ async fn plan_gate_status_codes_and_inbox() {
     assert_eq!(env.status_of(task.id), Status::Blocked);
 
     // 受信箱: questions ではなく attention の plan_approval。
-    let inbox = send(&app, g("/api/v1/inbox")).await;
+    let inbox = send(&app, get_admin("/api/v1/inbox")).await;
     assert_eq!(inbox.status, 200, "{}", inbox.text());
     let inbox = inbox.json();
     let questions: Vec<&Value> = inbox["questions"]
@@ -791,7 +797,11 @@ async fn plan_gate_status_codes_and_inbox() {
     );
 
     // Execution 節: phase = awaiting_plan_approval、理由つき。
-    let exec = send(&app, g(&format!("/api/v1/tasks/{}/execution", task.id))).await;
+    let exec = send(
+        &app,
+        get_admin(&format!("/api/v1/tasks/{}/execution", task.id)),
+    )
+    .await;
     assert_eq!(exec.status, 200, "{}", exec.text());
     let exec = exec.json();
     assert_eq!(exec["phase"], "awaiting_plan_approval", "{exec}");
@@ -834,7 +844,7 @@ async fn plan_gate_status_codes_and_inbox() {
 
 #[tokio::test]
 async fn plan_gate_replan_requests_a_planner_and_withdraw_cancels() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let task = awaiting_plan_task(&env);
     let resp = send(
@@ -906,7 +916,7 @@ fn routed_task(status: Status) -> task_core::Task {
 
 #[tokio::test]
 async fn decompose_sets_an_explicit_compound_hint_and_clears_the_gate_decision() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let task = routed_task(Status::Ready);
     env.seed(&task);
@@ -955,7 +965,7 @@ async fn decompose_sets_an_explicit_compound_hint_and_clears_the_gate_decision()
 
 #[tokio::test]
 async fn decompose_refuses_running_terminal_and_out_of_scope_tasks() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let running = routed_task(Status::Running);
     env.seed(&running);
@@ -1033,7 +1043,7 @@ async fn decompose_refuses_running_terminal_and_out_of_scope_tasks() {
 
 #[tokio::test]
 async fn retry_with_execution_marks_the_copy_and_drops_the_copied_gate_decision() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let failed = routed_task(Status::Failed);
     env.seed(&failed);
@@ -1083,7 +1093,7 @@ async fn retry_with_execution_marks_the_copy_and_drops_the_copied_gate_decision(
 /// spec（check）は上書きでき（`done` のまま、`work_unit_spec_overridden`）、消すのは 422。`POST` は従来どおり 409。
 #[tokio::test]
 async fn put_with_an_active_plan_is_a_human_replan_that_may_override_a_done_spec() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let task = new_task(TaskKind::Execute, Status::Draft);
     env.seed(&task);

@@ -6,17 +6,6 @@ use common::*;
 use serde_json::json;
 use task_core::{Event, Status, TaskId, TaskKind, TaskRouting, TaskStore, TierSource};
 
-fn admin() -> [(&'static str, &'static str); 1] {
-    [("authorization", "Bearer s3cret-token-value")]
-}
-
-fn env_with_token() -> TestEnv {
-    TestEnv::with(EnvOptions {
-        token: Some(TOKEN.to_string()),
-        ..EnvOptions::default()
-    })
-}
-
 fn routing_decided(run_id: &str, escalation: Option<&str>) -> Event {
     serde_json::from_value(json!({
         "type": "routing_decided",
@@ -53,7 +42,7 @@ fn routing_decided(run_id: &str, escalation: Option<&str>) -> Event {
 /// shadow の失敗・timeout は primary の outcome、attempts、review に影響しない。
 #[tokio::test]
 async fn routing_shadow_audit_keeps_primary_outcome_separate() {
-    let env = env_with_token();
+    let env = admin_env();
     let task = new_task(TaskKind::Execute, Status::Done);
     env.seed(&task);
     let id = task.id;
@@ -110,7 +99,7 @@ async fn routing_shadow_audit_keeps_primary_outcome_separate() {
     }
     let resp = send(
         &env.router(),
-        get_with(&format!("/api/v1/tasks/{id}/routing"), &admin()),
+        get_with(&format!("/api/v1/tasks/{id}/routing"), &admin_headers()),
     )
     .await;
     assert_eq!(resp.status, 200, "{}", resp.text());
@@ -135,7 +124,7 @@ async fn routing_shadow_audit_keeps_primary_outcome_separate() {
 
 #[tokio::test]
 async fn routing_returns_per_run_audit_and_dropped_assignee() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     let mut task = new_task(TaskKind::Execute, Status::Done);
     task.assignee = Some("software-engineering".into());
@@ -189,7 +178,7 @@ async fn routing_returns_per_run_audit_and_dropped_assignee() {
 
     let resp = send(
         &app,
-        get_with(&format!("/api/v1/tasks/{id}/routing"), &admin()),
+        get_with(&format!("/api/v1/tasks/{id}/routing"), &admin_headers()),
     )
     .await;
     assert_eq!(resp.status, 200, "{}", resp.text());
@@ -218,14 +207,17 @@ async fn routing_returns_per_run_audit_and_dropped_assignee() {
 /// run の無いタスクは `runs: []`（200）。知らないタスクは 404、クエリは 400、トークン無しは 401。
 #[tokio::test]
 async fn routing_is_empty_without_runs_and_404_for_unknown_tasks() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     let task = new_task(TaskKind::Execute, Status::Ready);
     env.seed(&task);
 
     let resp = send(
         &app,
-        get_with(&format!("/api/v1/tasks/{}/routing", task.id), &admin()),
+        get_with(
+            &format!("/api/v1/tasks/{}/routing", task.id),
+            &admin_headers(),
+        ),
     )
     .await;
     assert_eq!(resp.status, 200, "{}", resp.text());
@@ -237,7 +229,7 @@ async fn routing_is_empty_without_runs_and_404_for_unknown_tasks() {
         &app,
         get_with(
             &format!("/api/v1/tasks/{}/routing", TaskId::new()),
-            &admin(),
+            &admin_headers(),
         ),
     )
     .await;
@@ -245,7 +237,10 @@ async fn routing_is_empty_without_runs_and_404_for_unknown_tasks() {
 
     let resp = send(
         &app,
-        get_with(&format!("/api/v1/tasks/{}/routing?x=1", task.id), &admin()),
+        get_with(
+            &format!("/api/v1/tasks/{}/routing?x=1", task.id),
+            &admin_headers(),
+        ),
     )
     .await;
     assert_eq!(resp.status, 400, "{}", resp.text());

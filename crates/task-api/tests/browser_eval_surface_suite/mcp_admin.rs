@@ -8,20 +8,6 @@ use common::*;
 use task_core::{McpCall, McpCallStore, McpClient, McpClientStore, McpScope};
 use time::OffsetDateTime;
 
-fn g(path: &str) -> axum::http::Request<axum::body::Body> {
-    get_with(
-        path,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
-fn env() -> TestEnv {
-    TestEnv::with(EnvOptions {
-        token: Some(TOKEN.into()),
-        ..Default::default()
-    })
-}
-
 fn seed_client(env: &TestEnv, id: &str) {
     env.store
         .mcp_client_create(&McpClient {
@@ -38,10 +24,10 @@ fn seed_client(env: &TestEnv, id: &str) {
 
 #[tokio::test]
 async fn lists_clients_without_the_token_value() {
-    let env = env();
+    let env = admin_env();
     seed_client(&env, "chatgpt");
     let app = env.router();
-    let resp = send(&app, g("/api/v1/mcp/clients")).await;
+    let resp = send(&app, get_admin("/api/v1/mcp/clients")).await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
     let body = resp.json();
     let items = body["items"].as_array().expect("items");
@@ -54,7 +40,7 @@ async fn lists_clients_without_the_token_value() {
 
 #[tokio::test]
 async fn lists_calls_optionally_filtered_by_client() {
-    let env = env();
+    let env = admin_env();
     seed_client(&env, "a");
     seed_client(&env, "b");
     for (i, client_id) in ["a", "b", "a"].iter().enumerate() {
@@ -73,11 +59,11 @@ async fn lists_calls_optionally_filtered_by_client() {
     }
     let app = env.router();
 
-    let resp = send(&app, g("/api/v1/mcp/calls")).await;
+    let resp = send(&app, get_admin("/api/v1/mcp/calls")).await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
     assert_eq!(resp.json()["items"].as_array().expect("items").len(), 3);
 
-    let resp = send(&app, g("/api/v1/mcp/calls?client=a")).await;
+    let resp = send(&app, get_admin("/api/v1/mcp/calls?client=a")).await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
     let items = resp.json()["items"].as_array().expect("items").clone();
     assert_eq!(items.len(), 2);
@@ -86,7 +72,7 @@ async fn lists_calls_optionally_filtered_by_client() {
 
 #[tokio::test]
 async fn requires_a_bearer_token() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let resp = send(
         &app,

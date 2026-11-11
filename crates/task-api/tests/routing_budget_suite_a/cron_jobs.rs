@@ -15,20 +15,6 @@ use task_core::{Status, TaskId, TaskStore};
 
 const BASE: &str = "/api/v1/cron-jobs";
 
-fn job_body(name: &str) -> Value {
-    json!({
-        "name": name,
-        "schedule": "0 4 * * *",
-        "timezone": "Asia/Tokyo",
-        "template": {
-            "title": "知識整理: {date}",
-            "objective": "KB と受信箱を整理する",
-            "acceptance": [{"type": "reviewer", "text": "整理の記録がある"}],
-            "lane": "cheap"
-        }
-    })
-}
-
 fn post_empty(path: &str) -> Request<Body> {
     post_json(path, &json!({}))
 }

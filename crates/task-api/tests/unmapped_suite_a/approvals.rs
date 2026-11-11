@@ -17,35 +17,6 @@ use task_core::{
 };
 use time::OffsetDateTime;
 
-fn g(path: &str) -> axum::http::Request<axum::body::Body> {
-    get_with(
-        path,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
-fn p(path: &str, body: &Value) -> axum::http::Request<axum::body::Body> {
-    post_json_with(
-        path,
-        body,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
-fn d(path: &str) -> axum::http::Request<axum::body::Body> {
-    delete_with(
-        path,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
-fn env_with_token() -> TestEnv {
-    TestEnv::with(EnvOptions {
-        token: Some(TOKEN.into()),
-        ..Default::default()
-    })
-}
-
 fn node(id: &str, parent: Option<&str>, kind: OrgKind) -> OrgNode {
     let now = OffsetDateTime::now_utc();
     OrgNode {
@@ -146,25 +117,29 @@ fn blocked_task_with_approval(
 
 #[tokio::test]
 async fn approvals_are_listed_oldest_first_and_can_be_filtered() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     seed_org(&env);
     let project = ProjectId::new();
     let (_, a) = blocked_task_with_approval(&env, "coding-poc", Some(project));
     let (_, b) = blocked_task_with_approval(&env, "secretary", None);
 
-    let resp = send(&app, g("/api/v1/approvals")).await;
+    let resp = send(&app, get_admin("/api/v1/approvals")).await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
     let items = resp.json()["items"].as_array().cloned().expect("items");
     assert_eq!(items.len(), 2);
     assert_eq!(items[0]["id"], a.id.to_string(), "oldest first");
 
-    let resp = send(&app, g("/api/v1/approvals?node=secretary")).await;
+    let resp = send(&app, get_admin("/api/v1/approvals?node=secretary")).await;
     let items = resp.json()["items"].as_array().cloned().expect("items");
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["id"], b.id.to_string());
 
-    let resp = send(&app, g(&format!("/api/v1/approvals?project={project}"))).await;
+    let resp = send(
+        &app,
+        get_admin(&format!("/api/v1/approvals?project={project}")),
+    )
+    .await;
     let items = resp.json()["items"].as_array().cloned().expect("items");
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["id"], a.id.to_string());
@@ -178,27 +153,31 @@ async fn approvals_are_listed_oldest_first_and_can_be_filtered() {
             OffsetDateTime::now_utc(),
         )
         .expect("decide");
-    let resp = send(&app, g("/api/v1/approvals?pending=true")).await;
+    let resp = send(&app, get_admin("/api/v1/approvals?pending=true")).await;
     let items = resp.json()["items"].as_array().cloned().expect("items");
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["id"], b.id.to_string());
 
     // 全件（pending 無し）は両方出る。
-    let resp = send(&app, g("/api/v1/approvals")).await;
+    let resp = send(&app, get_admin("/api/v1/approvals")).await;
     assert_eq!(resp.json()["items"].as_array().map(Vec::len), Some(2));
 
     // R5（Phase 27）: `pending=false` は**決定済みだけ**（以前は全件を返していた）。
-    let resp = send(&app, g("/api/v1/approvals?pending=false")).await;
+    let resp = send(&app, get_admin("/api/v1/approvals?pending=false")).await;
     let items = resp.json()["items"].as_array().cloned().expect("items");
     assert_eq!(items.len(), 1, "{items:?}");
     assert_eq!(items[0]["id"], a.id.to_string());
     assert_eq!(items[0]["decision"], "once");
     // 他の絞り込みと AND で効く。
-    let resp = send(&app, g("/api/v1/approvals?pending=false&node=secretary")).await;
+    let resp = send(
+        &app,
+        get_admin("/api/v1/approvals?pending=false&node=secretary"),
+    )
+    .await;
     assert_eq!(resp.json()["items"].as_array().map(Vec::len), Some(0));
     let resp = send(
         &app,
-        g(&format!(
+        get_admin(&format!(
             "/api/v1/approvals?pending=false&project={project}"
         )),
     )
@@ -206,20 +185,20 @@ async fn approvals_are_listed_oldest_first_and_can_be_filtered() {
     assert_eq!(resp.json()["items"].as_array().map(Vec::len), Some(1));
 
     // 知らないクエリは 400。
-    let resp = send(&app, g("/api/v1/approvals?nope=1")).await;
+    let resp = send(&app, get_admin("/api/v1/approvals?nope=1")).await;
     assert_eq!(resp.status.as_u16(), 400);
 }
 
 #[tokio::test]
 async fn once_reopens_the_task_through_the_existing_answer_path() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     seed_org(&env);
     let (task, approval) = blocked_task_with_approval(&env, "coding-poc", None);
 
     let resp = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/approvals/{}/decide", approval.id),
             &json!({"decision": "once", "answer": "pegasus"}),
         ),
@@ -251,14 +230,14 @@ async fn once_reopens_the_task_through_the_existing_answer_path() {
 
 #[tokio::test]
 async fn standing_also_reopens_the_task_and_adds_a_rule_scoped_to_the_node_by_default() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     seed_org(&env);
     let (task, approval) = blocked_task_with_approval(&env, "coding-poc", None);
 
     let resp = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/approvals/{}/decide", approval.id),
             &json!({"decision": "standing", "answer": "pegasus は 1 ノードで始めてよい"}),
         ),
@@ -292,14 +271,14 @@ async fn standing_also_reopens_the_task_and_adds_a_rule_scoped_to_the_node_by_de
 
 #[tokio::test]
 async fn standing_with_scope_all_applies_to_every_node() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     seed_org(&env);
     let (_, approval) = blocked_task_with_approval(&env, "coding-poc", None);
 
     let resp = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/approvals/{}/decide", approval.id),
             &json!({"decision": "standing", "answer": "深夜は連絡しない", "scope": "all"}),
         ),
@@ -321,7 +300,7 @@ async fn standing_with_scope_all_applies_to_every_node() {
     let (_, approval2) = blocked_task_with_approval(&env, "coding-poc", None);
     let resp = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/approvals/{}/decide", approval2.id),
             &json!({"decision": "standing", "answer": "x", "scope": "bogus"}),
         ),
@@ -332,14 +311,14 @@ async fn standing_with_scope_all_applies_to_every_node() {
 
 #[tokio::test]
 async fn denied_prefixes_the_answer_so_the_worker_can_tell() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     seed_org(&env);
     let (task, approval) = blocked_task_with_approval(&env, "coding-poc", None);
 
     let resp = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/approvals/{}/decide", approval.id),
             &json!({"decision": "denied", "answer": "予算超過"}),
         ),
@@ -361,14 +340,14 @@ async fn denied_prefixes_the_answer_so_the_worker_can_tell() {
 /// `once` + 同じ答えで決定済みになる（`GET /approvals?pending=true` からその行が消える）。
 #[tokio::test]
 async fn answering_a_task_directly_also_settles_its_pending_approval() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     seed_org(&env);
     let (task, approval) = blocked_task_with_approval(&env, "coding-poc", None);
 
     let resp = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/tasks/{}/answer", task.id),
             &json!({"answer": "pegasus"}),
         ),
@@ -385,21 +364,21 @@ async fn answering_a_task_directly_also_settles_its_pending_approval() {
     assert_eq!(decided.decision, Some(task_core::approval::Decision::Once));
     assert_eq!(decided.answer.as_deref(), Some("pegasus"));
 
-    let resp = send(&app, g("/api/v1/approvals?pending=true")).await;
+    let resp = send(&app, get_admin("/api/v1/approvals?pending=true")).await;
     let items = resp.json()["items"].as_array().cloned().expect("items");
     assert!(items.is_empty(), "{items:?}");
 }
 
 #[tokio::test]
 async fn deciding_an_unknown_approval_is_404_and_a_blank_answer_is_422() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     seed_org(&env);
     let (_, approval) = blocked_task_with_approval(&env, "coding-poc", None);
 
     let resp = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/approvals/{}/decide", ApprovalId::new()),
             &json!({"decision": "once", "answer": "x"}),
         ),
@@ -410,7 +389,7 @@ async fn deciding_an_unknown_approval_is_404_and_a_blank_answer_is_422() {
 
     let resp = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/approvals/not-a-ulid/decide",
             &json!({"decision": "once", "answer": "x"}),
         ),
@@ -420,7 +399,7 @@ async fn deciding_an_unknown_approval_is_404_and_a_blank_answer_is_422() {
 
     let resp = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/approvals/{}/decide", approval.id),
             &json!({"decision": "once", "answer": "   "}),
         ),
@@ -431,12 +410,12 @@ async fn deciding_an_unknown_approval_is_404_and_a_blank_answer_is_422() {
 
 #[tokio::test]
 async fn standing_rules_can_be_listed_created_and_deleted() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
 
     let resp = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/standing-rules",
             &json!({"rule": "深夜は連絡しない"}),
         ),
@@ -448,7 +427,7 @@ async fn standing_rules_can_be_listed_created_and_deleted() {
 
     let resp = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/standing-rules",
             &json!({"node_id": "coding-poc", "rule": "pegasus は 1 ノードで始めてよい"}),
         ),
@@ -457,44 +436,48 @@ async fn standing_rules_can_be_listed_created_and_deleted() {
     assert_eq!(resp.status.as_u16(), 201);
     let for_coding = resp.json();
 
-    let resp = send(&app, g("/api/v1/standing-rules")).await;
+    let resp = send(&app, get_admin("/api/v1/standing-rules")).await;
     assert_eq!(
         resp.json()["items"].as_array().map(Vec::len),
         Some(2),
         "絞り込み無しは全件"
     );
 
-    let resp = send(&app, g("/api/v1/standing-rules?node=coding-poc")).await;
+    let resp = send(&app, get_admin("/api/v1/standing-rules?node=coding-poc")).await;
     let items = resp.json()["items"].as_array().cloned().expect("items");
     assert_eq!(items.len(), 2, "全員向け + そのノード向け");
 
     let resp = send(
         &app,
-        d(&format!(
+        delete_admin(&format!(
             "/api/v1/standing-rules/{}",
             for_coding["id"].as_str().expect("id")
         )),
     )
     .await;
     assert_eq!(resp.status.as_u16(), 204);
-    let resp = send(&app, g("/api/v1/standing-rules?node=coding-poc")).await;
+    let resp = send(&app, get_admin("/api/v1/standing-rules?node=coding-poc")).await;
     assert_eq!(resp.json()["items"].as_array().map(Vec::len), Some(1));
 
     // 無い id は 404（2 回目の削除、ULID でない文字列も）。
     let resp = send(
         &app,
-        d(&format!(
+        delete_admin(&format!(
             "/api/v1/standing-rules/{}",
             for_coding["id"].as_str().expect("id")
         )),
     )
     .await;
     assert_eq!(resp.status.as_u16(), 404);
-    let resp = send(&app, d("/api/v1/standing-rules/not-a-ulid")).await;
+    let resp = send(&app, delete_admin("/api/v1/standing-rules/not-a-ulid")).await;
     assert_eq!(resp.status.as_u16(), 404);
 
     // 空白だけの rule は 422。
-    let resp = send(&app, p("/api/v1/standing-rules", &json!({"rule": "   "}))).await;
+    let resp = send(
+        &app,
+        post_admin("/api/v1/standing-rules", &json!({"rule": "   "})),
+    )
+    .await;
     assert_eq!(resp.status.as_u16(), 422);
     let _ = global;
 }
@@ -502,7 +485,7 @@ async fn standing_rules_can_be_listed_created_and_deleted() {
 /// トークンを設定した構成での管理系（decide / standing-rules の作成・削除）の 401。
 #[tokio::test]
 async fn admin_operations_require_a_token_when_one_is_configured() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     seed_org(&env);
     let (_, approval) = blocked_task_with_approval(&env, "coding-poc", None);
@@ -533,9 +516,9 @@ async fn admin_operations_require_a_token_when_one_is_configured() {
     assert_eq!(resp.status.as_u16(), 401);
 
     // 読み取りは従来どおり通る（トークン付きなら）。
-    let resp = send(&app, g("/api/v1/approvals")).await;
+    let resp = send(&app, get_admin("/api/v1/approvals")).await;
     assert_eq!(resp.status.as_u16(), 200);
-    let resp = send(&app, g("/api/v1/standing-rules")).await;
+    let resp = send(&app, get_admin("/api/v1/standing-rules")).await;
     assert_eq!(resp.status.as_u16(), 200);
 }
 
@@ -601,7 +584,7 @@ async fn the_daemon_snapshot_carries_the_pending_approval_count() {
             OffsetDateTime::now_utc(),
         )
         .expect("decide");
-    let resp = send(&app, g("/api/v1/daemon")).await;
+    let resp = send(&app, get_admin("/api/v1/daemon")).await;
     assert_eq!(resp.json()["snapshot"]["approvals_pending"], 0);
 }
 
@@ -620,29 +603,29 @@ fn withdrawn_event_count(env: &TestEnv, task_id: TaskId) -> usize {
 /// から消え、`pending=false`（決めたものの履歴）に残る。イベントが 1 件つく。
 #[tokio::test]
 async fn cancelling_the_task_withdraws_its_pending_approval_from_every_surface() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     env.daemon_tx.send_replace(Some(snapshot(3)));
     seed_org(&env);
     let (task, approval) = blocked_task_with_approval(&env, "coding-poc", None);
-    let resp = send(&app, g("/api/v1/daemon")).await;
+    let resp = send(&app, get_admin("/api/v1/daemon")).await;
     assert_eq!(resp.json()["snapshot"]["approvals_pending"], 1);
 
     let resp = send(
         &app,
-        p(&format!("/api/v1/tasks/{}/cancel", task.id), &json!({})),
+        post_admin(&format!("/api/v1/tasks/{}/cancel", task.id), &json!({})),
     )
     .await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
     assert_eq!(env.status_of(task.id), Status::Cancelled);
 
-    let resp = send(&app, g("/api/v1/approvals?pending=true")).await;
+    let resp = send(&app, get_admin("/api/v1/approvals?pending=true")).await;
     assert!(
         resp.json()["items"].as_array().expect("items").is_empty(),
         "{}",
         resp.text()
     );
-    let resp = send(&app, g("/api/v1/approvals?pending=false")).await;
+    let resp = send(&app, get_admin("/api/v1/approvals?pending=false")).await;
     let items = resp.json()["items"].as_array().cloned().expect("items");
     assert_eq!(items.len(), 1, "{items:?}");
     assert_eq!(items[0]["id"], approval.id.to_string());
@@ -653,9 +636,9 @@ async fn cancelling_the_task_withdraws_its_pending_approval_from_every_surface()
             .is_some_and(|s| s.starts_with("task cancelled")),
         "{items:?}"
     );
-    let resp = send(&app, g("/api/v1/daemon")).await;
+    let resp = send(&app, get_admin("/api/v1/daemon")).await;
     assert_eq!(resp.json()["snapshot"]["approvals_pending"], 0);
-    let resp = send(&app, g("/api/v1/inbox")).await;
+    let resp = send(&app, get_admin("/api/v1/inbox")).await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
     assert!(
         resp.json()["questions"]
@@ -669,7 +652,7 @@ async fn cancelling_the_task_withdraws_its_pending_approval_from_every_surface()
     // `types` の語彙にも入っている。
     let resp = send(
         &app,
-        g(&format!(
+        get_admin(&format!(
             "/api/v1/tasks/{}/events?types=approvals_withdrawn",
             task.id
         )),
@@ -687,7 +670,7 @@ async fn cancelling_the_task_withdraws_its_pending_approval_from_every_surface()
 /// 409 が返っていた。今は決定を記録して 200 + `note`、タスクには答えない（`Answered` を積まない）。
 #[tokio::test]
 async fn deciding_an_approval_of_a_terminal_task_records_the_decision_and_returns_a_note() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     seed_org(&env);
     let (task, _) = blocked_task_with_approval(&env, "coding-poc", None);
@@ -710,7 +693,7 @@ async fn deciding_an_approval_of_a_terminal_task_records_the_decision_and_return
 
     let resp = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/approvals/{}/decide", stale.id),
             &json!({"decision": "denied", "answer": "不要になった"}),
         ),
@@ -734,7 +717,7 @@ async fn deciding_an_approval_of_a_terminal_task_records_the_decision_and_return
         .iter()
         .any(|(_, e)| matches!(e, task_core::Event::Answered { .. }));
     assert!(!answered, "a terminal task must not be answered");
-    let resp = send(&app, g("/api/v1/approvals?pending=true")).await;
+    let resp = send(&app, get_admin("/api/v1/approvals?pending=true")).await;
     assert!(resp.json()["items"].as_array().expect("items").is_empty());
 }
 
@@ -742,7 +725,7 @@ async fn deciding_an_approval_of_a_terminal_task_records_the_decision_and_return
 /// `withdrawn` は celeris だけが書く（人が送ると 422）。
 #[tokio::test]
 async fn deciding_when_the_task_cannot_take_an_answer_is_409_without_side_effects() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     seed_org(&env);
     let (task, approval) = blocked_task_with_approval(&env, "coding-poc", None);
@@ -753,7 +736,7 @@ async fn deciding_when_the_task_cannot_take_an_answer_is_409_without_side_effect
 
     let resp = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/approvals/{}/decide", approval.id),
             &json!({"decision": "denied", "answer": "x"}),
         ),
@@ -769,7 +752,7 @@ async fn deciding_when_the_task_cannot_take_an_answer_is_409_without_side_effect
 
     let resp = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/approvals/{}/decide", approval.id),
             &json!({"decision": "withdrawn", "answer": "x"}),
         ),

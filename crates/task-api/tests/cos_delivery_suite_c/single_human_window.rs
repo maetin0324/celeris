@@ -9,35 +9,16 @@
 //! forwards route are refused.
 use crate::common;
 
+use common::cos_ops::{decision_answered_by, issue_bearer, raise_decision};
 use common::*;
 use serde_json::{Value, json};
-use task_api::{ApiToken, Principal};
 use task_core::chat::triage::CosTriageSource;
-use task_core::decision::{
-    CostOfReversal, DecisionKind, DecisionOption, DecisionOrigin, DecisionPathEntry,
-    DecisionRaisedBy, DecisionRequest, DecisionStatus,
-};
-use task_core::{Event, Status, TaskKind, TaskStore};
+use task_core::{Status, TaskKind};
 use time::{Duration, OffsetDateTime};
 
 const WEB_TOKEN: &str = "web-token-value-window";
 const OPERATOR_TOKEN: &str = "operator-token-value-window";
 const OPS: &str = "/api/v1/cos/operations";
-
-fn env() -> TestEnv {
-    TestEnv::with(EnvOptions {
-        extra_tokens: vec![
-            ApiToken::new(Principal::Human { name: "web".into() }, WEB_TOKEN),
-            ApiToken::new(
-                Principal::Operator {
-                    name: "claude-code".into(),
-                },
-                OPERATOR_TOKEN,
-            ),
-        ],
-        ..EnvOptions::default()
-    })
-}
 
 fn bearer(token: &str) -> String {
     format!("Bearer {token}")
@@ -48,46 +29,6 @@ fn rfc3339(at: OffsetDateTime) -> String {
         .expect("rfc3339")
 }
 
-fn raise_decision(env: &TestEnv, task: &task_core::Task, id: &str) {
-    let opt = |key: &str| DecisionOption {
-        key: key.into(),
-        label: key.into(),
-        consequence: None,
-    };
-    env.store
-        .append_event(
-            task.id,
-            &Event::DecisionRequested {
-                decision: Box::new(DecisionRequest {
-                    id: id.into(),
-                    key: "h1".into(),
-                    kind: DecisionKind::Choice,
-                    question: "which?".into(),
-                    options: vec![opt("vault"), opt("manual")],
-                    recommended: "vault".into(),
-                    cost_of_reversal: CostOfReversal::Low,
-                    cost_note: None,
-                    needed_before: vec!["c".into()],
-                    path: vec![DecisionPathEntry {
-                        task_id: task.id,
-                        title: "root".into(),
-                        stage: Some("s1".into()),
-                        unit: None,
-                    }],
-                    raised_by: DecisionRaisedBy {
-                        task_id: task.id,
-                        run_id: None,
-                        origin: DecisionOrigin::Planner,
-                    },
-                    status: DecisionStatus::Open,
-                    answer: None,
-                    withdrawn_reason: None,
-                }),
-            },
-        )
-        .expect("raise");
-}
-
 /// A `human_required` task of `project` with one open decision; returns `(task, inbox item id)`.
 fn wait(env: &TestEnv, project: &str, decision_id: &str) -> (task_core::Task, String) {
     let mut task = new_task(TaskKind::Execute, Status::Ready);
@@ -96,15 +37,6 @@ fn wait(env: &TestEnv, project: &str, decision_id: &str) -> (task_core::Task, St
     env.seed(&task);
     raise_decision(env, &task, decision_id);
     (task, format!("decision-{decision_id}"))
-}
-
-fn run_bearer(env: &TestEnv, thread: &str, run: &str) -> String {
-    let bearer = task_api::cos::issue_run_bearer(&env.store, thread, run, Duration::hours(1))
-        .expect("issue");
-    env.store
-        .chat_run_record_policy(run, "5", "test")
-        .expect("policy");
-    format!("Bearer {bearer}")
 }
 
 fn finish_run(env: &TestEnv, run: &str) {
@@ -143,18 +75,6 @@ fn forward_op(key: &str, to_thread: &str, message: &str, tasks: &[String], expir
     })
 }
 
-fn decision_answered_by(env: &TestEnv, task: &task_core::Task) -> Vec<String> {
-    env.store
-        .events_for(task.id)
-        .expect("events")
-        .into_iter()
-        .filter_map(|(_, e)| match e {
-            Event::DecisionAnswered { by, .. } => Some(by),
-            _ => None,
-        })
-        .collect()
-}
-
 async fn cards(app: &axum::Router, general: &str) -> Vec<Value> {
     let listed = send(
         app,
@@ -176,7 +96,7 @@ async fn cards(app: &axum::Router, general: &str) -> Vec<Value> {
 
 #[tokio::test]
 async fn project_escalation_is_answered_through_the_general_cos_and_relayed_to_the_project_cos() {
-    let env = env();
+    let env = web_operator_env(WEB_TOKEN, OPERATOR_TOKEN);
     let app = env.router();
     let now = OffsetDateTime::now_utc();
     let project_thread = project_cos_thread(&env.store, "pluvio");
@@ -217,7 +137,7 @@ async fn project_escalation_is_answered_through_the_general_cos_and_relayed_to_t
         .expect("claim")
         .expect("triage run in the project thread");
     let item = claim.item_ids[0].clone();
-    let triage = run_bearer(&env, &project_thread.id, "run-triage");
+    let triage = issue_bearer(&env, &project_thread.id, "run-triage", "5");
     let escalate = json!({
         "idempotency_key": "esc-1",
         "expected_revision": "r1",
@@ -299,7 +219,7 @@ async fn project_escalation_is_answered_through_the_general_cos_and_relayed_to_t
         .expect("claim")
         .expect("general run");
     assert_eq!(claimed.input_message_id, said);
-    let general_cos = run_bearer(&env, &general.id, "run-general");
+    let general_cos = issue_bearer(&env, &general.id, "run-general", "5");
     let general_headers = [("authorization", general_cos.as_str())];
 
     // D4: the general CoS does not answer the project's item itself.
@@ -378,7 +298,7 @@ async fn project_escalation_is_answered_through_the_general_cos_and_relayed_to_t
         .expect("claim")
         .expect("project run");
     assert_eq!(claimed.input_message_id, relayed_id);
-    let project_cos = run_bearer(&env, &project_thread.id, "run-project");
+    let project_cos = issue_bearer(&env, &project_thread.id, "run-project", "5");
     let project_headers = [("authorization", project_cos.as_str())];
     // The project CoS cannot forward (only the general CoS does).
     let resp = send(

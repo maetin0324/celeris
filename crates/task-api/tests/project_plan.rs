@@ -13,49 +13,10 @@ use common::*;
 use serde_json::{Value, json};
 use task_core::{MilestoneStatus, Status, TaskKind, TaskStore};
 
-fn g(path: &str) -> axum::http::Request<axum::body::Body> {
-    get_with(
-        path,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
-fn p(path: &str, body: &Value) -> axum::http::Request<axum::body::Body> {
-    post_json_with(
-        path,
-        body,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
-fn pa(path: &str, body: &Value) -> axum::http::Request<axum::body::Body> {
-    patch_json_with(
-        path,
-        body,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
-fn env_with_token() -> TestEnv {
-    TestEnv::with(EnvOptions {
-        token: Some(TOKEN.into()),
-        ..Default::default()
-    })
-}
-
-async fn seed_secretary(app: &axum::Router) {
-    let resp = send(
-        app,
-        p("/api/v1/org", &json!({"id": "secretary", "name": "秘書", "kind": "secretary", "brief": "案件を受け取る"})),
-    )
-    .await;
-    assert_eq!(resp.status.as_u16(), 201, "{}", resp.text());
-}
-
 async fn create_project(app: &axum::Router, title: &str, request: &str) -> String {
     let resp = send(
         app,
-        p(
+        post_admin(
             "/api/v1/projects",
             &json!({"title": title, "request": request}),
         ),
@@ -78,7 +39,7 @@ fn assert_gone(resp: &Resp) {
 /// 受け入れ (a): 消した API がすべて 410 / 422 を返し、`GET /projects/{id}` は読める。行は消えず状態も変わらない。
 #[tokio::test]
 async fn project_plan_endpoints_are_gone() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     seed_secretary(&app).await;
     let project_id = create_project(&app, "Pluvio 新テーマ", "隣接分野を探して欲しい").await;
@@ -99,7 +60,7 @@ async fn project_plan_endpoints_are_gone() {
     ] {
         let resp = send(
             &app,
-            p(&format!("/api/v1/projects/{project_id}/plan"), &body),
+            post_admin(&format!("/api/v1/projects/{project_id}/plan"), &body),
         )
         .await;
         assert_gone(&resp);
@@ -111,7 +72,7 @@ async fn project_plan_endpoints_are_gone() {
     }
     let resp = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/projects/{project_id}/project-plan/1/decide"),
             &json!({"decision": "approve"}),
         ),
@@ -122,7 +83,7 @@ async fn project_plan_endpoints_are_gone() {
     // 途中目標の書き込み（作成・状態・判定・中止・一時停止・再開）。
     let resp = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/projects/{project_id}/milestones"),
             &json!({"title": "新しい途中目標"}),
         ),
@@ -131,7 +92,7 @@ async fn project_plan_endpoints_are_gone() {
     assert_gone(&resp);
     let resp = send(
         &app,
-        pa(
+        patch_admin(
             &format!("/api/v1/milestones/{mid}"),
             &json!({"status": "reached"}),
         ),
@@ -140,7 +101,7 @@ async fn project_plan_endpoints_are_gone() {
     assert_gone(&resp);
     let resp = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/milestones/{mid}/decide"),
             &json!({"decision": "ok"}),
         ),
@@ -150,20 +111,24 @@ async fn project_plan_endpoints_are_gone() {
     for action in ["cancel", "pause", "resume"] {
         let resp = send(
             &app,
-            p(&format!("/api/v1/milestones/{mid}/{action}"), &json!({})),
+            post_admin(&format!("/api/v1/milestones/{mid}/{action}"), &json!({})),
         )
         .await;
         assert_gone(&resp);
     }
 
     // ADR-0028 の `POST /plans`（U-R6）。
-    let resp = send(&app, p("/api/v1/plans", &json!({"goal": "分解して"}))).await;
+    let resp = send(
+        &app,
+        post_admin("/api/v1/plans", &json!({"goal": "分解して"})),
+    )
+    .await;
     assert_gone(&resp);
 
     // `auto_advance` の書き込みは 422（他の欄と一緒でも）。
     let resp = send(
         &app,
-        pa(
+        patch_admin(
             &format!("/api/v1/projects/{project_id}"),
             &json!({"auto_advance": true}),
         ),
@@ -173,7 +138,7 @@ async fn project_plan_endpoints_are_gone() {
     assert!(body.to_string().contains("auto_advance"), "{body}");
     let resp = send(
         &app,
-        pa(
+        patch_admin(
             &format!("/api/v1/projects/{project_id}"),
             &json!({"auto_advance": false, "title": "変えない"}),
         ),
@@ -190,7 +155,7 @@ async fn project_plan_endpoints_are_gone() {
     assert_eq!(resp.status.as_u16(), 401, "{}", resp.text());
 
     // 読み取りは動き、何も作られず、凍結した行の状態は変わらない。
-    let resp = send(&app, g(&format!("/api/v1/projects/{project_id}"))).await;
+    let resp = send(&app, get_admin(&format!("/api/v1/projects/{project_id}"))).await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
     assert_eq!(resp.json()["project"]["title"], "Pluvio 新テーマ");
     assert_eq!(resp.json()["project"]["auto_advance"], false);
@@ -203,7 +168,7 @@ async fn project_plan_endpoints_are_gone() {
 /// U-R8: 途中目標の行は既定で隠れ（`milestones: []`、`milestones_frozen` は件数）、`?include_frozen=true` で返る。
 #[tokio::test]
 async fn project_detail_hides_frozen_milestones_by_default() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     seed_secretary(&app).await;
     let project_id = create_project(&app, "t", "r").await;
@@ -218,7 +183,7 @@ async fn project_detail_hides_frozen_milestones_by_default() {
             .expect("milestone");
     }
 
-    let hidden = send(&app, g(&format!("/api/v1/projects/{project_id}"))).await;
+    let hidden = send(&app, get_admin(&format!("/api/v1/projects/{project_id}"))).await;
     assert_eq!(hidden.status.as_u16(), 200, "{}", hidden.text());
     let hidden = hidden.json();
     assert_eq!(hidden["milestones"], json!([]));
@@ -229,7 +194,7 @@ async fn project_detail_hides_frozen_milestones_by_default() {
 
     let shown = send(
         &app,
-        g(&format!(
+        get_admin(&format!(
             "/api/v1/projects/{project_id}?include_frozen=true"
         )),
     )
@@ -249,7 +214,7 @@ async fn project_detail_hides_frozen_milestones_by_default() {
     // 明示の false も既定と同じ。知らない値は 400 系。
     let explicit = send(
         &app,
-        g(&format!(
+        get_admin(&format!(
             "/api/v1/projects/{project_id}?include_frozen=false"
         )),
     )
@@ -258,7 +223,7 @@ async fn project_detail_hides_frozen_milestones_by_default() {
     assert_eq!(explicit["milestones"], json!([]));
     let bad = send(
         &app,
-        g(&format!(
+        get_admin(&format!(
             "/api/v1/projects/{project_id}?include_frozen=maybe"
         )),
     )
@@ -270,7 +235,7 @@ async fn project_detail_hides_frozen_milestones_by_default() {
 /// `POST /tasks` の `stages_hint` は `Task.routing.stages_hint` に入る。案件直下に作っても途中目標の行はできない。
 #[tokio::test]
 async fn is_root_task_and_stages_hint_are_exposed() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     seed_secretary(&app).await;
     let project_id = create_project(&app, "t", "r").await;
@@ -278,7 +243,7 @@ async fn is_root_task_and_stages_hint_are_exposed() {
 
     let resp = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/tasks",
             &json!({
                 "title": "browser capability（Phase 1〜4）",
@@ -307,7 +272,7 @@ async fn is_root_task_and_stages_hint_are_exposed() {
     // 形の検証（空の title）は 422。
     let resp = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/tasks",
             &json!({
                 "title": "t",
@@ -330,7 +295,7 @@ async fn is_root_task_and_stages_hint_are_exposed() {
     conv.conversation = Some(task_core::MessageId::new());
     env.seed(&conv);
 
-    let detail = send(&app, g(&format!("/api/v1/projects/{project_id}")))
+    let detail = send(&app, get_admin(&format!("/api/v1/projects/{project_id}")))
         .await
         .json();
     let flag = |id: &str| {
@@ -346,19 +311,22 @@ async fn is_root_task_and_stages_hint_are_exposed() {
     assert_eq!(flag(&conv.id.to_string()), Some(json!(false)));
     assert_eq!(detail["root_totals"]["root_tasks"], 1);
 
-    let list = send(&app, g(&format!("/api/v1/tasks?project={project_id}")))
-        .await
-        .json();
+    let list = send(
+        &app,
+        get_admin(&format!("/api/v1/tasks?project={project_id}")),
+    )
+    .await
+    .json();
     for item in list["items"].as_array().expect("items") {
         let expected = item["id"] == root_id.as_str();
         assert_eq!(item["is_root_task"], json!(expected), "{item}");
         assert_eq!(item["paused"], json!(false));
     }
-    let task_detail = send(&app, g(&format!("/api/v1/tasks/{root_id}")))
+    let task_detail = send(&app, get_admin(&format!("/api/v1/tasks/{root_id}")))
         .await
         .json();
     assert_eq!(task_detail["is_root_task"], true);
-    let child_detail = send(&app, g(&format!("/api/v1/tasks/{}", child.id)))
+    let child_detail = send(&app, get_admin(&format!("/api/v1/tasks/{}", child.id)))
         .await
         .json();
     assert_eq!(child_detail["is_root_task"], false);
@@ -367,7 +335,7 @@ async fn is_root_task_and_stages_hint_are_exposed() {
 /// D13（R5a）: `POST /tasks/{id}/pause|resume` は subtree を止め・戻す（管理系、409 の規則、詳細の `paused_by`）。
 #[tokio::test]
 async fn task_pause_and_resume_cover_the_subtree() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     let root = new_task(TaskKind::Execute, Status::Ready);
     env.seed(&root);
@@ -385,7 +353,7 @@ async fn task_pause_and_resume_cover_the_subtree() {
 
     let resp = send(
         &app,
-        p(&format!("/api/v1/tasks/{}/pause", root.id), &json!({})),
+        post_admin(&format!("/api/v1/tasks/{}/pause", root.id), &json!({})),
     )
     .await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
@@ -400,7 +368,7 @@ async fn task_pause_and_resume_cover_the_subtree() {
         .map(|t| t.id)
         .collect();
     assert!(!ready.contains(&root.id) && !ready.contains(&child.id));
-    let child_detail = send(&app, g(&format!("/api/v1/tasks/{}", child.id)))
+    let child_detail = send(&app, get_admin(&format!("/api/v1/tasks/{}", child.id)))
         .await
         .json();
     assert_eq!(child_detail["paused_by"], root.id.to_string());
@@ -411,14 +379,14 @@ async fn task_pause_and_resume_cover_the_subtree() {
 
     let resp = send(
         &app,
-        p(&format!("/api/v1/tasks/{}/pause", root.id), &json!({})),
+        post_admin(&format!("/api/v1/tasks/{}/pause", root.id), &json!({})),
     )
     .await;
     assert_problem(&resp, 409, "invalid_transition");
 
     let resp = send(
         &app,
-        p(&format!("/api/v1/tasks/{}/resume", root.id), &json!({})),
+        post_admin(&format!("/api/v1/tasks/{}/resume", root.id), &json!({})),
     )
     .await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
@@ -431,7 +399,7 @@ async fn task_pause_and_resume_cover_the_subtree() {
         .map(|t| t.id)
         .collect();
     assert!(ready.contains(&root.id) && ready.contains(&child.id));
-    let child_detail = send(&app, g(&format!("/api/v1/tasks/{}", child.id)))
+    let child_detail = send(&app, get_admin(&format!("/api/v1/tasks/{}", child.id)))
         .await
         .json();
     assert!(child_detail.get("paused_by").is_none());
@@ -439,7 +407,7 @@ async fn task_pause_and_resume_cover_the_subtree() {
     // 知らない task は 404。
     let resp = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/tasks/{}/pause", task_core::TaskId::new()),
             &json!({}),
         ),
@@ -452,11 +420,11 @@ async fn task_pause_and_resume_cover_the_subtree() {
 /// 未知の mode・欄・下段版は 4xx（黙って config へ倒さない）。
 #[tokio::test]
 async fn create_accepts_and_pins_routing_override() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     let resp = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/tasks",
             &json!({
                 "title": "trial", "objective": "o",
@@ -495,7 +463,7 @@ async fn create_accepts_and_pins_routing_override() {
     ] {
         let resp = send(
             &app,
-            p(
+            post_admin(
                 "/api/v1/tasks",
                 &json!({
                     "title": "t", "objective": "o",
@@ -513,10 +481,10 @@ async fn create_accepts_and_pins_routing_override() {
 /// 子・孫・retry（root の複製）にも同じ値で届く。矛盾指定は 4xx で何も作らない。
 #[tokio::test]
 async fn evidence_mode_round_trips_through_post_get_child_and_retry() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     let create = |ov: Value| {
-        p(
+        post_admin(
             "/api/v1/tasks",
             &json!({
                 "title": "trial", "objective": "o",
@@ -550,7 +518,7 @@ async fn evidence_mode_round_trips_through_post_get_child_and_retry() {
         let resp = send(&app, create(ov.clone())).await;
         assert_eq!(resp.status.as_u16(), 201, "{ov}: {}", resp.text());
         let id = resp.json()["id"].as_str().expect("id").to_string();
-        let got = send(&app, g(&format!("/api/v1/tasks/{id}"))).await;
+        let got = send(&app, get_admin(&format!("/api/v1/tasks/{id}"))).await;
         assert_eq!(got.status.as_u16(), 200, "{}", got.text());
         assert_eq!(mode_of(&got.json()).as_deref(), Some(want), "{ov}");
     }
@@ -582,20 +550,20 @@ async fn evidence_mode_round_trips_through_post_get_child_and_retry() {
     grand.parent_id = Some(child.id);
     env.seed(&grand);
     for id in [child.id, grand.id] {
-        let got = send(&app, g(&format!("/api/v1/tasks/{id}"))).await;
+        let got = send(&app, get_admin(&format!("/api/v1/tasks/{id}"))).await;
         assert_eq!(mode_of(&got.json()).as_deref(), Some("none"), "{id}");
     }
 
     // 取り消した root は retry できる（複製は新しい id の root になる）。
     let resp = send(
         &app,
-        p(&format!("/api/v1/tasks/{root_id}/cancel"), &json!({})),
+        post_admin(&format!("/api/v1/tasks/{root_id}/cancel"), &json!({})),
     )
     .await;
     assert!(resp.status.is_success(), "{}", resp.text());
     let resp = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/tasks/{root_id}/retry"),
             &json!({"accept": false}),
         ),
@@ -606,7 +574,7 @@ async fn evidence_mode_round_trips_through_post_get_child_and_retry() {
         .as_str()
         .expect("task_id")
         .to_string();
-    let got = send(&app, g(&format!("/api/v1/tasks/{new_id}"))).await;
+    let got = send(&app, get_admin(&format!("/api/v1/tasks/{new_id}"))).await;
     assert_eq!(
         mode_of(&got.json()).as_deref(),
         Some("none"),

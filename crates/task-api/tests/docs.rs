@@ -15,61 +15,10 @@ use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use task_core::{ArtifactRef, Event, Status, Task, TaskKind, TaskStore};
 
-fn g(path: &str) -> axum::http::Request<axum::body::Body> {
-    get_with(
-        path,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
-fn p(path: &str, body: &Value) -> axum::http::Request<axum::body::Body> {
-    post_json_with(
-        path,
-        body,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
-fn pu(path: &str, body: &Value) -> axum::http::Request<axum::body::Body> {
-    put_json_with(
-        path,
-        body,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
-fn d(path: &str) -> axum::http::Request<axum::body::Body> {
-    delete_with(
-        path,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
-fn env() -> TestEnv {
-    TestEnv::with(EnvOptions {
-        token: Some(TOKEN.into()),
-        ..EnvOptions::default()
-    })
-}
-
-fn git(dir: &Path, args: &[&str]) {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .unwrap_or_else(|e| panic!("git {args:?}: {e}"));
-    assert!(
-        out.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
-
 async fn make_project(app: &axum::Router, title: &str) -> String {
     let resp = send(
         app,
-        p(
+        post_admin(
             "/api/v1/projects",
             &json!({"title": title, "request": "書く"}),
         ),
@@ -110,7 +59,7 @@ async fn project_with_repo(
     seed_repo(&repo, docs, toml);
     let created = send(
         app,
-        p(
+        post_admin(
             &format!("/api/v1/projects/{project}/repos"),
             &json!({"location": {"kind": "local", "path": repo.to_string_lossy()}}),
         ),
@@ -128,13 +77,13 @@ async fn project_with_repo(
 /// primary の `[outputs].docs` を使う。既定は `docs`。
 #[tokio::test]
 async fn the_docs_root_comes_from_the_primary_repository() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let dir = tempfile::tempdir().expect("tempdir");
 
     // 既定（`workspace.toml` が無い）。
     let (project, _repo) = project_with_repo(&app, dir.path(), "docs", None).await;
-    let tree = send(&app, g(&format!("/api/v1/projects/{project}/docs"))).await;
+    let tree = send(&app, get_admin(&format!("/api/v1/projects/{project}/docs"))).await;
     assert_eq!(tree.status.as_u16(), 200, "{}", tree.text());
     let body = tree.json();
     assert_eq!(body["root"], "docs");
@@ -159,7 +108,7 @@ async fn the_docs_root_comes_from_the_primary_repository() {
         Some("[outputs]\ndocs = \"handbook\"\n"),
     )
     .await;
-    let tree = send(&app, g(&format!("/api/v1/projects/{moved}/docs")))
+    let tree = send(&app, get_admin(&format!("/api/v1/projects/{moved}/docs")))
         .await
         .json();
     assert_eq!(tree["root"], "handbook");
@@ -169,13 +118,13 @@ async fn the_docs_root_comes_from_the_primary_repository() {
 /// リポジトリの無い案件は 409。`docs/init`（管理系）で `~/workspace/<slug>/` に作って primary にする。
 #[tokio::test]
 async fn a_project_without_a_repository_gets_a_documents_repository_on_init() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let project = make_project(&app, "Pluvio PoC").await;
 
     // 読み取りは**何も作らない**。
     assert_problem(
-        &send(&app, g(&format!("/api/v1/projects/{project}/docs"))).await,
+        &send(&app, get_admin(&format!("/api/v1/projects/{project}/docs"))).await,
         409,
         "docs_unavailable",
     );
@@ -197,7 +146,7 @@ async fn a_project_without_a_repository_gets_a_documents_repository_on_init() {
 
     let init = send(
         &app,
-        p(&format!("/api/v1/projects/{project}/docs/init"), &json!({})),
+        post_admin(&format!("/api/v1/projects/{project}/docs/init"), &json!({})),
     )
     .await;
     assert_eq!(init.status.as_u16(), 200, "{}", init.text());
@@ -212,22 +161,25 @@ async fn a_project_without_a_repository_gets_a_documents_repository_on_init() {
     assert!(path.join("docs/README.md").is_file(), "最初のページがある");
 
     // primary として登録されている（`Project.workspace` の写しも動く）。
-    let repos = send(&app, g(&format!("/api/v1/projects/{project}/repos")))
-        .await
-        .json();
+    let repos = send(
+        &app,
+        get_admin(&format!("/api/v1/projects/{project}/repos")),
+    )
+    .await
+    .json();
     assert_eq!(repos["items"].as_array().expect("items").len(), 1);
     assert_eq!(repos["items"][0]["is_primary"], true);
     assert_eq!(repos["items"][0]["kind"], "git");
     assert_eq!(repos["items"][0]["default_branch"], "main");
 
     // ツリーが読める。2 回目の init は作り直さない。
-    let tree = send(&app, g(&format!("/api/v1/projects/{project}/docs")))
+    let tree = send(&app, get_admin(&format!("/api/v1/projects/{project}/docs")))
         .await
         .json();
     assert_eq!(tree["items"][0]["path"], "docs/README.md", "{tree}");
     let again = send(
         &app,
-        p(&format!("/api/v1/projects/{project}/docs/init"), &json!({})),
+        post_admin(&format!("/api/v1/projects/{project}/docs/init"), &json!({})),
     )
     .await
     .json();
@@ -237,7 +189,7 @@ async fn a_project_without_a_repository_gets_a_documents_repository_on_init() {
     let jp = make_project(&app, "調査").await;
     let init = send(
         &app,
-        p(&format!("/api/v1/projects/{jp}/docs/init"), &json!({})),
+        post_admin(&format!("/api/v1/projects/{jp}/docs/init"), &json!({})),
     )
     .await
     .json();
@@ -247,7 +199,7 @@ async fn a_project_without_a_repository_gets_a_documents_repository_on_init() {
 /// primary が `dir`（git ではない）の案件も、文書リポジトリを作って primary を移す（ADR-0044 D7）。
 #[tokio::test]
 async fn a_dir_primary_is_replaced_by_a_documents_repository() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let dir = tempfile::tempdir().expect("tempdir");
     let project = make_project(&app, "Data Project").await;
@@ -255,7 +207,7 @@ async fn a_dir_primary_is_replaced_by_a_documents_repository() {
     std::fs::create_dir_all(&data).expect("mkdir");
     let created = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/projects/{project}/repos"),
             &json!({"location": {"kind": "local", "path": data.to_string_lossy()}}),
         ),
@@ -265,15 +217,18 @@ async fn a_dir_primary_is_replaced_by_a_documents_repository() {
 
     let init = send(
         &app,
-        p(&format!("/api/v1/projects/{project}/docs/init"), &json!({})),
+        post_admin(&format!("/api/v1/projects/{project}/docs/init"), &json!({})),
     )
     .await
     .json();
     assert_eq!(init["created"], true);
     assert_eq!(init["repo"], "data-project");
-    let repos = send(&app, g(&format!("/api/v1/projects/{project}/repos")))
-        .await
-        .json();
+    let repos = send(
+        &app,
+        get_admin(&format!("/api/v1/projects/{project}/repos")),
+    )
+    .await
+    .json();
     let items = repos["items"].as_array().expect("items");
     assert_eq!(items.len(), 2);
     let primary: Vec<&str> = items
@@ -295,7 +250,7 @@ async fn a_dir_primary_is_replaced_by_a_documents_repository() {
 /// `?q=` は `git grep -il`（大文字小文字を区別しない）。ページは front matter と履歴とリンクを持つ。
 #[tokio::test]
 async fn pages_are_searched_rendered_and_linked() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let dir = tempfile::tempdir().expect("tempdir");
     let (project, _repo) = project_with_repo(&app, dir.path(), "docs", None).await;
@@ -311,7 +266,7 @@ async fn pages_are_searched_rendered_and_linked() {
     );
     let put = send(
         &app,
-        pu(
+        put_admin(
             &format!("/api/v1/projects/{project}/docs/page"),
             &json!({"path": "docs/research/fs.md", "body": body}),
         ),
@@ -320,7 +275,7 @@ async fn pages_are_searched_rendered_and_linked() {
     assert_eq!(put.status.as_u16(), 200, "{}", put.text());
 
     // ツリー（2 枚）と `q=`（1 枚）。
-    let tree = send(&app, g(&format!("/api/v1/projects/{project}/docs")))
+    let tree = send(&app, get_admin(&format!("/api/v1/projects/{project}/docs")))
         .await
         .json();
     let paths: Vec<&str> = tree["items"]
@@ -336,7 +291,7 @@ async fn pages_are_searched_rendered_and_linked() {
     );
     let found = send(
         &app,
-        g(&format!(
+        get_admin(&format!(
             "/api/v1/projects/{project}/docs?q=%E8%AA%BF%E3%81%B9"
         )),
     )
@@ -349,15 +304,18 @@ async fn pages_are_searched_rendered_and_linked() {
         "{found}"
     );
     assert_eq!(found["items"][0]["path"], "docs/research/fs.md");
-    let none = send(&app, g(&format!("/api/v1/projects/{project}/docs?q=zzz")))
-        .await
-        .json();
+    let none = send(
+        &app,
+        get_admin(&format!("/api/v1/projects/{project}/docs?q=zzz")),
+    )
+    .await
+    .json();
     assert!(none["items"].as_array().expect("items").is_empty());
 
     // ページ。
     let page = send(
         &app,
-        g(&format!(
+        get_admin(&format!(
             "/api/v1/projects/{project}/docs/page?path=docs/research/fs.md"
         )),
     )
@@ -389,9 +347,12 @@ async fn pages_are_searched_rendered_and_linked() {
     assert_eq!(page["too_large"], false);
 
     // 逆リンク: タイムラインにこのページが出る（front matter の `tasks:` に載っているから）。
-    let timeline = send(&app, g(&format!("/api/v1/tasks/{}/timeline", task.id)))
-        .await
-        .json();
+    let timeline = send(
+        &app,
+        get_admin(&format!("/api/v1/tasks/{}/timeline", task.id)),
+    )
+    .await
+    .json();
     let docs: Vec<&Value> = timeline["items"]
         .as_array()
         .expect("items")
@@ -407,7 +368,7 @@ async fn pages_are_searched_rendered_and_linked() {
     assert_problem(
         &send(
             &app,
-            g(&format!(
+            get_admin(&format!(
                 "/api/v1/projects/{project}/docs/page?path=docs/none.md"
             )),
         )
@@ -424,7 +385,7 @@ async fn pages_are_searched_rendered_and_linked() {
 /// 作る → 直す（etag）→ 409（古い etag・etag 無し）→ 消す。`main` は fast-forward される。
 #[tokio::test]
 async fn editing_a_page_commits_on_the_default_branch_and_checks_the_etag() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let dir = tempfile::tempdir().expect("tempdir");
     let (project, repo) = project_with_repo(&app, dir.path(), "docs", None).await;
@@ -443,7 +404,7 @@ async fn editing_a_page_commits_on_the_default_branch_and_checks_the_etag() {
 
     let created = send(
         &app,
-        pu(&page, &json!({"path": "docs/a.md", "body": "# A\n"})),
+        put_admin(&page, &json!({"path": "docs/a.md", "body": "# A\n"})),
     )
     .await;
     assert_eq!(created.status.as_u16(), 200, "{}", created.text());
@@ -458,7 +419,7 @@ async fn editing_a_page_commits_on_the_default_branch_and_checks_the_etag() {
     // 既にあるのに etag を付けなければ 409。
     let missing = send(
         &app,
-        pu(&page, &json!({"path": "docs/a.md", "body": "# B\n"})),
+        put_admin(&page, &json!({"path": "docs/a.md", "body": "# B\n"})),
     )
     .await;
     let problem = assert_problem(&missing, 409, "etag_mismatch");
@@ -467,7 +428,7 @@ async fn editing_a_page_commits_on_the_default_branch_and_checks_the_etag() {
     assert_problem(
         &send(
             &app,
-            pu(
+            put_admin(
                 &page,
                 &json!({"path": "docs/a.md", "body": "# B\n", "etag": "0".repeat(40)}),
             ),
@@ -480,7 +441,7 @@ async fn editing_a_page_commits_on_the_default_branch_and_checks_the_etag() {
     // 正しい etag なら通る。message も効く。
     let updated = send(
         &app,
-        pu(
+        put_admin(
             &page,
             &json!({"path": "docs/a.md", "body": "# B\n", "etag": etag, "message": "docs: 直した"}),
         ),
@@ -489,7 +450,7 @@ async fn editing_a_page_commits_on_the_default_branch_and_checks_the_etag() {
     .json();
     let next = updated["etag"].as_str().expect("etag").to_string();
     assert_ne!(next, etag);
-    let read = send(&app, g(&format!("{page}?path=docs/a.md")))
+    let read = send(&app, get_admin(&format!("{page}?path=docs/a.md")))
         .await
         .json();
     assert_eq!(read["raw"], "# B\n");
@@ -497,43 +458,57 @@ async fn editing_a_page_commits_on_the_default_branch_and_checks_the_etag() {
     assert_eq!(read["history"].as_array().expect("history").len(), 2);
 
     // 根を書かないパスも同じページを指す（`docs/` を前に付ける）。
-    let same = send(&app, g(&format!("{page}?path=a.md"))).await.json();
+    let same = send(&app, get_admin(&format!("{page}?path=a.md")))
+        .await
+        .json();
     assert_eq!(same["path"], "docs/a.md");
 
     // 境界: `..` は 403、`.md` 以外は 422、空は 400。
     assert_problem(
         &send(
             &app,
-            pu(&page, &json!({"path": "../escape.md", "body": "x"})),
+            put_admin(&page, &json!({"path": "../escape.md", "body": "x"})),
         )
         .await,
         403,
         "path_forbidden",
     );
     assert_problem(
-        &send(&app, pu(&page, &json!({"path": "docs/a.txt", "body": "x"}))).await,
+        &send(
+            &app,
+            put_admin(&page, &json!({"path": "docs/a.txt", "body": "x"})),
+        )
+        .await,
         422,
         "validation",
     );
     assert_problem(
-        &send(&app, pu(&page, &json!({"path": "", "body": "x"}))).await,
+        &send(&app, put_admin(&page, &json!({"path": "", "body": "x"}))).await,
         400,
         "bad_request",
     );
 
     // 消す（etag 必須）。
     assert_problem(
-        &send(&app, d(&format!("{page}?path=docs/a.md"))).await,
+        &send(&app, delete_admin(&format!("{page}?path=docs/a.md"))).await,
         409,
         "etag_mismatch",
     );
-    let deleted = send(&app, d(&format!("{page}?path=docs/a.md&etag={next}"))).await;
+    let deleted = send(
+        &app,
+        delete_admin(&format!("{page}?path=docs/a.md&etag={next}")),
+    )
+    .await;
     assert_eq!(deleted.status.as_u16(), 200, "{}", deleted.text());
     assert_eq!(deleted.json()["deleted"], true);
     assert!(deleted.json()["etag"].is_null());
     assert!(!repo.join("docs/a.md").exists(), "作業ツリーからも消える");
     assert_problem(
-        &send(&app, d(&format!("{page}?path=docs/a.md&etag={next}"))).await,
+        &send(
+            &app,
+            delete_admin(&format!("{page}?path=docs/a.md&etag={next}")),
+        )
+        .await,
         404,
         "page_not_found",
     );
@@ -542,7 +517,7 @@ async fn editing_a_page_commits_on_the_default_branch_and_checks_the_etag() {
 /// ADR-0043 D5 と同じ規則: 人が `main` を編集中なら 409（何も触らない）。
 #[tokio::test]
 async fn editing_while_the_default_branch_is_dirty_is_409() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let dir = tempfile::tempdir().expect("tempdir");
     let (project, repo) = project_with_repo(&app, dir.path(), "docs", None).await;
@@ -550,7 +525,7 @@ async fn editing_while_the_default_branch_is_dirty_is_409() {
 
     let resp = send(
         &app,
-        pu(
+        put_admin(
             &format!("/api/v1/projects/{project}/docs/page"),
             &json!({"path": "docs/a.md", "body": "# A\n"}),
         ),
@@ -594,7 +569,7 @@ fn produced(env: &TestEnv, task: &Task, name: &str, body: &[u8]) {
 /// 成果物をページにする。front matter に `tasks: [<id>]` が入り、タイムラインに逆リンクが出る。
 #[tokio::test]
 async fn an_artifact_can_be_promoted_to_a_page() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let dir = tempfile::tempdir().expect("tempdir");
     let (project, repo) = project_with_repo(&app, dir.path(), "docs", None).await;
@@ -627,7 +602,7 @@ async fn an_artifact_can_be_promoted_to_a_page() {
     assert_problem(
         &send(
             &app,
-            p(
+            post_admin(
                 &promote,
                 &json!({"name": "nope.md", "path": "docs/research/x.md"}),
             ),
@@ -639,7 +614,7 @@ async fn an_artifact_can_be_promoted_to_a_page() {
 
     let resp = send(
         &app,
-        p(
+        post_admin(
             &promote,
             &json!({"name": "answer.md", "path": "docs/research/x.md"}),
         ),
@@ -650,7 +625,7 @@ async fn an_artifact_can_be_promoted_to_a_page() {
 
     let page = send(
         &app,
-        g(&format!(
+        get_admin(&format!(
             "/api/v1/projects/{project}/docs/page?path=docs/research/x.md"
         )),
     )
@@ -674,7 +649,7 @@ async fn an_artifact_can_be_promoted_to_a_page() {
     assert_problem(
         &send(
             &app,
-            p(
+            post_admin(
                 &promote,
                 &json!({"name": "answer.md", "path": "docs/research/x.md"}),
             ),
@@ -686,7 +661,7 @@ async fn an_artifact_can_be_promoted_to_a_page() {
     produced(&env, &task, "answer.md", "# 新しい答え\n".as_bytes());
     let again = send(
         &app,
-        p(
+        post_admin(
             &promote,
             &json!({"name": "answer.md", "path": "docs/research/x.md", "title": "決定版", "overwrite": true}),
         ),
@@ -695,7 +670,7 @@ async fn an_artifact_can_be_promoted_to_a_page() {
     assert_eq!(again.status.as_u16(), 200, "{}", again.text());
     let page = send(
         &app,
-        g(&format!(
+        get_admin(&format!(
             "/api/v1/projects/{project}/docs/page?path=docs/research/x.md"
         )),
     )
@@ -710,9 +685,12 @@ async fn an_artifact_can_be_promoted_to_a_page() {
     assert_eq!(page["history"].as_array().expect("history").len(), 2);
 
     // 逆リンク（front matter の `tasks:`）。
-    let timeline = send(&app, g(&format!("/api/v1/tasks/{}/timeline", task.id)))
-        .await
-        .json();
+    let timeline = send(
+        &app,
+        get_admin(&format!("/api/v1/tasks/{}/timeline", task.id)),
+    )
+    .await
+    .json();
     let docs: Vec<&Value> = timeline["items"]
         .as_array()
         .expect("items")
@@ -726,7 +704,7 @@ async fn an_artifact_can_be_promoted_to_a_page() {
     assert_problem(
         &send(
             &app,
-            p(&promote, &json!({"name": "answer.md", "path": "../x.md"})),
+            post_admin(&promote, &json!({"name": "answer.md", "path": "../x.md"})),
         )
         .await,
         403,
@@ -735,7 +713,7 @@ async fn an_artifact_can_be_promoted_to_a_page() {
     assert_problem(
         &send(
             &app,
-            p(
+            post_admin(
                 &promote,
                 &json!({"name": "answer.md", "path": "docs/x.txt"}),
             ),
@@ -749,7 +727,7 @@ async fn an_artifact_can_be_promoted_to_a_page() {
 /// 案件に属さないタスクの昇格は 409（文書の置き場が無い）。知らないタスクは 404。
 #[tokio::test]
 async fn promoting_needs_a_project() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let task = new_task(TaskKind::Execute, Status::Done);
     env.seed(&task);
@@ -757,7 +735,7 @@ async fn promoting_needs_a_project() {
     assert_problem(
         &send(
             &app,
-            p(
+            post_admin(
                 &format!("/api/v1/tasks/{}/artifacts/promote", task.id),
                 &json!({"name": "answer.md", "path": "docs/x.md"}),
             ),
@@ -769,7 +747,7 @@ async fn promoting_needs_a_project() {
     assert_problem(
         &send(
             &app,
-            p(
+            post_admin(
                 &format!(
                     "/api/v1/tasks/{}/artifacts/promote",
                     task_core::TaskId::new()
@@ -786,18 +764,18 @@ async fn promoting_needs_a_project() {
 /// 無い案件は 404（文書の API も他と同じ）。
 #[tokio::test]
 async fn an_unknown_project_is_404() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let id = task_core::ProjectId::new();
     assert_problem(
-        &send(&app, g(&format!("/api/v1/projects/{id}/docs"))).await,
+        &send(&app, get_admin(&format!("/api/v1/projects/{id}/docs"))).await,
         404,
         "project_not_found",
     );
     assert_problem(
         &send(
             &app,
-            p(&format!("/api/v1/projects/{id}/docs/init"), &json!({})),
+            post_admin(&format!("/api/v1/projects/{id}/docs/init"), &json!({})),
         )
         .await,
         404,
@@ -807,14 +785,14 @@ async fn an_unknown_project_is_404() {
 
 #[tokio::test]
 async fn maintenance_audit_is_read_only_and_apply_requires_exact_approval() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let dir = tempfile::tempdir().unwrap();
     let (project, repo) = project_with_repo(&app, dir.path(), "docs", None).await;
     std::fs::write(repo.join("docs/README.md"), "# Human dirty edit\n").unwrap();
     std::fs::write(repo.join("notes-untracked.md"), "do not touch").unwrap();
     let endpoint = format!("/api/v1/projects/{project}/docs/maintenance");
-    let result = send(&app, g(&endpoint)).await;
+    let result = send(&app, get_admin(&endpoint)).await;
     assert_eq!(result.status.as_u16(), 200, "{}", result.text());
     let body = result.json();
     assert_eq!(body["audit"]["documents"][0]["path"], "docs/README.md");
@@ -822,7 +800,7 @@ async fn maintenance_audit_is_read_only_and_apply_requires_exact_approval() {
     assert_eq!(body["policy"]["mode"], "observe");
     let refused = send(
         &app,
-        p(&endpoint, &json!({"op":"apply", "plan":body["proposal"]})),
+        post_admin(&endpoint, &json!({"op":"apply", "plan":body["proposal"]})),
     )
     .await;
     assert_eq!(refused.status.as_u16(), 409, "{}", refused.text());
@@ -845,17 +823,25 @@ async fn maintenance_audit_is_read_only_and_apply_requires_exact_approval() {
 
 #[tokio::test]
 async fn maintenance_approved_plan_attaches_to_review_task_and_stale_plan_is_refused() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let dir = tempfile::tempdir().unwrap();
     let (project, repo) = project_with_repo(&app, dir.path(), "docs", None).await;
     let endpoint = format!("/api/v1/projects/{project}/docs/maintenance");
-    let audited = send(&app, g(&endpoint)).await.json();
+    let audited = send(&app, get_admin(&endpoint)).await.json();
     let mut plan = audited["proposal"].clone();
     plan["actions"] = json!([{"operation":"rewrite", "path":"docs/README.md", "body":"# Reviewed documentation\n"}]);
-    let approved = send(&app, p(&endpoint, &json!({"op":"approve","plan":plan}))).await;
+    let approved = send(
+        &app,
+        post_admin(&endpoint, &json!({"op":"approve","plan":plan})),
+    )
+    .await;
     assert_eq!(approved.status.as_u16(), 200, "{}", approved.text());
-    let applied = send(&app, p(&endpoint, &json!({"op":"apply","plan":plan}))).await;
+    let applied = send(
+        &app,
+        post_admin(&endpoint, &json!({"op":"apply","plan":plan})),
+    )
+    .await;
     assert_eq!(applied.status.as_u16(), 200, "{}", applied.text());
     let result = applied.json();
     assert_eq!(result["merged"], false);
@@ -873,17 +859,21 @@ async fn maintenance_approved_plan_attaches_to_review_task_and_stale_plan_is_ref
         std::fs::read_to_string(repo.join("docs/README.md")).unwrap(),
         "# Reviewed documentation\n"
     );
-    let changes = send(&app, g(&format!("/api/v1/tasks/{task_id}/changes"))).await;
+    let changes = send(&app, get_admin(&format!("/api/v1/tasks/{task_id}/changes"))).await;
     assert_eq!(changes.status.as_u16(), 200, "{}", changes.text());
     std::fs::write(repo.join("docs/README.md"), "# Subsequent edit\n").unwrap();
     git(&repo, &["add", "docs/README.md"]);
     git(&repo, &["commit", "-m", "subsequent"]);
-    let stale = send(&app, p(&endpoint, &json!({"op":"apply","plan":plan}))).await;
+    let stale = send(
+        &app,
+        post_admin(&endpoint, &json!({"op":"apply","plan":plan})),
+    )
+    .await;
     assert_eq!(stale.status.as_u16(), 409);
     assert!(stale.text().contains("stale approval"));
-    let saved = send(&app, p(&endpoint, &json!({"op":"audit"}))).await;
+    let saved = send(&app, post_admin(&endpoint, &json!({"op":"audit"}))).await;
     assert_eq!(saved.status.as_u16(), 200);
-    let viewed = send(&app, g(&endpoint)).await.json();
+    let viewed = send(&app, get_admin(&endpoint)).await.json();
     assert_eq!(
         viewed["saved_report"]["audit"]["revision"],
         saved.json()["audit"]["revision"]

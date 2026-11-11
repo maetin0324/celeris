@@ -10,14 +10,6 @@ use task_core::{TaskStore, profile};
 
 const H1: &str = "b6132a44b6132a44b6132a44b6132a44b6132a44b6132a44b6132a44b6132a44";
 
-fn p(body: &Value) -> axum::http::Request<axum::body::Body> {
-    post_json_with(
-        "/api/v1/tasks",
-        body,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
 fn node(id: &str, parent: Option<&str>, skills: &[&str]) -> OrgNode {
     OrgNode {
         id: id.into(),
@@ -98,7 +90,7 @@ async fn variant_post_resend_and_org_drift() {
     let app = env.router();
     let good = body(identity(H1, pin(&nodes)));
 
-    let first = send(&app, p(&good)).await;
+    let first = send(&app, post_admin("/api/v1/tasks", &good)).await;
     assert_eq!(first.status.as_u16(), 201, "{}", first.text());
     let id = first.json()["id"].as_str().unwrap().to_string();
     let own = env.store.task_campaign_own(&id).unwrap().unwrap();
@@ -122,14 +114,14 @@ async fn variant_post_resend_and_org_drift() {
     );
 
     // 同一再送は 200 で新規作成なし。
-    let again = send(&app, p(&good)).await;
+    let again = send(&app, post_admin("/api/v1/tasks", &good)).await;
     assert_eq!(again.status.as_u16(), 200, "{}", again.text());
     assert_eq!(again.json()["id"], json!(id));
     assert_eq!(counts(&env), after_first);
 
     // org が drift したら、同一の冪等照会でも成功にしない。
     env.store.replace_org_nodes(&org("y")).unwrap();
-    let drifted = send(&app, p(&good)).await;
+    let drifted = send(&app, post_admin("/api/v1/tasks", &good)).await;
     assert_eq!(drifted.status.as_u16(), 409, "{}", drifted.text());
     assert_eq!(drifted.json()["code"], json!("campaign_org_drift"));
     assert_eq!(counts(&env), after_first);
@@ -144,14 +136,22 @@ async fn org_drift_on_new_post_leaves_nothing() {
     // pin は skill x、現 org は y。
     env.store.replace_org_nodes(&org("y")).unwrap();
     let before_drift = counts(&env);
-    let resp = send(&app, p(&body(identity(H1, pin(&nodes))))).await;
+    let resp = send(
+        &app,
+        post_admin("/api/v1/tasks", &body(identity(H1, pin(&nodes)))),
+    )
+    .await;
     assert_eq!(resp.status.as_u16(), 409, "{}", resp.text());
     assert_eq!(counts(&env), before_drift);
     let _ = before;
     // 脱落 / 余分 node も拒否。
     let missing = json!({"nodes": ["secretary"], "coding_node": "secretary",
         "effective_profile_sha256": H1});
-    let resp = send(&app, p(&body(identity(H1, missing)))).await;
+    let resp = send(
+        &app,
+        post_admin("/api/v1/tasks", &body(identity(H1, missing))),
+    )
+    .await;
     assert!(
         (400..500).contains(&resp.status.as_u16()),
         "{}",
@@ -171,12 +171,16 @@ async fn half_variant_and_changed_content_are_rejected_without_residue() {
     for drop in ["variant", "variant_org"] {
         let mut c = identity(H1, pin(&nodes));
         c.as_object_mut().unwrap().remove(drop);
-        let resp = send(&app, p(&body(c))).await;
+        let resp = send(&app, post_admin("/api/v1/tasks", &body(c))).await;
         assert_eq!(resp.status.as_u16(), 400, "{drop}: {}", resp.text());
         assert_eq!(counts(&env), base);
     }
 
-    let first = send(&app, p(&body(identity(H1, pin(&nodes))))).await;
+    let first = send(
+        &app,
+        post_admin("/api/v1/tasks", &body(identity(H1, pin(&nodes)))),
+    )
+    .await;
     assert_eq!(first.status.as_u16(), 201, "{}", first.text());
     let stored = counts(&env);
 
@@ -192,7 +196,7 @@ async fn half_variant_and_changed_content_are_rejected_without_residue() {
         stripped,
         identity(H1, other_pin),
     ] {
-        let resp = send(&app, p(&body(c))).await;
+        let resp = send(&app, post_admin("/api/v1/tasks", &body(c))).await;
         assert_eq!(resp.status.as_u16(), 409, "{}", resp.text());
         assert_eq!(counts(&env), stored);
     }

@@ -11,47 +11,10 @@ use common::*;
 use serde_json::{Value, json};
 use task_core::{Status, TaskKind};
 
-fn g(path: &str) -> axum::http::Request<axum::body::Body> {
-    get_with(
-        path,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
-fn p(path: &str, body: &Value) -> axum::http::Request<axum::body::Body> {
-    post_json_with(
-        path,
-        body,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
-fn pa(path: &str, body: &Value) -> axum::http::Request<axum::body::Body> {
-    patch_json_with(
-        path,
-        body,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
-fn d(path: &str) -> axum::http::Request<axum::body::Body> {
-    delete_with(
-        path,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
-fn env() -> TestEnv {
-    TestEnv::with(EnvOptions {
-        token: Some(TOKEN.into()),
-        ..EnvOptions::default()
-    })
-}
-
 async fn make_project(app: &axum::Router) -> String {
     let resp = send(
         app,
-        p(
+        post_admin(
             "/api/v1/projects",
             &json!({"title": "benchfs", "request": "測る"}),
         ),
@@ -64,7 +27,7 @@ async fn make_project(app: &axum::Router) -> String {
 /// ADR-0043 D1: 作る → 一覧 → primary を移す → 直す → 消す。`Project.workspace` は primary の写し。
 #[tokio::test]
 async fn repos_can_be_created_listed_repointed_and_deleted() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let project = make_project(&app).await;
     let dir = tempfile::tempdir().expect("tempdir");
@@ -76,7 +39,7 @@ async fn repos_can_be_created_listed_repointed_and_deleted() {
     // 名前も kind も省略できる（パスの末尾から slug、`.git` があれば git）。
     let created = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/projects/{project}/repos"),
             &json!({"location": {"kind": "local", "path": code.to_string_lossy()}}),
         ),
@@ -91,7 +54,7 @@ async fn repos_can_be_created_listed_repointed_and_deleted() {
     let first_id = first["id"].as_str().expect("id").to_string();
 
     // `Project.workspace` は primary の写し（GUI の後方互換）。
-    let detail = send(&app, g(&format!("/api/v1/projects/{project}")))
+    let detail = send(&app, get_admin(&format!("/api/v1/projects/{project}")))
         .await
         .json();
     assert_eq!(detail["project"]["workspace"]["kind"], "local");
@@ -104,7 +67,7 @@ async fn repos_can_be_created_listed_repointed_and_deleted() {
     // 2 件目（git ではないディレクトリ）。
     let second = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/projects/{project}/repos"),
             &json!({"name": "paper", "location": {"kind": "local", "path": paper.to_string_lossy()}}),
         ),
@@ -115,9 +78,12 @@ async fn repos_can_be_created_listed_repointed_and_deleted() {
     assert_eq!(second.json()["kind"], "dir", "`.git` が無ければ dir");
     assert_eq!(second.json()["is_primary"], false);
 
-    let list = send(&app, g(&format!("/api/v1/projects/{project}/repos")))
-        .await
-        .json();
+    let list = send(
+        &app,
+        get_admin(&format!("/api/v1/projects/{project}/repos")),
+    )
+    .await
+    .json();
     let items = list["items"].as_array().expect("items");
     assert_eq!(items.len(), 2);
     assert_eq!(items[0]["name"], "benchfs", "primary が先頭");
@@ -125,7 +91,7 @@ async fn repos_can_be_created_listed_repointed_and_deleted() {
     // primary を移す。
     let moved = send(
         &app,
-        pa(
+        patch_admin(
             &format!("/api/v1/repos/{second_id}"),
             &json!({"is_primary": true}),
         ),
@@ -133,7 +99,7 @@ async fn repos_can_be_created_listed_repointed_and_deleted() {
     .await;
     assert_eq!(moved.status.as_u16(), 200, "{}", moved.text());
     assert_eq!(moved.json()["is_primary"], true);
-    let detail = send(&app, g(&format!("/api/v1/projects/{project}")))
+    let detail = send(&app, get_admin(&format!("/api/v1/projects/{project}")))
         .await
         .json();
     assert_eq!(
@@ -145,7 +111,7 @@ async fn repos_can_be_created_listed_repointed_and_deleted() {
     // 名前と run を直す。
     let patched = send(
         &app,
-        pa(
+        patch_admin(
             &format!("/api/v1/repos/{first_id}"),
             &json!({"name": "code", "run": "host"}),
         ),
@@ -156,14 +122,17 @@ async fn repos_can_be_created_listed_repointed_and_deleted() {
     assert_eq!(patched.json()["run"], "host");
 
     // 消す。
-    let deleted = send(&app, d(&format!("/api/v1/repos/{first_id}"))).await;
+    let deleted = send(&app, delete_admin(&format!("/api/v1/repos/{first_id}"))).await;
     assert_eq!(deleted.status.as_u16(), 204, "{}", deleted.text());
-    let list = send(&app, g(&format!("/api/v1/projects/{project}/repos")))
-        .await
-        .json();
+    let list = send(
+        &app,
+        get_admin(&format!("/api/v1/projects/{project}/repos")),
+    )
+    .await
+    .json();
     assert_eq!(list["items"].as_array().expect("items").len(), 1);
     assert_eq!(
-        send(&app, d(&format!("/api/v1/repos/{first_id}")))
+        send(&app, delete_admin(&format!("/api/v1/repos/{first_id}")))
             .await
             .status
             .as_u16(),
@@ -174,7 +143,7 @@ async fn repos_can_be_created_listed_repointed_and_deleted() {
 /// ADR-0043 D1: 変更系は管理系（トークンが要る）。読み取りは要らない。
 #[tokio::test]
 async fn changing_repos_needs_the_admin_token_but_reading_does_not() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let project = make_project(&app).await;
     let body = json!({"location": {"kind": "local", "path": "/srv/x"}});
@@ -192,21 +161,25 @@ async fn changing_repos_needs_the_admin_token_but_reading_does_not() {
         assert_problem(&resp, 401, "unauthorized");
     }
     // 読み取りはトークンだけあればよい（このテストの celeris はトークンを設定しているので共通ガードは効く）。
-    let resp = send(&app, g(&format!("/api/v1/projects/{project}/repos"))).await;
+    let resp = send(
+        &app,
+        get_admin(&format!("/api/v1/projects/{project}/repos")),
+    )
+    .await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
 }
 
 /// ADR-0043 D1: 422 になる入力（重複した名前・不正な slug・知らないクラスタ・未対応の `sync = "none"`）と 404。
 #[tokio::test]
 async fn invalid_repo_input_is_422_and_unknown_ids_are_404() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let project = make_project(&app).await;
     let base = format!("/api/v1/projects/{project}/repos");
 
     let ok = send(
         &app,
-        p(
+        post_admin(
             &base,
             &json!({"name": "code", "location": {"kind": "local", "path": "/srv/code"}}),
         ),
@@ -217,7 +190,7 @@ async fn invalid_repo_input_is_422_and_unknown_ids_are_404() {
     // 名前の重複。
     let dup = send(
         &app,
-        p(
+        post_admin(
             &base,
             &json!({"name": "code", "location": {"kind": "local", "path": "/srv/other"}}),
         ),
@@ -229,7 +202,7 @@ async fn invalid_repo_input_is_422_and_unknown_ids_are_404() {
     for bad in ["../escape", "Upper", "", ".hidden"] {
         let resp = send(
             &app,
-            p(
+            post_admin(
                 &base,
                 &json!({"name": bad, "location": {"kind": "local", "path": "/srv/x"}}),
             ),
@@ -241,7 +214,7 @@ async fn invalid_repo_input_is_422_and_unknown_ids_are_404() {
     // 知らないクラスタ（ADR-0039 D1 と同じ規律）。
     let unknown_cluster = send(
         &app,
-        p(
+        post_admin(
             &base,
             &json!({"location": {"kind": "remote", "cluster": "nope", "path": "/work/x"}}),
         ),
@@ -253,7 +226,7 @@ async fn invalid_repo_input_is_422_and_unknown_ids_are_404() {
     // ADR-0043 D7: リモート (b)（`sync = "none"`）は未対応。
     let reserved = send(
         &app,
-        p(
+        post_admin(
             &base,
             &json!({"location": {"kind": "remote", "cluster": "pegasus", "path": "/work/x"}, "sync": "none"}),
         ),
@@ -264,7 +237,7 @@ async fn invalid_repo_input_is_422_and_unknown_ids_are_404() {
     // 相対パス。
     let relative = send(
         &app,
-        p(
+        post_admin(
             &base,
             &json!({"location": {"kind": "local", "path": "relative"}}),
         ),
@@ -277,21 +250,21 @@ async fn invalid_repo_input_is_422_and_unknown_ids_are_404() {
     assert_problem(
         &send(
             &app,
-            pa(&format!("/api/v1/repos/{missing}"), &json!({"run": "host"})),
+            patch_admin(&format!("/api/v1/repos/{missing}"), &json!({"run": "host"})),
         )
         .await,
         404,
         "repo_not_found",
     );
     assert_problem(
-        &send(&app, d(&format!("/api/v1/repos/{missing}"))).await,
+        &send(&app, delete_admin(&format!("/api/v1/repos/{missing}"))).await,
         404,
         "repo_not_found",
     );
     assert_problem(
         &send(
             &app,
-            g(&format!(
+            get_admin(&format!(
                 "/api/v1/projects/{}/repos",
                 task_core::ProjectId::new()
             )),
@@ -301,20 +274,24 @@ async fn invalid_repo_input_is_422_and_unknown_ids_are_404() {
         "project_not_found",
     );
     // 1 つも書かない PATCH は 422。
-    let empty = send(&app, pa(&format!("/api/v1/repos/{missing}"), &json!({}))).await;
+    let empty = send(
+        &app,
+        patch_admin(&format!("/api/v1/repos/{missing}"), &json!({})),
+    )
+    .await;
     assert_problem(&empty, 422, "validation");
 }
 
 /// ADR-0043 D1 / D2: `POST /tasks` の `repos` と、未終端のタスクが使っているリポジトリの 409。
 #[tokio::test]
 async fn a_task_picks_repos_by_name_and_blocks_their_deletion_until_it_finishes() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let project = make_project(&app).await;
     let base = format!("/api/v1/projects/{project}/repos");
     let code = send(
         &app,
-        p(
+        post_admin(
             &base,
             &json!({"name": "code", "location": {"kind": "local", "path": "/srv/code"}}),
         ),
@@ -323,7 +300,7 @@ async fn a_task_picks_repos_by_name_and_blocks_their_deletion_until_it_finishes(
     let code_id = code.json()["id"].as_str().expect("id").to_string();
     send(
         &app,
-        p(
+        post_admin(
             &base,
             &json!({"name": "paper", "location": {"kind": "local", "path": "/srv/paper"}}),
         ),
@@ -346,7 +323,7 @@ async fn a_task_picks_repos_by_name_and_blocks_their_deletion_until_it_finishes(
     // 名前で選ぶ（並びはそのまま = `repos[0]` が cwd）。
     let created = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/tasks",
             &body(json!(["paper", "code"]), Some(&project)),
         ),
@@ -359,7 +336,11 @@ async fn a_task_picks_repos_by_name_and_blocks_their_deletion_until_it_finishes(
     let task_id = task["id"].as_str().expect("id").to_string();
 
     // 書かなければ案件の primary を継ぐ。
-    let inherited = send(&app, p("/api/v1/tasks", &body(json!([]), Some(&project)))).await;
+    let inherited = send(
+        &app,
+        post_admin("/api/v1/tasks", &body(json!([]), Some(&project))),
+    )
+    .await;
     assert_eq!(
         inherited.json()["repos"][0]["name"],
         "code",
@@ -370,17 +351,21 @@ async fn a_task_picks_repos_by_name_and_blocks_their_deletion_until_it_finishes(
     // 知らない名前は 422。
     let unknown = send(
         &app,
-        p("/api/v1/tasks", &body(json!(["nope"]), Some(&project))),
+        post_admin("/api/v1/tasks", &body(json!(["nope"]), Some(&project))),
     )
     .await;
     assert_problem(&unknown, 422, "validation");
 
     // 案件に属さないタスクに `repos` は書けない。
-    let orphan = send(&app, p("/api/v1/tasks", &body(json!(["code"]), None))).await;
+    let orphan = send(
+        &app,
+        post_admin("/api/v1/tasks", &body(json!(["code"]), None)),
+    )
+    .await;
     assert_problem(&orphan, 422, "validation");
 
     // 未終端のタスクが使っているリポジトリは消せない。
-    let busy = send(&app, d(&format!("/api/v1/repos/{code_id}"))).await;
+    let busy = send(&app, delete_admin(&format!("/api/v1/repos/{code_id}"))).await;
     assert_problem(&busy, 409, "repo_in_use");
 
     // 終わったら消せる。
@@ -388,23 +373,27 @@ async fn a_task_picks_repos_by_name_and_blocks_their_deletion_until_it_finishes(
         task_id.as_str(),
         inherited.json()["id"].as_str().expect("id"),
     ] {
-        let cancelled = send(&app, p(&format!("/api/v1/tasks/{id}/cancel"), &json!({}))).await;
+        let cancelled = send(
+            &app,
+            post_admin(&format!("/api/v1/tasks/{id}/cancel"), &json!({})),
+        )
+        .await;
         assert_eq!(cancelled.status.as_u16(), 200, "{}", cancelled.text());
     }
-    let freed = send(&app, d(&format!("/api/v1/repos/{code_id}"))).await;
+    let freed = send(&app, delete_admin(&format!("/api/v1/repos/{code_id}"))).await;
     assert_eq!(freed.status.as_u16(), 204, "{}", freed.text());
 }
 
 /// ADR-0043 D2: リモートのリポジトリを他と混ぜたタスクはこの Phase では 422。
 #[tokio::test]
 async fn mixing_a_remote_repo_with_a_local_one_is_rejected() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let project = make_project(&app).await;
     let base = format!("/api/v1/projects/{project}/repos");
     send(
         &app,
-        p(
+        post_admin(
             &base,
             &json!({"name": "code", "location": {"kind": "local", "path": "/srv/code"}}),
         ),
@@ -412,7 +401,7 @@ async fn mixing_a_remote_repo_with_a_local_one_is_rejected() {
     .await;
     let remote = send(
         &app,
-        p(
+        post_admin(
             &base,
             &json!({"name": "cluster", "location": {"kind": "remote", "cluster": "pegasus", "path": "/work/x"}}),
         ),
@@ -428,10 +417,14 @@ async fn mixing_a_remote_repo_with_a_local_one_is_rejected() {
         })
     };
     // リモート 1 つだけなら通る（ADR-0018 / 0019 の従来の経路）。
-    let alone = send(&app, p("/api/v1/tasks", &task(json!(["cluster"])))).await;
+    let alone = send(&app, post_admin("/api/v1/tasks", &task(json!(["cluster"])))).await;
     assert_eq!(alone.status.as_u16(), 201, "{}", alone.text());
     // 混ぜたら 422。
-    let mixed = send(&app, p("/api/v1/tasks", &task(json!(["cluster", "code"])))).await;
+    let mixed = send(
+        &app,
+        post_admin("/api/v1/tasks", &task(json!(["cluster", "code"]))),
+    )
+    .await;
     let problem = assert_problem(&mixed, 422, "validation");
     assert!(
         problem["errors"][0]["message"]
@@ -496,11 +489,11 @@ fn seed_tree(env: &TestEnv) -> (task_core::TaskId, std::path::PathBuf) {
 /// ADR-0043 D6: 一覧（既定は先頭のリポジトリ、`repo=` で切り替え、`dir` はリンク越しに見える）。
 #[tokio::test]
 async fn the_tree_lists_every_repo_of_the_task() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let (task_id, _) = seed_tree(&env);
 
-    let root = send(&app, g(&format!("/api/v1/tasks/{task_id}/tree"))).await;
+    let root = send(&app, get_admin(&format!("/api/v1/tasks/{task_id}/tree"))).await;
     assert_eq!(root.status.as_u16(), 200, "{}", root.text());
     let view = root.json();
     assert_eq!(view["repo"], "code", "`repo=` を省略したら先頭");
@@ -515,14 +508,21 @@ async fn the_tree_lists_every_repo_of_the_task() {
     assert_eq!(view["entries"][1]["kind"], "file");
     assert_eq!(view["entries"][1]["size"], 8);
 
-    let sub = send(&app, g(&format!("/api/v1/tasks/{task_id}/tree?path=src")))
-        .await
-        .json();
+    let sub = send(
+        &app,
+        get_admin(&format!("/api/v1/tasks/{task_id}/tree?path=src")),
+    )
+    .await
+    .json();
     assert_eq!(sub["path"], "src");
     assert_eq!(sub["entries"][0]["path"], "src/lib.rs");
 
     // `dir` のリポジトリ（シンボリックリンク）もリンク越しに見える。
-    let data = send(&app, g(&format!("/api/v1/tasks/{task_id}/tree?repo=data"))).await;
+    let data = send(
+        &app,
+        get_admin(&format!("/api/v1/tasks/{task_id}/tree?repo=data")),
+    )
+    .await;
     assert_eq!(data.status.as_u16(), 200, "{}", data.text());
     assert_eq!(data.json()["entries"][0]["name"], "one.csv");
 }
@@ -530,13 +530,13 @@ async fn the_tree_lists_every_repo_of_the_task() {
 /// ADR-0043 D6: 本文（テキスト・バイナリ・大きすぎるもの）。
 #[tokio::test]
 async fn the_tree_file_returns_text_and_only_the_size_for_binaries() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let (task_id, code) = seed_tree(&env);
 
     let text = send(
         &app,
-        g(&format!("/api/v1/tasks/{task_id}/tree/file?path=README.md")),
+        get_admin(&format!("/api/v1/tasks/{task_id}/tree/file?path=README.md")),
     )
     .await;
     assert_eq!(text.status.as_u16(), 200, "{}", text.text());
@@ -549,7 +549,7 @@ async fn the_tree_file_returns_text_and_only_the_size_for_binaries() {
     std::fs::write(code.join("blob.bin"), [0u8, 1, 2, 3]).expect("write");
     let binary = send(
         &app,
-        g(&format!("/api/v1/tasks/{task_id}/tree/file?path=blob.bin")),
+        get_admin(&format!("/api/v1/tasks/{task_id}/tree/file?path=blob.bin")),
     )
     .await
     .json();
@@ -561,7 +561,7 @@ async fn the_tree_file_returns_text_and_only_the_size_for_binaries() {
     std::fs::write(code.join("big.txt"), &big).expect("write");
     let large = send(
         &app,
-        g(&format!("/api/v1/tasks/{task_id}/tree/file?path=big.txt")),
+        get_admin(&format!("/api/v1/tasks/{task_id}/tree/file?path=big.txt")),
     )
     .await
     .json();
@@ -573,7 +573,7 @@ async fn the_tree_file_returns_text_and_only_the_size_for_binaries() {
 /// ADR-0043 D6 / ADR-0003 D5: `..`・絶対パス・シンボリックリンクの脱出は 403。知らないものは 404。
 #[tokio::test]
 async fn the_tree_refuses_to_leave_the_working_tree() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
     let (task_id, code) = seed_tree(&env);
     let secret = env.dir.path().join("secret.txt");
@@ -584,13 +584,13 @@ async fn the_tree_refuses_to_leave_the_working_tree() {
     for path in ["..", "../..", "src/../../secret.txt", "/etc/passwd"] {
         let resp = send(
             &app,
-            g(&format!("/api/v1/tasks/{task_id}/tree?path={path}")),
+            get_admin(&format!("/api/v1/tasks/{task_id}/tree?path={path}")),
         )
         .await;
         assert_problem(&resp, 403, "path_forbidden");
         let resp = send(
             &app,
-            g(&format!("/api/v1/tasks/{task_id}/tree/file?path={path}")),
+            get_admin(&format!("/api/v1/tasks/{task_id}/tree/file?path={path}")),
         )
         .await;
         assert_problem(&resp, 403, "path_forbidden");
@@ -598,7 +598,7 @@ async fn the_tree_refuses_to_leave_the_working_tree() {
     // 作業ツリーの外を指すシンボリックリンクも 403。
     let escaped = send(
         &app,
-        g(&format!(
+        get_admin(&format!(
             "/api/v1/tasks/{task_id}/tree/file?path=escape.txt"
         )),
     )
@@ -607,19 +607,27 @@ async fn the_tree_refuses_to_leave_the_working_tree() {
     // ディレクトリを本文として読もうとしたら 403。
     let dir = send(
         &app,
-        g(&format!("/api/v1/tasks/{task_id}/tree/file?path=src")),
+        get_admin(&format!("/api/v1/tasks/{task_id}/tree/file?path=src")),
     )
     .await;
     assert_problem(&dir, 403, "path_forbidden");
     // `path` 無しの本文は 400。
-    let missing_path = send(&app, g(&format!("/api/v1/tasks/{task_id}/tree/file"))).await;
+    let missing_path = send(
+        &app,
+        get_admin(&format!("/api/v1/tasks/{task_id}/tree/file")),
+    )
+    .await;
     assert_problem(&missing_path, 400, "bad_request");
     // そのタスクに無いリポジトリは 404。
-    let unknown_repo = send(&app, g(&format!("/api/v1/tasks/{task_id}/tree?repo=nope"))).await;
+    let unknown_repo = send(
+        &app,
+        get_admin(&format!("/api/v1/tasks/{task_id}/tree?repo=nope")),
+    )
+    .await;
     assert_problem(&unknown_repo, 404, "file_not_found");
     // 作業ツリーを持たないタスクは 404。
     let plain = new_task(TaskKind::Execute, Status::Done);
     env.seed(&plain);
-    let no_tree = send(&app, g(&format!("/api/v1/tasks/{}/tree", plain.id))).await;
+    let no_tree = send(&app, get_admin(&format!("/api/v1/tasks/{}/tree", plain.id))).await;
     assert_problem(&no_tree, 404, "file_not_found");
 }

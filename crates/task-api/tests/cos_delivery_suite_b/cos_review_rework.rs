@@ -5,16 +5,12 @@
 //! credential (no LLM, no network).
 use crate::common;
 
-use common::cos_ops::{audit_events, cos_bearer};
+use common::cos_ops::{audit_events, cos_bearer, db};
 use common::*;
 use serde_json::{Value, json};
 use task_core::chat::triage::CosTriageSource;
 use task_core::{Check, Criterion, Event, Status, TaskId, TaskKind, TaskStore, Trigger};
 use time::OffsetDateTime;
-
-fn db(env: &TestEnv) -> rusqlite::Connection {
-    rusqlite::Connection::open(&env.db_path).expect("open db")
-}
 
 /// A ready task judged by a reviewer, failing on its first rejected review.
 fn reviewed_task(env: &TestEnv, labels: &[&str], human_check: bool) -> task_core::Task {

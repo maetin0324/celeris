@@ -15,20 +15,8 @@ use tokio::sync::mpsc;
 /// 偽の webhook URL（秘密ファイルに書く値。応答に出てはいけない）。
 const WEBHOOK_URL: &str = "https://discord.invalid/api/webhooks/123/super-secret-token";
 
-fn auth() -> String {
-    format!("Bearer {TOKEN}")
-}
-
-fn g(path: &str) -> axum::http::Request<axum::body::Body> {
-    get_with(path, &[("authorization", auth().as_str())])
-}
-
 fn p(path: &str) -> axum::http::Request<axum::body::Body> {
-    post_json_with(
-        path,
-        &serde_json::json!({}),
-        &[("authorization", auth().as_str())],
-    )
+    post_admin(path, &serde_json::json!({}))
 }
 
 fn spawn_test_double(
@@ -204,7 +192,7 @@ async fn get_notify_shows_the_fingerprint_and_recent_sends_but_never_the_url() {
         .expect("mark");
     let app = env.router();
 
-    let resp = send(&app, g("/api/v1/notify")).await;
+    let resp = send(&app, get_admin("/api/v1/notify")).await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
     let body = resp.json();
     assert_eq!(body["configured"], true);
@@ -248,7 +236,7 @@ async fn get_notify_omits_project_id_for_kinds_without_a_project() {
         .expect("upsert");
     let app = env.router();
 
-    let resp = send(&app, g("/api/v1/notify")).await;
+    let resp = send(&app, get_admin("/api/v1/notify")).await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
     let body = resp.json();
     let recent = body["recent"].as_array().expect("recent");
@@ -264,7 +252,7 @@ async fn get_notify_omits_project_id_for_kinds_without_a_project() {
 async fn get_notify_reports_not_configured_without_a_secret() {
     let (env, _tmp) = env_with_webhook(false, Some(TOKEN.into()), None);
     let app = env.router();
-    let resp = send(&app, g("/api/v1/notify")).await;
+    let resp = send(&app, get_admin("/api/v1/notify")).await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
     let body = resp.json();
     assert_eq!(body["configured"], false);

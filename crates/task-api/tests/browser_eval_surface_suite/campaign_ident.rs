@@ -7,14 +7,6 @@ use common::*;
 use serde_json::{Value, json};
 use task_core::TaskStore;
 
-fn p(body: &Value) -> axum::http::Request<axum::body::Body> {
-    post_json_with(
-        "/api/v1/tasks",
-        body,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
 fn task(extra: Value) -> Value {
     let mut b = json!({
         "title": "trial", "objective": "o",
@@ -40,7 +32,7 @@ async fn create_stores_campaign_identity_and_resend_is_idempotent() {
     let app = env.router();
 
     let body = task(json!({"campaign": campaign(1, "m1"), "idempotency_key": "campaign-k1"}));
-    let first = send(&app, p(&body)).await;
+    let first = send(&app, post_admin("/api/v1/tasks", &body)).await;
     assert_eq!(first.status.as_u16(), 201, "{}", first.text());
     let id = first.json()["id"].as_str().expect("id").to_string();
     let own = env
@@ -61,20 +53,28 @@ async fn create_stores_campaign_identity_and_resend_is_idempotent() {
     );
 
     // 同一識別の再送は既存 task（200）。新しい task は増えない。
-    let again = send(&app, p(&body)).await;
+    let again = send(&app, post_admin("/api/v1/tasks", &body)).await;
     assert_eq!(again.status.as_u16(), 200, "{}", again.text());
     assert_eq!(again.json()["id"], json!(id));
     // キー無しでも同じ試行なら同じ task。
-    let keyless = send(&app, p(&task(json!({"campaign": campaign(1, "m1")})))).await;
+    let keyless = send(
+        &app,
+        post_admin(
+            "/api/v1/tasks",
+            &task(json!({"campaign": campaign(1, "m1")})),
+        ),
+    )
+    .await;
     assert_eq!(keyless.status.as_u16(), 200, "{}", keyless.text());
     assert_eq!(keyless.json()["id"], json!(id));
 
     // 別の試行（repetition 違い）は衝突せず別 task。
     let other = send(
         &app,
-        p(&task(
-            json!({"campaign": campaign(2, "m1"), "idempotency_key": "campaign-k2"}),
-        )),
+        post_admin(
+            "/api/v1/tasks",
+            &task(json!({"campaign": campaign(2, "m1"), "idempotency_key": "campaign-k2"})),
+        ),
     )
     .await;
     assert_eq!(other.status.as_u16(), 201, "{}", other.text());
@@ -83,14 +83,22 @@ async fn create_stores_campaign_identity_and_resend_is_idempotent() {
     // 同じキーで識別が違えば 409、同じ試行で manifest が違っても 409。どちらも task を作らない。
     let bad_key = send(
         &app,
-        p(&task(
-            json!({"campaign": campaign(3, "m1"), "idempotency_key": "campaign-k1"}),
-        )),
+        post_admin(
+            "/api/v1/tasks",
+            &task(json!({"campaign": campaign(3, "m1"), "idempotency_key": "campaign-k1"})),
+        ),
     )
     .await;
     assert_eq!(bad_key.status.as_u16(), 409, "{}", bad_key.text());
     assert_eq!(bad_key.json()["code"], "idempotency_key_conflict");
-    let bad_manifest = send(&app, p(&task(json!({"campaign": campaign(1, "m2")})))).await;
+    let bad_manifest = send(
+        &app,
+        post_admin(
+            "/api/v1/tasks",
+            &task(json!({"campaign": campaign(1, "m2")})),
+        ),
+    )
+    .await;
     assert_eq!(bad_manifest.status.as_u16(), 409, "{}", bad_manifest.text());
 
     // 子 task は自分の行を持たず、親の識別を継ぐ。
@@ -105,7 +113,7 @@ async fn create_stores_campaign_identity_and_resend_is_idempotent() {
     );
 
     // campaign 無しの task は従来どおり識別 NULL。キーだけでも作れる（汎用の冪等キー）。不正な routing_setting は 400。
-    let plain = send(&app, p(&task(json!({})))).await;
+    let plain = send(&app, post_admin("/api/v1/tasks", &task(json!({})))).await;
     assert_eq!(plain.status.as_u16(), 201);
     let pid = plain.json()["id"].as_str().expect("id").to_string();
     assert!(
@@ -114,10 +122,18 @@ async fn create_stores_campaign_identity_and_resend_is_idempotent() {
             .expect("resolve")
             .is_none()
     );
-    let key_only = send(&app, p(&task(json!({"idempotency_key": "k"})))).await;
+    let key_only = send(
+        &app,
+        post_admin("/api/v1/tasks", &task(json!({"idempotency_key": "k"}))),
+    )
+    .await;
     assert_eq!(key_only.status.as_u16(), 201, "{}", key_only.text());
     let mut bad = campaign(9, "m");
     bad["routing_setting"] = json!("auto");
-    let resp = send(&app, p(&task(json!({"campaign": bad})))).await;
+    let resp = send(
+        &app,
+        post_admin("/api/v1/tasks", &task(json!({"campaign": bad}))),
+    )
+    .await;
     assert_eq!(resp.status.as_u16(), 400, "{}", resp.text());
 }

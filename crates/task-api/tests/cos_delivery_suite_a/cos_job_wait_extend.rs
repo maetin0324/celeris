@@ -7,7 +7,7 @@
 //! timeout (`time_out_cluster_job_wait`).
 use crate::common;
 
-use common::cos_ops::{audit_events, cos_bearer};
+use common::cos_ops::{audit_events, cos_bearer, db};
 use common::*;
 use serde_json::{Value, json};
 use task_core::approval::{Approval, ApprovalId, ApprovalStore, Decision};
@@ -17,10 +17,6 @@ use task_core::cluster_job::{
 };
 use task_core::{Event, Status, TaskKind};
 use time::OffsetDateTime;
-
-fn db(env: &TestEnv) -> rusqlite::Connection {
-    rusqlite::Connection::open(&env.db_path).expect("open db")
-}
 
 fn status(job: &str, state: ClusterJobState) -> ClusterJobStatus {
     ClusterJobStatus {

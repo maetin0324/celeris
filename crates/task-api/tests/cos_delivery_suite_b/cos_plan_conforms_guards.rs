@@ -7,10 +7,10 @@
 use crate::common;
 
 use common::cos_ops::cos_bearer;
+use common::plan_conforms::{ago, conforms, ingest_plan_gate};
 use common::*;
 use serde_json::{Value, json};
 use task_core::approval::{ApprovalStore, StandingRule, StandingRuleId};
-use task_core::chat::triage::CosTriageSource;
 use task_core::decision::{
     CostOfReversal, DecisionKind, DecisionOption, DecisionOrigin, DecisionPathEntry,
     DecisionRaisedBy, DecisionRequest, DecisionStatus,
@@ -20,7 +20,6 @@ use task_core::{
     PlanStatus, StageReview, StageSpec, Status, TaskKind, TaskStore, Trigger, WorkUnitKind,
 };
 use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
 const KINDS: [&str; 6] = [
     "billing",
@@ -30,16 +29,6 @@ const KINDS: [&str; 6] = [
     "destructive",
     "secrets_permissions",
 ];
-
-fn db(env: &TestEnv) -> rusqlite::Connection {
-    rusqlite::Connection::open(&env.db_path).expect("open db")
-}
-
-fn ago(hours: i64) -> String {
-    (OffsetDateTime::now_utc() - time::Duration::hours(hours))
-        .format(&Rfc3339)
-        .expect("time")
-}
 
 /// `prep` is reviewed by a person; `run` and `grade` are not.
 fn spec() -> ExecutionPlanSpec {
@@ -193,52 +182,6 @@ fn approved(plan_id: &str) -> Event {
         by: "human".into(),
         note: None,
     }
-}
-
-async fn ingest_plan_gate(env: &TestEnv, app: &axum::Router, id: task_core::TaskId) -> String {
-    let feed = send(app, get_admin("/api/v1/inbox/items")).await;
-    assert_eq!(feed.status.as_u16(), 200, "{}", feed.text());
-    let feed = feed.json();
-    let inbox_id = feed["items"]
-        .as_array()
-        .expect("items")
-        .iter()
-        .find(|x| x["kind"] == "plan_gate" && x["task"]["id"] == id.to_string())
-        .and_then(|x| x["id"].as_str())
-        .unwrap_or_else(|| panic!("no plan gate for {id}: {feed}"))
-        .to_string();
-    let source = CosTriageSource {
-        source_kind: "inbox".into(),
-        source_key: inbox_id.clone(),
-        source_revision: "r1".into(),
-        source_event_id: None,
-        operation_id: None,
-        summary: inbox_id.clone(),
-        detail: String::new(),
-        policy_version: "10".into(),
-        task_id: None,
-    };
-    env.store
-        .cos_triage_ingest_batch(
-            "events",
-            &id.to_string(),
-            &[source],
-            OffsetDateTime::now_utc(),
-        )
-        .expect("ingest");
-    db(env)
-        .query_row(
-            "SELECT id FROM cos_inbox_items WHERE source_key=?1",
-            [inbox_id.as_str()],
-            |r| r.get(0),
-        )
-        .expect("ingested row")
-}
-
-fn conforms(plan_id: &str, guarded: Value) -> Value {
-    json!({"category": "plan_conforms",
-           "refs": [{"kind": "message", "id": "GET /api/v1/tasks/x/tree 2026-10-30T00:00Z"}],
-           "plan": {"plan_id": plan_id, "guarded_stages": guarded}})
 }
 
 fn within_frame(rule: &StandingRule) -> Value {

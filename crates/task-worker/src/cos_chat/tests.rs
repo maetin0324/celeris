@@ -92,6 +92,7 @@ fn chat() -> CosChatContext {
         projects: vec![],
         inline_read_max_commands: None,
         relayed_instructions: vec![],
+        standing: Default::default(),
     }
 }
 

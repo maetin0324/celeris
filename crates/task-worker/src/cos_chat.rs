@@ -9,6 +9,7 @@ use task_core::Task;
 use crate::protocol::{CosChatContext, CosChatHistory, RunContext};
 
 pub mod capabilities;
+pub mod standing;
 pub use capabilities::{
     Continuation, HarnessCapabilities, ImageDelivery, MissingCapability, capability_reason,
     image_delivery, image_delivery_reason,
@@ -78,9 +79,10 @@ fn variable_part(
     let mut out = format!("# CoS chat: thread {}\n\n", chat.thread_id);
     out.push_str(&skills_section(chat));
     out.push_str(&run_parameters_section(chat, run_id, task));
-    // The context dependent person/profile/knowledge sections (empty for a CoS chat run today);
-    // their fixed notes are in the Core. The legacy conversation and milestone instructions are
-    // cleared: they ask for `result.actions`, which a CoS chat run must not use.
+    // ADR 2026-11-11-cos-standing-context: role, grants, user, memory and the KB entry.
+    out.push_str(&standing::standing_section(chat));
+    // The legacy conversation and milestone instructions are cleared: they ask for
+    // `result.actions`, which a CoS chat run must not use.
     let mut shared = context.clone();
     shared.conversation_addressee = None;
     shared.milestone_review = None;

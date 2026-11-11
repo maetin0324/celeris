@@ -87,6 +87,10 @@ pub struct CosChatContext {
     /// one CoS chat run may run for a short read. Absent = the default (20).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inline_read_max_commands: Option<u32>,
+    /// ADR 2026-11-11-cos-standing-context D2: role, delegated grants, user pages, memory and the
+    /// KB entry. Rendered on every CoS chat run.
+    #[serde(default)]
+    pub standing: super::cos_standing::CosStandingContext,
 }
 
 /// One relayed instruction of the thread (ADR 2026-10-27-relayed-instructions D1/D4). `text` is the

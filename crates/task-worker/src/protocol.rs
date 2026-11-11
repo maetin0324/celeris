@@ -1385,12 +1385,14 @@ pub use health::{
     HealthVerdictOut, OwnerRow, PathStat, PolicyVerdictOut,
 };
 mod cos_chat;
+mod cos_standing;
 pub use cos_chat::{
     COS_CHAT_IMAGE_MEDIA_TYPES, COS_RUN_CREDENTIAL_ENV, CosChatAttachment, CosChatContext,
     CosChatDelivery, CosChatHistory, CosChatHistoryMessage, CosChatInboxDecision, CosChatInboxItem,
     CosChatInboxOption, CosChatInput, CosChatProjectSummary, CosChatRelayedInstruction,
     is_cos_chat_run,
 };
+pub use cos_standing::{CosStandingContext, CosStandingGrant, CosStandingPage, CosThreadRole};
 
 /// 試験用の最小の `Task`。他 crate の試験が `RunRequest` を組むために公開している（製品の経路では使わない）。
 #[doc(hidden)]

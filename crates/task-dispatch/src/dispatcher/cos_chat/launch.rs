@@ -17,7 +17,7 @@ use task_core::chat::{
 use task_worker::adapter::{RunLimits, WorkerAdapter};
 use task_worker::protocol::{
     COS_RUN_CREDENTIAL_ENV, CosChatAttachment, CosChatContext, CosChatDelivery, CosChatInput,
-    RunContext, RunRequest, SessionHandle,
+    RunRequest,
 };
 use time::OffsetDateTime;
 
@@ -624,25 +624,15 @@ impl CosChatLaunch {
             }
         }
 
-        // ADR 2026-10-27-relayed-instructions D4: the unexpired relays of the thread.
-        let relayed_instructions = self
-            .store
-            .chat_relayed_instructions(thread_id, now)
-            .map_err(|e| format!("relayed instructions unavailable: {e}"))?
-            .into_iter()
-            .filter_map(|message| {
-                let relay = message.relay?;
-                Some(task_worker::protocol::CosChatRelayedInstruction {
-                    message_id: message.id,
-                    seq: i64::try_from(message.seq).unwrap_or(i64::MAX),
-                    text: message.text,
-                    relayed_by: relay.relayed_by,
-                    said_at: relay.said_at,
-                    task_ids: relay.scope.task_ids,
-                    expires_at: relay.scope.expires_at,
-                })
-            })
-            .collect();
+        let relayed_instructions =
+            crate::cos_context::relayed_instructions(&self.store, thread_id, now)?;
+        let standing = crate::cos_context::standing_context(
+            &self.store,
+            &dispatcher.config.knowledge.root,
+            thread.as_ref().map(|t| t.kind),
+            thread.as_ref().and_then(|t| t.project_id.as_deref()),
+            now,
+        )?;
         let chat = CosChatContext {
             thread_id: thread_id.to_string(),
             run_id: run_id.to_owned(),
@@ -679,6 +669,7 @@ impl CosChatLaunch {
             api_base_url: cfg.api_base_url.clone(),
             inbox_items,
             projects,
+            standing,
         };
         let budget = task_core::Budget {
             max_turns: cfg.max_turns,
@@ -698,16 +689,7 @@ impl CosChatLaunch {
         if let Err(e) = std::fs::create_dir_all(&artifacts_dir) {
             return Err(format!("CoS artifacts unavailable: {e}").into());
         }
-        let context = RunContext {
-            cos_chat: Some(chat),
-            skills,
-            session: Some(SessionHandle {
-                adapter: "claude-code".to_owned(),
-                session_id: session.session_id.clone(),
-                resume: mode == ChatRunSessionMode::Resumed,
-            }),
-            ..RunContext::default()
-        };
+        let context = crate::cos_context::cos_run_context(chat, skills, &session.session_id, mode);
         let req = RunRequest {
             protocol: task_worker::protocol::PROTOCOL_VERSION,
             task,

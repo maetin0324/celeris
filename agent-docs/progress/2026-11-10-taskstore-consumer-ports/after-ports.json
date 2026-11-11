@@ -1,0 +1,2843 @@
+{
+ "schema": "taskstore-consumer-ports/measure/2",
+ "generator": "agent-docs/progress/2026-11-10-taskstore-consumer-ports/measure.py",
+ "head_subject": "record-ports: measure.py に celeris-mcp の port の指標（file ごとの store の型・port_fake_ の試験・fake の method・SQLite を開く試験）を足す",
+ "task_store_fn_decls": {
+  "value": 181,
+  "command": "grep -c '^    fn ' crates/task-core/src/store/task_store.rs",
+  "parsed_trait_fns": 181
+ },
+ "task_store_supertraits": {
+  "value": 18,
+  "command": "awk '/^pub trait TaskStore:/{f=1;next} f&&/^\\{/{exit} f&&/\\+ crate::/{n++} END{print n}' crates/task-core/src/store/task_store.rs",
+  "names": [
+   "ReportStore",
+   "ApprovalStore",
+   "NotificationStore",
+   "NoticeStore",
+   "DiskWatchStore",
+   "ScriptInboxStore",
+   "CredentialWaitStore",
+   "KnowledgeRunStore",
+   "DeliveryStore",
+   "NodeSessionStore",
+   "McpClientStore",
+   "McpCallStore",
+   "BrowserWaitStore",
+   "ClusterJobWaitStore",
+   "CronJobStore",
+   "ModelCatalogStore",
+   "OrgDirectory",
+   "TaskQuery"
+  ]
+ },
+ "store_traits": {
+  "TaskStore": {
+   "file": "crates/task-core/src/store/task_store.rs",
+   "fn_count": 181,
+   "supertraits": [
+    "ReportStore",
+    "ApprovalStore",
+    "NotificationStore",
+    "NoticeStore",
+    "DiskWatchStore",
+    "ScriptInboxStore",
+    "CredentialWaitStore",
+    "KnowledgeRunStore",
+    "DeliveryStore",
+    "NodeSessionStore",
+    "McpClientStore",
+    "McpCallStore",
+    "BrowserWaitStore",
+    "ClusterJobWaitStore",
+    "CronJobStore",
+    "ModelCatalogStore",
+    "OrgDirectory",
+    "TaskQuery"
+   ]
+  },
+  "ReportStore": {
+   "file": "crates/task-core/src/report.rs",
+   "fn_count": 8,
+   "supertraits": []
+  },
+  "ApprovalStore": {
+   "file": "crates/task-core/src/approval.rs",
+   "fn_count": 8,
+   "supertraits": []
+  },
+  "NotificationStore": {
+   "file": "crates/task-core/src/notify.rs",
+   "fn_count": 7,
+   "supertraits": []
+  },
+  "NoticeStore": {
+   "file": "crates/task-core/src/feed.rs",
+   "fn_count": 11,
+   "supertraits": []
+  },
+  "DiskWatchStore": {
+   "file": "crates/task-core/src/disk_watch.rs",
+   "fn_count": 2,
+   "supertraits": []
+  },
+  "ScriptInboxStore": {
+   "file": "crates/task-core/src/script_inbox.rs",
+   "fn_count": 5,
+   "supertraits": []
+  },
+  "CredentialWaitStore": {
+   "file": "crates/task-core/src/store/credential_wait.rs",
+   "fn_count": 4,
+   "supertraits": []
+  },
+  "KnowledgeRunStore": {
+   "file": "crates/task-core/src/knowledge_run.rs",
+   "fn_count": 8,
+   "supertraits": []
+  },
+  "DeliveryStore": {
+   "file": "crates/task-core/src/delivery.rs",
+   "fn_count": 3,
+   "supertraits": []
+  },
+  "NodeSessionStore": {
+   "file": "crates/task-core/src/node_session.rs",
+   "fn_count": 10,
+   "supertraits": []
+  },
+  "McpClientStore": {
+   "file": "crates/task-core/src/mcp.rs",
+   "fn_count": 7,
+   "supertraits": []
+  },
+  "McpCallStore": {
+   "file": "crates/task-core/src/mcp.rs",
+   "fn_count": 2,
+   "supertraits": []
+  },
+  "BrowserWaitStore": {
+   "file": "crates/task-core/src/browser_wait.rs",
+   "fn_count": 16,
+   "supertraits": []
+  },
+  "ClusterJobWaitStore": {
+   "file": "crates/task-core/src/cluster_job.rs",
+   "fn_count": 4,
+   "supertraits": []
+  },
+  "CronJobStore": {
+   "file": "crates/task-core/src/cron/store.rs",
+   "fn_count": 12,
+   "supertraits": []
+  },
+  "ModelCatalogStore": {
+   "file": "crates/task-core/src/store/model_catalog.rs",
+   "fn_count": 8,
+   "supertraits": []
+  },
+  "OrgDirectory": {
+   "file": "crates/task-core/src/store/org_directory.rs",
+   "fn_count": 6,
+   "supertraits": []
+  },
+  "TaskQuery": {
+   "file": "crates/task-core/src/store/task_query.rs",
+   "fn_count": 2,
+   "supertraits": []
+  }
+ },
+ "visible_methods_via_taskstore": 304,
+ "duplicate_decls": {},
+ "consumers": {
+  "campaign": {
+   "taskstore_mentions": 7,
+   "taskstore_mentions_tests": 30,
+   "methods": [
+    "events_for",
+    "get",
+    "instance_register",
+    "work_units_for"
+   ],
+   "method_count": 4,
+   "methods_tests_only": [
+    "apply_transition",
+    "apply_transition_with_events",
+    "decision_log_record_outcome",
+    "decision_log_record_proposal",
+    "insert",
+    "list",
+    "task_routing_override"
+   ],
+   "supertrait_methods": [
+    "cluster_job_wait_get",
+    "cluster_job_waits_waiting"
+   ],
+   "store_traits_named": [
+    "TaskStore"
+   ],
+   "files_calling": {
+    "events_for": [
+     "crates/campaign/src/dagbench/celeris_side.rs"
+    ],
+    "get": [
+     "crates/campaign/src/dagbench/celeris_side.rs"
+    ],
+    "instance_register": [
+     "crates/campaign/src/dagbench/celeris_side.rs"
+    ],
+    "work_units_for": [
+     "crates/campaign/src/dagbench/celeris_side.rs"
+    ]
+   },
+   "sqlite_store_opens_in_tests": 28
+  },
+  "celeris": {
+   "taskstore_mentions": 112,
+   "taskstore_mentions_tests": 72,
+   "methods": [
+    "append_event",
+    "apply_transition",
+    "apply_transition_with_events",
+    "comment_add",
+    "comments_for",
+    "config_events_append",
+    "create_task",
+    "decisions_list",
+    "delivery_repair_apply",
+    "events_for",
+    "execution_plan_active",
+    "execution_plan_list",
+    "get",
+    "instance_delete",
+    "instance_delete_where",
+    "instance_heartbeat",
+    "instance_list",
+    "instance_mark_drained",
+    "instance_register",
+    "instance_register_if",
+    "instance_request_handoff",
+    "instance_set_role",
+    "instance_set_role_if",
+    "integration_put",
+    "integration_request_record",
+    "integration_requests_close",
+    "latest_event_id",
+    "latest_routing_evidence",
+    "list",
+    "message_append",
+    "message_list",
+    "org_seed",
+    "ready_tasks",
+    "repo_get",
+    "repo_list",
+    "routing_stage",
+    "run_index_get",
+    "running_tasks_with_runnable_work_units",
+    "set_account_limit",
+    "set_routing_stage",
+    "task_integration_upsert",
+    "task_routing_override",
+    "task_workspace_root_get",
+    "unblock_pending",
+    "work_units_for"
+   ],
+   "method_count": 45,
+   "methods_tests_only": [
+    "account_limits",
+    "acquire_lease",
+    "children",
+    "create_task_by",
+    "decision_get",
+    "decision_log_project_cos_turns",
+    "decision_log_project_interventions",
+    "decision_log_record_outcome",
+    "decision_log_record_proposal",
+    "decision_log_record_usage",
+    "eval_trials_list",
+    "insert",
+    "integration_list_for_project",
+    "local_settings_set",
+    "milestone_create",
+    "open_integration_requests",
+    "project_create",
+    "project_set_auto_integrate",
+    "project_set_status",
+    "replace_routing_evidence",
+    "repo_create",
+    "runs_for_task",
+    "task_campaign_resolve",
+    "task_integration_get",
+    "task_integration_list",
+    "task_workspace_root_pin",
+    "update_task",
+    "work_unit_transition",
+    "work_units_apply"
+   ],
+   "supertrait_methods": [
+    "approval_list",
+    "cron_job_list",
+    "cron_job_runs",
+    "delivery_get",
+    "delivery_list",
+    "delivery_save",
+    "feed_cursor_get",
+    "feed_cursor_set",
+    "knowledge_run_create",
+    "knowledge_run_finish",
+    "knowledge_run_get",
+    "knowledge_run_recent",
+    "knowledge_run_retry",
+    "list_page",
+    "model_catalog_apply",
+    "model_catalog_list",
+    "model_catalog_overrides",
+    "model_catalog_record_failure",
+    "notice_list",
+    "notice_record",
+    "notification_mark",
+    "notification_pending",
+    "notification_scan_at",
+    "notification_scan_mark",
+    "notification_upsert_pending",
+    "org_get",
+    "org_list",
+    "project_get",
+    "project_list",
+    "report_append",
+    "report_list",
+    "report_unreviewed_children",
+    "script_inbox_apply",
+    "script_inbox_cursors",
+    "script_inbox_domain_events_after",
+    "script_inbox_generation_events_after"
+   ],
+   "store_traits_named": [
+    "ModelCatalogStore",
+    "NotificationStore",
+    "OrgDirectory",
+    "ScriptInboxStore",
+    "TaskStore"
+   ],
+   "files_calling": {
+    "append_event": [
+     "crates/celeris/src/daemon/services.rs",
+     "crates/celeris/src/delivery.rs",
+     "crates/celeris/src/knowledge_curation.rs"
+    ],
+    "apply_transition": [
+     "crates/celeris/src/knowledge_curation/extraction.rs"
+    ],
+    "apply_transition_with_events": [
+     "crates/celeris/src/delivery.rs"
+    ],
+    "comment_add": [
+     "crates/celeris/src/delivery.rs",
+     "crates/celeris/src/delivery/auto_resolve.rs"
+    ],
+    "comments_for": [
+     "crates/celeris/src/delivery.rs",
+     "crates/celeris/src/delivery/auto_resolve.rs",
+     "crates/celeris/src/knowledge_curation.rs",
+     "crates/celeris/src/knowledge_maint.rs"
+    ],
+    "config_events_append": [
+     "crates/celeris/src/daemon/config_admin.rs"
+    ],
+    "create_task": [
+     "crates/celeris/examples/seed_hello_crate_task.rs"
+    ],
+    "decisions_list": [
+     "crates/celeris/src/knowledge_curation.rs",
+     "crates/celeris/src/notify.rs"
+    ],
+    "delivery_repair_apply": [
+     "crates/celeris/src/delivery.rs"
+    ],
+    "events_for": [
+     "crates/celeris/src/daemon/services.rs",
+     "crates/celeris/src/delivery.rs",
+     "crates/celeris/src/knowledge_maint.rs",
+     "crates/celeris/src/notify.rs"
+    ],
+    "execution_plan_active": [
+     "crates/celeris/src/delivery.rs"
+    ],
+    "execution_plan_list": [
+     "crates/celeris/src/notify.rs"
+    ],
+    "get": [
+     "crates/celeris/src/delivery.rs",
+     "crates/celeris/src/knowledge_curation.rs",
+     "crates/celeris/src/knowledge_curation/extraction.rs",
+     "crates/celeris/src/knowledge_gc.rs",
+     "crates/celeris/src/knowledge_maint.rs",
+     "crates/celeris/src/notify.rs",
+     "crates/celeris/src/reports.rs"
+    ],
+    "instance_delete": [
+     "crates/celeris/src/instance.rs"
+    ],
+    "instance_delete_where": [
+     "crates/celeris/src/instance.rs"
+    ],
+    "instance_heartbeat": [
+     "crates/celeris/src/instance.rs"
+    ],
+    "instance_list": [
+     "crates/celeris/src/instance.rs",
+     "crates/celeris/src/lib.rs"
+    ],
+    "instance_mark_drained": [
+     "crates/celeris/src/instance.rs"
+    ],
+    "instance_register": [
+     "crates/celeris/src/instance.rs"
+    ],
+    "instance_register_if": [
+     "crates/celeris/src/instance.rs"
+    ],
+    "instance_request_handoff": [
+     "crates/celeris/src/instance.rs"
+    ],
+    "instance_set_role": [
+     "crates/celeris/src/instance.rs"
+    ],
+    "instance_set_role_if": [
+     "crates/celeris/src/instance.rs"
+    ],
+    "integration_put": [
+     "crates/celeris/src/delivery.rs"
+    ],
+    "integration_request_record": [
+     "crates/celeris/src/delivery/auto_resolve.rs"
+    ],
+    "integration_requests_close": [
+     "crates/celeris/src/delivery.rs"
+    ],
+    "latest_event_id": [
+     "crates/celeris/src/notify/triage.rs"
+    ],
+    "latest_routing_evidence": [
+     "crates/celeris/src/daemon/routing_guardrail.rs"
+    ],
+    "list": [
+     "crates/celeris/src/daemon/classify_tick.rs",
+     "crates/celeris/src/daemon/stranded_sweep.rs",
+     "crates/celeris/src/knowledge_curation.rs",
+     "crates/celeris/src/knowledge_curation/extraction.rs"
+    ],
+    "message_append": [
+     "crates/celeris/src/delivery.rs"
+    ],
+    "message_list": [
+     "crates/celeris/src/delivery.rs",
+     "crates/celeris/src/notify.rs"
+    ],
+    "org_seed": [
+     "crates/celeris/src/daemon/bootstrap.rs"
+    ],
+    "ready_tasks": [
+     "crates/celeris/src/daemon/classify_tick.rs"
+    ],
+    "repo_get": [
+     "crates/celeris/src/daemon/stranded_sweep.rs"
+    ],
+    "repo_list": [
+     "crates/celeris/src/daemon/stranded_sweep.rs",
+     "crates/celeris/src/delivery.rs",
+     "crates/celeris/src/doc_gardener.rs"
+    ],
+    "routing_stage": [
+     "crates/celeris/src/daemon/routing_guardrail.rs"
+    ],
+    "run_index_get": [
+     "crates/celeris/src/daemon/services.rs"
+    ],
+    "running_tasks_with_runnable_work_units": [
+     "crates/celeris/src/daemon/classify_tick.rs"
+    ],
+    "set_account_limit": [
+     "crates/celeris/src/accounts_admin.rs",
+     "crates/celeris/src/daemon/admin.rs"
+    ],
+    "set_routing_stage": [
+     "crates/celeris/src/daemon/routing_guardrail.rs"
+    ],
+    "task_integration_upsert": [
+     "crates/celeris/src/delivery.rs"
+    ],
+    "task_routing_override": [
+     "crates/celeris/src/daemon/classify_tick.rs"
+    ],
+    "task_workspace_root_get": [
+     "crates/celeris/src/knowledge_curation.rs"
+    ],
+    "unblock_pending": [
+     "crates/celeris/src/daemon/unblocks_sweep.rs"
+    ],
+    "work_units_for": [
+     "crates/celeris/src/daemon/classify_tick.rs",
+     "crates/celeris/src/delivery.rs"
+    ]
+   },
+   "sqlite_store_opens_in_tests": 119
+  },
+  "celeris-credentiald": {
+   "taskstore_mentions": 0,
+   "taskstore_mentions_tests": 0,
+   "methods": [],
+   "method_count": 0,
+   "methods_tests_only": [],
+   "supertrait_methods": [],
+   "store_traits_named": [],
+   "files_calling": {},
+   "sqlite_store_opens_in_tests": 0
+  },
+  "celeris-mcp": {
+   "taskstore_mentions": 1,
+   "taskstore_mentions_tests": 1,
+   "methods": [
+    "get"
+   ],
+   "method_count": 1,
+   "methods_tests_only": [
+    "append_event",
+    "apply_transition",
+    "apply_transition_with_events",
+    "comments_for",
+    "events_for",
+    "insert",
+    "message_page",
+    "project_create"
+   ],
+   "supertrait_methods": [
+    "event_rows_for",
+    "list_page",
+    "mcp_call_record",
+    "mcp_client_by_token_hash",
+    "mcp_client_get",
+    "mcp_client_touch_last_used",
+    "milestone_list",
+    "node_session_active",
+    "org_get",
+    "org_list",
+    "org_upsert",
+    "project_get",
+    "project_list",
+    "report_list"
+   ],
+   "store_traits_named": [
+    "McpCallStore",
+    "McpClientStore",
+    "NodeSessionStore",
+    "OrgDirectory",
+    "ReportStore",
+    "TaskQuery",
+    "TaskStore"
+   ],
+   "files_calling": {
+    "get": [
+     "crates/celeris-mcp/src/tools/tasks.rs"
+    ]
+   },
+   "sqlite_store_opens_in_tests": 7
+  },
+  "celerisctl": {
+   "taskstore_mentions": 49,
+   "taskstore_mentions_tests": 8,
+   "methods": [
+    "append_event",
+    "create_task_by",
+    "events_for",
+    "get",
+    "harness_balance_reset",
+    "harness_balance_trips",
+    "list",
+    "work_units_for"
+   ],
+   "method_count": 8,
+   "methods_tests_only": [
+    "apply_transition_with_events",
+    "create_task",
+    "decision_log_record_execution",
+    "decision_log_record_outcome",
+    "decision_log_record_proposal",
+    "decision_log_record_usage",
+    "decisions_list",
+    "insert",
+    "org_seed",
+    "project_create",
+    "replace_routing_evidence",
+    "update_task"
+   ],
+   "supertrait_methods": [
+    "knowledge_run_get",
+    "knowledge_run_reset",
+    "mcp_client_create",
+    "mcp_client_get",
+    "mcp_client_list",
+    "mcp_client_revoke",
+    "mcp_client_set_scopes",
+    "milestone_list",
+    "org_list",
+    "project_get",
+    "project_list"
+   ],
+   "store_traits_named": [
+    "KnowledgeRunStore",
+    "McpClientStore",
+    "OrgDirectory",
+    "TaskStore"
+   ],
+   "files_calling": {
+    "append_event": [
+     "crates/celerisctl/src/commands/workspace.rs"
+    ],
+    "create_task_by": [
+     "crates/celerisctl/src/commands/add.rs"
+    ],
+    "events_for": [
+     "crates/celerisctl/src/commands/query.rs",
+     "crates/celerisctl/src/commands/worker.rs"
+    ],
+    "get": [
+     "crates/celerisctl/src/commands/query.rs",
+     "crates/celerisctl/src/commands/worker.rs",
+     "crates/celerisctl/src/commands/workspace.rs"
+    ],
+    "harness_balance_reset": [
+     "crates/celerisctl/src/commands/routing.rs"
+    ],
+    "harness_balance_trips": [
+     "crates/celerisctl/src/commands/routing.rs"
+    ],
+    "list": [
+     "crates/celerisctl/src/commands/plan_lint.rs",
+     "crates/celerisctl/src/commands/query.rs"
+    ],
+    "work_units_for": [
+     "crates/celerisctl/src/commands/execution.rs"
+    ]
+   },
+   "sqlite_store_opens_in_tests": 80
+  },
+  "jev-classifier": {
+   "taskstore_mentions": 0,
+   "taskstore_mentions_tests": 0,
+   "methods": [],
+   "method_count": 0,
+   "methods_tests_only": [],
+   "supertrait_methods": [],
+   "store_traits_named": [],
+   "files_calling": {},
+   "sqlite_store_opens_in_tests": 0
+  },
+  "llm-proxy": {
+   "taskstore_mentions": 0,
+   "taskstore_mentions_tests": 0,
+   "methods": [],
+   "method_count": 0,
+   "methods_tests_only": [],
+   "supertrait_methods": [],
+   "store_traits_named": [],
+   "files_calling": {},
+   "sqlite_store_opens_in_tests": 0
+  },
+  "routing-eval": {
+   "taskstore_mentions": 0,
+   "taskstore_mentions_tests": 1,
+   "methods": [],
+   "method_count": 0,
+   "methods_tests_only": [
+    "latest_routing_evidence"
+   ],
+   "supertrait_methods": [],
+   "store_traits_named": [],
+   "files_calling": {},
+   "sqlite_store_opens_in_tests": 4
+  },
+  "script-runtime": {
+   "taskstore_mentions": 0,
+   "taskstore_mentions_tests": 0,
+   "methods": [
+    "get",
+    "insert"
+   ],
+   "method_count": 2,
+   "methods_tests_only": [],
+   "supertrait_methods": [],
+   "store_traits_named": [],
+   "files_calling": {
+    "get": [
+     "crates/script-runtime/vendor/deno_core/cppgc.rs",
+     "crates/script-runtime/vendor/deno_core/modules/module_map_data.rs",
+     "crates/script-runtime/vendor/deno_core/runtime/bindings.rs",
+     "crates/script-runtime/vendor/deno_core/runtime/jsruntime.rs"
+    ],
+    "insert": [
+     "crates/script-runtime/vendor/deno_core/cppgc.rs",
+     "crates/script-runtime/vendor/deno_core/modules/map.rs",
+     "crates/script-runtime/vendor/deno_core/ops_builtin_v8.rs",
+     "crates/script-runtime/vendor/deno_core/runtime/bindings.rs"
+    ]
+   },
+   "sqlite_store_opens_in_tests": 0
+  },
+  "task-api": {
+   "taskstore_mentions": 56,
+   "taskstore_mentions_tests": 73,
+   "methods": [
+    "account_limits",
+    "cluster_connection_list_since",
+    "cluster_settings_get",
+    "cluster_settings_list",
+    "cluster_settings_set",
+    "comments_for",
+    "config_events_recent",
+    "create_task",
+    "decision_get",
+    "decisions_list",
+    "eval_trials_list",
+    "events_for",
+    "events_since",
+    "execution_metrics_task_rows",
+    "execution_plan_active",
+    "execution_plan_adopt_tree",
+    "execution_plan_adopt_tree_tx",
+    "execution_plan_list",
+    "get",
+    "instance_list",
+    "integration_latest",
+    "integration_list_for_project",
+    "integration_list_for_task",
+    "integration_put",
+    "latest_event_id",
+    "list",
+    "local_settings_get",
+    "local_settings_set",
+    "message_list",
+    "message_page",
+    "open_integration_requests",
+    "org_delete",
+    "project_create",
+    "repo_create",
+    "repo_delete",
+    "repo_get",
+    "repo_list",
+    "repo_set_primary",
+    "repo_update",
+    "run_index_get",
+    "runs_for_task",
+    "set_account_limit",
+    "set_task_expected_write_paths",
+    "task_integration_get",
+    "task_integration_list",
+    "task_routing_override",
+    "tree_adopt_apply",
+    "tree_adopt_apply_tx",
+    "update_task",
+    "work_units_for"
+   ],
+   "method_count": 50,
+   "methods_tests_only": [
+    "acquire_lease",
+    "append_event",
+    "apply_transition",
+    "apply_transition_with_events",
+    "comment_add",
+    "eval_trial_claim_next",
+    "eval_trial_finish",
+    "eval_trial_mark_scoring",
+    "eval_trial_mark_started",
+    "execution_plan_adopt",
+    "execution_plans_replace",
+    "insert",
+    "integration_request_record",
+    "local_settings_events",
+    "message_append",
+    "milestone_create",
+    "milestone_set_lifecycle",
+    "project_set_archived_at",
+    "project_set_lifecycle",
+    "project_set_status",
+    "ready_tasks",
+    "replace_routing_evidence",
+    "run_index_finish",
+    "run_index_start",
+    "run_record_selection",
+    "task_campaign_resolve",
+    "task_integration_upsert",
+    "unblocks_of",
+    "work_unit_transition",
+    "work_units_apply"
+   ],
+   "supertrait_methods": [
+    "approval_get",
+    "approval_list",
+    "browser_site_policy_get",
+    "browser_task_policy_get",
+    "browser_task_policy_set",
+    "browser_wait_get",
+    "browser_wait_open",
+    "browser_wait_register",
+    "browser_waits_for_task",
+    "cron_job_list",
+    "cron_job_runs",
+    "delivery_get",
+    "delivery_list",
+    "event_rows_for",
+    "knowledge_run_get",
+    "knowledge_run_recent",
+    "list_page",
+    "mcp_calls_list",
+    "mcp_client_list",
+    "milestone_list",
+    "model_catalog_delete_override",
+    "model_catalog_discovery_records",
+    "model_catalog_list",
+    "model_catalog_overrides",
+    "model_catalog_set_override",
+    "node_session_active",
+    "notice_get",
+    "notice_list",
+    "notice_mark_read",
+    "notice_unread_count",
+    "notification_last_sent_at",
+    "notification_recent",
+    "org_get",
+    "org_list",
+    "org_upsert",
+    "project_get",
+    "project_list",
+    "report_get",
+    "report_list",
+    "report_mark_read",
+    "report_unread_counts",
+    "standing_rule_append",
+    "standing_rule_delete",
+    "standing_rule_list"
+   ],
+   "store_traits_named": [
+    "ApprovalStore",
+    "BrowserWaitStore",
+    "CronJobStore",
+    "DeliveryStore",
+    "KnowledgeRunStore",
+    "McpCallStore",
+    "McpClientStore",
+    "ModelCatalogStore",
+    "NodeSessionStore",
+    "NoticeStore",
+    "NotificationStore",
+    "OrgDirectory",
+    "ReportStore",
+    "TaskQuery",
+    "TaskStore"
+   ],
+   "files_calling": {
+    "account_limits": [
+     "crates/task-api/src/handlers/accounts.rs"
+    ],
+    "cluster_connection_list_since": [
+     "crates/task-api/src/handlers/clusters.rs"
+    ],
+    "cluster_settings_get": [
+     "crates/task-api/src/handlers/terminals.rs"
+    ],
+    "cluster_settings_list": [
+     "crates/task-api/src/handlers/clusters.rs"
+    ],
+    "cluster_settings_set": [
+     "crates/task-api/src/handlers/clusters.rs"
+    ],
+    "comments_for": [
+     "crates/task-api/src/timeline.rs"
+    ],
+    "config_events_recent": [
+     "crates/task-api/src/handlers/config_fields.rs"
+    ],
+    "create_task": [
+     "crates/task-api/src/changes.rs"
+    ],
+    "decision_get": [
+     "crates/task-api/src/cos/basis.rs"
+    ],
+    "decisions_list": [
+     "crates/task-api/src/cos/basis/plan_conforms.rs"
+    ],
+    "eval_trials_list": [
+     "crates/task-api/src/routing_eval.rs"
+    ],
+    "events_for": [
+     "crates/task-api/src/cos/basis.rs",
+     "crates/task-api/src/cos/basis/job_wait_extend.rs",
+     "crates/task-api/src/cos/basis/plan_conforms.rs",
+     "crates/task-api/src/cos/basis/review_rework.rs",
+     "crates/task-api/src/execution.rs",
+     "crates/task-api/src/handlers/task_actions.rs",
+     "crates/task-api/src/handlers/task_io.rs",
+     "crates/task-api/src/stats.rs"
+    ],
+    "events_since": [
+     "crates/task-api/src/console.rs",
+     "crates/task-api/src/handlers/task_io.rs",
+     "crates/task-api/src/sse.rs",
+     "crates/task-api/src/stats.rs"
+    ],
+    "execution_metrics_task_rows": [
+     "crates/task-api/src/stats.rs"
+    ],
+    "execution_plan_active": [
+     "crates/task-api/src/execution.rs"
+    ],
+    "execution_plan_adopt_tree": [
+     "crates/task-api/src/execution.rs"
+    ],
+    "execution_plan_adopt_tree_tx": [
+     "crates/task-api/src/execution.rs"
+    ],
+    "execution_plan_list": [
+     "crates/task-api/src/cos/basis/plan_conforms.rs",
+     "crates/task-api/src/execution.rs"
+    ],
+    "get": [
+     "crates/task-api/src/browser.rs",
+     "crates/task-api/src/browser_live.rs",
+     "crates/task-api/src/changes.rs",
+     "crates/task-api/src/chat/attachments.rs",
+     "crates/task-api/src/console.rs",
+     "crates/task-api/src/cos/basis/plan_conforms.rs",
+     "crates/task-api/src/cos/basis/review_rework.rs",
+     "crates/task-api/src/cos/goal_guard.rs",
+     "crates/task-api/src/cos/inbox.rs",
+     "crates/task-api/src/cos/operations/instructions.rs",
+     "crates/task-api/src/docs.rs",
+     "crates/task-api/src/handlers/idempotency.rs",
+     "crates/task-api/src/handlers/projects.rs",
+     "crates/task-api/src/handlers/system.rs",
+     "crates/task-api/src/handlers/task_actions.rs",
+     "crates/task-api/src/handlers/task_io.rs",
+     "crates/task-api/src/handlers/tasks.rs",
+     "crates/task-api/src/integrate_task.rs",
+     "crates/task-api/src/integrations.rs",
+     "crates/task-api/src/problem.rs",
+     "crates/task-api/src/routing.rs",
+     "crates/task-api/src/stats.rs",
+     "crates/task-api/src/timeline.rs",
+     "crates/task-api/src/tree.rs"
+    ],
+    "instance_list": [
+     "crates/task-api/src/releases.rs"
+    ],
+    "integration_latest": [
+     "crates/task-api/src/changes.rs"
+    ],
+    "integration_list_for_project": [
+     "crates/task-api/src/changes.rs"
+    ],
+    "integration_list_for_task": [
+     "crates/task-api/src/timeline.rs"
+    ],
+    "integration_put": [
+     "crates/task-api/src/changes.rs"
+    ],
+    "latest_event_id": [
+     "crates/task-api/src/console.rs",
+     "crates/task-api/src/sse.rs"
+    ],
+    "list": [
+     "crates/task-api/src/browser.rs"
+    ],
+    "local_settings_get": [
+     "crates/task-api/src/handlers/clusters.rs"
+    ],
+    "local_settings_set": [
+     "crates/task-api/src/handlers/clusters.rs"
+    ],
+    "message_list": [
+     "crates/task-api/src/conversation.rs"
+    ],
+    "message_page": [
+     "crates/task-api/src/console.rs"
+    ],
+    "open_integration_requests": [
+     "crates/task-api/src/inbox_notifications.rs"
+    ],
+    "org_delete": [
+     "crates/task-api/src/handlers/org.rs"
+    ],
+    "project_create": [
+     "crates/task-api/src/handlers/projects.rs"
+    ],
+    "repo_create": [
+     "crates/task-api/src/docs.rs",
+     "crates/task-api/src/repos.rs"
+    ],
+    "repo_delete": [
+     "crates/task-api/src/repos.rs"
+    ],
+    "repo_get": [
+     "crates/task-api/src/handlers/tasks.rs",
+     "crates/task-api/src/integrations.rs",
+     "crates/task-api/src/repos.rs"
+    ],
+    "repo_list": [
+     "crates/task-api/src/changes.rs",
+     "crates/task-api/src/docs.rs",
+     "crates/task-api/src/handlers/projects.rs",
+     "crates/task-api/src/integrations.rs",
+     "crates/task-api/src/repos.rs"
+    ],
+    "repo_set_primary": [
+     "crates/task-api/src/docs.rs"
+    ],
+    "repo_update": [
+     "crates/task-api/src/repos.rs"
+    ],
+    "run_index_get": [
+     "crates/task-api/src/browser_live.rs"
+    ],
+    "runs_for_task": [
+     "crates/task-api/src/stats.rs"
+    ],
+    "set_account_limit": [
+     "crates/task-api/src/handlers/accounts.rs"
+    ],
+    "set_task_expected_write_paths": [
+     "crates/task-api/src/handlers/task_actions.rs"
+    ],
+    "task_integration_get": [
+     "crates/task-api/src/integrations.rs"
+    ],
+    "task_integration_list": [
+     "crates/task-api/src/handlers/tasks.rs",
+     "crates/task-api/src/integrations.rs"
+    ],
+    "task_routing_override": [
+     "crates/task-api/src/handlers/task_actions.rs"
+    ],
+    "tree_adopt_apply": [
+     "crates/task-api/src/execution.rs"
+    ],
+    "tree_adopt_apply_tx": [
+     "crates/task-api/src/execution.rs"
+    ],
+    "update_task": [
+     "crates/task-api/src/lifecycle.rs"
+    ],
+    "work_units_for": [
+     "crates/task-api/src/execution.rs"
+    ]
+   },
+   "sqlite_store_opens_in_tests": 17
+  },
+  "task-dispatch": {
+   "taskstore_mentions": 59,
+   "taskstore_mentions_tests": 778,
+   "methods": [
+    "account_limits",
+    "acquire_lease",
+    "acquire_work_unit_lease",
+    "append_event",
+    "apply_transition",
+    "apply_transition_with_events",
+    "children",
+    "close_integration_requests_of_terminal_tasks",
+    "close_runs_of_terminal_tasks",
+    "cluster_connection_record",
+    "cluster_settings_get",
+    "comments_for",
+    "complete_plan",
+    "completion_outcomes_project",
+    "create_task",
+    "decision_log_campaign_touch",
+    "decision_log_project_cos_turns",
+    "decision_log_project_interventions",
+    "decision_log_record_execution",
+    "decision_log_record_outcome",
+    "decision_log_record_proposal",
+    "decision_log_record_usage",
+    "decision_log_run_get",
+    "decisions_list",
+    "delegate_children",
+    "effective_task_write_paths",
+    "eval_trial_claim_next",
+    "eval_trial_finish",
+    "eval_trial_get",
+    "eval_trial_mark_scoring",
+    "eval_trial_mark_started",
+    "eval_trial_unclaim",
+    "eval_trials_list",
+    "events_for",
+    "events_for_with_global_ids",
+    "events_since",
+    "execution_plan_active",
+    "extend_task_lease",
+    "get",
+    "halted_by_pause",
+    "harness_balance_trips",
+    "insert_route_decision",
+    "insert_route_features",
+    "insert_route_options",
+    "insert_route_outcome",
+    "instance_list",
+    "integration_request_record",
+    "integration_requests_close",
+    "latest_event_id",
+    "latest_routing_evidence",
+    "list",
+    "local_settings_events",
+    "local_settings_get",
+    "message_list",
+    "message_page",
+    "ready_tasks",
+    "record_route_decision",
+    "record_route_features",
+    "record_run_write_set",
+    "record_work_unit_write_set",
+    "recover_work_unit",
+    "renew_lease",
+    "repo_get",
+    "repo_list",
+    "review_repair_apply",
+    "routing_evidence_at",
+    "routing_stage",
+    "run_index_finish",
+    "run_index_get",
+    "run_index_progress_usage",
+    "run_index_start",
+    "run_record_selection",
+    "running_tasks_with_runnable_work_units",
+    "runs_for_task",
+    "runs_for_work_unit",
+    "runs_running",
+    "set_account_limit",
+    "task_campaign_resolve",
+    "task_routing_override",
+    "task_workspace_root_get",
+    "tasks_with_open_task_units",
+    "tree_child_create",
+    "try_start_work_unit_integration",
+    "update_task",
+    "work_unit_expected_write_paths",
+    "work_unit_get",
+    "work_unit_transition",
+    "work_unit_transition_with_events",
+    "work_units_apply",
+    "work_units_for"
+   ],
+   "method_count": 90,
+   "methods_tests_only": [
+    "behind_targets",
+    "cluster_connection_list_since",
+    "cluster_settings_set",
+    "create_task_by",
+    "db_waits_for",
+    "decisions_replace",
+    "delivery_repair_apply",
+    "execution_plan_list",
+    "execution_plan_replan",
+    "insert",
+    "instance_delete",
+    "instance_heartbeat",
+    "instance_register",
+    "instance_set_role",
+    "local_settings_set",
+    "message_append",
+    "milestone_create",
+    "milestone_set_plan_key",
+    "open_integration_requests",
+    "project_create",
+    "project_set_status",
+    "record_behind_target",
+    "replace_routing_evidence",
+    "repo_create",
+    "retry_task",
+    "run_write_sets",
+    "set_routing_stage",
+    "set_task_expected_write_paths",
+    "tree_tasks",
+    "work_unit_write_sets",
+    "work_units_replace"
+   ],
+   "supertrait_methods": [
+    "approval_append",
+    "approval_list",
+    "approval_withdraw_stale",
+    "browser_session_auth_section",
+    "browser_session_live_append",
+    "browser_site_policy_get",
+    "browser_task_policy_get",
+    "browser_wait_open",
+    "browser_waits_for_task",
+    "cluster_job_wait_get",
+    "cluster_job_wait_touch",
+    "cluster_job_waits_for_task",
+    "cluster_job_waits_waiting",
+    "credential_wait_cancel",
+    "credential_wait_enter",
+    "credential_wait_set_notice_item",
+    "credential_waits_list_waiting",
+    "delivery_get",
+    "delivery_save",
+    "disk_watch_apply",
+    "disk_watch_states",
+    "feed_cursor_get",
+    "feed_cursor_set",
+    "list_page",
+    "milestone_list",
+    "node_session_active",
+    "node_session_create",
+    "node_session_retire",
+    "node_session_set_id",
+    "node_session_touch",
+    "notice_get",
+    "notice_list",
+    "notice_record",
+    "notification_upsert_pending",
+    "org_list",
+    "project_get",
+    "project_list",
+    "report_append_all",
+    "report_list",
+    "report_unreviewed_children",
+    "standing_rule_list",
+    "work_unit_session_create",
+    "work_unit_session_current",
+    "work_unit_session_retire",
+    "work_unit_session_touch"
+   ],
+   "store_traits_named": [
+    "DeliveryStore",
+    "DiskWatchStore",
+    "NoticeStore",
+    "NotificationStore",
+    "OrgDirectory",
+    "TaskStore"
+   ],
+   "files_calling": {
+    "account_limits": [
+     "crates/task-dispatch/src/dispatcher.rs"
+    ],
+    "acquire_lease": [
+     "crates/task-dispatch/src/dispatcher/dispatch_run.rs",
+     "crates/task-dispatch/src/dispatcher/phase_integration.rs"
+    ],
+    "acquire_work_unit_lease": [
+     "crates/task-dispatch/src/dispatcher/dispatch_run.rs"
+    ],
+    "append_event": [
+     "crates/task-dispatch/src/dispatcher/browser_prereq.rs",
+     "crates/task-dispatch/src/dispatcher/cluster.rs",
+     "crates/task-dispatch/src/dispatcher/cluster_job_wait.rs",
+     "crates/task-dispatch/src/dispatcher/continuation_session.rs",
+     "crates/task-dispatch/src/dispatcher/dispatch_run.rs",
+     "crates/task-dispatch/src/dispatcher/housekeeping.rs",
+     "crates/task-dispatch/src/dispatcher/leases.rs",
+     "crates/task-dispatch/src/dispatcher/phase_integration.rs",
+     "crates/task-dispatch/src/dispatcher/quota_book.rs",
+     "crates/task-dispatch/src/dispatcher/review_spawn.rs",
+     "crates/task-dispatch/src/dispatcher/review_verdict.rs",
+     "crates/task-dispatch/src/dispatcher/route_select.rs",
+     "crates/task-dispatch/src/dispatcher/routing_context.rs",
+     "crates/task-dispatch/src/dispatcher/sinks.rs",
+     "crates/task-dispatch/src/dispatcher/tree_units.rs",
+     "crates/task-dispatch/src/dispatcher/work_units.rs",
+     "crates/task-dispatch/src/dispatcher/worker_finish.rs",
+     "crates/task-dispatch/src/dispatcher/worker_task.rs",
+     "crates/task-dispatch/src/health_review/check_item.rs",
+     "crates/task-dispatch/src/health_review/design_gate.rs",
+     "crates/task-dispatch/src/health_review/design_verdict.rs",
+     "crates/task-dispatch/src/health_review/input.rs",
+     "crates/task-dispatch/src/undeclared_artifacts/backfill.rs"
+    ],
+    "apply_transition": [
+     "crates/task-dispatch/src/dispatcher/maintenance.rs",
+     "crates/task-dispatch/src/dispatcher/review_spawn.rs"
+    ],
+    "apply_transition_with_events": [
+     "crates/task-dispatch/src/dispatcher/browser_prereq.rs",
+     "crates/task-dispatch/src/dispatcher/child_tasks.rs",
+     "crates/task-dispatch/src/dispatcher/cluster_job_wait.rs",
+     "crates/task-dispatch/src/dispatcher/dispatch_run.rs",
+     "crates/task-dispatch/src/dispatcher/leases.rs",
+     "crates/task-dispatch/src/dispatcher/phase_integration.rs",
+     "crates/task-dispatch/src/dispatcher/planner_flow.rs",
+     "crates/task-dispatch/src/dispatcher/review_spawn.rs",
+     "crates/task-dispatch/src/dispatcher/review_verdict.rs",
+     "crates/task-dispatch/src/dispatcher/variant_pin.rs",
+     "crates/task-dispatch/src/dispatcher/work_units.rs",
+     "crates/task-dispatch/src/dispatcher/worker_finish.rs",
+     "crates/task-dispatch/src/health_review/design_gate.rs",
+     "crates/task-dispatch/src/health_review/design_verdict.rs",
+     "crates/task-dispatch/src/health_review/review_limits.rs"
+    ],
+    "children": [
+     "crates/task-dispatch/src/dispatcher/child_tasks.rs",
+     "crates/task-dispatch/src/dispatcher/run_context.rs",
+     "crates/task-dispatch/src/dispatcher/snapshot.rs",
+     "crates/task-dispatch/src/dispatcher/token_budget.rs",
+     "crates/task-dispatch/src/dispatcher/work_units.rs",
+     "crates/task-dispatch/src/health_review/plan_adoption.rs",
+     "crates/task-dispatch/src/health_review/policy_review.rs",
+     "crates/task-dispatch/src/root_done_probe.rs"
+    ],
+    "close_integration_requests_of_terminal_tasks": [
+     "crates/task-dispatch/src/dispatcher/leases.rs"
+    ],
+    "close_runs_of_terminal_tasks": [
+     "crates/task-dispatch/src/dispatcher/leases.rs"
+    ],
+    "cluster_connection_record": [
+     "crates/task-dispatch/src/dispatcher/cluster.rs"
+    ],
+    "cluster_settings_get": [
+     "crates/task-dispatch/src/dispatcher/cluster.rs",
+     "crates/task-dispatch/src/dispatcher/run_context.rs"
+    ],
+    "comments_for": [
+     "crates/task-dispatch/src/dispatcher/run_context.rs"
+    ],
+    "complete_plan": [
+     "crates/task-dispatch/src/dispatcher/child_tasks.rs",
+     "crates/task-dispatch/src/dispatcher/review_verdict.rs"
+    ],
+    "completion_outcomes_project": [
+     "crates/task-dispatch/src/dispatcher/decision_log_wire.rs"
+    ],
+    "create_task": [
+     "crates/task-dispatch/src/dispatcher/child_tasks.rs"
+    ],
+    "decision_log_campaign_touch": [
+     "crates/task-dispatch/src/dispatcher/decision_log_wire.rs"
+    ],
+    "decision_log_project_cos_turns": [
+     "crates/task-dispatch/src/dispatcher/decision_log_wire.rs"
+    ],
+    "decision_log_project_interventions": [
+     "crates/task-dispatch/src/dispatcher/decision_log_wire.rs"
+    ],
+    "decision_log_record_execution": [
+     "crates/task-dispatch/src/dispatcher/decision_log_wire.rs"
+    ],
+    "decision_log_record_outcome": [
+     "crates/task-dispatch/src/dispatcher/decision_log_wire.rs"
+    ],
+    "decision_log_record_proposal": [
+     "crates/task-dispatch/src/dispatcher/decision_log_wire.rs"
+    ],
+    "decision_log_record_usage": [
+     "crates/task-dispatch/src/dispatcher/decision_log_wire.rs",
+     "crates/task-dispatch/src/dispatcher/lane_assist.rs"
+    ],
+    "decision_log_run_get": [
+     "crates/task-dispatch/src/dispatcher/decision_log_wire.rs"
+    ],
+    "decisions_list": [
+     "crates/task-dispatch/src/dispatcher/planner_flow.rs",
+     "crates/task-dispatch/src/dispatcher/review_spawn.rs",
+     "crates/task-dispatch/src/dispatcher/tree_units.rs"
+    ],
+    "delegate_children": [
+     "crates/task-dispatch/src/dispatcher/sinks.rs"
+    ],
+    "effective_task_write_paths": [
+     "crates/task-dispatch/src/dispatcher/write_set_gate.rs"
+    ],
+    "eval_trial_claim_next": [
+     "crates/task-dispatch/src/dispatcher/eval_trials.rs"
+    ],
+    "eval_trial_finish": [
+     "crates/task-dispatch/src/dispatcher/eval_trials.rs"
+    ],
+    "eval_trial_get": [
+     "crates/task-dispatch/src/dispatcher/eval_trials.rs"
+    ],
+    "eval_trial_mark_scoring": [
+     "crates/task-dispatch/src/dispatcher/eval_trials.rs"
+    ],
+    "eval_trial_mark_started": [
+     "crates/task-dispatch/src/dispatcher/eval_trials.rs"
+    ],
+    "eval_trial_unclaim": [
+     "crates/task-dispatch/src/dispatcher/eval_trials.rs"
+    ],
+    "eval_trials_list": [
+     "crates/task-dispatch/src/dispatcher/eval_trials.rs"
+    ],
+    "events_for": [
+     "crates/task-dispatch/src/dispatcher/browser_prereq.rs",
+     "crates/task-dispatch/src/dispatcher/child_tasks.rs",
+     "crates/task-dispatch/src/dispatcher/cluster_job_wait.rs",
+     "crates/task-dispatch/src/dispatcher/continuation_session.rs",
+     "crates/task-dispatch/src/dispatcher/cos_chat/root_done.rs",
+     "crates/task-dispatch/src/dispatcher/decision_log_wire.rs",
+     "crates/task-dispatch/src/dispatcher/dispatch_run.rs",
+     "crates/task-dispatch/src/dispatcher/housekeeping.rs",
+     "crates/task-dispatch/src/dispatcher/leases.rs",
+     "crates/task-dispatch/src/dispatcher/phase_integration.rs",
+     "crates/task-dispatch/src/dispatcher/planner_flow.rs",
+     "crates/task-dispatch/src/dispatcher/quota_book.rs",
+     "crates/task-dispatch/src/dispatcher/review_spawn.rs",
+     "crates/task-dispatch/src/dispatcher/review_verdict.rs",
+     "crates/task-dispatch/src/dispatcher/run_context.rs",
+     "crates/task-dispatch/src/dispatcher/tree_units.rs",
+     "crates/task-dispatch/src/dispatcher/work_units.rs",
+     "crates/task-dispatch/src/dispatcher/worker_finish.rs",
+     "crates/task-dispatch/src/dispatcher/worker_task.rs",
+     "crates/task-dispatch/src/health_review/check_item.rs",
+     "crates/task-dispatch/src/health_review/design_gate.rs",
+     "crates/task-dispatch/src/health_review/design_verdict.rs",
+     "crates/task-dispatch/src/health_review/input.rs",
+     "crates/task-dispatch/src/health_review/policy_review.rs",
+     "crates/task-dispatch/src/reports.rs",
+     "crates/task-dispatch/src/root_done_probe.rs",
+     "crates/task-dispatch/src/undeclared_artifacts/backfill.rs"
+    ],
+    "events_for_with_global_ids": [
+     "crates/task-dispatch/src/dispatcher/child_tasks.rs"
+    ],
+    "events_since": [
+     "crates/task-dispatch/src/dispatcher/cos_chat/root_done.rs",
+     "crates/task-dispatch/src/dispatcher/cos_chat/triage.rs",
+     "crates/task-dispatch/src/dispatcher/project_guard.rs",
+     "crates/task-dispatch/src/dispatcher/project_wake.rs"
+    ],
+    "execution_plan_active": [
+     "crates/task-dispatch/src/dispatcher/cluster_job_wait.rs",
+     "crates/task-dispatch/src/dispatcher/leases.rs",
+     "crates/task-dispatch/src/dispatcher/phase_integration.rs",
+     "crates/task-dispatch/src/dispatcher/planner_flow.rs",
+     "crates/task-dispatch/src/dispatcher/review_spawn.rs",
+     "crates/task-dispatch/src/dispatcher/review_verdict.rs",
+     "crates/task-dispatch/src/dispatcher/tree_units.rs",
+     "crates/task-dispatch/src/dispatcher/work_units.rs",
+     "crates/task-dispatch/src/health_review/design_verdict.rs",
+     "crates/task-dispatch/src/health_review/input.rs"
+    ],
+    "extend_task_lease": [
+     "crates/task-dispatch/src/dispatcher/leases.rs",
+     "crates/task-dispatch/src/dispatcher/phase_integration.rs"
+    ],
+    "get": [
+     "crates/task-dispatch/src/approvals.rs",
+     "crates/task-dispatch/src/dispatcher/child_tasks.rs",
+     "crates/task-dispatch/src/dispatcher/cluster_job_wait.rs",
+     "crates/task-dispatch/src/dispatcher/cos_chat/attachments.rs",
+     "crates/task-dispatch/src/dispatcher/cos_chat/root_done.rs",
+     "crates/task-dispatch/src/dispatcher/credential_gate.rs",
+     "crates/task-dispatch/src/dispatcher/decision_log_wire.rs",
+     "crates/task-dispatch/src/dispatcher/dispatch_run.rs",
+     "crates/task-dispatch/src/dispatcher/followups.rs",
+     "crates/task-dispatch/src/dispatcher/housekeeping.rs",
+     "crates/task-dispatch/src/dispatcher/leases.rs",
+     "crates/task-dispatch/src/dispatcher/maintenance.rs",
+     "crates/task-dispatch/src/dispatcher/ownerless_runs.rs",
+     "crates/task-dispatch/src/dispatcher/phase_integration.rs",
+     "crates/task-dispatch/src/dispatcher/planner_flow.rs",
+     "crates/task-dispatch/src/dispatcher/project_wake.rs",
+     "crates/task-dispatch/src/dispatcher/review_spawn.rs",
+     "crates/task-dispatch/src/dispatcher/review_verdict.rs",
+     "crates/task-dispatch/src/dispatcher/run_context.rs",
+     "crates/task-dispatch/src/dispatcher/sinks.rs",
+     "crates/task-dispatch/src/dispatcher/token_budget.rs",
+     "crates/task-dispatch/src/dispatcher/tree_units.rs",
+     "crates/task-dispatch/src/dispatcher/work_units.rs",
+     "crates/task-dispatch/src/dispatcher/worker_finish.rs",
+     "crates/task-dispatch/src/dispatcher/worker_task.rs",
+     "crates/task-dispatch/src/dispatcher/workspaces.rs",
+     "crates/task-dispatch/src/health_review/design_verdict.rs",
+     "crates/task-dispatch/src/root_done_probe.rs"
+    ],
+    "halted_by_pause": [
+     "crates/task-dispatch/src/dispatcher/work_units.rs"
+    ],
+    "harness_balance_trips": [
+     "crates/task-dispatch/src/dispatcher/route_select.rs"
+    ],
+    "insert_route_decision": [
+     "crates/task-dispatch/src/dispatcher/eval_trials.rs"
+    ],
+    "insert_route_features": [
+     "crates/task-dispatch/src/dispatcher/eval_trials.rs"
+    ],
+    "insert_route_options": [
+     "crates/task-dispatch/src/dispatcher/eval_trials.rs"
+    ],
+    "insert_route_outcome": [
+     "crates/task-dispatch/src/dispatcher/eval_trials.rs"
+    ],
+    "instance_list": [
+     "crates/task-dispatch/src/dispatcher/eval_trials.rs",
+     "crates/task-dispatch/src/dispatcher/leases.rs"
+    ],
+    "integration_request_record": [
+     "crates/task-dispatch/src/dispatcher/phase_integration.rs"
+    ],
+    "integration_requests_close": [
+     "crates/task-dispatch/src/dispatcher/phase_integration.rs"
+    ],
+    "latest_event_id": [
+     "crates/task-dispatch/src/dispatcher/cos_chat/root_done.rs",
+     "crates/task-dispatch/src/dispatcher/cos_chat/triage.rs",
+     "crates/task-dispatch/src/dispatcher/project_wake.rs"
+    ],
+    "latest_routing_evidence": [
+     "crates/task-dispatch/src/dispatcher/route_select.rs"
+    ],
+    "list": [
+     "crates/task-dispatch/src/dispatcher.rs",
+     "crates/task-dispatch/src/dispatcher/browser_prereq.rs",
+     "crates/task-dispatch/src/dispatcher/child_tasks.rs",
+     "crates/task-dispatch/src/dispatcher/leases.rs",
+     "crates/task-dispatch/src/dispatcher/ownerless_runs.rs",
+     "crates/task-dispatch/src/dispatcher/tree_units.rs",
+     "crates/task-dispatch/src/dispatcher/work_units.rs",
+     "crates/task-dispatch/src/undeclared_artifacts/backfill.rs"
+    ],
+    "local_settings_events": [
+     "crates/task-dispatch/src/disk_watch.rs"
+    ],
+    "local_settings_get": [
+     "crates/task-dispatch/src/dispatcher.rs"
+    ],
+    "message_list": [
+     "crates/task-dispatch/src/dispatcher/run_context.rs"
+    ],
+    "message_page": [
+     "crates/task-dispatch/src/dispatcher/run_context.rs"
+    ],
+    "ready_tasks": [
+     "crates/task-dispatch/src/dispatcher.rs",
+     "crates/task-dispatch/src/dispatcher/dispatch_run.rs",
+     "crates/task-dispatch/src/dispatcher/tree_units.rs"
+    ],
+    "record_route_decision": [
+     "crates/task-dispatch/src/dispatcher/dispatch_run.rs"
+    ],
+    "record_route_features": [
+     "crates/task-dispatch/src/dispatcher/dispatch_run.rs"
+    ],
+    "record_run_write_set": [
+     "crates/task-dispatch/src/dispatcher/write_set_record.rs"
+    ],
+    "record_work_unit_write_set": [
+     "crates/task-dispatch/src/dispatcher/write_set_record.rs"
+    ],
+    "recover_work_unit": [
+     "crates/task-dispatch/src/dispatcher/phase_integration.rs"
+    ],
+    "renew_lease": [
+     "crates/task-dispatch/src/dispatcher/leases.rs",
+     "crates/task-dispatch/src/dispatcher/sinks.rs",
+     "crates/task-dispatch/src/dispatcher/work_units.rs"
+    ],
+    "repo_get": [
+     "crates/task-dispatch/src/dispatcher/behind_target.rs",
+     "crates/task-dispatch/src/dispatcher/workspaces.rs",
+     "crates/task-dispatch/src/root_done_probe.rs"
+    ],
+    "repo_list": [
+     "crates/task-dispatch/src/dispatcher/housekeeping.rs",
+     "crates/task-dispatch/src/dispatcher/run_context.rs",
+     "crates/task-dispatch/src/health_review/inventory.rs"
+    ],
+    "review_repair_apply": [
+     "crates/task-dispatch/src/dispatcher/review_verdict.rs"
+    ],
+    "routing_evidence_at": [
+     "crates/task-dispatch/src/dispatcher/route_select.rs"
+    ],
+    "routing_stage": [
+     "crates/task-dispatch/src/dispatcher/route_select.rs"
+    ],
+    "run_index_finish": [
+     "crates/task-dispatch/src/dispatcher/eval_trials.rs",
+     "crates/task-dispatch/src/dispatcher/planner_flow.rs",
+     "crates/task-dispatch/src/dispatcher/worker_finish.rs",
+     "crates/task-dispatch/src/health_review/design_gate.rs"
+    ],
+    "run_index_get": [
+     "crates/task-dispatch/src/dispatcher/eval_trials.rs",
+     "crates/task-dispatch/src/dispatcher/ownerless_runs.rs",
+     "crates/task-dispatch/src/dispatcher/phase_integration.rs",
+     "crates/task-dispatch/src/dispatcher/planner_flow.rs",
+     "crates/task-dispatch/src/dispatcher/work_units.rs",
+     "crates/task-dispatch/src/dispatcher/worker_finish.rs"
+    ],
+    "run_index_progress_usage": [
+     "crates/task-dispatch/src/dispatcher/sinks.rs"
+    ],
+    "run_index_start": [
+     "crates/task-dispatch/src/dispatcher/dispatch_run.rs",
+     "crates/task-dispatch/src/dispatcher/eval_trials.rs",
+     "crates/task-dispatch/src/dispatcher/review_spawn.rs",
+     "crates/task-dispatch/src/dispatcher/work_units.rs",
+     "crates/task-dispatch/src/health_review/design_gate.rs"
+    ],
+    "run_record_selection": [
+     "crates/task-dispatch/src/dispatcher/route_select.rs"
+    ],
+    "running_tasks_with_runnable_work_units": [
+     "crates/task-dispatch/src/dispatcher/work_units.rs"
+    ],
+    "runs_for_task": [
+     "crates/task-dispatch/src/dispatcher/continuation_session.rs",
+     "crates/task-dispatch/src/dispatcher/dispatch_run.rs",
+     "crates/task-dispatch/src/dispatcher/review_spawn.rs",
+     "crates/task-dispatch/src/dispatcher/token_budget.rs",
+     "crates/task-dispatch/src/health_review/design_gate.rs",
+     "crates/task-dispatch/src/undeclared_artifacts/backfill.rs"
+    ],
+    "runs_for_work_unit": [
+     "crates/task-dispatch/src/dispatcher/continuation_session.rs",
+     "crates/task-dispatch/src/dispatcher/work_units.rs"
+    ],
+    "runs_running": [
+     "crates/task-dispatch/src/dispatcher/ownerless_runs.rs"
+    ],
+    "set_account_limit": [
+     "crates/task-dispatch/src/dispatcher.rs"
+    ],
+    "task_campaign_resolve": [
+     "crates/task-dispatch/src/dispatcher/decision_log_wire.rs",
+     "crates/task-dispatch/src/dispatcher/lane_assist.rs",
+     "crates/task-dispatch/src/dispatcher/run_context.rs",
+     "crates/task-dispatch/src/dispatcher/variant_pin.rs"
+    ],
+    "task_routing_override": [
+     "crates/task-dispatch/src/dispatcher/dispatch_run.rs",
+     "crates/task-dispatch/src/dispatcher/lane_assist.rs",
+     "crates/task-dispatch/src/dispatcher/review_spawn.rs"
+    ],
+    "task_workspace_root_get": [
+     "crates/task-dispatch/src/dispatcher/workspaces.rs"
+    ],
+    "tasks_with_open_task_units": [
+     "crates/task-dispatch/src/dispatcher/tree_units.rs"
+    ],
+    "tree_child_create": [
+     "crates/task-dispatch/src/dispatcher/tree_units.rs"
+    ],
+    "try_start_work_unit_integration": [
+     "crates/task-dispatch/src/dispatcher/phase_integration.rs"
+    ],
+    "update_task": [
+     "crates/task-dispatch/src/dispatcher/dispatch_run.rs",
+     "crates/task-dispatch/src/dispatcher/planner_flow.rs",
+     "crates/task-dispatch/src/dispatcher/tree_units.rs",
+     "crates/task-dispatch/src/dispatcher/work_units.rs",
+     "crates/task-dispatch/src/dispatcher/worker_task.rs"
+    ],
+    "work_unit_expected_write_paths": [
+     "crates/task-dispatch/src/dispatcher/write_set_gate.rs"
+    ],
+    "work_unit_get": [
+     "crates/task-dispatch/src/dispatcher/housekeeping.rs",
+     "crates/task-dispatch/src/dispatcher/planner_flow.rs",
+     "crates/task-dispatch/src/dispatcher/work_units.rs"
+    ],
+    "work_unit_transition": [
+     "crates/task-dispatch/src/credential_resume.rs",
+     "crates/task-dispatch/src/dispatcher/phase_integration.rs",
+     "crates/task-dispatch/src/dispatcher/tree_units.rs",
+     "crates/task-dispatch/src/dispatcher/work_units.rs",
+     "crates/task-dispatch/src/dispatcher/worker_finish.rs"
+    ],
+    "work_unit_transition_with_events": [
+     "crates/task-dispatch/src/dispatcher/worker_finish.rs"
+    ],
+    "work_units_apply": [
+     "crates/task-dispatch/src/dispatcher/cluster_job_wait.rs",
+     "crates/task-dispatch/src/dispatcher/credential_gate.rs",
+     "crates/task-dispatch/src/dispatcher/phase_integration.rs",
+     "crates/task-dispatch/src/dispatcher/tree_units.rs",
+     "crates/task-dispatch/src/dispatcher/work_units.rs",
+     "crates/task-dispatch/src/dispatcher/worker_finish.rs"
+    ],
+    "work_units_for": [
+     "crates/task-dispatch/src/credential_resume.rs",
+     "crates/task-dispatch/src/dispatcher/cluster_job_wait.rs",
+     "crates/task-dispatch/src/dispatcher/credential_gate.rs",
+     "crates/task-dispatch/src/dispatcher/followups.rs",
+     "crates/task-dispatch/src/dispatcher/leases.rs",
+     "crates/task-dispatch/src/dispatcher/ownerless_runs.rs",
+     "crates/task-dispatch/src/dispatcher/phase_integration.rs",
+     "crates/task-dispatch/src/dispatcher/planner_flow.rs",
+     "crates/task-dispatch/src/dispatcher/review_spawn.rs",
+     "crates/task-dispatch/src/dispatcher/review_verdict.rs",
+     "crates/task-dispatch/src/dispatcher/tree_units.rs",
+     "crates/task-dispatch/src/dispatcher/work_units.rs",
+     "crates/task-dispatch/src/dispatcher/worker_finish.rs",
+     "crates/task-dispatch/src/health_review/design_verdict.rs"
+    ]
+   },
+   "sqlite_store_opens_in_tests": 618
+  },
+  "task-ops": {
+   "taskstore_mentions": 347,
+   "taskstore_mentions_tests": 10,
+   "methods": [
+    "append_event",
+    "apply_transition",
+    "apply_transition_with_events",
+    "behind_targets",
+    "children",
+    "comment_add",
+    "comments_for",
+    "console_action_run_claim",
+    "count_by_status",
+    "create_task",
+    "create_task_with_origin",
+    "db_waits_for",
+    "decision_get",
+    "decision_resolve_apply",
+    "decisions_list",
+    "decisions_replace",
+    "effective_task_write_paths",
+    "events_for",
+    "events_since",
+    "execution_plan_active",
+    "execution_plan_adopt",
+    "execution_plan_adopt_delegating",
+    "execution_plan_adopt_tree",
+    "execution_plan_list",
+    "execution_plan_replan",
+    "execution_plans_replace",
+    "get",
+    "integration_request_answer",
+    "integration_request_record",
+    "integration_requests_close",
+    "latest_event_id",
+    "latest_event_rows",
+    "latest_event_ts",
+    "latest_routing_evidence",
+    "list",
+    "message_append",
+    "message_list",
+    "message_page",
+    "milestone_get",
+    "open_integration_requests",
+    "project_create",
+    "record_behind_target",
+    "repo_create",
+    "repo_get",
+    "repo_list",
+    "retry_task",
+    "run_index_get",
+    "run_selections_for_task",
+    "run_write_sets",
+    "runs_for_task",
+    "runs_for_work_unit",
+    "runs_replace",
+    "set_routing_stage",
+    "task_campaign_resolve",
+    "task_integration_get",
+    "task_integration_list",
+    "task_integration_save_sweep",
+    "task_integration_upsert",
+    "task_routing_override",
+    "tasks_with_events",
+    "tree_adopt_apply",
+    "tree_tasks",
+    "unblock_fire",
+    "unblock_pending",
+    "update_task",
+    "work_unit_expected_write_paths",
+    "work_unit_transition",
+    "work_unit_write_sets",
+    "work_units_apply",
+    "work_units_for",
+    "work_units_replace"
+   ],
+   "method_count": 71,
+   "methods_tests_only": [
+    "acquire_lease",
+    "halted_by_pause",
+    "insert",
+    "local_settings_set",
+    "milestone_create",
+    "milestone_set_lifecycle",
+    "project_set_auto_integrate",
+    "project_set_lifecycle",
+    "ready_tasks",
+    "record_run_write_set",
+    "run_index_finish",
+    "run_index_start",
+    "set_task_expected_write_paths",
+    "unblocks_of"
+   ],
+   "supertrait_methods": [
+    "approval_decide",
+    "approval_get",
+    "approval_list",
+    "browser_waits_expire",
+    "browser_waits_pending",
+    "cluster_job_waits_for_task",
+    "cluster_job_waits_waiting",
+    "credential_waits_list_waiting",
+    "cron_job_delete",
+    "cron_job_get",
+    "cron_job_get_by_name",
+    "cron_job_insert",
+    "cron_job_list",
+    "cron_job_record",
+    "cron_job_run_last_created",
+    "cron_job_run_queued",
+    "cron_job_run_update",
+    "cron_job_update",
+    "delivery_get",
+    "delivery_list",
+    "delivery_save",
+    "disk_watch_states",
+    "event_rows_for",
+    "feed_cursor_get",
+    "knowledge_run_get",
+    "list_page",
+    "milestone_list",
+    "notice_record",
+    "notice_record_batch",
+    "notice_sources_known",
+    "org_get",
+    "org_list",
+    "project_get",
+    "project_list",
+    "report_append",
+    "report_list",
+    "report_page_since",
+    "script_inbox_open",
+    "standing_rule_append",
+    "standing_rule_list"
+   ],
+   "store_traits_named": [
+    "NoticeStore",
+    "OrgDirectory",
+    "ReportStore",
+    "TaskStore"
+   ],
+   "files_calling": {
+    "append_event": [
+     "crates/task-ops/src/comment.rs",
+     "crates/task-ops/src/delivery.rs",
+     "crates/task-ops/src/followup.rs",
+     "crates/task-ops/src/inbox/health_repeat.rs",
+     "crates/task-ops/src/integrate_task.rs",
+     "crates/task-ops/src/op_writes.rs",
+     "crates/task-ops/src/plan_gate.rs",
+     "crates/task-ops/src/routing_outcome.rs",
+     "crates/task-ops/src/stranded/reintegrate.rs"
+    ],
+    "apply_transition": [
+     "crates/task-ops/src/comment.rs",
+     "crates/task-ops/src/conversation.rs",
+     "crates/task-ops/src/edit.rs",
+     "crates/task-ops/src/gate.rs"
+    ],
+    "apply_transition_with_events": [
+     "crates/task-ops/src/op_writes.rs",
+     "crates/task-ops/src/stranded/reintegrate.rs"
+    ],
+    "behind_targets": [
+     "crates/task-ops/src/behind_target.rs"
+    ],
+    "children": [
+     "crates/task-ops/src/delegate.rs",
+     "crates/task-ops/src/delegate/child_wait.rs",
+     "crates/task-ops/src/lifecycle.rs",
+     "crates/task-ops/src/project_plan.rs",
+     "crates/task-ops/src/project_snapshot.rs"
+    ],
+    "comment_add": [
+     "crates/task-ops/src/comment.rs"
+    ],
+    "comments_for": [
+     "crates/task-ops/src/comment.rs",
+     "crates/task-ops/src/delegate/child_wait.rs"
+    ],
+    "console_action_run_claim": [
+     "crates/task-ops/src/actions.rs"
+    ],
+    "count_by_status": [
+     "crates/task-ops/src/inbox/read.rs",
+     "crates/task-ops/src/view.rs"
+    ],
+    "create_task": [
+     "crates/task-ops/src/add.rs",
+     "crates/task-ops/src/conversation.rs",
+     "crates/task-ops/src/cron_jobs.rs",
+     "crates/task-ops/src/plan.rs"
+    ],
+    "create_task_with_origin": [
+     "crates/task-ops/src/followup.rs"
+    ],
+    "db_waits_for": [
+     "crates/task-ops/src/wait.rs"
+    ],
+    "decision_get": [
+     "crates/task-ops/src/decision.rs",
+     "crates/task-ops/src/human_inbox/item_task.rs"
+    ],
+    "decision_resolve_apply": [
+     "crates/task-ops/src/decision.rs"
+    ],
+    "decisions_list": [
+     "crates/task-ops/src/decision.rs",
+     "crates/task-ops/src/inbox.rs",
+     "crates/task-ops/src/plan_gate.rs",
+     "crates/task-ops/src/replay.rs",
+     "crates/task-ops/src/tree.rs",
+     "crates/task-ops/src/tree_plan.rs",
+     "crates/task-ops/src/tree_view.rs",
+     "crates/task-ops/src/wait.rs"
+    ],
+    "decisions_replace": [
+     "crates/task-ops/src/replay.rs"
+    ],
+    "effective_task_write_paths": [
+     "crates/task-ops/src/view.rs"
+    ],
+    "events_for": [
+     "crates/task-ops/src/approval.rs",
+     "crates/task-ops/src/comment.rs",
+     "crates/task-ops/src/decision.rs",
+     "crates/task-ops/src/delegate.rs",
+     "crates/task-ops/src/delivery.rs",
+     "crates/task-ops/src/dep_integration.rs",
+     "crates/task-ops/src/edit.rs",
+     "crates/task-ops/src/execution.rs",
+     "crates/task-ops/src/gate.rs",
+     "crates/task-ops/src/integrate_task.rs",
+     "crates/task-ops/src/phase_gate.rs",
+     "crates/task-ops/src/plan_gate.rs",
+     "crates/task-ops/src/project_plan.rs",
+     "crates/task-ops/src/project_snapshot.rs",
+     "crates/task-ops/src/routing_audit.rs",
+     "crates/task-ops/src/routing_outcome.rs",
+     "crates/task-ops/src/stranded/reintegrate.rs",
+     "crates/task-ops/src/tree.rs",
+     "crates/task-ops/src/tree_view.rs",
+     "crates/task-ops/src/wait.rs"
+    ],
+    "events_since": [
+     "crates/task-ops/src/gate.rs",
+     "crates/task-ops/src/notify_feed.rs"
+    ],
+    "execution_plan_active": [
+     "crates/task-ops/src/decision.rs",
+     "crates/task-ops/src/delivery.rs",
+     "crates/task-ops/src/execution.rs",
+     "crates/task-ops/src/inbox.rs",
+     "crates/task-ops/src/regate.rs",
+     "crates/task-ops/src/tree.rs",
+     "crates/task-ops/src/tree_adopt.rs",
+     "crates/task-ops/src/view.rs",
+     "crates/task-ops/src/wait.rs"
+    ],
+    "execution_plan_adopt": [
+     "crates/task-ops/src/execution.rs"
+    ],
+    "execution_plan_adopt_delegating": [
+     "crates/task-ops/src/execution.rs"
+    ],
+    "execution_plan_adopt_tree": [
+     "crates/task-ops/src/execution.rs"
+    ],
+    "execution_plan_list": [
+     "crates/task-ops/src/inbox.rs",
+     "crates/task-ops/src/replay.rs",
+     "crates/task-ops/src/tree.rs",
+     "crates/task-ops/src/tree_view.rs",
+     "crates/task-ops/src/view.rs"
+    ],
+    "execution_plan_replan": [
+     "crates/task-ops/src/execution.rs"
+    ],
+    "execution_plans_replace": [
+     "crates/task-ops/src/replay.rs"
+    ],
+    "get": [
+     "crates/task-ops/src/add.rs",
+     "crates/task-ops/src/approval.rs",
+     "crates/task-ops/src/comment.rs",
+     "crates/task-ops/src/conversation.rs",
+     "crates/task-ops/src/cron_jobs.rs",
+     "crates/task-ops/src/decision.rs",
+     "crates/task-ops/src/delegate.rs",
+     "crates/task-ops/src/delivery.rs",
+     "crates/task-ops/src/dep_integration.rs",
+     "crates/task-ops/src/edit.rs",
+     "crates/task-ops/src/execution.rs",
+     "crates/task-ops/src/followup.rs",
+     "crates/task-ops/src/gate.rs",
+     "crates/task-ops/src/health_debt.rs",
+     "crates/task-ops/src/human_inbox/read.rs",
+     "crates/task-ops/src/integrate_task.rs",
+     "crates/task-ops/src/integrate_task/phase.rs",
+     "crates/task-ops/src/lifecycle.rs",
+     "crates/task-ops/src/notify_feed.rs",
+     "crates/task-ops/src/phase_gate.rs",
+     "crates/task-ops/src/plan_gate.rs",
+     "crates/task-ops/src/project_plan.rs",
+     "crates/task-ops/src/regate.rs",
+     "crates/task-ops/src/replay.rs",
+     "crates/task-ops/src/retry.rs",
+     "crates/task-ops/src/routing_audit.rs",
+     "crates/task-ops/src/routing_stage.rs",
+     "crates/task-ops/src/stranded/reintegrate.rs",
+     "crates/task-ops/src/tree.rs",
+     "crates/task-ops/src/tree_adopt.rs",
+     "crates/task-ops/src/tree_view.rs",
+     "crates/task-ops/src/unblocks.rs",
+     "crates/task-ops/src/view.rs",
+     "crates/task-ops/src/wait.rs"
+    ],
+    "integration_request_answer": [
+     "crates/task-ops/src/integrate_task.rs",
+     "crates/task-ops/src/integrate_task/phase.rs"
+    ],
+    "integration_request_record": [
+     "crates/task-ops/src/stranded.rs",
+     "crates/task-ops/src/stranded/reintegrate.rs"
+    ],
+    "integration_requests_close": [
+     "crates/task-ops/src/gate.rs"
+    ],
+    "latest_event_id": [
+     "crates/task-ops/src/gate.rs"
+    ],
+    "latest_event_rows": [
+     "crates/task-ops/src/inbox.rs",
+     "crates/task-ops/src/inbox/dependents_reopened.rs"
+    ],
+    "latest_event_ts": [
+     "crates/task-ops/src/stagnation.rs"
+    ],
+    "latest_routing_evidence": [
+     "crates/task-ops/src/routing_stage.rs"
+    ],
+    "list": [
+     "crates/task-ops/src/delivery.rs",
+     "crates/task-ops/src/followup.rs",
+     "crates/task-ops/src/graph.rs",
+     "crates/task-ops/src/inbox/read.rs",
+     "crates/task-ops/src/project_snapshot.rs",
+     "crates/task-ops/src/replay.rs",
+     "crates/task-ops/src/roadmap.rs",
+     "crates/task-ops/src/routing_outcome.rs",
+     "crates/task-ops/src/stagnation.rs",
+     "crates/task-ops/src/view.rs"
+    ],
+    "message_append": [
+     "crates/task-ops/src/conversation.rs"
+    ],
+    "message_list": [
+     "crates/task-ops/src/actions.rs",
+     "crates/task-ops/src/milestone_review.rs"
+    ],
+    "message_page": [
+     "crates/task-ops/src/notify_feed.rs"
+    ],
+    "milestone_get": [
+     "crates/task-ops/src/project_plan.rs"
+    ],
+    "open_integration_requests": [
+     "crates/task-ops/src/inbox.rs",
+     "crates/task-ops/src/integrate_task.rs"
+    ],
+    "project_create": [
+     "crates/task-ops/src/actions.rs"
+    ],
+    "record_behind_target": [
+     "crates/task-ops/src/behind_target.rs"
+    ],
+    "repo_create": [
+     "crates/task-ops/src/actions.rs"
+    ],
+    "repo_get": [
+     "crates/task-ops/src/dep_integration.rs",
+     "crates/task-ops/src/inbox.rs",
+     "crates/task-ops/src/integrate_task.rs",
+     "crates/task-ops/src/routing_labels.rs"
+    ],
+    "repo_list": [
+     "crates/task-ops/src/add.rs",
+     "crates/task-ops/src/delegate.rs",
+     "crates/task-ops/src/delivery.rs",
+     "crates/task-ops/src/dep_integration.rs",
+     "crates/task-ops/src/edit.rs",
+     "crates/task-ops/src/followup.rs",
+     "crates/task-ops/src/health_debt.rs"
+    ],
+    "retry_task": [
+     "crates/task-ops/src/retry.rs"
+    ],
+    "run_index_get": [
+     "crates/task-ops/src/view.rs"
+    ],
+    "run_selections_for_task": [
+     "crates/task-ops/src/view.rs"
+    ],
+    "run_write_sets": [
+     "crates/task-ops/src/routing_labels.rs",
+     "crates/task-ops/src/view.rs"
+    ],
+    "runs_for_task": [
+     "crates/task-ops/src/replay.rs",
+     "crates/task-ops/src/tree.rs",
+     "crates/task-ops/src/tree_view.rs",
+     "crates/task-ops/src/view.rs"
+    ],
+    "runs_for_work_unit": [
+     "crates/task-ops/src/delivery.rs"
+    ],
+    "runs_replace": [
+     "crates/task-ops/src/replay.rs"
+    ],
+    "set_routing_stage": [
+     "crates/task-ops/src/routing_stage.rs"
+    ],
+    "task_campaign_resolve": [
+     "crates/task-ops/src/view.rs"
+    ],
+    "task_integration_get": [
+     "crates/task-ops/src/stranded.rs",
+     "crates/task-ops/src/stranded/reintegrate.rs"
+    ],
+    "task_integration_list": [
+     "crates/task-ops/src/dep_integration.rs",
+     "crates/task-ops/src/inbox.rs"
+    ],
+    "task_integration_save_sweep": [
+     "crates/task-ops/src/stranded.rs"
+    ],
+    "task_integration_upsert": [
+     "crates/task-ops/src/op_writes.rs",
+     "crates/task-ops/src/stranded/reintegrate.rs"
+    ],
+    "task_routing_override": [
+     "crates/task-ops/src/routing_outcome.rs",
+     "crates/task-ops/src/view.rs"
+    ],
+    "tasks_with_events": [
+     "crates/task-ops/src/replay.rs"
+    ],
+    "tree_adopt_apply": [
+     "crates/task-ops/src/tree_adopt.rs"
+    ],
+    "tree_tasks": [
+     "crates/task-ops/src/lifecycle.rs",
+     "crates/task-ops/src/tree.rs",
+     "crates/task-ops/src/tree_adopt.rs",
+     "crates/task-ops/src/tree_view.rs"
+    ],
+    "unblock_fire": [
+     "crates/task-ops/src/unblocks.rs"
+    ],
+    "unblock_pending": [
+     "crates/task-ops/src/unblocks.rs"
+    ],
+    "update_task": [
+     "crates/task-ops/src/edit.rs",
+     "crates/task-ops/src/lifecycle.rs",
+     "crates/task-ops/src/regate.rs"
+    ],
+    "work_unit_expected_write_paths": [
+     "crates/task-ops/src/view.rs"
+    ],
+    "work_unit_transition": [
+     "crates/task-ops/src/integrate_task/phase.rs"
+    ],
+    "work_unit_write_sets": [
+     "crates/task-ops/src/routing_labels.rs",
+     "crates/task-ops/src/view.rs"
+    ],
+    "work_units_apply": [
+     "crates/task-ops/src/decision.rs"
+    ],
+    "work_units_for": [
+     "crates/task-ops/src/decision.rs",
+     "crates/task-ops/src/delivery.rs",
+     "crates/task-ops/src/execution.rs",
+     "crates/task-ops/src/gate.rs",
+     "crates/task-ops/src/inbox.rs",
+     "crates/task-ops/src/integrate_task/phase.rs",
+     "crates/task-ops/src/plan_gate.rs",
+     "crates/task-ops/src/project_plan.rs",
+     "crates/task-ops/src/replay.rs",
+     "crates/task-ops/src/tree.rs",
+     "crates/task-ops/src/tree_adopt.rs",
+     "crates/task-ops/src/tree_plan.rs",
+     "crates/task-ops/src/tree_view.rs",
+     "crates/task-ops/src/view.rs",
+     "crates/task-ops/src/wait.rs"
+    ],
+    "work_units_replace": [
+     "crates/task-ops/src/replay.rs"
+    ]
+   },
+   "sqlite_store_opens_in_tests": 325
+  },
+  "task-worker": {
+   "taskstore_mentions": 8,
+   "taskstore_mentions_tests": 2,
+   "methods": [
+    "children",
+    "list",
+    "runs_running",
+    "work_unit_get"
+   ],
+   "method_count": 4,
+   "methods_tests_only": [
+    "acquire_lease",
+    "apply_transition_with_events",
+    "get",
+    "insert",
+    "task_workspace_root_pin",
+    "update_task"
+   ],
+   "supertrait_methods": [
+    "browser_session_agent_action",
+    "browser_wait_open"
+   ],
+   "store_traits_named": [
+    "BrowserWaitStore",
+    "TaskStore"
+   ],
+   "files_calling": {
+    "children": [
+     "crates/task-worker/src/workspace_targets.rs"
+    ],
+    "list": [
+     "crates/task-worker/src/workspace_prune.rs",
+     "crates/task-worker/src/workspace_targets.rs"
+    ],
+    "runs_running": [
+     "crates/task-worker/src/workspace_prune.rs",
+     "crates/task-worker/src/workspace_targets.rs"
+    ],
+    "work_unit_get": [
+     "crates/task-worker/src/scratch/gc.rs"
+    ]
+   },
+   "sqlite_store_opens_in_tests": 13
+  }
+ },
+ "unreferenced_methods": [],
+ "test_only_methods": {
+  "task_expected_write_paths": [
+   "crates/task-core/src/store/write_sets.rs"
+  ],
+  "release_lease": [
+   "crates/task-core/src/store/tests.rs"
+  ],
+  "project_set_status": [
+   "crates/celeris/tests/notify.rs",
+   "crates/celeris/tests/project_controller_e2e.rs",
+   "crates/task-api/tests/project_wake_human.rs",
+   "crates/task-core/src/store/tests.rs",
+   "crates/task-dispatch/src/dispatcher/tests/long_horizon_pilot.rs",
+   "crates/task-dispatch/src/dispatcher/tests/project_controller_replay.rs",
+   "crates/task-dispatch/src/dispatcher/tests/project_recovery.rs",
+   "crates/task-dispatch/src/dispatcher/tests/project_wake_effects.rs"
+  ],
+  "project_set_workspace": [
+   "crates/task-core/src/store/tests.rs"
+  ],
+  "project_set_lifecycle": [
+   "crates/task-api/tests/project_wake_human.rs",
+   "crates/task-core/src/store/tests.rs",
+   "crates/task-ops/src/lifecycle/tests.rs"
+  ],
+  "project_set_archived_at": [
+   "crates/task-api/tests/project_wake_human.rs",
+   "crates/task-core/src/store/tests.rs"
+  ],
+  "project_set_slug": [
+   "crates/task-core/src/store/tests.rs"
+  ],
+  "project_set_auto_integrate": [
+   "crates/celeris/src/delivery/tests.rs",
+   "crates/task-ops/src/delivery/tests.rs"
+  ],
+  "repo_active_tasks": [
+   "crates/task-core/src/store/tests.rs"
+  ],
+  "integration_get": [
+   "crates/task-core/src/store/tests.rs"
+  ],
+  "milestone_set_plan_key": [
+   "crates/task-dispatch/src/dispatcher/tests/planning_and_gate.rs"
+  ],
+  "milestone_set_status": [
+   "crates/task-core/src/store/tests.rs"
+  ],
+  "milestone_set_lifecycle": [
+   "crates/task-api/tests/lifecycle.rs",
+   "crates/task-core/src/store/tests.rs",
+   "crates/task-ops/src/lifecycle/tests.rs"
+  ],
+  "unblocks_of": [
+   "crates/task-api/tests/unblocks.rs",
+   "crates/task-ops/src/unblocks/tests.rs"
+  ]
+ },
+ "table_writers": {
+  "account_limits": [
+   "crates/task-core/src/store/account_limits.rs"
+  ],
+  "approvals": [
+   "crates/task-core/src/approval.rs",
+   "crates/task-core/src/chat/override_op.rs"
+  ],
+  "authority_audit": [
+   "crates/task-core/src/store/authority.rs"
+  ],
+  "authority_grants": [
+   "crates/task-core/src/store/authority.rs"
+  ],
+  "authority_proposals": [
+   "crates/task-core/src/store/authority.rs"
+  ],
+  "browser_approvals": [
+   "crates/task-core/src/browser_wait/sql.rs"
+  ],
+  "browser_control_actions": [
+   "crates/task-core/src/browser_store.rs"
+  ],
+  "browser_control_state": [
+   "crates/task-core/src/browser_control_ops.rs",
+   "crates/task-core/src/browser_store.rs"
+  ],
+  "browser_credentials": [
+   "crates/task-core/src/browser_wait/sql.rs"
+  ],
+  "browser_identities": [
+   "crates/task-core/src/browser_store.rs"
+  ],
+  "browser_live_events": [
+   "crates/task-core/src/browser_store.rs"
+  ],
+  "browser_site_policies": [
+   "crates/task-core/src/store/site_policies.rs"
+  ],
+  "browser_site_policy_events": [
+   "crates/task-core/src/store/site_policies.rs"
+  ],
+  "browser_task_policies": [
+   "crates/task-core/src/browser_wait/sql.rs",
+   "crates/task-core/src/store/browser_policy_auto.rs"
+  ],
+  "browser_trusted_devices": [
+   "crates/task-core/src/store/trusted_devices.rs"
+  ],
+  "browser_waits": [
+   "crates/task-core/src/browser_wait/sql.rs"
+  ],
+  "chat_attachment_refs": [
+   "crates/task-core/src/chat/attachments.rs",
+   "crates/task-core/src/chat/store.rs"
+  ],
+  "chat_attachments": [
+   "crates/task-core/src/chat/attachments.rs"
+  ],
+  "chat_client_requests": [
+   "crates/task-core/src/chat/attachments.rs"
+  ],
+  "chat_events": [
+   "crates/task-core/src/chat/run_store.rs",
+   "crates/task-core/src/chat/store.rs"
+  ],
+  "chat_messages": [
+   "crates/task-core/src/chat/run_store.rs",
+   "crates/task-core/src/chat/store.rs",
+   "crates/task-core/src/chat/triage.rs",
+   "crates/task-core/src/store/legacy.rs"
+  ],
+  "chat_runs": [
+   "crates/task-core/src/chat/run_store.rs",
+   "crates/task-core/src/chat/session.rs",
+   "crates/task-core/src/chat/triage.rs"
+  ],
+  "chat_threads": [
+   "crates/task-core/src/chat/credential.rs",
+   "crates/task-core/src/chat/review.rs",
+   "crates/task-core/src/chat/store.rs",
+   "crates/task-core/src/chat/triage.rs",
+   "crates/task-core/src/store/legacy.rs"
+  ],
+  "chat_upload_reservations": [
+   "crates/task-core/src/chat/attachments.rs"
+  ],
+  "cluster_connection_log": [
+   "crates/task-core/src/store/cluster.rs"
+  ],
+  "cluster_job_waits": [
+   "crates/task-core/src/cluster_job.rs"
+  ],
+  "cluster_settings": [
+   "crates/task-core/src/store/cluster.rs"
+  ],
+  "completion_outcomes": [
+   "crates/task-core/src/store/completion_outcomes.rs"
+  ],
+  "config_events": [
+   "crates/task-core/src/store/config_events.rs"
+  ],
+  "console_action_runs": [
+   "crates/task-core/src/store/messages.rs"
+  ],
+  "cos_digest_shadow_outbox": [
+   "crates/task-core/src/store/cos_digest_apply.rs"
+  ],
+  "cos_inbox_items": [
+   "crates/task-core/src/chat/override_op.rs",
+   "crates/task-core/src/chat/triage.rs"
+  ],
+  "cos_legacy_notification_links": [
+   "crates/task-core/src/chat/triage.rs"
+  ],
+  "cos_notification_routes": [
+   "crates/task-core/src/chat/triage.rs"
+  ],
+  "cos_operations": [
+   "crates/task-core/src/chat/operations.rs",
+   "crates/task-core/src/chat/override_op.rs"
+  ],
+  "cos_run_credentials": [
+   "crates/task-core/src/chat/credential.rs"
+  ],
+  "credential_wait_events": [
+   "crates/task-core/src/store/credential_wait.rs"
+  ],
+  "credential_waits": [
+   "crates/task-core/src/store/credential_wait.rs"
+  ],
+  "cron_job_runs": [
+   "crates/task-core/src/cron/store.rs"
+  ],
+  "cron_jobs": [
+   "crates/task-core/src/cron/store.rs"
+  ],
+  "daemon_instances": [
+   "crates/task-core/src/store/instances.rs"
+  ],
+  "decision_log_campaign_activity": [
+   "crates/task-core/src/store/decision_log.rs"
+  ],
+  "decision_log_interventions": [
+   "crates/task-core/src/store/decision_log.rs"
+  ],
+  "decision_log_runs": [
+   "crates/task-core/src/store/decision_log.rs"
+  ],
+  "decision_log_usage": [
+   "crates/task-core/src/store/decision_log.rs"
+  ],
+  "decisions": [
+   "crates/task-core/src/store/events.rs",
+   "crates/task-core/src/store/execution/decisions.rs"
+  ],
+  "deliveries": [
+   "crates/task-core/src/delivery.rs"
+  ],
+  "disk_watch_state": [
+   "crates/task-core/src/disk_watch.rs"
+  ],
+  "eval_trials": [
+   "crates/task-core/src/store/eval_trials.rs"
+  ],
+  "events": [
+   "crates/task-core/src/store/events.rs",
+   "crates/task-core/src/store/tasks.rs"
+  ],
+  "execution_plans": [
+   "crates/task-core/src/store/execution/plans.rs",
+   "crates/task-core/src/store/execution/repair.rs"
+  ],
+  "feed_cursor": [
+   "crates/task-core/src/chat/run_store.rs",
+   "crates/task-core/src/chat/triage.rs",
+   "crates/task-core/src/feed.rs",
+   "crates/task-core/src/store/legacy.rs",
+   "crates/task-core/src/store/project_wake.rs"
+  ],
+  "feed_notices": [
+   "crates/task-core/src/feed.rs"
+  ],
+  "feed_sources": [
+   "crates/task-core/src/feed.rs"
+  ],
+  "harness_balance_trips": [
+   "crates/task-core/src/store/completion_outcomes.rs"
+  ],
+  "health_inventory_runs": [
+   "crates/task-core/src/health_inventory/store.rs"
+  ],
+  "knowledge_runs": [
+   "crates/task-core/src/knowledge_run.rs"
+  ],
+  "llm_proxy_requests": [
+   "crates/llm-proxy/src/log.rs",
+   "crates/task-core/src/store/routing_log.rs"
+  ],
+  "local_settings": [
+   "crates/task-core/src/store/local_machine.rs"
+  ],
+  "local_settings_events": [
+   "crates/task-core/src/store/local_machine.rs"
+  ],
+  "mcp_calls": [
+   "crates/task-core/src/mcp.rs"
+  ],
+  "mcp_clients": [
+   "crates/task-core/src/mcp.rs"
+  ],
+  "messages": [
+   "crates/task-core/src/store/messages.rs"
+  ],
+  "milestones": [
+   "crates/task-core/src/store/projects.rs"
+  ],
+  "model_catalog": [
+   "crates/task-core/src/store/model_catalog.rs"
+  ],
+  "model_catalog_discovery": [
+   "crates/task-core/src/store/model_catalog.rs"
+  ],
+  "model_catalog_overrides": [
+   "crates/task-core/src/store/model_catalog.rs"
+  ],
+  "node_sessions": [
+   "crates/task-core/src/chat/session.rs",
+   "crates/task-core/src/node_session.rs",
+   "crates/task-core/src/store/legacy.rs"
+  ],
+  "notification_scan_state": [
+   "crates/task-core/src/notify.rs"
+  ],
+  "notifications": [
+   "crates/task-core/src/chat/triage.rs",
+   "crates/task-core/src/notify.rs"
+  ],
+  "org_browser_events": [
+   "crates/task-core/src/store/org.rs"
+  ],
+  "org_nodes": [
+   "crates/task-core/src/store/org.rs"
+  ],
+  "project_briefs": [
+   "crates/task-core/src/store/project_briefs.rs"
+  ],
+  "project_controller_decisions": [
+   "crates/task-core/src/store/project_guard.rs",
+   "crates/task-core/src/store/project_wake.rs",
+   "crates/task-core/src/store/project_wake_effect.rs"
+  ],
+  "project_controller_state": [
+   "crates/task-core/src/store/authority.rs",
+   "crates/task-core/src/store/project_guard.rs",
+   "crates/task-core/src/store/project_wake.rs",
+   "crates/task-core/src/store/project_wake_effect.rs"
+  ],
+  "project_repos": [
+   "crates/task-core/src/store/projects.rs",
+   "crates/task-core/src/store/repos.rs"
+  ],
+  "project_retention_permit": [
+   "crates/task-core/src/store/project_retention.rs"
+  ],
+  "project_retention_runs": [
+   "crates/task-core/src/store/project_retention.rs"
+  ],
+  "project_roadmap_outcome_events": [
+   "crates/task-core/src/store/roadmap.rs"
+  ],
+  "project_roadmap_versions": [
+   "crates/task-core/src/store/roadmap.rs"
+  ],
+  "project_wakes": [
+   "crates/task-core/src/store/project_guard.rs",
+   "crates/task-core/src/store/project_wake.rs"
+  ],
+  "projects": [
+   "crates/task-core/src/store/projects.rs",
+   "crates/task-core/src/store/repos.rs"
+  ],
+  "reports": [
+   "crates/task-core/src/report.rs"
+  ],
+  "root_done_summaries": [
+   "crates/task-core/src/store/root_done.rs"
+  ],
+  "route_decisions": [
+   "crates/task-core/src/store/route_records.rs"
+  ],
+  "route_features": [
+   "crates/task-core/src/store/route_records.rs"
+  ],
+  "route_options": [
+   "crates/task-core/src/store/route_records.rs"
+  ],
+  "route_outcomes": [
+   "crates/task-core/src/store/route_records.rs"
+  ],
+  "routing_evidence": [
+   "crates/task-core/src/store/routing_evidence.rs"
+  ],
+  "routing_stage": [
+   "crates/task-core/src/store/routing_evidence.rs"
+  ],
+  "runs": [
+   "crates/task-core/src/store/events.rs",
+   "crates/task-core/src/store/execution/runs.rs"
+  ],
+  "script_behavior_change_events": [
+   "crates/task-core/src/store/script_behavior_changes.rs"
+  ],
+  "script_behavior_changes": [
+   "crates/task-core/src/store/script_behavior_changes.rs"
+  ],
+  "script_compare_log": [
+   "crates/task-core/src/store/script_domains.rs"
+  ],
+  "script_domain_events": [
+   "crates/task-core/src/store/script_domains.rs"
+  ],
+  "script_domain_modes": [
+   "crates/task-core/src/store/script_domains.rs"
+  ],
+  "script_exhaustive_runs": [
+   "crates/task-core/src/store/script_exhaustive.rs"
+  ],
+  "script_generation_events": [
+   "crates/task-core/src/store/script_domains.rs"
+  ],
+  "script_generations": [
+   "crates/task-core/src/store/script_domains.rs"
+  ],
+  "script_guard_state": [
+   "crates/task-core/src/store/script_guard.rs"
+  ],
+  "script_inbox_cursors": [
+   "crates/task-core/src/script_inbox.rs"
+  ],
+  "script_inbox_items": [
+   "crates/task-core/src/script_inbox.rs"
+  ],
+  "standing_rules": [
+   "crates/task-core/src/approval.rs",
+   "crates/task-core/src/chat/override_op.rs"
+  ],
+  "task_behind_targets": [
+   "crates/task-core/src/store/behind_targets.rs"
+  ],
+  "task_campaigns": [
+   "crates/task-core/src/store/decision_log.rs"
+  ],
+  "task_comments": [
+   "crates/task-core/src/store/messages.rs"
+  ],
+  "task_idempotency_keys": [
+   "crates/task-core/src/store/idempotency.rs"
+  ],
+  "task_integrations": [
+   "crates/task-core/src/store/task_integration_state.rs"
+  ],
+  "task_routing_overrides": [
+   "crates/task-core/src/store/routing_overrides.rs"
+  ],
+  "task_unblocks": [
+   "crates/task-core/src/store/unblocks.rs"
+  ],
+  "task_workspace_roots": [
+   "crates/task-core/src/store/local_machine.rs"
+  ],
+  "task_write_hints": [
+   "crates/task-core/src/store/write_sets.rs"
+  ],
+  "tasks": [
+   "crates/task-core/src/chat/override_op.rs",
+   "crates/task-core/src/store/execution/work_units.rs",
+   "crates/task-core/src/store/migrated_harness.rs",
+   "crates/task-core/src/store/org.rs",
+   "crates/task-core/src/store/tasks.rs",
+   "crates/task-core/src/store/transition.rs"
+  ],
+  "terminal_session_events": [
+   "crates/task-core/src/store/terminal_sessions.rs"
+  ],
+  "work_units": [
+   "crates/task-core/src/chat/override_op.rs",
+   "crates/task-core/src/store/events.rs",
+   "crates/task-core/src/store/execution/work_units.rs",
+   "crates/task-core/src/store/tasks.rs"
+  ]
+ },
+ "test_file_count": 872,
+ "rust_file_count": 1835,
+ "celeris_mcp": {
+  "files_store_types": {
+   "crates/celeris-mcp/src/auth.rs": {
+    "test_file": false,
+    "prod": [
+     "McpClientStore"
+    ],
+    "tests": []
+   },
+   "crates/celeris-mcp/src/auth/tests.rs": {
+    "test_file": true,
+    "prod": [],
+    "tests": [
+     "McpClientStore",
+     "SqliteStore"
+    ]
+   },
+   "crates/celeris-mcp/src/call/tests.rs": {
+    "test_file": true,
+    "prod": [],
+    "tests": [
+     "McpClientStore",
+     "SqliteStore"
+    ]
+   },
+   "crates/celeris-mcp/src/resources.rs": {
+    "test_file": false,
+    "prod": [
+     "OrgDirectory"
+    ],
+    "tests": []
+   },
+   "crates/celeris-mcp/src/rpc.rs": {
+    "test_file": false,
+    "prod": [
+     "McpCallStore"
+    ],
+    "tests": []
+   },
+   "crates/celeris-mcp/src/state.rs": {
+    "test_file": false,
+    "prod": [
+     "NodeSessionStore",
+     "OrgDirectory",
+     "SqliteStore",
+     "TaskQuery"
+    ],
+    "tests": []
+   },
+   "crates/celeris-mcp/src/stdio.rs": {
+    "test_file": false,
+    "prod": [],
+    "tests": [
+     "McpClientStore",
+     "SqliteStore"
+    ]
+   },
+   "crates/celeris-mcp/src/tools/db_tests.rs": {
+    "test_file": true,
+    "prod": [],
+    "tests": [
+     "McpClientStore",
+     "SqliteStore"
+    ]
+   },
+   "crates/celeris-mcp/src/tools/fake_ports.rs": {
+    "test_file": true,
+    "prod": [],
+    "tests": [
+     "OrgDirectory",
+     "TaskQuery"
+    ]
+   },
+   "crates/celeris-mcp/src/tools/knowledge.rs": {
+    "test_file": false,
+    "prod": [
+     "SqliteStore"
+    ],
+    "tests": []
+   },
+   "crates/celeris-mcp/src/tools/org.rs": {
+    "test_file": false,
+    "prod": [
+     "OrgDirectory"
+    ],
+    "tests": []
+   },
+   "crates/celeris-mcp/src/tools/projects.rs": {
+    "test_file": false,
+    "prod": [
+     "OrgDirectory",
+     "TaskQuery"
+    ],
+    "tests": []
+   },
+   "crates/celeris-mcp/src/tools/tasks.rs": {
+    "test_file": false,
+    "prod": [
+     "ReportStore",
+     "TaskQuery",
+     "TaskStore"
+    ],
+    "tests": []
+   },
+   "crates/celeris-mcp/tests/mcp_integration.rs": {
+    "test_file": true,
+    "prod": [],
+    "tests": [
+     "McpCallStore",
+     "McpClientStore",
+     "OrgDirectory",
+     "SqliteStore",
+     "TaskStore"
+    ]
+   }
+  },
+  "files_naming_taskstore_src": [
+   "crates/celeris-mcp/src/tools/tasks.rs"
+  ],
+  "taskstore_dependent_files": {
+   "src": [
+    "crates/celeris-mcp/src/tools/tasks.rs"
+   ],
+   "tests": [
+    "crates/celeris-mcp/tests/mcp_integration.rs"
+   ],
+   "count": 2
+  },
+  "port_fake_tests": 10,
+  "fakes": {
+   "FakePorts": {
+    "file": "crates/celeris-mcp/src/tools/fake_ports.rs",
+    "fns": {
+     "OrgDirectory": 6,
+     "TaskQuery": 2
+    },
+    "fn_count": 8
+   }
+  },
+  "sqlite_opens_in_tests": 7,
+  "sqlite_test_files": {
+   "crates/celeris-mcp/src/auth/tests.rs": {
+    "opens": 1,
+    "tests": 7
+   },
+   "crates/celeris-mcp/src/call/tests.rs": {
+    "opens": 1,
+    "tests": 5
+   },
+   "crates/celeris-mcp/src/stdio.rs": {
+    "opens": 1,
+    "tests": 1
+   },
+   "crates/celeris-mcp/src/tools/db_tests.rs": {
+    "opens": 1,
+    "tests": 14
+   },
+   "crates/celeris-mcp/tests/mcp_integration.rs": {
+    "opens": 3,
+    "tests": 22
+   }
+  },
+  "tests_in_sqlite_files": 49
+ }
+}

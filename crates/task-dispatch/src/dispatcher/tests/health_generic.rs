@@ -1254,8 +1254,8 @@ async fn g4_r1_review_request_builtin_generic_good_is_done() {
 // ---- WU の統合後の final review（G4-R1） ----
 //
 // atomic の試験（上の `g4_r1_review_request_*`）は計画の無い task の direct review で、WU の check・WU の統合を通らない。
-// 既存の `health_review_input_not_built_for_work_units` は plan gate で止まる計画の task で、final review の reviewer
-// run に届かなくても通る（材料の event が 0 件でも合格する）。ここでは採用済みの計画（1 段 1 WU、WU の run が fixture の
+// 既存の `health_review_input_not_built_for_work_units` は材料の event を `if let Some` と `builds.len() <= 1` で見るので、
+// final review の reviewer run に届かなくても（材料の event が 0 件でも）合格し、受信の材料も見ない。ここでは採用済みの計画（1 段 1 WU、WU の run が fixture の
 // 候補を入れる）を流し、WU の check・統合の後の final review の reviewer が実際に受けた `ReviewRequest.health` を見る。
 
 /// WU の統合後の final review を流した結果（fixture と worktree の root は試験の終わりまで持つ）。
@@ -1429,8 +1429,7 @@ fn integrated_input<'a>(flow: &'a IntegratedFlow, policy_source: &str) -> &'a He
 /// 変えた file）が入り、`owner_rows`・`invariants` は空。WU の check・WU の run は材料を作らず受けない。受けた候補を
 /// 根拠にした reviewer の blocking の不合格で、task は Done にならない。
 /// 既存の試験で足りない理由: atomic の `g4_r1_review_request_*` は WU の check・統合を通らない。
-/// `health_review_input_not_built_for_work_units` は plan gate で止まり final review に届かなくても通り、受信の材料を
-/// 見ない。`health_generic_wu_check_*` は WU の check の証跡だけを見る。
+/// `health_review_input_not_built_for_work_units` は材料の event が 0 件でも合格し、受信の材料を見ない。`health_generic_wu_check_*` は WU の check の証跡だけを見る。
 async fn integrated_candidate_blocks_done(kind: &str, variant: &str, without_profile: bool) {
     let (_bundle, _bundled) = configure_real_bundled_checker();
     let flow = integrated_flow(kind, variant, without_profile).await;

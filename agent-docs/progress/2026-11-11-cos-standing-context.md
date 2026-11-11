@@ -51,6 +51,27 @@ updated: 2026-11-11
 - 実物 K4 を原票の明示指定でも実行したが、約5分で結果が出ず中断（exit 130）。実物の完走は未確認。
 - D4 は未実装のまま。この修正だけで task 全体の完了とはしない。
 
+## attempt 2 の最終検査（2026-11-11）
+
+基準は `git merge-base HEAD main`。最後の同期の後、件名「phase 1: 起動前通知の Codex fixture を一時 home に隔離する」の
+HEAD で実行した。検査後の変更はこの進捗の記録のみ。task 全体は未完了で、完了日はまだ記入しない。
+
+- `bash scripts/dev/test-affected.sh`: exit 0。nextest 5881 件すべて合格、22 skipped、376.851 秒。
+  差分対象の doc test も合格。repo-health pass、worsened=0、script bundle SKIP は 0 件。
+- `cargo clippy --workspace -- -D warnings`: exit 0（vendor の deno_core の既存 deprecated warning は残る）。
+- `cargo fmt --all -- --check`: exit 0。
+- `sh scripts/dev/progress-index.sh --check`: exit 0。
+- `cargo nextest run -p task-worker --lib -E 'test(launch_notice_tests)'`: exit 0、4 件合格。
+- 実物 K4 の明示指定試験は exit 130（中断）。合格とは扱わない。
+
+commit の件名:
+
+- `phase 1: K4 の実物検証を明示した原票に限定する`
+- `phase 1: 起動前通知の Codex fixture を一時 home に隔離する`
+- `phase 1: 再検査の結果と未実装の委任経路を記録する`
+
+次の run は、検査の再実行からではなく D4 の実装から始める。常設文脈はあるが、global grant を保存・使用する経路はまだ無い。
+
 ## 残り（続きの run でする）
 
 1. D4: `ScopeKind::Global`（`project_id = '*'`）と分類 `routine_answer`（`answer_kind` 欄、期限・回数を省ける）。migration で

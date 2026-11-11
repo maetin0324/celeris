@@ -7,7 +7,7 @@ tasks: [01M75722RHE7ZQ6KS09FMSXD3V]
 - 関係: [ADR 2026-10-05 cos-chat-home](2026-10-05-cos-chat-home.md) D3/D6（`[cos.triage]` の policy_skill・policy_version）、
   [ADR 2026-10-28 cos-session-policy-key](2026-10-28-cos-session-policy-key.md)（版と skill の hash を session key に入れる）、
   [ADR 2026-10-28 cos-routine-delegated-answers](2026-10-28-cos-routine-delegated-answers.md)（policy_version の bump の手順）、
-  [ADR-0056](0056-codex-acp-skill-delivery.md)（KB の `skills/<name>/` からの配送）、
+  [ADR-0127](0127-skills-native-delivery.md)（KB の `skills/<name>/` からの配送）、
   [ADR 2026-10-11 破壊的変更](2026-10-11-breaking-changes-by-default.md)。
 - 記録: [進捗](../progress/2026-11-11-cos-skill-sync.md)。
 

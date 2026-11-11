@@ -74,9 +74,15 @@ attempt 3 の検査（提出時の HEAD で実行。基準は git merge-base HEA
 - 時間切れの試験の単独の再実行 `cargo nextest run -p celeris-campaign --test k4_cells_validity -E 'test(real_k4_archive_grades_thirty_of_thirty_two)'` → exit 0、1 passed（392 秒）。
 - `sh scripts/dev/progress-index.sh --check` → exit 0。
 
+attempt 4 の検査（コードは変えていない。提出時の HEAD で実行。基準は git merge-base HEAD main。前回の review は test-affected の 1200 秒の時間切れで落ちた）:
+
+- `bash scripts/dev/test-affected.sh` → exit 0（787 秒）。nextest 5,881 passed・22 skipped（455 秒）。repo-health は verdict=pass・new 0・worsened 0、repo_health_gate は all checks passed。開始時の load average は 4、終了時は 66（他の process）。末尾の `own-eval` の削除失敗（Permission denied）は `crates/campaign/tests/preflight.rs` が 11-10 に残した dir で、この branch とは関係ない。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check` → exit 0。
+
 ## 未解決
 
-- test-affected の全体は、範囲外の試験 1 件の負荷による時間切れで exit 100 だった（上記）。負荷の低い時に再実行すれば通る見込み（未確認）。
+- review の test-affected の再実行が 1200 秒の上限に収まるかは host の負荷による（今回は 787 秒）。
 - 評価試行の hidden check（`run_eval_check`）と target の `remove_dir_all` は tick の中の同期処理として残る（pool の `.lock` は待たない。この task の範囲外）。
 
 ## 提案

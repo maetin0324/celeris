@@ -35,6 +35,7 @@ use crate::browser_launcher::{
     ActionArgs, ClientError, ErrorCode, LauncherClient, Observation, Outcome, Receipt,
     SessionFacts, SessionPolicy, SessionState, StartedSession, Verb,
 };
+use crate::browser_runtime::INNER_ID;
 use crate::{
     AdapterError, BrowserPorts, EventSink, RunLimits, RunOutcome, RunRequest, WorkerAdapter,
 };
@@ -79,9 +80,6 @@ pub(crate) fn artifact_action_reason(code: Option<ErrorCode>) -> &'static str {
 
 /// 1 要求の読み書きの期限。launcher 側の最長（`action` 120 秒）より長く取る。
 const CLIENT_TIMEOUT: Duration = Duration::from_secs(150);
-
-/// launcher の中で Chrome が動く userns 内の UID / GID（ADR-0115 の `1000 → S`）。
-const INNER_ID: u32 = 1000;
 
 /// daemon は launcher の process group を観測できない（別 UID の process）。launcher の
 /// `isolation_ok`（launcher 自身が `collect_facts` → `verify_isolation` を通した結果）が真のとき

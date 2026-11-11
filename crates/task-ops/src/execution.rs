@@ -41,13 +41,6 @@ pub fn describe_validation_errors(errors: &[PlanValidationError]) -> String {
         .join("; ")
 }
 
-/// D14/D5: 計画を検証し、新規に採用する（`execution_plans` / `work_units` の行と
-/// `Event::ExecutionPlanned` を同じトランザクションで書く）。
-///
-/// - タスクが無ければ `OpsError::NotFound`。
-/// - `spec` が D14 の検証に落ちれば `OpsError::Validation`。
-/// - タスクに既に `active` な計画があれば `OpsError::Store(StoreError::InUse)`（E2 は新規のみ。
-///   replan は Phase E4）。
 /// D14 の検証（`validate_with`）と、/3 の unit の `task:<id>` 依存の検証（ADR 2026-11-11-unit-task-dependencies D4。
 /// 存在・自分の木の外・同じ案件・循環なし）。人・CoS の採用と replan が通る。planner の計画は dispatcher が同じ
 /// `unit_task_deps::plan_errors` で見る。
@@ -82,6 +75,13 @@ pub fn describe_task_dependency_errors(
     })
 }
 
+/// D14/D5: 計画を検証し、新規に採用する（`execution_plans` / `work_units` の行と
+/// `Event::ExecutionPlanned` を同じトランザクションで書く）。
+///
+/// - タスクが無ければ `OpsError::NotFound`。
+/// - `spec` が D14 の検証に落ちれば `OpsError::Validation`。
+/// - タスクに既に `active` な計画があれば `OpsError::Store(StoreError::InUse)`（E2 は新規のみ。
+///   replan は Phase E4）。
 pub fn adopt_plan(
     store: &dyn TaskStore,
     task_id: TaskId,

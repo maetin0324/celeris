@@ -2,7 +2,7 @@
 #[test]
 fn timed_out_download_adoption_recovers_before_the_next_snapshot() {
     let output = std::process::Command::new("python3")
-        .args(["-c", include_str!("browser_action_recovery.py")])
+        .args(["-c", include_str!("../browser_action_recovery.py")])
         .arg(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/src/browser_action.py"

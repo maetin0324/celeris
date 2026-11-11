@@ -178,6 +178,29 @@ pub type HumanVerdicts = HashMap<usize, (bool, String)>;
 pub const PLAN_FILE_NAME: &str = "plan.json";
 pub const REVIEW_FILE_NAME: &str = "review.json";
 
+/// ADR-0007 D5 2.: 決定的な条件が 1 つでも落ちて reviewer run を起動しなかったときの、`Check::Reviewer` の項目の
+/// reason。文字列の正本はここ 1 か所。reviewer の判定ではないので、`Dispatcher::try_review_repair` は決定的な不合格が
+/// あるときこの項目を修復の分類から外す（ADR-0072 D16 付記 G4-S1）。
+pub(crate) const REVIEWER_NOT_EVALUATED_REASON: &str =
+    "not evaluated: a deterministic check failed";
+
+/// ADR-0072 D16: 不合格の verdict を、`classify_review_failure` と repair の失敗した検査の入力（`FailedCheck`）に写す。
+/// check は task.acceptance の条件の check。暗黙の条件（Plan/aggregate/repo_checks/research）は task.acceptance に無く、
+/// D16 の分類表にも無いので修復できない（`Check::Human` と同じ扱いに倒す）。health の Fail だけは
+/// `Check::Command { cmd: HEALTH_CHECK_ID }`（[`Verdict::implicit_check`]。health enforcement loop D3.2）。
+/// 不合格が無ければ空（分類は `Substantive`）。
+pub(crate) fn failed_checks(task: &Task, verdicts: &[Verdict]) -> Vec<task_core::FailedCheck> {
+    (verdicts.iter().filter(|v| !v.pass))
+        .map(|v| task_core::FailedCheck {
+            check: (task.acceptance.get(v.criterion_idx))
+                .map(|c| c.check.clone())
+                .unwrap_or_else(|| v.implicit_check()),
+            reason: v.reason.clone(),
+            repair_hint: v.repair_hint.clone(),
+        })
+        .collect()
+}
+
 const REASON_TAIL: usize = 1024;
 
 fn tail(s: &str, n: usize) -> &str {
@@ -815,7 +838,7 @@ pub async fn review_task(
                 .map(|&idx| Verdict {
                     criterion_idx: idx,
                     pass: false,
-                    reason: "not evaluated: a deterministic check failed".to_string(),
+                    reason: REVIEWER_NOT_EVALUATED_REASON.to_string(),
                     repair_hint: None,
                 })
                 .collect()

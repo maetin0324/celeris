@@ -23,11 +23,14 @@ updated: 2026-11-11
   - `dispatcher::tests::cos_launch_wire::skill_drift_holds_the_claim_and_notices_once`: 版 10 と config 1 では 3 tick しても run が無く知らせは 1 件、
     consult.md を消すと知らせが 1 件増えて run は無いまま、直すと次の tick で run が起きる。旧い
     `missing_skills_close_prelaunch_as_skills_unavailable` と `cos_chat_run_launch_missing_required_skill_is_unavailable`（claim の後の判定）はこの試験に置き換えた。
-  - `task_ops::cos_skill_gate` の単体試験 3 本（repo の skill が既定の版で通る、版違い・無い file・link 先、front matter の読み方）。
+  - `task_ops::cos_skill_gate` の単体試験 2 本（版違い・無い file・link 先、front matter の読み方）。
+  - `crates/celeris/src/config/cos_tests.rs` の `repo_cos_skills_pass_the_gate_under_the_default_triage_config`（repo の skill が
+    `[cos.triage]` の既定の policy_skill・policy_version で照合を通る。attempt 4 で task-ops の試験から移した）。
   - `task_dispatch::cos_skill_gate::tests::core_skill_files_follow_the_core_text`（Core が名を挙げる `.md` と `CORE_SKILL_FILES` が一致。
     Core（task-worker）と一覧（task-ops）の両方を見られる task-dispatch に置く）。
   - `crates/celeris/tests/cos_skill_sync.rs` → `scripts/selfdeploy/tests/sync_skills.sh`（release の束ね、KB の置き換えと 1 commit、
-    curation の commit 済み・変更中・stage 済みのページと他の skill は変わらない、2 回目は commit しない）。
+    curation の commit 済み・変更中・stage 済みのページと他の skill は変わらない、2 回目は commit しない、
+    `[knowledge] root` の読み方と、読めない config では写さず失敗すること）。
   - CoS run を起こす既存の試験の KB を `write_fixture` に替えた（policy_version を上げる 3 本は、同時に skill も上げる）。
 
 ## 前回提出時の検査（今回の再検査結果は後述）
@@ -45,18 +48,31 @@ updated: 2026-11-11
 
 運用者が行う。本番の KB・config・daemon には worker は触れていない。
 
-1. この変更を含む release を `release.sh` で作り、`promote.sh <sha12>` で昇格する。昇格の最後に `sync-skills.sh` が
-   release の `skills/cos-operator`・`skills/cos-inbox-triage` を `~/.local/share/celeris/knowledge/skills/` に写し、
-   KB の git に `selfdeploy: sync CoS skills from release <sha12>` を 1 件 commit する。
-   これで KB の cos-inbox-triage は版 11 になり、無かった `cos-operator/consult.md` と `cos-operator/project-controller.md` が入る。
-2. 確認: `git -C ~/.local/share/celeris/knowledge log -1 --name-only` が `skills/cos-*` だけを挙げる。
-   `grep -A2 '^metadata:' ~/.local/share/celeris/knowledge/skills/cos-inbox-triage/SKILL.md` が `version: "11"`。
-   本番 config の `[cos.triage] policy_version` は "11" のままでよい（書き換え不要）。
-3. 昇格から写しまでの数秒、または写しが失敗したとき（promote.sh が exit 4）は、受信箱に
-   「CoS の skill が config と合わないので、CoS の run を止めています」が 1 件出て、CoS run は起きない。
-   `bash ~/.local/celeris/releases/<sha12>/scripts/sync-skills.sh ~/.local/celeris/releases/<sha12> ~/.local/share/celeris/knowledge`
-   を手で実行すれば、次の tick から CoS run が起きる。
-4. 消した config 欄は無い。
+この変更を含む release の**最初の**昇格では、KB は自動では変わらない。昇格を走らせるのは今の `current` の
+`promote.sh`（ADR-0041 D4。Web の「昇格」と `POST /releases/{sha12}/promote` も同じ）で、今の本番の `promote.sh` には
+写しの段が無いため。新しい daemon は起動した時点から CoS の run を止め、受信箱に
+「CoS の skill が config と合わないので、CoS の run を止めています」を 1 件出す。手順 2 を実行するまで CoS の run は起きない。
+
+1. この変更を含む release を `release.sh` で作り、`verify.sh` を通して昇格する（Web の「昇格」か `promote.sh <sha12>`）。
+2. 昇格の直後に、運用者が新しい release の写しを手で 1 回実行する（`<sha12>` は昇格した版）。
+
+   ```bash
+   R=~/.local/celeris/releases/<sha12>
+   bash "$R/scripts/sync-skills.sh" "$R" ~/.local/share/celeris/knowledge
+   ```
+
+   本番 config は `[knowledge] root` を既定のまま使っている前提（operator の確認による。root を変えていればその path を渡す）。
+   `sync-skills.sh` は `skills/cos-operator`・`skills/cos-inbox-triage` を release と同じ内容に置き換え、
+   KB の git に `selfdeploy: sync CoS skills from release <sha12>` を 1 件 commit する。curation の書いたページは変えない。
+3. 確認:
+   - `git -C ~/.local/share/celeris/knowledge log -1 --name-only` が `skills/cos-*` だけを挙げる。
+   - `grep -A2 '^metadata:' ~/.local/share/celeris/knowledge/skills/cos-inbox-triage/SKILL.md` が `version: "11"`。
+   - `ls ~/.local/share/celeris/knowledge/skills/cos-operator/` に `consult.md` と `project-controller.md` がある。
+   - 本番 config の `[cos.triage] policy_version` は "11" のままでよい（書き換え不要）。次の tick から CoS の run が起きる。
+   - 受信箱の「CoS の run を止めています」の件は、運用者が見て閉じる。
+4. 2 回目以降の昇格では、`current` の `promote.sh` が写しの段を持つので、昇格の最後に自動で写る。写しが失敗したとき
+   （`promote.sh` が exit 4、`promote.log` に `sync-skills.sh ... failed` か `could not resolve the KB root`）は、手順 2 と同じコマンドを手で実行する。
+5. 消した config 欄は無い。
 
 ## run 4 の検査と待機修正
 

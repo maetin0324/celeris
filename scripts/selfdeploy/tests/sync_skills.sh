@@ -44,4 +44,20 @@ g diff --cached --name-only | grep -qx projects/new.md || fail "curation's stage
 # a second sync of the same release adds no commit
 bash "$REPO/scripts/selfdeploy/sync-skills.sh" "$T/rel" "$T/kb" >/dev/null || fail "second sync"
 [ "$(g rev-list --count "$before"..HEAD)" = 1 ] || fail "second sync committed again"
+
+# promote/rollback find the KB from `[knowledge] root` of the config; an unreadable config fails
+# (exit 4 of promote.sh) instead of syncing a guessed default KB.
+mkdir -p "$T/cfg"
+printf '[knowledge]\nroot = "kb-here"\n' >"$T/cfg/rel.toml"
+printf '[cos]\nenabled = true\n' >"$T/cfg/nokey.toml"
+printf '[knowledge\nroot = "x"\n' >"$T/cfg/bad.toml"
+root_of() ( unset SD_KNOWLEDGE_ROOT; SD_LOG_FILE=/dev/null; . "$REPO/scripts/selfdeploy/lib.sh"; SD_CONFIG="$1"; sd_knowledge_root )
+[ "$(root_of "$T/cfg/rel.toml")" = "$T/cfg/kb-here" ] || fail "relative [knowledge] root"
+[ "$(HOME="$T/home" root_of "$T/cfg/nokey.toml")" = "$T/home/.local/share/celeris/knowledge" ] || fail "default root"
+if root_of "$T/cfg/bad.toml" >/dev/null 2>&1; then fail "an unreadable config resolved a KB root"; fi
+head="$(g rev-parse HEAD)"
+if ( unset SD_KNOWLEDGE_ROOT; SD_LOG_FILE=/dev/null; . "$REPO/scripts/selfdeploy/lib.sh"; SD_CONFIG="$T/cfg/bad.toml"; sd_sync_cos_skills "$T/rel" ); then
+  fail "sd_sync_cos_skills succeeded with an unreadable config"
+fi
+[ "$(g rev-parse HEAD)" = "$head" ] || fail "the KB changed although the config was unreadable"
 echo "sync_skills: ok"

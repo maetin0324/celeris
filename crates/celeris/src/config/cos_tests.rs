@@ -229,3 +229,17 @@ fn cos_triage_authorization_safety_net_default_and_override() {
     .expect("example loads");
     assert_eq!(example.cos.authorization_unavailable_after_secs(), 1200);
 }
+
+/// ADR 2026-11-11-cos-skill-sync D4: the repo's CoS skills pass the claim gate under the config
+/// default of `[cos.triage]`, so raising `policy_version` without the skill's `metadata.version`
+/// (or the reverse) fails here before a release. The gate's own tests (task-ops) use fixtures and
+/// cannot see this crate's default.
+#[test]
+fn repo_cos_skills_pass_the_gate_under_the_default_triage_config() {
+    let skills = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/skills");
+    let triage = CosTriageConfig::default();
+    assert_eq!(
+        task_ops::cos_skill_gate::check(&skills, &triage.policy_skill, &triage.policy_version),
+        Ok(())
+    );
+}

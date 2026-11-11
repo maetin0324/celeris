@@ -8,6 +8,7 @@ tasks: [01M75722RHE7ZQ6KS09FMSXD3V]
   [ADR 2026-10-28 cos-session-policy-key](2026-10-28-cos-session-policy-key.md)（版と skill の hash を session key に入れる）、
   [ADR 2026-10-28 cos-routine-delegated-answers](2026-10-28-cos-routine-delegated-answers.md)（policy_version の bump の手順）、
   [ADR-0127](0127-skills-native-delivery.md)（KB の `skills/<name>/` からの配送）、
+  [ADR-0122](0122-ui-ux-external-skills.md) D1（`celerisctl skills import`）、[ADR-0041](0041-self-improvement-loop-hardening.md) D4（どの `promote.sh` を走らせるか）、
   [ADR 2026-10-11 破壊的変更](2026-10-11-breaking-changes-by-default.md)。
 - 記録: [進捗](../progress/2026-11-11-cos-skill-sync.md)。
 
@@ -43,8 +44,19 @@ release と昇格を通す。KB の他のページ（curation が書いた `proj
 - この ADR より前に作った release（rollback の戻り先など）は `skills/` を持たない。そのときは KB を変えずに log に残して終わる（exit 0）。
   KB が config と合わなければ D3 が CoS run を止めて知らせる。release.sh は束ねられなければ release を作らないので、新しい release は必ず `skills/` を持つ。
 - 写しの失敗は昇格を取り消さない（daemon は既に新しい）。exit 4 と log で知らせ、D3 が CoS run を止めて受信箱に出す。
+- KB の場所は `$SD_CONFIG` の `[knowledge] root`（相対なら config の dir 基準、`~` を展開）。欄が無い・config の file が無いときは
+  daemon と同じ既定 `~/.local/share/celeris/knowledge`。config があるのに読めない（TOML の誤り、root が文字列でない）ときは
+  既定の場所を推測して写さず、写しの失敗（exit 4）にする。別の場所に写して成功と記録すると、本当の KB が古いまま残るため。
 - 時機を昇格の後にした理由: 昇格の前に写すと、昇格が失敗して旧 daemon に戻ったときに KB だけが新しくなる。
-  昇格の後なら、新しい daemon が起きてから写すまでの間（数秒）だけ D3 が CoS run を止める。
+  昇格の後なら、D3 が CoS run を止めるのは、新しい daemon が起きてから同じ `promote.sh` が写し終えるまでの間だけになる。
+- どの `promote.sh` が写すか: 昇格を走らせるのは **いま動いている版（`current`）の** `promote.sh`（ADR-0041 D4。
+  Web の「昇格」と `POST /releases/{sha12}/promote` も同じ）。写しの段は、この変更を含む release が一度昇格されて
+  `current` になった後の昇格から働く。**この変更を含む release の最初の昇格**は写しの段の無い旧い `promote.sh` が走るので、
+  KB は変わらない。そのときは運用者が昇格の直後に `sync-skills.sh` を手で 1 回実行する（手順は進捗の「本番への移行」）。
+  それまでの間、D3 が CoS run を止めて受信箱に 1 件知らせる。`rollback.sh` も、写しの段を持つ版のものを走らせたときだけ写す。
+- 既存の `celerisctl skills import`（ADR-0122 D1、`task_ops::knowledge::skills_put`）は使わない。あれは取り込みで、
+  release に無い古い file を消さず、front matter に `source:` を足し、skill ごとに commit する。配備は KB の dir を
+  release と同じ内容に置き換える必要があり、意味が違う。
 
 ### D3: CoS run の claim の前に skill と config を照らす（版の組ごとに 1 回知らせる）
 
@@ -69,8 +81,9 @@ claim の後で二度見ていたので消した。`SkillsUnavailable` は polic
 ### D4: 版を上げる手順
 
 policy_version を上げる変更は、同じ commit で `config/skills/cos-inbox-triage/SKILL.md` の `metadata.version` と
-`[cos.triage]` の既定（`crates/celeris/src/config/cos.rs`）を上げる（`task_ops::cos_skill_gate` の試験が repo の skill を
-既定の版で通すことを確かめる）。本番では昇格（D2）で KB が新しい版になり、config の `policy_version` を人が書き換えて reload する。
+`[cos.triage]` の既定（`crates/celeris/src/config/cos.rs`）を上げる。`crates/celeris/src/config/cos_tests.rs` の
+`repo_cos_skills_pass_the_gate_under_the_default_triage_config` が、repo の `config/skills` を `[cos.triage]` の既定
+（policy_skill・policy_version）で照合し（D3 の `check`）、片方だけ上げると落ちる。本番では昇格（D2）で KB が新しい版になり、config の `policy_version` を人が書き換えて reload する。
 どちらかが遅れている間、D3 が CoS run を止めて受信箱に知らせる。
 
 ## 帰結

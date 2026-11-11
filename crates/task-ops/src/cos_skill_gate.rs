@@ -179,22 +179,6 @@ pub fn write_fixture(
 mod tests {
     use super::*;
 
-    fn repo_skills() -> std::path::PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/skills")
-    }
-
-    /// The repo's skills pass the gate under the config default, so a promotion that syncs them
-    /// opens the gate. Not covered elsewhere: nothing else reads the repo skill tree as the KB.
-    #[test]
-    fn repo_skills_pass_under_the_default_policy_version() {
-        let version = metadata_version(
-            &std::fs::read_to_string(repo_skills().join("cos-inbox-triage/SKILL.md"))
-                .expect("triage skill"),
-        )
-        .expect("version");
-        assert_eq!(check(&repo_skills(), "cos-inbox-triage", &version), Ok(()));
-    }
-
     #[test]
     fn version_mismatch_and_missing_files_are_drift() {
         let dir = tempfile::tempdir().expect("tempdir");

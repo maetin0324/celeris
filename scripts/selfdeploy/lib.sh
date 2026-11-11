@@ -1401,20 +1401,25 @@ sd_bundle_cos_skills() {
   done <"$build/scripts/selfdeploy/cos-skills.txt"
 }
 
-# `[knowledge] root` of $SD_CONFIG (relative to the config file, `~` expanded), default
-# ~/.local/share/celeris/knowledge. SD_KNOWLEDGE_ROOT overrides it.
+# `[knowledge] root` of $SD_CONFIG (relative to the config file, `~` expanded). The daemon's default
+# ~/.local/share/celeris/knowledge only when the config has no such key or no config file exists
+# (as sd_db_path). A config that exists but cannot be read fails: no guessed KB
+# (ADR 2026-11-11-cos-skill-sync D2). SD_KNOWLEDGE_ROOT overrides it.
 sd_knowledge_root() {
   if [ -n "${SD_KNOWLEDGE_ROOT:-}" ]; then printf '%s\n' "$SD_KNOWLEDGE_ROOT"; return 0; fi
   python3 - "${SD_CONFIG:-}" <<'PY'
 import os, sys
 root = "~/.local/share/celeris/knowledge"
 path = sys.argv[1]
-try:
-    import tomllib
-    with open(path, "rb") as f:
-        root = tomllib.load(f).get("knowledge", {}).get("root", root)
-except Exception:
-    pass
+if path and os.path.exists(path):
+    try:
+        import tomllib
+        with open(path, "rb") as f:
+            root = tomllib.load(f).get("knowledge", {}).get("root", root)
+        if not isinstance(root, str):
+            raise ValueError("[knowledge] root is not a string")
+    except Exception as e:
+        sys.exit(f"sd_knowledge_root: cannot read [knowledge] root of {path}: {e}")
 root = os.path.expanduser(root)
 if not os.path.isabs(root) and path:
     root = os.path.join(os.path.dirname(os.path.abspath(path)), root)
@@ -1426,7 +1431,10 @@ PY
 # logged and returned (the caller exits 4 after its other steps; the switch itself stands).
 sd_sync_cos_skills() {
   local rel="$1" kb
-  kb="$(sd_knowledge_root)" || return 1
+  if ! kb="$(sd_knowledge_root 2>>"${SD_LOG_FILE:-/dev/stderr}")"; then
+    sd_log "warning: could not resolve the KB root from $SD_CONFIG; the CoS skills were not synced and CoS runs stay held (ADR 2026-11-11-cos-skill-sync D3)"
+    return 1
+  fi
   if bash "$(dirname "${BASH_SOURCE[0]}")/sync-skills.sh" "$rel" "$kb" >>"${SD_LOG_FILE:-/dev/stderr}" 2>&1; then
     sd_log "sync-skills: deployed the CoS skills of $(basename "$rel") to $kb/skills"
   else

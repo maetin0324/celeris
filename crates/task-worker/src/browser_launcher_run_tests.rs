@@ -2972,6 +2972,141 @@ mod launcher_login {
         drop(chrome);
     }
 
+    /// The Shibboleth fixture with a test-only gate: while `gate-<name>` exists in the fixture
+    /// directory, the IdP holds its answer to `POST /<name>` and marks `held-<name>` (the moment the
+    /// request arrived). The test removes the gate to let the answer through.
+    fn gated_sso_script() -> String {
+        let script = include_str!("browser_sso_fixture.py");
+        let post = "    def do_POST(self):\n        data = self.rfile.read(int(self.headers.get('Content-Length', '0')))\n";
+        assert!(script.contains(post), "fixture do_POST shape");
+        script.replace(
+            post,
+            &format!(
+                "{post}        name = self.path.split('?')[0].strip('/')\n        if Path('gate-' + name).exists():\n            Path('held-' + name).write_text('')\n            while Path('gate-' + name).exists():\n                threading.Event().wait(0.01)\n"
+            ),
+        )
+    }
+
+    /// Regression (settings stage integration, 2026-11-10): a slow IdP must not turn a valid login
+    /// into `launcher_authenticate_rejected`. The daemon connects to `injection.sock` before
+    /// `authenticate` (credentiald admits the connecting controller), and the launcher writes the
+    /// injection request only after the trusted login page shows its password field. Here the IdP
+    /// holds `POST /password` (the relay's auto-submit) for credentiald's request-read bound
+    /// (`IO_TIMEOUT`) plus 1 s — still well inside the launcher's 15 s login navigation deadline —
+    /// so the passed stream sits idle past `IO_TIMEOUT` before the request arrives.
+    #[tokio::test]
+    async fn launcher_login_regression_slow_password_page_still_injects_through_the_passed_stream()
+    {
+        let chrome = ChromeFixture::start_with(&gated_sso_script());
+        let brokers = Arc::new(Mutex::new(0));
+        let dir = crate::test_support::short_tempdir().expect("tempdir");
+        let sock = dir.path().join("launcher.sock");
+        let server = LauncherServer::bind(
+            &sock,
+            ServerConfig {
+                allowed_uids: vec![DaemonIds::current().uid],
+                limits: LauncherLimits::default(),
+            },
+            Arc::new(ChromeBackend {
+                controller: Arc::clone(&chrome.controller),
+                chrome_pid: chrome.chrome_pid as i32,
+                brokers: Arc::clone(&brokers),
+            }),
+            Registry::open(dir.path().join("state"), "inst-login-slow-idp").expect("registry"),
+        )
+        .expect("bind");
+        let _handle = server.spawn().expect("spawn");
+        let task_id = task_core::TaskId::new();
+        let credd = crate::test_support::short_tempdir().expect("credd");
+        credentiald(credd.path(), &chrome.origin, &task_id.to_string());
+        let run_dir = credd.path().join("run");
+        let (runtime, _) = LauncherRuntime::start(&sock, "task-1", "run-login", policy())
+            .expect("launcher session");
+        let runtime = Arc::new(runtime);
+        crate::browser_cdp_sink::UnixInjectionClient::new(
+            celeris_credentiald::injection_ipc::injection_socket(&run_dir),
+        )
+        .register_live_session(LiveSessionRegistration {
+            session_id: runtime.session_id().to_owned(),
+            controller_pid: std::process::id(),
+            controller_start: process_start(std::process::id()).expect("self start"),
+            runtime_pid: chrome.chrome_pid,
+            runtime_start: process_start(chrome.chrome_pid).expect("chrome start"),
+        })
+        .expect("register live session");
+        let approval = consumed(&chrome.origin, task_id);
+        let sup = crate::browser_credential::CredentialSupervisor {
+            broker: Arc::new(crate::browser_credential::UnixLeaseBroker {
+                control_socket: run_dir.join("celeris-credentiald/control.sock"),
+            }),
+            bridge: PathBuf::from("/nonexistent/celeris-credentiald"),
+            runtime_dir: Some(run_dir.clone()),
+        };
+        let fixture = chrome.directory.path().to_owned();
+        std::fs::write(fixture.join("gate-password"), "").expect("gate");
+        // Event wait: the IdP has the relay's POST; only then does the hold start.
+        let releaser = std::thread::spawn(move || {
+            let deadline = std::time::Instant::now() + Duration::from_secs(60);
+            while !fixture.join("held-password").exists() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "relay POST never arrived"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            std::thread::sleep(
+                celeris_credentiald::injection_ipc::IO_TIMEOUT + Duration::from_secs(1),
+            );
+            std::fs::remove_file(fixture.join("gate-password")).expect("open gate");
+        });
+        let sink = AuthSink::default();
+        let login = launcher_credential_login(
+            &runtime,
+            &approval,
+            None,
+            &sup,
+            &run_dir,
+            &task_id.to_string(),
+            "run-resumed",
+            &approval.wait.session_id,
+            &sink,
+        )
+        .await;
+        releaser.join().expect("releaser");
+        let journal = std::fs::read_to_string(credd.path().join("data/audit/journal.jsonl"))
+            .expect("journal");
+        assert_eq!(
+            login,
+            CredentialLogin::Recorded(Ok(crate::browser_launcher::protocol::LoginResult::HELD)),
+            "{journal}"
+        );
+        assert_eq!(
+            *brokers.lock().expect("lock"),
+            1,
+            "one passed broker stream"
+        );
+        let received = chrome.directory.path().join("received");
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        while !received.exists() {
+            assert!(std::time::Instant::now() < deadline, "SP never received");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            std::fs::read_to_string(&received).expect("received"),
+            SECRET
+        );
+        assert_eq!(
+            journal
+                .lines()
+                .filter(|l| l.contains("\"consumed\""))
+                .count(),
+            1,
+            "{journal}"
+        );
+        runtime.stop().expect("stop");
+        drop(chrome);
+    }
+
     /// 付記 2026-10-10b (launcher protocol 7, real credentiald): the pinned consent button is pressed
     /// once by the launcher's controller and the login resumes on the LMS.
     #[tokio::test]

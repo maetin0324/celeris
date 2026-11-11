@@ -7,6 +7,9 @@
 //! `resources/list` は**列挙できるもの**（知識の索引・組織・skills）だけを出す。タスク・案件は
 //! 件数が大きく汎用の列挙に意味が無いため、`tasks_list` / `projects_list` で id を知ってから
 //! `resources/read` で読む（Phase 78 の簡略化。`docs/guides/mcp.md` に明記）。
+//!
+//! ADR 2026-11-10-taskstore-consumer-ports: 組織の列挙の本体（`org_resources`）は `&dyn OrgDirectory`
+//! だけを受ける（試験は `tools/fake_ports.rs` の fake を渡す）。知識ベースの列挙は store を使わない。
 
 use std::sync::Arc;
 
@@ -14,7 +17,7 @@ use serde::Serialize;
 use task_core::{McpScope, OrgDirectory};
 
 use crate::auth::AuthedClient;
-use crate::state::McpState;
+use crate::state::{McpState, run_blocking};
 use crate::tools::{self, ToolError, ToolOutput};
 
 #[derive(Debug, Clone, Serialize)]
@@ -35,9 +38,7 @@ pub async fn list(
     if client.has_scope(McpScope::KnowledgeRead)
         && let Some(root) = state.knowledge_root.clone()
     {
-        let items = state
-            .blocking(move |_store| task_ops::knowledge::ensure_index(&root).items)
-            .await;
+        let items = run_blocking(move || task_ops::knowledge::ensure_index(&root).items).await;
         for item in items {
             out.push(ResourceDescriptor {
                 uri: format!("celeris://knowledge/{}", item.path),
@@ -49,24 +50,14 @@ pub async fn list(
     }
     if client.has_scope(McpScope::OrgRead) {
         let nodes = state
-            .blocking(move |store| store.org_list())
-            .await
-            .map_err(|e| ToolError::internal(e.to_string()))?;
-        for node in nodes {
-            out.push(ResourceDescriptor {
-                uri: format!("celeris://org/{}", node.id),
-                name: node.name,
-                description: None,
-                mime_type: "application/json",
-            });
-        }
+            .blocking_on(&state.org_directory, org_resources)
+            .await?;
+        out.extend(nodes);
     }
     if client.has_scope(McpScope::SkillsRead)
         && let Some(root) = state.knowledge_root.clone()
     {
-        let skills = state
-            .blocking(move |_store| task_ops::knowledge::skills_list(&root))
-            .await;
+        let skills = run_blocking(move || task_ops::knowledge::skills_list(&root)).await;
         for skill in skills {
             out.push(ResourceDescriptor {
                 uri: format!("celeris://skills/{}", skill.name),
@@ -77,6 +68,24 @@ pub async fn list(
         }
     }
     Ok(out)
+}
+
+/// 組織のノード 1 つにつき 1 件（`celeris://org/<node_id>`、名簿の並び）。引数は `McpState` の
+/// `org_directory`（`Arc<dyn OrgDirectory>`）と同じ型にし、`blocking_on` へ関数のまま渡す。
+pub(crate) fn org_resources(
+    org: &(dyn OrgDirectory + 'static),
+) -> Result<Vec<ResourceDescriptor>, ToolError> {
+    Ok(org
+        .org_list()
+        .map_err(|e| ToolError::internal(e.to_string()))?
+        .into_iter()
+        .map(|node| ResourceDescriptor {
+            uri: format!("celeris://org/{}", node.id),
+            name: node.name,
+            description: None,
+            mime_type: "application/json",
+        })
+        .collect())
 }
 
 /// `celeris://<kind>/<id>` を `(tool 名, args)` に写す。

@@ -1,15 +1,16 @@
 //! `McpState`: ハンドラが共有するもの一式（ADR-0056 D5）。`task-api::ApiState` と同じ規律
 //! （専用の `SqliteStore` 接続、`spawn_blocking` で同期の store 呼び出しを逃がす）。
 //!
-//! ADR 2026-11-10-taskstore-consumer-ports: 名簿と task の一覧だけを読む道具（`tools/projects`・
-//! `tools/tasks` の一覧）は、同じ接続を狭い trait で見る handle（`org_directory`・`task_query`）を
-//! `blocking_on` に渡す。接続は `store` の 1 つだけで、handle はその `Arc` の写し。
+//! ADR 2026-11-10-taskstore-consumer-ports: 名簿と task の一覧だけを読む道具（`tools/org`・
+//! `tools/projects`・`resources` の組織と、`tools/tasks` の一覧）は、同じ接続を狭い trait で見る handle
+//! （`org_directory`・`node_sessions`・`task_query`）を `blocking_on` に渡す。接続は `store` の 1 つだけで、
+//! handle はその `Arc` の写し。store を使わない処理（知識ベースのファイル）は `run_blocking` で逃がす。
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use task_core::{OrgDirectory, RoleSpec, SqliteStore, StoreOptions, TaskQuery};
+use task_core::{NodeSessionStore, OrgDirectory, RoleSpec, SqliteStore, StoreOptions, TaskQuery};
 
 use crate::ratelimit::RateLimiter;
 use crate::tools::api::ApiTarget;
@@ -26,6 +27,8 @@ pub struct McpState {
     pub(crate) store: Arc<SqliteStore>,
     /// `store` と同じ接続を `OrgDirectory` として見る handle（新しい接続・状態ではない）。
     pub(crate) org_directory: Arc<dyn OrgDirectory>,
+    /// `store` と同じ接続を `NodeSessionStore` として見る handle（`org_list` の継続セッションの有無）。
+    pub(crate) node_sessions: Arc<dyn NodeSessionStore>,
     /// `store` と同じ接続を `TaskQuery` として見る handle（新しい接続・状態ではない）。
     pub(crate) task_query: Arc<dyn TaskQuery>,
     pub(crate) rate_limit_per_min: u32,
@@ -90,10 +93,12 @@ impl McpState {
         knowledge_root: Option<PathBuf>,
     ) -> Arc<Self> {
         let org_directory: Arc<dyn OrgDirectory> = store.clone();
+        let node_sessions: Arc<dyn NodeSessionStore> = store.clone();
         let task_query: Arc<dyn TaskQuery> = store.clone();
         Arc::new(Self {
             store,
             org_directory,
+            node_sessions,
             task_query,
             rate_limit_per_min,
             limiter: Mutex::new(RateLimiter::default()),
@@ -125,8 +130,8 @@ impl McpState {
         self.blocking_on(&self.store, f).await
     }
 
-    /// `handle`（`store` か、それを狭い trait で見る `org_directory`・`task_query`）を受ける同期の
-    /// 呼び出しをブロッキングスレッドへ逃がす。`spawn_blocking` を呼ぶのはここだけ。
+    /// `handle`（`store` か、それを狭い trait で見る `org_directory`・`node_sessions`・`task_query`）を
+    /// 受ける同期の呼び出しをブロッキングスレッドへ逃がす。
     pub(crate) async fn blocking_on<P, T, F>(&self, handle: &Arc<P>, f: F) -> T
     where
         P: ?Sized + Send + Sync + 'static,
@@ -134,14 +139,7 @@ impl McpState {
         F: FnOnce(&P) -> T + Send + 'static,
     {
         let handle = Arc::clone(handle);
-        match tokio::task::spawn_blocking(move || f(&handle)).await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::error!(error = %e, "celeris-mcp: blocking task panicked");
-                // 呼び出し側は `T` を返せる必要があるため、panic はここでは起こさず伝播させる。
-                std::panic::resume_unwind(e.into_panic())
-            }
-        }
+        run_blocking(move || f(&handle)).await
     }
 
     /// `initialize` で新しいセッションを発行する。
@@ -161,5 +159,22 @@ impl McpState {
             .unwrap_or_else(|e| e.into_inner())
             .get(session_id)
             .cloned()
+    }
+}
+
+/// 同期の処理をブロッキングスレッドへ逃がし、panic は呼び出し側へ伝播させる。`spawn_blocking` を
+/// 呼ぶのはここだけ。store を使わない処理（知識ベースのファイルの読み書き）は直接これを呼ぶ。
+pub(crate) async fn run_blocking<T, F>(f: F) -> T
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    match tokio::task::spawn_blocking(f).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(error = %e, "celeris-mcp: blocking task panicked");
+            // 呼び出し側は `T` を返せる必要があるため、panic はここでは起こさず伝播させる。
+            std::panic::resume_unwind(e.into_panic())
+        }
     }
 }

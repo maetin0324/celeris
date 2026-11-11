@@ -1,20 +1,28 @@
 //! ADR 2026-11-10-taskstore-consumer-ports: `OrgDirectory`・`TaskQuery` の試験用の fake と、
-//! `tools/projects`・`tools/tasks` の一覧の本体をこの fake で確かめる試験（SQLite を開かない）。
+//! `tools/org`・`tools/projects`・`resources` の組織の列挙・`tools/tasks` の一覧の本体をこの fake で
+//! 確かめる試験（SQLite を開かない）。
 //!
-//! fake はメモリの `Vec` を持つだけで、SQL の振る舞い（並び・絞り込み・cursor）は task-core の store の
-//! 試験が確かめる。`list_page` は道具が使う形（`ListOrder::UpdatedDesc`・cursor なし・`statuses` と
+//! fake はメモリの `Vec` を持つだけで、SQL の振る舞い（並び・絞り込み・cursor・upsert の検査）は task-core
+//! の store の試験が確かめる（名簿は `store::tests::org_nodes_round_trip_and_upsert_keeps_created_at`・
+//! `store::tests::org_upsert_rejects_a_second_secretary_and_cycles`、継続セッションは
+//! `node_session::tests::conversation_and_lead_kinds_and_different_nodes_are_independent`）。`list_page` は道具が使う形（`ListOrder::UpdatedDesc`・cursor なし・`statuses` と
 //! `project_id` の絞り込み）だけを実装し、それ以外の並びと cursor は `StoreError::Invalid` で断る。
 
 use std::sync::Mutex;
 use task_core::{
     Budget, EventRow, ListFilter, ListOrder, Milestone, MilestoneId, MilestoneStatus, OrgDirectory,
-    OrgNode, Page, Project, ProjectId, ProjectStatus, Status, StoreError, Task, TaskId, TaskKind,
-    TaskQuery, Tier, WorkerHint, WorkspaceSpec,
+    OrgKind, OrgNode, Page, Project, ProjectId, ProjectStatus, SessionKind, Status, StoreError,
+    Task, TaskId, TaskKind, TaskQuery, Tier, WorkerHint, WorkspaceSpec,
 };
 use time::{Duration, OffsetDateTime};
 
+use super::ToolErrorCode;
+use super::org::{
+    CreateNodeArgs, create_node, effective_profile, list_nodes, set_node_skill_mount,
+};
 use super::projects::{get_project, list_projects};
 use super::tasks::list_tasks;
+use crate::resources::org_resources;
 
 #[derive(Default)]
 struct FakePorts {
@@ -361,4 +369,226 @@ fn port_fake_tasks_list_filters_by_status_project_and_limit() {
 
     let first = list_tasks(&fake, &filter, 1).expect("list limited");
     assert_eq!(ids(&first, |t| &t.id), vec![ready_new.to_string()]);
+}
+
+/// 組織のノード（`skills` は profile の skills、`position` は名簿の並び）。
+fn org_node(
+    id: &str,
+    parent: Option<&str>,
+    kind: OrgKind,
+    skills: &[&str],
+    position: i64,
+) -> OrgNode {
+    let profile = task_core::Profile {
+        skills: skills.iter().map(|s| s.to_string()).collect(),
+        ..Default::default()
+    };
+    OrgNode {
+        id: id.to_string(),
+        parent_id: parent.map(str::to_string),
+        name: format!("{id} name"),
+        kind,
+        genre: None,
+        brief: String::new(),
+        profile,
+        position,
+        created_at: at(0),
+        updated_at: at(0),
+    }
+}
+
+/// secretary `cos` > department `eng`・`ops` > section `backend`（`eng` の下）の名簿を持つ fake。
+fn org_fake() -> FakePorts {
+    let fake = FakePorts::default();
+    for node in [
+        org_node("cos", None, OrgKind::Secretary, &["triage"], 0),
+        org_node("eng", Some("cos"), OrgKind::Department, &["rust"], 1),
+        org_node("ops", Some("cos"), OrgKind::Department, &[], 2),
+        org_node("backend", Some("eng"), OrgKind::Section, &["sql"], 3),
+    ] {
+        fake.org_upsert(&node).expect("seed org");
+    }
+    fake
+}
+
+#[test]
+fn port_fake_org_list_inherits_skills_and_asks_sessions_by_node_kind() {
+    let fake = org_fake();
+    // 有効なセッション: cos の conversation、eng の lead、ops は conversation だけ（department は lead を見る）。
+    let active = [
+        ("cos", SessionKind::Conversation),
+        ("eng", SessionKind::Lead),
+        ("ops", SessionKind::Conversation),
+    ];
+    let asked = Mutex::new(Vec::new());
+    let has_session = |node_id: &str, kind: SessionKind| -> Result<bool, StoreError> {
+        asked
+            .lock()
+            .map_err(|_| StoreError::Invalid("asked lock poisoned".to_string()))?
+            .push(node_id.to_string());
+        Ok(active.contains(&(node_id, kind)))
+    };
+
+    let items = list_nodes(&fake, &has_session).expect("list org");
+
+    assert_eq!(
+        ids(&items, |n| &n.id),
+        vec!["cos", "eng", "ops", "backend"],
+        "名簿の並び（position）のまま"
+    );
+    let by_id = |id: &str| items.iter().find(|n| n.id == id).expect("node");
+    assert_eq!(by_id("cos").kind, OrgKind::Secretary);
+    assert!(by_id("cos").has_continuation_session);
+    assert!(by_id("eng").has_continuation_session);
+    assert!(
+        !by_id("ops").has_continuation_session,
+        "department は lead のセッションだけを数える"
+    );
+    assert!(!by_id("backend").has_continuation_session);
+    assert_eq!(by_id("backend").parent_id.as_deref(), Some("eng"));
+    assert_eq!(
+        by_id("backend").skills,
+        vec!["triage", "rust", "sql"],
+        "祖先の skills を根から継ぐ"
+    );
+    assert_eq!(
+        asked.lock().expect("asked").as_slice(),
+        ["cos", "eng", "ops"],
+        "section のセッションは聞かない"
+    );
+
+    let failing = |_: &str, _: SessionKind| -> Result<bool, StoreError> {
+        Err(StoreError::Invalid("sessions unavailable".to_string()))
+    };
+    let err = list_nodes(&fake, &failing).expect_err("session lookup fails");
+    assert_eq!(err.code, ToolErrorCode::Internal);
+}
+
+#[test]
+fn port_fake_org_get_resolves_inherited_profile_or_none_for_missing_id() {
+    let fake = org_fake();
+
+    let profile = effective_profile(&fake, "backend")
+        .expect("get")
+        .expect("backend exists");
+    assert_eq!(profile.node_id, "backend");
+    assert_eq!(profile.chain, vec!["cos", "eng", "backend"]);
+    assert_eq!(profile.skills, vec!["triage", "rust", "sql"]);
+
+    let missing = effective_profile(&fake, "nope").expect("get missing");
+    assert!(missing.is_none());
+}
+
+#[test]
+fn port_fake_org_create_node_upserts_child_without_tools_and_permissions() {
+    let fake = org_fake();
+    let args: CreateNodeArgs = serde_json::from_value(serde_json::json!({
+        "parent_id": "ops",
+        "id": "storage",
+        "name": "Storage",
+        "profile": {
+            "skills": ["lustre"],
+            "tools": ["gh"],
+            "permissions": {"approvals": ["cluster:pegasus"]}
+        }
+    }))
+    .expect("args");
+
+    let created = create_node(&fake, args, at(500)).expect("create");
+
+    let stored = fake
+        .org_get("storage")
+        .expect("get")
+        .expect("org_upsert received the node");
+    assert_eq!(stored, created);
+    assert_eq!(stored.parent_id.as_deref(), Some("ops"));
+    assert_eq!(stored.kind, OrgKind::Section, "department の子は section");
+    assert_eq!(stored.name, "Storage");
+    assert_eq!(stored.position, 0);
+    assert_eq!((stored.created_at, stored.updated_at), (at(500), at(500)));
+    assert_eq!(stored.profile.skills, vec!["lustre"]);
+    assert!(stored.profile.tools.is_empty(), "tools は外から触れない");
+    assert!(
+        stored.profile.permissions.approvals.is_empty(),
+        "permissions は外から触れない"
+    );
+
+    let args: CreateNodeArgs = serde_json::from_value(serde_json::json!({
+        "parent_id": "cos", "id": "research", "name": "Research"
+    }))
+    .expect("args");
+    let department = create_node(&fake, args, at(600)).expect("create department");
+    assert_eq!(
+        department.kind,
+        OrgKind::Department,
+        "secretary の子は department"
+    );
+}
+
+#[test]
+fn port_fake_org_create_node_rejects_bad_parent_or_duplicate_id_without_writing() {
+    let fake = org_fake();
+    let before = fake.org_list().expect("list");
+    for (parent, id) in [("nope", "x1"), ("backend", "x2"), ("eng", "ops")] {
+        let args: CreateNodeArgs = serde_json::from_value(serde_json::json!({
+            "parent_id": parent, "id": id, "name": "X"
+        }))
+        .expect("args");
+        let err = create_node(&fake, args, at(700)).expect_err("rejected");
+        assert_eq!(err.code, ToolErrorCode::InvalidParams, "{parent}/{id}");
+    }
+    assert_eq!(fake.org_list().expect("list"), before, "何も書かない");
+}
+
+#[test]
+fn port_fake_org_mount_skill_adds_and_removes_the_mount_or_not_found() {
+    let fake = org_fake();
+
+    let mounted = set_node_skill_mount(&fake, "eng", "yomiyasu", true, at(800)).expect("mount");
+    assert_eq!(mounted.profile.skills_mounts, vec!["yomiyasu"]);
+    assert_eq!(mounted.updated_at, at(800));
+    let stored = fake.org_get("eng").expect("get").expect("eng");
+    assert_eq!(stored, mounted, "org_upsert received the mounted node");
+    assert_eq!(stored.profile.skills, vec!["rust"], "他の欄は変えない");
+
+    set_node_skill_mount(&fake, "eng", "yomiyasu", true, at(810)).expect("mount again");
+    let stored = fake.org_get("eng").expect("get").expect("eng");
+    assert_eq!(stored.profile.skills_mounts, vec!["yomiyasu"], "重ねない");
+
+    let unmounted =
+        set_node_skill_mount(&fake, "eng", "yomiyasu", false, at(900)).expect("unmount");
+    assert!(unmounted.profile.skills_mounts.is_empty());
+    assert_eq!(
+        fake.org_get("eng").expect("get").expect("eng"),
+        unmounted,
+        "org_upsert received the unmounted node"
+    );
+
+    let err =
+        set_node_skill_mount(&fake, "nope", "yomiyasu", true, at(1000)).expect_err("missing node");
+    assert_eq!(err.code, ToolErrorCode::NotFound);
+}
+
+#[test]
+fn port_fake_resources_org_list_has_one_json_resource_per_node() {
+    let fake = org_fake();
+
+    let resources = org_resources(&fake).expect("resources");
+
+    let uris: Vec<_> = resources.iter().map(|r| r.uri.as_str()).collect();
+    assert_eq!(
+        uris,
+        vec![
+            "celeris://org/cos",
+            "celeris://org/eng",
+            "celeris://org/ops",
+            "celeris://org/backend"
+        ]
+    );
+    assert_eq!(resources[1].name, "eng name");
+    assert!(resources.iter().all(|r| r.mime_type == "application/json"));
+    assert!(resources.iter().all(|r| r.description.is_none()));
+
+    let empty = org_resources(&FakePorts::default()).expect("no nodes");
+    assert!(empty.is_empty());
 }

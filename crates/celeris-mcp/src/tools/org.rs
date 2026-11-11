@@ -1,4 +1,9 @@
 //! ADR-0056 D2: `org_list` / `org_get` / `org_create_node` / `org_mount_skill` / `org_unmount_skill`。
+//!
+//! ADR 2026-11-10-taskstore-consumer-ports: 本体（`list_nodes`・`effective_profile`・`create_node`・
+//! `set_node_skill_mount`）は同期の関数で、`&dyn OrgDirectory` だけを受ける（`list_nodes` は継続セッションの
+//! 有無を聞く関数も受ける）。試験は `tools/fake_ports.rs` の fake を渡す。async 側は引数を検査し、
+//! `McpState::blocking_on` で本体を 1 回呼ぶ。
 
 use std::future::Future;
 use std::pin::Pin;
@@ -7,8 +12,7 @@ use std::sync::Arc;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use task_core::{
-    EffectiveProfile, McpScope, NodeSessionStore, OrgDirectory, OrgKind, OrgNode, Profile,
-    SessionKind,
+    EffectiveProfile, McpScope, OrgDirectory, OrgKind, OrgNode, Profile, SessionKind, StoreError,
 };
 use time::OffsetDateTime;
 
@@ -46,39 +50,55 @@ async fn list_impl(
     _client: &AuthedClient,
     _args: serde_json::Value,
 ) -> Result<ToolOutput, ToolError> {
+    let sessions = Arc::clone(&state.node_sessions);
     let items = state
-        .blocking(move |store| -> Result<Vec<OrgNodeSummary>, ToolError> {
-            let nodes = store
-                .org_list()
-                .map_err(|e| ToolError::internal(e.to_string()))?;
-            let mut out = Vec::with_capacity(nodes.len());
-            for node in &nodes {
-                let effective = task_core::resolve_profile(&nodes, &node.id);
-                let has_session = match node.kind {
-                    OrgKind::Secretary => store
-                        .node_session_active(&node.id, SessionKind::Conversation, None)
-                        .map_err(|e| ToolError::internal(e.to_string()))?
-                        .is_some(),
-                    OrgKind::Department => store
-                        .node_session_active(&node.id, SessionKind::Lead, None)
-                        .map_err(|e| ToolError::internal(e.to_string()))?
-                        .is_some(),
-                    OrgKind::Section => false,
-                };
-                out.push(OrgNodeSummary {
-                    id: node.id.clone(),
-                    name: node.name.clone(),
-                    parent_id: node.parent_id.clone(),
-                    kind: node.kind,
-                    skills: effective.skills,
-                    harness_default: effective.harness_default,
-                    has_continuation_session: has_session,
-                });
-            }
-            Ok(out)
+        .blocking_on(&state.org_directory, move |org| {
+            list_nodes(org, &|node_id, kind| {
+                Ok(sessions.node_session_active(node_id, kind, None)?.is_some())
+            })
         })
         .await?;
     ToolOutput::from_serialize(&ListOutput { items })
+}
+
+/// 有効な継続セッションがあるか（`node_id`, `kind`）を答える関数（案件に結び付かないセッションだけを見る）。
+pub(super) type HasSession<'a> = &'a dyn Fn(&str, SessionKind) -> Result<bool, StoreError>;
+
+/// `org_list` の本体: 名簿の全ノードを名簿の並びで、実効 profile の skills・harness の既定と、継続
+/// セッションの有無（secretary は conversation、department は lead を `has_session` に聞く。section は
+/// 持たないので聞かない）に要約する。
+pub(super) fn list_nodes(
+    org: &dyn OrgDirectory,
+    has_session: HasSession<'_>,
+) -> Result<Vec<OrgNodeSummary>, ToolError> {
+    let nodes = org
+        .org_list()
+        .map_err(|e| ToolError::internal(e.to_string()))?;
+    let mut out = Vec::with_capacity(nodes.len());
+    for node in &nodes {
+        let effective = task_core::resolve_profile(&nodes, &node.id);
+        let session_kind = match node.kind {
+            OrgKind::Secretary => Some(SessionKind::Conversation),
+            OrgKind::Department => Some(SessionKind::Lead),
+            OrgKind::Section => None,
+        };
+        let has_continuation_session = match session_kind {
+            Some(kind) => {
+                has_session(&node.id, kind).map_err(|e| ToolError::internal(e.to_string()))?
+            }
+            None => false,
+        };
+        out.push(OrgNodeSummary {
+            id: node.id.clone(),
+            name: node.name.clone(),
+            parent_id: node.parent_id.clone(),
+            kind: node.kind,
+            skills: effective.skills,
+            harness_default: effective.harness_default,
+            has_continuation_session,
+        });
+    }
+    Ok(out)
 }
 
 fn list_call<'a>(
@@ -115,22 +135,28 @@ async fn get_impl(
     let args: GetArgs =
         serde_json::from_value(args).map_err(|e| ToolError::invalid_params(e.to_string()))?;
     let profile = state
-        .blocking(
-            move |store| -> Result<Option<EffectiveProfile>, ToolError> {
-                let nodes = store
-                    .org_list()
-                    .map_err(|e| ToolError::internal(e.to_string()))?;
-                if !nodes.iter().any(|n| n.id == args.node_id) {
-                    return Ok(None);
-                }
-                Ok(Some(task_core::resolve_profile(&nodes, &args.node_id)))
-            },
-        )
+        .blocking_on(&state.org_directory, move |org| {
+            effective_profile(org, &args.node_id)
+        })
         .await?;
     match profile {
         Some(p) => ToolOutput::from_serialize(&p),
         None => Err(ToolError::not_found("org node was not found")),
     }
+}
+
+/// `org_get` の本体: そのノードの実効 profile（祖先から継いだものを含む）。ノードが無ければ `None`。
+pub(super) fn effective_profile(
+    org: &dyn OrgDirectory,
+    node_id: &str,
+) -> Result<Option<EffectiveProfile>, ToolError> {
+    let nodes = org
+        .org_list()
+        .map_err(|e| ToolError::internal(e.to_string()))?;
+    if !nodes.iter().any(|n| n.id == node_id) {
+        return Ok(None);
+    }
+    Ok(Some(task_core::resolve_profile(&nodes, node_id)))
 }
 
 fn get_call<'a>(
@@ -222,59 +248,67 @@ async fn create_node_impl(
 ) -> Result<ToolOutput, ToolError> {
     let args: CreateNodeArgs =
         serde_json::from_value(args).map_err(|e| ToolError::invalid_params(e.to_string()))?;
+    let now = OffsetDateTime::now_utc();
+    let node = state
+        .blocking_on(&state.org_directory, move |org| create_node(org, args, now))
+        .await?;
+    ToolOutput::from_serialize(&node)
+}
+
+/// `org_create_node` の本体: 親の下に子ノードを 1 つ作る。種別は親で決まる（secretary の子は department、
+/// department の子は section、section は子を持てない）。`profile` は `tools` / `permissions` / `review`
+/// を落とす。親が無い・id が既にある・検査に落ちたら `InvalidParams` で、何も書かない。
+pub(super) fn create_node(
+    org: &dyn OrgDirectory,
+    args: CreateNodeArgs,
+    now: OffsetDateTime,
+) -> Result<OrgNode, ToolError> {
     let profile = args
         .profile
         .map(ProfileInput::into_profile)
         .unwrap_or_default();
-    let node = state
-        .blocking(move |store| -> Result<OrgNode, ToolError> {
-            let nodes = store
-                .org_list()
-                .map_err(|e| ToolError::internal(e.to_string()))?;
-            let Some(parent) = nodes.iter().find(|n| n.id == args.parent_id) else {
-                return Err(ToolError::invalid_params(format!(
-                    "parent {:?} does not exist",
-                    args.parent_id
-                )));
-            };
-            let kind = match parent.kind {
-                OrgKind::Secretary => OrgKind::Department,
-                OrgKind::Department => OrgKind::Section,
-                OrgKind::Section => {
-                    return Err(ToolError::invalid_params(
-                        "a section cannot have child nodes",
-                    ));
-                }
-            };
-            if nodes.iter().any(|n| n.id == args.id) {
-                return Err(ToolError::invalid_params(format!(
-                    "org node {:?} already exists",
-                    args.id
-                )));
-            }
-            let now = OffsetDateTime::now_utc();
-            let node = OrgNode {
-                id: args.id,
-                parent_id: Some(args.parent_id),
-                name: args.name,
-                kind,
-                genre: None,
-                brief: String::new(),
-                profile,
-                position: 0,
-                created_at: now,
-                updated_at: now,
-            };
-            task_core::validate_upsert(&nodes, &node)
-                .map_err(|e| ToolError::invalid_params(e.to_string()))?;
-            task_core::validate_profile(&node.profile, &[])
-                .map_err(|e| ToolError::invalid_params(e.to_string()))?;
-            store
-                .org_upsert(&node)
-                .map_err(|e| ToolError::internal(e.to_string()))
-        })
-        .await?;
-    ToolOutput::from_serialize(&node)
+    let nodes = org
+        .org_list()
+        .map_err(|e| ToolError::internal(e.to_string()))?;
+    let Some(parent) = nodes.iter().find(|n| n.id == args.parent_id) else {
+        return Err(ToolError::invalid_params(format!(
+            "parent {:?} does not exist",
+            args.parent_id
+        )));
+    };
+    let kind = match parent.kind {
+        OrgKind::Secretary => OrgKind::Department,
+        OrgKind::Department => OrgKind::Section,
+        OrgKind::Section => {
+            return Err(ToolError::invalid_params(
+                "a section cannot have child nodes",
+            ));
+        }
+    };
+    if nodes.iter().any(|n| n.id == args.id) {
+        return Err(ToolError::invalid_params(format!(
+            "org node {:?} already exists",
+            args.id
+        )));
+    }
+    let node = OrgNode {
+        id: args.id,
+        parent_id: Some(args.parent_id),
+        name: args.name,
+        kind,
+        genre: None,
+        brief: String::new(),
+        profile,
+        position: 0,
+        created_at: now,
+        updated_at: now,
+    };
+    task_core::validate_upsert(&nodes, &node)
+        .map_err(|e| ToolError::invalid_params(e.to_string()))?;
+    task_core::validate_profile(&node.profile, &[])
+        .map_err(|e| ToolError::invalid_params(e.to_string()))?;
+    org.org_upsert(&node)
+        .map_err(|e| ToolError::internal(e.to_string()))
 }
 
 fn create_node_call<'a>(
@@ -317,33 +351,40 @@ async fn mount_common(
             args.skill
         )));
     }
+    let now = OffsetDateTime::now_utc();
     let node = state
-        .blocking(move |store| -> Result<OrgNode, ToolError> {
-            let Some(mut node) = store
-                .org_get(&args.node_id)
-                .map_err(|e| ToolError::internal(e.to_string()))?
-            else {
-                return Err(ToolError::not_found(format!(
-                    "org node {:?} was not found",
-                    args.node_id
-                )));
-            };
-            // Phase 82（ADR-0056 D3 続き）: task-api の `POST/DELETE /org/{id}/skills…` と**同じ**
-            // task-ops 関数を呼ぶ（挙動が食い違わないようにするため）。名前は呼び出し元で検証済みなので
-            // ここで失敗することは無いが、`?` で素直に伝える。
-            task_ops::knowledge::set_skill_mount(
-                &mut node.profile.skills_mounts,
-                &args.skill,
-                mount,
-            )
-            .map_err(|e| ToolError::invalid_params(e.to_string()))?;
-            node.updated_at = OffsetDateTime::now_utc();
-            store
-                .org_upsert(&node)
-                .map_err(|e| ToolError::internal(e.to_string()))
+        .blocking_on(&state.org_directory, move |org| {
+            set_node_skill_mount(org, &args.node_id, &args.skill, mount, now)
         })
         .await?;
     ToolOutput::from_serialize(&node)
+}
+
+/// `org_mount_skill` / `org_unmount_skill` の本体: そのノードの `skills_mounts` に `skill` を足す
+/// （`mount`）か外し、`updated_at = now` で書く。ノードが無ければ `NotFound`。
+pub(super) fn set_node_skill_mount(
+    org: &dyn OrgDirectory,
+    node_id: &str,
+    skill: &str,
+    mount: bool,
+    now: OffsetDateTime,
+) -> Result<OrgNode, ToolError> {
+    let Some(mut node) = org
+        .org_get(node_id)
+        .map_err(|e| ToolError::internal(e.to_string()))?
+    else {
+        return Err(ToolError::not_found(format!(
+            "org node {node_id:?} was not found"
+        )));
+    };
+    // Phase 82（ADR-0056 D3 続き）: task-api の `POST/DELETE /org/{id}/skills…` と**同じ**
+    // task-ops 関数を呼ぶ（挙動が食い違わないようにするため）。名前は呼び出し元で検証済みなので
+    // ここで失敗することは無いが、`?` で素直に伝える。
+    task_ops::knowledge::set_skill_mount(&mut node.profile.skills_mounts, skill, mount)
+        .map_err(|e| ToolError::invalid_params(e.to_string()))?;
+    node.updated_at = now;
+    org.org_upsert(&node)
+        .map_err(|e| ToolError::internal(e.to_string()))
 }
 
 fn mount_skill_impl<'a>(

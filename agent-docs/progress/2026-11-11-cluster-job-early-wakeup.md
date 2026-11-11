@@ -1,7 +1,7 @@
 ---
 title: クラスタ job の失敗・長い Q/H による早期再開
 tasks: [01M752V5864CMYZZ2QHYAJ4X0E]
-status: done
+status: blocked
 updated: 2026-11-11
 ---
 # クラスタ job の失敗・長い Q/H による早期再開
@@ -68,7 +68,11 @@ attempt 1 の review では、条件 5 と workspace.toml の `bash scripts/dev/
 - この実測では変更範囲外の 3 件が負荷で落ちた。`dispatcher::tests::git_workspace::review_records_each_repositories_own_definition_and_worktree_results`（each repository must have its own evidence）、`browser::post_login_tests::daemon_post_login_waits_through_slow_shibboleth_hops`（target_changed）、`celeris-campaign::k4_cells_validity real_k4_archive_grades_thirty_of_thirty_two`（600 秒で時間切れ）。
 - 同じ HEAD で単独に再実行すると 3 件とも合格した。前 2 件と cluster_job の試験 28 件の 30 件が 24.5 秒で合格、k4 の試験は 36.6 秒で合格。
 - doc test（同じ 14 crate）は exit 0（45 秒）。
-- 低い負荷では同じ検査が 1200 秒に収まる。attempt 1 の nextest は 421 秒の回があった。
+- 2 回目の実測（提出時の HEAD、13:59〜14:22 UTC、load average は 47 から 89〜102 に上がった）は 22 分 27 秒、exit 100。nextest は 899.6 秒で 8222 件合格、2 件が 600 秒で時間切れ（`celeris-campaign::k4_cells_validity real_k4_archive_grades_thirty_of_thirty_two`、`celeris-campaign::k_cases_grade k3_k4_recompute_rejects_a_wrong_report_and_accepts_the_raw_derived_one`）。
+- 時間切れの 2 件は原票の tgz を展開して採点する重い試験で、変更範囲外。単独の再実行では合格した（k4 は 36.6 秒、k3_k4_recompute は 137.2 秒、`dagbench_graded real_k3_case_is_graded_independently_on_both_arms` は 126.4 秒）。
+- 低い負荷では同じ検査が 1200 秒に収まりうる。attempt 1 の nextest は 421 秒の回があった。
+- `cargo fmt --all -- --check` と `cargo clippy --workspace -- -D warnings` は提出時の HEAD で exit 0。
+- test-affected が 3 回続けて通らなかった（attempt 1 の review、attempt 2 の実測 2 回）ため、CLAUDE.md の規則に従い、進め方を人に質問する。
 
 ## 本番への移行
 
@@ -77,11 +81,13 @@ attempt 1 の review では、条件 5 と workspace.toml の `bash scripts/dev/
 
 ## 未解決
 
-無し。実クラスタの job 操作は実行していない。
+- 受け入れ条件 5（`bash scripts/dev/test-affected.sh` exit 0）が host の負荷で通らない。進め方を人に質問した。
+- 実クラスタの job 操作は実行していない。
 
 ## 提案
 
 - task-core を変える task の test-affected は全 crate とほぼ同じ量になり、load average 60 以上の host では review の上限（`review_timeout_secs` = 600 秒、再試行 1200 秒）に収まらない。review の決定的検査の同時実行数を host の core 数で制限するか、重い検査の review を負荷の低い時に回す仕組みを別 task で検討することを提案する。
+- celeris-campaign の原票 tgz を使う試験（k4_cells_validity・k_cases_grade・dagbench_graded の real 系）は単独でも 36〜137 秒かかり、負荷の下で 600 秒の上限に達する。全体の試験の中での扱い（slow 枠の分離など）を別 task で検討することを提案する。
 
 変更範囲外の `celeris-credentiald::injection_ipc::concurrent_first_request_streams_over_the_limit_are_denied_unread`
 が全体実行で一度 `call: Io` になった。コードを変えない単独再実行は 1 件合格（0.03 秒）。

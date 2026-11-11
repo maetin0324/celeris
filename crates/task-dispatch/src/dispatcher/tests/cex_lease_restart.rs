@@ -375,14 +375,24 @@ async fn cex_draining_instance_reclaims_its_expired_lease_without_redispatching(
         index_status(&store, &run_a),
         Some(task_core::RunIndexStatus::Running)
     );
-    // draining の間は Ready の Task を起こさない（tick の結果が in_flight 0 のまま）。
+    // draining の間は Ready の Task を起こさない。回収した Task は手元の infra backoff でも止まるので、backoff の無い
+    // 新しい Task も置き、それも起こさないことを確かめる（tick の結果が dispatched 0・in_flight 0 のまま）。
+    let other = true_task(dir.path());
+    let other_id = other.id;
+    store.insert(&other).unwrap();
     let report = draining.tick().unwrap();
     assert_eq!((report.dispatched, report.in_flight), (0, 0), "{report:?}");
     assert_eq!(worker_starts(&store, id), vec![run_a.clone()]);
+    assert!(worker_starts(&store, other_id).is_empty());
+    assert_eq!(status_of(&store, other_id), Status::Ready);
 
     let mut active = dispatcher(store.clone(), done_adapter(), 1);
     let s = store.clone();
-    assert!(run_until_state(&mut active, || status_of(&s, id) == Status::Done).await);
+    assert!(
+        run_until_state(&mut active, || status_of(&s, id) == Status::Done
+            && status_of(&s, other_id) == Status::Done)
+        .await
+    );
     let starts = worker_starts(&store, id);
     assert_eq!(starts.len(), 2, "{starts:?}");
     assert_eq!(finishes(&store, id, &run_a).len(), 1);
@@ -503,6 +513,75 @@ async fn cex_reclosing_a_run_after_worker_finished_does_not_write_twice() {
             "{key}"
         );
     }
+    assert!(store.runs_running().unwrap().is_empty());
+}
+
+/// 不変条件（ADR 2026-10-03-ownerless-running-runs D3・`close_aborted_run` の再実行の注記）: 手元の run A の
+/// `WorkerFinished` を別の経路（人の割り込みと同時の閉じ・新しい active の照合）が先に記録した後で、持ち主の
+/// dispatcher が A を止めて閉じ直しても、`WorkerFinished` を二重に書かず、WU の回収は省略しない（WU a を A の
+/// running のまま残さず、別の run で走らせ直して Task を完了させる）。
+///
+/// 既存試験で検出できない理由: 割り込み・cancel の試験（`a_run_aborted_by_cancel_closes_its_runs_row` など）は
+/// `WorkerFinished` を持ち主の閉じ直しで初めて書く順序だけを作り、記録済みの run を閉じ直す順序を作らない。
+/// `close_aborted_run` の `already` を外しても既存試験は落ちない。
+#[tokio::test]
+async fn cex_holder_reclosing_an_already_finished_run_does_not_write_twice() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = true_task(dir.path());
+    let id = task.id;
+    store.insert(&task).unwrap();
+    adopt_three_step_plan(&store, id);
+    let adapter = GatedAdapter::new();
+    let mut d = dispatcher(store.clone(), adapter.clone(), 1);
+    let (s, a) = (store.clone(), adapter.clone());
+    assert!(
+        run_until_state(&mut d, || a.started().len() == 1
+            && wu_row(&s, id, "a").status == WorkUnitStatus::Running)
+        .await
+    );
+    let run_a = wu_row(&store, id, "a").last_run_id.unwrap();
+    assert_eq!(lease_run(&store, id), Some(run_a.clone()));
+
+    // 別の経路が A の終わりを先に記録し、Task を Ready に戻した（WU a は running のまま）。
+    store
+        .apply_transition_with_events(
+            id,
+            Trigger::Interrupt,
+            vec![Event::WorkerFinished {
+                run_id: run_a.clone(),
+                outcome: "interrupted: comment".into(),
+                usage: None,
+                role: None,
+                metrics: None,
+                end: Some(RunEnd::Cancelled),
+            }],
+        )
+        .unwrap();
+    assert_eq!(finishes(&store, id, &run_a).len(), 1);
+
+    // 持ち主の tick: `abort_stale_runs` が A を止めて `close_aborted_run` で閉じ直す（同期）。
+    d.tick().unwrap();
+    assert_eq!(finishes(&store, id, &run_a).len(), 1);
+    let a_row = wu_row(&store, id, "a");
+    assert!(
+        a_row.status != WorkUnitStatus::Running
+            || a_row.last_run_id.as_deref() != Some(run_a.as_str()),
+        "{a_row:?}"
+    );
+
+    adapter.gate.add_permits(8);
+    let s = store.clone();
+    assert!(run_until_state(&mut d, || status_of(&s, id) == Status::Done).await);
+    assert_eq!(finishes(&store, id, &run_a).len(), 1);
+    for key in ["a", "b", "c"] {
+        assert_eq!(
+            wu_row(&store, id, key).status,
+            WorkUnitStatus::Done,
+            "{key}"
+        );
+    }
+    assert_ne!(wu_row(&store, id, "a").last_run_id, Some(run_a.clone()));
     assert!(store.runs_running().unwrap().is_empty());
 }
 

@@ -11,12 +11,15 @@
 //! 値（[`Inputs`]）だけで決まる。
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
+
+use task_core::{Task, WorkspaceSpec};
 
 use task_ops::daemon::{
     ScratchAdmissionView, ScratchHeldRunView, ScratchOwnerForecastView, ScratchOwnerView,
+    ScratchStatus,
 };
 
 /// pool の根に daemon が書き出す、待たせている run の一覧。
@@ -31,21 +34,23 @@ pub fn min_free_bytes(total: u64, pct: f64) -> u64 {
 }
 
 /// D2: `paths` のうち空きが下限（容量 × `pct`）を割る最初のものの理由（filesystem が読めなければそれも理由。
-/// 安全側に倒して run を始めない）。
-pub fn find_low_disk(paths: &[std::path::PathBuf], pct: f64) -> Option<String> {
-    paths
-        .iter()
-        .find_map(|path| match crate::scratch_gc::fs_stats(path) {
-            Some((total, free)) if free < min_free_bytes(total, pct) => Some(format!(
-                "{}: {} free (minimum {} = {pct}% of {})",
-                path.display(),
-                gb(free),
-                gb(min_free_bytes(total, pct)),
-                gb(total),
-            )),
-            Some(_) => None,
-            None => Some(format!("{}: cannot read the filesystem", path.display())),
-        })
+/// 安全側に倒して run を始めない）。`fs` は (容量, 空き) を返す statvfs（`scratch_gc::fs_stats`）。
+pub fn find_low_disk(
+    paths: &[std::path::PathBuf],
+    pct: f64,
+    fs: impl Fn(&Path) -> Option<(u64, u64)>,
+) -> Option<String> {
+    paths.iter().find_map(|path| match fs(path) {
+        Some((total, free)) if free < min_free_bytes(total, pct) => Some(format!(
+            "{}: {} free (minimum {} = {pct}% of {})",
+            path.display(),
+            gb(free),
+            gb(min_free_bytes(total, pct)),
+            gb(total),
+        )),
+        Some(_) => None,
+        None => Some(format!("{}: cannot read the filesystem", path.display())),
+    })
 }
 
 /// 見込みの材料の owner 1 つ。
@@ -202,31 +207,42 @@ pub type Probe = Arc<dyn Fn() -> Inputs + Send + Sync>;
 
 type HoldKey = (String, Option<String>);
 
-/// dispatcher の待たせている run（`ScratchState.admission`）。pass ごとに [`Gate::begin_pass`] を呼ぶ。
+/// dispatcher の待たせている run（`ScratchState.admission`）。pass ごとに [`Gate::begin_pass`] を呼ぶ。dispatch の
+/// 途中で `&self` の Dispatcher から呼べるよう、状態は中の Mutex に持つ（daemon の tick の thread だけが触る）。
 #[derive(Default)]
 pub struct Gate {
     pub probe: Option<Probe>,
+    state: Mutex<GateState>,
+}
+
+#[derive(Default)]
+struct GateState {
     holds: BTreeMap<HoldKey, ScratchHeldRunView>,
     seen: BTreeSet<HoldKey>,
     admitted_bytes: u64,
     published: Option<Vec<ScratchHeldRunView>>,
     /// 待ち始めの記録（log）を残した回数（試験が 1 回だけかを確かめる）。
-    pub notes: u64,
+    notes: u64,
 }
 
 impl Gate {
+    fn state(&self) -> std::sync::MutexGuard<'_, GateState> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     /// pass の始め: 前の pass で判定に来なかった run（始まった・`ready` でなくなった）の記録を消し、通した量を 0 に
     /// 戻す。一覧が変わっていれば `pool_root` の `admission.json` に書き出す。
-    pub fn begin_pass(&mut self, pool_root: Option<&Path>) {
-        let seen = std::mem::take(&mut self.seen);
-        self.holds.retain(|k, _| seen.contains(k));
-        self.admitted_bytes = 0;
-        let held = self.held_views();
+    pub fn begin_pass(&self, pool_root: Option<&Path>) {
+        let mut st = self.state();
+        let seen = std::mem::take(&mut st.seen);
+        st.holds.retain(|k, _| seen.contains(k));
+        st.admitted_bytes = 0;
+        let held: Vec<ScratchHeldRunView> = st.holds.values().cloned().collect();
         if let Some(root) = pool_root
-            && self.published.as_ref() != Some(&held)
+            && st.published.as_ref() != Some(&held)
         {
             match write_held(root, &held) {
-                Ok(()) => self.published = Some(held),
+                Ok(()) => st.published = Some(held),
                 Err(e) => tracing::warn!(error = %e, "disk forecast: cannot write the held runs"),
             }
         }
@@ -234,23 +250,59 @@ impl Gate {
 
     /// 待たせている run（task・WU の順）。
     pub fn held_views(&self) -> Vec<ScratchHeldRunView> {
-        self.holds.values().cloned().collect()
+        self.state().holds.values().cloned().collect()
+    }
+
+    /// 待ち始めの log を残した回数。
+    pub fn notes(&self) -> u64 {
+        self.state().notes
     }
 
     /// 判定に使う見込み。`probe` があればそれ、無ければ scratch の走査の結果（scratch が無効なら `None`）。
-    pub fn forecast(
-        &self,
-        view: Option<&task_ops::daemon::ScratchStatus>,
-    ) -> Option<ScratchAdmissionView> {
+    pub fn forecast(&self, view: Option<&ScratchStatus>) -> Option<ScratchAdmissionView> {
         match &self.probe {
             Some(probe) => Some(forecast(&probe(), Vec::new())),
             None => view.filter(|v| v.enabled).map(|v| v.admission.clone()),
         }
     }
 
+    /// D1 の dispatch からの入口: Local の task で、測った見込みがあるときだけ `repo_of`（run の cargo の target を
+    /// 結び付ける checkout の source）を引いて [`Gate::hold`] で判定する。待たせるなら `true`。
+    pub fn holds_run(
+        &self,
+        view: Option<&ScratchStatus>,
+        task: &Task,
+        work_unit_id: Option<&str>,
+        runs_in_flight: usize,
+        repo_of: impl FnOnce() -> Option<PathBuf>,
+    ) -> bool {
+        if !matches!(task.workspace, WorkspaceSpec::Local { .. }) {
+            return false;
+        }
+        let Some(view) = self
+            .forecast(view)
+            .filter(|v| !v.expected_by_repo.is_empty())
+        else {
+            return false;
+        };
+        let Some(repo) = repo_of() else {
+            return false;
+        };
+        let repo_key = task_worker::build_cache::repo_cache_key(&repo);
+        let id = task.id.to_string();
+        self.hold(
+            &view,
+            &id,
+            work_unit_id,
+            &repo_key,
+            runs_in_flight,
+            SystemTime::now(),
+        )
+    }
+
     /// D1: run（task・WU）を待たせるなら `true`。待ち始めに 1 回だけ log を残す（受信箱・通知には出さない）。
     pub fn hold(
-        &mut self,
+        &self,
         view: &ScratchAdmissionView,
         task_id: &str,
         work_unit_id: Option<&str>,
@@ -264,28 +316,28 @@ impl Gate {
         }
         .to_string();
         let key: HoldKey = (task_id.to_string(), work_unit_id.map(str::to_string));
-        match decide(view, &owner, repo_key, self.admitted_bytes, runs_in_flight) {
+        let mut st = self.state();
+        match decide(view, &owner, repo_key, st.admitted_bytes, runs_in_flight) {
             Decision::Skip => {
-                self.holds.remove(&key);
+                st.holds.remove(&key);
                 false
             }
             Decision::Admit { need_bytes } => {
-                self.holds.remove(&key);
-                self.admitted_bytes = self.admitted_bytes.saturating_add(need_bytes);
+                st.holds.remove(&key);
+                st.admitted_bytes = st.admitted_bytes.saturating_add(need_bytes);
                 false
             }
             Decision::Hold { need_bytes, reason } => {
-                self.seen.insert(key.clone());
-                let since = self
-                    .holds
-                    .get(&key)
-                    .map(|h| h.since.clone())
-                    .unwrap_or_else(|| {
+                st.seen.insert(key.clone());
+                let since = match st.holds.get(&key) {
+                    Some(h) => h.since.clone(),
+                    None => {
                         tracing::info!(task_id, work_unit_id, %owner, %reason, "disk forecast: run held");
-                        self.notes += 1;
+                        st.notes += 1;
                         task_worker::scratch::rfc3339(now)
-                    });
-                self.holds.insert(
+                    }
+                };
+                st.holds.insert(
                     key,
                     ScratchHeldRunView {
                         task_id: task_id.to_string(),
@@ -429,7 +481,7 @@ mod tests {
             &inputs(10 * GB, vec![sample("task-a", "ap", true, Some(50 * GB))]),
             Vec::new(),
         );
-        let mut gate = Gate::default();
+        let gate = Gate::default();
         assert!(gate.hold(&v, "t1", None, "ap", 1, SystemTime::UNIX_EPOCH));
         gate.begin_pass(Some(dir.path()));
         let held = read_held(dir.path());

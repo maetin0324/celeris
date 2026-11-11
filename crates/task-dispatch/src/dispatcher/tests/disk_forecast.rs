@@ -104,7 +104,7 @@ async fn a_new_target_waits_ready_until_the_forecast_fits_and_the_reason_is_note
         assert_eq!(status(&f.store, b.id), Status::Ready);
     }
     assert_eq!(f.store.get(b.id).unwrap().unwrap().attempts, 0);
-    assert_eq!(f.d.scratch.admission.notes, 1, "the hold is noted once");
+    assert_eq!(f.d.scratch.admission.notes(), 1, "the hold is noted once");
     let held = f.d.scratch.admission.held_views();
     assert_eq!(held.len(), 1);
     assert_eq!(held[0].task_id, b.id.to_string());
@@ -156,7 +156,7 @@ async fn a_continuation_is_judged_by_its_increment_only() {
     f.d.tick().unwrap();
     assert_eq!(status(&f.store, cont.id), Status::Running);
     assert_eq!(status(&f.store, fresh.id), Status::Ready);
-    assert_eq!(f.d.scratch.admission.notes, 1);
+    assert_eq!(f.d.scratch.admission.notes(), 1);
 }
 
 #[tokio::test]
@@ -174,5 +174,5 @@ async fn the_only_run_is_never_held_and_unknown_repos_are_not_judged() {
     f.store.insert(&other).unwrap();
     f.d.tick().unwrap();
     assert_eq!(status(&f.store, other.id), Status::Running);
-    assert_eq!(f.d.scratch.admission.notes, 0);
+    assert_eq!(f.d.scratch.admission.notes(), 0);
 }

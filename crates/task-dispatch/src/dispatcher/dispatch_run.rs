@@ -70,17 +70,7 @@ impl Dispatcher {
         // ADR 2026-10-07-build-tmp-hygiene 付記 A4: 監視している path が `critical` のあいだは新しい coding run を
         // 起こさない（ready のまま。attempts を消費しない。並列 WU の 2 本目以降も同じ）。
         if self.held_by_disk_critical(&task) {
-            let path = self
-                .disk_watch
-                .as_ref()
-                .map(|r| {
-                    r.entries
-                        .iter()
-                        .map(|e| e.path.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default();
+            let path = crate::disk_watch::paths_label(self.disk_watch.as_ref());
             self.note_dispatch_wait(task.id, task_core::TaskWait::DiskCritical { path });
             return Ok(false);
         }
@@ -283,27 +273,13 @@ impl Dispatcher {
             );
             return Ok(false);
         }
-        // ADR 2026-11-11-disk-aware-dispatch D1: 空きの見込みが予備を割るなら、新しい target を作る run を始めず
-        // `ready` のまま待たせる（lease・attempts の前。理由は待ち始めに 1 回だけ log。受信箱には出さない）。
+        // ADR 2026-11-11-disk-aware-dispatch D1: 空きの見込みが予備を割るなら新しい target を作る run を ready のまま待たせる。
+        let (view, wu) = (self.scratch.view.as_ref(), run_key.work_unit.as_deref());
+        let repo_of = || self.cargo_target_repo(&task).map(|r| r.source);
         if !is_planner_dispatch
-            && matches!(task.workspace, WorkspaceSpec::Local { .. })
-            && let Some(view) = self.scratch.admission.forecast(self.scratch.view.as_ref())
-            && !view.expected_by_repo.is_empty()
-            && let Some(repo) = self.cargo_target_repo(&task)
+            && (self.scratch.admission).holds_run(view, &task, wu, self.running.len(), repo_of)
         {
-            let repo_key = task_worker::build_cache::repo_cache_key(&repo.source);
-            let (id, wu, now) = (
-                task.id.to_string(),
-                run_key.work_unit.as_deref(),
-                std::time::SystemTime::now(),
-            );
-            if self
-                .scratch
-                .admission
-                .hold(&view, &id, wu, &repo_key, self.running.len(), now)
-            {
-                return Ok(false);
-            }
+            return Ok(false);
         }
         // ADR-0018: リモート実行のタスクは、クラスタの設定・cooldown・並列度・多重接続を先に確かめる。
         // ADR-0062 B1（Phase 107）: `cluster_of` が `None` の理由を分ける。(a) 設定に無いクラスタ

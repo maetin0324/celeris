@@ -348,7 +348,9 @@ impl Dispatcher {
             paths.push(self.config.scratch.dir.clone());
         }
         let pct = self.config.min_free_disk_pct;
-        let find_low = move |paths: &[PathBuf]| crate::disk_admission::find_low_disk(paths, pct);
+        let find_low = move |paths: &[PathBuf]| {
+            crate::disk_admission::find_low_disk(paths, pct, crate::scratch_gc::fs_stats)
+        };
         let mut low = find_low(&paths);
         // ADR-0075 D3: 空きが足りなければ、新しい run を始める前にこの tick で緊急 GC（rename まで）を回す。
         // 削除は別スレッドなので空きが戻るのは数 tick 後。その間は下の保留と通知 1 回（attempts を消費しない）。

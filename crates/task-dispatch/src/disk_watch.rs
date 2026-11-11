@@ -525,6 +525,16 @@ pub fn run_disk_watch_with(
 }
 
 /// dispatcher が持つ監視の設定と間隔の時刻（[`crate::dispatcher::Dispatcher::set_disk_watch`]）。
+/// 監視している path（`, ` 区切り。`critical` の待ちの理由 `TaskWait::DiskCritical` に載せる。監視が無ければ空）。
+pub(crate) fn paths_label(runner: Option<&DiskWatchRunner>) -> String {
+    let entries = runner.map(|r| r.entries.as_slice()).unwrap_or_default();
+    let paths: Vec<String> = entries
+        .iter()
+        .map(|e| e.path.display().to_string())
+        .collect();
+    paths.join(", ")
+}
+
 pub(crate) struct DiskWatchRunner {
     pub(crate) entries: Vec<DiskWatchEntry>,
     pub(crate) probe: Box<dyn DiskProbe>,

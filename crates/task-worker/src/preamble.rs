@@ -116,7 +116,7 @@ fn render_parts(context: &RunContext, artifacts: &str, with_fixed_notes: bool) -
     out.push_str(&session_diff_section(context));
     // ADR-0046 D1 / D4（Phase 59）: 実効 profile（能力・方針・道具・知識・ハーネス）と進め方。
     // どちらも `None` / 空なら節ごと出さないので、Phase 58 までの出力とバイト単位で同じ。
-    // 61（ADR-0047 の知識の索引）は `knowledge_section` を別に足す。ここには入れない。
+    // KB の検索入口は `knowledge_section` を別に足す。ここには入れない。
     out.push_str(&profile_section(context));
     out.push_str(&mode_section(context));
     out.push_str(&organization_section(context));
@@ -129,10 +129,10 @@ fn render_parts(context: &RunContext, artifacts: &str, with_fixed_notes: bool) -
     out.push_str(&workspace_section(context));
     // ADR 2026-10-05 cos-chat-home D4: task に pin された添付の入力 manifest。空なら何も出さない。
     out.push_str(&input_attachments_section(context));
-    // ADR-0047 D2（Phase 61）: マウントされた知識の**索引だけ**（本文は入れない。道具で読む）。
+    // KB の検索入口（本文と索引は展開しない。必要なときに道具で読む）。
     // `context.knowledge` が無い run の前置きは Phase 60 までと 1 バイトも変わらない。
     if let Some(knowledge) = &context.knowledge {
-        out.push_str(&knowledge_section(&knowledge.mounts, &knowledge.index));
+        out.push_str(&knowledge_section(&knowledge.mounts));
     }
     out.push_str(&role_section(context));
     if with_fixed_notes {
@@ -920,22 +920,13 @@ pub fn input_attachments_section(context: &RunContext) -> String {
     out
 }
 
-/// ADR-0047 D2 / D3（Phase 61）: 知識の節（**索引だけ**。本文は入れない）。
-///
-/// `mounts` は実効マウント（ADR-0047 D2: 組織の和 ＋ 案件 ＋ タスクの明示）、`index` はそのマウントで
-/// 読めるページの索引（[`task_core::knowledge::mount_matches`] で振り分ける）。純粋関数で、
-/// マウントが 1 つも無い・索引が空なら**空文字列**（前置きは 1 バイトも変わらない）。
-///
-/// 出るもの: マウントの一覧 → D3 の使い方 → マウントごとの `path` / `title` / `tags`
-/// （全体で最大 [`task_core::knowledge::MAX_PREAMBLE_ITEMS`] 件。溢れた分は件数だけ出す）。
-pub fn knowledge_section(
-    mounts: &[task_core::KnowledgeMount],
-    index: &[task_core::KnowledgeItem],
-) -> String {
+/// KB の短い検索入口。索引の件数や並び順に prompt を依存させない。
+/// ADR 2026-11-11 worker-knowledge-entry。本文は必要なときに取得する。
+pub fn knowledge_section(mounts: &[task_core::KnowledgeMount]) -> String {
     if mounts.is_empty() {
         return String::new();
     }
-    let mut out = String::from("## 知識 (knowledge base — 索引だけ。本文は道具で読む)\n");
+    let mut out = String::from("## 知識 (knowledge base — 必要なときに検索して読む)\n");
     out.push_str(&format!(
         "あなたが読める知識: {}。\n",
         mounts
@@ -944,45 +935,14 @@ pub fn knowledge_section(
             .collect::<Vec<_>>()
             .join("、")
     ));
-    // ADR-0047 D3 の案内文。
     out.push_str(
-        "知識は `celerisctl knowledge search <語> [--scope …]` で探し、`celerisctl knowledge get <path>` で読む。\
+        "過去の設計判断・運用手順・既知の不具合が必要になったら、task の対象名やエラーの語で \
+         `celerisctl knowledge search <語> [--scope …]` を使う。案件の知識は `--scope project:<slug>` で絞る。\n\
+         結果の path を `celerisctl knowledge get <path>` で読み、本文・出典を確認してから使う。\n\
          将来も使える事実を得たら `celerisctl knowledge record --title … --scope … --source task:<このタスクの id>` \
-         で候補に入れる（一時的な情報・雑談・推測は入れない。出典を付ける）。候補は人が確認してから正本に入る。\n",
+         で候補に入れる（一時的な情報・雑談・推測は入れない。出典を付ける）。\
+         候補は日次整理の検証を通ると daemon が正本に適用する。人が書いたページの保護など、必要な判断は人に回る。\n\n",
     );
-    let mut shown = 0usize;
-    let mut sections = String::new();
-    for mount in mounts {
-        let items: Vec<&task_core::KnowledgeItem> = index
-            .iter()
-            .filter(|item| task_core::knowledge::mount_matches(mount, item))
-            .collect();
-        if items.is_empty() {
-            continue;
-        }
-        sections.push_str(&format!("### {}\n", mount.label()));
-        for (n, item) in items.iter().enumerate() {
-            if shown >= task_core::knowledge::MAX_PREAMBLE_ITEMS {
-                sections.push_str(&format!(
-                    "- （ほか {} 件。`search` で探す）\n",
-                    items.len() - n
-                ));
-                break;
-            }
-            sections.push_str(&format!("- `{}` — {}", item.path, one_line(&item.title)));
-            if !item.tags.is_empty() {
-                sections.push_str(&format!("（{}）", item.tags.join("、")));
-            }
-            sections.push('\n');
-            shown += 1;
-        }
-    }
-    if sections.is_empty() {
-        // マウントはあるが 1 件も読めるものが無い（KB がまだ無い・空）。索引の節は出さない。
-        return String::new();
-    }
-    out.push_str(&sections);
-    out.push('\n');
     out
 }
 

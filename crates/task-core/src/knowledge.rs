@@ -46,9 +46,7 @@ pub const RETIRED_DIR: &str = "_retired";
 pub const SKILLS_DIR: &str = "skills";
 /// ADR-0047 D1: 派生物の索引。
 pub const INDEX_FILE: &str = "index.json";
-/// ADR-0047 D2: 前置きに出す索引の上限。
-pub const MAX_PREAMBLE_ITEMS: usize = 200;
-/// 索引に入れるページ数の上限（KB が壊れていても画面と前置きが詰まらないように）。
+/// 索引に入れるページ数の上限（KB が壊れていても索引を使う処理が詰まらないように）。
 pub const MAX_INDEX_ITEMS: usize = 5_000;
 /// 1 ページの本文の上限（これを超えるページは `too_large`。`task_ops::docs` と同じ）。
 pub const MAX_PAGE_BYTES: usize = 512 * 1024;
@@ -752,7 +750,7 @@ impl KnowledgeMount {
         }
     }
 
-    /// 前置きと GUI に出す 1 行の見出し。
+    /// 索引と GUI に出す 1 行の見出し。
     pub fn label(&self) -> String {
         match self.kind {
             MountKind::Kb => format!("kb:{}", self.scope.as_deref().unwrap_or("")),
@@ -817,7 +815,7 @@ impl FromStr for KnowledgeMount {
     }
 }
 
-/// その索引の 1 件がそのマウントに入るか（ADR-0047 D2。前置きの索引をマウントごとに並べるのに使う）。
+/// その索引の 1 件がそのマウントに入るか（ADR-0047 D2。実効マウントで索引を絞るのに使う）。
 ///
 /// `kb` は [`in_scope`]。`repo` / `dir` / `memory` の項目は、集める側（ディスパッチャ）が
 /// `scope` に [`KnowledgeMount::label`] と同じ文字列（`repo:<name>` / `dir:<path>` / `memory:<node>`）を

@@ -670,7 +670,7 @@ impl Dispatcher {
             self.fail_and_cleanup_eval_trial(&started_trial, &format!("cargo target: {e}"));
             e
         })?;
-        let Some(adapter) = route.adapter.with_env(&cargo_env.set) else {
+        let Ok(adapter) = task_worker::configure_env(&route.adapter, cargo_env.set) else {
             let why = format!(
                 "cargo target: adapter {} cannot take CARGO_TARGET_DIR",
                 route.adapter.id()

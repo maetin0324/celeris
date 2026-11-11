@@ -965,11 +965,13 @@ impl WorkerAdapter for SignallingFake {
         self.inner.run(req, run_id, limits, &signalling).await
     }
 
-    fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-        Some(Arc::new(Self {
-            inner: self.inner.with_env(extra)?,
-            progress_sent: self.progress_sent.clone(),
-        }))
+    fn configure(&self, settings: &task_worker::AdapterSettings) -> task_worker::Configured {
+        self.inner.configure(settings).map_adapter(|inner| {
+            Arc::new(Self {
+                inner,
+                progress_sent: self.progress_sent.clone(),
+            })
+        })
     }
 }
 

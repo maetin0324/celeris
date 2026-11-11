@@ -47,16 +47,6 @@ struct RecordingSink {
     comments: Mutex<Vec<String>>,
 }
 impl EventSink for RecordingSink {
-    fn browser_control_gate(
-        &self,
-        _run_id: &str,
-        _session_id: &str,
-    ) -> Option<std::sync::Arc<dyn crate::browser_live::ControlGate>> {
-        Some(std::sync::Arc::new(crate::browser_live::InMemoryGate::new()))
-    }
-    fn browser_updated(&self, browser: &BrowserRun) {
-        self.browsers.lock().unwrap().push(browser.clone());
-    }
     fn progress(&self, msg: &str) {
         self.progress_with(msg, &ProgressFields::default());
     }
@@ -71,6 +61,67 @@ impl EventSink for RecordingSink {
     }
     fn artifact(&self, artifact: &ArtifactRef) {
         self.artifacts.lock().unwrap().push(artifact.clone());
+    }
+}
+impl crate::BrowserAuthority for RecordingSink {
+    fn browser_approval_consume(
+        &self,
+        _wait: &task_core::browser_wait::BrowserWait,
+    ) -> Result<task_core::browser_wait::ConsumedBrowserApproval, String> {
+        Err("browser wait store unavailable".into())
+    }
+    fn browser_operation_approval_consume(
+        &self,
+        _wait: &task_core::browser_wait::BrowserWait,
+    ) -> Result<task_core::browser_wait::ConsumedBrowserOperation, String> {
+        Err("browser wait store unavailable".into())
+    }
+    fn browser_saved_credential(
+        &self,
+        _policy_id: &str,
+        _origin: &str,
+    ) -> Option<crate::browser_credential::SavedCredential> {
+        None
+    }
+    fn browser_saved_credential_valid(&self, _wait: &task_core::browser_wait::BrowserWait) -> bool {
+        false
+    }
+    fn browser_wait_open(
+        &self,
+        _request: &task_core::browser_wait::NewBrowserWait,
+    ) -> Result<(), String> {
+        Err("browser wait store unavailable".into())
+    }
+    fn browser_waits(&self) -> Result<Vec<task_core::browser_wait::BrowserWait>, String> {
+        Ok(Vec::new())
+    }
+}
+
+impl crate::BrowserControl for RecordingSink {
+    fn browser_auth_section(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+        _active: bool,
+    ) -> Result<(), String> {
+        Err("browser control store unavailable".into())
+    }
+    fn browser_control_gate(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+    ) -> Option<std::sync::Arc<dyn crate::browser_live::ControlGate>> {
+        Some(std::sync::Arc::new(crate::browser_live::InMemoryGate::new()))
+    }
+    fn browser_live(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+        _event: &task_core::browser_live::ScrubbedLiveEvent,
+    ) {
+    }
+    fn browser_updated(&self, browser: &BrowserRun) {
+        self.browsers.lock().unwrap().push(browser.clone());
     }
 }
 
@@ -674,6 +725,10 @@ async fn execution_fallback_uses_fresh_session_and_refuses_without_conformance()
         "fallback-run",
         limits(),
         &sink,
+        Some(crate::BrowserPorts {
+            authority: &sink,
+            control: &sink,
+        }),
         &executable,
         None,
         &record,
@@ -709,6 +764,10 @@ async fn execution_fallback_uses_fresh_session_and_refuses_without_conformance()
         "denied-run",
         limits(),
         &RecordingSink::default(),
+        Some(crate::BrowserPorts {
+            authority: &RecordingSink::default(),
+            control: &RecordingSink::default(),
+        }),
         &executable,
         None,
         &denied,
@@ -793,6 +852,10 @@ async fn p4c_runner_record_routes_and_falls_back() {
         "runner-ledger-fallback",
         limits(),
         &RecordingSink::default(),
+        Some(crate::BrowserPorts {
+            authority: &RecordingSink::default(),
+            control: &RecordingSink::default(),
+        }),
         &executable,
         None,
         &record,
@@ -805,6 +868,17 @@ async fn p4c_runner_record_routes_and_falls_back() {
             .join("runs/runner-ledger-fallback/browser-fallback-1/config.json")
             .exists()
     );
+}
+
+/// `env` を重ねた adapter（dispatcher の `prepare_run_adapter` と同じく `configure` 1 回で適用する）。
+fn adapter_with_env(
+    adapter: &Arc<dyn WorkerAdapter>,
+    env: Vec<(String, String)>,
+) -> Arc<dyn WorkerAdapter> {
+    adapter
+        .configure(&crate::AdapterSettings::env_only(env))
+        .adapter
+        .expect("the harness takes env")
 }
 
 /// The conformance runner supplies its measured ledger, real 0.38.1 executable and
@@ -862,26 +936,26 @@ async fn p4c_fallback_real_harness_scenario() {
     let alternate_dir = root.join("alternate");
     std::fs::create_dir_all(&primary_dir).unwrap();
     std::fs::create_dir_all(&alternate_dir).unwrap();
-    let primary = primary.with_env(&env("open", &primary_dir)).unwrap();
-    let alternate = alternate
-        .with_env(&env("fallback", &alternate_dir))
-        .unwrap();
-    let primary = primary
-        .with_env(&[(
+    let primary = adapter_with_env(&primary, env("open", &primary_dir));
+    let alternate = adapter_with_env(&alternate, env("fallback", &alternate_dir));
+    let primary = adapter_with_env(
+        &primary,
+        vec![(
             "CELERIS_BROWSER_CLI".into(),
             root.join("runs/p4c-real-fallback/browser/celeris-browser.py")
                 .to_string_lossy()
                 .into_owned(),
-        )])
-        .unwrap();
-    let alternate = alternate
-        .with_env(&[(
+        )],
+    );
+    let alternate = adapter_with_env(
+        &alternate,
+        vec![(
             "CELERIS_BROWSER_CLI".into(),
             root.join("runs/p4c-real-fallback/browser-fallback-1/celeris-browser.py")
                 .to_string_lossy()
                 .into_owned(),
-        )])
-        .unwrap();
+        )],
+    );
     let mut req = request(&root);
     // Canonical origin (scheme, host, port): a bare "localhost" means https://localhost:443,
     // which neither intersects the task requirement nor reaches the loopback fixture.
@@ -918,6 +992,10 @@ async fn p4c_fallback_real_harness_scenario() {
             kill_grace: Duration::from_millis(100),
         },
         &sink,
+        Some(crate::BrowserPorts {
+            authority: &sink,
+            control: &sink,
+        }),
     )
     .await
     .unwrap();
@@ -941,14 +1019,15 @@ async fn p4c_fallback_real_harness_scenario() {
         serde_json::to_vec(&no_alternate_ledger).unwrap(),
     )
     .unwrap();
-    let no_candidate_primary = primary
-        .with_env(&[(
+    let no_candidate_primary = adapter_with_env(
+        &primary,
+        vec![(
             "CELERIS_BROWSER_CLI".into(),
             root.join("runs/p4c-no-candidate/browser/celeris-browser.py")
                 .to_string_lossy()
                 .into_owned(),
-        )])
-        .unwrap();
+        )],
+    );
     let no_candidate = run_with_executable_candidates_record(
         no_candidate_primary,
         vec![alternate.clone()],
@@ -956,6 +1035,10 @@ async fn p4c_fallback_real_harness_scenario() {
         "p4c-no-candidate",
         limits(),
         &RecordingSink::default(),
+        Some(crate::BrowserPorts {
+            authority: &RecordingSink::default(),
+            control: &RecordingSink::default(),
+        }),
         &executable,
         None,
         &no_alternate_record,
@@ -1010,6 +1093,10 @@ async fn p4c_fallback_real_harness_scenario() {
         "p4c-credential",
         limits(),
         &RecordingSink::default(),
+        Some(crate::BrowserPorts {
+            authority: &RecordingSink::default(),
+            control: &RecordingSink::default(),
+        }),
         &executable,
         None,
         &record,
@@ -1053,6 +1140,10 @@ async fn specialist_wraps_existing_harness_and_runs_same_browser_task() {
         "specialist-run",
         limits(),
         &sink,
+        Some(crate::BrowserPorts {
+            authority: &sink,
+            control: &sink,
+        }),
         &executable,
         None,
         &record,
@@ -1159,28 +1250,15 @@ struct WaitSink {
     browsers: Mutex<Vec<BrowserRun>>,
 }
 impl EventSink for WaitSink {
-    fn browser_control_gate(
-        &self,
-        _run_id: &str,
-        _session_id: &str,
-    ) -> Option<std::sync::Arc<dyn crate::browser_live::ControlGate>> {
-        Some(std::sync::Arc::new(crate::browser_live::InMemoryGate::new()))
-    }
     fn progress(&self, _: &str) {}
     fn artifact(&self, _: &ArtifactRef) {}
-    fn browser_updated(&self, browser: &BrowserRun) {
-        self.browsers.lock().unwrap().push(browser.clone());
-    }
-    fn browser_wait_open(&self, request: &NewBrowserWait) -> Result<(), String> {
-        self.store
-            .browser_wait_open(self.task_id, request, time::OffsetDateTime::now_utc())
-            .map(|_| ())
-            .map_err(|e| e.code().into())
-    }
-    fn browser_waits(&self) -> Result<Vec<BrowserWait>, String> {
-        self.store
-            .browser_waits_for_task(self.task_id)
-            .map_err(|e| e.to_string())
+}
+impl crate::BrowserAuthority for WaitSink {
+    fn browser_approval_consume(
+        &self,
+        _wait: &task_core::browser_wait::BrowserWait,
+    ) -> Result<task_core::browser_wait::ConsumedBrowserApproval, String> {
+        Err("browser wait store unavailable".into())
     }
     fn browser_operation_approval_consume(
         &self,
@@ -1193,6 +1271,55 @@ impl EventSink for WaitSink {
             time::OffsetDateTime::now_utc(),
         )
         .map_err(String::from)
+    }
+    fn browser_saved_credential(
+        &self,
+        _policy_id: &str,
+        _origin: &str,
+    ) -> Option<crate::browser_credential::SavedCredential> {
+        None
+    }
+    fn browser_saved_credential_valid(&self, _wait: &task_core::browser_wait::BrowserWait) -> bool {
+        false
+    }
+    fn browser_wait_open(&self, request: &NewBrowserWait) -> Result<(), String> {
+        self.store
+            .browser_wait_open(self.task_id, request, time::OffsetDateTime::now_utc())
+            .map(|_| ())
+            .map_err(|e| e.code().into())
+    }
+    fn browser_waits(&self) -> Result<Vec<BrowserWait>, String> {
+        self.store
+            .browser_waits_for_task(self.task_id)
+            .map_err(|e| e.to_string())
+    }
+}
+
+impl crate::BrowserControl for WaitSink {
+    fn browser_auth_section(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+        _active: bool,
+    ) -> Result<(), String> {
+        Err("browser control store unavailable".into())
+    }
+    fn browser_control_gate(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+    ) -> Option<std::sync::Arc<dyn crate::browser_live::ControlGate>> {
+        Some(std::sync::Arc::new(crate::browser_live::InMemoryGate::new()))
+    }
+    fn browser_live(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+        _event: &task_core::browser_live::ScrubbedLiveEvent,
+    ) {
+    }
+    fn browser_updated(&self, browser: &BrowserRun) {
+        self.browsers.lock().unwrap().push(browser.clone());
     }
 }
 
@@ -1232,6 +1359,10 @@ async fn sensitive_backend_is_refused_before_substrate_harness_and_wait_creation
             "denied-run",
             limits(),
             &sink,
+            Some(crate::BrowserPorts {
+                authority: &sink,
+                control: &sink,
+            }),
             &temp.path().join("must-not-launch"),
             None,
         )
@@ -1298,6 +1429,10 @@ async fn opencode_and_claude_share_supervised_browser_lifecycle_artifacts_and_cl
             "execution1",
             limits(),
             &sink,
+            Some(crate::BrowserPorts {
+                authority: &sink,
+                control: &sink,
+            }),
             &executable,
             None,
         )
@@ -1362,6 +1497,10 @@ async fn unsupported_adapter_and_missing_administrator_grant_fail_before_harness
         "bad-adapter",
         limits(),
         &sink,
+        Some(crate::BrowserPorts {
+            authority: &sink,
+            control: &sink,
+        }),
         &absent,
         None,
     )
@@ -1379,6 +1518,10 @@ async fn unsupported_adapter_and_missing_administrator_grant_fail_before_harness
         "no-grant",
         limits(),
         &sink,
+        Some(crate::BrowserPorts {
+            authority: &sink,
+            control: &sink,
+        }),
         &absent,
         None,
     )
@@ -1410,6 +1553,10 @@ async fn cleanup_failure_marks_browser_failed_instead_of_reporting_completion() 
         "cleanup-failure",
         limits(),
         &sink,
+        Some(crate::BrowserPorts {
+            authority: &sink,
+            control: &sink,
+        }),
         &executable,
         None,
     )
@@ -1482,6 +1629,10 @@ async fn launch_uses_generated_policy_and_binds_its_hash_to_the_run() {
         "generated",
         limits(),
         &sink,
+        Some(crate::BrowserPorts {
+            authority: &sink,
+            control: &sink,
+        }),
         &executable,
         None,
     )
@@ -1571,6 +1722,10 @@ async fn actions_and_domains_outside_task_policy_are_stopped_before_the_substrat
         "hostile",
         limits(),
         &sink,
+        Some(crate::BrowserPorts {
+            authority: &sink,
+            control: &sink,
+        }),
         &executable,
         None,
     )
@@ -1623,6 +1778,10 @@ async fn missing_empty_or_widening_task_policy_fails_before_any_process_starts()
             "refused",
             limits(),
             &sink,
+            Some(crate::BrowserPorts {
+                authority: &sink,
+                control: &sink,
+            }),
             &absent,
             None,
         )
@@ -1682,6 +1841,10 @@ async fn missing_egress_resolver_inner() {
         "no-egress",
         limits(),
         &RecordingSink::default(),
+        Some(crate::BrowserPorts {
+            authority: &RecordingSink::default(),
+            control: &RecordingSink::default(),
+        }),
         &temp.path().join("must-not-start"),
         None,
     )
@@ -1943,6 +2106,10 @@ print(json.dumps({{'success': True, 'data': {{}}}}))
             kill_grace: Duration::from_millis(100),
         },
         &RecordingSink::default(),
+        Some(crate::BrowserPorts {
+            authority: &RecordingSink::default(),
+            control: &RecordingSink::default(),
+        }),
         &script,
         None,
     )
@@ -2378,13 +2545,6 @@ struct ApprovalSink {
     contexts: Mutex<Vec<BrowserContext>>,
 }
 impl EventSink for ApprovalSink {
-    fn browser_control_gate(
-        &self,
-        _run_id: &str,
-        _session_id: &str,
-    ) -> Option<std::sync::Arc<dyn crate::browser_live::ControlGate>> {
-        Some(std::sync::Arc::new(crate::browser_live::InMemoryGate::new()))
-    }
     fn progress(&self, msg: &str) {
         self.progress_with(msg, &ProgressFields::default());
     }
@@ -2395,19 +2555,13 @@ impl EventSink for ApprovalSink {
             .push((msg.into(), fields.clone()));
     }
     fn artifact(&self, _: &ArtifactRef) {}
-    fn browser_updated(&self, browser: &BrowserRun) {
-        self.browsers.lock().unwrap().push(browser.clone());
-    }
-    fn browser_wait_open(&self, request: &NewBrowserWait) -> Result<(), String> {
-        self.store
-            .browser_wait_open(self.task_id, request, time::OffsetDateTime::now_utc())
-            .map(|_| ())
-            .map_err(|e| e.code().into())
-    }
-    fn browser_waits(&self) -> Result<Vec<BrowserWait>, String> {
-        self.store
-            .browser_waits_for_task(self.task_id)
-            .map_err(|e| e.to_string())
+}
+impl crate::BrowserAuthority for ApprovalSink {
+    fn browser_approval_consume(
+        &self,
+        _wait: &task_core::browser_wait::BrowserWait,
+    ) -> Result<task_core::browser_wait::ConsumedBrowserApproval, String> {
+        Err("browser wait store unavailable".into())
     }
     fn browser_operation_approval_consume(
         &self,
@@ -2420,6 +2574,55 @@ impl EventSink for ApprovalSink {
             time::OffsetDateTime::now_utc(),
         )
         .map_err(String::from)
+    }
+    fn browser_saved_credential(
+        &self,
+        _policy_id: &str,
+        _origin: &str,
+    ) -> Option<crate::browser_credential::SavedCredential> {
+        None
+    }
+    fn browser_saved_credential_valid(&self, _wait: &task_core::browser_wait::BrowserWait) -> bool {
+        false
+    }
+    fn browser_wait_open(&self, request: &NewBrowserWait) -> Result<(), String> {
+        self.store
+            .browser_wait_open(self.task_id, request, time::OffsetDateTime::now_utc())
+            .map(|_| ())
+            .map_err(|e| e.code().into())
+    }
+    fn browser_waits(&self) -> Result<Vec<BrowserWait>, String> {
+        self.store
+            .browser_waits_for_task(self.task_id)
+            .map_err(|e| e.to_string())
+    }
+}
+
+impl crate::BrowserControl for ApprovalSink {
+    fn browser_auth_section(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+        _active: bool,
+    ) -> Result<(), String> {
+        Err("browser control store unavailable".into())
+    }
+    fn browser_control_gate(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+    ) -> Option<std::sync::Arc<dyn crate::browser_live::ControlGate>> {
+        Some(std::sync::Arc::new(crate::browser_live::InMemoryGate::new()))
+    }
+    fn browser_live(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+        _event: &task_core::browser_live::ScrubbedLiveEvent,
+    ) {
+    }
+    fn browser_updated(&self, browser: &BrowserRun) {
+        self.browsers.lock().unwrap().push(browser.clone());
     }
 }
 
@@ -2524,6 +2727,10 @@ async fn click_approval_opens_a_wait_and_resumes_the_same_session_once() {
         "run-1",
         limits(),
         &sink,
+        Some(crate::BrowserPorts {
+            authority: &sink,
+            control: &sink,
+        }),
         &executable,
         None,
     )
@@ -2612,6 +2819,10 @@ async fn click_approval_opens_a_wait_and_resumes_the_same_session_once() {
         "run-2",
         limits(),
         &sink,
+        Some(crate::BrowserPorts {
+            authority: &sink,
+            control: &sink,
+        }),
         &executable,
         None,
     )
@@ -2685,4 +2896,155 @@ sys.exit(1 if n == 0 else 0)
     );
     std::fs::remove_file(dir.path().join("attempts")).unwrap();
     assert!(!super::close_with_retry(&argv, 0, Duration::ZERO).await);
+}
+
+/// Existing policy/control refusal tests always inject capabilities. These tests protect the
+/// earlier injection boundary, including wrappers which otherwise consult the global ledger.
+struct PortProbe(std::sync::atomic::AtomicUsize);
+#[async_trait::async_trait]
+impl WorkerAdapter for PortProbe {
+    fn id(&self) -> &str {
+        "acp"
+    }
+    async fn run(
+        &self,
+        _: RunRequest,
+        _: &str,
+        _: RunLimits,
+        _: &dyn EventSink,
+    ) -> Result<RunOutcome, AdapterError> {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Err(AdapterError::Other("port probe reached adapter".into()))
+    }
+}
+
+// No runtime configuration: these cases must finish before consulting global browser state.
+fn port_request(workspace: &Path) -> RunRequest {
+    let mut task = crate::protocol::tests::sample_task();
+    task.skills = vec![task_core::browser::BROWSER_SKILL.into()];
+    RunRequest {
+        protocol: crate::protocol::PROTOCOL_VERSION,
+        task,
+        workspace: workspace.into(),
+        work_dir: None,
+        artifacts_dir: workspace.join("artifacts"),
+        context: Default::default(),
+        cargo_target_dir: None,
+        llm_route: None,
+    }
+}
+
+async fn port_entry(
+    entry: usize,
+    adapter: Arc<dyn WorkerAdapter>,
+    req: RunRequest,
+) -> Result<RunOutcome, AdapterError> {
+    let limits = RunLimits {
+        wall_clock: Duration::from_secs(1),
+        idle_timeout: Duration::from_secs(1),
+        kill_grace: Duration::from_secs(1),
+    };
+    let sink = crate::adapter::NullSink;
+    let executable = req.workspace.join("substrate");
+    let record = req.workspace.join("absent-ledger");
+    match entry {
+        0 => run(adapter, req, "port-probe", limits, &sink, None).await,
+        1 => run_with_candidates(adapter, vec![], req, "port-probe", limits, &sink, None).await,
+        2 => {
+            run_with_executable(
+                adapter,
+                req,
+                "port-probe",
+                limits,
+                &sink,
+                None,
+                &executable,
+                None,
+            )
+            .await
+        }
+        3 => {
+            run_with_executable_record(
+                adapter,
+                req,
+                "port-probe",
+                limits,
+                &sink,
+                None,
+                &executable,
+                None,
+                &record,
+            )
+            .await
+        }
+        4 => {
+            run_with_executable_candidates_record(
+                adapter,
+                vec![],
+                req,
+                "port-probe",
+                limits,
+                &sink,
+                None,
+                &executable,
+                None,
+                &record,
+            )
+            .await
+        }
+        _ => unreachable!(),
+    }
+}
+
+#[tokio::test]
+async fn browser_port_missing_refuses_before_spawn() {
+    for entry in 0..5 {
+        let dir = tempfile::tempdir().unwrap();
+        let req = port_request(dir.path()); // Missing ports win over an absent policy grant.
+        let substrate_marker = dir.path().join("substrate-started");
+        crate::test_support::write_executable(
+            &dir.path().join("substrate"),
+            &format!("#!/bin/sh\ntouch '{}'\n", substrate_marker.display()),
+        );
+        let before: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        let adapter = Arc::new(PortProbe(std::sync::atomic::AtomicUsize::new(0)));
+        let error = port_entry(entry, adapter.clone(), req).await.unwrap_err();
+        assert!(
+            matches!(error, AdapterError::Other(ref text) if text == "browser capability not injected"),
+            "entry {entry}: {error}"
+        );
+        assert_eq!(adapter.0.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert!(!substrate_marker.exists());
+        let after: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(before, after, "no runtime or session files created");
+    }
+}
+
+#[tokio::test]
+async fn browser_port_none_preserves_non_browser_non_execute_planner_and_review() {
+    for mode in 0..4 {
+        for entry in 0..5 {
+            let dir = tempfile::tempdir().unwrap();
+            let mut req = port_request(dir.path());
+            match mode {
+                0 => req.task.skills.clear(),
+                1 => req.task.kind = task_core::TaskKind::Review,
+                2 => req.context.execution_planner = Some(Default::default()),
+                3 => req.context.review = Some(Default::default()),
+                _ => unreachable!(),
+            }
+            let adapter = Arc::new(PortProbe(std::sync::atomic::AtomicUsize::new(0)));
+            let error = port_entry(entry, adapter.clone(), req).await.unwrap_err();
+            assert!(
+                matches!(error, AdapterError::Other(ref text) if text == "port probe reached adapter")
+            );
+            assert_eq!(adapter.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+        }
+    }
 }

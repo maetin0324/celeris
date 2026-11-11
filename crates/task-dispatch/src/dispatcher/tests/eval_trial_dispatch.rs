@@ -2,7 +2,7 @@ use super::*;
 
 use std::process::Command;
 
-/// The env an eval adapter was given through `with_env` (the per-trial `CARGO_TARGET_DIR`).
+/// The env an eval adapter was given through `configure` (the per-trial `CARGO_TARGET_DIR`).
 type EvalEnv = Vec<(String, String)>;
 
 fn env_value(env: &EvalEnv, name: &str) -> Option<String> {
@@ -27,14 +27,18 @@ impl WorkerAdapter for EvalStubAdapter {
         "eval-stub"
     }
 
-    fn with_model(&self, _model: &str) -> Option<Arc<dyn WorkerAdapter>> {
-        Some(Arc::new(self.clone()))
-    }
-
-    fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut next = self.clone();
-        next.env.extend(extra.iter().cloned());
-        Some(Arc::new(next))
+    fn configure(&self, settings: &task_worker::AdapterSettings) -> task_worker::Configured {
+        settings.configured(
+            &[
+                task_worker::AdapterSetting::Model,
+                task_worker::AdapterSetting::Env,
+            ],
+            || {
+                let mut next = self.clone();
+                settings.apply_env(&mut next.env);
+                Arc::new(next)
+            },
+        )
     }
 
     async fn run(
@@ -200,7 +204,7 @@ struct ScriptedEvalWorker {
     /// `Some(message)`: end the run with `Terminal::Error { message }` instead of writing a result.
     fail_with: Option<String>,
     seen: Arc<StdMutex<Vec<(RunRequest, std::path::PathBuf)>>>,
-    /// The env given through `with_env` (cargo would build into its `CARGO_TARGET_DIR`).
+    /// The env given through `configure` (cargo would build into its `CARGO_TARGET_DIR`).
     env: EvalEnv,
 }
 
@@ -210,14 +214,18 @@ impl WorkerAdapter for ScriptedEvalWorker {
         "eval-scripted"
     }
 
-    fn with_model(&self, _model: &str) -> Option<Arc<dyn WorkerAdapter>> {
-        Some(Arc::new(self.clone()))
-    }
-
-    fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut next = self.clone();
-        next.env.extend(extra.iter().cloned());
-        Some(Arc::new(next))
+    fn configure(&self, settings: &task_worker::AdapterSettings) -> task_worker::Configured {
+        settings.configured(
+            &[
+                task_worker::AdapterSetting::Model,
+                task_worker::AdapterSetting::Env,
+            ],
+            || {
+                let mut next = self.clone();
+                settings.apply_env(&mut next.env);
+                Arc::new(next)
+            },
+        )
     }
 
     async fn run(
@@ -847,12 +855,14 @@ impl WorkerAdapter for GatedEvalAdapter {
         "eval-gated"
     }
 
-    fn with_model(&self, _model: &str) -> Option<Arc<dyn WorkerAdapter>> {
-        Some(Arc::new(self.clone()))
-    }
-
-    fn with_env(&self, _extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-        Some(Arc::new(self.clone()))
+    fn configure(&self, settings: &task_worker::AdapterSettings) -> task_worker::Configured {
+        settings.configured(
+            &[
+                task_worker::AdapterSetting::Model,
+                task_worker::AdapterSetting::Env,
+            ],
+            || Arc::new(self.clone()),
+        )
     }
 
     async fn run(

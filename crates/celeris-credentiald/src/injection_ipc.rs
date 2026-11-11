@@ -28,6 +28,12 @@ use crate::injection::{RedisplayGuard, RedisplayGuardWire};
 pub const MAX_REQUEST: usize = 16 * 1024;
 /// 読み取り・sink 応答の期限。
 pub const IO_TIMEOUT: Duration = Duration::from_secs(5);
+/// 渡された injection 接続の最初の要求を待つときの保険（[`InjectionService::await_first_request`]）。
+/// daemon は auth section を開いてから接続し、その FD を launcher に渡す。launcher が要求を書くのは
+/// login 頁の password 欄が出た後になる（ADR 2026-10-09 付記「launcher の Authenticate 経路」）。
+/// 待ちは要求の到着・peer の close・auth section の close で終わるので、通常はこの長さに届かない。
+/// 長さは launcher が 1 操作を打ち切る期限（`LauncherLimits::default` の action 120 秒）に揃える。
+pub const PASSED_STREAM_BACKSTOP: Duration = Duration::from_secs(120);
 
 /// 拒否コード（D3）。応答には `code()` の固定語彙だけを出す。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -314,6 +320,16 @@ impl LiveRegistry {
             _ => Err(InjectCode::AuthSectionRequired),
         }
     }
+    /// `pid`（開始時刻 `start`）を controller とする稼働 session に、開いた auth section があるか。
+    fn controller_has_open_section(&self, pid: u32, start: u64) -> bool {
+        self.sessions.lock().is_ok_and(|m| {
+            m.values().any(|e| {
+                e.section.is_some()
+                    && e.session.controller_pid == pid
+                    && e.session.controller_start == start
+            })
+        })
+    }
     #[allow(clippy::type_complexity)]
     fn snapshot(
         &self,
@@ -342,6 +358,34 @@ impl LiveRegistry {
                     .collect()
             })
             .unwrap_or_default()
+    }
+}
+
+/// [`InjectionService::await_first_request`] の本体。`registry` の auth section を tick ごとに見直す。
+fn wait_first_request(registry: &LiveRegistry, fd: i32, peer: PeerCred) -> Result<(), InjectCode> {
+    let begun = std::time::Instant::now();
+    let tick = libc::c_int::try_from(IO_TIMEOUT.as_millis()).unwrap_or(libc::c_int::MAX);
+    loop {
+        let mut p = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let rc = unsafe { libc::poll(&mut p, 1, tick) };
+        if rc > 0 {
+            return Ok(());
+        }
+        if rc < 0 {
+            if std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(InjectCode::InvalidRequest);
+        }
+        let held = process_start(peer.pid)
+            .is_some_and(|start| registry.controller_has_open_section(peer.pid, start));
+        if !held || begun.elapsed() >= PASSED_STREAM_BACKSTOP {
+            return Err(InjectCode::InvalidRequest);
+        }
     }
 }
 
@@ -755,6 +799,16 @@ impl InjectionService {
             .any(|(pid, st, _)| *pid == peer.pid && start == Some(*st))
     }
 
+    /// 1 接続の最初の要求が読めるまで待つ（ADR 2026-11-11-credentiald-passed-stream-wait D1〜D3）。要求の byte・peer の
+    /// close・接続の異常のどれかが来たら `Ok` を返し、中身の照合は [`read_request`] と
+    /// [`Self::handle`] に任せる。[`IO_TIMEOUT`] の間に何も来ないとき、待ち続けるのは peer が
+    /// 開いた auth section を持つ登録済み controller の間だけで、[`PASSED_STREAM_BACKSTOP`] で
+    /// 打ち切る。auth section が閉じた・持たない peer（worker・agent を含む）は従来どおり
+    /// [`IO_TIMEOUT`] で `InvalidRequest` になる。
+    pub fn await_first_request(&self, fd: i32, peer: PeerCred) -> Result<(), InjectCode> {
+        wait_first_request(&self.registry, fd, peer)
+    }
+
     /// 1 要求を照合して応答を作る。`sink` は step 6 でだけ使う。
     pub fn handle(&self, peer: PeerCred, body: &[u8], sink: &mut dyn CdpSink) -> InjectionReply {
         let req = match serde_json::from_slice::<InjectionRequest>(body) {
@@ -1066,7 +1120,7 @@ pub(crate) fn read_request(fd: i32) -> Result<(Vec<u8>, Vec<OwnedFd>), InjectCod
     Ok((body, fds))
 }
 
-pub(crate) fn write_reply(stream: &mut std::os::unix::net::UnixStream, reply: &InjectionReply) {
+pub(crate) fn write_reply(mut stream: &std::os::unix::net::UnixStream, reply: &InjectionReply) {
     use std::io::Write;
     if let Ok(body) = serde_json::to_vec(reply) {
         let mut out = (body.len() as u32).to_be_bytes().to_vec();
@@ -1266,5 +1320,86 @@ mod attested_tests {
             Admission::Attested.admit("sess-1", pid, Some(&v2), Some(LAUNCHER_UID)),
             Err(InjectCode::IsolationRequired)
         );
+    }
+}
+
+#[cfg(test)]
+mod first_request_tests {
+    //! ADR 2026-11-11-credentiald-passed-stream-wait D1〜D3: 渡された injection 接続の最初の要求の待ち。
+    use super::*;
+    use std::io::Write;
+    use std::os::unix::net::UnixStream;
+
+    /// controller = この試験 process、runtime = pid 2 以上の任意の値（待ちは runtime を見ない）。
+    fn registry(open: bool) -> (Arc<LiveRegistry>, PeerCred) {
+        let me = std::process::id();
+        let registry = Arc::new(LiveRegistry::default());
+        registry
+            .register(LiveSessionRegistration {
+                session_id: "sess-1".into(),
+                controller_pid: me,
+                controller_start: process_start(me).expect("self start"),
+                runtime_pid: me,
+                runtime_start: process_start(me).expect("self start"),
+            })
+            .expect("register");
+        if open {
+            registry
+                .open_section(AuthSectionRegistration {
+                    session_id: "sess-1".into(),
+                    auth_section_id: "auth-1".into(),
+                    lease_id: "lease-1".into(),
+                    exact_origin: "https://idp.example".into(),
+                    cdp_target_id: "target-1".into(),
+                })
+                .expect("open");
+        }
+        let peer = PeerCred {
+            uid: unsafe { libc::geteuid() },
+            pid: me,
+        };
+        (registry, peer)
+    }
+
+    /// fail-closed: 開いた auth section の無い peer の黙った接続は、従来どおり IO_TIMEOUT で拒否する。
+    #[test]
+    fn silent_stream_without_an_open_auth_section_is_denied_after_io_timeout() {
+        let (registry, peer) = registry(false);
+        let (ours, _theirs) = UnixStream::pair().expect("pair");
+        let begun = std::time::Instant::now();
+        assert_eq!(
+            wait_first_request(&registry, ours.as_raw_fd(), peer),
+            Err(InjectCode::InvalidRequest)
+        );
+        assert!(begun.elapsed() >= IO_TIMEOUT);
+    }
+
+    /// auth section が開いている間は IO_TIMEOUT を過ぎて着いた要求も読み、閉じたら次の tick で拒否する。
+    #[test]
+    fn passed_stream_waits_while_the_auth_section_is_open_and_stops_when_it_closes() {
+        let (registry, peer) = registry(true);
+        let (ours, mut theirs) = UnixStream::pair().expect("pair");
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(IO_TIMEOUT + Duration::from_secs(1));
+            theirs.write_all(&[0]).expect("write");
+            theirs
+        });
+        assert_eq!(
+            wait_first_request(&registry, ours.as_raw_fd(), peer),
+            Ok(())
+        );
+        drop(writer.join().expect("writer"));
+
+        let (ours, _theirs) = UnixStream::pair().expect("pair");
+        let r = Arc::clone(&registry);
+        let closer = std::thread::spawn(move || {
+            std::thread::sleep(IO_TIMEOUT + Duration::from_secs(1));
+            r.close_section("sess-1", "auth-1").expect("close");
+        });
+        assert_eq!(
+            wait_first_request(&registry, ours.as_raw_fd(), peer),
+            Err(InjectCode::InvalidRequest)
+        );
+        closer.join().expect("closer");
     }
 }

@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use task_core::llm_route::HarnessId;
 
-use crate::adapter::WorkerAdapter;
+use crate::adapter::{AdapterSetting, AdapterSettings, LlmEndpoint, WorkerAdapter};
 use crate::protocol::{CredentialReference, RunRequest, SelectedLlmRoute};
 
 /// Why a selected route cannot be launched. Every case fails closed.
@@ -47,18 +47,13 @@ pub fn route_adapter(
     } else {
         None
     };
-    let model_id = model_id.as_deref().unwrap_or(&route.model_id);
-    let mut adapter = base
-        .with_model(model_id)
-        .unwrap_or_else(|| Arc::clone(base));
+    let mut settings = AdapterSettings {
+        model: Some(model_id.unwrap_or_else(|| route.model_id.clone())),
+        ..AdapterSettings::default()
+    };
     let api_key = match &route.credential {
         Some(CredentialReference::AccountDirectory { path, env }) => {
-            adapter = adapter
-                .with_env(&[(env.clone(), path.display().to_string())])
-                .ok_or_else(|| RouteError::AccountUnsupported {
-                    harness: harness.to_string(),
-                    account: route.account_id.clone(),
-                })?;
+            settings.env.push((env.clone(), path.display().to_string()));
             None
         }
         Some(CredentialReference::Environment { name }) => Some(resolve_secret(name).ok_or_else(
@@ -69,13 +64,25 @@ pub fn route_adapter(
         )?),
         None => None,
     };
-    if let Some(base_url) = route.endpoint.as_ref().and_then(|e| e.base_url.as_deref()) {
-        adapter = adapter
-            .with_llm_endpoint(base_url, api_key.as_deref())
-            .ok_or_else(|| RouteError::EndpointUnsupported {
-                harness: harness.to_string(),
-                base_url: base_url.to_string(),
-            })?;
+    let base_url = route.endpoint.as_ref().and_then(|e| e.base_url.clone());
+    settings.llm_endpoint = base_url
+        .clone()
+        .map(|base_url| LlmEndpoint { base_url, api_key });
+    // ADR 2026-11-10-worker-capability-ports D3 3b: a harness without a model option keeps its
+    // own configuration; the account environment and the endpoint fail closed (account first).
+    let (adapter, unsupported) = base.configure(&settings).resolve(base);
+    if unsupported.contains(&AdapterSetting::Env) {
+        return Err(RouteError::AccountUnsupported {
+            harness: harness.to_string(),
+            account: route.account_id.clone(),
+        });
+    }
+    if let Some(base_url) = base_url.filter(|_| unsupported.contains(&AdapterSetting::LlmEndpoint))
+    {
+        return Err(RouteError::EndpointUnsupported {
+            harness: harness.to_string(),
+            base_url,
+        });
     }
     Ok(adapter)
 }

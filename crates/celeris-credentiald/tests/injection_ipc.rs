@@ -3,30 +3,38 @@
 //! 実 socket（`injection.sock`、実 SO_PEERCRED、実 SCM_RIGHTS、実 SOCK_SEQPACKET の sink FD）で試す。
 //! 隔離の admission だけは試験 feature の `SameUidHarnessFacts`（与えた事実を verify_isolation に通す）で、
 //! production の `Attested` がこの host で `isolation_required` になることも別に確かめる。
+//! 受付の並行（最初の要求の待ちは接続ごと、照合は 1 本の thread、待てる接続は 8 まで）は
+//! ADR 2026-11-11-credentiald-passed-stream-wait D4・D5 の `concurrent_first_request_` の試験で確かめる。
 use celeris_credentiald::{
     AuthorizedLeaseContext, Broker, CredentialPolicy, CredentialProvider, CredentialRef, Error,
     LeaseRequest, ManualProvider, ProviderCapabilities, SecretEnvelope,
     injection_ipc::{
-        self, Admission, CdpSink, Field, InjectionReply, InjectionRequest, InjectionService,
-        LiveRegistry, PeerCred, SinkFailed, UsernameTarget, process_start,
+        self, Admission, AuthSectionRegistration, CdpSink, Field, IO_TIMEOUT, InjectionReply,
+        InjectionRequest, InjectionService, LiveRegistry, LiveSessionRegistration, PeerCred,
+        SinkFailed, UsernameTarget, process_start,
     },
     ipc,
 };
 use std::{
     collections::BTreeSet,
     fs,
+    io::Read,
     os::{
         fd::{AsRawFd, FromRawFd, OwnedFd},
-        unix::fs::PermissionsExt,
+        unix::{
+            fs::PermissionsExt,
+            net::{UnixListener, UnixStream},
+        },
     },
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command},
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc,
     },
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use task_core::browser_isolation::{
     CdpEndpoint, IsolationViolation, Namespace, RuntimeFacts, collect_runtime_facts,
@@ -360,10 +368,20 @@ fn inject_raw(
     verdict: &'static str,
     fds: usize,
 ) -> (Vec<u8>, Option<Vec<u8>>) {
+    inject_raw_at(&fx.sock("injection.sock"), body, verdict, fds)
+}
+
+/// [`inject_raw`] を `socket` に送る。
+fn inject_raw_at(
+    socket: &Path,
+    body: &[u8],
+    verdict: &'static str,
+    fds: usize,
+) -> (Vec<u8>, Option<Vec<u8>>) {
     let (broker_end, mux_end) = seqpacket();
     let handle = mux(mux_end, verdict);
     let raw_fds: Vec<i32> = (0..fds).map(|_| broker_end.as_raw_fd()).collect();
-    let raw = injection_ipc::call_raw(&fx.sock("injection.sock"), body, &raw_fds).expect("call");
+    let raw = injection_ipc::call_raw(socket, body, &raw_fds).expect("call");
     drop(broker_end);
     (raw, handle.join().expect("mux"))
 }
@@ -989,6 +1007,238 @@ fn pair_injection_selector_and_shape_mismatches_never_consume_the_lease() {
     assert!(reply.ok, "{:?}", reply.code);
     let (reply, _, _) = inject(&fx, &request("sess-2", "auth-2", &single));
     assert!(reply.ok, "{:?}", reply.code);
+}
+
+// ---- 受付の並行（ADR 2026-11-11-credentiald-passed-stream-wait D4・D5）----
+
+/// `ipc::serve_injection_streams`（本番と同じ受付）を別 thread で回す。登録と auth section は `registry` に
+/// 直接書く（controller = この試験 process）。drop で黙った接続を閉じ、受付と全 thread の終わりを待つ。
+struct Accepting {
+    path: PathBuf,
+    registry: Arc<LiveRegistry>,
+    waiting: mpsc::Receiver<()>,
+    silent: Vec<UnixStream>,
+    stop: Arc<AtomicBool>,
+    accept: Option<thread::JoinHandle<()>>,
+}
+
+impl Accepting {
+    fn start(fx: &Fx) -> Self {
+        let path = fx.root.path().join("accept.sock");
+        let listener = UnixListener::bind(&path).expect("bind");
+        let registry = Arc::new(LiveRegistry::default());
+        let service = InjectionService::new(
+            Arc::clone(&fx.broker),
+            Arc::clone(&registry),
+            Admission::SameUidHarnessFacts(facts),
+        );
+        let (entered, waiting) = mpsc::channel();
+        let stop = Arc::new(AtomicBool::new(false));
+        let until = Arc::clone(&stop);
+        let accept = thread::spawn(move || {
+            let streams = listener
+                .incoming()
+                .flatten()
+                .take_while(move |_| !until.load(Ordering::SeqCst));
+            let on_wait = move || {
+                let _ = entered.send(());
+            };
+            ipc::serve_injection_streams(streams, &service, &on_wait);
+        });
+        Self {
+            path,
+            registry,
+            waiting,
+            silent: Vec::new(),
+            stop,
+            accept: Some(accept),
+        }
+    }
+    /// 稼働 session を登録して auth section を開く。controller = この試験 process、runtime = 子 process。
+    fn live(&self, fx: &mut Fx, session_id: &str, section: &str, lease: &str) {
+        let me = std::process::id();
+        let (runtime_pid, runtime_start) = fx.child();
+        self.registry
+            .register(LiveSessionRegistration {
+                session_id: session_id.into(),
+                controller_pid: me,
+                controller_start: process_start(me).expect("self start"),
+                runtime_pid,
+                runtime_start,
+            })
+            .expect("register");
+        self.registry
+            .open_section(AuthSectionRegistration {
+                session_id: session_id.into(),
+                auth_section_id: section.into(),
+                lease_id: lease.into(),
+                exact_origin: ORIGIN.into(),
+                cdp_target_id: TARGET.into(),
+            })
+            .expect("open");
+    }
+    /// 要求を書かない接続を開き、その待ちの thread が待ちに入ったことを出来事で確かめる（保険 60 秒）。
+    fn silent_stream(&mut self) {
+        let stream = UnixStream::connect(&self.path).expect("connect");
+        self.waiting
+            .recv_timeout(Duration::from_secs(60))
+            .expect("the silent stream's thread entered the wait");
+        self.silent.push(stream);
+    }
+    /// 黙った接続のどれにも応答も close も来ていない（受付はまだ待っている）。
+    fn assert_silent_streams_still_wait(&self) {
+        for stream in &self.silent {
+            let mut byte = 0u8;
+            let n = unsafe {
+                libc::recv(
+                    stream.as_raw_fd(),
+                    (&raw mut byte).cast(),
+                    1,
+                    libc::MSG_PEEK | libc::MSG_DONTWAIT,
+                )
+            };
+            assert_eq!(n, -1, "a silent stream got a reply or was closed");
+            assert_eq!(
+                std::io::Error::last_os_error().kind(),
+                std::io::ErrorKind::WouldBlock
+            );
+        }
+    }
+}
+
+impl Drop for Accepting {
+    fn drop(&mut self) {
+        self.silent.clear();
+        self.stop.store(true, Ordering::SeqCst);
+        // accept を起こす接続。`take_while` が受付を終わらせ、scope が全 thread を待つ。
+        let _ = UnixStream::connect(&self.path);
+        if let Some(accept) = self.accept.take() {
+            let _ = accept.join();
+        }
+    }
+}
+
+/// 要求を sink FD 付きで送り（受付が先に閉じていれば送れなくても続ける）、届いた応答の code を返す。
+fn offer_and_read_code(socket: &Path, body: &[u8], sink: i32) -> Option<String> {
+    let mut stream = UnixStream::connect(socket).expect("connect");
+    stream
+        .set_read_timeout(Some(IO_TIMEOUT + Duration::from_secs(5)))
+        .expect("timeout");
+    let mut out = (body.len() as u32).to_be_bytes().to_vec();
+    out.extend_from_slice(body);
+    let mut cmsg = [0u64; 4];
+    let mut iov = libc::iovec {
+        iov_base: out.as_mut_ptr().cast(),
+        iov_len: out.len(),
+    };
+    unsafe {
+        let mut msg: libc::msghdr = std::mem::zeroed();
+        msg.msg_iov = &mut iov;
+        msg.msg_iovlen = 1;
+        msg.msg_control = cmsg.as_mut_ptr().cast();
+        msg.msg_controllen = libc::CMSG_SPACE(std::mem::size_of::<i32>() as u32) as _;
+        let c = libc::CMSG_FIRSTHDR(&msg);
+        (*c).cmsg_level = libc::SOL_SOCKET;
+        (*c).cmsg_type = libc::SCM_RIGHTS;
+        (*c).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<i32>() as u32) as _;
+        std::ptr::write_unaligned(libc::CMSG_DATA(c).cast::<i32>(), sink);
+        let _ = libc::sendmsg(stream.as_raw_fd(), &msg, libc::MSG_NOSIGNAL);
+    }
+    let mut len = [0u8; 4];
+    stream.read_exact(&mut len).expect("reply length");
+    let mut reply = vec![0u8; u32::from_be_bytes(len) as usize];
+    stream.read_exact(&mut reply).expect("reply body");
+    serde_json::from_slice::<InjectionReply>(&reply)
+        .expect("reply")
+        .code
+}
+
+/// D4: auth section を開いた peer の黙った接続が最初の要求を待っている間も、別の接続の要求は IO_TIMEOUT の
+/// 内に照合され、lease はちょうど 1 回消費される。受付が 1 接続ずつだと、この要求は黙った接続の待ち
+/// （最長 PASSED_STREAM_BACKSTOP の 120 秒）が終わるまで読まれない。
+#[test]
+fn concurrent_first_request_another_stream_is_answered_while_a_silent_stream_waits() {
+    let mut fx = Fx::new(Admission::SameUidHarnessFacts(facts));
+    let mut acc = Accepting::start(&fx);
+    let lease = fx.grant("sess-1", "k1", 60);
+    acc.live(&mut fx, "sess-1", "auth-1", &lease);
+    acc.silent_stream();
+    let before = fx.calls();
+    let begun = Instant::now();
+    let body = serde_json::to_vec(&request("sess-1", "auth-1", &lease)).expect("json");
+    let (raw, frame) = inject_raw_at(&acc.path, &body, "ok", 1);
+    let elapsed = begun.elapsed();
+    let reply: InjectionReply = serde_json::from_slice(&raw).expect("reply");
+    assert!(reply.ok, "{:?}", reply.code);
+    assert!(
+        elapsed < IO_TIMEOUT,
+        "the reply took {elapsed:?} (IO_TIMEOUT {IO_TIMEOUT:?})"
+    );
+    acc.assert_silent_streams_still_wait();
+    assert_eq!(fx.calls(), before + 1);
+    assert!(contains(&frame.expect("frame"), SENTINEL));
+    assert!(!contains(&raw, SENTINEL));
+    // 照合は直列のまま: 同じ lease の 2 回目は lease_used で、provider は呼ばれない。
+    let (raw, frame) = inject_raw_at(&acc.path, &body, "ok", 1);
+    let reply: InjectionReply = serde_json::from_slice(&raw).expect("reply");
+    assert_eq!(reply.code.as_deref(), Some("lease_used"));
+    assert!(frame.is_none());
+    assert_eq!(fx.calls(), before + 1);
+    acc.assert_silent_streams_still_wait();
+}
+
+/// D5: 待つ接続が MAX_WAITING_STREAMS 本あるとき、次の接続は要求を読まれずにすぐ invalid_request になり、
+/// lease も provider も使われない。待ちが終われば枠は戻り、同じ lease で注入できる。
+#[test]
+fn concurrent_first_request_streams_over_the_limit_are_denied_unread() {
+    let mut fx = Fx::new(Admission::SameUidHarnessFacts(facts));
+    let mut acc = Accepting::start(&fx);
+    let lease = fx.grant("sess-1", "k1", 60);
+    acc.live(&mut fx, "sess-1", "auth-1", &lease);
+    for _ in 0..ipc::MAX_WAITING_STREAMS {
+        acc.silent_stream();
+    }
+    let before = fx.calls();
+    let journal = fx.journal();
+    let body = serde_json::to_vec(&request("sess-1", "auth-1", &lease)).expect("json");
+    let (broker_end, mux_end) = seqpacket();
+    let sink = mux(mux_end, "ok");
+    let begun = Instant::now();
+    let code = offer_and_read_code(&acc.path, &body, broker_end.as_raw_fd());
+    let elapsed = begun.elapsed();
+    drop(broker_end);
+    assert_eq!(code.as_deref(), Some("invalid_request"));
+    assert!(
+        elapsed < IO_TIMEOUT,
+        "the denial took {elapsed:?} (IO_TIMEOUT {IO_TIMEOUT:?})"
+    );
+    assert!(
+        sink.join().expect("mux").is_none(),
+        "nothing reached the sink"
+    );
+    assert_eq!(fx.calls(), before);
+    assert_eq!(fx.journal(), journal, "the denied stream is not audited");
+    acc.assert_silent_streams_still_wait();
+    assert!(
+        acc.waiting.try_recv().is_err(),
+        "a stream over the limit never enters the wait"
+    );
+
+    // 黙った接続を閉じると待ちが終わって枠が戻る。戻るまでの間の拒否は lease に触れないので、
+    // 注入が通るまで出来事として繰り返す（保険 60 秒）。
+    acc.silent.clear();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let reply = loop {
+        let (raw, _) = inject_raw_at(&acc.path, &body, "ok", 1);
+        let reply: InjectionReply = serde_json::from_slice(&raw).expect("reply");
+        if reply.ok || Instant::now() >= deadline {
+            break reply;
+        }
+        assert_eq!(reply.code.as_deref(), Some("invalid_request"));
+        thread::sleep(Duration::from_millis(10));
+    };
+    assert!(reply.ok, "{:?}", reply.code);
+    assert_eq!(fx.calls(), before + 1);
 }
 
 /// Unix socket を置く試験用の一時 dir。socket の path は `sun_path`（108 byte）に収まる必要があり、

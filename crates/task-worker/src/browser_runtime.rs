@@ -25,8 +25,11 @@ use task_core::browser_isolation::{
     verify_launcher_session,
 };
 
-/// sandbox の中の UID/GID（host から見た UID は変わらない。ADR-0105）。
-pub const SANDBOX_UID: u32 = 1000;
+/// sandbox の userns の内側の UID / GID（bwrap の `--uid` / `--gid`。host から見た UID は変わらない。
+/// ADR-0105）。launcher はこの ID を専用 host UID の subuid へ map する（ADR-0115 の `1000 → S`。
+/// `browser_launcher::userns` の 2 map と `backend` の map の照合、daemon の `runtime_facts`）。
+/// launcher が runtime に依存する向きなので、正本はこちらに置く。
+pub(crate) const INNER_ID: u32 = 1000;
 
 /// The existing daemon path creates its own user namespace. A launcher may supply
 /// a namespace created under its dedicated host UID instead.
@@ -355,8 +358,6 @@ const ROOT_LINKS: [&str; 5] = ["bin", "lib", "lib32", "lib64", "sbin"];
 /// tmpfs（0755）の下に置き直し、bwrap にはこの path を渡す（ADR-0116 付記）。
 const SESSION_MOUNT_BASE: &str = "/tmp";
 const SESSION_MOUNT: &str = "/tmp/celeris-session";
-/// sandbox の中の UID / GID（`--uid` / `--gid`、launcher の 2 map の内側 ID）。
-const INNER_ID: u32 = 1000;
 
 /// bwrap の引数（`--info-fd` を除く）。I/O は `/` 直下の symlink 判定だけ。
 ///
@@ -367,13 +368,14 @@ const INNER_ID: u32 = 1000;
 /// 内側 1000 は session_root の私有 dir を辿れないので、session dir は子の私有 mount ns で
 /// `SESSION_MOUNT` に bind し直してから渡す。
 pub fn bwrap_args(spec: &RuntimeSpec) -> Vec<OsString> {
+    let inner = INNER_ID.to_string();
     let mut a: Vec<OsString> = vec!["--unshare-user".into()];
     a.extend(
         [
             "--uid",
-            "1000",
+            &inner,
             "--gid",
-            "1000",
+            &inner,
             "--unshare-pid",
             "--unshare-net",
             "--unshare-ipc",

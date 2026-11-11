@@ -1399,8 +1399,8 @@ fn reviewer_run_gets_a_run_tmpdir_that_is_removed_on_drop() {
         ) -> Result<RunOutcome, AdapterError> {
             Err(AdapterError::Other("unused".into()))
         }
-        fn with_env(&self, _extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-            Some(Arc::new(EnvAdapter))
+        fn configure(&self, settings: &task_worker::AdapterSettings) -> task_worker::Configured {
+            settings.configured(&[task_worker::AdapterSetting::Env], || Arc::new(EnvAdapter))
         }
     }
     let ws = tempfile::tempdir().unwrap();

@@ -502,25 +502,6 @@ impl RecordingSink {
 }
 
 impl EventSink for RecordingSink {
-    fn browser_control_gate(
-        &self,
-        _run_id: &str,
-        _session_id: &str,
-    ) -> Option<Arc<dyn crate::browser_live::ControlGate>> {
-        Some(Arc::new(InMemoryGate::new()))
-    }
-    fn browser_updated(&self, browser: &BrowserRun) {
-        self.note(&format!("{browser:?}"));
-        self.browsers.lock().expect("lock").push(browser.clone());
-    }
-    fn browser_live(
-        &self,
-        _run_id: &str,
-        _session_id: &str,
-        event: &task_core::browser_live::ScrubbedLiveEvent,
-    ) {
-        self.note(&format!("{:?}", event.as_persisted()));
-    }
     fn progress(&self, msg: &str) {
         self.note(msg);
     }
@@ -532,6 +513,69 @@ impl EventSink for RecordingSink {
     }
     fn comment(&self, body: &str) {
         self.note(body);
+    }
+}
+impl crate::BrowserAuthority for RecordingSink {
+    fn browser_approval_consume(
+        &self,
+        _wait: &task_core::browser_wait::BrowserWait,
+    ) -> Result<task_core::browser_wait::ConsumedBrowserApproval, String> {
+        Err("browser wait store unavailable".into())
+    }
+    fn browser_operation_approval_consume(
+        &self,
+        _wait: &task_core::browser_wait::BrowserWait,
+    ) -> Result<task_core::browser_wait::ConsumedBrowserOperation, String> {
+        Err("browser wait store unavailable".into())
+    }
+    fn browser_saved_credential(
+        &self,
+        _policy_id: &str,
+        _origin: &str,
+    ) -> Option<crate::browser_credential::SavedCredential> {
+        None
+    }
+    fn browser_saved_credential_valid(&self, _wait: &task_core::browser_wait::BrowserWait) -> bool {
+        false
+    }
+    fn browser_wait_open(
+        &self,
+        _request: &task_core::browser_wait::NewBrowserWait,
+    ) -> Result<(), String> {
+        Err("browser wait store unavailable".into())
+    }
+    fn browser_waits(&self) -> Result<Vec<task_core::browser_wait::BrowserWait>, String> {
+        Ok(Vec::new())
+    }
+}
+
+impl crate::BrowserControl for RecordingSink {
+    fn browser_auth_section(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+        _active: bool,
+    ) -> Result<(), String> {
+        Err("browser control store unavailable".into())
+    }
+    fn browser_control_gate(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+    ) -> Option<Arc<dyn crate::browser_live::ControlGate>> {
+        Some(Arc::new(InMemoryGate::new()))
+    }
+    fn browser_live(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+        event: &task_core::browser_live::ScrubbedLiveEvent,
+    ) {
+        self.note(&format!("{:?}", event.as_persisted()));
+    }
+    fn browser_updated(&self, browser: &BrowserRun) {
+        self.note(&format!("{browser:?}"));
+        self.browsers.lock().expect("lock").push(browser.clone());
     }
 }
 
@@ -668,6 +712,10 @@ async fn run_through(f: &Fixture, rewrite: Option<u32>) -> RunResult {
             kill_grace: Duration::from_secs(1),
         },
         &sink,
+        crate::BrowserPorts {
+            authority: &sink,
+            control: &sink,
+        },
         LauncherTarget {
             socket: &p.sock,
             refuse_test_loopback: false,

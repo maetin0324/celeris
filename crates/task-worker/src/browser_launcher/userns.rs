@@ -10,6 +10,8 @@ use std::process::Command;
 
 use nix::libc;
 
+use crate::browser_runtime::INNER_ID;
+
 /// Empties the browser-writable session subdirectories and, since HOME is a
 /// subdirectory of the session root (F4), any top-level dot entry the
 /// browser subuid left directly under the session dir (the sticky session
@@ -29,14 +31,14 @@ impl Mapping {
             "0".into(),
             self.host_id.to_string(),
             "1".into(),
-            "1000".into(),
+            INNER_ID.to_string(),
             self.sub_id.to_string(),
             "1".into(),
         ]
     }
 
     fn expected(self) -> String {
-        format!("0 {} 1\n1000 {} 1\n", self.host_id, self.sub_id)
+        format!("0 {} 1\n{INNER_ID} {} 1\n", self.host_id, self.sub_id)
     }
 }
 
@@ -215,8 +217,8 @@ pub fn create() -> io::Result<UserNamespace> {
                 libc::_exit(0);
             }
             if libc::chdir(path.as_ptr().cast()) != 0
-                || libc::setresgid(1000, 1000, 1000) != 0
-                || libc::setresuid(1000, 1000, 1000) != 0
+                || libc::setresgid(INNER_ID, INNER_ID, INNER_ID) != 0
+                || libc::setresuid(INNER_ID, INNER_ID, INNER_ID) != 0
             {
                 libc::_exit(1);
             }

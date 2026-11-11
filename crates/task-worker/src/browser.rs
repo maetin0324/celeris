@@ -20,7 +20,10 @@ use task_core::browser_wait::{
 use task_core::{BrowserRun, BrowserRunState, ProgressFields, ProgressKind};
 
 use crate::browser_credential::policy_changed;
-use crate::{AdapterError, EventSink, RunLimits, RunOutcome, RunRequest, Terminal, WorkerAdapter};
+use crate::{
+    AdapterError, BrowserPorts, EventSink, RunLimits, RunOutcome, RunRequest, Terminal,
+    WorkerAdapter,
+};
 
 #[path = "browser_auth.rs"]
 mod auth;
@@ -353,52 +356,10 @@ struct ActionEvent {
 /// are browser audit sources. Do not let page-driven comments/delegation publish data.
 struct BrowserSink<'a>(&'a dyn EventSink);
 impl EventSink for BrowserSink<'_> {
-    fn browser_saved_credential(
-        &self,
-        policy_id: &str,
-        origin: &str,
-    ) -> Option<crate::browser_credential::SavedCredential> {
-        self.0.browser_saved_credential(policy_id, origin)
-    }
-    fn browser_saved_credential_valid(&self, wait: &task_core::browser_wait::BrowserWait) -> bool {
-        self.0.browser_saved_credential_valid(wait)
-    }
-
     fn context_compacted(&self) {
         self.0.context_compacted();
     }
-    fn browser_wait_open(
-        &self,
-        request: &task_core::browser_wait::NewBrowserWait,
-    ) -> Result<(), String> {
-        self.0.browser_wait_open(request)
-    }
-    fn browser_waits(&self) -> Result<Vec<task_core::browser_wait::BrowserWait>, String> {
-        self.0.browser_waits()
-    }
-    fn browser_auth_section(
-        &self,
-        run_id: &str,
-        session_id: &str,
-        active: bool,
-    ) -> Result<(), String> {
-        self.0.browser_auth_section(run_id, session_id, active)
-    }
-    fn browser_control_gate(
-        &self,
-        run_id: &str,
-        session_id: &str,
-    ) -> Option<std::sync::Arc<dyn crate::browser_live::ControlGate>> {
-        self.0.browser_control_gate(run_id, session_id)
-    }
-    fn browser_live(
-        &self,
-        run_id: &str,
-        session_id: &str,
-        event: &task_core::browser_live::ScrubbedLiveEvent,
-    ) {
-        self.0.browser_live(run_id, session_id, event);
-    }
+
     fn progress(&self, _msg: &str) {
         self.0.heartbeat();
     }
@@ -419,15 +380,15 @@ impl EventSink for BrowserSink<'_> {
 }
 
 /// Production live sink: the scrubbed event goes to the session's persisted live log
-/// through the run's `EventSink` (ADR-0100).
+/// through the run's `BrowserControl` (ADR-0100).
 pub(crate) struct EventSinkLive<'a> {
-    pub(crate) sink: &'a dyn EventSink,
+    pub(crate) control: &'a dyn crate::BrowserControl,
     pub(crate) run_id: String,
     pub(crate) session_id: String,
 }
 impl crate::browser_live::LiveSink for EventSinkLive<'_> {
     fn send(&self, event: &task_core::browser_live::ScrubbedLiveEvent) {
-        self.sink
+        self.control
             .browser_live(&self.run_id, &self.session_id, event);
     }
 }
@@ -591,14 +552,41 @@ async fn close_once(argv: &[std::ffi::OsString]) -> Option<bool> {
     }
 }
 
+/// Start the supervisor-owned lifecycle through the control capability only.
+fn running_browser(
+    req: &RunRequest,
+    run_id: &str,
+    session_id: String,
+    policy: &crate::browser_policy::PreparedBrowserPolicy,
+    control: &dyn crate::BrowserControl,
+) -> BrowserRun {
+    let browser = BrowserRun {
+        task_id: req.task.id,
+        run_id: run_id.into(),
+        session_id,
+        state: BrowserRunState::Running,
+        live_view_url: None,
+        policy: Some(policy.binding.clone()),
+    };
+    control.browser_updated(&browser);
+    browser
+}
+
+fn require_browser_ports(
+    ports: Option<BrowserPorts<'_>>,
+) -> Result<BrowserPorts<'_>, AdapterError> {
+    ports.ok_or_else(|| AdapterError::Other("browser capability not injected".into()))
+}
+
 pub async fn run(
     adapter: Arc<dyn WorkerAdapter>,
     req: RunRequest,
     run_id: &str,
     limits: RunLimits,
     sink: &dyn EventSink,
+    ports: Option<BrowserPorts<'_>>,
 ) -> Result<RunOutcome, AdapterError> {
-    run_with_candidates(adapter, Vec::new(), req, run_id, limits, sink).await
+    run_with_candidates(adapter, Vec::new(), req, run_id, limits, sink, ports).await
 }
 
 /// Execute the selected backend and, for public-only browser tasks, try configured alternatives
@@ -611,6 +599,7 @@ pub async fn run_with_candidates(
     run_id: &str,
     limits: RunLimits,
     sink: &dyn EventSink,
+    ports: Option<BrowserPorts<'_>>,
 ) -> Result<RunOutcome, AdapterError> {
     if !task_core::browser::requests_browser(&req.task.skills)
         || req.context.execution_planner.is_some()
@@ -619,6 +608,7 @@ pub async fn run_with_candidates(
     {
         return adapter.run(req, run_id, limits, sink).await;
     }
+    let ports = require_browser_ports(ports)?;
     let record_path = conformance_record_path()
         .ok_or_else(|| AdapterError::Other("browser conformance record unavailable".into()))?;
     run_with_executable_candidates_record(
@@ -628,6 +618,7 @@ pub async fn run_with_candidates(
         run_id,
         limits,
         sink,
+        Some(ports),
         Path::new("agent-browser"),
         crate::browser_credential::configured(),
         &record_path,
@@ -643,10 +634,19 @@ pub async fn run_with_executable_candidates_record(
     run_id: &str,
     limits: RunLimits,
     sink: &dyn EventSink,
+    ports: Option<BrowserPorts<'_>>,
     executable: &Path,
     credentials: Option<&crate::browser_credential::CredentialSupervisor>,
     record_path: &Path,
 ) -> Result<RunOutcome, AdapterError> {
+    if !task_core::browser::requests_browser(&req.task.skills)
+        || req.context.execution_planner.is_some()
+        || req.context.review.is_some()
+        || req.task.kind != task_core::TaskKind::Execute
+    {
+        return adapter.run(req, run_id, limits, sink).await;
+    }
+    let ports = require_browser_ports(ports)?;
     // Credential waits and an active auth section must never be replayed through a fallback.
     let sensitive = req.context.browser_policy.as_ref().is_some_and(|p| {
         p.allowed_actions
@@ -669,6 +669,7 @@ pub async fn run_with_executable_candidates_record(
             run_id,
             limits,
             sink,
+            Some(ports),
             executable,
             credentials,
             record_path,
@@ -715,12 +716,14 @@ fn isolated_runtime_ready(
 }
 
 /// `run` with an explicit substrate and credential broker (integration tests use fakes).
+#[allow(clippy::too_many_arguments)]
 pub async fn run_with_executable(
     adapter: Arc<dyn WorkerAdapter>,
     req: RunRequest,
     run_id: &str,
     limits: RunLimits,
     sink: &dyn EventSink,
+    ports: Option<BrowserPorts<'_>>,
     executable: &Path,
     credentials: Option<&crate::browser_credential::CredentialSupervisor>,
 ) -> Result<RunOutcome, AdapterError> {
@@ -731,6 +734,7 @@ pub async fn run_with_executable(
     {
         return adapter.run(req, run_id, limits, sink).await;
     }
+    let ports = require_browser_ports(ports)?;
     let record_path = match conformance_record_path() {
         Some(path) => path,
         None => {
@@ -752,6 +756,7 @@ pub async fn run_with_executable(
         run_id,
         limits,
         sink,
+        Some(ports),
         executable,
         credentials,
         &record_path,
@@ -767,6 +772,7 @@ pub async fn run_with_executable_record(
     run_id: &str,
     limits: RunLimits,
     sink: &dyn EventSink,
+    ports: Option<BrowserPorts<'_>>,
     executable: &Path,
     credentials: Option<&crate::browser_credential::CredentialSupervisor>,
     record_path: &Path,
@@ -777,6 +783,7 @@ pub async fn run_with_executable_record(
         run_id,
         limits,
         sink,
+        ports,
         executable,
         credentials,
         record_path,
@@ -792,6 +799,7 @@ async fn run_with_executable_attempt(
     run_id: &str,
     limits: RunLimits,
     sink: &dyn EventSink,
+    ports: Option<BrowserPorts<'_>>,
     executable: &Path,
     credentials: Option<&crate::browser_credential::CredentialSupervisor>,
     record_path: &Path,
@@ -804,6 +812,11 @@ async fn run_with_executable_attempt(
     {
         return adapter.run(req, run_id, limits, sink).await;
     }
+    let ports = require_browser_ports(ports)?;
+    let BrowserPorts {
+        authority: auth,
+        control,
+    } = ports;
     task_core::browser::browser_adapter(Some(adapter.id())).map_err(AdapterError::Other)?;
     let capability = req
         .context
@@ -836,6 +849,7 @@ async fn run_with_executable_attempt(
             run_id,
             limits,
             sink,
+            ports,
             launcher_run::LauncherTarget {
                 socket,
                 refuse_test_loopback: *refuse_test_loopback,
@@ -847,7 +861,7 @@ async fn run_with_executable_attempt(
         )
         .await;
     }
-    let waits = sink
+    let waits = auth
         .browser_waits()
         .map_err(|_| AdapterError::Other("browser wait store unavailable".into()))?;
     let approved = waits
@@ -862,13 +876,13 @@ async fn run_with_executable_attempt(
     };
     let credential_approved = approved.clone().filter(|_| approved_operation.is_none());
     if let Some(wait) = &credential_approved {
-        if !sink.browser_saved_credential_valid(wait) {
-            return credential_reentry(req.task.id, run_id, wait, &policy, sink);
+        if !auth.browser_saved_credential_valid(wait) {
+            return credential_reentry(req.task.id, run_id, wait, &policy, ports);
         }
         check_approved_credential(wait, &policy, credentials)?;
     }
     if let Some(outcome) =
-        registered_credential_approval(req.task.id, run_id, &waits, &policy, credentials, sink)?
+        registered_credential_approval(req.task.id, run_id, &waits, &policy, credentials, ports)?
     {
         return Ok(outcome);
     }
@@ -967,7 +981,7 @@ async fn run_with_executable_attempt(
     let allowed: task_core::AgentBrowserActionPolicy = serde_json::from_slice(&initial_policy)
         .map_err(|_| AdapterError::Other("browser policy rejected".into()))?;
     // ADR-0113: every shim-issued agent action passes the store-backed control gate.
-    let control_gate = sink
+    let control_gate = control
         .browser_control_gate(run_id, &session)
         .ok_or_else(|| AdapterError::Other("browser control store unavailable".into()))?;
     let action_server = crate::browser_action::ActionServer::start(
@@ -1057,7 +1071,7 @@ async fn run_with_executable_attempt(
     // A failed sandbox version check does not consume the one-time approval.
     let operation = match (&approved, approved_operation) {
         (Some(wait), Some(action)) => {
-            let consumed = sink.browser_operation_approval_consume(wait).map_err(|_| {
+            let consumed = auth.browser_operation_approval_consume(wait).map_err(|_| {
                 AdapterError::Other("browser approval could not be consumed".into())
             })?;
             Some(ApprovedOperation {
@@ -1089,25 +1103,16 @@ async fn run_with_executable_attempt(
             if let Some(field) = trusted_login_difference(&current, pinned) {
                 return Err(policy_changed(field));
             }
-            Some(sink.browser_approval_consume(wait).map_err(|_| {
+            Some(auth.browser_approval_consume(wait).map_err(|_| {
                 AdapterError::Other("browser approval could not be consumed".into())
             })?)
         }
         _ => None,
     };
-    let mut browser = BrowserRun {
-        task_id: req.task.id,
-        run_id: run_id.into(),
-        session_id: session,
-        state: BrowserRunState::Running,
-        // Live View stops with credential use (ADR-0080 D3).
-        live_view_url: None,
-        policy: Some(policy.binding.clone()),
-    };
-    sink.browser_updated(&browser);
+    let mut browser = running_browser(&req, run_id, session, &policy, control);
     let live = crate::browser_live::LiveEmitter::with_observation_stop(
         EventSinkLive {
-            sink,
+            control,
             run_id: run_id.into(),
             session_id: browser.session_id.clone(),
         },
@@ -1140,7 +1145,7 @@ async fn run_with_executable_attempt(
                 .lock()
                 .map_err(|_| AdapterError::Other("cdp_unavailable".into()))?
                 .open_auth_section(auth_id.clone());
-            if sink
+            if control
                 .browser_auth_section(run_id, &browser.session_id, true)
                 .is_err()
             {
@@ -1150,7 +1155,7 @@ async fn run_with_executable_attempt(
                     .map(|mut c| c.close_auth_section());
                 sup.broker.revoke(&lease_id, "supervisor");
                 browser.state = BrowserRunState::Failed;
-                sink.browser_updated(&browser);
+                control.browser_updated(&browser);
                 return Ok(RunOutcome {
                     terminal: Terminal::Error {
                         message: "browser auth section could not be recorded".into(),
@@ -1211,7 +1216,7 @@ async fn run_with_executable_attempt(
                 )
                 .await
                 .and_then(|pressed| {
-                    if sink
+                    if control
                         .browser_auth_section(run_id, &browser.session_id, false)
                         .is_ok()
                     {
@@ -1276,7 +1281,7 @@ async fn run_with_executable_attempt(
         if closed && injected_session_guard.is_some() {
             // Injection failed, but the session has ended; only now may the
             // externally visible auth interval be released.
-            let _ = sink.browser_auth_section(run_id, &browser.session_id, false);
+            let _ = control.browser_auth_section(run_id, &browser.session_id, false);
         }
         if let (Some(sup), Some(approval)) = (credentials, approval.as_ref()) {
             return credential_failure_reentry(
@@ -1284,7 +1289,7 @@ async fn run_with_executable_attempt(
                 run_id,
                 &approval.wait,
                 &policy,
-                sink,
+                ports,
                 sup,
                 closed,
             );
@@ -1325,7 +1330,7 @@ async fn run_with_executable_attempt(
         run_id,
         &browser.session_id,
         &policy,
-        sink,
+        ports,
         outcome,
     );
     outcome = next_outcome;
@@ -1356,7 +1361,7 @@ async fn run_with_executable_attempt(
     if closed && injected_session_guard.is_some() {
         // The session is gone; no browser observation can resume. A failed close
         // leaves both the store and controller in their stopped state.
-        if sink
+        if control
             .browser_auth_section(run_id, &browser.session_id, false)
             .is_err()
         {
@@ -1389,7 +1394,7 @@ async fn run_with_executable_attempt(
             _ => BrowserRunState::Failed,
         }
     };
-    sink.browser_updated(&browser);
+    control.browser_updated(&browser);
     drop(action_server);
     drop(shared_cdp);
     drop(broker_session);

@@ -1,4 +1,5 @@
-//! The env every CoS chat/triage run gets (`cos_run_env`, passed to `with_env` at launch).
+//! The env every CoS chat/triage run gets (`cos_run_env`, passed as the `env` of the
+//! `AdapterSettings` that `configure` applies at launch).
 
 use super::{
     COS_API_URL_ENV, COS_POLICY_VERSION_ENV, COS_RUN_CREDENTIAL_ENV, cos_run_env, path_with_first,

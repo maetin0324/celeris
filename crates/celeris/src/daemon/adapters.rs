@@ -465,9 +465,14 @@ env = { OPENAI_BASE_URL = "http://proxy" }
         let cfg = load(&toml);
         let adapters = build_harness_adapters(&cfg).unwrap();
         // The dispatcher applies the selected route's `provider/model` at launch (as here).
-        let pi = adapters[&"pi".into()]
-            .with_model("opencode-go/deepseek-v4-pro")
-            .unwrap();
+        let settings = task_worker::AdapterSettings {
+            model: Some("opencode-go/deepseek-v4-pro".into()),
+            ..task_worker::AdapterSettings::default()
+        };
+        let (pi, unsupported) = adapters[&"pi".into()]
+            .configure(&settings)
+            .resolve(&adapters[&"pi".into()]);
+        assert!(unsupported.is_empty(), "{unsupported:?}");
         let req = RunRequest {
             protocol: PROTOCOL_VERSION,
             task: sample_task_for_tests(),

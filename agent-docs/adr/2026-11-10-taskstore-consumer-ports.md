@@ -3,7 +3,7 @@ tasks: [01M6TYVJT2HG9NY5FW9FMCZS9A]
 ---
 # ADR 2026-11-10: TaskStore の consumer 駆動の port — 最初の consumer は celeris-mcp
 
-- 状態: 採用・実装済み。実装は同じ task の mcp-port・store-prune・table-writers、前後計測は record。D2 の 8 method のうち 2 個（`org_list`・`org_upsert`）を移さなかったことと、D2 の「1 行転送」をやめたことは末尾の付記に書いた。
+- 状態: 採用・実装済み。実装は同じ task の mcp-port・store-prune・table-writers・mcp-ports・move-org・mcp-org、前後計測は record と record-ports。D2 の 8 method は全部移した（`org_list`・`org_upsert` は move-org で移した。2 つ目の付記）。`get` は D2 のとおり移していない。D2 の「1 行転送」をやめたことは 1 つ目の付記に書いた。
 - 計測と検査: `agent-docs/progress/2026-11-10-taskstore-consumer-ports/measure.py`（標準ライブラリだけ）、着手時の値 `baseline.json`、削除の対象 `prune-list.json`、直す file `port-fix-files.json`。基準は着手時の `$CELERIS_WU_BASE`（件名「integrate wu/final-record (phase reclose)」）。
 
 ## 文脈
@@ -90,6 +90,7 @@ tasks: [01M6TYVJT2HG9NY5FW9FMCZS9A]
 - 6 method はどれも読み出しだけ（`with_read_conn`）。SQL・transaction・schema・event の kind は変えていない（D5 のとおり）。
 
 ### TaskStore に残した 3 method（D2 からの変更）
+- この節は record の時点の記録。`org_list`・`org_upsert` は後の move-org で `OrgDirectory` へ移した（下の「付記 2026-11-11: celeris-mcp の port の完了（record-ports）」）。今も `TaskStore` に残るのは `get` だけ。
 - `org_list`・`org_upsert`: D2 では `OrgDirectory` へ移す予定だった。移すと R3 の write_set（B0 の `slices.json`）の外の 4 file を直す必要があるので残した。
   - UFCS で呼ぶ 2 file: `crates/task-core/src/approval/tests.rs`（`TaskStore::org_upsert(&store, …)`）と `crates/task-core/src/report/tests.rs`（`crate::store::TaskStore::org_upsert(&store, …)`）。supertrait へ移すと trait 名を直す必要がある（E0782）。write_set の task-core の src は `lib|store|model|transition`・`store/`・`tree/gate`・`chat/` だけで、この 2 file は入らない。
   - 具体型で呼ぶ試験 2 file: `crates/celerisctl/tests/org_migrate_v2.rs`（`org_list`）と `crates/celeris/tests/trial_context_canary_e2e.rs`（`org_upsert`）。write_set の試験の正規表現 `^crates/[a-z-]+/tests/[a-z_/]+\.rs$` は file 名の数字を通さない。
@@ -108,3 +109,45 @@ tasks: [01M6TYVJT2HG9NY5FW9FMCZS9A]
 - D6: `TaskStore` の fn 宣言は 193 → 183（目標 185。store-prune の 4 個と移した 6 個）。supertrait は 16 → 18。celeris-mcp の src の `TaskStore` の言及は 6 → 3（目標 1）、celeris-mcp が直に呼ぶ `TaskStore` の method は 9 → 3。`auth.rs` から見える method は 308 → 7（`McpClientStore`）、`tools/projects.rs` は 308 → 6（`OrgDirectory`・`TaskQuery`）。試験で SQLite を開く数は 7 → 7 で減らしていない（理由は進捗の mcp-port の節）。compile の単位の逆依存は変わらない（`Cargo.toml`・`Cargo.lock` の差分なし）。
 - D5: `measure.py --check-writers cos_inbox_items,chat_client_requests` → exit 0。task-api は 2 表を書かない。
 - D7: `prune-list.json` の 17 名を消した（`measure.py --check-pruned` → exit 0）。試験だけが呼ぶ 14 個は残した。
+
+## 付記 2026-11-11: celeris-mcp の port の完了（record-ports）
+後の値は `agent-docs/progress/2026-11-10-taskstore-consumer-ports/after-ports.json`（`measure.py --json`、schema `taskstore-consumer-ports/measure/2`。key `celeris_mcp` を足した）。前の値は同じ台本を、着手時の tree（件名「integrate wu/final-record (phase reclose)」）と前回の record の tree（件名「integrate wu/table-writers (phase impl)」）の `crates/` に当てて数えた（`git archive` で `$TMPDIR` に出して実行）。表の 3 列は「着手時 → record → 今」。
+
+### McpState の port 型の handle（mcp-ports・mcp-org）
+- `McpState`（`crates/celeris-mcp/src/state.rs`）は唯一の接続 `Arc<SqliteStore>` を開いて持ち、同じ `Arc` を coerce した `org_directory: Arc<dyn OrgDirectory>`・`node_sessions: Arc<dyn NodeSessionStore>`・`task_query: Arc<dyn TaskQuery>` を持つ。新しい接続・状態ではない（`SqliteStore::open_with` の呼び出しは `open` の 1 か所のまま）。
+- `blocking_on(&self, handle: &Arc<P>, f: FnOnce(&P) -> T)` が handle を受け、`run_blocking`（`spawn_blocking` と panic の伝播の 1 か所）で走らせる。port へ移していない tool のための `blocking`（`FnOnce(&SqliteStore)`）は残る。
+
+### 名簿・一覧の tool の本体が受ける trait
+- `tools/projects.rs`: `list_projects(&dyn OrgDirectory, …)`・`get_project(&dyn OrgDirectory, &dyn TaskQuery, …)`
+- `tools/tasks.rs`: `list_tasks(&dyn TaskQuery, …)`（`tasks_list` の本体）
+- `tools/org.rs`: `list_nodes(&dyn OrgDirectory, HasSession)`・`effective_profile(&dyn OrgDirectory, …)`・`create_node(&dyn OrgDirectory, …)`・`set_node_skill_mount(&dyn OrgDirectory, …)`。`HasSession` は `&dyn Fn(&str, SessionKind) -> Result<bool, StoreError>` で、本番は `node_sessions` の handle から作る（`org_list` の継続セッションの有無は `node_sessions` 表を読むため）。
+- `resources.rs`: 組織の列挙 `org_resources(&dyn OrgDirectory)`
+- `auth.rs`: `authenticate(&dyn McpClientStore, …)`（1 つ目の付記から変わらない）
+- どの本体も `SqliteStore`・`TaskStore` を名指さず、async 側は `state.blocking_on(&state.<handle>, …)` を呼ぶ。
+
+### org_list・org_upsert の移動と決定 write-set の回答（move-org）
+- move-org が `org_list`・`org_upsert` の宣言と本体を `OrgDirectory`（`store/org_directory.rs` の `impl OrgDirectory for SqliteStore`）へ移し、`org_list_impl`・`org_upsert_impl` と `task_store_impl.rs` の転送を消した。`org_upsert` は既存の `org_upsert_tx` を同じ IMMEDIATE transaction で呼ぶので、名簿の更新と監査 event の原子性は変わらない。`OrgDirectory` は 6 method になり、`TaskStore` の fn 宣言は 183 → 181。
+- 決定 write-set の回答は (a)（operator「決定 write-set=a のうえで計画 v4 のとおり進める」）。R3 の write_set（B0 の `slices.json`）の外の 4 file を直し、`slices.json` は書き換えない。4 file は `crates/task-core/src/approval/tests.rs`・`crates/task-core/src/report/tests.rs`（UFCS の trait 名を `OrgDirectory` にした）と `crates/celerisctl/tests/org_migrate_v2.rs`・`crates/celeris/tests/trial_context_canary_e2e.rs`（`OrgDirectory` の import を足した）。`slices-check.py --write-set R3` はこの 4 path を外と出すが、決定済みの例外である。
+- 名簿の能力が `OrgDirectory` と `TaskStore` に分かれていた状態（前回の review の advisory）は、これで解けた。
+
+### get を TaskStore に残す理由
+- `get` を `TaskQuery` へ移すと、具体型で `get` を呼ぶ file に import を足す必要がある。候補（上限）は 266 file で（D2）、`crates/task-worker/src` の試験 3 file（`browser_tests.rs`・`workspace_prune/tests.rs`・`workspace_targets/tests.rs`）を含む。D4 の条件（task-worker を直さない）に合わず、`browser_tests.rs` は R2 の write_set に入る。
+- 移しても `tools/tasks.rs` は `TaskStore` から離れない。`tools/tasks.rs` の `McpState::blocking` 8 か所のうち 1 か所が `get`、残り 7 か所（`task_ops::comment::post_human_comment_as`・`gate::answer`・`retry::retry_task_with_execution`・`regate::set_execution_mode`・`gate::cancel`（と `comment::post_node_comment`）・`gate::approve_as`・`gate::reject_as`）は `task_ops` へ委譲する。委譲先はどれも `store: &dyn TaskStore` を受けるので、`&SqliteStore` を `&dyn TaskStore` に変えて渡す。この 7 か所を狭い port で受けるには task-ops の署名を変える必要があり、task-ops の port（D2 の最後の行）の仕事である。
+
+### celeris-mcp の値の前後
+| 指標 | 着手時 | record | 今 |
+|---|---:|---:|---:|
+| src で `TaskStore` を名指す file（`celeris_mcp.files_naming_taskstore_src`） | 5 | 3 | 1（`tools/tasks.rs`） |
+| src の `TaskStore` の言及（`consumers.celeris-mcp.taskstore_mentions`） | 6 | 3 | 1 |
+| 直に呼ぶ `TaskStore` 自身の method（`consumers.celeris-mcp.methods`） | 9 | 3 | 1（`get`） |
+| `TaskStore` の fn 宣言（B0 の command） | 193 | 183 | 181 |
+| fake で名簿・一覧の tool を試すのに実装する method | 308（`dyn TaskStore`。本体が `&SqliteStore` を受けるので実際には替えられなかった） | 308 | 8（`OrgDirectory` 6・`TaskQuery` 2。`celeris_mcp.fakes.FakePorts`） |
+| `port_fake_` の試験（SQLite を開かない） | 0 | 0 | 10 |
+| 試験の code の `SqliteStore::open*`（`celeris_mcp.sqlite_opens_in_tests`） | 7 | 7 | 7 |
+| SQLite を開く試験 file の試験の数（近似。`celeris_mcp.tests_in_sqlite_files`） | 50 | 50 | 49 |
+| `TaskStore` の宣言を変えたときに celeris-mcp で読む・直す file（`celeris_mcp.taskstore_dependent_files`） | 6（src 5・tests 1） | 4（src 3・tests 1） | 2（src `tools/tasks.rs`・tests `tests/mcp_integration.rs`） |
+
+- `TaskStore` を名指す file が 3 → 1 になった。残る `tools/tasks.rs` は `get` のために `TaskStore` を import する（上の理由）。試験でない code で `SqliteStore` を名指す src の file は 2 つ残る: `state.rs`（接続を開いて handle を作る）と `tools/knowledge.rs`（`resolve_scope`・`layout_with_projects` が `&SqliteStore` を受け、`kb::project_refs` で案件の一覧を読む。task-ops の関数の署名を変える必要があり、R3 の範囲の外）。
+- fixture: 名簿・一覧の tool と組織の resources の本体は、fake を渡して SQLite を開かずに試す（`port_fake_` の 10 件）。SQLite を開く試験は 1 件減った（`tests/mcp_integration.rs` の `org_create_node_ignores_tools_and_permissions` を `port_fake_org_create_node_upserts_child_without_tools_and_permissions` へ移した）。`SqliteStore::open*` の数（7）は fixture の helper の数で、減っていない。残る SQLite の試験は、`mcp_clients` の行と本物の HTTP の往復（`auth/tests.rs`・`call/tests.rs`・`stdio.rs`）、file の DB を読み取り専用で開く `db_query`・`db_schema`（`tools/db_tests.rs`）、port へ移していない tool も通す結合試験（`tests/mcp_integration.rs` の 22 件）である。名簿の SQL は task-core の store の試験が確かめる。
+- 逆依存: `TaskStore` の宣言を変えたときに celeris-mcp で読む・直す file は 6 → 2 になった。compile の単位の逆依存は変わらない。celeris-mcp は task-core に依存し続け（`crates/celeris-mcp/Cargo.toml`・`Cargo.lock` は着手時から差分なし）、task-core のどの変更でも celeris-mcp は再 compile される。これを減らすには trait を別の crate に置く（crate を割る）必要があり、R3 の範囲の外。
+- D6 の目標との差: 「celeris-mcp の src の `TaskStore` の言及 1」「`TaskStore` は `tools/tasks.rs` だけ」は届いた。「mcp の file から見える method 数」は、名簿・一覧の本体では `OrgDirectory` 6・`TaskQuery` 2・`McpClientStore` 7 になった。`tools/tasks.rs` の `get` と `task_ops` への委譲は `TaskStore` の 304 method のまま。

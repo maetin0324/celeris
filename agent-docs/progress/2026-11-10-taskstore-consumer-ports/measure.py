@@ -2,10 +2,11 @@
 """R3（TaskStore の consumer 駆動分割）の計測と検査。標準ライブラリだけを使う。
 
 呼び方（repo の根から。どの cwd からでも repo の根を自分で決める）:
-  measure.py --json <出力path>
-      計測を JSON で書く（exit 0）。key: task_store_fn_decls・task_store_supertraits（B0 と同じ
-      command の値）・consumers.<crate>.{taskstore_mentions,methods,...}・unreferenced_methods・
-      test_only_methods・table_writers.<表>（試験以外で INSERT/UPDATE/DELETE を書く file）。
+  measure.py --json [出力path]
+      計測を JSON で書く（exit 0）。path を省くと標準出力に書く。key: task_store_fn_decls・
+      task_store_supertraits（B0 と同じ command の値）・consumers.<crate>.{taskstore_mentions,
+      methods,...}・unreferenced_methods・test_only_methods・table_writers.<表>（試験以外で
+      INSERT/UPDATE/DELETE を書く file）・celeris_mcp（下の「celeris-mcp の port の指標」）。
   measure.py --check-single-decl
       TaskStore とその supertrait（推移的）の trait 定義の間で同じ fn 名が 2 回以上宣言されていれば
       その名前と trait を出して exit 1。
@@ -22,6 +23,13 @@
   重なる method（AMBIGUOUS）は受け手の識別子に `store` を含むときだけ数える。
 - 表の書き手: 文字列リテラルの中の `INSERT [OR x] INTO t`・`REPLACE INTO t`・`UPDATE [OR x] t`・
   `DELETE FROM t`（大小文字を問わない）。t は migrations の `CREATE TABLE` にある表に限る。
+- celeris-mcp の port の指標（key celeris_mcp。crates/celeris-mcp の全 file）:
+  files_store_types は file ごとに名指す store の型（`SqliteStore` と、TaskStore とその supertrait の
+  trait 名）を試験でない code（prod）と試験の code（tests）に分けたもの。taskstore_dependent_files は
+  `TaskStore` を名指すか TaskStore 自身の fn を呼ぶ file（TaskStore の宣言を変えたときに読む・直す file）。
+  port_fake_tests は `fn port_fake_*` の数。fakes は `impl <trait> for Fake*` の block ごとの fn の数。
+  sqlite_opens_in_tests は試験の code の `SqliteStore::open*` の数、tests_in_sqlite_files は試験の code に
+  それがある file の `#[test]`・`#[tokio::test]` の数（SQLite を開く試験の近似）。
 """
 
 from __future__ import annotations
@@ -506,7 +514,7 @@ def measure() -> dict:
 
     dup = duplicate_decls(traits)
     return {
-        "schema": "taskstore-consumer-ports/measure/1",
+        "schema": "taskstore-consumer-ports/measure/2",
         "generator": "agent-docs/progress/2026-11-10-taskstore-consumer-ports/measure.py",
         "head_subject": _git(["log", "-1", "--format=%s", "HEAD"]),
         "task_store_fn_decls": {
@@ -531,6 +539,65 @@ def measure() -> dict:
         "table_writers": table_writers(src),
         "test_file_count": len(src.test_files),
         "rust_file_count": len(src.code),
+        "celeris_mcp": mcp_ports(src, traits, own_set),
+    }
+
+
+MCP_CRATE = "celeris-mcp"
+TEST_ATTR = re.compile(r"#\[(?:tokio::)?test\b")
+FAKE_IMPL = re.compile(r"\bimpl\s+([A-Z][A-Za-z0-9_]*)\s+for\s+(Fake[A-Za-z0-9_]*)\s*\{")
+SQLITE_OPEN = re.compile(r"\bSqliteStore::open")
+
+
+def _test_part(code: str, prod: str) -> str:
+    """試験でない file の cfg(test) の行だけを残す（prod_code が空白にした行）。"""
+    return "\n".join(c for c, p in zip(code.split("\n"), prod.split("\n")) if c != p)
+
+
+def mcp_ports(src: Source, traits, own_set: set[str]) -> dict:
+    names = ["SqliteStore", *sorted(traits)]
+    type_pat = re.compile(r"\b(" + "|".join(names) + r")\b")
+    files: dict[str, dict] = {}
+    dependent = {"src": [], "tests": []}
+    port_fake: set[str] = set()
+    fakes: dict[str, dict] = {}
+    opens = 0
+    sqlite_files: dict[str, dict] = {}
+    for r in sorted(src.code):
+        if crate_of(r) != MCP_CRATE:
+            continue
+        code = src.code[r]
+        if src.is_test(r):
+            prod, tests = "", code
+        else:
+            prod = src.prod_code[r]
+            tests = _test_part(code, prod)
+        prod_types = sorted(set(type_pat.findall(prod)))
+        test_types = sorted(set(type_pat.findall(tests)))
+        if prod_types or test_types:
+            files[r] = {"test_file": src.is_test(r), "prod": prod_types, "tests": test_types}
+        if re.search(r"\bTaskStore\b", code) or called_methods(code, own_set):
+            dependent["src" if r.startswith(f"crates/{MCP_CRATE}/src/") else "tests"].append(r)
+        port_fake |= set(re.findall(r"\bfn\s+(port_fake_[a-z0-9_]+)", code))
+        for m in FAKE_IMPL.finditer(code):
+            brace = m.end() - 1
+            body = code[brace + 1 : _match_brace(code, brace)]
+            fakes.setdefault(m.group(2), {"file": r, "fns": {}})["fns"][m.group(1)] = len(depth1_fns(body))
+        n_open = len(SQLITE_OPEN.findall(tests))
+        opens += n_open
+        if n_open:
+            sqlite_files[r] = {"opens": n_open, "tests": len(TEST_ATTR.findall(tests))}
+    return {
+        "files_store_types": files,
+        "files_naming_taskstore_src": sorted(
+            r for r, v in files.items() if r.startswith(f"crates/{MCP_CRATE}/src/") and "TaskStore" in v["prod"] + v["tests"]
+        ),
+        "taskstore_dependent_files": {**dependent, "count": len(dependent["src"]) + len(dependent["tests"])},
+        "port_fake_tests": len(port_fake),
+        "fakes": {k: {**v, "fn_count": sum(v["fns"].values())} for k, v in sorted(fakes.items())},
+        "sqlite_opens_in_tests": opens,
+        "sqlite_test_files": sqlite_files,
+        "tests_in_sqlite_files": sum(v["tests"] for v in sqlite_files.values()),
     }
 
 
@@ -614,16 +681,20 @@ def check_pruned(path: Path) -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("--json", metavar="PATH")
+    g.add_argument("--json", metavar="PATH", nargs="?", const="-")
     g.add_argument("--check-single-decl", action="store_true")
     g.add_argument("--check-writers", metavar="TABLES")
     g.add_argument("--check-pruned", metavar="PRUNE_LIST")
     a = ap.parse_args()
     if a.json:
         data = measure()
+        text = json.dumps(data, ensure_ascii=False, indent=1) + "\n"
+        if a.json == "-":
+            sys.stdout.write(text)
+            return 0
         out = Path(a.json)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(data, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+        out.write_text(text, encoding="utf-8")
         return 0
     if a.check_single_decl:
         return check_single_decl()

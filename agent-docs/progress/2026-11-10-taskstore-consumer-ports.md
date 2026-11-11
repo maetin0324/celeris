@@ -2,12 +2,12 @@
 title: 健全性v2 R3 — TaskStore の consumer 駆動分割と domain/storage 境界
 tasks: [01M6TYVJT2HG9NY5FW9FMCZS9A, 01M73HCEX581ACXN6W7VP4M26Q]
 status: done
-updated: 2026-11-10
-completed: 2026-11-10
+updated: 2026-11-11
+completed: 2026-11-11
 ---
 # 健全性v2 R3 — TaskStore の consumer 駆動分割と domain/storage 境界
 
-完了日: 2026-11-10（WU record）
+完了日: 2026-11-11（WU record-ports。最初の完了は 2026-11-10 の WU record）
 
 基準は着手時の `$CELERIS_WU_BASE`（WU ports-design、件名「integrate wu/final-record (phase reclose)」）。設計判断は [ADR 2026-11-10 TaskStore の consumer 駆動の port](../adr/2026-11-10-taskstore-consumer-ports.md)。
 
@@ -19,8 +19,10 @@ completed: 2026-11-10
 - mcp-ports（task 01M73HCEX581ACXN6W7VP4M26Q）: 済み。final review の指摘（celeris-mcp の tool 本体が `McpState::blocking` から具体型の store を受け、fake に替えられない）を直した（下の「mcp-ports の結果」）。
 - move-org: org_list・org_upsert を OrgDirectory に移し、承認済みの write-set 外 4 file を変更した（下の「move-org の結果」）。
 - mcp-org: 名簿の tool（`tools/org.rs`）と resources の組織の列挙を `OrgDirectory` の handle で動かし、fake の試験を 10 件にした（下の「mcp-org の結果」）。
+- record-ports: 済み。`measure.py` に celeris-mcp の port の指標を足し、`after-ports.json` を書き、ADR に 2 つ目の付記を足した（下の「record-ports の結果」）。crates/ は変えていない。
 
 ## 前後の計測（record、提出時の HEAD で実行）
+- この節は record の時点（mcp-ports・move-org・mcp-org の前）の値。今の値は下の「record-ports の結果」。
 - 後の値は [after.json](2026-11-10-taskstore-consumer-ports/after.json)（`measure.py --json`、`head_subject` は「integrate wu/table-writers (phase impl)」）、前の値は着手時の [baseline.json](2026-11-10-taskstore-consumer-ports/baseline.json)。store の行は `bash scripts/dev/check-health.sh`（base は auto、`git merge-base HEAD main`）の report の `size.responsibility-growth` の `baseline.value`（前）と `head_value`（後）。
 - 「改善しない」は数が減らなかった項目、または数は減ったが依存は減っていない項目。
 
@@ -188,7 +190,9 @@ task 01M73HCEX581ACXN6W7VP4M26Q の WU mcp-ports。前回の final review の指
 - 試験だけが呼ぶ TaskStore method 14 個は消すかを決めていない（`prune-list.json` の `held_test_only`）。本番の代わりの経路を確かめた method から、後の段で契約の廃止を書いて消す。
 - `browser_task_policies` の書き手は task-core の 2 file だけで、task-api は書いていない（B0 D4 の「task-api が直接書く 3 表」のうち 1 表は既に task-core に寄っている）。
 - `route_judgments` 表は crates/ に読み手も書き手も無い（store-prune の後）。表を消すかは、本番の DB で行が 0 件であることを確かめてから、migration を足す別の task で決める（データを失わない規則）。
-- check-health の `dup.state`（warning、worsened、候補）: 表 `t` の書き手として `measure.py` の docstring（23・24 行目の `INSERT … INTO t` の説明）が数えられた。ports-design で入った誤検出で、verdict には影響しない。
+- check-health の `dup.state`（warning、worsened、候補）: 表 `t` の書き手として `measure.py` の docstring（`INSERT … INTO t` の説明）が数えられた。ports-design で入った誤検出で、verdict には影響しない。
+- `get` は `TaskStore` に残る（R2 の後の段。提案節）。celeris-mcp の `tools/tasks.rs` は `get` と `task_ops` への委譲のために `TaskStore` を名指し続ける。
+- celeris-mcp の試験の `SqliteStore::open*` は 7 のまま。`mcp_clients` の行と HTTP の往復、file の DB を読む `db_query`・`db_schema`、結合試験は SQLite を通して確かめる試験で、fake に替える予定は無い。
 
 ## move-org の結果
 
@@ -264,10 +268,50 @@ WU mcp-org（段 org-port）。基準は `$CELERIS_WU_BASE`（件名「integrate
 - `mcp-org: resources の組織の列挙の試験を resources.rs に置き、tools から resources への依存を作らない`
 - `mcp-org: 進捗に mcp-org の結果を書く`
 
+## record-ports の結果
+WU record-ports（段 wrap）。基準は `$CELERIS_WU_BASE`（mcp-org の進捗の commit の上）。crates/ は変えていない。ADR の付記は [ADR の 2 つ目の付記](../adr/2026-11-10-taskstore-consumer-ports.md)（「付記 2026-11-11: celeris-mcp の port の完了（record-ports）」）。
+
+- `measure.py` に key `celeris_mcp` を足した（schema `taskstore-consumer-ports/measure/2`）: file ごとに名指す store の型（`files_store_types`。試験でない code と試験の code に分ける）、`TaskStore` を名指す src の file、`TaskStore` の宣言を変えたときに読む・直す file（`taskstore_dependent_files`）、`port_fake_` の試験の数、fake の impl ごとの method 数（`fakes`）、試験の code の `SqliteStore::open*` の数と、それがある file の試験の数（`tests_in_sqlite_files`）。`--json` は path を省くと標準出力に書く。既存の key と値は変えていない。
+- 後の値は [after-ports.json](2026-11-10-taskstore-consumer-ports/after-ports.json)（新しい file。`after.json`・`baseline.json` は上書きしていない）。前の値は同じ台本を着手時の tree（件名「integrate wu/final-record (phase reclose)」）と record の tree（件名「integrate wu/table-writers (phase impl)」）の `crates/` に当てて数えた。
+
+| 指標 | 着手時 | record | 今 |
+|---|---:|---:|---:|
+| `TaskStore` の fn 宣言（B0 の command） | 193 | 183 | 181 |
+| `TaskStore` の supertrait（B0 の command） | 16 | 18 | 18 |
+| `dyn TaskStore` から見える method | 308 | 304 | 304 |
+| celeris-mcp の src で `TaskStore` を名指す file | 5 | 3 | 1（`tools/tasks.rs`） |
+| celeris-mcp の src の `TaskStore` の言及 | 6 | 3 | 1 |
+| celeris-mcp が直に呼ぶ `TaskStore` 自身の method | 9 | 3 | 1（`get`） |
+| fake で名簿・一覧の tool を試すのに実装する method | 308 | 308 | 8（`OrgDirectory` 6・`TaskQuery` 2） |
+| `port_fake_` の試験（SQLite を開かない） | 0 | 0 | 10 |
+| 試験の code の `SqliteStore::open*` | 7 | 7 | 7 |
+| SQLite を開く試験 file の試験の数（近似） | 50 | 50 | 49 |
+| `TaskStore` の宣言を変えたときに celeris-mcp で読む・直す file | 6（src 5・tests 1） | 4（src 3・tests 1） | 2（src 1・tests 1） |
+| compile の単位の逆依存 | celeris-mcp は task-core に依存 | 同じ | 同じ（`Cargo.toml`・`Cargo.lock` の差分なし） |
+
+- 判定: 名簿・一覧の tool（`tools/org.rs`・`tools/projects.rs`・`resources.rs` の組織の列挙・`tools/tasks.rs` の `tasks_list`）と `auth.rs` は狭い trait の handle だけで動き、fake で試せる。`tools/tasks.rs` の `get` と `task_ops` への委譲 7 か所は `TaskStore` のまま（理由は ADR の付記の「get を TaskStore に残す理由」）。`SqliteStore::open*` の数と compile の単位の逆依存は変わらない。
+- 他の consumer の `TaskStore` 直の method（`consumers.<crate>.method_count`）: task-dispatch 90・task-ops 71・task-api 50・celeris 45・celerisctl 8・campaign 4・task-worker 4・script-runtime 2・celeris-mcp 1。
+
+### 証拠コマンドと結果（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+- `python3 agent-docs/progress/2026-11-10-taskstore-consumer-ports/measure.py --json > agent-docs/progress/2026-11-10-taskstore-consumer-ports/after-ports.json` → exit 0（1 回だけ実行。`task_store_fn_decls` 181、`duplicate_decls` 0、`celeris_mcp.files_naming_taskstore_src` は `tools/tasks.rs` の 1 つ、`port_fake_tests` 10、`fakes.FakePorts.fns` は `OrgDirectory` 6・`TaskQuery` 2）
+- 前の値: `git archive <着手時 / record の commit> crates | tar -x -C $TMPDIR/tree-…` に台本を写し、その tree の根で `python3 …/measure.py --json` → どちらも exit 0（上の表の「着手時」「record」の列）
+- `git diff --stat <着手時の commit> HEAD -- crates/celeris-mcp/Cargo.toml Cargo.lock crates/task-core/Cargo.toml` → 0 行
+- `sh scripts/dev/check-doc-links.sh` → exit 0、`sh scripts/dev/check-adr-numbers.sh` → exit 0（416 files）、`sh scripts/dev/progress-index.sh --check` → exit 0、`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → exit 0
+- `git diff --name-only $CELERIS_WU_BASE | python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R3 agent-docs/progress/2026-11-07-health-v2-b0/slices.json` → exit 0（`write-set R3: ok`。変えた path は ADR・この進捗・`measure.py`・`after-ports.json` の 4 つ）。`sh "$CELERIS_WU_SCOPE_PATHS"` → 同じ 4 path
+- `bash scripts/dev/test-affected.sh` → exit 0（「試験対象の変更なし（docs のみ等）」。repo_health_gate の試験は合格）
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- `bash scripts/dev/check-health.sh --base "$CELERIS_WU_BASE"` → exit 0（mode doc-only、verdict pass、fail 級 0、new 0、worsened 0）
+
+### 変更（commit の件名）
+- `record-ports: measure.py に celeris-mcp の port の指標（file ごとの store の型・port_fake_ の試験・fake の method・SQLite を開く試験）を足す`
+- `record-ports: after-ports.json、ADR の 2 つ目の付記、進捗の完了`
+
 ## 提案（次の工程へ渡す事項）
 - `org_list`・`org_upsert` は OrgDirectory へ移動済み。write_set の変更は不要で、承認済み 4 file の修正だけで完了した。
+- **celeris-mcp の残り（`tools/tasks.rs` の `task_ops` への委譲 7 か所、`tools/knowledge.rs` の `&SqliteStore`）は task-ops の port で扱う。** 委譲先（`task_ops::gate`・`comment`・`retry`・`regate`、`kb::project_refs`）が `&dyn TaskStore`・`S: TaskStore` を受けるので、celeris-mcp の側だけでは狭くできない。task-ops を consumer に選ぶ段で、これらの関数が使う method を数えてから決める。
 - **`get` を `TaskQuery` へ移すのは R2 の後の段にする。** 具体型で `get` を呼ぶ `crates/task-worker/src` の試験 3 file（`browser_tests.rs`・`workspace_prune/tests.rs`・`workspace_targets/tests.rs`）を直す必要があり、`browser_tests.rs` は R2 の write_set に入る。具体型で `get` を呼ぶ file の候補（上限）は 266。
 - **store/ の下に port の trait を足すときは、転送の層を作らず、本体を trait の impl に置く。** store module の本体の行は閾値 8000 を超えていて、repo-health の `size.responsibility-growth` は WU base より 1 行でも増えると落ちる。`_impl` への 1 行転送の形では trait 1 つにつき 5 行（trait と impl の見出し・閉じ括弧、supertrait の行）が増える。本体を `impl <trait> for SqliteStore` に移して `_impl` と転送を消すと減る（前例 `store/model_catalog.rs`、今回の `store/org_directory.rs`・`store/task_query.rs`）。1 つの trait の impl は 1 block にしか置けないので、本体を trait の file にまとめ、領域の file の helper は `pub(super)` にして使う。WU の check に `bash scripts/dev/check-health.sh --base "$CELERIS_WU_BASE"` を置くと、celeris が走らせる WU の repo-health と同じ base で確かめられる。
 - **task-dispatch の port は R4 で扱う。** R4（Dispatcher の状態所有と判断/副作用の分割、`depends_on` R2・R3）は「副作用は R2・R3 で分けた port だけを通す」と決めている。task-dispatch は `TaskStore` 直の method を 91 個呼ぶ（after.json）。R4 の write_set に入る `dispatcher/cos_chat/projects.rs`・`cos_chat/review.rs`・`project_wake.rs` は、この task で `OrgDirectory` の import だけを足した。
-- **残る `TaskStore` の consumer**（after.json の `consumers.<crate>.method_count`。どれも `TaskStore` を名指す）: task-dispatch 91・task-ops 72・task-api 52・celeris 46・celerisctl 9・campaign 4・task-worker 4・celeris-mcp 3・script-runtime 2。次の consumer は、呼ぶ method の数が少なく、R2・R4 の write_set と重ならないもの（celerisctl。`crates/celerisctl/src` は R2・R4 の write_set に 1 file も入らない）から選ぶ案がある。campaign も R2・R4 と重ならないが、R3 の write_set にも入らない。選ぶ前に `measure.py --json` で `files_calling` を見て、直す file の数を cargo check の試しで確かめる（ADR D4 の手順）。
+- **残る `TaskStore` の consumer**（after-ports.json の `consumers.<crate>.method_count`。どれも `TaskStore` を名指す）: task-dispatch 90・task-ops 71・task-api 50・celeris 45・celerisctl 8・campaign 4・task-worker 4・script-runtime 2・celeris-mcp 1。次の consumer は、呼ぶ method の数が少なく、R2・R4 の write_set と重ならないもの（celerisctl。`crates/celerisctl/src` は R2・R4 の write_set に 1 file も入らない）から選ぶ案がある。campaign も R2・R4 と重ならないが、R3 の write_set にも入らない。選ぶ前に `measure.py --json` で `files_calling` を見て、直す file の数を cargo check の試しで確かめる（ADR D4 の手順）。
 - **compile の単位の逆依存は port では減らない。** celeris-mcp は task-core に依存し続ける。減らすには trait を別の crate に置く必要があり、R3 の範囲の外。

@@ -13,7 +13,7 @@ use task_ops::knowledge as kb;
 
 use super::{ToolDef, ToolError, ToolOutput, clamp_limit, schema};
 use crate::auth::AuthedClient;
-use crate::state::McpState;
+use crate::state::{McpState, run_blocking};
 
 fn kb_root(state: &McpState) -> Result<PathBuf, ToolError> {
     state
@@ -194,9 +194,7 @@ async fn get_impl(
         return Err(ToolError::not_found(format!("{path} was not found")));
     }
     let path_for_blocking = path.clone();
-    let raw = state
-        .blocking(move |_store| kb::read_page(&root, &path_for_blocking))
-        .await;
+    let raw = run_blocking(move || kb::read_page(&root, &path_for_blocking)).await;
     let Some(raw) = raw else {
         return Err(ToolError::not_found(format!("{path} was not found")));
     };

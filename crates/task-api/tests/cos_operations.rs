@@ -1,68 +1,16 @@
 //! ADR 2026-10-05 D2/D3: `POST /api/v1/cos/operations` and `GET /api/v1/cos/operations/{o}`.
 mod common;
 
-use common::cos_ops::{documented_default_basis, with_basis};
+use common::cos_ops::{cos_bearer, db, documented_default_basis, op_body, post_op, with_basis};
 use common::*;
 use serde_json::{Value, json};
-use task_core::chat::{ChatPostMessageRequest, ChatSendMode};
 use task_core::decision::{
     CostOfReversal, DecisionKind, DecisionOption, DecisionOrigin, DecisionPathEntry,
     DecisionRaisedBy, DecisionRequest, DecisionStatus,
 };
 use task_core::{Event, Status, TaskKind, TaskStore};
-use time::{Duration, OffsetDateTime};
 
 const OPS: &str = "/api/v1/cos/operations";
-
-/// A live CoS run of a new thread and its bearer: `(thread_id, run_id, "Bearer …")`.
-fn cos_bearer(env: &TestEnv, key: &str) -> (String, String, String) {
-    let store = &env.store;
-    let now = OffsetDateTime::now_utc();
-    let thread = common::project_cos_thread(store, &task_core::ProjectId::new().to_string());
-    store
-        .chat_message_post(
-            &thread.id,
-            &ChatPostMessageRequest {
-                client_message_id: format!("message-{key}"),
-                text: "input".into(),
-                attachment_ids: vec![],
-                reply_to_id: None,
-                mode: ChatSendMode::Queue,
-                resume_queue: false,
-            },
-            now,
-        )
-        .expect("message");
-    let run = format!("run-{key}");
-    store
-        .chat_run_claim_next(&thread.id, &run, &json!({}), now)
-        .expect("claim")
-        .expect("run");
-    let bearer = task_api::cos::issue_run_bearer(store, &thread.id, &run, Duration::hours(1))
-        .expect("issue");
-    store
-        .chat_run_record_policy(&run, "1", "test")
-        .expect("policy");
-    (thread.id, run, format!("Bearer {bearer}"))
-}
-
-fn op_body(key: &str, method: &str, path: &str, body: Value) -> Value {
-    json!({
-        "idempotency_key": key,
-        "expected_revision": null,
-        "reason": "人が依頼した",
-        "policy_version": "1",
-        "request": {"method": method, "path": path, "body": body},
-    })
-}
-
-async fn post_op(app: &axum::Router, bearer: &str, body: &Value) -> Resp {
-    send(app, post_json_with(OPS, body, &[("authorization", bearer)])).await
-}
-
-fn db(env: &TestEnv) -> rusqlite::Connection {
-    rusqlite::Connection::open(&env.db_path).expect("open db")
-}
 
 fn cos_events(env: &TestEnv) -> Vec<(String, Value)> {
     let conn = db(env);

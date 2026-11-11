@@ -6,7 +6,6 @@ mod common;
 
 use common::*;
 use serde_json::{Value, json};
-use task_api::{ApiToken, Principal};
 use task_core::authority::{self as a, reason};
 use task_core::project_wake::ControllerMode;
 use task_core::{Status, TaskKind};
@@ -16,21 +15,6 @@ use time::{Duration, OffsetDateTime};
 const WEB_TOKEN: &str = "web-token-value-a7";
 const OPERATOR_TOKEN: &str = "operator-token-value-a7";
 const OPS: &str = "/api/v1/cos/operations";
-
-fn env() -> TestEnv {
-    TestEnv::with(EnvOptions {
-        extra_tokens: vec![
-            ApiToken::new(Principal::Human { name: "web".into() }, WEB_TOKEN),
-            ApiToken::new(
-                Principal::Operator {
-                    name: "claude-code".into(),
-                },
-                OPERATOR_TOKEN,
-            ),
-        ],
-        ..EnvOptions::default()
-    })
-}
 
 struct Cos {
     env: TestEnv,
@@ -53,7 +37,7 @@ async fn post_human(app: &axum::Router, path: &str, body: &Value) -> Resp {
 
 /// 案件 thread に人が 1 回発言し、案件 CoS の run がそれを取る。controller は `shadow`（autonomy の中）。
 async fn cos_with(mode: Option<ControllerMode>, request: &str) -> Cos {
-    let env = env();
+    let env = web_operator_env(WEB_TOKEN, OPERATOR_TOKEN);
     let app = env.router();
     let thread = project_cos_thread(&env.store, "pilot:a7");
     let project = thread.project_id.clone().expect("project");

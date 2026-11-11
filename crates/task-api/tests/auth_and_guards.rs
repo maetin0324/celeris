@@ -16,20 +16,6 @@ fn valid_task_body() -> serde_json::Value {
     ]})
 }
 
-/// ADR-0044 §5 Phase 53 追記（Phase 55）: **変更を伴う API はすべて管理系**なので、
-/// 変更系のガード（Content-Type / 本文サイズ / 未知フィールド）を見るテストはトークン付きの
-/// env を使い、要求に Bearer を付ける。
-fn admin_env() -> TestEnv {
-    TestEnv::with(EnvOptions {
-        token: Some(TOKEN.into()),
-        ..Default::default()
-    })
-}
-
-fn admin() -> [(&'static str, String); 1] {
-    [("authorization", format!("Bearer {TOKEN}"))]
-}
-
 /// `Request::post(..)` に Host / Content-Type / Bearer を付ける（本文はそのまま）。
 fn admin_post(path: &str, content_type: Option<&str>, body: Body) -> Request<Body> {
     let mut builder = Request::post(path)
@@ -326,8 +312,7 @@ async fn bodies_over_one_mebibyte_are_rejected_with_413() {
 async fn malformed_and_unknown_fields_are_bad_requests() {
     let env = admin_env();
     let app = env.router();
-    let admin = admin();
-    let headers: Vec<(&str, &str)> = admin.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    let headers = admin_headers();
 
     let mut unknown = valid_task_body();
     unknown["bogus"] = json!(1);

@@ -9,12 +9,18 @@ pub const OPS: &str = "/api/v1/cos/operations";
 
 /// A live CoS run of a new thread: `(thread_id, run_id, "Bearer …")`.
 pub fn cos_bearer(env: &TestEnv, key: &str) -> (String, String, String) {
-    let store = &env.store;
+    let thread = super::project_cos_thread(&env.store, &task_core::ProjectId::new().to_string());
+    let bearer = cos_run_bearer(env, &thread.id, key);
+    (thread.id, format!("run-{key}"), bearer)
+}
+
+/// A live CoS run `run-{key}` on an existing thread (a queued message, the claimed run, its
+/// bearer with policy version 1): `"Bearer …"`.
+pub fn cos_run_bearer(env: &TestEnv, thread_id: &str, key: &str) -> String {
     let now = OffsetDateTime::now_utc();
-    let thread = super::project_cos_thread(store, &task_core::ProjectId::new().to_string());
-    store
+    env.store
         .chat_message_post(
-            &thread.id,
+            thread_id,
             &ChatPostMessageRequest {
                 client_message_id: format!("message-{key}"),
                 text: "input".into(),
@@ -27,16 +33,21 @@ pub fn cos_bearer(env: &TestEnv, key: &str) -> (String, String, String) {
         )
         .expect("message");
     let run = format!("run-{key}");
-    store
-        .chat_run_claim_next(&thread.id, &run, &json!({}), now)
+    env.store
+        .chat_run_claim_next(thread_id, &run, &json!({}), now)
         .expect("claim")
         .expect("run");
-    let bearer = task_api::cos::issue_run_bearer(store, &thread.id, &run, Duration::hours(1))
+    issue_bearer(env, thread_id, &run, "1")
+}
+
+/// The bearer of an already claimed run, with `policy_version` recorded for it: `"Bearer …"`.
+pub fn issue_bearer(env: &TestEnv, thread_id: &str, run: &str, policy_version: &str) -> String {
+    let bearer = task_api::cos::issue_run_bearer(&env.store, thread_id, run, Duration::hours(1))
         .expect("issue");
-    store
-        .chat_run_record_policy(&run, "1", "test")
+    env.store
+        .chat_run_record_policy(run, policy_version, "test")
         .expect("policy");
-    (thread.id, run, format!("Bearer {bearer}"))
+    format!("Bearer {bearer}")
 }
 
 pub fn op_body(key: &str, method: &str, path: &str, body: Value) -> Value {
@@ -69,6 +80,69 @@ pub fn with_basis(mut body: Value, basis: Value) -> Value {
 
 pub fn db(env: &TestEnv) -> rusqlite::Connection {
     rusqlite::Connection::open(&env.db_path).expect("open db")
+}
+
+/// `POST /cos/operations` with the CoS run's bearer.
+pub async fn post_op(app: &axum::Router, bearer: &str, body: &Value) -> Resp {
+    send(app, post_json_with(OPS, body, &[("authorization", bearer)])).await
+}
+
+/// Who answered the task's decisions (`DecisionAnswered.by`), oldest first.
+pub fn decision_answered_by(env: &TestEnv, task: &task_core::Task) -> Vec<String> {
+    env.store
+        .events_for(task.id)
+        .expect("events")
+        .into_iter()
+        .filter_map(|(_, e)| match e {
+            Event::DecisionAnswered { by, .. } => Some(by),
+            _ => None,
+        })
+        .collect()
+}
+
+/// An open planner `Choice` decision `id` (key `h1`, options vault/manual, recommended vault) on `task`.
+pub fn raise_decision(env: &TestEnv, task: &task_core::Task, id: &str) {
+    use task_core::decision::{
+        CostOfReversal, DecisionKind, DecisionOption, DecisionOrigin, DecisionPathEntry,
+        DecisionRaisedBy, DecisionRequest, DecisionStatus,
+    };
+    let opt = |key: &str| DecisionOption {
+        key: key.into(),
+        label: key.into(),
+        consequence: None,
+    };
+    env.store
+        .append_event(
+            task.id,
+            &Event::DecisionRequested {
+                decision: Box::new(DecisionRequest {
+                    id: id.into(),
+                    key: "h1".into(),
+                    kind: DecisionKind::Choice,
+                    question: "which?".into(),
+                    options: vec![opt("vault"), opt("manual")],
+                    recommended: "vault".into(),
+                    cost_of_reversal: CostOfReversal::Low,
+                    cost_note: None,
+                    needed_before: vec!["c".into()],
+                    path: vec![DecisionPathEntry {
+                        task_id: task.id,
+                        title: "root".into(),
+                        stage: Some("s1".into()),
+                        unit: None,
+                    }],
+                    raised_by: DecisionRaisedBy {
+                        task_id: task.id,
+                        run_id: None,
+                        origin: DecisionOrigin::Planner,
+                    },
+                    status: DecisionStatus::Open,
+                    answer: None,
+                    withdrawn_reason: None,
+                }),
+            },
+        )
+        .expect("raise");
 }
 
 /// One domain: the operation succeeds with `action`, leaves its audit envelope event and its chat

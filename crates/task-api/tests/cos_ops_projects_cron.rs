@@ -10,20 +10,6 @@ use common::*;
 use serde_json::{Value, json};
 use task_core::{CronJobStore, TaskStore};
 
-fn job_body(name: &str) -> Value {
-    json!({
-        "name": name,
-        "schedule": "0 4 * * *",
-        "timezone": "Asia/Tokyo",
-        "template": {
-            "title": "知識整理: {date}",
-            "objective": "KB と受信箱を整理する",
-            "acceptance": [{"type": "reviewer", "text": "整理の記録がある"}],
-            "lane": "cheap"
-        }
-    })
-}
-
 fn job(env: &TestEnv, name: &str) -> Option<task_core::CronJob> {
     env.store.cron_job_get_by_name(name).expect("get")
 }

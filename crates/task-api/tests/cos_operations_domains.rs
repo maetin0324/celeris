@@ -4,57 +4,14 @@
 mod common;
 
 use common::cos_ops::{
-    OPS, cos_bearer, documented_default_basis, op_body, run_domain, run_domain_answering,
+    OPS, cos_bearer, documented_default_basis, op_body, raise_decision, run_domain,
+    run_domain_answering,
 };
 use common::*;
 use serde_json::json;
 use task_core::approval::{Approval, ApprovalId, ApprovalStore, Decision};
-use task_core::decision::{
-    CostOfReversal, DecisionKind, DecisionOption, DecisionOrigin, DecisionPathEntry,
-    DecisionRaisedBy, DecisionRequest, DecisionStatus,
-};
 use task_core::{Event, Status, TaskKind, TaskStore};
 use time::OffsetDateTime;
-
-fn raise_decision(env: &TestEnv, task: &task_core::Task, id: &str) {
-    let opt = |key: &str| DecisionOption {
-        key: key.into(),
-        label: key.into(),
-        consequence: None,
-    };
-    env.store
-        .append_event(
-            task.id,
-            &Event::DecisionRequested {
-                decision: Box::new(DecisionRequest {
-                    id: id.into(),
-                    key: "h1".into(),
-                    kind: DecisionKind::Choice,
-                    question: "which?".into(),
-                    options: vec![opt("vault"), opt("manual")],
-                    recommended: "vault".into(),
-                    cost_of_reversal: CostOfReversal::Low,
-                    cost_note: None,
-                    needed_before: vec!["c".into()],
-                    path: vec![DecisionPathEntry {
-                        task_id: task.id,
-                        title: "root".into(),
-                        stage: Some("s1".into()),
-                        unit: None,
-                    }],
-                    raised_by: DecisionRaisedBy {
-                        task_id: task.id,
-                        run_id: None,
-                        origin: DecisionOrigin::Planner,
-                    },
-                    status: DecisionStatus::Open,
-                    answer: None,
-                    withdrawn_reason: None,
-                }),
-            },
-        )
-        .expect("raise");
-}
 
 #[tokio::test]
 async fn cos_chat_ops_domain_task_create() {

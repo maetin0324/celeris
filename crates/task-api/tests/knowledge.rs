@@ -15,36 +15,6 @@ use serde_json::{Value, json};
 use std::path::Path;
 use task_core::knowledge as kb;
 
-fn g(path: &str) -> axum::http::Request<axum::body::Body> {
-    get_with(
-        path,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
-fn p(path: &str, body: &Value) -> axum::http::Request<axum::body::Body> {
-    post_json_with(
-        path,
-        body,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
-fn pu(path: &str, body: &Value) -> axum::http::Request<axum::body::Body> {
-    put_json_with(
-        path,
-        body,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
-fn env() -> TestEnv {
-    TestEnv::with(EnvOptions {
-        token: Some(TOKEN.into()),
-        ..EnvOptions::default()
-    })
-}
-
 /// tempdir の中に KB を用意する（`celerisctl knowledge init` と同じ経路）。
 fn item_paths(body: &Value) -> Vec<String> {
     body["items"]
@@ -68,16 +38,16 @@ fn write_page(root: &Path, path: &str, body: &str) {
 /// KB がまだ無いときは**何も作らず** `initialized: false`。変更系は 409 `knowledge_unavailable`。
 #[tokio::test]
 async fn an_uninitialized_knowledge_base_reads_empty_and_refuses_writes() {
-    let env = env();
+    let env = admin_env();
     let app = env.router();
 
-    let tree = send(&app, g("/api/v1/knowledge/tree")).await;
+    let tree = send(&app, get_admin("/api/v1/knowledge/tree")).await;
     assert_eq!(tree.status.as_u16(), 200, "{}", tree.text());
     assert_eq!(tree.json()["initialized"], false);
     assert_eq!(tree.json()["items"].as_array().map(Vec::len), Some(0));
     assert_eq!(tree.json()["inbox_count"], 0);
 
-    let inbox = send(&app, g("/api/v1/knowledge/inbox")).await;
+    let inbox = send(&app, get_admin("/api/v1/knowledge/inbox")).await;
     assert_eq!(inbox.status.as_u16(), 200, "{}", inbox.text());
     assert_eq!(inbox.json()["initialized"], false);
 
@@ -89,7 +59,7 @@ async fn an_uninitialized_knowledge_base_reads_empty_and_refuses_writes() {
 
     let put = send(
         &app,
-        pu(
+        put_admin(
             "/api/v1/knowledge/page",
             &json!({"path": "user/x.md", "body": "# x\n"}),
         ),
@@ -102,7 +72,7 @@ async fn an_uninitialized_knowledge_base_reads_empty_and_refuses_writes() {
 /// ツリーは索引を返し、`?scope=` と `?q=`（tag → title → 本文）で絞れる。
 #[tokio::test]
 async fn the_tree_lists_pages_and_filters_by_scope_and_query() {
-    let env = env();
+    let env = admin_env();
     init_kb(&env.knowledge_root);
     write_page(
         &env.knowledge_root,
@@ -117,7 +87,7 @@ async fn the_tree_lists_pages_and_filters_by_scope_and_query() {
     task_ops::knowledge::reindex(&env.knowledge_root).expect("reindex");
     let app = env.router();
 
-    let tree = send(&app, g("/api/v1/knowledge/tree")).await;
+    let tree = send(&app, get_admin("/api/v1/knowledge/tree")).await;
     assert_eq!(tree.status.as_u16(), 200, "{}", tree.text());
     let body = tree.json();
     assert_eq!(body["initialized"], true);
@@ -150,7 +120,11 @@ async fn the_tree_lists_pages_and_filters_by_scope_and_query() {
     assert!(scopes.contains(&"environment/clusters"), "{scopes:?}");
 
     // `?scope=` で絞る（`init` の雛形の pegasus / sirius / fern03 がここに居る）。
-    let scoped = send(&app, g("/api/v1/knowledge/tree?scope=environment/clusters")).await;
+    let scoped = send(
+        &app,
+        get_admin("/api/v1/knowledge/tree?scope=environment/clusters"),
+    )
+    .await;
     let items = scoped.json()["items"].as_array().expect("items").clone();
     assert!(
         items.iter().all(|i| i["path"]
@@ -175,7 +149,7 @@ async fn the_tree_lists_pages_and_filters_by_scope_and_query() {
     );
 
     // `?q=`: 本文でしか当たらないページも拾う（全文一致）。
-    let q = send(&app, g("/api/v1/knowledge/tree?q=pjsub")).await;
+    let q = send(&app, get_admin("/api/v1/knowledge/tree?q=pjsub")).await;
     let hits = item_paths(&q.json());
     assert!(
         hits.iter().any(|p| p == "environment/clusters/pegasus.md"),
@@ -186,7 +160,7 @@ async fn the_tree_lists_pages_and_filters_by_scope_and_query() {
         "{hits:?}"
     );
     // tag で当たるページだけが返り、当たらないページ（`experience`）は出ない。
-    let cluster = send(&app, g("/api/v1/knowledge/tree?q=cluster")).await;
+    let cluster = send(&app, get_admin("/api/v1/knowledge/tree?q=cluster")).await;
     let hits = item_paths(&cluster.json());
     assert!(
         hits.iter().any(|p| p == "environment/clusters/pegasus.md"),
@@ -208,14 +182,14 @@ async fn the_tree_lists_pages_and_filters_by_scope_and_query() {
 /// ページは front matter を分けて描画し、履歴と etag を返す。生 HTML は捨てる。
 #[tokio::test]
 async fn a_page_is_rendered_with_its_front_matter_history_and_etag() {
-    let env = env();
+    let env = admin_env();
     init_kb(&env.knowledge_root);
     let app = env.router();
 
     // 人の編集（`PUT`）で 1 枚作る → 履歴 1 件。
     let created = send(
         &app,
-        pu(
+        put_admin(
             "/api/v1/knowledge/page",
             &json!({
                 "path": "environment/clusters/wisteria.md",
@@ -230,7 +204,7 @@ async fn a_page_is_rendered_with_its_front_matter_history_and_etag() {
 
     let page = send(
         &app,
-        g("/api/v1/knowledge/page?path=environment/clusters/wisteria.md"),
+        get_admin("/api/v1/knowledge/page?path=environment/clusters/wisteria.md"),
     )
     .await;
     assert_eq!(page.status.as_u16(), 200, "{}", page.text());
@@ -259,7 +233,7 @@ async fn a_page_is_rendered_with_its_front_matter_history_and_etag() {
     );
 
     // 書いたら索引が作り直されている（`reindex` を別に呼ばなくてもツリーに出る）。
-    let tree = send(&app, g("/api/v1/knowledge/tree?scope=environment")).await;
+    let tree = send(&app, get_admin("/api/v1/knowledge/tree?scope=environment")).await;
     let paths = item_paths(&tree.json());
     assert!(
         paths
@@ -269,20 +243,20 @@ async fn a_page_is_rendered_with_its_front_matter_history_and_etag() {
     );
 
     // 無いページは 404。
-    let missing = send(&app, g("/api/v1/knowledge/page?path=user/nope.md")).await;
+    let missing = send(&app, get_admin("/api/v1/knowledge/page?path=user/nope.md")).await;
     assert_problem(&missing, 404, "page_not_found");
 }
 
 /// `PUT` の境界: etag の 409、`..` の 403、`.md` 以外の 422、`_inbox` の 403、同じ中身の `unchanged`。
 #[tokio::test]
 async fn writing_a_page_checks_the_etag_and_the_path() {
-    let env = env();
+    let env = admin_env();
     init_kb(&env.knowledge_root);
     let app = env.router();
 
     let first = send(
         &app,
-        pu(
+        put_admin(
             "/api/v1/knowledge/page",
             &json!({"path": "user/notes.md", "body": "# メモ\n"}),
         ),
@@ -294,7 +268,7 @@ async fn writing_a_page_checks_the_etag_and_the_path() {
     // 既にあるのに etag 無しは 409（いまの値が載る）。
     let clash = send(
         &app,
-        pu(
+        put_admin(
             "/api/v1/knowledge/page",
             &json!({"path": "user/notes.md", "body": "# 別\n"}),
         ),
@@ -306,7 +280,7 @@ async fn writing_a_page_checks_the_etag_and_the_path() {
     // 正しい etag なら通る。同じ中身なら `unchanged`。
     let same = send(
         &app,
-        pu(
+        put_admin(
             "/api/v1/knowledge/page",
             &json!({"path": "user/notes.md", "body": "# メモ\n", "etag": etag}),
         ),
@@ -318,7 +292,7 @@ async fn writing_a_page_checks_the_etag_and_the_path() {
     // 根の外・`.md` 以外・`_inbox` は弾く。
     let escape = send(
         &app,
-        pu(
+        put_admin(
             "/api/v1/knowledge/page",
             &json!({"path": "../etc/passwd.md", "body": "x"}),
         ),
@@ -327,7 +301,7 @@ async fn writing_a_page_checks_the_etag_and_the_path() {
     assert_problem(&escape, 403, "path_forbidden");
     let absolute = send(
         &app,
-        pu(
+        put_admin(
             "/api/v1/knowledge/page",
             &json!({"path": "/etc/passwd.md", "body": "x"}),
         ),
@@ -336,7 +310,7 @@ async fn writing_a_page_checks_the_etag_and_the_path() {
     assert_problem(&absolute, 403, "path_forbidden");
     let not_md = send(
         &app,
-        pu(
+        put_admin(
             "/api/v1/knowledge/page",
             &json!({"path": "user/a.txt", "body": "x"}),
         ),
@@ -345,7 +319,7 @@ async fn writing_a_page_checks_the_etag_and_the_path() {
     assert_problem(&not_md, 422, "validation");
     let inbox = send(
         &app,
-        pu(
+        put_admin(
             "/api/v1/knowledge/page",
             &json!({"path": "_inbox/x.md", "body": "x"}),
         ),
@@ -354,12 +328,12 @@ async fn writing_a_page_checks_the_etag_and_the_path() {
     assert_problem(&inbox, 403, "path_forbidden");
     // 読み取りも同じ境界。
     assert_problem(
-        &send(&app, g("/api/v1/knowledge/page?path=../x.md")).await,
+        &send(&app, get_admin("/api/v1/knowledge/page?path=../x.md")).await,
         403,
         "path_forbidden",
     );
     assert_problem(
-        &send(&app, g("/api/v1/knowledge/page?path=x.txt")).await,
+        &send(&app, get_admin("/api/v1/knowledge/page?path=x.txt")).await,
         422,
         "validation",
     );
@@ -368,7 +342,7 @@ async fn writing_a_page_checks_the_etag_and_the_path() {
 /// 候補（`_inbox`）の一覧と accept / reject。コミットは git に残る。
 #[tokio::test]
 async fn candidates_can_be_accepted_or_rejected() {
-    let env = env();
+    let env = admin_env();
     init_kb(&env.knowledge_root);
     // ワーカーが `celerisctl knowledge record` で入れた体（同じ関数を呼ぶ）。
     let one = task_ops::knowledge::record(
@@ -387,7 +361,7 @@ async fn candidates_can_be_accepted_or_rejected() {
     .expect("record");
     let app = env.router();
 
-    let inbox = send(&app, g("/api/v1/knowledge/inbox")).await;
+    let inbox = send(&app, get_admin("/api/v1/knowledge/inbox")).await;
     assert_eq!(inbox.status.as_u16(), 200, "{}", inbox.text());
     let items = inbox.json()["items"].as_array().expect("items").clone();
     assert_eq!(items.len(), 1, "{}", inbox.text());
@@ -405,14 +379,18 @@ async fn candidates_can_be_accepted_or_rejected() {
         inbox.text()
     );
     // 候補はツリー（索引）には出ない。
-    let tree = send(&app, g("/api/v1/knowledge/tree")).await;
+    let tree = send(&app, get_admin("/api/v1/knowledge/tree")).await;
     assert_eq!(tree.json()["inbox_count"], 1);
     let paths = item_paths(&tree.json());
     assert!(!paths.iter().any(|p| p.starts_with("_inbox/")), "{paths:?}");
 
     // 知らない id は 404、`/` を含む id は 403。
     assert_problem(
-        &send(&app, p("/api/v1/knowledge/inbox/nope/accept", &json!({}))).await,
+        &send(
+            &app,
+            post_admin("/api/v1/knowledge/inbox/nope/accept", &json!({})),
+        )
+        .await,
         404,
         "candidate_not_found",
     );
@@ -420,7 +398,7 @@ async fn candidates_can_be_accepted_or_rejected() {
     assert_problem(
         &send(
             &app,
-            p("/api/v1/knowledge/inbox/..%2F..%2Fetc/reject", &json!({})),
+            post_admin("/api/v1/knowledge/inbox/..%2F..%2Fetc/reject", &json!({})),
         )
         .await,
         403,
@@ -430,7 +408,7 @@ async fn candidates_can_be_accepted_or_rejected() {
     // accept は正本に移してコミットする。
     let accepted = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/knowledge/inbox/{}/accept", one.id),
             &json!({}),
         ),
@@ -441,7 +419,7 @@ async fn candidates_can_be_accepted_or_rejected() {
     assert!(accepted.json()["etag"].as_str().is_some());
     let page = send(
         &app,
-        g("/api/v1/knowledge/page?path=environment/servers/fern03.md"),
+        get_admin("/api/v1/knowledge/page?path=environment/servers/fern03.md"),
     )
     .await;
     assert_eq!(page.status.as_u16(), 200, "{}", page.text());
@@ -457,7 +435,9 @@ async fn candidates_can_be_accepted_or_rejected() {
     );
     assert_eq!(page.json()["history"].as_array().map(Vec::len), Some(1));
     assert_eq!(
-        send(&app, g("/api/v1/knowledge/inbox")).await.json()["items"]
+        send(&app, get_admin("/api/v1/knowledge/inbox"))
+            .await
+            .json()["items"]
             .as_array()
             .map(Vec::len),
         Some(0)
@@ -466,7 +446,7 @@ async fn candidates_can_be_accepted_or_rejected() {
     assert_problem(
         &send(
             &app,
-            p(
+            post_admin(
                 &format!("/api/v1/knowledge/inbox/{}/accept", one.id),
                 &json!({}),
             ),
@@ -489,12 +469,12 @@ async fn candidates_can_be_accepted_or_rejected() {
         },
     )
     .expect("record");
-    let listed = send(&app, g("/api/v1/knowledge/inbox")).await;
+    let listed = send(&app, get_admin("/api/v1/knowledge/inbox")).await;
     assert_eq!(listed.json()["items"][0]["target_exists"], true);
     assert_eq!(listed.json()["items"][0]["op"], "append");
     let appended = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/knowledge/inbox/{}/accept", two.id),
             &json!({}),
         ),
@@ -523,7 +503,7 @@ async fn candidates_can_be_accepted_or_rejected() {
     assert_problem(
         &send(
             &app,
-            p(
+            post_admin(
                 &format!("/api/v1/knowledge/inbox/{}/accept", two.id),
                 &json!({"path": "environment/servers/fern03.md"}),
             ),
@@ -534,7 +514,7 @@ async fn candidates_can_be_accepted_or_rejected() {
     );
     let forced = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/knowledge/inbox/{}/accept", two.id),
             &json!({"path": "environment/servers/fern03.md", "overwrite": true}),
         ),
@@ -557,7 +537,7 @@ async fn candidates_can_be_accepted_or_rejected() {
     .expect("record");
     let rejected = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/knowledge/inbox/{}/reject", three.id),
             &json!({}),
         ),
@@ -574,7 +554,7 @@ async fn candidates_can_be_accepted_or_rejected() {
     assert_problem(
         &send(
             &app,
-            p(
+            post_admin(
                 &format!("/api/v1/knowledge/inbox/{}/reject", three.id),
                 &json!({}),
             ),
@@ -590,7 +570,7 @@ async fn candidates_can_be_accepted_or_rejected() {
 /// 上書きする（P-61-k）。
 #[tokio::test]
 async fn candidates_with_an_op_show_it_and_accept_behaves_per_op() {
-    let env = env();
+    let env = admin_env();
     init_kb(&env.knowledge_root);
     write_page(
         &env.knowledge_root,
@@ -624,7 +604,7 @@ async fn candidates_with_an_op_show_it_and_accept_behaves_per_op() {
     assert_eq!(outcome.inboxed.len(), 2, "{outcome:?}");
 
     let app = env.router();
-    let inbox = send(&app, g("/api/v1/knowledge/inbox")).await;
+    let inbox = send(&app, get_admin("/api/v1/knowledge/inbox")).await;
     let items = inbox.json()["items"].as_array().expect("items").clone();
     assert_eq!(items.len(), 2, "{}", inbox.text());
     let merge_item = items
@@ -642,7 +622,7 @@ async fn candidates_with_an_op_show_it_and_accept_behaves_per_op() {
     let merge_id = merge_item["id"].as_str().expect("id").to_string();
     let accepted = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/knowledge/inbox/{merge_id}/accept"),
             &json!({}),
         ),
@@ -651,7 +631,7 @@ async fn candidates_with_an_op_show_it_and_accept_behaves_per_op() {
     assert_eq!(accepted.status.as_u16(), 200, "{}", accepted.text());
     let page = send(
         &app,
-        g("/api/v1/knowledge/page?path=environment/tools/old.md"),
+        get_admin("/api/v1/knowledge/page?path=environment/tools/old.md"),
     )
     .await;
     assert!(
@@ -666,7 +646,7 @@ async fn candidates_with_an_op_show_it_and_accept_behaves_per_op() {
     let retire_id = retire_item["id"].as_str().expect("id").to_string();
     let accepted = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/knowledge/inbox/{retire_id}/accept"),
             &json!({}),
         ),
@@ -681,7 +661,7 @@ async fn candidates_with_an_op_show_it_and_accept_behaves_per_op() {
             .exists()
     );
     // 退役したページは索引にも出ない。
-    let tree = send(&app, g("/api/v1/knowledge/tree")).await;
+    let tree = send(&app, get_admin("/api/v1/knowledge/tree")).await;
     let paths = item_paths(&tree.json());
     assert!(!paths.iter().any(|p| p.contains("old.md")), "{paths:?}");
 }
@@ -689,7 +669,7 @@ async fn candidates_with_an_op_show_it_and_accept_behaves_per_op() {
 /// 変更系は管理系（ADR-0013 D11）。トークン無しは 401、読み取りは通る。
 #[tokio::test]
 async fn the_write_endpoints_are_admin_only() {
-    let env = env();
+    let env = admin_env();
     init_kb(&env.knowledge_root);
     let app = env.router();
 
@@ -725,13 +705,13 @@ async fn the_write_endpoints_are_admin_only() {
 /// 整理の保護（`protected_page`）が効く。`human:instruction` だけのページを人が直しても同じ。
 #[tokio::test]
 async fn a_gui_edit_marks_the_page_as_human_authored() {
-    let env = env();
+    let env = admin_env();
     init_kb(&env.knowledge_root);
     let app = env.router();
 
     let fresh = send(
         &app,
-        pu(
+        put_admin(
             "/api/v1/knowledge/page",
             &json!({"path": "projects/x/new.md", "body": "# 新しいページ\n"}),
         ),
@@ -751,14 +731,18 @@ async fn a_gui_edit_marks_the_page_as_human_authored() {
         "projects/x/fact.md",
         "---\ntitle: 事実\nsources: [task:01X, human:instruction]\n---\n\n古い本文\n",
     );
-    let before = send(&app, g("/api/v1/knowledge/page?path=projects/x/fact.md")).await;
+    let before = send(
+        &app,
+        get_admin("/api/v1/knowledge/page?path=projects/x/fact.md"),
+    )
+    .await;
     assert_eq!(before.status.as_u16(), 200, "{}", before.text());
     let before_raw = before.json()["raw"].as_str().expect("raw").to_string();
     assert!(!kb::protected_page("projects/x/fact.md", &before_raw));
     let etag = before.json()["etag"].as_str().expect("etag").to_string();
     let edited = send(
         &app,
-        pu(
+        put_admin(
             "/api/v1/knowledge/page",
             &json!({
                 "path": "projects/x/fact.md",
@@ -780,7 +764,7 @@ async fn a_gui_edit_marks_the_page_as_human_authored() {
     let etag = edited.json()["etag"].as_str().expect("etag").to_string();
     let again = send(
         &app,
-        pu(
+        put_admin(
             "/api/v1/knowledge/page",
             &json!({"path": "projects/x/fact.md", "body": raw, "etag": etag}),
         ),
@@ -795,7 +779,7 @@ async fn a_gui_edit_marks_the_page_as_human_authored() {
 /// 候補の accept は知識画面の経路で従来どおり動く。
 #[tokio::test]
 async fn candidates_never_appear_in_the_human_inbox() {
-    let env = env();
+    let env = admin_env();
     init_kb(&env.knowledge_root);
     let mut ids = Vec::new();
     for (i, title) in ["候補 A", "候補 B"].iter().enumerate() {
@@ -816,10 +800,10 @@ async fn candidates_never_appear_in_the_human_inbox() {
         ids.push(c.id);
     }
     let app = env.router();
-    let cands = send(&app, g("/api/v1/knowledge/inbox")).await;
+    let cands = send(&app, get_admin("/api/v1/knowledge/inbox")).await;
     assert_eq!(cands.json()["items"].as_array().expect("items").len(), 2);
 
-    let inbox = send(&app, g("/api/v1/inbox/items")).await;
+    let inbox = send(&app, get_admin("/api/v1/inbox/items")).await;
     assert_eq!(inbox.status.as_u16(), 200, "{}", inbox.text());
     let body = inbox.json();
     let items = body["items"].as_array().expect("items");
@@ -832,14 +816,14 @@ async fn candidates_never_appear_in_the_human_inbox() {
     );
     assert!(body["counts"]["by_kind"].get("knowledge_review").is_none());
     assert_problem(
-        &send(&app, g("/api/v1/inbox/items/knowledge_review")).await,
+        &send(&app, get_admin("/api/v1/inbox/items/knowledge_review")).await,
         404,
         "inbox-item-gone",
     );
     assert_problem(
         &send(
             &app,
-            p(
+            post_admin(
                 "/api/v1/inbox/items/knowledge_review/answer",
                 &json!({"option": "accept", "payload": {"candidate_id": ids[0]}}),
             ),
@@ -848,7 +832,7 @@ async fn candidates_never_appear_in_the_human_inbox() {
         404,
         "inbox-item-gone",
     );
-    let notices = send(&app, g("/api/v1/notifications")).await;
+    let notices = send(&app, get_admin("/api/v1/notifications")).await;
     assert_eq!(notices.status.as_u16(), 200, "{}", notices.text());
     assert!(
         !notices.text().contains("knowledge_review") && !notices.text().contains("取り込み待ち"),
@@ -859,13 +843,13 @@ async fn candidates_never_appear_in_the_human_inbox() {
     // 知識画面の accept は従来どおり。
     let accepted = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/knowledge/inbox/{}/accept", ids[0]),
             &json!({}),
         ),
     )
     .await;
     assert_eq!(accepted.status.as_u16(), 200, "{}", accepted.text());
-    let rest = send(&app, g("/api/v1/knowledge/inbox")).await;
+    let rest = send(&app, get_admin("/api/v1/knowledge/inbox")).await;
     assert_eq!(rest.json()["items"].as_array().expect("items").len(), 1);
 }

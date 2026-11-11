@@ -17,30 +17,6 @@ use task_core::{BrowserSitePolicy, BrowserSitePolicySource, SqliteStore, TaskSto
 const BASE: &str = "/api/v1/browser/site-policies";
 const ORIGIN: &str = "https://manaba.example";
 
-fn auth() -> String {
-    format!("Bearer {TOKEN}")
-}
-
-fn put(path: &str, body: &Value) -> axum::http::Request<axum::body::Body> {
-    put_json_with(path, body, &[("authorization", auth().as_str())])
-}
-
-fn del(path: &str) -> axum::http::Request<axum::body::Body> {
-    delete_with(path, &[("authorization", auth().as_str())])
-}
-
-fn get(path: &str) -> axum::http::Request<axum::body::Body> {
-    get_with(path, &[("authorization", auth().as_str())])
-}
-
-fn post(path: &str, body: &Value) -> axum::http::Request<axum::body::Body> {
-    post_json_with(path, body, &[("authorization", auth().as_str())])
-}
-
-fn patch(path: &str, body: &Value) -> axum::http::Request<axum::body::Body> {
-    patch_json_with(path, body, &[("authorization", auth().as_str())])
-}
-
 fn policy_body(login_path: &str, selector: &str) -> Value {
     json!({
         "exact_origin": ORIGIN,
@@ -79,7 +55,7 @@ async fn browser_site_policy_db_api_changes_reach_broker_without_restart() {
     // 追加: 次の判定から login_url・selector が入る。
     let created = send(
         &app,
-        put(
+        put_admin(
             &format!("{BASE}/manaba"),
             &policy_body("/login", "#password"),
         ),
@@ -110,7 +86,7 @@ async fn browser_site_policy_db_api_changes_reach_broker_without_restart() {
     // 編集: 同じ broker（作り直しなし）が新しい値を返す。
     let replaced = send(
         &app,
-        put(
+        put_admin(
             &format!("{BASE}/manaba"),
             &policy_body("/ct/login", "input[name=pw]"),
         ),
@@ -128,7 +104,7 @@ async fn browser_site_policy_db_api_changes_reach_broker_without_restart() {
     assert_eq!(edited.password_selector.as_deref(), Some("input[name=pw]"));
 
     // 削除: 次の判定から selector 無しに戻る。
-    let deleted = send(&app, del(&format!("{BASE}/manaba"))).await;
+    let deleted = send(&app, delete_admin(&format!("{BASE}/manaba"))).await;
     assert_eq!(deleted.status.as_u16(), 204, "{}", deleted.text());
     let gone = broker
         .credential_policy("task-1", "manaba", ORIGIN)
@@ -158,7 +134,7 @@ async fn browser_site_policy_db_put_validates_and_lists() {
     // ADR-0110 D2 の形式検証: login URL が origin の外。
     let bad = send(
         &app,
-        put(
+        put_admin(
             &format!("{BASE}/manaba"),
             &json!({"exact_origin": ORIGIN, "login_url": "https://evil.example/login", "password_selector": "#p"}),
         ),
@@ -169,14 +145,14 @@ async fn browser_site_policy_db_put_validates_and_lists() {
     // policy_id の形。
     let bad_id = send(
         &app,
-        put(&format!("{BASE}/bad%20id"), &policy_body("/login", "#p")),
+        put_admin(&format!("{BASE}/bad%20id"), &policy_body("/login", "#p")),
     )
     .await;
     assert_problem(&bad_id, 422, "site_policy_invalid");
     // 知らない欄。
     let unknown = send(
         &app,
-        put(
+        put_admin(
             &format!("{BASE}/manaba"),
             &json!({"exact_origin": ORIGIN, "login_url": format!("{ORIGIN}/login"), "password_selector": "#p", "bogus": 1}),
         ),
@@ -194,12 +170,12 @@ async fn browser_site_policy_db_put_validates_and_lists() {
     for id in ["zeta", "alpha"] {
         let r = send(
             &app,
-            put(&format!("{BASE}/{id}"), &policy_body("/login", "#p")),
+            put_admin(&format!("{BASE}/{id}"), &policy_body("/login", "#p")),
         )
         .await;
         assert_eq!(r.status.as_u16(), 201, "{}", r.text());
     }
-    let list = send(&app, get(BASE)).await;
+    let list = send(&app, get_admin(BASE)).await;
     assert_eq!(list.status.as_u16(), 200);
     let ids: Vec<_> = list.json()["items"]
         .as_array()
@@ -213,14 +189,14 @@ async fn browser_site_policy_db_put_validates_and_lists() {
         "https://manaba.example/login"
     );
     // 無い policy の削除は 404。
-    let missing = send(&app, del(&format!("{BASE}/nope"))).await;
+    let missing = send(&app, delete_admin(&format!("{BASE}/nope"))).await;
     assert_problem(&missing, 404, "site_policy_not_found");
 }
 
 async fn seed_browser_node(app: &Router, policy_ids: Value) {
     let r = send(
         app,
-        post(
+        post_admin(
             "/api/v1/org",
             &json!({"id":"secretary", "name":"Secretary", "kind":"secretary"}),
         ),
@@ -229,7 +205,7 @@ async fn seed_browser_node(app: &Router, policy_ids: Value) {
     assert_eq!(r.status.as_u16(), 201, "{}", r.text());
     let r = send(
         app,
-        post(
+        post_admin(
             "/api/v1/org",
             &json!({"id":"browser-execution", "name":"Browser", "kind":"department", "parent_id":"secretary",
                     "profile":{"browser":{"allowed_domains":[ORIGIN], "credential_policy_ids": policy_ids}}}),
@@ -246,12 +222,12 @@ async fn browser_site_policy_db_delete_in_use_by_grant_is_conflict() {
     let (env, app) = fixture();
     let r = send(
         &app,
-        put(&format!("{BASE}/manaba"), &policy_body("/login", "#p")),
+        put_admin(&format!("{BASE}/manaba"), &policy_body("/login", "#p")),
     )
     .await;
     assert_eq!(r.status.as_u16(), 201);
     seed_browser_node(&app, json!(["manaba"])).await;
-    let conflict = send(&app, del(&format!("{BASE}/manaba"))).await;
+    let conflict = send(&app, delete_admin(&format!("{BASE}/manaba"))).await;
     let problem = assert_problem(&conflict, 409, "site_policy_in_use");
     assert_eq!(problem["node_ids"], json!(["browser-execution"]));
     assert_eq!(problem["wait_ids"], json!([]));
@@ -262,9 +238,13 @@ async fn browser_site_policy_db_delete_in_use_by_grant_is_conflict() {
             .is_some()
     );
     // grant から外せば消せる。
-    let r = send(&app, patch(SETTINGS, &json!({"credential_policy_ids": []}))).await;
+    let r = send(
+        &app,
+        patch_admin(SETTINGS, &json!({"credential_policy_ids": []})),
+    )
+    .await;
     assert_eq!(r.status.as_u16(), 200, "{}", r.text());
-    let r = send(&app, del(&format!("{BASE}/manaba"))).await;
+    let r = send(&app, delete_admin(&format!("{BASE}/manaba"))).await;
     assert_eq!(r.status.as_u16(), 204, "{}", r.text());
 }
 
@@ -275,14 +255,14 @@ async fn browser_site_policy_db_grant_credential_settings() {
     // 実在しない site policy は grant に入れない。
     let unknown = send(
         &app,
-        patch(SETTINGS, &json!({"credential_policy_ids": ["manaba"]})),
+        patch_admin(SETTINGS, &json!({"credential_policy_ids": ["manaba"]})),
     )
     .await;
     let problem = assert_problem(&unknown, 422, "unknown_site_policy");
     assert_eq!(problem["policy_ids"], json!(["manaba"]));
     let r = send(
         &app,
-        put(&format!("{BASE}/manaba"), &policy_body("/login", "#p")),
+        put_admin(&format!("{BASE}/manaba"), &policy_body("/login", "#p")),
     )
     .await;
     assert_eq!(r.status.as_u16(), 201);
@@ -290,7 +270,7 @@ async fn browser_site_policy_db_grant_credential_settings() {
     // credential_use: true は Phase 1 の集合を実体化して credential_use を加える。
     let on = send(
         &app,
-        patch(
+        patch_admin(
             SETTINGS,
             &json!({"credential_policy_ids": ["manaba"], "credential_use": true}),
         ),
@@ -314,14 +294,22 @@ async fn browser_site_policy_db_grant_credential_settings() {
     expected.push("credential_use".into());
     assert_eq!(actions, expected);
     // 2 回目の true は重複させない。
-    let again = send(&app, patch(SETTINGS, &json!({"credential_use": true}))).await;
+    let again = send(
+        &app,
+        patch_admin(SETTINGS, &json!({"credential_use": true})),
+    )
+    .await;
     assert_eq!(
         again.json()["profile"]["browser"]["allowed_actions"],
         browser["allowed_actions"]
     );
 
     // false は credential_use だけを外す。
-    let off = send(&app, patch(SETTINGS, &json!({"credential_use": false}))).await;
+    let off = send(
+        &app,
+        patch_admin(SETTINGS, &json!({"credential_use": false})),
+    )
+    .await;
     assert_eq!(off.status.as_u16(), 200, "{}", off.text());
     let actions: Vec<String> =
         serde_json::from_value(off.json()["profile"]["browser"]["allowed_actions"].clone())
@@ -349,7 +337,7 @@ async fn browser_site_policy_db_config_seed_only_fills_missing() {
     let (env, app) = fixture();
     let r = send(
         &app,
-        put(
+        put_admin(
             &format!("{BASE}/manaba"),
             &policy_body("/api-login", "#api"),
         ),
@@ -404,7 +392,7 @@ async fn browser_site_policy_db_config_seed_only_fills_missing() {
         .expect("seed");
     assert!(again.is_empty());
     // 種で入れた policy も API で一覧・判定に出る。
-    let list = send(&app, get(BASE)).await;
+    let list = send(&app, get_admin(BASE)).await;
     assert_eq!(list.json()["items"][1]["source"], "config");
     let decided = broker(&env)
         .credential_policy("task-1", "portal", "https://portal.example")

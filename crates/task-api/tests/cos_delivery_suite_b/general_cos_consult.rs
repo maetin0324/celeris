@@ -10,6 +10,7 @@
 //! checks.
 use crate::common;
 
+use common::cos_ops::issue_bearer;
 use common::*;
 use serde_json::{Value, json};
 use task_api::{ApiToken, Principal};
@@ -43,15 +44,6 @@ fn general(env: &TestEnv) -> task_core::chat::ChatThread {
         )
         .expect("general")
         .thread
-}
-
-fn run_bearer(env: &TestEnv, thread: &str, run: &str) -> String {
-    let bearer = task_api::cos::issue_run_bearer(&env.store, thread, run, Duration::hours(1))
-        .expect("issue");
-    env.store
-        .chat_run_record_policy(run, "5", "test")
-        .expect("policy");
-    format!("Bearer {bearer}")
 }
 
 fn count(env: &TestEnv, sql: &str) -> i64 {
@@ -100,7 +92,7 @@ async fn say(
         .expect("claim")
         .expect("a run for the person's message");
     assert_eq!(claimed.input_message_id, said);
-    let bearer = run_bearer(env, thread, &run);
+    let bearer = issue_bearer(env, thread, &run, "5");
     (said, run, bearer)
 }
 
@@ -377,7 +369,7 @@ async fn general_cos_consult_proposal_is_cos_words_and_never_an_instruction() {
         .expect("claim")
         .expect("the proposal queues a project run");
     assert_eq!(claimed.input_message_id, message.id);
-    let project_bearer = run_bearer(&env, &project_thread.id, "run-project");
+    let project_bearer = issue_bearer(&env, &project_thread.id, "run-project", "5");
     let cite = op(
         "cite-proposal",
         &format!("/api/v1/tasks/{}/comments", task.id),

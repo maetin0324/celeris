@@ -7,24 +7,9 @@
 use crate::common;
 
 use common::*;
-use serde_json::{Value, json};
+use serde_json::json;
 use task_core::chat::{ChatMessageQuery, ChatPostMessageRequest, ChatSendMode};
 use task_core::{GenreSpec, RoleSpec, Status, TaskStore, Tier};
-
-fn p(path: &str, body: &Value) -> axum::http::Request<axum::body::Body> {
-    post_json_with(
-        path,
-        body,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
-fn g(path: &str) -> axum::http::Request<axum::body::Body> {
-    get_with(
-        path,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
 
 fn env_with_token() -> TestEnv {
     TestEnv::with(EnvOptions {
@@ -55,7 +40,7 @@ async fn seed_org(app: &axum::Router) {
         json!({"id": "software-engineering", "name": "Software Engineering", "kind": "section",
                "parent_id": "engineering", "brief": "コードを直す"}),
     ] {
-        let resp = send(app, p("/api/v1/org", &body)).await;
+        let resp = send(app, post_admin("/api/v1/org", &body)).await;
         assert_eq!(resp.status.as_u16(), 201, "{}", resp.text());
     }
 }
@@ -101,7 +86,7 @@ async fn cos_chat_console_instruct_queues_on_the_general_cos_thread_and_keeps_id
     seed_org(&app).await;
     let result = send(
         &app,
-        p("/api/v1/console/instruct", &json!({"text":"互換入力"})),
+        post_admin("/api/v1/console/instruct", &json!({"text":"互換入力"})),
     )
     .await;
     assert_eq!(result.status.as_u16(), 202, "{}", result.text());
@@ -121,12 +106,14 @@ async fn cos_chat_console_instruct_queues_on_the_general_cos_thread_and_keeps_id
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].text, "互換入力");
     assert_eq!(items[0].state, task_core::chat::ChatMessageState::Queued);
-    let old = send(&app, g("/api/v1/org/cos/messages")).await.json();
+    let old = send(&app, get_admin("/api/v1/org/cos/messages"))
+        .await
+        .json();
     assert_eq!(old["items"][0]["id"], body["message_id"]);
     // A second input stays on the same thread: no thread per input, no legacy thread.
     let again = send(
         &app,
-        p("/api/v1/console/instruct", &json!({"text":"二度目"})),
+        post_admin("/api/v1/console/instruct", &json!({"text":"二度目"})),
     )
     .await;
     assert_eq!(again.status.as_u16(), 202, "{}", again.text());
@@ -149,7 +136,7 @@ async fn cos_chat_console_org_message_uses_the_same_cos_queue() {
     seed_org(&app).await;
     let result = send(
         &app,
-        p("/api/v1/org/cos/messages", &json!({"text":"組織入口"})),
+        post_admin("/api/v1/org/cos/messages", &json!({"text":"組織入口"})),
     )
     .await;
     assert_eq!(result.status.as_u16(), 202, "{}", result.text());
@@ -165,7 +152,7 @@ async fn cos_chat_console_project_scope_lands_on_the_project_cos_thread() {
     seed_org(&app).await;
     let created = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/projects",
             &json!({"title":"Scope","request":"調査"}),
         ),
@@ -175,7 +162,7 @@ async fn cos_chat_console_project_scope_lands_on_the_project_cos_thread() {
     let project: task_core::ProjectId = created["id"].as_str().unwrap().parse().unwrap();
     let result = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/console/instruct",
             &json!({"text":"案件側", "scope":format!("project:{project}")}),
         ),
@@ -206,7 +193,7 @@ async fn cos_chat_console_non_cos_keeps_the_task_path() {
     seed_org(&app).await;
     let resp = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/console/instruct",
             &json!({"text":"@software-engineering 修正"}),
         ),
@@ -228,7 +215,7 @@ async fn cos_chat_console_reads_chat_without_duplicate_projection() {
     seed_org(&app).await;
     let old = send(
         &app,
-        p("/api/v1/console/instruct", &json!({"text":"旧から"})),
+        post_admin("/api/v1/console/instruct", &json!({"text":"旧から"})),
     )
     .await
     .json();
@@ -247,7 +234,9 @@ async fn cos_chat_console_reads_chat_without_duplicate_projection() {
             time::OffsetDateTime::now_utc(),
         )
         .unwrap();
-    let page = send(&app, g("/api/v1/console?scope=all")).await.json();
+    let page = send(&app, get_admin("/api/v1/console?scope=all"))
+        .await
+        .json();
     let texts: Vec<_> = page["items"]
         .as_array()
         .unwrap()
@@ -288,7 +277,9 @@ async fn cos_chat_console_reads_chat_without_duplicate_projection() {
             created_at: time::OffsetDateTime::now_utc(),
         })
         .unwrap();
-    let page = send(&app, g("/api/v1/console?scope=all")).await.json();
+    let page = send(&app, get_admin("/api/v1/console?scope=all"))
+        .await
+        .json();
     let texts: Vec<_> = page["items"]
         .as_array()
         .unwrap()
@@ -314,7 +305,9 @@ async fn cos_chat_console_reads_chat_without_duplicate_projection() {
             time::OffsetDateTime::now_utc(),
         )
         .unwrap();
-    let page = send(&app, g("/api/v1/console?scope=all")).await.json();
+    let page = send(&app, get_admin("/api/v1/console?scope=all"))
+        .await
+        .json();
     let reply = page["items"]
         .as_array()
         .unwrap()
@@ -333,7 +326,7 @@ async fn a_plain_instruction_talks_to_the_cos() {
 
     let resp = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/console/instruct",
             &json!({"text": "今週の状況を教えて"}),
         ),
@@ -351,7 +344,9 @@ async fn a_plain_instruction_talks_to_the_cos() {
     assert_eq!(task.assignee.as_deref(), Some("cos"));
     assert_eq!(task.objective, "今週の状況を教えて");
 
-    let items = send(&app, g("/api/v1/org/cos/messages")).await.json()["items"]
+    let items = send(&app, get_admin("/api/v1/org/cos/messages"))
+        .await
+        .json()["items"]
         .as_array()
         .cloned()
         .expect("items");
@@ -368,7 +363,7 @@ async fn an_at_mention_talks_to_that_node_and_strips_the_mention() {
 
     let resp = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/console/instruct",
             &json!({"text": "@software-engineering このバグを直して"}),
         ),
@@ -378,7 +373,7 @@ async fn an_at_mention_talks_to_that_node_and_strips_the_mention() {
     let body = resp.json();
     assert_eq!(body["node_id"], "software-engineering");
 
-    let items = send(&app, g("/api/v1/org/software-engineering/messages"))
+    let items = send(&app, get_admin("/api/v1/org/software-engineering/messages"))
         .await
         .json()["items"]
         .as_array()
@@ -399,7 +394,7 @@ async fn an_explicit_node_scope_routes_without_a_mention() {
 
     let resp = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/console/instruct",
             &json!({"text": "このバグを直して", "scope": "node:software-engineering"}),
         ),
@@ -418,7 +413,7 @@ async fn a_project_scope_binds_the_cos_conversation_to_that_project() {
 
     let created = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/projects",
             &json!({"title": "Pluvio", "request": "調べて"}),
         ),
@@ -429,7 +424,7 @@ async fn a_project_scope_binds_the_cos_conversation_to_that_project() {
 
     let resp = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/console/instruct",
             &json!({"text": "進捗どうですか", "scope": format!("project:{project_id}")}),
         ),
@@ -456,7 +451,7 @@ async fn unknown_targets_are_404() {
     assert_problem(
         &send(
             &app,
-            p("/api/v1/console/instruct", &json!({"text": "@ghost hi"})),
+            post_admin("/api/v1/console/instruct", &json!({"text": "@ghost hi"})),
         )
         .await,
         404,
@@ -465,7 +460,7 @@ async fn unknown_targets_are_404() {
     assert_problem(
         &send(
             &app,
-            p(
+            post_admin(
                 "/api/v1/console/instruct",
                 &json!({"text": "hi", "scope": "node:ghost"}),
             ),
@@ -481,7 +476,7 @@ async fn unknown_targets_are_404() {
     assert_problem(
         &send(
             &empty_app,
-            p("/api/v1/console/instruct", &json!({"text": "hi"})),
+            post_admin("/api/v1/console/instruct", &json!({"text": "hi"})),
         )
         .await,
         404,
@@ -497,14 +492,18 @@ async fn blank_text_is_422_and_a_malformed_scope_is_400() {
     seed_org(&app).await;
 
     assert_problem(
-        &send(&app, p("/api/v1/console/instruct", &json!({"text": "   "}))).await,
+        &send(
+            &app,
+            post_admin("/api/v1/console/instruct", &json!({"text": "   "})),
+        )
+        .await,
         422,
         "validation",
     );
     assert_problem(
         &send(
             &app,
-            p(
+            post_admin(
                 "/api/v1/console/instruct",
                 &json!({"text": "hi", "scope": "bogus"}),
             ),

@@ -5,6 +5,7 @@
 //! 時刻は注入した値で、sleep しない。
 use crate::common;
 
+use common::cos_ops::db;
 use common::*;
 use serde_json::{Value, json};
 use task_core::approval::{Approval, ApprovalId, ApprovalStore, StandingRule, StandingRuleId};
@@ -19,10 +20,6 @@ use time::{Duration, OffsetDateTime};
 
 fn at(secs: i64) -> OffsetDateTime {
     OffsetDateTime::from_unix_timestamp(1_790_000_000 + secs).expect("time")
-}
-
-fn db(env: &TestEnv) -> rusqlite::Connection {
-    rusqlite::Connection::open(&env.db_path).expect("open db")
 }
 
 fn count(env: &TestEnv, sql: &str) -> i64 {

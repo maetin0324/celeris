@@ -4,7 +4,7 @@
 //! fixtures written through the store; the derived inbox keys them like the dispatcher's intake.
 use crate::common;
 
-use common::cos_ops::{audit_events, cos_bearer};
+use common::cos_ops::{audit_events, cos_bearer, db};
 use common::*;
 use serde_json::{Value, json};
 use task_core::approval::{ApprovalStore, StandingRule, StandingRuleId};
@@ -20,10 +20,6 @@ const ADR: &str = "agent-docs/adr/2026-10-28-cos-routine-delegated-answers.md";
 
 fn at(secs: i64) -> OffsetDateTime {
     OffsetDateTime::from_unix_timestamp(1_790_000_000 + secs).expect("time")
-}
-
-fn db(env: &TestEnv) -> rusqlite::Connection {
-    rusqlite::Connection::open(&env.db_path).expect("open db")
 }
 
 fn raise(

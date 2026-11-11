@@ -6,36 +6,17 @@
 //! and recorded as rejected; a person's token cannot post a relay.
 mod common;
 
+use common::cos_ops::{decision_answered_by, raise_decision};
 use common::*;
 use serde_json::{Value, json};
-use task_api::{ApiToken, Principal};
 use task_core::approval::ApprovalStore;
 use task_core::chat::triage::CosTriageSource;
-use task_core::decision::{
-    CostOfReversal, DecisionKind, DecisionOption, DecisionOrigin, DecisionPathEntry,
-    DecisionRaisedBy, DecisionRequest, DecisionStatus,
-};
-use task_core::{Event, Status, TaskKind, TaskStore};
+use task_core::{Status, TaskKind};
 use time::{Duration, OffsetDateTime};
 
 const WEB_TOKEN: &str = "web-token-value-relay";
 const OPERATOR_TOKEN: &str = "operator-token-value-relay";
 const OPS: &str = "/api/v1/cos/operations";
-
-fn env() -> TestEnv {
-    TestEnv::with(EnvOptions {
-        extra_tokens: vec![
-            ApiToken::new(Principal::Human { name: "web".into() }, WEB_TOKEN),
-            ApiToken::new(
-                Principal::Operator {
-                    name: "claude-code".into(),
-                },
-                OPERATOR_TOKEN,
-            ),
-        ],
-        ..EnvOptions::default()
-    })
-}
 
 fn bearer(token: &str) -> String {
     format!("Bearer {token}")
@@ -44,46 +25,6 @@ fn bearer(token: &str) -> String {
 fn rfc3339(at: OffsetDateTime) -> String {
     at.format(&time::format_description::well_known::Rfc3339)
         .expect("rfc3339")
-}
-
-fn raise_decision(env: &TestEnv, task: &task_core::Task, id: &str) {
-    let opt = |key: &str| DecisionOption {
-        key: key.into(),
-        label: key.into(),
-        consequence: None,
-    };
-    env.store
-        .append_event(
-            task.id,
-            &Event::DecisionRequested {
-                decision: Box::new(DecisionRequest {
-                    id: id.into(),
-                    key: "h1".into(),
-                    kind: DecisionKind::Choice,
-                    question: "which?".into(),
-                    options: vec![opt("vault"), opt("manual")],
-                    recommended: "vault".into(),
-                    cost_of_reversal: CostOfReversal::Low,
-                    cost_note: None,
-                    needed_before: vec!["c".into()],
-                    path: vec![DecisionPathEntry {
-                        task_id: task.id,
-                        title: "root".into(),
-                        stage: Some("s1".into()),
-                        unit: None,
-                    }],
-                    raised_by: DecisionRaisedBy {
-                        task_id: task.id,
-                        run_id: None,
-                        origin: DecisionOrigin::Planner,
-                    },
-                    status: DecisionStatus::Open,
-                    answer: None,
-                    withdrawn_reason: None,
-                }),
-            },
-        )
-        .expect("raise");
 }
 
 /// A `human_required` task of `project` with one open decision; returns `(task, inbox item id)`.
@@ -134,18 +75,6 @@ fn run_bearer(env: &TestEnv, thread: &str, run: &str) -> String {
     format!("Bearer {bearer}")
 }
 
-fn decision_answered_by(env: &TestEnv, task: &task_core::Task) -> Vec<String> {
-    env.store
-        .events_for(task.id)
-        .expect("events")
-        .into_iter()
-        .filter_map(|(_, e)| match e {
-            Event::DecisionAnswered { by, .. } => Some(by),
-            _ => None,
-        })
-        .collect()
-}
-
 fn audit_states(env: &TestEnv, operation_id: &str) -> Vec<String> {
     let conn = rusqlite::Connection::open(&env.db_path).expect("open db");
     let mut stmt = conn
@@ -164,7 +93,7 @@ fn audit_states(env: &TestEnv, operation_id: &str) -> Vec<String> {
 /// who decided (the person, relayed by the operator) and who executed (the project CoS).
 #[tokio::test]
 async fn operator_relay_grounds_the_project_cos_answer_and_separates_decider_from_executor() {
-    let env = env();
+    let env = web_operator_env(WEB_TOKEN, OPERATOR_TOKEN);
     let app = env.router();
     let thread = project_cos_thread(&env.store, "pluvio");
     let project = thread.project_id.clone().expect("project thread");
@@ -344,7 +273,7 @@ async fn operator_relay_grounds_the_project_cos_answer_and_separates_decider_fro
 /// thread; one scoped to another task and one that expired are refused and recorded as rejected.
 #[tokio::test]
 async fn triage_run_cites_a_relay_in_scope_and_refuses_out_of_scope_or_expired_ones() {
-    let env = env();
+    let env = web_operator_env(WEB_TOKEN, OPERATOR_TOKEN);
     let app = env.router();
     let now = OffsetDateTime::now_utc();
     let general = env
@@ -559,7 +488,7 @@ async fn triage_run_cites_a_relay_in_scope_and_refuses_out_of_scope_or_expired_o
 /// and carries no relay.
 #[tokio::test]
 async fn a_person_message_records_its_author_without_a_relay() {
-    let env = env();
+    let env = web_operator_env(WEB_TOKEN, OPERATOR_TOKEN);
     let app = env.router();
     let thread = project_cos_thread(&env.store, "own");
     let resp = send(
@@ -608,7 +537,7 @@ async fn post_relay(
 /// the same wait (e.g. the relay's own run) is refused by the domain route, so it is answered once.
 #[tokio::test]
 async fn relay_after_escalation_is_answered_by_the_rejudging_run_once() {
-    let env = env();
+    let env = web_operator_env(WEB_TOKEN, OPERATOR_TOKEN);
     let app = env.router();
     let now = OffsetDateTime::now_utc();
     let thread = project_cos_thread(&env.store, "benchfs");
@@ -724,7 +653,7 @@ async fn relay_after_escalation_is_answered_by_the_rejudging_run_once() {
 /// approval), so CoS is told the item is no longer open instead of "applies to project …, not this target".
 #[tokio::test]
 async fn relay_scope_maps_a_closed_authorization_item_to_its_task() {
-    let env = env();
+    let env = web_operator_env(WEB_TOKEN, OPERATOR_TOKEN);
     let app = env.router();
     let now = OffsetDateTime::now_utc();
     let thread = project_cos_thread(&env.store, "benchfs");

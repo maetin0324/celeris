@@ -11,39 +11,9 @@
 mod common;
 
 use common::*;
-use serde_json::{Value, json};
+use serde_json::json;
 use std::path::{Path, PathBuf};
 use task_core::{Status, TaskId, TaskKind};
-
-fn g(path: &str) -> axum::http::Request<axum::body::Body> {
-    get_with(
-        path,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
-fn p(path: &str, body: &Value) -> axum::http::Request<axum::body::Body> {
-    post_json_with(
-        path,
-        body,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
-/// `git -C <dir> <args...>`（テストの下ごしらえ専用）。
-fn git(dir: &Path, args: &[&str]) {
-    let out = std::process::Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .output()
-        .unwrap_or_else(|e| panic!("git {args:?}: {e}"));
-    assert!(
-        out.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
 
 fn git_out(dir: &Path, args: &[&str]) -> String {
     let out = std::process::Command::new("git")
@@ -221,7 +191,7 @@ async fn the_changes_list_every_git_repo_and_serve_one_file_diff() {
     std::fs::write(tree.join("README.md"), b"hello\nmore\n").expect("write");
     std::fs::write(tree.join("new.txt"), b"x\n").expect("write");
 
-    let resp = send(&app, g(&format!("/api/v1/tasks/{task_id}/changes"))).await;
+    let resp = send(&app, get_admin(&format!("/api/v1/tasks/{task_id}/changes"))).await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
     let body = resp.json();
     let repos = body["repos"].as_array().expect("repos");
@@ -247,7 +217,7 @@ async fn the_changes_list_every_git_repo_and_serve_one_file_diff() {
     // 1 ファイルの diff。
     let diff = send(
         &app,
-        g(&format!(
+        get_admin(&format!(
             "/api/v1/tasks/{task_id}/changes/code/diff?path=src.txt"
         )),
     )
@@ -266,7 +236,7 @@ async fn the_changes_list_every_git_repo_and_serve_one_file_diff() {
     assert_eq!(
         send(
             &app,
-            g(&format!("/api/v1/tasks/{task_id}/changes/code/diff"))
+            get_admin(&format!("/api/v1/tasks/{task_id}/changes/code/diff"))
         )
         .await
         .status
@@ -276,7 +246,7 @@ async fn the_changes_list_every_git_repo_and_serve_one_file_diff() {
     assert_problem(
         &send(
             &app,
-            g(&format!(
+            get_admin(&format!(
                 "/api/v1/tasks/{task_id}/changes/code/diff?path=../x"
             )),
         )
@@ -287,7 +257,7 @@ async fn the_changes_list_every_git_repo_and_serve_one_file_diff() {
     assert_problem(
         &send(
             &app,
-            g(&format!("/api/v1/tasks/{task_id}/changes/nope/diff?path=a")),
+            get_admin(&format!("/api/v1/tasks/{task_id}/changes/nope/diff?path=a")),
         )
         .await,
         404,
@@ -297,12 +267,20 @@ async fn the_changes_list_every_git_repo_and_serve_one_file_diff() {
     let bare = new_task(TaskKind::Execute, Status::Done);
     env.seed(&bare);
     assert_problem(
-        &send(&app, g(&format!("/api/v1/tasks/{}/changes", bare.id))).await,
+        &send(
+            &app,
+            get_admin(&format!("/api/v1/tasks/{}/changes", bare.id)),
+        )
+        .await,
         404,
         "file_not_found",
     );
     assert_problem(
-        &send(&app, g(&format!("/api/v1/tasks/{}/changes", TaskId::new()))).await,
+        &send(
+            &app,
+            get_admin(&format!("/api/v1/tasks/{}/changes", TaskId::new())),
+        )
+        .await,
         404,
         "task_not_found",
     );
@@ -330,7 +308,7 @@ async fn merging_fast_forwards_the_default_branch_and_records_the_integration() 
 
     let resp = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/tasks/{task_id}/changes/code/integrate"),
             &json!({"method": "merge", "note": "見たよ"}),
         ),
@@ -359,7 +337,7 @@ async fn merging_fast_forwards_the_default_branch_and_records_the_integration() 
     assert!(!branch_exists(&repo, &format!("celeris/{task_id}")));
 
     // 取り込んだ後の `changes` は「もう無い」。記録は残る。
-    let after = send(&app, g(&format!("/api/v1/tasks/{task_id}/changes")))
+    let after = send(&app, get_admin(&format!("/api/v1/tasks/{task_id}/changes")))
         .await
         .json();
     assert_eq!(after["repos"][0]["missing"], true, "{after}");
@@ -397,7 +375,7 @@ async fn a_tree_child_cannot_be_integrated_into_main_by_hand() {
     ] {
         let resp = send(
             &app,
-            p(
+            post_admin(
                 &format!("/api/v1/tasks/{task_id}/changes/code/integrate"),
                 &body,
             ),
@@ -412,7 +390,7 @@ async fn a_tree_child_cannot_be_integrated_into_main_by_hand() {
     assert_eq!(git_out(&repo, &["rev-parse", "refs/heads/main"]), before);
     assert!(tree.join("src.txt").is_file());
     assert!(branch_exists(&repo, &format!("celeris/{task_id}")));
-    let after = send(&app, g(&format!("/api/v1/tasks/{task_id}/changes")))
+    let after = send(&app, get_admin(&format!("/api/v1/tasks/{task_id}/changes")))
         .await
         .json();
     assert!(after["repos"][0]["integration"].is_null(), "{after}");
@@ -429,7 +407,7 @@ async fn merging_while_the_default_branch_is_being_edited_is_409() {
 
     let resp = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/tasks/{task_id}/changes/code/integrate"),
             &json!({"method": "merge"}),
         ),
@@ -440,7 +418,7 @@ async fn merging_while_the_default_branch_is_being_edited_is_409() {
     assert_eq!(git_out(&repo, &["rev-parse", "refs/heads/main"]), before);
     assert!(tree.join("src.txt").is_file(), "worktree は残る");
     // 何も起きていないので記録も残さない。
-    let after = send(&app, g(&format!("/api/v1/tasks/{task_id}/changes")))
+    let after = send(&app, get_admin(&format!("/api/v1/tasks/{task_id}/changes")))
         .await
         .json();
     assert!(after["repos"][0]["integration"].is_null(), "{after}");
@@ -462,7 +440,7 @@ async fn a_conflicting_merge_records_a_conflict_and_creates_the_child_task() {
 
     let resp = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/tasks/{task_id}/changes/code/integrate"),
             &json!({"method": "merge"}),
         ),
@@ -484,7 +462,7 @@ async fn a_conflicting_merge_records_a_conflict_and_creates_the_child_task() {
     assert!(branch_exists(&repo, &format!("celeris/{task_id}")));
 
     // 子タスク: 親の子で、`ready`、親の worktree の上（`mode = shared`）、受け入れ条件は検査コマンド。
-    let child = send(&app, g(&format!("/api/v1/tasks/{child_id}"))).await;
+    let child = send(&app, get_admin(&format!("/api/v1/tasks/{child_id}"))).await;
     assert_eq!(child.status.as_u16(), 200, "{}", child.text());
     let child = child.json();
     let task = &child["task"];
@@ -527,7 +505,7 @@ async fn discarding_needs_confirmation_and_then_removes_the_worktree_and_branch(
 
     let without = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/tasks/{task_id}/changes/code/integrate"),
             &json!({"method": "discard"}),
         ),
@@ -539,7 +517,7 @@ async fn discarding_needs_confirmation_and_then_removes_the_worktree_and_branch(
 
     let resp = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/tasks/{task_id}/changes/code/integrate"),
             &json!({"method": "discard", "confirm": true}),
         ),
@@ -566,7 +544,7 @@ async fn a_pull_request_is_pushed_created_refreshed_and_merged_with_a_fake_gh() 
     // `origin` が無いうちは 409。
     let no_origin = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/tasks/{task_id}/changes/code/integrate"),
             &json!({"method": "pr"}),
         ),
@@ -599,7 +577,7 @@ async fn a_pull_request_is_pushed_created_refreshed_and_merged_with_a_fake_gh() 
 
     let created = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/tasks/{task_id}/changes/code/integrate"),
             &json!({"method": "pr"}),
         ),
@@ -622,7 +600,7 @@ async fn a_pull_request_is_pushed_created_refreshed_and_merged_with_a_fake_gh() 
     assert!(calls.contains("pr create --base main --head"), "{calls}");
 
     // 画面を開いたら同期する（まだ OPEN なので何も変わらない）。
-    let open = send(&app, g(&format!("/api/v1/tasks/{task_id}/changes")))
+    let open = send(&app, get_admin(&format!("/api/v1/tasks/{task_id}/changes")))
         .await
         .json();
     assert_eq!(open["repos"][0]["integration"]["state"], "open", "{open}");
@@ -632,7 +610,7 @@ async fn a_pull_request_is_pushed_created_refreshed_and_merged_with_a_fake_gh() 
     // 「Celeris で merge」。
     let merged = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/tasks/{task_id}/changes/code/pr/merge"),
             &json!({}),
         ),
@@ -650,7 +628,7 @@ async fn a_pull_request_is_pushed_created_refreshed_and_merged_with_a_fake_gh() 
     // 2 回目は 409（もう開いていない）。
     let again = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/tasks/{task_id}/changes/code/pr/merge"),
             &json!({}),
         ),
@@ -666,7 +644,7 @@ async fn the_project_page_lists_the_integrations_of_its_tasks() {
     let app = env.router();
     let project = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/projects",
             &json!({"title": "benchfs", "request": "測る"}),
         ),
@@ -679,7 +657,7 @@ async fn the_project_page_lists_the_integrations_of_its_tasks() {
     // 空でも 200。
     let empty = send(
         &app,
-        g(&format!("/api/v1/projects/{project_id}/integrations")),
+        get_admin(&format!("/api/v1/projects/{project_id}/integrations")),
     )
     .await;
     assert_eq!(empty.status.as_u16(), 200, "{}", empty.text());
@@ -687,7 +665,7 @@ async fn the_project_page_lists_the_integrations_of_its_tasks() {
     assert_problem(
         &send(
             &app,
-            g(&format!(
+            get_admin(&format!(
                 "/api/v1/projects/{}/integrations",
                 task_core::ProjectId::new()
             )),
@@ -700,7 +678,7 @@ async fn the_project_page_lists_the_integrations_of_its_tasks() {
     let (task_id, _repo, _tree) = seed_git_task(&env, Some(parsed));
     send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/tasks/{task_id}/changes/code/integrate"),
             &json!({"method": "merge"}),
         ),
@@ -709,7 +687,7 @@ async fn the_project_page_lists_the_integrations_of_its_tasks() {
     // 同じタスク・同じリポジトリをもう一度取り込む（記録は 2 件になるが、一覧には最新の 1 件だけ）。
     send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/tasks/{task_id}/changes/code/integrate"),
             &json!({"method": "discard", "confirm": true}),
         ),
@@ -718,7 +696,7 @@ async fn the_project_page_lists_the_integrations_of_its_tasks() {
 
     let list = send(
         &app,
-        g(&format!("/api/v1/projects/{project_id}/integrations")),
+        get_admin(&format!("/api/v1/projects/{project_id}/integrations")),
     )
     .await;
     assert_eq!(list.status.as_u16(), 200, "{}", list.text());

@@ -5,13 +5,12 @@ mod common;
 
 use axum::body::Body;
 use axum::http::Request;
+use common::cos_ops::post_op;
 use common::*;
 use serde_json::{Value, json};
 use task_core::chat::attachments::ChatAttachmentLimits;
 use task_core::chat::{ChatOpenThreadRequest, ChatPostMessageRequest, ChatSendMode};
 use time::{Duration, OffsetDateTime};
-
-const OPS: &str = "/api/v1/cos/operations";
 
 fn env_with_attachments() -> TestEnv {
     let mut env = admin_env();
@@ -80,10 +79,6 @@ fn op_body(key: &str, path: &str, body: Value) -> Value {
         "policy_version": "1",
         "request": {"method": "POST", "path": path, "body": body},
     })
-}
-
-async fn post_op(app: &axum::Router, bearer: &str, body: &Value) -> Resp {
-    send(app, post_json_with(OPS, body, &[("authorization", bearer)])).await
 }
 
 fn refs(env: &TestEnv, attachment: &str) -> Vec<(String, String)> {

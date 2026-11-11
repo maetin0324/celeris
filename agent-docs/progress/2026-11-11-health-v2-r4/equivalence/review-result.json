@@ -1,0 +1,57 @@
+{
+  "id": "review-result",
+  "sites": [
+    {
+      "at": "crates/task-dispatch/src/dispatcher/review_verdict.rs:20",
+      "fn": "on_review_finished",
+      "subject": "review"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/work_units.rs:360",
+      "fn": "on_work_unit_checks_finished",
+      "subject": "work_unit"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/work_units.rs:1525",
+      "fn": "finished_plan_gate",
+      "subject": "task"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/review_spawn.rs:196",
+      "fn": "start_final_review_from_ready",
+      "subject": "review"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/phase_integration.rs:736",
+      "fn": "on_integration_finished",
+      "subject": "phase_integration"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/phase_integration.rs:1543",
+      "fn": "finish_phase_integration",
+      "subject": "review"
+    }
+  ],
+  "verdict": "different",
+  "evidence": [
+    "crates/task-dispatch/src/dispatcher/work_units.rs:375",
+    "crates/task-dispatch/src/dispatcher/work_units.rs:385",
+    "crates/task-dispatch/src/dispatcher/work_units.rs:399",
+    "crates/task-dispatch/src/dispatcher/work_units.rs:1525",
+    "crates/task-dispatch/src/dispatcher/review_spawn.rs:234",
+    "crates/task-dispatch/src/dispatcher/review_verdict.rs:126",
+    "crates/task-dispatch/src/dispatcher/review_verdict.rs:182",
+    "crates/task-dispatch/src/dispatcher/review_verdict.rs:282",
+    "crates/task-dispatch/src/dispatcher/review_verdict.rs:352",
+    "crates/task-dispatch/src/dispatcher/review_verdict.rs:435",
+    "crates/task-dispatch/src/dispatcher/review_verdict.rs:458",
+    "crates/task-dispatch/src/dispatcher/review_verdict.rs:495",
+    "crates/task-dispatch/src/dispatcher/review_verdict.rs:554",
+    "crates/task-dispatch/src/dispatcher/phase_integration.rs:757",
+    "crates/task-dispatch/src/dispatcher/phase_integration.rs:797",
+    "crates/task-dispatch/src/dispatcher/phase_integration.rs:1456",
+    "crates/task-dispatch/src/dispatcher/phase_integration.rs:1487",
+    "crates/task-dispatch/src/dispatcher/phase_integration.rs:1543"
+  ],
+  "shared_contract": "入力・前提: on_review_finished はtask_id/run_idと受け入れ条件のReviewOutcomeを受け、taskがReviewingであることとtarget snapshotの鮮度を確認する。WUのreview相当はRunOutcomeとWorkUnitCheckRunを受けるcheck完了で、run_holds_leaseとRunning WUを確認する。統合はIntegrationRun（merge衝突、stale、checks、head）とRunning task/統合WUを確認する。状態・event: reviewはreviewer run/quotaを閉じReviewVerdict/ReviewCommandCheckedを記録し、子待ち・集約・repairを経てReviewPass/ReviewFail、Planなら子挿入を含むcomplete_planを適用する。WU checkはhealthをsettleし不合格をretryable Terminal::ErrorとWorkUnitCheckFailureへ変換して既存finish_worker_result_withへ戻す（WorkUnitChecksFailedとWU/task遷移）。統合は失敗ならmerge/check repair又は質問、成功ならWU Done/PhaseIntegrated、途中ならContinue(Advance)又はPhaseGate、全段DoneならWorkerDoneからspawn_reviewへ進む。最終reviewと統合後の最終reviewは同じspawn_review/on_review_finishedを利用しており、結果処理の別実装ではない。失敗: reviewはstaleを延期、供給/infra失敗は上限内又はAuthFailedならReviewingを維持しattempts不変、healthを含む不合格はrepair/blocked/failへ分岐する。WUのstale lease結果と統合の非Running結果は捨てるが、WUのcheck失敗はworker retry、統合check失敗は統合repairであり同じ遷移ではない。共有できるのは決定的check不合格なら成功にしない判定・check実行（既にwork_unitsからreviewのcheck実行を再利用）の範囲。入力と出力を統一する場合もCheckResultsから失敗一覧を返すところまでとし、lease/snapshotの鮮度条件・event型・retry/repair上限・完了対象は統合しない。workerの自己申告だけで完了せず、reviewer合格でも決定的check不合格を優先する。"
+}

@@ -52,8 +52,11 @@ pub fn standing_context(
             .map(|p| p.id.to_string())
             .collect(),
     };
+    // ADR 2026-11-11-cos-standing-context D2/D4: every thread also reads the global ledger.
+    let mut ledgers = projects;
+    ledgers.push(task_core::authority::GLOBAL_LEDGER.to_owned());
     let mut grants = Vec::new();
-    for id in &projects {
+    for id in &ledgers {
         let ledger = store
             .authority_grants(id)
             .map_err(|e| format!("authority ledger unavailable: {e}"))?;

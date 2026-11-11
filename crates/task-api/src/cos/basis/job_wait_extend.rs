@@ -7,6 +7,12 @@
 //! of that wait was still queued at the last poll, the answer is `once` with the note
 //! [`EXTEND_NOTE`], the basis names the approval, and the same jobs have not timed out more than
 //! [`JOB_WAIT_EXTEND_MAX`] times.
+//!
+//! ADR 2026-11-11-cos-standing-context D4: a person's standing delegation ("job 待ちは常に延長") is a
+//! live `job_wait_extend` grant of the authority ledger (global or the task's project). When the
+//! basis cites it, the count limit does not send the case to a person; every other check stays, and
+//! the use is written to `authority_audit` (the grant id as the human decision, `cos:<thread>` as the
+//! actor) after the answer is applied ([`record_grant_use`]).
 
 use task_core::approval::{ApprovalId, ApprovalStore};
 use task_core::cluster_job::{ClusterJobState, ClusterJobStatus, ClusterJobWaitState};
@@ -14,9 +20,13 @@ use task_core::store::SqliteStore;
 use task_core::{Event, TaskStore};
 use task_ops::human_inbox::InboxKind;
 
+use task_core::authority::{
+    ActionClass, AuthorityVerdict, GrantScope, NewAuthorityAudit, ScopeKind,
+};
+
 use super::{
-    BASIS_EXTEND_LIMIT, BASIS_INVALID, BASIS_JOB_NOT_QUEUED, BasisRefKind, BasisTarget,
-    DelegatedBasis, problem,
+    BASIS_EXTEND_LIMIT, BASIS_INVALID, BASIS_JOB_NOT_QUEUED, BasisCategory, BasisRefKind,
+    BasisTarget, DelegatedBasis, problem,
 };
 use crate::problem::{ApiProblem, store_problem};
 
@@ -124,6 +134,89 @@ fn timeouts_of_same_jobs(events: &[(u64, Event)], current: &TimedOut) -> usize {
         .count()
 }
 
+/// The project of `task` and the cited live `job_wait_extend` grant that backs the whole project.
+fn standing_grant(
+    store: &SqliteStore,
+    basis: &DelegatedBasis,
+    task: task_core::TaskId,
+    now: time::OffsetDateTime,
+) -> Result<Option<(String, String)>, ApiProblem> {
+    let Some(project) = store
+        .get(task)
+        .map_err(store_problem)?
+        .and_then(|t| t.project_id)
+        .map(|p| p.to_string())
+    else {
+        return Ok(None);
+    };
+    for r in basis
+        .refs
+        .iter()
+        .filter(|r| r.kind == BasisRefKind::AuthorityGrant)
+    {
+        let id = r.id.trim();
+        let class = store
+            .authority_grant(id)
+            .map_err(store_problem)?
+            .map(|g| g.action_class);
+        if class == Some(ActionClass::JobWaitExtend)
+            && store
+                .authority_grant_backs(id, &project, now)
+                .map_err(store_problem)?
+                .is_none()
+        {
+            return Ok(Some((project, id.to_owned())));
+        }
+    }
+    Ok(None)
+}
+
+/// D4: after the extension is applied, write the use of the standing grant (consumes one use; the
+/// decision is the grant, the actor is the CoS run). Nothing when the basis cites no such grant.
+pub(crate) fn record_grant_use(
+    store: &SqliteStore,
+    basis: &DelegatedBasis,
+    target: &BasisTarget,
+    actor: &str,
+) -> Result<(), ApiProblem> {
+    if basis.category != BasisCategory::JobWaitExtend {
+        return Ok(());
+    }
+    let now = time::OffsetDateTime::now_utc();
+    let Some(task) = target.task_id else {
+        return Ok(());
+    };
+    let Some((project, cited)) = standing_grant(store, basis, task, now)? else {
+        return Ok(());
+    };
+    let approval = target.approval_id.clone().unwrap_or_default();
+    store
+        .authority_use(
+            &NewAuthorityAudit {
+                project_id: project.clone(),
+                action_class: ActionClass::JobWaitExtend.as_str().to_owned(),
+                scope: GrantScope {
+                    kind: ScopeKind::Project,
+                    reference: project,
+                },
+                verdict: AuthorityVerdict::denied("pending"),
+                suggestion: serde_json::json!({
+                    "answer": {"option": EXTEND_OPTION, "note": EXTEND_NOTE},
+                    "approval_id": approval, "task_id": task.to_string(), "cited_grant": cited,
+                }),
+                actual_actor: actor.to_owned(),
+                human_decision_ref: None,
+                decision_id: None,
+                dedupe_key: format!("job_wait_extend:{approval}"),
+                outcome_state: "applied",
+                observed_outcome: Some(serde_json::json!({"approval_decided": approval})),
+            },
+            now,
+        )
+        .map_err(store_problem)?;
+    Ok(())
+}
+
 pub(super) fn validate(
     store: &SqliteStore,
     basis: &DelegatedBasis,
@@ -200,12 +293,14 @@ pub(super) fn validate(
     }
     // D3: the limit on extensions of the same jobs.
     let reached = timeouts_of_same_jobs(&events, &current);
-    if reached > JOB_WAIT_EXTEND_MAX {
+    if reached > JOB_WAIT_EXTEND_MAX
+        && standing_grant(store, basis, task_id, time::OffsetDateTime::now_utc())?.is_none()
+    {
         return Err(problem(
             BASIS_EXTEND_LIMIT,
             format!(
                 "the wait of these jobs reached its limit {reached} times (CoS extends up to \
-                 {JOB_WAIT_EXTEND_MAX}); escalate it"
+                 {JOB_WAIT_EXTEND_MAX} without a standing job_wait_extend grant); escalate it"
             ),
         ));
     }

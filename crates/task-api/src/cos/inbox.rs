@@ -570,7 +570,8 @@ async fn resolve(
                     let Some(routine) = req.basis.as_ref() else {
                         return Err(reject(basis::missing()));
                     };
-                    basis::validate(store, routine, &answer_target(found, input)).map_err(&reject)?;
+                    let target = answer_target(found, input);
+                    basis::validate(store, routine, &target).map_err(&reject)?;
                     audit.ctx.reason =
                         format!("{}: {}", basis::reason_prefix(routine), audit.ctx.reason);
                     let (method, domain_path, domain_body) =
@@ -587,6 +588,14 @@ async fn resolve(
                         &domain_path,
                         domain_body,
                     )?;
+                    // ADR 2026-11-11-cos-standing-context D4: the use of a standing grant is audited
+                    // after the answer is applied (decision = the grant, actor = this CoS run).
+                    if op.state == "applied"
+                        && let Err(problem) =
+                            basis::record_grant_use(store, routine, &target, &audit.by())
+                    {
+                        tracing::warn!(item = %item.id, detail = ?problem, "standing grant use not audited");
+                    }
                     Ok((op, None))
                 }
                 ResolveOutcome::Observe => {

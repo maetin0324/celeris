@@ -72,30 +72,51 @@ commit の件名:
 
 次の run は、検査の再実行からではなく D4 の実装から始める。常設文脈はあるが、global grant を保存・使用する経路はまだ無い。
 
-## 残り（続きの run でする）
+## attempt 3: D4 の実装（global の委任・grant に裏付けられた取り次ぎ）
 
-1. D4: `ScopeKind::Global`（`project_id = '*'`）と分類 `routine_answer`（`answer_kind` 欄、期限・回数を省ける）。migration で
-   `authority_grants` の CHECK を作り直す。global の API（`/api/v1/authority…`）。
-2. D4: `chat.relay_forward` に `grant_id`。生きた grant が案件を含めば `task_ids`・`expires_at` を要らないとする（window.rs）。
-3. D4: Core と cos-operator・cos-inbox-triage の skill から「`expires_at` は 24 時間後」「1 task に絞る」書き方を消し、常設の指示は
-   `authority.grant_propose` にする（policy_version を上げる）。
-4. scenario 試験: 統括で「job待ちは常に延長」→ CoS が提案 → 人が受け入れ → 案件 CoS が job 待ちの上限の件を grant id を引いて答え、
-   人に回さない。grant に裏付けられた取り次ぎは task の指定と期限なしで通る。
+ADR の D4 を実装に合わせて書き直した（分類は `job_wait_extend`、期限は 3660 日まで、API は `{id} = global`）。
 
-## D4 の実装前 brief（未着手）
+- `task-core/src/authority.rs`: `ScopeKind::Global`、`GLOBAL_LEDGER = "*"`、分類 `ActionClass::JobWaitExtend`
+  （`is_routine_answer`）、`MAX_ROUTINE_GRANT_DAYS = 3660`。`scope_covers` は global を全案件に広げる。
+- migration 0123（`authority_grants` を作り直す。行を写し、追記専用の trigger と index を作り直す。CHECK で global の行は
+  `project_id = '*'`・`scope_ref = '*'`・`job_wait_extend` だけ）。`SCHEMA_VERSION = 123`。
+- `store/authority.rs`: 案件の判定は global の行も候補にする。global の範囲は定型の代答の分類だけ（他は 422）。
+  `authority_grant_backs(_tx)`（取り次ぎを裏付けるか: 範囲・取り消し・期限・回数・元の根拠）。global の提案の通知は案件なし。
+- `task-api/src/handlers/authority.rs`: `Ledger`（`{id}` が `global` なら全案件の台帳）。CoS の `authority.grant_propose`・
+  `authority.check`・`authority.grant_revoke` も同じ。
+- `chat.relay_forward`（`chat/window.rs`）: `grant_id` があり裏付けが成り立てば `task_ids`・`expires_at` を省ける。
+  `relay.grant_id` に残し、`instructed_by` で使うたびに照合する（`cos/operations/instructions.rs`）。`grant_id` の無い
+  取り次ぎは今のまま task と期限が必須。
+- `job_wait_extend` の代答（`cos/basis/job_wait_extend.rs`）: basis の refs が生きた `job_wait_extend` の grant を挙げていれば、
+  同じ job の上限到達 3 回の制限で人に回さない。applied になった後に `authority_audit` へ 1 行（`grant_id`、
+  `human_decision_ref = authority_grant:<id>`、`actual_actor = cos:<thread>`）を書く（受信箱の resolve と `/cos/operations` の両方）。
+- 常設の文脈（`task-dispatch/src/cos_context.rs`）は global の台帳の grant も入れる。統括の役割の節と `cos-inbox-triage` の §10・
+  (g) の行を直し、「`expires_at` は 24 時間後」の書き方を消した（policy_version は上げていない。下の「本番への移行」）。
+- API の文書（77k・forwards）と生成物（`docs/api/v1/api-v1.schema.json`・`web/api/generated/`）を更新した。
 
-1. 根本原因: ledger は案件・期限・回数に限定され、取り次ぎは task と期限を必須にしている。恒久の人の委任を表現できない。
-2. owner: 型と失効判定は `task-core/src/authority.rs`、保存・出典照合・使用の監査は `store/authority.rs`、
-   HTTP と CoS operation は `task-api/src/handlers/authority.rs`・`cos/ops/projects.rs`、取り次ぎは `chat/window.rs`。
-3. 再利用: `source_problem` の人の出典確認、提案の question_key による重複防止、grant の revoke、
-   `authority_use_tx` の使用と監査の transaction、`cos/basis.rs` の authority grant 根拠。
-4. 選択: 別の常設メモへ権限を書かず、D4 の ledger 拡張を採る。global と案件の grant を同じ検証経路で扱う。
-5. 新しい状態: global scope、routine_answer の answer_kind、任意の期限・回数、relay の grant_id。
-   無期限を遠い未来の日付や巨大な回数で代用しない。一般の危険操作の上限は維持する。
-6. 撤去: grant の裏付けがある取り次ぎへの一律 task・期限必須、Core/skill の一律 24 時間指示。
-7. 不変条件: 人だけが許可を作る。使用の直前にも範囲・出典・取消・期限を確認し、判断根拠と実行者を別々に監査する。
-   scenario は統括の原文→提案→人の許可→案件の job 待ち代答を実 API/transaction で通す。
-   取消・他案件・異なる answer_kind・人以外の許可・grant 無しの期限欠落は拒否する。
+試験:
+
+- `crates/task-api/tests/cos_job_wait_extend.rs` の
+  `standing_job_wait_grant_from_the_general_thread_answers_the_project_wait_limit`（受け入れ条件 5 の scenario）: 統括 thread の
+  人の発言 → 統括 CoS が `authority.grant_propose`（global）→ 人が受け入れ（global の production は 422）→ grant 無しの取り次ぎは
+  422、grant 付きは task と期限なしで通る → 案件 CoS が 4 回目の上限の件を grant 無しでは 422 `cos_basis_extend_limit`、grant 付きで
+  200・item answered・承認 once → `authority_audit` に grant id・`authority_grant:<id>`・`cos:<案件 thread>` が分かれて残る → 取り消すと
+  裏付けが消える。`cargo nextest run -p task-api --test cos_job_wait_extend`: 4 件合格。
+- `task-core` の `authority_ledger_scope_cover_is_narrow` に global の範囲を足した。
+
+## D4 の実装前 brief
+
+1. 根本原因: ledger は案件・期限 366 日に限られ、取り次ぎは task と期限を必須にしていた。恒久の人の委任を表せず、job 待ちの
+   4 回目以降は必ず人に回った。
+2. owner: 型と判定は `task-core/src/authority.rs`・`store/authority.rs`、HTTP と CoS operation は `handlers/authority.rs`、
+   取り次ぎは `chat/window.rs`、代答の条件は `cos/basis/job_wait_extend.rs`。
+3. 再利用: `source_problem`（人の発言の確認）、提案の `question_key`、`authority_use_tx`（消費と監査を同じ transaction）、
+   basis の `authority_grant` の ref。
+4. 選択: 別の常設メモに権限を書かず ledger を広げる。分類 1 つで代答の種類を表す（`answer_kind` 欄は足さない）。
+5. 新しい状態: global の範囲（`project_id = '*'`）、分類 `job_wait_extend`、`relay.grant_id`、`ChatForwardRequest.grant_id`。
+6. 撤去: grant に裏付けられた取り次ぎへの一律の task・期限必須、skill の一律 24 時間の指示。
+7. 不変条件: 人だけが grant を作る（既存の `authority_ledger_grant_is_human_only`）。使うたびに範囲・出典・取り消し・期限を照合する。
+   判断の根拠と実行者を別に監査する（scenario 試験）。
 
 ## 初期の委任の種（D5。配備後に operator が提案として登録し、人が受け入れる）
 
@@ -104,32 +125,49 @@ commit の件名:
 
 | # | 人の発言（日付・場所） | 提案する grant |
 | --- | --- | --- |
-| 1 | 2026-10-30 利用者（web）「job待ちに関しては基本認可するしかないのでそのようなケースも案件CoSで自動対応するようにしてください」 | global・`routine_answer`・`answer_kind = job_wait_extend`（cluster の job 待ちの上限は延長する）・期限なし |
-| 2 | 2026-10-27 利用者（operator session、BenchFS の Sirius 実験）「何台落としてもいいので続けてください」 | BenchFS の案件・`routine_answer`・`answer_kind = cluster_node_failure_continue`（node が落ちても実験を続ける）・期限なし |
-| 3 | 10-30 前後の利用者「全部うまく対処してください、こっちが判断する必要があるもの以外」 | global・`routine_answer`（triage の定型の代答全般。`human_required` は除く。分類で解除できないのは今のまま） |
-| 4 | 利用者「衝突の統合は自動で」の趣旨の指示 | global・`routine_answer`・`answer_kind = integrate_conflict` |
-| 5 | 利用者「計画の承認も基本自動化」の趣旨の指示 | global・`routine_answer`・`answer_kind = plan_conforms`（skill の (f) の条件はそのまま） |
-| 6 | 本番の relay 33 件のうち残りの常設の指示（operator が原文で確かめる） | 原文ごとに 1 件 |
+| 1 | 2026-10-30 利用者（web）「job待ちに関しては基本認可するしかないのでそのようなケースも案件CoSで自動対応するようにしてください」 | global・分類 `job_wait_extend`（cluster の job 待ちの上限は延長する）・期限 3660 日・回数 1000。今の実装で登録できる |
+| 2 | 2026-10-27 利用者（operator session、BenchFS の Sirius 実験）「何台落としてもいいので続けてください」 | BenchFS の案件・node 障害でも実験を続ける委任。対応する分類がまだ無い（提案 1）。分類ができるまでは登録しない |
+| 3 | 10-30 前後の利用者「全部うまく対処してください、こっちが判断する必要があるもの以外」 | 定型の代答全般。分類ごとに分けて登録する（今は #1 だけ）。`human_required` は分類で解除できないまま |
+| 4 | 利用者「衝突の統合は自動で」の趣旨の指示 | 衝突の統合の委任。分類がまだ無い（提案 1） |
+| 5 | 利用者「計画の承認も基本自動化」の趣旨の指示 | 計画の承認（`plan_conforms`）の委任。分類がまだ無い（提案 1）。今も (f) の条件を満たす計画は CoS が承認できる |
+| 6 | 本番の relay 33 件のうち残りの常設の指示（operator が原文で確かめる） | 原文ごとに、対応する分類があれば 1 件 |
 
-手順（D4 の配備の後）:
+手順（この task が main に入り、配備された後）:
 
-1. operator は本番の `chat_messages` を読み取りで引き、上の各行の人の発言の message id を確かめる。
-2. operator は提案を登録する: `POST /api/v1/authority/proposals`（global）か `POST /api/v1/projects/<id>/authority/proposals`、
-   本文は `{"question_key":"standing:<#>","scope":{…},"action_class":"routine_answer","answer_kind":"…","source":{"kind":"human_message","ref":"<message id>"},"note":"<人の発言の要約>"}`。
-3. 人は受信箱の提案の件を画面で開き、内容を読んで「許可する」を押す（`POST …/authority/grants` に `proposal_id`）。断るなら「断る」。
-4. 確認: `GET /api/v1/authority` の grant が `state = live` で、次の CoS run の `runs/<run_id>/prompt.txt` の
-   `<!-- celeris:cos-standing v1 … grants=N/…` の N が増えている。
+1. operator は本番の `chat_messages` を読み取りで引き、各行の人の発言の message id を確かめる（統括 thread の人の発言。取り次がれた
+   relay の写しは根拠にならないので `metadata_json.relay.source.message_id` の元の id を使う）。
+2. operator は提案を登録する（operator の token。許可そのものは作れない）:
+   `POST /api/v1/projects/global/authority/proposals`、本文
+   `{"question_key":"standing:1","scope":{"kind":"global","ref":"*"},"action_class":"job_wait_extend","source":{"kind":"human_message","ref":"<message id>"},"expires_at":"<今から 3650 日後の RFC3339>","budget":1000,"note":"<人の発言の要約>"}`。
+   受信箱に「統括 CoS が全案件に効く許可（job_wait_extend）を提案しました」の通知が 1 件出る。
+3. 人が受け入れる: web には global の台帳の画面がまだ無い（未解決事項）。それまでは人の web token で
+   `POST /api/v1/projects/global/authority/grants` に同じ本文と `"proposal_id":"<提案の id>"` を送る（人の token 以外は 403）。
+   断るなら `POST /api/v1/projects/global/authority/proposals/<id>/dismiss`。
+4. 確認: `GET /api/v1/projects/global/authority` の grant が `state = live`。次の CoS run の `runs/<run_id>/prompt.txt` の
+   `<!-- celeris:cos-standing v1 … grants=N/…` の N が 1 増える。案件の job 待ちの上限の件を CoS が答えたら、
+   `GET /api/v1/projects/<案件>/authority` の audit に `human_decision_ref = authority_grant:<id>` の行が出る。
+5. 本番の昇格（promote）の権限は登録しない（`docs/ops/external-operator.md` の分担のまま）。
 
 ## 本番への移行
 
-- config の欄の追加・削除は無い（この run の時点）。配備の後、CoS run の prompt に常設の節が入る。KB に `cos/memory.md` が
+- config の欄の追加・削除は無い。配備の後、CoS run の prompt に常設の節が入る。KB に `cos/memory.md` が
   無い間は「（まだ無い）」と出る。人か curation が `cos/memory.md` を作ると入る。
+- DB: migration 0123 が `authority_grants` を作り直す（本番は 0 行なので写す行は無い。行があっても写す）。schema 版 123 の
+  release の後で 122 の release へ rollback すると、版の新しい DB を旧 binary が開けない点は他の migration と同じ。
+- KB の skill: `cos-inbox-triage` の本文を変えた（§10 の取り次ぎ、(g) の行）。policy_version は "11" のまま（判定の
+  API の契約は grant の無い代答では変わらない）。配備の後、KB の `skills/cos-inbox-triage/SKILL.md` を repo の
+  `config/skills/cos-inbox-triage/SKILL.md` に差し替える（ADR 2026-11-11-cos-skill-sync の手順）。
 
 ## 未解決事項
 
-- D4 の実装（上の「残り」）。
+- web の許可の画面は案件ごとで、global の台帳の画面が無い。人が global の提案を受け入れるには今は API を使う。
+- 種 #2〜#5 に当たる分類（node 障害での継続・衝突の統合・計画の承認）は未実装。
 - `cos/memory.md` の初期の本文は未作成（KB の変更は人の確認を通す）。
+- 実物 K4 の明示指定試験（attempt 2）は完走を確かめていない。
 
 ## 提案
 
+1. 定型の代答の分類を足す: `plan_conforms`（計画の承認）、衝突の統合、node 障害での実験の継続。足すたびに migration で
+   CHECK を作り直し、basis の各 category の検査で grant の効果（何を人に回さなくなるか）を決める。
+2. web の許可の画面に global の台帳（`/projects/global/authority`）を出し、人が画面で受け入れ・取り消しできるようにする。
 - 統括 CoS の relay の期限切れ（4〜48 時間）で人に戻った件数を、D4 の配備の前後で `authority_audit` と受信箱の件数で比べる。

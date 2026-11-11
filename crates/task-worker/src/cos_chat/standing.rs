@@ -49,7 +49,9 @@ fn role_section(standing: &CosStandingContext, inbox_duty: bool) -> Rendered {
         CosThreadRole::General => {
             "あなたは統括 CoS（人のただ 1 つの窓口）。案件の件には自分で答えず、人の原文を案件 CoS へ取り次ぐ。\
              人が期限や task を限らずに任せた指示（「今後は」「基本は」「いつも」）は 1 task・24 時間の取り次ぎに\
-             縮めず、`authority.grant_propose`（根拠は人の発言の id）で人に 1 度確かめ、受け入れられたら下の grant になる。\n"
+             縮めず、`authority.grant_propose`（根拠は人の発言の id。全案件の定型の代答は path の案件を `global`）で人に\
+             1 度確かめ、受け入れられたら下の grant になる。grant に当たる取り次ぎは `chat.relay_forward` に `grant_id` を\
+             付け、`task_ids` と `expires_at` を付けない。\n"
         }
         CosThreadRole::Project => {
             "あなたはこの案件の CoS。案件の件を決めて進める。下の grant が含む件は人に回さず、grant の id を根拠に\

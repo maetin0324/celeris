@@ -204,7 +204,9 @@ pub(crate) fn live_escalation(
 
 /// D3 `chat.relay_forward`: the general CoS (`from_thread`) forwards the person's message
 /// `req.message_id` to the project thread `to_thread`. The text and `said_at` are the person's
-/// own (never CoS's words); the scope needs 1..=20 tasks of the project and an expiry.
+/// own (never CoS's words); the scope needs 1..=20 tasks of the project and an expiry, unless a
+/// live authority grant covering the target project backs it (`grant_id`, ADR
+/// 2026-11-11-cos-standing-context D4): then the tasks and the expiry may be omitted.
 pub fn chat_relay_forward_tx(
     tx: &Connection,
     from_thread: &str,
@@ -239,22 +241,45 @@ pub fn chat_relay_forward_tx(
             req.message_id
         )));
     }
-    if req.task_ids.is_empty() {
-        return Err(ChatError::Invalid(
-            "a forward names the tasks it applies to (task_ids must not be empty)".into(),
-        ));
-    }
-    if req.expires_at.trim().is_empty() {
-        return Err(ChatError::Invalid("a forward needs expires_at".into()));
+    let expires_at = req
+        .expires_at
+        .as_deref()
+        .map(str::trim)
+        .filter(|e| !e.is_empty());
+    match req.grant_id.as_deref() {
+        Some(grant) => {
+            let project = to.project_id.as_deref().unwrap_or_default();
+            if let Some(why) =
+                crate::store::SqliteStore::authority_grant_backs_tx(tx, grant, project, now)?
+            {
+                return Err(ChatError::Invalid(format!(
+                    "grant {grant} does not back a standing forward to project {project}: {why}"
+                )));
+            }
+        }
+        None => {
+            if req.task_ids.is_empty() {
+                return Err(ChatError::Invalid(
+                    "a forward without grant_id names the tasks it applies to (task_ids must not be empty)"
+                        .into(),
+                ));
+            }
+            if expires_at.is_none() {
+                return Err(ChatError::Invalid(
+                    "a forward without grant_id needs expires_at".into(),
+                ));
+            }
+        }
     }
     let relay_req = ChatRelayRequest {
         client_message_id: req.client_message_id.clone(),
         text: source.text.clone(),
         said_at: source.created_at.clone(),
         task_ids: req.task_ids.clone(),
-        expires_at: Some(req.expires_at.clone()),
+        expires_at: expires_at.map(str::to_owned),
     };
     let mut relay = relay_record(tx, to_thread, &relay_req, relayed_by, now)?;
+    relay.grant_id = req.grant_id.clone();
     relay.source = Some(ChatRelaySource {
         thread_id: from_thread.to_owned(),
         message_id: source.id.clone(),

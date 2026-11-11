@@ -781,9 +781,10 @@ export type ChatEventType = "message" | "text_delta" | "status" | "tool" | "run"
 
 export type ChatForwardRequest = {
   "client_message_id": string;
-  "expires_at": string;
+  "expires_at"?: string | null;
+  "grant_id"?: string | null;
   "message_id": string;
-  "task_ids": Array<string>;
+  "task_ids"?: Array<string>;
 };
 
 export type ChatMessage = {
@@ -887,6 +888,7 @@ export type ChatReferenceResponse = {
 };
 
 export type ChatRelay = {
+  "grant_id"?: string | null;
   "relayed_by": string;
   "said_at": string;
   "scope": ChatRelayScope;

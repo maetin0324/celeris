@@ -3,7 +3,7 @@ tasks: [01M75722QN630BBASEQ759KG4T]
 ---
 # ADR 2026-11-11: CoS の常設の文脈（役割・利用者・任された範囲・覚え書き・KB の入口）と、人の委任の grant 化
 
-- 状態: 採用。D1〜D3・D6 は実装済み、D4・D5 は同じ task の続きの run で実装する（[進捗](../progress/2026-11-11-cos-standing-context.md)）。
+- 状態: 採用。D1〜D4・D6 は実装済み。D5 の登録は配備後に operator と人が行う（[進捗](../progress/2026-11-11-cos-standing-context.md)）。
 - 関係: [ADR 2026-11-04 project controller](2026-11-04-project-controller.md) A7（authority ledger）、
   [ADR 2026-10-27 取り次いだ指示](2026-10-27-relayed-instructions.md)、
   [ADR 2026-10-28 窓口は統括 CoS 1 本](2026-10-28-single-human-window-general-cos.md)、
@@ -57,20 +57,34 @@ tasks: [01M75722QN630BBASEQ759KG4T]
   memory=<0|1>/<字数> kb=<scope 数>/<字数> omitted=<落とした件数> -->` を置く。`runs/<run_id>/prompt.txt` を数えれば
   節ごとの有無と字数が分かる（新しい列・event を足さない）。
 
-### D4 global の範囲と、期限の無い委任（続きの run で実装）
+### D4 global の範囲と、期限・task に縛られない委任
 
 - `ScopeKind::Global`（`ref = "*"`）を足す。global の grant は `project_id = '*'` の行で、どの案件の範囲も含む
-  （`scope_covers`）。migration で `authority_grants.scope_kind` の CHECK を作り直す（行は写す。データを失わない）。
-  API は `GET/POST /api/v1/authority`・`…/grants`・`…/proposals`（案件の API と同じ本文・同じ人の token の規則）。
-- 分類 `routine_answer` を足す。CoS の定型の代答（受信箱の `job_wait_extend`・`plan_conforms`・衝突の統合など）を
-  人に回さずに答えてよいという委任で、grant の新しい欄 `answer_kind` に代答の種類を 1 つ持つ。`routine_answer` の grant
-  だけは期限と回数を省ける（取り消すまで有効）。他の分類は今のまま期限・回数が必須。
+  （`scope_covers`。案件の判定は自分の案件の行と global の行を候補にする）。migration 0123 で `authority_grants` を
+  作り直して CHECK に `global` と新しい分類を足す（行は写す。追記専用の trigger と index も作り直す）。表の CHECK で
+  「global の行は `project_id = '*'`・`scope_ref = '*'`・定型の代答の分類だけ」を固定する。
+  API は案件の台帳と同じ `/api/v1/projects/{id}/authority…` で、`{id}` に `global` を書く（本文・人の token の規則は同じ。
+  新しい route を足さない）。
+- 定型の代答の委任は、代答の種類ごとの分類にする（初めは `job_wait_extend`。`ActionClass::is_routine_answer`）。
+  当初案の「分類 `routine_answer` と欄 `answer_kind`」は採らない: 欄を足すと grant の型と表の全経路が変わり、分類 1 つで
+  種類を表せば判定（分類の一致）と CHECK だけで足りるため。種類を足すときは分類を足す。
+- 期限: 定型の代答の分類だけ期限の上限を 3660 日（`MAX_ROUTINE_GRANT_DAYS`）にする。他の分類は今のまま 366 日。
+  期限の欄を省ける形（NULL）は採らない: 期限の欄は判定・表示・監査の全経路が必須として読むため、型を変えずに
+  「人が取り消すまで続く」を表す。回数は 1000 回まで（使うたびに 1 消費）。
+- 効果: 受信箱の cluster job の待ちの上限（`basis.category = job_wait_extend`）で、basis の refs が生きた `job_wait_extend`
+  の grant（global かその task の案件、範囲は global か案件全体）を挙げていれば、同じ job の上限到達 3 回の制限
+  （ADR 2026-10-30-cos-job-wait-extend D3）で人に回さない。job が全て待ち（Q）であることなど他の条件は変えない。
 - 人が期限・範囲を限らずに任せた指示は、CoS が `authority.grant_propose`（根拠は人の発言の id）で 1 度だけ確かめ、
-  人が受け入れたら grant になる。統括 CoS は常設の指示を 1 task・24 時間の取り次ぎに絞らない（Core と skill を直す）。
-- 取り次ぎ（`chat.relay_forward`）は `grant_id` を持てる。生きた grant がその案件を含むなら、`task_ids` と `expires_at` を
-  要らないとする（window.rs の検査を grant の範囲に合わせる）。
-- 代答の記録は判断の根拠（grant id・人の発言の出典）と実行者（`cos:<thread>`）を別々に残す（authority_audit の
-  `human_decision_ref = authority_grant:<id>`・`actual_actor`。ADR 2026-10-27・`docs/ops/external-operator.md` §4）。
+  人が受け入れたら grant になる。統括 CoS は常設の指示を 1 task・24 時間の取り次ぎに絞らない（常設の文脈の役割の節と
+  `cos-inbox-triage` の §10 を直す）。
+- 取り次ぎ（`chat.relay_forward`）は `grant_id` を持てる。その grant が生きていて（取り消し・期限・回数・元の根拠）、
+  global の台帳か取り次ぎ先の案件の台帳の、範囲が global か案件全体の行なら、`task_ids` と `expires_at` を省ける。
+  `relay.grant_id` に残し、`instructed_by` に使うたびに同じ照合をやり直す（取り消した grant の取り次ぎは根拠にならない）。
+  `grant_id` の無い取り次ぎは今のまま task と期限が必須。
+- 代答の記録は判断の根拠と実行者を別々に残す: 代答が applied になった後に `authority_audit` へ 1 行（`grant_id`、
+  `human_decision_ref = authority_grant:<id>`、`actual_actor = cos:<thread>`、`outcome_state = applied`）を書き、grant の
+  元の根拠（人の発言の id）は grant の行から引ける（ADR 2026-10-27-relayed-instructions、`docs/ops/external-operator.md` §4）。
+  `cos_operations` の監査は今のまま basis（refs に grant の id）と CoS の actor を持つ。
 
 ### D5 初期の委任の種
 
@@ -80,8 +94,8 @@ tasks: [01M75722QN630BBASEQ759KG4T]
 ### D6 撤去
 
 - `cos_chat.rs` の「CoS chat run には context 依存の節は空」の注釈と、`..RunContext::default()` の CoS の経路を消す。
-- D4 の実装で、取り次ぎの task 必須・期限必須の検査（grant の無い取り次ぎには残す）と、skill の「`expires_at` は 24 時間後」
-  の書き方を消す。
+- 取り次ぎの task 必須・期限必須の検査は grant の無い取り次ぎにだけ残し、skill の「`expires_at` は 24 時間後」の
+  書き方を消した（D4）。
 
 ## 不変条件と試験
 

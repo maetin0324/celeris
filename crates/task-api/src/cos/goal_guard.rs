@@ -93,6 +93,12 @@ fn class_refusal(class: ActionClass) -> (&'static str, &'static str) {
             IRREVERSIBLE_REQUIRES_HUMAN,
             "this operation cannot be undone",
         ),
+        // No operation is classified as a routine answer (`job_wait_extend` grants are checked by the
+        // basis of the inbox answer, ADR 2026-11-11-cos-standing-context D4); keep the safe refusal.
+        ActionClass::JobWaitExtend => (
+            IRREVERSIBLE_REQUIRES_HUMAN,
+            "a routine-answer grant does not cover this operation",
+        ),
     }
 }
 

@@ -19,6 +19,7 @@ use task_ops::human_inbox::InboxKind;
 use crate::problem::{ApiProblem, store_problem};
 
 mod job_wait_extend;
+pub(crate) use job_wait_extend::record_grant_use;
 mod plan_conforms;
 mod review_rework;
 pub use plan_conforms::{BasisPlan, GuardedStage, StageGuardKind, StageRiskKind};

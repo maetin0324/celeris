@@ -412,6 +412,11 @@ pub(crate) const MIGRATIONS: &[(u32, &str)] = &[
         122,
         include_str!("../migrations/0122_events_dependents_reopened_index.sql"),
     ),
+    // ADR 2026-11-11-cos-standing-context D4: authority ledger の global の範囲と定型の代答の分類（表の作り直し）。
+    (
+        123,
+        include_str!("../migrations/0123_authority_global_routine.sql"),
+    ),
 ];
 
 /// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0038 work_unit_sessions、

@@ -14,8 +14,9 @@ use ulid::Ulid;
 use super::{SqliteStore, StoreError, format_rfc3339};
 use crate::authority::{
     ActionClass, AuthorityAuditEntry, AuthorityGrant, AuthorityProposal, AuthorityVerdict,
-    GrantScope, GrantSource, MAX_GRANT_BUDGET, MAX_GRANT_DAYS, NewAuthorityAudit,
-    NewAuthorityGrant, ScopeKind, SourceKind, grant_denial, reason, scope_covers, scope_rank,
+    GLOBAL_LEDGER, GrantScope, GrantSource, MAX_GRANT_BUDGET, MAX_GRANT_DAYS,
+    MAX_ROUTINE_GRANT_DAYS, NewAuthorityAudit, NewAuthorityGrant, ScopeKind, SourceKind,
+    grant_denial, reason, scope_covers, scope_rank,
 };
 
 /// 許可を作れない理由（API は 422 にする）。
@@ -99,6 +100,7 @@ fn grant_of(conn: &Connection, id: &str) -> Result<Option<AuthorityGrant>, Store
 /// 無ければ依頼文の Outcome block の id。書き込みの tx の中からも呼ばれるので `conn` だけを使う。読めなければ `Err`。
 fn scope_exists(conn: &Connection, project: &str, scope: &GrantScope) -> Result<bool, StoreError> {
     Ok(match scope.kind {
+        ScopeKind::Global => project == GLOBAL_LEDGER && scope.reference == GLOBAL_LEDGER,
         ScopeKind::Project => {
             scope.reference == project
                 && conn
@@ -376,7 +378,12 @@ fn check_tx(
     if unknown_outcome(conn, project, action_class)? {
         return Ok(AuthorityVerdict::denied(reason::PRIOR_OUTCOME_UNKNOWN));
     }
-    let mut candidates: Vec<AuthorityGrant> = grants_of(conn, project)?
+    // D4: 案件の判定は global の台帳の行も候補にする（global の許可はどの案件の範囲も含む）。
+    let mut ledger = grants_of(conn, project)?;
+    if project != GLOBAL_LEDGER {
+        ledger.extend(grants_of(conn, GLOBAL_LEDGER)?);
+    }
+    let mut candidates: Vec<AuthorityGrant> = ledger
         .into_iter()
         .filter(|g| g.action_class == class && scope_covers(&g.scope, scope))
         .collect();
@@ -530,13 +537,27 @@ fn validate_new(
             format!("budget must be 1 to {MAX_GRANT_BUDGET}"),
         )));
     }
+    if scope.kind == ScopeKind::Global && !class.is_routine_answer() {
+        return Ok(Some(refusal(
+            GRANT_INVALID,
+            format!(
+                "a global grant delegates routine answers only; {} needs a project, outcome or task scope",
+                class.as_str()
+            ),
+        )));
+    }
     let Ok(expiry) = super::parse_rfc3339(expires_at) else {
         return Ok(Some(refusal(GRANT_INVALID, "expires_at must be RFC3339")));
     };
-    if expiry <= now || expiry > now + time::Duration::days(MAX_GRANT_DAYS) {
+    let max_days = if class.is_routine_answer() {
+        MAX_ROUTINE_GRANT_DAYS
+    } else {
+        MAX_GRANT_DAYS
+    };
+    if expiry <= now || expiry > now + time::Duration::days(max_days) {
         return Ok(Some(refusal(
             GRANT_INVALID,
-            format!("expires_at must be in the future and within {MAX_GRANT_DAYS} days"),
+            format!("expires_at must be in the future and within {max_days} days"),
         )));
     }
     if !scope_exists(conn, project, scope)? {
@@ -757,6 +778,48 @@ impl SqliteStore {
         Ok((verdict, id))
     }
 
+    /// D4: 取り次ぎ（`chat.relay_forward`）の根拠の許可 `grant_id` が案件 `project` の常設の指示を裏付けるか。
+    /// 裏付けるなら `None`、裏付けないなら理由。global の台帳か同じ案件の台帳の、範囲が global か案件全体の行で、
+    /// 取り消し・期限・回数・元の根拠のどれにも引っかからないこと。取り次ぎを根拠に使うたびにも呼ぶ。
+    pub fn authority_grant_backs_tx(
+        conn: &Connection,
+        grant_id: &str,
+        project: &str,
+        now: OffsetDateTime,
+    ) -> Result<Option<String>, StoreError> {
+        let Some(grant) = grant_of(conn, grant_id)? else {
+            return Ok(Some("no such grant".into()));
+        };
+        let covers = match grant.scope.kind {
+            ScopeKind::Global => true,
+            ScopeKind::Project => grant.project_id == project,
+            ScopeKind::Outcome | ScopeKind::Task => false,
+        };
+        if project.is_empty() || !covers {
+            return Ok(Some(format!(
+                "the grant's scope {} {} does not cover the whole project",
+                grant.scope.kind.as_str(),
+                grant.scope.reference
+            )));
+        }
+        if let Some(denial) = grant_denial(&grant, now) {
+            return Ok(Some(denial.to_owned()));
+        }
+        if source_problem(conn, project, &grant.source, &grant.granted_by)?.is_some() {
+            return Ok(Some(reason::SOURCE_UNREADABLE.to_owned()));
+        }
+        Ok(None)
+    }
+
+    pub fn authority_grant_backs(
+        &self,
+        grant_id: &str,
+        project: &str,
+        now: OffsetDateTime,
+    ) -> Result<Option<String>, StoreError> {
+        self.with_read_conn(|c| Self::authority_grant_backs_tx(c, grant_id, project, now))
+    }
+
     /// 許可を使わない監査の行（人の発言の取り次ぎ、controller の拒否、問いの抑止）。同じ key は 1 行。
     pub fn authority_audit_record(
         &self,
@@ -926,16 +989,23 @@ impl SqliteStore {
                 source_key: format!("authority:proposal:{}:{}", new.project_id, new.question_key),
                 kind: crate::feed::NoticeKind::BadNews,
                 group_key: format!("bad_news:authority:{}", new.project_id),
-                title: format!(
-                    "案件 {} の CoS が許可（{}）を提案しました",
-                    new.project_id,
-                    new.action_class.as_str()
-                ),
+                title: if new.project_id == GLOBAL_LEDGER {
+                    format!(
+                        "統括 CoS が全案件に効く許可（{}）を提案しました",
+                        new.action_class.as_str()
+                    )
+                } else {
+                    format!(
+                        "案件 {} の CoS が許可（{}）を提案しました",
+                        new.project_id,
+                        new.action_class.as_str()
+                    )
+                },
                 summary: format!(
                     "{}。案件の画面の「許可」で、許可するか断るかを決めてください。問いの key: {}。人の発言: {}",
                     new.note, new.question_key, new.source.reference
                 ),
-                project_id: Some(new.project_id.clone()),
+                project_id: (new.project_id != GLOBAL_LEDGER).then(|| new.project_id.clone()),
                 task_id: None,
                 target: None,
                 links: Vec::new(),

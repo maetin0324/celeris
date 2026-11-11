@@ -10,6 +10,7 @@ mod common;
 use common::cos_ops::{audit_events, cos_bearer};
 use common::*;
 use serde_json::{Value, json};
+use task_api::{ApiToken, Principal};
 use task_core::approval::{Approval, ApprovalId, ApprovalStore, Decision};
 use task_core::chat::triage::CosTriageSource;
 use task_core::cluster_job::{
@@ -76,11 +77,25 @@ fn timed_out_wait(wait_id: &str, jobs: &[&str], state: ClusterJobState) -> Vec<E
 /// Returns `(task, approval id)`.
 fn authorization(
     env: &TestEnv,
+    events: Vec<Event>,
+    text: &str,
+    labels: &[&str],
+) -> (task_core::Task, ApprovalId) {
+    authorization_in(env, None, events, text, labels)
+}
+
+/// [`authorization`] for a task of `project` (a random project when `None`).
+fn authorization_in(
+    env: &TestEnv,
+    project: Option<task_core::ProjectId>,
     mut events: Vec<Event>,
     text: &str,
     labels: &[&str],
 ) -> (task_core::Task, ApprovalId) {
     let mut task = new_task(TaskKind::Execute, Status::Blocked);
+    if project.is_some() {
+        task.project_id = project;
+    }
     task.labels = labels.iter().map(|l| (*l).to_string()).collect();
     events.push(Event::QuestionRaised {
         run_id: "run-1".into(),
@@ -409,4 +424,274 @@ async fn job_wait_extend_through_operations_reads_the_approval_answer() {
         .expect("approval");
     assert_eq!(decided.decision, Some(Decision::Once));
     assert_eq!(env.status_of(task.id), Status::Ready);
+}
+
+const WEB_TOKEN: &str = "web-token-standing-grant";
+
+/// 不変条件（ADR 2026-11-11-cos-standing-context D4）: 人が統括 thread で期限も task も限らずに任せた指示は、
+/// CoS の提案 → 人の受け入れで global の grant になり、その grant に裏付けられた取り次ぎは task と期限なしで通り、
+/// 案件 CoS は 3 回の上限を超えた job 待ちの件を grant の id を根拠に人へ回さず答え、監査には判断の根拠（grant）と
+/// 実行した CoS が別々に残る。既存の試験は取り次ぎに task と期限を必ず求め、4 回目の上限を必ず人に回す前提で、
+/// 常設の委任の経路（global の範囲・grant_id 付きの取り次ぎ・上限の解除・監査）を通らないので、この試験で固定する。
+#[tokio::test]
+async fn standing_job_wait_grant_from_the_general_thread_answers_the_project_wait_limit() {
+    let env = TestEnv::with(EnvOptions {
+        extra_tokens: vec![ApiToken::new(
+            Principal::Human { name: "web".into() },
+            WEB_TOKEN,
+        )],
+        ..EnvOptions::default()
+    });
+    let app = env.router();
+    let human = format!("Bearer {WEB_TOKEN}");
+    let as_human = [("authorization", human.as_str())];
+    let now = OffsetDateTime::now_utc();
+
+    // 1. 人が統括 thread で「job待ちは常に延長」と書く。
+    let general = env
+        .store
+        .cos_thread_open(
+            &task_core::chat::ChatOpenThreadRequest { project_id: None },
+            now,
+        )
+        .expect("general")
+        .thread;
+    let said = send(
+        &app,
+        post_json_with(
+            &format!("/api/v1/chat/threads/{}/messages", general.id),
+            &json!({"client_message_id": "h-standing", "text": "job待ちは常に延長してください",
+                    "attachment_ids": [], "reply_to_id": null, "mode": "queue", "resume_queue": false}),
+            &as_human,
+        ),
+    )
+    .await;
+    assert_eq!(said.status.as_u16(), 202, "{}", said.text());
+    let said = said.json()["message"]["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    env.store
+        .chat_run_claim_next(&general.id, "run-general", &json!({}), now)
+        .expect("claim")
+        .expect("run");
+    let general_bearer = format!(
+        "Bearer {}",
+        task_api::cos::issue_run_bearer(
+            &env.store,
+            &general.id,
+            "run-general",
+            time::Duration::hours(1)
+        )
+        .expect("issue")
+    );
+    env.store
+        .chat_run_record_policy("run-general", "1", "test")
+        .expect("policy");
+    let general_op = |key: &str, path: String, body: Value| {
+        let op = json!({"idempotency_key": key, "expected_revision": null,
+                        "reason": "人の常設の指示", "policy_version": "1",
+                        "request": {"method": "POST", "path": path, "body": body}});
+        let app = app.clone();
+        let bearer = general_bearer.clone();
+        async move {
+            send(
+                &app,
+                post_json_with(
+                    "/api/v1/cos/operations",
+                    &op,
+                    &[("authorization", bearer.as_str())],
+                ),
+            )
+            .await
+        }
+    };
+    let expires = (now + time::Duration::days(3650))
+        .format(&time::format_description::well_known::Rfc3339)
+        .expect("format");
+    let grant_body = json!({"scope": {"kind": "global", "ref": "*"}, "action_class": "job_wait_extend",
+        "source": {"kind": "human_message", "ref": said}, "expires_at": expires, "budget": 1000,
+        "note": "人の発言のとおり、cluster job の待ちの上限は常に延長する"});
+
+    // 2. 統括 CoS が grant を提案する（global の台帳）。
+    let mut proposal = grant_body.clone();
+    proposal["question_key"] = json!("job-wait-always-extend");
+    let proposed = general_op(
+        "propose",
+        "/api/v1/projects/global/authority/proposals".into(),
+        proposal,
+    )
+    .await;
+    assert_eq!(proposed.status.as_u16(), 200, "{}", proposed.text());
+    assert_eq!(
+        proposed.json()["operation"]["action"],
+        "authority.grant_propose"
+    );
+    let proposal_id = proposed.json()["operation"]["result"]["proposal"]["id"]
+        .as_str()
+        .expect("proposal id")
+        .to_owned();
+    // global の範囲は定型の代答だけ（本番の変更などは案件の範囲で人が与える）。
+    let mut production = grant_body.clone();
+    production["action_class"] = json!("production");
+    let refused = send(
+        &app,
+        post_json_with(
+            "/api/v1/projects/global/authority/grants",
+            &production,
+            &as_human,
+        ),
+    )
+    .await;
+    assert_problem(&refused, 422, "authority_grant_invalid");
+
+    // 3. 人が受け入れる（grant になる）。
+    let mut accept = grant_body.clone();
+    accept["proposal_id"] = json!(proposal_id);
+    let granted = send(
+        &app,
+        post_json_with(
+            "/api/v1/projects/global/authority/grants",
+            &accept,
+            &as_human,
+        ),
+    )
+    .await;
+    assert_eq!(granted.status.as_u16(), 201, "{}", granted.text());
+    let grant = granted.json()["id"].as_str().expect("grant").to_owned();
+    assert_eq!(granted.json()["project_id"], "*");
+    assert_eq!(granted.json()["state"], "live");
+
+    // 4. grant に裏付けられた取り次ぎは task と期限なしで通る（裏付けが無ければ従来どおり断る）。
+    let (project_thread, _, project_bearer) = cos_ops::cos_bearer(&env, "standing");
+    let project = env
+        .store
+        .chat_thread_get(&project_thread)
+        .expect("thread")
+        .expect("thread")
+        .project_id
+        .expect("project");
+    let forwards = format!("/api/v1/chat/threads/{project_thread}/forwards");
+    let bare = general_op(
+        "forward-bare",
+        forwards.clone(),
+        json!({"client_message_id": "forward:bare", "message_id": said}),
+    )
+    .await;
+    assert_eq!(bare.status.as_u16(), 422, "{}", bare.text());
+    let forwarded = general_op(
+        "forward-grant",
+        forwards,
+        json!({"client_message_id": "forward:grant", "message_id": said, "grant_id": grant}),
+    )
+    .await;
+    assert_eq!(forwarded.status.as_u16(), 200, "{}", forwarded.text());
+    let relay: Value = db(&env)
+        .query_row(
+            "SELECT metadata_json FROM chat_messages WHERE thread_id=?1 AND metadata_json LIKE '%grant_id%'",
+            [project_thread.as_str()],
+            |r| r.get::<_, String>(0),
+        )
+        .map(|m| serde_json::from_str::<Value>(&m).expect("json")["relay"].clone())
+        .expect("relayed message");
+    assert_eq!(relay["grant_id"], grant.as_str());
+    assert_eq!(relay["source"]["message_id"], said.as_str());
+    assert!(relay["scope"].get("task_ids").is_none(), "{relay}");
+    assert!(relay["scope"].get("expires_at").is_none(), "{relay}");
+
+    // 5. 案件 CoS が 4 回目の job 待ちの上限を grant の id を根拠に答え、人に回さない。
+    let project_id: task_core::ProjectId = project.parse().expect("project id");
+    let mut events = Vec::new();
+    for w in ["s1", "s2", "s3", "s4"] {
+        events.extend(timed_out_wait(w, &["48196"], ClusterJobState::Queued));
+    }
+    let (task, approval) = authorization_in(&env, Some(project_id), events, LIMIT_TEXT, &[]);
+    let item = ingest(&env, approval);
+    let cos = Cos {
+        app: app.clone(),
+        bearer: project_bearer,
+    };
+    let without = cos
+        .resolve(
+            &item,
+            answer("no-grant", "once", "延長", extend_basis(approval)),
+        )
+        .await;
+    assert_refused(
+        &env,
+        &without,
+        422,
+        "cos_basis_extend_limit",
+        &item,
+        approval,
+    );
+    let mut basis = extend_basis(approval);
+    basis["refs"]
+        .as_array_mut()
+        .expect("refs")
+        .push(json!({"kind": "authority_grant", "id": grant}));
+    let ok = cos
+        .resolve(&item, answer("with-grant", "once", "延長", basis))
+        .await;
+    assert_eq!(ok.status.as_u16(), 200, "{}", ok.text());
+    assert_eq!(ok.json()["item"]["state"], "answered");
+    let decided = env
+        .store
+        .approval_get(approval)
+        .expect("get")
+        .expect("approval");
+    assert_eq!(decided.decision, Some(Decision::Once));
+    assert_eq!(env.status_of(task.id), Status::Ready);
+
+    // 判断の根拠（grant と人の発言）と実行者（案件 CoS）が別々に残る。
+    let (grant_id, decision_ref, actor, outcome, audit_project): (
+        Option<String>,
+        Option<String>,
+        String,
+        String,
+        String,
+    ) = db(&env)
+        .query_row(
+            "SELECT grant_id, human_decision_ref, actual_actor, outcome_state, project_id
+             FROM authority_audit WHERE action_class = 'job_wait_extend'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .expect("one audit row");
+    assert_eq!(grant_id.as_deref(), Some(grant.as_str()));
+    assert_eq!(decision_ref, Some(format!("authority_grant:{grant}")));
+    assert!(actor.contains(&project_thread), "{actor}");
+    assert_eq!(outcome, "applied");
+    assert_eq!(audit_project, project);
+    let granted = env
+        .store
+        .authority_grant(&grant)
+        .expect("read")
+        .expect("grant");
+    assert_eq!(granted.source.reference, said);
+    assert_eq!(granted.consumed, 1);
+
+    // 人が取り消すと、取り次ぎの裏付けも消える。
+    assert_eq!(
+        env.store
+            .authority_grant_backs(&grant, &project, OffsetDateTime::now_utc())
+            .expect("backs"),
+        None
+    );
+    let revoked = send(
+        &app,
+        post_json_with(
+            &format!("/api/v1/projects/global/authority/grants/{grant}/revoke"),
+            &json!({"reason": "やめる"}),
+            &as_human,
+        ),
+    )
+    .await;
+    assert_eq!(revoked.status.as_u16(), 200, "{}", revoked.text());
+    assert!(
+        env.store
+            .authority_grant_backs(&grant, &project, OffsetDateTime::now_utc())
+            .expect("backs")
+            .is_some()
+    );
 }

@@ -3804,15 +3804,28 @@
           "type": "string"
         },
         "expires_at": {
-          "description": "RFC 3339 expiry (required, after now).",
-          "type": "string"
+          "default": null,
+          "description": "RFC 3339 expiry (after now). Required without `grant_id`; with it, absent = while the grant lives.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "grant_id": {
+          "default": null,
+          "description": "ADR 2026-11-11-cos-standing-context D4: a live grant of the authority ledger (global or the\ntarget project's own, project or global scope) that makes the person's instruction standing.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "message_id": {
           "description": "The person's message of the general thread.",
           "type": "string"
         },
         "task_ids": {
-          "description": "Tasks of the target project the instruction applies to (1..=`CHAT_RELAY_TASKS_MAX`).",
+          "default": [],
+          "description": "Tasks of the target project the instruction applies to (1..=`CHAT_RELAY_TASKS_MAX`;\nmay be empty only with `grant_id`, then the whole project).",
           "items": {
             "type": "string"
           },
@@ -3821,9 +3834,7 @@
       },
       "required": [
         "client_message_id",
-        "message_id",
-        "task_ids",
-        "expires_at"
+        "message_id"
       ],
       "type": "object"
     },
@@ -4267,6 +4278,13 @@
     "ChatRelay": {
       "description": "ADR 2026-10-27-relayed-instructions D1: the relay record of a `role=user` message. The text\nof the message is the person's own words; this says who carried them, when the person said\nthem and where they apply.",
       "properties": {
+        "grant_id": {
+          "description": "ADR 2026-11-11-cos-standing-context D4: the authority grant that backs a forward without\ntasks or an expiry. Use as `instructed_by` re-checks it (revoked / expired grants stop it).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "relayed_by": {
           "description": "The principal that relayed the instruction (same as the message `author`).",
           "type": "string"

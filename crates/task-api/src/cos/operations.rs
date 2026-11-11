@@ -811,6 +811,16 @@ async fn create_operation(
             if let Some(pass) = &pass {
                 super::goal_guard::settle(store, &audit, pass, &result);
             }
+            // ADR 2026-11-11-cos-standing-context D4: the use of a standing grant is audited after
+            // the answer is applied (decision = the grant, actor = this CoS run).
+            if let (Ok(op), Some(routine), Some(wait)) = (&result, routine.as_ref(), wait.as_ref())
+                && instructed_by.is_none()
+                && op.state == "applied"
+                && let Err(problem) =
+                    super::basis::record_grant_use(store, routine, &wait.target, &audit.by())
+            {
+                tracing::warn!(path = %path, detail = ?problem, "standing grant use not audited");
+            }
             result
         })
         .await?;

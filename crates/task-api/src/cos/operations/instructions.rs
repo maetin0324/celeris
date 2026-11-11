@@ -203,6 +203,18 @@ pub(super) fn instructed_message(
             ));
         }
 
+        // ADR 2026-11-11-cos-standing-context D4: a standing forward lives only while its grant does.
+        if let (Some(grant), Some(project)) = (&relay.grant_id, &relay.scope.project_id) {
+            match store.authority_grant_backs(grant, project, now) {
+                Ok(None) => {}
+                Ok(Some(why)) => {
+                    return Err(format!(
+                        "instructed_by {message_id} is backed by grant {grant}, which no longer holds: {why}"
+                    ));
+                }
+                Err(e) => return Err(format!("authority ledger unreadable: {e}")),
+            }
+        }
         if task_core::chat::relay_expired(relay, now) {
             return Err(format!(
                 "instructed_by {message_id} is a relayed instruction that expired at {}",

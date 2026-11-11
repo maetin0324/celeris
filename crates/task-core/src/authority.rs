@@ -26,10 +26,14 @@ pub enum ActionClass {
     ExternalPublish,
     OpaqueExternalEffect,
     LaunchRoot,
+    /// ADR 2026-11-11-cos-standing-context D4: CoS の定型の代答（受信箱の cluster job の待ちの上限を
+    /// 「延長」で答える。`basis.category = job_wait_extend`）を人に回さずに行ってよいという委任。
+    /// 定型の代答の分類だけは global の範囲と長い期限（[`MAX_ROUTINE_GRANT_DAYS`]）を持てる。
+    JobWaitExtend,
 }
 
 impl ActionClass {
-    pub const ALL: [ActionClass; 7] = [
+    pub const ALL: [ActionClass; 8] = [
         ActionClass::HumanRequired,
         ActionClass::Destructive,
         ActionClass::Production,
@@ -37,6 +41,7 @@ impl ActionClass {
         ActionClass::ExternalPublish,
         ActionClass::OpaqueExternalEffect,
         ActionClass::LaunchRoot,
+        ActionClass::JobWaitExtend,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -48,7 +53,13 @@ impl ActionClass {
             ActionClass::ExternalPublish => "external_publish",
             ActionClass::OpaqueExternalEffect => "opaque_external_effect",
             ActionClass::LaunchRoot => "launch_root",
+            ActionClass::JobWaitExtend => "job_wait_extend",
         }
+    }
+
+    /// 定型の代答の委任か（global の範囲と長い期限を持てる分類）。
+    pub fn is_routine_answer(self) -> bool {
+        matches!(self, ActionClass::JobWaitExtend)
     }
 
     pub fn parse(s: &str) -> Option<Self> {
@@ -64,7 +75,13 @@ pub enum ScopeKind {
     Outcome,
     /// 作業単位（task）。
     Task,
+    /// ADR 2026-11-11-cos-standing-context D4: 全案件。`ref` は [`GLOBAL_LEDGER`]、行の `project_id` も
+    /// [`GLOBAL_LEDGER`]。定型の代答の分類（[`ActionClass::is_routine_answer`]）だけが持てる。
+    Global,
 }
+
+/// global の許可の台帳の key（`authority_grants.project_id`・`scope_ref`・API の path の `global` に対応）。
+pub const GLOBAL_LEDGER: &str = "*";
 
 impl ScopeKind {
     pub fn as_str(self) -> &'static str {
@@ -72,6 +89,7 @@ impl ScopeKind {
             ScopeKind::Project => "project",
             ScopeKind::Outcome => "outcome",
             ScopeKind::Task => "task",
+            ScopeKind::Global => "global",
         }
     }
 
@@ -80,6 +98,7 @@ impl ScopeKind {
             "project" => Some(ScopeKind::Project),
             "outcome" => Some(ScopeKind::Outcome),
             "task" => Some(ScopeKind::Task),
+            "global" => Some(ScopeKind::Global),
             _ => None,
         }
     }
@@ -228,9 +247,10 @@ pub fn grant_denial(grant: &AuthorityGrant, now: OffsetDateTime) -> Option<&'sta
     (grant.consumed >= grant.budget).then_some(reason::BUDGET_EXHAUSTED)
 }
 
-/// 範囲 `request` を `grant` が含むか。案件の許可は案件の中のすべてを、途中目標・task の許可は同じ ref だけを含む。
+/// 範囲 `request` を `grant` が含むか。global の許可はすべての案件を、案件の許可は案件の中のすべてを、
+/// 途中目標・task の許可は同じ ref だけを含む（案件の許可の候補は同じ案件の行だけから選ぶ）。
 pub fn scope_covers(grant: &GrantScope, request: &GrantScope) -> bool {
-    grant.kind == ScopeKind::Project
+    matches!(grant.kind, ScopeKind::Global | ScopeKind::Project)
         || (grant.kind == request.kind && grant.reference == request.reference)
 }
 
@@ -240,6 +260,7 @@ pub fn scope_rank(kind: ScopeKind) -> u8 {
         ScopeKind::Task => 0,
         ScopeKind::Outcome => 1,
         ScopeKind::Project => 2,
+        ScopeKind::Global => 3,
     }
 }
 
@@ -331,6 +352,8 @@ pub struct NewAuthorityAudit {
 /// 許可の上限（無条件の許可を入れない）。
 pub const MAX_GRANT_BUDGET: i64 = 1000;
 pub const MAX_GRANT_DAYS: i64 = 366;
+/// 定型の代答の委任の期限の上限（人が取り消すまで続く常設の委任。D4）。
+pub const MAX_ROUTINE_GRANT_DAYS: i64 = 3660;
 /// 人が controller を `enabled` にしたときの `launch_root` の許可の既定。
 pub const DEFAULT_LAUNCH_GRANT_DAYS: i64 = 30;
 pub const DEFAULT_LAUNCH_GRANT_BUDGET: i64 = 10;
@@ -402,6 +425,17 @@ mod tests {
         assert!(scope_covers(&o1, &o1));
         assert!(!scope_covers(&o1, &o2));
         assert!(!scope_covers(&o1, &project));
+        // D4: the global scope covers every project's scopes and ranks after the project.
+        let global = GrantScope {
+            kind: ScopeKind::Global,
+            reference: GLOBAL_LEDGER.into(),
+        };
+        assert!(scope_covers(&global, &project));
+        assert!(scope_covers(&global, &o1));
+        assert!(scope_rank(ScopeKind::Global) > scope_rank(ScopeKind::Project));
+        assert_eq!(ScopeKind::parse("global"), Some(ScopeKind::Global));
+        assert!(ActionClass::JobWaitExtend.is_routine_answer());
+        assert!(!ActionClass::Production.is_routine_answer());
         assert_eq!(ActionClass::parse("anything"), None);
         for class in ActionClass::ALL {
             assert_eq!(ActionClass::parse(class.as_str()), Some(class));

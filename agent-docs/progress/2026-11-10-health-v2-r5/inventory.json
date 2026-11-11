@@ -120,8 +120,8 @@
    "keep": 2
   },
   "task-worker": {
-   "adjust-worker": 9,
-   "keep": 12
+   "adjust-worker": 6,
+   "keep": 15
   }
  },
  "targets": [
@@ -16281,11 +16281,12 @@
      "conflict": false
     }
    },
-   "leaf": "adjust-worker",
+   "leaf": "keep",
    "leaf_reasons": [
-    "task_worker_bundled_after_r2"
+    "task_worker_bundled_after_r2",
+    "requires_userns_and_real_browser_process_keep_by_objective"
    ],
-   "bundle": "browser_eval_surface_userns_gate_suite"
+   "bundle": null
   },
   {
    "path": "crates/task-worker/tests/browser_runtime_isolated.rs",
@@ -16695,11 +16696,12 @@
      "conflict": false
     }
    },
-   "leaf": "adjust-worker",
+   "leaf": "keep",
    "leaf_reasons": [
-    "task_worker_bundled_after_r2"
+    "task_worker_bundled_after_r2",
+    "process_global_waitpid_any_child_requires_own_binary"
    ],
-   "bundle": "unmapped_suite"
+   "bundle": null
   },
   {
    "path": "crates/task-worker/tests/ssh_cluster_manual.rs",
@@ -16751,11 +16753,12 @@
      "conflict": false
     }
    },
-   "leaf": "adjust-worker",
+   "leaf": "keep",
    "leaf_reasons": [
-    "task_worker_bundled_after_r2"
+    "task_worker_bundled_after_r2",
+    "singleton_bundle_group_after_reaper_kept"
    ],
-   "bundle": "unmapped_suite"
+   "bundle": null
   },
   {
    "path": "crates/task-worker/tests/ssh_localhost.rs",

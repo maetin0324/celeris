@@ -196,7 +196,6 @@ pub fn write_target_origin(owner_dir: &Path, origin: &TargetOrigin) -> io::Resul
     std::fs::rename(&tmp, owner_dir.join(TARGET_ORIGIN_FILE))
 }
 
-/// owner のディレクトリに残った作りかけ（`.seed-copy-*`）を消す。
 /// 写している間 seed の世代を GC から守る印（世代の dir の中の file に共有の flock）。
 pub const SEED_COPY_PIN: &str = ".copy-pin";
 /// 同じ owner の割り当て（seed の写し）を直列にする file（owner の dir の中に排他の flock）。
@@ -252,7 +251,12 @@ fn open_lock_file(path: &Path) -> io::Result<std::fs::File> {
 pub fn lock_owner_alloc(owner_dir: &Path) -> io::Result<std::fs::File> {
     std::fs::create_dir_all(owner_dir)?;
     let file = open_lock_file(&owner_dir.join(OWNER_ALLOC_LOCK))?;
+    let started = std::time::Instant::now();
     file.lock()?;
+    let waited = started.elapsed();
+    if waited >= std::time::Duration::from_secs(1) {
+        tracing::warn!(owner_dir = %owner_dir.display(), wait_secs = waited.as_secs_f64(), "scratch: owner allocation lock acquired after waiting");
+    }
     Ok(file)
 }
 
@@ -266,6 +270,7 @@ pub fn try_lock_owner_alloc(owner_dir: &Path) -> io::Result<Option<std::fs::File
     }
 }
 
+/// owner のディレクトリに残った作りかけ（`.seed-copy-*`）を消す。
 pub fn remove_partial_copies(owner_dir: &Path) {
     let Ok(entries) = std::fs::read_dir(owner_dir) else {
         return;

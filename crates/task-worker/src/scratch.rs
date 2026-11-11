@@ -705,7 +705,8 @@ pub fn allocate(pool: &Pool, req: &AllocateRequest<'_>) -> io::Result<Allocation
 }
 
 /// `allocate` の seed の条件と写し方を指定する版（dispatcher は `[scratch.cargo]` と rustc の版を渡す）。
-/// seed の写しは pool の `.lock` を外して行う（世代は pin、owner は `.alloc.lock` で守る）。待つので tick から呼ばない。
+/// seed の写しは pool の `.lock` を外して行う（世代は pin、owner は `.alloc.lock` で守る）。待つので tick から呼ばない
+/// （通常の run と評価試行は run の future の `spawn_blocking` で呼ぶ）。
 pub fn allocate_with_seed(
     pool: &Pool,
     req: &AllocateRequest<'_>,
@@ -878,6 +879,20 @@ fn allocate_locked(
 /// 外部の owner の lease（`celerisctl scratch lease`）。adopt は呼び出し側が候補を渡したときだけ。
 pub fn touch(pool: &Pool, owner: &Owner) -> io::Result<bool> {
     let _lock = pool.lock()?;
+    touch_locked(pool, owner)
+}
+
+/// tick 用の `touch`（ADR 2026-11-11-scratch-lock-tick-stall）: pool の `.lock` が使用中なら待たずに `Ok(false)`
+/// （lease の TTL の内なので、触れなくても回収されない）。
+#[track_caller]
+pub fn try_touch(pool: &Pool, owner: &Owner) -> io::Result<bool> {
+    let Some(_lock) = pool.try_lock()? else {
+        return Ok(false);
+    };
+    touch_locked(pool, owner)
+}
+
+fn touch_locked(pool: &Pool, owner: &Owner) -> io::Result<bool> {
     let path = pool.lease_path(owner);
     if !path.exists() {
         return Ok(false);
@@ -901,6 +916,21 @@ pub fn set_ttl(pool: &Pool, owner: &Owner, ttl_secs: Option<u64>) -> io::Result<
 /// `released_at` を書き、P3 に落とす。
 pub fn release(pool: &Pool, owner: &Owner) -> io::Result<bool> {
     let _lock = pool.lock()?;
+    release_locked(pool, owner)
+}
+
+/// tick 用の `release`（ADR 2026-11-11-scratch-lock-tick-stall）: pool の `.lock` が使用中なら待たずに `Ok(false)`。
+/// `released_at` を書けなかった lease は TTL が切れると `scratch_gc` が回収する。
+#[track_caller]
+pub fn try_release(pool: &Pool, owner: &Owner) -> io::Result<bool> {
+    let Some(_lock) = pool.try_lock()? else {
+        tracing::info!(%owner, caller = %std::panic::Location::caller(), "scratch: pool lock busy; the lease is left to its TTL");
+        return Ok(false);
+    };
+    release_locked(pool, owner)
+}
+
+fn release_locked(pool: &Pool, owner: &Owner) -> io::Result<bool> {
     let path = pool.lease_path(owner);
     let Some(mut lease) = read_lease(&path)? else {
         return Ok(false);

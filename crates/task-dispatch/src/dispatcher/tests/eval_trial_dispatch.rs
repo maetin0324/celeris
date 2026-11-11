@@ -638,9 +638,10 @@ async fn eval_trial_check_uses_trial_target_dir() {
 async fn eval_trial_target_removed_on_recovery() {
     let (temp, store, _sqlite, batch_id, _repo) = eval_fixture("true");
     let seen = Arc::new(StdMutex::new(Vec::new()));
+    let started = Arc::new(tokio::sync::Notify::new());
     let hung: Arc<dyn WorkerAdapter> = Arc::new(EvalStubAdapter {
         seen: seen.clone(),
-        started: Arc::new(tokio::sync::Notify::new()),
+        started: started.clone(),
         env: Vec::new(),
         hang: true,
     });
@@ -652,6 +653,8 @@ async fn eval_trial_target_removed_on_recovery() {
     dead.config.eval.reserved_runs = 1;
     dead.set_eval_version_probe(|_| Some("eval-stub 1.0.0".into()));
     assert_eq!(dead.tick_eval_trials(), 1);
+    // The target is allocated off the tick, before the run starts.
+    started.notified().await;
     let trial = only_trial(&store, &batch_id);
     let (target, lease) = trial_target(temp.path(), &trial.trial_id);
     assert!(target.is_dir());
@@ -697,16 +700,18 @@ fn eval_owner_row(
     }
 }
 
-/// The old instance (`owner`) starts a trial whose run hangs; returns it with the trial's work tree.
-fn start_hung_eval_trial(
+/// The old instance (`owner`) starts a trial whose run hangs; returns it with the trial's work tree
+/// once the run has started (its target is allocated off the tick, before the run).
+async fn start_hung_eval_trial(
     temp: &std::path::Path,
     store: &Arc<dyn TaskStore>,
     batch_id: &str,
     owner: &str,
 ) -> (Dispatcher, task_core::routing_eval_trial::EvalTrial) {
+    let started = Arc::new(tokio::sync::Notify::new());
     let hung: Arc<dyn WorkerAdapter> = Arc::new(EvalStubAdapter {
         seen: Arc::new(StdMutex::new(Vec::new())),
-        started: Arc::new(tokio::sync::Notify::new()),
+        started: started.clone(),
         env: Vec::new(),
         hang: true,
     });
@@ -718,6 +723,7 @@ fn start_hung_eval_trial(
     old.config.eval.reserved_runs = 1;
     old.set_eval_version_probe(|_| Some("eval-stub 1.0.0".into()));
     assert_eq!(old.tick_eval_trials(), 1);
+    started.notified().await;
     let trial = only_trial(store, batch_id);
     assert_eq!(trial.instance_id.as_deref(), Some(owner));
     (old, trial)
@@ -754,7 +760,7 @@ async fn eval_recovery_keeps_running_trial_of_live_owner() {
             time::OffsetDateTime::now_utc(),
         ))
         .unwrap();
-    let (mut old, trial) = start_hung_eval_trial(temp.path(), &store, &batch_id, owner);
+    let (mut old, trial) = start_hung_eval_trial(temp.path(), &store, &batch_id, owner).await;
     let worktree = std::path::PathBuf::from(trial.worktree_path.clone().unwrap());
     let run_id = trial.run_id.clone().unwrap();
     let (target, _lease) = trial_target(temp.path(), &trial.trial_id);
@@ -808,7 +814,7 @@ async fn eval_recovery_errors_trial_of_dead_owner_and_cancels_run_row() {
                 heartbeat_at,
             ))
             .unwrap();
-        let (mut old, trial) = start_hung_eval_trial(temp.path(), &store, &batch_id, owner);
+        let (mut old, trial) = start_hung_eval_trial(temp.path(), &store, &batch_id, owner).await;
         // The old instance died: nothing holds its run any more.
         for (_, entry) in old.eval_runs.drain() {
             entry.handle.abort();
@@ -1015,7 +1021,7 @@ async fn eval_run_row_not_left_running_after_handoff() {
                 now,
             ))
             .unwrap();
-        let (mut old, trial) = start_hung_eval_trial(temp.path(), &store, &batch_id, owner);
+        let (mut old, trial) = start_hung_eval_trial(temp.path(), &store, &batch_id, owner).await;
         for (_, entry) in old.eval_runs.drain() {
             entry.handle.abort();
         }
@@ -1056,7 +1062,7 @@ async fn eval_run_row_not_left_running_after_handoff() {
                 now,
             ))
             .unwrap();
-        let (mut old, trial) = start_hung_eval_trial(temp.path(), &store, &batch_id, owner);
+        let (mut old, trial) = start_hung_eval_trial(temp.path(), &store, &batch_id, owner).await;
         let run_id = trial.run_id.clone().unwrap();
         let mut next = recovering_dispatcher(temp.path(), &store);
         reconcile_ownerless_now(&mut next);
@@ -1116,7 +1122,7 @@ async fn eval_run_row_not_left_running_after_handoff() {
                 now,
             ))
             .unwrap();
-        let (mut old, trial) = start_hung_eval_trial(temp.path(), &store, &batch_id, owner);
+        let (mut old, trial) = start_hung_eval_trial(temp.path(), &store, &batch_id, owner).await;
         let run_id = trial.run_id.clone().unwrap();
         old.set_accepting_new_work(false);
         assert_eq!(old.in_flight(), 1);
@@ -1561,4 +1567,61 @@ async fn verify_daemon_leaves_foreign_eval_trial_files() {
         assert!(file.is_file(), "{}", file.display());
     }
     assert!(!temp.path().join("staging/eval").exists());
+}
+
+/// ADR 2026-11-11-scratch-lock-tick-stall: while another holder keeps the scratch pool `.lock`
+/// (a seed copy or GC in another thread), the tick that starts an evaluation trial does not wait for
+/// it. The target (lease, seed copy, TTL) is made off the tick before the run starts. Scoring and
+/// clean-up under the held lock also finish without waiting: the target is removed and the lease is
+/// left to its TTL.
+///
+/// 不変条件: tick は pool の `.lock` を待たない（評価試行の開始・採点・片付け）。既存の評価試行の
+/// 試験は lock の競合が無い状態だけを試し、tick の中の待ち（本番で 4 分 tick が止まった形）を検出できない。
+#[tokio::test]
+async fn eval_trial_tick_does_not_wait_for_a_held_pool_lock() {
+    let (temp, store, _sqlite, batch_id, _repo) = eval_fixture("true");
+    let seen = Arc::new(StdMutex::new(Vec::new()));
+    let started = Arc::new(tokio::sync::Notify::new());
+    let adapter: Arc<dyn WorkerAdapter> = Arc::new(EvalStubAdapter {
+        seen: seen.clone(),
+        started: started.clone(),
+        env: Vec::new(),
+        hang: false,
+    });
+    let mut d = dispatcher(store.clone(), adapter, 2);
+    own_instance(&mut d, "01EVALDAEMON00000000000000");
+    d.config.workspace_roots =
+        task_core::local_machine::WorkspaceRoots::new(temp.path().join("data"), None);
+    let pool = scratch_on(&mut d, &temp.path().join("scratch")).pool();
+    d.config.eval.reserved_runs = 1;
+    d.set_eval_version_probe(|_| Some("eval-stub 1.0.0".into()));
+
+    // Another holder keeps the pool lock (a separate open file description: flock conflicts).
+    let held = pool.lock().unwrap();
+    assert_eq!(d.tick_eval_trials(), 1, "the trial starts without waiting");
+    d.tick().unwrap();
+    let trial = only_trial(&store, &batch_id);
+    let (target, lease) = trial_target(temp.path(), &trial.trial_id);
+    assert!(seen.lock().unwrap().is_empty(), "the run waits for its target");
+    assert!(!lease.exists(), "no lease is written while the lock is held");
+
+    // The holder lets go: the target is made off the tick and the run starts.
+    drop(held);
+    tokio::time::timeout(Duration::from_secs(30), started.notified())
+        .await
+        .expect("the run starts once the pool lock is free");
+    assert!(target.is_dir(), "{}", target.display());
+    let written = task_worker::scratch::read_lease(&lease).unwrap().unwrap();
+    assert!(written.ttl_secs.is_some(), "the trial's lease carries its TTL");
+
+    // Scoring and clean-up under a held lock still settle the trial.
+    let held = pool.lock().unwrap();
+    assert!(run_until_state(&mut d, || trial_settled(&store, &batch_id)).await);
+    assert_eq!(
+        only_trial(&store, &batch_id).status,
+        task_core::routing_eval_trial::EvalTrialStatus::Passed
+    );
+    assert!(!target.exists(), "{}", target.display());
+    assert!(!released(&lease), "the busy lease is left to its TTL");
+    drop(held);
 }

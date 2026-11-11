@@ -1,14 +1,15 @@
 ---
 title: scratch の pool lock による tick 停止と消えた handoff 要求
 tasks: [01M757GNJA20FHCF54DED64RBT]
-status: running
+status: done
+completed: 2026-11-11
 updated: 2026-11-11
 ---
 # scratch の pool lock による tick 停止と消えた handoff 要求
 
 ## 変更
 
-調査と [設計 brief](../adr/2026-11-11-scratch-lock-tick-stall.md) を記録。実装中。task 全体は未完了。
+調査と [設計 brief](../adr/2026-11-11-scratch-lock-tick-stall.md) を記録し、実装した（attempt 3 で完了）。
 
 commit: `phase 1: defer scratch cleanup without blocking tick`。
 
@@ -24,15 +25,24 @@ commit: `phase 2: copy the seed outside the pool lock and drop handoff requests 
 - 最後の tick の時刻は既存の `GET /daemon` の `snapshot.last_tick_at` で読める（流用。新しい欄は足していない）。
 - 検査の env（`housekeeping::check_cargo_target_env`。呼び出し元は housekeeping・work_units・review_spawn・phase_integration）は `scratch::try_allocate_for_check` を使う。owner の `.alloc.lock` と pool の `.lock` を try で取り、取れなければ lease に触らず target の path だけを返す。seed は写さない（target が無ければ空で作る）。試験 `check_allocation_does_not_wait_for_the_pool_lock_nor_copy_the_seed`。
 
+commit: `phase 3: allocate eval trial targets off the tick and stop waiting for the pool lock`（attempt 3）。
+
+- 評価試行の target（`eval_allocate_target`: `allocate_with_seed` と `set_ttl`）を、通常の run と同じく run の future の `spawn_blocking` で adapter の起動の前に行う。tick は target の path（`pool.target_dir(owner)`）だけを request に入れる。割り当ての失敗は `AdapterError::Other("cargo target: …")` として既存の `on_eval_worker_finished` が試行を `error` にし、作業ツリーと target を消す。
+- 採点の `touch` と片付けの `release` は新しい `scratch::try_touch`・`scratch::try_release`（pool の `.lock` が使用中なら待たずに `Ok(false)`。release は lease を TTL に任せたことを info に出す）。待つ版の `touch`・`release` は CLI（`celerisctl scratch lease`）だけが使う。
+- owner の `.alloc.lock`（`lock_owner_alloc`）も 1 秒以上待ったら owner の dir と待機秒数を warn に出す。
+- review の軽微な指摘 2 件を直した: `reflink.rs` の `remove_partial_copies` の doc comment の位置、`instance.rs` の `DropStaleHandoff` の log 文字列の空白。
+- 試験 `eval_trial_tick_does_not_wait_for_a_held_pool_lock`（別の fd で pool の `.lock` を握ったまま `tick_eval_trials` と `tick` が返り、run は lock が空くまで始まらず、空いたら target と TTL 付きの lease ができて run が始まる。採点と片付けも lock を握ったまま終わり、target は消え、lease は TTL に残る）。既存の試験 2 つ（`eval_trial_target_removed_on_recovery`・`start_hung_eval_trial`）は、target を run の開始の前に用意するようになったので、target を見る前に run の開始（adapter の `started`）を待つ。
+
 ## 呼び出し元の調査
 
-- `scratch.rs::allocate_with_seed`: 同期。通常 run は `worker_task` の spawn_blocking 内。`housekeeping::check_cargo_target_env` と `eval_trials::eval_allocate_target` は tick の同期経路で、変更が必要。
-- `scratch.rs::touch/set_ttl/release`: CLI は待機可。評価試行の touch/release/set_ttl は tick から呼ぶため変更が必要。
+- `scratch.rs::allocate_with_seed`: 待つ。通常 run は `worker_task` の spawn_blocking 内、評価試行は run の future の spawn_blocking 内（attempt 3）。`housekeeping::check_cargo_target_env` は `try_allocate_for_check`（attempt 2）。
+- `scratch.rs::touch/set_ttl/release`: 待つ版は CLI と評価試行の spawn_blocking（set_ttl）だけ。tick の評価試行は `try_touch`・`try_release`（attempt 3）。
 - `maintenance::run_target_sweep_task`: tick の同期経路。Busy なら Ready のまま次回へ。
 - `scratch_gc::execute`: tick の通常・緊急 GC と CLI。Busy なら削除を次回へ。
 - `scratch/seed.rs::seed_gc`: tick。Busy なら次回へ。
 - `scratch/seed.rs::refresh_seed`: 更新スレッド。pool lock は公開と旧世代の退避に使用。コピー中の参照保護と調整が必要。
-- `DaemonSnapshot.last_tick_at` は既存。health/log の露出は未確認。
+- `DaemonSnapshot.last_tick_at` は既存で、`GET /daemon` の `snapshot.last_tick_at` で読める。
+- 結論: tick（main thread と tick の中の同期処理）から pool の `.lock` や owner の `.alloc.lock` を待つ経路は残っていない。
 
 ## 証拠（提出時の HEAD のコードで実行。基準は git merge-base HEAD main）
 
@@ -58,10 +68,8 @@ attempt 2 の検査（提出時の HEAD で実行）:
 
 ## 未解決
 
-- 評価試行（`eval_trials::eval_allocate_target`）は tick の中で `allocate_with_seed`（seed の写しと pool の `.lock` の待ち）と `set_ttl` を呼ぶ。`score_eval_trial` の `touch`、片付けの `release` も pool の `.lock` を待つ。未修正（受け入れ条件 4 は未達）。
-- 実 daemon 系の試験 fixture が実 host の disk watch を継承する問題を解消し、指定検査を完走する。
-- task 全体は未完了。完了日は未設定。
+- 評価試行の hidden check（`run_eval_check`）と target の `remove_dir_all` は tick の中の同期処理として残る（pool の `.lock` は待たない。この task の範囲外）。
 
 ## 提案
 
-無し。
+- 評価試行の hidden check と target の削除も tick の外（spawn_blocking）へ移す task を起こす。数分の cargo の検査が tick の中で走ると、pool の `.lock` と同じく tick が止まる。

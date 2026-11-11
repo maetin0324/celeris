@@ -1,7 +1,7 @@
 # scratch のロック待ちを tick から除く
 
 - 日付: 2026-11-11
-- 状態: Accepted（実装中）
+- 状態: Accepted（実装済み）
 - 関連: [ADR-0075](0075-tiered-build-cache.md)、[ADR-0129](0129-host-sccache-reflink-targets.md)
 
 ## 実装前 brief
@@ -23,6 +23,8 @@
 - 同じ owner の割り当ては owner の dir の `.alloc.lock`（排他 flock）で直列にする。pool lock より先に、外で取る（lock の順序は owner → pool。pool lock を持って owner の lock を待つ経路は無い）。owner の GC（`scratch_gc::execute`）は `.alloc.lock` が持たれている owner を消さない。
 - handoff の要求元は新しい列を足さず、既存の行から導く: 自分より新しく（`started_at`, `instance_id`）、drain しておらず、pid が生きている standby か active の行。要求を書くのは起動時の standby と、古い active を見つけた新しい active だけで、どちらもこの条件を満たす。standby は要求の前に自分の行を書く。
 - active は draining を `instance_set_role_if` の transaction の中で要求元を確かめてから書く。要求元が居なければ、同じく transaction の中で確かめてから `instance_register_if` で自分の行を書き直して要求を消し（`DropStaleHandoff`）、active に残る。promote.sh が新 daemon を止めて行が消えた後に残った要求は、古い active の次の tick で消える。
+- 評価試行の target（`eval_trials::eval_allocate_target`。seed の写し・pool lock・TTL）は、通常の run と同じく run の future の `spawn_blocking` で adapter の起動の前に用意する。割り当ての失敗は adapter の失敗として試行を `error` にする。tick から呼ぶ採点の `touch` と片付けの `release` は `scratch::try_touch`・`scratch::try_release` で待たない。使用中なら touch は省き（lease の TTL の内）、`released_at` を書けなかった lease は TTL が切れると `scratch_gc` が回収する。
+- owner の `.alloc.lock` の待ちも、1 秒以上なら owner の dir と待機秒数を warn に出す。
 - 最後の tick の時刻は既存の `DaemonSnapshot.last_tick_at`（`GET /daemon`）を流用する。新しい時計の正本を作らない。handoff の要求を処理した log（draining・要求の破棄）に、要求からの経過秒数 `request_age_secs` を出す。
 
 ## 実装状況
@@ -31,4 +33,6 @@
 
 検査の env（`housekeeping::check_cargo_target_env`）は `try_allocate_for_check` で待たず、seed を写さない（target が無ければ空で作る。検査の build は遅くなりうるが tick は止まらない）。
 
-未実装: 評価試行（`eval_trials`）の割り当て・touch・release・set_ttl を tick の外へ移すこと。
+評価試行の割り当て（`allocate_with_seed`・`set_ttl`）は run の future の `spawn_blocking` へ移し、採点の `touch` と片付けの `release` は try 版にした。tick から pool の `.lock` を待つ経路は残っていない（`Pool::lock` を待つのは run の future の `spawn_blocking`・seed の更新スレッド・CLI だけ）。
+
+範囲外で残る tick の同期処理: 評価試行の hidden check（`run_eval_check`）と target の `remove_dir_all` は tick の中で走る。pool lock は待たないが、時間はかかりうる。

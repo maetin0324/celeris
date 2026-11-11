@@ -668,7 +668,7 @@ impl Supervisor {
                 if dropped {
                     tracing::warn!(
                         instance_id = %self_id, request_age_secs = ?request_age_secs,
-                        "dropped a handoff request whose requester is gone (its row was removed or                          its pid is dead); staying active (ADR 2026-11-11-scratch-lock-tick-stall)"
+                        "dropped a handoff request whose requester is gone (its row was removed or its pid is dead); staying active (ADR 2026-11-11-scratch-lock-tick-stall)"
                     );
                 }
                 Step::Stay

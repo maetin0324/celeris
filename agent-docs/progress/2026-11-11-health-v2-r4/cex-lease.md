@@ -70,7 +70,10 @@ G7 について: `cex_restart_after_crash_…` を落とす guard は dispatcher
 
 - `cargo nextest run -p task-dispatch -E 'test(/cex_/)' --no-fail-fast`: 9 本すべて合格、exit 0。
 - guard の確認は上の表のとおり（一時変更は commit していない）。
-- `cargo fmt --all -- --check`、`cargo clippy --workspace -- -D warnings`、`bash scripts/dev/test-affected.sh` の結果は run の報告に書く。
+- `cargo nextest run -p task-dispatch --no-fail-fast`: 1670 本すべて合格、exit 0。
+- `cargo fmt --all -- --check`: exit 0。`cargo clippy --workspace -- -D warnings`: exit 0。`sh scripts/dev/progress-index.sh --check`: exit 0。
+- `bash scripts/dev/test-affected.sh` は run の壁時計が足りず実行していない（`--list` の対象は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch）。変更は task-dispatch の `#[cfg(test)]` の module と文書だけで、逆依存の crate の build には入らない。統合の check で走らせる。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の変更 path はこの記録・`cex_lease_restart.rs`・`tests/mod.rs` の 3 件。
 
 ## 提案
 

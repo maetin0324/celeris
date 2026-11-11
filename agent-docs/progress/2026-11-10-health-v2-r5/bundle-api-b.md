@@ -2,12 +2,12 @@
 title: R5 bundle-api-b — task-api の routing・管理 API・その他の試験の束ね
 tasks: [01M6TYVJT53598CPKMGSQGA7XM]
 status: done
-updated: 2026-11-10
-completed: 2026-11-10
+updated: 2026-11-11
+completed: 2026-11-11
 ---
 # R5 bundle-api-b — task-api の routing・管理 API・その他の試験の束ね
 
-完了日: 2026-11-10
+完了日: 2026-11-11
 
 WorkUnit `bundle-api-b`（段 bundle）。task-api の結合試験のうち、`inventory.json` で leaf が `bundle-api-b` の 37 target を 6 つの束（`crates/task-api/tests/<bundle>/main.rs`）にした。試験関数の中身は変えていない。leaf の割り当てで `docs` を 1 件 keep に戻した（下の「docs を束ねない理由」）。基準は `$CELERIS_WU_BASE`（bundle-api-a の後）。
 
@@ -22,10 +22,11 @@ binary は lib の unittest 1 個を含む。この leaf で 37 target が 6 束
 
 ## 変更
 - 件名「phase 1: bundle task-api routing, admin and unmapped integration targets」の commit — 37 target の `git mv`、6 つの `main.rs`、`classify.py` の scripts の path の数え方、`test_classify.py` の試験 4 件、`inventory.json` の作り直し。
-- 件名「R5 bundle-api-b: ADR に docs を keep にした付記を書き、束の表を直す」の commit — ADR の D2・D4-1・束の表・動かさない target の表と付記。
+- 件名「R5 bundle-api-b: ADR に docs を keep にした付記を書き、束の表を直す」の commit — ADR の D2・D4-1・束の表・動かさない target の表と付記。ADR はこの WU の write set の外（範囲 check は `crates/task-api/tests/`・`crates/task-api/Cargo.toml`・この dir だけを許す）なので、次の commit で base の内容に戻した。
 - 件名「R5 bundle-api-b: 進捗に検査の結果を書く」の commit — この file。
+- 件名「R5 bundle-api-b: ADR の変更を戻し、付記の案を進捗の提案に移す」の commit — ADR を `$CELERIS_WU_BASE` の内容に戻し（差 0 行）、付記の文と表の直しを下の「提案」に移した。
 
-束（ADR [2026-11-10-test-target-bundles.md](../../adr/2026-11-10-test-target-bundles.md) の表と同じ）:
+束（ADR [2026-11-10-test-target-bundles.md](../../adr/2026-11-10-test-target-bundles.md) の表から `unmapped_suite_a` の `docs` を外したもの。ADR の表は直していない。下の「提案」）:
 
 | 束 | 件数 | 試験 | target |
 |---|---|---|---|
@@ -72,8 +73,14 @@ binary は lib の unittest 1 個を含む。この leaf で 37 target が 6 束
 - `sh scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-adr-numbers.sh`・`sh scripts/dev/progress-index.sh --check` → 各 exit 0。
 
 ## 未解決
-無し。
+- ADR [2026-11-10-test-target-bundles.md](../../adr/2026-11-10-test-target-bundles.md) は `docs` を keep にしたことをまだ反映していない（D2 の最大の束の行数、D4-1 の named_suite の条件、段 bundle の表の `unmapped_suite_a` 8 件、動かさない target の表の task-api keep 17 件）。`inventory.json` と束は 7 件で正しい。ADR を直す文は下の「提案」の 1 つ目にある。
 
 ## 提案
+- ADR を書き換えられる unit（段 record、または段 bundle の統合）が、ADR [2026-11-10-test-target-bundles.md](../../adr/2026-11-10-test-target-bundles.md) に次の 5 点を入れる。この WU は ADR を write set の外として変えなかった。
+  1. D2: 最大の束を「task-api `unmapped_suite_a` の 7 file 3736 行（注釈・空行込み。付記 bundle-api-b で `docs` を外した後）」にする（base_sha の tree で数えた。直す前は 8 file 4627 行）。
+  2. D4-1 の named_suite の説明に「`scripts/` の `#` comment でない行が file の path を名指しする target も含む。付記 bundle-api-b」を足す。
+  3. 段 bundle の見出しを「76 target → 15 束。task-api 55 → 9、celeris 15 → 4、celerisctl 6 → 2」にし、表の `unmapped_suite_a` を 7 件（approvals・cluster_settings_admin・concurrency・console・console_instruct・conversation・files）にする。
+  4. 動かさない target の表の task-api を「keep 18、名前で呼ばれる suite 6」にする。
+  5. 付記「実装との突き合わせ」に 1 行足す: 「2026-11-10（unit bundle-api-b）: task-api の `docs` を束から外して keep にした。`scripts/dev/check-doc-links.sh` の `FOREIGN_DOCS` が `crates/task-api/tests/docs.rs` を path で挙げ、束へ動かすと doc-link 検査が落ちる（script は R5 の write set の外）。`classify.py` の `external_refs` は `scripts/` の `#` comment でない行が target の path を含むときも `scripts` の参照に数える（`test_classify.py` の `ScriptPathRule`）。comment の行は数えない。leaf が変わったのは `docs` だけ。記録は [bundle-api-b.md](../progress/2026-11-10-health-v2-r5/bundle-api-b.md)。」
 - `docs` を束ねるには、`scripts/dev/check-doc-links.sh` の `FOREIGN_DOCS` の path を束の path に直す変更が要る。script は R5 の write set の外なので、R6 か別の task で、一覧の path の変更と `docs` の移動を同じ変更で行う（`classify.py` の keep の理由はその変更で消える）。
 - `scripts/dev/tests/script-compare.sh` の 3 行目の comment は celeris の `crates/celeris/tests/script_compare_report.rs` を挙げるが、bundle-celeris がこの file を `tests/routing_budget_suite/` に動かしたので、段 bundle の統合の後は古い path になる。script は R5 の write set の外なので、R6 で comment の path を直す（検査は落ちない。comment は doc-link 検査の対象外）。

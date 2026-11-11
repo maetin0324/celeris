@@ -30,7 +30,7 @@ tasks: [01M75722QN630BBASEQ759KG4T]
 | soul（境界・口調） | `task_worker::cos_chat::core`（Global Core） | Core そのもの（今と同じ） | 既存のまま | コードの変更（review を通す） |
 | identity（役割） | `task_worker::cos_chat::standing` の thread の種類ごとの固定文 | 統括・案件・review・受信箱の一次対応の役割の節 | 600 | コードの変更 |
 | user（利用者） | KB の `user/*.md` | page ごとの題名と本文の先頭（front matter を除く） | page 600・節 3000 | KB の通常の経路（人の編集・curation） |
-| memory: 任された範囲 | authority ledger の grant（`authority_grants`） | 生きている grant の id・範囲・分類・期限・残り回数・人の発言の抜粋 | 節 4000 | 人の受け入れ（D4）・取り消し |
+| memory: 任された範囲 | authority ledger の grant（`authority_grants`） | 生きている grant の id・範囲・分類・期限・残り回数・人の発言の抜粋 | 節 3600 | 人の受け入れ（D4）・取り消し |
 | memory: 覚え書き（権限でない慣習・好み・道具の癖） | KB の `cos/memory.md` | 本文の末尾（新しい追記）を上限まで | 2000 | CoS が KB 候補として出し（`POST /api/v1/knowledge/inbox`、scope `cos`）、日次 curation か人の受け入れで入る |
 | KB の入口 | cos の org profile の knowledge の mount | 検索してよい scope と、検索・取得の API の書き方だけ（索引は入れない） | 800 | org の profile（`PATCH /api/v1/org`） |
 

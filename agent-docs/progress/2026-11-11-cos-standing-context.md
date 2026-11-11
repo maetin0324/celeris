@@ -38,6 +38,15 @@ updated: 2026-11-11
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
 - `sh scripts/dev/progress-index.sh --check`: exit 0。
 
+## attempt 2: 受け入れ検査の fixture の隔離
+
+- 前回 reviewer の `test-affected.sh` は 5881 件中 K4 の実物試験 1 件が 600 秒で timeout（exit 100）。
+- 原因を持つ fixture 選択から、別 task の本番 workspace の絶対パスを探す fallback を撤去した。
+  実物検証は `CAMPAIGN_K4_TGZ` の明示指定で実行し、指定したファイルが無い場合は失敗する。
+  [ADR](../adr/2026-11-11-k4-explicit-test-archive.md) に試験契約の変更と維持する採点条件を記録した。
+- 常設文脈 ADR の grant 節の上限を実装と同じ 3600 字へ訂正した。
+- D4 は未実装のまま。この修正だけで task 全体の完了とはしない。
+
 ## 残り（続きの run でする）
 
 1. D4: `ScopeKind::Global`（`project_id = '*'`）と分類 `routine_answer`（`answer_kind` 欄、期限・回数を省ける）。migration で
@@ -47,6 +56,21 @@ updated: 2026-11-11
    `authority.grant_propose` にする（policy_version を上げる）。
 4. scenario 試験: 統括で「job待ちは常に延長」→ CoS が提案 → 人が受け入れ → 案件 CoS が job 待ちの上限の件を grant id を引いて答え、
    人に回さない。grant に裏付けられた取り次ぎは task の指定と期限なしで通る。
+
+## D4 の実装前 brief（未着手）
+
+1. 根本原因: ledger は案件・期限・回数に限定され、取り次ぎは task と期限を必須にしている。恒久の人の委任を表現できない。
+2. owner: 型と失効判定は `task-core/src/authority.rs`、保存・出典照合・使用の監査は `store/authority.rs`、
+   HTTP と CoS operation は `task-api/src/handlers/authority.rs`・`cos/ops/projects.rs`、取り次ぎは `chat/window.rs`。
+3. 再利用: `source_problem` の人の出典確認、提案の question_key による重複防止、grant の revoke、
+   `authority_use_tx` の使用と監査の transaction、`cos/basis.rs` の authority grant 根拠。
+4. 選択: 別の常設メモへ権限を書かず、D4 の ledger 拡張を採る。global と案件の grant を同じ検証経路で扱う。
+5. 新しい状態: global scope、routine_answer の answer_kind、任意の期限・回数、relay の grant_id。
+   無期限を遠い未来の日付や巨大な回数で代用しない。一般の危険操作の上限は維持する。
+6. 撤去: grant の裏付けがある取り次ぎへの一律 task・期限必須、Core/skill の一律 24 時間指示。
+7. 不変条件: 人だけが許可を作る。使用の直前にも範囲・出典・取消・期限を確認し、判断根拠と実行者を別々に監査する。
+   scenario は統括の原文→提案→人の許可→案件の job 待ち代答を実 API/transaction で通す。
+   取消・他案件・異なる answer_kind・人以外の許可・grant 無しの期限欠落は拒否する。
 
 ## 初期の委任の種（D5。配備後に operator が提案として登録し、人が受け入れる）
 

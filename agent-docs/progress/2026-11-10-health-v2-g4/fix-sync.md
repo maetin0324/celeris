@@ -32,6 +32,7 @@ main の commit「store-prune: 呼び手の無い TaskStore method 4 個と B0 �
 ## 変更（commit の件名）
 - `phase 1: set the fixture project title with project_set_text_tx after the store prune`
 - `phase 1: record fix-sync cause, fix and submit checks`
+- `phase 1: rewrite G4 evidence with the checks after the main sync`
 
 ## 証拠（提出時の HEAD で実行）
 結果は task の進捗 [2026-11-10-health-v2-g4.md](../2026-11-10-health-v2-g4.md) の「証拠」節に書いた。この unit で最初に確かめたのは次の 1 件。

@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use time::OffsetDateTime;
 
 use crate::authority::forward_gap;
-use crate::store::authority::grant_of;
+use crate::store::authority::forward_grant;
 
 use super::store::{
     ChatError, ChatMessagePosted, MessageProvenance, NewMessage, cos_thread_ensure_tx,
@@ -244,13 +244,8 @@ pub fn chat_relay_forward_tx(
             req.message_id
         )));
     }
-    let expires_at = req.expires_at.clone().filter(|e| !e.trim().is_empty());
-    let grant = req
-        .grant_id
-        .as_deref()
-        .map(|id| grant_of(tx, id))
-        .transpose()?;
-    let scoped = !req.task_ids.is_empty() && expires_at.is_some();
+    let grant = forward_grant(tx, req.grant_id.as_deref())?;
+    let scoped = !req.task_ids.is_empty() && req.expires_at.is_some();
     if let Some(why) = forward_gap(grant, scoped, to.project_id.as_deref(), now) {
         return Err(ChatError::Invalid(format!("forward refused: {why}")));
     }
@@ -259,7 +254,7 @@ pub fn chat_relay_forward_tx(
         text: source.text.clone(),
         said_at: source.created_at.clone(),
         task_ids: req.task_ids.clone(),
-        expires_at,
+        expires_at: req.expires_at.clone(),
     };
     let mut relay = relay_record(tx, to_thread, &relay_req, relayed_by, now)?;
     relay.grant_id = req.grant_id.clone();

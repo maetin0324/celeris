@@ -88,11 +88,19 @@ fn grants_of(conn: &Connection, project: &str) -> Result<Vec<AuthorityGrant>, St
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
-pub(crate) fn grant_of(conn: &Connection, id: &str) -> Result<Option<AuthorityGrant>, StoreError> {
+fn grant_of(conn: &Connection, id: &str) -> Result<Option<AuthorityGrant>, StoreError> {
     let mut st = conn.prepare_cached(&format!(
         "SELECT {GRANT_COLUMNS} FROM authority_grants WHERE id = ?1"
     ))?;
     Ok(st.query_row([id], grant_row).optional()?)
+}
+
+/// D4: 取り次ぎ（`chat.relay_forward`）が `grant_id` に書いた許可の行。`None` は書いていない、`Some(None)` は無い id。
+pub(crate) fn forward_grant(
+    conn: &Connection,
+    grant_id: Option<&str>,
+) -> Result<Option<Option<AuthorityGrant>>, StoreError> {
+    grant_id.map(|id| grant_of(conn, id)).transpose()
 }
 
 /// 範囲が実在し案件に属するか。案件は同じ id、task はその案件の task。途中目標は `project_snapshot` と同じ規則で、

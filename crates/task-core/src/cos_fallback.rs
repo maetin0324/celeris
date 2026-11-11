@@ -20,17 +20,17 @@ pub fn unsent(conn: &Connection, item_id: &str) -> rusqlite::Result<bool> {
 }
 
 /// Withdraw the unsent fallback notification of `item_id`; `false` when there is none (never
-/// claimed, or already sent). A send already in flight (the POST under way) is not stopped.
+/// claimed, or already sent). A send already in flight (the POST under way) is not stopped. The
+/// write comes first: a deferred transaction that reads before it writes fails with
+/// `SQLITE_BUSY_SNAPSHOT` when another connection commits in between.
 pub fn withdraw_unsent(conn: &Connection, item_id: &str) -> rusqlite::Result<bool> {
-    let found = unsent(conn, item_id)?;
-    if found {
-        conn.execute(
-            "UPDATE notifications SET ok=0,error=?2 WHERE kind='cos_fallback' AND key=?1 \
-             AND ok IS NULL AND sent_at IS NULL",
-            params![item_id, WITHDRAWN],
-        )?;
-    }
-    Ok(found)
+    conn.execute(
+        "UPDATE notifications SET ok=0,error=?2 WHERE kind='cos_fallback' AND key=?1 \
+         AND ok IS NULL AND sent_at IS NULL \
+         AND EXISTS(SELECT 1 FROM cos_inbox_items WHERE id=?1 AND state='fallback')",
+        params![item_id, WITHDRAWN],
+    )?;
+    unsent(conn, item_id)
 }
 
 /// The state a CoS judgment (`outcome`) takes the item from: `fallback` when the judgment withdrew

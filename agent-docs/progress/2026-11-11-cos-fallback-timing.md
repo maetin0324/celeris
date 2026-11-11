@@ -43,12 +43,13 @@ ADR: [2026-11-11-cos-fallback-timing](../adr/2026-11-11-cos-fallback-timing.md)
     `cos_fallback_timing_pickable_clock_starts_at_the_end_of_the_last_run`
   - (d) `task-core` の `cos_triage_judgment_before_the_send_withdraws_the_fallback`
   - (e) `root_done_summary_waits_for_the_safety_net_when_cos_cannot_start`・`root_done_summary_waits_for_its_live_run_up_to_the_safety_net`
-- `bash scripts/dev/test-affected.sh` → exit 0（attempt 2、load average 48、約 27 分）。web の vitest（Test Files 103 passed・6 passed）、repo-health（all checks passed）も合格。
+- `bash scripts/dev/test-affected.sh` → exit 0（attempt 3、提出時の HEAD、load average 64〜80、1578 秒）。nextest 8227 passed・23 skipped（849 秒）、web の vitest 103 files・710 tests と 6 files・133 tests、test-ts-verify 20 passed、ts-verify --grade 合格、repo-health verdict=pass（fail_grade=0）、script bundle SKIP 0 件。attempt 2（load average 48）も exit 0 で約 27 分。
 - `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0。
 - `cargo nextest run -p celeris --test script_generation_e2e` → 3 回続けて exit 0。
 - `bash scripts/dev/check-health.sh` → exit 0（verdict=pass）。
 
 ## 未解決
+- review の決定的 check（上限 600 秒、再試行 1200 秒）は、この task の test-affected（task-core を変えるので 14 crate・nextest 8227 件・web・control-ts・ts-verify）に足りない。attempt 2 の review は 1200 秒の時間切れで落ちた。load average 48〜80 の host では 26〜27 分かかる。D2 の取り下げは task-core の store の transaction の中に要るので、対象を縮める変更はしていない。負荷の低い時の再検査か、check の上限の延長が要る（人の判断）。
 - `git_workspace::review_records_each_repositories_own_definition_and_worktree_results` は負荷で落ちる（tick 数の上限待ち）。
   G4（01M6TYVJSXBZMSBC0YGAT2TTX0）の branch に出来事待ちへの直しがあり、main に入れば解消する見込み（未確認）。
 - 本番の「thread も枠も空いているのに 120 秒以上拾われない」8 件の原因は決めきれていない。推測（未確認）: 他の process の run が

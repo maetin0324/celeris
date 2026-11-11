@@ -5,7 +5,7 @@
     python3 agent-docs/progress/2026-11-11-health-v2-r4/change-map-measure.py --out <path>
 
 読むのは crates/task-dispatch/src/dispatcher.rs と crates/task-dispatch/src/dispatcher/ の下の *.rs
-（作業ツリーの内容）と `git log` だけ。build・試験は走らせない。標準 library だけを使う。
+（作業ツリーの内容）、同じ dir の owners.json と `git log`。build・試験は走らせない。標準 library だけを使う。
 同じ HEAD（作業ツリーが HEAD と同じ）なら同じ bytes を書く。判定の規則と限界は出力の `method` に書く。
 """
 
@@ -560,6 +560,57 @@ def pair_list(pairs, keys, limit=None, min_commits=1):
     return rows[:limit] if limit else rows
 
 
+OWNERS = {
+    "execution-coordination", "run-supervisor", "routing", "project-orchestration",
+    "host-maintenance", "cluster-runtime", "composition-root", "test-hooks",
+}
+
+
+def assign_owners(fields, rules):
+    """明示規則だけで候補を決める。競合は候補の選択で消さない。"""
+    modules, overrides = rules["modules"], rules["fields"]
+    for key, rule in list(modules.items()) + list(overrides.items()):
+        if rule.get("owner") not in OWNERS or not rule.get("reason", "").strip():
+            raise ValueError("invalid owner rule: " + key)
+    unknown_fields = set(overrides) - {f["name"] for f in fields}
+    if unknown_fields:
+        raise ValueError("stale field rules: " + ", ".join(sorted(unknown_fields)))
+    for f in fields:
+        touched = sorted(set(f["readers"]) | set(f["writers"]))
+        missing = set(touched) - set(modules)
+        if missing:
+            raise ValueError("unmapped modules for " + f["name"] + ": " + ", ".join(sorted(missing)))
+        writer_owners = {modules[p]["owner"] for p in f["writers"]}
+        if f["cfg_test"]:
+            owner, reason = "test-hooks", "宣言に #[cfg(test)] があり、製品の field ではない。"
+        elif f["name"] in overrides:
+            rule = overrides[f["name"]]
+            owner, reason = rule["owner"], rule["reason"]
+        else:
+            candidates = writer_owners or {modules[p]["owner"] for p in f["readers"]}
+            if len(candidates) != 1:
+                raise ValueError("unresolved owner for " + f["name"] + ": " + ", ".join(sorted(candidates)))
+            owner = next(iter(candidates))
+            reason = "書き手" if writer_owners else "書き手未検出のため読み手"
+            reason += "の module 規則が単一 owner を示す。"
+        access = []
+        for p in touched:
+            mode = "/".join(k for k, paths in (("read", f["readers"]), ("write", f["writers"])) if p in paths)
+            access.append(p + " (" + mode + ", " + modules[p]["owner"] + ": " + modules[p]["reason"] + ")")
+        reason += " 参照 module: " + ("; ".join(access) or "製品の参照なし") + "。"
+        pairs = f["co_change"]
+        if pairs:
+            reason += " co_change（出力された上位組）: " + "; ".join(
+                p["a"] + " + " + p["b"] + " = " + str(p["commits"]) + "回" for p in pairs
+            ) + "。共変更は file 単位の相関であり所有の証明ではない。"
+        else:
+            reason += " co_change は該当組0件（未観測であり独立性の証明ではない）。"
+        conflict = len(writer_owners) > 1
+        if conflict:
+            reason += " 書き手 owner の競合: " + "; ".join(p + " → " + modules[p]["owner"] for p in f["writers"]) + "。"
+        f.update(owner=owner, owner_reason=reason, owner_conflict=conflict)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--out", required=True)
@@ -609,6 +660,14 @@ def main():
             }
         )
     out_fields.sort(key=lambda f: f["name"])
+
+    rules_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "owners.json")
+    with open(rules_path, encoding="utf-8") as f:
+        owner_rules = json.load(f)
+    try:
+        assign_owners(out_fields, owner_rules)
+    except ValueError as error:
+        sys.exit(str(error))
 
     doc = {
         "fields": out_fields,
@@ -680,7 +739,8 @@ def main():
                 "共変更は file 単位。1 commit の中で field に関係の無い変更をした file も組に数える。",
                 "co_change の --since は committer date で、rebase した commit は rebase の日時で数える。",
             ],
-            "not_in_this_unit": ["owner", "equivalence"],
+            "owner_rules": owner_rules,
+            "not_in_this_unit": ["equivalence"],
         },
     }
     out_dir = os.path.dirname(os.path.abspath(args.out))

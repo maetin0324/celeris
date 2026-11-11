@@ -2749,6 +2749,9 @@
     "crates/task-dispatch/src/dispatcher/cron_tick.rs:30"
    ],
    "name": "accepting_new_work",
+   "owner": "execution-coordination",
+   "owner_conflict": false,
+   "owner_reason": "set_accepting_new_work は daemon/tick_loop.rs:133,141 でも更新する実行受付状態。setter という名前だけで composition-root としない。 参照 module: crates/task-dispatch/src/dispatcher.rs (read/write, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/cos_chat/control.rs (read, run-supervisor: CoS run の停止と割り込みを監督する。); crates/task-dispatch/src/dispatcher/cos_chat/launch.rs (read, run-supervisor: CoS run の claim・起動・終了を監督する。); crates/task-dispatch/src/dispatcher/cos_chat/routes.rs (read, routing: CoS の経路を選ぶ。); crates/task-dispatch/src/dispatcher/cos_chat/slot_wait.rs (read, run-supervisor: CoS run の実行枠待ちを追跡する。); crates/task-dispatch/src/dispatcher/cron_tick.rs (read, host-maintenance: 定期的な保守 executor を呼ぶ。); crates/task-dispatch/src/dispatcher/eval_trials.rs (read, routing: routing 評価試行の run を管理する。); crates/task-dispatch/src/dispatcher/leases.rs (read, run-supervisor: run の停止・lease 回収・終了照合を担う。); crates/task-dispatch/src/dispatcher/ownerless_runs.rs (read, run-supervisor: owner を失った run と review を回収する。); crates/task-dispatch/src/dispatcher/review_spawn.rs (read, execution-coordination: review の同期・開始・待ちを調停する。); crates/task-dispatch/src/dispatcher/work_units.rs (read, execution-coordination: WU の依存と check の開始を調停する。); crates/task-dispatch/src/dispatcher/worker_finish.rs (read, run-supervisor: worker の結果を閉じ継続を処理する。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/worker_finish.rs = 22回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/work_units.rs = 19回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/review_spawn.rs = 17回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/leases.rs = 12回; crates/task-dispatch/src/dispatcher/cos_chat/control.rs + crates/task-dispatch/src/dispatcher/cos_chat/launch.rs = 9回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs",
     "crates/task-dispatch/src/dispatcher/cos_chat/control.rs",
@@ -2778,6 +2781,9 @@
     "crates/task-dispatch/src/dispatcher.rs:2201"
    ],
    "name": "account_books",
+   "owner": "routing",
+   "owner_conflict": false,
+   "owner_reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。 参照 module: crates/task-dispatch/src/dispatcher.rs (read, execution-coordination: tick の段と完了通知を調停する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs"
    ],
@@ -2799,6 +2805,9 @@
     "crates/task-dispatch/src/dispatcher/route_select.rs:947"
    ],
    "name": "account_limits",
+   "owner": "routing",
+   "owner_conflict": false,
+   "owner_reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。 参照 module: crates/task-dispatch/src/dispatcher.rs (read/write, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/route_select.rs (read, routing: source と account を選ぶ。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/route_select.rs = 10回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs",
     "crates/task-dispatch/src/dispatcher/route_select.rs"
@@ -2837,6 +2846,9 @@
     "crates/task-dispatch/src/dispatcher/snapshot.rs:249"
    ],
    "name": "accounts_scan_cache",
+   "owner": "routing",
+   "owner_conflict": true,
+   "owner_reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。 参照 module: crates/task-dispatch/src/dispatcher.rs (write, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/route_select.rs (read/write, routing: source と account を選ぶ。); crates/task-dispatch/src/dispatcher/snapshot.rs (write, execution-coordination: 複数領域の観測値を集約する（状態の本来の所有は field 別指定）。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 16回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/route_select.rs = 10回; crates/task-dispatch/src/dispatcher/route_select.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 3回。共変更は file 単位の相関であり所有の証明ではない。 書き手 owner の競合: crates/task-dispatch/src/dispatcher.rs → execution-coordination; crates/task-dispatch/src/dispatcher/route_select.rs → routing; crates/task-dispatch/src/dispatcher/snapshot.rs → execution-coordination。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/route_select.rs"
    ],
@@ -2885,6 +2897,9 @@
     "crates/task-dispatch/src/dispatcher/snapshot.rs:175"
    ],
    "name": "awaiting_children",
+   "owner": "execution-coordination",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher.rs (read, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/child_tasks.rs (read/write, execution-coordination: 子 task の完了と親の待ちを調停する。); crates/task-dispatch/src/dispatcher/leases.rs (read, run-supervisor: run の停止・lease 回収・終了照合を担う。); crates/task-dispatch/src/dispatcher/review_verdict.rs (write, execution-coordination: review 判定を task/WU の後続処理へ写す。); crates/task-dispatch/src/dispatcher/snapshot.rs (read, execution-coordination: 複数領域の観測値を集約する（状態の本来の所有は field 別指定）。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 16回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/leases.rs = 12回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/review_verdict.rs = 7回; crates/task-dispatch/src/dispatcher/review_verdict.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 4回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/child_tasks.rs = 3回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs",
     "crates/task-dispatch/src/dispatcher/child_tasks.rs",
@@ -2937,6 +2952,9 @@
     "crates/task-dispatch/src/dispatcher/stale_priority.rs:157"
    ],
    "name": "awaiting_human",
+   "owner": "execution-coordination",
+   "owner_conflict": true,
+   "owner_reason": "review/WU/check/統合の完了待ちと後続処理を調停する状態。lease 回収も書くため run-supervisor との競合は残す。 参照 module: crates/task-dispatch/src/dispatcher.rs (read, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/leases.rs (write, run-supervisor: run の停止・lease 回収・終了照合を担う。); crates/task-dispatch/src/dispatcher/review_spawn.rs (write, execution-coordination: review の同期・開始・待ちを調停する。); crates/task-dispatch/src/dispatcher/snapshot.rs (read, execution-coordination: 複数領域の観測値を集約する（状態の本来の所有は field 別指定）。); crates/task-dispatch/src/dispatcher/stale_priority.rs (read, execution-coordination: review 同期の待ち順を決める。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/review_spawn.rs = 17回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 16回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/leases.rs = 12回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/stale_priority.rs = 2回; crates/task-dispatch/src/dispatcher/leases.rs + crates/task-dispatch/src/dispatcher/review_spawn.rs = 2回。共変更は file 単位の相関であり所有の証明ではない。 書き手 owner の競合: crates/task-dispatch/src/dispatcher/leases.rs → run-supervisor; crates/task-dispatch/src/dispatcher/review_spawn.rs → execution-coordination。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs",
     "crates/task-dispatch/src/dispatcher/snapshot.rs",
@@ -2956,6 +2974,9 @@
    "decl": "crates/task-dispatch/src/dispatcher.rs:1333",
    "evidence": [],
    "name": "before_integration_start",
+   "owner": "test-hooks",
+   "owner_conflict": false,
+   "owner_reason": "宣言に #[cfg(test)] があり、製品の field ではない。 参照 module: 製品の参照なし。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [],
    "test_access": [
     "crates/task-dispatch/src/dispatcher/phase_integration.rs"
@@ -2970,6 +2991,9 @@
     "crates/task-dispatch/src/dispatcher/browser_prereq.rs:34"
    ],
    "name": "browser_ledger",
+   "owner": "execution-coordination",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/browser_prereq.rs (read/write, execution-coordination: browser 実行前提を検査し再開する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/browser_prereq.rs"
    ],
@@ -2986,6 +3010,9 @@
     "crates/task-dispatch/src/dispatcher/browser_prereq.rs:35"
    ],
    "name": "browser_prereq_rescan",
+   "owner": "execution-coordination",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/browser_prereq.rs (write, execution-coordination: browser 実行前提を検査し再開する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [],
    "test_access": [],
    "writers": [
@@ -3030,6 +3057,9 @@
     "crates/task-dispatch/src/dispatcher/worker_finish.rs:1893"
    ],
    "name": "checking",
+   "owner": "execution-coordination",
+   "owner_conflict": true,
+   "owner_reason": "review/WU/check/統合の完了待ちと後続処理を調停する状態。lease 回収も書くため run-supervisor との競合は残す。 参照 module: crates/task-dispatch/src/dispatcher.rs (read/write, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/leases.rs (read/write, run-supervisor: run の停止・lease 回収・終了照合を担う。); crates/task-dispatch/src/dispatcher/ownerless_runs.rs (read, run-supervisor: owner を失った run と review を回収する。); crates/task-dispatch/src/dispatcher/work_units.rs (read/write, execution-coordination: WU の依存と check の開始を調停する。); crates/task-dispatch/src/dispatcher/worker_finish.rs (read, run-supervisor: worker の結果を閉じ継続を処理する。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/worker_finish.rs = 22回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/work_units.rs = 19回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/leases.rs = 12回; crates/task-dispatch/src/dispatcher/work_units.rs + crates/task-dispatch/src/dispatcher/worker_finish.rs = 9回; crates/task-dispatch/src/dispatcher/leases.rs + crates/task-dispatch/src/dispatcher/ownerless_runs.rs = 6回。共変更は file 単位の相関であり所有の証明ではない。 書き手 owner の競合: crates/task-dispatch/src/dispatcher.rs → execution-coordination; crates/task-dispatch/src/dispatcher/leases.rs → run-supervisor; crates/task-dispatch/src/dispatcher/work_units.rs → execution-coordination。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs",
     "crates/task-dispatch/src/dispatcher/leases.rs",
@@ -3056,6 +3086,9 @@
     "crates/task-dispatch/src/dispatcher/lane_assist.rs:219"
    ],
    "name": "classification_board",
+   "owner": "routing",
+   "owner_conflict": false,
+   "owner_reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。 参照 module: crates/task-dispatch/src/dispatcher/lane_assist.rs (read, routing: lane の分類待ちと選択を担う。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/lane_assist.rs"
    ],
@@ -3070,6 +3103,9 @@
     "crates/task-dispatch/src/dispatcher/lane_assist.rs:227"
    ],
    "name": "classification_deferred_since",
+   "owner": "routing",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/lane_assist.rs (write, routing: lane の分類待ちと選択を担う。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [],
    "test_access": [],
    "writers": [
@@ -3084,6 +3120,9 @@
     "crates/task-dispatch/src/dispatcher/lane_assist.rs:225"
    ],
    "name": "classification_wait",
+   "owner": "routing",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/lane_assist.rs (read/write, routing: lane の分類待ちと選択を担う。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/lane_assist.rs"
    ],
@@ -3100,6 +3139,9 @@
     "crates/task-dispatch/src/dispatcher/cluster.rs:527"
    ],
    "name": "cluster_command_probe",
+   "owner": "composition-root",
+   "owner_conflict": false,
+   "owner_reason": "constructor と set_* だけで外部操作 port を注入。daemon/bootstrap.rs と clusters.rs の呼び元を確認し、cluster の走行処理は port を呼ぶ。 参照 module: crates/task-dispatch/src/dispatcher/cluster.rs (read/write, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/cluster.rs"
    ],
@@ -3123,6 +3165,9 @@
     "crates/task-dispatch/src/dispatcher/snapshot.rs:92"
    ],
    "name": "cluster_conn",
+   "owner": "cluster-runtime",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/cluster.rs (read/write, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。); crates/task-dispatch/src/dispatcher/snapshot.rs (read, execution-coordination: 複数領域の観測値を集約する（状態の本来の所有は field 別指定）。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher/cluster.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 1回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/cluster.rs",
     "crates/task-dispatch/src/dispatcher/snapshot.rs"
@@ -3168,6 +3213,9 @@
     "crates/task-dispatch/src/dispatcher/snapshot.rs:78"
    ],
    "name": "cluster_connected",
+   "owner": "cluster-runtime",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/cluster.rs (read/write, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。); crates/task-dispatch/src/dispatcher/cluster_job_wait.rs (read, cluster-runtime: durable job 待ちを poll して再開する。); crates/task-dispatch/src/dispatcher/dispatch_run.rs (read, execution-coordination: run 開始の gate と資源予約を調停する（routing も含む混在 module）。); crates/task-dispatch/src/dispatcher/run_context.rs (read, execution-coordination: 実行要求の文脈を組み立てる。); crates/task-dispatch/src/dispatcher/snapshot.rs (read, execution-coordination: 複数領域の観測値を集約する（状態の本来の所有は field 別指定）。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher/dispatch_run.rs + crates/task-dispatch/src/dispatcher/run_context.rs = 13回; crates/task-dispatch/src/dispatcher/dispatch_run.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 5回; crates/task-dispatch/src/dispatcher/cluster.rs + crates/task-dispatch/src/dispatcher/dispatch_run.rs = 2回; crates/task-dispatch/src/dispatcher/cluster.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 1回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/cluster.rs",
     "crates/task-dispatch/src/dispatcher/cluster_job_wait.rs",
@@ -3190,6 +3238,9 @@
     "crates/task-dispatch/src/dispatcher/cluster.rs:462"
    ],
    "name": "cluster_connector",
+   "owner": "composition-root",
+   "owner_conflict": false,
+   "owner_reason": "constructor と set_* だけで外部操作 port を注入。daemon/bootstrap.rs と clusters.rs の呼び元を確認し、cluster の走行処理は port を呼ぶ。 参照 module: crates/task-dispatch/src/dispatcher/cluster.rs (read/write, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/cluster.rs"
    ],
@@ -3224,6 +3275,9 @@
     "crates/task-dispatch/src/dispatcher/snapshot.rs:83"
    ],
    "name": "cluster_cooldown",
+   "owner": "cluster-runtime",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/cluster.rs (write, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。); crates/task-dispatch/src/dispatcher/dispatch_run.rs (read, execution-coordination: run 開始の gate と資源予約を調停する（routing も含む混在 module）。); crates/task-dispatch/src/dispatcher/snapshot.rs (read, execution-coordination: 複数領域の観測値を集約する（状態の本来の所有は field 別指定）。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher/dispatch_run.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 5回; crates/task-dispatch/src/dispatcher/cluster.rs + crates/task-dispatch/src/dispatcher/dispatch_run.rs = 2回; crates/task-dispatch/src/dispatcher/cluster.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 1回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/dispatch_run.rs",
     "crates/task-dispatch/src/dispatcher/snapshot.rs"
@@ -3243,6 +3297,9 @@
     "crates/task-dispatch/src/dispatcher/cluster.rs:612"
    ],
    "name": "cluster_disconnect_info",
+   "owner": "cluster-runtime",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/cluster.rs (read/write, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/cluster.rs"
    ],
@@ -3261,6 +3318,9 @@
     "crates/task-dispatch/src/dispatcher/cluster_job_wait.rs:144"
    ],
    "name": "cluster_job_poller",
+   "owner": "composition-root",
+   "owner_conflict": false,
+   "owner_reason": "constructor と set_* だけで外部操作 port を注入。daemon/bootstrap.rs と clusters.rs の呼び元を確認し、cluster の走行処理は port を呼ぶ。 参照 module: crates/task-dispatch/src/dispatcher/cluster_job_wait.rs (read/write, cluster-runtime: durable job 待ちを poll して再開する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/cluster_job_wait.rs"
    ],
@@ -3277,6 +3337,9 @@
     "crates/task-dispatch/src/dispatcher/cluster_job_wait.rs:234"
    ],
    "name": "cluster_job_polls",
+   "owner": "cluster-runtime",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/cluster_job_wait.rs (read/write, cluster-runtime: durable job 待ちを poll して再開する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/cluster_job_wait.rs"
    ],
@@ -3295,6 +3358,9 @@
     "crates/task-dispatch/src/dispatcher/cluster.rs:500"
    ],
    "name": "cluster_liveness_probe",
+   "owner": "test-hooks",
+   "owner_conflict": false,
+   "owner_reason": "constructor に実装の既定値があり、set_* は試験の差し替え用。daemon の set_* 呼び元検索では該当せず、宣言・setter の試験用注記を根拠とする（cfg(test) field とは別）。 参照 module: crates/task-dispatch/src/dispatcher/cluster.rs (read/write, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/cluster.rs"
    ],
@@ -3318,6 +3384,9 @@
     "crates/task-dispatch/src/dispatcher/snapshot.rs:90"
    ],
    "name": "cluster_login_needed",
+   "owner": "cluster-runtime",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/cluster.rs (read/write, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。); crates/task-dispatch/src/dispatcher/snapshot.rs (read, execution-coordination: 複数領域の観測値を集約する（状態の本来の所有は field 別指定）。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher/cluster.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 1回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/cluster.rs",
     "crates/task-dispatch/src/dispatcher/snapshot.rs"
@@ -3335,6 +3404,9 @@
     "crates/task-dispatch/src/dispatcher/cluster.rs:532"
    ],
    "name": "cluster_master_watcher",
+   "owner": "composition-root",
+   "owner_conflict": false,
+   "owner_reason": "constructor と set_* だけで外部操作 port を注入。daemon/bootstrap.rs と clusters.rs の呼び元を確認し、cluster の走行処理は port を呼ぶ。 参照 module: crates/task-dispatch/src/dispatcher/cluster.rs (read/write, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/cluster.rs"
    ],
@@ -3351,6 +3423,9 @@
     "crates/task-dispatch/src/dispatcher/cluster.rs:506"
    ],
    "name": "cluster_ssh_command_override",
+   "owner": "test-hooks",
+   "owner_conflict": false,
+   "owner_reason": "constructor に実装の既定値があり、set_* は試験の差し替え用。daemon の set_* 呼び元検索では該当せず、宣言・setter の試験用注記を根拠とする（cfg(test) field とは別）。 参照 module: crates/task-dispatch/src/dispatcher/cluster.rs (read/write, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/cluster.rs"
    ],
@@ -3374,6 +3449,9 @@
     "crates/task-dispatch/src/dispatcher/dispatch_run.rs:323"
    ],
    "name": "cluster_waiting",
+   "owner": "execution-coordination",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher.rs (read/write, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/dispatch_run.rs (write, execution-coordination: run 開始の gate と資源予約を調停する（routing も含む混在 module）。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/dispatch_run.rs = 56回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs"
    ],
@@ -3424,6 +3502,9 @@
     "crates/task-dispatch/src/dispatcher/cluster_job_wait.rs:174"
    ],
    "name": "config",
+   "owner": "composition-root",
+   "owner_conflict": false,
+   "owner_reason": "daemon/bootstrap.rs:587 の DispatchConfig と admin の apply_dispatch_config による設定再注入。set_config_max_concurrency も設定入力であり、実効値 max_concurrency は別 field。 参照 module: crates/task-dispatch/src/dispatcher.rs (read/write, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/auto_leaf.rs (read, execution-coordination: leaf の実行 gate を評価する。); crates/task-dispatch/src/dispatcher/behind_target.rs (read, execution-coordination: 統合先との遅れを観測する。); crates/task-dispatch/src/dispatcher/child_tasks.rs (read, execution-coordination: 子 task の完了と親の待ちを調停する。); crates/task-dispatch/src/dispatcher/cluster.rs (read, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。); crates/task-dispatch/src/dispatcher/cluster_job_wait.rs (read, cluster-runtime: durable job 待ちを poll して再開する。); crates/task-dispatch/src/dispatcher/continuation_session.rs (read, run-supervisor: 継続 run の session を解決する。); crates/task-dispatch/src/dispatcher/cos_chat/control.rs (read, run-supervisor: CoS run の停止と割り込みを監督する。); crates/task-dispatch/src/dispatcher/cos_chat/launch.rs (read, run-supervisor: CoS run の claim・起動・終了を監督する。); crates/task-dispatch/src/dispatcher/cos_chat/triage.rs (read, project-orchestration: CoS に受信箱の一次対応を渡す。); crates/task-dispatch/src/dispatcher/cron_tick.rs (read, host-maintenance: 定期的な保守 executor を呼ぶ。); crates/task-dispatch/src/dispatcher/dispatch_run.rs (read, execution-coordination: run 開始の gate と資源予約を調停する（routing も含む混在 module）。); crates/task-dispatch/src/dispatcher/eval_trials.rs (read, routing: routing 評価試行の run を管理する。); crates/task-dispatch/src/dispatcher/housekeeping.rs (read, host-maintenance: scratch と worktree の後片付け・disk guard を担う。); crates/task-dispatch/src/dispatcher/leases.rs (read, run-supervisor: run の停止・lease 回収・終了照合を担う。); crates/task-dispatch/src/dispatcher/maintenance.rs (read, host-maintenance: target 掃除と disk 監視を実行する。); crates/task-dispatch/src/dispatcher/ownerless_runs.rs (read, run-supervisor: owner を失った run と review を回収する。); crates/task-dispatch/src/dispatcher/phase_integration.rs (read, execution-coordination: WU 成果の工程統合を調停する。); crates/task-dispatch/src/dispatcher/planner_flow.rs (read, execution-coordination: plan 採用と gate を調停する。); crates/task-dispatch/src/dispatcher/project_wake.rs (read, project-orchestration: 案件 controller の wake・予算・再評価を担う。); crates/task-dispatch/src/dispatcher/review_spawn.rs (read, execution-coordination: review の同期・開始・待ちを調停する。); crates/task-dispatch/src/dispatcher/review_verdict.rs (read, execution-coordination: review 判定を task/WU の後続処理へ写す。); crates/task-dispatch/src/dispatcher/route_failure.rs (read, routing: source の失敗と cooldown を記録する。); crates/task-dispatch/src/dispatcher/route_launch.rs (read, routing: 選んだ route に adapter を組み立てる。); crates/task-dispatch/src/dispatcher/route_select.rs (read, routing: source と account を選ぶ。); crates/task-dispatch/src/dispatcher/run_context.rs (read, execution-coordination: 実行要求の文脈を組み立てる。); crates/task-dispatch/src/dispatcher/snapshot.rs (read, execution-coordination: 複数領域の観測値を集約する（状態の本来の所有は field 別指定）。); crates/task-dispatch/src/dispatcher/tree_units.rs (read, execution-coordination: 木の gate と生存確認を調停する。); crates/task-dispatch/src/dispatcher/work_units.rs (read, execution-coordination: WU の依存と check の開始を調停する。); crates/task-dispatch/src/dispatcher/worker_finish.rs (read, run-supervisor: worker の結果を閉じ継続を処理する。); crates/task-dispatch/src/dispatcher/workspaces.rs (read, execution-coordination: 実行用 worktree の準備を調停する。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/dispatch_run.rs = 56回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/worker_finish.rs = 22回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/work_units.rs = 19回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/review_spawn.rs = 17回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/run_context.rs = 17回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs",
     "crates/task-dispatch/src/dispatcher/auto_leaf.rs",
@@ -3535,6 +3616,9 @@
     "crates/task-dispatch/src/dispatcher/snapshot.rs:88"
    ],
    "name": "connect_pending_clusters",
+   "owner": "cluster-runtime",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/cluster.rs (write, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。); crates/task-dispatch/src/dispatcher/snapshot.rs (read, execution-coordination: 複数領域の観測値を集約する（状態の本来の所有は field 別指定）。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher/cluster.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 1回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/snapshot.rs"
    ],
@@ -3564,6 +3648,9 @@
     "crates/task-dispatch/src/dispatcher/workspaces.rs:415"
    ],
    "name": "container_probe",
+   "owner": "cluster-runtime",
+   "owner_conflict": false,
+   "owner_reason": "実行環境の観測状態。tunnel_probe_state は probe thread の Mutex 内更新、container_probe は detect_container_runtime の検出結果であり、設定注入だけとはしない。 参照 module: crates/task-dispatch/src/dispatcher.rs (read/write, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/snapshot.rs (read, execution-coordination: 複数領域の観測値を集約する（状態の本来の所有は field 別指定）。); crates/task-dispatch/src/dispatcher/workspaces.rs (read, execution-coordination: 実行用 worktree の準備を調停する。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 16回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/workspaces.rs = 6回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs",
     "crates/task-dispatch/src/dispatcher/snapshot.rs",
@@ -3613,6 +3700,9 @@
     "crates/task-dispatch/src/dispatcher/project_wake.rs:80"
    ],
    "name": "cos_chat_launch",
+   "owner": "project-orchestration",
+   "owner_conflict": true,
+   "owner_reason": "CoS run 起動 port だけでなく triage・controller・retention の可変状態も格納する。案件の運営を候補とし、launch の run-supervisor との競合を残す。 参照 module: crates/task-dispatch/src/dispatcher.rs (read, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/child_tasks.rs (read, execution-coordination: 子 task の完了と親の待ちを調停する。); crates/task-dispatch/src/dispatcher/cos_chat/launch.rs (write, run-supervisor: CoS run の claim・起動・終了を監督する。); crates/task-dispatch/src/dispatcher/cos_chat/triage.rs (write, project-orchestration: CoS に受信箱の一次対応を渡す。); crates/task-dispatch/src/dispatcher/cron_tick.rs (read, host-maintenance: 定期的な保守 executor を呼ぶ。); crates/task-dispatch/src/dispatcher/input_attachments.rs (read, execution-coordination: run 開始に必要な添付を組み立てる。); crates/task-dispatch/src/dispatcher/project_retention.rs (write, project-orchestration: 案件 controller の記録を整理する。); crates/task-dispatch/src/dispatcher/project_wake.rs (read/write, project-orchestration: 案件 controller の wake・予算・再評価を担う。); crates/task-dispatch/src/dispatcher/route_select.rs (read, routing: source と account を選ぶ。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/route_select.rs = 10回; crates/task-dispatch/src/dispatcher/cos_chat/launch.rs + crates/task-dispatch/src/dispatcher/cos_chat/triage.rs = 9回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/cos_chat/launch.rs = 6回; crates/task-dispatch/src/dispatcher/cron_tick.rs + crates/task-dispatch/src/dispatcher/project_wake.rs = 4回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/child_tasks.rs = 3回。共変更は file 単位の相関であり所有の証明ではない。 書き手 owner の競合: crates/task-dispatch/src/dispatcher/cos_chat/launch.rs → run-supervisor; crates/task-dispatch/src/dispatcher/cos_chat/triage.rs → project-orchestration; crates/task-dispatch/src/dispatcher/project_retention.rs → project-orchestration; crates/task-dispatch/src/dispatcher/project_wake.rs → project-orchestration。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs",
     "crates/task-dispatch/src/dispatcher/child_tasks.rs",
@@ -3643,6 +3733,9 @@
     "crates/task-dispatch/src/dispatcher.rs:1903"
    ],
    "name": "credential_busy",
+   "owner": "execution-coordination",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher.rs (read/write, execution-coordination: tick の段と完了通知を調停する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs"
    ],
@@ -3666,6 +3759,9 @@
     "crates/task-dispatch/src/dispatcher/lane_assist.rs:371"
    ],
    "name": "credential_gates",
+   "owner": "composition-root",
+   "owner_conflict": false,
+   "owner_reason": "constructor と set_* だけで設定を注入。daemon/bootstrap.rs と admin.rs の reload が呼び、走行処理は設定を読む。 参照 module: crates/task-dispatch/src/dispatcher/credential_gate.rs (read/write, execution-coordination: credential 待ちへの遷移と復帰を調停する。); crates/task-dispatch/src/dispatcher/lane_assist.rs (read, routing: lane の分類待ちと選択を担う。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher/credential_gate.rs + crates/task-dispatch/src/dispatcher/lane_assist.rs = 1回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/credential_gate.rs",
     "crates/task-dispatch/src/dispatcher/lane_assist.rs"
@@ -3683,6 +3779,9 @@
     "crates/task-dispatch/src/dispatcher/credential_gate.rs:72"
    ],
    "name": "credential_held",
+   "owner": "execution-coordination",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/credential_gate.rs (write, execution-coordination: credential 待ちへの遷移と復帰を調停する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [],
    "test_access": [],
    "writers": [
@@ -3697,6 +3796,9 @@
     "crates/task-dispatch/src/dispatcher.rs:1886"
    ],
    "name": "credential_resumer",
+   "owner": "composition-root",
+   "owner_conflict": false,
+   "owner_reason": "constructor と set_* による port/設定の注入。daemon の bootstrap.rs・run.rs・services.rs・api.rs が呼び、走行処理は field 自体を置換しない（呼び元一覧は cm-owners.md）。 参照 module: crates/task-dispatch/src/dispatcher.rs (read/write, execution-coordination: tick の段と完了通知を調停する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs"
    ],
@@ -3713,6 +3815,9 @@
     "crates/task-dispatch/src/dispatcher/housekeeping.rs:323"
    ],
    "name": "disk_low",
+   "owner": "host-maintenance",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/housekeeping.rs (read/write, host-maintenance: scratch と worktree の後片付け・disk guard を担う。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/housekeeping.rs"
    ],
@@ -3763,6 +3868,9 @@
     "crates/task-dispatch/src/dispatcher/review_spawn.rs:353"
    ],
    "name": "disk_ready",
+   "owner": "host-maintenance",
+   "owner_conflict": false,
+   "owner_reason": "disk/target/健全性の棚卸しを調停する実行時状態。facade の tick の更新や Arc 内部の変更を含むので設定 port としない。health_inventory は範囲外 health_review/inventory.rs の実装も参照する。 参照 module: crates/task-dispatch/src/dispatcher.rs (read/write, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/cos_chat/launch.rs (read, run-supervisor: CoS run の claim・起動・終了を監督する。); crates/task-dispatch/src/dispatcher/cos_chat/routes.rs (read, routing: CoS の経路を選ぶ。); crates/task-dispatch/src/dispatcher/cos_chat/slot_wait.rs (read, run-supervisor: CoS run の実行枠待ちを追跡する。); crates/task-dispatch/src/dispatcher/cron_tick.rs (read, host-maintenance: 定期的な保守 executor を呼ぶ。); crates/task-dispatch/src/dispatcher/review_spawn.rs (read, execution-coordination: review の同期・開始・待ちを調停する。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/review_spawn.rs = 17回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/cos_chat/launch.rs = 6回; crates/task-dispatch/src/dispatcher/cos_chat/launch.rs + crates/task-dispatch/src/dispatcher/cos_chat/routes.rs = 6回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/cron_tick.rs = 3回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/cos_chat/routes.rs = 2回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs",
     "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs",
@@ -3791,6 +3899,9 @@
     "crates/task-dispatch/src/dispatcher/maintenance.rs:78"
    ],
    "name": "disk_watch",
+   "owner": "host-maintenance",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/dispatch_run.rs (read, execution-coordination: run 開始の gate と資源予約を調停する（routing も含む混在 module）。); crates/task-dispatch/src/dispatcher/maintenance.rs (read/write, host-maintenance: target 掃除と disk 監視を実行する。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher/dispatch_run.rs + crates/task-dispatch/src/dispatcher/maintenance.rs = 2回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/dispatch_run.rs",
     "crates/task-dispatch/src/dispatcher/maintenance.rs"
@@ -3808,6 +3919,9 @@
     "crates/task-dispatch/src/dispatcher/dispatch_run.rs:1435"
    ],
    "name": "dispatch_routing",
+   "owner": "composition-root",
+   "owner_conflict": false,
+   "owner_reason": "Dispatcher::new の既定 DispatchRoutingSettings を dispatch_run.rs:1435 で読むだけの routing 設定。daemon の setter 呼び元は無く、constructor に閉じた設定である。 参照 module: crates/task-dispatch/src/dispatcher/dispatch_run.rs (read, execution-coordination: run 開始の gate と資源予約を調停する（routing も含む混在 module）。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/dispatch_run.rs"
    ],
@@ -3829,6 +3943,9 @@
     "crates/task-dispatch/src/dispatcher/snapshot.rs:171"
    ],
    "name": "dispatch_waits",
+   "owner": "execution-coordination",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher.rs (read/write, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/snapshot.rs (read, execution-coordination: 複数領域の観測値を集約する（状態の本来の所有は field 別指定）。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 16回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs",
     "crates/task-dispatch/src/dispatcher/snapshot.rs"
@@ -3861,6 +3978,9 @@
     "crates/task-dispatch/src/dispatcher/housekeeping.rs:10"
    ],
    "name": "eligible",
+   "owner": "composition-root",
+   "owner_conflict": false,
+   "owner_reason": "constructor と set_* による port/設定の注入。daemon の bootstrap.rs・run.rs・services.rs・api.rs が呼び、走行処理は field 自体を置換しない（呼び元一覧は cm-owners.md）。 参照 module: crates/task-dispatch/src/dispatcher.rs (read/write, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/cluster.rs (read, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。); crates/task-dispatch/src/dispatcher/housekeeping.rs (read, host-maintenance: scratch と worktree の後片付け・disk guard を担う。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/housekeeping.rs = 11回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/cluster.rs = 3回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs",
     "crates/task-dispatch/src/dispatcher/cluster.rs",
@@ -3897,6 +4017,9 @@
     "crates/task-dispatch/src/dispatcher/leases.rs:15"
    ],
    "name": "eval_runs",
+   "owner": "routing",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher.rs (read, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/eval_trials.rs (read/write, routing: routing 評価試行の run を管理する。); crates/task-dispatch/src/dispatcher/leases.rs (read, run-supervisor: run の停止・lease 回収・終了照合を担う。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/leases.rs = 12回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/eval_trials.rs = 5回; crates/task-dispatch/src/dispatcher/eval_trials.rs + crates/task-dispatch/src/dispatcher/leases.rs = 2回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs",
     "crates/task-dispatch/src/dispatcher/eval_trials.rs",
@@ -3917,6 +4040,9 @@
     "crates/task-dispatch/src/dispatcher/eval_trials.rs:1238"
    ],
    "name": "eval_version_probe",
+   "owner": "test-hooks",
+   "owner_conflict": false,
+   "owner_reason": "constructor に実装の既定値があり、set_* は試験の差し替え用。daemon の set_* 呼び元検索では該当せず、宣言・setter の試験用注記を根拠とする（cfg(test) field とは別）。 参照 module: crates/task-dispatch/src/dispatcher/eval_trials.rs (read/write, routing: routing 評価試行の run を管理する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/eval_trials.rs"
    ],
@@ -3934,6 +4060,9 @@
     "crates/task-dispatch/src/dispatcher/route_launch.rs:85"
    ],
    "name": "harness_adapters",
+   "owner": "composition-root",
+   "owner_conflict": false,
+   "owner_reason": "constructor と set_* だけで設定を注入。daemon/bootstrap.rs と admin.rs の reload が呼び、走行処理は設定を読む。 参照 module: crates/task-dispatch/src/dispatcher/dispatch_run.rs (read, execution-coordination: run 開始の gate と資源予約を調停する（routing も含む混在 module）。); crates/task-dispatch/src/dispatcher/route_launch.rs (read/write, routing: 選んだ route に adapter を組み立てる。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/dispatch_run.rs",
     "crates/task-dispatch/src/dispatcher/route_launch.rs"
@@ -3958,6 +4087,9 @@
     "crates/task-dispatch/src/dispatcher/cron_tick.rs:42"
    ],
    "name": "health_inventory",
+   "owner": "host-maintenance",
+   "owner_conflict": false,
+   "owner_reason": "disk/target/健全性の棚卸しを調停する実行時状態。facade の tick の更新や Arc 内部の変更を含むので設定 port としない。health_inventory は範囲外 health_review/inventory.rs の実装も参照する。 参照 module: crates/task-dispatch/src/dispatcher.rs (read, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/cron_tick.rs (read, host-maintenance: 定期的な保守 executor を呼ぶ。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/cron_tick.rs = 3回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs",
     "crates/task-dispatch/src/dispatcher/cron_tick.rs"
@@ -3991,6 +4123,9 @@
     "crates/task-dispatch/src/dispatcher/worker_finish.rs:1564"
    ],
    "name": "infra_backoff",
+   "owner": "run-supervisor",
+   "owner_conflict": true,
+   "owner_reason": "開始側と回収・終了側が共有する run の生存と再試行状態。lease と run 終了の整合を担う候補へ割り当てるが、異なる書き手 owner の競合は残す。 参照 module: crates/task-dispatch/src/dispatcher/dispatch_run.rs (read/write, execution-coordination: run 開始の gate と資源予約を調停する（routing も含む混在 module）。); crates/task-dispatch/src/dispatcher/leases.rs (write, run-supervisor: run の停止・lease 回収・終了照合を担う。); crates/task-dispatch/src/dispatcher/worker_finish.rs (write, run-supervisor: worker の結果を閉じ継続を処理する。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher/dispatch_run.rs + crates/task-dispatch/src/dispatcher/worker_finish.rs = 8回; crates/task-dispatch/src/dispatcher/leases.rs + crates/task-dispatch/src/dispatcher/worker_finish.rs = 3回; crates/task-dispatch/src/dispatcher/dispatch_run.rs + crates/task-dispatch/src/dispatcher/leases.rs = 2回。共変更は file 単位の相関であり所有の証明ではない。 書き手 owner の競合: crates/task-dispatch/src/dispatcher/dispatch_run.rs → execution-coordination; crates/task-dispatch/src/dispatcher/leases.rs → run-supervisor; crates/task-dispatch/src/dispatcher/worker_finish.rs → run-supervisor。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/dispatch_run.rs"
    ],
@@ -4012,6 +4147,9 @@
     "crates/task-dispatch/src/dispatcher.rs:2614"
    ],
    "name": "integrated_deps",
+   "owner": "execution-coordination",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher.rs (write, execution-coordination: tick の段と完了通知を調停する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [],
    "test_access": [
     "crates/task-dispatch/src/dispatcher/tests/cron_jobs.rs"
@@ -4057,6 +4195,9 @@
     "crates/task-dispatch/src/dispatcher/work_units.rs:1450"
    ],
    "name": "integrating",
+   "owner": "execution-coordination",
+   "owner_conflict": true,
+   "owner_reason": "review/WU/check/統合の完了待ちと後続処理を調停する状態。lease 回収も書くため run-supervisor との競合は残す。 参照 module: crates/task-dispatch/src/dispatcher.rs (read, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/leases.rs (read/write, run-supervisor: run の停止・lease 回収・終了照合を担う。); crates/task-dispatch/src/dispatcher/phase_integration.rs (read/write, execution-coordination: WU 成果の工程統合を調停する。); crates/task-dispatch/src/dispatcher/work_units.rs (read, execution-coordination: WU の依存と check の開始を調停する。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/work_units.rs = 19回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/leases.rs = 12回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/phase_integration.rs = 10回; crates/task-dispatch/src/dispatcher/phase_integration.rs + crates/task-dispatch/src/dispatcher/work_units.rs = 10回; crates/task-dispatch/src/dispatcher/leases.rs + crates/task-dispatch/src/dispatcher/phase_integration.rs = 2回。共変更は file 単位の相関であり所有の証明ではない。 書き手 owner の競合: crates/task-dispatch/src/dispatcher/leases.rs → run-supervisor; crates/task-dispatch/src/dispatcher/phase_integration.rs → execution-coordination。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs",
     "crates/task-dispatch/src/dispatcher/leases.rs",
@@ -4110,6 +4251,9 @@
     "crates/task-dispatch/src/dispatcher/work_units.rs:316"
    ],
    "name": "just_aborted",
+   "owner": "run-supervisor",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/dispatch_run.rs (read, execution-coordination: run 開始の gate と資源予約を調停する（routing も含む混在 module）。); crates/task-dispatch/src/dispatcher/leases.rs (read/write, run-supervisor: run の停止・lease 回収・終了照合を担う。); crates/task-dispatch/src/dispatcher/phase_integration.rs (read, execution-coordination: WU 成果の工程統合を調停する。); crates/task-dispatch/src/dispatcher/work_units.rs (read, execution-coordination: WU の依存と check の開始を調停する。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher/dispatch_run.rs + crates/task-dispatch/src/dispatcher/work_units.rs = 12回; crates/task-dispatch/src/dispatcher/phase_integration.rs + crates/task-dispatch/src/dispatcher/work_units.rs = 10回; crates/task-dispatch/src/dispatcher/dispatch_run.rs + crates/task-dispatch/src/dispatcher/phase_integration.rs = 3回; crates/task-dispatch/src/dispatcher/dispatch_run.rs + crates/task-dispatch/src/dispatcher/leases.rs = 2回; crates/task-dispatch/src/dispatcher/leases.rs + crates/task-dispatch/src/dispatcher/phase_integration.rs = 2回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/dispatch_run.rs",
     "crates/task-dispatch/src/dispatcher/leases.rs",
@@ -4129,6 +4273,9 @@
     "crates/task-dispatch/src/dispatcher.rs:1714"
    ],
    "name": "knowledge_probe",
+   "owner": "test-hooks",
+   "owner_conflict": false,
+   "owner_reason": "constructor に実装の既定値があり、set_* は試験の差し替え用。daemon の set_* 呼び元検索では該当せず、宣言・setter の試験用注記を根拠とする（cfg(test) field とは別）。 参照 module: crates/task-dispatch/src/dispatcher.rs (read/write, execution-coordination: tick の段と完了通知を調停する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs"
    ],
@@ -4145,6 +4292,9 @@
     "crates/task-dispatch/src/dispatcher.rs:1715"
    ],
    "name": "knowledge_probe_cache",
+   "owner": "routing",
+   "owner_conflict": false,
+   "owner_reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。 参照 module: crates/task-dispatch/src/dispatcher.rs (read/write, execution-coordination: tick の段と完了通知を調停する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs"
    ],
@@ -4161,6 +4311,9 @@
     "crates/task-dispatch/src/dispatcher/cluster.rs:791"
    ],
    "name": "last_cluster_command_probe",
+   "owner": "cluster-runtime",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/cluster.rs (read/write, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/cluster.rs"
    ],
@@ -4179,6 +4332,9 @@
     "crates/task-dispatch/src/dispatcher/cluster.rs:723"
    ],
    "name": "last_cluster_liveness",
+   "owner": "cluster-runtime",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/cluster.rs (read/write, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/cluster.rs"
    ],
@@ -4198,6 +4354,9 @@
     "crates/task-dispatch/src/dispatcher/cluster.rs:1070"
    ],
    "name": "last_cluster_tunnel_refresh",
+   "owner": "cluster-runtime",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/cluster.rs (read/write, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/cluster.rs"
    ],
@@ -4223,6 +4382,9 @@
     "crates/task-dispatch/src/dispatcher/cluster.rs:862"
    ],
    "name": "last_tick_gap_ms",
+   "owner": "execution-coordination",
+   "owner_conflict": false,
+   "owner_reason": "constructor が作る完了通知 channel または tick の観測値。送受信・tick 更新は実行調停の状態であり、外から注入する設定 port としない。 参照 module: crates/task-dispatch/src/dispatcher.rs (write, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/cluster.rs (read, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/cluster.rs = 3回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/cluster.rs"
    ],
@@ -4239,6 +4401,9 @@
     "crates/task-dispatch/src/dispatcher.rs:2295"
    ],
    "name": "last_tick_started",
+   "owner": "execution-coordination",
+   "owner_conflict": false,
+   "owner_reason": "constructor が作る完了通知 channel または tick の観測値。送受信・tick 更新は実行調停の状態であり、外から注入する設定 port としない。 参照 module: crates/task-dispatch/src/dispatcher.rs (write, execution-coordination: tick の段と完了通知を調停する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [],
    "test_access": [],
    "writers": [
@@ -4253,6 +4418,9 @@
     "crates/task-dispatch/src/dispatcher/tree_units.rs:83"
    ],
    "name": "liveness_checked_at",
+   "owner": "execution-coordination",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/tree_units.rs (read/write, execution-coordination: 木の gate と生存確認を調停する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/tree_units.rs"
    ],
@@ -4300,6 +4468,9 @@
     "crates/task-dispatch/src/dispatcher/route_select.rs:747"
    ],
    "name": "llm_route_registry",
+   "owner": "composition-root",
+   "owner_conflict": false,
+   "owner_reason": "constructor と set_* だけで設定を注入。daemon/bootstrap.rs と admin.rs の reload が呼び、走行処理は設定を読む。 参照 module: crates/task-dispatch/src/dispatcher.rs (read, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/dispatch_run.rs (read, execution-coordination: run 開始の gate と資源予約を調停する（routing も含む混在 module）。); crates/task-dispatch/src/dispatcher/eval_trials.rs (read, routing: routing 評価試行の run を管理する。); crates/task-dispatch/src/dispatcher/review_spawn.rs (read, execution-coordination: review の同期・開始・待ちを調停する。); crates/task-dispatch/src/dispatcher/route_launch.rs (read, routing: 選んだ route に adapter を組み立てる。); crates/task-dispatch/src/dispatcher/route_select.rs (read/write, routing: source と account を選ぶ。); crates/task-dispatch/src/dispatcher/script_canary.rs (read, host-maintenance: 制御 script の canary と rollback を管理する。); crates/task-dispatch/src/dispatcher/snapshot.rs (read, execution-coordination: 複数領域の観測値を集約する（状態の本来の所有は field 別指定）。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/dispatch_run.rs = 56回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/review_spawn.rs = 17回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 16回; crates/task-dispatch/src/dispatcher/dispatch_run.rs + crates/task-dispatch/src/dispatcher/review_spawn.rs = 16回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/route_select.rs = 10回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs",
     "crates/task-dispatch/src/dispatcher/dispatch_run.rs",
@@ -4330,6 +4501,9 @@
     "crates/task-dispatch/src/dispatcher/snapshot.rs:308"
    ],
    "name": "login_pending_accounts",
+   "owner": "routing",
+   "owner_conflict": false,
+   "owner_reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。 参照 module: crates/task-dispatch/src/dispatcher.rs (read/write, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/snapshot.rs (read, execution-coordination: 複数領域の観測値を集約する（状態の本来の所有は field 別指定）。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 16回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs",
     "crates/task-dispatch/src/dispatcher/snapshot.rs"
@@ -4347,6 +4521,9 @@
     "crates/task-dispatch/src/dispatcher/ownerless_runs.rs:31"
    ],
    "name": "lost_review_watch",
+   "owner": "run-supervisor",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/ownerless_runs.rs (read/write, run-supervisor: owner を失った run と review を回収する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/ownerless_runs.rs"
    ],
@@ -4393,6 +4570,9 @@
     "crates/task-dispatch/src/dispatcher/work_units.rs:1938"
    ],
    "name": "max_concurrency",
+   "owner": "execution-coordination",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher.rs (read/write, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/cos_chat/launch.rs (read, run-supervisor: CoS run の claim・起動・終了を監督する。); crates/task-dispatch/src/dispatcher/dispatch_run.rs (read, execution-coordination: run 開始の gate と資源予約を調停する（routing も含む混在 module）。); crates/task-dispatch/src/dispatcher/review_spawn.rs (read, execution-coordination: review の同期・開始・待ちを調停する。); crates/task-dispatch/src/dispatcher/work_units.rs (read, execution-coordination: WU の依存と check の開始を調停する。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/dispatch_run.rs = 56回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/work_units.rs = 19回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/review_spawn.rs = 17回; crates/task-dispatch/src/dispatcher/dispatch_run.rs + crates/task-dispatch/src/dispatcher/review_spawn.rs = 16回; crates/task-dispatch/src/dispatcher/dispatch_run.rs + crates/task-dispatch/src/dispatcher/work_units.rs = 12回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs",
     "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs",
@@ -4445,6 +4625,9 @@
     "crates/task-dispatch/src/dispatcher/snapshot.rs:53"
    ],
    "name": "now_unix_fn",
+   "owner": "test-hooks",
+   "owner_conflict": false,
+   "owner_reason": "constructor に実装の既定値があり、set_* は試験の差し替え用。daemon の set_* 呼び元検索では該当せず、宣言・setter の試験用注記を根拠とする（cfg(test) field とは別）。 参照 module: crates/task-dispatch/src/dispatcher.rs (read/write, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/quota_book.rs (read, routing: account の利用枠を見積もる。); crates/task-dispatch/src/dispatcher/route_failure.rs (read, routing: source の失敗と cooldown を記録する。); crates/task-dispatch/src/dispatcher/route_select.rs (read, routing: source と account を選ぶ。); crates/task-dispatch/src/dispatcher/snapshot.rs (read, execution-coordination: 複数領域の観測値を集約する（状態の本来の所有は field 別指定）。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 16回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/route_select.rs = 10回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/route_failure.rs = 4回; crates/task-dispatch/src/dispatcher/route_select.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 3回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/quota_book.rs = 2回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs",
     "crates/task-dispatch/src/dispatcher/quota_book.rs",
@@ -4496,6 +4679,9 @@
     "crates/task-dispatch/src/dispatcher/work_units.rs:1386"
    ],
    "name": "orphan_takeover",
+   "owner": "composition-root",
+   "owner_conflict": false,
+   "owner_reason": "daemon/run.rs:208 の set_orphan_takeover が instance_id・freshness・pid_alive port を注入する。leases.rs:742 の lease_holders_gone は読み取りだけなので、回収処理の owner と設定注入の owner を分ける。 参照 module: crates/task-dispatch/src/dispatcher.rs (write, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/cos_chat/control.rs (read, run-supervisor: CoS run の停止と割り込みを監督する。); crates/task-dispatch/src/dispatcher/eval_trials.rs (read, routing: routing 評価試行の run を管理する。); crates/task-dispatch/src/dispatcher/leases.rs (read, run-supervisor: run の停止・lease 回収・終了照合を担う。); crates/task-dispatch/src/dispatcher/ownerless_runs.rs (read, run-supervisor: owner を失った run と review を回収する。); crates/task-dispatch/src/dispatcher/work_units.rs (read, execution-coordination: WU の依存と check の開始を調停する。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/work_units.rs = 19回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/leases.rs = 12回; crates/task-dispatch/src/dispatcher/leases.rs + crates/task-dispatch/src/dispatcher/ownerless_runs.rs = 6回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/eval_trials.rs = 5回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/ownerless_runs.rs = 5回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/cos_chat/control.rs",
     "crates/task-dispatch/src/dispatcher/eval_trials.rs",
@@ -4516,6 +4702,9 @@
     "crates/task-dispatch/src/dispatcher/ownerless_runs.rs:108"
    ],
    "name": "ownerless_reconciled_at",
+   "owner": "run-supervisor",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/ownerless_runs.rs (read/write, run-supervisor: owner を失った run と review を回収する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/ownerless_runs.rs"
    ],
@@ -4564,6 +4753,9 @@
     "crates/task-dispatch/src/dispatcher/worker_finish.rs:1621"
    ],
    "name": "pending_subjects",
+   "owner": "execution-coordination",
+   "owner_conflict": true,
+   "owner_reason": "review/WU/check/統合の完了待ちと後続処理を調停する状態。lease 回収も書くため run-supervisor との競合は残す。 参照 module: crates/task-dispatch/src/dispatcher/leases.rs (write, run-supervisor: run の停止・lease 回収・終了照合を担う。); crates/task-dispatch/src/dispatcher/phase_integration.rs (write, execution-coordination: WU 成果の工程統合を調停する。); crates/task-dispatch/src/dispatcher/review_spawn.rs (write, execution-coordination: review の同期・開始・待ちを調停する。); crates/task-dispatch/src/dispatcher/review_verdict.rs (write, execution-coordination: review 判定を task/WU の後続処理へ写す。); crates/task-dispatch/src/dispatcher/worker_finish.rs (write, run-supervisor: worker の結果を閉じ継続を処理する。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher/review_spawn.rs + crates/task-dispatch/src/dispatcher/review_verdict.rs = 8回; crates/task-dispatch/src/dispatcher/phase_integration.rs + crates/task-dispatch/src/dispatcher/review_verdict.rs = 5回; crates/task-dispatch/src/dispatcher/phase_integration.rs + crates/task-dispatch/src/dispatcher/worker_finish.rs = 4回; crates/task-dispatch/src/dispatcher/leases.rs + crates/task-dispatch/src/dispatcher/worker_finish.rs = 3回; crates/task-dispatch/src/dispatcher/leases.rs + crates/task-dispatch/src/dispatcher/phase_integration.rs = 2回。共変更は file 単位の相関であり所有の証明ではない。 書き手 owner の競合: crates/task-dispatch/src/dispatcher/leases.rs → run-supervisor; crates/task-dispatch/src/dispatcher/phase_integration.rs → execution-coordination; crates/task-dispatch/src/dispatcher/review_spawn.rs → execution-coordination; crates/task-dispatch/src/dispatcher/review_verdict.rs → execution-coordination; crates/task-dispatch/src/dispatcher/worker_finish.rs → run-supervisor。",
    "readers": [],
    "test_access": [
     "crates/task-dispatch/src/dispatcher/ownerless_runs.rs"
@@ -4591,6 +4783,9 @@
     "crates/task-dispatch/src/dispatcher/snapshot.rs:19"
    ],
    "name": "publisher",
+   "owner": "composition-root",
+   "owner_conflict": false,
+   "owner_reason": "constructor と set_* による port/設定の注入。daemon の bootstrap.rs・run.rs・services.rs・api.rs が呼び、走行処理は field 自体を置換しない（呼び元一覧は cm-owners.md）。 参照 module: crates/task-dispatch/src/dispatcher.rs (write, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/snapshot.rs (read, execution-coordination: 複数領域の観測値を集約する（状態の本来の所有は field 別指定）。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 16回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/snapshot.rs"
    ],
@@ -4607,6 +4802,9 @@
     "crates/task-dispatch/src/dispatcher/quota_book.rs:30"
    ],
    "name": "quota_activity",
+   "owner": "routing",
+   "owner_conflict": false,
+   "owner_reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。 参照 module: crates/task-dispatch/src/dispatcher/quota_book.rs (read, routing: account の利用枠を見積もる。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/quota_book.rs"
    ],
@@ -4621,6 +4819,9 @@
     "crates/task-dispatch/src/dispatcher/quota_book.rs:188"
    ],
    "name": "quota_calibration",
+   "owner": "routing",
+   "owner_conflict": false,
+   "owner_reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。 参照 module: crates/task-dispatch/src/dispatcher/quota_book.rs (read, routing: account の利用枠を見積もる。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/quota_book.rs"
    ],
@@ -4635,6 +4836,9 @@
     "crates/task-dispatch/src/dispatcher/housekeeping.rs:503"
    ],
    "name": "removing_build_caches",
+   "owner": "host-maintenance",
+   "owner_conflict": false,
+   "owner_reason": "disk/target/健全性の棚卸しを調停する実行時状態。facade の tick の更新や Arc 内部の変更を含むので設定 port としない。health_inventory は範囲外 health_review/inventory.rs の実装も参照する。 参照 module: crates/task-dispatch/src/dispatcher/housekeeping.rs (read, host-maintenance: scratch と worktree の後片付け・disk guard を担う。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/housekeeping.rs"
    ],
@@ -4649,6 +4853,9 @@
     "crates/task-dispatch/src/dispatcher/housekeeping.rs:723"
    ],
    "name": "removing_repo_targets",
+   "owner": "host-maintenance",
+   "owner_conflict": false,
+   "owner_reason": "disk/target/健全性の棚卸しを調停する実行時状態。facade の tick の更新や Arc 内部の変更を含むので設定 port としない。health_inventory は範囲外 health_review/inventory.rs の実装も参照する。 参照 module: crates/task-dispatch/src/dispatcher/housekeeping.rs (read, host-maintenance: scratch と worktree の後片付け・disk guard を担う。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/housekeeping.rs"
    ],
@@ -4663,6 +4870,9 @@
     "crates/task-dispatch/src/dispatcher/housekeeping.rs:734"
    ],
    "name": "repo_target_gc_at",
+   "owner": "host-maintenance",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/housekeeping.rs (read/write, host-maintenance: scratch と worktree の後片付け・disk guard を担う。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/housekeeping.rs"
    ],
@@ -4686,6 +4896,9 @@
     "crates/task-dispatch/src/dispatcher/snapshot.rs:125"
    ],
    "name": "review_resync_halted",
+   "owner": "execution-coordination",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/review_spawn.rs (write, execution-coordination: review の同期・開始・待ちを調停する。); crates/task-dispatch/src/dispatcher/snapshot.rs (read, execution-coordination: 複数領域の観測値を集約する（状態の本来の所有は field 別指定）。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher/review_spawn.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 2回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/snapshot.rs"
    ],
@@ -4704,6 +4917,9 @@
     "crates/task-dispatch/src/dispatcher/stale_priority.rs:76"
    ],
    "name": "review_sync_queue",
+   "owner": "execution-coordination",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/stale_priority.rs (read/write, execution-coordination: review 同期の待ち順を決める。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/stale_priority.rs"
    ],
@@ -4722,6 +4938,9 @@
     "crates/task-dispatch/src/dispatcher/stale_priority.rs:81"
    ],
    "name": "review_sync_seq",
+   "owner": "execution-coordination",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/stale_priority.rs (read/write, execution-coordination: review 同期の待ち順を決める。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/stale_priority.rs"
    ],
@@ -4769,6 +4988,9 @@
     "crates/task-dispatch/src/dispatcher/review_verdict.rs:26"
    ],
    "name": "reviewing",
+   "owner": "run-supervisor",
+   "owner_conflict": true,
+   "owner_reason": "開始側と回収・終了側が共有する run の生存と再試行状態。lease と run 終了の整合を担う候補へ割り当てるが、異なる書き手 owner の競合は残す。 参照 module: crates/task-dispatch/src/dispatcher.rs (read, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/cluster.rs (read, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。); crates/task-dispatch/src/dispatcher/housekeeping.rs (read, host-maintenance: scratch と worktree の後片付け・disk guard を担う。); crates/task-dispatch/src/dispatcher/leases.rs (read/write, run-supervisor: run の停止・lease 回収・終了照合を担う。); crates/task-dispatch/src/dispatcher/ownerless_runs.rs (read/write, run-supervisor: owner を失った run と review を回収する。); crates/task-dispatch/src/dispatcher/review_spawn.rs (write, execution-coordination: review の同期・開始・待ちを調停する。); crates/task-dispatch/src/dispatcher/review_verdict.rs (write, execution-coordination: review 判定を task/WU の後続処理へ写す。); crates/task-dispatch/src/dispatcher/route_select.rs (read, routing: source と account を選ぶ。); crates/task-dispatch/src/dispatcher/snapshot.rs (read, execution-coordination: 複数領域の観測値を集約する（状態の本来の所有は field 別指定）。); crates/task-dispatch/src/dispatcher/tree_units.rs (read, execution-coordination: 木の gate と生存確認を調停する。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/review_spawn.rs = 17回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 16回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/leases.rs = 12回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/housekeeping.rs = 11回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/route_select.rs = 10回。共変更は file 単位の相関であり所有の証明ではない。 書き手 owner の競合: crates/task-dispatch/src/dispatcher/leases.rs → run-supervisor; crates/task-dispatch/src/dispatcher/ownerless_runs.rs → run-supervisor; crates/task-dispatch/src/dispatcher/review_spawn.rs → execution-coordination; crates/task-dispatch/src/dispatcher/review_verdict.rs → execution-coordination。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs",
     "crates/task-dispatch/src/dispatcher/cluster.rs",
@@ -4809,6 +5031,9 @@
     "crates/task-dispatch/src/dispatcher/routing_context.rs:272"
    ],
    "name": "routing_context_registry",
+   "owner": "composition-root",
+   "owner_conflict": false,
+   "owner_reason": "constructor と set_* による port/設定の注入。daemon の bootstrap.rs・run.rs・services.rs・api.rs が呼び、走行処理は field 自体を置換しない（呼び元一覧は cm-owners.md）。 参照 module: crates/task-dispatch/src/dispatcher.rs (write, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/routing_context.rs (read, routing: routing の特徴量と registry を扱う。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/routing_context.rs = 4回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/routing_context.rs"
    ],
@@ -4838,6 +5063,9 @@
     "crates/task-dispatch/src/dispatcher/review_spawn.rs:1453"
    ],
    "name": "routing_mode",
+   "owner": "composition-root",
+   "owner_conflict": false,
+   "owner_reason": "constructor と set_* だけで設定を注入。daemon/bootstrap.rs と admin.rs の reload が呼び、走行処理は設定を読む。 参照 module: crates/task-dispatch/src/dispatcher/dispatch_run.rs (read, execution-coordination: run 開始の gate と資源予約を調停する（routing も含む混在 module）。); crates/task-dispatch/src/dispatcher/lane_assist.rs (read/write, routing: lane の分類待ちと選択を担う。); crates/task-dispatch/src/dispatcher/review_spawn.rs (read, execution-coordination: review の同期・開始・待ちを調停する。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher/dispatch_run.rs + crates/task-dispatch/src/dispatcher/review_spawn.rs = 16回; crates/task-dispatch/src/dispatcher/dispatch_run.rs + crates/task-dispatch/src/dispatcher/lane_assist.rs = 4回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/dispatch_run.rs",
     "crates/task-dispatch/src/dispatcher/lane_assist.rs",
@@ -4856,6 +5084,9 @@
     "crates/task-dispatch/src/dispatcher/write_set_record.rs:75"
    ],
    "name": "run_write_bases",
+   "owner": "execution-coordination",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/write_set_record.rs (write, execution-coordination: run の書き込み実績を保存する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [],
    "test_access": [
     "crates/task-dispatch/src/dispatcher/tests/write_set_record.rs"
@@ -4903,6 +5134,9 @@
     "crates/task-dispatch/src/dispatcher/ownerless_runs.rs:248"
    ],
    "name": "running",
+   "owner": "run-supervisor",
+   "owner_conflict": true,
+   "owner_reason": "開始側と回収・終了側が共有する run の生存と再試行状態。lease と run 終了の整合を担う候補へ割り当てるが、異なる書き手 owner の競合は残す。 参照 module: crates/task-dispatch/src/dispatcher.rs (read, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/cluster.rs (read, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。); crates/task-dispatch/src/dispatcher/cos_chat/launch.rs (read, run-supervisor: CoS run の claim・起動・終了を監督する。); crates/task-dispatch/src/dispatcher/dispatch_run.rs (write, execution-coordination: run 開始の gate と資源予約を調停する（routing も含む混在 module）。); crates/task-dispatch/src/dispatcher/leases.rs (read/write, run-supervisor: run の停止・lease 回収・終了照合を担う。); crates/task-dispatch/src/dispatcher/ownerless_runs.rs (read, run-supervisor: owner を失った run と review を回収する。); crates/task-dispatch/src/dispatcher/route_select.rs (read, routing: source と account を選ぶ。); crates/task-dispatch/src/dispatcher/snapshot.rs (read, execution-coordination: 複数領域の観測値を集約する（状態の本来の所有は field 別指定）。); crates/task-dispatch/src/dispatcher/tree_units.rs (read, execution-coordination: 木の gate と生存確認を調停する。); crates/task-dispatch/src/dispatcher/work_units.rs (read, execution-coordination: WU の依存と check の開始を調停する。); crates/task-dispatch/src/dispatcher/worker_finish.rs (read, run-supervisor: worker の結果を閉じ継続を処理する。); crates/task-dispatch/src/dispatcher/write_set_gate.rs (read, execution-coordination: 並列 WU の書き込み範囲を予約する。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/dispatch_run.rs = 56回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/worker_finish.rs = 22回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/work_units.rs = 19回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 16回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/leases.rs = 12回。共変更は file 単位の相関であり所有の証明ではない。 書き手 owner の競合: crates/task-dispatch/src/dispatcher/dispatch_run.rs → execution-coordination; crates/task-dispatch/src/dispatcher/leases.rs → run-supervisor。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs",
     "crates/task-dispatch/src/dispatcher/cluster.rs",
@@ -4939,6 +5173,9 @@
     "crates/task-dispatch/src/dispatcher.rs:2437"
    ],
    "name": "rx",
+   "owner": "execution-coordination",
+   "owner_conflict": false,
+   "owner_reason": "constructor が作る完了通知 channel または tick の観測値。送受信・tick 更新は実行調停の状態であり、外から注入する設定 port としない。 参照 module: crates/task-dispatch/src/dispatcher.rs (write, execution-coordination: tick の段と完了通知を調停する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [],
    "test_access": [],
    "writers": [
@@ -4982,6 +5219,9 @@
     "crates/task-dispatch/src/dispatcher/snapshot.rs:137"
    ],
    "name": "scratch",
+   "owner": "host-maintenance",
+   "owner_conflict": true,
+   "owner_reason": "disk/target/健全性の棚卸しを調停する実行時状態。facade の tick の更新や Arc 内部の変更を含むので設定 port としない。health_inventory は範囲外 health_review/inventory.rs の実装も参照する。 参照 module: crates/task-dispatch/src/dispatcher.rs (read/write, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/dispatch_run.rs (read, execution-coordination: run 開始の gate と資源予約を調停する（routing も含む混在 module）。); crates/task-dispatch/src/dispatcher/housekeeping.rs (read/write, host-maintenance: scratch と worktree の後片付け・disk guard を担う。); crates/task-dispatch/src/dispatcher/snapshot.rs (read, execution-coordination: 複数領域の観測値を集約する（状態の本来の所有は field 別指定）。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/dispatch_run.rs = 56回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 16回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/housekeeping.rs = 11回; crates/task-dispatch/src/dispatcher/dispatch_run.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 5回; crates/task-dispatch/src/dispatcher/dispatch_run.rs + crates/task-dispatch/src/dispatcher/housekeeping.rs = 3回。共変更は file 単位の相関であり所有の証明ではない。 書き手 owner の競合: crates/task-dispatch/src/dispatcher.rs → execution-coordination; crates/task-dispatch/src/dispatcher/housekeeping.rs → host-maintenance。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs",
     "crates/task-dispatch/src/dispatcher/dispatch_run.rs",
@@ -5023,6 +5263,9 @@
     "crates/task-dispatch/src/dispatcher/script_compare.rs:88"
    ],
    "name": "script_compare",
+   "owner": "host-maintenance",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/cos_chat/digest.rs (read, project-orchestration: CoS に渡す案件と受信箱の要約を組み立てる。); crates/task-dispatch/src/dispatcher/script_canary.rs (read/write, host-maintenance: 制御 script の canary と rollback を管理する。); crates/task-dispatch/src/dispatcher/script_compare.rs (read/write, host-maintenance: 制御 script の比較実行と mode の観測を担う。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher/cos_chat/digest.rs + crates/task-dispatch/src/dispatcher/script_compare.rs = 5回; crates/task-dispatch/src/dispatcher/cos_chat/digest.rs + crates/task-dispatch/src/dispatcher/script_canary.rs = 2回; crates/task-dispatch/src/dispatcher/script_canary.rs + crates/task-dispatch/src/dispatcher/script_compare.rs = 1回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/cos_chat/digest.rs",
     "crates/task-dispatch/src/dispatcher/script_canary.rs",
@@ -5063,6 +5306,9 @@
     "crates/task-dispatch/src/dispatcher/snapshot.rs:55"
    ],
    "name": "source_cooldowns",
+   "owner": "routing",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/route_failure.rs (read/write, routing: source の失敗と cooldown を記録する。); crates/task-dispatch/src/dispatcher/route_select.rs (read, routing: source と account を選ぶ。); crates/task-dispatch/src/dispatcher/snapshot.rs (read, execution-coordination: 複数領域の観測値を集約する（状態の本来の所有は field 別指定）。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher/route_select.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 3回; crates/task-dispatch/src/dispatcher/route_failure.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 2回; crates/task-dispatch/src/dispatcher/route_failure.rs + crates/task-dispatch/src/dispatcher/route_select.rs = 1回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/route_failure.rs",
     "crates/task-dispatch/src/dispatcher/route_select.rs",
@@ -5112,6 +5358,9 @@
     "crates/task-dispatch/src/dispatcher/tree_units.rs:238"
    ],
    "name": "stagnation",
+   "owner": "project-orchestration",
+   "owner_conflict": true,
+   "owner_reason": "案件予算の監視と task 木の停滞監視が同じ field を更新する。案件の運営を候補とし、tick/tree_units の execution-coordination との競合を残す。 参照 module: crates/task-dispatch/src/dispatcher.rs (write, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/cron_tick.rs (read, host-maintenance: 定期的な保守 executor を呼ぶ。); crates/task-dispatch/src/dispatcher/planner_flow.rs (read, execution-coordination: plan 採用と gate を調停する。); crates/task-dispatch/src/dispatcher/project_wake.rs (read/write, project-orchestration: 案件 controller の wake・予算・再評価を担う。); crates/task-dispatch/src/dispatcher/snapshot.rs (read, execution-coordination: 複数領域の観測値を集約する（状態の本来の所有は field 別指定）。); crates/task-dispatch/src/dispatcher/tree_units.rs (read/write, execution-coordination: 木の gate と生存確認を調停する。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 16回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/planner_flow.rs = 12回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/tree_units.rs = 9回; crates/task-dispatch/src/dispatcher/cron_tick.rs + crates/task-dispatch/src/dispatcher/project_wake.rs = 4回; crates/task-dispatch/src/dispatcher/snapshot.rs + crates/task-dispatch/src/dispatcher/tree_units.rs = 4回。共変更は file 単位の相関であり所有の証明ではない。 書き手 owner の競合: crates/task-dispatch/src/dispatcher.rs → execution-coordination; crates/task-dispatch/src/dispatcher/project_wake.rs → project-orchestration; crates/task-dispatch/src/dispatcher/tree_units.rs → execution-coordination。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/cron_tick.rs",
     "crates/task-dispatch/src/dispatcher/planner_flow.rs",
@@ -5142,6 +5391,9 @@
     "crates/task-dispatch/src/dispatcher/tree_units.rs:95"
    ],
    "name": "stall_watch",
+   "owner": "execution-coordination",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/tree_units.rs (read/write, execution-coordination: 木の gate と生存確認を調停する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/tree_units.rs"
    ],
@@ -5167,6 +5419,9 @@
     "crates/task-dispatch/src/dispatcher/tree_units.rs:96"
    ],
    "name": "stalled_tasks",
+   "owner": "execution-coordination",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/snapshot.rs (read, execution-coordination: 複数領域の観測値を集約する（状態の本来の所有は field 別指定）。); crates/task-dispatch/src/dispatcher/tree_units.rs (read/write, execution-coordination: 木の gate と生存確認を調停する。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher/snapshot.rs + crates/task-dispatch/src/dispatcher/tree_units.rs = 4回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/snapshot.rs",
     "crates/task-dispatch/src/dispatcher/tree_units.rs"
@@ -5217,6 +5472,9 @@
     "crates/task-dispatch/src/dispatcher/cluster.rs:604"
    ],
    "name": "store",
+   "owner": "composition-root",
+   "owner_conflict": false,
+   "owner_reason": "Dispatcher::new に daemon/bootstrap.rs:587 が store port を注入する。field 自体の置換と store 内部の DB 更新は区別する。 参照 module: crates/task-dispatch/src/dispatcher.rs (read, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/auto_leaf.rs (read, execution-coordination: leaf の実行 gate を評価する。); crates/task-dispatch/src/dispatcher/behind_target.rs (read, execution-coordination: 統合先との遅れを観測する。); crates/task-dispatch/src/dispatcher/browser_prereq.rs (read, execution-coordination: browser 実行前提を検査し再開する。); crates/task-dispatch/src/dispatcher/child_tasks.rs (read, execution-coordination: 子 task の完了と親の待ちを調停する。); crates/task-dispatch/src/dispatcher/cluster.rs (read, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。); crates/task-dispatch/src/dispatcher/cluster_job_wait.rs (read, cluster-runtime: durable job 待ちを poll して再開する。); crates/task-dispatch/src/dispatcher/continuation_session.rs (read, run-supervisor: 継続 run の session を解決する。); crates/task-dispatch/src/dispatcher/credential_gate.rs (read, execution-coordination: credential 待ちへの遷移と復帰を調停する。); crates/task-dispatch/src/dispatcher/cron_tick.rs (read, host-maintenance: 定期的な保守 executor を呼ぶ。); crates/task-dispatch/src/dispatcher/decision_log_wire.rs (read, execution-coordination: 判断の記録と実行の配線を担う。); crates/task-dispatch/src/dispatcher/dispatch_run.rs (read, execution-coordination: run 開始の gate と資源予約を調停する（routing も含む混在 module）。); crates/task-dispatch/src/dispatcher/eval_trials.rs (read, routing: routing 評価試行の run を管理する。); crates/task-dispatch/src/dispatcher/housekeeping.rs (read, host-maintenance: scratch と worktree の後片付け・disk guard を担う。); crates/task-dispatch/src/dispatcher/lane_assist.rs (read, routing: lane の分類待ちと選択を担う。); crates/task-dispatch/src/dispatcher/leases.rs (read, run-supervisor: run の停止・lease 回収・終了照合を担う。); crates/task-dispatch/src/dispatcher/maintenance.rs (read, host-maintenance: target 掃除と disk 監視を実行する。); crates/task-dispatch/src/dispatcher/ownerless_runs.rs (read, run-supervisor: owner を失った run と review を回収する。); crates/task-dispatch/src/dispatcher/phase_integration.rs (read, execution-coordination: WU 成果の工程統合を調停する。); crates/task-dispatch/src/dispatcher/planner_flow.rs (read, execution-coordination: plan 採用と gate を調停する。); crates/task-dispatch/src/dispatcher/quota_book.rs (read, routing: account の利用枠を見積もる。); crates/task-dispatch/src/dispatcher/review_spawn.rs (read, execution-coordination: review の同期・開始・待ちを調停する。); crates/task-dispatch/src/dispatcher/review_verdict.rs (read, execution-coordination: review 判定を task/WU の後続処理へ写す。); crates/task-dispatch/src/dispatcher/route_failure.rs (read, routing: source の失敗と cooldown を記録する。); crates/task-dispatch/src/dispatcher/route_select.rs (read, routing: source と account を選ぶ。); crates/task-dispatch/src/dispatcher/routing_context.rs (read, routing: routing の特徴量と registry を扱う。); crates/task-dispatch/src/dispatcher/run_context.rs (read, execution-coordination: 実行要求の文脈を組み立てる。); crates/task-dispatch/src/dispatcher/snapshot.rs (read, execution-coordination: 複数領域の観測値を集約する（状態の本来の所有は field 別指定）。); crates/task-dispatch/src/dispatcher/tree_units.rs (read, execution-coordination: 木の gate と生存確認を調停する。); crates/task-dispatch/src/dispatcher/variant_pin.rs (read, routing: 評価 variant と route を照合する。); crates/task-dispatch/src/dispatcher/work_units.rs (read, execution-coordination: WU の依存と check の開始を調停する。); crates/task-dispatch/src/dispatcher/worker_finish.rs (read, run-supervisor: worker の結果を閉じ継続を処理する。); crates/task-dispatch/src/dispatcher/workspaces.rs (read, execution-coordination: 実行用 worktree の準備を調停する。); crates/task-dispatch/src/dispatcher/write_set_gate.rs (read, execution-coordination: 並列 WU の書き込み範囲を予約する。); crates/task-dispatch/src/dispatcher/write_set_record.rs (read, execution-coordination: run の書き込み実績を保存する。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/dispatch_run.rs = 56回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/worker_finish.rs = 22回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/work_units.rs = 19回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/review_spawn.rs = 17回; crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/run_context.rs = 17回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs",
     "crates/task-dispatch/src/dispatcher/auto_leaf.rs",
@@ -5267,6 +5525,9 @@
     "crates/task-dispatch/src/dispatcher/maintenance.rs:34"
    ],
    "name": "target_sweep",
+   "owner": "composition-root",
+   "owner_conflict": false,
+   "owner_reason": "constructor と set_* だけで設定を注入。daemon/bootstrap.rs と admin.rs の reload が呼び、走行処理は設定を読む。 参照 module: crates/task-dispatch/src/dispatcher/maintenance.rs (read/write, host-maintenance: target 掃除と disk 監視を実行する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/maintenance.rs"
    ],
@@ -5290,6 +5551,9 @@
     "crates/task-dispatch/src/dispatcher/maintenance.rs:40"
    ],
    "name": "target_sweep_scope",
+   "owner": "composition-root",
+   "owner_conflict": false,
+   "owner_reason": "constructor と set_* だけで設定を注入。daemon/bootstrap.rs と admin.rs の reload が呼び、走行処理は設定を読む。 参照 module: crates/task-dispatch/src/dispatcher/housekeeping.rs (read, host-maintenance: scratch と worktree の後片付け・disk guard を担う。); crates/task-dispatch/src/dispatcher/maintenance.rs (read/write, host-maintenance: target 掃除と disk 監視を実行する。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher/housekeeping.rs + crates/task-dispatch/src/dispatcher/maintenance.rs = 3回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/housekeeping.rs",
     "crates/task-dispatch/src/dispatcher/maintenance.rs"
@@ -5314,6 +5578,9 @@
     "crates/task-dispatch/src/dispatcher/housekeeping.rs:596"
    ],
    "name": "task_workspaces",
+   "owner": "execution-coordination",
+   "owner_conflict": true,
+   "owner_reason": "dispatch_one が登録し、housekeeping が中止後に掃除する実行用 worktree の状態。host-maintenance との競合を残す。 参照 module: crates/task-dispatch/src/dispatcher/dispatch_run.rs (write, execution-coordination: run 開始の gate と資源予約を調停する（routing も含む混在 module）。); crates/task-dispatch/src/dispatcher/housekeeping.rs (read/write, host-maintenance: scratch と worktree の後片付け・disk guard を担う。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher/dispatch_run.rs + crates/task-dispatch/src/dispatcher/housekeeping.rs = 3回。共変更は file 単位の相関であり所有の証明ではない。 書き手 owner の競合: crates/task-dispatch/src/dispatcher/dispatch_run.rs → execution-coordination; crates/task-dispatch/src/dispatcher/housekeeping.rs → host-maintenance。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/housekeeping.rs"
    ],
@@ -5331,6 +5598,9 @@
     "crates/task-dispatch/src/dispatcher/leases.rs:543"
    ],
    "name": "terminal_records_reconciled_at",
+   "owner": "run-supervisor",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/leases.rs (read/write, run-supervisor: run の停止・lease 回収・終了照合を担う。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/leases.rs"
    ],
@@ -5347,6 +5617,9 @@
    "decl": "crates/task-dispatch/src/dispatcher.rs:1195",
    "evidence": [],
    "name": "test_cos_reserved_sources",
+   "owner": "test-hooks",
+   "owner_conflict": false,
+   "owner_reason": "宣言に #[cfg(test)] があり、製品の field ではない。 参照 module: 製品の参照なし。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [],
    "test_access": [
     "crates/task-dispatch/src/dispatcher/route_select.rs"
@@ -5359,6 +5632,9 @@
    "decl": "crates/task-dispatch/src/dispatcher.rs:1215",
    "evidence": [],
    "name": "test_disable_stale_priority",
+   "owner": "test-hooks",
+   "owner_conflict": false,
+   "owner_reason": "宣言に #[cfg(test)] があり、製品の field ではない。 参照 module: 製品の参照なし。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [],
    "test_access": [
     "crates/task-dispatch/src/dispatcher/stale_priority.rs",
@@ -5372,6 +5648,9 @@
    "decl": "crates/task-dispatch/src/dispatcher.rs:1211",
    "evidence": [],
    "name": "test_disable_write_set_gate",
+   "owner": "test-hooks",
+   "owner_conflict": false,
+   "owner_reason": "宣言に #[cfg(test)] があり、製品の field ではない。 参照 module: 製品の参照なし。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [],
    "test_access": [
     "crates/task-dispatch/src/dispatcher/tests/phase_effect_ab/write_set.rs",
@@ -5385,6 +5664,9 @@
    "decl": "crates/task-dispatch/src/dispatcher.rs:1198",
    "evidence": [],
    "name": "test_halt_after_wu_transition",
+   "owner": "test-hooks",
+   "owner_conflict": false,
+   "owner_reason": "宣言に #[cfg(test)] があり、製品の field ではない。 参照 module: 製品の参照なし。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [],
    "test_access": [
     "crates/task-dispatch/src/dispatcher/tests/cluster_job_wait.rs",
@@ -5398,6 +5680,9 @@
    "decl": "crates/task-dispatch/src/dispatcher.rs:1192",
    "evidence": [],
    "name": "test_now",
+   "owner": "test-hooks",
+   "owner_conflict": false,
+   "owner_reason": "宣言に #[cfg(test)] があり、製品の field ではない。 参照 module: 製品の参照なし。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [],
    "test_access": [
     "crates/task-dispatch/src/dispatcher/clock.rs",
@@ -5437,6 +5722,9 @@
    "decl": "crates/task-dispatch/src/dispatcher.rs:1203",
    "evidence": [],
    "name": "test_policy_clock",
+   "owner": "test-hooks",
+   "owner_conflict": false,
+   "owner_reason": "宣言に #[cfg(test)] があり、製品の field ではない。 参照 module: 製品の参照なし。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [],
    "test_access": [
     "crates/task-dispatch/src/dispatcher/clock.rs",
@@ -5451,6 +5739,9 @@
    "decl": "crates/task-dispatch/src/dispatcher.rs:1207",
    "evidence": [],
    "name": "test_skip_pre_review_sync",
+   "owner": "test-hooks",
+   "owner_conflict": false,
+   "owner_reason": "宣言に #[cfg(test)] があり、製品の field ではない。 参照 module: 製品の参照なし。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [],
    "test_access": [
     "crates/task-dispatch/src/dispatcher/review_spawn.rs",
@@ -5464,6 +5755,9 @@
    "decl": "crates/task-dispatch/src/dispatcher.rs:1219",
    "evidence": [],
    "name": "test_sync_conflict_as_review_fail",
+   "owner": "test-hooks",
+   "owner_conflict": false,
+   "owner_reason": "宣言に #[cfg(test)] があり、製品の field ではない。 参照 module: 製品の参照なし。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [],
    "test_access": [
     "crates/task-dispatch/src/dispatcher/review_spawn.rs",
@@ -5477,6 +5771,9 @@
    "decl": "crates/task-dispatch/src/dispatcher.rs:1201",
    "evidence": [],
    "name": "test_worker_start_delay",
+   "owner": "test-hooks",
+   "owner_conflict": false,
+   "owner_reason": "宣言に #[cfg(test)] があり、製品の field ではない。 参照 module: 製品の参照なし。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [],
    "test_access": [
     "crates/task-dispatch/src/dispatcher/dispatch_run.rs",
@@ -5507,6 +5804,9 @@
     "crates/task-dispatch/src/dispatcher/write_set_gate.rs:174"
    ],
    "name": "ticks",
+   "owner": "execution-coordination",
+   "owner_conflict": false,
+   "owner_reason": "constructor が作る完了通知 channel または tick の観測値。送受信・tick 更新は実行調停の状態であり、外から注入する設定 port としない。 参照 module: crates/task-dispatch/src/dispatcher/browser_prereq.rs (read, execution-coordination: browser 実行前提を検査し再開する。); crates/task-dispatch/src/dispatcher/script_canary.rs (write, host-maintenance: 制御 script の canary と rollback を管理する。); crates/task-dispatch/src/dispatcher/script_compare.rs (read, host-maintenance: 制御 script の比較実行と mode の観測を担う。); crates/task-dispatch/src/dispatcher/snapshot.rs (read, execution-coordination: 複数領域の観測値を集約する（状態の本来の所有は field 別指定）。); crates/task-dispatch/src/dispatcher/write_set_gate.rs (read, execution-coordination: 並列 WU の書き込み範囲を予約する。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher/script_canary.rs + crates/task-dispatch/src/dispatcher/script_compare.rs = 1回; crates/task-dispatch/src/dispatcher/script_canary.rs + crates/task-dispatch/src/dispatcher/snapshot.rs = 1回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/browser_prereq.rs",
     "crates/task-dispatch/src/dispatcher/script_compare.rs",
@@ -5528,6 +5828,9 @@
     "crates/task-dispatch/src/dispatcher/cluster.rs:537"
    ],
    "name": "tunnel_events",
+   "owner": "cluster-runtime",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/cluster.rs (read/write, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/cluster.rs"
    ],
@@ -5544,6 +5847,9 @@
     "crates/task-dispatch/src/dispatcher/cluster.rs:481"
    ],
    "name": "tunnel_forward_ensurer",
+   "owner": "composition-root",
+   "owner_conflict": false,
+   "owner_reason": "constructor と set_* だけで外部操作 port を注入。daemon/bootstrap.rs と clusters.rs の呼び元を確認し、cluster の走行処理は port を呼ぶ。 参照 module: crates/task-dispatch/src/dispatcher/cluster.rs (read/write, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/cluster.rs"
    ],
@@ -5560,6 +5866,9 @@
     "crates/task-dispatch/src/dispatcher/cluster.rs:493"
    ],
    "name": "tunnel_listener_probe",
+   "owner": "composition-root",
+   "owner_conflict": false,
+   "owner_reason": "constructor と set_* だけで外部操作 port を注入。daemon/bootstrap.rs と clusters.rs の呼び元を確認し、cluster の走行処理は port を呼ぶ。 参照 module: crates/task-dispatch/src/dispatcher/cluster.rs (read/write, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/cluster.rs"
    ],
@@ -5576,6 +5885,9 @@
     "crates/task-dispatch/src/dispatcher/cluster.rs:487"
    ],
    "name": "tunnel_probe",
+   "owner": "composition-root",
+   "owner_conflict": false,
+   "owner_reason": "constructor と set_* だけで外部操作 port を注入。daemon/bootstrap.rs と clusters.rs の呼び元を確認し、cluster の走行処理は port を呼ぶ。 参照 module: crates/task-dispatch/src/dispatcher/cluster.rs (read/write, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/cluster.rs"
    ],
@@ -5592,6 +5904,9 @@
     "crates/task-dispatch/src/dispatcher/cluster.rs:1207"
    ],
    "name": "tunnel_probe_state",
+   "owner": "cluster-runtime",
+   "owner_conflict": false,
+   "owner_reason": "実行環境の観測状態。tunnel_probe_state は probe thread の Mutex 内更新、container_probe は detect_container_runtime の検出結果であり、設定注入だけとはしない。 参照 module: crates/task-dispatch/src/dispatcher/cluster.rs (read, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/cluster.rs"
    ],
@@ -5613,6 +5928,9 @@
     "crates/task-dispatch/src/dispatcher/cluster.rs:1289"
    ],
    "name": "tunnel_prober_stop",
+   "owner": "cluster-runtime",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher.rs (read, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/cluster.rs (read/write, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/cluster.rs = 3回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs",
     "crates/task-dispatch/src/dispatcher/cluster.rs"
@@ -5630,6 +5948,9 @@
     "crates/task-dispatch/src/dispatcher/cluster.rs:1347"
    ],
    "name": "tunnel_state",
+   "owner": "cluster-runtime",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/cluster.rs (read/write, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/cluster.rs"
    ],
@@ -5676,6 +5997,9 @@
     "crates/task-dispatch/src/dispatcher/work_units.rs:77"
    ],
    "name": "tx",
+   "owner": "execution-coordination",
+   "owner_conflict": false,
+   "owner_reason": "constructor が作る完了通知 channel または tick の観測値。送受信・tick 更新は実行調停の状態であり、外から注入する設定 port としない。 参照 module: crates/task-dispatch/src/dispatcher/dispatch_run.rs (read, execution-coordination: run 開始の gate と資源予約を調停する（routing も含む混在 module）。); crates/task-dispatch/src/dispatcher/eval_trials.rs (read, routing: routing 評価試行の run を管理する。); crates/task-dispatch/src/dispatcher/phase_integration.rs (read, execution-coordination: WU 成果の工程統合を調停する。); crates/task-dispatch/src/dispatcher/review_spawn.rs (read, execution-coordination: review の同期・開始・待ちを調停する。); crates/task-dispatch/src/dispatcher/work_units.rs (read, execution-coordination: WU の依存と check の開始を調停する。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher/dispatch_run.rs + crates/task-dispatch/src/dispatcher/review_spawn.rs = 16回; crates/task-dispatch/src/dispatcher/dispatch_run.rs + crates/task-dispatch/src/dispatcher/work_units.rs = 12回; crates/task-dispatch/src/dispatcher/phase_integration.rs + crates/task-dispatch/src/dispatcher/work_units.rs = 10回; crates/task-dispatch/src/dispatcher/dispatch_run.rs + crates/task-dispatch/src/dispatcher/phase_integration.rs = 3回; crates/task-dispatch/src/dispatcher/dispatch_run.rs + crates/task-dispatch/src/dispatcher/eval_trials.rs = 1回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/dispatch_run.rs",
     "crates/task-dispatch/src/dispatcher/eval_trials.rs",
@@ -5701,6 +6025,9 @@
     "crates/task-dispatch/src/dispatcher/dispatch_run.rs:302"
    ],
    "name": "unroutable",
+   "owner": "routing",
+   "owner_conflict": false,
+   "owner_reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。 参照 module: crates/task-dispatch/src/dispatcher.rs (read/write, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/dispatch_run.rs (write, execution-coordination: run 開始の gate と資源予約を調停する（routing も含む混在 module）。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/dispatch_run.rs = 56回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher.rs"
    ],
@@ -5725,6 +6052,9 @@
     "crates/task-dispatch/src/dispatcher/variant_pin.rs:72"
    ],
    "name": "variant_observation",
+   "owner": "composition-root",
+   "owner_conflict": false,
+   "owner_reason": "constructor と set_* による port/設定の注入。daemon の bootstrap.rs・run.rs・services.rs・api.rs が呼び、走行処理は field 自体を置換しない（呼び元一覧は cm-owners.md）。 参照 module: crates/task-dispatch/src/dispatcher.rs (write, execution-coordination: tick の段と完了通知を調停する。); crates/task-dispatch/src/dispatcher/variant_pin.rs (read, routing: 評価 variant と route を照合する。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher.rs + crates/task-dispatch/src/dispatcher/variant_pin.rs = 2回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/variant_pin.rs"
    ],
@@ -5741,6 +6071,9 @@
     "crates/task-dispatch/src/dispatcher/cluster.rs:1443"
    ],
    "name": "warned_cluster_tool",
+   "owner": "cluster-runtime",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/cluster.rs (write, cluster-runtime: SSH 接続・master・tunnel の実行状態を監視する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [],
    "test_access": [],
    "writers": [
@@ -5762,6 +6095,9 @@
     "crates/task-dispatch/src/dispatcher/review_spawn.rs:1468"
    ],
    "name": "warned_unroutable",
+   "owner": "routing",
+   "owner_conflict": false,
+   "owner_reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。 参照 module: crates/task-dispatch/src/dispatcher/dispatch_run.rs (read/write, execution-coordination: run 開始の gate と資源予約を調停する（routing も含む混在 module）。); crates/task-dispatch/src/dispatcher/review_spawn.rs (write, execution-coordination: review の同期・開始・待ちを調停する。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher/dispatch_run.rs + crates/task-dispatch/src/dispatcher/review_spawn.rs = 16回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/dispatch_run.rs"
    ],
@@ -5779,6 +6115,9 @@
     "crates/task-dispatch/src/dispatcher/write_set_gate.rs:213"
    ],
    "name": "write_reservations",
+   "owner": "execution-coordination",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/write_set_gate.rs (read/write, execution-coordination: 並列 WU の書き込み範囲を予約する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/write_set_gate.rs"
    ],
@@ -5795,6 +6134,9 @@
     "crates/task-dispatch/src/dispatcher/write_set_gate.rs:175"
    ],
    "name": "write_set_hold_seq",
+   "owner": "execution-coordination",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/write_set_gate.rs (read/write, execution-coordination: 並列 WU の書き込み範囲を予約する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/write_set_gate.rs"
    ],
@@ -5811,6 +6153,9 @@
     "crates/task-dispatch/src/dispatcher/write_set_gate.rs:184"
    ],
    "name": "write_set_waits",
+   "owner": "execution-coordination",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/write_set_gate.rs (read/write, execution-coordination: 並列 WU の書き込み範囲を予約する。)。 co_change は該当組0件（未観測であり独立性の証明ではない）。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/write_set_gate.rs"
    ],
@@ -5837,6 +6182,9 @@
     "crates/task-dispatch/src/dispatcher/work_units.rs:1030"
    ],
    "name": "wu_prepare_failures",
+   "owner": "execution-coordination",
+   "owner_conflict": false,
+   "owner_reason": "書き手の module 規則が単一 owner を示す。 参照 module: crates/task-dispatch/src/dispatcher/dispatch_run.rs (read/write, execution-coordination: run 開始の gate と資源予約を調停する（routing も含む混在 module）。); crates/task-dispatch/src/dispatcher/work_units.rs (read/write, execution-coordination: WU の依存と check の開始を調停する。)。 co_change（出力された上位組）: crates/task-dispatch/src/dispatcher/dispatch_run.rs + crates/task-dispatch/src/dispatcher/work_units.rs = 12回。共変更は file 単位の相関であり所有の証明ではない。",
    "readers": [
     "crates/task-dispatch/src/dispatcher/dispatch_run.rs",
     "crates/task-dispatch/src/dispatcher/work_units.rs"
@@ -5968,9 +6316,646 @@
    "co_change の --since は committer date で、rebase した commit は rebase の日時で数える。"
   ],
   "not_in_this_unit": [
-   "owner",
    "equivalence"
   ],
+  "owner_rules": {
+   "fields": {
+    "accepting_new_work": {
+     "owner": "execution-coordination",
+     "reason": "set_accepting_new_work は daemon/tick_loop.rs:133,141 でも更新する実行受付状態。setter という名前だけで composition-root としない。"
+    },
+    "account_books": {
+     "owner": "routing",
+     "reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。"
+    },
+    "account_limits": {
+     "owner": "routing",
+     "reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。"
+    },
+    "accounts_scan_cache": {
+     "owner": "routing",
+     "reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。"
+    },
+    "awaiting_human": {
+     "owner": "execution-coordination",
+     "reason": "review/WU/check/統合の完了待ちと後続処理を調停する状態。lease 回収も書くため run-supervisor との競合は残す。"
+    },
+    "checking": {
+     "owner": "execution-coordination",
+     "reason": "review/WU/check/統合の完了待ちと後続処理を調停する状態。lease 回収も書くため run-supervisor との競合は残す。"
+    },
+    "classification_board": {
+     "owner": "routing",
+     "reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。"
+    },
+    "cluster_command_probe": {
+     "owner": "composition-root",
+     "reason": "constructor と set_* だけで外部操作 port を注入。daemon/bootstrap.rs と clusters.rs の呼び元を確認し、cluster の走行処理は port を呼ぶ。"
+    },
+    "cluster_connector": {
+     "owner": "composition-root",
+     "reason": "constructor と set_* だけで外部操作 port を注入。daemon/bootstrap.rs と clusters.rs の呼び元を確認し、cluster の走行処理は port を呼ぶ。"
+    },
+    "cluster_job_poller": {
+     "owner": "composition-root",
+     "reason": "constructor と set_* だけで外部操作 port を注入。daemon/bootstrap.rs と clusters.rs の呼び元を確認し、cluster の走行処理は port を呼ぶ。"
+    },
+    "cluster_liveness_probe": {
+     "owner": "test-hooks",
+     "reason": "constructor に実装の既定値があり、set_* は試験の差し替え用。daemon の set_* 呼び元検索では該当せず、宣言・setter の試験用注記を根拠とする（cfg(test) field とは別）。"
+    },
+    "cluster_master_watcher": {
+     "owner": "composition-root",
+     "reason": "constructor と set_* だけで外部操作 port を注入。daemon/bootstrap.rs と clusters.rs の呼び元を確認し、cluster の走行処理は port を呼ぶ。"
+    },
+    "cluster_ssh_command_override": {
+     "owner": "test-hooks",
+     "reason": "constructor に実装の既定値があり、set_* は試験の差し替え用。daemon の set_* 呼び元検索では該当せず、宣言・setter の試験用注記を根拠とする（cfg(test) field とは別）。"
+    },
+    "config": {
+     "owner": "composition-root",
+     "reason": "daemon/bootstrap.rs:587 の DispatchConfig と admin の apply_dispatch_config による設定再注入。set_config_max_concurrency も設定入力であり、実効値 max_concurrency は別 field。"
+    },
+    "container_probe": {
+     "owner": "cluster-runtime",
+     "reason": "実行環境の観測状態。tunnel_probe_state は probe thread の Mutex 内更新、container_probe は detect_container_runtime の検出結果であり、設定注入だけとはしない。"
+    },
+    "cos_chat_launch": {
+     "owner": "project-orchestration",
+     "reason": "CoS run 起動 port だけでなく triage・controller・retention の可変状態も格納する。案件の運営を候補とし、launch の run-supervisor との競合を残す。"
+    },
+    "credential_gates": {
+     "owner": "composition-root",
+     "reason": "constructor と set_* だけで設定を注入。daemon/bootstrap.rs と admin.rs の reload が呼び、走行処理は設定を読む。"
+    },
+    "credential_resumer": {
+     "owner": "composition-root",
+     "reason": "constructor と set_* による port/設定の注入。daemon の bootstrap.rs・run.rs・services.rs・api.rs が呼び、走行処理は field 自体を置換しない（呼び元一覧は cm-owners.md）。"
+    },
+    "disk_ready": {
+     "owner": "host-maintenance",
+     "reason": "disk/target/健全性の棚卸しを調停する実行時状態。facade の tick の更新や Arc 内部の変更を含むので設定 port としない。health_inventory は範囲外 health_review/inventory.rs の実装も参照する。"
+    },
+    "dispatch_routing": {
+     "owner": "composition-root",
+     "reason": "Dispatcher::new の既定 DispatchRoutingSettings を dispatch_run.rs:1435 で読むだけの routing 設定。daemon の setter 呼び元は無く、constructor に閉じた設定である。"
+    },
+    "eligible": {
+     "owner": "composition-root",
+     "reason": "constructor と set_* による port/設定の注入。daemon の bootstrap.rs・run.rs・services.rs・api.rs が呼び、走行処理は field 自体を置換しない（呼び元一覧は cm-owners.md）。"
+    },
+    "eval_version_probe": {
+     "owner": "test-hooks",
+     "reason": "constructor に実装の既定値があり、set_* は試験の差し替え用。daemon の set_* 呼び元検索では該当せず、宣言・setter の試験用注記を根拠とする（cfg(test) field とは別）。"
+    },
+    "harness_adapters": {
+     "owner": "composition-root",
+     "reason": "constructor と set_* だけで設定を注入。daemon/bootstrap.rs と admin.rs の reload が呼び、走行処理は設定を読む。"
+    },
+    "health_inventory": {
+     "owner": "host-maintenance",
+     "reason": "disk/target/健全性の棚卸しを調停する実行時状態。facade の tick の更新や Arc 内部の変更を含むので設定 port としない。health_inventory は範囲外 health_review/inventory.rs の実装も参照する。"
+    },
+    "infra_backoff": {
+     "owner": "run-supervisor",
+     "reason": "開始側と回収・終了側が共有する run の生存と再試行状態。lease と run 終了の整合を担う候補へ割り当てるが、異なる書き手 owner の競合は残す。"
+    },
+    "integrating": {
+     "owner": "execution-coordination",
+     "reason": "review/WU/check/統合の完了待ちと後続処理を調停する状態。lease 回収も書くため run-supervisor との競合は残す。"
+    },
+    "knowledge_probe": {
+     "owner": "test-hooks",
+     "reason": "constructor に実装の既定値があり、set_* は試験の差し替え用。daemon の set_* 呼び元検索では該当せず、宣言・setter の試験用注記を根拠とする（cfg(test) field とは別）。"
+    },
+    "knowledge_probe_cache": {
+     "owner": "routing",
+     "reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。"
+    },
+    "last_tick_gap_ms": {
+     "owner": "execution-coordination",
+     "reason": "constructor が作る完了通知 channel または tick の観測値。送受信・tick 更新は実行調停の状態であり、外から注入する設定 port としない。"
+    },
+    "last_tick_started": {
+     "owner": "execution-coordination",
+     "reason": "constructor が作る完了通知 channel または tick の観測値。送受信・tick 更新は実行調停の状態であり、外から注入する設定 port としない。"
+    },
+    "llm_route_registry": {
+     "owner": "composition-root",
+     "reason": "constructor と set_* だけで設定を注入。daemon/bootstrap.rs と admin.rs の reload が呼び、走行処理は設定を読む。"
+    },
+    "login_pending_accounts": {
+     "owner": "routing",
+     "reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。"
+    },
+    "now_unix_fn": {
+     "owner": "test-hooks",
+     "reason": "constructor に実装の既定値があり、set_* は試験の差し替え用。daemon の set_* 呼び元検索では該当せず、宣言・setter の試験用注記を根拠とする（cfg(test) field とは別）。"
+    },
+    "orphan_takeover": {
+     "owner": "composition-root",
+     "reason": "daemon/run.rs:208 の set_orphan_takeover が instance_id・freshness・pid_alive port を注入する。leases.rs:742 の lease_holders_gone は読み取りだけなので、回収処理の owner と設定注入の owner を分ける。"
+    },
+    "pending_subjects": {
+     "owner": "execution-coordination",
+     "reason": "review/WU/check/統合の完了待ちと後続処理を調停する状態。lease 回収も書くため run-supervisor との競合は残す。"
+    },
+    "publisher": {
+     "owner": "composition-root",
+     "reason": "constructor と set_* による port/設定の注入。daemon の bootstrap.rs・run.rs・services.rs・api.rs が呼び、走行処理は field 自体を置換しない（呼び元一覧は cm-owners.md）。"
+    },
+    "quota_activity": {
+     "owner": "routing",
+     "reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。"
+    },
+    "quota_calibration": {
+     "owner": "routing",
+     "reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。"
+    },
+    "removing_build_caches": {
+     "owner": "host-maintenance",
+     "reason": "disk/target/健全性の棚卸しを調停する実行時状態。facade の tick の更新や Arc 内部の変更を含むので設定 port としない。health_inventory は範囲外 health_review/inventory.rs の実装も参照する。"
+    },
+    "removing_repo_targets": {
+     "owner": "host-maintenance",
+     "reason": "disk/target/健全性の棚卸しを調停する実行時状態。facade の tick の更新や Arc 内部の変更を含むので設定 port としない。health_inventory は範囲外 health_review/inventory.rs の実装も参照する。"
+    },
+    "reviewing": {
+     "owner": "run-supervisor",
+     "reason": "開始側と回収・終了側が共有する run の生存と再試行状態。lease と run 終了の整合を担う候補へ割り当てるが、異なる書き手 owner の競合は残す。"
+    },
+    "routing_context_registry": {
+     "owner": "composition-root",
+     "reason": "constructor と set_* による port/設定の注入。daemon の bootstrap.rs・run.rs・services.rs・api.rs が呼び、走行処理は field 自体を置換しない（呼び元一覧は cm-owners.md）。"
+    },
+    "routing_mode": {
+     "owner": "composition-root",
+     "reason": "constructor と set_* だけで設定を注入。daemon/bootstrap.rs と admin.rs の reload が呼び、走行処理は設定を読む。"
+    },
+    "running": {
+     "owner": "run-supervisor",
+     "reason": "開始側と回収・終了側が共有する run の生存と再試行状態。lease と run 終了の整合を担う候補へ割り当てるが、異なる書き手 owner の競合は残す。"
+    },
+    "rx": {
+     "owner": "execution-coordination",
+     "reason": "constructor が作る完了通知 channel または tick の観測値。送受信・tick 更新は実行調停の状態であり、外から注入する設定 port としない。"
+    },
+    "scratch": {
+     "owner": "host-maintenance",
+     "reason": "disk/target/健全性の棚卸しを調停する実行時状態。facade の tick の更新や Arc 内部の変更を含むので設定 port としない。health_inventory は範囲外 health_review/inventory.rs の実装も参照する。"
+    },
+    "stagnation": {
+     "owner": "project-orchestration",
+     "reason": "案件予算の監視と task 木の停滞監視が同じ field を更新する。案件の運営を候補とし、tick/tree_units の execution-coordination との競合を残す。"
+    },
+    "store": {
+     "owner": "composition-root",
+     "reason": "Dispatcher::new に daemon/bootstrap.rs:587 が store port を注入する。field 自体の置換と store 内部の DB 更新は区別する。"
+    },
+    "target_sweep": {
+     "owner": "composition-root",
+     "reason": "constructor と set_* だけで設定を注入。daemon/bootstrap.rs と admin.rs の reload が呼び、走行処理は設定を読む。"
+    },
+    "target_sweep_scope": {
+     "owner": "composition-root",
+     "reason": "constructor と set_* だけで設定を注入。daemon/bootstrap.rs と admin.rs の reload が呼び、走行処理は設定を読む。"
+    },
+    "task_workspaces": {
+     "owner": "execution-coordination",
+     "reason": "dispatch_one が登録し、housekeeping が中止後に掃除する実行用 worktree の状態。host-maintenance との競合を残す。"
+    },
+    "ticks": {
+     "owner": "execution-coordination",
+     "reason": "constructor が作る完了通知 channel または tick の観測値。送受信・tick 更新は実行調停の状態であり、外から注入する設定 port としない。"
+    },
+    "tunnel_forward_ensurer": {
+     "owner": "composition-root",
+     "reason": "constructor と set_* だけで外部操作 port を注入。daemon/bootstrap.rs と clusters.rs の呼び元を確認し、cluster の走行処理は port を呼ぶ。"
+    },
+    "tunnel_listener_probe": {
+     "owner": "composition-root",
+     "reason": "constructor と set_* だけで外部操作 port を注入。daemon/bootstrap.rs と clusters.rs の呼び元を確認し、cluster の走行処理は port を呼ぶ。"
+    },
+    "tunnel_probe": {
+     "owner": "composition-root",
+     "reason": "constructor と set_* だけで外部操作 port を注入。daemon/bootstrap.rs と clusters.rs の呼び元を確認し、cluster の走行処理は port を呼ぶ。"
+    },
+    "tunnel_probe_state": {
+     "owner": "cluster-runtime",
+     "reason": "実行環境の観測状態。tunnel_probe_state は probe thread の Mutex 内更新、container_probe は detect_container_runtime の検出結果であり、設定注入だけとはしない。"
+    },
+    "tx": {
+     "owner": "execution-coordination",
+     "reason": "constructor が作る完了通知 channel または tick の観測値。送受信・tick 更新は実行調停の状態であり、外から注入する設定 port としない。"
+    },
+    "unroutable": {
+     "owner": "routing",
+     "reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。"
+    },
+    "variant_observation": {
+     "owner": "composition-root",
+     "reason": "constructor と set_* による port/設定の注入。daemon の bootstrap.rs・run.rs・services.rs・api.rs が呼び、走行処理は field 自体を置換しない（呼び元一覧は cm-owners.md）。"
+    },
+    "warned_unroutable": {
+     "owner": "routing",
+     "reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。"
+    }
+   },
+   "modules": {
+    "crates/task-dispatch/src/dispatcher.rs": {
+     "owner": "execution-coordination",
+     "reason": "tick の段と完了通知を調停する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#run-claim-lease"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/auto_leaf.rs": {
+     "owner": "execution-coordination",
+     "reason": "leaf の実行 gate を評価する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#decisions-plan-gate"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/behind_target.rs": {
+     "owner": "execution-coordination",
+     "reason": "統合先との遅れを観測する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#workunit-scheduling-stage-integration"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/browser_prereq.rs": {
+     "owner": "execution-coordination",
+     "reason": "browser 実行前提を検査し再開する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#browser-site-policy-trusted-devices"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/child_tasks.rs": {
+     "owner": "execution-coordination",
+     "reason": "子 task の完了と親の待ちを調停する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#recursive-task-tree"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/cluster.rs": {
+     "owner": "cluster-runtime",
+     "reason": "SSH 接続・master・tunnel の実行状態を監視する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/adr/0018-remote-clusters-over-ssh.md"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/cluster_job_wait.rs": {
+     "owner": "cluster-runtime",
+     "reason": "durable job 待ちを poll して再開する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/adr/0090-durable-wait-for-cluster-jobs.md"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/continuation_session.rs": {
+     "owner": "run-supervisor",
+     "reason": "継続 run の session を解決する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#continuation-session-resume"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/cos_chat/control.rs": {
+     "owner": "run-supervisor",
+     "reason": "CoS run の停止と割り込みを監督する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#cos-chat-threads-runs"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/cos_chat/digest.rs": {
+     "owner": "project-orchestration",
+     "reason": "CoS に渡す案件と受信箱の要約を組み立てる。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#cos-inbox-triage-operations-audit"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs": {
+     "owner": "run-supervisor",
+     "reason": "CoS run の claim・起動・終了を監督する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#cos-chat-threads-runs"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/cos_chat/routes.rs": {
+     "owner": "routing",
+     "reason": "CoS の経路を選ぶ。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#cos-chat-threads-runs"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/cos_chat/slot_wait.rs": {
+     "owner": "run-supervisor",
+     "reason": "CoS run の実行枠待ちを追跡する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#cos-chat-threads-runs"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/cos_chat/triage.rs": {
+     "owner": "project-orchestration",
+     "reason": "CoS に受信箱の一次対応を渡す。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#cos-inbox-triage-operations-audit"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/credential_gate.rs": {
+     "owner": "execution-coordination",
+     "reason": "credential 待ちへの遷移と復帰を調停する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#credential-broker-resume"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/cron_tick.rs": {
+     "owner": "host-maintenance",
+     "reason": "定期的な保守 executor を呼ぶ。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#cron-jobs"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/decision_log_wire.rs": {
+     "owner": "execution-coordination",
+     "reason": "判断の記録と実行の配線を担う。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#decisions-plan-gate"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/dispatch_run.rs": {
+     "owner": "execution-coordination",
+     "reason": "run 開始の gate と資源予約を調停する（routing も含む混在 module）。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#run-claim-lease"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/eval_trials.rs": {
+     "owner": "routing",
+     "reason": "routing 評価試行の run を管理する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#routing-eval"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/housekeeping.rs": {
+     "owner": "host-maintenance",
+     "reason": "scratch と worktree の後片付け・disk guard を担う。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#scratch-build-cache-disk-guard"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/input_attachments.rs": {
+     "owner": "execution-coordination",
+     "reason": "run 開始に必要な添付を組み立てる。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#worker-protocol-adapters"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/lane_assist.rs": {
+     "owner": "routing",
+     "reason": "lane の分類待ちと選択を担う。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#routing-lane-route"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/leases.rs": {
+     "owner": "run-supervisor",
+     "reason": "run の停止・lease 回収・終了照合を担う。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#orphan-takeover"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/maintenance.rs": {
+     "owner": "host-maintenance",
+     "reason": "target 掃除と disk 監視を実行する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#scratch-build-cache-disk-guard"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/ownerless_runs.rs": {
+     "owner": "run-supervisor",
+     "reason": "owner を失った run と review を回収する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#orphan-takeover"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/phase_integration.rs": {
+     "owner": "execution-coordination",
+     "reason": "WU 成果の工程統合を調停する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#workunit-scheduling-stage-integration"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/planner_flow.rs": {
+     "owner": "execution-coordination",
+     "reason": "plan 採用と gate を調停する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#execution-plan-adoption"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/project_retention.rs": {
+     "owner": "project-orchestration",
+     "reason": "案件 controller の記録を整理する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#project-controller"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/project_wake.rs": {
+     "owner": "project-orchestration",
+     "reason": "案件 controller の wake・予算・再評価を担う。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#project-controller"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/quota_book.rs": {
+     "owner": "routing",
+     "reason": "account の利用枠を見積もる。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#accounts-quota"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/review_spawn.rs": {
+     "owner": "execution-coordination",
+     "reason": "review の同期・開始・待ちを調停する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#review-runs-final-review"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/review_verdict.rs": {
+     "owner": "execution-coordination",
+     "reason": "review 判定を task/WU の後続処理へ写す。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#review-runs-final-review"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/route_failure.rs": {
+     "owner": "routing",
+     "reason": "source の失敗と cooldown を記録する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#routing-lane-route"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/route_launch.rs": {
+     "owner": "routing",
+     "reason": "選んだ route に adapter を組み立てる。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#routing-lane-route"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/route_select.rs": {
+     "owner": "routing",
+     "reason": "source と account を選ぶ。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#routing-lane-route"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/routing_context.rs": {
+     "owner": "routing",
+     "reason": "routing の特徴量と registry を扱う。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#routing-lane-route"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/run_context.rs": {
+     "owner": "execution-coordination",
+     "reason": "実行要求の文脈を組み立てる。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#worker-protocol-adapters"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/script_canary.rs": {
+     "owner": "host-maintenance",
+     "reason": "制御 script の canary と rollback を管理する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#script-runtime"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/script_compare.rs": {
+     "owner": "host-maintenance",
+     "reason": "制御 script の比較実行と mode の観測を担う。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#script-runtime"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/snapshot.rs": {
+     "owner": "execution-coordination",
+     "reason": "複数領域の観測値を集約する（状態の本来の所有は field 別指定）。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#run-claim-lease"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/stale_priority.rs": {
+     "owner": "execution-coordination",
+     "reason": "review 同期の待ち順を決める。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#workunit-scheduling-stage-integration"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/tree_units.rs": {
+     "owner": "execution-coordination",
+     "reason": "木の gate と生存確認を調停する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#recursive-task-tree"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/variant_pin.rs": {
+     "owner": "routing",
+     "reason": "評価 variant と route を照合する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#routing-eval"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/work_units.rs": {
+     "owner": "execution-coordination",
+     "reason": "WU の依存と check の開始を調停する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#workunit-scheduling-stage-integration"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs": {
+     "owner": "run-supervisor",
+     "reason": "worker の結果を閉じ継続を処理する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#continuation-session-resume"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/workspaces.rs": {
+     "owner": "execution-coordination",
+     "reason": "実行用 worktree の準備を調停する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#worker-protocol-adapters"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/write_set_gate.rs": {
+     "owner": "execution-coordination",
+     "reason": "並列 WU の書き込み範囲を予約する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#workunit-scheduling-stage-integration"
+     ]
+    },
+    "crates/task-dispatch/src/dispatcher/write_set_record.rs": {
+     "owner": "execution-coordination",
+     "reason": "run の書き込み実績を保存する。",
+     "sources": [
+      "docs/architecture-map.md#task-dispatch",
+      "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#workunit-scheduling-stage-integration"
+     ]
+    }
+   },
+   "rules": [
+    "cfg(test) field は test-hooks。",
+    "個別指定を優先し、無ければ writers の owner が単一の時だけ採用する。writers が空なら readers の単一 owner を採用する。それ以外はエラー。",
+    "参照された module が未登録なら個別指定の有無にかかわらずエラー。",
+    "owner_conflict は測定された writers の module owner が2種類以上。constructor は測定対象外、setter は除外しない。",
+    "共変更は相関の補助根拠であって所有を証明しない。owner は R4 の検討候補であり設計境界の決定ではない。"
+   ],
+   "schema": "celeris.dispatcher-owner-candidates/1"
+  },
   "scope": {
    "files_read": 209,
    "roots": [

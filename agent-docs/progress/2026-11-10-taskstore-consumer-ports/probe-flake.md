@@ -13,7 +13,7 @@ updated: 2026-11-11
 ## 結論
 段 org-port の統合で `celeris-campaign::arm_set_cli_normal` の `ab_only_counts_repetitions_retries_grading_and_cost_and_resumes_without_reposting` が落ちた原因は、R3 の変更ではなく次の競合だった。
 1. `crates/celeris/tests/ops_r1_pipeline.rs` の `campaign_bin()` が、試験の途中で同じ `CARGO_TARGET_DIR` に `cargo build -p celeris-campaign --bin celeris-campaign` を走らせる。
-2. この build は試験の build と依存の feature・profile が違うので作り直しになり、`target/debug/celeris-campaign` を消して新しい file を置く（inode が替わる）。
+2. この build は試験の build の後でも依存ごと compile し直し、`target/debug/celeris-campaign` を消して新しい file を置く（inode が替わる。下の証拠）。作り直しになる理由は、試験の build と依存の feature の組み合わせが違うためと見込むが、未確認。
 3. その間に走っていた `celeris-campaign preflight` では、`std::env::current_exe()` が `<path> (deleted)` を返す。`preflight_isolation::run` がそこから `fs::copy` すると ENOENT になり、A・B・operator の 3 件が `deny_readable:<主体>:probe:stage probe: No such file or directory (os error 2)` になる。
 
 `preflight_isolation.rs` の写し元を `/proc/self/exe`（定数 `SELF_EXE`）に替えて直した。
@@ -50,7 +50,12 @@ updated: 2026-11-11
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 - 直す前（`preflight_isolation.rs` だけ base に戻して実行）: `cargo nextest run -p celeris-campaign --test preflight_deny_file -E 'test(probe_stage_)'` → exit 100。`1 test run: 0 passed, 1 failed`。panic は `assert!(!t.contains("stage probe"))` で、missing は `deny_readable:A:probe:stage probe: No such file or directory (os error 2)`・B・operator の 3 件（統合の log と同じ文）。
 - 直した後: `cargo nextest run -p celeris-campaign --test preflight_deny_file` → exit 0、`4 tests run: 4 passed`。
-- 残りの検査の結果は「## 検査の結果」に書く。
+- `cargo nextest run -p celeris-campaign --test arm_set_cli_normal --test preflight_deny_file` → exit 0、`10 tests run: 10 passed`（統合で落ちた `ab_only_counts_repetitions_retries_grading_and_cost_and_resumes_without_reposting` を含む）。
+- `bash scripts/dev/test-affected.sh` → exit 0。対象 crate は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。nextest `3713 tests run: 3713 passed (13 slow), 11 skipped`、script bundle の SKIP 0 件。`ops_r1_pipeline` も同じ run で走った。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo clippy -p celeris-campaign --test preflight_deny_file -- -D warnings` → exit 0（足した試験の code）。
+- `cargo fmt --all -- --check` → exit 0。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の変更 path は、この進捗ファイル・`crates/campaign/src/preflight_isolation.rs`・`crates/campaign/tests/preflight_deny_file.rs` の 3 件だけ。
 
 ## 未解決
 - 無し（この WU の範囲では）。下の提案の扱いは R5 との調整が要る。

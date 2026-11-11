@@ -320,3 +320,48 @@ run の終わりに quota の消費を見積もり、`QuotaEstimated` event を�
 - `quota_activity.end` と account book の読み出しは呼び出し側に残し、その結果を `group`・`after` として渡す。`member_events` と `calibration_records` は呼び出し側が遷移と同じ順で書く。
 
 owner 候補: routing（quota の会計）。
+
+## 反例試験の不足
+
+cm-test-gaps による静的調査（2026-11-11、基準 `$CELERIS_WU_BASE`）。以下は試験本文の入力・操作順・assertion と、上の判断／副作用区間を照合した結果であり、試験の実行結果ではない。「不足」は挙げた試験群で固定されていない具体的な組合せを指す。製品の不具合が再現したという意味ではなく、別 crate・release gate を含む全試験の網羅性も主張しない。再現方法は後続の試験設計案で、今回は hook も試験も追加しない。
+
+### lease
+
+- 既存の試験: `crates/task-core/src/store/tests.rs:275` の `acquire_lease_is_exclusive_under_concurrency` は、同一の in-memory store に対する2スレッドの取得を Barrier で揃え、成功が片方だけであることを確認する。`crates/task-core/src/store/tests.rs:861` の `renew_lease_extends_only_the_matching_running_lease` は、保持者の延長、別 run・非 Running・存在しない task の拒否、不要な遷移 event が増えないことを順次確認する。
+- 回収側の試験: `crates/task-dispatch/src/dispatcher/tests/work_units.rs:898` の `a_lease_expiry_requeue_closes_the_runs_row` は、期限切れの WU を tick で回収し、終了 event と run 行の HarnessError・終了時刻を確認する。`crates/task-dispatch/src/dispatcher/tests/integration_ready_race.rs:279` の `expired_lease_during_stage_integration_is_extended_not_reclaimed` は、統合中の lease を延長し、Running を維持して最終的に Done へ進めることを確認する。
+- 守る不変条件: 単一保持者と、現在の保持者を古い情報で回収しないこと。根拠は `CLAUDE.md`（状態の正本は SQLite）、`agent-docs/adr/0074-parallel-work-units-checkpoints-milestones-quota.md`（並列 WU の lease）、`agent-docs/adr/2026-10-20-integration-check-process-group-and-lease.md`（統合中の延長）。対象境界は `reclaim_expired_leases` の読み出し 218–237 と renew 244–303、回収の永続化 402–433。
+- 不足する反例: Running の run A の期限切れ snapshot を回収側が取得した直後、別の接続が A を renew する順序、および A を終了させ run B が取得した後に古い回収側が再開する順序。期待結果は、先に確定した renew／B の lease を古い snapshot が消さず、B を止めず、A の requeue を B に適用しないこと。逆順（回収が先に確定）は旧 A の renew が拒否されること。既存の取得競合と逐次 renew 試験だけでは、この読み出しと適用の間の変更を固定していない。
+- 決定的な再現方法: 一時 DB を2接続で開き、回収側の snapshot 取得後に試験専用 hook で停止し、他方の commit 完了を出来事待ちして再開する。期限は注入時計と fixture の lease 時刻で揃える。`tokio::time::pause` だけでは SQLite 側の実時計を進められないので、時計の対応も明示する。CPU 負荷や固定 sleep に依存しない。
+
+### restart
+
+- 既存の試験: `crates/task-dispatch/src/dispatcher/tests/ownerless_runs.rs:260` の `handoff_shutdown_closes_the_old_reviewer_run_and_the_new_active_rereviews` は、旧 reviewer が lock を持つ間は新側が起動せず、shutdown で旧 run が Cancelled・終了 event 1件となり、引き継ぎ後の review が Done、running 行が空になることを確認する。`crates/task-dispatch/src/dispatcher/tests/ownerless_runs.rs:487` の `ownerless_runs_are_reconciled_again_after_the_interval` は注入時計で周期前後の回収を確認する。同ファイル :515 の `an_ownerless_run_is_kept_while_another_instance_lives_until_its_deadline` は、生存する他 instance があっても期限後には閉じることを確認するが、その後に旧側の完了を届けない。
+- 回復時の保護: `crates/task-dispatch/src/dispatcher/tests/orphan_work_units.rs:349` の `stale_recovery_cannot_overwrite_a_new_run_replan_or_task_cancel` は、保存しておいた WU の読み取り値に対して新 run・replan・cancel を先に確定し、古い `recover_work_unit` が行と event を変更しないことを確認する。これは WU 回復の比較更新の試験であり、reviewer 完了経路全体の重複適用の試験ではない。
+- 守る不変条件: run を取り残さず、遅延結果で終端から再開したり別 run の結果を上書きしたりしない。根拠は `agent-docs/adr/2026-10-03-ownerless-running-runs.md` D1–D3・D5、`CLAUDE.md` の SQLite 正本・events 追記専用。D3 は期限回収後の旧保持者による WorkerFinished の追記を明示的に許すため、全経路で終了 event が1件だけという条件にはしない。
+- 不足する反例: 新 active が期限切れ reviewer A を ownerless として閉じ、reviewer B を開始した後、まだ生きていた旧 draining instance から A の合格結果が届く。期待結果は、A の run 行が Running に戻らず、B の登録・quota を A が解放せず、古い候補の合格で delivery を進めないこと。続いてもう一度 dispatcher を作り直し、B の正当な終了後に running 行が残らないことも確認する。対象境界は `on_review_finished` の memory 除去 26、quota 73–93、状態確認 126–140、delivery 保存 358–389 と task 遷移 502–560。
+- 決定的な再現方法: 既存の ownerless fixture の pid 生存関数と注入時計を再利用し、旧 reviewer の完了送信を Notify の試験専用 gate で保留する。新側の回収・B 起動の出来事を待ってから旧側を解放し、再起動後まで run ID 別の索引・候補・quota を照合する。CPU 負荷は使わない。
+
+### 同時完了
+
+- 既存の試験: `crates/task-dispatch/src/dispatcher/tests/tick_and_dispatch.rs:663` の `a_human_comment_interrupts_the_running_run_and_the_next_run_carries_it` は、稼働中の worker への人のコメントが Ready への割り込みとなり、attempts を増やさず次 run の前置きに載ることを確認する。`crates/task-dispatch/src/dispatcher/tests/work_units.rs:997` の `a_run_aborted_by_cancel_closes_its_runs_row` は、遅延中の worker を cancel して run 行の Cancelled・終了時刻と終了 event を確認する。両者は完了通知を同じ tick の処理待ちキューへ揃えてはいない。
+- 既存の回復保護: `crates/task-dispatch/src/dispatcher/tests/orphan_work_units.rs:386` の `local_run_is_not_recovered_and_task_cancel_does_not_requeue` は、手元にある run を索引だけから回収しないことと、その後の cancel で WU が Cancelled、running map が空になることを確認する。前節の :349 の比較更新試験もあるが、worker 終了処理の副作用を通した比較ではない。
+- 守る不変条件: `CLAUDE.md` の「状態は SQLite」「worker の自己申告だけで完了にしない」「events は追記専用」。人の割り込みは `agent-docs/adr/0044-task-management.md`、WU の回復は `agent-docs/adr/0074-parallel-work-units-checkpoints-milestones-quota.md` の Ready task の孤児回収の付記。対象境界は `finish_worker_result_with` の WU 遷移 1289–1351、run 終了 1354–1387、段の再判定 1390–1421、task 遷移 1553–1628。
+- 不足する反例: run A の Done 通知を処理待ちにし、lease も期限に到達させた tick に、(a) 人のコメント、(b) cancel をそれぞれ確定させる。さらに WU 遷移直後と task 遷移直前の各境界で人の操作を挟む。期待結果は、cancel 後に Done／review／統合へ進まないこと、コメント後の新 run B を A の終了で閉じず、次 run がコメントを受け取ること、回収と終了で retry・report・quota の処理を二重適用しないこと。逆順でも、既に確定した状態に対する人の操作の契約どおりとなること。単独の cancel／コメント試験ではこの組合せを保証しない。
+- 決定的な再現方法: fake adapter の完了送信を gate で制御し、キュー投入済みを通知で確認してから tick を呼ぶ。lease 時刻は注入時計で固定し、途中の窓は既存 `test_halt_after_wu_transition` と同種の試験専用 hook で固定する。順序ごとに run ID、WU、task、終了理由、起動回数を検査する。CPU 負荷や偶然の同時終了は使わない。
+
+### review/integration
+
+- 既存の試験: `crates/task-dispatch/src/dispatcher/tests/target_sync.rs:309` の `integration_repair_resumes_review_on_latest_target` は、repair 後に target を進め、最新 target を含む候補で check と reviewer が動き、attempts を保って Done になることを確認する。同ファイル :1336 の `reviewer_pass_is_reused_when_target_advances_without_overlap` と :1422 の `reviewer_runs_again_when_target_advances_touching_the_task_files` は、main の進行と候補の差分が非重複なら合格を再利用し、重複なら reviewer を再実行することを確認する。非重複の場合も新候補への必須 check の束縛を確認している。
+- 段の順序: `crates/task-dispatch/src/dispatcher/tests/work_units.rs:1928` の `a_pending_human_replan_runs_the_planner_before_retrying_the_integration` は、人の replan 要求後、planner より前に統合を再試行しないこと、変更後の check で統合が追加1回だけ走ることを確認する。`crates/task-dispatch/src/dispatcher/tests/integration_ready_race.rs:71` の `ready_wins_before_integration_start_leaves_pending_and_retries` は、統合開始前の hook で Ready への遷移を挟み、Pending のまま再試行できることを確認する。
+- 守る不変条件: `CLAUDE.md` の完了判定、`agent-docs/adr/0118-review-target-sync-and-merge-candidate.md` D3–D5 の候補と verdict の束縛、`agent-docs/adr/0120-pre-review-sync-integration-repair.md` D2–D4 の repair 後の再同期と回数上限、`agent-docs/adr/0074-parallel-work-units-checkpoints-milestones-quota.md` の統合・replan の順序。再利用の条件は `agent-docs/adr/2026-10-27-review-resync-halt-visible-and-reviewer-reuse.md` に従う。
+- 不足する反例: review A が合格し完了キューへ入った後、verdict 保存前に main が進む。併せて段の repair／人の replan が先に確定した状態を用意し、旧 review A と旧 integration の完了を遅れて届ける。期待結果は、旧候補を無条件に MergeQueued にせず、現行の計画を旧完了で Done にせず、repair を重複作成せず、必要な再同期・check を経てから次段へ進むこと。既存試験は各々の分岐と順序を確認するが、完了通知の滞留後の計画変更と候補変更を組み合わせてはいない。
+- 決定的な再現方法: `spawn_review` の非同期検査・送信（996–1077）と `on_review_finished` の delivery 保存（358–389）／task 遷移（502–560）の間を試験専用 gate で区切る。送信完了を出来事待ちし、一時 Git repo の main 更新・replan 確定後に処理を進める。repair 起票と段統合の event 順・候補の束縛を照合する。main を繰り返し更新する負荷試験にはしない。
+
+### 権限/予算
+
+- 既存の試験: `crates/task-dispatch/src/dispatcher/tests/tree_gate.rs:1271` の `tree_usd_limit_prices_cache_tokens_by_their_rates` は単価に従う合算と上限到達時の決定要求1件を、同ファイル :1301 の `tree_usd_limit_stops_on_unknown_cost_runs_unless_a_rate_is_configured` は費用不明での停止と単価設定後の解除を確認する。`crates/task-dispatch/tests/policy_close.rs:323` の `unknown_quota_or_cost_is_not_treated_as_zero_or_available` は quota・費用・予算の Unknown を Available／ゼロにせず、Unknown しかなければ Hold とする純粋な policy を確認する。これは実際の worker 非起動の確認ではない。
+- quota 予約: `crates/task-dispatch/src/dispatcher/tests/route_select.rs:1424` の `cos_reservation_is_traced_and_never_a_slot_wait` は、予約済み候補の拒否理由と、予約と同時実行枠の混在を単なる slot 待ちにしないことを確認する。入力は構築済みの RouteState であり、`route_state` の収集から `dispatch_one` の起動までの更新は挟まない。
+- credential 待ち: `crates/task-dispatch/src/dispatcher/tests/credential_gate.rs:153` の `missing_credential_blocks_only_that_unit_and_leaves_the_task_and_siblings` は対象 WU だけの Blocked を確認する。`crates/task-dispatch/src/dispatcher/tests/credential_e2e.rs:547` の `credential_wait_notifies_through_the_outbox_without_any_run_over_full_ticks` は注入時計で tick を回し、待機中の通知集約と run／chat 起動の抑止を確認する。`crates/task-core/src/store/credential_wait_tests.rs:255` の `cancelled_task_is_never_resumed` は cancel 確定後の検証／resume claim を拒否する。`crates/task-core/src/store/credential_wait_tests.rs:209` の `claim_resume_succeeds_exactly_once_under_concurrency` は8スレッドの claim の成功が1件であることを確認する。claim 済みで実起動前の窓はこれらの試験にはない。
+- 守る不変条件: `CLAUDE.md` の認可・SQLite 正本、`agent-docs/adr/2026-11-06-budget-usd-caps.md` D2（上限設定時の費用不明は停止、既に起動した run 分の超過は許容）、`agent-docs/adr/2026-10-11-llm-source-harness-selection.md`（source/account と quota）、`agent-docs/adr/2026-10-15-credential-wait-skip-triage.md`（待機によって worker／CoS を起こさない）。USD 費用不明と quota 推定の unknown は別の量として検査する。
+- 不足する反例: (a) credential の resume claim が成功した後、同じ木の別 run が終わって USD 上限到達または費用不明となり、次の dispatch に進む。期待結果は credential の解消だけで予算を迂回せず、worker を起こさず理由を残すこと。cancel を claim 後に確定する派生例でも起動しないこと。(b) 同じ account の worker と reviewer が重なり、一方の終了で quota group が Pending、他方の終了で Closed になる途中に task の cancel／再起動を挟む。期待結果は予約を二重解放せず、残る不明分を利用可能なゼロと扱わず、次の route が過大な空きを見ないこと。単独の gate／policy／claim の assertion ではこの連鎖を固定していない。
+- 決定的な再現方法: (a) claim 完了と次 tick の間で出来事待ちし、別 run の完了を fixture で永続化して起動回数ゼロを照合する。(b) fake adapter の2つの終了 gate を順に解放し、`resolve_quota_estimate` の group 更新 177 と他 member の event 追記 314–316、自分の event を保存する worker／review 終了経路の境界を試験専用 hook で固定する。quota の観測値・時計も注入し、再起動後の route と記録を確認する。実 credential・外部通信・CPU 負荷は使わない。

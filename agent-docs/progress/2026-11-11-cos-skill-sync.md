@@ -6,7 +6,7 @@ updated: 2026-11-11
 ---
 # CoS の skill を昇格で KB に写し、版が config と違えば CoS run を起こさない
 
-完了日: 2026-11-11（attempt 3 で受け入れ検査がすべて exit 0）。本番への配備は運用者が行う。
+完了日: 2026-11-11（attempt 4 で移行手順を直し、受け入れ検査がすべて exit 0）。本番への配備は運用者が行う。
 
 設計判断は [ADR 2026-11-11 cos-skill-sync](../adr/2026-11-11-cos-skill-sync.md)。基準は `git merge-base HEAD main`。
 
@@ -102,6 +102,9 @@ updated: 2026-11-11
 - phase 1: CoS skill 同期の最終検査結果を記録する
 - phase 1: CoS skill 同期の再検査と未完了事項を記録する
 - phase 1: CoS の照合の門を task-dispatch に移し、Cargo.lock を変えずに test-affected の範囲を狭める
+- phase 1: CoS skill 同期の attempt 3 の検査結果を記録する
+- phase 1: 最初の昇格では手で sync-skills.sh を走らせる移行手順に直し、版の照合を config の既定で試し、読めない config では KB に写さない
+- phase 1: CoS skill 同期の attempt 4 の検査結果を記録する
 
 ## 未解決事項
 
@@ -157,5 +160,45 @@ attempt 2 の review は `test-affected` が 1200 秒の上限で時間切れだ
 - `bash scripts/dev/test-affected.sh` → exit 0、15 分 33 秒（load average 35〜55）。nextest 6626 passed / 23 skipped（567.6 秒）、
   Web 104 files / 712 tests と server 試験は合格、健全性 verdict=pass（fail_grade 0）、script bundle SKIP 0。
   ログ: run の成果物 `test-affected-attempt3.log`。終了時に一時 dir の削除権限の警告（`rm: cannot remove …/own-eval`）が出たが exit 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check` → exit 0（この記録の commit の後に実行）。
+
+## attempt 4: 移行手順の誤りと review の指摘 2 件を直す
+
+attempt 3 の review は「本番への移行」の手順 1 と ADR D2 の誤りで不合格だった。
+
+- 実装前 brief:
+  1. 根本原因: 通常の昇格（Web の「昇格」・`POST /releases/{sha12}/promote`）は今の `current` の `promote.sh` を走らせる（ADR-0041 D4）。
+     今の本番の `promote.sh` には写しの段が無いので、この変更を含む release の最初の昇格では KB が版 10 のまま残る。
+     手順と ADR はこれを書いておらず、「止まるのは数秒」と誤って書いていた。
+     副次の指摘 2 件: task-ops の試験は skill 自身の版で照合し、config の既定と比べていなかった。
+     `sd_knowledge_root` は config が読めないと黙って既定の KB を返していた。
+  2. 責務 owner: 移行手順は進捗、時機の説明は ADR D2 と `docs/ops/selfdeploy.md` §4c、既定の版は celeris の config（`crates/celeris/src/config/cos.rs`）、
+     KB の場所は `scripts/selfdeploy/lib.sh` の `sd_knowledge_root`。
+  3. 既存の再利用先: `task_ops::cos_skill_gate::check`（照合）、`scripts/selfdeploy/tests/sync_skills.sh`（写しの試験）、
+     `sd_db_path` の「config が無ければ既定」の扱い。`celerisctl skills import` は取り込み（古い file を消さず `source:` を足す）で意味が違うので使わない（ADR D2 に理由を書いた）。
+  4. 選択肢: (a) 新しい release の `promote.sh` を走らせるよう releases.rs を変える案は ADR-0041 D4 の安全策を崩すので採らない。
+     (b) 昇格の前に手で写す案は、昇格が失敗したときに KB だけが進むので採らない。(c) 最初の昇格の直後に手で 1 回写す手順を採った。
+  5. 新しい状態・分岐・fallback・port: 無し。`sd_knowledge_root` の黙った fallback を消した（読めない config は失敗）。
+  6. 撤去対象: task-ops の `repo_skills_pass_under_the_default_policy_version`（celeris の config 既定で照らす試験に置き換えた）と、
+     `sd_knowledge_root` の例外の握りつぶし。
+  7. 不変条件: repo の CoS skill は `[cos.triage]` の既定で照合を通る（`repo_cos_skills_pass_the_gate_under_the_default_triage_config`）。
+     読めない config では KB を変えず失敗する（`sync_skills.sh` の追加分）。
+- 変えたこと:
+  - 「本番への移行」を書き直した（最初の昇格の直後に手で `sync-skills.sh` を 1 回実行、それまで CoS の run は止まり受信箱に 1 件）。
+  - ADR D2 に「どの `promote.sh` が写すか」「KB の場所の決め方」「`celerisctl skills import` を使わない理由」を足し、「数秒」の記述を直した。
+    ADR D4 の試験の参照を直した。`docs/ops/selfdeploy.md` §4c に写しの段と最初の昇格の注意を書いた。
+  - `crates/celeris/src/config/cos_tests.rs` に `repo_cos_skills_pass_the_gate_under_the_default_triage_config` を足し、
+    task-ops の同名の役の試験を消した。既存の試験では、config の既定と repo の skill の版のずれを検出できなかった。
+  - `sd_knowledge_root` は config があるのに読めない（TOML の誤り・root が文字列でない）と失敗し、`sd_sync_cos_skills` は log に残して
+    失敗を返す（`promote.sh`・`rollback.sh` は exit 4）。`sync_skills.sh` に相対の root・既定の root・読めない config の 3 件を足した。
+
+### attempt 4 の検査（提出時の HEAD で実行、基準は `git merge-base HEAD main`）
+
+- `cargo nextest run -p task-ops -p celeris -E 'test(cos_skill_gate) | test(repo_cos_skills_pass_the_gate_under_the_default_triage_config) | test(promote_deploys_the_cos_skills_and_leaves_curation_pages)'`
+  → exit 0、4 passed。
+- `bash scripts/dev/test-affected.sh` → exit 0、895 秒（load average 33〜84）。nextest 6626 passed / 23 skipped（513.6 秒）、
+  Web 104 files / 712 tests と server 113 tests は合格、健全性 verdict=pass（fail_grade 0）、script bundle SKIP 0。
+  ログ: run の成果物 `test-affected-attempt4.log`。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 - `sh scripts/dev/progress-index.sh --check` → exit 0（この記録の commit の後に実行）。

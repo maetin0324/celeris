@@ -29,4 +29,6 @@
 
 実装済み: 掃除の try-lock 化、pool lock を持たない seed の写し（世代の pin・owner の `.alloc.lock`）、handoff の要求元の確認、`request_age_secs` の log。
 
-未実装: `housekeeping::check_cargo_target_env` と評価試行（`eval_trials`）の割り当て・touch・release・set_ttl を tick の外へ移すこと。写しは pool lock を持たなくなったが、この 2 経路は tick の中で写しそのものを同期に待つ。
+検査の env（`housekeeping::check_cargo_target_env`）は `try_allocate_for_check` で待たず、seed を写さない（target が無ければ空で作る。検査の build は遅くなりうるが tick は止まらない）。
+
+未実装: 評価試行（`eval_trials`）の割り当て・touch・release・set_ttl を tick の外へ移すこと。

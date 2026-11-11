@@ -1928,3 +1928,26 @@ fn seed_copy_runs_without_the_pool_lock_and_gc_keeps_the_pinned_generation() {
     assert_eq!(gc.retired.len(), 1, "{gc:?}");
     assert!(!repo_dir.join("gen-1").exists());
 }
+
+/// ADR 2026-11-11-scratch-lock-tick-stall: tick の検査の env の割り当ては、pool の `.lock` を別の持ち主が
+/// 握っていても待たずに `None` を返し、空いていれば lease を書く。seed があっても写さない（写しは tick を止める）。
+/// 不変条件: tick から pool の `.lock` と seed の写しを待つ経路が無い。既存の試験は競合する lock を作らない。
+#[test]
+fn check_allocation_does_not_wait_for_the_pool_lock_nor_copy_the_seed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = Pool::new(tmp.path());
+    write_seed(&pool, MANIFEST);
+    let owner = Owner::task("T1");
+    let held = pool.lock().unwrap();
+    assert!(try_allocate_for_check(&pool, &owner, Path::new(SEED_REPO)).is_none());
+    assert!(!pool.lease_path(&owner).exists());
+    drop(held);
+    let a = try_allocate_for_check(&pool, &owner, Path::new(SEED_REPO)).expect("allocated");
+    assert_eq!(a.origin, TargetOrigin::Empty { reason: None });
+    assert!(is_empty_dir(&a.target_dir));
+    assert!(pool.lease_path(&owner).is_file());
+    // 割り当て中の owner（seed を写している）も待たない。
+    let owner_alloc = lock_owner_alloc(&pool.owner_dir(&owner)).unwrap();
+    assert!(try_allocate_for_check(&pool, &owner, Path::new(SEED_REPO)).is_none());
+    drop(owner_alloc);
+}

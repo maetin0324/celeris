@@ -22,6 +22,7 @@ commit: `phase 2: copy the seed outside the pool lock and drop handoff requests 
 - `allocate_with_seed` は pool lock の下で世代の pin（`pin_current_seed`、世代の `.copy-pin` に共有 flock）と lease の書き込みだけを行い、写しは lock を外して行う。同じ owner の割り当ては `.alloc.lock` で pool lock の外で直列にする。seed の GC は pin のある世代とその repo を退避せず、owner の GC は `.alloc.lock` が持たれた owner を消さない。
 - handoff: active は要求元（自分より新しく drain していない、pid が生きている standby・active の行）が居るときだけ draining になる。居なければ要求を消して active に残る（判定はどちらも書き込みの transaction の中）。standby は要求の前に自分の行を書く。draining と要求の破棄の log に `request_age_secs` を出す。
 - 最後の tick の時刻は既存の `GET /daemon` の `snapshot.last_tick_at` で読める（流用。新しい欄は足していない）。
+- 検査の env（`housekeeping::check_cargo_target_env`。呼び出し元は housekeeping・work_units・review_spawn・phase_integration）は `scratch::try_allocate_for_check` を使う。owner の `.alloc.lock` と pool の `.lock` を try で取り、取れなければ lease に触らず target の path だけを返す。seed は写さない（target が無ければ空で作る）。試験 `check_allocation_does_not_wait_for_the_pool_lock_nor_copy_the_seed`。
 
 ## 呼び出し元の調査
 
@@ -51,14 +52,13 @@ attempt 2 の検査（提出時の HEAD で実行）:
 
 - `cargo nextest run -p celeris --lib -E 'test(/instance::tests/)'` → 29 passed（`a_handoff_request_from_a_gone_requester_is_dropped_and_the_active_stays` を含む）。
 - `cargo nextest run -p celeris --test instance_handoff --test unpromoted_release` → 18 passed（実 daemon の handoff）。
-- `cargo nextest run -p task-worker --lib -E 'test(/scratch::tests/)'` → 41 passed（`seed_copy_runs_without_the_pool_lock_and_gc_keeps_the_pinned_generation` を含む）。
+- `cargo nextest run -p task-worker --lib -E 'test(/scratch::tests/)'` → 42 passed（`seed_copy_runs_without_the_pool_lock_and_gc_keeps_the_pinned_generation` を含む）。
 - `cargo nextest run -p task-dispatch --lib -E 'test(/scratch_gc/) | test(target_sweep_tick_defers)'` → 9 passed。
 - `bash scripts/dev/test-affected.sh` は attempt 2 では未実行（壁時計の残りが足りない）。
 
 ## 未解決
 
-- `housekeeping::check_cargo_target_env` と評価試行の割り当てを tick 外へ移す。checks 用 env の呼び出し元は housekeeping・work_units・review_spawn・phase_integration。
-- 評価試行の touch/release/set_ttl の待機経路を除く。
+- 評価試行（`eval_trials::eval_allocate_target`）は tick の中で `allocate_with_seed`（seed の写しと pool の `.lock` の待ち）と `set_ttl` を呼ぶ。`score_eval_trial` の `touch`、片付けの `release` も pool の `.lock` を待つ。未修正（受け入れ条件 4 は未達）。
 - 実 daemon 系の試験 fixture が実 host の disk watch を継承する問題を解消し、指定検査を完走する。
 - task 全体は未完了。完了日は未設定。
 

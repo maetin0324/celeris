@@ -256,6 +256,16 @@ pub fn lock_owner_alloc(owner_dir: &Path) -> io::Result<std::fs::File> {
     Ok(file)
 }
 
+/// `lock_owner_alloc` の待たない版。他の割り当てが持っていれば `None`。
+pub fn try_lock_owner_alloc(owner_dir: &Path) -> io::Result<Option<std::fs::File>> {
+    let file = open_lock_file(&owner_dir.join(OWNER_ALLOC_LOCK))?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(e)) => Err(e),
+    }
+}
+
 pub fn remove_partial_copies(owner_dir: &Path) {
     let Ok(entries) = std::fs::read_dir(owner_dir) else {
         return;

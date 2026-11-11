@@ -705,17 +705,63 @@ pub fn allocate(pool: &Pool, req: &AllocateRequest<'_>) -> io::Result<Allocation
 }
 
 /// `allocate` の seed の条件と写し方を指定する版（dispatcher は `[scratch.cargo]` と rustc の版を渡す）。
-/// seed の写しは `.lock` の下で行う（seed の切り替え・GC と直列）。
+/// seed の写しは pool の `.lock` を外して行う（世代は pin、owner は `.alloc.lock` で守る）。待つので tick から呼ばない。
 pub fn allocate_with_seed(
     pool: &Pool,
     req: &AllocateRequest<'_>,
     seed: &SeedPolicy<'_>,
     ops: &SeedCopyOps<'_>,
 ) -> io::Result<Allocation> {
-    let owner_dir = pool.owner_dir(req.owner);
     // 同じ owner の割り当ては pool の `.lock` の外で直列にする（seed の写しは `.lock` を持たない）。
-    let _owner_alloc = lock_owner_alloc(&owner_dir)?;
-    let mut lock = pool.lock()?;
+    let owner_alloc = lock_owner_alloc(&pool.owner_dir(req.owner))?;
+    let lock = pool.lock()?;
+    allocate_locked(pool, req, seed, ops, owner_alloc, lock)
+}
+
+/// tick（検査の env）用の割り当て: 待たず、seed を写さない（ADR 2026-11-11-scratch-lock-tick-stall）。
+/// owner が割り当て中か pool の `.lock` が使用中なら `None`（次の呼び出しに回す。target の path はそのまま使える）。
+pub fn try_allocate_for_check(pool: &Pool, owner: &Owner, repo_path: &Path) -> Option<Allocation> {
+    let none = |_: &AdoptCandidate| None;
+    let req = AllocateRequest {
+        owner,
+        repo_path,
+        base_commit: None,
+        work_unit_key: None,
+        checkout: None,
+        candidates: &[],
+        distance: &none,
+        adopt: false,
+        max_distance: 0,
+    };
+    let owner_dir = pool.owner_dir(owner);
+    let locks = std::fs::create_dir_all(&owner_dir)
+        .and_then(|()| try_lock_owner_alloc(&owner_dir))
+        .and_then(|o| Ok(o.zip(pool.try_lock()?)));
+    let result = match locks {
+        Ok(Some((owner_alloc, lock))) => {
+            let ops = SeedCopyOps::real();
+            allocate_locked(pool, &req, &SeedPolicy::disabled(), &ops, owner_alloc, lock)
+        }
+        Ok(None) => {
+            tracing::info!(owner = %owner, "scratch: the owner or the pool is busy; the check uses the target path without touching the lease");
+            return None;
+        }
+        Err(e) => Err(e),
+    };
+    result
+        .inspect_err(|e| tracing::warn!(owner = %owner, error = %e, "scratch: could not write the lease; using the target path without it"))
+        .ok()
+}
+
+fn allocate_locked(
+    pool: &Pool,
+    req: &AllocateRequest<'_>,
+    seed: &SeedPolicy<'_>,
+    ops: &SeedCopyOps<'_>,
+    _owner_alloc: std::fs::File,
+    mut lock: PoolLock,
+) -> io::Result<Allocation> {
+    let owner_dir = pool.owner_dir(req.owner);
     let lease_path = owner_dir.join(LEASE_FILE);
     let target = owner_dir.join(TARGET_SUBDIR);
     std::fs::create_dir_all(&owner_dir)?;
@@ -785,17 +831,16 @@ pub fn allocate_with_seed(
             Some(from) => TargetOrigin::Adopted { from: from.clone() },
             None => TargetOrigin::Existing,
         }
+    } else if !seed.enabled {
+        remove_partial_copies(&owner_dir);
+        TargetOrigin::Empty { reason: None }
     } else {
         // ADR 2026-11-11-scratch-lock-tick-stall: 世代の固定と lease の書き込みだけを `.lock` の下で行い、
         // 数十 GB の写しは `.lock` を外して行う（seed の切り替え・GC・他の割り当てを止めない）。
-        let pin = if seed.enabled {
-            pin_current_seed(pool, &repo_key).unwrap_or_else(|e| {
-                tracing::warn!(owner = %req.owner, error = %e, "scratch: could not pin the seed generation");
-                None
-            })
-        } else {
+        let pin = pin_current_seed(pool, &repo_key).unwrap_or_else(|e| {
+            tracing::warn!(owner = %req.owner, error = %e, "scratch: could not pin the seed generation");
             None
-        };
+        });
         write_lease(&lease_path, &lease)?;
         drop(lock);
         let origin = seed_target(pool, &owner_dir, &repo_key, seed, ops, pin.as_ref());

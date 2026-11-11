@@ -106,8 +106,8 @@ tasks: [01M6TYVJT53598CPKMGSQGA7XM]
 |---|---|---|---|---|
 | task-api | adjust-api | `cos_delivery_suite`（R3 の競合が解ければ `cos_delivery_suite_*` へ） | 4 | cos_operations_domains・cos_ops_admin_config・cos_ops_projects_cron・project_auto_integrate |
 | task-worker | adjust-worker | `browser_eval_surface_suite` | 5 | browser_control_gate_wire・browser_live_cross・browser_loopback_prod_build・browser_prod_admission・browser_shared_cdp_events |
-| task-worker | adjust-worker | `browser_eval_surface_browser_action_recovery_py_suite` | 1 | browser_action_recovery（fixture `browser_action_recovery.py`。独立 binary を維持） |
-| task-worker | keep | 独立 binary を維持 | 3 | browser_restore_deliver（userns・実 browser）・reap_finished_children（waitpid(-1)）・ssh_cluster_manual（相手が keep のため1件だけの組） |
+| task-worker | adjust-worker | `unmapped_suite` | 2 | reap_finished_children・ssh_cluster_manual |
+| task-worker | adjust-worker | 1 件だけの組（束ねない） | 2 | browser_action_recovery（fixture `browser_action_recovery.py`）・browser_restore_deliver（fixture `userns_gate`） |
 
 ### 動かさない target（task-api・celeris・celerisctl）
 | crate | keep | 内訳 | r6 |
@@ -150,5 +150,3 @@ tasks: [01M6TYVJT53598CPKMGSQGA7XM]
 ## 付記: 実装との突き合わせ
 - 2026-11-10（unit adr）: 設計のみ。`inventory.json` の束は段 survey の案のまま採った（名前・上限・鍵を変えていない）。実装の leaf が束を外した・分けたときはここに書く。
 - 2026-11-10（unit reclass）: 地図の brace の path を r6 に数える。段 bundle の 3 leaf（`bundle-api-a`・`bundle-celeris`・`bundle-ctl`）が test-affected の health gate の `arch-map.wrong_path` で止まった。原因は `classify.py` の `external_refs` が地図の行を path の部分一致で探していたことで、brace の path（`crates/celerisctl/tests/{no_migrate,cli_resolution,bin_smoke}.rs` など）を見落とした。`classify.py` は地図の表の行の path を `scripts/dev/check-architecture-map.py` の `collect_backtick_paths`（と相対リンク）で集めるように直し、brace の展開を自分では持たない。`--check` は地図を集め直し、地図が挙げる target の leaf が r6（D4-1 の keep の理由があれば keep）であることを確かめる。これで 20 target が r6 になった: 段 bundle・adjust から 19 件（task-api 15: auth_and_guards・browser_doctor・browser_live・browser_site_policy_db・chat_stream・cluster_connect_admin・cos_chat_attach_pin・cos_operations・lifecycle・organization・reports・request_lock_counts・task_management・task_tree・tree_adopt、celeris 1: unpromoted_release、celerisctl 3: bin_smoke・cli_resolution・no_migrate）と、1 件だけの組で keep だった task-api の `execution`。束は同じ規則（D1・D2）で組み直したので、件数が減った鍵の束は名前と中身が変わった（`task_plan_suite` は 0 件になり消えた。task-api `browser_eval_surface_suite_a`・`_b` は 6 件の `browser_eval_surface_suite` 1 つになった）。1 件だけになった束は無かった。表は上のとおり直した。記録は [reclass.md](../progress/2026-11-10-health-v2-r5/reclass.md)。
-
-- 2026-11-11（unit adjust-worker）: `browser_restore_deliver` は実 browser と `userns_gate` を使うため、人の Objective に従い keep。`reap_finished_children` は `waitpid(-1)` が同じ process の任意の子を回収するため D3 の process global として keep。その結果、相手の無くなった `ssh_cluster_manual` も独立 target のまま。inventory の leaf・理由・summary を合わせ、base の走査結果と検査器は変えない。残る6 target は既定の2束へ移す。`browser_live_cross` は偽 Chrome・偽 SessionBackend を使い、実 browser と userns を使わない。

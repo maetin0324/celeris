@@ -797,7 +797,7 @@ async fn iterations_and_questions_are_null_when_unset() {
 
 /// `configure` の env の追加分は既存の同名キーより後に環境を組み立てるので勝つ（他アダプタと同じ規則）。
 #[tokio::test]
-async fn with_env_overrides_a_same_name_key_already_in_config_env() {
+async fn configure_env_overrides_a_same_name_key_already_in_config_env() {
     let dir = tempfile::tempdir().unwrap();
     let out_file = dir.path().join("env-seen.txt");
     let mut config = stub_ldr(
@@ -822,7 +822,7 @@ async fn with_env_overrides_a_same_name_key_already_in_config_env() {
         insufficient_is_error: false,
     };
     let base = LdrAdapter::new(config);
-    let with_env = base
+    let configured = base
         .configure(&AdapterSettings {
             env: vec![("OPENAI_BASE_URL".to_string(), "http://new:2".to_string())],
             ..AdapterSettings::default()
@@ -832,7 +832,7 @@ async fn with_env_overrides_a_same_name_key_already_in_config_env() {
 
     let req = sample_req(dir.path().to_path_buf());
     let sink = RecordingSink::default();
-    let outcome = with_env
+    let outcome = configured
         .run(req, "run-8", default_limits(), &sink)
         .await
         .unwrap();

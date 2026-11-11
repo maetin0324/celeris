@@ -2532,7 +2532,7 @@ echo '{"type":"result","subtype":"success","is_error":false}'
 
 /// ADR-0024 D2: `configure` の env の追加分は、既存の同名キーより後に環境を組み立てるので勝つ。
 #[tokio::test]
-async fn with_env_overrides_a_same_name_key_already_in_config_env() {
+async fn configure_env_overrides_a_same_name_key_already_in_config_env() {
     let dir = tempfile::tempdir().unwrap();
     let out_file = dir.path().join("env-seen.txt");
     let mut config = stub_claude(
@@ -2551,7 +2551,7 @@ echo '{{"type":"result","subtype":"success","is_error":false}}'
         "old-account-dir".to_string(),
     ));
     let base = ClaudeCodeAdapter::new(config);
-    let with_env = base
+    let configured = base
         .configure(&AdapterSettings {
             env: vec![(
                 "CLAUDE_SECURESTORAGE_CONFIG_DIR".to_string(),
@@ -2564,7 +2564,7 @@ echo '{{"type":"result","subtype":"success","is_error":false}}'
 
     let req = sample_req(dir.path().to_path_buf());
     let sink = RecordingSink::default();
-    let outcome = with_env
+    let outcome = configured
         .run(req, "run-env-1", default_limits(), &sink)
         .await
         .unwrap();
@@ -2577,7 +2577,7 @@ echo '{{"type":"result","subtype":"success","is_error":false}}'
 /// 上書きする（`[execution.planner].permission_mode` を実際の CLI 引数に反映するための実行時配線。
 /// E3 実装時に見送っていたフック）。既定のアダプタ（`bypassPermissions`）の CLI 引数には出ない。
 #[tokio::test]
-async fn with_permission_mode_overrides_the_permission_mode_argument() {
+async fn configure_permission_mode_overrides_the_permission_mode_argument() {
     let dir = tempfile::tempdir().unwrap();
     let out_file = dir.path().join("args-seen.txt");
     let config = stub_claude(

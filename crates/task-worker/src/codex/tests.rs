@@ -1049,7 +1049,7 @@ echo '{"type":"turn.completed"}'
 
 /// ADR-0025 D2: `configure` の env の追加分（`CODEX_HOME`）は既存の同名キーより後に環境を組み立てるので勝つ。
 #[tokio::test]
-async fn with_env_overrides_a_same_name_key_already_in_config_env() {
+async fn configure_env_overrides_a_same_name_key_already_in_config_env() {
     let dir = tempfile::tempdir().unwrap();
     let out_file = dir.path().join("env-seen.txt");
     let mut config = CodexConfig {
@@ -1070,7 +1070,7 @@ async fn with_env_overrides_a_same_name_key_already_in_config_env() {
         .env
         .push(("CODEX_HOME".to_string(), "old-account-dir".to_string()));
     let base = CodexAdapter::new(config);
-    let with_env = base
+    let configured = base
         .configure(&AdapterSettings {
             env: vec![("CODEX_HOME".to_string(), "new-account-dir".to_string())],
             ..AdapterSettings::default()
@@ -1080,7 +1080,7 @@ async fn with_env_overrides_a_same_name_key_already_in_config_env() {
 
     let req = sample_req(dir.path().to_path_buf());
     let sink = RecordingSink::default();
-    let outcome = with_env
+    let outcome = configured
         .run(req, "run-env-1", default_limits(), &sink)
         .await
         .unwrap();

@@ -618,7 +618,7 @@ async fn ask_input_carries_model_only_when_set() {
 
 /// `configure` の env の追加分は既存の同名キーより後に環境を組み立てるので勝つ（claude_code/codex と同じ規則）。
 #[tokio::test]
-async fn with_env_overrides_a_same_name_key_already_in_config_env() {
+async fn configure_env_overrides_a_same_name_key_already_in_config_env() {
     let dir = tempfile::tempdir().unwrap();
     let out_file = dir.path().join("env-seen.txt");
     let mut config = stub_pqa(
@@ -633,7 +633,7 @@ async fn with_env_overrides_a_same_name_key_already_in_config_env() {
         .env
         .push(("OPENAI_BASE_URL".to_string(), "http://old:1".to_string()));
     let base = PaperQaAdapter::new(config);
-    let with_env = base
+    let configured = base
         .configure(&AdapterSettings {
             env: vec![("OPENAI_BASE_URL".to_string(), "http://new:2".to_string())],
             ..AdapterSettings::default()
@@ -643,7 +643,7 @@ async fn with_env_overrides_a_same_name_key_already_in_config_env() {
 
     let req = sample_req(dir.path().to_path_buf());
     let sink = RecordingSink::default();
-    let outcome = with_env
+    let outcome = configured
         .run(req, "run-8", default_limits(), &sink)
         .await
         .unwrap();

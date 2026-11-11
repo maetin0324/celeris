@@ -1,0 +1,13 @@
+diff --git a/crates/celeris/src/notify.rs b/crates/celeris/src/notify.rs
+index faa135e9..0340fc63 100644
+--- a/crates/celeris/src/notify.rs
++++ b/crates/celeris/src/notify.rs
+@@ -1193,7 +1193,7 @@ async fn read_retry_after(response: reqwest::Response) -> Duration {
+ /// 429 は `SendOutcome::RateLimited`（失敗ではない。ADR-0037 D3）。
+ pub async fn post_webhook(client: &reqwest::Client, url: &str, content: &str) -> SendOutcome {
+     let payload = serde_json::json!({
+-        "content": clamp_content(content),
++        "content": "",
+         "username": WEBHOOK_USERNAME,
+         "allowed_mentions": { "parse": [] },
+     });

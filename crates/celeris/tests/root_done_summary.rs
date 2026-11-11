@@ -14,9 +14,10 @@
 #[allow(clippy::duplicate_mod)] // 同じ支援 file を試験 crate ごとに読む
 #[path = "../../../tests/support/http_async.rs"]
 mod fake_http;
+#[path = "support/webhook.rs"]
+mod webhook;
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use celeris::notify::{self, NotifyConfig, SendResult};
@@ -28,48 +29,11 @@ use task_core::{
 };
 use task_dispatch::Dispatcher;
 use time::OffsetDateTime;
-use tokio::io::AsyncWriteExt;
+use webhook::{Hook, hook};
 
 const WEB: &str = "http://celeris.test";
 const COS_OK: &str = "cat >/dev/null; echo '{\"type\":\"done\",\"summary\":\"まとめ: 調査の仕事を行い、成果が出た\",\"evidence\":[]}'";
 const COS_FAIL: &str = "cat >/dev/null; echo cos-broken >&2; exit 1";
-
-/// 偽の Discord webhook: 204 を返し、受けた本文を残す。
-struct Hook {
-    url: String,
-    bodies: Arc<Mutex<Vec<String>>>,
-    seen: tokio::sync::mpsc::UnboundedReceiver<()>,
-}
-
-async fn hook() -> Hook {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
-    let url = format!("http://{}/hook", listener.local_addr().expect("addr"));
-    let bodies = Arc::new(Mutex::new(Vec::new()));
-    let (tx, seen) = tokio::sync::mpsc::unbounded_channel();
-    let kept = bodies.clone();
-    tokio::spawn(async move {
-        while let Ok((mut stream, _)) = listener.accept().await {
-            let kept = kept.clone();
-            let tx = tx.clone();
-            tokio::spawn(async move {
-                let Some(raw) =
-                    fake_http::read(&mut stream, |r| fake_http::matches(r, "POST", "/hook")).await
-                else {
-                    return;
-                };
-                let body = raw.split_once("\r\n\r\n").unwrap().1.to_owned();
-                kept.lock().expect("bodies").push(body);
-                let _ = stream
-                    .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
-                    .await;
-                let _ = tx.send(());
-            });
-        }
-    });
-    Hook { url, bodies, seen }
-}
 
 struct Env {
     dir: tempfile::TempDir,

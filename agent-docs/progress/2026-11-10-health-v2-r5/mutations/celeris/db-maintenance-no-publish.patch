@@ -1,0 +1,12 @@
+diff --git a/crates/celeris/src/db_maintenance.rs b/crates/celeris/src/db_maintenance.rs
+index a9cf65f7..7375836f 100644
+--- a/crates/celeris/src/db_maintenance.rs
++++ b/crates/celeris/src/db_maintenance.rs
+@@ -221,7 +221,6 @@ fn backup_once(
+         if cancel.load(Ordering::Relaxed) {
+             return Err(BackupError::Cancelled);
+         }
+-        std::fs::rename(&partial, &dest)?;
+         Ok(())
+     })();
+     if result.is_err() {

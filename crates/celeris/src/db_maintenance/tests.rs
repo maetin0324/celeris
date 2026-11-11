@@ -12,47 +12,6 @@ fn populated_wal_db(path: &Path) {
     .unwrap();
 }
 
-/// Measure the old 1-page stepping mechanism: each committed update resets its copied-page
-/// count. The production setting had 100 pages followed by a 250 ms gap for writers to do this.
-#[test]
-fn incremental_backup_progress_restarts_after_other_connection_writes() {
-    let dir = tempfile::tempdir().unwrap();
-    let src = dir.path().join("source.sqlite3");
-    populated_wal_db(&src);
-    let source = rusqlite::Connection::open(&src).unwrap();
-    let writer = rusqlite::Connection::open(&src).unwrap();
-    let mut destination = rusqlite::Connection::open(dir.path().join("old.sqlite3")).unwrap();
-    let backup = rusqlite::backup::Backup::new(&source, &mut destination).unwrap();
-    assert!(matches!(
-        backup.step(1).unwrap(),
-        rusqlite::backup::StepResult::More
-    ));
-    let first = backup.progress();
-    assert!(first.pagecount > 100);
-    let mut restarts = 0;
-    for _ in 1..=4 {
-        writer
-            .execute("UPDATE pages SET payload = randomblob(4096) WHERE id=1", [])
-            .unwrap();
-        assert!(matches!(
-            backup.step(1).unwrap(),
-            rusqlite::backup::StepResult::More
-        ));
-        let next = backup.progress();
-        if next.remaining >= first.remaining {
-            restarts += 1;
-        }
-    }
-    eprintln!(
-        "online backup measurement: pagecount={}, steps=5, restarts={restarts}",
-        first.pagecount
-    );
-    assert_eq!(
-        restarts, 4,
-        "each separate-connection write resets the copied pages"
-    );
-}
-
 /// The writer commits at a progress callback inside VACUUM, so the overlap is event-driven.
 #[test]
 fn vacuum_backup_finishes_with_a_concurrent_writer_and_integrity_ok() {

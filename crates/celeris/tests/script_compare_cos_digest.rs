@@ -18,13 +18,14 @@ mod support;
 
 use std::sync::Arc;
 
-use celeris::{Config, Exit, RunOptions};
+use celeris::Exit;
 use celeris_script::ScriptRuntimeHandle;
 use celeris_script::manifest::{deploy_bundle, deployed_dir};
 use support::script_compare::{
-    Env, LONG_DEADLINE, TIMEOUT_RETRIES, dist_bundle, dist_dir, load_config, repo_root, start_code,
-    start_policy,
+    Env, LONG_DEADLINE, TIMEOUT_RETRIES, dist_bundle, dist_dir, load_config, repo_root, run_daemon,
+    start_code, start_policy,
 };
+use task_core::SqliteStore;
 use task_core::chat::digest::{CosDigestCommand, CosDigestInput, cos_digest_decide};
 use task_core::chat::digest::{
     CosDigestPassOutput, CosDigestPassRead, CosDigestPassRun, CosDigestRunRef,
@@ -35,7 +36,6 @@ use task_core::script_compare::{
     CompareOutcome, CosDigestAppliedBy, CosDigestCommandsSummary, CosDigestCompareRecord,
     ScriptDomain, ScriptGenerationState, ScriptMode, sha256_digest,
 };
-use task_core::{DaemonMode, SqliteStore};
 use task_dispatch::script_policy::{
     CosDigestOp, CosDigestOpReply, CosDigestPassCall, PolicyScript, TsResult,
     classify_cos_digest_pass,
@@ -528,20 +528,6 @@ async fn script_compare_cos_digest_different_answer_keeps_rust_digest() {
         );
     }
     handle.shutdown();
-}
-
-async fn run_daemon(config: Config) -> Exit {
-    celeris::run(
-        config,
-        RunOptions {
-            until_idle: false,
-            max_ticks: 3,
-            mode: DaemonMode::Normal,
-            release: None,
-        },
-    )
-    .await
-    .expect("daemon run")
 }
 
 /// (6) daemon の結線: `[script]` の起動で generation の行ができ、compare の digest pass が記録される。

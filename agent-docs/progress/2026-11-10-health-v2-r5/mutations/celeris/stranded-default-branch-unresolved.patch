@@ -1,0 +1,15 @@
+diff --git a/crates/celeris/src/daemon/stranded_sweep.rs b/crates/celeris/src/daemon/stranded_sweep.rs
+index e391b1ed..a447bb6e 100644
+--- a/crates/celeris/src/daemon/stranded_sweep.rs
++++ b/crates/celeris/src/daemon/stranded_sweep.rs
+@@ -199,7 +199,9 @@ fn default_branch_for(
+     configured: Option<&str>,
+ ) -> Result<String, task_ops::changes::DefaultBranchError> {
+     match path {
+-        Some(path) => task_ops::changes::resolve_default_branch(path, configured),
++        Some(_path) => Err(task_ops::changes::DefaultBranchError(
++            "mutant".to_owned(),
++        )),
+         None => Err(task_ops::changes::DefaultBranchError(
+             "repository cannot be resolved".to_owned(),
+         )),

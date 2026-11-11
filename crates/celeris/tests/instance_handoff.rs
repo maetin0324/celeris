@@ -12,6 +12,9 @@
 //!
 //! 外部ネットワークには出ない（ワーカーは `sh` の偽アダプタ、API は loopback）。
 
+#[path = "support/wait.rs"]
+mod wait;
+
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -26,6 +29,7 @@ use task_core::{
     TaskStore, Tier, WorkerHint, WorkspaceSpec,
 };
 use time::OffsetDateTime;
+use wait::wait_until;
 
 /// 偽のワーカー: 2 秒眠ってから `done` を 1 行返す（引き継ぎの間ずっと走っている run を作るため）。
 /// TOML には**リテラル文字列**（`'...'`）として書くので、ここの `\"` はそのまま `sh` に渡る。
@@ -222,20 +226,6 @@ fn options(release: &str, max_ticks: u64, until_idle: bool) -> RunOptions {
         max_ticks,
         mode: task_core::DaemonMode::Normal,
         release: Some(release.to_string()),
-    }
-}
-
-/// `check` が真になるまで（最大 `limit`）待つ。
-async fn wait_until(limit: Duration, mut check: impl FnMut() -> bool) -> bool {
-    let deadline = std::time::Instant::now() + limit;
-    loop {
-        if check() {
-            return true;
-        }
-        if std::time::Instant::now() >= deadline {
-            return false;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
     }
 }
 

@@ -1,0 +1,21 @@
+{
+  "crate": "celeris",
+  "removals": [
+    {
+      "name": "incremental_backup_progress_restarts_after_other_connection_writes",
+      "count": 1,
+      "reason": "contracts.json の old_impl 候補 old-incremental-backup-measurement。試験は rusqlite の online backup（Backup::step(1)）が別接続の書き込みで最初からやり直すことを測るだけで、celeris の関数を 1 つも呼ばない。定期 backup はこの性質を理由に VACUUM INTO へ置き換え済み（件名「定期DBバックアップの再開始ループと中断遅延を解消」の commit、現行の方式は ADR 2026-10-10-local-disk-growth-paths の現状の節と backup_once の注釈「The old incremental backup can restart …」に書かれている）。DB に残る旧い shape の event や行を読まないので replay の契約ではない。不変条件の試験でもない（contracts.json の invariant=false、capability-map の evidence に無い）。db_maintenance.rs の 2 つの mutant（publish の rename を外す・partial の本体を消さない）の下でこの試験は通り、代わりの試験が落ちた。",
+      "replacement": [
+        "backup_once_writes_a_restorable_copy_and_keeps_recent_generations",
+        "incomplete_backups_are_cleaned_and_cancel_does_not_publish",
+        "vacuum_backup_finishes_with_a_concurrent_writer_and_integrity_ok",
+        "vacuum_progress_handler_interrupts_an_active_copy"
+      ],
+      "mutation": {
+        "patch": "agent-docs/progress/2026-11-10-health-v2-r5/mutations/celeris/db-maintenance-no-publish.patch",
+        "filter": "test(/^db_maintenance::tests::/)",
+        "result": "killed"
+      }
+    }
+  ]
+}

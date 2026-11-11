@@ -13,23 +13,10 @@ use task_core::{
 };
 use time::OffsetDateTime;
 
+use crate::git_support::git;
+
 fn now() -> OffsetDateTime {
     OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("fixed clock")
-}
-
-fn git(repo: &Path, args: &[&str]) -> String {
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .expect("run git");
-    assert!(
-        output.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }
 
 /// A repo whose first branch is `trunk`, with `celeris/<task>` one commit ahead, merged into

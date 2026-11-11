@@ -1,0 +1,13 @@
+diff --git a/crates/celeris/src/knowledge_curation.rs b/crates/celeris/src/knowledge_curation.rs
+index a2b187ad..d1fec112 100644
+--- a/crates/celeris/src/knowledge_curation.rs
++++ b/crates/celeris/src/knowledge_curation.rs
+@@ -1200,7 +1200,7 @@ fn apply_validated(
+             (None, Some(e))
+         }
+     };
+-    let (push, push_detail, push_line) = if commit_sha.is_some() {
++    let (push, push_detail, push_line) = if commit_sha.is_some() && false {
+         match task_ops::knowledge::push_remote(knowledge_root) {
+             task_ops::knowledge::PushOutcome::Pushed { remote, branch } => (
+                 "pushed",

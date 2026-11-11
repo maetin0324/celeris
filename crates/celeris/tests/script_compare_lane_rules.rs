@@ -11,18 +11,18 @@ mod support;
 
 use std::sync::Arc;
 
-use celeris::{Config, Exit, RunOptions};
+use celeris::Exit;
 use celeris_script::manifest::{deploy_bundle, deployed_dir};
 use support::script_compare::{
     Env, LONG_DEADLINE, TIMEOUT_RETRIES, dist_bundle, dist_dir, is_timeout, load_config, repo_root,
-    start_code, start_policy,
+    run_daemon, start_code, start_policy,
 };
 use task_core::model_policy::{TaskFeatures, match_rule};
 use task_core::script_compare::{
     CompareOutcome, LaneRulesInput, ScriptCompareRecord, ScriptDomain, ScriptGenerationState,
     ScriptMode, recorded_input,
 };
-use task_core::{DaemonMode, LaneDecision, RoutingRecord, Task, Tier};
+use task_core::{LaneDecision, RoutingRecord, Task, Tier};
 use task_dispatch::Dispatcher;
 use task_dispatch::script_policy::{
     LaneRulesOutput, PolicyScript, TsResult, call_lane_rules, classify_lane_rules,
@@ -246,20 +246,6 @@ async fn script_compare_different_answer_keeps_rust_decision_bytes() {
     assert_eq!(decision_bytes(&routing), decision_bytes(&base));
     assert_ne!(decision(&routing).lane, Tier::Frontier);
     handle.shutdown();
-}
-
-async fn run_daemon(config: Config) -> Exit {
-    celeris::run(
-        config,
-        RunOptions {
-            until_idle: false,
-            max_ticks: 3,
-            mode: DaemonMode::Normal,
-            release: None,
-        },
-    )
-    .await
-    .expect("daemon run")
 }
 
 /// daemon の結線: `[script]` の起動で generation の行ができ、compare の dispatch が記録される。

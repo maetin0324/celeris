@@ -945,22 +945,3 @@ fn general_cos_consult_prompt_carries_the_intent_hint_and_the_guidance() {
         assert!(consult.contains(needle), "consult.md lacks {needle}");
     }
 }
-
-/// ADR 2026-11-11-cos-skill-sync D3: the gate's list of the files the Core names
-/// (`task_ops::cos_skill_gate::CORE_SKILL_FILES`) is exactly the `.md` files the Core names, so a
-/// new reference in the Core cannot go unchecked before a CoS run.
-#[test]
-fn core_skill_files_follow_the_core_text() {
-    use task_ops::cos_skill_gate::CORE_SKILL_FILES;
-    let core = super::core(&CosChatContext::default());
-    let named: std::collections::BTreeSet<&str> = core
-        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '_'))
-        .filter(|w| w.ends_with(".md"))
-        .collect();
-    let listed: std::collections::BTreeSet<&str> = CORE_SKILL_FILES
-        .iter()
-        .map(|(_, f)| *f)
-        .filter(|f| *f != "SKILL.md")
-        .collect();
-    assert_eq!(named, listed);
-}

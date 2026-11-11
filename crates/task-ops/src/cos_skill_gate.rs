@@ -1,83 +1,22 @@
-//! ADR 2026-11-11-cos-skill-sync D3: may a CoS chat run start with the skills the KB holds?
+//! ADR 2026-11-11-cos-skill-sync D3: do the KB's CoS skills fit this daemon's config?
 //!
 //! The repo (`config/skills/`) is the source of the CoS skills and the KB's `skills/` is where a
-//! promotion deploys them (`scripts/selfdeploy/sync-skills.sh`). Before a CoS run is claimed the
-//! dispatcher asks [`SkillGate::ready`]: the triage skill's `metadata.version` must equal
-//! `[cos.triage] policy_version`, and every file the Core names ([`CORE_SKILL_FILES`]) or a
-//! mounted `SKILL.md` links to (`](name.md)` next to it) must exist. On drift no run is claimed and
-//! one operator notice is recorded per distinct drift (its source key is durable, so a restart does
-//! not repeat it). Deterministic file reads only, no judgment.
+//! promotion deploys them (`scripts/selfdeploy/sync-skills.sh`). [`check`] is the pure,
+//! deterministic part of the gate before a CoS run is claimed: the triage skill's
+//! `metadata.version` must equal `[cos.triage] policy_version`, and every file the Core names
+//! ([`CORE_SKILL_FILES`]) or a mounted `SKILL.md` links to (`](name.md)` next to it) must exist.
+//! The dispatcher's `task_dispatch::cos_skill_gate::SkillGate` holds the claim and records the
+//! operator notice. File reads only, no judgment.
 
 use std::collections::BTreeSet;
 use std::path::Path;
-
-use task_core::feed::{NoticeEvent, NoticeKind, NoticeStore};
-use time::OffsetDateTime;
-
-/// The CoS gate of one dispatcher: remembers the drift last noticed so a held tick does not
-/// write the same notice again.
-#[derive(Debug, Default)]
-pub struct SkillGate {
-    noticed: Option<String>,
-}
-
-impl SkillGate {
-    /// `true` when CoS runs may start. `kb_root` is `[knowledge] root`.
-    pub fn ready(
-        &mut self,
-        store: &dyn NoticeStore,
-        kb_root: &Path,
-        (policy_skill, policy_version): (&str, &str),
-        now: OffsetDateTime,
-    ) -> bool {
-        let root = kb_root.join(task_core::knowledge::SKILLS_DIR);
-        let drift = match check(&root, policy_skill, policy_version) {
-            Ok(()) => {
-                self.noticed = None;
-                return true;
-            }
-            Err(drift) => drift,
-        };
-        let key = drift.key();
-        if self.noticed.as_deref() != Some(key.as_str()) {
-            record_notice(store, &drift, now);
-            self.noticed = Some(key);
-        }
-        false
-    }
-}
-
-fn record_notice(store: &dyn NoticeStore, drift: &SkillDrift, now: OffsetDateTime) {
-    let detail = drift.describe();
-    tracing::warn!(%detail, "CoS runs held: the KB's CoS skills do not fit [cos.triage]");
-    let summary = format!(
-        "{detail}。運用者の作業: repo の skill を KB に写す配備（promote.sh の sync-skills 段、または \
-         scripts/selfdeploy/sync-skills.sh）を行うか、[cos.triage] policy_version を skill の版に合わせて reload する。\
-         合った次の tick から CoS の run が起きる。"
-    );
-    let event = NoticeEvent {
-        source_key: format!("cos:skill-drift:{}", drift.key()),
-        kind: NoticeKind::BadNews,
-        group_key: "bad_news:cos:skill_drift".to_owned(),
-        title: "CoS の skill が config と合わないので、CoS の run を止めています".to_owned(),
-        summary,
-        project_id: None,
-        task_id: None,
-        target: None,
-        links: Vec::new(),
-        at: now,
-    };
-    if let Err(error) = store.notice_record(&event) {
-        tracing::error!(%error, "failed to record the CoS skill drift notice");
-    }
-}
 
 /// The CoS skills every CoS run may mount (`cos-operator` always; the triage skill is
 /// `[cos.triage] policy_skill`).
 pub const OPERATOR_SKILL: &str = "cos-operator";
 
 /// The skill files the Core (`task_worker::cos_chat::core`) tells the CoS to read, `(skill, file)`.
-/// `task-dispatch`'s `cos_skill_gate` test pins this list to the Core text.
+/// `task_dispatch::cos_skill_gate`'s test pins this list to the Core text.
 pub const CORE_SKILL_FILES: &[(&str, &str)] = &[
     (OPERATOR_SKILL, "SKILL.md"),
     (OPERATOR_SKILL, "consult.md"),

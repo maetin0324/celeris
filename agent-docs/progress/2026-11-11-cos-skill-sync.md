@@ -12,7 +12,8 @@ updated: 2026-11-11
 
 ## 変えたこと
 
-- 照合（ADR D3）: `crates/task-ops/src/cos_skill_gate.rs` に `check`・`SkillGate`・`CORE_SKILL_FILES`・試験用の `write_fixture` を置いた。
+- 照合（ADR D3）: 純粋な照合 `check`・`SkillDrift`・`CORE_SKILL_FILES`・試験用の `write_fixture` は `crates/task-ops/src/cos_skill_gate.rs`、
+  知らせを 1 回だけ記録して log に残す `SkillGate` は `crates/task-dispatch/src/cos_skill_gate.rs`（dispatcher module の外）。
   dispatcher は `tick_cos_chat_launch` の claim の条件に `SkillGate::ready` を足しただけ（dispatcher module の行は増やさない）。
   claim の後の「SKILL.md が無ければ prelaunch で `SkillsUnavailable`」の判定は二重なので消した。
 - 写し（ADR D2）: `scripts/selfdeploy/cos-skills.txt`（cos-operator・cos-inbox-triage）、`sync-skills.sh`、
@@ -23,7 +24,8 @@ updated: 2026-11-11
     consult.md を消すと知らせが 1 件増えて run は無いまま、直すと次の tick で run が起きる。旧い
     `missing_skills_close_prelaunch_as_skills_unavailable` と `cos_chat_run_launch_missing_required_skill_is_unavailable`（claim の後の判定）はこの試験に置き換えた。
   - `task_ops::cos_skill_gate` の単体試験 3 本（repo の skill が既定の版で通る、版違い・無い file・link 先、front matter の読み方）。
-  - `task-worker` の `core_skill_files_follow_the_core_text`（Core が名を挙げる `.md` と `CORE_SKILL_FILES` が一致）。
+  - `task_dispatch::cos_skill_gate::tests::core_skill_files_follow_the_core_text`（Core が名を挙げる `.md` と `CORE_SKILL_FILES` が一致。
+    Core（task-worker）と一覧（task-ops）の両方を見られる task-dispatch に置く）。
   - `crates/celeris/tests/cos_skill_sync.rs` → `scripts/selfdeploy/tests/sync_skills.sh`（release の束ね、KB の置き換えと 1 commit、
     curation の commit 済み・変更中・stage 済みのページと他の skill は変わらない、2 回目は commit しない）。
   - CoS run を起こす既存の試験の KB を `write_fixture` に替えた（policy_version を上げる 3 本は、同時に skill も上げる）。
@@ -81,8 +83,9 @@ updated: 2026-11-11
 - phase 1: ADR の skill 配送の参照を ADR-0127 に直す
 - phase 1: skills の無い古い release では KB を変えずに昇格を終え、script_compare の試験の KB を一時 dir にする
 - phase 1: wait for terminal state and evidence in git_workspace review tests
-
 - phase 1: CoS skill 同期の最終検査結果を記録する
+- phase 1: CoS skill 同期の再検査と未完了事項を記録する
+- phase 1: CoS の照合の門を task-dispatch に移し、Cargo.lock を変えずに test-affected の範囲を狭める
 
 ## 未解決事項
 
@@ -116,3 +119,18 @@ updated: 2026-11-11
 - 残作業: `test-affected` を再実行して exit 0 を確認し、進捗を done にする。
   run の残り予算では再検査の完走を保証できないため checkpoint を残す。
 - commit: `phase 1: CoS skill 同期の再検査と未完了事項を記録する`。
+
+## attempt 3: test-affected の範囲を狭める
+
+attempt 2 の review は `test-affected` が 1200 秒の上限で時間切れだった（host の load average は約 85）。
+原因は `Cargo.lock` の変更で、`test-affected.sh` は workspace 共通 file の変更として全 crate（nextest 8266 件）と ts-verify を走らせていた。
+
+- 実装前 brief: 根本原因は task-ops に `tracing` を、task-worker の dev 依存に task-ops を足したこと（`Cargo.lock` が変わる）。
+  owner は照合の門（`SkillGate`）の置き場所。task-ops は判定を返し、log は dispatcher が残す（`delegate.rs` と同じ分け方）。
+  採用した案: `SkillGate`（知らせの記録と log）を task-dispatch の `cos_skill_gate` module に移し、task-ops には純粋な `check` だけを残す。
+  Core と一覧を照らす試験は、両方の crate を見られる task-dispatch に移す。`Cargo.lock`・`crates/*/Cargo.toml`・task-worker の差分は 0 になった。
+  新しい状態・分岐・fallback・port は無し。挙動は変えていない（同じ試験がそのまま通る）。
+- `bash scripts/dev/test-affected.sh --list`: celeris・celeris-campaign・celeris-mcp・celerisctl・llm-proxy・task-api・task-dispatch・
+  task-ops・task-worker と web（typecheck+unit）。task-core・e2e・celeris-credentiald・celeris-script・jev-classifier・routing-eval・ts-verify は外れた。
+- `cargo nextest run -p task-ops -p task-dispatch --lib -E 'test(cos_skill_gate) | test(skill_drift_holds_the_claim_and_notices_once) | test(core_skill_files_follow_the_core_text)'`
+  → 5 passed。

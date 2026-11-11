@@ -49,7 +49,8 @@ release と昇格を通す。KB の他のページ（curation が書いた `proj
 ### D3: CoS run の claim の前に skill と config を照らす（版の組ごとに 1 回知らせる）
 
 dispatcher の CoS の tick（`tick_cos_chat_launch`）は、新しい run を claim する前に
-`task_ops::cos_skill_gate::SkillGate::ready` を呼ぶ。次のどれかなら claim せず（queue の発言・受信箱の件・relay・plan の
+`task_dispatch::cos_skill_gate::SkillGate::ready` を呼ぶ（照合そのものは純粋な `task_ops::cos_skill_gate::check`、
+知らせの記録と log は dispatcher 側の `SkillGate`）。次のどれかなら claim せず（queue の発言・受信箱の件・relay・plan の
 再判定のどれも run を起こさない）、`false` を返す。
 
 1. `[cos.triage] policy_skill` の `SKILL.md` の front matter の `metadata.version` が `[cos.triage] policy_version` と違う（無いも違う）。

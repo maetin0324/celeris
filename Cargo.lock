@@ -3241,7 +3241,6 @@ dependencies = [
  "tempfile",
  "thiserror",
  "time",
- "tracing",
 ]
 
 [[package]]
@@ -3259,7 +3258,6 @@ dependencies = [
  "sha2",
  "task-api",
  "task-core",
- "task-ops",
  "task-worker",
  "tempfile",
  "thiserror",

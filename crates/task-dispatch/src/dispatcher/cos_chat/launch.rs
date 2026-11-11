@@ -238,7 +238,7 @@ pub(crate) struct CosChatLaunch {
     /// `cos.root_done.*` の内訳を出す。試験だけが差し替える。
     pub(crate) root_done_probe_threshold: std::time::Duration,
     /// ADR 2026-11-11-cos-skill-sync D3: no CoS run is claimed while the KB's skills drift.
-    pub(super) skill_gate: task_ops::cos_skill_gate::SkillGate,
+    pub(super) skill_gate: crate::cos_skill_gate::SkillGate,
 }
 
 /// Which durable claim binds the new run to its input message.

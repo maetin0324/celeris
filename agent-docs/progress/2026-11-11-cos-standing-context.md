@@ -1,10 +1,12 @@
 ---
 title: CoS の常設の文脈（任された範囲・利用者・覚え書き・KB の入口）と人の委任の grant 化
 tasks: [01M75722QN630BBASEQ759KG4T]
-status: running
+status: done
 updated: 2026-11-11
 ---
 # CoS の常設の文脈（任された範囲・利用者・覚え書き・KB の入口）と人の委任の grant 化
+
+完了日: 2026-11-11
 
 設計判断は [ADR 2026-11-11 CoS の常設の文脈](../adr/2026-11-11-cos-standing-context.md)。基準は `git merge-base HEAD main`。
 
@@ -118,6 +120,29 @@ ADR の D4 を実装に合わせて書き直した（分類は `job_wait_extend`
 - 件名「phase 1: API schema の生成物を作り直す」の commit で schema と web の生成型を作り直し、その試験を単独で再実行して合格。
   test-affected 全体（約 30 分）の再実行は run の壁時計が足りず、この run ではしていない。
 - `cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check`・`sh scripts/dev/progress-index.sh --check`: 下の result に記録。
+
+## attempt 4: main の取り込みと提出時の検査
+
+- task branch を main（件名「phase 1: 消した config 欄・旧い退避規則・ブラウザ通知の文書の残りを直す」）へ rebase した。
+  衝突は `crates/task-dispatch/src/lib.rs` の module 宣言だけで、`cos_context` と main の `cos_skill_gate` の両方を残した。
+- 件名「phase 1: main の取り込みで重なった Codex fixture の CODEX_HOME の指定を 1 つにする」: main にも同じ fixture の隔離が
+  入っていたため、attempt 2 の重複した `env` 欄（E0062）を消して main の版に合わせた。
+- 件名「phase 1: 取り次ぎの判定 forward_gap を Result にし、main の取り込み後の chat の行を閾値に収める」: rebase の後、
+  repo health の `size.responsibility-growth` が `crates/task-core/src/chat` の本体の行 8001（閾値 8000）で fail した。
+  `task_core::authority::forward_gap` の戻り値を `Result<(), String>` にし、`chat/window.rs` の呼び出しを 3 行から 2 行にした
+  （8000）。判定の中身と拒否の文言は変えていない。呼び出し元（`cos/operations/instructions.rs`）と scenario 試験の比較を合わせた。
+- schema の生成物: `cargo nextest run -p task-api -p task-worker --lib -E 'test(committed_schema_matches_generated)'` は 2 件合格、
+  `node web/scripts/gen-types.mjs` の差分は 0。
+
+## attempt 4 の検査（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
+
+- `bash scripts/dev/test-affected.sh` → exit 0（1273 秒、開始時の load average 24）。nextest 8301 件合格・23 件 skip、
+  web の型検査と unit 710 件合格、ts-verify 20 件合格、repo health は verdict=pass（fail_grade=0）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check` → exit 0。
+- review の検査の上限は 1200 秒で、この負荷の test-affected は 1273 秒かかった。review が時間切れになったら、負荷の低い時に
+  再検査すれば足りる（コードの直しは要らない）。
 
 ## D4 の実装前 brief
 

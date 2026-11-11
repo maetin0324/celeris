@@ -3,6 +3,8 @@
 //! 実 socket（`injection.sock`、実 SO_PEERCRED、実 SCM_RIGHTS、実 SOCK_SEQPACKET の sink FD）で試す。
 //! 隔離の admission だけは試験 feature の `SameUidHarnessFacts`（与えた事実を verify_isolation に通す）で、
 //! production の `Attested` がこの host で `isolation_required` になることも別に確かめる。
+//! 受付の並行（最初の要求の待ちは接続ごと、照合は 1 本の thread、待てる接続は 8 まで）は
+//! ADR 2026-11-11-credentiald-passed-stream-wait D4・D5 の `concurrent_first_request_` の試験で確かめる。
 use celeris_credentiald::{
     AuthorizedLeaseContext, Broker, CredentialPolicy, CredentialProvider, CredentialRef, Error,
     LeaseRequest, ManualProvider, ProviderCapabilities, SecretEnvelope,

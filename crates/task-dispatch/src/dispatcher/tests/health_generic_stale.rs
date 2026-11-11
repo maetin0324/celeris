@@ -323,8 +323,8 @@ fn reused_bindings(events: &[Event]) -> Vec<(String, String)> {
 /// 変わった head で本物の検査器が走り直す（`reused_from` が無い）。再利用されるのは reviewer の合格だけ:
 /// - main が文書だけ進む（ts・rust）: 新しい head の health は Pass で done。
 /// - main が base 側の profile で層 `app` の許可を空にする（ts）: reviewer の合格は再利用されても、新しい head の
-///   health は fail 級の `deps.violation` で Fail になり、再利用の合格で done にしない（task は failed。repair に
-///   回らないことは欠け G4-S1。[`health_generic_reviewer_reuse_health_fail_routes_to_repair`]）。
+///   health は fail 級の `deps.violation` で Fail になり、再利用の合格で done にしない（done は health の review の
+///   repair の後。repair の class と修復の後の done は [`health_generic_reviewer_reuse_health_fail_routes_to_repair`]）。
 ///
 /// 検査の最中に古くなった 1 回目の review は、health の項目を記録しない（同期をやり直す）。前の Pass を写す経路が
 /// 無いことは `health_generic_stale_*_reevaluates` が確かめる。
@@ -367,8 +367,24 @@ async fn health_generic_reviewer_reuse_reevaluates_health_on_new_head() {
             assert!(!*pass, "{evidence:?}");
             assert_eq!(evidence.verdict, HealthVerdict::Fail, "{evidence:?}");
             assert_eq!(blocking_rules(evidence), vec!["deps.violation"]);
-            assert_ne!(flow.status, Status::Done, "{:?}", flow.events);
-            continue;
+            let repaired = flow.events.iter().position(|e| {
+                matches!(e, Event::RepairScheduled { origin, .. }
+                    if *origin == task_core::execution::RepairOrigin::Review)
+            });
+            let done = flow.events.iter().position(|e| {
+                matches!(
+                    e,
+                    Event::Transitioned {
+                        to: Status::Done,
+                        ..
+                    }
+                )
+            });
+            assert!(
+                matches!((repaired, done), (Some(r), Some(d)) if r < d),
+                "the reused reviewer pass finished the task before the health repair: {:?}",
+                flow.events
+            );
         }
         assert_eq!(
             flow.status,
@@ -379,25 +395,19 @@ async fn health_generic_reviewer_reuse_reevaluates_health_on_new_head() {
     }
 }
 
-/// 欠け G4-S1 の assert の文言（[`health_generic_reviewer_reuse_health_fail_routes_to_repair`] の `should_panic`）。
-const G4_S1: &str =
-    "G4-S1: a health Fail next to a reused reviewer pass did not go to the review repair";
-
 /// 不変条件 (g)（ADR (3) の表: reviewer の合格の再利用の経路も dep-inversion を Fail にして repair に回す）: reviewer の
 /// 合格を再利用した review で health が Fail になったら（再利用の後に main が base 側の profile で層 `app` の許可を空にし、
 /// 良い変更の `app` → `core` の import が fail 級の `deps.violation` になる。候補が自分で層を逆向きにした場合は、決定的な
 /// 項目が落ちるので reviewer run が起きず、再利用する合格が無い）、review の repair（class `health:deps.violation`）に
 /// 回り、修復の後に done になる。
 ///
-/// 既知の欠け G4-S1（進捗 `agent-docs/progress/2026-11-10-health-v2-g4/rs-stale.md` の未解決）: 決定的な項目（health）が
-/// 落ちると reviewer の項目は「not evaluated: a deterministic check failed」の不合格になり（`review.rs` の ADR-0007 D5）、
-/// `classify_review_failure` は修復できない reviewer の不合格と health の不合格の混在を Substantive にして、task を
-/// failed（`review_fail`）にする。期待は弱めず、この欠けの assert の文言だけの `should_panic` にしてある。直ったら
-/// panic しなくなって落ちるので、そのとき `should_panic` を外す。
+/// G4-S1 の回帰の試験（fix-s1 で解決。ADR-0072 D16 付記）: 決定的な項目（health）が落ちると reviewer の項目は
+/// `review::REVIEWER_NOT_EVALUATED_REASON` の不合格になる（ADR-0007 D5）。`Dispatcher::try_review_repair` がこの項目を
+/// 修復の分類から外すので、health の class だけで review の repair に回る。外さないと修復できない reviewer の不合格との
+/// 混在が Substantive になり、task は failed（`review_fail`）になって、この試験は repair の class の assert で落ちる。
+/// 既存の `review_verdict` の試験は stub の verdict を使い、本物の検査器の Fail と reviewer の合格の再利用の流れを
+/// 通らない。
 #[tokio::test]
-#[should_panic(
-    expected = "G4-S1: a health Fail next to a reused reviewer pass did not go to the review repair"
-)]
 async fn health_generic_reviewer_reuse_health_fail_routes_to_repair() {
     let (_bundle, bundled) = configure_real_bundled_checker();
     let mut setup = Setup::new("ts", "good");
@@ -418,10 +428,10 @@ async fn health_generic_reviewer_reuse_health_fail_routes_to_repair() {
     assert_eq!(
         repair_classes(&flow.events),
         vec!["health:deps.violation".to_string()],
-        "{G4_S1}: {:?}",
+        "{:?}",
         flow.events
     );
-    assert_eq!(flow.status, Status::Done, "{G4_S1}: {:?}", flow.events);
+    assert_eq!(flow.status, Status::Done, "{:?}", flow.events);
 }
 
 /// 候補の最初の health の証跡（review の health の項目の 1 つ目）。

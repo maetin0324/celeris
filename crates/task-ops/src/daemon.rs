@@ -170,7 +170,7 @@ pub struct ScratchStatus {
     pub pinned_bytes: u64,
     pub targets_max_bytes: u64,
     pub total_max_bytes: u64,
-    /// 実効上限 = min(total_max, filesystem から pool の外の使用量と `min_free_disk_mb` を除いた分)（D1）。
+    /// 実効上限 = min(total_max, filesystem から pool の外の使用量と 空きの下限（`min_free_disk_pct`）を除いた分)（D1）。
     pub effective_max_bytes: u64,
     pub high_watermark: f64,
     pub low_watermark: f64,
@@ -182,6 +182,9 @@ pub struct ScratchStatus {
     pub legacy: Vec<ScratchLegacyView>,
     /// 直近の GC（rename したものがあった回）。
     pub last_gc: Option<ScratchGcView>,
+    /// ADR 2026-11-11-disk-aware-dispatch D4: dispatch の前の空きの見込み（`task_dispatch::disk_admission`）と、
+    /// それで待たせている run。
+    pub admission: ScratchAdmissionView,
     /// 廃止。常に `None`（ADR-0129）: sccache は Celeris の外（host の cargo 設定）になった。型は旧 client との
     /// 互換のため残す。
     #[serde(default)]
@@ -334,6 +337,57 @@ pub struct ScratchOwnerView {
     pub work_unit_key: Option<String>,
 }
 
+/// ADR 2026-11-11-disk-aware-dispatch D1/D4: 空きの見込み。`*_bytes` のうち `expected_bytes` と `size_bytes` は測った
+/// 見かけの大きさ、`growth_bytes`・`running_growth_bytes`・`need_bytes` は係数 `ratio` を掛けた disk 上の量の見込み。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ScratchAdmissionView {
+    /// pool の filesystem の空き（statvfs。読めなければ `None` で、判定しない）。
+    pub free_bytes: Option<u64>,
+    /// 予備 = 空きの下限（容量 × `[dispatch] min_free_disk_pct`）。
+    pub reserve_bytes: u64,
+    /// 見かけの大きさを disk 上の量に直す係数（`[scratch] forecast_disk_ratio`）。
+    pub ratio: f64,
+    /// 走っている（`p0`）target がこれから増える見込みの合計。
+    pub running_growth_bytes: u64,
+    /// repo ごとの見込み（同じ `repo_key` の owner の測った大きさの最大。seed は数えない）。
+    pub expected_by_repo: std::collections::BTreeMap<String, u64>,
+    /// owner ごとの見込み（owner の文字列順。repo の分からない owner は載せない）。
+    pub owners: Vec<ScratchOwnerForecastView>,
+    /// 空きの見込みが足りず `ready` のまま待たせている run（daemon が pool の `admission.json` に書き出したもの）。
+    pub held: Vec<ScratchHeldRunView>,
+}
+
+/// owner 1 つの見込み。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ScratchOwnerForecastView {
+    pub owner: String,
+    pub repo_key: String,
+    /// class が `p0`（走っている）。
+    pub running: bool,
+    /// 測った大きさ（未測定は `None`。見込みでは 0 と見る）。
+    pub size_bytes: Option<u64>,
+    /// この owner の repo の見込み。
+    pub expected_bytes: u64,
+    /// 走っている owner の増分の見込み（走っていなければ 0）。
+    pub growth_bytes: u64,
+}
+
+/// 空きの見込みで待たせている run 1 つ。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ScratchHeldRunView {
+    pub task_id: String,
+    pub work_unit_id: Option<String>,
+    /// run が使う scratch の owner（`task-<id>` / `task-<id>/wu-<id>`）。
+    pub owner: String,
+    pub repo_key: String,
+    /// この run の見込み（disk 上の量）。
+    pub need_bytes: u64,
+    /// 判定の式と値（人が読む 1 行）。
+    pub reason: String,
+    /// 待ち始め（RFC 3339）。
+    pub since: String,
+}
+
 /// pool の外の旧い target 1 つ。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ScratchLegacyView {
@@ -350,7 +404,7 @@ pub struct ScratchGcView {
     pub at: String,
     /// その回の `pressure`。
     pub pressure: String,
-    /// 空き < `min_free_disk_mb` の緊急 GC か。
+    /// 空き < 空きの下限（`min_free_disk_pct`）の緊急 GC か。
     pub emergency: bool,
     pub removed: Vec<ScratchGcRemovedView>,
     pub reclaimed_bytes: u64,

@@ -375,7 +375,7 @@ pub fn status_of(
         Some(&cfg.selfdeploy.releases_dir),
     );
     let sizes = measure_unleased(&settings, &legacy);
-    let min_free = cfg.dispatch.min_free_disk_mb.saturating_mul(1024 * 1024);
+    let min_free_pct = cfg.dispatch.min_free_disk_pct;
     // ADR-0129 (1): sccache / cache server の欄は `build_status` が `None` にする（Celeris の外）。
     let status = with_lookup(cfg, cli_db, |lookup, has_db| {
         let run = scratch_gc::run_gc(
@@ -384,13 +384,20 @@ pub fn status_of(
             lookup,
             has_db,
             &sizes,
-            min_free,
+            min_free_pct,
             false,
             &BTreeSet::new(),
             true,
         );
         scratch_gc::build_status(
-            &settings, &run.scan, &run.plan, run.fs, min_free, &sizes, None, now,
+            &settings,
+            &run.scan,
+            &run.plan,
+            run.fs,
+            run.min_free_bytes,
+            &sizes,
+            None,
+            now,
         )
     });
     Ok(status)
@@ -407,7 +414,6 @@ fn gc(
         Some(&cfg.selfdeploy.releases_dir),
     );
     let sizes = measure_unleased(settings, &legacy);
-    let min_free = cfg.dispatch.min_free_disk_mb.saturating_mul(1024 * 1024);
     let run = with_lookup(cfg, cli_db, |lookup, has_db| {
         scratch_gc::run_gc(
             settings,
@@ -415,7 +421,7 @@ fn gc(
             lookup,
             has_db,
             &sizes,
-            min_free,
+            cfg.dispatch.min_free_disk_pct,
             false,
             &BTreeSet::new(),
             dry_run,
@@ -492,6 +498,30 @@ fn print_status(s: &task_ops::daemon::ScratchStatus) {
                 .as_deref()
                 .map(|f| format!(" (adopted from {f})"))
                 .unwrap_or_default()
+        );
+    }
+    // ADR 2026-11-11-disk-aware-dispatch D4: 空きの見込みと、それで待たせている run。
+    let a = &s.admission;
+    outln!(
+        "admission: free {} · reserve {} · running growth {} · ratio {}",
+        a.free_bytes.map(gb).unwrap_or_else(|| "-".to_string()),
+        gb(a.reserve_bytes),
+        gb(a.running_growth_bytes),
+        a.ratio
+    );
+    for (repo, bytes) in &a.expected_by_repo {
+        outln!("  expected {repo} {}", gb(*bytes));
+    }
+    for o in a.owners.iter().filter(|o| o.running) {
+        outln!("  growth {} {}", o.owner, gb(o.growth_bytes));
+    }
+    for h in &a.held {
+        outln!(
+            "  held {} (need {}, since {}): {}",
+            h.owner,
+            gb(h.need_bytes),
+            h.since,
+            h.reason
         );
     }
     if !s.legacy.is_empty() {

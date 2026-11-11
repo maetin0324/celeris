@@ -243,7 +243,7 @@ fn arm(d: &mut Dispatcher, store: &Arc<SqliteStore>, dir: &Path, max_cos_runs: u
         OffsetDateTime::from_unix_timestamp(CLOCK).expect("clock"),
     )));
     d.config.execution.max_cos_runs = max_cos_runs;
-    d.config.min_free_disk_mb = 0;
+    d.config.min_free_disk_pct = 0.0;
     d.config.knowledge.root = dir.join("knowledge");
     task_ops::cos_skill_gate::write_fixture(
         &d.config.knowledge.root.join("skills"),

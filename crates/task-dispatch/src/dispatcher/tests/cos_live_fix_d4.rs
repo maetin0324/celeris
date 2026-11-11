@@ -35,7 +35,7 @@ fn fixture(script: &str) -> Fixture {
         OffsetDateTime::from_unix_timestamp(1_790_000_000).expect("clock"),
     )));
     d.config.execution.max_cos_runs = 1;
-    d.config.min_free_disk_mb = 0;
+    d.config.min_free_disk_pct = 0.0;
     d.config.knowledge.root = dir.path().join("knowledge");
     task_ops::cos_skill_gate::write_fixture(
         &d.config.knowledge.root.join("skills"),

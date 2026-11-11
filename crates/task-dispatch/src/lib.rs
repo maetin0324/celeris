@@ -16,6 +16,7 @@ pub mod cos_context;
 pub(crate) mod cos_skill_gate;
 pub mod credential_resume;
 /// ADR 2026-10-07-build-tmp-hygiene D4: ディスク使用率の監視（`DiskProbe`・判定の純関数・tick の段）。
+pub mod disk_admission;
 pub mod disk_watch;
 pub mod dispatcher;
 /// ADR-0072 D6/D11/D12/D15（Phase E2）: WorkUnit の状態遷移の決定（純粋関数）。

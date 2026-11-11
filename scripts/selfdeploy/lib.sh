@@ -986,6 +986,19 @@ sd_release_prune_enforce_limit() {
   sd_release_prune_record_start "$target"
 }
 
+# ADR 2026-11-11-disk-aware-dispatch D3: build の**後**にも上限を確かめる（release.sh の EXIT trap）。開始時だけでは
+# build で上限を超えて育った target（本番 88.0 GB > 64 GiB）が、次の release の開始まで lease（P0）のまま残る。
+# この build の開始時刻（`.celeris-release-build-start`）より古い workspace の成果物を開始時と同じ規則で刈り、
+# それでも上限を超えていれば target を作り直す。`sd_release_target_settle <target> <tree>`。
+sd_release_target_settle() {
+  local target="$1" tree="$2" start
+  [ -d "$target" ] || return 0
+  start="$(cat "$target/.celeris-release-build-start" 2>/dev/null || printf '0')"
+  case "$start" in *[!0-9.]*|'') start=0 ;; esac
+  sd_release_prune_stale_test_binaries "$target" "$tree" "$start"
+  sd_release_prune_enforce_limit "$target"
+}
+
 # lease を返す（P3 に落ち、GC が即回収する）。Phase SD-1 から release.sh の終了時には呼ばない（上の説明）。
 # 共有の target を今すぐ手放したいとき（人の手作業）に使う。
 sd_scratch_release() {

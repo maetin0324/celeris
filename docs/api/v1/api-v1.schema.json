@@ -28862,6 +28862,69 @@
       ],
       "type": "object"
     },
+    "ScratchAdmissionView": {
+      "description": "ADR 2026-11-11-disk-aware-dispatch D1/D4: 空きの見込み。`*_bytes` のうち `expected_bytes` と `size_bytes` は測った\n見かけの大きさ、`growth_bytes`・`running_growth_bytes`・`need_bytes` は係数 `ratio` を掛けた disk 上の量の見込み。",
+      "properties": {
+        "expected_by_repo": {
+          "additionalProperties": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "description": "repo ごとの見込み（同じ `repo_key` の owner の測った大きさの最大。seed は数えない）。",
+          "type": "object"
+        },
+        "free_bytes": {
+          "description": "pool の filesystem の空き（statvfs。読めなければ `None` で、判定しない）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "held": {
+          "description": "空きの見込みが足りず `ready` のまま待たせている run（daemon が pool の `admission.json` に書き出したもの）。",
+          "items": {
+            "$ref": "#/$defs/ScratchHeldRunView"
+          },
+          "type": "array"
+        },
+        "owners": {
+          "description": "owner ごとの見込み（owner の文字列順。repo の分からない owner は載せない）。",
+          "items": {
+            "$ref": "#/$defs/ScratchOwnerForecastView"
+          },
+          "type": "array"
+        },
+        "ratio": {
+          "description": "見かけの大きさを disk 上の量に直す係数（`[scratch] forecast_disk_ratio`）。",
+          "format": "double",
+          "type": "number"
+        },
+        "reserve_bytes": {
+          "description": "予備 = 空きの下限（容量 × `[dispatch] min_free_disk_pct`）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "running_growth_bytes": {
+          "description": "走っている（`p0`）target がこれから増える見込みの合計。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "reserve_bytes",
+        "ratio",
+        "running_growth_bytes",
+        "expected_by_repo",
+        "owners",
+        "held"
+      ],
+      "type": "object"
+    },
     "ScratchCacheStats": {
       "description": "廃止（ADR-0129）: cache server の `/stats`（`celeris.scratch-cache-stats/1`）。型だけ残す（値は常に `None`）。",
       "properties": {
@@ -29193,7 +29256,7 @@
           "type": "string"
         },
         "emergency": {
-          "description": "空き < `min_free_disk_mb` の緊急 GC か。",
+          "description": "空き < 空きの下限（`min_free_disk_pct`）の緊急 GC か。",
           "type": "boolean"
         },
         "pressure": {
@@ -29218,6 +29281,50 @@
         "emergency",
         "removed",
         "reclaimed_bytes"
+      ],
+      "type": "object"
+    },
+    "ScratchHeldRunView": {
+      "description": "空きの見込みで待たせている run 1 つ。",
+      "properties": {
+        "need_bytes": {
+          "description": "この run の見込み（disk 上の量）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "owner": {
+          "description": "run が使う scratch の owner（`task-<id>` / `task-<id>/wu-<id>`）。",
+          "type": "string"
+        },
+        "reason": {
+          "description": "判定の式と値（人が読む 1 行）。",
+          "type": "string"
+        },
+        "repo_key": {
+          "type": "string"
+        },
+        "since": {
+          "description": "待ち始め（RFC 3339）。",
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "work_unit_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "task_id",
+        "owner",
+        "repo_key",
+        "need_bytes",
+        "reason",
+        "since"
       ],
       "type": "object"
     },
@@ -29249,6 +29356,50 @@
       "required": [
         "path",
         "class"
+      ],
+      "type": "object"
+    },
+    "ScratchOwnerForecastView": {
+      "description": "owner 1 つの見込み。",
+      "properties": {
+        "expected_bytes": {
+          "description": "この owner の repo の見込み。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "growth_bytes": {
+          "description": "走っている owner の増分の見込み（走っていなければ 0）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "repo_key": {
+          "type": "string"
+        },
+        "running": {
+          "description": "class が `p0`（走っている）。",
+          "type": "boolean"
+        },
+        "size_bytes": {
+          "description": "測った大きさ（未測定は `None`。見込みでは 0 と見る）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "owner",
+        "repo_key",
+        "running",
+        "expected_bytes",
+        "growth_bytes"
       ],
       "type": "object"
     },
@@ -29446,6 +29597,10 @@
     "ScratchStatus": {
       "description": "ADR-0075 D6（Phase G1）: scratch pool の状態（`celeris.scratch-status/1`）。**観測値**で DB には書かない。\n容量は byte。サイズは測定スレッドの値（古くてもよい）、未測定は同じ repo の最大値で推定する。",
       "properties": {
+        "admission": {
+          "$ref": "#/$defs/ScratchAdmissionView",
+          "description": "ADR 2026-11-11-disk-aware-dispatch D4: dispatch の前の空きの見込み（`task_dispatch::disk_admission`）と、\nそれで待たせている run。"
+        },
         "cache": {
           "anyOf": [
             {
@@ -29470,7 +29625,7 @@
           ]
         },
         "effective_max_bytes": {
-          "description": "実効上限 = min(total_max, filesystem から pool の外の使用量と `min_free_disk_mb` を除いた分)（D1）。",
+          "description": "実効上限 = min(total_max, filesystem から pool の外の使用量と 空きの下限（`min_free_disk_pct`）を除いた分)（D1）。",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -29589,7 +29744,8 @@
         "low_watermark",
         "pressure",
         "owners",
-        "legacy"
+        "legacy",
+        "admission"
       ],
       "type": "object"
     },

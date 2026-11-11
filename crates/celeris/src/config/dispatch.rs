@@ -102,15 +102,17 @@ fn default_resync_quiet_secs() -> u64 {
 pub struct DispatchTomlConfig {
     #[serde(default = "default_max_infra_retries")]
     pub max_infra_retries: u32,
-    #[serde(default = "default_min_free_disk_mb")]
-    pub min_free_disk_mb: u64,
+    /// ADR 2026-11-11-disk-aware-dispatch D2: 空きの下限（filesystem の容量に対する %。既定 10、0 で無効、範囲 [0, 100)）。
+    /// 旧い `min_free_disk_mb`（固定 MiB）は置き換えた（書けば `deny_unknown_fields` で読み込みエラー）。
+    #[serde(default = "default_min_free_disk_pct")]
+    pub min_free_disk_pct: f64,
 }
 
 impl Default for DispatchTomlConfig {
     fn default() -> Self {
         Self {
             max_infra_retries: default_max_infra_retries(),
-            min_free_disk_mb: default_min_free_disk_mb(),
+            min_free_disk_pct: default_min_free_disk_pct(),
         }
     }
 }
@@ -119,8 +121,9 @@ fn default_max_infra_retries() -> u32 {
     5
 }
 
-fn default_min_free_disk_mb() -> u64 {
-    5120
+/// 使用率 90% で新しい run を止める（disk_watch の critical 95% より手前）。
+fn default_min_free_disk_pct() -> f64 {
+    10.0
 }
 
 /// `[plan]`（DESIGN §4.2, ADR-0007 D7）。
@@ -152,7 +155,7 @@ impl Config {
             max_requeues: self.max_requeues,
             max_reviewer_retries: self.review.max_reviewer_retries,
             max_infra_retries: self.dispatch.max_infra_retries,
-            min_free_disk_mb: self.dispatch.min_free_disk_mb,
+            min_free_disk_pct: self.dispatch.min_free_disk_pct,
             reviewer_hint: WorkerHint {
                 // ADR-0069 Phase 118 D4: 他に何も分からないときの既定値（後方互換）。実際の reviewer
                 // run の lane は `Dispatcher::pick_reviewer` が `reviewer_tier_override` /

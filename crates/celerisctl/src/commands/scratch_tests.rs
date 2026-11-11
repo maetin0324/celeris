@@ -6,7 +6,7 @@ fn config(tmp: &Path) -> PathBuf {
     std::fs::write(
             &path,
             format!(
-                "db = \"{}\"\n[dispatch]\nmin_free_disk_mb = 0\n[workspace]\nbuild_cache_dir = \"{}\"\n[scratch]\ndir = \"{}\"\n[selfdeploy]\nreleases_dir = \"{}\"\n",
+                "db = \"{}\"\n[dispatch]\nmin_free_disk_pct = 0.0\n[workspace]\nbuild_cache_dir = \"{}\"\n[scratch]\ndir = \"{}\"\n[selfdeploy]\nreleases_dir = \"{}\"\n",
                 tmp.join("celeris.sqlite3").display(),
                 tmp.join("build-cache").display(),
                 tmp.join("scratch").display(),

@@ -218,9 +218,9 @@ pub enum Pressure {
     None,
     /// `targets` が `targets_max × high_watermark` を超えた。
     HighWatermark,
-    /// filesystem の空きが `min_free_disk_mb × 2` を下回った。
+    /// filesystem の空きが 空きの下限（`min_free_disk_pct`）× 2 を下回った。
     LowDisk,
-    /// 空きが `min_free_disk_mb` を下回った（dispatch の直前の緊急 GC）。
+    /// 空きが空きの下限（`min_free_disk_pct`）を下回った（dispatch の直前の緊急 GC）。
     Emergency,
 }
 
@@ -244,7 +244,7 @@ pub struct GcParams {
     pub min_free_bytes: u64,
     /// filesystem の空き（statvfs。不明なら `None` で空きの条件は見ない）。
     pub fs_free_bytes: Option<u64>,
-    /// 緊急モード（空き < `min_free_disk_mb`）。目標 = 空き `min_free × 3`。
+    /// 緊急モード（空き < 空きの下限）。目標 = 空き `min_free × 3`。
     pub emergency: bool,
     pub completed_grace_secs: u64,
     pub warm_seeds_per_repo: usize,

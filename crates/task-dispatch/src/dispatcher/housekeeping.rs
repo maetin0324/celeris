@@ -54,7 +54,7 @@ impl Dispatcher {
 
     /// ADR-0075 D2（Phase G1）: tick の `scratch_gc` phase。lease と DB の状態を読み、`plan_gc` で決めた target を
     /// `.deleting-*` へ rename する（`remove_dir_all` は削除スレッド、サイズは測定スレッド）。`emergency` は空き <
-    /// `min_free_disk_mb` のときの緊急モード。rename した件数を返す。
+    /// 空きの下限（`min_free_disk_pct`）のときの緊急モード。rename した件数を返す。
     pub(super) fn scratch_gc(&mut self, emergency: bool) -> usize {
         use task_worker::scratch::{GIB, Pressure};
         // ADR-0041 D5: verify は本番と同じ scratch pool を見る。staging DB の状態で本番の target を消さない。
@@ -72,7 +72,6 @@ impl Dispatcher {
             .lock()
             .map(|m| m.clone())
             .unwrap_or_default();
-        let min_free = self.config.min_free_disk_mb.saturating_mul(1024 * 1024);
         let lookup = task_worker::scratch::StoreLookup(self.store.as_ref());
         let run = crate::scratch_gc::run_gc(
             &settings,
@@ -80,7 +79,7 @@ impl Dispatcher {
             &lookup,
             true,
             &sizes,
-            min_free,
+            self.config.min_free_disk_pct,
             emergency,
             &std::collections::BTreeSet::new(),
             false,
@@ -108,6 +107,7 @@ impl Dispatcher {
             }
             self.scratch.pressure = Some(run.plan.pressure);
         }
+        let min_free = run.min_free_bytes;
         let eff = crate::scratch_gc::effective_max(
             settings.total_max_bytes,
             run.fs,
@@ -236,7 +236,7 @@ impl Dispatcher {
             .scratch
             .pressure
             .is_some_and(|p| p != task_worker::scratch::Pressure::None);
-        let min_free = self.config.min_free_disk_mb.saturating_mul(1024 * 1024);
+        let min_free_pct = self.config.min_free_disk_pct;
         let busy = self.scratch.seed_refreshing.clone();
         let spawned = std::thread::Builder::new()
             .name("celeris-scratch-seed".to_string())
@@ -264,10 +264,13 @@ impl Dispatcher {
                         .collect();
                     let root = settings.pool().root().to_path_buf();
                     let hold = |seed_bytes: Option<u64>| {
+                        let fs = crate::scratch_gc::fs_stats(&root);
+                        let min_free =
+                            fs.map(|f| crate::disk_admission::min_free_bytes(f.0, min_free_pct));
                         task_worker::scratch::seed_refresh_hold(
                             pressure_high,
-                            crate::scratch_gc::fs_stats(&root).map(|f| f.1),
-                            min_free,
+                            fs.map(|f| f.1),
+                            min_free.unwrap_or(0),
                             seed_bytes,
                         )
                     };
@@ -319,7 +322,7 @@ impl Dispatcher {
     /// ディスク不足は Phase 116 の infra 障害として一度だけ通知し、空きが戻ると自動で解除する。
     /// 検査不能も安全側に倒して run を開始しない。
     pub(super) fn check_disk_space(&mut self) -> bool {
-        if self.config.min_free_disk_mb == 0 {
+        if self.config.min_free_disk_pct <= 0.0 {
             self.disk_low = false;
             return true;
         }
@@ -344,17 +347,8 @@ impl Dispatcher {
         if self.scratch_active() {
             paths.push(self.config.scratch.dir.clone());
         }
-        let min_free = self.config.min_free_disk_mb;
-        let find_low = move |paths: &[PathBuf]| {
-            paths.iter().find_map(|path| match free_disk_mb(path) {
-                Ok(free) if free < min_free => Some(format!(
-                    "{}: {free} MiB free (minimum {min_free} MiB)",
-                    path.display(),
-                )),
-                Err(error) => Some(error),
-                _ => None,
-            })
-        };
+        let pct = self.config.min_free_disk_pct;
+        let find_low = move |paths: &[PathBuf]| crate::disk_admission::find_low_disk(paths, pct);
         let mut low = find_low(&paths);
         // ADR-0075 D3: 空きが足りなければ、新しい run を始める前にこの tick で緊急 GC（rename まで）を回す。
         // 削除は別スレッドなので空きが戻るのは数 tick 後。その間は下の保留と通知 1 回（attempts を消費しない）。

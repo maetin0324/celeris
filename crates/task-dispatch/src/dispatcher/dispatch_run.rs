@@ -283,6 +283,28 @@ impl Dispatcher {
             );
             return Ok(false);
         }
+        // ADR 2026-11-11-disk-aware-dispatch D1: 空きの見込みが予備を割るなら、新しい target を作る run を始めず
+        // `ready` のまま待たせる（lease・attempts の前。理由は待ち始めに 1 回だけ log。受信箱には出さない）。
+        if !is_planner_dispatch
+            && matches!(task.workspace, WorkspaceSpec::Local { .. })
+            && let Some(view) = self.scratch.admission.forecast(self.scratch.view.as_ref())
+            && !view.expected_by_repo.is_empty()
+            && let Some(repo) = self.cargo_target_repo(&task)
+        {
+            let repo_key = task_worker::build_cache::repo_cache_key(&repo.source);
+            let (id, wu, now) = (
+                task.id.to_string(),
+                run_key.work_unit.as_deref(),
+                std::time::SystemTime::now(),
+            );
+            if self
+                .scratch
+                .admission
+                .hold(&view, &id, wu, &repo_key, self.running.len(), now)
+            {
+                return Ok(false);
+            }
+        }
         // ADR-0018: リモート実行のタスクは、クラスタの設定・cooldown・並列度・多重接続を先に確かめる。
         // ADR-0062 B1（Phase 107）: `cluster_of` が `None` の理由を分ける。(a) 設定に無いクラスタ
         // → 従来どおり `unroutable`（人が設定を直すまで進まない）。(b) 担当が `cluster:<id>` を

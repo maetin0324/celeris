@@ -24,8 +24,8 @@ async fn disk_gate_notifies_once_and_recovers_without_a_run() {
     let mut d = dispatcher(store.clone(), adapter, 1);
     d.config.workspace_roots =
         task_core::local_machine::WorkspaceRoots::new(dir.path().join("not-created"), None);
-    assert!(free_disk_mb(d.config.workspace_roots.config_root()).is_ok());
-    d.config.min_free_disk_mb = u64::MAX;
+    assert!(crate::scratch_gc::fs_stats(d.config.workspace_roots.config_root()).is_some());
+    d.config.min_free_disk_pct = 99.9;
     assert_eq!(d.tick().unwrap().dispatched, 0);
     assert_eq!(d.tick().unwrap().dispatched, 0);
     assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Ready);
@@ -35,10 +35,10 @@ async fn disk_gate_notifies_once_and_recovers_without_a_run() {
     assert_eq!(notices.total, 1);
     assert_eq!(notices.items[0].kind, task_core::feed::NoticeKind::BadNews);
     assert!(notices.items[0].title.contains("ディスク不足"));
-    d.config.min_free_disk_mb = 0;
+    d.config.min_free_disk_pct = 0.0;
     assert_eq!(d.tick().unwrap().dispatched, 1);
     assert!(!d.disk_low);
-    d.config.min_free_disk_mb = u64::MAX;
+    d.config.min_free_disk_pct = 99.9;
     assert!(!d.check_disk_space());
     assert_eq!(
         store

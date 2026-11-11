@@ -1,6 +1,7 @@
 # ADR-0075: ビルドキャッシュの 2 層化 — target は使い捨ての scratch、再利用は sccache の L1（ローカル）/ L2（NFS）に集約し、Celeris が semantic cache manager になる
 
 - 日付: 2026-09-28
+- 付記（2026-11-11）: `[dispatch] min_free_disk_mb`（固定 MiB）は [ADR 2026-11-11-disk-aware-dispatch](2026-11-11-disk-aware-dispatch.md) D2 で `[dispatch] min_free_disk_pct`（filesystem の容量に対する %、既定 10）に置き換えた。下の本文の `min_free_disk_mb` は「空きの下限（容量 × `min_free_disk_pct`）」と読み替える。dispatch の前の空きの見込み（D1）も同 ADR。
 - 状態: **Accepted**（2026-09-28 Phase G1 完了・本番反映、Phase G2 実装、Phase G3 実装〈cache server の有効化は人〉）
 - 入力: `docs/notes/build-cache-tiering-input-2026-09-28.md`（人の設計方針。本 ADR はこれに沿う。以下「入力メモ」）
 - 関連:

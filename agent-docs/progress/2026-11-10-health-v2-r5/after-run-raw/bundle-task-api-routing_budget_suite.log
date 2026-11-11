@@ -1,0 +1,31 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running tests/routing_budget_suite/main.rs (/local/celeris/data/scratch/targets/task-01M76AG298YER7PJB6M781C77X/wu-01M76B4XA4MZRYHBP348ZP7R49/target/debug/deps/routing_budget_suite-1fdf77a0b77c24fd)
+
+running 24 tests
+test project_brief::project_brief_admin_put_replaces_and_shows_in_list_and_detail ... ok
+test project_brief::project_list_reports_task_counts_last_activity_and_human_waits ... ok
+test project_wake_human_chat::project_wake_api_human_chat_off_project_is_inert ... ok
+test project_wake_human_chat::project_wake_api_human_chat_relay_bumps_once_and_a_resend_does_not ... ok
+test project_wake_human_chat::project_wake_api_human_chat_refused_writes_do_not_bump ... ok
+test project_wake_human::project_wake_api_human_refused_or_unchanged_requests_do_not_bump ... ok
+test project_wake_human_chat::project_wake_api_human_chat_message_bumps_once_and_a_resend_does_not ... ok
+test project_wake_human_chat::project_wake_api_human_inbox_refused_answers_do_not_bump ... ok
+test project_brief::project_status_put_is_written_by_the_project_cos_only ... ok
+test project_wake_human_chat::project_wake_api_human_chat_forward_bumps_once_and_a_replay_does_not ... ok
+test project_wake_human_chat::project_wake_api_human_chat_cos_and_operator_messages_are_not_counted ... ok
+test project_wake_human_chat::project_wake_api_human_inbox_plan_withdraw_failure_keeps_the_epoch ... ok
+test project_wake_human_chat::project_wake_api_human_inbox_cos_answer_and_resolve_are_not_counted ... ok
+test project_wake_human_chat::project_wake_api_human_chat_bump_failure_rolls_the_message_back ... ok
+test project_wake_human::project_wake_api_human_off_or_projectless_is_inert ... ok
+test project_wake_human_chat::project_wake_api_human_inbox_operator_or_projectless_is_not_counted ... ok
+test project_wake_human::project_wake_api_human_mcp_is_not_counted ... ok
+test project_wake_human::project_wake_api_human_each_route_bumps_once ... ok
+test project_wake_human::project_wake_api_human_operator_is_not_counted ... ok
+test project_wake_human::project_wake_api_human_write_failure_keeps_the_epoch ... ok
+test project_wake_human::project_wake_api_human_bump_failure_rolls_the_write_back ... ok
+test project_wake_human_chat::project_wake_api_human_inbox_each_answer_bumps_once ... ok
+test project_wake_human_chat::project_wake_api_human_inbox_bump_failure_rolls_the_answer_back ... ok
+test project_wake_human::project_wake_api_human_cos_is_not_counted ... ok
+
+test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.32s
+

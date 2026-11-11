@@ -10,7 +10,16 @@
 #                    B0 と同じく settle 後に測る。settle は「編集の前に、同じ対象 crate の組で --no-run を 1 回走らせる」こと。
 #                    B0 の交絡（前回と違う組・前の編集の mtime で作り直しが混ざる）を除くため、組は編集で決まる対象と同じにする。
 #       run1, run2 : cargo nextest run -p <crate>（build は事前に --no-run で済ませる）を 2 回走らせた秒・件数・失敗した試験名
-#       各段の前後と全体の前後に /proc/loadavg を記録する。
+#       label が head のときは続けて次の 2 段を測る（label が base でも head でもなければ skipped に理由を書く）。
+#       bundles    : crates/<crate>/tests/*/main.rs の束ごとに cargo test -p <crate> --test <bundle> を 1 回（1 process の実行）。
+#                    build は先に --no-run で済ませ、束ごとに exit・passed・failed・ignored・失敗した試験名・秒・loadavg を書く。
+#       base_run   : $MEASURE_BASELINE（既定は同じ dir の baseline.json）の同じ crate の run1・run2 の loadavg_before・after の
+#                    1 分値の最大と、この run の同じ値の最大を比べる。比が 2 を超えるか baseline に crate が無ければ、
+#                    git merge-base HEAD main を $TMPDIR の git worktree（compare と同じ関数）で cargo nextest run -p <crate>
+#                    --no-fail-fast を 1 回走らせる。要らなければ needed=false と比と両方の値だけを書く。
+#       既存の <out.json> には crate を足していく。別の crate の記録は残し、同じ crate を測り直したらその crate の記録だけを
+#       置き換える（正本は <out>-raw/steps.jsonl。<out.json> はそこから組み直す）。<out.json> の label と違う label では走らせない。
+#       各段の前後と全体の前後に /proc/loadavg を記録する。crate ごとの session に git_head・label・開始時刻を書く。
 #   bash <this> features <out.json> <crate,...> <crate,...>
 #       2 つの組 A・B について cargo tree -e features の (package, feature) の差を出し、
 #       A → B → A → B の順に cargo nextest run --no-run を走らせて各回の Compiling 行を記録する（作り直しの原因の確認）。
@@ -24,10 +33,15 @@
 #                    （base は -p の組、HEAD は --workspace -E の filter）を --no-run で走らせる。その後に同じ側の doc test の行も測る。
 #   bash <this> --validate <out.json>
 #       run・compare の出力に必要な欄があれば 0。測れなかった項目は skipped 欄（crate・item・reason）に理由があれば通す。
+#       label が base でない run の出力には bundles・base_run も求める。
+#   bash <this> --require <out.json> <crate,...>
+#       --validate が通り、label が head で、名指した各 crate に run1・run2・bundles（見つけた全束の結果）・base_run が
+#       skipped でなく揃う時だけ 0（needed=false の base_run も揃ったと数える）。
 #
 # 環境変数:
 #   MEASURE_DEADLINE  epoch 秒。これを過ぎたら残りの段を走らせず、skipped に理由を書く（run の壁時計に収めるため）。
 #                     走らせる段も残り秒数を timeout の上限にする。
+#   MEASURE_BASELINE  base_run が比べる run の出力（既定は同じ dir の baseline.json）。
 # 全 workspace の試験・並走 cargo の負荷はかけない（普通の build と、指定 crate の試験の実行だけ）。
 # CARGO_TARGET_DIR は渡された値のまま使う。
 set -u
@@ -35,10 +49,12 @@ here="$(cd "$(dirname "$0")" && pwd)"
 now() { date +%s.%N; }
 la() { cut -d' ' -f1-3 /proc/loadavg; }
 
+# validate <out.json> [<crate,...>]: 2 つ目の引数があれば --require の判定もする。
 validate() {
-  python3 -I - "$1" <<'PY'
+  python3 -I - "$@" <<'PY'
 import json, sys
 p = sys.argv[1]
+require = [c for c in sys.argv[2].split(",") if c] if len(sys.argv) > 2 else None
 try:
     d = json.load(open(p))
 except Exception as e:
@@ -91,6 +107,8 @@ if d.get("schema") == "health-v2-r5-build-compare/1":
     if errs:
         print("invalid:"); [print("  " + e) for e in errs]; sys.exit(1)
     print(f"ok: compare {len(set(crates))} crates (both sides built: {both}), {len(skipped)} skipped item(s)")
+    if require is not None:
+        print("not required-complete: compare output (--require needs a run output with label head)"); sys.exit(1)
     sys.exit(0)
 for k in ("schema", "label", "git_head", "loadavg_before", "loadavg_after", "crates", "skipped"):
     if k not in d:
@@ -107,12 +125,19 @@ req = {
     "edit_verify": ("edited_file", "affected", "settle_secs", "list_secs", "rebuild_secs", "rebuild_exit",
                     "rebuild_compiled_units", "edit_to_verify_secs", "loadavg_before", "loadavg_after"),
     "run": ("secs", "exit", "tests_run", "failed_tests", "loadavg_before", "loadavg_after"),
+    "bundles": ("found", "results"),
+    "bundle": ("cmd", "exit", "passed", "failed", "ignored", "failed_tests", "build_secs", "secs",
+               "loadavg_before", "loadavg_after"),
+    "base_run": ("needed", "ratio", "baseline_loadavg_1m_max", "head_loadavg_1m_max", "baseline"),
+    "base_run_needed": ("base_sha", "cmd", "secs", "exit", "tests_run", "failed_tests", "loadavg_before", "loadavg_after"),
 }
+# label が base でない run（HEAD の計測）は、束の 1 process 実行と base の実行（または要らない判定）も求める。
+items = ("build", "edit_verify", "run1", "run2") + (() if d.get("label") == "base" else ("bundles", "base_run"))
 crates = d.get("crates", {})
 if not crates:
     errs.append("no crates measured")
 for c, m in crates.items():
-    for item in ("build", "edit_verify", "run1", "run2"):
+    for item in items:
         if (c, item) in skipped:
             continue
         v = m.get(item)
@@ -122,15 +147,50 @@ for c, m in crates.items():
         for f in req["run" if item.startswith("run") else item]:
             if f not in v:
                 errs.append(f"{c}.{item}: missing field {f}")
+        if item == "bundles" and isinstance(v.get("results"), dict):
+            for b in v.get("found", []):
+                if (c, f"bundles:{b}") in skipped:
+                    continue
+                r = v["results"].get(b)
+                if not isinstance(r, dict):
+                    errs.append(f"{c}.bundles.{b}: missing (and not in skipped)")
+                    continue
+                errs.extend(f"{c}.bundles.{b}: missing field {f}" for f in req["bundle"] if f not in r)
+        if item == "base_run" and v.get("needed") is True:
+            errs.extend(f"{c}.base_run: missing field {f}" for f in req["base_run_needed"] if f not in v)
 if errs:
     print("invalid:"); [print("  " + e) for e in errs]; sys.exit(1)
 print(f"ok: {len(crates)} crates, {len(skipped)} skipped item(s)")
+if require is None:
+    sys.exit(0)
+# --require: label が head で、名指した crate に run1・run2・bundles・base_run が skipped でなく揃う。
+miss = []
+if d.get("label") != "head":
+    miss.append(f"label is {d.get('label')!r}, not 'head'")
+for c in require:
+    m = crates.get(c)
+    if m is None:
+        miss.append(f"{c}: not measured"); continue
+    for item in ("run1", "run2", "bundles", "base_run"):
+        if (c, item) in skipped or not isinstance(m.get(item), dict):
+            miss.append(f"{c}.{item}: skipped or missing")
+    b = m.get("bundles")
+    if isinstance(b, dict):
+        miss.extend(f"{c}.bundles.{n}: skipped or missing" for n in b.get("found", [])
+                    if (c, f"bundles:{n}") in skipped or not isinstance(b.get("results", {}).get(n), dict))
+if miss:
+    print("not required-complete:"); [print("  " + e) for e in miss]; sys.exit(1)
+print(f"required-complete: {', '.join(require)}")
 PY
 }
 
 if [ "${1:-}" = "--validate" ]; then
   [ $# -eq 2 ] || { echo "usage: $0 --validate <out.json>" >&2; exit 2; }
   validate "$2"; exit $?
+fi
+if [ "${1:-}" = "--require" ]; then
+  [ $# -eq 3 ] || { echo "usage: $0 --require <out.json> <crate,...>" >&2; exit 2; }
+  validate "$2" "$3"; exit $?
 fi
 
 mode="${1:-}"
@@ -141,14 +201,27 @@ case "$mode" in
        out="$2"; set_a="$3"; set_b="$4" ;;
   compare) [ $# -eq 3 ] || { echo "usage: $0 compare <out.json> <crate,...>" >&2; exit 2; }
        out="$2"; crates_csv="$3"; label=compare ;;
-  *) echo "usage: $0 run|features|compare|--validate ..." >&2; exit 2 ;;
+  *) echo "usage: $0 run|features|compare|--validate|--require ..." >&2; exit 2 ;;
 esac
 
 out="$(realpath -m "$out")"
 raw="${out%.json}-raw"
 mkdir -p "$raw"
 steps="$raw/steps.jsonl"
-: >"$steps"
+if [ "$mode" = run ] && [ -e "$out" ]; then
+  # 既存の out に足す: label が同じ時だけ。正本の steps.jsonl から、測り直す crate の行だけを除く。
+  old_label="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1])).get("label",""))' "$out" 2>/dev/null)"
+  [ "$old_label" = "$label" ] || { echo "measure: $out の label は '$old_label' で、'$label' の記録を足さない" >&2; exit 2; }
+  [ -f "$steps" ] || { echo "measure: $out はあるが正本の $steps が無い" >&2; exit 2; }
+  python3 -I - "$steps" "$crates_csv" <<'PY' || exit 2
+import json, sys
+p, cs = sys.argv[1], set(sys.argv[2].split(","))
+keep = [l for l in open(p) if l.strip() and json.loads(l).get("crate") not in cs]
+open(p, "w").writelines(keep)
+PY
+else
+  : >"$steps"
+fi
 
 # 残り秒（MEASURE_DEADLINE が無ければ大きな値）。
 remaining() {
@@ -220,6 +293,21 @@ json.dump(d, open(out, "w"), indent=1, ensure_ascii=False)
 PY
 }
 
+# base（git merge-base HEAD main）の tree。compare と run の base_run が共有する（写しは作らず、終われば消す）。
+head_tree="$(git rev-parse --show-toplevel)"; base_tree=""
+base_tree_add() {
+  [ -n "$base_sha" ] || { echo "measure: git merge-base HEAD main が無い" >&2; return 2; }
+  base_tree="$(mktemp -d "${TMPDIR:?TMPDIR が要る}/r5-measure-base.XXXXXX")" && rmdir "$base_tree" || return 2
+  echo "worktree add --detach $base_tree $base_sha" >>"$raw/worktree.log"
+  git worktree add --detach "$base_tree" "$base_sha" >>"$raw/worktree.log" 2>&1 || { cat "$raw/worktree.log" >&2; base_tree=""; return 2; }
+  trap base_tree_remove EXIT
+}
+base_tree_remove() {
+  [ -n "$base_tree" ] || return 0
+  git -C "$head_tree" worktree remove --force "$base_tree" >>"$raw/worktree.log" 2>&1; echo "worktree remove: exit $?" >>"$raw/worktree.log"
+  base_tree=""
+}
+
 # ---- features モード ---------------------------------------------------------------------------------
 if [ "$mode" = features ]; then
   pargs() { local a=(); IFS=, read -ra cs <<<"$1"; for c in "${cs[@]}"; do a+=(-p "$c"); done; echo "${a[@]}"; }
@@ -263,12 +351,8 @@ fi
 
 # ---- compare モード ------------------------------------------------------------------------------------
 if [ "$mode" = compare ]; then
-  [ -n "$base_sha" ] || { echo "measure: git merge-base HEAD main が無い" >&2; exit 2; }
-  head_tree="$(git rev-parse --show-toplevel)"
-  base_tree="$(mktemp -d "${TMPDIR:?TMPDIR が要る}/r5-measure-base.XXXXXX")" && rmdir "$base_tree"
-  git worktree add --detach "$base_tree" "$base_sha" >"$raw/worktree.log" 2>&1 || { cat "$raw/worktree.log" >&2; exit 2; }
-  cleanup() { git -C "$head_tree" worktree remove --force "$base_tree" >>"$raw/worktree.log" 2>&1; echo "worktree remove: exit $?" >>"$raw/worktree.log"; }
-  trap cleanup EXIT
+  : >"$raw/worktree.log"
+  base_tree_add || exit 2
   tree_of() { if [ "$1" = head ]; then echo "$head_tree"; else echo "$base_tree"; fi; }
   IFS=, read -ra crates <<<"$crates_csv"
   order_json="$(python3 -I -c 'import json,sys; cs=sys.argv[1].split(","); print(json.dumps([{"crate":c,"side":s} for i,c in enumerate(cs) for s in (("base","head") if i%2==0 else ("head","base"))]))' "$crates_csv")"
@@ -422,19 +506,126 @@ fi
 
 # ---- run モード ----------------------------------------------------------------------------------------
 IFS=, read -ra crates <<<"$crates_csv"
+baseline_in="${MEASURE_BASELINE:-$here/baseline.json}"
+# label が base でない run の後段（bundles・base_run）。head だけが走らせ、ほかの label は skipped に理由を書く。
+post_items=""; [ "$label" != base ] && post_items="bundles base_run"
+skip_post() { local it; for it in $post_items; do skip "$1" "$it" "$2"; done; }
+
+# nextest_result <log> <exit> <t0> <t1> <loadavg_before> <loadavg_after>: nextest の log から秒・件数・失敗した試験名の JSON。
+nextest_result() {
+  python3 -I - "$@" <<'PY'
+import json, re, sys
+lg, rc, t0, t1, l0, l1 = sys.argv[1:7]
+txt = open(lg, errors="replace").read()
+failed = sorted(set(m.group(2) for m in re.finditer(r"^\s*(FAIL|TIMEOUT|SIGSEGV|SIGABRT|SIGKILL|ABORT)\s+\[[^\]]*\]\s+(?:\(\s*\d+/\d+\)\s+)?(\S+\s+\S+)", txt, re.M)))
+m = re.search(r"Summary \[\s*([\d.]+)s\]\s+(\d+) tests? run: (\d+) passed(?:.*?(\d+) failed)?(?:.*?(\d+) timed out)?(?:.*?(\d+) skipped)?", txt)
+d = {"exit": int(rc), "timed_out": rc in ("124", "137"), "secs": round(float(t1) - float(t0), 2),
+     "nextest_summary_secs": float(m.group(1)) if m else None,
+     "tests_run": int(m.group(2)) if m else None, "passed": int(m.group(3)) if m else None,
+     "failed": int(m.group(4) or 0) if m else None, "timed_out_tests": int(m.group(5) or 0) if m else None,
+     "skipped_tests": int(m.group(6) or 0) if m else None,
+     "failed_tests": failed, "loadavg_before": l0, "loadavg_after": l1}
+print(json.dumps(d))
+PY
+}
+
+# bundles <crate>: crates/<crate>/tests/*/main.rs の束ごとに cargo test -p <crate> --test <bundle> を 1 回（1 process）。
+measure_bundles() {
+  local c="$1" m b bl lg brc rc t0 t1 t2 l0 la0 found=() res="$raw/bundles-$c.jsonl"
+  for m in crates/"$c"/tests/*/main.rs; do [ -f "$m" ] && found+=("$(basename "$(dirname "$m")")"); done
+  : >"$res"; la0="$(la)"
+  for b in "${found[@]}"; do
+    bl="$raw/bundle-$c-$b.build.log"; lg="$raw/bundle-$c-$b.log"
+    # build は先に済ませ、試験の秒に混ぜない。
+    t0="$(now)"; timed 60 cargo test -p "$c" --test "$b" --no-run >"$bl" 2>&1; brc=$?; t1="$(now)"
+    if [ "$brc" = 125 ] || [ "$brc" = 124 ] || [ "$brc" = 137 ]; then
+      skip "$c" "bundles:$b" "束の build が MEASURE_DEADLINE までに終わらない（exit $brc）"; continue
+    fi
+    l0="$(la)"; t1="$(now)"
+    if [ "$brc" = 0 ]; then timed 30 cargo test -p "$c" --test "$b" >"$lg" 2>&1; rc=$?; else rc="$brc"; : >"$lg"; fi
+    t2="$(now)"
+    if [ "$rc" = 125 ]; then skip "$c" "bundles:$b" "MEASURE_DEADLINE までの残りが 30 秒未満で走らせなかった（build は済み）"; continue; fi
+    python3 -I - "$b" "$c" "$lg" "$rc" "$brc" "$t0" "$t1" "$t2" "$l0" "$(la)" >>"$res" <<'PY'
+import json, re, sys
+b, c, lg, rc, brc, t0, t1, t2, l0, l1 = sys.argv[1:11]
+txt = open(lg, errors="replace").read()
+res = [tuple(map(int, m.groups())) for m in re.finditer(r"^test result: \w+\. (\d+) passed; (\d+) failed; (\d+) ignored", txt, re.M)]
+print(json.dumps({"bundle": b, "data": {
+  "cmd": f"cargo test -p {c} --test {b}", "build_exit": int(brc), "build_secs": round(float(t1) - float(t0), 2),
+  "exit": int(rc), "timed_out": rc in ("124", "137"), "harness_finished": bool(res),
+  "passed": res[-1][0] if res else None, "failed": res[-1][1] if res else None, "ignored": res[-1][2] if res else None,
+  "failed_tests": sorted(set(re.findall(r"^test (\S+) \.\.\. FAILED$", txt, re.M))),
+  "secs": round(float(t2) - float(t1), 2), "loadavg_before": l0, "loadavg_after": l1}}))
+PY
+  done
+  step "$c" bundles "$(python3 -I - "$res" "$c" "$la0" "$(la)" "${found[@]}" <<'PY'
+import json, sys
+res, c, l0, l1, found = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5:]
+r = {}
+for line in open(res):
+    s = json.loads(line); r[s["bundle"]] = s["data"]
+print(json.dumps({"glob": f"crates/{c}/tests/*/main.rs", "cmd": f"cargo test -p {c} --test <bundle>",
+                  "found": found, "results": r, "loadavg_before": l0, "loadavg_after": l1}))
+PY
+)"
+}
+
+# base_run <crate>: baseline と HEAD の run1・run2 の loadavg（1 分値）の最大を比べ、要る時だけ base で 1 回走らせる。
+measure_base_run() {
+  local c="$1" cmp prc rc l0 t0 t1 lg pl
+  cmp="$(python3 -I - "$baseline_in" "$out" "$c" "$head_tree" <<'PY'
+import json, os, sys
+bp, op, c, top = sys.argv[1:5]
+def la_max(m):
+    v = [float(m[r][k].split()[0]) for r in ("run1", "run2") if isinstance(m.get(r), dict)
+         for k in ("loadavg_before", "loadavg_after") if m[r].get(k)]
+    return max(v) if v else None
+try:
+    bm, why = json.load(open(bp)).get("crates", {}).get(c), None
+except Exception as e:
+    bm, why = None, f"baseline を読めない: {e}"
+b = la_max(bm) if bm else None
+h = la_max(json.load(open(op))["crates"].get(c, {}))
+ratio = round(h / b, 3) if (b and h is not None) else None
+needed = b is None or (ratio is not None and ratio > 2)
+reason = why or ("baseline に crate の run1・run2 の loadavg が無い" if b is None
+                 else f"HEAD の 1 分値の最大 {h} は baseline の {b} の {ratio} 倍" + ("（2 倍を超える）" if needed else "（2 倍以下）"))
+rel = os.path.relpath(os.path.realpath(bp), top)
+print(json.dumps({"baseline": bp if rel.startswith("..") else rel, "baseline_loadavg_1m_max": b, "head_loadavg_1m_max": h, "ratio": ratio,
+                  "threshold": 2, "needed": needed, "reason": reason}))
+PY
+)"
+  if [ "$(python3 -I -c 'import json,sys; print(json.loads(sys.argv[1])["needed"])' "$cmp")" != True ]; then
+    step "$c" base_run "$cmp"; return
+  fi
+  base_tree_add || { skip "$c" base_run "base の git worktree add に失敗した（$raw/worktree.log）"; return; }
+  pl="$raw/base-prerun-$c.log"; lg="$raw/base-run-$c.log"
+  t0="$(now)"; (cd "$base_tree" && timed 60 cargo nextest run -p "$c" --no-run) >"$pl" 2>&1; prc=$?; t1="$(now)"
+  if [ "$prc" = 125 ] || [ "$prc" = 124 ] || [ "$prc" = 137 ]; then
+    base_tree_remove; skip "$c" base_run "base の試験の前の build が MEASURE_DEADLINE までに終わらない（exit $prc）"; return
+  fi
+  local bsecs; bsecs="$(python3 -c 'import sys; print(round(float(sys.argv[2])-float(sys.argv[1]),2))' "$t0" "$t1")"
+  l0="$(la)"; t0="$(now)"
+  (cd "$base_tree" && timed 120 cargo nextest run -p "$c" --no-fail-fast) >"$lg" 2>&1; rc=$?; t1="$(now)"
+  base_tree_remove
+  if [ "$rc" = 125 ]; then skip "$c" base_run "MEASURE_DEADLINE までの残りが 120 秒未満で base を走らせなかった（build は済み）"; return; fi
+  step "$c" base_run "$(python3 -I -c 'import json,sys; d=json.loads(sys.argv[1]); d.update(json.loads(sys.argv[2])); d.update({"base_sha":sys.argv[3],"cmd":"cargo nextest run -p "+sys.argv[4]+" --no-fail-fast（base の git worktree で。build は先に --no-run）","build_exit":int(sys.argv[5]),"build_secs":float(sys.argv[6])}); print(json.dumps(d))' \
+    "$cmp" "$(nextest_result "$lg" "$rc" "$t0" "$t1" "$l0" "$(la)")" "$base_sha" "$c" "$prc" "$bsecs")"
+}
+
 for c in "${crates[@]}"; do
+  step "$c" session "$(python3 -I -c 'import json,sys,time; print(json.dumps({"label":sys.argv[1],"git_head":sys.argv[2],"merge_base_main":sys.argv[3],"measured_src_equals_merge_base":sys.argv[4]=="true","started_at":time.strftime("%Y-%m-%dT%H:%M:%SZ",time.gmtime()),"loadavg_start":sys.argv[5],"cargo_target_dir":sys.argv[6]}))' "$label" "$head_sha" "$base_sha" "$src_eq" "$(la)" "${CARGO_TARGET_DIR:-}")"
   # build
   lg="$raw/build-$c.log"; l0="$(la)"; t0="$(now)"
   timed 60 cargo nextest run -p "$c" --no-run >"$lg" 2>&1; rc=$?
   t1="$(now)"
   if [ "$rc" = 125 ]; then
-    for it in build edit_verify run1 run2; do skip "$c" "$it" "MEASURE_DEADLINE までの残りが足りず走らせなかった"; done; continue
+    for it in build edit_verify run1 run2 $post_items; do skip "$c" "$it" "MEASURE_DEADLINE までの残りが足りず走らせなかった"; done; continue
   fi
   binaries_json -p "$c" "$raw/build-$c.binaries.json"
   read -r nb nl <<<"$(count_bins "$raw/build-$c.binaries.json" "$t0")"
   step "$c" build "$(python3 -I -c 'import json,sys; a=sys.argv; print(json.dumps({"exit":int(a[1]),"timed_out":a[1] in ("124","137"),"secs":round(float(a[3])-float(a[2]),2),"compiled_units":len(json.loads(a[4])),"compiled":json.loads(a[4]),"test_binaries":None if a[5]=="null" else int(a[5]),"linked_test_binaries":None if a[6]=="null" else int(a[6]),"loadavg_before":a[7],"loadavg_after":a[8]}))' \
     "$rc" "$t0" "$t1" "$(compiled_names "$lg")" "$nb" "$nl" "$l0" "$(la)")"
-
   # edit_verify（settle 後）
   f="crates/$c/src/lib.rs"; git ls-files --error-unmatch "$f" >/dev/null 2>&1 || f="crates/$c/src/main.rs"
   probe=$'\n// edit-verify probe (R5 measure.sh)\n'
@@ -483,30 +674,21 @@ PY
   pl="$raw/prerun-$c.log"
   timed 60 cargo nextest run -p "$c" --no-run >"$pl" 2>&1; prc=$?
   if [ "$prc" = 125 ] || [ "$prc" = 124 ] || [ "$prc" = 137 ]; then
-    skip "$c" run1 "試験の前の build が MEASURE_DEADLINE までに終わらない（exit $prc）"
-    skip "$c" run2 "試験の前の build が MEASURE_DEADLINE までに終わらない（exit $prc）"; continue
+    for it in run1 run2 $post_items; do skip "$c" "$it" "試験の前の build が MEASURE_DEADLINE までに終わらない（exit $prc）"; done; continue
   fi
   for r in 1 2; do
     lg="$raw/run$r-$c.log"; l0="$(la)"; t0="$(now)"
     timed 120 cargo nextest run -p "$c" --no-fail-fast >"$lg" 2>&1; rc=$?
     t1="$(now)"
     if [ "$rc" = 125 ]; then skip "$c" "run$r" "MEASURE_DEADLINE までの残りが 120 秒未満で走らせなかった"; continue; fi
-    step "$c" "run$r" "$(python3 -I - "$lg" "$rc" "$t0" "$t1" "$l0" "$(la)" <<'PY'
-import json, re, sys
-lg, rc, t0, t1, l0, l1 = sys.argv[1:7]
-txt = open(lg, errors="replace").read()
-failed = sorted(set(m.group(2) for m in re.finditer(r"^\s*(FAIL|TIMEOUT|SIGSEGV|SIGABRT|SIGKILL|ABORT)\s+\[[^\]]*\]\s+(?:\(\s*\d+/\d+\)\s+)?(\S+\s+\S+)", txt, re.M)))
-m = re.search(r"Summary \[\s*([\d.]+)s\]\s+(\d+) tests? run: (\d+) passed(?:.*?(\d+) failed)?(?:.*?(\d+) timed out)?(?:.*?(\d+) skipped)?", txt)
-d = {"exit": int(rc), "timed_out": rc in ("124", "137"), "secs": round(float(t1) - float(t0), 2),
-     "nextest_summary_secs": float(m.group(1)) if m else None,
-     "tests_run": int(m.group(2)) if m else None, "passed": int(m.group(3)) if m else None,
-     "failed": int(m.group(4) or 0) if m else None, "timed_out_tests": int(m.group(5) or 0) if m else None,
-     "skipped_tests": int(m.group(6) or 0) if m else None,
-     "failed_tests": failed, "loadavg_before": l0, "loadavg_after": l1}
-print(json.dumps(d))
-PY
-)"
+    step "$c" "run$r" "$(nextest_result "$lg" "$rc" "$t0" "$t1" "$l0" "$(la)")"
   done
+  if [ "$label" = head ]; then
+    measure_bundles "$c"
+    measure_base_run "$c"
+  elif [ -n "$post_items" ]; then
+    skip_post "$c" "label が head でない（'$label'）ので、束の 1 process 実行と base の実行を走らせなかった"
+  fi
 done
 assemble
 cat "$out"

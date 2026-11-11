@@ -1,0 +1,31 @@
+warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGER` causes the socket to block the thread on drop
+   --> crates/script-runtime/vendor/deno_core/uv_compat/tcp.rs:818:17
+    |
+818 |       && stream.set_linger(Some(std::time::Duration::ZERO)).is_err()
+    |                 ^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: `deno_core` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.58s
+     Running tests/routing_budget_suite/main.rs (/local/celeris/data/scratch/targets/task-01M76AG298YER7PJB6M781C77X/wu-01M76B4XA44CN8G9F3TMYM6DNM/target/debug/deps/routing_budget_suite-d26701d6b7af18bb)
+
+running 15 tests
+test script_compare_execution_gate::script_compare_gate_largest_input_still_matches ... ok
+test script_compare_execution_gate::script_compare_gate_real_host_matches_rust_on_all_fixtures ... ok
+test script_compare_execution_gate::script_compare_gate_real_bundle_records_match_without_text ... ok
+test script_compare_report::script_compare_report_before_migration_exits_3 ... ok
+test script_compare_report::script_compare_report_classifies_every_outcome ... ok
+test script_compare_report::script_compare_report_counts_explained_cos_records ... ok
+test script_compare_report::script_compare_report_reads_dispatched_records ... ok
+test script_compare_report::script_compare_report_refuses_counts_without_records ... ok
+test script_compare_report::script_compare_report_cos_gate_uses_the_log_table ... ok
+test script_compare_execution_gate::script_compare_gate_reserved_rule_is_a_safety_violation ... ok
+test script_compare_execution_gate::script_compare_gate_throwing_bundle_keeps_rust_and_withholds_text ... ok
+test script_compare_execution_gate::script_compare_gate_different_answer_keeps_rust_decision_bytes ... ok
+test script_compare_report::script_compare_report_pure_gate_counts_real_records ... ok
+test tick_scale_baseline::tick_scale_baseline ... ok
+test script_compare_report::script_compare_report_counts_rollbacks ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.74s
+

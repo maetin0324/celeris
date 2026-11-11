@@ -1,0 +1,22 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running tests/run_worker_suite/main.rs (/local/celeris/data/scratch/targets/task-01M76AG298YER7PJB6M781C77X/wu-01M76B4XA4MZRYHBP348ZP7R49/target/debug/deps/run_worker_suite-f7ccdb91209686fd)
+
+running 15 tests
+test secrets_admin::put_does_not_reflect_the_value_in_a_parse_error ... ok
+test secrets_admin::secret_values_never_appear_in_config_or_secrets_responses ... ok
+test repository_required::repository_required_patch_repairs_blocked_children_but_not_running_tasks ... ok
+test secrets_admin::put_replaces_an_existing_secret ... ok
+test secrets_admin::all_three_endpoints_are_409_when_secrets_is_not_configured ... ok
+test repository_required::repository_required_cos_rejects_with_reason_and_audit_then_accepts_repos ... ok
+test repository_required::repository_required_human_warning_and_patch_repair_are_atomic ... ok
+test secrets_admin::all_three_endpoints_require_a_token_when_token_file_is_not_configured ... ok
+test secrets_admin::put_rejects_empty_or_whitespace_only_values ... ok
+test secrets_admin::put_and_delete_reject_invalid_ids_as_not_found ... ok
+test secrets_admin::all_three_endpoints_require_a_token_even_on_loopback ... ok
+test secrets_admin::delete_removes_the_file_and_second_delete_is_404 ... ok
+test secrets_admin::get_lists_items_with_used_by_and_never_the_value ... ok
+test secrets_admin::put_creates_a_0600_file_and_never_returns_the_value ... ok
+test secrets_admin::put_records_a_secret_stored_event_without_the_value ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.14s
+

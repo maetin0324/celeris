@@ -1,0 +1,23 @@
+warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGER` causes the socket to block the thread on drop
+   --> crates/script-runtime/vendor/deno_core/uv_compat/tcp.rs:818:17
+    |
+818 |       && stream.set_linger(Some(std::time::Duration::ZERO)).is_err()
+    |                 ^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: `deno_core` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.37s
+     Running tests/browser_eval_surface_suite/main.rs (/local/celeris/data/scratch/targets/task-01M76AG298YER7PJB6M781C77X/wu-01M76B4XA44CN8G9F3TMYM6DNM/target/debug/deps/browser_eval_surface_suite-a3bcd49615bfbaf1)
+
+running 7 tests
+test fake_http::framing_requires_every_header_and_body_byte ... ok
+test fake_http::async_one_shot_survives_noise_and_silent_connection ... ok
+test fake_http::sync_one_shot_survives_noise_and_silent_connection ... ok
+test browser_startup_reap::startup_reaps_dead_instance_and_preserves_live_instance ... ok
+test workspace_roots::running_run_workspace_stable_after_root_change ... ok
+test workspace_roots::new_task_uses_store_workspace_root ... ok
+test workspace_roots::existing_workspace_unchanged_after_root_change ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.35s
+

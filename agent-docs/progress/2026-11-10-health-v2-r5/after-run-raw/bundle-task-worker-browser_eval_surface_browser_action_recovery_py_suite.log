@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running tests/browser_eval_surface_browser_action_recovery_py_suite/main.rs (/local/celeris/data/scratch/targets/task-01M76AG298YER7PJB6M781C77X/wu-01M76B4XA4NDSPES1FRPZKRGZW/target/debug/deps/browser_eval_surface_browser_action_recovery_py_suite-e757217446b088ef)
+
+running 1 test
+test browser_action_recovery::timed_out_download_adoption_recovers_before_the_next_snapshot ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+

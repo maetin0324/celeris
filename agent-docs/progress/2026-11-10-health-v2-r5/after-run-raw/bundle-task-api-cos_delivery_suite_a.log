@@ -1,0 +1,49 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.23s
+     Running tests/cos_delivery_suite_a/main.rs (/local/celeris/data/scratch/targets/task-01M76AG298YER7PJB6M781C77X/wu-01M76B4XA4MZRYHBP348ZP7R49/target/debug/deps/cos_delivery_suite_a-f450a7ecbb56ae23)
+
+running 42 tests
+test chat_attachments::chat_attach_api_unconfigured_is_unavailable ... ok
+test chat_attachments::chat_attach_api_rejects_duplicate_file_fields ... ok
+test cos_auth::cos_chat_ops_auth_admin_bearer_unchanged ... ok
+test chat_attachments::chat_attach_api_requires_client_upload_id ... ok
+test chat_attachments::chat_attach_api_rejects_empty_client_upload_id ... ok
+test cos_auth::cos_chat_ops_checkpoint_api_403_for_human_and_other_run ... ok
+test cos_auth::cos_chat_ops_auth_identity_claims_are_ignored_or_422 ... ok
+test cos_auth::cos_chat_ops_auth_get_allowed_and_direct_mutation_is_422_with_audit ... ok
+test cos_auth::cos_chat_ops_auth_expired_revoked_and_unknown_are_401 ... ok
+test cos_auth::cos_chat_ops_checkpoint_api_200_and_conflicts ... ok
+test cos_chat_triage_scenarios::cos_chat_triage_override_revokes_a_resolved_answer_end_to_end ... ok
+test chat_attachments::chat_attach_api_metadata_exposes_download_url ... ok
+test chat_attachments::chat_attach_api_upload_limits_replay_and_content ... ok
+test chat_attachments::chat_attach_api_replay_different_bytes_conflicts ... ok
+test chat_attachments::chat_attach_api_deleted_content_is_unavailable ... ok
+test cos_chat_triage_scenarios::cos_chat_triage_a_answers_each_wait_kind_without_webhook ... ok
+test cos_chat_triage_scenarios::cos_chat_triage_b_escalates_human_matters_and_keeps_the_wait ... ok
+test cos_job_wait_extend::job_wait_extend_refuses_jobs_not_queued_other_questions_and_the_limit ... ok
+test cos_job_wait_extend::job_wait_extend_answers_once_extend_for_queued_jobs ... ok
+test cos_chat_attach_handoff_kb::cos_chat_attach_handoff_pin_missing_owner_404 ... ok
+test cos_chat_attach_handoff_kb::cos_chat_attach_handoff_kb_candidate_keeps_provenance ... ok
+test chat_attachments::chat_attach_api_knowledge_inbox_reference ... ok
+test cos_auth::cos_chat_ops_auth_cos_shape_never_falls_back_to_admin ... ok
+test cos_operations_review_report::review_thread_upload_is_403_and_review_thread_lookup_is_404_until_it_exists ... ok
+test cos_operations_review_report::review_report_from_the_review_run_writes_one_general_message_and_one_audit_row ... ok
+test cos_job_wait_extend::job_wait_extend_through_operations_reads_the_approval_answer ... ok
+test cos_operations_review_report::review_report_from_another_run_a_person_or_a_wrong_input_is_422 ... ok
+test cos_ops_mutations::cos_ops_mutations_execution_plan_post_adopts_atomically ... ok
+test chat_attachments::chat_attach_api_preview_delete_and_references ... ok
+test cos_ops_mutations::cos_ops_mutations_execution_decompose ... ok
+test cos_ops_mutations::cos_ops_mutations_execution_plan_put_replans_an_active_plan ... ok
+test cos_ops_mutations::task_rereview_resumes_a_halted_review_without_a_reviewer_criterion ... ok
+test cos_ops_mutations::cos_ops_mutations_decision_revise_and_withdraw ... ok
+test cos_ops_mutations::cos_ops_mutations_notification_reads ... ok
+test cos_ops_mutations::cos_ops_mutations_task_rereview_resumes_halted_review ... ok
+test cos_ops_mutations::cos_ops_mutations_task_rereview ... ok
+test cos_ops_mutations::cos_ops_mutations_knowledge_accept ... ok
+test cos_ops_mutations::cos_ops_mutations_tree_adopt_is_audited_atomically ... ok
+test cos_ops_mutations::cos_ops_mutations_task_edit_pause_resume_reopen_retry ... ok
+test cos_ops_mutations::cos_ops_mutations_task_gate_actions ... ok
+test cos_ops_projects_cron_changes::cos_ops_projects_cron_changes_merge_is_external_once ... ok
+test cos_ops_projects_cron_changes::cos_ops_projects_cron_changes_pr_create_and_merge_call_gh_once ... ok
+
+test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.43s
+

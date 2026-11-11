@@ -1,0 +1,93 @@
+diff --git a/agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json b/agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json
+index ac77c1e4..3ad0034f 100644
+--- a/agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json
++++ b/agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json
+@@ -2285,6 +2285,16 @@
+      "crate": "celeris",
+      "module": "accounts_admin",
+      "path": "crates/celeris/src/accounts_admin.rs"
++    },
++    {
++     "crate": "task-dispatch",
++     "module": "routing_runtime::quota",
++     "path": "crates/task-dispatch/src/routing_runtime/quota.rs"
++    },
++    {
++     "crate": "task-dispatch",
++     "module": "routing_runtime::quota_estimate",
++     "path": "crates/task-dispatch/src/routing_runtime/quota_estimate.rs"
+     }
+    ],
+    "invariants": [
+@@ -2410,6 +2420,16 @@
+      "crate": "task-dispatch",
+      "module": "dispatcher::token_budget",
+      "path": "crates/task-dispatch/src/dispatcher/token_budget.rs"
++    },
++    {
++     "crate": "task-dispatch",
++     "module": "run_settlement",
++     "path": "crates/task-dispatch/src/run_settlement.rs"
++    },
++    {
++     "crate": "task-dispatch",
++     "module": "dispatch_admission",
++     "path": "crates/task-dispatch/src/dispatch_admission.rs"
+     }
+    ],
+    "invariants": [
+@@ -3371,6 +3391,16 @@
+      "crate": "task-dispatch",
+      "module": "dispatcher::leases",
+      "path": "crates/task-dispatch/src/dispatcher/leases.rs"
++    },
++    {
++     "crate": "task-dispatch",
++     "module": "run_supervisor",
++     "path": "crates/task-dispatch/src/run_supervisor.rs"
++    },
++    {
++     "crate": "task-dispatch",
++     "module": "run_settlement",
++     "path": "crates/task-dispatch/src/run_settlement.rs"
+     }
+    ],
+    "invariants": [
+@@ -3459,6 +3489,11 @@
+      "crate": "task-dispatch",
+      "module": "dispatcher::leases",
+      "path": "crates/task-dispatch/src/dispatcher/leases.rs"
++    },
++    {
++     "crate": "task-dispatch",
++     "module": "run_supervisor",
++     "path": "crates/task-dispatch/src/run_supervisor.rs"
+     }
+    ],
+    "invariants": [
+diff --git a/scripts/dev/repo-health/profiles/celeris.toml b/scripts/dev/repo-health/profiles/celeris.toml
+index c16e2806..17360654 100644
+--- a/scripts/dev/repo-health/profiles/celeris.toml
++++ b/scripts/dev/repo-health/profiles/celeris.toml
+@@ -215,6 +215,9 @@ paths = [
+     '^crates/task-dispatch/src/orphan\.rs$',
+     '^crates/task-core/src/instance\.rs$',
+     '^crates/celeris/src/instance\.rs$',
++    # R4 の owner（ADR 2026-11-11-dispatcher-state-ownership D8）。上の dispatcher/ の path は撤去まで残す
++    '^crates/task-dispatch/src/run_supervisor(\.rs$|/)',
++    '^crates/task-dispatch/src/run_settlement(\.rs$|/)',
+ ]
+ 
+ # 予算・単価・quota（capability budget-pricing・accounts-quota。ADR 2026-11-06-budget-usd-caps）
+@@ -226,6 +229,11 @@ paths = [
+     '^crates/task-ops/src/project_budget',
+     '^crates/task-dispatch/src/dispatcher/token_budget\.rs$',
+     '^crates/task-dispatch/src/dispatcher/quota_book\.rs$',
++    # R4 の owner（ADR 2026-11-11-dispatcher-state-ownership D8）。上の dispatcher/ の path は撤去まで残す
++    '^crates/task-dispatch/src/routing_runtime/quota(\.rs$|/)',
++    '^crates/task-dispatch/src/routing_runtime/quota_estimate(\.rs$|/)',
++    '^crates/task-dispatch/src/run_settlement(\.rs$|/)',
++    '^crates/task-dispatch/src/dispatch_admission(\.rs$|/)',
+ ]
+ 
+ # release の作成・昇格・rollback（capability release-selfdeploy-wiring、地図の self-deploy 行。docs/ops/selfdeploy.md）

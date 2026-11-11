@@ -14,7 +14,7 @@ use axum::extract::{RawQuery, State};
 use axum::http::StatusCode;
 use task_core::{
     ApprovalStore, Event, KnowledgeRunStore, ReportFilter, ReportStore, SqliteStore, Task, TaskId,
-    TaskIntegration, TaskStore,
+    TaskIntegration, TaskQuery, TaskStore,
 };
 
 use crate::handlers::{ApiResult, Params, json_response, no_query};

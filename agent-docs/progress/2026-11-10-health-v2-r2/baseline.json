@@ -1,0 +1,274 @@
+{
+ "schema": "health-v2-r2-measure/1",
+ "event_sink": {
+  "file": "crates/task-worker/src/adapter.rs",
+  "methods": [
+   "browser_updated",
+   "browser_wait_open",
+   "browser_waits",
+   "browser_saved_credential",
+   "browser_saved_credential_valid",
+   "browser_approval_consume",
+   "browser_operation_approval_consume",
+   "browser_auth_section",
+   "browser_control_gate",
+   "browser_live",
+   "before_spawn",
+   "progress",
+   "progress_with",
+   "artifact",
+   "context_compacted",
+   "heartbeat",
+   "delegate",
+   "comment",
+   "usage_progress",
+   "rate_limit",
+   "policy_violation",
+   "session_established",
+   "session_resume_failed"
+  ],
+  "method_count": 23,
+  "browser_methods": [
+   "browser_updated",
+   "browser_wait_open",
+   "browser_waits",
+   "browser_saved_credential",
+   "browser_saved_credential_valid",
+   "browser_approval_consume",
+   "browser_operation_approval_consume",
+   "browser_auth_section",
+   "browser_control_gate",
+   "browser_live"
+  ],
+  "browser_count": 10,
+  "default_impls": 21
+ },
+ "browser_traits": {
+  "BrowserAuthority": {
+   "expected_file": "crates/task-worker/src/browser_policy.rs",
+   "found_in": null,
+   "methods": [],
+   "default_impls": 0
+  },
+  "BrowserControl": {
+   "expected_file": "crates/task-worker/src/browser_live.rs",
+   "found_in": null,
+   "methods": [],
+   "default_impls": 0
+  }
+ },
+ "browser_trait_default_impls": 0,
+ "browser_sinks_nontest": [
+  {
+   "type": "StoreSink",
+   "trait": "EventSink",
+   "file": "crates/task-dispatch/src/dispatcher/sinks.rs",
+   "browser_fns": 10
+  },
+  {
+   "type": "BrowserSink",
+   "trait": "EventSink",
+   "file": "crates/task-worker/src/browser.rs",
+   "browser_fns": 7
+  }
+ ],
+ "unrelated_sinks": {
+  "ReviewerSink": {
+   "impls": [
+    "EventSink@crates/task-dispatch/src/dispatcher/sinks.rs"
+   ],
+   "browser_fns": 0,
+   "browser_trait_impls": 0
+  },
+  "ChatRunSink": {
+   "impls": [
+    "EventSink@crates/task-dispatch/src/dispatcher/cos_chat/sink.rs"
+   ],
+   "browser_fns": 0,
+   "browser_trait_impls": 0
+  },
+  "PrintSink": {
+   "impls": [
+    "EventSink@crates/celerisctl/src/commands/worker.rs"
+   ],
+   "browser_fns": 0,
+   "browser_trait_impls": 0
+  },
+  "NullSink": {
+   "impls": [
+    "EventSink@crates/task-worker/src/adapter.rs"
+   ],
+   "browser_fns": 0,
+   "browser_trait_impls": 0
+  },
+  "BrowserSink": {
+   "impls": [
+    "EventSink@crates/task-worker/src/browser.rs"
+   ],
+   "browser_fns": 7,
+   "browser_trait_impls": 0
+  }
+ },
+ "worker_adapter": {
+  "methods": [
+   "id",
+   "model_namespace",
+   "account_id",
+   "with_model",
+   "with_llm_endpoint",
+   "with_permission_mode",
+   "run",
+   "with_env",
+   "with_container"
+  ],
+  "with_fns": [
+   "with_model",
+   "with_llm_endpoint",
+   "with_permission_mode",
+   "with_env",
+   "with_container"
+  ],
+  "with_count": 5,
+  "has_configure": false
+ },
+ "adapter_impls_nontest": [
+  {
+   "type": "StubWorker",
+   "file": "crates/campaign/src/dagbench/celeris_side.rs",
+   "with_fns": 0,
+   "with": [],
+   "configure": false
+  },
+  {
+   "type": "AcpAdapter",
+   "file": "crates/task-worker/src/acp.rs",
+   "with_fns": 3,
+   "with": [
+    "with_env",
+    "with_model",
+    "with_container"
+   ],
+   "configure": false
+  },
+  {
+   "type": "AiderAdapter",
+   "file": "crates/task-worker/src/aider.rs",
+   "with_fns": 3,
+   "with": [
+    "with_model",
+    "with_env",
+    "with_container"
+   ],
+   "configure": false
+  },
+  {
+   "type": "BrowserSpecialistAdapter",
+   "file": "crates/task-worker/src/browser_specialist.rs",
+   "with_fns": 5,
+   "with": [
+    "with_model",
+    "with_llm_endpoint",
+    "with_permission_mode",
+    "with_env",
+    "with_container"
+   ],
+   "configure": false
+  },
+  {
+   "type": "ClaudeCodeAdapter",
+   "file": "crates/task-worker/src/claude_code.rs",
+   "with_fns": 4,
+   "with": [
+    "with_model",
+    "with_env",
+    "with_container",
+    "with_permission_mode"
+   ],
+   "configure": false
+  },
+  {
+   "type": "CodexAdapter",
+   "file": "crates/task-worker/src/codex.rs",
+   "with_fns": 3,
+   "with": [
+    "with_model",
+    "with_env",
+    "with_container"
+   ],
+   "configure": false
+  },
+  {
+   "type": "FakeAdapter",
+   "file": "crates/task-worker/src/fake.rs",
+   "with_fns": 3,
+   "with": [
+    "with_model",
+    "with_env",
+    "with_container"
+   ],
+   "configure": false
+  },
+  {
+   "type": "LangMemAdapter",
+   "file": "crates/task-worker/src/langmem.rs",
+   "with_fns": 2,
+   "with": [
+    "with_env",
+    "with_model"
+   ],
+   "configure": false
+  },
+  {
+   "type": "LdrAdapter",
+   "file": "crates/task-worker/src/local_deep_research.rs",
+   "with_fns": 2,
+   "with": [
+    "with_env",
+    "with_model"
+   ],
+   "configure": false
+  },
+  {
+   "type": "PaperQaAdapter",
+   "file": "crates/task-worker/src/paperqa.rs",
+   "with_fns": 2,
+   "with": [
+    "with_env",
+    "with_model"
+   ],
+   "configure": false
+  },
+  {
+   "type": "PiAdapter",
+   "file": "crates/task-worker/src/pi.rs",
+   "with_fns": 4,
+   "with": [
+    "with_model",
+    "with_env",
+    "with_llm_endpoint",
+    "with_container"
+   ],
+   "configure": false
+  }
+ ],
+ "adapter_impls_nontest_with_fns": 31,
+ "adapter_impls_test": {
+  "impls": 108,
+  "with_impls": 22,
+  "with_fns": 31
+ },
+ "browser_specialist_setting_forwards": 5,
+ "worker_task_with_env_calls": 4,
+ "adapter_setting_calls_nontest": {
+  "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs": 1,
+  "crates/task-dispatch/src/dispatcher/eval_trials.rs": 1,
+  "crates/task-dispatch/src/dispatcher/housekeeping.rs": 1,
+  "crates/task-dispatch/src/dispatcher/route_failure.rs": 1,
+  "crates/task-dispatch/src/dispatcher/route_launch.rs": 1,
+  "crates/task-dispatch/src/dispatcher/worker_task.rs": 6,
+  "crates/task-dispatch/src/review.rs": 1,
+  "crates/task-worker/src/browser_specialist.rs": 5,
+  "crates/task-worker/src/route.rs": 3
+ },
+ "adapter_setting_calls_nontest_total": 20
+}

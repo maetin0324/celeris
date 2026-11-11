@@ -325,8 +325,10 @@ impl WorkerAdapter for LaunchingAdapter {
         })
     }
 
-    fn with_env(&self, _extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-        Some(Arc::new(LaunchingAdapter(self.0)))
+    fn configure(&self, settings: &task_worker::AdapterSettings) -> task_worker::Configured {
+        settings.configured(&[task_worker::AdapterSetting::Env], || {
+            Arc::new(LaunchingAdapter(self.0))
+        })
     }
 }
 

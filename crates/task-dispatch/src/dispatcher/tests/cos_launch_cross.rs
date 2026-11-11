@@ -227,11 +227,14 @@ impl WorkerAdapter for Gates {
             exit_code: Some(0),
         })
     }
-    fn with_model(&self, _model: &str) -> Option<Arc<dyn WorkerAdapter>> {
-        Some(Arc::new(self.clone()))
-    }
-    fn with_env(&self, _extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-        Some(Arc::new(self.clone()))
+    fn configure(&self, settings: &task_worker::AdapterSettings) -> task_worker::Configured {
+        settings.configured(
+            &[
+                task_worker::AdapterSetting::Model,
+                task_worker::AdapterSetting::Env,
+            ],
+            || Arc::new(self.clone()),
+        )
     }
 }
 

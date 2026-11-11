@@ -1,6 +1,7 @@
 use super::*;
 use serde_json::json;
 use std::os::unix::{fs::PermissionsExt, net::UnixListener};
+use task_core::OrgDirectory;
 use task_worker::browser::SUPPORTED_VERSION;
 
 fn fixture(dir: &std::path::Path) -> (DoctorConfig, SqliteStore) {

@@ -21,18 +21,6 @@ pub struct StoredRouteDecision {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct StoredRouteJudgment {
-    pub judgment_id: String,
-    pub features_hash: String,
-    pub options_hash: String,
-    pub input_sha256: String,
-    pub judge: serde_json::Value,
-    pub probs: serde_json::Value,
-    pub source: String,
-    pub created_at: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct StoredRouteOutcome {
     pub decision_id: String,
     pub outcome: RouteOutcome,
@@ -134,12 +122,6 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub fn insert_route_judgment(&self, j: &StoredRouteJudgment) -> Result<(), StoreError> {
-        let conn = self.lock()?;
-        conn.execute("INSERT INTO route_judgments(judgment_id,features_hash,options_hash,input_sha256,judge_json,probs_json,source,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)", params![j.judgment_id,j.features_hash,j.options_hash,j.input_sha256,serde_json::to_string(&j.judge)?,serde_json::to_string(&j.probs)?,j.source,j.created_at])?;
-        Ok(())
-    }
-
     pub fn route_features_get(&self, hash: &str) -> Result<Option<TaskFeatures>, StoreError> {
         self.with_read_conn(|c| {
             c.query_row(
@@ -193,31 +175,6 @@ impl SqliteStore {
                 })
             })
             .transpose()
-        })
-    }
-
-    pub fn route_decision_get(&self, id: &str) -> Result<Option<StoredRouteDecision>, StoreError> {
-        self.with_read_conn(|c| Ok(c.query_row("SELECT decision_id,subject_kind,subject_id,run_id,features_hash,options_hash,input_json,output_json,judge_json,stage,created_at FROM route_decisions WHERE decision_id=?1", [id], decision_row).optional()?))
-    }
-
-    pub fn route_outcome_get(&self, id: &str) -> Result<Option<StoredRouteOutcome>, StoreError> {
-        self.with_read_conn(|c| c.query_row("SELECT decision_id,schema,labels_json,recorded_at FROM route_outcomes WHERE decision_id=?1", [id], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?))).optional()?.map(|(decision_id,schema,labels,recorded_at)| Ok(StoredRouteOutcome { decision_id, outcome:RouteOutcome { schema,labels:serde_json::from_str(&labels)? }, recorded_at })).transpose())
-    }
-
-    pub fn route_judgment_get(&self, id: &str) -> Result<Option<StoredRouteJudgment>, StoreError> {
-        self.with_read_conn(|c| c.query_row("SELECT judgment_id,features_hash,options_hash,input_sha256,judge_json,probs_json,source,created_at FROM route_judgments WHERE judgment_id=?1", [id], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?,r.get::<_,String>(6)?,r.get::<_,String>(7)?))).optional()?.map(|(judgment_id,features_hash,options_hash,input_sha256,judge,probs,source,created_at)| Ok(StoredRouteJudgment { judgment_id,features_hash,options_hash,input_sha256,judge:serde_json::from_str(&judge)?,probs:serde_json::from_str(&probs)?,source,created_at })).transpose())
-    }
-
-    /// Judgments are reusable only for the exact feature/options content pair.
-    pub fn route_judgments_for_hashes(
-        &self,
-        features_hash: &str,
-        options_hash: &str,
-    ) -> Result<Vec<StoredRouteJudgment>, StoreError> {
-        self.with_read_conn(|c| {
-            let mut stmt=c.prepare("SELECT judgment_id,features_hash,options_hash,input_sha256,judge_json,probs_json,source,created_at FROM route_judgments WHERE features_hash=?1 AND options_hash=?2 ORDER BY judgment_id")?;
-            let rows=stmt.query_map(params![features_hash,options_hash], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,String>(4)?,r.get::<_,String>(5)?,r.get::<_,String>(6)?,r.get::<_,String>(7)?)))?;
-            rows.map(|row| { let (judgment_id,features_hash,options_hash,input_sha256,judge,probs,source,created_at)=row?; Ok(StoredRouteJudgment { judgment_id,features_hash,options_hash,input_sha256,judge:serde_json::from_str(&judge)?,probs:serde_json::from_str(&probs)?,source,created_at }) }).collect()
         })
     }
 

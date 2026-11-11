@@ -21,7 +21,7 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use task_core::{OrgNode, TaskStore};
+use task_core::{OrgDirectory, OrgNode};
 use task_ops::knowledge::{self as ops_kb, SkillError};
 use time::OffsetDateTime;
 

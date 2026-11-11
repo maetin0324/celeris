@@ -1,7 +1,7 @@
 //! ADR 2026-10-27-project-brief D5: the project summaries a CoS chat run receives. Deterministic
 //! (store reads only): the general CoS gets every non-archived project, a project CoS its own.
 
-use task_core::{ProjectId, SqliteStore, TaskStore};
+use task_core::{OrgDirectory, ProjectId, SqliteStore};
 use task_worker::protocol::CosChatProjectSummary;
 use time::format_description::well_known::Rfc3339;
 
@@ -65,7 +65,8 @@ fn cut(text: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use task_core::{
-        Project, ProjectBrief, ProjectBriefInput, ProjectStatus, WaitingOn, WaitingOnKind,
+        Project, ProjectBrief, ProjectBriefInput, ProjectStatus, TaskStore, WaitingOn,
+        WaitingOnKind,
     };
     use time::OffsetDateTime;
 

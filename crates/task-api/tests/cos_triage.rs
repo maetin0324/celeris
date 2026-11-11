@@ -430,6 +430,108 @@ async fn cos_chat_triage_observe_needs_no_judgment() {
     assert_eq!(outbox, 0, "observe sends nothing");
 }
 
+/// ADR 2026-11-10-taskstore-consumer-ports D5: the inbox mark (task-core `cos_triage_resolve_tx`)
+/// and the applied audit row commit in one `cos_operation_apply` transaction, so neither stays
+/// without the other. Every other resolve test either succeeds (both written) or is refused before that
+/// transaction opens, so a mark moved to its own transaction or connection would still pass them;
+/// here a trigger makes one of the two writes fail inside the transaction.
+#[tokio::test]
+async fn cos_chat_triage_mark_and_audit_commit_together() {
+    let env = admin_env();
+    let app = env.router();
+    let notice = ingest(&env, "notice", "notice-atomic", "v1", 1);
+    let (_t, _r, bearer) = cos_bearer(&env, "atomic");
+    let headers = [("authorization", bearer.as_str())];
+    let sql = |sql: &str| db(&env).execute_batch(sql).expect("sql");
+    let operation = |key: &str| -> (String, String) {
+        db(&env)
+            .query_row(
+                "SELECT id,state FROM cos_operations WHERE idempotency_key=?1",
+                [key],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("operation row")
+    };
+    let applied = || -> i64 {
+        db(&env)
+            .query_row(
+                "SELECT COUNT(*) FROM cos_operations WHERE state='applied'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count")
+    };
+    let marked_by = || -> Option<String> {
+        db(&env)
+            .query_row(
+                "SELECT operation_id FROM cos_inbox_items WHERE id=?1",
+                [&notice],
+                |r| r.get(0),
+            )
+            .expect("item")
+    };
+
+    // The mark fails: the audit row of the operation is not applied either.
+    sql(
+        "CREATE TRIGGER refuse_mark BEFORE UPDATE ON cos_inbox_items \
+         BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+    );
+    let resp = send(
+        &app,
+        post_json_with(
+            &resolve_path(&notice),
+            &resolve_body("k-atomic-1", "v1", "observe", json!({})),
+            &headers,
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 500, "{}", resp.text());
+    assert_eq!(operation("k-atomic-1").1, "rejected");
+    assert_eq!(applied(), 0);
+    assert_eq!(item_state(&env, &notice), "pending");
+    assert_eq!(marked_by(), None);
+    sql("DROP TRIGGER refuse_mark");
+
+    // The applied audit row fails: the mark written before it in the transaction is rolled back.
+    sql(
+        "CREATE TRIGGER refuse_applied BEFORE INSERT ON cos_operations WHEN NEW.state='applied' \
+         BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+    );
+    let resp = send(
+        &app,
+        post_json_with(
+            &resolve_path(&notice),
+            &resolve_body("k-atomic-2", "v1", "observe", json!({})),
+            &headers,
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 500, "{}", resp.text());
+    assert_eq!(operation("k-atomic-2").1, "rejected");
+    assert_eq!(applied(), 0);
+    assert_eq!(item_state(&env, &notice), "pending");
+    assert_eq!(marked_by(), None);
+    sql("DROP TRIGGER refuse_applied");
+
+    // Both writes allowed: the mark names the applied operation and its audit event exists.
+    let resp = send(
+        &app,
+        post_json_with(
+            &resolve_path(&notice),
+            &resolve_body("k-atomic-3", "v1", "observe", json!({})),
+            &headers,
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    let (op_id, state) = operation("k-atomic-3");
+    assert_eq!(state, "applied");
+    assert_eq!(applied(), 1);
+    assert_eq!(item_state(&env, &notice), "observed");
+    assert_eq!(marked_by().as_deref(), Some(op_id.as_str()));
+    assert_eq!(audit_events(&env, &op_id).len(), 1);
+}
+
 #[tokio::test]
 async fn cos_chat_triage_escalation_packet_is_validated() {
     let env = admin_env();

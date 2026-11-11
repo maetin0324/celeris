@@ -9,6 +9,7 @@ use crate::common;
 
 use common::*;
 use serde_json::{Value, json};
+use task_core::OrgDirectory;
 use task_core::approval::{Approval, ApprovalId, ApprovalStore, StandingRuleId};
 use task_core::org::{OrgKind, OrgNode};
 use task_core::{

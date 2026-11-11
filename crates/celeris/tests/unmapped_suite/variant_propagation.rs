@@ -15,7 +15,8 @@ use serde_json::{Value, json};
 use task_core::org::{OrgKind, OrgNode};
 use task_core::variant_wire::effective_profile_sha256;
 use task_core::{
-    DaemonMode, Event, InstanceRole, SharedRole, SqliteStore, Status, TaskId, TaskStore, profile,
+    DaemonMode, Event, InstanceRole, OrgDirectory, SharedRole, SqliteStore, Status, TaskId,
+    TaskStore, profile,
 };
 
 const H1: &str = "b6132a44b6132a44b6132a44b6132a44b6132a44b6132a44b6132a44b6132a44";

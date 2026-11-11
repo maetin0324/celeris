@@ -52,7 +52,8 @@ impl SqliteStore {
     }
 
     /// ADR-0080 H3: 認証区間（credential 注入）の開始/終了。task-api の `auth-section`
-    /// endpoint と worker の supervisor（`EventSink::browser_auth_section`）が共に使う唯一の口。
+    /// endpoint と worker の supervisor（`task_worker::browser_live::BrowserControl::browser_auth_section`）
+    /// が共に使う唯一の口。
     pub fn browser_control_auth_section(
         &self,
         key: BrowserSessionKey<'_>,

@@ -47,20 +47,26 @@ impl WorkerAdapter for OauthAdapter {
         }
         Ok(done_outcome())
     }
-    fn with_model(&self, _model: &str) -> Option<Arc<dyn WorkerAdapter>> {
-        Some(Arc::new(self.clone()))
-    }
-    fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-        let account = extra
-            .iter()
-            .find(|(k, _)| k == AccountAdapter::ClaudeCode.env_var())
-            .and_then(|(_, v)| std::path::Path::new(v).file_name())
-            .map(|n| n.to_string_lossy().into_owned())
-            .or_else(|| self.account.clone());
-        Some(Arc::new(Self {
-            account,
-            ..self.clone()
-        }))
+    fn configure(&self, settings: &task_worker::AdapterSettings) -> task_worker::Configured {
+        settings.configured(
+            &[
+                task_worker::AdapterSetting::Model,
+                task_worker::AdapterSetting::Env,
+            ],
+            || {
+                let account = settings
+                    .env
+                    .iter()
+                    .find(|(k, _)| k == AccountAdapter::ClaudeCode.env_var())
+                    .and_then(|(_, v)| std::path::Path::new(v).file_name())
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .or_else(|| self.account.clone());
+                Arc::new(Self {
+                    account,
+                    ..self.clone()
+                })
+            },
+        )
     }
 }
 

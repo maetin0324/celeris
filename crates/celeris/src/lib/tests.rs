@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use task_api::types::GenreConfigView;
-use task_core::{DaemonMode, InstanceRole, SharedRole, SqliteStore, TaskStore};
+use task_core::{DaemonMode, InstanceRole, OrgDirectory, SharedRole, SqliteStore, TaskStore};
 use time::OffsetDateTime;
 
 #[test]

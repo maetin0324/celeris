@@ -4,6 +4,7 @@
 //! 接続は**人が張った `ControlMaster` の多重接続を借りる**（`BatchMode=yes` で、対話的な認証は絶対に行わない）。
 //! 接続が無ければ `WorkspaceError::Unreachable` を返し、呼び出し側（ディスパッチャ）が供給側失敗として扱う。
 
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -761,8 +762,9 @@ pub fn control_master_alive_blocking(ssh_command: &[String], host: &str) -> bool
 /// ADR-0062 A（Phase 107）: master 越しの実通信で生存を確定させる（`ssh -o BatchMode=yes <host> -- true`）。
 /// `control_master_alive_blocking`（`-O check`）は unix ソケットを見るだけなので、NAT / ファイアウォールの
 /// idle timeout で TCP が黙って死んでいても「Master running」を返し続ける。こちらは実際にリモートへ
-/// コマンドを 1 つ流すので確定できる。`timeout` を超えたら子を kill して `false`（`std::process::Command`
-/// を使う同期の実装。tick ループからは `run_cluster_hooks_off_async` 経由で OS スレッドに逃がして呼ぶ）。
+/// コマンドを 1 つ流すので確定できる。`timeout` を超えたら ssh の group と子孫ごと kill して `false`
+/// （[`wait_or_kill_group`]。`std::process::Command` を使う同期の実装。tick ループからは
+/// `run_cluster_hooks_off_async` 経由で OS スレッドに逃がして呼ぶ）。
 pub fn control_master_command_probe_blocking(
     ssh_command: &[String],
     host: &str,
@@ -777,25 +779,35 @@ pub fn control_master_command_probe_blocking(
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
+        .process_group(0)
         .spawn()
     {
         Ok(child) => child,
         Err(_) => return false,
     };
+    matches!(wait_or_kill_group(&mut child, timeout), Ok(Some(status)) if status.success())
+}
+
+/// ADR 2026-11-10-ssh-timeout-kills-process-group D1・D2: `process_group(0)` で起こした `child`（group の長）の終了を
+/// `timeout` まで待つ。終われば `Ok(Some(status))`。超えたら、子を回収する**前に**（pid と pgid が再利用されない間に）
+/// group と子孫（ppid を辿る）を SIGKILL し（`LocalWorkspace::exec` の時間切れと同じ
+/// [`crate::process_group::kill_group_and_descendants`]）、子を回収して `Ok(None)`。直接の子だけを kill すると、
+/// ProxyCommand・wrapper・試験の偽 ssh の子が孤児として残る（2026-11-10 の release gate を止めた `sleep 3600`）。
+fn wait_or_kill_group(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> std::io::Result<Option<std::process::ExitStatus>> {
     let start = std::time::Instant::now();
     loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return status.success(),
-            Ok(None) => {
-                if start.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return false;
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            Err(_) => return false,
+        if let Some(status) = child.try_wait()? {
+            return Ok(Some(status));
         }
+        if start.elapsed() >= timeout {
+            crate::process_group::kill_group_and_descendants(child.id() as i32);
+            let _ = child.wait();
+            return Ok(None);
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 
@@ -812,7 +824,8 @@ pub struct RemoteCommandOutput {
 pub const REMOTE_COMMAND_OUTPUT_MAX: usize = 1024 * 1024;
 
 /// ADR-0090 D2: tick から OS スレッドに逃がして呼ぶ、master 越しの 1 コマンド（`ssh -o BatchMode=yes <host> -- <script>`）。
-/// `timeout` を超えたら子を kill して `Err`。ssh 自身の失敗（exit 255）も `Err`（接続の問題。poll の失敗として扱う）。
+/// `timeout` を超えたら ssh の group と子孫ごと kill して `Err`（[`wait_or_kill_group`]）。ssh 自身の失敗（exit 255）も
+/// `Err`（接続の問題。poll の失敗として扱う）。
 /// 対話的な認証はしない（`BatchMode=yes`。人が張った ControlMaster を借りるだけ）。
 pub fn run_remote_command_blocking(
     ssh_command: &[String],
@@ -830,6 +843,7 @@ pub fn run_remote_command_blocking(
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        .process_group(0)
         .spawn()
         .map_err(|e| format!("cannot start ssh: {e}"))?;
     fn drain(mut r: impl Read + Send + 'static) -> std::thread::JoinHandle<Vec<u8>> {
@@ -850,23 +864,15 @@ pub fn run_remote_command_blocking(
     }
     let out = child.stdout.take().map(drain);
     let err = child.stderr.take().map(drain);
-    let start = std::time::Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {
-                if start.elapsed() >= timeout {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(format!(
-                        "ssh to {host} timed out after {}s",
-                        timeout.as_secs()
-                    ));
-                }
-                std::thread::sleep(Duration::from_millis(50));
-            }
-            Err(e) => return Err(format!("cannot wait for ssh: {e}")),
+    let status = match wait_or_kill_group(&mut child, timeout) {
+        Ok(Some(status)) => status,
+        Ok(None) => {
+            return Err(format!(
+                "ssh to {host} timed out after {}s",
+                timeout.as_secs()
+            ));
         }
+        Err(e) => return Err(format!("cannot wait for ssh: {e}")),
     };
     let collect = |h: Option<std::thread::JoinHandle<Vec<u8>>>| {
         h.and_then(|h| h.join().ok())
@@ -889,7 +895,13 @@ pub fn run_remote_command_blocking(
 }
 
 /// 外部コマンドを 1 つ動かし、末尾の出力と終了コードを返す（`LocalWorkspace::exec` と同じ流儀）。
+///
+/// ADR 2026-11-10-ssh-timeout-kills-process-group D1・D2: 子は `process_group(0)` で起こす。stdout・stderr を EOF まで
+/// 読んでから `wait` し、全体を 1 つの `timeout` で囲む。`timeout` が切れたとき `wait` は `Ready` を返していない
+/// （子は未回収）ので、`child.id()` が `Some` の間に group と子孫を SIGKILL してから回収する（rsync の子の ssh、
+/// ssh の ProxyCommand を孤児にしない）。
 async fn run_command(args: &[String], timeout: Duration) -> Result<ExecResult, WorkspaceError> {
+    use tokio::io::AsyncReadExt;
     let Some((program, rest)) = args.split_first() else {
         return Err(WorkspaceError::Remote("empty command".to_string()));
     };
@@ -899,23 +911,49 @@ async fn run_command(args: &[String], timeout: Duration) -> Result<ExecResult, W
     command.stdout(std::process::Stdio::piped());
     command.stderr(std::process::Stdio::piped());
     command.kill_on_drop(true);
-    let child = command.output();
-    match tokio::time::timeout(timeout, child).await {
-        Ok(out) => {
-            let out = out?;
+    command.process_group(0);
+    let mut child = command.spawn()?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| WorkspaceError::Io(std::io::Error::other("child stdout not captured")))?;
+    let mut stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| WorkspaceError::Io(std::io::Error::other("child stderr not captured")))?;
+    let finished = tokio::time::timeout(timeout, async {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let (read_out, read_err) =
+            tokio::join!(stdout.read_to_end(&mut out), stderr.read_to_end(&mut err));
+        read_out?;
+        read_err?;
+        let status = child.wait().await?;
+        Ok::<_, std::io::Error>((status, out, err))
+    })
+    .await;
+    match finished {
+        Ok(done) => {
+            let (status, out, err) = done?;
             Ok(ExecResult {
-                exit: out.status.code(),
-                stdout_tail: crate::workspace::tail_utf8_lossy(&out.stdout),
-                stderr_tail: crate::workspace::tail_utf8_lossy(&out.stderr),
+                exit: status.code(),
+                stdout_tail: crate::workspace::tail_utf8_lossy(&out),
+                stderr_tail: crate::workspace::tail_utf8_lossy(&err),
                 timed_out: false,
             })
         }
-        Err(_) => Ok(ExecResult {
-            exit: None,
-            stdout_tail: String::new(),
-            stderr_tail: String::new(),
-            timed_out: true,
-        }),
+        Err(_elapsed) => {
+            if let Some(pid) = child.id() {
+                crate::process_group::kill_group_and_descendants(pid as i32);
+            }
+            let _ = child.wait().await;
+            Ok(ExecResult {
+                exit: None,
+                stdout_tail: String::new(),
+                stderr_tail: String::new(),
+                timed_out: true,
+            })
+        }
     }
 }
 

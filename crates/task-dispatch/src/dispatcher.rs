@@ -1104,8 +1104,8 @@ struct RunExtras {
     execution_planner: Option<task_worker::protocol::ExecutionPlannerContext>,
     /// ADR-0072 D14（Phase E4b 項目3）: planner run にだけ `Some(self.config.execution.planner.
     /// permission_mode)`。`RunContext` には乗らない（ワーカーへの文脈ではなく、`run_worker` が
-    /// `adapter.with_permission_mode` で実際の CLI 引数を上書きするためだけの、dispatcher 内部の
-    /// 配線）。
+    /// `AdapterSettings` の `permission_mode` を `configure` で適用して実際の CLI 引数を上書きする
+    /// ためだけの、dispatcher 内部の配線）。
     planner_permission_mode: Option<String>,
     /// ADR-0074 D1.2（Phase F2b）: v2 の WU の run の成果物の置き場（`<task_dir>/wu/<key>/artifacts`。
     /// 並列の WU が同じ `artifacts/checkpoint.json` を上書きしないため）。`runs/` は Task のものを共有する。

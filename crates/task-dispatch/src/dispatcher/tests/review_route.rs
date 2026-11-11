@@ -322,9 +322,10 @@ impl WorkerAdapter for IdAs {
     fn id(&self) -> &str {
         &self.id
     }
-    fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-        let inner = self.inner.with_env(extra)?;
-        Some(IdAs::wrap(&self.id, inner))
+    fn configure(&self, settings: &task_worker::AdapterSettings) -> task_worker::Configured {
+        self.inner
+            .configure(settings)
+            .map_adapter(|inner| IdAs::wrap(&self.id, inner))
     }
     async fn run(
         &self,

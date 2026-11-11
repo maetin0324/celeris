@@ -5,7 +5,7 @@ use task_core::browser_wait::BrowserWaitStore;
 use task_core::org::{OrgKind, OrgNode};
 use task_core::{
     BrowserAction, BrowserCapability, BrowserDomainMode, BrowserSitePolicy, BrowserTaskPolicy,
-    SqliteStore, Task, TaskStore, Trigger,
+    OrgDirectory, SqliteStore, Task, TaskStore, Trigger,
 };
 use task_ops::add::{NewTaskSpec, create_task};
 use task_ops::retry::retry_task;

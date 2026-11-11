@@ -18,8 +18,8 @@ use tokio::process::Command;
 use tracing::warn;
 
 use crate::adapter::{
-    AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter, deadline_terminal,
-    spawn_capture_stderr, with_estimated_cost,
+    AdapterError, AdapterSetting, AdapterSettings, Configured, EventSink, RunLimits, RunOutcome,
+    Terminal, WorkerAdapter, deadline_terminal, spawn_capture_stderr, with_estimated_cost,
 };
 use crate::delegate_file::forward_delegate_file;
 use crate::progress;
@@ -45,7 +45,7 @@ pub struct ClaudeCodeConfig {
     /// 追加の環境変数（例: `CLAUDE_CONFIG_DIR`）。
     pub env: Vec<(String, String)>,
     /// ADR-0043 D3（Phase 56）: `Some` なら `claude` をコンテナの中で起こす（`container::wrap`）。
-    /// TOML には書かない（ディスパッチャが `with_container` で入れる）。
+    /// TOML には書かない（ディスパッチャが `configure` の `container` で入れる）。
     pub container: Option<crate::container::SharedPlan>,
     /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D1/D7: `[adapters.claude_code] subagents`。既定 `Deny`
     /// （`--disallowedTools Agent,Task,Workflow` を `extra_args` の後ろに付ける）。
@@ -95,33 +95,28 @@ impl WorkerAdapter for ClaudeCodeAdapter {
         run_claude_code(&self.config, &req, run_id, &limits, sink).await
     }
 
-    /// ADR-0024 D2: `extra` を `config.env` の末尾に足した複製を返す。同名キーは後勝ち（`envs()` に渡す順で
-    /// 最後に指定した値が使われる）ので、末尾に足すだけで `extra` が既存の同名キーに勝つ。
-    fn with_model(&self, model: &str) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut config = self.config.clone();
-        config.model = Some(model.to_owned());
-        Some(Arc::new(Self::new(config)))
-    }
-    fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut config = self.config.clone();
-        config.env.extend(extra.iter().cloned());
-        Some(Arc::new(ClaudeCodeAdapter::new(config)))
-    }
-    /// ADR-0043 D3（Phase 56）: コンテナの中で `claude` を起こす複製。
-    fn with_container(&self, plan: crate::container::SharedPlan) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut config = self.config.clone();
-        config.container = Some(plan);
-        Some(Arc::new(ClaudeCodeAdapter::new(config)))
-    }
-
-    /// ADR-0072 D14（Phase E4b 項目3）: `--permission-mode` を上書きした複製。planner run に
-    /// `[execution.planner].permission_mode`（既定 `"bypassPermissions"`）を実際の CLI 引数へ反映するために使う
-    /// （`with_model`/`with_env` と同じ形。ADR-0072「Phase E3 実装時の逸脱・明確化」で見送っていた
-    /// フック）。
-    fn with_permission_mode(&self, mode: &str) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut config = self.config.clone();
-        config.permission_mode = mode.to_owned();
-        Some(Arc::new(ClaudeCodeAdapter::new(config)))
+    /// ADR 2026-11-10-worker-capability-ports D3: model、env（ADR-0024 D2: 末尾に足すので同名キーは後勝ち）、
+    /// コンテナ（ADR-0043 D3）、`--permission-mode`（ADR-0072 D14: planner run の
+    /// `[execution.planner].permission_mode`）を受ける。
+    fn configure(&self, settings: &AdapterSettings) -> Configured {
+        settings.configured(
+            &[
+                AdapterSetting::Model,
+                AdapterSetting::PermissionMode,
+                AdapterSetting::Env,
+                AdapterSetting::Container,
+            ],
+            || {
+                let mut config = self.config.clone();
+                settings.apply_model(&mut config.model);
+                settings.apply_env(&mut config.env);
+                if let Some(mode) = &settings.permission_mode {
+                    config.permission_mode = mode.clone();
+                }
+                settings.apply_container(&mut config.container);
+                Arc::new(Self::new(config))
+            },
+        )
     }
 }
 

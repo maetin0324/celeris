@@ -10,7 +10,7 @@ use common::cos_ops::{
 use common::*;
 use serde_json::json;
 use task_core::approval::{Approval, ApprovalId, ApprovalStore, Decision};
-use task_core::{Event, Status, TaskKind, TaskStore};
+use task_core::{Event, OrgDirectory, Status, TaskKind, TaskStore};
 use time::OffsetDateTime;
 
 #[tokio::test]

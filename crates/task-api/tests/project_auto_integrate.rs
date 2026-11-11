@@ -5,7 +5,7 @@ mod common;
 
 use common::*;
 use serde_json::json;
-use task_core::TaskStore;
+use task_core::OrgDirectory;
 
 #[tokio::test]
 async fn auto_integrate_is_a_project_attribute_switched_by_patch() {

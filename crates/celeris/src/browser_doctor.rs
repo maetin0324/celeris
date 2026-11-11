@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use task_api::browser_readiness::BrowserReadiness;
-use task_core::{BrowserAction, SqliteStore, TaskStore};
+use task_core::{BrowserAction, OrgDirectory, SqliteStore};
 use task_worker::browser_ledger::{HostAgentBrowser, ledger_status, probe_agent_browser};
 
 use crate::Config;

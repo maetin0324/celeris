@@ -131,6 +131,27 @@ pub(super) fn bind_claim_tx(
     Ok(message_id)
 }
 
+/// [`SqliteStore::cos_triage_resolve`] in the caller's transaction: the resolve API marks the item
+/// inside the `cos_operation_apply` transaction of its audit row, so the audit row and the mark
+/// commit or roll back together (ADR 2026-11-10-taskstore-consumer-ports D5). `false` when the
+/// item already has an outcome.
+pub fn cos_triage_resolve_tx(
+    tx: &Transaction<'_>,
+    item_id: &str,
+    outcome: &str,
+    operation_id: Option<&str>,
+    reason: Option<&str>,
+    now: OffsetDateTime,
+) -> Result<bool, ChatError> {
+    if !matches!(
+        outcome,
+        "answered" | "observed" | "escalated" | "fallback" | "resolved"
+    ) {
+        return Err(ChatError::Invalid("invalid triage outcome".into()));
+    }
+    Ok(tx.execute("UPDATE cos_inbox_items SET state=?2,operation_id=?3,reason=?4,updated_at=?5 WHERE id=?1 AND state IN ('pending','running')", params![item_id,outcome,operation_id,reason,chat_ts(now)])? == 1)
+}
+
 fn put_cursor(tx: &Transaction<'_>, name: &str, value: &str) -> Result<(), ChatError> {
     tx.execute(
         "INSERT INTO feed_cursor(name,value) VALUES(?1,?2) ON CONFLICT(name) DO UPDATE SET value=excluded.value",
@@ -305,14 +326,11 @@ impl SqliteStore {
         reason: Option<&str>,
         now: OffsetDateTime,
     ) -> Result<bool, ChatError> {
-        if !matches!(
-            outcome,
-            "answered" | "observed" | "escalated" | "fallback" | "resolved"
-        ) {
-            return Err(ChatError::Invalid("invalid triage outcome".into()));
-        }
-        let conn = writer(self)?;
-        Ok(conn.execute("UPDATE cos_inbox_items SET state=?2,operation_id=?3,reason=?4,updated_at=?5 WHERE id=?1 AND state IN ('pending','running')", params![item_id,outcome,operation_id,reason,chat_ts(now)])? == 1)
+        let mut conn = writer(self)?;
+        let tx = conn.transaction()?;
+        let changed = cos_triage_resolve_tx(&tx, item_id, outcome, operation_id, reason, now)?;
+        tx.commit()?;
+        Ok(changed)
     }
 
     /// Arbitration point shared by escalation and unavailable fallback.

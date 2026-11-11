@@ -1,7 +1,7 @@
 //! ADR-0056 D1 / D4（Phase 78）: 口ごとの認証。決定的（LLM も I/O 以外の判断も無い。DESIGN 原則 1）。
 
 use sha2::{Digest, Sha256};
-use task_core::{McpScope, TaskStore};
+use task_core::{McpClientStore, McpScope};
 use time::OffsetDateTime;
 
 use crate::config::ListenerAuth;
@@ -55,7 +55,7 @@ pub enum AuthError {
 
 /// 口の認証方式にしたがってクライアントを決める。成功したら `last_used_at` を更新する。
 pub fn authenticate(
-    store: &dyn TaskStore,
+    store: &dyn McpClientStore,
     listener_auth: &ListenerAuth,
     bearer: Option<&str>,
     now: OffsetDateTime,

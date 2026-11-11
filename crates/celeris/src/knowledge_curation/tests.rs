@@ -8,6 +8,7 @@ mod git_support;
 use super::*;
 use git_support::git;
 use task_core::NotificationStore;
+use task_core::OrgDirectory;
 use task_core::org::{OrgKind, OrgNode};
 use task_core::report::ReportStore;
 use task_core::{CronCatchUp, CronOverlap, CronTaskTemplate, SqliteStore, Tier, Trigger};

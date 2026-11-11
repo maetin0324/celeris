@@ -20,8 +20,8 @@ use tokio::process::Command;
 use tracing::warn;
 
 use crate::adapter::{
-    AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter, deadline_terminal,
-    spawn_capture_stderr, with_estimated_cost,
+    AdapterError, AdapterSetting, AdapterSettings, Configured, EventSink, RunLimits, RunOutcome,
+    Terminal, WorkerAdapter, deadline_terminal, spawn_capture_stderr, with_estimated_cost,
 };
 use crate::claude_code::{build_prompt, work_dir_note};
 use crate::delegate_file::{clear_delegate_file, forward_delegate_file};
@@ -216,23 +216,23 @@ impl WorkerAdapter for CodexAdapter {
         run_codex(&self.config, &req, run_id, &limits, sink).await
     }
 
-    /// ADR-0025 D2: `extra`（`CODEX_HOME` を含む）を `config.env` の末尾に足した複製を返す
-    /// （`claude_code::ClaudeCodeAdapter::with_env` と同じ規則: 同名キーは後勝ち）。
-    fn with_model(&self, model: &str) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut config = self.config.clone();
-        config.model = Some(model.to_owned());
-        Some(Arc::new(Self::new(config)))
-    }
-    fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut config = self.config.clone();
-        config.env.extend(extra.iter().cloned());
-        Some(Arc::new(CodexAdapter::new(config)))
-    }
-    /// ADR-0043 D3（Phase 56）: コンテナの中で `codex` を起こす複製。
-    fn with_container(&self, plan: crate::container::SharedPlan) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut config = self.config.clone();
-        config.container = Some(plan);
-        Some(Arc::new(CodexAdapter::new(config)))
+    /// ADR 2026-11-10-worker-capability-ports D3: model、env（ADR-0025 D2: `CODEX_HOME` を含む。同名キーは
+    /// 後勝ち）、コンテナ（ADR-0043 D3）を受ける。
+    fn configure(&self, settings: &AdapterSettings) -> Configured {
+        settings.configured(
+            &[
+                AdapterSetting::Model,
+                AdapterSetting::Env,
+                AdapterSetting::Container,
+            ],
+            || {
+                let mut config = self.config.clone();
+                settings.apply_model(&mut config.model);
+                settings.apply_env(&mut config.env);
+                settings.apply_container(&mut config.container);
+                Arc::new(Self::new(config))
+            },
+        )
     }
 }
 

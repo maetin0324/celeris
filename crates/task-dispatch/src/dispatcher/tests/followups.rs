@@ -8,7 +8,7 @@
 use super::*;
 use std::sync::Mutex as SyncMutex;
 
-/// `with_env` で受け取った env を持ち、run の中で `CELERIS_FOLLOWUPS_FILE` に後続を 1 件追記して done になる。
+/// `configure` で受け取った env を持ち、run の中で `CELERIS_FOLLOWUPS_FILE` に後続を 1 件追記して done になる。
 struct FollowupAdapter {
     env: Vec<(String, String)>,
     seen_env: Arc<SyncMutex<Vec<(String, String)>>>,
@@ -19,13 +19,15 @@ impl WorkerAdapter for FollowupAdapter {
     fn id(&self) -> &str {
         "instant"
     }
-    fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut env = self.env.clone();
-        env.extend(extra.iter().cloned());
-        Some(Arc::new(FollowupAdapter {
-            env,
-            seen_env: self.seen_env.clone(),
-        }))
+    fn configure(&self, settings: &task_worker::AdapterSettings) -> task_worker::Configured {
+        settings.configured(&[task_worker::AdapterSetting::Env], || {
+            let mut env = self.env.clone();
+            settings.apply_env(&mut env);
+            Arc::new(FollowupAdapter {
+                env,
+                seen_env: self.seen_env.clone(),
+            })
+        })
     }
     async fn run(
         &self,

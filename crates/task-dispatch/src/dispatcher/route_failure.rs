@@ -180,21 +180,21 @@ impl Dispatcher {
     }
 
     /// ADR-0024 D2 / ADR-0025 D2: プールから選んだアカウントの環境変数（claude-code は
-    /// `CLAUDE_SECURESTORAGE_CONFIG_DIR`、codex は `CODEX_HOME`）を末尾に重ねたアダプタを返す。`with_env` が
-    /// `None`（アダプタがこの経路を実装していない）なら `None`（呼び出し側は満杯として扱う）。
-    pub(super) fn adapter_for_account(
+    /// `CLAUDE_SECURESTORAGE_CONFIG_DIR`、codex は `CODEX_HOME`）。`[accounts]` にこの種類の root が
+    /// 無ければ `None`（呼び出し側は満杯として扱う）。adapter へは `route_adapter` が model と一緒に
+    /// 1 回の `configure` で重ねる。
+    pub(super) fn account_env(
         &self,
-        base: &Arc<dyn WorkerAdapter>,
         account_adapter: AccountAdapter,
         account_id: &str,
-    ) -> Option<Arc<dyn WorkerAdapter>> {
+    ) -> Option<(String, String)> {
         let cfg = self.config.accounts.as_ref()?;
         let root = cfg.root_for(account_adapter)?;
         let dir = root.join(account_id);
-        base.with_env(&[(
+        Some((
             account_adapter.env_var().to_string(),
             dir.display().to_string(),
-        )])
+        ))
     }
 }
 

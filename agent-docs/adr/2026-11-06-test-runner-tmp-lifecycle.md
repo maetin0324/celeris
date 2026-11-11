@@ -141,6 +141,18 @@ fallback を消すと、Celeris 外の host で runner が動かなくなる。
 ## 実装済みの付記（2026-11-07）
 実装は `scripts/dev/lib/test-tmp-lifecycle.sh` にあり、`scripts/dev/test-affected.sh` と `scripts/dev/test-parallel.sh` が使う。D1〜D5 の決定（TMPDIR 47 byte 以下、候補 3 つの順、owner metadata と flock、次回起動時の回収、setsid と 30 秒待ち）と実装は一致している。SIGKILL の後始末は次回起動時の回収である。D6 の旧い残骸は人の手順のままで、自動回収は実装していない。
 
+## 付記（2026-11-10）: test-parallel.sh の run_tee は tee への pipe を cmd の stdout・stderr にだけ持たせる
+- 2026-11-10 の release gate で、nextest が全試験を通して終わった後、`run_tee` の `wait "$tpid"`（tee の終わり待ち）が約 45 分戻らなかった。
+  試験の孤児 `sleep 3600`（stdout・stderr は /dev/null）が、`exec {tfd}> >(tee …)` の元の fd を継いで持っていたためである。bash の `{var}>` は CLOEXEC を付けない。
+  tee は pipe の書き口が全部閉じるまで EOF を受けない。
+- 決定: `run_tee` は cmd を `ttl_run "$@" >&"$tfd" 2>&1 {tfd}>&-` で起こす。cmd の側では元の `$tfd` を閉じ、pipe は cmd の stdout・stderr だけが持つ。
+  stdout を /dev/null にした子孫は、tee を止められなくなる。stdout を pipe のまま持つ子孫は、従来どおり tee を止める（その出力を log に残すため）。
+- lock の fd（`TTL_LOCK_FD`）は D2 のとおり子孫に継がせたままにする。子孫が lock を持つ間は、D3 の 1 で dir を回収しない。これは意図した保護である。
+  `run_tee` の待ちは lock の fd には依らない（lock は file で、tee の EOF に関わらない）。
+- 回帰試験: `scripts/dev/tests/test-runner-tmp-lifecycle.sh` の (i)。偽 cargo が、stdout・stderr を /dev/null にした子孫（fifo の read で止まる）を残して終わる。
+  試験は次の 4 点を確かめる。runner が doc test へ進んで戻ること、子孫が pipe を持たず lock を持つこと、子孫が居る間は dir が残ること、子孫を止めた後の回収で dir が消えること。
+- 子孫を生んだ側（ssh の probe の timeout）は `2026-11-10-ssh-timeout-kills-process-group.md` で直した。
+
 ## 範囲外
 - daemon 側の check の timeout を、SIGTERM → SIGKILL の 2 段に変えること（`workspace.rs`）。別の判断として task の提案に書く。
 - js_step（web・control-ts の段）の一時 file。これらは `TMPDIR` の下に作られ、exec の `TMPDIR` と一緒に消える。

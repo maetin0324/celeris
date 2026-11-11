@@ -401,6 +401,7 @@ impl ChatAttachmentStore {
         Ok(())
     }
 
+    /// Pin `id` to the owner ([`add_ref_tx`] checks the arguments).
     pub fn add_ref(
         &self,
         id: &str,
@@ -408,15 +409,29 @@ impl ChatAttachmentStore {
         owner_id: &str,
         now: OffsetDateTime,
     ) -> Result<(), AttachmentError> {
-        if !valid_id(id)
-            || !matches!(owner_kind, "message" | "task" | "knowledge_inbox")
-            || owner_id.is_empty()
-        {
-            return Err(AttachmentError::InvalidPath);
-        }
         let mut conn = self.conn.lock().map_err(|_| AttachmentError::Poisoned)?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         add_ref_tx(&tx, id, owner_kind, owner_id, now)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// `POST /chat/attachments/{a}/references`: [`Self::add_ref`] and the client request record
+    /// (`chat_client_requests` kind `attachment_ref`, keyed by the attachment and the idempotency
+    /// key; a resent key keeps the first record) in one transaction.
+    pub fn add_ref_request(
+        &self,
+        id: &str,
+        owner_kind: &str,
+        owner_id: &str,
+        key: &str,
+        request_hash: &str,
+        now: OffsetDateTime,
+    ) -> Result<(), AttachmentError> {
+        let mut conn = self.conn.lock().map_err(|_| AttachmentError::Poisoned)?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        add_ref_tx(&tx, id, owner_kind, owner_id, now)?;
+        tx.execute("INSERT OR IGNORE INTO chat_client_requests(kind,scope_id,key,request_hash,result_id,created_at) VALUES('attachment_ref',?1,?2,?3,?4,?5)", params![id, key, request_hash, owner_id, stamp(now)?])?;
         tx.commit()?;
         Ok(())
     }

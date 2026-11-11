@@ -269,10 +269,16 @@ fn parse_aider_usage_returns_none_when_nothing_matches() {
 }
 
 #[test]
-fn with_model_returns_a_new_adapter_carrying_the_model() {
+fn configure_model_returns_a_new_adapter_carrying_the_model() {
     let adapter = AiderAdapter::new(AiderConfig::default());
-    let with_model = adapter.with_model("claude-sonnet-5").unwrap();
-    assert_eq!(with_model.id(), AiderAdapter::ID);
+    let configured = adapter
+        .configure(&AdapterSettings {
+            model: Some("claude-sonnet-5".into()),
+            ..AdapterSettings::default()
+        })
+        .adapter
+        .unwrap();
+    assert_eq!(configured.id(), AiderAdapter::ID);
 }
 
 /// 実バイナリでの動作確認（ADR-0061, Phase 104。`agent-docs/PROGRESS.md` Phase 104 参照）。`cargo test

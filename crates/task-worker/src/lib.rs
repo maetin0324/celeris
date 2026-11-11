@@ -87,7 +87,10 @@ pub mod workspace_prune;
 pub mod workspace_targets;
 
 pub use acp::{AcpAdapter, AcpConfig, AcpPermission};
-pub use adapter::{AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter};
+pub use adapter::{
+    AdapterError, AdapterSetting, AdapterSettings, Configured, EnvNotAccepted, EventSink,
+    LlmEndpoint, RunLimits, RunOutcome, Terminal, WorkerAdapter, configure_env,
+};
 pub use aider::{AiderAdapter, AiderConfig};
 pub use browser_specialist::BrowserSpecialistAdapter;
 pub use claude_account::{
@@ -151,3 +154,6 @@ pub use task_repos::{
     REPOS_DIR_NAME, SetupOutcome, TaskRepo, TaskWorkspaces, run_setup, run_setup_in,
 };
 pub use workspace::{ExecResult, LocalWorkspace, Workspace, WorkspaceError};
+
+pub use browser_live::BrowserControl;
+pub use browser_policy::{BrowserAuthority, BrowserPorts};

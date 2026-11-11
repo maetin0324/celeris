@@ -1,5 +1,5 @@
 use super::*;
-use task_core::{OrgKind, SqliteStore};
+use task_core::{OrgDirectory, OrgKind, SqliteStore};
 
 fn now() -> OffsetDateTime {
     OffsetDateTime::now_utc()

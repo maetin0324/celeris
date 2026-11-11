@@ -7,7 +7,7 @@ use crate::org::{MilestoneId, ProjectId};
 
 use super::{StoreError, format_rfc3339, kind_str, status_str, tier_str};
 
-/// `TaskStore::list_page` のフィルタ（ADR-0013 D10）。既定は絞り込み無し。
+/// `TaskQuery::list_page` のフィルタ（ADR-0013 D10）。既定は絞り込み無し。
 #[derive(Debug, Clone, Default)]
 pub struct ListFilter {
     /// 空なら status で絞らない。
@@ -47,7 +47,7 @@ pub struct ListFilter {
     pub hide_archived: bool,
 }
 
-/// `TaskStore::list_page` の並び順（ADR-0013 D10）。
+/// `TaskQuery::list_page` の並び順（ADR-0013 D10）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ListOrder {
     /// `priority DESC, created_at ASC, id ASC`（ディスパッチ順）。

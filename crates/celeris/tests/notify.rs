@@ -29,9 +29,9 @@ use task_core::notify::{MAX_NOTIFY_ATTEMPTS, NotificationKind, NotificationStore
 use task_core::org::{OrgKind, OrgNode};
 use task_core::report::{Report, ReportId, ReportKind, ReportStore};
 use task_core::{
-    Budget, Check, Criterion, MilestoneId, MilestoneStatus, Project, ProjectId, ProjectStatus,
-    SqliteStore, Status, Task, TaskId, TaskKind, TaskStore, Tier, Trigger, WorkerHint,
-    WorkspaceSpec,
+    Budget, Check, Criterion, MilestoneId, MilestoneStatus, OrgDirectory, Project, ProjectId,
+    ProjectStatus, SqliteStore, Status, Task, TaskId, TaskKind, TaskStore, Tier, Trigger,
+    WorkerHint, WorkspaceSpec,
 };
 use time::OffsetDateTime;
 

@@ -1367,23 +1367,3 @@ pub mod identity_seal;
 pub mod injection;
 pub mod injection_ipc;
 pub mod ipc;
-#[derive(Debug, Serialize)]
-pub struct CredentialUseResult {
-    pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub failure_code: Option<&'static str>,
-}
-impl CredentialUseResult {
-    pub fn from_result(result: Result<(), Error>) -> Self {
-        match result {
-            Ok(()) => Self {
-                success: true,
-                failure_code: None,
-            },
-            Err(e) => Self {
-                success: false,
-                failure_code: Some(e.code()),
-            },
-        }
-    }
-}

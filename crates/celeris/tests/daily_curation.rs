@@ -1,10 +1,14 @@
 //! 日次整理 job の結合試験。時計と worker の成果だけを注入し、外部通信や sleep は使わない。
 
+#[path = "support/git.rs"]
+mod git_support;
+
 use std::path::{Path, PathBuf};
 
 use celeris::config::Config;
 use celeris::knowledge_curation;
 use celeris::reports::{self, ReportsConfig};
+use git_support::git;
 use task_core::org::{OrgKind, OrgNode};
 use task_core::report::{Report, ReportFilter, ReportId, ReportKind, ReportStore};
 use task_core::{
@@ -179,23 +183,6 @@ acceptance = [{{ type = "artifact_exists", name = "curation-plan.json" }}]
             })
             .expect("reports")
     }
-}
-
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args([
-            "-c",
-            "user.name=test",
-            "-c",
-            "user.email=test@example.invalid",
-        ])
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
-        .expect("git");
-    assert!(out.status.success(), "git {args:?}: {out:?}");
-    String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
 fn read_json(path: &Path) -> serde_json::Value {

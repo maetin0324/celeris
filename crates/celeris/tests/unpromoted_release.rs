@@ -12,12 +12,16 @@
 //!
 //! 実 `$HOME`・実 systemd・外部ネットワークには触れない。
 
+#[path = "support/wait.rs"]
+mod wait;
+
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use celeris::{Config, Exit, RunOptions};
 use task_core::{DaemonInstance, InstanceRole, SqliteStore, TaskStore};
 use time::OffsetDateTime;
+use wait::wait_until;
 
 const RELEASE: &str = "aaaabbbbcccc";
 const PROD: &str = "7fbfc347b240";
@@ -203,19 +207,6 @@ fn prod_handoff_requested(store: &SqliteStore) -> bool {
         .find(|i| i.instance_id == "prod")
         .and_then(|i| i.handoff_requested_at)
         .is_some()
-}
-
-async fn wait_until(limit: Duration, mut check: impl FnMut() -> bool) -> bool {
-    let deadline = std::time::Instant::now() + limit;
-    loop {
-        if check() {
-            return true;
-        }
-        if std::time::Instant::now() >= deadline {
-            return false;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
 }
 
 /// (a) 事故の再現: `current` は本番を指し、`releases/<RELEASE>` はあるが印は無い。古い schema の DB は

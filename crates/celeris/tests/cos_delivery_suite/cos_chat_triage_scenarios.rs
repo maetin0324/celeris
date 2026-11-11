@@ -2,11 +2,6 @@
 //! tick（`tick_loop`）と同じ順（`select_routes_batch` → `withdraw_if_resolved` → `triage::render` →
 //! `post_webhook` → `record`）を偽 webhook（127.0.0.1 の TCP）に向けて回す。外部ネットワークに出ず、
 //! 時刻は固定値を渡す。待ちは webhook の受信を出来事として待ち、sleep しない。
-#[cfg(test)]
-use crate::fake_http;
-
-use std::sync::{Arc, Mutex};
-
 use celeris::notify::{self, NotifyConfig, SendResult};
 use task_core::chat::triage::CosTriageSource;
 use task_core::feed::{NoticeEvent, NoticeKind, NoticeStore};
@@ -16,7 +11,8 @@ use task_core::{
     TaskStore, Tier,
 };
 use time::OffsetDateTime;
-use tokio::io::AsyncWriteExt;
+
+use crate::webhook::{Hook, hook};
 
 fn at() -> OffsetDateTime {
     OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("clock")
@@ -44,43 +40,6 @@ const LEGACY: [NotificationKind; 12] = [
     NotificationKind::DecisionRequested,
     NotificationKind::PlanApproval,
 ];
-
-/// A fake Discord webhook: answers 204 and keeps each request body.
-struct Hook {
-    url: String,
-    bodies: Arc<Mutex<Vec<String>>>,
-    seen: tokio::sync::mpsc::UnboundedReceiver<()>,
-}
-
-async fn hook() -> Hook {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
-    let url = format!("http://{}/hook", listener.local_addr().expect("addr"));
-    let bodies = Arc::new(Mutex::new(Vec::new()));
-    let (tx, seen) = tokio::sync::mpsc::unbounded_channel();
-    let kept = bodies.clone();
-    tokio::spawn(async move {
-        while let Ok((mut stream, _)) = listener.accept().await {
-            let kept = kept.clone();
-            let tx = tx.clone();
-            tokio::spawn(async move {
-                let Some(raw) =
-                    fake_http::read(&mut stream, |r| fake_http::matches(r, "POST", "/hook")).await
-                else {
-                    return;
-                };
-                let body = raw.split_once("\r\n\r\n").unwrap().1.to_owned();
-                kept.lock().expect("bodies").push(body);
-                let _ = stream
-                    .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
-                    .await;
-                let _ = tx.send(());
-            });
-        }
-    });
-    Hook { url, bodies, seen }
-}
 
 fn view(dir: &std::path::Path) -> task_ops::view::ViewContext {
     task_ops::view::ViewContext {

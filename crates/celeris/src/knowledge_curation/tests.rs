@@ -2,7 +2,11 @@
 //! KB に commit・push）・1 件の報告。KB は tempdir、KB の origin は tempdir の bare repo、store はメモリ上、
 //! 時計は `now` 引数で注入する（実時間の sleep・network は使わない）。
 
+#[path = "../../tests/support/git.rs"]
+mod git_support;
+
 use super::*;
+use git_support::git;
 use task_core::NotificationStore;
 use task_core::org::{OrgKind, OrgNode};
 use task_core::report::ReportStore;
@@ -248,23 +252,6 @@ enum Remote {
     None,
     Bare,
     Broken,
-}
-
-fn git(dir: &Path, args: &[&str]) -> String {
-    let out = std::process::Command::new("git")
-        .args([
-            "-c",
-            "user.name=test",
-            "-c",
-            "user.email=test@example.invalid",
-        ])
-        .args(args)
-        .current_dir(dir)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
-        .expect("git");
-    assert!(out.status.success(), "git {args:?}: {out:?}");
-    String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
 /// b を a に統合し、a を直す計画（ハッシュは本番 KB の今の内容）。

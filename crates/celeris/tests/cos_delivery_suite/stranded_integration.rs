@@ -8,6 +8,8 @@ use task_core::{
 use task_ops::stranded::{self, BranchRecord, MergeRequest};
 use time::OffsetDateTime;
 
+use crate::git_support::git;
+
 struct GitRepo(tempfile::TempDir);
 
 impl GitRepo {
@@ -36,21 +38,6 @@ impl GitRepo {
         git(self.path(), &["commit", "-m", name]);
         git(self.path(), &["rev-parse", "HEAD"])
     }
-}
-
-fn git(repo: &Path, args: &[&str]) -> String {
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(args)
-        .output()
-        .expect("run git");
-    assert!(
-        output.status.success(),
-        "git {args:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }
 
 fn done_task(id: TaskId) -> Task {

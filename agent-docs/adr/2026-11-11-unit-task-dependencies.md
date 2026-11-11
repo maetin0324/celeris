@@ -56,10 +56,16 @@ tasks: [01M74TM8Y43C5EMYF7FP525DZ5]
   採用と replan は task-ops の `validate_for_task` が呼ぶ。
   - `task:` の後が task id であること（`Malformed`）。
   - 存在する task であること（`NotFound`）。
-  - 自分の木（root とその子孫。自分・祖先・子孫を含む）の task でないこと（`InOwnTree`。木の中は unit の key）。
+  - 自分の木の task でないこと（`InOwnTree`）。自分の木は、自分・祖先（`parent_id` と木の親 `tree.parent_unit` を辿る。
+    委譲の親〈`tree` を持たない子の `parent_id`〉を含む）・子孫（`children` を辿る。委譲の子と木の子）・自分と祖先が属する
+    木の節点（`tree_tasks`。採用で `parent_id` を書き換えない子を含む）。祖先は子孫の完了を待つので、祖先を指す依存は必ず
+    循環する。木の中の順序は unit の key で書く。委譲の兄弟（同じ親の別の子）は木の外なので待てる。
   - 同じ案件であること。計画を持つ task が案件に属さなければ書けない（`OtherProject`）。
-  - 循環しないこと: 依存先から「待つ」辺（task の `depends_on` と、有効な計画の終端でない unit の `task:` 依存）を辿って、
-    自分の木の task に着かないこと（`Cycle`）。
+  - 循環しないこと: 依存先から「待つ」辺を辿って、自分の木の task に着かないこと（`Cycle`）。辺は task の `depends_on`、
+    子（委譲の子と木の子。親は子の完了を待つ。dispatcher の `parent_waits_for_children` と計画の kind task の unit）、
+    有効な計画の終端でない unit の `task:` 依存と kind task の unit の子。辺は task の状態で刈らない（終わった task も
+    辿る。余分に拒んでも planner は別の書き方を選べるが、見逃した循環では unit が黙って待ち続けるため）。辿る task は
+    512 件までで、その先は辿らない。
 - **D5 待ちの理由**: M11 `TaskWait::TaskDependency { task_id, cause, detail, unit_keys }`。task 一覧・詳細・木の `waits` を組む
   `task_ops::wait::task_waits`（計画の待ち D7〜D13 と同じ所）が `unit_task_deps::resolve` で組む。依存先が複数なら task_id 順の
   最初の 1 件（M10 D3 と同じ）。M10 と違い dispatcher のメモリには持たない: dispatcher の gate を増やさず、running の task
@@ -94,5 +100,7 @@ temp DB と一時 git repo だけ（外部ネットワークなし）。時間�
   入ると次の tick で始まる。
 - (b) 同じ計画の、task 依存を持たない unit は待たずに進む。
 - (c) 依存先が failed・cancelled なら unit は始まらず、受信箱の `stalled` の項目が 1 件出る。
-- (d) 検証が、存在しない task・自分の木の task・循環・別の案件を拒む。
+- (d) 検証が、存在しない task・自分の木の task・循環・別の案件を拒む。委譲の木（`tree` を持たない子）でも、委譲の親・祖先・
+  子孫を指す依存と、依存先の子を経由する循環を拒み、委譲の兄弟は通す
+  （`plan_validation_rejects_delegation_ancestors_and_cycles_through_children`）。
 - (e) task 依存の待ちでは `human_wait_aging` が出ない。

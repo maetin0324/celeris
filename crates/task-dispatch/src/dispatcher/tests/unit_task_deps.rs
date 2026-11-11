@@ -480,3 +480,99 @@ async fn plan_validation_rejects_missing_own_tree_other_project_and_cycle() {
         "{refused:?}"
     );
 }
+
+/// (d) 委譲の木（`tree` を持たず `parent_id` だけで親を指す子）の検証。守る不変条件: 祖先（委譲の親・その親）を指す依存と、
+/// 依存先の子を経由する循環（親は委譲の子を待つ）は採用しない。委譲の兄弟は木の外なので待てる。
+/// 上の試験は計画を持つ task が root で、`depends_on` の辺だけの循環しか作らないので、`tree` だけで木を数える検証と
+/// 子の辺の無い循環の探索がこれらを通しても落ちない（委譲の子の unit が親の done を待って黙って止まり続ける不具合）。
+#[tokio::test]
+async fn plan_validation_rejects_delegation_ancestors_and_cycles_through_children() {
+    let dir = tempfile::tempdir().unwrap();
+    let fx = fixture(dir.path(), Status::Done, &["final"], &[]);
+    let store = &fx.store;
+    let mk = |parent: Option<TaskId>, deps: Vec<TaskId>| {
+        let mut t = new_task(
+            dir.path(),
+            Check::Command {
+                cmd: "true".into(),
+                expect_exit: 0,
+            },
+            0,
+        );
+        t.status = Status::Blocked;
+        t.project_id = Some(fx.project);
+        t.parent_id = parent;
+        t.depends_on = deps;
+        store.insert(&t).unwrap();
+        t
+    };
+    // 委譲の木: grandparent → parent → { owner（計画を持つ）, sibling }。owner の下に委譲の子 grandchild。
+    let grandparent = mk(None, vec![]);
+    let parent = mk(Some(grandparent.id), vec![]);
+    let owner = mk(Some(parent.id), vec![]);
+    let sibling = mk(Some(parent.id), vec![]);
+    let grandchild = mk(Some(owner.id), vec![]);
+    // owner の計画の kind task の子（木の節点）と、その委譲の子（木の節点の下の子孫）。
+    let mut tree_child = new_task(
+        dir.path(),
+        Check::Command {
+            cmd: "true".into(),
+            expect_exit: 0,
+        },
+        0,
+    );
+    tree_child.status = Status::Blocked;
+    tree_child.project_id = Some(fx.project);
+    tree_child.parent_id = Some(owner.id);
+    tree_child.tree = Some(task_core::TreeInfo::child_of(
+        &owner,
+        task_core::ParentUnit {
+            task_id: owner.id,
+            plan_id: "plan".into(),
+            unit_key: "c".into(),
+            stage: "s".into(),
+            attempt: 1,
+        },
+        None,
+    ));
+    store.insert(&tree_child).unwrap();
+    let under_tree_child = mk(Some(tree_child.id), vec![]);
+    // 木の外の root `holder` は、委譲の子 `blocked_on_owner` を通して owner を待つ（holder → 子 → owner）。
+    let holder = mk(None, vec![]);
+    let _blocked_on_owner = mk(Some(holder.id), vec![owner.id]);
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../task-core/testdata/execution-plan/v3-browser.json"
+    ))
+    .unwrap();
+    let errors = |id: TaskId| -> Vec<task_core::TaskDependencyRejection> {
+        let mut spec: task_core::ExecutionPlanSpec = serde_json::from_str(&text).unwrap();
+        let p3 = spec.units.iter_mut().find(|u| u.key == "p3").unwrap();
+        p3.depends_on.push(task_core::task_dependency_key(id));
+        task_ops::unit_task_deps::plan_errors(store.as_ref(), &owner, &spec)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.reason)
+            .collect()
+    };
+    use task_core::TaskDependencyRejection as R;
+    assert_eq!(
+        errors(parent.id),
+        vec![R::InOwnTree],
+        "the delegating parent"
+    );
+    assert_eq!(errors(grandparent.id), vec![R::InOwnTree], "an ancestor");
+    assert_eq!(errors(grandchild.id), vec![R::InOwnTree], "a descendant");
+    assert_eq!(errors(tree_child.id), vec![R::InOwnTree], "a tree node");
+    assert_eq!(
+        errors(under_tree_child.id),
+        vec![R::InOwnTree],
+        "a descendant under a tree node"
+    );
+    assert_eq!(
+        errors(holder.id),
+        vec![R::Cycle],
+        "waits on owner via a child"
+    );
+    assert!(errors(sibling.id).is_empty(), "a delegated sibling");
+}

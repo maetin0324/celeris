@@ -20,6 +20,20 @@ updated: 2026-11-11
 ## 変更（commit の件名）
 - `phase 1: unit の task:<id> 依存（木の外の task の完了・取り込みを待つ）`
 - `phase 1: health の悪化を直す（task_deps を既存の単位へ、解決を task-ops へ移す）`
+- `phase 1: validate_for_task の doc を adopt_plan の doc から離す（clippy doc_lazy_continuation）`
+- `phase 1: 検証が委譲の親・祖先と子を経由する循環を拒む（review の差し戻し）`
+
+## review の差し戻しへの対応（attempt 2）
+- 指摘: 検証が委譲の親（`tree` を持たない子の `parent_id`）を指す `task:` 依存を通し、依存先の子を経由する循環も通した。
+  自分の木を `tree.root_id` だけで数え、循環の辺に「親は子を待つ」が無かったため。
+- 直し方（`task_ops::unit_task_deps::plan_errors`。判断の純粋関数 `task_dependency_errors` は変えていない）:
+  - 自分の木 = 自分・祖先（`parent_id` と木の親を辿る）・子孫（`children` を辿る）・自分と祖先が属する木の節点（`tree_tasks`）。
+    委譲の兄弟は木の外のまま（待てる）。
+  - 循環の辺に子（`children` と、有効な計画の kind task の unit の `child_task_id`）を足した。
+  - ADR D4・`InOwnTree` の文・planner の指示・`docs/api/v1/api.md` の /3 の項を合わせて直した。
+- 試験: `dispatcher::tests::unit_task_deps::plan_validation_rejects_delegation_ancestors_and_cycles_through_children`。
+  委譲の親・祖父・孫は `InOwnTree`、委譲の子を通して owner を待つ root は `Cycle`、委譲の兄弟は通る。直す前の
+  `plan_errors` に戻して走らせると「the delegating parent」で落ちる（left `[]`、right `[InOwnTree]`）ことを確かめた。
 
 主な file:
 - ADR: `agent-docs/adr/2026-11-11-unit-task-dependencies.md`（実装の前に書き、実装に合わせて D2・D4・D5 の置き場所を直した）。
@@ -50,7 +64,7 @@ dispatcher module の合計・`work_units.rs`・`dispatch_one`・`validate_v3`�
 - `bash scripts/dev/test-affected.sh`: 結果は報告本文に書く。
 - `cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check`: 結果は報告本文に書く。
 - `sh scripts/dev/progress-index.sh --check`: 結果は報告本文に書く。
-- 試験 (a)〜(e): `crates/task-dispatch/src/dispatcher/tests/unit_task_deps.rs` の 6 件と
+- 試験 (a)〜(e): `crates/task-dispatch/src/dispatcher/tests/unit_task_deps.rs` の 7 件と
   `crates/task-core/src/wait/task_deps/tests.rs` の 6 件。
 
 ## 未解決

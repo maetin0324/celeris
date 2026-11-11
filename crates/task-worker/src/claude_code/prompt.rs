@@ -1296,7 +1296,9 @@ fn tree_plan_shape_section(
          whether a task finished or was integrated is a fact celeris reads from the database and git, not a \
          human choice. Bringing that work into this task's branch is still the plan's job (for example a unit \
          that merges the default branch). Tasks inside this task's own tree are referenced by unit key, never \
-         by `task:`; the task must exist, belong to this project and must not wait for this task.\n\n"
+         by `task:`; this task's ancestors (including the task that delegated it) and descendants cannot be \
+         waited for, since they wait for this task. The task must exist, belong to this project and must not \
+         wait for this task.\n\n"
     ));
 
     out.push_str("#### Where this task sits in the tree\n");

@@ -3,7 +3,7 @@
 //! 判断は task-core の純粋関数（`resolve_task_dependencies`・`task_dependency_errors`）。ここは事実を集めて渡すだけで、
 //! 取り込みの判定は M10 の [`crate::dep_integration::dependency_integration`] をそのまま呼ぶ（判定のコードを写さない）。
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use task_core::{
     Event, ExecutionPlanSpec, StoreError, Task, TaskDependencyContext, TaskDependencyError,
@@ -154,8 +154,8 @@ fn transition(
     )
 }
 
-/// D4: 採用の前の検証。計画を持つ `task` の木・案件と、依存先から辿れる「待つ」辺を store から読み、task-core の
-/// `task_dependency_errors` に渡す。`task:` 依存の無い計画は何も読まない。
+/// D4: 採用の前の検証。計画を持つ `task` の木（[`own_tree`]）・案件と、依存先から辿れる「待つ」辺（[`waits_on`]）を
+/// store から読み、task-core の `task_dependency_errors` に渡す。`task:` 依存の無い計画は何も読まない。
 pub fn plan_errors(
     store: &dyn TaskStore,
     task: &Task,
@@ -165,19 +165,9 @@ pub fn plan_errors(
     if deps.is_empty() {
         return Ok(Vec::new());
     }
-    let root = task_core::tree::root_id_of(task);
-    let mut own_tree = BTreeSet::from([root, task.id]);
-    let mut frontier = vec![root];
-    while let Some(id) = frontier.pop() {
-        for child in store.children(id)? {
-            if own_tree.insert(child.id) {
-                frontier.push(child.id);
-            }
-        }
-    }
     let mut ctx = TaskDependencyContext {
         project: task.project_id,
-        own_tree,
+        own_tree: own_tree(store, task)?,
         ..Default::default()
     };
     let mut queue: Vec<TaskId> = Vec::new();
@@ -206,16 +196,61 @@ pub fn plan_errors(
     Ok(task_core::task_dependency_errors(spec, &ctx))
 }
 
-/// `id` が待つ task（`depends_on` と、有効な計画の終端でない unit の `task:` 依存）。
+/// D4: 計画を持つ `task` の木。自分、祖先（`parent_id` と木の親〈`tree.parent_unit`〉を辿る。委譲の親を含む）、子孫
+/// （`children` を辿る。委譲の子と木の子）、自分と祖先が属する木の節点（`tree_tasks`。採用で `parent_id` を書き換えない子を
+/// 含む）。祖先は子孫の完了を待つので、祖先を指す依存は必ず循環する。委譲の兄弟（同じ親の別の子）は入らない（木の外の task）。
+fn own_tree(store: &dyn TaskStore, task: &Task) -> Result<BTreeSet<TaskId>, StoreError> {
+    let parents = |t: &Task| {
+        t.parent_id
+            .into_iter()
+            .chain(task_core::tree::tree_parent(t))
+    };
+    let mut tree = BTreeSet::from([task.id]);
+    let mut roots = BTreeSet::from([task_core::tree::root_id_of(task)]);
+    let mut up: Vec<TaskId> = parents(task).collect();
+    while let Some(id) = up.pop() {
+        if tree.len() >= MAX_CYCLE_WALK || !tree.insert(id) {
+            continue;
+        }
+        if let Some(t) = store.get(id)? {
+            roots.insert(task_core::tree::root_id_of(&t));
+            up.extend(parents(&t));
+        }
+    }
+    for root in roots {
+        tree.extend(store.tree_tasks(root)?.into_iter().map(|t| t.id));
+    }
+    // 木の節点として先に入った子の下（その子の委譲の子）も辿るので、訪問は `tree` と別に数える。
+    let mut visited = BTreeSet::from([task.id]);
+    let mut down = vec![task.id];
+    while let Some(id) = down.pop() {
+        for child in store.children(id)? {
+            tree.insert(child.id);
+            if visited.insert(child.id) {
+                down.push(child.id);
+            }
+        }
+    }
+    Ok(tree)
+}
+
+/// `id` が待つ task: `depends_on`、委譲の子と木の子（`children`。親は子の完了を待つ）、有効な計画の終端でない unit の
+/// `task:` 依存と kind task の unit の子（採用で `parent_id` を書き換えない子を含む）。
 fn waits_on(store: &dyn TaskStore, id: TaskId) -> Result<Vec<TaskId>, StoreError> {
     let Some(t) = store.get(id)? else {
         return Ok(Vec::new());
     };
-    let mut out: BTreeMap<TaskId, ()> = t.depends_on.iter().map(|d| (*d, ())).collect();
+    let mut out: BTreeSet<TaskId> = t.depends_on.iter().copied().collect();
+    out.extend(store.children(id)?.into_iter().map(|c| c.id));
     for u in store.work_units_for(id)? {
         if u.status.is_active() && !u.status.is_terminal() {
-            out.extend(task_core::unit_task_dependencies(&u).map(|d| (d, ())));
+            out.extend(task_core::unit_task_dependencies(&u));
+            out.extend(
+                u.child_task_id
+                    .as_deref()
+                    .and_then(|c| c.parse::<TaskId>().ok()),
+            );
         }
     }
-    Ok(out.into_keys().collect())
+    Ok(out.into_iter().collect())
 }

@@ -54,11 +54,13 @@ pub fn plan_task_dependencies(spec: &ExecutionPlanSpec) -> Vec<(String, String, 
 pub struct TaskDependencyContext {
     /// 計画を持つ task の案件。
     pub project: Option<ProjectId>,
-    /// 計画を持つ task の木（root とその子孫。自分・祖先・子孫を含む）。
+    /// 計画を持つ task の木（自分・祖先〈`parent_id` と木の親を辿る。委譲の親を含む〉・子孫〈委譲の子と木の子〉・
+    /// 自分と祖先が属する木の節点）。委譲の兄弟は入らない。
     pub own_tree: BTreeSet<TaskId>,
     /// 見つかった依存先 → その案件。見つからない id は入らない。
     pub targets: BTreeMap<TaskId, Option<ProjectId>>,
-    /// 依存先から辿れる「待つ」辺（task → その task が待つ task。`depends_on` と有効な計画の unit の `task:` 依存）。
+    /// 依存先から辿れる「待つ」辺（task → その task が待つ task。`depends_on`、委譲の子と木の子〈親は子を待つ〉、
+    /// 有効な計画の unit の `task:` 依存と kind task の unit の子）。
     pub waits_on: BTreeMap<TaskId, Vec<TaskId>>,
 }
 
@@ -69,11 +71,12 @@ pub enum TaskDependencyRejection {
     Malformed,
     /// その task が無い。
     NotFound,
-    /// 自分の木（自分・祖先・子孫・同じ木）の task。木の中は unit の key で書く。
+    /// 自分の木（自分・祖先〈委譲の親を含む〉・子孫・同じ木の節点）の task。祖先は子孫を待つので必ず循環し、
+    /// 木の中の順序は unit の key で書く。
     InOwnTree,
     /// 別の案件の task（計画を持つ task が案件に属さないときも）。
     OtherProject,
-    /// その task が（`depends_on` か計画の `task:` 依存を辿って）この task の木を待つ。
+    /// その task が（`depends_on`・子・計画の `task:` 依存を辿って）この task の木を待つ。
     Cycle,
 }
 
@@ -93,7 +96,7 @@ impl std::fmt::Display for TaskDependencyError {
             }
             TaskDependencyRejection::NotFound => "no such task（依存先の task が無い）",
             TaskDependencyRejection::InOwnTree => {
-                "points into this task's own tree; depend on the unit key instead（自分の木の task は unit の key で書く）"
+                "points at this task, an ancestor (including the delegating parent), a descendant or a node of its tree; ancestors wait for this task, and order inside a tree is written with unit keys（自分・祖先・子孫・同じ木の task は待てない）"
             }
             TaskDependencyRejection::OtherProject => {
                 "is not a task of this task's project（別の案件の task は待てない）"

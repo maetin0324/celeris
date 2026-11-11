@@ -116,6 +116,15 @@ task 01M74X0XAN0MCFJ4KZ3VVFT2QA の進捗。工程は contract → input-owner �
 - `sh "$CELERIS_WU_SCOPE_PATHS"` → exit 0。出力の 11 path は許可範囲内。
 - commit 件名: `phase 2: 偽 reviewer の試験ごとに不変条件と修正理由を記録する`。
 
+### 再提出の検証（run の時間切れ後。提出時の HEAD で実行）
+基準は `$CELERIS_WU_BASE`。既存の修正 12 件と試験ごとの doc comment は要求を満たしていたため、今回のコード変更は無し。前回の check の 1200 秒 timeout に対し、同じ cwd で同じコマンドを再実行した。timeout の原因は未特定で、今回は再現しなかった。
+- `bash scripts/dev/test-affected.sh` → exit 0。nextest 3747 件すべて合格（319.679 秒）、11 件 skip。対象 package の doc test も合格。health は verdict pass・fail 級 0・new 0・worsened 0。検査器自身の 94 試験は OK（expected failures 2 件）、repo_health_gate は 7 件すべて OK。
+- `cargo nextest run -p task-dispatch --no-fail-fast -E 'test(health_review_input_) | test(health_generic_review_input_) | test(health_review_policy_) | test(health_review_scenario_) | test(target_sync::) | test(health_enforce::) | test(phase_effect_ab_)'` → exit 0。103 件すべて合格（30.027 秒）。Absent の材料・旧契約の撤去・policy gate と report 故障の回帰・偽 reviewer の修正を確認した。
+- `cargo clippy --workspace -- -D warnings`、`cargo fmt --all -- --check` → exit 0。
+- 計画の check 3（旧定数・旧関数なし、4 件の通常試験、禁止対象の差分なし）と check 4（許可された 11 path の範囲）→ exit 0。I7・stub 検査器・task-core・campaign・profile・baseline は変えていない。
+- `sh scripts/dev/progress-index.sh --check`、`git diff --check` → exit 0。
+- commit 件名: `phase 2: 時間切れ後の affected tests 再検証を記録する`。
+
 ## 未解決（工程 2）
 - 範囲外で落ちた 12 件は直した。残りは注釈だけで、どれも動作に影響しない。
   - `crates/task-core/src/model/events.rs` の `HealthReviewInputSkipped` の doc comment と、`task_core::design_review::ReviewPolicy::definition_sha256` の doc comment（「health の材料の再利用の鍵に入る」。R2.3 で鍵に使わなくなった）が古い。task の受け入れ条件が `crates/task-core/` の無変更を求めるので変えていない。

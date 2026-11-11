@@ -2,7 +2,7 @@
 tasks: [01M74X0XAN0MCFJ4KZ3VVFT2QA]
 ---
 # ADR 2026-11-11: review 方針の無い（Absent）repo の候補も final reviewer に渡す（health-review-integration D4.4 の改定）
-状態: 提案（2026-11-11、unit contract）。実装は同じ task の後続 unit（input-owner・request-atomic・request-integrated）、記録は record。
+状態: 実装済み（2026-11-11、unit record）。実装は同じ task の unit input-owner・request-atomic・request-integrated。実装との食い違いは末尾の「付記（2026-11-11、unit record）」。
 
 - 日付: 2026-11-11
 - task: 01M74X0XAN0MCFJ4KZ3VVFT2QA（G4-R1: review 方針の無い汎用 repo の候補を final reviewer に渡す）。記録は [fix-review-gap の進捗](../progress/2026-11-10-health-v2-g4/fix-review-gap.md)。
@@ -113,5 +113,26 @@ tasks: [01M74X0XAN0MCFJ4KZ3VVFT2QA]
 - reviewer の prompt は材料の分だけ長くなる（`findings.new` は 50 件、`diff.paths` は 40 件まで）。費用の増分は未測定（有料の測定をしない）。検査器の起動の回数は変わらない（`Absent` の repo はこれまでも policy の関門のために report を 1 回走らせていた）。
 - R2.8 のとおり、配備の時点で review 中の candidate は材料を 1 回だけ作り直す。
 
+## 付記（2026-11-11、unit record）: 実装との食い違い
+R1〜R5 は決めたとおりに実装した。`HealthInputWork::repo_input` は `Present`・`Absent` を同じ手順で作り、`absent_policy`・`POLICY_ABSENT` と旧い試験 2 件は消え、4 試験 `…_reaches_reviewer` は `should_panic` の無い通常の試験になった。食い違いは次の (a)〜(e)。証拠は [fix-review-gap の進捗](../progress/2026-11-10-health-v2-g4/fix-review-gap.md) の工程 2〜5。
+
+- (a) R6 の見込みと、実際に落ちて直した試験の違い。R6 は「実際に落ちるかと全件の一覧は未確認」と書いた。input-owner の `test-affected.sh` では 12 件（試験 file 6 個）が落ち、replan で input-owner の範囲に足して直した。
+
+| 試験 file | R6 の見込み | 実際 |
+|---|---|---|
+| `health_review/policy_review/unknown_tests.rs` | `health_review_policy_unknown_absent_policy_change_needs_approval` の「Built を作らない」assert | その 1 件に加え、`health_review_policy_unknown_candidates_wait_for_a_human` も落ちた（`(Absent, Missing)` の本文に旧い `POLICY_ABSENT` の文を期待していた）。2 件とも新しい契約の assert に替えた |
+| `health_review/scenario_tests.rs` | 挙げていない | `health_review_scenario_normal_change` が落ちた（`[review]` の無い repo の final review に材料が無いことを固定していた）。材料が渡ることの assert に替えた |
+| `dispatcher/tests/target_sync.rs` | 2 か所 | 5 件（偽の reviewer `ReviewShaAdapter`・`CountingReviewer`）。`"health":{"findings":[]}` を足した |
+| `dispatcher/tests/health_enforce.rs` | `with_review` の 1 か所 | 1 件（`review_repair_not_evaluated_reviewer_does_not_block_a_health_repair`）。同じ直し方 |
+| `dispatcher/tests/phase_effect_ab/review_sync.rs` | 挙げていない | 2 件（`SyncScenarioAdapter`）。同じ直し方 |
+| `dispatcher/tests/phase_effect_ab/stale_priority.rs` | 挙げていない | 1 件（`ReviewAdapter`）。同じ直し方 |
+| `dispatcher/tests/work_units.rs` | 1 か所 | 落ちなかった。変えていない。その試験の task は `parallel_task`（案件の repo を持たない workspace だけの task）なので、final review の前の同期が無く、health の材料を作らず I7 も及ばない |
+
+- (b) R4 の `crates/task-core/src/model/events.rs` の `HealthReviewInputSkipped` の doc comment（「review 方針が `absent` など」）は変えていない。task の受け入れ条件と計画の check が `crates/task-core/` の無変更を求めるため。R4 に挙げていなかった `task_core::design_review::ReviewPolicy::definition_sha256` の doc comment（「health の材料の再利用の鍵に入る」。R2.3 で鍵に使わなくなった）も同じ理由で残した。`crates/task-dispatch/src/health_review/verdict.rs` の module doc（「`health` を渡していない review（`[review]` の無い repo、WU の review）」）も、計画の check が `verdict.rs` の無変更を求めるので残した。3 か所とも説明の文だけで動作に影響しない。直す条件と責任者は進捗の「提案」に書いた。
+- (c) R4 の表で「計画の範囲外（R6）」とした `unknown_tests.rs` の assert は、replan で input-owner の範囲に入り、同じ task の中で直した。
+- (d) R5 の `g4_r1_review_request_` の試験は 17 件になった。atomic の 9 件と、WU の統合後 3 件・複数 repo 2 件（`dispatcher/tests/health_generic.rs`）、`Absent` の reviewer run のやり直し・reviewer の合格の再利用・候補の方針を信用しないことの 3 件（`dispatcher/tests/health_review_input.rs`）。`health_review_input_` の材料の試験は、旧い 2 件を消して単体 4 件と dispatcher の 1 件に置き換えた。R5 の「WU の check・WU の review では作らない」は、既存の `health_review_input_not_built_for_work_units` が材料 0 件でも合格する弱い形だったので、統合後の 3 件で WU の run が `ReviewRequest.health` を受けないことも確かめた。
+- (e) 実装中に分かったこと: 案件の repo（`task.repos`）を持たない task の final review は、`HealthReviewInputBuilt`・`HealthReviewInputSkipped` のどちらも残さない（review の前の同期と材料が案件の repo ごとのため）。この ADR の決定（R1〜R3）は変えていない。意図した契約かは未確認で、進捗の「提案」に回した。
+
 ## 状態の記録
 - 2026-11-11: 提案（unit contract）。実装の後、record が状態を「実装済み」にし、実装との食い違いを付記に書く。
+- 2026-11-11: 実装済み（unit record）。R1〜R5 は unit input-owner・request-atomic・request-integrated の commit で実装した。実装との食い違いは上の「付記（2026-11-11、unit record）」。提出時の HEAD の検査は fix-review-gap の進捗の工程 5。

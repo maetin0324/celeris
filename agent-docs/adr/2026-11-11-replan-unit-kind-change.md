@@ -29,7 +29,9 @@ tasks: [01M74VC34XB4RPAB61AV4226YS]
 
 - `plan_replan` の持ち越しは `row.kind` を新しい版の unit の kind にする。WU ブランチの作り直し（ADR 2026-10-20 D1/D2）は
   新しい kind で判定する（task の行は WU ブランチを持たない）。
-- store の `update_work_unit_tx` は `kind` 列も書く。他の書き手は読んだ行の値のまま渡すので変わらない。
+- store の `update_work_unit_tx` は `kind` 列を、書き込む spec の JSON の kind から導く（`kind = json_extract(<json>, '$.kind')`）。
+  行の kind の正本は spec で、列はその写しになる（行を作るときは `WorkUnitRow::new` が spec の kind を写す）。他の書き手は
+  spec を変えないので kind も変わらない。
 - replay の `apply_replan_step` も同じく `kind` を新しい版の kind にする。
 
 ### D2. 始まった行の「task と leaf をまたぐ」kind の変更は、採用の前の検証で拒む
@@ -40,11 +42,12 @@ tasks: [01M74VC34XB4RPAB61AV4226YS]
   - leaf の行（task・integrate 以外）: WU ブランチ（`branch`）・commit（`head_commit`）・lease がある、または `running`。
   - done・退役した行は見ない（done の不変条件は `validate_with` が見る）。leaf の kind どうし（implement → test など）の変更は
     WU ブランチをそのまま使えるので拒まない（D1 で行の kind を合わせる）。
-- 理由の文は「kind を元に戻すか、新しい key で書く（古い unit は superseded になる）」を planner に示す。
+- 理由の文（`UnitKindChange` の Display）は「kind を元に戻すか、新しい key で書く（古い unit は superseded になる）」を planner に示す。
 - 呼ぶ所は 2 つ。
   1. planner の計画の採用の準備（`prepare_adoption`、unit の gate の後）。設計 review（D3.5）と root の計画の承認（D8）の前に
      planner の再試行に返す。unit の gate が kind を変えた場合もここで見る。
-  2. `plan_replan`（人の replan・人の計画・planner の採用が通る書き込みの直前）。
+  2. `plan_replan`（人の replan・人の計画・planner の採用が通る書き込みの直前）。退役した key・daemon の足した WU の key の検証と
+     まとめた `execution_plan::replan_row_errors` で呼ぶ。
 - 採用の後に `child_create_failed`（「is not a task unit」）で落ちる経路は残らない。D1 で行と計画の kind は一致し、一致させられない
   行は D2 で採用されない。
 

@@ -818,14 +818,30 @@ pub fn kind_change_errors(
             continue;
         }
         if let Some(state) = kind_bound_state(row) {
-            errors.push(PlanValidationError::StartedUnitKindChanged {
-                key: w.key.clone(),
-                from: row.kind,
-                to: w.kind,
-                state,
-            });
+            errors.push(PlanValidationError::StartedUnitKindChanged(
+                UnitKindChange {
+                    key: w.key.clone(),
+                    from: row.kind,
+                    to: w.kind,
+                    state,
+                },
+            ));
         }
     }
+    errors
+}
+
+/// replan の計画 `spec` を今の行 `rows`（退役した行を含む）と突き合わせる検証（`task_ops::execution::plan_replan` が書き込みの前に
+/// 使う）: 退役した key の再利用（[`retired_key_errors`]、ADR-0079 R7-3 D3）・daemon の足した WU の key
+/// （[`daemon_added_key_errors`]、R7-12 D3）・始まった行の kind の変更（[`kind_change_errors`]、ADR 2026-11-11-replan-unit-kind-change D2）。
+pub fn replan_row_errors(
+    active: &ExecutionPlanSpec,
+    spec: &ExecutionPlanSpec,
+    rows: &[WorkUnitRow],
+) -> Vec<PlanValidationError> {
+    let mut errors = retired_key_errors(spec, rows);
+    errors.extend(daemon_added_key_errors(active, spec, rows));
+    errors.extend(kind_change_errors(spec, rows));
     errors
 }
 

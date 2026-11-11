@@ -2884,19 +2884,19 @@ fn kind_change_errors_reject_only_started_rows_crossing_the_task_boundary() {
     let keys: Vec<&str> = errors
         .iter()
         .map(|e| match e {
-            PlanValidationError::StartedUnitKindChanged { key, .. } => key.as_str(),
+            PlanValidationError::StartedUnitKindChanged(change) => change.key.as_str(),
             other => panic!("unexpected {other:?}"),
         })
         .collect();
     assert_eq!(keys, vec!["child", "branch", "lease"], "{errors:?}");
     assert_eq!(
         errors[0],
-        PlanValidationError::StartedUnitKindChanged {
+        PlanValidationError::StartedUnitKindChanged(UnitKindChange {
             key: "child".into(),
             from: WorkUnitKind::Task,
             to: WorkUnitKind::Investigate,
             state: "child task 01CHILD".into(),
-        }
+        })
     );
     let text = errors[1].to_string();
     assert!(

@@ -29,16 +29,21 @@ completed: 2026-11-11
 ## 変更
 
 - `phase 1: replan で unit の kind を task と leaf の間で変えたときの行の kind を直し、始まった行の変更を採用の前に拒む`
-  - task-core: `execution_plan::kind_bound_state`・`kind_change_errors`（純粋関数）と `PlanValidationError::StartedUnitKindChanged`。
+  - task-core: `execution_plan::kind_bound_state`・`kind_change_errors`・`replan_row_errors`（純粋関数）と
+    `PlanValidationError::StartedUnitKindChanged(UnitKindChange)`。
     子 task のある kind task の行、WU ブランチ・commit・lease を持つか `running` の leaf の行の kind を task と leaf の間で変える計画を、
     planner に分かる理由（kind を元に戻すか、新しい key で書く）で返す。
-  - task-core store: `update_work_unit_tx` が `kind` 列も書く。
-  - task-ops: `plan_replan` は持ち越す行の `kind` を新しい版の unit の kind にし、`kind_change_errors` で始まった行の変更を拒む。
+  - task-core store: `update_work_unit_tx` が `kind` 列を、書き込む spec の JSON の kind から導いて書く（`json_extract`。正本は spec）。
+  - task-ops: `plan_replan` は持ち越す行の `kind` を新しい版の unit の kind にし、`replan_row_errors`（退役した key・daemon の
+    足した WU の key・始まった行の kind の変更）で拒む。
     replay の `apply_replan_step` も `kind` を書き換える（「`kind` は書き換えない」の記述を消した）。
   - task-dispatch: `prepare_adoption`（unit の gate の後、設計 review と root の承認の前）で `kind_change_errors` を呼び、planner の
     再試行に返す。採用の前の検証の失敗の文言を「計画が採用の前の検証に通りませんでした」に直した（以前の「子 Task の提案が委譲の
     検証に通りませんでした」は repos・kind の検証の失敗にも出ていた）。
   - 互換の分岐・切替 flag は置いていない。
+  - repo-health の `size.responsibility-growth`（閾値を超えた `PlanValidationError::fmt`・`plan_replan`・store module を伸ばさない）に
+    合わせ、新しい理由の文は `UnitKindChange` の Display に置き、`plan_replan` の key の検証 3 つは `replan_row_errors` にまとめた。
+    `fmt` の `WrongSchema` の腕は余分な block の括弧を外した（出力は同じ）。
 
 ## 試験（一時 DB と偽のアダプタだけ）
 
@@ -54,7 +59,7 @@ completed: 2026-11-11
   leaf の行の状態（WU ブランチ・lease）での拒否、始まっていない行・leaf の kind どうし・done・superseded の行を拒まないこと。
 - 試験が不具合を検出することの確認（提出前に一時的に修正を外して実行し、元に戻した）:
   - 持ち越しの `row.kind = wu_spec.kind` を外すと、task → leaf と leaf → task の 2 本が落ちる。
-  - `kind_change_errors` の 2 か所の呼び出しを外すと、子 task がある行の 1 本が落ちる。
+  - `kind_change_errors` の 2 か所の呼び出し（`plan_replan` と `prepare_adoption`）を外すと、子 task がある行の 1 本が落ちる。
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
 

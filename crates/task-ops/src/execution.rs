@@ -641,23 +641,11 @@ pub fn plan_replan(
         )));
     }
     let new_keys: BTreeSet<&str> = internal.work_units.iter().map(|w| w.key.as_str()).collect();
-    // `work_units.key` は `UNIQUE(task_id, key)`。過去（superseded を含む）に使われた key を
-    // 「新しい」key として再利用しようとしたら拒否する（D5）。ADR-0079 付記「R7-3」D3: 段階の統合 WU の key
-    // （前の版で消した段階の key を戻した）も同じく検証の理由にする（以前は sqlite の UNIQUE 制約のエラーだった）。
-    let mut retired = task_core::execution_plan::retired_key_errors(&validated.spec, &all_units);
-    // ADR-0079 付記「R7-12」D3: daemon の足した WU（配送 / 最終レビュー / 統合の repair WU）の key を書いた計画も拒む
-    // （新しい unit とみなすと、既存の done の行を ready に戻して repair を再実行してしまう）。
-    retired.extend(task_core::execution_plan::daemon_added_key_errors(
-        &active.spec,
-        &validated.spec,
-        &all_units,
-    ));
-    // ADR 2026-11-11-replan-unit-kind-change D2: 始まった行の kind を task と leaf の間で変える計画も拒む（下の持ち越しは
-    // 行の kind を新しい版に合わせるので、子 task・WU ブランチを持つ行を書き換えさせない）。
-    retired.extend(task_core::execution_plan::kind_change_errors(
-        &validated.spec,
-        &all_units,
-    ));
+    // `work_units.key` は `UNIQUE(task_id, key)`。過去（superseded を含む）に使われた key を「新しい」key として再利用する計画
+    // （D5・ADR-0079 付記「R7-3」D3）、daemon の足した WU の key を書いた計画（R7-12 D3）、始まった行の kind を task と leaf の
+    // 間で変える計画（ADR 2026-11-11-replan-unit-kind-change D2）を拒む（`task_core::execution_plan::replan_row_errors`）。
+    let retired =
+        task_core::execution_plan::replan_row_errors(&active.spec, &validated.spec, &all_units);
     if !retired.is_empty() {
         return Err(OpsError::Validation(describe_validation_errors(&retired)));
     }
@@ -772,8 +760,7 @@ pub fn plan_replan(
                 let mut row = existing.clone();
                 row.plan_id = new_plan_id.clone();
                 row.seq = seq as u32;
-                // ADR 2026-11-11-replan-unit-kind-change D1: 行の kind は新しい版の unit の kind（task と leaf を
-                // またいで変わる行は、子 task・WU ブランチを持たないことを上の `kind_change_errors` が確かめた）。
+                // ADR 2026-11-11-replan-unit-kind-change D1: 行の kind は新しい版の unit の kind（始まった行は上で拒んだ）。
                 row.kind = wu_spec.kind;
                 // ADR 2026-10-20-replan-dep-change-wu-rebase D1/D2: 同じ段の依存先が変わった葉は、次の
                 // prepare が旧 WU ブランチを退避して新しい起点から作り直す（branch / base / head を消す）。

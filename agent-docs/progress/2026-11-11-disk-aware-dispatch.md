@@ -38,10 +38,12 @@ commit（件名）:
 
 （提出時の HEAD で実行。基準は `git merge-base HEAD main`）
 
-- `bash scripts/dev/test-affected.sh`: exit 0（861 秒、開始時 load average 15.6）。対象は celeris・celeris-campaign・celeris-mcp・celerisctl・llm-proxy・task-api・task-dispatch・task-ops・task-worker と web。nextest 6643 passed・23 skipped、web 104 file・712 passed、repo_health_gate all checks passed。
+- `bash scripts/dev/test-affected.sh`: exit 0（attempt 2、1039 秒、開始時 load average 約 40）。対象は celeris・celeris-campaign・celeris-mcp・celerisctl・e2e・llm-proxy・task-api・task-dispatch・task-ops・task-worker と web。nextest 6739 passed・23 skipped、web 104 file・712 passed、repo_health_gate all checks passed。
+- `cargo build -p celeris -p celerisctl --bins && cargo nextest run -p e2e --test account_pool_scenarios`: 3 passed（review で落ちた `account_selection_follows_headroom…` を含む。試験 config を `min_free_disk_pct = 0` に直した後）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
 - `bash scripts/dev/check-health.sh`: verdict=pass、fail 級 0。
 - `cargo nextest run -p task-dispatch --lib disk_forecast disk_admission cleanup_and_disk scratch_gc disk_watch`: 33 passed。
+- `cargo nextest run -p task-dispatch --lib disk_forecast disk_admission cleanup_and_disk`（attempt 2）: 13 passed（`disk_admission` の `the_daemon_status_carries_its_own_held_runs_from_memory` は、別の Gate〈verify の daemon〉の空の pass が status の `held` を変えないことを確かめる）。
 - `bash scripts/selfdeploy/tests/release_target_settled_after_build.sh`・`release_target_delete_retry.sh`・`release_prune_stale_test_binaries.sh`・`release_uses_scratch_lease.sh`・`release_prune_production_scale.sh`・`prune_tests_stay_in_tmp.sh`: すべて exit 0。
 - `UPDATE_SCHEMA=1 cargo test -p task-api --lib committed_schema_matches_generated`: 1 passed（schema を作り直した）。
 

@@ -69,6 +69,7 @@ task 01M6TYVJSXBZMSBC0YGAT2TTX0 の WorkUnit record-review-gap の記録。コ�
 ## 変更
 - `phase 6: record-review-gap の進捗を置く`
 - `phase 6: G4-R1 修正後の目的ごとの結果と提出証拠を記録する`
+- `phase 6: 規定の検査の結果を進捗に書く`
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
 - 基準について: この WorkUnit の `$CELERIS_WU_BASE` は開始時の snapshot で、そこからの code の差分は無い。そのまま走らせると docs だけの軽い経路になるので、task 全体の証拠にするため `env -u CELERIS_WU_BASE` で基準を `git merge-base HEAD main` にした。対象（`--list`）は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。
@@ -82,7 +83,14 @@ task 01M6TYVJSXBZMSBC0YGAT2TTX0 の WorkUnit record-review-gap の記録。コ�
 - 全体試験（nextest の全件・doc test・web e2e・実 browser/userns）は実行していない（release gate だけで走らせる規則）。
 
 ## 規定の検査（最後の commit の後）
-（記録中）
+commit『phase 6: G4-R1 修正後の目的ごとの結果と提出証拠を記録する』の後の HEAD で実行した。その後の commit『phase 6: 規定の検査の結果を進捗に書く』はこの節だけを変える（code の差分 0）。その commit の後に文書検査・fmt・範囲を再実行し、結果は WorkUnit の result.json の evidence に書いた。
+- `cargo clippy --workspace -- -D warnings` → exit 0（62 秒）。
+- `cargo fmt --all -- --check` → exit 0。差分なし。
+- `bash scripts/dev/test-affected.sh`（WorkUnit の基準 `$CELERIS_WU_BASE`。daemon の WU の check と同じ）→ exit 0（148 秒）。docs だけの軽い経路で、repo-health は verdict pass・fail 級 0・new 0・worsened 0、検査器自身の試験 94 件は `OK (expected failures=2)`、repo_health_gate は 7 件 OK。
+- `bash scripts/dev/check-health.sh --base "$CELERIS_WU_BASE"` → exit 0（mode doc-only、verdict pass、fail 級 0）。
+- `sh scripts/dev/check-doc-links.sh` → exit 0（ok）。`sh scripts/dev/check-adr-numbers.sh` → exit 0（ok、420 file）。`sh scripts/dev/progress-index.sh --check` → exit 0（ok）。`python3 scripts/dev/check-human-text.py --root .` → exit 0（指摘 0 件）。`git diff --check` → exit 0。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` → exit 0。変更 path はこの file と [G4 のまとめ](../2026-11-10-health-v2-g4.md) の 2 file だけ。`git diff --quiet "$CELERIS_WU_BASE" HEAD -- crates/ scripts/` → exit 0（code・検査器の差分なし）。
+- 禁止範囲: `git diff --quiet $(git merge-base HEAD main) HEAD -- crates/task-core/ crates/campaign/ scripts/dev/repo-health/ scripts/dev/check-health.sh scripts/dev/source-size-baseline.json` → exit 0（task 全体で task-core・campaign・検査器・baseline に差分なし）。
 
 ## 受け入れ条件ごとの証拠（この WorkUnit）
 | 条件 | 実行したコマンド | 結果 |

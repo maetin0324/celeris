@@ -467,7 +467,7 @@ mod run_common_tests;
 /// ADR 2026-11-10-worker-capability-ports D3・D5 5b: `configure` の unsupported の報告と browser-specialist
 /// の転送（名前は `adapter_settings_` で始める）。守る不変条件: 受けられない項目は必ず `unsupported` に
 /// 出て（呼び出し側の fail closed・log の根拠）、受けた項目は 1 回の適用で複製に載る。既存の試験は
-/// adapter ごとの「受ける」側（`with_env_overrides_…` など）だけを見ており、受けない側の報告・既定実装・
+/// adapter ごとの「受ける」側（`configure_env_overrides_…` など）だけを見ており、受けない側の報告・既定実装・
 /// browser-specialist の転送を見る試験は無かった。
 #[cfg(test)]
 mod settings_tests {
@@ -754,8 +754,8 @@ mod settings_tests {
         assert!(Arc::ptr_eq(&unchanged, &probe));
         let mut settings = settings_of(&[S::Model, S::Env]);
         settings.env = vec![kv("A", "3")];
-        let with_model = probe.configure(&settings).resolve_env(&probe);
-        assert!(with_model.is_ok_and(|a| !Arc::ptr_eq(&a, &probe)));
+        let configured = probe.configure(&settings).resolve_env(&probe);
+        assert!(configured.is_ok_and(|a| !Arc::ptr_eq(&a, &probe)));
 
         let bare: Arc<dyn WorkerAdapter> = Arc::new(Bare);
         assert_eq!(

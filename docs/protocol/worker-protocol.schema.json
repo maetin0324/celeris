@@ -1113,6 +1113,16 @@
           },
           "type": "array"
         },
+        "standing": {
+          "$ref": "#/$defs/CosStandingContext",
+          "default": {
+            "grants": [],
+            "knowledge_scopes": [],
+            "role": "general",
+            "user_pages": []
+          },
+          "description": "ADR 2026-11-11-cos-standing-context D2: role, delegated grants, user pages, memory and the\nKB entry. Rendered on every CoS chat run."
+        },
         "summary": {
           "description": "The thread summary written by an earlier CoS run, if any.",
           "type": [
@@ -1489,6 +1499,158 @@
         "said_at"
       ],
       "type": "object"
+    },
+    "CosStandingContext": {
+      "description": "The standing context. Always present on a CoS chat run built by the dispatcher.",
+      "properties": {
+        "grants": {
+          "default": [],
+          "description": "Live grants, newest first: the thread's project and the global ones in a project thread,\nevery project and the global ones elsewhere.",
+          "items": {
+            "$ref": "#/$defs/CosStandingGrant"
+          },
+          "type": "array"
+        },
+        "knowledge_scopes": {
+          "default": [],
+          "description": "The KB scopes the cos org profile mounts (`user`, `projects`, …), for the search entry.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "memory": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CosStandingPage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "`cos/memory.md`, when it exists."
+        },
+        "role": {
+          "$ref": "#/$defs/CosThreadRole"
+        },
+        "user_pages": {
+          "default": [],
+          "description": "`user/*.md` in path order. Empty when the KB has none or is not set up.",
+          "items": {
+            "$ref": "#/$defs/CosStandingPage"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "role"
+      ],
+      "type": "object"
+    },
+    "CosStandingGrant": {
+      "description": "One live grant of the authority ledger (D1 memory: what the person delegated).",
+      "properties": {
+        "action_class": {
+          "type": "string"
+        },
+        "budget_remaining": {
+          "description": "Uses left, or absent when the grant has no use limit.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "expires_at": {
+          "description": "RFC3339, or absent when the grant lasts until it is revoked.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        },
+        "project_id": {
+          "type": "string"
+        },
+        "scope_kind": {
+          "type": "string"
+        },
+        "scope_ref": {
+          "type": "string"
+        },
+        "source": {
+          "description": "`<kind>:<ref>` of the person's basis (`human_message:<message id>` …).",
+          "type": "string"
+        },
+        "source_excerpt": {
+          "description": "The head of the person's own words, when readable.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "project_id",
+        "scope_kind",
+        "scope_ref",
+        "action_class",
+        "note",
+        "source",
+        "created_at"
+      ],
+      "type": "object"
+    },
+    "CosStandingPage": {
+      "description": "One KB page quoted into the standing context (`user/*.md`, `cos/memory.md`).",
+      "properties": {
+        "body": {
+          "description": "The body without front matter (the renderer applies the limits).",
+          "type": "string"
+        },
+        "path": {
+          "description": "KB-relative path (`user/preferences.md`).",
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "title",
+        "body"
+      ],
+      "type": "object"
+    },
+    "CosThreadRole": {
+      "description": "The role of the thread the run serves (D1 identity). Chosen from the thread kind.",
+      "oneOf": [
+        {
+          "const": "general",
+          "description": "The general CoS thread (the person's single window), and a legacy thread.",
+          "type": "string"
+        },
+        {
+          "const": "project",
+          "description": "A project CoS thread.",
+          "type": "string"
+        },
+        {
+          "const": "review",
+          "description": "The review (back) thread of the periodic review.",
+          "type": "string"
+        }
+      ]
     },
     "CredentialReference": {
       "oneOf": [

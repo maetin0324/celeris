@@ -1,14 +1,14 @@
 ---
 title: 健全性v2 G4 rs-stale — candidate・base・policy の変更と reviewer の合格の再利用で古い合格を使わず、baseline 改変で合格しない
 tasks: [01M6TYVJSXBZMSBC0YGAT2TTX0]
-status: blocked
-updated: 2026-11-10
+status: done
+updated: 2026-11-11
 ---
 # 健全性v2 G4 rs-stale — candidate・base・policy の変更と reviewer の合格の再利用で古い合格を使わず、baseline 改変で合格しない
 
-完了日: 未完了（未解決 G4-S1 を plan_issue で申告した）
+完了日: 2026-11-11
 
-`crates/task-dispatch/src/dispatcher/tests/health_generic_stale.rs` に 6 試験を足した。5 試験は合格、1 試験（`health_generic_reviewer_reuse_health_fail_routes_to_repair`）は欠け G4-S1 の assert の文言に限った `should_panic` で、期待を弱めずに残した。設計は [ADR 2026-11-10 health-generic-fixtures](../../adr/2026-11-10-health-generic-fixtures.md) の (3) の (e)・(f) の行と D3.1。基準は `$CELERIS_WU_BASE`。本体・検査器・policy・baseline・builder は変えていない。
+`crates/task-dispatch/src/dispatcher/tests/health_generic_stale.rs` に 6 試験を足し、6 試験とも `should_panic` 無しで合格する。前回の run は欠け G4-S1 を見つけて `health_generic_reviewer_reuse_health_fail_routes_to_repair` を `should_panic` にし、plan_issue で申告した。unit fix-s1 が G4-S1 を直した後、この run は前回の 3 commit を cherry-pick し、`should_panic` を外して ADR (3) の (g) の期待のまま合格させた（下の「G4-S1（fix-s1 で解決）」）。設計は [ADR 2026-11-10 health-generic-fixtures](../../adr/2026-11-10-health-generic-fixtures.md) の (3) の (e)・(f) の行と D3.1。基準は `$CELERIS_WU_BASE`。本体・検査器・policy・baseline・builder は変えていない。
 
 ## 実装前 brief
 1. 根本原因: 本物の検査器の合格が dispatcher の流れの中で古くなる場合（候補の head・main・base 側の profile が変わる、reviewer の合格を再利用する）と、baseline・policy の改変・履歴の細工・候補が持ち込んだ検査器を、本物の検査器と fixture で確かめる試験が無い。`health_review/reuse_tests.rs` は stub の検査器に `review_item::evaluate_all` を直接当て、`target_sync.rs` の再利用の試験は health の当たらない repo で、`health_generic.rs` は 1 回の候補の判定だけを見る。
@@ -31,6 +31,10 @@ updated: 2026-11-10
   - `crates/task-dispatch/src/dispatcher/tests/mod.rs`: `mod health_generic_stale;` の 1 行。
 - `phase 1: keep the fixture note path out of the doc link check`
   - fixture の repo の文書の path を `concat!("docs", "/notes.md")` の const にした。文字列のままだと `doc.links`（`scripts/dev/check-doc-links.sh`）がこの repo の壊れた link として fail 級にする（builder の `Path('docs') / 'guide.md'` と同じ扱い）。
+- `phase 1: record rs-stale tests and gap G4-S1`（進捗の記録。前回の run）
+- `phase 1: drop should_panic from the G4-S1 test on top of fix-s1`
+  - `health_generic_reviewer_reuse_health_fail_routes_to_repair`: `should_panic` と欠けの文言の const `G4_S1` を外し、doc comment を回帰の試験の説明（fix-s1 の `try_review_repair` が `review::REVIEWER_NOT_EVALUATED_REASON` の項目を分類から外す）に直した。assert（`RepairScheduled` の class が `health:deps.violation` だけ、最後は done）は前回のまま。
+  - `health_generic_reviewer_reuse_reevaluates_health_on_new_head` の policy を狭める場合: 「done にならない」の assert は fix-s1 の後は成り立たない（repair の後に done になる）ので、「done への遷移は health の review の repair（origin Review）の後」に直した。再利用の合格で done にしない、という確かめる性質は変えていない。
 
 ## 試験と結果（提出時の HEAD で実行）
 | 試験 | 確かめること | 結果 |
@@ -38,8 +42,8 @@ updated: 2026-11-10
 | `health_generic_stale_head_change_reevaluates` | ts・rust の good の Pass の後に、repair が同じ base の dep-inversion の fixture の候補の commit を head に重ねる。2 回目の health は前の Pass を写さず（`reused_from` 無し、head の tree が違う）、本物の同梱の検査器が fail 級の `deps.violation`（rust は `deps.cycle` も）で Fail。修復の後に done | 合格 |
 | `health_generic_stale_base_change_reevaluates` | ts・rust の good の Pass の後に main が tree の同じ空の commit で進む。同期の後の health は、head の tree が前と同じでも前の Pass を写さず、新しい base で走り直して Pass。tree だけで再利用を決める欠けがあれば落ちる | 合格 |
 | `health_generic_stale_policy_change_reevaluates` | ts の good の Pass の後に main が base 側の profile で層 `app` の許可を空にする。同期の後の health は新しい base の profile で走り直し（policy の指紋が変わる）、良い変更の `app` → `core` の import が fail 級の `deps.violation` で Fail。review の repair（class `health:deps.violation`）の後に done。rust は良い変更が `Cargo.toml` の依存を足さないので対象外 | 合格 |
-| `health_generic_reviewer_reuse_reevaluates_health_on_new_head` | reviewer の合格の後に検査の最中に main が進む（`target_sync.rs` と同じ流れ）。`ReviewerPassReused` が 1 件で、health は飛ばさず再利用先の `(target, reviewed)` で走り直す（`reused_from` 無し）。main が文書だけ進む ts・rust は Pass で done。main が層 `app` の許可を空にする ts は Fail で、再利用の合格で done にしない | 合格 |
-| `health_generic_reviewer_reuse_health_fail_routes_to_repair` | 上の Fail の場合が、ADR (3) の (g) の行のとおり review の repair（class `health:deps.violation`）に回り、修復の後に done になる | `should_panic`（G4-S1） |
+| `health_generic_reviewer_reuse_reevaluates_health_on_new_head` | reviewer の合格の後に検査の最中に main が進む（`target_sync.rs` と同じ流れ）。`ReviewerPassReused` が 1 件で、health は飛ばさず再利用先の `(target, reviewed)` で走り直す（`reused_from` 無し）。main が文書だけ進む ts・rust は Pass で done。main が層 `app` の許可を空にする ts は Fail で、done への遷移は health の review の repair の後（再利用の合格で done にしない） | 合格 |
+| `health_generic_reviewer_reuse_health_fail_routes_to_repair` | 上の Fail の場合が、ADR (3) の (g) の行のとおり review の repair（`RepairScheduled` の class `health:deps.violation` だけ）に回り、修復の後に done になる（G4-S1 の回帰の試験） | 合格（`should_panic` 無し） |
 | `health_generic_baseline_weakening_not_pass` | ts・rust で、(1) baseline-rewrite・policy-exclude の候補（dep-inversion に改変を重ねたもの）は base の profile で評価され、fail 級は dep-inversion の rule と `policy.changed` で Fail（review の repair）。(2) 同じ改変の policy の file だけの候補（fixture の head から改変の path だけを取り出す）は health の項目が PolicyOnly（合格）でも、policy の関門が承認の子 task（objective に policy の file）を作り、task は reviewing のまま止まる。(3) history-smuggle は 2 commit の候補の途中の commit を base にせず、base との差分で dep-inversion の Fail。(4) dep-inversion の候補が自分の `scripts/dev/repo-health/repo_health.py`（何もせず exit 0）を足しても、証跡の検査器は同梱のもので、合格にならない | 合格 |
 
 ADR (3) の表との差:
@@ -47,24 +51,21 @@ ADR (3) の表との差:
 - reviewer の合格の再利用の経路で health が Fail になるのは、再利用の後に base 側が変わる場合だけ。候補が自分で層を逆向きにすると、1 回目の review で決定的な項目（health）が落ちるので reviewer run が起きず（`review.rs` の ADR-0007 D5）、再利用する合格が無い。
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
-- `cargo nextest run -p task-dispatch -E 'test(health_generic_)'`: exit 0。25 tests run、25 passed（rs-paths の 19 と rs-stale の 6。`should_panic` は rs-paths の 4 件と G4-S1 の 1 件）。rs-stale の 6 試験は合わせて約 50 秒（1 回の review の流れは 1〜2 秒）。
+- `cargo nextest run -p task-dispatch -E 'test(health_generic_stale_) | test(health_generic_reviewer_reuse_) | test(health_generic_baseline_weakening_not_pass)'`: exit 0。6 tests run、6 passed。`grep -c should_panic crates/task-dispatch/src/dispatcher/tests/health_generic_stale.rs` は 0。
+- `cargo nextest run -p task-dispatch -E 'test(health_generic_)'`: exit 0。25 tests run、25 passed（rs-paths の 19 と rs-stale の 6。`should_panic` は rs-paths の G4-R1 の 4 件だけ）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。
 - `cargo fmt --all -- --check`: exit 0。
-- `bash scripts/dev/test-affected.sh`: exit 0（nextest 3731 tests passed・11 skipped、Python の unittest 94 件 OK・expected failures=2、check-health の台本 7 件 OK）。
+- `bash scripts/dev/test-affected.sh`: exit 0（nextest 3734 tests passed・11 skipped、Python の unittest 94 件 OK・expected failures=2、check-health の台本 7 件 OK）。
 - `bash scripts/dev/check-health.sh --base "$CELERIS_WU_BASE"`: exit 0（verdict=pass、fail_grade=0、new=0）。
 - `sh scripts/dev/progress-index.sh --check`: exit 0。
 - `sh "$CELERIS_WU_SCOPE_PATHS"`: 変更 path は `dispatcher/tests/health_generic.rs`・`health_generic_stale.rs`・`mod.rs` と、この進捗 file。
-- `git diff --exit-code "$CELERIS_WU_BASE" -- scripts/dev/repo-health scripts/dev/check-health.sh scripts/tests size-baseline.json`: exit 0（検査器・policy・baseline・builder に差分なし）。
-- 参考: `cargo clippy --workspace --all-targets -- -D warnings` は `task-core` の lib test の既存の `useless conversion`（2 件）で落ちる。この unit は `task-core` を変えていない。
+- `git diff --exit-code "$CELERIS_WU_BASE" -- scripts/dev/repo-health scripts/dev/check-health.sh scripts/tests size-baseline.json`: exit 0（検査器・policy・baseline・builder に差分なし）。`git diff --stat "$CELERIS_WU_BASE" -- crates ':!crates/task-dispatch/src/dispatcher/tests'` は空（本体のコードに差分なし）。
+
+## G4-S1（fix-s1 で解決）
+- 欠け: `Check::Reviewer` のある task で health の Fail が review の repair に回らず、task が failed（`review_fail`）になった。決定的な項目が落ちると reviewer の項目が「not evaluated: a deterministic check failed」の不合格になり、`task_core::classify_review_failure` が修復できない reviewer の不合格と health の不合格の混在を Substantive にしていた。
+- 再現: `python3 -I scripts/tests/repo_health_fixtures.py build ts good <dest>`。task に `Check::Reviewer` を足し、reviewer の合格の後に検査の最中に main の `scripts/dev/repo-health/profiles/default.toml` の層 `app` の `allow` を空にする（試験 `health_generic_reviewer_reuse_health_fail_routes_to_repair`）。
+- 解決: unit fix-s1（ADR-0072 D16 付記 G4-S1）。`Dispatcher::try_review_repair`（`crates/task-dispatch/src/dispatcher/review_verdict.rs`）が、決定的な不合格があるとき reason が `review::REVIEWER_NOT_EVALUATED_REASON` の `Check::Reviewer` の項目を分類から外す。
+- 確認: この run の HEAD（fix-s1 の上）で、上の試験が `should_panic` 無しで合格する。`RepairScheduled`（origin Review）の class は `health:deps.violation` だけで、修復の後に done。
 
 ## 未解決
-- G4-S1（plan_issue で申告）: `Check::Reviewer` のある task では、health の Fail が review の repair に回らず task が failed になる。
-  - 再現: `python3 -I scripts/tests/repo_health_fixtures.py build ts good <dest>`。task に `Check::Reviewer` を足し、reviewer の合格の後に検査の最中に main の `scripts/dev/repo-health/profiles/default.toml` の層 `app` の `allow` を空にする（試験 `health_generic_reviewer_reuse_health_fail_routes_to_repair`）。
-  - 期待（ADR (3) の (g) の行）: health の Fail（`deps.violation`）が review の repair（`RepairScheduled` の class `health:deps.violation`、origin Review）に回り、修復の後に done。
-  - 実際: `ReviewerPassReused` の後に health は Fail（同梱の検査器、`reused_from` 無し）だが、reviewer の項目は「not evaluated: a deterministic check failed」の不合格になり（`crates/task-dispatch/src/review.rs` の決定的な条件が全部合格のときだけ reviewer を評価する分岐）、`task_core::classify_review_failure` は修復できない reviewer の不合格（class 無し）と health の不合格の混在を Substantive にする。`RepairScheduled` は 0 件で、`Transitioned { to: Failed, reason: "review_fail" }`。
-  - 範囲: 再利用に限らない（未確認）。同じ分岐は reviewer run の前にも当たるので、`Check::Reviewer` のある task で候補が fail 級の finding を入れたときも、health の Fail は repair に回らず failed になると読める。rs-paths の `direct_review_*_dep_inversion_routes_to_repair` は `Check::Reviewer` を持たないので、この場合を通らない。
-  - 直し方の案（どれも rs-stale の範囲外）: (a) `review_verdict` の分類で「not evaluated: a deterministic check failed」の reviewer の不合格を数えず、決定的な項目の class だけで repair を決める（owner は `task_core::execution::classify_review_failure` の呼び出し側の `review_verdict.rs`）。(b) `review.rs` が決定的な項目の不合格のときに reviewer の項目を不合格の verdict にせず、評価しなかった印にする。
-  - 直ったら、`should_panic` を外す（外さないと試験が落ちるので、外し忘れは分かる）。
-
-## 提案
-- G4-S1 は (a) を推す。reviewer を評価しなかったことは不合格の原因ではなく、決定的な不合格の結果なので、分類は原因の class で決めるのが D16 の表の意図に合う。
+- 無し（rs-stale の範囲）。rs-paths の G4-R1（`[review]` 節の無い repo で候補の finding が final review の材料に入らない）は rs-paths の記録のとおり別に扱う。

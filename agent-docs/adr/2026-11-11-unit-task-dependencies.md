@@ -34,7 +34,7 @@ tasks: [01M74TM8Y43C5EMYF7FP525DZ5]
      切り出したもの。git の祖先判定・delivery の見送り・人の保留/破棄の読み取りはこの 1 か所）。対話・support task の扱いも
      M10 と同じ。
   満たされたかの判断は task-core の純粋関数 `wait::resolve_task_dependencies` が事実（依存先の状態と取り込みの cause）から
-  決める。事実を集めるのは `task_ops::unit_task_deps::resolve`。満たされた unit を `pending → ready`（event の理由
+  決める。事実を集めるのは `task_ops::unit_task_deps::resolve_pending_units`。満たされた unit を `pending → ready`（event の理由
   `task_dependency_met`）に上げるのは `task_ops::unit_task_deps::settle_external`（`child:` の子 Task の依存の解決と同じ関数。
   dispatcher の `resolve_child_dependencies` はこれを呼ぶだけにした）。依存先の成果をこの task の branch に入れるのは今どおり
   計画の仕事（既定 branch を取り込む unit を置く）で、この依存は「既定 branch に入った」までを保証する。
@@ -67,7 +67,7 @@ tasks: [01M74TM8Y43C5EMYF7FP525DZ5]
     辿る。余分に拒んでも planner は別の書き方を選べるが、見逃した循環では unit が黙って待ち続けるため）。辿る task は
     512 件までで、その先は辿らない。
 - **D5 待ちの理由**: M11 `TaskWait::TaskDependency { task_id, cause, detail, unit_keys }`。task 一覧・詳細・木の `waits` を組む
-  `task_ops::wait::task_waits`（計画の待ち D7〜D13 と同じ所）が `unit_task_deps::resolve` で組む。依存先が複数なら task_id 順の
+  `task_ops::wait::task_waits`（計画の待ち D7〜D13 と同じ所）が `unit_task_deps::resolve_pending_units` で組む。依存先が複数なら task_id 順の
   最初の 1 件（M10 D3 と同じ）。M10 と違い dispatcher のメモリには持たない: dispatcher の gate を増やさず、running の task
   （他の unit が走っている）にも unit の待ちを出すため。git を読むのは、pending の unit が `task:` で待つ依存先が done で
   M10 の対象のときだけ。

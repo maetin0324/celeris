@@ -180,7 +180,8 @@ fn plan_waits_of(
     let mut waits = task_core::plan_waits(units, &children, &keys);
     // ADR 2026-11-11-unit-task-dependencies D5（M11）: pending の unit が `task:<id>` で待つ木の外の task（DB と、M10 と同じ
     // git の祖先判定。`task:` の依存が無ければ何も読まない）。
-    let task_deps = crate::unit_task_deps::resolve(store, task, units, &mut Default::default())?;
+    let task_deps =
+        crate::unit_task_deps::resolve_pending_units(store, task, units, &mut Default::default())?;
     waits.extend(task_deps.first_wait());
     Ok(waits)
 }

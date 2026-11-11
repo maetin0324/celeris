@@ -18,7 +18,7 @@ const MAX_CYCLE_WALK: usize = 512;
 
 /// D2: `task` の pending の unit が待つ `task:` 依存を解く（`units` は `task` の `work_units_for`）。依存元は計画を持つ `task`。
 /// `integrated` は M10 と同じ取り込み済みの記憶（呼び出し側が持つ）。
-pub fn resolve(
+pub fn resolve_pending_units(
     store: &dyn TaskStore,
     task: &Task,
     units: &[WorkUnitRow],
@@ -59,7 +59,7 @@ pub struct ExternalSettle {
 /// ADR-0074 D3.7（Phase F4b (f)）: `depends_on: ["child:<key>"]` の WU を、子 Task（`child-<key>` の印を持つ
 /// `parent_id = task_id` の Task）の状態で進める。子が `done` なら（他の依存も満たされていれば）`pending → ready`、
 /// 子が `failed` / `cancelled` なら `pending → blocked(dependency_failed)`（D17 の replan の対象）。
-/// ADR 2026-11-11-unit-task-dependencies D2・D3: `task:<id>`（木の外の task）の依存も同じ所で解く（[`resolve`]）。満たされた
+/// ADR 2026-11-11-unit-task-dependencies D2・D3: `task:<id>`（木の外の task）の依存も同じ所で解く（[`resolve_pending_units`]）。満たされた
 /// unit は `pending → ready`（`task_dependency_met`）。依存先の失敗では上げも止めもしない（人に知らせるのは生存確認）。
 /// dispatcher の `resolve_child_dependencies` が呼ぶ（`integrated` は M10 と同じ取り込み済みの記憶の写し）。
 pub fn settle_external(
@@ -78,7 +78,7 @@ pub fn settle_external(
         return Ok(ExternalSettle::default());
     }
     let task_deps = match store.get(task_id)? {
-        Some(task) => resolve(store, &task, units, &mut integrated.clone())?,
+        Some(task) => resolve_pending_units(store, &task, units, &mut integrated.clone())?,
         None => TaskDependencyResolution::default(),
     };
     // ADR 2026-10-11-task-wait-reasons D3: 子の状態での解決と「子待ち」は task-core の `resolve_children`

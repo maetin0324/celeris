@@ -1,0 +1,13 @@
+diff --git a/crates/celeris/src/instance.rs b/crates/celeris/src/instance.rs
+index aa918523..b19d6af7 100644
+--- a/crates/celeris/src/instance.rs
++++ b/crates/celeris/src/instance.rs
+@@ -388,7 +388,7 @@ pub fn decide_tick(
+         }
+         InstanceRole::Standby => {
+             if no_other_live_active(rows, self_id, alive) {
+-                TickDecision::Promote
++                TickDecision::Stay
+             } else {
+                 TickDecision::Stay
+             }

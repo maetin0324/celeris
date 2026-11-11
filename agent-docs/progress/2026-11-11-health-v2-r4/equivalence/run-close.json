@@ -1,0 +1,49 @@
+{
+  "id": "run-close",
+  "sites": [
+    {
+      "at": "crates/task-dispatch/src/dispatcher/worker_finish.rs:337",
+      "fn": "finish_worker_result_with",
+      "subject": "task"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/work_units.rs:399",
+      "fn": "on_work_unit_checks_finished",
+      "subject": "work_unit"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/review_verdict.rs:20",
+      "fn": "on_review_finished",
+      "subject": "review"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/cos_chat/sink.rs:407",
+      "fn": "finish",
+      "subject": "cos_chat"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/eval_trials.rs:1046",
+      "fn": "on_eval_worker_finished",
+      "subject": "eval_trial"
+    }
+  ],
+  "verdict": "different",
+  "evidence": [
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:213",
+    "crates/task-dispatch/src/dispatcher/work_units.rs:376",
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:1317",
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:1446",
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:1533",
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:1555",
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:1624",
+    "crates/task-dispatch/src/dispatcher/review_verdict.rs:29",
+    "crates/task-dispatch/src/dispatcher/review_verdict.rs:126",
+    "crates/task-dispatch/src/dispatcher/review_verdict.rs:432",
+    "crates/task-dispatch/src/dispatcher/cos_chat/sink.rs:73",
+    "crates/task-dispatch/src/dispatcher/cos_chat/sink.rs:433",
+    "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs:1005",
+    "crates/task-dispatch/src/dispatcher/eval_trials.rs:1064",
+    "crates/task-dispatch/src/dispatcher/eval_trials.rs:1094"
+  ],
+  "shared_contract": "全体は非等価。入力: task/WU は Task・任意 WU・RunOutcome/AdapterError・検査失敗、review は ReviewOutcome、CoS は ChatFinish/actions、eval は追跡中の run id と結果。前提: task/WU は入口で lease 一致を検査し stale を捨てる。review は lease を持たず Reviewing を確認、CoS は sink の finished と store 終端、eval は eval_runs と instance 所有を確認する。書き込み: task は WorkerFinished/QuotaEstimated 等を遷移と渡す。WU は先に WorkUnitTransitioned を書き、兄弟待ち/統合時は task を Running のまま events を個別追記する。review は Reviewer role の WorkerFinished と ReviewVerdict 等を書き、stale 時も cancelled の run 索引を閉じる。CoS は chat_run_finish_with_telemetry で会話状態・本文・usage を閉じ、Question も Completed。eval は run_index_finish と scoring/error を書く。CoS/eval のこの入口には task の WorkerFinished 追記や task lease 解放は無い。失敗: task の InvalidTransition は警告、その他の store error は返却、WU 遷移失敗は警告継続。CoS finish は store error を返すが finished は true にし、呼び元は警告。eval の索引失敗は警告して処理継続。部分共有: task と WU は既に finish_worker_result_with を共用し、task/review は resolve_quota_estimate を共用。共通化候補は run id・usage・metrics・明示終端から終了記録を組み立てる純粋処理まで。lease 所有の検証、状態遷移、transaction 境界、自己申告だけで完了させない条件を一律の close(run) に埋めてはならない。"
+}

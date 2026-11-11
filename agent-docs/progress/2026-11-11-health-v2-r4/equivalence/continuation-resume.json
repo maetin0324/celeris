@@ -1,0 +1,59 @@
+{
+  "id": "continuation-resume",
+  "sites": [
+    {
+      "at": "crates/task-dispatch/src/dispatcher/continuation_session.rs:31",
+      "fn": "resolve_continuation_session",
+      "subject": "task"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/continuation_session.rs:45",
+      "fn": "resolve_continuation_session",
+      "subject": "work_unit"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/worker_finish.rs:751",
+      "fn": "finish_worker_result_with",
+      "subject": "work_unit"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/worker_finish.rs:1129",
+      "fn": "finish_worker_result_with",
+      "subject": "task"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/cos_chat/rollover.rs:123",
+      "fn": "choose_session",
+      "subject": "cos_chat"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/cos_chat/rollover.rs:385",
+      "fn": "run_attempts",
+      "subject": "cos_chat"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/eval_trials.rs:885",
+      "fn": "eval_run_request",
+      "subject": "eval_trial"
+    }
+  ],
+  "verdict": "different",
+  "evidence": [
+    "crates/task-dispatch/src/dispatcher/continuation_session.rs:44",
+    "crates/task-dispatch/src/dispatcher/continuation_session.rs:72",
+    "crates/task-dispatch/src/dispatcher/continuation_session.rs:102",
+    "crates/task-dispatch/src/dispatcher/continuation_session.rs:143",
+    "crates/task-dispatch/src/dispatcher/continuation_session.rs:173",
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:657",
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:751",
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:1129",
+    "crates/task-dispatch/src/dispatcher/sinks.rs:355",
+    "crates/task-dispatch/src/dispatcher/cos_chat/rollover.rs:138",
+    "crates/task-dispatch/src/dispatcher/cos_chat/rollover.rs:165",
+    "crates/task-dispatch/src/dispatcher/cos_chat/rollover.rs:418",
+    "crates/task-dispatch/src/dispatcher/cos_chat/rollover.rs:454",
+    "crates/task-dispatch/src/dispatcher/eval_trials.rs:884",
+    "crates/task-dispatch/src/dispatcher/eval_trials.rs:1118"
+  ],
+  "shared_contract": "入力・前提: task/WU は task と任意の WU、直近の終端 worker run、checkpoint、role、adapter/account/provider/cwd/container、保存 session を使う。resolve_continuation_session は WU 有無を受ける既存の共通実装であり二重実装ではない。worker_finish の WU 継続は execution_scheduler::decide に渡し、atomic task は進捗なし回数・継続上限を別に判定する。CoS は thread の ChatSessionKey、現役 session、前runの拒否/context枯渇、配送cursorを使い、taskのcontinuable終端を前提としない。eval trial は常に resume=false、checkpointなしで、Done以外はerrorへ送る。状態・event: task/WU は work_unit_session の retire/create、RunExtras、WorkerProgress、CheckpointSaved と WU/task遷移を扱う。CoS は chat_session_rotate、chat_run_record_session、summary水位・配送cursorを扱う。失敗: task/WU の resume拒否は sink がretireとWorkerProgressの印を記録し次のdispatchでcheckpoint付きfreshを選ぶ。CoSは同じchat run・同じ入力のまま、まだRunningならfreshを1回試し、再拒否・準備失敗はChatFinish::Failedにする。共通化候補は保存sessionの互換性・拒否・context上限という正規化した事実から Resume または Fresh(reason,retire) を返す純粋な判定部分のみ。task/WUの進捗なし・上限判定も事実から継続/質問を返す部分は候補だが、WUのauto_leafと子待ちを含む経路全体は同一でない。別accountのsessionを使わず、拒否したsessionを再利用せず、SQLiteのcheckpoint/会話を正本とする不変条件を維持する。新しい共通関数の採用は本調査では決定しない。"
+}

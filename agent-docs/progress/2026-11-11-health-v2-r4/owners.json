@@ -1,0 +1,638 @@
+{
+  "fields": {
+    "accepting_new_work": {
+      "owner": "execution-coordination",
+      "reason": "set_accepting_new_work は daemon/tick_loop.rs:133,141 でも更新する実行受付状態。setter という名前だけで composition-root としない。"
+    },
+    "account_books": {
+      "owner": "routing",
+      "reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。"
+    },
+    "account_limits": {
+      "owner": "routing",
+      "reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。"
+    },
+    "accounts_scan_cache": {
+      "owner": "routing",
+      "reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。"
+    },
+    "awaiting_human": {
+      "owner": "execution-coordination",
+      "reason": "review/WU/check/統合の完了待ちと後続処理を調停する状態。lease 回収も書くため run-supervisor との競合は残す。"
+    },
+    "checking": {
+      "owner": "execution-coordination",
+      "reason": "review/WU/check/統合の完了待ちと後続処理を調停する状態。lease 回収も書くため run-supervisor との競合は残す。"
+    },
+    "classification_board": {
+      "owner": "routing",
+      "reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。"
+    },
+    "cluster_command_probe": {
+      "owner": "composition-root",
+      "reason": "constructor と set_* だけで外部操作 port を注入。daemon/bootstrap.rs と clusters.rs の呼び元を確認し、cluster の走行処理は port を呼ぶ。"
+    },
+    "cluster_connector": {
+      "owner": "composition-root",
+      "reason": "constructor と set_* だけで外部操作 port を注入。daemon/bootstrap.rs と clusters.rs の呼び元を確認し、cluster の走行処理は port を呼ぶ。"
+    },
+    "cluster_job_poller": {
+      "owner": "composition-root",
+      "reason": "constructor と set_* だけで外部操作 port を注入。daemon/bootstrap.rs と clusters.rs の呼び元を確認し、cluster の走行処理は port を呼ぶ。"
+    },
+    "cluster_liveness_probe": {
+      "owner": "test-hooks",
+      "reason": "constructor に実装の既定値があり、set_* は試験の差し替え用。daemon の set_* 呼び元検索では該当せず、宣言・setter の試験用注記を根拠とする（cfg(test) field とは別）。"
+    },
+    "cluster_master_watcher": {
+      "owner": "composition-root",
+      "reason": "constructor と set_* だけで外部操作 port を注入。daemon/bootstrap.rs と clusters.rs の呼び元を確認し、cluster の走行処理は port を呼ぶ。"
+    },
+    "cluster_ssh_command_override": {
+      "owner": "test-hooks",
+      "reason": "constructor に実装の既定値があり、set_* は試験の差し替え用。daemon の set_* 呼び元検索では該当せず、宣言・setter の試験用注記を根拠とする（cfg(test) field とは別）。"
+    },
+    "config": {
+      "owner": "composition-root",
+      "reason": "daemon/bootstrap.rs:587 の DispatchConfig と admin の apply_dispatch_config による設定再注入。set_config_max_concurrency も設定入力であり、実効値 max_concurrency は別 field。"
+    },
+    "container_probe": {
+      "owner": "cluster-runtime",
+      "reason": "実行環境の観測状態。tunnel_probe_state は probe thread の Mutex 内更新、container_probe は detect_container_runtime の検出結果であり、設定注入だけとはしない。"
+    },
+    "cos_chat_launch": {
+      "owner": "project-orchestration",
+      "reason": "CoS run 起動 port だけでなく triage・controller・retention の可変状態も格納する。案件の運営を候補とし、launch の run-supervisor との競合を残す。"
+    },
+    "credential_gates": {
+      "owner": "composition-root",
+      "reason": "constructor と set_* だけで設定を注入。daemon/bootstrap.rs と admin.rs の reload が呼び、走行処理は設定を読む。"
+    },
+    "credential_resumer": {
+      "owner": "composition-root",
+      "reason": "constructor と set_* による port/設定の注入。daemon の bootstrap.rs・run.rs・services.rs・api.rs が呼び、走行処理は field 自体を置換しない（呼び元一覧は cm-owners.md）。"
+    },
+    "disk_ready": {
+      "owner": "host-maintenance",
+      "reason": "disk/target/健全性の棚卸しを調停する実行時状態。facade の tick の更新や Arc 内部の変更を含むので設定 port としない。health_inventory は範囲外 health_review/inventory.rs の実装も参照する。"
+    },
+    "dispatch_routing": {
+      "owner": "composition-root",
+      "reason": "Dispatcher::new の既定 DispatchRoutingSettings を dispatch_run.rs:1435 で読むだけの routing 設定。daemon の setter 呼び元は無く、constructor に閉じた設定である。"
+    },
+    "eligible": {
+      "owner": "composition-root",
+      "reason": "constructor と set_* による port/設定の注入。daemon の bootstrap.rs・run.rs・services.rs・api.rs が呼び、走行処理は field 自体を置換しない（呼び元一覧は cm-owners.md）。"
+    },
+    "eval_version_probe": {
+      "owner": "test-hooks",
+      "reason": "constructor に実装の既定値があり、set_* は試験の差し替え用。daemon の set_* 呼び元検索では該当せず、宣言・setter の試験用注記を根拠とする（cfg(test) field とは別）。"
+    },
+    "harness_adapters": {
+      "owner": "composition-root",
+      "reason": "constructor と set_* だけで設定を注入。daemon/bootstrap.rs と admin.rs の reload が呼び、走行処理は設定を読む。"
+    },
+    "health_inventory": {
+      "owner": "host-maintenance",
+      "reason": "disk/target/健全性の棚卸しを調停する実行時状態。facade の tick の更新や Arc 内部の変更を含むので設定 port としない。health_inventory は範囲外 health_review/inventory.rs の実装も参照する。"
+    },
+    "infra_backoff": {
+      "owner": "run-supervisor",
+      "reason": "開始側と回収・終了側が共有する run の生存と再試行状態。lease と run 終了の整合を担う候補へ割り当てるが、異なる書き手 owner の競合は残す。"
+    },
+    "integrating": {
+      "owner": "execution-coordination",
+      "reason": "review/WU/check/統合の完了待ちと後続処理を調停する状態。lease 回収も書くため run-supervisor との競合は残す。"
+    },
+    "knowledge_probe": {
+      "owner": "test-hooks",
+      "reason": "constructor に実装の既定値があり、set_* は試験の差し替え用。daemon の set_* 呼び元検索では該当せず、宣言・setter の試験用注記を根拠とする（cfg(test) field とは別）。"
+    },
+    "knowledge_probe_cache": {
+      "owner": "routing",
+      "reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。"
+    },
+    "last_tick_gap_ms": {
+      "owner": "execution-coordination",
+      "reason": "constructor が作る完了通知 channel または tick の観測値。送受信・tick 更新は実行調停の状態であり、外から注入する設定 port としない。"
+    },
+    "last_tick_started": {
+      "owner": "execution-coordination",
+      "reason": "constructor が作る完了通知 channel または tick の観測値。送受信・tick 更新は実行調停の状態であり、外から注入する設定 port としない。"
+    },
+    "llm_route_registry": {
+      "owner": "composition-root",
+      "reason": "constructor と set_* だけで設定を注入。daemon/bootstrap.rs と admin.rs の reload が呼び、走行処理は設定を読む。"
+    },
+    "login_pending_accounts": {
+      "owner": "routing",
+      "reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。"
+    },
+    "now_unix_fn": {
+      "owner": "test-hooks",
+      "reason": "constructor に実装の既定値があり、set_* は試験の差し替え用。daemon の set_* 呼び元検索では該当せず、宣言・setter の試験用注記を根拠とする（cfg(test) field とは別）。"
+    },
+    "orphan_takeover": {
+      "owner": "composition-root",
+      "reason": "daemon/run.rs:208 の set_orphan_takeover が instance_id・freshness・pid_alive port を注入する。leases.rs:742 の lease_holders_gone は読み取りだけなので、回収処理の owner と設定注入の owner を分ける。"
+    },
+    "pending_subjects": {
+      "owner": "execution-coordination",
+      "reason": "review/WU/check/統合の完了待ちと後続処理を調停する状態。lease 回収も書くため run-supervisor との競合は残す。"
+    },
+    "publisher": {
+      "owner": "composition-root",
+      "reason": "constructor と set_* による port/設定の注入。daemon の bootstrap.rs・run.rs・services.rs・api.rs が呼び、走行処理は field 自体を置換しない（呼び元一覧は cm-owners.md）。"
+    },
+    "quota_activity": {
+      "owner": "routing",
+      "reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。"
+    },
+    "quota_calibration": {
+      "owner": "routing",
+      "reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。"
+    },
+    "removing_build_caches": {
+      "owner": "host-maintenance",
+      "reason": "disk/target/健全性の棚卸しを調停する実行時状態。facade の tick の更新や Arc 内部の変更を含むので設定 port としない。health_inventory は範囲外 health_review/inventory.rs の実装も参照する。"
+    },
+    "removing_repo_targets": {
+      "owner": "host-maintenance",
+      "reason": "disk/target/健全性の棚卸しを調停する実行時状態。facade の tick の更新や Arc 内部の変更を含むので設定 port としない。health_inventory は範囲外 health_review/inventory.rs の実装も参照する。"
+    },
+    "reviewing": {
+      "owner": "run-supervisor",
+      "reason": "開始側と回収・終了側が共有する run の生存と再試行状態。lease と run 終了の整合を担う候補へ割り当てるが、異なる書き手 owner の競合は残す。"
+    },
+    "routing_context_registry": {
+      "owner": "composition-root",
+      "reason": "constructor と set_* による port/設定の注入。daemon の bootstrap.rs・run.rs・services.rs・api.rs が呼び、走行処理は field 自体を置換しない（呼び元一覧は cm-owners.md）。"
+    },
+    "routing_mode": {
+      "owner": "composition-root",
+      "reason": "constructor と set_* だけで設定を注入。daemon/bootstrap.rs と admin.rs の reload が呼び、走行処理は設定を読む。"
+    },
+    "running": {
+      "owner": "run-supervisor",
+      "reason": "開始側と回収・終了側が共有する run の生存と再試行状態。lease と run 終了の整合を担う候補へ割り当てるが、異なる書き手 owner の競合は残す。"
+    },
+    "rx": {
+      "owner": "execution-coordination",
+      "reason": "constructor が作る完了通知 channel または tick の観測値。送受信・tick 更新は実行調停の状態であり、外から注入する設定 port としない。"
+    },
+    "scratch": {
+      "owner": "host-maintenance",
+      "reason": "disk/target/健全性の棚卸しを調停する実行時状態。facade の tick の更新や Arc 内部の変更を含むので設定 port としない。health_inventory は範囲外 health_review/inventory.rs の実装も参照する。"
+    },
+    "stagnation": {
+      "owner": "project-orchestration",
+      "reason": "案件予算の監視と task 木の停滞監視が同じ field を更新する。案件の運営を候補とし、tick/tree_units の execution-coordination との競合を残す。"
+    },
+    "store": {
+      "owner": "composition-root",
+      "reason": "Dispatcher::new に daemon/bootstrap.rs:587 が store port を注入する。field 自体の置換と store 内部の DB 更新は区別する。"
+    },
+    "target_sweep": {
+      "owner": "composition-root",
+      "reason": "constructor と set_* だけで設定を注入。daemon/bootstrap.rs と admin.rs の reload が呼び、走行処理は設定を読む。"
+    },
+    "target_sweep_scope": {
+      "owner": "composition-root",
+      "reason": "constructor と set_* だけで設定を注入。daemon/bootstrap.rs と admin.rs の reload が呼び、走行処理は設定を読む。"
+    },
+    "task_workspaces": {
+      "owner": "execution-coordination",
+      "reason": "dispatch_one が登録し、housekeeping が中止後に掃除する実行用 worktree の状態。host-maintenance との競合を残す。"
+    },
+    "ticks": {
+      "owner": "execution-coordination",
+      "reason": "constructor が作る完了通知 channel または tick の観測値。送受信・tick 更新は実行調停の状態であり、外から注入する設定 port としない。"
+    },
+    "tunnel_forward_ensurer": {
+      "owner": "composition-root",
+      "reason": "constructor と set_* だけで外部操作 port を注入。daemon/bootstrap.rs と clusters.rs の呼び元を確認し、cluster の走行処理は port を呼ぶ。"
+    },
+    "tunnel_listener_probe": {
+      "owner": "composition-root",
+      "reason": "constructor と set_* だけで外部操作 port を注入。daemon/bootstrap.rs と clusters.rs の呼び元を確認し、cluster の走行処理は port を呼ぶ。"
+    },
+    "tunnel_probe": {
+      "owner": "composition-root",
+      "reason": "constructor と set_* だけで外部操作 port を注入。daemon/bootstrap.rs と clusters.rs の呼び元を確認し、cluster の走行処理は port を呼ぶ。"
+    },
+    "tunnel_probe_state": {
+      "owner": "cluster-runtime",
+      "reason": "実行環境の観測状態。tunnel_probe_state は probe thread の Mutex 内更新、container_probe は detect_container_runtime の検出結果であり、設定注入だけとはしない。"
+    },
+    "tx": {
+      "owner": "execution-coordination",
+      "reason": "constructor が作る完了通知 channel または tick の観測値。送受信・tick 更新は実行調停の状態であり、外から注入する設定 port としない。"
+    },
+    "unroutable": {
+      "owner": "routing",
+      "reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。"
+    },
+    "variant_observation": {
+      "owner": "composition-root",
+      "reason": "constructor と set_* による port/設定の注入。daemon の bootstrap.rs・run.rs・services.rs・api.rs が呼び、走行処理は field 自体を置換しない（呼び元一覧は cm-owners.md）。"
+    },
+    "warned_unroutable": {
+      "owner": "routing",
+      "reason": "source/account 選択・利用枠・分類待ち・到達性の実行時状態。dispatcher facade や review からも使われるが routing の状態としてまとめる。lock 内部・範囲外型の変更は字句測定の writers に出ない場合がある。"
+    }
+  },
+  "modules": {
+    "crates/task-dispatch/src/dispatcher.rs": {
+      "owner": "execution-coordination",
+      "reason": "tick の段と完了通知を調停する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#run-claim-lease"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/auto_leaf.rs": {
+      "owner": "execution-coordination",
+      "reason": "leaf の実行 gate を評価する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#decisions-plan-gate"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/behind_target.rs": {
+      "owner": "execution-coordination",
+      "reason": "統合先との遅れを観測する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#workunit-scheduling-stage-integration"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/browser_prereq.rs": {
+      "owner": "execution-coordination",
+      "reason": "browser 実行前提を検査し再開する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#browser-site-policy-trusted-devices"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/child_tasks.rs": {
+      "owner": "execution-coordination",
+      "reason": "子 task の完了と親の待ちを調停する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#recursive-task-tree"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/cluster.rs": {
+      "owner": "cluster-runtime",
+      "reason": "SSH 接続・master・tunnel の実行状態を監視する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/adr/0018-remote-clusters-over-ssh.md"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/cluster_job_wait.rs": {
+      "owner": "cluster-runtime",
+      "reason": "durable job 待ちを poll して再開する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/adr/0090-durable-wait-for-cluster-jobs.md"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/continuation_session.rs": {
+      "owner": "run-supervisor",
+      "reason": "継続 run の session を解決する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#continuation-session-resume"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/cos_chat/control.rs": {
+      "owner": "run-supervisor",
+      "reason": "CoS run の停止と割り込みを監督する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#cos-chat-threads-runs"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/cos_chat/digest.rs": {
+      "owner": "project-orchestration",
+      "reason": "CoS に渡す案件と受信箱の要約を組み立てる。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#cos-inbox-triage-operations-audit"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs": {
+      "owner": "run-supervisor",
+      "reason": "CoS run の claim・起動・終了を監督する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#cos-chat-threads-runs"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/cos_chat/routes.rs": {
+      "owner": "routing",
+      "reason": "CoS の経路を選ぶ。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#cos-chat-threads-runs"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/cos_chat/slot_wait.rs": {
+      "owner": "run-supervisor",
+      "reason": "CoS run の実行枠待ちを追跡する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#cos-chat-threads-runs"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/cos_chat/triage.rs": {
+      "owner": "project-orchestration",
+      "reason": "CoS に受信箱の一次対応を渡す。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#cos-inbox-triage-operations-audit"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/credential_gate.rs": {
+      "owner": "execution-coordination",
+      "reason": "credential 待ちへの遷移と復帰を調停する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#credential-broker-resume"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/cron_tick.rs": {
+      "owner": "host-maintenance",
+      "reason": "定期的な保守 executor を呼ぶ。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#cron-jobs"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/decision_log_wire.rs": {
+      "owner": "execution-coordination",
+      "reason": "判断の記録と実行の配線を担う。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#decisions-plan-gate"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/dispatch_run.rs": {
+      "owner": "execution-coordination",
+      "reason": "run 開始の gate と資源予約を調停する（routing も含む混在 module）。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#run-claim-lease"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/eval_trials.rs": {
+      "owner": "routing",
+      "reason": "routing 評価試行の run を管理する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#routing-eval"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/housekeeping.rs": {
+      "owner": "host-maintenance",
+      "reason": "scratch と worktree の後片付け・disk guard を担う。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#scratch-build-cache-disk-guard"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/input_attachments.rs": {
+      "owner": "execution-coordination",
+      "reason": "run 開始に必要な添付を組み立てる。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#worker-protocol-adapters"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/lane_assist.rs": {
+      "owner": "routing",
+      "reason": "lane の分類待ちと選択を担う。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#routing-lane-route"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/leases.rs": {
+      "owner": "run-supervisor",
+      "reason": "run の停止・lease 回収・終了照合を担う。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#orphan-takeover"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/maintenance.rs": {
+      "owner": "host-maintenance",
+      "reason": "target 掃除と disk 監視を実行する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#scratch-build-cache-disk-guard"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/ownerless_runs.rs": {
+      "owner": "run-supervisor",
+      "reason": "owner を失った run と review を回収する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#orphan-takeover"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/phase_integration.rs": {
+      "owner": "execution-coordination",
+      "reason": "WU 成果の工程統合を調停する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#workunit-scheduling-stage-integration"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/planner_flow.rs": {
+      "owner": "execution-coordination",
+      "reason": "plan 採用と gate を調停する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#execution-plan-adoption"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/project_retention.rs": {
+      "owner": "project-orchestration",
+      "reason": "案件 controller の記録を整理する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#project-controller"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/project_wake.rs": {
+      "owner": "project-orchestration",
+      "reason": "案件 controller の wake・予算・再評価を担う。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#project-controller"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/quota_book.rs": {
+      "owner": "routing",
+      "reason": "account の利用枠を見積もる。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#accounts-quota"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/review_spawn.rs": {
+      "owner": "execution-coordination",
+      "reason": "review の同期・開始・待ちを調停する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#review-runs-final-review"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/review_verdict.rs": {
+      "owner": "execution-coordination",
+      "reason": "review 判定を task/WU の後続処理へ写す。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#review-runs-final-review"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/route_failure.rs": {
+      "owner": "routing",
+      "reason": "source の失敗と cooldown を記録する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#routing-lane-route"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/route_launch.rs": {
+      "owner": "routing",
+      "reason": "選んだ route に adapter を組み立てる。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#routing-lane-route"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/route_select.rs": {
+      "owner": "routing",
+      "reason": "source と account を選ぶ。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#routing-lane-route"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/routing_context.rs": {
+      "owner": "routing",
+      "reason": "routing の特徴量と registry を扱う。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#routing-lane-route"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/run_context.rs": {
+      "owner": "execution-coordination",
+      "reason": "実行要求の文脈を組み立てる。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#worker-protocol-adapters"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/script_canary.rs": {
+      "owner": "host-maintenance",
+      "reason": "制御 script の canary と rollback を管理する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#script-runtime"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/script_compare.rs": {
+      "owner": "host-maintenance",
+      "reason": "制御 script の比較実行と mode の観測を担う。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#script-runtime"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/snapshot.rs": {
+      "owner": "execution-coordination",
+      "reason": "複数領域の観測値を集約する（状態の本来の所有は field 別指定）。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#run-claim-lease"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/stale_priority.rs": {
+      "owner": "execution-coordination",
+      "reason": "review 同期の待ち順を決める。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#workunit-scheduling-stage-integration"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/tree_units.rs": {
+      "owner": "execution-coordination",
+      "reason": "木の gate と生存確認を調停する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#recursive-task-tree"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/variant_pin.rs": {
+      "owner": "routing",
+      "reason": "評価 variant と route を照合する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#routing-eval"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/work_units.rs": {
+      "owner": "execution-coordination",
+      "reason": "WU の依存と check の開始を調停する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#workunit-scheduling-stage-integration"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs": {
+      "owner": "run-supervisor",
+      "reason": "worker の結果を閉じ継続を処理する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#continuation-session-resume"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/workspaces.rs": {
+      "owner": "execution-coordination",
+      "reason": "実行用 worktree の準備を調停する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#worker-protocol-adapters"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/write_set_gate.rs": {
+      "owner": "execution-coordination",
+      "reason": "並列 WU の書き込み範囲を予約する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#workunit-scheduling-stage-integration"
+      ]
+    },
+    "crates/task-dispatch/src/dispatcher/write_set_record.rs": {
+      "owner": "execution-coordination",
+      "reason": "run の書き込み実績を保存する。",
+      "sources": [
+        "docs/architecture-map.md#task-dispatch",
+        "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json#workunit-scheduling-stage-integration"
+      ]
+    }
+  },
+  "rules": [
+    "cfg(test) field は test-hooks。",
+    "個別指定を優先し、無ければ writers の owner が単一の時だけ採用する。writers が空なら readers の単一 owner を採用する。それ以外はエラー。",
+    "参照された module が未登録なら個別指定の有無にかかわらずエラー。",
+    "owner_conflict は測定された writers の module owner が2種類以上。constructor は測定対象外、setter は除外しない。",
+    "共変更は相関の補助根拠であって所有を証明しない。owner は R4 の検討候補であり設計境界の決定ではない。"
+  ],
+  "schema": "celeris.dispatcher-owner-candidates/1"
+}

@@ -31574,6 +31574,46 @@
       ],
       "type": "object"
     },
+    "TaskDependencyCause": {
+      "description": "D5: unit の `task:` 依存がまだ満たされない理由。",
+      "oneOf": [
+        {
+          "const": "unfinished",
+          "description": "依存先が done でない（走っている・待っている・review 中など）。",
+          "type": "string"
+        },
+        {
+          "const": "unmerged",
+          "description": "依存先は done だが、成果が既定 branch に入っていない（M10 の `unmerged`）。",
+          "type": "string"
+        },
+        {
+          "const": "delivery_skipped",
+          "description": "delivery が取り込みを見送った（M10 の `delivery_skipped`）。",
+          "type": "string"
+        },
+        {
+          "const": "held",
+          "description": "人が取り込みを保留にした（M10 の `held`）。",
+          "type": "string"
+        },
+        {
+          "const": "discarded",
+          "description": "人が取り込まないと決めた（M10 の `discarded`）。",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "description": "依存先が failed。",
+          "type": "string"
+        },
+        {
+          "const": "cancelled",
+          "description": "依存先が cancelled。",
+          "type": "string"
+        }
+      ]
+    },
     "TaskDetail": {
       "description": "`celerisctl show --json` と `GET /api/v1/tasks/{id}` の本体。",
       "properties": {
@@ -33606,6 +33646,39 @@
             "task_id",
             "cause",
             "detail"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "M11（ADR 2026-11-11-unit-task-dependencies D5）: 計画の unit が `task:<id>` で待つ木の外の task が、まだ満たされない\n（done でない・M10 と同じ取り込みの待ち・failed・cancelled）。人の操作待ちではない。依存先が複数なら task_id 順の最初の 1 件。",
+          "properties": {
+            "cause": {
+              "$ref": "#/$defs/TaskDependencyCause"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "task_dependency",
+              "type": "string"
+            },
+            "task_id": {
+              "$ref": "#/$defs/TaskId"
+            },
+            "unit_keys": {
+              "description": "待つ pending の unit の key（seq 順）。",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "task_id",
+            "cause",
+            "detail",
+            "unit_keys"
           ],
           "type": "object"
         }

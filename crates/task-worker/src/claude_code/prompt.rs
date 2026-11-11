@@ -1287,7 +1287,16 @@ fn tree_plan_shape_section(
          Stages run in array order. Units of the same stage may run in parallel; a unit may depend on at \
          most one unit of its own stage, and `depends_on` may point to the same or an earlier stage only. \
          `\"review\":\"human\"` pauses after that stage for a human check; use it only when a human really \
-         has to look before the next stage.\n\n"
+         has to look before the next stage.\n\
+         **Waiting for another task** (a sibling or another root task of this project, outside this task's \
+         tree): write `\"task:<task id>\"` in the unit's `depends_on` (for example \
+         `\"depends_on\":[\"task:01M6TYVJT0Z1CBGNK8VTNK8ZJH\"]`). celeris starts the unit only after that task \
+         is `done` and, for two root tasks, after its branch is in the default branch; units without it keep \
+         running. Do **not** raise a decision such as \"answer when X is done / merged into main\" to wait: \
+         whether a task finished or was integrated is a fact celeris reads from the database and git, not a \
+         human choice. Bringing that work into this task's branch is still the plan's job (for example a unit \
+         that merges the default branch). Tasks inside this task's own tree are referenced by unit key, never \
+         by `task:`; the task must exist, belong to this project and must not wait for this task.\n\n"
     ));
 
     out.push_str("#### Where this task sits in the tree\n");
@@ -1366,7 +1375,9 @@ fn tree_plan_shape_section(
          Raise a decision only when the work needs a choice that you cannot make from the objective, the \
          acceptance criteria and the repository (for example: which external service to depend on, which of \
          two incompatible designs the human wants, whether to spend a scarce resource). Do not ask about \
-         things you can decide yourself. Each decision has 2 to 5 `options` (with `key` and `label`, \
+         things you can decide yourself. A decision is only for a choice that only a human can make — never \
+         for waiting until another task finishes or is merged (use a `task:<task id>` dependency for that). \
+         Each decision has 2 to 5 `options` (with `key` and `label`, \
          optionally `consequence`), a `recommended` option key, `cost_of_reversal` (`low` | `medium` | \
          `high`, how expensive it is to change the answer later) and a non-empty `needed_before`: the unit \
          keys or `stage:<key>` that must wait for the answer. Units that wait list the decision key in their \

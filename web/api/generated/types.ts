@@ -6304,6 +6304,8 @@ export type TaskComment = {
   "task_id": TaskId;
 };
 
+export type TaskDependencyCause = "unfinished" | "unmerged" | "delivery_skipped" | "held" | "discarded" | "failed" | "cancelled";
+
 export type TaskDetail = {
   "actions": Array<Action>;
   "actual_run_write_sets": Array<ActualWriteSetView>;
@@ -6639,6 +6641,12 @@ export type TaskWait = {
   "detail": string;
   "kind": "depends_on_integration";
   "task_id": TaskId;
+} | {
+  "cause": TaskDependencyCause;
+  "detail": string;
+  "kind": "task_dependency";
+  "task_id": TaskId;
+  "unit_keys": Array<string>;
 };
 
 export type TextPart = {

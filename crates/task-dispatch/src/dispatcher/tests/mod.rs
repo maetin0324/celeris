@@ -3175,6 +3175,7 @@ mod cos_slot_wait;
 mod dep_integration;
 mod human_gates;
 mod task_waits;
+mod unit_task_deps;
 /// ADR 2026-11-09-unscheduled-restart-hold: 再起動直後の停滞の判定の保留。
 mod unscheduled_restart;
 

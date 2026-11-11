@@ -152,6 +152,20 @@ impl Dispatcher {
             }
             other => other,
         };
+        // ADR 2026-11-11-unit-task-dependencies D4: unit の `task:<id>` 依存（存在・自分の木の外・同じ案件・循環なし）。違えば
+        // 検証の理由として planner に返す（人・CoS の採用は task-ops の `validate_for_task` が同じ関数で見る）。
+        let validation = match validation {
+            Ok(v) => {
+                let errors =
+                    task_ops::unit_task_deps::plan_errors(self.store.as_ref(), task, &v.spec)?;
+                if errors.is_empty() {
+                    Ok(v)
+                } else {
+                    Err(task_ops::execution::describe_validation_errors(&errors))
+                }
+            }
+            other => other,
+        };
         // ADR 2026-11-07-health-review-integration D3.3: 高 risk の class の path を書く planner の計画に brief が無ければ再試行に回す。
         let validation = self.design_brief_gate(task, &run_id, validation);
 

@@ -32,6 +32,9 @@ pub struct LivenessUnitFacts {
     /// ADR-0074「F5-fix8 実装時の明確化」: `pending` で、`child:<key>` の依存（ADR-0074 D3.7 の子 Task）を
     /// 待っている（/2 の計画の名指しの待ち。子が終われば dispatcher が決定的に解く）。
     pub waits_on_child_dep: bool,
+    /// ADR 2026-11-11-unit-task-dependencies D3・D5: `pending` で、`task:<id>` の依存（木の外の task）がまだ満たされない理由
+    /// （`TaskDependencyResolution::cause_of`。終わった cause を先に）。満たされていれば `None`。
+    pub task_dependency: Option<crate::task_deps::TaskDependencyCause>,
 }
 
 /// D10: 木の 1 節点の事実（store の読み取りだけで集める。`task_ops::tree::liveness_snapshot`）。
@@ -319,6 +322,29 @@ fn classify_node(n: &NodeLivenessFacts) -> NodeLiveness {
                     ));
                 }
             },
+            // ADR 2026-11-11-unit-task-dependencies D3: 依存先がもう成果を出さない（failed・cancelled・取り込みの破棄）なら、人が
+            // 依存先をやり直すか計画を作り直すまで誰も進めない（理由なし → 既存の StallDetected・受信箱の stalled で知らせる）。
+            // それ以外（done 待ち・取り込み待ち・delivery の見送り・人の保留）は名指しの待ち。
+            (WorkUnitStatus::Pending, _) if u.task_dependency.is_some_and(|c| c.is_ended()) => {
+                let cause = u.task_dependency.map(|c| c.as_str()).unwrap_or("-");
+                unexplained.get_or_insert((
+                    "task_dependency_ended",
+                    format!(
+                        "unit {} が待つ木の外の task は {cause} で、もう成果を出さない（依存先をやり直すか、計画を作り直して依存を外すまで始まらない）",
+                        u.key
+                    ),
+                ));
+            }
+            (WorkUnitStatus::Pending, _) if u.task_dependency.is_some() => {
+                let cause = u.task_dependency.map(|c| c.as_str()).unwrap_or("-");
+                waiting.get_or_insert((
+                    "task_dependency",
+                    format!(
+                        "unit {} は木の外の task の完了・取り込みを待っている（{cause}）",
+                        u.key
+                    ),
+                ));
+            }
             (WorkUnitStatus::Pending, _) if u.waits_on_child_dep => {
                 waiting.get_or_insert((
                     "children",

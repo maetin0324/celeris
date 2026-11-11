@@ -471,7 +471,8 @@ impl Dispatcher {
         let v2 = task_core::is_phased_schema(&active_plan.spec.schema);
         let mut units = self.store.work_units_for(task_id)?;
         // ADR-0074 D3.7（Phase F4b (f)）: `child:<key>` の依存を子 Task の状態で決定的に解く。
-        let (changed, waiting_on_children) = self.resolve_child_dependencies(task_id, &units)?;
+        let (changed, waiting_on_children, task_dep_wait) =
+            self.resolve_child_dependencies(task_id, &units)?;
         if changed {
             units = self.store.work_units_for(task_id)?;
         }
@@ -571,7 +572,7 @@ impl Dispatcher {
             return self.finished_plan_gate(task_id, &active_plan.id, &events);
         }
         if v2 {
-            return self.wu_dispatch_gate_v2(task_id, units);
+            return self.wu_dispatch_gate_v2(task_id, units, task_dep_wait);
         }
         match task_core::next_work_unit(&units) {
             task_core::NextStep::RunWorkUnit(id) => {
@@ -686,20 +687,38 @@ impl Dispatcher {
     /// 印を持つ `parent_id = task_id` の Task）の状態で進める。子が `done` なら（他の依存も満たされて
     /// いれば）`pending → ready`、子が `failed` / `cancelled` なら `pending → blocked(dependency_failed)`
     /// （D17 の replan の対象）。戻り値は（書き換えたか、まだ終わっていない子を待っている WU があるか）。
+    ///
+    /// ADR 2026-11-11-unit-task-dependencies D2: `task:<id>`（木の外の task）の依存も同じ所で解く（事実は task-ops、判断は
+    /// task-core の `resolve_task_dependencies`）。満たされた unit は `pending → ready`（`task_dependency_met`）。依存先の失敗では
+    /// 上げも止めもしない（D3。人に知らせるのは生存確認）。まだ満たされない依存は戻り値の 3 つ目（M11 の待ち）。
     pub(super) fn resolve_child_dependencies(
         &self,
         task_id: TaskId,
         units: &[task_core::WorkUnitRow],
-    ) -> Result<(bool, bool), DispatchError> {
+    ) -> Result<(bool, bool, Option<task_core::TaskWait>), DispatchError> {
         let prefix = task_core::CHILD_DEP_PREFIX;
         let has_child_deps =
             |u: &task_core::WorkUnitRow| u.depends_on.iter().any(|d| d.starts_with(prefix));
-        if !units
-            .iter()
-            .any(|u| u.status == task_core::WorkUnitStatus::Pending && has_child_deps(u))
-        {
-            return Ok((false, false));
+        let has_task_deps = |u: &task_core::WorkUnitRow| {
+            u.depends_on
+                .iter()
+                .any(|d| task_core::is_task_dependency(d))
+        };
+        if !units.iter().any(|u| {
+            u.status == task_core::WorkUnitStatus::Pending
+                && (has_child_deps(u) || has_task_deps(u))
+        }) {
+            return Ok((false, false, None));
         }
+        let task_deps = match self.store.get(task_id)? {
+            Some(task) if units.iter().any(has_task_deps) => task_ops::unit_task_deps::resolve(
+                self.store.as_ref(),
+                &task,
+                units,
+                &mut self.integrated_deps.clone(),
+            )?,
+            _ => task_core::TaskDependencyResolution::default(),
+        };
         // ADR 2026-10-11-task-wait-reasons D3: 子の状態での解決と「子待ち」は task-core の `resolve_children`
         // （一覧・木の `Children` と同じ関数）。
         let children: Vec<task_core::ChildFacts> = self
@@ -713,10 +732,11 @@ impl Dispatcher {
             })
             .collect();
         let task_core::ChildResolution {
-            done,
+            mut done,
             failed,
             waiting_units,
         } = task_core::resolve_children(units, &children);
+        done.extend(task_deps.met.iter().cloned());
         let mut changed = false;
         for u in units.iter().filter(|u| {
             u.status == task_core::WorkUnitStatus::Pending
@@ -744,9 +764,14 @@ impl Dispatcher {
                 let Some(u) = units.iter().find(|u| u.id == id) else {
                     continue;
                 };
-                if !has_child_deps(u) {
+                if !has_child_deps(u) && !has_task_deps(u) {
                     continue;
                 }
+                let reason = if has_child_deps(u) {
+                    "child_done"
+                } else {
+                    "task_dependency_met"
+                };
                 let mut row = u.clone();
                 row.status = task_core::WorkUnitStatus::Ready;
                 self.store.work_unit_transition(
@@ -757,7 +782,7 @@ impl Dispatcher {
                         key: u.key.clone(),
                         from: task_core::WorkUnitStatus::Pending,
                         to: task_core::WorkUnitStatus::Ready,
-                        reason: "child_done".to_string(),
+                        reason: reason.to_string(),
                         run_id: None,
                     },
                 )?;
@@ -765,14 +790,20 @@ impl Dispatcher {
             }
         }
         let waiting = !waiting_units.is_empty();
-        Ok((changed, waiting))
+        Ok((
+            changed,
+            waiting,
+            task_ops::unit_task_deps::first_wait(&task_deps),
+        ))
     }
 
     /// ADR-0074 D1.3/D1.6（Phase F2b）: v2 の計画の Ready な Task が次に何をするか。
+    /// `task_dep_wait` は `task:` 依存のまだ満たされない待ち（M11）。起こせる unit が無ければ `Skip` の代わりに `Wait` で返す。
     pub(super) fn wu_dispatch_gate_v2(
         &self,
         task_id: TaskId,
         units: Vec<task_core::WorkUnitRow>,
+        task_dep_wait: Option<task_core::TaskWait>,
     ) -> Result<WuDispatchGate, DispatchError> {
         use crate::execution_scheduler::PhaseSettle;
         match crate::execution_scheduler::settle_phase(&units) {
@@ -794,7 +825,10 @@ impl Dispatcher {
                     .first()
                     .and_then(|id| units.into_iter().find(|u| &u.id == id))
                     .map(|u| WuDispatchGate::RunWorkUnit(Box::new(u)))
-                    .unwrap_or(WuDispatchGate::Skip))
+                    .unwrap_or_else(|| match task_dep_wait {
+                        Some(wait) => WuDispatchGate::Wait(Box::new(wait)),
+                        None => WuDispatchGate::Skip,
+                    }))
             }
         }
     }

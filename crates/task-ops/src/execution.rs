@@ -48,6 +48,26 @@ pub fn describe_validation_errors(errors: &[PlanValidationError]) -> String {
 /// - `spec` が D14 の検証に落ちれば `OpsError::Validation`。
 /// - タスクに既に `active` な計画があれば `OpsError::Store(StoreError::InUse)`（E2 は新規のみ。
 ///   replan は Phase E4）。
+/// D14 の検証（`validate_with`）と、/3 の unit の `task:<id>` 依存の検証（ADR 2026-11-11-unit-task-dependencies D4。
+/// 存在・自分の木の外・同じ案件・循環なし）。人・CoS の採用と replan が通る。planner の計画は dispatcher が同じ
+/// `unit_task_deps::plan_errors` で見る。
+fn validate_for_task(
+    store: &dyn TaskStore,
+    task: &task_core::Task,
+    spec: &ExecutionPlanSpec,
+    limits: ExecutionLimits,
+    done_work_units: &[(String, task_core::WorkUnitSpec)],
+    ctx: PlanContext,
+) -> Result<task_core::ValidatedPlan, OpsError> {
+    let validated = validate_with(spec, limits, done_work_units, ctx)
+        .map_err(|errors| OpsError::Validation(describe_validation_errors(&errors)))?;
+    let errors = crate::unit_task_deps::plan_errors(store, task, &validated.spec)?;
+    if !errors.is_empty() {
+        return Err(OpsError::Validation(describe_validation_errors(&errors)));
+    }
+    Ok(validated)
+}
+
 pub fn adopt_plan(
     store: &dyn TaskStore,
     task_id: TaskId,
@@ -91,8 +111,7 @@ pub fn adopt_plan_with_children(
         origin,
         depth: task_core::tree::depth_of(&task),
     };
-    let validated = validate_with(&spec, limits, &[], ctx)
-        .map_err(|errors| OpsError::Validation(describe_validation_errors(&errors)))?;
+    let validated = validate_for_task(store, &task, &spec, limits, &[], ctx)?;
 
     let plan_id = new_id();
     let created_at = format_rfc3339(now)?;
@@ -351,8 +370,7 @@ pub fn prepare_human_plan_adoption(
         origin: PlanOrigin::Human,
         depth: task_core::tree::depth_of(&task),
     };
-    let validated = validate_with(&spec, limits, &[], ctx)
-        .map_err(|errors| OpsError::Validation(describe_validation_errors(&errors)))?;
+    let validated = validate_for_task(store, &task, &spec, limits, &[], ctx)?;
     let mut adopt_limits = limits;
     let (validated, outcome) = crate::tree_plan::unit_gate_plan(
         store,
@@ -624,8 +642,7 @@ pub fn plan_replan(
         origin,
         depth: task_core::tree::depth_of(&task),
     };
-    let validated = validate_with(&spec, limits, &done_work_units, ctx)
-        .map_err(|errors| OpsError::Validation(describe_validation_errors(&errors)))?;
+    let validated = validate_for_task(store, &task, &spec, limits, &done_work_units, ctx)?;
 
     let internal = task_core::internal_view(&validated.spec).into_owned();
     // ADR 2026-10-22-stalled-auto-replan D7: 統合の失敗からの自動 replan に、done の unit の `checks` しか変えない

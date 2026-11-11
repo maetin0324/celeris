@@ -90,8 +90,8 @@ credentiald 側の試験（`crates/celeris-credentiald/src/injection_ipc.rs` の
 - `cargo test -p task-worker --lib launcher_run::tests::launcher_login::` を 3 回 → 3 回とも 7 passed; 0 failed
 - `cargo test -p celeris-credentiald --lib first_request_tests` → 2 passed（16.0 秒）
 - `cargo fmt --all -- --check` → exit 0、`cargo clippy --workspace -- -D warnings` → exit 0
-- `bash scripts/dev/test-affected.sh` → TEST_AFFECTED_RESULT
-- `sh scripts/dev/progress-index.sh --check` → PROGRESS_CHECK_RESULT
+- `bash scripts/dev/test-affected.sh` → exit 0（nextest 5953 tests run: 5953 passed、22 skipped。web は tsc -b と vitest 104 files・712 tests passed、node --test も合格。repo_health_gate: all checks passed）
+- `sh scripts/dev/progress-index.sh --check` → exit 0
 
 ## 提案
 

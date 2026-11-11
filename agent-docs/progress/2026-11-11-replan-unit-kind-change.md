@@ -65,7 +65,8 @@ completed: 2026-11-11
 
 - `cargo nextest run -p task-dispatch tree_kind_change` → 3 passed
 - `cargo nextest run -p task-core kind_change_errors` → 1 passed
-- `bash scripts/dev/test-affected.sh` → 下の「提出時の検査」に記す
+- `bash scripts/dev/test-affected.sh` → exit 0（nextest 8218 passed・23 skipped、test-ts-verify 20 passed、repo-health verdict=pass
+  〈worsened=0〉）
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
 - 全体の試験（`cargo nextest run --workspace`）は走らせていない（ADR 2026-10-20-full-tests-at-release-only）。

@@ -11,7 +11,7 @@ task 01M6TYVJT0Z1CBGNK8VTNK8ZJH の repair WorkUnit repair-settings-2 の記録�
 
 ## 指摘
 
-- `health:size.responsibility-growth:5ac03d663ce8b3be`。module `crates/task-dispatch/src/dispatcher` の本体の行（空行・注釈・use・mod 宣言を除く）が段の基点 35116 → 統合後の HEAD 35117。上限 8000 を超えた module は 1 行でも増えると落ちる。
+- `health:size.responsibility-growth`（段 settings の統合の指摘）。module `crates/task-dispatch/src/dispatcher` の本体の行（空行・注釈・use・mod 宣言を除く）が段の基点 35116 → 統合後の HEAD 35117。上限 8000 を超えた module は 1 行でも増えると落ちる。
 - 増えたのは commit『phase 1: fold WorkerAdapter with_* into configure(AdapterSettings)』（cos_chat/launch.rs +11、route_launch.rs +7、worker_task.rs -16）。launcher-login-fix は無関係。
 - repair-settings-1 は直す file（task-dispatch と task-worker/src/adapter.rs）が範囲外として plan_issue で返した。operator が comment（2026-11-11T02:16Z）で直し方と範囲（R2 の write_set の 5 file と adapter.rs）を示した。
 
@@ -57,7 +57,7 @@ task 01M6TYVJT0Z1CBGNK8VTNK8ZJH の repair WorkUnit repair-settings-2 の記録�
 
 ## 未解決事項
 
-- この WU の範囲外差分の検査（objective の正規表現）は launcher-login-fix の write_set（browser_launcher・credentiald など）を写したもので、operator が認めた 5 file と `crates/task-worker/src/adapter.rs`・`lib.rs` に合わない。この検査は exit 1（out of scope）になる。operator の comment の範囲で直したので、file は変えていない。`lib.rs` は adapter.rs の新しい関数の公開（`pub use`）の 1 行だけ。
+- この WU の範囲外差分の検査（objective の正規表現）は launcher-login-fix の write_set（browser_launcher・credentiald など）を写したもので、operator が認めた 5 file と `crates/task-worker/src/adapter.rs`・`lib.rs` に合わない。この検査は exit 1（out of scope）になる。operator の comment の範囲で直したので、file は変えていない。`lib.rs` の変更は adapter.rs の新しい関数を公開する `pub use` の欄だけ。
 
 ## 提案
 

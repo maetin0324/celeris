@@ -16,6 +16,10 @@ use nix::libc;
 /// root means only the subuid can remove its own files there).
 const CLEANUP_SCRIPT: &CStr = c"status=0; for d in output home run actions profile tmp; do [ -d \"$d\" ] || continue; /bin/rm -rf -- \"$d\"/* \"$d\"/.[!.]* \"$d\"/..?* || status=1; done; /bin/rm -rf -- ./.[!.]* ./..?* || status=1; exit \"$status\"";
 
+/// Chrome が動く userns の内側の UID / GID（ADR-0115 の `1000 → S`）。launcher が作る 2 map の
+/// 内側 ID、bwrap の `--uid` / `--gid`、daemon が観測した map から runtime UID を引く鍵の正本。
+pub const INNER_ID: u32 = 1000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Mapping {
     pub host_id: u32,
@@ -29,14 +33,14 @@ impl Mapping {
             "0".into(),
             self.host_id.to_string(),
             "1".into(),
-            "1000".into(),
+            INNER_ID.to_string(),
             self.sub_id.to_string(),
             "1".into(),
         ]
     }
 
     fn expected(self) -> String {
-        format!("0 {} 1\n1000 {} 1\n", self.host_id, self.sub_id)
+        format!("0 {} 1\n{INNER_ID} {} 1\n", self.host_id, self.sub_id)
     }
 }
 
@@ -215,8 +219,8 @@ pub fn create() -> io::Result<UserNamespace> {
                 libc::_exit(0);
             }
             if libc::chdir(path.as_ptr().cast()) != 0
-                || libc::setresgid(1000, 1000, 1000) != 0
-                || libc::setresuid(1000, 1000, 1000) != 0
+                || libc::setresgid(INNER_ID, INNER_ID, INNER_ID) != 0
+                || libc::setresuid(INNER_ID, INNER_ID, INNER_ID) != 0
             {
                 libc::_exit(1);
             }

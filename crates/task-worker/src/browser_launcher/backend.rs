@@ -344,8 +344,8 @@ fn maps_match(pid: i32, uid: userns::Mapping, gid: userns::Mapping, forbidden: &
     };
     // launcher から見た入れ子の map: 内側 1000 → subuid / subgid の 1 行だけ。
     // launcher 自身（host_id）は Chrome の userns には map されない。
-    let expected_u = vec![vec![1000, uid.sub_id, 1]];
-    let expected_g = vec![vec![1000, gid.sub_id, 1]];
+    let expected_u = vec![vec![userns::INNER_ID, uid.sub_id, 1]];
+    let expected_g = vec![vec![userns::INNER_ID, gid.sub_id, 1]];
     normalize(&u) == expected_u
         && normalize(&g) == expected_g
         && forbidden

@@ -378,15 +378,6 @@ impl FrameRelay {
         self.stop.store(true, Ordering::SeqCst);
         self.slot.close();
     }
-
-    /// 閉じてから thread の終わりを待つ（試験用。本番は frame 源の終わりを待たない）。
-    #[cfg(test)]
-    pub fn close_and_join(mut self) {
-        self.close();
-        if let Some(t) = self.thread.take() {
-            let _ = t.join();
-        }
-    }
 }
 
 impl Drop for FrameRelay {

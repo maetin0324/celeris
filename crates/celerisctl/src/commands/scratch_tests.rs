@@ -1,6 +1,6 @@
 use super::*;
 
-/// `[dispatch] min_free_disk_mb = 0`: gc・lease の判定を host の空き（tmpfs の /tmp など）から切り離す。
+/// `[dispatch] min_free_disk_pct = 0`: gc・lease の判定を host の空き（tmpfs の /tmp など）から切り離す。
 fn config(tmp: &Path) -> PathBuf {
     let path = tmp.join("config.toml");
     std::fs::write(

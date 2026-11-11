@@ -5,7 +5,7 @@
 //! group_key `disk:<path>`）、`critical_pct`（既定 95%）以上で受信箱（`disk_full`。`disk_watch_state` の
 //! `critical` の行から派生）に出す。**LLM は呼ばない。** 付記 A4（2026-10-09）: `warn` の通知には大きい
 //! target の上位を載せ（[`TargetCensus`]）、`critical` のあいだは新しい coding run を起こさない
-//! （ADR-0074 の `min_free_disk_mb` は全体の停止のまま）。
+//! （ADR-0074 の全体の停止は `[dispatch] min_free_disk_pct` の空きの下限のまま。ADR 2026-11-11-disk-aware-dispatch D2）。
 //!
 //! - 状態は SQLite の `disk_watch_state`（[`task_core::DiskWatchStore`]）。daemon のメモリに持つのは
 //!   測る間隔の時刻と直近の critical 判定。

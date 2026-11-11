@@ -4,8 +4,10 @@
 //!   新しい target を作る run を始めず `ready` のまま待たせる。repo の見込みは同じ `repo_key` の owner の測った大きさの
 //!   最大（seed は数えない）。worker run が 1 本も走っていなければ 1 本は通す（詰まらない）。
 //! - D2: 予備（空きの下限）は filesystem の容量 × `[dispatch] min_free_disk_pct`（[`min_free_bytes`]）。
-//! - D4: 見込みは `ScratchStatus.admission`（[`forecast`]）。待たせている run は [`Gate`] のメモリが正本で、変わったら pool
-//!   の `admission.json` に書き出す（`celerisctl scratch status` は [`read_held`] で読む）。
+//! - D4: 見込みは `ScratchStatus.admission`（[`forecast`]）。待たせている run の正本は daemon の [`Gate`] のメモリだけで、
+//!   file には書かない（同じ pool を見る verify の daemon が上書きできない）。daemon の snapshot
+//!   （`GET /api/v1/metrics/scratch`）を組むときに [`Gate::with_held`] で `held` を埋める。pool の走査だけで組む status
+//!   （`celerisctl scratch status`）の `held` は `None`（分からない）。
 //!
 //! dispatcher の module の外に置く（Dispatcher の field・method を増やさない）。**LLM は呼ばない。** 判定は注入できる
 //! 値（[`Inputs`]）だけで決まる。
@@ -21,9 +23,6 @@ use task_ops::daemon::{
     ScratchAdmissionView, ScratchHeldRunView, ScratchOwnerForecastView, ScratchOwnerView,
     ScratchStatus,
 };
-
-/// pool の根に daemon が書き出す、待たせている run の一覧。
-pub const HELD_FILE: &str = "admission.json";
 
 /// D2: filesystem の容量 `total` に対する空きの下限（byte）。`pct` が 0 以下なら 0（無効）。
 pub fn min_free_bytes(total: u64, pct: f64) -> u64 {
@@ -92,8 +91,8 @@ fn scaled(bytes: u64, ratio: f64) -> u64 {
     ((bytes as f64) * ratio).ceil() as u64
 }
 
-/// D1/D4: 見込みを組む。`held` は待たせている run（[`read_held`] か [`Gate::held_views`]）。
-pub fn forecast(inputs: &Inputs, held: Vec<ScratchHeldRunView>) -> ScratchAdmissionView {
+/// D1/D4: 見込みを組む。`held` は待たせている run（daemon の [`Gate::held_views`]。pool の走査だけなら `None`）。
+pub fn forecast(inputs: &Inputs, held: Option<Vec<ScratchHeldRunView>>) -> ScratchAdmissionView {
     let mut expected_by_repo: BTreeMap<String, u64> = BTreeMap::new();
     for s in &inputs.samples {
         let e = expected_by_repo.entry(s.repo_key.clone()).or_insert(0);
@@ -220,7 +219,6 @@ struct GateState {
     holds: BTreeMap<HoldKey, ScratchHeldRunView>,
     seen: BTreeSet<HoldKey>,
     admitted_bytes: u64,
-    published: Option<Vec<ScratchHeldRunView>>,
     /// 待ち始めの記録（log）を残した回数（試験が 1 回だけかを確かめる）。
     notes: u64,
 }
@@ -230,22 +228,20 @@ impl Gate {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// pass の始め: 前の pass で判定に来なかった run（始まった・`ready` でなくなった）の記録を消し、通した量を 0 に
-    /// 戻す。一覧が変わっていれば `pool_root` の `admission.json` に書き出す。
-    pub fn begin_pass(&self, pool_root: Option<&Path>) {
+    /// 候補を照合する pass の始め（枠が埋まって照合しない pass では呼ばない。記録はそのまま残る）: 前の pass で判定に
+    /// 来なかった run（始まった・`ready` でなくなった）の記録を消し、通した量を 0 に戻す。
+    pub fn begin_pass(&self) {
         let mut st = self.state();
         let seen = std::mem::take(&mut st.seen);
         st.holds.retain(|k, _| seen.contains(k));
         st.admitted_bytes = 0;
-        let held: Vec<ScratchHeldRunView> = st.holds.values().cloned().collect();
-        if let Some(root) = pool_root
-            && st.published.as_ref() != Some(&held)
-        {
-            match write_held(root, &held) {
-                Ok(()) => st.published = Some(held),
-                Err(e) => tracing::warn!(error = %e, "disk forecast: cannot write the held runs"),
-            }
-        }
+    }
+
+    /// D4: daemon の snapshot の scratch の status（pool の走査で組んだ `view`）に、待たせている run をメモリから載せる。
+    pub fn with_held(&self, view: Option<&ScratchStatus>) -> Option<ScratchStatus> {
+        let mut status = view?.clone();
+        status.admission.held = Some(self.held_views());
+        Some(status)
     }
 
     /// 待たせている run（task・WU の順）。
@@ -261,7 +257,7 @@ impl Gate {
     /// 判定に使う見込み。`probe` があればそれ、無ければ scratch の走査の結果（scratch が無効なら `None`）。
     pub fn forecast(&self, view: Option<&ScratchStatus>) -> Option<ScratchAdmissionView> {
         match &self.probe {
-            Some(probe) => Some(forecast(&probe(), Vec::new())),
+            Some(probe) => Some(forecast(&probe(), None)),
             None => view.filter(|v| v.enabled).map(|v| v.admission.clone()),
         }
     }
@@ -355,22 +351,6 @@ impl Gate {
     }
 }
 
-fn write_held(root: &Path, held: &[ScratchHeldRunView]) -> std::io::Result<()> {
-    let body = serde_json::to_vec_pretty(held).map_err(std::io::Error::other)?;
-    let tmp = root.join(format!(".{HELD_FILE}.tmp"));
-    std::fs::create_dir_all(root)?;
-    std::fs::write(&tmp, body)?;
-    std::fs::rename(&tmp, root.join(HELD_FILE))
-}
-
-/// daemon が書き出した待たせている run（無い・読めなければ空）。
-pub fn read_held(root: &Path) -> Vec<ScratchHeldRunView> {
-    std::fs::read(root.join(HELD_FILE))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -416,7 +396,7 @@ mod tests {
                     sample("task-d", "other", true, Some(5 * GB)),
                 ],
             ),
-            Vec::new(),
+            None,
         );
         assert_eq!(v.expected_by_repo.get("ap"), Some(&(100 * GB)));
         assert_eq!(v.running_growth_bytes, 60 * GB + 100 * GB);
@@ -436,7 +416,7 @@ mod tests {
             ],
         );
         i.ratio = 0.5;
-        let v = forecast(&i, Vec::new());
+        let v = forecast(&i, None);
         assert_eq!(v.running_growth_bytes, 20 * GB);
         assert_eq!(need_bytes(&v, "task-new", "ap"), 50 * GB);
     }
@@ -451,7 +431,7 @@ mod tests {
                     sample("task-b", "ap", true, Some(80 * GB)),
                 ],
             ),
-            Vec::new(),
+            None,
         );
         // 150 − 20 − 0 − 100 = 30 ≥ 30: 通す。2 本目は 30 − 100 < 30: 待つ。
         assert_eq!(
@@ -473,22 +453,44 @@ mod tests {
         assert_eq!(decide(&v, "task-z", "unknown", 0, 1), Decision::Skip);
     }
 
+    /// 不変条件（D4）: daemon の status の `held` は自分の Gate のメモリだけから来る。別の Gate（同じ pool を見る verify の
+    /// daemon）が空の pass を回しても変わらない。旧い試験 `held_runs_round_trip_through_the_pool_file` は pool の
+    /// `admission.json`（廃止した共有の写し）を確かめていたので、この試験に置き換えた。
     #[test]
-    fn held_runs_round_trip_through_the_pool_file() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(read_held(dir.path()).is_empty());
+    fn the_daemon_status_carries_its_own_held_runs_from_memory() {
         let v = forecast(
             &inputs(10 * GB, vec![sample("task-a", "ap", true, Some(50 * GB))]),
-            Vec::new(),
+            None,
         );
-        let gate = Gate::default();
-        assert!(gate.hold(&v, "t1", None, "ap", 1, SystemTime::UNIX_EPOCH));
-        gate.begin_pass(Some(dir.path()));
-        let held = read_held(dir.path());
-        assert_eq!(held.len(), 1);
-        assert_eq!(held[0].owner, "task-t1");
+        assert_eq!(
+            v.held, None,
+            "a pool scan alone does not know the held runs"
+        );
+        let mut status = crate::scratch_gc::disabled_status(
+            &task_worker::scratch::ScratchSettings::default(),
+            SystemTime::UNIX_EPOCH,
+        );
+        status.admission = v.clone();
+        let (live, verify) = (Gate::default(), Gate::default());
+        assert!(live.hold(&v, "t1", None, "ap", 1, SystemTime::UNIX_EPOCH));
+        live.begin_pass();
+        verify.begin_pass();
+        let held = live.with_held(Some(&status)).and_then(|s| s.admission.held);
+        let owners: Vec<String> = held
+            .unwrap_or_default()
+            .into_iter()
+            .map(|h| h.owner)
+            .collect();
+        assert_eq!(owners, vec!["task-t1".to_string()]);
+        assert_eq!(
+            verify
+                .with_held(Some(&status))
+                .and_then(|s| s.admission.held),
+            Some(Vec::new())
+        );
+        assert_eq!(live.with_held(None), None);
         // 次の pass で判定に来なければ消える。
-        gate.begin_pass(Some(dir.path()));
-        assert!(read_held(dir.path()).is_empty());
+        live.begin_pass();
+        assert!(live.held_views().is_empty());
     }
 }

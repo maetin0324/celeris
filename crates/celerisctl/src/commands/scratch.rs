@@ -515,14 +515,20 @@ fn print_status(s: &task_ops::daemon::ScratchStatus) {
     for o in a.owners.iter().filter(|o| o.running) {
         outln!("  growth {} {}", o.owner, gb(o.growth_bytes));
     }
-    for h in &a.held {
-        outln!(
-            "  held {} (need {}, since {}): {}",
-            h.owner,
-            gb(h.need_bytes),
-            h.since,
-            h.reason
-        );
+    match &a.held {
+        Some(held) => {
+            for h in held {
+                outln!(
+                    "  held {} (need {}, since {}): {}",
+                    h.owner,
+                    gb(h.need_bytes),
+                    h.since,
+                    h.reason
+                );
+            }
+        }
+        // 待たせている run は daemon の判定のメモリにだけある（pool の走査では分からない）。
+        None => outln!("  held: only the daemon knows (GET /api/v1/metrics/scratch)"),
     }
     if !s.legacy.is_empty() {
         outln!("legacy ({}):", s.legacy.len());

@@ -5763,7 +5763,7 @@ export type ScratchAdmissionView = {
   [key: string]: number;
 };
   "free_bytes"?: number | null;
-  "held": Array<ScratchHeldRunView>;
+  "held"?: Array<ScratchHeldRunView> | null;
   "owners": Array<ScratchOwnerForecastView>;
   "ratio": number;
   "reserve_bytes": number;

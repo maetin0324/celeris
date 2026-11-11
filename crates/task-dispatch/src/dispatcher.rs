@@ -507,7 +507,8 @@ pub struct DispatchConfig {
     /// `"infra failure ×N: …"` として打ち切る（`Trigger::LeaseExpired` は使わなくなった。
     /// `reclaim_expired_leases` もこの上限を通す）。既定 5。
     pub max_infra_retries: u32,
-    /// 新規 run の開始を許す各 filesystem の最小空き容量 (MiB)。0 で無効。
+    /// ADR 2026-11-11-disk-aware-dispatch D2: 新規 run の開始を許す各 filesystem の空きの下限（容量に対する %）。
+    /// 0 で無効。
     pub min_free_disk_pct: f64,
     /// ADR-0016 D1: `[[roles]]`。run 開始時に `RunContext.role`（指示文）を載せ、委譲された子の既定に使う。
     pub roles: Vec<RoleSpec>,
@@ -2566,10 +2567,6 @@ impl Dispatcher {
         self.unroutable.clear();
         self.cluster_waiting.clear();
         self.dispatch_waits.clear();
-        let pool = self
-            .scratch_active()
-            .then(|| self.config.scratch.dir.clone());
-        self.scratch.admission.begin_pass(pool.as_deref());
         // ADR-0089（Phase R6-5）: 非 CoS の枠が埋まっていても、CoS の対話 run の枠が空いていれば走査する。
         if !self.run_load().any_slot() {
             // 容量切れで照合しなかった tick: write-set の待機の数えを戻さない（2026-10-03-write-set-no-starvation）。
@@ -2580,6 +2577,7 @@ impl Dispatcher {
             }
             return Ok(0);
         }
+        self.scratch.admission.begin_pass();
         // 上位から見て見送りが続いても後続を試せるよう、窓は広めに取る。
         let window = self.ready_window();
         let ready_started = Instant::now();

@@ -82,9 +82,16 @@ release.sh は終了時（成功・失敗とも。EXIT trap）に、この build
 
 `ScratchStatus.admission`（`GET /api/v1/metrics/scratch` と `celerisctl scratch status`）に、空き・予備・係数・
 走っている target の増分の合計・repo ごとの見込み・owner ごとの見込み（大きさ・見込み・増分）・待たせている run
-（task・WU・owner・repo・見込み・理由・待ち始め）を出す。待たせている run は daemon のメモリが正本で、daemon は
-変わったときに pool の `admission.json` に書き出す（`celerisctl` はこれを読む。daemon が止まっていれば古い内容を
-`observed_at` 付きで見せる）。
+（task・WU・owner・repo・見込み・理由・待ち始め）を出す。待たせている run の正本は daemon の判定のメモリ
+（`disk_admission::Gate`）だけで、file には書かない。daemon は snapshot（`GET /api/v1/metrics/scratch`）を組むときに
+メモリから `held` を埋める。`celerisctl scratch status` は pool を走査して組むので、見込みは出すが `held` は
+`null`（分からない）とし、表では「daemon だけが知る」と API を示す（`last_gc` と同じ扱い）。
+
+付記（2026-11-11、review の指摘）: 初版は pool の `admission.json` に書き出し、daemon の status もそれを読んでいた。
+verify の daemon（`celeris --mode verify`）は本番と同じ config・同じ scratch pool で dispatch の pass を回すので、
+最初の pass で空の一覧を書き、本番の status の `held` が実際の待ちと食い違った。共有の写しを廃止し、メモリだけを
+正本にした。待たせている run の記録は、候補を照合する pass の始めに、前の pass で判定に来なかった run の分を消す
+（枠が埋まって照合しない pass では消さない）。
 
 ## 結果
 

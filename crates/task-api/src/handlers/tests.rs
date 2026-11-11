@@ -193,7 +193,7 @@ async fn metrics_scratch_matches_the_status_schema() {
                 expected_bytes: 18 << 30,
                 growth_bytes: 0,
             }],
-            held: vec![task_ops::daemon::ScratchHeldRunView {
+            held: Some(vec![task_ops::daemon::ScratchHeldRunView {
                 task_id: "01XYZ".into(),
                 work_unit_id: None,
                 owner: "task-01XYZ".into(),
@@ -201,7 +201,7 @@ async fn metrics_scratch_matches_the_status_schema() {
                 need_bytes: 18 << 30,
                 reason: "free − running growth − admitted − need < reserve".into(),
                 since: "2026-09-28T00:00:00Z".into(),
-            }],
+            }]),
         },
         owners: vec![task_ops::daemon::ScratchOwnerView {
             owner: "task-01ABC".into(),

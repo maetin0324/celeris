@@ -665,7 +665,7 @@ pub fn build_status(
                 ratio: settings.forecast_disk_ratio,
                 samples: crate::disk_admission::samples_from_owners(&owners),
             },
-            crate::disk_admission::read_held(&settings.dir),
+            None,
         ),
         owners,
         legacy,

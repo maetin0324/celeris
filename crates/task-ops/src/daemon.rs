@@ -353,8 +353,9 @@ pub struct ScratchAdmissionView {
     pub expected_by_repo: std::collections::BTreeMap<String, u64>,
     /// owner ごとの見込み（owner の文字列順。repo の分からない owner は載せない）。
     pub owners: Vec<ScratchOwnerForecastView>,
-    /// 空きの見込みが足りず `ready` のまま待たせている run（daemon が pool の `admission.json` に書き出したもの）。
-    pub held: Vec<ScratchHeldRunView>,
+    /// 空きの見込みが足りず `ready` のまま待たせている run（直近の照合した pass。正本は daemon の判定のメモリで、daemon の
+    /// snapshot だけが埋める）。pool の走査だけで組んだ status（`celerisctl scratch status`）では `None`（分からない）。
+    pub held: Option<Vec<ScratchHeldRunView>>,
 }
 
 /// owner 1 つの見込み。

@@ -588,7 +588,7 @@ fn inherited_sccache_env_passes_through() {
     );
 }
 
-/// ADR-0075 §5 G1 受け入れ条件 5: 空きが `min_free_disk_mb` 未満なら、新しい run の前に緊急 GC（P0 以外を
+/// ADR-0075 §5 G1 受け入れ条件 5: 空きが下限（容量 × `min_free_disk_pct`）未満なら、新しい run の前に緊急 GC（P0 以外を
 /// 目標まで rename）→ 空きが戻るまで dispatch を保留し「ディスク不足 (infra)」を 1 回だけ通知 → 戻れば自動解除。
 /// 消せるものが P0 だけなら通知の本文に pinned の一覧が付く。
 #[tokio::test]

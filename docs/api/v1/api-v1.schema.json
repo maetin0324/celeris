@@ -28884,11 +28884,14 @@
           ]
         },
         "held": {
-          "description": "空きの見込みが足りず `ready` のまま待たせている run（daemon が pool の `admission.json` に書き出したもの）。",
+          "description": "空きの見込みが足りず `ready` のまま待たせている run（直近の照合した pass。正本は daemon の判定のメモリで、daemon の\nsnapshot だけが埋める）。pool の走査だけで組んだ status（`celerisctl scratch status`）では `None`（分からない）。",
           "items": {
             "$ref": "#/$defs/ScratchHeldRunView"
           },
-          "type": "array"
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "owners": {
           "description": "owner ごとの見込み（owner の文字列順。repo の分からない owner は載せない）。",
@@ -28920,8 +28923,7 @@
         "ratio",
         "running_growth_bytes",
         "expected_by_repo",
-        "owners",
-        "held"
+        "owners"
       ],
       "type": "object"
     },

@@ -15,7 +15,7 @@ updated: 2026-11-11
 2. 責務 owner: dispatch の前の判定（`dispatcher/dispatch_run.rs` の起動前の段）と scratch の見積り（`scratch_gc::build_status`）。release-build は `scripts/selfdeploy/lib.sh` の刈り込み。
 3. 既存の再利用先: scratch の走査と測定（lease の `size_bytes`、`ScratchOwnerView`）、`fs_stats`、`sd_release_prune_stale_test_binaries`・`sd_release_prune_enforce_limit`。
 4. 選択肢: (a) 今の空きの下限を上げるだけ、(b) 見込みで判定する。(a) は走っている target の増分を見ないので (b) を採った。見込みは repo の最近の最大（operator の計測で seed との共有はほぼ 0）。
-5. 新しい状態: `ScratchState.admission`（`disk_admission::Gate`。待たせている run のメモリ〈中の Mutex。dispatch の途中で `&self` から呼ぶため〉と pool の `admission.json` への書き出し）。試験用の口 `Gate.probe`（空きと大きさを注入）。config `[dispatch] min_free_disk_pct`・`[scratch] forecast_disk_ratio`。Dispatcher の field・method は増やしていない（health の `size.responsibility-growth`）。
+5. 新しい状態: `ScratchState.admission`（`disk_admission::Gate`。待たせている run のメモリ〈中の Mutex。dispatch の途中で `&self` から呼ぶため〉。file には書かない）。試験用の口 `Gate.probe`（空きと大きさを注入）。config `[dispatch] min_free_disk_pct`・`[scratch] forecast_disk_ratio`。Dispatcher の field・method は増やしていない（health の `size.responsibility-growth`）。
 6. 撤去対象: `[dispatch] min_free_disk_mb`（読み込みエラー）、`dispatcher.rs` の `free_disk_mb`、今の空きだけで決める dispatch。
 7. 不変条件と試験: `dispatcher/tests/disk_forecast.rs`（待つ・戻れば始まる・続きは増分・0 本なら通す・log 1 回・通知なし）、`disk_admission.rs` の単体試験、`config/tests.rs`（旧い欄の拒否・範囲）、`scripts/selfdeploy/tests/release_target_settled_after_build.sh`。
 
@@ -24,7 +24,7 @@ updated: 2026-11-11
 - D1: `crates/task-dispatch/src/disk_admission.rs`（新）。`空き − Σ 走っている target の増分 − 今の pass で通した見込み − この run の見込み ≥ 予備` でなければ run を始めず `ready` のまま待たせる（lease・attempts の前）。見込みは同じ `repo_key` の owner の測った大きさの最大（seed を除く）。続きの run（owner の target がある）は増分だけ。worker run が 0 本なら通す。待ち始めに 1 回だけ `tracing::info!`（`disk forecast: run held`）。通知・受信箱には書かない。呼び出しは `dispatch_run.rs` の write-set の判定の直後（planner・Remote の run は除く）。
 - D2: `[dispatch] min_free_disk_mb` を `[dispatch] min_free_disk_pct`（既定 10、範囲 [0, 100)）に置き換えた。下限 = 容量 × pct。`check_disk_space`（`disk_admission::find_low_disk`）・scratch の GC と実効上限（`run_gc` の `min_free_bytes`）・seed の更新の保留・`celerisctl scratch` が同じ下限を使う。`[scratch] forecast_disk_ratio`（既定 1.0、範囲 (0, 1]）を足した。
 - D3: release-build の target が上限を超えて残る理由: `sd_release_prune_enforce_limit` は release.sh の build の前にしか呼ばれず、build で育った target（本番 88.0 GB）はそのまま lease に残っていた。adopt の経路は原因ではない（adopt の後も開始時の確認は通る）。release.sh の EXIT trap に `sd_release_target_settle`（この build の開始時刻より古い workspace の成果物の刈り込みと上限の確認）を足した。
-- D4: `ScratchStatus.admission`（`ScratchAdmissionView`: 空き・予備・係数・増分の合計・repo の見込み・owner ごとの見込み・待たせている run）。`GET /api/v1/metrics/scratch` と `celerisctl scratch status`（`--json` と表の両方）に出る。API schema（`docs/api/v1/api-v1.schema.json`）と web の生成型を作り直した。
+- D4: `ScratchStatus.admission`（`ScratchAdmissionView`: 空き・予備・係数・増分の合計・repo の見込み・owner ごとの見込み・待たせている run）。`GET /api/v1/metrics/scratch` と `celerisctl scratch status`（`--json` と表の両方）に出る。待たせている run（`held`）の正本は daemon の `Gate` のメモリだけで、daemon の snapshot が `Gate::with_held` で埋める。`celerisctl scratch status` の `held` は `null`（表は「only the daemon knows」と API を示す）。API schema（`docs/api/v1/api-v1.schema.json`）と web の生成型を作り直した。
 - 文書: ADR-0075 に付記、`docs/ops/local-disk-growth.md`・`docs/ops/build-tmp-hygiene.md`・`docs/architecture-map.md`・`config/celeris.example.toml`。
 
 commit（件名）:
@@ -32,6 +32,7 @@ commit（件名）:
 - `phase 1: hold runs whose cargo target would not fit the disk forecast, make the free-space floor proportional, cap release-build after the build`
 - `phase 1: keep the dispatcher module from growing (gate behind &self, disk paths label in disk_watch) and break the scratch_gc cycle`（health の `size.responsibility-growth`〈`dispatch_one` と dispatcher module の行〉と `deps.cycle`〈disk_admission ↔ scratch_gc〉を直した。`dispatch_one` の disk critical の path の組み立てを `disk_watch::paths_label` に移し、`find_low_disk` は statvfs の関数を引数で受ける）
 - `phase 1: 進捗に検査の結果を書く`
+- `phase 2: keep the held runs only in the daemon's memory and drop the leftover min_free_disk_mb references`（attempt 2。review の指摘 2 件を直した。(1) 初版は待たせている run を pool の `admission.json` に書き、daemon の status もそれを読んでいた。verify の daemon は同じ pool で dispatch の pass を回すので、空の一覧で本番の status を上書きした。file を廃止し、daemon の snapshot がメモリから埋める。記録の刈り込みは候補を照合する pass だけで行う。(2) 消した欄 `min_free_disk_mb` が `tests/e2e/tests/account_pool_scenarios.rs` の試験 config に残り、release gate の `nextest --workspace` で celeris が読み込みエラーになっていた。`min_free_disk_pct = 0` に直し、`DispatchConfig.min_free_disk_pct`・`disk_watch.rs`・celerisctl の `scratch_tests.rs`・`dispatcher/tests/build_cache.rs` の説明も直した）
 
 ## 証拠
 

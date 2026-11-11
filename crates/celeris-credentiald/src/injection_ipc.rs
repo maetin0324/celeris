@@ -799,7 +799,7 @@ impl InjectionService {
             .any(|(pid, st, _)| *pid == peer.pid && start == Some(*st))
     }
 
-    /// 1 接続の最初の要求が読めるまで待つ（ADR-0109 D1 付記 2026-11-11）。要求の byte・peer の
+    /// 1 接続の最初の要求が読めるまで待つ（ADR 2026-11-11-credentiald-passed-stream-wait D1〜D3）。要求の byte・peer の
     /// close・接続の異常のどれかが来たら `Ok` を返し、中身の照合は [`read_request`] と
     /// [`Self::handle`] に任せる。[`IO_TIMEOUT`] の間に何も来ないとき、待ち続けるのは peer が
     /// 開いた auth section を持つ登録済み controller の間だけで、[`PASSED_STREAM_BACKSTOP`] で
@@ -1120,7 +1120,7 @@ pub(crate) fn read_request(fd: i32) -> Result<(Vec<u8>, Vec<OwnedFd>), InjectCod
     Ok((body, fds))
 }
 
-pub(crate) fn write_reply(stream: &mut std::os::unix::net::UnixStream, reply: &InjectionReply) {
+pub(crate) fn write_reply(mut stream: &std::os::unix::net::UnixStream, reply: &InjectionReply) {
     use std::io::Write;
     if let Ok(body) = serde_json::to_vec(reply) {
         let mut out = (body.len() as u32).to_be_bytes().to_vec();
@@ -1325,7 +1325,7 @@ mod attested_tests {
 
 #[cfg(test)]
 mod first_request_tests {
-    //! ADR-0109 D1 付記 2026-11-11: 渡された injection 接続の最初の要求の待ち。
+    //! ADR 2026-11-11-credentiald-passed-stream-wait D1〜D3: 渡された injection 接続の最初の要求の待ち。
     use super::*;
     use std::io::Write;
     use std::os::unix::net::UnixStream;

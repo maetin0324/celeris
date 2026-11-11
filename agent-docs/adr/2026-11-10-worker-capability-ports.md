@@ -229,3 +229,11 @@ userns・実 browser の要る試験（task-api の `browser_e2e.rs`・`browser_
 - 通知・観測だけを使う sink と harness の adapter は、型の上で Browser の認可・制御・secret の能力を持たなくなる。browser の run に能力を渡し忘れると、harness の spawn の前に `AdapterError` で止まる。
 - with_* の写し 26 個（試験 31 個）と browser-specialist の転送 5 個が `configure` 1 つずつになり、`prepare_run_adapter` の match 4 つが 1 つになる。
 - 置き場所の正本: 通知・観測は `adapter.rs` の `EventSink`、Browser の認可・secret は `browser_policy.rs` の `BrowserAuthority`、Browser の制御・live は `browser_live.rs` の `BrowserControl`、adapter の設定は `adapter.rs` の `configure`。
+
+## 付記（2026-11-11、unit dup-cleanup）
+
+D5 5a の「B0 の dup 4 件」は unit dups ではなく、それを置き換えた unit dup-cleanup が実装した（dups は範囲検査の開始 snapshot に並行の変更が混じったため superseded）。
+
+- userns の内側の UID / GID（ADR-0115 の `1000 → S`）の定数は `crates/task-worker/src/browser_launcher/userns.rs` の `pub const INNER_ID: u32 = 1000;` の 1 つにした。2 map を作る `Mapping::helper_args`・`Mapping::expected`、holder の `setresgid` / `setresuid`、`browser_launcher/backend.rs` の `maps_match` の期待する map、`browser_runtime.rs` の bwrap の `--uid` / `--gid`（`INNER_ID.to_string()`）と spawn の子の `setresgid` / `setresuid`、`browser_launcher_run.rs` の `runtime_facts` がこの定数を使う。`browser_runtime.rs` の `SANDBOX_UID`（pub・未参照）と、`browser_runtime.rs`・`browser_launcher_run.rs` の private な `INNER_ID` は消した。値と map の形は変えていない。
+- 未参照の 3 つを消した: `browser_live.rs` の `FrameRelay::close_and_join`（`#[cfg(test)]`、試験からも呼ばれていない）、task-core `browser.rs` の `normalize_host_pattern`、`celeris-credentiald` の `lib.rs` の `CredentialUseResult`（struct と唯一の impl `from_result` の両方）。消す前に `crates`・`web`・`control-ts`・`scripts` を grep し、定義の他に参照が無いことを確かめた。
+- `CredentialUseResult` は [ADR-0078](0078-browser-execution-capability.md) が LLM に返す結果の interface 名として挙げているが、実装の中で作る所も返す所も無かった（broker は `injection_ipc` の応答と audit の code で結果を返す）。ADR-0078 の本文は書き換えない。credential broker の挙動は変わらない（消したのは呼ばれていない型と関数だけ）。

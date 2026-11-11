@@ -41,7 +41,7 @@ tasks: [01M6TYVJT53598CPKMGSQGA7XM]
 
 ### D2. 1 束の上限
 - 1 束は test target 8 件まで（`inventory.json` の `max_per_bundle`。同じ鍵の組は件数を均して割る）。
-- 束の本体の行の合計は `size.responsibility-growth` の `module_lines`（8000）、1 file は `file_lines`（2000）を超えない。この size 規則の module の単位は `<pkg>/src/<module>` で、`tests/` の file は `external_test` に分類されて数えない（`scripts/dev/repo-health/rules/size_growth.py`、`source-size-report.toml`）ので、束ねで `module_lines` の finding は出ない。それでも上限を置くのは、規則が `tests/` に広がっても新しい違反を出さないため。計画の束で最大は task-api `unmapped_suite_b` の 6 file 3678 行（注釈・空行込み）、最大の file は 1199 行で、どちらも上限の半分以下。
+- 束の本体の行の合計は `size.responsibility-growth` の `module_lines`（8000）、1 file は `file_lines`（2000）を超えない。この size 規則の module の単位は `<pkg>/src/<module>` で、`tests/` の file は `external_test` に分類されて数えない（`scripts/dev/repo-health/rules/size_growth.py`、`source-size-report.toml`）ので、束ねで `module_lines` の finding は出ない。それでも上限を置くのは、規則が `tests/` に広がっても新しい違反を出さないため。計画の束で最大は task-api `unmapped_suite_a` の 8 file 4627 行（注釈・空行込み。付記 reclass で組み直した後）、最大の file は `cos_delivery_suite_c` の `operations.rs` の 1133 行で、どちらも上限の内。
 - `dup.test-fixture`（内容がほぼ同じ試験 file の候補）は束ねでは変わらない（file の中身を変えないため）。
 
 ### D3. process global・env・CWD・時刻の汚染
@@ -51,7 +51,7 @@ tasks: [01M6TYVJT53598CPKMGSQGA7XM]
 
 ### D4. keep・r6 の条件（`inventory.json` の `rules.leaf_order`。先に当たったものが leaf）
 1. keep: D3 の汚染、`scripts/` の `--test`・`-E` か `.config/nextest.toml` の `binary_id` で名前を呼ばれる suite（named_suite。`task-worker::ssh_localhost`・`e2e::cluster_scenarios` の test-group を含む）、file 名の数字（write set の外）、別の target の file を `#[path]` で取り込む・取り込まれる（shares_source_with。`local_machine_settings` と `local_settings_admin`、`llm_routes_admin` と `llm_accounts_admin`・`llm_sources`）、R5 に束ねる leaf の無い crate（celeris-campaign 111 件を含む）、adjust leaf の無い crate での R2〜R4 との競合、束ねる相手の無い 1 件だけの組（singleton_bundle_group）。
-2. r6: `docs/architecture-map.md` の関連試験の列が path を挙げる target（35 件）。地図は R5 の write set の外なので、R5 では動かさず R6 で地図と一緒に動かす。
+2. r6: `docs/architecture-map.md` の表の行が path を挙げる target（keep の理由の無い 55 件。task-api 36・celeris 12・celerisctl 7）。行の path は `scripts/dev/check-architecture-map.py` の `collect_backtick_paths` が集める形で数える（brace の `a/{b,c}.rs` と、path の直後の `（…）` の中の相対 path を含む。付記 reclass）。地図は R5 の write set の外なので、R5 では動かさず R6 で地図と一緒に動かす。
 3. adjust-api・adjust-worker: R2〜R4 の branch が変える file・ADR が名指す target・R2 が変える interface を名指す target。task-worker は R2 の write set と interface が全 target を覆うので、keep でない 9 件を段 final の adjust-worker に置く。
 4. 残りが段 bundle の 4 leaf。keep と r6 の target は動かさないので、R2〜R4 の変更と衝突しない。
 
@@ -79,27 +79,23 @@ tasks: [01M6TYVJT53598CPKMGSQGA7XM]
 
 ## 束ねの表（`inventory.json` の bundle と leaf。base は `inventory.json` の `base_sha`）
 
-### 段 bundle（95 target → 19 束。task-api 70 → 13、celeris 16 → 4、celerisctl 9 → 2）
+### 段 bundle（77 target → 15 束。task-api 56 → 9、celeris 15 → 4、celerisctl 6 → 2）
 | crate | leaf | 束（`tests/<bundle>/`） | 件 | capability group | fixture | target |
 |---|---|---|---|---|---|---|
-| task-api | bundle-api-a | `cos_delivery_suite_a` | 6 | cap-cos-delivery | common | chat_attachments・chat_stream・cos_auth・cos_chat_attach_handoff_kb・cos_chat_attach_pin・cos_chat_triage_scenarios |
-| task-api | bundle-api-a | `cos_delivery_suite_b` | 6 | cap-cos-delivery | common | cos_job_wait_extend・cos_operations・cos_operations_review_report・cos_ops_mutations・cos_ops_projects_cron_changes・cos_ops_projects_cron_docs |
-| task-api | bundle-api-a | `cos_delivery_suite_c` | 6 | cap-cos-delivery | common | cos_ops_registry・cos_plan_conforms_guards・cos_review_rework・cos_routine_answers・cos_triage_override・general_cos_consult |
+| task-api | bundle-api-a | `cos_delivery_suite_a` | 8 | cap-cos-delivery | common | chat_attachments・cos_auth・cos_chat_attach_handoff_kb・cos_chat_triage_scenarios・cos_job_wait_extend・cos_operations_review_report・cos_ops_mutations・cos_ops_projects_cron_changes |
+| task-api | bundle-api-a | `cos_delivery_suite_b` | 7 | cap-cos-delivery | common | cos_ops_projects_cron_docs・cos_ops_registry・cos_plan_conforms_guards・cos_review_rework・cos_routine_answers・cos_triage_override・general_cos_consult |
 | task-api | bundle-api-a | `routing_budget_suite` | 3 | cap-routing-budget | common | project_brief・project_wake_human・project_wake_human_chat |
-| task-api | bundle-api-b | `browser_eval_surface_suite_a` | 5 | cap-browser-eval-surface | common | api_principals・auth_and_guards・browser_doctor・browser_live・browser_restore_deliver |
-| task-api | bundle-api-b | `browser_eval_surface_suite_b` | 5 | cap-browser-eval-surface | common | browser_restore_live_session・campaign_ident・campaign_variant_atomic・mcp_admin・request_lock_counts |
-| task-api | bundle-api-b | `cos_delivery_suite_d` | 8 | cap-cos-delivery | common | daemon_clusters_config・integration_api・integration_principals・notify・operations・single_human_window・task_list_with・task_wait_api |
+| task-api | bundle-api-b | `browser_eval_surface_suite` | 6 | cap-browser-eval-surface | common | api_principals・browser_restore_deliver・browser_restore_live_session・campaign_ident・campaign_variant_atomic・mcp_admin |
+| task-api | bundle-api-b | `cos_delivery_suite_c` | 8 | cap-cos-delivery | common | daemon_clusters_config・integration_api・integration_principals・notify・operations・single_human_window・task_list_with・task_wait_api |
 | task-api | bundle-api-b | `routing_budget_suite_a` | 7 | cap-routing-budget | common | cron_jobs・legacy_routing_events・routing・routing_source_state・routing_stage・saved_credentials・script_exhaustive |
 | task-api | bundle-api-b | `run_worker_suite` | 2 | cap-run-worker | common | repository_required・secrets_admin |
-| task-api | bundle-api-b | `task_plan_suite` | 4 | cap-task-plan | common | lifecycle・task_management・task_tree・tree_adopt |
-| task-api | bundle-api-b | `unmapped_suite_a` | 6 | none | common | approvals・cluster_connect_admin・cluster_settings_admin・concurrency・console・console_instruct |
-| task-api | bundle-api-b | `unmapped_suite_b` | 6 | none | common | conversation・docs・files・genres・memory・organization |
-| task-api | bundle-api-b | `unmapped_suite_c` | 6 | none | common | reports・roles・skills・standby・terminals・unblocks |
+| task-api | bundle-api-b | `unmapped_suite_a` | 8 | none | common | approvals・cluster_settings_admin・concurrency・console・console_instruct・conversation・docs・files |
+| task-api | bundle-api-b | `unmapped_suite_b` | 7 | none | common | genres・memory・roles・skills・standby・terminals・unblocks |
 | celeris | bundle-celeris | `browser_eval_surface_suite` | 3 | cap-browser-eval-surface | none | browser_startup_reap・fake_http・workspace_roots |
-| celeris | bundle-celeris | `cos_delivery_suite` | 8 | cap-cos-delivery | none | cos_chat_stagnation_notify・cos_chat_triage_notify・cos_chat_triage_scenarios・deployment_audit・releases_api・stranded_default_branch・stranded_integration・unpromoted_release |
+| celeris | bundle-celeris | `cos_delivery_suite` | 7 | cap-cos-delivery | none | cos_chat_stagnation_notify・cos_chat_triage_notify・cos_chat_triage_scenarios・deployment_audit・releases_api・stranded_default_branch・stranded_integration |
 | celeris | bundle-celeris | `routing_budget_suite` | 3 | cap-routing-budget | support | script_compare_execution_gate・script_compare_report・tick_scale_baseline |
 | celeris | bundle-celeris | `unmapped_suite` | 2 | none | none | legacy_event_startup・variant_propagation |
-| celerisctl | bundle-ctl | `browser_eval_surface_suite` | 7 | cap-browser-eval-surface | common | bin_smoke・browser_doctor・browser_ledger_release・campaign_connected・cli_resolution・mcp_client_scopes・no_migrate |
+| celerisctl | bundle-ctl | `browser_eval_surface_suite` | 4 | cap-browser-eval-surface | common | browser_doctor・browser_ledger_release・campaign_connected・mcp_client_scopes |
 | celerisctl | bundle-ctl | `unmapped_suite` | 2 | none | common | pipe・skills_import |
 
 - `routing_budget_suite_a` の `legacy_routing_events` は旧い shape の event の replay の契約の試験で、束ねるが消さない（D5-5）。
@@ -108,8 +104,7 @@ tasks: [01M6TYVJT53598CPKMGSQGA7XM]
 ### 段 final（決定 `r-landed` の後。R2〜R4 が main に入ってから `classify.py --write` をやり直し、表を直す）
 | crate | leaf | 束（案） | 件 | target |
 |---|---|---|---|---|
-| task-api | adjust-api | `browser_eval_surface_suite`（R3 の競合が解ければ `browser_eval_surface_suite_b` へ） | 1 | browser_site_policy_db |
-| task-api | adjust-api | `cos_delivery_suite`（同じく `cos_delivery_suite_*` へ） | 4 | cos_operations_domains・cos_ops_admin_config・cos_ops_projects_cron・project_auto_integrate |
+| task-api | adjust-api | `cos_delivery_suite`（R3 の競合が解ければ `cos_delivery_suite_*` へ） | 4 | cos_operations_domains・cos_ops_admin_config・cos_ops_projects_cron・project_auto_integrate |
 | task-worker | adjust-worker | `browser_eval_surface_suite` | 5 | browser_control_gate_wire・browser_live_cross・browser_loopback_prod_build・browser_prod_admission・browser_shared_cdp_events |
 | task-worker | adjust-worker | `unmapped_suite` | 2 | reap_finished_children・ssh_cluster_manual |
 | task-worker | adjust-worker | 1 件だけの組（束ねない） | 2 | browser_action_recovery（fixture `browser_action_recovery.py`）・browser_restore_deliver（fixture `userns_gate`） |
@@ -117,9 +112,9 @@ tasks: [01M6TYVJT53598CPKMGSQGA7XM]
 ### 動かさない target（task-api・celeris・celerisctl）
 | crate | keep | 内訳 | r6 |
 |---|---|---|---|
-| task-api | 18 | 名前で呼ばれる suite 5・`#[path]` の共有 5・数字 4・process global 3・1 件だけの組 3（重複あり） | 20 |
-| celeris | 28 | 数字 16・process global 10・名前で呼ばれる suite 4・1 件だけの組 2・adjust leaf の無い競合 1（重複あり） | 11 |
-| celerisctl | 5 | 1 件だけの組 3・数字 1・process global 1 | 4 |
+| task-api | 17 | 名前で呼ばれる suite 5・`#[path]` の共有 5・数字 4・process global 3・1 件だけの組 2（重複あり） | 36 |
+| celeris | 28 | 数字 16・process global 10・名前で呼ばれる suite 4・1 件だけの組 2・adjust leaf の無い競合 1（重複あり） | 12 |
+| celerisctl | 5 | 1 件だけの組 3・数字 1・process global 1 | 7 |
 
 ## 撤去
 - 束ねた元の target: `crates/<crate>/tests/<target>.rs` は `git mv` で `tests/<bundle>/<target>.rs` へ移すので、元の path に file は残らない。Cargo.toml に `[[test]]` の明示は無いので Cargo.toml は変えない。
@@ -149,8 +144,9 @@ tasks: [01M6TYVJT53598CPKMGSQGA7XM]
 2. 束ごとに `crates/<crate>/tests/<bundle>/main.rs` を作り、支援 module を 1 回だけ宣言する: `#[path = "../common/mod.rs"] mod common;`（celeris は `#[path = "../support/mod.rs"] mod support;`。`mod.rs` を `#[path]` で読むと入れ子の `pub mod cos_ops;` は `tests/common/` から解決される。rustc 1.98、edition 2024 で確認）。target が `#[path]` で読む repo root の `tests/support/*.rs` や他 crate の `tests/userns_gate/mod.rs` も `main.rs` に 1 回だけ宣言し、相対 path は dir が 1 段深くなる分 `../` を 1 つ足す。
 3. 元の file を `git mv crates/<crate>/tests/<target>.rs crates/<crate>/tests/<bundle>/<target>.rs` で動かし、`main.rs` に `mod <target>;` を足す（名前順）。
 4. 動かした file の先頭の `mod common;`（と `#[path] mod …;`）を消し、`use crate::common;`（必要な名前だけ）に置き換える。`use common::*;` と `common::foo()` の形は edition 2018 以降の uniform path でそのまま解決する。試験関数の中身は変えない。使っていない `use` は置かない（clippy の `-D warnings` で落ちる）。
-5. `cargo nextest list -p <crate>` の試験の数を base と比べ（同じであること）、binary の数の前後（例: task-api 114 → 57）を進捗に書く。`cargo nextest run -p <crate> -E 'binary_id(<crate>::<bundle>)'` と `cargo test -p <crate> --test <bundle>` を通す。`cargo test` だけで落ちる target は D3 に従って束から外し、`inventory.json` と進捗に理由を書く。
+5. `cargo nextest list -p <crate>` の試験の数を base と比べ（同じであること）、binary の数の前後（例: task-api 114 → 67）を進捗に書く。`cargo nextest run -p <crate> -E 'binary_id(<crate>::<bundle>)'` と `cargo test -p <crate> --test <bundle>` を通す。`cargo test` だけで落ちる target は D3 に従って束から外し、`inventory.json` と進捗に理由を書く。
 6. `classify.py --verify-leaf <leaf>`・`cases.py --crate <crate> --base "$CELERIS_WU_BASE"`・`bash scripts/dev/test-affected.sh`・`cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check`・`check-health.sh --base "$CELERIS_WU_BASE"`・B0 の `slices-check.py --write-set R5` を通し、進捗 `agent-docs/progress/2026-11-10-health-v2-r5/<leaf key>.md` に commit を件名で書く。
 
 ## 付記: 実装との突き合わせ
 - 2026-11-10（unit adr）: 設計のみ。`inventory.json` の束は段 survey の案のまま採った（名前・上限・鍵を変えていない）。実装の leaf が束を外した・分けたときはここに書く。
+- 2026-11-10（unit reclass）: 地図の brace の path を r6 に数える。段 bundle の 3 leaf（`bundle-api-a`・`bundle-celeris`・`bundle-ctl`）が test-affected の health gate の `arch-map.wrong_path` で止まった。原因は `classify.py` の `external_refs` が地図の行を path の部分一致で探していたことで、brace の path（`crates/celerisctl/tests/{no_migrate,cli_resolution,bin_smoke}.rs` など）を見落とした。`classify.py` は地図の表の行の path を `scripts/dev/check-architecture-map.py` の `collect_backtick_paths`（と相対リンク）で集めるように直し、brace の展開を自分では持たない。`--check` は地図を集め直し、地図が挙げる target の leaf が r6（D4-1 の keep の理由があれば keep）であることを確かめる。これで 20 target が r6 になった: 段 bundle・adjust から 19 件（task-api 15: auth_and_guards・browser_doctor・browser_live・browser_site_policy_db・chat_stream・cluster_connect_admin・cos_chat_attach_pin・cos_operations・lifecycle・organization・reports・request_lock_counts・task_management・task_tree・tree_adopt、celeris 1: unpromoted_release、celerisctl 3: bin_smoke・cli_resolution・no_migrate）と、1 件だけの組で keep だった task-api の `execution`。束は同じ規則（D1・D2）で組み直したので、件数が減った鍵の束は名前と中身が変わった（`task_plan_suite` は 0 件になり消えた。task-api `browser_eval_surface_suite_a`・`_b` は 6 件の `browser_eval_surface_suite` 1 つになった）。1 件だけになった束は無かった。表は上のとおり直した。記録は [reclass.md](../progress/2026-11-10-health-v2-r5/reclass.md)。

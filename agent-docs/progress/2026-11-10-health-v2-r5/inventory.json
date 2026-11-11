@@ -5,7 +5,7 @@
  "generator": "python3 agent-docs/progress/2026-11-10-health-v2-r5/classify.py --write agent-docs/progress/2026-11-10-health-v2-r5/inventory.json",
  "main_at_generation": "af3ac6a5b91b859e3ba3e48c3a98c75dc737cc7b",
  "rules": {
-  "leaf_order": "(first match wins; the reasons are kept in `leaf_reasons`):\n  1. keep  — needs its own binary or cannot move inside the R5 write set:\n             a process global operation; a suite named by scripts/ (--test, -E)\n             or .config/nextest.toml (binary_id); a digit in the file name\n             (B0 R5 write set is tests/[a-z_/]+.rs); a file compiled into another\n             target (#[path]) or including one; a crate with no R5 bundle\n             leaf; an R2〜R4 conflict in a crate with no adjust leaf.\n  2. r6    — named by docs/architecture-map.md or linked from a tracked .md\n             outside this inventory's own progress directory (moving it needs\n             a document outside the R5 write set).\n  3. adjust-api / adjust-worker — task-api / task-worker targets with an\n             R2〜R4 conflict; task-worker targets are bundled only in the final\n             stage (R2's write set and interfaces cover them).\n  4. bundle-api-a (task-api, name starts with cos_ / chat_ / general_cos /\n     project_), bundle-api-b (other task-api), bundle-celeris, bundle-ctl.\n  Bundles: same crate, leaf, capability_key and fixture_key; at most\n  max_per_bundle targets, chunks balanced. A bundle-* group of one target is\n  keep (singleton_bundle_group): no other target shares its capability and\n  fixture, so it stays its own binary. adjust-* groups of one stay (the final\n  stage regroups them after R2〜R4 land).",
+  "leaf_order": "(first match wins; the reasons are kept in `leaf_reasons`):\n  1. keep  — needs its own binary or cannot move inside the R5 write set:\n             a process global operation; a suite named by scripts/ (--test, -E,\n             or the target's file path as a whole word on a line that is not a\n             `#` comment: the script's behaviour depends on the path, and\n             scripts/ other than test-affected.sh are outside the R5 write set) or\n             .config/nextest.toml (binary_id); a digit in the file name\n             (B0 R5 write set is tests/[a-z_/]+.rs); a file compiled into another\n             target (#[path]) or including one; a crate with no R5 bundle\n             leaf; an R2〜R4 conflict in a crate with no adjust leaf.\n  2. r6    — named by a table row of docs/architecture-map.md (the paths\n             scripts/dev/check-architecture-map.py collects: brace lists\n             `a/{b,c}.rs` and the relative paths in `（…）` after a path count)\n             or linked from a tracked .md outside this inventory's own progress\n             directory (moving it needs a document outside the R5 write set).\n             --check re-collects the map and requires r6 for every named\n             target that rule 1 does not keep.\n  3. adjust-api / adjust-worker — task-api / task-worker targets with an\n             R2〜R4 conflict; task-worker targets are bundled only in the final\n             stage (R2's write set and interfaces cover them).\n  4. bundle-api-a (task-api, name starts with cos_ / chat_ / general_cos /\n     project_), bundle-api-b (other task-api), bundle-celeris, bundle-ctl.\n  Bundles: same crate, leaf, capability_key and fixture_key; at most\n  max_per_bundle targets, chunks balanced. A bundle-* group of one target is\n  keep (singleton_bundle_group): no other target shares its capability and\n  fixture, so it stays its own binary. adjust-* groups of one stay (the final\n  stage regroups them after R2〜R4 land).",
   "max_per_bundle": 8,
   "bundle_key": "crate + leaf + capability_key + fixture_key",
   "capability_key": "group:<B0 capability group (cap-*)> of the target's capability: the capability-map tests entry when the path is listed there, otherwise the capability whose id / owner module tokens best match the file name tokens (first token counts double; capability_source says which); group:none when nothing matches",
@@ -70,9 +70,9 @@
  },
  "summary": {
   "celeris": {
-   "bundle-celeris": 16,
+   "bundle-celeris": 15,
    "keep": 28,
-   "r6": 11
+   "r6": 12
   },
   "celeris-campaign": {
    "keep": 111
@@ -87,9 +87,9 @@
    "keep": 7
   },
   "celerisctl": {
-   "bundle-ctl": 9,
+   "bundle-ctl": 6,
    "keep": 5,
-   "r6": 4
+   "r6": 7
   },
   "e2e": {
    "keep": 10
@@ -104,11 +104,11 @@
    "keep": 1
   },
   "task-api": {
-   "adjust-api": 5,
-   "bundle-api-a": 21,
-   "bundle-api-b": 49,
+   "adjust-api": 4,
+   "bundle-api-a": 18,
+   "bundle-api-b": 37,
    "keep": 18,
-   "r6": 20
+   "r6": 36
   },
   "task-core": {
    "keep": 2
@@ -372,7 +372,9 @@
    "fixture_key": "none",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:135"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -821,7 +823,9 @@
    "fixture_key": "fixtures/grade-cases+fixtures/grader-private+support_cases",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:135"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -1700,7 +1704,9 @@
    "fixture_key": "fixtures/dagbench",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:41"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -1815,7 +1821,9 @@
    "fixture_key": "none",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:41"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -1869,7 +1877,9 @@
    "fixture_key": "none",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:41"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -1923,7 +1933,9 @@
    "fixture_key": "none",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:41"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -2856,7 +2868,9 @@
     ]
    },
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:135"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -3346,7 +3360,9 @@
    "fixture_key": "none",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:135"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -3761,7 +3777,9 @@
    "fixture_key": "fixtures/grade-cases+fixtures/grader-private+support_cases",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:112"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -4181,7 +4199,8 @@
     ],
     "md_links": [],
     "scripts": [
-     "scripts/dev/test-long-horizon-bench.sh:83"
+     "scripts/dev/test-long-horizon-bench.sh:83",
+     "scripts/dev/test-long-horizon-bench.sh:177"
     ],
     "nextest": []
    },
@@ -4357,7 +4376,9 @@
    "fixture_key": "fixtures/grade-cases+fixtures/grader-private+hidden.rs+support_cases",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:135"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -4974,7 +4995,9 @@
    "external_refs": {
     "architecture_map": [],
     "md_links": [],
-    "scripts": [],
+    "scripts": [
+     "scripts/campaign/test_ops_r2_session.py:3"
+    ],
     "nextest": []
    },
    "digit_in_name": true,
@@ -5010,6 +5033,7 @@
    },
    "leaf": "keep",
    "leaf_reasons": [
+    "named_suite",
     "digit_in_name_outside_write_set",
     "crate_without_r5_bundle_leaf"
    ],
@@ -5186,7 +5210,9 @@
    "fixture_key": "common",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:135"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -5712,7 +5738,9 @@
    "fixture_key": "fixtures/grade-cases+fixtures/grader-private+support_cases",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:112"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -5767,7 +5795,9 @@
    "fixture_key": "none",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:135"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -5821,7 +5851,9 @@
    "fixture_key": "none",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:135"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -5878,6 +5910,7 @@
    "process_global": {},
    "external_refs": {
     "architecture_map": [
+     "docs/architecture-map.md:135",
      "docs/architecture-map.md:215"
     ],
     "md_links": [],
@@ -6815,7 +6848,8 @@
    "process_global": {},
    "external_refs": {
     "architecture_map": [
-     "docs/architecture-map.md:95"
+     "docs/architecture-map.md:95",
+     "docs/architecture-map.md:168"
     ],
     "md_links": [],
     "scripts": [],
@@ -7031,7 +7065,9 @@
     ]
    },
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:168"
+    ],
     "md_links": [],
     "scripts": [
      "scripts/check-browser-acceptance.sh:46"
@@ -7226,7 +7262,9 @@
    "fixture_key": "none",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:168"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -7572,7 +7610,7 @@
    "leaf_reasons": [
     "task_api_other"
    ],
-   "bundle": "browser_eval_surface_suite_a"
+   "bundle": "browser_eval_surface_suite"
   },
   {
    "path": "crates/task-api/tests/approvals.rs",
@@ -7650,7 +7688,9 @@
    "fixture_key": "common",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:129"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -7711,11 +7751,11 @@
      "conflict": false
     }
    },
-   "leaf": "bundle-api-b",
+   "leaf": "r6",
    "leaf_reasons": [
-    "task_api_other"
+    "architecture_map"
    ],
-   "bundle": "browser_eval_surface_suite_a"
+   "bundle": null
   },
   {
    "path": "crates/task-api/tests/authority_ledger.rs",
@@ -7793,7 +7833,9 @@
    "fixture_key": "common",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:56"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -7835,11 +7877,11 @@
      "conflict": false
     }
    },
-   "leaf": "bundle-api-b",
+   "leaf": "r6",
    "leaf_reasons": [
-    "task_api_other"
+    "architecture_map"
    ],
-   "bundle": "browser_eval_surface_suite_a"
+   "bundle": null
   },
   {
    "path": "crates/task-api/tests/browser_e2e.rs",
@@ -7860,7 +7902,9 @@
     ]
    },
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:136"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -8013,7 +8057,10 @@
    "fixture_key": "common",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:31",
+     "docs/architecture-map.md:136"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -8070,11 +8117,11 @@
      "conflict": false
     }
    },
-   "leaf": "bundle-api-b",
+   "leaf": "r6",
    "leaf_reasons": [
-    "task_api_other"
+    "architecture_map"
    ],
-   "bundle": "browser_eval_surface_suite_a"
+   "bundle": null
   },
   {
    "path": "crates/task-api/tests/browser_live_cross.rs",
@@ -8093,7 +8140,9 @@
     ]
    },
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:31"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -8218,7 +8267,7 @@
    "leaf_reasons": [
     "task_api_other"
    ],
-   "bundle": "browser_eval_surface_suite_a"
+   "bundle": "browser_eval_surface_suite"
   },
   {
    "path": "crates/task-api/tests/browser_restore_live_session.rs",
@@ -8282,7 +8331,7 @@
    "leaf_reasons": [
     "task_api_other"
    ],
-   "bundle": "browser_eval_surface_suite_b"
+   "bundle": "browser_eval_surface_suite"
   },
   {
    "path": "crates/task-api/tests/browser_site_policy_db.rs",
@@ -8297,7 +8346,9 @@
    "fixture_key": "common",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:56"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -8363,11 +8414,11 @@
      "conflict": false
     }
    },
-   "leaf": "adjust-api",
+   "leaf": "r6",
    "leaf_reasons": [
-    "conflict:R3"
+    "architecture_map"
    ],
-   "bundle": "browser_eval_surface_suite"
+   "bundle": null
   },
   {
    "path": "crates/task-api/tests/browser_waits.rs",
@@ -8510,7 +8561,7 @@
    "leaf_reasons": [
     "task_api_other"
    ],
-   "bundle": "browser_eval_surface_suite_b"
+   "bundle": "browser_eval_surface_suite"
   },
   {
    "path": "crates/task-api/tests/campaign_variant_atomic.rs",
@@ -8571,7 +8622,7 @@
    "leaf_reasons": [
     "task_api_other"
    ],
-   "bundle": "browser_eval_surface_suite_b"
+   "bundle": "browser_eval_surface_suite"
   },
   {
    "path": "crates/task-api/tests/changes.rs",
@@ -8650,7 +8701,8 @@
    "process_global": {},
    "external_refs": {
     "architecture_map": [
-     "docs/architecture-map.md:44"
+     "docs/architecture-map.md:44",
+     "docs/architecture-map.md:137"
     ],
     "md_links": [],
     "scripts": [],
@@ -8819,7 +8871,9 @@
    "fixture_key": "common",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:137"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -8884,11 +8938,11 @@
      "conflict": false
     }
    },
-   "leaf": "bundle-api-a",
+   "leaf": "r6",
    "leaf_reasons": [
-    "task_api_prefix_a"
+    "architecture_map"
    ],
-   "bundle": "cos_delivery_suite_a"
+   "bundle": null
   },
   {
    "path": "crates/task-api/tests/cluster_connect_admin.rs",
@@ -8903,7 +8957,9 @@
    "fixture_key": "common",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:152"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -8945,11 +9001,11 @@
      "conflict": false
     }
    },
-   "leaf": "bundle-api-b",
+   "leaf": "r6",
    "leaf_reasons": [
-    "task_api_other"
+    "architecture_map"
    ],
-   "bundle": "unmapped_suite_a"
+   "bundle": null
   },
   {
    "path": "crates/task-api/tests/cluster_settings_admin.rs",
@@ -9254,7 +9310,7 @@
    "leaf_reasons": [
     "task_api_other"
    ],
-   "bundle": "unmapped_suite_b"
+   "bundle": "unmapped_suite_a"
   },
   {
    "path": "crates/task-api/tests/cos_auth.rs",
@@ -9432,7 +9488,9 @@
    "fixture_key": "common",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:156"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -9474,11 +9532,11 @@
      "conflict": false
     }
    },
-   "leaf": "bundle-api-a",
+   "leaf": "r6",
    "leaf_reasons": [
-    "task_api_prefix_a"
+    "architecture_map"
    ],
-   "bundle": "cos_delivery_suite_a"
+   "bundle": null
   },
   {
    "path": "crates/task-api/tests/cos_chat_triage_scenarios.rs",
@@ -9686,7 +9744,7 @@
    "leaf_reasons": [
     "task_api_prefix_a"
    ],
-   "bundle": "cos_delivery_suite_b"
+   "bundle": "cos_delivery_suite_a"
   },
   {
    "path": "crates/task-api/tests/cos_live_fix_d1.rs",
@@ -9701,7 +9759,9 @@
    "fixture_key": "common",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:156"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -9759,7 +9819,9 @@
    "fixture_key": "common",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:156"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -9817,7 +9879,9 @@
    "fixture_key": "common",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:137"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -9882,11 +9946,11 @@
      "conflict": false
     }
    },
-   "leaf": "bundle-api-a",
+   "leaf": "r6",
    "leaf_reasons": [
-    "task_api_prefix_a"
+    "architecture_map"
    ],
-   "bundle": "cos_delivery_suite_b"
+   "bundle": null
   },
   {
    "path": "crates/task-api/tests/cos_operations_domains.rs",
@@ -10013,7 +10077,7 @@
    "leaf_reasons": [
     "task_api_prefix_a"
    ],
-   "bundle": "cos_delivery_suite_b"
+   "bundle": "cos_delivery_suite_a"
   },
   {
    "path": "crates/task-api/tests/cos_ops_admin_config.rs",
@@ -10140,7 +10204,7 @@
    "leaf_reasons": [
     "task_api_prefix_a"
    ],
-   "bundle": "cos_delivery_suite_b"
+   "bundle": "cos_delivery_suite_a"
   },
   {
    "path": "crates/task-api/tests/cos_ops_ops_surface.rs",
@@ -10328,7 +10392,7 @@
    "leaf_reasons": [
     "task_api_prefix_a"
    ],
-   "bundle": "cos_delivery_suite_b"
+   "bundle": "cos_delivery_suite_a"
   },
   {
    "path": "crates/task-api/tests/cos_ops_projects_cron_docs.rs",
@@ -10473,7 +10537,7 @@
    "leaf_reasons": [
     "task_api_prefix_a"
    ],
-   "bundle": "cos_delivery_suite_c"
+   "bundle": "cos_delivery_suite_b"
   },
   {
    "path": "crates/task-api/tests/cos_plan_conforms.rs",
@@ -10618,7 +10682,7 @@
    "leaf_reasons": [
     "task_api_prefix_a"
    ],
-   "bundle": "cos_delivery_suite_c"
+   "bundle": "cos_delivery_suite_b"
   },
   {
    "path": "crates/task-api/tests/cos_review_rework.rs",
@@ -10679,7 +10743,7 @@
    "leaf_reasons": [
     "task_api_prefix_a"
    ],
-   "bundle": "cos_delivery_suite_c"
+   "bundle": "cos_delivery_suite_b"
   },
   {
    "path": "crates/task-api/tests/cos_routine_answers.rs",
@@ -10740,7 +10804,7 @@
    "leaf_reasons": [
     "task_api_prefix_a"
    ],
-   "bundle": "cos_delivery_suite_c"
+   "bundle": "cos_delivery_suite_b"
   },
   {
    "path": "crates/task-api/tests/cos_triage.rs",
@@ -10756,7 +10820,8 @@
    "process_global": {},
    "external_refs": {
     "architecture_map": [
-     "docs/architecture-map.md:70"
+     "docs/architecture-map.md:70",
+     "docs/architecture-map.md:137"
     ],
     "md_links": [],
     "scripts": [],
@@ -10890,7 +10955,7 @@
    "leaf_reasons": [
     "task_api_prefix_a"
    ],
-   "bundle": "cos_delivery_suite_c"
+   "bundle": "cos_delivery_suite_b"
   },
   {
    "path": "crates/task-api/tests/cron_jobs.rs",
@@ -11027,7 +11092,7 @@
    "leaf_reasons": [
     "task_api_other"
    ],
-   "bundle": "cos_delivery_suite_d"
+   "bundle": "cos_delivery_suite_c"
   },
   {
    "path": "crates/task-api/tests/decisions.rs",
@@ -11043,7 +11108,8 @@
    "process_global": {},
    "external_refs": {
     "architecture_map": [
-     "docs/architecture-map.md:118"
+     "docs/architecture-map.md:118",
+     "docs/architecture-map.md:132"
     ],
     "md_links": [],
     "scripts": [],
@@ -11130,7 +11196,9 @@
    "external_refs": {
     "architecture_map": [],
     "md_links": [],
-    "scripts": [],
+    "scripts": [
+     "scripts/dev/check-doc-links.sh:31"
+    ],
     "nextest": []
    },
    "digit_in_name": false,
@@ -11170,11 +11238,11 @@
      "conflict": false
     }
    },
-   "leaf": "bundle-api-b",
+   "leaf": "keep",
    "leaf_reasons": [
-    "task_api_other"
+    "named_suite"
    ],
-   "bundle": "unmapped_suite_b"
+   "bundle": null
   },
   {
    "path": "crates/task-api/tests/execution.rs",
@@ -11191,7 +11259,9 @@
    "fixture_key": "common+crates/task-core/testdata/execution-plan/v3-browser.json",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:132"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -11252,9 +11322,9 @@
      "conflict": false
     }
    },
-   "leaf": "keep",
+   "leaf": "r6",
    "leaf_reasons": [
-    "singleton_bundle_group:bundle-api-b"
+    "architecture_map"
    ],
    "bundle": null
   },
@@ -11317,7 +11387,7 @@
    "leaf_reasons": [
     "task_api_other"
    ],
-   "bundle": "unmapped_suite_b"
+   "bundle": "unmapped_suite_a"
   },
   {
    "path": "crates/task-api/tests/general_cos_consult.rs",
@@ -11378,7 +11448,7 @@
    "leaf_reasons": [
     "task_api_prefix_a"
    ],
-   "bundle": "cos_delivery_suite_c"
+   "bundle": "cos_delivery_suite_b"
   },
   {
    "path": "crates/task-api/tests/genres.rs",
@@ -11605,7 +11675,7 @@
    "leaf_reasons": [
     "task_api_other"
    ],
-   "bundle": "cos_delivery_suite_d"
+   "bundle": "cos_delivery_suite_c"
   },
   {
    "path": "crates/task-api/tests/integration_principals.rs",
@@ -11666,7 +11736,7 @@
    "leaf_reasons": [
     "task_api_other"
    ],
-   "bundle": "cos_delivery_suite_d"
+   "bundle": "cos_delivery_suite_c"
   },
   {
    "path": "crates/task-api/tests/integration_repair.rs",
@@ -11906,7 +11976,9 @@
    "fixture_key": "common",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:130"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -11983,11 +12055,11 @@
      "conflict": false
     }
    },
-   "leaf": "bundle-api-b",
+   "leaf": "r6",
    "leaf_reasons": [
-    "task_api_other"
+    "architecture_map"
    ],
-   "bundle": "task_plan_suite"
+   "bundle": null
   },
   {
    "path": "crates/task-api/tests/list_and_detail.rs",
@@ -12065,7 +12137,9 @@
    "fixture_key": "common",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:152"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -12275,7 +12349,9 @@
    "fixture_key": "local_settings_admin.rs",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:153"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -12338,7 +12414,9 @@
    "fixture_key": "common",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:153"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -12510,7 +12588,7 @@
    "leaf_reasons": [
     "task_api_other"
    ],
-   "bundle": "browser_eval_surface_suite_b"
+   "bundle": "browser_eval_surface_suite"
   },
   {
    "path": "crates/task-api/tests/memory.rs",
@@ -12695,7 +12773,7 @@
    "leaf_reasons": [
     "task_api_other"
    ],
-   "bundle": "cos_delivery_suite_d"
+   "bundle": "cos_delivery_suite_c"
   },
   {
    "path": "crates/task-api/tests/operations.rs",
@@ -12756,7 +12834,7 @@
    "leaf_reasons": [
     "task_api_other"
    ],
-   "bundle": "cos_delivery_suite_d"
+   "bundle": "cos_delivery_suite_c"
   },
   {
    "path": "crates/task-api/tests/organization.rs",
@@ -12771,7 +12849,10 @@
    "fixture_key": "common",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:33",
+     "docs/architecture-map.md:130"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -12813,11 +12894,11 @@
      "conflict": false
     }
    },
-   "leaf": "bundle-api-b",
+   "leaf": "r6",
    "leaf_reasons": [
-    "task_api_other"
+    "architecture_map"
    ],
-   "bundle": "unmapped_suite_b"
+   "bundle": null
   },
   {
    "path": "crates/task-api/tests/project_auto_integrate.rs",
@@ -13463,7 +13544,9 @@
    "fixture_key": "common",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:33"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -13505,11 +13588,11 @@
      "conflict": false
     }
    },
-   "leaf": "bundle-api-b",
+   "leaf": "r6",
    "leaf_reasons": [
-    "task_api_other"
+    "architecture_map"
    ],
-   "bundle": "unmapped_suite_c"
+   "bundle": null
   },
   {
    "path": "crates/task-api/tests/repos.rs",
@@ -13648,7 +13731,9 @@
    "fixture_key": "common",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:129"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -13690,11 +13775,11 @@
      "conflict": false
     }
    },
-   "leaf": "bundle-api-b",
+   "leaf": "r6",
    "leaf_reasons": [
-    "task_api_other"
+    "architecture_map"
    ],
-   "bundle": "browser_eval_surface_suite_b"
+   "bundle": null
   },
   {
    "path": "crates/task-api/tests/roles.rs",
@@ -13755,7 +13840,7 @@
    "leaf_reasons": [
     "task_api_other"
    ],
-   "bundle": "unmapped_suite_c"
+   "bundle": "unmapped_suite_b"
   },
   {
    "path": "crates/task-api/tests/routing.rs",
@@ -14452,7 +14537,7 @@
    "leaf_reasons": [
     "task_api_other"
    ],
-   "bundle": "cos_delivery_suite_d"
+   "bundle": "cos_delivery_suite_c"
   },
   {
    "path": "crates/task-api/tests/skills.rs",
@@ -14513,7 +14598,7 @@
    "leaf_reasons": [
     "task_api_other"
    ],
-   "bundle": "unmapped_suite_c"
+   "bundle": "unmapped_suite_b"
   },
   {
    "path": "crates/task-api/tests/standby.rs",
@@ -14574,7 +14659,7 @@
    "leaf_reasons": [
     "task_api_other"
    ],
-   "bundle": "unmapped_suite_c"
+   "bundle": "unmapped_suite_b"
   },
   {
    "path": "crates/task-api/tests/stream.rs",
@@ -14796,7 +14881,7 @@
    "leaf_reasons": [
     "task_api_other"
    ],
-   "bundle": "cos_delivery_suite_d"
+   "bundle": "cos_delivery_suite_c"
   },
   {
    "path": "crates/task-api/tests/task_management.rs",
@@ -14811,7 +14896,9 @@
    "fixture_key": "common",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:130"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -14888,11 +14975,11 @@
      "conflict": false
     }
    },
-   "leaf": "bundle-api-b",
+   "leaf": "r6",
    "leaf_reasons": [
-    "task_api_other"
+    "architecture_map"
    ],
-   "bundle": "task_plan_suite"
+   "bundle": null
   },
   {
    "path": "crates/task-api/tests/task_tree.rs",
@@ -14907,7 +14994,10 @@
    "fixture_key": "common",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:119",
+     "docs/architecture-map.md:132"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -14972,11 +15062,11 @@
      "conflict": false
     }
    },
-   "leaf": "bundle-api-b",
+   "leaf": "r6",
    "leaf_reasons": [
-    "task_api_other"
+    "architecture_map"
    ],
-   "bundle": "task_plan_suite"
+   "bundle": null
   },
   {
    "path": "crates/task-api/tests/task_wait_api.rs",
@@ -15037,7 +15127,7 @@
    "leaf_reasons": [
     "task_api_other"
    ],
-   "bundle": "cos_delivery_suite_d"
+   "bundle": "cos_delivery_suite_c"
   },
   {
    "path": "crates/task-api/tests/terminals.rs",
@@ -15098,7 +15188,7 @@
    "leaf_reasons": [
     "task_api_other"
    ],
-   "bundle": "unmapped_suite_c"
+   "bundle": "unmapped_suite_b"
   },
   {
    "path": "crates/task-api/tests/tree_adopt.rs",
@@ -15113,7 +15203,9 @@
    "fixture_key": "common",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:119"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -15178,11 +15270,11 @@
      "conflict": false
     }
    },
-   "leaf": "bundle-api-b",
+   "leaf": "r6",
    "leaf_reasons": [
-    "task_api_other"
+    "architecture_map"
    ],
-   "bundle": "task_plan_suite"
+   "bundle": null
   },
   {
    "path": "crates/task-api/tests/trusted_devices.rs",
@@ -15326,7 +15418,7 @@
    "leaf_reasons": [
     "task_api_other"
    ],
-   "bundle": "unmapped_suite_c"
+   "bundle": "unmapped_suite_b"
   },
   {
    "path": "crates/task-worker/tests/browser_action_recovery.rs",
@@ -15405,7 +15497,9 @@
     ]
    },
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:97"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -15606,7 +15700,9 @@
     ]
    },
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:96"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -15751,7 +15847,9 @@
     ]
    },
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:97"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -16214,7 +16312,9 @@
     ]
    },
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:96"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -16302,7 +16402,9 @@
     ]
    },
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:96"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -16438,7 +16540,9 @@
     ]
    },
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:97"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -17166,7 +17270,9 @@
    "fixture_key": "actor_trace",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:116"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -17225,7 +17331,9 @@
    "fixture_key": "actor_trace",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:116"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -17284,7 +17392,9 @@
    "fixture_key": "actor_trace",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:116"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -17343,7 +17453,9 @@
    "fixture_key": "actor_trace",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:116"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -17402,7 +17514,9 @@
    "fixture_key": "actor_trace",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:116"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -18053,7 +18167,9 @@
     ]
    },
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:154"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -18416,7 +18532,9 @@
     ]
    },
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:150"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -18639,6 +18757,7 @@
     "architecture_map": [],
     "md_links": [],
     "scripts": [
+     "scripts/dev/daemon-soak/daemon_soak.py:4",
      "scripts/dev/long-run-soak.sh:45"
     ],
     "nextest": []
@@ -18699,7 +18818,8 @@
    "process_global": {},
    "external_refs": {
     "architecture_map": [
-     "docs/architecture-map.md:122"
+     "docs/architecture-map.md:122",
+     "docs/architecture-map.md:154"
     ],
     "md_links": [],
     "scripts": [],
@@ -20355,7 +20475,9 @@
    "fixture_key": "none",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:150"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -20416,11 +20538,11 @@
      "conflict": false
     }
    },
-   "leaf": "bundle-celeris",
+   "leaf": "r6",
    "leaf_reasons": [
-    "crate_bundle"
+    "architecture_map"
    ],
-   "bundle": "cos_delivery_suite"
+   "bundle": null
   },
   {
    "path": "crates/celeris/tests/variant_propagation.rs",
@@ -20623,7 +20745,9 @@
    "fixture_key": "common",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:164"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -20677,11 +20801,11 @@
      "conflict": false
     }
    },
-   "leaf": "bundle-ctl",
+   "leaf": "r6",
    "leaf_reasons": [
-    "crate_bundle"
+    "architecture_map"
    ],
-   "bundle": "browser_eval_surface_suite"
+   "bundle": null
   },
   {
    "path": "crates/celerisctl/tests/browser_doctor.rs",
@@ -20962,7 +21086,9 @@
    "fixture_key": "common",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:164"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -21001,11 +21127,11 @@
      "conflict": false
     }
    },
-   "leaf": "bundle-ctl",
+   "leaf": "r6",
    "leaf_reasons": [
-    "crate_bundle"
+    "architecture_map"
    ],
-   "bundle": "browser_eval_surface_suite"
+   "bundle": null
   },
   {
    "path": "crates/celerisctl/tests/cos_ops.rs",
@@ -21254,7 +21380,9 @@
    "fixture_key": "common",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:164"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -21308,11 +21436,11 @@
      "conflict": false
     }
    },
-   "leaf": "bundle-ctl",
+   "leaf": "r6",
    "leaf_reasons": [
-    "crate_bundle"
+    "architecture_map"
    ],
-   "bundle": "browser_eval_surface_suite"
+   "bundle": null
   },
   {
    "path": "crates/celerisctl/tests/org_migrate_v2.rs",
@@ -21743,7 +21871,9 @@
    "fixture_key": "none",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:169"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -21800,7 +21930,9 @@
    "fixture_key": "control-ts/fixtures/cos_digest/cases.jsonl+docs/api/script-host/host-v1.schema.json",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:169"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -21854,7 +21986,9 @@
    "fixture_key": "none",
    "process_global": {},
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:169"
+    ],
     "md_links": [],
     "scripts": [
      "scripts/selfdeploy/script-bundle-gate.sh:164"
@@ -21937,6 +22071,7 @@
    "process_global": {},
    "external_refs": {
     "architecture_map": [
+     "docs/architecture-map.md:169",
      "docs/architecture-map.md:170"
     ],
     "md_links": [],
@@ -22019,7 +22154,9 @@
     ]
    },
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:169"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []
@@ -22305,7 +22442,9 @@
     ]
    },
    "external_refs": {
-    "architecture_map": [],
+    "architecture_map": [
+     "docs/architecture-map.md:171"
+    ],
     "md_links": [],
     "scripts": [],
     "nextest": []

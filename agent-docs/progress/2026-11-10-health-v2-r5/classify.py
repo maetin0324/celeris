@@ -22,14 +22,21 @@ Usage (run from the repository root):
 
 Leaf rules (first match wins; the reasons are kept in `leaf_reasons`):
   1. keep  — needs its own binary or cannot move inside the R5 write set:
-             a process global operation; a suite named by scripts/ (--test, -E)
-             or .config/nextest.toml (binary_id); a digit in the file name
+             a process global operation; a suite named by scripts/ (--test, -E,
+             or the target's file path as a whole word on a line that is not a
+             `#` comment: the script's behaviour depends on the path, and
+             scripts/ other than test-affected.sh are outside the R5 write set) or
+             .config/nextest.toml (binary_id); a digit in the file name
              (B0 R5 write set is tests/[a-z_/]+.rs); a file compiled into another
              target (#[path]) or including one; a crate with no R5 bundle
              leaf; an R2〜R4 conflict in a crate with no adjust leaf.
-  2. r6    — named by docs/architecture-map.md or linked from a tracked .md
-             outside this inventory's own progress directory (moving it needs
-             a document outside the R5 write set).
+  2. r6    — named by a table row of docs/architecture-map.md (the paths
+             scripts/dev/check-architecture-map.py collects: brace lists
+             `a/{b,c}.rs` and the relative paths in `（…）` after a path count)
+             or linked from a tracked .md outside this inventory's own progress
+             directory (moving it needs a document outside the R5 write set).
+             --check re-collects the map and requires r6 for every named
+             target that rule 1 does not keep.
   3. adjust-api / adjust-worker — task-api / task-worker targets with an
              R2〜R4 conflict; task-worker targets are bundled only in the final
              stage (R2's write set and interfaces cover them).
@@ -45,6 +52,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import importlib.util
 import json
 import os
 import posixpath
@@ -59,6 +67,9 @@ HERE = "agent-docs/progress/2026-11-10-health-v2-r5"
 SLICES = "agent-docs/progress/2026-11-07-health-v2-b0/slices.json"
 CAPMAP = "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json"
 ARCHMAP = "docs/architecture-map.md"
+# The map's own checker owns how a map row names paths; classify.py calls it (no copy of its rules).
+ARCHMAP_CHECKER = "scripts/dev/check-architecture-map.py"
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 NEXTEST = ".config/nextest.toml"
 R_SLICES = {
     "R2": "01M6TYVJT0Z1CBGNK8VTNK8ZJH",
@@ -253,19 +264,51 @@ def scan_target(tree: Tree, t: dict) -> dict:
     }
 
 
+def archmap_checker():
+    """scripts/dev/check-architecture-map.py loaded as a module (its file name is not importable)."""
+    name = "check_architecture_map"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(name, os.path.join(REPO_ROOT, ARCHMAP_CHECKER))
+        if spec is None or spec.loader is None:
+            raise SystemExit(f"cannot load {ARCHMAP_CHECKER}")
+        mod = importlib.util.module_from_spec(spec)
+        # @dataclass looks the defining module up in sys.modules while the body runs.
+        sys.modules[name] = mod
+        try:
+            spec.loader.exec_module(mod)
+        except BaseException:
+            del sys.modules[name]
+            raise
+    return sys.modules[name]
+
+
+def archmap_paths(amap: str) -> dict[str, list[int]]:
+    """Repo path -> map lines naming it: every table row, collected as check-architecture-map.py does.
+
+    The checker reports wrong_path for each such path that does not exist, so a target named here
+    cannot move without changing the map. Relative links are resolved from the map's directory.
+    """
+    cam = archmap_checker()
+    out: dict[str, list[int]] = defaultdict(list)
+    for i, ln in enumerate(amap.splitlines(), 1):
+        if not cam.TABLE_ROW_RE.match(ln):
+            continue
+        paths = cam.collect_backtick_paths(ln) | {cam.resolve_link(x, ARCHMAP) for x in cam.collect_md_link_paths(ln)}
+        for p in sorted({posixpath.normpath(p) for p in paths}):
+            out[p].append(i)
+    return out
+
+
 def external_refs(tree: Tree, targets: list[dict]) -> dict[str, dict]:
     by_path = {t["path"]: t for t in targets}
     names = defaultdict(list)
     for t in targets:
         names[t["target"]].append(t)
     refs = {t["path"]: {"architecture_map": [], "md_links": [], "scripts": [], "nextest": []} for t in targets}
-    # docs/architecture-map.md: every mention of the path (check-architecture-map.py checks they exist).
-    amap = tree.read(ARCHMAP)
-    for t in targets:
-        tail = t["path"].split("/", 1)[1] if t["path"].startswith("crates/") else t["path"]
-        for i, ln in enumerate(amap.splitlines(), 1):
-            if t["path"] in ln or f"`{tail}`" in ln:
-                refs[t["path"]]["architecture_map"].append(f"{ARCHMAP}:{i}")
+    # docs/architecture-map.md: the rows naming the path (check-architecture-map.py checks they exist).
+    for p, lines in archmap_paths(tree.read(ARCHMAP)).items():
+        if p in refs:
+            refs[p]["architecture_map"] = [f"{ARCHMAP}:{i}" for i in lines]
     # Markdown links from tracked .md files (check-doc-links.sh checks they resolve).
     mds = [p for p in tree.blobs if p.endswith(".md")]
     tree.read_many(mds)
@@ -280,11 +323,18 @@ def external_refs(tree: Tree, targets: list[dict]) -> dict[str, dict]:
                 dest = posixpath.normpath(posixpath.join(here, link.split("#", 1)[0]))
                 if dest in by_path:
                     refs[dest]["md_links"].append(f"{md}:{i}")
-    # scripts/: `--test <name>` (crate from `-p` on the same line when present) and -E filters.
+    # scripts/: `--test <name>` (crate from `-p` on the same line when present), -E filters, and the
+    # target's file path on a line that is not a `#` comment (check-doc-links.sh names
+    # crates/task-api/tests/docs.rs in FOREIGN_DOCS: moving the file changes what the script does, and the
+    # script is outside the R5 write set). A path in a comment only describes; it does not change behaviour.
     scripts = [p for p in tree.blobs if p.startswith("scripts/")]
     tree.read_many(scripts)
+    path_res = {t["path"]: script_path_re(t["path"]) for t in targets}
     for sp in scripts:
         for i, ln in enumerate(tree.read(sp).splitlines(), 1):
+            for p, rx in path_res.items():
+                if p in ln and not ln.lstrip().startswith("#") and rx.search(ln):
+                    refs[p]["scripts"].append(f"{sp}:{i}")
             pkg = re.search(r"(?:-p|--package)[= ]+([A-Za-z0-9_-]+)", ln)
             for name in re.findall(r"--test[= ]+([A-Za-z0-9_]+)", ln):
                 for t in names.get(name, []):
@@ -297,6 +347,11 @@ def external_refs(tree: Tree, targets: list[dict]) -> dict[str, dict]:
         for t in filter_hits(ln, targets):
             refs[t["path"]]["nextest"].append(f"{NEXTEST}:{i}")
     return refs
+
+
+def script_path_re(path: str) -> re.Pattern:
+    """The repo-relative path as a whole word (an optional `./`); `$root/repo/crates/...` in a fixture does not count."""
+    return re.compile(r"(?<![\w/.$-])(?:\./)?" + re.escape(path) + r"(?![\w./-])")
 
 
 def filter_hits(expr: str, targets: list[dict]) -> list[dict]:
@@ -440,11 +495,12 @@ def conflicts(t: dict, fields: dict, slices: dict, branches: dict, planned: dict
     return res
 
 
-def assign(rec: dict) -> tuple[str, list[str]]:
+def keep_reasons(rec: dict) -> list[str]:
+    """Rule 1 (keep) reasons of a record; empty when rule 1 does not apply."""
     reasons = []
     pg = rec["process_global"]
     refs = rec["external_refs"]
-    conflict = [k for k, v in rec["conflicts"].items() if v["conflict"]]
+    conflict = [k for k, v in rec["conflicts"].items() if isinstance(v, dict) and v.get("conflict")]
     if pg:
         reasons.append("process_global:" + ",".join(sorted(pg)))
     if refs["scripts"] or refs["nextest"]:
@@ -457,8 +513,14 @@ def assign(rec: dict) -> tuple[str, list[str]]:
         reasons.append("crate_without_r5_bundle_leaf")
     elif conflict and rec["crate"] not in ADJUST_LEAF:
         reasons.append("conflict_without_adjust_leaf:" + ",".join(conflict))
-    if reasons:
+    return reasons
+
+
+def assign(rec: dict) -> tuple[str, list[str]]:
+    if reasons := keep_reasons(rec):
         return "keep", reasons
+    refs = rec["external_refs"]
+    conflict = [k for k, v in rec["conflicts"].items() if v["conflict"]]
     if refs["architecture_map"] or refs["md_links"]:
         return "r6", ["architecture_map" if refs["architecture_map"] else "md_link"]
     if rec["crate"] in ADJUST_LEAF and (conflict or rec["crate"] == "task-worker"):
@@ -575,6 +637,20 @@ REQUIRED = {
 }
 
 
+def map_rule_errors(records: list[dict], named: dict[str, list[int]]) -> list[str]:
+    """Rule 2 against the map itself: a target the map names is r6 unless rule 1 keeps it."""
+    errs = []
+    for r in records:
+        lines = named.get(r.get("path"))
+        if not lines:
+            continue
+        want = "keep" if keep_reasons(r) else "r6"
+        if r.get("leaf") != want:
+            errs.append(f"{r['path']}: named by {ARCHMAP}:{','.join(map(str, lines))} but leaf {r.get('leaf')} "
+                        f"(want {want}; reasons {r.get('leaf_reasons')})")
+    return errs
+
+
 def check(inv_path: str) -> int:
     inv = json.load(open(inv_path, encoding="utf-8"))
     errs: list[str] = []
@@ -647,6 +723,9 @@ def check(inv_path: str) -> int:
                 errs.append(f"{p}: adjust-worker is for task-worker")
         elif r["bundle"] is not None:
             errs.append(f"{p}: {leaf} target must not have a bundle")
+    well_formed = [r for r in inv.get("targets", []) if r.get("path") in fresh and r.get("leaf") in LEAVES
+                   and all(isinstance(r.get(k), ty) for k, ty in REQUIRED.items())]
+    errs += map_rule_errors(well_formed, archmap_paths(tree.read(ARCHMAP)))
     names = defaultdict(set)
     for t in targets:
         names[t["crate"]].add(t["target"])

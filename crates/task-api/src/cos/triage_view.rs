@@ -91,7 +91,7 @@ pub(crate) fn items(
 /// notifier has not sent it, so CoS may still answer, observe or escalate it.
 pub(crate) fn fallback_unsent(db: &Path, id: &str) -> Result<bool, ChatError> {
     let conn = open(db)?;
-    task_core::chat::triage::cos_triage_fallback_unsent(&conn, id)
+    Ok(task_core::cos_fallback::unsent(&conn, id)?)
 }
 
 /// True when a later revision of the same source was ingested after `item`.

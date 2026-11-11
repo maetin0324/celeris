@@ -127,39 +127,8 @@ pub(crate) struct CosTriageState {
     pub(super) stagnation_generation: Option<u64>,
 }
 
-/// Why `triage_launch` did not start a run for a CoS thread with pending items
-/// (ADR 2026-11-11-cos-fallback-timing D3).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TriageSkip {
-    /// The daemon does not take new work (standby, draining).
-    NotAccepting,
-    /// The disk guard holds new work.
-    DiskNotReady,
-    /// `cos.enabled=false` (the fallback routes the items at once).
-    Disabled,
-    /// The KB's CoS skills do not fit `[cos.triage]` (ADR 2026-11-11-cos-skill-sync D3).
-    SkillDrift,
-    /// This process runs the thread's CoS run; the items are claimed after it.
-    ThreadRunning,
-    /// Every CoS slot is in use.
-    NoCapacity,
-    /// SQLite has a live run of the thread that this process does not own.
-    RunInDb,
-}
-
-impl TriageSkip {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::NotAccepting => "not_accepting_new_work",
-            Self::DiskNotReady => "disk_not_ready",
-            Self::Disabled => "cos_disabled",
-            Self::SkillDrift => "cos_skill_drift",
-            Self::ThreadRunning => "thread_run_live",
-            Self::NoCapacity => "no_cos_slot",
-            Self::RunInDb => "thread_run_live_in_db",
-        }
-    }
-}
+/// ADR 2026-11-11-cos-fallback-timing D3 (`task_ops::cos_first_response`).
+pub(crate) use task_ops::cos_first_response::TriageSkip;
 
 /// Inbox builds of the relay re-judging pass: `scoped` covers the candidates' tasks only, `full`
 /// every task (only for keys that name no task).
@@ -745,22 +714,18 @@ impl CosChatLaunch {
             .map_err(|e| e.to_string())?;
         let mut skips = HashMap::new();
         for thread in threads {
-            let skip = if let Some(gate) = gate {
-                Some(gate)
-            } else if self.running.contains_key(&thread) {
-                Some(TriageSkip::ThreadRunning)
-            } else if !self.has_capacity(dispatcher) {
-                Some(TriageSkip::NoCapacity)
-            } else if self.start_thread(dispatcher, &thread, ClaimSource::Triage)? {
-                None
-            } else {
+            let skip = match gate {
+                Some(gate) => gate,
+                None if self.running.contains_key(&thread) => TriageSkip::ThreadRunning,
+                None if !self.has_capacity(dispatcher) => TriageSkip::NoCapacity,
                 // The claim saw a live run of this thread that this process does not own (a
                 // draining daemon after a release switch, a run being settled).
-                Some(TriageSkip::RunInDb)
+                None if !self.start_thread(dispatcher, &thread, ClaimSource::Triage)? => {
+                    TriageSkip::RunInDb
+                }
+                None => continue,
             };
-            if let Some(skip) = skip {
-                skips.insert(thread, skip);
-            }
+            skips.insert(thread, skip);
         }
         for (thread, skip) in &skips {
             if self.triage.launch_skips.get(thread) != Some(skip) {

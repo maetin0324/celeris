@@ -26,6 +26,7 @@ use task_worker::protocol::{CosChatInboxDecision, CosChatInboxItem, CosChatInbox
 
 use super::attachments::{stage_message_attachments, workspace_dir};
 use super::sink::{ChatClock, ChatRunSink, chat_finish_for};
+use super::triage::TriageSkip as Skip;
 use crate::dispatcher::Dispatcher;
 use crate::dispatcher::route_select::RoutePick;
 
@@ -331,17 +332,12 @@ impl Dispatcher {
         let (store, kb, now) = (&*self.store, &self.config.knowledge.root, self.now_utc());
         let ready = launch.config.enabled && launch.skill_gate.ready(store, kb, policy, now);
         // ADR 2026-11-11-cos-fallback-timing D3: why no CoS run may start now (logged per thread).
-        let gate = if !self.accepting_new_work {
-            Some(super::triage::TriageSkip::NotAccepting)
-        } else if !self.disk_ready {
-            Some(super::triage::TriageSkip::DiskNotReady)
-        } else if !launch.config.enabled {
-            Some(super::triage::TriageSkip::Disabled)
-        } else if !ready {
-            Some(super::triage::TriageSkip::SkillDrift)
-        } else {
-            None
-        };
+        let gate = Skip::gate(
+            self.accepting_new_work,
+            self.disk_ready,
+            launch.config.enabled,
+            ready,
+        );
         if gate.is_none() {
             if let Err(error) = launch.claim_queued(self) {
                 tracing::warn!(%error, "CoS chat launch tick failed");

@@ -21,6 +21,11 @@ ADR: [2026-11-11-cos-fallback-timing](../adr/2026-11-11-cos-fallback-timing.md)
   - ADR の付記（cos-chat-home D6・cos-inbox-triage・cos-inbox-triage-fallback・cos-authorization・root-done-cos-summary）、
     skill cos-inbox-triage §7・SOURCE.md、`config/celeris.example.toml` を合わせた。
 
+- `phase 1: 待ちの判定を task-ops に、取り下げの SQL を task-core の cos_fallback に移し、repo health の行数の上限に合わせる` —
+  repo health（`size.responsibility-growth`）が dispatcher module（35103 → 35194）・task-core chat module（8026 > 8000）・
+  task-api `cos::resolve`（268 → 278 行）で落ちたので、`FirstResponseWait`・`TriageSkip` を `task_ops::cos_first_response` に、
+  D2 の SQL を `task_core::cos_fallback` に、resolve の判定を `terminal_conflict` に移した。挙動は変えていない。
+
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
 - 対象の試験: `cargo nextest run -p task-dispatch -p task-core -p celeris -p task-api -E 'test(/cos_chat_triage|cos_fallback_timing|cos_chat_root_done|root_done_summary|cos_triage|cos_chat_authorization|cos_reload|cos_inbox/)'` → 結果は下の「検査」に書く。
 - 受け入れ条件 3 の試験:

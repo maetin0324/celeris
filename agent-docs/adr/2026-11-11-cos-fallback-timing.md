@@ -61,13 +61,16 @@ D6. web のブラウザ通知（未読の知らせの数が増えるたびに出
 
 ## 3. 実装
 
-- `crates/task-dispatch/src/dispatcher/cos_chat/fallback.rs`: `FirstResponseWait`（`OwnRun`・`BehindRun`・`Pickable`）と
-  `unavailable_reason(c, enabled, fallback_after_secs, now)`。走査は thread の動いている run の開始と直前の run の終わりも読む。
-  `FallbackDeadlines`・`waits_for_first_response` は消した。
-- `crates/task-dispatch/src/dispatcher/cos_chat/triage.rs`・`launch.rs`: `TriageSkip`・`launch_skips`、`dirty` の撤去。
+- `crates/task-ops/src/cos_first_response.rs`: `FirstResponseWait`（`OwnRun`・`BehindRun`・`Pickable`、`queued`・
+  `queued_behind`・`overdue`）と `TriageSkip`（`gate`・`as_str`）。純粋な関数で、dispatcher は SQLite から時刻を読んで渡す。
+- `crates/task-dispatch/src/dispatcher/cos_chat/fallback.rs`: `unavailable_reason(c, enabled, fallback_after_secs, now)`。
+  走査は thread の動いている run の開始と直前の run の終わりも読む。`FallbackDeadlines`・`waits_for_first_response` は消した。
+- `crates/task-dispatch/src/dispatcher/cos_chat/triage.rs`・`launch.rs`: `triage_launch` の skip 理由（`launch_skips`）、
+  `dirty` の撤去。
 - `crates/task-dispatch/src/dispatcher/cos_chat/root_done.rs`: D4。
-- `crates/task-core/src/chat/triage.rs`: `cos_triage_fallback_unsent`・`COS_FALLBACK_WITHDRAWN`、`cos_triage_resolve_tx` と
-  `cos_triage_outbox_claim` の D2。`crates/task-api/src/cos/inbox.rs`: 未送信の fallback の件の resolve を受ける。
+- `crates/task-core/src/cos_fallback.rs`: `unsent`・`withdraw_unsent`・`judged_from`・`take_route`・`WITHDRAWN`（D2 の SQL）。
+  `crates/task-core/src/chat/triage.rs` の `cos_triage_resolve_tx`・`cos_triage_outbox_claim` がこれを同じ transaction で呼ぶ。
+  `crates/task-api/src/cos/inbox.rs`（`terminal_conflict`）: 未送信の fallback の件の resolve を受ける。
 - `crates/celeris/src/config/cos.rs`: `fallback_after_secs`・`CosConfig::fallback_after_secs()`・`FALLBACK_MARGIN_SECS`。
 - web: `web/features/reports/notifications-watcher.tsx`・`notification-rule.ts`（と試験）・`notifications-enable.tsx` を消した。
 - 試験: `crates/task-dispatch/src/dispatcher/tests/cos_chat_triage_fallback_timing.rs`（注入した試験時計）、

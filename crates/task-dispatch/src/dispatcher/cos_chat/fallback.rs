@@ -37,9 +37,9 @@ use rusqlite::Connection;
 use serde_json::json;
 use task_core::chat::{ChatActor, ChatCard};
 use task_core::{NoticeId, NoticeStore, TaskId};
+use task_ops::cos_first_response::{FirstResponseWait, parse_ts};
 use task_ops::human_inbox::{InboxItem, InboxKind};
 use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
 use super::launch::CosChatLaunch;
 use super::triage::COS_TRIAGE_NOTICE_KIND;
@@ -80,67 +80,6 @@ pub(crate) struct FallbackCandidate {
     pub thread_idle_since: Option<String>,
     /// `cos_notification_routes.route` already claimed for this item.
     pub route: Option<String>,
-}
-
-pub(crate) fn parse_ts(at: &str) -> Option<OffsetDateTime> {
-    OffsetDateTime::parse(at, &Rfc3339).ok()
-}
-
-/// Where CoS's first response to one item stands (ADR 2026-11-11-cos-fallback-timing D1).
-/// Shared by inbox items and root-done summaries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FirstResponseWait {
-    /// The item's own CoS run is live since this time.
-    OwnRun(OffsetDateTime),
-    /// The item waits behind another live run of its thread, live since this time.
-    BehindRun(OffsetDateTime),
-    /// No run of its thread is live: the item has been pickable since this time.
-    Pickable(OffsetDateTime),
-}
-
-impl FirstResponseWait {
-    /// The wait of an item that arrived at `arrived` with no live run of its own: behind the
-    /// thread's live run if any, else pickable since its arrival or the end of the thread's last
-    /// run, whichever is later.
-    pub(crate) fn queued(
-        arrived: OffsetDateTime,
-        thread_run_started: Option<OffsetDateTime>,
-        thread_idle_since: Option<OffsetDateTime>,
-    ) -> Self {
-        match thread_run_started {
-            Some(started) => Self::BehindRun(started),
-            None => Self::Pickable(thread_idle_since.map_or(arrived, |idle| idle.max(arrived))),
-        }
-    }
-
-    /// Why the safety net `limit_secs` has run out, or `None` while CoS may still answer.
-    pub(crate) fn overdue(self, limit_secs: u64, now: OffsetDateTime) -> Option<String> {
-        let limit = i64::try_from(limit_secs).unwrap_or(i64::MAX);
-        match self {
-            Self::OwnRun(since) => {
-                let ran = (now - since).whole_seconds();
-                (ran > limit).then(|| {
-                    format!("CoS の一次対応が {limit} 秒を超えて終わらない（run の経過 {ran} 秒）")
-                })
-            }
-            Self::BehindRun(since) => {
-                let ran = (now - since).whole_seconds();
-                (ran > limit).then(|| {
-                    format!(
-                        "CoS の前の run が {limit} 秒を超えて終わらず、一次対応が始まらない（run の経過 {ran} 秒）"
-                    )
-                })
-            }
-            Self::Pickable(since) => {
-                let waited = (now - since).whole_seconds();
-                (waited > limit).then(|| {
-                    format!(
-                        "CoS の一次対応が {limit} 秒を超えても始まらない（容量待ち・停止を含む。拾える状態になってから {waited} 秒）"
-                    )
-                })
-            }
-        }
-    }
 }
 
 /// Why CoS is considered absent for one item, or `None` while it may still answer.

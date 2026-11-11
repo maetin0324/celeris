@@ -1,6 +1,7 @@
 //! task-core: ドメインモデル、状態機械、イベント、SQLiteストア。
 //! DESIGN.md §4-§5.1 のスコープ。LLM呼び出し・サブプロセス起動は行わない（ADR-0001 D2）。
 
+pub mod cos_fallback;
 pub mod delivery;
 mod sqlite_process;
 pub use delivery::{Delivery, DeliverySkipReason, DeliveryState, DeliveryStore};

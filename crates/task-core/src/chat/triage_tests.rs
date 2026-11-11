@@ -609,7 +609,7 @@ fn cos_triage_judgment_before_the_send_withdraws_the_fallback() {
     };
     let withdrawn = (
         Some(0),
-        Some(super::triage::COS_FALLBACK_WITHDRAWN.to_owned()),
+        Some(crate::cos_fallback::WITHDRAWN.to_owned()),
         None,
     );
 

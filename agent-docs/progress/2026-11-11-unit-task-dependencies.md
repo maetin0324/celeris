@@ -24,6 +24,7 @@ updated: 2026-11-11
 - `phase 1: 検証が委譲の親・祖先と子を経由する循環を拒む（review の差し戻し）`
 - `phase 1: unit_task_deps::resolve を resolve_pending_units に改名（公開面の名前の重複を増やさない）`
 - `phase 1: 進捗に attempt 2 の commit を足す`
+- `phase 1: 進捗に attempt 3 の状況を足す`
 
 ## review の差し戻しへの対応（attempt 2）
 - 指摘: 検証が委譲の親（`tree` を持たない子の `parent_id`）を指す `task:` 依存を通し、依存先の子を経由する循環も通した。
@@ -70,6 +71,10 @@ dispatcher module の合計・`work_units.rs`・`dispatch_one`・`validate_v3`�
   `crates/task-core/src/wait/task_deps/tests.rs` の 6 件。
 
 ## 未解決
+- review の検査の時間: task-core を変えたので `test-affected.sh` は 14 crate・nextest 8231 件・web・test-ts-verify・repo health を
+  走らせる。nextest だけで 640〜930 秒かかり（load average 80 前後、24 core）、review の検査の上限 1200 秒を超えやすい。
+  attempt 2 の review はこの時間切れで終わり、criterion 3〜6（attempt 2 の直し）は評価されていない。attempt 3 はコードを変えず、
+  検査を提出時の HEAD で再実行した。
 - daemon の `until_idle`（`is_idle`）は、unit が `task:` 依存だけを待つ ready の task を idle とみなさない（M10 はメモリの待ちで
   idle とみなす）。本番の常駐 daemon には効かない。試験・e2e の `until_idle` で使うときは待ち続ける。
 - 依存先の成果を自分の branch に入れる unit（既定 branch の取り込み）は今どおり計画が置く。自動では入れない。

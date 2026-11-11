@@ -1,7 +1,7 @@
 //! Durable CoS triage intake and route arbitration (ADR 2026-10-06).
 use std::collections::HashSet;
 
-use rusqlite::{OptionalExtension, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -149,7 +149,48 @@ pub fn cos_triage_resolve_tx(
     ) {
         return Err(ChatError::Invalid("invalid triage outcome".into()));
     }
-    Ok(tx.execute("UPDATE cos_inbox_items SET state=?2,operation_id=?3,reason=?4,updated_at=?5 WHERE id=?1 AND state IN ('pending','running')", params![item_id,outcome,operation_id,reason,chat_ts(now)])? == 1)
+    if tx.execute("UPDATE cos_inbox_items SET state=?2,operation_id=?3,reason=?4,updated_at=?5 WHERE id=?1 AND state IN ('pending','running')", params![item_id,outcome,operation_id,reason,chat_ts(now)])? == 1 {
+        return Ok(true);
+    }
+    // ADR 2026-11-11-cos-fallback-timing D2: CoS's judgment before the notifier sent the fallback
+    // withdraws it and takes the item back.
+    if matches!(outcome, "answered" | "observed" | "escalated")
+        && withdraw_unsent_fallback_tx(tx, item_id)?
+    {
+        return Ok(tx.execute("UPDATE cos_inbox_items SET state=?2,operation_id=?3,reason=?4,updated_at=?5 WHERE id=?1 AND state='fallback'", params![item_id,outcome,operation_id,reason,chat_ts(now)])? == 1);
+    }
+    Ok(false)
+}
+
+/// ADR 2026-11-11-cos-fallback-timing D2: `notifications.error` of a fallback withdrawn because CoS
+/// judged the item before the notifier sent it.
+pub const COS_FALLBACK_WITHDRAWN: &str = "withdrawn: CoS judged before the send";
+
+/// D2: the fallback handed the item to the person but the notifier has not sent it (or it was
+/// already withdrawn for a CoS judgment), so CoS's judgment still wins. A sent fallback stays with
+/// the person.
+pub fn cos_triage_fallback_unsent(conn: &Connection, item_id: &str) -> Result<bool, ChatError> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM cos_inbox_items i JOIN notifications n \
+         ON n.kind='cos_fallback' AND n.key=i.id WHERE i.id=?1 AND i.state='fallback' \
+         AND n.sent_at IS NULL AND (n.ok IS NULL OR n.error=?2))",
+        params![item_id, COS_FALLBACK_WITHDRAWN],
+        |r| r.get(0),
+    )?)
+}
+
+/// D2: withdraw the unsent fallback notification of `item_id`; `false` when there is none (never
+/// claimed, or already sent). A send already in flight (the POST under way) is not stopped.
+fn withdraw_unsent_fallback_tx(conn: &Connection, item_id: &str) -> Result<bool, ChatError> {
+    if !cos_triage_fallback_unsent(conn, item_id)? {
+        return Ok(false);
+    }
+    conn.execute(
+        "UPDATE notifications SET ok=0,error=?2 WHERE kind='cos_fallback' AND key=?1 \
+         AND ok IS NULL AND sent_at IS NULL",
+        params![item_id, COS_FALLBACK_WITHDRAWN],
+    )?;
+    Ok(true)
 }
 
 fn put_cursor(tx: &Transaction<'_>, name: &str, value: &str) -> Result<(), ChatError> {
@@ -360,7 +401,13 @@ impl SqliteStore {
             return Ok(None);
         }
         let notification_id = Ulid::new().to_string();
-        let claimed = tx.execute("INSERT INTO cos_notification_routes(item_id,notification_id,route,source_kind,source_key,source_revision,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?7) ON CONFLICT DO NOTHING", params![item_id,notification_id,route,source_kind,source_key,revision,at])?;
+        // ADR 2026-11-11-cos-fallback-timing D2: CoS escalates an item whose fallback the notifier
+        // has not sent: the fallback is withdrawn and CoS's text takes its route (sent once).
+        let claimed = if route == "escalation" && withdraw_unsent_fallback_tx(&tx, item_id)? {
+            tx.execute("UPDATE cos_notification_routes SET route='escalation',notification_id=?2,updated_at=?3 WHERE item_id=?1 AND route='fallback'", params![item_id,notification_id,at])?
+        } else {
+            tx.execute("INSERT INTO cos_notification_routes(item_id,notification_id,route,source_kind,source_key,source_revision,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?7) ON CONFLICT DO NOTHING", params![item_id,notification_id,route,source_kind,source_key,revision,at])?
+        };
         if claimed == 0 {
             return Ok(None);
         }

@@ -550,3 +550,146 @@ fn cos_triage_closed_since_lists_answered_waits_apart_from_open_ones() {
             .is_empty()
     );
 }
+
+/// ADR 2026-11-11-cos-fallback-timing D2 (受け入れ条件 3(d)): CoS's judgment after the fallback was
+/// claimed but before the notifier sent it withdraws the fallback. observe: nothing goes out;
+/// escalate: CoS's text takes the route and goes out once. A sent fallback stays with the person.
+/// The older tests only covered a judgment racing the claim (`outbox_unique_and_withdraws_before_send`),
+/// where the item was still pending, not one arriving while the claimed fallback waits for the notifier.
+#[test]
+fn cos_triage_judgment_before_the_send_withdraws_the_fallback() {
+    let s = SqliteStore::open_in_memory().expect("store");
+    s.cos_triage_ingest_batch(
+        "decision",
+        "1",
+        &[item("a", "1"), item("b", "1"), item("c", "1")],
+        at(0),
+    )
+    .expect("ingest");
+    let id_of = |key: &str| -> String {
+        s.lock()
+            .expect("lock")
+            .query_row(
+                "SELECT id FROM cos_inbox_items WHERE source_key=?1",
+                [key],
+                |r| r.get(0),
+            )
+            .expect("id")
+    };
+    let (a, b, c) = (id_of("a"), id_of("b"), id_of("c"));
+    let mut fallback = Vec::new();
+    for id in [&a, &b, &c] {
+        fallback.push(
+            s.cos_triage_outbox_claim(id, "fallback", "fixed text", at(1))
+                .expect("claim")
+                .expect("fallback"),
+        );
+        assert!(
+            s.cos_triage_resolve(id, "fallback", None, Some("safety net"), at(1))
+                .expect("mark")
+        );
+    }
+    let state = |id: &str| -> String {
+        s.lock()
+            .expect("lock")
+            .query_row("SELECT state FROM cos_inbox_items WHERE id=?1", [id], |r| {
+                r.get(0)
+            })
+            .expect("state")
+    };
+    let notification = |id: &str| -> (Option<i64>, Option<String>, Option<String>) {
+        s.lock()
+            .expect("lock")
+            .query_row(
+                "SELECT ok,error,sent_at FROM notifications WHERE id=?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .expect("notification")
+    };
+    let withdrawn = (
+        Some(0),
+        Some(super::triage::COS_FALLBACK_WITHDRAWN.to_owned()),
+        None,
+    );
+
+    // observe before the send: the fallback is withdrawn, the item is CoS's.
+    assert!(
+        s.cos_triage_resolve(&a, "observed", Some("op-a"), Some("a notice only"), at(2))
+            .expect("observe")
+    );
+    assert_eq!(state(&a), "observed");
+    assert_eq!(notification(&fallback[0]), withdrawn);
+    assert!(
+        !s.cos_triage_outbox_sendable(&fallback[0], true, at(2))
+            .expect("not sendable")
+    );
+
+    // escalate before the send: CoS's text replaces the fallback on the same route.
+    let escalation = s
+        .cos_triage_outbox_claim(&b, "escalation", "CoS text", at(2))
+        .expect("claim")
+        .expect("CoS text replaces the unsent fallback");
+    assert!(
+        s.cos_triage_resolve(
+            &b,
+            "escalated",
+            Some("op-b"),
+            Some("needs the person"),
+            at(2)
+        )
+        .expect("escalate")
+    );
+    assert_eq!(state(&b), "escalated");
+    assert_eq!(notification(&fallback[1]), withdrawn);
+    let route: (String, String) = s
+        .lock()
+        .expect("lock")
+        .query_row(
+            "SELECT route,notification_id FROM cos_notification_routes WHERE item_id=?1",
+            [&b],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("route");
+    assert_eq!(route, ("escalation".to_owned(), escalation.clone()));
+    assert!(
+        s.cos_triage_outbox_sendable(&escalation, true, at(3))
+            .expect("CoS text is sendable")
+    );
+    // A retried escalate finds the route taken: no second message.
+    assert!(
+        s.cos_triage_outbox_claim(&b, "escalation", "CoS text", at(3))
+            .expect("retry")
+            .is_none()
+    );
+
+    // Sent: the person has it; a later judgment changes nothing and sends nothing.
+    s.lock()
+        .expect("lock")
+        .execute(
+            "UPDATE notifications SET ok=1,sent_at='2026-11-11T00:00:00Z' WHERE id=?1",
+            [&fallback[2]],
+        )
+        .expect("sent");
+    assert!(
+        !s.cos_triage_resolve(&c, "observed", Some("op-c"), Some("late"), at(4))
+            .expect("late observe")
+    );
+    assert!(
+        s.cos_triage_outbox_claim(&c, "escalation", "late", at(4))
+            .expect("late escalate")
+            .is_none()
+    );
+    assert_eq!(state(&c), "fallback");
+    let pending: Vec<String> = {
+        let conn = s.lock().expect("lock");
+        let mut stmt = conn
+            .prepare("SELECT kind||':'||key FROM notifications WHERE ok IS NULL ORDER BY kind,key")
+            .expect("prepare");
+        stmt.query_map([], |r| r.get(0))
+            .expect("query")
+            .collect::<Result<_, _>>()
+            .expect("rows")
+    };
+    assert_eq!(pending, [format!("cos_escalation:{b}")]);
+}

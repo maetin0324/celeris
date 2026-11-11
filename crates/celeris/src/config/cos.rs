@@ -118,13 +118,13 @@ pub struct CosTriageConfig {
     pub min_confidence: f64,
     #[serde(default = "default_human_required")]
     pub human_required: Vec<String>,
-    #[serde(default = "default_unavailable_after_secs")]
-    pub unavailable_after_secs: u64,
-    /// ADR 2026-10-29-cos-authorization-fallback-after-triage D2: the safety net of an
-    /// authorization item whose CoS run has not started, or is still live, after this many
-    /// seconds. Unset means `max_wall_secs + AUTHORIZATION_FALLBACK_MARGIN_SECS` (1200 by default).
+    /// ADR 2026-11-11-cos-fallback-timing D1/D5: the safety net of CoS's first response for every
+    /// kind, counted from the start of the live run (the item's own, or the one it waits behind)
+    /// or from the time the item became pickable. Unset means
+    /// `max_wall_secs + FALLBACK_MARGIN_SECS` (1200 by default). The removed
+    /// `unavailable_after_secs` / `authorization_unavailable_after_secs` are load errors.
     #[serde(default)]
-    pub authorization_unavailable_after_secs: Option<u64>,
+    pub fallback_after_secs: Option<u64>,
 }
 
 impl Default for CosTriageConfig {
@@ -134,8 +134,7 @@ impl Default for CosTriageConfig {
             policy_version: default_policy_version(),
             min_confidence: default_min_confidence(),
             human_required: default_human_required(),
-            unavailable_after_secs: default_unavailable_after_secs(),
-            authorization_unavailable_after_secs: None,
+            fallback_after_secs: None,
         }
     }
 }
@@ -176,12 +175,9 @@ fn default_human_required() -> Vec<String> {
         .map(str::to_owned)
         .collect()
 }
-fn default_unavailable_after_secs() -> u64 {
-    120
-}
-/// The margin added to `max_wall_secs` for the default authorization safety net: the run's own
+/// The margin added to `max_wall_secs` for the default fallback safety net: the run's own
 /// wall-clock limit ends a live run first, and the reaping tick and the item's queue wait fit in it.
-pub const AUTHORIZATION_FALLBACK_MARGIN_SECS: u64 = 300;
+pub const FALLBACK_MARGIN_SECS: u64 = 300;
 
 /// `[cos.attachments]`。既定は 1 ファイル 25 MiB、1 メッセージ 100 MiB/10 件、保存量 10 GiB、
 /// 未送信 24 時間、最後の参照が外れてから 30 日。
@@ -258,17 +254,12 @@ impl CosConfig {
             .unwrap_or_else(|| PathBuf::from("."))
     }
 
-    /// ADR 2026-10-29-cos-authorization-fallback-after-triage D2: the resolved safety net of an
-    /// authorization item. Unset: `max_wall_secs + AUTHORIZATION_FALLBACK_MARGIN_SECS`, and never
-    /// shorter than `unavailable_after_secs`.
-    pub fn authorization_unavailable_after_secs(&self) -> u64 {
+    /// ADR 2026-11-11-cos-fallback-timing D1: the resolved safety net of CoS's first response.
+    /// Unset: `max_wall_secs + FALLBACK_MARGIN_SECS`.
+    pub fn fallback_after_secs(&self) -> u64 {
         self.triage
-            .authorization_unavailable_after_secs
-            .unwrap_or_else(|| {
-                self.max_wall_secs
-                    .saturating_add(AUTHORIZATION_FALLBACK_MARGIN_SECS)
-                    .max(self.triage.unavailable_after_secs)
-            })
+            .fallback_after_secs
+            .unwrap_or_else(|| self.max_wall_secs.saturating_add(FALLBACK_MARGIN_SECS))
     }
 
     pub fn stream_retention(&self) -> time::Duration {
@@ -303,17 +294,12 @@ impl CosConfig {
                 "[cos.triage] min_confidence must be between 0 and 1".into(),
             ));
         }
-        if self.triage.unavailable_after_secs == 0 {
-            return Err(ConfigError::Invalid(
-                "[cos.triage] unavailable_after_secs must be >= 1".into(),
-            ));
-        }
-        if let Some(secs) = self.triage.authorization_unavailable_after_secs
-            && secs <= self.triage.unavailable_after_secs
+        if let Some(secs) = self.triage.fallback_after_secs
+            && secs <= self.max_wall_secs
         {
             return Err(ConfigError::Invalid(
-                "[cos.triage] authorization_unavailable_after_secs must be greater than \
-                 unavailable_after_secs"
+                "[cos.triage] fallback_after_secs must be greater than [cos] max_wall_secs \
+                 (a live CoS run is not cut short)"
                     .into(),
             ));
         }

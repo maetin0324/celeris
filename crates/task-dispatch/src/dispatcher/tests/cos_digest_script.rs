@@ -486,6 +486,15 @@ async fn cos_digest_script_order_item_update_before_and_after_run_end() {
         let first = settle(&mut f).await;
         // 遅れて item の更新が届く。completed の run の未処理 item は digest と同じ pass で退避
         // （fallback）に渡っているので、遅れた判断は効かない。digest pass がもう一度立っても何も増えない。
+        // ADR 2026-11-11-cos-fallback-timing D2: a judgment before the send would still win; this
+        // checks a judgment after the notifier sent the fallback.
+        rusqlite::Connection::open(&f.db_path)
+            .expect("db")
+            .execute(
+                "UPDATE notifications SET ok=1,sent_at='2026-11-11T00:00:00Z' WHERE kind='cos_fallback'",
+                [],
+            )
+            .expect("sent");
         for item in [&late_done, &late_stop] {
             assert!(
                 !f.store

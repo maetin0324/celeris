@@ -24,6 +24,7 @@ use task_core::{
 use task_ops::root_done::{self, RootDoneFacts};
 use time::OffsetDateTime;
 
+use super::fallback::{FirstResponseWait, parse_ts};
 use super::launch::CosChatLaunch;
 use crate::dispatcher::Dispatcher;
 use crate::root_done_probe::{
@@ -313,14 +314,55 @@ impl CosChatLaunch {
                         let facts = collect_facts(&self.store, row.task_id, probe)?;
                         self.root_done_fallback(row, &facts, Some(thread_id), now)
                     }
-                    Some(_) => Ok(()),
+                    Some((_, run)) => {
+                        // ADR 2026-11-11-cos-fallback-timing D4: CoS is writing the summary; only a
+                        // run that hangs past the safety net (from its start) gets the short text.
+                        let started = run.started_at.as_deref().and_then(parse_ts).unwrap_or(now);
+                        match FirstResponseWait::OwnRun(started)
+                            .overdue(self.config.triage.fallback_after_secs, now)
+                        {
+                            Some(_) => {
+                                let facts = collect_facts(&self.store, row.task_id, probe)?;
+                                self.root_done_fallback(row, &facts, Some(thread_id), now)
+                            }
+                            None => Ok(()),
+                        }
+                    }
                     None => {
-                        let limit = i64::try_from(self.config.triage.unavailable_after_secs)
-                            .unwrap_or(i64::MAX);
-                        if age <= limit {
+                        // D4: the input waits behind the thread's live run, or is pickable since
+                        // it was queued or the thread's last run ended. Not counted from the done.
+                        let queued = self
+                            .store
+                            .chat_message_get(thread_id, input_id)
+                            .ok()
+                            .and_then(|m| parse_ts(&m.created_at))
+                            .unwrap_or(row.created_at);
+                        let live = runs
+                            .items
+                            .iter()
+                            .filter(|r| {
+                                matches!(
+                                    r.state,
+                                    ChatRunState::Queued
+                                        | ChatRunState::Running
+                                        | ChatRunState::Stopping
+                                )
+                            })
+                            .map(|r| r.started_at.as_deref().and_then(parse_ts).unwrap_or(queued))
+                            .min();
+                        let idle = runs
+                            .items
+                            .iter()
+                            .filter_map(|r| r.finished_at.as_deref().and_then(parse_ts))
+                            .max();
+                        let wait = FirstResponseWait::queued(queued, live, idle);
+                        if wait
+                            .overdue(self.config.triage.fallback_after_secs, now)
+                            .is_none()
+                        {
                             return Ok(());
                         }
-                        // 未着手のまま待ちすぎた（容量待ち・停止）: 入力を取り下げて決定的な短文に切り替える。
+                        // 拾える状態のまま安全網を超えた（容量待ち・停止）: 入力を取り下げて決定的な短文に切り替える。
                         let _ = self.store.chat_message_cancel(thread_id, input_id, now);
                         let facts = collect_facts(&self.store, row.task_id, probe)?;
                         self.root_done_fallback(row, &facts, Some(thread_id), now)

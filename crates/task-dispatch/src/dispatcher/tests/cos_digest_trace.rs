@@ -946,10 +946,11 @@ async fn trace_scenarios(mode: Mode) -> Vec<(String, Vec<PassCapture>)> {
     out.record(&mut s, "completed/answered-observed-running")
         .await;
 
-    // completed: the unavailable fallback routed the item while the run was still live.
+    // completed: the safety net routed the item of a run still live past it (counted from the
+    // run's start, ADR 2026-11-11-cos-fallback-timing D1).
     let mut s = scene(mode, true, DONE);
     trace_start_run(&mut s.f, &["deploy"]);
-    s.f.advance(130);
+    s.f.advance(1210);
     s.f.tick();
     assert_eq!(
         s.f.count("SELECT COUNT(*) FROM cos_inbox_items WHERE state='fallback'"),
@@ -1008,10 +1009,10 @@ async fn trace_scenarios(mode: Mode) -> Vec<(String, Vec<PassCapture>)> {
     trace_escalate(&s.f, &items[0], "人の判断", trace_packet());
     out.record(&mut s, "failed/escalated-and-running").await;
 
-    // failed: the unavailable fallback routed the item while the run was still live.
+    // failed: the safety net routed the item of a run still live past it (D1 of the ADR above).
     let mut s = scene(mode, true, FAIL_SCRIPT);
     trace_start_run(&mut s.f, &["deploy"]);
-    s.f.advance(130);
+    s.f.advance(1210);
     s.f.tick();
     out.record(&mut s, "failed/fallback-while-live").await;
 

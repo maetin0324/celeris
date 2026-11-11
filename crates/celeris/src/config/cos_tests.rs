@@ -198,36 +198,41 @@ fn cos_chat_config_rejects_legacy_route_fields() {
     assert!(load("[cos]\nmax_turns = 0\n").is_err());
 }
 
-/// ADR 2026-10-29-cos-authorization-fallback-after-triage D2: the safety net of an authorization
-/// item defaults to `max_wall_secs + 300`, follows `max_wall_secs`, and an explicit value wins.
+/// ADR 2026-11-11-cos-fallback-timing D1/D5: the safety net of every kind defaults to
+/// `max_wall_secs + 300`, follows `max_wall_secs`, an explicit value wins and must be longer than
+/// `max_wall_secs`; the removed fields counted from arrival are load errors.
 #[test]
-fn cos_triage_authorization_safety_net_default_and_override() {
+fn cos_triage_fallback_safety_net_default_override_and_removed_fields() {
     let cfg = load("").expect("empty config loads");
-    assert_eq!(cfg.cos.triage.authorization_unavailable_after_secs, None);
-    assert_eq!(cfg.cos.authorization_unavailable_after_secs(), 1200);
+    assert_eq!(cfg.cos.triage.fallback_after_secs, None);
+    assert_eq!(cfg.cos.fallback_after_secs(), 1200);
     let cfg = load("[cos]\nmax_wall_secs = 1800\n").expect("loads");
-    assert_eq!(cfg.cos.authorization_unavailable_after_secs(), 2100);
-    let cfg = load("[cos.triage]\nunavailable_after_secs = 5000\n").expect("loads");
-    assert_eq!(
-        cfg.cos.authorization_unavailable_after_secs(),
-        5000,
-        "never shorter than unavailable_after_secs"
-    );
-    let cfg = load("[cos.triage]\nauthorization_unavailable_after_secs = 3600\n").expect("loads");
-    assert_eq!(cfg.cos.authorization_unavailable_after_secs(), 3600);
-    let err = load("[cos.triage]\nauthorization_unavailable_after_secs = 120\n")
-        .expect_err("not longer than unavailable_after_secs");
+    assert_eq!(cfg.cos.fallback_after_secs(), 2100);
+    let cfg = load("[cos.triage]\nfallback_after_secs = 3600\n").expect("loads");
+    assert_eq!(cfg.cos.fallback_after_secs(), 3600);
+    let err = load("[cos.triage]\nfallback_after_secs = 120\n")
+        .expect_err("not longer than max_wall_secs");
     assert!(
         err.to_string()
-            .contains("authorization_unavailable_after_secs must be greater"),
+            .contains("fallback_after_secs must be greater than [cos] max_wall_secs"),
         "{err}"
     );
+    for removed in [
+        "[cos.triage]\nunavailable_after_secs = 120\n",
+        "[cos.triage]\nauthorization_unavailable_after_secs = 1200\n",
+    ] {
+        let err = load(removed).expect_err("removed field");
+        assert!(
+            err.to_string().contains("unknown field"),
+            "{removed}: {err}"
+        );
+    }
     let example = Config::load(Path::new(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../config/celeris.example.toml"
     )))
     .expect("example loads");
-    assert_eq!(example.cos.authorization_unavailable_after_secs(), 1200);
+    assert_eq!(example.cos.fallback_after_secs(), 1200);
 }
 
 /// ADR 2026-11-11-cos-skill-sync D4: the repo's CoS skills pass the claim gate under the config

@@ -44,3 +44,4 @@ license: このリポジトリと同じ（外部の license は無い）
 - 2026-11-04（ADR 2026-11-04-project-controller 付記 A7）: §2 の追加の規則に人の許可範囲（authority ledger）の行を足した
   （聞く前に `authority.check` を読む、提案は `authority.grant_propose`、basis の refs の種類 `authority_grant` は `human_required` を
   解除しない）。policy_version を 11 に上げた。config の `[cos.triage] policy_version` の既定も "11"。
+- 2026-11-11（ADR 2026-11-11-cos-fallback-timing）: §7 の退避の説明を全種類の「一次対応の後だけ送る」と送信前の判定の取り下げに直した。判定の基準は変えていないので policy_version は 11 のまま（config の `[cos.triage] policy_version` も変えない）。

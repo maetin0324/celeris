@@ -256,6 +256,53 @@ async fn without_cos_the_deterministic_fallback_is_notified_once() {
     assert_eq!(f.count("SELECT COUNT(*) FROM chat_runs"), 0);
 }
 
+/// (e) ADR 2026-11-11-cos-fallback-timing D4: the root-done summary follows the same rule as an
+/// inbox item. Queued while CoS cannot start (stopped intake), it is not cut at 120 seconds; the
+/// deterministic short text goes out once the safety net (1200 s) has passed since it became
+/// pickable.
+#[tokio::test]
+async fn root_done_summary_waits_for_the_safety_net_when_cos_cannot_start() {
+    let mut f = fixture(true);
+    f.d.accepting_new_work = false;
+    f.tick();
+    f.done_task(None);
+    f.tick();
+    f.advance(130);
+    f.tick();
+    assert!(f.summary_notifications().is_empty(), "no 120-second cut");
+    f.advance(1000);
+    f.tick();
+    assert!(f.summary_notifications().is_empty());
+    f.advance(100);
+    f.tick();
+    let bodies = f.summary_notifications();
+    assert_eq!(bodies.len(), 1, "{bodies:?}");
+    assert!(bodies[0].contains("決定的な短文"), "{}", bodies[0]);
+}
+
+/// (e) While CoS writes the summary (its run is live) nothing goes out; a run that hangs past the
+/// safety net, counted from its start, gets the short text once.
+#[tokio::test]
+async fn root_done_summary_waits_for_its_live_run_up_to_the_safety_net() {
+    let mut f = fixture(true);
+    f.tick();
+    f.done_task(None);
+    f.tick();
+    assert_eq!(
+        f.count("SELECT COUNT(*) FROM chat_runs WHERE state='running'"),
+        1
+    );
+    f.advance(1100);
+    f.tick();
+    assert!(f.summary_notifications().is_empty(), "CoS is writing it");
+    f.advance(110);
+    f.tick();
+    f.tick();
+    let bodies = f.summary_notifications();
+    assert_eq!(bodies.len(), 1, "{bodies:?}");
+    assert!(bodies[0].contains("決定的な短文"), "{}", bodies[0]);
+}
+
 /// ADR 2026-11-04-project-controller §A4: a root the general CoS delegated from a conversation
 /// (an applied `task.create` operation of the general thread) reports into that general thread,
 /// not into its project's thread, with the task id in the facts, so the person goes on from the

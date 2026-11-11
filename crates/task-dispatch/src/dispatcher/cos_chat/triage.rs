@@ -27,7 +27,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use task_core::chat::ChatRun;
-use task_core::chat::triage::{COS_TRIAGE_BATCH_MAX, CosTriageSource};
+use task_core::chat::triage::CosTriageSource;
 use task_core::{Event, EventRow, Notice, NoticeKind, NoticeQuery, NoticeStore, TaskId, TaskStore};
 use task_ops::human_inbox::{HumanInbox, InboxItem, InboxKind};
 use time::OffsetDateTime;
@@ -68,15 +68,11 @@ pub struct CosTriageSettings {
     pub policy_version: String,
     pub min_confidence: f64,
     pub human_required: Vec<String>,
-    /// D6: a wait with no CoS outcome after this many seconds goes to the
-    /// unavailable fallback (fallback leaf).
-    pub unavailable_after_secs: u64,
-    /// ADR 2026-10-29-cos-authorization-fallback-after-triage D2: the safety net of an
-    /// authorization item. While its CoS run is live (queued・running・stopping) the
-    /// `unavailable_after_secs` deadline does not apply; the item goes to the person only when no
-    /// run starts within this many seconds of its arrival, or when its run is still live this many
-    /// seconds after it started. The daemon resolves the default as `max_wall_secs + 300`.
-    pub authorization_unavailable_after_secs: u64,
+    /// ADR 2026-11-11-cos-fallback-timing D1: the safety net of CoS's first response, the same
+    /// for every kind. Counted from the start of the item's own live run, or of the run of its
+    /// thread it waits behind, and otherwise from the time the item became pickable. The daemon
+    /// resolves the default as `max_wall_secs + 300`.
+    pub fallback_after_secs: u64,
 }
 
 impl Default for CosTriageSettings {
@@ -97,8 +93,7 @@ impl Default for CosTriageSettings {
             .into_iter()
             .map(String::from)
             .collect(),
-            unavailable_after_secs: 120,
-            authorization_unavailable_after_secs: 1200,
+            fallback_after_secs: 1200,
         }
     }
 }
@@ -108,8 +103,10 @@ impl Default for CosTriageSettings {
 pub(crate) struct CosTriageState {
     /// The startup comparison has run in this process.
     reconciled: bool,
-    /// Pending items may exist; try one claim when the inbox thread is idle.
-    pub(super) dirty: bool,
+    /// The reason each CoS thread with pending items was last skipped by `triage_launch`, so a
+    /// reason is logged once when it changes (ADR 2026-11-11-cos-fallback-timing D3). Log
+    /// de-duplication only: whether a thread has pending items is read from SQLite every tick.
+    pub(crate) launch_skips: HashMap<String, TriageSkip>,
     /// A run of the inbox thread finished (or the process started): write the digests
     /// of finished triage runs (ADR 2026-10-07-cos-inbox-thread-conversation D1).
     pub(crate) digest_due: bool,
@@ -128,6 +125,40 @@ pub(crate) struct CosTriageState {
     /// The stagnation check result (`Dispatcher::stagnation_generation`) whose four kinds were
     /// last reconciled (ADR 2026-10-29-stagnation-triage-notify-wiring D3).
     pub(super) stagnation_generation: Option<u64>,
+}
+
+/// Why `triage_launch` did not start a run for a CoS thread with pending items
+/// (ADR 2026-11-11-cos-fallback-timing D3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TriageSkip {
+    /// The daemon does not take new work (standby, draining).
+    NotAccepting,
+    /// The disk guard holds new work.
+    DiskNotReady,
+    /// `cos.enabled=false` (the fallback routes the items at once).
+    Disabled,
+    /// The KB's CoS skills do not fit `[cos.triage]` (ADR 2026-11-11-cos-skill-sync D3).
+    SkillDrift,
+    /// This process runs the thread's CoS run; the items are claimed after it.
+    ThreadRunning,
+    /// Every CoS slot is in use.
+    NoCapacity,
+    /// SQLite has a live run of the thread that this process does not own.
+    RunInDb,
+}
+
+impl TriageSkip {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::NotAccepting => "not_accepting_new_work",
+            Self::DiskNotReady => "disk_not_ready",
+            Self::Disabled => "cos_disabled",
+            Self::SkillDrift => "cos_skill_drift",
+            Self::ThreadRunning => "thread_run_live",
+            Self::NoCapacity => "no_cos_slot",
+            Self::RunInDb => "thread_run_live_in_db",
+        }
+    }
 }
 
 /// Inbox builds of the relay re-judging pass: `scoped` covers the candidates' tasks only, `full`
@@ -372,7 +403,6 @@ impl CosChatLaunch {
             match self.triage_reconcile(dispatcher, now) {
                 Ok(()) => {
                     self.triage.reconciled = true;
-                    self.triage.dirty = true;
                     self.triage.digest_due = true;
                 }
                 Err(error) => {
@@ -477,7 +507,6 @@ impl CosChatLaunch {
         }
         self.triage.stagnation_generation = Some(generation);
         if inserted > 0 {
-            self.triage.dirty = true;
             tracing::info!(inserted, "CoS triage added stagnation waits");
         }
         Ok(())
@@ -639,14 +668,10 @@ impl CosChatLaunch {
                     .map_err(|e| e.to_string())?;
                 sources_for_touched(&inbox, &touched, &policy)
             };
-            let inserted = self
-                .store
+            self.store
                 .cos_triage_ingest_batch(COS_TRIAGE_EVENTS_SOURCE, &last.to_string(), &sources, now)
                 .map_err(|e| e.to_string())?;
             cursor = last;
-            if inserted > 0 {
-                self.triage.dirty = true;
-            }
             if rows.len() < EVENT_BATCH {
                 break;
             }
@@ -697,38 +722,52 @@ impl CosChatLaunch {
             .iter()
             .filter_map(|n| notice_source(n, &policy))
             .collect();
-        let inserted = self
-            .store
+        self.store
             .cos_triage_ingest_batch(COS_TRIAGE_NOTICES_SOURCE, &head, &sources, now)
             .map_err(|e| e.to_string())?;
-        if inserted > 0 {
-            self.triage.dirty = true;
-        }
         Ok(())
     }
 
     /// Start one CoS run over up to twenty pending items in each idle CoS thread that has
     /// pending items (ADR 2026-10-22-cos-fixed-threads D3). While a thread's run is live its
-    /// items stay pending (durable queue).
-    pub(crate) fn triage_launch(&mut self, dispatcher: &mut Dispatcher) -> Result<(), String> {
-        if !self.triage.dirty {
-            return Ok(());
-        }
+    /// items stay pending (durable queue). ADR 2026-11-11-cos-fallback-timing D3: the pending
+    /// threads are read from SQLite every tick (no process-local "maybe pending" hint), so an
+    /// item is picked on the first tick its thread is idle and a slot is free, and every skip is
+    /// logged with its reason. `gate` is the dispatcher-wide reason no CoS run may start now.
+    pub(crate) fn triage_launch(
+        &mut self,
+        dispatcher: &mut Dispatcher,
+        gate: Option<TriageSkip>,
+    ) -> Result<(), String> {
         let threads = self
             .store
             .cos_triage_pending_threads()
             .map_err(|e| e.to_string())?;
-        // Busy threads keep their items for the next pass.
-        let mut more = false;
+        let mut skips = HashMap::new();
         for thread in threads {
-            if self.running.contains_key(&thread) || !self.has_capacity(dispatcher) {
-                more = true;
-                continue;
+            let skip = if let Some(gate) = gate {
+                Some(gate)
+            } else if self.running.contains_key(&thread) {
+                Some(TriageSkip::ThreadRunning)
+            } else if !self.has_capacity(dispatcher) {
+                Some(TriageSkip::NoCapacity)
+            } else if self.start_thread(dispatcher, &thread, ClaimSource::Triage)? {
+                None
+            } else {
+                // The claim saw a live run of this thread that this process does not own (a
+                // draining daemon after a release switch, a run being settled).
+                Some(TriageSkip::RunInDb)
+            };
+            if let Some(skip) = skip {
+                skips.insert(thread, skip);
             }
-            self.start_thread(dispatcher, &thread, ClaimSource::Triage)?;
-            more |= self.triage.dirty;
         }
-        self.triage.dirty = more;
+        for (thread, skip) in &skips {
+            if self.triage.launch_skips.get(thread) != Some(skip) {
+                tracing::info!(thread_id = %thread, reason = skip.as_str(), "CoS triage launch skipped a thread with pending items");
+            }
+        }
+        self.triage.launch_skips = skips;
         Ok(())
     }
 
@@ -745,11 +784,9 @@ impl CosChatLaunch {
             .cos_triage_claim(thread_id, run_id, now)
             .map_err(|e| e.to_string())?
         else {
-            self.triage.dirty = false;
             return Ok(None);
         };
-        // More than a batch: claim the rest after this run.
-        self.triage.dirty = claim.item_ids.len() >= COS_TRIAGE_BATCH_MAX;
+        // More than a batch: the rest stays pending and is claimed after this run.
         self.store
             .chat_run_get(&claim.thread_id, run_id)
             .map(Some)

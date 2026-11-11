@@ -65,8 +65,7 @@ fn fixture() -> Fixture {
             web_base_url: Some("http://celeris.test".into()),
             // 退避は試験が明示的に縮めるまで起こさない。
             triage: CosTriageSettings {
-                unavailable_after_secs: 1_000_000,
-                authorization_unavailable_after_secs: 1_000_000,
+                fallback_after_secs: 1_000_000,
                 ..Default::default()
             },
         },
@@ -396,7 +395,7 @@ async fn unknown_stagnation_holds_rows_until_the_check_succeeds_again() {
 
     // The unavailable fallback is due for every item now.
     if let Some(launch) = f.d.cos_chat_launch.as_mut() {
-        launch.config.triage.unavailable_after_secs = 60;
+        launch.config.triage.fallback_after_secs = 60;
     }
     f.at(3780);
     assert_eq!(f.rows(), rows, "fallback holds the stagnation rows");

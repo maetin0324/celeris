@@ -515,11 +515,21 @@ async fn resolve(
                     id: i.clone(),
                 })));
             };
-            if item.is_terminal() {
-                return Err(reject(revision_conflict(format!(
-                    "triage item {i} is already {}",
-                    item.state
-                ))));
+            // ADR 2026-11-11-cos-fallback-timing D2: a fallback the notifier has not sent yields to
+            // CoS's judgment; a sent one stays with the person (this judgment is recorded as rejected
+            // and nothing is sent again).
+            if item.is_terminal()
+                && !(item.state == "fallback"
+                    && triage_view::fallback_unsent(&db, &i).map_err(cos_problem)?)
+            {
+                return Err(reject(revision_conflict(if item.state == "fallback" {
+                    format!(
+                        "triage item {i} was already sent to the person by the fallback; \
+                         this judgment is recorded and nothing is sent again"
+                    )
+                } else {
+                    format!("triage item {i} is already {}", item.state)
+                })));
             }
             if item.source_revision != req.expected_revision {
                 return Err(reject(revision_conflict(format!(

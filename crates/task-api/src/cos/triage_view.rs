@@ -87,6 +87,13 @@ pub(crate) fn items(
     Ok(rows.collect::<Result<_, _>>()?)
 }
 
+/// ADR 2026-11-11-cos-fallback-timing D2: the item is with the person by the fallback, but the
+/// notifier has not sent it, so CoS may still answer, observe or escalate it.
+pub(crate) fn fallback_unsent(db: &Path, id: &str) -> Result<bool, ChatError> {
+    let conn = open(db)?;
+    task_core::chat::triage::cos_triage_fallback_unsent(&conn, id)
+}
+
 /// True when a later revision of the same source was ingested after `item`.
 pub(crate) fn superseded(db: &Path, item: &CosInboxItem) -> Result<bool, ChatError> {
     let conn = open(db)?;

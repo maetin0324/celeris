@@ -4,7 +4,6 @@ import { type ReactNode, useEffect, useRef, useState } from "react";
 import { badgeView } from "../../api/queries/badges";
 import type { ConnectionState } from "../../api/realtime/connection-state";
 import { useConnectionState, useRealtimeSubscription } from "../../api/realtime/use-realtime";
-import { NotificationsWatcher } from "../../features/reports/notifications-watcher";
 import { formatAbsolute, formatRelative, useLastHello } from "../../lib/time";
 import { Badge, type BadgeTone } from "../ui/badge";
 import { buttonVariants } from "../ui/button";
@@ -87,7 +86,6 @@ export function Shell({ children }: { children: ReactNode }) {
       >
         本文へ移動
       </a>
-      <NotificationsWatcher unread={server.notificationsUnread} />
       <header className="relative flex flex-wrap items-center gap-2 border-b border-border bg-background px-4 py-1 md:sticky md:top-0 md:h-dvh md:w-nav md:shrink-0 md:flex-col md:flex-nowrap md:items-stretch md:gap-3 md:overflow-y-auto md:border-r md:border-b-0 md:px-3 md:py-4">
         <Link
           to="/"

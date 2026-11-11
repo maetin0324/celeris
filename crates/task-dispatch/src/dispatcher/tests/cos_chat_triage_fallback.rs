@@ -4,14 +4,11 @@
 
 use super::*;
 use crate::dispatcher::cos_chat::fallback::{
-    COS_FALLBACK_HEADLINE, COS_FALLBACK_NO_RECOMMENDATION, FallbackCandidate, FallbackDeadlines,
-    unavailable_reason,
+    COS_FALLBACK_HEADLINE, COS_FALLBACK_NO_RECOMMENDATION, FallbackCandidate, unavailable_reason,
 };
 
-const DEADLINES: FallbackDeadlines = FallbackDeadlines {
-    after_secs: 120,
-    authorization_after_secs: 1200,
-};
+/// `[cos.triage] fallback_after_secs` of the fixture (the default `max_wall_secs + 300`).
+const AFTER_SECS: u64 = 1200;
 
 const FAIL: &str = "cat >/dev/null; echo boom >&2; exit 3";
 const QUOTA: &str =
@@ -150,13 +147,13 @@ async fn cos_chat_triage_fallback_deadline_covers_capacity_wait() {
     f.tick();
     f.question("waiting", vec![]);
     f.tick();
-    f.advance(100);
+    f.advance(1190);
     f.tick();
-    assert_eq!(f.fallback_outbox(), 0, "within unavailable_after_secs");
+    assert_eq!(f.fallback_outbox(), 0, "within fallback_after_secs");
     assert_eq!(f.state_count("pending"), 1);
     f.advance(30);
     f.tick();
-    f.assert_one_fallback("120 秒");
+    f.assert_one_fallback("1200 秒を超えても始まらない");
     assert_eq!(f.inbox_runs(), 0);
 }
 
@@ -225,7 +222,15 @@ async fn cos_chat_triage_fallback_restart_and_recovery_neither_resend_nor_answer
     assert_eq!(f.items(), 1);
     assert_eq!(f.fallback_outbox(), 1, "no second notice");
     assert_eq!(f.state_count("fallback"), 1);
-    // An escalation attempt by a recovered CoS cannot add a second pending outbox.
+    // An escalation attempt by a recovered CoS after the send cannot add a second pending outbox
+    // (before the send it would replace the fallback: ADR 2026-11-11-cos-fallback-timing D2).
+    rusqlite::Connection::open(&f.db_path)
+        .expect("db")
+        .execute(
+            "UPDATE notifications SET ok=1,sent_at='2026-11-11T00:00:00Z' WHERE kind='cos_fallback'",
+            [],
+        )
+        .expect("sent");
     let again = f
         .store
         .cos_triage_outbox_claim(&item, "escalation", "{}", f.d.now_utc())
@@ -331,6 +336,8 @@ fn cos_chat_triage_fallback_reason_is_deterministic() {
         run_state: None,
         run_reason: None,
         run_started_at: None,
+        thread_run_started_at: None,
+        thread_idle_since: None,
         route: None,
         summary: String::new(),
         detail: String::new(),
@@ -341,14 +348,14 @@ fn cos_chat_triage_fallback_reason_is_deterministic() {
             .expect("ts"),
         ..base.clone()
     };
-    assert!(unavailable_reason(&fresh, true, DEADLINES, now).is_none());
-    assert!(unavailable_reason(&fresh, false, DEADLINES, now).is_some());
+    assert!(unavailable_reason(&fresh, true, AFTER_SECS, now).is_none());
+    assert!(unavailable_reason(&fresh, false, AFTER_SECS, now).is_some());
     let running = FallbackCandidate {
         run_id: Some("r".into()),
         run_state: Some("running".into()),
         ..fresh.clone()
     };
-    assert!(unavailable_reason(&running, true, DEADLINES, now).is_none());
+    assert!(unavailable_reason(&running, true, AFTER_SECS, now).is_none());
     for (state, part) in [
         ("failed", "失敗"),
         ("interrupted", "止まった"),
@@ -359,7 +366,7 @@ fn cos_chat_triage_fallback_reason_is_deterministic() {
             run_state: Some(state.into()),
             ..running.clone()
         };
-        let reason = unavailable_reason(&c, true, DEADLINES, now).expect(state);
+        let reason = unavailable_reason(&c, true, AFTER_SECS, now).expect(state);
         assert!(reason.contains(part), "{state}: {reason}");
     }
     let quota = FallbackCandidate {
@@ -368,7 +375,7 @@ fn cos_chat_triage_fallback_reason_is_deterministic() {
         ..running
     };
     assert!(
-        unavailable_reason(&quota, true, DEADLINES, now)
+        unavailable_reason(&quota, true, AFTER_SECS, now)
             .expect("quota")
             .contains("quota")
     );
@@ -436,9 +443,9 @@ async fn cos_chat_triage_fallback_hands_over_the_whole_body_and_queues_a_summary
     );
     f.long_question("長い質問", &body);
     f.tick();
-    f.advance(130);
+    f.advance(1210);
     f.tick();
-    f.assert_one_fallback("120 秒");
+    f.assert_one_fallback("1200 秒");
     assert_eq!(f.inbox_runs(), 0);
     let messages = f.general_messages();
     let handoff = messages
@@ -650,3 +657,6 @@ async fn cos_chat_triage_fallback_summary_request_failed_run_is_retried_up_to_th
 
 #[path = "cos_chat_triage_fallback_authorization.rs"]
 mod authorization;
+
+#[path = "cos_chat_triage_fallback_timing.rs"]
+mod timing;

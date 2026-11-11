@@ -319,6 +319,15 @@ async fn cos_digest_script_ts_order_item_update_before_and_after_run_end() {
         f.finish_run("run-3-run-first-stop", ChatRunState::Stopped);
         f.observe_run_end();
         let first = settle(&mut f).await;
+        // ADR 2026-11-11-cos-fallback-timing D2: a judgment before the send would still win; this
+        // checks a judgment after the notifier sent the fallback.
+        rusqlite::Connection::open(&f.db_path)
+            .expect("db")
+            .execute(
+                "UPDATE notifications SET ok=1,sent_at='2026-11-11T00:00:00Z' WHERE kind='cos_fallback'",
+                [],
+            )
+            .expect("sent");
         for item in [&late_done, &late_stop] {
             assert!(
                 !f.store

@@ -14,9 +14,8 @@ use ulid::Ulid;
 use super::{SqliteStore, StoreError, format_rfc3339};
 use crate::authority::{
     ActionClass, AuthorityAuditEntry, AuthorityGrant, AuthorityProposal, AuthorityVerdict,
-    GLOBAL_LEDGER, GrantScope, GrantSource, MAX_GRANT_BUDGET, MAX_GRANT_DAYS,
-    MAX_ROUTINE_GRANT_DAYS, NewAuthorityAudit, NewAuthorityGrant, ScopeKind, SourceKind,
-    grant_denial, reason, scope_covers, scope_rank,
+    GLOBAL_LEDGER, GrantScope, GrantSource, MAX_GRANT_BUDGET, NewAuthorityAudit, NewAuthorityGrant,
+    ScopeKind, SourceKind, grant_denial, reason, scope_covers, scope_rank,
 };
 
 /// 許可を作れない理由（API は 422 にする）。
@@ -80,15 +79,16 @@ fn grant_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AuthorityGrant> {
     })
 }
 
+/// 案件 `project` に効く許可: その案件の行と global の台帳（`project_id = '*'`。D4）の行。
 fn grants_of(conn: &Connection, project: &str) -> Result<Vec<AuthorityGrant>, StoreError> {
     let mut st = conn.prepare_cached(&format!(
-        "SELECT {GRANT_COLUMNS} FROM authority_grants WHERE project_id = ?1 ORDER BY created_at, id"
+        "SELECT {GRANT_COLUMNS} FROM authority_grants WHERE project_id IN (?1, '*') ORDER BY created_at, id"
     ))?;
     let rows = st.query_map([project], grant_row)?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
-fn grant_of(conn: &Connection, id: &str) -> Result<Option<AuthorityGrant>, StoreError> {
+pub(crate) fn grant_of(conn: &Connection, id: &str) -> Result<Option<AuthorityGrant>, StoreError> {
     let mut st = conn.prepare_cached(&format!(
         "SELECT {GRANT_COLUMNS} FROM authority_grants WHERE id = ?1"
     ))?;
@@ -378,12 +378,7 @@ fn check_tx(
     if unknown_outcome(conn, project, action_class)? {
         return Ok(AuthorityVerdict::denied(reason::PRIOR_OUTCOME_UNKNOWN));
     }
-    // D4: 案件の判定は global の台帳の行も候補にする（global の許可はどの案件の範囲も含む）。
-    let mut ledger = grants_of(conn, project)?;
-    if project != GLOBAL_LEDGER {
-        ledger.extend(grants_of(conn, GLOBAL_LEDGER)?);
-    }
-    let mut candidates: Vec<AuthorityGrant> = ledger
+    let mut candidates: Vec<AuthorityGrant> = grants_of(conn, project)?
         .into_iter()
         .filter(|g| g.action_class == class && scope_covers(&g.scope, scope))
         .collect();
@@ -537,28 +532,9 @@ fn validate_new(
             format!("budget must be 1 to {MAX_GRANT_BUDGET}"),
         )));
     }
-    if scope.kind == ScopeKind::Global && !class.is_routine_answer() {
-        return Ok(Some(refusal(
-            GRANT_INVALID,
-            format!(
-                "a global grant delegates routine answers only; {} needs a project, outcome or task scope",
-                class.as_str()
-            ),
-        )));
-    }
-    let Ok(expiry) = super::parse_rfc3339(expires_at) else {
-        return Ok(Some(refusal(GRANT_INVALID, "expires_at must be RFC3339")));
-    };
-    let max_days = if class.is_routine_answer() {
-        MAX_ROUTINE_GRANT_DAYS
-    } else {
-        MAX_GRANT_DAYS
-    };
-    if expiry <= now || expiry > now + time::Duration::days(max_days) {
-        return Ok(Some(refusal(
-            GRANT_INVALID,
-            format!("expires_at must be in the future and within {max_days} days"),
-        )));
+    if let Some(problem) = crate::authority::grant_shape_problem(scope.kind, class, expires_at, now)
+    {
+        return Ok(Some(refusal(GRANT_INVALID, problem)));
     }
     if !scope_exists(conn, project, scope)? {
         return Ok(Some(refusal(
@@ -778,48 +754,6 @@ impl SqliteStore {
         Ok((verdict, id))
     }
 
-    /// D4: 取り次ぎ（`chat.relay_forward`）の根拠の許可 `grant_id` が案件 `project` の常設の指示を裏付けるか。
-    /// 裏付けるなら `None`、裏付けないなら理由。global の台帳か同じ案件の台帳の、範囲が global か案件全体の行で、
-    /// 取り消し・期限・回数・元の根拠のどれにも引っかからないこと。取り次ぎを根拠に使うたびにも呼ぶ。
-    pub fn authority_grant_backs_tx(
-        conn: &Connection,
-        grant_id: &str,
-        project: &str,
-        now: OffsetDateTime,
-    ) -> Result<Option<String>, StoreError> {
-        let Some(grant) = grant_of(conn, grant_id)? else {
-            return Ok(Some("no such grant".into()));
-        };
-        let covers = match grant.scope.kind {
-            ScopeKind::Global => true,
-            ScopeKind::Project => grant.project_id == project,
-            ScopeKind::Outcome | ScopeKind::Task => false,
-        };
-        if project.is_empty() || !covers {
-            return Ok(Some(format!(
-                "the grant's scope {} {} does not cover the whole project",
-                grant.scope.kind.as_str(),
-                grant.scope.reference
-            )));
-        }
-        if let Some(denial) = grant_denial(&grant, now) {
-            return Ok(Some(denial.to_owned()));
-        }
-        if source_problem(conn, project, &grant.source, &grant.granted_by)?.is_some() {
-            return Ok(Some(reason::SOURCE_UNREADABLE.to_owned()));
-        }
-        Ok(None)
-    }
-
-    pub fn authority_grant_backs(
-        &self,
-        grant_id: &str,
-        project: &str,
-        now: OffsetDateTime,
-    ) -> Result<Option<String>, StoreError> {
-        self.with_read_conn(|c| Self::authority_grant_backs_tx(c, grant_id, project, now))
-    }
-
     /// 許可を使わない監査の行（人の発言の取り次ぎ、controller の拒否、問いの抑止）。同じ key は 1 行。
     pub fn authority_audit_record(
         &self,
@@ -989,18 +923,7 @@ impl SqliteStore {
                 source_key: format!("authority:proposal:{}:{}", new.project_id, new.question_key),
                 kind: crate::feed::NoticeKind::BadNews,
                 group_key: format!("bad_news:authority:{}", new.project_id),
-                title: if new.project_id == GLOBAL_LEDGER {
-                    format!(
-                        "統括 CoS が全案件に効く許可（{}）を提案しました",
-                        new.action_class.as_str()
-                    )
-                } else {
-                    format!(
-                        "案件 {} の CoS が許可（{}）を提案しました",
-                        new.project_id,
-                        new.action_class.as_str()
-                    )
-                },
+                title: crate::authority::proposal_title(&new.project_id, new.action_class),
                 summary: format!(
                     "{}。案件の画面の「許可」で、許可するか断るかを決めてください。問いの key: {}。人の発言: {}",
                     new.note, new.question_key, new.source.reference

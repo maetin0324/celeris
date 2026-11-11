@@ -52,9 +52,11 @@ pub fn standing_context(
             .map(|p| p.id.to_string())
             .collect(),
     };
-    // ADR 2026-11-11-cos-standing-context D2/D4: every thread also reads the global ledger.
+    // ADR 2026-11-11-cos-standing-context D2/D4: every thread also reads the global ledger. A
+    // project's ledger already lists the global rows, so each grant is taken once.
     let mut ledgers = projects;
     ledgers.push(task_core::authority::GLOBAL_LEDGER.to_owned());
+    let mut seen = std::collections::BTreeSet::new();
     let mut grants = Vec::new();
     for id in &ledgers {
         let ledger = store
@@ -62,7 +64,7 @@ pub fn standing_context(
             .map_err(|e| format!("authority ledger unavailable: {e}"))?;
         for grant in ledger
             .into_iter()
-            .filter(|g| grant_denial(g, now).is_none())
+            .filter(|g| grant_denial(g, now).is_none() && seen.insert(g.id.clone()))
         {
             let source_excerpt = store
                 .authority_source_excerpt(&grant.source)

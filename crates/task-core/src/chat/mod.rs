@@ -545,11 +545,9 @@ pub struct ChatForwardRequest {
     #[serde(default)]
     pub task_ids: Vec<String>,
     /// RFC 3339 expiry (after now). Required without `grant_id`; with it, absent = while the grant lives.
-    #[serde(default)]
     pub expires_at: Option<String>,
     /// ADR 2026-11-11-cos-standing-context D4: a live grant of the authority ledger (global or the
     /// target project's own, project or global scope) that makes the person's instruction standing.
-    #[serde(default)]
     pub grant_id: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

@@ -247,6 +247,84 @@ pub fn grant_denial(grant: &AuthorityGrant, now: OffsetDateTime) -> Option<&'sta
     (grant.consumed >= grant.budget).then_some(reason::BUDGET_EXHAUSTED)
 }
 
+/// D4: 新しい許可の範囲・分類・期限の形の誤り（人が直せる理由）。global の範囲は定型の代答の分類だけ、期限は
+/// 未来で、定型の代答は [`MAX_ROUTINE_GRANT_DAYS`]・他は [`MAX_GRANT_DAYS`] 以内。
+pub fn grant_shape_problem(
+    kind: ScopeKind,
+    class: ActionClass,
+    expires_at: &str,
+    now: OffsetDateTime,
+) -> Option<String> {
+    if kind == ScopeKind::Global && !class.is_routine_answer() {
+        return Some(format!(
+            "a global grant delegates routine answers only; {} needs a project, outcome or task scope",
+            class.as_str()
+        ));
+    }
+    let max_days = if class.is_routine_answer() {
+        MAX_ROUTINE_GRANT_DAYS
+    } else {
+        MAX_GRANT_DAYS
+    };
+    match OffsetDateTime::parse(expires_at, &Rfc3339) {
+        Err(_) => Some("expires_at must be RFC3339".into()),
+        Ok(at) if at <= now || at > now + time::Duration::days(max_days) => Some(format!(
+            "expires_at must be in the future and within {max_days} days"
+        )),
+        Ok(_) => None,
+    }
+}
+
+/// D4: 許可 `grant` が案件 `project` 全体の常設の指示を裏付けるか。裏付けるなら `None`、裏付けないなら理由。
+/// global の行か同じ案件の案件全体の行で、取り消し・期限・回数のどれにも引っかからないこと。
+pub fn grant_backs(grant: &AuthorityGrant, project: &str, now: OffsetDateTime) -> Option<String> {
+    let covers = match grant.scope.kind {
+        ScopeKind::Global => true,
+        ScopeKind::Project => grant.project_id == project,
+        ScopeKind::Outcome | ScopeKind::Task => false,
+    };
+    if project.is_empty() || !covers {
+        return Some(format!(
+            "the grant's scope {} {} does not cover the whole project",
+            grant.scope.kind.as_str(),
+            grant.scope.reference
+        ));
+    }
+    grant_denial(grant, now).map(str::to_owned)
+}
+
+/// D4: 取り次ぎ（`chat.relay_forward`）が足りない理由。`grant` は `grant_id` を書いたときの台帳の行（無い id は
+/// `Some(None)`）、`scoped` は task と期限を書いたか。`grant_id` が無ければ task と期限が要り、あれば `grant` が
+/// 取り次ぎ先の案件全体を裏付けること（[`grant_backs`]）。取り次ぎを `instructed_by` に使うたびにも照合する。
+pub fn forward_gap(
+    grant: Option<Option<AuthorityGrant>>,
+    scoped: bool,
+    project: Option<&str>,
+    now: OffsetDateTime,
+) -> Option<String> {
+    match grant {
+        None if scoped => None,
+        None => Some("a forward without grant_id needs task_ids and expires_at".into()),
+        Some(None) => Some("no such grant".into()),
+        Some(Some(g)) => grant_backs(&g, project.unwrap_or_default(), now),
+    }
+}
+
+/// D4: 許可の提案の通知の題（global の台帳は統括 CoS の提案）。
+pub fn proposal_title(project: &str, class: ActionClass) -> String {
+    if project == GLOBAL_LEDGER {
+        format!(
+            "統括 CoS が全案件に効く許可（{}）を提案しました",
+            class.as_str()
+        )
+    } else {
+        format!(
+            "案件 {project} の CoS が許可（{}）を提案しました",
+            class.as_str()
+        )
+    }
+}
+
 /// 範囲 `request` を `grant` が含むか。global の許可はすべての案件を、案件の許可は案件の中のすべてを、
 /// 途中目標・task の許可は同じ ref だけを含む（案件の許可の候補は同じ案件の行だけから選ぶ）。
 pub fn scope_covers(grant: &GrantScope, request: &GrantScope) -> bool {

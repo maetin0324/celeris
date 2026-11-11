@@ -576,10 +576,7 @@ async fn resolve(
                         format!("{}: {}", basis::reason_prefix(routine), audit.ctx.reason);
                     let (method, domain_path, domain_body) =
                         delegated_request(found, input).map_err(&reject)?;
-                    audit.item = Some(ItemMark {
-                        item_id: item.id.clone(),
-                        outcome: "answered",
-                    });
+                    audit.item = Some(ItemMark::new(&item.id, "answered"));
                     let op = dispatch(
                         store,
                         &env,
@@ -588,14 +585,8 @@ async fn resolve(
                         &domain_path,
                         domain_body,
                     )?;
-                    // ADR 2026-11-11-cos-standing-context D4: the use of a standing grant is audited
-                    // after the answer is applied (decision = the grant, actor = this CoS run).
-                    if op.state == "applied"
-                        && let Err(problem) =
-                            basis::record_grant_use(store, routine, &target, &audit.by())
-                    {
-                        tracing::warn!(item = %item.id, detail = ?problem, "standing grant use not audited");
-                    }
+                    // ADR 2026-11-11-cos-standing-context D4: audit the use of a standing grant.
+                    basis::grant_used(store, routine, &target, &audit, &op);
                     Ok((op, None))
                 }
                 ResolveOutcome::Observe => {
@@ -611,10 +602,7 @@ async fn resolve(
                             "the source is an unresolved wait that needs a judgment; answer or escalate it",
                         )));
                     }
-                    audit.item = Some(ItemMark {
-                        item_id: item.id.clone(),
-                        outcome: "observed",
-                    });
+                    audit.item = Some(ItemMark::new(&item.id, "observed"));
                     let op = audit.apply(store, "cos_inbox_item", &item.id, action, |_| {
                         Ok(serde_json::json!({"item_id": item.id, "outcome": "observed", "confidence": confidence}))
                     })?;
@@ -666,10 +654,7 @@ async fn resolve(
                             OffsetDateTime::now_utc(),
                         )
                         .map_err(cos_problem)?;
-                    audit.item = Some(ItemMark {
-                        item_id: item.id.clone(),
-                        outcome: "escalated",
-                    });
+                    audit.item = Some(ItemMark::new(&item.id, "escalated"));
                     let result = serde_json::json!({
                         "item_id": item.id,
                         "outcome": "escalated",

@@ -155,15 +155,9 @@ fn standing_grant(
         .filter(|r| r.kind == BasisRefKind::AuthorityGrant)
     {
         let id = r.id.trim();
-        let class = store
-            .authority_grant(id)
-            .map_err(store_problem)?
-            .map(|g| g.action_class);
-        if class == Some(ActionClass::JobWaitExtend)
-            && store
-                .authority_grant_backs(id, &project, now)
-                .map_err(store_problem)?
-                .is_none()
+        let grant = store.authority_grant(id).map_err(store_problem)?;
+        if let Some(grant) = grant.filter(|g| g.action_class == ActionClass::JobWaitExtend)
+            && task_core::authority::grant_backs(&grant, &project, now).is_none()
         {
             return Ok(Some((project, id.to_owned())));
         }
@@ -171,9 +165,25 @@ fn standing_grant(
     Ok(None)
 }
 
-/// D4: after the extension is applied, write the use of the standing grant (consumes one use; the
-/// decision is the grant, the actor is the CoS run). Nothing when the basis cites no such grant.
-pub(crate) fn record_grant_use(
+/// D4: after the answer `op` is applied, audit the use of the standing grant the basis cites
+/// ([`record_grant_use`]). A failure to audit is logged; the answer already stands.
+pub(crate) fn grant_used(
+    store: &SqliteStore,
+    basis: &DelegatedBasis,
+    target: &BasisTarget,
+    audit: &crate::cos::operations::OperationAudit,
+    op: &task_core::chat::CosOperation,
+) {
+    if op.state == "applied"
+        && let Err(problem) = record_grant_use(store, basis, target, &audit.by())
+    {
+        tracing::warn!(operation = %op.id, detail = ?problem, "standing grant use not audited");
+    }
+}
+
+/// D4: write the use of the standing grant (consumes one use; the decision is the grant, the actor
+/// is the CoS run). Nothing when the basis cites no such grant.
+fn record_grant_use(
     store: &SqliteStore,
     basis: &DelegatedBasis,
     target: &BasisTarget,

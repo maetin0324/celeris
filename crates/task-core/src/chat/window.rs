@@ -6,6 +6,9 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 
+use crate::authority::forward_gap;
+use crate::store::authority::grant_of;
+
 use super::store::{
     ChatError, ChatMessagePosted, MessageProvenance, NewMessage, cos_thread_ensure_tx,
     emit_message, insert_message, message_post_with, message_require, relay_record, thread_require,
@@ -241,42 +244,22 @@ pub fn chat_relay_forward_tx(
             req.message_id
         )));
     }
-    let expires_at = req
-        .expires_at
+    let expires_at = req.expires_at.clone().filter(|e| !e.trim().is_empty());
+    let grant = req
+        .grant_id
         .as_deref()
-        .map(str::trim)
-        .filter(|e| !e.is_empty());
-    match req.grant_id.as_deref() {
-        Some(grant) => {
-            let project = to.project_id.as_deref().unwrap_or_default();
-            if let Some(why) =
-                crate::store::SqliteStore::authority_grant_backs_tx(tx, grant, project, now)?
-            {
-                return Err(ChatError::Invalid(format!(
-                    "grant {grant} does not back a standing forward to project {project}: {why}"
-                )));
-            }
-        }
-        None => {
-            if req.task_ids.is_empty() {
-                return Err(ChatError::Invalid(
-                    "a forward without grant_id names the tasks it applies to (task_ids must not be empty)"
-                        .into(),
-                ));
-            }
-            if expires_at.is_none() {
-                return Err(ChatError::Invalid(
-                    "a forward without grant_id needs expires_at".into(),
-                ));
-            }
-        }
+        .map(|id| grant_of(tx, id))
+        .transpose()?;
+    let scoped = !req.task_ids.is_empty() && expires_at.is_some();
+    if let Some(why) = forward_gap(grant, scoped, to.project_id.as_deref(), now) {
+        return Err(ChatError::Invalid(format!("forward refused: {why}")));
     }
     let relay_req = ChatRelayRequest {
         client_message_id: req.client_message_id.clone(),
         text: source.text.clone(),
         said_at: source.created_at.clone(),
         task_ids: req.task_ids.clone(),
-        expires_at: expires_at.map(str::to_owned),
+        expires_at,
     };
     let mut relay = relay_record(tx, to_thread, &relay_req, relayed_by, now)?;
     relay.grant_id = req.grant_id.clone();

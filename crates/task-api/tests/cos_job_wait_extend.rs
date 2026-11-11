@@ -672,12 +672,16 @@ async fn standing_job_wait_grant_from_the_general_thread_answers_the_project_wai
     assert_eq!(granted.consumed, 1);
 
     // 人が取り消すと、取り次ぎの裏付けも消える。
-    assert_eq!(
-        env.store
-            .authority_grant_backs(&grant, &project, OffsetDateTime::now_utc())
-            .expect("backs"),
-        None
-    );
+    let backs = |env: &TestEnv| {
+        let row = env.store.authority_grant(&grant).expect("read");
+        task_core::authority::forward_gap(
+            Some(row),
+            true,
+            Some(&project),
+            OffsetDateTime::now_utc(),
+        )
+    };
+    assert_eq!(backs(&env), None);
     let revoked = send(
         &app,
         post_json_with(
@@ -688,10 +692,5 @@ async fn standing_job_wait_grant_from_the_general_thread_answers_the_project_wai
     )
     .await;
     assert_eq!(revoked.status.as_u16(), 200, "{}", revoked.text());
-    assert!(
-        env.store
-            .authority_grant_backs(&grant, &project, OffsetDateTime::now_utc())
-            .expect("backs")
-            .is_some()
-    );
+    assert_eq!(backs(&env).as_deref(), Some("grant_revoked"));
 }

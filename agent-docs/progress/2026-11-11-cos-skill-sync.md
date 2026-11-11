@@ -1,12 +1,12 @@
 ---
 title: CoS の skill を昇格で KB に写し、版が config と違えば CoS run を起こさない
 tasks: [01M75722RHE7ZQ6KS09FMSXD3V]
-status: running
+status: done
 updated: 2026-11-11
 ---
 # CoS の skill を昇格で KB に写し、版が config と違えば CoS run を起こさない
 
-実装完了日: 2026-11-11。attempt 2 の再検査で既存試験が失敗したため、受け入れ検査は未完了。本番への配備は運用者が行う。
+完了日: 2026-11-11（attempt 3 で受け入れ検査がすべて exit 0）。本番への配備は運用者が行う。
 
 設計判断は [ADR 2026-11-11 cos-skill-sync](../adr/2026-11-11-cos-skill-sync.md)。基準は `git merge-base HEAD main`。
 
@@ -89,7 +89,8 @@ updated: 2026-11-11
 
 ## 未解決事項
 
-- attempt 2 の `test-affected` は exit 100。受け入れ条件 0 は未達。本番の KB・config・process は変更していない。
+- 本番の KB・config・process は変更していない。配備は「本番への移行」節の手順で運用者が行う。
+- 健全性検査の候補 warning が 1 件 new（`dup.public-surface`: 公開の `fn check` の名が他 crate と重なる）。verdict は pass、fail_grade 0。
 
 ## 提案
 
@@ -134,3 +135,11 @@ attempt 2 の review は `test-affected` が 1200 秒の上限で時間切れだ
   task-ops・task-worker と web（typecheck+unit）。task-core・e2e・celeris-credentiald・celeris-script・jev-classifier・routing-eval・ts-verify は外れた。
 - `cargo nextest run -p task-ops -p task-dispatch --lib -E 'test(cos_skill_gate) | test(skill_drift_holds_the_claim_and_notices_once) | test(core_skill_files_follow_the_core_text)'`
   → 5 passed。
+
+### attempt 3 の検査（提出時の HEAD で実行、基準は `git merge-base HEAD main`）
+
+- `bash scripts/dev/test-affected.sh` → exit 0、15 分 33 秒（load average 35〜55）。nextest 6626 passed / 23 skipped（567.6 秒）、
+  Web 104 files / 712 tests と server 試験は合格、健全性 verdict=pass（fail_grade 0）、script bundle SKIP 0。
+  ログ: run の成果物 `test-affected-attempt3.log`。終了時に一時 dir の削除権限の警告（`rm: cannot remove …/own-eval`）が出たが exit 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check` → exit 0（この記録の commit の後に実行）。

@@ -716,13 +716,11 @@ async fn health_generic_review_input_rust_dup_state_does_not_fail() {
 }
 
 /// 不変条件 (b)（ADR (3) の `review_input_`）: 候補の finding は final review の材料（`HealthReviewInputBuilt` の
-/// `input.findings.new`、= reviewer の `ReviewRequest.health`）に evidence の path 付きで入る。
-///
-/// 既知の欠け G4-R1（進捗 `agent-docs/progress/2026-11-10-health-v2-g4/rs-paths.md` の未解決）: fixture の base の profile は
-/// `[review]` 節を持たないので review 方針は `absent` になり、材料は作られない（`health_review::input` の
-/// `POLICY_ABSENT`。`HealthReviewInputSkipped` だけが残る）。組み込み generic の profile も `[review]` を持たないので、
-/// profile の無い repo も同じ。期待は弱めず、下の 4 試験は `should_panic`（この欠けの assert の文言だけ）にしてある。
-/// 直ったら panic しなくなって落ちるので、そのとき `should_panic` を外す。
+/// `input.findings.new`、= reviewer の `ReviewRequest.health`）に evidence の path 付きで入る。fixture の base の
+/// profile は `[review]` 節を持たない（review 方針は `Absent`）ので、材料は `Present` と同じ構築で作られ、方針の値
+/// （`owner_rows`・`invariants`）だけが空になる（ADR 2026-11-11-health-generic-review-input R1）。
+/// 既存の試験で足りない理由: `health_review_input_` の材料の試験は stub の検査器だけで、本物の検査器の
+/// `Absent` の profile と候補の finding（dup-contract・dup-state）を見ない。
 async fn review_input_candidate_reaches_reviewer(kind: &str, variant: &str) {
     let (_bundle, bundled) = configure_real_bundled_checker();
     let flow = review_input_flow(&bundled, kind, variant).await;
@@ -752,6 +750,17 @@ async fn review_input_candidate_reaches_reviewer(kind: &str, variant: &str) {
         1,
         "no HealthReviewInputBuilt for the candidate (skipped: {skipped:?})"
     );
+    assert!(skipped.is_empty(), "{skipped:?}");
+    let empty = |key: &str| match &inputs[0][key] {
+        serde_json::Value::Array(a) => a.is_empty(),
+        serde_json::Value::Object(o) => o.is_empty(),
+        _ => false,
+    };
+    assert!(
+        empty("owner_rows") && empty("invariants"),
+        "no [review] in the base profile: {}",
+        inputs[0]
+    );
     let new: Vec<&serde_json::Value> = inputs[0]["findings"]["new"]
         .as_array()
         .into_iter()
@@ -768,25 +777,21 @@ async fn review_input_candidate_reaches_reviewer(kind: &str, variant: &str) {
 }
 
 #[tokio::test]
-#[should_panic(expected = "no HealthReviewInputBuilt for the candidate")]
 async fn health_generic_review_input_ts_dup_contract_reaches_reviewer() {
     review_input_candidate_reaches_reviewer("ts", "dup-contract").await;
 }
 
 #[tokio::test]
-#[should_panic(expected = "no HealthReviewInputBuilt for the candidate")]
 async fn health_generic_review_input_ts_dup_state_reaches_reviewer() {
     review_input_candidate_reaches_reviewer("ts", "dup-state").await;
 }
 
 #[tokio::test]
-#[should_panic(expected = "no HealthReviewInputBuilt for the candidate")]
 async fn health_generic_review_input_rust_dup_contract_reaches_reviewer() {
     review_input_candidate_reaches_reviewer("rust", "dup-contract").await;
 }
 
 #[tokio::test]
-#[should_panic(expected = "no HealthReviewInputBuilt for the candidate")]
 async fn health_generic_review_input_rust_dup_state_reaches_reviewer() {
     review_input_candidate_reaches_reviewer("rust", "dup-state").await;
 }

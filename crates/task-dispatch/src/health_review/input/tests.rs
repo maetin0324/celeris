@@ -5,6 +5,7 @@ use super::*;
 use crate::health_review::gate::REPORT_SCHEMA;
 use crate::health_review::policy::REVIEW_POLICY_SCHEMA;
 use task_core::SqliteStore;
+use task_core::required_checks::definition_digest;
 use task_core::required_checks::health::CHECKER_SCRIPT;
 
 const DIGEST: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -109,32 +110,27 @@ not a row `crates/foo/src/lib.rs`
     assert_eq!(owner_rows(&many, &changed).len(), MAX_OWNER_ROWS);
 }
 
-/// 一時 git repo: main に stub の検査器（`--print-review-policy` は方針、report の mode は `log` に 1 行足して
-/// `report` を書く）と、branch `cand` に 1 commit。
-fn stub_repo(
-    source: &str,
-    report: Option<serde_json::Value>,
-    log: &Path,
-) -> (tempfile::TempDir, CandidateRepo) {
-    let repo = tempfile::tempdir().unwrap();
-    let dir = repo.path();
-    let git = |args: &[&str]| {
-        let out = std::process::Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(args)
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "git {args:?}: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        String::from_utf8_lossy(&out.stdout).trim().to_string()
-    };
-    git(&["init", "-q", "-b", "main"]);
-    git(&["config", "user.email", "t@example.com"]);
-    git(&["config", "user.name", "t"]);
+fn git_result(dir: &Path, args: &[&str]) -> Result<String, String> {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    } else {
+        Err(String::from_utf8_lossy(&out.stderr).into_owned())
+    }
+}
+
+fn git_in(dir: &Path, args: &[&str]) -> String {
+    git_result(dir, args).unwrap_or_else(|e| panic!("git {args:?}: {e}"))
+}
+
+/// stub の検査器（`--print-review-policy` は方針の `source`、report の mode は `log` に 1 行足して `report` を書く。
+/// `report` が無ければ exit 2）を `dir` に書く。
+fn write_stub(dir: &Path, source: &str, report: Option<&serde_json::Value>, log: &Path) {
     let policy = serde_json::json!({
         "schema": REVIEW_POLICY_SCHEMA, "source": source, "owner_map": "owners/map.md",
         "high_risk": [], "invariants": {"events-append-only": "CLAUDE.md"}, "definition_sha256": DIGEST,
@@ -148,6 +144,22 @@ fn stub_repo(
     let path = dir.join(CHECKER_SCRIPT);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, script).unwrap();
+}
+
+/// 一時 git repo: main に stub の検査器（`--print-review-policy` は方針、report の mode は `log` に 1 行足して
+/// `report` を書く）と、branch `cand` に 1 commit。
+fn stub_repo(
+    source: &str,
+    report: Option<serde_json::Value>,
+    log: &Path,
+) -> (tempfile::TempDir, CandidateRepo) {
+    let repo = tempfile::tempdir().unwrap();
+    let dir = repo.path();
+    let git = |args: &[&str]| git_in(dir, args);
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.email", "t@example.com"]);
+    git(&["config", "user.name", "t"]);
+    write_stub(dir, source, report.as_ref(), log);
     std::fs::create_dir_all(dir.join("owners")).unwrap();
     std::fs::write(dir.join("owners/map.md"), "| a | `src/` |\n").unwrap();
     git(&["add", "-A"]);
@@ -230,52 +242,218 @@ fn health_review_input_built_once_per_candidate() {
     assert_eq!((built, skipped), (1, 2), "{events:?}");
 }
 
-/// 方針が absent の repo は作らず `HealthReviewInputSkipped` に理由を残す。policy の関門のため、repo health は
-/// 1 回走り、candidate の policy の状態を同じ event に残す（同じ candidate の 2 回目は記録を使う）。
+/// candidate の event（`HealthReviewInputBuilt` の `definition_sha256` と `input`、candidate の
+/// `HealthReviewInputSkipped` の数）。
+fn built_and_skipped(
+    store: &Arc<dyn TaskStore>,
+    task: TaskId,
+    c: &CandidateRepo,
+) -> (Vec<(String, HealthRepoInput)>, usize) {
+    let mut built = Vec::new();
+    let mut skipped = 0;
+    for (_, e) in store.events_for(task).unwrap() {
+        match e {
+            Event::HealthReviewInputBuilt {
+                repo_id,
+                definition_sha256,
+                input,
+                ..
+            } if repo_id == c.repo_id => {
+                built.push((definition_sha256, serde_json::from_value(input).unwrap()));
+            }
+            Event::HealthReviewInputSkipped { repo_id, .. } if repo_id == c.repo_id => skipped += 1,
+            _ => {}
+        }
+    }
+    (built, skipped)
+}
+
+/// base の commit の検査器から作る再利用の鍵（R2: `definition_digest(&[], Some(&checker))`）。
+fn base_definition(c: &CandidateRepo) -> String {
+    let id = task_core::required_checks::health::base_checker(&c.target_sha, |args| {
+        git_result(&c.dir, args)
+    })
+    .unwrap()
+    .expect("the base has a checker");
+    definition_digest(&[], Some(&id))
+}
+
+/// 不変条件（ADR 2026-11-11-health-generic-review-input R1・R2）: review 方針が `Absent` の repo の材料は `Present` と
+/// 同じ構築で作り、`diff`・`findings`・`policy` を持ち、`owner_rows`・`invariants` だけが空。`HealthReviewInputBuilt`
+/// は candidate ごとに 1 回で、鍵の 4 つ目は選んだ検査器の `definition_digest`（方針の `definition_sha256` ではない）。
+/// report は経路共通の評価（`evaluated`）と共有し、同じ candidate の 2 回目は検査器を起こさない。
+/// 既存の試験で足りない理由: 旧い `health_review_input_policy_absent_is_skipped` は `Absent` を
+/// `HealthReviewInputSkipped` に固定していた。材料の試験（`built_once_per_candidate`）は方針が `Present` だけを見る。
 #[test]
-fn health_review_input_policy_absent_is_skipped() {
+fn health_review_input_policy_absent_builds_material_without_policy_values() {
     let scratch = tempfile::tempdir().unwrap();
     let log = scratch.path().join("runs.log");
-    let (_repo, candidate) = stub_repo("absent", Some(report(true, vec![])), &log);
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let w = work(&store, "review-1", &candidate, scratch.path());
-    assert_eq!(build_health_input(&w), None);
-    assert_eq!(build_health_input(&w), None);
-    assert_eq!(
-        log_lines(&log),
-        1,
-        "the policy state is decided once per candidate"
+    let (_repo, candidate) = stub_repo(
+        "absent",
+        Some(report(true, vec![finding("new", false, 1)])),
+        &log,
     );
-    let skipped: Vec<(String, String, Option<HealthPolicyState>)> = store
-        .events_for(w.task_id)
-        .unwrap()
-        .into_iter()
-        .filter_map(|(_, e)| match e {
-            Event::HealthReviewInputSkipped {
-                repo_id,
-                reason,
-                reviewed_sha,
-                policy,
-                ..
-            } if repo_id == candidate.repo_id => Some((
-                reason,
-                reviewed_sha,
-                policy.map(|p| serde_json::from_value(p).unwrap()),
-            )),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(skipped.len(), 2);
-    let (reason, reviewed, policy) = &skipped[0];
-    assert_eq!(reason, POLICY_ABSENT);
-    assert_eq!(reviewed, &candidate.reviewed_sha);
-    let policy = policy.as_ref().unwrap();
-    assert!(policy.changed);
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut w = work(&store, "review-1", &candidate, scratch.path());
+    let first = build_health_input(&w).expect("absent repos get material");
+    assert_eq!(log_lines(&log), 1);
     assert_eq!(
-        policy.files,
+        w.evaluated.lock().unwrap().len(),
+        1,
+        "the report is shared with the health item"
+    );
+    w.review_run = "review-2".into();
+    assert_eq!(build_health_input(&w).as_ref(), Some(&first));
+    assert_eq!(log_lines(&log), 1, "the recorded material is reused");
+    let repo = &first.repos[0];
+    assert_eq!(
+        (repo.target_sha.as_str(), repo.reviewed_sha.as_str()),
+        (
+            candidate.target_sha.as_str(),
+            candidate.reviewed_sha.as_str()
+        )
+    );
+    assert_eq!(
+        (repo.diff.files, repo.diff.paths[0].path.as_str()),
+        (1, "src/a.rs")
+    );
+    assert_eq!(repo.findings.new.len(), 1);
+    assert_eq!(
+        repo.findings.new[0].path.as_deref(),
+        Some("crates/x/src/f1.rs")
+    );
+    assert!(repo.policy.changed);
+    assert_eq!(
+        repo.policy.files,
         vec!["scripts/dev/repo-health/profiles/celeris.toml".to_string()]
     );
-    assert_eq!(skipped[0], skipped[1]);
+    assert!(
+        repo.owner_rows.is_empty(),
+        "the base map is not used without [review]"
+    );
+    assert!(repo.invariants.is_empty());
+    let (built, skipped) = built_and_skipped(&store, w.task_id, &candidate);
+    assert_eq!(skipped, 0);
+    assert_eq!(built.len(), 1);
+    assert_eq!(built[0].0, base_definition(&candidate));
+    assert_ne!(built[0].0, DIGEST);
+    assert_eq!(&built[0].1, repo);
+}
+
+/// 不変条件（R2.6）: 材料の再利用は `(repo, target, reviewed, 検査器の definition_digest)` に束縛する。candidate・
+/// base・base の方針（`Absent` → `Present` で `owner_rows`・`invariants` が入る）のどれかが変われば作り直し、同じ
+/// candidate のやり直しでは検査器を起こさない。既存の試験で足りない理由: `built_once_per_candidate` は同じ candidate の
+/// 再利用だけを見て、candidate・base・方針が変わったときの失効を見ない。
+#[test]
+fn health_review_input_reuse_is_bound_to_candidate_base_and_policy() {
+    let scratch = tempfile::tempdir().unwrap();
+    let log = scratch.path().join("runs.log");
+    let mut rep = report(true, vec![finding("new", false, 1)]);
+    rep["policy"]["changed"] = false.into();
+    let (repo, first) = stub_repo("absent", Some(rep.clone()), &log);
+    let dir = repo.path();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut w = work(&store, "review-1", &first, scratch.path());
+    let build = |w: &HealthInputWork| build_health_input(w).expect("material").repos.remove(0);
+    let a = build(&w);
+    assert_eq!(log_lines(&log), 1);
+
+    // candidate が変わる（rework の commit）→ 作り直す。
+    std::fs::write(dir.join("src/b.rs"), "fn b() {}\n").unwrap();
+    git_in(dir, &["add", "-A"]);
+    git_in(dir, &["commit", "-q", "-m", "rework"]);
+    let reworked = CandidateRepo {
+        reviewed_sha: git_in(dir, &["rev-parse", "HEAD"]),
+        ..first.clone()
+    };
+    w.candidates = vec![reworked.clone()];
+    let b = build(&w);
+    assert_eq!(log_lines(&log), 2, "a new candidate is evaluated again");
+    assert_eq!(
+        (b.reviewed_sha.as_str(), b.diff.files),
+        (reworked.reviewed_sha.as_str(), 2)
+    );
+    assert_eq!(build(&w), b);
+    assert_eq!(
+        log_lines(&log),
+        2,
+        "a retry of the same candidate reuses the material"
+    );
+
+    // base の方針が変わる（main の profile に [review] が入る）→ target が変わり作り直す。
+    git_in(dir, &["checkout", "-q", "main"]);
+    write_stub(dir, "base", Some(&rep), &log);
+    git_in(dir, &["add", "-A"]);
+    git_in(dir, &["commit", "-q", "-m", "review policy"]);
+    let moved = CandidateRepo {
+        target_sha: git_in(dir, &["rev-parse", "HEAD"]),
+        ..reworked.clone()
+    };
+    git_in(dir, &["checkout", "-q", "cand"]);
+    w.candidates = vec![moved.clone()];
+    let c = build(&w);
+    assert_eq!(log_lines(&log), 3, "a new base is evaluated again");
+    assert_eq!(c.target_sha, moved.target_sha);
+    assert_eq!(c.owner_rows.len(), 1, "{c:?}");
+    assert_eq!(
+        c.invariants.get("events-append-only").map(String::as_str),
+        Some("CLAUDE.md")
+    );
+    assert!(a.owner_rows.is_empty() && b.invariants.is_empty());
+
+    let (built, _) = built_and_skipped(&store, w.task_id, &first);
+    let keys: Vec<_> = built
+        .iter()
+        .map(|(d, i)| (i.target_sha.clone(), i.reviewed_sha.clone(), d.clone()))
+        .collect();
+    assert_eq!(
+        keys,
+        vec![
+            (
+                first.target_sha.clone(),
+                first.reviewed_sha.clone(),
+                base_definition(&first)
+            ),
+            (
+                reworked.target_sha.clone(),
+                reworked.reviewed_sha.clone(),
+                base_definition(&reworked)
+            ),
+            (
+                moved.target_sha.clone(),
+                moved.reviewed_sha.clone(),
+                base_definition(&moved)
+            ),
+        ]
+    );
+    assert_ne!(keys[1].2, keys[2].2, "the checker of the new base differs");
+}
+
+/// 不変条件（R2.5・R3.3）: 方針が `Absent` の repo でも report を作れなければ、`findings.verdict = "error"`・
+/// policy の状態が不明の材料を `HealthReviewInputBuilt` に記録して reviewer に渡し、再利用しない（次の review で
+/// 検査器を起こし直す）。既存の試験で足りない理由: `failed_report_is_recorded_as_unknown` は方針が `Present` だけで、
+/// `Absent` の故障は旧い経路（`HealthReviewInputSkipped`）を通っていた。
+#[test]
+fn health_review_input_policy_absent_failed_report_is_not_reused() {
+    let scratch = tempfile::tempdir().unwrap();
+    let log = scratch.path().join("runs.log");
+    let (_repo, candidate) = stub_repo("absent", None, &log);
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let w = work(&store, "review-1", &candidate, scratch.path());
+    for n in 1..=2 {
+        let input = build_health_input(&w).expect("material with an unknown policy");
+        let repo = &input.repos[0];
+        assert_eq!(
+            (repo.findings.verdict.as_str(), repo.findings.reviewable),
+            ("error", false)
+        );
+        assert_eq!(repo.policy.source, POLICY_UNKNOWN);
+        assert_eq!(repo.diff.files, 1);
+        assert_eq!(log_lines(&log), n, "an unknown report is not reused");
+    }
+    let (built, skipped) = built_and_skipped(&store, w.task_id, &candidate);
+    assert_eq!((built.len(), skipped), (2, 0));
+    assert!(built.iter().all(|(_, i)| i.policy.source == POLICY_UNKNOWN));
 }
 
 /// report を書かない repo health（exit 2）は理由付きの空の要約を渡し、policy の状態を不明（`unavailable`）として
@@ -456,4 +634,84 @@ fn health_enforce_g2_bundled_checker_builds_material_and_policy_state() {
         );
     }
     assert_eq!(log_lines(&log), 2, "no checker runs without a checker");
+}
+
+/// 不変条件（R2.2・R2.6・R3.2）: base に検査器の無い repo（同梱の検査器、方針は `Absent`）の材料の鍵は同梱の検査器の
+/// `definition_digest` で、同じ版なら再利用し、同梱の検査器の版が変われば同じ candidate でも作り直す。適用判定が
+/// `Unavailable`（同梱も無い）・方針を読めない repo は材料を作らず、不明の policy を `HealthReviewInputSkipped` に残す。
+/// 既存の試験で足りない理由: `health_enforce_g2_bundled_checker_builds_material_and_policy_state` は方針が `Present`
+/// で同じ版の再利用だけを見て、検査器の版が変わったときの失効と `Absent` の材料を見ない。
+#[test]
+fn health_review_input_reuse_is_bound_to_the_checker_version() {
+    let scratch = tempfile::tempdir().unwrap();
+    let log = scratch.path().join("runs.log");
+    let bundle = tempfile::tempdir().unwrap();
+    write_stub(
+        bundle.path(),
+        "absent",
+        Some(&report(true, vec![finding("new", false, 1)])),
+        &log,
+    );
+    let bundled = |sha: char| BundledChecker {
+        dir: bundle.path().to_path_buf(),
+        id: task_core::required_checks::health::CheckerId {
+            source: task_core::required_checks::health::CheckerSource::Bundled,
+            sha256: sha.to_string().repeat(64),
+        },
+    };
+    let (_repo, candidate) = plain_repo();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let w = work(&store, "review-1", &candidate, scratch.path());
+    let (old, new) = (bundled('b'), bundled('c'));
+    let first = build_health_input_with(&w, Some(&old)).expect("material");
+    assert_eq!(
+        build_health_input_with(&w, Some(&old)).as_ref(),
+        Some(&first)
+    );
+    assert_eq!(log_lines(&log), 1, "the same checker reuses the material");
+    let second = build_health_input_with(&w, Some(&new)).expect("material");
+    assert_eq!(log_lines(&log), 2, "a new checker version builds again");
+    assert_eq!(first, second);
+    let repo = &second.repos[0];
+    assert_eq!((repo.diff.files, repo.findings.new.len()), (1, 1));
+    assert!(repo.owner_rows.is_empty() && repo.invariants.is_empty());
+    let (built, skipped) = built_and_skipped(&store, w.task_id, &candidate);
+    let keys: Vec<_> = built.iter().map(|(d, _)| d.clone()).collect();
+    assert_eq!(
+        keys,
+        vec![
+            definition_digest(&[], Some(&old.id)),
+            definition_digest(&[], Some(&new.id)),
+        ]
+    );
+    assert_eq!(skipped, 0);
+
+    // 同梱も無い（Unavailable）と、方針を読めない検査器。
+    let garbled = tempfile::tempdir().unwrap();
+    write_stub(garbled.path(), "garbled", Some(&report(true, vec![])), &log);
+    let unreadable = BundledChecker {
+        dir: garbled.path().to_path_buf(),
+        ..bundled('d')
+    };
+    for (checker, want) in [
+        (None, CHECKER_UNAVAILABLE),
+        (Some(&unreadable), "review 方針を読めない"),
+    ] {
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let w = work(&store, "review-1", &candidate, scratch.path());
+        assert_eq!(build_health_input_with(&w, checker), None);
+        let recorded = skips(&store, w.task_id);
+        assert_eq!(recorded.len(), 1, "{recorded:?}");
+        assert!(recorded[0].0.contains(want), "{recorded:?}");
+        assert_eq!(
+            recorded[0].1.as_ref().map(|p| p.source.as_str()),
+            Some(POLICY_UNKNOWN)
+        );
+        assert!(
+            built_and_skipped(&store, w.task_id, &candidate)
+                .0
+                .is_empty()
+        );
+    }
+    assert_eq!(log_lines(&log), 2, "no report without a readable policy");
 }

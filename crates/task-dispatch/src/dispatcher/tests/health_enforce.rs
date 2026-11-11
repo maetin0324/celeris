@@ -688,6 +688,8 @@ async fn health_enforce_non_celeris_direct_review_routes_to_repair() {
 /// 修復の後の review は health を Pass にし、reviewer の合格で task を done にする。上の
 /// `health_enforce_non_celeris_direct_review_routes_to_repair` は `Check::Reviewer` の無い task なので、未評価の reviewer
 /// の項目が health の Fail を `Substantive`（`ReviewFail`）にする欠けを検出できない。
+/// 不変条件: 決定的な health Fail は reviewer に妨げられず修復へ進む。
+/// 変更理由: ADR R1・R6 により Absent でも材料が届くため、偽 reviewer にも health 判定が要る。
 #[tokio::test]
 async fn review_repair_not_evaluated_reviewer_does_not_block_a_health_repair() {
     let repo = tempfile::tempdir().unwrap();
@@ -703,9 +705,14 @@ async fn review_repair_not_evaluated_reviewer_does_not_block_a_health_repair() {
     });
     task.budget.max_retries = 0;
     store.insert(&task).unwrap();
+    // `health` も書く: reviewer に health の材料を渡した review は `health` の判定を求める（I7、ADR
+    // 2026-11-07-health-review-integration D5.2）。ADR 2026-11-11-health-generic-review-input の R1 で `[review]` の
+    // 無い（absent）repo も材料を受けるので、この偽の reviewer も空の判定を書く（R6）。試験が守る不変条件は変えない。
     let adapter = Arc::new(
         ParallelWuAdapter::new(Duration::ZERO)
-            .with_review(r#"{"verdicts":[{"criterion":1,"pass":true,"reason":"fine"}]}"#)
+            .with_review(
+                r#"{"verdicts":[{"criterion":1,"pass":true,"reason":"fine"}],"health":{"findings":[]}}"#,
+            )
             .with_action("repair-1", commit_fixed),
     );
     let mut d = non_celeris_dispatcher(store.clone(), adapter, ws.path(), 1);

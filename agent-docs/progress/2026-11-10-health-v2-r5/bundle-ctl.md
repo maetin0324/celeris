@@ -35,7 +35,7 @@ WorkUnit `bundle-ctl`（段 ctl）。celerisctl の結合試験のうち、`inve
 基準は `$CELERIS_WU_BASE`。前回の run の plan_issue の記録は証拠に使っていない。下はすべてこの run で走らせた結果。
 - `python3 agent-docs/progress/2026-11-10-health-v2-r5/classify.py --verify-leaf bundle-ctl agent-docs/progress/2026-11-10-health-v2-r5/inventory.json` → exit 0。移った target 6、元の path にある keep・r6 263、error 0。
 - `python3 agent-docs/progress/2026-11-10-health-v2-r5/cases.py --crate celerisctl --base "$CELERIS_WU_BASE"` → exit 0。試験関数 205 → 205、表の行 118 → 118、名前で追った移動 24、不変条件の試験 18（7 file）、removals 0。
-- `bash scripts/dev/test-affected.sh` → exit 0、368 秒。
+- `bash scripts/dev/test-affected.sh` → exit 0、368 秒。進捗を commit した後にも再実行し、exit 0・136 秒で、下の件数は同じだった。
   - 対象 crate は celerisctl。health は `verdict=pass`、`fail_grade=0`、`repo_health_gate: all checks passed`。
   - nextest は `Starting 205 tests across 15 binaries (303 binaries skipped)`、`205 tests run: 205 passed, 0 skipped`。
   - doc test は `cargo test --doc --workspace` で 14 crate、3 passed・2 ignored・0 failed。base の runner では celerisctl（library 無し）で exit 101 だった段で、affected-features の変更で library の無い crate は doc test の対象から外れた。

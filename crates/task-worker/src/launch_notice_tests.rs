@@ -124,6 +124,11 @@ fn adapters(dir: &Path, log: &Path, missing: bool) -> Vec<(&'static str, Box<dyn
                     dir.join("codex-home").display().to_string(),
                 )],
                 command: program.clone(),
+                // 起動前の rules 作成も fixture 内に限る（実アカウントを継承しない）。
+                env: vec![(
+                    "CODEX_HOME".into(),
+                    dir.join("codex-home").display().to_string(),
+                )],
                 ..Default::default()
             })),
         ),

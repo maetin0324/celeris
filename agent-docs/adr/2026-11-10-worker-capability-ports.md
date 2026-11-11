@@ -1,11 +1,11 @@
 ---
-status: proposed
+status: accepted
 tasks: [01M6TYVJT0Z1CBGNK8VTNK8ZJH]
 ---
 # worker の能力の分離: EventSink から Browser の認可・制御・secret 操作を外し、WorkerAdapter の with_* を 1 つの設定にする
 
 - 日付: 2026-11-10
-- 状態: 提案（健全性 v2 R2。この ADR ではコードを変えない。実装は同じ task の unit browser-port・adapter-settings・dups、記録は unit record）
+- 状態: 実装済み（2026-11-11、健全性 v2 R2 の task 01M6TYVJT0Z1CBGNK8VTNK8ZJH。実装は unit browser-port・adapter-settings・launcher-login-fix・repair-settings-2・dup-cleanup・inject-wait・stale-with-refs、記録は [R2 の進捗](../progress/2026-11-10-health-v2-r2.md)）。決定節と実装の食い違いは末尾の付記「実装との突き合わせ」に書く
 - 関係: [ADR-0003 worker protocol](0003-worker-protocol.md)（`EventSink`・`WorkerAdapter`）、[ADR-0080 browser の policy broker と承認](0080-browser-phase2-policy-broker-approval.md)（H3 の auth section、`credential-stays-in-broker`）、[ADR-0100 live proxy](0100-browser-phase3-live-proxy-acl.md)、[ADR-0107 browser fallback 候補の準備](0107-browser-fallback-candidate-preparation.md)（`prepare_run_adapter`）、ADR-0113 D3（control gate）、ADR-0024 D2・ADR-0043 D3・ADR-0072 D14・ADR-0075 D4・ADR-0098 D6（with_* の各経路）、[ADR 2026-10-11 llm-source-harness-selection](2026-10-11-llm-source-harness-selection.md)（`with_llm_endpoint` の fail closed）、[ADR 2026-11-07 健全性 v2 の基準](2026-11-07-health-v2-baseline.md)（R2 の scope・write_set）、[ADR 2026-11-10 adapter の結果契約](2026-11-10-adapter-result-contract.md)（R1）、[ADR 2026-10-11 破壊的変更](2026-10-11-breaking-changes-by-default.md)
 
 ## 背景
@@ -238,3 +238,32 @@ D5 5a の「B0 の dup 4 件」は unit dups ではなく、それを置き換�
 - 置き場所は計画の objective が挙げた `browser_launcher`（map を作る module）ではなく `browser_runtime` にした。`browser_launcher` は元から `browser_runtime` に依存する（`backend.rs` が `RuntimeSpec`・`EgressRelay` などを use）。定数を `browser_launcher::userns` に置くと `browser_runtime → browser_launcher` の辺が増え、health の `deps.cycle`（必須）が base の 6 単位の循環から 8 単位の循環への悪化（worsened 1）で落ちた。sandbox の内側の ID を決めるのは bwrap を起動する runtime（ADR-0105）で、launcher はそれを subuid へ map する側なので、依存の向きに沿って runtime を正本にした。
 - 未参照の 3 つを消した: `browser_live.rs` の `FrameRelay::close_and_join`（`#[cfg(test)]`、試験からも呼ばれていない）、task-core `browser.rs` の `normalize_host_pattern`、`celeris-credentiald` の `lib.rs` の `CredentialUseResult`（struct と唯一の impl `from_result` の両方）。消す前に `crates`・`web`・`control-ts`・`scripts` を grep し、定義の他に参照が無いことを確かめた。
 - `CredentialUseResult` は [ADR-0078](0078-browser-execution-capability.md) が LLM に返す結果の interface 名として挙げているが、実装の中で作る所も返す所も無かった（broker は `injection_ipc` の応答と audit の code で結果を返す）。ADR-0078 の本文は書き換えない。credential broker の挙動は変わらない（消したのは呼ばれていない型と関数だけ）。
+
+## 付記（2026-11-11、unit record）実装との突き合わせ
+
+決定節（D1〜D5）と提出時の HEAD の実装を突き合わせた。計測値は [measure.py](../progress/2026-11-10-health-v2-r2/measure.py) の `--json`（基準値と最終値の表は [R2 の進捗](../progress/2026-11-10-health-v2-r2.md)）。
+
+### 決定どおりのもの
+
+- D1: `EventSink` は 13 method（`event_sink.method_count` 23 → 13）、既定実装は 11（21 → 11）、browser_* は 0（10 → 0）。
+- D2 2a: `BrowserAuthority` は `browser_policy.rs` に 6 method、`BrowserControl` は `browser_live.rs` に 4 method を持ち、どちらも既定実装は 0。両者を束ねる supertrait は無い。
+- D2 2b: 本番で Browser の trait を実装するのは `StoreSink`（`dispatcher/sinks.rs`）だけで、`ReviewerSink`・`ChatRunSink`・`PrintSink`・`NullSink`・`BrowserSink` の browser_* は 0（`BrowserSink` は 7 → 0）。browser の入口 5 つは `Option<BrowserPorts<'_>>` を受け、素通りの判定の直後に `None` を `AdapterError::Other("browser capability not injected")` で拒否する（`browser.rs`）。`run_worker` は `requests_browser` が真の run にだけ能力を渡す。
+- D3: `WorkerAdapter` の with_* は 0（5 → 0）、`configure` は非試験の 10 impl、非試験の adapter の with_* の fn は 31 → 0、試験の adapter の with_* の fn は 31 → 0、`BrowserSpecialistAdapter` の設定の転送は 5 → 1、`prepare_run_adapter` の `.with_env(` は 4 → 0、非試験の `.with_<設定>(` の呼び出しは 20 → 0。3b の表の「受けられないとき」の扱いは呼び出し側ごとに変えていない。
+- D5 5a: 表の撤去対象はすべて消えた（`measure.py --check-browser-split`・`--check-adapter-settings` が exit 0）。互換の別名・deprecated・新旧切替の flag は置いていない。
+
+### 決定節との食い違い
+
+1. D2 2a の `BrowserPorts`: 決定は pub の欄 2 つだけの struct だった。実装は同じ 2 欄に加えて、1 つの実装者から 2 つの能力を借りる `BrowserPorts::new<T: BrowserAuthority + BrowserControl>(&T)` を持つ。状態も fallback も持たない。
+2. D2 2a・2b-4 の「live event の出口（`EventSinkLive`・`forward_events`）は `&dyn BrowserControl` だけを受ける」: `EventSinkLive` と launcher の login は control だけを受ける。`forward_events`（`browser.rs`）は `BrowserControl` を直接受けず、通知の `&dyn EventSink` と scrub 済みの `LiveEmitter<S>` を受ける。secret（`BrowserAuthority`）に届かない点は決定と同じ。
+3. D2 2b: 開始時の `BrowserRun` の組み立てと `browser_updated` を `running_browser`（`browser.rs`）にまとめ、daemon と launcher の両経路が control だけで呼ぶ。決定節に無い helper である。
+4. D2 2b-7 の試験の sink: trait に既定実装が無いので、使わない method も明示的に実装した。launcher の試験の `RegisteredSink` は fixture の owner・origin・credential の参照・trusted login を照合し、task-api の試験の `StoreSink` は実の broker の `describe_policy` で再検証する。既定 `true` を返す実装は残っていない。
+5. D3 3a の helper: `AdapterSettings::configured`（受ける項目の配列から `unsupported` と複製の有無を決める）・`apply_model`・`apply_env`・`apply_container`・`env_only`、`Configured::map_adapter`（包む adapter の転送）を足した。`AdapterSetting` は `Hash` も derive する。
+6. D3 3a・3b の追加（unit repair-settings-2）: `Configured::resolve_env(base) -> Result<Arc<dyn WorkerAdapter>, EnvNotAccepted>` と `configure_env(adapter, env)` を `adapter.rs` に足した。settings 段の統合で health の `size.responsibility-growth` が module `crates/task-dispatch/src/dispatcher` の本体の行の増加（段の基点 35116 → 35117）を指摘し、原因は「`env_only` → `configure` → `resolve` → `unsupported.contains(&AdapterSetting::Env)`」の同じ形が 5 か所に写されていたことだった。3b の表の housekeeping・review・eval_trials・cos_chat は `configure_env` を、route_launch は `configure(..).resolve_env(..)` を呼ぶ。失敗時の扱いは 3b の表のまま変えていない。提出時の HEAD の module の行は 35103。
+7. D3 3b の route_launch・route_failure: 決定が許した「隣り合う 2 回の適用を 1 回にまとめる」を採り、`route_failure.rs` の `adapter_for_account` を env の組を返す `account_env` に変えた。`route_adapter` は model と account の env を 1 回の `configure` で重ねる。
+8. D3 3b の cos_chat: 決定は `launch_claimed` の中の変更を想定していた。実装は `adapter_with_run_env` に出した。`launch_claimed` が `size.responsibility-growth` の関数の閾値（200 行）を既に超えており、中で置き換えると 5 行増えて worsened になったため。
+9. D3 3b の worker_task: warn と note の文言「does not support with_env」を「does not take env」にした。過去の event の文言は変えない（追記専用）。空の env は「指定なし」とみなすので、旧 `with_env(&[])` と違い複製を作らない。空の env を渡す呼び出し側は無い。
+10. D4 の write_set: 4a・4b の表に無い path を、後から計画に足した unit が変えた。credentiald の `src/injection_ipc.rs`・`src/ipc.rs`・`tests/injection_ipc.rs`（launcher-login-fix・inject-wait）、`browser_launcher/{backend,userns}.rs`（dup-cleanup）、`crates/task-dispatch/src/dispatcher.rs`・`dispatcher/cos_chat/launch/tests.rs`・`crates/task-core/src/browser_control_ops.rs`（stale-with-refs）。どれも計画 v5 の各 unit の範囲 check が許した path である。repair-settings-2 の `adapter.rs` は operator の comment（2026-11-11）が範囲として認めた。
+11. D5 5a の B0 の dup 4 件: unit dups ではなく unit dup-cleanup が実装した（上の付記「2026-11-11、unit dup-cleanup」）。`from_result` は `CredentialUseResult` の唯一の impl で、struct と一緒に消えた。
+12. D5 5b の試験: 決定の表に無い試験を足した。`browser_port_none_preserves_non_browser_non_execute_planner_and_review`（素通りの 4 条件で `None` を見ないこと）、`adapter_settings_configure_env_reports_whether_env_was_taken`（`configure_env` の判定）、`launcher_login_regression_slow_password_page_still_injects_through_the_passed_stream`、credentiald の `first_request_tests` の 2 件と `concurrent_first_request_` の 4 件。stale-with-refs は試験名に with_* を含む 9 件を `configure_*` に改名した（本体と assert は同じ）。既存の試験は削除していない。
+13. 決定節に無い挙動の変更: settings 段の統合で launcher login の試験が `launcher_authenticate_rejected` で落ちた。原因は R2 の能力分離ではなく、credentiald が渡された injection 接続の最初の要求を固定の 5 秒（`IO_TIMEOUT`）しか待たないことだった（2026-09-30 からある待ち）。unit launcher-login-fix がこの待ちを auth section に結び付けた出来事待ち（保険 120 秒）に変え、unit inject-wait が受付を「待ちは接続ごとに並行、照合・lease の消費・注入は 1 本の thread で直列、待てる接続は 8 まで」にした（決定 inject-accept の回答 a）。この決定は ADR-0109 D1 を改める別の ADR [2026-11-11 credentiald の渡された injection 接続の最初の要求の待ち](2026-11-11-credentiald-passed-stream-wait.md) に書いた。この ADR の D2 の注入の経路と launcher protocol（版 9）は変えていない。
+14. D5 5b の最後の段落のとおり、userns・実 browser の試験（task-api の `browser_e2e.rs`・`browser_h3_injection.rs`）は unit の中では `--no-run` の build だけを確かめた。実行は release gate（`scripts/selfdeploy/release.sh`）の担当である。

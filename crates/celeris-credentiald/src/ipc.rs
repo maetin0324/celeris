@@ -385,7 +385,9 @@ fn socket(path: &Path) -> Result<UnixListener, Error> {
     }
     Ok(listener)
 }
-/// One `injection.sock` connection (ADR-0109 D1): one request, one reply.
+/// One `injection.sock` connection (ADR-0109 D1): one request, one reply. The first request may
+/// arrive after `IO_TIMEOUT` only while the peer holds an open auth section (a stream the daemon
+/// passed to the launcher, [`InjectionService::await_first_request`]).
 fn serve_injection(mut stream: UnixStream, service: &InjectionService) {
     let denied = |c: InjectCode| InjectionReply {
         v: 1,
@@ -405,6 +407,9 @@ fn serve_injection(mut stream: UnixStream, service: &InjectionService) {
         let Ok((uid, pid)) = peer(&stream) else {
             return denied(InjectCode::PeerUidMismatch);
         };
+        if let Err(c) = service.await_first_request(stream.as_raw_fd(), PeerCred { uid, pid }) {
+            return denied(c);
+        }
         let (mut body, mut fds) = match crate::injection_ipc::read_request(stream.as_raw_fd()) {
             Ok(v) => v,
             Err(c) => return denied(c),

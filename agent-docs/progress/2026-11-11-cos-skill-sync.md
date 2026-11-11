@@ -1,12 +1,12 @@
 ---
 title: CoS の skill を昇格で KB に写し、版が config と違えば CoS run を起こさない
 tasks: [01M75722RHE7ZQ6KS09FMSXD3V]
-status: running
+status: done
 updated: 2026-11-11
 ---
 # CoS の skill を昇格で KB に写し、版が config と違えば CoS run を起こさない
 
-未完了（run 1 で区切った）。
+完了日: 2026-11-11。実装と必須検査を完了。本番への配備は運用者が行う。
 
 設計判断は [ADR 2026-11-11 cos-skill-sync](../adr/2026-11-11-cos-skill-sync.md)。基準は `git merge-base HEAD main`。
 
@@ -30,8 +30,14 @@ updated: 2026-11-11
 
 ## 証拠（提出時の HEAD で実行）
 
-報告本文に書く（`bash scripts/dev/test-affected.sh`、`cargo clippy --workspace -- -D warnings`、`cargo fmt --all -- --check`、
-`sh scripts/dev/progress-index.sh --check`）。
+- `bash scripts/dev/test-affected.sh` → exit 0。Rust 8266 passed / 23 skipped、Web 104 files / 712 tests 合格と server 試験合格、
+  TS 自己試験 20 passed、対象 doc test 合格、script bundle SKIP 0。健全性検査も合格。
+  ログ: run の成果物 `test-affected-run4-final.log`。終了時に一時 dir の削除権限の警告が出たが exit 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0（差分無し）。
+- `sh scripts/dev/progress-index.sh --check` → exit 0。
+- 版違い・Core の file 欠落で claim せず通知を重複させないこと、一致後に起動すること、release 同期が curation のページを変えないことは、
+  上記の対象試験に含まれる（試験名は「変えたこと」節）。
 
 ## 本番への移行
 
@@ -50,17 +56,37 @@ updated: 2026-11-11
    を手で実行すれば、次の tick から CoS run が起きる。
 4. 消した config 欄は無い。
 
+## run 4 の検査と待機修正
+
+- 最初の `test-affected` は共有 script-runner-cache の sandbox 書き込み制限で exit 2。制限を外した再実行では
+  健全性・Web（104 files / 712 tests と server 試験）・TS 自己試験が合格。
+- Rust は 8266 件中 8262 passed、2 failed、2 timed out、23 skipped（exit 100）。
+  git_workspace の `the_repository_check_commands_are_the_reviewers_default` と
+  `review_records_each_repositories_own_definition_and_worktree_results` は固定 60 tick 後に判定していた。
+- 実装前 brief（待機修正）: 根本原因は review の非同期処理を tick 回数で待つこと。owner は git_workspace の試験。
+  既存の `run_until_state` と、commit「phase 1: wait for terminal state and evidence in git_workspace review tests」を再利用した。
+  固定回数を増やす案ではなく、終端状態と証拠を待つ既存修正を採用。製品の状態・分岐・fallback・port の追加は無し。
+  撤去対象は同じ試験の固定回数待ち。不変条件は repo ごとの必須検査結果・定義指紋・review verdict を検査することで、
+  assert は維持する。新しい試験は追加しない。ADR-0125 の出来事待ちに従う。
+- campaign の `k4_cells_validity::real_k4_archive_grades_thirty_of_thirty_two` と
+  `k_cases_grade::k3_k4_recompute_rejects_a_wrong_report_and_accepts_the_raw_derived_one` は各 600 秒 TIMEOUT。
+  当時の host load average は約 114。原因は未確定で、campaign のコード・試験は変更していない。
+- 修正後に `cargo clippy --workspace -- -D warnings` は exit 0。再実行は exit 0（8266 passed）で完走。前回の 2 失敗と 2 TIMEOUT は解消した。
+
+## commit（件名）
+
+- phase 1: CoS の skill を昇格で KB に写し、版や Core の file が config と合わなければ CoS run を claim しない
+- phase 1: 進捗に run 1 の区切りと落ちる試験 3 本を書く
+- phase 1: CoS を有効にする credential_e2e・project_wake の試験の KB に照合を通る skill を置く
+- phase 1: ADR の skill 配送の参照を ADR-0127 に直す
+- phase 1: skills の無い古い release では KB を変えずに昇格を終え、script_compare の試験の KB を一時 dir にする
+- phase 1: wait for terminal state and evidence in git_workspace review tests
+
+- phase 1: CoS skill 同期の最終検査結果を記録する
+
 ## 未解決事項
 
-- run 3 の test-affected（8266 件、4 失敗・1 TIMEOUT）の後に直したもの: ADR の link（ADR-0127 へ）、`actor_trace_flow4`・`deployment_audit`
-  （試験の偽 release に `skills/` が無く promote が exit 4。`skills/` の無い古い release では KB を変えずに exit 0 にした。ADR D2 に追記）、
-  `tick_scale_baseline`（script_compare の Env の KB を一時 dir にし照合を通る skill を置いた）。この 3 本は個別に合格。
-- 残る 2 本は未確認: `task-worker browser::post_login_tests::daemon_post_login_unconfirmed_keeps_observation_stopped_and_names_the_reason`（FAIL）と
-  `celeris-campaign::k4_cells_validity real_k4_archive_grades_thirty_of_thirty_two`（600 秒 TIMEOUT）。どちらも CoS の照合と関係の無い経路で、負荷の影響と見ているが未確認。
-- 直した後の `bash scripts/dev/test-affected.sh` の再実行は未了。
-
-- KB の git の commit の author は `celeris selfdeploy <selfdeploy@celeris.invalid>`（`SD_KB_GIT_NAME`・`SD_KB_GIT_EMAIL` で変えられる）。
-  curation の commit と同じ author にするかは未確認。
+- 受け入れ条件に関する未解決事項は無し。本番の KB・config・process は変更していない。
 
 ## 提案
 

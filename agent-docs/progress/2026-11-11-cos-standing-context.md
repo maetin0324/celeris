@@ -30,7 +30,13 @@ updated: 2026-11-11
 
 ## 検査
 
-（提出時に追記する）
+- 件名「phase 1: CoS の全 run に常設の文脈…」の commit で `bash scripts/dev/test-affected.sh`: exit 100。nextest 5881 件中 5880 件合格、
+  1 件失敗（`task-worker protocol::tests::committed_schema_matches_generated`。schema の生成物の更新漏れ）。repo-health は
+  verdict=pass、worsened=0。
+- 件名「phase 1: worker protocol の schema に cos_chat.standing を足す」の commit で schema を `UPDATE_SCHEMA=1` で作り直し、
+  その試験だけを再実行して合格。test-affected 全体の再実行は wall の残りが足りず、続きの run で最終の HEAD で行う。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+- `sh scripts/dev/progress-index.sh --check`: exit 0。
 
 ## 残り（続きの run でする）
 

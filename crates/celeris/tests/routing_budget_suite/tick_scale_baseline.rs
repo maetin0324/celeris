@@ -19,7 +19,7 @@
 //! - 判定には使わない計測の試験である。assert は「複写した task が全部 blocked」「dispatch が終わり run・リースが
 //!   残らない」「blocked の task は dispatch されない（数が変わらない）」「挿入した task は 1 回だけ run になる」だけ。
 
-mod support;
+use crate::support;
 
 use std::io::Write as _;
 use std::time::Instant;

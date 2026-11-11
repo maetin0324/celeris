@@ -1,7 +1,5 @@
 #[cfg(test)]
-#[allow(clippy::duplicate_mod)] // 同じ支援 file を試験 crate ごとに読む
-#[path = "../../../tests/support/http_async.rs"]
-mod fake_http;
+use crate::fake_http;
 
 use celeris::notify::{self, NotifyConfig, SendOutcome};
 use task_core::chat::triage::CosTriageSource;

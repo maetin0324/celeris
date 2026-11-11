@@ -49,13 +49,14 @@ run を起こす前（write-set の判定の後、lease の前）に、次の不
   pool に既にあれば `max(0, repo の見込み − 今の大きさ)`（同じ task の続きは増分だけ）、無ければ repo の見込み全体
   （seed から写しても共有はほぼ 0 と見る）。
 - **単位**: 測った大きさは見かけの大きさ（btrfs の圧縮前）で、statvfs の空きは disk 上の量。見込みには
-  `[dispatch] disk_forecast_ratio`（既定 1.0、範囲 (0, 1]）を掛けて disk 上の量に直す。既定 1.0 は圧縮の無い
+  `[scratch] forecast_disk_ratio`（既定 1.0、範囲 (0, 1]）を掛けて disk 上の量に直す。既定 1.0 は圧縮の無い
   filesystem で正しく、圧縮のある filesystem では多めに見積もる（安全側）。本番の値は人が実測から決める
   （進捗の「本番への移行」）。
 - **詰まらない**: worker run が 1 本も走っていなければ、見込みが足りなくても 1 本は通す（今 tick に通した run が
   あれば 2 本目からは判定する）。
 - **対象**: scratch が有効で、run の cargo の target を結び付ける repo（`cargo_target_repo`）があり、この run の
   見込みが 0 より大きいもの。Remote の run と見込み 0 の run（Rust でない repo、続きで増分が無い run）は判定しない。
+- **呼び出し**: `Gate::holds_run`（`dispatch_run.rs` から `&self` で呼ぶ。状態は `Gate` の中の Mutex）。Dispatcher の field・method は増やさない（health の `size.responsibility-growth`）。試験は `Gate.probe` で空きと大きさを注入する。
 - **記録**: 待たせた run（task と WU）ごとに、待ち始めに 1 回だけ `tracing::info!`（`disk forecast: run held`）を
   残す。受信箱・通知には出さない。run が始まる・task が `ready` でなくなると記録を消す。
 - 旧い挙動（今の空きだけで決める dispatch）は残さない。`check_disk_space` の全体停止（D2 の下限を割ったら全部止める）

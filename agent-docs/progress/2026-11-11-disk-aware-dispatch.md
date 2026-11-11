@@ -1,7 +1,8 @@
 ---
 title: 空きの見込みで dispatch を絞り、空きの下限を filesystem の大きさに比例させる
 tasks: [01M75CV7TY7GMYY8PG3BE0SCBJ]
-status: running
+status: done
+completed: 2026-11-11
 updated: 2026-11-11
 ---
 # 空きの見込みで dispatch を絞り、空きの下限を filesystem の大きさに比例させる
@@ -14,7 +15,7 @@ updated: 2026-11-11
 2. 責務 owner: dispatch の前の判定（`dispatcher/dispatch_run.rs` の起動前の段）と scratch の見積り（`scratch_gc::build_status`）。release-build は `scripts/selfdeploy/lib.sh` の刈り込み。
 3. 既存の再利用先: scratch の走査と測定（lease の `size_bytes`、`ScratchOwnerView`）、`fs_stats`、`sd_release_prune_stale_test_binaries`・`sd_release_prune_enforce_limit`。
 4. 選択肢: (a) 今の空きの下限を上げるだけ、(b) 見込みで判定する。(a) は走っている target の増分を見ないので (b) を採った。見込みは repo の最近の最大（operator の計測で seed との共有はほぼ 0）。
-5. 新しい状態: `ScratchState.admission`（`disk_admission::Gate`。待たせている run のメモリと pool の `admission.json` への書き出し）。試験用の口 `Gate.probe`（空きと大きさを注入）。config `[dispatch] min_free_disk_pct`・`[scratch] forecast_disk_ratio`。Dispatcher の field・method は増やしていない（health の `size.responsibility-growth`）。
+5. 新しい状態: `ScratchState.admission`（`disk_admission::Gate`。待たせている run のメモリ〈中の Mutex。dispatch の途中で `&self` から呼ぶため〉と pool の `admission.json` への書き出し）。試験用の口 `Gate.probe`（空きと大きさを注入）。config `[dispatch] min_free_disk_pct`・`[scratch] forecast_disk_ratio`。Dispatcher の field・method は増やしていない（health の `size.responsibility-growth`）。
 6. 撤去対象: `[dispatch] min_free_disk_mb`（読み込みエラー）、`dispatcher.rs` の `free_disk_mb`、今の空きだけで決める dispatch。
 7. 不変条件と試験: `dispatcher/tests/disk_forecast.rs`（待つ・戻れば始まる・続きは増分・0 本なら通す・log 1 回・通知なし）、`disk_admission.rs` の単体試験、`config/tests.rs`（旧い欄の拒否・範囲）、`scripts/selfdeploy/tests/release_target_settled_after_build.sh`。
 
@@ -26,11 +27,20 @@ updated: 2026-11-11
 - D4: `ScratchStatus.admission`（`ScratchAdmissionView`: 空き・予備・係数・増分の合計・repo の見込み・owner ごとの見込み・待たせている run）。`GET /api/v1/metrics/scratch` と `celerisctl scratch status`（`--json` と表の両方）に出る。API schema（`docs/api/v1/api-v1.schema.json`）と web の生成型を作り直した。
 - 文書: ADR-0075 に付記、`docs/ops/local-disk-growth.md`・`docs/ops/build-tmp-hygiene.md`・`docs/architecture-map.md`・`config/celeris.example.toml`。
 
+commit（件名）:
+
+- `phase 1: hold runs whose cargo target would not fit the disk forecast, make the free-space floor proportional, cap release-build after the build`
+- `phase 1: keep the dispatcher module from growing (gate behind &self, disk paths label in disk_watch) and break the scratch_gc cycle`（health の `size.responsibility-growth`〈`dispatch_one` と dispatcher module の行〉と `deps.cycle`〈disk_admission ↔ scratch_gc〉を直した。`dispatch_one` の disk critical の path の組み立てを `disk_watch::paths_label` に移し、`find_low_disk` は statvfs の関数を引数で受ける）
+- `phase 1: 進捗に検査の結果を書く`
+
 ## 証拠
 
 （提出時の HEAD で実行。基準は `git merge-base HEAD main`）
 
-- `cargo nextest run -p task-dispatch --lib disk_forecast disk_admission cleanup_and_disk scratch_gc`: 21 passed。
+- `bash scripts/dev/test-affected.sh`: exit 0（861 秒、開始時 load average 15.6）。対象は celeris・celeris-campaign・celeris-mcp・celerisctl・llm-proxy・task-api・task-dispatch・task-ops・task-worker と web。nextest 6643 passed・23 skipped、web 104 file・712 passed、repo_health_gate all checks passed。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+- `bash scripts/dev/check-health.sh`: verdict=pass、fail 級 0。
+- `cargo nextest run -p task-dispatch --lib disk_forecast disk_admission cleanup_and_disk scratch_gc disk_watch`: 33 passed。
 - `bash scripts/selfdeploy/tests/release_target_settled_after_build.sh`・`release_target_delete_retry.sh`・`release_prune_stale_test_binaries.sh`・`release_uses_scratch_lease.sh`・`release_prune_production_scale.sh`・`prune_tests_stay_in_tmp.sh`: すべて exit 0。
 - `UPDATE_SCHEMA=1 cargo test -p task-api --lib committed_schema_matches_generated`: 1 passed（schema を作り直した）。
 

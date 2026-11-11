@@ -1068,6 +1068,98 @@ async fn partial_failure_resumes_atomic_with_every_job_and_can_wait_again() {
     assert_eq!(task_ops::derive::no_progress_streak(&events, None), 0);
 }
 
+/// Invariant: a failure wakes the task once. The continuation may wait again on the very same
+/// jobs, including the inspected failure; later polls must not start a run per poll_secs, and
+/// the re-wait resumes as `satisfied` once the remaining jobs finish. The partial-failure test
+/// above re-waits without the failed job, so it cannot detect a wake storm on a kept failure.
+#[tokio::test]
+async fn rewaiting_with_an_inspected_failure_does_not_wake_again_until_the_rest_finish() {
+    let dir = tempfile::tempdir().unwrap();
+    let (store, mut d, task, adapter, _) = setup(
+        dir.path(),
+        vec![
+            wait_terminal(&["1", "2", "3"], None),
+            wait_terminal(&["1", "2", "3"], None),
+        ],
+        vec![],
+    );
+    let failed = qstat(&[("1", "F", Some(-14)), ("2", "Q", None), ("3", "R", None)]);
+    let script: PollScript = Arc::new(StdMutex::new(VecDeque::from([failed])));
+    let polls = Arc::new(StdMutex::new(Vec::new()));
+    d.set_cluster_job_poller(fake_poller(script.clone(), polls.clone()));
+    let id = task.id;
+    tick_until(&mut d, |_| {
+        let waits = store.cluster_job_waits_for_task(id).unwrap();
+        waits.len() == 2 && (waits[1].last_polled_at.is_some() || waits[1].finished_at.is_some())
+    })
+    .await;
+    settle_polls(&mut d).await;
+    assert_eq!(
+        store.cluster_job_waits_for_task(id).unwrap()[1].state,
+        ClusterJobWaitState::Waiting,
+        "the kept failure woke the task again"
+    );
+    assert_eq!(adapter.seen.lock().unwrap().len(), 2);
+    assert_eq!(
+        adapter.seen.lock().unwrap()[1]
+            .continuation
+            .as_ref()
+            .and_then(|c| c.cluster_jobs.as_ref())
+            .map(|j| j.state.clone())
+            .as_deref(),
+        Some("job_failed")
+    );
+    assert_eq!(
+        store.cluster_job_waits_for_task(id).unwrap()[1].jobs,
+        ["1", "2", "3"]
+    );
+    // The same [1(F), 2(Q), 3(R)] is polled again and again: no wake, no new run.
+    for _ in 0..3 {
+        let before = polls.lock().unwrap().len();
+        advance(&d, 31);
+        tick_until(&mut d, |d| {
+            polls.lock().unwrap().len() == before + 1 && d.cluster_job_polls.is_empty()
+        })
+        .await;
+        let waits = store.cluster_job_waits_for_task(id).unwrap();
+        assert_eq!(waits[1].state, ClusterJobWaitState::Waiting);
+        assert_eq!(waits[1].last_status[0].exit_status, Some(-14));
+        assert_eq!(
+            finished_count(&store, id),
+            1,
+            "only the first failure woke the task"
+        );
+        assert_eq!(store.get(id).unwrap().unwrap().status, Status::Blocked);
+    }
+    assert_eq!(adapter.seen.lock().unwrap().len(), 2);
+    // The remaining jobs finish: the re-wait resumes as satisfied (unchanged rule).
+    script.lock().unwrap().push_back(qstat(&[
+        ("1", "F", Some(-14)),
+        ("2", "F", Some(0)),
+        ("3", "F", Some(0)),
+    ]));
+    advance(&d, 31);
+    tick_until(&mut d, |_| {
+        store.get(id).unwrap().unwrap().status == Status::Done
+    })
+    .await;
+    let waits = store.cluster_job_waits_for_task(id).unwrap();
+    assert_eq!(waits[1].state, ClusterJobWaitState::Satisfied);
+    let seen = adapter.seen.lock().unwrap();
+    assert_eq!(seen.len(), 3);
+    let jobs = seen[2]
+        .continuation
+        .as_ref()
+        .and_then(|c| c.cluster_jobs.as_ref())
+        .expect("cluster job results");
+    assert_eq!(jobs.state, "satisfied");
+    assert!(jobs.jobs[0].contains("Exit_status -14"), "{jobs:?}");
+    drop(seen);
+    let events = store.events_for(id).unwrap();
+    assert_eq!(consecutive_continuations(&events), 0);
+    assert_eq!(task_ops::derive::no_progress_streak(&events, None), 0);
+}
+
 /// Queue wakeup must carry scheduling evidence and survive a re-wait without storms.
 #[tokio::test]
 async fn queued_job_wakes_once_across_rewait_with_scheduling_evidence() {

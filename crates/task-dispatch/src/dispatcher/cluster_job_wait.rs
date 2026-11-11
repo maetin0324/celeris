@@ -3,7 +3,9 @@
 //! - run の終わり（`Terminal::Waiting`）の検証と wait の組み立て（[`Dispatcher::cluster_job_wait_for`]）。
 //! - tick の poll（[`Dispatcher::poll_cluster_job_waits`]）: `waiting` の wait を `poll_secs` ごとに高々 1 回、
 //!   クラスタの ssh master 越しに `qstat -xf` / `sacct` で調べ（OS スレッドに逃がし、結果は次の tick 以降に拾う）、
-//!   状態が変わったら `ClusterJobWaitPolled`、すべて終われば `ClusterJobWaitFinished{satisfied}` と task / unit の再開、
+//!   状態が変わったら `ClusterJobWaitPolled`。すべて終わったとき、job の 1 つが失敗で終わったとき（detail
+//!   `job_failed`）、job が Q/H のまま `queued_wake_secs` を超えたとき（detail `queue_stalled`）は
+//!   `ClusterJobWaitFinished{satisfied}` と task / unit の再開（起床の条件は `task_core::cluster_job::wakeup::observe`）、
 //!   上限を過ぎたら `ClusterJobWaitFinished{timed_out}` と人への質問。
 //! - continuation の前置きに渡す job の最終状態（[`cluster_jobs_from_events`] / [`Dispatcher::work_unit_cluster_jobs`]）。
 //!

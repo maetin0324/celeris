@@ -3,8 +3,10 @@
 //! worker の run が `result.json` の `{"type": "wait", "kind": "cluster_job", ...}` で終わると、dispatcher は
 //! その run を閉じ（`runs.status = waiting`）、task（または WorkUnit）を止めて `ClusterJobWaitStarted` を残す。
 //! daemon の tick がクラスタの ssh master 越しに `qstat -xf`（PBS）/ `sacct`（Slurm）を `poll_secs` ごとに
-//! 高々 1 回だけ流し、すべての job が終わったら `ClusterJobWaitFinished{satisfied}` と一緒に task を
-//! continuation の run に戻す。
+//! 高々 1 回だけ流し、次のどれかで `ClusterJobWaitFinished{satisfied}` と一緒に task を continuation の run に戻す:
+//! すべての job が終わった（detail は空）、job の 1 つが失敗で終わった（detail `job_failed`。失敗の発生ごとに
+//! 1 回）、job が Q/H のまま `queued_wake_secs` を超えた（detail `queue_stalled`。job ごとに 1 回）。起床の条件は
+//! [`wakeup::observe`]（ADR 2026-11-11-cluster-job-early-wakeup）。
 //!
 //! - **events が正本**。`cluster_job_waits` 表は event と同じトランザクションで書く派生の索引
 //!   （[`apply_event_tx`]）。状態の変わらない poll は event を出さず、`last_polled_at` / `last_status` だけを

@@ -588,24 +588,115 @@ fn queue_clock_resets_and_receipts_survive_serialization() {
     assert!(!statuses[0].queue_notified);
 }
 
-/// Only queue wakeups are deduplicated: failed jobs may be rerun using the same ID.
+/// Invariant: one failure wakes the worker once. Re-waiting with the inspected failed job
+/// (here the original `[1(F, -14), 2(Q), 3(R)]`) must not wake on every poll, and a poll that
+/// misses the job (`Unknown`) is not an observation that re-arms the wake. The removed test
+/// asserted the opposite (every failed observation woke), which made runs loop each poll_secs.
 #[test]
-fn failure_is_not_suppressed_when_the_same_job_is_waited_again() {
+fn the_same_failure_does_not_wake_again_when_waited_again() {
+    let now = time::OffsetDateTime::now_utc();
+    let mut first = wait_for(task(crate::Status::Running).id);
+    first.jobs = ids(&["1", "2", "3"]);
+    let output = "Job Id: 1\n job_state = F\n Exit_status = -14\n\
+                  Job Id: 2\n job_state = Q\nJob Id: 3\n job_state = R\n";
+    let mut statuses = parse_pbs_qstat_xf(output, "", &first.jobs);
+    assert_eq!(
+        wakeup::observe(&first, &[], &mut statuses, now, 3600),
+        Some("job_failed")
+    );
+    // The wake closes the first wait with these statuses; the continuation waits again.
+    first.last_status = statuses;
+    first.state = ClusterJobWaitState::Satisfied;
+    let mut rewait = first.clone();
+    rewait.wait_id = "rewait".into();
+    rewait.last_status.clear();
+    rewait.state = ClusterJobWaitState::Waiting;
+    let history = vec![first.clone(), rewait.clone()];
+    let mut statuses = parse_pbs_qstat_xf(output, "", &rewait.jobs);
+    assert_eq!(
+        wakeup::observe(&rewait, &history, &mut statuses, now, 3600),
+        None
+    );
+    // Later polls of the same wait read the failure from this wait's own last_status.
+    rewait.last_status = statuses;
+    let mut statuses = parse_pbs_qstat_xf(output, "", &rewait.jobs);
+    assert_eq!(
+        wakeup::observe(&rewait, &[first.clone()], &mut statuses, now, 3600),
+        None
+    );
+    // A poll that does not report job 1 leaves no observation; the failure stays known.
+    let missing = parse_pbs_qstat_xf(
+        "Job Id: 2\n job_state = Q\nJob Id: 3\n job_state = R\n",
+        "",
+        &rewait.jobs,
+    );
+    assert_eq!(missing[0].state, ClusterJobState::Unknown);
+    rewait.last_status = missing;
+    let mut statuses = parse_pbs_qstat_xf(output, "", &rewait.jobs);
+    assert_eq!(
+        wakeup::observe(&rewait, &[first.clone()], &mut statuses, now, 3600),
+        None
+    );
+    // Another task, WorkUnit or cluster has no shared history: its failure still wakes.
+    let mut other = rewait.clone();
+    other.wait_id = "other-owner".into();
+    other.work_unit_id = Some("another-unit".into());
+    other.last_status.clear();
+    let mut statuses = parse_pbs_qstat_xf(output, "", &other.jobs);
+    assert_eq!(
+        wakeup::observe(&other, &[first], &mut statuses, now, 3600),
+        Some("job_failed")
+    );
+}
+
+/// Invariant: a same-ID rerun (PBS rerun keeps the ID) that is observed in Q/R/H and then
+/// fails again is a new failure and wakes the worker once more, in the same wait or a re-wait.
+#[test]
+fn a_rerun_seen_queued_that_fails_again_wakes_again() {
+    let now = time::OffsetDateTime::now_utc();
     let mut wait = wait_for(task(crate::Status::Running).id);
     wait.jobs = ids(&["1", "2"]);
-    let mut statuses = parse_pbs_qstat_xf(
-        "Job Id: 1\n job_state = F\n Exit_status = -14\nJob Id: 2\n job_state = R\n",
-        "",
-        &wait.jobs,
-    );
-    let now = time::OffsetDateTime::now_utc();
+    let failed = "Job Id: 1\n job_state = F\n Exit_status = -14\nJob Id: 2\n job_state = R\n";
+    let mut statuses = parse_pbs_qstat_xf(failed, "", &wait.jobs);
     assert_eq!(
-        wakeup::observe(&wait, &[], &mut statuses, now, 60),
+        wakeup::observe(&wait, &[], &mut statuses, now, 3600),
         Some("job_failed")
     );
-    wait.last_status = statuses.clone();
-    assert_eq!(
-        wakeup::observe(&wait, &[wait.clone()], &mut statuses, now, 60),
-        Some("job_failed")
-    );
+    let mut done = wait.clone();
+    done.last_status = statuses;
+    done.state = ClusterJobWaitState::Satisfied;
+    let mut rewait = done.clone();
+    rewait.wait_id = "rewait".into();
+    rewait.last_status.clear();
+    rewait.state = ClusterJobWaitState::Waiting;
+    for (state, at) in [("Q", 300), ("R", 600), ("H", 900)] {
+        let mut statuses = parse_pbs_qstat_xf(
+            &format!("Job Id: 1\n job_state = {state}\nJob Id: 2\n job_state = R\n"),
+            "",
+            &rewait.jobs,
+        );
+        assert_eq!(
+            wakeup::observe(
+                &rewait,
+                &[done.clone()],
+                &mut statuses,
+                now + time::Duration::seconds(at),
+                3600
+            ),
+            None
+        );
+        rewait.last_status = statuses;
+        let mut statuses = parse_pbs_qstat_xf(failed, "", &rewait.jobs);
+        assert_eq!(
+            wakeup::observe(
+                &rewait,
+                &[done.clone()],
+                &mut statuses,
+                now + time::Duration::seconds(at + 1),
+                3600
+            ),
+            Some("job_failed"),
+            "a failure after observing {state} is a new failure"
+        );
+    }
 }

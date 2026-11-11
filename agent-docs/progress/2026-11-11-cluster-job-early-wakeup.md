@@ -86,6 +86,49 @@ attempt 1 の review では、条件 5 と workspace.toml の `bash scripts/dev/
   - `cargo clippy --workspace -- -D warnings` → exit 0（55 秒）。
   - `sh scripts/dev/progress-index.sh --check` → exit 0。
 
+## attempt 4: 失敗の起床を失敗の発生ごとに 1 回にする
+
+final review の欠陥: `wakeup::observe` は失敗した job を見るたびに `job_failed` を返していた。
+起床の後の続きの run が失敗済みの job を含めたまま待ち直すと（例: `[1(F, Exit_status -14), 2(Q), 3(R)]`）、
+次の poll でまた起き、`poll_secs`（sirius は 300 秒）ごとに LLM の run が起き続ける。D1 によりこの run は
+continuation の回数にも進捗なしの窓にも数えられず、止まるのは `max_wait_secs` の質問だけだった。
+
+### 実装前 brief
+
+1. 根本原因: `wakeup::observe` の失敗判定が今回の観測だけを見て、同じ job の直近の観測（durable wait の `last_status`）を見ていない。
+   Q/H の起床は `queue_notified` で 1 回にしていたが、失敗は「同じ id の rerun がある」として毎回起こしていた。症状は dispatcher の poll（`apply_cluster_job_statuses`）で出る。
+2. 責務 owner: `task_core::cluster_job::wakeup::observe`（起床条件の唯一の判定）。dispatcher は理由を受け取るだけなので変えない。
+3. 既存の再利用先: `observe` が `queued_since` のために集めている `previous`（今の wait の `last_status`、無ければ同じ task・WorkUnit・cluster・scheduler の過去の wait の `last_status`、新しい順）と `failed()`。
+   試験は task-core の `wait_for`・`parse_pbs_qstat_xf`、dispatcher の偽 poller と注入時計（`cluster_job_wait.rs` の試験の helper）。
+4. 選択肢: (a) `previous.first()` が失敗の終了なら起こさない（採用。追加の状態なしで「失敗の発生ごとに 1 回」になり、Q/R/H を観測した後の再失敗は起こす）。
+   (b) status に「失敗を通知した」欄を足す（不採用。`previous` から導けるので正本が 2 つになる）。(c) dispatcher で失敗済み job を待ち直しから外す（不採用。owner の外の特例で、worker の待ち直しの自由を奪う）。
+5. 新しい状態・分岐・fallback・port: 無し（DB 列・status の欄も足さない）。`observe` の失敗判定に直近の観測の条件を 1 つ足すだけ。
+6. 撤去対象: 試験 `failure_is_not_suppressed_when_the_same_job_is_waited_again`、`observe` の doc の「a failed observation always wakes the worker」、ADR 2026-11-11-cluster-job-early-wakeup の「失敗の起床は抑制しない」の文。
+   module doc（`cluster_job.rs`・dispatcher の `cluster_job_wait.rs`）の全終了だけの説明も書き直す。
+7. 不変条件: 失敗の発生 1 回につき起床は高々 1 回。待ち直しでは失敗済み job は終わった job として扱い、残りが終われば satisfied で再開する。
+   全成功の再開・上限切れの質問・D1・D6 は変えない。task-core の試験 2 件と dispatcher の試験 1 件で確かめ、既存の cluster_job 系の試験も通す。
+
+### 変更（attempt 4）
+
+- `task_core::cluster_job::wakeup::observe`: 失敗した job は、直近の観測（`queued_since` と同じ `previous`。
+  今の wait の `last_status`、無ければ同じ task・WorkUnit・cluster・scheduler の過去の wait の新しい順）のうち
+  `Unknown`（出力に job が無い）でない最初のものが既に失敗の終了なら `job_failed` にしない。DB 列・status の欄は足していない。
+- 試験: `failure_is_not_suppressed_when_the_same_job_is_waited_again` を消し、task-core に
+  `the_same_failure_does_not_wake_again_when_waited_again`（待ち直し・同じ wait の次の poll・`Unknown` を挟んでも起きない、
+  別の WorkUnit では起きる）と `a_rerun_seen_queued_that_fails_again_wakes_again`（Q・R・H の後の再失敗で起きる）を足した。
+  dispatcher に `rewaiting_with_an_inspected_failure_does_not_wake_again_until_the_rest_finish`（起床の後に `[1(F,-14),2(Q),3(R)]`
+  をそのまま待ち直し、注入時計で 3 回 poll しても run は 2 本のまま・wait は waiting・`ClusterJobWaitFinished` は 1 件、
+  残りが終わると satisfied で 3 本目の run が起き done、D1 の計数は 0）を足した。
+- 既存の試験で検出できない理由: 既存の部分失敗の試験は失敗した job を外して待ち直すので、残した失敗による起床の連続を見ない。
+  旧い規則（失敗を見るたびに起こす）に戻すと、task-core の 1 件と dispatcher の 1 件が落ちることを確かめた
+  （rerun の試験は旧い規則でも通る。旧い規則でも起きる場面の試験なので）。
+- ADR 2026-11-11-cluster-job-early-wakeup: 「失敗の起床は抑制しない」を、失敗の発生ごとに 1 回の規則と限界
+  （`poll_secs` 以内に rerun が始まって再び失敗した場合は検出しない）に書き換えた。
+- `CLUSTER_JOB_RECOVERY_GUIDANCE`（task-worker `ssh.rs`）: 待ち直しでは調べ終えた終了済みの job を外し、まだ Q/R の job と
+  再投入した job だけを書くこと、失敗済みの job を残しても再び起こされないことを足した。
+- module doc（`task-core/src/cluster_job.rs`、`task-dispatch/src/dispatcher/cluster_job_wait.rs`）を、全終了に加えて
+  `job_failed`・`queue_stalled` でも再開すると書き直した。
+
 ## 本番への移行
 
 `queued_wake_secs` は、そのキーを知る release の昇格後に人が本番設定へ追加する。
@@ -93,7 +136,6 @@ attempt 1 の review では、条件 5 と workspace.toml の `bash scripts/dev/
 
 ## 未解決
 
-- 受け入れ条件 5（`bash scripts/dev/test-affected.sh` exit 0）は、負荷の低い時の review の再検査で確かめる（人の回答）。
 - 実クラスタの job 操作は実行していない。
 
 ## 提案

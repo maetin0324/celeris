@@ -15,7 +15,15 @@ fn failed(job: &ClusterJobStatus) -> bool {
 }
 
 /// Enrich fresh observations with durable queue clocks and notification receipts.
-/// Queue delay is notified once per job; a failed observation always wakes the worker.
+///
+/// Both wake reasons fire once per occurrence, judged only from durable wait rows:
+/// - `queue_stalled`: once per job (`queue_notified` survives re-waits).
+/// - `job_failed`: once per failure. A failed job wakes the worker only when its latest
+///   earlier observation (this wait's `last_status`, else the newest past wait of the same
+///   task, WorkUnit, cluster and scheduler; `Unknown` rows are not observations) was not
+///   already a failure. Re-waiting with an inspected failed job therefore does not wake again,
+///   while a same-ID rerun that was seen in Q/R/H and then fails wakes again. A rerun that starts
+///   and fails between two polls is not detected (the scheduler shows the same failure).
 pub fn observe(
     wait: &ClusterJobWait,
     history: &[ClusterJobWait],
@@ -63,7 +71,10 @@ pub fn observe(
                 queued = true;
             }
         }
-        if failed(job) {
+        let last_seen = previous
+            .iter()
+            .find(|p| p.state != ClusterJobState::Unknown);
+        if failed(job) && !last_seen.is_some_and(|p| failed(p)) {
             failure = true;
         }
     }

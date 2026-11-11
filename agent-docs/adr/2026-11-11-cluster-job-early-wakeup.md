@@ -15,7 +15,12 @@ Slurm の State は `State%64` で取得し、OUT_OF_MEMORY 等の長い状態�
 最初に Q/H を観測した時刻から数え、R 等を観測すると連続時間をリセットする。
 Q と H の移動ではリセットしない。観測不能では時計を進めたと判断しない。
 同じ task・WorkUnit・cluster・scheduler・job id について、長い Q/H は一度だけ通知する。
-失敗の起床は抑制しない。同じ ID を再実行した後の失敗も次の poll で調べ直せる。
+失敗の起床は失敗の発生ごとに 1 回にする。失敗した job の直近の観測（今の wait の last_status、無ければ同じ
+task・WorkUnit・cluster・scheduler の過去の wait のうち最も新しいもの。job が出力に無い `?` は観測に数えない）が
+既に失敗の終了なら、その job では起こさない。続きの run が調べ終えた失敗済みの job を含めたまま待ち直しても
+poll ごとに起きず、失敗済みの job は終わった job として扱われ、他の job が全部終われば satisfied で再開する。
+同じ ID の rerun で Q/R/H など終わっていない状態を観測した後に再び失敗したときは、もう一度起こす。
+限界: poll の間（`poll_secs` 以内）に rerun が始まって再び失敗した場合は、同じ失敗の続きと区別できず検出しない。
 待ち直し・daemon 再起動をまたぐ時刻と通知済み情報は既存 wait の status JSON と event に保存する。
 同じ job を待ち直した際は過去の wait の情報を引き継ぐ。再投入による新しい job id は新しい対象になる。
 

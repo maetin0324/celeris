@@ -1,12 +1,73 @@
 ---
-title: "健全性v2 R4: Dispatcher の大きい関数の判断と副作用の区間"
+title: "健全性v2 R4: Dispatcher の field 所有・重複処理・大きい関数の区間・反例試験の不足"
 tasks: [01M74VAMWFCC4JGZY4ENA92HJJ]
-status: running
+status: done
 updated: 2026-11-11
+completed: 2026-11-11
 ---
-# 健全性v2 R4: Dispatcher の大きい関数の判断と副作用の区間
+# 健全性v2 R4: Dispatcher の field 所有・重複処理・大きい関数の区間・反例試験の不足
 
-この文書は、`crates/task-dispatch/src/dispatcher/` の大きい 7 関数の本体を行番号で「判断」と「副作用」に分ける。コードは変えていない。行番号は WorkUnit cm-functions の base（`$CELERIS_WU_BASE`）の HEAD のもの。
+## 要約
+
+コードは変えていない。数は `change-map.json`（下の再生成のコマンドの出力）から取った。所有の決定ではなく、R4 の分割の設計に使う実測である。
+
+**field**: `crates/task-dispatch/src/dispatcher.rs` の `pub struct Dispatcher` の field は 116 件（うち `#[cfg(test)]` 10 件）。116 件すべてに owner 候補と根拠（`fields[].owner`・`owner_reason`）がある。規則は [owners.json](owners.json)、割り当ての経緯は [cm-owners.md](cm-owners.md)。
+
+| owner 候補 | field 数 |
+|---|---:|
+| execution-coordination | 31 |
+| composition-root | 22 |
+| cluster-runtime | 16 |
+| test-hooks | 15 |
+| routing | 14 |
+| host-maintenance | 9 |
+| run-supervisor | 7 |
+| project-orchestration | 2 |
+| 合計 | 116 |
+
+**owner_conflict**: 書き手の module の owner が 2 種類以上ある field は 12 件。うち 7 件（`awaiting_human`・`checking`・`infra_backoff`・`integrating`・`pending_subjects`・`reviewing`・`running`）は `dispatcher/leases`（run-supervisor）が書き手に入る。module 名は `crates/task-dispatch/src/` からの相対 path（`.rs` を省略）。
+
+| field | 候補 owner | 書き手の owner（module） |
+|---|---|---|
+| `accounts_scan_cache` | routing | execution-coordination（dispatcher, dispatcher/snapshot）; routing（dispatcher/route_select） |
+| `awaiting_human` | execution-coordination | execution-coordination（dispatcher/review_spawn）; run-supervisor（dispatcher/leases） |
+| `checking` | execution-coordination | execution-coordination（dispatcher, dispatcher/work_units）; run-supervisor（dispatcher/leases） |
+| `cos_chat_launch` | project-orchestration | project-orchestration（dispatcher/cos_chat/triage, dispatcher/project_retention, dispatcher/project_wake）; run-supervisor（dispatcher/cos_chat/launch） |
+| `infra_backoff` | run-supervisor | execution-coordination（dispatcher/dispatch_run）; run-supervisor（dispatcher/leases, dispatcher/worker_finish） |
+| `integrating` | execution-coordination | execution-coordination（dispatcher/phase_integration）; run-supervisor（dispatcher/leases） |
+| `pending_subjects` | execution-coordination | execution-coordination（dispatcher/phase_integration, dispatcher/review_spawn, dispatcher/review_verdict）; run-supervisor（dispatcher/leases, dispatcher/worker_finish） |
+| `reviewing` | run-supervisor | execution-coordination（dispatcher/review_spawn, dispatcher/review_verdict）; run-supervisor（dispatcher/leases, dispatcher/ownerless_runs） |
+| `running` | run-supervisor | execution-coordination（dispatcher/dispatch_run）; run-supervisor（dispatcher/leases） |
+| `scratch` | host-maintenance | execution-coordination（dispatcher）; host-maintenance（dispatcher/housekeeping） |
+| `stagnation` | project-orchestration | execution-coordination（dispatcher, dispatcher/tree_units）; project-orchestration（dispatcher/project_wake） |
+| `task_workspaces` | execution-coordination | execution-coordination（dispatcher/dispatch_run）; host-maintenance（dispatcher/housekeeping） |
+
+owner_conflict が false でも競合が無いとは限らない（lock の中・別名経由・範囲外の型の変更は字句の測定で拾えない。`method.limits`）。
+
+**equivalence**: 6 件（`change-map.json` の最上位の `equivalence`、元は `equivalence/<id>.json`）。verdict は 6 件とも different（経路全体は同じ処理ではない）。共有できる契約は次の範囲に限る。記録は [cm-equiv-run.md](cm-equiv-run.md) と [cm-equiv-flow.md](cm-equiv-flow.md)。
+
+| id | verdict | 共有できる契約（1 行） |
+|---|---|---|
+| continuation-resume | different | 保存 session の互換性・拒否・context 上限の事実から Resume か Fresh を返す純粋な判定まで（session の解決 `resolve_continuation_session` は既に共通）。 |
+| lease-renew | different | `renew_lease(task_id, run_id, ttl) -> Result<bool, StoreError>` の store 操作まで（既に共通）。Ok(false) と Err を同じに扱う wrapper は lease 回収の安全条件を壊す。 |
+| retry-backoff | different | infra 障害の「連続回数と上限から再試行するか」の判定と既存の `infra_backoff_delay(n)` まで（worker 完了と lease 回収に同じ判定が重複）。 |
+| review-result | different | 決定的 check が不合格なら成功にしない判定と、check 結果から失敗一覧を作る処理まで（check の実行は既に共通）。 |
+| run-close | different | run id・usage・metrics・明示した終端から終了記録を組み立てる純粋な処理まで。lease の検証・状態遷移・transaction の境界は一律の close(run) に入れない。 |
+| wu-failure | different | 失敗の署名・同じ失敗の回数・replan の残り・replan 禁止の理由から Replan か Ask と理由を返す上限判定まで（似た判定が 3 か所）。 |
+
+**関数と反例試験**: 大きい 7 関数の判断と副作用の区間は下の `## 関数: <名>` の 7 節（finish_worker_result_with・dispatch_one・spawn_review・on_review_finished・reclaim_expired_leases・route_state・resolve_quota_estimate）にある。各節の owner 候補は、その関数の module の owners.json の候補と 7 件とも一致する。lease・restart・同時完了・review/integration・権限/予算の反例試験の不足は末尾の `## 反例試験の不足` の 5 節にある。記録は [cm-functions.md](cm-functions.md) と [cm-test-gaps.md](cm-test-gaps.md)。
+
+**再生成**（repo の root で。build・試験は走らせない。1 回 20 秒ほど）:
+
+```sh
+python3 agent-docs/progress/2026-11-11-health-v2-r4/change-map-measure.py --out agent-docs/progress/2026-11-11-health-v2-r4/change-map.json
+```
+
+`equivalence/*.json` の形か参照（file・行・関数）が壊れていれば、出力を書かずに exit 1 になる。作業ツリーが HEAD と同じなら同じ bytes を書く。
+
+## 関数の節の読み方
+
+下の `## 関数:` の 7 節は、`crates/task-dispatch/src/dispatcher/` の大きい 7 関数の本体を行番号で「判断」と「副作用」に分ける。コードは変えていない。行番号は WorkUnit cm-functions の base（`$CELERIS_WU_BASE`）の HEAD のもの。
 
 - 判断: store・時計・config・memory 上の状態を読み、次の動作を決める区間。副作用なしで純粋関数に切り出せる。
 - 副作用: DB 書き込み（`store.*` の書き込み）・event 追記・lease 操作・process や task の spawn・通知・file system・git の操作。Dispatcher の memory 上の map（`running`・`infra_backoff` など）への書き込みも副作用として数え、「（memory）」と付ける。

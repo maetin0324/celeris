@@ -1,12 +1,12 @@
 ---
 title: CoS の skill を昇格で KB に写し、版が config と違えば CoS run を起こさない
 tasks: [01M75722RHE7ZQ6KS09FMSXD3V]
-status: done
+status: running
 updated: 2026-11-11
 ---
 # CoS の skill を昇格で KB に写し、版が config と違えば CoS run を起こさない
 
-完了日: 2026-11-11。実装と必須検査を完了。本番への配備は運用者が行う。
+実装完了日: 2026-11-11。attempt 2 の再検査で既存試験が失敗したため、受け入れ検査は未完了。本番への配備は運用者が行う。
 
 設計判断は [ADR 2026-11-11 cos-skill-sync](../adr/2026-11-11-cos-skill-sync.md)。基準は `git merge-base HEAD main`。
 
@@ -28,7 +28,7 @@ updated: 2026-11-11
     curation の commit 済み・変更中・stage 済みのページと他の skill は変わらない、2 回目は commit しない）。
   - CoS run を起こす既存の試験の KB を `write_fixture` に替えた（policy_version を上げる 3 本は、同時に skill も上げる）。
 
-## 証拠（提出時の HEAD で実行）
+## 前回提出時の検査（今回の再検査結果は後述）
 
 - `bash scripts/dev/test-affected.sh` → exit 0。Rust 8266 passed / 23 skipped、Web 104 files / 712 tests 合格と server 試験合格、
   TS 自己試験 20 passed、対象 doc test 合格、script bundle SKIP 0。健全性検査も合格。
@@ -86,9 +86,33 @@ updated: 2026-11-11
 
 ## 未解決事項
 
-- 受け入れ条件に関する未解決事項は無し。本番の KB・config・process は変更していない。
+- attempt 2 の `test-affected` は exit 100。受け入れ条件 0 は未達。本番の KB・config・process は変更していない。
 
 ## 提案
 
 - `cos_chat_skills` は triage の skill の名を `"cos-inbox-triage"` と書き、`[cos.triage] policy_skill` を読まない。
   policy_skill を変えると照合と mount が別の skill を見る。policy_skill の欄を消すか mount で読むかを決める task を提案する。
+
+## attempt 2 の再検査（提出時の HEAD で実行）
+
+基準は `git merge-base HEAD main`。製品コード・試験・設計の追加変更は無し。
+前回 review は `test-affected` の 1200 秒制限で時間切れだった。
+
+- `bash scripts/dev/test-affected.sh`（sandbox 内）: exit 2。共有 script-runner-cache が読み取り専用で TS 検証を開始できなかった。
+- 同じコマンドを sandbox 外で再実行: exit 100。Rust 8264 passed / 1 failed / 1 timed out / 23 skipped（843.741 秒）。
+  健全性 pass、Web 104 files / 712 tests、server 113 tests、TS 自己試験 20 件は合格。
+  ログ: run 成果物 `test-affected-attempt2-final.log`。
+- 失敗は今回変更していない task-worker の
+  `launcher_credential_post_login_presses_the_pinned_consent_once_and_resumes`
+  （`launcher_authenticate_rejected`）と campaign の
+  `real_k4_archive_grades_thirty_of_thirty_two`（600 秒 TIMEOUT）。ホストの load average は約 88。
+  負荷との因果関係は未確定。
+- `cargo clippy --workspace -- -D warnings && cargo fmt --all -- --check`: exit 0。
+- `sh scripts/dev/progress-index.sh --check`: exit 0（記録更新後にも確認）。
+
+- 単独再実行: `cargo nextest run -p task-worker -p celeris-campaign -E 'test(launcher_credential_post_login_presses_the_pinned_consent_once_and_resumes) | test(real_k4_archive_grades_thirty_of_thirty_two)'`
+  → exit 0、2 passed / 2275 skipped、513.939 秒。campaign の試験は 513.924 秒。
+  ログ: `isolated-attempt2.log`。単独合格は `test-affected` の合格に代えない。
+- 残作業: `test-affected` を再実行して exit 0 を確認し、進捗を done にする。
+  run の残り予算では再検査の完走を保証できないため checkpoint を残す。
+- commit: `phase 1: CoS skill 同期の再検査と未完了事項を記録する`。

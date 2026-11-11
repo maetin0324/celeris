@@ -121,11 +121,9 @@ impl Dispatcher {
         }
         // ADR 2026-11-10-worker-capability-ports D3 3b: a harness without a model option keeps
         // its own configuration; an adapter that cannot take the account environment fails closed.
-        let (adapter, unsupported) = base.configure(&settings).resolve(base);
-        if unsupported.contains(&task_worker::AdapterSetting::Env) {
-            return Err(unavailable());
-        }
-        Ok(adapter)
+        base.configure(&settings)
+            .resolve_env(base)
+            .map_err(|task_worker::EnvNotAccepted| unavailable())
     }
 
     /// [`selected_llm_route`] with this dispatcher's registry and `[accounts]` roots.

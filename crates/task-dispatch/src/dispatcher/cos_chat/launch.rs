@@ -820,17 +820,12 @@ impl CosChatLaunch {
         harness: &task_core::llm_route::HarnessId,
         now: OffsetDateTime,
     ) -> Result<Arc<dyn WorkerAdapter>, String> {
-        let settings = task_worker::AdapterSettings::env_only(run_env);
-        let (adapter, unsupported) = adapter.configure(&settings).resolve(adapter);
-        if unsupported.contains(&task_worker::AdapterSetting::Env) {
+        task_worker::configure_env(adapter, run_env).map_err(|task_worker::EnvNotAccepted| {
             if let Err(error) = self.store.cos_run_credential_revoke(run_id, now) {
                 tracing::warn!(%error, %run_id, "CoS credential revoke after launch failure failed");
             }
-            return Err(format!(
-                "CoS unavailable: harness {harness} cannot receive a run credential"
-            ));
-        }
-        Ok(adapter)
+            format!("CoS unavailable: harness {harness} cannot receive a run credential")
+        })
     }
 
     pub(super) fn find_input(

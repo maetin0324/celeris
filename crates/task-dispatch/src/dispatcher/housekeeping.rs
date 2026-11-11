@@ -472,22 +472,17 @@ impl Dispatcher {
         if env.set.is_empty() {
             return (adapter, None);
         }
-        let settings = task_worker::AdapterSettings::env_only(env.set);
-        let (wrapped, unsupported) = adapter.configure(&settings).resolve(&adapter);
-        if unsupported.contains(&task_worker::AdapterSetting::Env) {
+        let target = env.set.iter().find(|(k, _)| k == "CARGO_TARGET_DIR");
+        let target = target.map(|(_, v)| PathBuf::from(v));
+        let Ok(wrapped) = task_worker::configure_env(&adapter, env.set) else {
             let rust = self
                 .cargo_target_repo(task)
                 .is_some_and(|r| r.dir.join("Cargo.toml").is_file());
             if rust {
                 tracing::warn!(task_id = %task.id, adapter = %adapter.id(), "reviewer adapter does not take env; CARGO_TARGET_DIR was not applied (ADR 2026-10-07-build-tmp-hygiene A1)");
             }
-            return (wrapped, None);
-        }
-        let target = settings
-            .env
-            .iter()
-            .find(|(k, _)| k == "CARGO_TARGET_DIR")
-            .map(|(_, v)| PathBuf::from(v));
+            return (adapter, None);
+        };
         (wrapped, target)
     }
 

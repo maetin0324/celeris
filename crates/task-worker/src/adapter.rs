@@ -429,6 +429,35 @@ impl Configured {
             self.unsupported,
         )
     }
+
+    /// env を求めた呼び出し側の受け取り方: `Env` が `unsupported` にあれば [`EnvNotAccepted`]、無ければ
+    /// [`Self::resolve`] と同じ adapter（`Env` 以外の受けなかった項目は見ない）。
+    pub fn resolve_env(
+        self,
+        base: &Arc<dyn WorkerAdapter>,
+    ) -> Result<Arc<dyn WorkerAdapter>, EnvNotAccepted> {
+        let (adapter, unsupported) = self.resolve(base);
+        if unsupported.contains(&AdapterSetting::Env) {
+            return Err(EnvNotAccepted);
+        }
+        Ok(adapter)
+    }
+}
+
+/// adapter が env を受けなかった（[`Configured::resolve_env`]・[`configure_env`]）。どう扱うか（fail closed・
+/// 警告して元の adapter）は呼び出し側が決める。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EnvNotAccepted;
+
+/// env だけを `adapter` に重ねる（[`AdapterSettings::env_only`] を 1 回の `configure` で適用する）。env が空なら
+/// 何も求めないので `adapter` のまま `Ok`。
+pub fn configure_env(
+    adapter: &Arc<dyn WorkerAdapter>,
+    env: Vec<(String, String)>,
+) -> Result<Arc<dyn WorkerAdapter>, EnvNotAccepted> {
+    adapter
+        .configure(&AdapterSettings::env_only(env))
+        .resolve_env(adapter)
 }
 
 #[cfg(test)]
@@ -640,25 +669,7 @@ mod settings_tests {
             .adapter
             .expect("the inner harness took model and env");
         assert_eq!(copy.id(), crate::BrowserSpecialistAdapter::ID);
-        let mut task = sample_task_for_tests();
-        task.skills = vec![task_core::browser::BROWSER_SKILL.to_string()];
-        let dir = std::path::PathBuf::from("/nonexistent-adapter-settings");
-        let req = RunRequest {
-            protocol: PROTOCOL_VERSION,
-            task,
-            workspace: dir.clone(),
-            artifacts_dir: dir.join("artifacts"),
-            work_dir: None,
-            context: RunContext::default(),
-            cargo_target_dir: None,
-            llm_route: None,
-        };
-        let limits = RunLimits {
-            wall_clock: LONG,
-            idle_timeout: LONG,
-            kill_grace: Duration::from_millis(1),
-        };
-        let _ = copy.run(req, "r1", limits, &NullSink).await;
+        run_once(&copy).await;
         assert_eq!(
             log.lock().unwrap().as_slice(),
             &[vec![kv("A", "1"), kv("A", "2"), kv("B", "x")]]
@@ -695,6 +706,63 @@ mod settings_tests {
         settings.apply_container(&mut container);
         assert!(container.is_none());
         assert_eq!(settings.requested(), [S::Env]);
+    }
+
+    /// browser の task で `adapter` を 1 回走らせる（`Probe` は run の時点の env を log に残す）。
+    async fn run_once(adapter: &Arc<dyn WorkerAdapter>) {
+        let mut task = sample_task_for_tests();
+        task.skills = vec![task_core::browser::BROWSER_SKILL.to_string()];
+        let dir = std::path::PathBuf::from("/nonexistent-adapter-settings");
+        let req = RunRequest {
+            protocol: PROTOCOL_VERSION,
+            task,
+            workspace: dir.clone(),
+            artifacts_dir: dir.join("artifacts"),
+            work_dir: None,
+            context: RunContext::default(),
+            cargo_target_dir: None,
+            llm_route: None,
+        };
+        let limits = RunLimits {
+            wall_clock: LONG,
+            idle_timeout: LONG,
+            kill_grace: Duration::from_millis(1),
+        };
+        let _ = adapter.run(req, "r1", limits, &NullSink).await;
+    }
+
+    /// `configure_env`（env だけを重ねる 5 か所の呼び出し側の共通の判定）: env を受ける adapter は env を
+    /// 重ねた複製を返し、受けない adapter は `EnvNotAccepted` を返す（呼び出し側の fail closed・警告の根拠）。
+    /// 空の env は何も求めないので元の adapter のまま。`resolve_env` は `Env` 以外の受けなかった項目
+    /// （route の model）を失敗にしない。
+    #[tokio::test]
+    async fn adapter_settings_configure_env_reports_whether_env_was_taken() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let probe: Arc<dyn WorkerAdapter> = Arc::new(Probe {
+            accepts: vec![S::Env],
+            env: vec![kv("A", "1")],
+            log: Arc::clone(&log),
+        });
+        let taken = configure_env(&probe, vec![kv("A", "2")]).expect("probe takes env");
+        assert!(!Arc::ptr_eq(&taken, &probe), "env is applied to a copy");
+        run_once(&taken).await;
+        assert_eq!(
+            log.lock().unwrap().as_slice(),
+            &[vec![kv("A", "1"), kv("A", "2")]]
+        );
+        let unchanged = configure_env(&probe, Vec::new()).expect("empty env asks nothing");
+        assert!(Arc::ptr_eq(&unchanged, &probe));
+        let mut settings = settings_of(&[S::Model, S::Env]);
+        settings.env = vec![kv("A", "3")];
+        let with_model = probe.configure(&settings).resolve_env(&probe);
+        assert!(with_model.is_ok_and(|a| !Arc::ptr_eq(&a, &probe)));
+
+        let bare: Arc<dyn WorkerAdapter> = Arc::new(Bare);
+        assert_eq!(
+            configure_env(&bare, vec![kv("A", "2")]).err(),
+            Some(EnvNotAccepted)
+        );
+        assert!(configure_env(&bare, Vec::new()).is_ok_and(|a| Arc::ptr_eq(&a, &bare)));
     }
 
     const LONG: Duration = Duration::from_secs(60);

@@ -1057,15 +1057,13 @@ pub(crate) fn with_run_tmpdir(
     Option<task_worker::run_tmpdir::RunTmpDir>,
 ) {
     match task_worker::run_tmpdir::RunTmpDir::create(workspace_dir, run_id) {
-        Ok(tmp) => {
-            let settings = task_worker::AdapterSettings::env_only(tmp.env());
-            let (wrapped, unsupported) = adapter.configure(&settings).resolve(adapter);
-            if unsupported.contains(&task_worker::AdapterSetting::Env) {
+        Ok(tmp) => match task_worker::configure_env(adapter, tmp.env()) {
+            Ok(wrapped) => (wrapped, Some(tmp)),
+            Err(task_worker::EnvNotAccepted) => {
                 tracing::warn!(adapter = %adapter.id(), "adapter does not take env; the run TMPDIR was not applied");
-                return (wrapped, None);
+                (Arc::clone(adapter), None)
             }
-            (wrapped, Some(tmp))
-        }
+        },
         Err(e) => {
             tracing::warn!(run_id, error = %e, "run tmpdir: could not create; TMPDIR is left unchanged");
             (Arc::clone(adapter), None)

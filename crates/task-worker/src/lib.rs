@@ -88,8 +88,8 @@ pub mod workspace_targets;
 
 pub use acp::{AcpAdapter, AcpConfig, AcpPermission};
 pub use adapter::{
-    AdapterError, AdapterSetting, AdapterSettings, Configured, EventSink, LlmEndpoint, RunLimits,
-    RunOutcome, Terminal, WorkerAdapter,
+    AdapterError, AdapterSetting, AdapterSettings, Configured, EnvNotAccepted, EventSink,
+    LlmEndpoint, RunLimits, RunOutcome, Terminal, WorkerAdapter, configure_env,
 };
 pub use aider::{AiderAdapter, AiderConfig};
 pub use browser_specialist::BrowserSpecialistAdapter;

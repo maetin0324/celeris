@@ -670,16 +670,14 @@ impl Dispatcher {
             self.fail_and_cleanup_eval_trial(&started_trial, &format!("cargo target: {e}"));
             e
         })?;
-        let settings = task_worker::AdapterSettings::env_only(cargo_env.set);
-        let (adapter, unsupported) = route.adapter.configure(&settings).resolve(&route.adapter);
-        if unsupported.contains(&task_worker::AdapterSetting::Env) {
+        let Ok(adapter) = task_worker::configure_env(&route.adapter, cargo_env.set) else {
             let why = format!(
                 "cargo target: adapter {} cannot take CARGO_TARGET_DIR",
                 route.adapter.id()
             );
             self.fail_and_cleanup_eval_trial(&started_trial, &why);
             return Err(why);
-        }
+        };
         // 記録（route_features / route_options / route_decisions / runs）。失敗したら run を起こさない。
         let decision_id =
             match self.record_eval_decision(&trial, &run_id, harness_version.as_deref()) {

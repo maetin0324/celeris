@@ -30,8 +30,7 @@ policy_skill = "cos-inbox-triage"
 policy_version = "11"
 min_confidence = 0.85
 human_required = ["objective_change", "beyond_frame", "external_publish", "destructive", "secret_or_security", "standing_permission", "explicit_human"]
-unavailable_after_secs = 120
-# authorization_unavailable_after_secs = 1200  # 認可の件の安全網。未設定なら max_wall_secs + 300
+# fallback_after_secs = 1200  # 安全網。未設定なら max_wall_secs + 300
 
 [cos.attachments]
 max_file_bytes = 26214400
@@ -166,7 +165,7 @@ rollover は context 上限、`[sessions] rollover_tokens`、または harness/s
 
 1. **代答**: `GET /api/v1/cos/inbox?state=answered` で item の `reason`・`policy_version`・`operation_id` を見る。`GET /api/v1/cos/operations/{operation_id}` と元 task の events で actor=cos と理由を確認し、「受信箱」スレッドに「CoS が代わりに答えた」カードがあることを見る。
 2. **Discord escalation**: `state=escalated` の item に対応する通知が `GET /api/v1/notify` に 1 件だけあり、本文に要点・選択肢・推奨と理由・web link（`[notify] web_base_url` + 該当画面）が入っていることを見る。`web_base_url` が未設定・不正なら送信せず、`notify.web_base_url is missing or invalid` として未達のまま残る。webhook の secret（`[notify] discord_webhook_secret`）が無ければ未設定扱いで未達になる。どちらでも元の待ちは解決しない。Discord の返信・リアクションでは状態が変わらないことも確かめる。
-3. **CoS 不在の退避**: `cos.enabled=false`・CoS run の失敗・quota 切れ・`unavailable_after_secs` 超過（認可の件は CoS run が動いている間は数えず、run が始まらない・終わらないまま `authorization_unavailable_after_secs` を超えたとき。ADR 2026-10-29-cos-authorization-fallback-after-triage）のどれかで、item が `fallback` になり、「CoS 不在のため直接通知」の見出しと不在理由が付いた通知が revision ごとに 1 件だけ出ることを見る。CoS が回復しても同じ revision を再通知・代答しない。
+3. **CoS 不在の退避**（ADR 2026-11-11-cos-fallback-timing）: どの種類の件も、件の run か、件が後ろで待つ同じ thread の run が動いている（queued・running・stopping）間は退避しない。item が `fallback` になるのは、`cos.enabled=false`、CoS run が resolve せずに終わったとき（失敗・quota 切れ・途中で止まった・未処理のまま完了・run の記録が無い）、または安全網 `[cos.triage] fallback_after_secs`（未設定なら `[cos] max_wall_secs + 300`）を超えたときだけである。安全網は run の開始（件の run か、件が後ろで待つ run の `started_at`）から数え、動いている run が無ければ件を拾えるようになった時刻（到着と thread の直前の run の終わりの遅い方）から数える。どれかで item が `fallback` になり、「CoS 不在のため直接通知」の見出しと不在理由が付いた通知が revision ごとに 1 件だけ出ることを見る。送られる前に CoS が answer・observe・escalate したら、CoS の判定が採られ、fallback の通知は `ok=0`・`error="withdrawn: CoS judged before the send"` で取り下げられる（行は残る。escalate なら CoS の文面が同じ route で 1 回だけ送られる）。送られた後の CoS の判定は件を変えず、resolve は 409 `cos_inbox_revision_conflict` を返し、判定と理由は rejected の CoS 操作の監査行に残る。送り直さない。CoS が回復しても同じ revision を再通知・代答しない。
 4. **取消・差し戻し**: 代答カードの取消/差し戻し、または `POST /api/v1/cos/operations/{o}/override`（`mode=revoke|return`、人の認証のみ、理由必須）を使う。未消費の回答は待ちが新 revision で開き直り、消費済みは対象 task が pause されて新しい人待ちになり、不可逆な副作用は補償 task の id が返る。いずれも元の events は消えない。CoS の認証で override すると拒否される。
 
 通知の通常経路が CoS の escalation だけであることは、旧 inbox reminder/digest・完了通知などが Discord に出ないこと（`GET /api/v1/notify` に直接送信の新規行が増えないこと）で確かめる。例外は上の退避と管理者の明示 test だけである。

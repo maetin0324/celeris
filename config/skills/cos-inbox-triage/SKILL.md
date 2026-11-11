@@ -252,7 +252,7 @@ metadata:
 
 ## 11. CoS 不在で人へ回った件の要約（ADR 2026-10-28-cos-inbox-chat-summary）
 
-- CoS が期限内に答えられず人へ直接回った件（認可以外は 120 秒、認可は run が始まらない・終わらないまま安全網の秒数を超えたか、run が resolve せずに終わった件）は、daemon が退避の行（件の本文の全文・選択肢・回答の画面）を残し、
+- CoS が答えられず人へ直接回った件（§7 と同じ規則。どの種類の件も、run が resolve せずに終わったか、cos.enabled=false か、run が始まってから〈run が無ければ件を拾える状態になってから〉`[cos.triage] fallback_after_secs` を超えた件）は、daemon が退避の行（件の本文の全文・選択肢・回答の画面）を残し、
   統括スレッドに `CoS 不在で人へ直接回した件の要約: items=[…]` で始まる依頼を積む。この入力は daemon の依頼で、人の発言ではない
   （`instructed_by` には使えない）。
 - この run では、挙がった件ごとに task の最新の question・選択肢の全文・案件の状況を API で読み、(1) 何が起きたか

@@ -91,4 +91,8 @@ policy_version を上げる変更は、同じ commit で `config/skills/cos-inbo
 - KB の CoS の skill を KB の側で直すと、次の昇格で消える。
 - config と KB の版がずれると CoS は止まる（違う方針で黙って動くより良い）。受信箱の件は CoS の不在の fallback
   （`unavailable_after_secs`）で人に回る。
+  付記（2026-11-11、[2026-11-11-cos-fallback-timing](2026-11-11-cos-fallback-timing.md) D1・D3・D5）: この欄は消えた。
+  この ADR の D3 の門（`triage_launch` の skip 理由 `cos_skill_drift`）で CoS が止まる間、件は拾えるようになった時刻（到着と thread の直前の run の
+  終わりの遅い方）から `[cos.triage] fallback_after_secs`（未設定なら `[cos] max_wall_secs + 300`、既定 1200 秒）の安全網を
+  超えたときに人に回る。
 - 研究評価の記録は変えない。CoS の判断の根拠と実行者は従来どおり operation と resolve に残る。

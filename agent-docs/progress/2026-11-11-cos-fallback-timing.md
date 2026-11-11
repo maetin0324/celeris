@@ -34,6 +34,17 @@ ADR: [2026-11-11-cos-fallback-timing](../adr/2026-11-11-cos-fallback-timing.md)
   daemon が待ちのある thread を毎 tick 拾う（D3）ので general thread の message が 1 page（200 件）を超え、試験の
   `digests()` が古い digest を見落とした（1033 行）。`after_seq` で全 page を読むようにした。単独で 3 回続けて合格。
 
+- `phase 1: 消した config 欄・旧い退避規則・ブラウザ通知の文書の残りを直す` — final review が挙げた文書の残りを直した。
+  crates/・web/・`config/celeris.example.toml` は変えていない。
+  - `docs/ops/cos-chat.md`: `[cos.triage]` の見本から消した 2 欄を除き `# fallback_after_secs = 1200` を書いた。
+    受信箱一次対応の運用確認 3 を ADR の規則（全種類、run が動く間は退避しない・安全網の数え始め・送信前の判定の取り下げ・
+    送信済みの後は 409 で記録だけ）に書き換えた。
+  - skill cos-inbox-triage §11 の「人へ直接回った件」を §7 と同じ規則にした。判定の基準は変えないので metadata.version は
+    "11" のまま。SOURCE.md の 2026-11-11 の行に §11 の直しを足した。
+  - `agent-docs/web/feature-parity.md`: X9 を廃止の行（ADR D6、確認は e2e `parity-x: 未読が増えてもブラウザ通知を出さない`）にし、
+    R17 からブラウザ通知の許可・未読の増加での通知・消した unit を除いた。他の行の通知欄は「なし（X9 は廃止）」にした。
+  - ADR 2026-11-11-cos-skill-sync の帰結に付記: skill の門で CoS が止まる間、件は `fallback_after_secs` の安全網で人に回る。
+
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
 - 対象の試験: `cargo nextest run -p task-dispatch -p task-core -p celeris -p task-api -E 'test(/cos_chat_triage|cos_fallback_timing|cos_chat_root_done|root_done_summary|cos_triage|cos_chat_authorization|cos_reload|cos_inbox/)'` → 結果は下の「検査」に書く。
 - 受け入れ条件 3 の試験:
@@ -47,6 +58,12 @@ ADR: [2026-11-11-cos-fallback-timing](../adr/2026-11-11-cos-fallback-timing.md)
 - `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0。
 - `cargo nextest run -p celeris --test script_generation_e2e` → 3 回続けて exit 0。
 - `bash scripts/dev/check-health.sh` → exit 0（verdict=pass）。
+- 文書の残りの直し（commit『phase 1: 消した config 欄・旧い退避規則・ブラウザ通知の文書の残りを直す』の後、提出時の HEAD で実行）:
+  - `git grep -n "unavailable_after_secs\|120 秒" -- docs/ops/cos-chat.md config/skills/cos-inbox-triage/SKILL.md` → 出力なし（exit 1）。
+  - `node web/scripts/check-parity.mjs` → exit 1。出るのは R30 の行の commit が HEAD の祖先でないという誤りだけ（base でも出る。範囲外）。X9 の誤りは消えた。
+  - `git diff --quiet "$CELERIS_WU_BASE" HEAD -- crates/ web/ config/celeris.example.toml` → exit 0（この WorkUnit の変更は文書だけ）。
+  - `sh scripts/dev/check-doc-links.sh` → exit 0（ok）、`sh scripts/dev/check-adr-numbers.sh` → exit 0（423 files）、`sh scripts/dev/progress-index.sh --check` → exit 0。
+  - test-affected は走らせていない（人の指示。final review が走らせる）。
 
 ## 未解決
 - review の決定的 check（上限 600 秒、再試行 1200 秒）は、この task の test-affected（task-core を変えるので 14 crate・nextest 8227 件・web・control-ts・ts-verify）に足りない。attempt 2 の review は 1200 秒の時間切れで落ちた。load average 48〜80 の host では 26〜27 分かかる。D2 の取り下げは task-core の store の transaction の中に要るので、対象を縮める変更はしていない。負荷の低い時の再検査か、check の上限の延長が要る（人の判断）。
@@ -66,8 +83,14 @@ ADR: [2026-11-11-cos-fallback-timing](../adr/2026-11-11-cos-fallback-timing.md)
    旧い欄が残っていると新しい release は読み込みエラーで起動しない。
 2. 確認: `grep -n "unavailable_after_secs" ~/.config/celeris/celeris.toml` が何も出さないこと。release の切り替え後に
    `/api/v1/health` が ok で、`journalctl --user -u 'celeris@*'` に config の読み込みエラーが無いこと。
-3. KB の skill cos-inbox-triage の写しを使っているなら、`config/skills/cos-inbox-triage/SKILL.md` の §7 に差し替える
+3. KB の skill cos-inbox-triage の写しを使っているなら、`config/skills/cos-inbox-triage/SKILL.md`（§7・§11）に差し替える
    （policy_version は 11 のまま）。
 
 ## 提案
+- `POST /api/v1/reports/notified`（`crates/task-api/src/reports.rs`、CoS 操作 `report.notified`）は web に呼び出し元が無い
+  （`git grep -n "reports/notified\|reports_notified" -- web ':!web/api/generated'` が出力なし）。消したブラウザ通知とも
+  つながっていなかった（消した watcher は unread-count を読んでいた）。この task の範囲外なので直さない。API・CoS 操作・
+  schema・`docs/api/v1/api.md` から消すかを別の task で決める。
+- 台帳の R17 の unit `reports.test`・`notify.test` は web に file が無い（base から。範囲外）。台帳の検査は unit の名前を
+  照合しないので見逃される。
 - 未読の知らせを web で知りたい人には、画面の未読の badge で足りるかを人が確かめる。

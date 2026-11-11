@@ -14,7 +14,8 @@ head の tree で走らせ、非 0 の exit を finding に写す。どの scrip
   ref を写す。HEAD は head の sha）。対象 repo の index・ref・config には書かない。command には GIT_* の環境変数を
   渡さない（command の中の試験が作る一時 repo が対象 repo を書き換えないように）。
 - command が無ければ not_applicable（no_command）。argv[0] が PATH に無い・script の file が無い（exit 126・127）は
-  unsupported。非 0 の exit は fail（finding 1 件。出力の `path:line:` の行を evidence にする。無ければ command の file）。
+  unsupported（起動の前に script の file の有無も確かめる。shell ごとの exit の違いに依らない）。
+  signal で終わったら error（crashed:<rule>:CommandKilled。検査の結果ではない）。非 0 の exit は fail（finding 1 件。出力の `path:line:` の行を evidence にする。無ければ command の file）。
 - head だけで評価する（既存検査は今も「全部通る」が合格の条件なので、base に同じ失敗があっても new として数える）。
 """
 
@@ -27,6 +28,17 @@ import subprocess
 
 from health.gitio import git_text
 from health.rule import Hit, NotApplicable, Rule, Unsupported
+
+class CommandKilled(RuntimeError):
+    """包んだ検査が signal で終わった。検査の結果ではなく基盤の故障なので finding にせず error にする。"""
+
+
+def _script_of(argv: list[str]) -> str | None:
+    for a in argv[1:]:
+        if " " not in a and (a.startswith("scripts/") or a.endswith((".sh", ".py"))):
+            return a
+    return None
+
 
 _LOC = re.compile(r"^\s*(?:-\s+)?([A-Za-z0-9_.][^\s:]*):(\d+):")
 _MAX_EVIDENCE = 40
@@ -106,14 +118,19 @@ def _rule(rule_id: str, kind: str) -> Rule:
             argv = [subs.get(a, a) for a in argv]
             if shutil.which(argv[0]) is None:
                 raise Unsupported(f"tool_missing:{argv[0]}")
+            script = _script_of(argv)
+            if script is not None and not os.path.isfile(os.path.join(root, script)):
+                # shell ごとに exit が違う（dash は 2）ので、起動の前に script の有無で決める
+                raise Unsupported(f"command_missing: script {script} が head の tree に無い")
             proc = subprocess.run(argv, cwd=root, env=env, capture_output=True, text=True, timeout=900)
             shown = " ".join(a if a not in (root,) else "{root}" for a in argv)
             if proc.returncode in (126, 127):
                 raise Unsupported(f"command_missing: {shown} が起動できない（exit {proc.returncode}）")
+            if proc.returncode < 0:
+                raise CommandKilled(f"{shown} が signal {-proc.returncode} で終わった")
             if proc.returncode == 0:
                 continue
-            script = next((a for a in argv[1:] if a.startswith("scripts/") or a.endswith((".sh", ".py"))),
-                          argv[0])
+            script = script or argv[0]
             hits.append(Hit(
                 evidence=_evidence(proc.stdout + "\n" + proc.stderr, script, tree.side),
                 scope=("repo", "."),

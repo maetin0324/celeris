@@ -125,6 +125,30 @@ task 01M74X0XAN0MCFJ4KZ3VVFT2QA の進捗。工程は contract → input-owner �
 - `sh scripts/dev/progress-index.sh --check`、`git diff --check` → exit 0。
 - commit 件名: `phase 2: 時間切れ後の affected tests 再検証を記録する`。
 
+## 工程 3: request-atomic（adapter 受信内容と atomic review の合否を固定する）
+状態: 完了。変えたのは `crates/task-dispatch/src/dispatcher/tests/health_generic.rs`（試験だけ）とこの進捗。本体の code・検査器・profile・baseline・TaskStore・campaign は変えていない。
+
+### 変更
+- `phase 3: adapter が受けた ReviewRequest.health と atomic の final review の合否を固定する`
+  - 既存の `review_flow`・`configure_real_bundled_checker`・`build_fixture` を使い回した。`ReviewSetup.reviewer` を `bool` から `Reviewer`（`None`・`Pass`・`Candidates`）に替え、`without_profile` を足した。既存の試験の動きは変えていない。
+  - `build_fixture_without_profile`: builder の CLI は profile の有無を選べないので、同じ builder の `build(..., with_profile=False)` を `python3 -I -c` で呼ぶ。fixture の内容は写していない。builder の出力の読み取りは `run_builder` に寄せた（`build_fixture` と共用）。
+  - `CandidateReviewer`（試験の中だけの adapter。本体に hook を足していない）: reviewer run が受けた `req.context.review.health` を記録する。受けた `findings.new` のうち `dup.contract` には `duplicate_implementation`、`dup.state` には `dual_source_of_truth` の blocking の finding を書く（path は候補の path、reason は候補の fingerprint を引く）。候補が無ければ空の health の判定で合格にする。fixture と作業ツリーは読まない。
+  - 試験 9 件（どれも通常の成功試験。`should_panic` は 0 件）。
+    - `g4_r1_review_request_{ts,rust}_{dup_contract,dup_state}_fails_review`（4 件）と `g4_r1_review_request_builtin_generic_{dup_contract,dup_state}_fails_review`（profile の無い ts の dup-contract と rust の dup-state。2 件）。adapter が受けた材料について次を確かめる: repo_id、`target_sha` = fixture の base、`reviewed_sha` = 候補、diff の path が候補の変更 file の全部と一致、`owner_rows`・`invariants` が空、`policy.source` = `base`（profile あり）か `builtin`（profile 無し）、`changed = false`、report の verdict `pass` で `reviewable`、fixture の期待の rule の候補 1 件（warning・new、path は候補の変更 file）。同じ候補の `HealthReviewInputBuilt` の `input` は受けた材料と一致する（event は照合だけに使う）。さらに、reviewer の blocking の不合格（`health:<kind>`、根拠あり）で review が落ち、検査器の health の項目は合格のまま、`review_pass` の遷移は無く、reviewer run は 1 回で、task は Failed になる（`max_retries = 0`）。
+    - `g4_r1_review_request_{ts,rust}_good_is_done` と `g4_r1_review_request_builtin_generic_good_is_done`（3 件）。同じ材料の検査に加え、受けた材料に二重化の候補（`dup.contract`・`dup.state`）が無い。reviewer run は 1 回で、不合格の verdict は無く、`review_pass` で Done になる。
+  - 試験ごとの不変条件と既存の試験で足りない理由は doc comment と節の注釈に書いた。要点: 既存の `…_reaches_reviewer` は `HealthReviewInputBuilt` の event だけを見る。材料が reviewer の run の `RunContext` に載ったこと（配送）と、受けた候補による reviewer の不合格が task の状態を止めることは確かめない。`health_review_input_policy_absent_reaches_the_reviewer_request` は stub の検査器の固定の report で、本物の検査器の候補と組み込み generic を通らない。
+
+### 変異の確認（commit していない一時の変更）
+- `CandidateReviewer` が受けた材料を無視する（`review_json(None)`）ように一時的に変えて流した。候補の 6 件は「the reviewer's blocking health:… must fail the review」で落ち、good の 3 件は合格した（9 件中 6 件不合格）。材料が reviewer に届かない不具合を、この試験が検出できることを確かめた。変更は元に戻した。
+
+### 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+- `cargo nextest run -p task-dispatch -E 'test(g4_r1_review_request_) | test(health_generic_review_input_)'` → exit 0。17 件すべて合格（新しい 9 件と既存の 8 件）。
+- `bash scripts/dev/test-affected.sh` → exit 0（836 秒）。対象は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。nextest 3756 件すべて合格、11 件 skip。health は verdict pass・fail 級 0・new 0・worsened 0。検査器自身の試験は OK（expected failures 2 件）、repo_health_gate は 7 件すべて OK。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- 範囲（計画の check 4）→ exit 0。変更 path は `health_generic.rs` とこの進捗だけ。
+- 参考（必須の検査ではない）: `cargo clippy -p task-dispatch --tests -- -D warnings` は既存の 4 件（`dispatch_ready_phases.rs`・`health_enforce.rs`・`cos_chat_root_done.rs`・`cos_slot_wait.rs`）で exit 101。`health_generic.rs` の指摘は 0 件。
+
 ## 未解決（工程 2）
 - 範囲外で落ちた 12 件は直した。残りは注釈だけで、どれも動作に影響しない。
   - `crates/task-core/src/model/events.rs` の `HealthReviewInputSkipped` の doc comment と、`task_core::design_review::ReviewPolicy::definition_sha256` の doc comment（「health の材料の再利用の鍵に入る」。R2.3 で鍵に使わなくなった）が古い。task の受け入れ条件が `crates/task-core/` の無変更を求めるので変えていない。

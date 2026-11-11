@@ -27,6 +27,9 @@ use task_core::required_checks::health::{
     CHECKER_DIR, CheckerId, CheckerSource, HEALTH_CHECK_ID, HealthEvidence, HealthVerdict,
     PROFILES_DIR, SOURCE_SIZE_REPORT,
 };
+use task_worker::protocol::{
+    HealthFindingKind, HealthRepoInput, HealthReviewInput, HealthSeverity,
+};
 
 /// builder の出力の末尾の 1 行（ADR D1.1）。`base`・`head` は `non-git` で `None`。`multi` は先頭の repo の SHA。
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -56,11 +59,34 @@ fn source_root() -> PathBuf {
 /// 作る（ADR D3.2）。python3 が無ければ失敗にする（skip にしない。検査器も python3 を要する）。
 pub(super) fn build_fixture(kind: &str, variant: &str, dest: &std::path::Path) -> Fixture {
     let builder = source_root().join("scripts/tests/repo_health_fixtures.py");
-    let out = std::process::Command::new("python3")
-        .arg("-I")
+    let mut cmd = std::process::Command::new("python3");
+    cmd.arg("-I")
         .arg(&builder)
         .args(["build", kind, variant])
-        .arg(dest)
+        .arg(dest);
+    run_builder(cmd, kind, variant)
+}
+
+/// [`build_fixture`] の profile を置かない形（base に `profiles/default.toml` が無く、検査器は組み込み generic を使う。
+/// 契約 ADR 2026-11-07-repo-health-contract の D2）。builder の CLI は profile の有無を選べないので、同じ builder の
+/// `build(..., with_profile=False)` を呼ぶ（fixture の内容は写さない）。
+fn build_fixture_without_profile(kind: &str, variant: &str, dest: &std::path::Path) -> Fixture {
+    const CALL: &str = "import json, sys\nfrom dataclasses import asdict\nfrom pathlib import Path\n\
+        sys.path.insert(0, sys.argv[1])\nimport repo_health_fixtures as f\n\
+        print(json.dumps(asdict(f.build(sys.argv[2], sys.argv[3], Path(sys.argv[4]), with_profile=False))))\n";
+    let mut cmd = std::process::Command::new("python3");
+    cmd.arg("-I")
+        .arg("-c")
+        .arg(CALL)
+        .arg(source_root().join("scripts/tests"))
+        .args([kind, variant])
+        .arg(dest);
+    run_builder(cmd, kind, variant)
+}
+
+/// builder を走らせ、出力の末尾の 1 行を [`Fixture`] として読む。
+fn run_builder(mut cmd: std::process::Command, kind: &str, variant: &str) -> Fixture {
+    let out = cmd
         .output()
         .unwrap_or_else(|e| panic!("python3 を起動できない（builder と検査器が要る）: {e}"));
     assert!(
@@ -396,15 +422,33 @@ struct ReviewFlow {
     ws: PathBuf,
     events: Vec<Event>,
     status: Status,
+    /// [`Reviewer::Candidates`] の adapter が reviewer run ごとに受けた `ReviewRequest.health`（順に）。ほかの
+    /// reviewer では空。
+    requests: Vec<Option<HealthReviewInput>>,
+}
+
+/// final review の reviewer run（[`review_flow`]）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+enum Reviewer {
+    /// reviewer run を起こさない（acceptance に `Check::Reviewer` を足さない）。review の repair は worktree を
+    /// fixture の base に戻す。
+    #[default]
+    None,
+    /// acceptance に `Check::Reviewer` を足し、reviewer は合格の `review.json`（[`REVIEW_PASS`]）を書く。
+    Pass,
+    /// acceptance に `Check::Reviewer` を足し、reviewer は受けた `ReviewRequest.health` を記録して、その候補の
+    /// finding から判定を書く（[`CandidateReviewer`]）。
+    Candidates,
 }
 
 /// review の作り方（[`review_flow`]）。
 #[derive(Debug, Clone, Copy, Default)]
 struct ReviewSetup {
-    /// acceptance に `Check::Reviewer` を足す（final review の reviewer run を起こす）。
-    reviewer: bool,
+    reviewer: Reviewer,
     /// Celeris 固有の欄（[`Flags`]）。`None` は既定の task（`target_sync::reviewing_task`）。
     flags: Option<Flags>,
+    /// fixture の base に profile を置かない（検査器は組み込み generic を使う。[`build_fixture_without_profile`]）。
+    without_profile: bool,
 }
 
 /// Celeris 固有の欄（ADR D3.3）。どれを立てても health の結果は変わらない（J1）。
@@ -485,13 +529,17 @@ async fn review_flow(
 ) -> ReviewFlow {
     let fixtures = tempfile::tempdir().unwrap();
     let repo = fixtures.path().join(kind);
-    let fx = build_fixture(kind, variant, &repo);
+    let fx = if setup.without_profile {
+        build_fixture_without_profile(kind, variant, &repo)
+    } else {
+        build_fixture(kind, variant, &repo)
+    };
     let changed = changed_paths(&repo, &fx);
     let ws = tempfile::tempdir().unwrap();
     let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
     let store: Arc<dyn TaskStore> = sqlite.clone();
     let mut task = review_task(&repo, &store, &sqlite, setup.flags);
-    if setup.reviewer {
+    if setup.reviewer != Reviewer::None {
         task.acceptance.push(Criterion {
             text: "reviewer".into(),
             check: Check::Reviewer,
@@ -499,12 +547,17 @@ async fn review_flow(
     }
     store.insert(&task).unwrap();
     let base = fx.base().to_string();
-    let adapter: Arc<dyn WorkerAdapter> = if setup.reviewer {
-        Arc::new(ParallelWuAdapter::new(Duration::from_millis(5)).with_review(REVIEW_PASS))
-    } else {
-        Arc::new(RepairActionAdapter::new(move |dir, _| {
+    let requests = Arc::new(StdMutex::new(Vec::new()));
+    let adapter: Arc<dyn WorkerAdapter> = match setup.reviewer {
+        Reviewer::None => Arc::new(RepairActionAdapter::new(move |dir, _| {
             restore_base(dir, &base)
-        }))
+        })),
+        Reviewer::Pass => {
+            Arc::new(ParallelWuAdapter::new(Duration::from_millis(5)).with_review(REVIEW_PASS))
+        }
+        Reviewer::Candidates => Arc::new(CandidateReviewer {
+            requests: requests.clone(),
+        }),
     };
     let mut d = non_celeris_dispatcher(store.clone(), adapter, ws.path(), 1);
     let releases = tempfile::tempdir().unwrap();
@@ -532,6 +585,7 @@ async fn review_flow(
     let events = events_of(&store, task.id);
     let status = store.get(task.id).unwrap().unwrap().status;
     let ws_path = ws.path().to_path_buf();
+    let requests = requests.lock().unwrap().clone();
     ReviewFlow {
         _dirs: vec![fixtures, ws, releases],
         fx,
@@ -541,6 +595,7 @@ async fn review_flow(
         ws: ws_path,
         events,
         status,
+        requests,
     }
 }
 
@@ -654,8 +709,8 @@ fn reported_findings(flow: &ReviewFlow, rule: &str) -> Vec<serde_json::Value> {
 /// final review（reviewer run あり）を候補の finding の fixture で流す。
 async fn review_input_flow(bundled: &CheckerId, kind: &str, variant: &str) -> ReviewFlow {
     let setup = ReviewSetup {
-        reviewer: true,
-        flags: None,
+        reviewer: Reviewer::Pass,
+        ..ReviewSetup::default()
     };
     review_flow(bundled, kind, variant, setup).await
 }
@@ -794,6 +849,338 @@ async fn health_generic_review_input_rust_dup_contract_reaches_reviewer() {
 #[tokio::test]
 async fn health_generic_review_input_rust_dup_state_reaches_reviewer() {
     review_input_candidate_reaches_reviewer("rust", "dup-state").await;
+}
+
+// ---- G4-R1: adapter が受けた ReviewRequest.health と atomic の final review の合否 ----
+//
+// 既存の `…_reaches_reviewer` は `HealthReviewInputBuilt` の event だけを見る。event は dispatcher が材料を作った記録で、
+// reviewer の run の `RunContext` に載ったこと（配送）を示さない。材料を作っても `ReviewRequest.health` に入れ損ねる・
+// 別の repo の材料を入れる・reviewer の判定を合否に使わない、という壊れ方は event だけでは検出できない。ここでは
+// 試験の中だけの reviewer（[`CandidateReviewer`]。本体に hook を足さない）が実際に受けた `ReviewRequest.health` を
+// 記録し、その中身と、受けた候補を根拠にした reviewer の不合格が task の状態を決めることを確かめる。report・event は
+// 受信の写しの照合だけに使い、配送の証拠にしない。
+
+/// 候補の finding の rule と、reviewer がそれを根拠に返す blocking の health finding の種別（汎用規約の 2・4）。
+/// `dup.contract` は同じ契約の二重実装、`dup.state` は同じ表の書き手（状態の正本）の二重化。
+const CANDIDATE_KINDS: [(&str, HealthFindingKind); 2] = [
+    ("dup.contract", HealthFindingKind::DuplicateImplementation),
+    ("dup.state", HealthFindingKind::DualSourceOfTruth),
+];
+
+/// 試験の中だけの reviewer。reviewer run（`TaskKind::Review`）で受けた `ReviewRequest.health` を記録し、その
+/// `findings.new` の候補（[`CANDIDATE_KINDS`] の rule）ごとに blocking の finding（path は候補の path、reason は候補の
+/// fingerprint を引く）を `review.json` に書く。候補が無ければ空の health の判定で合格にする。fixture・作業ツリーは
+/// 読まず、受けた材料だけで決める（材料が届かなければ合格を書くので、届かない不具合は Done で表に出る）。ほかの run
+/// （worker のやり直し）は何も変えずに終わる。
+struct CandidateReviewer {
+    requests: Arc<StdMutex<Vec<Option<HealthReviewInput>>>>,
+}
+
+impl CandidateReviewer {
+    /// 受けた材料 `health` への `review.json`（acceptance[1] が `Check::Reviewer`）。
+    fn review_json(health: Option<&HealthReviewInput>) -> String {
+        let findings: Vec<serde_json::Value> = health
+            .into_iter()
+            .flat_map(|h| &h.repos)
+            .flat_map(|repo| &repo.findings.new)
+            .filter_map(|f| {
+                let (_, kind) = CANDIDATE_KINDS.iter().find(|(rule, _)| *rule == f.rule_id)?;
+                let path = f.path.as_deref()?;
+                Some(serde_json::json!({
+                    "kind": kind,
+                    "severity": HealthSeverity::Blocking,
+                    "path": path,
+                    "reason": format!("{} at {path}: the candidate adds a second owner", f.fingerprint),
+                }))
+            })
+            .collect();
+        serde_json::json!({
+            "verdicts": [{"criterion": 1, "pass": true, "reason": "the acceptance holds"}],
+            "health": {"findings": findings},
+        })
+        .to_string()
+    }
+}
+
+#[async_trait]
+impl WorkerAdapter for CandidateReviewer {
+    fn id(&self) -> &str {
+        "instant"
+    }
+    async fn run(
+        &self,
+        req: RunRequest,
+        _run_id: &str,
+        _limits: RunLimits,
+        _sink: &dyn EventSink,
+    ) -> Result<RunOutcome, AdapterError> {
+        if req.task.kind == TaskKind::Review {
+            let health = req.context.review.as_ref().and_then(|r| r.health.clone());
+            std::fs::create_dir_all(&req.artifacts_dir).unwrap();
+            std::fs::write(
+                req.artifacts_dir.join("review.json"),
+                Self::review_json(health.as_ref()),
+            )
+            .unwrap();
+            self.requests.lock().unwrap().push(health);
+        }
+        Ok(RunOutcome {
+            terminal: Terminal::Done {
+                summary: "ok".into(),
+                evidence: vec![],
+                usage: None,
+            },
+            exit_code: Some(0),
+        })
+    }
+}
+
+/// adapter が受けた 1 回目の reviewer run の `ReviewRequest.health` から、task の唯一の repo の材料を返す。repo・
+/// base（= fixture の base）・head（= 候補）・diff（= 候補が変えた path の全部）・空の `owner_rows`/`invariants`
+/// （base の profile に `[review]` が無い）・policy の状態（`source` は `policy_source`、`changed = false`）・材料に
+/// した report を確かめる。同じ候補の `HealthReviewInputBuilt` の `input` が受けた材料と同じことも確かめる（event は
+/// 受信の写しとして照合するだけ）。
+fn received_input<'a>(flow: &'a ReviewFlow, policy_source: &str) -> &'a HealthRepoInput {
+    let skipped: Vec<&String> = flow
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            Event::HealthReviewInputSkipped { reason, .. } => Some(reason),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !flow.requests.is_empty(),
+        "no reviewer run: {:?}",
+        flow.events
+    );
+    assert!(
+        flow.requests.iter().all(Option::is_some),
+        "every reviewer run gets ReviewRequest.health (skipped: {skipped:?})"
+    );
+    let health = flow.requests[0].as_ref().expect("checked above");
+    assert!(health.brief.is_none(), "an atomic task has no plan");
+    assert_eq!(health.repos.len(), 1, "{health:?}");
+    let repo = &health.repos[0];
+    assert_eq!(repo.repo_id, flow.task.repos[0].repo_id.to_string());
+    assert_eq!(repo.target_sha, flow.fx.base());
+    assert_eq!(repo.reviewed_sha, flow.fx.head());
+    let mut diff: Vec<&str> = repo.diff.paths.iter().map(|p| p.path.as_str()).collect();
+    diff.sort_unstable();
+    let mut changed: Vec<&str> = flow.changed.iter().map(String::as_str).collect();
+    changed.sort_unstable();
+    assert!(!changed.is_empty());
+    assert_eq!(diff, changed, "{:?}", repo.diff);
+    assert_eq!(repo.diff.files, changed.len() as u64, "{:?}", repo.diff);
+    assert!(
+        repo.owner_rows.is_empty() && repo.invariants.is_empty(),
+        "no [review] in the base profile: {repo:?}"
+    );
+    assert_eq!(repo.policy.source, policy_source, "{:?}", repo.policy);
+    assert!(
+        !repo.policy.changed && repo.policy.files.is_empty(),
+        "{:?}",
+        repo.policy
+    );
+    assert!(
+        repo.findings.reviewable && repo.findings.reason.is_none(),
+        "{:?}",
+        repo.findings
+    );
+    assert_eq!(repo.findings.verdict, "pass", "{:?}", repo.findings);
+    assert!(skipped.is_empty(), "{skipped:?}");
+    let built: Vec<&serde_json::Value> = flow
+        .events
+        .iter()
+        .filter_map(|e| match e {
+            Event::HealthReviewInputBuilt {
+                reviewed_sha,
+                input,
+                ..
+            } if reviewed_sha == flow.fx.head() => Some(input),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(built.len(), 1, "one material per candidate");
+    assert_eq!(*built[0], serde_json::to_value(repo).unwrap());
+    repo
+}
+
+/// review の不合格の verdict のうち reason に `tag` を含むもの。
+fn failed_verdicts<'a>(events: &'a [Event], tag: &str) -> Vec<&'a str> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::ReviewVerdict {
+                pass: false,
+                reason,
+                ..
+            } if reason.contains(tag) => Some(reason.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// review が task を Done にした（`review_pass` の遷移）か。
+fn review_passed(events: &[Event]) -> bool {
+    events
+        .iter()
+        .any(|e| matches!(e, Event::Transitioned { reason, .. } if reason == "review_pass"))
+}
+
+/// 候補の reviewer（[`Reviewer::Candidates`]）で atomic の task の final review を流す。
+async fn request_flow(
+    bundled: &CheckerId,
+    kind: &str,
+    variant: &str,
+    without_profile: bool,
+) -> ReviewFlow {
+    let setup = ReviewSetup {
+        reviewer: Reviewer::Candidates,
+        without_profile,
+        ..ReviewSetup::default()
+    };
+    review_flow(bundled, kind, variant, setup).await
+}
+
+/// 不変条件（ADR 2026-11-11-health-generic-review-input R1・R5、ADR 2026-11-07-health-review-integration D5.3）:
+/// review 方針の無い汎用 repo（fixture の profile か、profile の無い repo の組み込み generic）の atomic の final review で、
+/// adapter が実際に受けた `ReviewRequest.health` に、その repo・base・head・diff と、本物の検査器が出した候補の
+/// finding（rule は fixture の期待、evidence の path は候補が変えた file）が入り、`owner_rows`・`invariants` は空。
+/// 受けた候補を根拠に reviewer が blocking の health finding を返すと、review は不合格になり task は Done にならない
+/// （検査器の health の項目は合格のままで、不合格は reviewer の判定から来る）。
+/// 既存の試験で足りない理由: `…_reaches_reviewer` は `HealthReviewInputBuilt` の event だけを見るので、材料が
+/// reviewer の run に載ったこと（配送）と、受けた候補による reviewer の不合格が task の状態を止めることを確かめない。
+/// `health_review_input_policy_absent_reaches_the_reviewer_request` は stub の検査器の固定の report で、本物の検査器の
+/// 候補・組み込み generic を通らない。
+async fn request_candidate_blocks_done(kind: &str, variant: &str, without_profile: bool) {
+    let (_bundle, bundled) = configure_real_bundled_checker();
+    let flow = request_flow(&bundled, kind, variant, without_profile).await;
+    let source = if without_profile { "builtin" } else { "base" };
+    let repo = received_input(&flow, source);
+    let rule = expected_rule(&flow.fx);
+    let candidates: Vec<_> = repo
+        .findings
+        .new
+        .iter()
+        .filter(|f| f.rule_id == rule)
+        .collect();
+    assert_eq!(candidates.len(), 1, "{rule}: {:?}", repo.findings);
+    let candidate = candidates[0];
+    assert_eq!(
+        (candidate.severity.as_str(), candidate.delta.as_str()),
+        ("warning", "new"),
+        "{candidate:?}"
+    );
+    let path = candidate.path.as_deref().unwrap_or_default();
+    assert!(
+        flow.changed.iter().any(|c| c == path),
+        "the candidate's evidence {path:?} must be a changed file {:?}",
+        flow.changed
+    );
+    let (_, finding_kind) = CANDIDATE_KINDS
+        .iter()
+        .find(|(r, _)| *r == rule)
+        .unwrap_or_else(|| panic!("{rule} is not a candidate rule"));
+    let tag = format!("health:{}", finding_kind.as_str());
+    let failed = failed_verdicts(&flow.events, &tag);
+    assert!(
+        !failed.is_empty(),
+        "the reviewer's blocking {tag} must fail the review: {:?}",
+        flow.events
+    );
+    assert!(
+        failed
+            .iter()
+            .all(|r| r.contains(&candidate.fingerprint) && !r.contains("ungrounded")),
+        "the blocking finding is grounded on the received candidate: {failed:?}"
+    );
+    let items = review_health(&flow.events);
+    assert!(
+        !items.is_empty() && items.iter().all(|(pass, _)| *pass),
+        "the checker's health item passes; the reviewer fails the review: {items:?}"
+    );
+    assert!(!review_passed(&flow.events), "{:?}", flow.events);
+    // substantive の blocking は局所修復でなく `ReviewFail`。やり直しの無い task（`max_retries = 0`）は Failed で止まる。
+    assert_eq!(flow.requests.len(), 1, "one reviewer run");
+    assert_eq!(flow.status, Status::Failed, "{:?}", flow.events);
+}
+
+#[tokio::test]
+async fn g4_r1_review_request_ts_dup_contract_fails_review() {
+    request_candidate_blocks_done("ts", "dup-contract", false).await;
+}
+
+#[tokio::test]
+async fn g4_r1_review_request_ts_dup_state_fails_review() {
+    request_candidate_blocks_done("ts", "dup-state", false).await;
+}
+
+#[tokio::test]
+async fn g4_r1_review_request_rust_dup_contract_fails_review() {
+    request_candidate_blocks_done("rust", "dup-contract", false).await;
+}
+
+#[tokio::test]
+async fn g4_r1_review_request_rust_dup_state_fails_review() {
+    request_candidate_blocks_done("rust", "dup-state", false).await;
+}
+
+#[tokio::test]
+async fn g4_r1_review_request_builtin_generic_dup_contract_fails_review() {
+    request_candidate_blocks_done("ts", "dup-contract", true).await;
+}
+
+#[tokio::test]
+async fn g4_r1_review_request_builtin_generic_dup_state_fails_review() {
+    request_candidate_blocks_done("rust", "dup-state", true).await;
+}
+
+/// 不変条件（同じ ADR の R1・R5）: 良い変更（fixture の期待のラベルが無い）でも、adapter が受けた
+/// `ReviewRequest.health` には同じ repo・base・head・diff の材料が入り、`owner_rows`・`invariants` は空で、二重化の
+/// 候補（`dup.contract`・`dup.state`）は無い。同じ reviewer は不合格を返さず、task は 1 回の reviewer run で Done になる。
+/// 既存の試験で足りない理由: 候補の試験（`…_fails_review`）だけでは、reviewer が材料に関係なく不合格にする・材料が
+/// 届かない場合と区別できない。`health_generic_direct_review_*_good_passes` は reviewer run を起こさず、受信の材料を
+/// 見ない。
+async fn request_good_is_done(kind: &str, without_profile: bool) {
+    let (_bundle, bundled) = configure_real_bundled_checker();
+    let flow = request_flow(&bundled, kind, "good", without_profile).await;
+    assert!(flow.fx.expected.is_empty(), "{:?}", flow.fx);
+    let source = if without_profile { "builtin" } else { "base" };
+    let repo = received_input(&flow, source);
+    assert!(
+        repo.findings
+            .new
+            .iter()
+            .all(|f| CANDIDATE_KINDS.iter().all(|(rule, _)| *rule != f.rule_id)),
+        "no duplication candidate for a good change: {:?}",
+        repo.findings
+    );
+    assert_eq!(flow.requests.len(), 1, "one reviewer run");
+    assert!(
+        flow.events
+            .iter()
+            .all(|e| !matches!(e, Event::ReviewVerdict { pass: false, .. })),
+        "{:?}",
+        flow.events
+    );
+    assert!(review_passed(&flow.events), "{:?}", flow.events);
+    assert_eq!(flow.status, Status::Done, "{:?}", flow.events);
+}
+
+#[tokio::test]
+async fn g4_r1_review_request_ts_good_is_done() {
+    request_good_is_done("ts", false).await;
+}
+
+#[tokio::test]
+async fn g4_r1_review_request_rust_good_is_done() {
+    request_good_is_done("rust", false).await;
+}
+
+#[tokio::test]
+async fn g4_r1_review_request_builtin_generic_good_is_done() {
+    request_good_is_done("ts", true).await;
 }
 
 // ---- 複数 repo ----
@@ -1017,8 +1404,8 @@ async fn health_generic_flags_do_not_change_outcome() {
         );
         for flags in configs {
             let setup = ReviewSetup {
-                reviewer: false,
                 flags: Some(flags),
+                ..ReviewSetup::default()
             };
             let flow = review_flow(&bundled, kind, variant, setup).await;
             assert_eq!(outcome(&flow), baseline, "{kind}/{variant} with {flags:?}");

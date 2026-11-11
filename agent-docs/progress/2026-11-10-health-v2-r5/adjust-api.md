@@ -47,8 +47,8 @@ WorkUnit `adjust-api`（段 final）。`inventory.json` で leaf が `adjust-api
 - `cargo nextest run -p task-api -E 'binary_id(task-api::cos_delivery_suite)'` → exit 0、19 passed、0 skipped。
 - `cargo test -p task-api --test cos_delivery_suite`（1 process の中で並行に実行）→ exit 0、19 passed。
 - `bash scripts/dev/check-health.sh --base "$CELERIS_WU_BASE"` → exit 0（verdict=pass、fail_grade 0、new 0、worsened 0）。sync-main.md のリンクを直す前は `doc.links` の 1 件で exit 1 だった。
-- 条件 1: `bash scripts/dev/test-affected.sh` → exit 0（694 秒）。対象は celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker と web。nextest 5872 tests run: 5872 passed（17 slow）、22 skipped。web は tsc -b が通り、vitest 104 file・712 tests passed。health gate は「all checks passed」。
-- 条件 1: `cargo clippy --workspace -- -D warnings` → exit 0（55 秒）。`cargo fmt --all -- --check` → exit 0（出力なし）。
+- 条件 1: `bash scripts/dev/test-affected.sh` → exit 0（963 秒。この file を足した commit の HEAD で実行。その前の束ねの commit の HEAD でも exit 0、694 秒）。対象は celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker と web。nextest 5872 tests run: 5872 passed（27 slow）、22 skipped。web は tsc -b が通り、vitest 104 file・712 tests passed。health gate は verdict=pass（fail_grade 0、worsened 0）、「all checks passed」。
+- 条件 1: `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0（出力なし）。
 - `python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R5 agent-docs/progress/2026-11-07-health-v2-b0/slices.json`（`git diff --no-renames --name-only "$CELERIS_WU_BASE" HEAD` と未追跡 path を標準入力）→ exit 0、「write-set R5: ok」。`sh "$CELERIS_WU_SCOPE_PATHS"` の出力は束の 4 file・`main.rs`・sync-main.md・この file だけ。
 - `sh scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-adr-numbers.sh`・`sh scripts/dev/progress-index.sh --check` → 各 exit 0。
 

@@ -2829,3 +2829,82 @@ fn v3_replan_counts_shared_stages_and_decisions_but_not_done_only_history() {
             .contains(&PlanValidationError::TooManyDecisions { count: 1, max: 0 })
     );
 }
+
+/// ADR 2026-11-11-replan-unit-kind-change D2: replan で task と leaf の間の kind の変更を拒むのは、行が kind を変えると
+/// 引き継げない状態（kind task の行の子 task、leaf の行の WU ブランチ・commit・lease・running）を持つときだけ。
+/// 始まっていない行・leaf の kind どうしの変更・done の行は拒まない。dispatcher の試験（`tree_kind_change.rs`）は子 task の
+/// ある行だけを通すので、leaf の行の状態の判定はここで固定する。
+#[test]
+fn kind_change_errors_reject_only_started_rows_crossing_the_task_boundary() {
+    let row = |key: &str, kind: WorkUnitKind, status: WorkUnitStatus| {
+        let mut s = spec(key, &[]);
+        s.kind = kind;
+        WorkUnitRow::new(
+            format!("wu-{key}"),
+            "t".into(),
+            "p1".into(),
+            0,
+            s,
+            status,
+            "2026-11-11T00:00:00Z".into(),
+        )
+    };
+    let unit = |key: &str, kind: WorkUnitKind| {
+        let mut s = spec(key, &[]);
+        s.kind = kind;
+        s
+    };
+    let mut with_child = row("child", WorkUnitKind::Task, WorkUnitStatus::Failed);
+    with_child.child_task_id = Some("01CHILD".into());
+    let mut with_branch = row("branch", WorkUnitKind::Implement, WorkUnitStatus::Blocked);
+    with_branch.branch = Some("celeris-wu/t/branch".into());
+    let mut with_lease = row("lease", WorkUnitKind::Implement, WorkUnitStatus::Running);
+    with_lease.lease_run_id = Some("run-1".into());
+    let rows = vec![
+        row("held", WorkUnitKind::Task, WorkUnitStatus::Ready),
+        row("fresh", WorkUnitKind::Implement, WorkUnitStatus::Pending),
+        with_child,
+        with_branch,
+        with_lease,
+        row("leafkind", WorkUnitKind::Implement, WorkUnitStatus::Blocked),
+        row("done", WorkUnitKind::Task, WorkUnitStatus::Done),
+        row("gone", WorkUnitKind::Task, WorkUnitStatus::Superseded),
+    ];
+    let new = plan(vec![
+        unit("held", WorkUnitKind::Implement),
+        unit("fresh", WorkUnitKind::Task),
+        unit("child", WorkUnitKind::Investigate),
+        unit("branch", WorkUnitKind::Task),
+        unit("lease", WorkUnitKind::Task),
+        unit("leafkind", WorkUnitKind::Test),
+        unit("done", WorkUnitKind::Implement),
+        unit("gone", WorkUnitKind::Implement),
+    ]);
+    let errors = kind_change_errors(&new, &rows);
+    let keys: Vec<&str> = errors
+        .iter()
+        .map(|e| match e {
+            PlanValidationError::StartedUnitKindChanged { key, .. } => key.as_str(),
+            other => panic!("unexpected {other:?}"),
+        })
+        .collect();
+    assert_eq!(keys, vec!["child", "branch", "lease"], "{errors:?}");
+    assert_eq!(
+        errors[0],
+        PlanValidationError::StartedUnitKindChanged {
+            key: "child".into(),
+            from: WorkUnitKind::Task,
+            to: WorkUnitKind::Investigate,
+            state: "child task 01CHILD".into(),
+        }
+    );
+    let text = errors[1].to_string();
+    assert!(
+        text.contains("unit branch has already started (work unit branch celeris-wu/t/branch)")
+            && text.contains("from \"implement\" to \"task\"")
+            && text.contains("new key"),
+        "{text}"
+    );
+    assert_eq!(kind_bound_state(&rows[0]), None);
+    assert_eq!(kind_bound_state(&rows[1]), None);
+}

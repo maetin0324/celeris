@@ -328,6 +328,14 @@ pub enum PlanValidationError {
     DaemonAddedKeyReused {
         key: String,
     },
+    /// ADR 2026-11-11-replan-unit-kind-change D2: 始まった（kind を変えると引き継げない状態 `state` を持つ）生きた行の kind を、
+    /// replan で task と leaf の間で変えた。
+    StartedUnitKindChanged {
+        key: String,
+        from: WorkUnitKind,
+        to: WorkUnitKind,
+        state: String,
+    },
     /// ADR 2026-10-23-stage-order-and-plan-stall D3: 採用で書く未完の行の依存が、有効な行（版を問わない。前の版で done の
     /// 繰り越し行は満たされた依存）に解決できない。待っても満たされないので採用しない。
     DependencyWithoutRow {
@@ -646,6 +654,17 @@ impl std::fmt::Display for PlanValidationError {
             Self::DaemonAddedKeyReused { key } => write!(
                 f,
                 "work unit key {key:?} belongs to a work unit the daemon added (a delivery / final-review / integration repair work unit, not in the plan); do not write it — the daemon carries it over（{key} は daemon が足した WU〈計画に無い repair WU〉なので計画に書かない。daemon が持ち越す。ADR-0079 R7-12）"
+            ),
+            Self::StartedUnitKindChanged {
+                key,
+                from,
+                to,
+                state,
+            } => write!(
+                f,
+                "unit {key} has already started ({state}); a replan cannot change its kind from {from:?} to {to:?}. Keep kind {from:?}, or write the new work under a new key (the old unit is superseded)（始まった unit の kind は replan で task と leaf の間で変えられない。kind を元に戻すか、新しい key で書くこと。ADR 2026-11-11-replan-unit-kind-change）",
+                from = from.as_str(),
+                to = to.as_str()
             ),
             Self::ChildTaskTooDeep {
                 key,

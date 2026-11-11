@@ -652,6 +652,12 @@ pub fn plan_replan(
         &validated.spec,
         &all_units,
     ));
+    // ADR 2026-11-11-replan-unit-kind-change D2: 始まった行の kind を task と leaf の間で変える計画も拒む（下の持ち越しは
+    // 行の kind を新しい版に合わせるので、子 task・WU ブランチを持つ行を書き換えさせない）。
+    retired.extend(task_core::execution_plan::kind_change_errors(
+        &validated.spec,
+        &all_units,
+    ));
     if !retired.is_empty() {
         return Err(OpsError::Validation(describe_validation_errors(&retired)));
     }
@@ -766,9 +772,12 @@ pub fn plan_replan(
                 let mut row = existing.clone();
                 row.plan_id = new_plan_id.clone();
                 row.seq = seq as u32;
+                // ADR 2026-11-11-replan-unit-kind-change D1: 行の kind は新しい版の unit の kind（task と leaf を
+                // またいで変わる行は、子 task・WU ブランチを持たないことを上の `kind_change_errors` が確かめた）。
+                row.kind = wu_spec.kind;
                 // ADR 2026-10-20-replan-dep-change-wu-rebase D1/D2: 同じ段の依存先が変わった葉は、次の
                 // prepare が旧 WU ブランチを退避して新しい起点から作り直す（branch / base / head を消す）。
-                let rebase = existing.kind != task_core::WorkUnitKind::Task
+                let rebase = row.kind != task_core::WorkUnitKind::Task
                     && task_core::same_phase_dependencies_changed(
                         &existing.depends_on,
                         existing.phase.as_deref(),

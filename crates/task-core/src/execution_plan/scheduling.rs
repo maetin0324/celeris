@@ -776,6 +776,59 @@ pub fn retired_key_errors(
     errors
 }
 
+/// ADR 2026-11-11-replan-unit-kind-change D2: 行が kind を変えると引き継げない状態（kind task の行は子 task、leaf の行は
+/// WU ブランチ・commit・lease・`running`）を持つなら、その説明。持たなければ `None`（replan で kind を変えてよい）。
+pub fn kind_bound_state(row: &WorkUnitRow) -> Option<String> {
+    if row.kind == WorkUnitKind::Task {
+        return row
+            .child_task_id
+            .as_ref()
+            .map(|child| format!("child task {child}"));
+    }
+    if let Some(branch) = &row.branch {
+        Some(format!("work unit branch {branch}"))
+    } else if let Some(commit) = &row.head_commit {
+        Some(format!("work unit commit {commit}"))
+    } else if let Some(run) = &row.lease_run_id {
+        Some(format!("run {run} holds the work unit"))
+    } else if row.status == WorkUnitStatus::Running {
+        Some("the work unit is running".to_string())
+    } else {
+        None
+    }
+}
+
+/// ADR 2026-11-11-replan-unit-kind-change D2: 新しい計画 `spec` が、生きた未完の行（`rows`、退役した行を含んでよい）の kind を
+/// task と leaf の間で変えていて、その行が [`kind_bound_state`] を持つか。持てば replan はその行を新しい kind に書き換えられない
+/// （子 task を捨てる・WU ブランチの成果を捨てる）ので、採用の前に検証の理由として返す。done の行は見ない（done の不変条件は
+/// [`validate_with`] が見る）。leaf の kind どうしの変更は WU ブランチをそのまま使えるので返さない。純粋関数。
+pub fn kind_change_errors(
+    spec: &ExecutionPlanSpec,
+    rows: &[WorkUnitRow],
+) -> Vec<PlanValidationError> {
+    let mut errors = Vec::new();
+    for w in &internal_view(spec).work_units {
+        let Some(row) = rows
+            .iter()
+            .find(|u| u.key == w.key && u.status.is_active() && u.status != WorkUnitStatus::Done)
+        else {
+            continue;
+        };
+        if (row.kind == WorkUnitKind::Task) == (w.kind == WorkUnitKind::Task) {
+            continue;
+        }
+        if let Some(state) = kind_bound_state(row) {
+            errors.push(PlanValidationError::StartedUnitKindChanged {
+                key: w.key.clone(),
+                from: row.kind,
+                to: w.kind,
+                state,
+            });
+        }
+    }
+    errors
+}
+
 /// ADR 2026-10-23-stage-order-and-plan-stall D3: 採用で書く行 `written`（新規・持ち越し）のうち未完の行の依存が、
 /// 採用後の行 `projected`（版を問わない）の有効な行に解決できるか。前の版で done の繰り越し行（今の版の `plan_id` を
 /// 持たない行）は有効な行なので満たされた依存になる。`child:<key>` は子 Task で解くので見ない。解決できない依存ごとに

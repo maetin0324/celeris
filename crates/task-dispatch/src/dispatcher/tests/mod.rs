@@ -3143,6 +3143,10 @@ mod tree_decisions;
 /// （`StallDetected`）・人の replan の 2 回目の試行（`src/dispatcher/tests/tree_approval.rs`）。
 mod tree_approval;
 
+/// ADR 2026-11-11-replan-unit-kind-change: replan で unit の kind を task と leaf の間で変えたときの行の kind と、子 task の
+/// ある行の kind の変更を採用の前に拒むこと（`src/dispatcher/tests/tree_kind_change.rs`）。
+mod tree_kind_change;
+
 /// ADR-0074「F5-fix8 実装時の明確化」: 仕事の残っていない計画の最終レビュー（空の replan の事故の再現）と、
 /// 木でない Task の生存確認（`src/dispatcher/tests/finished_plan.rs`）。
 mod finished_plan;

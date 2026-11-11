@@ -23,7 +23,7 @@ pub(in super::super) struct PreparedPlan {
 pub(in super::super) enum AdoptionHold {
     /// SPEC §3.1 / ADR-0033 D4・D5: 部をまたぐ子は秘書（人）への質問。認可されたら planner をもう一度走らせる。
     NeedsAuthorization(Vec<String>),
-    /// 子 task の提案・unit の repos・退役した key などの検証に通らなかった（planner の再試行の理由）。
+    /// 子 task の提案・unit の repos・始まった unit の kind の変更などの検証に通らなかった（planner の再試行の理由）。
     Invalid(String),
 }
 
@@ -43,6 +43,20 @@ impl Dispatcher {
     ) -> Result<PreparedPlan, AdoptionHold> {
         let (validated, tree_plan) =
             self.tree_plan_gate(task, validated, done_work_units, &mut adopt_limits);
+        // ADR 2026-11-11-replan-unit-kind-change D2: unit の gate の後の計画で、始まった行の kind を task と leaf の間で
+        // 変えていれば、設計 review と root の承認の前に planner の再試行に返す（採用の `plan_replan` も同じ関数で拒む）。
+        if replan {
+            let rows = self
+                .store
+                .work_units_for(task.id)
+                .map_err(|e| AdoptionHold::Invalid(e.to_string()))?;
+            let errors = task_core::execution_plan::kind_change_errors(&validated.spec, &rows);
+            if !errors.is_empty() {
+                return Err(AdoptionHold::Invalid(
+                    task_ops::execution::describe_validation_errors(&errors),
+                ));
+            }
+        }
         let children = if replan {
             let existing: std::collections::BTreeSet<String> = self
                 .store

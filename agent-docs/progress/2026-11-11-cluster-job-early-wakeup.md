@@ -129,6 +129,19 @@ continuation の回数にも進捗なしの窓にも数えられず、止まる�
 - module doc（`task-core/src/cluster_job.rs`、`task-dispatch/src/dispatcher/cluster_job_wait.rs`）を、全終了に加えて
   `job_failed`・`queue_stalled` でも再開すると書き直した。
 
+### 検査（attempt 4、提出時の HEAD で実行）
+
+commit『phase 1: wake once per cluster job failure so re-waits with a failed job do not loop』の後に実行した。
+その後の commit『phase 1: 進捗に attempt 4 の検査結果を書く』はこの進捗ファイルだけを変える。
+
+- `cargo nextest run -p task-core -p task-dispatch -p task-worker -p celeris --lib -E 'test(cluster_job) | test(job_wait) | test(preamble) | test(rerun) | test(failure)'` → 247 passed（exit 0）。
+- 新しい 3 件を旧い規則（失敗を見るたびに起こす）に一時的に戻して実行 → task-core の `the_same_failure_does_not_wake_again_when_waited_again` と dispatcher の `rewaiting_with_an_inspected_failure_does_not_wake_again_until_the_rest_finish` が落ちた（コードは戻してある）。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0（53 秒）。
+- `bash scripts/dev/test-affected.sh` → exit 0（812 秒、20:05〜20:19 UTC、開始時 load average 3.9、終了時 43.6）。
+  14 crate の nextest 8235 passed・23 skipped、web の tsc と vitest 712 passed・server の node test、test-ts-verify 20 passed、repo_health_gate all checks passed。
+- `sh scripts/dev/progress-index.sh --check` → exit 0。
+
 ## 本番への移行
 
 `queued_wake_secs` は、そのキーを知る release の昇格後に人が本番設定へ追加する。

@@ -16,7 +16,6 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
-use crate::browser_launcher::userns::INNER_ID;
 use crate::browser_relay::{self, CHANNEL_FD, CONNECT, GRANT, READY, REFUSE};
 
 use nix::libc;
@@ -25,6 +24,12 @@ use task_core::browser_isolation::{
     LauncherSessionProof, Namespace, RuntimeFacts, SESSION_ROOT, StateRejected, verify_isolation,
     verify_launcher_session,
 };
+
+/// sandbox の userns の内側の UID / GID（bwrap の `--uid` / `--gid`。host から見た UID は変わらない。
+/// ADR-0105）。launcher はこの ID を専用 host UID の subuid へ map する（ADR-0115 の `1000 → S`。
+/// `browser_launcher::userns` の 2 map と `backend` の map の照合、daemon の `runtime_facts`）。
+/// launcher が runtime に依存する向きなので、正本はこちらに置く。
+pub(crate) const INNER_ID: u32 = 1000;
 
 /// The existing daemon path creates its own user namespace. A launcher may supply
 /// a namespace created under its dedicated host UID instead.

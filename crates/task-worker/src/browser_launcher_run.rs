@@ -31,11 +31,11 @@ use crate::browser_launcher::protocol::{
     CREDENTIAL_LOGIN_PROTOCOL, LoginObservation, LoginResult, MAX_ARTIFACT_BYTES, MAX_ARTIFACTS,
     POST_LOGIN_PROTOCOL, artifact_name_verb,
 };
-use crate::browser_launcher::userns::INNER_ID;
 use crate::browser_launcher::{
     ActionArgs, ClientError, ErrorCode, LauncherClient, Observation, Outcome, Receipt,
     SessionFacts, SessionPolicy, SessionState, StartedSession, Verb,
 };
+use crate::browser_runtime::INNER_ID;
 use crate::{
     AdapterError, BrowserPorts, EventSink, RunLimits, RunOutcome, RunRequest, WorkerAdapter,
 };

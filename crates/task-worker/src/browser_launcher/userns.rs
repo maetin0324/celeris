@@ -10,15 +10,13 @@ use std::process::Command;
 
 use nix::libc;
 
+use crate::browser_runtime::INNER_ID;
+
 /// Empties the browser-writable session subdirectories and, since HOME is a
 /// subdirectory of the session root (F4), any top-level dot entry the
 /// browser subuid left directly under the session dir (the sticky session
 /// root means only the subuid can remove its own files there).
 const CLEANUP_SCRIPT: &CStr = c"status=0; for d in output home run actions profile tmp; do [ -d \"$d\" ] || continue; /bin/rm -rf -- \"$d\"/* \"$d\"/.[!.]* \"$d\"/..?* || status=1; done; /bin/rm -rf -- ./.[!.]* ./..?* || status=1; exit \"$status\"";
-
-/// Chrome が動く userns の内側の UID / GID（ADR-0115 の `1000 → S`）。launcher が作る 2 map の
-/// 内側 ID、bwrap の `--uid` / `--gid`、daemon が観測した map から runtime UID を引く鍵の正本。
-pub const INNER_ID: u32 = 1000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Mapping {

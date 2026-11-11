@@ -424,8 +424,14 @@ struct Flags {
 }
 
 /// atomic の task（計画なし、reviewing）を fixture の repo 1 つで作る。`flags` が `None` なら既定の
-/// `target_sync::reviewing_task`。
-fn review_task(repo: &std::path::Path, store: &Arc<dyn TaskStore>, flags: Option<Flags>) -> Task {
+/// `target_sync::reviewing_task`。案件の題名は `TaskStore` に書き込みの method が無いので、`sqlite`（`store` と
+/// 同じ DB の handle）の transaction で書く。
+fn review_task(
+    repo: &std::path::Path,
+    store: &Arc<dyn TaskStore>,
+    sqlite: &SqliteStore,
+    flags: Option<Flags>,
+) -> Task {
     let Some(flags) = flags else {
         return reviewing_task(repo, store);
     };
@@ -437,8 +443,10 @@ fn review_task(repo: &std::path::Path, store: &Arc<dyn TaskStore>, flags: Option
     let (project, repos) = project_with_repos(store, &[(name, repo, task_core::RepoKind::Git)]);
     if flags.project_named_celeris {
         assert!(
-            store
-                .project_set_text(project, Some("celeris"), None)
+            sqlite
+                .write_tx::<_, task_core::StoreError, _>(|tx| {
+                    SqliteStore::project_set_text_tx(tx, project, Some("celeris"), None)
+                })
                 .unwrap()
         );
         assert!(store.project_set_slug(project, "celeris").unwrap());
@@ -480,8 +488,9 @@ async fn review_flow(
     let fx = build_fixture(kind, variant, &repo);
     let changed = changed_paths(&repo, &fx);
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let mut task = review_task(&repo, &store, setup.flags);
+    let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let mut task = review_task(&repo, &store, &sqlite, setup.flags);
     if setup.reviewer {
         task.acceptance.push(Criterion {
             text: "reviewer".into(),

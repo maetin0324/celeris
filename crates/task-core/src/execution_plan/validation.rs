@@ -328,6 +328,9 @@ pub enum PlanValidationError {
     DaemonAddedKeyReused {
         key: String,
     },
+    /// ADR 2026-11-11-replan-unit-kind-change D2: 始まった（kind を変えると引き継げない状態 `state` を持つ）生きた行の kind を、
+    /// replan で task と leaf の間で変えた。
+    StartedUnitKindChanged(UnitKindChange),
     /// ADR 2026-10-23-stage-order-and-plan-stall D3: 採用で書く未完の行の依存が、有効な行（版を問わない。前の版で done の
     /// 繰り越し行は満たされた依存）に解決できない。待っても満たされないので採用しない。
     DependencyWithoutRow {
@@ -410,16 +413,34 @@ pub enum PlanValidationError {
     },
 }
 
+/// ADR 2026-11-11-replan-unit-kind-change D2: [`PlanValidationError::StartedUnitKindChanged`] の中身。行 `key` は kind を変えると
+/// 引き継げない状態 `state`（[`kind_bound_state`]）を持つのに、replan の計画が kind を `from` から `to` に（task と leaf の間で）変えた。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnitKindChange {
+    pub key: String,
+    pub from: WorkUnitKind,
+    pub to: WorkUnitKind,
+    pub state: String,
+}
+
+impl std::fmt::Display for UnitKindChange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (key, state, from, to) = (&self.key, &self.state, self.from.as_str(), self.to.as_str());
+        write!(
+            f,
+            "unit {key} has already started ({state}); a replan cannot change its kind from {from:?} to {to:?}. Keep kind {from:?}, or write the new work under a new key (the old unit is superseded)（始まった unit の kind は replan で task と leaf の間で変えられない。kind を元に戻すか、新しい key で書くこと。ADR 2026-11-11-replan-unit-kind-change）"
+        )
+    }
+}
+
 impl std::fmt::Display for PlanValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::PlanLimitAccounting { detail } => f.write_str(detail),
-            Self::WrongSchema { found } => {
-                write!(
-                    f,
-                    "schema must be {EXECUTION_PLAN_SCHEMA}, {EXECUTION_PLAN_SCHEMA_V2} or {EXECUTION_PLAN_SCHEMA_V3}, found {found}"
-                )
-            }
+            Self::WrongSchema { found } => write!(
+                f,
+                "schema must be {EXECUTION_PLAN_SCHEMA}, {EXECUTION_PLAN_SCHEMA_V2} or {EXECUTION_PLAN_SCHEMA_V3}, found {found}"
+            ),
             Self::NoWorkUnits => write!(f, "work_units must not be empty"),
             Self::TooManyWorkUnits { count, max } => {
                 write!(f, "too many work_units: {count} > {max}")
@@ -647,6 +668,7 @@ impl std::fmt::Display for PlanValidationError {
                 f,
                 "work unit key {key:?} belongs to a work unit the daemon added (a delivery / final-review / integration repair work unit, not in the plan); do not write it — the daemon carries it over（{key} は daemon が足した WU〈計画に無い repair WU〉なので計画に書かない。daemon が持ち越す。ADR-0079 R7-12）"
             ),
+            Self::StartedUnitKindChanged(change) => change.fmt(f),
             Self::ChildTaskTooDeep {
                 key,
                 depth,

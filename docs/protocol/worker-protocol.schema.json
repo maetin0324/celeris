@@ -804,7 +804,7 @@
           "type": "string"
         },
         "state": {
-          "description": "wait の終わり方（`satisfied` | `timed_out` | `cancelled`）。",
+          "description": "wait の再開理由（`satisfied` | `job_failed` | `queue_stalled` | `timed_out` | `cancelled`）。",
           "type": "string"
         },
         "summary": {

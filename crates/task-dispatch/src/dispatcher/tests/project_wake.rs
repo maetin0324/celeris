@@ -121,6 +121,10 @@ impl Env {
         d.config.execution.max_cos_runs = 0;
         d.config.min_free_disk_mb = 0;
         d.stagnation.checked_at = Some(at("2100-01-01T00:00:00Z"));
+        // ADR 2026-11-11-cos-skill-sync D3: CoS skills that fit (no skill drift notice).
+        d.config.knowledge.root = self.dir.path().join("knowledge");
+        let skills = d.config.knowledge.root.join("skills");
+        task_ops::cos_skill_gate::write_fixture(&skills, "cos-inbox-triage", "1").expect("skills");
         d.set_cos_chat_launch(
             store.clone(),
             CosChatLaunchConfig {

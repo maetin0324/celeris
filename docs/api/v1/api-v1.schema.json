@@ -5658,12 +5658,31 @@
           "description": "worker が申告した id（`42634`。scheduler の server 名の接尾辞は付けない）。",
           "type": "string"
         },
+        "queue_notified": {
+          "default": false,
+          "description": "A queue-delay wakeup was already delivered for this job.",
+          "type": "boolean"
+        },
+        "queued_since": {
+          "description": "First consecutive Q/H observation, RFC 3339; durable across re-waits.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "raw_state": {
           "description": "scheduler が返した生の状態（PBS の `job_state` の文字、Slurm の `State`）。",
           "type": [
             "string",
             "null"
           ]
+        },
+        "scheduling": {
+          "description": "PBS scheduling evidence (Resource_List, comment, estimated.start_time).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "state": {
           "$ref": "#/$defs/ClusterJobState"

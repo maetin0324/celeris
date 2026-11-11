@@ -11,6 +11,8 @@ pub mod auto_resolve;
 pub mod capacity;
 /// ADR-0072 D8（Phase E1）: daemon が決定的に集める mechanical checkpoint（git の読み取りだけ）。
 pub mod checkpoint;
+/// ADR 2026-11-11-cos-skill-sync D3: CoS の run の claim の前に KB の skill を config と照らす門。
+pub(crate) mod cos_skill_gate;
 pub mod credential_resume;
 /// ADR 2026-10-07-build-tmp-hygiene D4: ディスク使用率の監視（`DiskProbe`・判定の純関数・tick の段）。
 pub mod disk_watch;

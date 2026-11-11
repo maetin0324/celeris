@@ -46,15 +46,12 @@ fn fixture_on(
     d.config.min_free_disk_mb = 0;
     d.config.execution.max_cos_runs = 2;
     d.config.knowledge.root = dir.path().join("knowledge");
-    for name in ["cos-operator", "cos-inbox-triage"] {
-        let path = d.config.knowledge.root.join("skills").join(name);
-        std::fs::create_dir_all(&path).expect("skill dir");
-        std::fs::write(
-            path.join("SKILL.md"),
-            format!("---\nname: {name}\ndescription: stub\n---\n# {name}\n"),
-        )
-        .expect("skill");
-    }
+    task_ops::cos_skill_gate::write_fixture(
+        &d.config.knowledge.root.join("skills"),
+        "cos-inbox-triage",
+        "1",
+    )
+    .expect("CoS skills");
     let now = OffsetDateTime::from_unix_timestamp(1_791_158_400).expect("clock");
     d.test_now = Some(Arc::new(StdMutex::new(now)));
     d.set_cos_chat_launch(

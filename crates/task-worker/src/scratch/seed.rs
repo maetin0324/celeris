@@ -11,8 +11,9 @@
 //!
 //! seed は lease 付きの owner ではない（`targets/` の外）ので、ADR-0075 D2 の semantic GC（P0〜P3・warm seed）
 //! の対象にならない。ここの GC は「current 以外の世代」「放棄された未完の世代（manifest の無い `gen-*`）」「猶予を過ぎた登録外の repo」
-//! だけを消す。消す・切り替えるは pool の `.lock` の下で行う（owner への写しも `.lock` の下なので、写している
-//! 最中の世代は消えない）。**LLM は呼ばない**（seed の build は cargo を走らせるだけ）。
+//! だけを消す。消す・切り替えるは pool の `.lock` の下で行う。owner への写しは `.lock` を持たず、写している
+//! 世代は `SEED_COPY_PIN` の共有 flock で守る（GC は持たれている世代と、その世代を持つ repo を退避しない。
+//! ADR 2026-11-11-scratch-lock-tick-stall）。**LLM は呼ばない**（seed の build は cargo を走らせるだけ）。
 
 use std::collections::{BTreeSet, HashMap};
 use std::io;
@@ -22,9 +23,9 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
 use super::{
-    CARGO_TARGET_DIR_VAR, CargoTuning, Pool, SEED_CURRENT, SEED_MANIFEST, SEEDS_DIR, SeedCopyOps,
-    SeedManifest, TARGET_SUBDIR, cargo_tuning_env, deleting_name, measure_tree, mtime,
-    probe_pool_share, rfc3339, set_mtime,
+    CARGO_TARGET_DIR_VAR, CargoTuning, Pool, SEED_COPY_PIN, SEED_CURRENT, SEED_MANIFEST, SEEDS_DIR,
+    SeedCopyOps, SeedManifest, TARGET_SUBDIR, cargo_tuning_env, deleting_name, lock_file_held,
+    measure_tree, mtime, probe_pool_share, rfc3339, set_mtime,
 };
 
 /// 世代ディレクトリの接頭辞。
@@ -357,7 +358,7 @@ pub fn refresh_seed(
         let _ = remove_any(&gen_dir);
         return failed(format!("cannot switch the seed: {e}"));
     }
-    // 旧世代は lock の下で `.deleting-*` へ退避する（写している最中の owner は lock を持つので、ここで消えない）。
+    // 旧世代は lock の下で `.deleting-*` へ退避する（写している最中の世代は pin があるので残す）。
     let trash = retire_stale_generations(pool, &repo_dir, now);
     drop(lock);
     for t in trash {
@@ -413,6 +414,10 @@ fn retire_stale_generations(pool: &Pool, repo_dir: &Path, now: SystemTime) -> Ve
         if current.as_deref() == Some(name.as_str()) {
             continue;
         }
+        if lock_file_held(&repo_dir.join(&name), SEED_COPY_PIN) {
+            tracing::info!(repo_key = %key, generation = %name, "scratch: an owner is copying this seed generation; retiring it later");
+            continue;
+        }
         let trash = seeds_dir(pool).join(deleting_name(&format!("seed-{key}-{name}"), now));
         match std::fs::rename(repo_dir.join(&name), &trash) {
             Ok(()) => {
@@ -425,6 +430,14 @@ fn retire_stale_generations(pool: &Pool, repo_dir: &Path, now: SystemTime) -> Ve
         }
     }
     out
+}
+
+/// repo の seed のどれかの世代を owner が写しているか。
+fn seed_generation_pinned(repo_dir: &Path) -> bool {
+    std::fs::read_dir(repo_dir).is_ok_and(|rd| {
+        rd.flatten()
+            .any(|e| e.path().is_dir() && lock_file_held(&e.path(), SEED_COPY_PIN))
+    })
 }
 
 /// seed の GC の 1 回の結果（退避したもの）。
@@ -459,8 +472,9 @@ pub fn seed_gc(pool: &Pool, registered: &BTreeSet<String>, now: SystemTime) -> S
         .filter(|n| !n.starts_with('.'))
         .collect();
     keys.sort();
-    let _lock = match pool.lock() {
-        Ok(l) => l,
+    let _lock = match pool.try_lock() {
+        Ok(Some(l)) => l,
+        Ok(None) => return out,
         Err(e) => {
             tracing::warn!(dir = %pool.root().display(), error = %e, "scratch: could not take the pool lock; seed GC skipped");
             return out;
@@ -487,6 +501,9 @@ pub fn seed_gc(pool: &Pool, registered: &BTreeSet<String>, now: SystemTime) -> S
                     if now.duration_since(since).unwrap_or_default()
                         >= Duration::from_secs(SEED_UNREGISTERED_GRACE_SECS) =>
                 {
+                    if seed_generation_pinned(&repo_dir) {
+                        continue;
+                    }
                     let trash = root.join(deleting_name(&format!("seed-{key}"), now));
                     drop(refresh);
                     match std::fs::rename(&repo_dir, &trash) {

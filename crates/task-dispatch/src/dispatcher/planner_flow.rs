@@ -221,7 +221,7 @@ impl Dispatcher {
                             task,
                             &run_id,
                             vec![finished, quota_event],
-                            format!("子 Task の提案が委譲の検証に通りませんでした: {reason}"),
+                            format!("計画が採用の前の検証に通りませんでした: {reason}"),
                             now,
                         )?;
                         return Ok(());

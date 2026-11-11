@@ -57,6 +57,9 @@ fn daemon_with(
         since: "2026-10-27T00:10:00Z".into(),
         detail: "verify 済みで昇格されていない".into(),
     }];
+    d.config.knowledge.root = dir.path().join("knowledge");
+    let skills = d.config.knowledge.root.join("skills");
+    task_ops::cos_skill_gate::write_fixture(&skills, "cos-inbox-triage", "1").expect("skills");
     d.set_cos_chat_launch(
         store.clone(),
         CosChatLaunchConfig {
@@ -530,15 +533,12 @@ async fn cos_review_run_has_the_general_cos_context_and_its_own_session() {
     let mut d = daemon_with(&dir, &store, &clock, adapter, 2);
     d.config.execution.max_cos_runs = 1;
     d.config.knowledge.root = dir.path().join("knowledge");
-    for name in ["cos-operator", "cos-inbox-triage"] {
-        let skill_dir = d.config.knowledge.root.join("skills").join(name);
-        std::fs::create_dir_all(&skill_dir).unwrap();
-        std::fs::write(
-            skill_dir.join("SKILL.md"),
-            format!("---\nname: {name}\ndescription: test skill\n---\n# {name}\n"),
-        )
-        .unwrap();
-    }
+    task_ops::cos_skill_gate::write_fixture(
+        &d.config.knowledge.root.join("skills"),
+        "cos-inbox-triage",
+        "1",
+    )
+    .expect("CoS skills");
 
     tick_at(&mut d, &clock, "2026-10-27T01:00:00Z");
     tick_at(&mut d, &clock, "2026-10-27T01:00:01Z");

@@ -1386,7 +1386,15 @@ fn seed_copy_drops_workspace_member_artifacts_and_keeps_registry_ones() {
         copy: &cp_reflink_auto,
         is_shared: &shared,
     };
-    let origin = seed_target(&pool, &owner_dir, &key, &SeedPolicy::unchecked(), &copy_ops);
+    let pin = pin_current_seed(&pool, &key).unwrap();
+    let origin = seed_target(
+        &pool,
+        &owner_dir,
+        &key,
+        &SeedPolicy::unchecked(),
+        &copy_ops,
+        pin.as_ref(),
+    );
     assert!(matches!(origin, TargetOrigin::Seed { .. }), "{origin:?}");
     let owner_target = owner_dir.join(TARGET_SUBDIR);
     assert!(
@@ -1697,6 +1705,21 @@ fn seed_gc_keeps_current_and_removes_stale_generations_and_abandoned_builds() {
     .unwrap();
     std::fs::create_dir_all(repo_dir.join("gen-000000000000-2/target")).unwrap();
     let registered: BTreeSet<String> = [key.clone()].into();
+    // 不変条件: pool が Busy なら削除せず戻り、解放後の GC で回収する。
+    // 従来の claim 競合だけでは pool の待機を検出できない。
+    let pool_lock = pool.lock().unwrap();
+    assert!(pool.try_lock().unwrap().is_none());
+    let (finished, receive) = std::sync::mpsc::channel();
+    let guard = std::thread::spawn(move || {
+        let progressed = receive.recv_timeout(Duration::from_secs(30)).is_ok();
+        drop(pool_lock);
+        progressed
+    });
+    let deferred = seed_gc(&pool, &registered, at(T0 + 30));
+    let _ = finished.send(());
+    assert!(guard.join().unwrap(), "seed GC waited for the pool lock");
+    assert_eq!(deferred, SeedGcResult::default());
+    assert!(repo_dir.join("gen-000000000000-2").is_dir());
     // build 中（`claim_seed` を他が持つ）なら build も旧世代も触らない。
     let held = claim_seed(&repo_dir).unwrap().unwrap();
     let r = seed_gc(&pool, &registered, at(T0 + 60));
@@ -1832,4 +1855,99 @@ fn low_disk_reclaims_the_warm_seed_that_would_be_adopted() {
     // 空きを見ない設定（min_free = 0）なら、同じ空きでも seed は残る。
     p.min_free_bytes = 0;
     assert!(ids(&plan_gc(&entries, &p)).is_empty());
+}
+
+/// ADR 2026-11-11-scratch-lock-tick-stall: seed の写しの間、pool の `.lock` は空いていて（tick の掃除・他の
+/// 割り当てが待たない）、写している世代は seed の GC で退避されず、owner は owner の GC から守られる。
+/// 不変条件: 写しが pool 全体のロックを握らない・写し中の seed と owner が消えない。既存の試験は写しを途中で
+/// 止めないので、写している最中の lock と GC を観測できない。偽の写しを channel で止めて決定的に再現する。
+#[test]
+fn seed_copy_runs_without_the_pool_lock_and_gc_keeps_the_pinned_generation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = Pool::new(tmp.path());
+    write_seed(&pool, MANIFEST);
+    let key = crate::build_cache::repo_cache_key(Path::new(SEED_REPO));
+    let repo_dir = pool.root().join(SEEDS_DIR).join(&key);
+    let owner = Owner::task("T1");
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel::<()>();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let origin = std::thread::scope(|s| {
+        let (pool, owner) = (&pool, &owner);
+        let copier = s.spawn(move || {
+            let none = |_: &AdoptCandidate| None;
+            let shared = |_: &Path| Ok(true);
+            let gated = move |from: &Path, to: &Path| {
+                if from.is_dir() {
+                    let _ = entered_tx.send(());
+                    // 保険の上限。通常は試験が直ちに release を送る。
+                    let _ = release_rx.recv_timeout(Duration::from_secs(30));
+                }
+                cp_reflink_auto(from, to)
+            };
+            let ops = SeedCopyOps {
+                copy: &gated,
+                is_shared: &shared,
+            };
+            allocate_with_seed(
+                pool,
+                &seed_req(owner, &none),
+                &SeedPolicy::unchecked(),
+                &ops,
+            )
+        });
+        entered_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("the copy started");
+        // 写している最中: pool の `.lock` は空いている。
+        assert!(
+            pool.try_lock().unwrap().is_some(),
+            "the copy holds the pool lock"
+        );
+        // owner は割り当て中の印を持つ（owner の GC はこれを見て残す）。
+        assert!(lock_file_held(&pool.owner_dir(owner), OWNER_ALLOC_LOCK));
+        // seed が新しい世代へ切り替わっても、写している世代は GC で退避されない。
+        let gen2 = repo_dir.join("gen-2");
+        std::fs::create_dir_all(gen2.join(TARGET_SUBDIR)).unwrap();
+        std::fs::write(gen2.join(SEED_MANIFEST), MANIFEST).unwrap();
+        switch_current(&repo_dir, "gen-2", SystemTime::now()).unwrap();
+        let registered: BTreeSet<String> = [key.clone()].into();
+        let gc = seed_gc(pool, &registered, SystemTime::now());
+        assert!(gc.retired.is_empty(), "{gc:?}");
+        assert!(repo_dir.join("gen-1").is_dir());
+        release_tx.send(()).unwrap();
+        copier.join().unwrap().unwrap().origin
+    });
+    assert!(
+        matches!(&origin, TargetOrigin::Seed { seed, .. } if seed.ends_with("gen-1/target")),
+        "{origin:?}"
+    );
+    assert!(!lock_file_held(&pool.owner_dir(&owner), OWNER_ALLOC_LOCK));
+    // 写し終われば、古い世代は次の GC で退避される。
+    let registered: BTreeSet<String> = [key.clone()].into();
+    let gc = seed_gc(&pool, &registered, SystemTime::now());
+    assert_eq!(gc.retired.len(), 1, "{gc:?}");
+    assert!(!repo_dir.join("gen-1").exists());
+}
+
+/// ADR 2026-11-11-scratch-lock-tick-stall: tick の検査の env の割り当ては、pool の `.lock` を別の持ち主が
+/// 握っていても待たずに `None` を返し、空いていれば lease を書く。seed があっても写さない（写しは tick を止める）。
+/// 不変条件: tick から pool の `.lock` と seed の写しを待つ経路が無い。既存の試験は競合する lock を作らない。
+#[test]
+fn check_allocation_does_not_wait_for_the_pool_lock_nor_copy_the_seed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = Pool::new(tmp.path());
+    write_seed(&pool, MANIFEST);
+    let owner = Owner::task("T1");
+    let held = pool.lock().unwrap();
+    assert!(try_allocate_for_check(&pool, &owner, Path::new(SEED_REPO)).is_none());
+    assert!(!pool.lease_path(&owner).exists());
+    drop(held);
+    let a = try_allocate_for_check(&pool, &owner, Path::new(SEED_REPO)).expect("allocated");
+    assert_eq!(a.origin, TargetOrigin::Empty { reason: None });
+    assert!(is_empty_dir(&a.target_dir));
+    assert!(pool.lease_path(&owner).is_file());
+    // 割り当て中の owner（seed を写している）も待たない。
+    let owner_alloc = lock_owner_alloc(&pool.owner_dir(&owner)).unwrap();
+    assert!(try_allocate_for_check(&pool, &owner, Path::new(SEED_REPO)).is_none());
+    drop(owner_alloc);
 }

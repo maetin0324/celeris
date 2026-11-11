@@ -66,8 +66,17 @@ attempt 2 の検査（提出時の HEAD で実行）:
 - `cargo nextest run -p task-dispatch --lib -E 'test(/scratch_gc/) | test(target_sweep_tick_defers)'` → 9 passed。
 - `bash scripts/dev/test-affected.sh` → exit 0。nextest 5,880 passed・22 skipped（747 秒）、repo-health は verdict=pass・new 0・worsened 0。実行時の /local 使用率は 94%、load average は 117。
 
+attempt 3 の検査（提出時の HEAD で実行。基準は git merge-base HEAD main）:
+
+- `cargo nextest run -p task-dispatch --lib -E 'test(/eval_trial|eval_recovery|eval_run|live_handoff_keeps_running_eval/)'` → exit 0、21 passed（新しい `eval_trial_tick_does_not_wait_for_a_held_pool_lock` を含む）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0（fmt の commit の後）。
+- `bash scripts/dev/test-affected.sh` → exit 100。nextest 5,881 件中 5,880 passed・1 timed out・22 skipped（777 秒）。時間切れは `celeris-campaign::k4_cells_validity real_k4_archive_grades_thirty_of_thirty_two`（600 秒）の 1 件で、この branch は celeris-campaign を変えていない。実行時の load average は 85、/local の使用率は 86%。repo-health は verdict=pass・new 0・worsened 0、repo_health_gate は all checks passed。
+- 時間切れの試験の単独の再実行 `cargo nextest run -p celeris-campaign --test k4_cells_validity -E 'test(real_k4_archive_grades_thirty_of_thirty_two)'` → exit 0、1 passed（392 秒）。
+- `sh scripts/dev/progress-index.sh --check` → exit 0。
+
 ## 未解決
 
+- test-affected の全体は、範囲外の試験 1 件の負荷による時間切れで exit 100 だった（上記）。負荷の低い時に再実行すれば通る見込み（未確認）。
 - 評価試行の hidden check（`run_eval_check`）と target の `remove_dir_all` は tick の中の同期処理として残る（pool の `.lock` は待たない。この task の範囲外）。
 
 ## 提案

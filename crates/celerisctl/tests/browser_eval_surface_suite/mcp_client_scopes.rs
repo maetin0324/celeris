@@ -1,7 +1,7 @@
 //! ADR 2026-10-23-mcp-read-only-db-and-api D1: `celerisctl mcp client scopes` は token を変えずに scope を
 //! 置き換える（人が chatgpt-rdc に `db:read` / `api:read` を足す手順）。
 
-mod common;
+use crate::common;
 
 use std::path::Path;
 use std::process::{Command, Output};

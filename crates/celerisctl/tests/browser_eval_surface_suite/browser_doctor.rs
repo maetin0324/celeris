@@ -1,10 +1,7 @@
 //! Doctor reads a fake daemon in a temporary configuration, never a production DB/socket.
-mod common;
+use crate::common;
 
-#[cfg(test)]
-#[allow(clippy::duplicate_mod)] // 同じ支援 file を試験 crate ごとに読む
-#[path = "../../../tests/support/http_sync.rs"]
-mod fake_http;
+use crate::fake_http;
 
 use serde_json::{Value, json};
 use std::io::Write;

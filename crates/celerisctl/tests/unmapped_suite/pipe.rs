@@ -5,7 +5,7 @@
 //! からパイプを閉じ、プロセスが panic せず正常終了する（exit 0、stderr に "panicked" を
 //! 含まない）ことを確認する。
 
-mod common;
+use crate::common;
 
 use std::io::Read;
 use std::process::{Command, Stdio};

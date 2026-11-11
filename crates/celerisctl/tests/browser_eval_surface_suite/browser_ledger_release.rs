@@ -1,5 +1,5 @@
 //! Release の台帳検査 CLI。実 browser・ネットワーク・本番 path は使わない。
-mod common;
+use crate::common;
 
 use std::path::Path;
 use std::process::{Command, Output};

@@ -2709,6 +2709,349 @@
   ],
   "since": "2026-09-15"
  },
+ "equivalence": [
+  {
+   "evidence": [
+    "crates/task-dispatch/src/dispatcher/continuation_session.rs:44",
+    "crates/task-dispatch/src/dispatcher/continuation_session.rs:72",
+    "crates/task-dispatch/src/dispatcher/continuation_session.rs:102",
+    "crates/task-dispatch/src/dispatcher/continuation_session.rs:143",
+    "crates/task-dispatch/src/dispatcher/continuation_session.rs:173",
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:657",
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:751",
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:1129",
+    "crates/task-dispatch/src/dispatcher/sinks.rs:355",
+    "crates/task-dispatch/src/dispatcher/cos_chat/rollover.rs:138",
+    "crates/task-dispatch/src/dispatcher/cos_chat/rollover.rs:165",
+    "crates/task-dispatch/src/dispatcher/cos_chat/rollover.rs:418",
+    "crates/task-dispatch/src/dispatcher/cos_chat/rollover.rs:454",
+    "crates/task-dispatch/src/dispatcher/eval_trials.rs:884",
+    "crates/task-dispatch/src/dispatcher/eval_trials.rs:1118"
+   ],
+   "id": "continuation-resume",
+   "shared_contract": "入力・前提: task/WU は task と任意の WU、直近の終端 worker run、checkpoint、role、adapter/account/provider/cwd/container、保存 session を使う。resolve_continuation_session は WU 有無を受ける既存の共通実装であり二重実装ではない。worker_finish の WU 継続は execution_scheduler::decide に渡し、atomic task は進捗なし回数・継続上限を別に判定する。CoS は thread の ChatSessionKey、現役 session、前runの拒否/context枯渇、配送cursorを使い、taskのcontinuable終端を前提としない。eval trial は常に resume=false、checkpointなしで、Done以外はerrorへ送る。状態・event: task/WU は work_unit_session の retire/create、RunExtras、WorkerProgress、CheckpointSaved と WU/task遷移を扱う。CoS は chat_session_rotate、chat_run_record_session、summary水位・配送cursorを扱う。失敗: task/WU の resume拒否は sink がretireとWorkerProgressの印を記録し次のdispatchでcheckpoint付きfreshを選ぶ。CoSは同じchat run・同じ入力のまま、まだRunningならfreshを1回試し、再拒否・準備失敗はChatFinish::Failedにする。共通化候補は保存sessionの互換性・拒否・context上限という正規化した事実から Resume または Fresh(reason,retire) を返す純粋な判定部分のみ。task/WUの進捗なし・上限判定も事実から継続/質問を返す部分は候補だが、WUのauto_leafと子待ちを含む経路全体は同一でない。別accountのsessionを使わず、拒否したsessionを再利用せず、SQLiteのcheckpoint/会話を正本とする不変条件を維持する。新しい共通関数の採用は本調査では決定しない。",
+   "sites": [
+    {
+     "at": "crates/task-dispatch/src/dispatcher/continuation_session.rs:31",
+     "fn": "resolve_continuation_session",
+     "subject": "task"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/continuation_session.rs:45",
+     "fn": "resolve_continuation_session",
+     "subject": "work_unit"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/worker_finish.rs:751",
+     "fn": "finish_worker_result_with",
+     "subject": "work_unit"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/worker_finish.rs:1129",
+     "fn": "finish_worker_result_with",
+     "subject": "task"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/cos_chat/rollover.rs:123",
+     "fn": "choose_session",
+     "subject": "cos_chat"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/cos_chat/rollover.rs:385",
+     "fn": "run_attempts",
+     "subject": "cos_chat"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/eval_trials.rs:885",
+     "fn": "eval_run_request",
+     "subject": "eval_trial"
+    }
+   ],
+   "verdict": "different"
+  },
+  {
+   "evidence": [
+    "crates/task-dispatch/src/dispatcher/work_units.rs:44",
+    "crates/task-dispatch/src/dispatcher/work_units.rs:288",
+    "crates/task-dispatch/src/dispatcher/work_units.rs:296",
+    "crates/task-dispatch/src/dispatcher/sinks.rs:292",
+    "crates/task-dispatch/src/dispatcher/sinks.rs:311",
+    "crates/task-dispatch/src/dispatcher/leases.rs:244",
+    "crates/task-dispatch/src/dispatcher/leases.rs:257",
+    "crates/task-dispatch/src/dispatcher/leases.rs:268",
+    "crates/task-dispatch/src/dispatcher/leases.rs:280",
+    "crates/task-dispatch/src/dispatcher.rs:237"
+   ],
+   "id": "lease-renew",
+   "shared_contract": "5 呼び出しの store 操作は既に共通だが、呼び出し契約全体は非等価。入力は全て task id/run id/TTL。WU checks 開始は phase あり、handoff は結果の保存後で TTL=review_timeout*(2*checks+1)+grace。heartbeat は mutex と renew_every で間引き lease_ttl を渡す。回収時は手元の生存 process に max_wall_secs+grace、checking に review_timeout+grace を渡す。状態/event: 更新の委譲先は同じ renew_lease、呼び出し側が更新 event を追加するコードは無い。handoff のみ更新後に WorkUnitChecksHandedOff を追記。失敗: checks/handoff は Ok(false) を無視、Err は警告して進む（handoff event の失敗は返却）。heartbeat は false で戻り、busy だけ100ms間隔で最大3回再試行、他の Err/使い切りは警告して run を止めない。回収は true なら回収を避け、false なら後続の回収判定へ進み、Err なら次 tick へ延期。部分共有契約は renew_lease(task_id,run_id,ttl)->Result<bool,StoreError> の結果を保持する操作までで既存実装を再利用できる。bool の意味を消す共通の warn-and-continue wrapper は回収時の安全条件を壊す。store 内部は今回の読み取り範囲外で、ここでは呼び出しとその分岐を根拠とする。",
+   "sites": [
+    {
+     "at": "crates/task-dispatch/src/dispatcher/work_units.rs:50",
+     "fn": "spawn_work_unit_checks",
+     "subject": "work_unit"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/work_units.rs:293",
+     "fn": "record_check_hand_off",
+     "subject": "work_unit"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/sinks.rs:304",
+     "fn": "heartbeat",
+     "subject": "task/work_unit"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/leases.rs:252",
+     "fn": "reclaim_expired_leases",
+     "subject": "task/work_unit"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/leases.rs:275",
+     "fn": "reclaim_expired_leases",
+     "subject": "work_unit"
+    }
+   ],
+   "verdict": "different"
+  },
+  {
+   "evidence": [
+    "crates/task-dispatch/src/dispatcher/dispatch_run.rs:217",
+    "crates/task-dispatch/src/dispatcher/dispatch_run.rs:238",
+    "crates/task-dispatch/src/dispatcher/dispatch_run.rs:409",
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:579",
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:1561",
+    "crates/task-dispatch/src/dispatcher/leases.rs:363",
+    "crates/task-dispatch/src/dispatcher/leases.rs:408",
+    "crates/task-dispatch/src/dispatcher/work_units.rs:1022",
+    "crates/task-dispatch/src/dispatcher/work_units.rs:1038",
+    "crates/task-dispatch/src/dispatcher/sinks.rs:311",
+    "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs:960",
+    "crates/task-dispatch/src/dispatcher/cos_chat/routes.rs:82",
+    "crates/task-dispatch/src/dispatcher/cos_chat/routes.rs:118",
+    "crates/task-dispatch/src/dispatcher/route_failure.rs:296",
+    "crates/task-dispatch/src/dispatcher/eval_trials.rs:1075",
+    "crates/task-dispatch/src/dispatcher.rs:987"
+   ],
+   "id": "retry-backoff",
+   "shared_contract": "非等価。通常 task retry は DB attempts/updated_at と設定 base/max を retry_backoff に渡し期限まで dispatch を止める（2本目の並列 WU は省略）。インフラ障害は events 由来の連続 infra 回数+1 を max_infra_retries と比べ、以内なら InfraRequeue、超過なら非 retryable WorkerError。成功した遷移後だけメモリの infra_backoff に期限を置く。lease 回収にも同じ上限判定と infra_backoff_delay の使用が重複するが、孤児再起動は待たず、WorkerFinished.end/class と WU 照合も異なる。WU 準備はメモリの連続回数、2^n 秒（60秒cap）、5回目または permanent で Blocked/Question・WorkUnitTransitioned、1本目は task も Unroutable にする。heartbeat は DB busy の操作再試行のみ（3回、固定100ms）で task attempts/event を増やさない。CoS は同一 run/input の経路 index を進める方式で、終了 handle/Running・壁時計予算・capacity が前提、経路通知を記録し利用不能/期限超過なら会話を閉じる。ここに指数 backoff は無い。eval の adapter error は trial error と cleanup で終わり自動 retry しない。失敗: task/回収の InvalidTransition は警告、その他は返却（期限は成功時のみ）。WU 準備の transition error は返却、CoS の停止/finish error は警告。部分共有候補は (infra_n,max)->再試行可否 と既存 infra_backoff_delay(n)->Duration の純粋な規則。期限の時計、回数の正本、適用先状態/event、孤児例外、error 処理を各 owner に残す。通常 retry_backoff の計算本体は範囲外なので式の等価性は推測しない。",
+   "sites": [
+    {
+     "at": "crates/task-dispatch/src/dispatcher/dispatch_run.rs:218",
+     "fn": "dispatch_one",
+     "subject": "task"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/worker_finish.rs:578",
+     "fn": "finish_worker_result_with",
+     "subject": "task"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/leases.rs:363",
+     "fn": "reclaim_expired_leases",
+     "subject": "task/work_unit"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/work_units.rs:1014",
+     "fn": "on_work_unit_prepare_failed",
+     "subject": "work_unit"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher.rs:990",
+     "fn": "wu_prepare_backoff",
+     "subject": "work_unit"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/sinks.rs:311",
+     "fn": "heartbeat",
+     "subject": "task/work_unit"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/cos_chat/routes.rs:47",
+     "fn": "retry_routes",
+     "subject": "cos_chat"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/route_failure.rs:285",
+     "fn": "decide_route_failure",
+     "subject": "task"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/eval_trials.rs:1075",
+     "fn": "on_eval_worker_finished",
+     "subject": "eval_trial"
+    }
+   ],
+   "verdict": "different"
+  },
+  {
+   "evidence": [
+    "crates/task-dispatch/src/dispatcher/work_units.rs:375",
+    "crates/task-dispatch/src/dispatcher/work_units.rs:385",
+    "crates/task-dispatch/src/dispatcher/work_units.rs:399",
+    "crates/task-dispatch/src/dispatcher/work_units.rs:1525",
+    "crates/task-dispatch/src/dispatcher/review_spawn.rs:234",
+    "crates/task-dispatch/src/dispatcher/review_verdict.rs:126",
+    "crates/task-dispatch/src/dispatcher/review_verdict.rs:182",
+    "crates/task-dispatch/src/dispatcher/review_verdict.rs:282",
+    "crates/task-dispatch/src/dispatcher/review_verdict.rs:352",
+    "crates/task-dispatch/src/dispatcher/review_verdict.rs:435",
+    "crates/task-dispatch/src/dispatcher/review_verdict.rs:458",
+    "crates/task-dispatch/src/dispatcher/review_verdict.rs:495",
+    "crates/task-dispatch/src/dispatcher/review_verdict.rs:554",
+    "crates/task-dispatch/src/dispatcher/phase_integration.rs:757",
+    "crates/task-dispatch/src/dispatcher/phase_integration.rs:797",
+    "crates/task-dispatch/src/dispatcher/phase_integration.rs:1456",
+    "crates/task-dispatch/src/dispatcher/phase_integration.rs:1487",
+    "crates/task-dispatch/src/dispatcher/phase_integration.rs:1543"
+   ],
+   "id": "review-result",
+   "shared_contract": "入力・前提: on_review_finished はtask_id/run_idと受け入れ条件のReviewOutcomeを受け、taskがReviewingであることとtarget snapshotの鮮度を確認する。WUのreview相当はRunOutcomeとWorkUnitCheckRunを受けるcheck完了で、run_holds_leaseとRunning WUを確認する。統合はIntegrationRun（merge衝突、stale、checks、head）とRunning task/統合WUを確認する。状態・event: reviewはreviewer run/quotaを閉じReviewVerdict/ReviewCommandCheckedを記録し、子待ち・集約・repairを経てReviewPass/ReviewFail、Planなら子挿入を含むcomplete_planを適用する。WU checkはhealthをsettleし不合格をretryable Terminal::ErrorとWorkUnitCheckFailureへ変換して既存finish_worker_result_withへ戻す（WorkUnitChecksFailedとWU/task遷移）。統合は失敗ならmerge/check repair又は質問、成功ならWU Done/PhaseIntegrated、途中ならContinue(Advance)又はPhaseGate、全段DoneならWorkerDoneからspawn_reviewへ進む。最終reviewと統合後の最終reviewは同じspawn_review/on_review_finishedを利用しており、結果処理の別実装ではない。失敗: reviewはstaleを延期、供給/infra失敗は上限内又はAuthFailedならReviewingを維持しattempts不変、healthを含む不合格はrepair/blocked/failへ分岐する。WUのstale lease結果と統合の非Running結果は捨てるが、WUのcheck失敗はworker retry、統合check失敗は統合repairであり同じ遷移ではない。共有できるのは決定的check不合格なら成功にしない判定・check実行（既にwork_unitsからreviewのcheck実行を再利用）の範囲。入力と出力を統一する場合もCheckResultsから失敗一覧を返すところまでとし、lease/snapshotの鮮度条件・event型・retry/repair上限・完了対象は統合しない。workerの自己申告だけで完了せず、reviewer合格でも決定的check不合格を優先する。",
+   "sites": [
+    {
+     "at": "crates/task-dispatch/src/dispatcher/review_verdict.rs:20",
+     "fn": "on_review_finished",
+     "subject": "review"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/work_units.rs:360",
+     "fn": "on_work_unit_checks_finished",
+     "subject": "work_unit"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/work_units.rs:1525",
+     "fn": "finished_plan_gate",
+     "subject": "task"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/review_spawn.rs:196",
+     "fn": "start_final_review_from_ready",
+     "subject": "review"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/phase_integration.rs:736",
+     "fn": "on_integration_finished",
+     "subject": "phase_integration"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/phase_integration.rs:1543",
+     "fn": "finish_phase_integration",
+     "subject": "review"
+    }
+   ],
+   "verdict": "different"
+  },
+  {
+   "evidence": [
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:213",
+    "crates/task-dispatch/src/dispatcher/work_units.rs:376",
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:1317",
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:1446",
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:1533",
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:1555",
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:1624",
+    "crates/task-dispatch/src/dispatcher/review_verdict.rs:29",
+    "crates/task-dispatch/src/dispatcher/review_verdict.rs:126",
+    "crates/task-dispatch/src/dispatcher/review_verdict.rs:432",
+    "crates/task-dispatch/src/dispatcher/cos_chat/sink.rs:73",
+    "crates/task-dispatch/src/dispatcher/cos_chat/sink.rs:433",
+    "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs:1005",
+    "crates/task-dispatch/src/dispatcher/eval_trials.rs:1064",
+    "crates/task-dispatch/src/dispatcher/eval_trials.rs:1094"
+   ],
+   "id": "run-close",
+   "shared_contract": "全体は非等価。入力: task/WU は Task・任意 WU・RunOutcome/AdapterError・検査失敗、review は ReviewOutcome、CoS は ChatFinish/actions、eval は追跡中の run id と結果。前提: task/WU は入口で lease 一致を検査し stale を捨てる。review は lease を持たず Reviewing を確認、CoS は sink の finished と store 終端、eval は eval_runs と instance 所有を確認する。書き込み: task は WorkerFinished/QuotaEstimated 等を遷移と渡す。WU は先に WorkUnitTransitioned を書き、兄弟待ち/統合時は task を Running のまま events を個別追記する。review は Reviewer role の WorkerFinished と ReviewVerdict 等を書き、stale 時も cancelled の run 索引を閉じる。CoS は chat_run_finish_with_telemetry で会話状態・本文・usage を閉じ、Question も Completed。eval は run_index_finish と scoring/error を書く。CoS/eval のこの入口には task の WorkerFinished 追記や task lease 解放は無い。失敗: task の InvalidTransition は警告、その他の store error は返却、WU 遷移失敗は警告継続。CoS finish は store error を返すが finished は true にし、呼び元は警告。eval の索引失敗は警告して処理継続。部分共有: task と WU は既に finish_worker_result_with を共用し、task/review は resolve_quota_estimate を共用。共通化候補は run id・usage・metrics・明示終端から終了記録を組み立てる純粋処理まで。lease 所有の検証、状態遷移、transaction 境界、自己申告だけで完了させない条件を一律の close(run) に埋めてはならない。",
+   "sites": [
+    {
+     "at": "crates/task-dispatch/src/dispatcher/worker_finish.rs:337",
+     "fn": "finish_worker_result_with",
+     "subject": "task"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/work_units.rs:399",
+     "fn": "on_work_unit_checks_finished",
+     "subject": "work_unit"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/review_verdict.rs:20",
+     "fn": "on_review_finished",
+     "subject": "review"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/cos_chat/sink.rs:407",
+     "fn": "finish",
+     "subject": "cos_chat"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/eval_trials.rs:1046",
+     "fn": "on_eval_worker_finished",
+     "subject": "eval_trial"
+    }
+   ],
+   "verdict": "different"
+  },
+  {
+   "evidence": [
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:907",
+    "crates/task-dispatch/src/dispatcher/work_units.rs:1283",
+    "crates/task-dispatch/src/dispatcher/work_units.rs:1299",
+    "crates/task-dispatch/src/dispatcher/work_units.rs:1334",
+    "crates/task-dispatch/src/dispatcher/phase_integration.rs:1327",
+    "crates/task-dispatch/src/dispatcher/phase_integration.rs:1342",
+    "crates/task-dispatch/src/dispatcher/phase_integration.rs:1362",
+    "crates/task-dispatch/src/dispatcher/tree_units.rs:948",
+    "crates/task-dispatch/src/dispatcher/tree_units.rs:958",
+    "crates/task-dispatch/src/dispatcher/tree_units.rs:1196",
+    "crates/task-dispatch/src/dispatcher/tree_units.rs:1270",
+    "crates/task-dispatch/src/dispatcher/tree_units.rs:750",
+    "crates/task-dispatch/src/dispatcher/child_tasks.rs:86",
+    "crates/task-dispatch/src/dispatcher/child_tasks.rs:178",
+    "crates/task-dispatch/src/dispatcher/child_tasks.rs:214",
+    "crates/task-dispatch/src/dispatcher/phase_integration/merge_repair.rs:43",
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:1316",
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:1336"
+   ],
+   "id": "wu-failure",
+   "shared_contract": "入力・前提: worker完了時は WuDecision とcheck失敗、遅延伝播は保存WUと最後のWorkerFinished、統合は統合WUと理由/署名を読む。3箇所にfailure_signature→stalled_replans→effective_max_replansの類似した判定があり、前2者はsource=WorkUnit、統合はIntegration。遅延経路はBlocked(Question/ContinuationCap)を先に質問へ返す。統合はhealthのError/往復/上限でreplan自体を禁止する。状態・event: worker完了はWUの遷移とWorkerFinished等、遅延経路はAutoReplanRequested/QuestionRaisedを記録しTriggerを返す。統合はleaseを消しWUをFailed又はBlocked(Question)へ先に更新し、AutoReplanRequested又はQuestionRaised付きtask遷移を実行する。上限時のworker/WUはreplan_exhausted_askを使い、tree有効な節点では決定要求とContinue(Advance)、それ以外はWorkerQuestionになる。子taskの終端はschema v3のRunningなkind Task WUへ写しWorkUnitTransitionedを記録する。infra失敗だけは子を限定回数作り直し、尽きたらBlocked(Infra)と通知で段を止め兄弟は続行する。Delegated経路はglobal event idで既処理を除外し、Ignore/会話taskを除外、親attempts/max_retriesでChildFailedによる再実行又は質問を選ぶ（replan回数ではない）。merge repair失敗はCancelledへ退かせ統合をPendingに戻す。失敗: worker完了のWU自身/依存WUの遷移書き込み失敗はwarnして継続する（worker_finish.rs:1316、1336）。他の照合・判定のstore errorは原則伝播するが統合のInvalidTransitionは無視、委譲経路はfalseを返す。共有できる範囲は、署名・同一失敗回数・replan残量・replan禁止理由を入力に Replan/Ask と理由を返す純粋な上限判定で、署名生成とstalled集計は既存関数を再利用済み。WU行更新、子の作り直し、親attempts、承認・通知の書き込みは分ける。失敗を親完了へ変換せず、infraを無制限replanせず、同じ委譲失敗を重複処理しない不変条件を守る。",
+   "sites": [
+    {
+     "at": "crates/task-dispatch/src/dispatcher/worker_finish.rs:902",
+     "fn": "finish_worker_result_with",
+     "subject": "work_unit"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/work_units.rs:1219",
+     "fn": "deferred_work_unit_trigger",
+     "subject": "work_unit"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/phase_integration.rs:1310",
+     "fn": "integration_gives_up_with",
+     "subject": "phase_integration"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/tree_units.rs:894",
+     "fn": "reconcile_tree_units",
+     "subject": "child_task"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/tree_units.rs:1184",
+     "fn": "handle_child_infra_failure",
+     "subject": "child_task"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/child_tasks.rs:145",
+     "fn": "escalate_failed_children",
+     "subject": "task"
+    },
+    {
+     "at": "crates/task-dispatch/src/dispatcher/phase_integration/merge_repair.rs:42",
+     "fn": "retire_if_failed",
+     "subject": "work_unit"
+    }
+   ],
+   "verdict": "different"
+  }
+ ],
  "fields": [
   {
    "cfg_test": false,
@@ -6299,6 +6642,13 @@
     "take_record"
    ]
   },
+  "equivalence_rules": [
+   "同じ dir の equivalence/*.json を file 名の順に読み、id の順に並べて最上位の equivalence に入れる（中身は書き換えない）。",
+   "形: key は ['evidence', 'id', 'shared_contract', 'sites', 'verdict'] だけ。id は小文字・数字・`-` で file 名（.json を除く）と同じ。verdict は equivalent か different。shared_contract は空でない文字列。sites は 2 件以上の配列で、各要素の key は ['at', 'fn', 'subject'] だけ（fn は識別子、subject は空でない文字列）。evidence は 1 件以上の配列。",
+   "参照: sites の at と evidence の各要素は repo の root からの `path:行`。file が在り、行が 1 以上 file の行数以下（最後の改行の無い行も 1 行と数える）。sites の fn は、comment・文字列を空白にした at の file の本文に `fn <名前>` の宣言がある。",
+   "違反が 1 件でもあれば全件を stderr に出し、出力 file を書かずに exit 1。",
+   "検査は参照の実在までで、verdict と shared_contract の内容の正しさ、fn が at の行を含むことは検査しない。"
+  ],
   "field_list": {
    "cfg_test_count": 10,
    "command": "awk '/^pub struct Dispatcher *\\{/{f=1;next} f&&/^\\}/{exit} f&&/^    [a-z_0-9]+:/{n++} END{print n}' crates/task-dispatch/src/dispatcher.rs",
@@ -6314,9 +6664,6 @@
    "受け手の範囲は字句の block で決める。中括弧の無い closure の引数（`|d: &mut Dispatcher| d.f`）は範囲を誤る。",
    "共変更は file 単位。1 commit の中で field に関係の無い変更をした file も組に数える。",
    "co_change の --since は committer date で、rebase した commit は rebase の日時で数える。"
-  ],
-  "not_in_this_unit": [
-   "equivalence"
   ],
   "owner_rules": {
    "fields": {

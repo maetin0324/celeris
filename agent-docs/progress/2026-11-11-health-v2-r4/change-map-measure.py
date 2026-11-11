@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""健全性 v2 R4 change-map: Dispatcher の field の読み書き file と共変更を数える。
+"""健全性 v2 R4 change-map: Dispatcher の field の読み書き file と共変更を数え、等価性の記録を取り込む。
 
 使い方（repo の root で）:
     python3 agent-docs/progress/2026-11-11-health-v2-r4/change-map-measure.py --out <path>
 
 読むのは crates/task-dispatch/src/dispatcher.rs と crates/task-dispatch/src/dispatcher/ の下の *.rs
-（作業ツリーの内容）、同じ dir の owners.json と `git log`。build・試験は走らせない。標準 library だけを使う。
+（作業ツリーの内容）、同じ dir の owners.json と equivalence/*.json、`git log`。build・試験は走らせない。
+標準 library だけを使う。equivalence/*.json の形か参照（file・行・関数）が壊れていれば、出力を書かずに exit 1。
 同じ HEAD（作業ツリーが HEAD と同じ）なら同じ bytes を書く。判定の規則と限界は出力の `method` に書く。
 """
 
@@ -45,6 +46,13 @@ GIT_LOG = [
     DISPATCHER_DIR,
 ]
 EVIDENCE_MAX = 6
+EQUIV_DIR = "equivalence"
+EQUIV_KEYS = {"id", "sites", "verdict", "evidence", "shared_contract"}
+EQUIV_SITE_KEYS = {"at", "fn", "subject"}
+EQUIV_VERDICTS = ("equivalent", "different")
+EQUIV_SITES_MIN = 2
+EQUIV_ID_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+EQUIV_REF_RE = re.compile(r"^([A-Za-z0-9_./-]+):([0-9]+)$")
 FIELD_PAIRS_MAX = 5
 TOP_PAIRS_MIN_COMMITS = 3
 
@@ -611,6 +619,110 @@ def assign_owners(fields, rules):
         f.update(owner=owner, owner_reason=reason, owner_conflict=conflict)
 
 
+def nonempty_str(v):
+    return isinstance(v, str) and bool(v.strip())
+
+
+class RefFiles:
+    """参照先の file の行数と、comment・文字列を空白にした本文（.rs のみ）。"""
+
+    def __init__(self):
+        self.cache = {}
+
+    def get(self, path):
+        if path not in self.cache:
+            if not os.path.isfile(path):
+                self.cache[path] = None
+            else:
+                with open(path, encoding="utf-8") as f:
+                    src = f.read()
+                n_lines = src.count("\n") + (1 if src and not src.endswith("\n") else 0)
+                self.cache[path] = (n_lines, mask_rust(src) if path.endswith(".rs") else src)
+        return self.cache[path]
+
+
+def check_ref(ref, where, files, errors):
+    """`path:行` の参照を検査する。file が読めれば path を返す。"""
+    m = EQUIV_REF_RE.match(ref) if isinstance(ref, str) else None
+    if not m:
+        errors.append("%s: `path:行` の文字列でない: %r" % (where, ref))
+        return None
+    path, line = m.group(1), int(m.group(2))
+    if os.path.normpath(path).replace(os.sep, "/") != path or path.startswith("../"):
+        errors.append("%s: repo の root からの正規化した相対 path でない: %s" % (where, ref))
+        return None
+    entry = files.get(path)
+    if entry is None:
+        errors.append("%s: file が無い: %s" % (where, ref))
+        return None
+    if not 1 <= line <= entry[0]:
+        errors.append("%s: 行 %d が file の行数 %d の外: %s" % (where, line, entry[0], ref))
+    return path
+
+
+def load_equivalence(eq_dir):
+    """equivalence/*.json を id の順に読み、形と参照を検査する。(記録の一覧, 違反の一覧) を返す。"""
+    errors, records = [], []
+    names = sorted(n for n in os.listdir(eq_dir) if n.endswith(".json")) if os.path.isdir(eq_dir) else []
+    if not names:
+        errors.append(EQUIV_DIR + "/*.json が 0 件")
+    files = RefFiles()
+    for name in names:
+        where = EQUIV_DIR + "/" + name
+        try:
+            with open(os.path.join(eq_dir, name), encoding="utf-8") as f:
+                rec = json.load(f)
+        except (OSError, ValueError) as error:
+            errors.append("%s: JSON として読めない: %s" % (where, error))
+            continue
+        if not isinstance(rec, dict):
+            errors.append(where + ": 最上位が object でない")
+            continue
+        keys = set(rec)
+        if keys != EQUIV_KEYS:
+            errors.append(
+                "%s: key が %s でない（欠け: %s、余分: %s）"
+                % (where, sorted(EQUIV_KEYS), sorted(EQUIV_KEYS - keys), sorted(keys - EQUIV_KEYS))
+            )
+            continue
+        rid = rec["id"]
+        if not (isinstance(rid, str) and EQUIV_ID_RE.match(rid)):
+            errors.append("%s: id が小文字・数字・`-` の文字列でない: %r" % (where, rid))
+        elif rid + ".json" != name:
+            errors.append("%s: id %s が file 名と一致しない" % (where, rid))
+        if rec["verdict"] not in EQUIV_VERDICTS:
+            errors.append("%s: verdict が %s のどちらでもない: %r" % (where, "・".join(EQUIV_VERDICTS), rec["verdict"]))
+        if not nonempty_str(rec["shared_contract"]):
+            errors.append(where + ": shared_contract が空でない文字列でない")
+        sites = rec["sites"]
+        if not isinstance(sites, list) or len(sites) < EQUIV_SITES_MIN:
+            errors.append("%s: sites が %d 件以上の配列でない" % (where, EQUIV_SITES_MIN))
+            sites = sites if isinstance(sites, list) else []
+        for i, site in enumerate(sites):
+            sw = "%s: sites[%d]" % (where, i)
+            if not isinstance(site, dict) or set(site) != EQUIV_SITE_KEYS:
+                errors.append("%s: key が %s の object でない" % (sw, sorted(EQUIV_SITE_KEYS)))
+                continue
+            if not nonempty_str(site["subject"]):
+                errors.append(sw + ": subject が空でない文字列でない")
+            fn = site["fn"]
+            if not (isinstance(fn, str) and re.fullmatch(IDENT, fn)):
+                errors.append("%s: fn が識別子でない: %r" % (sw, fn))
+                fn = None
+            path = check_ref(site["at"], sw + ".at", files, errors)
+            if path and fn and not re.search(r"\bfn\s+" + re.escape(fn) + r"\s*[<(]", files.get(path)[1]):
+                errors.append("%s: fn %s が %s に無い" % (sw, fn, path))
+        evidence = rec["evidence"]
+        if not isinstance(evidence, list) or not evidence:
+            errors.append(where + ": evidence が 1 件以上の配列でない")
+            evidence = evidence if isinstance(evidence, list) else []
+        for i, ref in enumerate(evidence):
+            check_ref(ref, "%s: evidence[%d]" % (where, i), files, errors)
+        records.append(rec)
+    records.sort(key=lambda r: str(r["id"]))
+    return records, errors
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--out", required=True)
@@ -668,9 +780,13 @@ def main():
         assign_owners(out_fields, owner_rules)
     except ValueError as error:
         sys.exit(str(error))
+    equivalence, eq_errors = load_equivalence(os.path.join(os.path.dirname(rules_path), EQUIV_DIR))
+    if eq_errors:
+        sys.exit("equivalence の検査で違反 %d 件:\n" % len(eq_errors) + "\n".join(eq_errors))
 
     doc = {
         "fields": out_fields,
+        "equivalence": equivalence,
         "co_change": {
             "since": SINCE,
             "commits": n_commits,
@@ -740,7 +856,19 @@ def main():
                 "co_change の --since は committer date で、rebase した commit は rebase の日時で数える。",
             ],
             "owner_rules": owner_rules,
-            "not_in_this_unit": ["equivalence"],
+            "equivalence_rules": [
+                "同じ dir の %s/*.json を file 名の順に読み、id の順に並べて最上位の equivalence に入れる"
+                "（中身は書き換えない）。" % EQUIV_DIR,
+                "形: key は %s だけ。id は小文字・数字・`-` で file 名（.json を除く）と同じ。"
+                "verdict は %s。shared_contract は空でない文字列。sites は %d 件以上の配列で、各要素の key は %s だけ"
+                "（fn は識別子、subject は空でない文字列）。evidence は 1 件以上の配列。"
+                % (sorted(EQUIV_KEYS), " か ".join(EQUIV_VERDICTS), EQUIV_SITES_MIN, sorted(EQUIV_SITE_KEYS)),
+                "参照: sites の at と evidence の各要素は repo の root からの `path:行`。file が在り、"
+                "行が 1 以上 file の行数以下（最後の改行の無い行も 1 行と数える）。sites の fn は、"
+                "comment・文字列を空白にした at の file の本文に `fn <名前>` の宣言がある。",
+                "違反が 1 件でもあれば全件を stderr に出し、出力 file を書かずに exit 1。",
+                "検査は参照の実在までで、verdict と shared_contract の内容の正しさ、fn が at の行を含むことは検査しない。",
+            ],
         },
     }
     out_dir = os.path.dirname(os.path.abspath(args.out))

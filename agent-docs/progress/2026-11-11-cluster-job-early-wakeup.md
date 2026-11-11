@@ -57,6 +57,19 @@ Slurm は状態が FAILED 等で exit 0 の場合と、exit 0 だが signal 非�
 - `sh scripts/dev/check-doc-links.sh`、`sh scripts/dev/check-adr-numbers.sh`、`sh scripts/dev/progress-index.sh --check`、`python3 scripts/dev/check-architecture-map.py` → exit 0。
 - `git diff --check` → exit 0。
 
+## attempt 2: review の時間切れの調査
+
+attempt 1 の review では、条件 5 と workspace.toml の `bash scripts/dev/test-affected.sh` が 600 秒と再試行の 1200 秒の両方で時間切れになった。
+コードの不具合ではなく、検査の量と host の負荷が原因と判断し、コードは変えていない。
+
+- 検査の量: task-core を変えたため、逆依存が jev-classifier 以外の 14 crate（nextest 8224 件）になる。加えて test-ts-verify（runner の cache key の入力の変更）と web の段も走る。
+- 負荷: 実測時の load average は 64〜88（24 core）。同じ時間に別の task の test-affected が 2 本走っていた。
+- 提出時の HEAD での実測（2026-11-11 13:14〜13:50 UTC）は合計 35 分 33 秒。check-health が 4 分 9 秒、検査器の自己試験が 4 分 19 秒、web が 18 秒、test-ts-verify が 6 分 27 秒、nextest の build が 3 分 36 秒、nextest が 971 秒。
+- この実測では変更範囲外の 3 件が負荷で落ちた。`dispatcher::tests::git_workspace::review_records_each_repositories_own_definition_and_worktree_results`（each repository must have its own evidence）、`browser::post_login_tests::daemon_post_login_waits_through_slow_shibboleth_hops`（target_changed）、`celeris-campaign::k4_cells_validity real_k4_archive_grades_thirty_of_thirty_two`（600 秒で時間切れ）。
+- 同じ HEAD で単独に再実行すると 3 件とも合格した。前 2 件と cluster_job の試験 28 件の 30 件が 24.5 秒で合格、k4 の試験は 36.6 秒で合格。
+- doc test（同じ 14 crate）は exit 0（45 秒）。
+- 低い負荷では同じ検査が 1200 秒に収まる。attempt 1 の nextest は 421 秒の回があった。
+
 ## 本番への移行
 
 `queued_wake_secs` は、そのキーを知る release の昇格後に人が本番設定へ追加する。
@@ -67,6 +80,8 @@ Slurm は状態が FAILED 等で exit 0 の場合と、exit 0 だが signal 非�
 無し。実クラスタの job 操作は実行していない。
 
 ## 提案
+
+- task-core を変える task の test-affected は全 crate とほぼ同じ量になり、load average 60 以上の host では review の上限（`review_timeout_secs` = 600 秒、再試行 1200 秒）に収まらない。review の決定的検査の同時実行数を host の core 数で制限するか、重い検査の review を負荷の低い時に回す仕組みを別 task で検討することを提案する。
 
 変更範囲外の `celeris-credentiald::injection_ipc::concurrent_first_request_streams_over_the_limit_are_denied_unread`
 が全体実行で一度 `call: Io` になった。コードを変えない単独再実行は 1 件合格（0.03 秒）。

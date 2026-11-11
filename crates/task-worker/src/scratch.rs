@@ -712,8 +712,10 @@ pub fn allocate_with_seed(
     seed: &SeedPolicy<'_>,
     ops: &SeedCopyOps<'_>,
 ) -> io::Result<Allocation> {
-    let _lock = pool.lock()?;
     let owner_dir = pool.owner_dir(req.owner);
+    // 同じ owner の割り当ては pool の `.lock` の外で直列にする（seed の写しは `.lock` を持たない）。
+    let _owner_alloc = lock_owner_alloc(&owner_dir)?;
+    let mut lock = pool.lock()?;
     let lease_path = owner_dir.join(LEASE_FILE);
     let target = owner_dir.join(TARGET_SUBDIR);
     std::fs::create_dir_all(&owner_dir)?;
@@ -784,8 +786,24 @@ pub fn allocate_with_seed(
             None => TargetOrigin::Existing,
         }
     } else {
-        seed_target(pool, &owner_dir, &repo_key, seed, ops)
+        // ADR 2026-11-11-scratch-lock-tick-stall: 世代の固定と lease の書き込みだけを `.lock` の下で行い、
+        // 数十 GB の写しは `.lock` を外して行う（seed の切り替え・GC・他の割り当てを止めない）。
+        let pin = if seed.enabled {
+            pin_current_seed(pool, &repo_key).unwrap_or_else(|e| {
+                tracing::warn!(owner = %req.owner, error = %e, "scratch: could not pin the seed generation");
+                None
+            })
+        } else {
+            None
+        };
+        write_lease(&lease_path, &lease)?;
+        drop(lock);
+        let origin = seed_target(pool, &owner_dir, &repo_key, seed, ops, pin.as_ref());
+        drop(pin);
+        lock = pool.lock()?;
+        origin
     };
+    let _lock = lock;
     std::fs::create_dir_all(&target)?;
     if origin != TargetOrigin::Existing {
         match &origin {

@@ -197,6 +197,65 @@ pub fn write_target_origin(owner_dir: &Path, origin: &TargetOrigin) -> io::Resul
 }
 
 /// owner のディレクトリに残った作りかけ（`.seed-copy-*`）を消す。
+/// 写している間 seed の世代を GC から守る印（世代の dir の中の file に共有の flock）。
+pub const SEED_COPY_PIN: &str = ".copy-pin";
+/// 同じ owner の割り当て（seed の写し）を直列にする file（owner の dir の中に排他の flock）。
+pub const OWNER_ALLOC_LOCK: &str = ".alloc.lock";
+
+/// 写している世代（`gen-*/target` の正規の path）と、その世代を守る共有の flock。
+pub struct SeedPin {
+    target: PathBuf,
+    _file: std::fs::File,
+}
+
+/// pool の `.lock` の下で呼び、`current` の世代を固定する。lock を外して写す間、GC はこの世代を退避しない。
+pub fn pin_current_seed(pool: &Pool, repo_key: &str) -> io::Result<Option<SeedPin>> {
+    let target = match seed_current_dir(pool, repo_key)
+        .join(TARGET_SUBDIR)
+        .canonicalize()
+    {
+        Ok(p) if p.is_dir() => p,
+        _ => return Ok(None),
+    };
+    let Some(generation) = target.parent() else {
+        return Ok(None);
+    };
+    let file = open_lock_file(&generation.join(SEED_COPY_PIN))?;
+    file.lock_shared()?;
+    Ok(Some(SeedPin {
+        target,
+        _file: file,
+    }))
+}
+
+/// `dir` の中の `name` の flock を誰かが持っているか（持っていなければ取らずに返す）。読めないときは持っている扱い。
+pub fn lock_file_held(dir: &Path, name: &str) -> bool {
+    let path = dir.join(name);
+    if !path.exists() {
+        return false;
+    }
+    match open_lock_file(&path).map(|f| f.try_lock()) {
+        Ok(Ok(())) => false,
+        Ok(Err(std::fs::TryLockError::WouldBlock)) | Ok(Err(_)) | Err(_) => true,
+    }
+}
+
+fn open_lock_file(path: &Path) -> io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(path)
+}
+
+/// 同じ owner の割り当てを直列にする排他の flock（pool の `.lock` より先に、外で取る）。
+pub fn lock_owner_alloc(owner_dir: &Path) -> io::Result<std::fs::File> {
+    std::fs::create_dir_all(owner_dir)?;
+    let file = open_lock_file(&owner_dir.join(OWNER_ALLOC_LOCK))?;
+    file.lock()?;
+    Ok(file)
+}
+
 pub fn remove_partial_copies(owner_dir: &Path) {
     let Ok(entries) = std::fs::read_dir(owner_dir) else {
         return;
@@ -293,23 +352,28 @@ fn nanos() -> u128 {
 }
 
 /// `target/` がまだ無い owner に seed を写す。成功すれば `TargetOrigin::Seed`、使えなければ一時ディレクトリを
-/// 消して `TargetOrigin::Empty`（`target/` は作らない。呼び出し側が空で作る）。`.lock` は呼び出し側が持つ。
+/// 消して `TargetOrigin::Empty`（`target/` は作らない。呼び出し側が空で作る）。pool の `.lock` は持たずに呼ぶ
+/// （ADR 2026-11-11-scratch-lock-tick-stall）。世代は `pin`（`.lock` の下で取った固定）、owner の直列は
+/// 呼び出し側の `lock_owner_alloc` が守る。
 pub fn seed_target(
     pool: &Pool,
     owner_dir: &Path,
     repo_key: &str,
     policy: &SeedPolicy<'_>,
     ops: &SeedCopyOps<'_>,
+    pin: Option<&SeedPin>,
 ) -> TargetOrigin {
     remove_partial_copies(owner_dir);
     if !policy.enabled {
         return TargetOrigin::Empty { reason: None };
     }
-    let current = seed_current_dir(pool, repo_key);
-    let seed = current.join(TARGET_SUBDIR);
-    if !seed.is_dir() {
+    let Some(pin) = pin else {
         return TargetOrigin::Empty { reason: None };
-    }
+    };
+    let seed = pin.target.clone();
+    let Some(current) = seed.parent().map(Path::to_path_buf) else {
+        return TargetOrigin::Empty { reason: None };
+    };
     let empty = |reason: String| TargetOrigin::Empty {
         reason: Some(reason),
     };
@@ -323,11 +387,7 @@ pub fn seed_target(
     if let Err(reason) = check_manifest(&manifest, repo_key, policy) {
         return empty(reason);
     }
-    // 世代ディレクトリ（`current` の先）を固定して写す（途中で `current` が切り替わっても混ざらない）。
-    let seed = match seed.canonicalize() {
-        Ok(p) => p,
-        Err(e) => return empty(format!("seed is not readable: {e}")),
-    };
+    // 世代ディレクトリ（`current` の先）は `pin` が固定済み（途中で `current` が切り替わっても混ざらない）。
     let Some((probe_src, size)) = largest_file(&seed) else {
         return empty("seed has no file to verify extent sharing".to_string());
     };

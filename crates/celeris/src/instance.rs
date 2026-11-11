@@ -14,6 +14,10 @@
 //!   `handoff_requested_at` を書く。居なければ `active` になる（同じ transaction で確かめて書く）。
 //! - 毎 tick: 自分の行に heartbeat を打つ。`active` は `handoff_requested_at` を見たら**同じ tick で**
 //!   `draining` へ（listener を閉じ、dispatch と裏方を止める。手元の run は面倒を見続ける）。
+//!   ただし要求元（自分より新しく、drain しておらず、pid が生きている standby か active の行）が
+//!   draining を書く transaction の中で見つからなければ、要求を捨てて active のままでいる
+//!   （ADR 2026-11-11-scratch-lock-tick-stall。止まった tick が消えた新 daemon の要求を後から処理して
+//!   active が 0 になった本番障害の直し）。standby は要求の前に自分の行を書く。
 //!   `standby` は、生きている他の `active` が 1 つも無くなったら `active` へ（判断と書き込みを 1 つの
 //!   transaction で行う。ADR-0040 D4 付記 2026-10-05）。
 //! - `active` が 2 つ以上生きていたら（規則に反する痕）、新しい方を残し古い方へ引き継ぎを要求する。
@@ -358,12 +362,16 @@ pub enum TickDecision {
     Promote,
     /// `active` → `draining`（listener を閉じ、dispatch と裏方を止める）。
     Drain,
+    /// 引き継ぎの要求はあるが要求元が居ない（行が消えたか pid が死んだ）。要求を消して `active` に残る。
+    DropStaleHandoff,
 }
 
 /// ADR-0040 D4 の毎 tick の規則。`self_id` は自分の `instance_id`。
 ///
-/// - `active`: 自分の行に引き継ぎの要求があれば drain。生きている別の `active` が自分より新しければ、
-///   新しい方を残すために自分が drain する（規則に反する 2 つ目の active の解消）。
+/// - `active`: 自分の行に引き継ぎの要求があり、要求元（自分より新しく drain していない、pid が
+///   生きている standby か active）が居れば drain。要求元が居なければ要求を捨てる。生きている別の
+///   `active` が自分より新しければ、新しい方を残すために自分が drain する（規則に反する 2 つ目の
+///   active の解消）。
 /// - `standby`: 生きている他の `active` が 1 つも無ければ昇格を試みる（最終的な判断は store の書き込みで）。
 pub fn decide_tick(
     role: InstanceRole,
@@ -380,8 +388,19 @@ pub fn decide_tick(
                     r.instance_id != self_id && is_live_active(r, alive) && newer_than(r, me)
                 })
             });
-            if asked || superseded {
+            let requester_alive = me.is_some_and(|me| {
+                rows.iter().any(|r| {
+                    r.instance_id != self_id
+                        && matches!(r.role, InstanceRole::Standby | InstanceRole::Active)
+                        && r.drained_at.is_none()
+                        && newer_than(r, me)
+                        && alive(r.pid)
+                })
+            });
+            if superseded || (asked && requester_alive) {
                 TickDecision::Drain
+            } else if asked {
+                TickDecision::DropStaleHandoff
             } else {
                 TickDecision::Stay
             }
@@ -514,8 +533,11 @@ impl Supervisor {
         let initial = if admitted {
             InstanceRole::Active
         } else {
-            // 生きている active が居る（または居たのが書く直前に現れた）。先に全部へ引き継ぎを要求してから、
-            // standby として登録する。
+            // 生きている active が居る（または居たのが書く直前に現れた）。先に standby として登録してから
+            // 全部へ引き継ぎを要求する（active は要求元の行が無い要求を捨てるので、行が先）。
+            supervisor
+                .store
+                .instance_register(&supervisor.row(InstanceRole::Standby, now))?;
             for active in store_live_actives(&supervisor.store, &self_id)? {
                 match supervisor
                     .store
@@ -531,9 +553,6 @@ impl Supervisor {
                     ),
                 }
             }
-            supervisor
-                .store
-                .instance_register(&supervisor.row(InstanceRole::Standby, now))?;
             InstanceRole::Standby
         };
         supervisor.role.set(initial);
@@ -610,6 +629,12 @@ impl Supervisor {
         // 2. 役割の判断。書き込みが要るもの（昇格）は store で同じ transaction の中で確かめる。
         let current = self.role.get();
         let rows = self.store.instance_list()?;
+        // 要求を書かれてから処理するまでの秒数（tick が止まっていたかを log で分かるようにする）。
+        let request_age_secs = rows
+            .iter()
+            .find(|r| r.instance_id == self_id)
+            .and_then(|r| r.handoff_requested_at)
+            .map(|t| (now - t).whole_seconds());
         let mut step = match decide_tick(current, &self_id, &rows, &pid_alive) {
             TickDecision::Stay => Step::Stay,
             TickDecision::Promote => {
@@ -631,16 +656,46 @@ impl Supervisor {
                     Step::Stay
                 }
             }
+            TickDecision::DropStaleHandoff => {
+                // 要求を消す書き込みは、同じ transaction で要求元が居ないことを確かめてから行う。
+                let dropped = self.store.instance_register_if(
+                    &self.row(InstanceRole::Active, now),
+                    &|rows| {
+                        decide_tick(InstanceRole::Active, &self_id, rows, &pid_alive)
+                            == TickDecision::DropStaleHandoff
+                    },
+                )?;
+                if dropped {
+                    tracing::warn!(
+                        instance_id = %self_id, request_age_secs = ?request_age_secs,
+                        "dropped a handoff request whose requester is gone (its row was removed or                          its pid is dead); staying active (ADR 2026-11-11-scratch-lock-tick-stall)"
+                    );
+                }
+                Step::Stay
+            }
             TickDecision::Drain => {
-                self.store
-                    .instance_set_role(&self_id, InstanceRole::Draining, now)?;
-                self.role.set(InstanceRole::Draining);
-                self.drain_started_at = Some(now);
-                tracing::info!(
-                    instance_id = %self_id, release = %self.identity.release, in_flight,
-                    "active -> draining (a newer release or a newer active asked for the handoff; ADR-0040 D4)"
-                );
-                Step::Draining
+                // 要求元が生きていることを draining を書く transaction の中で確かめ直す。
+                let draining = self.store.instance_set_role_if(
+                    &self_id,
+                    InstanceRole::Draining,
+                    now,
+                    &|rows| {
+                        decide_tick(InstanceRole::Active, &self_id, rows, &pid_alive)
+                            == TickDecision::Drain
+                    },
+                )?;
+                if draining {
+                    self.role.set(InstanceRole::Draining);
+                    self.drain_started_at = Some(now);
+                    tracing::info!(
+                        instance_id = %self_id, release = %self.identity.release, in_flight,
+                        request_age_secs = ?request_age_secs,
+                        "active -> draining (a newer release or a newer active asked for the handoff; ADR-0040 D4)"
+                    );
+                    Step::Draining
+                } else {
+                    Step::Stay
+                }
             }
         };
         // 2b. 監視（ADR-0040 D4 付記 2026-10-05）: 生きている active が自分より古い行を残していれば、

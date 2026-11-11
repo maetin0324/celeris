@@ -347,6 +347,12 @@ pub fn execute(pool: &Pool, plan: &GcPlan, scan: &Scan, emergency: bool) -> Exec
             tracing::debug!(path = %pick.path.display(), "scratch: cargo is building; keeping target");
             continue;
         };
+        // 割り当て中（seed を写している）owner は pool の `.lock` を持たないので、owner の印で守る。
+        if let Some(o) = &pick.owner
+            && scratch::lock_file_held(&pool.owner_dir(o), scratch::OWNER_ALLOC_LOCK)
+        {
+            continue;
+        }
         let flat = match &pick.owner {
             Some(o) => o.flat(),
             None => pick

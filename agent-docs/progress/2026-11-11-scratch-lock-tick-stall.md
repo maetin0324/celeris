@@ -17,6 +17,12 @@ commit: `phase 1: defer scratch cleanup without blocking tick`。
 - 別 fd の pool lock を保持したまま tick/GC が戻る試験を追加。保険の30秒で解放された場合は失敗し、通常は channel の通知で直ちに解放する。解放後の掃除も確認する。
 - 通常 run は既に `worker_task` の spawn_blocking 内。停止経路は checks 用 env の準備にもあり、ここは未修正。
 
+commit: `phase 2: copy the seed outside the pool lock and drop handoff requests from gone requesters`（attempt 2）。
+
+- `allocate_with_seed` は pool lock の下で世代の pin（`pin_current_seed`、世代の `.copy-pin` に共有 flock）と lease の書き込みだけを行い、写しは lock を外して行う。同じ owner の割り当ては `.alloc.lock` で pool lock の外で直列にする。seed の GC は pin のある世代とその repo を退避せず、owner の GC は `.alloc.lock` が持たれた owner を消さない。
+- handoff: active は要求元（自分より新しく drain していない、pid が生きている standby・active の行）が居るときだけ draining になる。居なければ要求を消して active に残る（判定はどちらも書き込みの transaction の中）。standby は要求の前に自分の行を書く。draining と要求の破棄の log に `request_age_secs` を出す。
+- 最後の tick の時刻は既存の `GET /daemon` の `snapshot.last_tick_at` で読める（流用。新しい欄は足していない）。
+
 ## 呼び出し元の調査
 
 - `scratch.rs::allocate_with_seed`: 同期。通常 run は `worker_task` の spawn_blocking 内。`housekeeping::check_cargo_target_env` と `eval_trials::eval_allocate_target` は tick の同期経路で、変更が必要。
@@ -41,13 +47,18 @@ commit: `phase 1: defer scratch cleanup without blocking tick`。
 
 `launch_notice_tests` の Codex fixture が継承した `CODEX_HOME` を使い、起動前の rules 作成を host の account に向けていた。fixture の owner で試験専用の home を設定し、既存の3つの通知契約を保った。新しい fallback・本番の変更は無し。既存の試験で期待値は変えず、`run-order` の adapter の戻り値も失敗メッセージへ出す。
 
+attempt 2 の検査（提出時の HEAD で実行）:
+
+- `cargo nextest run -p celeris --lib -E 'test(/instance::tests/)'` → 29 passed（`a_handoff_request_from_a_gone_requester_is_dropped_and_the_active_stays` を含む）。
+- `cargo nextest run -p celeris --test instance_handoff --test unpromoted_release` → 18 passed（実 daemon の handoff）。
+- `cargo nextest run -p task-worker --lib -E 'test(/scratch::tests/)'` → 41 passed（`seed_copy_runs_without_the_pool_lock_and_gc_keeps_the_pinned_generation` を含む）。
+- `cargo nextest run -p task-dispatch --lib -E 'test(/scratch_gc/) | test(target_sweep_tick_defers)'` → 9 passed。
+- `bash scripts/dev/test-affected.sh` は attempt 2 では未実行（壁時計の残りが足りない）。
+
 ## 未解決
 
-- コピーの参照保護・pool lock の短縮。コピー中の owner の同時割り当て・GC も保護する必要がある。
 - `housekeeping::check_cargo_target_env` と評価試行の割り当てを tick 外へ移す。checks 用 env の呼び出し元は housekeeping・work_units・review_spawn・phase_integration。
 - 評価試行の touch/release/set_ttl の待機経路を除く。
-- handoff 要求元を永続化し、要求元削除時の取消と drain 直前の transaction 内の存在・pid 生存確認を実装する。
-- `last_tick_at` を health または log で確認できるようにする。
 - 実 daemon 系の試験 fixture が実 host の disk watch を継承する問題を解消し、指定検査を完走する。
 - task 全体は未完了。完了日は未設定。
 

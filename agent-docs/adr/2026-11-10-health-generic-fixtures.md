@@ -2,7 +2,7 @@
 tasks: [01M6TYVJSXBZMSBC0YGAT2TTX0]
 ---
 # ADR 2026-11-10: 非 Celeris の isolated Git fixture で repo health の汎用性とすり抜け耐性を確かめる
-状態: 提案
+状態: 実装済み
 
 - 日付: 2026-11-10
 - 実装: 健全性 v2 G4（task 01M6TYVJSXBZMSBC0YGAT2TTX0）の後続 unit（py-detect・py-bypass・rs-paths・rs-stale・rs-limits・measure・record）と、policy だけの branch の子 task exc-expiry。この ADR の unit はコードを変えない。記録は [G4 の進捗](../progress/2026-11-10-health-v2-g4.md)。
@@ -150,5 +150,19 @@ tasks: [01M6TYVJSXBZMSBC0YGAT2TTX0]
 - 訂正: (1) dup-contract・dup-state の期待は「candidate の finding が 1 件、exit 0・verdict pass、final review の材料に入る」。(2) fail 級を前提にした行（policy 弱化 5 種・history-smuggle の土台、(e)(g)(h) の Fail と repair、repair の class）は dep-inversion と class `health:deps.violation` に移した。(3) dep-inversion は fixture の base の profile が層を宣言したときだけ fail 級。profile 無しは `not_applicable` で、ほかの rule（Rust の `deps.cycle` など）は実測どおり。(4) Rust の試験の割り当て: `health_generic.rs` に `wu_check_`・`direct_review_`・`review_input_`・`multi_repo_`・`flags_do_not_change_outcome`、`health_generic_stale.rs` に `stale_`・`baseline_weakening_not_pass`・`reviewer_reuse_`。flag に案件の `self_improve` を足した。
 - 試験: `test_generic_dep_inversion_without_layers_not_applicable` を足した。
 
+## 付記（2026-11-11、unit record）: 実装との食い違い
+unit ごとの記録と提出時の検査は [G4 の進捗](../progress/2026-11-10-health-v2-g4.md)。上の py-detect の付記に無い食い違いを書く。
+- (a) 結論の「dispatcher の経路を変えない」: G4 は dispatcher の review の修復の分類の入力を 1 か所変えた。rs-stale が欠け G4-S1（`Check::Reviewer` のある task で、決定的な不合格の修復を reviewer の「未評価」の項目が妨げ、health の Fail が `review_fail` になる）を見つけ、unit fix-s1 が `crates/task-dispatch/src/dispatcher/review_verdict.rs` の `Dispatcher::try_review_repair` で reason が `review::REVIEWER_NOT_EVALUATED_REASON`（`crates/task-dispatch/src/review.rs`）の項目を分類から外した（[ADR-0072](0072-task-execution-decomposition.md) の付記 G4-S1）。検査器・policy・baseline・`crates/campaign/` は G4 の branch で変えていない（`git diff --quiet $(git merge-base HEAD main) -- crates/campaign/ scripts/dev/repo-health/ scripts/dev/check-health.sh` が exit 0）。検査器の期限付き例外は子 task exc-expiry の policy だけの branch が main に入れた。
+- (b) write_set（(5)）: 表に無い次の path を変えた（範囲は各 unit の計画の check で許した。slices.json は変えていない）。`crates/task-dispatch/src/health_review/scenario_tests.rs`（rs-paths。D3.1 の写す helper を新しく書かず、既存の `copy_checker` を `pub(super)` にして使った）、`crates/task-dispatch/src/dispatcher/review_verdict.rs`・`crates/task-dispatch/src/review.rs`・`crates/task-dispatch/src/dispatcher/tests/{review,health_enforce,ownerless_runs}.rs`（fix-s1）、`crates/task-dispatch/src/dispatcher/tests/git_workspace.rs`（deflake-ws。段 hardening の統合を止めた review の試験の待ちを tick の回数から出来事待ちにした）、`agent-docs/progress/2026-11-10-health-v2-g4/measure.py`（measure の台本）、`agent-docs/adr/0072-task-execution-decomposition.md`（G4-S1 の付記）。
+- (c) (2) の variant: builder は 16 variant を持つ。表に無い `tool-failure`（包んだ検査の故障）を足した。`unsupported-tool` と `tool-failure` は base の profile に包んだ検査の command を足すので、「base は kind ごとに 1 つ」の例外になる。policy の弱化 5 種と tool の 2 種は profile 無しでは作れず、builder は `ValueError` を出す。docs-only は `inputs.doc_only = true` という欄でなく、report の契約の欄 `inputs.mode = "doc-only"` で確かめた。
+- (d) (3) の (d) の行: 検査器の欠け G1・G2 を `@unittest.expectedFailure` の 2 試験に残した（人の決定 checker-gaps の a）。G1 `test_generic_checker_import_failure_is_error`: `health/` の module を欠いた検査器は exit 2 でなく exit 1（report は無い）。G2 `test_generic_missing_script_unsupported`: 無い script を包んだ `doc.links` は `unsupported` でなく `fail`（`/bin/sh` が dash で exit 2 を返し、126・127 にならない）。どちらも合格にはならない。直すのは G4 の後の policy だけの別 task。
+- (e) (3) の (g) の行の `review_input_`: 候補の finding は report には入るが、`[review]` 節の無い repo（fixture の profile と組み込み generic）では final review の材料に入らない（未解決 G4-R1）。[ADR 2026-11-07 health-review-integration](2026-11-07-health-review-integration.md) の D4.4 は review 方針が `absent` の repo で `ReviewRequest.health = None` にし `HealthReviewInputSkipped` を残すと定めていて、この ADR の期待と食い違う。4 試験 `health_generic_review_input_{ts,rust}_{dup_contract,dup_state}_reaches_reviewer` は期待を弱めず `should_panic`（`no HealthReviewInputBuilt for the candidate`）で残した。`*_does_not_fail` の 4 試験（report に候補が 1 件、health は Pass）は合格する。どちらの ADR を直すかは G4 の外の別 task で決める。
+- (f) rust の dep-inversion: 層を宣言した profile でも `deps.violation` に加えて `deps.cycle` が fail 級になる（core の `Cargo.toml` が app に依存し、Cargo の循環を実際に作る）。review の repair の class は `health:deps.cycle,health:deps.violation`。measure の fail 級の適合率 77.4% の差 14 件もこの `deps.cycle`。
+- (g) D3.3 の flag の実名: (i) `Project.title`・`Project.slug`、(ii) `ProjectRepo.name`・`RepoRef.name`（`RepoId` は ULID で名前を持たない）、(iii) `Task.mode` = `TaskMode::Prototype`、(iv) `DispatchConfig.releases_dir`、(v) `self_improve` という欄はコードに無いので、案件ごとの自動化の欄 `Project.auto_integrate` を立てた。複数 repo の止まる試験は builder の multi でなく、別々に作った ts good と rust dep-inversion の 2 repo を使った（multi は 2 repo に同じ variant を入れる）。
+- (h) (3) の (f) の dispatcher の側: 候補が自分の `scripts/dev/repo-health/repo_health.py` を持ち込んだ場合の verdict は Fail でなく Error（同梱の検査器が候補の `.py` を評価し、fixture の profile の adapter に python が無いので `unsupported:<rule>(adapter_missing:python)`）。合格にはならない。reviewer の合格の再利用で health が Fail になるのは、再利用の後に base 側が変わる場合だけ。
+- (i) (3) の (h) の行: 修復の上限の試験は ts だけ（rust の逆向きの依存は `Cargo.toml` の行で、内容を書かずに file を移せない）。期限付き例外は exc-expiry が `scripts/tests/test_repo_health_exception_expiry.py` の 5 試験（`test_exception_expir` で始まる）で確かめた。
+- (j) (4) の測り方: 検査器は 3 回でなく 5 回ずつ当てた。報告の file 名は `health-generic-matrix.*` でなく `g4-measurement.md`・`g4-measurement.json`（WorkUnit measure の成果物 dir）。`RequiredChecksEvaluated` の時刻の差（D4.3）は測っていない。
+
 ## 状態の記録
 - 2026-11-10: 提案（unit adr）。実装の後、record が「実装済み」にし、実装との食い違いを付記に書く。
+- 2026-11-11: 実装済み（unit record）。実装との食い違いは上の「付記（2026-11-11、unit record）」。未解決は G4-R1・G1・G2 で、直す別 task を進捗の「提案」に書いた。

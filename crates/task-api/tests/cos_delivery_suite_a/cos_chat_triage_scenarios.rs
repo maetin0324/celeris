@@ -142,6 +142,11 @@ fn approval(env: &TestEnv) -> Approval {
 
 /// A root task waiting for its plan approval (`blocked(awaiting_plan_approval)`).
 fn plan_gate_task(env: &TestEnv) -> task_core::Task {
+    plan_gate_task_with(env, &["review_human:phase-2"])
+}
+
+/// [`plan_gate_task`] whose approval request carries `reasons`.
+fn plan_gate_task_with(env: &TestEnv, reasons: &[&str]) -> task_core::Task {
     let mut task = new_task(TaskKind::Execute, Status::Ready);
     // A human check sends the plan to a person (ADR 2026-10-30-plan-conforms-human-guards G2 (1)).
     task.acceptance[0].check = task_core::Check::Reviewer;
@@ -178,7 +183,7 @@ fn plan_gate_task(env: &TestEnv) -> task_core::Task {
             },
             vec![Event::PlanApprovalRequested {
                 plan_id: "plan-1".into(),
-                reasons: vec!["review_human:phase-2".into()],
+                reasons: reasons.iter().map(|r| r.to_string()).collect(),
             }],
         )
         .expect("plan gate");
@@ -646,4 +651,336 @@ async fn cos_chat_triage_override_revokes_a_resolved_answer_end_to_end() {
             .iter()
             .any(|e| e.contains("DecisionAnswered") || e.contains("decision_answered"))
     );
+}
+
+// ---- ADR 2026-11-12-cos-triage-scope: policy 12 の範囲（受け入れ条件 4 の (b)〜(f)。(a) は
+// cos_job_wait_extend.rs の standing_job_wait_grant_from_the_general_thread_answers_the_project_wait_limit）。
+
+/// The escalation packet of `item` addressed to `to`, with the derived wait's own options.
+fn packet_to(env: &TestEnv, inbox_id: &str, task_id: task_core::TaskId, to: &str) -> Value {
+    let found = derived(env)
+        .into_iter()
+        .find(|x| x.id == inbox_id)
+        .expect("derived wait");
+    let options: Vec<Value> = if found.options.is_empty() {
+        vec![json!({"key": "reply", "label": "web で回答"})]
+    } else {
+        found
+            .options
+            .iter()
+            .map(|o| json!({"key": o.key, "label": o.label}))
+            .collect()
+    };
+    json!({"escalation": {
+        "to": to, "summary": "決めてください",
+        "options": options, "recommended": null,
+        "recommendation_reason": "根拠を示せない",
+        "web_path": format!("/tasks/{task_id}"),
+    }})
+}
+
+fn op_row(env: &TestEnv, op: &str) -> (String, Value) {
+    let (policy, payload): (String, String) = db(env)
+        .query_row(
+            "SELECT policy_version, payload_json FROM cos_operations WHERE id=?1",
+            [op],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("operation row");
+    (policy, serde_json::from_str(&payload).expect("payload"))
+}
+
+/// (b)(c) D3・D6: 設計 review に通った計画（人の確認の段つき）に未回答の決定が 2 つある。CoS は先に決定に
+/// `task_scope` で答え（推奨のある決定、推奨と違うが task の ADR の範囲の write set の決定）、その後に計画を
+/// `plan_conforms` で承認する。決定が残っている間の承認は断られる。記録には根拠と方針の版が残る。
+#[tokio::test]
+async fn cos_triage_scope_b_c_answers_the_decisions_then_approves_the_plan() {
+    let env = admin_env();
+    let app = env.router();
+    let task = plan_gate_task(&env);
+    raise_decision(&env, &task, "d-default");
+    raise_decision(&env, &task, "d-writeset");
+    let rows = ingest_all(&env, 1);
+    let bearer = cos_bearer(&env, "scope-bc");
+    let headers = [("authorization", bearer.as_str())];
+    let resolve = |item: &str, rev: &str, key: &str, extra: Value| {
+        post_json_with(
+            &resolve_path(item),
+            &body(key, rev, "answer", "task の目的と ADR の範囲", extra),
+            &headers,
+        )
+    };
+    let plan_basis = json!({"category": "plan_conforms",
+        "refs": [{"kind": "task", "id": task.id.to_string()}], "plan": {"plan_id": "plan-1"}});
+    let (_, plan_item, plan_rev) = find(&rows, "plan_gate-");
+
+    // 決定が未回答の間は計画を承認できない（API の検査）。
+    let early = send(
+        &app,
+        resolve(plan_item, plan_rev, "k-plan-early",
+            json!({"answer": {"option": "approve", "note": "計画どおり"}, "basis": plan_basis.clone()})),
+    )
+    .await;
+    assert_problem(&early, 422, "cos_basis_invalid");
+
+    let ground = json!({"category": "task_scope", "refs": [
+        {"kind": "task", "id": task.id.to_string()},
+        {"kind": "adr", "id": "agent-docs/adr/2026-11-12-cos-triage-scope.md"}]});
+    let (_, d1, d1_rev) = find(&rows, "decision-d-default");
+    let first = send(
+        &app,
+        resolve(
+            d1,
+            d1_rev,
+            "k-d1",
+            json!({"answer": {"option": "vault"}, "basis": ground.clone()}),
+        ),
+    )
+    .await;
+    assert_eq!(first.status.as_u16(), 200, "{}", first.text());
+    assert_eq!(first.json()["item"]["state"], "answered");
+    let (_, d2, d2_rev) = find(&rows, "decision-d-writeset");
+    let second = send(
+        &app,
+        resolve(
+            d2,
+            d2_rev,
+            "k-d2",
+            json!({"answer": {"option": "manual"}, "basis": ground.clone()}),
+        ),
+    )
+    .await;
+    assert_eq!(second.status.as_u16(), 200, "{}", second.text());
+    let op = second.json()["operation"]["id"]
+        .as_str()
+        .expect("op")
+        .to_owned();
+    let (policy, payload) = op_row(&env, &op);
+    assert_eq!(
+        policy, "1",
+        "the policy version handed to the run is recorded"
+    );
+    assert_eq!(payload["basis"]["category"], "task_scope", "{payload}");
+    assert_eq!(
+        payload["basis"]["refs"][0]["id"],
+        task.id.to_string(),
+        "{payload}"
+    );
+
+    let approved = send(
+        &app,
+        resolve(
+            plan_item,
+            plan_rev,
+            "k-plan",
+            json!({"answer": {"option": "approve", "note": "計画どおり"}, "basis": plan_basis}),
+        ),
+    )
+    .await;
+    assert_eq!(approved.status.as_u16(), 200, "{}", approved.text());
+    assert_eq!(approved.json()["item"]["state"], "answered");
+    assert_eq!(
+        count(
+            &env,
+            "SELECT COUNT(*) FROM notifications WHERE kind='cos_escalation'"
+        ),
+        0,
+        "nothing went to the person"
+    );
+}
+
+/// (d)(e) D1・D2: credential の入力の待ちと、費用の上限（`near_limit:`）を超える計画の承認は人に残す。
+/// daemon と API の同じ照合が決定的に判定し、CoS の回答も operator 宛ても 422 `cos_reserved_for_human`。
+/// human 宛てなら outbox（Discord）に 1 通ずつ積まれる。
+#[tokio::test]
+async fn cos_triage_scope_d_e_credential_and_beyond_budget_go_to_the_person() {
+    let env = admin_env();
+    let app = env.router();
+    let waiting = question_task(&env, &[]);
+    env.store
+        .credential_wait_enter(
+            &task_core::CredentialWaitEnter {
+                work_unit_id: "wu-cred",
+                task_id: waiting.id,
+                secret_id: "jev_api_key",
+                provider: "jev",
+                purpose: "login",
+            },
+            OffsetDateTime::now_utc(),
+        )
+        .expect("credential wait");
+    let costly = plan_gate_task_with(&env, &["near_limit:max_tokens:950000/1000000"]);
+    let rows = ingest_all(&env, 1);
+    let bearer = cos_bearer(&env, "scope-de");
+    let headers = [("authorization", bearer.as_str())];
+    let cases = [
+        (
+            "credential_wait-",
+            waiting.id,
+            "credential_input",
+            json!({"option": "reply", "note": "入れた"}),
+            json!({"category": "task_scope", "refs": [{"kind": "task", "id": waiting.id.to_string()}]}),
+        ),
+        (
+            "plan_gate-",
+            costly.id,
+            "beyond_approval",
+            json!({"option": "approve", "note": "計画どおり"}),
+            json!({"category": "plan_conforms", "refs": [{"kind": "task", "id": costly.id.to_string()}],
+                "plan": {"plan_id": "plan-1"}}),
+        ),
+    ];
+    for (prefix, task_id, class, answer, basis) in cases {
+        let (inbox_id, item, rev) = find(&rows, prefix);
+        // The daemon's match shows the same class before CoS judges.
+        let found = derived(&env)
+            .into_iter()
+            .find(|x| &x.id == inbox_id)
+            .expect("wait");
+        let hint = task_ops::triage_match::match_item(
+            &env.store,
+            task_ops::triage_match::MatchInput {
+                source_kind: found.kind.as_str(),
+                title: &found.title,
+                body: found.detail.as_deref().unwrap_or(""),
+                project_id: None,
+            },
+            OffsetDateTime::now_utc(),
+        )
+        .expect("match");
+        assert_eq!(hint.reserved.map(|r| r.as_str()), Some(class), "{prefix}");
+        let answered = send(
+            &app,
+            post_json_with(
+                &resolve_path(item),
+                &body(
+                    &format!("k-a-{prefix}"),
+                    rev,
+                    "answer",
+                    "答える",
+                    json!({"answer": answer, "basis": basis}),
+                ),
+                &headers,
+            ),
+        )
+        .await;
+        let problem = assert_problem(&answered, 422, "cos_reserved_for_human");
+        assert!(
+            problem["detail"].as_str().unwrap_or("").contains(class),
+            "{problem}"
+        );
+        let to_operator = send(
+            &app,
+            post_json_with(
+                &resolve_path(item),
+                &body(
+                    &format!("k-o-{prefix}"),
+                    rev,
+                    "escalate",
+                    "operator へ",
+                    packet_to(&env, inbox_id, task_id, "operator"),
+                ),
+                &headers,
+            ),
+        )
+        .await;
+        assert_problem(&to_operator, 422, "cos_reserved_for_human");
+        let to_human = send(
+            &app,
+            post_json_with(
+                &resolve_path(item),
+                &body(
+                    &format!("k-h-{prefix}"),
+                    rev,
+                    "escalate",
+                    "人に残す件",
+                    packet_to(&env, inbox_id, task_id, "human"),
+                ),
+                &headers,
+            ),
+        )
+        .await;
+        assert_eq!(
+            to_human.status.as_u16(),
+            200,
+            "{prefix}: {}",
+            to_human.text()
+        );
+        assert_eq!(to_human.json()["item"]["addressee"], "human");
+        assert!(to_human.json()["notification_id"].is_string());
+    }
+    assert_eq!(
+        count(
+            &env,
+            "SELECT COUNT(*) FROM notifications WHERE kind='cos_escalation'"
+        ),
+        2
+    );
+}
+
+/// (f) D2: policy だけの branch を main に入れる件（Celeris の API に経路が無い操作）は operator 宛て。
+/// 経路だけが記録され、通知（Discord）の行も統括 CoS の札も作られず、受信箱の item は addressee=operator。
+#[tokio::test]
+async fn cos_triage_scope_f_outside_celeris_goes_to_the_operator_without_discord() {
+    let env = admin_env();
+    let app = env.router();
+    let task = decision_task(&env, "d-policy-main", &[]);
+    let rows = ingest_all(&env, 1);
+    let bearer = cos_bearer(&env, "scope-f");
+    let headers = [("authorization", bearer.as_str())];
+    let (inbox_id, item, rev) = find(&rows, "decision-d-policy-main");
+    let resp = send(
+        &app,
+        post_json_with(
+            &resolve_path(item),
+            &body(
+                "k-f",
+                rev,
+                "escalate",
+                "policy の file を main に入れるのは operator の操作",
+                packet_to(&env, inbox_id, task.id, "operator"),
+            ),
+            &headers,
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    let out = resp.json();
+    assert_eq!(out["item"]["state"], "escalated");
+    assert_eq!(out["item"]["addressee"], "operator");
+    assert!(out["notification_id"].is_null(), "{out}");
+    assert_eq!(count(&env, "SELECT COUNT(*) FROM notifications"), 0);
+    assert_eq!(
+        count(
+            &env,
+            "SELECT COUNT(*) FROM cos_notification_routes WHERE route='operator' AND notification_id IS NULL"
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            &env,
+            "SELECT COUNT(*) FROM chat_messages WHERE client_message_id LIKE 'cos-escalation-card:%'"
+        ),
+        0,
+        "no card in the person's window"
+    );
+    // A retried escalate finds the route taken and still records the outcome once.
+    let again = send(
+        &app,
+        post_json_with(
+            &resolve_path(item),
+            &body(
+                "k-f",
+                rev,
+                "escalate",
+                "policy の file を main に入れるのは operator の操作",
+                packet_to(&env, inbox_id, task.id, "operator"),
+            ),
+            &headers,
+        ),
+    )
+    .await;
+    assert_eq!(again.status.as_u16(), 200, "{}", again.text());
+    assert_eq!(count(&env, "SELECT COUNT(*) FROM notifications"), 0);
 }

@@ -1133,6 +1133,7 @@ impl Builder<'_> {
             AttentionItem::PlanApproval {
                 task,
                 plan_version,
+                reasons,
                 summary,
                 stages,
                 decision_ids,
@@ -1140,7 +1141,13 @@ impl Builder<'_> {
                 ..
             } => {
                 let path = format!("/api/v1/tasks/{}/execution/plan-gate", task.id);
+                // ADR 2026-11-12-cos-triage-scope D4: the reasons (`near_limit:` …) are in the body,
+                // so the triage match and the person read why a person approves this plan.
                 let detail = std::iter::once(summary.clone())
+                    .chain(
+                        (!reasons.is_empty())
+                            .then(|| format!("承認の理由: {}", reasons.join(", "))),
+                    )
                     .chain(
                         stages
                             .iter()

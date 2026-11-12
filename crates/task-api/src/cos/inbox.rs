@@ -586,11 +586,12 @@ async fn resolve(
                     )? {
                         return Err(reject(human_required_problem(&why)));
                     }
-                    crate::inbox_notifications::validate_answer(found, input)
-                        .map_err(|e| reject(unprocessable("validation", e.detail())))?;
+                    // ADR 2026-11-12-cos-triage-scope D1: what a person keeps, whatever the answer.
                     if let Some(reserved) = reserved(store, &item.source_kind, Some(found))? {
                         return Err(reject(basis::reserved_for_human(reserved)));
                     }
+                    crate::inbox_notifications::validate_answer(found, input)
+                        .map_err(|e| reject(unprocessable("validation", e.detail())))?;
                     let Some(routine) = req.basis.as_ref() else {
                         return Err(reject(basis::missing()));
                     };

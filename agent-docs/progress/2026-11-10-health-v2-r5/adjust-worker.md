@@ -1,10 +1,13 @@
 ---
 title: 健全性v2 R5 adjust-worker — worker 結合試験の束ね
-status: blocked
+status: done
 tasks: [01M6TYVJT53598CPKMGSQGA7XM]
-updated: 2026-11-11
+updated: 2026-11-12
+completed: 2026-11-11
 ---
 # 健全性v2 R5 adjust-worker — worker 結合試験の束ね
+
+完了日: 2026-11-11（status は 2026-11-12 に unit adr-tables が blocked から done に直した。下の「未解決事項」）
 
 基準は `$CELERIS_WU_BASE`。R2・R3 の main 取り込み後に実施。R4 は含まず、R4 後の調整は R6 が行う。
 
@@ -20,7 +23,7 @@ updated: 2026-11-11
 ## 変更
 - `phase 1: bundle task-worker integration test targets`。
 - `browser_eval_surface_suite`: browser_control_gate_wire・browser_live_cross・browser_loopback_prod_build・browser_prod_admission・browser_shared_cdp_events。
-- `browser_eval_surface_browser_action_recovery_py_suite`: browser_action_recovery。fixture が違うため他の束に混ぜず、Python fixture の include に `../` を足す。Python file 自体は動かさない。
+- `browser_eval_surface_browser_action_recovery_py_suite`: browser_action_recovery。fixture が違うため他の束に混ぜず、Python fixture の include に `../` を足す。Python file 自体は動かさない。後の unit worker-singleton がこの 1 件だけの束を消し、`crates/task-worker/tests/browser_action_recovery.rs` を元の test target（keep）に戻した（[worker-singleton.md](worker-singleton.md)）。
 - browser_restore_deliver は実 browser・userns を使うため keep。reap_finished_children は waitpid(-1) が同じ process の子を回収するため keep。その結果、相手の無くなった ssh_cluster_manual も keep。inventory の分類・理由・summary を更新した。ADR の更新は write set 外なので基準版に戻し、実装との差はこの進捗に記録する。検査器と base の走査結果は変えていない。
 - browser_live_cross は偽 Chrome・偽 SessionBackend の試験で実 browser・userns は使わない。userns_gate を使う全 target と ssh_localhost は元の path のまま。nextest の binary_id filter は変更不要。
 - source 内は変更しない。試験関数は削除・追加せず、契約・assertion は全て維持するため限定 mutation は不要。
@@ -68,7 +71,16 @@ updated: 2026-11-11
 - 修正 commit: `phase 2: repair adjust-worker scope and progress link`。
 
 ## 未解決事項
-受け入れ条件1の test-affected は未合格。src 内の既存試験 launch_notice_tests の a_spawn_failure_keeps_the_notice・a_failed_notice_prevents_the_spawn・notice_is_called_before_the_process_is_spawned が codex の通知0回で失敗する。対象 file と codex.rs は WU 基準から差分無し。Codex fixture は既定の環境を使い、codex.rs は起動前に CODEX_HOME/rules へ規則を書き込む。一方 codex/tests.rs の stub_codex は CODEX_HOME を一時ディレクトリに隔離している。継承環境での書き込み失敗が疑われるが、run の戻り値を最初の試験が捨てるため詳細なエラーは未確認。src は Objective で変更禁止なので変更しない。plan_issue として src の fixture の調査・隔離修正を許可する別 leaf を求める。
+- 受け入れ条件 1 の test-affected は、この run（再試行）では exit 100 だった。src の既存試験 `launch_notice_tests` の 3 件
+  （`a_spawn_failure_keeps_the_notice`・`a_failed_notice_prevents_the_spawn`・`notice_is_called_before_the_process_is_spawned`）が
+  codex の通知 0 回で落ちた。対象 file（`crates/task-worker/src/launch_notice_tests.rs`）と codex.rs は WU の基準から差分が無く、R5 はこの file を変えていない。
+- その後の run では 3 件とも合格し、再発していない（2026-11-12 に unit adr-tables が確かめた記録）:
+  - R5 の進捗 [2026-11-10-health-v2-r5.md](../2026-11-10-health-v2-r5.md) の「未解決事項」: resync-g4 と後の test-affected・measure-run では合格した。
+  - [measure-run.md](measure-run.md)・[run-worker.md](run-worker.md): `cargo nextest run -p task-worker`（lib の unit 試験を含む）を HEAD で 2 回・base で 1 回走らせ、3 回とも 1283 件合格・失敗 0。
+  - [worker-singleton.md](worker-singleton.md): `bash scripts/dev/test-affected.sh` → exit 0（対象 7 crate に task-worker を含む。nextest 5945 件合格・22 skip）。
+  - [adr-tables.md](adr-tables.md): `cargo nextest run -p task-worker --lib -E 'test(launch_notice_tests::)'` → exit 0、4 件合格（上の 3 件を含む）。
+- 原因は未確認のまま（継承した環境の `CODEX_HOME` への規則の書き込みの失敗の疑い。`codex/tests.rs` の `stub_codex` は `CODEX_HOME` を一時 dir に隔離するが、この fixture は既定の環境を使う）。再発したら、最初の試験が捨てている run の戻り値を出して調べる。src は R5 の write set の外なので、この unit では変えていない。
 
 ## 提案
-段 record の owner が、上記 keep の理由と6 target の移動を ADR の付記に反映する。
+- ADR への反映（keep の理由と 6 target の移動）は unit adr-tables が ADR [2026-11-10-test-target-bundles.md](../../adr/2026-11-10-test-target-bundles.md) の D3・段 final の表・付記「実装との突き合わせ」の adjust-worker の行に書いた。
+- `launch_notice_tests` の fixture を `codex/tests.rs` の `stub_codex` と同じく `CODEX_HOME` を一時 dir に隔離する変更を、src を変えてよい task（R6 か別の task）で検討する。

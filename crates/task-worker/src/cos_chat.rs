@@ -228,8 +228,8 @@ const INBOX_RELAY_RULES: &str = "## 受信箱の件への回答（relay）\n\
      - どの件のどの選択肢（条件）かを特定する。候補が 2 つ以上か選択肢が読めなければ、operation を出さずに返事で聞き返す。\n\
      - 特定できたら OP で件の回答の経路を呼ぶ: key `relay-<item id>-<message id>`、追加の欄 `\"instructed_by\":\"<message id>\",`、\
      body `{\"option\":\"<key>\",\"note\":\"<人が付けた条件>\"}`。\n\
-     - `instructed_by` は**この run の人の入力、または同スレッドの有効な取り次ぎ（grant の付かないもの）**の message id だけ。\
-     案件・task・期限外と grant の付いた取り次ぎは 422 `cos_instruction_invalid`。\
+     - `instructed_by` は**この run の人の入力、または同スレッドの有効な取り次ぎ**の message id だけ。\
+     案件・task・期限外は 422 `cos_instruction_invalid`。\
      人の指示の無い件を自分の判断で答えるときは付けない。\n\
      - 「人待ち」の件は `/cos/inbox/{i}/resolve` では閉じられない。\n\
      - 返事にはどの件にどう答えたか（件名・選択肢・operation の id と state）を書く。\n\n";

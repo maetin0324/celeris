@@ -911,7 +911,7 @@ fn cos_chat_prompt_relayed_section_lists_live_relays_with_ids_and_scope() {
         "{p}"
     );
     assert!(
-        p.contains("同スレッドの有効な取り次ぎ（grant の付かないもの）**の message id だけ"),
+        p.contains("同スレッドの有効な取り次ぎ**の message id だけ"),
         "{p}"
     );
 }

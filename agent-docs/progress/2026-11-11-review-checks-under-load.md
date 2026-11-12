@@ -20,6 +20,37 @@ updated: 2026-11-12
   を足した（ADR 2026-11-11 unit-task-dependencies D7 と同じ方針）。
 - `celerisctl scratch status` が枠の使用中と、枠を待つ検査（label・開始時刻・理由）を出す。
 
+## attempt 4（final review 01M78EKC7W の criterion 3・5 の不備の直し: Rust の枠の取得も CELERIS_CHECK_SLOT を守る）
+- 不備: ADR D3.2 の「`CELERIS_CHECK_SLOT` があれば取り直さない」を守るのが shell だけで、dispatcher は検査の度に process の
+  env から host の枠を開いていた。test-affected.sh・test-parallel.sh が枠を持つ間、dispatcher の review 系の試験が本物の host の
+  枠の dir に 2 本目を取りに行き、枠が全部使用中だと 4 件が落ちた。
+- 直し（task-worker `check_slots`）: 枠の取得元を `SlotSource`（`Host(CheckSlots)`・`Held(<lock の path>)`）にした。純粋な
+  `SlotSource::resolve` が `CELERIS_CHECK_SLOT` を dir・数より先に見る（shell と同じ順）。held なら `SlottedWorkspace` は重い
+  command も枠を取らず、その path を `CELERIS_CHECK_SLOT` で渡してすぐ走らせる。dir を決められないときの warn 1 行は起動時の
+  `SlotSource::resolve_or_warn` に移した（包まない扱いは同じ）。検査 1 件の上限と取得元は `CheckLimits`（`wrap` で包む）に
+  まとめた。env を検査の度に読む入口（旧い daemon 用の包む関数と `SlottedWorkspace` の env から包む関連関数）は消した。
+- 直し（task-dispatch・celeris）: `DispatchConfig::check_slots` を足した。本番は `Config::dispatch_config` が
+  `SlotSource::from_env` で決め、dispatcher は起動時の値を使う（`apply_dispatch_config` は入れ替えない。この関数は file の
+  行数の上限のため `dispatcher/housekeeping.rs` に移した）。review・WU・段の統合の検査は `CheckLimits::wrap` で包む。
+  試験の DispatchConfig は `test_check_slots()`（process に 1 つの一時 dir の枠 64 本、`atexit` で消す）、dagbench は `None`
+  （検査が合成の軽い command。理由は注釈）。
+- 試験: `check_slots::tests::a_held_slot_is_not_taken_again_by_rust_or_the_shell_lib`（一時 dir の枠を全部持ち、
+  `CELERIS_CHECK_SLOT` を渡すと Rust も bash も待たずに走り、path を変えず dir に file を増やさない。held が無ければ両方が待つ）、
+  `dispatcher::tests::review::a_heavy_review_check_takes_the_injected_slot_and_receives_its_path`（review の重い検査が注入した
+  一時 dir の枠の path を受け取り、検査の後の dir は `slot-0.lock` だけ）。ADR の D3 と付記を直した。D8 は変えない。
+
+### attempt 4 の証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
+- 外から枠を全部持つ: `flock -x $d/slot-0.lock sleep 900` の下で `CELERIS_CHECK_SLOTS_DIR=$d CELERIS_CHECK_SLOTS=1 cargo nextest
+  run -p task-dispatch --lib -E 'test(/dispatcher::tests::(review|lane_assist|decision_log|routing_context|mlsys_mock_e2e)/)'`
+  → 66 passed（attempt 3 では 4 件 failed）。`$d` は試験の後も `slot-0.lock` だけ。
+- `cargo nextest run -p task-worker --lib -E 'test(/check_slots::/)'` → 8 passed。
+- `bash scripts/dev/check-health.sh`（commit した HEAD）→ verdict=pass exit 0（worsened 0）。`spawn_review` は 745 行（main 748）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `bash scripts/dev/test-affected.sh` → exit 100（859 秒、load 20〜29、7 crate、nextest 5995 件中 5994 passed・1 failed）。
+  落ちたのは変更範囲外の `task-worker ssh::tests::remote_command_times_out_and_kills_the_ssh_process_group`（偽 ssh の子が残ったと
+  判定）。同じ試験を単独で 3 回走らせて 3 回とも合格した。負荷で落ちる既知の ssh の試験と同じ形。run の時間の残りが足りず、
+  test-affected 全体の再実行はしていない（未確認）。
+
 ## attempt 3（final review 01M78AJAY9 の criterion 4 の不備 2 点と advisory 1 点の直し）
 - 枠の dir を host の local にした。既定は `${CELERIS_CHECK_SLOTS_DIR:-$XDG_RUNTIME_DIR/celeris/check-slots}`（以前の既定は
   nfs4 の共有 home の下で、別の host と枠を取り合い、`waiting/` の pid を local の `/proc` で誤って判定した）。home に落ちる

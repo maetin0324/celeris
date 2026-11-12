@@ -1192,3 +1192,237 @@ async fn cex_integration_restart_after_the_integration_unit_is_done_does_not_int
         1
     );
 }
+
+/// 実行中の worker を終了直前に止める。試験は store の lease を見てから gate を開ける。
+struct HumanGateAdapter {
+    gate: tokio::sync::Semaphore,
+    returned: tokio::sync::Notify,
+    terminal: Terminal,
+}
+
+impl HumanGateAdapter {
+    fn new(terminal: Terminal) -> Arc<Self> {
+        Arc::new(Self {
+            gate: tokio::sync::Semaphore::new(0),
+            returned: tokio::sync::Notify::new(),
+            terminal,
+        })
+    }
+}
+
+#[async_trait]
+impl WorkerAdapter for HumanGateAdapter {
+    fn id(&self) -> &str {
+        "instant"
+    }
+    async fn run(
+        &self,
+        _req: RunRequest,
+        _run_id: &str,
+        _limits: RunLimits,
+        _sink: &dyn EventSink,
+    ) -> Result<RunOutcome, AdapterError> {
+        self.gate.acquire().await.unwrap().forget();
+        self.returned.notify_one();
+        Ok(RunOutcome {
+            terminal: self.terminal.clone(),
+            exit_code: Some(0),
+        })
+    }
+}
+
+async fn release_human_worker(adapter: &HumanGateAdapter) {
+    adapter.gate.add_permits(1);
+    tokio::time::timeout(Duration::from_secs(60), adapter.returned.notified())
+        .await
+        .expect("worker reached its return");
+    tokio::task::yield_now().await;
+}
+
+fn human_task(dir: &Path) -> Task {
+    new_task(
+        dir,
+        Check::Command {
+            cmd: "true".into(),
+            expect_exit: 0,
+        },
+        0,
+    )
+}
+
+/// 不変条件: gate で止めた run より先に人が cancel を確定したら、成功の完了は Cancelled を上書きせず review・統合・Done に進まない。
+/// 既存の試験で検出できない理由: a_run_aborted_by_cancel_closes_its_runs_row は遅延中に abort するだけで、cancel の後に成功を返す順序と禁止する遷移を確認しない。
+#[tokio::test]
+async fn cex_human_cancel_precedes_successful_worker_completion() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = human_task(dir.path());
+    let id = task.id;
+    store.insert(&task).unwrap();
+    let adapter = HumanGateAdapter::new(done_outcome().terminal);
+    let mut d = dispatcher(store.clone(), adapter.clone(), 1);
+    let s = store.clone();
+    assert!(run_until_state(&mut d, || s.get(id).unwrap().unwrap().lease.is_some()).await);
+    let run = store.get(id).unwrap().unwrap().lease.unwrap().worker_run_id;
+    store.apply_transition(id, Trigger::Cancel, None).unwrap();
+    release_human_worker(&adapter).await;
+    let s = store.clone();
+    assert!(
+        run_until_state(&mut d, || s
+            .run_index_get(&run)
+            .unwrap()
+            .unwrap()
+            .finished_at
+            .is_some())
+        .await
+    );
+    assert_eq!(status_of(&store, id), Status::Cancelled);
+    assert!(
+        !transitions(&store, id)
+            .iter()
+            .any(|(to, _)| matches!(to, Status::Reviewing | Status::Done))
+    );
+    assert_eq!(reviewer_starts(&store, id), 0);
+    assert!(phase_integrated(&store, id).is_empty());
+    assert!(store.delivery_get(id).unwrap().is_none());
+    assert!(store.get(id).unwrap().unwrap().lease.is_none());
+}
+
+/// 不変条件: 人の pause の後に実行中の run が continuation を返しても paused_at は残り、Ready から次の run を起こさない。
+/// 既存の試験で検出できない理由: task_waits の paused ancestor は起動前の状態だけを作り、run の終了処理による pause の保存と continuation の抑止を通さない。
+#[tokio::test]
+async fn cex_human_pause_survives_completion_and_holds_continuation() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = human_task(dir.path());
+    let id = task.id;
+    store.insert(&task).unwrap();
+    let adapter = HumanGateAdapter::new(Terminal::Yielded {
+        checkpoint: serde_json::json!({"completed":["one"],"remaining":["two"],"next_action":"continue"}),
+        usage: None,
+    });
+    let mut d = dispatcher(store.clone(), adapter.clone(), 1);
+    let s = store.clone();
+    assert!(run_until_state(&mut d, || s.get(id).unwrap().unwrap().lease.is_some()).await);
+    let now = store.get(id).unwrap().unwrap().updated_at;
+    let (next, event) =
+        task_ops::lifecycle::plan_set_paused(store.as_ref(), id, true, "human", now).unwrap();
+    store.update_task(&next, event).unwrap();
+    release_human_worker(&adapter).await;
+    let s = store.clone();
+    assert!(run_until_state(&mut d, || status_of(&s, id) == Status::Ready).await);
+    for _ in 0..3 {
+        let report = d.tick().unwrap();
+        assert_eq!(report.dispatched, 0, "{report:?}");
+        assert_eq!(store.get(id).unwrap().unwrap().paused_at, Some(now));
+        assert!(store.get(id).unwrap().unwrap().lease.is_none());
+    }
+    assert_eq!(
+        count(&store, id, |e| matches!(
+            e,
+            Event::WorkerStarted { role: None, .. }
+        )),
+        1
+    );
+    assert!(!reached_done(&store, id));
+}
+
+/// 不変条件: 未回答の worker の質問は tick の housekeeping を通しても未回答で、run・review・Done を起こさない。
+/// 既存の試験で検出できない理由: review の question 試験は最初の Blocked を確認するだけで、その後の tick の起動数と回答 event の不在を確認しない。
+#[tokio::test]
+async fn cex_human_unanswered_question_stays_blocked_across_housekeeping() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("human.db");
+    let sqlite = Arc::new(SqliteStore::open(&db_path).unwrap());
+    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let task = human_task(dir.path());
+    let id = task.id;
+    store.insert(&task).unwrap();
+    let approval = task_core::approval::Approval {
+        id: task_core::approval::ApprovalId::new(),
+        project_id: None,
+        node_id: "human-test".into(),
+        task_id: Some(id),
+        question: "which option?".into(),
+        decision: None,
+        answer: None,
+        created_at: task.created_at - time::Duration::days(2),
+        decided_at: None,
+    };
+    store.approval_append(&approval).unwrap();
+    let adapter = HumanGateAdapter::new(Terminal::Question {
+        text: "which option?".into(),
+        usage: None,
+    });
+    let mut d = dispatcher(store.clone(), adapter.clone(), 1);
+    d.set_cos_chat_launch(
+        sqlite,
+        crate::dispatcher::cos_chat::launch::CosChatLaunchConfig {
+            enabled: false,
+            worker_reserve_five_hour: 0.90,
+            harness: "fake".into(),
+            max_turns: 2,
+            max_wall_secs: 30,
+            inline_read_max_commands: 20,
+            unavailable_reason: None,
+            data_dir: dir.path().to_path_buf(),
+            db_path: db_path.clone(),
+            attachment_limits: Default::default(),
+            api_base_url: "http://127.0.0.1:1/api/v1".into(),
+            web_base_url: None,
+            triage: Default::default(),
+        },
+    );
+    let s = store.clone();
+    assert!(run_until_state(&mut d, || s.get(id).unwrap().unwrap().lease.is_some()).await);
+    release_human_worker(&adapter).await;
+    let s = store.clone();
+    assert!(
+        run_until_state(&mut d, || status_of(&s, id) == Status::Blocked
+            || terminal(&s, id))
+        .await
+    );
+    d.set_stagnation(Default::default(), 0);
+    // これは待ちではなく、停止した状態に対する各 pass の検査。
+    for _ in 0..3 {
+        let report = d.tick().unwrap();
+        assert_eq!(
+            (report.dispatched, report.reviewed, report.in_flight),
+            (0, 0, 0),
+            "{report:?}"
+        );
+        assert_eq!(status_of(&store, id), Status::Blocked);
+        assert_eq!(
+            store.approval_get(approval.id).unwrap(),
+            Some(approval.clone())
+        );
+    }
+    assert_eq!(
+        count(
+            &store,
+            id,
+            |e| matches!(e, Event::WorkerFinished { outcome, .. } if outcome == "question: which option?")
+        ),
+        1
+    );
+    assert_eq!(
+        count(&store, id, |e| matches!(e, Event::Answered { .. })),
+        0
+    );
+    assert_eq!(
+        count(&store, id, |e| matches!(
+            e,
+            Event::WorkerStarted { role: None, .. }
+        )),
+        1
+    );
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    let routes: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM cos_inbox_items WHERE source_kind='authorization' AND state='fallback'",
+        [], |row| row.get(0),
+    ).unwrap();
+    assert_eq!(routes, 1, "CoS 不在の退避を実際に通す");
+    assert!(store.work_units_for(id).unwrap().is_empty());
+    assert!(store.get(id).unwrap().unwrap().lease.is_none());
+    assert!(!reached_done(&store, id));
+}

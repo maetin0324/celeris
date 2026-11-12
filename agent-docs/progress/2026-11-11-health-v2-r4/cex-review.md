@@ -2,7 +2,7 @@
 title: "健全性v2 R4 cex-review: review・統合・権限・予算の反例試験"
 tasks: [01M75475JER9MAVHY9BTHCRXH9]
 status: running
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 # 健全性v2 R4 cex-review: review・統合・権限・予算の反例試験
 
@@ -141,3 +141,73 @@ fake の reviewer は `review.json` に criterion 0〜7 の判定を書く。配
 ### 提案
 
 - `finish_phase_integration` の統合 WU の done と、Task の遷移・`PhaseIntegrated` を 1 つの store の書き込みにする（または、再起動の照合が `integrated_commit` を持つ done の統合 WU に `PhaseIntegrated` が無ければ記録し直す）。R4 で統合の完了の owner を分けるときに、上の反例の assert（`PhaseIntegrated` が 1 件）を足す。
+
+## 節: human
+
+### 作業前 brief
+
+1. 根本原因: 人の操作と run の完了の順序を gate で固定し、未回答のまま housekeeping を通す試験が不足している。
+2. 責務 owner: `dispatcher/leases.rs` の古い run の中止、`worker_finish.rs` の lease 照合、dispatch の pause 判定、質問の Blocked 遷移。
+3. 再利用先: `run_until_state`、`dispatcher`、`new_task`、API と同じ `task_ops::lifecycle::plan_set_paused`、store の遷移と索引。
+4. 選択肢: private field による停止は使わず fake adapter の semaphore で終了を制御する。pause は continuation の完了後の Ready で確認する。
+5. 新しい状態・分岐・fallback・port: 無し（試験だけ）。
+6. 撤去対象: 無し。
+7. 不変条件: cancel を完了で上書きしない。pause を完了で消さず次の run を起こさない。未回答の質問を自動で解かない。
+
+### 試験と不変条件
+
+| 試験 | 不変条件 |
+|---|---|
+| `cex_human_cancel_precedes_successful_worker_completion` | run の gate を閉じたまま Cancel を store に確定し、その後 Done を返しても Cancelled を保持する。Reviewing・Done の遷移、reviewer、段の統合、delivery が無く、lease を残さない |
+| `cex_human_pause_survives_completion_and_holds_continuation` | API と同じ pause の計画・更新を run の gate を開ける前に確定する。continuation が Ready に戻っても paused_at を保存し、次の run を起こさない |
+| `cex_human_unanswered_question_stays_blocked_across_housekeeping` | 質問で Blocked にした後も tick の起動・review・実行中件数はゼロ。未決の承認行（作成は二日前）は回答・決定・決定時刻を持たないまま。CoS 無効時の退避を実際に通しても Blocked のまま、回答 event・WU・Done が無い |
+
+tick の三回の呼び出しは待ちの上限ではなく、停止済みの状態に対する各 pass の検査。状態への到達はすべて `run_until_state`、run の終了は semaphore と Notify の出来事待ちで確認する。Dispatcher の field は参照していない。CoS は公開の `set_cos_chat_launch` で無効に設定し、一時 DB の退避行を読む。ネットワークへの送信はしない。
+
+承認行付きの質問は受信箱で `authorization` に吸収される（`human_inbox/read.rs`）。退避の検査を最初に `question` の行に限定したところゼロ件で失敗したため、承認行に対応する `authorization` の退避を読むように修正した。task の状態や未回答の保持には失敗していない。
+
+### guard を一時的に外すと落ちることの確認
+
+各実行は `cargo nextest run -p task-dispatch -E 'test(/cex_review_authority::/)' --no-fail-fast`。一時変更は `git checkout --` で戻し、commit しない。store と migration は一時変更でも触っていない。
+
+| guard（一時変更） | 落ちた試験・assert・観測 |
+|---|---|
+| GH1 `task-core/src/wait.rs` の `halt_waits`: 自分の paused_at 判定を `false && …` にする（1 行） | `cex_human_pause_survives_completion_and_holds_continuation` の `assert!(run_until_state(.. Ready ..).await)` が 60 秒の保険で false。Ready を観測する前に次の run が起動する |
+| GH2 `dispatcher/worker_finish.rs`: 質問の完了を `Trigger::WorkerQuestion` から `Trigger::WorkerDone` にする（1 行） | `cex_human_unanswered_question_stays_blocked_across_housekeeping` の `assert_eq!(status, Blocked)`。実際は Done |
+
+GH1・GH2 を同じ build で確認し、10 本中 8 本合格・上の 2 本失敗、exit 100。既存の review・integration の 7 本と cancel は合格。
+
+| guard（一時変更） | 結果 |
+|---|---|
+| GH3 `dispatcher/worker_finish.rs`: 終了処理の入口の `if !lease_matches` を `false && …` にする（1 行） | 10 本すべて合格、exit 0。cancel の試験はこの guard 単独の除去を検出しなかった |
+
+### 確かめられなかった guard
+
+- GH3 の単独の除去では cancel の反例は成立しなかった。`abort_stale_runs` の中止、状態機械の遷移の検査、終了処理の失敗時の lease 照合も残るため、入口の照合だけを守る試験にはなっていない。gate で成功を返す順序は作っているが、worker の後処理から完了 channel に送るまでを直接観測しないので、どの防御が止めたかは未確認。複数の防御をまとめて外す追加実験はしていない。
+- 質問への人の回答・計画の decision の適用経路は今回の worker 質問の試験の対象外。計画の decision の既存試験は変更していない。
+
+### 反例
+
+今の実装で成り立たない人の権限の反例は見つからなかった。退避の分類を限定しすぎた試験の修正は上記のとおり。
+
+### 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+
+- `cargo nextest run -p task-dispatch -E 'test(/cex_review_authority::/)' --no-fail-fast`: 本体の全一時変更を復元後、10 本すべて合格・1670 本 skip、exit 0（追加 human 3 本、既存 review 4 本・integration 3 本）。
+- guard の確認は上の表のとおり。GH1・GH2 は失敗を検出、GH3 は単独の除去を検出できなかった。`git diff --name-only` で本体の変更はゼロ。
+- 規約: `awk` で試験 10 本すべてに不変条件と既存試験との差の doc comment を確認（bad=0、exit 0）。禁止された待ちの helper と thread sleep はゼロ件。Dispatcher の private field の読み書きはゼロ件。
+- `sh scripts/dev/progress-index.sh --check`: exit 0。`sh "$CELERIS_WU_SCOPE_PATHS"`: exit 0、変更 path はこの記録と `cex_review_authority.rs` の二件。
+- `bash scripts/dev/test-affected.sh --list`: celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch の五 crate。
+- `bash scripts/dev/test-affected.sh`: exit 0。health は pass（新規・悪化ゼロ）、検査器の unit 78 本合格。nextest は 3732 本合格・11 本 skip（335 秒）、doc test は四 suite が合格（各ゼロ本）。ただし control-ts の offline install が失敗し、bundle に依存する 59 件は試験内で早期 return した（`script bundle SKIP: 59 件`）。今回の変更は dispatcher の試験とこの記録だけで、この場合は script が bundle 不足を非致命として扱う。59 件を実行済みとは扱わない。追加した human 3 本と既存の review・integration 7 本は別途すべて実行し合格している。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+- `sh scripts/dev/check-doc-links.sh`: exit 0（ok）。`sh scripts/dev/check-adr-numbers.sh`: exit 0（419 files）。
+- 最後の同期以降に上記の検査を実行し、その後の変更はこの記録への結果追記だけ。検査後の code の変更は無い。
+
+### 完了・未解決・提案
+
+human の完了日: 2026-11-12。後続の credential・budget と全節の記録は別 unit のため、ファイル全体の status は running のまま。
+
+commit 件名: `phase 1: 人の cancel・pause・未回答質問の反例試験を固定する`。
+
+未解決: GH3 単独の除去は検出できなかった。bundle 不足の 59 件の実行は今回未確認。これ以外に今回の受け入れ条件の未解決は無い。本番への移行は不要。
+
+提案: 無し（本体の変更は行っていない）。

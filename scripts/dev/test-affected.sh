@@ -441,6 +441,13 @@ if [ -n "$crates" ]; then
       echo "test-affected: bundle を作れない（$why）。CELERIS_SCRIPT_BUNDLE_DIR を渡さない" >&2
     fi
   fi
+  # ADR 2026-11-12-host-check-slots D3: host 共通の枠を取ってから nextest を始め、並列度を枠に合わせる。
+  # 並列度は NEXTEST_TEST_THREADS（nextest の --test-threads の env）で渡し、nextest の行は上の「cargo の呼び方」の
+  # とおりに保つ（rebuild-check.sh がこの行を照合する）。
+  # shellcheck source=lib/check-slot.sh
+  . "$root/scripts/dev/lib/check-slot.sh"
+  check_slot_acquire "test-affected $(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)" || exit 2
+  export NEXTEST_TEST_THREADS="$CHECK_SLOT_TEST_THREADS"
   ttl_run cargo nextest run --workspace -E "$filter"
   ttl_run cargo test --doc --workspace
   if [ -n "$skip_log" ]; then

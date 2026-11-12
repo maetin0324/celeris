@@ -515,7 +515,11 @@ fn result_json_instructions(artifacts: &str) -> String {
          If you cannot proceed and need a decision from a human, instead write \
          `{{\"question\": \"<your question>\"}}` to `{artifacts}/result.json` and stop there. This is a \
          non-interactive run: you cannot ask a question any other way, and no one will read your final \
-         chat message directly.\n\n{rules}",
+         chat message directly. \
+         Do not use a question (or a decision or approval) to wait for host load or resources: Celeris \
+         itself makes heavy checks wait for a host check slot and does not count that wait in their timeout \
+         (ADR 2026-11-12-host-check-slots). If a check times out or a test fails only under load, report the \
+         result as it is in `summary` and do not ask a human to answer once the load is lower.\n\n{rules}",
         rules = crate::human_text::HUMAN_TEXT_RULES
     )
 }

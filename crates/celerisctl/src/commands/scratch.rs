@@ -333,6 +333,10 @@ pub fn run(cli_db: Option<PathBuf>, command: ScratchCommand) -> Result<ExitCode,
                 outln!("{body}");
             } else {
                 print_status(&status);
+                // ADR 2026-11-12-host-check-slots D6: host 共通の検査の枠（使用中と、枠を待つ検査と理由）。
+                if let Some(slots) = task_worker::check_slots::CheckSlots::from_env() {
+                    print_check_slots(&slots.status());
+                }
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -459,6 +463,29 @@ fn gc(
     }
     out.push_str(&format!("{} candidate(s)\n", picks.len()));
     Ok(out)
+}
+
+/// ADR 2026-11-12-host-check-slots D6: 枠の一覧と、枠を待つ検査（label・開始・理由）。
+fn print_check_slots(s: &task_worker::check_slots::SlotStatus) {
+    outln!(
+        "check slots {} · {} / {} in use · {} waiting",
+        s.dir.display(),
+        s.held.len(),
+        s.slots,
+        s.waiting.len()
+    );
+    for h in &s.held {
+        outln!("  slot {} since {}: {}", h.slot, h.since, h.label);
+    }
+    for w in &s.waiting {
+        outln!(
+            "  waiting since {} (pid {}): {} — {}",
+            w.since,
+            w.pid,
+            w.label,
+            w.reason
+        );
+    }
 }
 
 fn print_status(s: &task_ops::daemon::ScratchStatus) {

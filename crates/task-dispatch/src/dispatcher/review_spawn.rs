@@ -972,11 +972,15 @@ impl Dispatcher {
                     workspace: if index == 0 {
                         None
                     } else {
-                        Some(Box::new(
-                            LocalWorkspace::new(&dir)
-                                .with_work_dir(repo.dir.clone())
-                                .with_cargo_env(review_check_env.clone()),
-                        ) as Box<dyn Workspace>)
+                        // ADR 2026-11-12-host-check-slots D3: 重い検査は host 共通の枠を取ってから走らせる。
+                        Some(task_worker::check_slots::SlottedWorkspace::wrap(
+                            Box::new(
+                                LocalWorkspace::new(&dir)
+                                    .with_work_dir(repo.dir.clone())
+                                    .with_cargo_env(review_check_env.clone()),
+                            ),
+                            format!("review {task_id} {}", repo.name),
+                        ))
                     },
                 });
             }
@@ -1005,14 +1009,19 @@ impl Dispatcher {
                     }
                     Box::new(ssh)
                 }
-                None => Box::new(
-                    match review_work_dir {
-                        Some(work) if work.is_dir() => {
-                            LocalWorkspace::new(&dir).with_work_dir(work)
+                // ADR 2026-11-12-host-check-slots D3: local の検査は host 共通の枠を取ってから走らせる
+                // （枠の待ちは timeout に数えない）。remote（ssh）は remote の host の資源なので包まない。
+                None => task_worker::check_slots::SlottedWorkspace::wrap(
+                    Box::new(
+                        match review_work_dir {
+                            Some(work) if work.is_dir() => {
+                                LocalWorkspace::new(&dir).with_work_dir(work)
+                            }
+                            _ => LocalWorkspace::new(&dir),
                         }
-                        _ => LocalWorkspace::new(&dir),
-                    }
-                    .with_cargo_env(review_check_env),
+                        .with_cargo_env(review_check_env),
+                    ),
+                    format!("review {task_id}"),
                 ),
             };
             let extras = ReviewExtras {

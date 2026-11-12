@@ -155,9 +155,13 @@ pub(super) async fn run_integration_checks(
             log_path.display().to_string(),
         );
         let clock = std::time::Instant::now();
-        let check_ws = ws.clone().with_output_log(&log_path);
+        // ADR 2026-11-12-host-check-slots D3: 重い検査は host 共通の枠を取ってから走らせる（待ちは timeout に数えない）。
+        let check_ws = task_worker::check_slots::SlottedWorkspace::wrap(
+            Box::new(ws.clone().with_output_log(&log_path)),
+            format!("task {task_id} {}", observed.key),
+        );
         let outcome = crate::review::exec_check_outcome(
-            &check_ws,
+            check_ws.as_ref(),
             &c.cmd,
             c.expect_exit,
             command_timeout,

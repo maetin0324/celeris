@@ -48,10 +48,12 @@ if [ "$have_ver" != "$pin" ] && [ "${CELERIS_NEXTEST_ANY_VERSION:-0}" != 1 ]; th
 fi
 
 ncpu="$(nproc 2>/dev/null || echo 4)"
-jobs_default=$((ncpu / 3))
-[ "$jobs_default" -lt 2 ] && jobs_default=2
-[ "$jobs_default" -gt 8 ] && jobs_default=8
-jobs="${CELERIS_TEST_JOBS:-$jobs_default}"
+# ADR 2026-11-12-host-check-slots D3: 準備の build の前に host 共通の枠を取り、nextest の並列度を枠に合わせる
+# （review の検査・worker の test-affected と同じ上限に従う）。
+# shellcheck source=lib/check-slot.sh
+. "$here/scripts/dev/lib/check-slot.sh"
+check_slot_acquire "release gate test-parallel $(git rev-parse --short=12 HEAD 2>/dev/null || echo HEAD)" || exit 2
+jobs="${CELERIS_TEST_JOBS:-$CHECK_SLOT_TEST_THREADS}"
 
 # userns の preflight（ADR-0126 B2/B4）: release gate と同じ env（CELERIS_USERNS_TESTS=1 か CELERIS_ISOLATION_TESTS=require）
 # なのに unprivileged user namespace が作れない host では、実 bwrap / unshare / launcher の試験が「Operation not permitted」で

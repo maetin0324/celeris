@@ -42,7 +42,7 @@ try:
     from health import engine, profile as profile_mod, snapshot  # noqa: E402
     from health.snapshot import UsageError  # noqa: E402
     _IMPORT_FAULT: Exception | None = None
-except ImportError as _exc:  # 検査器の写しが欠けている。契約では検査器の故障は error（exit 2）
+except Exception as _exc:  # noqa: BLE001 — 欠けた module・構文誤り・import 時の例外。検査器の故障は error（exit 2）
     _IMPORT_FAULT = _exc
 
     class UsageError(Exception):  # type: ignore[no-redef]

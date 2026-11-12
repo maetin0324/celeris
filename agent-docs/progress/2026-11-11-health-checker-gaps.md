@@ -13,6 +13,7 @@ updated: 2026-11-12
 - `rules/existing_checks.py`: 起動の前に `_preflight` で tool と script の有無を確かめ、無ければ unsupported（G2）。signal で終わる検査は error（G3）。
 - `test_repo_health_generic_bypass.py`: expectedFailure 2 件を外し、signal の試験を足した。
 - attempt 2: operator の差分確認（承認 task 01M76CCPPK88BRZCXMZPVKW3R6）で不合格。最初の版の script の判定（`scripts/` で始まる、`.sh`・`.py` で終わる引数）が Celeris の source-size の `python3 -m unittest discover -s scripts/tests ...` の `scripts/tests` を script とみなし、source-size を unsupported（exit 2）にした。script を interpreter（sh・bash・dash・python・python3）の option の後の最初の引数だけに改め、`-c`・`-m`・`-` は script 無しにした（ADR の G2）。
+- attempt 2 の repair（reviewer の不合格）: `repo_health.py` の先頭の import が ImportError だけを捕まえていたので、`health/engine.py` の構文誤りと `health/snapshot.py` の import 時の例外が traceback の exit 1 になっていた。`except Exception` にして、どの import の失敗も `checker_import_failed` の exit 2 にした。`test_generic_checker_import_failure_is_error` に、遅れて import される scan.py の欠け・先頭の engine.py の欠け・engine.py の構文誤り・snapshot.py の import 時の例外の 4 つを置き、exit 2・report 無し・traceback 無しを確かめる（`except ImportError` に戻すと構文誤りと例外の 2 件が落ちることを手元で確かめた）。ADR の G1 に import の失敗の範囲を書き足した。試験の注釈の「checker gap G1・G2」と G4 の進捗の「未解決」を、直した ADR を指す文に直した。
 - `test_repo_health_wrapped_checks.py`（新規）: 判定の表、Celeris の profile の全 command が `_preflight` を通ること、module の実行が起動して pass になること、無い python の script が unsupported になること。最初の版の判定では 4 試験とも落ちる（手元で旧い判定に戻して確かめた）。
 
 ## 証拠（提出時の HEAD で実行）

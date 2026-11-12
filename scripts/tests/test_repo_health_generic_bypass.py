@@ -87,6 +87,14 @@ class GenericBypassTests(unittest.TestCase):
         (partial / 'health' / module).unlink()
         return partial / 'repo_health.py'
 
+    def checker_with_tail(self, module, tail):
+        """A copy of the checker in $TMPDIR whose health/<module> ends with `tail` (a fault injected at import)."""
+        broken = self.tmp() / 'tool'
+        shutil.copytree(TOOL_DIR, broken)
+        with (broken / 'health' / module).open('a', encoding='utf-8') as fh:
+            fh.write(tail)
+        return broken / 'repo_health.py'
+
     def env_with_adr_tool(self):
         """Environment whose PATH has a passing `orchard-adr-lint`, so only the absent script of doc.links is left."""
         bin_dir = self.tmp() / 'bin'
@@ -136,8 +144,8 @@ class GenericBypassTests(unittest.TestCase):
 
         The tool that is not on PATH (adr.numbers) is unsupported and makes the run an error (exit 2).  The
         absent script of doc.links is then judged alone (orchard-adr-lint stubbed on PATH): it must not pass
-        either.  Its exact status (unsupported, not fail) is the checker gap G2, kept in
-        test_generic_missing_script_unsupported.
+        either.  Its exact status (unsupported, not fail) is G2 of ADR 2026-11-11-health-checker-gaps,
+        checked in test_generic_missing_script_unsupported.
         """
         env = self.env_with_adr_tool()
         for kind, repo in self.fixtures('unsupported-tool'):
@@ -205,7 +213,7 @@ class GenericBypassTests(unittest.TestCase):
                     self.assertEqual(rules[rid]['status'], 'error', rules[rid])
                     self.assertEqual(rules[rid]['reason'], f'crashed:{rid}:RuntimeError')
         # A checker copy that lacks a health/ module writes no report and does not exit 0, so it cannot
-        # pass.  The exact exit code (2, an error) is the checker gap G1, kept in
+        # pass.  The exact exit code (2, an error) is G1 of ADR 2026-11-11-health-checker-gaps, checked in
         # test_generic_checker_import_failure_is_error.
         partial = self.checker_without('scan.py')
         for kind, repo in self.fixtures('good', kinds=('ts',)):
@@ -238,13 +246,27 @@ class GenericBypassTests(unittest.TestCase):
         Contract: ADR 2026-11-10-health-generic-fixtures (3) table (d) and ADR 2026-11-11-health-checker-gaps G1.
         Exit 1 is only a required rule that fails; repo_health.py turns an import or run failure of the
         checker itself into exit 2 with the reason on stderr and no report.
+
+        The faults cover both places a module is imported: health/scan.py is imported late (while the
+        checker runs), engine.py and snapshot.py at the top of repo_health.py.  A missing module, a syntax
+        error and an exception raised at import are all exit 2 without a traceback.  Removing only scan.py
+        (the earlier form of this test) did not reach the top-level import, where a SyntaxError or a
+        RuntimeError still escaped as a traceback with exit 1.
         """
-        partial = self.checker_without('scan.py')
+        faults = {
+            'missing-late-module': self.checker_without('scan.py'),
+            'missing-top-module': self.checker_without('engine.py'),
+            'syntax-error-at-import': self.checker_with_tail('engine.py', '\n\ndef (\n'),
+            'exception-at-import': self.checker_with_tail('snapshot.py', '\n\nraise RuntimeError("fault injected by the test")\n'),
+        }
         for kind, repo in self.fixtures('good', kinds=('ts',)):
-            with self.subTest(kind=kind, fault='missing-module'):
-                proc, report = self.check(repo, tool=partial)
-                self.assertIsNone(report)
-                self.assertEqual(proc.returncode, 2, proc.stderr[-400:])
+            for fault, tool in faults.items():
+                with self.subTest(kind=kind, fault=fault):
+                    proc, report = self.check(repo, tool=tool)
+                    self.assertIsNone(report)
+                    self.assertEqual(proc.returncode, 2, proc.stderr[-400:])
+                    self.assertIn('repo-health: checker_', proc.stderr)
+                    self.assertNotIn('Traceback', proc.stderr)
 
     # ------------------------------------------------------------------ (f)
 

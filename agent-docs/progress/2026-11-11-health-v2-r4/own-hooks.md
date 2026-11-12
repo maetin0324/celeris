@@ -33,7 +33,7 @@ updated: 2026-11-12
   `#[cfg(any(test, not(test)))]` の形も検出する（下の変異の結果。旧い assert はこの形を見逃した）。
 - 本番の build のコードは変えていない（変えたのは `#[cfg(test)]` の行と注釈だけ）。
 
-## 証拠（commit「phase 1: Dispatcher の試験用 field を test_hooks 1 個にまとめ、structure_guard で数える」の上で実行）
+## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
 - 計画の check 3（awk で `Dispatcher` の本体の `#[cfg(test)]` を数え、直後が `test_hooks:`）: exit 0。
 - `cargo nextest run -p task-dispatch -E 'test(structure_guard_) | test(phase_effect_ab) | test(integration_ready_race)'`:
@@ -42,6 +42,8 @@ updated: 2026-11-12
   `#[cfg(any(test, not(test)))]` を付けて `cargo nextest run -p task-dispatch --lib --no-fail-fast -E 'test(structure_guard_)'`:
   exit 100、6 件中 2 件失敗（`structure_guard_dispatcher_has_one_test_field`「Dispatcher has 2 #[cfg(test)] fields」、
   `structure_guard_owner_structs_have_no_test_fields`「ClusterRuntime has a #[cfg(test)] field」）。旧い `structure_guard_cluster_runtime` は合格した。
+- `bash scripts/dev/test-affected.sh`（対象 celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch）: exit 0、nextest 3750 件合格・11 件 skip、
+  壁時計 487 秒（開始 load 1、終了 load 12）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
 - `bash scripts/dev/check-health.sh`: exit 0（verdict=pass、fail_grade=0、worsened=0。new=1 は `host_maintenance.rs` の
   `migration.remnant`（warning）で、この unit が変えていない行）。

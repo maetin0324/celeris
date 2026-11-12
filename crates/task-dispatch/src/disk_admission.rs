@@ -348,7 +348,13 @@ impl Gate {
         st.admitted
             .retain(|k, (o, _)| k != &key && !writing.contains(o.as_str()));
         let admitted_bytes = st.admitted.values().map(|(_, b)| b).sum();
-        let writers = writing.len() + st.admitted.len();
+        // 「1 本は通す」の数えには release-build を入れない: release の lease は 48 時間生き、task の run が 0 本でも
+        // 増分を持つが、その build の終わりを待っても task の run の空きは戻らない（詰まる）。
+        let task_writers = writing
+            .iter()
+            .filter(|o| !o.starts_with("release-"))
+            .count();
+        let writers = task_writers + st.admitted.len();
         match decide(view, &owner, repo_key, admitted_bytes, writers) {
             Decision::Skip => {
                 st.holds.remove(&key);
@@ -658,5 +664,24 @@ mod tests {
         let low = forecast(&inputs(5 * GB, vec![old]), None);
         assert!(!empty.hold(&low, "d", None, "ap", SystemTime::UNIX_EPOCH));
         assert!(empty.hold(&low, "e", None, "ap", SystemTime::UNIX_EPOCH));
+    }
+    /// 不変条件（attempt 6 の review の指摘）: lease の生きた release-build は増分を持つが、「1 本は通す」の数えには入らない。
+    /// task の run が 0 本なら、空きが予備を割っていても 1 本は通す（release の lease は 48 時間生き、待っても空きは戻らない）。
+    /// 旧い試験は release の owner を含む走査で 0 本の規則を見ていなかった。
+    #[test]
+    fn a_live_release_build_does_not_stall_the_first_task_run() {
+        let rel = Sample {
+            owner: "release-abc".into(),
+            repo_key: "ap".into(),
+            running: true,
+            size_bytes: Some(90 * GB),
+        };
+        let seed = sample("task-p3", "ap", false, Some(90 * GB));
+        let v = forecast(&inputs(50 * GB, vec![rel, seed]), None);
+        let gate = Gate::default();
+        gate.begin_pass(|_, _| true);
+        // 空き 50 GB は予備を割るが、task の run は 0 本なので 1 本は通す。2 本目は待つ。
+        assert!(!gate.hold(&v, "t1", None, "ap", SystemTime::UNIX_EPOCH));
+        assert!(gate.hold(&v, "t2", None, "ap", SystemTime::UNIX_EPOCH));
     }
 }

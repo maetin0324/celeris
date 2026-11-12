@@ -65,7 +65,7 @@ run を起こす前（write-set の判定の後、lease の前）に、次の不
   `Gate` のメモリで数え続ける（pass をまたぐ）。走査に出たら走査の増分が数え、通した分からは外す（二重に数えない）。
   run が lease を書く前に終わった・起動の前に見送った（dispatcher の `running` に無い）ら、次の pass の始めに外す。
 - **詰まらない**: target を今書いている run（走査の今書いている owner と、通したがまだ走査に出ない run）が 1 本も
-  無ければ、見込みが足りなくても 1 本は通す（待っても空きは run の終わりでは戻らない）。Rust でない run・対話の run は
+  無ければ、見込みが足りなくても 1 本は通す（待っても空きは run の終わりでは戻らない）。この数えに release-build の lease（48 時間生きる）は入れない。release は見込みの増分には数えるが、task の run が 0 本ならそれだけで待たせない。Rust でない run・対話の run は
   数えない（target を書かないので、走っていても空きの見込みを変えない）。
 - **対象**: scratch が有効で、run の cargo の target を結び付ける repo（`cargo_target_repo`）があり、この run の
   見込みが 0 より大きいもの。Remote の run と見込み 0 の run（Rust でない repo、続きで増分が無い run）は判定しない。

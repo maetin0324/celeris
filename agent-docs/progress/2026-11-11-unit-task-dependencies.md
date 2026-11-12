@@ -26,6 +26,7 @@ updated: 2026-11-12
 - `phase 1: 進捗に attempt 2 の commit を足す`
 - `phase 1: 進捗に attempt 3 の状況を足す`
 - `phase 1: 進捗に attempt 4 の状況を足す`
+- `phase 1: instance_handoff の試験が引き継ぎの要求を出来事として待つ（review の不合格は負荷での競合）`
 
 ## review の差し戻しへの対応（attempt 2）
 - 指摘: 検証が委譲の親（`tree` を持たない子の `parent_id`）を指す `task:` 依存を通し、依存先の子を経由する循環も通した。
@@ -80,6 +81,12 @@ dispatcher module の合計・`work_units.rs`・`dispatch_one`・`validate_v3`�
 - attempt 4（2026-11-12）: コードは変えていない。main へ衝突なしで rebase し、API の schema の試験
   （`committed_schema_matches_generated`）と web の `gen-types.mjs` で生成物にずれが無いことを確かめた。`test-affected.sh` は
   exit 0、1254 秒（load average 45〜65、nextest 8318 件 736 秒）。load average 40 を超える時間帯では 1200 秒に収まらない。
+- attempt 5（2026-11-12）: attempt 4 の review は `test-affected.sh` の exit 100 で不合格だった。落ちたのは
+  `crates/celeris/tests/instance_handoff.rs` の `a_stale_heartbeat_does_not_replace_a_live_active_until_its_process_is_gone`
+  だけで、この変更の範囲外（celeris の instance の引き継ぎ）。原因は試験の競合: `Supervisor::start` は standby の行を書いてから
+  別の文で active に `handoff_requested_at` を書くが、試験は standby を見た直後に要求を 1 回だけ読んでいた。負荷が高いと
+  2 つの文の間に読む。試験は要求も `wait_until`（出来事待ち）で待つように直した。守る不変条件（standby は生きている active に
+  引き継ぎを要求し、active が生きている間は active にならない）は変えていない。本体のコードは変えていない。
 - daemon の `until_idle`（`is_idle`）は、unit が `task:` 依存だけを待つ ready の task を idle とみなさない（M10 はメモリの待ちで
   idle とみなす）。本番の常駐 daemon には効かない。試験・e2e の `until_idle` で使うときは待ち続ける。
 - 依存先の成果を自分の branch に入れる unit（既定 branch の取り込み）は今どおり計画が置く。自動では入れない。

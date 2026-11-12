@@ -211,6 +211,59 @@ async fn done_then_command_review_passes_and_events_are_recorded() {
     );
 }
 
+/// 不変条件（ADR 2026-11-12-host-check-slots D3）: review の重い検査（cargo の語を含む command）は `DispatchConfig` に注入した
+/// 枠の取得元から枠を取り、その lock の path を `CELERIS_CHECK_SLOT` で受け取る。dispatcher は検査の度に env を読まず、
+/// host の枠の dir を開かない（注入した枠の dir には検査の後に lock だけが残り、holder・waiting は残らない）。2026-11-12 の
+/// final review までは dispatcher が検査の度に process の env から host の枠を開いており、既存の試験は注入した枠が
+/// 使われることを確かめていなかった（枠が全部使用中の host で review 系の試験 4 件が落ちた）。
+#[tokio::test]
+async fn a_heavy_review_check_takes_the_injected_slot_and_receives_its_path() {
+    use task_worker::check_slots::{CheckSlots, SlotSource};
+    let dir = tempfile::tempdir().unwrap();
+    let slot_dir = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let seen = out.path().join("slot-seen");
+    let cmd = format!(
+        "echo cargo >/dev/null; printf %s \"$CELERIS_CHECK_SLOT\" > '{}'",
+        seen.display()
+    );
+    assert!(task_worker::check_slots::is_heavy(&cmd));
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = new_task(
+        dir.path(),
+        Check::Command {
+            cmd: cmd.clone(),
+            expect_exit: 0,
+        },
+        0,
+    );
+    store.insert(&task).unwrap();
+    let adapter = Arc::new(InstantAdapter {
+        terminal: Terminal::Done {
+            summary: "ok".into(),
+            evidence: vec![],
+            usage: None,
+        },
+        delay: Duration::from_millis(10),
+    });
+    let mut d = dispatcher(store.clone(), adapter, 2);
+    d.config.check_slots = Some(SlotSource::Host(CheckSlots::new(slot_dir.path(), 1)));
+    let report = run_until_idle(&mut d, 200).await;
+    assert!(report.idle);
+    let t = store.get(task.id).unwrap().unwrap();
+    assert_eq!(t.status, Status::Done);
+    assert_eq!(
+        std::fs::read_to_string(&seen).unwrap(),
+        slot_dir.path().join("slot-0.lock").to_string_lossy()
+    );
+    let names: Vec<String> = std::fs::read_dir(slot_dir.path())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    assert_eq!(names, vec!["slot-0.lock".to_string()]);
+}
+
 /// Phase 44（実機 2026-09-18）: 委譲した子タスクが失敗し `retry_then_ask`（max_retries 到達）で親が
 /// `blocked` に落ちる質問は、ワーカーの `Question` ではなくディスパッチャ自身が立てるものだが、
 /// Phase 26 と同じく `approvals` にも 1 件残る（そうしないと認可画面に出ず、`approval_pending` の
@@ -547,6 +600,7 @@ async fn department_reviewer_runs_share_and_continue_one_lead_session() {
             idle_timeout: Duration::from_secs(5),
             kill_grace: Duration::from_millis(100),
             review_timeout: Duration::from_secs(5),
+            check_slots: super::test_check_slots(),
             review_resync_quiet: Duration::from_secs(900),
             workspace_roots: task_core::local_machine::WorkspaceRoots::new(
                 PathBuf::from("/nonexistent"),
@@ -666,6 +720,7 @@ async fn a_rejected_lead_session_resume_retires_it_and_the_next_review_starts_fr
             idle_timeout: Duration::from_secs(5),
             kill_grace: Duration::from_millis(100),
             review_timeout: Duration::from_secs(5),
+            check_slots: super::test_check_slots(),
             review_resync_quiet: Duration::from_secs(900),
             workspace_roots: task_core::local_machine::WorkspaceRoots::new(
                 PathBuf::from("/nonexistent"),
@@ -788,6 +843,7 @@ async fn a_resume_rejection_that_still_produced_a_result_self_heals_and_the_retr
             idle_timeout: Duration::from_secs(5),
             kill_grace: Duration::from_millis(100),
             review_timeout: Duration::from_secs(5),
+            check_slots: super::test_check_slots(),
             review_resync_quiet: Duration::from_secs(900),
             workspace_roots: task_core::local_machine::WorkspaceRoots::new(
                 PathBuf::from("/nonexistent"),

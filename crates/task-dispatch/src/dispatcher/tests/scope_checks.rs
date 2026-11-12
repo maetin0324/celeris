@@ -272,6 +272,8 @@ async fn a_silent_failing_scope_check_gets_a_hint_in_its_detail() {
         task.id,
         &observed,
         &ws,
+        // 検査は重くない（枠を取らない）ので、枠の取得元は無し。
+        None,
         &checks,
         Duration::from_secs(30),
         None,

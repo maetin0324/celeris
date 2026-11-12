@@ -89,6 +89,27 @@ pub(super) fn new_task(dir: &std::path::Path, check: Check, max_retries: u32) ->
     }
 }
 
+/// ADR 2026-11-12-host-check-slots D3: 試験の dispatcher が検査に使う枠の取得元。process に 1 つの一時 dir（`TempDir`）の
+/// host の枠で、本物の host の枠の dir（`$XDG_RUNTIME_DIR/celeris/check-slots`）も env（`CELERIS_CHECK_SLOT*`）も見ない
+/// （test-affected.sh・test-parallel.sh が枠を持つ間に走っても、親の枠や他の検査と取り合わない）。枠の数（64）は 1 つの
+/// process で同時に走る試験の検査より多く、試験どうしも待たない。static の `TempDir` は drop されないので、process の
+/// 終わりに `atexit` で消す。
+pub(super) fn test_check_slots() -> Option<task_worker::check_slots::SlotSource> {
+    use task_worker::check_slots::{CheckSlots, SlotSource};
+    static DIR: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    extern "C" fn remove_dir() {
+        if let Some(dir) = DIR.get() {
+            let _ = std::fs::remove_dir_all(dir.path());
+        }
+    }
+    let dir = DIR.get_or_init(|| {
+        // SAFETY: `remove_dir` は panic せず、初期化済みの static の path を消すだけ。
+        unsafe { libc::atexit(remove_dir) };
+        tempfile::tempdir().expect("check slot tempdir")
+    });
+    Some(SlotSource::Host(CheckSlots::new(dir.path(), 64)))
+}
+
 pub(super) fn dispatcher(
     store: Arc<dyn TaskStore>,
     adapter: Arc<dyn WorkerAdapter>,
@@ -150,6 +171,7 @@ fn new_test_dispatcher(
             idle_timeout: Duration::from_secs(5),
             kill_grace: Duration::from_millis(100),
             review_timeout: Duration::from_secs(5),
+            check_slots: test_check_slots(),
             review_resync_quiet: Duration::from_secs(900),
             workspace_roots: task_core::local_machine::WorkspaceRoots::new(
                 PathBuf::from("/nonexistent"),
@@ -1283,6 +1305,7 @@ fn pool_dispatcher_with_requeues(
             idle_timeout: Duration::from_secs(5),
             kill_grace: Duration::from_millis(100),
             review_timeout: Duration::from_secs(5),
+            check_slots: test_check_slots(),
             review_resync_quiet: Duration::from_secs(900),
             workspace_roots: task_core::local_machine::WorkspaceRoots::new(
                 PathBuf::from("/nonexistent"),

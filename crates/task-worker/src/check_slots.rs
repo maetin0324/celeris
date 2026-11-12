@@ -2,6 +2,8 @@
 //!
 //! 枠は `<dir>/slot-<i>.lock` の `flock(2)` の排他 lock（D1）。daemon の検査は [`SlottedWorkspace`] が、
 //! script（test-affected.sh・test-parallel.sh）は `scripts/dev/lib/check-slot.sh` が同じ file を取り合う。
+//! 枠の取得元（[`SlotSource`]）は daemon の起動時に env から 1 回だけ決め、dispatcher には設定として渡す（D3）。
+//! 呼び出し元が既に枠を持つ（[`HELD_ENV`]）なら、shell と同じく取り直さない（D3.2）。
 //! 枠を待つ時間は検査の timeout に数えない（D3）。待ちの理由は 1 回だけ log と `waiting/` に残す（D5）。
 
 use std::ffi::OsStr;
@@ -24,7 +26,8 @@ pub const SLOTS_DIR_ENV: &str = "CELERIS_CHECK_SLOTS_DIR";
 pub const RUNTIME_DIR_ENV: &str = "XDG_RUNTIME_DIR";
 /// 枠の数を差し替える環境変数（D2）。
 pub const SLOTS_ENV: &str = "CELERIS_CHECK_SLOTS";
-/// 取った枠（lock の path）を command に渡す環境変数（D3）。script はこれがあれば取り直さない。
+/// 取った枠（lock の path）を command に渡す環境変数（D3）。daemon（[`SlotSource::Held`]）も script もこれがあれば
+/// 取り直さない（D3.2）。
 pub const HELD_ENV: &str = "CELERIS_CHECK_SLOT";
 /// 枠 1 本あたりの core 数（D2。`scripts/dev/lib/check-slot.sh` と同じ値）。
 pub const CORES_PER_SLOT: usize = 12;
@@ -199,7 +202,7 @@ impl CheckSlots {
         ))
     }
 
-    /// D1/D2: この process の env と core 数から決める（[`CheckSlots::resolve`]）。
+    /// D1/D2: この process の env と core 数から決める（[`CheckSlots::resolve`]。`celerisctl scratch status` が使う）。
     pub fn from_env() -> Option<Self> {
         Self::resolve(
             std::env::var_os(SLOTS_DIR_ENV).as_deref(),
@@ -370,19 +373,91 @@ fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-/// D3: daemon の検査の作業場所を包み、重い command だけ枠を取ってから timeout 付きで実行する。
+/// D3: 重い検査の枠の取得元。daemon の起動時に [`SlotSource::from_env`] で 1 回だけ決め、dispatcher の設定
+/// （`DispatchConfig::check_slots`）で渡す。dispatcher は検査の度に env を読まない。
+#[derive(Debug, Clone)]
+pub enum SlotSource {
+    /// host の枠を取ってから走らせる（D1・D2）。
+    Host(CheckSlots),
+    /// 呼び出し元（test-affected.sh・test-parallel.sh など）が既に枠を持つ（[`HELD_ENV`] の lock の path）。取り直さず、
+    /// その path を command にそのまま渡す（D3.2。入れ子で自分の枠を待つ deadlock と、親の枠と別に 2 本目を取ることを防ぐ）。
+    Held(PathBuf),
+}
+
+impl SlotSource {
+    /// D3: env の値と core 数から決める（純粋）。[`HELD_ENV`] が空でなければ、dir や数より先に [`SlotSource::Held`]
+    /// （`check-slot.sh` の `check_slot_acquire` と同じ順。`check_slots::tests` が一致を確かめる）。無ければ
+    /// [`CheckSlots::resolve`] の host の枠。dir も決められなければ `None`（包まない）。
+    pub fn resolve(
+        held_env: Option<&OsStr>,
+        dir_env: Option<&OsStr>,
+        runtime_dir: Option<&OsStr>,
+        slots_env: Option<&str>,
+        cores: usize,
+    ) -> Option<Self> {
+        match held_env.filter(|v| !v.is_empty()) {
+            Some(held) => Some(Self::Held(PathBuf::from(held))),
+            None => CheckSlots::resolve(dir_env, runtime_dir, slots_env, cores).map(Self::Host),
+        }
+    }
+
+    /// D3: [`SlotSource::resolve`] に、決められない（`None`）ときの warn 1 行を足す（daemon の起動時に 1 回呼ぶ）。
+    pub fn resolve_or_warn(
+        held_env: Option<&OsStr>,
+        dir_env: Option<&OsStr>,
+        runtime_dir: Option<&OsStr>,
+        slots_env: Option<&str>,
+        cores: usize,
+    ) -> Option<Self> {
+        let source = Self::resolve(held_env, dir_env, runtime_dir, slots_env, cores);
+        if source.is_none() {
+            tracing::warn!(
+                "check slots: neither CELERIS_CHECK_SLOTS_DIR nor XDG_RUNTIME_DIR is set; checks run without a host slot"
+            );
+        }
+        source
+    }
+
+    /// D3: この process の env と core 数から決める（[`SlotSource::resolve_or_warn`]）。daemon の起動時に設定を組み立てる
+    /// ときだけ呼ぶ。
+    pub fn from_env() -> Option<Self> {
+        Self::resolve_or_warn(
+            std::env::var_os(HELD_ENV).as_deref(),
+            std::env::var_os(SLOTS_DIR_ENV).as_deref(),
+            std::env::var_os(RUNTIME_DIR_ENV).as_deref(),
+            std::env::var(SLOTS_ENV).ok().as_deref(),
+            host_cores(),
+        )
+    }
+}
+
+/// D3: 検査の作業場所を、起動時に決めた取得元 `source` で包む。`None`（枠の dir を決められず、起動時に warn 済み）なら
+/// 包まずに返す（重い検査も枠なしで走り、[`HELD_ENV`] を渡さない）。
+pub fn with_check_slot(
+    source: Option<&SlotSource>,
+    inner: Box<dyn Workspace>,
+    label: impl Into<String>,
+) -> Box<dyn Workspace> {
+    match source {
+        Some(source) => Box::new(SlottedWorkspace::new(inner, source.clone(), label)),
+        None => inner,
+    }
+}
+
+/// D3: daemon の検査の作業場所を包み、重い command だけ枠を取ってから timeout 付きで実行する（枠を待つ時間は timeout
+/// に数えない）。[`SlotSource::Held`] なら枠を取らず、持っている枠の path を渡してすぐ走らせる。
 pub struct SlottedWorkspace {
     inner: Box<dyn Workspace>,
-    slots: CheckSlots,
+    source: SlotSource,
     label: String,
     note: WaitNote,
 }
 
 impl SlottedWorkspace {
-    pub fn new(inner: Box<dyn Workspace>, slots: CheckSlots, label: impl Into<String>) -> Self {
+    pub fn new(inner: Box<dyn Workspace>, source: SlotSource, label: impl Into<String>) -> Self {
         Self {
             inner,
-            slots,
+            source,
             label: label.into(),
             note: log_wait(),
         }
@@ -393,33 +468,6 @@ impl SlottedWorkspace {
         self.note = note;
         self
     }
-
-    /// host の枠（[`CheckSlots::from_env`]）で包む（[`SlottedWorkspace::wrap_with`]）。
-    pub fn wrap(inner: Box<dyn Workspace>, label: impl Into<String>) -> Box<dyn Workspace> {
-        Self::wrap_with(inner, CheckSlots::from_env(), label)
-    }
-
-    /// D3: 枠があれば包む。枠の dir を決められない（`None`）なら warn を 1 行出し、包まずに返す。
-    pub fn wrap_with(
-        inner: Box<dyn Workspace>,
-        slots: Option<CheckSlots>,
-        label: impl Into<String>,
-    ) -> Box<dyn Workspace> {
-        match slots {
-            Some(slots) => Box::new(Self::new(inner, slots, label)),
-            None => {
-                tracing::warn!(
-                    "check slots: neither CELERIS_CHECK_SLOTS_DIR nor XDG_RUNTIME_DIR is set; checks run without a host slot"
-                );
-                inner
-            }
-        }
-    }
-}
-
-/// D3: daemon の local の検査の作業場所を host の枠で包む（[`SlottedWorkspace::wrap`]）。
-pub fn slotted(ws: crate::LocalWorkspace, label: impl Into<String>) -> Box<dyn Workspace> {
-    SlottedWorkspace::wrap(Box::new(ws), label)
 }
 
 #[async_trait]
@@ -432,15 +480,19 @@ impl Workspace for SlottedWorkspace {
         if !is_heavy(cmd) {
             return self.inner.exec(cmd, timeout).await;
         }
-        let label = format!("{}: {}", self.label, cmd);
-        let note = self.note.clone();
-        let guard = self
-            .slots
-            .acquire(&label, |reason| note(&label, reason))
-            .await?;
+        let (guard, path) = match &self.source {
+            SlotSource::Held(path) => (None, path.clone()),
+            SlotSource::Host(slots) => {
+                let label = format!("{}: {}", self.label, cmd);
+                let note = self.note.clone();
+                let guard = slots.acquire(&label, |reason| note(&label, reason)).await?;
+                let path = guard.path().to_path_buf();
+                (Some(guard), path)
+            }
+        };
         let held = format!(
             "{HELD_ENV}={}; export {HELD_ENV}; {cmd}",
-            shell_quote(&guard.path().to_string_lossy())
+            shell_quote(&path.to_string_lossy())
         );
         let result = self.inner.exec(&held, timeout).await;
         drop(guard);

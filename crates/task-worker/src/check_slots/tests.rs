@@ -67,8 +67,12 @@ async fn a_heavy_check_waits_for_a_free_slot_and_the_wait_is_not_counted_in_its_
         .expect("the only slot is free");
     let inner = Recording::default();
     let (note, seen) = counting_note();
-    let ws = SlottedWorkspace::new(Box::new(inner.clone()), slots.clone(), "review 01TASK")
-        .with_wait_note(note);
+    let ws = SlottedWorkspace::new(
+        Box::new(inner.clone()),
+        SlotSource::Host(slots.clone()),
+        "review 01TASK",
+    )
+    .with_wait_note(note);
     let timeout = Duration::from_secs(60);
     let check =
         tokio::spawn(async move { ws.exec("bash scripts/dev/test-affected.sh", timeout).await });
@@ -140,7 +144,8 @@ async fn a_light_check_never_waits_for_a_slot() {
     let _other = slots.try_take("other").expect("take").expect("free");
     let inner = Recording::default();
     let (note, seen) = counting_note();
-    let ws = SlottedWorkspace::new(Box::new(inner.clone()), slots, "review").with_wait_note(note);
+    let ws = SlottedWorkspace::new(Box::new(inner.clone()), SlotSource::Host(slots), "review")
+        .with_wait_note(note);
     let r = ws
         .exec(
             "sh scripts/dev/progress-index.sh --check",
@@ -372,19 +377,20 @@ impl tracing::Subscriber for CountWarns {
     fn exit(&self, _: &tracing::span::Id) {}
 }
 
-/// 不変条件（D3）: 枠の dir を決められない daemon は warn を 1 行出し、検査の作業場所を包まずに返す（重い検査も枠なしで
-/// 走り、`CELERIS_CHECK_SLOT` を渡さない）。dir が決まれば包む。既存の試験は `SlottedWorkspace::new` を直に使うので、
-/// env が欠けたときの扱いの退行（別の dir に落ちる・止まる）を検出できない。
+/// 不変条件（D3）: 枠の dir を決められない daemon は起動時の解決（`SlotSource::resolve_or_warn`）で warn を 1 行だけ出し、
+/// 検査の作業場所を包まない（重い検査も枠なしで走り、`CELERIS_CHECK_SLOT` を渡さない。検査の度には warn しない）。dir が
+/// 決まれば包む。既存の試験は `SlottedWorkspace::new` を直に使うので、env が欠けたときの扱いの退行（別の dir に落ちる・
+/// 止まる・検査の度に warn する）を検出できない。
 #[tokio::test]
 async fn without_a_slot_dir_the_daemon_warns_once_and_runs_checks_unwrapped() {
     let warns = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let inner = Recording::default();
     let ws = tracing::subscriber::with_default(CountWarns(warns.clone()), || {
-        SlottedWorkspace::wrap_with(
-            Box::new(inner.clone()),
-            CheckSlots::resolve(None, None, None, 24),
-            "review",
-        )
+        let source = SlotSource::resolve_or_warn(None, None, None, None, 24);
+        assert!(source.is_none());
+        let first = with_check_slot(source.as_ref(), Box::new(inner.clone()), "review");
+        let _second = with_check_slot(source.as_ref(), Box::new(Recording::default()), "review");
+        first
     });
     assert_eq!(warns.load(Ordering::SeqCst), 1);
     ws.exec("bash scripts/dev/test-affected.sh", Duration::from_secs(5))
@@ -393,12 +399,15 @@ async fn without_a_slot_dir_the_daemon_warns_once_and_runs_checks_unwrapped() {
     assert_eq!(inner.calls()[0].0, "bash scripts/dev/test-affected.sh");
 
     let runtime = tempfile::tempdir().expect("tempdir");
-    let slots = CheckSlots::resolve(None, Some(runtime.path().as_os_str()), None, 24)
-        .expect("XDG_RUNTIME_DIR gives the dir");
+    let source =
+        SlotSource::resolve_or_warn(None, None, Some(runtime.path().as_os_str()), None, 24);
+    let Some(SlotSource::Host(slots)) = &source else {
+        panic!("XDG_RUNTIME_DIR gives the host slots: {source:?}");
+    };
     assert_eq!(slots.dir(), runtime.path().join("celeris/check-slots"));
     assert_eq!(slots.slots(), 2);
     let wrapped = Recording::default();
-    let ws = SlottedWorkspace::wrap_with(Box::new(wrapped.clone()), Some(slots), "review");
+    let ws = with_check_slot(source.as_ref(), Box::new(wrapped.clone()), "review");
     ws.exec("bash scripts/dev/test-affected.sh", Duration::from_secs(5))
         .await
         .expect("exec");
@@ -407,4 +416,170 @@ async fn without_a_slot_dir_the_daemon_warns_once_and_runs_checks_unwrapped() {
         "{:?}",
         wrapped.calls()
     );
+}
+
+/// `run_shell_lib` と同じ env で bash を起こし、`limit` までに終わらなければ kill して `None` を返す（待ち続ける退行で
+/// 試験が止まらないように）。
+fn run_shell_lib_within(
+    script: &str,
+    home: &Path,
+    env: &[(&str, &str)],
+    limit: Duration,
+) -> Option<std::process::Output> {
+    let lib = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/dev/lib/check-slot.sh");
+    let mut cmd = std::process::Command::new("bash");
+    cmd.env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("HOME", home)
+        .arg("-c")
+        .arg(format!(". \"$1\"; {script}"))
+        .arg("check-slot-parity")
+        .arg(lib)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
+    let mut child = cmd.spawn().expect("spawn bash");
+    let deadline = std::time::Instant::now() + limit;
+    while std::time::Instant::now() < deadline {
+        if child.try_wait().expect("try_wait").is_some() {
+            return Some(child.wait_with_output().expect("output"));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // bash と待ちの `sleep` を process group ごと止める（孤児を残さない）。
+    if let Ok(pid) = i32::try_from(child.id()) {
+        let _ = nix::sys::signal::killpg(
+            nix::unistd::Pid::from_raw(pid),
+            nix::sys::signal::Signal::SIGKILL,
+        );
+    }
+    let _ = child.wait();
+    None
+}
+
+fn names_in(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .map(|d| {
+            d.flatten()
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
+}
+
+/// 不変条件（D3.2）: 呼び出し元が枠を持つ（`CELERIS_CHECK_SLOT` がある）なら、daemon（Rust の `SlotSource::resolve` と
+/// `SlottedWorkspace`）も script（`check-slot.sh` の `check_slot_acquire`）も枠を取り直さず、待たずに走る。持っている枠の
+/// path をそのまま渡し、枠の dir に holder・waiting の file を増やさない。dir の env が無くても held が先に効く。試験は
+/// 一時 dir の枠を全部持ってから確かめる（取り直せば待ち続けるので、待たないことで規則を区別できる）。既存の一致の
+/// 試験は dir・数・並列度しか見ず、2026-11-12 の review が見つけた「Rust だけが held を見ない」食い違いを検出できない。
+#[tokio::test]
+async fn a_held_slot_is_not_taken_again_by_rust_or_the_shell_lib() {
+    let home = tempfile::tempdir().expect("tempdir");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let slots = CheckSlots::new(dir.path(), 1);
+    let parent = slots
+        .try_take("test-affected.sh")
+        .expect("take")
+        .expect("the only slot is free");
+    let held = parent.path().to_string_lossy().to_string();
+    let dir_s = dir.path().to_string_lossy().to_string();
+    let before = names_in(dir.path());
+    assert_eq!(before, vec!["slot-0.holder", "slot-0.lock"]);
+
+    for dir_env in [Some(dir_s.as_str()), None] {
+        // Rust: held は dir・数より先に効き、枠を取らずにその path を渡す。
+        let source = SlotSource::resolve(
+            Some(OsStr::new(&held)),
+            dir_env.map(OsStr::new),
+            None,
+            Some("1"),
+            24,
+        );
+        let Some(SlotSource::Held(path)) = &source else {
+            panic!("CELERIS_CHECK_SLOT gives a held slot: {source:?}");
+        };
+        assert_eq!(path, parent.path());
+        let inner = Recording::default();
+        let (note, seen) = counting_note();
+        let ws = SlottedWorkspace::new(
+            Box::new(inner.clone()),
+            SlotSource::Held(path.clone()),
+            "review",
+        )
+        .with_wait_note(note);
+        let r = tokio::time::timeout(
+            Duration::from_secs(10),
+            ws.exec("bash scripts/dev/test-affected.sh", Duration::from_secs(5)),
+        )
+        .await
+        .expect("a held slot never waits")
+        .expect("exec");
+        assert_eq!(r.exit, Some(0));
+        assert!(seen.lock().map(|v| v.is_empty()).unwrap_or(false));
+        assert_eq!(
+            inner.calls()[0].0,
+            format!(
+                "CELERIS_CHECK_SLOT={}; export CELERIS_CHECK_SLOT; bash scripts/dev/test-affected.sh",
+                shell_quote(&held)
+            )
+        );
+
+        // shell: 同じ env で check_slot_acquire は待たずに 0 を返し、持っている枠の path を変えない。
+        let mut env = vec![
+            ("OMP_NUM_THREADS", "24"),
+            (SLOTS_ENV, "1"),
+            (HELD_ENV, held.as_str()),
+        ];
+        if let Some(v) = dir_env {
+            env.push((SLOTS_DIR_ENV, v));
+        }
+        let out = run_shell_lib_within(
+            "check_slot_acquire parity && printf '%s\\n' \"$CELERIS_CHECK_SLOT\"",
+            home.path(),
+            &env,
+            Duration::from_secs(30),
+        )
+        .expect("the shell lib does not wait for a held slot");
+        assert!(out.status.success(), "{dir_env:?}: {out:?}");
+        assert_eq!(stdout_lines(&out), vec![held.clone()], "{dir_env:?}");
+        assert_eq!(names_in(dir.path()), before, "{dir_env:?}");
+    }
+
+    // 対照: held が無ければ、Rust も shell も全部使用中の枠を待つ（上の合格が「枠が空いていた」からではない）。
+    let source = SlotSource::resolve(None, Some(OsStr::new(&dir_s)), None, Some("1"), 24);
+    let Some(source @ SlotSource::Host(_)) = source else {
+        panic!("without CELERIS_CHECK_SLOT the host slots are used");
+    };
+    let inner = Recording::default();
+    let ws = SlottedWorkspace::new(Box::new(inner.clone()), source, "review");
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(300),
+            ws.exec("bash scripts/dev/test-affected.sh", Duration::from_secs(5)),
+        )
+        .await
+        .is_err(),
+        "the Rust side waits for the taken slot"
+    );
+    assert!(inner.calls().is_empty());
+    let out = run_shell_lib_within(
+        "check_slot_acquire parity",
+        home.path(),
+        &[
+            ("OMP_NUM_THREADS", "24"),
+            (SLOTS_ENV, "1"),
+            (SLOTS_DIR_ENV, dir_s.as_str()),
+        ],
+        Duration::from_millis(1500),
+    );
+    assert!(
+        out.is_none(),
+        "the shell lib waits for the taken slot: {out:?}"
+    );
+    drop(parent);
 }

@@ -4,7 +4,7 @@ use super::route_select::{RouteInput, RoutePick, RouteTrace, account_adapter_for
 use super::token_budget::run_watch;
 use super::*;
 use crate::review::RepoHealth;
-use task_worker::check_slots::slotted;
+use task_worker::check_slots::{SlotSource, with_check_slot};
 
 /// ADR-0118 D4 付記 / ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3・D4: 直近の遷移（自動の
 /// 再レビューの遷移を除く）または再開（`ReviewResyncResumed`）以後の stale（`ReviewTargetAdvanced`）の数、
@@ -926,7 +926,7 @@ impl Dispatcher {
         let review_work_dir = self.work_dir_for(&task).filter(|w| w.is_dir());
         // ADR-0074 F5-fix: reviewer の checks は Task の worktree で走るので `<repo-key>`
         // （Task 単位の run と同じ target）。
-        let review_check_env = self.check_cargo_target_env(&task, None);
+        let review_check_env = ReviewCheckEnv::new(self, &task);
         let events: Vec<Event> = events.into_iter().map(|(_, e)| e).collect();
         let mut repo_checks = Vec::new();
         if let Some(workspaces) = self.task_workspaces_for(&task) {
@@ -973,10 +973,8 @@ impl Dispatcher {
                     workspace: if index == 0 {
                         None
                     } else {
-                        Some(slotted(
-                            LocalWorkspace::new(&dir)
-                                .with_work_dir(repo.dir.clone())
-                                .with_cargo_env(review_check_env.clone()),
+                        Some(review_check_env.workspace(
+                            LocalWorkspace::new(&dir).with_work_dir(repo.dir.clone()),
                             format!("review {task_id} {}", repo.name),
                         ))
                     },
@@ -1008,10 +1006,9 @@ impl Dispatcher {
                     Box::new(ssh)
                 }
                 // ADR 2026-11-12-host-check-slots D3: local の検査だけ host の枠で包む（remote は包まない）。
-                None => slotted(
+                None => review_check_env.workspace(
                     LocalWorkspace::new(&dir)
-                        .with_work_dir(review_work_dir.unwrap_or_else(|| dir.clone()))
-                        .with_cargo_env(review_check_env),
+                        .with_work_dir(review_work_dir.unwrap_or_else(|| dir.clone())),
                     format!("review {task_id}"),
                 ),
             };
@@ -1608,3 +1605,25 @@ pub(super) fn reviewer_harness_request(task: &Task) -> task_core::llm_route::Har
 
 /// [`reviewer_harness_request`] の role。
 pub(super) const REVIEWER_HARNESS_ROLE: &str = "reviewer";
+
+/// ADR 2026-11-12-host-check-slots D3: review の local の検査の作業場所に付けるもの。cargo の env と、daemon の起動時に
+/// 決めた枠の取得元（`DispatchConfig::check_slots`。検査の度に env を読まない）。
+struct ReviewCheckEnv {
+    cargo: task_worker::scratch::CargoEnv,
+    slots: Option<SlotSource>,
+}
+
+impl ReviewCheckEnv {
+    fn new(d: &Dispatcher, task: &Task) -> Self {
+        Self {
+            cargo: d.check_cargo_target_env(task, None),
+            slots: d.config.check_slots.clone(),
+        }
+    }
+
+    /// local の検査の作業場所に cargo の env を付け、枠の取得元で包む。
+    fn workspace(&self, ws: LocalWorkspace, label: String) -> Box<dyn Workspace> {
+        let ws = ws.with_cargo_env(self.cargo.clone());
+        with_check_slot(self.slots.as_ref(), Box::new(ws), label)
+    }
+}

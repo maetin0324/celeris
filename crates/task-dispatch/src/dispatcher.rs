@@ -467,6 +467,10 @@ pub struct DispatchConfig {
     pub kill_grace: Duration,
     /// `Command` チェック 1 件あたりの上限。
     pub review_timeout: Duration,
+    /// ADR 2026-11-12-host-check-slots D3: review・WU・段の統合の local の重い検査が取る枠の取得元。本番は daemon の
+    /// 起動時に env から 1 回だけ決める（`SlotSource::from_env`）。dispatcher は検査の度に env を読まない。`None` は枠の
+    /// dir を決められない（起動時に warn 済み）で、検査を包まない。設定の再読み込み（`apply_dispatch_config`）では変えない。
+    pub check_slots: Option<task_worker::check_slots::SlotSource>,
     /// ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D4: 再同期の上限で止めた review を、target の
     /// 先頭 commit がこれだけ古ければ（他の取り込みが止んだ）自動で再開する。
     pub review_resync_quiet: Duration,

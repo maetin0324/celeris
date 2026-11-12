@@ -1521,6 +1521,9 @@ fn build_dispatcher(shared: &Arc<Shared>, paths: &Paths, store: Arc<dyn TaskStor
             idle_timeout: Duration::from_secs(600),
             kill_grace: Duration::from_millis(100),
             review_timeout: Duration::from_secs(60),
+            // ADR 2026-11-12-host-check-slots D3: dagbench の WU の検査は合成の軽い command（`true` と採点の台本）で枠を
+            // 取らない。host の枠を渡すと、計測が他の検査の混み具合と env（`CELERIS_CHECK_SLOT`）に左右されるので渡さない。
+            check_slots: None,
             review_resync_quiet: Duration::from_secs(900),
             workspace_roots: task_core::local_machine::WorkspaceRoots::new(
                 paths.workspaces.clone(),

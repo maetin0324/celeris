@@ -47,14 +47,26 @@ core 数）、host 全体で同時に走る重い検査の数に上限が無か�
      が `Workspace::exec` を包み、重い command（D4）だけ枠を取ってから内側の `exec` を timeout 付きで呼ぶ。枠を待つ
      時間は timeout に数えない（timeout は枠を取った後の実行にだけかかる）。取った枠は `CELERIS_CHECK_SLOT=<lock の path>`
      として command に渡す。remote（ssh）の作業場所は包まない（枠は daemon の host の資源で、remote の host の負荷とは別）。
-     `CELERIS_CHECK_SLOTS_DIR` も `XDG_RUNTIME_DIR` も無い process では枠の dir を決められないので、warn を 1 行出して包まない
-     （daemon は user の systemd unit で、user の manager が `XDG_RUNTIME_DIR` を渡すので、本番では起きない見込み。本番の
-     daemon の env は未確認なので、配備の後に `celerisctl scratch status` で枠の dir を確かめる）。
-  2. script: `scripts/dev/test-affected.sh` は nextest の前、`scripts/dev/test-parallel.sh`（release gate）は準備の build の
-     前に `scripts/dev/lib/check-slot.sh` の `check_slot_acquire` で枠を取る。`CELERIS_CHECK_SLOT` が既にあれば（daemon が
-     取って渡した）取り直さない（入れ子で自分の枠を待つ deadlock を起こさない）。dir を決められなければ理由を stderr に
-     出して exit 2（枠なしで走らない）。
-  3. worker が直接打つ `cargo clippy`・`cargo build` は枠を取らない（試験より短く、worker の run の壁時計の中で収まる。
+     枠の取得元（`task_worker::check_slots::SlotSource`）は daemon の起動時に env から 1 回だけ決め（`SlotSource::from_env`。
+     `crates/celeris/src/config/dispatch.rs` の `Config::dispatch_config`）、`DispatchConfig::check_slots` で dispatcher に
+     渡す。dispatcher は検査の度に env を読まない（`with_check_slot` で設定の取得元を使う）。設定の再読み込み
+     （`apply_dispatch_config`）では入れ替えない。試験の dispatcher は一時 dir の枠を入れ、host の枠の dir を開かない。
+     `CELERIS_CHECK_SLOTS_DIR` も `XDG_RUNTIME_DIR` も無い process では枠の dir を決められないので、起動時の解決
+     （`SlotSource::resolve_or_warn`）で warn を 1 行出し、検査を包まない（daemon は user の systemd unit で、user の
+     manager が `XDG_RUNTIME_DIR` を渡すので、本番では起きない見込み。本番の daemon の env は未確認なので、配備の後に
+     `celerisctl scratch status` で枠の dir を確かめる）。
+  2. 呼び出し元が既に枠を持つ（`CELERIS_CHECK_SLOT` が空でない）なら、daemon も script も枠を取り直さない（入れ子で自分の
+     枠を待つ deadlock と、親の枠と別に 2 本目を取ることを防ぐ）。規則は Rust と shell で同じで、dir・数より先に見る:
+     - Rust: `SlotSource::resolve` が `CELERIS_CHECK_SLOT` を見て `SlotSource::Held(<lock の path>)` を返す。
+       `SlottedWorkspace` は held なら重い command も枠を取らず、その path を `CELERIS_CHECK_SLOT` で渡してすぐ内側の
+       `exec` を呼ぶ（test-affected.sh・test-parallel.sh の中で起きた daemon が対象）。
+     - shell: `check_slot_acquire` は `CELERIS_CHECK_SLOT` があれば取らずに 0 を返す（daemon が取って渡した場合）。
+     `check_slots` の試験が一時 dir の枠を全部持った上で `CELERIS_CHECK_SLOT` を渡し、Rust も bash も待たずに走ることを
+     確かめる（held が無ければ両方が待つことも確かめる）。
+  3. script: `scripts/dev/test-affected.sh` は nextest の前、`scripts/dev/test-parallel.sh`（release gate）は準備の build の
+     前に `scripts/dev/lib/check-slot.sh` の `check_slot_acquire` で枠を取る（2 の held なら取らない）。dir を決められなければ
+     理由を stderr に出して exit 2（枠なしで走らない）。
+  4. worker が直接打つ `cargo clippy`・`cargo build` は枠を取らない（試験より短く、worker の run の壁時計の中で収まる。
      絞る対象は host の負荷の大半を占める nextest の試験）。
 - **D4 重い command の判定**: command の字句に `cargo`・`cargo-nextest`・`nextest` の語、または `test-affected`・
   `test-parallel` を含むもの（決定的。`task_worker::check_slots::is_heavy`）。`sh scripts/dev/progress-index.sh --check` の
@@ -92,8 +104,9 @@ core 数）、host 全体で同時に走る重い検査の数に上限が無か�
 
 ## 付記（実装の突き合わせ）
 
-- `SlottedWorkspace` を使う所: `dispatcher/review_spawn.rs`（review の local の作業場所と 2 つ目以降の repo の検査）、
-  `dispatcher/work_units.rs`（WU の検査）、`dispatcher/phase_integration.rs`（段の統合の検査）。
+- `SlottedWorkspace` を使う所（`DispatchConfig::check_slots` を `with_check_slot` に渡す）: `dispatcher/review_spawn.rs`
+  （review の local の作業場所と 2 つ目以降の repo の検査）、`dispatcher/work_units.rs`（WU の検査）、
+  `dispatcher/phase_integration.rs`（段の統合の検査。`run_integration_checks` が取得元を受け取る）。
 - 試験: `task_worker::check_slots` の `a_heavy_check_waits_for_a_free_slot_and_the_wait_is_not_counted_in_its_timeout`
   （枠 1 本を別の holder が持つ間、timeout の 10 倍待っても実行しない・理由は 1 回・枠が空けば全 timeout で実行し合格）、
   `a_light_check_never_waits_for_a_slot`、`heavy_commands_are_the_cargo_and_test_scripts`、`status_lists_holders_and_live_waiters`、
@@ -102,3 +115,22 @@ core 数）、host 全体で同時に走る重い検査の数に上限が無か�
 - 既知の限界: `ownerless_runs` の reviewer の行の TTL（`3 × (条件数 + 2) × review_timeout`）は枠の待ちを含まない。
   daemon の引き継ぎ中に旧 daemon の review が長く枠を待つと、新 daemon が行を早く閉じうる（行は索引で、判定は旧 daemon が
   届ける）。発生したら別 task で扱う。
+
+## 付記 2026-11-12（final review の不合格の直し: held の規則を Rust にも置き、取得元を起動時に注入する）
+
+- 不備: D3.2 の「`CELERIS_CHECK_SLOT` があれば取り直さない」を守るのが shell の `check_slot_acquire` だけで、Rust の枠の取得は
+  見ていなかった。さらに dispatcher は検査の度に process の env から host の枠を開いていた。このため test-affected.sh・
+  test-parallel.sh が枠を持つ間に走る dispatcher の試験が、本物の host の枠の dir（`$XDG_RUNTIME_DIR/celeris/check-slots`）を
+  開いて 2 本目の枠を取りに行き、枠が全部使用中だと review 系の試験 4 件が待ちで落ちた（試験の holder・waiting の file も
+  host の dir に残った）。
+- 直し: 枠の取得元を `SlotSource`（`Host(CheckSlots)` と `Held(<lock の path>)`）の 1 つの型にし、env を受け取る純粋な
+  `SlotSource::resolve` が `CELERIS_CHECK_SLOT` を dir・数より先に見る（D3.2）。`DispatchConfig::check_slots` を足し、本番は
+  daemon の起動時に `SlotSource::from_env` で 1 回だけ決める（D3.1）。env を検査の度に読む入口（daemon の local の作業場所を
+  包む関数と、`SlottedWorkspace` の env から包む関連関数）は消した。dir を決められないときの warn 1 行と包まない扱いは
+  起動時の解決に移した（検査の度には warn しない）。
+- 試験の dispatcher（`dispatcher/tests/mod.rs`・`tests/review.rs`）は process に 1 つの一時 dir の枠（64 本、`atexit` で消す）を
+  入れる。dagbench（`campaign` の `dagbench/celeris_side.rs`）は検査が合成の軽い command なので `None`（枠を使わない）を入れる。
+- 試験: `a_held_slot_is_not_taken_again_by_rust_or_the_shell_lib`（Rust と bash の held の一致。枠を全部持った一時 dir で、
+  held なら待たずに走り path を変えず dir に file を増やさない。held が無ければ両方が待つ）、dispatcher の
+  `a_heavy_review_check_takes_the_injected_slot_and_receives_its_path`（review の重い検査が注入した一時 dir の枠の path を
+  `CELERIS_CHECK_SLOT` で受け取り、検査の後の枠の dir は lock だけ）。D8 の `review_timeout_secs` の判断は変えない。

@@ -147,6 +147,9 @@ impl Config {
             idle_timeout: Duration::from_secs(self.idle_timeout_secs),
             kill_grace: Duration::from_secs(self.kill_grace_secs),
             review_timeout: Duration::from_secs(self.review_timeout_secs),
+            // ADR 2026-11-12-host-check-slots D3: 検査の枠の取得元は daemon の env から決める（`CELERIS_CHECK_SLOT` があれば
+            // 取り直さない）。dispatcher が持つのは起動時の値で、再読み込み（`apply_dispatch_config`）では入れ替えない。
+            check_slots: task_worker::check_slots::SlotSource::from_env(),
             review_resync_quiet: Duration::from_secs(self.review.resync_quiet_secs),
             workspace_roots: self.workspace_roots(),
             plan_auto_accept: self.plan.auto_accept,

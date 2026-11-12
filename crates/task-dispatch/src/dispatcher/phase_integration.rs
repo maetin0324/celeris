@@ -2,7 +2,7 @@
 
 use super::*;
 use std::collections::BTreeMap;
-use task_worker::check_slots::slotted;
+use task_worker::check_slots::{SlotSource, with_check_slot};
 
 /// ADR 2026-11-08-health-enforcement-loop: 検査の列の項目の記録と health の項目。file は size の制約で `health_review/` に置く。
 #[path = "../health_review/check_item.rs"]
@@ -128,11 +128,16 @@ pub(crate) struct ObservedIntegration {
 /// 評価し（`check_item::run_item`）、同じ列の最後の項目（cmd `HEALTH_CHECK_ID`）として `WorkUnitCheckFinished`・
 /// `IntegrationCheckFinished` の `health` 欄に証跡を残す。列に足す行（NotApplicable でなければ）は戻り値の `checks` の後の
 /// 1 行。WU の check と段の統合はここだけを通り、経路ごとに検査器を起こさない。
+///
+/// ADR 2026-11-12-host-check-slots D3: 重い検査は `slots`（daemon の起動時に決めた `DispatchConfig::check_slots`）の枠を
+/// 取ってから走らせる。
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn run_integration_checks(
     store: &dyn task_core::TaskStore,
     task_id: TaskId,
     observed: &ObservedIntegration,
     ws: &task_worker::LocalWorkspace,
+    slots: Option<&SlotSource>,
     checks: &[task_core::WorkUnitCheck],
     command_timeout: Duration,
     health: Option<check_item::HealthTarget>,
@@ -157,7 +162,11 @@ pub(super) async fn run_integration_checks(
         );
         let clock = std::time::Instant::now();
         // ADR 2026-11-12-host-check-slots D3: 重い検査は host 共通の枠を取ってから走らせる（待ちは timeout に数えない）。
-        let check_ws = slotted(ws.clone().with_output_log(&log_path), &observed.key);
+        let check_ws = with_check_slot(
+            slots,
+            Box::new(ws.clone().with_output_log(&log_path)),
+            &observed.key,
+        );
         let outcome = crate::review::exec_check_outcome(
             check_ws.as_ref(),
             &c.cmd,
@@ -630,6 +639,7 @@ impl Dispatcher {
         let work_unit_id = integ.id.clone();
         let wu_id_for_entry = integ.id.clone();
         let store = self.store.clone();
+        let check_slots = self.config.check_slots.clone();
         let observed = ObservedIntegration {
             work_unit_id: integ.id.clone(),
             key: integ.key.clone(),
@@ -707,6 +717,7 @@ impl Dispatcher {
                         task_id,
                         &observed,
                         &ws,
+                        check_slots.as_ref(),
                         &checks,
                         timeout,
                         health,

@@ -347,11 +347,13 @@ pub struct ScratchAdmissionView {
     pub reserve_bytes: u64,
     /// 見かけの大きさを disk 上の量に直す係数（`[scratch] forecast_disk_ratio`）。
     pub ratio: f64,
-    /// run か review の検査が今書いている target がこれから増える見込みの合計。
+    /// target を今書いている owner（`owners` の `running`）がこれから増える見込みの合計。daemon が通したが worker の lease が
+    /// まだ走査に出ない run の見込みは含まない（daemon の判定のメモリだけが数え、待たせた run の `reason` の `admitted` に出る）。
     pub running_growth_bytes: u64,
     /// repo ごとの見込み（target が pool にある同じ `repo_key` の owner の測った大きさの最大。GC の推定と同じ定義）。
     pub expected_by_repo: std::collections::BTreeMap<String, u64>,
-    /// owner ごとの見込み（owner の文字列順。target の無い owner・repo の分からない owner は載せない）。
+    /// owner ごとの見込み（owner の文字列順）。target が pool にある owner と、target がまだ無くても今書いている owner
+    /// （seed を写している最中の run）を載せる。それ以外の target の無い owner・repo の分からない owner・野良は載せない。
     pub owners: Vec<ScratchOwnerForecastView>,
     /// 空きの見込みが足りず `ready` のまま待たせている run（直近の照合した pass。正本は daemon の判定のメモリで、daemon の
     /// snapshot だけが埋める）。pool の走査だけで組んだ status（`celerisctl scratch status`）では `None`（分からない）。
@@ -363,9 +365,10 @@ pub struct ScratchAdmissionView {
 pub struct ScratchOwnerForecastView {
     pub owner: String,
     pub repo_key: String,
-    /// run か review の検査が今この target に書いている（`task running`・`task reviewing`・`work unit running`）。
+    /// この target に今書いている: run か review の検査（`task running`・`task reviewing`・`work unit running`）か、
+    /// lease の生きた release-build（`lease live`。次の build が見込みまで育てる）。
     pub running: bool,
-    /// 測った大きさ（未測定は `None`。見込みでは 0 と見る）。
+    /// 測った大きさ（未測定・target がまだ無いときは `None`。見込みでは 0 と見る）。
     pub size_bytes: Option<u64>,
     /// この owner の repo の見込み。
     pub expected_bytes: u64,

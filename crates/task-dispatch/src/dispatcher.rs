@@ -2577,7 +2577,12 @@ impl Dispatcher {
             }
             return Ok(0);
         }
-        self.scratch.admission.begin_pass();
+        // ADR 2026-11-11-disk-aware-dispatch D1: 通した run の見込みは、走っている間（lease が走査に出るまで）持ち越す。
+        let in_flight = |task: &str, wu: Option<&str>| {
+            (self.running.keys())
+                .any(|k| k.task.to_string() == task && k.work_unit.as_deref() == wu)
+        };
+        self.scratch.admission.begin_pass(in_flight);
         // 上位から見て見送りが続いても後続を試せるよう、窓は広めに取る。
         let window = self.ready_window();
         let ready_started = Instant::now();

@@ -2,7 +2,8 @@
 //! `ScratchState.admission.probe` に注入した値で与える（大きな file は作らない）。
 //!
 //! 守る不変条件: 見込みが予備を割ると新しい target を作る run は `ready` のまま待ち（attempts を消費しない）、空きが
-//! 戻れば始まる。同じ task の続き（owner の target がある）は増分だけで判定する。worker run が 0 本なら詰まらない。
+//! 戻れば始まる。同じ task の続き（owner の target がある）は増分だけで判定する。target を今書いている run が 0 本なら
+//! 詰まらない。通した run は lease が走査に出るまで（本番で多くは 10〜30 秒）見込みに数え続ける。
 //! 待たせた理由は待ち始めに 1 回だけ残り、通知・受信箱には出ない。既存の `cleanup_and_disk` の試験は今の空きの
 //! 全体停止（`check_disk_space`）だけを見ていて、走っている target の増分と新しい target の見込みを検出できない。
 
@@ -37,7 +38,7 @@ struct Fixture {
 
 fn fixture(free: u64, samples: Vec<Sample>) -> Fixture {
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
-    // 走り続ける run（増分の判定のあいだ worker run が 1 本ある状態を保つ）。
+    // 走り続ける run（通した run が走っている状態を保つ）。
     let adapter = Arc::new(InstantAdapter {
         terminal: Terminal::Done {
             summary: String::new(),
@@ -91,7 +92,7 @@ async fn a_new_target_waits_ready_until_the_forecast_fits_and_the_reason_is_note
     f.inputs.lock().unwrap().samples = vec![sample("task-old", &repo, false, 100 * GB)];
     f.store.insert(&a).unwrap();
     f.d.tick().unwrap();
-    // worker run が 0 本なので、見込み 100 GB でも 1 本目は通す。
+    // target を書いている run が 0 本なので、見込み 100 GB でも 1 本目は通す。
     assert_eq!(status(&f.store, a.id), Status::Running);
     f.store.insert(&b).unwrap();
     // 走っている a の target（65 GB）は 35 GB 増える見込み: 150 − 35 − 100 = 15 < 30。
@@ -161,7 +162,7 @@ async fn a_continuation_is_judged_by_its_increment_only() {
 
 #[tokio::test]
 async fn the_only_run_is_never_held_and_unknown_repos_are_not_judged() {
-    // 空きは予備を大きく割っているが、worker run が 0 本なので 1 本は通す。
+    // 空きは予備を大きく割っているが、target を書いている run が 0 本なので 1 本は通す。
     let mut f = fixture(5 * GB, Vec::new());
     let root = f._root.path().to_path_buf();
     let (a, repo) = rust_task(&root, "a");
@@ -175,4 +176,46 @@ async fn the_only_run_is_never_held_and_unknown_repos_are_not_judged() {
     f.d.tick().unwrap();
     assert_eq!(status(&f.store, other.id), Status::Running);
     assert_eq!(f.d.scratch.admission.notes(), 0);
+}
+
+/// attempt 5 の review の指摘: 同じ tick にまとめて来た run のうち、見込みに入る分だけが始まり、通した run の lease が
+/// 走査に出るまでの tick でも残りは待ち続ける（通した量を pass ごとに 0 に戻すと次の tick で通ってしまう）。
+#[tokio::test]
+async fn runs_admitted_in_one_tick_keep_their_forecast_until_their_lease_appears() {
+    let mut f = fixture(250 * GB, Vec::new());
+    let root = f._root.path().to_path_buf();
+    let (a, repo) = rust_task(&root, "a");
+    f.inputs.lock().unwrap().samples = vec![sample("task-old", &repo, false, 100 * GB)];
+    let mut ids = vec![a.id];
+    f.store.insert(&a).unwrap();
+    for name in ["b", "c"] {
+        let (t, _) = rust_task(&root, name);
+        let t = Task {
+            workspace: a.workspace.clone(),
+            ..t
+        };
+        ids.push(t.id);
+        f.store.insert(&t).unwrap();
+    }
+    // 250 − 100（1 本目）− 100（2 本目）< 30 + 100: 2 本だけ始まる。
+    assert_eq!(f.d.tick().unwrap().dispatched, 2);
+    let ready: Vec<TaskId> = (ids.iter().copied())
+        .filter(|id| status(&f.store, *id) == Status::Ready)
+        .collect();
+    assert_eq!(ready.len(), 1);
+    // 走査は変わらない（通した 2 本の lease はまだ無い）: 3 本目は待ち続ける。
+    for _ in 0..3 {
+        assert_eq!(f.d.tick().unwrap().dispatched, 0);
+        assert_eq!(status(&f.store, ready[0]), Status::Ready);
+    }
+    assert_eq!(f.d.scratch.admission.notes(), 1);
+    // 通した 2 本が走査に書いている owner として出る（target 60 GB、増分 40 GB ずつ）: 250 − 80 − 100 = 70 ≥ 30 で始まる。
+    let started: Vec<Sample> = (ids.iter())
+        .filter(|id| **id != ready[0])
+        .map(|id| sample(&format!("task-{id}"), &repo, true, 60 * GB))
+        .collect();
+    f.inputs.lock().unwrap().samples =
+        [vec![sample("task-old", &repo, false, 100 * GB)], started].concat();
+    assert_eq!(f.d.tick().unwrap().dispatched, 1);
+    assert_eq!(status(&f.store, ready[0]), Status::Running);
 }

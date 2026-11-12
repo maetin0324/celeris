@@ -276,9 +276,7 @@ impl Dispatcher {
         // ADR 2026-11-11-disk-aware-dispatch D1: 空きの見込みが予備を割るなら新しい target を作る run を ready のまま待たせる。
         let (view, wu) = (self.scratch.view.as_ref(), run_key.work_unit.as_deref());
         let repo_of = || self.cargo_target_repo(&task).map(|r| r.source);
-        if !is_planner_dispatch
-            && (self.scratch.admission).holds_run(view, &task, wu, self.running.len(), repo_of)
-        {
+        if !is_planner_dispatch && (self.scratch.admission).holds_run(view, &task, wu, repo_of) {
             return Ok(false);
         }
         // ADR-0018: リモート実行のタスクは、クラスタの設定・cooldown・並列度・多重接続を先に確かめる。

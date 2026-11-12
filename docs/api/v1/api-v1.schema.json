@@ -28894,7 +28894,7 @@
           ]
         },
         "owners": {
-          "description": "owner ごとの見込み（owner の文字列順。target の無い owner・repo の分からない owner は載せない）。",
+          "description": "owner ごとの見込み（owner の文字列順）。target が pool にある owner と、target がまだ無くても今書いている owner\n（seed を写している最中の run）を載せる。それ以外の target の無い owner・repo の分からない owner・野良は載せない。",
           "items": {
             "$ref": "#/$defs/ScratchOwnerForecastView"
           },
@@ -28912,7 +28912,7 @@
           "type": "integer"
         },
         "running_growth_bytes": {
-          "description": "run か review の検査が今書いている target がこれから増える見込みの合計。",
+          "description": "target を今書いている owner（`owners` の `running`）がこれから増える見込みの合計。daemon が通したが worker の lease が\nまだ走査に出ない run の見込みは含まない（daemon の判定のメモリだけが数え、待たせた run の `reason` の `admitted` に出る）。",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -29383,11 +29383,11 @@
           "type": "string"
         },
         "running": {
-          "description": "run か review の検査が今この target に書いている（`task running`・`task reviewing`・`work unit running`）。",
+          "description": "この target に今書いている: run か review の検査（`task running`・`task reviewing`・`work unit running`）か、\nlease の生きた release-build（`lease live`。次の build が見込みまで育てる）。",
           "type": "boolean"
         },
         "size_bytes": {
-          "description": "測った大きさ（未測定は `None`。見込みでは 0 と見る）。",
+          "description": "測った大きさ（未測定・target がまだ無いときは `None`。見込みでは 0 と見る）。",
           "format": "uint64",
           "minimum": 0,
           "type": [

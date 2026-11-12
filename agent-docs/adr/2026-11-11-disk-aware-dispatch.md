@@ -36,7 +36,7 @@ run を起こす前（write-set の判定の後、lease の前）に、次の不
 `ready` のまま待たせる（attempts を消費しない）。
 
 ```
-空き − Σ 走っている target の増分の見込み − 今 tick に通した run の見込み − この run の見込み ≥ 予備
+空き − Σ 走っている target の増分の見込み − 通したがまだ走査に出ない run の見込み − この run の見込み ≥ 予備
 ```
 
 - **空き**: scratch pool の filesystem の statvfs の空き（`ScratchStatus.fs_free_bytes`）。
@@ -60,8 +60,13 @@ run を起こす前（write-set の判定の後、lease の前）に、次の不
   `[scratch] forecast_disk_ratio`（既定 1.0、範囲 (0, 1]）を掛けて disk 上の量に直す。既定 1.0 は圧縮の無い
   filesystem で正しく、圧縮のある filesystem では多めに見積もる（安全側）。本番の値は人が実測から決める
   （進捗の「本番への移行」）。
-- **詰まらない**: worker run が 1 本も走っていなければ、見込みが足りなくても 1 本は通す（今 tick に通した run が
-  あれば 2 本目からは判定する）。
+- **通したがまだ走査に出ない run**: 判定で通した run（task・WU）の見込みは、worker が lease を書いて走査に今書いている
+  owner として出るまで（本番の記録で run の作成から lease.json まで 5〜265 秒、多くは 10〜30 秒。tick は 2 秒）、
+  `Gate` のメモリで数え続ける（pass をまたぐ）。走査に出たら走査の増分が数え、通した分からは外す（二重に数えない）。
+  run が lease を書く前に終わった・起動の前に見送った（dispatcher の `running` に無い）ら、次の pass の始めに外す。
+- **詰まらない**: target を今書いている run（走査の今書いている owner と、通したがまだ走査に出ない run）が 1 本も
+  無ければ、見込みが足りなくても 1 本は通す（待っても空きは run の終わりでは戻らない）。Rust でない run・対話の run は
+  数えない（target を書かないので、走っていても空きの見込みを変えない）。
 - **対象**: scratch が有効で、run の cargo の target を結び付ける repo（`cargo_target_repo`）があり、この run の
   見込みが 0 より大きいもの。Remote の run と見込み 0 の run（Rust でない repo、続きで増分が無い run）は判定しない。
 - **呼び出し**: `Gate::holds_run`（`dispatch_run.rs` から `&self` で呼ぶ。状態は `Gate` の中の Mutex）。Dispatcher の field・method は増やさない（health の `size.responsibility-growth`）。試験は `Gate.probe` で空きと大きさを注入する。
@@ -114,6 +119,15 @@ pool に無く、その owner の増分が 0 になって次の tick の run が
 になり上限 64 GiB を毎回超える。D3 は終わりに作り直すので空きは戻るが、次の build がまた書く。lease の生きた
 release-build の増分を数える（上の「走っている target の増分」。attempt 2 の付記で一度外したのは、target が上限を
 超えて残っていた間の古い大きさに引きずられた数え方を直すためで、今は D3 で target が小さく保たれる）。
+
+付記（2026-11-12、attempt 5 の review の指摘）: (1) 通した量を pass ごとに 0 に戻していたので、直前の tick で通した
+run の見込みが lease の現れるまで消え、同じ tick にまとめて来た Rust の task のうち見込みに入らない分が次の tick で
+通った（本番は max_concurrency 6、lease まで多くは 10〜30 秒）。通した run を (task, WU) ごとに `Gate` のメモリに持ち、
+走査に今書いている owner として出るまで、または走らなくなるまで数える（上の「通したがまだ走査に出ない run」）。
+(2) 「詰まらない」の数えを dispatcher の `running` の全 run（Rust でない run・対話の run も含む）から、target を今書いて
+いる run に変えた。旧い数えでは、lease の生きた release-build の予約で空きが足りない間、関係の無い run が 1 本でも
+走っていると Rust の run は始まらなかった。`ScratchAdmissionView` の `owners`・`running` の説明（seed を写している
+owner と release-build を含む）を実装に合わせた。
 
 ## 結果
 

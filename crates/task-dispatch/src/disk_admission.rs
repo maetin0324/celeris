@@ -1,11 +1,13 @@
 //! ADR 2026-11-11-disk-aware-dispatch: dispatch の前の空きの見込み。
 //!
-//! - D1: `空き − Σ 走っている target の増分 − 今の pass で通した run の見込み − この run の見込み ≥ 予備` でなければ、
-//!   新しい target を作る run を始めず `ready` のまま待たせる。repo の見込みは target が pool にある同じ `repo_key` の
-//!   owner の測った大きさの最大（GC の推定と同じ `task_worker::scratch::repo_max_sizes`）。増分を数えるのは run か
-//!   review の検査が今 target に書いている owner（`task_worker::scratch::target_written_now`）と、lease の生きた
-//!   release-build（build ごとに repo の見込みまで育つ）だけ。worker run が 1 本も
-//!   走っていなければ 1 本は通す（詰まらない）。
+//! - D1: `空き − Σ 走っている target の増分 − 通したがまだ走査に出ない run の見込み − この run の見込み ≥ 予備` で
+//!   なければ、新しい target を作る run を始めず `ready` のまま待たせる。repo の見込みは target が pool にある同じ
+//!   `repo_key` の owner の測った大きさの最大（GC の推定と同じ `task_worker::scratch::repo_max_sizes`）。増分を数えるのは
+//!   run か review の検査が今 target に書いている owner（`task_worker::scratch::target_written_now`）と、lease の生きた
+//!   release-build（build ごとに repo の見込みまで育つ）だけ。通した run は、worker が lease を書いて走査に書いている
+//!   owner として出るまで（多くは 10〜30 秒、長いと数分）、[`Gate`] のメモリで見込みを数え続ける（pass をまたぐ）。
+//!   target を今書いている run（走査の書いている owner と、通したがまだ走査に出ない run）が 1 本も無ければ 1 本は通す
+//!   （詰まらない）。
 //! - D2: 予備（空きの下限）は filesystem の容量 × `[dispatch] min_free_disk_pct`（[`min_free_bytes`]）。
 //! - D4: 見込みは `ScratchStatus.admission`（[`forecast`]）。待たせている run の正本は daemon の [`Gate`] のメモリだけで、
 //!   file には書かない（同じ pool を見る verify の daemon が上書きできない）。daemon の snapshot
@@ -180,13 +182,15 @@ fn gb(bytes: u64) -> String {
     format!("{:.1} GB", bytes as f64 / 1e9)
 }
 
-/// D1 の式。`admitted_bytes` は同じ pass で先に通した run の見込みの合計、`runs_in_flight` は走っている worker run の数。
+/// D1 の式。`admitted_bytes` は通したがまだ走査に書いている owner として出ない run の見込みの合計、`writers` は target を
+/// 今書いている run の数（走査の書いている owner と、通したがまだ走査に出ない run）。`writers` が 0 なら通す（待っても
+/// 空きは run の終わりでは戻らないので、待たせると詰まる）。
 pub fn decide(
     view: &ScratchAdmissionView,
     owner: &str,
     repo_key: &str,
     admitted_bytes: u64,
-    runs_in_flight: usize,
+    writers: usize,
 ) -> Decision {
     let Some(free) = view.free_bytes else {
         return Decision::Skip;
@@ -195,7 +199,7 @@ pub fn decide(
     if need == 0 {
         return Decision::Skip;
     }
-    if runs_in_flight == 0 {
+    if writers == 0 {
         return Decision::Admit { need_bytes: need };
     }
     let available = free
@@ -223,8 +227,9 @@ pub type Probe = Arc<dyn Fn() -> Inputs + Send + Sync>;
 
 type HoldKey = (String, Option<String>);
 
-/// dispatcher の待たせている run（`ScratchState.admission`）。pass ごとに [`Gate::begin_pass`] を呼ぶ。dispatch の
-/// 途中で `&self` の Dispatcher から呼べるよう、状態は中の Mutex に持つ（daemon の tick の thread だけが触る）。
+/// dispatcher の待たせている run と、通したがまだ走査に出ない run（`ScratchState.admission`）。pass ごとに
+/// [`Gate::begin_pass`] を呼ぶ。dispatch の途中で `&self` の Dispatcher から呼べるよう、状態は中の Mutex に持つ
+/// （daemon の tick の thread だけが触る）。
 #[derive(Default)]
 pub struct Gate {
     pub probe: Option<Probe>,
@@ -235,7 +240,10 @@ pub struct Gate {
 struct GateState {
     holds: BTreeMap<HoldKey, ScratchHeldRunView>,
     seen: BTreeSet<HoldKey>,
-    admitted_bytes: u64,
+    /// 通した run（task・WU）→ (owner, 見込み)。worker が lease を書き、走査に書いている owner として出るまで（その後は
+    /// 走査の増分が数える）、または run が終わるまで持つ。pass ごとに 0 に戻すと、直前の tick で通した run の見込みが
+    /// lease の現れるまで消え、まとめて来た run が見込みを超えて始まる（attempt 5 の review の指摘）。
+    admitted: BTreeMap<HoldKey, (String, u64)>,
     /// 待ち始めの記録（log）を残した回数（試験が 1 回だけかを確かめる）。
     notes: u64,
 }
@@ -246,12 +254,20 @@ impl Gate {
     }
 
     /// 候補を照合する pass の始め（枠が埋まって照合しない pass では呼ばない。記録はそのまま残る）: 前の pass で判定に
-    /// 来なかった run（始まった・`ready` でなくなった）の記録を消し、通した量を 0 に戻す。
-    pub fn begin_pass(&self) {
+    /// 来なかった run（始まった・`ready` でなくなった）の待ちの記録を消し、通した run のうち走っていないもの
+    /// （`in_flight` が `false`。lease を書く前に終わった・起動の前に見送った）を消す。
+    pub fn begin_pass(&self, in_flight: impl Fn(&str, Option<&str>) -> bool) {
         let mut st = self.state();
         let seen = std::mem::take(&mut st.seen);
         st.holds.retain(|k, _| seen.contains(k));
-        st.admitted_bytes = 0;
+        st.admitted
+            .retain(|(task, wu), _| in_flight(task, wu.as_deref()));
+    }
+
+    /// 通したがまだ走査に出ない run の見込みの合計。
+    #[cfg(test)]
+    pub(crate) fn admitted_bytes(&self) -> u64 {
+        self.state().admitted.values().map(|(_, b)| b).sum()
     }
 
     /// D4: daemon の snapshot の scratch の status（pool の走査で組んだ `view`）に、待たせている run をメモリから載せる。
@@ -286,7 +302,6 @@ impl Gate {
         view: Option<&ScratchStatus>,
         task: &Task,
         work_unit_id: Option<&str>,
-        runs_in_flight: usize,
         repo_of: impl FnOnce() -> Option<PathBuf>,
     ) -> bool {
         if !matches!(task.workspace, WorkspaceSpec::Local { .. }) {
@@ -303,24 +318,17 @@ impl Gate {
         };
         let repo_key = task_worker::build_cache::repo_cache_key(&repo);
         let id = task.id.to_string();
-        self.hold(
-            &view,
-            &id,
-            work_unit_id,
-            &repo_key,
-            runs_in_flight,
-            SystemTime::now(),
-        )
+        self.hold(&view, &id, work_unit_id, &repo_key, SystemTime::now())
     }
 
-    /// D1: run（task・WU）を待たせるなら `true`。待ち始めに 1 回だけ log を残す（受信箱・通知には出さない）。
+    /// D1: run（task・WU）を待たせるなら `true`。待ち始めに 1 回だけ log を残す（受信箱・通知には出さない）。通した
+    /// run は、走査（`view`）に書いている owner として出るまで見込みを数え続ける。
     pub fn hold(
         &self,
         view: &ScratchAdmissionView,
         task_id: &str,
         work_unit_id: Option<&str>,
         repo_key: &str,
-        runs_in_flight: usize,
         now: SystemTime,
     ) -> bool {
         let owner = match work_unit_id {
@@ -329,15 +337,26 @@ impl Gate {
         }
         .to_string();
         let key: HoldKey = (task_id.to_string(), work_unit_id.map(str::to_string));
+        let writing: BTreeSet<&str> = view
+            .owners
+            .iter()
+            .filter(|o| o.running)
+            .map(|o| o.owner.as_str())
+            .collect();
         let mut st = self.state();
-        match decide(view, &owner, repo_key, st.admitted_bytes, runs_in_flight) {
+        // 走査に書いている owner として出た run は、走査の増分が数える（二重に数えない）。
+        st.admitted
+            .retain(|k, (o, _)| k != &key && !writing.contains(o.as_str()));
+        let admitted_bytes = st.admitted.values().map(|(_, b)| b).sum();
+        let writers = writing.len() + st.admitted.len();
+        match decide(view, &owner, repo_key, admitted_bytes, writers) {
             Decision::Skip => {
                 st.holds.remove(&key);
                 false
             }
             Decision::Admit { need_bytes } => {
                 st.holds.remove(&key);
-                st.admitted_bytes = st.admitted_bytes.saturating_add(need_bytes);
+                st.admitted.insert(key, (owner, need_bytes));
                 false
             }
             Decision::Hold { need_bytes, reason } => {
@@ -447,9 +466,10 @@ mod tests {
         }
     }
 
-    /// 不変条件（attempt 3 の review の申し送り）: repo の見込みは target が pool にある owner だけから決まり（GC の推定と
-    /// 同じ入力）、増分は run か review の検査が今書いている owner だけが持つ。release-build の lease・まだ始まらない WU・
-    /// target の消えた lease の記録は数えない。上の試験は `Sample` を直接与えるので、走査の行からの絞り込みを確かめない。
+    /// 不変条件（attempt 3・attempt 4 の review）: repo の見込みは target が pool にある owner だけから決まり（GC の推定と
+    /// 同じ入力）、増分は run か review の検査が今書いている owner（seed を写している最中で target がまだ無い owner も
+    /// 大きさ不明として含む）と lease の生きた release-build だけが持つ。まだ始まらない WU・target の消えた lease の記録・
+    /// p0 でない owner は数えない。上の試験は `Sample` を直接与えるので、走査の行からの絞り込みを確かめない。
     #[test]
     fn samples_count_present_targets_and_grow_only_where_a_run_writes_now() {
         let rows = vec![
@@ -574,9 +594,9 @@ mod tests {
         );
         status.admission = v.clone();
         let (live, verify) = (Gate::default(), Gate::default());
-        assert!(live.hold(&v, "t1", None, "ap", 1, SystemTime::UNIX_EPOCH));
-        live.begin_pass();
-        verify.begin_pass();
+        assert!(live.hold(&v, "t1", None, "ap", SystemTime::UNIX_EPOCH));
+        live.begin_pass(|_, _| true);
+        verify.begin_pass(|_, _| true);
         let held = live.with_held(Some(&status)).and_then(|s| s.admission.held);
         let owners: Vec<String> = held
             .unwrap_or_default()
@@ -592,7 +612,51 @@ mod tests {
         );
         assert_eq!(live.with_held(None), None);
         // 次の pass で判定に来なければ消える。
-        live.begin_pass();
+        live.begin_pass(|_, _| true);
         assert!(live.held_views().is_empty());
+    }
+
+    /// 不変条件（attempt 5 の review の指摘）: 通した run の見込みは pass をまたいで、走査に書いている owner として出るまで
+    /// 数え続ける。lease を書く前に終わった run（走っていない）の分は次の pass で消える。target を今書いている run が
+    /// 無ければ 1 本は通すが、通した run が走査に出る前でもそれを書いている run として数える。旧い試験は
+    /// `decide` に通した量を手で渡すか、次の tick の前に通した run の sample を probe に足していたので、lease が現れる
+    /// までの抜けを検出できなかった。
+    #[test]
+    fn admitted_runs_count_across_passes_until_the_scan_shows_them() {
+        let old = sample("task-old", "ap", false, Some(100 * GB));
+        let v = forecast(&inputs(250 * GB, vec![old.clone()]), None);
+        let gate = Gate::default();
+        gate.begin_pass(|_, _| true);
+        // 書いている run 0 本: a は通す。b は 250 − 100 − 100 = 50 ≥ 30 で通す。c は 250 − 200 − 100 < 30 で待つ。
+        assert!(!gate.hold(&v, "a", None, "ap", SystemTime::UNIX_EPOCH));
+        assert!(!gate.hold(&v, "b", None, "ap", SystemTime::UNIX_EPOCH));
+        assert!(gate.hold(&v, "c", None, "ap", SystemTime::UNIX_EPOCH));
+        // 次の pass: a・b の lease はまだ走査に無い。c は待ち続ける。
+        for _ in 0..3 {
+            gate.begin_pass(|_, _| true);
+            assert_eq!(gate.admitted_bytes(), 200 * GB);
+            assert!(gate.hold(&v, "c", None, "ap", SystemTime::UNIX_EPOCH));
+        }
+        assert_eq!(gate.notes(), 1);
+        // a が seed を写し始めて走査に出る（大きさ不明の書いている owner。増分 100）: 通した分からは外れ、二重に数えない。
+        let seeding = Sample {
+            owner: "task-a".into(),
+            repo_key: "ap".into(),
+            running: true,
+            size_bytes: None,
+        };
+        let v2 = forecast(&inputs(250 * GB, vec![old.clone(), seeding]), None);
+        gate.begin_pass(|_, _| true);
+        assert!(gate.hold(&v2, "c", None, "ap", SystemTime::UNIX_EPOCH));
+        assert_eq!(gate.admitted_bytes(), 100 * GB);
+        // b が lease を書く前に終わった（走っていない）: 次の pass で消え、c は 250 − 100 − 0 − 100 = 50 ≥ 30 で通る。
+        gate.begin_pass(|task, _| task != "b");
+        assert!(!gate.hold(&v2, "c", None, "ap", SystemTime::UNIX_EPOCH));
+        assert!(gate.held_views().is_empty());
+        // 走査に書いている owner が無く、通した run も無ければ、予備を割っても 1 本は通す。
+        let empty = Gate::default();
+        let low = forecast(&inputs(5 * GB, vec![old]), None);
+        assert!(!empty.hold(&low, "d", None, "ap", SystemTime::UNIX_EPOCH));
+        assert!(empty.hold(&low, "e", None, "ap", SystemTime::UNIX_EPOCH));
     }
 }

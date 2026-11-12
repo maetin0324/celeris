@@ -973,7 +973,6 @@ impl Dispatcher {
                     workspace: if index == 0 {
                         None
                     } else {
-                        // ADR 2026-11-12-host-check-slots D3: 重い検査は host 共通の枠を取ってから走らせる。
                         Some(slotted(
                             LocalWorkspace::new(&dir)
                                 .with_work_dir(repo.dir.clone())
@@ -1008,8 +1007,7 @@ impl Dispatcher {
                     }
                     Box::new(ssh)
                 }
-                // ADR 2026-11-12-host-check-slots D3: local の検査は host 共通の枠を取ってから走らせる
-                // （枠の待ちは timeout に数えない）。remote（ssh）は remote の host の資源なので包まない。
+                // ADR 2026-11-12-host-check-slots D3: local の検査だけ host の枠で包む（remote は包まない）。
                 None => slotted(
                     LocalWorkspace::new(&dir)
                         .with_work_dir(review_work_dir.unwrap_or_else(|| dir.clone()))

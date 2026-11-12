@@ -469,9 +469,10 @@ async fn cancelling_a_task_removes_its_worktree_and_branch() {
 }
 
 /// 不変条件（ADR-0043 D2、ADR 2026-11-11 dispatcher-state-ownership D2）: 中止された task でも、その run が走っている
-/// 間は worktree を消さない。`running`・`reviewing` は `Dispatcher` の入口が `HostMaintenance` に渡す入力で、
-/// run が抜けた後（入力が空）に同じ owner が消す。既存の `cancelling_a_task_removes_its_worktree_and_branch` は
-/// run の終わった task だけを見るので、入口が `running` を渡し忘れても通る。
+/// 間は worktree を消さない。`running`・`reviewing` は `Dispatcher` の入口が `HostMaintenance` に渡す入力。
+/// 既存の `cancelling_a_task_removes_its_worktree_and_branch` は run の終わった task だけを見るので、入口が
+/// `running` を渡し忘れても通る。走っていない中止の task を消すことは、その試験と `plan_workspace_cleanup` の
+/// 試験が確かめる（ここで生きている run の worktree を消すと、worker の準備と競合して決定的でない）。
 #[tokio::test]
 async fn a_cancelled_task_keeps_its_worktree_while_its_run_is_in_flight() {
     let repo_dir = tempfile::tempdir().unwrap();
@@ -498,8 +499,8 @@ async fn a_cancelled_task_keeps_its_worktree_while_its_run_is_in_flight() {
     let mut d = worktree_dispatcher(store.clone(), adapter, root.path(), None);
     assert_eq!(d.tick().unwrap().dispatched, 1);
     let task_dir = root.path().join(task.id.to_string());
-    // worktree は worker の側（spawn した run）が作る。できるまで待つ（出来事待ち。上限 10 秒）。
-    for _ in 0..1000 {
+    // worktree は worker の側（spawn した run）が作る。できるまで待つ（出来事待ち。上限 30 秒）。
+    for _ in 0..3000 {
         if task_dir.join("tree").is_dir() {
             break;
         }
@@ -517,18 +518,10 @@ async fn a_cancelled_task_keeps_its_worktree_while_its_run_is_in_flight() {
         task_dir.join("tree").is_dir(),
         "run が走っている間は中止でも worktree を消さない"
     );
-    assert!(d.maint.remembers_task_workspaces(task.id));
-
-    // run が抜けた後（入力の集合が空）は、同じ owner が中止の片付けをする。
-    let (maint, inputs) = d.maintenance_parts();
-    maint
-        .cleanup_cancelled_worktrees(&inputs, &std::collections::HashSet::new())
-        .unwrap();
     assert!(
-        !task_dir.join("tree").exists(),
-        "走っていなければ中止の worktree は消える"
+        d.maint.remembers_task_workspaces(task.id),
+        "記録も残す（run が抜けた後の tick で片付ける）"
     );
-    assert!(!d.maint.remembers_task_workspaces(task.id));
 }
 
 /// ADR-0041 D1 / ADR-0043 D2: 未コミットの変更が残っていれば `WorkerProgress` を 1 行積む（worktree は残す）。

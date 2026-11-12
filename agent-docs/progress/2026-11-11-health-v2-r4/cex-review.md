@@ -105,7 +105,7 @@ updated: 2026-11-12
 
 ## 提案
 
-R4 の分割（ADR 2026-11-11-dispatcher-state-ownership の D1・D3・D7）で、これらの試験を次の owner の回帰検査にする。16 本の実行は 3.3 秒なので、R4 の各 unit の check には `cargo nextest run -p task-dispatch -E 'test(/cex_review_authority::/)'` の全 16 本を入れ、下の表は「その unit が壊しうる試験」として使う。
+R4 の分割（ADR 2026-11-11-dispatcher-state-ownership の D1・D3・D7）で、これらの試験を次の owner の回帰検査にする。16 本の実行は 10 秒未満なので、R4 の各 unit の check には `cargo nextest run -p task-dispatch -E 'test(/cex_review_authority::/)'` の全 16 本を入れ、下の表は「その unit が壊しうる試験」として使う。
 
 | 試験 | owner（D1・D3） | 回帰検査にする unit |
 |---|---|---|
@@ -135,7 +135,7 @@ R4 の分割（ADR 2026-11-11-dispatcher-state-ownership の D1・D3・D7）で�
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
 
-- `cargo nextest run -p task-dispatch -E 'test(/cex_review_authority::/)' --no-fail-fast`: 16 本すべて合格・1670 本 skip、exit 0（実行 3.3 秒）。
+- `cargo nextest run -p task-dispatch -E 'test(/cex_review_authority::/)' --no-fail-fast`: 16 本すべて合格・1670 本 skip、exit 0（実行は 10 秒未満。負荷で 3〜9 秒）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。
 - `cargo fmt --all -- --check`: exit 0。
 - `sh scripts/dev/progress-index.sh --check`: exit 0。

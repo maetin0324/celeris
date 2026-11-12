@@ -26,6 +26,9 @@
 #   bash <this> compare <out.json> <crate,...>
 #       base（git merge-base HEAD main）と HEAD を同じ run で交互に測る（試験は走らせない）。base は $TMPDIR の下に
 #       git worktree add した写しで測り、終わったら git worktree remove する。crate ごとに base と HEAD の順を入れ替える。
+#       段の順は crate ごとに「両側の build → 両側の edit_verify」（側の順は order のとおり）。片側の build の直前に
+#       相手側の edit_verify（14 crate の settle と作り直し）を置かない。置くと build の組の 1 分値が自分の計測の負荷で
+#       2 倍以上離れ、除外される（meas-edit-worker の 1 回目: 比 2.9〜6.5）。
 #       targets    : cargo metadata の target の数（kind ごと。build しない）
 #       build      : cargo nextest run -p <crate> --no-run で settle した後、src の mtime を進めて同じ build を測る
 #                    （その crate の lib と全 test target の作り直し・link）。呼び方は両側で同じ。
@@ -461,13 +464,15 @@ PY
     (cd "$(tree_of "$side")" && eval "$(cat "$raw/inv-$side.prep")" && eval "$cmd")
   }
   probe=$'\n// edit-verify probe (R5 measure.sh compare)\n'
-  measure_one() {
-    local side="$1" c="$2" tree f pre rc src lrc drc wait_rc l0 l1 t0 t1 t2 t3 t4 nb nm nl na aff
+  # edited_file <tree> <crate>: 編集・mtime を進める file（src/lib.rs、無ければ src/main.rs）。
+  edited_file() { local f="crates/$2/src/lib.rs"; git -C "$1" ls-files --error-unmatch "$f" >/dev/null 2>&1 || f="crates/$2/src/main.rs"; echo "$f"; }
+  measure_build() {
+    local side="$1" c="$2" tree f pre rc src wait_rc l0 t0 t1 nb nm nl na
     tree="$(tree_of "$side")"; pre="$raw/$side-$c"
     wait_stage; wait_rc=$?
     cstep "$side" "$c" build_settle_wait "$load_wait"
-    [ "$wait_rc" = 0 ] || { cskip "$side" "$c" build "load wait expired: $load_wait"; cskip "$side" "$c" edit_verify "load wait expired: $load_wait"; return; }
-    f="crates/$c/src/lib.rs"; git -C "$tree" ls-files --error-unmatch "$f" >/dev/null 2>&1 || f="crates/$c/src/main.rs"
+    [ "$wait_rc" = 0 ] || { cskip "$side" "$c" build "load wait expired: $load_wait"; return; }
+    f="$(edited_file "$tree" "$c")"
     # build: 両側とも -p <crate>。settle の後に src の mtime を進め、その crate と test target の作り直しを測る。
     (cd "$tree" && timed 60 cargo nextest run -p "$c" --no-run) >"$pre-build-settle.log" 2>&1; src=$?
     if [ "$src" -ge 124 ] && [ "$src" -le 137 ]; then
@@ -481,6 +486,10 @@ PY
       cstep "$side" "$c" build "$(python3 -I -c 'import json,sys; a=sys.argv; c=json.loads(a[5]); n=lambda x: None if x=="null" else int(x); print(json.dumps({"cmd":"cargo nextest run -p "+a[10]+" --no-run（settle の後に "+a[11]+" の mtime を進める）","exit":int(a[1]),"timed_out":a[1] in ("124","137"),"settle_exit":int(a[4]),"secs":round(float(a[3])-float(a[2]),2),"compiled_units":len(c),"compiled":c,"test_binaries":n(a[6]),"linked_test_binaries":n(a[7]),"loadavg_before":a[8],"loadavg_after":a[9]}))' \
         "$rc" "$t0" "$t1" "$src" "$(compiled_names "$pre-build.log")" "$nm" "$nl" "$l0" "$(la)" "$c" "$f")"
     fi
+  }
+  measure_ev() {
+    local side="$1" c="$2" tree f pre rc src lrc drc wait_rc l0 l1 t0 t1 t2 t3 t4 nb nm nl na aff
+    tree="$(tree_of "$side")"; pre="$raw/$side-$c"; f="$(edited_file "$tree" "$c")"
     # edit_verify: 対象 crate を決め、その組で settle してから、編集 → --list → その側の nextest の行（--no-run）→ doc test の行。
     printf '%s' "$probe" >>"$tree/$f"
     (cd "$tree" && CELERIS_WU_BASE=HEAD bash scripts/dev/test-affected.sh --list) >"$pre-edit.list" 2>"$pre-edit.list.err"
@@ -537,7 +546,8 @@ PY
   i=0
   for c in "${crates[@]}"; do
     if [ $((i % 2)) -eq 0 ]; then sides="base head"; else sides="head base"; fi
-    for side in $sides; do measure_one "$side" "$c"; done
+    for side in $sides; do measure_build "$side" "$c"; done
+    for side in $sides; do measure_ev "$side" "$c"; done
     i=$((i + 1))
   done
   assemble_cmp

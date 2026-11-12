@@ -132,7 +132,11 @@ fake の reviewer は `review.json` に criterion 0〜7 の判定を書く。配
 
 - `cargo nextest run -p task-dispatch -E 'test(/cex_review_authority::/)' --no-fail-fast`: 7 本すべて合格（`cex_integration_` 3 本、`cex_review_` 4 本）、exit 0。
 - guard の確認は上の表のとおり（一時変更は commit していない）。
-- 規約の確認: `cex_review_authority.rs` に tick を回数で回す helper の名前と thread の sleep は 0 件。`/// 不変条件:` と `/// 既存の試験で検出できない理由:` は各 7 行（試験 7 本）。
+- 規約の確認: `cex_review_authority.rs` に tick を回数で回す helper の名前と thread の sleep は 0 件。`/// 不変条件:` と `/// 既存の試験で検出できない理由:` は各 7 行（試験 7 本）。Dispatcher の private field の読み書きは 0 件。
+- `bash scripts/dev/test-affected.sh`: exit 0。対象は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch、nextest は 3729 本合格・11 本 skip（652 秒、開始 load 39、壁時計 約 19 分）、script bundle の SKIP は 0 件。最後に scratch の片付けの `rm` が権限で 3 件失敗と出たが exit には影響しない。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo clippy -p task-dispatch --tests -- -D warnings` の指摘のうち `cex_review_authority.rs` のものは 0 件。`cargo fmt --all -- --check`: exit 0。`sh scripts/dev/progress-index.sh --check`: exit 0。
+- test-affected と clippy は試験 file の最後の変更の後の HEAD で実行した。その後の commit はこの記録だけ（code は同じ）で、fmt・progress-index・`cex_review_authority::` の 7 本はその後の HEAD で再実行した。
+- 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の変更 path はこの記録と `cex_review_authority.rs` の 2 件。
 
 ### 提案
 

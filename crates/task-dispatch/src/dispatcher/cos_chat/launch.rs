@@ -320,7 +320,7 @@ impl Dispatcher {
         // ADR 2026-11-07-root-done-tick-phase-timing D3: the breakdown is non-empty only for a slow pass.
         let root_done_parts = launch.root_done_tick(self);
         lap("cos.root_done_tick");
-        if self.accepting_new_work && self.disk_ready && launch.config.enabled {
+        if self.accepting_new_work && self.maint.disk_ready() && launch.config.enabled {
             if let Err(error) = launch.claim_queued(self) {
                 tracing::warn!(%error, "CoS chat launch tick failed");
             }

@@ -70,17 +70,7 @@ impl Dispatcher {
         // ADR 2026-10-07-build-tmp-hygiene 付記 A4: 監視している path が `critical` のあいだは新しい coding run を
         // 起こさない（ready のまま。attempts を消費しない。並列 WU の 2 本目以降も同じ）。
         if self.held_by_disk_critical(&task) {
-            let path = self
-                .disk_watch
-                .as_ref()
-                .map(|r| {
-                    r.entries
-                        .iter()
-                        .map(|e| e.path.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default();
+            let path = self.maint.disk_watch_paths();
             self.note_dispatch_wait(task.id, task_core::TaskWait::DiskCritical { path });
             return Ok(false);
         }
@@ -1063,7 +1053,7 @@ impl Dispatcher {
         }
         // ADR-0043 D2: 中止されたときに片付けられるよう、この run で使う作業場所を覚えておく。
         if let Some(ws) = &task_worktree {
-            self.task_workspaces.insert(task.id, ws.clone());
+            self.maint.remember_task_workspaces(task.id, ws.clone());
         }
         // ADR-0074 D4（Phase F3 quota）: 観測の `before` を記録する。ADR-0076: planner run も同じく
         // 登録する（`on_planner_finished` が `resolve_quota_estimate` で閉じる）。
@@ -1328,7 +1318,7 @@ impl Dispatcher {
         } else if self.scratch_active() {
             CargoTargetPlan::Scratch {
                 settings: Box::new(self.config.scratch.clone()),
-                candidates: self.scratch.candidates.clone(),
+                candidates: self.maint.scratch_candidates(),
             }
         } else {
             CargoTargetPlan::Legacy(self.config.build_cache_dir.clone())

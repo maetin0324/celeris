@@ -21,6 +21,8 @@ pub mod dispatcher;
 pub mod execution_scheduler;
 /// ADR 2026-11-07-health-review-integration: 健全性の review（review 方針の読み込み・設計 review・health 文脈・verdict）。
 pub mod health_review;
+/// ADR 2026-11-11 dispatcher-state-ownership D1: disk・scratch・build cache・repo target の掃除の状態の owner。
+pub(crate) mod host_maintenance;
 /// ADR-0074 D1.2 / D1.4（Phase F2）: WU の worktree と工程の統合（daemon 側の git 操作だけ。LLM なし）。
 pub mod integration;
 /// Phase F5-fix6: 居なくなったデーモンの run（孤児）を lease 失効を待たずに回収する判定。

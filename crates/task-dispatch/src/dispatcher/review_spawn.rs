@@ -350,7 +350,7 @@ impl Dispatcher {
         run_id: String,
         subject: &ReviewSubject,
     ) -> Result<bool, DispatchError> {
-        if !self.accepting_new_work || !self.disk_ready {
+        if !self.accepting_new_work || !self.maint.disk_ready() {
             return Ok(false);
         }
         let Some(task) = self.store.get(task_id)? else {

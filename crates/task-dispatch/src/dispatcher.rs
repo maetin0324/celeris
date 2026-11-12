@@ -18,7 +18,7 @@
 //! ## module map（ADR-0082）
 //!
 //! この facade に残すもの: `Dispatcher` struct と private な補助型（`RunEntry`・`ReviewEntry`・
-//! `Completion` など）、公開の設定型、`new` と setter/getter、`tick`（段階の順序。`disk_ready` は drain
+//! `Completion` など）、公開の設定型、`new` と setter/getter、`tick`（段階の順序。`HostMaintenance::refresh_disk_ready` は drain
 //! より前）・`drain_completions`・`dispatch_ready`・`is_idle`、`mod` 宣言と明示した `pub use`。依存の向きは L0（この facade の型と free helper）
 //! ← L1 ← L2 ← L3 ← L4 ← `tick`。横の呼び出しは `worker_finish` → `phase_integration` の 1 本だけ。
 //!
@@ -26,7 +26,9 @@
 //! |---|---|---|
 //! | `cluster_runtime` | cluster / tunnel の接続・生存確認・probe・job の poll の状態の owner（`crate::cluster_runtime::ClusterRuntime`。この dir の外。ADR 2026-11-11 dispatcher-state-ownership D1） | owner |
 //! | `cluster` | `ClusterRuntime` を呼ぶ入口と、org・run の表を読むクラスタの解決 | L1 |
-//! | `housekeeping` | disk guard・scratch pool の GC・後片付け | L1 |
+//! | `host_maintenance` | disk guard・disk 監視・scratch pool の GC・build cache と repo target の掃除・中止された作業場所の片付けの状態の owner（`crate::host_maintenance::HostMaintenance`。この dir の外。ADR 2026-11-11 dispatcher-state-ownership D1） | owner |
+//! | `housekeeping` | `HostMaintenance` を呼ぶ入口（`MaintenanceInputs` と run・review の集合を渡す）と、verify の判定・承認と通知 feed の照合・検査の `CARGO_TARGET_DIR` | L1 |
+//! | `maintenance` | `HostMaintenance` の保守 executor（cron の `target_sweep`）と disk 監視の設定の入口 | L1 |
 //! | `snapshot` | デーモン状態の snapshot の組み立てと公開 | L1 |
 //! | `quota_book` | quota の見積りと release | L1 |
 //! | `sinks` | run 途中のイベントの sink（`StoreSink`・`ReviewerSink`） | L1 |
@@ -246,46 +248,6 @@ fn log_slow_step(step: &'static str, started: Instant) {
             "slow dispatcher step"
         );
     }
-}
-
-/// 未作成の作業場所は最も近い既存の親 filesystem を測る。statvfs は symlink も解決する。
-fn free_disk_mb(path: &Path) -> Result<u64, String> {
-    let existing = path
-        .ancestors()
-        .find(|p| p.exists())
-        .ok_or_else(|| format!("{}: no existing ancestor", path.display()))?;
-    let stat =
-        nix::sys::statvfs::statvfs(existing).map_err(|e| format!("{}: {e}", existing.display()))?;
-    Ok(stat.blocks_available().saturating_mul(stat.fragment_size()) / (1024 * 1024))
-}
-
-/// ADR-0075（Phase G1）: dispatcher が持つ scratch pool の GC の状態（プロセス内メモリだけ。DB に書かない）。
-#[derive(Default)]
-struct ScratchState {
-    /// 測定スレッドの結果（パス → サイズ）。
-    sizes: crate::scratch_gc::SizeCache,
-    extents: crate::scratch_gc::SharedExtentCache,
-    /// 削除スレッド・測定スレッドが動いている間は `true`（重ねて起こさない）。
-    removing: Arc<std::sync::atomic::AtomicBool>,
-    measuring: Arc<std::sync::atomic::AtomicBool>,
-    last_measure: Option<Instant>,
-    /// 直近の走査で P3 だった target（run の開始時の adopt の候補）。
-    candidates: Vec<task_worker::scratch::AdoptCandidate>,
-    /// `DaemonSnapshot.scratch`。
-    view: Option<task_ops::daemon::ScratchStatus>,
-    last_gc: Option<task_ops::daemon::ScratchGcView>,
-    /// journal の遷移（watermark の到達・解除）を 1 回だけ出すための直前の値。
-    pressure: Option<task_worker::scratch::Pressure>,
-    /// 実効上限の縮小を 1 回だけ出すための直前の値（GiB）。
-    effective_warned_gib: Option<u64>,
-    /// ディスク不足の通知の本文に足す P0 の一覧（直近の走査）。
-    pinned_summary: Option<String>,
-    /// この tick で緊急 GC を回した（通常の `scratch_gc` phase を重ねない）。
-    ran_this_tick: bool,
-    /// ADR-0129 (4): 直近に seed の更新を確かめた時刻（`None` = 起動後まだ。昇格の後の起動で直ちに確かめる）。
-    seed_last_check: Option<Instant>,
-    /// seed の更新スレッドが動いている間は `true`。
-    seed_refreshing: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// ADR-0075 D3: run の `CARGO_TARGET_DIR` をどこから取るか（`run_worker` に渡す）。
@@ -1179,14 +1141,9 @@ pub struct Dispatcher {
     /// があれば store、無ければ `config.config_max_concurrency`）。tick の頭と admin の
     /// `LocalSettingsChanged` で `refresh_max_concurrency` が読み直す。走行中の run は止めない。
     max_concurrency: usize,
-    /// ADR 2026-10-07-build-tmp-hygiene D1.4: cron の保守 executor（`target_sweep`）の roots と上限。
-    /// `None` は既定（`dispatcher::maintenance` を参照）。
-    target_sweep: Option<task_worker::target_sweep::SweepParams>,
-    /// ADR 2026-10-07-build-tmp-hygiene D4: ディスク使用率の監視（`None` は無効。celeris が
-    /// `[[maintenance.disk_watch]]` から `set_disk_watch` で渡す）。
-    disk_watch: Option<crate::disk_watch::DiskWatchRunner>,
-    /// ADR 2026-10-07-build-tmp-hygiene 付記 A2・A3: 保守 executor の掃除の範囲。
-    target_sweep_scope: crate::target_sweep::SweepScope,
+    /// ADR 2026-11-11 dispatcher-state-ownership D1: disk・scratch・build cache・repo target の掃除と、中止された
+    /// task の作業場所の片付けの状態の owner（`crate::host_maintenance`。入口は `housekeeping.rs`・`maintenance.rs`）。
+    maint: crate::host_maintenance::HostMaintenance,
     #[cfg(test)]
     test_now: Option<Arc<StdMutex<OffsetDateTime>>>,
     /// 試験専用: この source の全 account を Claude 予約（`CosReservation`）として扱う（CoS の経路でも再現する）。
@@ -1266,16 +1223,6 @@ pub struct Dispatcher {
     /// 手元のレビューのうち、前の tick で「tokio task は終わっているのに判定の完了が届いていない」と見た
     /// task（`ownerless_runs.rs` の `reap_lost_reviews`。2 tick 続けて見えたら取りこぼしと判定する）。
     lost_review_watch: std::collections::HashSet<TaskId>,
-    disk_low: bool,
-    /// ADR-0074 F5-fix: 終端の WU の target を消す別スレッドが動いている間は `true`（重ねて起こさない）。
-    removing_build_caches: Arc<std::sync::atomic::AtomicBool>,
-    /// ADR 2026-10-10-local-disk-growth-paths D2: 終端 task の repo 直下 target の常設の掃除（cron に依らない）。
-    /// 前回走った時刻（注入時計）と、削除スレッドが動いている間の印。
-    repo_target_gc_at: Option<OffsetDateTime>,
-    removing_repo_targets: Arc<std::sync::atomic::AtomicBool>,
-    /// ADR-0075（Phase G1）: scratch pool の GC の状態（測定の cache・削除 / 測定スレッドの印・adopt の候補・観測値）。
-    scratch: ScratchState,
-    disk_ready: bool,
     /// 「設定に合うプロバイダが無い」警告を出した（連続 tick で繰り返さない）タスク（ADR-0012 D2）。
     warned_unroutable: std::collections::HashSet<TaskId>,
     /// ADR 2026-10-15-mlsys-min D4: 外部 provider の credential 待ちの宣言（source ごと）と秘密の置き場。
@@ -1381,11 +1328,6 @@ pub struct Dispatcher {
     /// `dispatch_ready` も `recover_reviews` も動かさず、**手元の run とレビューの面倒だけ見続ける**
     /// （完了の記録、リースの更新、`aggregate` / `child_failed` の後処理は通常どおり動く）。
     accepting_new_work: bool,
-    /// ADR-0041 D1 / ADR-0043 D2: この celeris が用意したローカルの作業場所（1 つ以上のリポジトリ）。
-    /// **終端では消さない**（ADR-0043 D2 の改定。差分を見るために残す）。消すのは**中止**（cancel）
-    /// のときだけで、worktree とブランチを消す。再起動では失われる（残った worktree は人が
-    /// `git worktree remove` する。PROGRESS の未解決）。
-    task_workspaces: HashMap<TaskId, task_worker::TaskWorkspaces>,
     /// ADR-0041 D5: 面倒を見てよいタスクの述語（`None` なら全部）。`--mode verify` の煙試験でだけ使う。
     eligible: Option<TaskFilter>,
     /// ADR-0052 D1（Phase 64）: 知識整理タスクを dispatch する直前に当てる到達性の検査
@@ -1501,9 +1443,7 @@ impl Dispatcher {
             cos_chat_launch: None,
             config,
             max_concurrency,
-            target_sweep: None,
-            disk_watch: None,
-            target_sweep_scope: crate::target_sweep::SweepScope::default(),
+            maint: Default::default(),
             #[cfg(test)]
             test_now: None,
             #[cfg(test)]
@@ -1541,12 +1481,6 @@ impl Dispatcher {
             terminal_records_reconciled_at: None,
             ownerless_reconciled_at: None,
             lost_review_watch: std::collections::HashSet::new(),
-            disk_low: false,
-            removing_build_caches: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            repo_target_gc_at: None,
-            removing_repo_targets: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            scratch: ScratchState::default(),
-            disk_ready: true,
             warned_unroutable: std::collections::HashSet::new(),
             credential_gates: credential_gate::CredentialGates::default(),
             credential_held: std::collections::HashSet::new(),
@@ -1590,7 +1524,6 @@ impl Dispatcher {
             credential_busy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             now_unix_fn: Arc::new(real_now_unix),
             accepting_new_work: true,
-            task_workspaces: HashMap::new(),
             eligible: None,
             knowledge_probe: Arc::new(|base_url, bearer_token| {
                 task_worker::probe_models(base_url, task_worker::PROBE_TIMEOUT, bearer_token)
@@ -2202,7 +2135,7 @@ impl Dispatcher {
             }
         }
         // drain_completions からも reviewer run が起動されるため、完了処理より先に判定する。
-        self.disk_ready = !self.accepting_new_work || self.check_disk_space();
+        self.refresh_disk_ready();
         // Critical also gates reviewers started by drain_completions. Sample before that phase.
         // Draining instances leave monitoring to the new owner.
         if self.accepting_new_work {
@@ -2250,22 +2183,8 @@ impl Dispatcher {
         self.cleanup_cancelled_worktrees()?;
         // ADR-0075 D2（Phase G1）: scratch pool の semantic GC（`scratch_gc` phase。rename まで、削除と測定は別スレッド）。
         // scratch が無効なら ADR-0074 F5-fix: 終端になった WU の target（WU ごとの `CARGO_TARGET_DIR`）を消す。
-        if self.scratch_active() {
-            if !self.scratch.ran_this_tick {
-                self.scratch_gc(false);
-            }
-            // ADR-0129 (4)(5): seed の GC（rename まで）と、main が進んだときの seed の更新（別スレッド）。
-            self.seed_housekeeping(Instant::now());
-        } else {
-            self.cleanup_work_unit_build_caches();
-            self.scratch.view = self.config.shared_build_cache.then(|| {
-                crate::scratch_gc::disabled_status(
-                    &self.config.scratch,
-                    std::time::SystemTime::now(),
-                )
-            });
-        }
-        self.scratch.ran_this_tick = false;
+        // ADR-0129 (4)(5): scratch が有効なら seed の GC（rename まで）と、main が進んだときの seed の更新（別スレッド）も。
+        self.tick_build_caches();
         steps.mark("scratch_and_build_caches");
         // ADR-0066 D2（Phase 110b）: 終端になってから `prune_after_secs` 経った作業場所から、ビルド
         // 生成物だけを刈る（1 tick に最大 1 か所。探すところまでは軽いので同期、削除は別スレッド）。
@@ -2275,7 +2194,7 @@ impl Dispatcher {
         steps.mark("prune_and_sweep");
         // ADR-0040 D4: draining のインスタンスは新しい仕事を始めない（拾い上げも dispatch もしない）。
         // 手元の run とレビューの完了・リース更新・後処理は上の `drain_completions` 以下でそのまま動く。
-        if self.accepting_new_work && self.disk_ready {
+        if self.accepting_new_work && self.maint.disk_ready() {
             self.recover_reviews()?;
         }
         steps.mark("recover_reviews");
@@ -2298,14 +2217,14 @@ impl Dispatcher {
             tracing::warn!(error = %e, "browser prerequisite re-evaluation failed");
         }
         steps.mark("cron_and_browser_prereq");
-        if self.accepting_new_work && self.disk_ready {
+        if self.accepting_new_work && self.maint.disk_ready() {
             report.dispatched = self.dispatch_ready()?;
             self.stagnation.waits_known = true; // ADR 2026-11-09-unscheduled-restart-hold D1: メモリの待ちが揃った。
         }
         steps.mark_with("dispatch_ready", crate::phase_timing::take());
         // ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch）D3:
         // 評価 run は本番を先に配った後の予約枠（`[routing_eval] reserved_runs`）の中だけで起こす。
-        if self.accepting_new_work && self.disk_ready {
+        if self.accepting_new_work && self.maint.disk_ready() {
             report.eval_started = self.tick_eval_trials();
         }
         steps.mark("tick_eval_trials");

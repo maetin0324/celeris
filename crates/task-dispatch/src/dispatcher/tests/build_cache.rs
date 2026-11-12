@@ -1,5 +1,11 @@
 use super::*;
 
+/// owner の `seed_housekeeping` を `Dispatcher` の値で呼ぶ（tick を通さずに間隔を確かめる）。
+fn seed_housekeeping(d: &mut Dispatcher, now: Instant) {
+    let (maint, inputs) = d.maintenance_parts();
+    maint.seed_housekeeping(&inputs, now);
+}
+
 /// 共有ビルドキャッシュが有効で git のリポジトリがある run の前置きに、`target/` は共有キャッシュに
 /// あるという 1 行が足される。無効なら足されない。
 #[tokio::test]
@@ -639,15 +645,14 @@ async fn low_disk_runs_emergency_gc_before_pausing_dispatch() {
     // 緊急 GC: agent の P3（通常は watermark まで残る）も rename、P0 は残る。
     assert!(!pool.target_dir(&released).exists());
     assert!(pool.target_dir(&live).exists());
-    assert!(d.disk_low);
+    assert!(d.maint.disk_low());
     assert_eq!(
-        d.scratch.view.as_ref().map(|v| v.pressure.as_str()),
+        d.maint.scratch_view().map(|v| v.pressure.as_str()),
         Some("emergency")
     );
     assert!(
-        d.scratch
-            .view
-            .as_ref()
+        d.maint
+            .scratch_view()
             .unwrap()
             .last_gc
             .as_ref()
@@ -664,7 +669,7 @@ async fn low_disk_runs_emergency_gc_before_pausing_dispatch() {
     // 空きが戻れば自動で解除して dispatch する。
     d.config.min_free_disk_mb = 0;
     assert_eq!(d.tick().unwrap().dispatched, 1);
-    assert!(!d.disk_low);
+    assert!(!d.maint.disk_low());
     assert!(pool.target_dir(&live).exists());
 
     // 消せるものが P0 だけ → 保留の通知に pinned の一覧。
@@ -736,7 +741,7 @@ async fn scratch_on_nfs_falls_back_to_build_cache_dir() {
             task_worker::build_cache::cargo_target_dir_env(cache_dir.path(), repo_dir.path());
         assert!(runs[0].contains(&expected), "{:?}", runs[0]);
         assert!(!scratch_dir.path().join("targets").exists());
-        let view = d.scratch.view.clone().expect("disabled view");
+        let view = d.maint.scratch_view().cloned().expect("disabled view");
         assert!(!view.enabled);
         assert_eq!(view.disabled_reason, settings.disabled_reason);
     }
@@ -846,7 +851,7 @@ async fn seed_housekeeping_runs_on_its_interval_and_retires_stale_generations() 
     std::fs::create_dir_all(repo_dir.join("gen-b/target")).unwrap();
     sc::switch_current(&repo_dir, "gen-b", std::time::SystemTime::now()).unwrap();
     let t0 = Instant::now();
-    d.seed_housekeeping(t0);
+    seed_housekeeping(&mut d, t0);
     assert!(!repo_dir.join("gen-a").exists());
     assert!(repo_dir.join(sc::SEED_UNREGISTERED_MARK).is_file());
     assert_eq!(
@@ -855,15 +860,24 @@ async fn seed_housekeeping_runs_on_its_interval_and_retires_stale_generations() 
     );
     // 間隔の前は何もしない。
     std::fs::create_dir_all(repo_dir.join("gen-c/target")).unwrap();
-    d.seed_housekeeping(t0 + Duration::from_secs(sc::SEED_CHECK_INTERVAL_SECS - 1));
+    seed_housekeeping(
+        &mut d,
+        t0 + Duration::from_secs(sc::SEED_CHECK_INTERVAL_SECS - 1),
+    );
     assert!(repo_dir.join("gen-c").is_dir());
-    d.seed_housekeeping(t0 + Duration::from_secs(sc::SEED_CHECK_INTERVAL_SECS));
+    seed_housekeeping(
+        &mut d,
+        t0 + Duration::from_secs(sc::SEED_CHECK_INTERVAL_SECS),
+    );
     assert!(!repo_dir.join("gen-c").exists());
     assert!(repo_dir.join("gen-b/target").is_dir());
     // seed_reflink = false なら触らない。
     std::fs::create_dir_all(repo_dir.join("gen-d/target")).unwrap();
     d.config.scratch.seed_reflink = false;
-    d.seed_housekeeping(t0 + Duration::from_secs(10 * sc::SEED_CHECK_INTERVAL_SECS));
+    seed_housekeeping(
+        &mut d,
+        t0 + Duration::from_secs(10 * sc::SEED_CHECK_INTERVAL_SECS),
+    );
     assert!(repo_dir.join("gen-d").is_dir());
 }
 

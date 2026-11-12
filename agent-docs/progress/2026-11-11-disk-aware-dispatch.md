@@ -42,6 +42,7 @@ commit（件名）:
 
 （提出時の HEAD で実行。基準は `git merge-base HEAD main`）
 
+- attempt 4（コード変更なし、main は動いていない）: 前回の review で落ちた `script_compare_cos_digest`（celeris）は単独実行で 9 passed。提出時の HEAD の `bash scripts/dev/test-affected.sh` は exit 0（nextest 6749 passed・開始時 load average 約 21）。負荷が高い時に時間依存で落ちる既存の試験で、この変更の範囲外。
 - attempt 3（main は動いておらず rebase なし）: `bash scripts/dev/test-affected.sh` exit 0（1189 秒、開始時 load average 約 36）。nextest 6749 passed・23 skipped、web 103 file・710 passed、repo_health_gate all checks passed。`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0、`sh scripts/dev/progress-index.sh --check` ok。`cargo nextest run -p task-worker -p task-dispatch --lib -E 'test(/scratch/) | test(/disk_forecast/) | test(/disk_admission/) | …'` 116 passed（新しい試験 `samples_count_present_targets_and_grow_only_where_a_run_writes_now`・`only_running_and_reviewing_owners_count_as_written_now` を含む）。`UPDATE_SCHEMA=1 cargo test -p task-api --lib committed_schema_matches_generated` 1 passed、`node web/scripts/gen-types.mjs` で生成型を作り直した。
 - `bash scripts/dev/test-affected.sh`: exit 0（attempt 2、1039 秒、開始時 load average 約 40）。対象は celeris・celeris-campaign・celeris-mcp・celerisctl・e2e・llm-proxy・task-api・task-dispatch・task-ops・task-worker と web。nextest 6739 passed・23 skipped、web 104 file・712 passed、repo_health_gate all checks passed。
 - `cargo build -p celeris -p celerisctl --bins && cargo nextest run -p e2e --test account_pool_scenarios`: 3 passed（review で落ちた `account_selection_follows_headroom…` を含む。試験 config を `min_free_disk_pct = 0` に直した後）。

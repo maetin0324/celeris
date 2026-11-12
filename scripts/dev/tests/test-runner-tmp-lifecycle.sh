@@ -437,7 +437,10 @@ fx="$base/fx"
 fakebin="$base/fakebin"
 mkdir -p "$fx/scripts/dev/lib" "$fx/crates/foo/src" "$fx/tools/nextest" "$fakebin"
 cp "$here/scripts/dev/test-affected.sh" "$here/scripts/dev/test-parallel.sh" "$fx/scripts/dev/"
-cp "$LIB" "$fx/scripts/dev/lib/"
+cp "$LIB" "$here/scripts/dev/lib/check-slot.sh" "$fx/scripts/dev/lib/"
+# ADR 2026-11-12-host-check-slots: 偽 repo の runner は host の枠ではなく試験の一時 dir の枠を取る。
+export CELERIS_CHECK_SLOTS_DIR="$fx/check-slots" CELERIS_CHECK_SLOTS=8
+unset CELERIS_CHECK_SLOT
 cp "$here/tools/nextest/VERSION" "$fx/tools/nextest/VERSION"
 printf '#!/bin/sh\nexit 0\n' >"$fx/scripts/dev/check-health.sh"
 printf '[package]\nname = "foo"\n' >"$fx/crates/foo/Cargo.toml"

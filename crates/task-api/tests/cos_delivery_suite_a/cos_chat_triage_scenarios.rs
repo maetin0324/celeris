@@ -1062,10 +1062,7 @@ async fn cos_triage_scope_g_operator_escalation_takes_over_an_unsent_fallback() 
         .expect("fallback row");
     assert_eq!(
         withdrawn,
-        (
-            Some(0),
-            Some(task_core::cos_fallback::WITHDRAWN.to_owned())
-        )
+        (Some(0), Some(task_core::cos_fallback::WITHDRAWN.to_owned()))
     );
     assert_eq!(
         count(&env, "SELECT COUNT(*) FROM notifications"),

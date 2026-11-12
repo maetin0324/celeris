@@ -77,8 +77,10 @@ job 待ちの延長、replan の指示など）は CoS が答える。`basis.cat
   外部への公開・送信（`external_publish`）、破壊的操作（`destructive`）、秘密・権限・セキュリティ（`secrets_permissions`）。
   これらの段は、それより前の `review: human` の段か人の承認（standing rule・人が答えた decision・認めた approval）の内側に
   あるときだけ (f) にでき、そうでなければ上の表の行（`beyond_frame`・`production` は本番の行・`external_publish`・`destructive`・
-  `secret_or_security`）として escalate する。計画の中の decision と `review: human` の段は approve しても消えず、人に残る。計画を書き直させる `replan`・
-  取り下げる `withdraw` は CoS が選ばず escalate する。
+  `secret_or_security`）として escalate する。計画の中の未回答の decision は、§0 の人に残す件でなければ同じ run で先に `task_scope` で
+  答え、その後に (f) で判定し直す（ADR 2026-11-12-cos-triage-scope D6。決定が残る間の approve は API が 422 で断る）。
+  `review: human` の段は approve しても消えず、人に残る。計画を書き直させる `replan` は `task_scope` の根拠（計画が task の目的・
+  受け入れ条件・ADR から外れている箇所）つきで答えられる。取り下げる `withdraw` は目的の変更に当たるので escalate する。
 - CoS が新しい standing permission（永続の認可）を自分で作ることは「秘密・権限・セキュリティ」の行として escalate。
   `/cos/operations` の standing_rule.create・release.promote は人の決定で CoS にも登録されているが（cos-operator の operations.md）、
   人の依頼がある chat の run で使うもので、人の指示の無い一次対応では使わず escalate する。

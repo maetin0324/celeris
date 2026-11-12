@@ -34,6 +34,9 @@
    - 外部 operator: 関係 task への `task_comments.author_kind = operator` の comment、または `by = operator:<name>` の event
 5. **人の待ち（D5）**: `human_waits` は revision ごとに、人への経路の作成時刻から、その revision の解決時刻まで。
    解決が無ければ `ended_at: null`（open）。
+   付記 2026-11-12（ADR 2026-11-12-cos-triage-scope D2、schema `celeris.eval-requests/2`）: 経路 `operator`（CoS が外部 operator に
+   回した件）の区間は人の待ちではないので `operator_waits` に分け、`summary.open_operator_waits` に数える。`human_waits` と
+   `open_human_waits` は経路 `escalation`・`fallback` だけ。区間の形（`RouteWaitSpan`）は同じ。
 6. **解決（D6）**: revision の窓（その revision の source 時刻から次の revision まで）で、関係 task の events から
    source_kind ごとの解決 event を探す（question → `Answered`、decision → 同じ id の `DecisionAnswered` /
    `DecisionWithdrawn`、authorization・acceptance_check → `ApprovalDecided`、plan_gate → `PlanGateDecided`、

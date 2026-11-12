@@ -336,6 +336,77 @@ fn renotified_revised_and_returned_request_is_one_row_with_times_and_actors() {
     assert_eq!(again, ledger);
 }
 
+/// ADR 2026-11-12-cos-triage-scope D2: CoS が外部 operator に回した件（経路 `operator`）は人の待ちではない。
+/// `operator_waits` に入り、`human_waits`・`open_human_waits` には数えない。revision の `route` は `operator` のまま残る。
+/// 既存の試験は人への経路しか作らないので、この区別は検出できない。
+#[test]
+fn operator_route_is_not_a_human_wait() {
+    let s = SqliteStore::open_in_memory().unwrap();
+    let task = super::super::tests::sample_task(Status::Draft);
+    s.create_task(&task, vec![]).unwrap();
+    let t = task.id;
+    append_at(&s, t, &requested("D9", t), "2026-10-27T12:00:00Z");
+    let src = source("decision", "decision-D9", "2026-10-27T12:00:00Z", t);
+    s.cos_triage_ingest_batch("events", "o", &[src], at("2026-10-27T12:00:01Z"))
+        .unwrap();
+    let item = item_id(&s, "decision-D9", "2026-10-27T12:00:00Z");
+    {
+        let conn = s.lock().unwrap();
+        assert!(
+            crate::cos_fallback::take_operator_route(&conn, &item, "2026-10-27T12:01:00Z").unwrap()
+        );
+    }
+
+    let open = s
+        .request_ledger(at("2026-10-27T00:00:00Z"), at("2026-10-28T00:00:00Z"))
+        .unwrap();
+    assert_eq!(open.requests.len(), 1);
+    let row = &open.requests[0];
+    assert!(row.human_waits.is_empty());
+    assert_eq!(row.operator_waits.len(), 1);
+    assert_eq!(row.operator_waits[0].route, "operator");
+    assert_eq!(row.operator_waits[0].started_at, "2026-10-27T12:01:00Z");
+    assert_eq!(row.operator_waits[0].ended_at, None);
+    assert_eq!(row.revisions[0].route.as_deref(), Some("operator"));
+    assert_eq!(open.summary.open_human_waits, 0);
+    assert_eq!(open.summary.open_operator_waits, 1);
+
+    // The operator answers as itself: the span ends with the operator, still outside the human waits.
+    append_at(
+        &s,
+        t,
+        &Event::DecisionAnswered {
+            id: "D9".into(),
+            option: "a".into(),
+            note: None,
+            by: "operator:claude-code".into(),
+        },
+        "2026-10-27T12:30:00Z",
+    );
+    let closed = s
+        .request_ledger(at("2026-10-27T00:00:00Z"), at("2026-10-28T00:00:00Z"))
+        .unwrap();
+    let row = &closed.requests[0];
+    assert!(row.human_waits.is_empty());
+    assert_eq!(
+        row.operator_waits[0].ended_at.as_deref(),
+        Some("2026-10-27T12:30:00Z")
+    );
+    assert_eq!(
+        row.operator_waits[0].end_actor_kind.as_deref(),
+        Some("external_operator")
+    );
+    assert_eq!(closed.summary.open_operator_waits, 0);
+    assert_eq!(closed.summary.open_human_waits, 0);
+    let json = serde_json::to_value(&closed).unwrap();
+    assert_eq!(json["schema"], "celeris.eval-requests/2");
+    assert_eq!(json["requests"][0]["human_waits"], serde_json::json!([]));
+    assert_eq!(
+        json["requests"][0]["operator_waits"][0]["route"],
+        "operator"
+    );
+}
+
 /// notice の再通知（count の revision）は 1 行。主体の記録が無い要求は null のまま。範囲外の要求は出ない。
 #[test]
 fn renotified_notice_is_one_row_and_unknowns_stay_null() {

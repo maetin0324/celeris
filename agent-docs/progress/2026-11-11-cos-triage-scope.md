@@ -64,18 +64,31 @@ updated: 2026-11-12
   - 試験 `cos_triage_scope_f_human_required_waits_are_not_routed_to_the_operator`: label `human_required` の決定と human check（受け入れ確認）を operator 宛てにすると 422、operator の経路 0 件。human 宛てなら 200 で outbox 2 通。
   - review の advisory も直した: ADR D2 に human_required の operator 宛ての拒否、D3 の監査の reason を実装の形（「CoS の判断（<category>）」、版は `policy_version`、grant は `basis.refs`）、D4・D1 の `browser_wait` を `security_boundary`、D7 に `review_rework` の回数が旧い文言の監査も数える理由と撤去の条件。skill の「(a)〜(g) の条件」の言い方と `cos_plan_conforms.rs` の試験のコメントの `documented_default`。`docs/api/v1/api.md` の operator 宛ての拒否の説明。
 
-## 証拠（提出時の HEAD で実行）
+## 変更（attempt 4）
+- attempt 3 の review の不合格（criterion 6）: operator 宛ての件が、人が読む受信箱 thread（要約の判断「人に回した」、card の `escalated`「人の判断待ち」、人待ちの数）と評価の台帳（`human_waits`・`open_human_waits`）で人の待ちとして出ていた。mlsys の方針の版の記録に 11→12 の行が無く、skill §2 に v11 の 2 文（replan・withdraw は escalate、計画の decision は人に残る）が残っていた。
+- 実装前の整理: 根本原因は operator 宛ての区別が `cos_notification_routes.route` にしか無く、表示と台帳が route を読んでいなかったこと。owner は `digest.rs`（と byte 一致の `control-ts/src/domains/cos_digest.ts`）、`web/features/chat/cards/card-model.ts`、`store/request_ledger.rs`。新しい item の state は足さず（状態の正本は route 1 つ）、card の state `operator` と台帳の `operator_waits` を route から導く。fallback・切替 flag は無し。撤去は skill §2 の v11 の 2 文、TS の `route` の `operator` を throw する制約、移行手順の手での skill import。
+- `phase 1: operator 宛ての件を人の待ちとして見せない・数えない（review の差し戻し）`
+  - digest（Rust と TS）: 経路 `operator` の `escalated` は判断「外部 operator に回した（人の判断は不要。Discord 通知なし）」、card の state `operator`（`OPERATOR_CARD_STATE`）。他の state は経路があっても変えない。fixture の `hand/decision/*` に経路の次元（`escalation`・`operator`）を足し（48 行増） `cargo run -p task-core --example dump-cos-digest-fixtures` で作り直した（生成部は不変）。TS の `ROUTES` に `operator` を足した（以前は throw し、compare が崩れた）。
+  - web: `card-model.ts` に `operator`（「外部 operator の対応待ち」、info）。`pendingHumanCount` の `WAITING_STATES` には入れない。試験 `chat_cards_operator_route_is_not_a_human_wait`。
+  - 台帳: `RequestRow.operator_waits`・`summary.open_operator_waits`、`HumanWaitSpan` を `RouteWaitSpan` に改名、schema `celeris.eval-requests/2`。試験 `operator_route_is_not_a_human_wait`。
+  - 文書: ADR D2 の付記（表示・台帳・拾い方）、ADR 2026-10-07 と ADR 2026-10-27-eval-request-ledger の付記、`docs/ops/mlsys-main-4-ops-r1.md` §8 の 11→12 の行、skill §2 の 2 文を D6（決定に先に答えて判定し直す）と `replan` は `task_scope`・`withdraw` は escalate に書き換え、`docs/ops/external-operator.md` §1 に operator 宛ての件の拾い方、`docs/ops/cos-chat.md` の Discord の確認手順、下の「本番への移行」を昇格の skill の写しと門に合わせた。
+
+## 証拠（提出時の HEAD で実行。attempt 4）
 - `bash scripts/dev/test-affected.sh` → exit 0（件数は報告本文）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。`sh scripts/dev/progress-index.sh --check` → exit 0。
+- `bash scripts/dev/check-health.sh` → verdict pass、exit 0（size.responsibility-growth は chat module 8000 行・store module と `request_row` は base と同じ行数に収めた）。
+- `cargo run -p task-core --example dump-cos-digest-fixtures` で fixture を作り直し（生成部は不変、`hand/decision/*` が 48 行増）、control-ts の `cos_digest.test.ts` 53 件と web の `chat-card.test.tsx` 24 件が合格。
 
 ## 未解決
 - 本番で送信済みの退避の件（例 `dependents_reopened-01M75722QN630BBASEQ759KG4T-735`）は人に残る。配備の後は、人が受信箱で閉じるか、依存先の後続が動き出すと消える。
 - 照合が判定する人に残す件は、件の種類と本文から決まるもの（credential の待ち・cluster の login・ブラウザの待ち・`near_limit:` の計画）だけ。目的の変更・本番 config・有料の試行・研究上の判断・検査を弱める判断は、CoS が方針（常設の節と skill §0）で判定する。
 
 ## 本番への移行
-1. 配備の後、`~/.config/celeris/config.toml` の `[cos.triage] policy_version` を `"12"` にする（今は "11"）。
-2. KB の skill を v12 に差し替える: `celerisctl skills import config/skills --name cos-inbox-triage --root <kb_root>`。
+1. 昇格（`promote.sh`）が release の `skills/cos-inbox-triage`（v12）を KB の `skills/` に写し、KB の git に commit する（ADR 2026-11-11-cos-skill-sync D2。`docs/ops/selfdeploy.md` の「CoS の skill の写し」）。写しが exit 4 で失敗したときだけ、人が `bash ~/.local/celeris/releases/<sha12>/scripts/sync-skills.sh ~/.local/celeris/releases/<sha12> <knowledge root>` を 1 回実行する。
+2. 昇格の直後から、KB の skill の版（12）と `~/.config/celeris/config.toml` の `[cos.triage] policy_version`（今は "11"）が合わないので、daemon は CoS の run を起こさず受信箱に 1 件知らせる。人が `policy_version` を `"12"` にして config を読み直す（`POST /api/v1/reload`）と一次対応が再開する。
 3. `GET /api/v1/system/health`（または CoS の run の policy_version）で 12 になったことを確かめる。版が違うと resolve は 422 `cos_policy_version_mismatch`。
 4. migration 0124 は daemon の起動で当たる（`cos_notification_routes` の作り直し。行は消えない）。
+5. operator 宛ての件は Discord に出ない。operator は `GET /api/v1/cos/inbox?state=escalated` の `addressee=operator` の件を拾う（`docs/ops/external-operator.md` §1）。
+6. `celerisctl eval requests` の出力は schema `celeris.eval-requests/2`（`operator_waits`・`open_operator_waits` が増えた）。版 "12" 以降の人の待ちの数は版 "11" 以前と比べない（`docs/ops/mlsys-main-4-ops-r1.md` §8）。
 
 ## 提案

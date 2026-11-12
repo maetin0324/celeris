@@ -11,8 +11,15 @@ Celeris の CoS worker や `cos-operator` skill とは別であり、この手�
 ## 1. 担当する仕事と起動条件
 
 担当は **配備・rollback・credentiald・本番 config・daemon/DB の復旧**と、
-**CoS が人へ回した項目のうち、人が operator に委ねたもの**に限る。
+**CoS が operator 宛てに回した項目**（policy だけの branch を main に入れる、本番の昇格・rollback、host の操作など、Celeris の API に
+経路が無い操作が要る件。ADR 2026-11-12-cos-triage-scope D2）、および**人が operator に委ねた項目**に限る。
 通常の受信箱の回答・再試行・起票は CoS が行う。自己改善の実装は task と reviewer の既存経路を使う。
+
+operator 宛ての件の拾い方: `GET /api/v1/cos/inbox?state=escalated` の item のうち `addressee` が `operator` のもの
+（`jq '.items[] | select(.addressee == "operator")'`）。これらは Discord に送られず、統括 CoS の札も無く、受信箱 thread の要約では
+「外部 operator に回した」と出る（人の判断待ちには数えない）。`reason` に CoS が要る操作を書いているので、それを読んで §3 の分担で
+実行し、元の待ちには §4 の手順（operator 自身の principal、§4-3 の取り次ぎ）で答える。人が残す件（credential・予算・目的の変更・
+セキュリティの境界・本番 config・有料の試行・研究上の判断。同 ADR D1）は API が operator 宛てを 422 で断るので、ここには出ない。
 
 起動の契機は人の手での依頼、または C3 の通知・escalate（依存表参照）。通知だけでは変更を開始しない。
 人の指示が既に有効なら再承認は不要だが、対象・行為・実行者・期限の範囲を開始票で確認する。

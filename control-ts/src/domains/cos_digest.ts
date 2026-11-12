@@ -13,8 +13,8 @@
 // - 余計な欄・欠けた欄・型の違いは throw する（Option の欄も null を明示させる）。
 // - `run_state`・item の `state`・`source_kind` は Rust でも文字列で、未知の値にも決まった文面を返す
 //   （`run は <state> で終わった`・`状態不明`・`項目`）。fixture の参照出力と byte 一致させるため、ここも拒まない。
-// - `route` は Rust では文字列だが、書き込む値は `escalation`・`fallback` だけ。それ以外の値は throw する
-//   （digest の出力には使わない欄なので、拒んでも一致は崩れない）。
+// - `route` は Rust では文字列だが、書き込む値は `escalation`・`fallback`・`operator`（ADR 2026-11-12-cos-triage-scope D2）
+//   だけ。それ以外の値は throw する（`operator` だけが判断の文と card の state を変える）。
 import { cosDigestListRuns, cosDigestReadRun, type RequestContext } from "celeris:host";
 
 export type CosDigestRunState = string;
@@ -51,7 +51,7 @@ export interface CosTriageItemReport {
   operation_id: string | null;
   run_id: string | null;
   created_at: string;
-  route: "escalation" | "fallback" | null;
+  route: "escalation" | "fallback" | "operator" | null;
   decision: CosTriageDecision | null;
 }
 
@@ -91,7 +91,7 @@ export interface CosDigestOutput {
 /** Rust の `COS_TRIAGE_DIGEST_KEY_PREFIX`。 */
 export const COS_TRIAGE_DIGEST_KEY_PREFIX = "cos-triage-digest:";
 
-const ROUTES: readonly string[] = ["escalation", "fallback"];
+const ROUTES: readonly string[] = ["escalation", "fallback", "operator"];
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -272,6 +272,14 @@ function title(item: CosTriageItemReport): string {
   return rustTrim(item.summary) === "" ? `${item.source_kind}:${item.source_key}` : item.summary;
 }
 
+/** Rust の `to_operator`（ADR 2026-11-12-cos-triage-scope D2）: 経路が外部 operator 宛て。state は人宛てと同じ `escalated`。 */
+function toOperator(item: CosTriageItemReport): boolean {
+  return item.route === "operator";
+}
+
+/** Rust の `OPERATOR_CARD_STATE`: operator 宛ての件の card の state（人待ちに数えない）。 */
+const OPERATOR_CARD_STATE = "operator";
+
 /** Rust の `judgment`。 */
 function judgment(item: CosTriageItemReport, runState: string): string {
   switch (item.state) {
@@ -280,7 +288,7 @@ function judgment(item: CosTriageItemReport, runState: string): string {
     case "observed":
       return "見ただけ（判断は不要）";
     case "escalated":
-      return "人に回した";
+      return toOperator(item) ? "外部 operator に回した（人の判断は不要。Discord 通知なし）" : "人に回した";
     case "fallback":
       return "未処理のまま人へ直接通知した（CoS 不在の退避）";
     case "resolved":
@@ -348,6 +356,8 @@ export function digestMessage(
       }
       // 元の待ちはまだ開いている: card は答えられる状態のまま。
       if (it.state === "fallback") state = "pending";
+      // D2: 人の待ちではない。card は固有の state を持つ（web は人待ちに数えず「人の判断待ち」とも書かない）。
+      else if (toOperator(it)) state = OPERATOR_CARD_STATE;
     } else if (it.state === "running" && requeues(runState)) {
       state = "pending";
     }

@@ -34,6 +34,8 @@ assistant の発言が 1 件も残らない。判断（何の件か・answer/esc
   `web_path`、`actor=cos`、`reason` = 推奨とその理由）。web は既存の chat card（ADR cos-chat-home D5）で `escalated` を人待ちとして数え、
   受信箱 API の選択肢で答える。答えた件は受信箱 API が 404 を返すので閉じた表示になる。answer / observe の件は閉じた状態のカード
   （`state=answered` / `observed`）で残す。
+  付記 2026-11-12（ADR 2026-11-12-cos-triage-scope D2）: CoS が外部 operator に回した件（経路 `operator`）は判断の行が
+  「外部 operator に回した（人の判断は不要。Discord 通知なし）」、カードの `state=operator` で、web は人待ちに数えない。
 - CoS 自身の最終文は使わない。triage run には出力 message が無く（`text_rejected`）、1 件ずつの判断は `reason` に書かせる設計（skill §3）で
   十分だから。CoS が reason を書かなかった場合も「理由の記録なし」として件は必ず残る（受け入れ条件 0 の「決定的に補う」）。
 - 終端が completed なのに `running` のまま残った件は「未処理（人へ直接通知する）」と書き、処理は D6 の退避に任せる。

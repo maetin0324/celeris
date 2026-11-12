@@ -50,7 +50,8 @@ export function isClosedState(state: string): boolean {
   return CLOSED_STATES.has(state);
 }
 
-/** 人が答えるべき待ちとして数える状態。 */
+/** 人が答えるべき待ちとして数える状態。`operator`（CoS が外部 operator に回した件。ADR 2026-11-12-cos-triage-scope D2）は
+ *  開いているが人の待ちではないので数えない。 */
 const WAITING_STATES = new Set(["pending", "escalated"]);
 
 /** 人待ちの件数（受信箱 thread の控えめな badge 用）。同じ card が何度出ても 1 件に数える。 */
@@ -74,6 +75,7 @@ export function overrideTarget(card: ChatCard): string {
 const CARD_STATES: Record<string, { tone: BadgeTone; label: string }> = {
   pending: { tone: "warning", label: "人待ち" },
   escalated: { tone: "warning", label: "人の判断待ち" },
+  operator: { tone: "info", label: "外部 operator の対応待ち" },
   running: { tone: "running", label: "対応中" },
   applied: { tone: "success", label: "適用済み" },
   answered: { tone: "success", label: "回答済み" },

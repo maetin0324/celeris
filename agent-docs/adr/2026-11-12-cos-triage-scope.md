@@ -55,6 +55,20 @@ policy だけの branch を main に入れる、本番の昇格・rollback、hos
   integrate task が尽きた統合の依頼）の件。answer を断る判定（`kept_by_person`）と同じ関数で判定する（試験
   `cos_triage_scope_f_human_required_waits_are_not_routed_to_the_operator`）。
 
+付記 2026-11-12（review の差し戻し。operator 宛ての件を人の待ちとして見せない・数えない）: 件の state は人宛てと同じ
+`escalated` なので、人が読む場所と評価の記録は経路（`route = 'operator'`）を読んで区別する。状態の正本は経路 1 つで、
+新しい item の state は足さない。
+
+- 受信箱 thread の要約（`digest.rs` と control-ts の `cos_digest.ts`。byte 一致）: 判断の行は「外部 operator に回した（人の判断は不要。Discord 通知なし）」。「人が決めること」「選択肢」の行は出ない（operator 宛ては通知の本文（packet）を持たない）。
+  card の state は `operator`（`OPERATOR_CARD_STATE`。card は表示の写しで、item の state ではない）。web は `operator` を人待ちに
+  数えず（`pendingHumanCount`）、札は「外部 operator の対応待ち」。card は閉じていないので人はそこから答えられる。
+  fixture `control-ts/fixtures/cos_digest/cases.jsonl` の `hand/decision/operator/*` が Rust と TS の一致を固定する。
+- 論理要求の台帳（ADR 2026-10-27-eval-request-ledger、`celerisctl eval requests`）: 経路 `operator` の区間は `human_waits` でなく
+  `operator_waits` に入り、`summary.open_operator_waits` に数える（schema `celeris.eval-requests/2`）。外部 operator は AI の
+  運用補助（`docs/ops/external-operator.md`）なので人の待ちに数えない。revision の `route` は `operator` のまま残る。
+- operator は `GET /api/v1/cos/inbox?state=escalated` の `addressee = "operator"` の件を拾う（`docs/ops/external-operator.md` §1）。
+  人向けの受信箱（`/inbox`）には元の待ちがそのまま出るので、人も答えられる。
+
 ### D3 それ以外は CoS が task の目的の範囲で答え、根拠を残す
 
 - basis の `category` に `task_scope`（task の目的・受け入れ条件・ADR・grant・人の過去の指示から CoS が判断する）を足す。
@@ -127,4 +141,6 @@ CoS は拾い直さない（判定は 409 で記録だけ残る）。この ADR 
 ## 本番への移行
 
 `~/.config/celeris/config.toml` の `[cos.triage] policy_version` を `"12"` にし、KB の skill を v12 に差し替える
-（手順は進捗の「本番への移行」節）。
+（手順は進捗の「本番への移行」節）。skill の写しは昇格の `promote.sh` が行う（ADR 2026-11-11-cos-skill-sync D2）。
+KB の skill の版と `policy_version` が合うまで daemon は CoS の run を起こさないので、昇格から config を `"12"` にするまでの間は
+一次対応が止まり、受信箱に 1 件知らせが出る。

@@ -105,7 +105,7 @@ fn renotify_and_restart_do_not_add_rows() {
         String::from_utf8_lossy(&out.stderr)
     );
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["schema"], "celeris.eval-requests/1");
+    assert_eq!(v["schema"], "celeris.eval-requests/2");
     assert_eq!(v["summary"]["requests"], 1);
     assert_eq!(v["summary"]["items"], 1);
     let row = &v["requests"][0];

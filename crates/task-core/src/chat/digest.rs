@@ -19,6 +19,11 @@ use serde::{Deserialize, Serialize};
 use super::store::{CHAT_CLIENT_KEY_MAX_BYTES, CHAT_MESSAGE_TEXT_MAX_BYTES};
 use super::triage::{COS_TRIAGE_DIGEST_KEY_PREFIX, CosTriageItemReport, CosTriageOption};
 use super::{ChatActor, ChatCard, ChatCardKind};
+use crate::cos_fallback::is_operator_route;
+
+/// ADR 2026-11-12-cos-triage-scope D2: the card state of an item CoS routed to the external
+/// operator. The inbox item stays `escalated`; only the card (a display snapshot) differs.
+pub const OPERATOR_CARD_STATE: &str = "operator";
 
 /// The snapshot one digest decision reads. `items` is `cos_triage_run_report(run_id)` in its
 /// order; `reason` is the chat run's reason (`null` when it cannot be read). `run_state` stays a
@@ -135,11 +140,15 @@ pub fn cos_card_kind(source_kind: &str) -> ChatCardKind {
     }
 }
 
-/// The judgment line of one item, and whether the person still has to act on it.
-fn judgment(item: &CosTriageItemReport, run_state: &str) -> &'static str {
+/// The judgment line of one item, and whether the person still has to act on it. ADR
+/// 2026-11-12-cos-triage-scope D2: `operator` is whether the item was routed to the external
+/// operator (no Discord, no card in the person's window): told apart by its route, not its state
+/// (`escalated` for both).
+fn judgment(item: &CosTriageItemReport, run_state: &str, operator: bool) -> &'static str {
     match item.state.as_str() {
         "answered" => "代わりに答えた",
         "observed" => "見ただけ（判断は不要）",
+        "escalated" if operator => "外部 operator に回した（人の判断は不要。Discord 通知なし）",
         "escalated" => "人に回した",
         "fallback" => "未処理のまま人へ直接通知した（CoS 不在の退避）",
         "resolved" => "元の待ちが閉じていた（何もしていない）",
@@ -202,51 +211,52 @@ pub fn cos_digest_message(
     let mut cards = Vec::new();
     for item in items {
         let title = item.title();
+        let operator = item.route.as_deref().is_some_and(is_operator_route);
         text.push_str(&format!(
             "\n### {}（{}）\n- 判断: {}\n",
             title,
             cos_kind_label(&item.source_kind),
-            judgment(item, run_state)
+            judgment(item, run_state, operator)
         ));
+        let reason = item.reason.as_deref().map(str::trim);
         text.push_str(&format!(
             "- 理由: {}\n",
-            item.reason
-                .as_deref()
-                .map(str::trim)
-                .filter(|r| !r.is_empty())
-                .unwrap_or("理由の記録なし")
+            reason.filter(|r| !r.is_empty()).unwrap_or("理由の記録なし")
         ));
-        let mut state = item.state.clone();
+        // The card state. A `fallback` wait is still open (the card stays answerable); an item
+        // routed to the external operator is not a person's wait (D2: the web neither counts it in
+        // `pendingHumanCount` nor labels it 「人の判断待ち」); items a stopped run left running go
+        // back to pending.
+        let state = match item.state.as_str() {
+            "fallback" => "pending".to_owned(),
+            "escalated" if operator => OPERATOR_CARD_STATE.to_owned(),
+            "running" if requeues(run_state) => "pending".to_owned(),
+            _ => item.state.clone(),
+        };
         let mut href = "/inbox".to_owned();
         let mut card_reason = item.reason.clone();
-        if matches!(item.state.as_str(), "escalated" | "fallback") {
-            if let Some(d) = &item.decision {
-                if let Some(background) = d.background.as_deref().filter(|b| !b.is_empty()) {
-                    text.push_str(&format!("- 背景: {background}\n"));
-                }
-                if !d.summary.is_empty() {
-                    text.push_str(&format!("- 人が決めること: {}\n", d.summary));
-                }
-                if let Some(options) = options_line(item) {
-                    text.push_str(&format!("- 選択肢: {options}\n"));
-                }
-                if let Some(why) = d.recommendation_reason.as_deref().filter(|r| !r.is_empty()) {
-                    text.push_str(&format!("- 推奨の理由: {why}\n"));
-                    card_reason = Some(why.to_owned());
-                }
-                if let Some(next) = d.on_answer.as_deref().filter(|n| !n.is_empty()) {
-                    text.push_str(&format!("- 答えると: {next}\n"));
-                }
-                if !d.web_path.is_empty() {
-                    href = d.web_path.clone();
-                }
+        if matches!(item.state.as_str(), "escalated" | "fallback")
+            && let Some(d) = &item.decision
+        {
+            if let Some(background) = d.background.as_deref().filter(|b| !b.is_empty()) {
+                text.push_str(&format!("- 背景: {background}\n"));
             }
-            if item.state == "fallback" {
-                // The original wait is still open: the card stays answerable.
-                state = "pending".into();
+            if !d.summary.is_empty() {
+                text.push_str(&format!("- 人が決めること: {}\n", d.summary));
             }
-        } else if item.state == "running" && requeues(run_state) {
-            state = "pending".into();
+            if let Some(options) = options_line(item) {
+                text.push_str(&format!("- 選択肢: {options}\n"));
+            }
+            if let Some(why) = d.recommendation_reason.as_deref().filter(|r| !r.is_empty()) {
+                text.push_str(&format!("- 推奨の理由: {why}\n"));
+                card_reason = Some(why.to_owned());
+            }
+            if let Some(next) = d.on_answer.as_deref().filter(|n| !n.is_empty()) {
+                text.push_str(&format!("- 答えると: {next}\n"));
+            }
+            if !d.web_path.is_empty() {
+                href = d.web_path.clone();
+            }
         }
         cards.push(ChatCard {
             kind: cos_card_kind(&item.source_kind),

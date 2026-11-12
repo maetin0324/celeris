@@ -69,6 +69,12 @@ pub fn take_route(
 /// external operator. The route has no notification (nothing is sent to Discord).
 pub const OPERATOR_ROUTE: &str = "operator";
 
+/// D2: whether a `cos_notification_routes.route` is the operator route. Such an item is not a
+/// person's wait: the digest, the web cards and the request ledger keep it apart.
+pub fn is_operator_route(route: &str) -> bool {
+    route == OPERATOR_ROUTE
+}
+
 /// D2: take the operator route of `item_id` (in the caller's transaction). `false` when the item
 /// already has a route (a retried escalate, or a fallback the notifier sent).
 pub fn take_operator_route(conn: &Connection, item_id: &str, at: &str) -> rusqlite::Result<bool> {

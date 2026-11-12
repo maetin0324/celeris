@@ -1112,8 +1112,7 @@ impl Dispatcher {
         wu: Option<&task_core::WorkUnitRow>,
     ) -> (Option<PathBuf>, Option<PathBuf>, String, Option<String>) {
         let workspaces = self.task_workspaces_for(task);
-        if let Some(wu) = wu
-            && let Some(branch) = &wu.branch
+        if let Some((wu, branch)) = wu.and_then(|wu| Some((wu, wu.branch.as_ref()?)))
             && let Some(ws) = &workspaces
         {
             let wu_dir = crate::integration::wu_dir(&ws.task_dir, &wu.key);

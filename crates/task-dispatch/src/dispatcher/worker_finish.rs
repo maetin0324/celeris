@@ -1,7 +1,6 @@
 //! worker run の終了処理（`finish_worker_result` と finalise の失敗の後始末）。同じ transaction の組と `release_quota_if_tracked` はそのまま。ADR-0082 の L3。
 
 use super::*;
-use crate::knowledge_usage::read_site as knowledge_at;
 
 fn repair_git(dir: &Path, args: &[&str]) -> Option<String> {
     let output = std::process::Command::new("git")
@@ -1277,7 +1276,7 @@ impl Dispatcher {
         let metrics = run_since.map(|since| task_core::RunMetrics {
             wall_ms: wall_ms_since(since),
             retries: task.attempts,
-            knowledge: knowledge_at(self.work_unit_checkpoint_site(&task, current_wu.as_ref())),
+            knowledge: crate::kb_use(self.work_unit_checkpoint_site(&task, current_wu.as_ref())),
             ..Default::default()
         });
         // ADR-0072 D5/D6/D15（Phase E2）: WU の行の更新（このWU自身 + 伝播で一緒に決まった他のWU）を、

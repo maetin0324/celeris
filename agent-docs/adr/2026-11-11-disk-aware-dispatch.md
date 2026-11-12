@@ -68,7 +68,7 @@ run を起こす前（write-set の判定の後、lease の前）に、次の不
   run が lease を書く前に終わった・起動の前に見送った（dispatcher の `running` に無い）ら、次の pass の始めに外す。
 - **詰まらない**: 終わる見込みのある書き手が 1 本も無ければ、見込みが足りなくても 1 本は通す（待っても空きを戻す run の
   終わりが来ない）。書き手は (a) 走査で増分を持つ owner のうち、この daemon が run・review・WU の検査を今走らせている
-  task（dispatcher の `running`・`reviewing`・`checking`。`Gate::begin_pass` の `busy`）のものと、(b) 通したがまだ走査に
+  task（dispatcher の `running`・`reviewing`・`checking`。`Gate::begin_pass` の `runs`・`others`）のものと、(b) 通したがまだ走査に
   出ない run。増分を持つかは DB の状態から決まるが、書き手かどうかは daemon が走らせているかで決める（2 つの意味を
   分ける）。release-build（task が無い）、`reviewing` で子・policy の人の承認・再同期の停止を待つ task、WU を待つ
   `running` の親は増分の予約には数えるが書き手ではない（待っても終わらない）。Rust でない run・対話の run も書き手で

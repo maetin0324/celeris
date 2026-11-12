@@ -417,20 +417,12 @@ impl Dispatcher {
             Some(w) => Some(w.workspaces.clone()),
             None => worktree,
         };
-        // ADR-0074 F5-fix（不具合 1）: 自分の worktree を持つ WU の run だけ WU ごとの `CARGO_TARGET_DIR`（owner
-        // `task-<id>/wu-<id>`）。Task の worktree を共有する WU は Task の target を使う。
-        let cargo_target_work_unit = wu_workspace
-            .as_ref()
-            .and(v2_wu.as_ref())
-            .map(|wu| (wu.id.clone(), wu.key.clone()));
-        // ADR 2026-11-11-disk-aware-dispatch D1: 空きの見込みが予備を割るなら新しい target を作る run を ready のまま
-        // 待たせる（lease・遷移・attempts の前）。owner は worker と同じ（`cargo_target_work_unit`）。
+        // ADR 2026-11-11-disk-aware-dispatch D1: 見込みが予備を割るなら ready のまま待たせる（owner は worker の target の WU）。
+        let target_wu = wu_workspace.as_ref().and(v2_wu.as_ref());
         let (view, wu) = (self.scratch.view.as_ref(), run_key.work_unit.as_deref());
-        let target_wu = cargo_target_work_unit.as_ref().map(|(id, _)| id.as_str());
         let repo_of = || self.cargo_target_repo(&task).map(|r| r.source);
-        if !is_planner_dispatch
-            && (self.scratch.admission).holds_run(view, &task, wu, target_wu, repo_of)
-        {
+        let gate = (!is_planner_dispatch).then_some(&self.scratch.admission);
+        if gate.is_some_and(|g| g.holds_run(view, &task, wu, target_wu, repo_of)) {
             return Ok(false);
         }
         // Capture before any worker can write; retries load the same WU-id snapshot.
@@ -952,7 +944,8 @@ impl Dispatcher {
         if let Some(w) = &wu_workspace {
             extras.artifacts_dir_override = Some(w.artifacts_dir.clone());
         }
-        extras.cargo_target_work_unit = cargo_target_work_unit;
+        // ADR-0074 F5-fix（不具合 1）: 自分の worktree を持つ WU だけ WU ごとの `CARGO_TARGET_DIR`。
+        extras.cargo_target_work_unit = target_wu.map(|w| (w.id.clone(), w.key.clone()));
         // ADR 2026-10-10-local-disk-growth-paths D1: 作業場所の先頭に git の repo が無い（`repos=[]` の子 task・
         // shared の Rust checkout）なら、代わりの checkout を決めて `run_worker` に渡す（repo 直下 target を防ぐ）。
         if remote.is_none()

@@ -1,0 +1,8 @@
+celeris
+celeris-campaign
+celerisctl
+llm-proxy
+task-api
+task-dispatch
+task-worker
+web: typecheck+unit (理由: web の型の元になる crate の変更: task-api)

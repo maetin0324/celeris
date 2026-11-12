@@ -1,0 +1,689 @@
+{
+  "schema": "health-v2-r5-build-compare/2",
+  "attempts": [
+    {
+      "attempt": 1,
+      "crates": [
+        "task-dispatch"
+      ],
+      "pairs": {
+        "task-dispatch": {
+          "build": [
+            [
+              {
+                "cmd": "cargo nextest run -p task-dispatch --no-run\uff08settle \u306e\u5f8c\u306b crates/task-dispatch/src/lib.rs \u306e mtime \u3092\u9032\u3081\u308b\uff09",
+                "exit": 0,
+                "timed_out": false,
+                "settle_exit": 0,
+                "secs": 58.76,
+                "compiled_units": 2,
+                "compiled": [
+                  "task-dispatch",
+                  "celeris-campaign"
+                ],
+                "test_binaries": 2,
+                "linked_test_binaries": 2,
+                "loadavg_before": "3.58 6.25 10.84",
+                "loadavg_after": "3.16 5.63 10.34",
+                "load_wait": {
+                  "waited_secs": 0.0,
+                  "loadavg": "3.58 6.25 10.84 1/1528 3359361",
+                  "ready": true,
+                  "max_load": 24.0
+                }
+              },
+              {
+                "cmd": "cargo nextest run -p task-dispatch --no-run\uff08settle \u306e\u5f8c\u306b crates/task-dispatch/src/lib.rs \u306e mtime \u3092\u9032\u3081\u308b\uff09",
+                "exit": 0,
+                "timed_out": false,
+                "settle_exit": 0,
+                "secs": 57.87,
+                "compiled_units": 2,
+                "compiled": [
+                  "task-dispatch",
+                  "celeris-campaign"
+                ],
+                "test_binaries": 2,
+                "linked_test_binaries": 2,
+                "loadavg_before": "3.16 5.63 10.34",
+                "loadavg_after": "3.33 5.18 9.88",
+                "load_wait": {
+                  "waited_secs": 0.0,
+                  "loadavg": "3.16 5.63 10.34 1/1528 3360125",
+                  "ready": true,
+                  "max_load": 24.0
+                }
+              }
+            ]
+          ],
+          "edit_verify": [
+            [
+              {
+                "edited_file": "crates/task-dispatch/src/lib.rs",
+                "affected": [
+                  "celeris",
+                  "celeris-campaign",
+                  "celerisctl",
+                  "llm-proxy",
+                  "task-dispatch"
+                ],
+                "extra_checks": [],
+                "cmd": "cargo nextest run \"${args[@]}\" --no-run",
+                "doc_test_cmd": "cargo test --doc \"${args[@]}\"",
+                "settle_exit": 0,
+                "settle_secs": 119.03,
+                "settle_compiled_units": 15,
+                "settle_compiled": [
+                  "task-core",
+                  "jev-classifier",
+                  "deno_core",
+                  "celeris-script",
+                  "task-ops",
+                  "celeris-credentiald",
+                  "routing-eval",
+                  "task-worker",
+                  "task-api",
+                  "celeris-mcp",
+                  "task-dispatch",
+                  "celeris-campaign",
+                  "llm-proxy",
+                  "celeris",
+                  "celerisctl"
+                ],
+                "list_exit": 0,
+                "list_secs": 0.1,
+                "rebuild_exit": 0,
+                "rebuild_timed_out": false,
+                "rebuild_secs": 83.62,
+                "rebuild_compiled_units": 5,
+                "rebuild_compiled": [
+                  "task-dispatch",
+                  "celeris-campaign",
+                  "llm-proxy",
+                  "celeris",
+                  "celerisctl"
+                ],
+                "listed_binaries": 195,
+                "test_binaries": 195,
+                "linked_test_binaries": 195,
+                "linked_binaries_all": 195,
+                "edit_to_verify_secs": 83.72,
+                "doc_test_exit": 0,
+                "doc_test_secs": 5.03,
+                "doc_test_compiled_units": 0,
+                "doc_test_passed": 0,
+                "doc_test_failed": 0,
+                "doc_test_ignored": 0,
+                "edit_to_verify_with_doc_secs": 88.76,
+                "loadavg_before": "17.77 9.87 10.98",
+                "loadavg_after": "14.14 10.95 11.27",
+                "load_wait": {
+                  "waited_secs": 0.0,
+                  "loadavg": "17.77 9.87 10.98 1/1644 3366403",
+                  "ready": true,
+                  "max_load": 24.0
+                }
+              },
+              {
+                "edited_file": "crates/task-dispatch/src/lib.rs",
+                "affected": [
+                  "celeris",
+                  "celeris-campaign",
+                  "celerisctl",
+                  "llm-proxy",
+                  "task-dispatch"
+                ],
+                "extra_checks": [],
+                "cmd": "cargo nextest run --workspace -E \"$filter\" --no-run",
+                "doc_test_cmd": "cargo test --doc --workspace",
+                "settle_exit": 0,
+                "settle_secs": 106.33,
+                "settle_compiled_units": 15,
+                "settle_compiled": [
+                  "celeris-credentiald",
+                  "e2e",
+                  "task-ops",
+                  "task-core",
+                  "celeris-mcp",
+                  "routing-eval",
+                  "jev-classifier",
+                  "celeris-script",
+                  "task-worker",
+                  "task-api",
+                  "task-dispatch",
+                  "celeris-campaign",
+                  "llm-proxy",
+                  "celeris",
+                  "celerisctl"
+                ],
+                "list_exit": 0,
+                "list_secs": 0.11,
+                "rebuild_exit": 0,
+                "rebuild_timed_out": false,
+                "rebuild_secs": 82.91,
+                "rebuild_compiled_units": 5,
+                "rebuild_compiled": [
+                  "task-dispatch",
+                  "celeris-campaign",
+                  "llm-proxy",
+                  "celeris",
+                  "celerisctl"
+                ],
+                "listed_binaries": 312,
+                "test_binaries": 180,
+                "linked_test_binaries": 180,
+                "linked_binaries_all": 180,
+                "edit_to_verify_secs": 83.03,
+                "doc_test_exit": 0,
+                "doc_test_secs": 15.67,
+                "doc_test_compiled_units": 0,
+                "doc_test_passed": 3,
+                "doc_test_failed": 0,
+                "doc_test_ignored": 2,
+                "edit_to_verify_with_doc_secs": 98.7,
+                "loadavg_before": "23.07 15.65 12.94",
+                "loadavg_after": "17.40 16.66 13.62",
+                "load_wait": {
+                  "waited_secs": 0.0,
+                  "loadavg": "23.07 15.65 12.94 1/1708 3380259",
+                  "ready": true,
+                  "max_load": 24.0
+                }
+              }
+            ]
+          ]
+        }
+      },
+      "raw": {
+        "schema": "health-v2-r5-build-compare/1",
+        "label": "compare",
+        "git_head": "b183bde2e686ba8db3ad48416f62c0ea919f9c97",
+        "merge_base_main": "4bc05f1efd974d518b97c0afbcb50f0b341bbe10",
+        "base_tree": "git worktree add --detach $TMPDIR/r5-measure-base.* <merge_base_main>\uff08\u8a08\u6e2c\u306e\u5f8c\u306b git worktree remove\uff09",
+        "host": {
+          "nproc": 24,
+          "uname": "Linux 6.8.12-9-pve",
+          "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+          "nextest": "cargo-nextest 0.9.146 (8af696ddc 2026-09-21)",
+          "cargo_target_dir": "/local/celeris/data/scratch/targets/task-01M6TYVJT53598CPKMGSQGA7XM/wu-01M76W3168ZCRPM1VDDX9ZSXW1/target"
+        },
+        "started_at": "2026-11-12T11:51:55Z",
+        "elapsed_secs": 643.6,
+        "loadavg_before": "1.59 7.26 11.71",
+        "loadavg_after": "17.40 16.66 13.62",
+        "order": [
+          {
+            "crate": "task-dispatch",
+            "side": "base"
+          },
+          {
+            "crate": "task-dispatch",
+            "side": "head"
+          }
+        ],
+        "skipped": [],
+        "sides": {
+          "base": {
+            "git_head": "4bc05f1efd974d518b97c0afbcb50f0b341bbe10",
+            "crates": {
+              "task-dispatch": {
+                "targets": {
+                  "kinds": {
+                    "lib": 1,
+                    "test": 1
+                  },
+                  "test_targets": 1,
+                  "test_target_names": [
+                    "policy_close"
+                  ]
+                },
+                "build_settle_wait": {
+                  "waited_secs": 0.0,
+                  "loadavg": "1.72 7.10 11.61 1/1528 3357541",
+                  "ready": true,
+                  "max_load": 24.0
+                },
+                "build": {
+                  "cmd": "cargo nextest run -p task-dispatch --no-run\uff08settle \u306e\u5f8c\u306b crates/task-dispatch/src/lib.rs \u306e mtime \u3092\u9032\u3081\u308b\uff09",
+                  "exit": 0,
+                  "timed_out": false,
+                  "settle_exit": 0,
+                  "secs": 58.76,
+                  "compiled_units": 2,
+                  "compiled": [
+                    "task-dispatch",
+                    "celeris-campaign"
+                  ],
+                  "test_binaries": 2,
+                  "linked_test_binaries": 2,
+                  "loadavg_before": "3.58 6.25 10.84",
+                  "loadavg_after": "3.16 5.63 10.34",
+                  "load_wait": {
+                    "waited_secs": 0.0,
+                    "loadavg": "3.58 6.25 10.84 1/1528 3359361",
+                    "ready": true,
+                    "max_load": 24.0
+                  }
+                },
+                "edit_settle_wait": {
+                  "waited_secs": 0.0,
+                  "loadavg": "3.33 5.18 9.88 1/1530 3360825",
+                  "ready": true,
+                  "max_load": 24.0
+                },
+                "edit_verify": {
+                  "edited_file": "crates/task-dispatch/src/lib.rs",
+                  "affected": [
+                    "celeris",
+                    "celeris-campaign",
+                    "celerisctl",
+                    "llm-proxy",
+                    "task-dispatch"
+                  ],
+                  "extra_checks": [],
+                  "cmd": "cargo nextest run \"${args[@]}\" --no-run",
+                  "doc_test_cmd": "cargo test --doc \"${args[@]}\"",
+                  "settle_exit": 0,
+                  "settle_secs": 119.03,
+                  "settle_compiled_units": 15,
+                  "settle_compiled": [
+                    "task-core",
+                    "jev-classifier",
+                    "deno_core",
+                    "celeris-script",
+                    "task-ops",
+                    "celeris-credentiald",
+                    "routing-eval",
+                    "task-worker",
+                    "task-api",
+                    "celeris-mcp",
+                    "task-dispatch",
+                    "celeris-campaign",
+                    "llm-proxy",
+                    "celeris",
+                    "celerisctl"
+                  ],
+                  "list_exit": 0,
+                  "list_secs": 0.1,
+                  "rebuild_exit": 0,
+                  "rebuild_timed_out": false,
+                  "rebuild_secs": 83.62,
+                  "rebuild_compiled_units": 5,
+                  "rebuild_compiled": [
+                    "task-dispatch",
+                    "celeris-campaign",
+                    "llm-proxy",
+                    "celeris",
+                    "celerisctl"
+                  ],
+                  "listed_binaries": 195,
+                  "test_binaries": 195,
+                  "linked_test_binaries": 195,
+                  "linked_binaries_all": 195,
+                  "edit_to_verify_secs": 83.72,
+                  "doc_test_exit": 0,
+                  "doc_test_secs": 5.03,
+                  "doc_test_compiled_units": 0,
+                  "doc_test_passed": 0,
+                  "doc_test_failed": 0,
+                  "doc_test_ignored": 0,
+                  "edit_to_verify_with_doc_secs": 88.76,
+                  "loadavg_before": "17.77 9.87 10.98",
+                  "loadavg_after": "14.14 10.95 11.27",
+                  "load_wait": {
+                    "waited_secs": 0.0,
+                    "loadavg": "17.77 9.87 10.98 1/1644 3366403",
+                    "ready": true,
+                    "max_load": 24.0
+                  }
+                }
+              }
+            },
+            "invocation": {
+              "prep": [
+                "args=()",
+                "while IFS= read -r c; do args+=(-p \"$c\"); done <<<\"$crates\""
+              ],
+              "nextest": "cargo nextest run \"${args[@]}\"",
+              "doc_test": "cargo test --doc \"${args[@]}\""
+            }
+          },
+          "head": {
+            "git_head": "b183bde2e686ba8db3ad48416f62c0ea919f9c97",
+            "crates": {
+              "task-dispatch": {
+                "targets": {
+                  "kinds": {
+                    "lib": 1,
+                    "test": 1
+                  },
+                  "test_targets": 1,
+                  "test_target_names": [
+                    "policy_close"
+                  ]
+                },
+                "build_settle_wait": {
+                  "waited_secs": 0.0,
+                  "loadavg": "3.16 5.63 10.34 1/1528 3360045",
+                  "ready": true,
+                  "max_load": 24.0
+                },
+                "build": {
+                  "cmd": "cargo nextest run -p task-dispatch --no-run\uff08settle \u306e\u5f8c\u306b crates/task-dispatch/src/lib.rs \u306e mtime \u3092\u9032\u3081\u308b\uff09",
+                  "exit": 0,
+                  "timed_out": false,
+                  "settle_exit": 0,
+                  "secs": 57.87,
+                  "compiled_units": 2,
+                  "compiled": [
+                    "task-dispatch",
+                    "celeris-campaign"
+                  ],
+                  "test_binaries": 2,
+                  "linked_test_binaries": 2,
+                  "loadavg_before": "3.16 5.63 10.34",
+                  "loadavg_after": "3.33 5.18 9.88",
+                  "load_wait": {
+                    "waited_secs": 0.0,
+                    "loadavg": "3.16 5.63 10.34 1/1528 3360125",
+                    "ready": true,
+                    "max_load": 24.0
+                  }
+                },
+                "edit_settle_wait": {
+                  "waited_secs": 0.0,
+                  "loadavg": "14.14 10.95 11.27 2/1662 3371964",
+                  "ready": true,
+                  "max_load": 24.0
+                },
+                "edit_verify": {
+                  "edited_file": "crates/task-dispatch/src/lib.rs",
+                  "affected": [
+                    "celeris",
+                    "celeris-campaign",
+                    "celerisctl",
+                    "llm-proxy",
+                    "task-dispatch"
+                  ],
+                  "extra_checks": [],
+                  "cmd": "cargo nextest run --workspace -E \"$filter\" --no-run",
+                  "doc_test_cmd": "cargo test --doc --workspace",
+                  "settle_exit": 0,
+                  "settle_secs": 106.33,
+                  "settle_compiled_units": 15,
+                  "settle_compiled": [
+                    "celeris-credentiald",
+                    "e2e",
+                    "task-ops",
+                    "task-core",
+                    "celeris-mcp",
+                    "routing-eval",
+                    "jev-classifier",
+                    "celeris-script",
+                    "task-worker",
+                    "task-api",
+                    "task-dispatch",
+                    "celeris-campaign",
+                    "llm-proxy",
+                    "celeris",
+                    "celerisctl"
+                  ],
+                  "list_exit": 0,
+                  "list_secs": 0.11,
+                  "rebuild_exit": 0,
+                  "rebuild_timed_out": false,
+                  "rebuild_secs": 82.91,
+                  "rebuild_compiled_units": 5,
+                  "rebuild_compiled": [
+                    "task-dispatch",
+                    "celeris-campaign",
+                    "llm-proxy",
+                    "celeris",
+                    "celerisctl"
+                  ],
+                  "listed_binaries": 312,
+                  "test_binaries": 180,
+                  "linked_test_binaries": 180,
+                  "linked_binaries_all": 180,
+                  "edit_to_verify_secs": 83.03,
+                  "doc_test_exit": 0,
+                  "doc_test_secs": 15.67,
+                  "doc_test_compiled_units": 0,
+                  "doc_test_passed": 3,
+                  "doc_test_failed": 0,
+                  "doc_test_ignored": 2,
+                  "edit_to_verify_with_doc_secs": 98.7,
+                  "loadavg_before": "23.07 15.65 12.94",
+                  "loadavg_after": "17.40 16.66 13.62",
+                  "load_wait": {
+                    "waited_secs": 0.0,
+                    "loadavg": "23.07 15.65 12.94 1/1708 3380259",
+                    "ready": true,
+                    "max_load": 24.0
+                  }
+                }
+              }
+            },
+            "invocation": {
+              "prep": [
+                "filter=\"\"",
+                "while IFS= read -r c; do filter=\"${filter:+$filter | }package(=$c)\"; done <<<\"$crates\""
+              ],
+              "nextest": "cargo nextest run --workspace -E \"$filter\"",
+              "doc_test": "cargo test --doc --workspace"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "git_head": "b183bde2e686ba8db3ad48416f62c0ea919f9c97",
+  "merge_base_main": "4bc05f1efd974d518b97c0afbcb50f0b341bbe10",
+  "host": "home-dev",
+  "cargo_target_dir": "/local/celeris/data/scratch/targets/task-01M6TYVJT53598CPKMGSQGA7XM/wu-01M76W3168ZCRPM1VDDX9ZSXW1/target",
+  "started_at": "2026-11-12T11:51:55Z",
+  "order": [
+    "base",
+    "head"
+  ],
+  "comparisons": [
+    {
+      "crate": "task-dispatch",
+      "item": "build",
+      "attempt": 1,
+      "pair": 1,
+      "base": {
+        "cmd": "cargo nextest run -p task-dispatch --no-run\uff08settle \u306e\u5f8c\u306b crates/task-dispatch/src/lib.rs \u306e mtime \u3092\u9032\u3081\u308b\uff09",
+        "exit": 0,
+        "timed_out": false,
+        "settle_exit": 0,
+        "secs": 58.76,
+        "compiled_units": 2,
+        "compiled": [
+          "task-dispatch",
+          "celeris-campaign"
+        ],
+        "test_binaries": 2,
+        "linked_test_binaries": 2,
+        "loadavg_before": "3.58 6.25 10.84",
+        "loadavg_after": "3.16 5.63 10.34",
+        "load_wait": {
+          "waited_secs": 0.0,
+          "loadavg": "3.58 6.25 10.84 1/1528 3359361",
+          "ready": true,
+          "max_load": 24.0
+        }
+      },
+      "head": {
+        "cmd": "cargo nextest run -p task-dispatch --no-run\uff08settle \u306e\u5f8c\u306b crates/task-dispatch/src/lib.rs \u306e mtime \u3092\u9032\u3081\u308b\uff09",
+        "exit": 0,
+        "timed_out": false,
+        "settle_exit": 0,
+        "secs": 57.87,
+        "compiled_units": 2,
+        "compiled": [
+          "task-dispatch",
+          "celeris-campaign"
+        ],
+        "test_binaries": 2,
+        "linked_test_binaries": 2,
+        "loadavg_before": "3.16 5.63 10.34",
+        "loadavg_after": "3.33 5.18 9.88",
+        "load_wait": {
+          "waited_secs": 0.0,
+          "loadavg": "3.16 5.63 10.34 1/1528 3360125",
+          "ready": true,
+          "max_load": 24.0
+        }
+      },
+      "ratio": 1.075075075075075,
+      "excluded": false,
+      "reason": null,
+      "base_load_1m_max": 3.58,
+      "head_load_1m_max": 3.33
+    },
+    {
+      "crate": "task-dispatch",
+      "item": "edit_verify",
+      "attempt": 1,
+      "pair": 1,
+      "base": {
+        "edited_file": "crates/task-dispatch/src/lib.rs",
+        "affected": [
+          "celeris",
+          "celeris-campaign",
+          "celerisctl",
+          "llm-proxy",
+          "task-dispatch"
+        ],
+        "extra_checks": [],
+        "cmd": "cargo nextest run \"${args[@]}\" --no-run",
+        "doc_test_cmd": "cargo test --doc \"${args[@]}\"",
+        "settle_exit": 0,
+        "settle_secs": 119.03,
+        "settle_compiled_units": 15,
+        "settle_compiled": [
+          "task-core",
+          "jev-classifier",
+          "deno_core",
+          "celeris-script",
+          "task-ops",
+          "celeris-credentiald",
+          "routing-eval",
+          "task-worker",
+          "task-api",
+          "celeris-mcp",
+          "task-dispatch",
+          "celeris-campaign",
+          "llm-proxy",
+          "celeris",
+          "celerisctl"
+        ],
+        "list_exit": 0,
+        "list_secs": 0.1,
+        "rebuild_exit": 0,
+        "rebuild_timed_out": false,
+        "rebuild_secs": 83.62,
+        "rebuild_compiled_units": 5,
+        "rebuild_compiled": [
+          "task-dispatch",
+          "celeris-campaign",
+          "llm-proxy",
+          "celeris",
+          "celerisctl"
+        ],
+        "listed_binaries": 195,
+        "test_binaries": 195,
+        "linked_test_binaries": 195,
+        "linked_binaries_all": 195,
+        "edit_to_verify_secs": 83.72,
+        "doc_test_exit": 0,
+        "doc_test_secs": 5.03,
+        "doc_test_compiled_units": 0,
+        "doc_test_passed": 0,
+        "doc_test_failed": 0,
+        "doc_test_ignored": 0,
+        "edit_to_verify_with_doc_secs": 88.76,
+        "loadavg_before": "17.77 9.87 10.98",
+        "loadavg_after": "14.14 10.95 11.27",
+        "load_wait": {
+          "waited_secs": 0.0,
+          "loadavg": "17.77 9.87 10.98 1/1644 3366403",
+          "ready": true,
+          "max_load": 24.0
+        }
+      },
+      "head": {
+        "edited_file": "crates/task-dispatch/src/lib.rs",
+        "affected": [
+          "celeris",
+          "celeris-campaign",
+          "celerisctl",
+          "llm-proxy",
+          "task-dispatch"
+        ],
+        "extra_checks": [],
+        "cmd": "cargo nextest run --workspace -E \"$filter\" --no-run",
+        "doc_test_cmd": "cargo test --doc --workspace",
+        "settle_exit": 0,
+        "settle_secs": 106.33,
+        "settle_compiled_units": 15,
+        "settle_compiled": [
+          "celeris-credentiald",
+          "e2e",
+          "task-ops",
+          "task-core",
+          "celeris-mcp",
+          "routing-eval",
+          "jev-classifier",
+          "celeris-script",
+          "task-worker",
+          "task-api",
+          "task-dispatch",
+          "celeris-campaign",
+          "llm-proxy",
+          "celeris",
+          "celerisctl"
+        ],
+        "list_exit": 0,
+        "list_secs": 0.11,
+        "rebuild_exit": 0,
+        "rebuild_timed_out": false,
+        "rebuild_secs": 82.91,
+        "rebuild_compiled_units": 5,
+        "rebuild_compiled": [
+          "task-dispatch",
+          "celeris-campaign",
+          "llm-proxy",
+          "celeris",
+          "celerisctl"
+        ],
+        "listed_binaries": 312,
+        "test_binaries": 180,
+        "linked_test_binaries": 180,
+        "linked_binaries_all": 180,
+        "edit_to_verify_secs": 83.03,
+        "doc_test_exit": 0,
+        "doc_test_secs": 15.67,
+        "doc_test_compiled_units": 0,
+        "doc_test_passed": 3,
+        "doc_test_failed": 0,
+        "doc_test_ignored": 2,
+        "edit_to_verify_with_doc_secs": 98.7,
+        "loadavg_before": "23.07 15.65 12.94",
+        "loadavg_after": "17.40 16.66 13.62",
+        "load_wait": {
+          "waited_secs": 0.0,
+          "loadavg": "23.07 15.65 12.94 1/1708 3380259",
+          "ready": true,
+          "max_load": 24.0
+        }
+      },
+      "ratio": 1.2982554867754643,
+      "excluded": false,
+      "reason": null,
+      "base_load_1m_max": 17.77,
+      "head_load_1m_max": 23.07
+    }
+  ]
+}

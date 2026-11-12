@@ -26,6 +26,9 @@
 #   bash <this> compare <out.json> <crate,...>
 #       base（git merge-base HEAD main）と HEAD を同じ run で交互に測る（試験は走らせない）。base は $TMPDIR の下に
 #       git worktree add した写しで測り、終わったら git worktree remove する。crate ごとに base と HEAD の順を入れ替える。
+#       段の順は crate ごとに「両側の build → 両側の edit_verify」（側の順は order のとおり）。片側の build の直前に
+#       相手側の edit_verify（14 crate の settle と作り直し）を置かない。置くと build の組の 1 分値が自分の計測の負荷で
+#       2 倍以上離れ、除外される（meas-edit-worker の 1 回目: 比 2.9〜6.5）。
 #       targets    : cargo metadata の target の数（kind ごと。build しない）
 #       build      : cargo nextest run -p <crate> --no-run で settle した後、src の mtime を進めて同じ build を測る
 #                    （その crate の lib と全 test target の作り直し・link）。呼び方は両側で同じ。
@@ -38,6 +41,21 @@
 #       --validate が通り、label が head で、名指した各 crate に run1・run2・bundles（見つけた全束の結果）・base_run が
 #       skipped でなく揃う時だけ 0（needed=false の base_run も揃ったと数える）。
 #
+# 再計測:
+#   compare <out.json> <crate,...>: /2、全試行を attempts に保存する。
+#   run-compare <out.json> <crate,...>: base・HEAD・HEAD・base、各実行直前に --no-run。
+#   --require-compare <out.json> <spec,...>: spec は <crate> か <crate>:<item>（item は build・edit_verify・run）。
+#       <crate> はその記録の schema の全 item（build-compare は build と edit_verify、run-compare は run）、
+#       <crate>:<item> はその item だけに、除外されない組が 1 つ以上あれば 0。足りなければ 1。
+#       記録の schema に無い item（例 build-compare の <crate>:run）・未知の item・空の crate は exit 2。
+#       除外の規則（両側の exit が 0、load の 1 分値の最大の比が 2 未満、負荷待ちが ready、秒が有限で 0 以上）は item を指定しても同じ。
+#   summary <json...> / summary --check <md> <json...>: 全試行の表の生成と byte 一致検査。
+#       列は crate・stage・attempt/pair・base と HEAD の秒・base と HEAD の nextest 部分の秒・load の比・採否・除外の理由。
+#       nextest 部分の秒は edit_verify の記録に edit_to_verify_secs（doc test を除く edit→verify）があれば出し、無ければ -。
+#       除外の理由は 'load ratio >= 2'・'load wait expired'・'<base|head> <exit の欄> <値>'・'missing or invalid measurement' を
+#       この順に '; ' で並べる（採用の行は -）。compare・run-compare は crate 名だけを受ける。
+#   MEASURE_MAX_LOAD=24 / MEASURE_LOAD_WAIT=600 / MEASURE_RETRIES=2。
+#   待ちの期限超過は除外。再試行の回数は初回に加える回数。
 # 環境変数:
 #   MEASURE_DEADLINE  epoch 秒。これを過ぎたら残りの段を走らせず、skipped に理由を書く（run の壁時計に収めるため）。
 #                     走らせる段も残り秒数を timeout の上限にする。
@@ -184,6 +202,15 @@ print(f"required-complete: {', '.join(require)}")
 PY
 }
 
+# /2 decisions live in measure_summary.py; /1 validation below remains available.
+case "${1:-}" in
+  compare|run-compare|summary) python3 "$here/measure_summary.py" "$@"; exit $? ;;
+  --require-compare) shift; python3 "$here/measure_summary.py" require "$@"; exit $? ;;
+esac
+if [ "${1:-}" = "--validate" ] && python3 -I -c 'import json,sys; sys.exit(not json.load(open(sys.argv[1])).get("schema", "").endswith("/2"))' "${2:-}" 2>/dev/null; then
+  python3 "$here/measure_summary.py" validate "$2"; exit $?
+fi
+
 if [ "${1:-}" = "--validate" ]; then
   [ $# -eq 2 ] || { echo "usage: $0 --validate <out.json>" >&2; exit 2; }
   validate "$2"; exit $?
@@ -199,9 +226,9 @@ case "$mode" in
        label="$2"; out="$3"; crates_csv="$4" ;;
   features) [ $# -eq 4 ] || { echo "usage: $0 features <out.json> <crate,...> <crate,...>" >&2; exit 2; }
        out="$2"; set_a="$3"; set_b="$4" ;;
-  compare) [ $# -eq 3 ] || { echo "usage: $0 compare <out.json> <crate,...>" >&2; exit 2; }
-       out="$2"; crates_csv="$3"; label=compare ;;
-  *) echo "usage: $0 run|features|compare|--validate|--require ..." >&2; exit 2 ;;
+  _compare-once) [ $# -eq 3 ] || { echo "usage: $0 compare <out.json> <crate,...>" >&2; exit 2; }
+       out="$2"; crates_csv="$3"; label=compare; mode=compare ;;
+  *) echo "usage: $0 run|features|compare|run-compare|summary|--validate|--require|--require-compare ..." >&2; exit 2 ;;
 esac
 
 out="$(realpath -m "$out")"
@@ -377,7 +404,16 @@ for line in open(steps):
 json.dump(d, open(out, "w"), indent=1, ensure_ascii=False)
 PY
   }
-  cstep() { python3 -I -c 'import json,sys; print(json.dumps({"side":sys.argv[1],"crate":sys.argv[2],"item":sys.argv[3],"data":json.loads(sys.argv[4])}))' "$@" >>"$steps"; assemble_cmp; }
+  load_wait='{}'
+  wait_stage() {
+    load_wait="$(python3 "$here/measure_summary.py" wait)" || return 2
+    python3 -I -c 'import json,sys; sys.exit(not json.loads(sys.argv[1])["ready"])' "$load_wait"
+  }
+  cstep() {
+    if [ "$3" = build ] || [ "$3" = edit_verify ]; then
+      set -- "$1" "$2" "$3" "$(python3 -I -c 'import json,sys; d=json.loads(sys.argv[1]); d["load_wait"]=json.loads(sys.argv[2]); print(json.dumps(d))' "$4" "$load_wait")"
+    fi
+    python3 -I -c 'import json,sys; print(json.dumps({"side":sys.argv[1],"crate":sys.argv[2],"item":sys.argv[3],"data":json.loads(sys.argv[4])}))' "$@" >>"$steps"; assemble_cmp; }
   cskip() { python3 -I -c 'import json,sys; print(json.dumps({"side":sys.argv[1],"crate":sys.argv[2],"item":sys.argv[3],"skip":sys.argv[4]}))' "$@" >>"$steps"; assemble_cmp; }
   # bins <json> <t0> <crate,...>: 一覧の binary の数、うち指定 crate の数、指定 crate で t0 以後に書かれた数、全体で t0 以後に書かれた数
   bins() {
@@ -428,15 +464,21 @@ PY
     (cd "$(tree_of "$side")" && eval "$(cat "$raw/inv-$side.prep")" && eval "$cmd")
   }
   probe=$'\n// edit-verify probe (R5 measure.sh compare)\n'
-  measure_one() {
-    local side="$1" c="$2" tree f pre rc src lrc drc l0 l1 t0 t1 t2 t3 t4 nb nm nl na aff
+  # edited_file <tree> <crate>: 編集・mtime を進める file（src/lib.rs、無ければ src/main.rs）。
+  edited_file() { local f="crates/$2/src/lib.rs"; git -C "$1" ls-files --error-unmatch "$f" >/dev/null 2>&1 || f="crates/$2/src/main.rs"; echo "$f"; }
+  measure_build() {
+    local side="$1" c="$2" tree f pre rc src wait_rc l0 t0 t1 nb nm nl na
     tree="$(tree_of "$side")"; pre="$raw/$side-$c"
-    f="crates/$c/src/lib.rs"; git -C "$tree" ls-files --error-unmatch "$f" >/dev/null 2>&1 || f="crates/$c/src/main.rs"
+    wait_stage; wait_rc=$?
+    cstep "$side" "$c" build_settle_wait "$load_wait"
+    [ "$wait_rc" = 0 ] || { cskip "$side" "$c" build "load wait expired: $load_wait"; return; }
+    f="$(edited_file "$tree" "$c")"
     # build: 両側とも -p <crate>。settle の後に src の mtime を進め、その crate と test target の作り直しを測る。
     (cd "$tree" && timed 60 cargo nextest run -p "$c" --no-run) >"$pre-build-settle.log" 2>&1; src=$?
     if [ "$src" -ge 124 ] && [ "$src" -le 137 ]; then
       cskip "$side" "$c" build "settle の build が MEASURE_DEADLINE までに終わらない（exit $src）"
     else
+      wait_stage || { cskip "$side" "$c" build "load wait expired: $load_wait"; return; }
       touch "$tree/$f"; l0="$(la)"; t0="$(now)"
       (cd "$tree" && timed 30 cargo nextest run -p "$c" --no-run) >"$pre-build.log" 2>&1; rc=$?; t1="$(now)"
       (cd "$tree" && cargo nextest list -p "$c" --list-type binaries-only --message-format json 2>/dev/null) >"$pre-build.binaries.json"
@@ -444,16 +486,24 @@ PY
       cstep "$side" "$c" build "$(python3 -I -c 'import json,sys; a=sys.argv; c=json.loads(a[5]); n=lambda x: None if x=="null" else int(x); print(json.dumps({"cmd":"cargo nextest run -p "+a[10]+" --no-run（settle の後に "+a[11]+" の mtime を進める）","exit":int(a[1]),"timed_out":a[1] in ("124","137"),"settle_exit":int(a[4]),"secs":round(float(a[3])-float(a[2]),2),"compiled_units":len(c),"compiled":c,"test_binaries":n(a[6]),"linked_test_binaries":n(a[7]),"loadavg_before":a[8],"loadavg_after":a[9]}))' \
         "$rc" "$t0" "$t1" "$src" "$(compiled_names "$pre-build.log")" "$nm" "$nl" "$l0" "$(la)" "$c" "$f")"
     fi
+  }
+  measure_ev() {
+    local side="$1" c="$2" tree f pre rc src lrc drc wait_rc l0 l1 t0 t1 t2 t3 t4 nb nm nl na aff
+    tree="$(tree_of "$side")"; pre="$raw/$side-$c"; f="$(edited_file "$tree" "$c")"
     # edit_verify: 対象 crate を決め、その組で settle してから、編集 → --list → その側の nextest の行（--no-run）→ doc test の行。
     printf '%s' "$probe" >>"$tree/$f"
     (cd "$tree" && CELERIS_WU_BASE=HEAD bash scripts/dev/test-affected.sh --list) >"$pre-edit.list" 2>"$pre-edit.list.err"
     git -C "$tree" checkout -- "$f"
     aff="$(grep -v ':' "$pre-edit.list")"
     if [ -z "$aff" ]; then cskip "$side" "$c" edit_verify "test-affected.sh --list が crate を返さなかった（$pre-edit.list.err）"; return; fi
+    wait_stage; wait_rc=$?
+    cstep "$side" "$c" edit_settle_wait "$load_wait"
+    [ "$wait_rc" = 0 ] || { cskip "$side" "$c" edit_verify "load wait expired: $load_wait"; return; }
     t0="$(now)"; side_run "$side" nextest "$aff" >"$pre-edit-settle.log" 2>&1; src=$?
     if [ "$src" -ge 124 ] && [ "$src" -le 137 ]; then
       cskip "$side" "$c" edit_verify "settle の build が MEASURE_DEADLINE までに終わらない（exit $src）"; return
     fi
+    wait_stage || { cskip "$side" "$c" edit_verify "load wait expired: $load_wait"; return; }
     l0="$(la)"; printf '%s' "$probe" >>"$tree/$f"; t1="$(now)"
     (cd "$tree" && CELERIS_WU_BASE=HEAD bash scripts/dev/test-affected.sh --list) >"$pre-edit.list2" 2>>"$pre-edit.list.err"; lrc=$?
     t2="$(now)"
@@ -496,12 +546,13 @@ PY
   i=0
   for c in "${crates[@]}"; do
     if [ $((i % 2)) -eq 0 ]; then sides="base head"; else sides="head base"; fi
-    for side in $sides; do measure_one "$side" "$c"; done
+    for side in $sides; do measure_build "$side" "$c"; done
+    for side in $sides; do measure_ev "$side" "$c"; done
     i=$((i + 1))
   done
   assemble_cmp
   cat "$out"
-  validate "$out"; exit $?
+  exit 0
 fi
 
 # ---- run モード ----------------------------------------------------------------------------------------

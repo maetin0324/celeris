@@ -1,0 +1,2 @@
+  filter=""
+  while IFS= read -r c; do filter="${filter:+$filter | }package(=$c)"; done <<<"$crates"

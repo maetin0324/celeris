@@ -1,0 +1,425 @@
+warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGER` causes the socket to block the thread on drop
+   --> crates/script-runtime/vendor/deno_core/uv_compat/tcp.rs:818:17
+    |
+818 |       && stream.set_linger(Some(std::time::Duration::ZERO)).is_err()
+    |                 ^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: `deno_core` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.29s
+────────────
+ Nextest run ID a2bbb4a5-4cf3-4ece-9b4b-70e5db8cb3c8 with nextest profile: default
+    Starting 205 tests across 19 binaries
+        PASS [   0.006s] (  1/205) celerisctl::cli_resolution embedded_path_is_the_fallback_without_runtime_mapping
+        PASS [   0.007s] (  2/205) celerisctl::cli_resolution invalid_mapping_values_fail_clearly
+        PASS [   0.015s] (  3/205) celerisctl::browser_ledger_release browser_ledger_release_no_conformant_backend
+        PASS [   0.015s] (  4/205) celerisctl::browser_ledger_release browser_ledger_release_json_keeps_public_backend_without_credential_proof
+        PASS [   0.015s] (  5/205) celerisctl::browser_ledger_release browser_ledger_release_missing
+        PASS [   0.016s] (  6/205) celerisctl::bin_smoke help_exits_zero
+        PASS [   0.016s] (  7/205) celerisctl::browser_ledger_release browser_ledger_release_invalid
+        PASS [   0.006s] (  8/205) celerisctl::cli_resolution missing_runtime_mapping_target_fails_clearly_without_embedded_fallback
+        PASS [   0.005s] (  9/205) celerisctl::cli_resolution stale_embedded_path_without_mapping_fails_clearly
+        PASS [   0.006s] ( 10/205) celerisctl::cli_resolution runtime_mapping_wins_over_stale_embedded_path
+        PASS [   0.022s] ( 11/205) celerisctl::browser_doctor browser_doctor_daemon_unavailable_is_one_line_exit_two
+        PASS [   0.023s] ( 12/205) celerisctl::browser_ledger_release browser_ledger_release_ok_json_and_text_without_host_probe
+        PASS [   0.024s] ( 13/205) celerisctl::browser_doctor browser_doctor_api_url_and_token_file_overrides_config
+        PASS [   0.024s] ( 14/205) celerisctl::browser_ledger_release browser_ledger_release_stale_agent_browser
+        PASS [   0.026s] ( 15/205) celerisctl::browser_doctor browser_doctor_json_ok_warn_and_skip_exit_zero_with_env_config
+        PASS [   0.027s] ( 16/205) celerisctl::browser_doctor browser_doctor_prints_one_line_per_missing_item_and_exits_one
+        PASS [   0.014s] ( 17/205) celerisctl::cli_resolution resolved_cli_is_the_real_binary
+        PASS [   0.011s] ( 18/205) celerisctl::cos_ops cos_chat_ops_ctl_api_request_without_run_credential_does_not_send
+        PASS [   0.032s] ( 19/205) celerisctl::browser_ledger_release browser_ledger_release_stale_release
+        PASS [   0.012s] ( 20/205) celerisctl::cos_ops cos_chat_ops_ctl_unsupported_db_mutation_is_rejected_before_db_open
+        PASS [   0.011s] ( 21/205) celerisctl::cos_ops cos_chat_ops_ctl_without_policy_version_env_fails
+        PASS [   0.023s] ( 22/205) celerisctl::cos_ops cos_chat_ops_ctl_api_request_can_send_registered_comment_shape
+        PASS [   0.023s] ( 23/205) celerisctl::cos_ops cos_chat_ops_ctl_add_uses_audited_http_without_opening_database
+        PASS [   0.012s] ( 24/205) celerisctl::no_migrate celerisctl_does_not_create_a_missing_db
+        PASS [   0.023s] ( 25/205) celerisctl::cos_ops cos_chat_ops_ctl_reason_and_policy_can_come_from_environment
+        PASS [   0.014s] ( 26/205) celerisctl::org_migrate_v2 config_to_harnesses_prints_the_new_shape_from_the_legacy_one
+        PASS [   0.027s] ( 27/205) celerisctl::followups add_inside_a_run_queues_a_followup_instead_of_opening_the_db
+        PASS [   0.045s] ( 28/205) celerisctl::cos_ops cos_chat_ops_ctl_prefers_api_url_env_over_config
+        PASS [   0.070s] ( 29/205) celerisctl::browser_ledger_release browser_ledger_release_host_probe_uses_explicit_executable
+        PASS [   0.159s] ( 30/205) celerisctl::terminal_pty sigterm_ends_a_job_that_left_the_session_holding_the_tty
+        PASS [   0.256s] ( 31/205) celerisctl::routing_cli routing_export_emits_one_training_row_and_supports_text_omission
+        PASS [   0.116s] ( 32/205) celerisctl::terminal_pty stdin_eof_ends_a_job_that_left_the_session_holding_the_tty
+        PASS [   0.363s] ( 33/205) celerisctl::campaign_connected export_keeps_raw_run_and_call_keys_and_states
+        PASS [   0.388s] ( 34/205) celerisctl::campaign_connected grade_with_foreign_manifest_hash_is_rejected
+        PASS [   0.362s] ( 35/205) celerisctl::skills_import ui_ux_skills_cli_imports_config_skills_without_a_db
+        PASS [   0.413s] ( 36/205) celerisctl::campaign_connected connected_campaign_exports_every_joined_field_and_passes
+        PASS [   0.424s] ( 37/205) celerisctl::campaign_connected verify_connected_requires_grades
+        PASS [   0.451s] ( 38/205) celerisctl::campaign_connected unobserved_usage_row_is_missing_not_zero
+        PASS [   0.459s] ( 39/205) celerisctl::campaign_connected grade_row_joins_every_run_of_the_trial
+        PASS [   0.483s] ( 40/205) celerisctl::campaign_export campaign_export_is_deterministic_deduped_scoped_and_secret_free
+        PASS [   0.495s] ( 41/205) celerisctl::eval_requests renotify_and_restart_do_not_add_rows
+        PASS [   0.546s] ( 42/205) celerisctl::campaign_connected run_without_routing_decision_may_lack_proposed_first
+        PASS [   0.541s] ( 43/205) celerisctl::no_migrate celerisctl_reads_a_newer_db_but_refuses_to_write_it
+        PASS [   0.540s] ( 44/205) celerisctl::no_migrate celerisctl_refuses_an_older_db_and_leaves_its_schema_alone
+        PASS [   0.563s] ( 45/205) celerisctl::no_migrate celerisctl_reads_and_writes_a_db_at_its_own_version
+        PASS [   0.602s] ( 46/205) celerisctl::followups add_to_another_db_or_outside_a_run_writes_the_db_as_before
+        PASS [   0.607s] ( 47/205) celerisctl::mcp_client_scopes scopes_replaces_the_scope_list_and_keeps_the_token
+        PASS [   0.597s] ( 48/205) celerisctl::routing_cli routing_stage_set_refuses_enforce_without_evidence_then_lists_the_human_change
+        PASS [   0.664s] ( 49/205) celerisctl::org_migrate_v2 migrate_v2_maps_the_tree_and_rollback_restores_it_exactly
+        PASS [   0.260s] ( 50/205) celerisctl::bin/celerisctl commands::accept::tests::run_on_invalid_id_returns_message_error
+        PASS [   0.802s] ( 51/205) celerisctl::campaign_connected empty_campaign_fails_the_connection_check
+        PASS [   0.282s] ( 52/205) celerisctl::bin/celerisctl commands::accept::tests::run_on_missing_task_returns_message_error
+        PASS [   0.285s] ( 53/205) celerisctl::bin/celerisctl commands::add::tests::run_inserts_task_and_created_event
+        PASS [   0.504s] ( 54/205) celerisctl::worker_run done_prints_progress_artifact_and_result_without_touching_the_store
+        PASS [   0.490s] ( 55/205) celerisctl::worker_run error_with_provider_failure_exits_four_and_preserves_provider_failure
+        PASS [   0.307s] ( 56/205) celerisctl::bin/celerisctl commands::add::tests::run_acceptance_order_is_accept_then_cmd_then_artifact_then_reviewer
+        PASS [   0.474s] ( 57/205) celerisctl::worker_run manual_run_cannot_silently_drop_browser_capability
+        PASS [   0.009s] ( 58/205) celerisctl::bin/celerisctl commands::browser::tests::challenge_format
+        PASS [   0.011s] ( 59/205) celerisctl::bin/celerisctl commands::browser::tests::approve_talks_one_line_to_a_private_socket
+        PASS [   0.473s] ( 60/205) celerisctl::worker_run question_exits_three
+        PASS [   0.010s] ( 61/205) celerisctl::bin/celerisctl commands::campaign::tests::scrub_hides_secret_shapes_and_keeps_plain_text
+        PASS [   0.010s] ( 62/205) celerisctl::bin/celerisctl commands::build_cache::tests::only_old_directories_directly_under_cargo_are_candidates
+        PASS [   0.014s] ( 63/205) celerisctl::bin/celerisctl commands::build_cache::tests::dry_run_preserves_cache_and_prune_removes_only_old_entry
+        PASS [   0.444s] ( 64/205) celerisctl::worker_run unknown_harness_errors
+        PASS [   0.499s] ( 65/205) celerisctl::worker_run harness_flag_starts_the_declared_harness_command
+        PASS [   0.010s] ( 66/205) celerisctl::bin/celerisctl commands::cos_ops::tests::cos_chat_ops_ctl_missing_reason_fails_before_connection
+        PASS [   0.011s] ( 67/205) celerisctl::bin/celerisctl commands::cos_ops::tests::cos_chat_ops_ctl_rejects_header_injection_before_connection
+        PASS [   0.023s] ( 68/205) celerisctl::bin/celerisctl commands::cos_ops::tests::cos_chat_ops_ctl_credential_wraps_domain_mutation_and_uses_run_bearer
+        PASS [   0.295s] ( 69/205) celerisctl::bin/celerisctl commands::add::tests::run_with_genre_but_no_config_stores_the_name_only
+        PASS [   0.019s] ( 70/205) celerisctl::bin/celerisctl commands::cron::tests::cron_create_parses_template_and_calls_api
+        PASS [   0.022s] ( 71/205) celerisctl::bin/celerisctl commands::cos_ops::tests::cos_chat_ops_ctl_without_credential_preserves_domain_request
+        PASS [   0.021s] ( 72/205) celerisctl::bin/celerisctl commands::cron::tests::cron_history_calls_api
+        PASS [   0.344s] ( 73/205) celerisctl::bin/celerisctl commands::add::tests::run_with_approval_kind_starts_ready
+        PASS [   0.021s] ( 74/205) celerisctl::bin/celerisctl commands::cron::tests::cron_list_calls_api
+        PASS [   0.307s] ( 75/205) celerisctl::bin/celerisctl commands::add::tests::run_with_invalid_parent_id_returns_error
+        PASS [   0.021s] ( 76/205) celerisctl::bin/celerisctl commands::cron::tests::cron_pause_calls_api
+        PASS [   0.021s] ( 77/205) celerisctl::bin/celerisctl commands::cron::tests::cron_resume_calls_api
+        PASS [   0.021s] ( 78/205) celerisctl::bin/celerisctl commands::cron::tests::cron_request_keeps_the_api_v1_prefix_separator
+        PASS [   0.010s] ( 79/205) celerisctl::bin/celerisctl commands::cron::tests::cron_template_must_be_json_object
+        PASS [   0.022s] ( 80/205) celerisctl::bin/celerisctl commands::cron::tests::cron_run_calls_api
+        PASS [   0.508s] ( 81/205) celerisctl::worker_run running_task_requires_explicit_workspace
+        PASS [   0.010s] ( 82/205) celerisctl::bin/celerisctl commands::curation::tests::adding_inbox_id_does_not_authorize_a_proposal
+        PASS [   0.021s] ( 83/205) celerisctl::bin/celerisctl commands::cron::tests::cron_show_calls_api
+        PASS [   0.335s] ( 84/205) celerisctl::bin/celerisctl commands::add::tests::run_with_genre_and_config_applies_genre_default_role_defaults
+        PASS [   0.013s] ( 85/205) celerisctl::bin/celerisctl commands::curation::tests::discovers_workspace_root_from_repo_worktree_cwd
+        PASS [   0.014s] ( 86/205) celerisctl::bin/celerisctl commands::curation::tests::diff_touching_unplanned_path_is_rejected
+        PASS [   0.015s] ( 87/205) celerisctl::bin/celerisctl commands::curation::tests::edited_kb_with_rehashed_plan_is_rejected_but_content_only_edit_passes
+        PASS [   0.023s] ( 88/205) celerisctl::bin/celerisctl commands::cron::tests::cron_update_calls_api
+        PASS [   0.014s] ( 89/205) celerisctl::bin/celerisctl commands::curation::tests::inbox_proposal_for_unknown_task_is_rejected
+        PASS [   0.272s] ( 90/205) celerisctl::bin/celerisctl commands::add::tests::run_with_missing_dependency_errors_and_inserts_nothing
+        PASS [   0.010s] ( 91/205) celerisctl::bin/celerisctl commands::db::tests::backup_of_a_missing_source_is_a_clean_error
+        PASS [   0.015s] ( 92/205) celerisctl::bin/celerisctl commands::curation::tests::worker_shape_of_2026_10_03_is_rejected_with_reason
+        PASS [   0.018s] ( 93/205) celerisctl::bin/celerisctl commands::curation::tests::minimal_plan_passes
+        PASS [   0.011s] ( 94/205) celerisctl::bin/celerisctl commands::db::tests::integrity_check_on_garbage_bytes_is_a_failure_not_a_panic
+        PASS [   0.032s] ( 95/205) celerisctl::bin/celerisctl commands::curation::tests::more_than_max_inbox_candidates_is_rejected
+        PASS [   0.035s] ( 96/205) celerisctl::bin/celerisctl commands::curation::tests::input_mutation_or_missing_snapshot_cannot_pass_even_for_minimal_plan
+        PASS [   0.279s] ( 97/205) celerisctl::bin/celerisctl commands::add::tests::run_with_role_and_config_applies_role_defaults
+        PASS [   0.585s] ( 98/205) celerisctl::worker_run_signal sigterm_kills_the_worker_process_and_exits_130
+        PASS [   0.020s] ( 99/205) celerisctl::bin/celerisctl commands::integration::tests::integration_api_actions_build_paths_and_bodies
+        PASS [   0.276s] (100/205) celerisctl::bin/celerisctl commands::add::tests::run_with_role_but_no_config_stores_the_name_only
+        PASS [   0.020s] (101/205) celerisctl::bin/celerisctl commands::integration::tests::integration_api_discard_and_hold_require_reason
+        PASS [   0.011s] (102/205) celerisctl::bin/celerisctl commands::integration::tests::integration_api_filter_and_table_render_items
+        PASS [   0.013s] (103/205) celerisctl::bin/celerisctl commands::integration::tests::integration_api_rejects_unknown_state_at_parse_time
+        PASS [   0.023s] (104/205) celerisctl::bin/celerisctl commands::integration::tests::integration_api_list_paths_and_filters
+        PASS [   0.010s] (105/205) celerisctl::bin/celerisctl commands::knowledge::tests::cos_live_fix_d2_cli_direct_record_refuses_attachment_ids
+        PASS [   0.262s] (106/205) celerisctl::bin/celerisctl commands::add::tests::run_with_unreadable_config_errors_and_inserts_nothing
+        PASS [   0.011s] (107/205) celerisctl::bin/celerisctl commands::knowledge::tests::cos_live_fix_d2_cli_idempotency_key_is_stable
+        PASS [   0.046s] (108/205) celerisctl::bin/celerisctl commands::integration::tests::integration_api_http_calls_reach_the_daemon_route
+        PASS [   0.022s] (109/205) celerisctl::bin/celerisctl commands::knowledge::tests::cos_live_fix_d2_cli_record_with_cos_credential_calls_the_api
+        PASS [   0.268s] (110/205) celerisctl::bin/celerisctl commands::add::tests::run_without_any_acceptance_criterion_errors_and_inserts_nothing
+        PASS [   0.010s] (111/205) celerisctl::bin/celerisctl commands::knowledge::tests::the_root_flag_wins_over_an_unreadable_config
+        PASS [   0.307s] (112/205) celerisctl::bin/celerisctl commands::add::tests::run_with_unknown_genre_or_role_genre_mismatch_errors_when_config_given
+        PASS [   0.010s] (113/205) celerisctl::bin/celerisctl commands::models::tests::table_shows_state_override_and_discovery
+        PASS [   0.012s] (114/205) celerisctl::bin/celerisctl commands::models::tests::empty_catalog_points_at_discover
+        PASS [   0.011s] (115/205) celerisctl::bin/celerisctl commands::org::tests::the_map_is_deterministic_and_merges_the_poc_section
+        PASS [   0.273s] (116/205) celerisctl::bin/celerisctl commands::cancel::tests::run_on_invalid_id_returns_message_error
+        PASS [   0.011s] (117/205) celerisctl::bin/celerisctl commands::projects::tests::projects_plan_subcommand_is_removed
+        PASS [   0.070s] (118/205) celerisctl::bin/celerisctl commands::knowledge::tests::the_cli_works_on_a_temporary_knowledge_base
+        PASS [   0.295s] (119/205) celerisctl::bin/celerisctl commands::cancel::tests::run_on_missing_task_returns_message_error
+        PASS [   0.288s] (120/205) celerisctl::bin/celerisctl commands::execution::tests::phase_gate_on_a_missing_task_is_an_error
+        PASS [   0.284s] (121/205) celerisctl::bin/celerisctl commands::execution::tests::tree_adopt_needs_the_tree_and_put_is_an_alias_of_set
+        PASS [   0.278s] (122/205) celerisctl::bin/celerisctl commands::gate::tests::run_answer_on_missing_task_returns_message_error
+        PASS [   0.305s] (123/205) celerisctl::bin/celerisctl commands::execution::tests::show_without_a_plan_succeeds_and_says_so
+        PASS [   1.289s] (124/205) celerisctl::campaign_connected missing_required_fields_or_unmetered_consumption_fail
+        PASS [   0.313s] (125/205) celerisctl::bin/celerisctl commands::execution::tests::set_then_show_round_trips
+        PASS [   0.324s] (126/205) celerisctl::bin/celerisctl commands::execution::tests::set_rejects_an_unknown_task
+        PASS [   0.309s] (127/205) celerisctl::bin/celerisctl commands::gate::tests::run_approve_on_missing_task_returns_message_error
+        PASS [   0.345s] (128/205) celerisctl::bin/celerisctl commands::execution::tests::set_adopts_a_v3_plan_with_the_configured_tree_limits
+        PASS [   0.355s] (129/205) celerisctl::bin/celerisctl commands::execution::tests::set_rejects_an_invalid_plan
+        PASS [   0.300s] (130/205) celerisctl::bin/celerisctl commands::knowledge::tests::rerun_resets_the_knowledge_run_row_and_rejects_unknown_ids
+        PASS [   0.304s] (131/205) celerisctl::bin/celerisctl commands::plan::tests::run_inserts_plan_task
+        PASS [   0.298s] (132/205) celerisctl::bin/celerisctl commands::plan_lint::tests::no_violations_when_every_human_check_has_a_deliverable
+        PASS [   0.008s] (133/205) celerisctl::bin/celerisctl commands::release::tests::parses_notes_args
+        PASS [   0.120s] (134/205) celerisctl::bin/celerisctl commands::release::tests::notes_fails_on_unknown_sha
+        PASS [   0.011s] (135/205) celerisctl::bin/celerisctl commands::release::tests::parses_preview_args
+        PASS [   0.010s] (136/205) celerisctl::bin/celerisctl commands::release::tests::preview_missing_release_is_none
+        PASS [   0.314s] (137/205) celerisctl::bin/celerisctl commands::plan::tests::run_with_blank_goal_returns_error
+        PASS [   0.314s] (138/205) celerisctl::bin/celerisctl commands::plan_lint::tests::lints_draft_and_ready_tasks_but_not_other_statuses
+        PASS [   0.511s] (139/205) celerisctl::bin/celerisctl commands::db::tests::backup_then_integrity_check_round_trip
+        PASS [   0.311s] (140/205) celerisctl::bin/celerisctl commands::projects::tests::run_ls_hides_archived_projects_unless_all
+        PASS [   0.308s] (141/205) celerisctl::bin/celerisctl commands::projects::tests::run_show_reads_the_project_and_its_milestones
+        PASS [   0.012s] (142/205) celerisctl::bin/celerisctl commands::routing::tests::a_source_without_harnesses_or_routes_says_so
+        PASS [   0.313s] (143/205) celerisctl::bin/celerisctl commands::query::tests::run_log_without_follow_succeeds
+        PASS [   0.013s] (144/205) celerisctl::bin/celerisctl commands::routing::tests::show_prints_class_candidates
+        PASS [   0.012s] (145/205) celerisctl::bin/celerisctl commands::routing::tests::shows_llm_sources_harnesses_and_routes
+        PASS [   0.010s] (146/205) celerisctl::bin/celerisctl commands::scratch::tests::disabled_scratch_makes_lease_fail_so_release_sh_falls_back
+        PASS [   0.014s] (147/205) celerisctl::bin/celerisctl commands::scratch::tests::env_has_only_target_and_cargo_tuning
+        PASS [   0.018s] (148/205) celerisctl::bin/celerisctl commands::scratch::tests::lease_touch_release_round_trip
+        PASS [   0.011s] (149/205) celerisctl::bin/celerisctl commands::scratch::tests::status_has_no_sccache_or_cache_server
+        PASS [   0.122s] (150/205) celerisctl::bin/celerisctl commands::release::tests::notes_writes_json_and_markdown_without_api
+        PASS [   0.010s] (151/205) celerisctl::bin/celerisctl commands::script::tests::script_canary_generations_and_guard_requests
+        PASS [   0.009s] (152/205) celerisctl::bin/celerisctl commands::script::tests::script_cos_read_only_and_request_of_partition_every_subcommand
+        PASS [   0.291s] (153/205) celerisctl::bin/celerisctl commands::query::tests::run_ls_tree_groups_children_under_parent
+        PASS [   0.038s] (154/205) celerisctl::bin/celerisctl commands::scratch::tests::gc_dry_run_lists_without_removing
+        PASS [   0.008s] (155/205) celerisctl::bin/celerisctl commands::script::tests::script_cos_read_only_is_domains_generations_list_and_guard_status
+        PASS [   0.011s] (156/205) celerisctl::bin/celerisctl commands::script::tests::script_cos_read_only_guard_clear_help_names_403_and_422
+        PASS [   0.009s] (157/205) celerisctl::bin/celerisctl commands::script::tests::script_cos_wrapped_requests_match_the_operations_table
+        PASS [   0.012s] (158/205) celerisctl::bin/celerisctl commands::script::tests::script_domain_mode_request_carries_mode_version_and_generation
+        PASS [   0.009s] (159/205) celerisctl::bin/celerisctl commands::script::tests::script_domain_table_shows_mode_version_and_short_bundle
+        PASS [   0.279s] (160/205) celerisctl::bin/celerisctl commands::query::tests::run_show_found_task_succeeds
+        PASS [   0.010s] (161/205) celerisctl::bin/celerisctl commands::script::tests::script_exhaustive_table_shows_standing_and_counts
+        PASS [   0.010s] (162/205) celerisctl::bin/celerisctl commands::script::tests::script_exhaustive_cos_read_only_and_wrapped
+        PASS [   0.297s] (163/205) celerisctl::bin/celerisctl commands::query::tests::run_ls_without_filter_lists_all_tasks
+        PASS [   0.010s] (164/205) celerisctl::bin/celerisctl commands::script::tests::script_generation_table_and_guard_line
+        PASS [   0.008s] (165/205) celerisctl::bin/celerisctl commands::worker::tests::normalize_outcome_maps_done_question_and_error_to_exit_codes
+        PASS [   0.010s] (166/205) celerisctl::bin/celerisctl commands::worker::tests::normalize_outcome_maps_adapter_errors_to_provider_failure
+        PASS [   0.014s] (167/205) celerisctl::bin/celerisctl commands::target_sweep::tests::target_sweep_cli_apply_with_root
+        PASS [   0.013s] (168/205) celerisctl::bin/celerisctl commands::target_sweep::tests::target_sweep_cli_dry_run_json_deletes_nothing
+        PASS [   0.013s] (169/205) celerisctl::bin/celerisctl commands::target_sweep::tests::target_sweep_cli_default_roots
+        PASS [   0.296s] (170/205) celerisctl::bin/celerisctl commands::query::tests::run_show_json_prints_task_detail_with_actions_and_matches_task_id
+        PASS [   0.015s] (171/205) celerisctl::bin/celerisctl commands::worker::tests::worker_route_cli_account_flag_narrows_the_pool
+        PASS [   0.310s] (172/205) celerisctl::bin/celerisctl commands::query::tests::run_show_json_missing_task_errors
+        PASS [   0.014s] (173/205) celerisctl::bin/celerisctl commands::worker::tests::worker_route_cli_fails_closed
+        PASS [   0.340s] (174/205) celerisctl::bin/celerisctl commands::query::tests::run_ls_with_status_filter_matches_store_list
+        PASS [   0.014s] (175/205) celerisctl::bin/celerisctl commands::worker::tests::worker_route_cli_model_flag_selects_that_model
+        PASS [   0.014s] (176/205) celerisctl::bin/celerisctl commands::worker::tests::worker_route_cli_openai_compatible_source_carries_its_endpoint
+        PASS [   0.016s] (177/205) celerisctl::bin/celerisctl commands::worker::tests::worker_route_cli_uses_the_given_harness_and_the_first_declared_candidate
+        PASS [   0.314s] (178/205) celerisctl::bin/celerisctl commands::query::tests::task_detail_json_is_parseable_and_contains_task_id_and_actions
+        PASS [   0.325s] (179/205) celerisctl::bin/celerisctl commands::query::tests::run_show_missing_task_errors
+        PASS [   0.328s] (180/205) celerisctl::bin/celerisctl commands::query::tests::task_detail_json_with_a_config_reports_the_worktree
+        PASS [   0.039s] (181/205) celerisctl::bin/celerisctl cos_mapping_tests::cos_mapped_subcommands_match_registered_operations
+        PASS [   0.272s] (182/205) celerisctl::bin/celerisctl commands::replay::tests::run_reports_failure_exit_code_on_drift
+        PASS [   0.048s] (183/205) celerisctl::bin/celerisctl cos_mapping_tests::cos_mapped_table_wraps_every_allowed_subcommand
+        PASS [   0.298s] (184/205) celerisctl::bin/celerisctl commands::rereview::tests::run_on_invalid_id_returns_message_error
+        PASS [   0.303s] (185/205) celerisctl::bin/celerisctl commands::replay::tests::run_reports_success_when_no_tasks
+        PASS [   0.301s] (186/205) celerisctl::bin/celerisctl commands::rereview::tests::run_on_missing_task_returns_message_error
+        PASS [   0.301s] (187/205) celerisctl::bin/celerisctl commands::retry::tests::run_on_invalid_id_returns_message_error
+        PASS [   0.305s] (188/205) celerisctl::bin/celerisctl commands::retry::tests::run_on_missing_task_returns_message_error
+        PASS [   1.461s] (189/205) celerisctl::worker_run codex_route_reaches_the_cli_without_mutating_the_store
+        PASS [   0.236s] (190/205) celerisctl::bin/celerisctl commands::worker::tests::resolve_cluster_target_uses_task_remote_path_without_workspace_arg
+        PASS [   0.273s] (191/205) celerisctl::bin/celerisctl commands::worker::tests::resolve_cluster_target_warns_when_task_targets_a_different_cluster
+        PASS [   0.273s] (192/205) celerisctl::bin/celerisctl commands::worker::tests::resolve_cluster_target_workspace_arg_overrides_task_path
+        PASS [   0.276s] (193/205) celerisctl::bin/celerisctl commands::worker::tests::resolve_cluster_target_requires_workspace_arg_for_local_task
+        PASS [   0.240s] (194/205) celerisctl::bin/celerisctl commands::workspace::tests::backfill_artifacts_with_an_unknown_task_is_an_error
+        PASS [   0.296s] (195/205) celerisctl::bin/celerisctl commands::worker::tests::resolve_cluster_target_errors_when_cluster_missing
+        PASS [   0.250s] (196/205) celerisctl::bin/celerisctl commands::workspace::tests::prune_deletes_and_records_the_event
+        PASS [   0.278s] (197/205) celerisctl::bin/celerisctl commands::workspace::tests::backfill_artifacts_isolates_local_retry_and_original_tasks
+        PASS [   0.298s] (198/205) celerisctl::bin/celerisctl commands::workspace::tests::backfill_artifacts_registers_remote_mirror_artifacts_once
+        PASS [   0.291s] (199/205) celerisctl::bin/celerisctl commands::workspace::tests::dry_run_lists_candidates_without_deleting
+        PASS [   0.300s] (200/205) celerisctl::bin/celerisctl commands::workspace::tests::older_than_overrides_the_config
+        PASS [   0.462s] (201/205) celerisctl::bin/celerisctl commands::worker::tests::resolve_cluster_target_rejects_running_or_reviewing_task_even_with_workspace_arg
+        PASS [   2.111s] (202/205) celerisctl::terminal_pty input_output_resize_and_exit_code
+        PASS [   2.149s] (203/205) celerisctl::terminal_pty sigterm_ends_the_whole_session
+        PASS [   2.059s] (204/205) celerisctl::terminal_pty stdin_eof_ends_the_whole_session
+        PASS [   2.706s] (205/205) celerisctl::pipe ls_on_a_closed_pipe_exits_cleanly_without_panicking
+────────────
+     Summary [   2.746s] 205 tests run: 205 passed, 0 skipped
+        PASS [   0.006s] (  1/205) celerisctl::cli_resolution embedded_path_is_the_fallback_without_runtime_mapping
+        PASS [   0.007s] (  2/205) celerisctl::cli_resolution invalid_mapping_values_fail_clearly
+        PASS [   0.015s] (  3/205) celerisctl::browser_ledger_release browser_ledger_release_no_conformant_backend
+        PASS [   0.015s] (  4/205) celerisctl::browser_ledger_release browser_ledger_release_json_keeps_public_backend_without_credential_proof
+        PASS [   0.015s] (  5/205) celerisctl::browser_ledger_release browser_ledger_release_missing
+        PASS [   0.016s] (  6/205) celerisctl::bin_smoke help_exits_zero
+        PASS [   0.016s] (  7/205) celerisctl::browser_ledger_release browser_ledger_release_invalid
+        PASS [   0.006s] (  8/205) celerisctl::cli_resolution missing_runtime_mapping_target_fails_clearly_without_embedded_fallback
+        PASS [   0.005s] (  9/205) celerisctl::cli_resolution stale_embedded_path_without_mapping_fails_clearly
+        PASS [   0.006s] ( 10/205) celerisctl::cli_resolution runtime_mapping_wins_over_stale_embedded_path
+        PASS [   0.022s] ( 11/205) celerisctl::browser_doctor browser_doctor_daemon_unavailable_is_one_line_exit_two
+        PASS [   0.023s] ( 12/205) celerisctl::browser_ledger_release browser_ledger_release_ok_json_and_text_without_host_probe
+        PASS [   0.024s] ( 13/205) celerisctl::browser_doctor browser_doctor_api_url_and_token_file_overrides_config
+        PASS [   0.024s] ( 14/205) celerisctl::browser_ledger_release browser_ledger_release_stale_agent_browser
+        PASS [   0.026s] ( 15/205) celerisctl::browser_doctor browser_doctor_json_ok_warn_and_skip_exit_zero_with_env_config
+        PASS [   0.027s] ( 16/205) celerisctl::browser_doctor browser_doctor_prints_one_line_per_missing_item_and_exits_one
+        PASS [   0.014s] ( 17/205) celerisctl::cli_resolution resolved_cli_is_the_real_binary
+        PASS [   0.011s] ( 18/205) celerisctl::cos_ops cos_chat_ops_ctl_api_request_without_run_credential_does_not_send
+        PASS [   0.032s] ( 19/205) celerisctl::browser_ledger_release browser_ledger_release_stale_release
+        PASS [   0.012s] ( 20/205) celerisctl::cos_ops cos_chat_ops_ctl_unsupported_db_mutation_is_rejected_before_db_open
+        PASS [   0.011s] ( 21/205) celerisctl::cos_ops cos_chat_ops_ctl_without_policy_version_env_fails
+        PASS [   0.023s] ( 22/205) celerisctl::cos_ops cos_chat_ops_ctl_api_request_can_send_registered_comment_shape
+        PASS [   0.023s] ( 23/205) celerisctl::cos_ops cos_chat_ops_ctl_add_uses_audited_http_without_opening_database
+        PASS [   0.012s] ( 24/205) celerisctl::no_migrate celerisctl_does_not_create_a_missing_db
+        PASS [   0.023s] ( 25/205) celerisctl::cos_ops cos_chat_ops_ctl_reason_and_policy_can_come_from_environment
+        PASS [   0.014s] ( 26/205) celerisctl::org_migrate_v2 config_to_harnesses_prints_the_new_shape_from_the_legacy_one
+        PASS [   0.027s] ( 27/205) celerisctl::followups add_inside_a_run_queues_a_followup_instead_of_opening_the_db
+        PASS [   0.045s] ( 28/205) celerisctl::cos_ops cos_chat_ops_ctl_prefers_api_url_env_over_config
+        PASS [   0.070s] ( 29/205) celerisctl::browser_ledger_release browser_ledger_release_host_probe_uses_explicit_executable
+        PASS [   0.159s] ( 30/205) celerisctl::terminal_pty sigterm_ends_a_job_that_left_the_session_holding_the_tty
+        PASS [   0.256s] ( 31/205) celerisctl::routing_cli routing_export_emits_one_training_row_and_supports_text_omission
+        PASS [   0.116s] ( 32/205) celerisctl::terminal_pty stdin_eof_ends_a_job_that_left_the_session_holding_the_tty
+        PASS [   0.363s] ( 33/205) celerisctl::campaign_connected export_keeps_raw_run_and_call_keys_and_states
+        PASS [   0.388s] ( 34/205) celerisctl::campaign_connected grade_with_foreign_manifest_hash_is_rejected
+        PASS [   0.362s] ( 35/205) celerisctl::skills_import ui_ux_skills_cli_imports_config_skills_without_a_db
+        PASS [   0.413s] ( 36/205) celerisctl::campaign_connected connected_campaign_exports_every_joined_field_and_passes
+        PASS [   0.424s] ( 37/205) celerisctl::campaign_connected verify_connected_requires_grades
+        PASS [   0.451s] ( 38/205) celerisctl::campaign_connected unobserved_usage_row_is_missing_not_zero
+        PASS [   0.459s] ( 39/205) celerisctl::campaign_connected grade_row_joins_every_run_of_the_trial
+        PASS [   0.483s] ( 40/205) celerisctl::campaign_export campaign_export_is_deterministic_deduped_scoped_and_secret_free
+        PASS [   0.495s] ( 41/205) celerisctl::eval_requests renotify_and_restart_do_not_add_rows
+        PASS [   0.546s] ( 42/205) celerisctl::campaign_connected run_without_routing_decision_may_lack_proposed_first
+        PASS [   0.541s] ( 43/205) celerisctl::no_migrate celerisctl_reads_a_newer_db_but_refuses_to_write_it
+        PASS [   0.540s] ( 44/205) celerisctl::no_migrate celerisctl_refuses_an_older_db_and_leaves_its_schema_alone
+        PASS [   0.563s] ( 45/205) celerisctl::no_migrate celerisctl_reads_and_writes_a_db_at_its_own_version
+        PASS [   0.602s] ( 46/205) celerisctl::followups add_to_another_db_or_outside_a_run_writes_the_db_as_before
+        PASS [   0.607s] ( 47/205) celerisctl::mcp_client_scopes scopes_replaces_the_scope_list_and_keeps_the_token
+        PASS [   0.597s] ( 48/205) celerisctl::routing_cli routing_stage_set_refuses_enforce_without_evidence_then_lists_the_human_change
+        PASS [   0.664s] ( 49/205) celerisctl::org_migrate_v2 migrate_v2_maps_the_tree_and_rollback_restores_it_exactly
+        PASS [   0.260s] ( 50/205) celerisctl::bin/celerisctl commands::accept::tests::run_on_invalid_id_returns_message_error
+        PASS [   0.802s] ( 51/205) celerisctl::campaign_connected empty_campaign_fails_the_connection_check
+        PASS [   0.282s] ( 52/205) celerisctl::bin/celerisctl commands::accept::tests::run_on_missing_task_returns_message_error
+        PASS [   0.285s] ( 53/205) celerisctl::bin/celerisctl commands::add::tests::run_inserts_task_and_created_event
+        PASS [   0.504s] ( 54/205) celerisctl::worker_run done_prints_progress_artifact_and_result_without_touching_the_store
+        PASS [   0.490s] ( 55/205) celerisctl::worker_run error_with_provider_failure_exits_four_and_preserves_provider_failure
+        PASS [   0.307s] ( 56/205) celerisctl::bin/celerisctl commands::add::tests::run_acceptance_order_is_accept_then_cmd_then_artifact_then_reviewer
+        PASS [   0.474s] ( 57/205) celerisctl::worker_run manual_run_cannot_silently_drop_browser_capability
+        PASS [   0.009s] ( 58/205) celerisctl::bin/celerisctl commands::browser::tests::challenge_format
+        PASS [   0.011s] ( 59/205) celerisctl::bin/celerisctl commands::browser::tests::approve_talks_one_line_to_a_private_socket
+        PASS [   0.473s] ( 60/205) celerisctl::worker_run question_exits_three
+        PASS [   0.010s] ( 61/205) celerisctl::bin/celerisctl commands::campaign::tests::scrub_hides_secret_shapes_and_keeps_plain_text
+        PASS [   0.010s] ( 62/205) celerisctl::bin/celerisctl commands::build_cache::tests::only_old_directories_directly_under_cargo_are_candidates
+        PASS [   0.014s] ( 63/205) celerisctl::bin/celerisctl commands::build_cache::tests::dry_run_preserves_cache_and_prune_removes_only_old_entry
+        PASS [   0.444s] ( 64/205) celerisctl::worker_run unknown_harness_errors
+        PASS [   0.499s] ( 65/205) celerisctl::worker_run harness_flag_starts_the_declared_harness_command
+        PASS [   0.010s] ( 66/205) celerisctl::bin/celerisctl commands::cos_ops::tests::cos_chat_ops_ctl_missing_reason_fails_before_connection
+        PASS [   0.011s] ( 67/205) celerisctl::bin/celerisctl commands::cos_ops::tests::cos_chat_ops_ctl_rejects_header_injection_before_connection
+        PASS [   0.023s] ( 68/205) celerisctl::bin/celerisctl commands::cos_ops::tests::cos_chat_ops_ctl_credential_wraps_domain_mutation_and_uses_run_bearer
+        PASS [   0.295s] ( 69/205) celerisctl::bin/celerisctl commands::add::tests::run_with_genre_but_no_config_stores_the_name_only
+        PASS [   0.019s] ( 70/205) celerisctl::bin/celerisctl commands::cron::tests::cron_create_parses_template_and_calls_api
+        PASS [   0.022s] ( 71/205) celerisctl::bin/celerisctl commands::cos_ops::tests::cos_chat_ops_ctl_without_credential_preserves_domain_request
+        PASS [   0.021s] ( 72/205) celerisctl::bin/celerisctl commands::cron::tests::cron_history_calls_api
+        PASS [   0.344s] ( 73/205) celerisctl::bin/celerisctl commands::add::tests::run_with_approval_kind_starts_ready
+        PASS [   0.021s] ( 74/205) celerisctl::bin/celerisctl commands::cron::tests::cron_list_calls_api
+        PASS [   0.307s] ( 75/205) celerisctl::bin/celerisctl commands::add::tests::run_with_invalid_parent_id_returns_error
+        PASS [   0.021s] ( 76/205) celerisctl::bin/celerisctl commands::cron::tests::cron_pause_calls_api
+        PASS [   0.021s] ( 77/205) celerisctl::bin/celerisctl commands::cron::tests::cron_resume_calls_api
+        PASS [   0.021s] ( 78/205) celerisctl::bin/celerisctl commands::cron::tests::cron_request_keeps_the_api_v1_prefix_separator
+        PASS [   0.010s] ( 79/205) celerisctl::bin/celerisctl commands::cron::tests::cron_template_must_be_json_object
+        PASS [   0.022s] ( 80/205) celerisctl::bin/celerisctl commands::cron::tests::cron_run_calls_api
+        PASS [   0.508s] ( 81/205) celerisctl::worker_run running_task_requires_explicit_workspace
+        PASS [   0.010s] ( 82/205) celerisctl::bin/celerisctl commands::curation::tests::adding_inbox_id_does_not_authorize_a_proposal
+        PASS [   0.021s] ( 83/205) celerisctl::bin/celerisctl commands::cron::tests::cron_show_calls_api
+        PASS [   0.335s] ( 84/205) celerisctl::bin/celerisctl commands::add::tests::run_with_genre_and_config_applies_genre_default_role_defaults
+        PASS [   0.013s] ( 85/205) celerisctl::bin/celerisctl commands::curation::tests::discovers_workspace_root_from_repo_worktree_cwd
+        PASS [   0.014s] ( 86/205) celerisctl::bin/celerisctl commands::curation::tests::diff_touching_unplanned_path_is_rejected
+        PASS [   0.015s] ( 87/205) celerisctl::bin/celerisctl commands::curation::tests::edited_kb_with_rehashed_plan_is_rejected_but_content_only_edit_passes
+        PASS [   0.023s] ( 88/205) celerisctl::bin/celerisctl commands::cron::tests::cron_update_calls_api
+        PASS [   0.014s] ( 89/205) celerisctl::bin/celerisctl commands::curation::tests::inbox_proposal_for_unknown_task_is_rejected
+        PASS [   0.272s] ( 90/205) celerisctl::bin/celerisctl commands::add::tests::run_with_missing_dependency_errors_and_inserts_nothing
+        PASS [   0.010s] ( 91/205) celerisctl::bin/celerisctl commands::db::tests::backup_of_a_missing_source_is_a_clean_error
+        PASS [   0.015s] ( 92/205) celerisctl::bin/celerisctl commands::curation::tests::worker_shape_of_2026_10_03_is_rejected_with_reason
+        PASS [   0.018s] ( 93/205) celerisctl::bin/celerisctl commands::curation::tests::minimal_plan_passes
+        PASS [   0.011s] ( 94/205) celerisctl::bin/celerisctl commands::db::tests::integrity_check_on_garbage_bytes_is_a_failure_not_a_panic
+        PASS [   0.032s] ( 95/205) celerisctl::bin/celerisctl commands::curation::tests::more_than_max_inbox_candidates_is_rejected
+        PASS [   0.035s] ( 96/205) celerisctl::bin/celerisctl commands::curation::tests::input_mutation_or_missing_snapshot_cannot_pass_even_for_minimal_plan
+        PASS [   0.279s] ( 97/205) celerisctl::bin/celerisctl commands::add::tests::run_with_role_and_config_applies_role_defaults
+        PASS [   0.585s] ( 98/205) celerisctl::worker_run_signal sigterm_kills_the_worker_process_and_exits_130
+        PASS [   0.020s] ( 99/205) celerisctl::bin/celerisctl commands::integration::tests::integration_api_actions_build_paths_and_bodies
+        PASS [   0.276s] (100/205) celerisctl::bin/celerisctl commands::add::tests::run_with_role_but_no_config_stores_the_name_only
+        PASS [   0.020s] (101/205) celerisctl::bin/celerisctl commands::integration::tests::integration_api_discard_and_hold_require_reason
+        PASS [   0.011s] (102/205) celerisctl::bin/celerisctl commands::integration::tests::integration_api_filter_and_table_render_items
+        PASS [   0.013s] (103/205) celerisctl::bin/celerisctl commands::integration::tests::integration_api_rejects_unknown_state_at_parse_time
+        PASS [   0.023s] (104/205) celerisctl::bin/celerisctl commands::integration::tests::integration_api_list_paths_and_filters
+        PASS [   0.010s] (105/205) celerisctl::bin/celerisctl commands::knowledge::tests::cos_live_fix_d2_cli_direct_record_refuses_attachment_ids
+        PASS [   0.262s] (106/205) celerisctl::bin/celerisctl commands::add::tests::run_with_unreadable_config_errors_and_inserts_nothing
+        PASS [   0.011s] (107/205) celerisctl::bin/celerisctl commands::knowledge::tests::cos_live_fix_d2_cli_idempotency_key_is_stable
+        PASS [   0.046s] (108/205) celerisctl::bin/celerisctl commands::integration::tests::integration_api_http_calls_reach_the_daemon_route
+        PASS [   0.022s] (109/205) celerisctl::bin/celerisctl commands::knowledge::tests::cos_live_fix_d2_cli_record_with_cos_credential_calls_the_api
+        PASS [   0.268s] (110/205) celerisctl::bin/celerisctl commands::add::tests::run_without_any_acceptance_criterion_errors_and_inserts_nothing
+        PASS [   0.010s] (111/205) celerisctl::bin/celerisctl commands::knowledge::tests::the_root_flag_wins_over_an_unreadable_config
+        PASS [   0.307s] (112/205) celerisctl::bin/celerisctl commands::add::tests::run_with_unknown_genre_or_role_genre_mismatch_errors_when_config_given
+        PASS [   0.010s] (113/205) celerisctl::bin/celerisctl commands::models::tests::table_shows_state_override_and_discovery
+        PASS [   0.012s] (114/205) celerisctl::bin/celerisctl commands::models::tests::empty_catalog_points_at_discover
+        PASS [   0.011s] (115/205) celerisctl::bin/celerisctl commands::org::tests::the_map_is_deterministic_and_merges_the_poc_section
+        PASS [   0.273s] (116/205) celerisctl::bin/celerisctl commands::cancel::tests::run_on_invalid_id_returns_message_error
+        PASS [   0.011s] (117/205) celerisctl::bin/celerisctl commands::projects::tests::projects_plan_subcommand_is_removed
+        PASS [   0.070s] (118/205) celerisctl::bin/celerisctl commands::knowledge::tests::the_cli_works_on_a_temporary_knowledge_base
+        PASS [   0.295s] (119/205) celerisctl::bin/celerisctl commands::cancel::tests::run_on_missing_task_returns_message_error
+        PASS [   0.288s] (120/205) celerisctl::bin/celerisctl commands::execution::tests::phase_gate_on_a_missing_task_is_an_error
+        PASS [   0.284s] (121/205) celerisctl::bin/celerisctl commands::execution::tests::tree_adopt_needs_the_tree_and_put_is_an_alias_of_set
+        PASS [   0.278s] (122/205) celerisctl::bin/celerisctl commands::gate::tests::run_answer_on_missing_task_returns_message_error
+        PASS [   0.305s] (123/205) celerisctl::bin/celerisctl commands::execution::tests::show_without_a_plan_succeeds_and_says_so
+        PASS [   1.289s] (124/205) celerisctl::campaign_connected missing_required_fields_or_unmetered_consumption_fail
+        PASS [   0.313s] (125/205) celerisctl::bin/celerisctl commands::execution::tests::set_then_show_round_trips
+        PASS [   0.324s] (126/205) celerisctl::bin/celerisctl commands::execution::tests::set_rejects_an_unknown_task
+        PASS [   0.309s] (127/205) celerisctl::bin/celerisctl commands::gate::tests::run_approve_on_missing_task_returns_message_error
+        PASS [   0.345s] (128/205) celerisctl::bin/celerisctl commands::execution::tests::set_adopts_a_v3_plan_with_the_configured_tree_limits
+        PASS [   0.355s] (129/205) celerisctl::bin/celerisctl commands::execution::tests::set_rejects_an_invalid_plan
+        PASS [   0.300s] (130/205) celerisctl::bin/celerisctl commands::knowledge::tests::rerun_resets_the_knowledge_run_row_and_rejects_unknown_ids
+        PASS [   0.304s] (131/205) celerisctl::bin/celerisctl commands::plan::tests::run_inserts_plan_task
+        PASS [   0.298s] (132/205) celerisctl::bin/celerisctl commands::plan_lint::tests::no_violations_when_every_human_check_has_a_deliverable
+        PASS [   0.008s] (133/205) celerisctl::bin/celerisctl commands::release::tests::parses_notes_args
+        PASS [   0.120s] (134/205) celerisctl::bin/celerisctl commands::release::tests::notes_fails_on_unknown_sha
+        PASS [   0.011s] (135/205) celerisctl::bin/celerisctl commands::release::tests::parses_preview_args
+        PASS [   0.010s] (136/205) celerisctl::bin/celerisctl commands::release::tests::preview_missing_release_is_none
+        PASS [   0.314s] (137/205) celerisctl::bin/celerisctl commands::plan::tests::run_with_blank_goal_returns_error
+        PASS [   0.314s] (138/205) celerisctl::bin/celerisctl commands::plan_lint::tests::lints_draft_and_ready_tasks_but_not_other_statuses
+        PASS [   0.511s] (139/205) celerisctl::bin/celerisctl commands::db::tests::backup_then_integrity_check_round_trip
+        PASS [   0.311s] (140/205) celerisctl::bin/celerisctl commands::projects::tests::run_ls_hides_archived_projects_unless_all
+        PASS [   0.308s] (141/205) celerisctl::bin/celerisctl commands::projects::tests::run_show_reads_the_project_and_its_milestones
+        PASS [   0.012s] (142/205) celerisctl::bin/celerisctl commands::routing::tests::a_source_without_harnesses_or_routes_says_so
+        PASS [   0.313s] (143/205) celerisctl::bin/celerisctl commands::query::tests::run_log_without_follow_succeeds
+        PASS [   0.013s] (144/205) celerisctl::bin/celerisctl commands::routing::tests::show_prints_class_candidates
+        PASS [   0.012s] (145/205) celerisctl::bin/celerisctl commands::routing::tests::shows_llm_sources_harnesses_and_routes
+        PASS [   0.010s] (146/205) celerisctl::bin/celerisctl commands::scratch::tests::disabled_scratch_makes_lease_fail_so_release_sh_falls_back
+        PASS [   0.014s] (147/205) celerisctl::bin/celerisctl commands::scratch::tests::env_has_only_target_and_cargo_tuning
+        PASS [   0.018s] (148/205) celerisctl::bin/celerisctl commands::scratch::tests::lease_touch_release_round_trip
+        PASS [   0.011s] (149/205) celerisctl::bin/celerisctl commands::scratch::tests::status_has_no_sccache_or_cache_server
+        PASS [   0.122s] (150/205) celerisctl::bin/celerisctl commands::release::tests::notes_writes_json_and_markdown_without_api
+        PASS [   0.010s] (151/205) celerisctl::bin/celerisctl commands::script::tests::script_canary_generations_and_guard_requests
+        PASS [   0.009s] (152/205) celerisctl::bin/celerisctl commands::script::tests::script_cos_read_only_and_request_of_partition_every_subcommand
+        PASS [   0.291s] (153/205) celerisctl::bin/celerisctl commands::query::tests::run_ls_tree_groups_children_under_parent
+        PASS [   0.038s] (154/205) celerisctl::bin/celerisctl commands::scratch::tests::gc_dry_run_lists_without_removing
+        PASS [   0.008s] (155/205) celerisctl::bin/celerisctl commands::script::tests::script_cos_read_only_is_domains_generations_list_and_guard_status
+        PASS [   0.011s] (156/205) celerisctl::bin/celerisctl commands::script::tests::script_cos_read_only_guard_clear_help_names_403_and_422
+        PASS [   0.009s] (157/205) celerisctl::bin/celerisctl commands::script::tests::script_cos_wrapped_requests_match_the_operations_table
+        PASS [   0.012s] (158/205) celerisctl::bin/celerisctl commands::script::tests::script_domain_mode_request_carries_mode_version_and_generation
+        PASS [   0.009s] (159/205) celerisctl::bin/celerisctl commands::script::tests::script_domain_table_shows_mode_version_and_short_bundle
+        PASS [   0.279s] (160/205) celerisctl::bin/celerisctl commands::query::tests::run_show_found_task_succeeds
+        PASS [   0.010s] (161/205) celerisctl::bin/celerisctl commands::script::tests::script_exhaustive_table_shows_standing_and_counts
+        PASS [   0.010s] (162/205) celerisctl::bin/celerisctl commands::script::tests::script_exhaustive_cos_read_only_and_wrapped
+        PASS [   0.297s] (163/205) celerisctl::bin/celerisctl commands::query::tests::run_ls_without_filter_lists_all_tasks
+        PASS [   0.010s] (164/205) celerisctl::bin/celerisctl commands::script::tests::script_generation_table_and_guard_line
+        PASS [   0.008s] (165/205) celerisctl::bin/celerisctl commands::worker::tests::normalize_outcome_maps_done_question_and_error_to_exit_codes
+        PASS [   0.010s] (166/205) celerisctl::bin/celerisctl commands::worker::tests::normalize_outcome_maps_adapter_errors_to_provider_failure
+        PASS [   0.014s] (167/205) celerisctl::bin/celerisctl commands::target_sweep::tests::target_sweep_cli_apply_with_root
+        PASS [   0.013s] (168/205) celerisctl::bin/celerisctl commands::target_sweep::tests::target_sweep_cli_dry_run_json_deletes_nothing
+        PASS [   0.013s] (169/205) celerisctl::bin/celerisctl commands::target_sweep::tests::target_sweep_cli_default_roots
+        PASS [   0.296s] (170/205) celerisctl::bin/celerisctl commands::query::tests::run_show_json_prints_task_detail_with_actions_and_matches_task_id
+        PASS [   0.015s] (171/205) celerisctl::bin/celerisctl commands::worker::tests::worker_route_cli_account_flag_narrows_the_pool
+        PASS [   0.310s] (172/205) celerisctl::bin/celerisctl commands::query::tests::run_show_json_missing_task_errors
+        PASS [   0.014s] (173/205) celerisctl::bin/celerisctl commands::worker::tests::worker_route_cli_fails_closed
+        PASS [   0.340s] (174/205) celerisctl::bin/celerisctl commands::query::tests::run_ls_with_status_filter_matches_store_list
+        PASS [   0.014s] (175/205) celerisctl::bin/celerisctl commands::worker::tests::worker_route_cli_model_flag_selects_that_model
+        PASS [   0.014s] (176/205) celerisctl::bin/celerisctl commands::worker::tests::worker_route_cli_openai_compatible_source_carries_its_endpoint
+        PASS [   0.016s] (177/205) celerisctl::bin/celerisctl commands::worker::tests::worker_route_cli_uses_the_given_harness_and_the_first_declared_candidate
+        PASS [   0.314s] (178/205) celerisctl::bin/celerisctl commands::query::tests::task_detail_json_is_parseable_and_contains_task_id_and_actions
+        PASS [   0.325s] (179/205) celerisctl::bin/celerisctl commands::query::tests::run_show_missing_task_errors
+        PASS [   0.328s] (180/205) celerisctl::bin/celerisctl commands::query::tests::task_detail_json_with_a_config_reports_the_worktree
+        PASS [   0.039s] (181/205) celerisctl::bin/celerisctl cos_mapping_tests::cos_mapped_subcommands_match_registered_operations
+        PASS [   0.272s] (182/205) celerisctl::bin/celerisctl commands::replay::tests::run_reports_failure_exit_code_on_drift
+        PASS [   0.048s] (183/205) celerisctl::bin/celerisctl cos_mapping_tests::cos_mapped_table_wraps_every_allowed_subcommand
+        PASS [   0.298s] (184/205) celerisctl::bin/celerisctl commands::rereview::tests::run_on_invalid_id_returns_message_error
+        PASS [   0.303s] (185/205) celerisctl::bin/celerisctl commands::replay::tests::run_reports_success_when_no_tasks
+        PASS [   0.301s] (186/205) celerisctl::bin/celerisctl commands::rereview::tests::run_on_missing_task_returns_message_error
+        PASS [   0.301s] (187/205) celerisctl::bin/celerisctl commands::retry::tests::run_on_invalid_id_returns_message_error
+        PASS [   0.305s] (188/205) celerisctl::bin/celerisctl commands::retry::tests::run_on_missing_task_returns_message_error
+        PASS [   1.461s] (189/205) celerisctl::worker_run codex_route_reaches_the_cli_without_mutating_the_store
+        PASS [   0.236s] (190/205) celerisctl::bin/celerisctl commands::worker::tests::resolve_cluster_target_uses_task_remote_path_without_workspace_arg
+        PASS [   0.273s] (191/205) celerisctl::bin/celerisctl commands::worker::tests::resolve_cluster_target_warns_when_task_targets_a_different_cluster
+        PASS [   0.273s] (192/205) celerisctl::bin/celerisctl commands::worker::tests::resolve_cluster_target_workspace_arg_overrides_task_path
+        PASS [   0.276s] (193/205) celerisctl::bin/celerisctl commands::worker::tests::resolve_cluster_target_requires_workspace_arg_for_local_task
+        PASS [   0.240s] (194/205) celerisctl::bin/celerisctl commands::workspace::tests::backfill_artifacts_with_an_unknown_task_is_an_error
+        PASS [   0.296s] (195/205) celerisctl::bin/celerisctl commands::worker::tests::resolve_cluster_target_errors_when_cluster_missing
+        PASS [   0.250s] (196/205) celerisctl::bin/celerisctl commands::workspace::tests::prune_deletes_and_records_the_event
+        PASS [   0.278s] (197/205) celerisctl::bin/celerisctl commands::workspace::tests::backfill_artifacts_isolates_local_retry_and_original_tasks
+        PASS [   0.298s] (198/205) celerisctl::bin/celerisctl commands::workspace::tests::backfill_artifacts_registers_remote_mirror_artifacts_once
+        PASS [   0.291s] (199/205) celerisctl::bin/celerisctl commands::workspace::tests::dry_run_lists_candidates_without_deleting
+        PASS [   0.300s] (200/205) celerisctl::bin/celerisctl commands::workspace::tests::older_than_overrides_the_config
+        PASS [   0.462s] (201/205) celerisctl::bin/celerisctl commands::worker::tests::resolve_cluster_target_rejects_running_or_reviewing_task_even_with_workspace_arg
+        PASS [   2.111s] (202/205) celerisctl::terminal_pty input_output_resize_and_exit_code
+        PASS [   2.149s] (203/205) celerisctl::terminal_pty sigterm_ends_the_whole_session
+        PASS [   2.059s] (204/205) celerisctl::terminal_pty stdin_eof_ends_the_whole_session
+        PASS [   2.706s] (205/205) celerisctl::pipe ls_on_a_closed_pipe_exits_cleanly_without_panicking

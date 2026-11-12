@@ -1,0 +1,265 @@
+{
+ "schema": "health-v2-r5-build-compare/1",
+ "label": "compare",
+ "git_head": "58151646bfbc5ffd6a576751e760e4759bf4333f",
+ "merge_base_main": "4bc05f1efd974d518b97c0afbcb50f0b341bbe10",
+ "base_tree": "git worktree add --detach $TMPDIR/r5-measure-base.* <merge_base_main>（計測の後に git worktree remove）",
+ "host": {
+  "nproc": 24,
+  "uname": "Linux 6.8.12-9-pve",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+  "nextest": "cargo-nextest 0.9.146 (8af696ddc 2026-09-21)",
+  "cargo_target_dir": "/local/celeris/data/scratch/targets/task-01M6TYVJT53598CPKMGSQGA7XM/wu-01M76W3168CGJJZK18RN72JXB6/target"
+ },
+ "started_at": "2026-11-12T10:42:10Z",
+ "elapsed_secs": 119.8,
+ "loadavg_before": "5.09 12.57 15.62",
+ "loadavg_after": "3.38 9.42 14.09",
+ "order": [
+  {
+   "crate": "celerisctl",
+   "side": "base"
+  },
+  {
+   "crate": "celerisctl",
+   "side": "head"
+  }
+ ],
+ "skipped": [],
+ "sides": {
+  "base": {
+   "git_head": "4bc05f1efd974d518b97c0afbcb50f0b341bbe10",
+   "crates": {
+    "celerisctl": {
+     "targets": {
+      "kinds": {
+       "bin": 1,
+       "test": 18
+      },
+      "test_targets": 18,
+      "test_target_names": [
+       "bin_smoke",
+       "browser_doctor",
+       "browser_ledger_release",
+       "campaign_connected",
+       "campaign_export",
+       "cli_resolution",
+       "cos_ops",
+       "eval_requests",
+       "followups",
+       "mcp_client_scopes",
+       "no_migrate",
+       "org_migrate_v2",
+       "pipe",
+       "routing_cli",
+       "skills_import",
+       "terminal_pty",
+       "worker_run",
+       "worker_run_signal"
+      ]
+     },
+     "build_settle_wait": {
+      "waited_secs": 0.0,
+      "loadavg": "4.84 12.39 15.55 2/1648 3121000",
+      "ready": true,
+      "max_load": 24.0
+     },
+     "build": {
+      "cmd": "cargo nextest run -p celerisctl --no-run（settle の後に crates/celerisctl/src/main.rs の mtime を進める）",
+      "exit": 0,
+      "timed_out": false,
+      "settle_exit": 0,
+      "secs": 5.37,
+      "compiled_units": 1,
+      "compiled": [
+       "celerisctl"
+      ],
+      "test_binaries": 19,
+      "linked_test_binaries": 1,
+      "loadavg_before": "4.22 10.65 14.72",
+      "loadavg_after": "4.12 10.52 14.66",
+      "load_wait": {
+       "waited_secs": 0.0,
+       "loadavg": "4.22 10.65 14.72 1/1634 3122304",
+       "ready": true,
+       "max_load": 24.0
+      }
+     },
+     "edit_settle_wait": {
+      "waited_secs": 0.0,
+      "loadavg": "4.12 10.52 14.66 17/1640 3122699",
+      "ready": true,
+      "max_load": 24.0
+     },
+     "edit_verify": {
+      "edited_file": "crates/celerisctl/src/main.rs",
+      "affected": [
+       "celerisctl"
+      ],
+      "extra_checks": [],
+      "cmd": "cargo nextest run \"${args[@]}\" --no-run",
+      "doc_test_cmd": "cargo test --doc \"${args[@]}\"",
+      "settle_exit": 0,
+      "settle_secs": 4.34,
+      "settle_compiled_units": 1,
+      "settle_compiled": [
+       "celerisctl"
+      ],
+      "list_exit": 0,
+      "list_secs": 0.09,
+      "rebuild_exit": 0,
+      "rebuild_timed_out": false,
+      "rebuild_secs": 4.24,
+      "rebuild_compiled_units": 1,
+      "rebuild_compiled": [
+       "celerisctl"
+      ],
+      "listed_binaries": 19,
+      "test_binaries": 19,
+      "linked_test_binaries": 1,
+      "linked_binaries_all": 1,
+      "edit_to_verify_secs": 4.32,
+      "doc_test_exit": 101,
+      "doc_test_secs": 0.28,
+      "doc_test_compiled_units": 0,
+      "doc_test_passed": 0,
+      "doc_test_failed": 0,
+      "doc_test_ignored": 0,
+      "edit_to_verify_with_doc_secs": 4.6,
+      "loadavg_before": "4.03 10.40 14.60",
+      "loadavg_after": "3.87 10.26 14.53",
+      "load_wait": {
+       "waited_secs": 0.0,
+       "loadavg": "4.03 10.40 14.60 2/1646 3122937",
+       "ready": true,
+       "max_load": 24.0
+      }
+     }
+    }
+   },
+   "invocation": {
+    "prep": [
+     "args=()",
+     "while IFS= read -r c; do args+=(-p \"$c\"); done <<<\"$crates\""
+    ],
+    "nextest": "cargo nextest run \"${args[@]}\"",
+    "doc_test": "cargo test --doc \"${args[@]}\""
+   }
+  },
+  "head": {
+   "git_head": "58151646bfbc5ffd6a576751e760e4759bf4333f",
+   "crates": {
+    "celerisctl": {
+     "targets": {
+      "kinds": {
+       "bin": 1,
+       "test": 14
+      },
+      "test_targets": 14,
+      "test_target_names": [
+       "bin_smoke",
+       "browser_eval_surface_suite",
+       "campaign_export",
+       "cli_resolution",
+       "cos_ops",
+       "eval_requests",
+       "followups",
+       "no_migrate",
+       "org_migrate_v2",
+       "routing_cli",
+       "terminal_pty",
+       "unmapped_suite",
+       "worker_run",
+       "worker_run_signal"
+      ]
+     },
+     "build_settle_wait": {
+      "waited_secs": 0.0,
+      "loadavg": "3.87 10.26 14.53 2/1641 3123348",
+      "ready": true,
+      "max_load": 24.0
+     },
+     "build": {
+      "cmd": "cargo nextest run -p celerisctl --no-run（settle の後に crates/celerisctl/src/main.rs の mtime を進める）",
+      "exit": 0,
+      "timed_out": false,
+      "settle_exit": 0,
+      "secs": 4.09,
+      "compiled_units": 1,
+      "compiled": [
+       "celerisctl"
+      ],
+      "test_binaries": 15,
+      "linked_test_binaries": 1,
+      "loadavg_before": "3.87 10.26 14.53",
+      "loadavg_after": "3.72 10.12 14.46",
+      "load_wait": {
+       "waited_secs": 0.0,
+       "loadavg": "3.87 10.26 14.53 2/1641 3123531",
+       "ready": true,
+       "max_load": 24.0
+      }
+     },
+     "edit_settle_wait": {
+      "waited_secs": 0.0,
+      "loadavg": "3.72 10.12 14.46 1/1634 3124011",
+      "ready": true,
+      "max_load": 24.0
+     },
+     "edit_verify": {
+      "edited_file": "crates/celerisctl/src/main.rs",
+      "affected": [
+       "celerisctl"
+      ],
+      "extra_checks": [],
+      "cmd": "cargo nextest run --workspace -E \"$filter\" --no-run",
+      "doc_test_cmd": "cargo test --doc --workspace",
+      "settle_exit": 0,
+      "settle_secs": 4.83,
+      "settle_compiled_units": 1,
+      "settle_compiled": [
+       "celerisctl"
+      ],
+      "list_exit": 0,
+      "list_secs": 0.16,
+      "rebuild_exit": 0,
+      "rebuild_timed_out": false,
+      "rebuild_secs": 4.72,
+      "rebuild_compiled_units": 1,
+      "rebuild_compiled": [
+       "celerisctl"
+      ],
+      "listed_binaries": 312,
+      "test_binaries": 15,
+      "linked_test_binaries": 1,
+      "linked_binaries_all": 1,
+      "edit_to_verify_secs": 4.87,
+      "doc_test_exit": 0,
+      "doc_test_secs": 14.45,
+      "doc_test_compiled_units": 0,
+      "doc_test_passed": 3,
+      "doc_test_failed": 0,
+      "doc_test_ignored": 2,
+      "edit_to_verify_with_doc_secs": 19.33,
+      "loadavg_before": "3.66 10.00 14.40",
+      "loadavg_after": "3.38 9.42 14.09",
+      "load_wait": {
+       "waited_secs": 0.0,
+       "loadavg": "3.66 10.00 14.40 1/1634 3124223",
+       "ready": true,
+       "max_load": 24.0
+      }
+     }
+    }
+   },
+   "invocation": {
+    "prep": [
+     "filter=\"\"",
+     "while IFS= read -r c; do filter=\"${filter:+$filter | }package(=$c)\"; done <<<\"$crates\""
+    ],
+    "nextest": "cargo nextest run --workspace -E \"$filter\"",
+    "doc_test": "cargo test --doc --workspace"
+   }
+  }
+ }
+}

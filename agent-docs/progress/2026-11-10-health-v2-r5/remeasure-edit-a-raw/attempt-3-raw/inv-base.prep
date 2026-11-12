@@ -1,0 +1,2 @@
+  args=()
+  while IFS= read -r c; do args+=(-p "$c"); done <<<"$crates"

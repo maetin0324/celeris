@@ -1,0 +1,6 @@
+   Compiling task-core v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/runs/01M77RDSCYDF8WQZFEPEMHMSW2/tmp/r5-measure-base.a1cqUL/crates/task-core)
+   Compiling celeris-credentiald v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/runs/01M77RDSCYDF8WQZFEPEMHMSW2/tmp/r5-measure-base.a1cqUL/crates/celeris-credentiald)
+   Compiling task-ops v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/runs/01M77RDSCYDF8WQZFEPEMHMSW2/tmp/r5-measure-base.a1cqUL/crates/task-ops)
+   Compiling task-worker v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/runs/01M77RDSCYDF8WQZFEPEMHMSW2/tmp/r5-measure-base.a1cqUL/crates/task-worker)
+   Compiling task-api v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/runs/01M77RDSCYDF8WQZFEPEMHMSW2/tmp/r5-measure-base.a1cqUL/crates/task-api)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 18s

@@ -117,6 +117,16 @@ impl Owner {
         }
     }
 
+    /// ADR-0075 D3: run の `CARGO_TARGET_DIR` の owner。自分の worktree を持つ WU の run なら `task-<id>/wu-<id>`、
+    /// Task 単位の run と Task の worktree を共有する WU（並列 1 に倒した Task・統合の repair WU）は `task-<id>`。
+    /// worker の割り当てと dispatch の空きの見込み（ADR 2026-11-11-disk-aware-dispatch D1）が同じ owner を使う。
+    pub fn of_run(task_id: impl Into<String>, own_worktree_work_unit: Option<&str>) -> Self {
+        match own_worktree_work_unit {
+            Some(wu) => Owner::work_unit(task_id, wu),
+            None => Owner::task(task_id),
+        }
+    }
+
     /// `task-<id>` / `task-<id>/wu-<id>` / `release-<sha12>` / `agent-<name>` を読む。
     pub fn parse(s: &str) -> Result<Self, String> {
         let bad = || {

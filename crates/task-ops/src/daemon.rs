@@ -365,9 +365,10 @@ pub struct ScratchAdmissionView {
 pub struct ScratchOwnerForecastView {
     pub owner: String,
     pub repo_key: String,
-    /// この target に今書いている: run か review の検査（`task running`・`task reviewing`・`work unit running`）か、
-    /// lease の生きた release-build（`lease live`。次の build が見込みまで育てる）。
-    pub running: bool,
+    /// 増分を予約する: DB の状態が run か review の検査で書かれうる（`task running`・`task reviewing`・
+    /// `work unit running`）か、lease の生きた release-build（`lease live`。次の build が見込みまで育てる）。
+    /// 「1 本は通す」の書き手かどうかは別で、daemon が run・review・WU の検査を今走らせている task だけが書き手。
+    pub grows: bool,
     /// 測った大きさ（未測定・target がまだ無いときは `None`。見込みでは 0 と見る）。
     pub size_bytes: Option<u64>,
     /// この owner の repo の見込み。

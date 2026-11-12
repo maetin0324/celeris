@@ -2578,11 +2578,17 @@ impl Dispatcher {
             return Ok(0);
         }
         // ADR 2026-11-11-disk-aware-dispatch D1: 通した run の見込みは、走っている間（lease が走査に出るまで）持ち越す。
+        // 「1 本は通す」の書き手は、この daemon が run・review・WU の検査を今走らせている task だけ（終わる見込みがある）。
         let in_flight = |task: &str, wu: Option<&str>| {
             (self.running.keys())
                 .any(|k| k.task.to_string() == task && k.work_unit.as_deref() == wu)
         };
-        self.scratch.admission.begin_pass(in_flight);
+        let busy = (self.running.keys().map(|k| k.task))
+            .chain(self.reviewing.keys().copied())
+            .chain(self.checking.values().map(|c| c.task_id))
+            .map(|id| id.to_string())
+            .collect();
+        self.scratch.admission.begin_pass(in_flight, busy);
         // 上位から見て見送りが続いても後続を試せるよう、窓は広めに取る。
         let window = self.ready_window();
         let ready_started = Instant::now();

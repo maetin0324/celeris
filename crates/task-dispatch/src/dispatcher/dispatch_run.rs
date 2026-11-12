@@ -273,12 +273,6 @@ impl Dispatcher {
             );
             return Ok(false);
         }
-        // ADR 2026-11-11-disk-aware-dispatch D1: 空きの見込みが予備を割るなら新しい target を作る run を ready のまま待たせる。
-        let (view, wu) = (self.scratch.view.as_ref(), run_key.work_unit.as_deref());
-        let repo_of = || self.cargo_target_repo(&task).map(|r| r.source);
-        if !is_planner_dispatch && (self.scratch.admission).holds_run(view, &task, wu, repo_of) {
-            return Ok(false);
-        }
         // ADR-0018: リモート実行のタスクは、クラスタの設定・cooldown・並列度・多重接続を先に確かめる。
         // ADR-0062 B1（Phase 107）: `cluster_of` が `None` の理由を分ける。(a) 設定に無いクラスタ
         // → 従来どおり `unroutable`（人が設定を直すまで進まない）。(b) 担当が `cluster:<id>` を
@@ -423,6 +417,22 @@ impl Dispatcher {
             Some(w) => Some(w.workspaces.clone()),
             None => worktree,
         };
+        // ADR-0074 F5-fix（不具合 1）: 自分の worktree を持つ WU の run だけ WU ごとの `CARGO_TARGET_DIR`（owner
+        // `task-<id>/wu-<id>`）。Task の worktree を共有する WU は Task の target を使う。
+        let cargo_target_work_unit = wu_workspace
+            .as_ref()
+            .and(v2_wu.as_ref())
+            .map(|wu| (wu.id.clone(), wu.key.clone()));
+        // ADR 2026-11-11-disk-aware-dispatch D1: 空きの見込みが予備を割るなら新しい target を作る run を ready のまま
+        // 待たせる（lease・遷移・attempts の前）。owner は worker と同じ（`cargo_target_work_unit`）。
+        let (view, wu) = (self.scratch.view.as_ref(), run_key.work_unit.as_deref());
+        let target_wu = cargo_target_work_unit.as_ref().map(|(id, _)| id.as_str());
+        let repo_of = || self.cargo_target_repo(&task).map(|r| r.source);
+        if !is_planner_dispatch
+            && (self.scratch.admission).holds_run(view, &task, wu, target_wu, repo_of)
+        {
+            return Ok(false);
+        }
         // Capture before any worker can write; retries load the same WU-id snapshot.
         let mut wu_scope_env = Vec::new();
         if let Some(wu) = &current_wu
@@ -941,11 +951,8 @@ impl Dispatcher {
         }
         if let Some(w) = &wu_workspace {
             extras.artifacts_dir_override = Some(w.artifacts_dir.clone());
-            // ADR-0074 F5-fix（不具合 1）: WU ごとの `CARGO_TARGET_DIR`。
-            if let Some(wu) = &v2_wu {
-                extras.cargo_target_work_unit = Some((wu.id.clone(), wu.key.clone()));
-            }
         }
+        extras.cargo_target_work_unit = cargo_target_work_unit;
         // ADR 2026-10-10-local-disk-growth-paths D1: 作業場所の先頭に git の repo が無い（`repos=[]` の子 task・
         // shared の Rust checkout）なら、代わりの checkout を決めて `run_worker` に渡す（repo 直下 target を防ぐ）。
         if remote.is_none()

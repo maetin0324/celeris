@@ -512,7 +512,7 @@ fn print_status(s: &task_ops::daemon::ScratchStatus) {
     for (repo, bytes) in &a.expected_by_repo {
         outln!("  expected {repo} {}", gb(*bytes));
     }
-    for o in a.owners.iter().filter(|o| o.running) {
+    for o in a.owners.iter().filter(|o| o.grows) {
         outln!("  growth {} {}", o.owner, gb(o.growth_bytes));
     }
     match &a.held {

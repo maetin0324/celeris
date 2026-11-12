@@ -5854,10 +5854,10 @@ export type ScratchLegacyView = {
 
 export type ScratchOwnerForecastView = {
   "expected_bytes": number;
+  "grows": boolean;
   "growth_bytes": number;
   "owner": string;
   "repo_key": string;
-  "running": boolean;
   "size_bytes"?: number | null;
 };
 

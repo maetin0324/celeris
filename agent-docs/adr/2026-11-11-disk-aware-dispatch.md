@@ -45,7 +45,7 @@ run を起こす前（write-set の判定の後、lease の前）に、次の不
   含む）の測った大きさ（lease の `size_bytes`）の最大。GC の推定（ADR-0075 D2 の「未測定は同じ repo の最大」）と同じ定義・
   同じ入力で、関数も 1 つ（`task_worker::scratch::repo_max_sizes`）。target が消えて lease の記録だけが残る owner は数えない。
   測った target が無い repo の見込みは 0（判定しない。GC は全体の最大で補うが、dispatch は判定しない）。
-- **走っている target の増分**: run か review の検査が今 target に書いている owner（分類の理由が `task running`・
+- **走っている target の増分**: 増分を予約する owner（`ScratchOwnerForecastView.grows`）。DB の状態から run か review の検査で書かれうる owner（分類の理由が `task running`・
   `task reviewing`・`work unit running`。`task_worker::scratch::target_written_now`。review の検査も task の owner の
   `CARGO_TARGET_DIR` で build する）と、lease の生きた release-build（`lease live`）ごとに
   `max(0, repo の見込み − 今の大きさ)`。未測定は大きさ 0 と見る。target がまだ pool に無い（seed を `.seed-copy-*` に
@@ -53,7 +53,9 @@ run を起こす前（write-set の判定の後、lease の前）に、次の不
   agent の lease と、まだ始まらない WU（`work unit queued`。その run の見込みはこの判定で数える）は数えない。
   release-build は D3 で build の後に上限を超えた target を作り直すので、次の build が見込みまで育てる量を
   常に予約として数える。
-- **この run の見込み**: run が使う owner（並列 WU は `task-<id>/wu-<id>`、それ以外は `task-<id>`）の target が
+- **この run の見込み**: run が使う owner（worker の `CARGO_TARGET_DIR` と同じ `Owner::of_run`。自分の worktree を持つ
+  WU は `task-<id>/wu-<id>`、Task 単位の run と Task の worktree を共有する WU（並列 1 に倒した Task・統合の repair WU）は
+  `task-<id>`。判定は WU の worktree を決めた後に置く）の target が
   pool に既にあれば `max(0, repo の見込み − 今の大きさ)`（同じ task の続きは増分だけ）、無ければ repo の見込み全体
   （seed から写しても共有はほぼ 0 と見る）。
 - **単位**: 測った大きさは見かけの大きさ（btrfs の圧縮前）で、statvfs の空きは disk 上の量。見込みには
@@ -64,9 +66,13 @@ run を起こす前（write-set の判定の後、lease の前）に、次の不
   owner として出るまで（本番の記録で run の作成から lease.json まで 5〜265 秒、多くは 10〜30 秒。tick は 2 秒）、
   `Gate` のメモリで数え続ける（pass をまたぐ）。走査に出たら走査の増分が数え、通した分からは外す（二重に数えない）。
   run が lease を書く前に終わった・起動の前に見送った（dispatcher の `running` に無い）ら、次の pass の始めに外す。
-- **詰まらない**: target を今書いている run（走査の今書いている owner と、通したがまだ走査に出ない run）が 1 本も
-  無ければ、見込みが足りなくても 1 本は通す（待っても空きは run の終わりでは戻らない）。この数えに release-build の lease（48 時間生きる）は入れない。release は見込みの増分には数えるが、task の run が 0 本ならそれだけで待たせない。Rust でない run・対話の run は
-  数えない（target を書かないので、走っていても空きの見込みを変えない）。
+- **詰まらない**: 終わる見込みのある書き手が 1 本も無ければ、見込みが足りなくても 1 本は通す（待っても空きを戻す run の
+  終わりが来ない）。書き手は (a) 走査で増分を持つ owner のうち、この daemon が run・review・WU の検査を今走らせている
+  task（dispatcher の `running`・`reviewing`・`checking`。`Gate::begin_pass` の `busy`）のものと、(b) 通したがまだ走査に
+  出ない run。増分を持つかは DB の状態から決まるが、書き手かどうかは daemon が走らせているかで決める（2 つの意味を
+  分ける）。release-build（task が無い）、`reviewing` で子・policy の人の承認・再同期の停止を待つ task、WU を待つ
+  `running` の親は増分の予約には数えるが書き手ではない（待っても終わらない）。Rust でない run・対話の run も書き手で
+  ない（走査に target が無い）。
 - **対象**: scratch が有効で、run の cargo の target を結び付ける repo（`cargo_target_repo`）があり、この run の
   見込みが 0 より大きいもの。Remote の run と見込み 0 の run（Rust でない repo、続きで増分が無い run）は判定しない。
 - **呼び出し**: `Gate::holds_run`（`dispatch_run.rs` から `&self` で呼ぶ。状態は `Gate` の中の Mutex）。Dispatcher の field・method は増やさない（health の `size.responsibility-growth`）。試験は `Gate.probe` で空きと大きさを注入する。
@@ -128,6 +134,15 @@ run の見込みが lease の現れるまで消え、同じ tick にまとめて
 いる run に変えた。旧い数えでは、lease の生きた release-build の予約で空きが足りない間、関係の無い run が 1 本でも
 走っていると Rust の run は始まらなかった。`ScratchAdmissionView` の `owners`・`running` の説明（seed を写している
 owner と release-build を含む）を実装に合わせた。
+
+付記（2026-11-12、attempt 7 の review の指摘）: (1) 「詰まらない」の書き手を走査の DB の状態（`task reviewing` を含む）から
+数えていたので、`reviewing` で委譲した子を待つ親（ADR-0016 D2）・policy の人の承認を待つ親・再同期の上限で止まった task
+が 1 本あるだけで、Rust の新しい run は走っている run が 0 本でも待ち続けた（親は子を、子は親を待つ。受信箱にも出ない）。
+書き手を daemon が run・review・WU の検査を走らせている task の owner に限った（上の「詰まらない」）。phase 7 の
+`release-` の接頭辞での除外は消した（release の owner には task が無いので書き手にならない）。`ScratchOwnerForecastView`
+の `running` は `grows` に改め、増分の予約だけを意味する。(2) 判定の owner を dispatcher の run の鍵（phase のある WU は
+すべて `Some`）から作っていたので、Task の worktree を共有する WU の続きが見込み全体で判定され、通した分が走査の owner と
+一致せず run の終わりまで二重に数えられた。worker と同じ `Owner::of_run` に WU の worktree を決めた後の値を渡す。
 
 ## 結果
 

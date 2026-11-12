@@ -6,8 +6,11 @@
 //!   run か review の検査が今 target に書いている owner（`task_worker::scratch::target_written_now`）と、lease の生きた
 //!   release-build（build ごとに repo の見込みまで育つ）だけ。通した run は、worker が lease を書いて走査に書いている
 //!   owner として出るまで（多くは 10〜30 秒、長いと数分）、[`Gate`] のメモリで見込みを数え続ける（pass をまたぐ）。
-//!   target を今書いている run（走査の書いている owner と、通したがまだ走査に出ない run）が 1 本も無ければ 1 本は通す
-//!   （詰まらない）。
+//! - D1「1 本は通す」: 終わる見込みのある書き手（この daemon が run・review・WU の検査を今走らせている task の、走査で
+//!   増分を持つ owner と、通したがまだ走査に出ない run）が 1 本も無ければ 1 本は通す（詰まらない）。増分を持つかは走査の
+//!   DB の状態から決まるが、`reviewing` で子・人の承認・再同期の停止を待つ task と、WU を待つ `running` の親は target を
+//!   書かず、待っても終わらないので書き手に数えない（attempt 7 の review の指摘）。owner は worker と同じ
+//!   （[`task_worker::scratch::Owner::of_run`]）。
 //! - D2: 予備（空きの下限）は filesystem の容量 × `[dispatch] min_free_disk_pct`（[`min_free_bytes`]）。
 //! - D4: 見込みは `ScratchStatus.admission`（[`forecast`]）。待たせている run の正本は daemon の [`Gate`] のメモリだけで、
 //!   file には書かない（同じ pool を見る verify の daemon が上書きできない）。daemon の snapshot
@@ -62,8 +65,9 @@ pub fn find_low_disk(
 pub struct Sample {
     pub owner: String,
     pub repo_key: String,
-    /// run か review の検査が今 target に書いている（class `p0` で [`task_worker::scratch::target_written_now`]）。
-    pub running: bool,
+    /// 増分を予約する: class `p0` で [`task_worker::scratch::target_written_now`] か、lease の生きた release-build。
+    /// 「1 本は通す」の書き手かどうかは別（[`Gate::begin_pass`] の `busy`）。
+    pub grows: bool,
     pub size_bytes: Option<u64>,
 }
 
@@ -77,8 +81,8 @@ pub struct Inputs {
 }
 
 /// scratch の走査の行から材料を作る。target が pool にある owner を数える（GC の推定と同じ入力。target が消えて
-/// lease の記録だけが残る owner の古い大きさは数えない）。ただし run か review の検査が今書いている owner
-/// （`running`）は、target がまだ無くても数える: 割り当ては seed を `.seed-copy-*` に写し終えてから `target/` に rename
+/// lease の記録だけが残る owner の古い大きさは数えない）。ただし増分を予約する owner
+/// （`grows`）は、target がまだ無くても数える: 割り当ては seed を `.seed-copy-*` に写し終えてから `target/` に rename
 /// するので、写している数分のあいだ `has_target` は false で、その run の増分が 0 に見えて次の tick の run が通ってしまう。
 /// その owner の大きさは分からないものとして（`None`）、増分を repo の見込み全体で数える。野良・repo の分からない owner は
 /// 数えない。
@@ -89,16 +93,16 @@ pub fn samples_from_owners(owners: &[ScratchOwnerView]) -> Vec<Sample> {
         .filter_map(|o| {
             // release-build の lease が生きているあいだは、次の release の build が repo の見込みまで target を育てる
             // （build ごとに約 88 GB。終わりに上限で作り直される）ので、増える owner として数える。
-            let running = o.class == "p0"
+            let grows = o.class == "p0"
                 && (task_worker::scratch::target_written_now(&o.reason)
                     || (o.kind == "release" && o.reason == task_worker::scratch::LEASE_LIVE));
-            if !o.has_target && !running {
+            if !o.has_target && !grows {
                 return None;
             }
             Some(Sample {
                 owner: o.owner.clone(),
                 repo_key: o.repo_key.clone()?,
-                running,
+                grows,
                 size_bytes: if o.has_target { o.size_bytes } else { None },
             })
         })
@@ -122,7 +126,7 @@ pub fn forecast(inputs: &Inputs, held: Option<Vec<ScratchHeldRunView>>) -> Scrat
         .iter()
         .map(|s| {
             let expected = expected_by_repo.get(&s.repo_key).copied().unwrap_or(0);
-            let growth = if s.running {
+            let growth = if s.grows {
                 scaled(
                     expected.saturating_sub(s.size_bytes.unwrap_or(0)),
                     inputs.ratio,
@@ -133,7 +137,7 @@ pub fn forecast(inputs: &Inputs, held: Option<Vec<ScratchHeldRunView>>) -> Scrat
             ScratchOwnerForecastView {
                 owner: s.owner.clone(),
                 repo_key: s.repo_key.clone(),
-                running: s.running,
+                grows: s.grows,
                 size_bytes: s.size_bytes,
                 expected_bytes: expected,
                 growth_bytes: growth,
@@ -182,9 +186,9 @@ fn gb(bytes: u64) -> String {
     format!("{:.1} GB", bytes as f64 / 1e9)
 }
 
-/// D1 の式。`admitted_bytes` は通したがまだ走査に書いている owner として出ない run の見込みの合計、`writers` は target を
-/// 今書いている run の数（走査の書いている owner と、通したがまだ走査に出ない run）。`writers` が 0 なら通す（待っても
-/// 空きは run の終わりでは戻らないので、待たせると詰まる）。
+/// D1 の式。`admitted_bytes` は通したがまだ走査に書いている owner として出ない run の見込みの合計、`writers` は終わる
+/// 見込みのある書き手の数（[`Gate::hold`]）。`writers` が 0 なら通す（待っても空きを戻す run の終わりが来ないので、
+/// 待たせると詰まる）。
 pub fn decide(
     view: &ScratchAdmissionView,
     owner: &str,
@@ -240,6 +244,8 @@ pub struct Gate {
 struct GateState {
     holds: BTreeMap<HoldKey, ScratchHeldRunView>,
     seen: BTreeSet<HoldKey>,
+    /// この pass の始めに、この daemon が run・review・WU の検査を走らせている task（[`Gate::begin_pass`]）。
+    busy: BTreeSet<String>,
     /// 通した run（task・WU）→ (owner, 見込み)。worker が lease を書き、走査に書いている owner として出るまで（その後は
     /// 走査の増分が数える）、または run が終わるまで持つ。pass ごとに 0 に戻すと、直前の tick で通した run の見込みが
     /// lease の現れるまで消え、まとめて来た run が見込みを超えて始まる（attempt 5 の review の指摘）。
@@ -255,9 +261,15 @@ impl Gate {
 
     /// 候補を照合する pass の始め（枠が埋まって照合しない pass では呼ばない。記録はそのまま残る）: 前の pass で判定に
     /// 来なかった run（始まった・`ready` でなくなった）の待ちの記録を消し、通した run のうち走っていないもの
-    /// （`in_flight` が `false`。lease を書く前に終わった・起動の前に見送った）を消す。
-    pub fn begin_pass(&self, in_flight: impl Fn(&str, Option<&str>) -> bool) {
+    /// （`in_flight` が `false`。lease を書く前に終わった・起動の前に見送った）を消す。`busy` は、この daemon が run・
+    /// review・WU の検査を今走らせている task（「1 本は通す」の書き手は、この task の増分を持つ owner だけ）。
+    pub fn begin_pass(
+        &self,
+        in_flight: impl Fn(&str, Option<&str>) -> bool,
+        busy: BTreeSet<String>,
+    ) {
         let mut st = self.state();
+        st.busy = busy;
         let seen = std::mem::take(&mut st.seen);
         st.holds.retain(|k, _| seen.contains(k));
         st.admitted
@@ -296,12 +308,15 @@ impl Gate {
     }
 
     /// D1 の dispatch からの入口: Local の task で、測った見込みがあるときだけ `repo_of`（run の cargo の target を
-    /// 結び付ける checkout の source）を引いて [`Gate::hold`] で判定する。待たせるなら `true`。
+    /// 結び付ける checkout の source）を引いて [`Gate::hold`] で判定する。待たせるなら `true`。`work_unit_id` は
+    /// dispatcher の run の鍵（phase のある WU）、`target_work_unit` は worker の `CARGO_TARGET_DIR` の owner の WU
+    /// （自分の worktree を持つ WU だけ。task の worktree を共有する WU は `None`）。
     pub fn holds_run(
         &self,
         view: Option<&ScratchStatus>,
         task: &Task,
         work_unit_id: Option<&str>,
+        target_work_unit: Option<&str>,
         repo_of: impl FnOnce() -> Option<PathBuf>,
     ) -> bool {
         if !matches!(task.workspace, WorkspaceSpec::Local { .. }) {
@@ -318,43 +333,51 @@ impl Gate {
         };
         let repo_key = task_worker::build_cache::repo_cache_key(&repo);
         let id = task.id.to_string();
-        self.hold(&view, &id, work_unit_id, &repo_key, SystemTime::now())
+        let owner = task_worker::scratch::Owner::of_run(&id, target_work_unit).to_string();
+        self.hold(
+            &view,
+            &id,
+            work_unit_id,
+            &owner,
+            &repo_key,
+            SystemTime::now(),
+        )
     }
 
-    /// D1: run（task・WU）を待たせるなら `true`。待ち始めに 1 回だけ log を残す（受信箱・通知には出さない）。通した
-    /// run は、走査（`view`）に書いている owner として出るまで見込みを数え続ける。
+    /// D1: run（task・WU。dispatcher の run の鍵）を待たせるなら `true`。`owner` はその run の `CARGO_TARGET_DIR` の
+    /// owner（worker と同じ [`task_worker::scratch::Owner::of_run`]）。待ち始めに 1 回だけ log を残す（受信箱・通知には
+    /// 出さない）。通した run は、走査（`view`）に増分を持つ owner として出るまで見込みを数え続ける。
     pub fn hold(
         &self,
         view: &ScratchAdmissionView,
         task_id: &str,
         work_unit_id: Option<&str>,
+        owner: &str,
         repo_key: &str,
         now: SystemTime,
     ) -> bool {
-        let owner = match work_unit_id {
-            Some(wu) => task_worker::scratch::Owner::work_unit(task_id, wu),
-            None => task_worker::scratch::Owner::task(task_id),
-        }
-        .to_string();
+        let owner = owner.to_string();
         let key: HoldKey = (task_id.to_string(), work_unit_id.map(str::to_string));
-        let writing: BTreeSet<&str> = view
+        let growing: Vec<&str> = view
             .owners
             .iter()
-            .filter(|o| o.running)
+            .filter(|o| o.grows)
             .map(|o| o.owner.as_str())
             .collect();
         let mut st = self.state();
-        // 走査に書いている owner として出た run は、走査の増分が数える（二重に数えない）。
+        // 走査に増分を持つ owner として出た run は、走査の増分が数える（二重に数えない）。
         st.admitted
-            .retain(|k, (o, _)| k != &key && !writing.contains(o.as_str()));
+            .retain(|k, (o, _)| k != &key && !growing.contains(&o.as_str()));
         let admitted_bytes = st.admitted.values().map(|(_, b)| b).sum();
-        // 「1 本は通す」の数えには release-build を入れない: release の lease は 48 時間生き、task の run が 0 本でも
-        // 増分を持つが、その build の終わりを待っても task の run の空きは戻らない（詰まる）。
-        let task_writers = writing
+        // 「1 本は通す」の書き手: 増分を持つ owner のうち、この daemon が run・review・WU の検査を走らせている task の
+        // もの。release-build（task が無い）と、reviewing・running のまま子・人・WU を待つ task は入らない（待っても
+        // 終わらないので、数えると詰まる）。
+        let busy_writers = growing
             .iter()
-            .filter(|o| !o.starts_with("release-"))
+            .filter_map(|o| task_worker::scratch::Owner::parse(o).ok())
+            .filter(|o| o.task_id().is_some_and(|t| st.busy.contains(t)))
             .count();
-        let writers = task_writers + st.admitted.len();
+        let writers = busy_writers + st.admitted.len();
         match decide(view, &owner, repo_key, admitted_bytes, writers) {
             Decision::Skip => {
                 st.holds.remove(&key);
@@ -399,13 +422,17 @@ mod tests {
 
     const GB: u64 = 1_000_000_000;
 
-    fn sample(owner: &str, repo: &str, running: bool, size: Option<u64>) -> Sample {
+    fn sample(owner: &str, repo: &str, grows: bool, size: Option<u64>) -> Sample {
         Sample {
             owner: owner.into(),
             repo_key: repo.into(),
-            running,
+            grows,
             size_bytes: size,
         }
+    }
+
+    fn busy(tasks: &[&str]) -> BTreeSet<String> {
+        tasks.iter().map(|t| t.to_string()).collect()
     }
 
     fn inputs(free: u64, samples: Vec<Sample>) -> Inputs {
@@ -513,7 +540,7 @@ mod tests {
             150 * GB,
         )]);
         assert_eq!(copying.len(), 1);
-        assert!(copying[0].running && copying[0].size_bytes.is_none());
+        assert!(copying[0].grows && copying[0].size_bytes.is_none());
         let v = forecast(&inputs(100 * GB, [samples.clone(), copying].concat()), None);
         let seeding = v.owners.iter().find(|o| o.owner == "task-seeding");
         assert_eq!(seeding.map(|o| o.growth_bytes), Some(90 * GB));
@@ -600,9 +627,11 @@ mod tests {
         );
         status.admission = v.clone();
         let (live, verify) = (Gate::default(), Gate::default());
-        assert!(live.hold(&v, "t1", None, "ap", SystemTime::UNIX_EPOCH));
-        live.begin_pass(|_, _| true);
-        verify.begin_pass(|_, _| true);
+        // a の run をこの daemon が走らせている（書き手）。
+        live.begin_pass(|_, _| true, busy(&["a"]));
+        assert!(live.hold(&v, "t1", None, "task-t1", "ap", SystemTime::UNIX_EPOCH));
+        live.begin_pass(|_, _| true, BTreeSet::new());
+        verify.begin_pass(|_, _| true, BTreeSet::new());
         let held = live.with_held(Some(&status)).and_then(|s| s.admission.held);
         let owners: Vec<String> = held
             .unwrap_or_default()
@@ -618,7 +647,7 @@ mod tests {
         );
         assert_eq!(live.with_held(None), None);
         // 次の pass で判定に来なければ消える。
-        live.begin_pass(|_, _| true);
+        live.begin_pass(|_, _| true, BTreeSet::new());
         assert!(live.held_views().is_empty());
     }
 
@@ -632,38 +661,38 @@ mod tests {
         let old = sample("task-old", "ap", false, Some(100 * GB));
         let v = forecast(&inputs(250 * GB, vec![old.clone()]), None);
         let gate = Gate::default();
-        gate.begin_pass(|_, _| true);
+        gate.begin_pass(|_, _| true, BTreeSet::new());
         // 書いている run 0 本: a は通す。b は 250 − 100 − 100 = 50 ≥ 30 で通す。c は 250 − 200 − 100 < 30 で待つ。
-        assert!(!gate.hold(&v, "a", None, "ap", SystemTime::UNIX_EPOCH));
-        assert!(!gate.hold(&v, "b", None, "ap", SystemTime::UNIX_EPOCH));
-        assert!(gate.hold(&v, "c", None, "ap", SystemTime::UNIX_EPOCH));
+        assert!(!gate.hold(&v, "a", None, "task-a", "ap", SystemTime::UNIX_EPOCH));
+        assert!(!gate.hold(&v, "b", None, "task-b", "ap", SystemTime::UNIX_EPOCH));
+        assert!(gate.hold(&v, "c", None, "task-c", "ap", SystemTime::UNIX_EPOCH));
         // 次の pass: a・b の lease はまだ走査に無い。c は待ち続ける。
         for _ in 0..3 {
-            gate.begin_pass(|_, _| true);
+            gate.begin_pass(|_, _| true, BTreeSet::new());
             assert_eq!(gate.admitted_bytes(), 200 * GB);
-            assert!(gate.hold(&v, "c", None, "ap", SystemTime::UNIX_EPOCH));
+            assert!(gate.hold(&v, "c", None, "task-c", "ap", SystemTime::UNIX_EPOCH));
         }
         assert_eq!(gate.notes(), 1);
         // a が seed を写し始めて走査に出る（大きさ不明の書いている owner。増分 100）: 通した分からは外れ、二重に数えない。
         let seeding = Sample {
             owner: "task-a".into(),
             repo_key: "ap".into(),
-            running: true,
+            grows: true,
             size_bytes: None,
         };
         let v2 = forecast(&inputs(250 * GB, vec![old.clone(), seeding]), None);
-        gate.begin_pass(|_, _| true);
-        assert!(gate.hold(&v2, "c", None, "ap", SystemTime::UNIX_EPOCH));
+        gate.begin_pass(|_, _| true, BTreeSet::new());
+        assert!(gate.hold(&v2, "c", None, "task-c", "ap", SystemTime::UNIX_EPOCH));
         assert_eq!(gate.admitted_bytes(), 100 * GB);
         // b が lease を書く前に終わった（走っていない）: 次の pass で消え、c は 250 − 100 − 0 − 100 = 50 ≥ 30 で通る。
-        gate.begin_pass(|task, _| task != "b");
-        assert!(!gate.hold(&v2, "c", None, "ap", SystemTime::UNIX_EPOCH));
+        gate.begin_pass(|task, _| task != "b", busy(&["a"]));
+        assert!(!gate.hold(&v2, "c", None, "task-c", "ap", SystemTime::UNIX_EPOCH));
         assert!(gate.held_views().is_empty());
         // 走査に書いている owner が無く、通した run も無ければ、予備を割っても 1 本は通す。
         let empty = Gate::default();
         let low = forecast(&inputs(5 * GB, vec![old]), None);
-        assert!(!empty.hold(&low, "d", None, "ap", SystemTime::UNIX_EPOCH));
-        assert!(empty.hold(&low, "e", None, "ap", SystemTime::UNIX_EPOCH));
+        assert!(!empty.hold(&low, "d", None, "task-d", "ap", SystemTime::UNIX_EPOCH));
+        assert!(empty.hold(&low, "e", None, "task-e", "ap", SystemTime::UNIX_EPOCH));
     }
     /// 不変条件（attempt 6 の review の指摘）: lease の生きた release-build は増分を持つが、「1 本は通す」の数えには入らない。
     /// task の run が 0 本なら、空きが予備を割っていても 1 本は通す（release の lease は 48 時間生き、待っても空きは戻らない）。
@@ -673,15 +702,88 @@ mod tests {
         let rel = Sample {
             owner: "release-abc".into(),
             repo_key: "ap".into(),
-            running: true,
+            grows: true,
             size_bytes: Some(90 * GB),
         };
         let seed = sample("task-p3", "ap", false, Some(90 * GB));
         let v = forecast(&inputs(50 * GB, vec![rel, seed]), None);
         let gate = Gate::default();
-        gate.begin_pass(|_, _| true);
+        gate.begin_pass(|_, _| true, BTreeSet::new());
         // 空き 50 GB は予備を割るが、task の run は 0 本なので 1 本は通す。2 本目は待つ。
-        assert!(!gate.hold(&v, "t1", None, "ap", SystemTime::UNIX_EPOCH));
-        assert!(gate.hold(&v, "t2", None, "ap", SystemTime::UNIX_EPOCH));
+        assert!(!gate.hold(&v, "t1", None, "task-t1", "ap", SystemTime::UNIX_EPOCH));
+        assert!(gate.hold(&v, "t2", None, "task-t2", "ap", SystemTime::UNIX_EPOCH));
+    }
+
+    /// 不変条件（attempt 7 の review の指摘）: 「1 本は通す」の書き手は、増分を持つ owner のうち、この daemon が run・
+    /// review・WU の検査を走らせている task のものだけ。`reviewing` で子・人の承認を待つ親（走査では増分を持つ）は
+    /// 書き手に数えず、子の run は予備を割っていても通る（数えると親は子を、子は親を待って詰まる）。同じ親が review の
+    /// 検査を走らせている間は書き手に数え、子は待つ。旧い試験は書き手を走査の増分だけから数え、待っている親を検出
+    /// できなかった。
+    #[test]
+    fn a_parent_waiting_in_review_is_not_a_writer_but_a_running_review_is() {
+        let parent = sample("task-p", "ap", true, Some(40 * GB));
+        let old = sample("task-old", "ap", false, Some(100 * GB));
+        // 空き 69 GB − 親の増分 60 − 子の見込み 100 < 予備 30。
+        let v = forecast(&inputs(69 * GB, vec![parent, old]), None);
+        let gate = Gate::default();
+        gate.begin_pass(|_, _| true, busy(&["other"]));
+        assert!(!gate.hold(&v, "c", None, "task-c", "ap", SystemTime::UNIX_EPOCH));
+        let gate = Gate::default();
+        gate.begin_pass(|_, _| true, busy(&["p"]));
+        assert!(gate.hold(&v, "c", None, "task-c", "ap", SystemTime::UNIX_EPOCH));
+        // 親の WU の owner（task-p/wu-w）も親の task の書き手として数える。
+        let wu = sample("task-q/wu-w", "ap", true, Some(40 * GB));
+        let v = forecast(&inputs(69 * GB, vec![wu]), None);
+        let gate = Gate::default();
+        gate.begin_pass(|_, _| true, busy(&["q"]));
+        assert!(gate.hold(&v, "c", None, "task-c", "ap", SystemTime::UNIX_EPOCH));
+    }
+
+    /// 不変条件（attempt 7 の review の副次の指摘）: 通した run の見込みは、worker と同じ owner（task の worktree を
+    /// 共有する WU なら `task-<id>`）で走査の owner と突き合わせる。続きの run はその owner の target の増分だけで判定し、
+    /// 走査に出たら通した分から外れる（二重に数えない）。
+    #[test]
+    fn a_shared_worktree_work_unit_is_judged_by_the_task_owner() {
+        let task_owner = task_worker::scratch::Owner::of_run("t", None).to_string();
+        assert_eq!(task_owner, "task-t");
+        assert_eq!(
+            task_worker::scratch::Owner::of_run("t", Some("w")).to_string(),
+            "task-t/wu-w"
+        );
+        let v = forecast(
+            &inputs(
+                45 * GB,
+                vec![
+                    sample("task-old", "ap", false, Some(100 * GB)),
+                    sample("task-t", "ap", false, Some(92 * GB)),
+                ],
+            ),
+            None,
+        );
+        let gate = Gate::default();
+        gate.begin_pass(|_, _| true, busy(&["x"]));
+        // 走査に書き手を 1 本置く（x）。phase のある WU w の run（鍵は (t, w)）は task-t の target の増分 8 GB で判定:
+        // 45 − 0 − 8 ≥ 30 で通る。WU の owner（task-t/wu-w）で判定すると 100 GB 全体になって待つ。
+        let x = sample("task-x", "other", true, Some(GB));
+        let v = ScratchAdmissionView {
+            owners: [v.owners.clone(), forecast(&inputs(0, vec![x]), None).owners].concat(),
+            ..v
+        };
+        assert!(!gate.hold(
+            &v,
+            "t",
+            Some("w"),
+            &task_owner,
+            "ap",
+            SystemTime::UNIX_EPOCH
+        ));
+        assert_eq!(gate.admitted_bytes(), 8 * GB);
+        // task-t が走査に増分を持つ owner として出たら、通した分から外れる。
+        let mut seen = v.clone();
+        if let Some(o) = seen.owners.iter_mut().find(|o| o.owner == "task-t") {
+            o.grows = true;
+        }
+        assert!(gate.hold(&seen, "u", None, "task-u", "ap", SystemTime::UNIX_EPOCH));
+        assert_eq!(gate.admitted_bytes(), 0);
     }
 }

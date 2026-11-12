@@ -188,7 +188,7 @@ async fn metrics_scratch_matches_the_status_schema() {
             owners: vec![task_ops::daemon::ScratchOwnerForecastView {
                 owner: "task-01ABC".into(),
                 repo_key: "agent-platform-0123456789".into(),
-                running: true,
+                grows: true,
                 size_bytes: Some(18 << 30),
                 expected_bytes: 18 << 30,
                 growth_bytes: 0,

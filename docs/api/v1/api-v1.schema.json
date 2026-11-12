@@ -29370,6 +29370,10 @@
           "minimum": 0,
           "type": "integer"
         },
+        "grows": {
+          "description": "増分を予約する: DB の状態が run か review の検査で書かれうる（`task running`・`task reviewing`・\n`work unit running`）か、lease の生きた release-build（`lease live`。次の build が見込みまで育てる）。\n「1 本は通す」の書き手かどうかは別で、daemon が run・review・WU の検査を今走らせている task だけが書き手。",
+          "type": "boolean"
+        },
         "growth_bytes": {
           "description": "今書いている owner の増分の見込み（書いていなければ 0）。",
           "format": "uint64",
@@ -29381,10 +29385,6 @@
         },
         "repo_key": {
           "type": "string"
-        },
-        "running": {
-          "description": "この target に今書いている: run か review の検査（`task running`・`task reviewing`・`work unit running`）か、\nlease の生きた release-build（`lease live`。次の build が見込みまで育てる）。",
-          "type": "boolean"
         },
         "size_bytes": {
           "description": "測った大きさ（未測定・target がまだ無いときは `None`。見込みでは 0 と見る）。",
@@ -29399,7 +29399,7 @@
       "required": [
         "owner",
         "repo_key",
-        "running",
+        "grows",
         "expected_bytes",
         "growth_bytes"
       ],

@@ -65,11 +65,11 @@ fn fixture(free: u64, samples: Vec<Sample>) -> Fixture {
     }
 }
 
-fn sample(owner: &str, repo: &str, running: bool, size: u64) -> Sample {
+fn sample(owner: &str, repo: &str, grows: bool, size: u64) -> Sample {
     Sample {
         owner: owner.into(),
         repo_key: repo.into(),
-        running,
+        grows,
         size_bytes: Some(size),
     }
 }
@@ -218,4 +218,41 @@ async fn runs_admitted_in_one_tick_keep_their_forecast_until_their_lease_appears
         [vec![sample("task-old", &repo, false, 100 * GB)], started].concat();
     assert_eq!(f.d.tick().unwrap().dispatched, 1);
     assert_eq!(status(&f.store, ready[0]), Status::Running);
+}
+
+/// attempt 7 の review の指摘: `reviewing` で子・人の承認・再同期の停止を待つ親の target は、走査では増分を持つ
+/// （DB の状態が `task reviewing`）が、この daemon は親の run も review も走らせていないので「1 本は通す」の書き手に
+/// 数えない。子の run は予備を割っていても通る（数えると、親は子を、子は親を待って詰まり、受信箱にも出ない）。親の
+/// owner は走査の行（probe）だけで与える: 判定が見るのは走査の行と dispatcher の run・review・WU の検査の表だけ。
+/// 走っている run が別にあれば、それが書き手になり子は待つ（`a_new_target_waits_…` と同じ）。
+#[tokio::test]
+async fn a_parent_waiting_in_review_does_not_stall_its_child() {
+    // 本番の値（空き 69 GB、予備 30 GB、repo の見込み 100 GB、親の target 40 GB は 60 GB 増える見込み）。
+    let mut f = fixture(69 * GB, Vec::new());
+    let root = f._root.path().to_path_buf();
+    let (child, repo) = rust_task(&root, "child");
+    let parent = TaskId::new();
+    f.inputs.lock().unwrap().samples = vec![
+        sample("task-old", &repo, false, 100 * GB),
+        sample(&format!("task-{parent}"), &repo, true, 40 * GB),
+    ];
+    f.store.insert(&child).unwrap();
+    assert_eq!(f.d.tick().unwrap().dispatched, 1);
+    assert_eq!(status(&f.store, child.id), Status::Running);
+    assert_eq!(f.d.scratch.admission.notes(), 0);
+    // 子が走っている間は、子が書き手: 同じ repo の次の新しい target は待つ。
+    let (next, _) = rust_task(&root, "next");
+    let next = Task {
+        workspace: child.workspace.clone(),
+        ..next
+    };
+    f.inputs
+        .lock()
+        .unwrap()
+        .samples
+        .push(sample(&format!("task-{}", child.id), &repo, true, GB));
+    f.store.insert(&next).unwrap();
+    assert_eq!(f.d.tick().unwrap().dispatched, 0);
+    assert_eq!(status(&f.store, next.id), Status::Ready);
+    assert_eq!(f.d.scratch.admission.notes(), 1);
 }

@@ -193,6 +193,22 @@ reviewer は、prompt が示す覚え書きの足し方（scope `cos`、page `co
   「指示は人の発言・skill・ADR・standing rule から受ける」を「人の発言・人が受け入れた grant（常設の節）・skill・ADR」に
   直した（D1: CoS に standing_rules は渡さない）。
 
+commit: 「phase 1: 覚え書きの page を KB のガードが受ける environment/celeris に移し、取り次ぎの有効性の判定を 1 つにする」、
+「phase 1: 取り次ぎの判定の統合を戻す（task-core の循環が増える）。覚え書きと operations.md の記述を合わせる」。
+
+### attempt 6 の検査（提出時の HEAD で実行。基準は `git merge-base HEAD main`、main の取り込みは不要だった）
+
+- 1 本目の commit の HEAD で `bash scripts/dev/test-affected.sh` → exit 1（170 秒）。repo health の `deps.cycle` だけが fail
+  （`authority` から `chat`・`store` への参照で task-core の循環が 62 単位になった）。2 本目の commit で戻した。
+- `bash scripts/dev/test-affected.sh` → exit 0（912 秒、開始時の load average 42）。nextest 8304 件合格・23 件 skip、
+  web の型検査と unit 711 件合格（103 file）、ts-verify 20 件合格、repo health は verdict=pass・worsened=0。
+- `cargo clippy --workspace -- -D warnings` → exit 0（94 秒）。`cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check` → exit 0。
+- 個別: `cargo nextest run -p task-worker -p task-dispatch --lib -E 'test(cos_standing) | test(committed_schema_matches_generated)'`
+  → 7 件合格。`cargo nextest run -p task-api --test knowledge` → 10 件合格（新しい試験を含む）。
+  `cargo nextest run -p task-api --test cos_job_wait_extend --test authority_ledger --test cos_live_fix_d2` → 29 件合格。
+- `crates/task-core/src/chat` の本体の行は 8000（main 7998。閾値 8000 以内）。
+
 ## D4 の実装前 brief
 
 1. 根本原因: ledger は案件・期限 366 日に限られ、取り次ぎは task と期限を必須にしていた。恒久の人の委任を表せず、job 待ちの

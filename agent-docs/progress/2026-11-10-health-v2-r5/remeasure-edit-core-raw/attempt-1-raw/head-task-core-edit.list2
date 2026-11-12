@@ -1,0 +1,16 @@
+celeris
+celeris-campaign
+celeris-credentiald
+celeris-mcp
+celeris-script
+celerisctl
+e2e
+llm-proxy
+routing-eval
+task-api
+task-core
+task-dispatch
+task-ops
+task-worker
+web: typecheck+unit (理由: web の型の元になる crate の変更: task-core)
+ts-verify: test-ts-verify (理由: runner の cache key の入力の変更)

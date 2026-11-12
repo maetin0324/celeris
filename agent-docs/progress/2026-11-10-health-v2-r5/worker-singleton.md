@@ -44,9 +44,10 @@ inventory は keep（理由 `singleton_bundle_group:adjust-worker`）にした�
 - `python3 agent-docs/progress/2026-11-10-health-v2-r5/cases.py --crate task-worker --base $(git merge-base HEAD main)` → exit 0（試験関数 1294 → 1294、removals 0 件）
 - `python3 -m unittest discover -s agent-docs/progress/2026-11-10-health-v2-r5 -p test_classify.py` → OK（16 件）
 - `cargo test -p task-worker --test browser_action_recovery` → exit 0（1 passed）
-- 検査の結果は下の「検査」に書く。
-
-## 検査
+- `bash scripts/dev/test-affected.sh` → exit 0（対象 7 crate: celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker。nextest 5945 件合格・22 skip・332.5 秒、全体 14 分、開始時の load average 35.8。repo-health verdict pass、script bundle SKIP 0 件）
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- `sh scripts/dev/progress-index.sh --check` → exit 0
 
 ## 未解決
 - ADR `2026-11-10-test-target-bundles.md` の表と adjust-worker.md の束の記述は、並行する WU adr-sync が直す。この WU では触っていない。

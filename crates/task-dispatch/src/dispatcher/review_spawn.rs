@@ -4,6 +4,7 @@ use super::route_select::{RouteInput, RoutePick, RouteTrace, account_adapter_for
 use super::token_budget::run_watch;
 use super::*;
 use crate::review::RepoHealth;
+use task_worker::check_slots::slotted;
 
 /// ADR-0118 D4 付記 / ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3・D4: 直近の遷移（自動の
 /// 再レビューの遷移を除く）または再開（`ReviewResyncResumed`）以後の stale（`ReviewTargetAdvanced`）の数、
@@ -922,7 +923,7 @@ impl Dispatcher {
         let tx = self.tx.clone();
         let remote_review = remote_settings.clone();
         // ADR-0019 D1 6. / ADR-0041 D1: 判定コマンドは worktree の中で実行する（元のリポジトリでは実行しない）。
-        let review_work_dir = self.work_dir_for(&task);
+        let review_work_dir = self.work_dir_for(&task).filter(|w| w.is_dir());
         // ADR-0074 F5-fix: reviewer の checks は Task の worktree で走るので `<repo-key>`
         // （Task 単位の run と同じ target）。
         let review_check_env = self.check_cargo_target_env(&task, None);
@@ -973,12 +974,10 @@ impl Dispatcher {
                         None
                     } else {
                         // ADR 2026-11-12-host-check-slots D3: 重い検査は host 共通の枠を取ってから走らせる。
-                        Some(task_worker::check_slots::SlottedWorkspace::wrap(
-                            Box::new(
-                                LocalWorkspace::new(&dir)
-                                    .with_work_dir(repo.dir.clone())
-                                    .with_cargo_env(review_check_env.clone()),
-                            ),
+                        Some(slotted(
+                            LocalWorkspace::new(&dir)
+                                .with_work_dir(repo.dir.clone())
+                                .with_cargo_env(review_check_env.clone()),
                             format!("review {task_id} {}", repo.name),
                         ))
                     },
@@ -1011,16 +1010,10 @@ impl Dispatcher {
                 }
                 // ADR 2026-11-12-host-check-slots D3: local の検査は host 共通の枠を取ってから走らせる
                 // （枠の待ちは timeout に数えない）。remote（ssh）は remote の host の資源なので包まない。
-                None => task_worker::check_slots::SlottedWorkspace::wrap(
-                    Box::new(
-                        match review_work_dir {
-                            Some(work) if work.is_dir() => {
-                                LocalWorkspace::new(&dir).with_work_dir(work)
-                            }
-                            _ => LocalWorkspace::new(&dir),
-                        }
+                None => slotted(
+                    LocalWorkspace::new(&dir)
+                        .with_work_dir(review_work_dir.unwrap_or_else(|| dir.clone()))
                         .with_cargo_env(review_check_env),
-                    ),
                     format!("review {task_id}"),
                 ),
             };

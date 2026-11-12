@@ -368,6 +368,11 @@ impl SlottedWorkspace {
     }
 }
 
+/// D3: daemon の local の検査の作業場所を host の枠で包む（[`SlottedWorkspace::wrap`]）。
+pub fn slotted(ws: crate::LocalWorkspace, label: impl Into<String>) -> Box<dyn Workspace> {
+    SlottedWorkspace::wrap(Box::new(ws), label)
+}
+
 #[async_trait]
 impl Workspace for SlottedWorkspace {
     async fn prepare(&self, task: &Task) -> Result<PathBuf, WorkspaceError> {

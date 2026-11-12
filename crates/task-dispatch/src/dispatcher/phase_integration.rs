@@ -2,6 +2,7 @@
 
 use super::*;
 use std::collections::BTreeMap;
+use task_worker::check_slots::slotted;
 
 /// ADR 2026-11-08-health-enforcement-loop: 検査の列の項目の記録と health の項目。file は size の制約で `health_review/` に置く。
 #[path = "../health_review/check_item.rs"]
@@ -156,10 +157,7 @@ pub(super) async fn run_integration_checks(
         );
         let clock = std::time::Instant::now();
         // ADR 2026-11-12-host-check-slots D3: 重い検査は host 共通の枠を取ってから走らせる（待ちは timeout に数えない）。
-        let check_ws = task_worker::check_slots::SlottedWorkspace::wrap(
-            Box::new(ws.clone().with_output_log(&log_path)),
-            format!("task {task_id} {}", observed.key),
-        );
+        let check_ws = slotted(ws.clone().with_output_log(&log_path), &observed.key);
         let outcome = crate::review::exec_check_outcome(
             check_ws.as_ref(),
             &c.cmd,

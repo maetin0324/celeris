@@ -21,7 +21,9 @@ updated: 2026-11-12
 - `celerisctl scratch status` が枠の使用中と、枠を待つ検査（label・開始時刻・理由）を出す。
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`。main への rebase の後に実行）
-- `bash scripts/dev/test-affected.sh`: exit 100（1279 秒）。repo-health pass、runner-tmp-lifecycle ok（199 checks）、runner-tmp-repro ok、
+- `bash scripts/dev/test-affected.sh`（最後の実行）: exit 0（1188 秒、load 50〜60）。nextest 6071 件 6071 passed、script bundle SKIP 0 件、
+  `check-slot: 枠 0/2 を使う。--test-threads 12`。
+- 同じ検査の 1 回前の実行: exit 100（1279 秒）。repo-health pass、runner-tmp-lifecycle ok（199 checks）、runner-tmp-repro ok、
   `check-slot: 枠 0/2 を使う。--test-threads 12`、nextest 6071 件中 6070 passed・1 failed。落ちたのは範囲外の
   `task-worker browser::post_login_tests::daemon_post_login_pair_login_reads_lms_and_refuses_idp_other_and_password_pages`
   （本物の Chromium の download 数が 2、期待 1。load 30〜60）。単独の再実行

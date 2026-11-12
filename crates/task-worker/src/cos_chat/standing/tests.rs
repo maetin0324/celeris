@@ -12,9 +12,9 @@ fn grant(i: usize, note: &str) -> CosStandingGrant {
         project_id: "01PROJ".into(),
         scope_kind: "project".into(),
         scope_ref: "01PROJ".into(),
-        action_class: "routine_answer".into(),
-        expires_at: None,
-        budget_remaining: None,
+        action_class: "job_wait_extend".into(),
+        expires_at: "2036-11-01T00:00:00Z".into(),
+        budget_remaining: 999,
         note: note.into(),
         source: format!("human_message:msg{i}"),
         source_excerpt: Some(
@@ -127,7 +127,10 @@ fn cos_standing_every_thread_kind_gets_all_sections_within_limits() {
             "grant id and the person's basis: {section}"
         );
         assert!(section.contains("「job待ちに関しては基本認可"), "{section}");
-        assert!(section.contains("期限 なし（取り消すまで）"), "{section}");
+        assert!(
+            section.contains("期限 2036-11-01T00:00:00Z、残り 999 回"),
+            "{section}"
+        );
         assert!(section.contains("user/preferences.md") && section.contains("結論を先に書く"));
         assert!(section.contains("Sirius の qstat の時刻は JST"));
         assert!(section.contains("`GET /api/v1/knowledge/tree?q=<語>&scope=<scope>`"));

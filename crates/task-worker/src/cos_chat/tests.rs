@@ -842,7 +842,8 @@ fn cos_operator_skill_documents_the_registered_project_deploy_scope() {
 
 /// ADR 2026-10-27-relayed-instructions D4: the live relays of the thread are listed with the
 /// message id CoS cites, who relayed them, when the person spoke and the scope; the relay rules
-/// say a listed relay may ground `instructed_by` from any run.
+/// say a listed relay may ground `instructed_by` from any run, except a standing forward
+/// (2026-11-11-cos-standing-context D4), which is listed with its grant and acts only through it.
 #[test]
 fn cos_chat_prompt_relayed_section_lists_live_relays_with_ids_and_scope() {
     use crate::protocol::CosChatRelayedInstruction;
@@ -859,6 +860,17 @@ fn cos_chat_prompt_relayed_section_lists_live_relays_with_ids_and_scope() {
             said_at: "2026-10-27T03:50:00.000Z".into(),
             task_ids: vec!["01TASKA".into(), "01TASKB".into()],
             expires_at: Some("2026-10-28T00:00:00.000Z".into()),
+            grant_id: None,
+        },
+        CosChatRelayedInstruction {
+            message_id: "m-relay-3".into(),
+            seq: 12,
+            text: "job待ちは常に延長してください".into(),
+            relayed_by: "cos:thr-general".into(),
+            said_at: "2026-11-11T09:00:00.000Z".into(),
+            task_ids: vec![],
+            expires_at: None,
+            grant_id: Some("01GRANTJOB".into()),
         },
         CosChatRelayedInstruction {
             message_id: "m-relay-1".into(),
@@ -868,6 +880,7 @@ fn cos_chat_prompt_relayed_section_lists_live_relays_with_ids_and_scope() {
             said_at: "2026-10-25T10:00:00.000Z".into(),
             task_ids: vec![],
             expires_at: None,
+            grant_id: None,
         },
     ];
     let p = prompt(&request(Path::new("/tmp/w"), Some(c)));
@@ -887,7 +900,18 @@ fn cos_chat_prompt_relayed_section_lists_live_relays_with_ids_and_scope() {
         "{p}"
     );
     assert!(
-        p.contains("同スレッドの有効な取り次ぎ**の message id だけ"),
+        p.contains(
+            "- seq 12 (message m-relay-3) cos:thr-general が 2026-11-11T09:00:00.000Z の人の発言を取り次ぎ\
+             （grant `01GRANTJOB` の常設の指示）: 「job待ちは常に延長してください」"
+        ),
+        "{p}"
+    );
+    assert!(
+        p.contains("grant の付いた取り次ぎ（常設の指示）は `instructed_by` に使えない"),
+        "{p}"
+    );
+    assert!(
+        p.contains("同スレッドの有効な取り次ぎ（grant の付かないもの）**の message id だけ"),
         "{p}"
     );
 }

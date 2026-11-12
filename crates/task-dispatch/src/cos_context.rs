@@ -73,8 +73,8 @@ pub fn standing_context(
                 scope_kind: grant.scope.kind.as_str().to_owned(),
                 scope_ref: grant.scope.reference,
                 action_class: grant.action_class.as_str().to_owned(),
-                expires_at: Some(grant.expires_at),
-                budget_remaining: Some(grant.budget - grant.consumed),
+                expires_at: grant.expires_at,
+                budget_remaining: grant.budget - grant.consumed,
                 note: grant.note,
                 source: format!("{}:{}", grant.source.kind.as_str(), grant.source.reference),
                 source_excerpt,
@@ -131,29 +131,43 @@ fn kb_page(root: &Path, path: &str) -> Option<CosStandingPage> {
     })
 }
 
-/// ADR 2026-10-27-relayed-instructions D4: the unexpired relays of the thread.
+/// ADR 2026-10-27-relayed-instructions D4: the unexpired relays of the thread. A standing forward
+/// (ADR 2026-11-11-cos-standing-context D4) is listed only while its grant still backs it, by the
+/// same rule the forward passed ([`task_core::authority::forward_gap`]); an unreadable ledger
+/// fails the launch (fail closed).
 pub fn relayed_instructions(
     store: &SqliteStore,
     thread_id: &str,
     now: OffsetDateTime,
 ) -> Result<Vec<CosChatRelayedInstruction>, String> {
-    Ok(store
+    let mut out = Vec::new();
+    for message in store
         .chat_relayed_instructions(thread_id, now)
         .map_err(|e| format!("relayed instructions unavailable: {e}"))?
-        .into_iter()
-        .filter_map(|message| {
-            let relay = message.relay?;
-            Some(CosChatRelayedInstruction {
-                message_id: message.id,
-                seq: i64::try_from(message.seq).unwrap_or(i64::MAX),
-                text: message.text,
-                relayed_by: relay.relayed_by,
-                said_at: relay.said_at,
-                task_ids: relay.scope.task_ids,
-                expires_at: relay.scope.expires_at,
-            })
-        })
-        .collect())
+    {
+        let Some(relay) = message.relay else { continue };
+        if let Some(grant) = &relay.grant_id {
+            let row = store
+                .authority_grant(grant)
+                .map_err(|e| format!("authority ledger unavailable: {e}"))?;
+            let source = relay.source.as_ref().map_or("", |s| s.message_id.as_str());
+            let project = relay.scope.project_id.as_deref();
+            if task_core::authority::forward_gap(Some(row), true, project, source, now).is_err() {
+                continue;
+            }
+        }
+        out.push(CosChatRelayedInstruction {
+            message_id: message.id,
+            seq: i64::try_from(message.seq).unwrap_or(i64::MAX),
+            text: message.text,
+            relayed_by: relay.relayed_by,
+            said_at: relay.said_at,
+            task_ids: relay.scope.task_ids,
+            expires_at: relay.scope.expires_at,
+            grant_id: relay.grant_id,
+        });
+    }
+    Ok(out)
 }
 
 /// D2: the `RunContext` of a CoS chat run. Every field is written out: a CoS run carries its thread

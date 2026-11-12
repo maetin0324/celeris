@@ -1464,6 +1464,13 @@
             "null"
           ]
         },
+        "grant_id": {
+          "description": "ADR 2026-11-11-cos-standing-context D4: the live grant whose basis this message is. Such a\nrelay is not an `instructed_by`; CoS cites the grant.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "message_id": {
           "description": "`chat_messages.id` (the value for `instructed_by`).",
           "type": "string"
@@ -1554,22 +1561,16 @@
           "type": "string"
         },
         "budget_remaining": {
-          "description": "Uses left, or absent when the grant has no use limit.",
+          "description": "Uses left (every grant has a use limit).",
           "format": "int64",
-          "type": [
-            "integer",
-            "null"
-          ]
+          "type": "integer"
         },
         "created_at": {
           "type": "string"
         },
         "expires_at": {
-          "description": "RFC3339, or absent when the grant lasts until it is revoked.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "description": "RFC3339 (every grant has an expiry; a standing one is far off).",
+          "type": "string"
         },
         "id": {
           "type": "string"
@@ -1604,6 +1605,8 @@
         "scope_kind",
         "scope_ref",
         "action_class",
+        "expires_at",
+        "budget_remaining",
         "note",
         "source",
         "created_at"

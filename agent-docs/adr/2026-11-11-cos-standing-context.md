@@ -88,10 +88,18 @@ tasks: [01M75722QN630BBASEQ759KG4T]
 - 人が期限・範囲を限らずに任せた指示は、CoS が `authority.grant_propose`（根拠は人の発言の id）で 1 度だけ確かめ、
   人が受け入れたら grant になる。統括 CoS は常設の指示を 1 task・24 時間の取り次ぎに絞らない（常設の文脈の役割の節と
   `cos-inbox-triage` の §10 を直す）。
-- 取り次ぎ（`chat.relay_forward`）は `grant_id` を持てる。その grant が生きていて（取り消し・期限・回数・元の根拠）、
-  global の台帳か取り次ぎ先の案件の台帳の、範囲が global か案件全体の行なら、`task_ids` と `expires_at` を省ける。
-  `relay.grant_id` に残し、`instructed_by` に使うたびに同じ照合をやり直す（取り消した grant の取り次ぎは根拠にならない）。
+- 取り次ぎ（`chat.relay_forward`）は `grant_id` を持てる。取り次ぐ人の発言が grant の元の根拠（`human_message` の id）
+  そのもので、その grant が生きていて（取り消し・期限・回数）、global の台帳か取り次ぎ先の案件の台帳の、範囲が global か
+  案件全体の行なら、`task_ids` と `expires_at` を省ける（`authority::forward_gap`。別の発言に `grant_id` を付けると拒否）。
+  `relay.grant_id` に残す。grant の付いた取り次ぎは `instructed_by` に使えない（付記 2026-11-12）。案件 CoS の prompt の
+  取り次ぎの一覧は、grant が同じ `forward_gap` で裏付ける間だけ載せる（取り消した grant の取り次ぎは消える）。
   `grant_id` の無い取り次ぎは今のまま task と期限が必須。
+- 付記 2026-11-12（review の差し戻し）: 当初は grant の付いた取り次ぎを `instructed_by` に使えるとし、使うたびに grant を
+  照合していた。`instructed_by` は受信箱の `human_required` の解除・目的の変更の検査（goal_guard）・authority ledger の
+  判定（回数の消費を含む）を飛ばすので、task も期限も無い取り次ぎがこれを持つと、`job_wait_extend` だけを任せた grant で
+  案件のどの操作も人の判断として通ってしまう。grant の効果は grant の分類の判定だけに限る: 定型の代答は basis の refs、
+  分類のある操作は ledger（`authority_use`）が候補の grant を選んで回数を消費する。取り次ぎは人の原文を案件 CoS に
+  届けるだけにする。
 - 代答の記録は判断の根拠と実行者を別々に残す: 代答が applied になった後に `authority_audit` へ 1 行（`grant_id`、
   `human_decision_ref = authority_grant:<id>`、`actual_actor = cos:<thread>`、`outcome_state = applied`）を書き、grant の
   元の根拠（人の発言の id）は grant の行から引ける（ADR 2026-10-27-relayed-instructions、`docs/ops/external-operator.md` §4）。
@@ -114,6 +122,9 @@ tasks: [01M75722QN630BBASEQ759KG4T]
   dispatcher の CoS 起動の試験）。
 - Core は thread の種類によらず byte 単位で同じ（既存の Core の試験）。
 - 許可は人だけが作る。`human_required` は許可で解除できない（既存の authority ledger の試験）。
+- grant は根拠の人の発言の取り次ぎだけを裏付け、grant の付いた取り次ぎは `instructed_by` にならない（task-api の
+  `standing_job_wait_grant_from_the_general_thread_answers_the_project_wait_limit`）。取り消した grant の取り次ぎは
+  案件 CoS の prompt に載らない（`cos_standing_relayed_list_follows_the_grant_of_a_standing_forward`）。
 - prompt が示す覚え書きの足し方（scope・path）は KB の置き場のガードを通り、受け入れると dispatcher が読む page に入る
   （`cos_standing_memory_note_route_passes_the_kb_placement_guard`、task-api の
   `the_cos_memory_note_route_records_and_accepts_into_the_memory_page`）。

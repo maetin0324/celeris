@@ -207,8 +207,8 @@ pub(crate) fn live_escalation(
 
 /// D3 `chat.relay_forward`: the general CoS (`from_thread`) forwards the person's message
 /// `req.message_id` to the project thread `to_thread`. The text and `said_at` are the person's
-/// own (never CoS's words); the scope needs 1..=20 tasks of the project and an expiry, unless a
-/// live authority grant covering the target project backs it (`grant_id`, ADR
+/// own (never CoS's words); the scope needs 1..=20 tasks of the project and an expiry, unless the
+/// message is the basis of a live authority grant covering the target project (`grant_id`, ADR
 /// 2026-11-11-cos-standing-context D4): then the tasks and the expiry may be omitted.
 pub fn chat_relay_forward_tx(
     tx: &Connection,
@@ -246,7 +246,7 @@ pub fn chat_relay_forward_tx(
     }
     let grant = forward_grant(tx, req.grant_id.as_deref())?;
     let scoped = !req.task_ids.is_empty() && req.expires_at.is_some();
-    forward_gap(grant, scoped, to.project_id.as_deref(), now)
+    forward_gap(grant, scoped, to.project_id.as_deref(), &source.id, now)
         .map_err(|why| ChatError::Invalid(format!("forward refused: {why}")))?;
     let relay_req = ChatRelayRequest {
         client_message_id: req.client_message_id.clone(),

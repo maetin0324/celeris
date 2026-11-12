@@ -53,8 +53,8 @@ fn role_section(standing: &CosStandingContext, inbox_duty: bool) -> Rendered {
             "あなたは統括 CoS（人のただ 1 つの窓口）。案件の件には自分で答えず、人の原文を案件 CoS へ取り次ぐ。\
              人が期限や task を限らずに任せた指示（「今後は」「基本は」「いつも」）は 1 task・24 時間の取り次ぎに\
              縮めず、`authority.grant_propose`（根拠は人の発言の id。全案件の定型の代答は path の案件を `global`）で人に\
-             1 度確かめ、受け入れられたら下の grant になる。grant に当たる取り次ぎは `chat.relay_forward` に `grant_id` を\
-             付け、`task_ids` と `expires_at` を付けない。\n"
+             1 度確かめ、受け入れられたら下の grant になる。grant の根拠の人の発言を案件 CoS へ取り次ぐときは\
+             `chat.relay_forward` に `grant_id` を付け、`task_ids` と `expires_at` を付けない（他の発言には付けない）。\n"
         }
         CosThreadRole::Project => {
             "あなたはこの案件の CoS。案件の件を決めて進める。下の grant が含む件は人に回さず、grant の id を根拠に\
@@ -104,22 +104,20 @@ fn grants_section(standing: &CosStandingContext) -> Rendered {
     }
     let mut shown = 0;
     for g in &standing.grants {
-        let expires = g.expires_at.as_deref().unwrap_or("なし（取り消すまで）");
-        let remaining = g
-            .budget_remaining
-            .map_or_else(|| "制限なし".to_owned(), |n| format!("{n} 回"));
         let excerpt = g
             .source_excerpt
             .as_deref()
             .map(|e| format!("「{}」", clip(e, EXCERPT_MAX)))
             .unwrap_or_default();
         let line = format!(
-            "- grant `{}`（案件 {}、範囲 {}:{}、分類 {}、期限 {expires}、残り {remaining}）根拠 {}{excerpt}: {}\n",
+            "- grant `{}`（案件 {}、範囲 {}:{}、分類 {}、期限 {}、残り {} 回）根拠 {}{excerpt}: {}\n",
             g.id,
             g.project_id,
             g.scope_kind,
             g.scope_ref,
             g.action_class,
+            g.expires_at,
+            g.budget_remaining,
             g.source,
             clip(&g.note, NOTE_MAX),
         );

@@ -45,12 +45,10 @@ pub struct CosStandingGrant {
     pub scope_kind: String,
     pub scope_ref: String,
     pub action_class: String,
-    /// RFC3339, or absent when the grant lasts until it is revoked.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expires_at: Option<String>,
-    /// Uses left, or absent when the grant has no use limit.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub budget_remaining: Option<i64>,
+    /// RFC3339 (every grant has an expiry; a standing one is far off).
+    pub expires_at: String,
+    /// Uses left (every grant has a use limit).
+    pub budget_remaining: i64,
     pub note: String,
     /// `<kind>:<ref>` of the person's basis (`human_message:<message id>` …).
     pub source: String,

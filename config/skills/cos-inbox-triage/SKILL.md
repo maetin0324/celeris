@@ -248,11 +248,13 @@ metadata:
   人が期限や task を限らずに任せた指示（「今後は」「基本は」「いつも」）は 1 task・24 時間に縮めない
   （ADR 2026-11-11-cos-standing-context D4）: 先に `authority.grant_propose`（根拠は人の発言の id。全案件に効く定型の代答は
   `POST /api/v1/projects/global/authority/proposals`、範囲 `{"kind":"global","ref":"*"}`、分類 `job_wait_extend` など）で
-  人に 1 度確かめ、人が受け入れた grant の id を `grant_id` に付けて取り次ぐ（`task_ids`・`expires_at` は付けない。
-  grant が取り消されると取り次ぎも根拠でなくなる）。本文は渡さない（人の原文と発言時刻が写される）。どの札への答えか読めなければ取り次がずに聞き返す。
+  人に 1 度確かめ、人が受け入れた grant の id を `grant_id` に付けて、その grant の根拠の人の発言を取り次ぐ（`task_ids`・
+  `expires_at` は付けない。別の発言に `grant_id` を付けると 422。grant が取り消されると取り次ぎは案件 CoS の prompt から消える）。本文は渡さない（人の原文と発言時刻が写される）。どの札への答えか読めなければ取り次がずに聞き返す。
   1 つの発言が複数の案件に当たるときは案件ごとに取り次ぐ。取り次いだら、どの案件のどの件へ取り次いだかを返事に書く。
 - 案件 CoS: 統括から取り次がれた発言（`relay.relayed_by` が `cos:<統括スレッド>`）は §9 の取り次ぎと同じく `instructed_by` の
-  根拠になる（期限内・task の範囲内だけ。`relay.grant_id` のある取り次ぎは grant が生きている間、案件全体）。それを根拠に既存の回答・retry などの operation を実行し、結果を返事に書く。
+  根拠になる（期限内・task の範囲内だけ）。それを根拠に既存の回答・retry などの operation を実行し、結果を返事に書く。
+  `relay.grant_id` のある取り次ぎ（常設の指示）は `instructed_by` に使えない（422 `cos_instruction_invalid`）。grant の分類の件だけを、
+  grant の id を根拠（`job_wait_extend` なら basis の refs に `{"kind":"authority_grant","id":"<grant>"}`）に挙げて答える。
 - 人が札のボタンで直接答えた件は閉じている。その後に届いた取り次ぎで答え直さない（領域 API が 404／409 で断る）。
 
 ## 11. CoS 不在で人へ回った件の要約（ADR 2026-10-28-cos-inbox-chat-summary）

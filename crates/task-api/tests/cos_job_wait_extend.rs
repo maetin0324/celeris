@@ -431,8 +431,10 @@ const WEB_TOKEN: &str = "web-token-standing-grant";
 /// 不変条件（ADR 2026-11-11-cos-standing-context D4）: 人が統括 thread で期限も task も限らずに任せた指示は、
 /// CoS の提案 → 人の受け入れで global の grant になり、その grant に裏付けられた取り次ぎは task と期限なしで通り、
 /// 案件 CoS は 3 回の上限を超えた job 待ちの件を grant の id を根拠に人へ回さず答え、監査には判断の根拠（grant）と
-/// 実行した CoS が別々に残る。既存の試験は取り次ぎに task と期限を必ず求め、4 回目の上限を必ず人に回す前提で、
-/// 常設の委任の経路（global の範囲・grant_id 付きの取り次ぎ・上限の解除・監査）を通らないので、この試験で固定する。
+/// 実行した CoS が別々に残る。grant は根拠の人の発言の取り次ぎだけを裏付け（別の発言は断る）、grant の付いた取り次ぎは
+/// `instructed_by` にならない（grant の分類を超えて人の判断の代わりにしない）。既存の試験は取り次ぎに task と期限を
+/// 必ず求め、4 回目の上限を必ず人に回す前提で、常設の委任の経路（global の範囲・grant_id 付きの取り次ぎ・上限の解除・
+/// 監査）を通らないので、この試験で固定する。
 #[tokio::test]
 async fn standing_job_wait_grant_from_the_general_thread_answers_the_project_wait_limit() {
     let env = TestEnv::with(EnvOptions {
@@ -579,6 +581,36 @@ async fn standing_job_wait_grant_from_the_general_thread_answers_the_project_wai
     )
     .await;
     assert_eq!(bare.status.as_u16(), 422, "{}", bare.text());
+    // grant は根拠の発言だけを裏付ける: 同じ統括 thread の人の別の発言を grant で常設の指示にできない。
+    let other = send(
+        &app,
+        post_json_with(
+            &format!("/api/v1/chat/threads/{}/messages", general.id),
+            &json!({"client_message_id": "h-other", "text": "本番の設定も全部任せます",
+                    "attachment_ids": [], "reply_to_id": null, "mode": "queue", "resume_queue": false}),
+            &as_human,
+        ),
+    )
+    .await;
+    assert_eq!(other.status.as_u16(), 202, "{}", other.text());
+    let other = other.json()["message"]["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    let unrelated = general_op(
+        "forward-unrelated",
+        forwards.clone(),
+        json!({"client_message_id": "forward:unrelated", "message_id": other, "grant_id": grant}),
+    )
+    .await;
+    assert_eq!(unrelated.status.as_u16(), 422, "{}", unrelated.text());
+    assert!(
+        unrelated
+            .text()
+            .contains(&format!("not on message {other}")),
+        "{}",
+        unrelated.text()
+    );
     let forwarded = general_op(
         "forward-grant",
         forwards,
@@ -586,13 +618,13 @@ async fn standing_job_wait_grant_from_the_general_thread_answers_the_project_wai
     )
     .await;
     assert_eq!(forwarded.status.as_u16(), 200, "{}", forwarded.text());
-    let relay: Value = db(&env)
+    let (relayed, relay): (String, Value) = db(&env)
         .query_row(
-            "SELECT metadata_json FROM chat_messages WHERE thread_id=?1 AND metadata_json LIKE '%grant_id%'",
+            "SELECT id, metadata_json FROM chat_messages WHERE thread_id=?1 AND metadata_json LIKE '%grant_id%'",
             [project_thread.as_str()],
-            |r| r.get::<_, String>(0),
+            |r| Ok((r.get(0)?, r.get::<_, String>(1)?)),
         )
-        .map(|m| serde_json::from_str::<Value>(&m).expect("json")["relay"].clone())
+        .map(|(id, m)| (id, serde_json::from_str::<Value>(&m).expect("json")["relay"].clone()))
         .expect("relayed message");
     assert_eq!(relay["grant_id"], grant.as_str());
     assert_eq!(relay["source"]["message_id"], said.as_str());
@@ -639,6 +671,28 @@ async fn standing_job_wait_grant_from_the_general_thread_answers_the_project_wai
     }
     let (task, approval) = authorization_in(&env, Some(project_id), events, LIMIT_TEXT, &[]);
     let item = ingest(&env, approval);
+    // grant の付いた取り次ぎは人の判断の代わり（instructed_by）にならない: 案件の task の操作でも断る。
+    let instructed = send(
+        &app,
+        post_json_with(
+            "/api/v1/cos/operations",
+            &json!({"idempotency_key": "standing-instructed", "expected_revision": null,
+                    "reason": "常設の指示を根拠にする", "policy_version": "1",
+                    "instructed_by": relayed,
+                    "request": {"method": "POST", "path": format!("/api/v1/tasks/{}/comments", task.id),
+                                "body": {"body": "常設の指示で進める"}}}),
+            &[("authorization", project_bearer.as_str())],
+        ),
+    )
+    .await;
+    let problem = assert_problem(&instructed, 422, "cos_instruction_invalid");
+    assert!(
+        problem["detail"]
+            .as_str()
+            .expect("detail")
+            .contains(&format!("standing forward of grant {grant}")),
+        "{problem}"
+    );
     let cos = Cos {
         app: app.clone(),
         bearer: project_bearer,
@@ -710,6 +764,7 @@ async fn standing_job_wait_grant_from_the_general_thread_answers_the_project_wai
             Some(row),
             true,
             Some(&project),
+            &said,
             OffsetDateTime::now_utc(),
         )
     };

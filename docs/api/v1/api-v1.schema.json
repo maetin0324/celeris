@@ -3811,7 +3811,7 @@
           ]
         },
         "grant_id": {
-          "description": "ADR 2026-11-11-cos-standing-context D4: a live grant of the authority ledger (global or the\ntarget project's own, project or global scope) that makes the person's instruction standing.",
+          "description": "ADR 2026-11-11-cos-standing-context D4: a live grant of the authority ledger (global or the\ntarget project's own, project or global scope) whose basis is `message_id`.",
           "type": [
             "string",
             "null"
@@ -4277,7 +4277,7 @@
       "description": "ADR 2026-10-27-relayed-instructions D1: the relay record of a `role=user` message. The text\nof the message is the person's own words; this says who carried them, when the person said\nthem and where they apply.",
       "properties": {
         "grant_id": {
-          "description": "ADR 2026-11-11-cos-standing-context D4: the authority grant that backs a forward without\ntasks or an expiry. Use as `instructed_by` re-checks it (revoked / expired grants stop it).",
+          "description": "ADR 2026-11-11-cos-standing-context D4: the grant whose basis is the forwarded message; it\nbacks a forward without tasks or an expiry. Never an `instructed_by` (CoS cites the grant).",
           "type": [
             "string",
             "null"

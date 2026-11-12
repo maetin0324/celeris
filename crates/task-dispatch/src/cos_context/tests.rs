@@ -120,7 +120,7 @@ fn cos_standing_context_reads_live_grants_kb_pages_and_scopes_per_thread_kind() 
             .source
             .starts_with("human_operation:project.controller_put:")
     );
-    assert_eq!(general.grants[1].budget_remaining, Some(5));
+    assert_eq!(general.grants[1].budget_remaining, 5);
     // `kb init` seeds its own `user/` pages; every page is from `user/`, ours among them.
     assert!(
         general
@@ -189,4 +189,94 @@ fn cos_standing_run_context_carries_the_chat_and_session_only() {
         ChatRunSessionMode::Fresh,
     );
     assert!(!fresh.session.expect("session").resume);
+}
+
+/// ADR 2026-11-11-cos-standing-context D4: a standing forward is listed with its grant while the
+/// grant backs it, and leaves the list once the person revokes the grant, by the rule the forward
+/// passed (`forward_gap`). Before, the list read only the relay's expiry (a standing forward has
+/// none), so a revoked grant's forward stayed in the prompt as a standing instruction.
+#[test]
+fn cos_standing_relayed_list_follows_the_grant_of_a_standing_forward() {
+    use task_core::chat::{ChatForwardRequest, ChatOpenThreadRequest, ChatPostMessageRequest};
+    let store = SqliteStore::open_in_memory().expect("store");
+    let now = at("2026-11-11T00:00:00Z");
+    let project = project(&store, "BenchFS");
+    let open = |project_id: Option<String>| {
+        store
+            .cos_thread_open(&ChatOpenThreadRequest { project_id }, now)
+            .expect("thread")
+            .thread
+            .id
+    };
+    let (general, project_thread) = (open(None), open(Some(project)));
+    let said = store
+        .chat_message_post_as(
+            &general,
+            &ChatPostMessageRequest {
+                client_message_id: "h-standing".into(),
+                text: "job待ちは常に延長してください".into(),
+                attachment_ids: vec![],
+                reply_to_id: None,
+                mode: task_core::chat::ChatSendMode::Queue,
+                resume_queue: false,
+            },
+            "human:web",
+            now,
+        )
+        .expect("post")
+        .response
+        .message
+        .id;
+    let grant = store
+        .write_tx::<_, task_core::StoreError, _>(|tx| {
+            let new = a::NewAuthorityGrant {
+                id: ulid::Ulid::new().to_string(),
+                project_id: a::GLOBAL_LEDGER.into(),
+                scope: GrantScope {
+                    kind: ScopeKind::Global,
+                    reference: a::GLOBAL_LEDGER.into(),
+                },
+                action_class: a::ActionClass::JobWaitExtend,
+                source: a::GrantSource {
+                    kind: a::SourceKind::HumanMessage,
+                    reference: said.clone(),
+                },
+                granted_by: "human:web".into(),
+                question_key: None,
+                note: "job 待ちの上限は延長する".into(),
+                expires_at: "2036-11-01T00:00:00Z".into(),
+                budget: 1000,
+            };
+            Ok(SqliteStore::authority_grant_insert_tx(tx, &new, now)?.expect("accepted"))
+        })
+        .expect("grant")
+        .id;
+    let forward = ChatForwardRequest {
+        client_message_id: "forward:standing".into(),
+        message_id: said,
+        task_ids: vec![],
+        expires_at: None,
+        grant_id: Some(grant.clone()),
+    };
+    let by = format!("cos:{general}");
+    store
+        .chat_relay_forward(&general, &project_thread, &forward, &by, now)
+        .expect("standing forward");
+
+    let listed = relayed_instructions(&store, &project_thread, now).expect("list");
+    assert_eq!(listed.len(), 1, "{listed:?}");
+    assert_eq!(listed[0].grant_id.as_deref(), Some(grant.as_str()));
+    assert!(listed[0].task_ids.is_empty() && listed[0].expires_at.is_none());
+
+    store
+        .write_tx::<_, task_core::StoreError, _>(|tx| {
+            SqliteStore::authority_grant_revoke_tx(tx, a::GLOBAL_LEDGER, &grant, "human:web", now)
+        })
+        .expect("revoke")
+        .expect("revoked");
+    let listed = relayed_instructions(&store, &project_thread, now).expect("list");
+    assert!(
+        listed.is_empty(),
+        "a revoked grant's forward is listed: {listed:?}"
+    );
 }

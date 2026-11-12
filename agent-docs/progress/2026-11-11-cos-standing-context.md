@@ -209,6 +209,39 @@ commit: 「phase 1: 覚え書きの page を KB のガードが受ける environ
   `cargo nextest run -p task-api --test cos_job_wait_extend --test authority_ledger --test cos_live_fix_d2` → 29 件合格。
 - `crates/task-core/src/chat` の本体の行は 8000（main 7998。閾値 8000 以内）。
 
+### attempt 7（review の不合格: grant 付きの取り次ぎが発言と grant を結び付けない）
+
+reviewer は criterion 7 を不合格にした: `forward_gap`・`grant_backs` は grant の範囲・取り消し・期限・回数だけを見て、取り次ぐ
+発言が grant の元の根拠かを照合しない。grant 付きの取り次ぎ（task も期限も無い）は `instructed_by` に使え、`instructed_by` は
+`human_required` の解除・goal_guard・authority ledger の判定を飛ばすので、`job_wait_extend` だけを任せた grant で案件のどの
+操作も人の判断として通る。直したこと（ADR D4 に付記 2026-11-12）:
+
+- `task_core::authority::forward_gap` に取り次ぐ発言の id を渡し、grant の元の根拠が `human_message` のその id で
+  なければ拒否する（「grant … rests on human_message …, not on message …」）。`chat/window.rs` の取り次ぎがこれを使う。
+- grant の付いた取り次ぎは `instructed_by` に使えない（`cos/operations/instructions.rs` が 422 `cos_instruction_invalid`）。
+  grant の効果は分類の判定だけ（定型の代答は basis の refs、分類のある操作は ledger の `authority_use`）。
+- advisory (1) を直した: 案件 CoS の prompt の取り次ぎの一覧（`task_dispatch::cos_context::relayed_instructions`）は、grant の
+  付いた取り次ぎを同じ `forward_gap`（取り次ぎの時と同じ判定）で照合し、取り消し・期限切れの grant の取り次ぎを載せない。
+  一覧の行に `grant_id` を渡し、prompt は「grant `<id>` の常設の指示」と書き、`instructed_by` に使えないことを書く。
+  判定は `authority` の純関数 1 つで、`chat` の module の本体の行は増やしていない（`deps.cycle` も増えない）。
+- advisory (2) を直した: `CosStandingGrant` の `expires_at`・`budget_remaining` を必須にし、renderer の「期限 なし
+  （取り消すまで）」「制限なし」の分岐と、それを確かめていた試験の文面を消した（どの grant も期限と回数を持つ。ADR D4）。
+- 文書: ADR D4 と不変条件、`docs/api/v1/api.md` の forwards の行、`cos-inbox-triage` の §10、`cos-operator` の
+  `operations.md` の取り次ぎの行、統括の役割の節と取り次ぎの節の文を直した。`docs/api/v1/api-v1.schema.json`・
+  `web/api/generated/schema.json`・`docs/protocol/worker-protocol.schema.json` を再生成した。
+
+試験（既存の試験は grant の根拠の発言を取り次ぐ正の経路だけを見ていて、別の発言の取り次ぎと `instructed_by` への流用を
+検出しなかった）:
+
+- task-api の `standing_job_wait_grant_from_the_general_thread_answers_the_project_wait_limit` に足した: 統括 thread の人の
+  別の発言に `grant_id` を付けた取り次ぎは 422、grant 付きの取り次ぎを案件の task の操作の `instructed_by` にすると 422
+  `cos_instruction_invalid`。
+- task-dispatch の `cos_standing_relayed_list_follows_the_grant_of_a_standing_forward`: grant 付きの取り次ぎは grant が生きて
+  いる間だけ一覧に載り（`grant_id` つき）、人が取り消すと消える。
+- task-worker の `cos_chat_prompt_relayed_section_lists_live_relays_with_ids_and_scope` に grant 付きの行の文面を足した。
+
+commit: 「phase 1: grant 付きの取り次ぎを grant の根拠の発言に限り、instructed_by に使わせない」。
+
 ## D4 の実装前 brief
 
 1. 根本原因: ledger は案件・期限 366 日に限られ、取り次ぎは task と期限を必須にしていた。恒久の人の委任を表せず、job 待ちの
@@ -267,11 +300,8 @@ commit: 「phase 1: 覚え書きの page を KB のガードが受ける environ
 
 ## 未解決事項
 
-- review の advisory のうち次の 2 件は直していない: `CosStandingGrant` の `expires_at`・`budget_remaining` が Option の
-  まま。grant の使用の監査（`record_grant_use`）は代答と別の transaction で、時刻に `now_utc` を直接使う。
-  prompt に入れる取り次ぎの一覧（`chat_relayed_instructions`）は期限だけを見て、取り消した grant の取り次ぎも一覧に残る
-  （`instructed_by` は `forward_gap` で grant を照合するので根拠にはならない）。operations.md・Core の旧い書き方
-  （attempt 5 の advisory (2)）は attempt 6 で直した。
+- grant の使用の監査（`record_grant_use`）は代答と別の transaction で、時刻に `now_utc` を直接使う（attempt 4 の advisory。
+  直していない）。取り次ぎの一覧の grant の照合と `CosStandingGrant` の Option は attempt 7 で直した。
 - 種 #2〜#5 に当たる分類（node 障害での継続・衝突の統合・計画の承認）は未実装。
 - `environment/celeris/cos-memory.md` の初期の本文は未作成（KB の変更は人の確認を通す）。
 - 実物 K4 の明示指定試験（attempt 2）は完走を確かめていない。
@@ -280,7 +310,5 @@ commit: 「phase 1: 覚え書きの page を KB のガードが受ける environ
 
 1. 定型の代答の分類を足す: `plan_conforms`（計画の承認）、衝突の統合、node 障害での実験の継続。足すたびに migration で
    CHECK を作り直し、basis の各 category の検査で grant の効果（何を人に回さなくなるか）を決める。
-2. 取り次ぎの有効性の判定を 1 つにする: `chat` の module の行を減らしてから、`chat` の中に期限と grant をまとめた判定を置き、
-   `chat_relayed_instructions` と `instructed_by` が同じ判定を使う（`authority` から `chat` を参照すると `deps.cycle` が fail する）。
-3. `record_grant_use` を代答と同じ transaction にし、時刻を注入した時計から取る。
+2. `record_grant_use` を代答と同じ transaction にし、時刻を注入した時計から取る。
 - 統括 CoS の relay の期限切れ（4〜48 時間）で人に戻った件数を、D4 の配備の前後で `authority_audit` と受信箱の件数で比べる。

@@ -228,8 +228,8 @@ const INBOX_RELAY_RULES: &str = "## 受信箱の件への回答（relay）\n\
      - どの件のどの選択肢（条件）かを特定する。候補が 2 つ以上か選択肢が読めなければ、operation を出さずに返事で聞き返す。\n\
      - 特定できたら OP で件の回答の経路を呼ぶ: key `relay-<item id>-<message id>`、追加の欄 `\"instructed_by\":\"<message id>\",`、\
      body `{\"option\":\"<key>\",\"note\":\"<人が付けた条件>\"}`。\n\
-     - `instructed_by` は**この run の人の入力、または同スレッドの有効な取り次ぎ**の message id だけ。\
-     案件・task・期限外は 422 `cos_instruction_invalid`。\
+     - `instructed_by` は**この run の人の入力、または同スレッドの有効な取り次ぎ（grant の付かないもの）**の message id だけ。\
+     案件・task・期限外と grant の付いた取り次ぎは 422 `cos_instruction_invalid`。\
      人の指示の無い件を自分の判断で答えるときは付けない。\n\
      - 「人待ち」の件は `/cos/inbox/{i}/resolve` では閉じられない。\n\
      - 返事にはどの件にどう答えたか（件名・選択肢・operation の id と state）を書く。\n\n";
@@ -394,17 +394,27 @@ fn projects_section(chat: &CosChatContext) -> String {
 }
 
 /// ADR 2026-10-27-relayed-instructions D4: the person's instructions relayed into this thread
-/// that are still in scope. CoS may cite one as `instructed_by` from any run of the thread.
+/// that are still in scope. CoS may cite one as `instructed_by` from any run of the thread,
+/// except a standing forward, which acts through its grant (2026-11-11-cos-standing-context D4).
 fn relayed_section(chat: &CosChatContext) -> String {
     if chat.relayed_instructions.is_empty() {
         return String::new();
     }
     let mut out = String::from(
         "## 取り次がれた人の指示 (relayed instructions, newest first)\n\
-         外部 operator・MCP client が人の発言の原文を取り次いだもの。期限内で、範囲が件の task を含むなら、\
-         この run の入力でなくても `instructed_by` にその message id を付けて根拠にできる。\n",
+         外部 operator・MCP client・統括 CoS が人の発言の原文を取り次いだもの。期限内で、範囲が件の task を含むなら、\
+         この run の入力でなくても `instructed_by` にその message id を付けて根拠にできる。\
+         grant の付いた取り次ぎ（常設の指示）は `instructed_by` に使えない。grant の分類の件だけを、grant の id を\
+         根拠（basis の refs など）に挙げて扱う。\n",
     );
     for r in &chat.relayed_instructions {
+        if let Some(grant) = &r.grant_id {
+            out.push_str(&format!(
+                "- seq {} (message {}) {} が {} の人の発言を取り次ぎ（grant `{grant}` の常設の指示）: 「{}」\n",
+                r.seq, r.message_id, r.relayed_by, r.said_at, r.text
+            ));
+            continue;
+        }
         let tasks = if r.task_ids.is_empty() {
             "この案件全体".to_string()
         } else {

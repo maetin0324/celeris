@@ -256,3 +256,109 @@ async fn a_parent_waiting_in_review_does_not_stall_its_child() {
     assert_eq!(status(&f.store, next.id), Status::Ready);
     assert_eq!(f.d.scratch.admission.notes(), 1);
 }
+
+/// attempt 9 の review の指摘: 待たせた task は待ちの理由 M12（`TaskWait::DiskForecast`）を持つ。理由が無いと、停滞の
+/// 判定が「ready のまま run も待ちの理由も無い」task として `task_unscheduled_secs`（既定 1800 秒）の後に受信箱へ出し、
+/// task の `runnable` も true のままになる。上の試験は通知（`notice_list`）しか見ず、停滞の判定と受信箱を検出できない。
+/// 時刻は注入した時計（`test_now`）で 2 時間進める。
+#[tokio::test]
+async fn a_held_run_has_a_wait_reason_and_never_becomes_task_unscheduled() {
+    use task_ops::stagnation::{StagnationKind, StagnationPolicy};
+    let mut f = fixture(150 * GB, Vec::new());
+    let policy = StagnationPolicy {
+        task_unscheduled_secs: 1800,
+        ..Default::default()
+    };
+    f.d.set_stagnation(policy.clone(), 60);
+    let (tx, rx) = tokio::sync::watch::channel(None);
+    f.d.set_snapshot_publisher(SnapshotPublisher {
+        tx,
+        instance_id: "inst-1".into(),
+        hostname: "host-1".into(),
+        started_at: "2026-11-12T00:00:00Z".into(),
+        tick_ms: 50,
+    });
+    let clock = Arc::new(StdMutex::new(OffsetDateTime::now_utc()));
+    f.d.test_now = Some(clock.clone());
+    let root = f._root.path().to_path_buf();
+    let (a, repo) = rust_task(&root, "a");
+    let (b, _) = rust_task(&root, "b");
+    let b = Task {
+        workspace: a.workspace.clone(),
+        ..b
+    };
+    f.inputs.lock().unwrap().samples = vec![sample("task-old", &repo, false, 100 * GB)];
+    f.store.insert(&a).unwrap();
+    f.d.tick().unwrap();
+    assert_eq!(status(&f.store, a.id), Status::Running);
+    f.inputs.lock().unwrap().samples = vec![
+        sample("task-old", &repo, false, 100 * GB),
+        sample(&format!("task-{}", a.id), &repo, true, 65 * GB),
+    ];
+    f.store.insert(&b).unwrap();
+    f.d.tick().unwrap();
+    let later = *clock.lock().unwrap() + time::Duration::hours(2);
+    *clock.lock().unwrap() = later;
+    f.d.tick().unwrap();
+    assert_eq!(status(&f.store, b.id), Status::Ready);
+    // task の待ち（snapshot・一覧・詳細と同じ合わせ方）に M12 が出て、走れるとは見えない。
+    let memory = task_ops::wait::MemoryWaits::from_waits(
+        f.d.snapshot_task_waits()
+            .into_iter()
+            .map(|w| (w.task_id, w.wait)),
+    );
+    let task_b = f.store.get(b.id).unwrap().unwrap();
+    let waits = task_ops::wait::task_waits_one(f.store.as_ref(), &task_b, &memory).unwrap();
+    assert!(
+        matches!(&waits[..], [TaskWait::DiskForecast { need_bytes, detail }]
+            if *need_bytes == 100 * GB && detail.contains("reserve")),
+        "{waits:?}"
+    );
+    assert!(!task_ops::wait::is_runnable(&task_b, &waits));
+    // 停滞の判定は b を拾わない。メモリの待ちが無ければ拾う（この試験が漏れを検出できること）。
+    let unscheduled = |findings: &[task_ops::stagnation::StagnationFinding]| {
+        findings
+            .iter()
+            .any(|x| x.kind == StagnationKind::TaskUnscheduled && x.task_id == Some(b.id))
+    };
+    assert!(!unscheduled(&f.d.stagnation.findings));
+    let none = std::collections::HashSet::new();
+    let facts = |memory: &task_ops::wait::MemoryWaits| {
+        task_ops::stagnation::gather(f.store.as_ref(), None, &policy, later, &none, &none, memory)
+            .unwrap()
+    };
+    let without_memory = facts(&task_ops::wait::MemoryWaits::default());
+    assert!(unscheduled(&task_ops::stagnation::detect(
+        &without_memory,
+        &policy,
+        later
+    )));
+    // 受信箱にも出ない。
+    let snapshot = rx.borrow().clone();
+    let inbox = task_ops::human_inbox::human_inbox(
+        f.store.as_ref(),
+        snapshot.as_ref(),
+        &task_ops::view::ViewContext {
+            workspace_roots: task_core::local_machine::WorkspaceRoots::new(
+                PathBuf::from("/nonexistent"),
+                None,
+            ),
+            retry_backoff_base: Duration::ZERO,
+            retry_backoff_max: Duration::ZERO,
+            max_requeues: 5,
+            clusters: Default::default(),
+        },
+        later,
+        &|_, _| Vec::new(),
+    )
+    .unwrap();
+    assert!(
+        !inbox.items.iter().any(|i| {
+            i.kind == task_ops::human_inbox::InboxKind::TaskUnscheduled
+                || i.task.as_ref().is_some_and(|t| t.id == b.id)
+        }),
+        "{:?}",
+        inbox.items.iter().map(|i| i.kind).collect::<Vec<_>>()
+    );
+    assert_eq!(f.d.scratch.admission.notes(), 1);
+}

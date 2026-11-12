@@ -78,6 +78,12 @@ run を起こす前（write-set の判定の後、lease の前）に、次の不
 - **呼び出し**: `Gate::holds_run`（`dispatch_run.rs` から `&self` で呼ぶ。状態は `Gate` の中の Mutex）。Dispatcher の field・method は増やさない（health の `size.responsibility-growth`）。試験は `Gate.probe` で空きと大きさを注入する。
 - **記録**: 待たせた run（task と WU）ごとに、待ち始めに 1 回だけ `tracing::info!`（`disk forecast: run held`）を
   残す。受信箱・通知には出さない。run が始まる・task が `ready` でなくなると記録を消す。
+- **待ちの理由**: 待たせた run の task には、pass ごとに待ちの理由 `TaskWait::DiskForecast { need_bytes, detail }`
+  （[ADR 2026-10-11-task-wait-reasons](2026-10-11-task-wait-reasons.md) の M12。`detail` は判定の式の値）を
+  `dispatch_waits` に入れる（同 D4: `dispatch_one` が `Ok(false)` で見送る箇所ごとに理由を入れる）。理由は
+  `Gate::hold` が待たせている run の記録と同じ判定から作って返し（`Gate::holds_run` → `note_dispatch_wait`）、
+  別に推測しない。task の `waits` に出て `runnable` は false になり、停滞の判定（`task_unscheduled`）は待ちのある
+  task として拾わない（受信箱に出ない）。
 - 旧い挙動（今の空きだけで決める dispatch）は残さない。`check_disk_space` の全体停止（D2 の下限を割ったら全部止める）
   はこの判定の前段としてそのまま働く。
 
@@ -143,6 +149,16 @@ owner と release-build を含む）を実装に合わせた。
 の `running` は `grows` に改め、増分の予約だけを意味する。(2) 判定の owner を dispatcher の run の鍵（phase のある WU は
 すべて `Some`）から作っていたので、Task の worktree を共有する WU の続きが見込み全体で判定され、通した分が走査の owner と
 一致せず run の終わりまで二重に数えられた。worker と同じ `Owner::of_run` に WU の worktree を決めた後の値を渡す。
+
+付記（2026-11-12、attempt 9 の review の指摘）: 待たせた task は `Gate` の記録（scratch の status の `held`）にしか
+理由が無く、task の待ちの正本である dispatcher の `dispatch_waits` に入っていなかった。そのため task の `waits` は空で
+`runnable` は true のまま、停滞の判定（`snapshot_task_waits` を memory に使う）は「ready のまま run も待ちの理由も
+無い」task として `task_unscheduled_secs`（既定 1800 秒）の後に受信箱の `task_unscheduled` に出した。待たせている間
+task は event を書かず、Rust の run は 30 分より長く走ることが多いので、本番の既定で起きる。待ちの理由 M12
+（`TaskWait::DiskForecast`）を足し、`Gate::hold` が待たせる判定と同じ値から作って返す（D1「待ちの理由」）。scratch の
+status の `held`（WU・owner・repo・待ち始めを持つ）と task の待ち（task ごとに 1 件）は、どちらもこの 1 回の判定の
+結果で、別々に判定しない。`ScratchAdmissionView.running_growth_bytes` の説明に残っていた `owners` の `running`
+（attempt 8 で `grows` に改名）も直した。
 
 ## 結果
 

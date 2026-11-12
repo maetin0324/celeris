@@ -12,6 +12,9 @@
 //!   書かず、待っても終わらないので書き手に数えない（attempt 7 の review の指摘）。owner は worker と同じ
 //!   （[`task_worker::scratch::Owner::of_run`]）。
 //! - D2: 予備（空きの下限）は filesystem の容量 × `[dispatch] min_free_disk_pct`（[`min_free_bytes`]）。
+//! - D1「記録」: 待たせた run の判定は task の待ちの理由 `TaskWait::DiskForecast`（ADR 2026-10-11-task-wait-reasons の M12）
+//!   として返し、dispatcher がその場で `dispatch_waits` に入れる（[`Gate::holds_run`]）。task の `waits`・`runnable`・停滞の
+//!   判定は待ちとして見る（理由の無い `ready` として受信箱の `task_unscheduled` に出ない）。
 //! - D4: 見込みは `ScratchStatus.admission`（[`forecast`]）。待たせている run の正本は daemon の [`Gate`] のメモリだけで、
 //!   file には書かない（同じ pool を見る verify の daemon が上書きできない）。daemon の snapshot
 //!   （`GET /api/v1/metrics/scratch`）を組むときに [`Gate::with_held`] で `held` を埋める。pool の走査だけで組む status
@@ -25,7 +28,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
-use task_core::{Task, WorkUnitRow, WorkspaceSpec};
+use task_core::{Task, TaskWait, WorkUnitRow, WorkspaceSpec};
 
 use task_ops::daemon::{
     ScratchAdmissionView, ScratchHeldRunView, ScratchOwnerForecastView, ScratchOwnerView,
@@ -313,7 +316,8 @@ impl Gate {
     }
 
     /// D1 の dispatch からの入口: Local の task で、測った見込みがあるときだけ `repo_of`（run の cargo の target を
-    /// 結び付ける checkout の source）を引いて [`Gate::hold`] で判定する。待たせるなら `true`。`work_unit_id` は
+    /// 結び付ける checkout の source）を引いて [`Gate::hold`] で判定する。待たせるなら task の待ちの理由（呼び手が
+    /// `dispatch_waits` に入れる）。`work_unit_id` は
     /// dispatcher の run の鍵（phase のある WU）、`target_work_unit` は worker の `CARGO_TARGET_DIR` の owner の WU
     /// （自分の worktree を持つ WU だけ。task の worktree を共有する WU は `None`）。
     pub fn holds_run(
@@ -323,19 +327,14 @@ impl Gate {
         work_unit_id: Option<&str>,
         target_work_unit: Option<&WorkUnitRow>,
         repo_of: impl FnOnce() -> Option<PathBuf>,
-    ) -> bool {
+    ) -> Option<TaskWait> {
         if !matches!(task.workspace, WorkspaceSpec::Local { .. }) {
-            return false;
+            return None;
         }
-        let Some(view) = self
+        let view = self
             .forecast(view)
-            .filter(|v| !v.expected_by_repo.is_empty())
-        else {
-            return false;
-        };
-        let Some(repo) = repo_of() else {
-            return false;
-        };
+            .filter(|v| !v.expected_by_repo.is_empty())?;
+        let repo = repo_of()?;
         let repo_key = task_worker::build_cache::repo_cache_key(&repo);
         let id = task.id.to_string();
         let target_work_unit = target_work_unit.map(|w| w.id.as_str());
@@ -350,9 +349,10 @@ impl Gate {
         )
     }
 
-    /// D1: run（task・WU。dispatcher の run の鍵）を待たせるなら `true`。`owner` はその run の `CARGO_TARGET_DIR` の
-    /// owner（worker と同じ [`task_worker::scratch::Owner::of_run`]）。待ち始めに 1 回だけ log を残す（受信箱・通知には
-    /// 出さない）。通した run は、走査（`view`）に増分を持つ owner として出るまで見込みを数え続ける。
+    /// D1: run（task・WU。dispatcher の run の鍵）を待たせるなら、その task の待ちの理由（`TaskWait::DiskForecast`。
+    /// 待たせている run の記録と同じ判定から作る）。`owner` はその run の `CARGO_TARGET_DIR` の owner（worker と同じ
+    /// [`task_worker::scratch::Owner::of_run`]）。待ち始めに 1 回だけ log を残す（受信箱・通知には出さない）。通した run
+    /// は、走査（`view`）に増分を持つ owner として出るまで見込みを数え続ける。
     pub fn hold(
         &self,
         view: &ScratchAdmissionView,
@@ -361,7 +361,7 @@ impl Gate {
         owner: &str,
         repo_key: &str,
         now: SystemTime,
-    ) -> bool {
+    ) -> Option<TaskWait> {
         let owner = owner.to_string();
         let key: HoldKey = (task_id.to_string(), work_unit_id.map(str::to_string));
         let growing: Vec<&str> = view
@@ -387,12 +387,12 @@ impl Gate {
         match decide(view, &owner, repo_key, admitted_bytes, writers) {
             Decision::Skip => {
                 st.holds.remove(&key);
-                false
+                None
             }
             Decision::Admit { need_bytes } => {
                 st.holds.remove(&key);
                 st.admitted.insert(key, (owner, need_bytes));
-                false
+                None
             }
             Decision::Hold { need_bytes, reason } => {
                 st.seen.insert(key.clone());
@@ -412,11 +412,14 @@ impl Gate {
                         owner,
                         repo_key: repo_key.to_string(),
                         need_bytes,
-                        reason,
+                        reason: reason.clone(),
                         since,
                     },
                 );
-                true
+                Some(TaskWait::DiskForecast {
+                    need_bytes,
+                    detail: reason,
+                })
             }
         }
     }

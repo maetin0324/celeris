@@ -28912,7 +28912,7 @@
           "type": "integer"
         },
         "running_growth_bytes": {
-          "description": "target を今書いている owner（`owners` の `running`）がこれから増える見込みの合計。daemon が通したが worker の lease が\nまだ走査に出ない run の見込みは含まない（daemon の判定のメモリだけが数え、待たせた run の `reason` の `admitted` に出る）。",
+          "description": "増分を予約する owner（`owners` の `grows`）がこれから増える見込みの合計。daemon が通したが worker の lease が\nまだ走査に出ない run の見込みは含まない（daemon の判定のメモリだけが数え、待たせた run の `reason` の `admitted` に出る）。",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -33746,6 +33746,29 @@
           "required": [
             "kind",
             "path"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "M12（ADR 2026-11-11-disk-aware-dispatch D1）: 空きの見込みが予備を割るので、新しい cargo の target を作る run を\n始めない。`need_bytes` はこの run の見込み（disk 上の量）、`detail` は判定の式の値。",
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "disk_forecast",
+              "type": "string"
+            },
+            "need_bytes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "need_bytes",
+            "detail"
           ],
           "type": "object"
         },

@@ -417,12 +417,13 @@ impl Dispatcher {
             Some(w) => Some(w.workspaces.clone()),
             None => worktree,
         };
-        // ADR 2026-11-11-disk-aware-dispatch D1: 見込みが予備を割るなら ready のまま待たせる（owner は worker の target の WU）。
+        // ADR 2026-11-11-disk-aware-dispatch D1: 見込みが予備を割るなら ready のまま待たせ、待ちの理由 M12 を残す。
         let target_wu = wu_workspace.as_ref().and(v2_wu.as_ref());
         let (view, wu) = (self.scratch.view.as_ref(), run_key.work_unit.as_deref());
         let repo_of = || self.cargo_target_repo(&task).map(|r| r.source);
         let gate = (!is_planner_dispatch).then_some(&self.scratch.admission);
-        if gate.is_some_and(|g| g.holds_run(view, &task, wu, target_wu, repo_of)) {
+        if let Some(wait) = gate.and_then(|g| g.holds_run(view, &task, wu, target_wu, repo_of)) {
+            self.note_dispatch_wait(task.id, wait);
             return Ok(false);
         }
         // Capture before any worker can write; retries load the same WU-id snapshot.

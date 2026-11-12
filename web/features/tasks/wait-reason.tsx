@@ -59,6 +59,8 @@ export function waitReason(wait: TaskWait): string {
       return "再試行待ち";
     case "disk_critical":
       return "空き容量の回復待ち";
+    case "disk_forecast":
+      return `空き容量の見込み待ち（必要 ${(wait.need_bytes / 1e9).toFixed(1)} GB）`;
     case "delegated_children":
       return `委譲した子 ${wait.task_ids.length} 件待ち`;
     case "review_awaiting_human":

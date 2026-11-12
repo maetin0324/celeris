@@ -6664,6 +6664,10 @@ export type TaskWait = {
   "kind": "disk_critical";
   "path": string;
 } | {
+  "detail": string;
+  "kind": "disk_forecast";
+  "need_bytes": number;
+} | {
   "kind": "delegated_children";
   "task_ids": Array<TaskId>;
 } | {

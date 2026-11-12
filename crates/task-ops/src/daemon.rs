@@ -347,7 +347,7 @@ pub struct ScratchAdmissionView {
     pub reserve_bytes: u64,
     /// 見かけの大きさを disk 上の量に直す係数（`[scratch] forecast_disk_ratio`）。
     pub ratio: f64,
-    /// target を今書いている owner（`owners` の `running`）がこれから増える見込みの合計。daemon が通したが worker の lease が
+    /// 増分を予約する owner（`owners` の `grows`）がこれから増える見込みの合計。daemon が通したが worker の lease が
     /// まだ走査に出ない run の見込みは含まない（daemon の判定のメモリだけが数え、待たせた run の `reason` の `admitted` に出る）。
     pub running_growth_bytes: u64,
     /// repo ごとの見込み（target が pool にある同じ `repo_key` の owner の測った大きさの最大。GC の推定と同じ定義）。

@@ -75,6 +75,17 @@ updated: 2026-11-12
   11 件 skip、壁時計 445 秒、開始 load 0.7・終了 load 12）。
 - 範囲の check は同じ 2 file で exit 1。許可の正規表現を `[a-z0-9_/]+\.rs$` にした写しでは範囲外の path が 0 件。
 
+## 3 回目の run（run 01M78ZG0JC）: 範囲の check の再不合格
+
+celeris の範囲の check は 2 回目の run の後も同じ正規表現 `[a-z_/]+\.rs$` のままで、同じ 2 file
+（`cos_live_fix_d4.rs`・`credential_e2e.rs`）で exit 1 だった。コードは変えていない。
+
+- 同じ check を作業ツリーで実行: exit 1、範囲外は上の 2 file だけ。許可を `[a-z0-9_/]+\.rs$` にした写しでは範囲外 0 件。
+- `cargo nextest run -p task-dispatch --lib --no-fail-fast -E 'test(structure_guard_) | test(phase_effect_ab) | test(integration_ready_race) | test(cos_live_fix_d4) | test(credential_e2e)'`:
+  38 件すべて合格。
+- 2 file の変更は `d.test_now` → `d.test_hooks.now` の 4 行だけで、field を消す受け入れ条件 0 に要る。file 名を変えて check を
+  避けることはしない（規約 9）。この run は done を返さず plan_issue（許可の正規表現を `[a-z0-9_/]+\.rs$` に広げる）を申告する。
+
 ## 未解決事項
 
 - 範囲の check の正規表現 `crates/task-dispatch/(src|tests)/[a-z_/]+\.rs$` は file 名の数字を許さない。`cos_live_fix_d4.rs`（3 行）と

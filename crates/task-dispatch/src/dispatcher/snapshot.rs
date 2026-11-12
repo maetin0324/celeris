@@ -74,23 +74,19 @@ impl Dispatcher {
                 host: spec.host.clone(),
                 concurrency: spec.concurrency,
                 in_use: self.cluster_in_use(&spec.id) as u32,
-                connected: self
-                    .cluster_connected
-                    .get(&spec.id)
-                    .copied()
-                    .unwrap_or(false),
+                connected: self.cluster.connected(&spec.id).unwrap_or(false),
                 cooldown_until: self
-                    .cluster_cooldown
-                    .get(&spec.id)
-                    .filter(|until| **until > now_instant)
+                    .cluster
+                    .cooldown_until(&spec.id)
+                    .filter(|until| *until > now_instant)
                     .map(|until| rfc3339(now + until.saturating_duration_since(now_instant))),
                 auth: spec.auth.clone(),
-                connect_pending: self.connect_pending_clusters.contains(&spec.id),
+                connect_pending: self.cluster.connect_pending(&spec.id),
                 // ADR-0053 D3（Phase 66）: トンネル（forward）の生存。`forwards` が無いクラスタは空。
-                tunnel_login_needed: self.cluster_login_needed.contains(&spec.id),
+                tunnel_login_needed: self.cluster.login_needed(&spec.id),
                 connection_stats: self
-                    .cluster_conn
-                    .get(&spec.id)
+                    .cluster
+                    .conn_state(&spec.id)
                     .map(|c| c.stats.clone())
                     .unwrap_or_default(),
                 tunnel_forwards: spec
@@ -140,9 +136,10 @@ impl Dispatcher {
             // ADR-0043 D3（Phase 56）: コンテナ実行の設定と起動時の検出。
             containers: Some(task_ops::daemon::ContainersLive {
                 preference: self.config.containers.preference.as_str().to_string(),
-                runtime: self.container_probe.program().map(str::to_string),
+                runtime: self.cluster.container_probe().program().map(str::to_string),
                 probes: self
-                    .container_probe
+                    .cluster
+                    .container_probe()
                     .tried
                     .iter()
                     .map(|(runtime, detail)| task_ops::daemon::ContainerProbeView {

@@ -315,9 +315,9 @@ impl Dispatcher {
         };
         if let Some((spec, _, _)) = &cluster {
             if self
-                .cluster_cooldown
-                .get(&spec.id)
-                .is_some_and(|until| *until > now)
+                .cluster
+                .cooldown_until(&spec.id)
+                .is_some_and(|until| until > now)
             {
                 // ADR-0018 D2: 人がログインするまで進まないので、待ち対象には数えない（`--until-idle` を止めない）。
                 self.cluster_waiting.insert(task.id);
@@ -329,11 +329,7 @@ impl Dispatcher {
                 return Ok(false);
             }
             // この tick の `refresh_cluster_liveness` の結果を使う（1 tick に 1 回だけ `ssh -O check` を呼ぶ）。
-            let alive = self
-                .cluster_connected
-                .get(&spec.id)
-                .copied()
-                .unwrap_or(false);
+            let alive = self.cluster.connected(&spec.id).unwrap_or(false);
             if !alive {
                 let spec = spec.clone();
                 // ADR-0032 D3: `auth = "publickey"` かつ接続フックがあれば、cooldown にする前に

@@ -204,7 +204,7 @@ async fn tick_until(d: &mut Dispatcher, mut pred: impl FnMut(&Dispatcher) -> boo
                 "condition not reached within {:?} ({ticks} ticks, in_flight {}, polls in flight {})",
                 STATE_WAIT_GUARD,
                 d.in_flight(),
-                d.cluster_job_polls.len()
+                d.cluster.job_polls_in_flight()
             );
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -213,16 +213,16 @@ async fn tick_until(d: &mut Dispatcher, mut pred: impl FnMut(&Dispatcher) -> boo
 
 /// 走っている poll の結果を tick が拾い終えるまで待つ（poll のスレッドの完了は scheduler 任せなので出来事で待つ）。
 async fn settle_polls(d: &mut Dispatcher) {
-    tick_until(d, |d| d.cluster_job_polls.is_empty()).await;
+    tick_until(d, |d| d.cluster.job_polls_in_flight() == 0).await;
 }
 
 /// 注入時計を進めない tick は、poll の結果を拾うだけで次の poll を起こさない。poll は tick の中で同期に
-/// `cluster_job_polls` へ載るので、1 回の tick の直後に空であれば「起こしていない」が決まる（スレッドの速さに依らない）。
+/// `ClusterRuntime` の poll の受け口へ載るので、1 回の tick の直後に空であれば「起こしていない」が決まる（スレッドの速さに依らない）。
 fn tick_starts_no_poll(d: &mut Dispatcher) {
-    assert!(d.cluster_job_polls.is_empty(), "a poll is still in flight");
+    assert!((d.cluster.job_polls_in_flight() == 0), "a poll is still in flight");
     d.tick().unwrap();
     assert!(
-        d.cluster_job_polls.is_empty(),
+        (d.cluster.job_polls_in_flight() == 0),
         "a tick started a poll before poll_secs passed"
     );
 }
@@ -312,7 +312,7 @@ async fn a_wait_parks_the_task_polls_and_resumes_as_a_continuation() {
     advance(&d, 31);
     // 2 回目の poll を起こし、その結果を tick が拾い終えるまで待つ（結果の反映前に event を数えない）。
     tick_until(&mut d, |d| {
-        polls.lock().unwrap().len() == 2 && d.cluster_job_polls.is_empty()
+        polls.lock().unwrap().len() == 2 && (d.cluster.job_polls_in_flight() == 0)
     })
     .await;
     tick_starts_no_poll(&mut d);
@@ -423,7 +423,7 @@ async fn verify_mode_neither_polls_nor_resumes_nor_times_out_a_cluster_job_wait(
     tick_until(&mut d, |d| {
         store.get(id).unwrap().unwrap().status == Status::Blocked
             && polls.lock().unwrap().len() == 1
-            && d.cluster_job_polls.is_empty()
+            && (d.cluster.job_polls_in_flight() == 0)
     })
     .await;
     let before_task = store.get(id).unwrap().unwrap();
@@ -442,7 +442,7 @@ async fn verify_mode_neither_polls_nor_resumes_nor_times_out_a_cluster_job_wait(
         for _ in 0..3 {
             d.tick().unwrap();
             assert!(
-                d.cluster_job_polls.is_empty(),
+                (d.cluster.job_polls_in_flight() == 0),
                 "verify started a cluster job poll"
             );
         }
@@ -916,7 +916,7 @@ async fn notice_wait_resumes_by_notice_only_and_once() {
 
     for _ in 0..3 {
         advance(&d, 31);
-        tick_until(&mut d, |d| d.cluster_job_polls.is_empty()).await;
+        tick_until(&mut d, |d| d.cluster.job_polls_in_flight() == 0).await;
     }
     assert!(
         *calls.lock().unwrap() >= 1,

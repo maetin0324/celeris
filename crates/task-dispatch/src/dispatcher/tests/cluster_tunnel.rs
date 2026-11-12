@@ -69,7 +69,7 @@ async fn cluster_and_provider_concurrency_are_both_enforced() {
             job_wait: Default::default(),
         },
     );
-    if !control_master_alive_blocking(&["ssh".to_string()], "celeris-localhost") {
+    if !task_worker::control_master_alive_blocking(&["ssh".to_string()], "celeris-localhost") {
         eprintln!("skip: celeris-localhost への多重接続が無い");
         return;
     }
@@ -419,22 +419,22 @@ fn probe_failures_keep_the_master_until_three_in_a_row() {
     for round in 1..=2 {
         liveness_round(&mut d, "sirius");
         assert_eq!(
-            d.cluster_connected.get("sirius"),
+            d.cluster.connected_mut().get("sirius"),
             Some(&true),
             "round {round}: 1〜2 回の失敗では接続中のまま"
         );
     }
     liveness_round(&mut d, "sirius");
-    assert_eq!(d.cluster_connected.get("sirius"), Some(&false));
+    assert_eq!(d.cluster.connected_mut().get("sirius"), Some(&false));
     assert!(
-        d.cluster_disconnect_info
+        d.cluster.disconnect_info_map()
             .get("sirius")
             .is_some_and(|info| info.detail.contains("3 times in a row")),
         "{:?}",
-        d.cluster_disconnect_info
+        d.cluster.disconnect_info_map()
     );
     liveness_round(&mut d, "sirius");
-    assert_eq!(d.cluster_connected.get("sirius"), Some(&false));
+    assert_eq!(d.cluster.connected_mut().get("sirius"), Some(&false));
     assert_eq!(probe_calls.load(std::sync::atomic::Ordering::SeqCst), 4);
     let log = connection_log(&store);
     let kinds: Vec<(&str, Option<&str>)> = log
@@ -453,8 +453,8 @@ fn probe_failures_keep_the_master_until_three_in_a_row() {
     liveness_round(&mut d, "sirius");
     // この巡の頭ではまだ `probe_dead`（結果を拾う前）なので false のまま。結果を拾った次の巡で戻る。
     liveness_round(&mut d, "sirius");
-    assert_eq!(d.cluster_connected.get("sirius"), Some(&true));
-    let stats = &d.cluster_conn["sirius"].stats;
+    assert_eq!(d.cluster.connected_mut().get("sirius"), Some(&true));
+    let stats = &d.cluster.conn_map()["sirius"].stats;
     assert_eq!(stats.losses, 1);
     assert_eq!(stats.losses_by_cause.get("probe_failed"), Some(&1));
     assert_eq!(stats.connects_borrowed, 2);
@@ -486,19 +486,19 @@ fn a_slow_probe_does_not_block_the_liveness_refresh() {
     ));
     let started = Instant::now();
     d.refresh_cluster_liveness();
-    d.last_cluster_liveness = None;
+    *d.cluster.last_liveness_mut() = None;
     d.refresh_cluster_liveness();
     let elapsed = started.elapsed();
     // probe はまだ走っている（結果を拾っていない）ことを先に確かめてから時間を判定する。
-    assert!(d.cluster_conn["sirius"].probe_inflight.is_some());
+    assert!(d.cluster.conn_map()["sirius"].probe_inflight.is_some());
     assert!(
         elapsed < Duration::from_secs(5),
         "refresh waited for the probe: {elapsed:?}"
     );
-    assert_eq!(d.cluster_connected.get("sirius"), Some(&true));
+    assert_eq!(d.cluster.connected_mut().get("sirius"), Some(&true));
     release.store(true, std::sync::atomic::Ordering::SeqCst);
     liveness_round(&mut d, "sirius");
-    assert!(d.cluster_conn["sirius"].probe_inflight.is_none());
+    assert!(d.cluster.conn_map()["sirius"].probe_inflight.is_none());
 }
 
 /// ADR-0078 D3-1 / D4: totp のクラスタでは、鍵認証の再接続は切断 1 回につき 1 回だけ。`-O check` が
@@ -531,8 +531,8 @@ fn totp_key_auth_reconnect_is_tried_once_per_outage() {
     }));
     let run_ticks = |d: &mut Dispatcher, n: usize| {
         for _ in 0..n {
-            d.last_cluster_liveness = None;
-            d.last_cluster_tunnel_refresh = None;
+            *d.cluster.last_liveness_mut() = None;
+            *d.cluster.last_tunnel_refresh_mut() = None;
             d.refresh_cluster_liveness();
             d.refresh_cluster_tunnels();
         }
@@ -575,7 +575,7 @@ fn totp_key_auth_reconnect_is_tried_once_per_outage() {
             ("key_auth_attempt", Some("failed")),
         ]
     );
-    let stats = &d.cluster_conn["pegasus"].stats;
+    let stats = &d.cluster.conn_map()["pegasus"].stats;
     assert_eq!(
         (stats.connects_totp, stats.losses, stats.key_auth_attempts),
         (1, 1, 2)
@@ -621,15 +621,15 @@ fn publickey_key_auth_reconnect_backs_off_up_to_five_minutes() {
         "バックオフの間は呼ばない"
     );
     assert_eq!(
-        d.cluster_conn["fern03"].key_auth_backoff,
+        d.cluster.conn_map()["fern03"].key_auth_backoff,
         Duration::from_secs(6)
     );
     // 期限が来たことにして、さらに 2 回失敗させる。
     for _ in 0..2 {
-        d.cluster_conn.get_mut("fern03").unwrap().next_key_auth_at = None;
+        d.cluster.conn_map_mut().get_mut("fern03").unwrap().next_key_auth_at = None;
         assert!(!d.ensure_cluster_master_for_tunnel(&spec));
     }
-    let state = &d.cluster_conn["fern03"];
+    let state = &d.cluster.conn_map()["fern03"];
     assert_eq!(state.key_auth_backoff, Duration::from_secs(24));
     assert_eq!(state.key_auth_failures, 3);
     assert!(state.unavailable_reported);
@@ -656,7 +656,7 @@ fn a_lost_master_is_recorded_and_notified_once_per_transition() {
         up_hook.load(std::sync::atomic::Ordering::SeqCst)
     }));
     let tick_liveness = |d: &mut Dispatcher| {
-        d.last_cluster_liveness = None;
+        *d.cluster.last_liveness_mut() = None;
         d.refresh_cluster_liveness();
     };
     tick_liveness(&mut d);
@@ -677,7 +677,7 @@ fn a_lost_master_is_recorded_and_notified_once_per_transition() {
         .filter(|e| e.kind == TunnelEventKind::LoginNeeded)
         .collect();
     assert_eq!(login_needed.len(), 1);
-    let detail = d.cluster_conn["pegasus"]
+    let detail = d.cluster.conn_map()["pegasus"]
         .last_lost_detail
         .clone()
         .unwrap_or_default();
@@ -696,7 +696,7 @@ fn a_lost_master_is_recorded_and_notified_once_per_transition() {
         }]
     }));
     d.refresh_cluster_master_exits();
-    let stats = &d.cluster_conn["pegasus"].stats;
+    let stats = &d.cluster.conn_map()["pegasus"].stats;
     assert_eq!(stats.losses, 2);
     assert_eq!(stats.losses_by_cause.get("master_exited"), Some(&1));
     assert_eq!(stats.connects_borrowed, 2);
@@ -743,12 +743,12 @@ fn a_restarted_dispatcher_borrows_the_surviving_master_and_keeps_the_counts() {
 
     let mut after = make(store.clone(), connector_calls.clone());
     for _ in 0..5 {
-        after.last_cluster_liveness = None;
-        after.last_cluster_tunnel_refresh = None;
+        *after.cluster.last_liveness_mut() = None;
+        *after.cluster.last_tunnel_refresh_mut() = None;
         after.refresh_cluster_liveness();
         after.refresh_cluster_tunnels();
     }
-    assert_eq!(after.cluster_connected.get("pegasus"), Some(&true));
+    assert_eq!(after.cluster.connected_mut().get("pegasus"), Some(&true));
     assert!(after.clusters_needing_login().is_empty());
     assert_eq!(connector_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     let counts_after =
@@ -756,7 +756,7 @@ fn a_restarted_dispatcher_borrows_the_surviving_master_and_keeps_the_counts() {
     assert_eq!(counts_after.connects_totp, 1, "TOTP は増えない");
     assert_eq!(counts_after.connects_borrowed, 1);
     assert_eq!(counts_after.losses, 0);
-    let since_start = &after.cluster_conn["pegasus"].stats;
+    let since_start = &after.cluster.conn_map()["pegasus"].stats;
     assert_eq!(
         (since_start.connects_totp, since_start.connects_borrowed),
         (0, 1)
@@ -958,7 +958,7 @@ async fn tunnel_down_then_key_auth_ok_brings_the_forward_up() {
 
     d.refresh_cluster_tunnels();
 
-    assert_eq!(d.cluster_connected.get("pegasus"), Some(&true));
+    assert_eq!(d.cluster.connected_mut().get("pegasus"), Some(&true));
     assert!(d.clusters_needing_login().is_empty());
     assert_eq!(ensure_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert!(d.tunnel_reachable("pegasus", "127.0.0.1:19001"));
@@ -1013,7 +1013,7 @@ async fn tunnel_down_and_key_auth_fails_marks_login_needed_once() {
 
     // 2 回目の tick（間引きを避けるため、間隔を過ぎさせる）。まだ同じ outage の間なので、
     // login_needed の再検出（新しいイベント）は起きない。
-    d.last_cluster_tunnel_refresh =
+    *d.cluster.last_tunnel_refresh_mut() =
         Some(Instant::now() - CLUSTER_LIVENESS_INTERVAL - Duration::from_millis(1));
     d.refresh_cluster_tunnels();
     assert_eq!(d.clusters_needing_login(), vec!["pegasus".to_string()]);
@@ -1051,7 +1051,7 @@ async fn tunnel_listener_absent_is_re_added() {
             "bnode150:19003",
         ),
     );
-    d.cluster_connected.insert("pegasus".into(), true);
+    d.cluster.connected_mut().insert("pegasus".into(), true);
     let ensure_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let listener_present = Arc::new(std::sync::atomic::AtomicBool::new(true));
     let ensure_calls_hook = ensure_calls.clone();
@@ -1077,7 +1077,7 @@ async fn tunnel_listener_absent_is_re_added() {
 
     // listener が消える（誰かが master 側を再起動した、等）。
     listener_present.store(false, std::sync::atomic::Ordering::SeqCst);
-    d.last_cluster_tunnel_refresh =
+    *d.cluster.last_tunnel_refresh_mut() =
         Some(Instant::now() - CLUSTER_LIVENESS_INTERVAL - Duration::from_millis(1));
     d.refresh_cluster_tunnels();
     assert_eq!(
@@ -1118,7 +1118,7 @@ async fn tunnel_listener_present_target_unhealthy_does_not_re_add() {
             "bnode150:19004",
         ),
     );
-    d.cluster_connected.insert("pegasus".into(), true);
+    d.cluster.connected_mut().insert("pegasus".into(), true);
     d.set_tunnel_listener_probe(Arc::new(|_listen: &str| true));
     let ensure_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let ensure_calls_hook = ensure_calls.clone();
@@ -1186,7 +1186,7 @@ async fn target_probe_seeds_synchronously_once_then_the_tick_stops_waiting_on_it
             "bnode150:19006",
         ),
     );
-    d.cluster_connected.insert("pegasus".into(), true);
+    d.cluster.connected_mut().insert("pegasus".into(), true);
     d.set_tunnel_listener_probe(Arc::new(|_listen: &str| true));
     d.set_tunnel_forward_ensurer(Arc::new(|_host: &str, _listen: &str, _target: &str| Ok(())));
     let probe_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -1209,7 +1209,7 @@ async fn target_probe_seeds_synchronously_once_then_the_tick_stops_waiting_on_it
 
     // 次の tick（`CLUSTER_LIVENESS_INTERVAL` を過ぎさせる）。probe はもう同期では呼ばれないので、
     // probe が遅くても tick は速い。
-    d.last_cluster_tunnel_refresh =
+    *d.cluster.last_tunnel_refresh_mut() =
         Some(Instant::now() - CLUSTER_LIVENESS_INTERVAL - Duration::from_millis(1));
     let second_started = Instant::now();
     d.refresh_cluster_tunnels();
@@ -1271,7 +1271,7 @@ async fn tunnel_target_unreachable_emits_the_event_once_across_many_ticks() {
             "bnode150:19007",
         ),
     );
-    d.cluster_connected.insert("pegasus".into(), true);
+    d.cluster.connected_mut().insert("pegasus".into(), true);
     d.set_tunnel_listener_probe(Arc::new(|_listen: &str| true));
     d.set_tunnel_forward_ensurer(Arc::new(|_host: &str, _listen: &str, _target: &str| Ok(())));
     d.set_tunnel_probe(Arc::new(|_listen: &str| {
@@ -1283,7 +1283,7 @@ async fn tunnel_target_unreachable_emits_the_event_once_across_many_ticks() {
         // 最初の 1 回だけ同期で種を蒔き、以後は `tunnel_probe_state` の既存の観測を読むだけ
         // （専用スレッドがこのテストの短い実行時間の中で probe をやり直すことは通常無い）。
         // それでもイベントが 1 回しか積まれないことを確かめる。
-        d.last_cluster_tunnel_refresh =
+        *d.cluster.last_tunnel_refresh_mut() =
             Some(Instant::now() - CLUSTER_LIVENESS_INTERVAL - Duration::from_millis(1));
         d.refresh_cluster_tunnels();
     }
@@ -1393,7 +1393,7 @@ async fn verify_mode_does_not_refresh_cluster_tunnels_or_write_a_report() {
     );
     assert!(d.clusters_needing_login().is_empty());
     assert!(d.take_tunnel_events().is_empty());
-    assert_eq!(d.cluster_connected.get("pegasus"), None);
+    assert_eq!(d.cluster.connected_mut().get("pegasus"), None);
 
     let reports_after = store
         .report_list(&task_core::ReportFilter::default())
@@ -1462,9 +1462,9 @@ async fn publickey_cluster_auto_connects_and_dispatch_continues_on_success() {
             "celeris-no-such-host-for-tests-auto-ok".to_string()
         )]
     );
-    assert_eq!(d.cluster_connected.get("auto"), Some(&true));
+    assert_eq!(d.cluster.connected_mut().get("auto"), Some(&true));
     assert!(
-        !d.cluster_cooldown.contains_key("auto"),
+        !d.cluster.cooldown_map_mut().contains_key("auto"),
         "success does not cool the cluster down"
     );
     let events = store.events_for(task.id).unwrap();
@@ -1663,7 +1663,7 @@ async fn cluster_live_carries_auth_and_connect_pending() {
 /// ADR-0018 実装メモ M1: 接続が戻っていれば、その tick で cooldown が解ける。`celeris-localhost` への多重接続が無い環境では skip。
 #[tokio::test]
 async fn cluster_cooldown_is_cleared_once_the_control_master_is_back() {
-    if !control_master_alive_blocking(&["ssh".to_string()], "celeris-localhost") {
+    if !task_worker::control_master_alive_blocking(&["ssh".to_string()], "celeris-localhost") {
         eprintln!("skip: celeris-localhost への多重接続が無い");
         return;
     }
@@ -1697,29 +1697,29 @@ async fn cluster_cooldown_is_cleared_once_the_control_master_is_back() {
             job_wait: Default::default(),
         },
     );
-    d.cluster_cooldown
+    d.cluster.cooldown_map_mut()
         .insert("local".into(), Instant::now() + Duration::from_secs(3600));
     d.refresh_cluster_liveness();
-    assert_eq!(d.cluster_connected.get("local"), Some(&true));
+    assert_eq!(d.cluster.connected_mut().get("local"), Some(&true));
     assert!(
-        !d.cluster_cooldown.contains_key("local"),
+        !d.cluster.cooldown_map_mut().contains_key("local"),
         "cooldown is cleared when the connection is back"
     );
 
     // ADR-0023 D1: 5 秒以内の 2 回目は `ssh -O check` を回さず、前回の結果をそのまま使う。
-    d.cluster_connected.insert("local".into(), false);
+    d.cluster.connected_mut().insert("local".into(), false);
     d.refresh_cluster_liveness();
     assert_eq!(
-        d.cluster_connected.get("local"),
+        d.cluster.connected_mut().get("local"),
         Some(&false),
         "間引いた回は確認し直さない"
     );
     // 前回の確認を古くすると、次の呼び出しで確認し直す。
-    d.last_cluster_liveness =
+    *d.cluster.last_liveness_mut() =
         Some(Instant::now() - CLUSTER_LIVENESS_INTERVAL - Duration::from_millis(1));
     d.refresh_cluster_liveness();
     assert_eq!(
-        d.cluster_connected.get("local"),
+        d.cluster.connected_mut().get("local"),
         Some(&true),
         "間隔を過ぎたら確認し直す"
     );

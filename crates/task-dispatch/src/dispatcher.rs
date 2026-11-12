@@ -78,7 +78,7 @@ use task_worker::{
     NodeContext, OrgNodeContext, PROTOCOL_VERSION, PriorReview, Reachability, RecentWork,
     RoleContext, RunContext, RunLimits, RunOutcome, RunRequest, SshSettings, SshWorkspace,
     SyncMode, Terminal, WorkerAdapter, WorkerMessage, Workspace, WorkspaceError,
-    control_master_alive_blocking, remote_dir_is_resolved, remote_exec_instructions,
+    remote_dir_is_resolved, remote_exec_instructions,
     resolve_remote_dir,
 };
 use time::OffsetDateTime;
@@ -100,10 +100,8 @@ mod cluster_job_wait;
 mod credential_gate;
 mod lane_assist;
 mod tick_steps;
-pub use cluster_job_wait::{
-    ClusterJobNotice, ClusterJobNoticeOutcome, ClusterJobPollRequest, ClusterJobPoller,
-    ssh_cluster_job_poller,
-};
+pub use crate::cluster_runtime::{ClusterJobPollRequest, ClusterJobPoller, ssh_cluster_job_poller};
+pub use cluster_job_wait::{ClusterJobNotice, ClusterJobNoticeOutcome};
 pub use credential_gate::{CredentialGate, CredentialGates};
 pub use decision_log_wire::record_task_decision_log;
 mod auto_leaf;
@@ -157,7 +155,7 @@ mod write_set_gate;
 /// ADR-0130 D2: run / WU の actual write-set の採取と保存。
 mod write_set_record;
 
-pub use cluster::{
+pub use crate::cluster_runtime::{
     ClusterCommandProbe, ClusterConnector, ClusterForwardSpec, ClusterLivenessProbe,
     ClusterMasterExit, ClusterMasterWatcher, ClusterSpec, DEFAULT_TUNNEL_PROBE_INTERVAL_SECS,
     TUNNEL_PROBE_MAX_INTERVAL_SECS, TunnelEvent, TunnelEventKind, TunnelForwardEnsurer,
@@ -178,10 +176,11 @@ pub use route_select::{account_adapter_for_source_kind, source_account_pool};
 pub use snapshot::SnapshotPublisher;
 
 #[cfg(test)]
-use cluster::{CLUSTER_LIVENESS_INTERVAL, next_key_auth_backoff, next_probe_interval_secs};
-use cluster::{
-    ClusterConnChange, ClusterConnState, ClusterDisconnectInfo, ClusterResolution,
-    ForwardObservation, TargetProbeState, run_cluster_hooks_off_async,
+use crate::cluster_runtime::{
+    CLUSTER_LIVENESS_INTERVAL, next_key_auth_backoff, next_probe_interval_secs,
+};
+use crate::cluster_runtime::{
+    ClusterConnChange, ClusterResolution, ClusterRuntime, run_cluster_hooks_off_async,
 };
 use leases::wall_ms_since;
 #[cfg(test)]
@@ -1292,9 +1291,9 @@ pub struct Dispatcher {
     classification_wait: Option<Duration>,
     /// board に項目が無くて最初に dispatch を見送った時刻（subject ごと。項目が載るか上限を過ぎたら消す）。
     classification_deferred_since: HashMap<String, Instant>,
-    /// ADR-0062 B1（Phase 107）: 「担当が cluster:<id> を持たない」警告を出した（連続 tick で
-    /// 繰り返さない）タスク。担当・道具が変わって使えるようになれば `task_may_use_cluster` が消す。
-    warned_cluster_tool: std::collections::HashSet<TaskId>,
+    /// ADR 2026-11-11 dispatcher-state-ownership D1: クラスタの接続・tunnel・job の poll の状態の owner。
+    /// field は private で、`Dispatcher` は `ClusterRuntime` の method だけを呼ぶ。
+    cluster: ClusterRuntime,
     /// この tick で `NoMatchingProvider` だった ready タスク（`is_idle` で待ち対象から外す。ADR-0012 D2）。
     unroutable: std::collections::HashSet<TaskId>,
     /// ADR 2026-10-11-task-wait-reasons D4: この tick で `dispatch_one` が見送った ready タスクの理由（メモリにしか
@@ -1339,19 +1338,6 @@ pub struct Dispatcher {
     variant_observation: Option<variant_pin::VariantObservation>,
     tx: mpsc::UnboundedSender<Completion>,
     rx: mpsc::UnboundedReceiver<Completion>,
-    /// ADR-0018 D2: 多重接続が無いクラスタの cooldown（この時刻まで dispatch しない）。
-    cluster_cooldown: HashMap<String, Instant>,
-    /// ADR-0018 D2: 直近の `ssh -O check` の結果（クラスタ id → 多重接続があるか）。`refresh_cluster_liveness` が埋める。
-    cluster_connected: HashMap<String, bool>,
-    /// ADR-0023 D1: 最後に `ssh -O check` を回した時刻（`CLUSTER_LIVENESS_INTERVAL` に 1 回だけ回す）。
-    last_cluster_liveness: Option<Instant>,
-    /// ADR-0053 Phase 84b: `refresh_cluster_liveness` が使う「master 生存」判定フック。既定は本物の
-    /// `control_master_alive_blocking`（`ssh -O check`）。テストは `set_cluster_liveness_probe` で
-    /// 偽物に差し替え、実機の ssh 状態に依存しないようにする。
-    cluster_liveness_probe: ClusterLivenessProbe,
-    /// 試験の継ぎ目: remote workspace の run と判定に渡す `SshSettings` の `ssh_command` /
-    /// `rsync_command` を差し替える（`set_cluster_ssh_command_override`）。`None`（既定）なら本物の ssh / rsync。
-    cluster_ssh_command_override: Option<Vec<String>>,
     /// tick の回数（スナップショット用）。
     ticks: u64,
     publisher: Option<SnapshotPublisher>,
@@ -1381,41 +1367,10 @@ pub struct Dispatcher {
     /// ADR-0024 D5/D7 / ADR-0025 D5: celeris（GUI の管理 API）が進行中のログイン中継を持っているアカウント
     /// （キーは `"<adapter>:<id>"`。同じ id でもアダプタが違えば別のログインとして扱う）。
     login_pending_accounts: std::collections::HashSet<String>,
-    /// ADR-0043 D3（Phase 56）: 起動時に調べたコンテナ runtime（観測値）。celeris が
-    /// `detect_container_runtime()` を呼んで埋める。埋まっていなければ「使えない」と同じ扱いで、
-    /// コンテナが要るタスクは `blocked` になる。
-    container_probe: task_worker::RuntimeProbe,
-    /// ADR-0032 D3: `auth = "publickey"` のクラスタに自動で接続を張るフック。`None` なら自動接続しない
-    /// （celeris 側が `set_cluster_connector` で挿す。未設定＝従来どおりの挙動）。
-    cluster_connector: Option<ClusterConnector>,
-    /// ADR-0062 A（Phase 107）: master 越しの実通信で生存を確定させるフック（`ssh -o BatchMode=yes
-    /// <host> -- true`）。`None` なら実通信の probe はしない（`-O check` だけの従来どおり）。
-    cluster_command_probe: Option<ClusterCommandProbe>,
-    /// ADR-0062 A: クラスタごとに最後に実通信 probe を行った時刻（`liveness_probe_secs` の間引きに使う）。
-    last_cluster_command_probe: HashMap<String, Instant>,
-    /// ADR-0090 D2: クラスタ job の poll のフック（`None` なら poll しない。celeris が本物を挿す）。
-    cluster_job_poller: Option<ClusterJobPoller>,
-    /// ADR-0090 D2: 走っている poll（wait id → 結果の受け口）。結果は次の tick 以降に拾う。
-    cluster_job_polls: HashMap<
-        String,
-        std::sync::mpsc::Receiver<Result<task_worker::RemoteCommandOutput, String>>,
-    >,
-    /// ADR-0078: クラスタごとの接続の帳簿（遷移・probe・鍵認証の再接続・回数）。
-    cluster_conn: HashMap<String, ClusterConnState>,
     /// ADR-0078 D5: 直前の tick の開始時刻と、その前の tick との間隔（`cluster ssh master lost` の
     /// `last_tick_gap_ms`。tick の停止による切断〈ADR-0078 C3〉を見分ける）。
     last_tick_started: Option<Instant>,
     last_tick_gap_ms: u64,
-    /// ADR-0062 A: 明示的な切断を経ずに接続が失われたクラスタの詳細（exit code・stderr の末尾）。
-    /// `mark_cluster_unavailable` が拾って報告に足し、`Event::ClusterMasterExited` を 1 回だけ残す
-    /// （`reported`）。接続が戻れば消す。
-    cluster_disconnect_info: HashMap<String, ClusterDisconnectInfo>,
-    /// ADR-0062 A: celeris が保持している master（`Child`）の終了を検出するフック。`None` なら見ない
-    /// （celeris 側が `set_cluster_master_watcher` で挿す）。
-    cluster_master_watcher: Option<ClusterMasterWatcher>,
-    /// ADR-0032 D4/D5: GUI 発の接続（`POST /clusters/{id}/connect`）が進行中のクラスタ id
-    /// （celeris が `set_cluster_connect_pending` で反映する。D3 の自動接続とは別物）。
-    connect_pending_clusters: std::collections::HashSet<String>,
     /// ADR 2026-10-15-mlsys-min-decision-assisted D4: credential 待ちの検証・再開（`credential_resume`）。
     /// 未設定なら何もしない。検証は別 thread（tick は DB を見るだけ）。
     credential_resumer: Option<Arc<crate::credential_resume::CredentialResumer>>,
@@ -1444,46 +1399,12 @@ pub struct Dispatcher {
     /// 未設定なら登録も `context_ref` の発行もしない（`routing_features_recorded` の追記は続ける）。
     routing_context_registry:
         Option<Arc<dyn task_core::model_router::context_registry::RoutingContextRegistry>>,
-    /// ADR-0053 D3（Phase 66）: `[[clusters]].forwards` を(再)確立するフック。`None` なら何もしない。
-    tunnel_forward_ensurer: Option<TunnelForwardEnsurer>,
-    /// ADR-0053 D3 / Phase 85: forward の target（先方）の健康を見るフック。`None` なら常に「不健全」扱い。
-    tunnel_probe: Option<TunnelProbe>,
-    /// ADR-0053 Phase 85: forward のリスナーの有無を見るフック。`None` なら常に「無い」扱い
-    /// （安全側のデフォルト。`tunnel_forward_ensurer` に(再)確立を試みさせる。Phase 66 までと同じ保守的な
-    /// 挙動）。
-    tunnel_listener_probe: Option<TunnelListenerProbe>,
-    /// ADR-0053 D3 / Phase 85: forward ごとの直近の観測（キーは `tunnel_key`）。listener と target の
-    /// 健康を別々に持つ（`ForwardObservation`）。
-    tunnel_state: HashMap<String, ForwardObservation>,
-    /// ADR-0066 D3（Phase 110b）: forward ごとの target probe の直近の結果（キーは `tunnel_key`）。
-    /// **専用スレッド（`ensure_tunnel_prober_started`）が書き、`refresh_one_forward` は読むだけ**
-    /// （tick の同期経路から HTTP probe を外すため）。listener が初めて有りになった forward は、
-    /// ここにまだ記録が無い間だけ `refresh_one_forward` が 1 回だけ同期に probe して種を蒔く。
-    tunnel_probe_state: Arc<std::sync::Mutex<HashMap<String, TargetProbeState>>>,
-    /// ADR-0066 D3: 専用スレッドを起こしたら `Some`（二重に起こさない）。`Drop` でスレッドに停止を伝える。
-    tunnel_prober_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
-    /// ADR-0053 D3: 「TOTP ログインが要る」と判定済みのクラスタ id（重複通知を防ぐ。master が戻れば消す）。
-    cluster_login_needed: std::collections::HashSet<String>,
-    /// ADR-0053 D3: 直近のトンネル状態遷移（Console / cluster API 向け。`take_tunnel_events` で取り出す）。
-    tunnel_events: std::collections::VecDeque<TunnelEvent>,
-    /// ADR-0053 D3: 最後にトンネルの生存を見た時刻（`refresh_cluster_liveness` と同じ間隔で間引く）。
-    last_cluster_tunnel_refresh: Option<Instant>,
     /// ADR-0074 D4（Phase F3 quota）: run の重なりを追跡し、measured/apportioned/pending を決定する
     /// （プロセス内メモリのみ。`AccountBook` とは別軸で、replay の対象外）。
     quota_activity: crate::accounts::QuotaActivity,
     /// ADR-0074 D4.2（Phase F3 quota）: `estimated` の較正材料（source × 窓ごとの直近 `measured`）。
     quota_calibration: crate::accounts::QuotaCalibrationBook,
     script_compare: dispatch_run::ScriptCompareState,
-}
-
-impl Drop for Dispatcher {
-    /// ADR-0066 D3: 専用の target-probe スレッド（起こしていれば）に停止を伝える。tick を止めない設計と
-    /// 同じ理由で、ここでも join はしない（スレッドは次の周回〈`TUNNEL_PROBER_STEP`〉で自分から終わる）。
-    fn drop(&mut self) {
-        if let Some(stop) = &self.tunnel_prober_stop {
-            stop.store(true, std::sync::atomic::Ordering::Relaxed);
-        }
-    }
 }
 
 /// ADR-0052 D1（Phase 65b で `bearer_token` を追加）: 到達性の検査のフック（差し替えられるようにして
@@ -1633,7 +1554,7 @@ impl Dispatcher {
             classification_board: lane_assist::ClassificationBoard::default(),
             classification_wait: None,
             classification_deferred_since: HashMap::new(),
-            warned_cluster_tool: std::collections::HashSet::new(),
+            cluster: ClusterRuntime::new(),
             just_aborted: std::collections::HashSet::new(),
             write_reservations: HashMap::new(),
             write_set_waits: HashMap::new(),
@@ -1654,13 +1575,6 @@ impl Dispatcher {
             variant_observation: None,
             tx,
             rx,
-            cluster_cooldown: HashMap::new(),
-            cluster_connected: HashMap::new(),
-            last_cluster_liveness: None,
-            cluster_liveness_probe: Arc::new(|ssh_command: &[String], host: &str| {
-                control_master_alive_blocking(ssh_command, host)
-            }),
-            cluster_ssh_command_override: None,
             ticks: 0,
             publisher: None,
             account_books,
@@ -1670,18 +1584,8 @@ impl Dispatcher {
             account_limits,
             accounts_scan_cache: HashMap::new(),
             login_pending_accounts: std::collections::HashSet::new(),
-            container_probe: task_worker::RuntimeProbe::default(),
-            cluster_connector: None,
-            cluster_command_probe: None,
-            last_cluster_command_probe: HashMap::new(),
-            cluster_job_poller: None,
-            cluster_job_polls: HashMap::new(),
-            cluster_conn: HashMap::new(),
             last_tick_started: None,
             last_tick_gap_ms: 0,
-            cluster_disconnect_info: HashMap::new(),
-            cluster_master_watcher: None,
-            connect_pending_clusters: std::collections::HashSet::new(),
             credential_resumer: None,
             credential_busy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             now_unix_fn: Arc::new(real_now_unix),
@@ -1694,15 +1598,6 @@ impl Dispatcher {
             knowledge_probe_cache: HashMap::new(),
             dispatch_routing: DispatchRoutingSettings::default(),
             routing_context_registry: None,
-            tunnel_forward_ensurer: None,
-            tunnel_probe: None,
-            tunnel_listener_probe: None,
-            tunnel_state: HashMap::new(),
-            tunnel_probe_state: Arc::new(std::sync::Mutex::new(HashMap::new())),
-            tunnel_prober_stop: None,
-            cluster_login_needed: std::collections::HashSet::new(),
-            tunnel_events: std::collections::VecDeque::new(),
-            last_cluster_tunnel_refresh: None,
             quota_activity: crate::accounts::QuotaActivity::new(),
             quota_calibration: crate::accounts::QuotaCalibrationBook::new(),
             script_compare: Default::default(),
@@ -1768,17 +1663,17 @@ impl Dispatcher {
                 "no container runtime; tasks that need one will be blocked"
             ),
         }
-        self.container_probe = probe;
+        self.cluster.set_container_probe(probe);
     }
 
     /// 調べた結果を差し替える（celeris の起動経路とテスト用）。
     pub fn set_container_probe(&mut self, probe: task_worker::RuntimeProbe) {
-        self.container_probe = probe;
+        self.cluster.set_container_probe(probe);
     }
 
     /// 起動時に調べたコンテナ runtime（スナップショット用）。
     pub fn container_probe(&self) -> &task_worker::RuntimeProbe {
-        &self.container_probe
+        self.cluster.container_probe()
     }
 
     /// ADR-0040 D4（Phase 47）: 新しい仕事を始めるのをやめる／再開する。`false` にすると

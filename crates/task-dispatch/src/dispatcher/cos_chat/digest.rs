@@ -49,7 +49,7 @@ use time::OffsetDateTime;
 
 use super::launch::CosChatLaunch;
 use crate::dispatcher::Dispatcher;
-use crate::dispatcher::cluster::run_cluster_hooks_off_async;
+use crate::cluster_runtime::run_cluster_hooks_off_async;
 use crate::script_policy::{
     COS_DIGEST_OP_SINK_CAPACITY, COS_DIGEST_PASS_DEADLINE, COS_DIGEST_PASS_MAX_OPS, CosDigestOp,
     CosDigestOpCall, CosDigestOpReply, CosDigestPassCall, CosDigestPassClassified,

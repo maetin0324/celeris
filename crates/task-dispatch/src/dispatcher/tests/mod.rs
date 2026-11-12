@@ -879,12 +879,13 @@ fn instant_done_dispatcher(store: Arc<dyn TaskStore>) -> Dispatcher {
 /// 始まったら、その結果を拾い終わるまで呼び続ける（SIGSTOP stutter の教訓: 固定の sleep で待たず、
 /// 結果を読み切ってから判定する）。
 fn liveness_round(d: &mut Dispatcher, id: &str) {
-    d.last_cluster_liveness = None;
-    d.last_cluster_command_probe.clear();
+    *d.cluster.last_liveness_mut() = None;
+    d.cluster.last_command_probe_mut().clear();
     d.refresh_cluster_liveness();
     let deadline = Instant::now() + Duration::from_secs(30);
     while d
-        .cluster_conn
+        .cluster
+        .conn_map()
         .get(id)
         .is_some_and(|s| s.probe_inflight.is_some())
     {
@@ -893,7 +894,7 @@ fn liveness_round(d: &mut Dispatcher, id: &str) {
             "the liveness probe did not finish"
         );
         std::thread::sleep(Duration::from_millis(2));
-        d.last_cluster_liveness = None;
+        *d.cluster.last_liveness_mut() = None;
         d.refresh_cluster_liveness();
     }
 }
@@ -926,8 +927,8 @@ fn cluster_spec_with_auth(id: &str, host: &str, auth: &str) -> ClusterSpec {
 
 /// ADR-0053 D3（Phase 66）: forward 付きの `ClusterSpec` を作る（`refresh_cluster_tunnels` 用）。
 /// `probe_interval_secs` は既定（`DEFAULT_TUNNEL_PROBE_INTERVAL_SECS`）にしておく。ADR-0066 D3
-/// 以降、target probe のバックオフは `d.tunnel_probe_state`（専用スレッドが書く）に移った。
-/// 間引きを避けたいテストは `d.last_cluster_tunnel_refresh` を過去にずらす（`CLUSTER_LIVENESS_INTERVAL`
+/// 以降、target probe のバックオフは `ClusterRuntime` の `tunnel_probe_state`（専用スレッドが書く）に移った。
+/// 間引きを避けたいテストは `d.cluster.last_tunnel_refresh_mut()` を過去にずらす（`CLUSTER_LIVENESS_INTERVAL`
 /// の間引きだけがテストから直接いじれる。target probe 側は 1 forward につき最初の 1 回だけ同期に
 /// 種を蒔くので、通常のテストはそれだけで足りる）。
 fn cluster_spec_with_forward(

@@ -12,10 +12,19 @@ impl Dispatcher {
     }
 
     pub(super) fn monotonic_now(&self) -> Instant {
+        (self.monotonic_clock())()
+    }
+
+    /// `monotonic_now` と同じ時計を、`Dispatcher` を借りない形で返す（owner の method に渡す）。
+    pub(super) fn monotonic_clock(&self) -> impl Fn() -> Instant + 'static {
         #[cfg(test)]
-        if let Some(clock) = &self.test_policy_clock {
-            return *clock.lock().expect("test monotonic clock mutex");
+        let test_clock = self.test_policy_clock.clone();
+        move || {
+            #[cfg(test)]
+            if let Some(clock) = &test_clock {
+                return *clock.lock().expect("test monotonic clock mutex");
+            }
+            Instant::now()
         }
-        Instant::now()
     }
 }

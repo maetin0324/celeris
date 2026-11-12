@@ -15,7 +15,7 @@ updated: 2026-11-12
   `warned_unroutable`・`unroutable`・`dispatch_routing`・`routing_context_registry`）を `crates/task-dispatch/src/routing_runtime.rs` の
   `RoutingRuntime` 1 個（`Dispatcher::routing`）に移した。field は private。`Dispatcher` の側は method を呼ぶ入口だけ。
 - `route_state`（約 220 行）の判断は `routing_runtime/route_state.rs` の純粋関数 `build_route_state(&RouteStateInputs) -> RouteState`。
-  走っている run・review の `(source, account)` は `Dispatcher::route_holds` が集める。走査 cache の更新と帳簿の lock は
+  走っている run・review の `(source, account)` は `Dispatcher::route_state` が集める。走査 cache の更新と帳簿の lock は
   `RoutingRuntime::route_state` が行う。`Dispatcher::route_state` は入力を組んで owner を呼ぶだけ（約 30 行）。
 - `RouteState`・`account_adapter_for_source_kind`・`source_account_pool`・`DispatchRoutingSettings`・`ClassificationBoard` 系の型は
   `routing_runtime` に移した（owner が `dispatcher` module を使わないため）。`task_dispatch::` 直下の公開 path は変わらない。

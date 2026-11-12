@@ -385,7 +385,7 @@ profile の高 risk の class と capability-map.json の owner path に、こ�
   `RoutingRuntime` 1 個になる」だから。`eval_runs`・`knowledge_probe_cache`・`quota_activity`・`quota_calibration` は表では routing だが、
   objective が own-quota などに任せているので `Dispatcher` に残した。
 - `route_state`（約 220 行）は D3 に従い、判断を `routing_runtime/route_state.rs` の純粋関数 `build_route_state(RouteStateInputs) -> RouteState`
-  に分けた。走っている run・review の `(source, account)` は `Dispatcher::route_holds` が集めて渡す（run の表の owner は別 unit が作る）。
+  に分けた。走っている run・review の `(source, account)` は `Dispatcher::route_state` が集めて渡す（run の表の owner は別 unit が作る）。
   `RoutingRuntime::route_state` が走査 cache を満たし、帳簿の lock を借りて関数を呼ぶ。`RouteState`・`account_adapter_for_source_kind`・
   `source_account_pool`・`DispatchRoutingSettings`・`ClassificationBoard` は `dispatcher` の外の `routing_runtime` に移した（owner が
   `dispatcher` module を使わないため）。公開 API の path は `task_dispatch::` 直下のままで変わらない。

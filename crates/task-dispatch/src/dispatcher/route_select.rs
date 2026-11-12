@@ -689,26 +689,21 @@ impl Dispatcher {
         self.routing.registry()
     }
 
-    /// The `(source, account)` pairs held by runs and reviews (a leaf run's admission does not count CoS chat
-    /// runs, which hold their own slot), and the CoS chat reservations.
-    fn route_holds(&self, cos: bool) -> (Vec<RouteHold>, Vec<RouteHold>) {
-        let running = self
-            .running
-            .values()
-            .filter(|entry| cos || !entry.cos)
-            .filter_map(|entry| entry.route.clone());
+    /// Capture the admission state of every declared source (see [`RoutingRuntime::route_state`]). The holds are
+    /// the `(source, account)` pairs of runs and reviews (a leaf run's admission does not count CoS chat runs,
+    /// which hold their own slot), and the CoS chat reservations.
+    pub(super) fn route_state(&mut self, cos: bool) -> RouteState {
+        let running = self.running.values().filter(|entry| cos || !entry.cos);
         let reviewing = self.reviewing.values().filter_map(|e| e.route.clone());
-        let cos_holds = self
+        let holds: Vec<RouteHold> = running
+            .filter_map(|entry| entry.route.clone())
+            .chain(reviewing)
+            .collect();
+        let cos_holds: Vec<RouteHold> = self
             .cos_chat_launch
             .as_ref()
             .map(|launch| launch.route_reservations.values().cloned().collect())
             .unwrap_or_default();
-        (running.chain(reviewing).collect(), cos_holds)
-    }
-
-    /// Capture the admission state of every declared source (see [`RoutingRuntime::route_state`]).
-    pub(super) fn route_state(&mut self, cos: bool) -> RouteState {
-        let (holds, cos_holds) = self.route_holds(cos);
         // `[cos] worker_reserve_five_hour`（CoS が有効なときだけ。既定 0.90）。
         let worker_reserve_five_hour = self
             .cos_chat_launch

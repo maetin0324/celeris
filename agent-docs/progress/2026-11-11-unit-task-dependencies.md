@@ -2,7 +2,7 @@
 title: plan の unit が別の task の完了・取り込みを待てるようにする（人の決定を待ちの代わりに使わない）
 tasks: [01M74TM8Y43C5EMYF7FP525DZ5]
 status: done
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 # plan の unit が別の task の完了・取り込みを待てるようにする（人の決定を待ちの代わりに使わない）
 
@@ -25,6 +25,7 @@ updated: 2026-11-11
 - `phase 1: unit_task_deps::resolve を resolve_pending_units に改名（公開面の名前の重複を増やさない）`
 - `phase 1: 進捗に attempt 2 の commit を足す`
 - `phase 1: 進捗に attempt 3 の状況を足す`
+- `phase 1: 進捗に attempt 4 の状況を足す`
 
 ## review の差し戻しへの対応（attempt 2）
 - 指摘: 検証が委譲の親（`tree` を持たない子の `parent_id`）を指す `task:` 依存を通し、依存先の子を経由する循環も通した。
@@ -74,7 +75,11 @@ dispatcher module の合計・`work_units.rs`・`dispatch_one`・`validate_v3`�
 - review の検査の時間: task-core を変えたので `test-affected.sh` は 14 crate・nextest 8231 件・web・test-ts-verify・repo health を
   走らせる。nextest だけで 640〜930 秒かかり（load average 80 前後、24 core）、review の検査の上限 1200 秒を超えやすい。
   attempt 2 の review はこの時間切れで終わり、criterion 3〜6（attempt 2 の直し）は評価されていない。attempt 3 はコードを変えず、
-  検査を提出時の HEAD で再実行した。
+  検査を提出時の HEAD で再実行した。attempt 3 の review も同じ時間切れ（criterion 0・7）で終わった。clippy・fmt・
+  progress-index・health は合格した。
+- attempt 4（2026-11-12）: コードは変えていない。main へ衝突なしで rebase し、API の schema の試験
+  （`committed_schema_matches_generated`）と web の `gen-types.mjs` で生成物にずれが無いことを確かめた。`test-affected.sh` は
+  exit 0、1254 秒（load average 45〜65、nextest 8318 件 736 秒）。load average 40 を超える時間帯では 1200 秒に収まらない。
 - daemon の `until_idle`（`is_idle`）は、unit が `task:` 依存だけを待つ ready の task を idle とみなさない（M10 はメモリの待ちで
   idle とみなす）。本番の常駐 daemon には効かない。試験・e2e の `until_idle` で使うときは待ち続ける。
 - 依存先の成果を自分の branch に入れる unit（既定 branch の取り込み）は今どおり計画が置く。自動では入れない。
@@ -82,6 +87,9 @@ dispatcher module の合計・`work_units.rs`・`dispatch_one`・`validate_v3`�
 ## 提案
 - R5（01M6TYVJT53598CPKMGSQGA7XM）の決定 01M736HS1RZD12PDQHQAJGC4WR のような「main に入ったら答えて」の決定は、この変更の
   release 後の replan で `task:<R2/R3/R4 の id>` の依存に置き換えられる。答え済みの決定と events は変えない。
+
+- review の検査の上限 1200 秒は、task-core を変える変更の `test-affected.sh`（14 crate・web・test-ts-verify）に足りない。
+  load average 40 以上では 1250〜1520 秒かかる。上限を上げるか、load average が低い時間に検査を回す仕組みを検討してほしい。
 
 ## 本番への移行
 - config の変更は無い。DB の migration も無い。release で入る。

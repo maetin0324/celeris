@@ -377,12 +377,19 @@ pub fn start_code(code: &str) -> (ScriptRuntimeHandle, Arc<ScriptPolicy>, String
 }
 
 /// 試験の config。`sources` は `[llm_sources.local]` の追加の行（機密除去の試験が base URL 等を足す）。
+///
+/// `[selfdeploy] releases_dir` は一時 dir の `releases`（無い dir）にする。既定の `~/.local/celeris/releases`
+/// は host の本物の release を指し、verify 済みで未昇格の release があると停滞の判定が
+/// `release_unpromoted-selfdeploy` の件を足して、受信箱の件の数を比べる試験が host の状態で落ちる。
 pub fn config_text(sources: &str, script: &str) -> String {
     format!(
         r#"
 db = "celeris.sqlite3"
 workspace_root = "ws"
 tick_ms = 50
+
+[selfdeploy]
+releases_dir = "releases"
 
 [llm_sources.local]
 kind = "fake"

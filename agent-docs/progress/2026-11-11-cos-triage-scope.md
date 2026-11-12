@@ -1,12 +1,12 @@
 ---
 title: 受信箱の一次対応で CoS が答える範囲を「人に残す件の列挙以外すべて」にし、Celeris の外の操作は operator 宛てに分ける（skill v12）
 tasks: [01M75722SX158YRMFYPQRVEEDY]
-status: running
+status: done
 updated: 2026-11-12
 ---
 # 受信箱の一次対応で CoS が答える範囲を広げ、operator 宛てを分ける（skill v12）
 
-完了日: 未完（attempt 1 は途中で区切った）
+完了日: 2026-11-12
 
 設計判断は [ADR 2026-11-12 cos-triage-scope](../adr/2026-11-12-cos-triage-scope.md)。基準は `git merge-base HEAD main`。
 
@@ -51,6 +51,16 @@ updated: 2026-11-12
 - `phase 1: dependents_reopened の件を CoS が見届けで閉じられるようにし、途切れた一次対応の扱いを ADR に書く`
   - task のコメント 1: `InboxKind::observable_while_open`（`dependents_reopened` だけ真）。resolve は開いている件でもこの種類の observe を受ける。照合は `observe の候補`。skill §3 に書いた。試験 `cos_triage_scope_dependents_reopened_is_observed_without_the_person`（observe で閉じ、後続は Ready のまま、決定の observe は 422、通知 0 件）と triage_match の試験。
   - task のコメント 2: ADR D9 に確認の結果を書いた（コードは変えない）。01M756VNCZ の後は、切り替えで止まった run の件は回収で pending に戻り、新しい daemon が次の tick で拾う（既存の試験 `cos_fallback_timing_standby_to_active_picks_on_the_next_tick`）。本番の `-735` は旧い 120 秒の規則で送信済みの退避なので、同 ADR D2 のとおり人に残る。
+
+## 変更（attempt 1 の Run #4）
+- `phase 1: script_compare の試験の config の releases_dir を一時 dir にする（host の未昇格の release で受信箱の件が増えていた）`
+  - Run #3 の test-affected で落ちた `celeris::script_compare_cos_digest` の 6 件は負荷依存でなく、単独でも同じに落ちた。原因は試験の config が `[selfdeploy] releases_dir` を書かず、既定の `~/.local/celeris/releases`（host の本物）を読んでいたこと。host に verify 済みで未昇格の release が 2 つあり、停滞の判定が `release_unpromoted-selfdeploy` の件を足していた。この task の変更とは関係しない（`main` でも host の状態しだいで落ちる）。
+  - `crates/celeris/tests/support/script_compare.rs` の `config_text` に `releases_dir = "releases"`（一時 dir の中の無い dir）を足した。守る不変条件: この helper を使う試験は host の release の状態に左右されない。既存の試験は host に未昇格の release が無い間はこれを検出できなかった。
+  - 直した後、この helper を使う celeris の試験 14 binary（`script_*`・`long_run_soak`・`tick_scale_baseline`・`project_c*`）を走らせ、99 件すべて合格した（1 件は skip）。
+
+## 証拠（提出時の HEAD で実行）
+- `bash scripts/dev/test-affected.sh` → exit 0（件数は報告本文）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。`sh scripts/dev/progress-index.sh --check` → exit 0。
 
 ## 未解決
 - 本番で送信済みの退避の件（例 `dependents_reopened-01M75722QN630BBASEQ759KG4T-735`）は人に残る。配備の後は、人が受信箱で閉じるか、依存先の後続が動き出すと消える。

@@ -1,0 +1,10 @@
+   Compiling tower v0.5.3
+   Compiling hyper v1.11.1
+   Compiling tower-http v0.6.11
+   Compiling hyper-util v0.1.20
+   Compiling hyper-rustls v0.27.9
+   Compiling axum v0.8.9
+   Compiling reqwest v0.13.5
+   Compiling task-worker v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/runs/01M77VWZ26Z4002B7V0WZTA831/tmp/r5-run-vwbb70cw/base/crates/task-worker)
+   Compiling task-api v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/runs/01M77VWZ26Z4002B7V0WZTA831/tmp/r5-run-vwbb70cw/base/crates/task-api)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 49.86s

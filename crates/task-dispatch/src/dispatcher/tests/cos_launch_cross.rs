@@ -73,7 +73,7 @@ fn message_count(store: &SqliteStore, thread: &str) -> usize {
 async fn route_failure_run_is_not_launched_and_does_not_stop_the_project_budget() {
     let mut f = fake_fixture();
     let until = (f.d.now_unix_fn)() + 3600;
-    f.d.source_cooldowns.insert(
+    f.d.routing.insert_source_cooldown_for_test(
         "p1".into(),
         crate::accounts::AccountCooldown {
             until,
@@ -239,7 +239,7 @@ impl WorkerAdapter for Gates {
 }
 
 fn arm(d: &mut Dispatcher, store: &Arc<SqliteStore>, dir: &Path, max_cos_runs: usize) {
-    d.test_now = Some(Arc::new(StdMutex::new(
+    d.test_hooks.now = Some(Arc::new(StdMutex::new(
         OffsetDateTime::from_unix_timestamp(CLOCK).expect("clock"),
     )));
     d.config.execution.max_cos_runs = max_cos_runs;

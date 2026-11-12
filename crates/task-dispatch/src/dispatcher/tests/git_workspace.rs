@@ -468,6 +468,62 @@ async fn cancelling_a_task_removes_its_worktree_and_branch() {
     );
 }
 
+/// 不変条件（ADR-0043 D2、ADR 2026-11-11 dispatcher-state-ownership D2）: 中止された task でも、その run が走っている
+/// 間は worktree を消さない。`running`・`reviewing` は `Dispatcher` の入口が `HostMaintenance` に渡す入力。
+/// 既存の `cancelling_a_task_removes_its_worktree_and_branch` は run の終わった task だけを見るので、入口が
+/// `running` を渡し忘れても通る。走っていない中止の task を消すことは、その試験と `plan_workspace_cleanup` の
+/// 試験が確かめる（ここで生きている run の worktree を消すと、worker の準備と競合して決定的でない）。
+#[tokio::test]
+async fn a_cancelled_task_keeps_its_worktree_while_its_run_is_in_flight() {
+    let repo_dir = tempfile::tempdir().unwrap();
+    init_test_repo(repo_dir.path());
+    let root = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = git_task(
+        repo_dir.path(),
+        None,
+        Check::Command {
+            cmd: "true".into(),
+            expect_exit: 0,
+        },
+    );
+    store.insert(&task).unwrap();
+    // run は終わらない（試験の間ずっと `running` に残る）。
+    let adapter = Arc::new(InstantAdapter {
+        terminal: Terminal::Question {
+            usage: None,
+            text: "どちらで進めますか".into(),
+        },
+        delay: Duration::from_secs(3600),
+    });
+    let mut d = worktree_dispatcher(store.clone(), adapter, root.path(), None);
+    assert_eq!(d.tick().unwrap().dispatched, 1);
+    let task_dir = root.path().join(task.id.to_string());
+    // worktree は worker の側（spawn した run）が作る。できるまで待つ（出来事待ち。上限 30 秒）。
+    for _ in 0..3000 {
+        if task_dir.join("tree").is_dir() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(task_dir.join("tree").is_dir());
+    assert_eq!(d.running_for_task(task.id), 1);
+    assert!(d.tasks_in_flight().contains(&task.id));
+
+    store
+        .apply_transition(task.id, task_core::Trigger::Cancel, None)
+        .unwrap();
+    d.cleanup_cancelled_worktrees().unwrap();
+    assert!(
+        task_dir.join("tree").is_dir(),
+        "run が走っている間は中止でも worktree を消さない"
+    );
+    assert!(
+        d.maint.remembers_task_workspaces(task.id),
+        "記録も残す（run が抜けた後の tick で片付ける）"
+    );
+}
+
 /// ADR-0041 D1 / ADR-0043 D2: 未コミットの変更が残っていれば `WorkerProgress` を 1 行積む（worktree は残す）。
 #[tokio::test]
 async fn a_dirty_worktree_is_kept_and_a_progress_line_is_appended() {

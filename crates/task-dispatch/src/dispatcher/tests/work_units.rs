@@ -2699,7 +2699,7 @@ async fn terminal_work_unit_target_is_reclaimed_on_the_next_tick() {
     assert!(exists(3), "failed work unit target must stay");
     assert!(exists(4), "blocked work unit target must stay");
     assert!(exists(0), "the waiting task target must stay");
-    let view = d.scratch.view.clone().expect("scratch view");
+    let view = d.maint.scratch_view().cloned().expect("scratch view");
     let class_of = |o: &Owner| {
         view.owners
             .iter()

@@ -854,7 +854,7 @@ async fn classification_wait_is_bounded_by_the_injected_clock() {
     store.insert(&task).unwrap();
     let mut d = dispatcher(store.clone(), question_adapter(), 1);
     let clock = Arc::new(StdMutex::new(Instant::now()));
-    d.test_policy_clock = Some(clock.clone());
+    d.test_hooks.policy_clock = Some(clock.clone());
     d.set_routing_mode(RoutingMode::DecisionAssisted);
     d.set_classification_wait(Some(Duration::from_secs(20)));
     d.tick().unwrap();

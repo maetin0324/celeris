@@ -1,5 +1,11 @@
 use super::*;
 
+/// owner の `check_disk_space` を `Dispatcher` の値で呼ぶ（tick を通さずに通知を重ねないことを確かめる）。
+fn check_disk_space(d: &mut Dispatcher) -> bool {
+    let (maint, inputs) = d.maintenance_parts();
+    maint.check_disk_space(&inputs)
+}
+
 #[tokio::test]
 async fn disk_gate_notifies_once_and_recovers_without_a_run() {
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
@@ -24,7 +30,7 @@ async fn disk_gate_notifies_once_and_recovers_without_a_run() {
     let mut d = dispatcher(store.clone(), adapter, 1);
     d.config.workspace_roots =
         task_core::local_machine::WorkspaceRoots::new(dir.path().join("not-created"), None);
-    assert!(free_disk_mb(d.config.workspace_roots.config_root()).is_ok());
+    assert!(crate::host_maintenance::free_disk_mb(d.config.workspace_roots.config_root()).is_ok());
     d.config.min_free_disk_mb = u64::MAX;
     assert_eq!(d.tick().unwrap().dispatched, 0);
     assert_eq!(d.tick().unwrap().dispatched, 0);
@@ -37,9 +43,9 @@ async fn disk_gate_notifies_once_and_recovers_without_a_run() {
     assert!(notices.items[0].title.contains("ディスク不足"));
     d.config.min_free_disk_mb = 0;
     assert_eq!(d.tick().unwrap().dispatched, 1);
-    assert!(!d.disk_low);
+    assert!(!d.maint.disk_low());
     d.config.min_free_disk_mb = u64::MAX;
-    assert!(!d.check_disk_space());
+    assert!(!check_disk_space(&mut d));
     assert_eq!(
         store
             .notice_list(&task_core::feed::NoticeQuery::default())
@@ -230,7 +236,7 @@ async fn disk_watch_tick_phase_holds_coding_until_pressure_recovers() {
     let clock = Arc::new(StdMutex::new(
         OffsetDateTime::from_unix_timestamp(1_791_331_200).unwrap(),
     ));
-    d.test_now = Some(clock.clone());
+    d.test_hooks.now = Some(clock.clone());
     let pct = Arc::new(StdMutex::new(85));
     d.set_disk_watch_with_probe(
         vec![DiskWatchEntry {

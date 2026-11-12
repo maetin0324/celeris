@@ -5,7 +5,7 @@
 //! picked account's login directory in its environment. The [`SelectedLlmRoute`] the worker
 //! receives carries the endpoint and a credential reference only; secret values never travel in it.
 
-use super::route_select::{RoutePick, account_adapter_for_source_kind};
+use super::route_select::RoutePick;
 use super::*;
 use task_core::llm_route::{HarnessId, Registry, SourceId};
 use task_worker::protocol::{CredentialReference, LlmEndpointReference, SelectedLlmRoute};
@@ -82,11 +82,11 @@ pub fn selected_llm_route(
 impl Dispatcher {
     /// Daemon wiring (bootstrap and reload): the base adapter of every declared harness.
     pub fn set_harness_adapters(&mut self, adapters: HashMap<HarnessId, Arc<dyn WorkerAdapter>>) {
-        self.harness_adapters = adapters;
+        self.routing.set_harness_adapters(adapters);
     }
 
     pub fn harness_adapter(&self, harness: &HarnessId) -> Option<&Arc<dyn WorkerAdapter>> {
-        self.harness_adapters.get(harness)
+        self.routing.harness_adapter(harness)
     }
 
     /// The adapter that runs `pick`: the harness adapter with the picked model, plus the picked
@@ -97,11 +97,12 @@ impl Dispatcher {
         pick: &RoutePick,
     ) -> Result<Arc<dyn WorkerAdapter>, RouteLaunchError> {
         let base = self
-            .harness_adapters
-            .get(&pick.harness)
+            .routing
+            .harness_adapter(&pick.harness)
             .ok_or_else(|| RouteLaunchError::UnknownHarness(pick.harness.clone()))?;
         let source = self
-            .llm_route_registry
+            .routing
+            .registry()
             .sources
             .get(&pick.candidate.source)
             .ok_or_else(|| RouteLaunchError::UnknownSource(pick.candidate.source.clone()))?;
@@ -132,7 +133,8 @@ impl Dispatcher {
         pick: &RoutePick,
     ) -> Result<SelectedLlmRoute, RouteLaunchError> {
         let root = self
-            .llm_route_registry
+            .routing
+            .registry()
             .sources
             .get(&pick.candidate.source)
             .and_then(|s| account_adapter_for_source_kind(s.kind.as_ref()))
@@ -143,7 +145,7 @@ impl Dispatcher {
                     .root_for(a)
                     .map(|r| r.to_path_buf())
             });
-        selected_llm_route(&self.llm_route_registry, pick, root.as_deref())
+        selected_llm_route(self.routing.registry(), pick, root.as_deref())
     }
 }
 

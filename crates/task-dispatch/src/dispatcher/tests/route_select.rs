@@ -2,7 +2,8 @@
 //! admission, harness/source compatibility, and the selection record.
 
 use super::*;
-use crate::dispatcher::route_select::{RouteFailure, RouteInput, RouteState, route_select};
+use crate::dispatcher::route_select::{RouteFailure, RouteInput, route_select};
+use crate::routing_runtime::route_state::RouteState;
 use std::collections::BTreeMap;
 use task_core::llm_route::{
     AccountId, CandidateKey, ExclusionReason, HarnessRule, HarnessSelectionError, HarnessSpec,

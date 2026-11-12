@@ -160,7 +160,7 @@ fn block_on_ts<F>(call: F) -> Option<(TsResult, Duration)>
 where
     F: std::future::Future<Output = (TsResult, Duration)> + Send,
 {
-    super::super::cluster::run_cluster_hooks_off_async(move || {
+    crate::cluster_runtime::run_cluster_hooks_off_async(move || {
         match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -440,7 +440,7 @@ impl Dispatcher {
             target.bundle_sha256.clone(),
             target.host_api.clone(),
             Some(run_id.to_owned()),
-            &self.llm_route_registry,
+            self.routing.registry(),
             &harness,
             input.lane.as_deref(),
             false,

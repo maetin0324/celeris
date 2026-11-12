@@ -4,7 +4,7 @@
 //! - fresh: store の一覧（= 待ち行列の到着順）で先頭。main に追いついている（behind 0）。
 //! - stale: 一覧で 2 番目。main より 2 commits 遅れ、遅れを 10 分前から観測している。
 //!
-//! - off（`test_disable_stale_priority = true`）: 到着順のまま fresh が先に同期・review され、stale は
+//! - off（`ablation.disable_stale_priority = true`）: 到着順のまま fresh が先に同期・review され、stale は
 //!   review 1 本ぶん待つ。
 //! - on（既定）: 長く stale な task が先に同期・review され、待ちは 0。
 //!
@@ -122,9 +122,9 @@ async fn run_variant(variant: Variant) -> (AbMetric, u64) {
     });
     // max_concurrency = 1: reviewer run は 1 本ずつ。
     let mut d = worktree_dispatcher(store.clone(), adapter.clone(), ws.path(), None);
-    d.test_disable_stale_priority = variant == Variant::Off;
+    d.test_hooks.ablation.disable_stale_priority = variant == Variant::Off;
     let now = OffsetDateTime::parse("2026-10-03T12:00:00Z", &Rfc3339).unwrap();
-    d.test_now = Some(Arc::new(std::sync::Mutex::new(now)));
+    d.test_hooks.now = Some(Arc::new(std::sync::Mutex::new(now)));
 
     // stale は先に分岐して main より 2 commits 遅れ、fresh は main に追いついてから分岐する。
     let wt_stale = d.local_worktree_for(&stale).unwrap();

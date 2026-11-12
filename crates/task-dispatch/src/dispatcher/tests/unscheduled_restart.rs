@@ -4,7 +4,7 @@
 //! 守る不変条件: 再起動直後でも、子や依存の統合を待つ ready の task は `task_unscheduled` に出ない。待ちの理由が
 //! 本当に無い ready の task は、保留が明けた最初の判定で今どおり出る。既存の停滞の試験（`stagnation.rs`・
 //! `cos_chat_triage_stagnation.rs`）はメモリの待ちを持つ task を使わず、tick の順序による誤検知を検出できない。
-//! 時刻は注入した時計（`test_now`）で決める。最後の出来事（壁時計）から 1 時間後に起動した daemon を作る。
+//! 時刻は注入した時計（`test_hooks.now`）で決める。最後の出来事（壁時計）から 1 時間後に起動した daemon を作る。
 
 use super::*;
 use task_ops::stagnation::{StagnationKind, StagnationPolicy};
@@ -34,7 +34,7 @@ fn restarted(store: Arc<dyn TaskStore>) -> (Dispatcher, Arc<StdMutex<OffsetDateT
     let clock = Arc::new(StdMutex::new(
         OffsetDateTime::now_utc() + time::Duration::hours(1),
     ));
-    d.test_now = Some(clock.clone());
+    d.test_hooks.now = Some(clock.clone());
     (d, clock)
 }
 

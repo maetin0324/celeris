@@ -74,7 +74,7 @@ fn setup() -> Setup {
     .unwrap();
     let adapter: Arc<dyn WorkerAdapter> = Arc::new(FakeAdapter::new(vec!["false".into()]));
     let mut d = dispatcher(store.clone(), adapter, 0);
-    d.test_now = Some(clock.clone());
+    d.test_hooks.now = Some(clock.clone());
     d.config.execution.max_cos_runs = 0;
     d.config.min_free_disk_mb = 0;
     d.set_cos_chat_launch(

@@ -421,7 +421,7 @@ async fn periodic_recovery_waits_for_check_owner_and_uses_the_injected_clock() {
     f.finish_only();
     let mut d = f.active();
     let now = OffsetDateTime::now_utc();
-    d.test_now = Some(Arc::new(std::sync::Mutex::new(now)));
+    d.test_hooks.now = Some(Arc::new(std::sync::Mutex::new(now)));
     let wu = f.unit();
     d.checking.insert(
         f.run.clone(),
@@ -448,11 +448,11 @@ async fn periodic_recovery_waits_for_check_owner_and_uses_the_injected_clock() {
         "a terminal run can still have live checks"
     );
     d.checking.remove(&f.run).unwrap().handle.abort();
-    *d.test_now.as_ref().unwrap().lock().unwrap() =
+    *d.test_hooks.now.as_ref().unwrap().lock().unwrap() =
         now + time::Duration::seconds(RUNS_RECONCILE_INTERVAL_SECS - 1);
     d.reconcile_ownerless_runs();
     assert_eq!(f.unit().status, WorkUnitStatus::Running, "not due yet");
-    *d.test_now.as_ref().unwrap().lock().unwrap() += time::Duration::seconds(1);
+    *d.test_hooks.now.as_ref().unwrap().lock().unwrap() += time::Duration::seconds(1);
     d.reconcile_ownerless_runs();
     assert_eq!(f.unit().status, WorkUnitStatus::Ready);
     f.assert_redispatched(&mut d).await;

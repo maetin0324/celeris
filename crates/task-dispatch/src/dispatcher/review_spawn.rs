@@ -1,6 +1,6 @@
 //! review run の起動（`spawn_review`・`pick_reviewer`・最終レビュー）。per-task file lock は verdict の保存まで持ち続ける。ADR-0082 の L2。
 
-use super::route_select::{RouteInput, RoutePick, RouteTrace, account_adapter_for_source_kind};
+use super::route_select::{RouteInput, RoutePick, RouteTrace};
 use super::token_budget::run_watch;
 use super::*;
 use crate::review::RepoHealth;
@@ -181,10 +181,10 @@ fn pending_integration_repair(
 
 impl Dispatcher {
     /// review 前の target 同期（ADR-0118）を行うか。本番では常に行う。試験だけが切れる
-    /// （`test_skip_pre_review_sync`、phase_effect_ab::review_sync の off）。
+    /// （`test_hooks.ablation.skip_pre_review_sync`、phase_effect_ab::review_sync の off）。
     fn pre_review_sync_enabled(&self) -> bool {
         #[cfg(test)]
-        if self.test_skip_pre_review_sync {
+        if self.test_hooks.ablation.skip_pre_review_sync {
             return false;
         }
         true
@@ -350,7 +350,7 @@ impl Dispatcher {
         run_id: String,
         subject: &ReviewSubject,
     ) -> Result<bool, DispatchError> {
-        if !self.accepting_new_work || !self.disk_ready {
+        if !self.accepting_new_work || !self.maint.disk_ready() {
             return Ok(false);
         }
         let Some(task) = self.store.get(task_id)? else {
@@ -566,7 +566,7 @@ impl Dispatcher {
                                 )
                             })?;
                         #[cfg(test)]
-                        if self.test_sync_conflict_as_review_fail {
+                        if self.test_hooks.ablation.sync_conflict_as_review_fail {
                             // Phase 2 以前の旧経路: 衝突を review の不合格として worker に戻す（attempts を使う）。
                             self.store.apply_transition(
                                 task_id,
@@ -1450,7 +1450,7 @@ impl Dispatcher {
             && let Some(decision) = trace.decision.as_mut()
         {
             decision.routing_resolved = Some(task_core::route_select::resolve_routing(
-                self.routing_mode,
+                self.routing.mode(),
                 routing_override.as_ref(),
             ));
         }
@@ -1465,7 +1465,7 @@ impl Dispatcher {
             Ok(v) => v,
             Err(reason) => {
                 // 拒否は task ごとに 1 回だけ残す（毎 tick の再試行で events を増やさない）。
-                if self.warned_unroutable.insert(task.id) {
+                if self.routing.warn_unroutable_once(task.id) {
                     match &outcome {
                         Err(_) => {
                             if let Err(e) = self.record_route_selection(
@@ -1493,11 +1493,7 @@ impl Dispatcher {
                 return None;
             }
         };
-        let account_adapter = self
-            .llm_route_registry
-            .sources
-            .get(&pick.candidate.source)
-            .and_then(|s| account_adapter_for_source_kind(s.kind.as_ref()));
+        let account_adapter = self.routing.source_account_adapter(&pick.candidate.source);
         let account = pick.account.to_string();
         let adapter_id = adapter.id().to_string();
         let review_run_id = ulid::Ulid::new().to_string();

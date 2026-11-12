@@ -1,7 +1,7 @@
 //! ADR 2026-11-06-cos-run-launch-accounting-and-drain D2: 枠だけで route を選べない CoS run は失敗にせず、
 //! claim のまま（`launched_at` なし）Waiting で待ち、次 tick で同じ入力・同じ run・同じ route 順で選び直す。
 //! 枠以外の理由（cooldown 等）では待たない。期限は run の `max_wall_secs` 残りで、延ばさない。
-//! 時計は `test_now` の差し替え、待ちは FIFO と task の join（sleep・負荷なし）。
+//! 時計は `test_hooks.now` の差し替え、待ちは FIFO と task の join（sleep・負荷なし）。
 
 use super::cos_chat_launch::{fixture, join, post, runs, thread};
 use super::*;
@@ -53,7 +53,7 @@ pub(super) async fn release(dir: &std::path::Path, thread: &str) {
 }
 
 pub(super) fn advance(d: &Dispatcher, secs: i64) {
-    let clock = d.test_now.as_ref().expect("test clock");
+    let clock = d.test_hooks.now.as_ref().expect("test clock");
     let mut now = clock.lock().unwrap();
     *now += time::Duration::seconds(secs);
 }
@@ -225,7 +225,7 @@ async fn slot_only_wait_keeps_the_run_waiting_then_launches_the_same_run() {
 async fn cooldown_does_not_wait() {
     let (_dir, store, mut d) = fixture(FakeAdapter::default_command(), 2);
     let until = (d.now_unix_fn)() + 3600;
-    d.source_cooldowns.insert(
+    d.routing.insert_source_cooldown_for_test(
         "p1".into(),
         crate::accounts::AccountCooldown {
             until,
@@ -249,7 +249,7 @@ async fn cooldown_does_not_wait() {
 #[tokio::test]
 async fn cos_reservation_closes_with_route_unavailable_without_waiting() {
     let (_dir, store, mut d) = fixture(FakeAdapter::default_command(), 2);
-    d.test_cos_reserved_sources.insert("p1".into());
+    d.test_hooks.cos_reserved_sources.insert("p1".into());
     let t = thread(&store, "reserved");
     post(&store, &t, "one");
     d.tick_cos_chat_launch();

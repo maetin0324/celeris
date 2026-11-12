@@ -52,8 +52,8 @@ impl Dispatcher {
         // ADR 2026-10-08 §(e): cooldowns of the implicit accounts (id = source id).
         let now_unix = (self.now_unix_fn)();
         let mut cooldowns: Vec<CooldownView> = self
-            .source_cooldowns
-            .iter()
+            .routing
+            .source_cooldowns()
             .filter(|(_, c)| c.until > now_unix)
             .map(|(source, c)| CooldownView {
                 source: source.to_string(),
@@ -74,23 +74,19 @@ impl Dispatcher {
                 host: spec.host.clone(),
                 concurrency: spec.concurrency,
                 in_use: self.cluster_in_use(&spec.id) as u32,
-                connected: self
-                    .cluster_connected
-                    .get(&spec.id)
-                    .copied()
-                    .unwrap_or(false),
+                connected: self.cluster.connected(&spec.id).unwrap_or(false),
                 cooldown_until: self
-                    .cluster_cooldown
-                    .get(&spec.id)
-                    .filter(|until| **until > now_instant)
+                    .cluster
+                    .cooldown_until(&spec.id)
+                    .filter(|until| *until > now_instant)
                     .map(|until| rfc3339(now + until.saturating_duration_since(now_instant))),
                 auth: spec.auth.clone(),
-                connect_pending: self.connect_pending_clusters.contains(&spec.id),
+                connect_pending: self.cluster.connect_pending(&spec.id),
                 // ADR-0053 D3（Phase 66）: トンネル（forward）の生存。`forwards` が無いクラスタは空。
-                tunnel_login_needed: self.cluster_login_needed.contains(&spec.id),
+                tunnel_login_needed: self.cluster.login_needed(&spec.id),
                 connection_stats: self
-                    .cluster_conn
-                    .get(&spec.id)
+                    .cluster
+                    .conn_state(&spec.id)
                     .map(|c| c.stats.clone())
                     .unwrap_or_default(),
                 tunnel_forwards: spec
@@ -134,15 +130,16 @@ impl Dispatcher {
             accounts,
             implicit_accounts,
             // ADR-0075 D6（Phase G1）: scratch pool の観測値（`scratch_gc` が tick ごとに組む）。
-            scratch: self.scratch.view.clone(),
+            scratch: self.maint.scratch_view().cloned(),
             // 付記 S5-8（P1-C）: TS の同期の待ちの集計（`script_tick_wait` の log 行と同じ値）。
             script_tick_wait: self.script_tick_wait_live(),
             // ADR-0043 D3（Phase 56）: コンテナ実行の設定と起動時の検出。
             containers: Some(task_ops::daemon::ContainersLive {
                 preference: self.config.containers.preference.as_str().to_string(),
-                runtime: self.container_probe.program().map(str::to_string),
+                runtime: self.cluster.container_probe().program().map(str::to_string),
                 probes: self
-                    .container_probe
+                    .cluster
+                    .container_probe()
                     .tried
                     .iter()
                     .map(|(runtime, detail)| task_ops::daemon::ContainerProbeView {
@@ -204,7 +201,7 @@ impl Dispatcher {
         self.implicit_account_ids()
             .into_iter()
             .map(|source| {
-                let registry = &self.llm_route_registry;
+                let registry = self.routing.registry();
                 let mut models: Vec<String> = registry
                     .route_defaults
                     .values()
@@ -245,11 +242,7 @@ impl Dispatcher {
                 continue;
             };
             roots.insert(adapter.as_str().to_string(), root.display().to_string());
-            let dirs = self
-                .accounts_scan_cache
-                .entry(adapter)
-                .or_insert_with(|| scan_accounts(root, adapter))
-                .clone();
+            let dirs = self.routing.scanned_accounts(adapter, root);
             let Some(book) = self.account_book(adapter) else {
                 continue;
             };
@@ -304,9 +297,7 @@ impl Dispatcher {
                             detail: c.detail.clone(),
                         }
                     }),
-                    login_pending: self
-                        .login_pending_accounts
-                        .contains(&Self::login_pending_key(adapter, &d.id)),
+                    login_pending: self.routing.login_pending(adapter, &d.id),
                 });
             }
         }

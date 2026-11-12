@@ -2,7 +2,7 @@
 //! 古い base を切り、同じ `README.md` を変える並列の 2 task A/B を作る。A を先に review して main へ
 //! 入れてから B を review する。
 //!
-//! - off（`test_skip_pre_review_sync = true`、旧経路）: B は古い base のまま review を通り、その後の
+//! - off（`ablation.skip_pre_review_sync = true`、旧経路）: B は古い base のまま review を通り、その後の
 //!   統合（main への取り込み）で衝突する。統合は `crates/celeris` の配送が持つので、ここでは試験の中の
 //!   `git merge --no-ff` で模擬し、衝突したら既存の入口（`Trigger::Rereview` で reviewing に戻し、
 //!   `try_integration_repair` で IntegrationRepair の repair WU を積む）を dispatcher に通す。repair run と
@@ -11,7 +11,7 @@
 //!
 //! 別の scenario `review_sync_phase2` は Phase 2（ADR-0120）の off/on。同期はどちらも行い、
 //!
-//! - off（`test_sync_conflict_as_review_fail = true`、旧経路）: review 前同期の衝突を `ReviewFail` で worker に
+//! - off（`ablation.sync_conflict_as_review_fail = true`、旧経路）: review 前同期の衝突を `ReviewFail` で worker に
 //!   戻す。B の attempts を 1 つ使い（`max_retries = 0` なら B はそこで failed）、worker の run が rebase する。
 //! - on（既定）: 衝突は IntegrationRepair の repair WU で直し、attempts を使わない。
 //!
@@ -221,8 +221,8 @@ async fn run_case(case: Case) -> (AbMetric, u32) {
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let adapter = Arc::new(SyncScenarioAdapter::new());
     let mut d = worktree_dispatcher(store.clone(), adapter.clone(), ws.path(), None);
-    d.test_skip_pre_review_sync = case == Case::NoPreReviewSync;
-    d.test_sync_conflict_as_review_fail = case == Case::ConflictAsReviewFail;
+    d.test_hooks.ablation.skip_pre_review_sync = case == Case::NoPreReviewSync;
+    d.test_hooks.ablation.sync_conflict_as_review_fail = case == Case::ConflictAsReviewFail;
 
     // 古い base（初回 commit の main）から並列の 2 task を切り、同じ README.md を変える。
     let a = reviewing_task(repo.path(), &store, "task A");

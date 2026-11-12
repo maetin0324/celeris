@@ -18,18 +18,22 @@
 //! ## module map（ADR-0082）
 //!
 //! この facade に残すもの: `Dispatcher` struct と private な補助型（`RunEntry`・`ReviewEntry`・
-//! `Completion` など）、公開の設定型、`new` と setter/getter、`tick`（段階の順序。`disk_ready` は drain
+//! `Completion` など）、公開の設定型、`new` と setter/getter、`tick`（段階の順序。`HostMaintenance::refresh_disk_ready` は drain
 //! より前）・`drain_completions`・`dispatch_ready`・`is_idle`、`mod` 宣言と明示した `pub use`。依存の向きは L0（この facade の型と free helper）
 //! ← L1 ← L2 ← L3 ← L4 ← `tick`。横の呼び出しは `worker_finish` → `phase_integration` の 1 本だけ。
 //!
 //! | モジュール | 責務 | 層 |
 //! |---|---|---|
-//! | `cluster` | cluster / tunnel の接続・生存確認・probe | L1 |
-//! | `housekeeping` | disk guard・scratch pool の GC・後片付け | L1 |
+//! | `cluster_runtime` | cluster / tunnel の接続・生存確認・probe・job の poll の状態の owner（`crate::cluster_runtime::ClusterRuntime`。この dir の外。ADR 2026-11-11 dispatcher-state-ownership D1） | owner |
+//! | `cluster` | `ClusterRuntime` を呼ぶ入口と、org・run の表を読むクラスタの解決 | L1 |
+//! | `host_maintenance` | disk guard・disk 監視・scratch pool の GC・build cache と repo target の掃除・中止された作業場所の片付けの状態の owner（`crate::host_maintenance::HostMaintenance`。この dir の外。ADR 2026-11-11 dispatcher-state-ownership D1） | owner |
+//! | `housekeeping` | `HostMaintenance` を呼ぶ入口（`MaintenanceInputs` と run・review の集合を渡す）と、verify の判定・承認と通知 feed の照合・検査の `CARGO_TARGET_DIR` | L1 |
+//! | `maintenance` | `HostMaintenance` の保守 executor（cron の `target_sweep`）と disk 監視の設定の入口 | L1 |
 //! | `snapshot` | デーモン状態の snapshot の組み立てと公開 | L1 |
 //! | `quota_book` | quota の見積りと release | L1 |
 //! | `sinks` | run 途中のイベントの sink（`StoreSink`・`ReviewerSink`） | L1 |
-//! | `route_failure` | route の供給側失敗の分類と account cooldown の記録 | L1 |
+//! | `routing_runtime` | 経路選択の状態（宣言・account の上限と帳簿・cooldown・routing mode・分類 board・経路なしの task・RoutingContext の登録簿）の owner（`crate::routing_runtime::RoutingRuntime`。この dir の外。`route_state` は `RouteState` の組み立ての純粋関数。ADR 2026-11-11 dispatcher-state-ownership D1・D3） | owner |
+//! | `route_failure` | route の供給側失敗の分類と、`RoutingRuntime` への account cooldown の記録 | L1 |
 //! | `workspaces` | 作業場所・worktree・container の準備 | L1 |
 //! | `run_context` | run の文脈（extras・session・knowledge・skills） | L1 |
 //! | `worker_task` | worker 本体（free fn の `run_worker`。`Dispatcher` に依存しない） | L1 |
@@ -41,7 +45,7 @@
 //! | `planner_flow` | planner の結果の採用と replan | L3 |
 //! | `review_verdict` | review の判定の適用と repair | L3 |
 //! | `phase_integration` | 工程の統合と途中報（phase report） | L3 |
-//! | `cluster_job_wait` | クラスタ job の durable wait の poll と続きの run（ADR-0090） | L3 |
+//! | `cluster_job_wait` | クラスタ job の durable wait の行と task・WU の再開（ADR-0090。poll のスレッドは `cluster_runtime`） | L3 |
 //! | `leases` | lease の回収・abort・orphan・drain | L3 |
 //! | `dispatch_run` | run の起動（`dispatch_one`・`spawn_worker`）と担当・lane の決定 | L4 |
 
@@ -78,8 +82,7 @@ use task_worker::{
     NodeContext, OrgNodeContext, PROTOCOL_VERSION, PriorReview, Reachability, RecentWork,
     RoleContext, RunContext, RunLimits, RunOutcome, RunRequest, SshSettings, SshWorkspace,
     SyncMode, Terminal, WorkerAdapter, WorkerMessage, Workspace, WorkspaceError,
-    control_master_alive_blocking, remote_dir_is_resolved, remote_exec_instructions,
-    resolve_remote_dir,
+    remote_dir_is_resolved, remote_exec_instructions, resolve_remote_dir,
 };
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -87,11 +90,11 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::accounts::{
-    AccountBook, AccountCandidate, AccountCheckRecord, AccountCooldownReason, AccountDir,
-    ExcludedReason, ObservationSource, account_cooldown_for_failure, cooldown_for_failure,
-    evaluate, scan_accounts,
+    AccountBook, AccountCandidate, AccountCheckRecord, AccountCooldownReason, ExcludedReason,
+    ObservationSource, account_cooldown_for_failure, cooldown_for_failure, evaluate,
 };
 use crate::policy::{ProviderId, ProviderOutcome};
+use crate::routing_runtime::RoutingRuntime;
 
 // ADR-0082: 責務別の子モジュール（層は L1 ← L2 ← L3 ← L4 ← tick）。
 mod browser_prereq;
@@ -100,10 +103,8 @@ mod cluster_job_wait;
 mod credential_gate;
 mod lane_assist;
 mod tick_steps;
-pub use cluster_job_wait::{
-    ClusterJobNotice, ClusterJobNoticeOutcome, ClusterJobPollRequest, ClusterJobPoller,
-    ssh_cluster_job_poller,
-};
+pub use crate::cluster_runtime::{ClusterJobPollRequest, ClusterJobPoller, ssh_cluster_job_poller};
+pub use cluster_job_wait::{ClusterJobNotice, ClusterJobNoticeOutcome};
 pub use credential_gate::{CredentialGate, CredentialGates};
 pub use decision_log_wire::record_task_decision_log;
 mod auto_leaf;
@@ -157,31 +158,35 @@ mod write_set_gate;
 /// ADR-0130 D2: run / WU の actual write-set の採取と保存。
 mod write_set_record;
 
-pub use cluster::{
+pub use crate::cluster_runtime::{
     ClusterCommandProbe, ClusterConnector, ClusterForwardSpec, ClusterLivenessProbe,
     ClusterMasterExit, ClusterMasterWatcher, ClusterSpec, DEFAULT_TUNNEL_PROBE_INTERVAL_SECS,
     TUNNEL_PROBE_MAX_INTERVAL_SECS, TunnelEvent, TunnelEventKind, TunnelForwardEnsurer,
     TunnelListenerProbe, TunnelProbe,
 };
-pub use dispatch_run::DispatchRoutingSettings;
-pub use lane_assist::{
-    BoardCall, BoardItem, CallProvenance, ClassificationBoard, lane_facts, task_routing_override,
+pub use crate::routing_runtime::DispatchRoutingSettings;
+pub use crate::routing_runtime::classification_board::{
+    BoardCall, BoardItem, CallProvenance, ClassificationBoard,
 };
+pub use crate::routing_runtime::route_state::{
+    RouteState, account_adapter_for_source_kind, source_account_pool,
+};
+pub use lane_assist::{lane_facts, task_routing_override};
 pub use route_failure::{FailureAction, FailureOrigin, classify_failure, provider_failure_outcome};
 pub use route_launch::{
     LaunchAdmission, RouteLaunchError, admit_by_availability, selected_llm_route,
 };
 pub use route_select::{
-    RouteFailure, RouteInput, RoutePick, RouteState, RouteTrace, harness_request_for, route_select,
+    RouteFailure, RouteInput, RoutePick, RouteTrace, harness_request_for, route_select,
 };
-pub use route_select::{account_adapter_for_source_kind, source_account_pool};
 pub use snapshot::SnapshotPublisher;
 
 #[cfg(test)]
-use cluster::{CLUSTER_LIVENESS_INTERVAL, next_key_auth_backoff, next_probe_interval_secs};
-use cluster::{
-    ClusterConnChange, ClusterConnState, ClusterDisconnectInfo, ClusterResolution,
-    ForwardObservation, TargetProbeState, run_cluster_hooks_off_async,
+use crate::cluster_runtime::{
+    CLUSTER_LIVENESS_INTERVAL, next_key_auth_backoff, next_probe_interval_secs,
+};
+use crate::cluster_runtime::{
+    ClusterConnChange, ClusterResolution, ClusterRuntime, run_cluster_hooks_off_async,
 };
 use leases::wall_ms_since;
 #[cfg(test)]
@@ -247,46 +252,6 @@ fn log_slow_step(step: &'static str, started: Instant) {
             "slow dispatcher step"
         );
     }
-}
-
-/// 未作成の作業場所は最も近い既存の親 filesystem を測る。statvfs は symlink も解決する。
-fn free_disk_mb(path: &Path) -> Result<u64, String> {
-    let existing = path
-        .ancestors()
-        .find(|p| p.exists())
-        .ok_or_else(|| format!("{}: no existing ancestor", path.display()))?;
-    let stat =
-        nix::sys::statvfs::statvfs(existing).map_err(|e| format!("{}: {e}", existing.display()))?;
-    Ok(stat.blocks_available().saturating_mul(stat.fragment_size()) / (1024 * 1024))
-}
-
-/// ADR-0075（Phase G1）: dispatcher が持つ scratch pool の GC の状態（プロセス内メモリだけ。DB に書かない）。
-#[derive(Default)]
-struct ScratchState {
-    /// 測定スレッドの結果（パス → サイズ）。
-    sizes: crate::scratch_gc::SizeCache,
-    extents: crate::scratch_gc::SharedExtentCache,
-    /// 削除スレッド・測定スレッドが動いている間は `true`（重ねて起こさない）。
-    removing: Arc<std::sync::atomic::AtomicBool>,
-    measuring: Arc<std::sync::atomic::AtomicBool>,
-    last_measure: Option<Instant>,
-    /// 直近の走査で P3 だった target（run の開始時の adopt の候補）。
-    candidates: Vec<task_worker::scratch::AdoptCandidate>,
-    /// `DaemonSnapshot.scratch`。
-    view: Option<task_ops::daemon::ScratchStatus>,
-    last_gc: Option<task_ops::daemon::ScratchGcView>,
-    /// journal の遷移（watermark の到達・解除）を 1 回だけ出すための直前の値。
-    pressure: Option<task_worker::scratch::Pressure>,
-    /// 実効上限の縮小を 1 回だけ出すための直前の値（GiB）。
-    effective_warned_gib: Option<u64>,
-    /// ディスク不足の通知の本文に足す P0 の一覧（直近の走査）。
-    pinned_summary: Option<String>,
-    /// この tick で緊急 GC を回した（通常の `scratch_gc` phase を重ねない）。
-    ran_this_tick: bool,
-    /// ADR-0129 (4): 直近に seed の更新を確かめた時刻（`None` = 起動後まだ。昇格の後の起動で直ちに確かめる）。
-    seed_last_check: Option<Instant>,
-    /// seed の更新スレッドが動いている間は `true`。
-    seed_refreshing: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// ADR-0075 D3: run の `CARGO_TARGET_DIR` をどこから取るか（`run_worker` に渡す）。
@@ -1180,43 +1145,11 @@ pub struct Dispatcher {
     /// があれば store、無ければ `config.config_max_concurrency`）。tick の頭と admin の
     /// `LocalSettingsChanged` で `refresh_max_concurrency` が読み直す。走行中の run は止めない。
     max_concurrency: usize,
-    /// ADR 2026-10-07-build-tmp-hygiene D1.4: cron の保守 executor（`target_sweep`）の roots と上限。
-    /// `None` は既定（`dispatcher::maintenance` を参照）。
-    target_sweep: Option<task_worker::target_sweep::SweepParams>,
-    /// ADR 2026-10-07-build-tmp-hygiene D4: ディスク使用率の監視（`None` は無効。celeris が
-    /// `[[maintenance.disk_watch]]` から `set_disk_watch` で渡す）。
-    disk_watch: Option<crate::disk_watch::DiskWatchRunner>,
-    /// ADR 2026-10-07-build-tmp-hygiene 付記 A2・A3: 保守 executor の掃除の範囲。
-    target_sweep_scope: crate::target_sweep::SweepScope,
+    /// ADR 2026-11-11 dispatcher-state-ownership D1: disk・scratch・build cache・repo target の掃除と、中止された
+    /// task の作業場所の片付けの状態の owner（`crate::host_maintenance`。入口は `housekeeping.rs`・`maintenance.rs`）。
+    maint: crate::host_maintenance::HostMaintenance,
     #[cfg(test)]
-    test_now: Option<Arc<StdMutex<OffsetDateTime>>>,
-    /// 試験専用: この source の全 account を Claude 予約（`CosReservation`）として扱う（CoS の経路でも再現する）。
-    #[cfg(test)]
-    test_cos_reserved_sources: std::collections::BTreeSet<task_core::llm_route::SourceId>,
-    /// 試験専用: WU の遷移を書いた直後に run の終了処理を打ち切る（その後の event が書かれる前の kill を再現）。
-    #[cfg(test)]
-    test_halt_after_wu_transition: bool,
-    /// 試験専用: spawn した worker task が `run_worker` に入る前に待つ時間（worker の終了が遅れる状況の再現）。
-    #[cfg(test)]
-    test_worker_start_delay: Option<std::time::Duration>,
-    #[cfg(test)]
-    test_policy_clock: Option<Arc<StdMutex<Instant>>>,
-    /// 試験だけの切替: review 前の target 同期（ADR-0118）を飛ばし、旧経路（未同期の HEAD を review）を再現する
-    /// （phase_effect_ab::review_sync の off）。
-    #[cfg(test)]
-    test_skip_pre_review_sync: bool,
-    /// 試験だけの切替: write-set gate（ADR-0130 D3）を切り、重なる run も同時に起こす
-    /// （phase_effect_ab::write_set の off）。
-    #[cfg(test)]
-    test_disable_write_set_gate: bool,
-    /// 試験だけの切替: review 前 sync の stale 優先（ADR-0130 D5）を切り、待ち行列を候補の順のまま渡す
-    /// （phase_effect_ab::stale_priority の off）。
-    #[cfg(test)]
-    test_disable_stale_priority: bool,
-    /// 試験だけの切替: review 前 sync の衝突を IntegrationRepair（ADR-0120）ではなく `ReviewFail` で返す
-    /// 旧経路を再現する（phase_effect_ab::review_sync の Phase 2 off）。
-    #[cfg(test)]
-    test_sync_conflict_as_review_fail: bool,
+    test_hooks: tests::hooks::TestHooks,
     /// ADR-0074 D1.5（Phase F2）: 鍵は (task, WU)。Task 単位の問いは `running_for_task`。
     running: HashMap<RunKey, RunEntry>,
     /// ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch）D4:
@@ -1267,36 +1200,13 @@ pub struct Dispatcher {
     /// 手元のレビューのうち、前の tick で「tokio task は終わっているのに判定の完了が届いていない」と見た
     /// task（`ownerless_runs.rs` の `reap_lost_reviews`。2 tick 続けて見えたら取りこぼしと判定する）。
     lost_review_watch: std::collections::HashSet<TaskId>,
-    disk_low: bool,
-    /// ADR-0074 F5-fix: 終端の WU の target を消す別スレッドが動いている間は `true`（重ねて起こさない）。
-    removing_build_caches: Arc<std::sync::atomic::AtomicBool>,
-    /// ADR 2026-10-10-local-disk-growth-paths D2: 終端 task の repo 直下 target の常設の掃除（cron に依らない）。
-    /// 前回走った時刻（注入時計）と、削除スレッドが動いている間の印。
-    repo_target_gc_at: Option<OffsetDateTime>,
-    removing_repo_targets: Arc<std::sync::atomic::AtomicBool>,
-    /// ADR-0075（Phase G1）: scratch pool の GC の状態（測定の cache・削除 / 測定スレッドの印・adopt の候補・観測値）。
-    scratch: ScratchState,
-    disk_ready: bool,
-    /// 「設定に合うプロバイダが無い」警告を出した（連続 tick で繰り返さない）タスク（ADR-0012 D2）。
-    warned_unroutable: std::collections::HashSet<TaskId>,
     /// ADR 2026-10-15-mlsys-min D4: 外部 provider の credential 待ちの宣言（source ごと）と秘密の置き場。
     credential_gates: credential_gate::CredentialGates,
     /// credential 待ちに入れた計画なしの task（tick ごとに同じ wait を書き直さない。再起動で `restore_credential_waits` が戻す）。
     credential_held: std::collections::HashSet<TaskId>,
-    /// `routing.mode`（既定 fixed）。decision_assisted のとき lane 層が分類結果を読む（`lane_assist`）。
-    routing_mode: task_core::route_select::RoutingMode,
-    /// 分類段が書く結果の置き場（dispatcher は読むだけ。Jev は呼ばない）。
-    classification_board: lane_assist::ClassificationBoard,
-    /// 分類段が動いているとき、board に項目が無い subject の dispatch を待たせる上限（`None` なら待たせない）。
-    /// ADR 2026-10-22-jev-classification-before-launch。
-    classification_wait: Option<Duration>,
-    /// board に項目が無くて最初に dispatch を見送った時刻（subject ごと。項目が載るか上限を過ぎたら消す）。
-    classification_deferred_since: HashMap<String, Instant>,
-    /// ADR-0062 B1（Phase 107）: 「担当が cluster:<id> を持たない」警告を出した（連続 tick で
-    /// 繰り返さない）タスク。担当・道具が変わって使えるようになれば `task_may_use_cluster` が消す。
-    warned_cluster_tool: std::collections::HashSet<TaskId>,
-    /// この tick で `NoMatchingProvider` だった ready タスク（`is_idle` で待ち対象から外す。ADR-0012 D2）。
-    unroutable: std::collections::HashSet<TaskId>,
+    /// ADR 2026-11-11 dispatcher-state-ownership D1: クラスタの接続・tunnel・job の poll の状態の owner。
+    /// field は private で、`Dispatcher` は `ClusterRuntime` の method だけを呼ぶ。
+    cluster: ClusterRuntime,
     /// ADR 2026-10-11-task-wait-reasons D4: この tick で `dispatch_one` が見送った ready タスクの理由（メモリにしか
     /// 無い M1〜M6・M9。`dispatch_ready` の先頭で空にし、同じ task の 2 件目は上書きしない）。snapshot の
     /// `task_waits` に載る。
@@ -1328,9 +1238,6 @@ pub struct Dispatcher {
     /// ADR-0074 D1.4（Phase F2b）: 工程の統合を走らせている Task（spawn した git 操作と検査）。
     /// 再起動の照合（D1.7）は「running の統合 WU で、ここに無いもの」を pending に戻す。
     integrating: HashMap<TaskId, IntegrationEntry>,
-    /// 統合の状態確認直前に別の ready 戻しを差し込む、試験専用の一回フック。
-    #[cfg(test)]
-    before_integration_start: Option<fn(&mut Dispatcher, TaskId)>,
     /// Phase F5-fix2: WU の `checks` を走らせている run（キーは run id）。
     checking: HashMap<String, CheckingEntry>,
     /// Phase F5-fix6: 居なくなったデーモンの run（孤児）を lease 失効を待たずに回収する（`None` = 無効）。
@@ -1339,83 +1246,16 @@ pub struct Dispatcher {
     variant_observation: Option<variant_pin::VariantObservation>,
     tx: mpsc::UnboundedSender<Completion>,
     rx: mpsc::UnboundedReceiver<Completion>,
-    /// ADR-0018 D2: 多重接続が無いクラスタの cooldown（この時刻まで dispatch しない）。
-    cluster_cooldown: HashMap<String, Instant>,
-    /// ADR-0018 D2: 直近の `ssh -O check` の結果（クラスタ id → 多重接続があるか）。`refresh_cluster_liveness` が埋める。
-    cluster_connected: HashMap<String, bool>,
-    /// ADR-0023 D1: 最後に `ssh -O check` を回した時刻（`CLUSTER_LIVENESS_INTERVAL` に 1 回だけ回す）。
-    last_cluster_liveness: Option<Instant>,
-    /// ADR-0053 Phase 84b: `refresh_cluster_liveness` が使う「master 生存」判定フック。既定は本物の
-    /// `control_master_alive_blocking`（`ssh -O check`）。テストは `set_cluster_liveness_probe` で
-    /// 偽物に差し替え、実機の ssh 状態に依存しないようにする。
-    cluster_liveness_probe: ClusterLivenessProbe,
-    /// 試験の継ぎ目: remote workspace の run と判定に渡す `SshSettings` の `ssh_command` /
-    /// `rsync_command` を差し替える（`set_cluster_ssh_command_override`）。`None`（既定）なら本物の ssh / rsync。
-    cluster_ssh_command_override: Option<Vec<String>>,
     /// tick の回数（スナップショット用）。
     ticks: u64,
     publisher: Option<SnapshotPublisher>,
-    /// ADR-0024 D4 / ADR-0025 D1: アダプタごとのアカウントの観測値・cooldown・確認の帳簿（設定された根ディレクトリの
-    /// アダプタだけキーを持つ）。実行中の run のシンクとも共有する。reload では差し替えない（設定ファイルの
-    /// 再読込では消えない観測値）。
-    account_books: HashMap<AccountAdapter, Arc<StdMutex<AccountBook>>>,
-    /// ADR 2026-10-08 §(e): cooldowns of the implicit accounts (id = source id) of sources
-    /// without an account pool. In memory only, like the observations of a reload.
-    source_cooldowns: HashMap<task_core::llm_route::SourceId, crate::accounts::AccountCooldown>,
-    /// ADR 2026-10-11 llm-source-harness-selection: declared sources, harnesses and routes.
-    llm_route_registry: Arc<task_core::llm_route::Registry>,
-    /// ADR 2026-10-11 llm-source-harness-selection: one base adapter per declared harness
-    /// (`[harnesses.<id>]` over `[adapters.<kind>]`); the route's model and account go on at launch.
-    harness_adapters: HashMap<task_core::llm_route::HarnessId, Arc<dyn WorkerAdapter>>,
-    account_limits: Option<
-        HashMap<
-            (
-                task_core::llm_route::SourceId,
-                task_core::llm_route::AccountId,
-            ),
-            usize,
-        >,
-    >,
-    /// ADR-0024 D1: 選択のたびにディレクトリを読み直さないよう、tick につき高々 1 回だけスキャンする（アダプタごと）。
-    accounts_scan_cache: HashMap<AccountAdapter, Vec<AccountDir>>,
-    /// ADR-0024 D5/D7 / ADR-0025 D5: celeris（GUI の管理 API）が進行中のログイン中継を持っているアカウント
-    /// （キーは `"<adapter>:<id>"`。同じ id でもアダプタが違えば別のログインとして扱う）。
-    login_pending_accounts: std::collections::HashSet<String>,
-    /// ADR-0043 D3（Phase 56）: 起動時に調べたコンテナ runtime（観測値）。celeris が
-    /// `detect_container_runtime()` を呼んで埋める。埋まっていなければ「使えない」と同じ扱いで、
-    /// コンテナが要るタスクは `blocked` になる。
-    container_probe: task_worker::RuntimeProbe,
-    /// ADR-0032 D3: `auth = "publickey"` のクラスタに自動で接続を張るフック。`None` なら自動接続しない
-    /// （celeris 側が `set_cluster_connector` で挿す。未設定＝従来どおりの挙動）。
-    cluster_connector: Option<ClusterConnector>,
-    /// ADR-0062 A（Phase 107）: master 越しの実通信で生存を確定させるフック（`ssh -o BatchMode=yes
-    /// <host> -- true`）。`None` なら実通信の probe はしない（`-O check` だけの従来どおり）。
-    cluster_command_probe: Option<ClusterCommandProbe>,
-    /// ADR-0062 A: クラスタごとに最後に実通信 probe を行った時刻（`liveness_probe_secs` の間引きに使う）。
-    last_cluster_command_probe: HashMap<String, Instant>,
-    /// ADR-0090 D2: クラスタ job の poll のフック（`None` なら poll しない。celeris が本物を挿す）。
-    cluster_job_poller: Option<ClusterJobPoller>,
-    /// ADR-0090 D2: 走っている poll（wait id → 結果の受け口）。結果は次の tick 以降に拾う。
-    cluster_job_polls: HashMap<
-        String,
-        std::sync::mpsc::Receiver<Result<task_worker::RemoteCommandOutput, String>>,
-    >,
-    /// ADR-0078: クラスタごとの接続の帳簿（遷移・probe・鍵認証の再接続・回数）。
-    cluster_conn: HashMap<String, ClusterConnState>,
+    /// ADR 2026-11-11 dispatcher-state-ownership D1: 経路選択の状態（宣言・account の上限と帳簿・cooldown・routing mode・
+    /// 分類 board・経路なしの task・RoutingContext の登録簿）の owner。field は private で、`Dispatcher` は method だけを呼ぶ。
+    routing: RoutingRuntime,
     /// ADR-0078 D5: 直前の tick の開始時刻と、その前の tick との間隔（`cluster ssh master lost` の
     /// `last_tick_gap_ms`。tick の停止による切断〈ADR-0078 C3〉を見分ける）。
     last_tick_started: Option<Instant>,
     last_tick_gap_ms: u64,
-    /// ADR-0062 A: 明示的な切断を経ずに接続が失われたクラスタの詳細（exit code・stderr の末尾）。
-    /// `mark_cluster_unavailable` が拾って報告に足し、`Event::ClusterMasterExited` を 1 回だけ残す
-    /// （`reported`）。接続が戻れば消す。
-    cluster_disconnect_info: HashMap<String, ClusterDisconnectInfo>,
-    /// ADR-0062 A: celeris が保持している master（`Child`）の終了を検出するフック。`None` なら見ない
-    /// （celeris 側が `set_cluster_master_watcher` で挿す）。
-    cluster_master_watcher: Option<ClusterMasterWatcher>,
-    /// ADR-0032 D4/D5: GUI 発の接続（`POST /clusters/{id}/connect`）が進行中のクラスタ id
-    /// （celeris が `set_cluster_connect_pending` で反映する。D3 の自動接続とは別物）。
-    connect_pending_clusters: std::collections::HashSet<String>,
     /// ADR 2026-10-15-mlsys-min-decision-assisted D4: credential 待ちの検証・再開（`credential_resume`）。
     /// 未設定なら何もしない。検証は別 thread（tick は DB を見るだけ）。
     credential_resumer: Option<Arc<crate::credential_resume::CredentialResumer>>,
@@ -1426,11 +1266,6 @@ pub struct Dispatcher {
     /// `dispatch_ready` も `recover_reviews` も動かさず、**手元の run とレビューの面倒だけ見続ける**
     /// （完了の記録、リースの更新、`aggregate` / `child_failed` の後処理は通常どおり動く）。
     accepting_new_work: bool,
-    /// ADR-0041 D1 / ADR-0043 D2: この celeris が用意したローカルの作業場所（1 つ以上のリポジトリ）。
-    /// **終端では消さない**（ADR-0043 D2 の改定。差分を見るために残す）。消すのは**中止**（cancel）
-    /// のときだけで、worktree とブランチを消す。再起動では失われる（残った worktree は人が
-    /// `git worktree remove` する。PROGRESS の未解決）。
-    task_workspaces: HashMap<TaskId, task_worker::TaskWorkspaces>,
     /// ADR-0041 D5: 面倒を見てよいタスクの述語（`None` なら全部）。`--mode verify` の煙試験でだけ使う。
     eligible: Option<TaskFilter>,
     /// ADR-0052 D1（Phase 64）: 知識整理タスクを dispatch する直前に当てる到達性の検査
@@ -1439,51 +1274,12 @@ pub struct Dispatcher {
     knowledge_probe: KnowledgeProbe,
     /// ADR-0052 D1: 検査の結果のキャッシュ（`base_url` → (いつ調べたか, 結果)）。60 秒。
     knowledge_probe_cache: HashMap<String, (Instant, Reachability)>,
-    dispatch_routing: DispatchRoutingSettings,
-    /// 多目的 routing Phase 3: run に結ぶ RoutingContext の登録簿（`set_routing_context_registry`）。
-    /// 未設定なら登録も `context_ref` の発行もしない（`routing_features_recorded` の追記は続ける）。
-    routing_context_registry:
-        Option<Arc<dyn task_core::model_router::context_registry::RoutingContextRegistry>>,
-    /// ADR-0053 D3（Phase 66）: `[[clusters]].forwards` を(再)確立するフック。`None` なら何もしない。
-    tunnel_forward_ensurer: Option<TunnelForwardEnsurer>,
-    /// ADR-0053 D3 / Phase 85: forward の target（先方）の健康を見るフック。`None` なら常に「不健全」扱い。
-    tunnel_probe: Option<TunnelProbe>,
-    /// ADR-0053 Phase 85: forward のリスナーの有無を見るフック。`None` なら常に「無い」扱い
-    /// （安全側のデフォルト。`tunnel_forward_ensurer` に(再)確立を試みさせる。Phase 66 までと同じ保守的な
-    /// 挙動）。
-    tunnel_listener_probe: Option<TunnelListenerProbe>,
-    /// ADR-0053 D3 / Phase 85: forward ごとの直近の観測（キーは `tunnel_key`）。listener と target の
-    /// 健康を別々に持つ（`ForwardObservation`）。
-    tunnel_state: HashMap<String, ForwardObservation>,
-    /// ADR-0066 D3（Phase 110b）: forward ごとの target probe の直近の結果（キーは `tunnel_key`）。
-    /// **専用スレッド（`ensure_tunnel_prober_started`）が書き、`refresh_one_forward` は読むだけ**
-    /// （tick の同期経路から HTTP probe を外すため）。listener が初めて有りになった forward は、
-    /// ここにまだ記録が無い間だけ `refresh_one_forward` が 1 回だけ同期に probe して種を蒔く。
-    tunnel_probe_state: Arc<std::sync::Mutex<HashMap<String, TargetProbeState>>>,
-    /// ADR-0066 D3: 専用スレッドを起こしたら `Some`（二重に起こさない）。`Drop` でスレッドに停止を伝える。
-    tunnel_prober_stop: Option<Arc<std::sync::atomic::AtomicBool>>,
-    /// ADR-0053 D3: 「TOTP ログインが要る」と判定済みのクラスタ id（重複通知を防ぐ。master が戻れば消す）。
-    cluster_login_needed: std::collections::HashSet<String>,
-    /// ADR-0053 D3: 直近のトンネル状態遷移（Console / cluster API 向け。`take_tunnel_events` で取り出す）。
-    tunnel_events: std::collections::VecDeque<TunnelEvent>,
-    /// ADR-0053 D3: 最後にトンネルの生存を見た時刻（`refresh_cluster_liveness` と同じ間隔で間引く）。
-    last_cluster_tunnel_refresh: Option<Instant>,
     /// ADR-0074 D4（Phase F3 quota）: run の重なりを追跡し、measured/apportioned/pending を決定する
     /// （プロセス内メモリのみ。`AccountBook` とは別軸で、replay の対象外）。
     quota_activity: crate::accounts::QuotaActivity,
     /// ADR-0074 D4.2（Phase F3 quota）: `estimated` の較正材料（source × 窓ごとの直近 `measured`）。
     quota_calibration: crate::accounts::QuotaCalibrationBook,
     script_compare: dispatch_run::ScriptCompareState,
-}
-
-impl Drop for Dispatcher {
-    /// ADR-0066 D3: 専用の target-probe スレッド（起こしていれば）に停止を伝える。tick を止めない設計と
-    /// 同じ理由で、ここでも join はしない（スレッドは次の周回〈`TUNNEL_PROBER_STEP`〉で自分から終わる）。
-    fn drop(&mut self) {
-        if let Some(stop) = &self.tunnel_prober_stop {
-            stop.store(true, std::sync::atomic::Ordering::Relaxed);
-        }
-    }
 }
 
 /// ADR-0052 D1（Phase 65b で `bearer_token` を追加）: 到達性の検査のフック（差し替えられるようにして
@@ -1514,44 +1310,11 @@ fn real_now_unix() -> i64 {
 
 impl Dispatcher {
     pub fn new(store: Arc<dyn TaskStore>, config: DispatchConfig) -> Self {
-        let account_limits = match store.account_limits() {
-            Ok(rows) => Some(
-                rows.into_iter()
-                    .map(|row| {
-                        (
-                            (
-                                task_core::llm_route::SourceId::from(row.source_id),
-                                task_core::llm_route::AccountId::from(row.account_id),
-                            ),
-                            row.max_runs,
-                        )
-                    })
-                    .collect(),
-            ),
-            Err(error) => {
-                tracing::error!(%error, "cannot load account limits; account dispatch is blocked");
-                None
-            }
-        };
         let (tx, rx) = mpsc::unbounded_channel();
-        // ADR-0024 D4 / ADR-0025 D1: `<root>/.celeris-usage.json` から観測値・cooldown を読む（無ければ空から始める）。
-        // アダプタごとに別の根ディレクトリ・別の帳簿（アカウントの記録はそのアダプタの中で閉じる）。
-        let account_books: HashMap<AccountAdapter, Arc<StdMutex<AccountBook>>> =
-            match &config.accounts {
-                Some(accounts) => accounts
-                    .roots
-                    .iter()
-                    .map(|(adapter, root)| {
-                        (
-                            *adapter,
-                            Arc::new(StdMutex::new(AccountBook::load(
-                                &root.join(".celeris-usage.json"),
-                            ))),
-                        )
-                    })
-                    .collect(),
-                None => HashMap::new(),
-            };
+        let routing = RoutingRuntime::new(
+            store.as_ref(),
+            config.accounts.as_ref().map(|accounts| &accounts.roots),
+        );
         // ADR-0075 D1: scratch を NFS 上で無効化したときは起動ログに理由を出す（従来の build_cache_dir に戻る）。
         // ADR-0129 (3): `[scratch] mount` が mount されていなければ従来の場所へ戻したことを出す。
         if let Some(reason) = &config.scratch.dir_fallback_reason {
@@ -1580,27 +1343,9 @@ impl Dispatcher {
             cos_chat_launch: None,
             config,
             max_concurrency,
-            target_sweep: None,
-            disk_watch: None,
-            target_sweep_scope: crate::target_sweep::SweepScope::default(),
+            maint: Default::default(),
             #[cfg(test)]
-            test_now: None,
-            #[cfg(test)]
-            test_cos_reserved_sources: Default::default(),
-            #[cfg(test)]
-            test_halt_after_wu_transition: false,
-            #[cfg(test)]
-            test_worker_start_delay: None,
-            #[cfg(test)]
-            test_policy_clock: None,
-            #[cfg(test)]
-            test_skip_pre_review_sync: false,
-            #[cfg(test)]
-            test_disable_write_set_gate: false,
-            #[cfg(test)]
-            test_disable_stale_priority: false,
-            #[cfg(test)]
-            test_sync_conflict_as_review_fail: false,
+            test_hooks: Default::default(),
             running: HashMap::new(),
             eval_runs: HashMap::new(),
             eval_version_probe: None,
@@ -1620,25 +1365,13 @@ impl Dispatcher {
             terminal_records_reconciled_at: None,
             ownerless_reconciled_at: None,
             lost_review_watch: std::collections::HashSet::new(),
-            disk_low: false,
-            removing_build_caches: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            repo_target_gc_at: None,
-            removing_repo_targets: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            scratch: ScratchState::default(),
-            disk_ready: true,
-            warned_unroutable: std::collections::HashSet::new(),
             credential_gates: credential_gate::CredentialGates::default(),
             credential_held: std::collections::HashSet::new(),
-            routing_mode: task_core::route_select::RoutingMode::default(),
-            classification_board: lane_assist::ClassificationBoard::default(),
-            classification_wait: None,
-            classification_deferred_since: HashMap::new(),
-            warned_cluster_tool: std::collections::HashSet::new(),
+            cluster: ClusterRuntime::new(),
             just_aborted: std::collections::HashSet::new(),
             write_reservations: HashMap::new(),
             write_set_waits: HashMap::new(),
             write_set_hold_seq: 0,
-            unroutable: std::collections::HashSet::new(),
             dispatch_waits: HashMap::new(),
             cluster_waiting: std::collections::HashSet::new(),
             integrated_deps: std::collections::BTreeSet::new(),
@@ -1647,62 +1380,25 @@ impl Dispatcher {
             review_sync_seq: 0,
             awaiting_children: HashMap::new(),
             integrating: HashMap::new(),
-            #[cfg(test)]
-            before_integration_start: None,
             checking: HashMap::new(),
             orphan_takeover: None,
             variant_observation: None,
             tx,
             rx,
-            cluster_cooldown: HashMap::new(),
-            cluster_connected: HashMap::new(),
-            last_cluster_liveness: None,
-            cluster_liveness_probe: Arc::new(|ssh_command: &[String], host: &str| {
-                control_master_alive_blocking(ssh_command, host)
-            }),
-            cluster_ssh_command_override: None,
             ticks: 0,
             publisher: None,
-            account_books,
-            source_cooldowns: HashMap::new(),
-            llm_route_registry: Arc::default(),
-            harness_adapters: HashMap::new(),
-            account_limits,
-            accounts_scan_cache: HashMap::new(),
-            login_pending_accounts: std::collections::HashSet::new(),
-            container_probe: task_worker::RuntimeProbe::default(),
-            cluster_connector: None,
-            cluster_command_probe: None,
-            last_cluster_command_probe: HashMap::new(),
-            cluster_job_poller: None,
-            cluster_job_polls: HashMap::new(),
-            cluster_conn: HashMap::new(),
+            routing,
             last_tick_started: None,
             last_tick_gap_ms: 0,
-            cluster_disconnect_info: HashMap::new(),
-            cluster_master_watcher: None,
-            connect_pending_clusters: std::collections::HashSet::new(),
             credential_resumer: None,
             credential_busy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             now_unix_fn: Arc::new(real_now_unix),
             accepting_new_work: true,
-            task_workspaces: HashMap::new(),
             eligible: None,
             knowledge_probe: Arc::new(|base_url, bearer_token| {
                 task_worker::probe_models(base_url, task_worker::PROBE_TIMEOUT, bearer_token)
             }),
             knowledge_probe_cache: HashMap::new(),
-            dispatch_routing: DispatchRoutingSettings::default(),
-            routing_context_registry: None,
-            tunnel_forward_ensurer: None,
-            tunnel_probe: None,
-            tunnel_listener_probe: None,
-            tunnel_state: HashMap::new(),
-            tunnel_probe_state: Arc::new(std::sync::Mutex::new(HashMap::new())),
-            tunnel_prober_stop: None,
-            cluster_login_needed: std::collections::HashSet::new(),
-            tunnel_events: std::collections::VecDeque::new(),
-            last_cluster_tunnel_refresh: None,
             quota_activity: crate::accounts::QuotaActivity::new(),
             quota_calibration: crate::accounts::QuotaCalibrationBook::new(),
             script_compare: Default::default(),
@@ -1721,7 +1417,7 @@ impl Dispatcher {
         &mut self,
         registry: Arc<dyn task_core::model_router::context_registry::RoutingContextRegistry>,
     ) {
-        self.routing_context_registry = Some(registry);
+        self.routing.set_context_registry(registry);
     }
 
     /// ADR-0052 D1: `[knowledge.langmem].base_url` の到達性（60 秒キャッシュ）。
@@ -1768,17 +1464,17 @@ impl Dispatcher {
                 "no container runtime; tasks that need one will be blocked"
             ),
         }
-        self.container_probe = probe;
+        self.cluster.set_container_probe(probe);
     }
 
     /// 調べた結果を差し替える（celeris の起動経路とテスト用）。
     pub fn set_container_probe(&mut self, probe: task_worker::RuntimeProbe) {
-        self.container_probe = probe;
+        self.cluster.set_container_probe(probe);
     }
 
     /// 起動時に調べたコンテナ runtime（スナップショット用）。
     pub fn container_probe(&self) -> &task_worker::RuntimeProbe {
-        &self.container_probe
+        self.cluster.container_probe()
     }
 
     /// ADR-0040 D4（Phase 47）: 新しい仕事を始めるのをやめる／再開する。`false` にすると
@@ -1963,22 +1659,7 @@ impl Dispatcher {
 
     /// Reload authoritative account settings. On failure keep account dispatch blocked.
     pub fn reload_account_limits(&mut self) -> Result<(), task_core::StoreError> {
-        self.account_limits = None;
-        let rows = self.store.account_limits()?;
-        self.account_limits = Some(
-            rows.into_iter()
-                .map(|r| {
-                    (
-                        (
-                            task_core::llm_route::SourceId::from(r.source_id),
-                            task_core::llm_route::AccountId::from(r.account_id),
-                        ),
-                        r.max_runs,
-                    )
-                })
-                .collect(),
-        );
-        Ok(())
+        self.routing.reload_account_limits(self.store.as_ref())
     }
 
     /// Set/clear an override, updating memory only after SQLite commits.
@@ -1988,31 +1669,12 @@ impl Dispatcher {
         id: &str,
         max_runs: Option<usize>,
     ) -> Result<(), task_core::StoreError> {
-        self.store.set_account_limit(adapter, id, max_runs)?;
-        if let Some(limits) = self.account_limits.as_mut() {
-            let key = (
-                task_core::llm_route::SourceId::from(adapter),
-                task_core::llm_route::AccountId::from(id),
-            );
-            if let Some(max_runs) = max_runs {
-                limits.insert(key, max_runs);
-            } else {
-                limits.remove(&key);
-            }
-            Ok(())
-        } else {
-            self.reload_account_limits()
-        }
+        self.routing
+            .set_account_limit(self.store.as_ref(), adapter, id, max_runs)
     }
 
     pub fn account_max_runs(&self, adapter: &str, id: &str) -> Option<usize> {
-        self.account_limits
-            .as_ref()?
-            .get(&(
-                task_core::llm_route::SourceId::from(adapter),
-                task_core::llm_route::AccountId::from(id),
-            ))
-            .copied()
+        self.routing.stored_limit(adapter, id)
     }
 
     /// `[accounts] max_runs_per_account`, or the built-in default 2 without `[accounts]`.
@@ -2024,7 +1686,7 @@ impl Dispatcher {
     }
 
     pub(super) fn account_run_limit(&self, adapter: AccountAdapter, id: &str, cos: bool) -> usize {
-        if self.account_limits.is_none() {
+        if !self.routing.account_limits_loaded() {
             return 0;
         }
         let (effective, _) = crate::capacity::effective_account_limit(
@@ -2037,7 +1699,8 @@ impl Dispatcher {
     /// Implicit accounts (ADR 2026-10-08 §(e), ADR 2026-10-11 llm-source-harness-selection): one
     /// per declared LLM source without an OAuth account pool, in source id order.
     pub fn implicit_account_ids(&self) -> Vec<ProviderId> {
-        self.llm_route_registry
+        self.routing
+            .registry()
             .sources
             .iter()
             .filter(|(_, spec)| account_adapter_for_source_kind(spec.kind.as_ref()).is_none())
@@ -2054,14 +1717,12 @@ impl Dispatcher {
         if !self.implicit_account_ids().iter().any(|id| id == source) {
             return None;
         }
+        if !self.routing.account_limits_loaded() {
+            return None;
+        }
         let stored = self
-            .account_limits
-            .as_ref()?
-            .get(&(
-                task_core::llm_route::SourceId::from(crate::capacity::IMPLICIT_ACCOUNT_ADAPTER),
-                task_core::llm_route::AccountId::from(source),
-            ))
-            .copied();
+            .routing
+            .stored_limit(crate::capacity::IMPLICIT_ACCOUNT_ADAPTER, source);
         Some(crate::capacity::effective_account_limit(
             stored,
             self.default_max_runs(),
@@ -2161,44 +1822,24 @@ impl Dispatcher {
                     .values()
                     .filter(|(source, account)| {
                         account.as_ref() == id
-                        && self
-                            .llm_route_registry
-                            .sources
-                            .get(source)
-                            .and_then(|spec| {
-                                crate::dispatcher::route_select::account_adapter_for_source_kind(
-                                    spec.kind.as_ref(),
-                                )
-                            })
-                            == Some(adapter)
+                            && self.routing.source_account_adapter(source) == Some(adapter)
                     })
                     .count()
             })
     }
 
-    /// ADR-0025 D1: `login_pending_accounts` のキー（同じ id でもアダプタが違えば別のログインとして扱う）。
-    fn login_pending_key(adapter: AccountAdapter, id: &str) -> String {
-        format!("{adapter}:{id}")
-    }
-
     /// D7: 進行中のログイン中継の有無を記録する（celeris の `HashMap<String, LoginSession>` と対）。
     pub fn set_account_login_pending(&mut self, adapter: AccountAdapter, id: &str, pending: bool) {
-        let key = Self::login_pending_key(adapter, id);
-        if pending {
-            self.login_pending_accounts.insert(key);
-        } else {
-            self.login_pending_accounts.remove(&key);
-        }
+        self.routing.set_login_pending(adapter, id, pending);
     }
 
     /// ログイン中継の実行中は定期確認しない。
     pub fn account_login_pending(&self, adapter: AccountAdapter, id: &str) -> bool {
-        self.login_pending_accounts
-            .contains(&Self::login_pending_key(adapter, id))
+        self.routing.login_pending(adapter, id)
     }
 
     pub fn account_book(&self, adapter: AccountAdapter) -> Option<Arc<StdMutex<AccountBook>>> {
-        self.account_books.get(&adapter).cloned()
+        self.routing.account_book(adapter)
     }
 
     /// D6: 手動確認の結果を `AccountBook` に記録して保存する（`source = "check"`）。
@@ -2297,17 +1938,13 @@ impl Dispatcher {
                 u64::try_from(tick_started.duration_since(prev).as_millis()).unwrap_or(u64::MAX);
         }
         // ADR-0024 D1: 選択のたびに読み直さないよう、スキャンは tick ごとに高々 1 回（このキャッシュを毎 tick 捨てる）。
-        self.accounts_scan_cache.clear();
+        self.routing.clear_scan_cache();
         // ADR 2026-10-14-local-machine-settings D4: `max_concurrency` は次の tick から効く（store を 1 行読む）。
         self.refresh_max_concurrency();
         let now = (self.now_unix_fn)();
-        for book in self.account_books.values() {
-            if let Ok(mut book) = book.lock() {
-                book.clear_expired(now);
-            }
-        }
+        self.routing.expire_account_books(now);
         // drain_completions からも reviewer run が起動されるため、完了処理より先に判定する。
-        self.disk_ready = !self.accepting_new_work || self.check_disk_space();
+        self.refresh_disk_ready();
         // Critical also gates reviewers started by drain_completions. Sample before that phase.
         // Draining instances leave monitoring to the new owner.
         if self.accepting_new_work {
@@ -2355,22 +1992,8 @@ impl Dispatcher {
         self.cleanup_cancelled_worktrees()?;
         // ADR-0075 D2（Phase G1）: scratch pool の semantic GC（`scratch_gc` phase。rename まで、削除と測定は別スレッド）。
         // scratch が無効なら ADR-0074 F5-fix: 終端になった WU の target（WU ごとの `CARGO_TARGET_DIR`）を消す。
-        if self.scratch_active() {
-            if !self.scratch.ran_this_tick {
-                self.scratch_gc(false);
-            }
-            // ADR-0129 (4)(5): seed の GC（rename まで）と、main が進んだときの seed の更新（別スレッド）。
-            self.seed_housekeeping(Instant::now());
-        } else {
-            self.cleanup_work_unit_build_caches();
-            self.scratch.view = self.config.shared_build_cache.then(|| {
-                crate::scratch_gc::disabled_status(
-                    &self.config.scratch,
-                    std::time::SystemTime::now(),
-                )
-            });
-        }
-        self.scratch.ran_this_tick = false;
+        // ADR-0129 (4)(5): scratch が有効なら seed の GC（rename まで）と、main が進んだときの seed の更新（別スレッド）も。
+        self.tick_build_caches();
         steps.mark("scratch_and_build_caches");
         // ADR-0066 D2（Phase 110b）: 終端になってから `prune_after_secs` 経った作業場所から、ビルド
         // 生成物だけを刈る（1 tick に最大 1 か所。探すところまでは軽いので同期、削除は別スレッド）。
@@ -2380,7 +2003,7 @@ impl Dispatcher {
         steps.mark("prune_and_sweep");
         // ADR-0040 D4: draining のインスタンスは新しい仕事を始めない（拾い上げも dispatch もしない）。
         // 手元の run とレビューの完了・リース更新・後処理は上の `drain_completions` 以下でそのまま動く。
-        if self.accepting_new_work && self.disk_ready {
+        if self.accepting_new_work && self.maint.disk_ready() {
             self.recover_reviews()?;
         }
         steps.mark("recover_reviews");
@@ -2403,14 +2026,14 @@ impl Dispatcher {
             tracing::warn!(error = %e, "browser prerequisite re-evaluation failed");
         }
         steps.mark("cron_and_browser_prereq");
-        if self.accepting_new_work && self.disk_ready {
+        if self.accepting_new_work && self.maint.disk_ready() {
             report.dispatched = self.dispatch_ready()?;
             self.stagnation.waits_known = true; // ADR 2026-11-09-unscheduled-restart-hold D1: メモリの待ちが揃った。
         }
         steps.mark_with("dispatch_ready", crate::phase_timing::take());
         // ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch）D3:
         // 評価 run は本番を先に配った後の予約枠（`[routing_eval] reserved_runs`）の中だけで起こす。
-        if self.accepting_new_work && self.disk_ready {
+        if self.accepting_new_work && self.maint.disk_ready() {
             report.eval_started = self.tick_eval_trials();
         }
         steps.mark("tick_eval_trials");
@@ -2572,7 +2195,7 @@ impl Dispatcher {
     }
 
     fn dispatch_ready(&mut self) -> Result<usize, DispatchError> {
-        self.unroutable.clear();
+        self.routing.begin_dispatch_pass();
         self.cluster_waiting.clear();
         self.dispatch_waits.clear();
         // ADR-0089（Phase R6-5）: 非 CoS の枠が埋まっていても、CoS の対話 run の枠が空いていれば走査する。
@@ -2673,7 +2296,7 @@ impl Dispatcher {
         // 待ち対象に数えない。
         Ok(ready.iter().all(|t| {
             !self.is_eligible(t)
-                || self.unroutable.contains(&t.id)
+                || self.routing.is_unroutable(&t.id)
                 || self.cluster_waiting.contains(&t.id)
                 || matches!(
                     self.dispatch_waits.get(&t.id),

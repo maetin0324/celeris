@@ -2,7 +2,7 @@
 //! 共有の作業ディレクトリ）で同じ `README.md` を書く 2 task A/B に、強く重なる expected write-set
 //! （`README.md`）を付けて同時に ready にする。
 //!
-//! - off（`test_disable_write_set_gate = true`）: A と B が同じ tick に起き、両方が同じ版の `README.md` を
+//! - off（`ablation.disable_write_set_gate = true`）: A と B が同じ tick に起き、両方が同じ版の `README.md` を
 //!   読んで編集する。先に書き終えた方の後で、もう片方は読んだ版と今の版が食い違う（同時編集の衝突）ので
 //!   書かずに終わり、受け入れ検査に落ちてやり直しの run（repair）が 1 本足される。
 //! - on（既定）: B は A の run が終わるまで ready のまま待ち、A の結果の上で編集するので衝突も repair もない。
@@ -181,7 +181,7 @@ async fn run_variant_with(
     adapter.start_delay = start_delay;
     let adapter = Arc::new(adapter);
     let mut d = dispatcher(store.clone(), adapter.clone(), 2);
-    d.test_disable_write_set_gate = variant == Variant::Off;
+    d.test_hooks.ablation.disable_write_set_gate = variant == Variant::Off;
 
     let done = |id: TaskId| store.get(id).unwrap().unwrap().status == Status::Done;
     let mut first_tick = true;

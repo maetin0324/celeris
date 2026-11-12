@@ -44,7 +44,7 @@ fn setup(store: Arc<SqliteStore>) -> (Dispatcher, Arc<StdMutex<OffsetDateTime>>)
     // worker 枠を設けず、作成された task を非終端のまま観察する。
     let mut d = dispatcher(store, adapter, 0);
     let clock = Arc::new(StdMutex::new(at("2026-10-01T02:59:59Z")));
-    d.test_now = Some(clock.clone());
+    d.test_hooks.now = Some(clock.clone());
     (d, clock)
 }
 
@@ -214,7 +214,7 @@ async fn target_sweep_cron_fires_deterministic_executor_and_records_event() {
     });
     let mut d = dispatcher(store.clone(), adapter, 1);
     let clock = Arc::new(StdMutex::new(at("2026-10-01T02:59:59Z")));
-    d.test_now = Some(clock.clone());
+    d.test_hooks.now = Some(clock.clone());
     d.set_target_sweep(task_worker::target_sweep::SweepParams {
         roots: vec![root.clone()],
         ..Default::default()
@@ -385,7 +385,7 @@ async fn target_sweep_executor_cleans_finished_workspaces_and_scratch_at_critica
     let mut d = dispatcher(store.clone(), adapter, 1);
     d.config.workspace_roots = task_core::local_machine::WorkspaceRoots::new(ws.clone(), None);
     scratch_on(&mut d, &scratch);
-    d.test_now = Some(Arc::new(StdMutex::new(now)));
+    d.test_hooks.now = Some(Arc::new(StdMutex::new(now)));
     d.set_target_sweep(task_worker::target_sweep::SweepParams {
         roots: vec![],
         ..Default::default()

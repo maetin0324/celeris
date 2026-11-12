@@ -470,7 +470,7 @@ impl<'a> Trial<'a> {
     fn start_daemon(&mut self, owner: &str) {
         let adapter: Arc<dyn WorkerAdapter> = Arc::new(FakeAdapter::new(vec!["false".into()]));
         let mut d = dispatcher(self.store.clone(), adapter, 0);
-        d.test_now = Some(self.env.clock.clone());
+        d.test_hooks.now = Some(self.env.clock.clone());
         d.config.execution.max_cos_runs = 0;
         d.config.min_free_disk_mb = 0;
         d.stagnation.checked_at = Some(at("2100-01-01T00:00:00Z"));

@@ -407,7 +407,7 @@ async fn cex_draining_instance_reclaims_its_expired_lease_without_redispatching(
 /// （b・c が pending のまま Task が ready で止まる）ので、ここでは assert せず、反例として
 /// `agent-docs/progress/2026-11-11-health-v2-r4/cex-lease.md` の「未解決」に再現手順を記録した。
 ///
-/// 既存試験で検出できない理由: `test_halt_after_wu_transition` を使う試験（`cluster_job_wait.rs`）は cluster の待ちの
+/// 既存試験で検出できない理由: `test_hooks.halt_after_wu_transition` を使う試験（`cluster_job_wait.rs`）は cluster の待ちの
 /// WU 遷移だけを見る。`orphan_work_units.rs` は WU が running のまま落ちた状態だけを種にし、WU が先に done になった
 /// 状態からの再起動・その再実行を作らない。
 #[tokio::test]

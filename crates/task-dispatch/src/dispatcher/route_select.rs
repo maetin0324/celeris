@@ -12,11 +12,10 @@
 use super::*;
 use std::collections::BTreeMap;
 use task_core::llm_route::{
-    AccountId, AccountSnapshot, Admission, Candidate, CandidateKey, CandidateRejection,
-    ExclusionReason, HarnessId, HarnessRequest, HarnessSelectionError, ModelId, QuotaSnapshot,
-    Registry, ReservationSnapshot, RouteRequest, RunSelection, SourceId, admit_source,
-    constrain_for_harness, enumerate_candidates, harness_candidates, route_priority,
-    select_harness, wire_model_id,
+    AccountId, Admission, Candidate, CandidateKey, CandidateRejection, ExclusionReason, HarnessId,
+    HarnessRequest, HarnessSelectionError, ModelId, QuotaSnapshot, Registry, RouteRequest,
+    RunSelection, SourceId, admit_source, constrain_for_harness, enumerate_candidates,
+    harness_candidates, route_priority, select_harness, wire_model_id,
 };
 use task_core::model_policy::RouteFeaturesRef;
 use task_core::route_select::policy::FRONTIER_LANE;
@@ -31,33 +30,6 @@ pub const ROUTE_SELECTION_VERSION: u32 = 2;
 
 /// Capability a task needs when it carries browser requirements.
 pub const BROWSER_CAPABILITY: &str = "browser_context";
-
-/// Mutable state the selection and admission steps read, captured once per decision.
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct RouteState {
-    pub accounts: AccountSnapshot,
-    pub quota: QuotaSnapshot,
-    pub reservations: ReservationSnapshot,
-    /// Per `(source, account)` run limit (stored `account_limits` or the default).
-    pub account_max_runs: BTreeMap<(SourceId, AccountId), u32>,
-    /// Evidence table snapshot per harness (ADR 2026-10-11 D2). Empty = no evidence yet, so the
-    /// `route_defaults` column decides.
-    pub evidence: BTreeMap<HarnessId, Vec<EvidenceRow>>,
-    /// Stage per harness (ADR D3). A harness without a row is `shadow`.
-    pub stages: BTreeMap<HarnessId, RoutingStage>,
-    /// Live harness versions; evidence is usable only while the major version agrees (ADR D2).
-    pub harness_versions: BTreeMap<HarnessId, String>,
-    /// Seed of the deterministic ε exploration (the run id; the task id when there is no run yet).
-    pub run_seed: Option<String>,
-    /// The one task features snapshot of this dispatch (ADR-task-routing-features D6).
-    pub features: Option<RouteFeaturesRef>,
-    /// The work unit this dispatch runs, when it runs one (the decision subject).
-    pub work_unit_id: Option<String>,
-    /// guardrail が止めた実行クラス（`harness_balance_trips`。ADR 2026-10-22 D2）。止まったクラスは宣言順。
-    pub balance_tripped: std::collections::BTreeSet<String>,
-    /// 付記 S5-3: `route_priority` の TS の候補列（[`RouteContext::priority_override`]）。
-    pub priority_override: Option<(HarnessId, Vec<CandidateKey>)>,
-}
 
 /// One routing request: the harness inputs plus the source/model inputs.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -688,43 +660,6 @@ pub(super) fn with_account_limits(registry: &Registry, state: &RouteState) -> Re
     out
 }
 
-/// The account pool that backs an OAuth source kind (login dirs, usage observations, cooldowns).
-pub fn account_adapter_for_source_kind(kind: &str) -> Option<AccountAdapter> {
-    match kind {
-        "claude_oauth" => Some(AccountAdapter::ClaudeCode),
-        "codex_oauth" => Some(AccountAdapter::Codex),
-        "opencode_go" => Some(AccountAdapter::OpencodeGo),
-        _ => None,
-    }
-}
-
-/// The account pool `source_id` offers to route selection. `logged_in` is the logged-in account
-/// directories when the source kind has an account adapter (OAuth pools), `None` otherwise.
-///
-/// - OAuth pool: the declared accounts narrowed to the logged-in ones, or every logged-in one when
-///   none are declared.
-/// - No account adapter: the declared accounts, or the source id itself as its one implicit account
-///   when none are declared (ADR 2026-10-08 account-concurrency-limits §(e),
-///   ADR 2026-10-26-ldr-proxy-and-route-fixes C1).
-///
-/// The dispatcher and `celerisctl worker` both build their pools here.
-pub fn source_account_pool(
-    source_id: &SourceId,
-    declared: &[AccountId],
-    logged_in: Option<&[AccountId]>,
-) -> Vec<AccountId> {
-    match logged_in {
-        Some(logged_in) if declared.is_empty() => logged_in.to_vec(),
-        Some(logged_in) => declared
-            .iter()
-            .filter(|a| logged_in.contains(a))
-            .cloned()
-            .collect(),
-        None if declared.is_empty() => vec![AccountId::from(source_id.as_ref())],
-        None => declared.to_vec(),
-    }
-}
-
 /// Harness inputs taken from the task's structured fields only (never its prose).
 pub fn harness_request_for(task: &Task) -> HarnessRequest {
     let mut required_capabilities = std::collections::BTreeSet::new();
@@ -741,240 +676,65 @@ pub fn harness_request_for(task: &Task) -> HarnessRequest {
     }
 }
 
+/// A `(source, account)` held by a run, a review or a CoS chat reservation.
+type RouteHold = (SourceId, AccountId);
+
 impl Dispatcher {
     /// Daemon wiring: the declared sources, harnesses, routes and defaults.
     pub fn set_llm_route_registry(&mut self, registry: Registry) {
-        self.llm_route_registry = Arc::new(registry);
+        self.routing.set_registry(registry);
     }
 
     pub fn llm_route_registry(&self) -> &Registry {
-        &self.llm_route_registry
+        self.routing.registry()
     }
 
-    /// Capture the admission state of every declared source: logged-in accounts of OAuth
-    /// pools (or the declared accounts of other sources), cooldowns and exhausted windows from
-    /// the account books, stored per-account limits, and runs holding a `(source, account)`.
+    /// Capture the admission state of every declared source (see [`RoutingRuntime::route_state`]). The holds are
+    /// the `(source, account)` pairs of runs and reviews (a leaf run's admission does not count CoS chat runs,
+    /// which hold their own slot), and the CoS chat reservations.
     pub(super) fn route_state(&mut self, cos: bool) -> RouteState {
-        let registry = Arc::clone(&self.llm_route_registry);
-        let now = (self.now_unix_fn)();
-        let mut state = RouteState::default();
+        let running = self.running.values().filter(|entry| cos || !entry.cos);
+        let reviewing = self.reviewing.values().filter_map(|e| e.route.clone());
+        let holds: Vec<RouteHold> = running
+            .filter_map(|entry| entry.route.clone())
+            .chain(reviewing)
+            .collect();
+        let cos_holds: Vec<RouteHold> = self
+            .cos_chat_launch
+            .as_ref()
+            .map(|launch| launch.route_reservations.values().cloned().collect())
+            .unwrap_or_default();
         // `[cos] worker_reserve_five_hour`（CoS が有効なときだけ。既定 0.90）。
-        let worker_reserve = self
+        let worker_reserve_five_hour = self
             .cos_chat_launch
             .as_ref()
             .filter(|launch| launch.config.enabled)
             .map(|launch| launch.config.worker_reserve_five_hour);
-        for entry in self.running.values() {
-            if let Some((source, account)) = &entry.route {
-                // A leaf run's admission does not count CoS chat runs (they hold their own slot).
-                if !cos && entry.cos {
-                    continue;
-                }
-                *state
-                    .reservations
-                    .source_in_use
-                    .entry(source.clone())
-                    .or_default() += 1;
-                *state
-                    .reservations
-                    .account_in_use
-                    .entry((source.clone(), account.clone()))
-                    .or_default() += 1;
-            }
-        }
-        // Reviewer runs hold their `(source, account)` the same way.
-        for (source, account) in self.reviewing.values().filter_map(|e| e.route.as_ref()) {
-            *state
-                .reservations
-                .source_in_use
-                .entry(source.clone())
-                .or_default() += 1;
-            *state
-                .reservations
-                .account_in_use
-                .entry((source.clone(), account.clone()))
-                .or_default() += 1;
-        }
-        for (source_id, spec) in &registry.sources {
-            if cos && let Some(launch) = self.cos_chat_launch.as_ref() {
-                for (source, account) in launch.route_reservations.values() {
-                    if source == source_id {
-                        *state
-                            .reservations
-                            .source_in_use
-                            .entry(source.clone())
-                            .or_default() += 1;
-                        *state
-                            .reservations
-                            .account_in_use
-                            .entry((source.clone(), account.clone()))
-                            .or_default() += 1;
-                    }
-                }
-            }
-            let adapter = account_adapter_for_source_kind(spec.kind.as_ref());
-            // OAuth pools are filled from the logged-in directories below.
-            let mut accounts = match adapter {
-                Some(_) => Vec::new(),
-                None => source_account_pool(source_id, &spec.accounts, None),
-            };
-            if let Some(adapter) = adapter {
-                let scanned = match (
-                    self.config.accounts.clone(),
-                    self.accounts_scan_cache.get(&adapter),
-                ) {
-                    (_, Some(dirs)) => dirs.clone(),
-                    (Some(cfg), None) => match cfg.root_for(adapter) {
-                        Some(root) => {
-                            let dirs = scan_accounts(root, adapter);
-                            self.accounts_scan_cache.insert(adapter, dirs.clone());
-                            dirs
-                        }
-                        None => Vec::new(),
-                    },
-                    (None, None) => Vec::new(),
-                };
-                let logged_in: Vec<AccountId> = scanned
-                    .iter()
-                    .filter(|d| d.logged_in)
-                    .map(|d| AccountId::from(d.id.as_str()))
-                    .collect();
-                accounts = source_account_pool(source_id, &spec.accounts, Some(&logged_in));
-                if let Some(book) = self.account_book(adapter) {
-                    let book = book.lock().unwrap_or_else(|e| e.into_inner());
-                    // Preserve the account pool's headroom policy when adapting it to
-                    // source×model routing. Admission chooses the first eligible account.
-                    accounts.sort_by(|left, right| {
-                        let in_use = |account: &AccountId| {
-                            state
-                                .reservations
-                                .account_in_use
-                                .get(&(source_id.clone(), account.clone()))
-                                .copied()
-                                .unwrap_or(0)
-                        };
-                        let score = |account: &AccountId| {
-                            evaluate(
-                                &AccountCandidate {
-                                    id: account.as_ref(),
-                                    logged_in: true,
-                                    in_use: in_use(account) as usize,
-                                },
-                                book.state(account.as_ref()),
-                                usize::MAX,
-                                now,
-                            )
-                            .score
-                        };
-                        score(right)
-                            .partial_cmp(&score(left))
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                            .then_with(|| left.cmp(right))
-                    });
-                    // ADR 2026-10-22 D1: source の残量。最良 account の ADR-0024 D3 スコア（席の減点なし）と、
-                    // 最も逼迫した窓の残り割合。除外された account は 0。
-                    let (mut best_score, mut best_remaining) = (0.0_f64, 0.0_f64);
-                    for account in &accounts {
-                        let key = (source_id.clone(), account.clone());
-                        let candidate = AccountCandidate {
-                            id: account.as_ref(),
-                            logged_in: true,
-                            in_use: 0,
-                        };
-                        let evaluation =
-                            evaluate(&candidate, book.state(account.as_ref()), usize::MAX, now);
-                        // ADR 2026-11-06-cos-run-launch-accounting-and-drain: 5 時間枠の使用率が
-                        // `[cos] worker_reserve_five_hour` 以上の Claude account は CoS の予約分で、worker は入れない。
-                        if !cos
-                            && adapter == task_core::AccountAdapter::ClaudeCode
-                            && worker_reserve.is_some_and(|reserve| {
-                                crate::accounts::five_hour_utilization(
-                                    book.state(account.as_ref()),
-                                    now,
-                                ) >= reserve
-                            })
-                        {
-                            state.quota.cos_reserved.insert(key.clone());
-                        }
-                        match evaluation.excluded {
-                            Some(ExcludedReason::Cooldown) => {
-                                state.quota.cooling_down.insert(key);
-                            }
-                            Some(ExcludedReason::Rejected) => {
-                                state.quota.auth_failed.insert(key);
-                            }
-                            Some(_) => {
-                                state.quota.account_remaining.insert(key, 0.0);
-                            }
-                            None => {
-                                best_score = best_score.max(evaluation.score.unwrap_or(0.0));
-                                best_remaining =
-                                    best_remaining.max(crate::accounts::remaining_fraction(
-                                        book.state(account.as_ref()),
-                                        now,
-                                    ));
-                            }
-                        }
-                    }
-                    state
-                        .quota
-                        .source_headroom
-                        .insert(source_id.clone(), best_score);
-                    // 全 account が除外のときは account 単位の理由（cooldown・枠切れ）を残すため、
-                    // source 単位の 0 は書かない。
-                    if best_remaining > 0.0 {
-                        state
-                            .quota
-                            .source_remaining
-                            .insert(source_id.clone(), best_remaining);
-                    }
-                }
-            }
-            // ADR 2026-10-08 §(e): a source without an account pool cools down as one implicit account.
-            if account_adapter_for_source_kind(spec.kind.as_ref()).is_none()
-                && self
-                    .source_cooldowns
-                    .get(source_id)
-                    .is_some_and(|c| c.until > now)
-            {
-                for account in &accounts {
-                    state
-                        .quota
-                        .cooling_down
-                        .insert((source_id.clone(), account.clone()));
-                }
-            }
-            if self.account_limits.is_some() {
-                for account in &accounts {
-                    let key = (source_id.clone(), account.clone());
-                    let stored = self
-                        .account_limits
-                        .as_ref()
-                        .and_then(|l| l.get(&key).copied());
-                    let (effective, _) =
-                        crate::capacity::effective_account_limit(stored, self.default_max_runs());
-                    // 暗黙 account（プールを持たない source）には CoS の +1 を付けない（ADR 2026-10-08 (c)・(e)）。
-                    let limit =
-                        crate::capacity::account_run_limit(effective, cos && adapter.is_some());
-                    state
-                        .account_max_runs
-                        .insert(key, u32::try_from(limit).unwrap_or(u32::MAX));
-                }
-            }
-            #[cfg(test)]
-            if self.test_cos_reserved_sources.contains(source_id) {
-                for account in &accounts {
+        let default_max_runs = self.default_max_runs();
+        let ctx = crate::routing_runtime::RouteStateContext {
+            cos,
+            now: (self.now_unix_fn)(),
+            worker_reserve_five_hour,
+            holds: &holds,
+            cos_holds: &cos_holds,
+            account_roots: self.config.accounts.as_ref().map(|a| &a.roots),
+            default_max_runs,
+        };
+        #[cfg(not(test))]
+        return self.routing.route_state(&ctx);
+        #[cfg(test)]
+        {
+            let mut state = self.routing.route_state(&ctx);
+            for source in &self.test_hooks.cos_reserved_sources {
+                for account in state.accounts.available.get(source).into_iter().flatten() {
                     state
                         .quota
                         .cos_reserved
-                        .insert((source_id.clone(), account.clone()));
+                        .insert((source.clone(), account.clone()));
                 }
             }
-            if !accounts.is_empty() {
-                state.accounts.available.insert(source_id.clone(), accounts);
-            }
+            state
         }
-        state
     }
 
     /// Decide the route for `input` against the current registry, admission state and the stored
@@ -1011,7 +771,7 @@ impl Dispatcher {
             context.evidence_version.as_deref(),
             &mut state,
         );
-        route_select(input, &self.llm_route_registry, &state)
+        route_select(input, self.routing.registry(), &state)
     }
 
     /// Read the genre×harness stage and the latest evidence rows of every harness this request can
@@ -1025,7 +785,7 @@ impl Dispatcher {
         state: &mut RouteState,
     ) {
         let genre = input.harness.genre.as_deref().unwrap_or_default();
-        let Ok(harnesses) = harness_candidates(&input.harness, &self.llm_route_registry) else {
+        let Ok(harnesses) = harness_candidates(&input.harness, self.routing.registry()) else {
             return;
         };
         for harness in harnesses {
@@ -1071,7 +831,7 @@ impl Dispatcher {
         start: usize,
     ) -> (Result<RoutePick, RouteFailure>, RouteTrace) {
         let state = self.route_state(true);
-        let mut registry = (*self.llm_route_registry).clone();
+        let mut registry = self.routing.registry().clone();
         registry.cos_route_candidates = registry
             .cos_route_candidates
             .into_iter()

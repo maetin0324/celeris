@@ -337,3 +337,72 @@ profile の高 risk の class と capability-map.json の owner path に、こ�
   `crates/task-dispatch/src/dispatcher/` が残る間は消しても当たらない。この dir を地図から外すと arch-map.wrong_owner と missing_invariant に当たる。
 - そこで capability-map.json の owner path と profile の高 risk の正規表現が名指しする file は、policy から旧い path を撤去するまで
   `Dispatcher` の薄い入口（owner の method を呼ぶだけ）として残す。旧い本体は D2 の 4 のとおり消す。
+
+## 付記 2026-11-12: own-cluster の実装（ClusterRuntime）
+
+- `ClusterRuntime`（`crates/task-dispatch/src/cluster_runtime.rs`）は D1 の表の cluster-runtime の 16 field に加えて、表で
+  `Dispatcher`（組み立て）とした 7 件（`cluster_command_probe`・`cluster_connector`・`cluster_job_poller`・`cluster_master_watcher`・
+  `tunnel_forward_ensurer`・`tunnel_listener_probe`・`tunnel_probe`）と `ProbePorts` とした 2 件（`cluster_liveness_probe`・
+  `cluster_ssh_command_override`）も持つ（計 25 field）。理由: unit own-cluster の受け入れ条件が「cluster の field が `Dispatcher`
+  から消え `ClusterRuntime` 1 個になる」で、この 9 件の port を読むのは `ClusterRuntime` の method だけだから。port は
+  `Dispatcher` の setter（celeris の配線は変えない）が `ClusterRuntime` の setter に渡す。
+- `cluster_waiting` は表どおり `ExecutionCoordination` の範囲で、`Dispatcher` に残した（その owner を作る unit が移す）。
+- クラスタ job の durable wait のうち、wait の行・task と WU の遷移（`finish_cluster_job_wait`・`time_out_cluster_job_wait`・再開）は
+  task・WU の待ちなので `dispatcher/cluster_job_wait.rs` に残した。`ClusterRuntime` は poll のスレッドと結果の受け口
+  （`take_job_poll`・`start_job_poll`）と poll の要求の組み立て（`job_poll_request`）を持つ。
+- owner の外の値（store・`[[clusters]]`・cooldown・`--mode verify`・単調時計・tick の間隔）は `ClusterInputs` で受ける。単調時計は
+  `Dispatcher::monotonic_clock` が返す closure で、`monotonic_now` と同じ時計（試験の差し替えを含む）を使う。
+- 試験 `structure_guard_cluster_runtime` が D2 の 1〜3・7 を source から確かめる。
+
+## 付記 2026-11-12: own-maint の実装（HostMaintenance）
+
+- `HostMaintenance`（`crates/task-dispatch/src/host_maintenance.rs`）は 10 field を持つ: D1 の表の host-maintenance の
+  `disk_low`・`disk_ready`・`disk_watch`・`removing_build_caches`・`removing_repo_targets`・`repo_target_gc_at`・`scratch` と、表で
+  `Dispatcher`（組み立て）とした `target_sweep`・`target_sweep_scope`、表で `ExecutionCoordination` とした `task_workspaces`。
+  理由: unit own-maint の objective がこの 3 件を移す field に挙げ、受け入れ条件が「挙げた field が `Dispatcher` から消え
+  `HostMaintenance` 1 個になる」だから。`target_sweep`・`target_sweep_scope` を読むのは保守 executor と repo target の掃除だけで、
+  `Dispatcher` の setter（celeris の配線は変えない）が `HostMaintenance` の setter に渡す。`task_workspaces` を書くのは run の起動
+  （`remember_task_workspaces`）と中止の片付けだけ。ExecutionCoordination を作る unit が、表どおりに移すかをそこで決める。
+- `disk_ready` は表どおり `HostMaintenance` に置いた。facade の `tick` は `refresh_disk_ready` を drain より前に呼び、他の module は
+  `disk_ready()` で読む。
+- 表で host-maintenance の `health_inventory`（cron の棚卸しの Busy の印）と `script_compare`（TS の比較の状態）は、unit own-maint の
+  objective に挙がっていないので `Dispatcher` に残した。
+- 実行中の run と判定中の review の作業場所を消さない条件は、`Dispatcher::tasks_in_flight`（`running` の鍵の task と `reviewing` の鍵）を
+  入口が組んで `HostMaintenance::cleanup_cancelled_worktrees` に渡す。片付けの判断は純粋関数 `plan_workspace_cleanup`
+  （走っている → 触らない、中止 → 消す、終端 → 残して未コミットを 1 行記録、task が無い → 記録だけ落とす）。
+- owner の外の値（store・`[scratch]`・`shared_build_cache`・build cache と releases の dir・`min_free_disk_mb`・workspace の root・
+  prune の秒数・`--mode verify`・注入時計の値）は `MaintenanceInputs` で受ける。保守 executor の失敗は `MaintenanceError`
+  （store と scratch pool の lock）で返し、入口が今と同じ `DispatchError` の variant に写す。
+- 試験 `structure_guard_host_maintenance` が D2 の 1〜3・7 を source から確かめる。
+
+## 付記 2026-11-12: own-routing の実装（RoutingRuntime）
+
+- `RoutingRuntime`（`crates/task-dispatch/src/routing_runtime.rs`）は 15 field を持つ: D1 の表の routing の `account_books`・
+  `account_limits`・`accounts_scan_cache`・`classification_board`・`classification_deferred_since`・`classification_wait`・
+  `login_pending_accounts`・`source_cooldowns`・`unroutable`・`warned_unroutable` と、表で `Dispatcher`（組み立て）とした
+  `dispatch_routing`・`routing_context_registry`・`routing_mode`、表に無い `llm_route_registry`・`harness_adapters`。
+  理由: unit own-routing の objective がこの 15 件を移す field に挙げ、受け入れ条件が「挙げた field が `Dispatcher` から消え
+  `RoutingRuntime` 1 個になる」だから。`eval_runs`・`knowledge_probe_cache`・`quota_activity`・`quota_calibration` は表では routing だが、
+  objective が own-quota などに任せているので `Dispatcher` に残した。
+- `route_state`（約 220 行）は D3 に従い、判断を `routing_runtime/route_state.rs` の純粋関数 `build_route_state(RouteStateInputs) -> RouteState`
+  に分けた。走っている run・review の `(source, account)` は `Dispatcher::route_state` が集めて渡す（run の表の owner は別 unit が作る）。
+  `RoutingRuntime::route_state` が走査 cache を満たし、帳簿の lock を借りて関数を呼ぶ。`RouteState`・`account_adapter_for_source_kind`・
+  `source_account_pool`・`DispatchRoutingSettings`・`ClassificationBoard` は `dispatcher` の外の `routing_runtime` に移した（owner が
+  `dispatcher` module を使わないため）。公開 API の path は `task_dispatch::` 直下のままで変わらない。
+- `ClassificationBoard` の `BoardItem` が持つ `CredentialGate` は `credential_gate.rs`（高 risk の credential の path）の型で、この unit は
+  その file を変えないので、crate 直下の re-export（`crate::CredentialGate`）で参照する。型を移すかは credential の owner を決める unit に任せる。
+- 試験の test-only の `test_cos_reserved_sources` は `Dispatcher::route_state` の `#[cfg(test)]` の後処理に残した（own-hooks が移す）。
+  試験の field 直参照（`source_cooldowns`・`account_limits`）は `#[cfg(test)]` の method（`insert_source_cooldown_for_test`・
+  `set_stored_limit_for_test`）に置き換えた。
+- 試験 `structure_guard_routing_runtime` が D2 の 1〜3・7 と、純粋 module が `Dispatcher`・store・時計・lock の語を持たないことを source から確かめる。
+
+## 付記 2026-11-12: own-hooks の実装（TestHooks・EffectAblation）
+
+- `Dispatcher` の `#[cfg(test)]` の field は `test_hooks: tests::hooks::TestHooks` の 1 個（`crates/task-dispatch/src/dispatcher/tests/hooks.rs`）。
+  `TestHooks` は `now`・`policy_clock`・`worker_start_delay`・`halt_after_wu_transition`・`cos_reserved_sources`・
+  `before_integration_start`・`ablation` を持つ。D6 の `PhaseAblation` は `EffectAblation`（`dispatcher/tests/phase_effect_ab.rs`）の名で置いた。
+- 本体が ablation を読むのは `test_hooks.ablation` の 1 か所で、読む行は今と同じ `#[cfg(test)]` の行（本番の build に型も分岐も無い）。
+  write-set gate と stale 優先の判断はまだ `impl Dispatcher` の method なので、引数で渡すのは判断を純粋関数に分ける unit（admit・review-decide）が行う。
+- 試験 `dispatcher/tests/structure_guard.rs` が、`Dispatcher` の struct の本体で条件に `test` を含む `#[cfg(...)]` 属性が 1 個より多いこと、
+  一覧 `OWNER_STRUCTS`（今は `ClusterRuntime`・`HostMaintenance`・`RoutingRuntime`）の struct に 1 個でもあることを落とす。field の名前は見ない。
+  owner を作る unit は自分の struct をこの一覧に足す。owner ごとの guard にあった同じ assert は消した。

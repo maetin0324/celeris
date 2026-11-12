@@ -491,7 +491,7 @@ impl Dispatcher {
                     });
                 task_worker::ClusterContext {
                     id: id.clone(),
-                    connected: self.cluster_connected.get(id).copied().unwrap_or(false),
+                    connected: self.cluster.connected(id).unwrap_or(false),
                     work_dir,
                 }
             })

@@ -1,7 +1,7 @@
 ---
 title: CoS 不在の直接通知（CosFallback）を一次対応の後だけ送る（全種類）
 tasks: [01M756VNCZAB8DSPKB1RCPJXTB]
-status: blocked
+status: done
 updated: 2026-11-12
 ---
 # CoS 不在の直接通知（CosFallback）を一次対応の後だけ送る（全種類）
@@ -69,6 +69,7 @@ ADR: [2026-11-11-cos-fallback-timing](../adr/2026-11-11-cos-fallback-timing.md)
     `sh scripts/dev/progress-index.sh --check` → exit 0。
   - `git diff --quiet "$CELERIS_WU_BASE" HEAD -- crates/ web/ config/` → exit 0（変更は進捗ファイルだけ）。
   - test-affected は走らせていない（docs のみ。人の指示。final review が走らせる）。
+  - 人の回答の記録（「本番への移行」の 6）の後も同じ 3 本が exit 0、`crates/`・`web/`・`config/` の差分は 0。
 
 ## 未解決
 - review の決定的 check（上限 600 秒、再試行 1200 秒）は、この task の test-affected（task-core を変えるので 14 crate・nextest 8227 件・web・control-ts・ts-verify）に足りない。attempt 2 の review は 1200 秒の時間切れで落ちた。load average 48〜80 の host では 26〜27 分かかる。D2 の取り下げは task-core の store の transaction の中に要るので、対象を縮める変更はしていない。負荷の低い時の再検査か、check の上限の延長が要る（人の判断）。
@@ -85,7 +86,7 @@ ADR: [2026-11-11-cos-fallback-timing](../adr/2026-11-11-cos-fallback-timing.md)
   `` failed to parse config: unknown field `unavailable_after_secs` ``。原因は本番 config（`~/.config/celeris/config.toml`）の
   `[cos.triage]` に、この task で消した `unavailable_after_secs = 120` が残っていること（`verify.sh` は本番 config をそのまま読ませる）。
   破壊的変更の方針どおりなので、互換の分岐は足さない。人がその行を消すまで、配送は verify で落ち続ける（人の書き換え待ち）。
-  手順は「本番への移行」の 1〜4。
+  手順は「本番への移行」の 1〜4。2026-11-12 に人の承認で行が消され、verify の再実行が合格して解消した（「本番への移行」の 6）。
 
 ## 本番への移行
 人が実行する手順（worker は本番の config・DB・process に触らない）。本番 config は `~/.config/celeris/config.toml`
@@ -107,6 +108,7 @@ ADR: [2026-11-11-cos-fallback-timing](../adr/2026-11-11-cos-fallback-timing.md)
    `failed to parse config` などの config の読み込みエラーが無いこと。
 5. KB の skill cos-inbox-triage の写しを使っているなら、`config/skills/cos-inbox-triage/SKILL.md`（§7・§11）に差し替える
    （policy_version は 11 のまま）。
+6. 実施の記録（2026-11-12、人の回答）: 利用者が承認し、operator が `~/.config/celeris/config.toml` を `config.toml.bak-20261112-unavailable-after` に backup してから `[cos.triage]` の `unavailable_after_secs = 120` の行を消した（`authorization_unavailable_after_secs` は書かれていなかった）。operator が verify をやり直して ok=true・live_ok=true になり、00:52Z（UTC）にこの task を含む release を live に昇格した。health は 200、新しい daemon の journal に config の読み込みエラーは無い（どれも operator の確認。worker は本番を読んでいない）。
 
 ## 提案
 - `POST /api/v1/reports/notified`（`crates/task-api/src/reports.rs`、CoS 操作 `report.notified`）は web に呼び出し元が無い

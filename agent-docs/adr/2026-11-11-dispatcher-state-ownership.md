@@ -337,3 +337,19 @@ profile の高 risk の class と capability-map.json の owner path に、こ�
   `crates/task-dispatch/src/dispatcher/` が残る間は消しても当たらない。この dir を地図から外すと arch-map.wrong_owner と missing_invariant に当たる。
 - そこで capability-map.json の owner path と profile の高 risk の正規表現が名指しする file は、policy から旧い path を撤去するまで
   `Dispatcher` の薄い入口（owner の method を呼ぶだけ）として残す。旧い本体は D2 の 4 のとおり消す。
+
+## 付記 2026-11-12: own-cluster の実装（ClusterRuntime）
+
+- `ClusterRuntime`（`crates/task-dispatch/src/cluster_runtime.rs`）は D1 の表の cluster-runtime の 16 field に加えて、表で
+  `Dispatcher`（組み立て）とした 7 件（`cluster_command_probe`・`cluster_connector`・`cluster_job_poller`・`cluster_master_watcher`・
+  `tunnel_forward_ensurer`・`tunnel_listener_probe`・`tunnel_probe`）と `ProbePorts` とした 2 件（`cluster_liveness_probe`・
+  `cluster_ssh_command_override`）も持つ（計 25 field）。理由: unit own-cluster の受け入れ条件が「cluster の field が `Dispatcher`
+  から消え `ClusterRuntime` 1 個になる」で、この 9 件の port を読むのは `ClusterRuntime` の method だけだから。port は
+  `Dispatcher` の setter（celeris の配線は変えない）が `ClusterRuntime` の setter に渡す。
+- `cluster_waiting` は表どおり `ExecutionCoordination` の範囲で、`Dispatcher` に残した（その owner を作る unit が移す）。
+- クラスタ job の durable wait のうち、wait の行・task と WU の遷移（`finish_cluster_job_wait`・`time_out_cluster_job_wait`・再開）は
+  task・WU の待ちなので `dispatcher/cluster_job_wait.rs` に残した。`ClusterRuntime` は poll のスレッドと結果の受け口
+  （`take_job_poll`・`start_job_poll`）と poll の要求の組み立て（`job_poll_request`）を持つ。
+- owner の外の値（store・`[[clusters]]`・cooldown・`--mode verify`・単調時計・tick の間隔）は `ClusterInputs` で受ける。単調時計は
+  `Dispatcher::monotonic_clock` が返す closure で、`monotonic_now` と同じ時計（試験の差し替えを含む）を使う。
+- 試験 `structure_guard_cluster_runtime` が D2 の 1〜3・7 を source から確かめる。

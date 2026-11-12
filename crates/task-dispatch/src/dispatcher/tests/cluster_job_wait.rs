@@ -219,7 +219,10 @@ async fn settle_polls(d: &mut Dispatcher) {
 /// 注入時計を進めない tick は、poll の結果を拾うだけで次の poll を起こさない。poll は tick の中で同期に
 /// `ClusterRuntime` の poll の受け口へ載るので、1 回の tick の直後に空であれば「起こしていない」が決まる（スレッドの速さに依らない）。
 fn tick_starts_no_poll(d: &mut Dispatcher) {
-    assert!((d.cluster.job_polls_in_flight() == 0), "a poll is still in flight");
+    assert!(
+        (d.cluster.job_polls_in_flight() == 0),
+        "a poll is still in flight"
+    );
     d.tick().unwrap();
     assert!(
         (d.cluster.job_polls_in_flight() == 0),

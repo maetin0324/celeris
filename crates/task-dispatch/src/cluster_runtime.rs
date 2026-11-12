@@ -500,7 +500,6 @@ pub fn ssh_cluster_job_poller() -> ClusterJobPoller {
     })
 }
 
-
 /// [`ClusterRuntime`] の method が読む、owner の外の値（`Dispatcher` の config・store・時計から入口が組む）。
 pub(crate) struct ClusterInputs<'a> {
     pub(crate) store: &'a dyn TaskStore,
@@ -779,7 +778,10 @@ impl ClusterRuntime {
     }
 
     /// ADR-0090 D2: poll の要求を組む（`env`・`setup` の後に `qstat -xf` / `sacct`）。
-    pub(crate) fn job_poll_request(spec: &ClusterSpec, wait: &ClusterJobWait) -> ClusterJobPollRequest {
+    pub(crate) fn job_poll_request(
+        spec: &ClusterSpec,
+        wait: &ClusterJobWait,
+    ) -> ClusterJobPollRequest {
         let mut script = String::new();
         for (k, v) in &spec.env {
             script.push_str(&format!("export {k}={} && ", shell_quote(v)));
@@ -941,7 +943,8 @@ impl ClusterRuntime {
     /// 理由をタスクのイベントに残す（人にログインを促すため）。`reason` は呼び出し側が組み立てる
     /// （自動接続を試みて失敗した場合は `"auto-connect failed: ..."` を含め、従来の「接続が無い」だけの文言と区別する）。
     pub(crate) fn mark_cluster_unavailable(
-        &mut self, cx: &ClusterInputs<'_>,
+        &mut self,
+        cx: &ClusterInputs<'_>,
         task_id: TaskId,
         spec: &ClusterSpec,
         reason: String,
@@ -981,10 +984,7 @@ impl ClusterRuntime {
         }
         let first = self
             .cluster_cooldown
-            .insert(
-                spec.id.clone(),
-                Instant::now() + cx.cooldown,
-            )
+            .insert(spec.id.clone(), Instant::now() + cx.cooldown)
             .is_none();
         if first {
             tracing::warn!(
@@ -1003,8 +1003,7 @@ impl ClusterRuntime {
         // ADR-0033 D3: クラスタが落ちたことは `infra` 相当のノードの悪い知らせとして人まで上げる
         // （案件に紐づかない）。同じホストの障害を毎 tick 繰り返さないよう、cooldown の間は 1 件だけにする。
         let now = OffsetDateTime::now_utc();
-        let cooldown_secs =
-            i64::try_from(cx.cooldown.as_secs()).unwrap_or(i64::MAX);
+        let cooldown_secs = i64::try_from(cx.cooldown.as_secs()).unwrap_or(i64::MAX);
         match crate::reports::cluster_report_recently_recorded(
             cx.store,
             &spec.host,
@@ -1082,7 +1081,8 @@ impl ClusterRuntime {
         }
         self.last_cluster_liveness = Some(now);
         let ssh_command = SshSettings::new("", "", "/").ssh_command;
-        let mut specs: Vec<(String, String, u64)> = cx.clusters
+        let mut specs: Vec<(String, String, u64)> = cx
+            .clusters
             .values()
             .map(|c| (c.id.clone(), c.host.clone(), c.liveness_probe_secs))
             .collect();
@@ -1201,7 +1201,8 @@ impl ClusterRuntime {
     /// 人への通知も出す（totp で鍵認証の出番が無いときはここで、ある場合は鍵認証が失敗したときに
     /// `ensure_cluster_master_for_tunnel` が出す）。同じ値の書き込み（false のままの tick 等）では何もしない。
     pub(crate) fn set_cluster_connected(
-        &mut self, cx: &ClusterInputs<'_>,
+        &mut self,
+        cx: &ClusterInputs<'_>,
         id: &str,
         alive: bool,
         change: ClusterConnChange,
@@ -1300,16 +1301,19 @@ impl ClusterRuntime {
             return true;
         };
         if spec.auth == "publickey" {
-            state
-                .next_key_auth_at
-                .is_none_or(|at| (cx.clock)() >= at)
+            state.next_key_auth_at.is_none_or(|at| (cx.clock)() >= at)
         } else {
             !state.key_auth_tried
         }
     }
 
     /// ADR-0078 D3/D5: 鍵認証の再接続を 1 回試した結果を帳簿・log・`cluster_connection_log` に残す。
-    pub(crate) fn note_key_auth_attempt(&mut self, cx: &ClusterInputs<'_>, spec: &ClusterSpec, ok: bool) {
+    pub(crate) fn note_key_auth_attempt(
+        &mut self,
+        cx: &ClusterInputs<'_>,
+        spec: &ClusterSpec,
+        ok: bool,
+    ) {
         let now_instant = (cx.clock)();
         let state = self.cluster_conn.entry(spec.id.clone()).or_default();
         state.key_auth_tried = true;
@@ -1340,7 +1344,11 @@ impl ClusterRuntime {
 
     /// ADR-0078 D4: publickey のクラスタで鍵認証の再接続が `KEY_AUTH_FAILURES_TO_REPORT` 回続けて
     /// 失敗したら、`ClusterUnavailable` の報告を切断 1 回につき 1 件だけ出す。
-    pub(crate) fn maybe_report_publickey_outage(&mut self, cx: &ClusterInputs<'_>, spec: &ClusterSpec) {
+    pub(crate) fn maybe_report_publickey_outage(
+        &mut self,
+        cx: &ClusterInputs<'_>,
+        spec: &ClusterSpec,
+    ) {
         let Some(state) = self.cluster_conn.get_mut(&spec.id) else {
             return;
         };
@@ -1411,10 +1419,7 @@ impl ClusterRuntime {
         if cx.verify_smoke {
             return;
         }
-        if !cx.clusters
-            .values()
-            .any(|c| !c.forwards.is_empty())
-        {
+        if !cx.clusters.values().any(|c| !c.forwards.is_empty()) {
             return;
         }
         let now_instant = Instant::now();
@@ -1425,7 +1430,8 @@ impl ClusterRuntime {
         }
         self.last_cluster_tunnel_refresh = Some(now_instant);
 
-        let mut specs: Vec<ClusterSpec> = cx.clusters
+        let mut specs: Vec<ClusterSpec> = cx
+            .clusters
             .values()
             .filter(|c| !c.forwards.is_empty())
             .cloned()
@@ -1455,7 +1461,11 @@ impl ClusterRuntime {
     /// master が生きているか確認し、死んでいれば鍵認証を 1 回試す（D3: TOTP の前に鍵認証）。
     /// 成功したら `cluster_connected` / cooldown を更新し、「ログインが要る」を解除する。
     /// 失敗したら「TOTP ログインが要る」を立てる（初めてのときだけ報告する）。
-    pub(crate) fn ensure_cluster_master_for_tunnel(&mut self, cx: &ClusterInputs<'_>, spec: &ClusterSpec) -> bool {
+    pub(crate) fn ensure_cluster_master_for_tunnel(
+        &mut self,
+        cx: &ClusterInputs<'_>,
+        spec: &ClusterSpec,
+    ) -> bool {
         if self
             .cluster_connected
             .get(&spec.id)
@@ -1532,7 +1542,12 @@ impl ClusterRuntime {
     /// （`tunnel_probe_state` にまだ記録が無い）場合だけ、この tick の中で 1 回だけ同期に probe して
     /// 種を蒔く。2 回目以降は専用スレッド（`ensure_tunnel_prober_started`）が裏で probe し続け、
     /// ここは `Mutex` を読むだけ（ssh も HTTP も呼ばない）。
-    pub(crate) fn refresh_one_forward(&mut self, cx: &ClusterInputs<'_>, spec: &ClusterSpec, fwd: &ClusterForwardSpec) {
+    pub(crate) fn refresh_one_forward(
+        &mut self,
+        cx: &ClusterInputs<'_>,
+        spec: &ClusterSpec,
+        fwd: &ClusterForwardSpec,
+    ) {
         let mut listener = self.probe_listener(&fwd.listen);
         let mut ensure_error: Option<String> = None;
         if !listener && let Some(ensure) = self.tunnel_forward_ensurer.clone() {
@@ -1614,7 +1629,8 @@ impl ClusterRuntime {
         let Some(probe) = self.tunnel_probe.clone() else {
             return;
         };
-        let forwards: Vec<(String, String, String, u64)> = cx.clusters
+        let forwards: Vec<(String, String, String, u64)> = cx
+            .clusters
             .values()
             .flat_map(|c| {
                 let id = c.id.clone();
@@ -1722,10 +1738,68 @@ impl ClusterRuntime {
             self.tunnel_events.pop_front();
         }
     }
-
 }
 
 /// シェルの 1 引数に引用する（`'...'`）。
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+#[cfg(test)]
+mod structure_guard_tests {
+    /// 不変条件（ADR 2026-11-11 dispatcher-state-ownership D2 の 1〜3・7）: `ClusterRuntime` の field は private で、
+    /// struct に `#[cfg(test)]` の field が無く、この module は組み立て役の型を引数に受けず、`dispatcher` module を
+    /// `use` しない。既存の試験は振る舞い（接続・tunnel・poll）だけを見るので、field を `pub` に戻したり
+    /// 組み立て役を引数に足したりしても通ってしまう。ここでは source を読んで形を確かめる。
+    #[test]
+    fn structure_guard_cluster_runtime() {
+        let src = include_str!("cluster_runtime.rs");
+        // 試験の module（この関数）より前だけを見る（この関数の中の文字列で自分に当たらないように）。
+        let src = &src[..src
+            .find("mod structure_guard_tests")
+            .expect("the guard module is in the source")];
+        let start = src
+            .find("pub struct ClusterRuntime {")
+            .expect("ClusterRuntime is defined");
+        let body = &src[start..];
+        let body = &body[..body.find("\n}\n").expect("the struct body ends")];
+        let mut fields = 0;
+        for line in body.lines().skip(1) {
+            let t = line.trim_start();
+            if t.starts_with("///") || t.is_empty() {
+                continue;
+            }
+            assert!(
+                !t.starts_with("pub"),
+                "a ClusterRuntime field is not private: {line}"
+            );
+            assert!(
+                !t.starts_with("#[cfg(test)]"),
+                "ClusterRuntime has a #[cfg(test)] field: {line}"
+            );
+            // field の行は `name: Type`（型の続きの行 `std::sync::...` は数えない）。
+            if t.split_once(": ").is_some_and(|(name, _)| {
+                !name.is_empty() && name.chars().all(|c| c.is_ascii_lowercase() || c == '_')
+            }) {
+                fields += 1;
+            }
+        }
+        assert_eq!(
+            fields, 25,
+            "ClusterRuntime owns the 25 cluster/tunnel fields"
+        );
+        let owner = ["Dis", "patcher"].concat();
+        for bad in [
+            format!("&mut {owner}"),
+            format!("&{owner}"),
+            format!("impl {owner}"),
+            format!("crate::{}", owner.to_lowercase()),
+            format!("super::{}", owner.to_lowercase()),
+        ] {
+            assert!(
+                !src.contains(&bad),
+                "cluster_runtime.rs must not contain {bad:?}"
+            );
+        }
+    }
 }

@@ -427,7 +427,8 @@ fn probe_failures_keep_the_master_until_three_in_a_row() {
     liveness_round(&mut d, "sirius");
     assert_eq!(d.cluster.connected_mut().get("sirius"), Some(&false));
     assert!(
-        d.cluster.disconnect_info_map()
+        d.cluster
+            .disconnect_info_map()
             .get("sirius")
             .is_some_and(|info| info.detail.contains("3 times in a row")),
         "{:?}",
@@ -626,7 +627,11 @@ fn publickey_key_auth_reconnect_backs_off_up_to_five_minutes() {
     );
     // 期限が来たことにして、さらに 2 回失敗させる。
     for _ in 0..2 {
-        d.cluster.conn_map_mut().get_mut("fern03").unwrap().next_key_auth_at = None;
+        d.cluster
+            .conn_map_mut()
+            .get_mut("fern03")
+            .unwrap()
+            .next_key_auth_at = None;
         assert!(!d.ensure_cluster_master_for_tunnel(&spec));
     }
     let state = &d.cluster.conn_map()["fern03"];
@@ -1697,7 +1702,8 @@ async fn cluster_cooldown_is_cleared_once_the_control_master_is_back() {
             job_wait: Default::default(),
         },
     );
-    d.cluster.cooldown_map_mut()
+    d.cluster
+        .cooldown_map_mut()
         .insert("local".into(), Instant::now() + Duration::from_secs(3600));
     d.refresh_cluster_liveness();
     assert_eq!(d.cluster.connected_mut().get("local"), Some(&true));

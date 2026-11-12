@@ -24,7 +24,8 @@
 //!
 //! | モジュール | 責務 | 層 |
 //! |---|---|---|
-//! | `cluster` | cluster / tunnel の接続・生存確認・probe | L1 |
+//! | `cluster_runtime` | cluster / tunnel の接続・生存確認・probe・job の poll の状態の owner（`crate::cluster_runtime::ClusterRuntime`。この dir の外。ADR 2026-11-11 dispatcher-state-ownership D1） | owner |
+//! | `cluster` | `ClusterRuntime` を呼ぶ入口と、org・run の表を読むクラスタの解決 | L1 |
 //! | `housekeeping` | disk guard・scratch pool の GC・後片付け | L1 |
 //! | `snapshot` | デーモン状態の snapshot の組み立てと公開 | L1 |
 //! | `quota_book` | quota の見積りと release | L1 |
@@ -41,7 +42,7 @@
 //! | `planner_flow` | planner の結果の採用と replan | L3 |
 //! | `review_verdict` | review の判定の適用と repair | L3 |
 //! | `phase_integration` | 工程の統合と途中報（phase report） | L3 |
-//! | `cluster_job_wait` | クラスタ job の durable wait の poll と続きの run（ADR-0090） | L3 |
+//! | `cluster_job_wait` | クラスタ job の durable wait の行と task・WU の再開（ADR-0090。poll のスレッドは `cluster_runtime`） | L3 |
 //! | `leases` | lease の回収・abort・orphan・drain | L3 |
 //! | `dispatch_run` | run の起動（`dispatch_one`・`spawn_worker`）と担当・lane の決定 | L4 |
 
@@ -78,8 +79,7 @@ use task_worker::{
     NodeContext, OrgNodeContext, PROTOCOL_VERSION, PriorReview, Reachability, RecentWork,
     RoleContext, RunContext, RunLimits, RunOutcome, RunRequest, SshSettings, SshWorkspace,
     SyncMode, Terminal, WorkerAdapter, WorkerMessage, Workspace, WorkspaceError,
-    remote_dir_is_resolved, remote_exec_instructions,
-    resolve_remote_dir,
+    remote_dir_is_resolved, remote_exec_instructions, resolve_remote_dir,
 };
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;

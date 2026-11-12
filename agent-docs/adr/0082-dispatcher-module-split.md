@@ -60,3 +60,12 @@ L0（facade の型と free helper）← L1 ← L2 ← L3 ← L4 ← facade の `
 
 - 局所変更の読む範囲が子モジュール 1 つに縮む。巨大関数（`finish_worker_result`、`dispatch_one` など）の中身の分割は移動の完了後に別の段で行う。
 - 子モジュールは facade の private な型に `super::` 経由で触れるため、型の field の可視性は原則変えずに済む。
+
+## 付記 2026-11-12: cluster の状態の owner を facade の外へ出した（R4 own-cluster）
+
+[ADR 2026-11-11 dispatcher-state-ownership](2026-11-11-dispatcher-state-ownership.md) D1・D2 に従い、cluster・tunnel・job の poll の
+状態（25 field）と処理を `crates/task-dispatch/src/cluster_runtime.rs` の `ClusterRuntime` に移した。`ClusterRuntime` は
+`dispatcher` module の外にあり、`Dispatcher` を引数に受けない。module map の `cluster` の行は「`ClusterRuntime` を呼ぶ入口と
+クラスタの解決」に、`cluster_job_wait` の行は「durable wait の行と task・WU の再開」に直し、`cluster_runtime` の行（層は owner）を足した。
+子 module の型の可視性を変えない（上の「結果」）という前提は、`dispatcher` の外の owner には当てはまらない。owner の型は
+`pub(crate)` で、field は private のまま method で読む。

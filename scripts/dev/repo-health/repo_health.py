@@ -15,7 +15,8 @@
 
 - report（celeris.repo-health.report/1）は --out にだけ書く。stdout には rule ごとの status と
   finding の数の要約を出す。
-- exit code: 0 合格、1 必須 rule の fail、2 必須 rule の error・unknown・unsupported。
+- exit code: 0 合格、1 必須 rule の fail、2 必須 rule の error・unknown・unsupported、検査器自身の
+  import・実行の失敗（理由は stderr、report は書かない）。
   report を書けないとき（使い方誤り・non-Git・git が無い・policy 版の不一致・profile の誤り）も
   exit 2 で、理由は stderr に出し --out には書かない。
 - policy（profile・baseline・検査器）は base 側の内容で評価する。head が policy の file を変えれば
@@ -37,8 +38,15 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)  # python3 -I（-P）でも自分の package を読む
 
-from health import engine, profile as profile_mod, snapshot  # noqa: E402
-from health.snapshot import UsageError  # noqa: E402
+try:
+    from health import engine, profile as profile_mod, snapshot  # noqa: E402
+    from health.snapshot import UsageError  # noqa: E402
+    _IMPORT_FAULT: Exception | None = None
+except ImportError as _exc:  # 検査器の写しが欠けている。契約では検査器の故障は error（exit 2）
+    _IMPORT_FAULT = _exc
+
+    class UsageError(Exception):  # type: ignore[no-redef]
+        pass
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -151,10 +159,16 @@ def run(args: argparse.Namespace) -> int:
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
+    if _IMPORT_FAULT is not None:
+        print(f"repo-health: checker_import_failed: {type(_IMPORT_FAULT).__name__}: {_IMPORT_FAULT}", file=sys.stderr)
+        return 2
     try:
         return run(args)
     except UsageError as exc:
         print(f"repo-health: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # noqa: BLE001 — 検査器の故障は traceback の exit 1 にせず error（exit 2）にする
+        print(f"repo-health: checker_crashed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 2
 
 

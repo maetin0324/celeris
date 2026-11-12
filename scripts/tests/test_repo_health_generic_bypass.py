@@ -159,18 +159,13 @@ class GenericBypassTests(unittest.TestCase):
                 self.assertTrue(script['required'])
                 self.assertNotIn(script['status'], ('pass', 'not_applicable'), script)
 
-    @unittest.expectedFailure
     def test_generic_missing_script_unsupported(self):
         """G2: a required wrapped check whose script is absent is unsupported (command_missing), not a finding.
 
-        Expected by ADR 2026-11-10-health-generic-fixtures (2) (unsupported-tool) and the docstring of
-        rules/existing_checks.py (a script file that is absent, exit 126/127, is unsupported).  Actual: /bin/sh
-        is dash, which exits 2 for a script it cannot open, so doc.links becomes fail with one fail-grade
-        finding, and Celeris would hand the absent script to repair as a finding to fix.  The run does not
-        pass either way (test_generic_unsupported_required_not_pass).  Unresolved G2 in
-        agent-docs/progress/2026-11-10-health-v2-g4/py-bypass.md; owner rules/existing_checks.py, a policy
-        file this unit does not change.  Remove expectedFailure when the policy-only task fixes G2; until
-        then an unexpected success reports that the decorator is stale.
+        Contract: ADR 2026-11-10-health-generic-fixtures (2) (unsupported-tool) and ADR
+        2026-11-11-health-checker-gaps G2.  rules/existing_checks.py checks that the script exists before
+        starting the command, so the result does not depend on the shell (dash exits 2 for a script it cannot
+        open).  The run still does not pass (test_generic_unsupported_required_not_pass).
         """
         env = self.env_with_adr_tool()
         for kind, repo in self.fixtures('unsupported-tool'):
@@ -219,18 +214,30 @@ class GenericBypassTests(unittest.TestCase):
                 self.assertIsNone(report)
                 self.assertNotEqual(proc.returncode, 0, proc.stderr[-400:])
 
-    @unittest.expectedFailure
+    def test_generic_wrapped_check_killed_by_signal_is_error(self):
+        """G3: a wrapped check that dies by a signal is an error (CommandKilled), not a finding to fix.
+
+        ADR 2026-11-11-health-checker-gaps G3.  A signal says nothing about the repo under test, so doc.links
+        is error (exit 2), never fail (which Celeris would hand to repair) and never pass.
+        """
+        for kind, repo in self.fixtures('tool-failure'):
+            with self.subTest(kind=kind, repo=repo.name, fault='signal'):
+                git(repo, 'switch', '-q', 'candidate')
+                (repo / 'tools' / 'check-docs.sh').write_text('kill -9 $$\n')
+                commit(repo, 'the wrapped check is killed')
+                proc, report = self.check(repo)
+                self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+                rule = self.rules(report)['doc.links']
+                self.assertEqual(rule['status'], 'error', rule)
+                self.assertEqual(rule['reason'], 'crashed:doc.links:CommandKilled', rule)
+                self.assertFalse([f for f in report['findings'] if f['rule_id'] == 'doc.links'])
+
     def test_generic_checker_import_failure_is_error(self):
         """G1: a checker that cannot import its own module is an error: exit 2 and no report.
 
-        Expected by ADR 2026-11-10-health-generic-fixtures (3) table (d) and the report contract (exit 1 is
-        only a required rule that fails; a fault of the checker is an error, exit 2).  Actual: the copy
-        without health/scan.py dies with a ModuleNotFoundError traceback, which Python turns into exit 1, so
-        the CLI and check-health.sh show a fail instead of an error.  It does not pass either way (no report,
-        non-zero exit: test_generic_tool_failure_is_error).  Unresolved G1 in
-        agent-docs/progress/2026-11-10-health-v2-g4/py-bypass.md; owner repo_health.py (its imports and
-        main), a policy file this unit does not change.  Remove expectedFailure when the policy-only task
-        fixes G1; until then an unexpected success reports that the decorator is stale.
+        Contract: ADR 2026-11-10-health-generic-fixtures (3) table (d) and ADR 2026-11-11-health-checker-gaps G1.
+        Exit 1 is only a required rule that fails; repo_health.py turns an import or run failure of the
+        checker itself into exit 2 with the reason on stderr and no report.
         """
         partial = self.checker_without('scan.py')
         for kind, repo in self.fixtures('good', kinds=('ts',)):

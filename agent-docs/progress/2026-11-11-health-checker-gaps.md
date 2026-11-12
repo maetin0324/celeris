@@ -2,7 +2,7 @@
 title: repo health の検査器の欠け G1・G2 を直す（policy だけの branch）
 tasks: [01M76BYGKY7R8SBZ22AZGJ72SP]
 status: running
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 # repo health の検査器の欠け G1・G2 を直す（policy だけの branch）
 
@@ -10,11 +10,13 @@ updated: 2026-11-11
 
 ## 変更
 - `repo_health.py`: import・実行の失敗を exit 2（理由は stderr）にした（G1）。
-- `rules/existing_checks.py`: 起動の前に script の有無を確かめ、無ければ unsupported（G2）。signal で終わる検査は error（G3）。
+- `rules/existing_checks.py`: 起動の前に `_preflight` で tool と script の有無を確かめ、無ければ unsupported（G2）。signal で終わる検査は error（G3）。
 - `test_repo_health_generic_bypass.py`: expectedFailure 2 件を外し、signal の試験を足した。
+- attempt 2: operator の差分確認（承認 task 01M76CCPPK88BRZCXMZPVKW3R6）で不合格。最初の版の script の判定（`scripts/` で始まる、`.sh`・`.py` で終わる引数）が Celeris の source-size の `python3 -m unittest discover -s scripts/tests ...` の `scripts/tests` を script とみなし、source-size を unsupported（exit 2）にした。script を interpreter（sh・bash・dash・python・python3）の option の後の最初の引数だけに改め、`-c`・`-m`・`-` は script 無しにした（ADR の G2）。
+- `test_repo_health_wrapped_checks.py`（新規）: 判定の表、Celeris の profile の全 command が `_preflight` を通ること、module の実行が起動して pass になること、無い python の script が unsupported になること。最初の版の判定では 4 試験とも落ちる（手元で旧い判定に戻して確かめた）。
 
 ## 証拠（提出時の HEAD で実行）
-- `python3 -I -m unittest discover -s scripts/tests -p 'test_repo_health*.py'` と `sh scripts/dev/tests/repo_health_gate.sh` の結果は成果物 checker-gaps-policy-diff.md に書いた。
+- 各検査の command・exit code・出力の要点は成果物 checker-gaps-policy-diff.md に書いた。
 
 ## 未解決
-- operator が policy の差分を確かめ、branch を main に no-ff で merge する（完了条件 6・7）。policy.changed は想定どおり。
+- operator が policy の差分を確かめ、branch を main に no-ff で merge する（完了条件 6・7・8）。policy.changed の fail と check-health の exit 1（policy の file と試験・文書の混ざった変更）は想定どおり。

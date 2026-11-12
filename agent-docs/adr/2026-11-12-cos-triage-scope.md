@@ -30,10 +30,10 @@ tasks: [01M75722SX158YRMFYPQRVEEDY]
 
 | 分類（`reserved`） | 中身 |
 |---|---|
-| `credential_input` | login・TOTP・OAuth など credential の入力（クラスタの login・ブラウザの credential 待ちを含む） |
+| `credential_input` | login・TOTP・OAuth など credential の入力（credentiald への注入待ち・クラスタの login を含む） |
 | `beyond_approval` | 承認（grant・予算・node-h の枠）を超える予算と資源。枠を確かめられないときも含む |
 | `objective_change` | task・案件の目的や受け入れ条件の変更 |
-| `security_boundary` | credential とセキュリティの境界（秘密の扱い・権限・sandbox の緩和・恒久の認可の新設） |
+| `security_boundary` | credential とセキュリティの境界（秘密の扱い・権限・sandbox の緩和・恒久の認可の新設・ブラウザの承認や credential の待ち） |
 | `production_config` | 本番 config の変更 |
 | `paid_trial` | 有料の追加試行（実 LLM の pilot 等、既存の承認の外） |
 | `research_judgment` | 研究上の判断（評価条件・凍結した評価の変更） |
@@ -50,7 +50,10 @@ policy だけの branch を main に入れる、本番の昇格・rollback、hos
 - `human`: 従来どおり outbox に通知を積み、統括 CoS の札を書き、Discord に送る。
 - `operator`: 経路（`cos_notification_routes.route = 'operator'`）だけを取り、通知の行（Discord）と統括 CoS の札を作らない。
   件は `escalated` のまま受信箱に残り、`GET /api/v1/cos/inbox` の `addressee` が `operator` になる。operator はそこから拾う。
-- D1 の分類に当たる件を `operator` 宛てにすると API が 422 `cos_reserved_for_human` で断る（人の判断を operator に渡さない）。
+- 人に残す件を `operator` 宛てにすると API が 422 `cos_reserved_for_human` で断り、経路を取らない（人の判断を operator に渡さない）。
+  人に残す件は、D4 の照合が D1 の分類を返す件に加え、人が設定した `human_required`（label・human check・override の待ち、
+  integrate task が尽きた統合の依頼）の件。answer を断る判定（`kept_by_person`）と同じ関数で判定する（試験
+  `cos_triage_scope_f_human_required_waits_are_not_routed_to_the_operator`）。
 
 ### D3 それ以外は CoS が task の目的の範囲で答え、根拠を残す
 
@@ -64,8 +67,9 @@ policy だけの branch を main に入れる、本番の昇格・rollback、hos
   - 失敗の件の `reopen` は `review_rework`。木の上限の `raise-once` は `raise_once`。
   - 認可（authorization）への回答は `job_wait_extend` か `within_approved_frame` だけ。認可は権限の境界なので `task_scope` では答えない。
   - D1 の分類に当たると daemon と API が決定的に判定した件（D4）への回答は 422 `cos_reserved_for_human`。
-- 監査の reason は「CoS の判断（<category>、方針 <policy_version>、grant <id…>）: <reason>」。payload の `basis` と
-  `policy_version`、判断者（grant・人の発言の出典）と実行者（CoS）は別々に残る（ADR 2026-10-27-relayed-instructions の記録を弱めない）。
+- 監査の reason は「CoS の判断（<category>）: <reason>」。方針の版は操作の記録の `policy_version` に、grant の id と根拠は
+  payload の `basis.refs` に残る。判断者（grant・人の発言の出典）と実行者（CoS）は別々に残る（ADR 2026-10-27-relayed-instructions
+  の記録を弱めない）。
   人は既存の取消・差し戻し（override）で覆せる。
 
 ### D4 daemon の事前の照合（決定的、LLM なし）
@@ -74,7 +78,7 @@ daemon は CoS の run を組むとき、受信箱の件ごとに `task_ops::tri
 同じ関数を resolve の API も使い、D1 の判定と operator 宛ての拒否に使う（正本は 1 つ）。
 
 - `reserved`: 件の種類と出所から決まる D1 の分類（例: `credential_wait`・`cluster_login` → `credential_input`、
-  `browser_wait` の credential の待ち → `credential_input`、計画の承認の理由が `near_limit:` → `beyond_approval`）。
+  `browser_wait`（ブラウザの承認・credential の待ち）→ `security_boundary`、計画の承認の理由が `near_limit:` → `beyond_approval`）。
 - `candidates`: 当てはまる定型の答えの候補（例: クラスタ job の待ちの上限の認可で、分類 `job_wait_extend` の生きた grant があれば
   「`job_wait_extend` の候補、grant <id>」。plan_gate なら `plan_conforms`、reviewer の差し戻しの失敗なら `review_rework`）。
 - 照合は store を読むだけで、LLM を呼ばない。候補は判断材料で、API の検査を省かない。
@@ -95,6 +99,13 @@ CoS が同じ run で決定に先に答え（`task_scope`。推奨のある決�
 
 - `BasisCategory::DocumentedDefault`・`WorkGuidance`、その検査と文書、「定型の 7 種類のどれにも当たらない判断は escalate」の行。
 - skill v11 の §2 の表の「上記以外で (a)〜(g) のどれにも当たらない判断」の行と §3 の「定型の代答 7 種類」の節。
+
+- 監査の reason の頭を「定型の代答（<category>）」から「CoS の判断（<category>）」に変えた。`review_rework` の開き直しの回数
+  （同じ task で 2 回まで、ADR 2026-10-29-cos-review-rework-reopen）は applied の監査の reason の頭で数えるので、版 12 より前の行の
+  「定型の代答（review_rework）」も数える（`basis/review_rework.rs`）。events は追記専用で旧い行を書き換えられず、数えないと
+  版の切り替えで上限が外れるため。この読み分けは旧い行を読むためだけのもので、新しい行は旧い文言で書かない。撤去の条件:
+  版 12 より前の `review_rework` の applied の行が、開いている task（終端でないもの）に 1 件も残らなくなったとき。撤去の責任は
+  この方針の次の版を出す task が持つ。
 
 ### D8 答えの要らない件は CoS が見届けで閉じる（task のコメント 1）
 

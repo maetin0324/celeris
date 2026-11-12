@@ -985,6 +985,90 @@ async fn cos_triage_scope_f_outside_celeris_goes_to_the_operator_without_discord
     assert_eq!(count(&env, "SELECT COUNT(*) FROM notifications"), 0);
 }
 
+/// (f) D1・D2（review の差し戻し）: 人が付けた `human_required` の label の決定と human check（受け入れ確認）は
+/// operator 宛てにすると 422 `cos_reserved_for_human` で断られ、operator の経路は取られない。人宛てなら通り、
+/// Discord に 1 通ずつ積まれる。既存の (d)(e) は照合の分類（reserved）だけを確かめ、(f) は分類の無い件だけを
+/// 確かめるので、人の明示の指定を operator に渡す穴はこの試験でしか見つからない。
+#[tokio::test]
+async fn cos_triage_scope_f_human_required_waits_are_not_routed_to_the_operator() {
+    let env = admin_env();
+    let app = env.router();
+    decision_task(&env, "d-human-label", &["human_required"]);
+    env.seed(&new_task(TaskKind::Approval, Status::Ready));
+    let rows = ingest_all(&env, 1);
+    let bearer = cos_bearer(&env, "scope-f-human");
+    let headers = [("authorization", bearer.as_str())];
+    let cases = [
+        ("decision-d-human-label", "labeled human_required"),
+        ("acceptance_check-", "human check"),
+    ];
+    for (prefix, why) in cases {
+        let (inbox_id, item, rev) = find(&rows, prefix);
+        let task_id = derived(&env)
+            .into_iter()
+            .find(|x| &x.id == inbox_id)
+            .and_then(|x| x.task.map(|t| t.id))
+            .expect("the wait names its task");
+        let to_operator = send(
+            &app,
+            post_json_with(
+                &resolve_path(item),
+                &body(
+                    &format!("k-o-{prefix}"),
+                    rev,
+                    "escalate",
+                    "operator へ",
+                    packet_to(&env, inbox_id, task_id, "operator"),
+                ),
+                &headers,
+            ),
+        )
+        .await;
+        let problem = assert_problem(&to_operator, 422, "cos_reserved_for_human");
+        assert!(
+            problem["detail"].as_str().unwrap_or("").contains(why),
+            "{prefix}: {problem}"
+        );
+        let to_human = send(
+            &app,
+            post_json_with(
+                &resolve_path(item),
+                &body(
+                    &format!("k-h-{prefix}"),
+                    rev,
+                    "escalate",
+                    "人の明示の指定",
+                    packet_to(&env, inbox_id, task_id, "human"),
+                ),
+                &headers,
+            ),
+        )
+        .await;
+        assert_eq!(
+            to_human.status.as_u16(),
+            200,
+            "{prefix}: {}",
+            to_human.text()
+        );
+        assert_eq!(to_human.json()["item"]["addressee"], "human");
+        assert!(to_human.json()["notification_id"].is_string());
+    }
+    assert_eq!(
+        count(
+            &env,
+            "SELECT COUNT(*) FROM cos_notification_routes WHERE route='operator'"
+        ),
+        0
+    );
+    assert_eq!(
+        count(
+            &env,
+            "SELECT COUNT(*) FROM notifications WHERE kind='cos_escalation'"
+        ),
+        2
+    );
+}
+
 /// D8（task のコメント 1、2026-11-12 本番の dependents_reopened-…-1016）: 依存先が戻って後続を待ちに戻した知らせは、
 /// 選択肢が後続の cancel だけで、後続を残すのが普通の答え。CoS は observe で閉じられ（人に回さない）、照合は
 /// observe の候補を出す。判断の要る待ち（決定）の observe は従来どおり 422。

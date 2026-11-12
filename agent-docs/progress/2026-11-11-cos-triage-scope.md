@@ -39,7 +39,7 @@ updated: 2026-11-12
 - (a) `crates/task-api/tests/cos_job_wait_extend.rs` の `standing_job_wait_grant_from_the_general_thread_answers_the_project_wait_limit`: daemon の照合が global の grant を名指し、CoS が grant を根拠に「延長」と答えて answered（人に回さない）。
 - (b)(c) `crates/task-api/tests/cos_chat_triage_scenarios.rs` の `cos_triage_scope_b_c_answers_the_decisions_then_approves_the_plan`: 決定が残る間の承認は 422、決定 2 件に task_scope で答え（推奨・推奨以外）、計画を plan_conforms で承認。operation の記録に policy_version と根拠。
 - (d)(e) `cos_triage_scope_d_e_credential_and_beyond_budget_go_to_the_person`: credential の待ちと `near_limit:` の計画は、照合が `credential_input`・`beyond_approval`、回答も operator 宛ても 422、human 宛てで outbox 2 通。
-- (f) `cos_triage_scope_f_outside_celeris_goes_to_the_operator_without_discord`: operator 宛ては notifications 0 件、経路 `operator`、札なし、addressee=operator。
+- (f) `cos_triage_scope_f_outside_celeris_goes_to_the_operator_without_discord`: operator 宛ては notifications 0 件、経路 `operator`、札なし、addressee=operator。`cos_triage_scope_f_human_required_waits_are_not_routed_to_the_operator`: 人が設定した human_required・human check の件は operator 宛てが 422（attempt 3）。
 - 照合の決定性: `task_ops::triage_match` の試験 2 件、`task-dispatch` の `cos_triage_hints_are_deterministic_store_reads`。
 
 ## 証拠（attempt 1。提出時の HEAD ではない）
@@ -56,6 +56,13 @@ updated: 2026-11-12
 - attempt 1 の Run #4 は、`celeris::script_compare_cos_digest` の 6 件の失敗（host の `~/.local/celeris/releases` の未昇格の release を読み、受信箱に `release_unpromoted-selfdeploy` が増える）を、`crates/celeris/tests/support/script_compare.rs` の `config_text` に `[selfdeploy] releases_dir` を足して直した。
 - 同じ直しが `main` の `phase 1: script_compare の試験の config が host の release 置き場を読まないようにする（release の gate の不合格）` に入っており、rebase の後は `config_text` に `[selfdeploy]` の表が 2 つになった。TOML の表の重複で `Config::load` が落ち、attempt 1 の review の test-affected は exit 100 になった。
 - attempt 2 で `script_compare.rs` を `main` の版に戻した（この task の差分から外した）。`main` の版の `config_text` が `releases_dir`・`repo`・`detach` を一時 dir に向け、`write_config` がそれを assert する。
+
+## 変更（attempt 3）
+- attempt 2 の review の不合格（criterion 6）: 人が設定した `human_required`（label）・human check・override の待ちを、CoS が `to=operator` で回せた（人に Discord も札も届かない）。operator 宛ての経路（`cos::inbox::escalate_to_operator`）が照合の分類（`reserved`）しか見ていなかった。
+- `phase 1: 人が human_required にした件を operator 宛てに回せないようにする（review の差し戻し）`
+  - `cos::inbox::kept_by_person` を answer と operator 宛ての両方の判定の正本にした（override の待ち・`human_required_reason`・照合の `reserved`）。結果は `Kept`（`HumanRequired`・`Reserved`）で、answer は従来どおり 403 `cos_human_required`／422 `cos_reserved_for_human`、operator 宛ては 422 `cos_reserved_for_human`（`basis::kept_for_human`）で、経路を取らない。
+  - 試験 `cos_triage_scope_f_human_required_waits_are_not_routed_to_the_operator`: label `human_required` の決定と human check（受け入れ確認）を operator 宛てにすると 422、operator の経路 0 件。human 宛てなら 200 で outbox 2 通。
+  - review の advisory も直した: ADR D2 に human_required の operator 宛ての拒否、D3 の監査の reason を実装の形（「CoS の判断（<category>）」、版は `policy_version`、grant は `basis.refs`）、D4・D1 の `browser_wait` を `security_boundary`、D7 に `review_rework` の回数が旧い文言の監査も数える理由と撤去の条件。skill の「(a)〜(g) の条件」の言い方と `cos_plan_conforms.rs` の試験のコメントの `documented_default`。`docs/api/v1/api.md` の operator 宛ての拒否の説明。
 
 ## 証拠（提出時の HEAD で実行）
 - `bash scripts/dev/test-affected.sh` → exit 0（件数は報告本文）。

@@ -70,7 +70,7 @@ job 待ちの延長、replan の指示など）は CoS が答える。`basis.cat
   読み、`answered` か `allow: true` なら聞き直さず、その `source`（人の発言の id）と抜粋を返事に書く。足りなければ人の発言を引いて
   `authority.grant_propose` で提案する（同じ `question_key` は 1 回だけ通知され、人の答えの後は 409 で断られる）。
   basis の `refs` に `{"kind":"authority_grant","id":"<許可の id>"}` を足せるが、これは根拠の 1 つで、`human_required` を解除せず、
-  (a)〜(g) の条件の代わりにもならない（失効した許可は 422 `cos_basis_authority_grant_invalid`）。
+  §3 の category の検査（`task_scope` の根拠を含む）の代わりにもならない（失効した許可は 422 `cos_basis_authority_grant_invalid`）。
 - 計画の承認（`plan_gate`）は、計画におかしなところが無ければ §3 の (f) `plan_conforms` で `approve` する
   （ADR 2026-10-30-cos-plan-conforms-approve、付記 2026-10-30-plan-conforms-human-guards）。危うい段は次の 6 種で、
   課金・有料試行（`billing`）、node-h（`node_hours`）、本番（daemon・systemd・release・本番 config）の変更（`production`）、

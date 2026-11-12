@@ -577,8 +577,8 @@ async fn resolve(
                             unprocessable("validation", "a notice has nothing to answer")
                         }));
                     };
-                    if let Some(problem) = kept_by_person(store, &item, found)? {
-                        return Err(reject(problem));
+                    if let Some(kept) = kept_by_person(store, &item, Some(found))? {
+                        return Err(reject(kept.refuse_answer()));
                     }
                     crate::inbox_notifications::validate_answer(found, input)
                         .map_err(|e| reject(unprocessable("validation", e.detail())))?;
@@ -727,25 +727,52 @@ pub(crate) fn own_judgment<'a>(
     Ok(routine)
 }
 
-/// Why CoS may not answer this open wait (D3「人に回す基準」and ADR 2026-11-12-cos-triage-scope
-/// D1): a human override wait, an explicit `human_required`, or a matter the deterministic match
-/// reserves for a person. `None` when CoS may answer it.
+/// What a person keeps of an open item (D3「人に回す基準」and ADR 2026-11-12-cos-triage-scope
+/// D1/D2): CoS may neither answer it nor route it to the operator.
+enum Kept {
+    /// A human override wait or an explicit `human_required` (label, human check).
+    HumanRequired(String),
+    /// A matter the deterministic match reserves for a person.
+    Reserved(task_ops::triage_match::Reserved),
+}
+
+impl Kept {
+    /// The refusal of a CoS answer: 403 for an explicit `human_required`, 422 for a reserved matter.
+    fn refuse_answer(self) -> ApiProblem {
+        match self {
+            Kept::HumanRequired(why) => human_required_problem(&why),
+            Kept::Reserved(reserved) => basis::reserved_for_human(reserved),
+        }
+    }
+
+    /// The refusal of an escalation to the operator (D2): 422, escalate it with to=human.
+    fn refuse_operator(self) -> ApiProblem {
+        match self {
+            Kept::HumanRequired(why) => basis::kept_for_human(&why),
+            Kept::Reserved(reserved) => basis::reserved_for_human(reserved),
+        }
+    }
+}
+
+/// What a person keeps of this item, or `None` when CoS may answer it or route it to the operator:
+/// a human override wait, an explicit `human_required` of its source wait, or a matter the
+/// deterministic match reserves for a person.
 fn kept_by_person(
     store: &SqliteStore,
     item: &CosInboxItem,
-    found: &InboxItem,
-) -> Result<Option<ApiProblem>, ApiProblem> {
+    source: Option<&InboxItem>,
+) -> Result<Option<Kept>, ApiProblem> {
     let override_wait = store
         .cos_override_wait_requires_human(&item.source_kind, &item.source_key)
         .map_err(cos_problem)?;
     if override_wait {
-        return Ok(Some(human_required_problem("human override wait")));
+        return Ok(Some(Kept::HumanRequired("human override wait".into())));
     }
-    let task = found.task.as_ref().map(|t| t.id);
-    if let Some(why) = human_required_reason(store, Some(found.kind), task)? {
-        return Ok(Some(human_required_problem(&why)));
+    let task = source.and_then(|s| s.task.as_ref()).map(|t| t.id);
+    if let Some(why) = human_required_reason(store, source.map(|s| s.kind), task)? {
+        return Ok(Some(Kept::HumanRequired(why)));
     }
-    Ok(reserved(store, &item.source_kind, Some(found))?.map(basis::reserved_for_human))
+    Ok(reserved(store, &item.source_kind, source)?.map(Kept::Reserved))
 }
 
 /// The outbox (Discord) body of an escalation addressed to the person.
@@ -775,8 +802,8 @@ fn outbox_body(
 }
 
 /// ADR 2026-11-12-cos-triage-scope D2: route an escalated item to the external operator. A matter
-/// a person keeps is refused; the route is taken in the audit's transaction and nothing is sent
-/// (no notification row, no card in the person's window).
+/// a person keeps (D1, `human_required` included) is refused; the route is taken in the audit's
+/// transaction and nothing is sent (no notification row, no card in the person's window).
 fn escalate_to_operator(
     store: &SqliteStore,
     audit: &mut OperationAudit,
@@ -784,8 +811,8 @@ fn escalate_to_operator(
     source: Option<&InboxItem>,
     action: &str,
 ) -> Result<task_core::chat::CosOperation, ApiProblem> {
-    if let Some(reserved) = reserved(store, &item.source_kind, source)? {
-        return Err(basis::reserved_for_human(reserved));
+    if let Some(kept) = kept_by_person(store, item, source)? {
+        return Err(kept.refuse_operator());
     }
     audit.item = Some(ItemMark::new(&item.id, "escalated"));
     let confidence = audit

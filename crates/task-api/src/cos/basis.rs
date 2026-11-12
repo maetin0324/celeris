@@ -188,12 +188,14 @@ pub(crate) const RESERVED_FOR_HUMAN: &str = "cos_reserved_for_human";
 
 /// D1: refuse answering (or routing to the operator) a wait the deterministic match reserved for a person.
 pub(crate) fn reserved_for_human(reserved: task_ops::triage_match::Reserved) -> ApiProblem {
+    kept_for_human(reserved.as_str())
+}
+
+/// D2: a wait a person keeps (`why`: a D1 class or an explicit `human_required`) goes to the person.
+pub(crate) fn kept_for_human(why: &str) -> ApiProblem {
     problem(
         RESERVED_FOR_HUMAN,
-        format!(
-            "this wait is reserved for a person ({}); escalate it with to=human",
-            reserved.as_str()
-        ),
+        format!("this wait is reserved for a person ({why}); escalate it with to=human"),
     )
 }
 

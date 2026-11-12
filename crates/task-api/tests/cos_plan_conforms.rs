@@ -269,7 +269,7 @@ async fn plan_conforms_refuses_other_answers_stale_versions_and_unguarded_stages
     let item = ingest_plan_gate(&env, &cos.app, task.id).await;
     let none = json!([]);
     let cases = [
-        // The gate recommends approve, but documented_default skips the plan checks.
+        // The gate recommends approve, but task_scope skips the plan checks.
         (
             "default",
             "approve",

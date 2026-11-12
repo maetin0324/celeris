@@ -120,4 +120,4 @@ stat -f -c 'path=%n blocks=%b free=%f available=%a block_size=%S' /local
 
 - 2026-10-10 に本番 config へ書いた暫定の `targets_max_gb = 150` は、この既定を含む release（`sizing-impl`）に昇格したあと消す（既定の 160 になる）。消す前後で `celerisctl scratch status --json` の pressure を記録する。
 - 測り方は S3 で共有 extent と hardlink を 1 回だけ数える。lease の `method` が `blocks` の owner は従来どおり重複込みの上限値なので、`scratch status` に `blocks` が多いときは debug log の理由（FIEMAP 非対応・上限超え）を見る。
-- 160 でも常に `scratch: watermark reached` が出る場合は、`pinned_bytes`（release-build）と owner の数を記録してから値を上げる。`/local` の空きは disk_watch と `effective_max` が別に守るので、上げるのは `targets_max_gb + 91 GiB` が 300 GiB から空きの下限（容量 × `min_free_disk_pct`、既定 10% = 30 GiB）の 3 倍を引いた値を超えない範囲（約 190 まで）にする。
+- 160 でも常に `scratch: watermark reached` が出る場合は、`pinned_bytes`（release-build）と owner の数を記録してから値を上げる。`/local` の空きは disk_watch と `effective_max` が別に守るので、上げるのは `targets_max_gb + 91 GiB` が 300 GiB から空きの下限（容量 × `min_free_disk_pct`、既定 10% = 30 GiB）を引いた 270 GiB を超えない範囲（約 179 まで）にする。旧い目安は固定 5 GiB の下限の 3 倍を余白に取っていた。その余白（走っている target がこれから増える量）は dispatch の空きの見込み（ADR 2026-11-11-disk-aware-dispatch D1）が新しい run を待たせて守るので、下限は 1 倍で数える。

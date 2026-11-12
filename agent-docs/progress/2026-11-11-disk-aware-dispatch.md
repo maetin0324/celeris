@@ -3,7 +3,7 @@ title: 空きの見込みで dispatch を絞り、空きの下限を filesystem 
 tasks: [01M75CV7TY7GMYY8PG3BE0SCBJ]
 status: done
 completed: 2026-11-11
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 # 空きの見込みで dispatch を絞り、空きの下限を filesystem の大きさに比例させる
 
@@ -21,10 +21,11 @@ updated: 2026-11-11
 
 ## 変更
 
-- D1: `crates/task-dispatch/src/disk_admission.rs`（新）。`空き − Σ 走っている target の増分 − 今の pass で通した見込み − この run の見込み ≥ 予備` でなければ run を始めず `ready` のまま待たせる（lease・attempts の前）。見込みは同じ `repo_key` の owner の測った大きさの最大（seed を除く）。続きの run（owner の target がある）は増分だけ。worker run が 0 本なら通す。待ち始めに 1 回だけ `tracing::info!`（`disk forecast: run held`）。通知・受信箱には書かない。呼び出しは `dispatch_run.rs` の write-set の判定の直後（planner・Remote の run は除く）。
+- D1: `crates/task-dispatch/src/disk_admission.rs`（新）。`空き − Σ 走っている target の増分 − 今の pass で通した見込み − この run の見込み ≥ 予備` でなければ run を始めず `ready` のまま待たせる（lease・attempts の前）。見込みは target が pool にある同じ `repo_key` の owner の測った大きさの最大（GC の推定と同じ `task_worker::scratch::repo_max_sizes`）。増分を数えるのは run か review の検査が今書いている owner だけ（`target_written_now`）。続きの run（owner の target がある）は増分だけ。worker run が 0 本なら通す。待ち始めに 1 回だけ `tracing::info!`（`disk forecast: run held`）。通知・受信箱には書かない。呼び出しは `dispatch_run.rs` の write-set の判定の直後（planner・Remote の run は除く）。
 - D2: `[dispatch] min_free_disk_mb` を `[dispatch] min_free_disk_pct`（既定 10、範囲 [0, 100)）に置き換えた。下限 = 容量 × pct。`check_disk_space`（`disk_admission::find_low_disk`）・scratch の GC と実効上限（`run_gc` の `min_free_bytes`）・seed の更新の保留・`celerisctl scratch` が同じ下限を使う。`[scratch] forecast_disk_ratio`（既定 1.0、範囲 (0, 1]）を足した。
 - D3: release-build の target が上限を超えて残る理由: `sd_release_prune_enforce_limit` は release.sh の build の前にしか呼ばれず、build で育った target（本番 88.0 GB）はそのまま lease に残っていた。adopt の経路は原因ではない（adopt の後も開始時の確認は通る）。release.sh の EXIT trap に `sd_release_target_settle`（この build の開始時刻より古い workspace の成果物の刈り込みと上限の確認）を足した。
 - D4: `ScratchStatus.admission`（`ScratchAdmissionView`: 空き・予備・係数・増分の合計・repo の見込み・owner ごとの見込み・待たせている run）。`GET /api/v1/metrics/scratch` と `celerisctl scratch status`（`--json` と表の両方）に出る。待たせている run（`held`）の正本は daemon の `Gate` のメモリだけで、daemon の snapshot が `Gate::with_held` で埋める。`celerisctl scratch status` の `held` は `null`（表は「only the daemon knows」と API を示す）。API schema（`docs/api/v1/api-v1.schema.json`）と web の生成型を作り直した。
+- attempt 3: review の不合格 1 件と申し送り 2 件を直した。(1) `docs/ops/local-disk-growth.md` の `targets_max_gb` の上げ幅が旧い 5 GiB の下限で計算した「約 190」のままだった。下限 30 GiB を 1 倍で引いた 270 GiB（`targets_max_gb` は約 179 まで）に直し、旧い 3 倍の余白は D1 の見込みが守ると書いた。(2) 見込みの材料（`samples_from_owners`）が target の消えた lease の記録も数えていた。`has_target` で絞り、repo の最大を GC の推定と同じ関数（`repo_max_sizes`）にした。(3) class `p0` をすべて増分に数え、lease の生きた release-build・まだ始まらない WU も増分を持っていた。分類の理由で絞り（`target_written_now`: `task running`・`task reviewing`・`work unit running`）、WU の理由を `work unit running` と `work unit queued` に分けた。API の説明が変わったので schema と web の生成型を作り直した。
 - 文書: ADR-0075 に付記、`docs/ops/local-disk-growth.md`・`docs/ops/build-tmp-hygiene.md`・`docs/architecture-map.md`・`config/celeris.example.toml`。
 
 commit（件名）:
@@ -33,6 +34,8 @@ commit（件名）:
 - `phase 1: keep the dispatcher module from growing (gate behind &self, disk paths label in disk_watch) and break the scratch_gc cycle`（health の `size.responsibility-growth`〈`dispatch_one` と dispatcher module の行〉と `deps.cycle`〈disk_admission ↔ scratch_gc〉を直した。`dispatch_one` の disk critical の path の組み立てを `disk_watch::paths_label` に移し、`find_low_disk` は statvfs の関数を引数で受ける）
 - `phase 1: 進捗に検査の結果を書く`
 - `phase 2: keep the held runs only in the daemon's memory and drop the leftover min_free_disk_mb references`（attempt 2。review の指摘 2 件を直した。(1) 初版は待たせている run を pool の `admission.json` に書き、daemon の status もそれを読んでいた。verify の daemon は同じ pool で dispatch の pass を回すので、空の一覧で本番の status を上書きした。file を廃止し、daemon の snapshot がメモリから埋める。記録の刈り込みは候補を照合する pass だけで行う。(2) 消した欄 `min_free_disk_mb` が `tests/e2e/tests/account_pool_scenarios.rs` の試験 config に残り、release gate の `nextest --workspace` で celeris が読み込みエラーになっていた。`min_free_disk_pct = 0` に直し、`DispatchConfig.min_free_disk_pct`・`disk_watch.rs`・celerisctl の `scratch_tests.rs`・`dispatcher/tests/build_cache.rs` の説明も直した）
+- `phase 2: 進捗に attempt 2 の検査の結果を書く`
+- `phase 3: count only present targets for the repo forecast, grow only targets a run writes now, fix the targets_max_gb bound`（attempt 3）
 
 ## 証拠
 

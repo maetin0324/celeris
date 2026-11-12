@@ -28871,7 +28871,7 @@
             "minimum": 0,
             "type": "integer"
           },
-          "description": "repo ごとの見込み（同じ `repo_key` の owner の測った大きさの最大。seed は数えない）。",
+          "description": "repo ごとの見込み（target が pool にある同じ `repo_key` の owner の測った大きさの最大。GC の推定と同じ定義）。",
           "type": "object"
         },
         "free_bytes": {
@@ -28894,7 +28894,7 @@
           ]
         },
         "owners": {
-          "description": "owner ごとの見込み（owner の文字列順。repo の分からない owner は載せない）。",
+          "description": "owner ごとの見込み（owner の文字列順。target の無い owner・repo の分からない owner は載せない）。",
           "items": {
             "$ref": "#/$defs/ScratchOwnerForecastView"
           },
@@ -28912,7 +28912,7 @@
           "type": "integer"
         },
         "running_growth_bytes": {
-          "description": "走っている（`p0`）target がこれから増える見込みの合計。",
+          "description": "run か review の検査が今書いている target がこれから増える見込みの合計。",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -29371,7 +29371,7 @@
           "type": "integer"
         },
         "growth_bytes": {
-          "description": "走っている owner の増分の見込み（走っていなければ 0）。",
+          "description": "今書いている owner の増分の見込み（書いていなければ 0）。",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -29383,7 +29383,7 @@
           "type": "string"
         },
         "running": {
-          "description": "class が `p0`（走っている）。",
+          "description": "run か review の検査が今この target に書いている（`task running`・`task reviewing`・`work unit running`）。",
           "type": "boolean"
         },
         "size_bytes": {

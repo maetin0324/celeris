@@ -1,8 +1,10 @@
 //! ADR 2026-11-11-disk-aware-dispatch: dispatch の前の空きの見込み。
 //!
 //! - D1: `空き − Σ 走っている target の増分 − 今の pass で通した run の見込み − この run の見込み ≥ 予備` でなければ、
-//!   新しい target を作る run を始めず `ready` のまま待たせる。repo の見込みは同じ `repo_key` の owner の測った大きさの
-//!   最大（seed は数えない）。worker run が 1 本も走っていなければ 1 本は通す（詰まらない）。
+//!   新しい target を作る run を始めず `ready` のまま待たせる。repo の見込みは target が pool にある同じ `repo_key` の
+//!   owner の測った大きさの最大（GC の推定と同じ `task_worker::scratch::repo_max_sizes`）。増分を数えるのは run か
+//!   review の検査が今 target に書いている owner だけ（`task_worker::scratch::target_written_now`）。worker run が 1 本も
+//!   走っていなければ 1 本は通す（詰まらない）。
 //! - D2: 予備（空きの下限）は filesystem の容量 × `[dispatch] min_free_disk_pct`（[`min_free_bytes`]）。
 //! - D4: 見込みは `ScratchStatus.admission`（[`forecast`]）。待たせている run の正本は daemon の [`Gate`] のメモリだけで、
 //!   file には書かない（同じ pool を見る verify の daemon が上書きできない）。daemon の snapshot
@@ -57,7 +59,7 @@ pub fn find_low_disk(
 pub struct Sample {
     pub owner: String,
     pub repo_key: String,
-    /// class が `p0`（走っている）。
+    /// run か review の検査が今 target に書いている（class `p0` で [`task_worker::scratch::target_written_now`]）。
     pub running: bool,
     pub size_bytes: Option<u64>,
 }
@@ -71,16 +73,17 @@ pub struct Inputs {
     pub samples: Vec<Sample>,
 }
 
-/// scratch の走査の行から材料を作る（seed・野良・repo の分からない owner は数えない）。
+/// scratch の走査の行から材料を作る。target が pool にある owner だけを数える（GC の推定と同じ入力。target が消えて
+/// lease の記録だけが残る owner の古い大きさは数えない）。野良・repo の分からない owner は数えない。
 pub fn samples_from_owners(owners: &[ScratchOwnerView]) -> Vec<Sample> {
     owners
         .iter()
-        .filter(|o| o.class != "seed" && o.kind != "stray")
+        .filter(|o| o.has_target && o.kind != "stray")
         .filter_map(|o| {
             Some(Sample {
                 owner: o.owner.clone(),
                 repo_key: o.repo_key.clone()?,
-                running: o.class == "p0",
+                running: o.class == "p0" && task_worker::scratch::target_written_now(&o.reason),
                 size_bytes: o.size_bytes,
             })
         })
@@ -93,11 +96,12 @@ fn scaled(bytes: u64, ratio: f64) -> u64 {
 
 /// D1/D4: 見込みを組む。`held` は待たせている run（daemon の [`Gate::held_views`]。pool の走査だけなら `None`）。
 pub fn forecast(inputs: &Inputs, held: Option<Vec<ScratchHeldRunView>>) -> ScratchAdmissionView {
-    let mut expected_by_repo: BTreeMap<String, u64> = BTreeMap::new();
-    for s in &inputs.samples {
-        let e = expected_by_repo.entry(s.repo_key.clone()).or_insert(0);
-        *e = (*e).max(s.size_bytes.unwrap_or(0));
-    }
+    let expected_by_repo = task_worker::scratch::repo_max_sizes(
+        inputs
+            .samples
+            .iter()
+            .filter_map(|s| Some((s.repo_key.as_str(), s.size_bytes?))),
+    );
     let mut owners: Vec<ScratchOwnerForecastView> = inputs
         .samples
         .iter()
@@ -403,6 +407,73 @@ mod tests {
         assert_eq!(need_bytes(&v, "task-new", "ap"), 100 * GB);
         assert_eq!(need_bytes(&v, "task-b", "ap"), 60 * GB);
         assert_eq!(need_bytes(&v, "task-a", "ap"), 0);
+    }
+
+    fn owner_row(
+        owner: &str,
+        kind: &str,
+        class: &str,
+        reason: &str,
+        target: bool,
+        size: u64,
+    ) -> ScratchOwnerView {
+        ScratchOwnerView {
+            owner: owner.into(),
+            kind: kind.into(),
+            class: class.into(),
+            reason: reason.into(),
+            has_target: target,
+            size_bytes: Some(size),
+            estimated_bytes: size,
+            measured_at: None,
+            lease_mtime: None,
+            repo_key: Some("ap".into()),
+            base_commit: None,
+            adopted_from: None,
+            work_unit_key: None,
+        }
+    }
+
+    /// 不変条件（attempt 3 の review の申し送り）: repo の見込みは target が pool にある owner だけから決まり（GC の推定と
+    /// 同じ入力）、増分は run か review の検査が今書いている owner だけが持つ。release-build の lease・まだ始まらない WU・
+    /// target の消えた lease の記録は数えない。上の試験は `Sample` を直接与えるので、走査の行からの絞り込みを確かめない。
+    #[test]
+    fn samples_count_present_targets_and_grow_only_where_a_run_writes_now() {
+        let rows = vec![
+            owner_row("release-abc", "release", "p0", "lease live", true, 60 * GB),
+            owner_row("task-gone", "task", "p3", "task done", false, 150 * GB),
+            owner_row("task-p3", "task", "seed", "task done", true, 90 * GB),
+            owner_row("task-r", "task", "p0", "task running", true, 40 * GB),
+            owner_row("task-v", "task", "p0", "task reviewing", true, 70 * GB),
+            owner_row(
+                "task-w/wu-q",
+                "work_unit",
+                "p0",
+                "work unit queued",
+                true,
+                10 * GB,
+            ),
+            owner_row(
+                "task-w/wu-r",
+                "work_unit",
+                "p0",
+                "work unit running",
+                true,
+                20 * GB,
+            ),
+        ];
+        let samples = samples_from_owners(&rows);
+        assert!(samples.iter().all(|s| s.owner != "task-gone"));
+        let v = forecast(&inputs(100 * GB, samples), None);
+        assert_eq!(v.expected_by_repo.get("ap"), Some(&(90 * GB)));
+        let growing: Vec<&str> = v
+            .owners
+            .iter()
+            .filter(|o| o.growth_bytes > 0)
+            .map(|o| o.owner.as_str())
+            .collect();
+        assert_eq!(growing, vec!["task-r", "task-v", "task-w/wu-r"]);
+        assert_eq!(v.running_growth_bytes, (50 + 20 + 70) * GB);
     }
 
     /// 不変条件: 係数は増分と見込みにだけ掛かる（disk 上の量に直す）。

@@ -41,10 +41,15 @@ run を起こす前（write-set の判定の後、lease の前）に、次の不
 
 - **空き**: scratch pool の filesystem の statvfs の空き（`ScratchStatus.fs_free_bytes`）。
 - **予備**: D2 の空きの下限（pool の filesystem の大きさ × `min_free_disk_pct`）。
-- **repo の見込み**: 直近の scratch の走査で、同じ `repo_key` の owner の測った大きさ（lease の `size_bytes`）の最大。
-  seed の行は数えない。測った target が無い repo の見込みは 0（判定しない）。
-- **走っている target の増分**: class `p0`（走っている）の owner ごとに `max(0, repo の見込み − 今の大きさ)`。未測定は
-  大きさ 0 と見る。
+- **repo の見込み**: 直近の scratch の走査で、target が pool にある同じ `repo_key` の owner（seed に選ばれた P3 の owner も
+  含む）の測った大きさ（lease の `size_bytes`）の最大。GC の推定（ADR-0075 D2 の「未測定は同じ repo の最大」）と同じ定義・
+  同じ入力で、関数も 1 つ（`task_worker::scratch::repo_max_sizes`）。target が消えて lease の記録だけが残る owner は数えない。
+  測った target が無い repo の見込みは 0（判定しない。GC は全体の最大で補うが、dispatch は判定しない）。
+- **走っている target の増分**: run か review の検査が今 target に書いている owner（分類の理由が `task running`・
+  `task reviewing`・`work unit running`。`task_worker::scratch::target_written_now`。review の検査も task の owner の
+  `CARGO_TARGET_DIR` で build する）ごとに `max(0, repo の見込み − 今の大きさ)`。未測定は大きさ 0 と見る。class `p0` でも
+  release-build・agent の lease（`lease live`）と、まだ始まらない WU（`work unit queued`。その run の見込みはこの判定で
+  数える）は数えない。release-build の target は D3 の上限で抑える。
 - **この run の見込み**: run が使う owner（並列 WU は `task-<id>/wu-<id>`、それ以外は `task-<id>`）の target が
   pool に既にあれば `max(0, repo の見込み − 今の大きさ)`（同じ task の続きは増分だけ）、無ければ repo の見込み全体
   （seed から写しても共有はほぼ 0 と見る）。
@@ -92,6 +97,13 @@ verify の daemon（`celeris --mode verify`）は本番と同じ config・同じ
 最初の pass で空の一覧を書き、本番の status の `held` が実際の待ちと食い違った。共有の写しを廃止し、メモリだけを
 正本にした。待たせている run の記録は、候補を照合する pass の始めに、前の pass で判定に来なかった run の分を消す
 （枠が埋まって照合しない pass では消さない）。
+
+付記（2026-11-12、attempt 2 の review の申し送り）: 初版の見込みは (1) target の消えた lease の記録（最長 7 日残る）も
+repo の最大に数え、本番では今ある target の最大 68.1 GB に対し 153.2 GB になっていた。(2) class `p0` の owner をすべて
+「走っている」と数え、lease の生きた release-build（48 時間）だけで増分 90.2 GB になり、run が 1 本でも走っていれば
+新しい run がほぼ待つ見込みだった。repo の見込みを GC と同じ定義（target が pool にある owner の最大）にし、増分を
+数える owner を `target_written_now` に絞った。WU の分類の理由は `work unit in progress` を `work unit running`
+（Running）と `work unit queued`（Pending・Ready・NeedsContinuation）に分けた（class はどちらも P0 のまま）。
 
 ## 結果
 

@@ -1314,7 +1314,7 @@ impl Dispatcher {
             CargoTargetPlan::Legacy(self.config.build_cache_dir.clone())
         };
         #[cfg(test)]
-        let test_worker_start_delay = self.test_worker_start_delay;
+        let test_worker_start_delay = self.test_hooks.worker_start_delay;
         tokio::spawn(async move {
             #[cfg(test)]
             if let Some(delay) = test_worker_start_delay {

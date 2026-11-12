@@ -181,10 +181,10 @@ fn pending_integration_repair(
 
 impl Dispatcher {
     /// review 前の target 同期（ADR-0118）を行うか。本番では常に行う。試験だけが切れる
-    /// （`test_skip_pre_review_sync`、phase_effect_ab::review_sync の off）。
+    /// （`test_hooks.ablation.skip_pre_review_sync`、phase_effect_ab::review_sync の off）。
     fn pre_review_sync_enabled(&self) -> bool {
         #[cfg(test)]
-        if self.test_skip_pre_review_sync {
+        if self.test_hooks.ablation.skip_pre_review_sync {
             return false;
         }
         true
@@ -566,7 +566,7 @@ impl Dispatcher {
                                 )
                             })?;
                         #[cfg(test)]
-                        if self.test_sync_conflict_as_review_fail {
+                        if self.test_hooks.ablation.sync_conflict_as_review_fail {
                             // Phase 2 以前の旧経路: 衝突を review の不合格として worker に戻す（attempts を使う）。
                             self.store.apply_transition(
                                 task_id,

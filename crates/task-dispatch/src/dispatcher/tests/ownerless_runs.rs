@@ -88,11 +88,16 @@ fn all_alive() -> Arc<dyn Fn(u32) -> bool + Send + Sync> {
 }
 
 fn clock_now(d: &Dispatcher) -> OffsetDateTime {
-    *d.test_now.as_ref().expect("test clock").lock().unwrap()
+    *d.test_hooks
+        .now
+        .as_ref()
+        .expect("test clock")
+        .lock()
+        .unwrap()
 }
 
 fn advance(d: &Dispatcher, secs: i64) {
-    let clock = d.test_now.as_ref().expect("test clock");
+    let clock = d.test_hooks.now.as_ref().expect("test clock");
     let mut now = clock.lock().unwrap();
     *now += time::Duration::seconds(secs);
 }

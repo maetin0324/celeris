@@ -740,7 +740,7 @@ impl CosChatLaunch {
         let clock: ChatClock = {
             #[cfg(test)]
             {
-                if let Some(test_now) = &dispatcher.test_now {
+                if let Some(test_now) = &dispatcher.test_hooks.now {
                     let test_now = Arc::clone(test_now);
                     Arc::new(move || *test_now.lock().unwrap_or_else(|e| e.into_inner()))
                 } else {

@@ -1148,35 +1148,10 @@ pub struct Dispatcher {
     /// ADR 2026-11-11 dispatcher-state-ownership D1: disk・scratch・build cache・repo target の掃除と、中止された
     /// task の作業場所の片付けの状態の owner（`crate::host_maintenance`。入口は `housekeeping.rs`・`maintenance.rs`）。
     maint: crate::host_maintenance::HostMaintenance,
+    /// ADR 2026-11-11 dispatcher-state-ownership D6: 試験用フック（時計・遅延・停止点・研究 ablation）の唯一の置き場。
+    /// 試験用の切替は `tests::hooks::TestHooks` に足す（`tests/structure_guard.rs` が属性の数を見る）。
     #[cfg(test)]
-    test_now: Option<Arc<StdMutex<OffsetDateTime>>>,
-    /// 試験専用: この source の全 account を Claude 予約（`CosReservation`）として扱う（CoS の経路でも再現する）。
-    #[cfg(test)]
-    test_cos_reserved_sources: std::collections::BTreeSet<task_core::llm_route::SourceId>,
-    /// 試験専用: WU の遷移を書いた直後に run の終了処理を打ち切る（その後の event が書かれる前の kill を再現）。
-    #[cfg(test)]
-    test_halt_after_wu_transition: bool,
-    /// 試験専用: spawn した worker task が `run_worker` に入る前に待つ時間（worker の終了が遅れる状況の再現）。
-    #[cfg(test)]
-    test_worker_start_delay: Option<std::time::Duration>,
-    #[cfg(test)]
-    test_policy_clock: Option<Arc<StdMutex<Instant>>>,
-    /// 試験だけの切替: review 前の target 同期（ADR-0118）を飛ばし、旧経路（未同期の HEAD を review）を再現する
-    /// （phase_effect_ab::review_sync の off）。
-    #[cfg(test)]
-    test_skip_pre_review_sync: bool,
-    /// 試験だけの切替: write-set gate（ADR-0130 D3）を切り、重なる run も同時に起こす
-    /// （phase_effect_ab::write_set の off）。
-    #[cfg(test)]
-    test_disable_write_set_gate: bool,
-    /// 試験だけの切替: review 前 sync の stale 優先（ADR-0130 D5）を切り、待ち行列を候補の順のまま渡す
-    /// （phase_effect_ab::stale_priority の off）。
-    #[cfg(test)]
-    test_disable_stale_priority: bool,
-    /// 試験だけの切替: review 前 sync の衝突を IntegrationRepair（ADR-0120）ではなく `ReviewFail` で返す
-    /// 旧経路を再現する（phase_effect_ab::review_sync の Phase 2 off）。
-    #[cfg(test)]
-    test_sync_conflict_as_review_fail: bool,
+    test_hooks: tests::hooks::TestHooks,
     /// ADR-0074 D1.5（Phase F2）: 鍵は (task, WU)。Task 単位の問いは `running_for_task`。
     running: HashMap<RunKey, RunEntry>,
     /// ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch）D4:
@@ -1265,9 +1240,6 @@ pub struct Dispatcher {
     /// ADR-0074 D1.4（Phase F2b）: 工程の統合を走らせている Task（spawn した git 操作と検査）。
     /// 再起動の照合（D1.7）は「running の統合 WU で、ここに無いもの」を pending に戻す。
     integrating: HashMap<TaskId, IntegrationEntry>,
-    /// 統合の状態確認直前に別の ready 戻しを差し込む、試験専用の一回フック。
-    #[cfg(test)]
-    before_integration_start: Option<fn(&mut Dispatcher, TaskId)>,
     /// Phase F5-fix2: WU の `checks` を走らせている run（キーは run id）。
     checking: HashMap<String, CheckingEntry>,
     /// Phase F5-fix6: 居なくなったデーモンの run（孤児）を lease 失効を待たずに回収する（`None` = 無効）。
@@ -1375,23 +1347,7 @@ impl Dispatcher {
             max_concurrency,
             maint: Default::default(),
             #[cfg(test)]
-            test_now: None,
-            #[cfg(test)]
-            test_cos_reserved_sources: Default::default(),
-            #[cfg(test)]
-            test_halt_after_wu_transition: false,
-            #[cfg(test)]
-            test_worker_start_delay: None,
-            #[cfg(test)]
-            test_policy_clock: None,
-            #[cfg(test)]
-            test_skip_pre_review_sync: false,
-            #[cfg(test)]
-            test_disable_write_set_gate: false,
-            #[cfg(test)]
-            test_disable_stale_priority: false,
-            #[cfg(test)]
-            test_sync_conflict_as_review_fail: false,
+            test_hooks: Default::default(),
             running: HashMap::new(),
             eval_runs: HashMap::new(),
             eval_version_probe: None,
@@ -1426,8 +1382,6 @@ impl Dispatcher {
             review_sync_seq: 0,
             awaiting_children: HashMap::new(),
             integrating: HashMap::new(),
-            #[cfg(test)]
-            before_integration_start: None,
             checking: HashMap::new(),
             orphan_takeover: None,
             variant_observation: None,

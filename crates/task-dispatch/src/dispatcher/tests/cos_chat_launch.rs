@@ -105,7 +105,7 @@ async fn cos_chat_run_control_stop_kills_group_pauses_queue_and_late_stop_isolat
     let command = vec!["sh".into(), "-c".into(),
         "cat >/dev/null; printf '%s' \"$CELERIS_COS_RUN_CREDENTIAL\" > .token; printf '%s' \"$$\" > ready.fifo; read x < release.fifo; echo '{\"type\":\"done\",\"summary\":\"done\",\"evidence\":[]}'".into()];
     let (dir, store, mut d) = fixture(command, 1);
-    d.test_now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
+    d.test_hooks.now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
     d.config.kill_grace = std::time::Duration::from_millis(20);
     let t = thread(&store, "control-stop");
     post(&store, &t, "first");
@@ -230,7 +230,7 @@ async fn cos_chat_run_control_stop_kills_group_pauses_queue_and_late_stop_isolat
 #[tokio::test]
 async fn cos_chat_run_control_interrupt_precedes_queue_without_changing_pause() {
     let (_dir, store, mut d) = fixture(FakeAdapter::default_command(), 1);
-    d.test_now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
+    d.test_hooks.now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
     let t = thread(&store, "control-interrupt");
     post(&store, &t, "first");
     post(&store, &t, "queued");
@@ -316,7 +316,7 @@ async fn cos_chat_run_control_live_interrupt_waits_for_old_worker_exit() {
         "cat >/dev/null; printf ready > ready.fifo; read x < release.fifo; echo '{\"type\":\"done\",\"summary\":\"done\",\"evidence\":[]}'".into(),
     ];
     let (dir, store, mut d) = fixture(command, 1);
-    d.test_now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
+    d.test_hooks.now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
     d.config.kill_grace = std::time::Duration::from_millis(20);
     let t = thread(&store, "control-live-interrupt");
     post(&store, &t, "first");
@@ -420,7 +420,7 @@ async fn cos_chat_run_control_live_interrupt_waits_for_old_worker_exit() {
 #[tokio::test]
 async fn cos_chat_run_control_restart_waits_for_orphan_then_continues_input() {
     let (dir, store, mut d) = fixture(FakeAdapter::default_command(), 1);
-    d.test_now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
+    d.test_hooks.now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
     let t = thread(&store, "control-orphan");
     post(&store, &t, "original");
     let old = store
@@ -508,7 +508,7 @@ async fn cos_chat_run_control_restart_waits_for_orphan_then_continues_input() {
 #[tokio::test]
 async fn cos_chat_run_control_pending_side_effect_waits_for_human() {
     let (dir, store, mut d) = fixture(FakeAdapter::default_command(), 1);
-    d.test_now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
+    d.test_hooks.now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
     let t = thread(&store, "control-pending");
     post(&store, &t, "original");
     let old = store
@@ -997,7 +997,7 @@ async fn cos_chat_run_e2e_send_stream_interrupt_stop_resume_and_restart() {
             progress_sent,
         }) as Arc<dyn WorkerAdapter>,
     )]));
-    d.test_now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
+    d.test_hooks.now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
     d.config.kill_grace = std::time::Duration::from_millis(20);
     let t = thread(&store, "e2e");
     let workspace = dir.path().join("cos/threads").join(&t).join("workspace");

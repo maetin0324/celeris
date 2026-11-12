@@ -217,7 +217,7 @@ async fn browser_policy_missing_worker_rejection_is_not_infra_requeue() {
     d.set_browser_ledger_watch(valid_ledger(ledger_dir.path()));
     // 試験専用の遅延: worker の拒否を 300ms 遅らせ、高負荷で終了が遅れる状況を負荷なしで再現する。
     // 旧形（tick_n(5) ≒ 50ms だけ待つ）ならこの遅延で必ず落ちる（下の事前確認がその証拠）。
-    d.test_worker_start_delay = Some(Duration::from_millis(300));
+    d.test_hooks.worker_start_delay = Some(Duration::from_millis(300));
     tick_n(&mut d, 5).await;
     assert_eq!(
         transition_reasons(&store, task.id),

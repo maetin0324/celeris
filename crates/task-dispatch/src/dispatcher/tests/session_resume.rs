@@ -1232,7 +1232,7 @@ fn session_jsonl(config: &std::path::Path, cwd: &std::path::Path, session_id: &s
         .join(format!("{session_id}.jsonl"))
 }
 
-/// 再起動を挟む試験の dispatcher。時計は注入した試験用の時計（`test_now`）。
+/// 再起動を挟む試験の dispatcher。時計は注入した試験用の時計（`test_hooks.now`）。
 fn restart_dispatcher(store: &Arc<dyn TaskStore>, adapter: Arc<ClaudeScriptAdapter>) -> Dispatcher {
     dispatcher_with_test_clock(store.clone(), adapter, 1, true)
 }
@@ -1328,7 +1328,7 @@ async fn second_daemon_to_idle(
     let adapter =
         Arc::new(ClaudeScriptAdapter::new(&store, Vec::new(), Vec::new()).with_config_dir(config));
     let mut d = restart_dispatcher(&store, adapter.clone());
-    if let Some(clock) = &d.test_now {
+    if let Some(clock) = &d.test_hooks.now {
         *clock.lock().unwrap() += Duration::from_secs(3600);
     }
     let report = run_until_idle(&mut d, 400).await;

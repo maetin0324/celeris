@@ -906,7 +906,7 @@ async fn delivery_rereview_below_the_cap_still_reviews() {
 }
 
 /// 同 ADR D4: 止めている間に target が静かになれば（先頭 commit が `review_resync_quiet` 以上古い）、
-/// `ReviewResyncResumed{target_quiet}` を残して自動で再開する。時計は dispatcher の `test_now` で進める。
+/// `ReviewResyncResumed{target_quiet}` を残して自動で再開する。時計は dispatcher の `test_hooks.now` で進める。
 #[tokio::test]
 async fn pre_review_sync_halted_review_resumes_when_target_is_quiet() {
     let repo = tempfile::tempdir().unwrap();
@@ -922,7 +922,7 @@ async fn pre_review_sync_halted_review_resumes_when_target_is_quiet() {
     store.insert(&task).unwrap();
     let mut d = worktree_dispatcher(store.clone(), done_adapter(), ws.path(), None);
     let clock = Arc::new(StdMutex::new(OffsetDateTime::now_utc()));
-    d.test_now = Some(clock.clone());
+    d.test_hooks.now = Some(clock.clone());
     let wt = d.local_worktree_for(&task).unwrap();
     wt.ensure_blocking().unwrap();
     commit_file(&wt.dir, "task.txt", "task\n");
@@ -1791,7 +1791,7 @@ async fn behind_target_pre_review_sync_records_before_and_after() {
     });
     let mut d = worktree_dispatcher(store.clone(), adapter, ws.path(), None);
     let t0 = OffsetDateTime::parse("2026-10-02T00:00:00Z", &Rfc3339).unwrap();
-    d.test_now = Some(Arc::new(StdMutex::new(t0)));
+    d.test_hooks.now = Some(Arc::new(StdMutex::new(t0)));
     let wt = d.local_worktree_for(&task).unwrap();
     wt.ensure_blocking().unwrap();
     commit_file(&wt.dir, "task.txt", "task\n");

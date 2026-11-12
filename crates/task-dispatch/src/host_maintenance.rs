@@ -1176,7 +1176,7 @@ mod tests {
 #[cfg(test)]
 mod structure_guard_tests {
     /// 不変条件（ADR 2026-11-11 dispatcher-state-ownership D2 の 1〜3・7）: `HostMaintenance` の field は private で
-    /// `#[cfg(test)]` の field を持たず、owner の module は組み立て役の型を受けず `dispatcher` module を使わない。
+    /// （`#[cfg(test)]` の field の無いことは `dispatcher/tests/structure_guard.rs`）、owner の module は組み立て役の型を受けず `dispatcher` module を使わない。
     /// 既存の試験は振る舞いだけを見るので、field を `pub` に戻しても、method が組み立て役を受けても通る。
     #[test]
     fn structure_guard_host_maintenance() {
@@ -1199,10 +1199,6 @@ mod structure_guard_tests {
             assert!(
                 !t.starts_with("pub"),
                 "a HostMaintenance field is not private: {line}"
-            );
-            assert!(
-                !t.starts_with("#[cfg(test)]"),
-                "HostMaintenance has a #[cfg(test)] field: {line}"
             );
             if let Some((name, _)) = t.split_once(": ")
                 && !name.is_empty()

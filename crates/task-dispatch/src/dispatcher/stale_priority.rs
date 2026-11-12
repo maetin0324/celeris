@@ -114,7 +114,7 @@ impl Dispatcher {
     ) -> Result<Vec<Task>, DispatchError> {
         self.enter_review_sync_queue(&candidates);
         #[cfg(test)]
-        if self.test_disable_stale_priority {
+        if self.test_hooks.ablation.disable_stale_priority {
             // phase_effect_ab::stale_priority の off: 並べ替えずに候補の順（store の一覧順）で渡す。
             return Ok(candidates);
         }

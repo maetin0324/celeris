@@ -1747,8 +1747,8 @@ fn shell_quote(s: &str) -> String {
 
 #[cfg(test)]
 mod structure_guard_tests {
-    /// 不変条件（ADR 2026-11-11 dispatcher-state-ownership D2 の 1〜3・7）: `ClusterRuntime` の field は private で、
-    /// struct に `#[cfg(test)]` の field が無く、この module は組み立て役の型を引数に受けず、`dispatcher` module を
+    /// 不変条件（ADR 2026-11-11 dispatcher-state-ownership D2 の 1〜3・7）: `ClusterRuntime` の field は private で
+    /// （`#[cfg(test)]` の field の無いことは `dispatcher/tests/structure_guard.rs`）、この module は組み立て役の型を引数に受けず、`dispatcher` module を
     /// `use` しない。既存の試験は振る舞い（接続・tunnel・poll）だけを見るので、field を `pub` に戻したり
     /// 組み立て役を引数に足したりしても通ってしまう。ここでは source を読んで形を確かめる。
     #[test]
@@ -1772,10 +1772,6 @@ mod structure_guard_tests {
             assert!(
                 !t.starts_with("pub"),
                 "a ClusterRuntime field is not private: {line}"
-            );
-            assert!(
-                !t.starts_with("#[cfg(test)]"),
-                "ClusterRuntime has a #[cfg(test)] field: {line}"
             );
             // field の行は `name: Type`（型の続きの行 `std::sync::...` は数えない）。
             if t.split_once(": ").is_some_and(|(name, _)| {

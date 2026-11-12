@@ -121,10 +121,10 @@ impl Dispatcher {
     }
 
     /// write-set gate を切っているか。本番では常に効かせる。試験だけが切れる
-    /// （`test_disable_write_set_gate`、phase_effect_ab::write_set の off）。
+    /// （`test_hooks.ablation.disable_write_set_gate`、phase_effect_ab::write_set の off）。
     pub(super) fn write_set_gate_disabled(&self) -> bool {
         #[cfg(test)]
-        if self.test_disable_write_set_gate {
+        if self.test_hooks.ablation.disable_write_set_gate {
             return true;
         }
         false

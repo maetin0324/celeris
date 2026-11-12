@@ -291,7 +291,7 @@ async fn a_stalled_non_tree_plan_is_detected() {
     assert!(!d.config.execution.limits.tree.enabled);
     let t0 = OffsetDateTime::now_utc() + time::Duration::minutes(5);
     let clock = Arc::new(StdMutex::new(t0));
-    d.test_now = Some(clock.clone());
+    d.test_hooks.now = Some(clock.clone());
     d.tick().unwrap();
     *clock.lock().unwrap() = t0 + time::Duration::seconds(599);
     d.tick().unwrap();
@@ -419,7 +419,7 @@ async fn a_plan_that_cannot_dispatch_reports_plan_stalled_and_reaches_the_inbox(
     d.config.execution.max_replans = 0;
     let t0 = OffsetDateTime::now_utc() + time::Duration::minutes(5);
     let clock = Arc::new(StdMutex::new(t0));
-    d.test_now = Some(clock.clone());
+    d.test_hooks.now = Some(clock.clone());
     d.tick().unwrap();
     *clock.lock().unwrap() = t0 + time::Duration::seconds(599);
     d.tick().unwrap();

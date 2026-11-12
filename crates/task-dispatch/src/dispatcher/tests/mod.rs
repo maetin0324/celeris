@@ -191,8 +191,8 @@ fn new_test_dispatcher(
     #[cfg(test)]
     {
         if use_test_clock {
-            dispatcher.test_now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
-            dispatcher.test_policy_clock = Some(policy_clock);
+            dispatcher.test_hooks.now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
+            dispatcher.test_hooks.policy_clock = Some(policy_clock);
         }
     }
     install_test_routes(&mut dispatcher, adapter, &[("p1", "test")], max_concurrency);
@@ -3208,10 +3208,12 @@ mod direct_route;
 /// ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）: draining の旧 instance は run の終わりで手を離す
 /// （`src/dispatcher/tests/drain_hand_off.rs`）。
 mod drain_hand_off;
+/// ADR 2026-11-11 dispatcher-state-ownership D6: `Dispatcher` の唯一の `#[cfg(test)]` の field の型。
+pub(super) mod hooks;
 mod lane_assist;
 /// 工程の効き目の A/B 試験（off/on の `ab-metric` 行と効き目の assert）
 /// （`src/dispatcher/tests/phase_effect_ab.rs`）。
-mod phase_effect_ab;
+pub(super) mod phase_effect_ab;
 /// 多目的 routing Phase 3: run 開始時の RoutingContext（`src/dispatcher/tests/routing_context.rs`）。
 mod routing_context;
 /// ADR-0074 付記 2026-10-05: 範囲 check（`WorkUnitCheck.scope`）は WU の作業時だけ流す
@@ -3225,6 +3227,8 @@ mod script_compare;
 mod session_resume;
 /// ADR-0130 D5: review 前 sync の待ち行列の stale 優先（`src/dispatcher/tests/stale_priority.rs`）。
 mod stale_priority;
+/// D6: `#[cfg(test)]` の field が `test_hooks` 1 個だけであること、owner の struct に無いこと。
+mod structure_guard;
 /// ADR-0130 D3: 同じ repo の expected write-set の重なりで run の起動を待たせる
 /// （`src/dispatcher/tests/write_set_gate.rs`）。
 mod write_set_gate;

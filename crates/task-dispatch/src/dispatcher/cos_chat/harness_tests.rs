@@ -56,7 +56,7 @@ fn fixture_on(
         .expect("skill");
     }
     let now = OffsetDateTime::from_unix_timestamp(1_791_158_400).expect("clock");
-    d.test_now = Some(Arc::new(StdMutex::new(now)));
+    d.test_hooks.now = Some(Arc::new(StdMutex::new(now)));
     d.set_cos_chat_launch(
         store.clone(),
         CosChatLaunchConfig {

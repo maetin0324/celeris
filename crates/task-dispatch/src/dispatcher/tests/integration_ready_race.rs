@@ -71,7 +71,7 @@ fn integration(store: &Arc<dyn TaskStore>, task_id: TaskId) -> task_core::WorkUn
 async fn ready_wins_before_integration_start_leaves_pending_and_retries() {
     let (_repo, _root, store, task, mut d) = fixture();
     let wu = integration(&store, task.id);
-    d.before_integration_start = Some(|d, task_id| {
+    d.test_hooks.before_integration_start = Some(|d, task_id| {
         // 最後の葉は Done、統合は Pending、まだ spawn は無い、という同じ tick の隙間。
         d.reconcile_parallel_tasks().unwrap();
         assert_eq!(d.store.get(task_id).unwrap().unwrap().status, Status::Ready);

@@ -553,7 +553,7 @@ async fn liveness_flags_only_unexplained_stalls() {
     // 偽の時計: 0 → 599 → 630 → 1,300 → 2,000 秒。
     let t0 = OffsetDateTime::now_utc() + time::Duration::minutes(5);
     let clock = Arc::new(StdMutex::new(t0));
-    d.test_now = Some(clock.clone());
+    d.test_hooks.now = Some(clock.clone());
     for secs in [0, 599, 630, 1300, 2000] {
         *clock.lock().unwrap() = t0 + time::Duration::seconds(secs);
         d.tick().unwrap();
@@ -595,7 +595,7 @@ async fn liveness_flags_only_unexplained_stalls() {
         .unwrap();
     let t0 = OffsetDateTime::now_utc() + time::Duration::minutes(5);
     let clock = Arc::new(StdMutex::new(t0));
-    d.test_now = Some(clock.clone());
+    d.test_hooks.now = Some(clock.clone());
     d.tick().unwrap();
     *clock.lock().unwrap() = t0 + time::Duration::seconds(599);
     d.tick().unwrap();
@@ -795,7 +795,7 @@ async fn tree_disabled_is_unchanged() {
     let mut d = tree_dispatcher(&store, adapter);
     d.config.execution.limits.tree.enabled = false;
     let t0 = OffsetDateTime::now_utc() + time::Duration::minutes(5);
-    d.test_now = Some(Arc::new(StdMutex::new(t0)));
+    d.test_hooks.now = Some(Arc::new(StdMutex::new(t0)));
     let report = run_until_idle(&mut d, 400).await;
     assert!(report.idle, "{report:?}");
     assert_eq!(store.get(task_id).unwrap().unwrap().status, Status::Done);

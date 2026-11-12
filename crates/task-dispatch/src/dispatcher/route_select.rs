@@ -725,7 +725,7 @@ impl Dispatcher {
         #[cfg(test)]
         {
             let mut state = self.routing.route_state(&ctx);
-            for source in &self.test_cos_reserved_sources {
+            for source in &self.test_hooks.cos_reserved_sources {
                 for account in state.accounts.available.get(source).into_iter().flatten() {
                     state
                         .quota

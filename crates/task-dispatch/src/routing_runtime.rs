@@ -459,7 +459,7 @@ impl RoutingRuntime {
 
 #[cfg(test)]
 mod structure_guard_tests {
-    /// 不変条件: ADR 2026-11-11 D2 の 1〜3・7（field が private、`#[cfg(test)]` の field が無い、
+    /// 不変条件: ADR 2026-11-11 D2 の 1〜3・7（field が private（`#[cfg(test)]` の field は `dispatcher/tests/structure_guard.rs`）、
     /// `Dispatcher` を受けない・`dispatcher` module を使わない、field は 15 件）。既存の試験は振る舞いだけを見るので、
     /// field を `pub` に戻しても通る。純粋 module `route_state.rs` は読み書き・時計・lock を持たない。
     #[test]
@@ -482,10 +482,6 @@ mod structure_guard_tests {
             assert!(
                 !t.starts_with("pub"),
                 "a RoutingRuntime field is not private: {line}"
-            );
-            assert!(
-                !t.starts_with("#[cfg(test)]"),
-                "RoutingRuntime has a #[cfg(test)] field: {line}"
             );
             if t.split_once(": ").is_some_and(|(name, _)| {
                 !name.is_empty() && name.chars().all(|c| c.is_ascii_lowercase() || c == '_')

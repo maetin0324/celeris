@@ -182,7 +182,7 @@ fn setup(
 }
 
 fn advance(d: &Dispatcher, secs: i64) {
-    if let Some(clock) = &d.test_now {
+    if let Some(clock) = &d.test_hooks.now {
         *clock.lock().unwrap() += time::Duration::seconds(secs);
     }
 }
@@ -712,7 +712,7 @@ async fn a_leaf_unit_waits_alone_and_liveness_names_the_wait() {
     // 偽の時計（生存確認の 600 秒・poll の間隔を進める）。
     let t0 = OffsetDateTime::now_utc();
     let clock = Arc::new(StdMutex::new(t0));
-    d.test_now = Some(clock.clone());
+    d.test_hooks.now = Some(clock.clone());
 
     // 1. a は wait、b は done。task は ready で、unit a は blocked(cluster_jobs)。
     tick_until(&mut d, |_| {
@@ -830,7 +830,7 @@ async fn a_leaf_unit_blocked_on_cluster_jobs_always_has_its_wait_row_after_a_hal
         seen: Arc::new(StdMutex::new(Vec::new())),
     });
     let mut d = tree_dispatcher(&store, adapter);
-    d.test_halt_after_wu_transition = true;
+    d.test_hooks.halt_after_wu_transition = true;
     d.config.clusters.insert(
         "sirius".into(),
         cluster(task_core::cluster_job::ClusterJobWaitLimits {

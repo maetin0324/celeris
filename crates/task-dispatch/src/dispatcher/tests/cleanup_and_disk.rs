@@ -236,7 +236,7 @@ async fn disk_watch_tick_phase_holds_coding_until_pressure_recovers() {
     let clock = Arc::new(StdMutex::new(
         OffsetDateTime::from_unix_timestamp(1_791_331_200).unwrap(),
     ));
-    d.test_now = Some(clock.clone());
+    d.test_hooks.now = Some(clock.clone());
     let pct = Arc::new(StdMutex::new(85));
     d.set_disk_watch_with_probe(
         vec![DiskWatchEntry {

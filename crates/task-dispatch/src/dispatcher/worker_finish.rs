@@ -1322,7 +1322,7 @@ impl Dispatcher {
                 tracing::warn!(%task_id, %run_id, error = %e, "failed to record the work unit transition");
             }
             #[cfg(test)]
-            if self.test_halt_after_wu_transition {
+            if self.test_hooks.halt_after_wu_transition {
                 return Ok(());
             }
             for row in side_effect_rows {

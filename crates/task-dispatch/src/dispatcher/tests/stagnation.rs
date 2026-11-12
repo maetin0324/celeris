@@ -48,7 +48,7 @@ async fn release_unpromoted_appears_at_threshold_once_and_closes_on_promotion() 
         60,
     );
     let clock = Arc::new(StdMutex::new(verified));
-    d.test_now = Some(clock.clone());
+    d.test_hooks.now = Some(clock.clone());
     let release_items = |d: &Dispatcher| {
         d.stagnation
             .findings

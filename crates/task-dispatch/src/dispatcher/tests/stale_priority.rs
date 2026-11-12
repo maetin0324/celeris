@@ -50,7 +50,7 @@ fn synced_at(store: &Arc<dyn TaskStore>, task: &Task) -> u64 {
 
 fn fixed_clock(d: &mut Dispatcher) -> OffsetDateTime {
     let now = OffsetDateTime::parse("2026-10-02T12:00:00Z", &Rfc3339).unwrap();
-    d.test_now = Some(Arc::new(std::sync::Mutex::new(now)));
+    d.test_hooks.now = Some(Arc::new(std::sync::Mutex::new(now)));
     now
 }
 

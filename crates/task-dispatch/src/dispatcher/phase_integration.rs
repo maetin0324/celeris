@@ -541,7 +541,7 @@ impl Dispatcher {
             return Ok(());
         }
         #[cfg(test)]
-        if let Some(hook) = self.before_integration_start.take() {
+        if let Some(hook) = self.test_hooks.before_integration_start.take() {
             hook(self, task.id);
         }
         let phase = integ.phase.clone().unwrap_or_default();

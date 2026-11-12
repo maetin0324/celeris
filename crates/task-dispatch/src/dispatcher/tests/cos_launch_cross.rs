@@ -239,7 +239,7 @@ impl WorkerAdapter for Gates {
 }
 
 fn arm(d: &mut Dispatcher, store: &Arc<SqliteStore>, dir: &Path, max_cos_runs: usize) {
-    d.test_now = Some(Arc::new(StdMutex::new(
+    d.test_hooks.now = Some(Arc::new(StdMutex::new(
         OffsetDateTime::from_unix_timestamp(CLOCK).expect("clock"),
     )));
     d.config.execution.max_cos_runs = max_cos_runs;

@@ -1,0 +1,57 @@
+---
+title: "健全性v2 R4 own-routing: routing の状態を RoutingRuntime へ移し route_state の判断を純粋関数に分ける"
+tasks: [01M6TYVJT4S29ZMP6P0D4831JG]
+status: completed
+updated: 2026-11-12
+---
+# 健全性v2 R4 own-routing: routing の状態を RoutingRuntime へ移し route_state の判断を純粋関数に分ける
+
+完了日: 2026-11-12
+
+## 概要
+
+- `Dispatcher` の 15 field（`llm_route_registry`・`harness_adapters`・`account_limits`・`accounts_scan_cache`・`login_pending_accounts`・
+  `account_books`・`source_cooldowns`・`routing_mode`・`classification_board`・`classification_wait`・`classification_deferred_since`・
+  `warned_unroutable`・`unroutable`・`dispatch_routing`・`routing_context_registry`）を `crates/task-dispatch/src/routing_runtime.rs` の
+  `RoutingRuntime` 1 個（`Dispatcher::routing`）に移した。field は private。`Dispatcher` の側は method を呼ぶ入口だけ。
+- `route_state`（約 220 行）の判断は `routing_runtime/route_state.rs` の純粋関数 `build_route_state(&RouteStateInputs) -> RouteState`。
+  走っている run・review の `(source, account)` は `Dispatcher::route_holds` が集める。走査 cache の更新と帳簿の lock は
+  `RoutingRuntime::route_state` が行う。`Dispatcher::route_state` は入力を組んで owner を呼ぶだけ（約 30 行）。
+- `RouteState`・`account_adapter_for_source_kind`・`source_account_pool`・`DispatchRoutingSettings`・`ClassificationBoard` 系の型は
+  `routing_runtime` に移した（owner が `dispatcher` module を使わないため）。`task_dispatch::` 直下の公開 path は変わらない。
+- 基準は `$CELERIS_WU_BASE`。quota（`quota_activity`・`quota_calibration`）は own-quota、`eval_runs`・`knowledge_probe_cache` は対象外で `Dispatcher` に残した。
+
+## 実装前 brief
+
+1. 根本原因: routing の状態 15 field が `Dispatcher` の field で、`dispatcher/` のどの module からも書ける。`route_state` は判断（account 一覧・
+   cooldown・上限から admission の状態を組む）と cache の更新が 1 関数に混ざっていた。
+2. 責務 owner: `crate::routing_runtime::RoutingRuntime`（状態）と `routing_runtime::route_state::build_route_state`（判断）。
+3. 既存の再利用先: `evaluate`・`source_account_pool`・`effective_account_limit`・既存の `route_select`・`lane_assist`・`cos_slot_wait` ほかの試験。
+4. 選択肢: (a) field を struct に包むだけ（ADR で不採用）。(b) 処理ごと owner に移し、判断は純粋関数に分ける。b を採った。
+5. 新しい状態・分岐・fallback・port: 無し。`RouteStateInputs`・`RouteStateContext` は借用の束。
+6. 撤去対象: `Dispatcher` の 15 field と初期化、`route_state` の旧い本体、`route_select.rs` の `RouteState` と 2 関数の定義、`lane_assist.rs` の
+   board の定義、`dispatch_run.rs` の `DispatchRoutingSettings` の定義。試験の field 直参照。module map に移した module の旧い行は無かった。
+7. 不変条件: 費用不明で止める・予算の予約と解放の順序・`token_budget.rs`・`credential_gate.rs` の判定は変えない（この unit はその file を触らない）。
+   `route_state` の出力は旧い実装と同じ（既存の `route_select`・`class_route`・`cos_slot_wait`・`cos_capacity` の試験を同じ assertion のまま通す）。
+
+## 試験の変更
+
+- 足した試験 `structure_guard_routing_runtime`（`routing_runtime.rs`）: 不変条件は ADR D2 の 1〜3・7（field が private、`#[cfg(test)]` の field が無い、
+  15 件、`Dispatcher` を受けない）と、純粋 module が `Dispatcher`・store・時計・lock の語を持たないこと。既存の試験は振る舞いだけを見るので、field を `pub` に戻しても通る。
+- 足した試験 4 件（`route_state.rs`）: CoS の予約は CoS の判断で宣言済み source だけ数える、暗黙 account の cooldown は期限まで、
+  上限は保存値を読めたときだけ書く（CoS の +1 は暗黙 account に付けない）、OAuth プールはログイン済みだけ出す。route_state の収集と起動の間を挟まない既存の試験は
+  構築済みの `RouteState` を渡すので、組み立ての条件は検出できなかった。
+- 既存の試験は assertion を変えていない。`d.source_cooldowns`・`d.account_limits` の直参照を `#[cfg(test)]` の method に置き換えた。
+
+## 証拠（提出時の HEAD で実行）
+
+- `cargo nextest run -p task-dispatch -E 'test(/structure_guard|route_state|routing_runtime|class_route|route_select|lane_assist|cos_slot_wait|cos_launch_cross|cos_capacity|account|route_launch|jev|snapshot|source_account/)'`: 186 passed。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+- `bash scripts/dev/check-health.sh`: exit 0（repo_health_gate: all checks passed）。
+- `bash scripts/dev/test-affected.sh`: exit 0。
+
+## 未確認・提案
+
+- guard を外した確認（field を `pub` にして `structure_guard_routing_runtime` が落ちること）は未実施。
+- `CredentialGate` は credential の path の型なので crate 直下の re-export で参照している。credential の owner を作る unit が型の置き場を決める。
+- `test_cos_reserved_sources`（試験用 hook）は `Dispatcher::route_state` の `#[cfg(test)]` の後処理に残した。own-hooks が移す。

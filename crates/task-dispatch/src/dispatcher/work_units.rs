@@ -73,8 +73,7 @@ impl Dispatcher {
         .with_cargo_env(check_env);
         let checks = wu.spec.checks.clone();
         let health = self.work_unit_health(&task, &wu, ws.work_dir());
-        let timeout = self.config.review_timeout;
-        let check_slots = self.config.check_slots.clone();
+        let timeout = CheckLimits::new(self.config.review_timeout, &self.config.check_slots);
         let tx = self.tx.clone();
         let checking_run_id = run_id.clone();
         // ADR-0079 付記 R7-5 D1: 不合格の記録に残す、check を実際に走らせる所。
@@ -105,7 +104,6 @@ impl Dispatcher {
                 task_id,
                 &observed,
                 &ws,
-                check_slots.as_ref(),
                 &checks,
                 timeout,
                 health,

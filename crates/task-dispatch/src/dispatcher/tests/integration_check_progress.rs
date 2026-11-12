@@ -161,10 +161,8 @@ async fn a_running_integration_check_has_a_started_event_and_a_readable_partial_
             task_id,
             &observed,
             &ws,
-            // 検査は重くない（枠を取らない）ので、枠の取得元は無し。
-            None,
             &checks,
-            Duration::from_secs(30),
+            task_worker::check_slots::CheckLimits::new(Duration::from_secs(30), &None),
             None,
         )
         .await

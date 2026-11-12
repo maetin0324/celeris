@@ -373,6 +373,32 @@ fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+/// D3: dispatcher の検査 1 件の上限。`timeout`（枠を取った後の実行にだけかかる）と、重い検査が取る枠の取得元
+/// （`DispatchConfig::check_slots`。daemon の起動時に決めた値で、検査の度に env を読まない）。
+#[derive(Debug, Clone)]
+pub struct CheckLimits {
+    pub timeout: Duration,
+    pub slots: Option<SlotSource>,
+}
+
+impl CheckLimits {
+    pub fn new(timeout: Duration, slots: &Option<SlotSource>) -> Self {
+        Self {
+            timeout,
+            slots: slots.clone(),
+        }
+    }
+
+    /// 検査の作業場所を枠の取得元で包む（[`with_check_slot`]）。
+    pub fn wrap(
+        &self,
+        inner: impl Workspace + 'static,
+        label: impl Into<String>,
+    ) -> Box<dyn Workspace> {
+        with_check_slot(self.slots.as_ref(), Box::new(inner), label)
+    }
+}
+
 /// D3: 重い検査の枠の取得元。daemon の起動時に [`SlotSource::from_env`] で 1 回だけ決め、dispatcher の設定
 /// （`DispatchConfig::check_slots`）で渡す。dispatcher は検査の度に env を読まない。
 #[derive(Debug, Clone)]

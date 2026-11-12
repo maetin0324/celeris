@@ -1,7 +1,7 @@
 ---
 title: host の負荷で review の検査が時間切れになる — 重い検査は host 共通の枠を取り、枠の待ちを timeout に数えない
 tasks: [01M75G99Q005DBQW4S5TZG88RK]
-status: running
+status: done
 updated: 2026-11-12
 ---
 # host の負荷で review の検査が時間切れになる — 重い検査は host 共通の枠を取り、枠の待ちを timeout に数えない
@@ -51,7 +51,22 @@ updated: 2026-11-12
   は範囲の check の外のまま。WU の検査は `phase_integration::run_integration_checks` を `work_units.rs` から呼ぶので、起動時に決めた
   取得元はこの呼び出しで渡すしかない。避ける形（process 全体の大域変数、検査の度に env を読む、WU の検査だけ枠を取らない）は依頼の
   直し方（検査の度に env を読まない・正本を 1 つにする）か ADR D3（WU の検査も枠を取る）に反する。この 1 行で `work_units.rs` の
-  行数は変わらない（health pass）。範囲の check に `crates/task-dispatch/src/dispatcher/work_units\.rs` を足す計画の直しを申告した。
+  行数は変わらない（health pass）。範囲の check に `crates/task-dispatch/src/dispatcher/work_units\.rs` を足す計画の直しを申告し、
+  計画の次の版で範囲の check に足された。コードは作り直さず、次の節の検査を提出時の HEAD で走らせた。
+
+### attempt 4 の提出時の証拠（run 01M78NB7X7。提出時の HEAD で実行。基準は `git merge-base HEAD main`）
+- `bash scripts/dev/test-affected.sh` → exit 0（925 秒、開始 load 2・終了 load 29）。対象 crate は celeris・celeris-campaign・
+  celerisctl・llm-proxy・task-api・task-dispatch・task-worker。nextest 5995 passed・22 skipped（15 slow）、script bundle SKIP 0 件。
+  範囲外の試験の失敗は無かった。
+- 外から枠を全部持つ: `flock -x $d/slot-0.lock sleep 1200` の下で `CELERIS_CHECK_SLOTS_DIR=$d CELERIS_CHECK_SLOTS=1 cargo nextest
+  run -p task-dispatch --lib -E 'test(/dispatcher::tests::(review|lane_assist|decision_log|routing_context|mlsys_mock_e2e|scope_checks|integration_check_progress)/)'`
+  → 82 passed。`$d` は試験の後も `slot-0.lock` だけ。
+- `cargo nextest run -p task-worker --lib -E 'test(/check_slots::/)'` → 8 passed。`grep -nE 'pub fn slotted|pub fn wrap\('`・
+  `grep -rn 'check_slots::slotted' crates/` は 0 件。
+- 範囲の check（許可に `dispatcher/work_units\.rs` を足した版）→ 範囲外の path は 0 件。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `bash scripts/dev/check-health.sh`（この節を書いた commit の HEAD）・`sh scripts/dev/progress-index.sh --check` の結果は報告に書く。
+- test-affected・clippy・fmt は commit「進捗に WU の check の不合格の直しと…」の HEAD で走らせた。その後の commit は進捗ファイルだけを変える。
 
 ### attempt 4 の続きの証拠（commit「apply_dispatch_config を dispatcher.rs に戻して…」の HEAD で実行。基準は `git merge-base HEAD main`）
 - `cargo nextest run -p task-worker --lib -E 'test(/check_slots::/)'` → 8 passed。`grep -nE 'pub fn slotted|pub fn wrap\('` は 0 件、
@@ -136,10 +151,16 @@ updated: 2026-11-12
 - phase 1: 進捗に最後の test-affected の結果を書く
 - phase 1: 枠の dir を host の local（XDG_RUNTIME_DIR）に移し、旧い並列度の説明を消し、Rust と shell の式の一致を試験で固める
 - phase 1: 進捗に attempt 3 の検査の結果を書く
+- phase 1: Rust の枠の取得も CELERIS_CHECK_SLOT を守り、dispatcher は起動時に解決した枠の取得元を設定で使う（試験は一時 dir の枠）
+- phase 1: 検査の上限と枠の取得元を CheckLimits にまとめ、dispatcher の module と file を main より長くしない
+- phase 1: review の 2 つ目以降の repo の検査の作業場所を then で組み、dagbench の WorkspaceRoots を use で短くする
+- phase 1: ADR の D3 と付記を CheckLimits の形に合わせる
+- phase 1: 進捗に attempt 4 の直しと検査の結果を書く
+- phase 1: apply_dispatch_config を dispatcher.rs に戻して注釈の折り返しで行数を保ち、CheckLimits の包む関数を check_workspace にする
+- phase 1: 進捗に WU の check の不合格の直しと、範囲の check の外に残る work_units.rs の 1 行を書く
+- phase 1: 進捗に attempt 4 の提出時の検査の結果を書き、done にする
 
 ## 未解決事項
-- WU の範囲の check が `dispatcher/work_units.rs` を許さない（「attempt 4 の続き」）。計画の直しを申告した。直った後の WU で、
-  提出時の HEAD の `bash scripts/dev/test-affected.sh` を走らせる（この HEAD では未実施）。
 - `ownerless_runs` の reviewer の行の TTL は枠の待ちを含まない（ADR の既知の限界）。
 - 本番の daemon の env に `XDG_RUNTIME_DIR` があるかは未確認（この run から daemon の `/proc/<pid>/environ` は読めない）。
   worker の run（この run）では `XDG_RUNTIME_DIR=/run/user/1001`（tmpfs）で、書き込めた。配備の後に `celerisctl scratch status`

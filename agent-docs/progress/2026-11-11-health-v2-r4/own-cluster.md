@@ -54,7 +54,20 @@ updated: 2026-11-12
 - `bash scripts/dev/check-health.sh`: exit 0（repo_health_gate: all checks passed）。
 - 計画の check（module map の `cluster_runtime` の行、`Dispatcher` の struct に cluster の field が無い、`cluster_runtime*` に
   `Dispatcher` の参照が無い）: すべて exit 0。
-- `bash scripts/dev/test-affected.sh`: 下の「test-affected」に書く。
+- `bash scripts/dev/test-affected.sh`: exit 0（476 秒。対象 crate は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。
+  nextest 3739 passed・11 skipped・失敗 0）。
+- 計画の check（`! awk … | grep -nE '^    (cluster_…|tunnel_…|last_cluster_…|warned_cluster_tool):'`、
+  `! grep -rnE '(impl|&mut|&) *Dispatcher\b' crates/task-dispatch/src/cluster_runtime*`、module map の行、範囲 check）: すべて exit 0。
+  `pub struct Dispatcher` の field は 92 件。
+
+## commit（件名）
+
+- phase 1: cluster・tunnel の状態と処理を ClusterRuntime へ移す
+- phase 1: ClusterRuntime の構造の試験と地図・ADR の付記を足す
+- phase 1: own-cluster の進捗を書く
+- phase 1: ClusterRuntime の doc comment の旧い Dispatcher の参照を直す（`Dispatcher::tunnel_state`・`tunnel_probe_state`・
+  `Dispatcher::new` を `ClusterRuntime` に、base から無かった `Dispatcher::effective_work_dir` を `cluster_of` に直した）
+- phase 1: own-cluster の test-affected の結果を書く
 
 ## 未解決事項
 

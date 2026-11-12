@@ -1,9 +1,8 @@
    Compiling e2e v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/wu/meas-edit-worker/repos/agent-platform/tests/e2e)
    Compiling celeris-credentiald v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/wu/meas-edit-worker/repos/agent-platform/crates/celeris-credentiald)
-   Compiling task-ops v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/wu/meas-edit-worker/repos/agent-platform/crates/task-ops)
    Compiling task-worker v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/wu/meas-edit-worker/repos/agent-platform/crates/task-worker)
-   Compiling routing-eval v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/wu/meas-edit-worker/repos/agent-platform/crates/routing-eval)
    Compiling celeris-mcp v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/wu/meas-edit-worker/repos/agent-platform/crates/celeris-mcp)
+   Compiling routing-eval v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/wu/meas-edit-worker/repos/agent-platform/crates/routing-eval)
    Compiling jev-classifier v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/wu/meas-edit-worker/repos/agent-platform/crates/jev-classifier)
 warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGER` causes the socket to block the thread on drop
    --> crates/script-runtime/vendor/deno_core/uv_compat/tcp.rs:818:17
@@ -15,6 +14,7 @@ warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGE
 
 warning: `deno_core` (lib) generated 1 warning
    Compiling celeris-script v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/wu/meas-edit-worker/repos/agent-platform/crates/script-runtime)
+   Compiling task-ops v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/wu/meas-edit-worker/repos/agent-platform/crates/task-ops)
    Compiling task-core v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/wu/meas-edit-worker/repos/agent-platform/crates/task-core)
    Compiling task-dispatch v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/wu/meas-edit-worker/repos/agent-platform/crates/task-dispatch)
    Compiling task-api v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/wu/meas-edit-worker/repos/agent-platform/crates/task-api)
@@ -31,4 +31,4 @@ warning: unused import: `ScriptGenerationControl`
    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
 
 warning: `celeris` (test "script_exhaustive") generated 1 warning
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 36s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 33s

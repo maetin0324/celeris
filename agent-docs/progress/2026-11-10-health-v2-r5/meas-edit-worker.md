@@ -1,21 +1,22 @@
 ---
 title: 健全性v2 R5 meas-edit-worker — task-worker の base と HEAD の build と edit→verify を同じ run で測る
 tasks: [01M6TYVJT53598CPKMGSQGA7XM]
-status: blocked
+status: done
 updated: 2026-11-12
+completed: 2026-11-12
 ---
 # 健全性v2 R5 meas-edit-worker
 
 ## 結果
 
-- edit→verify は base と HEAD の組が 3 つ取れ、3 つとも load の比が 2 未満で採用（included）になった。
-- build は 3 つの組がすべて load の比 2 以上で除外された。受け入れ条件（build と edit→verify の両方に比 2 未満の組）は満たしていない。
-- build の除外は計測の手順そのものが作る負荷による（下記「build が除外された理由」）。同じ台本で WU を再試行しても同じ結果になる見込みが高いので、提案 1 の直しを計画に求める（plan_issue）。
+- task-worker の build と edit→verify の両方で、base と HEAD の組が load の比 2 未満で採用（included）になった（build 1.29、edit→verify 1.05）。受け入れ条件 0 を満たす。
+- build は base 37.31 秒・HEAD 36.12 秒、doc test 込みの edit→verify は base 117.45 秒・HEAD 109.78 秒（nextest 部分は 108.77 秒・94.11 秒）。
+- 前回の HEAD の 190.58 秒（measure-build、1 分値 23〜84）は、同じ run・同じ負荷の条件では再現しなかった。HEAD は base より 7.67 秒短い。
 
 - コマンド: `MEASURE_MAX_LOAD=24 MEASURE_DEADLINE=<開始 + 3000 秒> bash agent-docs/progress/2026-11-10-health-v2-r5/measure.sh compare agent-docs/progress/2026-11-10-health-v2-r5/remeasure-edit-worker.json task-worker`
 - 負荷の上限は決定 meas-load の答え a に従い 24 にした。
-- 実行時刻は 2026-11-12T10:51:20Z〜11:24:41Z（2001 秒、exit 1）。3 回の試行（初回 + 再試行 2 回）をすべて走らせた。
-- 記録の 1 分値（各段の前後）は 2.67〜32.07。段の開始前の値はすべて 24 以下で、負荷待ちは最長 20 秒だった。32.07 は試行 2 の base の edit→verify の直後の値。
+- 実行時刻は 2026-11-12T11:34:30Z〜11:45:33Z（663 秒、exit 0）。初回の試行で両方の組が採用になり、再試行は走らなかった。
+- 記録の 1 分値（開始・終了と各段の前後、18 個）は 0.56〜23.65。各段の開始前の値はすべて 24 以下で、負荷待ちは最長 20 秒だった。23 前後の値は edit→verify の段の前後で、その段の直前の settle（7 crate の作り直し）が上げた値。両側とも同じ順なので、比は 1.05 にとどまった。
 - base は `git merge-base HEAD main`、HEAD はこの branch の HEAD（どちらも記録の git_head・merge_base_main 欄にある）。
 
 `bash agent-docs/progress/2026-11-10-health-v2-r5/measure.sh summary agent-docs/progress/2026-11-10-health-v2-r5/remeasure-edit-worker.json` の出力:
@@ -23,67 +24,57 @@ updated: 2026-11-12
 <!-- remeasure:begin -->
 | crate | stage | attempt/pair | base s | HEAD s | base nextest s | HEAD nextest s | load ratio | result | reason |
 |---|---|---|---:|---:|---:|---:|---:|---|---|
-| task-worker | build | 1/1 | 37.46 | 36.31 | - | - | 6.51622 | excluded | load ratio >= 2 |
-| task-worker | edit_verify | 1/1 | 117.35 | 109.75 | 108.58 | 94.29 | 1.02063 | included | - |
-| task-worker | build | 2/1 | 37.48 | 36.02 | - | - | 2.9276 | excluded | load ratio >= 2 |
-| task-worker | edit_verify | 2/1 | 109.99 | 117.35 | 101.55 | 101.84 | 1.74768 | included | - |
-| task-worker | build | 3/1 | 38.38 | 35.98 | - | - | 3.56833 | excluded | load ratio >= 2 |
-| task-worker | edit_verify | 3/1 | 109.12 | 108.74 | 100.14 | 93.44 | 1.25692 | included | - |
+| task-worker | build | 1/1 | 37.31 | 36.12 | - | - | 1.28947 | included | - |
+| task-worker | edit_verify | 1/1 | 117.45 | 109.78 | 108.77 | 94.11 | 1.04692 | included | - |
 <!-- remeasure:end -->
 
 build の秒は「task-worker の lib と全 test target の作り直しと link」、edit→verify の秒は doc test 込み、nextest s は doc test を除く edit→verify（`edit_to_verify_secs`）。
 
-## build が除外された理由
+## 1 回目の計測で build の組が除外された理由と直し
 
-3 回とも段の順は base の build → base の edit→verify → HEAD の build → HEAD の edit→verify だった（crate が 1 つなので、試行ごとに順が入れ替わらない）。
+この WU の 1 回目の run（2026-11-12T10:51:20Z〜11:24:41Z、3 試行）では、build の 3 組がすべて load の比 2 以上（2.93〜6.52）で除外され、計画の check（`--require-compare … task-worker`）が exit 1 になった。
 
-| 試行 | base の build の 1 分値（前 → 後） | HEAD の build の 1 分値（前 → 後） | 比 |
-|---|---|---|---:|
-| 1 | 2.67 → 3.39 | 22.09 → 13.90 | 6.52 |
-| 2 | 7.32 → 6.54 | 21.43 → 12.98 | 2.93 |
-| 3 | 6.00 → 5.17 | 21.41 → 13.31 | 3.57 |
+- 原因は compare の段の順だった。1 つの crate について base の build → base の edit→verify → HEAD の build → HEAD の edit→verify の順で測っていた。
+- HEAD の build の直前の settle は 1.2 秒（1 unit）で終わるので、HEAD の build は base の edit→verify（settle 100〜164 秒と作り直し）の直後に 1 分値 21〜22 で始まった。base の build は settle 77〜83 秒の後に 1 分値 2.67〜7.32 で始まった。
+- 直し: commit「phase 1: meas-edit-worker: measure.sh の compare を crate ごとに両側の build → 両側の edit→verify の順にする（build の組が自分の計測の負荷で除外されないように）」で、`measure_one` を `measure_build` と `measure_ev` に分け、crate ごとに両側の build を先に、両側の edit→verify を後に測る順にした。側の順（order 欄）、除外の規則（両側の exit が 0、1 分値の最大の比が 2 未満、負荷待ちが ready、秒が有限で 0 以上）、MEASURE_MAX_LOAD・MEASURE_LOAD_WAIT・MEASURE_RETRIES は変えていない。
+- 直しの後に、片側の負荷待ちが切れた時は、その側の build だけを skipped にし、edit→verify は自分の段の負荷待ちで判定する（直す前は、build の 2 回目の負荷待ちが切れると edit→verify を skipped に書かずに飛ばしていた）。
+- meas-edit-a の記録（remeasure-edit-a.json）は直す前の順で測った。meas-edit-a の組は採用・除外の判定のとおりで、測り直していない。
+- 1 回目の記録（3 試行の表と負荷の値）は commit「phase 1: meas-edit-worker: task-worker の base と HEAD の build と edit→verify を負荷上限 24 の同じ run で測る（build の組は負荷の比で全部除外）」の remeasure-edit-worker.json と、この file のその commit の版にある。1 回目の edit→verify の 3 組（採用）は base 109.12〜117.35 秒、HEAD 108.74〜117.35 秒で、今回の組と同じ範囲だった。
 
-- HEAD の build の直前に base の edit→verify（14 crate の settle と作り直し、約 110 秒）が走り、1 分値を 22 前後に上げる。HEAD の build はその直後に始まるので、開始時の 1 分値が base の build の 3〜6 倍になる。
-- 上限 24 は超えていないので、負荷待ちは起きない。1 分値の半減は約 42 秒なので、待てば下がる値だった。
-- 秒そのものは base 37.46・37.48・38.38、HEAD 36.31・36.02・35.98 で、組の中の差は 1.2〜2.4 秒だった。負荷の差が秒にどれだけ効いたかは未確認。
-
-## test binary と link の数（同じ run、3 回とも同じ）
+## test binary と link の数（同じ run）
 
 | 段 | base | HEAD |
 |---|---:|---:|
+| task-worker の test target（cargo metadata） | 21 | 17 |
 | build の test binary（link した数） | 25（25） | 21（21） |
-| edit→verify の対象全体の test binary（link した数） | 334（334） | 266（266） |
+| edit→verify の対象 7 crate の test binary（link した数） | 334（334） | 266（266） |
 
-## 読み方（edit→verify）
+edit→verify の対象は両側とも test-affected.sh --list の 7 crate（celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker）。HEAD の --workspace の一覧は全体で 312 binary で、うち対象 7 crate は 266。
 
-- doc test 込みの edit→verify は base 117.35・109.99・109.12 秒、HEAD 109.75・117.35・108.74 秒。3 組の差は −7.60・+7.36・−0.38 秒で、向きがそろっていない。
-- nextest 部分は base 108.58・101.55・100.14 秒、HEAD 94.29・101.84・93.44 秒で、3 組中 2 組は HEAD が 7〜14 秒短い。
-- doc test は base 8.44〜8.98 秒（`-p` の組）、HEAD 15.30〜15.51 秒（`--workspace`）。meas-edit-a と同じく、HEAD の doc test の呼び方の費用が nextest 部分の短縮を打ち消す。
-- 前回の HEAD の 190.58 秒（measure-build、負荷 23〜84）と B0 の 98〜136 秒は条件が違う。今回の同じ run の組では、HEAD は base と同じ程度（108.74〜117.35 秒）で、悪化は見られない。
-- 1 回ずつの組が 3 つなので、数秒の差がばらつきを超えるかは未確認。
+## 読み方
 
-## 証拠（基準は `git merge-base HEAD main`）
+- build: base 37.31 秒・HEAD 36.12 秒で差は 1.19 秒。link した test binary は 25 → 21。1 組なので、1 秒程度の差がばらつきを超えるかは未確認。
+- edit→verify（doc test 込み）: base 117.45 秒・HEAD 109.78 秒で、HEAD が 7.67 秒短い。
+- nextest 部分: base 108.77 秒・HEAD 94.11 秒で、HEAD が 14.66 秒短い。link した test binary は 334 → 266。
+- doc test: base 8.68 秒（`cargo test --doc` を 7 crate の `-p` で、doc test 0 件）、HEAD 15.66 秒（`--workspace`、doc test 3 件）。HEAD の doc test の呼び方の費用が nextest 部分の短縮の半分を打ち消す。meas-edit-a と同じ傾向。
+- B0 の task-worker の 98〜136 秒は B0 の計測（別の日・別の負荷・B0 の台本）の値で、今回の組と同じ条件ではない。
+
+## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
 
 - `sh agent-docs/progress/2026-11-10-health-v2-r5/v8-target-check.sh` → exit 0（v8 の build output 1 件）。
-- 上記の compare → exit 1（2001 秒。build の 3 組がすべて除外されたため）。
-- `bash agent-docs/progress/2026-11-10-health-v2-r5/measure.sh --validate agent-docs/progress/2026-11-10-health-v2-r5/remeasure-edit-worker.json` → exit 0。
-- `bash agent-docs/progress/2026-11-10-health-v2-r5/measure.sh --require-compare agent-docs/progress/2026-11-10-health-v2-r5/remeasure-edit-worker.json task-worker:edit_verify` → exit 0。
-- `bash agent-docs/progress/2026-11-10-health-v2-r5/measure.sh --require-compare agent-docs/progress/2026-11-10-health-v2-r5/remeasure-edit-worker.json task-worker` → exit 1（build の採用の組が 0）。
-- `bash agent-docs/progress/2026-11-10-health-v2-r5/measure.sh summary --check agent-docs/progress/2026-11-10-health-v2-r5/meas-edit-worker.md agent-docs/progress/2026-11-10-health-v2-r5/remeasure-edit-worker.json` → exit 0。
+- `python3 -I agent-docs/progress/2026-11-10-health-v2-r5/test_measure_summary.py` → exit 0（17 件 OK）。
+- 上記の compare → exit 0（663 秒、1 試行）。
+- `bash agent-docs/progress/2026-11-10-health-v2-r5/measure.sh --validate agent-docs/progress/2026-11-10-health-v2-r5/remeasure-edit-worker.json && bash agent-docs/progress/2026-11-10-health-v2-r5/measure.sh --require-compare agent-docs/progress/2026-11-10-health-v2-r5/remeasure-edit-worker.json task-worker` → exit 0（計画の check と同じコマンド）。
+- `bash agent-docs/progress/2026-11-10-health-v2-r5/measure.sh summary --check agent-docs/progress/2026-11-10-health-v2-r5/meas-edit-worker.md agent-docs/progress/2026-11-10-health-v2-r5/remeasure-edit-worker.json` → 下の「検査」に結果を書く。
 
-## 検査（commit 前の作業ツリーで実行。変更は上記の 3 path だけ）
+## 検査
 
-- `bash scripts/dev/test-affected.sh` → exit 0（140 秒。docs のみの変更として試験対象なし、repo_health_gate は合格）。
-- `cargo clippy --workspace -- -D warnings` → exit 0（52 秒）。
-- `cargo fmt --all -- --check` → exit 0。
-- `sh scripts/dev/progress-index.sh --check` → exit 0。
-- `sh "$CELERIS_WU_SCOPE_PATHS"` → exit 0（変更 89 path はすべて `agent-docs/progress/2026-11-10-health-v2-r5/` の下）。
+（提出前に書く）
 
 ## 未解決
 
-- task-worker の build の採用の組が無い（受け入れ条件 0 の build の部分）。
+- 無し。
 
 ## 提案
 
-1. measure.sh の compare で、build の段の前に 1 分値が下がるのを待つ（例: 段の直前の 1 分値が同じ crate の相手側の build の開始時の 2 倍未満になるまで待つ）か、両側の build を両側の edit→verify より先に測る順にする。除外の規則（比 2 未満）は弱めない。どちらも measure.sh（meas-tools の範囲）の変更なので、この WU では変えていない。
-2. 直した後に、この WU の compare を同じコマンドで測り直す。
+1. meas-edit-dispatch・meas-edit-core は直した後の measure.sh で測る。meas-edit-a の task-api・celeris・celerisctl の組を直した順で測り直すかは、meas-report で判断する（この WU では測り直していない）。

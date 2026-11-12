@@ -1,4 +1,4 @@
-   Compiling task-worker v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/runs/01M77P30JH5SQPT0HQGGM2MGN6/tmp/r5-measure-base.q7MhW9/crates/task-worker)
+   Compiling task-worker v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/runs/01M77RDSCYDF8WQZFEPEMHMSW2/tmp/r5-measure-base.a1cqUL/crates/task-worker)
 warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGER` causes the socket to block the thread on drop
    --> crates/script-runtime/vendor/deno_core/uv_compat/tcp.rs:818:17
     |
@@ -8,12 +8,12 @@ warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGE
     = note: `#[warn(deprecated)]` on by default
 
 warning: `deno_core` (lib) generated 1 warning
-   Compiling task-dispatch v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/runs/01M77P30JH5SQPT0HQGGM2MGN6/tmp/r5-measure-base.q7MhW9/crates/task-dispatch)
-   Compiling task-api v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/runs/01M77P30JH5SQPT0HQGGM2MGN6/tmp/r5-measure-base.q7MhW9/crates/task-api)
-   Compiling celeris-campaign v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/runs/01M77P30JH5SQPT0HQGGM2MGN6/tmp/r5-measure-base.q7MhW9/crates/campaign)
-   Compiling llm-proxy v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/runs/01M77P30JH5SQPT0HQGGM2MGN6/tmp/r5-measure-base.q7MhW9/crates/llm-proxy)
-   Compiling celeris v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/runs/01M77P30JH5SQPT0HQGGM2MGN6/tmp/r5-measure-base.q7MhW9/crates/celeris)
-   Compiling celerisctl v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/runs/01M77P30JH5SQPT0HQGGM2MGN6/tmp/r5-measure-base.q7MhW9/crates/celerisctl)
+   Compiling task-dispatch v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/runs/01M77RDSCYDF8WQZFEPEMHMSW2/tmp/r5-measure-base.a1cqUL/crates/task-dispatch)
+   Compiling task-api v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/runs/01M77RDSCYDF8WQZFEPEMHMSW2/tmp/r5-measure-base.a1cqUL/crates/task-api)
+   Compiling celeris-campaign v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/runs/01M77RDSCYDF8WQZFEPEMHMSW2/tmp/r5-measure-base.a1cqUL/crates/campaign)
+   Compiling llm-proxy v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/runs/01M77RDSCYDF8WQZFEPEMHMSW2/tmp/r5-measure-base.a1cqUL/crates/llm-proxy)
+   Compiling celeris v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/runs/01M77RDSCYDF8WQZFEPEMHMSW2/tmp/r5-measure-base.a1cqUL/crates/celeris)
+   Compiling celerisctl v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/runs/01M77RDSCYDF8WQZFEPEMHMSW2/tmp/r5-measure-base.a1cqUL/crates/celerisctl)
 warning: unused import: `ScriptGenerationControl`
   --> crates/celeris/tests/script_exhaustive.rs:23:36
    |

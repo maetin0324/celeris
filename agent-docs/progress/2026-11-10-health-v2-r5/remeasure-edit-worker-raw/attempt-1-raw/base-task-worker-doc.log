@@ -7,7 +7,7 @@ warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGE
     = note: `#[warn(deprecated)]` on by default
 
 warning: `deno_core` (lib) generated 1 warning
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.66s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.46s
    Doc-tests celeris
 
 running 0 tests

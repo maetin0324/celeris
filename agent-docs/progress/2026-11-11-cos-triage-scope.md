@@ -52,11 +52,10 @@ updated: 2026-11-12
   - task のコメント 1: `InboxKind::observable_while_open`（`dependents_reopened` だけ真）。resolve は開いている件でもこの種類の observe を受ける。照合は `observe の候補`。skill §3 に書いた。試験 `cos_triage_scope_dependents_reopened_is_observed_without_the_person`（observe で閉じ、後続は Ready のまま、決定の observe は 422、通知 0 件）と triage_match の試験。
   - task のコメント 2: ADR D9 に確認の結果を書いた（コードは変えない）。01M756VNCZ の後は、切り替えで止まった run の件は回収で pending に戻り、新しい daemon が次の tick で拾う（既存の試験 `cos_fallback_timing_standby_to_active_picks_on_the_next_tick`）。本番の `-735` は旧い 120 秒の規則で送信済みの退避なので、同 ADR D2 のとおり人に残る。
 
-## 変更（attempt 1 の Run #4）
-- `phase 1: script_compare の試験の config の releases_dir を一時 dir にする（host の未昇格の release で受信箱の件が増えていた）`
-  - Run #3 の test-affected で落ちた `celeris::script_compare_cos_digest` の 6 件は負荷依存でなく、単独でも同じに落ちた。原因は試験の config が `[selfdeploy] releases_dir` を書かず、既定の `~/.local/celeris/releases`（host の本物）を読んでいたこと。host に verify 済みで未昇格の release が 2 つあり、停滞の判定が `release_unpromoted-selfdeploy` の件を足していた。この task の変更とは関係しない（`main` でも host の状態しだいで落ちる）。
-  - `crates/celeris/tests/support/script_compare.rs` の `config_text` に `releases_dir = "releases"`（一時 dir の中の無い dir）を足した。守る不変条件: この helper を使う試験は host の release の状態に左右されない。既存の試験は host に未昇格の release が無い間はこれを検出できなかった。
-  - 直した後、この helper を使う celeris の試験 14 binary（`script_*`・`long_run_soak`・`tick_scale_baseline`・`project_c*`）を走らせ、99 件すべて合格した（1 件は skip）。
+## 変更（attempt 1 の Run #4 と attempt 2）
+- attempt 1 の Run #4 は、`celeris::script_compare_cos_digest` の 6 件の失敗（host の `~/.local/celeris/releases` の未昇格の release を読み、受信箱に `release_unpromoted-selfdeploy` が増える）を、`crates/celeris/tests/support/script_compare.rs` の `config_text` に `[selfdeploy] releases_dir` を足して直した。
+- 同じ直しが `main` の `phase 1: script_compare の試験の config が host の release 置き場を読まないようにする（release の gate の不合格）` に入っており、rebase の後は `config_text` に `[selfdeploy]` の表が 2 つになった。TOML の表の重複で `Config::load` が落ち、attempt 1 の review の test-affected は exit 100 になった。
+- attempt 2 で `script_compare.rs` を `main` の版に戻した（この task の差分から外した）。`main` の版の `config_text` が `releases_dir`・`repo`・`detach` を一時 dir に向け、`write_config` がそれを assert する。
 
 ## 証拠（提出時の HEAD で実行）
 - `bash scripts/dev/test-affected.sh` → exit 0（件数は報告本文）。

@@ -43,7 +43,7 @@ pub struct ClusterSpec {
     /// 空なら `refresh_cluster_tunnels` は何もしない（従来どおり）。
     pub forwards: Vec<ClusterForwardSpec>,
     /// ADR-0059 D6: 設定ファイルの `work_dir`（`[[clusters]] work_dir`）。DB の上書き
-    /// （`cluster_settings`）があればそちらが勝つ（`Dispatcher::effective_work_dir` が決める）。
+    /// （`cluster_settings`）があればそちらが勝つ（`dispatcher/cluster.rs` の `cluster_of` が決める）。
     pub work_dir: Option<PathBuf>,
     /// ADR-0062 A（Phase 107）: master の argv に足す `-o ServerAliveInterval=<n> -o
     /// ServerAliveCountMax=3 -o TCPKeepAlive=yes`（`0` なら keepalive を付けない）。既定 30 秒。
@@ -123,7 +123,7 @@ pub type TunnelProbe = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 pub type TunnelListenerProbe = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
 /// ADR-0053 Phase 84b: クラスタの ssh master の多重接続の有無を調べるフック。引数は
-/// `(ssh_command, host)`（`control_master_alive_blocking` と同じ形）。既定（`Dispatcher::new`）は本物の
+/// `(ssh_command, host)`（`control_master_alive_blocking` と同じ形）。既定（`ClusterRuntime::new`）は本物の
 /// `ssh -O check`（`control_master_alive_blocking`）。
 ///
 /// **観測（2026-09-21）**: このフックが無かった頃は `refresh_cluster_liveness` が常に本物の
@@ -281,7 +281,7 @@ impl TunnelEventKind {
 /// ADR-0053 D3: `tunnel_events` に積む上限（古いものから捨てる。無限に溜め込まない）。
 const TUNNEL_EVENTS_CAP: usize = 100;
 
-/// `Dispatcher::tunnel_state` のキー。
+/// `ClusterRuntime::tunnel_state` のキー。
 fn tunnel_key(cluster: &str, listen: &str) -> String {
     format!("{cluster}\u{0}{listen}")
 }
@@ -289,7 +289,7 @@ fn tunnel_key(cluster: &str, listen: &str) -> String {
 /// ADR-0053 Phase 85: `[[clusters.forwards]] probe_interval_secs` の既定（30 秒）。
 pub const DEFAULT_TUNNEL_PROBE_INTERVAL_SECS: u64 = 30;
 
-/// ADR-0053 Phase 85: 1 forward の直近の観測（`Dispatcher::tunnel_state` に積む）。listener（`-O forward`
+/// ADR-0053 Phase 85: 1 forward の直近の観測（`ClusterRuntime::tunnel_state` に積む）。listener（`-O forward`
 /// の有無）と target の健康（`/v1/models`）を別々に持つ。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ForwardObservation {
@@ -343,7 +343,7 @@ pub(crate) fn next_probe_interval_secs(current_secs: u64, min_secs: u64, healthy
         .min(TUNNEL_PROBE_MAX_INTERVAL_SECS)
 }
 
-/// ADR-0066 D3: forward 1 本の target probe の直近の結果（`Dispatcher::tunnel_probe_state` に積む。
+/// ADR-0066 D3: forward 1 本の target probe の直近の結果（`ClusterRuntime::tunnel_probe_state` に積む。
 /// 専用スレッドが書き、tick は読むだけ）。
 #[derive(Debug, Clone)]
 pub(crate) struct TargetProbeState {

@@ -73,11 +73,15 @@ baseline.md の edit→verify（task-api 155.78 秒・celeris 37.10 秒・celeri
 - 上記の compare → exit 1（1413 秒。celerisctl の edit→verify の除外による）。
 - `bash agent-docs/progress/2026-11-10-health-v2-r5/measure.sh --validate agent-docs/progress/2026-11-10-health-v2-r5/remeasure-edit-a.json` → exit 0。
 - `bash agent-docs/progress/2026-11-10-health-v2-r5/measure.sh --require-compare agent-docs/progress/2026-11-10-health-v2-r5/remeasure-edit-a.json task-api,celeris,celerisctl:build` → exit 0。
-- `bash agent-docs/progress/2026-11-10-health-v2-r5/measure.sh summary --check agent-docs/progress/2026-11-10-health-v2-r5/meas-edit-a.md agent-docs/progress/2026-11-10-health-v2-r5/remeasure-edit-a.json` → 結果は下の「検査」に書く。
+- `bash agent-docs/progress/2026-11-10-health-v2-r5/measure.sh summary --check agent-docs/progress/2026-11-10-health-v2-r5/meas-edit-a.md agent-docs/progress/2026-11-10-health-v2-r5/remeasure-edit-a.json` → exit 0。
 
-## 検査
+## 検査（提出時の HEAD で実行）
 
-（提出前に追記する）
+- `bash scripts/dev/test-affected.sh` → exit 0（168 秒。docs のみの変更として試験対象なし、repo_health_gate は合格）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（vendored `deno_core` の deprecated 警告 1 件）。
+- `cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check` → exit 0。
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → exit 0（変更 129 path はすべて `agent-docs/progress/2026-11-10-health-v2-r5/` の下）。
 
 ## 未解決
 

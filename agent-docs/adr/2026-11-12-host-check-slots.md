@@ -32,6 +32,8 @@ core 数）、host 全体で同時に走る重い検査の数に上限が無か�
      が `Workspace::exec` を包み、重い command（D4）だけ枠を取ってから内側の `exec` を timeout 付きで呼ぶ。枠を待つ
      時間は timeout に数えない（timeout は枠を取った後の実行にだけかかる）。取った枠は `CELERIS_CHECK_SLOT=<lock の path>`
      として command に渡す。remote（ssh）の作業場所は包まない（枠は daemon の host の資源で、remote の host の負荷とは別）。
+     `CELERIS_CHECK_SLOTS_DIR` も `HOME` も無い process では枠の dir を決められないので、warn を 1 行出して包まない
+     （daemon は user の systemd unit で `HOME` を持つので、本番では起きない）。
   2. script: `scripts/dev/test-affected.sh` は nextest の前、`scripts/dev/test-parallel.sh`（release gate）は準備の build の
      前に `scripts/dev/lib/check-slot.sh` の `check_slot_acquire` で枠を取る。`CELERIS_CHECK_SLOT` が既にあれば（daemon が
      取って渡した）取り直さない（入れ子で自分の枠を待つ deadlock を起こさない）。

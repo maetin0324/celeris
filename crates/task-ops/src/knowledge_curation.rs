@@ -162,6 +162,118 @@ fn safe_path(root: &Path, name: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// ADR 2026-11-12-knowledge-usage-per-run D5: 新規ページと同じ話題とみなす題名の語の Jaccard 係数の下限。
+pub const SAME_TOPIC_JACCARD: f64 = 0.6;
+
+/// D5: 新規の提案が、同じ置き場の既存の正本と同じ話題なら拒否する（更新・統合を先に選ばせる）。
+fn reject_new_on_existing_topic(
+    root: &Path,
+    item: &KbAction,
+    departing: &BTreeSet<&str>,
+) -> Result<(), String> {
+    let Some(group) = topic_group(&item.path) else {
+        return Ok(());
+    };
+    let title =
+        task_core::knowledge::title_of(item.content.as_deref().unwrap_or_default(), &item.path);
+    let tokens = title_tokens(&title);
+    if tokens.is_empty() {
+        return Ok(());
+    }
+    let mut pages = Vec::new();
+    collect_pages(root, &group, &mut pages)?;
+    for page in pages {
+        if page == item.path || departing.contains(page.as_str()) {
+            continue;
+        }
+        let Some(raw) = read_page(root, &page)? else {
+            continue;
+        };
+        let existing = title_tokens(&task_core::knowledge::title_of(&raw, &page));
+        let union = tokens.union(&existing).count();
+        let shared = tokens.intersection(&existing).count();
+        if union > 0 && shared as f64 / union as f64 >= SAME_TOPIC_JACCARD {
+            return Err(format!(
+                "{} は既存ページ {page} と同じ話題です（題名の語の Jaccard 係数 {SAME_TOPIC_JACCARD} 以上）。新規でなく {page} の fix か merge にしてください（ADR 2026-11-12-knowledge-usage-per-run D5）",
+                item.path
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// D5: 同じ話題を探す範囲（ADR-0047 の置き場の単位）。`projects/<slug>`・`environment/<分類>`・`user`・
+/// `experience`。それ以外（`_inbox/` など）は比べない。
+fn topic_group(path: &str) -> Option<String> {
+    let mut parts = path.split('/');
+    let first = parts.next()?;
+    match first {
+        "projects" | "environment" => {
+            let second = parts.next()?;
+            parts.next()?;
+            Some(format!("{first}/{second}"))
+        }
+        "user" | "experience" => Some(first.to_string()),
+        _ => None,
+    }
+}
+
+/// D5: 題名の語。ASCII の英数字は 2 文字以上の語、それ以外の文字（日本語など）は隣り合う 2 文字の組。
+fn title_tokens(title: &str) -> BTreeSet<String> {
+    fn flush(word: &mut String, out: &mut BTreeSet<String>) {
+        if word.chars().count() >= 2 {
+            out.insert(std::mem::take(word));
+        } else {
+            word.clear();
+        }
+    }
+    let mut out = BTreeSet::new();
+    let mut word = String::new();
+    let mut prev_wide: Option<char> = None;
+    for c in title.to_lowercase().chars() {
+        if c.is_ascii_alphanumeric() {
+            word.push(c);
+            prev_wide = None;
+            continue;
+        }
+        flush(&mut word, &mut out);
+        if c.is_alphanumeric() {
+            if let Some(prev) = prev_wide {
+                out.insert(format!("{prev}{c}"));
+            }
+            prev_wide = Some(c);
+        } else {
+            prev_wide = None;
+        }
+    }
+    flush(&mut word, &mut out);
+    out
+}
+
+/// `group` の下の正本のページ（`.md`、README と `_` で始まる名前を除く。symlink は辿らない）を名前順に集める。
+fn collect_pages(root: &Path, dir: &str, out: &mut Vec<String>) -> Result<(), String> {
+    let Ok(entries) = std::fs::read_dir(root.join(dir)) else {
+        return Ok(());
+    };
+    let mut names: Vec<(String, std::fs::FileType)> = entries
+        .filter_map(Result::ok)
+        .filter_map(|e| Some((e.file_name().into_string().ok()?, e.file_type().ok()?)))
+        .collect();
+    names.sort_by(|a, b| a.0.cmp(&b.0));
+    for (name, kind) in names {
+        if name.starts_with('_') || name.starts_with('.') || name == "README.md" {
+            continue;
+        }
+        let rel = format!("{dir}/{name}");
+        if kind.is_dir() {
+            collect_pages(root, &rel, out)?;
+        } else if kind.is_file() && name.ends_with(".md") {
+            out.push(rel);
+        }
+    }
+    Ok(())
+}
+
 fn read_page(root: &Path, name: &str) -> Result<Option<String>, String> {
     safe_path(root, name)?;
     let path = root.join(name);
@@ -274,6 +386,13 @@ pub fn validate_with_inbox(
     let mut used = BTreeSet::new();
     let mut kb = Vec::new();
     let mut human_decisions = plan.human_decisions.clone();
+    // ADR 2026-11-12-knowledge-usage-per-run D5: この計画で消える・統合されるページは同じ話題の比較から外す。
+    let departing: BTreeSet<&str> = plan
+        .kb
+        .iter()
+        .filter(|item| matches!(item.action, Action::Merge | Action::Delete))
+        .map(|item| item.path.as_str())
+        .collect();
     for item in &plan.kb {
         if item.reason.trim().is_empty() {
             return Err(format!("{} の理由がありません", item.path));
@@ -316,6 +435,9 @@ pub fn validate_with_inbox(
                     item.path
                 ));
             }
+        }
+        if item.action == Action::New {
+            reject_new_on_existing_topic(root, item, &departing)?;
         }
         if let Some(raw) = before.as_deref() {
             check_hash(&item.path, raw, item.expected_hash.as_deref())?;

@@ -19,6 +19,8 @@ pub(super) struct RunAdapterPrep {
     pub(super) env: Option<task_worker::scratch::CargoEnv>,
     /// ADR-0098 D6: 後続 task の宣言先。cargo の env の後、コンテナの前に適用する。
     pub(super) followups_env: Option<Vec<(String, String)>>,
+    /// ADR 2026-11-12-knowledge-usage-per-run D2: KB の操作の台帳（`CELERIS_KNOWLEDGE_USAGE_FILE`。followups の後）。
+    pub(super) knowledge_usage_env: Option<Vec<(String, String)>>,
     /// ADR-0074 付記 2026-10-05 D3: WU の run の `CELERIS_WU_BASE` / `CELERIS_WU_TARGET`（followups の後、コンテナの前）。
     pub(super) work_unit_env: Option<Vec<(String, String)>>,
     /// ADR 2026-10-07-build-tmp-hygiene D2.1: ローカルの host run の `TMPDIR`・`TMP`・`TEMP`
@@ -50,6 +52,10 @@ pub(super) fn prepare_run_adapter(
             "CARGO_TARGET_DIR",
         ),
         (prep.followups_env.as_deref(), "CELERIS_FOLLOWUPS_FILE"),
+        (
+            prep.knowledge_usage_env.as_deref(),
+            "CELERIS_KNOWLEDGE_USAGE_FILE",
+        ),
         (
             prep.work_unit_env.as_deref(),
             "CELERIS_WU_BASE / CELERIS_WU_TARGET",
@@ -402,6 +408,13 @@ pub(super) async fn run_worker(
     if followups_enabled {
         followups::clear_stale_followups(&artifacts_dir).await;
     }
+    // ADR 2026-11-12-knowledge-usage-per-run D2: worker run（followups と同じ範囲）の KB の操作を入口で数える。
+    // Remote の run は台帳が手元に無いので計測しない（`RunMetrics.knowledge` は `None`）。
+    let knowledge_usage_env = if followups_enabled && remote.is_none() {
+        super::knowledge_usage::prepare(&artifacts_dir).await
+    } else {
+        None
+    };
     let events = store
         .events_for(task_id)
         .map_err(|e| AdapterError::Other(format!("store: {e}")))?;
@@ -608,6 +621,7 @@ pub(super) async fn run_worker(
     let prep = RunAdapterPrep {
         env: target.as_ref().map(|(_, env)| env.clone()),
         followups_env,
+        knowledge_usage_env,
         work_unit_env,
         run_tmp_env: run_tmp.as_ref().map(|tmp| tmp.env()),
         container: container_plan.clone(),

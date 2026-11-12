@@ -845,6 +845,10 @@ pub struct RunMetrics {
     /// メッセージの件数）。取れなければ `None`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turns: Option<u32>,
+    /// ADR 2026-11-12-knowledge-usage-per-run D3: KB の操作の入口（`celerisctl knowledge`）で数えた回数。
+    /// 台帳の env を渡した run は 0 回でも `Some`。`None` は計測していない run。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub knowledge: Option<crate::knowledge::KnowledgeUse>,
 }
 
 /// run の役割（ADR-0014 D1）。`Event::WorkerStarted` / `WorkerFinished` の `role`。

@@ -3182,6 +3182,7 @@ mod work_unit_check_failures;
 /// ADR-0098（Phase R7-10）: worker の run が作る task は元の task の案件とリポジトリを継ぐ
 /// （`src/dispatcher/tests/followups.rs`）。
 mod followups;
+mod knowledge_usage;
 /// ADR-0074「R7-11 実装時の明確化」: planner / WU の run の予算が `RunRequest.task.budget` に届く
 /// （`src/dispatcher/tests/planner_budget.rs`）。
 mod planner_budget;

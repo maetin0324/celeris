@@ -121,6 +121,7 @@ mod eval_trials;
 mod followups;
 mod housekeeping;
 mod input_attachments;
+mod knowledge_usage;
 mod leases;
 mod maintenance;
 /// 持ち主の居ない `running` の `runs` 行の照合（lease を持たない reviewer run 等）。

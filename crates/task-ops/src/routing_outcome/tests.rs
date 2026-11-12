@@ -91,6 +91,7 @@ fn run_events(task: &task_core::Task) -> Vec<Event> {
                 retries: 1,
                 peak_context_tokens: None,
                 turns: None,
+                knowledge: None,
             }),
             end: Some(task_core::RunEnd::Completed),
         },
@@ -241,6 +242,7 @@ fn routing_outcome_sums_finished_fragments_and_estimates_known_prices() {
             retries: 2,
             peak_context_tokens: None,
             turns: None,
+            knowledge: None,
         });
     }
     events.push(second);

@@ -169,12 +169,23 @@ fn configured_root(explicit: Option<&Path>) -> Option<PathBuf> {
     celeris::Config::load(&path).ok().map(|c| c.knowledge.root)
 }
 
+/// ADR 2026-11-12-knowledge-usage-per-run D1: KB の操作の入口で 1 回を数える（env
+/// `CELERIS_KNOWLEDGE_USAGE_FILE` が無ければ何もしない）。結果はそのまま返す。
+pub(crate) fn counted(
+    op: kb::KnowledgeOp,
+    result: Result<ExitCode, CliError>,
+) -> Result<ExitCode, CliError> {
+    let ok = matches!(&result, Ok(code) if *code == ExitCode::SUCCESS);
+    kb::usage::note_from_env(op, ok);
+    result
+}
+
 pub fn run(command: KnowledgeCommand) -> Result<ExitCode, CliError> {
     match command {
         KnowledgeCommand::Init(args) => run_init(&args),
-        KnowledgeCommand::Search(args) => run_search(&args),
-        KnowledgeCommand::Get(args) => run_get(&args),
-        KnowledgeCommand::Record(args) => run_record(&args),
+        KnowledgeCommand::Search(args) => counted(kb::KnowledgeOp::Search, run_search(&args)),
+        KnowledgeCommand::Get(args) => counted(kb::KnowledgeOp::Get, run_get(&args)),
+        KnowledgeCommand::Record(args) => counted(kb::KnowledgeOp::Record, run_record(&args)),
         KnowledgeCommand::Reindex(args) => run_reindex(&args),
         KnowledgeCommand::MigrateHumanSources(args) => run_migrate_human_sources(&args),
         KnowledgeCommand::Rerun(_) => Err(CliError::msg(

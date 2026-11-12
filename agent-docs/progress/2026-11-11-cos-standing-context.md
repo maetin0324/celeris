@@ -240,7 +240,22 @@ reviewer は criterion 7 を不合格にした: `forward_gap`・`grant_backs` �
   いる間だけ一覧に載り（`grant_id` つき）、人が取り消すと消える。
 - task-worker の `cos_chat_prompt_relayed_section_lists_live_relays_with_ids_and_scope` に grant 付きの行の文面を足した。
 
-commit: 「phase 1: grant 付きの取り次ぎを grant の根拠の発言に限り、instructed_by に使わせない」。
+commit: 「phase 1: grant 付きの取り次ぎを grant の根拠の発言に限り、instructed_by に使わせない」、
+「phase 1: Core の受信箱の取り次ぎの行を元に戻す（Core の上限 9100 byte。grant 付きの扱いは取り次ぎの節に書く）」。
+
+### attempt 7 の検査（提出時の HEAD で実行。基準は `git merge-base HEAD main`、main の取り込みは不要だった）
+
+- 1 本目の commit の HEAD で `bash scripts/dev/test-affected.sh` → exit 100（15 分）。task-worker の
+  `cos_chat_core_is_byte_identical_across_runs_and_free_of_run_values` だけが落ちた（Core の受信箱の取り次ぎの行に足した文で
+  Core が 9146 byte になり上限 9100 を超えた）。2 本目の commit で Core の行を元に戻した。
+- `bash scripts/dev/test-affected.sh` → exit 0（13 分、開始時の load average 40）。nextest 8305 件合格・23 件 skip、web の
+  unit 711 件合格、ts-verify 20 件合格、repo health は verdict=pass・worsened=0。
+- `cargo clippy --workspace -- -D warnings` → exit 0（99 秒）。`cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check` → exit 0。
+- 個別: `cargo nextest run -p task-api -p task-core -p task-dispatch -p task-worker -E 'binary(cos_job_wait_extend) |
+  binary(relayed_instructions) | binary(single_human_window) | binary(authority_ledger) | test(cos_standing) | test(relayed) |
+  test(forward) | test(authority) | test(committed_schema)'` → 88 件合格。
+- `crates/task-core/src/chat` の本体の行は attempt 6 と同じ（増やしていない）。
 
 ## D4 の実装前 brief
 

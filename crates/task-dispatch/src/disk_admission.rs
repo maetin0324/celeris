@@ -3,7 +3,8 @@
 //! - D1: `空き − Σ 走っている target の増分 − 今の pass で通した run の見込み − この run の見込み ≥ 予備` でなければ、
 //!   新しい target を作る run を始めず `ready` のまま待たせる。repo の見込みは target が pool にある同じ `repo_key` の
 //!   owner の測った大きさの最大（GC の推定と同じ `task_worker::scratch::repo_max_sizes`）。増分を数えるのは run か
-//!   review の検査が今 target に書いている owner だけ（`task_worker::scratch::target_written_now`）。worker run が 1 本も
+//!   review の検査が今 target に書いている owner（`task_worker::scratch::target_written_now`）と、lease の生きた
+//!   release-build（build ごとに repo の見込みまで育つ）だけ。worker run が 1 本も
 //!   走っていなければ 1 本は通す（詰まらない）。
 //! - D2: 予備（空きの下限）は filesystem の容量 × `[dispatch] min_free_disk_pct`（[`min_free_bytes`]）。
 //! - D4: 見込みは `ScratchStatus.admission`（[`forecast`]）。待たせている run の正本は daemon の [`Gate`] のメモリだけで、
@@ -73,18 +74,30 @@ pub struct Inputs {
     pub samples: Vec<Sample>,
 }
 
-/// scratch の走査の行から材料を作る。target が pool にある owner だけを数える（GC の推定と同じ入力。target が消えて
-/// lease の記録だけが残る owner の古い大きさは数えない）。野良・repo の分からない owner は数えない。
+/// scratch の走査の行から材料を作る。target が pool にある owner を数える（GC の推定と同じ入力。target が消えて
+/// lease の記録だけが残る owner の古い大きさは数えない）。ただし run か review の検査が今書いている owner
+/// （`running`）は、target がまだ無くても数える: 割り当ては seed を `.seed-copy-*` に写し終えてから `target/` に rename
+/// するので、写している数分のあいだ `has_target` は false で、その run の増分が 0 に見えて次の tick の run が通ってしまう。
+/// その owner の大きさは分からないものとして（`None`）、増分を repo の見込み全体で数える。野良・repo の分からない owner は
+/// 数えない。
 pub fn samples_from_owners(owners: &[ScratchOwnerView]) -> Vec<Sample> {
     owners
         .iter()
-        .filter(|o| o.has_target && o.kind != "stray")
+        .filter(|o| o.kind != "stray")
         .filter_map(|o| {
+            // release-build の lease が生きているあいだは、次の release の build が repo の見込みまで target を育てる
+            // （build ごとに約 88 GB。終わりに上限で作り直される）ので、増える owner として数える。
+            let running = o.class == "p0"
+                && (task_worker::scratch::target_written_now(&o.reason)
+                    || (o.kind == "release" && o.reason == task_worker::scratch::LEASE_LIVE));
+            if !o.has_target && !running {
+                return None;
+            }
             Some(Sample {
                 owner: o.owner.clone(),
                 repo_key: o.repo_key.clone()?,
-                running: o.class == "p0" && task_worker::scratch::target_written_now(&o.reason),
-                size_bytes: o.size_bytes,
+                running,
+                size_bytes: if o.has_target { o.size_bytes } else { None },
             })
         })
         .collect()
@@ -464,6 +477,20 @@ mod tests {
         ];
         let samples = samples_from_owners(&rows);
         assert!(samples.iter().all(|s| s.owner != "task-gone"));
+        // target をまだ写している running の owner（lease だけある）は、大きさ不明の running として数える。
+        let copying = samples_from_owners(&[owner_row(
+            "task-seeding",
+            "task",
+            "p0",
+            "task running",
+            false,
+            150 * GB,
+        )]);
+        assert_eq!(copying.len(), 1);
+        assert!(copying[0].running && copying[0].size_bytes.is_none());
+        let v = forecast(&inputs(100 * GB, [samples.clone(), copying].concat()), None);
+        let seeding = v.owners.iter().find(|o| o.owner == "task-seeding");
+        assert_eq!(seeding.map(|o| o.growth_bytes), Some(90 * GB));
         let v = forecast(&inputs(100 * GB, samples), None);
         assert_eq!(v.expected_by_repo.get("ap"), Some(&(90 * GB)));
         let growing: Vec<&str> = v
@@ -472,8 +499,12 @@ mod tests {
             .filter(|o| o.growth_bytes > 0)
             .map(|o| o.owner.as_str())
             .collect();
-        assert_eq!(growing, vec!["task-r", "task-v", "task-w/wu-r"]);
-        assert_eq!(v.running_growth_bytes, (50 + 20 + 70) * GB);
+        assert_eq!(
+            growing,
+            vec!["release-abc", "task-r", "task-v", "task-w/wu-r"]
+        );
+        // lease の生きた release-build（target 60 GB）は次の build で見込み（90 GB）まで育つ増分 30 GB を持つ。
+        assert_eq!(v.running_growth_bytes, (30 + 50 + 20 + 70) * GB);
     }
 
     /// 不変条件: 係数は増分と見込みにだけ掛かる（disk 上の量に直す）。

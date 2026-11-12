@@ -37,6 +37,7 @@ commit（件名）:
 - `phase 2: 進捗に attempt 2 の検査の結果を書く`
 - `phase 3: count only present targets for the repo forecast, grow only targets a run writes now, fix the targets_max_gb bound`（attempt 3）
 - `phase 3: 進捗に attempt 3 の検査の結果を書く`
+- `phase 5: count the owners that are still copying their seed and the live release-build lease in the forecast`（attempt 5。review の指摘 2 件。(1) seed を写している run は `target/` が無く増分 0 になった。`running` の owner は target が無くても大きさ不明の増える owner として数える。(2) release-build は build ごとに約 88 GB 育つので、lease の生きた release-build の増分を数える。ADR の付記に書いた）
 
 ## 証拠
 

@@ -47,9 +47,12 @@ run を起こす前（write-set の判定の後、lease の前）に、次の不
   測った target が無い repo の見込みは 0（判定しない。GC は全体の最大で補うが、dispatch は判定しない）。
 - **走っている target の増分**: run か review の検査が今 target に書いている owner（分類の理由が `task running`・
   `task reviewing`・`work unit running`。`task_worker::scratch::target_written_now`。review の検査も task の owner の
-  `CARGO_TARGET_DIR` で build する）ごとに `max(0, repo の見込み − 今の大きさ)`。未測定は大きさ 0 と見る。class `p0` でも
-  release-build・agent の lease（`lease live`）と、まだ始まらない WU（`work unit queued`。その run の見込みはこの判定で
-  数える）は数えない。release-build の target は D3 の上限で抑える。
+  `CARGO_TARGET_DIR` で build する）と、lease の生きた release-build（`lease live`）ごとに
+  `max(0, repo の見込み − 今の大きさ)`。未測定は大きさ 0 と見る。target がまだ pool に無い（seed を `.seed-copy-*` に
+  写している最中。写し終えてから `target/` に rename する）run も、大きさ不明の増える owner として数える。class `p0` でも
+  agent の lease と、まだ始まらない WU（`work unit queued`。その run の見込みはこの判定で数える）は数えない。
+  release-build は D3 で build の後に上限を超えた target を作り直すので、次の build が見込みまで育てる量を
+  常に予約として数える。
 - **この run の見込み**: run が使う owner（並列 WU は `task-<id>/wu-<id>`、それ以外は `task-<id>`）の target が
   pool に既にあれば `max(0, repo の見込み − 今の大きさ)`（同じ task の続きは増分だけ）、無ければ repo の見込み全体
   （seed から写しても共有はほぼ 0 と見る）。
@@ -104,6 +107,13 @@ repo の最大に数え、本番では今ある target の最大 68.1 GB に対�
 新しい run がほぼ待つ見込みだった。repo の見込みを GC と同じ定義（target が pool にある owner の最大）にし、増分を
 数える owner を `target_written_now` に絞った。WU の分類の理由は `work unit in progress` を `work unit running`
 （Running）と `work unit queued`（Pending・Ready・NeedsContinuation）に分けた（class はどちらも P0 のまま）。
+
+付記（2026-11-12、attempt 4 の review の指摘）: (1) 走っている run の割り当ては seed の写しの数分のあいだ target が
+pool に無く、その owner の増分が 0 になって次の tick の run が通った。target が無くても `target_written_now` の owner は
+大きさ不明の増える owner として数える（`samples_from_owners`）。(2) release-build の target は build 1 回で約 88 GB
+になり上限 64 GiB を毎回超える。D3 は終わりに作り直すので空きは戻るが、次の build がまた書く。lease の生きた
+release-build の増分を数える（上の「走っている target の増分」。attempt 2 の付記で一度外したのは、target が上限を
+超えて残っていた間の古い大きさに引きずられた数え方を直すためで、今は D3 で target が小さく保たれる）。
 
 ## 結果
 

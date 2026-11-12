@@ -91,6 +91,8 @@ fn age(now: SystemTime, t: SystemTime) -> u64 {
 pub const TASK_RUNNING: &str = "task running";
 pub const TASK_REVIEWING: &str = "task reviewing";
 pub const WORK_UNIT_RUNNING: &str = "work unit running";
+/// release-build・agent の lease が生きている（`Owner::Release`・`Owner::Agent` の P0 の理由）。
+pub const LEASE_LIVE: &str = "lease live";
 
 /// ADR 2026-11-11-disk-aware-dispatch D1: 分類の理由が「run か review の検査が今 target に書いている」か。P0 でも
 /// release-build・agent の lease（`lease live`）と、まだ始まっていない WU（`work unit queued`。run の見込みは dispatch の
@@ -193,7 +195,7 @@ pub fn classify(
             {
                 (Class::Completed, "lease expired")
             } else {
-                (Class::Pinned, "lease live")
+                (Class::Pinned, LEASE_LIVE)
             }
         }
     }

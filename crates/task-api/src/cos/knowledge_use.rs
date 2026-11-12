@@ -1,12 +1,13 @@
 //! ADR 2026-11-12-knowledge-usage-per-run D1・D3: CoS run の KB の操作を API の受け側で数える。
 //!
-//! 数える受け側は次の 4 つで、どれも [`note`] を通る。どの run の数かは run credential（[`CosCaller`]）から
+//! 数える受け側は次の 4 つ。どの run の数かは run credential（[`CosCaller`]）から
 //! 決め（body に run id は無い）、`chat_runs.knowledge_use_json` に 1 回を足す。数は観測値で、権限・判断の
 //! 根拠には使わない。
 //!
 //! - `GET /api/v1/knowledge/tree`（検索。CoS の常設の文脈が案内する入口）→ `search`
 //! - `GET /api/v1/knowledge/page`（取得）→ `get`
 //! - `POST /api/v1/cos/operations` の `knowledge.record`（`POST /api/v1/knowledge/inbox`）→ `record`
+//!   （[`counted_record`]。operation の dispatch の中で数える）
 //! - `POST /api/v1/cos/knowledge-use`（`{"op": "search"|"get", "ok": bool}`）: CoS run の
 //!   `celerisctl knowledge search|get` は KB の根を直接読み API を通らないので、入口がこの route に 1 回を送る。
 
@@ -85,4 +86,18 @@ pub(crate) async fn note(state: &ApiState, caller: Option<&CosCaller>, op: Knowl
     if let Err(problem) = add(state, caller, op, ok).await {
         tracing::warn!(run_id = %caller.run_id, ?op, ?problem, "knowledge usage: could not count a CoS run operation (ADR 2026-11-12-knowledge-usage-per-run D1)");
     }
+}
+
+/// operation `knowledge.record` の受け側（`ops::decisions::dispatch`）: caller の run に record を 1 回数え、
+/// 結果はそのまま返す。数えられなくても記録は失敗にしない（ADR D1）。
+pub(crate) fn counted_record<T>(
+    store: &task_core::SqliteStore,
+    audit: &super::operations::OperationAudit,
+    result: Result<T, ApiProblem>,
+) -> Result<T, ApiProblem> {
+    let run_id = &audit.ctx.run_id;
+    if let Err(e) = store.chat_run_knowledge_use_add(run_id, KnowledgeOp::Record, result.is_ok()) {
+        tracing::warn!(%run_id, error = %e, "knowledge usage: could not count a CoS run record (ADR 2026-11-12-knowledge-usage-per-run D1)");
+    }
+    result
 }

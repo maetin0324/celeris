@@ -334,8 +334,11 @@ pub fn run(cli_db: Option<PathBuf>, command: ScratchCommand) -> Result<ExitCode,
             } else {
                 print_status(&status);
                 // ADR 2026-11-12-host-check-slots D6: host 共通の検査の枠（使用中と、枠を待つ検査と理由）。
-                if let Some(slots) = task_worker::check_slots::CheckSlots::from_env() {
-                    print_check_slots(&slots.status());
+                match task_worker::check_slots::CheckSlots::from_env() {
+                    Some(slots) => print_check_slots(&slots.status()),
+                    None => outln!(
+                        "check slots: unknown dir (neither CELERIS_CHECK_SLOTS_DIR nor XDG_RUNTIME_DIR is set)"
+                    ),
                 }
             }
             Ok(ExitCode::SUCCESS)
@@ -467,12 +470,14 @@ fn gc(
 
 /// ADR 2026-11-12-host-check-slots D6: 枠の一覧と、枠を待つ検査（label・開始・理由）。
 fn print_check_slots(s: &task_worker::check_slots::SlotStatus) {
+    use task_worker::check_slots::{host_cores, test_threads};
     outln!(
-        "check slots {} · {} / {} in use · {} waiting",
+        "check slots {} · {} / {} in use · {} waiting · --test-threads {}",
         s.dir.display(),
         s.held.len(),
         s.slots,
-        s.waiting.len()
+        s.waiting.len(),
+        test_threads(host_cores(), s.slots)
     );
     for h in &s.held {
         outln!("  slot {} since {}: {}", h.slot, h.since, h.label);

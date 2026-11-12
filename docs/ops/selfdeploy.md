@@ -126,7 +126,8 @@ scripts/selfdeploy/release.sh celeris/01M2XXX # 自己改善の案件の実装�
   → web `install --frozen-lockfile` → `typecheck` → `test` → `release`（build を含む）。
   pnpm は web/package.json の packageManager に固定する。web の段を飛ばす切替は無い。
 - **※※ `cargo-test` はテストバイナリを並列に回す（Phase SD-2、ADR-0041 §8、人の判断 2026-09-28）**: `scripts/dev/test-parallel.sh`
-  = `cargo nextest run --workspace --no-fail-fast --test-threads $CELERIS_TEST_JOBS`（既定 `min(8, max(2, nproc/3))`）の後に
+  = `cargo nextest run --workspace --no-fail-fast --test-threads $CELERIS_TEST_JOBS`（既定は host の検査の枠の並列度
+  `max(1, nproc / 枠の数)`、24 core・枠 2 で 12。準備の build の前に host 共通の枠を取る。ADR 2026-11-12-host-check-slots D2・D3）の後に
   `cargo test --doc --workspace`（nextest は doc-test を回さない）。範囲は `cargo test --workspace` と同じ。直列が要るテストは
   **ビルドする sha の** `.config/nextest.toml` の test-group で縛る。gate.json の `cargo_test` は
   `{runner: "nextest", nextest_version, jobs, binaries（nextest のバイナリ数 + doc-test の crate 数）, nextest_binaries, doc_binaries,

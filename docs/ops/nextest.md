@@ -43,8 +43,11 @@ cargo nextest --version    # → cargo-nextest 0.9.146 (...)
 
 ## 並列数
 
-`CELERIS_TEST_JOBS`（既定 `min(8, max(2, nproc/3))`。このホストは 24 CPU → 8）。daemon の run（cargo のビルド・LLM の
-worker）が同居するので、nproc いっぱいにはしない。時間に敏感なテストが高負荷で落ちるときは下げる。
+`CELERIS_TEST_JOBS`。無ければ host の検査の枠の並列度 `max(1, nproc / 枠の数)`（このホストは 24 CPU・枠 2 → 12）。
+`test-parallel.sh` は nextest の前に host 共通の検査の枠を 1 つ取り（`scripts/dev/lib/check-slot.sh`）、review の検査・
+worker の `test-affected.sh` と同じ上限に従う。枠の数は `CELERIS_CHECK_SLOTS`、無ければ `max(1, nproc / 12)`
+（[ADR 2026-11-12-host-check-slots](../../agent-docs/adr/2026-11-12-host-check-slots.md) D2）。枠が全部使用中なら空くまで待ち、
+待つ理由を 1 回だけ出す。時間に敏感なテストが高負荷で落ちるときは `CELERIS_TEST_JOBS` を下げる。
 
 ## 直列が要るテスト
 

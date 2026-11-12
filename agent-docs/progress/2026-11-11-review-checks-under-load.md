@@ -10,8 +10,8 @@ updated: 2026-11-12
 
 ## 結論
 - ADR `agent-docs/adr/2026-11-12-host-check-slots.md` を書いた。重い検査（cargo・nextest・test-affected・test-parallel を含む
-  command）は host 共通の枠（`$HOME/.cache/celeris/check-slots/slot-<i>.lock` の flock、数は `max(1, core 数 / 12)`）を
-  取ってから始め、枠を待つ時間は timeout に数えない。
+  command）は host 共通の枠（`${CELERIS_CHECK_SLOTS_DIR:-$XDG_RUNTIME_DIR/celeris/check-slots}/slot-<i>.lock` の flock。
+  dir は host の local の tmpfs、数は `max(1, core 数 / 12)`）を取ってから始め、枠を待つ時間は timeout に数えない。
 - daemon: `task_worker::check_slots::SlottedWorkspace` が review（local の作業場所・2 つ目以降の repo）、WU の検査、段の統合の
   検査の `exec` を包む。待ちの理由は 1 回だけ log と `waiting/` に残す。人への質問・認可・受信箱の件にはしない。
 - script: `scripts/dev/lib/check-slot.sh` を足し、test-affected.sh（nextest の前）と test-parallel.sh（準備の build の前）が
@@ -20,7 +20,29 @@ updated: 2026-11-12
   を足した（ADR 2026-11-11 unit-task-dependencies D7 と同じ方針）。
 - `celerisctl scratch status` が枠の使用中と、枠を待つ検査（label・開始時刻・理由）を出す。
 
+## attempt 3（final review 01M78AJAY9 の criterion 4 の不備 2 点と advisory 1 点の直し）
+- 枠の dir を host の local にした。既定は `${CELERIS_CHECK_SLOTS_DIR:-$XDG_RUNTIME_DIR/celeris/check-slots}`（以前の既定は
+  nfs4 の共有 home の下で、別の host と枠を取り合い、`waiting/` の pid を local の `/proc` で誤って判定した）。home に落ちる
+  経路は置かない。両方の env が無ければ daemon は warn を 1 行出して包まず、script は理由を stderr に出して exit 2。
+  Rust は env を読む `CheckSlots::from_env` と純粋な `slots_dir`・`slot_count`・`test_threads`・`CheckSlots::resolve`、
+  `SlottedWorkspace::wrap_with` に分けた。shell は `check_slot_dir`・`check_slot_count`・`check_slot_test_threads` に分けた。
+  `CELERIS_CHECK_SLOTS` の解釈も両方で「10 進の数字だけで 1 以上」にそろえた（以前は Rust だけ前後の空白と `+` を許し、
+  shell は `00` を 1 にしていた）。
+- 旧い並列度の説明を消した: `scripts/dev/test-parallel.sh` の env の説明、`docs/ops/nextest.md` の「並列数」、
+  `docs/ops/selfdeploy.md` の `cargo-test` 段を、今の既定（`CELERIS_TEST_JOBS` が無ければ枠の並列度
+  `max(1, nproc / 枠の数)`、24 core・枠 2 で 12）に書き換えた。ADR-0041 §8 の「並列数」に置き換えの付記を足した。
+  `scripts/selfdeploy/release.sh` の usage の 1 行は残した（「提案」）。
+- 式の二重化の advisory: `check_slots` の試験が bash に `scripts/dev/lib/check-slot.sh` を読ませ（core 数は
+  `OMP_NUM_THREADS`、env は Command にだけ渡す）、core 数 1・12・24・48 × `CELERIS_CHECK_SLOTS` 9 通りの枠の数・並列度と、
+  dir の解決 6 通りが Rust と一致することを確かめる。
+- ADR D1（host の local の要件・NFS を避ける理由・tmpfs で消えてよい理由）、D2（一致の試験）、D3（env が無いときの扱い）、
+  「撤去」（release.sh の残り・撤去の条件・責任者）を直した。
+- `celerisctl scratch status` は枠の行に `--test-threads N` を足し、dir を決められないときはその理由を 1 行出す。
+
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`。main への rebase の後に実行）
+- attempt 3: ATTEMPT3_EVIDENCE
+
+## 証拠（attempt 2、記録）
 - `bash scripts/dev/test-affected.sh`（最後の実行）: exit 0（1188 秒、load 50〜60）。nextest 6071 件 6071 passed、script bundle SKIP 0 件、
   `check-slot: 枠 0/2 を使う。--test-threads 12`。
 - 同じ検査の 1 回前の実行: exit 100（1279 秒）。repo-health pass、runner-tmp-lifecycle ok（199 checks）、runner-tmp-repro ok、
@@ -43,22 +65,34 @@ updated: 2026-11-12
 - phase 1: runner-tmp-lifecycle の偽 repo に check-slot.sh を写し、枠を試験の一時 dir に向ける
 - phase 1: 枠の lock の fd を script の子孫に継がせない（試験の孤児が枠を握らない）
 - phase 1: 進捗に提出時の検査の結果を書き、done にする
+- phase 1: 進捗に最後の test-affected の結果を書く
+- phase 1: 枠の dir を host の local（XDG_RUNTIME_DIR）に移し、旧い並列度の説明を消し、Rust と shell の式の一致を試験で固める
 
 ## 未解決事項
 - `ownerless_runs` の reviewer の行の TTL は枠の待ちを含まない（ADR の既知の限界）。
-- worker の sandbox の中の `$HOME/.cache/celeris/check-slots` が daemon と同じ file（同じ inode）かは本番で未確認。この run の
-  sandbox では作成・取得ができた。
+- 本番の daemon の env に `XDG_RUNTIME_DIR` があるかは未確認（この run から daemon の `/proc/<pid>/environ` は読めない）。
+  worker の run（この run）では `XDG_RUNTIME_DIR=/run/user/1001`（tmpfs）で、書き込めた。配備の後に `celerisctl scratch status`
+  で確かめる（「本番への移行」2）。
 - 範囲外の browser の試験（上記）が負荷で落ちることがある。
 
 ## 本番への移行
 1. この変更を含む release を promote する（人。`scripts/selfdeploy/promote.sh`）。daemon の検査と release gate の
-   test-parallel.sh、worker の test-affected.sh が同じ枠（`~/.cache/celeris/check-slots`）を使い始める。
-2. 確認: 重い検査が重なった時に `celerisctl scratch status` の末尾に `check slots … · N / 2 in use · M waiting` と、待つ検査の
-   理由が出る。daemon の log に `check waits for a host check slot` が待ち 1 件につき 1 回出る。
-3. `review_timeout_secs` は 1800 のまま残す（ADR D8）。600 に戻す条件: 枠のある release で 14 crate の test-affected
+   test-parallel.sh、worker の test-affected.sh が同じ枠（`/run/user/<uid>/celeris/check-slots`）を使い始める。
+2. 確認: `celerisctl scratch status` の末尾が `check slots /run/user/<uid>/celeris/check-slots · N / 2 in use · M waiting ·
+   --test-threads 12` になる。`check slots: unknown dir …` が出たら、daemon の unit の env に `XDG_RUNTIME_DIR` が無い
+   （枠なしで検査が走る）。daemon の log の `check slots: neither CELERIS_CHECK_SLOTS_DIR nor XDG_RUNTIME_DIR is set` でも分かる。
+   重い検査が重なった時は daemon の log に `check waits for a host check slot` が待ち 1 件につき 1 回出る。
+3. 試験と attempt 1・2 の script が残した旧い dir `~/.cache/celeris/check-slots`（`slot-<i>.lock`・`slot-<i>.holder`・
+   `waiting/`）は消してよい（人。`rm -r ~/.cache/celeris/check-slots`）。この branch より前の版の test-affected.sh が走って
+   いない時に消す（走っていれば、その process が lock を持つ）。新しい版はこの dir を読まない。
+4. `review_timeout_secs` は 1800 のまま残す（ADR D8）。600 に戻す条件: 枠のある release で 14 crate の test-affected
    （task-core を変える task）の review の検査の実行時間（log の check 開始から終了まで、枠の待ちを除く）を 3 回以上見て、
    最長が 300 秒以下であること。満たしたら `PATCH /api/v1/config/fields` で `review_timeout_secs = 600` にし、退避の
    `~/.config/celeris/config.toml.bak-20261111-review-timeout` は消さずに残す。
 
 ## 提案
+- `scripts/selfdeploy/release.sh` の usage の `CELERIS_TEST_JOBS` の行（34 行目）は旧い既定の式のまま残る。selfdeploy の
+  高 risk の path class なので、この task（設計 brief の無い差分）では変えなかった。挙動は test-parallel.sh が決めるので、
+  誤っているのは usage の文だけ。撤去の条件: selfdeploy の設計 review を通す別 task で、その行を枠の並列度
+  （`max(1, nproc / 枠の数)`、24 core・枠 2 で 12）の説明に書き換える。責任者: operator がその task を起こす。
 - 枠の数と core あたりの比（12）を config に移すか（今は環境変数と既定の式）。

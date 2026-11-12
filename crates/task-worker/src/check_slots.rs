@@ -4,6 +4,7 @@
 //! script（test-affected.sh・test-parallel.sh）は `scripts/dev/lib/check-slot.sh` が同じ file を取り合う。
 //! 枠を待つ時間は検査の timeout に数えない（D3）。待ちの理由は 1 回だけ log と `waiting/` に残す（D5）。
 
+use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::io;
 use std::path::{Path, PathBuf};
@@ -17,8 +18,10 @@ use task_core::{ArtifactRef, Task};
 
 use crate::workspace::{ExecResult, Workspace, WorkspaceError};
 
-/// 枠の dir を差し替える環境変数（D1）。無ければ `$HOME/.cache/celeris/check-slots`。
+/// 枠の dir を差し替える環境変数（D1）。host の local の dir でなければならない。無ければ [`slots_dir`] の既定。
 pub const SLOTS_DIR_ENV: &str = "CELERIS_CHECK_SLOTS_DIR";
+/// 既定の枠の dir の親（D1）。user ごとの host の tmpfs（`/run/user/<uid>`）。
+pub const RUNTIME_DIR_ENV: &str = "XDG_RUNTIME_DIR";
 /// 枠の数を差し替える環境変数（D2）。
 pub const SLOTS_ENV: &str = "CELERIS_CHECK_SLOTS";
 /// 取った枠（lock の path）を command に渡す環境変数（D3）。script はこれがあれば取り直さない。
@@ -28,9 +31,38 @@ pub const CORES_PER_SLOT: usize = 12;
 /// 枠が空くのを確かめ直す間隔（D5）。
 pub const POLL: Duration = Duration::from_secs(10);
 
+/// D1: 枠の dir。`CELERIS_CHECK_SLOTS_DIR` があればそれ、無ければ `$XDG_RUNTIME_DIR/celeris/check-slots`。
+/// どちらも無い（空も無いとみなす）なら `None`（枠を使わない。別の dir に落ちない）。
+/// `scripts/dev/lib/check-slot.sh` の `check_slot_dir` と同じ規則（`check_slots::tests` が一致を確かめる）。
+pub fn slots_dir(dir_env: Option<&OsStr>, runtime_dir: Option<&OsStr>) -> Option<PathBuf> {
+    let set = |v: Option<&OsStr>| v.filter(|v| !v.is_empty()).map(PathBuf::from);
+    set(dir_env).or_else(|| set(runtime_dir).map(|d| d.join("celeris/check-slots")))
+}
+
 /// D2: 枠の数の既定（`max(1, core 数 / 12)`）。
 pub fn default_slots(cores: usize) -> usize {
     (cores / CORES_PER_SLOT).max(1)
+}
+
+/// D2: 枠の数。`CELERIS_CHECK_SLOTS` が 10 進の数字だけで 1 以上ならそれ、ほかは [`default_slots`]。
+/// `check-slot.sh` の `check_slot_count` と同じ規則。
+pub fn slot_count(slots_env: Option<&str>, cores: usize) -> usize {
+    slots_env
+        .filter(|v| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or_else(|| default_slots(cores))
+}
+
+/// D2: 枠を取った試験の nextest の並列度（`max(1, core 数 / 枠の数)`）。`check-slot.sh` の
+/// `check_slot_test_threads` と同じ式。
+pub fn test_threads(cores: usize, slots: usize) -> usize {
+    (cores / slots.max(1)).max(1)
+}
+
+/// host の論理 core 数（daemon 側。script は `nproc`）。
+pub fn host_cores() -> usize {
+    std::thread::available_parallelism().map_or(1, |n| n.get())
 }
 
 /// D4: 枠を取る重い command か（`cargo`・`cargo-nextest`・`nextest` の語、または test-affected・test-parallel）。
@@ -154,19 +186,27 @@ impl CheckSlots {
         self
     }
 
-    /// D1/D2: 環境変数と core 数から決める。dir を決められない（`HOME` も無い）なら `None`。
+    /// D1/D2: env の値と core 数から決める（純粋）。dir を決められなければ `None`。
+    pub fn resolve(
+        dir_env: Option<&OsStr>,
+        runtime_dir: Option<&OsStr>,
+        slots_env: Option<&str>,
+        cores: usize,
+    ) -> Option<Self> {
+        Some(Self::new(
+            slots_dir(dir_env, runtime_dir)?,
+            slot_count(slots_env, cores),
+        ))
+    }
+
+    /// D1/D2: この process の env と core 数から決める（[`CheckSlots::resolve`]）。
     pub fn from_env() -> Option<Self> {
-        let dir = match std::env::var_os(SLOTS_DIR_ENV) {
-            Some(d) if !d.is_empty() => PathBuf::from(d),
-            _ => PathBuf::from(std::env::var_os("HOME")?).join(".cache/celeris/check-slots"),
-        };
-        let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
-        let slots = std::env::var(SLOTS_ENV)
-            .ok()
-            .and_then(|v| v.trim().parse::<usize>().ok())
-            .filter(|n| *n > 0)
-            .unwrap_or_else(|| default_slots(cores));
-        Some(Self::new(dir, slots))
+        Self::resolve(
+            std::env::var_os(SLOTS_DIR_ENV).as_deref(),
+            std::env::var_os(RUNTIME_DIR_ENV).as_deref(),
+            std::env::var(SLOTS_ENV).ok().as_deref(),
+            host_cores(),
+        )
     }
 
     pub fn dir(&self) -> &Path {
@@ -354,13 +394,22 @@ impl SlottedWorkspace {
         self
     }
 
-    /// host の枠（[`CheckSlots::from_env`]）で包む。枠の dir を決められなければ包まずに返す。
+    /// host の枠（[`CheckSlots::from_env`]）で包む（[`SlottedWorkspace::wrap_with`]）。
     pub fn wrap(inner: Box<dyn Workspace>, label: impl Into<String>) -> Box<dyn Workspace> {
-        match CheckSlots::from_env() {
+        Self::wrap_with(inner, CheckSlots::from_env(), label)
+    }
+
+    /// D3: 枠があれば包む。枠の dir を決められない（`None`）なら warn を 1 行出し、包まずに返す。
+    pub fn wrap_with(
+        inner: Box<dyn Workspace>,
+        slots: Option<CheckSlots>,
+        label: impl Into<String>,
+    ) -> Box<dyn Workspace> {
+        match slots {
             Some(slots) => Box::new(Self::new(inner, slots, label)),
             None => {
                 tracing::warn!(
-                    "check slots: neither CELERIS_CHECK_SLOTS_DIR nor HOME is set; checks run without a host slot"
+                    "check slots: neither CELERIS_CHECK_SLOTS_DIR nor XDG_RUNTIME_DIR is set; checks run without a host slot"
                 );
                 inner
             }

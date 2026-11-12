@@ -16,8 +16,18 @@ core 数）、host 全体で同時に走る重い検査の数に上限が無か�
 
 ## 決定
 
-- **D1 枠の置き場所は host の lock file**: 重い検査は host 共通の枠（check slot）を 1 つ取ってから始める。枠は
-  `${CELERIS_CHECK_SLOTS_DIR:-$HOME/.cache/celeris/check-slots}/slot-<i>.lock`（i = 0..N-1）の `flock(2)` の排他 lock。
+- **D1 枠の置き場所は host の local の lock file**: 重い検査は host 共通の枠（check slot）を 1 つ取ってから始める。枠は
+  `${CELERIS_CHECK_SLOTS_DIR:-$XDG_RUNTIME_DIR/celeris/check-slots}/slot-<i>.lock`（i = 0..N-1）の `flock(2)` の排他 lock。
+  - dir は host の local でなければならない。`$XDG_RUNTIME_DIR`（`/run/user/<uid>`）は systemd が user ごとに置く host の
+    tmpfs で、daemon の user unit（user の systemd manager が `XDG_RUNTIME_DIR` を渡す）と worker の run の両方から見えて
+    書ける（2026-11-12 に planner が worker の run の `/proc/self/mountinfo` で tmpfs と確認）。`CELERIS_CHECK_SLOTS_DIR` で
+    差し替えるときも host の local の dir を指す（試験は一時 dir を指す）。
+  - user の home（このホストでは nfs4 の共有 home）には置かない。同じ home を mount する別の host と同じ lock file を取り合い、
+    上限が host の core 数ではなく共有全体にかかる。`waiting/` の pid は local の `/proc` で生死を判定するので、別の host の
+    待ちを誤って消したり出したりする。NFS の `flock` は server 経由の lock になり、client の再起動・切断で外れ方も変わる。
+  - `CELERIS_CHECK_SLOTS_DIR` も `XDG_RUNTIME_DIR` も無ければ dir を決めない（home などの別の dir に落ちない。D3）。
+  - tmpfs なので host の再起動で dir ごと消えてよい。正本は lock だけで、lock は process と一緒に消える。dir は次に枠を取る
+    process が作り直す。
   daemon（Rust）と script（shell の `flock`）が同じ file を取り合うので、daemon の review・WU・段の統合の検査、release gate
   の試験、worker が自分で走らせる試験のどれも同じ上限に従う。process が終われば kernel が lock を外すので、kill -9 でも
   枠は漏れない。正本は lock だけで、holder の file（`slot-<i>.holder`）と待ちの file（`waiting/`）は表示用である
@@ -28,18 +38,22 @@ core 数）、host 全体で同時に走る重い検査の数に上限が無か�
 - **D2 枠の数と試験の並列度**: N = `CELERIS_CHECK_SLOTS`（正の整数）があればそれ、無ければ `max(1, core 数 / 12)`
   （24 core で 2）。枠を取った試験は nextest の `--test-threads` を `max(1, core 数 / N)`（24 core で 12）にする。
   1 本の試験 thread が daemon・tar などの子 process で 1 core を超えるので、N × threads を core 数に合わせる。
-  daemon は `std::thread::available_parallelism`、script は `nproc` で core 数を数える（同じ式。task-worker の
-  `check_slots::default_slots` と `scripts/dev/lib/check-slot.sh` が持つ）。
+  daemon は `std::thread::available_parallelism`、script は `nproc` で core 数を数える。dir・枠の数・並列度の規則は言語ごとに
+  2 か所にある（task-worker の `check_slots::{slots_dir, slot_count, test_threads}` と `scripts/dev/lib/check-slot.sh` の
+  `check_slot_dir`・`check_slot_count`・`check_slot_test_threads`）。`check_slots` の試験が bash にその file を読ませ、core 数
+  1・12・24・48 と `CELERIS_CHECK_SLOTS` の値ごとの枠の数・並列度と、dir の解決が一致することを確かめる（片方だけ変えると落ちる）。
 - **D3 どこで取るか**:
   1. daemon の検査（review の受け入れ条件と repo の検査、WU の検査、段の統合の検査）: `task_worker::check_slots::SlottedWorkspace`
      が `Workspace::exec` を包み、重い command（D4）だけ枠を取ってから内側の `exec` を timeout 付きで呼ぶ。枠を待つ
      時間は timeout に数えない（timeout は枠を取った後の実行にだけかかる）。取った枠は `CELERIS_CHECK_SLOT=<lock の path>`
      として command に渡す。remote（ssh）の作業場所は包まない（枠は daemon の host の資源で、remote の host の負荷とは別）。
-     `CELERIS_CHECK_SLOTS_DIR` も `HOME` も無い process では枠の dir を決められないので、warn を 1 行出して包まない
-     （daemon は user の systemd unit で `HOME` を持つので、本番では起きない）。
+     `CELERIS_CHECK_SLOTS_DIR` も `XDG_RUNTIME_DIR` も無い process では枠の dir を決められないので、warn を 1 行出して包まない
+     （daemon は user の systemd unit で、user の manager が `XDG_RUNTIME_DIR` を渡すので、本番では起きない見込み。本番の
+     daemon の env は未確認なので、配備の後に `celerisctl scratch status` で枠の dir を確かめる）。
   2. script: `scripts/dev/test-affected.sh` は nextest の前、`scripts/dev/test-parallel.sh`（release gate）は準備の build の
      前に `scripts/dev/lib/check-slot.sh` の `check_slot_acquire` で枠を取る。`CELERIS_CHECK_SLOT` が既にあれば（daemon が
-     取って渡した）取り直さない（入れ子で自分の枠を待つ deadlock を起こさない）。
+     取って渡した）取り直さない（入れ子で自分の枠を待つ deadlock を起こさない）。dir を決められなければ理由を stderr に
+     出して exit 2（枠なしで走らない）。
   3. worker が直接打つ `cargo clippy`・`cargo build` は枠を取らない（試験より短く、worker の run の壁時計の中で収まる。
      絞る対象は host の負荷の大半を占める nextest の試験）。
 - **D4 重い command の判定**: command の字句に `cargo`・`cargo-nextest`・`nextest` の語、または `test-affected`・
@@ -66,6 +80,15 @@ core 数）、host 全体で同時に走る重い検査の数に上限が無か�
 
 - 上限なしで重い検査を同時に走らせる経路（daemon の検査の素の `LocalWorkspace`、test-affected.sh の nextest の既定
   並列度、test-parallel.sh の `jobs_default`）を同じ変更で置き換えた。切替 flag・互換分岐は置かない。
+- 旧い並列度の既定の説明は同じ変更で直した（`scripts/dev/test-parallel.sh` の env の説明、`docs/ops/nextest.md` の「並列数」、
+  `docs/ops/selfdeploy.md` の `cargo-test` 段、ADR-0041 §8 の「並列数」に付記）。`agent-docs/progress/phase-G.md` と
+  `scripts/dev/testdata/runner-tmp-repro/test-parallel.sh.pinned` は履歴と固定の写しなので変えない。
+- 残す所（一時）: `scripts/selfdeploy/release.sh` の usage の `CELERIS_TEST_JOBS` の行（34 行目）が旧い既定の式を書いている。
+  selfdeploy の高 risk の path class にあり、この task の計画（設計 brief を持たない差分）では変えない。挙動は
+  test-parallel.sh が決めるので、残るのは usage の文だけである。撤去の条件: selfdeploy の設計 review を通す別 task で
+  その行を枠の並列度の説明に書き換える。責任者: operator がその task を起こす（この task の進捗ファイルの「提案」）。
+- 枠の dir の旧い既定（user の home の cache の下）は D1 で置き換えた。home に落ちる経路は残さない。試験が残した旧い dir は
+  進捗ファイルの「本番への移行」の手順で消す。
 
 ## 付記（実装の突き合わせ）
 
@@ -73,7 +96,9 @@ core 数）、host 全体で同時に走る重い検査の数に上限が無か�
   `dispatcher/work_units.rs`（WU の検査）、`dispatcher/phase_integration.rs`（段の統合の検査）。
 - 試験: `task_worker::check_slots` の `a_heavy_check_waits_for_a_free_slot_and_the_wait_is_not_counted_in_its_timeout`
   （枠 1 本を別の holder が持つ間、timeout の 10 倍待っても実行しない・理由は 1 回・枠が空けば全 timeout で実行し合格）、
-  `a_light_check_never_waits_for_a_slot`、`heavy_commands_are_the_cargo_and_test_scripts`、`status_lists_holders_and_live_waiters`。
+  `a_light_check_never_waits_for_a_slot`、`heavy_commands_are_the_cargo_and_test_scripts`、`status_lists_holders_and_live_waiters`、
+  `slot_count_and_test_threads_match_the_shell_lib`・`slots_dir_matches_the_shell_lib_and_never_falls_back_to_home`（D1・D2 の
+  Rust と shell の一致、env が無いと script は exit 2）、`without_a_slot_dir_the_daemon_warns_once_and_runs_checks_unwrapped`（D3）。
 - 既知の限界: `ownerless_runs` の reviewer の行の TTL（`3 × (条件数 + 2) × review_timeout`）は枠の待ちを含まない。
   daemon の引き継ぎ中に旧 daemon の review が長く枠を待つと、新 daemon が行を早く閉じうる（行は索引で、判定は旧 daemon が
   届ける）。発生したら別 task で扱う。

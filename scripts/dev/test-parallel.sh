@@ -17,7 +17,8 @@
 # どちらかが失敗する・集計が読めない（＝全部走った証拠が無い）なら exit 非 0。
 #
 # env:
-#   CELERIS_TEST_JOBS   同時に走らせるテストの数。既定 min(8, max(2, nproc/3))（このホストには daemon の run が同居する）
+#   CELERIS_TEST_JOBS   同時に走らせるテストの数。既定は host の検査の枠の並列度 max(1, nproc / 枠の数)（24 core・枠 2 で 12。
+#                       ADR 2026-11-12-host-check-slots D2、scripts/dev/lib/check-slot.sh の check_slot_test_threads）
 #   CELERIS_NEXTEST_ANY_VERSION  1 なら tools/nextest/VERSION と版が違っても続ける（既定は止める）
 #   CELERIS_TEST_SKIP_DOC        1 なら doc-test を回さない（開発時の短縮用。release.sh は使わない）
 #   CELERIS_USERNS_TESTS / CELERIS_ISOLATION_TESTS  試験側が読む（ADR-0126 B2/B4）。1 / require のとき userns が作れない

@@ -3078,6 +3078,9 @@ mod cron_jobs;
 mod dispatch_ready_phases;
 mod git_workspace;
 mod health_enforce;
+mod health_generic;
+mod health_generic_limits;
+mod health_generic_stale;
 mod health_limits_integration;
 mod integration_check_progress;
 mod integration_ready_race;
@@ -3142,6 +3145,10 @@ mod tree_decisions;
 /// ADR-0079 §7 R3b: root の計画の承認（決定・`review: human`・上限に近い）・承認不要の報告・生存確認
 /// （`StallDetected`）・人の replan の 2 回目の試行（`src/dispatcher/tests/tree_approval.rs`）。
 mod tree_approval;
+
+/// ADR 2026-11-11-replan-unit-kind-change: replan で unit の kind を task と leaf の間で変えたときの行の kind と、子 task の
+/// ある行の kind の変更を採用の前に拒むこと（`src/dispatcher/tests/tree_kind_change.rs`）。
+mod tree_kind_change;
 
 /// ADR-0074「F5-fix8 実装時の明確化」: 仕事の残っていない計画の最終レビュー（空の replan の事故の再現）と、
 /// 木でない Task の生存確認（`src/dispatcher/tests/finished_plan.rs`）。

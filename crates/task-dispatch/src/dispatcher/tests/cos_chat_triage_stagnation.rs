@@ -46,6 +46,8 @@ fn fixture() -> Fixture {
     let mut d = dispatcher_with_test_clock(store.clone(), adapter, 2, true);
     d.config.min_free_disk_mb = 0;
     d.config.knowledge.root = dir.path().join("knowledge");
+    let skills = d.config.knowledge.root.join("skills");
+    task_ops::cos_skill_gate::write_fixture(&skills, "cos-inbox-triage", "1").expect("skills");
     d.set_cos_chat_launch(
         store.clone(),
         CosChatLaunchConfig {
@@ -63,8 +65,7 @@ fn fixture() -> Fixture {
             web_base_url: Some("http://celeris.test".into()),
             // 退避は試験が明示的に縮めるまで起こさない。
             triage: CosTriageSettings {
-                unavailable_after_secs: 1_000_000,
-                authorization_unavailable_after_secs: 1_000_000,
+                fallback_after_secs: 1_000_000,
                 ..Default::default()
             },
         },
@@ -394,7 +395,7 @@ async fn unknown_stagnation_holds_rows_until_the_check_succeeds_again() {
 
     // The unavailable fallback is due for every item now.
     if let Some(launch) = f.d.cos_chat_launch.as_mut() {
-        launch.config.triage.unavailable_after_secs = 60;
+        launch.config.triage.fallback_after_secs = 60;
     }
     f.at(3780);
     assert_eq!(f.rows(), rows, "fallback holds the stagnation rows");

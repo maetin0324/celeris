@@ -156,15 +156,12 @@ impl World {
     fn config(&self, cos: bool) -> Config {
         let home = self.env.dir.path();
         let knowledge = home.join("knowledge");
-        for name in ["cos-operator", "cos-inbox-triage"] {
-            let skill = knowledge.join("skills").join(name);
-            std::fs::create_dir_all(&skill).expect("skill dir");
-            std::fs::write(
-                skill.join("SKILL.md"),
-                format!("---\nname: {name}\ndescription: test skill\n---\n# {name}\n"),
-            )
-            .expect("skill");
-        }
+        task_ops::cos_skill_gate::write_fixture(
+            &knowledge.join("skills"),
+            "cos-inbox-triage",
+            "11",
+        )
+        .expect("CoS skills");
         let cos = if cos {
             format!(
                 "[cos]\nenabled = true\nmax_turns = 2\nmax_wall_secs = 600\n\
@@ -508,24 +505,36 @@ impl World {
         self.digests().iter().filter(|k| **k == key).count()
     }
 
-    /// general thread の digest message の冪等 key（1 message 1 行）。
+    /// general thread の digest message の冪等 key（1 message 1 行）。全 page を古い順に読む: daemon 自身の triage run
+    /// （偽の CoS）は待ちのある thread を毎 tick 拾うので（ADR 2026-11-11-cos-fallback-timing D3）、message は新しい 200 件
+    /// （1 page の上限）に収まらないことがある。
     fn digests(&self) -> Vec<String> {
-        self.env
-            .store
-            .chat_message_list(
-                &general_thread(&self.env.store),
-                &ChatMessageQuery {
-                    limit: Some(200),
-                    ..Default::default()
-                },
-            )
-            .expect("messages")
-            .items
-            .into_iter()
-            .filter(|m| m.role == ChatMessageRole::Assistant)
-            .filter_map(|m| m.client_message_id)
-            .filter(|k| k.starts_with(DIGEST_KEY_PREFIX))
-            .collect()
+        let thread = general_thread(&self.env.store);
+        let mut keys = Vec::new();
+        let mut after = Some(0);
+        while let Some(after_seq) = after {
+            let page = self
+                .env
+                .store
+                .chat_message_list(
+                    &thread,
+                    &ChatMessageQuery {
+                        after_seq: Some(after_seq),
+                        limit: Some(200),
+                        ..Default::default()
+                    },
+                )
+                .expect("messages");
+            after = page.next_after_seq;
+            keys.extend(
+                page.items
+                    .into_iter()
+                    .filter(|m| m.role == ChatMessageRole::Assistant)
+                    .filter_map(|m| m.client_message_id)
+                    .filter(|k| k.starts_with(DIGEST_KEY_PREFIX)),
+            );
+        }
+        keys
     }
 
     fn log(&self) -> Vec<CosDigestCompareRecord> {

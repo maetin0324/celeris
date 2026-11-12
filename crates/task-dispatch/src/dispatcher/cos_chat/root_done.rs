@@ -16,11 +16,15 @@
 
 use std::collections::HashSet;
 
+use task_core::chat::ChatRunState::{
+    Queued as RunQueued, Running as RunRunning, Stopping as RunStopping,
+};
 use task_core::chat::{ChatPostMessageRequest, ChatRunState, ChatSendMode, cos_thread_label};
 use task_core::{
     Event, NoticeStore, NotificationKind, NotificationStore, RootDoneState, RootDoneSummary,
     TaskId, TaskStore,
 };
+use task_ops::cos_first_response::{FirstResponseWait, ThreadRun, parse_ts};
 use task_ops::root_done::{self, RootDoneFacts};
 use time::OffsetDateTime;
 
@@ -313,15 +317,38 @@ impl CosChatLaunch {
                         let facts = collect_facts(&self.store, row.task_id, probe)?;
                         self.root_done_fallback(row, &facts, Some(thread_id), now)
                     }
-                    Some(_) => Ok(()),
-                    None => {
-                        let limit = i64::try_from(self.config.triage.unavailable_after_secs)
-                            .unwrap_or(i64::MAX);
-                        if age <= limit {
+                    live => {
+                        // ADR 2026-11-11-cos-fallback-timing D4: while CoS writes the summary (its run
+                        // is live) the safety net counts from the run's start; an input not yet
+                        // started waits behind the thread's live run, or is pickable since it was
+                        // queued or the thread's last run ended. Not counted from the done.
+                        let wait = match live {
+                            Some((_, run)) => FirstResponseWait::OwnRun(
+                                run.started_at.as_deref().and_then(parse_ts).unwrap_or(now),
+                            ),
+                            None => FirstResponseWait::queued_behind(
+                                self.store
+                                    .chat_message_get(thread_id, input_id)
+                                    .ok()
+                                    .and_then(|m| parse_ts(&m.created_at))
+                                    .unwrap_or(row.created_at),
+                                runs.items.iter().map(|r| ThreadRun {
+                                    live: matches!(r.state, RunQueued | RunRunning | RunStopping),
+                                    started_at: r.started_at.as_deref(),
+                                    finished_at: r.finished_at.as_deref(),
+                                }),
+                            ),
+                        };
+                        if wait
+                            .overdue(self.config.triage.fallback_after_secs, now)
+                            .is_none()
+                        {
                             return Ok(());
                         }
-                        // 未着手のまま待ちすぎた（容量待ち・停止）: 入力を取り下げて決定的な短文に切り替える。
-                        let _ = self.store.chat_message_cancel(thread_id, input_id, now);
+                        if live.is_none() {
+                            // 拾える状態のまま安全網を超えた（容量待ち・停止）: 入力を取り下げて決定的な短文に切り替える。
+                            let _ = self.store.chat_message_cancel(thread_id, input_id, now);
+                        }
                         let facts = collect_facts(&self.store, row.task_id, probe)?;
                         self.root_done_fallback(row, &facts, Some(thread_id), now)
                     }

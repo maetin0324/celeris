@@ -39,15 +39,12 @@ pub(super) fn fixture_with(harness: &str, adapter: Arc<dyn WorkerAdapter>) -> Fi
     d.config.execution.max_cos_runs = 1;
     d.config.min_free_disk_mb = 0;
     d.config.knowledge.root = dir.path().join("knowledge");
-    for name in ["cos-operator", "cos-inbox-triage"] {
-        let skill_dir = d.config.knowledge.root.join("skills").join(name);
-        std::fs::create_dir_all(&skill_dir).expect("skill dir");
-        std::fs::write(
-            skill_dir.join("SKILL.md"),
-            format!("---\nname: {name}\ndescription: test skill\n---\n# {name}\n"),
-        )
-        .expect("skill");
-    }
+    task_ops::cos_skill_gate::write_fixture(
+        &d.config.knowledge.root.join("skills"),
+        "cos-inbox-triage",
+        "1",
+    )
+    .expect("CoS skills");
     d.set_cos_chat_launch(
         store.clone(),
         CosChatLaunchConfig {
@@ -283,19 +280,51 @@ async fn route_failure_closes_prelaunch_and_counts_as_not_launched() {
     assert!(run.usage.is_none());
 }
 
+/// ADR 2026-11-11-cos-skill-sync D3: the KB's skills that do not fit `[cos.triage]` (version or
+/// a file the Core names) keep every CoS run unclaimed, with one notice per drift; fixed, the
+/// queued message starts. Replaces the prelaunch `SkillsUnavailable` close of a missing SKILL.md:
+/// the gate is before the claim, so no run row is created at all.
 #[tokio::test]
-async fn missing_skills_close_prelaunch_as_skills_unavailable() {
+async fn skill_drift_holds_the_claim_and_notices_once() {
     let mut f = fake_fixture();
-    std::fs::remove_dir_all(f.d.config.knowledge.root.join("skills")).expect("remove skills");
+    let skills = f.d.config.knowledge.root.join("skills");
+    task_ops::cos_skill_gate::write_fixture(&skills, "cos-inbox-triage", "10").expect("v10");
     let t = f.thread("lw-skills");
-    let id = f.start(&t, "one");
-    let run = f.run(&t, &id);
-    assert_eq!(run.state, ChatRunState::Failed, "{run:?}");
-    assert_eq!(
-        run.prelaunch_reason,
-        Some(ChatPrelaunchReason::SkillsUnavailable)
+    f.post(&t, "one");
+    for _ in 0..3 {
+        f.tick();
+    }
+    assert!(f.run_ids(&t).is_empty(), "no run while the version drifts");
+    assert_eq!(drift_notices(&f), 1, "one notice for the same pair");
+
+    // A missing file the Core names is another drift: one more notice, still no run.
+    task_ops::cos_skill_gate::write_fixture(&skills, "cos-inbox-triage", "1").expect("v1");
+    std::fs::remove_file(skills.join("cos-operator/consult.md")).expect("rm consult");
+    for _ in 0..3 {
+        f.tick();
+    }
+    assert!(
+        f.run_ids(&t).is_empty(),
+        "no run while consult.md is missing"
     );
-    assert_eq!(run.cost_state, ChatCostState::NotLaunched);
+    assert_eq!(drift_notices(&f), 2);
+
+    task_ops::cos_skill_gate::write_fixture(&skills, "cos-inbox-triage", "1").expect("fixed");
+    f.tick();
+    assert_eq!(f.run_ids(&t).len(), 1, "the gate opens once the skills fit");
+    assert_eq!(drift_notices(&f), 2);
+}
+
+fn drift_notices(f: &Fixture) -> usize {
+    let page = f
+        .store
+        .notice_list(&task_core::feed::NoticeQuery::default())
+        .expect("notices");
+    page.items
+        .iter()
+        .filter(|n| n.group_key == "bad_news:cos:skill_drift")
+        .map(|n| n.count as usize)
+        .sum()
 }
 
 /// A harness that launches (sends the pre-spawn notice) and then ends with the given usage.

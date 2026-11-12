@@ -455,7 +455,17 @@ impl Env {
     pub fn with_config(domain: &'static str, sources: &str, extra: &str) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir_all(dir.path().join("ws")).expect("ws");
-        let config = write_config(dir.path(), &config_text(sources, extra));
+        let mut config = write_config(dir.path(), &config_text(sources, extra));
+        // ADR 2026-11-11-cos-skill-sync D3: a KB of this test whose CoS skills fit `[cos.triage]`
+        // (not the default `~/.local/share/celeris/knowledge`).
+        config.knowledge.root = dir.path().join("knowledge");
+        let triage = &config.cos.triage;
+        task_ops::cos_skill_gate::write_fixture(
+            &config.knowledge.root.join("skills"),
+            &triage.policy_skill,
+            &triage.policy_version,
+        )
+        .expect("CoS skills");
         let store = SqliteStore::open(&config.db.path).expect("store");
         Self {
             dir,

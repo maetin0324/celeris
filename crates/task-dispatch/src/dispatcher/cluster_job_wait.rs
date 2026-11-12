@@ -3,7 +3,9 @@
 //! - run の終わり（`Terminal::Waiting`）の検証と wait の組み立て（[`Dispatcher::cluster_job_wait_for`]）。
 //! - tick の poll（[`Dispatcher::poll_cluster_job_waits`]）: `waiting` の wait を `poll_secs` ごとに高々 1 回、
 //!   クラスタの ssh master 越しに `qstat -xf` / `sacct` で調べ（OS スレッドに逃がし、結果は次の tick 以降に拾う）、
-//!   状態が変わったら `ClusterJobWaitPolled`、すべて終われば `ClusterJobWaitFinished{satisfied}` と task / unit の再開、
+//!   状態が変わったら `ClusterJobWaitPolled`。すべて終わったとき、job の 1 つが失敗で終わったとき（detail
+//!   `job_failed`）、job が Q/H のまま `queued_wake_secs` を超えたとき（detail `queue_stalled`）は
+//!   `ClusterJobWaitFinished{satisfied}` と task / unit の再開（起床の条件は `task_core::cluster_job::wakeup::observe`）、
 //!   上限を過ぎたら `ClusterJobWaitFinished{timed_out}` と人への質問。
 //! - continuation の前置きに渡す job の最終状態（[`cluster_jobs_from_events`] / [`Dispatcher::work_unit_cluster_jobs`]）。
 //!
@@ -53,90 +55,17 @@ fn parse_ts(s: &str) -> Option<OffsetDateTime> {
     OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
 }
 
-/// 状態の変化の比較に使う形（job id・状態・終了コード。生の文字は比べない）。
-fn state_key(statuses: &[ClusterJobStatus]) -> Vec<(String, ClusterJobState, Option<i32>)> {
+// Notices carry scheduler observations, not the durable wakeup metadata.
+fn state_key(statuses: &[ClusterJobStatus]) -> Vec<(&str, ClusterJobState, Option<i32>)> {
     statuses
         .iter()
-        .map(|s| (s.job_id.clone(), s.state, s.exit_status))
+        .map(|s| (s.job_id.as_str(), s.state, s.exit_status))
         .collect()
 }
 
-/// ADR-0090 D2: continuation の前置きに渡す job の結果（wait と、その終わりの event の job の状態から）。
-pub(super) fn continuation_of(
-    wait: &ClusterJobWait,
-    state: ClusterJobWaitState,
-    jobs: &[ClusterJobStatus],
-) -> task_worker::ClusterJobsContinuation {
-    let statuses: Vec<ClusterJobStatus> = wait
-        .jobs
-        .iter()
-        .map(|j| {
-            jobs.iter()
-                .find(|s| &s.job_id == j)
-                .cloned()
-                .unwrap_or(ClusterJobStatus {
-                    job_id: j.clone(),
-                    state: ClusterJobState::Unknown,
-                    exit_status: None,
-                    raw_state: None,
-                })
-        })
-        .collect();
-    task_worker::ClusterJobsContinuation {
-        cluster: wait.cluster.clone(),
-        scheduler: wait.scheduler.as_str().to_string(),
-        state: state.as_str().to_string(),
-        jobs: cluster_job::preamble_lines(&statuses),
-        summary: wait.summary.clone(),
-    }
-}
-
-/// ADR-0090 D2: 暗黙の WorkUnit（atomic の run）の直前の wait の結果を events から組む。直前のワーカー run が
-/// `waiting` で終わっていて、その run の wait が終わっている（`ClusterJobWaitFinished`）ときだけ `Some`。
-pub(super) fn cluster_jobs_from_events(
-    events: &[(u64, Event)],
-) -> Option<task_worker::ClusterJobsContinuation> {
-    let last_run = events.iter().rev().find_map(|(_, ev)| match ev {
-        Event::WorkerFinished {
-            run_id,
-            role: None,
-            end,
-            ..
-        } => Some((run_id.clone(), *end)),
-        _ => None,
-    })?;
-    if last_run.1 != Some(task_core::RunEnd::Waiting) {
-        return None;
-    }
-    let wait = events.iter().rev().find_map(|(_, ev)| match ev {
-        Event::ClusterJobWaitStarted { wait } if wait.run_id == last_run.0 => Some(wait.clone()),
-        _ => None,
-    })?;
-    let (state, jobs) = events.iter().rev().find_map(|(_, ev)| match ev {
-        Event::ClusterJobWaitFinished {
-            wait_id,
-            state,
-            jobs,
-            ..
-        } if wait_id == &wait.wait_id => Some((*state, jobs.clone())),
-        _ => None,
-    })?;
-    Some(continuation_of(&wait, state, &jobs))
-}
-
-/// 直前のワーカー run（暗黙の WorkUnit）が `waiting` で終わったか（continuation の前置きを出すか）。
-pub(super) fn last_worker_run_waited(events: &[(u64, Event)]) -> bool {
-    events
-        .iter()
-        .rev()
-        .find_map(|(_, ev)| match ev {
-            Event::WorkerFinished {
-                role: None, end, ..
-            } => Some(*end == Some(task_core::RunEnd::Waiting)),
-            _ => None,
-        })
-        .unwrap_or(false)
-}
+pub(super) use task_worker::cluster_jobs_continuation::{
+    cluster_jobs_from_events, continuation_of, last_worker_run_waited,
+};
 
 impl Dispatcher {
     /// ADR-0090 D7: 本番の poll のフックを挿す（celeris 側の配線）。
@@ -216,7 +145,14 @@ impl Dispatcher {
         if wait.state == ClusterJobWaitState::Waiting {
             return None;
         }
-        Some(continuation_of(&wait, wait.state, &wait.last_status))
+        let mut context = continuation_of(&wait, wait.state, &wait.last_status);
+        let events = self.store.events_for(task_id).ok()?;
+        if let Some(reason) =
+            task_worker::cluster_jobs_continuation::wake_reason(&events, &wait.wait_id)
+        {
+            context.state = reason;
+        }
+        Some(context)
     }
 
     /// ADR-0090 D2: tick の poll。`waiting` の wait ごとに (1) 終わった poll の結果を拾う → (2) 上限を過ぎていれば
@@ -342,25 +278,35 @@ impl Dispatcher {
     }
 
     /// 完了判定の共通部（poll の結果も通知も通る）。全 job が終わっていれば `finish_cluster_job_wait`（satisfied）、
-    /// 状態が変わっていれば `ClusterJobWaitPolled`、変わらなければ時刻だけ触る。wait を終わらせたら `true`。
+    /// 部分失敗・長い Q/H でも再開する。変化は `ClusterJobWaitPolled`、変わらなければ時刻だけ触る。終了なら `true`。
     fn apply_cluster_job_statuses(
         &mut self,
         wait: &ClusterJobWait,
-        statuses: Vec<ClusterJobStatus>,
+        mut statuses: Vec<ClusterJobStatus>,
         now: OffsetDateTime,
     ) -> Result<bool, DispatchError> {
-        if cluster_job::all_finished(&wait.jobs, &statuses) {
-            tracing::info!(task_id = %wait.task_id, wait_id = %wait.wait_id, cluster = %wait.cluster, jobs = %cluster_job::status_line(&statuses), "cluster jobs finished; resuming as a continuation run (ADR-0090)");
+        let history = self.store.cluster_job_waits_for_task(wait.task_id)?;
+        let threshold = self
+            .config
+            .clusters
+            .get(&wait.cluster)
+            .map(|spec| spec.job_wait.queued_wake_secs)
+            .unwrap_or_else(cluster_job::default_queued_wake_secs);
+        let reason = cluster_job::wakeup::observe(wait, &history, &mut statuses, now, threshold);
+        let all_finished = cluster_job::all_finished(&wait.jobs, &statuses);
+        let reason = if all_finished { None } else { reason };
+        if all_finished || reason.is_some() {
+            tracing::info!(task_id = %wait.task_id, wait_id = %wait.wait_id, cluster = %wait.cluster, jobs = %cluster_job::status_line(&statuses), "cluster job wake condition met; resuming as a continuation run (ADR-0090)");
             self.finish_cluster_job_wait(
                 wait,
                 ClusterJobWaitState::Satisfied,
                 statuses,
-                String::new(),
+                reason.unwrap_or_default().to_string(),
                 now,
             )?;
             return Ok(true);
         }
-        if state_key(&statuses) != state_key(&wait.last_status) {
+        if statuses != wait.last_status {
             tracing::info!(task_id = %wait.task_id, wait_id = %wait.wait_id, jobs = %cluster_job::status_line(&statuses), "cluster job states changed (ADR-0090)");
             self.store.append_event(
                 wait.task_id,
@@ -614,6 +560,9 @@ impl Dispatcher {
             state: notice.state,
             exit_status: notice.exit_status,
             raw_state: None,
+            scheduling: Vec::new(),
+            queued_since: None,
+            queue_notified: false,
         };
         match statuses.iter_mut().find(|s| s.job_id == notice.job_id) {
             Some(s) => *s = fresh,

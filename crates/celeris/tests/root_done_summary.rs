@@ -47,15 +47,8 @@ async fn env(cos_script: &str) -> Env {
     let root = dir.path();
     let hook = hook().await;
     let knowledge = root.join("knowledge");
-    for name in ["cos-operator", "cos-inbox-triage"] {
-        let skill = knowledge.join("skills").join(name);
-        std::fs::create_dir_all(&skill).expect("skill dir");
-        std::fs::write(
-            skill.join("SKILL.md"),
-            format!("---\nname: {name}\ndescription: test skill\n---\n# {name}\n"),
-        )
-        .expect("skill");
-    }
+    task_ops::cos_skill_gate::write_fixture(&knowledge.join("skills"), "cos-inbox-triage", "11")
+        .expect("CoS skills");
     // `[api] listen` は CoS の起動条件（run が叩く API の URL）。待ち受けは作らない（build_dispatcher は bind しない）。
     let config_path = root.join("config.toml");
     std::fs::write(

@@ -215,6 +215,10 @@ paths = [
     '^crates/task-dispatch/src/orphan\.rs$',
     '^crates/task-core/src/instance\.rs$',
     '^crates/celeris/src/instance\.rs$',
+    # R4 の owner（ADR 2026-11-11-dispatcher-state-ownership D8）。上の dispatcher/ の path は撤去まで残す。
+    # 移動先の file は R4 が main に入れるまで追跡 file に無い。profile の試験（各 path が追跡 file に当たる）を通すため、
+    # 移動先を 1 行にまとめ、旧い dispatcher/leases.rs も選択肢に入れる。旧い path を撤去するときにこの選択肢も外す
+    '^crates/task-dispatch/src/(run_supervisor(\.rs$|/)|run_settlement(\.rs$|/)|dispatcher/leases\.rs$)',
 ]
 
 # 予算・単価・quota（capability budget-pricing・accounts-quota。ADR 2026-11-06-budget-usd-caps）
@@ -226,6 +230,9 @@ paths = [
     '^crates/task-ops/src/project_budget',
     '^crates/task-dispatch/src/dispatcher/token_budget\.rs$',
     '^crates/task-dispatch/src/dispatcher/quota_book\.rs$',
+    # R4 の owner（ADR 2026-11-11-dispatcher-state-ownership D8）。上の dispatcher/ の path は撤去まで残す。
+    # lease の class と同じ理由で、移動先を 1 行にまとめ、旧い dispatcher/quota_book.rs も選択肢に入れる。撤去のときに外す
+    '^crates/task-dispatch/src/(routing_runtime/quota(\.rs$|/)|routing_runtime/quota_estimate(\.rs$|/)|run_settlement(\.rs$|/)|dispatch_admission(\.rs$|/)|dispatcher/quota_book\.rs$)',
 ]
 
 # release の作成・昇格・rollback（capability release-selfdeploy-wiring、地図の self-deploy 行。docs/ops/selfdeploy.md）

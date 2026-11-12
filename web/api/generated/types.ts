@@ -1190,7 +1190,10 @@ export type ClusterJobState = "queued" | "held" | "running" | "exiting" | "finis
 export type ClusterJobStatus = {
   "exit_status"?: number | null;
   "job_id": string;
+  "queue_notified"?: boolean;
+  "queued_since"?: string | null;
   "raw_state"?: string | null;
+  "scheduling"?: Array<string>;
   "state": ClusterJobState;
 };
 

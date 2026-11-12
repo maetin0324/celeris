@@ -88,9 +88,12 @@ impl WorkerAdapter for SyncScenarioAdapter {
         let review = req.task.kind == TaskKind::Review;
         let secs = if review {
             self.reviews.fetch_add(1, Ordering::SeqCst);
+            // `health` も書く: reviewer に health の材料を渡した review は `health` の判定を求める（I7、ADR
+            // 2026-11-07-health-review-integration D5.2）。ADR 2026-11-11-health-generic-review-input の R1 で `[review]` の
+            // 無い（absent）repo も材料を受けるので、この偽の reviewer も空の判定を書く（R6）。試験が守る不変条件は変えない。
             std::fs::write(
                 req.artifacts_dir.join("review.json"),
-                r#"{"verdicts":[{"criterion":1,"pass":true,"reason":"ok"}]}"#,
+                r#"{"verdicts":[{"criterion":1,"pass":true,"reason":"ok"}],"health":{"findings":[]}}"#,
             )
             .unwrap();
             REVIEW_RUN_SECS
@@ -306,6 +309,8 @@ async fn run_case(case: Case) -> (AbMetric, u32) {
 
 /// off は B が古い base のまま review を通り、統合の衝突で repair と再 review が足される。on は review 前に
 /// 同期して衝突を先に直すので B の review は 1 回で済み、run が 1 つ減る。
+/// 不変条件: review 前に同期すると不要な再 review が減る。
+/// 変更理由: ADR R1・R6 により Absent でも材料が届くため、偽 reviewer にも health 判定が要る。
 #[tokio::test]
 async fn phase_effect_ab_review_sync_pre_review_sync_reduces_runs() {
     let off = run_variant(Variant::Off).await;
@@ -320,6 +325,8 @@ async fn phase_effect_ab_review_sync_pre_review_sync_reduces_runs() {
 /// Phase 2: off は review 前同期の衝突を ReviewFail で worker に戻すので B の attempts を 1 つ使う
 /// （`max_retries = 0` の task ならそこで failed）。on は IntegrationRepair で直し attempts を使わない。
 /// run 数・時間は同じ（偽アダプタでは worker のやり直しと repair WU が同じ rebase をする）。
+/// 不変条件: review 前同期の衝突修復は worker の attempts を消費しない。
+/// 変更理由: ADR R1・R6 により Absent でも材料が届くため、偽 reviewer にも health 判定が要る。
 #[tokio::test]
 async fn phase_effect_ab_review_sync_phase2_integration_repair_keeps_attempts() {
     let (off, off_attempts) = run_case(Case::ConflictAsReviewFail).await;

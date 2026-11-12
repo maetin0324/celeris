@@ -86,6 +86,9 @@ fn unknown(job_id: &str) -> ClusterJobStatus {
         state: ClusterJobState::Unknown,
         exit_status: None,
         raw_state: None,
+        scheduling: Vec::new(),
+        queued_since: None,
+        queue_notified: false,
     }
 }
 
@@ -244,6 +247,9 @@ mod tests {
             state,
             exit_status: None,
             raw_state: None,
+            scheduling: Vec::new(),
+            queued_since: None,
+            queue_notified: false,
         }
     }
 

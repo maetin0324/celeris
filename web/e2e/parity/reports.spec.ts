@@ -96,8 +96,9 @@ test("/reports fixture screenshots", async ({ page }) => {
   }
 });
 
-// ブラウザ通知は通知の未読（GET /notifications/unread-count の events）の増加で 1 回だけ出す。
-test("parity-x: 通知 1 回だけ・生 snapshot で消えない", async ({ page, context }) => {
+// ADR 2026-11-11-cos-fallback-timing D6: 知らせの未読が増えてもブラウザ通知は出さない（人への知らせは Discord だけで、
+// CoS の判定の後に届く）。未読の badge は出る。
+test("parity-x: 未読が増えてもブラウザ通知を出さない", async ({ page, context }) => {
   const unread = { unread: 2, events: 3, by_kind: { bad_news: 1, report: 1 } };
   await context.addInitScript(() => {
     (window as Window & { __notifications?: string[] }).__notifications = [];
@@ -111,36 +112,19 @@ test("parity-x: 通知 1 回だけ・生 snapshot で消えない", async ({ pag
       },
     });
   });
-  const fulfillUnread = async (route: import("@playwright/test").Route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(unread) });
-  await page.route("**/api/notifications/unread-count", fulfillUnread);
-  await page.goto(`${gateway.base}/reports`);
-  await expect
-    .poll(() => page.evaluate(() => (window as Window & { __notifications?: string[] }).__notifications?.length))
-    .toBe(1);
-  expect(await page.evaluate(() => (window as Window & { __notifications?: string[] }).__notifications?.[0])).toBe(
-    "celeris: 通知: 悪い知らせ 1 件 / 未読の通知 2 件",
+  await page.route("**/api/notifications/unread-count", (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(unread) }),
   );
-  const second = await context.newPage();
-  try {
-    await second.route("**/api/notifications/unread-count", fulfillUnread);
-    await second.goto(`${gateway.base}/reports`);
-    await expect(second.getByLabel("未読の通知 2 件")).toBeVisible();
-    await page.waitForTimeout(500);
-    expect(
-      await second.evaluate(() => (window as Window & { __notifications?: string[] }).__notifications?.length),
-    ).toBe(0);
-    daemon.sendEvent("daemon", { snapshot: { reports: null } });
-    await expect(page.getByLabel("未読の通知 2 件")).toBeVisible();
-    expect(await page.evaluate(() => (window as Window & { __notifications?: string[] }).__notifications?.length)).toBe(
-      1,
-    );
-    expect(
-      await page.evaluate(() =>
-        Object.keys(localStorage).every((key) => !localStorage.getItem(key)?.includes("日次の報告")),
-      ),
-    ).toBe(true);
-  } finally {
-    await second.close();
-  }
+  await page.goto(`${gateway.base}/reports`);
+  await expect(page.getByLabel("未読の通知 2 件")).toBeVisible();
+  unread.events = 5;
+  unread.unread = 3;
+  daemon.sendEvent("notifications_changed", {});
+  await expect(page.getByLabel("未読の通知 3 件")).toBeVisible();
+  expect(await page.evaluate(() => (window as Window & { __notifications?: string[] }).__notifications?.length)).toBe(
+    0,
+  );
+  expect(await page.evaluate(() => Object.keys(localStorage).some((key) => key.includes("notifications-seen")))).toBe(
+    false,
+  );
 });

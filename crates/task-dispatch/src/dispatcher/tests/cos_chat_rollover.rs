@@ -138,15 +138,12 @@ fn fixture(adapter: Arc<dyn WorkerAdapter>, store: Arc<SqliteStore>, dir: &Path)
     d.config.execution.max_cos_runs = 2;
     d.config.min_free_disk_mb = 0;
     d.config.knowledge.root = dir.join("knowledge");
-    for name in ["cos-operator", "cos-inbox-triage"] {
-        let skill_dir = d.config.knowledge.root.join("skills").join(name);
-        std::fs::create_dir_all(&skill_dir).expect("skill dir");
-        std::fs::write(
-            skill_dir.join("SKILL.md"),
-            format!("---\nname: {name}\ndescription: test skill\n---\n# {name}\n"),
-        )
-        .expect("skill");
-    }
+    task_ops::cos_skill_gate::write_fixture(
+        &d.config.knowledge.root.join("skills"),
+        "cos-inbox-triage",
+        "1",
+    )
+    .expect("CoS skills");
     d.set_cos_chat_launch(
         store,
         CosChatLaunchConfig {
@@ -954,6 +951,8 @@ async fn cos_chat_policy_change_makes_next_run_fresh_and_records_new_version() {
     // The operator raises the version and reloads.
     let mut cfg = d.cos_chat_launch.as_ref().expect("launch").config.clone();
     cfg.triage.policy_version = "7".into();
+    let skills = d.config.knowledge.root.join("skills");
+    task_ops::cos_skill_gate::write_fixture(&skills, "cos-inbox-triage", "7").expect("v7");
     d.reload_cos_chat_launch(cfg);
     post(&store, &t, "three");
     let third = tick_and_join(&mut d, &store, &t).await;
@@ -987,7 +986,7 @@ async fn cos_chat_policy_change_makes_next_run_fresh_and_records_new_version() {
             .knowledge
             .root
             .join("skills/cos-inbox-triage/SKILL.md"),
-        "---\nname: cos-inbox-triage\ndescription: test skill\n---\n# v8 body\n",
+        "---\nname: cos-inbox-triage\nmetadata:\n  version: \"7\"\n---\n# v8 body\n",
     )
     .expect("skill");
     post(&store, &t, "four");

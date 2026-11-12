@@ -1506,10 +1506,10 @@ fn build_dispatcher(shared: &Arc<Shared>, paths: &Paths, store: Arc<dyn TaskStor
         work_dir: None,
         keepalive_secs: 0,
         liveness_probe_secs: 0,
-        job_wait: task_core::cluster_job::ClusterJobWaitLimits {
-            poll_secs: shared.spec.poll_secs,
-            max_wait_secs: task_core::cluster_job::MAX_WAIT_SECS_CEILING,
-        },
+        job_wait: task_core::cluster_job::ClusterJobWaitLimits::new(
+            shared.spec.poll_secs,
+            task_core::cluster_job::MAX_WAIT_SECS_CEILING,
+        ),
     };
     let mut d = Dispatcher::new(
         store,

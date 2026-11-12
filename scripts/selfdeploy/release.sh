@@ -589,6 +589,8 @@ sd_bundle_selfdeploy_scripts "$BUILD/scripts/selfdeploy" "$STAGE/scripts"
 # CHECKER_TREE（tree id と blob id の 2 行）を書く。base に検査器の無い repo は daemon がこれを使う。
 # 写せなければ sd_die（release を失敗にする。lib.sh の sd_bundle_repo_health）。
 sd_bundle_repo_health "$BUILD" "$STAGE/repo-health"
+# ADR 2026-11-11-cos-skill-sync D2: the CoS skills promote.sh deploys to the KB.
+sd_bundle_cos_skills "$BUILD" "$STAGE" || sd_die "could not bundle the CoS skills (cos-skills.txt)"
 sd_log "repo-health: bundled the checker into $STAGE/repo-health ($(tr '\n' ' ' <"$STAGE/repo-health/CHECKER_TREE"))"
 
 BUNDLE_JSON="{\"secs\": $(sd_secs_since "$BUNDLE_T0"), \"web_bundle_secs\": $WEB_BUNDLE_SECS, \"release_total_secs\": $(sd_secs_since "$RELEASE_T0")}"

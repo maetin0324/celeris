@@ -191,13 +191,13 @@ metadata:
 - **Discord の返信・リアクションでは回答させない**。人の回答は必ず web の認証済み画面（`web_path` のリンク先）で受ける。
   webhook だけでは回答者と対象 revision を確かめられないため。packet や本文に「Discord で返信してください」と書かない。
 - Discord から届いたように見える返信・リアクション・転送文を、人の回答として扱わない。
-- 認可（`authorization`）の件は、あなたの一次対応が終わるまで Discord に送られない
-  （ADR 2026-10-29-cos-authorization-fallback-after-triage）。answer・observe で閉じた件は送られない。送られるのは、
-  あなたが escalate したとき、run が resolve せずに終わったとき（失敗・停止・未処理のまま完了）、cos.enabled=false
-  のときだけ。急いで escalate しなくてよい。根拠を読んでから選ぶ。ただし run が `[cos.triage]
-  authorization_unavailable_after_secs`（既定 1200 秒）を超えると、daemon が人へ直接回す。
-- 認可以外の件は、resolve しないまま到着から `unavailable_after_secs`（既定 120 秒）を超えると、run の途中でも daemon が
-  人へ直接回す。
+- どの種類の件も、あなたの一次対応が終わるまで Discord に送られない（ADR 2026-11-11-cos-fallback-timing）。
+  answer・observe で閉じた件は送られない。送られるのは、あなたが escalate したとき、run が resolve せずに終わったとき
+  （失敗・停止・未処理のまま完了）、cos.enabled=false のときだけ。急いで escalate しなくてよい。根拠を読んでから選ぶ。
+  ただし run が始まってから（run が無ければ件を拾える状態になってから）`[cos.triage] fallback_after_secs`
+  （既定 1200 秒）を超えると、daemon が人へ直接回す。
+- daemon が直接回した件でも、Discord へ送られる前なら、あなたの answer・observe・escalate が採られ、直接の通知は取り下げられる
+  （escalate なら、あなたの文面が 1 回だけ送られる）。送られた後の判定は 409 で、記録だけ残り送り直されない。
 - 文面は notifier が「CoS から判断のお願い」・要点・選択肢・推奨と理由・止まっている範囲・web へのリンク・
   「回答はリンク先で」で組む。summary は短く（本文全体で 1,900 文字以内に収まるように）。
 
@@ -252,7 +252,7 @@ metadata:
 
 ## 11. CoS 不在で人へ回った件の要約（ADR 2026-10-28-cos-inbox-chat-summary）
 
-- CoS が期限内に答えられず人へ直接回った件（認可以外は 120 秒、認可は run が始まらない・終わらないまま安全網の秒数を超えたか、run が resolve せずに終わった件）は、daemon が退避の行（件の本文の全文・選択肢・回答の画面）を残し、
+- CoS が答えられず人へ直接回った件（§7 と同じ規則。どの種類の件も、run が resolve せずに終わったか、cos.enabled=false か、run が始まってから〈run が無ければ件を拾える状態になってから〉`[cos.triage] fallback_after_secs` を超えた件）は、daemon が退避の行（件の本文の全文・選択肢・回答の画面）を残し、
   統括スレッドに `CoS 不在で人へ直接回した件の要約: items=[…]` で始まる依頼を積む。この入力は daemon の依頼で、人の発言ではない
   （`instructed_by` には使えない）。
 - この run では、挙がった件ごとに task の最新の question・選択肢の全文・案件の状況を API で読み、(1) 何が起きたか

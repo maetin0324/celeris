@@ -515,11 +515,8 @@ async fn resolve(
                     id: i.clone(),
                 })));
             };
-            if item.is_terminal() {
-                return Err(reject(revision_conflict(format!(
-                    "triage item {i} is already {}",
-                    item.state
-                ))));
+            if let Some(problem) = terminal_conflict(&db, &item).map_err(cos_problem)? {
+                return Err(reject(problem));
             }
             if item.source_revision != req.expected_revision {
                 return Err(reject(revision_conflict(format!(
@@ -691,6 +688,29 @@ async fn resolve(
             notification_id,
         },
     ))
+}
+
+/// Why `resolve` refuses an item that already has an outcome, or `None` when CoS may still judge it.
+/// ADR 2026-11-11-cos-fallback-timing D2: a fallback the notifier has not sent yields to CoS's
+/// judgment; a sent one stays with the person (this judgment is recorded as rejected and nothing
+/// is sent again).
+fn terminal_conflict(
+    db: &std::path::Path,
+    item: &CosInboxItem,
+) -> Result<Option<ApiProblem>, ChatError> {
+    if !item.is_terminal()
+        || (item.state == "fallback" && triage_view::fallback_unsent(db, &item.id)?)
+    {
+        return Ok(None);
+    }
+    let i = &item.id;
+    Ok(Some(revision_conflict(if item.state == "fallback" {
+        format!(
+            "triage item {i} was already sent to the person by the fallback; this judgment is recorded and nothing is sent again"
+        )
+    } else {
+        format!("triage item {i} is already {}", item.state)
+    })))
 }
 
 /// What a routine-answer basis is checked against: the derived wait and the chosen answer.

@@ -3,8 +3,10 @@
 //! worker の run が `result.json` の `{"type": "wait", "kind": "cluster_job", ...}` で終わると、dispatcher は
 //! その run を閉じ（`runs.status = waiting`）、task（または WorkUnit）を止めて `ClusterJobWaitStarted` を残す。
 //! daemon の tick がクラスタの ssh master 越しに `qstat -xf`（PBS）/ `sacct`（Slurm）を `poll_secs` ごとに
-//! 高々 1 回だけ流し、すべての job が終わったら `ClusterJobWaitFinished{satisfied}` と一緒に task を
-//! continuation の run に戻す。
+//! 高々 1 回だけ流し、次のどれかで `ClusterJobWaitFinished{satisfied}` と一緒に task を continuation の run に戻す:
+//! すべての job が終わった（detail は空）、job の 1 つが失敗で終わった（detail `job_failed`。失敗の発生ごとに
+//! 1 回）、job が Q/H のまま `queued_wake_secs` を超えた（detail `queue_stalled`。job ごとに 1 回）。起床の条件は
+//! [`wakeup::observe`]（ADR 2026-11-11-cluster-job-early-wakeup）。
 //!
 //! - **events が正本**。`cluster_job_waits` 表は event と同じトランザクションで書く派生の索引
 //!   （[`apply_event_tx`]）。状態の変わらない poll は event を出さず、`last_polled_at` / `last_status` だけを
@@ -117,6 +119,15 @@ pub struct ClusterJobStatus {
     /// scheduler が返した生の状態（PBS の `job_state` の文字、Slurm の `State`）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw_state: Option<String>,
+    /// PBS scheduling evidence (Resource_List, comment, estimated.start_time).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scheduling: Vec<String>,
+    /// First consecutive Q/H observation, RFC 3339; durable across re-waits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queued_since: Option<String>,
+    /// A queue-delay wakeup was already delivered for this job.
+    #[serde(default)]
+    pub queue_notified: bool,
 }
 
 impl ClusterJobStatus {
@@ -126,6 +137,9 @@ impl ClusterJobStatus {
             state: ClusterJobState::Unknown,
             exit_status: None,
             raw_state: None,
+            scheduling: Vec::new(),
+            queued_since: None,
+            queue_notified: false,
         }
     }
 }
@@ -314,20 +328,36 @@ pub struct ClusterJobWaitLimits {
     pub poll_secs: u64,
     /// 待ちの上限（秒、`poll_secs` 以上 [`MAX_WAIT_SECS_CEILING`] 以下）。worker の `timeout_secs` の上限と既定。
     pub max_wait_secs: u64,
+    /// Q/H observation threshold before waking the worker (seconds, positive).
+    #[serde(default = "default_queued_wake_secs")]
+    pub queued_wake_secs: u64,
 }
 
 impl Default for ClusterJobWaitLimits {
     fn default() -> Self {
-        Self {
-            poll_secs: DEFAULT_POLL_SECS,
-            max_wait_secs: DEFAULT_MAX_WAIT_SECS,
-        }
+        Self::new(DEFAULT_POLL_SECS, DEFAULT_MAX_WAIT_SECS)
     }
 }
 
+pub fn default_queued_wake_secs() -> u64 {
+    3600
+}
+
 impl ClusterJobWaitLimits {
+    /// Set poll/deadline limits while using the standard queue reassessment interval.
+    pub fn new(poll_secs: u64, max_wait_secs: u64) -> Self {
+        Self {
+            poll_secs,
+            max_wait_secs,
+            queued_wake_secs: default_queued_wake_secs(),
+        }
+    }
+
     /// 設定の検証（`celeris` の設定の読み込みが呼ぶ）。
     pub fn validate(&self) -> Result<(), String> {
+        if self.queued_wake_secs == 0 {
+            return Err("job_wait.queued_wake_secs must be > 0".into());
+        }
         if self.poll_secs < MIN_POLL_SECS {
             return Err(format!(
                 "job_wait.poll_secs must be >= {MIN_POLL_SECS} (got {})",
@@ -437,7 +467,7 @@ pub fn all_finished(jobs: &[String], statuses: &[ClusterJobStatus]) -> bool {
 /// クラスタで流す poll のコマンド（シェルの 1 行）。job id は [`valid_job_id`] を通ったものだけ。
 ///
 /// - PBS: `qstat -xf <ids>`（`-x` で終わった job の履歴も返す。PBS Pro の job history が前提）。
-/// - Slurm: `sacct -n -P -X -o JobID,State,ExitCode -j <ids>`（`squeue` は終わった job を返さない）。
+/// - Slurm: `sacct -n -P -X -o JobID,State%64,ExitCode -j <ids>`（`squeue` は終わった job を返さない）。
 pub fn poll_command(scheduler: ClusterScheduler, jobs: &[String]) -> String {
     let ids: Vec<&str> = jobs
         .iter()
@@ -447,7 +477,7 @@ pub fn poll_command(scheduler: ClusterScheduler, jobs: &[String]) -> String {
     match scheduler {
         ClusterScheduler::Pbs => format!("qstat -xf {}", ids.join(" ")),
         ClusterScheduler::Slurm => format!(
-            "sacct -n -P -X -o JobID,State,ExitCode -j {}",
+            "sacct -n -P -X -o JobID,State%64,ExitCode -j {}",
             ids.join(",")
         ),
     }
@@ -489,27 +519,51 @@ fn pbs_state(letter: &str) -> ClusterJobState {
 /// PBS の `qstat -xf <ids>` の出力を読む。
 ///
 /// 各 job は `Job Id: 42634.server` で始まる段落で、`job_state = F` と（終わった job なら）
-/// `Exit_status = 0` を持つ。長い値は次の行にタブで折り返されるが、読むのは 1 行の欄だけ。
+/// `Exit_status = 0` を持つ。資源指定・comment・開始見込みはタブ折返しも読む。
 /// stderr の `qstat: Unknown Job Id 42634.server` は [`ClusterJobState::Gone`]（終わったものとして扱う）。
 /// 出力に現れなかった job は [`ClusterJobState::Unknown`]（終わったとは扱わない）。
 pub fn parse_pbs_qstat_xf(stdout: &str, stderr: &str, jobs: &[String]) -> Vec<ClusterJobStatus> {
-    // (報告された id, job_state, Exit_status)
-    let mut blocks: Vec<(String, Option<String>, Option<i32>)> = Vec::new();
+    #[derive(Default)]
+    struct Block {
+        id: String,
+        state: Option<String>,
+        exit: Option<i32>,
+        scheduling: Vec<String>,
+        capture: bool,
+    }
+    let mut blocks: Vec<Block> = Vec::new();
     for line in stdout.lines() {
         let trimmed = line.trim();
         if let Some(id) = trimmed.strip_prefix("Job Id:") {
-            blocks.push((id.trim().to_string(), None, None));
+            blocks.push(Block {
+                id: id.trim().to_string(),
+                ..Block::default()
+            });
             continue;
         }
         let Some(current) = blocks.last_mut() else {
             continue;
         };
+        if line.starts_with('\t') && !trimmed.contains(" = ") {
+            if let Some(last) = current.scheduling.last_mut().filter(|_| current.capture) {
+                last.push_str(trimmed);
+            }
+            continue;
+        }
         let Some((key, value)) = trimmed.split_once('=') else {
             continue;
         };
+        current.capture = key.trim().starts_with("Resource_List.")
+            || matches!(key.trim(), "comment" | "estimated.start_time");
         match key.trim() {
-            "job_state" => current.1 = Some(value.trim().to_string()),
-            "Exit_status" | "exit_status" => current.2 = value.trim().parse::<i32>().ok(),
+            "job_state" => current.state = Some(value.trim().to_string()),
+            "Exit_status" | "exit_status" => current.exit = value.trim().parse::<i32>().ok(),
+            key if key.starts_with("Resource_List.")
+                || key == "comment"
+                || key == "estimated.start_time" =>
+            {
+                current.scheduling.push(trimmed.to_string())
+            }
             _ => {}
         }
     }
@@ -524,8 +578,8 @@ pub fn parse_pbs_qstat_xf(stdout: &str, stderr: &str, jobs: &[String]) -> Vec<Cl
         .collect();
     jobs.iter()
         .map(|j| {
-            if let Some((_, state, exit)) = blocks.iter().find(|(id, _, _)| job_matches(j, id)) {
-                let raw = state.clone();
+            if let Some(block) = blocks.iter().find(|b| job_matches(j, &b.id)) {
+                let raw = block.state.clone();
                 let st = raw
                     .as_deref()
                     .map(pbs_state)
@@ -534,11 +588,19 @@ pub fn parse_pbs_qstat_xf(stdout: &str, stderr: &str, jobs: &[String]) -> Vec<Cl
                     job_id: j.clone(),
                     state: st,
                     exit_status: if st == ClusterJobState::Finished {
-                        *exit
+                        block.exit
                     } else {
                         None
                     },
                     raw_state: raw,
+                    scheduling: block
+                        .scheduling
+                        .iter()
+                        .filter(|s| !s.is_empty())
+                        .cloned()
+                        .collect(),
+                    queued_since: None,
+                    queue_notified: false,
                 };
             }
             if gone.iter().any(|g| job_matches(j, g)) {
@@ -547,6 +609,9 @@ pub fn parse_pbs_qstat_xf(stdout: &str, stderr: &str, jobs: &[String]) -> Vec<Cl
                     state: ClusterJobState::Gone,
                     exit_status: None,
                     raw_state: Some("unknown to the scheduler".to_string()),
+                    scheduling: Vec::new(),
+                    queued_since: None,
+                    queue_notified: false,
                 };
             }
             ClusterJobStatus::unknown(j)
@@ -556,7 +621,11 @@ pub fn parse_pbs_qstat_xf(stdout: &str, stderr: &str, jobs: &[String]) -> Vec<Cl
 
 fn slurm_state(state: &str) -> ClusterJobState {
     // `CANCELLED by 123` のような接尾辞は先頭の語だけを見る。
-    let word = state.split_whitespace().next().unwrap_or("");
+    let word = state
+        .split_whitespace()
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('+');
     match word {
         "PENDING" | "CONFIGURING" | "REQUEUED" | "RESIZING" => ClusterJobState::Queued,
         "SUSPENDED" | "REQUEUE_HOLD" | "REQUEUE_FED" | "STOPPED" => ClusterJobState::Held,
@@ -570,7 +639,7 @@ fn slurm_state(state: &str) -> ClusterJobState {
     }
 }
 
-/// Slurm の `sacct -n -P -X -o JobID,State,ExitCode -j <ids>` の出力（`123|COMPLETED|0:0`）を読む。
+/// Slurm の `sacct -n -P -X -o JobID,State%64,ExitCode -j <ids>` の出力（`123|COMPLETED|0:0`）を読む。
 /// `ExitCode` は `<exit>:<signal>`。出力に無い job は [`ClusterJobState::Unknown`]。
 pub fn parse_slurm_sacct(stdout: &str, jobs: &[String]) -> Vec<ClusterJobStatus> {
     let rows: Vec<(String, String, Option<i32>)> = stdout
@@ -579,10 +648,16 @@ pub fn parse_slurm_sacct(stdout: &str, jobs: &[String]) -> Vec<ClusterJobStatus>
             let mut cols = l.trim().split('|');
             let id = cols.next()?.trim().to_string();
             let state = cols.next()?.trim().to_string();
-            let exit = cols
-                .next()
-                .and_then(|c| c.trim().split(':').next())
-                .and_then(|c| c.parse::<i32>().ok());
+            let exit = cols.next().and_then(|c| {
+                let (exit, signal) = c.trim().split_once(':')?;
+                let exit = exit.parse::<i32>().ok()?;
+                let signal = signal.parse::<i32>().ok()?;
+                Some(if exit == 0 && signal != 0 {
+                    -signal
+                } else {
+                    exit
+                })
+            });
             (!id.is_empty()).then_some((id, state, exit))
         })
         .collect();
@@ -599,6 +674,9 @@ pub fn parse_slurm_sacct(stdout: &str, jobs: &[String]) -> Vec<ClusterJobStatus>
                         None
                     },
                     raw_state: Some(state.clone()),
+                    scheduling: Vec::new(),
+                    queued_since: None,
+                    queue_notified: false,
                 }
             }
             None => ClusterJobStatus::unknown(j),
@@ -611,10 +689,17 @@ pub fn preamble_lines(statuses: &[ClusterJobStatus]) -> Vec<String> {
     statuses
         .iter()
         .map(|s| {
+            let scheduling = s.scheduling.join("; ");
             let raw = s
                 .raw_state
                 .as_deref()
-                .map(|r| format!(" / scheduler: {r}"))
+                .map(|r| {
+                    if scheduling.is_empty() {
+                        format!(" / scheduler: {r}")
+                    } else {
+                        format!(" / scheduler: {r}; {scheduling}")
+                    }
+                })
                 .unwrap_or_default();
             match (s.state, s.exit_status) {
                 (ClusterJobState::Finished, Some(code)) => {
@@ -905,3 +990,5 @@ impl ClusterJobWaitStore for SqliteStore {
 #[cfg(test)]
 #[path = "cluster_job/tests.rs"]
 mod tests;
+
+pub mod wakeup;

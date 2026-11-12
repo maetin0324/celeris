@@ -159,6 +159,16 @@ review は、案件の画面に並ぶ global の許可の「取り消す」が `
 
 commit: 「phase 1: global の許可と提案を案件の画面から行の台帳へ操作し、通知に決める場所を書く」。
 
+### attempt 5 の検査（提出時の HEAD で実行。基準は `git merge-base HEAD main`、main の取り込みは不要だった）
+
+- `bash scripts/dev/test-affected.sh` → exit 0（1038 秒、開始時の load average 16、途中 75）。nextest 8302 件合格・23 件 skip、
+  web の型検査と unit 711 件合格（103 file）、ts-verify 20 件合格、repo_health_gate は all checks passed。
+- `cargo clippy --workspace -- -D warnings` → exit 0（108 秒）。
+- `cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check` → exit 0。
+- 個別: `cargo nextest run -p task-api --test cos_job_wait_extend --test authority_ledger` → 26 件合格。
+  `npx vitest run features/projects/project-authority-panel.test.tsx` → 3 件合格。
+
 ## D4 の実装前 brief
 
 1. 根本原因: ledger は案件・期限 366 日に限られ、取り次ぎは task と期限を必須にしていた。恒久の人の委任を表せず、job 待ちの

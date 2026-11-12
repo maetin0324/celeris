@@ -49,7 +49,7 @@ core 数）、host 全体で同時に走る重い検査の数に上限が無か�
      として command に渡す。remote（ssh）の作業場所は包まない（枠は daemon の host の資源で、remote の host の負荷とは別）。
      枠の取得元（`task_worker::check_slots::SlotSource`）は daemon の起動時に env から 1 回だけ決め（`SlotSource::from_env`。
      `crates/celeris/src/config/dispatch.rs` の `Config::dispatch_config`）、`DispatchConfig::check_slots` で dispatcher に
-     渡す。dispatcher は検査の度に env を読まない（`with_check_slot` で設定の取得元を使う）。設定の再読み込み
+     渡す。dispatcher は検査の度に env を読まない（検査 1 件の上限と枠の取得元をまとめた `CheckLimits` の `wrap` で包む）。設定の再読み込み
      （`apply_dispatch_config`）では入れ替えない。試験の dispatcher は一時 dir の枠を入れ、host の枠の dir を開かない。
      `CELERIS_CHECK_SLOTS_DIR` も `XDG_RUNTIME_DIR` も無い process では枠の dir を決められないので、起動時の解決
      （`SlotSource::resolve_or_warn`）で warn を 1 行出し、検査を包まない（daemon は user の systemd unit で、user の
@@ -104,9 +104,9 @@ core 数）、host 全体で同時に走る重い検査の数に上限が無か�
 
 ## 付記（実装の突き合わせ）
 
-- `SlottedWorkspace` を使う所（`DispatchConfig::check_slots` を `with_check_slot` に渡す）: `dispatcher/review_spawn.rs`
+- `SlottedWorkspace` を使う所（`DispatchConfig::check_slots` と `review_timeout` から `CheckLimits` を作り、`wrap` で包む）: `dispatcher/review_spawn.rs`
   （review の local の作業場所と 2 つ目以降の repo の検査）、`dispatcher/work_units.rs`（WU の検査）、
-  `dispatcher/phase_integration.rs`（段の統合の検査。`run_integration_checks` が取得元を受け取る）。
+  `dispatcher/phase_integration.rs`（段の統合の検査。`run_integration_checks` が `CheckLimits` を受け取る）。
 - 試験: `task_worker::check_slots` の `a_heavy_check_waits_for_a_free_slot_and_the_wait_is_not_counted_in_its_timeout`
   （枠 1 本を別の holder が持つ間、timeout の 10 倍待っても実行しない・理由は 1 回・枠が空けば全 timeout で実行し合格）、
   `a_light_check_never_waits_for_a_slot`、`heavy_commands_are_the_cargo_and_test_scripts`、`status_lists_holders_and_live_waiters`、
@@ -125,7 +125,7 @@ core 数）、host 全体で同時に走る重い検査の数に上限が無か�
   host の dir に残った）。
 - 直し: 枠の取得元を `SlotSource`（`Host(CheckSlots)` と `Held(<lock の path>)`）の 1 つの型にし、env を受け取る純粋な
   `SlotSource::resolve` が `CELERIS_CHECK_SLOT` を dir・数より先に見る（D3.2）。`DispatchConfig::check_slots` を足し、本番は
-  daemon の起動時に `SlotSource::from_env` で 1 回だけ決める（D3.1）。env を検査の度に読む入口（daemon の local の作業場所を
+  daemon の起動時に `SlotSource::from_env` で 1 回だけ決める（D3.1）。dispatcher の検査の所は `CheckLimits`（timeout と取得元）を使う。env を検査の度に読む入口（daemon の local の作業場所を
   包む関数と、`SlottedWorkspace` の env から包む関連関数）は消した。dir を決められないときの warn 1 行と包まない扱いは
   起動時の解決に移した（検査の度には warn しない）。
 - 試験の dispatcher（`dispatcher/tests/mod.rs`・`tests/review.rs`）は process に 1 つの一時 dir の枠（64 本、`atexit` で消す）を

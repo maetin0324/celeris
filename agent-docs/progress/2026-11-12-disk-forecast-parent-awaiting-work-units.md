@@ -56,10 +56,12 @@ updated: 2026-11-12
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
 
 - `cargo nextest run -p task-worker -p task-dispatch -E 'test(/running_parent|shares_the_task_target|only_running_and_reviewing|parent_waiting_for_its_work_unit|target_sweep_scratch_cap|classify_follows|disk_admission|disk_forecast/)'` → 24 tests run, 24 passed（修正後）
-- `bash scripts/dev/test-affected.sh` → 結果は報告本文に書く
-- `cargo clippy --workspace -- -D warnings` → 結果は報告本文に書く
-- `cargo fmt --all -- --check` → 結果は報告本文に書く
-- `sh scripts/dev/progress-index.sh --check` → 結果は報告本文に書く
+- `bash scripts/dev/test-affected.sh` → exit 0（nextest 6741 tests run, 6741 passed, 23 skipped。web の tsc -b と unit 103 files / 712 tests passed）
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- `sh scripts/dev/progress-index.sh --check` → exit 0（`progress-index --check: ok`）
+- 上の 4 つは commit `phase 1: 空きの見込みで WU を待つだけの親の target を予約しない` の上で実行した。その後の commit
+  `phase 1: 進捗に検査の結果を書く` はこの進捗ファイルだけを変える（fmt と progress-index は再実行した）。
 
 ## 本番への移行
 

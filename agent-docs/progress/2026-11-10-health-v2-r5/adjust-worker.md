@@ -78,6 +78,7 @@ completed: 2026-11-11
   - R5 の進捗 [2026-11-10-health-v2-r5.md](../2026-11-10-health-v2-r5.md) の「未解決事項」: resync-g4 と後の test-affected・measure-run では合格した。
   - [measure-run.md](measure-run.md)・[run-worker.md](run-worker.md): `cargo nextest run -p task-worker`（lib の unit 試験を含む）を HEAD で 2 回・base で 1 回走らせ、3 回とも 1283 件合格・失敗 0。
   - [worker-singleton.md](worker-singleton.md): `bash scripts/dev/test-affected.sh` → exit 0（対象 7 crate に task-worker を含む。nextest 5945 件合格・22 skip）。
+  - [adr-tables.md](adr-tables.md): `cargo nextest run -p task-worker --lib -E 'test(launch_notice_tests::)'` → exit 0、4 件合格（上の 3 件を含む）。
 - 原因は未確認のまま（継承した環境の `CODEX_HOME` への規則の書き込みの失敗の疑い。`codex/tests.rs` の `stub_codex` は `CODEX_HOME` を一時 dir に隔離するが、この fixture は既定の環境を使う）。再発したら、最初の試験が捨てている run の戻り値を出して調べる。src は R5 の write set の外なので、この unit では変えていない。
 
 ## 提案

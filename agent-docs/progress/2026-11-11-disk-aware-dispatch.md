@@ -40,11 +40,13 @@ commit（件名）:
 - `phase 3: 進捗に attempt 3 の検査の結果を書く`
 - `phase 5: count the owners that are still copying their seed and the live release-build lease in the forecast`（attempt 5。review の指摘 2 件。(1) seed を写している run は `target/` が無く増分 0 になった。`running` の owner は target が無くても大きさ不明の増える owner として数える。(2) release-build は build ごとに約 88 GB 育つので、lease の生きた release-build の増分を数える。ADR の付記に書いた）
 - `phase 6: keep the forecast of admitted runs until their lease shows in the scan, count only target writers for the never-stall rule`（attempt 6）
+- `phase 6: 進捗に attempt 6 の検査の結果を書く`
 
 ## 証拠
 
 （提出時の HEAD で実行。基準は `git merge-base HEAD main`）
 
+- attempt 6（提出時の HEAD、main は動いておらず rebase なし）: `bash scripts/dev/test-affected.sh` exit 0（901 秒、開始時 load average 約 31）。nextest 6751 passed・23 skipped、web 103 file・710 passed、repo_health_gate all checks passed。`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0、`sh scripts/dev/progress-index.sh --check` ok。`cargo nextest run -p task-dispatch --lib -E 'test(/disk_forecast/) | test(/disk_admission/)'` 11 passed（新しい試験 `admitted_runs_count_across_passes_until_the_scan_shows_them`・`runs_admitted_in_one_tick_keep_their_forecast_until_their_lease_appears` を含む）。`begin_pass` で通した run を毎回消す旧い挙動に一時的に戻すと、この 2 件だけが落ちる（9 passed・2 failed）ことを確かめてから戻した。`UPDATE_SCHEMA=1 cargo test -p task-api --lib committed_schema_matches_generated` 1 passed、`node web/scripts/gen-types.mjs` で生成型を作り直した。
 - attempt 5（提出時の HEAD、main は動いていない）: `bash scripts/dev/test-affected.sh` exit 0（nextest 6749 passed。1 回目は負荷で `instance_handoff` の 1 件が落ち、単独実行 8 passed・再実行で全件 passed）。clippy・fmt・progress-index exit 0。task-dispatch・task-worker の scratch・disk 系 71 passed。
 - attempt 4（コード変更なし、main は動いていない）: 前回の review で落ちた `script_compare_cos_digest`（celeris）は単独実行で 9 passed。提出時の HEAD の `bash scripts/dev/test-affected.sh` は exit 0（nextest 6749 passed・開始時 load average 約 21）。負荷が高い時に時間依存で落ちる既存の試験で、この変更の範囲外。
 - attempt 3（main は動いておらず rebase なし）: `bash scripts/dev/test-affected.sh` exit 0（1189 秒、開始時 load average 約 36）。nextest 6749 passed・23 skipped、web 103 file・710 passed、repo_health_gate all checks passed。`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0、`sh scripts/dev/progress-index.sh --check` ok。`cargo nextest run -p task-worker -p task-dispatch --lib -E 'test(/scratch/) | test(/disk_forecast/) | test(/disk_admission/) | …'` 116 passed（新しい試験 `samples_count_present_targets_and_grow_only_where_a_run_writes_now`・`only_running_and_reviewing_owners_count_as_written_now` を含む）。`UPDATE_SCHEMA=1 cargo test -p task-api --lib committed_schema_matches_generated` 1 passed、`node web/scripts/gen-types.mjs` で生成型を作り直した。

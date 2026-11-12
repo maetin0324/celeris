@@ -211,3 +211,76 @@ commit 件名: `phase 1: 人の cancel・pause・未回答質問の反例試験�
 未解決: GH3 単独の除去は検出できなかった。bundle 不足の 59 件の実行は今回未確認。これ以外に今回の受け入れ条件の未解決は無い。本番への移行は不要。
 
 提案: 無し（本体の変更は行っていない）。
+
+## 節: credential・budget
+
+### 作業前 brief
+
+1. 根本原因: 既存試験は gate の直接呼び出しや adapter の呼び出し数が中心で、待ち解除と予算判定の順序の確認が不足している。
+2. 責務 owner: credential_gate と credential_resume、worker_finish の token 判定、tree_units の木の上限判定。
+3. 再利用先: credential_e2e の時計・mock 検証、run_until_state、HumanGateAdapter、tree_gate の seed_tree_run。
+4. 選択肢: store の状態・event・TickReport を観測する。run の終了は semaphore と Notify で制御する。private field は参照しない。
+5. 新しい状態・分岐・fallback・port: 無し（試験だけ）。
+6. 撤去対象: 無し。
+7. 不変条件: credential の待ち・cancel・予算停止を経て、許されない worker・continuation・reviewer を起こさない。
+
+### 試験と不変条件
+
+| 試験 | 不変条件 |
+|---|---|
+| `cex_credential_wait_holds_task_and_unit_across_retry_deadline` | 未登録の task と WU は時間だけで再開しない。WU は登録後の検証一時失敗と、注入時計が再検証の backoff を越えた tick でも起動数ゼロ、runs 索引は空 |
+| `cex_credential_cancel_after_resume_claim_never_dispatches` | verified から resume の claim を取った後の cancel を tick が上書きせず、task と WU の run はゼロ |
+| `cex_budget_tokens_after_credential_resume_stops_continuation_and_review` | credential 解除後の run が token 上限ちょうどで turns 切れ・Done を返しても failed。run は一本だけで、停止理由が WorkerFinished に残る |
+| `cex_budget_tree_usd_limit_holds_continuation` | 木の既知費用が上限ちょうどなら、終了した worker の continuation を止め、決定要求を一度だけ記録する |
+| `cex_budget_unknown_cost_holds_continuation` | 単価の無い model の終了済み run をゼロ費用にせず、費用不明の件数を決定要求に書いて continuation を止める |
+
+| `cex_budget_credential_resume_does_not_bypass_tree_stop` | credential の検証・resume が成功しても、既知費用の上限到達と費用不明の両方で追加 run ゼロ。停止理由は DecisionRequested に残る |
+
+### guard を一時的に外すと落ちることの確認
+
+各実行は `cargo nextest run -p task-dispatch -E 'test(/cex_review_authority::/)' --no-fail-fast`。本体の一〜二行を一時変更し、実行後に `git checkout --` で戻す。store と migration は一時変更でも触らない。
+
+| guard（一時変更） | 落ちた試験・assert・観測 |
+|---|---|
+| GW1 `credential_gate.rs` の `credential_gate_hold`: 待ちを登録した後の `Ok(true)` を `Ok(false)` にする（一行） | `cex_credential_wait_holds_task_and_unit_across_retry_deadline` と `cex_credential_cancel_after_resume_claim_never_dispatches` の runs 索引が空の assert が失敗。待ちを作った pass で既に run ができる。`cex_budget_credential_resume_does_not_bypass_tree_stop` も runs 一件の assert が実値二件で失敗 |
+| GB1 `worker_finish.rs`: token 上限の `used >= max` を `used > max` にする（一行） | `cex_budget_tokens_after_credential_resume_stops_continuation_and_review`。GW1 と同時に変えた実行では終端への到達が六十秒の保険で失敗。GW1 を戻した次の実行では、余分な run が現れた時点の status が Failed である assert が実値 Running で失敗（次の run が gate で停止中） |
+| GB2 `dispatch_run.rs`: `tree_limit_hold_for` を呼ぶ条件に `false &&` を足す（一行） | `cex_budget_tree_usd_limit_holds_continuation` と `cex_budget_unknown_cost_holds_continuation` の決定要求への到達が六十秒の保険で失敗。`cex_budget_credential_resume_does_not_bypass_tree_stop` は tick の `(dispatched, reviewed) == (0, 0)` が実値 `(1, 0)` で失敗 |
+
+最初の実行（GW1・GB1）は十六本中十二本合格・四本失敗、exit 100。次の実行（GB1・GB2）も十六本中十二本合格・四本失敗、exit 100。どちらも先行 leaf の十本はすべて合格した。GB1 の再確認では待ちの条件に禁止された追加 run の出現を足し、保険の時間切れを待たずに status の assert に進むようにした。
+
+### 確かめられなかった guard
+
+- resume claim 後の cancel の防御は、task の Cancelled と runs が空であることを確認した。cancel 後の古い resumer による再キューの書き込み自体は、この試験では行わない。store の比較更新の guard は、一時変更の禁止範囲のため外していない。
+- GB2 は dispatch の木の gate 全体を外す検証で、単価計算・費用不明の集計の個々の分岐を単独で外す実験ではない。
+- USD の二試験は turns 切れから continuation に進む経路で reviewer が起きないことを確認する。USD 上限後に Done を返す経路の final reviewer の停止は未確認。
+
+### 反例
+
+計画の無い task では、検証が一時失敗しても秘密ファイルの存在だけで run が起きる。
+
+- 再現手順: `credential_dispatcher` で未登録の task を tick し、credential_wait ができたところで止める。`put_secret` でファイルと保存 event を作り、注入時計の resumer を `VerifyOutcome::Transient` で一回処理する（transient 一件）。claim せず次の tick を呼ぶ。
+- 観測: `TickReport.dispatched = 1`、`in_flight = 1`。runs 索引に role Worker・status Running の行が一本できる。task の event は `Transitioned` ready → running（reason `dispatch`）、`WorkerStarted`（provider `p1`、model `m`）、`HarnessSelected`、`LlmRouteSelected`。検証の成功・resume は経ていない。
+- 最初の試験では `report.dispatched == 0` が実値一で失敗（全十五本のうち十四本合格）。観測用の一時出力を加えた再実行で上記 event を確認した。観測用の出力は除去した。
+- 原因: `credential_gate_hold` は `is_registered` が真なら、開いた wait の検証状態を確認せず通す。atomic task は WU の Blocked 行も持たない。
+- この条件の assert は残さず、本体は変更しない。試験は未登録の task と WU、および登録後に検証が一時失敗した WU の待機を固定する。credential_wait 自体に有効期限は無く、時間の境界は resumer の再検証 backoff（三十秒）で作った。
+
+### 証拠（最後の同期後の code で実行。基準は `$CELERIS_WU_BASE`）
+
+- 本体復元後の `cargo nextest run -p task-dispatch -E 'test(/cex_review_authority::/)' --no-fail-fast`: exit 0、十六本すべて合格・千六百七十本 skip。追加は credential 二本・budget 四本で、先行 leaf の十本もすべて合格。
+- guard の一時変更は `git checkout --` で復元した。変更 path は試験 file とこの記録だけ。store と migration は触っていない。
+- doc comment の awk 検査: tests=16、bad=0、exit 0。禁止された待ちの helper と thread sleep はゼロ件。Dispatcher の private field の参照は無い（設定は公開の config・apply_dispatch_config で行う）。
+- `sh scripts/dev/progress-index.sh --check`、`sh scripts/dev/check-doc-links.sh`、`sh scripts/dev/check-adr-numbers.sh`: exit 0。ADR は四百十九 file。
+- `sh "$CELERIS_WU_SCOPE_PATHS"`: exit 0、変更 path は指定の二件だけ。
+- `bash scripts/dev/test-affected.sh --list`: celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch の五 crate。
+- test-affected・clippy・fmt は実行後に追記する。
+- control-ts の事前 offline install は vite の tarball 不足で exit 1。ネットワークでの取得は行っていない。
+
+### 完了・未解決・提案
+
+credential・budget の完了日は検査後に記入する。ファイル全体の status は後続 unit があるため running のまま。
+
+commit 件名: `phase 1: credential 待ちと予算の反例試験を固定する`。
+
+未解決: atomic task が秘密ファイルの存在だけで検証一時失敗の待ちを迂回する反例は上記のとおり。本体はこの unit の範囲外。本番への移行は不要。
+
+提案: atomic task も開いた credential_wait の検証状態を確認し、検証成功と resume claim を経てから起動を許す。R4 の owner 分割の際に、この反例の assert を追加する。

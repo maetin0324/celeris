@@ -1426,3 +1426,374 @@ async fn cex_human_unanswered_question_stays_blocked_across_housekeeping() {
     assert!(store.get(id).unwrap().unwrap().lease.is_none());
     assert!(!reached_done(&store, id));
 }
+
+fn credential_dispatcher(
+    e: &super::credential_e2e::E2e,
+    adapter: Arc<dyn WorkerAdapter>,
+) -> Dispatcher {
+    let mut d = dispatcher(e.store(), adapter, 1);
+    let clock = e.clock.clone();
+    d.set_now_unix_fn(Arc::new(move || clock.lock().unwrap().unix_timestamp()));
+    d.set_credential_gates(crate::dispatcher::CredentialGates {
+        secrets_dir: Some(e.secrets.clone()),
+        by_source: HashMap::from([(
+            "p1".into(),
+            crate::dispatcher::CredentialGate {
+                secret_id: super::credential_gate::SECRET.into(),
+                provider: "jev".into(),
+                purpose: "counterexample credential".into(),
+            },
+        )]),
+    });
+    d
+}
+
+/// 不変条件: 未登録の task と WU は時間だけで再開せず、WU は再検証の backoff を越えた tick でも run を起こさない。
+/// 範囲: atomic task のファイル登録後・検証一時失敗の待機は成立しないため、記録の「反例」に残し assert しない。
+/// 既存の試験で検出できない理由: credential_e2e は resumer の再検証だけを見て、待機中の tick の起動数と runs 索引を見ない。
+#[tokio::test]
+async fn cex_credential_wait_holds_task_and_unit_across_retry_deadline() {
+    use super::credential_e2e::{DUMMY, E2e, Scripted};
+    use crate::credential_resume::VerifyOutcome;
+    for planned in [false, true] {
+        let e = E2e::new();
+        let task = new_task(e.dir.path(), Check::Reviewer, 1);
+        e.sqlite.insert(&task).unwrap();
+        if planned {
+            adopt_v2_plan(
+                &e.store(),
+                task.id,
+                &["build"],
+                vec![v2_wu("a", "build", &[])],
+            );
+        }
+        let adapter = HumanGateAdapter::new(done_outcome().terminal);
+        let mut d = credential_dispatcher(&e, adapter);
+        let s = e.store();
+        assert!(
+            run_until_state(&mut d, || !s
+                .credential_waits_list_waiting()
+                .unwrap()
+                .is_empty())
+            .await
+        );
+        let wait = e.sqlite.credential_waits_list_waiting().unwrap().remove(0);
+        assert_eq!(wait.task_id, task.id);
+        if planned {
+            assert_eq!(
+                e.sqlite.work_units_for(task.id).unwrap()[0].status,
+                WorkUnitStatus::Blocked
+            );
+        }
+        // 未登録のまま時間だけが経過しても解除しない。
+        for seconds in [29, 2, 3600] {
+            e.advance(seconds);
+            let report = d.tick().unwrap();
+            assert_eq!(report.dispatched, 0, "planned={planned}: {report:?}");
+            assert!(e.sqlite.runs_for_task(task.id).unwrap().is_empty());
+        }
+        if planned {
+            e.put_secret(DUMMY);
+            let verifier = Scripted::new(&[VerifyOutcome::Transient, VerifyOutcome::Transient]);
+            let resumer = e.resumer(&verifier);
+            assert_eq!(resumer.process().unwrap().transient, 1);
+            e.advance(31);
+            let report = d.tick().unwrap();
+            assert_eq!(report.dispatched, 0, "{report:?}");
+            assert!(e.sqlite.runs_for_task(task.id).unwrap().is_empty());
+            assert_eq!(resumer.process().unwrap().transient, 1);
+            assert_eq!(verifier.calls(), 2);
+        }
+        assert_eq!(
+            e.sqlite
+                .credential_wait_get(&wait.work_unit_id, &wait.secret_id)
+                .unwrap()
+                .unwrap()
+                .state,
+            task_core::CredentialWaitState::Waiting
+        );
+        assert_eq!(reviewer_starts(&e.store(), task.id), 0);
+    }
+}
+
+/// 不変条件: credential resume の claim が成功した後に cancel が確定しても task・WU の run を起こさない。
+/// 既存の試験で検出できない理由: credential_e2e は claim より先の cancel だけで、claim 後の cancel と tick を組み合わせない。
+#[tokio::test]
+async fn cex_credential_cancel_after_resume_claim_never_dispatches() {
+    use super::credential_e2e::{DUMMY, E2e};
+    use crate::credential_resume::secret_fingerprint;
+    for planned in [false, true] {
+        let e = E2e::new();
+        let task = new_task(e.dir.path(), Check::Reviewer, 1);
+        e.sqlite.insert(&task).unwrap();
+        if planned {
+            adopt_v2_plan(
+                &e.store(),
+                task.id,
+                &["build"],
+                vec![v2_wu("a", "build", &[])],
+            );
+        }
+        let mut d = credential_dispatcher(&e, HumanGateAdapter::new(done_outcome().terminal));
+        let s = e.store();
+        assert!(
+            run_until_state(&mut d, || !s
+                .credential_waits_list_waiting()
+                .unwrap()
+                .is_empty())
+            .await
+        );
+        let wait = e.sqlite.credential_waits_list_waiting().unwrap().remove(0);
+        e.put_secret(DUMMY);
+        let now = *e.clock.lock().unwrap();
+        assert!(
+            e.sqlite
+                .credential_wait_mark_verified(
+                    &wait.work_unit_id,
+                    &wait.secret_id,
+                    &secret_fingerprint(DUMMY),
+                    now
+                )
+                .unwrap()
+        );
+        assert!(
+            e.sqlite
+                .credential_wait_claim_resume(&wait.work_unit_id, &wait.secret_id, now)
+                .unwrap()
+        );
+        e.sqlite
+            .apply_transition(task.id, Trigger::Cancel, None)
+            .unwrap();
+        let report = d.tick().unwrap();
+        assert_eq!(report.dispatched, 0, "{report:?}");
+        assert!(e.sqlite.runs_for_task(task.id).unwrap().is_empty());
+        assert_eq!(status_of(&e.store(), task.id), Status::Cancelled);
+        assert_eq!(reviewer_starts(&e.store(), task.id), 0);
+    }
+}
+
+fn continuation_with_tokens(input: u64) -> Terminal {
+    Terminal::BudgetExhausted {
+        kind: task_core::BudgetKind::Turns,
+        message: "continue remaining work".into(),
+        usage: Some(task_core::Usage {
+            input_tokens: Some(input),
+            output_tokens: Some(0),
+            ..Default::default()
+        }),
+    }
+}
+
+/// 不変条件: token を使い切った run は continuation と reviewer を起こさず、停止理由を event に残す。
+/// 既存の試験で検出できない理由: token_budget は終了を gate で制御せず、credential 解除直後の最初の run の予算停止を通さない。
+#[tokio::test]
+async fn cex_budget_tokens_after_credential_resume_stops_continuation_and_review() {
+    use super::credential_e2e::{DUMMY, E2e, Scripted};
+    use crate::credential_resume::VerifyOutcome;
+    for done in [false, true] {
+        let e = E2e::new();
+        let mut task = new_task(e.dir.path(), Check::Reviewer, 1);
+        task.budget.max_tokens = Some(100);
+        e.sqlite.insert(&task).unwrap();
+        let ending = if done {
+            Terminal::Done {
+                summary: "done".into(),
+                evidence: vec![],
+                usage: Some(task_core::Usage {
+                    input_tokens: Some(100),
+                    ..Default::default()
+                }),
+            }
+        } else {
+            continuation_with_tokens(100)
+        };
+        let adapter = HumanGateAdapter::new(ending);
+        let mut d = credential_dispatcher(&e, adapter.clone());
+        let s = e.store();
+        assert!(
+            run_until_state(&mut d, || !s
+                .credential_waits_list_waiting()
+                .unwrap()
+                .is_empty())
+            .await
+        );
+        e.put_secret(DUMMY);
+        assert_eq!(
+            e.resumer(&Scripted::new(&[VerifyOutcome::Valid]))
+                .process()
+                .unwrap()
+                .resumed,
+            1
+        );
+        let s = e.store();
+        assert!(run_until_state(&mut d, || s.get(task.id).unwrap().unwrap().lease.is_some()).await);
+        release_human_worker(&adapter).await;
+        let s = e.store();
+        assert!(
+            run_until_state(&mut d, || terminal(&s, task.id)
+                || s.runs_for_task(task.id).unwrap().len() > 1)
+            .await
+        );
+        assert_eq!(status_of(&e.store(), task.id), Status::Failed);
+        let report = d.tick().unwrap();
+        assert_eq!((report.dispatched, report.reviewed), (0, 0));
+        assert_eq!(e.sqlite.runs_for_task(task.id).unwrap().len(), 1);
+        assert_eq!(reviewer_starts(&e.store(), task.id), 0);
+        assert!(events_of(&e.store(), task.id).iter().any(|ev| matches!(ev, Event::WorkerFinished { outcome, .. } if outcome == "token_budget_exhausted: 100/100")));
+    }
+}
+
+async fn tree_budget_continuation(unknown: bool) {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut task = new_task(dir.path(), Check::Reviewer, 1);
+    task.tree = Some(task_core::TreeInfo::root(task.id));
+    store.insert(&task).unwrap();
+    let adapter = HumanGateAdapter::new(continuation_with_tokens(1));
+    let mut d = dispatcher(store.clone(), adapter.clone(), 1);
+    let mut config = d.config().clone();
+    config.execution.limits.tree.enabled = true;
+    config.execution.limits.tree.max_tree_usd_micros = Some(2_000_000);
+    d.apply_dispatch_config(config);
+    // 最初の run 自身の model m は明示の単価で既知とする。
+    d.set_budget_rates(
+        task_core::pricing::BudgetRates::new([(
+            "m".into(),
+            task_core::pricing::BudgetRate {
+                input_per_million: 0.0,
+                output_per_million: 0.0,
+                cache_read_per_million: 0.0,
+                cache_write_per_million: 0.0,
+            },
+        )])
+        .unwrap(),
+    );
+    let s = store.clone();
+    assert!(run_until_state(&mut d, || s.get(task.id).unwrap().unwrap().lease.is_some()).await);
+    super::tree_gate::seed_tree_run(
+        &store,
+        &task,
+        "prior-budget-run",
+        if unknown {
+            "unpriced-local"
+        } else {
+            "claude-sonnet-5"
+        },
+        [1_000_000, 0, 0, 0],
+    );
+    release_human_worker(&adapter).await;
+    let s = store.clone();
+    assert!(
+        run_until_state(&mut d, || !s
+            .decisions_list(Some(task.id))
+            .unwrap()
+            .is_empty())
+        .await
+    );
+    let decisions = store.decisions_list(Some(task.id)).unwrap();
+    assert_eq!(decisions.len(), 1);
+    assert_eq!(decisions[0].key, "limit:max_tree_usd");
+    assert_eq!(
+        decisions[0]
+            .request
+            .question
+            .contains("費用不明の run が 1 件"),
+        unknown
+    );
+    let report = d.tick().unwrap();
+    assert_eq!((report.dispatched, report.reviewed), (0, 0));
+    assert_eq!(store.runs_for_task(task.id).unwrap().len(), 2);
+    assert_eq!(reviewer_starts(&store, task.id), 0);
+    assert_eq!(
+        count(
+            &store,
+            task.id,
+            |e| matches!(e, Event::DecisionRequested { decision } if decision.key == "limit:max_tree_usd")
+        ),
+        1
+    );
+    assert!(!reached_done(&store, task.id));
+}
+
+/// 不変条件: 木の USD 上限に到達した後は continuation・reviewer を起こさず、決定要求の event を一度だけ残す。
+/// 既存の試験で検出できない理由: tree_gate の既存試験は判定関数を直接呼び、gate で終了した worker から次の run への経路を通さない。
+#[tokio::test]
+async fn cex_budget_tree_usd_limit_holds_continuation() {
+    tree_budget_continuation(false).await;
+}
+
+/// 不変条件: 単価の無い model の終了済み run は費用不明として continuation・reviewer を止め、件数を event に残す。
+/// 既存の試験で検出できない理由: tree_gate の費用不明試験は判定関数を直接呼び、tick と runs 索引で追加起動の不在を確認しない。
+#[tokio::test]
+async fn cex_budget_unknown_cost_holds_continuation() {
+    tree_budget_continuation(true).await;
+}
+
+/// 不変条件: credential の検証・resume が成功しても、既知費用の上限と費用不明による木の停止は迂回できない。
+/// 既存の試験で検出できない理由: credential と tree_gate の既存試験は別々で、待ちの解除後の tick に木の予算停止を組み合わせない。
+#[tokio::test]
+async fn cex_budget_credential_resume_does_not_bypass_tree_stop() {
+    use super::credential_e2e::{DUMMY, E2e, Scripted};
+    use crate::credential_resume::VerifyOutcome;
+    for unknown in [false, true] {
+        let e = E2e::new();
+        let mut task = new_task(e.dir.path(), Check::Reviewer, 1);
+        task.tree = Some(task_core::TreeInfo::root(task.id));
+        e.sqlite.insert(&task).unwrap();
+        let mut d = credential_dispatcher(&e, HumanGateAdapter::new(done_outcome().terminal));
+        let s = e.store();
+        assert!(
+            run_until_state(&mut d, || !s
+                .credential_waits_list_waiting()
+                .unwrap()
+                .is_empty())
+            .await
+        );
+        super::tree_gate::seed_tree_run(
+            &e.store(),
+            &task,
+            "prior-budget-run",
+            if unknown {
+                "unpriced-local"
+            } else {
+                "claude-sonnet-5"
+            },
+            [1_000_000, 0, 0, 0],
+        );
+        let mut config = d.config().clone();
+        config.execution.limits.tree.enabled = true;
+        config.execution.limits.tree.max_tree_usd_micros = Some(2_000_000);
+        d.apply_dispatch_config(config);
+        e.put_secret(DUMMY);
+        assert_eq!(
+            e.resumer(&Scripted::new(&[VerifyOutcome::Valid]))
+                .process()
+                .unwrap()
+                .resumed,
+            1
+        );
+        assert!(e.sqlite.credential_waits_list_waiting().unwrap().is_empty());
+        let report = d.tick().unwrap();
+        assert_eq!((report.dispatched, report.reviewed), (0, 0), "{report:?}");
+        let runs = e.sqlite.runs_for_task(task.id).unwrap();
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].run_id, "prior-budget-run");
+        assert_eq!(reviewer_starts(&e.store(), task.id), 0);
+        assert_eq!(
+            count(
+                &e.store(),
+                task.id,
+                |ev| matches!(ev, Event::DecisionRequested { decision } if decision.key == "limit:max_tree_usd")
+            ),
+            1
+        );
+        let decisions = e.sqlite.decisions_list(Some(task.id)).unwrap();
+        assert_eq!(
+            decisions[0]
+                .request
+                .question
+                .contains("費用不明の run が 1 件"),
+            unknown
+        );
+    }
+}

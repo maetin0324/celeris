@@ -1,15 +1,18 @@
 //! 健全性v2 R4 cex-review: Dispatcher の状態所有を分割する前に、review の権限（検査した候補の同一性・自己申告で
-//! 完了しないこと・再同期の上限）の不変条件を今の実装に対して固定する反例試験
-//! （`agent-docs/progress/2026-11-11-health-v2-r4/cex-review.md`）。
+//! 完了しないこと・再同期の上限）と統合（再起動で二重に merge しない・衝突で repair に回る）の不変条件を今の実装に
+//! 対して固定する反例試験（`agent-docs/progress/2026-11-11-health-v2-r4/cex-review.md`）。
 //!
-//! 規約（`cex_lease_restart.rs` と同じ）: 試験は Dispatcher の private field に触らず、store の行（task・`runs`
-//! 索引・delivery）と event と `tick()` の戻り値（`TickReport`）だけを見る。待ちは [`run_until_state`]（出来事待ち・
-//! 壁時計の保険）で、tick の回数の上限で待たない。reviewer run の終わりは fake adapter の gate（semaphore）で
-//! 試験が決める。target の前進は試験が一時 Git repo の `main` に commit して作る。CPU 負荷は使わない。
+//! 規約（`cex_lease_restart.rs` と同じ）: 試験は Dispatcher の private field に触らず、store の行（task・WU・`runs`
+//! 索引・delivery・instance）と event と `tick()` の戻り値（`TickReport`）だけを見る。待ちは [`run_until_state`]（出来事待ち・
+//! 壁時計の保険）で、tick の回数の上限で待たない。run の終わりは fake adapter の gate（semaphore）で、統合の検査の
+//! 止め所は試験が置く file で試験が決める。target の前進は試験が一時 Git repo の `main` に commit して作る。
+//! CPU 負荷は使わない。
 use std::collections::VecDeque;
 
+use super::orphan_takeover::{SELF_ID, instance};
 use super::target_sync::commit_file;
 use super::*;
+use crate::orphan::{ORPHAN_TAKEOVER_REASON, OrphanTakeover};
 
 /// worker run が成功を申告する文（result.json と `Terminal::Done` の summary）。
 const CLAIM: &str = "all acceptance criteria verified";
@@ -621,4 +624,436 @@ async fn cex_review_resync_cap_halts_and_starts_no_more_reviewer_runs() {
     );
     assert!(!reached_done(&store, id), "{:?}", transitions(&store, id));
     assert_eq!(store.get(id).unwrap().unwrap().attempts, task.attempts);
+}
+
+// ---- 節: integration（統合の途中の再起動・衝突の repair） ----
+
+/// 段 `build` の 2 件の WU（`a`・`b`、互いに独立）の v2 計画。`a` の検査は、統合の作業ツリー（`a.txt` と `b.txt` が
+/// 揃う）で最初に走ったときだけ、試験が `<marks>/open` を置くまで（または `marks` が消えるまで）止まる。止まったことは
+/// `<marks>/first` の dir で分かる。WU `a` の作業ツリー（`a.txt` だけ）と 2 回目以降の統合では止まらない。
+fn adopt_blocking_integration_plan(store: &Arc<dyn TaskStore>, id: TaskId, marks: &Path) {
+    let mut a = v2_wu("a", "build", &[]);
+    a.checks = vec![task_core::WorkUnitCheck {
+        cmd: format!(
+            "if [ -f a.txt ] && [ -f b.txt ] && mkdir {first} 2>/dev/null; then \
+             while [ ! -f {open} ] && [ -d {marks} ]; do sleep 0.05; done; fi; test -f a.txt",
+            first = marks.join("first").display(),
+            open = marks.join("open").display(),
+            marks = marks.display(),
+        ),
+        expect_exit: 0,
+        scope: false,
+    }];
+    adopt_v2_plan(store, id, &["build"], vec![a, v2_wu("b", "build", &[])]);
+}
+
+/// 再起動後の新しい active（自分の行を登録し、孤児の回収を有効にした並列 WU の dispatcher）。
+fn restarted_parallel_dispatcher(
+    store: &Arc<dyn TaskStore>,
+    adapter: Arc<dyn WorkerAdapter>,
+    root: &Path,
+) -> Dispatcher {
+    store
+        .instance_register(&instance(SELF_ID, InstanceRole::Active, std::process::id()))
+        .unwrap();
+    let mut d = parallel_dispatcher(store.clone(), adapter, root, 2, 2, 2);
+    d.set_orphan_takeover(OrphanTakeover {
+        instance_id: SELF_ID.into(),
+        freshness: Duration::from_secs(60),
+        pid_alive: Arc::new(crate::orphan::proc_pid_alive),
+    });
+    d
+}
+
+/// 統合 WU `key` の `(to, reason)` の列。
+fn wu_transitions(store: &Arc<dyn TaskStore>, id: TaskId, key: &str) -> Vec<(WorkUnitStatus, String)> {
+    events_of(store, id)
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::WorkUnitTransitioned {
+                key: k, to, reason, ..
+            } if k == key => Some((to, reason)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn wu_status_of(store: &Arc<dyn TaskStore>, id: TaskId, key: &str) -> Option<WorkUnitStatus> {
+    store
+        .work_units_for(id)
+        .unwrap()
+        .into_iter()
+        .find(|u| u.key == key)
+        .map(|u| u.status)
+}
+
+/// `branch` の履歴の merge commit の第 2 親（取り込んだ側の commit）の列。
+fn merged_parents(repo: &Path, branch: &str) -> Vec<String> {
+    git_out(repo, &["log", "--merges", "--format=%P", branch])
+        .lines()
+        .filter_map(|l| l.split_whitespace().nth(1).map(str::to_string))
+        .collect()
+}
+
+/// `PhaseIntegrated` の `(key, skipped)` の列（event ごと）。
+fn phase_integrated(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<Vec<(String, bool)>> {
+    events_of(store, id)
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::PhaseIntegrated { merged, .. } => Some(
+                merged
+                    .into_iter()
+                    .map(|m| (m.key, m.skipped))
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        })
+        .collect()
+}
+
+/// 不変条件: （ADR-0074 D1.4・D1.7、`CLAUDE.md` の SQLite 正本）段の統合が葉の WU のブランチを Task のブランチに merge
+/// し終え、統合の検査の途中で daemon が落ちた（統合 WU は running、Task は running、`PhaseIntegrated` 無し）後に、
+/// 同じ store・同じ Git repo で作り直した dispatcher（新しい active）は、統合をやり直しても WU のブランチを二重に
+/// merge しない（Task のブランチの merge commit は WU のブランチごとに 1 つ）。やり直しは済んだ merge を飛ばし
+/// （`PhaseIntegrated.merged` の `skipped` が両方 true）、`PhaseIntegrated`・統合 WU の done・Task の reviewing と
+/// done はそれぞれ 1 回だけ記録する。
+/// 既存の試験で検出できない理由: `work_units.rs` の `an_interrupted_integration_is_redone_idempotently_after_restart` は
+/// Dispatcher の private field（`integrating`・`infra_backoff`）に触り、旧い統合の検査が終わるまで待ってから落とす
+/// （検査の途中で落ちる順序を作らない）。lease の失効の経路だけを通り、孤児の回収（`reconcile_parallel_tasks`）の
+/// 経路も、やり直しが merge を飛ばしたこと（`skipped`）も、Task の遷移が 1 回ずつであることも見ない。
+#[tokio::test]
+async fn cex_integration_restart_mid_phase_integration_does_not_merge_twice() {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let root = tempfile::tempdir().unwrap();
+    let marks = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = parallel_task(repo.path(), "test -f a.txt && test -f b.txt");
+    let id = task.id;
+    store.insert(&task).unwrap();
+    adopt_blocking_integration_plan(&store, id, marks.path());
+    let adapter = Arc::new(
+        ParallelWuAdapter::new(Duration::ZERO)
+            .with_file("a", "a.txt", "a")
+            .with_file("b", "b.txt", "b"),
+    );
+    let mut d1 = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 2, 2, 2);
+    let first = marks.path().join("first");
+    let s = store.clone();
+    assert!(
+        run_until_state(&mut d1, || first.is_dir()
+            && events_of(&s, id)
+                .iter()
+                .any(|e| matches!(e, Event::IntegrationCheckStarted { .. })))
+        .await
+    );
+    // 落ちる時点: merge は 2 件とも済み、統合の検査の途中（統合 WU は running、`PhaseIntegrated` 無し）。
+    let task_branch = format!("celeris/{id}");
+    let wu_heads: Vec<String> = ["a", "b"]
+        .iter()
+        .map(|k| git_out(repo.path(), &["rev-parse", &format!("celeris-wu/{id}/{k}")]))
+        .collect();
+    let mut parents = merged_parents(repo.path(), &task_branch);
+    parents.sort();
+    let mut heads = wu_heads.clone();
+    heads.sort();
+    assert_eq!(parents, heads);
+    assert_eq!(
+        wu_status_of(&store, id, "integrate-build"),
+        Some(WorkUnitStatus::Running)
+    );
+    assert_eq!(status_of(&store, id), Status::Running);
+    assert!(phase_integrated(&store, id).is_empty());
+    drop(d1);
+
+    // 同じ store・同じ repo で作り直す（落ちた daemon の行は無い）。
+    let mut d2 = restarted_parallel_dispatcher(&store, adapter.clone(), root.path());
+    let s = store.clone();
+    assert!(run_until_state(&mut d2, || terminal(&s, id)).await);
+    assert_eq!(
+        status_of(&store, id),
+        Status::Done,
+        "{:?}",
+        events_of(&store, id)
+    );
+    // WU のブランチごとに merge commit は 1 つだけ（やり直しで二重に merge しない）。
+    let parents = merged_parents(repo.path(), &task_branch);
+    assert_eq!(parents.len(), 2, "{parents:?}");
+    for head in &wu_heads {
+        assert_eq!(parents.iter().filter(|p| *p == head).count(), 1, "{head}");
+    }
+    // やり直しは済んだ merge を飛ばし、統合の完了は 1 回だけ。
+    assert_eq!(
+        phase_integrated(&store, id),
+        vec![vec![("a".to_string(), true), ("b".to_string(), true)]]
+    );
+    let integ = wu_transitions(&store, id, "integrate-build");
+    assert_eq!(
+        integ
+            .iter()
+            .filter(|(to, _)| *to == WorkUnitStatus::Done)
+            .count(),
+        1,
+        "{integ:?}"
+    );
+    assert!(
+        integ.contains(&(WorkUnitStatus::Pending, ORPHAN_TAKEOVER_REASON.to_string())),
+        "{integ:?}"
+    );
+    // Task は 1 回だけ進む（最終レビューも 1 回）。
+    let moves = transitions(&store, id);
+    for to in [Status::Reviewing, Status::Done] {
+        assert_eq!(
+            moves.iter().filter(|(t, _)| *t == to).count(),
+            1,
+            "{to:?}: {moves:?}"
+        );
+    }
+    assert_eq!(
+        count(&store, id, |e| matches!(
+            e,
+            Event::ReviewVerdict { criterion_idx: 0, .. }
+        )),
+        1
+    );
+    // 落ちた daemon の検査を終わらせる（`marks` が消えても止まる）。
+    std::fs::write(marks.path().join("open"), "").unwrap();
+}
+
+/// worker run は作業ツリーの `README.md` を変えて commit し、同じ run の中で target（`main`）にも同じ行を変える
+/// commit を積む（review 前の同期の rebase が衝突する）。integration repair の WU の run は試験が gate を開けるまで
+/// 止まり、開いたら target に rebase して衝突を解く。reviewer run は合格を書く。
+struct ConflictRepairAdapter {
+    repo: PathBuf,
+    /// worker run が target に積んだ commit。
+    target: StdMutex<Option<String>>,
+    /// worker run が作業ツリーに作った commit。
+    before: StdMutex<Option<String>>,
+    /// worker run の作業ツリー（Task の worktree）。
+    worktree: StdMutex<Option<PathBuf>>,
+    /// WU の run の key（起動順）。
+    work_units: StdMutex<Vec<String>>,
+    reviews: AtomicUsize,
+    gate: tokio::sync::Semaphore,
+}
+
+impl ConflictRepairAdapter {
+    fn new(repo: &Path) -> Arc<Self> {
+        Arc::new(ConflictRepairAdapter {
+            repo: repo.to_path_buf(),
+            target: StdMutex::new(None),
+            before: StdMutex::new(None),
+            worktree: StdMutex::new(None),
+            work_units: StdMutex::new(Vec::new()),
+            reviews: AtomicUsize::new(0),
+            gate: tokio::sync::Semaphore::new(0),
+        })
+    }
+
+    fn work_units(&self) -> Vec<String> {
+        self.work_units.lock().unwrap().clone()
+    }
+
+    fn reviews(&self) -> usize {
+        self.reviews.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl WorkerAdapter for ConflictRepairAdapter {
+    fn id(&self) -> &str {
+        "instant"
+    }
+    async fn run(
+        &self,
+        req: RunRequest,
+        _run_id: &str,
+        _limits: RunLimits,
+        _sink: &dyn EventSink,
+    ) -> Result<RunOutcome, AdapterError> {
+        std::fs::create_dir_all(&req.artifacts_dir).unwrap();
+        if req.task.kind == TaskKind::Review {
+            self.reviews.fetch_add(1, Ordering::SeqCst);
+            let verdicts: Vec<serde_json::Value> = (0..8)
+                .map(|criterion| serde_json::json!({"criterion": criterion, "pass": true, "reason": "ok"}))
+                .collect();
+            std::fs::write(
+                req.artifacts_dir.join("review.json"),
+                serde_json::json!({ "verdicts": verdicts }).to_string(),
+            )
+            .unwrap();
+            return Ok(done_outcome());
+        }
+        let cwd = req.cwd().to_path_buf();
+        if let Some(wu) = req.context.work_unit.as_ref() {
+            self.work_units.lock().unwrap().push(wu.key.clone());
+            if let Ok(permit) = self.gate.acquire().await {
+                permit.forget();
+            }
+            let target = self.target.lock().unwrap().clone().unwrap();
+            assert!(!git_ok(&cwd, &["rebase", &target]));
+            std::fs::write(cwd.join("README.md"), "main\ntask\n").unwrap();
+            git_out(&cwd, &["add", "README.md"]);
+            git_out(&cwd, &["-c", "core.editor=true", "rebase", "--continue"]);
+        } else {
+            std::fs::write(cwd.join("README.md"), "task\n").unwrap();
+            git_out(&cwd, &["add", "README.md"]);
+            git_out(&cwd, &["commit", "-q", "-m", "task change"]);
+            *self.before.lock().unwrap() = Some(git_out(&cwd, &["rev-parse", "HEAD"]));
+            *self.worktree.lock().unwrap() = Some(cwd.clone());
+            *self.target.lock().unwrap() = Some(commit_file(&self.repo, "README.md", "main\n"));
+        }
+        std::fs::write(
+            req.artifacts_dir.join("result.json"),
+            serde_json::json!({"summary": CLAIM, "evidence": []}).to_string(),
+        )
+        .unwrap();
+        Ok(RunOutcome {
+            terminal: Terminal::Done {
+                summary: CLAIM.into(),
+                evidence: vec![],
+                usage: None,
+            },
+            exit_code: Some(0),
+        })
+    }
+}
+
+/// `IntegrationRepairScheduled` の `(work_unit_id, target_sha, before_sha, attempt)` の列。
+fn repairs_scheduled(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<(String, String, String, u32)> {
+    events_of(store, id)
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::IntegrationRepairScheduled {
+                work_unit_id,
+                target_sha,
+                before_sha,
+                attempt,
+                ..
+            } => Some((work_unit_id, target_sha, before_sha, attempt)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// 不変条件: （ADR-0120 D1〜D5、ADR-0118 D3）配送の始まる root task の review 前の同期（target への rebase）が衝突したら、
+/// rebase を戻し（作業ツリーは worker の commit のまま clean、target は動かない）、IntegrationRepair の repair WU を
+/// 1 つだけ作る。repair が走っている間は検査も reviewer も起こさず、task は合格・Done・`MergeQueued` にならず、
+/// tick を重ねても 2 つ目の repair を作らない。repair が衝突を解いた後に review をやり直し、target を含む HEAD を
+/// 候補として合格する（`IntegrationRepairResolved` 1 件、reviewer run 1 本）。
+/// 既存の試験で検出できない理由: `target_sync.rs` の `integration_repair_*` は `spawn_review` を直接呼び、
+/// Dispatcher の private field（`reviewing`）と `run_until_idle` を使う。worker run の後の `tick()` の経路で衝突に
+/// 至る順序、repair の run を止めた間に tick が repair を重ねない・reviewer を起こさないこと、配送の行が衝突した候補で
+/// `MergeQueued` にならないことはどれも見ない。
+#[tokio::test]
+async fn cex_integration_sync_conflict_schedules_one_repair_and_never_passes_the_conflict() {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut task = git_review_task(
+        repo.path(),
+        &store,
+        "git merge-base --is-ancestor main HEAD".into(),
+    );
+    deliverable(&store, &mut task);
+    let id = task.id;
+    store.insert(&task).unwrap();
+    let adapter = ConflictRepairAdapter::new(repo.path());
+    let mut d = worktree_dispatcher(store.clone(), adapter.clone(), ws.path(), None);
+    let a = adapter.clone();
+    assert!(run_until_state(&mut d, || a.work_units().len() == 1).await);
+    let target = adapter.target.lock().unwrap().clone().unwrap();
+    let before = adapter.before.lock().unwrap().clone().unwrap();
+
+    // repair の run を止めている間（衝突の直後）。
+    let units = store.work_units_for(id).unwrap();
+    let repairs: Vec<_> = units
+        .iter()
+        .filter(|u| u.kind == task_core::WorkUnitKind::Repair)
+        .collect();
+    assert_eq!(repairs.len(), 1, "{units:?}");
+    let repair = repairs[0].clone();
+    assert_eq!(adapter.work_units(), vec![repair.key.clone()]);
+    assert_eq!(repair.status, WorkUnitStatus::Running);
+    assert_eq!(
+        repairs_scheduled(&store, id),
+        vec![(repair.id.clone(), target.clone(), before.clone(), 1)]
+    );
+    // target は動かず、merge commit も無い。作業ツリーは worker の commit のまま（rebase の途中を残さない）。
+    assert_eq!(git_out(repo.path(), &["rev-parse", "main"]), target);
+    assert!(git_out(repo.path(), &["log", "--merges", "--format=%H", "main"]).is_empty());
+    let wt = adapter.worktree.lock().unwrap().clone().unwrap();
+    assert_eq!(git_out(&wt, &["rev-parse", "HEAD"]), before);
+    assert!(git_out(&wt, &["status", "--porcelain"]).is_empty());
+    assert!(!git_ok(&wt, &["rev-parse", "-q", "--verify", "REBASE_HEAD"]));
+    assert_eq!(
+        std::fs::read_to_string(wt.join("README.md")).unwrap(),
+        "task\n"
+    );
+    // 衝突した候補は検査も reviewer も通らない。
+    assert_eq!(adapter.reviews(), 0);
+    assert_eq!(reviewer_starts(&store, id), 0);
+    assert_eq!(
+        count(&store, id, |e| matches!(e, Event::ReviewVerdict { .. })),
+        0
+    );
+    assert_eq!(
+        count(&store, id, |e| matches!(
+            e,
+            Event::ReviewTargetSynced { .. }
+        )),
+        0
+    );
+    assert!(!reached_done(&store, id), "{:?}", transitions(&store, id));
+    assert!(!merge_queued(&store, id), "{:?}", store.delivery_get(id));
+    assert_eq!(store.get(id).unwrap().unwrap().attempts, task.attempts);
+    // tick を重ねても 2 つ目の repair を作らない（repair の run は走ったまま）。
+    for _ in 0..2 {
+        let report = d.tick().unwrap();
+        assert!(report.in_flight >= 1, "{report:?}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(repairs_scheduled(&store, id).len(), 1);
+    assert_eq!(adapter.work_units().len(), 1);
+    assert_eq!(adapter.reviews(), 0);
+
+    // repair が衝突を解く。review をやり直し、target を含む HEAD を候補にして合格する。
+    adapter.gate.add_permits(1);
+    let s = store.clone();
+    assert!(run_until_state(&mut d, || terminal(&s, id)).await);
+    assert_eq!(
+        status_of(&store, id),
+        Status::Done,
+        "{:?}",
+        events_of(&store, id)
+    );
+    assert_eq!(repairs_scheduled(&store, id).len(), 1);
+    assert_eq!(adapter.work_units(), vec![repair.key.clone()]);
+    assert_eq!(adapter.reviews(), 1);
+    let resolved: Vec<(String, String, String)> = events_of(&store, id)
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::IntegrationRepairResolved {
+                work_unit_id,
+                target_sha,
+                reviewed_sha,
+                ..
+            } => Some((work_unit_id, target_sha, reviewed_sha)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(resolved.len(), 1, "{resolved:?}");
+    assert_eq!(resolved[0].0, repair.id);
+    assert_eq!(resolved[0].1, target);
+    let reviewed = resolved[0].2.clone();
+    assert!(git_ok(
+        repo.path(),
+        &["merge-base", "--is-ancestor", &target, &reviewed]
+    ));
+    assert_eq!(git_out(repo.path(), &["rev-parse", "main"]), target);
+    let row = store.delivery_get(id).unwrap().expect("delivery row");
+    assert_eq!(row.state, task_core::DeliveryState::MergeQueued, "{row:?}");
+    assert_eq!(row.merge_candidate_sha.as_deref(), Some(reviewed.as_str()));
+    assert_eq!(row.target_sha.as_deref(), Some(target.as_str()));
 }

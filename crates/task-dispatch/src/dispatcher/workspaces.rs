@@ -609,7 +609,7 @@ impl Dispatcher {
 
     /// ADR-0036 D1: そのタスクの成果物ディレクトリ（`<dir>/artifacts` か `<dir>/.taskd/artifacts/<task_id>`）。
     /// 判定は `task_core::artifacts`（純粋関数）。アダプタ・レビュー・記憶の読み取りはすべてこれを使う。
-    pub(crate) fn artifacts_dir(&self, task: &Task, workspace_dir: &Path) -> PathBuf {
+    pub(super) fn artifacts_dir(&self, task: &Task, workspace_dir: &Path) -> PathBuf {
         task_core::artifacts::artifacts_dir_for(task, workspace_dir)
     }
 }

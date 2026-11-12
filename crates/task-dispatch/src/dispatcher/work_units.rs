@@ -1174,14 +1174,15 @@ impl Dispatcher {
 
     /// ADR-0074 D1.6（Phase F2b）: checkpoint の mechanical な欄を取る場所（`(artifacts_dir, cwd,
     /// branch, base)`）。WU の worktree を持つ v2 の WU は WU の worktree・WU のブランチ・`base_commit`、
-    /// それ以外は従来どおり Task の作業場所。
-    pub(crate) fn work_unit_checkpoint_site(
+    /// それ以外（WU の無い run を含む）は従来どおり Task の作業場所。
+    pub(super) fn work_unit_checkpoint_site(
         &self,
         task: &Task,
-        wu: &task_core::WorkUnitRow,
+        wu: Option<&task_core::WorkUnitRow>,
     ) -> (Option<PathBuf>, Option<PathBuf>, String, Option<String>) {
         let workspaces = self.task_workspaces_for(task);
-        if let Some(branch) = &wu.branch
+        if let Some(wu) = wu
+            && let Some(branch) = &wu.branch
             && let Some(ws) = &workspaces
         {
             let wu_dir = crate::integration::wu_dir(&ws.task_dir, &wu.key);

@@ -1,6 +1,7 @@
 //! worker run の終了処理（`finish_worker_result` と finalise の失敗の後始末）。同じ transaction の組と `release_quota_if_tracked` はそのまま。ADR-0082 の L3。
 
 use super::*;
+use crate::knowledge_usage::read_site as knowledge_at;
 
 fn repair_git(dir: &Path, args: &[&str]) -> Option<String> {
     let output = std::process::Command::new("git")
@@ -661,7 +662,7 @@ impl Dispatcher {
                 let events_so_far = self.store.events_for(task_id)?;
                 // ADR-0074 D1.6（Phase F2b）: v2 の WU は WU の worktree・ブランチ・base で取る。
                 let (artifacts_dir, cwd_buf, branch, base) =
-                    self.work_unit_checkpoint_site(&task, wu);
+                    self.work_unit_checkpoint_site(&task, Some(wu));
                 let cwd = cwd_buf.as_deref();
                 let activity: Vec<crate::checkpoint::ToolActivity> = events_so_far
                     .iter()
@@ -1010,7 +1011,7 @@ impl Dispatcher {
                 // `blocked(decision)` にする（答えは次の run の前置きの「人の決定」節に入る）。他の unit を指した決定は
                 // その unit だけを止め、この run の完了は妨げない。
                 if wu_reason == "completed" && !reset_only {
-                    let (site_artifacts, _, _, _) = self.work_unit_checkpoint_site(&task, wu);
+                    let (site_artifacts, _, _, _) = self.work_unit_checkpoint_site(&task, Some(wu));
                     if let Some(found) =
                         self.worker_decisions(&task, Some(wu), site_artifacts.as_deref(), &run_id)?
                     {
@@ -1276,7 +1277,7 @@ impl Dispatcher {
         let metrics = run_since.map(|since| task_core::RunMetrics {
             wall_ms: wall_ms_since(since),
             retries: task.attempts,
-            knowledge: crate::knowledge_usage::run_use(self, &task, current_wu.as_ref()),
+            knowledge: knowledge_at(self.work_unit_checkpoint_site(&task, current_wu.as_ref())),
             ..Default::default()
         });
         // ADR-0072 D5/D6/D15（Phase E2）: WU の行の更新（このWU自身 + 伝播で一緒に決まった他のWU）を、

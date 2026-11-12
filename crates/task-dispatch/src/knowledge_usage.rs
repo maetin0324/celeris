@@ -6,7 +6,7 @@
 //! - run の後: 台帳があれば合計（0 回を含む）を `RunMetrics.knowledge` に入れる。無ければ `None`
 //!   （計測していない run）。どの run の数かは daemon が持つ run id で決める（台帳に run id は無い）。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use task_core::KnowledgeUse;
 use task_core::knowledge::usage::{self, ENV_USAGE_FILE, USAGE_FILE_NAME};
@@ -38,20 +38,12 @@ pub(crate) fn env(artifacts_dir: &Path) -> (String, String) {
     )
 }
 
-/// worker run の後の合計。台帳は run を起こしたときの artifacts（WU の run は WU の artifacts。
-/// `work_unit_checkpoint_site` と同じ規則）にある。
-pub(crate) fn run_use(
-    dispatcher: &crate::dispatcher::Dispatcher,
-    task: &task_core::Task,
-    wu: Option<&task_core::WorkUnitRow>,
+/// worker run の後の合計。`site` は `Dispatcher::work_unit_checkpoint_site` の結果（先頭が run を起こした
+/// ときの artifacts。WU の run は WU の artifacts）。
+pub(crate) fn read_site(
+    site: (Option<PathBuf>, Option<PathBuf>, String, Option<String>),
 ) -> Option<KnowledgeUse> {
-    let artifacts = match wu {
-        Some(wu) => dispatcher.work_unit_checkpoint_site(task, wu).0,
-        None => dispatcher
-            .task_dir(task)
-            .map(|dir| dispatcher.artifacts_dir(task, &dir)),
-    };
-    read(artifacts.as_deref())
+    read(site.0.as_deref())
 }
 
 /// run の後の合計。台帳が無ければ `None`（計測していない run）。

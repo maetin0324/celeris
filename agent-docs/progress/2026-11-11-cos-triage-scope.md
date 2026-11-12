@@ -75,6 +75,7 @@ updated: 2026-11-12
 
 ## 証拠（提出時の HEAD で実行。attempt 4）
 - `bash scripts/dev/test-affected.sh`（開始 load 46、1428 秒）→ exit 100。nextest 8328 件中 8327 件合格、web 712 件・control-ts 134 件合格、script bundle SKIP 0 件。落ちた 1 件は範囲外の task-worker `ssh::tests::run_command_times_out_and_kills_the_ssh_process_group`（偽 ssh の子 process が残ったと判定）。この差分は task-worker に触れておらず、同じ HEAD で単独に 3 回実行して 3 回とも合格（各 2.0 秒）。負荷の高い時の flaky として未解決に書く。
+- 同じ HEAD（進捗の証拠の commit の後）で `bash scripts/dev/test-affected.sh` を再実行（開始 load 42、939 秒）→ exit 0。nextest 8328 件すべて合格、web 712 件・control-ts 134 件合格、script bundle SKIP 0 件。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。`sh scripts/dev/progress-index.sh --check` → exit 0。
 - `bash scripts/dev/check-health.sh` → verdict pass、exit 0（size.responsibility-growth は chat module 8000 行・store module と `request_row` は base と同じ行数に収めた）。
 - `cargo run -p task-core --example dump-cos-digest-fixtures` で fixture を作り直し（生成部は不変、`hand/decision/*` が 48 行増）、control-ts の `cos_digest.test.ts` 53 件と web の `chat-card.test.tsx` 24 件が合格。

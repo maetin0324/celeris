@@ -45,10 +45,19 @@ updated: 2026-11-12
 
 ## 証拠（提出時の HEAD で実行）
 
-- `cargo nextest run -p task-dispatch -E 'test(/structure_guard|route_state|routing_runtime|class_route|route_select|lane_assist|cos_slot_wait|cos_launch_cross|cos_capacity|account|route_launch|jev|snapshot|source_account/)'`: 186 passed。
-- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
-- `bash scripts/dev/check-health.sh`: exit 0（repo_health_gate: all checks passed）。
-- `bash scripts/dev/test-affected.sh`: exit 0。
+- `cargo nextest run -p task-dispatch -E 'test(/structure_guard|route_state|routing_runtime|class_route|route_select|lane_assist|cos_slot_wait|cos_launch_cross|cos_capacity|account|route_launch|jev|snapshot|source_account/)'`: 186 passed（初回の提出時）。
+- `bash scripts/dev/test-affected.sh`: exit 0（celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch、3747 passed、564 秒、load 15〜27）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。`sh scripts/dev/progress-index.sh --check`: ok。
+- `python3 scripts/dev/repo-health/repo_health.py --repo . --base "$CELERIS_WU_BASE" --head HEAD --policy-version 1`: exit 0（verdict=pass、worsened=0）。
+
+## 初回の提出の check の不合格と直し
+
+- `celeris:repo-health/1`（基準は WU の base）: `Dispatcher` の method の数が base の 394 から 395 に増え（`route_select.rs` に足した
+  `route_holds`）、`size.responsibility-growth` が worsened になった。手元の `check-health.sh` は基準が `git merge-base HEAD main` で、
+  own-cluster・own-maint の減少を含めて比べるので通っていた。`route_holds` を `Dispatcher::route_state` の本体に畳み、394 に戻した。
+- `bash scripts/dev/test-affected.sh`: exit 100。`celeris-campaign::dagbench_process recovery_notice_continuation` が 600 秒で TIMEOUT。
+  単独では 5 回とも pass（30〜45 秒）、上の再実行でも pass。`RoutingRuntime::route_state` は帳簿をまとめて lock するが、他の lock の持ち手
+  （llm-proxy・routing_guardrail・sinks）は帳簿を 1 つずつしか持たないので、lock の順序による待ち合いは起きない。負荷による時間切れと見た（原因は未確認）。
 
 ## 未確認・提案
 

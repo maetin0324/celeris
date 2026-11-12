@@ -152,7 +152,7 @@ pub struct RecordArgs {
     /// `high` / `medium` / `low`。
     #[arg(long)]
     pub confidence: Option<String>,
-    /// 取り込む先の KB 相対パス（省略なら人が accept するときに `scope` と題名から決まる）。
+    /// 取り込む先の KB 相対パス（省略なら取り込むとき（日次整理の適用か人の accept）に `scope` と題名から決まる）。
     #[arg(long)]
     pub path: Option<String>,
     /// 候補に pin するチャット添付の id（CoS run だけ。API が provenance として記録する）。
@@ -182,7 +182,9 @@ fn configured_root(explicit: Option<&Path>) -> Option<PathBuf> {
 }
 
 /// ADR 2026-11-12-knowledge-usage-per-run D1: KB の操作の入口で 1 回を数える（env
-/// `CELERIS_KNOWLEDGE_USAGE_FILE` が無ければ何もしない）。結果はそのまま返す。
+/// `CELERIS_KNOWLEDGE_USAGE_FILE` が無ければ何もしない）。結果はそのまま返す。CoS run の `search`・`get` は
+/// KB の根を直接読み API を通らないので、API の受け側（`POST /api/v1/cos/knowledge-use`）に 1 回を送る。
+/// CoS run の `record` は API を通るので [`run_record_cos`] は受け側だけが数える。
 pub(crate) fn counted(
     op: kb::KnowledgeOp,
     result: Result<ExitCode, CliError>,
@@ -460,19 +462,9 @@ fn parse_confidence(raw: Option<&str>) -> Result<Option<Confidence>, CliError> {
 
 /// CoS run の `record`（ADR 2026-10-07 cos-live-fixes D2）: 本文を標準入力から読み、
 /// `POST /api/v1/knowledge/inbox` を `/cos/operations` で呼ぶ。KB の根には触らない。
-/// ADR 2026-11-12-knowledge-usage-per-run D1: CoS の `record` も入口で 1 回を数える。
+/// ADR 2026-11-12-knowledge-usage-per-run D1: 数えるのは API の受け側（operation `knowledge.record`）で、
+/// ここでは数えない（CoS が API を直接呼んでも同じ 1 か所で数える）。
 pub(crate) fn run_record_cos(
-    args: &RecordArgs,
-    options: &super::cos_ops::Options,
-    credential: &str,
-) -> Result<ExitCode, CliError> {
-    counted(
-        kb::KnowledgeOp::Record,
-        run_record_cos_uncounted(args, options, credential),
-    )
-}
-
-fn run_record_cos_uncounted(
     args: &RecordArgs,
     options: &super::cos_ops::Options,
     credential: &str,
@@ -491,7 +483,7 @@ fn run_record_cos_uncounted(
         outln!("{json}");
     } else {
         outln!(
-            "recorded {} → {}（operation {} {}。人が確認してから正本に入ります）",
+            "recorded {} → {}（operation {} {}。日次整理の検証を通ると正本に入ります）",
             result["path"].as_str().unwrap_or("-"),
             result["target"].as_str().unwrap_or("-"),
             operation["id"].as_str().unwrap_or("-"),
@@ -603,7 +595,7 @@ fn run_record(args: &RecordArgs) -> Result<ExitCode, CliError> {
                     None => outcome.target.clone(),
                 };
                 outln!(
-                    "recorded {} → {how}（人が確認してから正本に入ります）",
+                    "recorded {} → {how}（日次整理の検証を通ると正本に入ります）",
                     outcome.path
                 );
             }

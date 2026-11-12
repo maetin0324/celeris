@@ -92,7 +92,7 @@ Live View の grant/check/read は owner attestation を入力するため除外
 | POST | `/cos/operations` | `recursive_cos` | 既存の再帰禁止。操作 envelope 内から CoS 制御 API を呼ばない。override は人の取消・差し戻し専用。 |
 | POST | `/cos/operations/{o}/override` | `recursive_cos` | 既存の再帰禁止。操作 envelope 内から CoS 制御 API を呼ばない。override は人の取消・差し戻し専用。 |
 | POST | `/cos/threads/{t}/checkpoint` | `recursive_cos` | 既存の再帰禁止。操作 envelope 内から CoS 制御 API を呼ばない。override は人の取消・差し戻し専用。 |
-| POST | `/cos/knowledge-use` | `recursive_cos` | CoS run が自分の KB の操作の回数を数える CoS 制御 API（ADR 2026-11-12-knowledge-usage-per-run D1）。操作 envelope 内から呼ばない。 |
+| POST | `/cos/knowledge-use` | `recursive_cos` | CoS run の `celerisctl knowledge search|get`（API を通らない読み取り）の回数を数える CoS 制御 API（ADR 2026-11-12-knowledge-usage-per-run D1。`record` は operation `knowledge.record` の受け側が数える）。操作 envelope 内から呼ばない。 |
 | POST | `/tasks/{id}/browser/live/{run}/{session}/check` | `browser_credential_attestation` | 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。 |
 | POST | `/tasks/{id}/browser/live/{run}/{session}/grant` | `browser_credential_attestation` | 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。 |
 | POST | `/tasks/{id}/browser/live/{run}/{session}/read` | `browser_credential_attestation` | 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。 |

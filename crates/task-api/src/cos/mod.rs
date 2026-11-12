@@ -9,7 +9,7 @@ pub mod basis;
 pub(crate) mod goal_guard;
 pub mod inbox;
 /// ADR 2026-11-12-knowledge-usage-per-run: CoS run の KB の操作の回数（API の受け側）。
-mod knowledge_use;
+pub(crate) mod knowledge_use;
 pub mod operations;
 pub(crate) mod ops;
 pub mod override_op;

@@ -619,7 +619,7 @@ token_file = "api.token"
 | 235 | POST | `/script/behavior-changes/{spec_sha256}/revoke` | 承認を取り消す（認証された誰でも。§3.134.5） | `ScriptBehaviorChangeRevokeResult` | store `script_behavior_change_revoke` |
 | 236 | POST | `/script/domains/{domain}/exhaustive-runs` | `lane_rules` の全入力を daemon の isolate で流す網羅を始める（人・外部 operator の主体だけ。ADR 2026-11-04 D7。§3.134.6） | `ScriptExhaustiveRun`（202） | `ScriptGenerationControl::exhaustive_start` |
 | 237 | GET | `/script/domains/{domain}/exhaustive-runs` | 網羅の証拠の立場と最新の行（認証された誰でも。§3.134.6） | `ScriptExhaustiveRunList` | store `script_exhaustive_runs`・`script_exhaustive_standing` |
-| 238 | POST | `/cos/knowledge-use` | CoS run の KB の操作 1 回を数える（body `{op: search\|get\|record, ok}`。run は credential が決める。ADR 2026-11-12-knowledge-usage-per-run） | 200 `{run_id, knowledge_use}` | `crate::cos::knowledge_use` |
+| 238 | POST | `/cos/knowledge-use` | CoS run の `celerisctl knowledge search\|get`（KB の根を直接読み API を通らない）の 1 回を数える（body `{op: search\|get, ok}`。`record` は operation `knowledge.record` の受け側が数えるので 422。run は credential が決める。`GET /knowledge/tree`・`GET /knowledge/page` も CoS run credential の呼び出しを受け側で数える。ADR 2026-11-12-knowledge-usage-per-run D1） | 200 `{run_id, knowledge_use}` | `crate::cos::knowledge_use` |
 
 browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
 

@@ -711,6 +711,10 @@ async fn create_operation(
     let instructed_by = req.instructed_by.clone();
     let routine = req.basis.clone();
     let mut human_required = wait.as_ref().and_then(|w| w.human_required.clone());
+    // ADR 2026-11-12-knowledge-usage-per-run D1: `knowledge.record` は KB の受け側として caller の run に数える。
+    let knowledge_record = matched
+        .as_ref()
+        .is_some_and(|m| m.action == "knowledge.record");
     let operation = state
         .blocking(move |store| {
             if let Some(existing) = store
@@ -820,7 +824,12 @@ async fn create_operation(
             super::goal_guard::settle_after(store, &audit, &pass, &routine, &wait, &result);
             result
         })
-        .await?;
+        .await;
+    if knowledge_record {
+        let ok = operation.is_ok();
+        super::knowledge_use::note(&state, Some(&caller), task_core::KnowledgeOp::Record, ok).await;
+    }
+    let operation = operation?;
     state.chat.events.notify_waiters();
     Ok(operation_response(operation))
 }

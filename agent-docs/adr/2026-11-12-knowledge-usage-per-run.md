@@ -12,12 +12,17 @@ curation は 10-28 以降の適用 101 回で新規 450・統合 2・削除 502�
 
 ### D1 数える場所は KB の操作の入口（`celerisctl knowledge`）と API の受け側
 
-`celerisctl knowledge search`・`get`・`record`（CoS run の API 経由の `record` を含む）が 1 回ごとに数える。
+1 回の KB の操作を、その操作が通る 1 か所だけで数える。
 
-- worker run: env `CELERIS_KNOWLEDGE_USAGE_FILE` があれば、その file に 1 行の JSON（`{"op":"search"|"get"|"record","ok":true|false}`）を追記する。
-- CoS run（`CELERIS_COS_RUN_CREDENTIAL` がある）: `POST /api/v1/cos/knowledge-use`（body は同じ `{op, ok}`）を run credential で送る。API の受け側が credential から run を決めて数える。
+- worker run: `celerisctl knowledge search`・`get`・`record` が、env `CELERIS_KNOWLEDGE_USAGE_FILE` があれば、その file に 1 行の JSON（`{"op":"search"|"get"|"record","ok":true|false}`）を追記する。
+- CoS run（run credential で API を呼ぶ）: API の受け側が credential から run を決めて数える（`task_api::cos::knowledge_use::note`）。受け側は次の 4 つ。
+  - `GET /api/v1/knowledge/tree`（CoS の常設の文脈が案内する検索。`q` の無い一覧も KB を探す操作として数える）→ `search`
+  - `GET /api/v1/knowledge/page` → `get`
+  - `POST /api/v1/cos/operations` の `knowledge.record`（`POST /api/v1/knowledge/inbox`）→ `record`。`celerisctl knowledge record` の CoS の経路もここを通るので、CLI は数えない。
+  - `POST /api/v1/cos/knowledge-use`（body `{op, ok}`。`op` は `search`・`get` だけで、`record` は 422）: CoS run の `celerisctl knowledge search`・`get` は KB の根を直接読み API を通らないので、入口がここに 1 回を送る。
+- 人・web・worker の token の API 呼び出しは数えない（CoS run の credential が無い）。
 
-どちらも無いとき（人の手元、試験の外）は何も数えない。数えるのに失敗しても KB の操作は失敗にしない（計測の失敗で作業を止めない。失敗は stderr に 1 行出す）。
+どれも無いとき（人の手元、試験の外）は何も数えない。数えるのに失敗しても KB の操作は失敗にしない（計測の失敗で作業を止めない。失敗は stderr か daemon の log に 1 行出す）。
 
 数えるのは op と成否だけ。検索語・path・本文は書かない（秘密の写しを増やさない）。台帳の形と読み取りの規則は `task_core::knowledge::usage` の 1 か所に置き、CLI と daemon が共に使う。
 
@@ -33,7 +38,8 @@ CoS run: CoS の起動（dispatcher の `cos_chat`）は変えない。run crede
 
 ### D3 保存先
 
-- worker run（worker・reviewer・planner）: `RunMetrics.knowledge`（`KnowledgeUse { search, get, record }`）。`WorkerFinished` の `metrics` から `runs.metrics_json` に入る。env を渡した run は 0 回でも `Some`。`None` は「計測していない run」（この ADR より前の run と、env を渡さない経路）。読み取り率の分母は `Some` の run だけにする。
+- worker run（`WorkerFinished.role` が `worker` の run）: `RunMetrics.knowledge`（`KnowledgeUse { search, get, record }`）。`WorkerFinished` の `metrics` から `runs.metrics_json` に入る。env を渡した run は 0 回でも `Some`。`None` は「計測していない run」（この ADR より前の run と、env を渡さない経路）。読み取り率の分母は `Some` の run だけにする。
+- reviewer・planner・設計 review の run は計測しない（`RunMetrics.knowledge` は `None`）。これらの run は task の artifacts を worker と共有し、followups の env（台帳の env を運ぶ経路）を渡さない。prompt にも KB の入口（2026-11-11-worker-knowledge-entry）を入れていない。report の行には出るが、計測した run が 0 本なので率は出ない。計測するときは run ごとの台帳の置き場（`runs/<run_id>/` など）を決めてこの ADR に付記する。
 - CoS run: `chat_runs.knowledge_use_json`（migration 0125 で足す列）。値の形は worker と同じ `KnowledgeUse`。意味は同じで、置き場だけが run の表に合わせて分かれる。新しい行は列の既定値で 0 回から始まり（計測した run）、migration より前の行は NULL（計測していない run）。書き込みと読み取りは `task_core::KnowledgeUseStore`（`knowledge` の module。`chat` の module の SqliteStore の method 数は閾値を超えているので足さない）。版 124 は別の task の branch が使っているので予約にする（`RESERVED_VERSIONS`。123 は main に入った）。
 
 events への追加は `RunMetrics` の任意欄だけで、既存の event は書き換えない（events は追記専用）。
@@ -54,11 +60,11 @@ events への追加は `RunMetrics` の任意欄だけで、既存の event は�
 ## 撤去
 
 - worker の prompt の索引の列挙は 2026-11-11-worker-knowledge-entry で撤去済み。
-- 「候補は人が確認してから正本に入る」という古い説明は同 ADR の変更で直した。
+- 「候補は人が確認してから正本に入る」という古い説明は、前置き・guide・API 文書・architecture-map（同 ADR の変更）と、`celerisctl knowledge record` の出力・`--path` の help、`docs/ops/cos-chat.md`、知識抽出の prompt（`task_core::knowledge`）で直した。
 
 ## 検証
 
 - D1: CLI の試験で、env を渡した search・get・record が台帳に op ごとに 1 行ずつ書かれ、env が無ければ書かれないこと。
-- D2・D3: dispatcher の試験で、run の後に台帳の合計が `WorkerFinished.metrics.knowledge` に入ること（前の run の台帳を混ぜない）。task-api の試験で、`POST /api/v1/cos/knowledge-use` が credential の run の `knowledge_use_json` に数え、body の run id と人の token を受けず、NULL の run を数えないこと。
+- D2・D3: dispatcher の試験で、run の後に台帳の合計が `WorkerFinished.metrics.knowledge` に入ること（前の run の台帳を混ぜない）。task-api の試験（`tests/cos_knowledge_use.rs`）で、CoS run の credential の `GET /knowledge/tree`・`GET /knowledge/page`（404 は失敗として数える）・operation `knowledge.record`・`POST /api/v1/cos/knowledge-use` が credential の run の `knowledge_use_json` に数えられ、人の token の同じ呼び出し・body の run id・knowledge-use の `record` を受けず、NULL の run を数えないこと。
 - D4: store の試験の DB で、agent の種類・案件ごとの率と curation の比率を固定する。
 - D5: 同じ話題の既存ページがある新規の提案を検査が拒否し、統合の提案は通る試験。

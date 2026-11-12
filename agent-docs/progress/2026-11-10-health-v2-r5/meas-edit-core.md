@@ -62,13 +62,18 @@ build の秒は「task-core の lib と全 test target の作り直しと link�
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
 
 - `sh agent-docs/progress/2026-11-10-health-v2-r5/v8-target-check.sh` → exit 0（v8 の build output 1 件）。計測の前に実行した。
-- 上記の compare → exit 0（746 秒、1 試行）。commit は「phase 1: meas-edit-core: task-core の base と HEAD の build と edit→verify を負荷上限 24 の同じ run で測る（両方の組を採用）」。
+- 上記の compare → exit 0（746 秒、1 試行）。commit は「phase 1: meas-edit-core: task-core の base と HEAD の build と edit→verify を負荷上限 24 の同じ run で測る（両方の組を採用）」と「phase 1: meas-edit-core: 検査の結果を進捗に書く」。
 - `bash agent-docs/progress/2026-11-10-health-v2-r5/measure.sh --validate agent-docs/progress/2026-11-10-health-v2-r5/remeasure-edit-core.json && bash agent-docs/progress/2026-11-10-health-v2-r5/measure.sh --require-compare agent-docs/progress/2026-11-10-health-v2-r5/remeasure-edit-core.json task-core` → exit 0。
 - `bash agent-docs/progress/2026-11-10-health-v2-r5/measure.sh summary --check agent-docs/progress/2026-11-10-health-v2-r5/meas-edit-core.md agent-docs/progress/2026-11-10-health-v2-r5/remeasure-edit-core.json` → exit 0。
 
 ## 検査（提出時の HEAD で実行。WU の基準は `$CELERIS_WU_BASE`）
 
-- 下の「検査の結果」に書く。
+- `bash scripts/dev/test-affected.sh` → exit 0（141 秒。docs のみの変更として試験対象なし、repo_health_gate は合格）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（53 秒）。
+- `cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check` → exit 0。
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → exit 0（変更 path はすべて `agent-docs/progress/2026-11-10-health-v2-r5/` の下）。
+- 上記の summary --check → exit 0。
 
 ## 未解決
 

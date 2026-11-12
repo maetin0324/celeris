@@ -1148,8 +1148,6 @@ pub struct Dispatcher {
     /// ADR 2026-11-11 dispatcher-state-ownership D1: disk・scratch・build cache・repo target の掃除と、中止された
     /// task の作業場所の片付けの状態の owner（`crate::host_maintenance`。入口は `housekeeping.rs`・`maintenance.rs`）。
     maint: crate::host_maintenance::HostMaintenance,
-    /// ADR 2026-11-11 dispatcher-state-ownership D6: 試験用フック（時計・遅延・停止点・研究 ablation）の唯一の置き場。
-    /// 試験用の切替は `tests::hooks::TestHooks` に足す（`tests/structure_guard.rs` が属性の数を見る）。
     #[cfg(test)]
     test_hooks: tests::hooks::TestHooks,
     /// ADR-0074 D1.5（Phase F2）: 鍵は (task, WU)。Task 単位の問いは `running_for_task`。

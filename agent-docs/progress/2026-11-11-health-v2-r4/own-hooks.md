@@ -50,11 +50,32 @@ updated: 2026-11-12
 - 範囲の check（計画の check 5）: 不合格。範囲外は `crates/task-dispatch/src/dispatcher/tests/cos_live_fix_d4.rs` と
   `crates/task-dispatch/src/dispatcher/tests/credential_e2e.rs` の 2 件。
 
+## 2 回目の run（run 01M78XZH60）: celeris の check の不合格の直し
+
+前の run の後に celeris が走らせた check のうち 2 件が不合格だった。
+
+- `celeris:repo-health/1`: `size.responsibility-growth`（`dispatcher.rs` の本体の行 2139 が閾値 2000 超え、WU base では 2137）と
+  `source-size`（`check-source-size.py --base $CELERIS_WU_BASE` が同じ file で exit 1）。原因は、`test_hooks` の field の前に足した
+  2 行の doc comment が本番の行として数えられたこと（`#[cfg(test)]` より前の注釈は試験の範囲に入らない）。前の run の
+  `check-health.sh` は base が `git merge-base HEAD main` で、そこでは値が大きいので落ちなかった。同じ説明は
+  `tests/hooks.rs` の module 注釈にあるので、`dispatcher.rs` の 2 行を消した。
+- 範囲の check: 下の「未解決事項」のとおり、正規表現が数字を含む file 名を許さない。コードでは直せないので plan_issue で申告する。
+
+再検査（この run の作業ツリーで実行）:
+
+- `python3 scripts/dev/check-source-size.py --root . --base $CELERIS_WU_BASE --baseline scripts/dev/source-size-baseline.json`: exit 0
+  （0 failure、3 debt warning、1 reasoned exception）。
+- `python3 scripts/dev/repo-health/repo_health.py --repo scripts/dev --base $CELERIS_WU_BASE --head worktree --policy-version 1`: exit 0
+  （verdict=pass、fail_grade=0、new=0、worsened=0）。
+- `cargo nextest run -p task-dispatch -E 'test(structure_guard_) | test(phase_effect_ab) | test(integration_ready_race)'`: 24 件すべて合格。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+
 ## 未解決事項
 
 - 範囲の check の正規表現 `crates/task-dispatch/(src|tests)/[a-z_/]+\.rs$` は file 名の数字を許さない。`cos_live_fix_d4.rs`（3 行）と
   `credential_e2e.rs`（1 行）は `d.test_now` を直接書くので、field を消すと同じ変更で `d.test_hooks.now` に直す必要がある。
-  範囲の外に回避策は置けない（規約 9）ので、plan_issue で許可の正規表現を `[a-z0-9_/]+\.rs$` に広げることを申告した。
+  範囲の外に回避策は置けない（規約 9）ので、plan_issue で許可の正規表現を `[a-z0-9_/]+\.rs$` に広げることを申告する
+  （2 回目の run でも check は同じ正規表現のままだった）。
 - `crates/celeris/tests/root_done_summary.rs` の注釈が `test_now` を名指しする（範囲外。意味は「dispatcher の注入時計は外から差せない」で
   今も正しい）。直すなら record の unit で `test_hooks.now` に直す。
 

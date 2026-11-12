@@ -395,3 +395,14 @@ profile の高 risk の class と capability-map.json の owner path に、こ�
   試験の field 直参照（`source_cooldowns`・`account_limits`）は `#[cfg(test)]` の method（`insert_source_cooldown_for_test`・
   `set_stored_limit_for_test`）に置き換えた。
 - 試験 `structure_guard_routing_runtime` が D2 の 1〜3・7 と、純粋 module が `Dispatcher`・store・時計・lock の語を持たないことを source から確かめる。
+
+## 付記 2026-11-12: own-hooks の実装（TestHooks・EffectAblation）
+
+- `Dispatcher` の `#[cfg(test)]` の field は `test_hooks: tests::hooks::TestHooks` の 1 個（`crates/task-dispatch/src/dispatcher/tests/hooks.rs`）。
+  `TestHooks` は `now`・`policy_clock`・`worker_start_delay`・`halt_after_wu_transition`・`cos_reserved_sources`・
+  `before_integration_start`・`ablation` を持つ。D6 の `PhaseAblation` は `EffectAblation`（`dispatcher/tests/phase_effect_ab.rs`）の名で置いた。
+- 本体が ablation を読むのは `test_hooks.ablation` の 1 か所で、読む行は今と同じ `#[cfg(test)]` の行（本番の build に型も分岐も無い）。
+  write-set gate と stale 優先の判断はまだ `impl Dispatcher` の method なので、引数で渡すのは判断を純粋関数に分ける unit（admit・review-decide）が行う。
+- 試験 `dispatcher/tests/structure_guard.rs` が、`Dispatcher` の struct の本体で条件に `test` を含む `#[cfg(...)]` 属性が 1 個より多いこと、
+  一覧 `OWNER_STRUCTS`（今は `ClusterRuntime`・`HostMaintenance`・`RoutingRuntime`）の struct に 1 個でもあることを落とす。field の名前は見ない。
+  owner を作る unit は自分の struct をこの一覧に足す。owner ごとの guard にあった同じ assert は消した。

@@ -36,11 +36,13 @@ commit（件名）:
 - `phase 2: keep the held runs only in the daemon's memory and drop the leftover min_free_disk_mb references`（attempt 2。review の指摘 2 件を直した。(1) 初版は待たせている run を pool の `admission.json` に書き、daemon の status もそれを読んでいた。verify の daemon は同じ pool で dispatch の pass を回すので、空の一覧で本番の status を上書きした。file を廃止し、daemon の snapshot がメモリから埋める。記録の刈り込みは候補を照合する pass だけで行う。(2) 消した欄 `min_free_disk_mb` が `tests/e2e/tests/account_pool_scenarios.rs` の試験 config に残り、release gate の `nextest --workspace` で celeris が読み込みエラーになっていた。`min_free_disk_pct = 0` に直し、`DispatchConfig.min_free_disk_pct`・`disk_watch.rs`・celerisctl の `scratch_tests.rs`・`dispatcher/tests/build_cache.rs` の説明も直した）
 - `phase 2: 進捗に attempt 2 の検査の結果を書く`
 - `phase 3: count only present targets for the repo forecast, grow only targets a run writes now, fix the targets_max_gb bound`（attempt 3）
+- `phase 3: 進捗に attempt 3 の検査の結果を書く`
 
 ## 証拠
 
 （提出時の HEAD で実行。基準は `git merge-base HEAD main`）
 
+- attempt 3（main は動いておらず rebase なし）: `bash scripts/dev/test-affected.sh` exit 0（1189 秒、開始時 load average 約 36）。nextest 6749 passed・23 skipped、web 103 file・710 passed、repo_health_gate all checks passed。`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0、`sh scripts/dev/progress-index.sh --check` ok。`cargo nextest run -p task-worker -p task-dispatch --lib -E 'test(/scratch/) | test(/disk_forecast/) | test(/disk_admission/) | …'` 116 passed（新しい試験 `samples_count_present_targets_and_grow_only_where_a_run_writes_now`・`only_running_and_reviewing_owners_count_as_written_now` を含む）。`UPDATE_SCHEMA=1 cargo test -p task-api --lib committed_schema_matches_generated` 1 passed、`node web/scripts/gen-types.mjs` で生成型を作り直した。
 - `bash scripts/dev/test-affected.sh`: exit 0（attempt 2、1039 秒、開始時 load average 約 40）。対象は celeris・celeris-campaign・celeris-mcp・celerisctl・e2e・llm-proxy・task-api・task-dispatch・task-ops・task-worker と web。nextest 6739 passed・23 skipped、web 104 file・712 passed、repo_health_gate all checks passed。
 - `cargo build -p celeris -p celerisctl --bins && cargo nextest run -p e2e --test account_pool_scenarios`: 3 passed（review で落ちた `account_selection_follows_headroom…` を含む。試験 config を `min_free_disk_pct = 0` に直した後）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。

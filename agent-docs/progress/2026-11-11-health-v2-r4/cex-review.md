@@ -1,10 +1,153 @@
 ---
 title: "健全性v2 R4 cex-review: review・統合・権限・予算の反例試験"
 tasks: [01M75475JER9MAVHY9BTHCRXH9]
-status: running
+status: completed
 updated: 2026-11-12
 ---
 # 健全性v2 R4 cex-review: review・統合・権限・予算の反例試験
+
+完了日: 2026-11-12
+
+## 概要
+
+- 結論: `cex_` で始まる反例試験 16 本を固定し、提出時の HEAD で 16 本とも合格した。guard を一時的に外す確認は 18 件で、17 件は試験が落ちた。落ちなかったのは GH3 の 1 件だけ（cancel の試験を落とす単独の guard は未特定）。今の実装で成り立たない反例は 2 件で、試験では assert せず「未解決」に再現手順を書いた。
+- 基準は `git merge-base HEAD main`（各 WorkUnit の基準は `$CELERIS_WU_BASE`）。この基準からの `crates/` の変更は `crates/task-dispatch/src/dispatcher/tests/` の 3 file だけ（`cex_review_authority.rs` は新規、`tests/mod.rs` は `mod cex_review_authority;` の宣言、`cex_lease_restart.rs` は先行の unit cex-lease の分）。本体（dispatcher・store・task-ops・task-core・migration）は変えていない。guard の確認の一時変更は試験の後に `git checkout --` で戻し、commit していない。
+- 節と unit: `## 節: review`（unit cex-review）、`## 節: integration`（cex-integration）、`## 節: human`（cex-human）、`## 節: credential・budget`（cex-wait-budget）。この unit（cex-record）は試験 file と本体を変えず、この記録の冒頭の総括だけを書いた。
+- 試験の規約は `## 試験の規約` の節のとおり。加えて、試験の中の `for _ in 0..N` は待ちではなく、状態に到達した後の各 tick の検査（止めた状態が tick を重ねても動かないこと）。その間の `tokio::time::sleep(50ms)` は async の譲りで、thread を止める sleep ではない。
+
+## 全試験の表（16 本）
+
+「落とした guard」は、一時的に外すとその試験が落ちた guard（下の総表の記号）。
+
+| # | 試験 | 守る不変条件（要約） | 節 | 落とした guard |
+|---:|---|---|---|---|
+| 1 | `cex_review_late_pass_on_the_old_candidate_does_not_pass_the_rebased_candidate` | 候補 X を検査中の reviewer の合格が、rebase 後の候補 Y を合格・`MergeQueued`・Done にしない。Y では reviewer をやり直す | review | G1・G2・G3・G4 |
+| 2 | `cex_review_worker_claim_does_not_override_a_failing_check` | worker の成功の申告だけでは、落ちた決定的な検査を覆して Done にならない | review | G3・G7 |
+| 3 | `cex_review_worker_claim_is_not_done_before_or_against_the_reviewer` | reviewer の判定の前は reviewing のまま。reviewer が不合格なら failed | review | G3・G4 |
+| 4 | `cex_review_resync_cap_halts_and_starts_no_more_reviewer_runs` | 再同期は上限で止まり `ReviewResyncHalted` を 1 件残す。止めた後は review を起こさない | review | G1・G4・G5・G6 |
+| 5 | `cex_integration_restart_mid_phase_integration_does_not_merge_twice` | 統合の検査の途中で再起動しても merge commit は WU ごとに 1 つ。`PhaseIntegrated`・Done は各 1 回 | integration | GI1・GI2・GI3 |
+| 6 | `cex_integration_sync_conflict_schedules_one_repair_and_never_passes_the_conflict` | review 前の同期の衝突は rebase を戻し、repair を 1 つだけ作る。repair の間は reviewer・Done・`MergeQueued` が無い | integration | GC1・GC2・GC3 |
+| 7 | `cex_integration_restart_after_the_integration_unit_is_done_does_not_integrate_again` | 統合 WU の done の後に再起動しても統合をやり直さず、最終レビューは 1 回 | integration | GI3 |
+| 8 | `cex_human_cancel_precedes_successful_worker_completion` | 人の cancel の後に届いた成功の完了が Cancelled を上書きせず、review・統合・delivery に進まない | human | 無し（GH3 は検出せず） |
+| 9 | `cex_human_pause_survives_completion_and_holds_continuation` | run の完了が pause を消さず、continuation の次の run を起こさない | human | GH1 |
+| 10 | `cex_human_unanswered_question_stays_blocked_across_housekeeping` | 未回答の質問は tick・CoS 不在の退避を経ても Blocked のまま。回答・Done が無い | human | GH2 |
+| 11 | `cex_credential_wait_holds_task_and_unit_across_retry_deadline` | credential の未登録・検証の一時失敗の間、task と WU は時間だけで run を起こさない | credential・budget | GW1 |
+| 12 | `cex_credential_cancel_after_resume_claim_never_dispatches` | resume の claim の後の cancel を tick が上書きせず、run はゼロ | credential・budget | GW1 |
+| 13 | `cex_budget_tokens_after_credential_resume_stops_continuation_and_review` | token 上限ちょうどで止まり、Done の申告でも failed。continuation・reviewer は起きない | credential・budget | GB1 |
+| 14 | `cex_budget_tree_usd_limit_holds_continuation` | 木の USD 上限で continuation・reviewer を止め、決定要求を 1 回だけ残す | credential・budget | GB2 |
+| 15 | `cex_budget_unknown_cost_holds_continuation` | 単価の無い model の run を費用ゼロにせず、費用不明で continuation を止める | credential・budget | GB2 |
+| 16 | `cex_budget_credential_resume_does_not_bypass_tree_stop` | credential の resume が成功しても、USD 上限と費用不明による木の停止を迂回しない | credential・budget | GW1・GB2 |
+
+各試験の直前の doc comment に「不変条件:」と「既存の試験で検出できない理由:」がある（awk の検査で 16 本・不備 0）。詳しい不変条件は各節の表にある。
+
+## guard を一時的に外すと落ちることの総表
+
+一時変更は本体の 1〜2 行で、`crates/task-core/src/store/` と `crates/task-core/migrations/` には触れていない。build の数は review 4 回、integration 4 回、human 2 回、credential・budget 2 回。
+
+| guard | 節 | 一時変更（要約） | 結果 |
+|---|---|---|---|
+| G1 | review | `spawn_review`: 検査後の snapshot の照合を無効にする | 試験 1・4 が落ちた |
+| G2 | review | `reviewer_reuse`: 重なりの判定を無効にする | 試験 1 が落ちた |
+| G3 | review | `on_review_finished`: `all_pass` を常に true にする | 試験 1・2・3 が落ちた |
+| G4 | review | `review_task`: `Check::Reviewer` を reviewer なしで合格にする | 試験 1・3・4 が落ちた |
+| G5 | review | `spawn_review`: 再同期の上限で `return Ok(false)` しない | 試験 4 が落ちた |
+| G6 | review | `target_resync_exhausted`: 上限を `MAX_TARGET_RESYNCS + 1000` にする | 試験 4 が落ちた |
+| G7 | review | `review_task`: `Check::Command` を常に合格にする | 試験 2 が落ちた |
+| GI1 | integration | `integrate`: 取り込み済みの WU のブランチを飛ばす判定を無効にする | 試験 5 が落ちた（`skipped` の記録で検出。merge commit の数は git 自身も防ぐ） |
+| GI2 | integration | `reconcile_parallel_tasks`: 持ち主の居ない running の統合 WU を pending に戻さない | 試験 5 が落ちた |
+| GI3 | integration | `reconcile_parallel_tasks`: running の v2 Task を Ready に戻さない | 試験 5・7 が落ちた |
+| GC1 | integration | `spawn_review`: repair を作った後に `continue` する | 試験 6 が落ちた |
+| GC2 | integration | `try_integration_repair`: 常に上限に達したと判定する | 試験 6 が落ちた |
+| GC3 | integration | task-ops `changes.rs`: `rebase --abort` と clean の照合を外す | 試験 6 が落ちた |
+| GH1 | human | task-core `wait.rs` `halt_waits`: paused_at の判定を無効にする | 試験 9 が落ちた |
+| GH2 | human | `worker_finish.rs`: 質問の完了を `WorkerDone` にする | 試験 10 が落ちた |
+| GH3 | human | `worker_finish.rs`: 入口の `lease_matches` の照合を無効にする | 16 本中の当時の 10 本すべて合格（検出せず） |
+| GW1 | credential・budget | `credential_gate_hold`: 待ちの登録後に `Ok(false)` を返す | 試験 11・12・16 が落ちた |
+| GB1 | credential・budget | `worker_finish.rs`: token 上限の `>=` を `>` にする | 試験 13 が落ちた |
+| GB2 | credential・budget | `dispatch_run.rs`: `tree_limit_hold_for` を呼ばない | 試験 14・15・16 が落ちた |
+
+試験 8（cancel）を落とす guard は見つかっていない。試験 1〜7・9〜16 は少なくとも 1 つの guard で落ちることを確かめた。
+
+### 確かめられなかった guard（全節）
+
+| 節 | guard | 理由 |
+|---|---|---|
+| review | `on_review_finished` の `status != Reviewing` による判定の破棄（割り込みの変種） | `abort_stale_runs`・判定の破棄・検査後の snapshot の照合（G1）の 3 重で、1 つだけ外して落ちる試験を作れていない |
+| review | `bound_reviewer_pass` の同期前 HEAD への束縛 | 試験 1 の形では同期前の HEAD が X で束縛を満たす。一時変更は実行していない |
+| review | 配送の merge 直前の候補の照合 | `crates/celeris` の delivery で、書いてよい範囲の外 |
+| integration | `on_integration_finished` の古い結果の破棄 | 試験の再起動は旧 dispatcher を drop し、旧い完了が届かない。draining の引き継ぎは cex-lease の範囲 |
+| integration | `start_integration` の状態の判定と `try_start_work_unit_integration` の比較更新 | dispatch の gate が先に止め、この判定まで届かない |
+| integration | 段の統合の merge の衝突（`schedule_merge_repair`） | 衝突の試験は review 前の同期（ADR-0120）だけで書いた |
+| integration | 配送の Merging の途中の再起動 | `crates/celeris` の delivery で範囲の外 |
+| human | GH3（`worker_finish.rs` 入口の `lease_matches`） | 単独で外しても試験 8 は合格。`abort_stale_runs`・状態機械の遷移の検査・失敗時の lease 照合が残る。どの防御が止めたかは未確認 |
+| human | 人の回答・計画の decision の適用経路 | 試験 10 は worker の質問だけで、回答の適用は対象外 |
+| credential・budget | resume の claim の後の古い resumer の再キューの書き込み | store の比較更新は一時変更の禁止範囲（store）で外していない |
+| credential・budget | 単価計算・費用不明の集計の個々の分岐 | GB2 は木の gate 全体を外す確認で、分岐ごとには外していない |
+| credential・budget | USD 上限の後に Done を返す経路の final reviewer の停止 | 試験 14・15 は turns 切れから continuation に進む経路だけ |
+
+## 未解決
+
+今の実装で成り立たない反例が 2 件ある。どちらも本体は直さず、試験では assert していない。
+
+1. 統合 WU を done にした後、Task の遷移の前で落ちると `PhaseIntegrated` が 1 件も記録されない（節: integration）。
+   - 再現手順: 試験 7 と同じ。段 `build` の WU `a`・`b` の統合が merge を 2 件済ませ、統合の検査の途中で落ちた跡を作り、store に統合 WU の running → done（reason `integrated`）を直接書く。同じ store で新しい active の dispatcher を作り、Task が終端になるまで tick する。
+   - 観測: Task は ready → reviewing → done（`review_pass`）。`integration_check_finished` と `phase_integrated` は 0 件。merge は二重にならない。
+   - 原因の見込み: `finish_phase_integration` が統合 WU の done と、Task の遷移・`PhaseIntegrated` を別の書き込みにしている。
+2. 計画の無い（atomic）task は、credential の検証が一時失敗しても秘密 file の存在だけで run を起こす（節: credential・budget）。
+   - 再現手順: `credential_dispatcher` で未登録の task を tick して credential_wait を作る。`put_secret` で file と保存 event を作り、注入時計の resumer を `VerifyOutcome::Transient` で 1 回処理する。claim せずに次の tick を呼ぶ。
+   - 観測: `TickReport.dispatched = 1`、runs 索引に Worker・Running の行が 1 本、`Transitioned` ready → running（`dispatch`）と `WorkerStarted`。検証の成功・resume を経ていない。
+   - 原因: `credential_gate_hold` は `is_registered` が真なら、開いた wait の検証状態を見ずに通す。atomic task は WU の Blocked 行を持たない。
+
+その他の未確認の事項:
+
+- ADR 2026-11-11-dispatcher-state-ownership D7 の表で unit cex-review に割り当てた反例のうち、次の 2 つは試験にしていない。「段の repair か人の replan が先に確定した後に、旧 review と旧統合の完了が遅れて届く」（書いたのは target が進む変種と再起動の変種だけ）。「quota group の 2 つの終わりが続けて届く」（quota の試験は無い）。
+- 各節の test-affected では、control-ts の offline install が失敗し、bundle に依存する 59 件が試験の中で早期 return した（human・credential・budget の節）。この 59 件は実行済みと扱わない。
+
+## 提案
+
+R4 の分割（ADR 2026-11-11-dispatcher-state-ownership の D1・D3・D7）で、これらの試験を次の owner の回帰検査にする。16 本の実行は 3.3 秒なので、R4 の各 unit の check には `cargo nextest run -p task-dispatch -E 'test(/cex_review_authority::/)'` の全 16 本を入れ、下の表は「その unit が壊しうる試験」として使う。
+
+| 試験 | owner（D1・D3） | 回帰検査にする unit |
+|---|---|---|
+| 1〜4（`cex_review_`） | `review_decision::plan_review`・`judge_review`、同期と遷移は `ExecutionCoordination`、review run の登録は `RunSupervisor` | review-decide、own-supervisor |
+| 5・7（`cex_integration_restart_`） | 統合の process は `ExecutionCoordination`、持ち主の居ない run の回収は `RunSupervisor` | own-supervisor、review-decide の前の統合の移動 |
+| 6（`cex_integration_sync_conflict_`） | `review_decision::plan_review`（同期の衝突から repair）、同期は `ExecutionCoordination` | review-decide |
+| 8・10（cancel・未回答の質問） | `run_settlement::settle`、lease の照合は `RunSupervisor` | settle、own-supervisor |
+| 9（pause） | `dispatch_admission::admit` | admit |
+| 11・12（`cex_credential_`） | `dispatch_admission::admit`（credential の判定の結果を組み合わせる） | admit |
+| 13（token 上限） | `run_settlement::settle`、quota は `RoutingRuntime` | settle、own-quota |
+| 14〜16（木の USD 上限・費用不明） | `dispatch_admission::admit` | admit、own-quota |
+
+- 反例 1 は、統合の完了を `ExecutionCoordination` に移すときに 1 つの store の書き込みにする（または再起動の照合が `PhaseIntegrated` の無い done の統合 WU を記録し直す）。その unit で試験 7 に `PhaseIntegrated` 1 件の assert を足す。
+- 反例 2 は、admit の unit で atomic task も開いた credential_wait の検証状態を確かめるようにし、試験 11 に atomic task の変種の assert を足す。credential は高 risk の class なので設計 brief が要る。
+- 試験 8 を落とす guard を特定するため、settle の unit で `lease_matches` と `abort_stale_runs` を同じ owner に寄せた後、片方だけを外す確認をする。review の割り込みの変種も、`abort_stale_runs` と `on_review_finished` の破棄を同じ owner に寄せた後に足す。
+- D7 の未着手の 2 つ（replan の後の遅れた完了、quota group の続けての終わり）は own-quota・review-decide の前に試験として足す。
+- `cargo clippy -p task-dispatch --tests -- -D warnings` に残る他の試験 file の既存の 4 件は、別 task で直すか検査に `--tests` を足すかを決める（節: review の提案と同じ）。
+
+## 変更（commit の件名）
+
+- `phase 3: pin review authority counterexample tests (cex-review)` — 試験 1〜4 と節: review
+- `phase 3: pin restart and conflict-repair integration counterexample tests (cex-integration)`・`phase 3: pin the restart after the integration unit is done (cex-integration)` — 試験 5〜7
+- `phase 3: record the cex-integration tests, guard checks and the lost PhaseIntegrated counterexample`・`phase 3: record the cex-integration evidence at the submitted HEAD` — 節: integration
+- `phase 1: 人の cancel・pause・未回答質問の反例試験を固定する` — 試験 8〜10 と節: human
+- `phase 1: credential 待ちと予算の反例試験を固定する`・`phase 1: credential・budget の検証記録を確定する` — 試験 11〜16 と節: credential・budget
+- `phase 1: cex-review の記録を仕上げる` — この総括（cex-record）
+
+## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
+
+- `cargo nextest run -p task-dispatch -E 'test(/cex_review_authority::/)' --no-fail-fast`: 16 本すべて合格・1670 本 skip、exit 0（実行 3.3 秒）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `cargo fmt --all -- --check`: exit 0。
+- `sh scripts/dev/progress-index.sh --check`: exit 0。
+- doc comment の awk 検査（「不変条件:」と「既存の試験で検出できない理由:」）: tests=16、bad=0、exit 0。
+- `cex_review_authority.rs` の Dispatcher の private field（`running`・`reviewing`・`integrating`・`review_resync_halted`・`infra_backoff` など）の参照: 0 件。thread を止める sleep（`std::thread::sleep`）: 0 件。
+- `git diff --name-only $(git merge-base HEAD main) HEAD -- crates/`: `crates/task-dispatch/src/dispatcher/tests/` の 3 file だけ（本体の変更 0）。
+- この記録の 7 桁以上の 16 進の語: 0 件（commit は件名で挙げた）。
+- `sh "$CELERIS_WU_SCOPE_PATHS"`: この unit の変更 path はこの記録だけ。
+- `bash scripts/dev/test-affected.sh` はこの unit では走らせていない。段の統合（integrate-cex）の check が走らせる。この unit は試験 file と本体を変えず、記録だけを変えた。
+- 上の検査は、この記録を仕上げた commit の後の HEAD（提出時の HEAD）で再実行した。
+
+## 試験の規約
 
 規約（`cex_lease_restart.rs` と同じ）: 試験は `crates/task-dispatch/src/dispatcher/tests/cex_review_authority.rs` に置く。Dispatcher の private field に触らず、store の行（task・lease・WU・`runs` 索引・delivery・credential_wait 等）と event と `tick()` の戻り値（`TickReport`）だけを見る。待ちは `tests/mod.rs` の `run_until_state` と出来事待ちで、保険は壁時計（`STATE_WAIT_GUARD`）。tick の回数の上限で待たない。file の中に tick を回数で回して待つ helper と、thread を止める sleep を書かない。run の終わりは fake adapter の gate（semaphore・`Notify`）で試験が決め、時刻は注入した時計か store の時刻で作る。CPU 負荷は使わない。他の試験 file は変えない。各試験の直前の doc comment に「不変条件:」と「既存の試験で検出できない理由:」を書く。今の実装で成り立たない反例は本体を直さず、assert を入れずに「反例」に再現手順と観測した event を書く。
 
@@ -204,7 +347,7 @@ GH1・GH2 を同じ build で確認し、10 本中 8 本合格・上の 2 本失
 
 ### 完了・未解決・提案
 
-human の完了日: 2026-11-12。後続の credential・budget と全節の記録は別 unit のため、ファイル全体の status は running のまま。
+human の完了日: 2026-11-12。ファイル全体の status は、全節の記録を仕上げた unit cex-record で completed にした。
 
 commit 件名: `phase 1: 人の cancel・pause・未回答質問の反例試験を固定する`。
 
@@ -233,7 +376,6 @@ commit 件名: `phase 1: 人の cancel・pause・未回答質問の反例試験�
 | `cex_budget_tokens_after_credential_resume_stops_continuation_and_review` | credential 解除後の run が token 上限ちょうどで turns 切れ・Done を返しても failed。run は一本だけで、停止理由が WorkerFinished に残る |
 | `cex_budget_tree_usd_limit_holds_continuation` | 木の既知費用が上限ちょうどなら、終了した worker の continuation を止め、決定要求を一度だけ記録する |
 | `cex_budget_unknown_cost_holds_continuation` | 単価の無い model の終了済み run をゼロ費用にせず、費用不明の件数を決定要求に書いて continuation を止める |
-
 | `cex_budget_credential_resume_does_not_bypass_tree_stop` | credential の検証・resume が成功しても、既知費用の上限到達と費用不明の両方で追加 run ゼロ。停止理由は DecisionRequested に残る |
 
 ### guard を一時的に外すと落ちることの確認
@@ -279,7 +421,7 @@ commit 件名: `phase 1: 人の cancel・pause・未回答質問の反例試験�
 
 ### 完了・未解決・提案
 
-credential・budget の完了日: 2026-11-12。ファイル全体の status は後続 unit があるため running のまま。
+credential・budget の完了日: 2026-11-12。ファイル全体の status は、unit cex-record で completed にした。
 
 commit 件名: `phase 1: credential 待ちと予算の反例試験を固定する`、`phase 1: credential・budget の検証記録を確定する`。
 

@@ -1,8 +1,8 @@
 ---
 title: CoS 不在の直接通知（CosFallback）を一次対応の後だけ送る（全種類）
 tasks: [01M756VNCZAB8DSPKB1RCPJXTB]
-status: done
-updated: 2026-11-11
+status: blocked
+updated: 2026-11-12
 ---
 # CoS 不在の直接通知（CosFallback）を一次対応の後だけ送る（全種類）
 
@@ -64,6 +64,11 @@ ADR: [2026-11-11-cos-fallback-timing](../adr/2026-11-11-cos-fallback-timing.md)
   - `git diff --quiet "$CELERIS_WU_BASE" HEAD -- crates/ web/ config/celeris.example.toml` → exit 0（この WorkUnit の変更は文書だけ）。
   - `sh scripts/dev/check-doc-links.sh` → exit 0（ok）、`sh scripts/dev/check-adr-numbers.sh` → exit 0（423 files）、`sh scripts/dev/progress-index.sh --check` → exit 0。
   - test-affected は走らせていない（人の指示。final review が走らせる）。
+- 本番への移行の直し（2026-11-12。提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）:
+  - `sh scripts/dev/check-doc-links.sh` → exit 0、`sh scripts/dev/check-adr-numbers.sh` → exit 0（425 files）、
+    `sh scripts/dev/progress-index.sh --check` → exit 0。
+  - `git diff --quiet "$CELERIS_WU_BASE" HEAD -- crates/ web/ config/` → exit 0（変更は進捗ファイルだけ）。
+  - test-affected は走らせていない（docs のみ。人の指示。final review が走らせる）。
 
 ## 未解決
 - review の決定的 check（上限 600 秒、再試行 1200 秒）は、この task の test-affected（task-core を変えるので 14 crate・nextest 8227 件・web・control-ts・ts-verify）に足りない。attempt 2 の review は 1200 秒の時間切れで落ちた。load average 48〜80 の host では 26〜27 分かかる。D2 の取り下げは task-core の store の transaction の中に要るので、対象を縮める変更はしていない。負荷の低い時の再検査か、check の上限の延長が要る（人の判断）。
@@ -75,15 +80,32 @@ ADR: [2026-11-11-cos-fallback-timing](../adr/2026-11-11-cos-fallback-timing.md)
   拾わない理由は log（`CoS triage launch skipped a thread with pending items`、`reason=`）に残る。
 - 送信中（POST の最中）の fallback は取り下げられない。CoS の escalate がその間に来ると 2 通になりうる（窓は POST 1 回分）。
 - fallback が書いた hand-off の行と統括 CoS への要約依頼は、取り下げの後も残る。
+- 配送の失敗（2026-11-12）: この task の head は main に取り込まれたが、release の準備は gate（fmt・nextest・clippy・build・web）の
+  合格の後、verify で新しい celeris が起動せずに落ちた。staging の `logs/celeris-new.log` は
+  `` failed to parse config: unknown field `unavailable_after_secs` ``。原因は本番 config（`~/.config/celeris/config.toml`）の
+  `[cos.triage]` に、この task で消した `unavailable_after_secs = 120` が残っていること（`verify.sh` は本番 config をそのまま読ませる）。
+  破壊的変更の方針どおりなので、互換の分岐は足さない。人がその行を消すまで、配送は verify で落ち続ける（人の書き換え待ち）。
+  手順は「本番への移行」の 1〜4。
 
 ## 本番への移行
-人が実行する手順（worker は本番に触らない）:
-1. 本番 config（`~/.config/celeris/celeris.toml`）の `[cos.triage]` から `unavailable_after_secs = 120` の行を消す。
-   `authorization_unavailable_after_secs` を書いていれば `fallback_after_secs` に名前を変える（既定でよければ消す）。
-   旧い欄が残っていると新しい release は読み込みエラーで起動しない。
-2. 確認: `grep -n "unavailable_after_secs" ~/.config/celeris/celeris.toml` が何も出さないこと。release の切り替え後に
-   `/api/v1/health` が ok で、`journalctl --user -u 'celeris@*'` に config の読み込みエラーが無いこと。
-3. KB の skill cos-inbox-triage の写しを使っているなら、`config/skills/cos-inbox-triage/SKILL.md`（§7・§11）に差し替える
+人が実行する手順（worker は本番の config・DB・process に触らない）。本番 config は `~/.config/celeris/config.toml`
+（`scripts/selfdeploy/lib.sh` の `SD_CONFIG`。`verify.sh` はこの file を `--config` でそのまま新しい release に読ませる。
+`docs/ops/selfdeploy.md` §8）。
+1. release の準備と verify をやり直す前に、`~/.config/celeris/config.toml` の `[cos.triage]` から
+   `unavailable_after_secs = 120` の行を消す。いまの release の既定も 120（この task より前の
+   `crates/celeris/src/config/cos.rs` の `default_unavailable_after_secs`）なので、消してもいまの daemon の動きは変わらない。
+   `authorization_unavailable_after_secs` を書いていれば、それも同じく先に消す。旧い既定は `max_wall_secs + 300`
+   （既定 1200 秒）で、書いた値がこれと違うときだけ、昇格までの認可の件の安全網が既定に戻る。
+2. `fallback_after_secs` は昇格の後まで書かない。いまの release の `CosTriageConfig` は `deny_unknown_fields` なので、
+   先に書くといまの release が読み込みエラーで起動しなくなる。新しい既定（`max_wall_secs + 300`）でよければ昇格の後も書かない。
+3. やり直しの経路（`docs/ops/selfdeploy.md` §9）: この task が review に合格すると、配送が既定ブランチへの取り込みの後に
+   release と verify を準備し直す。準備のログは `<releases_dir>/.deliveries/01M756VNCZAB8DSPKB1RCPJXTB/<sha>/prepare.log`。
+   task が done のまま準備が走らないときは、管理 API `POST /tasks/{id}/rereview` に `{"expected_status":"done"}` を送ると、
+   実装をやり直さず現在の commit を再判定する。
+4. 確認: `grep -n "unavailable_after_secs" ~/.config/celeris/config.toml` が何も出さないこと。verify の後に
+   staging の `logs/celeris-new.log`（本番では `/local/celeris/state/staging/logs/celeris-new.log`）に
+   `failed to parse config` などの config の読み込みエラーが無いこと。
+5. KB の skill cos-inbox-triage の写しを使っているなら、`config/skills/cos-inbox-triage/SKILL.md`（§7・§11）に差し替える
    （policy_version は 11 のまま）。
 
 ## 提案

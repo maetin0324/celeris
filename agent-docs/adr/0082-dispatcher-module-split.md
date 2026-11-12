@@ -69,3 +69,12 @@ L0（facade の型と free helper）← L1 ← L2 ← L3 ← L4 ← facade の `
 クラスタの解決」に、`cluster_job_wait` の行は「durable wait の行と task・WU の再開」に直し、`cluster_runtime` の行（層は owner）を足した。
 子 module の型の可視性を変えない（上の「結果」）という前提は、`dispatcher` の外の owner には当てはまらない。owner の型は
 `pub(crate)` で、field は private のまま method で読む。
+
+## 付記 2026-11-12: disk・scratch・target の保守の状態の owner を facade の外へ出した（R4 own-maint）
+
+[ADR 2026-11-11 dispatcher-state-ownership](2026-11-11-dispatcher-state-ownership.md) D1・D2 に従い、disk guard・disk 監視・scratch pool の
+GC・build cache と repo target の掃除・中止された作業場所の片付けの状態（10 field）と処理を
+`crates/task-dispatch/src/host_maintenance.rs` の `HostMaintenance` に移した。`HostMaintenance` は `dispatcher` module の外にあり、
+`Dispatcher` を引数に受けない。module map の `housekeeping` の行は「`HostMaintenance` を呼ぶ入口と、verify の判定・承認と通知 feed の
+照合・検査の `CARGO_TARGET_DIR`」に直し、`maintenance` の行（保守 executor と disk 監視の設定の入口）と `host_maintenance` の行
+（層は owner）を足した。

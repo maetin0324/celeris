@@ -353,3 +353,24 @@ profile の高 risk の class と capability-map.json の owner path に、こ�
 - owner の外の値（store・`[[clusters]]`・cooldown・`--mode verify`・単調時計・tick の間隔）は `ClusterInputs` で受ける。単調時計は
   `Dispatcher::monotonic_clock` が返す closure で、`monotonic_now` と同じ時計（試験の差し替えを含む）を使う。
 - 試験 `structure_guard_cluster_runtime` が D2 の 1〜3・7 を source から確かめる。
+
+## 付記 2026-11-12: own-maint の実装（HostMaintenance）
+
+- `HostMaintenance`（`crates/task-dispatch/src/host_maintenance.rs`）は 10 field を持つ: D1 の表の host-maintenance の
+  `disk_low`・`disk_ready`・`disk_watch`・`removing_build_caches`・`removing_repo_targets`・`repo_target_gc_at`・`scratch` と、表で
+  `Dispatcher`（組み立て）とした `target_sweep`・`target_sweep_scope`、表で `ExecutionCoordination` とした `task_workspaces`。
+  理由: unit own-maint の objective がこの 3 件を移す field に挙げ、受け入れ条件が「挙げた field が `Dispatcher` から消え
+  `HostMaintenance` 1 個になる」だから。`target_sweep`・`target_sweep_scope` を読むのは保守 executor と repo target の掃除だけで、
+  `Dispatcher` の setter（celeris の配線は変えない）が `HostMaintenance` の setter に渡す。`task_workspaces` を書くのは run の起動
+  （`remember_task_workspaces`）と中止の片付けだけ。ExecutionCoordination を作る unit が、表どおりに移すかをそこで決める。
+- `disk_ready` は表どおり `HostMaintenance` に置いた。facade の `tick` は `refresh_disk_ready` を drain より前に呼び、他の module は
+  `disk_ready()` で読む。
+- 表で host-maintenance の `health_inventory`（cron の棚卸しの Busy の印）と `script_compare`（TS の比較の状態）は、unit own-maint の
+  objective に挙がっていないので `Dispatcher` に残した。
+- 実行中の run と判定中の review の作業場所を消さない条件は、`Dispatcher::tasks_in_flight`（`running` の鍵の task と `reviewing` の鍵）を
+  入口が組んで `HostMaintenance::cleanup_cancelled_worktrees` に渡す。片付けの判断は純粋関数 `plan_workspace_cleanup`
+  （走っている → 触らない、中止 → 消す、終端 → 残して未コミットを 1 行記録、task が無い → 記録だけ落とす）。
+- owner の外の値（store・`[scratch]`・`shared_build_cache`・build cache と releases の dir・`min_free_disk_mb`・workspace の root・
+  prune の秒数・`--mode verify`・注入時計の値）は `MaintenanceInputs` で受ける。保守 executor の失敗は `MaintenanceError`
+  （store と scratch pool の lock）で返し、入口が今と同じ `DispatchError` の variant に写す。
+- 試験 `structure_guard_host_maintenance` が D2 の 1〜3・7 を source から確かめる。

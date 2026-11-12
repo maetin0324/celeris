@@ -69,6 +69,11 @@ updated: 2026-11-12
   （verdict=pass、fail_grade=0、new=0、worsened=0）。
 - `cargo nextest run -p task-dispatch -E 'test(structure_guard_) | test(phase_effect_ab) | test(integration_ready_race)'`: 24 件すべて合格。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+- commit「phase 1: dispatcher.rs の test_hooks の前の注釈を消し、WU base 比の本体の行を増やさない」の後の HEAD で:
+  `bash scripts/dev/check-health.sh` exit 0（verdict=pass、fail_grade=0、worsened=0）、`sh scripts/dev/progress-index.sh --check` exit 0、
+  `bash scripts/dev/test-affected.sh` exit 0（対象 celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch、nextest 3750 件合格・
+  11 件 skip、壁時計 445 秒、開始 load 0.7・終了 load 12）。
+- 範囲の check は同じ 2 file で exit 1。許可の正規表現を `[a-z0-9_/]+\.rs$` にした写しでは範囲外の path が 0 件。
 
 ## 未解決事項
 

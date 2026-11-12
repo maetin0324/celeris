@@ -60,13 +60,18 @@ build の秒は「task-dispatch の lib と全 test target の作り直しと li
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
 
 - `sh agent-docs/progress/2026-11-10-health-v2-r5/v8-target-check.sh` → exit 0（v8 の build output 1 件）。計測の前に実行した。
-- 上記の compare → exit 0（645 秒、1 試行）。
+- 上記の compare → exit 0（645 秒、1 試行）。commit は「phase 1: meas-edit-dispatch: task-dispatch の base と HEAD の build と edit→verify を負荷上限 24 の同じ run で測る（両方の組を採用）」と「phase 1: meas-edit-dispatch: 検査の結果を進捗に書く」。
 - `bash agent-docs/progress/2026-11-10-health-v2-r5/measure.sh --validate agent-docs/progress/2026-11-10-health-v2-r5/remeasure-edit-dispatch.json && bash agent-docs/progress/2026-11-10-health-v2-r5/measure.sh --require-compare agent-docs/progress/2026-11-10-health-v2-r5/remeasure-edit-dispatch.json task-dispatch` → exit 0（計画の check と同じコマンド）。
-- `bash agent-docs/progress/2026-11-10-health-v2-r5/measure.sh summary --check agent-docs/progress/2026-11-10-health-v2-r5/meas-edit-dispatch.md agent-docs/progress/2026-11-10-health-v2-r5/remeasure-edit-dispatch.json` → 下の検査に結果を書く。
+- `bash agent-docs/progress/2026-11-10-health-v2-r5/measure.sh summary --check agent-docs/progress/2026-11-10-health-v2-r5/meas-edit-dispatch.md agent-docs/progress/2026-11-10-health-v2-r5/remeasure-edit-dispatch.json` → exit 0。
 
 ## 検査（提出時の HEAD で実行。WU の基準は `$CELERIS_WU_BASE`）
 
-- 検査の結果は commit「phase 1: meas-edit-dispatch: 検査の結果を進捗に書く」で書く。
+- `bash scripts/dev/test-affected.sh` → exit 0（138 秒。docs のみの変更として試験対象なし、repo_health_gate は合格）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（53 秒）。
+- `cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check` → exit 0。
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → exit 0（変更 31 path はすべて `agent-docs/progress/2026-11-10-health-v2-r5/` の下）。
+- 上記の summary --check → exit 0。
 
 ## 未解決
 

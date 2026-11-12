@@ -971,7 +971,7 @@ impl Dispatcher {
                     commands,
                     reusable: Default::default(),
                     workspace: (index != 0).then(|| {
-                        limits.wrap(
+                        limits.check_workspace(
                             LocalWorkspace::new(&dir)
                                 .with_work_dir(repo.dir.clone())
                                 .with_cargo_env(review_check_env.clone()),
@@ -1006,7 +1006,7 @@ impl Dispatcher {
                     Box::new(ssh)
                 }
                 // ADR 2026-11-12-host-check-slots D3: local の検査だけ host の枠で包む（remote は包まない）。
-                None => limits.wrap(
+                None => limits.check_workspace(
                     LocalWorkspace::new(&dir)
                         .with_work_dir(review_work_dir.unwrap_or_else(|| dir.clone()))
                         .with_cargo_env(review_check_env),

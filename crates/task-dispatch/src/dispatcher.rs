@@ -78,9 +78,8 @@ use task_worker::{
     NodeContext, OrgNodeContext, PROTOCOL_VERSION, PriorReview, Reachability, RecentWork,
     RoleContext, RunContext, RunLimits, RunOutcome, RunRequest, SshSettings, SshWorkspace,
     SyncMode, Terminal, WorkerAdapter, WorkerMessage, Workspace, WorkspaceError,
-    check_slots::{CheckLimits, SlotSource},
-    control_master_alive_blocking, remote_dir_is_resolved, remote_exec_instructions,
-    resolve_remote_dir,
+    check_slots::CheckLimits, control_master_alive_blocking, remote_dir_is_resolved,
+    remote_exec_instructions, resolve_remote_dir,
 };
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -361,9 +360,8 @@ fn rustc_version(dir: &std::path::Path) -> Option<String> {
 /// ADR-0041 D5: この celeris が**面倒を見てよいタスク**の述語。`None`（既定）は「全部」＝従来どおり。
 ///
 /// 検証（`--mode verify`）の celeris は、ここに「`genre = "smoke"` で、かつアダプタが `fake`」を渡す。
-/// dispatch だけでなく、**ストア上の他のタスクの状態を変えうる経路すべて**（期限切れリースの回収、
-/// `reviewing` の拾い上げ）で同じ述語を使う。手元で起こした run の後始末はこの述語に関係なく続ける
-/// （自分が起こしたものは必ず自分が畳む）。
+/// dispatch だけでなく、**ストア上の他のタスクの状態を変えうる経路すべて**（期限切れリースの回収、`reviewing` の拾い上げ）
+/// で同じ述語を使う。手元で起こした run の後始末はこの述語に関係なく続ける（自分が起こしたものは必ず自分が畳む）。
 pub type TaskFilter = Arc<dyn Fn(&Task) -> bool + Send + Sync>;
 
 /// RFC 3339 の文字列（デーモンのスナップショット用）。書式化に失敗することは実質無いが、その場合は空文字列。
@@ -468,10 +466,9 @@ pub struct DispatchConfig {
     pub kill_grace: Duration,
     /// `Command` チェック 1 件あたりの上限。
     pub review_timeout: Duration,
-    /// ADR 2026-11-12-host-check-slots D3: review・WU・段の統合の local の重い検査が取る枠の取得元。本番は daemon の
-    /// 起動時に env から 1 回だけ決める（`SlotSource::from_env`）。dispatcher は検査の度に env を読まない。`None` は枠の
-    /// dir を決められない（起動時に warn 済み）で、検査を包まない。設定の再読み込み（`apply_dispatch_config`）では変えない。
-    pub check_slots: Option<SlotSource>,
+    /// ADR 2026-11-12-host-check-slots D3: 重い検査の枠の取得元。daemon の起動時に env から 1 回決め、検査の度に env を
+    /// 読まない（`SlotSource::from_env`）。`None` は枠の dir を決められず（起動時に warn 済み）、検査を包まない。
+    pub check_slots: Option<task_worker::check_slots::SlotSource>,
     /// ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D4: 再同期の上限で止めた review を、target の
     /// 先頭 commit がこれだけ古ければ（他の取り込みが止んだ）自動で再開する。
     pub review_resync_quiet: Duration,
@@ -897,10 +894,9 @@ struct IntegrationEntry {
     handle: JoinHandle<()>,
 }
 
-/// ADR-0072 D14/D6・E4 (g) / Phase F5-fix2: WU の `checks` を走らせている run（`spawn_work_unit_checks`
-/// が spawn した検査。run 自身は `running` から既に外れている）。`in_flight` に数え（draining の
-/// インスタンスが検査の途中で exit して完了を失わないため）、lease の照合では「生きている run」と
-/// みなす。
+/// ADR-0072 D14/D6・E4 (g) / Phase F5-fix2: WU の `checks` を走らせている run（`spawn_work_unit_checks` が spawn
+/// した検査。run 自身は `running` から既に外れている）。`in_flight` に数え（draining のインスタンスが検査の途中で
+/// exit して完了を失わないため）、lease の照合では「生きている run」とみなす。
 ///
 /// ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）D1: draining になったら検査を止めて手を離す
 /// （`hand_off_checks_in_hand`）ので、WU・検査の数・run の終端（`Done`）・quota の持ち主も持つ。
@@ -1833,6 +1829,38 @@ impl Dispatcher {
             + self.health_inventory.in_flight()
     }
 
+    /// ADR 2026-10-22-dynamic-config D2: 設定ファイルから組み直した `DispatchConfig` のうち、動的な欄を稼働中の
+    /// dispatcher に入れる。各判断点が `self.config` を読むので、反映の単位は欄ごとの次の tick・次の run から。
+    /// 起動時にしか決められない欄（`clusters`・`accounts`・`workspace_roots`・`memory_dir`・`releases_dir`・
+    /// `containers`・`knowledge`・build cache・scratch・worktree の接頭辞・検査の枠 `check_slots`）は触らない。
+    pub fn apply_dispatch_config(&mut self, new: DispatchConfig) {
+        let c = &mut self.config;
+        c.delivery = new.delivery;
+        c.source_error_cooldown = new.source_error_cooldown;
+        c.config_max_concurrency = new.config_max_concurrency;
+        c.lease_grace = new.lease_grace;
+        c.idle_timeout = new.idle_timeout;
+        c.kill_grace = new.kill_grace;
+        c.review_timeout = new.review_timeout;
+        c.review_resync_quiet = new.review_resync_quiet;
+        c.plan_auto_accept = new.plan_auto_accept;
+        c.retry_backoff_base = new.retry_backoff_base;
+        c.retry_backoff_max = new.retry_backoff_max;
+        c.reviewer_hint = new.reviewer_hint;
+        c.reviewer_tier_override = new.reviewer_tier_override;
+        c.cluster_cooldown = new.cluster_cooldown;
+        c.max_requeues = new.max_requeues;
+        c.max_reviewer_retries = new.max_reviewer_retries;
+        c.max_infra_retries = new.max_infra_retries;
+        c.min_free_disk_pct = new.min_free_disk_pct;
+        c.roles = new.roles;
+        c.genres = new.genres;
+        c.delegation = new.delegation;
+        c.session_rollover_tokens = new.session_rollover_tokens;
+        c.execution = new.execution;
+        c.eval = new.eval;
+    }
+
     pub fn config(&self) -> &DispatchConfig {
         &self.config
     }
@@ -2060,9 +2088,8 @@ impl Dispatcher {
             })
     }
 
-    /// ADR 2026-10-08 §(d): drop stored implicit limits whose LLM source is no longer declared
-    /// without an account pool.
-    /// Called at start-up and after reload.
+    /// ADR 2026-10-08 §(d): drop stored implicit limits whose LLM source is no longer declared without an account
+    /// pool. Called at start-up and after reload.
     pub fn prune_implicit_account_limits(&mut self) -> Result<Vec<String>, task_core::StoreError> {
         let live: std::collections::HashSet<ProviderId> =
             self.implicit_account_ids().into_iter().collect();

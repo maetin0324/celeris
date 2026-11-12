@@ -49,7 +49,7 @@ core 数）、host 全体で同時に走る重い検査の数に上限が無か�
      として command に渡す。remote（ssh）の作業場所は包まない（枠は daemon の host の資源で、remote の host の負荷とは別）。
      枠の取得元（`task_worker::check_slots::SlotSource`）は daemon の起動時に env から 1 回だけ決め（`SlotSource::from_env`。
      `crates/celeris/src/config/dispatch.rs` の `Config::dispatch_config`）、`DispatchConfig::check_slots` で dispatcher に
-     渡す。dispatcher は検査の度に env を読まない（検査 1 件の上限と枠の取得元をまとめた `CheckLimits` の `wrap` で包む）。設定の再読み込み
+     渡す。dispatcher は検査の度に env を読まない（検査 1 件の上限と枠の取得元をまとめた `CheckLimits::check_workspace` で包む）。設定の再読み込み
      （`apply_dispatch_config`）では入れ替えない。試験の dispatcher は一時 dir の枠を入れ、host の枠の dir を開かない。
      `CELERIS_CHECK_SLOTS_DIR` も `XDG_RUNTIME_DIR` も無い process では枠の dir を決められないので、起動時の解決
      （`SlotSource::resolve_or_warn`）で warn を 1 行出し、検査を包まない（daemon は user の systemd unit で、user の
@@ -104,7 +104,7 @@ core 数）、host 全体で同時に走る重い検査の数に上限が無か�
 
 ## 付記（実装の突き合わせ）
 
-- `SlottedWorkspace` を使う所（`DispatchConfig::check_slots` と `review_timeout` から `CheckLimits` を作り、`wrap` で包む）: `dispatcher/review_spawn.rs`
+- `SlottedWorkspace` を使う所（`DispatchConfig::check_slots` と `review_timeout` から `CheckLimits` を作り、`check_workspace` で包む）: `dispatcher/review_spawn.rs`
   （review の local の作業場所と 2 つ目以降の repo の検査）、`dispatcher/work_units.rs`（WU の検査）、
   `dispatcher/phase_integration.rs`（段の統合の検査。`run_integration_checks` が `CheckLimits` を受け取る）。
 - 試験: `task_worker::check_slots` の `a_heavy_check_waits_for_a_free_slot_and_the_wait_is_not_counted_in_its_timeout`

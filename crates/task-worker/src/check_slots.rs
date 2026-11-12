@@ -390,7 +390,7 @@ impl CheckLimits {
     }
 
     /// 検査の作業場所を枠の取得元で包む（[`with_check_slot`]）。
-    pub fn wrap(
+    pub fn check_workspace(
         &self,
         inner: impl Workspace + 'static,
         label: impl Into<String>,

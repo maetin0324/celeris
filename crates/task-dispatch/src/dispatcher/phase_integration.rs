@@ -160,7 +160,7 @@ pub(super) async fn run_integration_checks(
         );
         let clock = std::time::Instant::now();
         // ADR 2026-11-12-host-check-slots D3: 重い検査は host 共通の枠を取ってから走らせる（待ちは timeout に数えない）。
-        let check_ws = limits.wrap(ws.clone().with_output_log(&log_path), &observed.key);
+        let check_ws = limits.check_workspace(ws.clone().with_output_log(&log_path), &observed.key);
         let outcome = crate::review::exec_check_outcome(
             check_ws.as_ref(),
             &c.cmd,

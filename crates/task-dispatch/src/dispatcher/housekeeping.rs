@@ -3,38 +3,6 @@
 use super::*;
 
 impl Dispatcher {
-    /// ADR 2026-10-22-dynamic-config D2: 設定ファイルから組み直した `DispatchConfig` のうち、動的な欄を稼働中の
-    /// dispatcher に入れる。各判断点が `self.config` を読むので、反映の単位は欄ごとの次の tick・次の run から。
-    /// 起動時にしか決められない欄（`clusters`・`accounts`・`workspace_roots`・`memory_dir`・`releases_dir`・
-    /// `containers`・`knowledge`・build cache・scratch・worktree の接頭辞・検査の枠の取得元 `check_slots`）は触らない。
-    pub fn apply_dispatch_config(&mut self, new: DispatchConfig) {
-        let c = &mut self.config;
-        c.delivery = new.delivery;
-        c.source_error_cooldown = new.source_error_cooldown;
-        c.config_max_concurrency = new.config_max_concurrency;
-        c.lease_grace = new.lease_grace;
-        c.idle_timeout = new.idle_timeout;
-        c.kill_grace = new.kill_grace;
-        c.review_timeout = new.review_timeout;
-        c.review_resync_quiet = new.review_resync_quiet;
-        c.plan_auto_accept = new.plan_auto_accept;
-        c.retry_backoff_base = new.retry_backoff_base;
-        c.retry_backoff_max = new.retry_backoff_max;
-        c.reviewer_hint = new.reviewer_hint;
-        c.reviewer_tier_override = new.reviewer_tier_override;
-        c.cluster_cooldown = new.cluster_cooldown;
-        c.max_requeues = new.max_requeues;
-        c.max_reviewer_retries = new.max_reviewer_retries;
-        c.max_infra_retries = new.max_infra_retries;
-        c.min_free_disk_pct = new.min_free_disk_pct;
-        c.roles = new.roles;
-        c.genres = new.genres;
-        c.delegation = new.delegation;
-        c.session_rollover_tokens = new.session_rollover_tokens;
-        c.execution = new.execution;
-        c.eval = new.eval;
-    }
-
     /// ADR-0040 D3 / ADR-0041 D5: `--mode verify` の煙試験インスタンスか（`set_eligible_tasks` が目印。celeris は
     /// verify のときだけ呼ぶ）。verify は本番のコピー（staging DB）を検査するだけなので、smoke 以外の task・wait・
     /// 承認・通知を書き換える裏の処理と、外部（クラスタ・共有の scratch）への副作用を起こさない。

@@ -1,0 +1,40 @@
+---
+title: 健全性v2 R5 record — R5 の進捗をまとめ、提案を書いて文書検査を通す
+tasks: [01M6TYVJT53598CPKMGSQGA7XM]
+status: done
+updated: 2026-11-12
+completed: 2026-11-12
+---
+# 健全性v2 R5 record
+
+完了日: 2026-11-12
+
+WorkUnit `record`（段 record）。基準は `$CELERIS_WU_BASE`（slices-check は `git merge-base HEAD main`）。コードは変えていない。
+
+## 変更
+- `agent-docs/progress/2026-11-10-health-v2-r5.md` を足した。task の進捗（front matter の tasks・status・完了日）で、各 leaf の結果の要約、test target と test binary の前後の数、build/link・edit→verify・実行時間・flaky の前後（`baseline.json`・`after-build.json`・`after-run.json` から）、消した試験と mutation の結果、残した target と理由、未解決事項、提案を書いた。
+- ADR 2026-11-10-test-target-bundles: 状態の行を「採用・R5 で実装済み」にし、付記「実装との突き合わせ」に 2 行を足した。1 行は affected-features が範囲の check のために進捗に置いた付記の案の写し（affected-features.md の提案 3）、もう 1 行は R5 の実装の結果の要約。
+- この file。
+
+## 数値の出典の確かめ方
+- HEAD の test target と binary: `python3 scripts/dev/test-target-inventory.py --json` の `totals`（`test_targets` 284、`expected_test_binaries` 311）と crate ごとの値（task-api 64/65・celeris 44/46・celerisctl 14/15・task-worker 17/21）。
+- base の test target: `inventory.json` の 352 件（`classify.py --check` の `base_sha … 352`）。
+- 束: HEAD の `crates/<crate>/tests/*/main.rs` が task-api 10・celeris 4・celerisctl 2・task-worker 2 の計 18。
+- keep・r6 の数と理由: `inventory.json` の `leaf` と `leaf_reasons` の先頭。
+- 段の統合で落ちた試験の名前: task の workspace の `integration-checks/` の log の `FAIL` の行（integrate-final の 2 つの log で 3 件）。
+
+## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+- `sh scripts/dev/check-doc-links.sh` → exit 0（`check-doc-links: ok`）
+- `sh scripts/dev/check-adr-numbers.sh` → exit 0（`check-adr-numbers: ok (419 files)`）
+- `sh scripts/dev/progress-index.sh --check` → exit 0（`progress-index --check: ok`）
+- `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` → exit 0（`check-doc-layout: ok`）
+- `git diff --name-only $(git merge-base HEAD main) | python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R5 agent-docs/progress/2026-11-07-health-v2-b0/slices.json` → exit 0（`write-set R5: ok`）
+- `python3 agent-docs/progress/2026-11-10-health-v2-r5/classify.py --check agent-docs/progress/2026-11-10-health-v2-r5/inventory.json` → exit 0（352 target、base も 352、18 束、0 error）
+- `python3 scripts/dev/test-target-inventory.py --json` → exit 0
+- 範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"`）→ 変えた path は ADR 2026-11-10-test-target-bundles・task の進捗・この file の 3 つだけ
+
+## 未解決事項
+- task の進捗の「未解決事項」のとおり。この leaf で新しく見つけた事項は無い。
+
+## 提案
+- task の進捗の「提案」1〜9 のとおり。

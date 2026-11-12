@@ -91,8 +91,6 @@ tasks: [01M75722QN630BBASEQ759KG4T]
 - 取り次ぎ（`chat.relay_forward`）は `grant_id` を持てる。その grant が生きていて（取り消し・期限・回数・元の根拠）、
   global の台帳か取り次ぎ先の案件の台帳の、範囲が global か案件全体の行なら、`task_ids` と `expires_at` を省ける。
   `relay.grant_id` に残し、`instructed_by` に使うたびに同じ照合をやり直す（取り消した grant の取り次ぎは根拠にならない）。
-  取り次ぎがまだ根拠になるか（期限・grant）は `task_core::chat::RelayLapse` の 1 つの判定にし、`instructed_by` と
-  prompt に入れる取り次ぎの一覧（`chat_relayed_instructions`）が同じ判定を使う（取り消した grant の取り次ぎは一覧からも消える）。
   `grant_id` の無い取り次ぎは今のまま task と期限が必須。
 - 代答の記録は判断の根拠と実行者を別々に残す: 代答が applied になった後に `authority_audit` へ 1 行（`grant_id`、
   `human_decision_ref = authority_grant:<id>`、`actual_actor = cos:<thread>`、`outcome_state = applied`）を書き、grant の

@@ -185,10 +185,9 @@ reviewer は、prompt が示す覚え書きの足し方（scope `cos`、page `co
   ガードを通り、案件を知る API と知らない celerisctl のどちらの Layout でも同じ page に置かれる）と、task-api の
   `the_cos_memory_note_route_records_and_accepts_into_the_memory_page`（`POST /knowledge/inbox` が 201、accept で
   `environment/celeris/cos-memory.md` に入る）。既存の prompt の試験は文面だけを見ていて、ガードを通るかは見ていなかった。
-- advisory (1) を直した: 取り次ぎがまだ根拠になるか（期限・grant）を `task_core::authority::relay_lapse` の 1 つの判定に
-  し、prompt に入れる取り次ぎの一覧（`chat_relayed_instructions`）と `instructed_by` の照合が同じ判定を使う。取り消した
-  grant の取り次ぎは一覧からも消える（`cos_job_wait_extend` の scenario で、取り消しの前は一覧にあり後は無いことを確かめる）。
-  `crates/task-core/src/chat` の本体の行は 7999（閾値 8000）に収めた（判定は `authority.rs` に置いた）。
+- advisory (1)（取り次ぎの有効性の判定の重複）は直さなかった。判定を `task_core::authority` に 1 つにする変更を試したが、
+  `authority` が `chat`・`store` を参照すると repo health の `deps.cycle` が fail した（task-core の循環が 61 単位から 62 単位に
+  増える）。`chat` の module に置くと本体の行が閾値 8000 を超える。未解決事項と提案に残した。
 - advisory (2) を直した: `config/skills/cos-operator/operations.md` の取り次ぎの行に `grant_id` の形、許可の提案の行に
   global の台帳（`{id}=global`、範囲 `{"kind":"global","ref":"*"}`）、取り消しの行に行の台帳を書いた。Core の
   「指示は人の発言・skill・ADR・standing rule から受ける」を「人の発言・人が受け入れた grant（常設の節）・skill・ADR」に
@@ -254,7 +253,9 @@ reviewer は、prompt が示す覚え書きの足し方（scope `cos`、page `co
 
 - review の advisory のうち次の 2 件は直していない: `CosStandingGrant` の `expires_at`・`budget_remaining` が Option の
   まま。grant の使用の監査（`record_grant_use`）は代答と別の transaction で、時刻に `now_utc` を直接使う。
-  取り次ぎの判定の重複（attempt 5 の advisory (1)）と operations.md・Core の旧い書き方（同 (2)）は attempt 6 で直した。
+  prompt に入れる取り次ぎの一覧（`chat_relayed_instructions`）は期限だけを見て、取り消した grant の取り次ぎも一覧に残る
+  （`instructed_by` は `forward_gap` で grant を照合するので根拠にはならない）。operations.md・Core の旧い書き方
+  （attempt 5 の advisory (2)）は attempt 6 で直した。
 - 種 #2〜#5 に当たる分類（node 障害での継続・衝突の統合・計画の承認）は未実装。
 - `environment/celeris/cos-memory.md` の初期の本文は未作成（KB の変更は人の確認を通す）。
 - 実物 K4 の明示指定試験（attempt 2）は完走を確かめていない。
@@ -263,5 +264,7 @@ reviewer は、prompt が示す覚え書きの足し方（scope `cos`、page `co
 
 1. 定型の代答の分類を足す: `plan_conforms`（計画の承認）、衝突の統合、node 障害での実験の継続。足すたびに migration で
    CHECK を作り直し、basis の各 category の検査で grant の効果（何を人に回さなくなるか）を決める。
-2. `record_grant_use` を代答と同じ transaction にし、時刻を注入した時計から取る。
+2. 取り次ぎの有効性の判定を 1 つにする: `chat` の module の行を減らしてから、`chat` の中に期限と grant をまとめた判定を置き、
+   `chat_relayed_instructions` と `instructed_by` が同じ判定を使う（`authority` から `chat` を参照すると `deps.cycle` が fail する）。
+3. `record_grant_use` を代答と同じ transaction にし、時刻を注入した時計から取る。
 - 統括 CoS の relay の期限切れ（4〜48 時間）で人に戻った件数を、D4 の配備の前後で `authority_audit` と受信箱の件数で比べる。

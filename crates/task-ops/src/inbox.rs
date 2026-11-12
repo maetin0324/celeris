@@ -352,25 +352,35 @@ impl SuppressRule {
 
 /// Task 木の現在状態だけから表示可否を決める。欠けた親や巡回は判定不能として残す。
 /// ADR 2026-10-17-root-dependency-waits-for-integration D4: 取り込まれない task を待つ root の依存元（受信箱の文面に足す）。
-fn waiting_dependents_note(all_tasks: &[Task], dep: TaskId) -> String {
-    let mut ids: Vec<String> = all_tasks
+/// ADR 2026-11-11-unit-task-dependencies D3: 計画の pending の unit が `task:<dep>` で待つ root も同じ文面に載せる。
+fn waiting_dependents_note(
+    store: &dyn TaskStore,
+    all_tasks: &[Task],
+    dep: TaskId,
+) -> Result<String, OpsError> {
+    let dep_key = task_core::task_dependency_key(dep);
+    let mut ids: Vec<String> = Vec::new();
+    for t in all_tasks
         .iter()
-        .filter(|t| {
-            !t.status.is_terminal()
-                && t.depends_on.contains(&dep)
-                && !task_core::tree::is_tree_child(t)
-        })
-        .map(|t| t.id.to_string())
-        .collect();
+        .filter(|t| !t.status.is_terminal() && !task_core::tree::is_tree_child(t))
+    {
+        let waits = t.depends_on.contains(&dep)
+            || store.work_units_for(t.id)?.iter().any(|u| {
+                u.status == task_core::WorkUnitStatus::Pending && u.depends_on.contains(&dep_key)
+            });
+        if waits {
+            ids.push(t.id.to_string());
+        }
+    }
     ids.sort();
-    if ids.is_empty() {
+    Ok(if ids.is_empty() {
         String::new()
     } else {
         format!(
             "。取り込まれるまで依存する task が待っています: {}",
             ids.join(", ")
         )
-    }
+    })
 }
 
 pub fn attention_suppression(task: &Task, by_id: &HashMap<TaskId, Task>) -> Option<SuppressRule> {
@@ -1226,7 +1236,7 @@ fn build_attention(
             summary: format!(
                 "完了しましたが main への取り込みを開始できませんでした: {}{}",
                 reason.label(),
-                waiting_dependents_note(all_tasks, t.id)
+                waiting_dependents_note(store, all_tasks, t.id)?
             ),
             detail,
             head,

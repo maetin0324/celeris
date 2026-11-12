@@ -7,6 +7,9 @@
 //!   不明も 200 の拒否で返す（CoS は `authority.check`）。
 //! - `POST …/authority/proposals`: 人の発言を引いた提案（CoS は `authority.grant_propose`）。同じ問いは 2 回通知しない。
 //! - `POST …/authority/proposals/{p}/dismiss`・`POST …/authority/audit/{a}/outcome`: 人の token だけ。
+//!
+//! path の `{id}` が `global` のときは全案件に効く台帳（ADR 2026-11-11-cos-standing-context D4。範囲は `global`、
+//! 分類は定型の代答だけ）。本文と token の規則は案件の台帳と同じ。
 
 use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
@@ -16,7 +19,8 @@ use serde_json::Value;
 use task_core::OrgDirectory;
 use task_core::authority::{
     ActionClass, AuthorityAuditEntry, AuthorityGrant, AuthorityProposal, AuthorityVerdict,
-    GrantScope, GrantSource, NewAuthorityGrant, ScopeKind, SourceKind, grant_denial, reason,
+    GLOBAL_LEDGER, GrantScope, GrantSource, NewAuthorityGrant, ScopeKind, SourceKind, grant_denial,
+    reason,
 };
 use task_core::chat::CosOperation;
 use task_core::store::{AuthorityRefusal, SqliteStore};
@@ -78,6 +82,47 @@ fn require_project(store: &SqliteStore, id: task_core::ProjectId) -> Result<(), 
     }
 }
 
+/// path の `{id}` に書く global の台帳の名前。
+pub const GLOBAL_PATH: &str = "global";
+
+/// path の `{id}` が指す台帳: 案件 1 つ、または全案件（D4）。
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Ledger {
+    Project(task_core::ProjectId),
+    Global,
+}
+
+impl Ledger {
+    pub(crate) fn parse(raw: &str) -> Result<Self, ApiProblem> {
+        if raw == GLOBAL_PATH {
+            return Ok(Ledger::Global);
+        }
+        parse_project_id(raw).map(Ledger::Project)
+    }
+
+    /// `authority_*` の表の `project_id`（global は [`GLOBAL_LEDGER`]）。
+    fn key(self) -> String {
+        match self {
+            Ledger::Project(id) => id.to_string(),
+            Ledger::Global => GLOBAL_LEDGER.to_owned(),
+        }
+    }
+
+    fn project(self) -> Option<task_core::ProjectId> {
+        match self {
+            Ledger::Project(id) => Some(id),
+            Ledger::Global => None,
+        }
+    }
+
+    fn require(self, store: &SqliteStore) -> Result<(), ApiProblem> {
+        match self {
+            Ledger::Project(id) => require_project(store, id),
+            Ledger::Global => Ok(()),
+        }
+    }
+}
+
 /// 許可を作るのは人の token だけ（D8）。operator・MCP・CoS の credential は 403。
 fn require_human(caller: &Caller) -> Result<(), ApiProblem> {
     if matches!(caller.0, Principal::Human { .. }) {
@@ -132,11 +177,11 @@ async fn get_authority(
     RawQuery(raw): RawQuery,
 ) -> ApiResult {
     no_query(&raw)?;
-    let project_id = parse_project_id(&id)?;
+    let ledger = Ledger::parse(&id)?;
     let view = state
         .blocking(move |store| {
-            require_project(store, project_id)?;
-            let project = project_id.to_string();
+            ledger.require(store)?;
+            let project = ledger.key();
             let at = now();
             let grants = store
                 .authority_grants(&project)
@@ -204,7 +249,7 @@ async fn post_grant(
     no_query(&raw)?;
     require_admin(&state, &headers)?;
     require_human(&caller)?;
-    let project_id = parse_project_id(&id)?;
+    let ledger = Ledger::parse(&id)?;
     let value: Value = read_json(body, false).await?;
     let body: GrantCreate = serde_json::from_value(value)
         .map_err(|e| unprocessable(AUTHORITY_GRANT_INVALID, e.to_string()))?;
@@ -224,8 +269,8 @@ async fn post_grant(
     let by = caller.actor();
     let view = state
         .blocking(move |store| {
-            require_project(store, project_id)?;
-            let project = project_id.to_string();
+            ledger.require(store)?;
+            let project = ledger.key();
             let at = now();
             let grant = store.write_tx::<_, ApiProblem, _>(|tx| {
                 let mut question_key = body.question_key.clone();
@@ -266,7 +311,9 @@ async fn post_grant(
                         at,
                     )?;
                 }
-                SqliteStore::authority_unblock_tx(tx, &project, at, 0)?;
+                if ledger.project().is_some() {
+                    SqliteStore::authority_unblock_tx(tx, &project, at, 0)?;
+                }
                 Ok(grant)
             })?;
             grant_view(store, grant, at)
@@ -301,25 +348,20 @@ async fn post_revoke(
 ) -> ApiResult {
     no_query(&raw)?;
     require_admin(&state, &headers)?;
-    let project_id = parse_project_id(&id)?;
+    let ledger = Ledger::parse(&id)?;
     let _: GrantRevoke = read_json(body, true).await?;
     let by = caller.actor();
     let epoch = crate::human_epoch::HumanEpoch::of(&caller);
     let view = state
         .blocking(move |store| {
-            require_project(store, project_id)?;
+            ledger.require(store)?;
             let at = now();
             let revoked = store.write_tx::<_, ApiProblem, _>(|tx| {
-                let revoked = SqliteStore::authority_grant_revoke_tx(
-                    tx,
-                    &project_id.to_string(),
-                    &grant,
-                    &by,
-                    at,
-                )?
-                .ok_or_else(|| grant_missing(&grant))?;
+                let revoked =
+                    SqliteStore::authority_grant_revoke_tx(tx, &ledger.key(), &grant, &by, at)?
+                        .ok_or_else(|| grant_missing(&grant))?;
                 // P1-G（K33）: 人の取り消しは編集と同じ transaction で wake を書き、古い判断を CAS で止める。
-                epoch.bump_tx(tx, Some(project_id))?;
+                epoch.bump_tx(tx, ledger.project())?;
                 Ok(revoked)
             })?;
             grant_view(store, revoked, at)
@@ -425,12 +467,12 @@ async fn post_check(
 ) -> ApiResult {
     no_query(&raw)?;
     require_admin(&state, &headers)?;
-    let project_id = parse_project_id(&id)?;
+    let ledger = Ledger::parse(&id)?;
     let body: AuthorityCheckBody = read_json(body, false).await?;
     let out = state
         .blocking(move |store| {
-            require_project(store, project_id)?;
-            Ok(check_op(store, &project_id.to_string(), &body, now()))
+            ledger.require(store)?;
+            Ok(check_op(store, &ledger.key(), &body, now()))
         })
         .await?;
     Ok(json_response(StatusCode::OK, &out))
@@ -539,17 +581,16 @@ async fn post_proposal(
 ) -> ApiResult {
     no_query(&raw)?;
     require_admin(&state, &headers)?;
-    let project_id = parse_project_id(&id)?;
+    let ledger = Ledger::parse(&id)?;
     let value: Value = read_json(body, false).await?;
     let body: ProposalCreate = serde_json::from_value(value)
         .map_err(|e| unprocessable(AUTHORITY_GRANT_INVALID, e.to_string()))?;
     let by = caller.actor();
     let out = state
         .blocking(move |store| {
-            require_project(store, project_id)?;
-            store.write_tx::<_, ApiProblem, _>(|tx| {
-                propose_tx(tx, &project_id.to_string(), &body, &by, now())
-            })
+            ledger.require(store)?;
+            store
+                .write_tx::<_, ApiProblem, _>(|tx| propose_tx(tx, &ledger.key(), &body, &by, now()))
         })
         .await?;
     Ok(json_response(StatusCode::OK, &out))
@@ -566,13 +607,13 @@ async fn post_dismiss(
     no_query(&raw)?;
     require_admin(&state, &headers)?;
     require_human(&caller)?;
-    let project_id = parse_project_id(&id)?;
+    let ledger = Ledger::parse(&id)?;
     let _: GrantRevoke = read_json(body, true).await?;
     let by = caller.actor();
     let out = state
         .blocking(move |store| {
-            require_project(store, project_id)?;
-            let project = project_id.to_string();
+            ledger.require(store)?;
+            let project = ledger.key();
             store.write_tx::<_, ApiProblem, _>(|tx| {
                 if !SqliteStore::authority_proposal_resolve_tx(
                     tx,
@@ -590,7 +631,9 @@ async fn post_dismiss(
                     ));
                 }
                 // P1-G（deny）: 人の回答なので、同じ transaction で入力の版と wake を進める。
-                SqliteStore::project_controller_human_bump_tx(tx, &project, now(), 0)?;
+                if ledger.project().is_some() {
+                    SqliteStore::project_controller_human_bump_tx(tx, &project, now(), 0)?;
+                }
                 SqliteStore::authority_proposal_by_id_tx(tx, &project, &proposal)?
                     .ok_or_else(|| ApiProblem::internal("proposal vanished"))
             })
@@ -619,7 +662,7 @@ async fn post_outcome(
     no_query(&raw)?;
     require_admin(&state, &headers)?;
     require_human(&caller)?;
-    let project_id = parse_project_id(&id)?;
+    let ledger = Ledger::parse(&id)?;
     let body: OutcomeSettle = read_json(body, false).await?;
     if !matches!(body.state.as_str(), "applied" | "failed") {
         return Err(unprocessable(
@@ -630,8 +673,8 @@ async fn post_outcome(
     let by = caller.actor();
     let out = state
         .blocking(move |store| {
-            require_project(store, project_id)?;
-            let project = project_id.to_string();
+            ledger.require(store)?;
+            let project = ledger.key();
             let observed = serde_json::json!({"observed_by": by, "note": body.note});
             if !store
                 .authority_outcome_settle(&project, &audit, &body.state, &observed, now())
@@ -654,12 +697,14 @@ async fn post_outcome(
 /// `authority.grant_revoke`: 誰でも取り消せる。監査と同じ transaction。
 pub(crate) fn cos_revoke(
     store: &SqliteStore,
-    project_id: task_core::ProjectId,
+    ledger: Ledger,
     grant: &str,
     audit: &OperationAudit,
 ) -> Result<CosOperation, ApiProblem> {
-    let target = project_id.to_string();
-    require_project(store, project_id).map_err(|p| audit.reject(store, "project", &target, p))?;
+    let target = ledger.key();
+    ledger
+        .require(store)
+        .map_err(|p| audit.reject(store, "project", &target, p))?;
     audit.apply_checked(store, "project", &target, "authority.grant_revoke", |tx| {
         let revoked =
             SqliteStore::authority_grant_revoke_tx(tx, &target, grant, &audit.by(), now())?
@@ -671,12 +716,14 @@ pub(crate) fn cos_revoke(
 /// `authority.check`: 読み取り。判定を監査つきの操作の結果として返す。
 pub(crate) fn cos_check(
     store: &SqliteStore,
-    project_id: task_core::ProjectId,
+    ledger: Ledger,
     body: AuthorityCheckBody,
     audit: &OperationAudit,
 ) -> Result<CosOperation, ApiProblem> {
-    let target = project_id.to_string();
-    require_project(store, project_id).map_err(|p| audit.reject(store, "project", &target, p))?;
+    let target = ledger.key();
+    ledger
+        .require(store)
+        .map_err(|p| audit.reject(store, "project", &target, p))?;
     let result = check_op(store, &target, &body, now());
     let value = serde_json::to_value(result).map_err(|e| ApiProblem::internal(e.to_string()))?;
     audit.apply_checked(store, "project", &target, "authority.check", |_| Ok(value))
@@ -685,12 +732,14 @@ pub(crate) fn cos_check(
 /// `authority.grant_propose`: 人の発言を引いた提案。許可そのものは人だけが作る（D8）。
 pub(crate) fn cos_propose(
     store: &SqliteStore,
-    project_id: task_core::ProjectId,
+    ledger: Ledger,
     body: ProposalCreate,
     audit: &OperationAudit,
 ) -> Result<CosOperation, ApiProblem> {
-    let target = project_id.to_string();
-    require_project(store, project_id).map_err(|p| audit.reject(store, "project", &target, p))?;
+    let target = ledger.key();
+    ledger
+        .require(store)
+        .map_err(|p| audit.reject(store, "project", &target, p))?;
     audit.apply_checked(store, "project", &target, "authority.grant_propose", |tx| {
         let out = propose_tx(tx, &target, &body, &audit.by(), now())?;
         serde_json::to_value(out).map_err(|e| ApiProblem::internal(e.to_string()))

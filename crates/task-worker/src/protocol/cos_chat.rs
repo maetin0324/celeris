@@ -87,6 +87,10 @@ pub struct CosChatContext {
     /// one CoS chat run may run for a short read. Absent = the default (20).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inline_read_max_commands: Option<u32>,
+    /// ADR 2026-11-11-cos-standing-context D2: role, delegated grants, user pages, memory and the
+    /// KB entry. Rendered on every CoS chat run.
+    #[serde(default)]
+    pub standing: super::cos_standing::CosStandingContext,
 }
 
 /// One relayed instruction of the thread (ADR 2026-10-27-relayed-instructions D1/D4). `text` is the
@@ -107,6 +111,10 @@ pub struct CosChatRelayedInstruction {
     /// RFC 3339 expiry; absent = no expiry.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<String>,
+    /// ADR 2026-11-11-cos-standing-context D4: the live grant whose basis this message is. Such a
+    /// relay is not an `instructed_by`; CoS cites the grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grant_id: Option<String>,
 }
 
 /// One project as summarized for a CoS chat run (ADR 2026-10-27-project-brief D5). Details are read

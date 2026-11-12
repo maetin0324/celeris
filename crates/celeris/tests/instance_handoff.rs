@@ -695,14 +695,19 @@ async fn a_stale_heartbeat_does_not_replace_a_live_active_until_its_process_is_g
         .await,
         "新しいインスタンスが standby にならない"
     );
+    // `Supervisor::start` は standby の行を書いてから、別の文で active に引き継ぎを要求する（行が先）。
+    // standby を見た直後はまだ要求が無いことがあるので、要求も出来事として待つ。
     assert!(
-        store
-            .instance_list()
-            .unwrap_or_else(|e| panic!("instances: {e}"))
-            .iter()
-            .find(|i| i.instance_id == "ghost")
-            .and_then(|i| i.handoff_requested_at)
-            .is_some(),
+        wait_until(Duration::from_secs(SEEDED_LEASE_GRACE_SECS), || {
+            store
+                .instance_list()
+                .unwrap_or_else(|e| panic!("instances: {e}"))
+                .iter()
+                .find(|i| i.instance_id == "ghost")
+                .and_then(|i| i.handoff_requested_at)
+                .is_some()
+        })
+        .await,
         "standby は生きている active に引き継ぎを要求する"
     );
     assert_eq!(

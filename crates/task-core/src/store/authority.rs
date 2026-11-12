@@ -14,8 +14,8 @@ use ulid::Ulid;
 use super::{SqliteStore, StoreError, format_rfc3339};
 use crate::authority::{
     ActionClass, AuthorityAuditEntry, AuthorityGrant, AuthorityProposal, AuthorityVerdict,
-    GrantScope, GrantSource, MAX_GRANT_BUDGET, MAX_GRANT_DAYS, NewAuthorityAudit,
-    NewAuthorityGrant, ScopeKind, SourceKind, grant_denial, reason, scope_covers, scope_rank,
+    GLOBAL_LEDGER, GrantScope, GrantSource, MAX_GRANT_BUDGET, NewAuthorityAudit, NewAuthorityGrant,
+    ScopeKind, SourceKind, grant_denial, reason, scope_covers, scope_rank,
 };
 
 /// 許可を作れない理由（API は 422 にする）。
@@ -79,9 +79,10 @@ fn grant_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<AuthorityGrant> {
     })
 }
 
+/// 案件 `project` に効く許可: その案件の行と global の台帳（`project_id = '*'`。D4）の行。
 fn grants_of(conn: &Connection, project: &str) -> Result<Vec<AuthorityGrant>, StoreError> {
     let mut st = conn.prepare_cached(&format!(
-        "SELECT {GRANT_COLUMNS} FROM authority_grants WHERE project_id = ?1 ORDER BY created_at, id"
+        "SELECT {GRANT_COLUMNS} FROM authority_grants WHERE project_id IN (?1, '*') ORDER BY created_at, id"
     ))?;
     let rows = st.query_map([project], grant_row)?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
@@ -94,11 +95,20 @@ fn grant_of(conn: &Connection, id: &str) -> Result<Option<AuthorityGrant>, Store
     Ok(st.query_row([id], grant_row).optional()?)
 }
 
+/// D4: 取り次ぎ（`chat.relay_forward`）が `grant_id` に書いた許可の行。`None` は書いていない、`Some(None)` は無い id。
+pub(crate) fn forward_grant(
+    conn: &Connection,
+    grant_id: Option<&str>,
+) -> Result<Option<Option<AuthorityGrant>>, StoreError> {
+    grant_id.map(|id| grant_of(conn, id)).transpose()
+}
+
 /// 範囲が実在し案件に属するか。案件は同じ id、task はその案件の task。途中目標は `project_snapshot` と同じ規則で、
 /// approved の Roadmap の版があればその版の取り下げていない Outcome の id だけ（request の block は読まない）、
 /// 無ければ依頼文の Outcome block の id。書き込みの tx の中からも呼ばれるので `conn` だけを使う。読めなければ `Err`。
 fn scope_exists(conn: &Connection, project: &str, scope: &GrantScope) -> Result<bool, StoreError> {
     Ok(match scope.kind {
+        ScopeKind::Global => project == GLOBAL_LEDGER && scope.reference == GLOBAL_LEDGER,
         ScopeKind::Project => {
             scope.reference == project
                 && conn
@@ -530,14 +540,9 @@ fn validate_new(
             format!("budget must be 1 to {MAX_GRANT_BUDGET}"),
         )));
     }
-    let Ok(expiry) = super::parse_rfc3339(expires_at) else {
-        return Ok(Some(refusal(GRANT_INVALID, "expires_at must be RFC3339")));
-    };
-    if expiry <= now || expiry > now + time::Duration::days(MAX_GRANT_DAYS) {
-        return Ok(Some(refusal(
-            GRANT_INVALID,
-            format!("expires_at must be in the future and within {MAX_GRANT_DAYS} days"),
-        )));
+    if let Some(problem) = crate::authority::grant_shape_problem(scope.kind, class, expires_at, now)
+    {
+        return Ok(Some(refusal(GRANT_INVALID, problem)));
     }
     if !scope_exists(conn, project, scope)? {
         return Ok(Some(refusal(
@@ -831,10 +836,11 @@ impl SqliteStore {
         })
     }
 
+    /// 案件 `project` の画面に出す提案: その案件の行と global の台帳の行（D4。許可の `grants_of` と同じ）。
     pub fn authority_proposals(&self, project: &str) -> Result<Vec<AuthorityProposal>, StoreError> {
         self.with_read_conn(|c| {
             let mut st = c.prepare_cached(&format!(
-                "SELECT {PROPOSAL_COLUMNS} FROM authority_proposals WHERE project_id = ?1
+                "SELECT {PROPOSAL_COLUMNS} FROM authority_proposals WHERE project_id IN (?1, '*')
                  ORDER BY created_at DESC, id DESC"
             ))?;
             let rows = st.query_map([project], proposal_row)?;
@@ -926,16 +932,9 @@ impl SqliteStore {
                 source_key: format!("authority:proposal:{}:{}", new.project_id, new.question_key),
                 kind: crate::feed::NoticeKind::BadNews,
                 group_key: format!("bad_news:authority:{}", new.project_id),
-                title: format!(
-                    "案件 {} の CoS が許可（{}）を提案しました",
-                    new.project_id,
-                    new.action_class.as_str()
-                ),
-                summary: format!(
-                    "{}。案件の画面の「許可」で、許可するか断るかを決めてください。問いの key: {}。人の発言: {}",
-                    new.note, new.question_key, new.source.reference
-                ),
-                project_id: Some(new.project_id.clone()),
+                title: crate::authority::proposal_title(&new.project_id, new.action_class),
+                summary: crate::authority::proposal_summary(new),
+                project_id: (new.project_id != GLOBAL_LEDGER).then(|| new.project_id.clone()),
                 task_id: None,
                 target: None,
                 links: Vec::new(),

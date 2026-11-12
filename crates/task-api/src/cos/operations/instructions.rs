@@ -140,8 +140,9 @@ pub fn inbox_answer_instruction_at(
 }
 
 /// D3: the message `instructed_by` names, when it is the `role=user` input of the caller's run
-/// in a CoS thread, or a relayed instruction of that thread in scope at `now`
-/// (ADR 2026-10-27-relayed-instructions D3). Otherwise the reason it is refused
+/// in a CoS thread, or a relayed instruction of that thread in scope at `now` that no grant backs
+/// (ADR 2026-10-27-relayed-instructions D3, 2026-11-11-cos-standing-context D4). Otherwise the
+/// reason it is refused
 /// (`cos_instruction_invalid`).
 pub(super) fn instructed_message(
     store: &SqliteStore,
@@ -203,6 +204,14 @@ pub(super) fn instructed_message(
             ));
         }
 
+        // ADR 2026-11-11-cos-standing-context D4: a standing forward acts only through its grant's
+        // class (basis refs, the ledger); as `instructed_by` it would waive every gate project-wide.
+        if let Some(grant) = &relay.grant_id {
+            return Err(format!(
+                "instructed_by {message_id} is a standing forward of grant {grant}: cite the grant \
+                 (basis refs or the authority ledger), not the message"
+            ));
+        }
         if task_core::chat::relay_expired(relay, now) {
             return Err(format!(
                 "instructed_by {message_id} is a relayed instruction that expired at {}",

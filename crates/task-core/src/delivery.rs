@@ -286,7 +286,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), crate::SCHEMA_VERSION);
-        assert_eq!(crate::SCHEMA_VERSION, 122);
+        assert_eq!(crate::SCHEMA_VERSION, 123);
         let conn = Connection::open(&path).unwrap();
         let mut stmt = conn
             .prepare("SELECT version FROM schema_migrations ORDER BY version")
@@ -304,7 +304,7 @@ mod tests {
                     61, 62, 63, 64, 65, 66, 67, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82,
                     83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101,
                     102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 117, 118,
-                    119, 120, 121, 122
+                    119, 120, 121, 122, 123
                 ])
                 .collect::<Vec<u32>>()
         );

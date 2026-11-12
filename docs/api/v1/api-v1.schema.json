@@ -3804,15 +3804,26 @@
           "type": "string"
         },
         "expires_at": {
-          "description": "RFC 3339 expiry (required, after now).",
-          "type": "string"
+          "description": "RFC 3339 expiry (after now). Required without `grant_id`; with it, absent = while the grant lives.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "grant_id": {
+          "description": "ADR 2026-11-11-cos-standing-context D4: a live grant of the authority ledger (global or the\ntarget project's own, project or global scope) whose basis is `message_id`.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "message_id": {
           "description": "The person's message of the general thread.",
           "type": "string"
         },
         "task_ids": {
-          "description": "Tasks of the target project the instruction applies to (1..=`CHAT_RELAY_TASKS_MAX`).",
+          "default": [],
+          "description": "Tasks of the target project the instruction applies to (1..=`CHAT_RELAY_TASKS_MAX`;\nmay be empty only with `grant_id`, then the whole project).",
           "items": {
             "type": "string"
           },
@@ -3821,9 +3832,7 @@
       },
       "required": [
         "client_message_id",
-        "message_id",
-        "task_ids",
-        "expires_at"
+        "message_id"
       ],
       "type": "object"
     },
@@ -4267,6 +4276,13 @@
     "ChatRelay": {
       "description": "ADR 2026-10-27-relayed-instructions D1: the relay record of a `role=user` message. The text\nof the message is the person's own words; this says who carried them, when the person said\nthem and where they apply.",
       "properties": {
+        "grant_id": {
+          "description": "ADR 2026-11-11-cos-standing-context D4: the grant whose basis is the forwarded message; it\nbacks a forward without tasks or an expiry. Never an `instructed_by` (CoS cites the grant).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "relayed_by": {
           "description": "The principal that relayed the instruction (same as the message `author`).",
           "type": "string"
@@ -31558,6 +31574,46 @@
       ],
       "type": "object"
     },
+    "TaskDependencyCause": {
+      "description": "D5: unit の `task:` 依存がまだ満たされない理由。",
+      "oneOf": [
+        {
+          "const": "unfinished",
+          "description": "依存先が done でない（走っている・待っている・review 中など）。",
+          "type": "string"
+        },
+        {
+          "const": "unmerged",
+          "description": "依存先は done だが、成果が既定 branch に入っていない（M10 の `unmerged`）。",
+          "type": "string"
+        },
+        {
+          "const": "delivery_skipped",
+          "description": "delivery が取り込みを見送った（M10 の `delivery_skipped`）。",
+          "type": "string"
+        },
+        {
+          "const": "held",
+          "description": "人が取り込みを保留にした（M10 の `held`）。",
+          "type": "string"
+        },
+        {
+          "const": "discarded",
+          "description": "人が取り込まないと決めた（M10 の `discarded`）。",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "description": "依存先が failed。",
+          "type": "string"
+        },
+        {
+          "const": "cancelled",
+          "description": "依存先が cancelled。",
+          "type": "string"
+        }
+      ]
+    },
     "TaskDetail": {
       "description": "`celerisctl show --json` と `GET /api/v1/tasks/{id}` の本体。",
       "properties": {
@@ -33590,6 +33646,39 @@
             "task_id",
             "cause",
             "detail"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "M11（ADR 2026-11-11-unit-task-dependencies D5）: 計画の unit が `task:<id>` で待つ木の外の task が、まだ満たされない\n（done でない・M10 と同じ取り込みの待ち・failed・cancelled）。人の操作待ちではない。依存先が複数なら task_id 順の最初の 1 件。",
+          "properties": {
+            "cause": {
+              "$ref": "#/$defs/TaskDependencyCause"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "task_dependency",
+              "type": "string"
+            },
+            "task_id": {
+              "$ref": "#/$defs/TaskId"
+            },
+            "unit_keys": {
+              "description": "待つ pending の unit の key（seq 順）。",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "task_id",
+            "cause",
+            "detail",
+            "unit_keys"
           ],
           "type": "object"
         }

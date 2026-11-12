@@ -403,6 +403,14 @@ candidates = [{{ source = "local", model = "fake" }}]
 [harness_selection]
 execution_class_defaults = {{}}
 rules = [{{ harness = "fake", required_capabilities = [] }}]
+
+# 本番 host の release 置き場と人の checkout を読まない（既定は ~/.local/celeris/releases と
+# ~/workspace/agent-platform。verify 済みで未昇格の release があると、停滞の検出が受信箱に
+# release_unpromoted-selfdeploy を足し、受信箱を比べる試験が host の状態で落ちる）。
+[selfdeploy]
+releases_dir = "releases"
+repo = "repo"
+detach = "inline"
 {script}
 "#
     )
@@ -411,7 +419,16 @@ rules = [{{ harness = "fake", required_capabilities = [] }}]
 pub fn write_config(home: &Path, text: &str) -> Config {
     let path = home.join("config.toml");
     std::fs::write(&path, text).expect("config");
-    Config::load(&path).expect("load config")
+    let config = Config::load(&path).expect("load config");
+    // 停滞の検出（release_unpromoted）は releases_dir を読む。host の置き場を読むと結果が host の状態で変わる。
+    assert!(
+        config.selfdeploy.releases_dir.starts_with(home)
+            && config.selfdeploy.repo.starts_with(home),
+        "the test config reads the host's releases_dir or repo: {:?} {:?}",
+        config.selfdeploy.releases_dir,
+        config.selfdeploy.repo
+    );
+    config
 }
 
 pub fn load_config(home: &Path, script: &str) -> Config {

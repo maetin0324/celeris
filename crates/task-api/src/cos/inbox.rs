@@ -570,15 +570,13 @@ async fn resolve(
                     let Some(routine) = req.basis.as_ref() else {
                         return Err(reject(basis::missing()));
                     };
-                    basis::validate(store, routine, &answer_target(found, input)).map_err(&reject)?;
+                    let target = answer_target(found, input);
+                    basis::validate(store, routine, &target).map_err(&reject)?;
                     audit.ctx.reason =
                         format!("{}: {}", basis::reason_prefix(routine), audit.ctx.reason);
                     let (method, domain_path, domain_body) =
                         delegated_request(found, input).map_err(&reject)?;
-                    audit.item = Some(ItemMark {
-                        item_id: item.id.clone(),
-                        outcome: "answered",
-                    });
+                    audit.item = Some(ItemMark::new(&item.id, "answered"));
                     let op = dispatch(
                         store,
                         &env,
@@ -587,6 +585,8 @@ async fn resolve(
                         &domain_path,
                         domain_body,
                     )?;
+                    // ADR 2026-11-11-cos-standing-context D4: audit the use of a standing grant.
+                    basis::grant_used(store, routine, &target, &audit, &op);
                     Ok((op, None))
                 }
                 ResolveOutcome::Observe => {
@@ -602,10 +602,7 @@ async fn resolve(
                             "the source is an unresolved wait that needs a judgment; answer or escalate it",
                         )));
                     }
-                    audit.item = Some(ItemMark {
-                        item_id: item.id.clone(),
-                        outcome: "observed",
-                    });
+                    audit.item = Some(ItemMark::new(&item.id, "observed"));
                     let op = audit.apply(store, "cos_inbox_item", &item.id, action, |_| {
                         Ok(serde_json::json!({"item_id": item.id, "outcome": "observed", "confidence": confidence}))
                     })?;
@@ -657,10 +654,7 @@ async fn resolve(
                             OffsetDateTime::now_utc(),
                         )
                         .map_err(cos_problem)?;
-                    audit.item = Some(ItemMark {
-                        item_id: item.id.clone(),
-                        outcome: "escalated",
-                    });
+                    audit.item = Some(ItemMark::new(&item.id, "escalated"));
                     let result = serde_json::json!({
                         "item_id": item.id,
                         "outcome": "escalated",

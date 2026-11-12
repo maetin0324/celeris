@@ -99,7 +99,7 @@ metadata:
 | `work_guidance` (d) | 受け入れ条件・目的を変えない範囲の作業方針の補足（worker の自由質問） | note で答える（option は省略か `answer`。`replan` は不可） |
 | `review_rework` (e) | reviewer の技術的な不備の差し戻しで failed になった task の開き直し（失敗の件への `reopen`） | 差し戻した reviewer run を refs に `{"kind":"review","id":"<reviewer run の id>"}` で入れる（失敗の件の本文の `reviewer(<id>): …` の id）。同じ task で CoS がこの category で開き直すのは 2 回まで。前に開き直したときと同じ差し戻し文なら不可 |
 | `plan_conforms` (f) | おかしなところの無い計画の承認（計画の承認の推奨 `approve`） | `plan.plan_id` に承認を待つ版の id（受信箱の件の版、`GET /api/v1/tasks/{id}/tree` の計画）を書く。task に未回答の決定が無い。危うい段（課金・node-h・本番の変更・外部公開・破壊的操作・秘密/権限）を `plan.guarded_stages` に全て挙げ、各段に `kind`（`billing`・`node_hours`・`production`・`external_publish`・`destructive`・`secrets_permissions` のどれか。必須）と `guard` を書き、`guard` を `review_human`（`id` はそれより前の `review: human` の段の key）か `standing_rule`・`decision`・`approval`（`id` は人の承認）で示す。同じ task が 24 時間に 3 版以上の計画を採用していれば不可。human check の付いた task（403）、承認の理由に `near_limit:` など費用・上限の理由がある、前の版の承認以降に目的・受け入れ条件の編集がある（422 `cos_basis_plan_needs_human`）も不可。`refs` に読んだ計画・指示の出典を入れる |
-| `job_wait_extend` (g) | クラスタ job の待ちが上限に達した認可（authorization）への「延長」 | 答えは `{"option":"once","note":"延長"}` だけ（note は「延長」の 1 語。補足は reason に書く）。refs に `{"kind":"approval","id":"<認可の id>"}`（item の `authorization-<id>` の id）を入れる。API が、その認可が待ちの上限で出たこと、最後の poll で job が全て待ち（Q）だったこと、同じ job の上限到達が 3 回以内であることを確かめる |
+| `job_wait_extend` (g) | クラスタ job の待ちが上限に達した認可（authorization）への「延長」 | 答えは `{"option":"once","note":"延長"}` だけ（note は「延長」の 1 語。補足は reason に書く）。refs に `{"kind":"approval","id":"<認可の id>"}`（item の `authorization-<id>` の id）を入れる。API が、その認可が待ちの上限で出たこと、最後の poll で job が全て待ち（Q）だったこと、同じ job の上限到達が 3 回以内であることを確かめる。人の常設の委任（分類 `job_wait_extend` の生きた grant。global か案件）があれば refs に `{"kind":"authority_grant","id":"<grant の id>"}` を足す。そのときは 3 回の上限で人に回さず（他の条件は同じ）、使ったことが authority の監査に grant の id と実行した CoS を分けて残る |
 
 - 例: 10-25 の d-release の post-merge は推奨どおりなので (c)。10-20 の予算延長は人が答えた予算の決定を frame にした (a)。
   10-13・10-19 の replan 上限は commit で進捗を確かめ、前と違う失敗なら (b)。10-30 の K4 pilot の plan v3（v2 に採点〜集計の経路の
@@ -243,11 +243,18 @@ metadata:
   `GET /api/v1/chat/threads/<t>/messages` で読む。全案件の履歴を毎回読まない。
 - 統括 CoS: 人が統括スレッドで札に答えたら、**自分では回答 operation を実行しない**（案件の件に `instructed_by` を付けた
   operation は 422 で却下される）。その人の発言を `chat.relay_forward`（`POST /api/v1/chat/threads/<案件スレッド>/forwards`、
-  body `{"client_message_id":"forward:<message_id>:<案件スレッド>","message_id":"<人の発言>","task_ids":["<札の task>"],"expires_at":"<24 時間後>"}`）
-  で案件スレッドへ取り次ぐ。本文は渡さない（人の原文と発言時刻が写される）。どの札への答えか読めなければ取り次がずに聞き返す。
+  body `{"client_message_id":"forward:<message_id>:<案件スレッド>","message_id":"<人の発言>","task_ids":["<札の task>"],"expires_at":"<人が言った期限>"}`）
+  で案件スレッドへ取り次ぐ。その場限りの答えは札の task と人が言った期限（言わなければ札の件が閉じるまでの目安）を付ける。
+  人が期限や task を限らずに任せた指示（「今後は」「基本は」「いつも」）は 1 task・24 時間に縮めない
+  （ADR 2026-11-11-cos-standing-context D4）: 先に `authority.grant_propose`（根拠は人の発言の id。全案件に効く定型の代答は
+  `POST /api/v1/projects/global/authority/proposals`、範囲 `{"kind":"global","ref":"*"}`、分類 `job_wait_extend` など）で
+  人に 1 度確かめ、人が受け入れた grant の id を `grant_id` に付けて、その grant の根拠の人の発言を取り次ぐ（`task_ids`・
+  `expires_at` は付けない。別の発言に `grant_id` を付けると 422。grant が取り消されると取り次ぎは案件 CoS の prompt から消える）。本文は渡さない（人の原文と発言時刻が写される）。どの札への答えか読めなければ取り次がずに聞き返す。
   1 つの発言が複数の案件に当たるときは案件ごとに取り次ぐ。取り次いだら、どの案件のどの件へ取り次いだかを返事に書く。
 - 案件 CoS: 統括から取り次がれた発言（`relay.relayed_by` が `cos:<統括スレッド>`）は §9 の取り次ぎと同じく `instructed_by` の
   根拠になる（期限内・task の範囲内だけ）。それを根拠に既存の回答・retry などの operation を実行し、結果を返事に書く。
+  `relay.grant_id` のある取り次ぎ（常設の指示）は `instructed_by` に使えない（422 `cos_instruction_invalid`）。grant の分類の件だけを、
+  grant の id を根拠（`job_wait_extend` なら basis の refs に `{"kind":"authority_grant","id":"<grant>"}`）に挙げて答える。
 - 人が札のボタンで直接答えた件は閉じている。その後に届いた取り次ぎで答え直さない（領域 API が 404／409 で断る）。
 
 ## 11. CoS 不在で人へ回った件の要約（ADR 2026-10-28-cos-inbox-chat-summary）

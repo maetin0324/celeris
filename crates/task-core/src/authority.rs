@@ -26,10 +26,14 @@ pub enum ActionClass {
     ExternalPublish,
     OpaqueExternalEffect,
     LaunchRoot,
+    /// ADR 2026-11-11-cos-standing-context D4: CoS の定型の代答（受信箱の cluster job の待ちの上限を
+    /// 「延長」で答える。`basis.category = job_wait_extend`）を人に回さずに行ってよいという委任。
+    /// 定型の代答の分類だけは global の範囲と長い期限（[`MAX_ROUTINE_GRANT_DAYS`]）を持てる。
+    JobWaitExtend,
 }
 
 impl ActionClass {
-    pub const ALL: [ActionClass; 7] = [
+    pub const ALL: [ActionClass; 8] = [
         ActionClass::HumanRequired,
         ActionClass::Destructive,
         ActionClass::Production,
@@ -37,6 +41,7 @@ impl ActionClass {
         ActionClass::ExternalPublish,
         ActionClass::OpaqueExternalEffect,
         ActionClass::LaunchRoot,
+        ActionClass::JobWaitExtend,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -48,7 +53,13 @@ impl ActionClass {
             ActionClass::ExternalPublish => "external_publish",
             ActionClass::OpaqueExternalEffect => "opaque_external_effect",
             ActionClass::LaunchRoot => "launch_root",
+            ActionClass::JobWaitExtend => "job_wait_extend",
         }
+    }
+
+    /// 定型の代答の委任か（global の範囲と長い期限を持てる分類）。
+    pub fn is_routine_answer(self) -> bool {
+        matches!(self, ActionClass::JobWaitExtend)
     }
 
     pub fn parse(s: &str) -> Option<Self> {
@@ -64,7 +75,13 @@ pub enum ScopeKind {
     Outcome,
     /// 作業単位（task）。
     Task,
+    /// ADR 2026-11-11-cos-standing-context D4: 全案件。`ref` は [`GLOBAL_LEDGER`]、行の `project_id` も
+    /// [`GLOBAL_LEDGER`]。定型の代答の分類（[`ActionClass::is_routine_answer`]）だけが持てる。
+    Global,
 }
+
+/// global の許可の台帳の key（`authority_grants.project_id`・`scope_ref`・API の path の `global` に対応）。
+pub const GLOBAL_LEDGER: &str = "*";
 
 impl ScopeKind {
     pub fn as_str(self) -> &'static str {
@@ -72,6 +89,7 @@ impl ScopeKind {
             ScopeKind::Project => "project",
             ScopeKind::Outcome => "outcome",
             ScopeKind::Task => "task",
+            ScopeKind::Global => "global",
         }
     }
 
@@ -80,6 +98,7 @@ impl ScopeKind {
             "project" => Some(ScopeKind::Project),
             "outcome" => Some(ScopeKind::Outcome),
             "task" => Some(ScopeKind::Task),
+            "global" => Some(ScopeKind::Global),
             _ => None,
         }
     }
@@ -228,9 +247,115 @@ pub fn grant_denial(grant: &AuthorityGrant, now: OffsetDateTime) -> Option<&'sta
     (grant.consumed >= grant.budget).then_some(reason::BUDGET_EXHAUSTED)
 }
 
-/// 範囲 `request` を `grant` が含むか。案件の許可は案件の中のすべてを、途中目標・task の許可は同じ ref だけを含む。
+/// D4: 新しい許可の範囲・分類・期限の形の誤り（人が直せる理由）。global の範囲は定型の代答の分類だけ、期限は
+/// 未来で、定型の代答は [`MAX_ROUTINE_GRANT_DAYS`]・他は [`MAX_GRANT_DAYS`] 以内。
+pub fn grant_shape_problem(
+    kind: ScopeKind,
+    class: ActionClass,
+    expires_at: &str,
+    now: OffsetDateTime,
+) -> Option<String> {
+    if kind == ScopeKind::Global && !class.is_routine_answer() {
+        return Some(format!(
+            "a global grant delegates routine answers only; {} needs a project, outcome or task scope",
+            class.as_str()
+        ));
+    }
+    let max_days = if class.is_routine_answer() {
+        MAX_ROUTINE_GRANT_DAYS
+    } else {
+        MAX_GRANT_DAYS
+    };
+    match OffsetDateTime::parse(expires_at, &Rfc3339) {
+        Err(_) => Some("expires_at must be RFC3339".into()),
+        Ok(at) if at <= now || at > now + time::Duration::days(max_days) => Some(format!(
+            "expires_at must be in the future and within {max_days} days"
+        )),
+        Ok(_) => None,
+    }
+}
+
+/// D4: 許可 `grant` が案件 `project` 全体の常設の指示を裏付けるか。裏付けるなら `None`、裏付けないなら理由。
+/// global の行か同じ案件の案件全体の行で、取り消し・期限・回数のどれにも引っかからないこと。
+pub fn grant_backs(grant: &AuthorityGrant, project: &str, now: OffsetDateTime) -> Option<String> {
+    let covers = match grant.scope.kind {
+        ScopeKind::Global => true,
+        ScopeKind::Project => grant.project_id == project,
+        ScopeKind::Outcome | ScopeKind::Task => false,
+    };
+    if project.is_empty() || !covers {
+        return Some(format!(
+            "the grant's scope {} {} does not cover the whole project",
+            grant.scope.kind.as_str(),
+            grant.scope.reference
+        ));
+    }
+    grant_denial(grant, now).map(str::to_owned)
+}
+
+/// D4: 取り次ぎ（`chat.relay_forward`）が足りるか。足りなければ `Err` に理由。`grant` は `grant_id` を書いたときの
+/// 台帳の行（無い id は `Some(None)`）、`scoped` は task と期限を書いたか、`message` は取り次ぐ人の発言の id。
+/// `grant_id` が無ければ task と期限が要る。あれば、`message` が grant の元の根拠（`human_message` の id）そのもので、
+/// `grant` が取り次ぎ先の案件全体を裏付けること（[`grant_backs`]）。別の発言を grant で常設の指示にしない。
+/// 取り次ぎの時と、CoS の prompt に載せる時（task-dispatch の `cos_context`）に照合する。
+pub fn forward_gap(
+    grant: Option<Option<AuthorityGrant>>,
+    scoped: bool,
+    project: Option<&str>,
+    message: &str,
+    now: OffsetDateTime,
+) -> Result<(), String> {
+    match grant {
+        None if scoped => Ok(()),
+        None => Err("a forward without grant_id needs task_ids and expires_at".into()),
+        Some(None) => Err("no such grant".into()),
+        Some(Some(g))
+            if g.source.kind != SourceKind::HumanMessage || g.source.reference != message =>
+        {
+            Err(format!(
+                "grant {} rests on {} {}, not on message {message}: forward the person's message the grant cites",
+                g.id,
+                g.source.kind.as_str(),
+                g.source.reference
+            ))
+        }
+        Some(Some(g)) => grant_backs(&g, project.unwrap_or_default(), now).map_or(Ok(()), Err),
+    }
+}
+
+/// D4: 許可の提案の通知の題（global の台帳は統括 CoS の提案）。
+pub fn proposal_title(project: &str, class: ActionClass) -> String {
+    if project == GLOBAL_LEDGER {
+        format!(
+            "統括 CoS が全案件に効く許可（{}）を提案しました",
+            class.as_str()
+        )
+    } else {
+        format!(
+            "案件 {project} の CoS が許可（{}）を提案しました",
+            class.as_str()
+        )
+    }
+}
+
+/// D4: 許可の提案の通知の本文。global の提案は、どの案件の画面の「許可」にも並ぶ（[`AuthorityProposal`] の
+/// 台帳は `project_id`。画面は行の台帳へ送る）。
+pub fn proposal_summary(p: &AuthorityProposal) -> String {
+    let place = if p.project_id == GLOBAL_LEDGER {
+        "全案件に効く提案です。どの案件の画面の「許可」からでも"
+    } else {
+        "案件の画面の「許可」で"
+    };
+    format!(
+        "{}。{place}、許可するか断るかを決めてください。問いの key: {}。人の発言: {}",
+        p.note, p.question_key, p.source.reference
+    )
+}
+
+/// 範囲 `request` を `grant` が含むか。global の許可はすべての案件を、案件の許可は案件の中のすべてを、
+/// 途中目標・task の許可は同じ ref だけを含む（案件の許可の候補は同じ案件の行だけから選ぶ）。
 pub fn scope_covers(grant: &GrantScope, request: &GrantScope) -> bool {
-    grant.kind == ScopeKind::Project
+    matches!(grant.kind, ScopeKind::Global | ScopeKind::Project)
         || (grant.kind == request.kind && grant.reference == request.reference)
 }
 
@@ -240,6 +365,7 @@ pub fn scope_rank(kind: ScopeKind) -> u8 {
         ScopeKind::Task => 0,
         ScopeKind::Outcome => 1,
         ScopeKind::Project => 2,
+        ScopeKind::Global => 3,
     }
 }
 
@@ -331,6 +457,8 @@ pub struct NewAuthorityAudit {
 /// 許可の上限（無条件の許可を入れない）。
 pub const MAX_GRANT_BUDGET: i64 = 1000;
 pub const MAX_GRANT_DAYS: i64 = 366;
+/// 定型の代答の委任の期限の上限（人が取り消すまで続く常設の委任。D4）。
+pub const MAX_ROUTINE_GRANT_DAYS: i64 = 3660;
 /// 人が controller を `enabled` にしたときの `launch_root` の許可の既定。
 pub const DEFAULT_LAUNCH_GRANT_DAYS: i64 = 30;
 pub const DEFAULT_LAUNCH_GRANT_BUDGET: i64 = 10;
@@ -384,6 +512,34 @@ mod tests {
         assert_eq!(grant_denial(&g, now), Some(reason::REVOKED));
     }
 
+    /// D4: global の提案の通知は、決める場所としてどの案件の画面でもよいと書く（global の台帳の画面は無い）。
+    #[test]
+    fn authority_proposal_summary_names_the_place_to_decide() {
+        let g = grant();
+        let mut p = AuthorityProposal {
+            id: "p1".into(),
+            project_id: "p".into(),
+            question_key: "k".into(),
+            scope: g.scope,
+            action_class: ActionClass::JobWaitExtend,
+            source: g.source,
+            expires_at: g.expires_at,
+            budget: 1,
+            note: "延長する".into(),
+            proposed_by: "cos:t".into(),
+            state: "open".into(),
+            resolved_grant_id: None,
+            resolved_by: None,
+            resolved_at: None,
+            created_at: g.created_at,
+        };
+        assert!(proposal_summary(&p).starts_with("延長する。案件の画面の「許可」で、"));
+        p.project_id = GLOBAL_LEDGER.into();
+        let global = proposal_summary(&p);
+        assert!(global.contains("全案件に効く提案です。どの案件の画面の「許可」からでも"));
+        assert!(global.ends_with("問いの key: k。人の発言: m"), "{global}");
+    }
+
     #[test]
     fn authority_ledger_scope_cover_is_narrow() {
         let project = GrantScope {
@@ -402,6 +558,17 @@ mod tests {
         assert!(scope_covers(&o1, &o1));
         assert!(!scope_covers(&o1, &o2));
         assert!(!scope_covers(&o1, &project));
+        // D4: the global scope covers every project's scopes and ranks after the project.
+        let global = GrantScope {
+            kind: ScopeKind::Global,
+            reference: GLOBAL_LEDGER.into(),
+        };
+        assert!(scope_covers(&global, &project));
+        assert!(scope_covers(&global, &o1));
+        assert!(scope_rank(ScopeKind::Global) > scope_rank(ScopeKind::Project));
+        assert_eq!(ScopeKind::parse("global"), Some(ScopeKind::Global));
+        assert!(ActionClass::JobWaitExtend.is_routine_answer());
+        assert!(!ActionClass::Production.is_routine_answer());
         assert_eq!(ActionClass::parse("anything"), None);
         for class in ActionClass::ALL {
             assert_eq!(ActionClass::parse(class.as_str()), Some(class));

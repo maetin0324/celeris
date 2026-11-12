@@ -76,7 +76,10 @@ pub struct MigrateHumanSourcesArgs {
 impl KnowledgeCommand {
     /// このサブコマンドが DB を要るか（`rerun` だけ）。`main` が store を開くかどうかを決める。
     pub fn needs_db(&self) -> bool {
-        matches!(self, KnowledgeCommand::Rerun(_) | KnowledgeCommand::Usage(_))
+        matches!(
+            self,
+            KnowledgeCommand::Rerun(_) | KnowledgeCommand::Usage(_)
+        )
     }
 }
 
@@ -186,7 +189,27 @@ pub(crate) fn counted(
 ) -> Result<ExitCode, CliError> {
     let ok = matches!(&result, Ok(code) if *code == ExitCode::SUCCESS);
     kb::usage::note_from_env(op, ok);
+    if let Some(credential) = super::cos_ops::credential() {
+        note_cos_run(op, ok, &credential);
+    }
     result
+}
+
+/// CoS run（run credential がある）の 1 回を API の受け側（`POST /api/v1/cos/knowledge-use`）に送る。どの run
+/// かは daemon が credential から決める。送れなくても KB の操作は失敗にしない（D1）。
+fn note_cos_run(op: kb::KnowledgeOp, ok: bool, credential: &str) {
+    let sent = super::cos_ops::api_config(None).and_then(|mut api| {
+        api.token = Some(credential.to_string());
+        super::cron::request(
+            &api,
+            "POST",
+            "/cos/knowledge-use",
+            Some(serde_json::json!({ "op": op, "ok": ok })),
+        )
+    });
+    if let Err(e) = sent {
+        eprintln!("warning: KB の利用を数えられない（CoS run）: {e}");
+    }
 }
 
 pub fn run(command: KnowledgeCommand) -> Result<ExitCode, CliError> {
@@ -226,12 +249,13 @@ fn run_usage(store: &SqliteStore, args: &UsageArgs) -> Result<ExitCode, CliError
         .into_iter()
         .map(|p| (p.id, p.slug.clone().unwrap_or_else(|| p.id.to_string())))
         .collect();
-    let mut report = task_ops::knowledge_usage::report(&store.tasks_with_events().map_err(db)?, |id| {
-        projects.get(&id).cloned().unwrap_or_else(|| id.to_string())
-    });
+    let label = |id| projects.get(&id).cloned().unwrap_or_else(|| id.to_string());
+    let mut report =
+        task_ops::knowledge_usage::usage_report(&store.tasks_with_events().map_err(db)?, label);
+    let cos_uses = task_core::KnowledgeUseStore::chat_run_knowledge_uses(store).map_err(db)?;
     report
         .runs
-        .extend(task_ops::knowledge_usage::cos_rows(&store.chat_run_knowledge_uses().map_err(|e| CliError::msg(e.to_string()))?));
+        .extend(task_ops::knowledge_usage::cos_rows(&cos_uses, label));
     if args.json {
         let json = serde_json::to_string_pretty(&report)
             .map_err(|e| CliError::msg(format!("failed to render json: {e}")))?;
@@ -436,7 +460,19 @@ fn parse_confidence(raw: Option<&str>) -> Result<Option<Confidence>, CliError> {
 
 /// CoS run の `record`（ADR 2026-10-07 cos-live-fixes D2）: 本文を標準入力から読み、
 /// `POST /api/v1/knowledge/inbox` を `/cos/operations` で呼ぶ。KB の根には触らない。
+/// ADR 2026-11-12-knowledge-usage-per-run D1: CoS の `record` も入口で 1 回を数える。
 pub(crate) fn run_record_cos(
+    args: &RecordArgs,
+    options: &super::cos_ops::Options,
+    credential: &str,
+) -> Result<ExitCode, CliError> {
+    counted(
+        kb::KnowledgeOp::Record,
+        run_record_cos_uncounted(args, options, credential),
+    )
+}
+
+fn run_record_cos_uncounted(
     args: &RecordArgs,
     options: &super::cos_ops::Options,
     credential: &str,

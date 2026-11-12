@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 /// ADR 2026-11-12-knowledge-usage-per-run: 入口で数える run ごとの KB の操作の台帳。
 pub mod usage;
-pub use usage::{KnowledgeOp, KnowledgeUse};
+pub use usage::{KnowledgeOp, KnowledgeUse, KnowledgeUseStore};
 
 /// Phase K-1: 置き場のガード（`record` / MCP `knowledge_propose` / `apply_candidates` が共有する）。
 pub mod layout;

@@ -105,6 +105,75 @@ pub fn read(path: &Path) -> KnowledgeUse {
     total
 }
 
+/// ADR D3: CoS run の回数（`chat_runs.knowledge_use_json`）。CoS run は API の受け側
+/// （`POST /api/v1/cos/knowledge-use`。run credential が run を決める）で数える。
+pub trait KnowledgeUseStore {
+    /// CoS run `run_id` の回数に 1 回を足し、足した後の回数を返す。行が無い・計測していない run（列が NULL）
+    /// なら `Ok(None)`。
+    fn chat_run_knowledge_use_add(
+        &self,
+        run_id: &str,
+        op: KnowledgeOp,
+        ok: bool,
+    ) -> Result<Option<KnowledgeUse>, crate::StoreError>;
+    /// 計測した CoS run の（thread の案件、回数）。
+    fn chat_run_knowledge_uses(
+        &self,
+    ) -> Result<Vec<(Option<crate::ProjectId>, KnowledgeUse)>, crate::StoreError>;
+}
+
+impl KnowledgeUseStore for crate::SqliteStore {
+    fn chat_run_knowledge_use_add(
+        &self,
+        run_id: &str,
+        op: KnowledgeOp,
+        ok: bool,
+    ) -> Result<Option<KnowledgeUse>, crate::StoreError> {
+        use rusqlite::OptionalExtension;
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let raw: Option<Option<String>> = tx
+            .query_row(
+                "SELECT knowledge_use_json FROM chat_runs WHERE run_id = ?1",
+                [run_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let Some(Some(raw)) = raw else {
+            return Ok(None);
+        };
+        let mut used: KnowledgeUse = serde_json::from_str(&raw)?;
+        used.add(Line { op, ok });
+        tx.execute(
+            "UPDATE chat_runs SET knowledge_use_json = ?2 WHERE run_id = ?1",
+            rusqlite::params![run_id, serde_json::to_string(&used)?],
+        )?;
+        tx.commit()?;
+        Ok(Some(used))
+    }
+
+    fn chat_run_knowledge_uses(
+        &self,
+    ) -> Result<Vec<(Option<crate::ProjectId>, KnowledgeUse)>, crate::StoreError> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT t.project_id, r.knowledge_use_json FROM chat_runs r \
+             JOIN chat_threads t ON t.id = r.thread_id WHERE r.knowledge_use_json IS NOT NULL \
+             ORDER BY r.run_id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((r.get::<_, Option<String>>(0)?, r.get::<_, String>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (project, raw) = row?;
+            let project = project.and_then(|p| p.parse::<crate::ProjectId>().ok());
+            out.push((project, serde_json::from_str(&raw)?));
+        }
+        Ok(out)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

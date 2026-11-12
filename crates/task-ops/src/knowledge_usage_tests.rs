@@ -125,7 +125,7 @@ fn read_rate_counts_only_measured_runs_per_agent_and_project() {
             vec![(0, curation("2026-11-01", 0, 0, 4, 0))],
         ),
     ];
-    let report = report(&tasks, |_| "agent-platform".to_string());
+    let report = usage_report(&tasks, |_| "agent-platform".to_string());
 
     let worker = report
         .runs
@@ -164,4 +164,43 @@ fn read_rate_counts_only_measured_runs_per_agent_and_project() {
         (3, 1, 4, 2)
     );
     assert_eq!(total.merge_ratio, Some(0.25));
+}
+
+#[test]
+fn cos_rows_group_measured_cos_runs_per_project() {
+    let project = ProjectId::new();
+    let rows = cos_rows(
+        &[
+            (
+                Some(project),
+                KnowledgeUse {
+                    get: 1,
+                    ..Default::default()
+                },
+            ),
+            (Some(project), KnowledgeUse::default()),
+            (
+                None,
+                KnowledgeUse {
+                    record: 1,
+                    ..Default::default()
+                },
+            ),
+        ],
+        |_| "agent-platform".to_string(),
+    );
+    assert_eq!(rows.len(), 2);
+    let general = &rows[0];
+    assert_eq!(
+        (general.agent.as_str(), general.project.as_deref()),
+        ("cos", None)
+    );
+    assert_eq!((general.measured_runs, general.read_runs), (1, 0));
+    let scoped = &rows[1];
+    assert_eq!(scoped.project.as_deref(), Some("agent-platform"));
+    assert_eq!(
+        (scoped.measured_runs, scoped.read_runs, scoped.get),
+        (2, 1, 1)
+    );
+    assert_eq!(scoped.read_rate, Some(0.5));
 }

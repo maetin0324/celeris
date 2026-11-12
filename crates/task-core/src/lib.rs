@@ -178,7 +178,7 @@ pub use profile::{
 // ---- ADR-0047（Phase 61）: 知識ベース ----
 pub use knowledge::{
     Confidence, Index as KnowledgeIndex, IndexItem as KnowledgeItem, KnowledgeMount, KnowledgeOp,
-    KnowledgeUse, MountKind, SearchHit as KnowledgeHit, merge_mounts,
+    KnowledgeUse, KnowledgeUseStore, MountKind, SearchHit as KnowledgeHit, merge_mounts,
 };
 // ---- ADR-0047 D4（Phase 62）: 知識整理 run の追跡 ----
 pub use knowledge_run::{

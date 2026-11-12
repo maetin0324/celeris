@@ -21,6 +21,8 @@ pub mod execution_scheduler;
 pub mod health_review;
 /// ADR-0074 D1.2 / D1.4（Phase F2）: WU の worktree と工程の統合（daemon 側の git 操作だけ。LLM なし）。
 pub mod integration;
+/// ADR 2026-11-12-knowledge-usage-per-run D2: run ごとの KB の操作の台帳（run の前の用意と run の後の合計）。
+pub(crate) mod knowledge_usage;
 /// Phase F5-fix6: 居なくなったデーモンの run（孤児）を lease 失効を待たずに回収する判定。
 pub mod orphan;
 mod phase_timing;

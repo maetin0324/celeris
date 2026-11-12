@@ -1276,7 +1276,7 @@ impl Dispatcher {
         let metrics = run_since.map(|since| task_core::RunMetrics {
             wall_ms: wall_ms_since(since),
             retries: task.attempts,
-            knowledge: self.run_knowledge_use(&task, current_wu.as_ref()),
+            knowledge: crate::knowledge_usage::run_use(self, &task, current_wu.as_ref()),
             ..Default::default()
         });
         // ADR-0072 D5/D6/D15（Phase E2）: WU の行の更新（このWU自身 + 伝播で一緒に決まった他のWU）を、

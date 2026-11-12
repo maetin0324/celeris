@@ -5,7 +5,7 @@ use super::{SqliteStore, StoreError, format_rfc3339};
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 122;
+pub const SCHEMA_VERSION: u32 = 125;
 
 impl SqliteStore {
     /// migration 0105 の `script_domain_modes.canary_bps`。CHECK は NULL で通るので `IS NOT NULL` を明示する。

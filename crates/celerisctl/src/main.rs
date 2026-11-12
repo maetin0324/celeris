@@ -517,8 +517,7 @@ fn main() -> ExitCode {
             command: KnowledgeCommand::Record(args),
         } = &cli.command
         {
-            let result = knowledge::run_record_cos(args, &cos_options, &credential);
-            return match knowledge::counted(task_core::KnowledgeOp::Record, result) {
+            return match knowledge::run_record_cos(args, &cos_options, &credential) {
                 Ok(code) => code,
                 Err(e) => {
                     eprintln!("error: {e}");

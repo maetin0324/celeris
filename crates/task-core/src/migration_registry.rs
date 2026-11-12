@@ -412,13 +412,19 @@ pub(crate) const MIGRATIONS: &[(u32, &str)] = &[
         122,
         include_str!("../migrations/0122_events_dependents_reopened_index.sql"),
     ),
+    // ADR 2026-11-12-knowledge-usage-per-run D3: `chat_runs.knowledge_use_json`（CoS run の KB の操作の回数）。
+    (
+        125,
+        include_str!("../migrations/0125_chat_run_knowledge_use.sql"),
+    ),
 ];
 
 /// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0038 work_unit_sessions、
-/// 0039 write_sets、0040 behind_targets、0067/0068 の並行 migration）。`migrate` は飛ばし、
+/// 0039 write_sets、0040 behind_targets、0067/0068 の並行 migration、0123 authority の global grant・0124 CoS の
+/// operator 経路は 2026-11-12 時点で別の task の branch にある）。`migrate` は飛ばし、
 /// `schema_migrations` にも記録しない。統合で本物の migration が入ったら、ここから外して
 /// [`MIGRATIONS`] に足す（記録が無いので後から当たる）。
-pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 68, 69, 116];
+pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 68, 69, 116, 123, 124];
 
 /// 版数 `version` の SQL 本体。表に無い版数は `None`。
 pub(crate) fn migration_sql(version: u32) -> Option<&'static str> {

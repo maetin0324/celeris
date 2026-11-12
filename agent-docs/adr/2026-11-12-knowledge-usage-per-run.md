@@ -10,37 +10,44 @@ curation は 10-28 以降の適用 101 回で新規 450・統合 2・削除 502�
 
 ## 決定
 
-### D1 数える場所は KB の操作の入口（`celerisctl knowledge`）
+### D1 数える場所は KB の操作の入口（`celerisctl knowledge`）と API の受け側
 
-`celerisctl knowledge search`・`get`・`record`（CoS run の API 経由の `record` を含む）は、env `CELERIS_KNOWLEDGE_USAGE_FILE` があれば、その file に 1 行の JSON（`{"op":"search"|"get"|"record","ok":true|false}`）を追記する。env が無いとき（人の手元、試験の外）は何も書かない。追記に失敗しても KB の操作は失敗にしない（計測の失敗で作業を止めない。失敗は stderr に 1 行出す）。
+`celerisctl knowledge search`・`get`・`record`（CoS run の API 経由の `record` を含む）が 1 回ごとに数える。
+
+- worker run: env `CELERIS_KNOWLEDGE_USAGE_FILE` があれば、その file に 1 行の JSON（`{"op":"search"|"get"|"record","ok":true|false}`）を追記する。
+- CoS run（`CELERIS_COS_RUN_CREDENTIAL` がある）: `POST /api/v1/cos/knowledge-use`（body は同じ `{op, ok}`）を run credential で送る。API の受け側が credential から run を決めて数える。
+
+どちらも無いとき（人の手元、試験の外）は何も数えない。数えるのに失敗しても KB の操作は失敗にしない（計測の失敗で作業を止めない。失敗は stderr に 1 行出す）。
 
 数えるのは op と成否だけ。検索語・path・本文は書かない（秘密の写しを増やさない）。台帳の形と読み取りの規則は `task_core::knowledge::usage` の 1 か所に置き、CLI と daemon が共に使う。
 
 harness の log・chat_events の tool 要約から数える経路は作らない。CoS の `skill_reads`（harness の tool 呼び出しから数える既存の欄）はこの ADR の範囲外で、変えない。
 
-### D2 file の置き場と run の帰属は daemon が決める
+### D2 台帳の置き場と run の帰属は daemon が決める
 
-daemon は run を起こす前に、run の artifacts の下の `knowledge-usage.jsonl` を消し、その path を env で渡す（ADR-0098 D1・D6 の followups と同じ手順）。run の後に daemon が file を読み、合計を run の記録に付ける。どの run の数かは daemon が持つ run id で決め、file の中身に run id は書かせない（自己申告の帰属を使わない。ADR-0098 D2）。
+worker run: daemon は run を起こす前に、run の artifacts（WU の run は WU の artifacts）の下の `knowledge-usage.jsonl` を空にして置き、その path を followups の env（ADR-0098 D6。どちらも run の中の `celerisctl` の書き先）と一緒に渡す。前の run の台帳は `clear_stale_followups` が置き直す。Remote の run は台帳が手元に無いので置かない（`None`）。run の後に daemon が file を読み、合計を run の記録に付ける。どの run の数かは daemon が持つ run id で決め、file の中身に run id は書かせない（自己申告の帰属を使わない。ADR-0098 D2）。台帳の用意と読み取りは `task_dispatch::knowledge_usage`（dispatcher の module の外）に置く。dispatcher の module は repo health の巨大責務の閾値を超えているので、足すのは配線の行だけにする。
+
+CoS run: CoS の起動（dispatcher の `cos_chat`）は変えない。run credential が run を決めるので、台帳の file も env も要らない。
 
 数は観測値で、権限・完了・判断主体の根拠には使わない。agent が file を書き換えれば数は変わるが、計測の用途（読み取り率の傾向）には足りる。
 
 ### D3 保存先
 
 - worker run（worker・reviewer・planner）: `RunMetrics.knowledge`（`KnowledgeUse { search, get, record }`）。`WorkerFinished` の `metrics` から `runs.metrics_json` に入る。env を渡した run は 0 回でも `Some`。`None` は「計測していない run」（この ADR より前の run と、env を渡さない経路）。読み取り率の分母は `Some` の run だけにする。
-- CoS run: `chat_runs.knowledge_use_json`（migration で足す列）。値の形は worker と同じ `KnowledgeUse`。意味は同じで、置き場だけが run の表に合わせて分かれる。
+- CoS run: `chat_runs.knowledge_use_json`（migration 0125 で足す列）。値の形は worker と同じ `KnowledgeUse`。意味は同じで、置き場だけが run の表に合わせて分かれる。新しい行は列の既定値で 0 回から始まり（計測した run）、migration より前の行は NULL（計測していない run）。書き込みと読み取りは `task_core::KnowledgeUseStore`（`knowledge` の module。`chat` の module の SqliteStore の method 数は閾値を超えているので足さない）。版 123・124 は別の task の branch が使っているので予約にする（`RESERVED_VERSIONS`）。
 
 events への追加は `RunMetrics` の任意欄だけで、既存の event は書き換えない（events は追記専用）。
 
 ### D4 report
 
-`celerisctl knowledge usage [--since <RFC3339>] [--json]`（DB は読み取りだけ）が次を出す。
+`celerisctl knowledge usage [--json]`（DB は読み取りだけ。集計は `task_ops::knowledge_usage`）が次を出す。期間の絞り込みは置かない（計測していない run は分母に入らないので、計測を始めた後の run だけが数に入る）。
 
-- agent の種類（worker・reviewer・planner・cos）と案件ごと: 計測済み run 数、検索か取得を 1 回以上した run 数と率、検索・取得・記録の回数。
+- agent の種類（worker・reviewer・planner は `WorkerFinished.role`、cos は `chat_runs`）と案件（CoS は thread の案件）ごと: 計測済み run 数、検索か取得を 1 回以上した run 数と率、検索・取得・記録の回数。
 - curation（`KnowledgeCurationApplied`）ごと: 日付・新規・統合・削除・修正と、統合の比率（統合 ÷（新規＋統合）。分母 0 なら比率なし）。期間の合計も出す。
 
 ### D5 curation は新規より既存の更新・統合を先に選ぶ
 
-日次整理の計画の決定的な検査（`task_ops::knowledge_curation::validate`）は、新規ページの提案が既存の正本と同じ話題なら拒否する。同じ話題の判定は決定的にする: 同じ最上位の置き場（`projects/<slug>/`・`environment/<分類>/` など、ADR-0047 の layout）にあり、題名を語に分けた集合の Jaccard 係数が 0.6 以上のページがある。拒否の理由には統合先の候補の path を書き、worker が `merge` に直せるようにする。curation の skill の手順も「まず既存ページの更新・統合、無ければ新規」に直す。
+日次整理の計画の決定的な検査（`task_ops::knowledge_curation::validate`）は、新規ページの提案が既存の正本と同じ話題なら拒否する。同じ話題の判定は決定的にする: 同じ最上位の置き場（`projects/<slug>/`・`environment/<分類>/` など、ADR-0047 の layout）にあり、題名を語に分けた集合の Jaccard 係数が 0.6 以上のページがある。拒否の理由には統合先の候補の path を書き、worker が `merge` に直せるようにする。拒否の文は worker がそのまま `fix`・`merge` に直せる形にする（`celerisctl curation validate` で worker が提出前に確かめられる）。curation の skill（本番 KB の `skills/` にあり repo には無い）の手順に「まず既存ページの更新・統合、無ければ新規」を足す作業は、本番 KB の変更なので task の進捗の「本番への移行」に人の手順として書く。
 
 閾値 0.6 は観測の前の初期値で、D4 の report の統合比率を見て変える。変えるときはこの ADR に付記する。
 
@@ -52,6 +59,6 @@ events への追加は `RunMetrics` の任意欄だけで、既存の event は�
 ## 検証
 
 - D1: CLI の試験で、env を渡した search・get・record が台帳に op ごとに 1 行ずつ書かれ、env が無ければ書かれないこと。
-- D2・D3: dispatcher の試験で、run の後に台帳の合計が `WorkerFinished.metrics.knowledge` に入ること、CoS run の行に `knowledge_use_json` が入ること。
+- D2・D3: dispatcher の試験で、run の後に台帳の合計が `WorkerFinished.metrics.knowledge` に入ること（前の run の台帳を混ぜない）。task-api の試験で、`POST /api/v1/cos/knowledge-use` が credential の run の `knowledge_use_json` に数え、body の run id と人の token を受けず、NULL の run を数えないこと。
 - D4: store の試験の DB で、agent の種類・案件ごとの率と curation の比率を固定する。
 - D5: 同じ話題の既存ページがある新規の提案を検査が拒否し、統合の提案は通る試験。

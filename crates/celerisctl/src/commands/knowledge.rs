@@ -54,6 +54,8 @@ pub enum KnowledgeCommand {
     Reindex(RootArgs),
     /// 知識整理 run をもう一度やらせる（ADR-0052 D3。**DB を開く**管理系）。
     Rerun(RerunArgs),
+    /// KB の使われ方の report（ADR 2026-11-12-knowledge-usage-per-run D4。**DB を開く**。読み取りだけ）。
+    Usage(UsageArgs),
     /// 旧形の `sources: human` を git 履歴から『人が書いた』『人の指示由来』に分ける
     /// （ADR-0047 付記 2026-10-04 H4。既定は dry-run。`--apply` で 1 commit）。
     MigrateHumanSources(MigrateHumanSourcesArgs),
@@ -74,8 +76,15 @@ pub struct MigrateHumanSourcesArgs {
 impl KnowledgeCommand {
     /// このサブコマンドが DB を要るか（`rerun` だけ）。`main` が store を開くかどうかを決める。
     pub fn needs_db(&self) -> bool {
-        matches!(self, KnowledgeCommand::Rerun(_))
+        matches!(self, KnowledgeCommand::Rerun(_) | KnowledgeCommand::Usage(_))
     }
+}
+
+#[derive(Args, Debug)]
+pub struct UsageArgs {
+    /// JSON で出す。
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Args, Debug)]
@@ -188,8 +197,8 @@ pub fn run(command: KnowledgeCommand) -> Result<ExitCode, CliError> {
         KnowledgeCommand::Record(args) => counted(kb::KnowledgeOp::Record, run_record(&args)),
         KnowledgeCommand::Reindex(args) => run_reindex(&args),
         KnowledgeCommand::MigrateHumanSources(args) => run_migrate_human_sources(&args),
-        KnowledgeCommand::Rerun(_) => Err(CliError::msg(
-            "knowledge rerun は DB を開く（`KnowledgeCommand::needs_db` を見て store 付きで呼ぶこと）",
+        KnowledgeCommand::Rerun(_) | KnowledgeCommand::Usage(_) => Err(CliError::msg(
+            "knowledge rerun / usage は DB を開く（`KnowledgeCommand::needs_db` を見て store 付きで呼ぶこと）",
         )),
     }
 }
@@ -201,8 +210,63 @@ pub fn run_with_store(
 ) -> Result<ExitCode, CliError> {
     match command {
         KnowledgeCommand::Rerun(args) => run_rerun(store, &args),
+        KnowledgeCommand::Usage(args) => run_usage(store, &args),
         other => run(other),
     }
+}
+
+/// ADR 2026-11-12-knowledge-usage-per-run D4: agent の種類・案件ごとの読み取り率と、curation ごとの
+/// 新規・統合・削除・修正と統合の比率を出す。集計は `task_ops::knowledge_usage::report`（events が正本）。
+fn run_usage(store: &SqliteStore, args: &UsageArgs) -> Result<ExitCode, CliError> {
+    use task_core::{OrgDirectory, TaskStore};
+    let db = |e: task_core::StoreError| CliError::msg(e.to_string());
+    let projects: std::collections::BTreeMap<_, _> = store
+        .project_list()
+        .map_err(db)?
+        .into_iter()
+        .map(|p| (p.id, p.slug.clone().unwrap_or_else(|| p.id.to_string())))
+        .collect();
+    let mut report = task_ops::knowledge_usage::report(&store.tasks_with_events().map_err(db)?, |id| {
+        projects.get(&id).cloned().unwrap_or_else(|| id.to_string())
+    });
+    report
+        .runs
+        .extend(task_ops::knowledge_usage::cos_rows(&store.chat_run_knowledge_uses().map_err(|e| CliError::msg(e.to_string()))?));
+    if args.json {
+        let json = serde_json::to_string_pretty(&report)
+            .map_err(|e| CliError::msg(format!("failed to render json: {e}")))?;
+        outln!("{json}");
+        return Ok(ExitCode::SUCCESS);
+    }
+    let rate = |r: Option<f64>| r.map_or("-".to_string(), |r| format!("{:.1}%", r * 100.0));
+    outln!("agent\tproject\tmeasured_runs\tread_runs\tread_rate\tsearch\tget\trecord");
+    for row in &report.runs {
+        outln!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            row.agent,
+            row.project.as_deref().unwrap_or("-"),
+            row.measured_runs,
+            row.read_runs,
+            rate(row.read_rate),
+            row.search,
+            row.get,
+            row.record
+        );
+    }
+    outln!("");
+    outln!("curation\tnew\tmerged\tdeleted\tfixed\tmerge_ratio");
+    for row in report.curation.iter().chain([&report.curation_total]) {
+        outln!(
+            "{}\t{}\t{}\t{}\t{}\t{}",
+            row.date.as_deref().unwrap_or("total"),
+            row.new,
+            row.merged,
+            row.deleted,
+            row.fixed,
+            rate(row.merge_ratio)
+        );
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 /// ADR-0052 D3: `knowledge_runs` の 1 行を「まだやり直していない失敗」に戻す。

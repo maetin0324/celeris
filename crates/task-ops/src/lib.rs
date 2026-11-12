@@ -44,6 +44,8 @@ pub mod integrate_task;
 pub mod knowledge;
 /// ADR-0131 D10: 日次の知識整理計画を検証し、差分と反映を決定的に作る。
 pub mod knowledge_curation;
+/// ADR 2026-11-12-knowledge-usage-per-run D4: KB の使われ方の report。
+pub mod knowledge_usage;
 /// ADR-0044 D6（Phase 55）: 案件・途中目標の中止・一時停止・アーカイブ。
 pub mod lifecycle;
 /// ADR-0046 D5（Phase 59）: 担当の決定的な選び方（capability matching）。

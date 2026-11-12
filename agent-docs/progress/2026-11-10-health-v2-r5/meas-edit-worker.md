@@ -65,11 +65,16 @@ edit→verify の対象は両側とも test-affected.sh --list の 7 crate（cel
 - `python3 -I agent-docs/progress/2026-11-10-health-v2-r5/test_measure_summary.py` → exit 0（17 件 OK）。
 - 上記の compare → exit 0（663 秒、1 試行）。
 - `bash agent-docs/progress/2026-11-10-health-v2-r5/measure.sh --validate agent-docs/progress/2026-11-10-health-v2-r5/remeasure-edit-worker.json && bash agent-docs/progress/2026-11-10-health-v2-r5/measure.sh --require-compare agent-docs/progress/2026-11-10-health-v2-r5/remeasure-edit-worker.json task-worker` → exit 0（計画の check と同じコマンド）。
-- `bash agent-docs/progress/2026-11-10-health-v2-r5/measure.sh summary --check agent-docs/progress/2026-11-10-health-v2-r5/meas-edit-worker.md agent-docs/progress/2026-11-10-health-v2-r5/remeasure-edit-worker.json` → 下の「検査」に結果を書く。
+- `bash agent-docs/progress/2026-11-10-health-v2-r5/measure.sh summary --check agent-docs/progress/2026-11-10-health-v2-r5/meas-edit-worker.md agent-docs/progress/2026-11-10-health-v2-r5/remeasure-edit-worker.json` → exit 0。
 
-## 検査
+## 検査（提出時の HEAD で実行。WU の基準は `$CELERIS_WU_BASE`）
 
-（提出前に書く）
+- `bash scripts/dev/test-affected.sh` → exit 0（136 秒。docs のみの変更として試験対象なし、repo_health_gate は合格）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（26 秒）。
+- `cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check` → exit 0。
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → exit 0（変更 90 path はすべて `agent-docs/progress/2026-11-10-health-v2-r5/` の下）。
+- 上記の summary --check → exit 0。
 
 ## 未解決
 

@@ -40,7 +40,18 @@ updated: 2026-11-12
 - `celerisctl scratch status` は枠の行に `--test-threads N` を足し、dir を決められないときはその理由を 1 行出す。
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`。main への rebase の後に実行）
-- attempt 3: ATTEMPT3_EVIDENCE
+- attempt 3: `bash scripts/dev/test-affected.sh`: exit 0（1169 秒、load 25〜43）。対象 crate は celeris・celeris-campaign・celerisctl・
+  llm-proxy・task-api・task-dispatch・task-worker。nextest 5993 passed・22 skipped、`check-slot: 枠 0/2 を使う。--test-threads 12`
+  （枠の dir は `/run/user/1001/celeris/check-slots` に作られた）。repo-health verdict=pass（new 0・worsened 0）、
+  runner-tmp-lifecycle ok（199 checks）、runner-tmp-repro ok（18 case）、script bundle SKIP 0 件。
+- attempt 3: `cargo nextest run -p task-worker -E 'test(/check_slots::/)'`: 7 passed（新しい
+  `slot_count_and_test_threads_match_the_shell_lib`・`slots_dir_matches_the_shell_lib_and_never_falls_back_to_home`・
+  `without_a_slot_dir_the_daemon_warns_once_and_runs_checks_unwrapped` を含む）。
+- attempt 3: `cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0、
+  `sh scripts/dev/progress-index.sh --check` exit 0。
+- attempt 3: `git grep 'min(8, max(2, nproc/3))' -- scripts/dev/test-parallel.sh docs/ops/nextest.md docs/ops/selfdeploy.md` は 0 件
+  （exit 1）。`grep -n '\.cache\|HOME' crates/task-worker/src/check_slots.rs scripts/dev/lib/check-slot.sh` も 0 件。
+- test-affected・clippy は「phase 1: 枠の dir を host の local …」の commit で実行した。その後の commit は進捗ファイルだけを変える。
 
 ## 証拠（attempt 2、記録）
 - `bash scripts/dev/test-affected.sh`（最後の実行）: exit 0（1188 秒、load 50〜60）。nextest 6071 件 6071 passed、script bundle SKIP 0 件、
@@ -67,6 +78,7 @@ updated: 2026-11-12
 - phase 1: 進捗に提出時の検査の結果を書き、done にする
 - phase 1: 進捗に最後の test-affected の結果を書く
 - phase 1: 枠の dir を host の local（XDG_RUNTIME_DIR）に移し、旧い並列度の説明を消し、Rust と shell の式の一致を試験で固める
+- phase 1: 進捗に attempt 3 の検査の結果を書く
 
 ## 未解決事項
 - `ownerless_runs` の reviewer の行の TTL は枠の待ちを含まない（ADR の既知の限界）。

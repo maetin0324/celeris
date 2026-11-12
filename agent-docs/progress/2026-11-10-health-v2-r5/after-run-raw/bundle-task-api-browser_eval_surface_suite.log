@@ -1,0 +1,26 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.24s
+     Running tests/browser_eval_surface_suite/main.rs (/local/celeris/data/scratch/targets/task-01M76AG298YER7PJB6M781C77X/wu-01M76B4XA4MZRYHBP348ZP7R49/target/debug/deps/browser_eval_surface_suite-5311125ba476b63e)
+
+running 19 tests
+test browser_restore_live_session::restore_http_binds_to_real_isolated_session_and_never_opens_on_refusal ... ok
+test browser_restore_deliver::restore_enters_observation_stop_until_session_end ... ok
+test api_principals::an_integration_answer_and_a_task_answer_carry_the_principal ... ok
+test mcp_admin::lists_clients_without_the_token_value ... ok
+test api_principals::api_principals_mcp_token_reads_with_a_client_id_and_never_writes ... ok
+test mcp_admin::requires_a_bearer_token ... ok
+test api_principals::api_principals_cos_runs_are_recorded_with_their_thread ... ok
+test api_principals::promotion_audit_distinguishes_web_and_external_operator ... ok
+test mcp_admin::lists_calls_optionally_filtered_by_client ... ok
+test api_principals::api_principals_two_tokens_are_recorded_as_different_actors ... ok
+test api_principals::api_principals_unknown_bearer_and_spoofed_headers_are_not_trusted ... ok
+test api_principals::pause_and_resume_record_the_authenticated_actor ... ok
+test campaign_variant_atomic::half_variant_and_changed_content_are_rejected_without_residue ... ok
+test campaign_variant_atomic::variant_post_resend_and_org_drift ... ok
+test api_principals::a_comment_answer_carries_the_principal_and_its_author_kind ... ok
+test campaign_variant_atomic::org_drift_on_new_post_leaves_nothing ... ok
+test api_principals::task_creation_and_retry_record_who_created_the_task ... ok
+test api_principals::retry_idempotency_preserves_the_token_principal ... ok
+test campaign_ident::create_stores_campaign_identity_and_resend_is_idempotent ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+

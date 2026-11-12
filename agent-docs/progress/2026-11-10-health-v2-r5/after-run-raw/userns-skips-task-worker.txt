@@ -1,0 +1,47 @@
+# cargo nextest run -p task-worker --success-output immediate（CELERIS_USERNS_TESTS 未設定）で 'SKIPPED (' を出した試験: 34 件
+# task-worker: 16
+# task-worker::browser_cdp_sink: 1
+# task-worker::browser_egress_relay: 1
+# task-worker::browser_h3_wire: 1
+# task-worker::browser_injection_attacks: 1
+# task-worker::browser_injection_wire: 1
+# task-worker::browser_launcher_ptrace: 1
+# task-worker::browser_restore_deliver: 4
+# task-worker::browser_runtime_isolated: 4
+# task-worker::browser_runtime_supervisor: 1
+# task-worker::browser_sandbox_artifacts: 2
+# task-worker::browser_shared_cdp: 1
+task-worker browser::tests::actions_and_domains_outside_task_policy_are_stopped_before_the_substrate | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker browser::tests::cleanup_failure_marks_browser_failed_instead_of_reporting_completion | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker browser::tests::click_approval_opens_a_wait_and_resumes_the_same_session_once | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker browser::tests::execution_fallback_uses_fresh_session_and_refuses_without_conformance | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker browser::tests::launch_uses_generated_policy_and_binds_its_hash_to_the_run | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker browser::tests::opencode_and_claude_share_supervised_browser_lifecycle_artifacts_and_cleanup | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker browser::tests::production_action_path_reaches_fixture_through_real_browser_and_egress | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker browser::tests::specialist_wraps_existing_harness_and_runs_same_browser_task | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker browser_launcher::userns::tests::real_namespace_when_host_is_ready | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker db_guard::tests::a_nested_user_namespace_cannot_undo_the_read_only_mount | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker db_guard::tests::host_config_read_only_inside_namespace | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker db_guard::tests::probe_confirms_the_db_is_not_writable_inside | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker db_guard::tests::ssh_config_includes_still_parse_inside_the_namespace | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker db_guard::tests::the_db_and_its_wal_files_are_read_only_but_siblings_stay_writable | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker db_guard::tests::the_guarded_process_has_no_capabilities_and_keeps_its_uid | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker db_guard::tests::user_systemd_bus_is_hidden_from_launched_process | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker::browser_cdp_sink real_browser_injection_receipt_and_origin_guards | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker::browser_egress_relay fixture_reachable_only_through_per_connection_egress_proxy | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker::browser_h3_wire real_broker_browser_injection_receipt_and_origin_guards | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker::browser_injection_attacks real_browser_injection_attack_matrix | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker::browser_injection_wire real_broker_browser_injection_receipt_and_origin_guards | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker::browser_launcher_ptrace launcher_chrome_denies_daemon_uid_ptrace | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker::browser_restore_deliver identity_restore_sameuid_rejected_in_production | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker::browser_restore_deliver live_session_delivers_restored_state_over_its_own_cdp_pipe | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker::browser_restore_deliver supervisor_entry_delivers_restored_state_to_controller_cdp_under_harness_admission | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker::browser_restore_deliver restored_session_refuses_agent_observation | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker::browser_runtime_isolated controller_kill_leaves_no_runtime_processes | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker::browser_runtime_isolated probe_inside_runtime_cannot_reach_host_sockets_or_network | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker::browser_runtime_isolated real_browser_in_runtime_facts_and_restore_refused_on_same_uid | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker::browser_runtime_isolated restart_reaps_recorded_runtime_and_ignores_stale_records | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker::browser_runtime_supervisor runtime_processes_do_not_survive_controller_kill_restart_or_stop | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker::browser_sandbox_artifacts real_sandbox_launcher_chrome_downloads_inline_pdf_after_login | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker::browser_sandbox_artifacts real_sandbox_screenshot_and_pdf_download_reach_the_output_dir | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)
+task-worker::browser_shared_cdp real_shared_cdp_and_auth_section | SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)

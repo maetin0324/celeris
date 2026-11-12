@@ -40,6 +40,9 @@ escalate したら、CoS の判定を採る。fallback の通知は `ok=0`・`er
 （`cos_inbox_revision_conflict`、「既に退避で人へ送った。判定は記録し、送り直さない」）を返し、判定と理由は rejected の
 CoS 操作の監査行に残る。POST の最中（送信中）の行は取り下げられない（記録は送信済みになる）。fallback が書いた hand-off の行・
 統括 CoS への要約依頼はそのまま残る（記録として）。
+付記 2026-11-12: CoS が件を外部 operator 宛てに回す escalate（[ADR 2026-11-12 CoS の一次対応の範囲](2026-11-12-cos-triage-scope.md)
+D2）も同じ規則に従う。退避の通知を取り下げ、route 行を `route=operator`・`notification_id` NULL に書き換える（通知は作らない）。
+人宛てと operator 宛ての書き換えは `cos_fallback::take_unsent_fallback` 1 つにある。
 
 D3. `triage_launch` は待ちのある thread を毎 tick SQLite から読む（プロセス内の「待ちがあるかも」の印 `triage.dirty` を消す）。
 件を拾わなかった thread には理由（`not_accepting_new_work`・`disk_not_ready`・`cos_disabled`・`cos_skill_drift`（ADR 2026-11-11-cos-skill-sync D3 の門）・`thread_run_live`・`no_cos_slot`・
@@ -68,7 +71,7 @@ D6. web のブラウザ通知（未読の知らせの数が増えるたびに出
 - `crates/task-dispatch/src/dispatcher/cos_chat/triage.rs`・`launch.rs`: `triage_launch` の skip 理由（`launch_skips`）、
   `dirty` の撤去。
 - `crates/task-dispatch/src/dispatcher/cos_chat/root_done.rs`: D4。
-- `crates/task-core/src/cos_fallback.rs`: `unsent`・`withdraw_unsent`・`judged_from`・`take_route`・`WITHDRAWN`（D2 の SQL）。
+- `crates/task-core/src/cos_fallback.rs`: `unsent`・`withdraw_unsent`・`judged_from`・`take_route`・`take_operator_route`（private の `take_unsent_fallback` を共に使う）・`WITHDRAWN`（D2 の SQL）。
   `crates/task-core/src/chat/triage.rs` の `cos_triage_resolve_tx`・`cos_triage_outbox_claim` がこれを同じ transaction で呼ぶ。
   `crates/task-api/src/cos/inbox.rs`（`terminal_conflict`）: 未送信の fallback の件の resolve を受ける。
 - `crates/celeris/src/config/cos.rs`: `fallback_after_secs`・`CosConfig::fallback_after_secs()`・`FALLBACK_MARGIN_SECS`。

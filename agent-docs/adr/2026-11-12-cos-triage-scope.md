@@ -69,6 +69,19 @@ policy だけの branch を main に入れる、本番の昇格・rollback、hos
 - operator は `GET /api/v1/cos/inbox?state=escalated` の `addressee = "operator"` の件を拾う（`docs/ops/external-operator.md` §1）。
   人向けの受信箱（`/inbox`）には元の待ちがそのまま出るので、人も答えられる。
 
+付記 2026-11-12（final review の差し戻し。退避の通知が未送信の件を operator 宛てに回す）: 退避の通知
+（[ADR 2026-11-11 退避の時刻](2026-11-11-cos-fallback-timing.md) D2）が未送信の件（state `fallback`、経路 `fallback`）は
+resolve で CoS が判定できる。この件を `operator` 宛てに回すと、退避の通知は取り下げられ（`ok=0`・`error` は `WITHDRAWN`）、
+退避の経路の行が `route = 'operator'`・`notification_id` NULL に変わる。通知の行は増えず、件は `escalated`、`addressee` は
+`operator` になる。人宛ての escalate が退避の行を `escalation` に書き換えるのと同じ規則で、規則は
+`task_core::cos_fallback` の private 関数 `take_unsent_fallback` 1 つにあり、`take_route`（人宛て）と `take_operator_route`
+（operator 宛て）の両方がそれを使う。前は `take_operator_route` が `INSERT … ON CONFLICT DO NOTHING` だけで、退避の行が既に
+あると何もしなかった。続く `judged_from` が退避の通知を取り下げるので、件は人にも operator にも渡らず、経路は `fallback` の
+まま（addressee は human）だった。送信済みの退避の件は今どおり 409 で、経路は `fallback` のまま（人が持っている）。退避を
+積んだときに統括 CoS に書いた札（project の thread の件だけ）は表示の写しとして残る。試験は task-core の
+`cos_triage_operator_escalation_before_the_send_takes_the_fallback_route` と task-api の
+`cos_triage_scope_g_operator_escalation_takes_over_an_unsent_fallback`。
+
 ### D3 それ以外は CoS が task の目的の範囲で答え、根拠を残す
 
 - basis の `category` に `task_scope`（task の目的・受け入れ条件・ADR・grant・人の過去の指示から CoS が判断する）を足す。

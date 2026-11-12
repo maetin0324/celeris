@@ -45,6 +45,27 @@ pub fn judged_from(
     Ok(if judged { "fallback" } else { "running" })
 }
 
+/// D2: CoS routes an item whose fallback is unsent (to the person or to the operator): the
+/// fallback is withdrawn and `route` takes the fallback's route row with `notification_id`
+/// (`Some(rows)`; 0 when the row was already taken). `None` when there is no unsent fallback.
+fn take_unsent_fallback(
+    conn: &Connection,
+    item_id: &str,
+    route: &str,
+    notification_id: Option<&str>,
+    at: &str,
+) -> rusqlite::Result<Option<usize>> {
+    if !withdraw_unsent(conn, item_id)? {
+        return Ok(None);
+    }
+    conn.execute(
+        "UPDATE cos_notification_routes SET route=?2,notification_id=?3,updated_at=?4 \
+         WHERE item_id=?1 AND route='fallback'",
+        params![item_id, route, notification_id, at],
+    )
+    .map(Some)
+}
+
 /// CoS escalates an item whose fallback is unsent: the fallback is withdrawn and the escalation
 /// takes its route row (`Some(rows)`). `None` leaves the claim to the normal insert.
 pub fn take_route(
@@ -54,15 +75,10 @@ pub fn take_route(
     notification_id: &str,
     at: &str,
 ) -> rusqlite::Result<Option<usize>> {
-    if route != "escalation" || !withdraw_unsent(conn, item_id)? {
+    if route != "escalation" {
         return Ok(None);
     }
-    conn.execute(
-        "UPDATE cos_notification_routes SET route='escalation',notification_id=?2,updated_at=?3 \
-         WHERE item_id=?1 AND route='fallback'",
-        params![item_id, notification_id, at],
-    )
-    .map(Some)
+    take_unsent_fallback(conn, item_id, route, Some(notification_id), at)
 }
 
 /// ADR 2026-11-12-cos-triage-scope D2: `cos_notification_routes.route` of an item CoS routed to the
@@ -75,9 +91,14 @@ pub fn is_operator_route(route: &str) -> bool {
     route == OPERATOR_ROUTE
 }
 
-/// D2: take the operator route of `item_id` (in the caller's transaction). `false` when the item
-/// already has a route (a retried escalate, or a fallback the notifier sent).
+/// D2: take the operator route of `item_id` (in the caller's transaction). An unsent fallback is
+/// withdrawn and its route row becomes the operator route (no notification), as an escalation to
+/// the person takes it in [`take_route`]. `false` when the item already has a route (a retried
+/// escalate, or a fallback the notifier sent).
 pub fn take_operator_route(conn: &Connection, item_id: &str, at: &str) -> rusqlite::Result<bool> {
+    if let Some(taken) = take_unsent_fallback(conn, item_id, OPERATOR_ROUTE, None, at)? {
+        return Ok(taken > 0);
+    }
     let claimed = conn.execute(
         "INSERT INTO cos_notification_routes(item_id,notification_id,route,source_kind,source_key,\
          source_revision,created_at,updated_at) SELECT id,NULL,?2,source_kind,source_key,\
@@ -86,3 +107,7 @@ pub fn take_operator_route(conn: &Connection, item_id: &str, at: &str) -> rusqli
     )?;
     Ok(claimed > 0)
 }
+
+#[cfg(test)]
+#[path = "cos_fallback_tests.rs"]
+mod tests;

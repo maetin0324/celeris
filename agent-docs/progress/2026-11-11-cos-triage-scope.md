@@ -73,6 +73,14 @@ updated: 2026-11-12
   - 台帳: `RequestRow.operator_waits`・`summary.open_operator_waits`、`HumanWaitSpan` を `RouteWaitSpan` に改名、schema `celeris.eval-requests/2`。試験 `operator_route_is_not_a_human_wait`。
   - 文書: ADR D2 の付記（表示・台帳・拾い方）、ADR 2026-10-07 と ADR 2026-10-27-eval-request-ledger の付記、`docs/ops/mlsys-main-4-ops-r1.md` §8 の 11→12 の行、skill §2 の 2 文を D6（決定に先に答えて判定し直す）と `replan` は `task_scope`・`withdraw` は escalate に書き換え、`docs/ops/external-operator.md` §1 に operator 宛ての件の拾い方、`docs/ops/cos-chat.md` の Discord の確認手順、下の「本番への移行」を昇格の skill の写しと門に合わせた。
 
+## 変更（WU operator-fallback、final review の差し戻し）
+- final review の不合格（criterion 6）: 退避の通知が未送信の件（state `fallback`、経路 `fallback`）を CoS が `to=operator` で回すと、`task_core::cos_fallback::take_operator_route` の `INSERT … ON CONFLICT DO NOTHING` が何もせず、続く `judged_from` が退避の通知を取り下げた。件は人にも operator にも渡らず、経路は `fallback` のまま（addressee は human）だった。
+- 実装前の整理: 根本原因は、退避の行を CoS の判断に譲る規則（ADR 2026-11-11-cos-fallback-timing D2）が `take_route` の人宛て（escalation）にしか無かったこと。owner は `crates/task-core/src/cos_fallback.rs`。退避の行の引き継ぎを private 関数 `take_unsent_fallback` 1 つにまとめ、`take_route`（人宛て、通知の id つき）と `take_operator_route`（operator 宛て、通知の id は NULL）の両方が使う。未送信の退避が無ければ `take_operator_route` は今の INSERT。2 つの公開の signature は変えず、`store/` と `chat/` の file は変えていない。新しい state・fallback・切替 flag は無し。撤去は `take_operator_route` の INSERT だけの規則。
+- `phase 1: 未送信の退避がある件を operator 宛てに回すと退避の経路を operator に引き継ぐ（final review の差し戻し）`
+  - task-core `cos_fallback`: 上の直し。試験 `cos_triage_operator_escalation_before_the_send_takes_the_fallback_route`（新しい `cos_fallback_tests.rs`）: 未送信の退避の件で operator の経路を取ると、退避の通知は `ok=0`・`error=WITHDRAWN`、経路は `operator`・`notification_id` NULL、件は `escalated`、通知の行は増えない。再試行は `false`。送信済みの退避の件は経路を取らず、件は `fallback` のまま。
+  - task-api の試験 `cos_triage_scope_g_operator_escalation_takes_over_an_unsent_fallback`: resolve は 200・`already_routed=false`、`GET /api/v1/cos/inbox?state=escalated` の `addressee` は `operator`、通知の行は増えない。送信済みの退避の件は 409 で、経路は `fallback` のまま。
+  - 文書: ADR 2026-11-12-cos-triage-scope D2 の付記、ADR 2026-11-11-cos-fallback-timing D2 の付記と実装の行、ADR 2026-10-28-cos-routine-delegated-answers の付記 A6（D1 の「定型の種類だけ」は ADR 2026-11-12 が置き換えた）。`docs/api/v1/api.md` の「§3.130 の『定型の代答の根拠』」を今の段落名「CoS の回答の根拠」に、77k の行の「定型の代答 `job_wait_extend`」を「`job_wait_extend`」に直した。skill cos-inbox-triage §2 の表の分類名を ADR D1 の 8 分類（`credential_input`・`objective_change`・`beyond_approval`・`security_boundary`・`production_config`・`paid_trial`・`research_judgment`・`weaken_checks`）にそろえ、D1 の分類でない行（人が指定した `human_required` 等、外部公開・破壊的な操作）はそう書いた。版は 12 のまま。
+
 ## 証拠（提出時の HEAD で実行。attempt 4）
 - `bash scripts/dev/test-affected.sh`（開始 load 46、1428 秒）→ exit 100。nextest 8328 件中 8327 件合格、web 712 件・control-ts 134 件合格、script bundle SKIP 0 件。落ちた 1 件は範囲外の task-worker `ssh::tests::run_command_times_out_and_kills_the_ssh_process_group`（偽 ssh の子 process が残ったと判定）。この差分は task-worker に触れておらず、同じ HEAD で単独に 3 回実行して 3 回とも合格（各 2.0 秒）。負荷の高い時の flaky として未解決に書く。
 - 同じ HEAD（進捗の証拠の commit の後）で `bash scripts/dev/test-affected.sh` を再実行（開始 load 42、939 秒）→ exit 0。nextest 8328 件すべて合格、web 712 件・control-ts 134 件合格、script bundle SKIP 0 件。
@@ -82,6 +90,7 @@ updated: 2026-11-12
 
 ## 未解決
 - task-worker の `ssh::tests::run_command_times_out_and_kills_the_ssh_process_group` は load 46〜60 の test-affected で 1 回落ちた（単独では合格）。同じ系統の `remote_command_times_out_and_kills_the_ssh_process_group` も高負荷で落ちることがある。この task の範囲外で、直すなら task-worker の ssh の試験を対象にした別 task にする。
+- 退避を積んだときに統括 CoS に書いた札（project の thread の件だけ）は、CoS が後で operator 宛てに回しても表示の写しとして残る（札は `chat/window.rs` が書き、この WU の範囲の外）。件の addressee と受信箱 thread の要約は operator になる。
 - 本番で送信済みの退避の件（例 `dependents_reopened-01M75722QN630BBASEQ759KG4T-735`）は人に残る。配備の後は、人が受信箱で閉じるか、依存先の後続が動き出すと消える。
 - 照合が判定する人に残す件は、件の種類と本文から決まるもの（credential の待ち・cluster の login・ブラウザの待ち・`near_limit:` の計画）だけ。目的の変更・本番 config・有料の試行・研究上の判断・検査を弱める判断は、CoS が方針（常設の節と skill §0）で判定する。
 
@@ -94,3 +103,4 @@ updated: 2026-11-12
 6. `celerisctl eval requests` の出力は schema `celeris.eval-requests/2`（`operator_waits`・`open_operator_waits` が増えた）。版 "12" 以降の人の待ちの数は版 "11" 以前と比べない（`docs/ops/mlsys-main-4-ops-r1.md` §8）。
 
 ## 提案
+- config の `[cos.triage] human_required`（`crates/celeris/src/config/cos.rs` の `HUMAN_REQUIRED_REASONS`、既定は v6 の 7 分類 `objective_change`・`beyond_frame`・`external_publish`・`destructive`・`secret_or_security`・`standing_permission`・`explicit_human`）は、読み込みの検査と `CosTriageSettings` に入るだけで、prompt にも API の検査にも渡らない（この task より前から）。ADR 2026-11-12 D1 の分類（照合の `reserved` と skill §2 の表）と名前も中身も違い、人に残す件の一覧の正本が 2 つに見える。提案: 別 task で、(a) 欄を消して読み込みエラーにする（D1 の列挙が正本、人の追加は task の `human_required` の label で行う）、または (b) 欄の語彙を D1 の 8 分類に替えて照合（`task_ops::triage_match`）と常設の節に渡す、のどちらかを人が決める。推奨は (a)（使われていない欄で、D1 と二重の正本になるため）。どちらも本番 config の書き換えが要るので「本番への移行」に書く。この WU では欄を消さない（範囲の外）。

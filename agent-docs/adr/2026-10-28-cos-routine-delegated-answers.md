@@ -131,3 +131,13 @@ approval を `approval` で入れる。problem code に `cos_basis_job_not_queue
 （task の受け入れ条件の human check は 403、承認の理由の `near_limit:` など費用・上限の理由と前の版の承認以降の目的・受け入れ条件の編集は
 422 `cos_basis_plan_needs_human`）と、`guarded_stages[].kind`（必須の 6 種）を足した。category の数は 7 のまま。problem code に
 `cos_basis_plan_needs_human` を足した。skill の §2 の表・§3 の (f) をこれに合わせ、policy_version は "10"。
+
+## 付記 A6（2026-11-12）: D1 の「定型の種類だけ」は ADR 2026-11-12 が置き換えた
+
+[2026-11-12-cos-triage-scope](2026-11-12-cos-triage-scope.md)（policy_version "12"）が、D1 の「CoS の単独の回答は定型の種類だけ。
+どれにも当たらない判断は escalate」を置き換えた。今は人に残す件を列挙し（同 ADR の D1。8 分類と人が設定した `human_required`）、
+それ以外は CoS が task の目的の範囲で答える（category `task_scope`、`refs` に根拠 1 件以上）。D1 の表の `documented_default` (c)・
+`work_guidance` (d) とその検査は消した（同 ADR の D7）。D1 の人に回すものの列挙も同じ ADR の D1 が置き換えた。付記 A1 の
+`integrate_task` の回答は、category を `documented_default` から `task_scope`（`refs` に ADR 2026-10-28-cos-integrate-task）に
+変えた（skill cos-inbox-triage v12）。D2 の basis の形（`category`・`refs`）と、残る category（`within_approved_frame`・`raise_once`・
+`review_rework`・`plan_conforms`・`job_wait_extend`）ごとの決定的な検査は残る。

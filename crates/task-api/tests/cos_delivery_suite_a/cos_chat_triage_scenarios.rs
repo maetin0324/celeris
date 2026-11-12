@@ -985,6 +985,142 @@ async fn cos_triage_scope_f_outside_celeris_goes_to_the_operator_without_discord
     assert_eq!(count(&env, "SELECT COUNT(*) FROM notifications"), 0);
 }
 
+/// (f) D2（付記 2026-11-12）と ADR 2026-11-11-cos-fallback-timing D2: 退避の通知が未送信の件（state=fallback）を
+/// CoS が operator 宛てに回すと、退避の経路の行が operator の経路（通知なし）に変わり、退避の通知は取り下げられる。
+/// resolve は 200・`already_routed=false`、`GET /api/v1/cos/inbox` の addressee は operator、Discord の通知は増えない。
+/// 送信済みの退避の件は今どおり 409。既存の (f) の試験は退避の無い件だけを回し、退避の取り下げの試験
+/// （task-core の `cos_triage_judgment_before_the_send_withdraws_the_fallback`）は人宛ての経路だけを見るので、
+/// operator 宛てで退避の行が残り件が誰にも渡らない不具合はこの試験でしか見つからない。
+#[tokio::test]
+async fn cos_triage_scope_g_operator_escalation_takes_over_an_unsent_fallback() {
+    let env = admin_env();
+    let app = env.router();
+    let unsent_task = decision_task(&env, "d-fallback-unsent", &[]);
+    let sent_task = decision_task(&env, "d-fallback-sent", &[]);
+    let rows = ingest_all(&env, 1);
+    let mut fallback = Vec::new();
+    for prefix in ["decision-d-fallback-unsent", "decision-d-fallback-sent"] {
+        let (_, item, _) = find(&rows, prefix);
+        fallback.push(
+            env.store
+                .cos_triage_outbox_claim(item, "fallback", r#"{"summary":"退避"}"#, at(2))
+                .expect("claim")
+                .expect("fallback"),
+        );
+        assert!(
+            env.store
+                .cos_triage_resolve(item, "fallback", None, Some("safety net"), at(2))
+                .expect("mark fallback")
+        );
+    }
+    db(&env)
+        .execute(
+            "UPDATE notifications SET ok=1,sent_at='2026-11-12T00:00:00Z' WHERE id=?1",
+            [&fallback[1]],
+        )
+        .expect("sent");
+    let notifications = count(&env, "SELECT COUNT(*) FROM notifications");
+    let bearer = cos_bearer(&env, "scope-g");
+    let headers = [("authorization", bearer.as_str())];
+
+    let (inbox_id, item, rev) = find(&rows, "decision-d-fallback-unsent");
+    let resp = send(
+        &app,
+        post_json_with(
+            &resolve_path(item),
+            &body(
+                "k-g",
+                rev,
+                "escalate",
+                "policy の file を main に入れるのは operator の操作",
+                packet_to(&env, inbox_id, unsent_task.id, "operator"),
+            ),
+            &headers,
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    let out = resp.json();
+    assert_eq!(out["item"]["state"], "escalated");
+    assert_eq!(out["item"]["addressee"], "operator");
+    assert_eq!(out["operation"]["result"]["already_routed"], false, "{out}");
+    assert!(out["notification_id"].is_null(), "{out}");
+    let route: (String, Option<String>) = db(&env)
+        .query_row(
+            "SELECT route,notification_id FROM cos_notification_routes WHERE item_id=?1",
+            [item],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("route");
+    assert_eq!(route, ("operator".to_owned(), None));
+    let withdrawn: (Option<i64>, Option<String>) = db(&env)
+        .query_row(
+            "SELECT ok,error FROM notifications WHERE id=?1",
+            [&fallback[0]],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("fallback row");
+    assert_eq!(
+        withdrawn,
+        (
+            Some(0),
+            Some(task_core::cos_fallback::WITHDRAWN.to_owned())
+        )
+    );
+    assert_eq!(
+        count(&env, "SELECT COUNT(*) FROM notifications"),
+        notifications,
+        "nothing new goes to Discord"
+    );
+    assert_eq!(
+        count(
+            &env,
+            "SELECT COUNT(*) FROM notifications WHERE ok IS NULL AND sent_at IS NULL"
+        ),
+        0
+    );
+    let list = send(&app, get_admin("/api/v1/cos/inbox?state=escalated")).await;
+    assert_eq!(list.status.as_u16(), 200, "{}", list.text());
+    let listed = list.json()["items"]
+        .as_array()
+        .expect("items")
+        .iter()
+        .find(|i| i["id"] == item.as_str())
+        .cloned()
+        .expect("the escalated item is listed");
+    assert_eq!(listed["addressee"], "operator", "{listed}");
+
+    // Sent: the person has it; the operator escalation is refused (409) and the route stays.
+    let (inbox_id, item, rev) = find(&rows, "decision-d-fallback-sent");
+    let late = send(
+        &app,
+        post_json_with(
+            &resolve_path(item),
+            &body(
+                "k-g-sent",
+                rev,
+                "escalate",
+                "送信済みの後",
+                packet_to(&env, inbox_id, sent_task.id, "operator"),
+            ),
+            &headers,
+        ),
+    )
+    .await;
+    assert_eq!(late.status.as_u16(), 409, "{}", late.text());
+    assert_eq!(
+        count(
+            &env,
+            "SELECT COUNT(*) FROM cos_notification_routes WHERE route='fallback'"
+        ),
+        1
+    );
+    assert_eq!(
+        count(&env, "SELECT COUNT(*) FROM notifications"),
+        notifications
+    );
+}
+
 /// (f) D1・D2（review の差し戻し）: 人が付けた `human_required` の label の決定と human check（受け入れ確認）は
 /// operator 宛てにすると 422 `cos_reserved_for_human` で断られ、operator の経路は取られない。人宛てなら通り、
 /// Discord に 1 通ずつ積まれる。既存の (d)(e) は照合の分類（reserved）だけを確かめ、(f) は分類の無い件だけを

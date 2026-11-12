@@ -85,7 +85,10 @@ updated: 2026-11-12
   `host_maintenance.rs` に `impl|&mut|& Dispatcher` が無い、範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"`）の path はすべて
   task-dispatch・地図・ADR・この進捗の中。
 - `bash scripts/dev/test-affected.sh`（1 回目、試験の修正の前の HEAD）: exit 100。nextest 3742 件中 3741 passed・1 failed
-  （足した試験の後半。上の「試験の変更」）。repo_health_gate: all checks passed。2 回目の結果は下の追記。
+  （足した試験の後半。上の「試験の変更」）。repo_health_gate: all checks passed。
+- `bash scripts/dev/test-affected.sh`（2 回目、試験の修正と進捗の commit の後の HEAD）: exit 0（約 830 秒）。nextest 3742 passed・
+  11 skipped・失敗 0。repo_health_gate: all checks passed。
+- `sh scripts/dev/progress-index.sh --check`: exit 0。
 
 ## commit（件名）
 

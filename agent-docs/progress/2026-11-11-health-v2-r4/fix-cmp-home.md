@@ -1,7 +1,7 @@
 ---
 title: "健全性v2 R4 fix-cmp-home: script_compare の試験の config が host の release 置き場を読まないようにする"
 tasks: [01M6TYVJT4S29ZMP6P0D4831JG]
-status: running
+status: completed
 updated: 2026-11-12
 ---
 # 健全性v2 R4 fix-cmp-home: script_compare の試験の config が host の release 置き場を読まないようにする
@@ -38,6 +38,7 @@ updated: 2026-11-12
 
 - `phase 1: script_compare の試験の config が host の release 置き場を読まないようにする` — 上の 2 か所を main と同じ行で写した。
 - `phase 1: fix-cmp-home の進捗を書く` — この file。
+- `phase 1: fix-cmp-home の検査の結果を書く` — 証拠の節を足し、status を completed にした。
 
 ## 証拠（提出時の HEAD で実行。基準は $CELERIS_WU_BASE）
 
@@ -50,6 +51,13 @@ updated: 2026-11-12
   - 直した後: 9 件すべて合格。
 - `cargo nextest run -p celeris --test script_compare_cos_digest --test script_compare_lane_rules --test script_compare_execution_gate`
   → 20 件すべて合格。
+- `bash scripts/dev/test-affected.sh`（対象 crate は celeris・celerisctl）→ exit 0、1007 passed・2 skipped、223 秒（load 5〜13）。
+  後始末の `rm` が別の試験の `.trash-*/…/own-eval` を消せず Permission denied を 3 行出したが、exit は 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- `bash scripts/dev/check-health.sh` → exit 0（repo_health_gate: all checks passed）
+- `sh scripts/dev/progress-index.sh --check` → exit 0
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → 変更は `crates/celeris/tests/support/script_compare.rs` と この file の 2 つだけ。
 
 ## 未解決
 

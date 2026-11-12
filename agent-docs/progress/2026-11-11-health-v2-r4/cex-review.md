@@ -264,7 +264,7 @@ commit 件名: `phase 1: 人の cancel・pause・未回答質問の反例試験�
 - 原因: `credential_gate_hold` は `is_registered` が真なら、開いた wait の検証状態を確認せず通す。atomic task は WU の Blocked 行も持たない。
 - この条件の assert は残さず、本体は変更しない。試験は未登録の task と WU、および登録後に検証が一時失敗した WU の待機を固定する。credential_wait 自体に有効期限は無く、時間の境界は resumer の再検証 backoff（三十秒）で作った。
 
-### 証拠（最後の同期後の code で実行。基準は `$CELERIS_WU_BASE`）
+### 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
 - 本体復元後の `cargo nextest run -p task-dispatch -E 'test(/cex_review_authority::/)' --no-fail-fast`: exit 0、十六本すべて合格・千六百七十本 skip。追加は credential 二本・budget 四本で、先行 leaf の十本もすべて合格。
 - guard の一時変更は `git checkout --` で復元した。変更 path は試験 file とこの記録だけ。store と migration は触っていない。
@@ -272,15 +272,17 @@ commit 件名: `phase 1: 人の cancel・pause・未回答質問の反例試験�
 - `sh scripts/dev/progress-index.sh --check`、`sh scripts/dev/check-doc-links.sh`、`sh scripts/dev/check-adr-numbers.sh`: exit 0。ADR は四百十九 file。
 - `sh "$CELERIS_WU_SCOPE_PATHS"`: exit 0、変更 path は指定の二件だけ。
 - `bash scripts/dev/test-affected.sh --list`: celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch の五 crate。
-- test-affected・clippy・fmt は実行後に追記する。
+- `bash scripts/dev/test-affected.sh`: exit 0。repo health は pass（new=0・worsened=0）、検査器の unit は 78 本合格。nextest は 3738 本合格・11 本 skip（約 349 秒）、doc test も合格（各 suite ゼロ本）。ただし script bundle 不足で 59 件が試験内で早期 return した。59 件は実行済みと扱わない。追加の六本と先行 leaf の十本は別途すべて実行し合格した。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+- 記録を確定した commit の後に、提出時の HEAD で必須三検査・十六本の選択実行・進捗と文書の検査・範囲検査を再実行する。以後は追跡 file を変更しない。
 - control-ts の事前 offline install は vite の tarball 不足で exit 1。ネットワークでの取得は行っていない。
 
 ### 完了・未解決・提案
 
-credential・budget の完了日は検査後に記入する。ファイル全体の status は後続 unit があるため running のまま。
+credential・budget の完了日: 2026-11-12。ファイル全体の status は後続 unit があるため running のまま。
 
-commit 件名: `phase 1: credential 待ちと予算の反例試験を固定する`。
+commit 件名: `phase 1: credential 待ちと予算の反例試験を固定する`、`phase 1: credential・budget の検証記録を確定する`。
 
-未解決: atomic task が秘密ファイルの存在だけで検証一時失敗の待ちを迂回する反例は上記のとおり。本体はこの unit の範囲外。本番への移行は不要。
+未解決: bundle 不足で早期 return した 59 件の実行は未確認。atomic task が秘密ファイルの存在だけで検証一時失敗の待ちを迂回する反例は上記のとおり。本体はこの unit の範囲外。本番への移行は不要。
 
 提案: atomic task も開いた credential_wait の検証状態を確認し、検証成功と resume claim を経てから起動を許す。R4 の owner 分割の際に、この反例の assert を追加する。

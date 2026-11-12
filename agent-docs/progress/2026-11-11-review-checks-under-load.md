@@ -1,7 +1,7 @@
 ---
 title: host の負荷で review の検査が時間切れになる — 重い検査は host 共通の枠を取り、枠の待ちを timeout に数えない
 tasks: [01M75G99Q005DBQW4S5TZG88RK]
-status: done
+status: running
 updated: 2026-11-12
 ---
 # host の負荷で review の検査が時間切れになる — 重い検査は host 共通の枠を取り、枠の待ちを timeout に数えない
@@ -27,11 +27,12 @@ updated: 2026-11-12
 - 直し（task-worker `check_slots`）: 枠の取得元を `SlotSource`（`Host(CheckSlots)`・`Held(<lock の path>)`）にした。純粋な
   `SlotSource::resolve` が `CELERIS_CHECK_SLOT` を dir・数より先に見る（shell と同じ順）。held なら `SlottedWorkspace` は重い
   command も枠を取らず、その path を `CELERIS_CHECK_SLOT` で渡してすぐ走らせる。dir を決められないときの warn 1 行は起動時の
-  `SlotSource::resolve_or_warn` に移した（包まない扱いは同じ）。検査 1 件の上限と取得元は `CheckLimits`（`wrap` で包む）に
-  まとめた。env を検査の度に読む入口（旧い daemon 用の包む関数と `SlottedWorkspace` の env から包む関連関数）は消した。
+  `SlotSource::resolve_or_warn` に移した（包まない扱いは同じ）。検査 1 件の上限と取得元は `CheckLimits`（`check_workspace`
+  で包む）にまとめた。env を検査の度に読む入口（旧い daemon 用の包む関数と `SlottedWorkspace` の env から包む関連関数）は消した。
 - 直し（task-dispatch・celeris）: `DispatchConfig::check_slots` を足した。本番は `Config::dispatch_config` が
-  `SlotSource::from_env` で決め、dispatcher は起動時の値を使う（`apply_dispatch_config` は入れ替えない。この関数は file の
-  行数の上限のため `dispatcher/housekeeping.rs` に移した）。review・WU・段の統合の検査は `CheckLimits::wrap` で包む。
+  `SlotSource::from_env` で決め、dispatcher は起動時の値を使う（`apply_dispatch_config` は入れ替えない）。review・WU・段の
+  統合の検査は `CheckLimits::check_workspace` で包む。WU の検査は `dispatcher/work_units.rs` が `run_integration_checks` に
+  `CheckLimits` を渡す（1 行の置き換え）。
   試験の DispatchConfig は `test_check_slots()`（process に 1 つの一時 dir の枠 64 本、`atexit` で消す）、dagbench は `None`
   （検査が合成の軽い command。理由は注釈）。
 - 試験: `check_slots::tests::a_held_slot_is_not_taken_again_by_rust_or_the_shell_lib`（一時 dir の枠を全部持ち、
@@ -39,7 +40,32 @@ updated: 2026-11-12
   `dispatcher::tests::review::a_heavy_review_check_takes_the_injected_slot_and_receives_its_path`（review の重い検査が注入した
   一時 dir の枠の path を受け取り、検査の後の dir は `slot-0.lock` だけ）。ADR の D3 と付記を直した。D8 は変えない。
 
-### attempt 4 の証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`）
+### attempt 4 の続き（WU の check の不合格の直し）
+- WU の check が 2 つ落ちた。(1) 範囲の check: `dispatcher/housekeeping.rs`・`dispatcher/work_units.rs` が許された path の外。
+  (2) `! grep -nE 'pub fn slotted|pub fn wrap\('`: `CheckLimits::wrap` が掛かった。
+- 直し: `apply_dispatch_config` を `dispatcher.rs` の元の場所に戻した（`housekeeping.rs` は main と同じ）。`dispatcher.rs` の file の
+  行は、`DispatchConfig::check_slots` の 3 行の分を注釈 3 か所の折り返しで詰め、main と同じ 2396 行にした（`SlotSource` は欄の型に
+  path で書き、use の行を増やさない）。`CheckLimits::wrap` を `CheckLimits::check_workspace` に改めた（中身は同じ。起動時に決めた
+  取得元で包み、env を読まない）。
+- 残り: `dispatcher/work_units.rs` の 1 行（`let timeout = CheckLimits::new(self.config.review_timeout, &self.config.check_slots);`）
+  は範囲の check の外のまま。WU の検査は `phase_integration::run_integration_checks` を `work_units.rs` から呼ぶので、起動時に決めた
+  取得元はこの呼び出しで渡すしかない。避ける形（process 全体の大域変数、検査の度に env を読む、WU の検査だけ枠を取らない）は依頼の
+  直し方（検査の度に env を読まない・正本を 1 つにする）か ADR D3（WU の検査も枠を取る）に反する。この 1 行で `work_units.rs` の
+  行数は変わらない（health pass）。範囲の check に `crates/task-dispatch/src/dispatcher/work_units\.rs` を足す計画の直しを申告した。
+
+### attempt 4 の続きの証拠（commit「apply_dispatch_config を dispatcher.rs に戻して…」の HEAD で実行。基準は `git merge-base HEAD main`）
+- `cargo nextest run -p task-worker --lib -E 'test(/check_slots::/)'` → 8 passed。`grep -nE 'pub fn slotted|pub fn wrap\('` は 0 件、
+  `grep -rn 'check_slots::slotted' crates/` も 0 件。
+- 外から枠を全部持つ: `flock -x $d/slot-0.lock sleep 1200` の下で `CELERIS_CHECK_SLOTS_DIR=$d CELERIS_CHECK_SLOTS=1 cargo nextest
+  run -p task-dispatch --lib -E 'test(/dispatcher::tests::(review|lane_assist|decision_log|routing_context|mlsys_mock_e2e|scope_checks|integration_check_progress)/)'`
+  → 82 passed（load 42）。`$d` は試験の後も `slot-0.lock` だけ。
+- `bash scripts/dev/check-health.sh`（commit した HEAD）→ verdict=pass exit 0（new 0・worsened 0）。`spawn_review` は 745 行（main 748）、
+  `dispatcher.rs` の file の行は 2396（main 2396）、dispatcher module の本体の行は 37335（main 37338）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- 範囲の check → `out of scope: crates/task-dispatch/src/dispatcher/work_units.rs`（exit 1。上の「残り」）。
+- `bash scripts/dev/test-affected.sh` はこの HEAD では走らせていない（未実施。計画の直しの後の WU で走らせる）。
+
+### attempt 4 の最初の証拠（commit「検査の上限と枠の取得元を CheckLimits にまとめ…」の HEAD で実行。基準は `git merge-base HEAD main`）
 - 外から枠を全部持つ: `flock -x $d/slot-0.lock sleep 900` の下で `CELERIS_CHECK_SLOTS_DIR=$d CELERIS_CHECK_SLOTS=1 cargo nextest
   run -p task-dispatch --lib -E 'test(/dispatcher::tests::(review|lane_assist|decision_log|routing_context|mlsys_mock_e2e)/)'`
   → 66 passed（attempt 3 では 4 件 failed）。`$d` は試験の後も `slot-0.lock` だけ。
@@ -112,6 +138,8 @@ updated: 2026-11-12
 - phase 1: 進捗に attempt 3 の検査の結果を書く
 
 ## 未解決事項
+- WU の範囲の check が `dispatcher/work_units.rs` を許さない（「attempt 4 の続き」）。計画の直しを申告した。直った後の WU で、
+  提出時の HEAD の `bash scripts/dev/test-affected.sh` を走らせる（この HEAD では未実施）。
 - `ownerless_runs` の reviewer の行の TTL は枠の待ちを含まない（ADR の既知の限界）。
 - 本番の daemon の env に `XDG_RUNTIME_DIR` があるかは未確認（この run から daemon の `/proc/<pid>/environ` は読めない）。
   worker の run（この run）では `XDG_RUNTIME_DIR=/run/user/1001`（tmpfs）で、書き込めた。配備の後に `celerisctl scratch status`

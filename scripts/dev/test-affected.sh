@@ -448,8 +448,12 @@ if [ -n "$crates" ]; then
   . "$root/scripts/dev/lib/check-slot.sh"
   check_slot_acquire "test-affected $(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)" || exit 2
   export NEXTEST_TEST_THREADS="$CHECK_SLOT_TEST_THREADS"
+  # nextest・doc test には枠の lock の fd を継がせない（lib/check-slot.sh の冒頭）。close は group の間だけ効き、shell は
+  # lock を持ち続ける。group の中の 2 行は「cargo の呼び方」のまま（字下げも rebuild-check.sh の照合に合わせる）。
+  {
   ttl_run cargo nextest run --workspace -E "$filter"
   ttl_run cargo test --doc --workspace
+  } {CHECK_SLOT_FD}>&-
   if [ -n "$skip_log" ]; then
     skips="$(grep -c . "$skip_log" || true)"
     echo "test-affected: script bundle SKIP: ${skips} 件" >&2

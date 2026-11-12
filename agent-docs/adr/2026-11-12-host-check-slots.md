@@ -22,6 +22,9 @@ core 数）、host 全体で同時に走る重い検査の数に上限が無か�
   の試験、worker が自分で走らせる試験のどれも同じ上限に従う。process が終われば kernel が lock を外すので、kill -9 でも
   枠は漏れない。正本は lock だけで、holder の file（`slot-<i>.holder`）と待ちの file（`waiting/`）は表示用である
   （空いているかの判定は lock の取得で行い、holder の file は見ない）。
+  lock の fd は子孫に継がせない。daemon は Rust の既定の `O_CLOEXEC` で開き、script は子を起こす呼び出し（test-affected.sh の
+  nextest・doc test、test-parallel.sh の準備・nextest・doc test）に `{CHECK_SLOT_FD}>&-` を付ける（bash の `{var}<>` は
+  CLOEXEC を付けない）。継ぐと、試験が残した孤児（2026-11-10 の release gate の `sleep 3600`）が script の終了後も枠を握る。
 - **D2 枠の数と試験の並列度**: N = `CELERIS_CHECK_SLOTS`（正の整数）があればそれ、無ければ `max(1, core 数 / 12)`
   （24 core で 2）。枠を取った試験は nextest の `--test-threads` を `max(1, core 数 / N)`（24 core で 12）にする。
   1 本の試験 thread が daemon・tar などの子 process で 1 core を超えるので、N × threads を core 数に合わせる。

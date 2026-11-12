@@ -54,6 +54,7 @@ ncpu="$(nproc 2>/dev/null || echo 4)"
 . "$here/scripts/dev/lib/check-slot.sh"
 check_slot_acquire "release gate test-parallel $(git rev-parse --short=12 HEAD 2>/dev/null || echo HEAD)" || exit 2
 jobs="${CELERIS_TEST_JOBS:-$CHECK_SLOT_TEST_THREADS}"
+# 以下の子（cargo・試験）には `{CHECK_SLOT_FD}>&-` を付け、枠の lock の fd を継がせない（lib/check-slot.sh の冒頭）。
 
 # userns の preflight（ADR-0126 B2/B4）: release gate と同じ env（CELERIS_USERNS_TESTS=1 か CELERIS_ISOLATION_TESTS=require）
 # なのに unprivileged user namespace が作れない host では、実 bwrap / unshare / launcher の試験が「Operation not permitted」で
@@ -113,9 +114,9 @@ run_tee() {
 echo "test-parallel: prepare: cargo nextest list --workspace --list-type binaries-only" >&2
 prc=0
 ttl_run cargo nextest list --workspace --list-type binaries-only --message-format json --color never \
-  >"$logdir/prepare.json" || prc=$?
+  >"$logdir/prepare.json" {CHECK_SLOT_FD}>&- || prc=$?
 if [ "$prc" -eq 0 ]; then
-  ttl_run cargo metadata --no-deps --format-version 1 >"$logdir/metadata.json" || prc=$?
+  ttl_run cargo metadata --no-deps --format-version 1 >"$logdir/metadata.json" {CHECK_SLOT_FD}>&- || prc=$?
 fi
 if [ "$prc" -eq 0 ]; then
   python3 - "$logdir/metadata.json" "$logdir/prepare.json" <<'PY' || prc=$?
@@ -171,7 +172,7 @@ nrc=0
 if [ "$prc" -eq 0 ]; then
   echo "test-parallel: cargo nextest run --workspace (nextest $have_ver, $jobs jobs of $ncpu cpus)" >&2
   run_tee "$logdir/nextest.log" cargo nextest run --workspace --no-fail-fast --color never --hide-progress-bar \
-    --test-threads "$jobs" "$@" || nrc=$?
+    --test-threads "$jobs" "$@" {CHECK_SLOT_FD}>&- || nrc=$?
 else
   : >"$logdir/nextest.log"
 fi
@@ -183,7 +184,7 @@ if [ "${CELERIS_TEST_SKIP_DOC:-0}" = 1 ]; then
   drc=skipped
 else
   echo "test-parallel: cargo test --doc --workspace" >&2
-  run_tee "$logdir/doc.log" cargo test --doc --workspace --color never || drc=$?
+  run_tee "$logdir/doc.log" cargo test --doc --workspace --color never {CHECK_SLOT_FD}>&- || drc=$?
 fi
 t2="$(date +%s.%N)"
 

@@ -5,6 +5,10 @@
 #                                取った枠は process が終われば kernel が外す（fd を閉じれば外れる）。
 #                                CELERIS_CHECK_SLOT が既にあれば（daemon が取って渡した）取り直さない。
 #   取った後は CHECK_SLOT_TEST_THREADS（= max(1, core 数 / 枠の数)）を nextest の --test-threads に渡す。
+#   子を起こす呼び出しには `{CHECK_SLOT_FD}>&-` を付け、lock の fd を子孫に継がせない（bash の {var}<> は CLOEXEC を
+#   付けない。継ぐと、試験の孤児〈2026-11-10 の release gate の sleep 3600 など〉が script の終了後も枠を握る）。
+#   関数の呼び出しに付けた close は関数の間だけ効き、shell 自身は lock を持ち続ける。CHECK_SLOT_FD は常に設定する
+#   （枠を取らなかったときは /dev/null。未設定だと `{CHECK_SLOT_FD}>&-` が ambiguous redirect になる）。
 # 枠の dir: ${CELERIS_CHECK_SLOTS_DIR:-$HOME/.cache/celeris/check-slots}、数: ${CELERIS_CHECK_SLOTS:-max(1, core 数 / 12)}。
 
 check_slot_count() {
@@ -26,6 +30,7 @@ check_slot_acquire() {
   [ "$CHECK_SLOT_TEST_THREADS" -ge 1 ] || CHECK_SLOT_TEST_THREADS=1
   export CHECK_SLOT_TEST_THREADS
   if [ -n "${CELERIS_CHECK_SLOT:-}" ]; then
+    exec {CHECK_SLOT_FD}</dev/null
     echo "check-slot: 枠は呼び出し元が取った（$CELERIS_CHECK_SLOT）。--test-threads $CHECK_SLOT_TEST_THREADS" >&2
     return 0
   fi

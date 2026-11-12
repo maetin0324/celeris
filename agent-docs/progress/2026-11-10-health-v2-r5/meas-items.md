@@ -41,6 +41,12 @@ meas-edit-a への影響: `--require-compare <out> task-api,celeris,celerisctl:b
 - 旧い `pair()`（`$CELERIS_WU_BASE` の版）と新しい `pair()` に同じ乱数の記録 200,000 組を与え、`excluded` と `ratio` が全組で一致した（差 0）。`excluded` が真の組と、`reason` が null でない組も一致した。
 - `bash agent-docs/progress/2026-11-10-health-v2-r5/measure.sh --validate agent-docs/progress/2026-11-10-health-v2-r5/after-build.json` → exit 0（`ok: compare 4 crates (both sides built: 4), 1 skipped item(s)`）。
 - `bash -n agent-docs/progress/2026-11-10-health-v2-r5/measure.sh`、`git diff --check` → exit 0。
+- `bash scripts/dev/test-affected.sh` → exit 0（142 秒）。`--list` の対象 crate は 0 件（R5 の進捗 dir だけの変更）。repo-health は verdict=pass、fail 級 0 件。new 4・worsened 1 の警告は全部 dup.contract で、R5 の前の台本（cases.py・classify.py・adr-check.py・contracts.py）のもの。この leaf の 4 file は含まれない。repo_health_gate は合格。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0（差分 0）。
+- `sh scripts/dev/progress-index.sh --check`、`bash scripts/dev/check-doc-links.sh` → exit 0。
+- `python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R5 agent-docs/progress/2026-11-07-health-v2-b0/slices.json` → exit 0（`write-set R5: ok`）。
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → exit 0。変更は R5 の進捗 dir の 4 file（meas-items.md・measure.sh・measure_summary.py・test_measure_summary.py）だけ。
 
 ## 未解決
 

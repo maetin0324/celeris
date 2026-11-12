@@ -1,0 +1,12 @@
+   Compiling task-dispatch v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/runs/01M77SHYWKF3AHQBRD752K04NW/tmp/r5-measure-base.uE33su/crates/task-dispatch)
+warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGER` causes the socket to block the thread on drop
+   --> crates/script-runtime/vendor/deno_core/uv_compat/tcp.rs:818:17
+    |
+818 |       && stream.set_linger(Some(std::time::Duration::ZERO)).is_err()
+    |                 ^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: `deno_core` (lib) generated 1 warning
+   Compiling celeris-campaign v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/runs/01M77SHYWKF3AHQBRD752K04NW/tmp/r5-measure-base.uE33su/crates/campaign)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 57.26s

@@ -712,6 +712,22 @@ async fn standing_job_wait_grant_from_the_general_thread_answers_the_project_wai
         .as_array_mut()
         .expect("refs")
         .push(json!({"kind": "authority_grant", "id": grant}));
+    // ADR 2026-11-12-cos-triage-scope D4（受け入れ条件 4 (a)）: daemon の照合は CoS の判断の前に、この件を
+    // job_wait_extend の候補とし、global の grant を名指す（store を読むだけ）。
+    let hint = task_ops::triage_match::match_item(
+        &env.store,
+        task_ops::triage_match::MatchInput {
+            source_kind: "authorization",
+            title: "",
+            body: LIMIT_TEXT,
+            project_id: Some(&project),
+        },
+        OffsetDateTime::now_utc(),
+    )
+    .expect("match");
+    assert_eq!(hint.reserved, None);
+    assert_eq!(hint.candidates[0].category, "job_wait_extend");
+    assert_eq!(hint.candidates[0].grant_id.as_deref(), Some(grant.as_str()));
     let ok = cos
         .resolve(&item, answer("with-grant", "once", "延長", basis))
         .await;

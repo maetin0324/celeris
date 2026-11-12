@@ -21,18 +21,35 @@ updated: 2026-11-12
   - task-core migration 0124: `cos_notification_routes.route` に `operator` を足した（表の作り直し、行は写す）。
   - skill cos-inbox-triage を version 12、`[cos.triage] policy_version` の既定を "12"（cos.rs・example.toml・docs/ops/cos-chat.md）。
 
+## 変更（attempt 1 の Run #2）
+- `phase 1: 件ごとの照合の行を CoS の prompt に付け、常設の節に方針 12 の要点を置き、/cos/operations でも人に残す件を断る`
+  - task-dispatch `cos_chat::triage_hint`: CoS run に渡す受信箱の件ごとに `task_ops::triage_match::match_item` を呼び、
+    `CosChatInboxItem.triage_match` に 1 行を付ける（thread の案件の grant と global の grant を読む。LLM なし）。worker は「照合（daemon）」の行で出す。
+  - task-worker `cos_chat::standing`: 受信箱の件を持つ run の常設の節に `TRIAGE_POLICY`（人に残す件の列挙・operator 宛て・task_scope の根拠。726 字、上限 `POLICY_MAX` 800）。Core には足していない。
+  - task-api `/cos/operations`: instructed_by の無い答えでも、照合が人に残す件と判定した待ちは 422 `cos_reserved_for_human`。resolve では回答の検証より先に判定する。
+  - web の生成型・worker protocol schema を更新した。
+- `phase 1: policy 12 の scenario 試験 (b)〜(f) を足し、計画の承認の本文に承認の理由を出し、schema の版を 124 にする`
+  - 計画の承認の件の本文に「承認の理由: …」（`PlanApprovalRequested.reasons`）を足した。照合が `near_limit:` を読む。
+  - `SCHEMA_VERSION` を 124 にし、campaign の `SUPPORTED_SCHEMA_VERSIONS` と delivery の migration の試験を合わせた。
+- `phase 1: 計画の再判断の説明と skill §9 を policy 12 に合わせ、api.md と進捗を直す`
+  - D6: `task_core::chat::plan_rejudge` の条件は答えた主体を見ないので、CoS が決定に答えた後も計画の再判断が起きる（コードは変えず、説明と skill §9 を直した）。
+  - `docs/api/v1/api.md` の basis の説明を task_scope・`to`・`addressee`・`cos_reserved_for_human` に直した。
+
+## 受け入れ条件 4 の scenario 試験
+- (a) `crates/task-api/tests/cos_job_wait_extend.rs` の `standing_job_wait_grant_from_the_general_thread_answers_the_project_wait_limit`: daemon の照合が global の grant を名指し、CoS が grant を根拠に「延長」と答えて answered（人に回さない）。
+- (b)(c) `crates/task-api/tests/cos_chat_triage_scenarios.rs` の `cos_triage_scope_b_c_answers_the_decisions_then_approves_the_plan`: 決定が残る間の承認は 422、決定 2 件に task_scope で答え（推奨・推奨以外）、計画を plan_conforms で承認。operation の記録に policy_version と根拠。
+- (d)(e) `cos_triage_scope_d_e_credential_and_beyond_budget_go_to_the_person`: credential の待ちと `near_limit:` の計画は、照合が `credential_input`・`beyond_approval`、回答も operator 宛ても 422、human 宛てで outbox 2 通。
+- (f) `cos_triage_scope_f_outside_celeris_goes_to_the_operator_without_discord`: operator 宛ては notifications 0 件、経路 `operator`、札なし、addressee=operator。
+- 照合の決定性: `task_ops::triage_match` の試験 2 件、`task-dispatch` の `cos_triage_hints_are_deterministic_store_reads`。
+
 ## 証拠（attempt 1。提出時の HEAD ではない）
 - `cargo test -p task-ops --lib triage_match` → 2 passed。
 - `cargo test --no-fail-fast -p task-api --test cos_routine_answers --test cos_triage --test cos_chat_triage_scenarios --test cos_operations --test cos_review_rework --test cos_integrate_task --test cos_plan_conforms --test cos_job_wait_extend --test authority_ledger --test single_human_window --test cos_operations_domains --test project_wake_human_chat` → 12 本すべて合格（22・3・4・4・8・7・4・4・5・17・13・1 件）。
 - test-affected・clippy・fmt・progress-index は未実行（次の run で最終の HEAD で回す）。
 
-## 未解決（次の run）
-- 常設の節（task-worker `cos_chat::standing`）に v12 の要点を置き、prompt の件ごとに照合の行を出す（task-dispatch `inbox_context_item` で `triage_match::match_item`）。
-- `/cos/operations` の答え（instructed_by なし）にも `reserved` の拒否を入れる。
-- scenario 試験 (a)〜(f) を `crates/task-api/tests/cos_chat_triage_scenarios.rs` に足す（(f) は operator 宛てで outbox・notifications が 0 件）。
-- 計画の承認の再判断（D6）: daemon の「決定の回答による計画の再判断」を CoS の回答でも起こす。
-- 依頼のコメントの 2 件: dependents_reopened に「取り消さない」の答え方を持たせる／release の切り替えで一次対応が途切れた件の拾い直しを確かめる。
-- API の JSON schema と web の生成型の更新（EscalationPacket.to・CosInboxItem.addressee・BasisRefKind.task）。
+## 未解決
+- 依頼のコメントの 2 件は未対応: (1) dependents_reopened の件に「取り消さない」の答え方を持たせる（今は選択肢が後続の cancel だけで、CoS は observe も answer もできない）。(2) release の切り替えで一次対応が途切れた件（fallback のまま CoS が拾い直さない件）の再開を確かめる。どちらも未調査。
+- 照合が判定する人に残す件は、件の種類と本文から決まるもの（credential の待ち・cluster の login・ブラウザの待ち・`near_limit:` の計画）だけ。目的の変更・本番 config・有料の試行・研究上の判断・検査を弱める判断は、CoS が方針（常設の節と skill §0）で判定する。
 
 ## 本番への移行
 1. 配備の後、`~/.config/celeris/config.toml` の `[cos.triage] policy_version` を `"12"` にする（今は "11"）。

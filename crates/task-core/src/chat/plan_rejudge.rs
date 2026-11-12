@@ -1,6 +1,7 @@
 //! ADR 2026-10-30-cos-review-open-waits D4: a plan approval that CoS escalated because the task
 //! still had an unanswered decision (skill cos-inbox-triage §3 (f)) goes back to CoS once the
-//! person has answered the task's decisions. Same state as the relay re-judge (付記 A2): the item's
+//! task's decisions are answered, by a person or by CoS (ADR 2026-11-12-cos-triage-scope D6: the
+//! condition below does not look at who answered). Same state as the relay re-judge (付記 A2): the item's
 //! input message. The claim moves it past the answer, so one answer hands an item over once.
 use rusqlite::params;
 use time::OffsetDateTime;

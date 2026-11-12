@@ -226,16 +226,7 @@ fn account_limits_source_account_and_source_limits_are_independent() {
     // explicit source key and the source's stable implicit account identity.
     d.set_account_limit("implicit", "shared-source", Some(4))
         .unwrap();
-    assert_eq!(
-        d.account_limits
-            .as_ref()
-            .and_then(|limits| limits.get(&(
-                task_core::llm_route::SourceId::from("implicit"),
-                task_core::llm_route::AccountId::from("shared-source"),
-            )))
-            .copied(),
-        Some(4)
-    );
+    assert_eq!(d.account_max_runs("implicit", "shared-source"), Some(4));
     assert_eq!(d.account_max_runs("claude-code", "shared-source"), None);
 }
 

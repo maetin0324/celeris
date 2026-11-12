@@ -88,8 +88,8 @@ impl Dispatcher {
         };
         let key = task_core::llm_route::SourceId::from(source);
         let current = self
-            .source_cooldowns
-            .get(&key)
+            .routing
+            .source_cooldown(&key)
             .filter(|c| c.until > now)
             .cloned()
             .map(|cooldown| crate::accounts::AccountState {
@@ -104,7 +104,7 @@ impl Dispatcher {
         );
         let until = OffsetDateTime::from_unix_timestamp(cooldown.until)
             .unwrap_or_else(|_| OffsetDateTime::now_utc());
-        self.source_cooldowns.insert(key, cooldown);
+        self.routing.set_source_cooldown(key, cooldown);
         Event::ProviderThrottled {
             provider: source.to_string(),
             until,

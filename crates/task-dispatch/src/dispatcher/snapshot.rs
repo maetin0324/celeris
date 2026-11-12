@@ -52,8 +52,8 @@ impl Dispatcher {
         // ADR 2026-10-08 §(e): cooldowns of the implicit accounts (id = source id).
         let now_unix = (self.now_unix_fn)();
         let mut cooldowns: Vec<CooldownView> = self
-            .source_cooldowns
-            .iter()
+            .routing
+            .source_cooldowns()
             .filter(|(_, c)| c.until > now_unix)
             .map(|(source, c)| CooldownView {
                 source: source.to_string(),
@@ -201,7 +201,7 @@ impl Dispatcher {
         self.implicit_account_ids()
             .into_iter()
             .map(|source| {
-                let registry = &self.llm_route_registry;
+                let registry = self.routing.registry();
                 let mut models: Vec<String> = registry
                     .route_defaults
                     .values()
@@ -242,11 +242,7 @@ impl Dispatcher {
                 continue;
             };
             roots.insert(adapter.as_str().to_string(), root.display().to_string());
-            let dirs = self
-                .accounts_scan_cache
-                .entry(adapter)
-                .or_insert_with(|| scan_accounts(root, adapter))
-                .clone();
+            let dirs = self.routing.scanned_accounts(adapter, root);
             let Some(book) = self.account_book(adapter) else {
                 continue;
             };
@@ -301,9 +297,7 @@ impl Dispatcher {
                             detail: c.detail.clone(),
                         }
                     }),
-                    login_pending: self
-                        .login_pending_accounts
-                        .contains(&Self::login_pending_key(adapter, &d.id)),
+                    login_pending: self.routing.login_pending(adapter, &d.id),
                 });
             }
         }

@@ -216,7 +216,7 @@ fn install_test_routes(
     let mut kinds = std::collections::BTreeSet::new();
     for (id, kind) in sources {
         let oauth =
-            crate::dispatcher::route_select::account_adapter_for_source_kind(kind).is_some();
+            crate::routing_runtime::route_state::account_adapter_for_source_kind(kind).is_some();
         r.sources.insert(
             (*id).into(),
             SourceSpec {
@@ -279,10 +279,9 @@ fn install_test_routes(
         .cloned()
         .unwrap_or_default();
     for (id, kind) in sources {
-        if crate::dispatcher::route_select::account_adapter_for_source_kind(kind).is_none()
-            && let Some(limits) = d.account_limits.as_mut()
-        {
-            limits.insert(((*id).into(), "default".into()), max_runs);
+        if crate::routing_runtime::route_state::account_adapter_for_source_kind(kind).is_none() {
+            d.routing
+                .set_stored_limit_for_test((*id).into(), "default".into(), max_runs);
         }
     }
     d.set_llm_route_registry(r);

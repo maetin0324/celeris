@@ -32,7 +32,8 @@
 //! | `snapshot` | デーモン状態の snapshot の組み立てと公開 | L1 |
 //! | `quota_book` | quota の見積りと release | L1 |
 //! | `sinks` | run 途中のイベントの sink（`StoreSink`・`ReviewerSink`） | L1 |
-//! | `route_failure` | route の供給側失敗の分類と account cooldown の記録 | L1 |
+//! | `routing_runtime` | 経路選択の状態（宣言・account の上限と帳簿・cooldown・routing mode・分類 board・経路なしの task・RoutingContext の登録簿）の owner（`crate::routing_runtime::RoutingRuntime`。この dir の外。`route_state` は `RouteState` の組み立ての純粋関数。ADR 2026-11-11 dispatcher-state-ownership D1・D3） | owner |
+//! | `route_failure` | route の供給側失敗の分類と、`RoutingRuntime` への account cooldown の記録 | L1 |
 //! | `workspaces` | 作業場所・worktree・container の準備 | L1 |
 //! | `run_context` | run の文脈（extras・session・knowledge・skills） | L1 |
 //! | `worker_task` | worker 本体（free fn の `run_worker`。`Dispatcher` に依存しない） | L1 |
@@ -89,11 +90,11 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::accounts::{
-    AccountBook, AccountCandidate, AccountCheckRecord, AccountCooldownReason, AccountDir,
-    ExcludedReason, ObservationSource, account_cooldown_for_failure, cooldown_for_failure,
-    evaluate, scan_accounts,
+    AccountBook, AccountCandidate, AccountCheckRecord, AccountCooldownReason, ExcludedReason,
+    ObservationSource, account_cooldown_for_failure, cooldown_for_failure, evaluate,
 };
 use crate::policy::{ProviderId, ProviderOutcome};
+use crate::routing_runtime::RoutingRuntime;
 
 // ADR-0082: 責務別の子モジュール（層は L1 ← L2 ← L3 ← L4 ← tick）。
 mod browser_prereq;
@@ -163,18 +164,21 @@ pub use crate::cluster_runtime::{
     TUNNEL_PROBE_MAX_INTERVAL_SECS, TunnelEvent, TunnelEventKind, TunnelForwardEnsurer,
     TunnelListenerProbe, TunnelProbe,
 };
-pub use dispatch_run::DispatchRoutingSettings;
-pub use lane_assist::{
-    BoardCall, BoardItem, CallProvenance, ClassificationBoard, lane_facts, task_routing_override,
+pub use crate::routing_runtime::DispatchRoutingSettings;
+pub use crate::routing_runtime::classification_board::{
+    BoardCall, BoardItem, CallProvenance, ClassificationBoard,
 };
+pub use crate::routing_runtime::route_state::{
+    RouteState, account_adapter_for_source_kind, source_account_pool,
+};
+pub use lane_assist::{lane_facts, task_routing_override};
 pub use route_failure::{FailureAction, FailureOrigin, classify_failure, provider_failure_outcome};
 pub use route_launch::{
     LaunchAdmission, RouteLaunchError, admit_by_availability, selected_llm_route,
 };
 pub use route_select::{
-    RouteFailure, RouteInput, RoutePick, RouteState, RouteTrace, harness_request_for, route_select,
+    RouteFailure, RouteInput, RoutePick, RouteTrace, harness_request_for, route_select,
 };
-pub use route_select::{account_adapter_for_source_kind, source_account_pool};
 pub use snapshot::SnapshotPublisher;
 
 #[cfg(test)]
@@ -1223,26 +1227,13 @@ pub struct Dispatcher {
     /// 手元のレビューのうち、前の tick で「tokio task は終わっているのに判定の完了が届いていない」と見た
     /// task（`ownerless_runs.rs` の `reap_lost_reviews`。2 tick 続けて見えたら取りこぼしと判定する）。
     lost_review_watch: std::collections::HashSet<TaskId>,
-    /// 「設定に合うプロバイダが無い」警告を出した（連続 tick で繰り返さない）タスク（ADR-0012 D2）。
-    warned_unroutable: std::collections::HashSet<TaskId>,
     /// ADR 2026-10-15-mlsys-min D4: 外部 provider の credential 待ちの宣言（source ごと）と秘密の置き場。
     credential_gates: credential_gate::CredentialGates,
     /// credential 待ちに入れた計画なしの task（tick ごとに同じ wait を書き直さない。再起動で `restore_credential_waits` が戻す）。
     credential_held: std::collections::HashSet<TaskId>,
-    /// `routing.mode`（既定 fixed）。decision_assisted のとき lane 層が分類結果を読む（`lane_assist`）。
-    routing_mode: task_core::route_select::RoutingMode,
-    /// 分類段が書く結果の置き場（dispatcher は読むだけ。Jev は呼ばない）。
-    classification_board: lane_assist::ClassificationBoard,
-    /// 分類段が動いているとき、board に項目が無い subject の dispatch を待たせる上限（`None` なら待たせない）。
-    /// ADR 2026-10-22-jev-classification-before-launch。
-    classification_wait: Option<Duration>,
-    /// board に項目が無くて最初に dispatch を見送った時刻（subject ごと。項目が載るか上限を過ぎたら消す）。
-    classification_deferred_since: HashMap<String, Instant>,
     /// ADR 2026-11-11 dispatcher-state-ownership D1: クラスタの接続・tunnel・job の poll の状態の owner。
     /// field は private で、`Dispatcher` は `ClusterRuntime` の method だけを呼ぶ。
     cluster: ClusterRuntime,
-    /// この tick で `NoMatchingProvider` だった ready タスク（`is_idle` で待ち対象から外す。ADR-0012 D2）。
-    unroutable: std::collections::HashSet<TaskId>,
     /// ADR 2026-10-11-task-wait-reasons D4: この tick で `dispatch_one` が見送った ready タスクの理由（メモリにしか
     /// 無い M1〜M6・M9。`dispatch_ready` の先頭で空にし、同じ task の 2 件目は上書きしない）。snapshot の
     /// `task_waits` に載る。
@@ -1288,32 +1279,9 @@ pub struct Dispatcher {
     /// tick の回数（スナップショット用）。
     ticks: u64,
     publisher: Option<SnapshotPublisher>,
-    /// ADR-0024 D4 / ADR-0025 D1: アダプタごとのアカウントの観測値・cooldown・確認の帳簿（設定された根ディレクトリの
-    /// アダプタだけキーを持つ）。実行中の run のシンクとも共有する。reload では差し替えない（設定ファイルの
-    /// 再読込では消えない観測値）。
-    account_books: HashMap<AccountAdapter, Arc<StdMutex<AccountBook>>>,
-    /// ADR 2026-10-08 §(e): cooldowns of the implicit accounts (id = source id) of sources
-    /// without an account pool. In memory only, like the observations of a reload.
-    source_cooldowns: HashMap<task_core::llm_route::SourceId, crate::accounts::AccountCooldown>,
-    /// ADR 2026-10-11 llm-source-harness-selection: declared sources, harnesses and routes.
-    llm_route_registry: Arc<task_core::llm_route::Registry>,
-    /// ADR 2026-10-11 llm-source-harness-selection: one base adapter per declared harness
-    /// (`[harnesses.<id>]` over `[adapters.<kind>]`); the route's model and account go on at launch.
-    harness_adapters: HashMap<task_core::llm_route::HarnessId, Arc<dyn WorkerAdapter>>,
-    account_limits: Option<
-        HashMap<
-            (
-                task_core::llm_route::SourceId,
-                task_core::llm_route::AccountId,
-            ),
-            usize,
-        >,
-    >,
-    /// ADR-0024 D1: 選択のたびにディレクトリを読み直さないよう、tick につき高々 1 回だけスキャンする（アダプタごと）。
-    accounts_scan_cache: HashMap<AccountAdapter, Vec<AccountDir>>,
-    /// ADR-0024 D5/D7 / ADR-0025 D5: celeris（GUI の管理 API）が進行中のログイン中継を持っているアカウント
-    /// （キーは `"<adapter>:<id>"`。同じ id でもアダプタが違えば別のログインとして扱う）。
-    login_pending_accounts: std::collections::HashSet<String>,
+    /// ADR 2026-11-11 dispatcher-state-ownership D1: 経路選択の状態（宣言・account の上限と帳簿・cooldown・routing mode・
+    /// 分類 board・経路なしの task・RoutingContext の登録簿）の owner。field は private で、`Dispatcher` は method だけを呼ぶ。
+    routing: RoutingRuntime,
     /// ADR-0078 D5: 直前の tick の開始時刻と、その前の tick との間隔（`cluster ssh master lost` の
     /// `last_tick_gap_ms`。tick の停止による切断〈ADR-0078 C3〉を見分ける）。
     last_tick_started: Option<Instant>,
@@ -1336,11 +1304,6 @@ pub struct Dispatcher {
     knowledge_probe: KnowledgeProbe,
     /// ADR-0052 D1: 検査の結果のキャッシュ（`base_url` → (いつ調べたか, 結果)）。60 秒。
     knowledge_probe_cache: HashMap<String, (Instant, Reachability)>,
-    dispatch_routing: DispatchRoutingSettings,
-    /// 多目的 routing Phase 3: run に結ぶ RoutingContext の登録簿（`set_routing_context_registry`）。
-    /// 未設定なら登録も `context_ref` の発行もしない（`routing_features_recorded` の追記は続ける）。
-    routing_context_registry:
-        Option<Arc<dyn task_core::model_router::context_registry::RoutingContextRegistry>>,
     /// ADR-0074 D4（Phase F3 quota）: run の重なりを追跡し、measured/apportioned/pending を決定する
     /// （プロセス内メモリのみ。`AccountBook` とは別軸で、replay の対象外）。
     quota_activity: crate::accounts::QuotaActivity,
@@ -1377,44 +1340,11 @@ fn real_now_unix() -> i64 {
 
 impl Dispatcher {
     pub fn new(store: Arc<dyn TaskStore>, config: DispatchConfig) -> Self {
-        let account_limits = match store.account_limits() {
-            Ok(rows) => Some(
-                rows.into_iter()
-                    .map(|row| {
-                        (
-                            (
-                                task_core::llm_route::SourceId::from(row.source_id),
-                                task_core::llm_route::AccountId::from(row.account_id),
-                            ),
-                            row.max_runs,
-                        )
-                    })
-                    .collect(),
-            ),
-            Err(error) => {
-                tracing::error!(%error, "cannot load account limits; account dispatch is blocked");
-                None
-            }
-        };
         let (tx, rx) = mpsc::unbounded_channel();
-        // ADR-0024 D4 / ADR-0025 D1: `<root>/.celeris-usage.json` から観測値・cooldown を読む（無ければ空から始める）。
-        // アダプタごとに別の根ディレクトリ・別の帳簿（アカウントの記録はそのアダプタの中で閉じる）。
-        let account_books: HashMap<AccountAdapter, Arc<StdMutex<AccountBook>>> =
-            match &config.accounts {
-                Some(accounts) => accounts
-                    .roots
-                    .iter()
-                    .map(|(adapter, root)| {
-                        (
-                            *adapter,
-                            Arc::new(StdMutex::new(AccountBook::load(
-                                &root.join(".celeris-usage.json"),
-                            ))),
-                        )
-                    })
-                    .collect(),
-                None => HashMap::new(),
-            };
+        let routing = RoutingRuntime::new(
+            store.as_ref(),
+            config.accounts.as_ref().map(|accounts| &accounts.roots),
+        );
         // ADR-0075 D1: scratch を NFS 上で無効化したときは起動ログに理由を出す（従来の build_cache_dir に戻る）。
         // ADR-0129 (3): `[scratch] mount` が mount されていなければ従来の場所へ戻したことを出す。
         if let Some(reason) = &config.scratch.dir_fallback_reason {
@@ -1481,19 +1411,13 @@ impl Dispatcher {
             terminal_records_reconciled_at: None,
             ownerless_reconciled_at: None,
             lost_review_watch: std::collections::HashSet::new(),
-            warned_unroutable: std::collections::HashSet::new(),
             credential_gates: credential_gate::CredentialGates::default(),
             credential_held: std::collections::HashSet::new(),
-            routing_mode: task_core::route_select::RoutingMode::default(),
-            classification_board: lane_assist::ClassificationBoard::default(),
-            classification_wait: None,
-            classification_deferred_since: HashMap::new(),
             cluster: ClusterRuntime::new(),
             just_aborted: std::collections::HashSet::new(),
             write_reservations: HashMap::new(),
             write_set_waits: HashMap::new(),
             write_set_hold_seq: 0,
-            unroutable: std::collections::HashSet::new(),
             dispatch_waits: HashMap::new(),
             cluster_waiting: std::collections::HashSet::new(),
             integrated_deps: std::collections::BTreeSet::new(),
@@ -1511,13 +1435,7 @@ impl Dispatcher {
             rx,
             ticks: 0,
             publisher: None,
-            account_books,
-            source_cooldowns: HashMap::new(),
-            llm_route_registry: Arc::default(),
-            harness_adapters: HashMap::new(),
-            account_limits,
-            accounts_scan_cache: HashMap::new(),
-            login_pending_accounts: std::collections::HashSet::new(),
+            routing,
             last_tick_started: None,
             last_tick_gap_ms: 0,
             credential_resumer: None,
@@ -1529,8 +1447,6 @@ impl Dispatcher {
                 task_worker::probe_models(base_url, task_worker::PROBE_TIMEOUT, bearer_token)
             }),
             knowledge_probe_cache: HashMap::new(),
-            dispatch_routing: DispatchRoutingSettings::default(),
-            routing_context_registry: None,
             quota_activity: crate::accounts::QuotaActivity::new(),
             quota_calibration: crate::accounts::QuotaCalibrationBook::new(),
             script_compare: Default::default(),
@@ -1549,7 +1465,7 @@ impl Dispatcher {
         &mut self,
         registry: Arc<dyn task_core::model_router::context_registry::RoutingContextRegistry>,
     ) {
-        self.routing_context_registry = Some(registry);
+        self.routing.set_context_registry(registry);
     }
 
     /// ADR-0052 D1: `[knowledge.langmem].base_url` の到達性（60 秒キャッシュ）。
@@ -1791,22 +1707,7 @@ impl Dispatcher {
 
     /// Reload authoritative account settings. On failure keep account dispatch blocked.
     pub fn reload_account_limits(&mut self) -> Result<(), task_core::StoreError> {
-        self.account_limits = None;
-        let rows = self.store.account_limits()?;
-        self.account_limits = Some(
-            rows.into_iter()
-                .map(|r| {
-                    (
-                        (
-                            task_core::llm_route::SourceId::from(r.source_id),
-                            task_core::llm_route::AccountId::from(r.account_id),
-                        ),
-                        r.max_runs,
-                    )
-                })
-                .collect(),
-        );
-        Ok(())
+        self.routing.reload_account_limits(self.store.as_ref())
     }
 
     /// Set/clear an override, updating memory only after SQLite commits.
@@ -1816,31 +1717,12 @@ impl Dispatcher {
         id: &str,
         max_runs: Option<usize>,
     ) -> Result<(), task_core::StoreError> {
-        self.store.set_account_limit(adapter, id, max_runs)?;
-        if let Some(limits) = self.account_limits.as_mut() {
-            let key = (
-                task_core::llm_route::SourceId::from(adapter),
-                task_core::llm_route::AccountId::from(id),
-            );
-            if let Some(max_runs) = max_runs {
-                limits.insert(key, max_runs);
-            } else {
-                limits.remove(&key);
-            }
-            Ok(())
-        } else {
-            self.reload_account_limits()
-        }
+        self.routing
+            .set_account_limit(self.store.as_ref(), adapter, id, max_runs)
     }
 
     pub fn account_max_runs(&self, adapter: &str, id: &str) -> Option<usize> {
-        self.account_limits
-            .as_ref()?
-            .get(&(
-                task_core::llm_route::SourceId::from(adapter),
-                task_core::llm_route::AccountId::from(id),
-            ))
-            .copied()
+        self.routing.stored_limit(adapter, id)
     }
 
     /// `[accounts] max_runs_per_account`, or the built-in default 2 without `[accounts]`.
@@ -1852,7 +1734,7 @@ impl Dispatcher {
     }
 
     pub(super) fn account_run_limit(&self, adapter: AccountAdapter, id: &str, cos: bool) -> usize {
-        if self.account_limits.is_none() {
+        if !self.routing.account_limits_loaded() {
             return 0;
         }
         let (effective, _) = crate::capacity::effective_account_limit(
@@ -1865,7 +1747,8 @@ impl Dispatcher {
     /// Implicit accounts (ADR 2026-10-08 §(e), ADR 2026-10-11 llm-source-harness-selection): one
     /// per declared LLM source without an OAuth account pool, in source id order.
     pub fn implicit_account_ids(&self) -> Vec<ProviderId> {
-        self.llm_route_registry
+        self.routing
+            .registry()
             .sources
             .iter()
             .filter(|(_, spec)| account_adapter_for_source_kind(spec.kind.as_ref()).is_none())
@@ -1882,14 +1765,12 @@ impl Dispatcher {
         if !self.implicit_account_ids().iter().any(|id| id == source) {
             return None;
         }
+        if !self.routing.account_limits_loaded() {
+            return None;
+        }
         let stored = self
-            .account_limits
-            .as_ref()?
-            .get(&(
-                task_core::llm_route::SourceId::from(crate::capacity::IMPLICIT_ACCOUNT_ADAPTER),
-                task_core::llm_route::AccountId::from(source),
-            ))
-            .copied();
+            .routing
+            .stored_limit(crate::capacity::IMPLICIT_ACCOUNT_ADAPTER, source);
         Some(crate::capacity::effective_account_limit(
             stored,
             self.default_max_runs(),
@@ -1989,44 +1870,24 @@ impl Dispatcher {
                     .values()
                     .filter(|(source, account)| {
                         account.as_ref() == id
-                        && self
-                            .llm_route_registry
-                            .sources
-                            .get(source)
-                            .and_then(|spec| {
-                                crate::dispatcher::route_select::account_adapter_for_source_kind(
-                                    spec.kind.as_ref(),
-                                )
-                            })
-                            == Some(adapter)
+                            && self.routing.source_account_adapter(source) == Some(adapter)
                     })
                     .count()
             })
     }
 
-    /// ADR-0025 D1: `login_pending_accounts` のキー（同じ id でもアダプタが違えば別のログインとして扱う）。
-    fn login_pending_key(adapter: AccountAdapter, id: &str) -> String {
-        format!("{adapter}:{id}")
-    }
-
     /// D7: 進行中のログイン中継の有無を記録する（celeris の `HashMap<String, LoginSession>` と対）。
     pub fn set_account_login_pending(&mut self, adapter: AccountAdapter, id: &str, pending: bool) {
-        let key = Self::login_pending_key(adapter, id);
-        if pending {
-            self.login_pending_accounts.insert(key);
-        } else {
-            self.login_pending_accounts.remove(&key);
-        }
+        self.routing.set_login_pending(adapter, id, pending);
     }
 
     /// ログイン中継の実行中は定期確認しない。
     pub fn account_login_pending(&self, adapter: AccountAdapter, id: &str) -> bool {
-        self.login_pending_accounts
-            .contains(&Self::login_pending_key(adapter, id))
+        self.routing.login_pending(adapter, id)
     }
 
     pub fn account_book(&self, adapter: AccountAdapter) -> Option<Arc<StdMutex<AccountBook>>> {
-        self.account_books.get(&adapter).cloned()
+        self.routing.account_book(adapter)
     }
 
     /// D6: 手動確認の結果を `AccountBook` に記録して保存する（`source = "check"`）。
@@ -2125,15 +1986,11 @@ impl Dispatcher {
                 u64::try_from(tick_started.duration_since(prev).as_millis()).unwrap_or(u64::MAX);
         }
         // ADR-0024 D1: 選択のたびに読み直さないよう、スキャンは tick ごとに高々 1 回（このキャッシュを毎 tick 捨てる）。
-        self.accounts_scan_cache.clear();
+        self.routing.clear_scan_cache();
         // ADR 2026-10-14-local-machine-settings D4: `max_concurrency` は次の tick から効く（store を 1 行読む）。
         self.refresh_max_concurrency();
         let now = (self.now_unix_fn)();
-        for book in self.account_books.values() {
-            if let Ok(mut book) = book.lock() {
-                book.clear_expired(now);
-            }
-        }
+        self.routing.expire_account_books(now);
         // drain_completions からも reviewer run が起動されるため、完了処理より先に判定する。
         self.refresh_disk_ready();
         // Critical also gates reviewers started by drain_completions. Sample before that phase.
@@ -2386,7 +2243,7 @@ impl Dispatcher {
     }
 
     fn dispatch_ready(&mut self) -> Result<usize, DispatchError> {
-        self.unroutable.clear();
+        self.routing.begin_dispatch_pass();
         self.cluster_waiting.clear();
         self.dispatch_waits.clear();
         // ADR-0089（Phase R6-5）: 非 CoS の枠が埋まっていても、CoS の対話 run の枠が空いていれば走査する。
@@ -2487,7 +2344,7 @@ impl Dispatcher {
         // 待ち対象に数えない。
         Ok(ready.iter().all(|t| {
             !self.is_eligible(t)
-                || self.unroutable.contains(&t.id)
+                || self.routing.is_unroutable(&t.id)
                 || self.cluster_waiting.contains(&t.id)
                 || matches!(
                     self.dispatch_waits.get(&t.id),

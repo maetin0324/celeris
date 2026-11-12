@@ -541,7 +541,7 @@ impl Dispatcher {
     /// 本番と同じ admission（`admit_source`。手元の評価 run の `(source, account)` も合算）で選ぶ。
     /// 評価は routing を**しない**（source×model は trial を作ったときに人が決めている）ので、候補は 1 件だけ。
     fn eval_pick(&mut self, trial: &EvalTrial) -> Result<RoutePick, EvalRouteError> {
-        let registry = Arc::clone(&self.llm_route_registry);
+        let registry = self.routing.registry_arc();
         let harness = registry
             .harnesses
             .keys()

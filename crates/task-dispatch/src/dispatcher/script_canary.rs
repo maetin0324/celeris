@@ -440,7 +440,7 @@ impl Dispatcher {
             target.bundle_sha256.clone(),
             target.host_api.clone(),
             Some(run_id.to_owned()),
-            &self.llm_route_registry,
+            self.routing.registry(),
             &harness,
             input.lane.as_deref(),
             false,

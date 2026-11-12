@@ -1,6 +1,6 @@
 //! review run の起動（`spawn_review`・`pick_reviewer`・最終レビュー）。per-task file lock は verdict の保存まで持ち続ける。ADR-0082 の L2。
 
-use super::route_select::{RouteInput, RoutePick, RouteTrace, account_adapter_for_source_kind};
+use super::route_select::{RouteInput, RoutePick, RouteTrace};
 use super::token_budget::run_watch;
 use super::*;
 use crate::review::RepoHealth;
@@ -1450,7 +1450,7 @@ impl Dispatcher {
             && let Some(decision) = trace.decision.as_mut()
         {
             decision.routing_resolved = Some(task_core::route_select::resolve_routing(
-                self.routing_mode,
+                self.routing.mode(),
                 routing_override.as_ref(),
             ));
         }
@@ -1465,7 +1465,7 @@ impl Dispatcher {
             Ok(v) => v,
             Err(reason) => {
                 // 拒否は task ごとに 1 回だけ残す（毎 tick の再試行で events を増やさない）。
-                if self.warned_unroutable.insert(task.id) {
+                if self.routing.warn_unroutable_once(task.id) {
                     match &outcome {
                         Err(_) => {
                             if let Err(e) = self.record_route_selection(
@@ -1493,11 +1493,7 @@ impl Dispatcher {
                 return None;
             }
         };
-        let account_adapter = self
-            .llm_route_registry
-            .sources
-            .get(&pick.candidate.source)
-            .and_then(|s| account_adapter_for_source_kind(s.kind.as_ref()));
+        let account_adapter = self.routing.source_account_adapter(&pick.candidate.source);
         let account = pick.account.to_string();
         let adapter_id = adapter.id().to_string();
         let review_run_id = ulid::Ulid::new().to_string();

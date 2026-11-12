@@ -225,7 +225,7 @@ async fn slot_only_wait_keeps_the_run_waiting_then_launches_the_same_run() {
 async fn cooldown_does_not_wait() {
     let (_dir, store, mut d) = fixture(FakeAdapter::default_command(), 2);
     let until = (d.now_unix_fn)() + 3600;
-    d.source_cooldowns.insert(
+    d.routing.insert_source_cooldown_for_test(
         "p1".into(),
         crate::accounts::AccountCooldown {
             until,

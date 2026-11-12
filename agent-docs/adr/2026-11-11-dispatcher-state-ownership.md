@@ -374,3 +374,24 @@ profile の高 risk の class と capability-map.json の owner path に、こ�
   prune の秒数・`--mode verify`・注入時計の値）は `MaintenanceInputs` で受ける。保守 executor の失敗は `MaintenanceError`
   （store と scratch pool の lock）で返し、入口が今と同じ `DispatchError` の variant に写す。
 - 試験 `structure_guard_host_maintenance` が D2 の 1〜3・7 を source から確かめる。
+
+## 付記 2026-11-12: own-routing の実装（RoutingRuntime）
+
+- `RoutingRuntime`（`crates/task-dispatch/src/routing_runtime.rs`）は 15 field を持つ: D1 の表の routing の `account_books`・
+  `account_limits`・`accounts_scan_cache`・`classification_board`・`classification_deferred_since`・`classification_wait`・
+  `login_pending_accounts`・`source_cooldowns`・`unroutable`・`warned_unroutable` と、表で `Dispatcher`（組み立て）とした
+  `dispatch_routing`・`routing_context_registry`・`routing_mode`、表に無い `llm_route_registry`・`harness_adapters`。
+  理由: unit own-routing の objective がこの 15 件を移す field に挙げ、受け入れ条件が「挙げた field が `Dispatcher` から消え
+  `RoutingRuntime` 1 個になる」だから。`eval_runs`・`knowledge_probe_cache`・`quota_activity`・`quota_calibration` は表では routing だが、
+  objective が own-quota などに任せているので `Dispatcher` に残した。
+- `route_state`（約 220 行）は D3 に従い、判断を `routing_runtime/route_state.rs` の純粋関数 `build_route_state(RouteStateInputs) -> RouteState`
+  に分けた。走っている run・review の `(source, account)` は `Dispatcher::route_holds` が集めて渡す（run の表の owner は別 unit が作る）。
+  `RoutingRuntime::route_state` が走査 cache を満たし、帳簿の lock を借りて関数を呼ぶ。`RouteState`・`account_adapter_for_source_kind`・
+  `source_account_pool`・`DispatchRoutingSettings`・`ClassificationBoard` は `dispatcher` の外の `routing_runtime` に移した（owner が
+  `dispatcher` module を使わないため）。公開 API の path は `task_dispatch::` 直下のままで変わらない。
+- `ClassificationBoard` の `BoardItem` が持つ `CredentialGate` は `credential_gate.rs`（高 risk の credential の path）の型で、この unit は
+  その file を変えないので、crate 直下の re-export（`crate::CredentialGate`）で参照する。型を移すかは credential の owner を決める unit に任せる。
+- 試験の test-only の `test_cos_reserved_sources` は `Dispatcher::route_state` の `#[cfg(test)]` の後処理に残した（own-hooks が移す）。
+  試験の field 直参照（`source_cooldowns`・`account_limits`）は `#[cfg(test)]` の method（`insert_source_cooldown_for_test`・
+  `set_stored_limit_for_test`）に置き換えた。
+- 試験 `structure_guard_routing_runtime` が D2 の 1〜3・7 と、純粋 module が `Dispatcher`・store・時計・lock の語を持たないことを source から確かめる。

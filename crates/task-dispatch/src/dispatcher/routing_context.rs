@@ -269,7 +269,7 @@ impl Dispatcher {
                 tracing::warn!(%task_id, run_id = input.run_id, error = %e, "failed to record routing features");
             }
         }
-        let registry = self.routing_context_registry.as_ref()?;
+        let registry = self.routing.context_registry()?;
         Some(registry.register(input.run_id, ctx, ttl, Instant::now()))
     }
 
@@ -288,7 +288,7 @@ impl Dispatcher {
 
     /// run が `running` から外れたとき（完了・打ち切り）に、その run の context ref を外す。
     pub(super) fn release_routing_context(&self, run_id: &str) {
-        if let Some(registry) = &self.routing_context_registry {
+        if let Some(registry) = self.routing.context_registry() {
             registry.release(run_id);
         }
     }

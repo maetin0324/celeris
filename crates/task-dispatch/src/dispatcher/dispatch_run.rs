@@ -12,12 +12,6 @@ pub(in crate::dispatcher) use script_compare::{
     SCRIPT_TICK_WAIT_BUDGET, ScriptTickWait, script_canary_target_for_test,
 };
 
-/// lane の決定（`decide_lane`）が使う routing の設定（retry の escalation の閾値）。
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct DispatchRoutingSettings {
-    pub escalation: task_core::EscalationThresholds,
-}
-
 impl Dispatcher {
     // Verify must skip snapshot tasks before dependency/child lookups and maintenance.
     // Filtering only in dispatch_one still scans the snapshot on every smoke tick.
@@ -282,14 +276,14 @@ impl Dispatcher {
             ClusterResolution::Local => None,
             ClusterResolution::Resolved(spec, path, mode) => Some((spec, path, mode)),
             ClusterResolution::NotConfigured => {
-                if self.warned_unroutable.insert(task.id) {
+                if self.routing.warn_unroutable_once(task.id) {
                     let cluster_id = match &task.workspace {
                         WorkspaceSpec::Remote { cluster, .. } => cluster.clone(),
                         WorkspaceSpec::Local { .. } => String::new(),
                     };
                     tracing::warn!(task_id = %task.id, cluster = %cluster_id, "no such cluster in the config; task left ready");
                 }
-                self.unroutable.insert(task.id);
+                self.routing.mark_unroutable(task.id);
                 self.note_dispatch_wait(
                     task.id,
                     task_core::TaskWait::Unroutable {
@@ -621,7 +615,7 @@ impl Dispatcher {
             && let Some(decision) = route_trace.decision.as_mut()
         {
             decision.routing_resolved = Some(task_core::route_select::resolve_routing(
-                self.routing_mode,
+                self.routing.mode(),
                 routing_override.as_ref(),
             ));
         }
@@ -635,7 +629,7 @@ impl Dispatcher {
         };
         let (pick, adapter, llm_route) = match launch {
             Ok(launch) => {
-                self.warned_unroutable.remove(&task.id);
+                self.routing.clear_warned_unroutable(&task.id);
                 launch
             }
             Err(launch_error) => {
@@ -656,11 +650,7 @@ impl Dispatcher {
         let adapter_id = adapter.id().to_string();
         let source_id = pick.candidate.source.to_string();
         let model = pick.candidate.model.to_string();
-        let account_adapter = self
-            .llm_route_registry
-            .sources
-            .get(&pick.candidate.source)
-            .and_then(|s| route_select::account_adapter_for_source_kind(s.kind.as_ref()));
+        let account_adapter = self.routing.source_account_adapter(&pick.candidate.source);
         // The pool account of an OAuth source (other sources book `(source, account)` on the route only).
         let account = account_adapter.map(|_| pick.account.to_string());
 
@@ -1213,7 +1203,7 @@ impl Dispatcher {
         let mut excluded: Vec<String> = Vec::new();
         let mut candidates: Vec<(String, String, Arc<dyn WorkerAdapter>)> = Vec::new();
         let mut harnesses: Vec<(&task_core::llm_route::HarnessId, &Arc<dyn WorkerAdapter>)> =
-            self.harness_adapters.iter().collect();
+            self.routing.harness_adapters().collect();
         harnesses.sort_by(|a, b| a.0.cmp(b.0));
         for (harness, adapter) in harnesses {
             let id = adapter.id();
@@ -1364,7 +1354,7 @@ impl Dispatcher {
     /// `ready_tasks` の取得件数。経路なしと分かっているタスク（`warned_unroutable`）の分だけ広げ、それらが窓を埋めて
     /// 後ろの実行可能なタスクが dispatch されない・`is_idle` が誤って真になることを防ぐ（ADR-0012 監査）。
     pub(super) fn ready_window(&self) -> usize {
-        self.max_concurrency * 4 + 16 + self.warned_unroutable.len()
+        self.max_concurrency * 4 + 16 + self.routing.warned_unroutable_count()
     }
 
     /// ADR-0043 D4: レビュー担当の必須の検査コマンド（ADR 2026-10-23-required-checks-bound-to-candidate:
@@ -1418,7 +1408,7 @@ impl Dispatcher {
                 task_core::retry_policy::attempt_history_with_interval(task, &events);
             let thresholds = task_core::EscalationThresholds {
                 org_ceiling: ceiling.clone(),
-                ..self.dispatch_routing.escalation.clone()
+                ..self.routing.escalation().clone()
             };
             let policy = task_core::EscalationPolicy::for_task_with_thresholds(
                 task,
@@ -1613,9 +1603,9 @@ impl Dispatcher {
         launch_error: Option<&RouteLaunchError>,
     ) -> Result<(), DispatchError> {
         if !matches!(outcome, Err(route_select::RouteFailure::NoEligible(_))) {
-            self.unroutable.insert(task_id);
+            self.routing.mark_unroutable(task_id);
         }
-        if !self.warned_unroutable.insert(task_id) {
+        if !self.routing.warn_unroutable_once(task_id) {
             return Ok(());
         }
         match (outcome, launch_error) {

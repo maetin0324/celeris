@@ -19232,6 +19232,38 @@
       ],
       "type": "object"
     },
+    "KnowledgeUse": {
+      "description": "1 run の KB の操作の回数（ADR D3。worker run は `RunMetrics.knowledge`、CoS run は\n`chat_runs.knowledge_use_json`）。回数は呼び出しの数で、`failed` はそのうち失敗した数。",
+      "properties": {
+        "failed": {
+          "default": 0,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "get": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "record": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "search": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "search",
+        "get",
+        "record"
+      ],
+      "type": "object"
+    },
     "LaneAssistRecord": {
       "description": "`celeris.route-decision/1` に載せる lane 層の記録（`decision_assisted` のときだけ）。",
       "properties": {
@@ -28350,6 +28382,17 @@
     "RunMetrics": {
       "description": "ADR-0061（Phase 104）: `Event::WorkerFinished` に添える run 単位のメトリクス。\nharness・model・account は同じ `run_id` の `Event::WorkerStarted` に既にあるのでここには持たない\n（二重管理をしない）。success/failure は `WorkerFinished.outcome` の文字列を\n`task-api::stats::classify_outcome` が分類する既存の仕組みのままにする。",
       "properties": {
+        "knowledge": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KnowledgeUse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-11-12-knowledge-usage-per-run D3: KB の操作の入口（`celerisctl knowledge`）で数えた回数。\n台帳の env を渡した run は 0 回でも `Some`。`None` は計測していない run。"
+        },
         "peak_context_tokens": {
           "description": "ADR-0072 D19（Phase E1）: この run で観測した context 量（input + cache_read + cache_creation）\nの最大値。取れないアダプタ（codex / acp。ADR-0072 §7 U2）は `None`。",
           "format": "uint64",

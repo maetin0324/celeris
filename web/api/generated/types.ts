@@ -3879,6 +3879,13 @@ export type KnowledgeTree = {
   "truncated": boolean;
 };
 
+export type KnowledgeUse = {
+  "failed"?: number;
+  "get": number;
+  "record": number;
+  "search": number;
+};
+
 export type LaneAssistRecord = {
   "base_lane": string;
   "basis": string;
@@ -5673,6 +5680,7 @@ export type RunList = {
 };
 
 export type RunMetrics = {
+  "knowledge"?: KnowledgeUse | null;
   "peak_context_tokens"?: number | null;
   "retries": number;
   "turns"?: number | null;

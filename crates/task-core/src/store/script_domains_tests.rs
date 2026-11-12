@@ -1750,6 +1750,7 @@ fn script_generation_rejected_rows_migrate_to_invalid() {
              ALTER TABLE chat_runs DROP COLUMN launch_tracked; \
              ALTER TABLE chat_runs DROP COLUMN attempts_recorded; \
              ALTER TABLE chat_runs DROP COLUMN attempts_usage_missing; \
+             ALTER TABLE chat_runs DROP COLUMN knowledge_use_json; \
              DROP TABLE health_inventory_runs; \
              DELETE FROM schema_migrations WHERE version >= 103;",
         )

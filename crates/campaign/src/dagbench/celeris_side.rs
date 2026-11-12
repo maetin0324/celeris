@@ -39,6 +39,7 @@ use std::{
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use task_core::local_machine::WorkspaceRoots;
 use task_core::{Status, TaskId, TaskStore};
 use task_dispatch::{
     ClusterSpec, ContainersRuntimeConfig, DispatchConfig, Dispatcher, ExecutionConfig,
@@ -1525,10 +1526,7 @@ fn build_dispatcher(shared: &Arc<Shared>, paths: &Paths, store: Arc<dyn TaskStor
             // 取らない。host の枠を渡すと、計測が他の検査の混み具合と env（`CELERIS_CHECK_SLOT`）に左右されるので渡さない。
             check_slots: None,
             review_resync_quiet: Duration::from_secs(900),
-            workspace_roots: task_core::local_machine::WorkspaceRoots::new(
-                paths.workspaces.clone(),
-                None,
-            ),
+            workspace_roots: WorkspaceRoots::new(paths.workspaces.clone(), None),
             plan_auto_accept: false,
             retry_backoff_base: Duration::ZERO,
             retry_backoff_max: Duration::ZERO,

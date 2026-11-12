@@ -970,18 +970,14 @@ impl Dispatcher {
                     )),
                     commands,
                     reusable: Default::default(),
-                    workspace: if index == 0 {
-                        None
-                    } else {
-                        Some(
-                            limits.wrap(
-                                LocalWorkspace::new(&dir)
-                                    .with_work_dir(repo.dir.clone())
-                                    .with_cargo_env(review_check_env.clone()),
-                                format!("review {task_id} {}", repo.name),
-                            ),
+                    workspace: (index != 0).then(|| {
+                        limits.wrap(
+                            LocalWorkspace::new(&dir)
+                                .with_work_dir(repo.dir.clone())
+                                .with_cargo_env(review_check_env.clone()),
+                            format!("review {task_id} {}", repo.name),
                         )
-                    },
+                    }),
                 });
             }
         }

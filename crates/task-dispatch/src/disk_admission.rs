@@ -6,6 +6,9 @@
 //!   run か review の検査が今 target に書いている owner（`task_worker::scratch::target_written_now`）と、lease の生きた
 //!   release-build（build ごとに repo の見込みまで育つ）だけ。通した run は、worker が lease を書いて走査に書いている
 //!   owner として出るまで（多くは 10〜30 秒、長いと数分）、[`Gate`] のメモリで見込みを数え続ける（pass をまたぐ）。
+//!   数え始めるのは run を起動したとき（[`Gate::started`]。dispatcher が `running` に入れた直後）で、判定で通しても
+//!   その後に起動を見送った run（経路の選択の拒否・分類の待ち・credential の待ち・lease が取れない）は数えない
+//!   （[`Admission::Go`] の見込みを捨てる。attempt 10 の review の指摘）。
 //! - D1「1 本は通す」: 終わる見込みのある書き手（この daemon が run・review・WU の検査を今走らせている task の、走査で
 //!   増分を持つ owner と、通したがまだ走査に出ない run）が 1 本も無ければ 1 本は通す（詰まらない）。増分を持つかは走査の
 //!   DB の状態から決まるが、`reviewing` で子・人の承認・再同期の停止を待つ task と、WU を待つ `running` の親は target を
@@ -13,7 +16,7 @@
 //!   （[`task_worker::scratch::Owner::of_run`]）。
 //! - D2: 予備（空きの下限）は filesystem の容量 × `[dispatch] min_free_disk_pct`（[`min_free_bytes`]）。
 //! - D1「記録」: 待たせた run の判定は task の待ちの理由 `TaskWait::DiskForecast`（ADR 2026-10-11-task-wait-reasons の M12）
-//!   として返し、dispatcher がその場で `dispatch_waits` に入れる（[`Gate::holds_run`]）。task の `waits`・`runnable`・停滞の
+//!   として返し、dispatcher がその場で `dispatch_waits` に入れる（[`Gate::judge_run`]）。task の `waits`・`runnable`・停滞の
 //!   判定は待ちとして見る（理由の無い `ready` として受信箱の `task_unscheduled` に出ない）。
 //! - D4: 見込みは `ScratchStatus.admission`（[`forecast`]）。待たせている run の正本は daemon の [`Gate`] のメモリだけで、
 //!   file には書かない（同じ pool を見る verify の daemon が上書きできない）。daemon の snapshot
@@ -190,7 +193,7 @@ fn gb(bytes: u64) -> String {
 }
 
 /// D1 の式。`admitted_bytes` は通したがまだ走査に書いている owner として出ない run の見込みの合計、`writers` は終わる
-/// 見込みのある書き手の数（[`Gate::hold`]）。`writers` が 0 なら通す（待っても空きを戻す run の終わりが来ないので、
+/// 見込みのある書き手の数（[`Gate::judge`]）。`writers` が 0 なら通す（待っても空きを戻す run の終わりが来ないので、
 /// 待たせると詰まる）。
 pub fn decide(
     view: &ScratchAdmissionView,
@@ -234,6 +237,28 @@ pub type Probe = Arc<dyn Fn() -> Inputs + Send + Sync>;
 
 type HoldKey = (String, Option<String>);
 
+/// 1 run の判定の結果（[`Gate::judge`]。判定しなかった run は `None`）。
+#[must_use]
+#[derive(Debug, Clone, PartialEq)]
+pub enum Admission {
+    /// 始めてよい。見込みは、run を起動したときに [`Gate::started`] に渡して数え始める。起動の前に見送ったら捨てる
+    /// （数えない）。
+    Go(Reservation),
+    /// 待たせる。task の待ちの理由（呼び手が `dispatch_waits` に入れる）。
+    Wait(TaskWait),
+}
+
+/// 判定で通した run の見込み。dispatcher が run を `running` に入れた後で [`Gate::started`] に渡したときだけ、通したが
+/// まだ走査に出ない run として数え始める。判定の時点で数えると、その後に経路の選択などで起動を見送った run が同じ
+/// pass の後続の書き手と見込みに残り、走っている run が 0 本でも後続が待つ（拒否が続く間、毎 pass。attempt 10 の
+/// review の指摘）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reservation {
+    key: HoldKey,
+    owner: String,
+    need_bytes: u64,
+}
+
 /// dispatcher の待たせている run と、通したがまだ走査に出ない run（`ScratchState.admission`）。pass ごとに
 /// [`Gate::begin_pass`] を呼ぶ。dispatch の途中で `&self` の Dispatcher から呼べるよう、状態は中の Mutex に持つ
 /// （daemon の tick の thread だけが触る）。
@@ -249,8 +274,8 @@ struct GateState {
     seen: BTreeSet<HoldKey>,
     /// この pass の始めに、この daemon が run・review・WU の検査を走らせている task（[`Gate::begin_pass`]）。
     busy: BTreeSet<String>,
-    /// 通した run（task・WU）→ (owner, 見込み)。worker が lease を書き、走査に書いている owner として出るまで（その後は
-    /// 走査の増分が数える）、または run が終わるまで持つ。pass ごとに 0 に戻すと、直前の tick で通した run の見込みが
+    /// 起動した run（task・WU）→ (owner, 見込み)（[`Gate::started`]）。worker が lease を書き、走査に書いている owner
+    /// として出るまで（その後は走査の増分が数える）、または run が終わるまで持つ。pass ごとに 0 に戻すと、直前の tick で通した run の見込みが
     /// lease の現れるまで消え、まとめて来た run が見込みを超えて始まる（attempt 5 の review の指摘）。
     admitted: BTreeMap<HoldKey, (String, u64)>,
     /// 待ち始めの記録（log）を残した回数（試験が 1 回だけかを確かめる）。
@@ -316,18 +341,17 @@ impl Gate {
     }
 
     /// D1 の dispatch からの入口: Local の task で、測った見込みがあるときだけ `repo_of`（run の cargo の target を
-    /// 結び付ける checkout の source）を引いて [`Gate::hold`] で判定する。待たせるなら task の待ちの理由（呼び手が
-    /// `dispatch_waits` に入れる）。`work_unit_id` は
+    /// 結び付ける checkout の source）を引いて [`Gate::judge`] で判定する。`work_unit_id` は
     /// dispatcher の run の鍵（phase のある WU）、`target_work_unit` は worker の `CARGO_TARGET_DIR` の owner の WU
     /// （自分の worktree を持つ WU だけ。task の worktree を共有する WU は `None`）。
-    pub fn holds_run(
+    pub fn judge_run(
         &self,
         view: Option<&ScratchStatus>,
         task: &Task,
         work_unit_id: Option<&str>,
         target_work_unit: Option<&WorkUnitRow>,
         repo_of: impl FnOnce() -> Option<PathBuf>,
-    ) -> Option<TaskWait> {
+    ) -> Option<Admission> {
         if !matches!(task.workspace, WorkspaceSpec::Local { .. }) {
             return None;
         }
@@ -339,7 +363,7 @@ impl Gate {
         let id = task.id.to_string();
         let target_work_unit = target_work_unit.map(|w| w.id.as_str());
         let owner = task_worker::scratch::Owner::of_run(&id, target_work_unit).to_string();
-        self.hold(
+        self.judge(
             &view,
             &id,
             work_unit_id,
@@ -349,11 +373,12 @@ impl Gate {
         )
     }
 
-    /// D1: run（task・WU。dispatcher の run の鍵）を待たせるなら、その task の待ちの理由（`TaskWait::DiskForecast`。
-    /// 待たせている run の記録と同じ判定から作る）。`owner` はその run の `CARGO_TARGET_DIR` の owner（worker と同じ
-    /// [`task_worker::scratch::Owner::of_run`]）。待ち始めに 1 回だけ log を残す（受信箱・通知には出さない）。通した run
-    /// は、走査（`view`）に増分を持つ owner として出るまで見込みを数え続ける。
-    pub fn hold(
+    /// D1: run（task・WU。dispatcher の run の鍵）を判定する。待たせるなら、その task の待ちの理由
+    /// （`TaskWait::DiskForecast`。待たせている run の記録と同じ判定から作る）。`owner` はその run の `CARGO_TARGET_DIR`
+    /// の owner（worker と同じ [`task_worker::scratch::Owner::of_run`]）。待ち始めに 1 回だけ log を残す（受信箱・通知には
+    /// 出さない）。通すなら見込み（[`Reservation`]）を返すだけで、まだ数えない（[`Gate::started`]）。判定しない（見込み 0・
+    /// 空きが読めない）なら `None`。
+    pub fn judge(
         &self,
         view: &ScratchAdmissionView,
         task_id: &str,
@@ -361,7 +386,7 @@ impl Gate {
         owner: &str,
         repo_key: &str,
         now: SystemTime,
-    ) -> Option<TaskWait> {
+    ) -> Option<Admission> {
         let owner = owner.to_string();
         let key: HoldKey = (task_id.to_string(), work_unit_id.map(str::to_string));
         let growing: Vec<&str> = view
@@ -391,8 +416,11 @@ impl Gate {
             }
             Decision::Admit { need_bytes } => {
                 st.holds.remove(&key);
-                st.admitted.insert(key, (owner, need_bytes));
-                None
+                Some(Admission::Go(Reservation {
+                    key,
+                    owner,
+                    need_bytes,
+                }))
             }
             Decision::Hold { need_bytes, reason } => {
                 st.seen.insert(key.clone());
@@ -416,11 +444,26 @@ impl Gate {
                         since,
                     },
                 );
-                Some(TaskWait::DiskForecast {
+                Some(Admission::Wait(TaskWait::DiskForecast {
                     need_bytes,
                     detail: reason,
-                })
+                }))
             }
+        }
+    }
+
+    /// D1: dispatcher が run を `running` に入れた直後に、その run の判定の結果（[`Gate::judge_run`]）を渡す。通した
+    /// （`Go`）run の見込みを数え始める。この後の判定は、走査に書いている owner として出るまで（または run が終わり次の
+    /// pass の [`Gate::begin_pass`] の `runs` から消えるまで）、この見込みを差し引き、この run を「1 本は通す」の書き手に
+    /// 数える。`Wait` の run は起動しないので来ない（来ても数えない）。
+    pub fn started(&self, admission: Option<Admission>) {
+        if let Some(Admission::Go(Reservation {
+            key,
+            owner,
+            need_bytes,
+        })) = admission
+        {
+            self.state().admitted.insert(key, (owner, need_bytes));
         }
     }
 }

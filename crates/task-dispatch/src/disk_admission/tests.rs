@@ -22,6 +22,25 @@ fn running(gate: &Gate) -> Vec<(String, Option<String>)> {
     gate.state().admitted.keys().cloned().collect()
 }
 
+/// dispatcher と同じ使い方: 判定し、通したら起動した（`running` に入れた）ものとして見込みを数え始める。待たせたら
+/// 待ちの理由。
+fn start(
+    gate: &Gate,
+    v: &ScratchAdmissionView,
+    task: &str,
+    wu: Option<&str>,
+    owner: &str,
+    repo: &str,
+) -> Option<TaskWait> {
+    match gate.judge(v, task, wu, owner, repo, SystemTime::UNIX_EPOCH) {
+        Some(Admission::Wait(wait)) => Some(wait),
+        go => {
+            gate.started(go);
+            None
+        }
+    }
+}
+
 fn inputs(free: u64, samples: Vec<Sample>) -> Inputs {
     Inputs {
         free_bytes: Some(free),
@@ -216,10 +235,7 @@ fn the_daemon_status_carries_its_own_held_runs_from_memory() {
     let (live, verify) = (Gate::default(), Gate::default());
     // a の run をこの daemon が走らせている（書き手）。
     live.begin_pass(running(&live), busy(&["a"]));
-    assert!(
-        live.hold(&v, "t1", None, "task-t1", "ap", SystemTime::UNIX_EPOCH)
-            .is_some()
-    );
+    assert!(start(&live, &v, "t1", None, "task-t1", "ap").is_some());
     live.begin_pass(running(&live), busy(&[]));
     verify.begin_pass(running(&verify), busy(&[]));
     let held = live.with_held(Some(&status)).and_then(|s| s.admission.held);
@@ -253,26 +269,14 @@ fn admitted_runs_count_across_passes_until_the_scan_shows_them() {
     let gate = Gate::default();
     gate.begin_pass(running(&gate), busy(&[]));
     // 書いている run 0 本: a は通す。b は 250 − 100 − 100 = 50 ≥ 30 で通す。c は 250 − 200 − 100 < 30 で待つ。
-    assert!(
-        gate.hold(&v, "a", None, "task-a", "ap", SystemTime::UNIX_EPOCH)
-            .is_none()
-    );
-    assert!(
-        gate.hold(&v, "b", None, "task-b", "ap", SystemTime::UNIX_EPOCH)
-            .is_none()
-    );
-    assert!(
-        gate.hold(&v, "c", None, "task-c", "ap", SystemTime::UNIX_EPOCH)
-            .is_some()
-    );
+    assert!(start(&gate, &v, "a", None, "task-a", "ap").is_none());
+    assert!(start(&gate, &v, "b", None, "task-b", "ap").is_none());
+    assert!(start(&gate, &v, "c", None, "task-c", "ap").is_some());
     // 次の pass: a・b の lease はまだ走査に無い。c は待ち続ける。
     for _ in 0..3 {
         gate.begin_pass(running(&gate), busy(&[]));
         assert_eq!(gate.admitted_bytes(), 200 * GB);
-        assert!(
-            gate.hold(&v, "c", None, "task-c", "ap", SystemTime::UNIX_EPOCH)
-                .is_some()
-        );
+        assert!(start(&gate, &v, "c", None, "task-c", "ap").is_some());
     }
     assert_eq!(gate.notes(), 1);
     // a が seed を写し始めて走査に出る（大きさ不明の書いている owner。増分 100）: 通した分からは外れ、二重に数えない。
@@ -284,34 +288,20 @@ fn admitted_runs_count_across_passes_until_the_scan_shows_them() {
     };
     let v2 = forecast(&inputs(250 * GB, vec![old.clone(), seeding]), None);
     gate.begin_pass(running(&gate), busy(&[]));
-    assert!(
-        gate.hold(&v2, "c", None, "task-c", "ap", SystemTime::UNIX_EPOCH)
-            .is_some()
-    );
+    assert!(start(&gate, &v2, "c", None, "task-c", "ap").is_some());
     assert_eq!(gate.admitted_bytes(), 100 * GB);
     // b が lease を書く前に終わった（走っていない）: 次の pass で消え、c は 250 − 100 − 0 − 100 = 50 ≥ 30 で通る。
     gate.begin_pass(
         running(&gate).into_iter().filter(|(t, _)| t != "b"),
         busy(&["a"]),
     );
-    assert!(
-        gate.hold(&v2, "c", None, "task-c", "ap", SystemTime::UNIX_EPOCH)
-            .is_none()
-    );
+    assert!(start(&gate, &v2, "c", None, "task-c", "ap").is_none());
     assert!(gate.held_views().is_empty());
     // 走査に書いている owner が無く、通した run も無ければ、予備を割っても 1 本は通す。
     let empty = Gate::default();
     let low = forecast(&inputs(5 * GB, vec![old]), None);
-    assert!(
-        empty
-            .hold(&low, "d", None, "task-d", "ap", SystemTime::UNIX_EPOCH)
-            .is_none()
-    );
-    assert!(
-        empty
-            .hold(&low, "e", None, "task-e", "ap", SystemTime::UNIX_EPOCH)
-            .is_some()
-    );
+    assert!(start(&empty, &low, "d", None, "task-d", "ap").is_none());
+    assert!(start(&empty, &low, "e", None, "task-e", "ap").is_some());
 }
 /// 不変条件（attempt 6 の review の指摘）: lease の生きた release-build は増分を持つが、「1 本は通す」の数えには入らない。
 /// task の run が 0 本なら、空きが予備を割っていても 1 本は通す（release の lease は 48 時間生き、待っても空きは戻らない）。
@@ -329,14 +319,8 @@ fn a_live_release_build_does_not_stall_the_first_task_run() {
     let gate = Gate::default();
     gate.begin_pass(running(&gate), busy(&[]));
     // 空き 50 GB は予備を割るが、task の run は 0 本なので 1 本は通す。2 本目は待つ。
-    assert!(
-        gate.hold(&v, "t1", None, "task-t1", "ap", SystemTime::UNIX_EPOCH)
-            .is_none()
-    );
-    assert!(
-        gate.hold(&v, "t2", None, "task-t2", "ap", SystemTime::UNIX_EPOCH)
-            .is_some()
-    );
+    assert!(start(&gate, &v, "t1", None, "task-t1", "ap").is_none());
+    assert!(start(&gate, &v, "t2", None, "task-t2", "ap").is_some());
 }
 
 /// 不変条件（attempt 7 の review の指摘）: 「1 本は通す」の書き手は、増分を持つ owner のうち、この daemon が run・
@@ -352,25 +336,16 @@ fn a_parent_waiting_in_review_is_not_a_writer_but_a_running_review_is() {
     let v = forecast(&inputs(69 * GB, vec![parent, old]), None);
     let gate = Gate::default();
     gate.begin_pass(running(&gate), busy(&["other"]));
-    assert!(
-        gate.hold(&v, "c", None, "task-c", "ap", SystemTime::UNIX_EPOCH)
-            .is_none()
-    );
+    assert!(start(&gate, &v, "c", None, "task-c", "ap").is_none());
     let gate = Gate::default();
     gate.begin_pass(running(&gate), busy(&["p"]));
-    assert!(
-        gate.hold(&v, "c", None, "task-c", "ap", SystemTime::UNIX_EPOCH)
-            .is_some()
-    );
+    assert!(start(&gate, &v, "c", None, "task-c", "ap").is_some());
     // 親の WU の owner（task-p/wu-w）も親の task の書き手として数える。
     let wu = sample("task-q/wu-w", "ap", true, Some(40 * GB));
     let v = forecast(&inputs(69 * GB, vec![wu]), None);
     let gate = Gate::default();
     gate.begin_pass(running(&gate), busy(&["q"]));
-    assert!(
-        gate.hold(&v, "c", None, "task-c", "ap", SystemTime::UNIX_EPOCH)
-            .is_some()
-    );
+    assert!(start(&gate, &v, "c", None, "task-c", "ap").is_some());
 }
 
 /// 不変条件（attempt 7 の review の副次の指摘）: 通した run の見込みは、worker と同じ owner（task の worktree を
@@ -403,26 +378,51 @@ fn a_shared_worktree_work_unit_is_judged_by_the_task_owner() {
         owners: [v.owners.clone(), forecast(&inputs(0, vec![x]), None).owners].concat(),
         ..v
     };
-    assert!(
-        gate.hold(
-            &v,
-            "t",
-            Some("w"),
-            &task_owner,
-            "ap",
-            SystemTime::UNIX_EPOCH
-        )
-        .is_none()
-    );
+    assert!(start(&gate, &v, "t", Some("w"), &task_owner, "ap").is_none());
     assert_eq!(gate.admitted_bytes(), 8 * GB);
     // task-t が走査に増分を持つ owner として出たら、通した分から外れる。
     let mut seen = v.clone();
     if let Some(o) = seen.owners.iter_mut().find(|o| o.owner == "task-t") {
         o.grows = true;
     }
-    assert!(
-        gate.hold(&seen, "u", None, "task-u", "ap", SystemTime::UNIX_EPOCH)
-            .is_some()
-    );
+    assert!(start(&gate, &seen, "u", None, "task-u", "ap").is_some());
     assert_eq!(gate.admitted_bytes(), 0);
+}
+
+/// 不変条件（attempt 10 の review の指摘）: 判定で通しても起動しなかった run（経路の選択の拒否・分類・credential の
+/// 待ち・lease が取れない。[`Gate::started`] に渡さない）は、同じ pass の後続の書き手にも見込みにも数えない。本番の
+/// 大きさ（空き 71.5 GB、予備 30 GB、repo の見込み 92 GB）で、拒否される a が先に並び run が 0 本でも、後続の b は
+/// 始まる。旧い試験は通した run がすべて起動する前提で、判定の時点で数える誤りを検出できなかった。
+#[test]
+fn a_run_judged_but_not_started_is_not_counted() {
+    let v = forecast(
+        &inputs(
+            71_500_000_000,
+            vec![sample("task-old", "ap", false, Some(92 * GB))],
+        ),
+        None,
+    );
+    let gate = Gate::default();
+    for _ in 0..3 {
+        gate.begin_pass(running(&gate), busy(&[]));
+        // a は通る（書き手 0 本）が、経路を拒否されて起動しない（見込みを捨てる）。
+        let a = gate.judge(&v, "a", None, "task-a", "ap", SystemTime::UNIX_EPOCH);
+        assert!(
+            matches!(&a, Some(Admission::Go(r)) if r.need_bytes == 92 * GB),
+            "{a:?}"
+        );
+        drop(a);
+        assert_eq!(gate.admitted_bytes(), 0);
+        // b は書き手 0 本で通る（a を数えると 71.5 − 92 − 92 < 30 で待つ）。
+        assert_eq!(start(&gate, &v, "b", None, "task-b", "ap"), None);
+        assert_eq!(gate.admitted_bytes(), 92 * GB);
+        // b が終わった（次の pass の runs に無い）。
+        gate.begin_pass(Vec::<(String, Option<String>)>::new(), busy(&[]));
+    }
+    assert!(gate.held_views().is_empty());
+    assert_eq!(gate.notes(), 0);
+    // 起動した b は書き手: 3 本目は待つ。
+    gate.begin_pass(running(&gate), busy(&[]));
+    assert_eq!(start(&gate, &v, "b", None, "task-b", "ap"), None);
+    assert!(start(&gate, &v, "c", None, "task-c", "ap").is_some());
 }

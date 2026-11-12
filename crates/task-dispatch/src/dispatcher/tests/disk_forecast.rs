@@ -362,3 +362,45 @@ async fn a_held_run_has_a_wait_reason_and_never_becomes_task_unscheduled() {
     );
     assert_eq!(f.d.scratch.admission.notes(), 1);
 }
+
+/// attempt 10 の review の指摘: 判定で通した後に経路の選択で拒否される task a（宣言の無い harness）が先に並び、run が
+/// 0 本のとき、同じ repo の後続 b は始まる。判定の時点で a の見込みを数えると、a は毎 pass 通って拒否され、b は
+/// 空き 71.5 − 92（a）< 30 + 92 で待ち続ける（待ちの理由 M12 が付くので停滞の安全網にも拾われない）。本番の値
+/// （空き 71.5 GB、予備 30 GB、repo の見込み 92 GB）で与える。上の試験は通した run がすべて起動する場面しか見ない。
+#[tokio::test]
+async fn a_route_refused_run_ahead_does_not_hold_the_next_run() {
+    let mut f = fixture(71_500_000_000, Vec::new());
+    let root = f._root.path().to_path_buf();
+    let (a, repo) = rust_task(&root, "a");
+    let (b, _) = rust_task(&root, "b");
+    let mut a = a;
+    a.priority = 10;
+    a.harness_id = Some("nonexistent".into());
+    let b = Task {
+        workspace: a.workspace.clone(),
+        ..b
+    };
+    f.inputs.lock().unwrap().samples = vec![sample("task-old", &repo, false, 92 * GB)];
+    f.store.insert(&a).unwrap();
+    f.store.insert(&b).unwrap();
+    assert_eq!(f.d.tick().unwrap().dispatched, 1);
+    assert_eq!(status(&f.store, a.id), Status::Ready);
+    assert_eq!(status(&f.store, b.id), Status::Running);
+    // 起動した b の見込みだけを数え、a は数えない。a の待ちは経路の拒否で、空きの見込みではない。
+    assert_eq!(f.d.scratch.admission.admitted_bytes(), 92 * GB);
+    assert!(f.d.scratch.admission.held_views().is_empty());
+    assert_eq!(f.d.scratch.admission.notes(), 0);
+    let waits = f.d.snapshot_task_waits();
+    assert!(
+        !waits
+            .iter()
+            .any(|w| matches!(w.wait, TaskWait::DiskForecast { .. })),
+        "{waits:?}"
+    );
+    // a は次の pass でも拒否され続け、b の見込みは残る（a を足さない）。
+    for _ in 0..3 {
+        f.d.tick().unwrap();
+        assert_eq!(status(&f.store, a.id), Status::Ready);
+        assert_eq!(f.d.scratch.admission.admitted_bytes(), 92 * GB);
+    }
+}

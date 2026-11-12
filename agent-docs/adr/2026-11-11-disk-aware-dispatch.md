@@ -62,10 +62,13 @@ run を起こす前（write-set の判定の後、lease の前）に、次の不
   `[scratch] forecast_disk_ratio`（既定 1.0、範囲 (0, 1]）を掛けて disk 上の量に直す。既定 1.0 は圧縮の無い
   filesystem で正しく、圧縮のある filesystem では多めに見積もる（安全側）。本番の値は人が実測から決める
   （進捗の「本番への移行」）。
-- **通したがまだ走査に出ない run**: 判定で通した run（task・WU）の見込みは、worker が lease を書いて走査に今書いている
+- **通したがまだ走査に出ない run**: 判定で通して起動した run（task・WU）の見込みは、worker が lease を書いて走査に今書いている
   owner として出るまで（本番の記録で run の作成から lease.json まで 5〜265 秒、多くは 10〜30 秒。tick は 2 秒）、
   `Gate` のメモリで数え続ける（pass をまたぐ）。走査に出たら走査の増分が数え、通した分からは外す（二重に数えない）。
-  run が lease を書く前に終わった・起動の前に見送った（dispatcher の `running` に無い）ら、次の pass の始めに外す。
+  run が lease を書く前に終わった（dispatcher の `running` に無い）ら、次の pass の始めに外す。数え始めるのは判定の
+  時点ではなく、dispatcher が run を `running` に入れた直後（`Gate::judge` は見込み `Reservation` を返すだけで、
+  `Gate::started` が数える）。判定の後で起動を見送った run（経路の選択の拒否・分類の待ち・credential の待ち・
+  variant の pin・lease が取れない）の見込みは捨て、同じ pass の後続の書き手にも見込みにも数えない。
 - **詰まらない**: 終わる見込みのある書き手が 1 本も無ければ、見込みが足りなくても 1 本は通す（待っても空きを戻す run の
   終わりが来ない）。書き手は (a) 走査で増分を持つ owner のうち、この daemon が run・review・WU の検査を今走らせている
   task（dispatcher の `running`・`reviewing`・`checking`。`Gate::begin_pass` の `runs`・`others`）のものと、(b) 通したがまだ走査に
@@ -75,13 +78,13 @@ run を起こす前（write-set の判定の後、lease の前）に、次の不
   ない（走査に target が無い）。
 - **対象**: scratch が有効で、run の cargo の target を結び付ける repo（`cargo_target_repo`）があり、この run の
   見込みが 0 より大きいもの。Remote の run と見込み 0 の run（Rust でない repo、続きで増分が無い run）は判定しない。
-- **呼び出し**: `Gate::holds_run`（`dispatch_run.rs` から `&self` で呼ぶ。状態は `Gate` の中の Mutex）。Dispatcher の field・method は増やさない（health の `size.responsibility-growth`）。試験は `Gate.probe` で空きと大きさを注入する。
+- **呼び出し**: `Gate::judge_run`（`dispatch_run.rs` から `&self` で呼ぶ。起動したら `Gate::started`。状態は `Gate` の中の Mutex）。Dispatcher の field・method は増やさない（health の `size.responsibility-growth`）。試験は `Gate.probe` で空きと大きさを注入する。
 - **記録**: 待たせた run（task と WU）ごとに、待ち始めに 1 回だけ `tracing::info!`（`disk forecast: run held`）を
   残す。受信箱・通知には出さない。run が始まる・task が `ready` でなくなると記録を消す。
 - **待ちの理由**: 待たせた run の task には、pass ごとに待ちの理由 `TaskWait::DiskForecast { need_bytes, detail }`
   （[ADR 2026-10-11-task-wait-reasons](2026-10-11-task-wait-reasons.md) の M12。`detail` は判定の式の値）を
   `dispatch_waits` に入れる（同 D4: `dispatch_one` が `Ok(false)` で見送る箇所ごとに理由を入れる）。理由は
-  `Gate::hold` が待たせている run の記録と同じ判定から作って返し（`Gate::holds_run` → `note_dispatch_wait`）、
+  `Gate::judge` が待たせている run の記録と同じ判定から作って返し（`Gate::judge_run` → `note_dispatch_wait`）、
   別に推測しない。task の `waits` に出て `runnable` は false になり、停滞の判定（`task_unscheduled`）は待ちのある
   task として拾わない（受信箱に出ない）。
 - 旧い挙動（今の空きだけで決める dispatch）は残さない。`check_disk_space` の全体停止（D2 の下限を割ったら全部止める）
@@ -159,6 +162,19 @@ task は event を書かず、Rust の run は 30 分より長く走ることが
 status の `held`（WU・owner・repo・待ち始めを持つ）と task の待ち（task ごとに 1 件）は、どちらもこの 1 回の判定の
 結果で、別々に判定しない。`ScratchAdmissionView.running_growth_bytes` の説明に残っていた `owners` の `running`
 （attempt 8 で `grows` に改名）も直した。
+
+付記（2026-11-12、attempt 10 の review の指摘）: 判定（`dispatch_run.rs` の経路の選択より前）で通した run を、判定の
+時点で `Gate` の通した分に入れていた。その後に起動を見送る経路（経路の選択の拒否 `note_route_refusal`・分類の待ち・
+credential の待ち・variant の pin・lease が取れない）があり、見送った run の見込みは次の pass の `begin_pass` まで残った。
+同じ pass の後続の候補はその run を書き手に数え、見込みも差し引いたので、拒否される Rust の task が先に並ぶと、run が
+0 本でも後続の Rust の task が毎 pass 待った（本番の値: 空き 71.5 GB − 先の task 92 GB < 予備 30 GB + 92 GB）。後続には
+待ちの理由 M12 が付くので `task_unscheduled` の安全網にも拾われず、待ちの表示も本当の原因（先の task の経路）と違った。
+`Gate::hold` を `Gate::judge` に改め、`Admission::Wait`（待ちの理由）か `Admission::Go(Reservation)` を返す（判定しない run は `None`）。
+dispatcher は run を `running` に入れた直後にだけ `Gate::started` で見込みを数え始め、その前に見送ったら捨てる
+（D1「通したがまだ走査に出ない run」）。`Reservation` の鍵は dispatcher の run の鍵（task と phase のある WU）で、
+`begin_pass` の `runs` と同じ。試験: `disk_admission::tests::a_run_judged_but_not_started_is_not_counted`（Gate の単体）
+と `dispatcher::tests::disk_forecast::a_route_refused_run_ahead_does_not_hold_the_next_run`（宣言の無い harness の task
+を先に並べた dispatcher の tick）。旧い数え方に戻すとどちらも落ちることを確かめた。
 
 ## 結果
 

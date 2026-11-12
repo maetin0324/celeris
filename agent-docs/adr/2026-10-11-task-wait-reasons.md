@@ -265,6 +265,6 @@ pub struct UnitWait {
 
 ### 付記 M12（2026-11-12、ADR 2026-11-11-disk-aware-dispatch）
 - dispatcher のメモリの理由に M12 `DiskForecast { need_bytes, detail }` を足した。空きの見込みが予備を割るので、新しい
-  cargo の target を作る run を始めない（判定箇所は `dispatch_run.rs` の `disk_admission::Gate::holds_run`。D4 どおり
+  cargo の target を作る run を始めない（判定箇所は `dispatch_run.rs` の `disk_admission::Gate::judge_run`。D4 どおり
   見送る箇所で `note_dispatch_wait` に入れる）。人の操作待ちではない（走っている run が終わって空きが戻れば始まる）。
   M6（`DiskCritical`。今の空きが下限を割った全体停止）とは別の理由として出す。web は「空き容量の見込み待ち」と出す。

@@ -417,12 +417,13 @@ impl Dispatcher {
             Some(w) => Some(w.workspaces.clone()),
             None => worktree,
         };
-        // ADR 2026-11-11-disk-aware-dispatch D1: 見込みが予備を割るなら ready のまま待たせ、待ちの理由 M12 を残す。
+        // ADR 2026-11-11-disk-aware-dispatch D1: 予備を割るなら待たせ（M12）、通した見込みは起動した後で数える。
         let target_wu = wu_workspace.as_ref().and(v2_wu.as_ref());
         let (view, wu) = (self.scratch.view.as_ref(), run_key.work_unit.as_deref());
         let repo_of = || self.cargo_target_repo(&task).map(|r| r.source);
         let gate = (!is_planner_dispatch).then_some(&self.scratch.admission);
-        if let Some(wait) = gate.and_then(|g| g.holds_run(view, &task, wu, target_wu, repo_of)) {
+        let disk = gate.and_then(|g| g.judge_run(view, &task, wu, target_wu, repo_of));
+        if let Some(crate::disk_admission::Admission::Wait(wait)) = disk {
             self.note_dispatch_wait(task.id, wait);
             return Ok(false);
         }
@@ -1138,6 +1139,7 @@ impl Dispatcher {
                 route: Some((pick.candidate.source, pick.account)),
             },
         );
+        self.scratch.admission.started(disk);
         Ok(true)
     }
 

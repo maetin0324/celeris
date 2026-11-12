@@ -77,7 +77,13 @@ nextest の `Starting` 行と `Summary` 行から。4 回とも同じ側では�
 
 ## 検査（提出時の HEAD で実行。WU の基準は `$CELERIS_WU_BASE`）
 
-- 下の commit の後に記入する。
+- `bash scripts/dev/test-affected.sh` → exit 0（137 秒。docs のみの変更として試験対象なし、repo_health_gate は合格）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（53 秒）。
+- `cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check` → exit 0。
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → exit 0（変更 path 34 件はすべて `agent-docs/progress/2026-11-10-health-v2-r5/` の下）。
+- 上記の summary --check → exit 0。
+- commit は「phase 1: meas-runs: 4 crate の試験を base・HEAD・HEAD・base の順に負荷上限 24 の同じ run で測る（8 組とも採用、flaky 0）」と「phase 1: meas-runs: 検査の結果を進捗に書く」。
 
 ## 未解決
 

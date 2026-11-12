@@ -44,7 +44,7 @@ fn fixture() -> Fixture {
         "cat >/dev/null".into(),
     ]));
     let mut d = dispatcher_with_test_clock(store.clone(), adapter, 2, true);
-    d.config.min_free_disk_mb = 0;
+    d.config.min_free_disk_pct = 0.0;
     d.config.knowledge.root = dir.path().join("knowledge");
     let skills = d.config.knowledge.root.join("skills");
     task_ops::cos_skill_gate::write_fixture(&skills, "cos-inbox-triage", "1").expect("skills");

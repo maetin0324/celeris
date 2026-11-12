@@ -16,6 +16,7 @@ pub mod cos_context;
 pub(crate) mod cos_skill_gate;
 pub mod credential_resume;
 /// ADR 2026-10-07-build-tmp-hygiene D4: ディスク使用率の監視（`DiskProbe`・判定の純関数・tick の段）。
+pub mod disk_admission;
 pub mod disk_watch;
 pub mod dispatcher;
 /// ADR-0072 D6/D11/D12/D15（Phase E2）: WorkUnit の状態遷移の決定（純粋関数）。
@@ -24,6 +25,9 @@ pub mod execution_scheduler;
 pub mod health_review;
 /// ADR-0074 D1.2 / D1.4（Phase F2）: WU の worktree と工程の統合（daemon 側の git 操作だけ。LLM なし）。
 pub mod integration;
+/// ADR 2026-11-12-knowledge-usage-per-run D2: run ごとの KB の操作の台帳（run の前の用意と run の後の合計）。
+pub(crate) mod knowledge_usage;
+pub(crate) use knowledge_usage::read_site as kb_use;
 /// Phase F5-fix6: 居なくなったデーモンの run（孤児）を lease 失効を待たずに回収する判定。
 pub mod orphan;
 mod phase_timing;

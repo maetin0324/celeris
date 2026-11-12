@@ -56,8 +56,7 @@ impl Dispatcher {
         let review_metrics = entry.as_ref().map(|e| task_core::RunMetrics {
             wall_ms: wall_ms_since(e.since),
             retries: 0,
-            peak_context_tokens: None,
-            turns: None,
+            ..Default::default()
         });
         let mut reviewer_finished = outcome.reviewer_run.take().map(|r| Event::WorkerFinished {
             run_id: r.run_id,

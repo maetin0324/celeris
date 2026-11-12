@@ -249,17 +249,6 @@ fn log_slow_step(step: &'static str, started: Instant) {
     }
 }
 
-/// 未作成の作業場所は最も近い既存の親 filesystem を測る。statvfs は symlink も解決する。
-fn free_disk_mb(path: &Path) -> Result<u64, String> {
-    let existing = path
-        .ancestors()
-        .find(|p| p.exists())
-        .ok_or_else(|| format!("{}: no existing ancestor", path.display()))?;
-    let stat =
-        nix::sys::statvfs::statvfs(existing).map_err(|e| format!("{}: {e}", existing.display()))?;
-    Ok(stat.blocks_available().saturating_mul(stat.fragment_size()) / (1024 * 1024))
-}
-
 /// ADR-0075（Phase G1）: dispatcher が持つ scratch pool の GC の状態（プロセス内メモリだけ。DB に書かない）。
 #[derive(Default)]
 struct ScratchState {
@@ -272,6 +261,8 @@ struct ScratchState {
     last_measure: Option<Instant>,
     /// 直近の走査で P3 だった target（run の開始時の adopt の候補）。
     candidates: Vec<task_worker::scratch::AdoptCandidate>,
+    /// ADR 2026-11-11-disk-aware-dispatch D1: 空きの見込みで待たせている run。
+    admission: crate::disk_admission::Gate,
     /// `DaemonSnapshot.scratch`。
     view: Option<task_ops::daemon::ScratchStatus>,
     last_gc: Option<task_ops::daemon::ScratchGcView>,
@@ -516,8 +507,9 @@ pub struct DispatchConfig {
     /// `"infra failure ×N: …"` として打ち切る（`Trigger::LeaseExpired` は使わなくなった。
     /// `reclaim_expired_leases` もこの上限を通す）。既定 5。
     pub max_infra_retries: u32,
-    /// 新規 run の開始を許す各 filesystem の最小空き容量 (MiB)。0 で無効。
-    pub min_free_disk_mb: u64,
+    /// ADR 2026-11-11-disk-aware-dispatch D2: 新規 run の開始を許す各 filesystem の空きの下限（容量に対する %）。
+    /// 0 で無効。
+    pub min_free_disk_pct: f64,
     /// ADR-0016 D1: `[[roles]]`。run 開始時に `RunContext.role`（指示文）を載せ、委譲された子の既定に使う。
     pub roles: Vec<RoleSpec>,
     /// ADR-0027 D1: `[[genres]]`。委譲の分野解決（`default_role` の既定の穴埋め）と、委譲できる run に渡す
@@ -1859,7 +1851,7 @@ impl Dispatcher {
         c.max_requeues = new.max_requeues;
         c.max_reviewer_retries = new.max_reviewer_retries;
         c.max_infra_retries = new.max_infra_retries;
-        c.min_free_disk_mb = new.min_free_disk_mb;
+        c.min_free_disk_pct = new.min_free_disk_pct;
         c.roles = new.roles;
         c.genres = new.genres;
         c.delegation = new.delegation;
@@ -2585,6 +2577,11 @@ impl Dispatcher {
             }
             return Ok(0);
         }
+        // ADR 2026-11-11-disk-aware-dispatch D1: 通した run は走っている間数え、書き手は run・review・検査中の task。
+        let runs = self.running.keys().map(|k| (k.task, k.work_unit.clone()));
+        let checks = self.checking.values().map(|c| c.task_id);
+        let others = self.reviewing.keys().copied().chain(checks);
+        self.scratch.admission.begin_pass(runs, others);
         // 上位から見て見送りが続いても後続を試せるよう、窓は広めに取る。
         let window = self.ready_window();
         let ready_started = Instant::now();

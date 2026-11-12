@@ -619,6 +619,7 @@ token_file = "api.token"
 | 235 | POST | `/script/behavior-changes/{spec_sha256}/revoke` | 承認を取り消す（認証された誰でも。§3.134.5） | `ScriptBehaviorChangeRevokeResult` | store `script_behavior_change_revoke` |
 | 236 | POST | `/script/domains/{domain}/exhaustive-runs` | `lane_rules` の全入力を daemon の isolate で流す網羅を始める（人・外部 operator の主体だけ。ADR 2026-11-04 D7。§3.134.6） | `ScriptExhaustiveRun`（202） | `ScriptGenerationControl::exhaustive_start` |
 | 237 | GET | `/script/domains/{domain}/exhaustive-runs` | 網羅の証拠の立場と最新の行（認証された誰でも。§3.134.6） | `ScriptExhaustiveRunList` | store `script_exhaustive_runs`・`script_exhaustive_standing` |
+| 238 | POST | `/cos/knowledge-use` | CoS run の `celerisctl knowledge search\|get`（KB の根を直接読み API を通らない）の 1 回を数える（body `{op: search\|get, ok}`。`record` は operation `knowledge.record` の受け側が数えるので 422。run は credential が決める。`GET /knowledge/tree`・`GET /knowledge/page` も CoS run credential の呼び出しを受け側で数える。ADR 2026-11-12-knowledge-usage-per-run D1） | 200 `{run_id, knowledge_use}` | `crate::cos::knowledge_use` |
 
 browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
 
@@ -2865,10 +2866,10 @@ author / committer は `Celeris (human) <celeris@local>`（`celerisctl knowledge
   まだ無ければ、**読み取りは `initialized: false` を返すだけ**（何も作らない）、変更系は
   409 `knowledge_unavailable`（用意するのは `celerisctl knowledge init` だけ）
 - 書き込みのあとは必ず `index.json` を作り直す（索引は**再生成できる派生物**。バージョン管理には入らない）
-- `_inbox/` の候補は**索引にも検索にも出ない**。人が §3.105 / §3.106 で accept / reject する
+- `_inbox/` の候補は**索引にも検索にも出ない**。日次整理が検証後に適用し、人も §3.105 / §3.106 で accept / reject できる
 
 組織の「人」（ワーカー）はこの HTTP ではなく **`celerisctl knowledge`**（ADR-0047 D3）で KB を読む。
-前置きには索引（`path` / `title` / `tags`、最大 200 件）だけが載り、本文は載らない。
+前置きには実効マウントと検索・本文取得の手順を載せる。索引の列挙と本文の挿入はしない。
 
 #### 3.101 `GET /knowledge/tree?scope=&q=` → 200 `KnowledgeTree`
 

@@ -259,6 +259,39 @@ fn lease_for(owner: &Owner) -> Lease {
     }
 }
 
+/// 不変条件（ADR 2026-11-11-disk-aware-dispatch D1）: dispatch の見込みが「増える target」と見るのは、run か review の
+/// 検査が今書いている owner だけ。P0 でも release の lease とまだ始まらない WU は含めない。`classify_follows_the_adr_table`
+/// は class しか見ないので、P0 の中の区別（理由）を確かめない。
+#[test]
+fn only_running_and_reviewing_owners_count_as_written_now() {
+    let s = ScratchSettings::with_dir("/s");
+    let db = Db {
+        tasks: HashMap::from([
+            ("R".to_string(), Status::Running),
+            ("V".to_string(), Status::Reviewing),
+        ]),
+        wus: HashMap::from([
+            ("w-run".to_string(), WorkUnitStatus::Running),
+            ("w-pend".to_string(), WorkUnitStatus::Pending),
+            ("w-cont".to_string(), WorkUnitStatus::NeedsContinuation),
+        ]),
+    };
+    let now = at(T0 + 10);
+    let written = |o: &str| {
+        let owner = Owner::parse(o).unwrap();
+        let (class, reason) =
+            classify(&owner, Some(&lease_for(&owner)), at(T0), now, &s, &db, true);
+        assert_eq!(class, Class::Pinned, "{o}");
+        target_written_now(reason)
+    };
+    assert!(written("task-R"));
+    assert!(written("task-V"));
+    assert!(written("task-R/wu-w-run"));
+    assert!(!written("task-R/wu-w-pend"));
+    assert!(!written("task-R/wu-w-cont"));
+    assert!(!written("release-0123456789ab"));
+}
+
 #[test]
 fn classify_follows_the_adr_table() {
     let s = ScratchSettings::with_dir("/s");

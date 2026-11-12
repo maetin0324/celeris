@@ -1802,7 +1802,7 @@ fn backoff_and_reviewer_settings_map_to_dispatch_config() {
     assert_eq!(d.retry_backoff_base, Duration::from_secs(10));
     assert_eq!(d.retry_backoff_max, Duration::from_secs(300));
     assert_eq!(d.max_requeues, 5);
-    assert_eq!(d.min_free_disk_mb, 5120);
+    assert_eq!(d.min_free_disk_pct, 10.0);
     assert_eq!(
         d.reviewer_hint,
         WorkerHint {
@@ -1936,9 +1936,19 @@ fn scratch_can_be_disabled() {
 }
 
 #[test]
-fn dispatch_min_free_disk_mb_can_be_configured() {
-    let cfg: Config = toml::from_str("[dispatch]\nmin_free_disk_mb = 2048\n").unwrap();
-    assert_eq!(cfg.dispatch_config().min_free_disk_mb, 2048);
+fn dispatch_min_free_disk_pct_can_be_configured_and_the_mib_field_is_rejected() {
+    let cfg: Config = toml::from_str("[dispatch]\nmin_free_disk_pct = 15.0\n").unwrap();
+    assert_eq!(cfg.dispatch_config().min_free_disk_pct, 15.0);
+    // ADR 2026-11-11-disk-aware-dispatch D2: 旧い固定 MiB の欄は読み込みエラー。
+    let err = toml::from_str::<Config>("[dispatch]\nmin_free_disk_mb = 2048\n")
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    assert!(err.contains("min_free_disk_mb"), "{err}");
+    let out_of_range: Config = toml::from_str("[dispatch]\nmin_free_disk_pct = 100.0\n").unwrap();
+    assert!(out_of_range.validate().is_err());
+    let bad_ratio: Config = toml::from_str("[scratch]\nforecast_disk_ratio = 0.0\n").unwrap();
+    assert!(bad_ratio.validate().is_err());
 }
 
 /// ADR-0010 D9: Reviewer run を満たせるプロバイダが無い設定はエラー。未知キーも拒否。

@@ -70,17 +70,7 @@ impl Dispatcher {
         // ADR 2026-10-07-build-tmp-hygiene 付記 A4: 監視している path が `critical` のあいだは新しい coding run を
         // 起こさない（ready のまま。attempts を消費しない。並列 WU の 2 本目以降も同じ）。
         if self.held_by_disk_critical(&task) {
-            let path = self
-                .disk_watch
-                .as_ref()
-                .map(|r| {
-                    r.entries
-                        .iter()
-                        .map(|e| e.path.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default();
+            let path = crate::disk_watch::paths_label(self.disk_watch.as_ref());
             self.note_dispatch_wait(task.id, task_core::TaskWait::DiskCritical { path });
             return Ok(false);
         }
@@ -427,6 +417,16 @@ impl Dispatcher {
             Some(w) => Some(w.workspaces.clone()),
             None => worktree,
         };
+        // ADR 2026-11-11-disk-aware-dispatch D1: 予備を割るなら待たせ（M12）、通した見込みは起動した後で数える。
+        let target_wu = wu_workspace.as_ref().and(v2_wu.as_ref());
+        let (view, wu) = (self.scratch.view.as_ref(), run_key.work_unit.as_deref());
+        let repo_of = || self.cargo_target_repo(&task).map(|r| r.source);
+        let gate = (!is_planner_dispatch).then_some(&self.scratch.admission);
+        let disk = gate.and_then(|g| g.judge_run(view, &task, wu, target_wu, repo_of));
+        if let Some(crate::disk_admission::Admission::Wait(wait)) = disk {
+            self.note_dispatch_wait(task.id, wait);
+            return Ok(false);
+        }
         // Capture before any worker can write; retries load the same WU-id snapshot.
         let mut wu_scope_env = Vec::new();
         if let Some(wu) = &current_wu
@@ -945,11 +945,9 @@ impl Dispatcher {
         }
         if let Some(w) = &wu_workspace {
             extras.artifacts_dir_override = Some(w.artifacts_dir.clone());
-            // ADR-0074 F5-fix（不具合 1）: WU ごとの `CARGO_TARGET_DIR`。
-            if let Some(wu) = &v2_wu {
-                extras.cargo_target_work_unit = Some((wu.id.clone(), wu.key.clone()));
-            }
         }
+        // ADR-0074 F5-fix（不具合 1）: 自分の worktree を持つ WU だけ WU ごとの `CARGO_TARGET_DIR`。
+        extras.cargo_target_work_unit = target_wu.map(|w| (w.id.clone(), w.key.clone()));
         // ADR 2026-10-10-local-disk-growth-paths D1: 作業場所の先頭に git の repo が無い（`repos=[]` の子 task・
         // shared の Rust checkout）なら、代わりの checkout を決めて `run_worker` に渡す（repo 直下 target を防ぐ）。
         if remote.is_none()
@@ -1141,6 +1139,7 @@ impl Dispatcher {
                 route: Some((pick.candidate.source, pick.account)),
             },
         );
+        self.scratch.admission.started(disk);
         Ok(true)
     }
 

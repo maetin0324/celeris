@@ -73,7 +73,7 @@ CoS run の `celerisctl` は、run の環境に入る `CELERIS_API_URL`（起動
 ## 添付の引き継ぎ（attach-handoff）
 
 - task へ: CoS は起票の request（`POST /api/v1/tasks`・operation `task.create`）の `attachment_ids` で、task の作成と添付の pin を同じ transaction で行う（[ADR 2026-10-07-cos-live-fixes](../../agent-docs/adr/2026-10-07-cos-live-fixes.md) D1。「起票してから pin」はしない）。pin された添付は、その task の作業 run の開始時に hash・size を照合して作業ツリー外へ read-only で stage し、前置きの入力 manifest に載る（screenshot を見て画面修正する依頼など）。照合失敗と ssh remote の task は `delivery=unavailable` になる。
-- 知識ベースへ: PDF などは `POST /api/v1/knowledge/inbox`（CoS operation `knowledge.record`、scope は `project:<slug>`）の `attachment_ids` で、候補の作成と同時に provenance 付きで pin される（同 ADR D2）。candidate は人が確認してから正本に入る。
+- 知識ベースへ: PDF などは `POST /api/v1/knowledge/inbox`（CoS operation `knowledge.record`、scope は `project:<slug>`）の `attachment_ids` で、候補の作成と同時に provenance 付きで pin される（同 ADR D2）。candidate は日次整理の検証を通ると daemon が正本に適用する（人も受信箱で accept / reject できる）。
 - 確認は task 詳細の入力添付と KB の candidate で行う。stage 先の完了後削除は未実装。
 
 ## 実機確認の再実行（cos-chat-live.sh）

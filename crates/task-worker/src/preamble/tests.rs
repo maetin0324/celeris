@@ -816,125 +816,40 @@ fn the_workspace_section_says_how_to_write_documents() {
     assert_eq!(repos_note(&[]), "");
 }
 
-/// ADR-0047 D2（Phase 61）: 知識の節は**索引だけ**（本文は入れない）。マウントごとに並び、
-/// D3 の使い方（`search` / `get` / `record`）が出る。マウントが無い run の前置きは
-/// Phase 60 までと 1 バイトも変わらない。
+/// 索引列挙の契約を廃止。検索入口は索引の有無に依存せず、未マウント時は出さない。
 #[test]
-fn the_knowledge_section_lists_the_index_of_every_mount_kind() {
-    use task_core::{KnowledgeItem, KnowledgeMount};
+fn knowledge_entry_explains_search_get_and_automatic_curation() {
+    use task_core::KnowledgeMount;
     let mounts = vec![
-        KnowledgeMount::kb("environment/clusters"),
-        KnowledgeMount::repo("pluvio", None),
+        KnowledgeMount::kb("projects"),
+        KnowledgeMount::kb("projects/pluvio"),
         KnowledgeMount::memory(Some("cluster-hpc".into())),
     ];
-    let index = vec![
-        KnowledgeItem {
-            path: "environment/clusters/pegasus.md".into(),
-            title: "pegasus の使い方".into(),
-            tags: vec!["hpc".into(), "cluster".into()],
-            scope: Some("environment".into()),
-            ..KnowledgeItem::default()
-        },
-        // 別の scope のページはこのマウントには出ない。
-        KnowledgeItem {
-            path: "user/profile.md".into(),
-            title: "人のプロフィール".into(),
-            scope: Some("user".into()),
-            ..KnowledgeItem::default()
-        },
-        KnowledgeItem {
-            path: "docs/design.md".into(),
-            title: "design.md".into(),
-            scope: Some("repo:pluvio".into()),
-            ..KnowledgeItem::default()
-        },
-        KnowledgeItem {
-            path: "/home/u/.local/celeris/memory/cluster-hpc/notes.md".into(),
-            title: "あなたの手帳（案件をまたぐ記憶）".into(),
-            scope: Some("memory:cluster-hpc".into()),
-            ..KnowledgeItem::default()
-        },
-    ];
-    let out = knowledge_section(&mounts, &index);
-    let at = |needle: &str| {
-        out.find(needle)
-            .unwrap_or_else(|| panic!("missing {needle:?} in:\n{out}"))
-    };
-    assert!(
-        out.starts_with("## 知識 (knowledge base — 索引だけ。本文は道具で読む)\n"),
-        "{out}"
-    );
-    assert!(
-        out.contains(
-            "あなたが読める知識: `kb:environment/clusters`、`repo:pluvio`、`memory:cluster-hpc`。"
-        ),
-        "{out}"
-    );
-    // ADR-0047 D3 の案内文。
-    assert!(
-        out.contains("`celerisctl knowledge search <語> [--scope …]` で探し"),
-        "{out}"
-    );
-    assert!(
-        out.contains("`celerisctl knowledge get <path>` で読む"),
-        "{out}"
-    );
-    assert!(out.contains("`celerisctl knowledge record"), "{out}");
-    assert!(out.contains("一時的な情報・雑談・推測は入れない"), "{out}");
-    // マウントごとに並ぶ（マウントの順）。
-    assert!(
-        at("### kb:environment/clusters") < at("### repo:pluvio"),
-        "{out}"
-    );
-    assert!(
-        at("### repo:pluvio") < at("### memory:cluster-hpc"),
-        "{out}"
-    );
-    assert!(
-        out.contains("- `environment/clusters/pegasus.md` — pegasus の使い方（hpc、cluster）"),
-        "{out}"
-    );
-    assert!(out.contains("- `docs/design.md` — design.md\n"), "{out}");
-    assert!(
-        out.contains("/memory/cluster-hpc/notes.md` — あなたの手帳"),
-        "{out}"
-    );
-    // マウントしていない scope のページは出ない（本文も出ない）。
-    assert!(!out.contains("user/profile.md"), "{out}");
+    let out = knowledge_section(&mounts);
+    assert!(out.contains("`kb:projects`、`kb:projects/pluvio`、`memory:cluster-hpc`"));
+    assert!(out.contains("`celerisctl knowledge search <語> [--scope …]`"));
+    assert!(out.contains("--scope project:<slug>"));
+    assert!(out.contains("`celerisctl knowledge get <path>`"));
+    assert!(out.contains("`celerisctl knowledge record"));
+    assert!(out.contains("本文・出典を確認"));
+    assert!(out.contains("一時的な情報・雑談・推測は入れない"));
+    assert!(out.contains("日次整理の検証を通ると daemon が正本に適用"));
+    assert!(out.contains("人が書いたページの保護"));
+    assert!(!out.contains("候補は人が確認してから"));
+    assert_eq!(knowledge_section(&[]), "");
 
-    // マウントが無い・索引が空なら節ごと出ない。
-    assert_eq!(knowledge_section(&[], &index), "");
-    assert_eq!(knowledge_section(&mounts, &[]), "");
-
-    // `render` に入れても、他の節の後ろ（作業場所の後、役割の前）に 1 回だけ出る。
     let context = RunContext {
         knowledge: Some(crate::protocol::KnowledgeContext {
-            mounts: mounts.clone(),
-            index: index.clone(),
+            mounts,
+            index: vec![],
         }),
         ..full_context()
     };
     let rendered = render(&context, "artifacts");
-    let at = |needle: &str| {
-        rendered
-            .find(needle)
-            .unwrap_or_else(|| panic!("missing {needle:?}"))
-    };
-    assert_eq!(
-        rendered.matches("## 知識 (knowledge base").count(),
-        1,
-        "{rendered}"
-    );
-    assert!(
-        at("## 覚えていること") < at("## 知識 (knowledge base"),
-        "{rendered}"
-    );
-    assert!(
-        at("## 知識 (knowledge base") < at("## Role: literature-reader"),
-        "{rendered}"
-    );
-    // 知識を渡さない run には `knowledge_section` の見出しが出ない（ADR-0067 D1 の「成果物の置き場所」
-    // の節は知識ベースに触れるので、素朴な「知識」という文字列の有無ではなく見出しそのものを見る）。
+    assert_eq!(rendered.matches("## 知識 (knowledge base").count(), 1);
+    let at = |needle: &str| rendered.find(needle).unwrap();
+    assert!(at("## 覚えていること") < at("## 知識 (knowledge base"));
+    assert!(at("## 知識 (knowledge base") < at("## Role: literature-reader"));
     assert!(!render(&full_context(), "artifacts").contains("## 知識 (knowledge base"));
     assert_eq!(
         render(&RunContext::default(), "artifacts"),
@@ -948,25 +863,32 @@ fn the_knowledge_section_lists_the_index_of_every_mount_kind() {
     );
 }
 
-/// ADR-0047 D2: 索引は最大 200 件（溢れた分は件数だけ）。
+/// 旧試験は 200 件の列挙を要求していた。新契約では重なる scope と大量索引でも
+/// prompt が増えないことを render 経由で固定し、列挙の再導入を検出する。
 #[test]
-fn the_knowledge_index_is_capped_at_two_hundred_items() {
+fn knowledge_entry_size_is_independent_of_index_size_and_overlapping_mounts() {
     use task_core::{KnowledgeItem, KnowledgeMount};
-    let mounts = vec![KnowledgeMount::kb("user")];
-    let index: Vec<KnowledgeItem> = (0..250)
+    let mut context = RunContext {
+        knowledge: Some(crate::protocol::KnowledgeContext {
+            mounts: vec![
+                KnowledgeMount::kb("projects"),
+                KnowledgeMount::kb("projects/pluvio"),
+            ],
+            index: vec![],
+        }),
+        ..full_context()
+    };
+    let empty = render(&context, "artifacts");
+    context.knowledge.as_mut().unwrap().index = (0..1000)
         .map(|n| KnowledgeItem {
-            path: format!("user/p{n}.md"),
+            path: format!("projects/pluvio/p{n}.md"),
             title: format!("page {n}"),
-            scope: Some("user".into()),
+            scope: Some("project:pluvio".into()),
             ..KnowledgeItem::default()
         })
         .collect();
-    let out = knowledge_section(&mounts, &index);
-    assert_eq!(
-        out.matches("- `user/p").count(),
-        task_core::knowledge::MAX_PREAMBLE_ITEMS
-    );
-    assert!(out.contains("- （ほか 50 件。`search` で探す）"), "{out}");
+    assert_eq!(render(&context, "artifacts"), empty);
+    assert!(knowledge_section(&context.knowledge.as_ref().unwrap().mounts).len() < 2000);
 }
 
 fn task_worker_recent_work_sample(

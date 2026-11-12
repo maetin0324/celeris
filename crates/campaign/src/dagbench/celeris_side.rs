@@ -1536,7 +1536,7 @@ fn build_dispatcher(shared: &Arc<Shared>, paths: &Paths, store: Arc<dyn TaskStor
             max_requeues: 5,
             max_reviewer_retries: 3,
             max_infra_retries: 5,
-            min_free_disk_mb: 0,
+            min_free_disk_pct: 0.0,
             roles: Vec::new(),
             genres: Vec::new(),
             delegation: Default::default(),

@@ -419,8 +419,7 @@ impl Dispatcher {
         let metrics = since.map(|since| task_core::RunMetrics {
             wall_ms: wall_ms_since(since),
             retries: 0,
-            peak_context_tokens: None,
-            turns: None,
+            ..Default::default()
         });
         tracing::info!(%task_id, %run_id, %outcome, "design review run finished (the verdict is read by design_verdict, not by the final review)");
         self.store.append_event(

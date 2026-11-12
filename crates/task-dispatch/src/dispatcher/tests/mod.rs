@@ -167,7 +167,7 @@ fn new_test_dispatcher(
             max_infra_retries: 5,
             // 空き容量を検証しない試験を host の残量から切り離す。
             // disk gate の試験は u64::MAX 等で閾値を明示する。
-            min_free_disk_mb: 0,
+            min_free_disk_pct: 0.0,
             roles: Vec::new(),
             genres: Vec::new(),
             delegation: DelegationLimits::default(),
@@ -1300,7 +1300,7 @@ fn pool_dispatcher_with_requeues(
             max_infra_retries: 5,
             // 空き容量を検証しない試験を host の残量から切り離す。
             // disk gate の試験は u64::MAX 等で閾値を明示する。
-            min_free_disk_mb: 0,
+            min_free_disk_pct: 0.0,
             roles: Vec::new(),
             genres: Vec::new(),
             delegation: DelegationLimits::default(),
@@ -2910,15 +2910,15 @@ async fn run_gate_until_second_checks(
 fn scratch_on(d: &mut Dispatcher, dir: &Path) -> task_worker::scratch::ScratchSettings {
     let s = task_worker::scratch::ScratchSettings::with_dir(dir);
     d.config.shared_build_cache = true;
-    // GC は実 filesystem の空きを読む。既定の 5120 MB のままだと host の空き（tmpfs の /tmp など）が
-    // 10 GiB を割ったとき LowDisk の GC が seed・完了 target を消し、試験が host の具合で落ちる。
-    // 空きの判定を試す試験は、この後で自分の値（u64::MAX など）を置く。
-    d.config.min_free_disk_mb = 0;
+    // GC は実 filesystem の空きを読む。既定の 10% のままだと host の空き（tmpfs の /tmp など）が
+    // 容量の 20% を割ったとき LowDisk の GC が seed・完了 target を消し、試験が host の具合で落ちる。
+    // 空きの判定を試す試験は、この後で自分の値（99.9 など）を置く。
+    d.config.min_free_disk_pct = 0.0;
     d.config.scratch = s.clone();
-    // scratch の GC は tempdir の filesystem の実の空き（statvfs）を `min_free_disk_mb` と比べる。既定の 5120 MB の
-    // ままだと host の空きが 5〜10 GiB の間で LowDisk になり、seed（同じ repo が使用中の P3）まで回収されて adopt の
+    // scratch の GC は tempdir の filesystem の実の空き（statvfs）を `min_free_disk_pct` の下限と比べる。既定の 10% の
+    // ままだと host の空きが容量の 10〜20% の間で LowDisk になり、seed（同じ repo が使用中の P3）まで回収されて adopt の
     // 試験が host の空きで変わる（N1 fix-build-cache-adopt）。空きを見る試験はこの後で明示的に上書きする。
-    d.config.min_free_disk_mb = 0;
+    d.config.min_free_disk_pct = 0.0;
     s
 }
 
@@ -3075,6 +3075,7 @@ mod credential_gate;
 mod credential_logcap;
 mod cron_cos_review;
 mod cron_jobs;
+mod disk_forecast;
 mod dispatch_ready_phases;
 mod git_workspace;
 mod health_enforce;
@@ -3186,6 +3187,7 @@ mod work_unit_check_failures;
 /// ADR-0098（Phase R7-10）: worker の run が作る task は元の task の案件とリポジトリを継ぐ
 /// （`src/dispatcher/tests/followups.rs`）。
 mod followups;
+mod knowledge_usage;
 /// ADR-0074「R7-11 実装時の明確化」: planner / WU の run の予算が `RunRequest.task.budget` に届く
 /// （`src/dispatcher/tests/planner_budget.rs`）。
 mod planner_budget;

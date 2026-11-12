@@ -411,6 +411,7 @@ fn ev_finished(run: &str, role: Option<RunRole>, tokens: u64) -> Event {
             retries: 0,
             peak_context_tokens: None,
             turns: None,
+            knowledge: None,
         }),
         end: Some(RunEnd::Completed),
     }

@@ -86,6 +86,32 @@ fn age(now: SystemTime, t: SystemTime) -> u64 {
     now.duration_since(t).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+/// 分類の理由のうち、run かその review の検査が今 target に書いているもの（ADR 2026-11-11-disk-aware-dispatch D1 の
+/// 「増える target」）。review の検査も task の owner の `CARGO_TARGET_DIR` で build する（`review_spawn.rs`）。
+pub const TASK_RUNNING: &str = "task running";
+pub const TASK_REVIEWING: &str = "task reviewing";
+pub const WORK_UNIT_RUNNING: &str = "work unit running";
+/// release-build・agent の lease が生きている（`Owner::Release`・`Owner::Agent` の P0 の理由）。
+pub const LEASE_LIVE: &str = "lease live";
+
+/// ADR 2026-11-11-disk-aware-dispatch D1: 分類の理由が「run か review の検査が今 target に書いている」か。P0 でも
+/// release-build・agent の lease（`lease live`）と、まだ始まっていない WU（`work unit queued`。run の見込みは dispatch の
+/// 判定で数える）は含めない。
+pub fn target_written_now(reason: &str) -> bool {
+    matches!(reason, TASK_RUNNING | TASK_REVIEWING | WORK_UNIT_RUNNING)
+}
+
+/// repo ごとの測った大きさの最大（`(repo_key, size)` の組から）。GC の推定（[`estimates`]）と dispatch の見込み
+/// （ADR 2026-11-11-disk-aware-dispatch D1）が同じ定義を使う。どちらも target が pool にある owner の行だけを渡す。
+pub fn repo_max_sizes<'a>(rows: impl IntoIterator<Item = (&'a str, u64)>) -> BTreeMap<String, u64> {
+    let mut out: BTreeMap<String, u64> = BTreeMap::new();
+    for (repo, size) in rows {
+        let m = out.entry(repo.to_string()).or_insert(0);
+        *m = (*m).max(size);
+    }
+    out
+}
+
 /// ADR-0075 D2 の表。`lease_mtime` は `lease.json` の mtime（lease が無ければディレクトリの mtime）。
 /// `has_db = false` のとき（`NoDb`）、daemon 由来の owner で DB に行が見つからないものは P0（消さない）。
 pub fn classify(
@@ -121,8 +147,8 @@ pub fn classify(
     };
     match owner {
         Owner::Task { task_id } => match lookup.task_status(task_id) {
-            Some(Status::Running) => (Class::Pinned, "task running"),
-            Some(Status::Reviewing) => (Class::Pinned, "task reviewing"),
+            Some(Status::Running) => (Class::Pinned, TASK_RUNNING),
+            Some(Status::Reviewing) => (Class::Pinned, TASK_REVIEWING),
             Some(Status::Draft | Status::Ready | Status::Blocked) => {
                 waiting("task waiting", "task waiting (keep window passed)")
             }
@@ -145,10 +171,10 @@ pub fn classify(
                 (Some(Status::Failed), Some(_)) => retry(),
                 (Some(t), Some(_)) if t.is_terminal() => (Class::Completed, "task finished"),
                 (Some(_), Some(w)) => match w {
+                    WorkUnitStatus::Running => (Class::Pinned, WORK_UNIT_RUNNING),
                     WorkUnitStatus::Pending
                     | WorkUnitStatus::Ready
-                    | WorkUnitStatus::Running
-                    | WorkUnitStatus::NeedsContinuation => (Class::Pinned, "work unit in progress"),
+                    | WorkUnitStatus::NeedsContinuation => (Class::Pinned, "work unit queued"),
                     WorkUnitStatus::Blocked | WorkUnitStatus::Failed => waiting(
                         "work unit failed/blocked (replan may retry)",
                         "work unit failed/blocked (keep window passed)",
@@ -169,7 +195,7 @@ pub fn classify(
             {
                 (Class::Completed, "lease expired")
             } else {
-                (Class::Pinned, "lease live")
+                (Class::Pinned, LEASE_LIVE)
             }
         }
     }
@@ -218,9 +244,9 @@ pub enum Pressure {
     None,
     /// `targets` が `targets_max × high_watermark` を超えた。
     HighWatermark,
-    /// filesystem の空きが `min_free_disk_mb × 2` を下回った。
+    /// filesystem の空きが 空きの下限（`min_free_disk_pct`）× 2 を下回った。
     LowDisk,
-    /// 空きが `min_free_disk_mb` を下回った（dispatch の直前の緊急 GC）。
+    /// 空きが空きの下限（`min_free_disk_pct`）を下回った（dispatch の直前の緊急 GC）。
     Emergency,
 }
 
@@ -244,7 +270,7 @@ pub struct GcParams {
     pub min_free_bytes: u64,
     /// filesystem の空き（statvfs。不明なら `None` で空きの条件は見ない）。
     pub fs_free_bytes: Option<u64>,
-    /// 緊急モード（空き < `min_free_disk_mb`）。目標 = 空き `min_free × 3`。
+    /// 緊急モード（空き < 空きの下限）。目標 = 空き `min_free × 3`。
     pub emergency: bool,
     pub completed_grace_secs: u64,
     pub warm_seeds_per_repo: usize,
@@ -309,17 +335,16 @@ pub struct GcPlan {
 
 /// 未測定の entry の推定（D2: 0 とみなさず同じ repo の最大値。repo に測定済みが無ければ全体の最大値）。
 fn estimates(entries: &[GcEntry]) -> BTreeMap<String, u64> {
-    let mut repo_max: BTreeMap<&str, u64> = BTreeMap::new();
-    let mut all_max = 0u64;
-    for e in entries {
-        if let Some(sz) = e.size_bytes {
-            all_max = all_max.max(sz);
-            if let Some(k) = &e.repo_key {
-                let m = repo_max.entry(k.as_str()).or_insert(0);
-                *m = (*m).max(sz);
-            }
-        }
-    }
+    let all_max = entries
+        .iter()
+        .filter_map(|e| e.size_bytes)
+        .max()
+        .unwrap_or(0);
+    let repo_max = repo_max_sizes(
+        entries
+            .iter()
+            .filter_map(|e| Some((e.repo_key.as_deref()?, e.size_bytes?))),
+    );
     entries
         .iter()
         .map(|e| {

@@ -12,7 +12,7 @@
 | Human-readable | 人がエディタで直接読み書きできる。front matter は最小の YAML もどき |
 | Agent-shared | 組織のどのノードからも**同じ 1 本の道具**（`celerisctl knowledge`）で読める |
 | Self-maintaining | 抽出・整理は決定的なトリガで起きる（Phase 62） |
-| User-owned | 人の物。git なのでいつでも戻せる。削除も人が決める |
+| User-owned | 人の物。git なので変更を救出できる。日次整理は検証後に自動適用し、保護対象の判断は人に回す |
 | Implementation-independent | 検索の実装（今は grep）・LangMem・将来の埋め込み索引は**差し替えられる**。ファイルの形は変えない |
 
 ## 2. 置き場と形（D1）
@@ -26,7 +26,7 @@
   environment/          <分類>/<name>.md（分類: celeris / clusters / hosts / servers / tools ＋ 既にあるディレクトリ）
   projects/<slug>/      design.md / decisions.md / status.md …（slug は案件の `slug`。ADR-0044 D7 追記）
   experience/           YYYY/MM/<slug>.md（問題・解法・結果・採らなかった案と理由）
-  _inbox/               抽出された候補。**索引にも検索にも出ない**（人が accept / reject する）
+  _inbox/               抽出された候補。**索引にも検索にも出ない**（日次整理が扱う。人も accept / reject できる）
   index.json            派生物。再生成できる（バージョン管理には入れない）
   README.md             この構成の説明（init が書く）
 ```
@@ -131,21 +131,17 @@ celerisctl knowledge rerun  <task_id>                      # 管理系。**DB �
 | `dir` | 任意のローカルディレクトリ（読み取り） | `{ kind = "dir", path = "/opt/share/notes" }` / `"dir:/opt/share/notes"` |
 | `memory` | そのノードの手帳（`memory/<node>/notes.md`） | `{ kind = "memory" }` / `"memory"` |
 
-**前置きには索引だけが出る**（`path` / `title` / `tags`。全体で最大 200 件）。本文は入らない。
+worker の前置きには、実効マウントと短い検索手順を出す。題名・タグの全件列挙はしない。
+過去の設計判断・運用手順・既知の不具合が必要になったら、task の対象名やエラーの語で
+`celerisctl knowledge search <語> [--scope …]` を使う。案件の知識は `--scope project:<slug>` で絞る。
+結果の path を `celerisctl knowledge get <path>` で読み、本文と出典を確認する。
 
-```
-## 知識 (knowledge base — 索引だけ。本文は道具で読む)
-あなたが読める知識: `kb:user`、`kb:environment`。
-知識は `celerisctl knowledge search <語> [--scope …]` で探し、`celerisctl knowledge get <path>` で読む。
-将来も使える事実を得たら `celerisctl knowledge record --title … --scope … --source task:<このタスクの id>`
-で候補に入れる（一時的な情報・雑談・推測は入れない。出典を付ける）。候補は人が確認してから正本に入る。
-### kb:user
-- `user/profile.md` — 人のプロフィール（user）
-### kb:environment
-- `environment/clusters/pegasus.md` — pegasus の使い方（environment、cluster、pegasus）
-```
+将来も使える事実は `celerisctl knowledge record --title … --scope … --source task:<このタスクの id>`
+で候補に入れる。一時的な情報・雑談・推測は入れない。候補は日次整理の検証を通ると daemon が正本に適用する。
+人が書いたページの保護など、必要な判断は人に回る。
 
-マウントが無い run・KB がまだ無い環境では、**この節ごと出ない**（前置きは Phase 60 までと 1 バイトも変わらない）。
+マウントが無い run には節を出さない。マウントがあれば索引が空でも検索の入口を出す。
+判断の根拠は [worker の KB 入口 ADR](../../agent-docs/adr/2026-11-11-worker-knowledge-entry.md) を参照。
 
 コンテナで走る run（ADR-0043 D3）には、KB の根を**同じパスに読み取り専用**で、`_inbox` だけ**書き込み可**で
 マウントする。だから `search` / `get` はそのまま動き、`record` も候補を書ける。正本はコンテナからは書けない。

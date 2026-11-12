@@ -19232,6 +19232,38 @@
       ],
       "type": "object"
     },
+    "KnowledgeUse": {
+      "description": "1 run の KB の操作の回数（ADR D3。worker run は `RunMetrics.knowledge`、CoS run は\n`chat_runs.knowledge_use_json`）。回数は呼び出しの数で、`failed` はそのうち失敗した数。",
+      "properties": {
+        "failed": {
+          "default": 0,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "get": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "record": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "search": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "search",
+        "get",
+        "record"
+      ],
+      "type": "object"
+    },
     "LaneAssistRecord": {
       "description": "`celeris.route-decision/1` に載せる lane 層の記録（`decision_assisted` のときだけ）。",
       "properties": {
@@ -28350,6 +28382,17 @@
     "RunMetrics": {
       "description": "ADR-0061（Phase 104）: `Event::WorkerFinished` に添える run 単位のメトリクス。\nharness・model・account は同じ `run_id` の `Event::WorkerStarted` に既にあるのでここには持たない\n（二重管理をしない）。success/failure は `WorkerFinished.outcome` の文字列を\n`task-api::stats::classify_outcome` が分類する既存の仕組みのままにする。",
       "properties": {
+        "knowledge": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/KnowledgeUse"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-11-12-knowledge-usage-per-run D3: KB の操作の入口（`celerisctl knowledge`）で数えた回数。\n台帳の env を渡した run は 0 回でも `Some`。`None` は計測していない run。"
+        },
         "peak_context_tokens": {
           "description": "ADR-0072 D19（Phase E1）: この run で観測した context 量（input + cache_read + cache_creation）\nの最大値。取れないアダプタ（codex / acp。ADR-0072 §7 U2）は `None`。",
           "format": "uint64",
@@ -28862,6 +28905,71 @@
       ],
       "type": "object"
     },
+    "ScratchAdmissionView": {
+      "description": "ADR 2026-11-11-disk-aware-dispatch D1/D4: 空きの見込み。`*_bytes` のうち `expected_bytes` と `size_bytes` は測った\n見かけの大きさ、`growth_bytes`・`running_growth_bytes`・`need_bytes` は係数 `ratio` を掛けた disk 上の量の見込み。",
+      "properties": {
+        "expected_by_repo": {
+          "additionalProperties": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "description": "repo ごとの見込み（target が pool にある同じ `repo_key` の owner の測った大きさの最大。GC の推定と同じ定義）。",
+          "type": "object"
+        },
+        "free_bytes": {
+          "description": "pool の filesystem の空き（statvfs。読めなければ `None` で、判定しない）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "held": {
+          "description": "空きの見込みが足りず `ready` のまま待たせている run（直近の照合した pass。正本は daemon の判定のメモリで、daemon の\nsnapshot だけが埋める）。pool の走査だけで組んだ status（`celerisctl scratch status`）では `None`（分からない）。",
+          "items": {
+            "$ref": "#/$defs/ScratchHeldRunView"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "owners": {
+          "description": "owner ごとの見込み（owner の文字列順）。target が pool にある owner と、target がまだ無くても今書いている owner\n（seed を写している最中の run）を載せる。それ以外の target の無い owner・repo の分からない owner・野良は載せない。",
+          "items": {
+            "$ref": "#/$defs/ScratchOwnerForecastView"
+          },
+          "type": "array"
+        },
+        "ratio": {
+          "description": "見かけの大きさを disk 上の量に直す係数（`[scratch] forecast_disk_ratio`）。",
+          "format": "double",
+          "type": "number"
+        },
+        "reserve_bytes": {
+          "description": "予備 = 空きの下限（容量 × `[dispatch] min_free_disk_pct`）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "running_growth_bytes": {
+          "description": "増分を予約する owner（`owners` の `grows`）がこれから増える見込みの合計。daemon が通したが worker の lease が\nまだ走査に出ない run の見込みは含まない（daemon の判定のメモリだけが数え、待たせた run の `reason` の `admitted` に出る）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "reserve_bytes",
+        "ratio",
+        "running_growth_bytes",
+        "expected_by_repo",
+        "owners"
+      ],
+      "type": "object"
+    },
     "ScratchCacheStats": {
       "description": "廃止（ADR-0129）: cache server の `/stats`（`celeris.scratch-cache-stats/1`）。型だけ残す（値は常に `None`）。",
       "properties": {
@@ -29193,7 +29301,7 @@
           "type": "string"
         },
         "emergency": {
-          "description": "空き < `min_free_disk_mb` の緊急 GC か。",
+          "description": "空き < 空きの下限（`min_free_disk_pct`）の緊急 GC か。",
           "type": "boolean"
         },
         "pressure": {
@@ -29218,6 +29326,50 @@
         "emergency",
         "removed",
         "reclaimed_bytes"
+      ],
+      "type": "object"
+    },
+    "ScratchHeldRunView": {
+      "description": "空きの見込みで待たせている run 1 つ。",
+      "properties": {
+        "need_bytes": {
+          "description": "この run の見込み（disk 上の量）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "owner": {
+          "description": "run が使う scratch の owner（`task-<id>` / `task-<id>/wu-<id>`）。",
+          "type": "string"
+        },
+        "reason": {
+          "description": "判定の式と値（人が読む 1 行）。",
+          "type": "string"
+        },
+        "repo_key": {
+          "type": "string"
+        },
+        "since": {
+          "description": "待ち始め（RFC 3339）。",
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "work_unit_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "task_id",
+        "owner",
+        "repo_key",
+        "need_bytes",
+        "reason",
+        "since"
       ],
       "type": "object"
     },
@@ -29249,6 +29401,50 @@
       "required": [
         "path",
         "class"
+      ],
+      "type": "object"
+    },
+    "ScratchOwnerForecastView": {
+      "description": "owner 1 つの見込み。",
+      "properties": {
+        "expected_bytes": {
+          "description": "この owner の repo の見込み。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "grows": {
+          "description": "増分を予約する: DB の状態が run か review の検査で書かれうる（`task running`・`task reviewing`・\n`work unit running`）か、lease の生きた release-build（`lease live`。次の build が見込みまで育てる）。\n「1 本は通す」の書き手かどうかは別で、daemon が run・review・WU の検査を今走らせている task だけが書き手。",
+          "type": "boolean"
+        },
+        "growth_bytes": {
+          "description": "今書いている owner の増分の見込み（書いていなければ 0）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "repo_key": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "description": "測った大きさ（未測定・target がまだ無いときは `None`。見込みでは 0 と見る）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "owner",
+        "repo_key",
+        "grows",
+        "expected_bytes",
+        "growth_bytes"
       ],
       "type": "object"
     },
@@ -29446,6 +29642,10 @@
     "ScratchStatus": {
       "description": "ADR-0075 D6（Phase G1）: scratch pool の状態（`celeris.scratch-status/1`）。**観測値**で DB には書かない。\n容量は byte。サイズは測定スレッドの値（古くてもよい）、未測定は同じ repo の最大値で推定する。",
       "properties": {
+        "admission": {
+          "$ref": "#/$defs/ScratchAdmissionView",
+          "description": "ADR 2026-11-11-disk-aware-dispatch D4: dispatch の前の空きの見込み（`task_dispatch::disk_admission`）と、\nそれで待たせている run。"
+        },
         "cache": {
           "anyOf": [
             {
@@ -29470,7 +29670,7 @@
           ]
         },
         "effective_max_bytes": {
-          "description": "実効上限 = min(total_max, filesystem から pool の外の使用量と `min_free_disk_mb` を除いた分)（D1）。",
+          "description": "実効上限 = min(total_max, filesystem から pool の外の使用量と 空きの下限（`min_free_disk_pct`）を除いた分)（D1）。",
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
@@ -29589,7 +29789,8 @@
         "low_watermark",
         "pressure",
         "owners",
-        "legacy"
+        "legacy",
+        "admission"
       ],
       "type": "object"
     },
@@ -33588,6 +33789,29 @@
           "required": [
             "kind",
             "path"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "M12（ADR 2026-11-11-disk-aware-dispatch D1）: 空きの見込みが予備を割るので、新しい cargo の target を作る run を\n始めない。`need_bytes` はこの run の見込み（disk 上の量）、`detail` は判定の式の値。",
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "disk_forecast",
+              "type": "string"
+            },
+            "need_bytes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "need_bytes",
+            "detail"
           ],
           "type": "object"
         },

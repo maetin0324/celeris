@@ -1602,7 +1602,7 @@ impl Builder<'_> {
             detail: clip(&format!(
                 "{} の使用率が {pct} で critical のしきい値を超えている。空きを作る（`celerisctl target sweep --apply`、\
                  不要な file の削除）。使用率がしきい値より 5 ポイント下がると自動で消える。run は止めない\
-                 （空きの下限による停止は ADR-0074 の min_free_disk_mb）。",
+                 （空きの下限による停止は ADR-0074 の min_free_disk_pct）。",
                 d.path
             )),
             options: vec![opt(

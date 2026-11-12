@@ -51,6 +51,10 @@ pub struct ScratchConfig {
     pub adopt_max_distance: u64,
     #[serde(default = "default_scratch_measure_interval_secs")]
     pub measure_interval_secs: u64,
+    /// ADR 2026-11-11-disk-aware-dispatch D1: 空きの見込みで、測った見かけの大きさに掛けて disk 上の量に直す係数
+    /// （既定 1.0。範囲 (0, 1]。btrfs の圧縮のある filesystem では人が実測から下げる）。
+    #[serde(default = "default_scratch_forecast_disk_ratio")]
+    pub forecast_disk_ratio: f64,
     /// ADR-0075 D4（Phase G2）: `[scratch.cargo]`。
     #[serde(default)]
     pub cargo: ScratchCargoConfig,
@@ -102,6 +106,7 @@ impl Default for ScratchConfig {
             adopt: default_scratch_enabled(),
             adopt_max_distance: default_scratch_adopt_max_distance(),
             measure_interval_secs: default_scratch_measure_interval_secs(),
+            forecast_disk_ratio: default_scratch_forecast_disk_ratio(),
             cargo: ScratchCargoConfig::default(),
         }
     }
@@ -119,6 +124,10 @@ fn default_scratch_l1_max_gb() -> u64 {
 fn default_scratch_total_max_gb() -> u64 {
     200
 }
+fn default_scratch_forecast_disk_ratio() -> f64 {
+    1.0
+}
+
 fn default_scratch_high_watermark() -> f64 {
     0.90
 }
@@ -197,6 +206,7 @@ impl Config {
             seed_reflink: c.seed_reflink,
             mount: c.mount.clone(),
             dir_fallback_reason: None,
+            forecast_disk_ratio: c.forecast_disk_ratio,
         }
     }
 

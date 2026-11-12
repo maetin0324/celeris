@@ -400,7 +400,7 @@ pub(super) async fn run_worker(
         extras.conversation_addressee.is_none() && planner_permission_mode.is_none();
     let artifacts_dir_for_followups = artifacts_dir.clone();
     if followups_enabled {
-        followups::clear_stale_followups(&artifacts_dir).await;
+        followups::clear_stale_followups(&artifacts_dir, remote.is_none()).await;
     }
     let events = store
         .events_for(task_id)
@@ -536,10 +536,10 @@ pub(super) async fn run_worker(
             },
             Some(repo),
         ) => {
-            let owner = match &cargo_target_work_unit {
-                Some((id, _)) => task_worker::scratch::Owner::work_unit(task_id.to_string(), id),
-                None => task_worker::scratch::Owner::task(task_id.to_string()),
-            };
+            let owner = task_worker::scratch::Owner::of_run(
+                task_id.to_string(),
+                cargo_target_work_unit.as_ref().map(|(id, _)| id.as_str()),
+            );
             let (settings, candidates) = (settings.clone(), candidates.clone());
             let key = cargo_target_work_unit.as_ref().map(|(_, k)| k.clone());
             let fallback = (

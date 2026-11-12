@@ -317,6 +317,7 @@ fn tokens_cost_and_peak_context_are_summed_and_maxed() {
             retries: 0,
             peak_context_tokens: Some(peak),
             turns: Some(3),
+            knowledge: None,
         }),
         end: Some(RunEnd::Completed),
     };

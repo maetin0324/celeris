@@ -3879,6 +3879,13 @@ export type KnowledgeTree = {
   "truncated": boolean;
 };
 
+export type KnowledgeUse = {
+  "failed"?: number;
+  "get": number;
+  "record": number;
+  "search": number;
+};
+
 export type LaneAssistRecord = {
   "base_lane": string;
   "basis": string;
@@ -5673,6 +5680,7 @@ export type RunList = {
 };
 
 export type RunMetrics = {
+  "knowledge"?: KnowledgeUse | null;
   "peak_context_tokens"?: number | null;
   "retries": number;
   "turns"?: number | null;
@@ -5758,6 +5766,18 @@ export type SavedCredentialList = {
   "items": Array<SavedCredentialItem>;
 };
 
+export type ScratchAdmissionView = {
+  "expected_by_repo": {
+  [key: string]: number;
+};
+  "free_bytes"?: number | null;
+  "held"?: Array<ScratchHeldRunView> | null;
+  "owners": Array<ScratchOwnerForecastView>;
+  "ratio": number;
+  "reserve_bytes": number;
+  "running_growth_bytes": number;
+};
+
 export type ScratchCacheStats = {
   "flush_dropped": number;
   "flush_last_at"?: string | null;
@@ -5823,10 +5843,29 @@ export type ScratchGcView = {
   "removed": Array<ScratchGcRemovedView>;
 };
 
+export type ScratchHeldRunView = {
+  "need_bytes": number;
+  "owner": string;
+  "reason": string;
+  "repo_key": string;
+  "since": string;
+  "task_id": string;
+  "work_unit_id"?: string | null;
+};
+
 export type ScratchLegacyView = {
   "class": string;
   "last_write"?: string | null;
   "path": string;
+  "size_bytes"?: number | null;
+};
+
+export type ScratchOwnerForecastView = {
+  "expected_bytes": number;
+  "grows": boolean;
+  "growth_bytes": number;
+  "owner": string;
+  "repo_key": string;
   "size_bytes"?: number | null;
 };
 
@@ -5866,6 +5905,7 @@ export type ScratchSccacheView = {
 };
 
 export type ScratchStatus = {
+  "admission": ScratchAdmissionView;
   "cache"?: ScratchCacheView | null;
   "dir": string;
   "disabled_reason"?: string | null;
@@ -6631,6 +6671,10 @@ export type TaskWait = {
 } | {
   "kind": "disk_critical";
   "path": string;
+} | {
+  "detail": string;
+  "kind": "disk_forecast";
+  "need_bytes": number;
 } | {
   "kind": "delegated_children";
   "task_ids": Array<TaskId>;

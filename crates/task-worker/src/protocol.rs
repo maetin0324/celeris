@@ -980,7 +980,7 @@ pub struct ActiveMilestoneContext {
     pub status: String,
 }
 
-/// ADR-0047 D2（Phase 61）: 前置きに出す知識の索引（`preamble::knowledge_section` が読む）。
+/// 知識のマウントと索引。前置きはマウントだけを案内し、PaperQA は索引で比較対象を探す。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct KnowledgeContext {
     /// 実効マウント（組織の和 ＋ 案件の `projects/<slug>` ＋ タスクの明示）。

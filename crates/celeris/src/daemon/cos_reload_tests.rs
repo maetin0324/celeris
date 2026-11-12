@@ -27,7 +27,7 @@ fn write_config(dir: &std::path::Path, cos: &str) -> Config {
 db = {db:?}
 workspace_root = {ws:?}
 [dispatch]
-min_free_disk_mb = 0
+min_free_disk_pct = 0.0
 [knowledge]
 root = {kb:?}
 [execution]

@@ -158,8 +158,7 @@ impl Dispatcher {
         let metrics = run_since.map(|since| task_core::RunMetrics {
             wall_ms: wall_ms_since(since),
             retries: task.attempts,
-            peak_context_tokens: None,
-            turns: None,
+            ..Default::default()
         });
         let index_status = run_end
             .map(task_core::RunIndexStatus::from_run_end)

@@ -81,6 +81,14 @@ updated: 2026-11-12
   - task-api の試験 `cos_triage_scope_g_operator_escalation_takes_over_an_unsent_fallback`: resolve は 200・`already_routed=false`、`GET /api/v1/cos/inbox?state=escalated` の `addressee` は `operator`、通知の行は増えない。送信済みの退避の件は 409 で、経路は `fallback` のまま。
   - 文書: ADR 2026-11-12-cos-triage-scope D2 の付記、ADR 2026-11-11-cos-fallback-timing D2 の付記と実装の行、ADR 2026-10-28-cos-routine-delegated-answers の付記 A6（D1 の「定型の種類だけ」は ADR 2026-11-12 が置き換えた）。`docs/api/v1/api.md` の「§3.130 の『定型の代答の根拠』」を今の段落名「CoS の回答の根拠」に、77k の行の「定型の代答 `job_wait_extend`」を「`job_wait_extend`」に直した。skill cos-inbox-triage §2 の表の分類名を ADR D1 の 8 分類（`credential_input`・`objective_change`・`beyond_approval`・`security_boundary`・`production_config`・`paid_trial`・`research_judgment`・`weaken_checks`）にそろえ、D1 の分類でない行（人が指定した `human_required` 等、外部公開・破壊的な操作）はそう書いた。版は 12 のまま。
 
+## 証拠（WU operator-fallback。基準は `git merge-base HEAD main`）
+- commit: `phase 1: 未送信の退避がある件を operator 宛てに回すと退避の経路を operator に引き継ぐ（final review の差し戻し）`、`phase 1: 試験の書式を cargo fmt に合わせる`（試験の 1 か所の改行だけ）、この進捗の commit。
+- `cargo nextest run -p task-core -E 'test(cos_triage_operator_escalation_before_the_send_takes_the_fallback_route) | test(cos_triage_judgment_before_the_send_withdraws_the_fallback) | test(operator_route_is_not_a_human_wait)'` → 3 件合格。`cargo nextest run -p task-api -E 'test(/cos_triage_scope_/)'` → 6 件合格（新しい `cos_triage_scope_g_…` を含む）。
+- `bash scripts/dev/test-affected.sh`（1 つ目の commit で実行、開始 load 26・途中 49、976 秒）→ exit 0。対象 14 crate、nextest 8359 件すべて合格（23 skipped）、web 713 件合格、test-ts-verify 20 件合格、script bundle SKIP 0 件。範囲外の試験の失敗は無かった。
+- fmt の commit の後の HEAD で: `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0（1 回目は新しい試験の改行で exit 1、`cargo fmt --all` で直して commit）、`sh scripts/dev/progress-index.sh --check` → exit 0、`sh scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-adr-numbers.sh` → exit 0。
+- `bash scripts/dev/check-health.sh` → verdict pass、exit 0（new 0、worsened 2 はどちらも optional の `dup.contract` の警告で、前の WU で入った `task_ops::triage_match` の `Candidate`・`Reserved` の名前の重なり）。
+- 範囲の確認: 変えた file は `crates/task-core/src/cos_fallback.rs`・`cos_fallback_tests.rs`、task-api の試験 1 file、ADR 3 本、この進捗、skill、`docs/api/v1/api.md` だけ（`store/`・`chat/` は変えていない）。
+
 ## 証拠（提出時の HEAD で実行。attempt 4）
 - `bash scripts/dev/test-affected.sh`（開始 load 46、1428 秒）→ exit 100。nextest 8328 件中 8327 件合格、web 712 件・control-ts 134 件合格、script bundle SKIP 0 件。落ちた 1 件は範囲外の task-worker `ssh::tests::run_command_times_out_and_kills_the_ssh_process_group`（偽 ssh の子 process が残ったと判定）。この差分は task-worker に触れておらず、同じ HEAD で単独に 3 回実行して 3 回とも合格（各 2.0 秒）。負荷の高い時の flaky として未解決に書く。
 - 同じ HEAD（進捗の証拠の commit の後）で `bash scripts/dev/test-affected.sh` を再実行（開始 load 42、939 秒）→ exit 0。nextest 8328 件すべて合格、web 712 件・control-ts 134 件合格、script bundle SKIP 0 件。

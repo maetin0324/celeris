@@ -983,7 +983,7 @@ fn repairs_scheduled(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<(String, Str
 /// tick を重ねても 2 つ目の repair を作らない。repair が衝突を解いた後に review をやり直し、target を含む HEAD を
 /// 候補として合格する（`IntegrationRepairResolved` 1 件、reviewer run 1 本）。
 /// 既存の試験で検出できない理由: `target_sync.rs` の `integration_repair_*` は `spawn_review` を直接呼び、
-/// Dispatcher の private field（`reviewing`）と `run_until_idle` を使う。worker run の後の `tick()` の経路で衝突に
+/// Dispatcher の private field（`reviewing`）を見て、tick の回数の上限で待つ。worker run の後の `tick()` の経路で衝突に
 /// 至る順序、repair の run を止めた間に tick が repair を重ねない・reviewer を起こさないこと、配送の行が衝突した候補で
 /// `MergeQueued` にならないことはどれも見ない。
 #[tokio::test]

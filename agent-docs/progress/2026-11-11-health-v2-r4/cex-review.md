@@ -73,3 +73,67 @@ fake の reviewer は `review.json` に criterion 0〜7 の判定を書く。配
 
 - reopen（人の割り込み）の変種は guard が 3 重で、1 つだけ外して落ちる試験が作れていない。R4 の分割で review の中断（`abort_stale_runs`）と判定の破棄（`on_review_finished`）を同じ owner に寄せるなら、そのときに割り込みの変種の試験を足し、どちらか 1 つを外して落ちることを確かめる。
 - `cargo clippy -p task-dispatch --tests -- -D warnings` の既存の 4 件は、release gate が `--tests` を見ないため残っている。別 task で直すか、検査に `--tests` を足すかを決める。
+
+## 節: integration
+
+基準は `$CELERIS_WU_BASE`。本体（dispatcher・store・task-ops）は変えていない。変えたのは `tests/cex_review_authority.rs`（試験 3 本と、その helper・fake adapter・統合の跡を作る fixture）とこの記録だけ。`tests/mod.rs` と他の試験 file は変えていない（`orphan_takeover.rs` の `instance`・`SELF_ID` と `target_sync.rs` の `commit_file` は `pub(super)` のものを use した）。
+
+### 作業前 brief
+
+1. 根本原因: R4 の分割の前に、統合の途中の再起動と、review 前の同期の衝突を `tick()` の経路で固定する試験が無い。既存の試験（`work_units.rs` の `an_interrupted_integration_is_redone_idempotently_after_restart`、`target_sync.rs` の `integration_repair_*`）は Dispatcher の private field（`integrating`・`infra_backoff`・`reviewing`）に触り、`spawn_review` を直接呼び、tick の回数の上限で待つ。
+2. 責務 owner: 段の統合は `dispatcher/phase_integration.rs`（`start_integration`・`on_integration_finished`・`finish_phase_integration`）と `integration.rs`（`integrate` の merge）、再起動の照合は `dispatcher/work_units.rs` の `reconcile_parallel_tasks`。review 前の同期の衝突は `dispatcher/review_spawn.rs`（`spawn_review` の同期）・`dispatcher/review_verdict.rs`（`try_integration_repair`）・`task-ops` の `changes::sync_onto_target`。
+3. 再利用: `tests/mod.rs` の `run_until_state`・`parallel_dispatcher`・`parallel_task`・`adopt_v2_plan`・`v2_wu`・`ParallelWuAdapter`・`worktree_dispatcher`・`init_test_repo`・`git_out`・`git_ok`、`orphan_takeover.rs` の `instance`・`SELF_ID`、`target_sync.rs` の `commit_file`、この file の `git_review_task`・`deliverable`。
+4. 選択肢: 再起動の止め所は private な hook（`before_integration_start`）を使わず、統合の検査の command が試験の置く file を待つ形にした（統合の作業ツリーで最初に走ったときだけ止まる）。落ちた daemon の dispatcher は drop し、作り直す dispatcher は自分の instance の行を登録して孤児の回収を有効にした（lease を失効させず、`infra_backoff` に触らずに済む）。統合 WU の done と Task の遷移の間で落ちた状態は、store に統合 WU の遷移を直接書いて作った（`cex_lease_restart.rs` の再起動の試験と同じ）。衝突は配送の始まる root task で、worker run が作業ツリーと target の同じ行を変えて作り、repair の run は semaphore で止めた。
+5. 新しい状態・分岐・fallback・port: 無し（試験だけ）。
+6. 撤去対象: 無し。
+7. 不変条件: 下の表の各行。
+
+### 試験（3 本、全部合格）
+
+| 試験 | 守る不変条件 |
+|---|---|
+| `cex_integration_restart_mid_phase_integration_does_not_merge_twice` | 段の統合が WU `a`・`b` のブランチを Task のブランチに merge し終え、統合の検査の途中で daemon が落ちた（統合 WU は running、`PhaseIntegrated` 無し）後に、同じ store・同じ Git repo で作り直した dispatcher（新しい active）が統合をやり直しても、Task のブランチの merge commit は WU のブランチごとに 1 つのまま。統合 WU は `orphan_takeover` で pending に戻り、やり直しは済んだ merge を飛ばし（`PhaseIntegrated.merged` の `skipped` が両方 true）、`PhaseIntegrated`・統合 WU の done・Task の reviewing・done・最終レビューの判定は各 1 回 |
+| `cex_integration_restart_after_the_integration_unit_is_done_does_not_integrate_again` | `finish_phase_integration` が統合 WU を done にした後、Task の遷移の前で落ちた状態から作り直しても、統合をやり直さない（統合 WU の遷移は running → done の 2 件のまま、`IntegrationCheckStarted` は 1 件、merge commit は WU ごとに 1 つ）。Task は Ready を経て最終レビューに 1 回だけ進み Done になる |
+| `cex_integration_sync_conflict_schedules_one_repair_and_never_passes_the_conflict` | 配送の始まる root task の review 前の同期（target への rebase）が衝突したら、rebase を戻し（作業ツリーは worker の commit のまま clean、`REBASE_HEAD` 無し、target は動かず merge commit 無し）、IntegrationRepair の repair WU を 1 つだけ作る（`IntegrationRepairScheduled` 1 件、attempt 1、before は worker の commit）。repair の run を止めている間は reviewer run・`ReviewVerdict`・`ReviewTargetSynced` が無く、Done・`MergeQueued` にならず、attempts は不変で、tick を重ねても 2 つ目の repair を作らない。repair が衝突を解いた後は `IntegrationRepairResolved` 1 件、reviewer run 1 本で合格し、配送の行の merge candidate は target を含む HEAD |
+
+### guard を一時的に外すと落ちることの確認
+
+本体の 1〜2 行を一時的に書き換えて `cargo nextest run -p task-dispatch -E 'test(/cex_review_authority::/)' --no-fail-fast` を実行した。一時変更は試験の後に `git checkout --` で戻し、commit していない（戻した後に `grep -rl GUARD-OFF crates/` は 0 件、`git status` は試験 file だけ）。`crates/task-core/src/store/` と `crates/task-core/migrations/` は触っていない。build は 4 回（B: GI1・GC1、C: GI2・GC2、D: GC3、E: GI3）。同じ build の guard は、それぞれ別の試験だけを落とす組み合わせにした。B〜D の時点では `cex_integration_restart_after_…` はまだ無く、E で足した後に確かめた。
+
+| guard（一時変更） | 落ちた試験（assert と観測） |
+|---|---|
+| GI1 `integration.rs` `integrate`: Task の HEAD の祖先になった WU のブランチを飛ばす `is_ancestor` を `false && …` にする | `cex_integration_restart_mid_…`（`phase_integrated(..) == [[("a", true), ("b", true)]]` が `[[("a", false), ("b", false)]]`）。merge commit の数の assert は合格した（git の `merge --no-ff` は取り込み済みの commit に新しい commit を作らない）。二重の merge commit は git 自身も防ぐので、この guard は `skipped` の記録で見る |
+| GC1 `review_spawn.rs` `spawn_review`: `try_integration_repair` が repair を作った後の `return Ok(true)` を `continue` にする | `cex_integration_sync_conflict_…`（`reviewer_starts(..) == 0` が 1）。repair の run の間に、同期していない HEAD で reviewer run を起こした |
+| GI2 `work_units.rs` `reconcile_parallel_tasks`: 持ち主の居ない running の統合 WU を pending に戻す条件を `false && …` にする | `cex_integration_restart_mid_…`（再起動後の `run_until_state(.. terminal ..)` が保険の 60 秒で false）。統合 WU が running のまま残り、Task が進まない |
+| GC2 `review_verdict.rs` `try_integration_repair`: 上限の判定を常に「上限に達した」にする | `cex_integration_sync_conflict_…`（`repairs.len() == 1` が 0）。repair を作らず、同期していない HEAD の review に回った |
+| GC3 `task-ops` `changes.rs`: `rebase_onto` で `rebase --abort` をせず、`sync_onto_target` の「元の HEAD・clean に戻った」照合を外す | `cex_integration_sync_conflict_…`（`repairs_scheduled(..)` の before が worker の commit ではなく target）。作業ツリーが rebase の途中のまま残り、その HEAD を before として記録した |
+| GI3 `work_units.rs` `reconcile_parallel_tasks`: 何も走っていない running の v2 の Task を `Continue{advance}` で Ready に戻す処理を飛ばす | `cex_integration_restart_mid_…` と `cex_integration_restart_after_…`（どちらも再起動後の `run_until_state(.. terminal ..)` が保険の 60 秒で false） |
+
+各 build の結果: B は 6 本中 2 本が失敗、C は 6 本中 2 本、D は 6 本中 1 本、E は 7 本中 2 本。どの build でも `cex_review_` の 4 本は合格した。guard を戻した後は 7 本すべて合格。
+
+### 確かめられなかった guard
+
+- `on_integration_finished` の古い結果の破棄（`task.status != Running || integ.status != Running`）。試験の「再起動」は落ちた daemon の dispatcher を drop するので、旧い統合の完了は channel ごと捨てられ、作り直した dispatcher に届かない。旧い daemon の完了が届く順序（draining の引き継ぎ）は cex-lease の範囲で、ここでは作っていない。
+- `start_integration` の状態の判定（pending・ready 以外は始めない）と `try_start_work_unit_integration` の比較更新。どちらの再起動の試験でも、dispatch の gate が done の統合 WU に統合を始めさせないので、この判定まで届かない。
+- 段の統合の merge の衝突（`schedule_merge_repair` の repair WU `merge-<phase>-<key>`）。衝突の試験は review 前の同期（ADR-0120 の IntegrationRepair）だけで書いた。
+- 配送の Merging の途中の再起動（`crates/celeris` の delivery）。dispatcher の外で、書いてよい範囲（`crates/task-dispatch/src/dispatcher/tests/`）の外。
+
+### 反例
+
+統合 WU を done にした後、Task の遷移の前で落ちると、`PhaseIntegrated` が 1 件も記録されない。
+
+- 再現手順: `cex_integration_restart_after_the_integration_unit_is_done_does_not_integrate_again` と同じ。段 `build` の WU `a`・`b` の統合が merge を 2 件済ませ、統合の検査の途中で daemon が落ちた跡を作る。store に統合 WU の running → done（reason `integrated`、`integrated_commit` は Task のブランチの HEAD）を直接書く（`finish_phase_integration` の最初の書き込みだけが残った状態）。同じ store で新しい active の dispatcher を作り、Task が終端になるまで tick する。
+- 観測した event（Task の分、再起動の後）: `transitioned` running → ready（`advance`）、ready → reviewing（`plan_complete`）、`delivery_skipped`（`no_project`）、reviewing → done（`review_pass`）、`review_verdict`（criterion 0 合格）。統合 WU の遷移は pending → running（`integrate`）と running → done（`integrated`）の 2 件だけ。`integration_check_started` は落ちる前の 1 件で、`integration_check_finished` と `phase_integrated` は 0 件。Task のブランチの merge commit は 2 つ（WU ごとに 1 つ）。
+- 影響: merge は二重にならず Task は 1 回で Done になるが、統合の完了の記録（取り込んだ WU と commit、統合後の HEAD、検査の結果）が event に残らない。途中確認のある段（`PausePointsResolved` の段）なら `PhaseReported` も出ず、停止点で止まらない見込み（未確認）。
+- 原因の見込み: `finish_phase_integration` は統合 WU の done（`work_unit_transition`）と、Task の遷移・`PhaseIntegrated`（`apply_transition_with_events`）を別の書き込みにしている。再起動後の `reconcile_parallel_tasks` は Task を Ready に戻し、全 WU が done なので dispatch の gate が最終レビューに進む。
+- 試験ではこの点を assert していない（本体は直していない）。
+
+### 証拠（提出時の HEAD で実行）
+
+- `cargo nextest run -p task-dispatch -E 'test(/cex_review_authority::/)' --no-fail-fast`: 7 本すべて合格（`cex_integration_` 3 本、`cex_review_` 4 本）、exit 0。
+- guard の確認は上の表のとおり（一時変更は commit していない）。
+- 規約の確認: `cex_review_authority.rs` に tick を回数で回す helper の名前と thread の sleep は 0 件。`/// 不変条件:` と `/// 既存の試験で検出できない理由:` は各 7 行（試験 7 本）。
+
+### 提案
+
+- `finish_phase_integration` の統合 WU の done と、Task の遷移・`PhaseIntegrated` を 1 つの store の書き込みにする（または、再起動の照合が `integrated_commit` を持つ done の統合 WU に `PhaseIntegrated` が無ければ記録し直す）。R4 で統合の完了の owner を分けるときに、上の反例の assert（`PhaseIntegrated` が 1 件）を足す。

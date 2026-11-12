@@ -147,5 +147,87 @@ class Decisions(unittest.TestCase):
             sleep.assert_called_once_with(5)
 
 
+def celerisctl_fixture():
+    # Shape of meas-edit-a's record: base test-affected ran `cargo test --doc -p celerisctl`,
+    # which exits 101 for a crate without a lib target; HEAD's doc test passed.
+    d = fixture()
+    d['attempts'][0]['crates'] = ['celerisctl']
+    pairs = d['attempts'][0]['pairs'].pop('a')
+    for side, secs in enumerate((6.18, 30.55)):
+        pairs['edit_verify'][0][side].update(edit_to_verify_secs=secs - 1, edit_to_verify_with_doc_secs=secs)
+    pairs['edit_verify'][0][0]['doc_test_exit'] = 101
+    d['attempts'][0]['pairs']['celerisctl'] = pairs
+    return d
+
+
+class Items(unittest.TestCase):
+    """--require-compare <crate>:<item> and exclusion reasons (rules unchanged)."""
+
+    def shell(self, path, spec):
+        return subprocess.run(['bash', str(Path(m.__file__).with_name('measure.sh')), '--require-compare', str(path), spec],
+                              capture_output=True).returncode
+
+    def test_celerisctl_doc_test_101_items(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp) / 'edit-a.json'
+            m.write(p, celerisctl_fixture())
+            expected = {'celerisctl:build': 0, 'celerisctl': 1, 'celerisctl:edit_verify': 1,
+                        'celerisctl:build,celerisctl:edit_verify': 1, 'celerisctl:build,other:build': 1,
+                        'celerisctl:run': 2, 'celerisctl:unknown': 2, ':build': 2, 'celerisctl:': 2, 'celerisctl,': 2}
+            self.assertEqual({spec: self.shell(p, spec) for spec in expected}, expected)
+            self.assertEqual(subprocess.run(['python3', str(Path(m.__file__)), 'validate', str(p)]).returncode, 0)
+        table = m.summary([celerisctl_fixture()])
+        self.assertIn('| celerisctl | build | 1/1 | 10 | 10 | - | - | 1 | included | - |', table)
+        self.assertIn('| celerisctl | edit_verify | 1/1 | 6.18 | 30.55 | 5.18 | 29.55 | 1 | excluded | base doc_test_exit 101 |', table)
+
+    def test_require_items_in_schema(self):
+        d = celerisctl_fixture()
+        self.assertTrue(m.require(d, ['celerisctl:build']))
+        self.assertFalse(m.require(d, ['celerisctl:edit_verify']))
+        with self.assertRaises(ValueError):
+            m.require(d, ['celerisctl:run'])
+        d = fixture()
+        d['schema'] = 'health-v2-r5-run-compare/2'
+        p = d['attempts'][0]['pairs']['a']
+        p['run'] = p['build']
+        self.assertTrue(m.require(d, ['a:run']))
+        for spec in ('a:build', 'a:edit_verify'):
+            with self.assertRaises(ValueError):
+                m.require(d, [spec])
+
+    def test_reasons(self):
+        cases = [
+            ({'loadavg_after': '24 0 0'}, {}, 'load ratio >= 2'),
+            ({'loadavg_after': '0 0 0', 'loadavg_before': '0 0 0'}, {}, 'load ratio >= 2'),
+            ({'load_wait': {'ready': False}}, {}, 'load wait expired'),
+            ({}, {'exit': 125}, 'head exit 125'),
+            ({'exit': None}, {}, 'missing or invalid measurement'),
+            ({'secs': -1}, {}, 'missing or invalid measurement'),
+            ({'loadavg_before': 'nan'}, {}, 'missing or invalid measurement'),
+            ({'loadavg_after': '30 0 0', 'load_wait': {'ready': False}, 'exit': 1}, {'secs': None},
+             'load ratio >= 2; load wait expired; base exit 1; missing or invalid measurement'),
+        ]
+        for base, head, reason in cases:
+            d = fixture()
+            b, h = d['attempts'][0]['pairs']['a']['build'][0]
+            b.update(base)
+            h.update(head)
+            row = m.comparisons(d)[0]
+            self.assertEqual((row['excluded'], row['reason']), (True, reason), (base, head))
+            self.assertIn(f'| excluded | {reason} |', m.summary([d]))
+        d = fixture()
+        d['attempts'][0]['pairs']['a']['edit_verify'][0][1].update(list_exit=2, doc_test_exit=101)
+        self.assertEqual(m.comparisons(d)[1]['reason'], 'head list_exit 2; head doc_test_exit 101')
+        self.assertEqual([r['reason'] for r in m.comparisons(fixture())], [None, None])
+
+    def test_compare_takes_crate_names_only(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(m.subprocess, 'run') as run, patch.object(m.subprocess, 'check_output') as out:
+            for crates in (['celerisctl:build'], ['']):
+                with self.assertRaises(ValueError):
+                    m.execute(Path(tmp) / 'x.json', crates)
+            run.assert_not_called()
+            out.assert_not_called()
+
+
 if __name__ == '__main__':
     unittest.main()

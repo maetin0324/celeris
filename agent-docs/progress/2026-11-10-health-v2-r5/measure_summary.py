@@ -22,47 +22,83 @@ def peak(v):
 
 
 def pair(base, head):
+    # Excluded exactly when any reason applies: ratio undefined or >= 2, a load
+    # wait not ready, a non-zero/missing exit, or a missing/invalid timing.
     try:
         b, h = peak(base), peak(head)
         ratio = max(b, h) / min(b, h) if min(b, h) else (1 if b == h else None)
         exits = ('exit',) if 'exit' in base else ('settle_exit', 'list_exit', 'rebuild_exit', 'doc_test_exit')
-        complete = all(v.get(k) == 0 for v in (base, head) for k in exits)
         timing = 'secs' if 'exit' in base else 'edit_to_verify_with_doc_secs'
-        complete = complete and all(isinstance(v.get(timing), (int, float)) and math.isfinite(v[timing]) and v[timing] >= 0 for v in (base, head))
-        admitted = all(v.get('load_wait', {}).get('ready', False) for v in (base, head))
-        return {'ratio': ratio, 'excluded': ratio is None or ratio >= 2 or not complete or not admitted,
+        sides = (('base', base), ('head', head))
+        reasons = []
+        if ratio is None or ratio >= 2:
+            reasons.append('load ratio >= 2')
+        if not all(v.get('load_wait', {}).get('ready', False) for v in (base, head)):
+            reasons.append('load wait expired')
+        reasons += [f'{s} {k} {json.dumps(v[k])}' for s, v in sides for k in exits if v.get(k) not in (None, 0)]
+        if any(v.get(k) is None for v in (base, head) for k in exits) or not all(
+                isinstance(v.get(timing), (int, float)) and math.isfinite(v[timing]) and v[timing] >= 0 for v in (base, head)):
+            reasons.append('missing or invalid measurement')
+        return {'ratio': ratio, 'excluded': bool(reasons), 'reason': '; '.join(reasons) or None,
                 'base_load_1m_max': b, 'head_load_1m_max': h}
     except (KeyError, ValueError, TypeError, IndexError):
         return {'ratio': None, 'excluded': True, 'reason': 'missing or invalid measurement'}
+
+
+ALL_ITEMS = ('build', 'edit_verify', 'run')
+
+
+def schema_items(d):
+    return ('run',) if d['schema'] == 'health-v2-r5-run-compare/2' else ('build', 'edit_verify')
 
 
 def comparisons(d):
     rows = []
     for a in d.get('attempts', []):
         for c in a.get('crates', []):
-            items = ('run',) if d['schema'] == 'health-v2-r5-run-compare/2' else ('build', 'edit_verify')
-            for item in items:
+            for item in schema_items(d):
                 for n, (b, h) in enumerate(a.get('pairs', {}).get(c, {}).get(item, [])):
                     rows.append(dict(crate=c, item=item, attempt=a['attempt'], pair=n + 1,
                                      base=b, head=h, **pair(b, h)))
     return rows
 
 
-def require(d, crates):
+def parse_spec(spec):
+    """'<crate>' or '<crate>:<item>' -> (crate, item or None); ValueError if malformed."""
+    crate, sep, item = spec.partition(':')
+    if not crate or (sep and item not in ALL_ITEMS):
+        raise ValueError(f'invalid require spec {spec!r}: use <crate> or <crate>:<{"|".join(ALL_ITEMS)}>')
+    return crate, item if sep else None
+
+
+def require(d, specs):
+    # A bare crate needs every item of the record's schema; <crate>:<item> needs
+    # that item only. An item outside the schema is a usage error (ValueError).
     rows = comparisons(d)
-    items = ('run',) if d['schema'] == 'health-v2-r5-run-compare/2' else ('build', 'edit_verify')
-    return all(any(r['crate'] == c and r['item'] == item and not r['excluded'] for r in rows)
-               for c in crates for item in items)
+    wanted = []
+    for spec in specs:
+        crate, item = parse_spec(spec)
+        if item is not None and item not in schema_items(d):
+            raise ValueError(f'item {item!r} is not in schema {d["schema"]}: {", ".join(schema_items(d))}')
+        wanted += [(crate, i) for i in ((item,) if item else schema_items(d))]
+    return all(any(r['crate'] == c and r['item'] == i and not r['excluded'] for r in rows) for c, i in wanted)
+
+
+def cell(value):
+    return '-' if value is None else str(value).replace('|', '\\|')
 
 
 def summary(docs):
-    lines = [BEGIN, '| crate | stage | attempt/pair | base s | HEAD s | load ratio | result |',
-             '|---|---|---|---:|---:|---:|---|']
+    # edit_verify also shows the nextest part (edit_to_verify_secs, without the
+    # doc test) when the record has it; other stages have no such part.
+    lines = [BEGIN, '| crate | stage | attempt/pair | base s | HEAD s | base nextest s | HEAD nextest s | load ratio | result | reason |',
+             '|---|---|---|---:|---:|---:|---:|---:|---|---|']
     for d in docs:
         for r in comparisons(d):
             key = 'edit_to_verify_with_doc_secs' if r['item'] == 'edit_verify' else 'secs'
+            part = [r[s].get('edit_to_verify_secs') if r['item'] == 'edit_verify' else None for s in ('base', 'head')]
             ratio = '-' if r['ratio'] is None else format(r['ratio'], '.6g')
-            lines.append(f"| {r['crate']} | {r['item']} | {r['attempt']}/{r['pair']} | {r['base'].get(key, '-')} | {r['head'].get(key, '-')} | {ratio} | {'excluded' if r['excluded'] else 'included'} |")
+            lines.append(f"| {r['crate']} | {r['item']} | {r['attempt']}/{r['pair']} | {cell(r['base'].get(key))} | {cell(r['head'].get(key))} | {cell(part[0])} | {cell(part[1])} | {ratio} | {'excluded' if r['excluded'] else 'included'} | {cell(r['reason'])} |")
     return '\n'.join(lines + [END]) + '\n'
 
 
@@ -116,6 +152,8 @@ def flaky(results):
 
 
 def execute(out, crates, run=False):
+    if not all(crates) or any(':' in c for c in crates):
+        raise ValueError('compare and run-compare take crate names only (no <crate>:<item>)')
     raw = Path(str(Path(out).with_suffix('')) + '-raw')
     raw.mkdir(parents=True, exist_ok=True)
     d = dict(schema='health-v2-r5-' + ('run' if run else 'build') + '-compare/2', attempts=[],
@@ -203,6 +241,10 @@ def main():
             data = Path(md).read_bytes()
             return 0 if data.count(BEGIN.encode()) == 1 and data.count(END.encode()) == 1 and block.encode() in data else 1
         print(block, end=''); return 0
+    if mode == 'require':
+        specs = args[1].split(',')
+        for spec in specs:
+            parse_spec(spec)  # malformed spec or unknown item: exit 2 before reading the record
     d = json.loads(Path(args[0]).read_text())
     if mode == 'validate':
         if d.get('schema') not in ('health-v2-r5-build-compare/2', 'health-v2-r5-run-compare/2') or not comparisons(d):
@@ -210,7 +252,7 @@ def main():
         return 0 if d.get('comparisons') == comparisons(d) else 1
     if mode == 'require':
         valid = d.get('schema') in ('health-v2-r5-build-compare/2', 'health-v2-r5-run-compare/2') and d.get('comparisons') == comparisons(d)
-        return 0 if valid and require(d, args[1].split(',')) else 1
+        return 0 if valid and require(d, specs) else 1
     return 2
 
 

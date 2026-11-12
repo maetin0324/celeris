@@ -41,8 +41,16 @@
 # 再計測:
 #   compare <out.json> <crate,...>: /2、全試行を attempts に保存する。
 #   run-compare <out.json> <crate,...>: base・HEAD・HEAD・base、各実行直前に --no-run。
-#   --require-compare <out.json> <crate,...>: 除外されない段が全 crate に揃えば 0。
-#   summary <json...> / summary --check <md> <json...>: 除外付き表の生成と byte 一致検査。
+#   --require-compare <out.json> <spec,...>: spec は <crate> か <crate>:<item>（item は build・edit_verify・run）。
+#       <crate> はその記録の schema の全 item（build-compare は build と edit_verify、run-compare は run）、
+#       <crate>:<item> はその item だけに、除外されない組が 1 つ以上あれば 0。足りなければ 1。
+#       記録の schema に無い item（例 build-compare の <crate>:run）・未知の item・空の crate は exit 2。
+#       除外の規則（両側の exit が 0、load の 1 分値の最大の比が 2 未満、負荷待ちが ready、秒が有限で 0 以上）は item を指定しても同じ。
+#   summary <json...> / summary --check <md> <json...>: 全試行の表の生成と byte 一致検査。
+#       列は crate・stage・attempt/pair・base と HEAD の秒・base と HEAD の nextest 部分の秒・load の比・採否・除外の理由。
+#       nextest 部分の秒は edit_verify の記録に edit_to_verify_secs（doc test を除く edit→verify）があれば出し、無ければ -。
+#       除外の理由は 'load ratio >= 2'・'load wait expired'・'<base|head> <exit の欄> <値>'・'missing or invalid measurement' を
+#       この順に '; ' で並べる（採用の行は -）。compare・run-compare は crate 名だけを受ける。
 #   MEASURE_MAX_LOAD=24 / MEASURE_LOAD_WAIT=600 / MEASURE_RETRIES=2。
 #   待ちの期限超過は除外。再試行の回数は初回に加える回数。
 # 環境変数:
@@ -217,7 +225,7 @@ case "$mode" in
        out="$2"; set_a="$3"; set_b="$4" ;;
   _compare-once) [ $# -eq 3 ] || { echo "usage: $0 compare <out.json> <crate,...>" >&2; exit 2; }
        out="$2"; crates_csv="$3"; label=compare; mode=compare ;;
-  *) echo "usage: $0 run|features|compare|--validate|--require ..." >&2; exit 2 ;;
+  *) echo "usage: $0 run|features|compare|run-compare|summary|--validate|--require|--require-compare ..." >&2; exit 2 ;;
 esac
 
 out="$(realpath -m "$out")"

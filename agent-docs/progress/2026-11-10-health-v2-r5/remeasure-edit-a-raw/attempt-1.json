@@ -1,0 +1,975 @@
+{
+ "schema": "health-v2-r5-build-compare/1",
+ "label": "compare",
+ "git_head": "58151646bfbc5ffd6a576751e760e4759bf4333f",
+ "merge_base_main": "4bc05f1efd974d518b97c0afbcb50f0b341bbe10",
+ "base_tree": "git worktree add --detach $TMPDIR/r5-measure-base.* <merge_base_main>（計測の後に git worktree remove）",
+ "host": {
+  "nproc": 24,
+  "uname": "Linux 6.8.12-9-pve",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+  "nextest": "cargo-nextest 0.9.146 (8af696ddc 2026-09-21)",
+  "cargo_target_dir": "/local/celeris/data/scratch/targets/task-01M6TYVJT53598CPKMGSQGA7XM/wu-01M76W3168CGJJZK18RN72JXB6/target"
+ },
+ "started_at": "2026-11-12T10:20:39Z",
+ "elapsed_secs": 1134.4,
+ "loadavg_before": "1.72 2.97 10.98",
+ "loadavg_after": "14.19 18.67 17.84",
+ "order": [
+  {
+   "crate": "task-api",
+   "side": "base"
+  },
+  {
+   "crate": "task-api",
+   "side": "head"
+  },
+  {
+   "crate": "celeris",
+   "side": "head"
+  },
+  {
+   "crate": "celeris",
+   "side": "base"
+  },
+  {
+   "crate": "celerisctl",
+   "side": "base"
+  },
+  {
+   "crate": "celerisctl",
+   "side": "head"
+  }
+ ],
+ "skipped": [],
+ "sides": {
+  "base": {
+   "git_head": "4bc05f1efd974d518b97c0afbcb50f0b341bbe10",
+   "crates": {
+    "task-api": {
+     "targets": {
+      "kinds": {
+       "lib": 1,
+       "test": 113
+      },
+      "test_targets": 113,
+      "test_target_names": [
+       "api_principals",
+       "approvals",
+       "auth_and_guards",
+       "authority_ledger",
+       "browser_doctor",
+       "browser_e2e",
+       "browser_h3_injection",
+       "browser_live",
+       "browser_live_cross",
+       "browser_restore_deliver",
+       "browser_restore_live_session",
+       "browser_site_policy_db",
+       "browser_waits",
+       "campaign_ident",
+       "campaign_variant_atomic",
+       "changes",
+       "chat_api",
+       "chat_attachments",
+       "chat_stream",
+       "cluster_connect_admin",
+       "cluster_settings_admin",
+       "concurrency",
+       "console",
+       "console_instruct",
+       "conversation",
+       "cos_auth",
+       "cos_chat_attach_handoff_kb",
+       "cos_chat_attach_pin",
+       "cos_chat_triage_scenarios",
+       "cos_integrate_task",
+       "cos_job_wait_extend",
+       "cos_live_fix_d1",
+       "cos_live_fix_d2",
+       "cos_operations",
+       "cos_operations_domains",
+       "cos_operations_review_report",
+       "cos_ops_admin_config",
+       "cos_ops_mutations",
+       "cos_ops_ops_surface",
+       "cos_ops_projects_cron",
+       "cos_ops_projects_cron_changes",
+       "cos_ops_projects_cron_docs",
+       "cos_ops_registry",
+       "cos_plan_conforms",
+       "cos_plan_conforms_guards",
+       "cos_review_rework",
+       "cos_routine_answers",
+       "cos_triage",
+       "cos_triage_override",
+       "cron_jobs",
+       "daemon_clusters_config",
+       "decisions",
+       "docs",
+       "execution",
+       "files",
+       "general_cos_consult",
+       "genres",
+       "inbox_notifications",
+       "integration_api",
+       "integration_principals",
+       "integration_repair",
+       "knowledge",
+       "legacy_routing_events",
+       "lifecycle",
+       "list_and_detail",
+       "llm_accounts_admin",
+       "llm_routes_admin",
+       "llm_sources",
+       "local_machine_settings",
+       "local_settings_admin",
+       "long_horizon_pilot",
+       "mcp_admin",
+       "memory",
+       "model_catalog",
+       "notify",
+       "operations",
+       "organization",
+       "project_auto_integrate",
+       "project_brief",
+       "project_controller",
+       "project_cos_guard",
+       "project_plan",
+       "project_roadmap",
+       "project_wake_human",
+       "project_wake_human_chat",
+       "relayed_instructions",
+       "reports",
+       "repos",
+       "repository_required",
+       "request_lock_counts",
+       "roles",
+       "routing",
+       "routing_eval",
+       "routing_source_state",
+       "routing_stage",
+       "saved_credentials",
+       "script_domains",
+       "script_exhaustive",
+       "script_generations",
+       "secrets_admin",
+       "single_human_window",
+       "skills",
+       "standby",
+       "stream",
+       "task_idempotency",
+       "task_list_with",
+       "task_management",
+       "task_tree",
+       "task_wait_api",
+       "terminals",
+       "tree_adopt",
+       "trusted_devices",
+       "unblocks"
+      ]
+     },
+     "build_settle_wait": {
+      "waited_secs": 0.0,
+      "loadavg": "1.74 2.95 10.93 2/1484 3048974",
+      "ready": true,
+      "max_load": 24.0
+     },
+     "build": {
+      "cmd": "cargo nextest run -p task-api --no-run（settle の後に crates/task-api/src/lib.rs の mtime を進める）",
+      "exit": 0,
+      "timed_out": false,
+      "settle_exit": 0,
+      "secs": 43.9,
+      "compiled_units": 1,
+      "compiled": [
+       "task-api"
+      ],
+      "test_binaries": 114,
+      "linked_test_binaries": 114,
+      "loadavg_before": "11.15 5.01 10.91",
+      "loadavg_after": "19.59 7.76 11.54",
+      "load_wait": {
+       "waited_secs": 0.0,
+       "loadavg": "11.15 5.01 10.91 4/1639 3053621",
+       "ready": true,
+       "max_load": 24.0
+      }
+     },
+     "edit_settle_wait": {
+      "waited_secs": 0.0,
+      "loadavg": "19.59 7.76 11.54 2/1660 3056835",
+      "ready": true,
+      "max_load": 24.0
+     },
+     "edit_verify": {
+      "edited_file": "crates/task-api/src/lib.rs",
+      "affected": [
+       "celeris",
+       "celeris-campaign",
+       "celerisctl",
+       "llm-proxy",
+       "task-api",
+       "task-dispatch",
+       "task-worker"
+      ],
+      "extra_checks": [
+       "web: typecheck+unit (理由: web の型の元になる crate の変更: task-api)"
+      ],
+      "cmd": "cargo nextest run \"${args[@]}\" --no-run",
+      "doc_test_cmd": "cargo test --doc \"${args[@]}\"",
+      "settle_exit": 0,
+      "settle_secs": 150.87,
+      "settle_compiled_units": 15,
+      "settle_compiled": [
+       "task-core",
+       "jev-classifier",
+       "deno_core",
+       "celeris-script",
+       "celeris-credentiald",
+       "task-ops",
+       "routing-eval",
+       "task-worker",
+       "task-api",
+       "celeris-mcp",
+       "task-dispatch",
+       "celeris-campaign",
+       "llm-proxy",
+       "celeris",
+       "celerisctl"
+      ],
+      "list_exit": 0,
+      "list_secs": 0.11,
+      "rebuild_exit": 0,
+      "rebuild_timed_out": false,
+      "rebuild_secs": 90.76,
+      "rebuild_compiled_units": 5,
+      "rebuild_compiled": [
+       "task-api",
+       "celeris",
+       "celeris-campaign",
+       "task-worker",
+       "celerisctl"
+      ],
+      "listed_binaries": 334,
+      "test_binaries": 334,
+      "linked_test_binaries": 329,
+      "linked_binaries_all": 329,
+      "edit_to_verify_secs": 90.87,
+      "doc_test_exit": 0,
+      "doc_test_secs": 8.38,
+      "doc_test_compiled_units": 0,
+      "doc_test_passed": 0,
+      "doc_test_failed": 0,
+      "doc_test_ignored": 1,
+      "edit_to_verify_with_doc_secs": 99.25,
+      "loadavg_before": "23.05 14.25 13.37",
+      "loadavg_after": "23.35 17.11 14.47",
+      "load_wait": {
+       "waited_secs": 15.001,
+       "loadavg": "23.05 14.25 13.37 1/1674 3065662",
+       "ready": true,
+       "max_load": 24.0
+      }
+     }
+    },
+    "celeris": {
+     "targets": {
+      "kinds": {
+       "bin": 1,
+       "example": 1,
+       "lib": 1,
+       "test": 56
+      },
+      "test_targets": 56,
+      "test_target_names": [
+       "actor_trace_flow1",
+       "actor_trace_flow2",
+       "actor_trace_flow3",
+       "actor_trace_flow4",
+       "actor_trace_flow5",
+       "bin_smoke",
+       "browser_startup_reap",
+       "campaign_acceptance_e2e",
+       "campaign_lock_e2e",
+       "campaign_wiring_e2e",
+       "cap_probe_real_daemon",
+       "cluster_login_script",
+       "cos_chat_stagnation_notify",
+       "cos_chat_triage_notify",
+       "cos_chat_triage_scenarios",
+       "cos_skill_sync",
+       "credential_wait_notify",
+       "daemon_ready_wait",
+       "daily_curation",
+       "deployment_audit",
+       "evidence_mode_e2e",
+       "fake_http",
+       "instance_handoff",
+       "integration_api",
+       "legacy_event_startup",
+       "long_run_soak",
+       "notify",
+       "ops_r1_attr",
+       "ops_r1_measure",
+       "ops_r1_pipeline",
+       "ops_r1_trace",
+       "project_controller_e2e",
+       "project_controller_replay",
+       "project_cos_shadow",
+       "releases_api",
+       "root_done_summary",
+       "routing_eval_run",
+       "script_compare_cos_digest",
+       "script_compare_execution_gate",
+       "script_compare_lane_rules",
+       "script_compare_report",
+       "script_compare_route_priority",
+       "script_exhaustive",
+       "script_generation_daemon",
+       "script_generation_e2e",
+       "script_runtime",
+       "stranded_default_branch",
+       "stranded_integration",
+       "tick_prod_copy_steps",
+       "tick_scale_baseline",
+       "trial_context_canary_e2e",
+       "ui_ux_skills_delivery",
+       "unpromoted_release",
+       "variant_propagation",
+       "worker_db_guard_refuse",
+       "workspace_roots"
+      ]
+     },
+     "build_settle_wait": {
+      "waited_secs": 0.0,
+      "loadavg": "16.07 20.62 17.97 2/1686 3104220",
+      "ready": true,
+      "max_load": 24.0
+     },
+     "build": {
+      "cmd": "cargo nextest run -p celeris --no-run（settle の後に crates/celeris/src/lib.rs の mtime を進める）",
+      "exit": 0,
+      "timed_out": false,
+      "settle_exit": 0,
+      "secs": 23.77,
+      "compiled_units": 1,
+      "compiled": [
+       "celeris"
+      ],
+      "test_binaries": 58,
+      "linked_test_binaries": 58,
+      "loadavg_before": "18.63 21.04 18.15",
+      "loadavg_after": "19.78 21.02 18.22",
+      "load_wait": {
+       "waited_secs": 0.0,
+       "loadavg": "18.63 21.04 18.15 1/1672 3105142",
+       "ready": true,
+       "max_load": 24.0
+      }
+     },
+     "edit_settle_wait": {
+      "waited_secs": 0.0,
+      "loadavg": "19.78 21.02 18.22 1/1670 3106891",
+      "ready": true,
+      "max_load": 24.0
+     },
+     "edit_verify": {
+      "edited_file": "crates/celeris/src/lib.rs",
+      "affected": [
+       "celeris",
+       "celerisctl"
+      ],
+      "extra_checks": [],
+      "cmd": "cargo nextest run \"${args[@]}\" --no-run",
+      "doc_test_cmd": "cargo test --doc \"${args[@]}\"",
+      "settle_exit": 0,
+      "settle_secs": 26.71,
+      "settle_compiled_units": 2,
+      "settle_compiled": [
+       "celeris",
+       "celerisctl"
+      ],
+      "list_exit": 0,
+      "list_secs": 0.09,
+      "rebuild_exit": 0,
+      "rebuild_timed_out": false,
+      "rebuild_secs": 27.61,
+      "rebuild_compiled_units": 2,
+      "rebuild_compiled": [
+       "celeris",
+       "celerisctl"
+      ],
+      "listed_binaries": 77,
+      "test_binaries": 77,
+      "linked_test_binaries": 77,
+      "linked_binaries_all": 77,
+      "edit_to_verify_secs": 27.7,
+      "doc_test_exit": 0,
+      "doc_test_secs": 1.51,
+      "doc_test_compiled_units": 0,
+      "doc_test_passed": 0,
+      "doc_test_failed": 0,
+      "doc_test_ignored": 0,
+      "edit_to_verify_with_doc_secs": 29.21,
+      "loadavg_before": "23.94 21.78 18.55",
+      "loadavg_after": "23.06 21.76 18.65",
+      "load_wait": {
+       "waited_secs": 0.0,
+       "loadavg": "23.94 21.78 18.55 1/1671 3108932",
+       "ready": true,
+       "max_load": 24.0
+      }
+     }
+    },
+    "celerisctl": {
+     "targets": {
+      "kinds": {
+       "bin": 1,
+       "test": 18
+      },
+      "test_targets": 18,
+      "test_target_names": [
+       "bin_smoke",
+       "browser_doctor",
+       "browser_ledger_release",
+       "campaign_connected",
+       "campaign_export",
+       "cli_resolution",
+       "cos_ops",
+       "eval_requests",
+       "followups",
+       "mcp_client_scopes",
+       "no_migrate",
+       "org_migrate_v2",
+       "pipe",
+       "routing_cli",
+       "skills_import",
+       "terminal_pty",
+       "worker_run",
+       "worker_run_signal"
+      ]
+     },
+     "build_settle_wait": {
+      "waited_secs": 0.0,
+      "loadavg": "23.06 21.76 18.65 1/1671 3111287",
+      "ready": true,
+      "max_load": 24.0
+     },
+     "build": {
+      "cmd": "cargo nextest run -p celerisctl --no-run（settle の後に crates/celerisctl/src/main.rs の mtime を進める）",
+      "exit": 0,
+      "timed_out": false,
+      "settle_exit": 0,
+      "secs": 5.11,
+      "compiled_units": 1,
+      "compiled": [
+       "celerisctl"
+      ],
+      "test_binaries": 19,
+      "linked_test_binaries": 1,
+      "loadavg_before": "14.81 19.85 18.14",
+      "loadavg_after": "14.19 19.64 18.08",
+      "load_wait": {
+       "waited_secs": 0.0,
+       "loadavg": "14.81 19.85 18.14 2/1685 3112459",
+       "ready": true,
+       "max_load": 24.0
+      }
+     },
+     "edit_settle_wait": {
+      "waited_secs": 0.0,
+      "loadavg": "14.19 19.64 18.08 1/1685 3112819",
+      "ready": true,
+      "max_load": 24.0
+     },
+     "edit_verify": {
+      "edited_file": "crates/celerisctl/src/main.rs",
+      "affected": [
+       "celerisctl"
+      ],
+      "extra_checks": [],
+      "cmd": "cargo nextest run \"${args[@]}\" --no-run",
+      "doc_test_cmd": "cargo test --doc \"${args[@]}\"",
+      "settle_exit": 0,
+      "settle_secs": 4.38,
+      "settle_compiled_units": 1,
+      "settle_compiled": [
+       "celerisctl"
+      ],
+      "list_exit": 0,
+      "list_secs": 0.08,
+      "rebuild_exit": 0,
+      "rebuild_timed_out": false,
+      "rebuild_secs": 4.32,
+      "rebuild_compiled_units": 1,
+      "rebuild_compiled": [
+       "celerisctl"
+      ],
+      "listed_binaries": 19,
+      "test_binaries": 19,
+      "linked_test_binaries": 1,
+      "linked_binaries_all": 1,
+      "edit_to_verify_secs": 4.41,
+      "doc_test_exit": 101,
+      "doc_test_secs": 0.27,
+      "doc_test_compiled_units": 0,
+      "doc_test_passed": 0,
+      "doc_test_failed": 0,
+      "doc_test_ignored": 0,
+      "edit_to_verify_with_doc_secs": 4.68,
+      "loadavg_before": "13.21 19.34 17.99",
+      "loadavg_after": "12.72 19.14 17.93",
+      "load_wait": {
+       "waited_secs": 0.0,
+       "loadavg": "13.21 19.34 17.99 2/1680 3113068",
+       "ready": true,
+       "max_load": 24.0
+      }
+     }
+    }
+   },
+   "invocation": {
+    "prep": [
+     "args=()",
+     "while IFS= read -r c; do args+=(-p \"$c\"); done <<<\"$crates\""
+    ],
+    "nextest": "cargo nextest run \"${args[@]}\"",
+    "doc_test": "cargo test --doc \"${args[@]}\""
+   }
+  },
+  "head": {
+   "git_head": "58151646bfbc5ffd6a576751e760e4759bf4333f",
+   "crates": {
+    "task-api": {
+     "targets": {
+      "kinds": {
+       "lib": 1,
+       "test": 64
+      },
+      "test_targets": 64,
+      "test_target_names": [
+       "auth_and_guards",
+       "authority_ledger",
+       "browser_doctor",
+       "browser_e2e",
+       "browser_eval_surface_suite",
+       "browser_h3_injection",
+       "browser_live",
+       "browser_live_cross",
+       "browser_site_policy_db",
+       "browser_waits",
+       "changes",
+       "chat_api",
+       "chat_stream",
+       "cluster_connect_admin",
+       "cos_chat_attach_pin",
+       "cos_delivery_suite",
+       "cos_delivery_suite_a",
+       "cos_delivery_suite_b",
+       "cos_delivery_suite_c",
+       "cos_integrate_task",
+       "cos_live_fix_d1",
+       "cos_live_fix_d2",
+       "cos_operations",
+       "cos_ops_ops_surface",
+       "cos_plan_conforms",
+       "cos_triage",
+       "decisions",
+       "docs",
+       "execution",
+       "inbox_notifications",
+       "integration_repair",
+       "knowledge",
+       "lifecycle",
+       "list_and_detail",
+       "llm_accounts_admin",
+       "llm_routes_admin",
+       "llm_sources",
+       "local_machine_settings",
+       "local_settings_admin",
+       "long_horizon_pilot",
+       "model_catalog",
+       "organization",
+       "project_controller",
+       "project_cos_guard",
+       "project_plan",
+       "project_roadmap",
+       "relayed_instructions",
+       "reports",
+       "repos",
+       "request_lock_counts",
+       "routing_budget_suite",
+       "routing_budget_suite_a",
+       "routing_eval",
+       "run_worker_suite",
+       "script_domains",
+       "script_generations",
+       "stream",
+       "task_idempotency",
+       "task_management",
+       "task_tree",
+       "tree_adopt",
+       "trusted_devices",
+       "unmapped_suite_a",
+       "unmapped_suite_b"
+      ]
+     },
+     "build_settle_wait": {
+      "waited_secs": 0.0,
+      "loadavg": "23.35 17.11 14.47 2/1688 3073866",
+      "ready": true,
+      "max_load": 24.0
+     },
+     "build": {
+      "cmd": "cargo nextest run -p task-api --no-run（settle の後に crates/task-api/src/lib.rs の mtime を進める）",
+      "exit": 0,
+      "timed_out": false,
+      "settle_exit": 0,
+      "secs": 35.48,
+      "compiled_units": 1,
+      "compiled": [
+       "task-api"
+      ],
+      "test_binaries": 65,
+      "linked_test_binaries": 65,
+      "loadavg_before": "21.56 16.84 14.40",
+      "loadavg_after": "26.81 18.31 14.96",
+      "load_wait": {
+       "waited_secs": 0.0,
+       "loadavg": "21.56 16.84 14.40 1/1682 3074399",
+       "ready": true,
+       "max_load": 24.0
+      }
+     },
+     "edit_settle_wait": {
+      "waited_secs": 10.001,
+      "loadavg": "22.84 17.74 14.81 2/1695 3076680",
+      "ready": true,
+      "max_load": 24.0
+     },
+     "edit_verify": {
+      "edited_file": "crates/task-api/src/lib.rs",
+      "affected": [
+       "celeris",
+       "celeris-campaign",
+       "celerisctl",
+       "llm-proxy",
+       "task-api",
+       "task-dispatch",
+       "task-worker"
+      ],
+      "extra_checks": [
+       "web: typecheck+unit (理由: web の型の元になる crate の変更: task-api)"
+      ],
+      "cmd": "cargo nextest run --workspace -E \"$filter\" --no-run",
+      "doc_test_cmd": "cargo test --doc --workspace",
+      "settle_exit": 0,
+      "settle_secs": 118.28,
+      "settle_compiled_units": 13,
+      "settle_compiled": [
+       "task-api",
+       "e2e",
+       "celeris-credentiald",
+       "celeris-mcp",
+       "jev-classifier",
+       "routing-eval",
+       "task-ops",
+       "celeris-script",
+       "task-core",
+       "celeris",
+       "celeris-campaign",
+       "task-worker",
+       "celerisctl"
+      ],
+      "list_exit": 0,
+      "list_secs": 0.15,
+      "rebuild_exit": 0,
+      "rebuild_timed_out": false,
+      "rebuild_secs": 83.52,
+      "rebuild_compiled_units": 5,
+      "rebuild_compiled": [
+       "task-api",
+       "celeris",
+       "celeris-campaign",
+       "task-worker",
+       "celerisctl"
+      ],
+      "listed_binaries": 312,
+      "test_binaries": 266,
+      "linked_test_binaries": 261,
+      "linked_binaries_all": 261,
+      "edit_to_verify_secs": 83.67,
+      "doc_test_exit": 0,
+      "doc_test_secs": 15.49,
+      "doc_test_compiled_units": 0,
+      "doc_test_passed": 3,
+      "doc_test_failed": 0,
+      "doc_test_ignored": 2,
+      "edit_to_verify_with_doc_secs": 99.16,
+      "loadavg_before": "23.77 21.60 16.65",
+      "loadavg_after": "26.02 23.83 17.98",
+      "load_wait": {
+       "waited_secs": 35.002,
+       "loadavg": "23.77 21.60 16.65 1/1684 3084735",
+       "ready": true,
+       "max_load": 24.0
+      }
+     }
+    },
+    "celeris": {
+     "targets": {
+      "kinds": {
+       "bin": 1,
+       "example": 1,
+       "lib": 1,
+       "test": 45
+      },
+      "test_targets": 45,
+      "test_target_names": [
+       "actor_trace_flow1",
+       "actor_trace_flow2",
+       "actor_trace_flow3",
+       "actor_trace_flow4",
+       "actor_trace_flow5",
+       "bin_smoke",
+       "browser_eval_surface_suite",
+       "campaign_acceptance_e2e",
+       "campaign_lock_e2e",
+       "campaign_wiring_e2e",
+       "cap_probe_real_daemon",
+       "cluster_login_script",
+       "cos_delivery_suite",
+       "cos_skill_sync",
+       "credential_wait_notify",
+       "daemon_ready_wait",
+       "daily_curation",
+       "evidence_mode_e2e",
+       "instance_handoff",
+       "integration_api",
+       "long_run_soak",
+       "notify",
+       "ops_r1_attr",
+       "ops_r1_measure",
+       "ops_r1_pipeline",
+       "ops_r1_trace",
+       "project_controller_e2e",
+       "project_controller_replay",
+       "project_cos_shadow",
+       "root_done_summary",
+       "routing_budget_suite",
+       "routing_eval_run",
+       "script_compare_cos_digest",
+       "script_compare_lane_rules",
+       "script_compare_route_priority",
+       "script_exhaustive",
+       "script_generation_daemon",
+       "script_generation_e2e",
+       "script_runtime",
+       "tick_prod_copy_steps",
+       "trial_context_canary_e2e",
+       "ui_ux_skills_delivery",
+       "unmapped_suite",
+       "unpromoted_release",
+       "worker_db_guard_refuse"
+      ]
+     },
+     "build_settle_wait": {
+      "waited_secs": 10.001,
+      "loadavg": "23.21 23.29 17.87 1/1681 3091788",
+      "ready": true,
+      "max_load": 24.0
+     },
+     "build": {
+      "cmd": "cargo nextest run -p celeris --no-run（settle の後に crates/celeris/src/lib.rs の mtime を進める）",
+      "exit": 0,
+      "timed_out": false,
+      "settle_exit": 0,
+      "secs": 23.29,
+      "compiled_units": 1,
+      "compiled": [
+       "celeris"
+      ],
+      "test_binaries": 47,
+      "linked_test_binaries": 47,
+      "loadavg_before": "12.23 19.49 16.96",
+      "loadavg_after": "15.92 19.70 17.09",
+      "load_wait": {
+       "waited_secs": 0.0,
+       "loadavg": "12.23 19.49 16.96 1/1673 3094090",
+       "ready": true,
+       "max_load": 24.0
+      }
+     },
+     "edit_settle_wait": {
+      "waited_secs": 0.0,
+      "loadavg": "15.92 19.70 17.09 2/1680 3095704",
+      "ready": true,
+      "max_load": 24.0
+     },
+     "edit_verify": {
+      "edited_file": "crates/celeris/src/lib.rs",
+      "affected": [
+       "celeris",
+       "celerisctl"
+      ],
+      "extra_checks": [],
+      "cmd": "cargo nextest run --workspace -E \"$filter\" --no-run",
+      "doc_test_cmd": "cargo test --doc --workspace",
+      "settle_exit": 0,
+      "settle_secs": 106.18,
+      "settle_compiled_units": 5,
+      "settle_compiled": [
+       "task-api",
+       "celeris",
+       "task-worker",
+       "celeris-campaign",
+       "celerisctl"
+      ],
+      "list_exit": 0,
+      "list_secs": 0.12,
+      "rebuild_exit": 0,
+      "rebuild_timed_out": false,
+      "rebuild_secs": 24.49,
+      "rebuild_compiled_units": 2,
+      "rebuild_compiled": [
+       "celeris",
+       "celerisctl"
+      ],
+      "listed_binaries": 312,
+      "test_binaries": 62,
+      "linked_test_binaries": 62,
+      "linked_binaries_all": 62,
+      "edit_to_verify_secs": 24.6,
+      "doc_test_exit": 0,
+      "doc_test_secs": 15.48,
+      "doc_test_compiled_units": 0,
+      "doc_test_passed": 3,
+      "doc_test_failed": 0,
+      "doc_test_ignored": 2,
+      "edit_to_verify_with_doc_secs": 40.09,
+      "loadavg_before": "22.75 22.21 18.32",
+      "loadavg_after": "16.07 20.62 17.97",
+      "load_wait": {
+       "waited_secs": 20.001,
+       "loadavg": "22.75 22.21 18.32 1/1678 3102018",
+       "ready": true,
+       "max_load": 24.0
+      }
+     }
+    },
+    "celerisctl": {
+     "targets": {
+      "kinds": {
+       "bin": 1,
+       "test": 14
+      },
+      "test_targets": 14,
+      "test_target_names": [
+       "bin_smoke",
+       "browser_eval_surface_suite",
+       "campaign_export",
+       "cli_resolution",
+       "cos_ops",
+       "eval_requests",
+       "followups",
+       "no_migrate",
+       "org_migrate_v2",
+       "routing_cli",
+       "terminal_pty",
+       "unmapped_suite",
+       "worker_run",
+       "worker_run_signal"
+      ]
+     },
+     "build_settle_wait": {
+      "waited_secs": 0.0,
+      "loadavg": "12.72 19.14 17.93 1/1674 3113473",
+      "ready": true,
+      "max_load": 24.0
+     },
+     "build": {
+      "cmd": "cargo nextest run -p celerisctl --no-run（settle の後に crates/celerisctl/src/main.rs の mtime を進める）",
+      "exit": 0,
+      "timed_out": false,
+      "settle_exit": 0,
+      "secs": 4.47,
+      "compiled_units": 1,
+      "compiled": [
+       "celerisctl"
+      ],
+      "test_binaries": 15,
+      "linked_test_binaries": 1,
+      "loadavg_before": "12.72 19.14 17.93",
+      "loadavg_after": "11.86 18.85 17.85",
+      "load_wait": {
+       "waited_secs": 0.0,
+       "loadavg": "12.72 19.14 17.93 2/1674 3113656",
+       "ready": true,
+       "max_load": 24.0
+      }
+     },
+     "edit_settle_wait": {
+      "waited_secs": 0.0,
+      "loadavg": "11.86 18.85 17.85 2/1672 3114092",
+      "ready": true,
+      "max_load": 24.0
+     },
+     "edit_verify": {
+      "edited_file": "crates/celerisctl/src/main.rs",
+      "affected": [
+       "celerisctl"
+      ],
+      "extra_checks": [],
+      "cmd": "cargo nextest run --workspace -E \"$filter\" --no-run",
+      "doc_test_cmd": "cargo test --doc --workspace",
+      "settle_exit": 0,
+      "settle_secs": 23.69,
+      "settle_compiled_units": 2,
+      "settle_compiled": [
+       "celeris",
+       "celerisctl"
+      ],
+      "list_exit": 0,
+      "list_secs": 0.12,
+      "rebuild_exit": 0,
+      "rebuild_timed_out": false,
+      "rebuild_secs": 5.24,
+      "rebuild_compiled_units": 1,
+      "rebuild_compiled": [
+       "celerisctl"
+      ],
+      "listed_binaries": 312,
+      "test_binaries": 15,
+      "linked_test_binaries": 1,
+      "linked_binaries_all": 1,
+      "edit_to_verify_secs": 5.36,
+      "doc_test_exit": 0,
+      "doc_test_secs": 14.16,
+      "doc_test_compiled_units": 0,
+      "doc_test_passed": 3,
+      "doc_test_failed": 0,
+      "doc_test_ignored": 2,
+      "edit_to_verify_with_doc_secs": 19.52,
+      "loadavg_before": "18.11 19.64 18.12",
+      "loadavg_after": "14.19 18.67 17.84",
+      "load_wait": {
+       "waited_secs": 0.0,
+       "loadavg": "18.11 19.64 18.12 2/1671 3115804",
+       "ready": true,
+       "max_load": 24.0
+      }
+     }
+    }
+   },
+   "invocation": {
+    "prep": [
+     "filter=\"\"",
+     "while IFS= read -r c; do filter=\"${filter:+$filter | }package(=$c)\"; done <<<\"$crates\""
+    ],
+    "nextest": "cargo nextest run --workspace -E \"$filter\"",
+    "doc_test": "cargo test --doc --workspace"
+   }
+  }
+ }
+}

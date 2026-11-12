@@ -46,11 +46,13 @@ commit（件名）:
 - `phase 7: 1 本は通す数えから release-build の lease を外す`
 - `phase 8: count only the tasks this daemon runs as writers for the never-stall rule, judge with the worker's scratch owner`（attempt 8）
 - `phase 8: move the disk_admission tests out of line and pass the running run keys to the gate (health size limits)`
+- `phase 9: point the celeris script-compare test config at its own releases_dir (host releases leaked a release_unpromoted inbox item)`（attempt 9。review の不合格は celeris の `script_compare_cos_digest` 6 件だけ。原因は試験の共通 config〈`crates/celeris/tests/support/script_compare.rs` の `config_text`〉が `[selfdeploy] releases_dir` を書かず、既定の `~/.local/celeris/releases`〈host〉を dispatcher の `release_unpromoted` の判定が読んでいたこと。host に verify 済みで昇格されていない release〈82b753db3d63、verify.json 05:35Z、promoted.json なし〉があると受信箱に `release_unpromoted-selfdeploy` が増え、byte 一致で比べる world が変わる。他の celeris の試験〈credential_wait_notify・campaign_*_e2e・unpromoted_release〉と同じく `releases_dir = "releases"`〈一時 dir〉に向けた。守る不変条件: 試験は host の release の状態に依らない。既存の試験で検出できなかった理由: 失敗が host の状態に依るため〉
 
 ## 証拠
 
 （提出時の HEAD で実行。基準は `git merge-base HEAD main`）
 
+- attempt 9（code の変更の後、進捗の記録の前）: `bash scripts/dev/test-affected.sh` exit 100（1268 秒、開始時 load average 約 24、途中 60〜80）。nextest 6771 件のうち 6769 passed。前回落ちた `script_compare_cos_digest` 6 件は passed。落ちたのは範囲外の負荷依存 2 件: task-worker `ssh::tests::remote_command_times_out_and_kills_the_ssh_process_group`（孫の `sleep` が 10 秒以内に消えない）と celeris-campaign `k_cases_grade::k3_k4_recompute_rejects_a_wrong_report_and_accepts_the_raw_derived_one`（600 秒の上限で timeout。host の原票 tgz を展開して再計算する試験）。この 2 件は同じ -p の組で単独に走らせると 2 passed（k3_k4 は 92 秒、load 約 47）。web 113 passed。`cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check` exit 0。
 - attempt 8（提出時の HEAD）: `bash scripts/dev/test-affected.sh` exit 100（1300 秒）。nextest 6764 件のうち 6758 passed、落ちたのは celeris の `script_compare_cos_digest` の 6 件だけ（web 711 passed、repo-health verdict=pass）。この 6 件は同じ binary を単独で走らせても落ちる（9 件中 6 failed）。差は、受信箱に余分な `release_unpromoted-selfdeploy` の項目があること（host の release の状態から来ると見ている。この変更は selfdeploy・受信箱の経路を変えていない。main で同じ失敗が出るかは時間切れで未確認）。`cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check`・`sh scripts/dev/progress-index.sh --check` は exit 0（code の最後の変更の前に実行）。`bash scripts/dev/check-health.sh` verdict=pass。
 - attempt 8: `cargo nextest run -p task-dispatch -p task-worker -p task-api -p task-ops -p celerisctl -p celeris -E 'test(disk_admission) | test(disk_forecast) | test(scratch) | test(committed_schema_matches_generated)'` 90 passed（新しい試験 3 件を含む）。`UPDATE_SCHEMA=1 cargo test -p task-api --lib committed_schema_matches_generated` 1 passed、`node web/scripts/gen-types.mjs` で生成型を作り直した。
 
@@ -77,7 +79,7 @@ commit（件名）:
 
 ## 未解決事項
 
-- attempt 8: celeris の `script_compare_cos_digest` 6 件が受信箱の余分な `release_unpromoted-selfdeploy` で落ちる（単独でも落ちる。原因が host の release の状態か、main でも落ちるかは未確認）。
+- 負荷が高いとき（load average 60 以上）に落ちる範囲外の試験: task-worker `ssh::tests::remote_command_times_out_and_kills_the_ssh_process_group`、celeris-campaign `k_cases_grade::k3_k4_recompute_rejects_a_wrong_report_and_accepts_the_raw_derived_one`（600 秒超過）。単独では通る。この変更は ssh・campaign の判定を変えていない。
 
 - 待たせている task の理由は `TaskWait` には出していない（task-core の変更を避けた）。画面の task の待ちの理由には出ず、daemon の `GET /api/v1/metrics/scratch` の `admission.held` だけに出る（`celerisctl scratch status` は見込みだけを出し、`held` は `null`）。
 - 増分の予約（`grows`）は DB の状態から決まるので、`reviewing` で子を待つ親・WU を待つ `running` の親の target も増分を予約する（書き手ではないので詰まりはしないが、予約が多めになり Rust の run が待つ時間が延びうる）。

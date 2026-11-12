@@ -243,7 +243,7 @@ fn project_roadmap_migration_0113_starts_from_a_0112_db_and_keeps_rows() {
              ALTER TABLE chat_runs DROP COLUMN attempts_usage_missing; \
              DROP TABLE health_inventory_runs; DROP INDEX idx_events_dependents_reopened; \
              ALTER TABLE chat_runs DROP COLUMN knowledge_use_json; \
-             DELETE FROM schema_migrations WHERE version IN (113, 114, 115, 117, 118, 119, 120, 121, 122, 123, 125);",
+             DELETE FROM schema_migrations WHERE version IN (113, 114, 115, 117, 118, 119, 120, 121, 122, 123, 124, 125);",
         )
         .unwrap();
         let max: i64 = conn

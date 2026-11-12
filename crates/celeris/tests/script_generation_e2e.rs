@@ -159,7 +159,7 @@ impl World {
         task_ops::cos_skill_gate::write_fixture(
             &knowledge.join("skills"),
             "cos-inbox-triage",
-            "11",
+            "12",
         )
         .expect("CoS skills");
         let cos = if cos {

@@ -135,7 +135,7 @@ async fn env() -> Env {
     let secrets = root.join("secrets");
     std::fs::create_dir_all(&secrets).expect("secrets dir");
     let knowledge = root.join("knowledge");
-    task_ops::cos_skill_gate::write_fixture(&knowledge.join("skills"), "cos-inbox-triage", "11")
+    task_ops::cos_skill_gate::write_fixture(&knowledge.join("skills"), "cos-inbox-triage", "12")
         .expect("CoS skills");
     let config_path = root.join("config.toml");
     std::fs::write(

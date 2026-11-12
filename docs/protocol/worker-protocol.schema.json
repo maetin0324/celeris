@@ -1325,6 +1325,13 @@
             "string",
             "null"
           ]
+        },
+        "triage_match": {
+          "description": "ADR 2026-11-12-cos-triage-scope D4: the daemon's deterministic match of the item (what a\nperson keeps, the likely answer and the grant backing it), one line; absent when nothing matched.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

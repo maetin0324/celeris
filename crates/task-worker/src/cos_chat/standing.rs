@@ -16,8 +16,23 @@ pub const USER_MAX: usize = 3000;
 pub const USER_PAGE_MAX: usize = 600;
 pub const MEMORY_MAX: usize = 2000;
 pub const KB_MAX: usize = 800;
+/// ADR 2026-11-12-cos-triage-scope D5: the inbox triage policy summary (fixed text).
+pub const POLICY_MAX: usize = 800;
 /// The whole standing context except the counting line of D3.
-pub const TOTAL_MAX: usize = ROLE_MAX + GRANTS_MAX + USER_MAX + MEMORY_MAX + KB_MAX;
+pub const TOTAL_MAX: usize = ROLE_MAX + POLICY_MAX + GRANTS_MAX + USER_MAX + MEMORY_MAX + KB_MAX;
+
+/// D5: what a person keeps and how CoS answers the rest, readable without opening the skill.
+pub const TRIAGE_POLICY: &str = "### 受信箱の一次対応の方針 (policy 12 の要点。詳細は skill cos-inbox-triage)\n\
+人に残す件（escalation.to=human。Discord に送られる）: credential の入力（login・TOTP・OAuth）／承認（grant・予算・\
+node-h の枠）を超える予算と資源／task・案件の目的や受け入れ条件の変更／credential とセキュリティの境界（秘密・権限・\
+sandbox の緩和・恒久の認可）／本番 config の変更／有料の追加試行／研究上の判断（評価条件・凍結した評価）／health の指摘\
+や検査を弱める判断／human_required・human check の件。\n\
+Celeris の外の操作だけが要る件（policy だけの branch を main に入れる・昇格・rollback・host の操作）は to=operator\
+（Discord に送らず受信箱に残る）。\n\
+それ以外は CoS が答える: basis.category=task_scope、refs に根拠（task・adr・doc・progress・decision・standing_rule・\
+approval・message・authority_grant）を 1 件以上、reason に理由を書く。根拠を示せないときだけ人に回す。件の「照合（daemon）」\
+の行の候補と grant を先に確かめる。計画の承認・reopen・raise-once・認可は skill の決まった category で答える。計画の承認に\
+未回答の決定があれば、先に決定に答えてから計画を判定し直す。\n";
 /// The person's words quoted per grant.
 const EXCERPT_MAX: usize = 200;
 const NOTE_MAX: usize = 200;
@@ -244,7 +259,8 @@ fn kb_section(standing: &CosStandingContext) -> Rendered {
 /// D1/D3: the standing context section of the run specific part.
 pub fn standing_section(chat: &CosChatContext) -> String {
     let standing = &chat.standing;
-    let role = role_section(standing, !chat.inbox_items.is_empty());
+    let inbox_duty = !chat.inbox_items.is_empty();
+    let role = role_section(standing, inbox_duty);
     let grants = grants_section(standing);
     let user = user_section(standing);
     let memory = memory_section(standing.memory.as_ref());
@@ -263,7 +279,11 @@ pub fn standing_section(chat: &CosChatContext) -> String {
         kb.items,
         chars(&kb.text),
     ));
-    for section in [role, grants, user, memory, kb] {
+    out.push_str(&role.text);
+    if inbox_duty {
+        out.push_str(TRIAGE_POLICY);
+    }
+    for section in [grants, user, memory, kb] {
         out.push_str(&section.text);
     }
     out.push('\n');

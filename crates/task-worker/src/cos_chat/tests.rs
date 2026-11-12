@@ -494,6 +494,7 @@ fn cos_chat_prompt_inbox_items_section_lists_open_items_and_relay_rules() {
         "no section outside the inbox thread"
     );
     c.inbox_items = vec![CosChatInboxItem {
+        triage_match: None,
         item_id: "i1".into(),
         source_kind: "question".into(),
         source_key: "q1".into(),
@@ -596,6 +597,7 @@ fn cos_chat_prompt_projects_section_lists_summaries_and_points_to_the_api() {
 
 fn inbox_item(created_at: &str) -> crate::protocol::CosChatInboxItem {
     crate::protocol::CosChatInboxItem {
+        triage_match: None,
         item_id: "i1".into(),
         source_kind: "question".into(),
         source_key: "q1".into(),

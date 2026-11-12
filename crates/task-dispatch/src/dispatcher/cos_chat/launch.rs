@@ -130,6 +130,7 @@ pub(crate) fn inbox_context_item(item: CosTriageItemReport) -> CosChatInboxItem 
     let summary = item.title();
     CosChatInboxItem {
         thread_id: Some(item.thread_id.clone()),
+        triage_match: None,
         item_id: item.item_id,
         source_kind: item.source_kind,
         source_key: item.source_key,
@@ -494,13 +495,21 @@ impl CosChatLaunch {
         };
         let in_inbox_thread = scope.is_some();
         let inbox_items = match scope {
-            Some(scope) => self
-                .store
-                .cos_triage_open_items(scope, COS_INBOX_CONTEXT_ITEMS)
-                .map_err(|e| format!("CoS inbox context unavailable: {e}"))?
-                .into_iter()
-                .map(inbox_context_item)
-                .collect(),
+            Some(scope) => {
+                let rows = self
+                    .store
+                    .cos_triage_open_items(scope, COS_INBOX_CONTEXT_ITEMS)
+                    .map_err(|e| format!("CoS inbox context unavailable: {e}"))?;
+                // ADR 2026-11-12-cos-triage-scope D4: the deterministic match of each item.
+                let hints = super::triage_hint::triage_hints(&self.store, &rows, now)?;
+                rows.into_iter()
+                    .zip(hints)
+                    .map(|(row, hint)| CosChatInboxItem {
+                        triage_match: hint,
+                        ..inbox_context_item(row)
+                    })
+                    .collect()
+            }
             None => Vec::new(),
         };
         let skill_names = cos_chat_skills(in_inbox_thread, &inbox_items);

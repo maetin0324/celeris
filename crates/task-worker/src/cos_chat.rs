@@ -468,6 +468,9 @@ fn inbox_section(chat: &CosChatContext) -> String {
             item.source_revision,
             item.created_at,
         ));
+        if let Some(hint) = item.triage_match.as_deref() {
+            out.push_str(&format!("  照合（daemon）: {hint}\n"));
+        }
         if let Some(reason) = item.reason.as_deref().filter(|r| !r.trim().is_empty()) {
             out.push_str(&format!(
                 "  CoS の理由: {reason}

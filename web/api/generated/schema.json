@@ -658,6 +658,21 @@
       ],
       "type": "object"
     },
+    "Addressee": {
+      "description": "ADR 2026-11-12-cos-triage-scope D2: who an escalated item is for.",
+      "oneOf": [
+        {
+          "const": "human",
+          "description": "The person: the outbox notification (Discord) and the card in the general CoS window.",
+          "type": "string"
+        },
+        {
+          "const": "operator",
+          "description": "The external operator (an operation outside Celeris: a policy-only branch to main, a\npromote or rollback, a host operation). The route only; nothing is sent to Discord.",
+          "type": "string"
+        }
+      ]
+    },
     "AdoptRequest": {
       "additionalProperties": false,
       "description": "`POST /tasks/{id}/tree/adopt` の本文。",
@@ -1930,7 +1945,7 @@
       "type": "string"
     },
     "BasisCategory": {
-      "description": "D1: the four routine judgments CoS may answer without a human instruction.",
+      "description": "ADR 2026-11-12-cos-triage-scope D3: what kind of judgment a CoS answer without a human\ninstruction is. Anything outside the human-reserved list (D1) may be answered as `task_scope`;\nthe other categories are answer shapes with their own deterministic checks.",
       "oneOf": [
         {
           "const": "within_approved_frame",
@@ -1943,13 +1958,8 @@
           "type": "string"
         },
         {
-          "const": "documented_default",
-          "description": "(c) The worker's recommendation equals a documented default or an existing ADR.",
-          "type": "string"
-        },
-        {
-          "const": "work_guidance",
-          "description": "(d) Work guidance for a worker question that changes neither objective nor acceptance.",
+          "const": "task_scope",
+          "description": "CoS's judgment inside the task's objective and acceptance, grounded on the task, an ADR, a\ngrant or a person's earlier instruction (ADR 2026-11-12-cos-triage-scope D3).",
           "type": "string"
         },
         {
@@ -2088,6 +2098,11 @@
         {
           "const": "authority_grant",
           "description": "ADR 2026-11-04-project-controller A7: a live grant of the authority ledger. It is evidence\nonly: it does not lift `human_required` and does not stand in for the category's checks.",
+          "type": "string"
+        },
+        {
+          "const": "task",
+          "description": "ADR 2026-11-12-cos-triage-scope D3: the task whose objective and acceptance CoS read.",
           "type": "string"
         }
       ]
@@ -7688,6 +7703,13 @@
     "CosInboxItem": {
       "description": "One `cos_inbox_items` row.",
       "properties": {
+        "addressee": {
+          "description": "ADR 2026-11-12-cos-triage-scope D2: `human` (escalated or fallback to the person, Discord)\nor `operator` (escalated to the external operator, not sent); absent while not routed.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "created_at": {
           "type": "string"
         },
@@ -10847,11 +10869,16 @@
         "summary": {
           "type": "string"
         },
+        "to": {
+          "$ref": "#/$defs/Addressee",
+          "description": "ADR 2026-11-12-cos-triage-scope D2: `human` or `operator`."
+        },
         "web_path": {
           "type": "string"
         }
       },
       "required": [
+        "to",
         "summary",
         "options",
         "recommendation_reason",

@@ -179,6 +179,10 @@ pub struct CosChatInboxItem {
     /// (`chat.relay_forward`, ADR 2026-10-28-single-human-window-general-cos D3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread_id: Option<String>,
+    /// ADR 2026-11-12-cos-triage-scope D4: the daemon's deterministic match of the item (what a
+    /// person keeps, the likely answer and the grant backing it), one line; absent when nothing matched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub triage_match: Option<String>,
 }
 
 /// The decision packet of a routed item.

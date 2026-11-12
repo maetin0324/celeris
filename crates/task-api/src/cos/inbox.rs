@@ -258,6 +258,8 @@ pub(crate) fn answers_wait(action: &str) -> bool {
 pub(crate) struct OperationWait {
     pub human_required: Option<String>,
     pub target: BasisTarget,
+    /// ADR 2026-11-12-cos-triage-scope D1/D4: what a person keeps of the open wait.
+    pub reserved: Option<task_ops::triage_match::Reserved>,
 }
 
 /// `human_required` and the basis target of a `/cos/operations` request that answers a wait.
@@ -334,21 +336,27 @@ pub(crate) async fn wait_for_operation(
             .then(|| matched.id.clone())
             .flatten(),
     };
-    let human_required = state
+    let open = found.cloned();
+    let (human_required, reserved) = state
         .blocking(move |store| {
+            let reserved = match open.as_ref() {
+                Some(wait) => reserved(store, wait.kind.as_str(), Some(wait))?,
+                None => None,
+            };
             if let Some((source_kind, id)) = override_source
                 && store
                     .cos_override_wait_requires_human(source_kind, &id)
                     .map_err(cos_problem)?
             {
-                return Ok(Some("human override wait".into()));
+                return Ok((Some("human override wait".into()), reserved));
             }
-            human_required_reason(store, kind, task_id)
+            Ok((human_required_reason(store, kind, task_id)?, reserved))
         })
         .await?;
     Ok(Some(OperationWait {
         human_required,
         target,
+        reserved,
     }))
 }
 
@@ -580,7 +588,7 @@ async fn resolve(
                     }
                     crate::inbox_notifications::validate_answer(found, input)
                         .map_err(|e| reject(unprocessable("validation", e.detail())))?;
-                    if let Some(reserved) = reserved(store, &item, Some(found))? {
+                    if let Some(reserved) = reserved(store, &item.source_kind, Some(found))? {
                         return Err(reject(basis::reserved_for_human(reserved)));
                     }
                     let Some(routine) = req.basis.as_ref() else {
@@ -645,7 +653,7 @@ async fn resolve(
                     validate_packet(packet, &item, source).map_err(&reject)?;
                     if packet.to == Addressee::Operator {
                         // D2: a matter a person keeps is not handed to the operator.
-                        if let Some(reserved) = reserved(store, &item, source)? {
+                        if let Some(reserved) = reserved(store, &item.source_kind, source)? {
                             return Err(reject(basis::reserved_for_human(reserved)));
                         }
                         let routed = store
@@ -750,14 +758,14 @@ fn terminal_conflict(
 /// deterministic match the daemon shows CoS before it judges.
 pub(crate) fn reserved(
     store: &SqliteStore,
-    item: &CosInboxItem,
+    source_kind: &str,
     source: Option<&InboxItem>,
 ) -> Result<Option<task_ops::triage_match::Reserved>, ApiProblem> {
     let body = source
         .and_then(|s| s.detail_full.as_deref().or(s.detail.as_deref()))
         .unwrap_or("");
     let input = task_ops::triage_match::MatchInput {
-        source_kind: &item.source_kind,
+        source_kind,
         title: source.map_or("", |s| s.title.as_str()),
         body,
         project_id: source.and_then(|s| s.project_id.as_deref()),

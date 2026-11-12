@@ -54,6 +54,7 @@ fn chat(role: CosThreadRole, inbox: bool) -> CosChatContext {
         api_base_url: "http://127.0.0.1:7720/api/v1".into(),
         inbox_items: if inbox {
             vec![CosChatInboxItem {
+                triage_match: None,
                 item_id: "i1".into(),
                 source_kind: "question".into(),
                 source_key: "q1".into(),
@@ -232,4 +233,29 @@ fn cos_standing_memory_note_route_passes_the_kb_placement_guard() {
         assert_eq!(placed.path, COS_MEMORY_PAGE);
         assert_eq!(placed.scope.as_deref(), Some("environment"));
     }
+}
+
+/// ADR 2026-11-12-cos-triage-scope D5: a run with inbox items reads what a person keeps and how CoS
+/// answers the rest in the standing context, without opening the skill. The other tests check the
+/// sections' limits but not that the policy summary is there (and only for inbox runs).
+#[test]
+fn cos_standing_inbox_run_carries_the_triage_policy_summary() {
+    assert!(
+        chars(TRIAGE_POLICY) <= POLICY_MAX,
+        "{}",
+        chars(TRIAGE_POLICY)
+    );
+    for needle in [
+        "人に残す件",
+        "to=operator",
+        "task_scope",
+        "credential の入力",
+        "本番 config",
+    ] {
+        assert!(TRIAGE_POLICY.contains(needle), "{needle}");
+    }
+    let with_inbox = prompt_of(&chat(CosThreadRole::Project, true));
+    assert!(standing_of(&with_inbox.variable).contains(TRIAGE_POLICY));
+    let without = prompt_of(&chat(CosThreadRole::Project, false));
+    assert!(!standing_of(&without.variable).contains("受信箱の一次対応の方針"));
 }

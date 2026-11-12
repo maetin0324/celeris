@@ -1,12 +1,12 @@
 ---
 title: "健全性v2 R4 own-routing: routing の状態を RoutingRuntime へ移し route_state の判断を純粋関数に分ける"
 tasks: [01M6TYVJT4S29ZMP6P0D4831JG]
-status: running
+status: done
 updated: 2026-11-12
 ---
 # 健全性v2 R4 own-routing: routing の状態を RoutingRuntime へ移し route_state の判断を純粋関数に分ける
 
-完了日: 未完了（2026-11-12 時点。提出時の HEAD の検査の後に書く）
+完了日: 2026-11-12
 
 ## 概要
 
@@ -43,12 +43,19 @@ updated: 2026-11-12
   構築済みの `RouteState` を渡すので、組み立ての条件は検出できなかった。
 - 既存の試験は assertion を変えていない。`d.source_cooldowns`・`d.account_limits` の直参照を `#[cfg(test)]` の method に置き換えた。
 
-## 証拠（提出時の HEAD で実行）
+## 証拠（提出時の HEAD で実行。fix-cmp-home の上に作り直した後）
 
-- `cargo nextest run -p task-dispatch -E 'test(/structure_guard|route_state|routing_runtime|class_route|route_select|lane_assist|cos_slot_wait|cos_launch_cross|cos_capacity|account|route_launch|jev|snapshot|source_account/)'`: 186 passed（初回の提出時）。
-- `bash scripts/dev/test-affected.sh`: exit 0（celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch、3747 passed、564 秒、load 15〜27）。
-- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。`sh scripts/dev/progress-index.sh --check`: ok。
-- `python3 scripts/dev/repo-health/repo_health.py --repo . --base "$CELERIS_WU_BASE" --head HEAD --policy-version 1`: exit 0（verdict=pass、worsened=0）。
+- 基準は `$CELERIS_WU_BASE`（WU の base）と `git merge-base HEAD main`。commit は件名で挙げる: 『経路選択の状態を RoutingRuntime へ移し
+  route_state の判断を純粋関数に分ける』『own-routing の進捗を書く』『route_state が holds を集め、Dispatcher の method を base より増やさない』
+  『own-routing の check の不合格の原因と再検査の結果を書く』『own-routing の check が範囲外の試験（host の release を読む）で落ちる原因を書く』
+  （以上は退避した branch から cherry-pick）、『own-routing を fix-cmp-home の上に作り直したことを進捗に書く』、『own-routing の検査の結果を書く』。
+- `cargo fmt --all -- --check`: exit 0。`cargo clippy --workspace -- -D warnings`: exit 0。
+- `bash scripts/dev/test-affected.sh`（celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch）:
+  - 1 回目: exit 100。3747 件中 3746 件 pass、`celeris-campaign::dagbench_process recovery_notice_continuation` だけ 600 秒で TIMEOUT
+    （917 秒、開始 load 3.7）。前回の不合格の `script_compare_cos_digest` 6 件はすべて pass（fix-cmp-home の直しで直った）。
+  - 2 回目（同じ HEAD、`DAGBENCH_PROCESS_RAW_DIR` で子の stderr を残す設定）: exit 0。3747 件すべて pass（359 秒、load 6〜14）。
+- `recovery_notice_continuation` の単独実行は 2 回とも pass（各 20 秒）。`cargo nextest run -p celeris-campaign` は 975 件すべて pass（148 秒）。
+- 範囲 check・`sh scripts/dev/progress-index.sh --check`・repo-health の結果は下の「検査の結果」に書く。
 
 ## 初回の提出の check の不合格と直し
 
@@ -73,6 +80,15 @@ updated: 2026-11-12
   own-routing の依存先を fix-cmp-home に変えた。celeris が旧い WU branch を `own-routing-superseded-*` に退避し、fix-cmp-home の HEAD から
   作り直した。この run は退避した branch の『own-maint の test-affected の結果を書く』より後の 5 commit を古い順に cherry-pick した
   （衝突なし、実装は作り直していない）。作業ツリーに fix-cmp-home の直しがあることは `config_text` の `[selfdeploy]` で確かめた。
+
+## 未解決: recovery_notice_continuation の時間切れ
+
+- この branch の test-affected で 3 回時間切れになった（初回の提出・今回の 1 回目、ほかに再実行で pass が 2 回）。単独・crate 単位では再現しない。
+  時間切れの run では一時 dir が消えるので、どの arm（baseline か celeris）のどの段で子が行を出さなくなったかは未確認。
+- routing の変更との関係は未確認。この試験の celeris arm の config は `accounts: None` なので、`RoutingRuntime::route_state` は account の走査も
+  帳簿の lock もしない。baseline arm は `Dispatcher` を使わない。
+- 提案: 試験の `wait_line` の待ち（`INSURANCE` 600 秒）が nextest の時間切れ（600 秒）と同じなので、panic で段の名前が出ない。待ちを
+  nextest の時間切れより短くし、時間切れのときは一時 dir を残す直しを別 task にする（この unit の範囲の外）。
 
 ## 未確認・提案
 

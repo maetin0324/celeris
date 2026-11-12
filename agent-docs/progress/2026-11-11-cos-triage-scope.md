@@ -87,6 +87,7 @@ updated: 2026-11-12
 - `bash scripts/dev/test-affected.sh`（1 つ目の commit で実行、開始 load 26・途中 49、976 秒）→ exit 0。対象 14 crate、nextest 8359 件すべて合格（23 skipped）、web 713 件合格、test-ts-verify 20 件合格、script bundle SKIP 0 件。範囲外の試験の失敗は無かった。
 - fmt の commit の後の HEAD で: `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0（1 回目は新しい試験の改行で exit 1、`cargo fmt --all` で直して commit）、`sh scripts/dev/progress-index.sh --check` → exit 0、`sh scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-adr-numbers.sh` → exit 0。
 - `bash scripts/dev/check-health.sh` → verdict pass、exit 0（new 0、worsened 2 はどちらも optional の `dup.contract` の警告で、前の WU で入った `task_ops::triage_match` の `Candidate`・`Reserved` の名前の重なり）。
+- 進捗の証拠の commit の後の HEAD で `bash scripts/dev/test-affected.sh` を再実行（開始 load 5、640 秒）→ exit 0。nextest 8359 件すべて合格（23 skipped）、test-ts-verify 20 件合格、script bundle SKIP 0 件。
 - 範囲の確認: 変えた file は `crates/task-core/src/cos_fallback.rs`・`cos_fallback_tests.rs`、task-api の試験 1 file、ADR 3 本、この進捗、skill、`docs/api/v1/api.md` だけ（`store/`・`chat/` は変えていない）。
 
 ## 証拠（提出時の HEAD で実行。attempt 4）

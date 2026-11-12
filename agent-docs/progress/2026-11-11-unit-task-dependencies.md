@@ -27,6 +27,7 @@ updated: 2026-11-12
 - `phase 1: 進捗に attempt 3 の状況を足す`
 - `phase 1: 進捗に attempt 4 の状況を足す`
 - `phase 1: instance_handoff の試験が引き継ぎの要求を出来事として待つ（review の不合格は負荷での競合）`
+- `phase 1: script_compare の試験の config が host の release 置き場を読まないようにする（release の gate の不合格）`
 
 ## review の差し戻しへの対応（attempt 2）
 - 指摘: 検証が委譲の親（`tree` を持たない子の `parent_id`）を指す `task:` 依存を通し、依存先の子を経由する循環も通した。
@@ -87,6 +88,18 @@ dispatcher module の合計・`work_units.rs`・`dispatch_one`・`validate_v3`�
   別の文で active に `handoff_requested_at` を書くが、試験は standby を見た直後に要求を 1 回だけ読んでいた。負荷が高いと
   2 つの文の間に読む。試験は要求も `wait_until`（出来事待ち）で待つように直した。守る不変条件（standby は生きている active に
   引き継ぎを要求し、active が生きている間は active にならない）は変えていない。本体のコードは変えていない。
+- attempt 6（2026-11-12、delivery-repair）: main への取り込みの後、release の gate（`release.sh` の `test-parallel.sh`）が
+  `celeris::script_compare_cos_digest` の 9 件中 6 件で落ちた。この変更の範囲外。原因は試験の config: `tests/support/script_compare.rs`
+  の `config_text` に `[selfdeploy]` が無く、`releases_dir` が既定の host の `~/.local/celeris/releases` になっていた。host に
+  verify 済みで未昇格の release（82b753db3d63・b03f811c1d5a）があると、停滞の検出が受信箱に `release_unpromoted-selfdeploy` を
+  足し、受信箱を比べる assert（324 行）が落ちる。直す前に `cargo nextest run -p celeris -p celerisctl
+  -E 'binary(script_compare_cos_digest)'` で同じ 6 件の失敗を再現した。`config_text` に `credential_wait_notify.rs` と同じ
+  `[selfdeploy]`（`releases_dir = "releases"`・`repo = "repo"`・`detach = "inline"`、config の dir 基準）を足し、`write_config` で
+  `releases_dir` と `repo` が試験の dir の下にあることを assert する。直した後、script_compare_cos_digest・lane_rules・
+  route_priority・script_generation_e2e の 26 件が合格。本体のコードは変えていない。
+- 同じく `[selfdeploy]` を書かない celeris の試験の config が 10 file ある（browser_startup_reap・cap_probe_real_daemon・
+  daily_curation・instance_handoff・root_done_summary・routing_eval_run・script_generation_daemon・script_runtime・
+  tick_prod_copy_steps・trial_context_canary_e2e）。release の gate では落ちていない（受信箱の中身を比べていない）。直していない。
 - daemon の `until_idle`（`is_idle`）は、unit が `task:` 依存だけを待つ ready の task を idle とみなさない（M10 はメモリの待ちで
   idle とみなす）。本番の常駐 daemon には効かない。試験・e2e の `until_idle` で使うときは待ち続ける。
 - 依存先の成果を自分の branch に入れる unit（既定 branch の取り込み）は今どおり計画が置く。自動では入れない。

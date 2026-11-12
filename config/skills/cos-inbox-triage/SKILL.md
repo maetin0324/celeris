@@ -1,16 +1,33 @@
 ---
 name: cos-inbox-triage
-description: Celeris の受信箱の一次対応 policy（policy_version 11）。CoS が新しい通知・decision・question・approval・plan/phase gate・失敗・browser/cluster/KB の待ちを受け取ったとき、answer（代答）/ observe（見届け）/ escalate（人に回す）を選ぶ基準、人に回す基準の表、定型の代答 7 種類とその根拠（basis）の形、escalation packet の形、confidence の扱い、Discord の扱いを定める。受信箱スレッドの run（この skill は受信箱スレッドか受信箱の件を渡された run にだけ mount される）で、answer/observe/escalate を選び resolve を呼ぶ前に読む。
+description: Celeris の受信箱の一次対応 policy（policy_version 12）。CoS が新しい通知・decision・question・approval・plan/phase gate・失敗・browser/cluster/KB の待ちを受け取ったとき、answer（代答）/ observe（見届け）/ escalate（人か operator に回す）を選ぶ基準、人に残す件の列挙、CoS が task の目的の範囲で答えるときの根拠（basis）の形、escalation packet の形、confidence の扱い、Discord の扱いを定める。受信箱スレッドの run（この skill は受信箱スレッドか受信箱の件を渡された run にだけ mount される）で、answer/observe/escalate を選び resolve を呼ぶ前に読む。
 metadata:
   author: celeris
-  version: "11"
+  version: "12"
 ---
 
-# CoS inbox triage（policy_version "11"）
+# CoS inbox triage（policy_version "12"）
 
 受信箱に届く待ちは全て最初に CoS（あなた）に渡る。あなたは各 item について
 **answer / observe / escalate** のどれかを選び、`POST /api/v1/cos/inbox/{i}/resolve` で 1 件ずつ記録する。
-契約の正本は [ADR 2026-10-05 cos-chat-home](../../../agent-docs/adr/2026-10-05-cos-chat-home.md) の D3。
+契約の正本は [ADR 2026-10-05 cos-chat-home](../../../agent-docs/adr/2026-10-05-cos-chat-home.md) の D3 と
+[ADR 2026-11-12 cos-triage-scope](../../../agent-docs/adr/2026-11-12-cos-triage-scope.md)（v12: 人に残す件の列挙以外は CoS が答える）。
+
+## 0. v12 の要点（人に残す件の列挙。これ以外は CoS が task の目的の範囲で答える）
+
+人に残す件（`escalation.to = "human"`。Discord に送られる）:
+login・TOTP・OAuth など credential の入力／承認（grant・予算・node-h の枠）を超える予算と資源／task・案件の目的や受け入れ条件の変更／
+credential とセキュリティの境界（秘密・権限・sandbox の緩和・恒久の認可の新設）／本番 config の変更／有料の追加試行（既存の承認の外）／
+研究上の判断（評価条件・凍結した評価の変更）／health の指摘や検査を弱める・例外にする判断／人が `human_required`・human check を付けた件。
+
+Celeris の外の操作が要る件（policy だけの branch を main に入れる、本番の昇格・rollback、host の操作）は `escalation.to = "operator"`
+（外部 operator 向け。Discord に送らず受信箱に残る）。人に残す件を operator 宛てにすると API が 422 `cos_reserved_for_human` で断る。
+
+それ以外（task の ADR の範囲の write set の拡張、設計 review に通った計画、推奨のある決定で取り消しが安いもの、兄弟 task との取り込み方、
+job 待ちの延長、replan の指示など）は CoS が答える。`basis.category = "task_scope"` とし、`refs` に根拠（`task`・`adr`・`doc`・
+`progress`・`decision`・`standing_rule`・`approval`・`message`・`authority_grant` のどれか）を最低 1 件入れ、`reason` に理由を書く。
+根拠を示せないときだけ人に回す。prompt の件の「照合」の行（daemon の決定的な照合）に候補と grant が出ていれば先に確かめる。
+計画の承認・失敗の reopen・`raise-once`・認可（authorization）への回答は §3 の決まった category で答える（`task_scope` では API が断る）。
 操作の経路・秘密・信頼しない入力の扱いは prompt の Core と cos-operator skill に従う。
 この skill は受信箱スレッド・統括/案件の CoS スレッド・定期見直しの review thread の run（または受信箱の件を渡された run）に mount される。
 
@@ -38,8 +55,8 @@ metadata:
 | 恒久の認可（standing rule）の新設（`standing_permission`） | escalate |
 | 人が「人の判断」と指定、human check、human_required の gate（`explicit_human`） | 必ず escalate。config/skill で無効にできない |
 | CoS の confidence が min_confidence 未満、情報不足・矛盾、外部副作用の結果不明 | escalate。confidence 欠落も低確信と扱う |
-| 上記以外で、§3 の定型の代答 7 種類 (a)〜(g) のどれかに当たり、その条件を basis で示せる | basis と reason 付きで answer |
-| 上記以外で、(a)〜(g) のどれにも当たらない判断（phase gate の途中確認、計画の承認の `replan`・`withdraw` を含む） | escalate |
+| 上記以外で、§3 の決まった category（(a)(b)(e)(f)(g)）の形の答え | その category の basis と reason 付きで answer |
+| 上記以外（phase gate の途中確認、計画の承認の `replan`、決定・質問・統合の依頼を含む） | `task_scope` の basis（根拠つき）で answer。根拠を示せなければ escalate |
 | 判断不要の通知・復旧済みの失敗 | observe しチャットに要点を残す。人への割込み通知は出さない |
 
 追加の規則:
@@ -67,7 +84,7 @@ metadata:
   人の依頼がある chat の run で使うもので、人の指示の無い一次対応では使わず escalate する。
 - 統合の依頼（`integration_request`）で選択肢 `integrate_task` があるものは、`integrate_task` で answer する
   （衝突を解く task を起票する。ADR 2026-10-28-cos-integrate-task）。推奨は `integrate_task` なので、basis は
-  `documented_default`、`refs` に `{"kind":"adr","id":"agent-docs/adr/2026-10-28-cos-integrate-task.md"}` を書く。「統合した」「見送る」「再試行する」を CoS が選ばない
+  `task_scope`、`refs` に `{"kind":"adr","id":"agent-docs/adr/2026-10-28-cos-integrate-task.md"}` を書く。「統合した」「見送る」「再試行する」を CoS が選ばない
   （手 merge の代わりにならない）。題が「integrate task が失敗」の依頼は API が answer を拒むので escalate する。
 - 段の統合（子 task・WU の branch を親 task の branch に取り込む。origin `phase:*`）の衝突は、daemon が merge の repair WU
   に自動で解かせる（ADR 2026-10-29-phase-integration-auto-repair）。受信箱に出る段の統合の依頼は、repair WU が上限（2 回）まで
@@ -80,31 +97,35 @@ metadata:
 
 ## 3. answer / observe / escalate の選び方
 
-- **answer**: 下の定型の代答 7 種類のどれかに当たり、その条件を `basis` で示せ、confidence が `min_confidence` 以上のときだけ。
+- **answer**: §0 の人に残す件に当たらず、`task_scope` の根拠か下の決まった category の条件を `basis` で示せ、confidence が `min_confidence` 以上のとき。
   `answer` には既存の InboxAnswerBody（`option`・`note`・`payload`）を入れる。元の問いの選択肢以外を作らない。
 - **observe**: 判断の必要が無いもの（知らせ・復旧済みの失敗・進捗）。要点をスレッドに残し、`answer=null`・`escalation=null`。
   判断の必要な未解決の待ちには使えない（API は 422 を返す）。迷ったら observe ではなく escalate。
-- **escalate**: 上の表で escalate に当たるもの、7 種類のどれにも当たらないもの、根拠を指せないもの、確信が足りないもの全て。
+- **escalate**: §0 の人に残す件、上の表で escalate に当たるもの、根拠を指せないもの、確信が足りないもの。宛先 `to` は
+  人に残す件なら `human`、Celeris の外の操作だけが要る件なら `operator`。
 
-### 定型の代答 7 種類（ADR 2026-10-28-cos-routine-delegated-answers D1、(e) は ADR 2026-10-29-cos-review-rework-reopen、(f) は ADR 2026-10-30-cos-plan-conforms-approve、(g) は ADR 2026-10-30-cos-job-wait-extend）
+### basis の category（ADR 2026-11-12-cos-triage-scope D3。(a)(b) は ADR 2026-10-28-cos-routine-delegated-answers、(e) は ADR 2026-10-29-cos-review-rework-reopen、(f) は ADR 2026-10-30-cos-plan-conforms-approve、(g) は ADR 2026-10-30-cos-job-wait-extend）
 
-人の取り次ぎ（§9 の `instructed_by`）の無い代答は、次のどれかとして `basis.category` に書く。条件は API が検査し、
+人の取り次ぎ（§9 の `instructed_by`）の無い代答は、次のどれかとして `basis.category` に書く。`task_scope` が既定で、
+他は答えの形ごとに決定的な検査のある category。条件は API が検査し、
 外れれば 422（`cos_basis_*`）で rejected として記録に残る。422 になったら同じ件を escalate する。
 
 | category | 代答してよいもの | 条件 |
 |---|---|---|
 | `within_approved_frame` (a) | 人が承認済みの資源・予算・node-h の枠の内側での続行（decision・authorization・plan/phase gate） | `frame` が人の承認（standing rule・人が答えた decision・認めた approval）を指す。`used + requested <= limit`。使用量を読んだ出典（`usage` か `ledger`）を refs に入れる |
 | `raise_once` (b) | replan・retry 等の木の上限（kind=limit の決定）への `raise-once` | 進捗の出典（`commit` か `artifact`）を refs に入れる。`failures.previous`（前の失敗）と `failures.current`（今の失敗）が違う。同じ task で CoS が `raise-once` を答えるのは 1 回だけ |
-| `documented_default` (c) | worker の推奨が文書化済みの既定値・既存 ADR と一致する選択 | 答えが元の待ちの推奨（`recommended`）と同じ option。既定・ADR の path（`adr`: `agent-docs/adr/*.md`、`doc`: `docs/**.md`・`agent-docs/**.md`）を refs に入れる |
-| `work_guidance` (d) | 受け入れ条件・目的を変えない範囲の作業方針の補足（worker の自由質問） | note で答える（option は省略か `answer`。`replan` は不可） |
+| `task_scope` | §0 の人に残す件以外の判断（決定・質問・統合の依頼・phase gate・replan の指示など） | refs に根拠（`task` は task の id、`adr`: `agent-docs/adr/*.md`、`doc`: `docs/**.md`・`agent-docs/**.md`、`progress`、`decision`・`standing_rule`・`approval`・`message`・`authority_grant`）を最低 1 件。自由質問は note で答える。認可・計画の承認・reopen・`raise-once` には使えない |
 | `review_rework` (e) | reviewer の技術的な不備の差し戻しで failed になった task の開き直し（失敗の件への `reopen`） | 差し戻した reviewer run を refs に `{"kind":"review","id":"<reviewer run の id>"}` で入れる（失敗の件の本文の `reviewer(<id>): …` の id）。同じ task で CoS がこの category で開き直すのは 2 回まで。前に開き直したときと同じ差し戻し文なら不可 |
 | `plan_conforms` (f) | おかしなところの無い計画の承認（計画の承認の推奨 `approve`） | `plan.plan_id` に承認を待つ版の id（受信箱の件の版、`GET /api/v1/tasks/{id}/tree` の計画）を書く。task に未回答の決定が無い。危うい段（課金・node-h・本番の変更・外部公開・破壊的操作・秘密/権限）を `plan.guarded_stages` に全て挙げ、各段に `kind`（`billing`・`node_hours`・`production`・`external_publish`・`destructive`・`secrets_permissions` のどれか。必須）と `guard` を書き、`guard` を `review_human`（`id` はそれより前の `review: human` の段の key）か `standing_rule`・`decision`・`approval`（`id` は人の承認）で示す。同じ task が 24 時間に 3 版以上の計画を採用していれば不可。human check の付いた task（403）、承認の理由に `near_limit:` など費用・上限の理由がある、前の版の承認以降に目的・受け入れ条件の編集がある（422 `cos_basis_plan_needs_human`）も不可。`refs` に読んだ計画・指示の出典を入れる |
 | `job_wait_extend` (g) | クラスタ job の待ちが上限に達した認可（authorization）への「延長」 | 答えは `{"option":"once","note":"延長"}` だけ（note は「延長」の 1 語。補足は reason に書く）。refs に `{"kind":"approval","id":"<認可の id>"}`（item の `authorization-<id>` の id）を入れる。API が、その認可が待ちの上限で出たこと、最後の poll で job が全て待ち（Q）だったこと、同じ job の上限到達が 3 回以内であることを確かめる。人の常設の委任（分類 `job_wait_extend` の生きた grant。global か案件）があれば refs に `{"kind":"authority_grant","id":"<grant の id>"}` を足す。そのときは 3 回の上限で人に回さず（他の条件は同じ）、使ったことが authority の監査に grant の id と実行した CoS を分けて残る |
 
-- 例: 10-25 の d-release の post-merge は推奨どおりなので (c)。10-20 の予算延長は人が答えた予算の決定を frame にした (a)。
+- 例: 10-25 の d-release の post-merge は推奨どおりで ADR の既定なので `task_scope`（refs に ADR）。10-20 の予算延長は人が答えた予算の決定を frame にした (a)。
   10-13・10-19 の replan 上限は commit で進捗を確かめ、前と違う失敗なら (b)。10-30 の K4 pilot の plan v3（v2 に採点〜集計の経路の
   修正 1 段を足しただけ、課金なし）は (f)。
-- 枠を超える、同じ失敗の繰り返し、2 回目の引き上げ、推奨と違う選択、目的・受け入れ条件・計画を変える答えは escalate。
+- 枠を超える、同じ失敗の繰り返し、2 回目の引き上げ、目的・受け入れ条件を変える答えは escalate。推奨と違う選択は、根拠
+  （task の目的・ADR・人の過去の指示）を refs に挙げられるときだけ `task_scope` で答える。
+- 計画の承認（plan_gate）で未回答の決定があるときは、同じ run で先に決定の件に `task_scope` で答え、その後に計画を (f) で判定し直す
+  （ADR 2026-11-12-cos-triage-scope D6）。決定が §0 に当たれば決定も計画も人に回す。
 - (e) に当てるのは、差し戻し文が直す内容を具体的に書き、直しても目的・受け入れ条件・仕様が変わらないもの（例: 依頼範囲外の
   生成物の混入を消す、足りない試験を足す、fmt・clippy の違反を直す）。次のものは (e) にせず escalate する: 差し戻しが目的・
   受け入れ条件・仕様の変更や範囲外の作業を求める、秘密・権限・セキュリティ、外部公開、破壊的操作、予算・枠の超過、
@@ -124,7 +145,7 @@ metadata:
   `standing`（恒久の認可）、同じ job の上限到達が 4 回目（API は 422 `cos_basis_extend_limit`）、`human_required` の付いた task。
 - `refs[]` は `{kind, id}` を 1〜20 件。kind は `standing_rule`・`decision`・`approval`・`usage`・`ledger`・`commit`（7〜40 桁の 16 進）・
   `artifact`・`progress`（`agent-docs/progress/*.md`）・`adr`・`doc`・`message`・`review`。読んだ API の path と時刻、commit の hash を具体的に書く。
-- 通った代答は監査の reason が「定型の代答（<category>）: <reason>」になり、payload に `basis` が残る。
+- 通った代答は監査の reason が「CoS の判断（<category>）: <reason>」になり、payload に `basis`、操作の記録に `policy_version` が残る。
 - `/cos/operations` で開いている待ちに答えるときも、`instructed_by` が無ければ同じ `basis` を body の最上位に付ける。
 
 `reason` には判定の理由を、参照した根拠（指示の seq・ADR・standing rule の id・計画の id 等）とともに書く。
@@ -142,7 +163,7 @@ metadata:
 ```json
 {"idempotency_key":"k","expected_revision":"1","outcome":"answer",
  "answer":{"option":"post-merge","note":"推奨どおり","payload":null},
- "basis":{"category":"documented_default",
+ "basis":{"category":"task_scope",
           "refs":[{"kind":"adr","id":"agent-docs/adr/YYYY-MM-DD-<既定を決めた ADR>.md"}]},
  "reason":"worker の推奨が ADR の既定と同じ","confidence":0.97,"policy_version":"<policy_version>","escalation":null}
 ```
@@ -155,13 +176,14 @@ metadata:
 ## 6. escalation packet の形
 
 ```json
-{"summary":"task X の成果を公開するかを決めてください。公開先 https://… の確認が済んでいません。",
+{"to":"human","summary":"task X の成果を公開するかを決めてください。公開先 https://… の確認が済んでいません。",
  "options":[{"key":"publish","label":"公開する","detail":"成果ページを今すぐ外部に公開する。取り消すには人が手で非公開にする"},
             {"key":"hold","label":"保留","detail":"公開先を確かめるまで task X を止めたままにする"}],
  "recommended":"hold","recommendation_reason":"公開先が未確認",
  "web_path":"/tasks/task-id"}
 ```
 
+- `to`: 宛先。`human`（人。Discord に送る）か `operator`（外部 operator。Discord に送らない）。§0 の人に残す件は必ず `human`。
 - `summary`: 人が数十秒で読める要点（何が止まっていて、何を決めてほしいか）。**最初の 1 文が結論**（人が今何をすればよいか）。
   人への依頼は web の画面名とボタン名で書く（例: 「受信箱」画面で「続ける」を押す）。curl・config・systemd の作業を
   人に求めない。運用者の作業が要るなら運用者向けの task を起票し、人にはその判断だけを頼む（cos-operator の explaining.md）。

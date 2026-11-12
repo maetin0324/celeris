@@ -243,7 +243,7 @@ async fn plan_conforms_approves_a_plan_whose_sensitive_stages_are_guarded() {
     assert_eq!(audits.len(), 1, "{audits:?}");
     assert_eq!(
         audits[0]["reason"],
-        "定型の代答（plan_conforms）: 前の版に採点の経路の修正 1 段を足しただけで、課金の段は人の確認の後"
+        "CoS の判断（plan_conforms）: 前の版に採点の経路の修正 1 段を足しただけで、課金の段は人の確認の後"
     );
     let payload: String = db(&env)
         .query_row(
@@ -273,7 +273,7 @@ async fn plan_conforms_refuses_other_answers_stale_versions_and_unguarded_stages
         (
             "default",
             "approve",
-            json!({"category": "documented_default",
+            json!({"category": "task_scope",
                    "refs": [{"kind": "adr", "id": "agent-docs/adr/2026-10-28-cos-routine-delegated-answers.md"}]}),
             "cos_basis_invalid",
         ),
@@ -452,7 +452,7 @@ async fn plan_conforms_applies_to_a_direct_plan_gate_operation() {
         .to_string();
     assert_eq!(
         audit_events(&env, &op)[0]["reason"],
-        "定型の代答（plan_conforms）: 計画は目的のとおり"
+        "CoS の判断（plan_conforms）: 計画は目的のとおり"
     );
     assert_ne!(env.status_of(task.id), Status::Blocked);
 }

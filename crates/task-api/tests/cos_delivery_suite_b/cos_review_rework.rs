@@ -157,7 +157,7 @@ fn assert_reopened(env: &TestEnv, resp: &Resp, id: TaskId) -> String {
     assert_eq!(audits.len(), 1, "{audits:?}");
     assert_eq!(
         audits[0]["reason"],
-        "定型の代答（review_rework）: 差し戻しは生成物の混入だけで、直し方が書いてある"
+        "CoS の判断（review_rework）: 差し戻しは生成物の混入だけで、直し方が書いてある"
     );
     assert_eq!(audits[0]["target_kind"], "task");
     op
@@ -205,7 +205,7 @@ async fn review_rework_reopens_and_hands_the_rejection_to_the_next_attempt() {
             reopen(
                 "default",
                 "r1",
-                json!({"category": "documented_default",
+                json!({"category": "task_scope",
                        "refs": [{"kind": "adr", "id": "agent-docs/adr/2026-10-29-cos-review-rework-reopen.md"}]}),
             ),
         )
@@ -336,7 +336,7 @@ async fn review_rework_stops_at_the_limit_and_on_a_repeated_rejection() {
                 "policy_version": "1",
                 "confidence": 0.9,
                 "escalation": {
-                    "summary": "reviewer の差し戻しで 3 回目の失敗。自動の開き直しは上限",
+                    "to": "human", "summary": "reviewer の差し戻しで 3 回目の失敗。自動の開き直しは上限",
                     "options": [{"key": "reopen", "label": "開き直す", "detail": "同じ task をもう一度実行する"},
                                 {"key": "cancel", "label": "諦める", "detail": "task を取り消す"}],
                     "recommended": null,

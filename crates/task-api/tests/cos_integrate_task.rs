@@ -294,7 +294,7 @@ async fn cos_integrate_task_resolves_the_conflict_and_closes_the_original_reques
                     "answer",
                     json!({"answer": {"option": "integrate_task", "note": "両方の呼び出しを残す"}}),
                 ),
-                json!({"category": "documented_default",
+                json!({"category": "task_scope",
                        "refs": [{"kind": "adr", "id": "agent-docs/adr/2026-10-28-cos-integrate-task.md"}]}),
             ),
             &[("authorization", bearer.as_str())],
@@ -492,7 +492,7 @@ async fn cos_integrate_task_failure_escalates_the_request_to_a_person() {
                 "r2",
                 "escalate",
                 json!({"escalation": {
-                    "summary": "integrate task が失敗した統合の依頼",
+                    "to": "human", "summary": "integrate task が失敗した統合の依頼",
                     "options": item["options"].as_array().expect("options").iter()
                         .map(|o| json!({"key": o["key"], "label": o["label"]})).collect::<Vec<_>>(),
                     "recommended": null,

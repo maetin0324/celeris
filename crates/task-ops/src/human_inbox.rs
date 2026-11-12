@@ -126,6 +126,11 @@ impl InboxKind {
         Self::STAGNATION_KINDS.iter().any(|k| k.as_str() == kind)
     }
 
+    /// The kind of an `as_str` name (`None` for `notice` and unknown names).
+    pub fn from_name(name: &str) -> Option<InboxKind> {
+        Self::ALL.into_iter().find(|k| k.as_str() == name)
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             InboxKind::Decision => "decision",
@@ -1297,7 +1302,7 @@ impl Builder<'_> {
                     detail: Some(Detail::Whole(detail)),
                     options,
                     // ADR 2026-10-28-cos-routine-delegated-answers 付記: integrate task は ADR が定めた既定の
-                    // 答え方なので推奨にする（CoS は documented_default の根拠で代答する）。
+                    // 答え方なので推奨にする（CoS は task_scope の根拠で代答する）。
                     recommended: integrate_task_offered
                         .then(|| task_core::integration_request::INTEGRATE_TASK_OPTION.to_string()),
                     due_at: None,

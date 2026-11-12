@@ -75,9 +75,9 @@ fn resolve_body(key: &str, revision: &str, outcome: &str, extra: Value) -> Value
     // recommended `vault` is a documented default, a free-text note is work guidance.
     if outcome == "answer" && body.get("basis").is_none() {
         body["basis"] = if body["answer"]["option"] == "vault" {
-            common::cos_ops::documented_default_basis()
+            common::cos_ops::task_scope_basis()
         } else {
-            common::cos_ops::work_guidance_basis()
+            common::cos_ops::task_scope_basis()
         };
     }
     body
@@ -85,6 +85,7 @@ fn resolve_body(key: &str, revision: &str, outcome: &str, extra: Value) -> Value
 
 fn packet(options: Value, recommended: Value, web_path: &str) -> Value {
     json!({
+        "to": "human",
         "summary": "公開前の確認",
         "options": options,
         "recommended": recommended,
@@ -1153,7 +1154,7 @@ async fn cos_free_text_question_resumes_through_resolve_and_relay() {
                         &format!("/api/v1/inbox/items/{inbox_id}/answer"),
                         answer,
                     ),
-                    common::cos_ops::work_guidance_basis(),
+                    common::cos_ops::task_scope_basis(),
                 )
             } else {
                 resolve_body(key, "r1", "answer", json!({"answer": answer}))

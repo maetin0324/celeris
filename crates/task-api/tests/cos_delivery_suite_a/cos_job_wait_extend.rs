@@ -279,7 +279,7 @@ async fn job_wait_extend_answers_once_extend_for_queued_jobs() {
     assert_eq!(audits.len(), 1, "{audits:?}");
     assert_eq!(
         audits[0]["reason"],
-        "定型の代答（job_wait_extend）: job は Q のままで、待つだけでは node-h を使わない"
+        "CoS の判断（job_wait_extend）: job は Q のままで、待つだけでは node-h を使わない"
     );
 }
 

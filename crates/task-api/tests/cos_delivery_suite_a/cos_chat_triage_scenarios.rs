@@ -298,12 +298,12 @@ async fn cos_chat_triage_a_answers_each_wait_kind_without_webhook() {
         (
             "decision-",
             json!({"option": "vault", "note": "既定どおり"}),
-            common::cos_ops::documented_default_basis(),
+            common::cos_ops::task_scope_basis(),
         ),
         (
             "question-",
             json!({"option": "answer", "note": "main に入れる"}),
-            common::cos_ops::work_guidance_basis(),
+            common::cos_ops::task_scope_basis(),
         ),
         (
             "authorization-",
@@ -435,7 +435,7 @@ async fn cos_chat_triage_b_escalates_human_matters_and_keeps_the_wait() {
                 explicit_rev,
                 "answer",
                 "定型",
-                json!({"answer": {"option": "vault"}, "basis": common::cos_ops::documented_default_basis()}),
+                json!({"answer": {"option": "vault"}, "basis": common::cos_ops::task_scope_basis()}),
             ),
             &headers,
         ),
@@ -493,7 +493,7 @@ async fn cos_chat_triage_b_escalates_human_matters_and_keeps_the_wait() {
                     "escalate",
                     why,
                     json!({"escalation": {
-                        "summary": summary,
+                        "to": "human", "summary": summary,
                         "options": options,
                         "recommended": recommended,
                         "recommendation_reason": why,
@@ -581,7 +581,7 @@ async fn cos_chat_triage_override_revokes_a_resolved_answer_end_to_end() {
                 revision,
                 "answer",
                 "定型",
-                json!({"answer": {"option": "vault"}, "basis": common::cos_ops::documented_default_basis()}),
+                json!({"answer": {"option": "vault"}, "basis": common::cos_ops::task_scope_basis()}),
             ),
             &headers,
         ),

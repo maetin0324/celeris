@@ -7,7 +7,9 @@ use std::path::Path;
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use task_core::chat::ChatError;
 
-const ITEM_COLUMNS: &str = "id,source_kind,source_key,source_revision,source_event_id,thread_id,message_id,state,run_id,reason,policy_version,operation_id,created_at,updated_at";
+const ITEM_COLUMNS: &str = "i.id,i.source_kind,i.source_key,i.source_revision,i.source_event_id,i.thread_id,i.message_id,i.state,i.run_id,i.reason,i.policy_version,i.operation_id,i.created_at,i.updated_at,r.route";
+/// ADR 2026-11-12-cos-triage-scope D2: the route row says who an escalated item is for.
+const ITEM_FROM: &str = "cos_inbox_items i LEFT JOIN cos_notification_routes r ON r.item_id=i.id";
 
 /// One `cos_inbox_items` row.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
@@ -26,6 +28,10 @@ pub struct CosInboxItem {
     pub operation_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// ADR 2026-11-12-cos-triage-scope D2: `human` (escalated or fallback to the person, Discord)
+    /// or `operator` (escalated to the external operator, not sent); absent while not routed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub addressee: Option<String>,
 }
 
 impl CosInboxItem {
@@ -51,6 +57,13 @@ fn item_row(r: &Row<'_>) -> rusqlite::Result<CosInboxItem> {
         operation_id: r.get(11)?,
         created_at: r.get(12)?,
         updated_at: r.get(13)?,
+        addressee: r.get::<_, Option<String>>(14)?.map(|route| {
+            if route == task_core::chat::triage::COS_OPERATOR_ROUTE {
+                "operator".to_owned()
+            } else {
+                "human".to_owned()
+            }
+        }),
     })
 }
 
@@ -64,7 +77,7 @@ pub(crate) fn item_get(db: &Path, id: &str) -> Result<Option<CosInboxItem>, Chat
     let conn = open(db)?;
     Ok(conn
         .query_row(
-            &format!("SELECT {ITEM_COLUMNS} FROM cos_inbox_items WHERE id=?1"),
+            &format!("SELECT {ITEM_COLUMNS} FROM {ITEM_FROM} WHERE i.id=?1"),
             [id],
             item_row,
         )
@@ -80,8 +93,8 @@ pub(crate) fn items(
     let conn = open(db)?;
     let limit = i64::try_from(limit).unwrap_or(i64::MAX);
     let mut stmt = conn.prepare(&format!(
-        "SELECT {ITEM_COLUMNS} FROM cos_inbox_items WHERE (?1 IS NULL OR state=?1) \
-         ORDER BY created_at DESC,id DESC LIMIT ?2"
+        "SELECT {ITEM_COLUMNS} FROM {ITEM_FROM} WHERE (?1 IS NULL OR i.state=?1) \
+         ORDER BY i.created_at DESC,i.id DESC LIMIT ?2"
     ))?;
     let rows = stmt.query_map(params![state, limit], item_row)?;
     Ok(rows.collect::<Result<_, _>>()?)

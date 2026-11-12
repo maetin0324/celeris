@@ -84,10 +84,23 @@ pub struct EscalationOption {
     pub detail: Option<String>,
 }
 
+/// ADR 2026-11-12-cos-triage-scope D2: who an escalated item is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Addressee {
+    /// The person: the outbox notification (Discord) and the card in the general CoS window.
+    Human,
+    /// The external operator (an operation outside Celeris: a policy-only branch to main, a
+    /// promote or rollback, a host operation). The route only; nothing is sent to Discord.
+    Operator,
+}
+
 /// D3 escalation packet. `recommended` is one of `options[].key` or null (then the reason says why).
 #[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EscalationPacket {
+    /// ADR 2026-11-12-cos-triage-scope D2: `human` or `operator`.
+    pub to: Addressee,
     pub summary: String,
     /// ADR 2026-10-30-cos-review-open-waits D3: which request and task the item comes from and why
     /// the decision is needed now, with task-internal words paraphrased.
@@ -567,6 +580,9 @@ async fn resolve(
                     }
                     crate::inbox_notifications::validate_answer(found, input)
                         .map_err(|e| reject(unprocessable("validation", e.detail())))?;
+                    if let Some(reserved) = reserved(store, &item, Some(found))? {
+                        return Err(reject(basis::reserved_for_human(reserved)));
+                    }
                     let Some(routine) = req.basis.as_ref() else {
                         return Err(reject(basis::missing()));
                     };
@@ -627,6 +643,28 @@ async fn resolve(
                         ))));
                     }
                     validate_packet(packet, &item, source).map_err(&reject)?;
+                    if packet.to == Addressee::Operator {
+                        // D2: a matter a person keeps is not handed to the operator.
+                        if let Some(reserved) = reserved(store, &item, source)? {
+                            return Err(reject(basis::reserved_for_human(reserved)));
+                        }
+                        let routed = store
+                            .cos_triage_operator_route(&item.id, OffsetDateTime::now_utc())
+                            .map_err(cos_problem)?;
+                        audit.item = Some(ItemMark::new(&item.id, "escalated"));
+                        let result = serde_json::json!({
+                            "item_id": item.id,
+                            "outcome": "escalated",
+                            "addressee": "operator",
+                            "notification_id": null,
+                            "already_routed": !routed,
+                            "confidence": confidence,
+                        });
+                        let op = audit.apply(store, "cos_inbox_item", &item.id, action, |_| {
+                            Ok(result)
+                        })?;
+                        return Ok((op, None));
+                    }
                     let outbox = serde_json::json!({
                         "item_id": item.id,
                         "source_kind": item.source_kind,
@@ -658,6 +696,7 @@ async fn resolve(
                     let result = serde_json::json!({
                         "item_id": item.id,
                         "outcome": "escalated",
+                        "addressee": "human",
                         "notification_id": notification_id,
                         "already_routed": notification_id.is_none(),
                         "confidence": confidence,
@@ -705,6 +744,27 @@ fn terminal_conflict(
     } else {
         format!("triage item {i} is already {}", item.state)
     })))
+}
+
+/// ADR 2026-11-12-cos-triage-scope D1/D4: what a person keeps of this item, by the same
+/// deterministic match the daemon shows CoS before it judges.
+pub(crate) fn reserved(
+    store: &SqliteStore,
+    item: &CosInboxItem,
+    source: Option<&InboxItem>,
+) -> Result<Option<task_ops::triage_match::Reserved>, ApiProblem> {
+    let body = source
+        .and_then(|s| s.detail_full.as_deref().or(s.detail.as_deref()))
+        .unwrap_or("");
+    let input = task_ops::triage_match::MatchInput {
+        source_kind: &item.source_kind,
+        title: source.map_or("", |s| s.title.as_str()),
+        body,
+        project_id: source.and_then(|s| s.project_id.as_deref()),
+    };
+    task_ops::triage_match::match_item(store, input, OffsetDateTime::now_utc())
+        .map(|m| m.reserved)
+        .map_err(store_problem)
 }
 
 /// What a routine-answer basis is checked against: the derived wait and the chosen answer.

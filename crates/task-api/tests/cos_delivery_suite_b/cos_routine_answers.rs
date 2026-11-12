@@ -152,7 +152,7 @@ fn assert_routine(env: &TestEnv, resp: &Resp, category: &str) {
     let audits = audit_events(env, op);
     assert_eq!(audits.len(), 1, "{audits:?}");
     let reason = audits[0]["reason"].as_str().expect("reason");
-    assert_eq!(reason, format!("定型の代答（{category}）: 根拠を確かめた"));
+    assert_eq!(reason, format!("CoS の判断（{category}）: 根拠を確かめた"));
     let payload: String = db(env)
         .query_row(
             "SELECT payload_json FROM cos_operations WHERE id=?1",
@@ -195,7 +195,7 @@ fn escalate(key: &str, web_path: &str) -> Value {
         "policy_version": "1",
         "confidence": 0.9,
         "escalation": {
-            "summary": "予算の枠を超えるので、続けるかを決めてください",
+            "to": "human", "summary": "予算の枠を超えるので、続けるかを決めてください",
             "options": [{"key": "continue", "label": "続ける"}, {"key": "stop", "label": "止める"}],
             "recommended": null,
             "recommendation_reason": "枠を超える額は人が決める",
@@ -422,7 +422,7 @@ async fn cos_routine_b_raise_once_only_once_and_not_for_a_repeated_failure() {
             answer(
                 "as-default",
                 raise_once.clone(),
-                json!({"category": "documented_default", "refs": [{"kind": "adr", "id": ADR}]}),
+                json!({"category": "task_scope", "refs": [{"kind": "adr", "id": ADR}]}),
             ),
         )
         .await;
@@ -463,10 +463,12 @@ async fn cos_routine_b_raise_once_only_once_and_not_for_a_repeated_failure() {
     assert_refused(&env, &second, "cos_basis_raise_once_used", &item2);
 }
 
-/// (c) the worker's recommendation is a written default: only the recommended option, only with an
-/// ADR or doc ref.
+/// ADR 2026-11-12-cos-triage-scope D3: `task_scope` answers a decision on CoS's own judgment, also
+/// with an option other than the recommended one, but only with a ground (task, ADR, grant, a
+/// person's words, …). Evidence alone (a commit) is not a ground. Replaces the old (c), which
+/// allowed only the recommended option.
 #[tokio::test]
-async fn cos_routine_c_documented_default_is_the_recommended_option() {
+async fn cos_routine_task_scope_answers_a_decision_only_with_a_ground() {
     let env = admin_env();
     let work = task(&env, Status::Ready, vec![]);
     raise(
@@ -479,46 +481,51 @@ async fn cos_routine_c_documented_default_is_the_recommended_option() {
     );
     let item = ingest(&env, "decision-dec-release", 1);
     let cos = Cos::new(&env, "default");
-    let default = json!({"category": "documented_default", "refs": [{"kind": "adr", "id": ADR}]});
 
-    let not_recommended = cos
+    let no_ground = cos
         .resolve(
             &item,
-            answer("pre", json!({"option": "pre-merge"}), default.clone()),
+            answer(
+                "no-ground",
+                json!({"option": "pre-merge"}),
+                json!({"category": "task_scope", "refs": [{"kind": "commit", "id": "0123abcd"}]}),
+            ),
         )
         .await;
-    assert_refused(&env, &not_recommended, "cos_basis_invalid", &item);
-    let no_doc = cos.resolve(&item, answer("no-doc", json!({"option": "post-merge"}),
-        json!({"category": "documented_default", "refs": [{"kind": "message", "id": "m1"}]}))).await;
-    assert_refused(&env, &no_doc, "cos_basis_invalid", &item);
-    let outside = cos.resolve(&item, answer("outside", json!({"option": "post-merge"}),
-        json!({"category": "documented_default", "refs": [{"kind": "adr", "id": concat!("agent-docs/adr/", "../../etc/x.md")}]}))).await;
+    assert_refused(&env, &no_ground, "cos_basis_invalid", &item);
+    let outside = cos.resolve(&item, answer("outside", json!({"option": "pre-merge"}),
+        json!({"category": "task_scope", "refs": [{"kind": "adr", "id": concat!("agent-docs/adr/", "../../etc/x.md")}]}))).await;
     assert_refused(&env, &outside, "cos_basis_invalid", &item);
+    let bad_task = cos
+        .resolve(
+            &item,
+            answer(
+                "bad-task",
+                json!({"option": "pre-merge"}),
+                json!({"category": "task_scope", "refs": [{"kind": "task", "id": "not-a-task"}]}),
+            ),
+        )
+        .await;
+    assert_refused(&env, &bad_task, "cos_basis_invalid", &item);
 
     let ok = cos
         .resolve(
             &item,
-            answer("ok", json!({"option": "post-merge"}), default),
+            answer(
+                "ok",
+                json!({"option": "pre-merge"}),
+                json!({"category": "task_scope", "refs": [{"kind": "task", "id": work.id.to_string()}, {"kind": "adr", "id": ADR}]}),
+            ),
         )
         .await;
-    assert_routine(&env, &ok, "documented_default");
+    assert_routine(&env, &ok, "task_scope");
 }
 
-/// (d) work guidance answers a worker question with a note. It cannot carry a frame, and it cannot
-/// answer a decision (a replan of a limit changes the plan: CoS escalates it).
+/// D3: `task_scope` answers a worker question with a note. It cannot carry a frame and needs a
+/// ground. Replaces the old (d) work guidance.
 #[tokio::test]
-async fn cos_routine_d_work_guidance_answers_a_question_without_replan() {
+async fn cos_routine_task_scope_answers_a_question_with_a_note() {
     let env = admin_env();
-    let limit_task = task(&env, Status::Ready, vec![]);
-    raise(
-        &env,
-        &limit_task,
-        "lim-g",
-        DecisionKind::Limit,
-        &["raise-once", "replan", "withdraw"],
-        "replan",
-    );
-    let limit_item = ingest(&env, "decision-lim-g", 0);
     let asked = task(
         &env,
         Status::Blocked,
@@ -529,33 +536,22 @@ async fn cos_routine_d_work_guidance_answers_a_question_without_replan() {
     );
     let item = ingest(&env, &format!("question-{}", asked.id), 1);
     let cos = Cos::new(&env, "guidance");
-    let guidance = json!({"category": "work_guidance",
+    let guidance = json!({"category": "task_scope",
                           "refs": [{"kind": "doc", "id": "docs/SPEC.md"}]});
 
-    let replan = cos
-        .resolve(
-            &limit_item,
-            answer(
-                "replan",
-                json!({"option": "replan", "note": "計画を変える"}),
-                guidance.clone(),
-            ),
-        )
-        .await;
-    assert_refused(&env, &replan, "cos_basis_invalid", &limit_item);
     let blank = cos
         .resolve(
             &item,
             answer(
                 "blank",
                 json!({"option": "answer", "note": "x"}),
-                json!({"category": "work_guidance", "refs": []}),
+                json!({"category": "task_scope", "refs": []}),
             ),
         )
         .await;
     assert_refused(&env, &blank, "cos_basis_invalid", &item);
     let frame_on_guidance = cos.resolve(&item, answer("frame", json!({"note": "main"}),
-        json!({"category": "work_guidance", "refs": [{"kind": "doc", "id": "docs/SPEC.md"}],
+        json!({"category": "task_scope", "refs": [{"kind": "doc", "id": "docs/SPEC.md"}],
                "frame": {"kind": "decision", "id": "x", "unit": "u", "limit": 1.0, "used": 0.0, "requested": 1.0}}))).await;
     assert_refused(&env, &frame_on_guidance, "cos_basis_invalid", &item);
 
@@ -569,7 +565,7 @@ async fn cos_routine_d_work_guidance_answers_a_question_without_replan() {
             ),
         )
         .await;
-    assert_routine(&env, &ok, "work_guidance");
+    assert_routine(&env, &ok, "task_scope");
     assert_eq!(env.status_of(asked.id), Status::Ready);
 }
 
@@ -611,9 +607,7 @@ async fn cos_routine_operations_need_a_basis_without_instruction() {
             "/api/v1/cos/operations",
             &body(
                 "ok",
-                Some(
-                    json!({"category": "documented_default", "refs": [{"kind": "adr", "id": ADR}]}),
-                ),
+                Some(json!({"category": "task_scope", "refs": [{"kind": "adr", "id": ADR}]})),
             ),
             &headers,
         ),
@@ -627,6 +621,6 @@ async fn cos_routine_operations_need_a_basis_without_instruction() {
     let audits = audit_events(&env, &op);
     assert_eq!(
         audits[0]["reason"],
-        "定型の代答（documented_default）: 根拠を確かめた"
+        "CoS の判断（task_scope）: 根拠を確かめた"
     );
 }

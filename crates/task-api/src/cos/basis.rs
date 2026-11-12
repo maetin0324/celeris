@@ -1,7 +1,9 @@
-//! ADR 2026-10-28-cos-routine-delegated-answers: the basis of a CoS answer that no human instructed.
+//! ADR 2026-10-28-cos-routine-delegated-answers D2 and ADR 2026-11-12-cos-triage-scope D3: the basis
+//! of a CoS answer that no human instructed.
 //!
-//! A CoS answer to a wait without `instructed_by` must name one of the routine categories and the
-//! evidence that the category's deterministic conditions hold (D1/D2). This module checks only what
+//! A CoS answer to a wait without `instructed_by` names its category and evidence. `task_scope` is
+//! CoS's own judgment inside the task's purpose and needs a ground (task, ADR, grant, a person's
+//! words, …); the other categories are the shapes with extra deterministic checks (D3). This module checks only what
 //! the API can decide from the request and the store: shape, the referenced approval, the
 //! arithmetic of the frame, the repeated failure and the once-only raise. The judgment that the
 //! cited evidence says what it claims stays with the worker and the reviewer of the audit.
@@ -31,7 +33,9 @@ const MAX_REFS: usize = 20;
 const MAX_REF_CHARS: usize = 300;
 const MAX_FAILURE_CHARS: usize = 500;
 
-/// D1: the four routine judgments CoS may answer without a human instruction.
+/// ADR 2026-11-12-cos-triage-scope D3: what kind of judgment a CoS answer without a human
+/// instruction is. Anything outside the human-reserved list (D1) may be answered as `task_scope`;
+/// the other categories are answer shapes with their own deterministic checks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum BasisCategory {
@@ -39,10 +43,9 @@ pub enum BasisCategory {
     WithinApprovedFrame,
     /// (b) Raise a run-time tree limit (replan, retry, …) once, with progress and a new failure.
     RaiseOnce,
-    /// (c) The worker's recommendation equals a documented default or an existing ADR.
-    DocumentedDefault,
-    /// (d) Work guidance for a worker question that changes neither objective nor acceptance.
-    WorkGuidance,
+    /// CoS's judgment inside the task's objective and acceptance, grounded on the task, an ADR, a
+    /// grant or a person's earlier instruction (ADR 2026-11-12-cos-triage-scope D3).
+    TaskScope,
     /// (e) Reopen a task the reviewer failed for a technical defect (ADR 2026-10-29-cos-review-rework-reopen).
     ReviewRework,
     /// (f) Approve a plan gate whose plan has nothing out of the ordinary (ADR 2026-10-30-cos-plan-conforms-approve).
@@ -56,8 +59,7 @@ impl BasisCategory {
         match self {
             BasisCategory::WithinApprovedFrame => "within_approved_frame",
             BasisCategory::RaiseOnce => "raise_once",
-            BasisCategory::DocumentedDefault => "documented_default",
-            BasisCategory::WorkGuidance => "work_guidance",
+            BasisCategory::TaskScope => "task_scope",
             BasisCategory::ReviewRework => "review_rework",
             BasisCategory::PlanConforms => "plan_conforms",
             BasisCategory::JobWaitExtend => "job_wait_extend",
@@ -85,7 +87,22 @@ pub enum BasisRefKind {
     /// ADR 2026-11-04-project-controller A7: a live grant of the authority ledger. It is evidence
     /// only: it does not lift `human_required` and does not stand in for the category's checks.
     AuthorityGrant,
+    /// ADR 2026-11-12-cos-triage-scope D3: the task whose objective and acceptance CoS read.
+    Task,
 }
+
+/// D3: the refs that ground a `task_scope` judgment (the others are evidence, not a ground).
+pub(crate) const TASK_SCOPE_GROUNDS: &[BasisRefKind] = &[
+    BasisRefKind::Task,
+    BasisRefKind::Adr,
+    BasisRefKind::Doc,
+    BasisRefKind::Progress,
+    BasisRefKind::Decision,
+    BasisRefKind::StandingRule,
+    BasisRefKind::Approval,
+    BasisRefKind::Message,
+    BasisRefKind::AuthorityGrant,
+];
 
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -166,6 +183,19 @@ pub(crate) const BASIS_PLAN_NEEDS_HUMAN: &str = "cos_basis_plan_needs_human";
 pub(crate) const BASIS_JOB_NOT_QUEUED: &str = "cos_basis_job_not_queued";
 pub(crate) const BASIS_EXTEND_LIMIT: &str = "cos_basis_extend_limit";
 pub(crate) const BASIS_AUTHORITY_GRANT: &str = "cos_basis_authority_grant_invalid";
+/// ADR 2026-11-12-cos-triage-scope D1/D2: the wait is one a person keeps.
+pub(crate) const RESERVED_FOR_HUMAN: &str = "cos_reserved_for_human";
+
+/// D1: refuse answering (or routing to the operator) a wait the deterministic match reserved for a person.
+pub(crate) fn reserved_for_human(reserved: task_ops::triage_match::Reserved) -> ApiProblem {
+    problem(
+        RESERVED_FOR_HUMAN,
+        format!(
+            "this wait is reserved for a person ({}); escalate it with to=human",
+            reserved.as_str()
+        ),
+    )
+}
 
 fn problem(code: &'static str, detail: impl Into<String>) -> ApiProblem {
     ApiProblem::new(StatusCode::UNPROCESSABLE_ENTITY, code, detail)
@@ -174,15 +204,15 @@ fn problem(code: &'static str, detail: impl Into<String>) -> ApiProblem {
 pub(crate) fn missing() -> ApiProblem {
     problem(
         BASIS_MISSING,
-        "a CoS answer without instructed_by needs basis (within_approved_frame, raise_once, \
-         documented_default, work_guidance, review_rework, plan_conforms or job_wait_extend with its evidence); \
-         otherwise escalate",
+        "a CoS answer without instructed_by needs basis (task_scope with a ground, or within_approved_frame, \
+         raise_once, review_rework, plan_conforms or job_wait_extend with its evidence); otherwise escalate",
     )
 }
 
-/// The audit reason of an accepted routine answer.
+/// The audit reason of an accepted CoS answer (ADR 2026-11-12-cos-triage-scope D3). The policy
+/// version and the cited grants are kept in the operation record (`policy_version`, `payload.basis`).
 pub(crate) fn reason_prefix(basis: &DelegatedBasis) -> String {
-    format!("定型の代答（{}）", basis.category.as_str())
+    format!("CoS の判断（{}）", basis.category.as_str())
 }
 
 fn md_path(id: &str, prefixes: &[&str]) -> bool {
@@ -206,6 +236,7 @@ fn check_ref(r: &BasisRef) -> Result<(), String> {
         BasisRefKind::Adr => md_path(id, &["agent-docs/adr/"]),
         BasisRefKind::Doc => md_path(id, &["docs/", "agent-docs/"]),
         BasisRefKind::Progress => md_path(id, &["agent-docs/progress/"]),
+        BasisRefKind::Task => id.parse::<TaskId>().is_ok(),
         _ => true,
     };
     if ok {
@@ -213,7 +244,7 @@ fn check_ref(r: &BasisRef) -> Result<(), String> {
     } else {
         Err(format!(
             "basis.refs[] {:?} {id:?} is malformed (commit: 7..=40 hex; adr: agent-docs/adr/*.md; \
-             doc: docs/ or agent-docs/ *.md; progress: agent-docs/progress/*.md)",
+             doc: docs/ or agent-docs/ *.md; progress: agent-docs/progress/*.md; task: a task id)",
             r.kind
         ))
     }
@@ -292,7 +323,7 @@ pub(crate) fn validate(
     }
     let option = target.option.as_deref();
     // ADR 2026-10-30-cos-plan-conforms-approve D3: approving a plan takes the plan checks (or a
-    // numeric frame); the gate always recommends approve, so documented_default would skip them.
+    // numeric frame); the gate always recommends approve, so task_scope would skip them.
     if target.kind == Some(InboxKind::PlanGate)
         && option == Some(plan_conforms::APPROVE_OPTION)
         && !matches!(
@@ -311,6 +342,19 @@ pub(crate) fn validate(
     {
         return Err(invalid(
             "reopening a failed task needs basis.category=review_rework".into(),
+        ));
+    }
+    // ADR 2026-11-12-cos-triage-scope D3: an authorization is a permission gate; only the frame and
+    // the job wait limit answer it.
+    if target.kind == Some(InboxKind::Authorization)
+        && !matches!(
+            category,
+            BasisCategory::JobWaitExtend | BasisCategory::WithinApprovedFrame
+        )
+    {
+        return Err(invalid(
+            "answering an authorization needs basis.category=job_wait_extend or within_approved_frame"
+                .into(),
         ));
     }
     if option == Some(RAISE_ONCE_OPTION) && category != BasisCategory::RaiseOnce {
@@ -423,37 +467,20 @@ pub(crate) fn validate(
                 ));
             }
         }
-        BasisCategory::DocumentedDefault => {
-            let recommended = target.recommended.as_deref();
-            if recommended.is_none() || option != recommended {
-                return Err(invalid(format!(
-                    "documented_default answers the wait's recommended option ({}), not {}",
-                    recommended.unwrap_or("none"),
-                    option.unwrap_or("a free-text answer")
-                )));
-            }
-            if !has_ref(basis, &[BasisRefKind::Adr, BasisRefKind::Doc]) {
+        BasisCategory::TaskScope => {
+            if !has_ref(basis, TASK_SCOPE_GROUNDS) {
                 return Err(invalid(
-                    "documented_default needs an adr or doc ref (where the default is written)"
+                    "task_scope needs a ground in refs (task, adr, doc, progress, decision, \
+                     standing_rule, approval, message or authority_grant); without one, escalate"
                         .into(),
                 ));
             }
-        }
-        BasisCategory::WorkGuidance => {
-            if kind != Some(InboxKind::Question) {
-                return Err(invalid(format!(
-                    "work_guidance answers a worker question, not {kind_name}"
-                )));
-            }
-            if !matches!(option, None | Some("answer")) {
+            if kind == Some(InboxKind::Question)
+                && option.is_none()
+                && target.note.as_deref().is_none_or(|n| n.trim().is_empty())
+            {
                 return Err(invalid(
-                    "work_guidance answers with a note only (option omitted or answer; replan changes the plan)"
-                        .into(),
-                ));
-            }
-            if target.note.as_deref().is_none_or(|n| n.trim().is_empty()) {
-                return Err(invalid(
-                    "work_guidance needs the guidance in answer.note".into(),
+                    "a free-text answer to a worker question needs answer.note".into(),
                 ));
             }
         }

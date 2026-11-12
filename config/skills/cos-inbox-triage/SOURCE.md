@@ -45,3 +45,7 @@ license: このリポジトリと同じ（外部の license は無い）
   （聞く前に `authority.check` を読む、提案は `authority.grant_propose`、basis の refs の種類 `authority_grant` は `human_required` を
   解除しない）。policy_version を 11 に上げた。config の `[cos.triage] policy_version` の既定も "11"。
 - 2026-11-11（ADR 2026-11-11-cos-fallback-timing）: §7 の退避の説明を全種類の「一次対応の後だけ送る」と送信前の判定の取り下げに直した。§11 の「人へ直接回った件」の説明も §7 と同じ規則に直した。判定の基準は変えていないので policy_version は 11 のまま（config の `[cos.triage] policy_version` も変えない）。
+- 2026-11-12（ADR 2026-11-12-cos-triage-scope）: 人に残す件の列挙（§0）以外は CoS が `task_scope`（根拠つき）で答える方針にし、
+  定型の (c) `documented_default`・(d) `work_guidance` を `task_scope` に置き換えた。escalate に宛先 `to`（`human`・`operator`）を足し、
+  operator 宛ては Discord に送らない。計画の承認で未回答の決定があれば先に決定に答える流れを書いた。policy_version を 12 に上げた。
+  config の `[cos.triage] policy_version` の既定も "12"。

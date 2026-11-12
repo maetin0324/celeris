@@ -863,7 +863,7 @@ async fn authority_ledger_human_required_cannot_be_lifted() {
         .op_full(json!({
             "idempotency_key": "hr-1", "expected_revision": null, "reason": "許可があるので代答する",
             "policy_version": "11",
-            "basis": {"category": "documented_default", "refs": [{"kind": "authority_grant", "id": g}]},
+            "basis": {"category": "task_scope", "refs": [{"kind": "authority_grant", "id": g}]},
             "request": {"method": "POST", "path": format!("/api/v1/tasks/{}/reopen", t.id), "body": {"note": "続ける"}},
         }))
         .await;

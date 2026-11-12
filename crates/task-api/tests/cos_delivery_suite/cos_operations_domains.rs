@@ -4,8 +4,7 @@
 use crate::common;
 
 use common::cos_ops::{
-    OPS, cos_bearer, documented_default_basis, op_body, raise_decision, run_domain,
-    run_domain_answering,
+    OPS, cos_bearer, op_body, raise_decision, run_domain, run_domain_answering, task_scope_basis,
 };
 use common::*;
 use serde_json::json;
@@ -71,7 +70,7 @@ async fn cos_chat_ops_domain_decision_answer() {
         "/api/v1/decisions/dec-d/answer",
         json!({"option": "vault"}),
         "decision.answer",
-        Some(documented_default_basis()),
+        Some(task_scope_basis()),
     )
     .await;
     let events = env.store.events_for(task.id).expect("events");

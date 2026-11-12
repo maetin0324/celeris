@@ -1,7 +1,7 @@
 //! ADR 2026-10-05 D2/D3: `POST /api/v1/cos/operations` and `GET /api/v1/cos/operations/{o}`.
 mod common;
 
-use common::cos_ops::{cos_bearer, db, documented_default_basis, op_body, post_op, with_basis};
+use common::cos_ops::{cos_bearer, db, op_body, post_op, task_scope_basis, with_basis};
 use common::*;
 use serde_json::{Value, json};
 use task_core::decision::{
@@ -294,7 +294,7 @@ async fn cos_chat_ops_api_comment_and_decision_answer_use_the_shared_operations(
                 "/api/v1/decisions/dec-1/answer",
                 json!({"option": "vault"}),
             ),
-            documented_default_basis(),
+            task_scope_basis(),
         ),
     )
     .await;

@@ -988,7 +988,7 @@ async fn project_wake_api_human_inbox_cos_answer_and_resolve_are_not_counted() {
                 "reason": "人に聞く",
                 "policy_version": "5",
                 "escalation": {
-                    "summary": "決める",
+                    "to": "human", "summary": "決める",
                     "options": [{"key": "vault", "label": "vault"}, {"key": "manual", "label": "manual"}],
                     "recommended": "vault",
                     "recommendation_reason": "既定",

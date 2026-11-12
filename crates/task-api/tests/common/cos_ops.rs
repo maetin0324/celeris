@@ -60,16 +60,10 @@ pub fn op_body(key: &str, method: &str, path: &str, body: Value) -> Value {
     })
 }
 
-/// ADR 2026-10-28-cos-routine-delegated-answers D2: (c) the recommended option is a written default.
-pub fn documented_default_basis() -> Value {
-    json!({"category": "documented_default",
-           "refs": [{"kind": "adr", "id": "agent-docs/adr/2026-10-28-cos-routine-delegated-answers.md"}]})
-}
-
-/// D2: (d) a note that guides the work without changing objective or acceptance.
-pub fn work_guidance_basis() -> Value {
-    json!({"category": "work_guidance",
-           "refs": [{"kind": "progress", "id": "agent-docs/progress/2026-10-28-cos-routine-delegated-answers.md"}]})
+/// ADR 2026-11-12-cos-triage-scope D3: CoS's judgment inside the task, grounded on an ADR.
+pub fn task_scope_basis() -> Value {
+    json!({"category": "task_scope",
+           "refs": [{"kind": "adr", "id": "agent-docs/adr/2026-11-12-cos-triage-scope.md"}]})
 }
 
 /// `body` (a resolve or `/cos/operations` body) with `basis` set.
@@ -275,7 +269,7 @@ async fn run_domain_inner(
     let reason = audits[0]["reason"].as_str().unwrap_or_default();
     match answering {
         None => assert_eq!(reason, "人が依頼した", "{key}"),
-        Some(Some(_)) => assert!(reason.starts_with("定型の代答（"), "{key}: {reason}"),
+        Some(Some(_)) => assert!(reason.starts_with("CoS の判断（"), "{key}: {reason}"),
         Some(None) => assert!(reason.starts_with("人の指示（"), "{key}: {reason}"),
     }
     assert!(reason.ends_with("人が依頼した"), "{key}: {reason}");

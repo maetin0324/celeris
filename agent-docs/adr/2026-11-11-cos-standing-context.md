@@ -64,7 +64,11 @@ tasks: [01M75722QN630BBASEQ759KG4T]
   作り直して CHECK に `global` と新しい分類を足す（行は写す。追記専用の trigger と index も作り直す）。表の CHECK で
   「global の行は `project_id = '*'`・`scope_ref = '*'`・定型の代答の分類だけ」を固定する。
   API は案件の台帳と同じ `/api/v1/projects/{id}/authority…` で、`{id}` に `global` を書く（本文・人の token の規則は同じ。
-  新しい route を足さない）。
+  新しい route を足さない）。案件の `GET …/projects/<案件>/authority` は、その案件の行に加えて global の台帳の行
+  （許可と提案。`project_id = '*'`）も返す。行への操作（受け入れ・断る・取り消し）は行の台帳の path（`*` は `global`）へ
+  送る。案件の path で global の行を取り消すと `grant_missing`（404）になる。web の許可の画面は行の `project_id` から
+  path を作り、global の行に「全案件に効く」と出す。global の提案の通知は「どの案件の画面の『許可』からでも決められる」
+  と書く（`authority::proposal_summary`）。global の台帳だけの画面は作らない。
 - 定型の代答の委任は、代答の種類ごとの分類にする（初めは `job_wait_extend`。`ActionClass::is_routine_answer`）。
   当初案の「分類 `routine_answer` と欄 `answer_kind`」は採らない: 欄を足すと grant の型と表の全経路が変わり、分類 1 つで
   種類を表せば判定（分類の一致）と CHECK だけで足りるため。種類を足すときは分類を足す。

@@ -836,10 +836,11 @@ impl SqliteStore {
         })
     }
 
+    /// 案件 `project` の画面に出す提案: その案件の行と global の台帳の行（D4。許可の `grants_of` と同じ）。
     pub fn authority_proposals(&self, project: &str) -> Result<Vec<AuthorityProposal>, StoreError> {
         self.with_read_conn(|c| {
             let mut st = c.prepare_cached(&format!(
-                "SELECT {PROPOSAL_COLUMNS} FROM authority_proposals WHERE project_id = ?1
+                "SELECT {PROPOSAL_COLUMNS} FROM authority_proposals WHERE project_id IN (?1, '*')
                  ORDER BY created_at DESC, id DESC"
             ))?;
             let rows = st.query_map([project], proposal_row)?;
@@ -932,10 +933,7 @@ impl SqliteStore {
                 kind: crate::feed::NoticeKind::BadNews,
                 group_key: format!("bad_news:authority:{}", new.project_id),
                 title: crate::authority::proposal_title(&new.project_id, new.action_class),
-                summary: format!(
-                    "{}。案件の画面の「許可」で、許可するか断るかを決めてください。問いの key: {}。人の発言: {}",
-                    new.note, new.question_key, new.source.reference
-                ),
+                summary: crate::authority::proposal_summary(new),
                 project_id: (new.project_id != GLOBAL_LEDGER).then(|| new.project_id.clone()),
                 task_id: None,
                 target: None,

@@ -325,6 +325,20 @@ pub fn proposal_title(project: &str, class: ActionClass) -> String {
     }
 }
 
+/// D4: 許可の提案の通知の本文。global の提案は、どの案件の画面の「許可」にも並ぶ（[`AuthorityProposal`] の
+/// 台帳は `project_id`。画面は行の台帳へ送る）。
+pub fn proposal_summary(p: &AuthorityProposal) -> String {
+    let place = if p.project_id == GLOBAL_LEDGER {
+        "全案件に効く提案です。どの案件の画面の「許可」からでも"
+    } else {
+        "案件の画面の「許可」で"
+    };
+    format!(
+        "{}。{place}、許可するか断るかを決めてください。問いの key: {}。人の発言: {}",
+        p.note, p.question_key, p.source.reference
+    )
+}
+
 /// 範囲 `request` を `grant` が含むか。global の許可はすべての案件を、案件の許可は案件の中のすべてを、
 /// 途中目標・task の許可は同じ ref だけを含む（案件の許可の候補は同じ案件の行だけから選ぶ）。
 pub fn scope_covers(grant: &GrantScope, request: &GrantScope) -> bool {
@@ -483,6 +497,34 @@ mod tests {
         assert_eq!(grant_denial(&g, now), Some(reason::BUDGET_EXHAUSTED));
         g.revoked_at = Some("2026-11-02T00:00:00Z".into());
         assert_eq!(grant_denial(&g, now), Some(reason::REVOKED));
+    }
+
+    /// D4: global の提案の通知は、決める場所としてどの案件の画面でもよいと書く（global の台帳の画面は無い）。
+    #[test]
+    fn authority_proposal_summary_names_the_place_to_decide() {
+        let g = grant();
+        let mut p = AuthorityProposal {
+            id: "p1".into(),
+            project_id: "p".into(),
+            question_key: "k".into(),
+            scope: g.scope,
+            action_class: ActionClass::JobWaitExtend,
+            source: g.source,
+            expires_at: g.expires_at,
+            budget: 1,
+            note: "延長する".into(),
+            proposed_by: "cos:t".into(),
+            state: "open".into(),
+            resolved_grant_id: None,
+            resolved_by: None,
+            resolved_at: None,
+            created_at: g.created_at,
+        };
+        assert!(proposal_summary(&p).starts_with("延長する。案件の画面の「許可」で、"));
+        p.project_id = GLOBAL_LEDGER.into();
+        let global = proposal_summary(&p);
+        assert!(global.contains("全案件に効く提案です。どの案件の画面の「許可」からでも"));
+        assert!(global.ends_with("問いの key: k。人の発言: m"), "{global}");
     }
 
     #[test]

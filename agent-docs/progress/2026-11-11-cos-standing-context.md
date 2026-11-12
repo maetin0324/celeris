@@ -2,11 +2,11 @@
 title: CoS の常設の文脈（任された範囲・利用者・覚え書き・KB の入口）と人の委任の grant 化
 tasks: [01M75722QN630BBASEQ759KG4T]
 status: done
-updated: 2026-11-11
+updated: 2026-11-12
 ---
 # CoS の常設の文脈（任された範囲・利用者・覚え書き・KB の入口）と人の委任の grant 化
 
-完了日: 2026-11-11
+完了日: 2026-11-12
 
 設計判断は [ADR 2026-11-11 CoS の常設の文脈](../adr/2026-11-11-cos-standing-context.md)。基準は `git merge-base HEAD main`。
 
@@ -144,6 +144,21 @@ ADR の D4 を実装に合わせて書き直した（分類は `job_wait_extend`
 - review の検査の上限は 1200 秒で、この負荷の test-affected は 1273 秒かかった。review が時間切れになったら、負荷の低い時に
   再検査すれば足りる（コードの直しは要らない）。
 
+## attempt 5: global の行を案件の画面から操作できるようにする（review の差し戻し）
+
+review は、案件の画面に並ぶ global の許可の「取り消す」が `grant_missing`（404）になる点と、global の提案の通知が
+無い画面を指す点を差し戻した。直したこと:
+
+- web の許可の画面（`web/features/projects/project-authority-panel.tsx`）: 受け入れ・断る・取り消しの path を、画面の案件の
+  id でなく行の `project_id` から作る（`*` は `global`）。global の行に「全案件に効く」と出す。分類 `job_wait_extend` の表示名を足した。
+- store の `authority_proposals` は、許可の `grants_of` と同じく案件の行と global の行を返す（global の提案も案件の画面に並ぶ）。
+- 通知の本文を `task_core::authority::proposal_summary` に移し、global の提案は「どの案件の画面の『許可』からでも決められる」と書く。
+- 試験: web の `project-authority-panel.test.tsx` に global の行の path と表示の試験、`task-api` の
+  `cos_job_wait_extend` の scenario に案件の GET に global の許可・提案が `project_id = "*"` で並ぶことと、案件の path での
+  取り消しが 404 であることの確認、`task-core` に `authority_proposal_summary_names_the_place_to_decide` を足した。
+
+commit: 「phase 1: global の許可と提案を案件の画面から行の台帳へ操作し、通知に決める場所を書く」。
+
 ## D4 の実装前 brief
 
 1. 根本原因: ledger は案件・期限 366 日に限られ、取り次ぎは task と期限を必須にしていた。恒久の人の委任を表せず、job 待ちの
@@ -180,9 +195,9 @@ ADR の D4 を実装に合わせて書き直した（分類は `job_wait_extend`
    `POST /api/v1/projects/global/authority/proposals`、本文
    `{"question_key":"standing:1","scope":{"kind":"global","ref":"*"},"action_class":"job_wait_extend","source":{"kind":"human_message","ref":"<message id>"},"expires_at":"<今から 3650 日後の RFC3339>","budget":1000,"note":"<人の発言の要約>"}`。
    受信箱に「統括 CoS が全案件に効く許可（job_wait_extend）を提案しました」の通知が 1 件出る。
-3. 人が受け入れる: web には global の台帳の画面がまだ無い（未解決事項）。それまでは人の web token で
-   `POST /api/v1/projects/global/authority/grants` に同じ本文と `"proposal_id":"<提案の id>"` を送る（人の token 以外は 403）。
-   断るなら `POST /api/v1/projects/global/authority/proposals/<id>/dismiss`。
+3. 人が受け入れる: web のどの案件の画面でも、「許可」の節に「CoS の提案: 全案件に効く・job 待ちの上限の延長（1000 回まで）」が
+   出る。「許可する」を押す（期限と回数は提案のまま）。受け入れない場合は「断る」を押す。取り消すときは、同じ節の
+   「全案件に効く・job 待ちの上限の延長・有効」の行の「取り消す」を押す（取り消しはすべての案件に及ぶ）。
 4. 確認: `GET /api/v1/projects/global/authority` の grant が `state = live`。次の CoS run の `runs/<run_id>/prompt.txt` の
    `<!-- celeris:cos-standing v1 … grants=N/…` の N が 1 増える。案件の job 待ちの上限の件を CoS が答えたら、
    `GET /api/v1/projects/<案件>/authority` の audit に `human_decision_ref = authority_grant:<id>` の行が出る。
@@ -200,7 +215,10 @@ ADR の D4 を実装に合わせて書き直した（分類は `job_wait_extend`
 
 ## 未解決事項
 
-- web の許可の画面は案件ごとで、global の台帳の画面が無い。人が global の提案を受け入れるには今は API を使う。
+- review の advisory 3 件は直していない: (1) prompt に入れる取り次ぎ（`chat_relayed_instructions`）は期限だけを見て、
+  取り消した grant の取り次ぎも残る（判定は `forward_gap` と 2 か所）。(2) `CosStandingGrant` の `expires_at`・
+  `budget_remaining` が Option のまま。(3) grant の使用の監査（`record_grant_use`）は代答と別の transaction。
+  `crates/task-core/src/chat` は行の閾値 8000 ちょうどで、(1) を chat に足すと health が落ちるため、別 task で扱う。
 - 種 #2〜#5 に当たる分類（node 障害での継続・衝突の統合・計画の承認）は未実装。
 - `cos/memory.md` の初期の本文は未作成（KB の変更は人の確認を通す）。
 - 実物 K4 の明示指定試験（attempt 2）は完走を確かめていない。
@@ -209,5 +227,5 @@ ADR の D4 を実装に合わせて書き直した（分類は `job_wait_extend`
 
 1. 定型の代答の分類を足す: `plan_conforms`（計画の承認）、衝突の統合、node 障害での実験の継続。足すたびに migration で
    CHECK を作り直し、basis の各 category の検査で grant の効果（何を人に回さなくなるか）を決める。
-2. web の許可の画面に global の台帳（`/projects/global/authority`）を出し、人が画面で受け入れ・取り消しできるようにする。
+2. 上の advisory (1) を直す: 取り次ぎの有効性の判定を store の 1 か所に寄せ、`chat` の行を減らしてから grant の生死を足す。
 - 統括 CoS の relay の期限切れ（4〜48 時間）で人に戻った件数を、D4 の配備の前後で `authority_audit` と受信箱の件数で比べる。

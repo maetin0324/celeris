@@ -598,6 +598,38 @@ async fn standing_job_wait_grant_from_the_general_thread_answers_the_project_wai
     assert_eq!(relay["source"]["message_id"], said.as_str());
     assert!(relay["scope"].get("task_ids").is_none(), "{relay}");
     assert!(relay["scope"].get("expires_at").is_none(), "{relay}");
+    // 案件の画面（GET …/projects/<案件>/authority）にも global の許可と提案が台帳の印（"*"）つきで並ぶ。
+    // 画面はこの印で global の台帳の path へ取り消し・受け入れを送る（案件の path では grant_missing）。
+    let shown = send(
+        &app,
+        get_with(&format!("/api/v1/projects/{project}/authority"), &as_human),
+    )
+    .await;
+    assert_eq!(shown.status.as_u16(), 200, "{}", shown.text());
+    let shown = shown.json();
+    let row = |list: &str, id: &str| {
+        shown[list]
+            .as_array()
+            .expect("list")
+            .iter()
+            .find(|r| r["id"] == id)
+            .cloned()
+            .unwrap_or_else(|| panic!("{list} {id} in {shown}"))
+    };
+    assert_eq!(row("grants", &grant)["project_id"], "*");
+    assert_eq!(row("grants", &grant)["state"], "live");
+    assert_eq!(row("proposals", &proposal_id)["project_id"], "*");
+    assert_eq!(row("proposals", &proposal_id)["state"], "accepted");
+    let wrong_ledger = send(
+        &app,
+        post_json_with(
+            &format!("/api/v1/projects/{project}/authority/grants/{grant}/revoke"),
+            &json!({"reason": "案件の台帳からは取り消せない"}),
+            &as_human,
+        ),
+    )
+    .await;
+    assert_eq!(wrong_ledger.status.as_u16(), 404, "{}", wrong_ledger.text());
 
     // 5. 案件 CoS が 4 回目の job 待ちの上限を grant の id を根拠に答え、人に回さない。
     let project_id: task_core::ProjectId = project.parse().expect("project id");

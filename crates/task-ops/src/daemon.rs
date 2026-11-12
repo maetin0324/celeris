@@ -367,6 +367,7 @@ pub struct ScratchOwnerForecastView {
     pub repo_key: String,
     /// 増分を予約する: DB の状態が run か review の検査で書かれうる（`task running`・`task reviewing`・
     /// `work unit running`）か、lease の生きた release-build（`lease live`。次の build が見込みまで育てる）。
+    /// WU を待っているだけの `running` の親（`task waiting for work units`）は予約しない。
     /// 「1 本は通す」の書き手かどうかは別で、daemon が run・review・WU の検査を今走らせている task だけが書き手。
     pub grows: bool,
     /// 測った大きさ（未測定・target がまだ無いときは `None`。見込みでは 0 と見る）。

@@ -239,6 +239,110 @@ impl StatusLookup for Db {
     fn work_unit_status(&self, id: &str) -> Option<WorkUnitStatus> {
         self.wus.get(id).copied()
     }
+    fn task_work_units(&self, _: &str) -> Vec<UnitTargetUse> {
+        Vec::new()
+    }
+}
+
+/// `running` の task の WU の状態だけを与える lookup（[`task_awaits_work_units`] の試験）。
+struct Plan(Vec<UnitTargetUse>);
+impl StatusLookup for Plan {
+    fn task_status(&self, _: &str) -> Option<Status> {
+        Some(Status::Running)
+    }
+    fn work_unit_status(&self, _: &str) -> Option<WorkUnitStatus> {
+        None
+    }
+    fn task_work_units(&self, _: &str) -> Vec<UnitTargetUse> {
+        self.0.clone()
+    }
+}
+
+fn unit(status: WorkUnitStatus, shares_task_worktree: bool) -> UnitTargetUse {
+    UnitTargetUse {
+        status,
+        shares_task_worktree,
+    }
+}
+
+/// 不変条件（ADR 2026-11-11-disk-aware-dispatch 付記 2026-11-12、親の数え方）: `running` の親の owner `task-<id>` は、
+/// 親の target に書く run・検査（WU の無い task の run、Task の worktree を共有する WU）があるときだけ「今書いている」。
+/// 自分の worktree を持つ WU・子 task だけが走っている、またはどの WU も走っていない親は書いていない。上の
+/// `only_running_and_reviewing_owners_count_as_written_now` は WU の無い task しか見ないので、親を一律に `task running`
+/// と数える旧い分類（本番で WU 1 本に repo の見込みの 2 倍を予約した）を検出できない。
+#[test]
+fn a_running_parent_is_written_only_while_a_run_shares_its_target() {
+    let s = ScratchSettings::with_dir("/s");
+    let parent = Owner::parse("task-P").unwrap();
+    let reason = |units: Vec<UnitTargetUse>| {
+        let (class, reason) = classify(
+            &parent,
+            Some(&lease_for(&parent)),
+            at(T0),
+            at(T0 + 10),
+            &s,
+            &Plan(units),
+            true,
+        );
+        assert_eq!(
+            class,
+            Class::Pinned,
+            "the parent's target is never reclaimed"
+        );
+        reason
+    };
+    use WorkUnitStatus::*;
+    // WU の run 1 本が自分の worktree で走っているだけ（本番の 2026-11-12 17:12Z の形）。
+    let r = reason(vec![unit(Running, false), unit(Pending, true)]);
+    assert_eq!(r, TASK_AWAITING_WORK_UNITS);
+    assert!(!target_written_now(r));
+    // どの WU も走っていない（次の WU が判定で待っている）。
+    assert!(!target_written_now(reason(vec![
+        unit(Done, false),
+        unit(Ready, true),
+    ])));
+    // 統合 WU・repair WU・並列 1 に倒した WU が Task の worktree で走っている。
+    let r = reason(vec![unit(Done, false), unit(Running, true)]);
+    assert_eq!(r, TASK_RUNNING);
+    assert!(target_written_now(r));
+    // WU の無い task（Task 単位の run）と、WU がすべて終わった task の run。
+    assert!(target_written_now(reason(Vec::new())));
+    assert!(target_written_now(reason(vec![
+        unit(Done, false),
+        unit(Superseded, true),
+    ])));
+}
+
+/// WU の行から材料を作る: branch のある WU は自分の worktree、branch の無い WU は Task の worktree を共有し、子 task の
+/// unit は共有しない。
+#[test]
+fn a_unit_shares_the_task_target_when_it_has_no_branch_of_its_own() {
+    let spec: task_core::WorkUnitSpec = serde_json::from_value(serde_json::json!({
+        "key": "a", "kind": "implement", "title": "t", "objective": "o", "phase": "p"
+    }))
+    .unwrap();
+    let row = |kind: task_core::WorkUnitKind, branch: Option<&str>| {
+        let mut r = task_core::WorkUnitRow::new(
+            "w".into(),
+            "t".into(),
+            "plan".into(),
+            1,
+            spec.clone(),
+            Running,
+            "2026-11-12T00:00:00Z".into(),
+        );
+        r.kind = kind;
+        r.branch = branch.map(str::to_string);
+        UnitTargetUse::of(&r)
+    };
+    use WorkUnitStatus::Running;
+    use task_core::WorkUnitKind::*;
+    assert!(!row(Implement, Some("celeris-wu/t/a")).shares_task_worktree);
+    assert!(row(Implement, None).shares_task_worktree);
+    assert!(row(Integrate, None).shares_task_worktree);
+    assert!(row(Repair, None).shares_task_worktree);
+    assert!(!row(Task, None).shares_task_worktree);
+    assert_eq!(row(Implement, None).status, Running);
 }
 
 fn lease_for(owner: &Owner) -> Lease {

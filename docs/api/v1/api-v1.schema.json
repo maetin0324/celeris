@@ -29441,7 +29441,7 @@
           "type": "integer"
         },
         "grows": {
-          "description": "増分を予約する: DB の状態が run か review の検査で書かれうる（`task running`・`task reviewing`・\n`work unit running`）か、lease の生きた release-build（`lease live`。次の build が見込みまで育てる）。\n「1 本は通す」の書き手かどうかは別で、daemon が run・review・WU の検査を今走らせている task だけが書き手。",
+          "description": "増分を予約する: DB の状態が run か review の検査で書かれうる（`task running`・`task reviewing`・\n`work unit running`）か、lease の生きた release-build（`lease live`。次の build が見込みまで育てる）。\nWU を待っているだけの `running` の親（`task waiting for work units`）は予約しない。\n「1 本は通す」の書き手かどうかは別で、daemon が run・review・WU の検査を今走らせている task だけが書き手。",
           "type": "boolean"
         },
         "growth_bytes": {

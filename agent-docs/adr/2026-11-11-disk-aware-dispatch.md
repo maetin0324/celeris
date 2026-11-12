@@ -47,7 +47,8 @@ run を起こす前（write-set の判定の後、lease の前）に、次の不
   測った target が無い repo の見込みは 0（判定しない。GC は全体の最大で補うが、dispatch は判定しない）。
 - **走っている target の増分**: 増分を予約する owner（`ScratchOwnerForecastView.grows`）。DB の状態から run か review の検査で書かれうる owner（分類の理由が `task running`・
   `task reviewing`・`work unit running`。`task_worker::scratch::target_written_now`。review の検査も task の owner の
-  `CARGO_TARGET_DIR` で build する）と、lease の生きた release-build（`lease live`）ごとに
+  `CARGO_TARGET_DIR` で build する。`running` の親が WU を待っているだけ（Task の target に書く run・検査が無い）なら
+  理由は `task waiting for work units` で、数えない。下の付記「親の数え方」）と、lease の生きた release-build（`lease live`）ごとに
   `max(0, repo の見込み − 今の大きさ)`。未測定は大きさ 0 と見る。target がまだ pool に無い（seed を `.seed-copy-*` に
   写している最中。写し終えてから `target/` に rename する）run も、大きさ不明の増える owner として数える。class `p0` でも
   agent の lease と、まだ始まらない WU（`work unit queued`。その run の見込みはこの判定で数える）は数えない。
@@ -73,9 +74,10 @@ run を起こす前（write-set の判定の後、lease の前）に、次の不
   終わりが来ない）。書き手は (a) 走査で増分を持つ owner のうち、この daemon が run・review・WU の検査を今走らせている
   task（dispatcher の `running`・`reviewing`・`checking`。`Gate::begin_pass` の `runs`・`others`）のものと、(b) 通したがまだ走査に
   出ない run。増分を持つかは DB の状態から決まるが、書き手かどうかは daemon が走らせているかで決める（2 つの意味を
-  分ける）。release-build（task が無い）、`reviewing` で子・policy の人の承認・再同期の停止を待つ task、WU を待つ
-  `running` の親は増分の予約には数えるが書き手ではない（待っても終わらない）。Rust でない run・対話の run も書き手で
-  ない（走査に target が無い）。
+  分ける）。release-build（task が無い）と、`reviewing` で子・policy の人の承認・再同期の停止を待つ task は増分の
+  予約には数えるが書き手ではない（待っても終わらない）。WU を待っているだけの `running` の親は増分の予約にも数えない
+  （親の target を書く run・検査が無い。付記「親の数え方」）。Rust でない run・対話の run も書き手でない（走査に
+  target が無い）。
 - **対象**: scratch が有効で、run の cargo の target を結び付ける repo（`cargo_target_repo`）があり、この run の
   見込みが 0 より大きいもの。Remote の run と見込み 0 の run（Rust でない repo、続きで増分が無い run）は判定しない。
 - **呼び出し**: `Gate::judge_run`（`dispatch_run.rs` から `&self` で呼ぶ。起動したら `Gate::started`。状態は `Gate` の中の Mutex）。Dispatcher の field・method は増やさない（health の `size.responsibility-growth`）。試験は `Gate.probe` で空きと大きさを注入する。
@@ -175,6 +177,38 @@ dispatcher は run を `running` に入れた直後にだけ `Gate::started` で
 `begin_pass` の `runs` と同じ。試験: `disk_admission::tests::a_run_judged_but_not_started_is_not_counted`（Gate の単体）
 と `dispatcher::tests::disk_forecast::a_route_refused_run_ahead_does_not_hold_the_next_run`（宣言の無い harness の task
 を先に並べた dispatcher の tick）。旧い数え方に戻すとどちらも落ちることを確かめた。
+
+付記（2026-11-12、親の数え方。task 01M78D03YNZ21WM22D5754G7TB）: 本番（release 3ea65571f611、係数 1.0）の 17:12Z〜17:29Z に、
+走っている run が R4（01M6TYVJT4S29ZMP6P0D4831JG）の WU 01M74SFN275QDFT0M899A4EKEB の 1 本だけで、2 件の Rust の
+task が空きの見込みで待った。走っている target の増分 137.8 GB は、WU の owner（大きさ 4.0 GB、増分 66.9 GB）と、
+WU を待っているだけの親の owner `task-01M6TYVJT4S29ZMP6P0D4831JG`（lease と `wu-*` だけで target が無い。大きさ不明の
+増える owner として repo の見込み 70.9 GB 全体）の和で、WU の run 1 本で repo の見込みのほぼ 2 倍を予約した。旧い D1 は
+「WU を待つ `running` の親は増分の予約には数える」としていた。親の owner を `CARGO_TARGET_DIR` に使うのは Task 単位の
+run、Task の worktree を共有する WU（統合 WU・repair WU・並列 1 に倒した WU・v1 の WU）の run と検査、`reviewing` の
+検査だけで、自分の worktree を持つ WU の run と検査は `task-<id>/wu-<id>` に書く。
+
+- 走査の分類（`task_worker::scratch::classify`）は、`running` の task が WU を待っているだけなら理由を
+  `task waiting for work units`（P0 のまま。GC は消さない）にし、`target_written_now` に入れない（増分を予約しない）。
+  WU を待っているだけとは、終わっていない WU があり、`Running` の WU のどれも Task の worktree を共有しないこと
+  （`task_awaits_work_units`）。共有するかは WU の branch の有無で決める（branch は自分の worktree を切った WU にだけ、
+  `Running` に移すのと同じ transaction で入る。`acquire_work_unit_lease`）。子 task の unit（kind `task`）は共有しない。
+  材料は `StatusLookup::task_work_units`（store の `work_units_for`）。WU の無い task と、WU がすべて終わった task の
+  `running` は従来どおり `task running`。
+- 親が自分の target に書く段に入るときは既存の経路で数える。Task 単位の run と Task の worktree を共有する WU の run
+  は、判定（`Gate::judge_run`。owner は `Owner::of_run` で `task-<id>`）でその run の見込みを数え、起動の後は通した分と
+  して、WU が `Running` になって走査に `task running` として出たら走査の増分として数える。統合 WU の検査の間は統合 WU が
+  `Running` なので親の owner は `task running`、`reviewing` の検査は `task reviewing` で数える。
+- 前に自分の worktree を切った WU が後で並列 1 に倒れて Task の worktree で走ると、branch が残るので親は
+  `task waiting for work units` のままになる。その run の見込みは判定で通した分（`Gate` の `admitted`。owner
+  `task-<id>`）に入り、走査に増える owner として出ないので run が終わるまで数え続ける（数え落とさない）。
+- 「詰まらない」規則、lease の生きた release-build の常時の予約、`forecast_disk_ratio` の意味は変えない。本番の
+  `forecast_disk_ratio = 0.3`（2026-11-12 17:29Z に operator が設定）はそのまま残す。
+- 試験: `task_worker::scratch::tests::a_running_parent_is_written_only_while_a_run_shares_its_target`（分類）、
+  `a_unit_shares_the_task_target_when_it_has_no_branch_of_its_own`（WU の行からの材料）、
+  `task_dispatch::scratch_gc::tests::a_parent_waiting_for_its_work_unit_reserves_only_the_work_unit_growth`（pool の
+  走査から status の増分まで。本番の形で増分が WU の 66 GB だけになる）。Task の worktree を共有する WU の判定は既存の
+  `disk_admission::tests::a_shared_worktree_work_unit_is_judged_by_the_task_owner`。旧い数え方（親を一律に
+  `task running`）に戻すと、分類の試験と走査から status までの試験の 2 つが落ちることを確かめた。
 
 ## 結果
 

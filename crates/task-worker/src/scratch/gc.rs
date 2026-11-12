@@ -52,6 +52,40 @@ impl Class {
 pub trait StatusLookup {
     fn task_status(&self, task_id: &str) -> Option<Status>;
     fn work_unit_status(&self, work_unit_id: &str) -> Option<WorkUnitStatus>;
+    /// task の WU が Task の target を書くかの材料（[`task_awaits_work_units`]。計画の無い task は空）。
+    fn task_work_units(&self, task_id: &str) -> Vec<UnitTargetUse>;
+}
+
+/// ADR 2026-11-11-disk-aware-dispatch 付記（2026-11-12、親の数え方）: WU 1 つが Task の target（owner `task-<id>`）を
+/// 書くかの材料。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UnitTargetUse {
+    pub status: WorkUnitStatus,
+    /// 自分の worktree を持たず Task の worktree を共有する（run と検査が owner `task-<id>` の `CARGO_TARGET_DIR` で
+    /// build する）。WU の branch は自分の worktree を切ったときだけ、`Running` に移すのと同じ transaction で入る
+    /// （`acquire_work_unit_lease`）ので、branch の無い WU（統合 WU・repair WU・並列 1 に倒した WU・v1 の WU）が共有する。
+    /// 子 task の unit（kind `task`）は子が自分の owner で走るので共有しない。
+    pub shares_task_worktree: bool,
+}
+
+impl UnitTargetUse {
+    pub fn of(row: &task_core::WorkUnitRow) -> Self {
+        UnitTargetUse {
+            status: row.status,
+            shares_task_worktree: row.kind != task_core::WorkUnitKind::Task && row.branch.is_none(),
+        }
+    }
+}
+
+/// ADR 2026-11-11-disk-aware-dispatch 付記（2026-11-12、親の数え方）: `running` の task が WU を待っているだけか。
+/// 終わっていない WU があり、`Running` の WU のどれも Task の worktree を共有しない（自分の worktree の WU か子 task
+/// だけが走っている・どれも走っていない）なら、Task の owner に書く run・検査は無い。WU の無い task（Task 単位の run・
+/// planner）と、Task の worktree を共有する WU が走っている task は書いている。
+pub fn task_awaits_work_units(units: &[UnitTargetUse]) -> bool {
+    units.iter().any(|u| !u.status.is_terminal())
+        && !units
+            .iter()
+            .any(|u| u.status == WorkUnitStatus::Running && u.shares_task_worktree)
 }
 
 /// DB を持たない呼び出し（DB が無い・開けない）。daemon 由来の owner は「DB に行が無い」＝ P3 にはせず、
@@ -63,6 +97,9 @@ impl StatusLookup for NoDb {
     }
     fn work_unit_status(&self, _: &str) -> Option<WorkUnitStatus> {
         None
+    }
+    fn task_work_units(&self, _: &str) -> Vec<UnitTargetUse> {
+        Vec::new()
     }
 }
 
@@ -80,6 +117,16 @@ impl StatusLookup for StoreLookup<'_> {
             .flatten()
             .map(|w| w.status)
     }
+    fn task_work_units(&self, task_id: &str) -> Vec<UnitTargetUse> {
+        let Ok(id) = task_id.parse::<task_core::TaskId>() else {
+            return Vec::new();
+        };
+        match self.0.work_units_for(id) {
+            Ok(rows) => rows.iter().map(UnitTargetUse::of).collect(),
+            // 読めなければ WU を待っているとは言えない（`task running` のまま増分に数える。安全側）。
+            Err(_) => Vec::new(),
+        }
+    }
 }
 
 fn age(now: SystemTime, t: SystemTime) -> u64 {
@@ -89,14 +136,17 @@ fn age(now: SystemTime, t: SystemTime) -> u64 {
 /// 分類の理由のうち、run かその review の検査が今 target に書いているもの（ADR 2026-11-11-disk-aware-dispatch D1 の
 /// 「増える target」）。review の検査も task の owner の `CARGO_TARGET_DIR` で build する（`review_spawn.rs`）。
 pub const TASK_RUNNING: &str = "task running";
+/// `running` の task が WU を待っているだけ（[`task_awaits_work_units`]）。P0（消さない）だが今は誰も書かない。
+pub const TASK_AWAITING_WORK_UNITS: &str = "task waiting for work units";
 pub const TASK_REVIEWING: &str = "task reviewing";
 pub const WORK_UNIT_RUNNING: &str = "work unit running";
 /// release-build・agent の lease が生きている（`Owner::Release`・`Owner::Agent` の P0 の理由）。
 pub const LEASE_LIVE: &str = "lease live";
 
 /// ADR 2026-11-11-disk-aware-dispatch D1: 分類の理由が「run か review の検査が今 target に書いている」か。P0 でも
-/// release-build・agent の lease（`lease live`）と、まだ始まっていない WU（`work unit queued`。run の見込みは dispatch の
-/// 判定で数える）は含めない。
+/// release-build・agent の lease（`lease live`）、まだ始まっていない WU（`work unit queued`。run の見込みは dispatch の
+/// 判定で数える）、WU を待っているだけの `running` の親（[`TASK_AWAITING_WORK_UNITS`]。親の owner に書く run の見込みは
+/// dispatch の判定で数える）は含めない。
 pub fn target_written_now(reason: &str) -> bool {
     matches!(reason, TASK_RUNNING | TASK_REVIEWING | WORK_UNIT_RUNNING)
 }
@@ -147,6 +197,9 @@ pub fn classify(
     };
     match owner {
         Owner::Task { task_id } => match lookup.task_status(task_id) {
+            Some(Status::Running) if task_awaits_work_units(&lookup.task_work_units(task_id)) => {
+                (Class::Pinned, TASK_AWAITING_WORK_UNITS)
+            }
             Some(Status::Running) => (Class::Pinned, TASK_RUNNING),
             Some(Status::Reviewing) => (Class::Pinned, TASK_REVIEWING),
             Some(Status::Draft | Status::Ready | Status::Blocked) => {

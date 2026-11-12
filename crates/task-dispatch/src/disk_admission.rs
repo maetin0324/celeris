@@ -11,9 +11,12 @@
 //!   （[`Admission::Go`] の見込みを捨てる。attempt 10 の review の指摘）。
 //! - D1「1 本は通す」: 終わる見込みのある書き手（この daemon が run・review・WU の検査を今走らせている task の、走査で
 //!   増分を持つ owner と、通したがまだ走査に出ない run）が 1 本も無ければ 1 本は通す（詰まらない）。増分を持つかは走査の
-//!   DB の状態から決まるが、`reviewing` で子・人の承認・再同期の停止を待つ task と、WU を待つ `running` の親は target を
-//!   書かず、待っても終わらないので書き手に数えない（attempt 7 の review の指摘）。owner は worker と同じ
-//!   （[`task_worker::scratch::Owner::of_run`]）。
+//!   DB の状態から決まるが、`reviewing` で子・人の承認・再同期の停止を待つ task は target を書かず、待っても終わらない
+//!   ので書き手に数えない（attempt 7 の review の指摘）。owner は worker と同じ（[`task_worker::scratch::Owner::of_run`]）。
+//! - D1 付記（2026-11-12、親の数え方）: WU を待っているだけの `running` の親（Task の target に書く run・検査が無い）は、
+//!   走査の分類（`task waiting for work units`。[`task_worker::scratch::task_awaits_work_units`]）で増分も持たない。親の
+//!   owner に書く run（Task 単位の run・Task の worktree を共有する WU）はこの判定で見込みを数え、走ると `task running`
+//!   として走査の増分に入る。
 //! - D2: 予備（空きの下限）は filesystem の容量 × `[dispatch] min_free_disk_pct`（[`min_free_bytes`]）。
 //! - D1「記録」: 待たせた run の判定は task の待ちの理由 `TaskWait::DiskForecast`（ADR 2026-10-11-task-wait-reasons の M12）
 //!   として返し、dispatcher がその場で `dispatch_waits` に入れる（[`Gate::judge_run`]）。task の `waits`・`runnable`・停滞の
@@ -401,8 +404,8 @@ impl Gate {
             .retain(|k, (o, _)| k != &key && !growing.contains(&o.as_str()));
         let admitted_bytes = st.admitted.values().map(|(_, b)| b).sum();
         // 「1 本は通す」の書き手: 増分を持つ owner のうち、この daemon が run・review・WU の検査を走らせている task の
-        // もの。release-build（task が無い）と、reviewing・running のまま子・人・WU を待つ task は入らない（待っても
-        // 終わらないので、数えると詰まる）。
+        // もの。release-build（task が無い）と、reviewing のまま子・人を待つ task は入らない（待っても終わらないので、
+        // 数えると詰まる）。WU を待つだけの running の親は、走査で増分を持たない（`task waiting for work units`）。
         let busy_writers = growing
             .iter()
             .filter_map(|o| task_worker::scratch::Owner::parse(o).ok())

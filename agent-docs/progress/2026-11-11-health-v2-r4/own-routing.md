@@ -1,12 +1,12 @@
 ---
 title: "健全性v2 R4 own-routing: routing の状態を RoutingRuntime へ移し route_state の判断を純粋関数に分ける"
 tasks: [01M6TYVJT4S29ZMP6P0D4831JG]
-status: blocked
+status: running
 updated: 2026-11-12
 ---
 # 健全性v2 R4 own-routing: routing の状態を RoutingRuntime へ移し route_state の判断を純粋関数に分ける
 
-完了日: 未完了（2026-11-12 時点。計画の test-affected の check が範囲外の試験で落ちるため、計画の直しを申告した）
+完了日: 未完了（2026-11-12 時点。提出時の HEAD の検査の後に書く）
 
 ## 概要
 
@@ -59,18 +59,20 @@ updated: 2026-11-12
   単独では 5 回とも pass（30〜45 秒）、上の再実行でも pass。`RoutingRuntime::route_state` は帳簿をまとめて lock するが、他の lock の持ち手
   （llm-proxy・routing_guardrail・sinks）は帳簿を 1 つずつしか持たないので、lock の順序による待ち合いは起きない。負荷による時間切れと見た（原因は未確認）。
 
-## 2 回目の提出の check の不合格と申告（計画の直しが要る）
+## 2 回目の提出の check の不合格と、fix-cmp-home による直し
 
-- 計画の check `bash scripts/dev/test-affected.sh` が exit 100。落ちたのは `celeris::script_compare_cos_digest` の 6 件だけ
-  （3747 件中 3741 件 pass）。`digest_pass` の 2 回目の tick の後の `assert_eq!(world(&env), …)`（324 行）で、受信箱に
+- 計画の check `bash scripts/dev/test-affected.sh` が exit 100 だった。落ちたのは `celeris::script_compare_cos_digest` の 6 件だけ
+  （3747 件中 3741 件 pass）。`digest_pass` の 2 回目の tick の後の `assert_eq!(world(&env), …)` で、受信箱に
   `release_unpromoted-selfdeploy`（fallback）の項目が増えていた。
-- 原因: `crates/celeris/tests/support/script_compare.rs` の `config_text` が `[selfdeploy] releases_dir` を書かないので、試験の dispatcher が
-  既定の `~/.local/celeris/releases`（本物の host）を読む。host には検証済みで未昇格の release が 2 件（verify は 19:18Z と 19:53Z、`promoted.json` が無い）あり、
-  早い方の検証から `release_unpromoted_secs`（既定 3600 秒）を過ぎた 20:18Z 以降、停滞の判定が項目を作る。routing の変更は関係しない
-  （この unit は `task-ops` の停滞判定・`tree_units.rs`・試験の helper を変えていない）。
-- 確認: 同じ試験 binary を本物の HOME で走らせると 6 件 FAIL、`HOME=$TMPDIR/empty-home` では 9 件すべて pass（提出時の HEAD で実行）。
-- 根本の直しは `config_text` に `[selfdeploy]` と `releases_dir = "releases"`（一時 dir の config からの相対。他の celeris の試験と同じ書き方）を
-  足すこと。この file は own-routing の範囲 check の許可 path の外なので、この unit では直さず、計画の直し（plan_issue）を申告した（規約 9）。
+- 原因は routing の変更ではなかった。`crates/celeris/tests/support/script_compare.rs` の `config_text` が `[selfdeploy] releases_dir` を
+  書かないので、試験の dispatcher が既定の `~/.local/celeris/releases`（本物の host）を読み、host の検証済みで未昇格の release が
+  `release_unpromoted_secs`（既定 3600 秒）を過ぎると停滞の判定が項目を作っていた。本物の HOME で 6 件 FAIL、
+  `HOME=$TMPDIR/empty-home` で 9 件すべて pass を確かめた。
+- この file は own-routing の範囲の外なので、この unit では直さず計画の直しを申告した。計画 v4 が WU fix-cmp-home
+  （`config_text` に `[selfdeploy]` と `releases_dir = "releases"` を足し、config が一時 dir の外を読まないことを assert する）を足し、
+  own-routing の依存先を fix-cmp-home に変えた。celeris が旧い WU branch を `own-routing-superseded-*` に退避し、fix-cmp-home の HEAD から
+  作り直した。この run は退避した branch の『own-maint の test-affected の結果を書く』より後の 5 commit を古い順に cherry-pick した
+  （衝突なし、実装は作り直していない）。作業ツリーに fix-cmp-home の直しがあることは `config_text` の `[selfdeploy]` で確かめた。
 
 ## 未確認・提案
 

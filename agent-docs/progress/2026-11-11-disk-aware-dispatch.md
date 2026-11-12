@@ -45,11 +45,13 @@ commit（件名）:
 - `phase 6: 進捗に attempt 6 の検査の結果を書く`
 - `phase 7: 1 本は通す数えから release-build の lease を外す`
 - `phase 8: count only the tasks this daemon runs as writers for the never-stall rule, judge with the worker's scratch owner`（attempt 8）
+- `phase 8: move the disk_admission tests out of line and pass the running run keys to the gate (health size limits)`
 
 ## 証拠
 
 （提出時の HEAD で実行。基準は `git merge-base HEAD main`）
 
+- attempt 8（提出時の HEAD）: `bash scripts/dev/test-affected.sh` exit 100（1300 秒）。nextest 6764 件のうち 6758 passed、落ちたのは celeris の `script_compare_cos_digest` の 6 件だけ（web 711 passed、repo-health verdict=pass）。この 6 件は同じ binary を単独で走らせても落ちる（9 件中 6 failed）。差は、受信箱に余分な `release_unpromoted-selfdeploy` の項目があること（host の release の状態から来ると見ている。この変更は selfdeploy・受信箱の経路を変えていない。main で同じ失敗が出るかは時間切れで未確認）。`cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check`・`sh scripts/dev/progress-index.sh --check` は exit 0（code の最後の変更の前に実行）。`bash scripts/dev/check-health.sh` verdict=pass。
 - attempt 8: `cargo nextest run -p task-dispatch -p task-worker -p task-api -p task-ops -p celerisctl -p celeris -E 'test(disk_admission) | test(disk_forecast) | test(scratch) | test(committed_schema_matches_generated)'` 90 passed（新しい試験 3 件を含む）。`UPDATE_SCHEMA=1 cargo test -p task-api --lib committed_schema_matches_generated` 1 passed、`node web/scripts/gen-types.mjs` で生成型を作り直した。
 
 - attempt 7（提出時の HEAD）: `bash scripts/dev/test-affected.sh` exit 0（nextest 6761 passed）。初回は負荷依存の task-worker `daemon_post_login_consent_not_pressed_twice_and_diagnostics_hold_no_page_data` 1 件が落ち（範囲外）、再実行で exit 0。clippy・fmt・progress-index exit 0。`cargo test -p task-dispatch --lib disk_admission` 8 passed（新しい試験を含む）。
@@ -74,6 +76,8 @@ commit（件名）:
 - release-build の target が今 64 GiB を超えていても、次の release の開始時（従来どおり）と終了時（新しい D3）に上限で作り直される。人の手作業は要らない。
 
 ## 未解決事項
+
+- attempt 8: celeris の `script_compare_cos_digest` 6 件が受信箱の余分な `release_unpromoted-selfdeploy` で落ちる（単独でも落ちる。原因が host の release の状態か、main でも落ちるかは未確認）。
 
 - 待たせている task の理由は `TaskWait` には出していない（task-core の変更を避けた）。画面の task の待ちの理由には出ず、daemon の `GET /api/v1/metrics/scratch` の `admission.held` だけに出る（`celerisctl scratch status` は見込みだけを出し、`held` は `null`）。
 - 増分の予約（`grows`）は DB の状態から決まるので、`reviewing` で子を待つ親・WU を待つ `running` の親の target も増分を予約する（書き手ではないので詰まりはしないが、予約が多めになり Rust の run が待つ時間が延びうる）。

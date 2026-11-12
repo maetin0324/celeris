@@ -861,12 +861,12 @@ async fn candidates_never_appear_in_the_human_inbox() {
 #[tokio::test]
 async fn the_cos_memory_note_route_records_and_accepts_into_the_memory_page() {
     use task_worker::protocol::{COS_MEMORY_PAGE, COS_MEMORY_SCOPE};
-    let env = env();
+    let env = admin_env();
     init_kb(&env.knowledge_root);
     let app = env.router();
     let made = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/knowledge/inbox",
             &json!({
                 "title": "CoS の覚え書き",
@@ -882,7 +882,7 @@ async fn the_cos_memory_note_route_records_and_accepts_into_the_memory_page() {
     let id = made.json()["id"].as_str().expect("candidate id").to_owned();
     let accepted = send(
         &app,
-        p(&format!("/api/v1/knowledge/inbox/{id}/accept"), &json!({})),
+        post_admin(&format!("/api/v1/knowledge/inbox/{id}/accept"), &json!({})),
     )
     .await;
     assert_eq!(accepted.status.as_u16(), 200, "{}", accepted.text());

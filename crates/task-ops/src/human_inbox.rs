@@ -1141,20 +1141,7 @@ impl Builder<'_> {
                 ..
             } => {
                 let path = format!("/api/v1/tasks/{}/execution/plan-gate", task.id);
-                // ADR 2026-11-12-cos-triage-scope D4: the reasons (`near_limit:` …) are in the body,
-                // so the triage match and the person read why a person approves this plan.
-                let detail = std::iter::once(summary.clone())
-                    .chain(
-                        (!reasons.is_empty())
-                            .then(|| format!("承認の理由: {}", reasons.join(", "))),
-                    )
-                    .chain(
-                        stages
-                            .iter()
-                            .map(|s| format!("{}: {}（{} 件）", s.key, s.title, s.units.len())),
-                    )
-                    .collect::<Vec<_>>()
-                    .join("\n");
+                let detail = plan_gate_detail(summary, reasons, stages);
                 // D1.1: 計画の決定の要求は別の `decision` 項目として並び、この項目の `blocked_by` に載る。
                 let blocked_by = decision_ids
                     .iter()
@@ -1911,6 +1898,25 @@ mod item_task;
 pub use item_task::item_task_id;
 
 pub mod dependents_reopened;
+
+/// The body of a plan gate item: the summary, the approval reasons and the stages. ADR
+/// 2026-11-12-cos-triage-scope D4: the reasons (`near_limit:` …) are in the body, so the triage
+/// match and the person read why a person approves this plan.
+fn plan_gate_detail(
+    summary: &str,
+    reasons: &[String],
+    stages: &[crate::inbox::PlanApprovalStage],
+) -> String {
+    std::iter::once(summary.to_owned())
+        .chain((!reasons.is_empty()).then(|| format!("承認の理由: {}", reasons.join(", "))))
+        .chain(
+            stages
+                .iter()
+                .map(|s| format!("{}: {}（{} 件）", s.key, s.title, s.units.len())),
+        )
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 #[cfg(test)]
 mod tests;

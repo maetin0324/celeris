@@ -127,16 +127,15 @@ pub(crate) fn cos_context_scope(kind: Option<ChatThreadKind>) -> CosContextScope
 pub(crate) fn inbox_context_item(item: CosTriageItemReport) -> CosChatInboxItem {
     let answer_path = (item.source_kind != super::triage::COS_TRIAGE_NOTICE_KIND)
         .then(|| format!("/api/v1/inbox/items/{}/answer", item.source_key));
-    let summary = item.title();
     CosChatInboxItem {
-        thread_id: Some(item.thread_id.clone()),
+        summary: item.title(),
         triage_match: None,
+        thread_id: Some(item.thread_id.clone()),
         item_id: item.item_id,
         source_kind: item.source_kind,
         source_key: item.source_key,
         source_revision: item.source_revision,
         state: item.state,
-        summary,
         detail: item.detail,
         reason: item.reason,
         created_at: item.created_at,
@@ -495,21 +494,13 @@ impl CosChatLaunch {
         };
         let in_inbox_thread = scope.is_some();
         let inbox_items = match scope {
-            Some(scope) => {
-                let rows = self
-                    .store
-                    .cos_triage_open_items(scope, COS_INBOX_CONTEXT_ITEMS)
-                    .map_err(|e| format!("CoS inbox context unavailable: {e}"))?;
-                // ADR 2026-11-12-cos-triage-scope D4: the deterministic match of each item.
-                let hints = super::triage_hint::triage_hints(&self.store, &rows, now)?;
-                rows.into_iter()
-                    .zip(hints)
-                    .map(|(row, hint)| CosChatInboxItem {
-                        triage_match: hint,
-                        ..inbox_context_item(row)
-                    })
-                    .collect()
-            }
+            Some(scope) => self
+                .store
+                .cos_triage_open_items(scope, COS_INBOX_CONTEXT_ITEMS)
+                .map_err(|e| format!("CoS inbox context unavailable: {e}"))?
+                .into_iter()
+                .map(inbox_context_item)
+                .collect(),
             None => Vec::new(),
         };
         let skill_names = cos_chat_skills(in_inbox_thread, &inbox_items);
@@ -676,7 +667,7 @@ impl CosChatLaunch {
             policy_version: policy_version.clone(),
             credential_env: COS_RUN_CREDENTIAL_ENV.into(),
             api_base_url: cfg.api_base_url.clone(),
-            inbox_items,
+            inbox_items: crate::cos_context::with_triage_match(&self.store, inbox_items, now)?,
             projects,
             standing,
         };

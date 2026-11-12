@@ -64,3 +64,19 @@ pub fn take_route(
     )
     .map(Some)
 }
+
+/// ADR 2026-11-12-cos-triage-scope D2: `cos_notification_routes.route` of an item CoS routed to the
+/// external operator. The route has no notification (nothing is sent to Discord).
+pub const OPERATOR_ROUTE: &str = "operator";
+
+/// D2: take the operator route of `item_id` (in the caller's transaction). `false` when the item
+/// already has a route (a retried escalate, or a fallback the notifier sent).
+pub fn take_operator_route(conn: &Connection, item_id: &str, at: &str) -> rusqlite::Result<bool> {
+    let claimed = conn.execute(
+        "INSERT INTO cos_notification_routes(item_id,notification_id,route,source_kind,source_key,\
+         source_revision,created_at,updated_at) SELECT id,NULL,?2,source_kind,source_key,\
+         source_revision,?3,?3 FROM cos_inbox_items WHERE id=?1 ON CONFLICT DO NOTHING",
+        params![item_id, OPERATOR_ROUTE, at],
+    )?;
+    Ok(claimed > 0)
+}

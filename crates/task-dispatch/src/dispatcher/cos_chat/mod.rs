@@ -11,7 +11,6 @@ pub(crate) mod rollover;
 pub(crate) mod root_done;
 pub(crate) mod sink;
 pub mod triage;
-pub(crate) mod triage_hint;
 pub(crate) mod workspace_files;
 
 mod routes;

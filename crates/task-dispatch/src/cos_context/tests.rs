@@ -280,3 +280,46 @@ fn cos_standing_relayed_list_follows_the_grant_of_a_standing_forward() {
         "a revoked grant's forward is listed: {listed:?}"
     );
 }
+
+/// ADR 2026-11-12-cos-triage-scope D4: the daemon's match is computed from the store only (no LLM,
+/// no clock but the one passed) and is the same for the same items. `task_ops::triage_match` tests
+/// the rules; this pins that each item handed to a CoS run gets its line.
+#[test]
+fn cos_triage_match_lines_are_deterministic_store_reads() {
+    use task_worker::protocol::CosChatInboxItem;
+    let store = task_core::store::SqliteStore::open_in_memory().expect("store");
+    let now = time::OffsetDateTime::from_unix_timestamp(1_794_441_600).expect("time");
+    let item = |kind: &str, detail: &str| CosChatInboxItem {
+        item_id: format!("i-{kind}"),
+        source_kind: kind.into(),
+        thread_id: Some("no-such-thread".into()),
+        summary: "件".into(),
+        detail: detail.into(),
+        ..CosChatInboxItem::default()
+    };
+    let items = vec![
+        item(
+            "authorization",
+            "クラスタ `pegasus` の job の待ちが上限（3600 秒）に達しました: 1 Q",
+        ),
+        item("credential_wait", ""),
+        item("notice", ""),
+    ];
+    let lines = |items: Vec<CosChatInboxItem>| -> Vec<Option<String>> {
+        super::with_triage_match(&store, items, now)
+            .expect("match")
+            .into_iter()
+            .map(|i| i.triage_match)
+            .collect()
+    };
+    let first = lines(items.clone());
+    assert_eq!(
+        first,
+        vec![
+            Some("job_wait_extend の候補".to_string()),
+            Some("人に残す件（credential_input）。to=human で回す".to_string()),
+            None,
+        ]
+    );
+    assert_eq!(lines(items), first);
+}

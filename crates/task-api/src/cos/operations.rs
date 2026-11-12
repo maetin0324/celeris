@@ -700,11 +700,8 @@ async fn create_operation(
             let delegated_wait =
                 super::inbox::wait_for_operation(&state, &delegated, &dp, &Value::Null).await?;
             wait = Some(super::inbox::OperationWait {
-                human_required: delegated_wait
-                    .as_ref()
-                    .and_then(|w| w.human_required.clone()),
                 target: super::inbox::answer_target(found, &input),
-                reserved: delegated_wait.and_then(|w| w.reserved),
+                ..delegated_wait.unwrap_or_default()
             });
         }
         env.inbox_feed = Some(std::sync::Arc::new(feed.items));
@@ -780,21 +777,8 @@ async fn create_operation(
             if instructed_by.is_none()
                 && let Some(wait) = wait.as_ref().filter(|w| w.target.kind.is_some())
             {
-                // ADR 2026-11-12-cos-triage-scope D1: a matter a person keeps is not CoS's to answer.
-                if let Some(reserved) = wait.reserved {
-                    return Err(audit.reject(
-                        store,
-                        "api",
-                        &path,
-                        super::basis::reserved_for_human(reserved),
-                    ));
-                }
-                let Some(routine) = routine.as_ref() else {
-                    return Err(audit.reject(store, "api", &path, super::basis::missing()));
-                };
-                if let Err(problem) = super::basis::validate(store, routine, &wait.target) {
-                    return Err(audit.reject(store, "api", &path, problem));
-                }
+                let routine = super::inbox::own_judgment(store, wait, routine.as_ref())
+                    .map_err(|problem| audit.reject(store, "api", &path, problem))?;
                 audit.ctx.reason = format!(
                     "{}: {}",
                     super::basis::reason_prefix(routine),

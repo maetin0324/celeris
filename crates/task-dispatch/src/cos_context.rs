@@ -12,8 +12,9 @@ use task_core::chat::ChatThreadKind;
 use task_core::store::SqliteStore;
 use task_core::{MountKind, OrgKind};
 use task_worker::protocol::{
-    COS_MEMORY_PAGE, CosChatContext, CosChatRelayedInstruction, CosStandingContext,
-    CosStandingGrant, CosStandingPage, CosThreadRole, RunContext, SessionHandle, SkillMount,
+    COS_MEMORY_PAGE, CosChatContext, CosChatInboxItem, CosChatRelayedInstruction,
+    CosStandingContext, CosStandingGrant, CosStandingPage, CosThreadRole, RunContext,
+    SessionHandle, SkillMount,
 };
 use time::OffsetDateTime;
 
@@ -226,6 +227,37 @@ pub fn cos_run_context(
         input_attachments: Vec::new(),
         campaign: None,
     }
+}
+
+/// ADR 2026-11-12-cos-triage-scope D4: attach the deterministic match (`task_ops::triage_match`, the
+/// same function the resolve API uses) to each inbox item handed to a CoS run. The project of an
+/// item is its thread's. Reads the store only; no LLM. A store error fails the launch.
+pub fn with_triage_match(
+    store: &SqliteStore,
+    mut items: Vec<CosChatInboxItem>,
+    now: OffsetDateTime,
+) -> Result<Vec<CosChatInboxItem>, String> {
+    let mut projects: std::collections::HashMap<String, Option<String>> = Default::default();
+    for item in &mut items {
+        let thread = item.thread_id.clone().unwrap_or_default();
+        if !projects.contains_key(&thread) {
+            let project = store
+                .chat_thread_get(&thread)
+                .map_err(|e| format!("CoS inbox thread unavailable: {e}"))?
+                .and_then(|t| t.project_id);
+            projects.insert(thread.clone(), project);
+        }
+        let input = task_ops::triage_match::MatchInput {
+            source_kind: &item.source_kind,
+            title: &item.summary,
+            body: &item.detail,
+            project_id: projects.get(&thread).and_then(|p| p.as_deref()),
+        };
+        item.triage_match = task_ops::triage_match::match_item(store, input, now)
+            .map_err(|e| format!("CoS triage match unavailable (authority ledger): {e}"))?
+            .prompt_line();
+    }
+    Ok(items)
 }
 
 #[cfg(test)]

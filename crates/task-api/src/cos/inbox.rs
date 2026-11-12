@@ -255,6 +255,7 @@ pub(crate) fn answers_wait(action: &str) -> bool {
 /// The wait a `/cos/operations` request answers: its explicit `human_required` and what a routine
 /// basis is checked against (ADR 2026-10-28-cos-routine-delegated-answers D2). `None` when the
 /// action answers no wait.
+#[derive(Default)]
 pub(crate) struct OperationWait {
     pub human_required: Option<String>,
     pub target: BasisTarget,
@@ -576,19 +577,8 @@ async fn resolve(
                             unprocessable("validation", "a notice has nothing to answer")
                         }));
                     };
-                    if store.cos_override_wait_requires_human(&item.source_kind,&item.source_key).map_err(cos_problem)? {
-                        return Err(reject(human_required_problem("human override wait")));
-                    }
-                    if let Some(why) = human_required_reason(
-                        store,
-                        Some(found.kind),
-                        found.task.as_ref().map(|t| t.id),
-                    )? {
-                        return Err(reject(human_required_problem(&why)));
-                    }
-                    // ADR 2026-11-12-cos-triage-scope D1: what a person keeps, whatever the answer.
-                    if let Some(reserved) = reserved(store, &item.source_kind, Some(found))? {
-                        return Err(reject(basis::reserved_for_human(reserved)));
+                    if let Some(problem) = kept_by_person(store, &item, found)? {
+                        return Err(reject(problem));
                     }
                     crate::inbox_notifications::validate_answer(found, input)
                         .map_err(|e| reject(unprocessable("validation", e.detail())))?;
@@ -653,44 +643,11 @@ async fn resolve(
                     }
                     validate_packet(packet, &item, source).map_err(&reject)?;
                     if packet.to == Addressee::Operator {
-                        // D2: a matter a person keeps is not handed to the operator.
-                        if let Some(reserved) = reserved(store, &item.source_kind, source)? {
-                            return Err(reject(basis::reserved_for_human(reserved)));
-                        }
-                        let routed = store
-                            .cos_triage_operator_route(&item.id, OffsetDateTime::now_utc())
-                            .map_err(cos_problem)?;
-                        audit.item = Some(ItemMark::new(&item.id, "escalated"));
-                        let result = serde_json::json!({
-                            "item_id": item.id,
-                            "outcome": "escalated",
-                            "addressee": "operator",
-                            "notification_id": null,
-                            "already_routed": !routed,
-                            "confidence": confidence,
-                        });
-                        let op = audit.apply(store, "cos_inbox_item", &item.id, action, |_| {
-                            Ok(result)
-                        })?;
+                        let op = escalate_to_operator(store, &mut audit, &item, source, action)
+                            .map_err(&reject)?;
                         return Ok((op, None));
                     }
-                    let outbox = serde_json::json!({
-                        "item_id": item.id,
-                        "source_kind": item.source_kind,
-                        "source_key": item.source_key,
-                        "source_revision": item.source_revision,
-                        "operation_id": audit.ctx.operation_id,
-                        "summary": packet.summary,
-                        "background": packet.background,
-                        "on_answer": packet.on_answer,
-                        "options": packet.options,
-                        "recommended": packet.recommended,
-                        "recommendation_reason": packet.recommendation_reason,
-                        "blocking": source.map(|s| s.blocking.summary.clone()),
-                        "web_path": packet.web_path,
-                        // ADR 2026-10-28-single-human-window-general-cos D2: the general card names the task.
-                        "task_id": source.and_then(|s| s.task.as_ref()).map(|t| t.id.to_string()),
-                    });
+                    let outbox = outbox_body(&item, packet, source, &audit.ctx.operation_id);
                     // Claim first: a crash after the claim leaves the outbox, and a retried resolve
                     // finds the route taken and still records the outcome.
                     let notification_id = store
@@ -753,6 +710,103 @@ fn terminal_conflict(
     } else {
         format!("triage item {i} is already {}", item.state)
     })))
+}
+
+/// ADR 2026-11-12-cos-triage-scope D1/D3: the basis of a CoS answer to `wait` without a human
+/// instruction: not a matter a person keeps, present, and passing its category's checks.
+pub(crate) fn own_judgment<'a>(
+    store: &SqliteStore,
+    wait: &OperationWait,
+    routine: Option<&'a DelegatedBasis>,
+) -> Result<&'a DelegatedBasis, ApiProblem> {
+    if let Some(reserved) = wait.reserved {
+        return Err(basis::reserved_for_human(reserved));
+    }
+    let routine = routine.ok_or_else(basis::missing)?;
+    basis::validate(store, routine, &wait.target)?;
+    Ok(routine)
+}
+
+/// Why CoS may not answer this open wait (D3「人に回す基準」and ADR 2026-11-12-cos-triage-scope
+/// D1): a human override wait, an explicit `human_required`, or a matter the deterministic match
+/// reserves for a person. `None` when CoS may answer it.
+fn kept_by_person(
+    store: &SqliteStore,
+    item: &CosInboxItem,
+    found: &InboxItem,
+) -> Result<Option<ApiProblem>, ApiProblem> {
+    let override_wait = store
+        .cos_override_wait_requires_human(&item.source_kind, &item.source_key)
+        .map_err(cos_problem)?;
+    if override_wait {
+        return Ok(Some(human_required_problem("human override wait")));
+    }
+    let task = found.task.as_ref().map(|t| t.id);
+    if let Some(why) = human_required_reason(store, Some(found.kind), task)? {
+        return Ok(Some(human_required_problem(&why)));
+    }
+    Ok(reserved(store, &item.source_kind, Some(found))?.map(basis::reserved_for_human))
+}
+
+/// The outbox (Discord) body of an escalation addressed to the person.
+fn outbox_body(
+    item: &CosInboxItem,
+    packet: &EscalationPacket,
+    source: Option<&InboxItem>,
+    operation_id: &str,
+) -> Value {
+    serde_json::json!({
+        "item_id": item.id,
+        "source_kind": item.source_kind,
+        "source_key": item.source_key,
+        "source_revision": item.source_revision,
+        "operation_id": operation_id,
+        "summary": packet.summary,
+        "background": packet.background,
+        "on_answer": packet.on_answer,
+        "options": packet.options,
+        "recommended": packet.recommended,
+        "recommendation_reason": packet.recommendation_reason,
+        "blocking": source.map(|s| s.blocking.summary.clone()),
+        "web_path": packet.web_path,
+        // ADR 2026-10-28-single-human-window-general-cos D2: the general card names the task.
+        "task_id": source.and_then(|s| s.task.as_ref()).map(|t| t.id.to_string()),
+    })
+}
+
+/// ADR 2026-11-12-cos-triage-scope D2: route an escalated item to the external operator. A matter
+/// a person keeps is refused; the route is taken in the audit's transaction and nothing is sent
+/// (no notification row, no card in the person's window).
+fn escalate_to_operator(
+    store: &SqliteStore,
+    audit: &mut OperationAudit,
+    item: &CosInboxItem,
+    source: Option<&InboxItem>,
+    action: &str,
+) -> Result<task_core::chat::CosOperation, ApiProblem> {
+    if let Some(reserved) = reserved(store, &item.source_kind, source)? {
+        return Err(basis::reserved_for_human(reserved));
+    }
+    audit.item = Some(ItemMark::new(&item.id, "escalated"));
+    let confidence = audit
+        .payload
+        .get("confidence")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let at = OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .map_err(|e| unprocessable("validation", e.to_string()))?;
+    audit.apply(store, "cos_inbox_item", &item.id, action, |tx| {
+        let routed = task_core::cos_fallback::take_operator_route(tx, &item.id, &at)?;
+        Ok(serde_json::json!({
+            "item_id": item.id,
+            "outcome": "escalated",
+            "addressee": "operator",
+            "notification_id": null,
+            "already_routed": !routed,
+            "confidence": confidence,
+        }))
+    })
 }
 
 /// ADR 2026-11-12-cos-triage-scope D1/D4: what a person keeps of this item, by the same

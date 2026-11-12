@@ -12,9 +12,6 @@ use super::store::{
 };
 use crate::store::SqliteStore;
 
-/// ADR 2026-11-12-cos-triage-scope D2: `cos_notification_routes.route` of an item CoS routed to the operator.
-pub const COS_OPERATOR_ROUTE: &str = "operator";
-
 pub const COS_TRIAGE_BATCH_MAX: usize = 20;
 const ROUTE_VERSION_CURSOR: &str = "cos_route_version";
 
@@ -339,38 +336,6 @@ impl SqliteStore {
         Ok(changed)
     }
 
-    /// ADR 2026-11-12-cos-triage-scope D2: take the item's route for the external operator. Returns
-    /// whether this call took it (`false` when the item already has a route or an outcome).
-    pub fn cos_triage_operator_route(
-        &self,
-        item_id: &str,
-        now: OffsetDateTime,
-    ) -> Result<bool, ChatError> {
-        let at = chat_ts(now);
-        let mut conn = writer(self)?;
-        let tx = immediate(&mut conn)?;
-        let source: Option<(String, String, String, String)> = tx
-            .query_row(
-                "SELECT source_kind,source_key,source_revision,state FROM cos_inbox_items WHERE id=?1",
-                [item_id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-            )
-            .optional()?;
-        let Some((source_kind, source_key, revision, state)) = source else {
-            return Err(ChatError::not_found("triage item", item_id));
-        };
-        if matches!(state.as_str(), "answered" | "observed" | "resolved") {
-            return Ok(false);
-        }
-        let claimed = tx.execute(
-            "INSERT INTO cos_notification_routes(item_id,notification_id,route,source_kind,source_key,source_revision,created_at,updated_at) \
-             VALUES(?1,NULL,?2,?3,?4,?5,?6,?6) ON CONFLICT DO NOTHING",
-            params![item_id, COS_OPERATOR_ROUTE, source_kind, source_key, revision, at],
-        )?;
-        tx.commit()?;
-        Ok(claimed > 0)
-    }
-
     /// Arbitration point shared by escalation and unavailable fallback.
     pub fn cos_triage_outbox_claim(
         &self,
@@ -382,11 +347,6 @@ impl SqliteStore {
         let kind = match route {
             "escalation" => "cos_escalation",
             "fallback" => "cos_fallback",
-            // ADR 2026-11-12-cos-triage-scope D2: the operator picks the item up from the inbox API;
-            // no notification (Discord) and no card in the person's window.
-            COS_OPERATOR_ROUTE => {
-                return self.cos_triage_operator_route(item_id, now).map(|_| None);
-            }
             _ => return Err(ChatError::Invalid("invalid CoS notification route".into())),
         };
         let at = chat_ts(now);

@@ -58,7 +58,7 @@ fn item_row(r: &Row<'_>) -> rusqlite::Result<CosInboxItem> {
         created_at: r.get(12)?,
         updated_at: r.get(13)?,
         addressee: r.get::<_, Option<String>>(14)?.map(|route| {
-            if route == task_core::chat::triage::COS_OPERATOR_ROUTE {
+            if route == task_core::cos_fallback::OPERATOR_ROUTE {
                 "operator".to_owned()
             } else {
                 "human".to_owned()

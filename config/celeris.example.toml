@@ -89,10 +89,12 @@ dir = "../memory"
 # 人が手で回すこともできる。
 # prune_after_secs = 86400
 
-# 新しい run の起動前に /、workspace_root、build_cache_dir の空きを確認する（MiB）。
-# 0 で無効。不足中は通知を 1 回出して保留し、回復すると自動で再開する。
+# 新しい run の起動前に /、workspace_root、build_cache_dir、scratch の空きを確認する。下限は各 filesystem の
+# 容量に対する %（ADR 2026-11-11-disk-aware-dispatch D2）。既定 10 は使用率 90% で止める（disk_watch の critical
+# 95% より手前）。0 で無効。不足中は通知を 1 回出して保留し、回復すると自動で再開する。旧い min_free_disk_mb は
+# 読み込みエラー。
 [dispatch]
-# min_free_disk_mb = 5120
+# min_free_disk_pct = 10
 
 # 変更の取り込み（ADR-0043 D5、Phase 54）。タスクが作ったブランチを**人が** GUI から
 # 「main に取り込む」「PR を作る」「捨てる」する（`GET/POST /api/v1/tasks/{id}/changes...`）。
@@ -722,7 +724,7 @@ workspace_target_after_hours = 6    # 終端 task の workspace target を消す
 
 # ADR 2026-10-07-build-tmp-hygiene D4: ディスク使用率の監視。dispatcher の tick が 60 秒ごとに statvfs で測り、
 # warn_pct 以上で通知（種類 disk）、critical_pct 以上で受信箱（disk_full）に出す。level が上がったときだけ作り、
-# しきい値より 5 ポイント下がると解除。critical 中は新規 coding run・そのレビューを保留（min_free_disk_mb も引き続き有効）。
+# しきい値より 5 ポイント下がると解除。critical 中は新規 coding run・そのレビューを保留（min_free_disk_pct も引き続き有効）。
 # 省略すると下の 3 つ（値は既定値）。`disk_watch = []`（[maintenance] の下）で監視しない。
 [[maintenance.disk_watch]]
 path = "/"

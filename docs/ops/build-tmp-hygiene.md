@@ -197,4 +197,4 @@ ADR [2026-10-10-local-disk-growth-paths](../../agent-docs/adr/2026-10-10-local-d
 
 workspace の対象は終端（done/cancelled/failed）から既定 6 時間経過した task の cargo target。非終端、running run のある task、Cargo lock 中、symlink は残す。ソース・成果物は保持する。scratch sweep も非終端・不明・外部 owner を残すため、上限まで回収できない場合がある。
 
-warn の通知には大きい target 上位 5 件の path と実使用量を載せる。critical では新しい coding run とそのレビュー・検査を保留し、使用率が critical 閾値から 5 ポイント下がった測定で再開する。実行中 run は中断しない。`min_free_disk_mb` による従来の停止も有効。cron の掃除は critical 中も実行できる（ただし `min_free_disk_mb` による全体停止中は既存の制約どおり）。
+warn の通知には大きい target 上位 5 件の path と実使用量を載せる。critical では新しい coding run とそのレビュー・検査を保留し、使用率が critical 閾値から 5 ポイント下がった測定で再開する。実行中 run は中断しない。空きの下限（`[dispatch] min_free_disk_pct`、既定 10% = 使用率 90%。ADR 2026-11-11-disk-aware-dispatch D2）による停止も有効で、critical より手前で新しい run を止める。cron の掃除は critical 中も実行できる（ただし空きの下限による全体停止中は既存の制約どおり）。

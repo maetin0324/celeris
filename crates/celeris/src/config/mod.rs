@@ -619,6 +619,18 @@ impl Config {
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
+        // ADR 2026-11-11-disk-aware-dispatch D1/D2。
+        if !(0.0..100.0).contains(&self.dispatch.min_free_disk_pct) {
+            return Err(ConfigError::Invalid(
+                "[dispatch] min_free_disk_pct must be in [0, 100)".into(),
+            ));
+        }
+        let ratio = self.scratch.forecast_disk_ratio;
+        if !(ratio > 0.0 && ratio <= 1.0) {
+            return Err(ConfigError::Invalid(
+                "[scratch] forecast_disk_ratio must be in (0, 1]".into(),
+            ));
+        }
         if let Some(script) = &self.script {
             script.validate()?;
         }

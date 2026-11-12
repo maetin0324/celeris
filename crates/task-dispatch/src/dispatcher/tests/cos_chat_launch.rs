@@ -23,7 +23,7 @@ pub(super) fn fixture(
     let adapter: Arc<dyn WorkerAdapter> = Arc::new(FakeAdapter::new(command));
     let mut d = dispatcher_with_test_clock(store.clone(), adapter, 2, true);
     d.config.execution.max_cos_runs = max_cos_runs;
-    d.config.min_free_disk_mb = 0;
+    d.config.min_free_disk_pct = 0.0;
     d.config.knowledge.root = dir.path().join("knowledge");
     task_ops::cos_skill_gate::write_fixture(
         &d.config.knowledge.root.join("skills"),

@@ -158,6 +158,9 @@ pub enum TaskWait {
     Backoff { until: String, cause: BackoffCause },
     /// M6。
     DiskCritical { path: String },
+    /// M12（ADR 2026-11-11-disk-aware-dispatch D1）: 空きの見込みが予備を割るので、新しい cargo の target を作る run を
+    /// 始めない。`need_bytes` はこの run の見込み（disk 上の量）、`detail` は判定の式の値。
+    DiskForecast { need_bytes: u64, detail: String },
     /// M7。
     DelegatedChildren { task_ids: Vec<TaskId> },
     /// M8。

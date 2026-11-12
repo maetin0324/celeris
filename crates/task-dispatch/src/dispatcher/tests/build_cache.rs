@@ -588,7 +588,7 @@ fn inherited_sccache_env_passes_through() {
     );
 }
 
-/// ADR-0075 §5 G1 受け入れ条件 5: 空きが `min_free_disk_mb` 未満なら、新しい run の前に緊急 GC（P0 以外を
+/// ADR-0075 §5 G1 受け入れ条件 5: 空きが下限（容量 × `min_free_disk_pct`）未満なら、新しい run の前に緊急 GC（P0 以外を
 /// 目標まで rename）→ 空きが戻るまで dispatch を保留し「ディスク不足 (infra)」を 1 回だけ通知 → 戻れば自動解除。
 /// 消せるものが P0 だけなら通知の本文に pinned の一覧が付く。
 #[tokio::test]
@@ -634,7 +634,7 @@ async fn low_disk_runs_emergency_gc_before_pausing_dispatch() {
     let live = lease(&pool, "agent-live");
     let released = lease(&pool, "agent-released");
     task_worker::scratch::release(&pool, &released).unwrap();
-    d.config.min_free_disk_mb = u64::MAX;
+    d.config.min_free_disk_pct = 99.9;
     assert_eq!(d.tick().unwrap().dispatched, 0);
     // 緊急 GC: agent の P3（通常は watermark まで残る）も rename、P0 は残る。
     assert!(!pool.target_dir(&released).exists());
@@ -662,7 +662,7 @@ async fn low_disk_runs_emergency_gc_before_pausing_dispatch() {
     assert_eq!(notices.total, 1, "{:?}", notices.items);
     assert!(notices.items[0].title.contains("ディスク不足 (infra)"));
     // 空きが戻れば自動で解除して dispatch する。
-    d.config.min_free_disk_mb = 0;
+    d.config.min_free_disk_pct = 0.0;
     assert_eq!(d.tick().unwrap().dispatched, 1);
     assert!(!d.disk_low);
     assert!(pool.target_dir(&live).exists());
@@ -675,7 +675,7 @@ async fn low_disk_runs_emergency_gc_before_pausing_dispatch() {
         task_core::local_machine::WorkspaceRoots::new(dir.path().to_path_buf(), None);
     let settings = scratch_on(&mut d, scratch_dir.path());
     let live = lease(&settings.pool(), "agent-live");
-    d.config.min_free_disk_mb = u64::MAX;
+    d.config.min_free_disk_pct = 99.9;
     d.tick().unwrap();
     assert!(settings.pool().target_dir(&live).exists());
     let notices = store

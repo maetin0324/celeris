@@ -43,7 +43,7 @@ fn fixture_on(
 ) {
     let db_path = dir.path().join("chat.sqlite");
     let mut d = dispatcher_with_test_clock(store.clone(), adapter, 2, true);
-    d.config.min_free_disk_mb = 0;
+    d.config.min_free_disk_pct = 0.0;
     d.config.execution.max_cos_runs = 2;
     d.config.knowledge.root = dir.path().join("knowledge");
     task_ops::cos_skill_gate::write_fixture(

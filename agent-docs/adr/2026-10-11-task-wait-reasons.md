@@ -262,3 +262,9 @@ pub struct UnitWait {
 - 検査（すべて exit 0）: `TMPDIR=/tmp bash scripts/dev/test-parallel.sh`（passed 5188・failed 0・ignored 14）、`cargo clippy --workspace -- -D warnings`、`cargo fmt --all -- --check`、web の typecheck・test（95 files・691 tests）、e2e `work/wait-reasons.spec.ts`・`work/task-tree-waits.spec.ts`（2 passed）。
 - D4 の `DaemonSnapshot` 旧 3 欄（`unroutable`・`awaiting_children`・`awaiting_human`）は削除済み（`crates/task-ops/src/daemon.rs` に無い。API schema と web の生成型からも無い）。前の検証葉 verify で未了とした点は、葉 snapshot-old で解消した。
 - D12 の StageReview の gate は `task_ops::wait::human_gate_waits` を dispatcher（`tree_units.rs`）と API が共有する（葉 stage-gate）。
+
+### 付記 M12（2026-11-12、ADR 2026-11-11-disk-aware-dispatch）
+- dispatcher のメモリの理由に M12 `DiskForecast { need_bytes, detail }` を足した。空きの見込みが予備を割るので、新しい
+  cargo の target を作る run を始めない（判定箇所は `dispatch_run.rs` の `disk_admission::Gate::judge_run`。D4 どおり
+  見送る箇所で `note_dispatch_wait` に入れる）。人の操作待ちではない（走っている run が終わって空きが戻れば始まる）。
+  M6（`DiskCritical`。今の空きが下限を割った全体停止）とは別の理由として出す。web は「空き容量の見込み待ち」と出す。

@@ -45,7 +45,7 @@ fn daemon_with(
     let mut d = dispatcher(store.clone(), adapter, slots);
     d.test_now = Some(clock.clone());
     d.config.execution.max_cos_runs = 0;
-    d.config.min_free_disk_mb = 0;
+    d.config.min_free_disk_pct = 0.0;
     // Fixed findings: the scan is kept from replacing them (its last check is in the future).
     d.stagnation.checked_at = Some(at("2100-01-01T00:00:00Z"));
     d.stagnation.findings = vec![StagnationFinding {
@@ -328,7 +328,7 @@ async fn cos_review_without_cos_chat_records_an_error_and_posts_nothing() {
     let adapter: Arc<dyn WorkerAdapter> = Arc::new(FakeAdapter::new(vec!["false".into()]));
     let mut d = dispatcher(store.clone(), adapter, 2);
     d.test_now = Some(clock.clone());
-    d.config.min_free_disk_mb = 0;
+    d.config.min_free_disk_pct = 0.0;
     tick_at(&mut d, &clock, "2026-10-27T01:00:00Z");
     assert!(inputs(&store).is_empty());
     assert!(store.cos_review_thread_get().unwrap().is_none());

@@ -153,6 +153,8 @@ case "$PREVIOUS_BUILD_START" in *[!0-9.]*|'') PREVIOUS_BUILD_START=0 ;; esac
 sd_release_prune_stale_test_binaries "$SD_CARGO_TARGET" "$BUILD" "$PREVIOUS_BUILD_START"
 sd_release_prune_enforce_limit "$SD_CARGO_TARGET"
 sd_release_prune_record_start "$SD_CARGO_TARGET"
+# ADR 2026-11-11-disk-aware-dispatch D3: 終了時（成功・失敗とも）にも刈って上限を確かめる（build で育った分を残さない）。
+trap 'rm -f "$GATE_TSV"; sd_release_target_settle "$SD_CARGO_TARGET" "$BUILD" || sd_log "release prune: settle failed"; sd_scratch_touch' EXIT
 
 # 共有 target が**この作業ツリーから**作られたものか（Phase SD-1）。違えば（新しい target・他の owner から
 # adopt した target・Phase SD-1 より前の `.cargo-target`）workspace のメンバーを先に掃除する（従来の

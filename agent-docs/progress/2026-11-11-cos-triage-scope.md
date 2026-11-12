@@ -74,12 +74,13 @@ updated: 2026-11-12
   - 文書: ADR D2 の付記（表示・台帳・拾い方）、ADR 2026-10-07 と ADR 2026-10-27-eval-request-ledger の付記、`docs/ops/mlsys-main-4-ops-r1.md` §8 の 11→12 の行、skill §2 の 2 文を D6（決定に先に答えて判定し直す）と `replan` は `task_scope`・`withdraw` は escalate に書き換え、`docs/ops/external-operator.md` §1 に operator 宛ての件の拾い方、`docs/ops/cos-chat.md` の Discord の確認手順、下の「本番への移行」を昇格の skill の写しと門に合わせた。
 
 ## 証拠（提出時の HEAD で実行。attempt 4）
-- `bash scripts/dev/test-affected.sh` → exit 0（件数は報告本文）。
+- `bash scripts/dev/test-affected.sh`（開始 load 46、1428 秒）→ exit 100。nextest 8328 件中 8327 件合格、web 712 件・control-ts 134 件合格、script bundle SKIP 0 件。落ちた 1 件は範囲外の task-worker `ssh::tests::run_command_times_out_and_kills_the_ssh_process_group`（偽 ssh の子 process が残ったと判定）。この差分は task-worker に触れておらず、同じ HEAD で単独に 3 回実行して 3 回とも合格（各 2.0 秒）。負荷の高い時の flaky として未解決に書く。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。`sh scripts/dev/progress-index.sh --check` → exit 0。
 - `bash scripts/dev/check-health.sh` → verdict pass、exit 0（size.responsibility-growth は chat module 8000 行・store module と `request_row` は base と同じ行数に収めた）。
 - `cargo run -p task-core --example dump-cos-digest-fixtures` で fixture を作り直し（生成部は不変、`hand/decision/*` が 48 行増）、control-ts の `cos_digest.test.ts` 53 件と web の `chat-card.test.tsx` 24 件が合格。
 
 ## 未解決
+- task-worker の `ssh::tests::run_command_times_out_and_kills_the_ssh_process_group` は load 46〜60 の test-affected で 1 回落ちた（単独では合格）。同じ系統の `remote_command_times_out_and_kills_the_ssh_process_group` も高負荷で落ちることがある。この task の範囲外で、直すなら task-worker の ssh の試験を対象にした別 task にする。
 - 本番で送信済みの退避の件（例 `dependents_reopened-01M75722QN630BBASEQ759KG4T-735`）は人に残る。配備の後は、人が受信箱で閉じるか、依存先の後続が動き出すと消える。
 - 照合が判定する人に残す件は、件の種類と本文から決まるもの（credential の待ち・cluster の login・ブラウザの待ち・`near_limit:` の計画）だけ。目的の変更・本番 config・有料の試行・研究上の判断・検査を弱める判断は、CoS が方針（常設の節と skill §0）で判定する。
 

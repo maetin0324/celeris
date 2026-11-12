@@ -666,7 +666,11 @@ fn restarted_parallel_dispatcher(
 }
 
 /// 統合 WU `key` の `(to, reason)` の列。
-fn wu_transitions(store: &Arc<dyn TaskStore>, id: TaskId, key: &str) -> Vec<(WorkUnitStatus, String)> {
+fn wu_transitions(
+    store: &Arc<dyn TaskStore>,
+    id: TaskId,
+    key: &str,
+) -> Vec<(WorkUnitStatus, String)> {
     events_of(store, id)
         .into_iter()
         .filter_map(|e| match e {
@@ -711,18 +715,29 @@ fn phase_integrated(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<Vec<(String, 
         .collect()
 }
 
-/// 不変条件: （ADR-0074 D1.4・D1.7、`CLAUDE.md` の SQLite 正本）段の統合が葉の WU のブランチを Task のブランチに merge
-/// し終え、統合の検査の途中で daemon が落ちた（統合 WU は running、Task は running、`PhaseIntegrated` 無し）後に、
-/// 同じ store・同じ Git repo で作り直した dispatcher（新しい active）は、統合をやり直しても WU のブランチを二重に
-/// merge しない（Task のブランチの merge commit は WU のブランチごとに 1 つ）。やり直しは済んだ merge を飛ばし
-/// （`PhaseIntegrated.merged` の `skipped` が両方 true）、`PhaseIntegrated`・統合 WU の done・Task の reviewing と
-/// done はそれぞれ 1 回だけ記録する。
-/// 既存の試験で検出できない理由: `work_units.rs` の `an_interrupted_integration_is_redone_idempotently_after_restart` は
-/// Dispatcher の private field（`integrating`・`infra_backoff`）に触り、旧い統合の検査が終わるまで待ってから落とす
-/// （検査の途中で落ちる順序を作らない）。lease の失効の経路だけを通り、孤児の回収（`reconcile_parallel_tasks`）の
-/// 経路も、やり直しが merge を飛ばしたこと（`skipped`）も、Task の遷移が 1 回ずつであることも見ない。
-#[tokio::test]
-async fn cex_integration_restart_mid_phase_integration_does_not_merge_twice() {
+/// 統合の検査の途中で落ちた daemon の跡（[`crash_mid_integration_check`]）。drop で落ちた daemon の検査を終わらせる
+/// （`open` を置く。`marks` が先に消えても検査は止まる）。
+struct MidIntegration {
+    repo: tempfile::TempDir,
+    root: tempfile::TempDir,
+    marks: tempfile::TempDir,
+    store: Arc<dyn TaskStore>,
+    adapter: Arc<ParallelWuAdapter>,
+    id: TaskId,
+    task_branch: String,
+    /// WU `a`・`b` のブランチの HEAD。
+    wu_heads: Vec<String>,
+}
+
+impl Drop for MidIntegration {
+    fn drop(&mut self) {
+        let _ = std::fs::write(self.marks.path().join("open"), "");
+    }
+}
+
+/// 段 `build`（WU `a`・`b`）の統合が 2 件の merge を済ませ、統合の検査の途中で daemon が落ちた跡を作る（統合 WU は
+/// running、Task は running、`PhaseIntegrated` 無し、落ちた daemon の dispatcher は drop 済み）。
+async fn crash_mid_integration_check() -> MidIntegration {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
@@ -747,7 +762,6 @@ async fn cex_integration_restart_mid_phase_integration_does_not_merge_twice() {
                 .any(|e| matches!(e, Event::IntegrationCheckStarted { .. })))
         .await
     );
-    // 落ちる時点: merge は 2 件とも済み、統合の検査の途中（統合 WU は running、`PhaseIntegrated` 無し）。
     let task_branch = format!("celeris/{id}");
     let wu_heads: Vec<String> = ["a", "b"]
         .iter()
@@ -765,9 +779,35 @@ async fn cex_integration_restart_mid_phase_integration_does_not_merge_twice() {
     assert_eq!(status_of(&store, id), Status::Running);
     assert!(phase_integrated(&store, id).is_empty());
     drop(d1);
+    MidIntegration {
+        repo,
+        root,
+        marks,
+        store,
+        adapter,
+        id,
+        task_branch,
+        wu_heads,
+    }
+}
+
+/// 不変条件: （ADR-0074 D1.4・D1.7、`CLAUDE.md` の SQLite 正本）段の統合が葉の WU のブランチを Task のブランチに merge
+/// し終え、統合の検査の途中で daemon が落ちた（統合 WU は running、Task は running、`PhaseIntegrated` 無し）後に、
+/// 同じ store・同じ Git repo で作り直した dispatcher（新しい active）は、統合をやり直しても WU のブランチを二重に
+/// merge しない（Task のブランチの merge commit は WU のブランチごとに 1 つ）。やり直しは済んだ merge を飛ばし
+/// （`PhaseIntegrated.merged` の `skipped` が両方 true）、`PhaseIntegrated`・統合 WU の done・Task の reviewing と
+/// done はそれぞれ 1 回だけ記録する。
+/// 既存の試験で検出できない理由: `work_units.rs` の `an_interrupted_integration_is_redone_idempotently_after_restart` は
+/// Dispatcher の private field（`integrating`・`infra_backoff`）に触り、旧い統合の検査が終わるまで待ってから落とす
+/// （検査の途中で落ちる順序を作らない）。lease の失効の経路だけを通り、孤児の回収（`reconcile_parallel_tasks`）の
+/// 経路も、やり直しが merge を飛ばしたこと（`skipped`）も、Task の遷移が 1 回ずつであることも見ない。
+#[tokio::test]
+async fn cex_integration_restart_mid_phase_integration_does_not_merge_twice() {
+    let f = crash_mid_integration_check().await;
+    let (store, id) = (f.store.clone(), f.id);
 
     // 同じ store・同じ repo で作り直す（落ちた daemon の行は無い）。
-    let mut d2 = restarted_parallel_dispatcher(&store, adapter.clone(), root.path());
+    let mut d2 = restarted_parallel_dispatcher(&store, f.adapter.clone(), f.root.path());
     let s = store.clone();
     assert!(run_until_state(&mut d2, || terminal(&s, id)).await);
     assert_eq!(
@@ -777,9 +817,9 @@ async fn cex_integration_restart_mid_phase_integration_does_not_merge_twice() {
         events_of(&store, id)
     );
     // WU のブランチごとに merge commit は 1 つだけ（やり直しで二重に merge しない）。
-    let parents = merged_parents(repo.path(), &task_branch);
+    let parents = merged_parents(f.repo.path(), &f.task_branch);
     assert_eq!(parents.len(), 2, "{parents:?}");
-    for head in &wu_heads {
+    for head in &f.wu_heads {
         assert_eq!(parents.iter().filter(|p| *p == head).count(), 1, "{head}");
     }
     // やり直しは済んだ merge を飛ばし、統合の完了は 1 回だけ。
@@ -812,12 +852,13 @@ async fn cex_integration_restart_mid_phase_integration_does_not_merge_twice() {
     assert_eq!(
         count(&store, id, |e| matches!(
             e,
-            Event::ReviewVerdict { criterion_idx: 0, .. }
+            Event::ReviewVerdict {
+                criterion_idx: 0,
+                ..
+            }
         )),
         1
     );
-    // 落ちた daemon の検査を終わらせる（`marks` が消えても止まる）。
-    std::fs::write(marks.path().join("open"), "").unwrap();
 }
 
 /// worker run は作業ツリーの `README.md` を変えて commit し、同じ run の中で target（`main`）にも同じ行を変える
@@ -961,8 +1002,8 @@ async fn cex_integration_sync_conflict_schedules_one_repair_and_never_passes_the
     store.insert(&task).unwrap();
     let adapter = ConflictRepairAdapter::new(repo.path());
     let mut d = worktree_dispatcher(store.clone(), adapter.clone(), ws.path(), None);
-    let a = adapter.clone();
-    assert!(run_until_state(&mut d, || a.work_units().len() == 1).await);
+    let (s, a) = (store.clone(), adapter.clone());
+    assert!(run_until_state(&mut d, || a.work_units().len() == 1 || terminal(&s, id)).await);
     let target = adapter.target.lock().unwrap().clone().unwrap();
     let before = adapter.before.lock().unwrap().clone().unwrap();
 
@@ -986,7 +1027,10 @@ async fn cex_integration_sync_conflict_schedules_one_repair_and_never_passes_the
     let wt = adapter.worktree.lock().unwrap().clone().unwrap();
     assert_eq!(git_out(&wt, &["rev-parse", "HEAD"]), before);
     assert!(git_out(&wt, &["status", "--porcelain"]).is_empty());
-    assert!(!git_ok(&wt, &["rev-parse", "-q", "--verify", "REBASE_HEAD"]));
+    assert!(!git_ok(
+        &wt,
+        &["rev-parse", "-q", "--verify", "REBASE_HEAD"]
+    ));
     assert_eq!(
         std::fs::read_to_string(wt.join("README.md")).unwrap(),
         "task\n"
@@ -1056,4 +1100,95 @@ async fn cex_integration_sync_conflict_schedules_one_repair_and_never_passes_the
     assert_eq!(row.state, task_core::DeliveryState::MergeQueued, "{row:?}");
     assert_eq!(row.merge_candidate_sha.as_deref(), Some(reviewed.as_str()));
     assert_eq!(row.target_sha.as_deref(), Some(target.as_str()));
+}
+
+/// 不変条件: （ADR-0074 D1.4・D1.7）段の統合の完了の書き込みの途中（統合 WU を done にした後、Task の遷移と
+/// `PhaseIntegrated` の前）で daemon が落ちた後に、作り直した dispatcher（新しい active）は統合をやり直さない（統合 WU は
+/// running に戻らず、統合の検査を走らせ直さず、WU のブランチの merge commit は 1 つずつのまま）。Task は Ready を経て
+/// 最終レビューに 1 回だけ進み、Done になる。
+/// 範囲: この順序では `PhaseIntegrated` が 1 件も記録されない（統合の完了の記録が失われる）。今の実装で成り立たないので
+/// assert せず、`agent-docs/progress/2026-11-11-health-v2-r4/cex-review.md` の「節: integration」の「反例」に再現手順と
+/// 観測した event を記録した。
+/// 既存の試験で検出できない理由: 統合の再起動の試験（`work_units.rs` の
+/// `an_interrupted_integration_is_redone_idempotently_after_restart` と上の試験）は統合 WU が running のまま落ちた状態
+/// だけを作り、`finish_phase_integration` の書き込みの間（WU の done と Task の遷移が別の書き込み）で落ちた状態を作らない。
+#[tokio::test]
+async fn cex_integration_restart_after_the_integration_unit_is_done_does_not_integrate_again() {
+    let f = crash_mid_integration_check().await;
+    let (store, id) = (f.store.clone(), f.id);
+    // 落ちた daemon の `finish_phase_integration` が統合 WU を done にした書き込みだけが残った。
+    let integ = store
+        .work_units_for(id)
+        .unwrap()
+        .into_iter()
+        .find(|u| u.key == "integrate-build")
+        .unwrap();
+    let mut done = integ.clone();
+    done.status = WorkUnitStatus::Done;
+    done.clear_lease();
+    done.integrated_commit = Some(git_out(f.repo.path(), &["rev-parse", &f.task_branch]));
+    store
+        .work_unit_transition(
+            id,
+            done,
+            Event::WorkUnitTransitioned {
+                work_unit_id: integ.id.clone(),
+                key: integ.key.clone(),
+                from: WorkUnitStatus::Running,
+                to: WorkUnitStatus::Done,
+                reason: "integrated".into(),
+                run_id: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(status_of(&store, id), Status::Running);
+
+    let mut d2 = restarted_parallel_dispatcher(&store, f.adapter.clone(), f.root.path());
+    let s = store.clone();
+    assert!(run_until_state(&mut d2, || terminal(&s, id)).await);
+    assert_eq!(
+        status_of(&store, id),
+        Status::Done,
+        "{:?}",
+        events_of(&store, id)
+    );
+    // 統合をやり直さない（統合 WU は running に戻らず、統合の検査も 1 回だけ）。
+    assert_eq!(
+        wu_transitions(&store, id, "integrate-build"),
+        vec![
+            (WorkUnitStatus::Running, "integrate".to_string()),
+            (WorkUnitStatus::Done, "integrated".to_string())
+        ]
+    );
+    assert_eq!(
+        count(&store, id, |e| matches!(
+            e,
+            Event::IntegrationCheckStarted { .. }
+        )),
+        1
+    );
+    let parents = merged_parents(f.repo.path(), &f.task_branch);
+    assert_eq!(parents.len(), 2, "{parents:?}");
+    for head in &f.wu_heads {
+        assert_eq!(parents.iter().filter(|p| *p == head).count(), 1, "{head}");
+    }
+    // Task は 1 回だけ進む（最終レビューも 1 回）。
+    let moves = transitions(&store, id);
+    for to in [Status::Reviewing, Status::Done] {
+        assert_eq!(
+            moves.iter().filter(|(t, _)| *t == to).count(),
+            1,
+            "{to:?}: {moves:?}"
+        );
+    }
+    assert_eq!(
+        count(&store, id, |e| matches!(
+            e,
+            Event::ReviewVerdict {
+                criterion_idx: 0,
+                ..
+            }
+        )),
+        1
+    );
 }

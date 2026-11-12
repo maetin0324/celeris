@@ -3,7 +3,7 @@ tasks: [01M75722SX158YRMFYPQRVEEDY]
 ---
 # ADR 2026-11-12: 受信箱の一次対応で CoS が答える範囲を「人に残す件の列挙以外すべて」にし、Celeris の外の操作は operator 宛てに分ける（policy_version 12）
 
-- 状態: 採用。実装の進み具合は [進捗](../progress/2026-11-11-cos-triage-scope.md)。
+- 状態: 採用。D1〜D8 は実装済み、D9 は既存の仕組みの確認（[進捗](../progress/2026-11-11-cos-triage-scope.md)）。
 - 置き換えるもの: [ADR 2026-10-28 定型の代答](2026-10-28-cos-routine-delegated-answers.md) D1 の「CoS の単独の回答は定型の
   7 種類だけ」。D2 の basis の形（`category`・`refs`）と、定型ごとの決定的な検査（(a) 枠の計算・(b) 一度だけ・(e) 差し戻し・
   (f) 計画の守り・(g) job 待ち）は残す。
@@ -95,6 +95,23 @@ CoS が同じ run で決定に先に答え（`task_scope`。推奨のある決�
 
 - `BasisCategory::DocumentedDefault`・`WorkGuidance`、その検査と文書、「定型の 7 種類のどれにも当たらない判断は escalate」の行。
 - skill v11 の §2 の表の「上記以外で (a)〜(g) のどれにも当たらない判断」の行と §3 の「定型の代答 7 種類」の節。
+
+### D8 答えの要らない件は CoS が見届けで閉じる（task のコメント 1）
+
+`dependents_reopened`（依存先が終端から戻ったので、その失敗で cancel されていた後続を待ちに戻した知らせ）は、選択肢が
+戻した後続の cancel だけで、後続を残すのが普通の答え。項目は後続が動き出すか終端になると自然に消える。
+`InboxKind::observable_while_open` が真の種類（今は `dependents_reopened` だけ）は、元の項目が開いていても CoS が observe で
+閉じてよい（resolve は 422 `cos_observe_needs_judgment` を返さない）。照合（D4）は `observe` の候補を出す。後続を取り消す
+（重複した後継を手で起票していた）と判断したときは、従来どおり `task_scope` で cancel を答えるか人に回す。
+
+### D9 release の切り替えで途切れた一次対応（task のコメント 2 の確認）
+
+本番の `dependents_reopened-01M75722QN630BBASEQ759KG4T-735` は、2026-11-11 23:18Z の昇格の時刻に旧い規則
+（到着から 120 秒で退避）で人へ送られた。ADR 2026-11-11-cos-fallback-timing（task 01M756VNCZ）の後は、切り替えで止まった
+run の件は digest の回収で `pending` に戻り（`requeue_run_tx`）、新しい daemon が次の tick で拾う（D3。試験
+`cos_fallback_timing_standby_to_active_picks_on_the_next_tick`・`cos_digest_script_restart_after_failed_requeue`）。
+退避は run が件を手放したときか安全網（既定 1200 秒）を超えたときだけ取られる。送信済みの退避の件は同 ADR D2 のとおり人に残り、
+CoS は拾い直さない（判定は 409 で記録だけ残る）。この ADR では仕組みを変えない。
 
 ## 本番への移行
 

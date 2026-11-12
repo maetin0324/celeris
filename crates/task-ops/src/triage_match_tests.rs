@@ -130,6 +130,13 @@ fn triage_match_reserves_credential_and_budget_for_a_person() {
     assert_eq!(m.candidates[0].category, "plan_conforms");
     let m = match_with(input("decision", "write set を広げるか", ""), &[], now);
     assert_eq!(m.candidates[0].category, "task_scope");
+    let m = match_with(
+        input("dependents_reopened", "依存先の復帰で後続を戻した", ""),
+        &[],
+        now,
+    );
+    assert_eq!(m.reserved, None);
+    assert_eq!(m.prompt_line().as_deref(), Some("observe の候補"));
     let m = match_with(input("notice", "知らせ", ""), &[], now);
     assert_eq!(m, TriageMatch::default());
     assert_eq!(m.prompt_line(), None);

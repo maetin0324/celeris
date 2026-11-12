@@ -611,7 +611,7 @@ async fn resolve(
                             "answer, escalation and basis must be null for outcome=observe",
                         )));
                     }
-                    if source.is_some() {
+                    if source.is_some_and(|s| !s.kind.observable_while_open()) {
                         return Err(reject(unprocessable(
                             "cos_observe_needs_judgment",
                             "the source is an unresolved wait that needs a judgment; answer or escalate it",

@@ -42,7 +42,8 @@ impl Reserved {
 /// D4: a likely answer and what backs it (a live grant, when one covers the item).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Candidate {
-    /// The basis category of `/cos/inbox/{i}/resolve` (`job_wait_extend`, `plan_conforms`, …).
+    /// The basis category of `/cos/inbox/{i}/resolve` (`job_wait_extend`, `plan_conforms`, …), or
+    /// `observe` for an item that needs no answer (D8).
     pub category: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grant_id: Option<String>,
@@ -119,6 +120,11 @@ pub fn match_with(
                     grant_id,
                 });
             }
+            // D8: nothing to answer; keeping the reopened dependents is the default.
+            Some(kind) if kind.observable_while_open() => candidates.push(Candidate {
+                category: "observe".into(),
+                grant_id: None,
+            }),
             Some(InboxKind::PlanGate) => candidates.push(Candidate {
                 category: "plan_conforms".into(),
                 grant_id: None,

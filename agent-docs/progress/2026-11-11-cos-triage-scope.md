@@ -47,8 +47,13 @@ updated: 2026-11-12
 - `cargo test --no-fail-fast -p task-api --test cos_routine_answers --test cos_triage --test cos_chat_triage_scenarios --test cos_operations --test cos_review_rework --test cos_integrate_task --test cos_plan_conforms --test cos_job_wait_extend --test authority_ledger --test single_human_window --test cos_operations_domains --test project_wake_human_chat` → 12 本すべて合格（22・3・4・4・8・7・4・4・5・17・13・1 件）。
 - test-affected・clippy・fmt・progress-index は未実行（次の run で最終の HEAD で回す）。
 
+## 変更（attempt 1 の Run #3）
+- `phase 1: dependents_reopened の件を CoS が見届けで閉じられるようにし、途切れた一次対応の扱いを ADR に書く`
+  - task のコメント 1: `InboxKind::observable_while_open`（`dependents_reopened` だけ真）。resolve は開いている件でもこの種類の observe を受ける。照合は `observe の候補`。skill §3 に書いた。試験 `cos_triage_scope_dependents_reopened_is_observed_without_the_person`（observe で閉じ、後続は Ready のまま、決定の observe は 422、通知 0 件）と triage_match の試験。
+  - task のコメント 2: ADR D9 に確認の結果を書いた（コードは変えない）。01M756VNCZ の後は、切り替えで止まった run の件は回収で pending に戻り、新しい daemon が次の tick で拾う（既存の試験 `cos_fallback_timing_standby_to_active_picks_on_the_next_tick`）。本番の `-735` は旧い 120 秒の規則で送信済みの退避なので、同 ADR D2 のとおり人に残る。
+
 ## 未解決
-- 依頼のコメントの 2 件は未対応: (1) dependents_reopened の件に「取り消さない」の答え方を持たせる（今は選択肢が後続の cancel だけで、CoS は observe も answer もできない）。(2) release の切り替えで一次対応が途切れた件（fallback のまま CoS が拾い直さない件）の再開を確かめる。どちらも未調査。
+- 本番で送信済みの退避の件（例 `dependents_reopened-01M75722QN630BBASEQ759KG4T-735`）は人に残る。配備の後は、人が受信箱で閉じるか、依存先の後続が動き出すと消える。
 - 照合が判定する人に残す件は、件の種類と本文から決まるもの（credential の待ち・cluster の login・ブラウザの待ち・`near_limit:` の計画）だけ。目的の変更・本番 config・有料の試行・研究上の判断・検査を弱める判断は、CoS が方針（常設の節と skill §0）で判定する。
 
 ## 本番への移行

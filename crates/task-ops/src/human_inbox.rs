@@ -126,6 +126,13 @@ impl InboxKind {
         Self::STAGNATION_KINDS.iter().any(|k| k.as_str() == kind)
     }
 
+    /// ADR 2026-11-12-cos-triage-scope D8: an open item of this kind needs no answer, so CoS may close
+    /// it by observing. `dependents_reopened` only offers to undo the daemon's own default (cancel a
+    /// reopened dependent); keeping them is the usual answer and the item goes away on its own.
+    pub fn observable_while_open(self) -> bool {
+        matches!(self, InboxKind::DependentsReopened)
+    }
+
     /// The kind of an `as_str` name (`None` for `notice` and unknown names).
     pub fn from_name(name: &str) -> Option<InboxKind> {
         Self::ALL.into_iter().find(|k| k.as_str() == name)

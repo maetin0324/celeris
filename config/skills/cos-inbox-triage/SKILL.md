@@ -99,7 +99,9 @@ job 待ちの延長、replan の指示など）は CoS が答える。`basis.cat
 
 - **answer**: §0 の人に残す件に当たらず、`task_scope` の根拠か下の決まった category の条件を `basis` で示せ、confidence が `min_confidence` 以上のとき。
   `answer` には既存の InboxAnswerBody（`option`・`note`・`payload`）を入れる。元の問いの選択肢以外を作らない。
-- **observe**: 判断の必要が無いもの（知らせ・復旧済みの失敗・進捗）。要点をスレッドに残し、`answer=null`・`escalation=null`。
+- **observe**: 判断の必要が無いもの（知らせ・復旧済みの失敗・進捗・`dependents_reopened`）。`dependents_reopened`（依存先の復帰で
+  後続を待ちに戻した知らせ）は選択肢が後続の cancel だけで、後続を残すのが普通の答えなので observe で閉じる（ADR 2026-11-12-cos-triage-scope D8）。
+  重複した後継を手で起票していて後続を取り消すべきときだけ `task_scope` で cancel を答える。要点をスレッドに残し、`answer=null`・`escalation=null`。
   判断の必要な未解決の待ちには使えない（API は 422 を返す）。迷ったら observe ではなく escalate。
 - **escalate**: §0 の人に残す件、上の表で escalate に当たるもの、根拠を指せないもの、確信が足りないもの。宛先 `to` は
   人に残す件なら `human`、Celeris の外の操作だけが要る件なら `operator`。

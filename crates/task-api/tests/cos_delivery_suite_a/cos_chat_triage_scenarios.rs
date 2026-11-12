@@ -984,3 +984,90 @@ async fn cos_triage_scope_f_outside_celeris_goes_to_the_operator_without_discord
     assert_eq!(again.status.as_u16(), 200, "{}", again.text());
     assert_eq!(count(&env, "SELECT COUNT(*) FROM notifications"), 0);
 }
+
+/// D8（task のコメント 1、2026-11-12 本番の dependents_reopened-…-1016）: 依存先が戻って後続を待ちに戻した知らせは、
+/// 選択肢が後続の cancel だけで、後続を残すのが普通の答え。CoS は observe で閉じられ（人に回さない）、照合は
+/// observe の候補を出す。判断の要る待ち（決定）の observe は従来どおり 422。
+#[tokio::test]
+async fn cos_triage_scope_dependents_reopened_is_observed_without_the_person() {
+    let env = admin_env();
+    let app = env.router();
+    let upstream = question_task(&env, &[]);
+    let mut dependent = new_task(TaskKind::Execute, Status::Ready);
+    dependent.depends_on = vec![upstream.id];
+    env.seed_with(
+        &dependent,
+        vec![Event::Transitioned {
+            from: Status::Cancelled,
+            to: Status::Ready,
+            reason: "dependency_reopened".into(),
+        }],
+    );
+    env.store
+        .append_event(
+            upstream.id,
+            &Event::DependentsReopened {
+                restored: vec![task_core::RestoredDependent {
+                    task_id: dependent.id,
+                    depends_on: vec![upstream.id],
+                }],
+                kept: vec![],
+            },
+        )
+        .expect("reopened");
+    decision_task(&env, "d-judge", &[]);
+    let rows = ingest_all(&env, 1);
+    let bearer = cos_bearer(&env, "scope-dr");
+    let headers = [("authorization", bearer.as_str())];
+    let (inbox_id, item, rev) = find(&rows, "dependents_reopened-");
+    let found = derived(&env)
+        .into_iter()
+        .find(|x| &x.id == inbox_id)
+        .expect("wait");
+    let hint = task_ops::triage_match::match_item(
+        &env.store,
+        task_ops::triage_match::MatchInput {
+            source_kind: found.kind.as_str(),
+            title: &found.title,
+            body: found.detail.as_deref().unwrap_or(""),
+            project_id: None,
+        },
+        OffsetDateTime::now_utc(),
+    )
+    .expect("match");
+    assert_eq!(hint.prompt_line().as_deref(), Some("observe の候補"));
+    let observed = send(
+        &app,
+        post_json_with(
+            &resolve_path(item),
+            &body(
+                "k-dr",
+                rev,
+                "observe",
+                "後続は残す（task の目的どおり動く）",
+                json!({}),
+            ),
+            &headers,
+        ),
+    )
+    .await;
+    assert_eq!(observed.status.as_u16(), 200, "{}", observed.text());
+    assert_eq!(observed.json()["item"]["state"], "observed");
+    assert_eq!(
+        env.status_of(dependent.id),
+        Status::Ready,
+        "the dependent is kept"
+    );
+    let (_, d_item, d_rev) = find(&rows, "decision-d-judge");
+    let refused = send(
+        &app,
+        post_json_with(
+            &resolve_path(d_item),
+            &body("k-dj", d_rev, "observe", "見届け", json!({})),
+            &headers,
+        ),
+    )
+    .await;
+    assert_problem(&refused, 422, "cos_observe_needs_judgment");
+    assert_eq!(count(&env, "SELECT COUNT(*) FROM notifications"), 0);
+}

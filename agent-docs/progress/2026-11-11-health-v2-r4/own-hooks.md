@@ -1,12 +1,12 @@
 ---
 title: "健全性v2 R4 own-hooks: 研究 ablation と試験用フックを 1 つの fixture に隔離する"
 tasks: [01M6TYVJT4S29ZMP6P0D4831JG]
-status: running
-updated: 2026-11-12
+status: done
+updated: 2026-11-13
 ---
 # 健全性v2 R4 own-hooks: 研究 ablation と試験用フックを 1 つの fixture に隔離する
 
-完了日: 未完了（範囲の check が 2 file を許さない。下の「未解決事項」）
+完了日: 2026-11-13
 
 ## 概要
 
@@ -86,14 +86,31 @@ celeris の範囲の check は 2 回目の run の後も同じ正規表現 `[a-z
 - 2 file の変更は `d.test_now` → `d.test_hooks.now` の 4 行だけで、field を消す受け入れ条件 0 に要る。file 名を変えて check を
   避けることはしない（規約 9）。この run は done を返さず plan_issue（許可の正規表現を `[a-z0-9_/]+\.rs$` に広げる）を申告する。
 
+## 4 回目の run（run 01M790ZGAS）: 計画 v6 での再開
+
+計画 v6 は範囲の check を計画の 1 つの定義から作り直した。実装は作り直していない。
+
+- `crates/celeris/tests/root_done_summary.rs` の module 注釈の `test_now` を `test_hooks.now` に直した（意味は「dispatcher の
+  注入時計は task-dispatch の内部で外から差せない」のまま）。commit「phase 1: root_done_summary の注釈の注入時計を test_hooks.now に直す」。
+- 旧い field 名（`test_now`・`test_disable_write_set_gate` など 9 個）を `git grep` で探した。コードには残っていない。残りは
+  過去の ADR（0125・0131 など、当時の記録）と ADR 2026-11-11 D1 の表（旧い field → 移し先の対応表。adr-align の unit が正本にそろえる）だけ。
+
+証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）:
+
+- `bash scripts/dev/test-affected.sh`（対象 celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch）: exit 0、nextest 3750 件合格・
+  11 件 skip、壁時計 358 秒（開始 load 0.4、終了 load 9.7）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+- `cargo nextest run -p task-dispatch --lib -E 'test(structure_guard_) | test(phase_effect_ab) | test(integration_ready_race)'`: 24 件すべて合格。
+  base 比で 4 file（`integration_ready_race.rs`・`phase_effect_ab/{review_sync,stale_priority,write_set}.rs`）の試験の数と assert の数は
+  同じ（21/37・15/23・8/11・14/15）。変わった行は field の書き方と注釈だけ。
+- 変異の確認（確かめた後に file を戻した）: `Dispatcher` に名前が `test_` で始まらない `#[cfg(test)] probe_extra: ()` を足すと
+  `structure_guard_dispatcher_has_one_test_field` が「Dispatcher has 2 #[cfg(test)] fields」で落ちた（6 件中 1 件失敗、exit 100）。
+- 範囲の check・`bash scripts/dev/check-health.sh`・`sh scripts/dev/progress-index.sh --check` はこの節を commit した HEAD で実行した（報告に結果を書く）。
+
 ## 未解決事項
 
-- 範囲の check の正規表現 `crates/task-dispatch/(src|tests)/[a-z_/]+\.rs$` は file 名の数字を許さない。`cos_live_fix_d4.rs`（3 行）と
-  `credential_e2e.rs`（1 行）は `d.test_now` を直接書くので、field を消すと同じ変更で `d.test_hooks.now` に直す必要がある。
-  範囲の外に回避策は置けない（規約 9）ので、plan_issue で許可の正規表現を `[a-z0-9_/]+\.rs$` に広げることを申告する
-  （2 回目の run でも check は同じ正規表現のままだった）。
-- `crates/celeris/tests/root_done_summary.rs` の注釈が `test_now` を名指しする（範囲外。意味は「dispatcher の注入時計は外から差せない」で
-  今も正しい）。直すなら record の unit で `test_hooks.now` に直す。
+- 無し。3 回の run で範囲の check が落ちた原因（許可の正規表現 `[a-z_/]+\.rs$` が `cos_live_fix_d4.rs`・`credential_e2e.rs` の
+  数字を許さない）は、計画 v6 が範囲の check を作り直して解消した。`root_done_summary.rs` の注釈は上のとおり直した。
 
 ## 提案
 

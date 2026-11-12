@@ -5,12 +5,13 @@ tasks: [01M76BYGKY7R8SBZ22AZGJ72SP]
 
 状態: 実装済み
 
-- 日付: 2026-11-11（G2 の script の判定を 2026-11-12 に改めた。下の「G2 の最初の判定を退けた理由」）
+- 日付: 2026-11-11（G2 の script の判定を 2026-11-12 に改めた。下の「G2 の最初の判定を退けた理由」。G1 の import の失敗の範囲も 2026-11-12 に広げた）
 - 付記先: [ADR 2026-11-07 repo health の契約](2026-11-07-repo-health-contract.md)、[ADR 2026-11-10 isolated Git fixture](2026-11-10-health-generic-fixtures.md)（(2) unsupported-tool、(3) 表 (d)）。G4 の人の決定 checker-gaps の回答 a（G4 では直さず、policy だけの別 task で直す）に従う。
 - 実装: `scripts/dev/repo-health/repo_health.py`、`scripts/dev/repo-health/rules/existing_checks.py`、試験は `scripts/tests/test_repo_health_generic_bypass.py`（G1・G2・G3）と `scripts/tests/test_repo_health_wrapped_checks.py`（G2 の script の判定と Celeris の profile）。
 
 ## 決定
 - G1: 検査器自身の module を import できない、または実行中に想定外の例外が出たときは、`repo_health.py` が理由を stderr に出して exit 2 にする（report は書かない）。契約では exit 1 は必須 rule の fail だけで、検査器の故障は error。traceback の exit 1 は fail に見えるので廃止する。
+  - import の失敗は例外の種類を問わない。欠けた module（ImportError）だけでなく、構文誤り（SyntaxError）や import 時に出る例外（例 RuntimeError）も、先頭の import（`health.engine`・`health.profile`・`health.snapshot`）では `checker_import_failed`、実行中に遅れて import される module（例 `health/scan.py`・`rules/*.py`）では `checker_crashed` として exit 2 にする（2026-11-12 の review で、先頭の import が ImportError だけを捕まえ、構文誤りと import 時の例外が traceback の exit 1 になっていた所を直した。`test_generic_checker_import_failure_is_error` が 4 つの故障を確かめる）。
 - G2: 包んだ検査は、起動の前に `_preflight` で 2 つを確かめ、外れたら `unsupported` にして finding を作らない。shell ごとの exit code（dash は 2、python3 も 2）に依らない。
   - argv[0] が PATH に無い: reason `tool_missing:<argv[0]>`（以前からの判定）。
   - command の script が head の tree に file として無い: reason `command_missing: script <path> が head の tree に無い`。
@@ -29,4 +30,4 @@ tasks: [01M76BYGKY7R8SBZ22AZGJ72SP]
 - 検査の判定を弱める policy の経路（baseline・exception・threshold）は変えない。
 
 ## 撤去
-- 試験の `@unittest.expectedFailure` 2 件と「Remove expectedFailure when …」の文を外した。旧い traceback の経路（import 失敗時の exit 1）と、dash の exit 2 を fail に写す経路は残っていない。fail の evidence の path を決めていた別の判定（`scripts/` で始まる、`.sh`・`.py` で終わる最初の引数）は消し、`_script_of` にまとめた。
+- 試験の `@unittest.expectedFailure` 2 件と「Remove expectedFailure when …」の文を外した。旧い traceback の経路（import 失敗時の exit 1。ImportError でない import の失敗も含む）と、dash の exit 2 を fail に写す経路は残っていない。fail の evidence の path を決めていた別の判定（`scripts/` で始まる、`.sh`・`.py` で終わる最初の引数）は消し、`_script_of` にまとめた。

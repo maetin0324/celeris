@@ -1528,7 +1528,7 @@
               "type": "null"
             }
           ],
-          "description": "`cos/memory.md`, when it exists."
+          "description": "`environment/celeris/cos-memory.md` (CoS's memory page), when it exists."
         },
         "role": {
           "$ref": "#/$defs/CosThreadRole"
@@ -1611,7 +1611,7 @@
       "type": "object"
     },
     "CosStandingPage": {
-      "description": "One KB page quoted into the standing context (`user/*.md`, `cos/memory.md`).",
+      "description": "One KB page quoted into the standing context (`user/*.md`, `environment/celeris/cos-memory.md`).",
       "properties": {
         "body": {
           "description": "The body without front matter (the renderer applies the limits).",

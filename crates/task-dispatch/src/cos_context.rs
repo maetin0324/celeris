@@ -12,13 +12,11 @@ use task_core::chat::ChatThreadKind;
 use task_core::store::SqliteStore;
 use task_core::{MountKind, OrgKind};
 use task_worker::protocol::{
-    CosChatContext, CosChatRelayedInstruction, CosStandingContext, CosStandingGrant,
-    CosStandingPage, CosThreadRole, RunContext, SessionHandle, SkillMount,
+    COS_MEMORY_PAGE, CosChatContext, CosChatRelayedInstruction, CosStandingContext,
+    CosStandingGrant, CosStandingPage, CosThreadRole, RunContext, SessionHandle, SkillMount,
 };
 use time::OffsetDateTime;
 
-/// The KB page of CoS's own (non-authority) memory (D1).
-pub const COS_MEMORY_PAGE: &str = "cos/memory.md";
 /// The KB directory of the user pages (D1).
 const USER_DIR: &str = "user/";
 

@@ -40,7 +40,7 @@ fn standing(role: CosThreadRole) -> CosStandingContext {
             page("user/preferences.md", "結論を先に書く。"),
             page("user/profile.md", "筑波大の HPC の研究者。"),
         ],
-        memory: Some(page("cos/memory.md", "- Sirius の qstat の時刻は JST。")),
+        memory: Some(page(COS_MEMORY_PAGE, "- Sirius の qstat の時刻は JST。")),
         knowledge_scopes: vec!["user".into(), "projects".into(), "memory".into()],
     }
 }
@@ -172,7 +172,7 @@ fn cos_standing_overflow_drops_the_oldest_and_says_how_many() {
         .map(|i| page(&format!("user/p{i:02}.md"), &"好み".repeat(800)))
         .collect();
     let memory = format!("{}- 最新の覚え書き\n", "- 古い覚え書き\n".repeat(400));
-    chat.standing.memory = Some(page("cos/memory.md", &memory));
+    chat.standing.memory = Some(page(COS_MEMORY_PAGE, &memory));
     let section = standing_section(&chat);
     let grants = grants_section(&chat.standing);
     assert!(chars(&grants.text) <= GRANTS_MAX, "{}", chars(&grants.text));
@@ -194,4 +194,39 @@ fn cos_standing_overflow_drops_the_oldest_and_says_how_many() {
         chars(&section)
     );
     assert!(section.contains(&format!("omitted={}", grants.omitted + user.omitted + 1)));
+}
+
+/// D1: the way the memory section tells CoS to add a note is one the KB accepts. Every writer of the
+/// KB (`knowledge.record`, `celerisctl knowledge record`, the curation run's `apply_candidates`)
+/// goes through `task_core::knowledge::layout::place`, so the scope and path named in the prompt
+/// must pass it and land on the page the dispatcher reads. The earlier page `cos/memory.md` with
+/// scope `cos` was refused there, and no prompt test looked at the guard.
+#[test]
+fn cos_standing_memory_note_route_passes_the_kb_placement_guard() {
+    use task_core::knowledge::layout::{Layout, PlacementRequest, place};
+    let section = memory_section(None);
+    assert!(
+        section
+            .text
+            .contains(&format!("\"scope\":\"{COS_MEMORY_SCOPE}\""))
+    );
+    assert!(
+        section
+            .text
+            .contains(&format!("\"path\":\"{COS_MEMORY_PAGE}\""))
+    );
+    // The API knows the projects; `celerisctl knowledge record` does not.
+    for projects in [Some(Vec::new()), None] {
+        let layout = Layout::new(projects, Vec::<String>::new(), Vec::new(), "2026-11-12");
+        let req = PlacementRequest {
+            op: None,
+            path: Some(COS_MEMORY_PAGE),
+            scope: Some(COS_MEMORY_SCOPE),
+            title: "CoS の覚え書き",
+            tags: &[],
+        };
+        let placed = place(&req, &layout).expect("the KB guard accepts the memory note route");
+        assert_eq!(placed.path, COS_MEMORY_PAGE);
+        assert_eq!(placed.scope.as_deref(), Some("environment"));
+    }
 }

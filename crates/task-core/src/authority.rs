@@ -310,6 +310,41 @@ pub fn forward_gap(
     }
 }
 
+/// D4: 取り次ぎがもう根拠にならない理由。prompt に入れる取り次ぎの一覧（`chat_relayed_instructions`）と
+/// `instructed_by` の照合が同じ [`relay_lapse`] を使う（grant を取り消すと両方から同時に外れる）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RelayLapse {
+    /// grant 付きの取り次ぎで、grant が取り次ぎ先の案件をもう裏付けない（`why` は [`forward_gap`] の理由）。
+    GrantGone { grant: String, why: String },
+    /// `expires_at` を過ぎた。
+    Expired,
+}
+
+/// D4: 取り次ぎ `relay` が `now` にまだ根拠になるか（`None`）。`grant` は `relay.grant_id` の台帳の行（無ければ `None`）。
+pub fn relay_lapse(
+    relay: &crate::chat::ChatRelay,
+    grant: Option<AuthorityGrant>,
+    now: OffsetDateTime,
+) -> Option<RelayLapse> {
+    if let Some(id) = relay.grant_id.as_deref()
+        && let Err(why) = forward_gap(Some(grant), true, relay.scope.project_id.as_deref(), now)
+    {
+        let grant = id.to_owned();
+        return Some(RelayLapse::GrantGone { grant, why });
+    }
+    crate::chat::relay_expired(relay, now).then_some(RelayLapse::Expired)
+}
+
+/// [`relay_lapse`] with the grant row read in `conn` (the chat store's read transaction).
+pub(crate) fn relay_lapse_conn(
+    conn: &rusqlite::Connection,
+    relay: &crate::chat::ChatRelay,
+    now: OffsetDateTime,
+) -> Result<Option<RelayLapse>, crate::store::StoreError> {
+    let grant = crate::store::authority::forward_grant(conn, relay.grant_id.as_deref())?;
+    Ok(relay_lapse(relay, grant.flatten(), now))
+}
+
 /// D4: 許可の提案の通知の題（global の台帳は統括 CoS の提案）。
 pub fn proposal_title(project: &str, class: ActionClass) -> String {
     if project == GLOBAL_LEDGER {

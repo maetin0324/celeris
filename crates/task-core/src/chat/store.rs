@@ -919,8 +919,9 @@ impl SqliteStore {
         self.chat_relay_post_also(thread_id, req, relayed_by, now, |_, _| Ok(()))
     }
 
-    /// ADR 2026-10-27-relayed-instructions D4: the relayed instructions of a thread that have not
-    /// expired at `now`, newest first, at most `CHAT_RELAYS_PROMPT_MAX`.
+    /// ADR 2026-10-27-relayed-instructions D4: the relayed instructions of a thread that still
+    /// ground it at `now` (no [`crate::authority::RelayLapse`]: not expired, and a standing
+    /// forward's grant still backs the project), newest first, at most `CHAT_RELAYS_PROMPT_MAX`.
     pub fn chat_relayed_instructions(
         &self,
         thread_id: &str,
@@ -938,11 +939,10 @@ impl SqliteStore {
             let mut out = Vec::new();
             for raw in raws {
                 let message = message_from_raw(conn, raw)?;
-                let live = message
-                    .relay
-                    .as_ref()
-                    .is_some_and(|relay| !relay_expired(relay, now));
-                if live {
+                let Some(relay) = &message.relay else {
+                    continue;
+                };
+                if crate::authority::relay_lapse_conn(conn, relay, now)?.is_none() {
                     out.push(message);
                     if out.len() >= CHAT_RELAYS_PROMPT_MAX {
                         break;

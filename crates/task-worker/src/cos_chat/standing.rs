@@ -4,7 +4,10 @@
 //! not fit is dropped oldest first and replaced by one line saying how many were left out and where
 //! to read them.
 
-use crate::protocol::{CosChatContext, CosStandingContext, CosStandingPage, CosThreadRole};
+use crate::protocol::{
+    COS_MEMORY_PAGE, COS_MEMORY_SCOPE, CosChatContext, CosStandingContext, CosStandingPage,
+    CosThreadRole,
+};
 
 /// D1 limits in characters, headings included. Their sum is [`TOTAL_MAX`].
 pub const ROLE_MAX: usize = 600;
@@ -176,12 +179,14 @@ fn user_section(standing: &CosStandingContext) -> Rendered {
     }
 }
 
-/// The tail of `cos/memory.md` (newest notes are appended at the end).
+/// The tail of [`COS_MEMORY_PAGE`] (newest notes are appended at the end). The way to add a note
+/// names the scope and path that the KB placement guard accepts (D1).
 fn memory_section(memory: Option<&CosStandingPage>) -> Rendered {
-    let mut text = String::from(
-        "### CoS の覚え書き (KB `cos/memory.md`)\n\
-         権限でない覚え書き（慣習・好み・道具の癖）。足すときは KB 候補にする（`POST /api/v1/knowledge/inbox`、scope `cos`。\
-         curation か人の受け入れで入る）。権限は grant にする。\n",
+    let mut text = format!(
+        "### CoS の覚え書き (KB `{COS_MEMORY_PAGE}`)\n\
+         権限でない覚え書き（運用の慣習・道具の癖）。足すときは KB 候補にする（`knowledge.record`、\
+         `POST /api/v1/knowledge/inbox` の body に `\"scope\":\"{COS_MEMORY_SCOPE}\"`・`\"path\":\"{COS_MEMORY_PAGE}\"`。\
+         curation か人の受け入れで入る）。利用者の好みは `user/preferences.md` の候補にする。権限は grant にする。\n",
     );
     let Some(page) = memory else {
         text.push_str("- （まだ無い）\n");

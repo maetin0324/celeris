@@ -31,9 +31,16 @@ tasks: [01M75722QN630BBASEQ759KG4T]
 | identity（役割） | `task_worker::cos_chat::standing` の thread の種類ごとの固定文 | 統括・案件・review・受信箱の一次対応の役割の節 | 600 | コードの変更 |
 | user（利用者） | KB の `user/*.md` | page ごとの題名と本文の先頭（front matter を除く） | page 600・節 3000 | KB の通常の経路（人の編集・curation） |
 | memory: 任された範囲 | authority ledger の grant（`authority_grants`） | 生きている grant の id・範囲・分類・期限・残り回数・人の発言の抜粋 | 節 3600 | 人の受け入れ（D4）・取り消し |
-| memory: 覚え書き（権限でない慣習・好み・道具の癖） | KB の `cos/memory.md` | 本文の末尾（新しい追記）を上限まで | 2000 | CoS が KB 候補として出し（`POST /api/v1/knowledge/inbox`、scope `cos`）、日次 curation か人の受け入れで入る |
+| memory: 覚え書き（権限でない運用の慣習・道具の癖） | KB の `environment/celeris/cos-memory.md`（`task_worker::protocol::COS_MEMORY_PAGE`） | 本文の末尾（新しい追記）を上限まで | 2000 | CoS が KB 候補として出し（`knowledge.record`、`POST /api/v1/knowledge/inbox` の body に scope `environment/celeris`・path `environment/celeris/cos-memory.md`）、日次 curation か人の受け入れで入る |
 | KB の入口 | cos の org profile の knowledge の mount | 検索してよい scope と、検索・取得の API の書き方だけ（索引は入れない） | 800 | org の profile（`PATCH /api/v1/org`） |
 
+- 覚え書きの置き場は KB の既存の分類 `environment/celeris/`（Celeris 自身の運用の癖）に置く。KB の書き込みはどの経路
+  （`knowledge.record`・`celerisctl knowledge record`・curation の `apply_candidates`）も置き場のガード
+  `task_core::knowledge::layout::place` を通り、ガードが受ける最上位は `user/`・`environment/<分類>/`・`projects/<slug>/`・
+  `experience/YYYY/MM/` だけである。当初の `cos/memory.md`（scope `cos`）はガードに拒まれ、CoS も curation も書けなかった。
+  最上位の `cos/` を足す案は、置き場の規則・scope の語彙・mount の scope を増やすので採らない。利用者の好みは覚え書きに
+  入れず `user/preferences.md` の候補にする。prompt が示す scope・path と dispatcher が読む page は同じ定数
+  （`COS_MEMORY_PAGE`・`COS_MEMORY_SCOPE`）から作り、試験でガードを通ることを確かめる。
 - Core を写した別 file（SOUL.md・IDENTITY.md）は作らない。役割の節は Core に入れず run 固有の部分に置く（Core は
   thread の種類によらず byte 単位で同じに保つ。ADR 2026-10-08 D6）。
 - 合計の上限は 10000 字。節の上限を超えた分は古いものから落とし、「ほか N 件（<読み方>）」の 1 行に置き換える。
@@ -84,6 +91,8 @@ tasks: [01M75722QN630BBASEQ759KG4T]
 - 取り次ぎ（`chat.relay_forward`）は `grant_id` を持てる。その grant が生きていて（取り消し・期限・回数・元の根拠）、
   global の台帳か取り次ぎ先の案件の台帳の、範囲が global か案件全体の行なら、`task_ids` と `expires_at` を省ける。
   `relay.grant_id` に残し、`instructed_by` に使うたびに同じ照合をやり直す（取り消した grant の取り次ぎは根拠にならない）。
+  取り次ぎがまだ根拠になるか（期限・grant）は `task_core::chat::RelayLapse` の 1 つの判定にし、`instructed_by` と
+  prompt に入れる取り次ぎの一覧（`chat_relayed_instructions`）が同じ判定を使う（取り消した grant の取り次ぎは一覧からも消える）。
   `grant_id` の無い取り次ぎは今のまま task と期限が必須。
 - 代答の記録は判断の根拠と実行者を別々に残す: 代答が applied になった後に `authority_audit` へ 1 行（`grant_id`、
   `human_decision_ref = authority_grant:<id>`、`actual_actor = cos:<thread>`、`outcome_state = applied`）を書き、grant の
@@ -107,6 +116,9 @@ tasks: [01M75722QN630BBASEQ759KG4T]
   dispatcher の CoS 起動の試験）。
 - Core は thread の種類によらず byte 単位で同じ（既存の Core の試験）。
 - 許可は人だけが作る。`human_required` は許可で解除できない（既存の authority ledger の試験）。
+- prompt が示す覚え書きの足し方（scope・path）は KB の置き場のガードを通り、受け入れると dispatcher が読む page に入る
+  （`cos_standing_memory_note_route_passes_the_kb_placement_guard`、task-api の
+  `the_cos_memory_note_route_records_and_accepts_into_the_memory_page`）。
 
 ## 考えた別案
 

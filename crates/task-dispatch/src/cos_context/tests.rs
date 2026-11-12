@@ -68,13 +68,14 @@ fn kb(dir: &Path) -> std::path::PathBuf {
     let root = dir.join("kb");
     task_ops::knowledge::init(&root).expect("kb init");
     std::fs::create_dir_all(root.join("user")).expect("user dir");
-    std::fs::create_dir_all(root.join("cos")).expect("cos dir");
+    let memory = root.join(COS_MEMORY_PAGE);
+    std::fs::create_dir_all(memory.parent().expect("memory dir")).expect("memory dir");
     std::fs::write(
         root.join("user/preferences.md"),
         "---\ntitle: 人の好み\n---\n# 人の好み\n結論を先に書く。\n",
     )
     .expect("page");
-    std::fs::write(root.join("cos/memory.md"), "- Sirius の時刻は JST。\n").expect("memory");
+    std::fs::write(memory, "- Sirius の時刻は JST。\n").expect("memory");
     root
 }
 

@@ -1,6 +1,7 @@
 //! Resolve human instruction evidence and enforce relay scope.
 use super::{DispatchEnv, Matched};
 use serde_json::Value;
+use task_core::authority::RelayLapse;
 use task_core::{TaskStore, chat::AuditContext, store::SqliteStore};
 
 /// The task an operation acts on, for the scope check of a relayed instruction: the task of a
@@ -203,23 +204,27 @@ pub(super) fn instructed_message(
             ));
         }
 
-        // ADR 2026-11-11-cos-standing-context D4: a standing forward lives only while its grant does.
-        if let Some(grant) = &relay.grant_id {
-            let row = store
-                .authority_grant(grant)
-                .map_err(|e| format!("authority ledger unreadable: {e}"))?;
-            let project = relay.scope.project_id.as_deref();
-            if let Err(why) = task_core::authority::forward_gap(Some(row), true, project, now) {
+        // ADR 2026-11-11-cos-standing-context D4: a standing forward lives only while its grant
+        // does. The same check decides which relays the prompt lists.
+        let grant = match relay.grant_id.as_deref() {
+            Some(id) => store
+                .authority_grant(id)
+                .map_err(|e| format!("authority ledger unreadable: {e}"))?,
+            None => None,
+        };
+        match task_core::authority::relay_lapse(relay, grant, now) {
+            Some(RelayLapse::GrantGone { grant, why }) => {
                 return Err(format!(
                     "instructed_by {message_id} is backed by grant {grant}, which no longer holds: {why}"
                 ));
             }
-        }
-        if task_core::chat::relay_expired(relay, now) {
-            return Err(format!(
-                "instructed_by {message_id} is a relayed instruction that expired at {}",
-                relay.scope.expires_at.as_deref().unwrap_or("?")
-            ));
+            Some(RelayLapse::Expired) => {
+                return Err(format!(
+                    "instructed_by {message_id} is a relayed instruction that expired at {}",
+                    relay.scope.expires_at.as_deref().unwrap_or("?")
+                ));
+            }
+            None => {}
         }
         if !relay.scope.task_ids.is_empty() {
             let covered = target

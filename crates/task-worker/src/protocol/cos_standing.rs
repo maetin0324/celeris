@@ -1,10 +1,18 @@
 //! `context.cos_chat.standing`: the standing context every CoS chat run reads (ADR 2026-11-11
 //! cos-standing-context D1/D2). The dispatcher fills it from the authority ledger, the KB pages
-//! `user/*.md` and `cos/memory.md`, and the cos org profile; the worker renders it with the limits
-//! of [`crate::cos_chat::standing`].
+//! `user/*.md` and [`COS_MEMORY_PAGE`], and the cos org profile; the worker renders it with the
+//! limits of [`crate::cos_chat::standing`].
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+/// D1: the KB page of CoS's own (non-authority) memory. It lives in the existing category of
+/// Celeris's own operating habits, so a KB candidate with [`COS_MEMORY_SCOPE`] and this path passes
+/// the KB placement guard (`task_core::knowledge::layout::place`) that `knowledge.record` and the
+/// curation run share. The dispatcher reads this page and the prompt names the same path.
+pub const COS_MEMORY_PAGE: &str = "environment/celeris/cos-memory.md";
+/// D1: the `scope` of a KB candidate that adds to [`COS_MEMORY_PAGE`].
+pub const COS_MEMORY_SCOPE: &str = "environment/celeris";
 
 /// The role of the thread the run serves (D1 identity). Chosen from the thread kind.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -52,7 +60,7 @@ pub struct CosStandingGrant {
     pub created_at: String,
 }
 
-/// One KB page quoted into the standing context (`user/*.md`, `cos/memory.md`).
+/// One KB page quoted into the standing context (`user/*.md`, `environment/celeris/cos-memory.md`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct CosStandingPage {
     /// KB-relative path (`user/preferences.md`).
@@ -73,7 +81,7 @@ pub struct CosStandingContext {
     /// `user/*.md` in path order. Empty when the KB has none or is not set up.
     #[serde(default)]
     pub user_pages: Vec<CosStandingPage>,
-    /// `cos/memory.md`, when it exists.
+    /// `environment/celeris/cos-memory.md` (CoS's memory page), when it exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory: Option<CosStandingPage>,
     /// The KB scopes the cos org profile mounts (`user`, `projects`, …), for the search entry.

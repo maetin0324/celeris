@@ -1392,7 +1392,10 @@ pub use cos_chat::{
     CosChatInboxOption, CosChatInput, CosChatProjectSummary, CosChatRelayedInstruction,
     is_cos_chat_run,
 };
-pub use cos_standing::{CosStandingContext, CosStandingGrant, CosStandingPage, CosThreadRole};
+pub use cos_standing::{
+    COS_MEMORY_PAGE, COS_MEMORY_SCOPE, CosStandingContext, CosStandingGrant, CosStandingPage,
+    CosThreadRole,
+};
 
 /// 試験用の最小の `Task`。他 crate の試験が `RunRequest` を組むために公開している（製品の経路では使わない）。
 #[doc(hidden)]

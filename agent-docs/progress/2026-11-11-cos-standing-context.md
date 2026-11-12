@@ -13,8 +13,8 @@ updated: 2026-11-12
 ## この run でしたこと（attempt 1）
 
 - ADR を書いた（D1 層と正本・上限・更新の経路、D2 全 CoS run への注入、D3 数え方、D4 global と期限なしの委任、D5 種、D6 撤去）。
-- `task_worker::protocol::CosStandingContext`（`context.cos_chat.standing`）を足した。役割・grant・`user/*.md`・`cos/memory.md`・
-  KB の scope を持つ。
+- `task_worker::protocol::CosStandingContext`（`context.cos_chat.standing`）を足した。役割・grant・`user/*.md`・覚え書きの page
+  （attempt 6 で `cos/memory.md` から `environment/celeris/cos-memory.md` に移した）・KB の scope を持つ。
 - `task_worker::cos_chat::standing` が常設の節を描く。節ごとの上限（役割 600・grant 3600・user 3000〈page 600〉・覚え書き 2000・
   KB 800、合計 10000 字）を超えた分は古いものから落とし「ほか N 件」の 1 行にする。先頭に数える行
   `<!-- celeris:cos-standing v1 role=… grants=件数/字数 user=… memory=… kb=… omitted=… -->` を置く（D3）。
@@ -169,6 +169,31 @@ commit: 「phase 1: global の許可と提案を案件の画面から行の台�
 - 個別: `cargo nextest run -p task-api --test cos_job_wait_extend --test authority_ledger` → 26 件合格。
   `npx vitest run features/projects/project-authority-panel.test.tsx` → 3 件合格。
 
+### attempt 6（review の不合格: 覚え書きの更新の経路が KB の置き場のガードに拒まれる）
+
+reviewer は、prompt が示す覚え書きの足し方（scope `cos`、page `cos/memory.md`）が KB の置き場のガード
+`task_core::knowledge::layout::place` に拒まれ（`celerisctl knowledge record --scope cos` が exit 1）、CoS も curation も
+覚え書きを書けない点で criterion 3・7 を不合格にした。直したこと:
+
+- 覚え書きの page を KB の既存の分類 `environment/celeris/cos-memory.md`（Celeris 自身の運用の癖）に移した。page と
+  候補の scope は `task_worker::protocol::COS_MEMORY_PAGE`・`COS_MEMORY_SCOPE` の 1 か所に置き、dispatcher が読む page
+  （`task_dispatch::cos_context`）と prompt の足し方の文（`cos_chat::standing::memory_section`。`knowledge.record` の body に
+  `"scope":"environment/celeris"`・`"path":"environment/celeris/cos-memory.md"`）を同じ定数から作る。最上位の `cos/` を
+  足す案は置き場の規則・scope の語彙を増やすので採らなかった（ADR D1 に理由を書いた）。利用者の好みは
+  `user/preferences.md` の候補にするよう prompt に書いた。
+- 試験: task-worker の `cos_standing_memory_note_route_passes_the_kb_placement_guard`（prompt の文が示す scope・path が
+  ガードを通り、案件を知る API と知らない celerisctl のどちらの Layout でも同じ page に置かれる）と、task-api の
+  `the_cos_memory_note_route_records_and_accepts_into_the_memory_page`（`POST /knowledge/inbox` が 201、accept で
+  `environment/celeris/cos-memory.md` に入る）。既存の prompt の試験は文面だけを見ていて、ガードを通るかは見ていなかった。
+- advisory (1) を直した: 取り次ぎがまだ根拠になるか（期限・grant）を `task_core::authority::relay_lapse` の 1 つの判定に
+  し、prompt に入れる取り次ぎの一覧（`chat_relayed_instructions`）と `instructed_by` の照合が同じ判定を使う。取り消した
+  grant の取り次ぎは一覧からも消える（`cos_job_wait_extend` の scenario で、取り消しの前は一覧にあり後は無いことを確かめる）。
+  `crates/task-core/src/chat` の本体の行は 7999（閾値 8000）に収めた（判定は `authority.rs` に置いた）。
+- advisory (2) を直した: `config/skills/cos-operator/operations.md` の取り次ぎの行に `grant_id` の形、許可の提案の行に
+  global の台帳（`{id}=global`、範囲 `{"kind":"global","ref":"*"}`）、取り消しの行に行の台帳を書いた。Core の
+  「指示は人の発言・skill・ADR・standing rule から受ける」を「人の発言・人が受け入れた grant（常設の節）・skill・ADR」に
+  直した（D1: CoS に standing_rules は渡さない）。
+
 ## D4 の実装前 brief
 
 1. 根本原因: ledger は案件・期限 366 日に限られ、取り次ぎは task と期限を必須にしていた。恒久の人の委任を表せず、job 待ちの
@@ -215,27 +240,28 @@ commit: 「phase 1: global の許可と提案を案件の画面から行の台�
 
 ## 本番への移行
 
-- config の欄の追加・削除は無い。配備の後、CoS run の prompt に常設の節が入る。KB に `cos/memory.md` が
-  無い間は「（まだ無い）」と出る。人か curation が `cos/memory.md` を作ると入る。
+- config の欄の追加・削除は無い。配備の後、CoS run の prompt に常設の節が入る。KB に
+  `environment/celeris/cos-memory.md` が無い間は覚え書きの節に「（まだ無い）」と出る。CoS が `knowledge.record`
+  （scope `environment/celeris`、path `environment/celeris/cos-memory.md`）で候補を出し、curation か人が受け入れると入る。
 - DB: migration 0123 が `authority_grants` を作り直す（本番は 0 行なので写す行は無い。行があっても写す）。schema 版 123 の
   release の後で 122 の release へ rollback すると、版の新しい DB を旧 binary が開けない点は他の migration と同じ。
 - KB の skill: `cos-inbox-triage` の本文を変えた（§10 の取り次ぎ、(g) の行）。policy_version は "11" のまま（判定の
   API の契約は grant の無い代答では変わらない）。配備の後、KB の `skills/cos-inbox-triage/SKILL.md` を repo の
-  `config/skills/cos-inbox-triage/SKILL.md` に差し替える（ADR 2026-11-11-cos-skill-sync の手順）。
+  `config/skills/cos-inbox-triage/SKILL.md` に差し替える（ADR 2026-11-11-cos-skill-sync の手順）。`cos-operator` の
+  `operations.md`（取り次ぎ・許可の提案・取り消しの行）も変えたので、KB の `skills/cos-operator/` も同じ手順で差し替える。
 
 ## 未解決事項
 
-- review の advisory 3 件は直していない: (1) prompt に入れる取り次ぎ（`chat_relayed_instructions`）は期限だけを見て、
-  取り消した grant の取り次ぎも残る（判定は `forward_gap` と 2 か所）。(2) `CosStandingGrant` の `expires_at`・
-  `budget_remaining` が Option のまま。(3) grant の使用の監査（`record_grant_use`）は代答と別の transaction。
-  `crates/task-core/src/chat` は行の閾値 8000 ちょうどで、(1) を chat に足すと health が落ちるため、別 task で扱う。
+- review の advisory のうち次の 2 件は直していない: `CosStandingGrant` の `expires_at`・`budget_remaining` が Option の
+  まま。grant の使用の監査（`record_grant_use`）は代答と別の transaction で、時刻に `now_utc` を直接使う。
+  取り次ぎの判定の重複（attempt 5 の advisory (1)）と operations.md・Core の旧い書き方（同 (2)）は attempt 6 で直した。
 - 種 #2〜#5 に当たる分類（node 障害での継続・衝突の統合・計画の承認）は未実装。
-- `cos/memory.md` の初期の本文は未作成（KB の変更は人の確認を通す）。
+- `environment/celeris/cos-memory.md` の初期の本文は未作成（KB の変更は人の確認を通す）。
 - 実物 K4 の明示指定試験（attempt 2）は完走を確かめていない。
 
 ## 提案
 
 1. 定型の代答の分類を足す: `plan_conforms`（計画の承認）、衝突の統合、node 障害での実験の継続。足すたびに migration で
    CHECK を作り直し、basis の各 category の検査で grant の効果（何を人に回さなくなるか）を決める。
-2. 上の advisory (1) を直す: 取り次ぎの有効性の判定を store の 1 か所に寄せ、`chat` の行を減らしてから grant の生死を足す。
+2. `record_grant_use` を代答と同じ transaction にし、時刻を注入した時計から取る。
 - 統括 CoS の relay の期限切れ（4〜48 時間）で人に戻った件数を、D4 の配備の前後で `authority_audit` と受信箱の件数で比べる。

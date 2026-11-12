@@ -714,6 +714,16 @@ async fn standing_job_wait_grant_from_the_general_thread_answers_the_project_wai
         )
     };
     assert_eq!(backs(&env), Ok(()));
+    // The prompt's relay list asks the same question as `instructed_by` (RelayLapse): the standing
+    // forward is listed while its grant holds and leaves the list with the grant.
+    let listed = |env: &TestEnv| {
+        env.store
+            .chat_relayed_instructions(&project_thread, OffsetDateTime::now_utc())
+            .expect("relays")
+            .iter()
+            .any(|m| m.relay.as_ref().and_then(|r| r.grant_id.as_deref()) == Some(grant.as_str()))
+    };
+    assert!(listed(&env));
     let revoked = send(
         &app,
         post_json_with(
@@ -725,4 +735,8 @@ async fn standing_job_wait_grant_from_the_general_thread_answers_the_project_wai
     .await;
     assert_eq!(revoked.status.as_u16(), 200, "{}", revoked.text());
     assert_eq!(backs(&env).err().as_deref(), Some("grant_revoked"));
+    assert!(
+        !listed(&env),
+        "a revoked grant's forward is not offered to the prompt"
+    );
 }

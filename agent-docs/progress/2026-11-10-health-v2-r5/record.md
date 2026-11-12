@@ -31,6 +31,10 @@ WorkUnit `record`（段 record）。基準は `$CELERIS_WU_BASE`（slices-check 
 - `git diff --name-only $(git merge-base HEAD main) | python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R5 agent-docs/progress/2026-11-07-health-v2-b0/slices.json` → exit 0（`write-set R5: ok`）
 - `python3 agent-docs/progress/2026-11-10-health-v2-r5/classify.py --check agent-docs/progress/2026-11-10-health-v2-r5/inventory.json` → exit 0（352 target、base も 352、18 束、0 error）
 - `python3 scripts/dev/test-target-inventory.py --json` → exit 0
+- `bash scripts/dev/test-affected.sh` → exit 0（184 秒、開始時の load average 61.62。`repo_health_gate: all checks passed`、`test-affected: 試験対象の変更なし（docs のみ等）`）
+- `cargo fmt --all -- --check` → exit 0
+- `cargo clippy --workspace -- -D warnings` → exit 0（77 秒）
+- `bash scripts/dev/check-health.sh` は単独では走らせていない。同じ repo health の判定は test-affected の `repo_health_gate` が通った
 - 範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"`）→ 変えた path は ADR 2026-11-10-test-target-bundles・task の進捗・この file の 3 つだけ
 
 ## 未解決事項

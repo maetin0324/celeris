@@ -402,6 +402,13 @@ CoS に直接の `promote.sh` 実行を許可したものではない。202 は�
 `current` に `scripts/` が無い（Phase 48 以前・初回）ときだけ昇格先のものを使い、
 応答の `script_from` が `"current"` / `"target"` のどちらかを言う。
 
+**CoS の skill の写し**（[ADR 2026-11-11 cos-skill-sync](../../agent-docs/adr/2026-11-11-cos-skill-sync.md) D2）:
+`promote.sh`・`rollback.sh` は切り替えを記録した後で、切り替え先の release の `skills/cos-*` を
+`[knowledge] root` の `skills/` に写し、KB の git に commit する（失敗は exit 4。config が読めないときも写さず exit 4）。
+写しの段も `current` の `promote.sh` が走らせるので、写しの段を含む release の**最初の**昇格では写らない。
+そのときは昇格の直後に `bash ~/.local/celeris/releases/<sha12>/scripts/sync-skills.sh ~/.local/celeris/releases/<sha12> <knowledge root>`
+を 1 回実行する。KB の skill の版が `[cos.triage] policy_version` と合うまで、daemon は CoS の run を起こさず受信箱に 1 件知らせる。
+
 **安全に関わる変更があるリリース**（`changes.sensitive` が空でない。§2）は、画面が赤いバッジ
 「安全に関わる変更 N 件」とパス一覧を**最初から開いて**出し、「昇格」ボタンは**押す前に sha12 を
 打たせる**（打つまでボタンは灰色。`window.confirm` は出ない）。普通のリリースは従来どおり

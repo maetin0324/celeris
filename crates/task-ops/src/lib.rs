@@ -18,6 +18,8 @@ pub mod comment;
 /// ADR-0048 D1/D2（Phase 60a）: Console の一本の流れを組み立てる決定的な部品。
 pub mod console;
 pub mod conversation;
+pub mod cos_first_response;
+pub mod cos_skill_gate;
 pub mod cron_jobs;
 pub mod daemon;
 pub mod decision;
@@ -87,6 +89,7 @@ pub mod tree_plan;
 /// ADR-0079 D11（Phase R4a）: 木の閲覧・roll-up の材料・案件の root の合計・段階の子の要約。
 pub mod tree_view;
 pub mod unblocks;
+pub mod unit_task_deps;
 pub mod view;
 pub mod wait;
 pub mod workspace;

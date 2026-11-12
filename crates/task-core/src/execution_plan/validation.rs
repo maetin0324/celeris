@@ -1687,7 +1687,7 @@ fn validate_v3(
         .collect();
     for u in &spec.units {
         let mut intra_stage_deps = 0usize;
-        for dep in &u.depends_on {
+        for dep in u.depends_on.iter().filter(|d| !is_task_dependency(d)) {
             if dep.starts_with(CHILD_DEP_PREFIX) {
                 errors.push(PlanValidationError::ChildDependencyNotAllowed {
                     key: u.key.clone(),

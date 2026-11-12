@@ -185,6 +185,8 @@ pub fn continuation_section(context: &RunContext) -> String {
 /// ADR-0090 D2: 前の run が待ったクラスタ job の最終状態の節（continuation の前置きの中）。
 fn cluster_jobs_section(jobs: &crate::protocol::ClusterJobsContinuation) -> String {
     let outcome = match jobs.state.as_str() {
+        "job_failed" => "job の失敗を検出したため、他の job の終了を待たず再開しました",
+        "queue_stalled" => "Q/H がしきい値を超えたため、資源指定を再評価するために再開しました",
         "satisfied" => "すべての job が終わりました",
         "timed_out" => {
             "待ちの上限に達しました（まだ終わっていない job があります。人の回答が下にあればそれに従うこと）"
@@ -204,6 +206,7 @@ fn cluster_jobs_section(jobs: &crate::protocol::ClusterJobsContinuation) -> Stri
     for line in &jobs.jobs {
         out.push_str(&format!("- {line}\n"));
     }
+    out.push_str(crate::ssh::CLUSTER_JOB_RECOVERY_GUIDANCE);
     out.push_str(
         "この Run で結果（出力ファイル・ログ）を回収し、受け入れ条件を確かめてから完了を申告すること。\
          Exit_status が 0 でない job があれば、ログで原因を確かめてから直す・投げ直す（投げ直したら再び \

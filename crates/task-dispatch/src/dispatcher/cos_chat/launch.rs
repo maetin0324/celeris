@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use task_ops::knowledge::SkillUse;
 
 use serde_json::json;
 use task_core::SqliteStore;
@@ -16,7 +17,7 @@ use task_core::chat::{
 use task_worker::adapter::{RunLimits, WorkerAdapter};
 use task_worker::protocol::{
     COS_RUN_CREDENTIAL_ENV, CosChatAttachment, CosChatContext, CosChatDelivery, CosChatInput,
-    RunContext, RunRequest, SessionHandle,
+    RunRequest,
 };
 use time::OffsetDateTime;
 
@@ -25,6 +26,7 @@ use task_worker::protocol::{CosChatInboxDecision, CosChatInboxItem, CosChatInbox
 
 use super::attachments::{stage_message_attachments, workspace_dir};
 use super::sink::{ChatClock, ChatRunSink, chat_finish_for};
+use super::triage::TriageSkip as Skip;
 use crate::dispatcher::Dispatcher;
 use crate::dispatcher::route_select::RoutePick;
 
@@ -236,6 +238,8 @@ pub(crate) struct CosChatLaunch {
     /// ADR 2026-11-07-root-done-tick-phase-timing D3/D4: `root_done_tick` がこれ以上かかった tick だけ
     /// `cos.root_done.*` の内訳を出す。試験だけが差し替える。
     pub(crate) root_done_probe_threshold: std::time::Duration,
+    /// ADR 2026-11-11-cos-skill-sync D3: no CoS run is claimed while the KB's skills drift.
+    pub(super) skill_gate: crate::cos_skill_gate::SkillGate,
 }
 
 /// Which durable claim binds the new run to its input message.
@@ -261,6 +265,7 @@ impl Dispatcher {
             triage: super::triage::CosTriageState::default(),
             project_controller: None,
             root_done_probe_threshold: crate::root_done_probe::ROOT_DONE_PROBE_THRESHOLD,
+            skill_gate: Default::default(),
         });
     }
 
@@ -320,7 +325,20 @@ impl Dispatcher {
         // ADR 2026-11-07-root-done-tick-phase-timing D3: the breakdown is non-empty only for a slow pass.
         let root_done_parts = launch.root_done_tick(self);
         lap("cos.root_done_tick");
-        if self.accepting_new_work && self.disk_ready && launch.config.enabled {
+        // ADR 2026-11-11-cos-skill-sync D3: a run already claimed keeps its retries; nothing new
+        // is claimed while the KB's CoS skills do not fit `[cos.triage]`.
+        let t = &launch.config.triage;
+        let policy = (t.policy_skill.as_str(), t.policy_version.as_str());
+        let (store, kb, now) = (&*self.store, &self.config.knowledge.root, self.now_utc());
+        let ready = launch.config.enabled && launch.skill_gate.ready(store, kb, policy, now);
+        // ADR 2026-11-11-cos-fallback-timing D3: why no CoS run may start now (logged per thread).
+        let gate = Skip::gate(
+            self.accepting_new_work,
+            self.disk_ready,
+            launch.config.enabled,
+            ready,
+        );
+        if gate.is_none() {
             if let Err(error) = launch.claim_queued(self) {
                 tracing::warn!(%error, "CoS chat launch tick failed");
             }
@@ -337,11 +355,11 @@ impl Dispatcher {
                 tracing::warn!(%error, "CoS plan re-judging failed");
             }
             lap("cos.plan_rejudge");
-            if let Err(error) = launch.triage_launch(self) {
-                tracing::warn!(%error, "CoS triage launch failed");
-            }
-            lap("cos.triage_launch");
         }
+        if let Err(error) = launch.triage_launch(self, gate) {
+            tracing::warn!(%error, "CoS triage launch failed");
+        }
+        lap("cos.triage_launch");
         {
             let retries = launch.retries.lock().unwrap_or_else(|e| e.into_inner());
             launch.run_configs.retain(|thread, _| {
@@ -408,12 +426,13 @@ impl CosChatLaunch {
         }
     }
 
+    /// `Ok(false)`: nothing was claimed (no input, or SQLite has a live run of the thread).
     pub(super) fn start_thread(
         &mut self,
         dispatcher: &mut Dispatcher,
         thread_id: &str,
         source: ClaimSource,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         let now = dispatcher.now_utc();
         let run_id = ulid::Ulid::new().to_string();
         let resolved = json!({
@@ -427,12 +446,12 @@ impl CosChatLaunch {
             ClaimSource::Triage => self.triage_claim(thread_id, &run_id, now)?,
         };
         let Some(run) = run else {
-            return Ok(());
+            return Ok(false);
         };
         self.run_configs
             .insert(thread_id.to_owned(), self.config.clone());
         self.launch_routes(dispatcher, thread_id, &run, 0, None, now);
-        Ok(())
+        Ok(true)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -488,14 +507,8 @@ impl CosChatLaunch {
         if let Some(reason) = cfg.unavailable_reason.clone() {
             return Err(reason.into());
         }
-        let (skills, missing_skills) =
-            dispatcher.skills_context(&skill_names, task_ops::knowledge::SkillUse::Work);
-        if !missing_skills.is_empty() {
-            return Err(LaunchFailure::skills(format!(
-                "CoS skills unavailable: {}",
-                missing_skills.join(", ")
-            )));
-        }
+        // ADR 2026-11-11-cos-skill-sync D3: the gate before the claim found every SKILL.md.
+        let (skills, _) = dispatcher.skills_context(&skill_names, SkillUse::Work);
         // ADR 2026-10-28-cos-session-policy-key D1: the policy this run gets is part of the key.
         let policy_version = cfg.triage.policy_version.clone();
         let policy_key = super::policy::policy_key(
@@ -611,25 +624,15 @@ impl CosChatLaunch {
             }
         }
 
-        // ADR 2026-10-27-relayed-instructions D4: the unexpired relays of the thread.
-        let relayed_instructions = self
-            .store
-            .chat_relayed_instructions(thread_id, now)
-            .map_err(|e| format!("relayed instructions unavailable: {e}"))?
-            .into_iter()
-            .filter_map(|message| {
-                let relay = message.relay?;
-                Some(task_worker::protocol::CosChatRelayedInstruction {
-                    message_id: message.id,
-                    seq: i64::try_from(message.seq).unwrap_or(i64::MAX),
-                    text: message.text,
-                    relayed_by: relay.relayed_by,
-                    said_at: relay.said_at,
-                    task_ids: relay.scope.task_ids,
-                    expires_at: relay.scope.expires_at,
-                })
-            })
-            .collect();
+        let relayed_instructions =
+            crate::cos_context::relayed_instructions(&self.store, thread_id, now)?;
+        let standing = crate::cos_context::standing_context(
+            &self.store,
+            &dispatcher.config.knowledge.root,
+            thread.as_ref().map(|t| t.kind),
+            thread.as_ref().and_then(|t| t.project_id.as_deref()),
+            now,
+        )?;
         let chat = CosChatContext {
             thread_id: thread_id.to_string(),
             run_id: run_id.to_owned(),
@@ -666,6 +669,7 @@ impl CosChatLaunch {
             api_base_url: cfg.api_base_url.clone(),
             inbox_items,
             projects,
+            standing,
         };
         let budget = task_core::Budget {
             max_turns: cfg.max_turns,
@@ -685,16 +689,7 @@ impl CosChatLaunch {
         if let Err(e) = std::fs::create_dir_all(&artifacts_dir) {
             return Err(format!("CoS artifacts unavailable: {e}").into());
         }
-        let context = RunContext {
-            cos_chat: Some(chat),
-            skills,
-            session: Some(SessionHandle {
-                adapter: "claude-code".to_owned(),
-                session_id: session.session_id.clone(),
-                resume: mode == ChatRunSessionMode::Resumed,
-            }),
-            ..RunContext::default()
-        };
+        let context = crate::cos_context::cos_run_context(chat, skills, &session.session_id, mode);
         let req = RunRequest {
             protocol: task_worker::protocol::PROTOCOL_VERSION,
             task,

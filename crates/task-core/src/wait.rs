@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::execution_plan::{
     CHILD_DEP_PREFIX, WorkUnitBlockedReason, WorkUnitKind, WorkUnitRow, WorkUnitStatus,
-    newly_ready_with, phase_ranks, runnable_work_units,
+    is_task_dependency, newly_ready_with, phase_ranks, runnable_work_units,
 };
 use crate::message::is_conversation;
 use crate::model::{Status, Task, TaskId, TaskKind};
@@ -168,6 +168,15 @@ pub enum TaskWait {
         cause: IntegrationWaitCause,
         detail: String,
     },
+    /// M11（ADR 2026-11-11-unit-task-dependencies D5）: 計画の unit が `task:<id>` で待つ木の外の task が、まだ満たされない
+    /// （done でない・M10 と同じ取り込みの待ち・failed・cancelled）。人の操作待ちではない。依存先が複数なら task_id 順の最初の 1 件。
+    TaskDependency {
+        task_id: TaskId,
+        cause: TaskDependencyCause,
+        detail: String,
+        /// 待つ pending の unit の key（seq 順）。
+        unit_keys: Vec<String>,
+    },
 }
 
 /// 祖先を辿る上限（循環と深すぎる鎖で dispatch 全体を止めない）。
@@ -246,6 +255,16 @@ pub fn halt_waits(
     out
 }
 
+/// D5: `depends_on` の依存先 1 件が満たされたか（done。対話の依存は前の対話が終端なら満たされる。P-78）。
+/// unit の `task:<id>` 依存（ADR 2026-11-11-unit-task-dependencies D2）も同じ関数で決める。
+pub fn dependency_done(status: Option<Status>, conversation: bool) -> bool {
+    match status {
+        Some(Status::Done) => true,
+        Some(s) => conversation && s.is_terminal(),
+        None => false,
+    }
+}
+
 /// D1〜D6: DB だけで決まる task 単位の待ち。空なら `ready_tasks` に入る。
 pub fn db_waits(f: &WaitFacts<'_>) -> Vec<TaskWait> {
     let mut out = halt_waits(f.task, f.ancestors, f.halted_projects, f.halted_milestones);
@@ -254,11 +273,7 @@ pub fn db_waits(f: &WaitFacts<'_>) -> Vec<TaskWait> {
     let mut unfinished: Vec<TaskId> = f
         .deps
         .iter()
-        .filter(|(_, status)| match status {
-            Some(Status::Done) => false,
-            Some(s) if is_conv && s.is_terminal() => false,
-            _ => true,
-        })
+        .filter(|(_, status)| !dependency_done(*status, is_conv))
         .map(|(id, _)| *id)
         .collect();
     unfinished.sort();
@@ -420,7 +435,7 @@ pub struct PlanStall {
 /// `Some`:
 /// - 非終端の有効な unit がある。
 /// - `running` の unit（kind task の子の写しを含む）・`blocked`・`failed` の unit が無い（それぞれ別の名指しの待ちか replan）。
-/// - 未回答の決定（`open_decision_keys`）・未完の子への `child:` 依存が無い。
+/// - 未回答の決定（`open_decision_keys`）・未完の子への `child:` 依存・満たされない `task:` 依存が無い。
 /// - 起こせる unit（[`runnable_work_units`]）・現在の段の ready の kind task の unit・上げられる unit（[`newly_ready_with`]）が無い。
 /// - 現在の段の非統合の unit がすべて done で統合 WU が待っている（dispatcher が統合を走らせる）形でもない。
 pub fn plan_stall(
@@ -444,11 +459,13 @@ pub fn plan_stall(
     }) {
         return None;
     }
+    // ADR 2026-11-11-unit-task-dependencies D5: 木の外の task への `task:` 依存も名指しの待ち（`TaskWait::TaskDependency`）。
     if live.iter().any(|u| {
         u.status == WorkUnitStatus::Pending
-            && u.depends_on
-                .iter()
-                .any(|d| d.starts_with(CHILD_DEP_PREFIX) && !external_done.contains(d))
+            && u.depends_on.iter().any(|d| {
+                (d.starts_with(CHILD_DEP_PREFIX) || is_task_dependency(d))
+                    && !external_done.contains(d)
+            })
     }) {
         return None;
     }
@@ -662,6 +679,9 @@ pub fn plan_waits(
     }
     out
 }
+
+mod task_deps;
+pub use task_deps::*;
 
 #[cfg(test)]
 mod tests;

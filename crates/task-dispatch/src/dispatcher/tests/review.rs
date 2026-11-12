@@ -1883,6 +1883,143 @@ async fn exceeding_the_per_class_repair_limit_falls_back_to_review_fail() {
     );
 }
 
+/// acceptance[0] が fmt の検査（`.repair-done` があれば合格）、acceptance[1] が `Check::Reviewer` の task（`max_retries`
+/// = 0: `ReviewFail` 1 回で failed になる）。
+fn fmt_and_reviewer_task(dir: &std::path::Path) -> Task {
+    let mut task = new_task(
+        dir,
+        Check::Command {
+            cmd: "echo 'cargo fmt --check' >/dev/null; test -f .repair-done".into(),
+            expect_exit: 0,
+        },
+        0,
+    );
+    task.acceptance.push(Criterion {
+        text: "the change is complete".into(),
+        check: Check::Reviewer,
+    });
+    task
+}
+
+fn review_repair_classes(events: &[(u64, Event)]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|(_, e)| match e {
+            Event::RepairScheduled { class, origin, .. }
+                if *origin == task_core::execution::RepairOrigin::Review =>
+            {
+                Some(class.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// ADR-0072 D16 付記（G4-S1）。不変条件: `Check::Reviewer` のある task で決定的な検査（fmt）だけが落ちたとき、review は
+/// reviewer run を起こさず reviewer の項目を `REVIEWER_NOT_EVALUATED_REASON` の不合格にするが、その項目は修復の分類と
+/// repair の失敗した検査に入らない。fmt の不合格は repair（class `format`、attempts 不変）に回り、修復の後の review で
+/// reviewer が合格を返して done になる。failed にならない。既存の `a_format_only_review_failure_*` は `Check::Reviewer`
+/// の無い task なので、未評価の reviewer の項目が分類を `Substantive` にする欠けを検出できない。
+#[tokio::test]
+async fn review_repair_not_evaluated_reviewer_does_not_block_a_format_repair() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = fmt_and_reviewer_task(dir.path());
+    store.insert(&task).unwrap();
+    let adapter = Arc::new(
+        ParallelWuAdapter::new(Duration::ZERO)
+            .with_review(r#"{"verdicts":[{"criterion":1,"pass":true,"reason":"fine"}]}"#)
+            .with_file("repair-1", ".repair-done", "x"),
+    );
+    let mut d = dispatcher(store.clone(), adapter, 1);
+    assert!(run_until_idle(&mut d, 400).await.idle);
+
+    let events = store.events_for(task.id).unwrap();
+    // 1 回目の review は reviewer を起こさず、reviewer の項目を未評価の不合格にした（この経路を通ったことの確認）。
+    assert!(
+        events.iter().any(|(_, e)| matches!(
+            e,
+            Event::ReviewVerdict { criterion_idx: 1, pass: false, reason, .. }
+                if reason == crate::review::REVIEWER_NOT_EVALUATED_REASON
+        )),
+        "{events:?}"
+    );
+    assert_eq!(review_repair_classes(&events), vec!["format".to_string()]);
+    assert!(
+        !events.iter().any(
+            |(_, e)| matches!(e, Event::Transitioned { reason, .. } if reason == "review_fail")
+        ),
+        "{events:?}"
+    );
+    let repair = store
+        .work_units_for(task.id)
+        .unwrap()
+        .into_iter()
+        .find(|u| u.key == "repair-1")
+        .expect("repair wu");
+    assert!(
+        !repair
+            .spec
+            .objective
+            .contains(crate::review::REVIEWER_NOT_EVALUATED_REASON),
+        "{}",
+        repair.spec.objective
+    );
+    let stored = store.get(task.id).unwrap().unwrap();
+    assert_eq!(
+        (stored.status, stored.attempts),
+        (Status::Done, 0),
+        "{stored:?}"
+    );
+}
+
+/// ADR-0072 D16 付記（G4-S1）。不変条件: reviewer が実際に不合格にした項目（reason が `REVIEWER_NOT_EVALUATED_REASON`
+/// でない）は今までどおり分類に数え、修復できる fmt の不合格と混ざれば `Substantive`（repair にせず `ReviewFail`）。
+/// 上の試験だけでは、`Check::Reviewer` の項目をすべて外す誤った直し方を検出できない。
+#[tokio::test]
+async fn review_repair_not_evaluated_only_skips_the_not_evaluated_reason() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut task = fmt_and_reviewer_task(dir.path());
+    task.status = Status::Reviewing;
+    store.insert(&task).unwrap();
+    let mut d = instant_done_dispatcher(store.clone());
+    let verdict = |idx: usize, reason: &str| Verdict {
+        criterion_idx: idx,
+        pass: false,
+        reason: reason.into(),
+        repair_hint: None,
+    };
+    d.on_review_finished(
+        task.id,
+        "run1".into(),
+        crate::review::ReviewOutcome {
+            verdicts: vec![
+                verdict(0, "exit 1: cargo fmt --check: Diff in src/lib.rs"),
+                verdict(1, "reviewer(r1): the change is incomplete"),
+            ],
+            plan: None,
+            provider_failure: None,
+            reviewer_run: None,
+            target_stale: None,
+            required_checks: vec![],
+            command_checks: vec![],
+        },
+    )
+    .unwrap();
+
+    let events = store.events_for(task.id).unwrap();
+    assert!(review_repair_classes(&events).is_empty(), "{events:?}");
+    assert!(
+        events.iter().any(
+            |(_, e)| matches!(e, Event::Transitioned { reason, .. } if reason == "review_fail")
+        ),
+        "{events:?}"
+    );
+    assert!(store.work_units_for(task.id).unwrap().is_empty());
+    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Failed);
+}
+
 /// ADR-0072 D5（E2b の指摘、Phase E3 で配線）: 計画の無い Task（暗黙の WorkUnit）の worker run と
 /// reviewer run の両方が `runs` 索引に行を書く（(g)「全タスクの run について書かれる」は WU の run
 /// だけでなく atomic/reviewer にも及ぶ）。

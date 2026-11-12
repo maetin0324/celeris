@@ -605,6 +605,9 @@ pub fn node_liveness_facts(
     } else {
         None
     };
+    // ADR 2026-11-11-unit-task-dependencies D3・D5: pending の unit の `task:` 依存（dispatcher と同じ解決。取り込みの記憶は持たない）。
+    let task_deps =
+        crate::unit_task_deps::resolve_pending_units(store, task, &rows, &mut Default::default())?;
     let mut units = Vec::new();
     for u in rows {
         let child = if u.kind == task_core::WorkUnitKind::Task {
@@ -639,6 +642,7 @@ pub fn node_liveness_facts(
                 && u.depends_on
                     .iter()
                     .any(|d| d.starts_with(task_core::CHILD_DEP_PREFIX)),
+            task_dependency: task_deps.cause_of(&u.key),
         });
     }
     Ok(task_core::NodeLivenessFacts {

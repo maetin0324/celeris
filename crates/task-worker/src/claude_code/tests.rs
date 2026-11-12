@@ -3422,6 +3422,10 @@ fn planner_prompt_carries_depth_and_leaf_criteria() {
         "`checks` has at least one deterministic command",
         "must be declared as a child task or raised as a decision — never squeezed into a leaf",
         "Decisions for a human (`decisions`, ADR-0079 D7)",
+        // ADR 2026-11-11-unit-task-dependencies D7: 別の task を待つときは決定でなく `task:<task id>` の依存。
+        "write `\"task:<task id>\"` in the unit's `depends_on`",
+        "Do **not** raise a decision such as \"answer when X is done / merged into main\" to wait",
+        "never for waiting until another task finishes or is merged",
         "`needed_before`",
         "`needs_decisions`",
         "At most 7 decisions per plan",

@@ -3,8 +3,10 @@ import type { ActionTarget } from "../../components/actions/use-action-result";
 // ADR 2026-11-04-project-controller A7: 人の許可範囲（authority ledger）の表示と人の操作。
 // GET /api/v1/projects/{id}/authority の応答をそのまま出す。判定は API（Rust）が行い、画面は検証しない。
 // 案件の詳細画面への結線は A9 が行う（この file は panel と単体試験まで）。
+// ADR 2026-11-11-cos-standing-context D4: 案件の応答には全案件に効く台帳（project_id "*"）の行も入る。
+// 行への操作は、その行の台帳の path（"*" は "global"）へ送る。
 
-export type AuthorityScope = { kind: "project" | "outcome" | "task"; ref: string };
+export type AuthorityScope = { kind: "global" | "project" | "outcome" | "task"; ref: string };
 export type AuthoritySource = {
   kind: "human_message" | "decision" | "approval" | "standing_rule" | "human_operation";
   ref: string;
@@ -12,6 +14,7 @@ export type AuthoritySource = {
 
 export type AuthorityGrantView = {
   id: string;
+  project_id: string;
   scope: AuthorityScope;
   action_class: string;
   source: AuthoritySource;
@@ -28,6 +31,7 @@ export type AuthorityGrantView = {
 
 export type AuthorityProposalView = {
   id: string;
+  project_id: string;
   question_key: string;
   scope: AuthorityScope;
   action_class: string;
@@ -68,19 +72,24 @@ const CLASS_LABEL: Record<string, string> = {
   external_publish: "外部への公開",
   opaque_external_effect: "結果を確かめられない外部の操作",
   launch_root: "続きの root の起票",
+  job_wait_extend: "job 待ちの上限の延長",
 };
 
 export function authorityClassLabel(actionClass: string): string {
   return CLASS_LABEL[actionClass] ?? actionClass;
 }
 
-function base(projectId: string): string {
-  return `/api/projects/${encodeURIComponent(projectId)}/authority`;
+/** 全案件に効く台帳の `project_id`（D4）。 */
+export const GLOBAL_LEDGER = "*";
+
+/** 行の台帳の path。全案件の台帳は `global`、案件の台帳は案件の id。 */
+function base(row: { project_id: string }): string {
+  const ledger = row.project_id === GLOBAL_LEDGER ? "global" : row.project_id;
+  return `/api/projects/${encodeURIComponent(ledger)}/authority`;
 }
 
 /** 提案を受けて許可する POST。期限・回数は人が決める（無期限・無制限の許可は API が断る）。 */
 export function grantFromProposalAction(
-  projectId: string,
   proposal: AuthorityProposalView,
   expiresAt: string,
   budget: number,
@@ -88,7 +97,7 @@ export function grantFromProposalAction(
   return {
     id: AUTHORITY_GRANT_ACTION_ID,
     method: "POST",
-    path: `${base(projectId)}/grants`,
+    path: `${base(proposal)}/grants`,
     body: {
       scope: proposal.scope,
       action_class: proposal.action_class,
@@ -101,22 +110,27 @@ export function grantFromProposalAction(
   };
 }
 
-export function revokeAction(projectId: string, grantId: string): ActionTarget {
+export function revokeAction(grant: AuthorityGrantView): ActionTarget {
   return {
     id: AUTHORITY_REVOKE_ACTION_ID,
     method: "POST",
-    path: `${base(projectId)}/grants/${encodeURIComponent(grantId)}/revoke`,
+    path: `${base(grant)}/grants/${encodeURIComponent(grant.id)}/revoke`,
     body: { reason: "画面から取り消した" },
   };
 }
 
-export function dismissAction(projectId: string, proposalId: string): ActionTarget {
+export function dismissAction(proposal: AuthorityProposalView): ActionTarget {
   return {
     id: AUTHORITY_DISMISS_ACTION_ID,
     method: "POST",
-    path: `${base(projectId)}/proposals/${encodeURIComponent(proposalId)}/dismiss`,
+    path: `${base(proposal)}/proposals/${encodeURIComponent(proposal.id)}/dismiss`,
     body: {},
   };
+}
+
+/** 全案件に効く行の印（取り消すとすべての案件で効かなくなる）。 */
+function reach(row: { project_id: string }): string {
+  return row.project_id === GLOBAL_LEDGER ? "全案件に効く・" : "";
 }
 
 const STATE_LABEL: Record<string, string> = {
@@ -147,7 +161,8 @@ export function ProjectAuthorityPanel({
       <h3 className="text-label font-medium">許可</h3>
       <p className="text-label text-muted-foreground">
         CoS と controller
-        がこの案件で人に聞かずに行える範囲です。許可には期限と回数があり、人の発言などの根拠が付きます。
+        がこの案件で人に聞かずに行える範囲です。許可には期限と回数があり、人の発言などの根拠が付きます。「全案件に効く」許可は統括
+        CoS の提案から作られ、取り消しはすべての案件に及びます。
       </p>
       {unknown.length > 0 && (
         <p role="alert" className="text-label" data-testid="authority-unknown">
@@ -159,7 +174,8 @@ export function ProjectAuthorityPanel({
           {open.map((p) => (
             <li key={p.id} className="space-y-1">
               <p className="text-label">
-                CoS の提案: {authorityClassLabel(p.action_class)}（{p.budget} 回まで）。{p.note}
+                CoS の提案: {reach(p)}
+                {authorityClassLabel(p.action_class)}（{p.budget} 回まで）。{p.note}
               </p>
               <div className="flex gap-2">
                 <button type="button" className="min-h-11 px-3" disabled={pending} onClick={() => onAccept(p)}>
@@ -182,6 +198,7 @@ export function ProjectAuthorityPanel({
           {view.grants.map((g) => (
             <li key={g.id} className="space-y-1">
               <p className="text-label">
+                {reach(g)}
                 {authorityClassLabel(g.action_class)}・{STATE_LABEL[g.state] ?? g.state}・残り {g.budget - g.consumed}{" "}
                 回・期限 {g.expires_at}
               </p>

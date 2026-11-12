@@ -20,7 +20,6 @@ import { ConfirmDialog } from "../../components/ui/confirm-dialog";
 import { shortId } from "../../components/ui/short-id";
 import { formatAbsolute, formatRelative } from "../../lib/time";
 import { Route } from "../../routes/notifications";
-import { NotificationsEnable } from "../reports/notifications-enable";
 import { noticeKinds, noticeKindView, noticeLinks } from "./notice-view";
 
 // /notifications（ADR-0133 D5・web ADR 2026-10-04 D4）。判断の要らない知らせを束で読み、既読にする。
@@ -265,7 +264,8 @@ export function NotificationsScreen() {
           通知の届け方
         </h2>
         <div className="flex flex-wrap items-center gap-3 text-body">
-          <NotificationsEnable />
+          {/* ADR 2026-11-11-cos-fallback-timing D6: 人への知らせは Discord だけ。知らせの増加ではブラウザ通知を出さない。 */}
+          <span>人への知らせは Discord だけに届く（CoS が人の判断が要ると決めた件と、CoS が動けないときの退避）。</span>
           <Button
             variant="secondary"
             disabled={tester.pending}

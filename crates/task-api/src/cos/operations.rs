@@ -162,6 +162,15 @@ pub(crate) struct ItemMark {
     pub(crate) outcome: &'static str,
 }
 
+impl ItemMark {
+    pub(crate) fn new(item_id: &str, outcome: &'static str) -> Self {
+        Self {
+            item_id: item_id.to_owned(),
+            outcome,
+        }
+    }
+}
+
 impl OperationAudit {
     /// Persist the first half of a C-class operation before its external effect. `now` is
     /// injected so retries and stale-pending behavior can be tested without wall-clock waits.
@@ -808,9 +817,7 @@ async fn create_operation(
                 Err(problem) => return Err(audit.reject(store, "api", &path, problem)),
             };
             let result = dispatch(store, &env, &audit, &method, &path, req.request.body);
-            if let Some(pass) = &pass {
-                super::goal_guard::settle(store, &audit, pass, &result);
-            }
+            super::goal_guard::settle_after(store, &audit, &pass, &routine, &wait, &result);
             result
         })
         .await?;

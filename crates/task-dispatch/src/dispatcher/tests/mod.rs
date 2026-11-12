@@ -3078,6 +3078,9 @@ mod cron_jobs;
 mod dispatch_ready_phases;
 mod git_workspace;
 mod health_enforce;
+mod health_generic;
+mod health_generic_limits;
+mod health_generic_stale;
 mod health_limits_integration;
 mod integration_check_progress;
 mod integration_ready_race;
@@ -3172,6 +3175,7 @@ mod cos_slot_wait;
 mod dep_integration;
 mod human_gates;
 mod task_waits;
+mod unit_task_deps;
 /// ADR 2026-11-09-unscheduled-restart-hold: 再起動直後の停滞の判定の保留。
 mod unscheduled_restart;
 

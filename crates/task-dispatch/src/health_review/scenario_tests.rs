@@ -314,7 +314,13 @@ pub(super) async fn run_flow_with(
 
 /// (6) 通常変更: `[review]` のある repo で高 risk の class に触れない計画は、設計 review の run なしに採用され、
 /// final review の `ReviewRequest.health` に diff 統計・owner 行・findings の要約が入る。reviewer run の数は
-/// `[review]` の無い repo の同じ流れ（従来）と同じ 1 本で、task は合格で終わる。
+/// `[review]` の無い repo の同じ流れと同じ 1 本で、task は合格で終わる。
+///
+/// `[review]` の無い（absent）repo の同じ流れ（`baseline`）も、final review に diff・findings・policy の材料が届き、
+/// `owner_rows`・`invariants` だけが空になる（ADR 2026-11-11-health-generic-review-input の R1）。旧い試験は
+/// 「`[review]` が無ければ health を渡さない」（`final_reviews() == [None]`）を固定していたが、R4 でその省略を撤去
+/// したので、absent の材料の中身を確かめる形に替えた。この試験は reviewer が実際に受けた `RunContext` を見るので、
+/// event だけを見る試験では届かない材料を検出できる。
 #[tokio::test]
 async fn health_review_scenario_normal_change() {
     let out = run_flow(true, NORMAL_PATH, false, vec![]).await;
@@ -343,11 +349,26 @@ async fn health_review_scenario_normal_change() {
         baseline.seen.len(),
         "no run is added at all"
     );
-    assert_eq!(
-        baseline.final_reviews(),
-        vec![None],
-        "no health without [review]"
+    let absent = baseline.final_reviews();
+    assert_eq!(absent.len(), 1);
+    let absent = absent[0]
+        .as_ref()
+        .expect("the final review carries health without [review]");
+    assert_eq!(absent.repos.len(), 1);
+    let absent = &absent.repos[0];
+    assert!(
+        absent.diff.paths.iter().any(|p| p.path == NORMAL_PATH),
+        "the changed path is in the diff stats: {:?}",
+        absent.diff.paths
     );
+    assert_eq!(absent.findings.counts.new, 1, "{:?}", absent.findings);
+    assert_eq!(absent.policy.source, "base", "{:?}", absent.policy);
+    assert!(!absent.policy.changed, "{:?}", absent.policy);
+    assert!(
+        absent.owner_rows.is_empty() && absent.invariants.is_empty(),
+        "no owner map nor invariants without [review]: {absent:?}"
+    );
+    assert_eq!(baseline.status(), Status::Done);
 
     let reviews = out.final_reviews();
     assert_eq!(reviews.len(), 1);
@@ -466,7 +487,7 @@ async fn health_review_scenario_high_risk_change() {
 }
 
 /// 本物の検査器の file（`scripts/dev/repo-health/` と side file）を `dest` に写す（`__pycache__` は除く）。
-fn copy_checker(src_root: &std::path::Path, dest: &std::path::Path) {
+pub(super) fn copy_checker(src_root: &std::path::Path, dest: &std::path::Path) {
     fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
         std::fs::create_dir_all(to).unwrap();
         for entry in std::fs::read_dir(from).unwrap() {

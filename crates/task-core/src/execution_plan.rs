@@ -683,11 +683,13 @@ pub fn apply_delta(
 mod design_brief;
 mod plan_limits;
 mod scheduling;
+mod task_deps;
 mod validation;
 
 pub use design_brief::{assess_plan_risk, plan_sha256, plan_write_paths, require_design_brief};
 pub use plan_limits::counted_plan_stages;
 pub use scheduling::*;
+pub use task_deps::*;
 pub use validation::*;
 
 #[cfg(test)]

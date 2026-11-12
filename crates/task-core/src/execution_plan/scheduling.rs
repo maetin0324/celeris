@@ -847,7 +847,7 @@ pub fn replan_row_errors(
 
 /// ADR 2026-10-23-stage-order-and-plan-stall D3: 採用で書く行 `written`（新規・持ち越し）のうち未完の行の依存が、
 /// 採用後の行 `projected`（版を問わない）の有効な行に解決できるか。前の版で done の繰り越し行（今の版の `plan_id` を
-/// 持たない行）は有効な行なので満たされた依存になる。`child:<key>` は子 Task で解くので見ない。解決できない依存ごとに
+/// 持たない行）は有効な行なので満たされた依存になる。`child:<key>` は子 Task で、`task:<id>` は木の外の task で解くので見ない。解決できない依存ごとに
 /// [`PlanValidationError::DependencyWithoutRow`]。純粋関数。
 pub fn dependency_without_row_errors(
     written: &[WorkUnitRow],
@@ -864,7 +864,10 @@ pub fn dependency_without_row_errors(
         .filter(|u| u.status.is_active() && u.status != WorkUnitStatus::Done)
     {
         for d in &u.depends_on {
-            if d.starts_with(CHILD_DEP_PREFIX) || live.contains(d.as_str()) {
+            if d.starts_with(CHILD_DEP_PREFIX)
+                || super::is_task_dependency(d)
+                || live.contains(d.as_str())
+            {
                 continue;
             }
             errors.push(PlanValidationError::DependencyWithoutRow {

@@ -1,6 +1,7 @@
 //! task-core: ドメインモデル、状態機械、イベント、SQLiteストア。
 //! DESIGN.md §4-§5.1 のスコープ。LLM呼び出し・サブプロセス起動は行わない（ADR-0001 D2）。
 
+pub mod cos_fallback;
 pub mod delivery;
 mod sqlite_process;
 pub use delivery::{Delivery, DeliverySkipReason, DeliveryState, DeliveryStore};
@@ -328,8 +329,18 @@ pub use tree::{
 pub use tree_metrics::{DepthRollup, RollupMetrics, RollupNodeFacts, SubtreeMetrics};
 pub use wait::{
     BackoffCause, CapacityScope, ChildFacts, ChildResolution, HaltState, HaltedSet, HumanGateKind,
-    IntegrationWaitCause, PlanStall, TaskWait, UnitWait, WaitFacts, db_waits, halt_waits,
-    plan_stall, plan_waits, resolve_children, unit_waits,
+    IntegrationWaitCause, PlanStall, TaskWait, UnitWait, WaitFacts, db_waits, dependency_done,
+    halt_waits, plan_stall, plan_waits, resolve_children, unit_waits,
+};
+// ---- ADR 2026-11-11-unit-task-dependencies: unit の `task:<id>` 依存 ----
+pub use execution_plan::{
+    TASK_DEP_PREFIX, TaskDependencyContext, TaskDependencyError, TaskDependencyRejection,
+    is_task_dependency, plan_task_dependencies, task_dependency_errors, task_dependency_id,
+    task_dependency_key, unit_task_dependencies,
+};
+pub use wait::{
+    TaskDependencyCause, TaskDependencyFact, TaskDependencyResolution, TaskDependencyWait,
+    resolve_task_dependencies,
 };
 // ---- ADR-0072 D13（Phase E3）: Complexity Gate ----
 pub use direct_route::{

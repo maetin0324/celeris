@@ -869,3 +869,41 @@ async fn candidates_never_appear_in_the_human_inbox() {
     let rest = send(&app, g("/api/v1/knowledge/inbox")).await;
     assert_eq!(rest.json()["items"].as_array().expect("items").len(), 1);
 }
+
+/// ADR 2026-11-11-cos-standing-context D1: the memory note route the CoS prompt names
+/// (`knowledge.record` with `COS_MEMORY_SCOPE` and `COS_MEMORY_PAGE`) makes a candidate and its
+/// accept writes the page the dispatcher reads into the standing context. The prompt tests check the
+/// words, not the endpoint; the earlier route (scope `cos`) was refused with 422 here.
+#[tokio::test]
+async fn the_cos_memory_note_route_records_and_accepts_into_the_memory_page() {
+    use task_worker::protocol::{COS_MEMORY_PAGE, COS_MEMORY_SCOPE};
+    let env = env();
+    init_kb(&env.knowledge_root);
+    let app = env.router();
+    let made = send(
+        &app,
+        p(
+            "/api/v1/knowledge/inbox",
+            &json!({
+                "title": "CoS の覚え書き",
+                "scope": COS_MEMORY_SCOPE,
+                "path": COS_MEMORY_PAGE,
+                "body": "- Sirius の qstat の時刻は JST。",
+                "sources": ["human:instruction"],
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(made.status.as_u16(), 201, "{}", made.text());
+    let id = made.json()["id"].as_str().expect("candidate id").to_owned();
+    let accepted = send(
+        &app,
+        p(&format!("/api/v1/knowledge/inbox/{id}/accept"), &json!({})),
+    )
+    .await;
+    assert_eq!(accepted.status.as_u16(), 200, "{}", accepted.text());
+    assert_eq!(accepted.json()["path"], COS_MEMORY_PAGE);
+    let page = task_ops::knowledge::read_page(&env.knowledge_root, COS_MEMORY_PAGE)
+        .expect("the memory page is in the KB");
+    assert!(page.contains("Sirius の qstat の時刻は JST。"), "{page}");
+}

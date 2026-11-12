@@ -682,90 +682,21 @@ impl Dispatcher {
         Ok(!stale.is_empty())
     }
 
-    /// ADR-0074 D3.7（Phase F4b (f)）: `depends_on: ["child:<key>"]` の WU を、子 Task（`child-<key>` の
-    /// 印を持つ `parent_id = task_id` の Task）の状態で進める。子が `done` なら（他の依存も満たされて
-    /// いれば）`pending → ready`、子が `failed` / `cancelled` なら `pending → blocked(dependency_failed)`
-    /// （D17 の replan の対象）。戻り値は（書き換えたか、まだ終わっていない子を待っている WU があるか）。
+    /// ADR-0074 D3.7（Phase F4b (f)）: `child:<key>`（子 Task）と、ADR 2026-11-11-unit-task-dependencies D2 の `task:<id>`
+    /// （木の外の task）の依存を解き、満たされた WU を上げる（本体は `task_ops::unit_task_deps::settle_external`）。
+    /// 戻り値は（書き換えたか、まだ終わっていない子を待っている WU があるか）。
     pub(super) fn resolve_child_dependencies(
         &self,
         task_id: TaskId,
         units: &[task_core::WorkUnitRow],
     ) -> Result<(bool, bool), DispatchError> {
-        let prefix = task_core::CHILD_DEP_PREFIX;
-        let has_child_deps =
-            |u: &task_core::WorkUnitRow| u.depends_on.iter().any(|d| d.starts_with(prefix));
-        if !units
-            .iter()
-            .any(|u| u.status == task_core::WorkUnitStatus::Pending && has_child_deps(u))
-        {
-            return Ok((false, false));
-        }
-        // ADR 2026-10-11-task-wait-reasons D3: 子の状態での解決と「子待ち」は task-core の `resolve_children`
-        // （一覧・木の `Children` と同じ関数）。
-        let children: Vec<task_core::ChildFacts> = self
-            .store
-            .children(task_id)?
-            .into_iter()
-            .map(|c| task_core::ChildFacts {
-                task_id: c.id,
-                status: c.status,
-                labels: c.labels,
-            })
-            .collect();
-        let task_core::ChildResolution {
-            done,
-            failed,
-            waiting_units,
-        } = task_core::resolve_children(units, &children);
-        let mut changed = false;
-        for u in units.iter().filter(|u| {
-            u.status == task_core::WorkUnitStatus::Pending
-                && u.depends_on.iter().any(|d| failed.contains(d))
-        }) {
-            let mut row = u.clone();
-            row.status = task_core::WorkUnitStatus::Blocked;
-            row.blocked_reason = Some(task_core::WorkUnitBlockedReason::DependencyFailed);
-            self.store.work_unit_transition(
-                task_id,
-                row,
-                Event::WorkUnitTransitioned {
-                    work_unit_id: u.id.clone(),
-                    key: u.key.clone(),
-                    from: task_core::WorkUnitStatus::Pending,
-                    to: task_core::WorkUnitStatus::Blocked,
-                    reason: "dependency_failed".to_string(),
-                    run_id: None,
-                },
-            )?;
-            changed = true;
-        }
-        if !changed {
-            for id in task_core::newly_ready_with(units, &done) {
-                let Some(u) = units.iter().find(|u| u.id == id) else {
-                    continue;
-                };
-                if !has_child_deps(u) {
-                    continue;
-                }
-                let mut row = u.clone();
-                row.status = task_core::WorkUnitStatus::Ready;
-                self.store.work_unit_transition(
-                    task_id,
-                    row,
-                    Event::WorkUnitTransitioned {
-                        work_unit_id: u.id.clone(),
-                        key: u.key.clone(),
-                        from: task_core::WorkUnitStatus::Pending,
-                        to: task_core::WorkUnitStatus::Ready,
-                        reason: "child_done".to_string(),
-                        run_id: None,
-                    },
-                )?;
-                changed = true;
-            }
-        }
-        let waiting = !waiting_units.is_empty();
-        Ok((changed, waiting))
+        let settled = task_ops::unit_task_deps::settle_external(
+            self.store.as_ref(),
+            task_id,
+            units,
+            &self.integrated_deps,
+        )?;
+        Ok((settled.changed, settled.waiting_on_children))
     }
 
     /// ADR-0074 D1.3/D1.6（Phase F2b）: v2 の計画の Ready な Task が次に何をするか。

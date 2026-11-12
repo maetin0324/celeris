@@ -1170,6 +1170,7 @@ host = "sirius"
     cfg.validate().unwrap();
     assert_eq!(cfg.clusters[0].job_wait.poll_secs, 300);
     assert_eq!(cfg.clusters[0].job_wait.max_wait_secs, 86_400);
+    assert_eq!(cfg.clusters[0].job_wait.queued_wake_secs, 3600);
     let cfg: Config = toml::from_str(&base(
         "job_wait = { poll_secs = 600, max_wait_secs = 43200 }",
     ))
@@ -1178,13 +1179,20 @@ host = "sirius"
     let spec = cfg.cluster_specs();
     assert_eq!(
         spec["sirius"].job_wait,
-        task_core::cluster_job::ClusterJobWaitLimits {
-            poll_secs: 600,
-            max_wait_secs: 43_200
-        }
+        task_core::cluster_job::ClusterJobWaitLimits::new(600, 43_200)
+    );
+    let custom = toml::from_str::<Config>(&base("job_wait = { queued_wake_secs = 90 }")).unwrap();
+    custom.validate().unwrap();
+    assert_eq!(
+        custom.cluster_specs()["sirius"].job_wait.queued_wake_secs,
+        90
     );
     for (bad, needle) in [
         ("job_wait = { poll_secs = 5 }", "poll_secs must be >= 30"),
+        (
+            "job_wait = { queued_wake_secs = 0 }",
+            "queued_wake_secs must be > 0",
+        ),
         (
             "job_wait = { poll_secs = 600, max_wait_secs = 60 }",
             "must be >= job_wait.poll_secs",

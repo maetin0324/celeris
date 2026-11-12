@@ -34,7 +34,7 @@ CoS run: CoS の起動（dispatcher の `cos_chat`）は変えない。run crede
 ### D3 保存先
 
 - worker run（worker・reviewer・planner）: `RunMetrics.knowledge`（`KnowledgeUse { search, get, record }`）。`WorkerFinished` の `metrics` から `runs.metrics_json` に入る。env を渡した run は 0 回でも `Some`。`None` は「計測していない run」（この ADR より前の run と、env を渡さない経路）。読み取り率の分母は `Some` の run だけにする。
-- CoS run: `chat_runs.knowledge_use_json`（migration 0125 で足す列）。値の形は worker と同じ `KnowledgeUse`。意味は同じで、置き場だけが run の表に合わせて分かれる。新しい行は列の既定値で 0 回から始まり（計測した run）、migration より前の行は NULL（計測していない run）。書き込みと読み取りは `task_core::KnowledgeUseStore`（`knowledge` の module。`chat` の module の SqliteStore の method 数は閾値を超えているので足さない）。版 123・124 は別の task の branch が使っているので予約にする（`RESERVED_VERSIONS`）。
+- CoS run: `chat_runs.knowledge_use_json`（migration 0125 で足す列）。値の形は worker と同じ `KnowledgeUse`。意味は同じで、置き場だけが run の表に合わせて分かれる。新しい行は列の既定値で 0 回から始まり（計測した run）、migration より前の行は NULL（計測していない run）。書き込みと読み取りは `task_core::KnowledgeUseStore`（`knowledge` の module。`chat` の module の SqliteStore の method 数は閾値を超えているので足さない）。版 124 は別の task の branch が使っているので予約にする（`RESERVED_VERSIONS`。123 は main に入った）。
 
 events への追加は `RunMetrics` の任意欄だけで、既存の event は書き換えない（events は追記専用）。
 

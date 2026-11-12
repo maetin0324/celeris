@@ -781,9 +781,10 @@ export type ChatEventType = "message" | "text_delta" | "status" | "tool" | "run"
 
 export type ChatForwardRequest = {
   "client_message_id": string;
-  "expires_at": string;
+  "expires_at"?: string | null;
+  "grant_id"?: string | null;
   "message_id": string;
-  "task_ids": Array<string>;
+  "task_ids"?: Array<string>;
 };
 
 export type ChatMessage = {
@@ -887,6 +888,7 @@ export type ChatReferenceResponse = {
 };
 
 export type ChatRelay = {
+  "grant_id"?: string | null;
   "relayed_by": string;
   "said_at": string;
   "scope": ChatRelayScope;
@@ -1190,7 +1192,10 @@ export type ClusterJobState = "queued" | "held" | "running" | "exiting" | "finis
 export type ClusterJobStatus = {
   "exit_status"?: number | null;
   "job_id": string;
+  "queue_notified"?: boolean;
+  "queued_since"?: string | null;
   "raw_state"?: string | null;
+  "scheduling"?: Array<string>;
   "state": ClusterJobState;
 };
 
@@ -6299,6 +6304,8 @@ export type TaskComment = {
   "task_id": TaskId;
 };
 
+export type TaskDependencyCause = "unfinished" | "unmerged" | "delivery_skipped" | "held" | "discarded" | "failed" | "cancelled";
+
 export type TaskDetail = {
   "actions": Array<Action>;
   "actual_run_write_sets": Array<ActualWriteSetView>;
@@ -6634,6 +6641,12 @@ export type TaskWait = {
   "detail": string;
   "kind": "depends_on_integration";
   "task_id": TaskId;
+} | {
+  "cause": TaskDependencyCause;
+  "detail": string;
+  "kind": "task_dependency";
+  "task_id": TaskId;
+  "unit_keys": Array<string>;
 };
 
 export type TextPart = {

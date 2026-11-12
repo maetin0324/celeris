@@ -83,7 +83,7 @@ impl Dispatcher {
                     &done_work_units.iter().map(|(k, _)| k.clone()).collect(),
                 ) {
                     Err(e) => Err(e),
-                    Ok(spec) => match validate_plan_harnesses(&spec, &self.config.genres) {
+                    Ok(spec) => match plan_preflight(self, task, &spec)? {
                         Err(e) => Err(e),
                         Ok(()) => {
                             let ctx = task_core::PlanContext {
@@ -1068,6 +1068,21 @@ pub(super) fn parse_planner_output(
 /// ADR-0072 D14（Phase E3）: 計画の各 WorkUnit の `harness` が `[[genres]]` にある id だけかを確かめる
 /// （担当の profile が許す harness に限る、の簡易版。`genres` が空の設定では検証しない。既存の
 /// `[[genres]] roles` の検証と同じ考え方）。
+/// planner の計画の採用前の検査: harness（[`validate_plan_harnesses`]）と、unit の `task:<id>` 依存
+/// （ADR 2026-11-11-unit-task-dependencies D4。存在・自分の木の外・同じ案件・循環なし。人・CoS の採用は task-ops の
+/// `validate_for_task` が同じ関数で見る）。違えば planner に返す理由。
+fn plan_preflight(
+    d: &Dispatcher,
+    task: &Task,
+    spec: &task_core::ExecutionPlanSpec,
+) -> Result<Result<(), String>, DispatchError> {
+    if let Err(e) = validate_plan_harnesses(spec, &d.config.genres) {
+        return Ok(Err(e));
+    }
+    let errors = task_ops::unit_task_deps::plan_errors(d.store.as_ref(), task, spec)?;
+    Ok(task_ops::execution::describe_task_dependency_errors(&errors).map_or(Ok(()), Err))
+}
+
 pub(super) fn validate_plan_harnesses(
     spec: &task_core::ExecutionPlanSpec,
     genres: &[GenreSpec],

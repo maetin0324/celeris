@@ -1,6 +1,6 @@
 //! 持ち主の居ない `running` の `runs` 行（lease を持たない reviewer run 等）。本番 2026-10（reviewer run
 //! 01M4129NX8R264QXMQVEZRDKHM）: `WorkerStarted{role: reviewer}` の直後に `Transitioned{reviewing → ready,
-//! review_fail}`（「not evaluated: a deterministic check failed」）が続き、reviewer run の `WorkerFinished` が
+//! review_fail}`（reviewer の項目の reason は `crate::review::REVIEWER_NOT_EVALUATED_REASON`）が続き、reviewer run の `WorkerFinished` が
 //! 無いまま `runs` 行が `running` で残った。取り残しの経路は 3 つ:
 //!
 //! - A: 決定的な検査が落ちて reviewer を起こさなかった（`on_review_finished` が閉じない）。
@@ -424,7 +424,7 @@ async fn a_reviewer_run_not_launched_because_a_check_failed_is_closed() {
     assert!(
         events.iter().any(
             |e| matches!(e, Event::ReviewVerdict { pass: false, reason, .. }
-            if reason == "not evaluated: a deterministic check failed")
+            if reason == crate::review::REVIEWER_NOT_EVALUATED_REASON)
         ),
         "{events:?}"
     );

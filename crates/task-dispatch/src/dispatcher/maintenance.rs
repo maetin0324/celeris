@@ -166,23 +166,23 @@ impl Dispatcher {
         let params = self.target_sweep_params();
         let clock = DispatcherClock(SystemTime::from(self.now_utc()));
         // 付記 A2: scratch の `<scratch>/targets` を owner 配置の root として足す。
-        let scope = self.target_sweep_scope;
         let mut roots = params.roots.clone();
-        let mut scratch_roots = Vec::new();
-        if scope.scratch_targets && self.scratch_active() {
-            let root = self.config.scratch.pool().targets_dir();
-            if root.is_dir() {
-                if !roots.contains(&root) {
-                    roots.push(root.clone());
-                }
-                scratch_roots.push(root);
-            }
+        let scratch_roots: Vec<_> = (self.target_sweep_scope.scratch_targets
+            && self.scratch_active())
+        .then(|| self.config.scratch.pool().targets_dir())
+        .filter(|root| root.is_dir())
+        .into_iter()
+        .collect();
+        for root in scratch_roots.iter().filter(|r| !params.roots.contains(r)) {
+            roots.push(root.clone());
         }
-        // Serialize scratch allocation/adoption and GC while paths are scanned and renamed.
         let _pool_lock = if scratch_roots.is_empty() {
             None
         } else {
-            Some(self.config.scratch.pool().lock()?)
+            let Some(lock) = self.config.scratch.pool().try_lock()? else {
+                return Ok(());
+            };
+            Some(lock)
         };
         self.store
             .apply_transition(task.id, Trigger::Dispatch, None)?;
@@ -191,16 +191,15 @@ impl Dispatcher {
             run_sweep_with_scratch(&roots, &scratch_roots, &params, mode, &clock, &lookup);
         drop(_pool_lock);
         // 付記 A3: 終わった task の作業場所に残った cargo target（build 中は残す）。
-        if scope.workspace_target_after_secs > 0 {
+        if self.target_sweep_scope.workspace_target_after_secs > 0 {
             sweep_workspace_targets(
                 &mut report,
                 self.store.as_ref(),
                 &self.config.workspace_roots,
-                scope.workspace_target_after_secs,
+                self.target_sweep_scope.workspace_target_after_secs,
                 self.now_utc(),
             );
         }
-        let event = report.to_event();
         // D1.5: 上限まで下げきれなければ D4 の `disk` 通知（`disk:target_sweep`）も出す。
         if report.over_cap_unresolved {
             let over_roots: Vec<(String, u64)> = report
@@ -221,7 +220,7 @@ impl Dispatcher {
         }
         if report.errors.is_empty() {
             self.store
-                .apply_transition(task.id, Trigger::WorkerDone, Some(event))?;
+                .apply_transition(task.id, Trigger::WorkerDone, Some(report.to_event()))?;
             self.store
                 .apply_transition(task.id, Trigger::ReviewPass, None)?;
             tracing::info!(
@@ -236,7 +235,7 @@ impl Dispatcher {
             self.store.apply_transition(
                 task.id,
                 Trigger::WorkerError { retryable: false },
-                Some(event),
+                Some(report.to_event()),
             )?;
             tracing::warn!(
                 task_id = %task.id,

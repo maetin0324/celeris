@@ -94,6 +94,7 @@ fn leaf(key: &str, status: WorkUnitStatus) -> LivenessUnitFacts {
         child: None,
         waits_on_open_decision: false,
         waits_on_child_dep: false,
+        task_dependency: None,
     }
 }
 

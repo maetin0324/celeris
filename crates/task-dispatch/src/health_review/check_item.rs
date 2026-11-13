@@ -29,12 +29,12 @@ use std::path::Path;
 
 use super::super::*;
 use super::ObservedIntegration;
+use super::target_base;
 use crate::health_review::gate::{
     self, BundledChecker, HealthGateDecision, HealthGateOutcome, HealthGateRequest,
 };
 use crate::health_review::input::HEALTH_INPUT_TIMEOUT;
 use crate::health_review::limits::{self, HealthScope, RepeatVerdict};
-use crate::health_review::target_base;
 use task_core::required_checks::health::{HEALTH_CHECK_ID, HealthEvidence, UnavailableReason};
 use task_core::{HealthRepeatSite, RepoId};
 

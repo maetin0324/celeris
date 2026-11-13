@@ -14,8 +14,6 @@
 //!   判定する純粋関数（ADR 2026-11-08-health-enforcement-loop D4.3）。
 //! - `health_review/check_item.rs`: WU の check と段の統合の検査の列の項目の記録と health の項目（ADR
 //!   2026-11-08-health-enforcement-loop D1.2・D3.2・D3.4）。`dispatcher::phase_integration` の子 module として `#[path]` で読む。
-//! - [`target_base`]: WU の check と段の統合の health の base を、取り込んだ review target から決める 1 つの関数（ADR
-//!   2026-11-13-health-base-merged-target）。
 //! - [`verdict`]: 構造化 health verdict の blocking を不合格にし repair/replan に写す（D5）。
 //! - `health_review/inventory.rs`: cron の全体棚卸しの runner（ADR 2026-11-08-health-enforcement-loop D6）。Dispatcher の欄
 //!   （Busy の印）が型を使うので、`dispatcher::cron_tick` の子 module として `#[path]` で読む。
@@ -29,5 +27,4 @@ pub mod limits;
 pub mod policy;
 pub mod review_item;
 pub mod stub_checker;
-pub(crate) mod target_base;
 pub(crate) mod verdict;

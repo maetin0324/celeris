@@ -43,12 +43,40 @@ updated: 2026-11-13
 
 ## 証拠（提出時の HEAD で実行）
 
-- 結果は下の「検査の結果」。
+- 条件0〜2: artifacts の `acceptance.py`（ADR D1 から field を抽出、純粋 module の語・薄い入口・QuotaBook・guard を検査）→ exit 0。
+- `sh "$CELERIS_WU_SCOPE_PATHS"` と同じ基点で変更12 path を確認。ADR 本体と `token_budget.rs` は `$CELERIS_WU_BASE` との差分ゼロ。
 
 ## 検査の結果（提出時の HEAD で実行）
 
-- `bash scripts/dev/test-affected.sh`: exit 0。3858 件 pass（11 skipped、449 秒）。
+- `bash scripts/dev/test-affected.sh`: exit 0。3859 件 pass（11 skipped、413 秒）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
 - `sh scripts/dev/progress-index.sh --check`: ok。`bash scripts/dev/check-health.sh`: exit 0（all checks passed）。
 - 範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"`）: 変更 path は task-dispatch の routing_runtime・dispatcher の入口と試験、ADR-0082、architecture-map、進捗だけ。
 - `leases.rs`（lease の高 risk path）は `self.eval_runs.len()` を `self.routing.eval_run_count()` に直した 1 行だけで、lease の判定は変えていない。
+
+## 今回の補正の brief（2026-11-13）
+
+1. 根本原因: 抽出済みの見積り関数に単独 run とグループの計算が集中し、較正を渡す分岐が表形式の試験に無かった。
+2. owner: `routing_runtime/quota_estimate.rs`。
+3. 再利用: 既存の提案型と `task_core::quota::decide_window`。
+4. 選択: 大きい判断関数を残す案に代え、終わりの形の選択・単独 run・閉じたグループの提案を分ける。設計は既存 ADR D3 のまま。
+5. 新状態・fallback・port: 無し。
+6. 撤去: 主関数内の旧い計算本体とコメント内の検査対象語。
+7. 不変条件: 観測優先、較正の最小件数、estimated を較正標本にしない。既存の表は較正無しだけなので `quota_estimate_calibration_priority_table` を追加した。
+
+## 未解決
+
+コードの未解決事項は無し。最初の検査は sandbox が検査枠の lock 書き込みを拒み exit 2、必要な権限で再実行して exit 0。
+試験終了時の一時 file 削除に Permission denied の警告が3行出たが、試験と doc test は成功した。
+範囲外の script_exhaustive.rs の未使用 import と、依存 deno_core の警告は残る。
+
+## 提案
+
+無し。
+
+## commit（件名）
+
+- `phase: own-quota: quota の見積りの判断を純粋関数に分け、quota の状態を RoutingRuntime へ移す`
+- `phase: own-quota: 進捗に検査の結果を書く`
+
+- `phase 1: split quota estimate proposals and cover calibration priority` — 判断を終わりの形ごとの関数へ分割し、較正の表形式試験を追加。

@@ -2,7 +2,7 @@
 //!
 //! 純粋関数 [`propose_estimate`] は、run の終わりの結果（free か、重なりの追跡の結果）・観測値・較正・重み付きトークンを
 //! [`EstimateInput`] で受け、この run の `Event::QuotaEstimated`、グループの他の member の event、較正へ足す標本を
-//! [`EstimateProposal`] で返す。読み書き・時計・lock は持たない。提案の適用（event の追記と較正の更新）は
+//! [`EstimateProposal`] で返す。入力から決定的に計算する。提案の適用（event の追記と較正の更新）は
 //! `routing_runtime/quota.rs` の owner の method が行う。
 
 use task_core::{
@@ -132,189 +132,219 @@ fn unknown_window(window: QuotaWindow, weighted_tokens: f64) -> QuotaWindowUse {
     )
 }
 
-/// 見積りの判断。決定的で、入力だけから event と標本を作る。
+/// 見積りの判断。終わりの形に応じて提案を選ぶ。
 pub(crate) fn propose_estimate(input: EstimateInput) -> EstimateProposal {
-    let EstimateInput {
-        run_id,
-        work_unit_id,
-        source,
-        weighted_tokens,
-        list_price_usd,
-        calibrations,
-        shape,
-    } = input;
-    let none = |own: Event| EstimateProposal {
-        own,
-        others: Vec::new(),
-        samples: Vec::new(),
-    };
-    let (adapter, account, outcome, after) = match shape {
+    let (adapter, account, outcome, after) = match &input.shape {
         EndShape::Free => {
-            let windows = vec![
-                task_core::quota::free_window(QuotaWindow::FiveHour),
-                task_core::quota::free_window(QuotaWindow::SevenDay),
-            ];
-            let method = task_core::quota::representative_method(&windows);
-            return none(event(
-                run_id,
-                work_unit_id,
-                source,
+            return ungrouped(
+                &input,
                 None,
-                windows,
-                weighted_tokens,
-                method,
-                None,
-                list_price_usd,
-            ));
+                vec![
+                    task_core::quota::free_window(QuotaWindow::FiveHour),
+                    task_core::quota::free_window(QuotaWindow::SevenDay),
+                ],
+            );
         }
         EndShape::Pooled {
             adapter,
             account,
             outcome,
             after,
-        } => (adapter, account, *outcome, after),
+        } => (*adapter, account.as_str(), outcome.as_ref(), after.as_ref()),
     };
-
     match outcome {
         QuotaEndOutcome::Exclusive {
             before,
             before_valid,
-        } => {
-            let mut calibration_used = None;
-            let windows: Vec<_> = windows_for(adapter)
-                .into_iter()
-                .map(|w| {
-                    let calibration = calibrations
-                        .iter()
-                        .find(|(window, _)| *window == w)
-                        .map(|(_, c)| *c);
-                    let qw = decide_window(
-                        w,
-                        before.as_ref(),
-                        after.as_ref(),
-                        before_valid,
-                        true,
-                        None,
-                        weighted_tokens,
-                        calibration,
-                    );
-                    if qw.method == QuotaMethod::Estimated {
-                        calibration_used = calibration;
-                    }
-                    qw
-                })
-                .collect();
-            let samples = windows
-                .iter()
-                .filter(|qw| qw.method == QuotaMethod::Measured)
-                .filter_map(|qw| {
-                    qw.used_pct.map(|used_pct| CalibrationSample {
-                        window: qw.window,
-                        used_pct,
-                    })
-                })
-                .collect();
-            let method = task_core::quota::representative_method(&windows);
-            EstimateProposal {
-                own: event(
-                    run_id,
-                    work_unit_id,
-                    source,
-                    Some(account),
-                    windows,
-                    weighted_tokens,
-                    method,
-                    calibration_used,
-                    list_price_usd,
-                ),
-                others: Vec::new(),
-                samples,
-            }
-        }
-        // D4.2 手順 2: 「集合の最後の run が終わった時点で決まる。それまでは pending」。暫定の unknown を出す
-        // （グループが閉じたら、閉じた run の提案の `others` が別に追記して上書きする）。
-        QuotaEndOutcome::Pending => none(event(
-            run_id,
-            work_unit_id,
-            source,
+        } => exclusive_estimate(
+            &input,
+            adapter,
+            account,
+            before.as_ref(),
+            *before_valid,
+            after,
+        ),
+        QuotaEndOutcome::Pending => ungrouped(
+            &input,
             Some(account),
             vec![
-                unknown_window(QuotaWindow::FiveHour, weighted_tokens),
-                unknown_window(QuotaWindow::SevenDay, weighted_tokens),
+                unknown_window(QuotaWindow::FiveHour, input.weighted_tokens),
+                unknown_window(QuotaWindow::SevenDay, input.weighted_tokens),
             ],
-            weighted_tokens,
-            QuotaMethod::Unknown,
-            None,
-            list_price_usd,
-        )),
+        ),
         QuotaEndOutcome::Closed {
             before,
             before_valid,
             members,
-        } => {
-            let total_weighted: f64 = members.iter().map(|m| m.weighted_tokens).sum();
-            let mut own_event = None;
-            let mut others = Vec::new();
-            for m in &members {
-                let windows: Vec<_> = windows_for(adapter)
-                    .into_iter()
-                    .map(|w| {
-                        let apportion = task_core::quota::ApportionedInputs {
-                            group_before: task_core::quota::snapshot(before.as_ref(), w),
-                            group_after: task_core::quota::snapshot(after.as_ref(), w),
-                            group_before_valid: before_valid,
-                            member_weighted_tokens: m.weighted_tokens,
-                            group_weighted_tokens_total: total_weighted,
-                        };
-                        decide_window(
-                            w,
-                            None,
-                            None,
-                            false,
-                            false,
-                            Some(&apportion),
-                            m.weighted_tokens,
-                            None,
-                        )
-                    })
-                    .collect();
-                let method = task_core::quota::representative_method(&windows);
-                let ev = event(
-                    m.run_id.clone(),
-                    m.work_unit_id.clone(),
-                    m.source.clone(),
-                    Some(account.clone()),
-                    windows,
+        } => closed_estimate(
+            &input,
+            adapter,
+            account,
+            before.as_ref(),
+            *before_valid,
+            after,
+            members,
+        ),
+    }
+}
+
+/// free と暫定 unknown は他 member の確定も較正も伴わない。
+fn ungrouped(
+    input: &EstimateInput,
+    account: Option<&str>,
+    windows: Vec<QuotaWindowUse>,
+) -> EstimateProposal {
+    let method = task_core::quota::representative_method(&windows);
+    EstimateProposal {
+        own: event(
+            input.run_id.clone(),
+            input.work_unit_id.clone(),
+            input.source.clone(),
+            account.map(str::to_string),
+            windows,
+            input.weighted_tokens,
+            method,
+            None,
+            input.list_price_usd,
+        ),
+        others: Vec::new(),
+        samples: Vec::new(),
+    }
+}
+
+/// 単独 run は窓ごとに観測を優先し、実測だけを新しい較正標本にする。
+fn exclusive_estimate(
+    input: &EstimateInput,
+    adapter: AccountAdapter,
+    account: &str,
+    before: Option<&RateLimitObservation>,
+    before_valid: bool,
+    after: Option<&RateLimitObservation>,
+) -> EstimateProposal {
+    let mut calibration_used = None;
+    let windows: Vec<_> = windows_for(adapter)
+        .into_iter()
+        .map(|w| {
+            let calibration = input
+                .calibrations
+                .iter()
+                .find(|(window, _)| *window == w)
+                .map(|(_, c)| *c);
+            let qw = decide_window(
+                w,
+                before,
+                after,
+                before_valid,
+                true,
+                None,
+                input.weighted_tokens,
+                calibration,
+            );
+            if qw.method == QuotaMethod::Estimated {
+                calibration_used = calibration;
+            }
+            qw
+        })
+        .collect();
+    let samples = windows
+        .iter()
+        .filter(|qw| qw.method == QuotaMethod::Measured)
+        .filter_map(|qw| {
+            qw.used_pct.map(|used_pct| CalibrationSample {
+                window: qw.window,
+                used_pct,
+            })
+        })
+        .collect();
+    let method = task_core::quota::representative_method(&windows);
+    EstimateProposal {
+        own: event(
+            input.run_id.clone(),
+            input.work_unit_id.clone(),
+            input.source.clone(),
+            Some(account.to_string()),
+            windows,
+            input.weighted_tokens,
+            method,
+            calibration_used,
+            input.list_price_usd,
+        ),
+        others: Vec::new(),
+        samples,
+    }
+}
+
+/// 閉じたグループの使用量を重みで配分し、自分と他 member の宛先を分ける。
+fn closed_estimate(
+    input: &EstimateInput,
+    adapter: AccountAdapter,
+    account: &str,
+    before: Option<&RateLimitObservation>,
+    before_valid: bool,
+    after: Option<&RateLimitObservation>,
+    members: &[crate::accounts::QuotaGroupMember],
+) -> EstimateProposal {
+    let total_weighted: f64 = members.iter().map(|m| m.weighted_tokens).sum();
+    let mut own_event = None;
+    let mut others = Vec::new();
+    for m in members {
+        let windows: Vec<_> = windows_for(adapter)
+            .into_iter()
+            .map(|w| {
+                let apportion = task_core::quota::ApportionedInputs {
+                    group_before: task_core::quota::snapshot(before, w),
+                    group_after: task_core::quota::snapshot(after, w),
+                    group_before_valid: before_valid,
+                    member_weighted_tokens: m.weighted_tokens,
+                    group_weighted_tokens_total: total_weighted,
+                };
+                decide_window(
+                    w,
+                    None,
+                    None,
+                    false,
+                    false,
+                    Some(&apportion),
                     m.weighted_tokens,
-                    method,
                     None,
-                    m.list_price_usd,
-                );
-                if m.run_id == run_id {
-                    own_event = Some(ev);
-                } else {
-                    others.push((m.task_id, ev));
-                }
-            }
-            let own = own_event.unwrap_or_else(|| {
-                event(
-                    run_id,
-                    work_unit_id,
-                    source,
-                    Some(account),
-                    vec![],
-                    weighted_tokens,
-                    QuotaMethod::Unknown,
-                    None,
-                    list_price_usd,
                 )
-            });
-            EstimateProposal {
-                own,
-                others,
-                samples: Vec::new(),
-            }
+            })
+            .collect();
+        let method = task_core::quota::representative_method(&windows);
+        let ev = event(
+            m.run_id.clone(),
+            m.work_unit_id.clone(),
+            m.source.clone(),
+            Some(account.to_string()),
+            windows,
+            m.weighted_tokens,
+            method,
+            None,
+            m.list_price_usd,
+        );
+        if m.run_id == input.run_id {
+            own_event = Some(ev);
+        } else {
+            others.push((m.task_id, ev));
         }
+    }
+    let own = own_event.unwrap_or_else(|| {
+        event(
+            input.run_id.clone(),
+            input.work_unit_id.clone(),
+            input.source.clone(),
+            Some(account.to_string()),
+            vec![],
+            input.weighted_tokens,
+            QuotaMethod::Unknown,
+            None,
+            input.list_price_usd,
+        )
+    });
+    EstimateProposal {
+        own,
+        others,
+        samples: Vec::new(),
     }
 }
 
@@ -476,6 +506,47 @@ mod tests {
             assert_eq!(*method, case.method, "{}", case.name);
             assert_eq!(proposal.others.len(), case.others, "{}", case.name);
             assert_eq!(proposal.samples.len(), case.samples, "{}", case.name);
+        }
+    }
+
+    /// 不変条件: 観測の有効性と較正の件数で見積りを選び、estimated を較正へ戻さない。
+    /// 既存の表は較正無しだけなので、窓への較正の受け渡し・標本の誤追加を検出できない。
+    #[test]
+    fn quota_estimate_calibration_priority_table() {
+        for (valid, samples, expected, sample_count) in [
+            (true, 3, QuotaMethod::Measured, 2),
+            (false, 3, QuotaMethod::Estimated, 0),
+            (false, 2, QuotaMethod::Unknown, 0),
+        ] {
+            let mut value = input(pooled(
+                AccountAdapter::ClaudeCode,
+                QuotaEndOutcome::Exclusive {
+                    before: Some(obs(0.10)),
+                    before_valid: valid,
+                },
+            ));
+            let cal = QuotaCalibration { k: 0.002, samples };
+            value.calibrations = vec![(QuotaWindow::FiveHour, cal), (QuotaWindow::SevenDay, cal)];
+            let proposal = propose_estimate(value);
+            let Event::QuotaEstimated {
+                windows,
+                calibration,
+                list_price_usd,
+                ..
+            } = proposal.own
+            else {
+                panic!("not a quota event");
+            };
+            assert!(windows.iter().all(|w| w.method == expected));
+            assert_eq!(
+                calibration,
+                (expected == QuotaMethod::Estimated).then_some(cal)
+            );
+            assert_eq!(proposal.samples.len(), sample_count);
+            assert_eq!(list_price_usd, Some(0.5));
+            if expected == QuotaMethod::Estimated {
+                assert!(windows.iter().all(|w| w.used_pct == Some(2.0)));
+            }
         }
     }
 

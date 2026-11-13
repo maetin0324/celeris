@@ -76,7 +76,7 @@ completed: 2026-11-13
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`、範囲は `$CELERIS_WU_BASE`）
 
-- `bash scripts/dev/test-affected.sh`: TEST_AFFECTED_RESULT
+- `bash scripts/dev/test-affected.sh`: exit 0（約 760 秒）。3892 tests run: 3892 passed、11 skipped。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
 - `bash scripts/dev/check-health.sh`: exit 0。verdict=pass、fail_grade=0、worsened=0、new=1。new の 1 件は `migration.remnant`（warning）で
   `crates/task-dispatch/src/host_maintenance.rs` の `legacy` の行（この unit は変えていない。settle-end の進捗と同じ）。

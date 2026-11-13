@@ -207,14 +207,8 @@ impl Dispatcher {
         if self.coord.accepting_new_work() || !self.coord.has_checks() {
             return Ok(0);
         }
-        let run_ids: Vec<String> = self
-            .coord
-            .checking_runs()
-            .into_iter()
-            .map(|(run_id, _)| run_id)
-            .collect();
         let mut count = 0;
-        for run_id in run_ids {
+        for (run_id, _) in self.coord.checking_runs() {
             let Some(entry) = self.coord.checking_entry(&run_id) else {
                 continue;
             };

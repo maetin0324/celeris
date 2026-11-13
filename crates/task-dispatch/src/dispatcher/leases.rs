@@ -635,7 +635,9 @@ impl Dispatcher {
             if !started {
                 self.coord.defer_review(task.id, subject);
             }
-            self.note_review_sync_offer(task.id, started);
+            // ADR-0130 D5: a started review leaves the queue; a deferral that was not a human gate
+            // counts towards the FIFO relief (owned by `ExecutionCoordination`).
+            self.coord.note_review_sync_offer(task.id, started);
         }
         Ok(())
     }

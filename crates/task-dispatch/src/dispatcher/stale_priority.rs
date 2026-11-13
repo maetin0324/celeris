@@ -114,12 +114,6 @@ impl Dispatcher {
         Ok(keyed.into_iter().map(|(_, t)| t).collect())
     }
 
-    /// Record the outcome of one offer: a started review leaves the queue; a deferral that was
-    /// not a human gate counts towards the FIFO relief.
-    pub(super) fn note_review_sync_offer(&mut self, task_id: TaskId, started: bool) {
-        self.coord.note_review_sync_offer(task_id, started);
-    }
-
     /// stale 優先を切っているか（ADR 2026-11-11 D6: 入口が `TestHooks` から読み、
     /// `ExecutionCoordination::enter_review_sync_queue` に引数で渡す）。本番では常に `false`（効かせる）。試験だけが切れる
     /// （`test_hooks.ablation.disable_stale_priority`、phase_effect_ab::stale_priority の off）。

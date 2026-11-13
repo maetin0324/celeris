@@ -216,11 +216,11 @@ async fn behind_target_stale_priority_counts_unselected_ticks() {
         vec![a.id, b.id]
     );
     for _ in 0..STALE_PRIORITY_RELIEF_TICKS {
-        d.note_review_sync_offer(b.id, false);
+        d.coord.note_review_sync_offer(b.id, false);
     }
     // A human-gate deferral is not an eligible tick.
     d.coord.set_awaiting_human(a.id, true);
-    d.note_review_sync_offer(a.id, false);
+    d.coord.note_review_sync_offer(a.id, false);
     assert_eq!(d.coord.review_sync_queue()[&a.id].skipped_ticks, 0);
     assert_eq!(
         d.coord.review_sync_queue()[&b.id].skipped_ticks,
@@ -235,7 +235,7 @@ async fn behind_target_stale_priority_counts_unselected_ticks() {
         vec![b.id, a.id]
     );
     // Selection leaves the queue; a task that left `reviewing` is dropped.
-    d.note_review_sync_offer(b.id, true);
+    d.coord.note_review_sync_offer(b.id, true);
     assert!(!d.coord.review_sync_queue().contains_key(&b.id));
     d.order_review_sync_queue(vec![], false).unwrap();
     assert!(d.coord.review_sync_queue().is_empty());

@@ -251,6 +251,17 @@ impl Dispatcher {
     }
 }
 
+/// このインスタンスがその run を worker run（[`RunSupervisor`] の表）か WU の検査（Phase F5-fix2。
+/// [`ExecutionCoordination`] の process の表）として手元に持っているか。lease の回収・手放した検査の引き継ぎ・
+/// result.json からの確定が使う。`Dispatcher::holds_run_in_hand` と違い、レビューと eval を見ない。
+pub(super) fn holds_run_or_check(
+    supervisor: &RunSupervisor<ReviewSubject>,
+    coord: &Coordination,
+    run_id: &str,
+) -> bool {
+    supervisor.holds_run_id(run_id) || coord.processes().is_checking(run_id)
+}
+
 /// run の期限（[`Dispatcher::ownerless_ttl`] の本体。手元の review の期限越えの判断にも渡す）。
 fn ownerless_ttl_with(
     config: &DispatchConfig,

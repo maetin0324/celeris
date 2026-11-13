@@ -327,9 +327,7 @@ impl Dispatcher {
                         )
                 })
                 .filter_map(|u| u.lease_run_id.or(u.last_run_id))
-                .filter(|r| {
-                    !self.supervisor.holds_run_id(r) && !self.coord.processes().is_checking(r)
-                })
+                .filter(|r| !ownerless_runs::holds_run_or_check(&self.supervisor, &self.coord, r))
                 .collect();
             if candidates.is_empty() {
                 continue;
@@ -1345,8 +1343,8 @@ impl Dispatcher {
                     continue;
                 };
                 // Phase F5-fix2: 検査中の run（`checking`）も手元の run。
-                let ours = self.supervisor.holds_run_id(&run_id)
-                    || self.coord.processes().is_checking(&run_id);
+                let ours =
+                    ownerless_runs::holds_run_or_check(&self.supervisor, &self.coord, &run_id);
                 let expired = u
                     .lease_expires_at
                     .as_deref()
@@ -1375,9 +1373,8 @@ impl Dispatcher {
                     self.requeue_orphaned_work_unit_run(&task, &run_id)?;
                 }
             }
-            if self.supervisor.runs_for_task(task.id) > 0
-                || self.coord.processes().is_integrating(task.id)
-            {
+            let integrating = self.coord.processes().is_integrating(task.id);
+            if self.supervisor.runs_for_task(task.id) > 0 || integrating {
                 continue;
             }
             let units = self.store.work_units_for(task.id)?;

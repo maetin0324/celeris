@@ -7,7 +7,23 @@
 //! D4 の run-close の共有の関数 [`run_end_record`] を置く。run の終了記録（`WorkerFinished`）の組み立てだけを共有し、
 //! lease の検証・二重の終了記録の確認・状態遷移・transaction の境界は閉じる経路ごとに残す。
 //!
+//! D3 の [`settle`] を置く。worker の run の終わり方（結果の分類・`Trigger`・outcome の文・`RunEnd`・infra 再試行・
+//! requeue の上限・cluster job の wait・browser の前提の block・WU の check の不合格）を、worker 完了の経路が読んだ値
+//! （[`RunFinishInput`]）から提案（[`RunFinishProposal`]）として返す。部をまたぐ質問の置き換え（[`questions_of_run`]）と
+//! 木の token 予算切れ（[`stop_at_token_budget`]）は、WU と atomic task の分岐の後に決まる trigger を見るので別の関数にする。
+//! 提案の適用（backoff・quota・cooldown・遷移と events の追記）は worker 完了の経路と owner の method が今と同じ順で行う。
+//!
 //! この module は入力の値だけを読む。永続化・file・process に触れず、`dispatcher` module を使わない（D2 の 3）。
+
+use std::time::Duration;
+
+use task_core::browser_prerequisite::BrowserPrerequisiteCode;
+use task_core::cluster_job::ClusterJobWait;
+use task_core::{BudgetKind, Event, RunEnd, Trigger, Usage};
+use task_worker::{AdapterError, RunOutcome, Terminal};
+
+use crate::policy::ProviderOutcome;
+use crate::review::ReviewSubject;
 
 /// [`replan_or_ask`] の入力。各経路が読んだ値を詰める。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,6 +126,455 @@ pub(crate) fn run_end_record(
         role,
         metrics,
         end,
+    }
+}
+
+/// [`settle`] の入力。worker 完了の経路が永続化から読んだ値と、dispatcher の側の判定（供給側の失敗の分類・cluster job の
+/// wait の検証）の結果を詰める。
+pub(crate) struct RunFinishInput<'a> {
+    /// worker の結果（`Err` はアダプタか供給側の失敗）。
+    pub result: Result<RunOutcome, AdapterError>,
+    /// この task の events（連続 requeue 数・連続 infra 再試行数・部をまたぐ質問を数える）。
+    pub events: &'a [(u64, Event)],
+    pub run_id: &'a str,
+    /// 対話の task の run（`Question` を `Done` として扱う。ADR-0033 D4 / Phase 28）。
+    pub conversation: bool,
+    /// WU の run（browser の前提の block は atomic の run だけ）。
+    pub work_unit: bool,
+    /// `Err` の供給側の失敗の分類（分類できなければ `None`）。
+    pub supply_failure: Option<ProviderOutcome>,
+    /// `Err` の文が台帳由来の browser の前提の失敗なら、その code。
+    pub browser_prereq: Option<BrowserPrerequisiteCode>,
+    /// `Terminal::Waiting` の申告を検証した結果（ADR-0090 D1/D2）。他の終わり方では `None`。
+    pub cluster_wait: Option<Result<ClusterJobWait, String>>,
+    pub max_requeues: u32,
+    pub max_infra_retries: u32,
+    /// WU の checks の不合格で `Terminal::Done` を `Terminal::Error` にすり替えた run の、worker の usage と不合格の要約
+    /// （ADR-0079 付記 R7-5）。
+    pub check_failure: Option<(Option<Usage>, String)>,
+}
+
+/// [`settle`] の提案。worker 完了の経路はこれを WU と atomic task の分岐に渡し、同じ transaction の events と owner の
+/// method への指示にする。
+#[derive(Debug)]
+pub(crate) struct RunFinishProposal {
+    pub trigger: Trigger,
+    /// `WorkerFinished.outcome` の文。
+    pub outcome: String,
+    /// この run の usage（check の不合格ですり替えた run は worker が返した usage）。
+    pub usage: Option<Usage>,
+    /// quota と cooldown の記録に渡す結果。
+    pub provider_outcome: ProviderOutcome,
+    /// 構造化した終わり方（ADR-0072 D7）。分類できない供給側・インフラの失敗は `None`。
+    pub run_end: Option<RunEnd>,
+    /// reviewer に渡す done の内容。
+    pub subject: ReviewSubject,
+    /// `Terminal::Yielded` と `Terminal::Waiting` の生の checkpoint（ADR-0072 D9）。
+    pub yield_checkpoint: Option<serde_json::Value>,
+    /// 開く cluster job の wait（ADR-0090 D1/D2）。
+    pub cluster_wait: Option<ClusterJobWait>,
+    /// browser の前提の block の event（ADR 2026-10-08-browser-prod-enablement D2）。
+    pub browser_prereq: Option<Event>,
+    /// `Trigger::InfraRequeue` のときの (n 回目, 待ち時間)。`RunSupervisor` の infra backoff に渡す（ADR-0070 D3）。
+    pub infra_requeue: Option<(u32, Duration)>,
+    /// worker が `result.json` を置き違えた run（WU の失敗から自動 replan を起こさない）。
+    pub misplaced: bool,
+    /// 部をまたぐ委譲の質問（1 件の部またぎにつき 1 件。同じ文面は 1 回だけ。ADR-0033 D4 / Phase 27）。
+    pub cross_department: Vec<String>,
+    /// outcome の文に足す check の不合格の要約（無ければ空。ADR-0079 付記 R7-5 D2）。
+    pub check_failure_suffix: String,
+}
+
+/// D3: worker の run の終わり方を決める。
+pub(crate) fn settle(input: RunFinishInput<'_>) -> RunFinishProposal {
+    let RunFinishInput {
+        result,
+        events,
+        run_id,
+        conversation,
+        work_unit,
+        supply_failure,
+        browser_prereq,
+        cluster_wait: checked_wait,
+        max_requeues,
+        max_infra_retries,
+        check_failure,
+    } = input;
+    let misplaced = matches!(&result, Ok(RunOutcome {
+        terminal: Terminal::Error { message, retryable: false, .. }, ..
+    }) if message.starts_with(task_worker::result_location::MISPLACED_RESULT_MARKER));
+    let mut subject = ReviewSubject::default();
+    let mut run_end: Option<RunEnd> = None;
+    let mut yield_checkpoint: Option<serde_json::Value> = None;
+    let mut cluster_wait: Option<ClusterJobWait> = None;
+    let mut browser_prereq_event: Option<Event> = None;
+    let mut infra_requeue: Option<(u32, Duration)> = None;
+    let (trigger, outcome, usage, provider_outcome) = match result {
+        Ok(RunOutcome {
+            terminal:
+                Terminal::Done {
+                    summary,
+                    usage,
+                    evidence,
+                },
+            ..
+        }) => {
+            subject = ReviewSubject {
+                summary: summary.clone(),
+                evidence,
+            };
+            run_end = Some(RunEnd::Completed);
+            (
+                Trigger::WorkerDone,
+                format!("done: {summary}"),
+                usage,
+                ProviderOutcome::Ok,
+            )
+        }
+        // ADR-0033 D4 / Phase 28: 対話 run は `Question` を出さない。人に聞きたいことは返事に書けばよいので、そのまま
+        // `Done` 扱いにする（`approvals` の行は作らない）。
+        Ok(RunOutcome {
+            terminal: Terminal::Question { text, usage },
+            ..
+        }) if conversation => {
+            subject = ReviewSubject {
+                summary: text.clone(),
+                evidence: Vec::new(),
+            };
+            run_end = Some(RunEnd::Completed);
+            (
+                Trigger::WorkerDone,
+                format!("done: {text}"),
+                usage,
+                ProviderOutcome::Ok,
+            )
+        }
+        Ok(RunOutcome {
+            terminal: Terminal::Question { text, usage },
+            ..
+        }) => {
+            run_end = Some(RunEnd::Question);
+            (
+                Trigger::WorkerQuestion,
+                format!("question: {text}"),
+                usage,
+                ProviderOutcome::Ok,
+            )
+        }
+        Ok(RunOutcome {
+            terminal:
+                Terminal::Error {
+                    message,
+                    retryable,
+                    usage,
+                },
+            ..
+        }) => {
+            // ADR-0072 D7: 二重の安全網。構造化されていない `Error` でも、予算切れの語彙なら `BudgetExhausted` にする。
+            run_end = Some(
+                retryable
+                    .then(|| classify_budget_kind_from_text(&message))
+                    .flatten()
+                    .map_or(RunEnd::Failed { retryable }, |kind| {
+                        RunEnd::BudgetExhausted { kind }
+                    }),
+            );
+            // ADR 2026-10-20-mlsys-main2-fixes D5: 失敗までに観測できた usage を残す（無ければ欠測のまま）。
+            (
+                Trigger::WorkerError { retryable },
+                format!("error(retryable={retryable}): {message}"),
+                usage,
+                ProviderOutcome::Ok,
+            )
+        }
+        // ADR-0072 D9/D10: graceful yield。trigger と outcome の文は仮の値で、continuation の判定が確定させる。
+        Ok(RunOutcome {
+            terminal: Terminal::Yielded { checkpoint, usage },
+            ..
+        }) => {
+            run_end = Some(RunEnd::Yielded);
+            yield_checkpoint = Some(checkpoint);
+            (
+                Trigger::WorkerError { retryable: true },
+                "error(retryable=true): yielded".to_string(),
+                usage,
+                ProviderOutcome::Ok,
+            )
+        }
+        // ADR-0090 D1: クラスタ job の終了待ち。検証に通れば run を `waiting` で閉じる。通らなければ retryable な失敗。
+        Ok(RunOutcome {
+            terminal: Terminal::Waiting {
+                checkpoint, usage, ..
+            },
+            ..
+        }) => match checked_wait
+            .unwrap_or_else(|| Err("the cluster job wait was not validated".to_string()))
+        {
+            Ok(wait) => {
+                run_end = Some(RunEnd::Waiting);
+                yield_checkpoint = checkpoint;
+                let line = format!(
+                    "waiting: クラスタ {} の {} job の終了を待ちます: {}",
+                    wait.cluster,
+                    wait.scheduler.as_str(),
+                    wait.jobs.join(" ")
+                );
+                cluster_wait = Some(wait);
+                (Trigger::ClusterJobWait, line, usage, ProviderOutcome::Ok)
+            }
+            Err(reason) => {
+                run_end = Some(RunEnd::Failed { retryable: true });
+                (
+                    Trigger::WorkerError { retryable: true },
+                    format!("error(retryable=true): invalid cluster job wait: {reason}"),
+                    usage,
+                    ProviderOutcome::Ok,
+                )
+            }
+        },
+        // ADR-0072 D7: turn / wall-clock / context の上限に当たった。usage を運ぶ。
+        Ok(RunOutcome {
+            terminal:
+                Terminal::BudgetExhausted {
+                    kind,
+                    message,
+                    usage,
+                },
+            ..
+        }) => {
+            run_end = Some(RunEnd::BudgetExhausted { kind });
+            (
+                Trigger::WorkerError { retryable: true },
+                format!("error(retryable=true): budget exhausted ({kind:?}): {message}"),
+                usage,
+                ProviderOutcome::Ok,
+            )
+        }
+        Err(e) => match supply_failure {
+            // ADR-0010 D5（P-21）: 供給側失敗は attempts を消費せず requeue し、プロバイダを cooldown にする。
+            // ADR 2026-10-17: 認証失敗は上限に数えない（アカウントは routing から外れ、再ログインか別アカウントを待つ）。
+            Some(po)
+                if matches!(po, ProviderOutcome::AuthFailed)
+                    || task_ops::derive::consecutive_requeues(events) < max_requeues =>
+            {
+                (Trigger::Requeue, format!("requeue: adapter: {e}"), None, po)
+            }
+            // ADR-0011（P-38）: 同じ試行での連続 requeue が上限に達したら、通常の失敗として attempts を消費する。
+            Some(po) => (
+                Trigger::WorkerError { retryable: true },
+                format!(
+                    "error(retryable=true): requeue limit ({max_requeues}) reached: adapter: {e}"
+                ),
+                None,
+                po,
+            ),
+            // ADR 2026-10-08-browser-prod-enablement D2: 台帳由来の失敗を返した atomic の run は infra 再試行に回さず止める。
+            None if !work_unit && browser_prereq.is_some() => {
+                let code = browser_prereq.unwrap_or(BrowserPrerequisiteCode::Missing);
+                browser_prereq_event = Some(Event::BrowserPrerequisiteBlocked {
+                    code,
+                    message: code.message().to_string(),
+                });
+                (
+                    Trigger::BrowserPrereqBlock,
+                    format!("browser_prerequisite: {}: adapter: {e}", code.as_str()),
+                    None,
+                    ProviderOutcome::Ok,
+                )
+            }
+            // ADR-0070 D3（Phase 116）: プロバイダが分類できない失敗は「インフラ都合」として attempts を消費せず、
+            // `max_infra_retries` までバックオフして再試行する。上限を超えたら `WorkerError{retryable:false}` で打ち切り、
+            // `"infra failure ×N"` を付ける（D1 の失敗分類がこの接頭辞を見る）。
+            None => {
+                let infra_n = task_ops::derive::consecutive_infra_requeues(events) + 1;
+                if let Some(delay) =
+                    crate::run_supervisor::infra_retry_after(infra_n, max_infra_retries)
+                {
+                    infra_requeue = Some((infra_n, delay));
+                    (
+                        Trigger::InfraRequeue,
+                        format!("infra_requeue: adapter: {e}"),
+                        None,
+                        ProviderOutcome::Ok,
+                    )
+                } else {
+                    (
+                        Trigger::WorkerError { retryable: false },
+                        format!(
+                            "{}{infra_n}: adapter: {e}",
+                            task_ops::derive::INFRA_FAILURE_MARKER
+                        ),
+                        None,
+                        ProviderOutcome::Ok,
+                    )
+                }
+            }
+        },
+    };
+    // ADR-0079 付記 R7-5 D4: checks の不合格ですり替えた run も、worker が返した usage を残す。
+    let usage = usage.or_else(|| check_failure.as_ref().and_then(|(usage, _)| *usage));
+    let check_failure_suffix = check_failure
+        .map(|(_, summary)| format!(": {summary}"))
+        .unwrap_or_default();
+    RunFinishProposal {
+        trigger,
+        outcome,
+        usage,
+        provider_outcome,
+        run_end,
+        subject,
+        yield_checkpoint,
+        cluster_wait,
+        browser_prereq: browser_prereq_event,
+        infra_requeue,
+        misplaced,
+        cross_department: cross_department_questions(events, run_id),
+        check_failure_suffix,
+    }
+}
+
+/// ADR-0033 D4（Phase 24 / Phase 27）: この run の途中で「部をまたぐ委譲」を止めたときに残った質問
+/// （`QuestionRaised`。1 件の部またぎにつき 1 件。同じ文面は 1 回だけ）。
+fn cross_department_questions(events: &[(u64, Event)], run_id: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for (_, e) in events {
+        if let Event::QuestionRaised { run_id: r, text } = e
+            && r == run_id
+            && !out.contains(text)
+        {
+            out.push(text.clone());
+        }
+    }
+    out
+}
+
+/// ADR-0072 D7（Phase E1）: 「二重の安全網」。構造化した `Terminal::BudgetExhausted` を返さない古い経路・アダプタのために、
+/// `Terminal::Error{retryable:true}` の文を字句判定する（`task_core::is_budget_outcome` と同じ語彙。分類できなければ `None`）。
+fn classify_budget_kind_from_text(message: &str) -> Option<BudgetKind> {
+    let m = message.to_lowercase();
+    if task_core::looks_like_context_exceeded(&m) {
+        Some(BudgetKind::Context)
+    } else if m.contains("max_turns") || m.contains("max turns") || m.contains("turn limit") {
+        Some(BudgetKind::Turns)
+    } else if m.contains("wall-clock") || m.contains("wall clock") || m.contains("budget") {
+        Some(BudgetKind::WallClock)
+    } else {
+        None
+    }
+}
+
+/// [`questions_of_run`] の提案。
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct RunQuestions {
+    /// 人に見せる質問（`approvals` の行の単位）。
+    pub questions: Vec<String>,
+    /// 部をまたぐ質問で run の終わり方を `Trigger::WorkerQuestion` に置き換えるときの outcome の文。置き換えたら
+    /// reviewer に渡す done の内容は空にする。
+    pub replaced_outcome: Option<String>,
+}
+
+/// ADR-0033 D4: 部をまたぐ委譲の質問は、run の自己申告の終わり方より優先する（子は作られていない）。
+/// Phase 27: 人に見せる質問は 1 件の部またぎにつき 1 つ。`trigger` と `outcome` は WU と atomic task の分岐の後の値。
+pub(crate) fn questions_of_run(
+    trigger: &Trigger,
+    outcome: &str,
+    cross_department: &[String],
+) -> RunQuestions {
+    let asked = matches!(trigger, Trigger::WorkerQuestion);
+    let mut questions: Vec<String> = Vec::new();
+    if asked {
+        questions.push(
+            outcome
+                .strip_prefix("question: ")
+                .unwrap_or(outcome)
+                .to_string(),
+        );
+    }
+    let replaced_outcome = (!cross_department.is_empty() && !asked)
+        .then(|| format!("question: {}", cross_department.join("\n")));
+    questions.extend(cross_department.iter().cloned());
+    RunQuestions {
+        questions,
+        replaced_outcome,
+    }
+}
+
+/// ADR 2026-10-20-mlsys-main2-fixes D1-4: この trigger の後に（人の操作なしで）次の run か reviewer が起きるか。
+/// `WorkerError{retryable:true}` は attempts が残れば retry になるので含める（残っていなければ failed で同じ終端）。
+pub(crate) fn trigger_starts_another_run(trigger: &Trigger) -> bool {
+    matches!(
+        trigger,
+        Trigger::WorkerDone
+            | Trigger::Continue { .. }
+            | Trigger::WorkerError { retryable: true }
+            | Trigger::Requeue
+            | Trigger::InfraRequeue
+    )
+}
+
+/// [`stop_at_token_budget`] の入力。
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct TreeTokens {
+    /// task 木のこの run 以外の消費。
+    pub prior: u64,
+    /// この run の usage。
+    pub run: Option<Usage>,
+    /// 木の `max_tokens`。
+    pub max: u64,
+}
+
+/// [`stop_at_token_budget`] の提案。適用する経路は trigger と outcome の文を置き換え、質問と infra の backoff を捨てる。
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct TokenBudgetStop {
+    pub trigger: Trigger,
+    pub outcome: String,
+    pub used: u64,
+    pub max: u64,
+}
+
+/// ADR 2026-10-20-mlsys-main2-fixes D1-4: 次の run（continuation・retry・requeue・次の unit・replan）や reviewer を起こす
+/// 終わり方でも、task 木の消費（この run を含む）が `max_tokens` に達していたら起こさず、task を failed にする（人には聞かない）。
+/// 兄弟の unit が走っている間（`stays_running`。task を遷移させない）は最後の 1 本で決めるので止めない。
+/// 木の消費は止める候補のときだけ読めばよいので、`tokens` は呼ぶ側が [`needs_tree_tokens`] を見てから読む。
+pub(crate) fn stop_at_token_budget(tokens: TreeTokens) -> Option<TokenBudgetStop> {
+    let used = tokens.prior + tokens.run.map(|u| u.budget_tokens()).unwrap_or(0);
+    (used >= tokens.max).then(|| TokenBudgetStop {
+        trigger: Trigger::TokenBudgetExhausted,
+        outcome: token_budget_outcome(used, tokens.max),
+        used,
+        max: tokens.max,
+    })
+}
+
+/// 木の token 予算を見る終わり方か（task を遷移させ、次の run か reviewer を起こす）。
+pub(crate) fn needs_tree_tokens(trigger: &Trigger, stays_running: bool) -> bool {
+    !stays_running && trigger_starts_another_run(trigger)
+}
+
+/// `WorkerFinished.outcome` / 遷移の理由に書く文（`token_budget_exhausted: <used>/<max>`）。
+pub(crate) fn token_budget_outcome(used: u64, max: u64) -> String {
+    format!("token_budget_exhausted: {used}/{max}")
+}
+
+/// ADR-0072 D9（Phase E1）: `WorkerFinished.outcome` に載せる、人が読む 1 行の終わり方の説明。
+pub(crate) fn describe_run_end(end: RunEnd) -> String {
+    match end {
+        RunEnd::Completed => "completed".to_string(),
+        RunEnd::Yielded => "yielded".to_string(),
+        RunEnd::BudgetExhausted { kind } => {
+            let k = match kind {
+                BudgetKind::Turns => "turns",
+                BudgetKind::WallClock => "wall_clock",
+                BudgetKind::Tokens => "tokens",
+                BudgetKind::Context => "context",
+            };
+            format!("budget_exhausted({k})")
+        }
+        RunEnd::Question => "question".to_string(),
+        RunEnd::Failed { retryable } => format!("failed(retryable={retryable})"),
+        RunEnd::HarnessError { class } => format!("harness_error({class:?})"),
+        RunEnd::Cancelled => "cancelled".to_string(),
+        RunEnd::Waiting => "waiting(cluster_jobs)".to_string(),
     }
 }
 

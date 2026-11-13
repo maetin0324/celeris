@@ -208,6 +208,9 @@ SD-1 の計測で gate の `cargo-test` は 214 s、うち約 200 s が**実行*
   テスト単位の並列・タイムアウト・group 制御も無い。
 - **並列数**: `CELERIS_TEST_JOBS`、既定 `min(8, max(2, nproc/3))`（24 CPU → 8）。daemon の run が同居するので nproc いっぱいにしない。
   8・16・24・8 + 負荷（busy loop 6 本）で回し、8 と 24 の差は 13 s（`truncate_…` 1 本が律速）なので 8 で十分。
+  - 付記（2026-11-12）: この既定は [ADR 2026-11-12-host-check-slots](2026-11-12-host-check-slots.md) D2 で置き換えた。
+    `test-parallel.sh` は host 共通の検査の枠を取り、`CELERIS_TEST_JOBS` が無ければ枠の並列度 `max(1, nproc / 枠の数)`
+    （24 CPU・枠 2 で 12）で回す。上の式は当時の記録として残す。
 - **gate が証明すること**: `CELERIS_TEST_SUMMARY {json}` の 1 行を gate.json の `cargo_test` に写す（`runner`・`nextest_version`・`jobs`・
   `binaries` = nextest のバイナリ数 + doc-test の crate 数・`passed` / `failed` / `ignored`・各 exit と秒数・`summary_parsed`）。
   nextest か doc-test が非 0、または nextest の `Starting N tests across M binaries` / `Summary … tests run:` が読めない（全部走った

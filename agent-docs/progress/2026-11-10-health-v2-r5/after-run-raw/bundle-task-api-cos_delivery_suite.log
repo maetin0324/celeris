@@ -1,0 +1,26 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running tests/cos_delivery_suite/main.rs (/local/celeris/data/scratch/targets/task-01M76AG298YER7PJB6M781C77X/wu-01M76B4XA4MZRYHBP348ZP7R49/target/debug/deps/cos_delivery_suite-707c21e91056ca96)
+
+running 19 tests
+test project_auto_integrate::auto_integrate_is_a_project_attribute_switched_by_patch ... ok
+test cos_operations_domains::cos_chat_ops_domain_execution_phase_gate ... ok
+test cos_operations_domains::cos_chat_ops_domain_approval_decide ... ok
+test cos_ops_projects_cron::cos_ops_projects_cron_domain_errors_are_recorded_as_rejected ... ok
+test cos_operations_domains::cos_chat_ops_domain_decision_answer ... ok
+test cos_operations_domains::cos_chat_ops_domain_comment_create ... ok
+test cos_ops_projects_cron::cos_ops_projects_cron_reports_read_and_notified_are_audited ... ok
+test cos_operations_domains::cos_chat_ops_domain_task_create ... ok
+test cos_ops_projects_cron::cos_ops_projects_cron_run_is_external_once ... ok
+test cos_ops_projects_cron::cos_ops_projects_cron_project_create_is_audited ... ok
+test cos_operations_domains::cos_chat_ops_domain_project_update ... ok
+test cos_ops_projects_cron::cos_ops_projects_cron_standing_rules_are_audited ... ok
+test cos_ops_admin_config::cos_ops_admin_config_llm_models_are_audited ... ok
+test cos_operations_domains::cos_chat_ops_domain_knowledge_reject ... ok
+test cos_ops_admin_config::cos_ops_admin_config_repos_and_cluster_settings_are_audited ... ok
+test cos_ops_admin_config::cos_ops_admin_config_daemon_and_external_effects_run_once ... ok
+test cos_ops_projects_cron::cos_ops_projects_cron_job_lifecycle_is_audited ... ok
+test cos_ops_projects_cron::cos_ops_projects_cron_project_lifecycle_is_audited ... ok
+test cos_ops_admin_config::cos_ops_admin_config_org_and_skills_are_audited ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.78s
+

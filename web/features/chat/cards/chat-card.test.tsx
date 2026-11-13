@@ -465,4 +465,16 @@ describe("chat cards: 人待ちの badge", () => {
     ];
     expect(pendingHumanCount(cards)).toBe(2);
   });
+
+  // ADR 2026-11-12-cos-triage-scope D2: a card CoS routed to the external operator is open (the person
+  // may still answer it) but is not a person's wait: it is not counted and not labelled 「人の判断待ち」.
+  it("chat_cards_operator_route_is_not_a_human_wait", () => {
+    const operator = card({ kind: "plan_gate", id: "p", state: "operator" });
+    expect(pendingHumanCount([operator, card({ kind: "decision", id: "a", state: "escalated" })])).toBe(1);
+    const html = renderToStaticMarkup(<ChatCardView card={operator} answer={ready()} />);
+    expect(html).toContain('data-card-state="operator"');
+    expect(html).toContain("外部 operator の対応待ち");
+    expect(html).not.toContain("人の判断待ち");
+    expect(html).toContain("<button");
+  });
 });

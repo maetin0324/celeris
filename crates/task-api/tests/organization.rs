@@ -10,46 +10,6 @@ use common::*;
 use serde_json::{Value, json};
 use task_core::{GenreSpec, NodeSessionStore, RoleSpec, Status, TaskKind, TaskStore, Tier};
 
-fn auth() -> [(&'static str, String); 1] {
-    [("authorization", format!("Bearer {TOKEN}"))]
-}
-
-fn headers<'a>(pairs: &'a [(&'static str, String)]) -> Vec<(&'static str, &'a str)> {
-    pairs.iter().map(|(k, v)| (*k, v.as_str())).collect()
-}
-
-/// トークンを設定した構成では**全ての**要求にトークンが要る（共通ガード）。管理系かどうかとは別の話なので、
-/// 下のテストは token 付きの要求をこの小道具で組む。
-fn g(path: &str) -> axum::http::Request<axum::body::Body> {
-    get_with(
-        path,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
-fn p(path: &str, body: &Value) -> axum::http::Request<axum::body::Body> {
-    post_json_with(
-        path,
-        body,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
-fn pa(path: &str, body: &Value) -> axum::http::Request<axum::body::Body> {
-    patch_json_with(
-        path,
-        body,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
-fn d(path: &str) -> axum::http::Request<axum::body::Body> {
-    delete_with(
-        path,
-        &[("authorization", format!("Bearer {TOKEN}").as_str())],
-    )
-}
-
 fn env_with_token() -> TestEnv {
     TestEnv::with(EnvOptions {
         token: Some(TOKEN.into()),
@@ -116,7 +76,7 @@ async fn seed_browser_node(app: &axum::Router) {
     assert_eq!(
         send(
             app,
-            p(
+            post_admin(
                 "/api/v1/org",
                 &json!({"id":"secretary", "name":"Secretary", "kind":"secretary"})
             )
@@ -126,14 +86,14 @@ async fn seed_browser_node(app: &axum::Router) {
         .as_u16(),
         201
     );
-    assert_eq!(send(app, p("/api/v1/org", &json!({"id":"browser-execution", "name":"Browser", "kind":"department", "parent_id":"secretary", "profile":{"browser":{"allowed_domains":["http://localhost:3000"], "credential_policy_ids":["policy-1"]}}}))).await.status.as_u16(), 201);
+    assert_eq!(send(app, post_admin("/api/v1/org", &json!({"id":"browser-execution", "name":"Browser", "kind":"department", "parent_id":"secretary", "profile":{"browser":{"allowed_domains":["http://localhost:3000"], "credential_policy_ids":["policy-1"]}}}))).await.status.as_u16(), 201);
 }
 
 /// 各 body が 422 validation で拒否され、org 行・監査 event・task events が変わらないこと。
 async fn assert_rejected_unchanged(env: &TestEnv, app: &axum::Router, bodies: &[Value]) {
     let before = browser_db_state(env);
     for body in bodies {
-        let response = send(app, pa(BROWSER_SETTINGS, body)).await;
+        let response = send(app, patch_admin(BROWSER_SETTINGS, body)).await;
         assert_problem(&response, 422, "validation");
         assert_eq!(browser_db_state(env), before, "{body}");
     }
@@ -148,7 +108,7 @@ fn domains(list: &[&str]) -> Vec<Value> {
 async fn apply_valid_settings(app: &axum::Router) {
     let response = send(
         app,
-        pa(
+        patch_admin(
             BROWSER_SETTINGS,
             &json!({
                 "allowed_domains":["https://billing.example.com"],
@@ -271,7 +231,7 @@ async fn browser_settings_generic_org_patch_uses_same_validation() {
     ] {
         let generic = send(
             &app,
-            pa(
+            patch_admin(
                 "/api/v1/org/browser-execution",
                 &json!({"profile":{"browser":{"allowed_domains":[bad]}}}),
             ),
@@ -339,8 +299,7 @@ async fn browser_settings_event_has_no_secret_values() {
 
 /// 秘書 → 研究部 → 関連研究調査課 を API から作る。
 async fn seed_org(app: &axum::Router) {
-    let a = auth();
-    let h = headers(&a);
+    let h = admin_headers();
     for body in [
         json!({"id": "secretary", "name": "秘書", "kind": "secretary", "brief": "案件を受け取る"}),
         json!({"id": "research", "name": "研究部", "kind": "department", "parent_id": "secretary"}),
@@ -358,12 +317,12 @@ async fn org_can_be_created_listed_patched_and_deleted() {
     let app = env.router();
 
     // 最初は空。
-    let resp = send(&app, g("/api/v1/org")).await;
+    let resp = send(&app, get_admin("/api/v1/org")).await;
     assert_eq!(resp.status.as_u16(), 200);
     assert_eq!(resp.json()["items"], json!([]));
 
     seed_org(&app).await;
-    let resp = send(&app, g("/api/v1/org")).await;
+    let resp = send(&app, get_admin("/api/v1/org")).await;
     let items = resp.json()["items"].as_array().cloned().expect("items");
     assert_eq!(items.len(), 3);
     // position 昇順（同値は id 昇順）。木は GUI が parent_id で組む。
@@ -380,7 +339,7 @@ async fn org_can_be_created_listed_patched_and_deleted() {
     // Location が付く。
     let resp = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/org",
             &json!({"id": "coding", "name": "コーディング部", "kind": "department", "parent_id": "secretary"}),
         ),
@@ -392,7 +351,7 @@ async fn org_can_be_created_listed_patched_and_deleted() {
     // PATCH は書いた項目だけを変える。`genre: null` は「分野なし」。
     let resp = send(
         &app,
-        pa(
+        patch_admin(
             "/api/v1/org/research-survey",
             &json!({"name": "文献調査課"}),
         ),
@@ -409,7 +368,7 @@ async fn org_can_be_created_listed_patched_and_deleted() {
 
     let resp = send(
         &app,
-        pa("/api/v1/org/research-survey", &json!({"genre": null})),
+        patch_admin("/api/v1/org/research-survey", &json!({"genre": null})),
     )
     .await;
     assert_eq!(resp.status.as_u16(), 200);
@@ -420,11 +379,15 @@ async fn org_can_be_created_listed_patched_and_deleted() {
     );
 
     // DELETE は 204、消えたら 404。
-    let resp = send(&app, d("/api/v1/org/research-survey")).await;
+    let resp = send(&app, delete_admin("/api/v1/org/research-survey")).await;
     assert_eq!(resp.status.as_u16(), 204, "{}", resp.text());
-    let resp = send(&app, d("/api/v1/org/research-survey")).await;
+    let resp = send(&app, delete_admin("/api/v1/org/research-survey")).await;
     assert_problem(&resp, 404, "org_node_not_found");
-    let resp = send(&app, pa("/api/v1/org/ghost", &json!({"name": "x"}))).await;
+    let resp = send(
+        &app,
+        patch_admin("/api/v1/org/ghost", &json!({"name": "x"})),
+    )
+    .await;
     assert_problem(&resp, 404, "org_node_not_found");
 }
 
@@ -437,7 +400,7 @@ async fn org_list_carries_lead_session_summaries_for_departments_with_a_continui
     let app = env.router();
     seed_org(&app).await;
 
-    let resp = send(&app, g("/api/v1/org")).await;
+    let resp = send(&app, get_admin("/api/v1/org")).await;
     assert!(
         resp.json().get("lead_sessions").is_none(),
         "まだセッションが無ければ出さない: {}",
@@ -462,7 +425,7 @@ async fn org_list_carries_lead_session_summaries_for_departments_with_a_continui
         })
         .expect("create session");
 
-    let resp = send(&app, g("/api/v1/org")).await;
+    let resp = send(&app, get_admin("/api/v1/org")).await;
     let sessions = resp.json()["lead_sessions"].as_array().cloned().unwrap();
     assert_eq!(sessions.len(), 1, "{sessions:?}");
     assert_eq!(sessions[0]["node_id"], "research");
@@ -482,7 +445,7 @@ async fn deleting_a_node_that_still_has_work_is_a_conflict() {
     task.assignee = Some("research-survey".into());
     env.seed(&task);
 
-    let resp = send(&app, d("/api/v1/org/research-survey")).await;
+    let resp = send(&app, delete_admin("/api/v1/org/research-survey")).await;
     let problem = assert_problem(&resp, 409, "org_node_in_use");
     assert!(
         problem["detail"]
@@ -493,14 +456,14 @@ async fn deleting_a_node_that_still_has_work_is_a_conflict() {
     );
 
     // 子を持つ部も消せない。
-    let resp = send(&app, d("/api/v1/org/research")).await;
+    let resp = send(&app, delete_admin("/api/v1/org/research")).await;
     assert_problem(&resp, 409, "org_node_in_use");
 
     // タスクが終端になれば消せる。
     env.store
         .apply_transition(task.id, task_core::Trigger::Cancel, None)
         .expect("cancel");
-    let resp = send(&app, d("/api/v1/org/research-survey")).await;
+    let resp = send(&app, delete_admin("/api/v1/org/research-survey")).await;
     assert_eq!(resp.status.as_u16(), 204, "{}", resp.text());
 }
 
@@ -509,8 +472,7 @@ async fn deleting_a_node_that_still_has_work_is_a_conflict() {
 async fn org_validation_is_reported_as_422_and_duplicate_ids_as_409() {
     let env = env_with_token();
     let app = env.router();
-    let a = auth();
-    let h = headers(&a);
+    let h = admin_headers();
     seed_org(&app).await;
 
     let resp = send(
@@ -530,7 +492,7 @@ async fn org_validation_is_reported_as_422_and_duplicate_ids_as_409() {
 
     let resp = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/org",
             &json!({"id": "lost", "name": "迷子", "kind": "section", "parent_id": "nobody"}),
         ),
@@ -575,14 +537,14 @@ async fn org_validation_is_reported_as_422_and_duplicate_ids_as_409() {
     assert!(problem.to_string().contains("unknown genre"), "{problem}");
     let resp = send(
         &app,
-        pa("/api/v1/org/research-survey", &json!({"genre": "bogus"})),
+        patch_admin("/api/v1/org/research-survey", &json!({"genre": "bogus"})),
     )
     .await;
     assert_problem(&resp, 422, "validation");
     // 設定にある分野は通る。
     let resp = send(
         &app,
-        pa("/api/v1/org/research-survey", &json!({"genre": "coding"})),
+        patch_admin("/api/v1/org/research-survey", &json!({"genre": "coding"})),
     )
     .await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
@@ -595,7 +557,7 @@ async fn org_validation_is_reported_as_422_and_duplicate_ids_as_409() {
     .await;
     assert_problem(&resp, 409, "org_node_exists");
     // 失敗しても既存は壊れない。
-    let resp = send(&app, g("/api/v1/org")).await;
+    let resp = send(&app, get_admin("/api/v1/org")).await;
     assert_eq!(resp.json()["items"].as_array().expect("items").len(), 3);
 }
 
@@ -640,8 +602,7 @@ async fn org_admin_endpoints_require_a_token() {
         "unauthorized",
     );
     // 同じ構成でも、トークンを出せば通る。
-    let a = auth();
-    let h = headers(&a);
+    let h = admin_headers();
     assert_eq!(
         send(&app, get_with("/api/v1/org", &h))
             .await
@@ -703,12 +664,12 @@ async fn projects_and_milestones_round_trip_through_the_api() {
     let env = env_with_token();
     let app = env.router();
 
-    let resp = send(&app, g("/api/v1/projects")).await;
+    let resp = send(&app, get_admin("/api/v1/projects")).await;
     assert_eq!(resp.json()["items"], json!([]));
 
     let resp = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/projects",
             &json!({"title": "Pluvio の新テーマ", "request": "Pluvio を基盤に用いた新たな研究テーマの模索、検証"}),
         ),
@@ -729,7 +690,7 @@ async fn projects_and_milestones_round_trip_through_the_api() {
     // 空の title / request は 422。
     let resp = send(
         &app,
-        p("/api/v1/projects", &json!({"title": "  ", "request": "r"})),
+        post_admin("/api/v1/projects", &json!({"title": "  ", "request": "r"})),
     )
     .await;
     assert_problem(&resp, 422, "validation");
@@ -737,7 +698,7 @@ async fn projects_and_milestones_round_trip_through_the_api() {
     // ADR-0079 D13（Phase R5a）: 途中目標の作成は 410（途中目標は root task の段階で表す）。
     let resp = send(
         &app,
-        p(
+        post_admin(
             &format!("/api/v1/projects/{project_id}/milestones"),
             &json!({"title": "関連研究を棚卸し"}),
         ),
@@ -760,7 +721,7 @@ async fn projects_and_milestones_round_trip_through_the_api() {
     // 案件の状態変更。途中目標の状態変更は 410（ADR-0079 D13）。
     let resp = send(
         &app,
-        pa(
+        patch_admin(
             &format!("/api/v1/projects/{project_id}"),
             &json!({"status": "active"}),
         ),
@@ -770,7 +731,7 @@ async fn projects_and_milestones_round_trip_through_the_api() {
     assert_eq!(resp.json()["status"], "active");
     let resp = send(
         &app,
-        pa(
+        patch_admin(
             &format!("/api/v1/milestones/{milestone_id}"),
             &json!({"status": "reached"}),
         ),
@@ -781,7 +742,7 @@ async fn projects_and_milestones_round_trip_through_the_api() {
     // 未知の状態は 400（本文の解析で落ちる）。
     let resp = send(
         &app,
-        pa(
+        patch_admin(
             &format!("/api/v1/projects/{project_id}"),
             &json!({"status": "bogus"}),
         ),
@@ -792,12 +753,12 @@ async fn projects_and_milestones_round_trip_through_the_api() {
     // 404: 無い案件・無い途中目標・ULID でない id。
     let missing = "01J9ZX5T3K8Q7W6V5R4P3N2M1H";
     assert_problem(
-        &send(&app, g(&format!("/api/v1/projects/{missing}"))).await,
+        &send(&app, get_admin(&format!("/api/v1/projects/{missing}"))).await,
         404,
         "project_not_found",
     );
     assert_problem(
-        &send(&app, g("/api/v1/projects/not-a-ulid")).await,
+        &send(&app, get_admin("/api/v1/projects/not-a-ulid")).await,
         404,
         "project_not_found",
     );
@@ -805,7 +766,7 @@ async fn projects_and_milestones_round_trip_through_the_api() {
     assert_problem(
         &send(
             &app,
-            p(
+            post_admin(
                 &format!("/api/v1/projects/{missing}/milestones"),
                 &json!({"title": "x"}),
             ),
@@ -817,7 +778,7 @@ async fn projects_and_milestones_round_trip_through_the_api() {
     assert_problem(
         &send(
             &app,
-            pa(
+            patch_admin(
                 &format!("/api/v1/milestones/{missing}"),
                 &json!({"status": "reached"}),
             ),
@@ -838,7 +799,7 @@ async fn a_project_can_carry_the_workspace_where_its_code_lives() {
     // 1. 作るときに指定できる（`Remote`）。
     let resp = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/projects",
             &json!({
                 "title": "Pluvio の PoC",
@@ -856,7 +817,7 @@ async fn a_project_can_carry_the_workspace_where_its_code_lives() {
     );
 
     // `GET /projects/{id}` にも出る。
-    let resp = send(&app, g(&format!("/api/v1/projects/{project_id}"))).await;
+    let resp = send(&app, get_admin(&format!("/api/v1/projects/{project_id}"))).await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
     assert_eq!(resp.json()["project"]["workspace"]["cluster"], "pegasus");
 
@@ -864,7 +825,7 @@ async fn a_project_can_carry_the_workspace_where_its_code_lives() {
     let home = std::env::var("HOME").expect("HOME");
     let resp = send(
         &app,
-        pa(
+        patch_admin(
             &format!("/api/v1/projects/{project_id}"),
             &json!({"workspace": {"kind": "local", "path": "~/workspace/rust/pluvio-poc"}}),
         ),
@@ -879,7 +840,7 @@ async fn a_project_can_carry_the_workspace_where_its_code_lives() {
     // 3. `null` で消せる。作業場所を決めていない案件には `workspace` が出ない。
     let resp = send(
         &app,
-        pa(
+        patch_admin(
             &format!("/api/v1/projects/{project_id}"),
             &json!({"workspace": null}),
         ),
@@ -892,7 +853,7 @@ async fn a_project_can_carry_the_workspace_where_its_code_lives() {
     assert_problem(
         &send(
             &app,
-            p(
+            post_admin(
                 "/api/v1/projects",
                 &json!({"title": "t", "request": "r", "workspace": {"kind": "remote", "cluster": "nope", "path": "/x"}}),
             ),
@@ -904,7 +865,7 @@ async fn a_project_can_carry_the_workspace_where_its_code_lives() {
     assert_problem(
         &send(
             &app,
-            pa(
+            patch_admin(
                 &format!("/api/v1/projects/{project_id}"),
                 &json!({"workspace": {"kind": "remote", "cluster": "nope", "path": "/x"}}),
             ),
@@ -918,7 +879,7 @@ async fn a_project_can_carry_the_workspace_where_its_code_lives() {
     assert_problem(
         &send(
             &app,
-            pa(&format!("/api/v1/projects/{project_id}"), &json!({})),
+            patch_admin(&format!("/api/v1/projects/{project_id}"), &json!({})),
         )
         .await,
         422,
@@ -927,7 +888,7 @@ async fn a_project_can_carry_the_workspace_where_its_code_lives() {
     // 作業場所を書かない案件は従来どおり（`workspace` は出ない）。
     let resp = send(
         &app,
-        p("/api/v1/projects", &json!({"title": "t", "request": "r"})),
+        post_admin("/api/v1/projects", &json!({"title": "t", "request": "r"})),
     )
     .await;
     assert_eq!(resp.status.as_u16(), 201, "{}", resp.text());
@@ -944,7 +905,7 @@ async fn a_local_project_workspace_can_choose_the_worktree_mode() {
     // 1. 省略すると保存も応答も従来どおり（既定は `worktree`）。
     let resp = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/projects",
             &json!({"title": "t", "request": "r", "workspace": {"kind": "local", "path": "/srv/repo"}}),
         ),
@@ -960,7 +921,7 @@ async fn a_local_project_workspace_can_choose_the_worktree_mode() {
     // 2. `mode` を書けばそのまま往復する。
     let resp = send(
         &app,
-        pa(
+        patch_admin(
             &format!("/api/v1/projects/{project_id}"),
             &json!({"workspace": {"kind": "local", "path": "/srv/repo", "mode": "shared"}}),
         ),
@@ -971,12 +932,12 @@ async fn a_local_project_workspace_can_choose_the_worktree_mode() {
         resp.json()["workspace"],
         json!({"kind": "local", "path": "/srv/repo", "mode": "shared"})
     );
-    let resp = send(&app, g(&format!("/api/v1/projects/{project_id}"))).await;
+    let resp = send(&app, get_admin(&format!("/api/v1/projects/{project_id}"))).await;
     assert_eq!(resp.json()["project"]["workspace"]["mode"], "shared");
 
     let resp = send(
         &app,
-        pa(
+        patch_admin(
             &format!("/api/v1/projects/{project_id}"),
             &json!({"workspace": {"kind": "local", "path": "/srv/repo", "mode": "worktree"}}),
         ),
@@ -992,7 +953,7 @@ async fn a_local_project_workspace_can_choose_the_worktree_mode() {
     // 3. 知らない `mode` は受け付けない。
     let resp = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/projects",
             &json!({"title": "t", "request": "r", "workspace": {"kind": "local", "path": "/srv/repo", "mode": "bogus"}}),
         ),
@@ -1015,7 +976,7 @@ async fn project_detail_returns_the_milestones_and_the_work_tree() {
 
     let project: Value = send(
         &app,
-        p("/api/v1/projects", &json!({"title": "t", "request": "r"})),
+        post_admin("/api/v1/projects", &json!({"title": "t", "request": "r"})),
     )
     .await
     .json();
@@ -1036,7 +997,7 @@ async fn project_detail_returns_the_milestones_and_the_work_tree() {
     // ADR-0033 D2: `POST /tasks` は project_id / milestone_id / assignee を任意で受ける。
     let parent: Value = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/tasks",
             &json!({
                 "title": "調べる", "objective": "関連研究を洗う",
@@ -1057,7 +1018,7 @@ async fn project_detail_returns_the_milestones_and_the_work_tree() {
 
     let child: Value = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/tasks",
             &json!({
                 "title": "まとめる", "objective": "報告を書く",
@@ -1074,7 +1035,7 @@ async fn project_detail_returns_the_milestones_and_the_work_tree() {
     // 案件に属さないタスクは仕事の木に出ない。
     let outsider = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/tasks",
             &json!({"title": "無関係", "objective": "o", "acceptance": [{"type": "human", "text": "x"}, {"type": "artifact_exists", "name": "result.md"}]}),
         ),
@@ -1084,24 +1045,28 @@ async fn project_detail_returns_the_milestones_and_the_work_tree() {
 
     // `GET /tasks?project=` も同じ絞り込み。Phase 24（ADR-0033 D4）から、案件を作った直後に
     // 秘書への対話用タスクが 1 件できるので、この案件のタスクは 2 + 1 件。
-    let listed = send(&app, g(&format!("/api/v1/tasks?project={project_id}"))).await;
+    let listed = send(
+        &app,
+        get_admin(&format!("/api/v1/tasks?project={project_id}")),
+    )
+    .await;
     assert_eq!(listed.status.as_u16(), 200, "{}", listed.text());
     assert_eq!(listed.json()["total"], 3);
     assert_problem(
-        &send(&app, g("/api/v1/tasks?project=nope")).await,
+        &send(&app, get_admin("/api/v1/tasks?project=nope")).await,
         400,
         "bad_request",
     );
 
     // ADR-0079 D13 / U-R8（Phase R5a）: 途中目標は既定で隠れる（件数は `milestones_frozen`）。
-    let hidden = send(&app, g(&format!("/api/v1/projects/{project_id}")))
+    let hidden = send(&app, get_admin(&format!("/api/v1/projects/{project_id}")))
         .await
         .json();
     assert_eq!(hidden["milestones"], json!([]));
     assert_eq!(hidden["milestones_frozen"], 1);
     let resp = send(
         &app,
-        g(&format!(
+        get_admin(&format!(
             "/api/v1/projects/{project_id}?include_frozen=true"
         )),
     )
@@ -1163,7 +1128,7 @@ async fn posting_a_task_with_an_unknown_assignee_or_project_is_rejected() {
 
     let resp = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/tasks",
             &json!({"title": "t", "objective": "o", "acceptance": [{"type": "human", "text": "x"}], "assignee": "nobody"}),
         ),
@@ -1173,7 +1138,7 @@ async fn posting_a_task_with_an_unknown_assignee_or_project_is_rejected() {
 
     let resp = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/tasks",
             &json!({"title": "t", "objective": "o", "acceptance": [{"type": "human", "text": "x"}],
                     "project_id": "01J9ZX5T3K8Q7W6V5R4P3N2M1H"}),
@@ -1186,7 +1151,7 @@ async fn posting_a_task_with_an_unknown_assignee_or_project_is_rejected() {
     // artifacts か知識ベースの参照が要る。
     let resp = send(
         &app,
-        p(
+        post_admin(
             "/api/v1/tasks",
             &json!({"title": "t", "objective": "o", "acceptance": [{"type": "human", "text": "x"}, {"type": "artifact_exists", "name": "result.md"}]}),
         ),

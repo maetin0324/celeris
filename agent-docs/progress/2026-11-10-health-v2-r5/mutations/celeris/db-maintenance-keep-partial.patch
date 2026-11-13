@@ -1,0 +1,13 @@
+diff --git a/crates/celeris/src/db_maintenance.rs b/crates/celeris/src/db_maintenance.rs
+index a9cf65f7..19778a18 100644
+--- a/crates/celeris/src/db_maintenance.rs
++++ b/crates/celeris/src/db_maintenance.rs
+@@ -239,7 +239,7 @@ fn backup_once(
+ }
+ 
+ fn remove_backup_files(path: &Path) {
+-    for suffix in ["", "-journal", "-wal", "-shm"] {
++    for suffix in ["-journal", "-wal", "-shm"] {
+         let mut name = path.as_os_str().to_os_string();
+         name.push(suffix);
+         let _ = std::fs::remove_file(PathBuf::from(name));

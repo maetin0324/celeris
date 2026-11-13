@@ -1,0 +1,38 @@
+warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGER` causes the socket to block the thread on drop
+   --> crates/script-runtime/vendor/deno_core/uv_compat/tcp.rs:818:17
+    |
+818 |       && stream.set_linger(Some(std::time::Duration::ZERO)).is_err()
+    |                 ^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: `deno_core` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.70s
+     Running tests/browser_eval_surface_suite/main.rs (/local/celeris/data/scratch/targets/task-01M76AG298YER7PJB6M781C77X/wu-01M76B4XA4RBGFFV5HXXSER5SF/target/debug/deps/browser_eval_surface_suite-e648a7254d408d53)
+
+running 22 tests
+test browser_doctor::browser_doctor_json_ok_warn_and_skip_exit_zero_with_env_config ... ok
+test browser_ledger_release::browser_ledger_release_json_keeps_public_backend_without_credential_proof ... ok
+test browser_ledger_release::browser_ledger_release_no_conformant_backend ... ok
+test browser_ledger_release::browser_ledger_release_missing ... ok
+test browser_ledger_release::browser_ledger_release_invalid ... ok
+test browser_doctor::browser_doctor_daemon_unavailable_is_one_line_exit_two ... ok
+test browser_doctor::browser_doctor_prints_one_line_per_missing_item_and_exits_one ... ok
+test browser_doctor::browser_doctor_api_url_and_token_file_overrides_config ... ok
+test browser_ledger_release::browser_ledger_release_ok_json_and_text_without_host_probe ... ok
+test browser_ledger_release::browser_ledger_release_stale_agent_browser ... ok
+test browser_ledger_release::browser_ledger_release_stale_release ... ok
+test browser_ledger_release::browser_ledger_release_host_probe_uses_explicit_executable ... ok
+test campaign_connected::verify_connected_requires_grades ... ok
+test campaign_connected::grade_row_joins_every_run_of_the_trial ... ok
+test campaign_connected::grade_with_foreign_manifest_hash_is_rejected ... ok
+test campaign_connected::export_keeps_raw_run_and_call_keys_and_states ... ok
+test campaign_connected::unobserved_usage_row_is_missing_not_zero ... ok
+test campaign_connected::connected_campaign_exports_every_joined_field_and_passes ... ok
+test campaign_connected::run_without_routing_decision_may_lack_proposed_first ... ok
+test mcp_client_scopes::scopes_replaces_the_scope_list_and_keeps_the_token ... ok
+test campaign_connected::empty_campaign_fails_the_connection_check ... ok
+test campaign_connected::missing_required_fields_or_unmetered_consumption_fail ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.92s
+

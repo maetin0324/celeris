@@ -632,13 +632,13 @@ export function ProjectControllerSection({ detail }: { detail: ProjectDetail }) 
           view={authority.data}
           pending={actions.pending}
           onAccept={(proposal) => {
-            void actions.run([grantFromProposalAction(projectId, proposal, proposal.expires_at, proposal.budget)]);
+            void actions.run([grantFromProposalAction(proposal, proposal.expires_at, proposal.budget)]);
           }}
           onDismiss={(proposal) => {
-            void actions.run([dismissAction(projectId, proposal.id)]);
+            void actions.run([dismissAction(proposal)]);
           }}
           onRevoke={(grant) => {
-            void actions.run([revokeAction(projectId, grant.id)]);
+            void actions.run([revokeAction(grant)]);
           }}
         />
       ) : null}

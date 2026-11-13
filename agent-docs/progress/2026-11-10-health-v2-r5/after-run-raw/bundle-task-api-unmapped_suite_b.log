@@ -1,0 +1,35 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running tests/unmapped_suite_b/main.rs (/local/celeris/data/scratch/targets/task-01M76AG298YER7PJB6M781C77X/wu-01M76B4XA4MZRYHBP348ZP7R49/target/debug/deps/unmapped_suite_b-016b591a6722c598)
+
+running 28 tests
+test standby::health_carries_the_release_the_mode_and_the_role ... ok
+test genres::create_task_with_valid_genre_returns_201_and_applies_genre_defaults ... ok
+test genres::create_task_with_genre_and_matching_role_returns_201 ... ok
+test roles::create_task_with_role_applies_role_defaults ... ok
+test genres::list_tasks_filters_by_genre ... ok
+test genres::config_shows_genres ... ok
+test genres::create_task_with_role_not_in_genre_is_422 ... ok
+test roles::task_values_win_over_role_defaults_and_aggregate_is_stored ... ok
+test standby::standby_refuses_the_dispatcher_admin_endpoints_with_503_and_retry_after ... ok
+test genres::create_task_with_unknown_genre_is_422 ... ok
+test roles::config_shows_roles_without_instruction_text_and_delegation_limits ... ok
+test skills::an_uninitialized_knowledge_base_lists_no_skills ... ok
+test memory::missing_files_read_as_empty_and_paths_are_returned ... ok
+test terminals::terminals_local_open_and_close_are_recorded ... ok
+test terminals::terminals_only_human_web_can_open ... ok
+test memory::there_is_no_write_endpoint ... ok
+test roles::unknown_role_is_stored_without_defaults ... ok
+test standby::draining_refuses_the_same_endpoints_and_plain_endpoints_keep_working ... ok
+test memory::existing_notes_and_a_projects_drawer_are_returned_in_full ... ok
+test terminals::terminals_cluster_requires_connection_and_work_dir ... ok
+test skills::mount_validates_the_node_and_the_skill_name_and_requires_admin ... ok
+test skills::put_skill_creates_and_updates_and_requires_admin ... ok
+test skills::mounting_a_skill_on_a_node_shows_up_in_mounted_by_including_children ... ok
+test terminals::terminals_without_tokens_config_is_forbidden ... ok
+test memory::unconfigured_memory_is_409_and_an_unknown_node_is_404 ... ok
+test unblocks::unblocks_api_rejects_unknown_and_duplicate_ids_and_creates_nothing ... ok
+test unblocks::unblocks_api_links_and_promotion_reopens_the_failed_task_once ... ok
+test unblocks::unblocks_cos_task_create_writes_the_link_in_the_audited_transaction ... ok
+
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.85s
+

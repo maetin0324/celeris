@@ -729,6 +729,12 @@ impl ClusterRuntime {
         self.cluster_job_polls.len()
     }
 
+    /// 試験用: 挿した poll のフック（dispatcher を作り直す試験が同じフックを挿し直す）。
+    #[cfg(test)]
+    pub(crate) fn job_poller(&self) -> Option<ClusterJobPoller> {
+        self.cluster_job_poller.clone()
+    }
+
     /// 試験用: 接続の状態の表。
     #[cfg(test)]
     pub(crate) fn connected_mut(&mut self) -> &mut HashMap<String, bool> {

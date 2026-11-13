@@ -4,7 +4,7 @@
 tasks: [01M62FCC7WC7EFEZRN56GFG5NA]
 ---
 
-- 状態: 採用（実装済み）
+- 状態: 採用（実装済み）。D2 の欄名と D3 は [2026-11-11-cos-fallback-timing](2026-11-11-cos-fallback-timing.md) で置き換えた（全種類に D1 を当て、欄は `fallback_after_secs`）
 - 関係: [2026-10-05-cos-chat-home](2026-10-05-cos-chat-home.md) D6「通知の一本化と退避」、
   [2026-10-06-cos-inbox-triage-fallback](2026-10-06-cos-inbox-triage-fallback.md) 決定 2（不在の条件）、
   [2026-10-07-cos-inbox-thread-conversation](2026-10-07-cos-inbox-thread-conversation.md) D1（停止した run の件の差し戻し）

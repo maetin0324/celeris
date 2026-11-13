@@ -17,6 +17,10 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
+/// ADR 2026-11-12-knowledge-usage-per-run: 入口で数える run ごとの KB の操作の台帳。
+pub mod usage;
+pub use usage::{KnowledgeOp, KnowledgeUse, KnowledgeUseStore};
+
 /// Phase K-1: 置き場のガード（`record` / MCP `knowledge_propose` / `apply_candidates` が共有する）。
 pub mod layout;
 pub use layout::{
@@ -46,9 +50,7 @@ pub const RETIRED_DIR: &str = "_retired";
 pub const SKILLS_DIR: &str = "skills";
 /// ADR-0047 D1: 派生物の索引。
 pub const INDEX_FILE: &str = "index.json";
-/// ADR-0047 D2: 前置きに出す索引の上限。
-pub const MAX_PREAMBLE_ITEMS: usize = 200;
-/// 索引に入れるページ数の上限（KB が壊れていても画面と前置きが詰まらないように）。
+/// 索引に入れるページ数の上限（KB が壊れていても索引を使う処理が詰まらないように）。
 pub const MAX_INDEX_ITEMS: usize = 5_000;
 /// 1 ページの本文の上限（これを超えるページは `too_large`。`task_ops::docs` と同じ）。
 pub const MAX_PAGE_BYTES: usize = 512 * 1024;
@@ -752,7 +754,7 @@ impl KnowledgeMount {
         }
     }
 
-    /// 前置きと GUI に出す 1 行の見出し。
+    /// 索引と GUI に出す 1 行の見出し。
     pub fn label(&self) -> String {
         match self.kind {
             MountKind::Kb => format!("kb:{}", self.scope.as_deref().unwrap_or("")),
@@ -817,7 +819,7 @@ impl FromStr for KnowledgeMount {
     }
 }
 
-/// その索引の 1 件がそのマウントに入るか（ADR-0047 D2。前置きの索引をマウントごとに並べるのに使う）。
+/// その索引の 1 件がそのマウントに入るか（ADR-0047 D2。実効マウントで索引を絞るのに使う）。
 ///
 /// `kb` は [`in_scope`]。`repo` / `dir` / `memory` の項目は、集める側（ディスパッチャ）が
 /// `scope` に [`KnowledgeMount::label`] と同じ文字列（`repo:<name>` / `dir:<path>` / `memory:<node>`）を
@@ -938,7 +940,7 @@ pub enum CandidateOp {
     Update,
     Merge,
     Retire,
-    /// Phase K-1: 既存のページの**末尾に節として足す**（既存の本文は残す。`_inbox/` で人が accept する）。
+    /// Phase K-1: 既存のページの**末尾に節として足す**（既存の本文は残す。`_inbox/` から日次整理の適用か人の accept で取り込む）。
     /// `record` / `knowledge_propose` の候補の置き場が既にあるとき、知識整理 run の `create` の置き場が
     /// 既にある（または同じ題名のページがある）ときに付く。
     Append,
@@ -1162,7 +1164,7 @@ pub fn maintenance_objective(input: &MaintenanceInput) -> String {
          - 既存ページが古い・誤っていると分かったら `merge`（本文をあなたが書き直した完全な版にする）か\n\
            `retire`（そのページはもう使えない）を使う\n\
          - 確信度は `confidence`（`high` / `medium` / `low`）で正直に書く。`high` の `create`/`update` は\n\
-           そのまま知識ベースに入る（他は人が確認してから入る）\n\
+           そのまま知識ベースに入る（他は受信箱に入り、日次整理の検証を通ると正本に入る）\n\
          - 置き場（Phase K-1。守らない候補は落ちる）: `user/<name>.md`、`environment/<分類>/<name>.md`\n\
            （`environment/` の直下は不可）、`projects/<slug>/<name>.md`（`scope = project:<slug>`。案件 ID は\n\
            パスにもラベルにも使わない）、`experience/YYYY/MM/<name>.md`。`scope` は置き場と一致させる\n\

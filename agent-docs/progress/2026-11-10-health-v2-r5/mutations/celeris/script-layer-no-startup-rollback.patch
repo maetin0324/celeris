@@ -1,0 +1,13 @@
+diff --git a/crates/celeris/src/daemon/script_layer.rs b/crates/celeris/src/daemon/script_layer.rs
+index 78c3c57a..e336851e 100644
+--- a/crates/celeris/src/daemon/script_layer.rs
++++ b/crates/celeris/src/daemon/script_layer.rs
+@@ -712,7 +712,7 @@ fn invalid_row(state_dir: &std::path::Path, sha256: &str) -> NewScriptGeneration
+ 
+ /// 起動時の戻しを書く。失敗は log に残して続ける（判定は Rust のまま、次の起動でやり直す）。
+ fn rollback_rows(db: &SqliteStore, rollbacks: &[(ScriptDomainModeRow, String)]) {
+-    for (row, reason) in rollbacks {
++    for (row, reason) in rollbacks.iter().take(0) {
+         let change = ScriptModeChange {
+             domain: row.domain.as_str().to_owned(),
+             to_mode: ScriptMode::Rust,

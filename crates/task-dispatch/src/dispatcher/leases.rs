@@ -162,8 +162,7 @@ impl Dispatcher {
             metrics: Some(task_core::RunMetrics {
                 wall_ms: wall_ms_since(since),
                 retries: task.attempts,
-                peak_context_tokens: None,
-                turns: None,
+                ..Default::default()
             }),
             end: Some(task_core::RunEnd::Cancelled),
         };
@@ -350,8 +349,7 @@ impl Dispatcher {
             let metrics = run_since.map(|since| task_core::RunMetrics {
                 wall_ms: wall_ms_since(since),
                 retries: task.attempts,
-                peak_context_tokens: None,
-                turns: None,
+                ..Default::default()
             });
             let infra_n = consecutive_infra_requeues(&self.store.events_for(task.id)?) + 1;
             // Phase F5-fix6: 孤児は lease 切れではなく「持ち主のデーモンが居なくなって中断された run」。

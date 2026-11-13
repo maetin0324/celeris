@@ -1,0 +1,4 @@
+# ADR 2026-11-11-cos-skill-sync D2: the CoS skills release.sh bundles (config/skills/<name>) and
+# promote.sh / rollback.sh deploy to the KB skills/<name>. One name per line.
+cos-operator
+cos-inbox-triage

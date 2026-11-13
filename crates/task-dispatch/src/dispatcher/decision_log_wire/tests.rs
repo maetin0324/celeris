@@ -35,6 +35,7 @@ fn finished(run: &str, end: RunEnd, wall_ms: u64, retries: u32, tokens: u64) -> 
             retries,
             peak_context_tokens: None,
             turns: None,
+            knowledge: None,
         }),
         end: Some(end),
     }
@@ -466,6 +467,7 @@ fn missing_usage_stays_null_and_is_distinct_from_zero() {
             retries: 0,
             peak_context_tokens: None,
             turns: None,
+            knowledge: None,
         }),
         end: Some(RunEnd::Completed),
     };

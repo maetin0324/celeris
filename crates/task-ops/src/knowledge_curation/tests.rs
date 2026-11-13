@@ -495,3 +495,103 @@ fn curation_cannot_add_or_drop_the_authored_mark() {
     assert_eq!(validated.kb.len(), 1);
     assert_eq!(validated.kb[0].path, "projects/demo/b.md");
 }
+
+/// ADR 2026-11-12-knowledge-usage-per-run D5: 同じ置き場に同じ話題の正本があれば、新規の提案は拒否し、
+/// 既存ページの更新（fix）と統合（merge）は通す。既存の試験は新規が通る場合しか見ていない。
+#[test]
+fn new_page_on_an_existing_topic_is_rejected_and_update_or_merge_passes() {
+    let (_dir, root) = fixture();
+    std::fs::write(
+        root.join("projects/demo/kb-usage.md"),
+        "# KB の読み取りを run ごとに数える\nold\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("projects/demo/disk-guard.md"),
+        "# disk guard の閾値\nold\n",
+    )
+    .unwrap();
+
+    let duplicate = item(
+        &root,
+        "projects/demo/kb-usage-count.md",
+        Action::New,
+        None,
+        Some("# KB の読み取りを run ごとに数える仕組み\nnew\n"),
+    );
+    let error = validate(&root, &plan(vec![duplicate.clone()])).unwrap_err();
+    assert!(error.contains("projects/demo/kb-usage.md"), "{error}");
+    assert!(error.contains("fix か merge"), "{error}");
+
+    // 既存ページの更新は通る。
+    let update = item(
+        &root,
+        "projects/demo/kb-usage.md",
+        Action::Fix,
+        None,
+        Some("# KB の読み取りを run ごとに数える\nold\nnew\n"),
+    );
+    assert_eq!(validate(&root, &plan(vec![update])).unwrap().kb.len(), 1);
+
+    // 既存ページがこの計画で別のページへ統合されて消えるなら、同じ話題の新規は通る。
+    let merge = item(
+        &root,
+        "projects/demo/kb-usage.md",
+        Action::Merge,
+        Some("projects/demo/a.md"),
+        Some("# A\nmerged\n"),
+    );
+    assert_eq!(
+        validate(&root, &plan(vec![merge, duplicate]))
+            .unwrap()
+            .kb
+            .len(),
+        2
+    );
+
+    // 話題の違う新規と、別の置き場（user/）の同じ題名は拒否しない。
+    let other = item(
+        &root,
+        "projects/demo/scheduler.md",
+        Action::New,
+        None,
+        Some("# dispatcher の tick の間隔\n"),
+    );
+    let elsewhere = item(
+        &root,
+        "user/kb-usage.md",
+        Action::New,
+        None,
+        Some("# KB の読み取りを run ごとに数える\n"),
+    );
+    assert_eq!(
+        validate(&root, &plan(vec![other, elsewhere]))
+            .unwrap()
+            .kb
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn title_tokens_use_ascii_words_and_wide_character_pairs() {
+    let tokens = title_tokens("KB の読取 v2 x");
+    let expected: BTreeSet<String> = ["kb", "v2", "の読", "読取"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    assert_eq!(tokens, expected);
+    assert_eq!(
+        topic_group("projects/demo/x.md").as_deref(),
+        Some("projects/demo")
+    );
+    assert_eq!(
+        topic_group("environment/clusters/x.md").as_deref(),
+        Some("environment/clusters")
+    );
+    assert_eq!(
+        topic_group("experience/2026/11/x.md").as_deref(),
+        Some("experience")
+    );
+    assert_eq!(topic_group("_inbox/x.md"), None);
+}

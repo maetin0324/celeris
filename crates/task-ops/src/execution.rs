@@ -41,6 +41,40 @@ pub fn describe_validation_errors(errors: &[PlanValidationError]) -> String {
         .join("; ")
 }
 
+/// D14 の検証（`validate_with`）と、/3 の unit の `task:<id>` 依存の検証（ADR 2026-11-11-unit-task-dependencies D4。
+/// 存在・自分の木の外・同じ案件・循環なし）。人・CoS の採用と replan が通る。planner の計画は dispatcher が同じ
+/// `unit_task_deps::plan_errors` で見る。
+fn validate_for_task(
+    store: &dyn TaskStore,
+    task: &task_core::Task,
+    spec: &ExecutionPlanSpec,
+    limits: ExecutionLimits,
+    done_work_units: &[(String, task_core::WorkUnitSpec)],
+    ctx: PlanContext,
+) -> Result<task_core::ValidatedPlan, OpsError> {
+    let validated = validate_with(spec, limits, done_work_units, ctx)
+        .map_err(|errors| OpsError::Validation(describe_validation_errors(&errors)))?;
+    describe_task_dependency_errors(&crate::unit_task_deps::plan_errors(
+        store,
+        task,
+        &validated.spec,
+    )?)
+    .map_or(Ok(validated), |m| Err(OpsError::Validation(m)))
+}
+
+/// ADR 2026-11-11-unit-task-dependencies D4: 拒んだ `task:` 依存の理由（無ければ `None`）。dispatcher の planner の検査も使う。
+pub fn describe_task_dependency_errors(
+    errors: &[task_core::TaskDependencyError],
+) -> Option<String> {
+    (!errors.is_empty()).then(|| {
+        errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ")
+    })
+}
+
 /// D14/D5: 計画を検証し、新規に採用する（`execution_plans` / `work_units` の行と
 /// `Event::ExecutionPlanned` を同じトランザクションで書く）。
 ///
@@ -91,8 +125,7 @@ pub fn adopt_plan_with_children(
         origin,
         depth: task_core::tree::depth_of(&task),
     };
-    let validated = validate_with(&spec, limits, &[], ctx)
-        .map_err(|errors| OpsError::Validation(describe_validation_errors(&errors)))?;
+    let validated = validate_for_task(store, &task, &spec, limits, &[], ctx)?;
 
     let plan_id = new_id();
     let created_at = format_rfc3339(now)?;
@@ -351,8 +384,7 @@ pub fn prepare_human_plan_adoption(
         origin: PlanOrigin::Human,
         depth: task_core::tree::depth_of(&task),
     };
-    let validated = validate_with(&spec, limits, &[], ctx)
-        .map_err(|errors| OpsError::Validation(describe_validation_errors(&errors)))?;
+    let validated = validate_for_task(store, &task, &spec, limits, &[], ctx)?;
     let mut adopt_limits = limits;
     let (validated, outcome) = crate::tree_plan::unit_gate_plan(
         store,
@@ -624,8 +656,7 @@ pub fn plan_replan(
         origin,
         depth: task_core::tree::depth_of(&task),
     };
-    let validated = validate_with(&spec, limits, &done_work_units, ctx)
-        .map_err(|errors| OpsError::Validation(describe_validation_errors(&errors)))?;
+    let validated = validate_for_task(store, &task, &spec, limits, &done_work_units, ctx)?;
 
     let internal = task_core::internal_view(&validated.spec).into_owned();
     // ADR 2026-10-22-stalled-auto-replan D7: 統合の失敗からの自動 replan に、done の unit の `checks` しか変えない
@@ -641,17 +672,11 @@ pub fn plan_replan(
         )));
     }
     let new_keys: BTreeSet<&str> = internal.work_units.iter().map(|w| w.key.as_str()).collect();
-    // `work_units.key` は `UNIQUE(task_id, key)`。過去（superseded を含む）に使われた key を
-    // 「新しい」key として再利用しようとしたら拒否する（D5）。ADR-0079 付記「R7-3」D3: 段階の統合 WU の key
-    // （前の版で消した段階の key を戻した）も同じく検証の理由にする（以前は sqlite の UNIQUE 制約のエラーだった）。
-    let mut retired = task_core::execution_plan::retired_key_errors(&validated.spec, &all_units);
-    // ADR-0079 付記「R7-12」D3: daemon の足した WU（配送 / 最終レビュー / 統合の repair WU）の key を書いた計画も拒む
-    // （新しい unit とみなすと、既存の done の行を ready に戻して repair を再実行してしまう）。
-    retired.extend(task_core::execution_plan::daemon_added_key_errors(
-        &active.spec,
-        &validated.spec,
-        &all_units,
-    ));
+    // `work_units.key` は `UNIQUE(task_id, key)`。過去（superseded を含む）に使われた key を「新しい」key として再利用する計画
+    // （D5・ADR-0079 付記「R7-3」D3）、daemon の足した WU の key を書いた計画（R7-12 D3）、始まった行の kind を task と leaf の
+    // 間で変える計画（ADR 2026-11-11-replan-unit-kind-change D2）を拒む（`task_core::execution_plan::replan_row_errors`）。
+    let retired =
+        task_core::execution_plan::replan_row_errors(&active.spec, &validated.spec, &all_units);
     if !retired.is_empty() {
         return Err(OpsError::Validation(describe_validation_errors(&retired)));
     }
@@ -766,9 +791,11 @@ pub fn plan_replan(
                 let mut row = existing.clone();
                 row.plan_id = new_plan_id.clone();
                 row.seq = seq as u32;
+                // ADR 2026-11-11-replan-unit-kind-change D1: 行の kind は新しい版の unit の kind（始まった行は上で拒んだ）。
+                row.kind = wu_spec.kind;
                 // ADR 2026-10-20-replan-dep-change-wu-rebase D1/D2: 同じ段の依存先が変わった葉は、次の
                 // prepare が旧 WU ブランチを退避して新しい起点から作り直す（branch / base / head を消す）。
-                let rebase = existing.kind != task_core::WorkUnitKind::Task
+                let rebase = row.kind != task_core::WorkUnitKind::Task
                     && task_core::same_phase_dependencies_changed(
                         &existing.depends_on,
                         existing.phase.as_deref(),

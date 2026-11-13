@@ -1,0 +1,1347 @@
+{
+ "schema": "celeris.health-v2-r5.contracts-mapping/1",
+ "fragment": "api-c",
+ "scope": "^crates/task-api/(tests/[s-z]|src/)",
+ "scan": {
+  "commit": "e9ef080c62043b38abecb99068d6cad4bb47dfd1",
+  "crates_tree": "a94cbae58bd70c2172084c0fde7bd40fe7726478",
+  "trees": {
+   "task-api": "6a18a4c653a70e85fb401a57f69138834084cd73",
+   "celeris": "1854b5ea716699d333a6192178b8994571187901",
+   "celerisctl": "eff59f0f09c329a66f000c8455c0b2eb7ce9d64f"
+  },
+  "adr_tree": "c4655b86806c0143de23f035c7cc26d682775b07",
+  "capability_map_blob": "ac77c1e4f12b5053c3619618bb3fa8cbd8365e80",
+  "architecture_map_blob": "f2430cd3b005b09f90683f3081ca277e4f621624",
+  "architecture_map_checker_blob": "999f10bc0c656a1a5a1eb211211fa702ad761ad2"
+ },
+ "extra_capabilities": [
+  {
+   "id": "knowledge-pages-skills",
+   "name": "知識pageとskillの管理・組織へのmount",
+   "owner_paths": [
+    "crates/task-api/src/knowledge.rs",
+    "crates/task-api/src/skills.rs"
+   ],
+   "reason": "B0のCoS監査と必須規則配送は、知識pageのpath境界とskill CRUD・継承mountの契約を表していない。"
+  },
+  {
+   "id": "repository-docs-artifacts",
+   "name": "repository文書と成果物の安全なfile配信",
+   "owner_paths": [
+    "crates/task-api/src/docs.rs",
+    "crates/task-api/src/files.rs",
+    "crates/task-api/src/tree.rs"
+   ],
+   "reason": "B0には文書path・成果物Range・MIME・repository内のfile解決を所有する能力が無い。"
+  },
+  {
+   "id": "api-secret-administration",
+   "name": "管理APIによる秘密fileの保管と非公開metadata",
+   "owner_paths": [
+    "crates/task-api/src/secrets.rs"
+   ],
+   "reason": "B0のcredential-broker-resumeはbrokerの注入と待ち再開で、管理用秘密fileのCRUD・0600・指紋の契約とは異なる。"
+  },
+  {
+   "id": "execution-metrics",
+   "name": "実行索引とeventに基づく使用量・continuation集計",
+   "owner_paths": [
+    "crates/task-api/src/stats.rs"
+   ],
+   "reason": "B0のrouting結果監査とcontinuation再開は、実行metricsのgroup集計と索引対event照合を独立に扱っていない。"
+  },
+  {
+   "id": "terminal-sessions",
+   "name": "人のWeb端末sessionとcluster接続条件・開閉監査",
+   "owner_paths": [
+    "crates/task-api/src/handlers/terminals.rs"
+   ],
+   "reason": "B0のweb-gatewayとHTTP認証だけでは端末sessionの開閉記録とcluster work dirの契約を表せない。"
+  }
+ ],
+ "files": {
+  "crates/task-api/src/accounts.rs": {
+   "capability": "accounts-quota",
+   "contract": "アカウント一覧は有効なディレクトリを名前順で返し、認証ファイルの有無をログイン状態に反映する。",
+   "b0_hint": [],
+   "tests": [
+    "tests::scan_accounts_finds_valid_dirs_sorted_with_login_state",
+    "tests::scan_accounts_missing_root_is_empty",
+    "tests::valid_account_id_rejects_path_traversal_and_dots"
+   ],
+   "fns": {
+    "tests::scan_accounts_missing_root_is_empty": {
+     "contract": "アカウントのルートが存在しなければ空の一覧を返す。"
+    },
+    "tests::valid_account_id_rejects_path_traversal_and_dots": {
+     "contract": "アカウントIDは空・隠し名・パス越境・区切り文字・65字以上を拒否する。"
+    }
+   }
+  },
+  "crates/task-api/src/browser.rs": {
+   "capability": "browser-policy-broker-approval",
+   "contract": "秘密文字列のDebugは値を伏せ、hex復号は大小文字を許し不正文字と奇数長を拒否する。",
+   "b0_hint": [
+    "browser-policy-broker-approval"
+   ],
+   "tests": [
+    "tests::secret_text_debug_redacts_and_hex_decodes"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/browser_control.rs": {
+   "capability": "browser-live-view-control",
+   "contract": "制御の競合・未収束・未検証の再開・過大なleaseは対応する固定HTTP problem codeになる。",
+   "b0_hint": [
+    "browser-live-view-control"
+   ],
+   "tests": [
+    "tests::control_errors_map_to_http",
+    "tests::routes_are_registered"
+   ],
+   "fns": {
+    "tests::routes_are_registered": {
+     "contract": "Browser制御のrouterは衝突せず構築できる。"
+    }
+   }
+  },
+  "crates/task-api/src/browser_identity/tests.rs": {
+   "capability": "browser-live-view-control",
+   "contract": "identity削除は墓標を残し、削除前のmetadataを使っても封緘を開けない。",
+   "b0_hint": [],
+   "tests": [
+    "deleted_leaves_tombstone_and_seal_cannot_be_opened",
+    "expired_identities_are_revoked_on_read",
+    "problem_body_is_fixed_code_only",
+    "public_output_and_debug_never_include_sealed_state_or_cookie",
+    "register_defaults_to_seven_days_and_lists_metadata_only",
+    "register_rejects_with_fixed_codes",
+    "restore_for_session_binds_to_live_isolated_session",
+    "restore_in_session_delivers_only_to_controller_after_all_checks",
+    "restore_is_allowed_only_under_verified_isolation",
+    "restore_is_isolation_required_on_trusted_local",
+    "revoked_old_generation_cannot_be_opened",
+    "sealed_state_cannot_cross_project_or_identity"
+   ],
+   "fns": {
+    "expired_identities_are_revoked_on_read": {
+     "contract": "identity一覧の読み取り時に期限切れを失効し、封緘を消して復元を拒否する。"
+    },
+    "problem_body_is_fixed_code_only": {
+     "contract": "identityの拒否problemは固定codeを返し秘密を含まない。"
+    },
+    "public_output_and_debug_never_include_sealed_state_or_cookie": {
+     "contract": "公開JSONとDebugにはcookie・暗号文・鍵ラベルを含めない。"
+    },
+    "register_defaults_to_seven_days_and_lists_metadata_only": {
+     "contract": "identity登録の既定期限は7日で、一覧と保存metadataに平文や封緘の詳細を公開しない。"
+    },
+    "register_rejects_with_fixed_codes": {
+     "contract": "未確認の要求・過大TTL・不正origin・他originの状態・重複IDは固定codeで拒否する。"
+    },
+    "restore_for_session_binds_to_live_isolated_session": {
+     "contract": "identity復元は同じsessionの生きた隔離証明とproject・origin・期限が一致するときだけ許す。"
+    },
+    "restore_in_session_delivers_only_to_controller_after_all_checks": {
+     "contract": "隔離とsessionとcontrollerの投入口を確認してから開封し、状態は戻り値でなくcontrollerだけへ渡す。"
+    },
+    "restore_is_allowed_only_under_verified_isolation": {
+     "contract": "identity復元は隔離証明があるときだけ許し、他project・他origin・期限切れを拒否する。"
+    },
+    "restore_is_isolation_required_on_trusted_local": {
+     "contract": "trusted localではidentity復元を403 isolation_requiredにし、他project・originは先に拒否する。"
+    },
+    "revoked_old_generation_cannot_be_opened": {
+     "contract": "失効で世代を進め封緘を消し、失効前の封緘は再活性化したmetadataでも開けない。"
+    },
+    "sealed_state_cannot_cross_project_or_identity": {
+     "contract": "封緘はidentityとprojectに暗号的に束縛され、外側のenvelopeを偽装しても越境できない。"
+    }
+   }
+  },
+  "crates/task-api/src/changes/tests.rs": {
+   "capability": "delivery-merge-candidate",
+   "contract": "同じtaskから同じPR本文を生成し、web URLがあればtaskへのリンクを含める。",
+   "b0_hint": [],
+   "tests": [
+    "the_pull_request_body_is_deterministic_and_links_back_to_celeris",
+    "the_pull_request_body_summarises_the_latest_report"
+   ],
+   "fns": {
+    "the_pull_request_body_summarises_the_latest_report": {
+     "contract": "PR本文には最新報告の見出しと規定行数までの本文を含め、残りはCelerisへ誘導する。"
+    }
+   }
+  },
+  "crates/task-api/src/chat/stream.rs": {
+   "capability": "cos-chat-threads-runs",
+   "contract": "chat streamのcursorは未指定なら0、queryとLast-Event-IDの両方があれば一致する値だけを受け入れる。",
+   "b0_hint": [],
+   "tests": [
+    "tests::chat_stream_cursor_prefers_agreeing_sources"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/console.rs": {
+   "capability": "http-api-auth-principals",
+   "contract": "Consoleのscopeは全体・project・nodeを受け入れ、不正形式は400にする。",
+   "b0_hint": [],
+   "tests": [
+    "tests::scopes_parse_all_project_and_node",
+    "tests::since_is_an_opaque_cursor"
+   ],
+   "fns": {
+    "tests::since_is_an_opaque_cursor": {
+     "contract": "Consoleのsinceは不透明cursorとして往復でき、空は未指定、不正形式は400になる。"
+    }
+   }
+  },
+  "crates/task-api/src/cos/basis/job_wait_extend.rs": {
+   "capability": "cos-inbox-triage-operations-audit",
+   "contract": "充足済みのjob待ちと質問より後に始まった待ちは延長判断の根拠にしない。",
+   "b0_hint": [],
+   "tests": [
+    "tests::timed_out_wait_is_none_for_a_satisfied_wait_or_a_wait_after_the_question",
+    "tests::timed_out_wait_reads_the_wait_before_the_question",
+    "tests::timeouts_count_only_waits_sharing_a_job"
+   ],
+   "fns": {
+    "tests::timed_out_wait_reads_the_wait_before_the_question": {
+     "contract": "job待ち延長の根拠には指定した質問より前の待ちのclusterとjobを使う。"
+    },
+    "tests::timeouts_count_only_waits_sharing_a_job": {
+     "contract": "job待ちのtimeout回数は現在の待ちと同じjobを共有する待ちだけを数える。"
+    }
+   }
+  },
+  "crates/task-api/src/cos/basis/plan_conforms.rs": {
+   "capability": "cos-inbox-triage-operations-audit",
+   "contract": "計画の最近の改訂数は時間窓内の版と時刻を解釈できない版を数える。",
+   "b0_hint": [],
+   "tests": [
+    "tests::recent_versions_counts_the_window_and_unparsable_times"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/cos/basis/review_rework.rs": {
+   "capability": "cos-inbox-triage-operations-audit",
+   "contract": "reviewerの不合格が無い失敗と再開済みの失敗は、再開を除外する判断で差し戻しの根拠にならない。",
+   "b0_hint": [],
+   "tests": [
+    "tests::rejection_is_none_without_a_reviewer_verdict_or_after_a_reopen",
+    "tests::rejection_reads_the_failing_reviewer_verdicts_of_the_last_run"
+   ],
+   "fns": {
+    "tests::rejection_reads_the_failing_reviewer_verdicts_of_the_last_run": {
+     "contract": "差し戻しの根拠は最後のrunの不合格reviewerとその指摘本文だけを集める。"
+    }
+   }
+  },
+  "crates/task-api/src/cos/operations.rs": {
+   "capability": "cos-inbox-triage-operations-audit",
+   "contract": "cos-operator skillの操作表はregistryで許可された操作の集合と一致する。",
+   "b0_hint": [
+    "cos-inbox-triage-operations-audit"
+   ],
+   "tests": [
+    "skill_table_tests::cos_operator_skill_table_matches_allowed"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/cos/ops/tests.rs": {
+   "capability": "cos-inbox-triage-operations-audit",
+   "contract": "許可されたregistryの各操作はmatch_operationの経路から到達できる。",
+   "b0_hint": [],
+   "tests": [
+    "cos_ops_every_allowed_row_is_reachable_through_match_operation",
+    "cos_ops_exclusions_match_all_named_parameters_and_report_adr_reason",
+    "cos_ops_registry_classifies_every_mutation_as_allowed_or_excluded",
+    "cos_ops_registry_matches_adr_domain_assignment_and_exclusions"
+   ],
+   "fns": {
+    "cos_ops_exclusions_match_all_named_parameters_and_report_adr_reason": {
+     "contract": "除外操作は各path parameterに対応してADRの理由を返し、空要素や余分な要素は一致しない。"
+    },
+    "cos_ops_registry_classifies_every_mutation_as_allowed_or_excluded": {
+     "contract": "変更系APIはすべてregistryで許可か除外に分類され、未分類を残さない。"
+    },
+    "cos_ops_registry_matches_adr_domain_assignment_and_exclusions": {
+     "contract": "registryの領域割当と除外理由はADRの操作表と一致する。"
+    }
+   }
+  },
+  "crates/task-api/src/cron_jobs.rs": {
+   "capability": "cron-jobs",
+   "contract": "cron名の重複と実行中の競合は409を返し、異なるproblem codeで区別する。",
+   "b0_hint": [],
+   "tests": [
+    "tests::store_in_use_maps_to_distinct_conflict_codes"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/docs.rs": {
+   "capability": "repository-docs-artifacts",
+   "contract": "文書pathの境界違反はdomainと同じ判定を保ち、403・422・400のproblemへ写す。",
+   "b0_hint": [],
+   "tests": [
+    "tests::page_paths_map_to_the_right_problem"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/files/tests.rs": {
+   "capability": "repository-docs-artifacts",
+   "contract": "成果物pathはworkspace相対だけを許し、絶対pathと親への越境を拒否する。",
+   "b0_hint": [],
+   "tests": [
+    "artifact_paths_that_are_not_workspace_relative_are_forbidden",
+    "content_disposition_escapes_filenames",
+    "content_type_table_is_closed",
+    "range_and_offset_planning_follows_the_spec",
+    "range_and_offset_together_are_a_bad_request",
+    "remote_task_artifacts_resolve_under_the_local_mirror",
+    "ulid_text_accepts_only_crockford_uppercase_26_chars"
+   ],
+   "fns": {
+    "content_disposition_escapes_filenames": {
+     "contract": "Content-Dispositionのfilenameは引用符などをescapeしてheaderを壊さない。"
+    },
+    "content_type_table_is_closed": {
+     "contract": "成果物のContent-Typeは閉じた対応表で決め、HTMLとSVGは実行可能な型で配信しない。"
+    },
+    "range_and_offset_planning_follows_the_spec": {
+     "contract": "Rangeとoffsetの読み出し計画は通常・suffix・範囲外・空fileの規定に従う。"
+    },
+    "range_and_offset_together_are_a_bad_request": {
+     "contract": "Rangeとoffsetの同時指定はbad_requestにする。"
+    },
+    "remote_task_artifacts_resolve_under_the_local_mirror": {
+     "contract": "remote成果物はローカルmirrorから解決し、存在とhash一致とrun IDを返す。"
+    },
+    "ulid_text_accepts_only_crockford_uppercase_26_chars": {
+     "contract": "ULIDはCrockford大文字の26文字だけを受け入れる。"
+    }
+   }
+  },
+  "crates/task-api/src/handlers/idempotency.rs": {
+   "capability": "task-lifecycle",
+   "contract": "冪等要求hashはJSONのkey順と冪等keyを無視し、要求pathと内容の違いを区別する。",
+   "b0_hint": [],
+   "tests": [
+    "tests::hash_ignores_object_order_and_key_but_includes_path_and_content"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/handlers/task_io.rs": {
+   "capability": "workunit-scheduling-stage-integration",
+   "contract": "検査logは最新の開始から終了までrunningを示し、末尾の切り出しでUTF-8を壊さず未作成fileは空にする。",
+   "b0_hint": [],
+   "tests": [
+    "check_log_tests::the_latest_started_check_is_running_until_its_finish_and_the_tail_is_utf8_safe"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/handlers/tests.rs": {
+   "capability": "http-api-auth-principals",
+   "contract": "scratch metricsはsnapshotが無ければ404、あれば公開schemaと同じkeyを持ちcacheとsccacheをnullで返す。",
+   "b0_hint": [
+    "credential-broker-resume",
+    "http-api-auth-principals"
+   ],
+   "tests": [
+    "metrics_scratch_matches_the_status_schema",
+    "replay_without_a_token_is_unauthorized",
+    "resolve_principal_distinguishes_config_tokens_and_mcp_clients",
+    "second_concurrent_replay_is_rejected_with_503",
+    "write_set_can_be_created_updated_and_read_through_task_api"
+   ],
+   "fns": {
+    "replay_without_a_token_is_unauthorized": {
+     "contract": "認証tokenの無いreplay要求は401になる。"
+    },
+    "resolve_principal_distinguishes_config_tokens_and_mcp_clients": {
+     "contract": "設定tokenとMCP client tokenからそれぞれの主体を決め、未知tokenと不正clientの要求を拒否する。"
+    },
+    "second_concurrent_replay_is_rejected_with_503": {
+     "contract": "replay実行中の二重要求は503 replay_in_progressになり、guard解放後は成功する。"
+    },
+    "write_set_can_be_created_updated_and_read_through_task_api": {
+     "contract": "taskのwrite setは作成時に指定でき、更新と消去の結果を詳細取得で読める。",
+     "capability": "task-lifecycle"
+    },
+    "metrics_scratch_matches_the_status_schema": {
+     "capability": "scratch-build-cache-disk-guard"
+    }
+   }
+  },
+  "crates/task-api/src/knowledge.rs": {
+   "capability": "knowledge-pages-skills",
+   "contract": "知識pageのpathは領域境界を保ち、越境・不正拡張子・空入力を対応するproblemへ写す。",
+   "b0_hint": [],
+   "tests": [
+    "tests::page_paths_map_to_the_right_problem"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/middleware.rs": {
+   "capability": "http-api-auth-principals",
+   "contract": "許可Hostにはloopback・listen先・追加Hostを正規化し重複なく含める。",
+   "b0_hint": [
+    "http-api-auth-principals"
+   ],
+   "tests": [
+    "tests::allowed_hosts_include_defaults_listen_host_and_extras",
+    "tests::constant_time_eq_compares_digests",
+    "tests::host_without_port_strips_ports_and_normalizes_case"
+   ],
+   "fns": {
+    "tests::constant_time_eq_compares_digests": {
+     "contract": "token digestの比較は同じdigestだけを一致として返す。"
+    },
+    "tests::host_without_port_strips_ports_and_normalizes_case": {
+     "contract": "Hostのportを除き大小文字を正規化し、不正port・括弧・空Hostを拒否する。"
+    }
+   }
+  },
+  "crates/task-api/src/principal.rs": {
+   "capability": "http-api-auth-principals",
+   "contract": "Callerは認証guardが挿入したPrincipalだけを採り、存在しない場合は拒否する。",
+   "b0_hint": [
+    "http-api-auth-principals"
+   ],
+   "tests": [
+    "tests::caller_requires_a_principal_from_the_guard",
+    "tests::token_debug_is_redacted",
+    "tests::token_principals_parse_and_render"
+   ],
+   "fns": {
+    "tests::token_debug_is_redacted": {
+     "contract": "tokenのDebugには主体を残すが秘密の値を出さない。"
+    },
+    "tests::token_principals_parse_and_render": {
+     "contract": "token主体の許可形式を解析してactorへ変換し、不正な形式を拒否する。"
+    }
+   }
+  },
+  "crates/task-api/src/problem.rs": {
+   "capability": "http-api-auth-principals",
+   "contract": "SQLiteのbusyは503 db_busy、その他の内部失敗はinternalにし、遷移拒否には状態とtriggerを付ける。",
+   "b0_hint": [],
+   "tests": [
+    "tests::busy_sqlite_errors_map_to_db_busy_and_others_to_internal",
+    "tests::validation_field_is_inferred_from_task_ops_messages"
+   ],
+   "fns": {
+    "tests::validation_field_is_inferred_from_task_ops_messages": {
+     "contract": "task-opsの入力検証messageから対象fieldを推定し、特定できない場合はfieldを付けない。"
+    }
+   }
+  },
+  "crates/task-api/src/query/tests.rs": {
+   "capability": "http-api-auth-principals",
+   "contract": "cluster job待ちeventはserdeのtype・event_type_name・公開語彙が一致し、語彙に重複が無い。",
+   "b0_hint": [],
+   "tests": [
+    "cluster_job_wait_event_types_match_their_serde_names",
+    "event_types_are_validated_against_the_event_vocabulary",
+    "health_review_event_types_match_their_serde_names",
+    "integration_repair_event_types_match_their_serde_names",
+    "integration_state_event_types_match_their_serde_names",
+    "limit_defaults_rejects_zero_and_clamps",
+    "lists_accept_repeated_and_comma_separated_values",
+    "review_target_event_types_match_their_serde_names",
+    "routing_feedback_event_types_match_their_serde_names",
+    "script_compare_event_types_match_their_serde_names",
+    "stranded_integration_status_serializes_for_api_clients",
+    "tree_event_types_match_their_serde_names",
+    "trusted_device_event_types_match_their_serde_names",
+    "unknown_and_repeated_keys_are_rejected",
+    "worker_policy_violation_event_type_matches_its_serde_name"
+   ],
+   "fns": {
+    "event_types_are_validated_against_the_event_vocabulary": {
+     "contract": "event type filterは公開event語彙にある名前だけを受け入れる。"
+    },
+    "health_review_event_types_match_their_serde_names": {
+     "contract": "health review eventはserdeのtype・event_type_name・公開語彙が一致する。",
+     "capability": "review-runs-final-review"
+    },
+    "integration_repair_event_types_match_their_serde_names": {
+     "contract": "integration repair eventはserdeのtype・event_type_name・公開語彙が一致する。",
+     "capability": "pre-review-sync-auto-resolve-integration-repair"
+    },
+    "integration_state_event_types_match_their_serde_names": {
+     "contract": "取り込み状態eventはserdeのtype・event_type_name・公開語彙が一致する。",
+     "capability": "delivery-merge-candidate"
+    },
+    "limit_defaults_rejects_zero_and_clamps": {
+     "contract": "limit未指定は既定値、0と負数は拒否、上限超過は上限値になる。"
+    },
+    "lists_accept_repeated_and_comma_separated_values": {
+     "contract": "一覧queryは繰り返しとカンマ区切りを連結し、不明なenum値を拒否する。"
+    },
+    "review_target_event_types_match_their_serde_names": {
+     "contract": "review対象eventはserdeのtype・event_type_name・公開語彙が一致する。",
+     "capability": "pre-review-sync-auto-resolve-integration-repair"
+    },
+    "routing_feedback_event_types_match_their_serde_names": {
+     "contract": "routing feedback eventはserdeのtype・event_type_name・公開語彙が一致する。",
+     "capability": "routing-audit-outcome"
+    },
+    "script_compare_event_types_match_their_serde_names": {
+     "contract": "script compare eventはserdeのtype・event_type_name・公開語彙が一致する。",
+     "capability": "script-runtime"
+    },
+    "stranded_integration_status_serializes_for_api_clients": {
+     "contract": "未取り込み状態はAPIでunintegratedとして直列化される。",
+     "capability": "delivery-merge-candidate"
+    },
+    "tree_event_types_match_their_serde_names": {
+     "contract": "再帰木eventはserdeのtype・event_type_name・公開語彙が一致する。",
+     "capability": "recursive-task-tree"
+    },
+    "trusted_device_event_types_match_their_serde_names": {
+     "contract": "信頼端末eventはserdeのtype・event_type_name・公開語彙が一致する。",
+     "capability": "browser-site-policy-trusted-devices"
+    },
+    "unknown_and_repeated_keys_are_rejected": {
+     "contract": "未知query keyと単一値keyの重複を拒否する。"
+    },
+    "worker_policy_violation_event_type_matches_its_serde_name": {
+     "contract": "worker policy違反のtypeとkindはserde名に一致し、typeを公開event語彙に含める。",
+     "capability": "worker-protocol-adapters"
+    },
+    "cluster_job_wait_event_types_match_their_serde_names": {
+     "capability": "task-lifecycle"
+    }
+   }
+  },
+  "crates/task-api/src/releases.rs": {
+   "capability": "release-selfdeploy-wiring",
+   "contract": "配備のCoS actorはthread種別から決まり、legacy threadと不明threadを拒否する。",
+   "b0_hint": [
+    "release-selfdeploy-wiring"
+   ],
+   "tests": [
+    "tests::cos_actor_follows_the_thread_kind_and_refuses_legacy_or_unreadable",
+    "tests::human_policy_ref_names_the_requested_release"
+   ],
+   "fns": {
+    "tests::human_policy_ref_names_the_requested_release": {
+     "contract": "人の配備監査のpolicy refには要求したrelease名を埋め込み、未展開placeholderを残さない。"
+    }
+   }
+  },
+  "crates/task-api/src/routing_eval.rs": {
+   "capability": "routing-eval",
+   "contract": "評価試行の取消は存在しなければ404、取消不能状態なら409として区別する。",
+   "b0_hint": [
+    "routing-eval"
+   ],
+   "tests": [
+    "tests::cancel_problem_splits_not_found_and_conflict",
+    "tests::empty_known_ids_reject_routes",
+    "tests::validate_accepts_a_known_route_and_keeps_the_check_command",
+    "tests::validate_rejects_duplicates_and_bad_timeout",
+    "tests::validate_rejects_empty_batch_unknown_route_and_missing_repo"
+   ],
+   "fns": {
+    "tests::empty_known_ids_reject_routes": {
+     "contract": "候補catalogが空ならsource・model・harnessを未知として拒否する。"
+    },
+    "tests::validate_accepts_a_known_route_and_keeps_the_check_command": {
+     "contract": "既知routeの試行はcheck commandとmanifestを保持し、timeout未指定は既定値を使う。"
+    },
+    "tests::validate_rejects_duplicates_and_bad_timeout": {
+     "contract": "評価試行は重複した組と不正timeoutを拒否する。"
+    },
+    "tests::validate_rejects_empty_batch_unknown_route_and_missing_repo": {
+     "contract": "空の評価batch・未知route・repository未指定を入力不正として拒否する。"
+    }
+   }
+  },
+  "crates/task-api/src/schema.rs": {
+   "capability": "http-api-auth-principals",
+   "contract": "commit済みAPI schemaは型から生成したschemaと一致する。",
+   "b0_hint": [],
+   "tests": [
+    "tests::committed_schema_matches_generated",
+    "tests::schema_uses_defs_once_for_shared_types"
+   ],
+   "fns": {
+    "tests::schema_uses_defs_once_for_shared_types": {
+     "contract": "共有型はschemaのdefsへ一度だけ定義し、dynamicRefを含めない。"
+    }
+   }
+  },
+  "crates/task-api/src/script_exhaustive.rs": {
+   "capability": "script-runtime",
+   "contract": "網羅試験の起動はruntime確認より先に主体を検査し、人とoperator以外を403、許可主体のruntime未接続を503にする。",
+   "b0_hint": [],
+   "tests": [
+    "tests::exhaustive_start_actor_check_precedes_runtime"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/src/secrets_tests.rs": {
+   "capability": "api-secret-administration",
+   "contract": "秘密fileの削除は実fileを消し、同じIDの再削除は失敗する。",
+   "b0_hint": [],
+   "tests": [
+    "delete_secret_file_removes_the_file",
+    "fingerprint_is_first_8_hex_chars_of_sha256_and_does_not_reveal_the_value",
+    "list_secret_files_missing_dir_is_empty_not_an_error",
+    "list_secret_files_skips_hidden_and_invalid_names",
+    "secret_ids_reject_path_traversal_and_empty",
+    "trim_secret_value_drops_trailing_newlines_only",
+    "write_then_list_round_trips_with_0600_and_trims_trailing_newline"
+   ],
+   "fns": {
+    "fingerprint_is_first_8_hex_chars_of_sha256_and_does_not_reveal_the_value": {
+     "contract": "秘密の指紋はSHA256の先頭8桁で決定的に生成し、秘密の値そのものを返さない。"
+    },
+    "list_secret_files_missing_dir_is_empty_not_an_error": {
+     "contract": "秘密の保存dirが存在しなければ一覧は空を返す。"
+    },
+    "list_secret_files_skips_hidden_and_invalid_names": {
+     "contract": "秘密一覧は隠しfileと不正なIDを除外する。"
+    },
+    "secret_ids_reject_path_traversal_and_empty": {
+     "contract": "秘密IDは空・隠し名・親への越境・path区切り・65字以上を拒否する。"
+    },
+    "trim_secret_value_drops_trailing_newlines_only": {
+     "contract": "秘密値の整形は末尾のCR/LFだけを除き、前後の空白は保持する。"
+    },
+    "write_then_list_round_trips_with_0600_and_trims_trailing_newline": {
+     "contract": "秘密fileは0600で保存して末尾改行を除き、上書き後の一覧に新しい指紋だけを返して一時fileを残さない。"
+    }
+   }
+  },
+  "crates/task-api/src/sse.rs": {
+   "capability": "http-api-auth-principals",
+   "contract": "SSE frameはevent名・任意のID・1行のJSON dataを規定の改行区切りで送る。",
+   "b0_hint": [],
+   "tests": [
+    "tests::frames_carry_event_name_optional_id_and_single_line_data",
+    "tests::start_position_resumes_resets_or_starts_now"
+   ],
+   "fns": {
+    "tests::start_position_resumes_resets_or_starts_now": {
+     "contract": "SSEはcursor未指定なら現在位置、範囲内なら続き、古すぎるか未来なら現在位置とreset理由を返す。"
+    }
+   }
+  },
+  "crates/task-api/src/stats/execution_metrics_comparison_tests.rs": {
+   "capability": "execution-metrics",
+   "contract": "continuation集計はtaskとWUのrunを含み、cache read込みのtoken・再開時間・重複読込を各groupへ反映する。",
+   "b0_hint": [],
+   "tests": [
+    "continuation_metrics_api_groups_task_and_work_unit_runs",
+    "indexed_summary_matches_event_reference_for_all_groups_and_since",
+    "indexed_summary_timing_2000_tasks_20_events"
+   ],
+   "fns": {
+    "indexed_summary_matches_event_reference_for_all_groups_and_since": {
+     "contract": "索引による実行集計は全groupとsince有無でeventを参照する集計に一致する。"
+    },
+    "indexed_summary_timing_2000_tasks_20_events": {
+     "contract": "2000 task各20 eventの索引集計はevent参照集計と一致し、両者の処理時間を表示する。"
+    }
+   }
+  },
+  "crates/task-api/src/stats/tests.rs": {
+   "capability": "accounts-quota",
+   "contract": "アカウント統計はadapterとaccountで帰属させ、accountの無いrunを集計しない。",
+   "b0_hint": [],
+   "tests": [
+    "account_stats_are_attributed_by_account_and_ignore_pool_less_runs",
+    "account_stats_error_only_counts_the_error_outcome_kind",
+    "outcome_prefixes_are_classified"
+   ],
+   "fns": {
+    "account_stats_error_only_counts_the_error_outcome_kind": {
+     "contract": "アカウント統計のerror数はError outcomeだけを数え、質問・再queue・lease切れを含めない。"
+    },
+    "outcome_prefixes_are_classified": {
+     "contract": "run outcomeは終了接頭辞とRunEndから完了・質問・再queue・中断・継続・errorへ分類する。"
+    }
+   }
+  },
+  "crates/task-api/src/timeline.rs": {
+   "capability": "task-lifecycle",
+   "contract": "timelineの時刻順は小数秒を解釈して決め、解釈できない時刻を先頭にする。",
+   "b0_hint": [],
+   "tests": [
+    "tests::fractional_seconds_do_not_reverse_the_order",
+    "tests::items_are_sorted_by_time_and_ties_keep_their_order",
+    "tests::profile_timeline_against_a_db_copy"
+   ],
+   "fns": {
+    "tests::items_are_sorted_by_time_and_ties_keep_their_order": {
+     "contract": "timelineは時刻昇順に並び、同時刻の項目は元の順序を保つ。"
+    },
+    "tests::profile_timeline_against_a_db_copy": {
+     "contract": "DBの写しとtaskを明示したときだけtimelineの読み出し・文書追加・整列とJSON化を計測する。"
+    }
+   }
+  },
+  "crates/task-api/src/tree.rs": {
+   "capability": "repository-docs-artifacts",
+   "contract": "repository外へ向くsymlinkはpath_forbiddenにし、内部fileだけを解決する。",
+   "b0_hint": [],
+   "tests": [
+    "tests::a_symlink_that_escapes_the_repo_root_is_forbidden",
+    "tests::relative_paths_reject_escapes"
+   ],
+   "fns": {
+    "tests::relative_paths_reject_escapes": {
+     "contract": "repository相対pathは空と通常の相対pathを許し、絶対pathと親への越境を拒否する。"
+    }
+   }
+  },
+  "crates/task-api/tests/saved_credentials.rs": {
+   "capability": "browser-policy-broker-approval",
+   "contract": "保存credentialの管理はownerの署名証明を必須にし、本人のmetadataだけをno-storeで返し、削除時はvaultの値も消す。",
+   "b0_hint": [],
+   "tests": [
+    "saved_credential_management_is_attested_owner_scoped_and_removes_the_vault_entry"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/script_domains.rs": {
+   "capability": "script-runtime",
+   "contract": "lane_rulesの網羅合格証拠があると昇格に100件を要し、99件は拒否する。他領域の閾値は変えない。",
+   "b0_hint": [],
+   "tests": [
+    "canary_promote_with_exhaustive_100",
+    "canary_promote_without_exhaustive_422",
+    "script_behavior_change_approve_is_human_only_and_revoke_fails_closed",
+    "script_cos_read_only_gets_pass_with_run_credential",
+    "script_domain_guard_clear_human_only",
+    "script_domain_guard_clear_refused_for_cos",
+    "script_domain_list_starts_rust_without_generation",
+    "script_domain_mode_canary_requires_guard_ready",
+    "script_domain_mode_canary_requires_human",
+    "script_domain_mode_refused_while_halted",
+    "script_domain_mode_rollback_by_anyone",
+    "script_domain_mode_rust_compare_rust_round_trip",
+    "script_domain_mode_through_cos_operations",
+    "script_domain_mode_ts_requires_same_generation_canary",
+    "script_domain_rejects_unknown_domain_bad_generation_and_bad_body",
+    "script_domain_stale_version_is_409_without_change"
+   ],
+   "fns": {
+    "canary_promote_without_exhaustive_422": {
+     "contract": "網羅証拠が欠如・不合格・実行中・中断ならlane_rulesの昇格にも1000件を要する。"
+    },
+    "script_behavior_change_approve_is_human_only_and_revoke_fails_closed": {
+     "contract": "挙動変更の承認は人だけに許し、hash不一致と未対応領域を拒否し、取消済みの承認は使えない。"
+    },
+    "script_cos_read_only_gets_pass_with_run_credential": {
+     "contract": "CoSのrun credentialはscriptの領域とgeneration一覧を直接読み取れる。"
+    },
+    "script_domain_guard_clear_human_only": {
+     "contract": "guard解除は人だけに許し、未停止時はcleared=false、入力不正は400にする。"
+    },
+    "script_domain_guard_clear_refused_for_cos": {
+     "contract": "CoSは直接要求でもoperations経由でもguardを解除できず、拒否の監査を残す。"
+    },
+    "script_domain_list_starts_rust_without_generation": {
+     "contract": "領域一覧の初期modeはrust・versionは0で、generationとguard停止が無い。"
+    },
+    "script_domain_mode_canary_requires_guard_ready": {
+     "contract": "canaryへの昇格には前段のcompareと十分なguard計数および適正な比率指定を要する。"
+    },
+    "script_domain_mode_canary_requires_human": {
+     "contract": "canary昇格・比率変更・ts昇格は人だけに許し、operatorはgeneration検証より先に403で拒否する。"
+    },
+    "script_domain_mode_refused_while_halted": {
+     "contract": "guard停止中はrust以外へのmode変更を409にし、rustへ戻す要求は許す。"
+    },
+    "script_domain_mode_rollback_by_anyone": {
+     "contract": "canaryとtsからの戻しはoperator・CoS・daemonを含む認証済みの主体に許す。"
+    },
+    "script_domain_mode_rust_compare_rust_round_trip": {
+     "contract": "rustからcompareへ切り替えると版とeventを更新し、同じ指定は冪等、rustへ戻しても他領域を変えない。"
+    },
+    "script_domain_mode_through_cos_operations": {
+     "contract": "CoSのmode変更は監査付きoperations経由だけを許し、canaryとtsへの昇格は拒否して監査を残す。"
+    },
+    "script_domain_mode_ts_requires_same_generation_canary": {
+     "contract": "ts昇格には同じgenerationのcanaryを要し、compareからの直行と版の競合を拒否する。"
+    },
+    "script_domain_rejects_unknown_domain_bad_generation_and_bad_body": {
+     "contract": "不明領域・modeとgenerationの不整合・未登録hash・不正本文を拒否する。"
+    },
+    "script_domain_stale_version_is_409_without_change": {
+     "contract": "領域の古い版と未来の版を409にし、状態とeventを変えない。"
+    }
+   }
+  },
+  "crates/task-api/tests/script_exhaustive.rs": {
+   "capability": "script-runtime",
+   "contract": "網羅証拠一覧はMCPも読め、証拠の有無と合格状態を示し、実行中は合格証拠に数えない。",
+   "b0_hint": [],
+   "tests": [
+    "exhaustive_list_shows_standing",
+    "exhaustive_start_refused_for_cos",
+    "exhaustive_start_rejects_each_conflict",
+    "exhaustive_start_requires_human_or_operator"
+   ],
+   "fns": {
+    "exhaustive_start_refused_for_cos": {
+     "contract": "CoSは網羅試験を起動できず、直接要求と除外operationの拒否を監査に残す。"
+    },
+    "exhaustive_start_rejects_each_conflict": {
+     "contract": "不明領域・modeやgenerationの不整合・未対応領域・不正本文・guard停止・実行中の競合は起動せず固定codeを返す。"
+    },
+    "exhaustive_start_requires_human_or_operator": {
+     "contract": "網羅試験のHTTP起動は人とoperatorに許し、MCPを拒否し、runtime未接続なら503で表を変えない。"
+    }
+   }
+  },
+  "crates/task-api/tests/script_generations.rs": {
+   "capability": "script-runtime",
+   "contract": "generation上限超過は409、同じhashの登録は冪等、退役で枠が空けば追加登録できる。",
+   "b0_hint": [
+    "script-runtime"
+   ],
+   "tests": [
+    "script_domain_generation_limit_409",
+    "script_domain_generation_register_503_when_unwired",
+    "script_domain_generation_register_invalid_422",
+    "script_domain_generation_register_not_deployed_409_is_retryable",
+    "script_domain_generation_retire_active_409_and_unknown_404",
+    "script_domain_generation_through_cos_operations"
+   ],
+   "fns": {
+    "script_domain_generation_register_503_when_unwired": {
+     "contract": "runtime未接続のgeneration登録と退役は503にし、storeを読む一覧は200で返す。"
+    },
+    "script_domain_generation_register_invalid_422": {
+     "contract": "generationの本文とbundle検証の不備は422にし、検証失敗をinvalidとして記録して再登録を拒否する。"
+    },
+    "script_domain_generation_register_not_deployed_409_is_retryable": {
+     "contract": "未配備bundleの登録は409で表とeventを変えず、同じhashの再試行と他hashの登録を妨げない。"
+    },
+    "script_domain_generation_retire_active_409_and_unknown_404": {
+     "contract": "使用中generationの退役は409、不明generationは404になる。"
+    },
+    "script_domain_generation_through_cos_operations": {
+     "contract": "CoSのgeneration登録と退役はoperationsの監査付き経路で実行する。"
+    }
+   }
+  },
+  "crates/task-api/tests/secrets_admin.rs": {
+   "capability": "api-secret-administration",
+   "contract": "秘密置き場が未設定なら一覧・保存・削除は409 secrets_unavailableになる。",
+   "b0_hint": [],
+   "tests": [
+    "all_three_endpoints_are_409_when_secrets_is_not_configured",
+    "all_three_endpoints_require_a_token_even_on_loopback",
+    "all_three_endpoints_require_a_token_when_token_file_is_not_configured",
+    "delete_removes_the_file_and_second_delete_is_404",
+    "get_lists_items_with_used_by_and_never_the_value",
+    "put_and_delete_reject_invalid_ids_as_not_found",
+    "put_creates_a_0600_file_and_never_returns_the_value",
+    "put_does_not_reflect_the_value_in_a_parse_error",
+    "put_records_a_secret_stored_event_without_the_value",
+    "put_rejects_empty_or_whitespace_only_values",
+    "put_replaces_an_existing_secret",
+    "secret_values_never_appear_in_config_or_secrets_responses"
+   ],
+   "fns": {
+    "all_three_endpoints_require_a_token_even_on_loopback": {
+     "contract": "loopback接続でも秘密の一覧・保存・削除はtoken無しでは401になる。"
+    },
+    "all_three_endpoints_require_a_token_when_token_file_is_not_configured": {
+     "contract": "token file未設定でも秘密の一覧・保存・削除は匿名要求を401にする。"
+    },
+    "delete_removes_the_file_and_second_delete_is_404": {
+     "contract": "秘密削除は実fileを消し、同じIDの2回目の削除は404になる。"
+    },
+    "get_lists_items_with_used_by_and_never_the_value": {
+     "contract": "秘密一覧は参照元と未設定のIDを含むmetadataを返し、値を含めない。"
+    },
+    "put_and_delete_reject_invalid_ids_as_not_found": {
+     "contract": "秘密のPUTとDELETEで不正IDを指定すると越境せず404になる。"
+    },
+    "put_creates_a_0600_file_and_never_returns_the_value": {
+     "contract": "秘密PUTは0600のfileを作成して一時fileを残さず、応答には値を返さない。"
+    },
+    "put_does_not_reflect_the_value_in_a_parse_error": {
+     "contract": "型の違う秘密PUT本文は400になり、parse errorに秘密のliteralを反射しない。"
+    },
+    "put_records_a_secret_stored_event_without_the_value": {
+     "contract": "秘密PUTは値を含まないidと指紋の保存eventを残し、同じPUTの再送はeventを増やさない。"
+    },
+    "put_rejects_empty_or_whitespace_only_values": {
+     "contract": "空または空白だけの秘密値は422で拒否する。"
+    },
+    "put_replaces_an_existing_secret": {
+     "contract": "既存IDへの秘密PUTは値を置き換える。"
+    },
+    "secret_values_never_appear_in_config_or_secrets_responses": {
+     "contract": "config取得と秘密管理の応答には秘密の実値を含めない。"
+    }
+   }
+  },
+  "crates/task-api/tests/single_human_window.rs": {
+   "capability": "cos-inbox-triage-operations-audit",
+   "contract": "案件からの判断依頼は統括CoSへ一度だけ提示し、人の回答を案件CoSへ監査付きで中継し、案件側だけが元の依頼を解決する。",
+   "b0_hint": [],
+   "tests": [
+    "project_escalation_is_answered_through_the_general_cos_and_relayed_to_the_project_cos"
+   ],
+   "fns": {}
+  },
+  "crates/task-api/tests/skills.rs": {
+   "capability": "knowledge-pages-skills",
+   "contract": "未初期化KBのskill一覧は何も作らずinitialized=falseと空一覧を返す。",
+   "b0_hint": [],
+   "tests": [
+    "an_uninitialized_knowledge_base_lists_no_skills",
+    "mount_validates_the_node_and_the_skill_name_and_requires_admin",
+    "mounting_a_skill_on_a_node_shows_up_in_mounted_by_including_children",
+    "put_skill_creates_and_updates_and_requires_admin"
+   ],
+   "fns": {
+    "mount_validates_the_node_and_the_skill_name_and_requires_admin": {
+     "contract": "skill mountは既知nodeと有効skill名を要し、mountとunmountの匿名要求を401にする。"
+    },
+    "mounting_a_skill_on_a_node_shows_up_in_mounted_by_including_children": {
+     "contract": "親nodeのskill mountは子にも継承され、再mountは冪等、使用中の削除は409、解除後は削除できる。"
+    },
+    "put_skill_creates_and_updates_and_requires_admin": {
+     "contract": "skill PUTは認証を要し作成と更新を一覧と詳細へ反映し、名前不一致は422、不明skillの取得は404になる。"
+    }
+   }
+  },
+  "crates/task-api/tests/standby.rs": {
+   "capability": "release-selfdeploy-wiring",
+   "contract": "drainingでもdispatcher管理APIを503にし、通常の読み取りとdispatcher不要の管理APIは動作する。",
+   "b0_hint": [],
+   "tests": [
+    "draining_refuses_the_same_endpoints_and_plain_endpoints_keep_working",
+    "health_carries_the_release_the_mode_and_the_role",
+    "standby_refuses_the_dispatcher_admin_endpoints_with_503_and_retry_after"
+   ],
+   "fns": {
+    "health_carries_the_release_the_mode_and_the_role": {
+     "contract": "healthにはrelease・verifyを含むmode・standbyを含むroleとAPI版とschema版を返す。"
+    },
+    "standby_refuses_the_dispatcher_admin_endpoints_with_503_and_retry_after": {
+     "contract": "standbyのdispatcher管理APIは503 standbyとRetry-After: 2を返し、activeに戻ると要求を受け付ける。"
+    }
+   }
+  },
+  "crates/task-api/tests/stream.rs": {
+   "capability": "http-api-auth-principals",
+   "contract": "SSE cursorが10000件より古いか未来ならresetを送り、10000件ちょうどの遅れは再開する。",
+   "b0_hint": [],
+   "tests": [
+    "cursors_far_behind_or_ahead_get_a_reset",
+    "disconnecting_stops_polling",
+    "heartbeat_and_task_filter",
+    "hello_then_created_event_arrives_within_two_seconds",
+    "last_event_id_resumes_without_gaps_or_duplicates",
+    "notification_change_emits_a_reload_hint",
+    "serve_binds_the_configured_address_and_reports_bind_errors",
+    "serve_over_loopback_tcp_streams_events_and_closes_on_shutdown",
+    "the_seventeenth_stream_is_rejected_with_503"
+   ],
+   "fns": {
+    "disconnecting_stops_polling": {
+     "contract": "SSE切断後はその接続のpollingを停止する。"
+    },
+    "heartbeat_and_task_filter": {
+     "contract": "SSEはheartbeatを送り、task filterに一致するeventだけを配信する。"
+    },
+    "hello_then_created_event_arrives_within_two_seconds": {
+     "contract": "SSE接続はhelloを送り、その後に作成したtaskのeventを2秒以内に配信する。"
+    },
+    "last_event_id_resumes_without_gaps_or_duplicates": {
+     "contract": "Last-Event-IDからSSEを再開すると切断中のeventを欠落・重複なく配信し、queryのafter_idよりheaderを優先する。"
+    },
+    "notification_change_emits_a_reload_hint": {
+     "contract": "通知の変更はSSEで再読込hintを配信する。"
+    },
+    "serve_binds_the_configured_address_and_reports_bind_errors": {
+     "contract": "HTTP serverは指定addressへbindし、bind失敗を呼出元へ返す。"
+    },
+    "serve_over_loopback_tcp_streams_events_and_closes_on_shutdown": {
+     "contract": "loopback TCPのHTTP serverはSSEでeventを配信し、shutdownで接続を閉じる。"
+    },
+    "the_seventeenth_stream_is_rejected_with_503": {
+     "contract": "SSE同時接続は16本まで許し、17本目を503で拒否する。"
+    }
+   }
+  },
+  "crates/task-api/tests/task_idempotency.rs": {
+   "capability": "task-lifecycle",
+   "contract": "campaign再送の新しい冪等keyも要求内容へ束縛し、同じkeyの内容変更を409にする。",
+   "b0_hint": [
+    "task-lifecycle"
+   ],
+   "tests": [
+    "campaign_resend_binds_new_key_to_request_content",
+    "cos_operations_reject_a_body_idempotency_key",
+    "create_resend_with_the_same_key_makes_one_task_and_other_content_is_409",
+    "failed_creation_does_not_reserve_key_and_old_field_is_rejected",
+    "retry_resend_with_the_same_key_makes_one_copy_and_other_content_is_409",
+    "simultaneous_create_and_retry_return_the_same_task"
+   ],
+   "fns": {
+    "cos_operations_reject_a_body_idempotency_key": {
+     "contract": "CoS operationsは内側の要求本文の冪等keyを拒否し、操作自身のkeyだけで再送をまとめ、拒否時はtaskを増やさない。"
+    },
+    "create_resend_with_the_same_key_makes_one_task_and_other_content_is_409": {
+     "contract": "同じkeyと内容のtask作成は1件に収束し、内容変更は409、key無しと別keyは別taskを作る。"
+    },
+    "failed_creation_does_not_reserve_key_and_old_field_is_rejected": {
+     "contract": "失敗したtask作成はkeyを予約せず、廃止した本文fieldの指定を拒否する。"
+    },
+    "retry_resend_with_the_same_key_makes_one_copy_and_other_content_is_409": {
+     "contract": "同じkeyのretryは1つの複製へ収束し、内容と対象pathの変更および作成keyの流用は409にする。"
+    },
+    "simultaneous_create_and_retry_return_the_same_task": {
+     "contract": "同時に届く同じkeyのtask作成とretryはそれぞれ同じtaskを返し重複作成しない。"
+    }
+   }
+  },
+  "crates/task-api/tests/task_list_with.rs": {
+   "capability": "task-lifecycle",
+   "contract": "既定のtask一覧はgit processを起動しない。",
+   "b0_hint": [],
+   "tests": [
+    "default_list_spawns_no_git",
+    "unknown_with_value_is_400",
+    "with_integrations_counts_do_not_scale_with_rows"
+   ],
+   "fns": {
+    "unknown_with_value_is_400": {
+     "contract": "task一覧の未知のwith値は400になる。"
+    },
+    "with_integrations_counts_do_not_scale_with_rows": {
+     "contract": "with=integrationsのgit実行とstore読込回数はtask行数で増えず、repository単位で解決する。"
+    }
+   }
+  },
+  "crates/task-api/tests/task_management.rs": {
+   "capability": "task-lifecycle",
+   "contract": "taskコメントは空本文を422、匿名を401、不明taskを404にする。",
+   "b0_hint": [
+    "task-lifecycle"
+   ],
+   "tests": [
+    "comment_validation_and_auth",
+    "list_tasks_filters_by_label_category_tier_priority_and_comment_text",
+    "patch_task_attaches_a_project_to_a_project_less_task_once",
+    "patch_task_changes_only_the_written_fields_and_records_an_edited_event",
+    "patch_task_validates_and_refuses_terminal_tasks",
+    "patch_task_workspace_switches_to_local_and_refuses_running_and_unknown_clusters",
+    "posting_a_human_comment_follows_the_effect_table",
+    "reopen_restarts_done_and_failed_tasks_only",
+    "the_timeline_lists_the_integrations_of_this_task",
+    "the_timeline_lists_the_releases_that_contain_this_tasks_commits",
+    "the_timeline_merges_events_comments_and_delegations_in_time_order",
+    "the_timeline_shows_the_knowledge_maintenance_run"
+   ],
+   "fns": {
+    "list_tasks_filters_by_label_category_tier_priority_and_comment_text": {
+     "contract": "task一覧はlabelのAND・category・assignee・milestone・tier・priority・コメントを含む検索語で絞り、不明値は400にする。"
+    },
+    "patch_task_attaches_a_project_to_a_project_less_task_once": {
+     "contract": "案件の無い未実行taskだけに案件とrepositoryを一度だけ紐付けられる。"
+    },
+    "patch_task_changes_only_the_written_fields_and_records_an_edited_event": {
+     "contract": "task PATCHは明示したfieldだけを更新してEdited eventを残し、priorityはラベルと数値の両方を受け入れる。"
+    },
+    "patch_task_validates_and_refuses_terminal_tasks": {
+     "contract": "task PATCHは終端・状態不一致・不正入力・匿名を拒否し、runningの通常field更新では状態を変えない。"
+    },
+    "patch_task_workspace_switches_to_local_and_refuses_running_and_unknown_clusters": {
+     "contract": "workspace PATCHはlocalへの切替を反映し、running中の切替と不明clusterを拒否する。"
+    },
+    "posting_a_human_comment_follows_the_effect_table": {
+     "contract": "人のコメントは状態別の効果表に従い、running runだけを終了記録し、blockedでは回答としてreadyへ戻す。"
+    },
+    "reopen_restarts_done_and_failed_tasks_only": {
+     "contract": "reopenはdoneとfailedだけをreadyへ戻してattemptsを0にし、cancelledと非終端を409にする。"
+    },
+    "the_timeline_lists_the_integrations_of_this_task": {
+     "contract": "task timelineはそのtaskの取り込みを作成時刻順に示し、後の更新時刻で順序を変えない。"
+    },
+    "the_timeline_lists_the_releases_that_contain_this_tasks_commits": {
+     "contract": "task timelineはworktreeのcommitを含むreleaseを表示し、worktree目印が無いときは表示しない。"
+    },
+    "the_timeline_merges_events_comments_and_delegations_in_time_order": {
+     "contract": "task timelineはevent・コメント・委譲を時刻順に統合し、子への委譲を1項目にまとめる。"
+    },
+    "the_timeline_shows_the_knowledge_maintenance_run": {
+     "contract": "task timelineはそのtaskの終端で起きた知識整理runと抽出経路を表示し、該当run無しでは表示しない。"
+    }
+   }
+  },
+  "crates/task-api/tests/task_tree.rs": {
+   "capability": "recursive-task-tree",
+   "contract": "深さ別の実行集計はtask・reviewerを含むrun・quotaを深さごとに数え、他のgroupにはrollupを出さない。",
+   "b0_hint": [
+    "recursive-task-tree"
+   ],
+   "tests": [
+    "execution_metrics_group_by_depth_counts_reviewer_runs_per_depth",
+    "legacy_task_is_a_single_node_tree",
+    "project_detail_sums_the_root_task_subtrees",
+    "task_tree_limits_count_a_model_with_a_configured_budget_rate",
+    "task_tree_limits_report_usd_with_cache_priced_and_unknown_runs",
+    "task_tree_rolls_up_a_three_level_tree_by_hand"
+   ],
+   "fns": {
+    "legacy_task_is_a_single_node_tree": {
+     "contract": "木のmetadataを持たないtaskも自分だけの1節点として木APIで取得できる。"
+    },
+    "project_detail_sums_the_root_task_subtrees": {
+     "contract": "案件詳細のroot集計は対話taskを除くrootを数え、子孫の使用量とrunをrootへ合算する。"
+    },
+    "task_tree_limits_count_a_model_with_a_configured_budget_rate": {
+     "contract": "設定された予算単価のmodelはcacheを含む費用を換算し、費用不明runに数えない。",
+     "capability": "budget-pricing"
+    },
+    "task_tree_limits_report_usd_with_cache_priced_and_unknown_runs": {
+     "contract": "木のlimitsはcache readとwriteを単価で換算し、未知modelの費用を0でなく不明件数として示す。",
+     "capability": "budget-pricing"
+    },
+    "task_tree_rolls_up_a_three_level_tree_by_hand": {
+     "contract": "3階層のtask木は各節点の値と子孫のrollupを手計算と同じ値で返す。"
+    }
+   }
+  },
+  "crates/task-api/tests/task_wait_api.rs": {
+   "capability": "task-lifecycle",
+   "contract": "task詳細とexecution詳細は一覧と同じ待ち理由を返し、廃止したawaiting_childrenを出さない。",
+   "b0_hint": [],
+   "tests": [
+    "task_wait_api_detail_carries_the_same_waits",
+    "task_wait_api_list_reports_children_depends_on_paused_and_snapshot_capacity",
+    "task_wait_api_run_state_splits_runnable_and_waiting",
+    "task_wait_api_stale_snapshot_adds_no_memory_waits",
+    "task_wait_api_tree_child_nodes_carry_waits",
+    "task_wait_api_tree_shows_unit_waiting_keys_and_stage_order"
+   ],
+   "fns": {
+    "task_wait_api_list_reports_children_depends_on_paused_and_snapshot_capacity": {
+     "contract": "task一覧は子・依存・一時停止・有効snapshotのcapacity待ちとrunnableを状態に従って示す。"
+    },
+    "task_wait_api_run_state_splits_runnable_and_waiting": {
+     "contract": "run_stateはrunnableとwaitingを分離し、cursor paginationとtotalを保ち、不正指定を400にする。"
+    },
+    "task_wait_api_stale_snapshot_adds_no_memory_waits": {
+     "contract": "古いsnapshotからmemory待ちを足さず、永続状態が実行可能ならrunnable=trueを返す。"
+    },
+    "task_wait_api_tree_child_nodes_carry_waits": {
+     "contract": "木APIは子task節点にも子待ちと依存待ちの理由を表示する。"
+    },
+    "task_wait_api_tree_shows_unit_waiting_keys_and_stage_order": {
+     "contract": "木APIはunitの依存待ちkeyと段順を示し、別段待ちと実行中unitのあるtaskの待ちを区別する。",
+     "capability": "workunit-scheduling-stage-integration"
+    }
+   }
+  },
+  "crates/task-api/tests/terminals.rs": {
+   "capability": "terminal-sessions",
+   "contract": "cluster端末の起動は接続中のclusterと設定済みwork dirを要し、不足は409、不明clusterは404、不正targetは400になる。",
+   "b0_hint": [],
+   "tests": [
+    "terminals_cluster_requires_connection_and_work_dir",
+    "terminals_local_open_and_close_are_recorded",
+    "terminals_only_human_web_can_open",
+    "terminals_without_tokens_config_is_forbidden"
+   ],
+   "fns": {
+    "terminals_local_open_and_close_are_recorded": {
+     "contract": "local端末はlogin shellとhomeを返し、開閉をactor・client・終了理由と時間付きで記録する。"
+    },
+    "terminals_only_human_web_can_open": {
+     "contract": "端末を開けるのはhuman:webだけで、他主体は403、token無しは401になり拒否時は開いた記録を残さない。"
+    },
+    "terminals_without_tokens_config_is_forbidden": {
+     "contract": "token未設定構成のhuman:localも端末を開けず403 terminal_forbiddenになる。"
+    }
+   }
+  },
+  "crates/task-api/tests/tree_adopt.rs": {
+   "capability": "recursive-task-tree",
+   "contract": "tree adoptは終端taskだけを正しいunitとstageへ結び、拒否は書き込まず、成功後はunitをdoneにして再採用を拒否する。",
+   "b0_hint": [
+    "recursive-task-tree"
+   ],
+   "tests": [
+    "adopt_endpoint_happy_path_and_refusals",
+    "adopt_endpoint_requires_the_tree_and_a_v3_plan",
+    "human_plan_adopt_refusals_write_nothing",
+    "human_put_v3_goes_through_the_tree_path_without_plan_gate",
+    "human_put_v3_is_422_while_the_tree_is_disabled",
+    "the_r5b_runbook_plans_are_accepted_as_written"
+   ],
+   "fns": {
+    "adopt_endpoint_requires_the_tree_and_a_v3_plan": {
+     "contract": "tree adoptは木の有効化とv3計画を必須にし、不足は422にする。"
+    },
+    "human_plan_adopt_refusals_write_nothing": {
+     "contract": "人のadopt計画は他案件・自身や祖先・leafへの採用などを計画全体で拒否し、何も書き込まない。"
+    },
+    "human_put_v3_goes_through_the_tree_path_without_plan_gate": {
+     "contract": "人のv3計画はplannerと同じ木の採用経路を通り、plan gateを作らずunit gateと段障壁と子上限を守る。"
+    },
+    "human_put_v3_is_422_while_the_tree_is_disabled": {
+     "contract": "木が無効なとき人のv3計画を422で拒否し、unitを作らない。"
+    },
+    "the_r5b_runbook_plans_are_accepted_as_written": {
+     "contract": "runbookのbrowserとBenchFSの計画fixtureはそのまま受理され、採用数と決定数と親子関係が一致しreplayが整合する。"
+    }
+   }
+  },
+  "crates/task-api/tests/trusted_devices.rs": {
+   "capability": "browser-site-policy-trusted-devices",
+   "contract": "信頼端末は最終使用から90日の境界で期限切れになり、拒否eventを残す。",
+   "b0_hint": [
+    "browser-site-policy-trusted-devices"
+   ],
+   "tests": [
+    "trusted_device_expired_with_fake_clock_is_rejected",
+    "trusted_device_invalid_assertion_is_rejected",
+    "trusted_device_limit_is_five_active_devices",
+    "trusted_device_list_has_no_hashes",
+    "trusted_device_old_secret_replay_revokes_device",
+    "trusted_device_readonly_verify_does_not_change_db",
+    "trusted_device_register_verify_rotates_secret",
+    "trusted_device_revoked_device_is_rejected",
+    "trusted_device_wrong_secret_is_rejected"
+   ],
+   "fns": {
+    "trusted_device_invalid_assertion_is_rejected": {
+     "contract": "署名鍵・payload・用途・owner・期限・本文との束縛が不正な端末assertionは拒否し、未認証と区別する。"
+    },
+    "trusted_device_limit_is_five_active_devices": {
+     "contract": "信頼端末の有効登録上限は5台で、失効により枠が空けば新規登録できる。"
+    },
+    "trusted_device_list_has_no_hashes": {
+     "contract": "信頼端末一覧とeventはmetadataだけを含み、現在と以前の秘密hashを返さない。"
+    },
+    "trusted_device_old_secret_replay_revokes_device": {
+     "contract": "回転前の秘密の再提示は拒否して端末をreuseで失効し、現在の秘密でも使えなくする。"
+    },
+    "trusted_device_readonly_verify_does_not_change_db": {
+     "contract": "readonly端末検証は正誤どちらでもDBとeventを変えず、next_hashとの併用を拒否する。"
+    },
+    "trusted_device_register_verify_rotates_secret": {
+     "contract": "信頼端末検証は秘密を回転して使用時刻と期限を延長し、新しい秘密で次の検証ができる。"
+    },
+    "trusted_device_revoked_device_is_rejected": {
+     "contract": "ownerによる端末失効は冪等でactor付きeventを残し、以後は通常とreadonlyの両検証を拒否する。"
+    },
+    "trusted_device_wrong_secret_is_rejected": {
+     "contract": "秘密不一致と不明端末は同じ応答で拒否し、秘密不一致だけでは端末を失効しない。"
+    }
+   }
+  },
+  "crates/task-api/tests/unblocks.rs": {
+   "capability": "task-lifecycle",
+   "contract": "修正taskのunblocks linkは作成後の昇格でfailed taskを一度だけ再開し、次の昇格では再開を重ねない。",
+   "b0_hint": [],
+   "tests": [
+    "unblocks_api_links_and_promotion_reopens_the_failed_task_once",
+    "unblocks_api_rejects_unknown_and_duplicate_ids_and_creates_nothing",
+    "unblocks_cos_task_create_writes_the_link_in_the_audited_transaction"
+   ],
+   "fns": {
+    "unblocks_api_rejects_unknown_and_duplicate_ids_and_creates_nothing": {
+     "contract": "不明または重複したunblocks IDを422で拒否し、taskとlinkを作らない。"
+    },
+    "unblocks_cos_task_create_writes_the_link_in_the_audited_transaction": {
+     "contract": "CoS経由のtask作成はunblocks linkと操作監査を同じtransactionで記録する。"
+    }
+   }
+  }
+ },
+ "groups": [
+  {
+   "id": "dup-a320f5c95af4",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/task-api/tests/script_domains.rs::mode_path",
+    "crates/task-api/tests/script_exhaustive.rs::mode_path"
+   ],
+   "names": [
+    "mode_path"
+   ],
+   "users": [
+    "crates/task-api/tests/script_domains.rs::script_domain_mode_rollback_by_anyone",
+    "crates/task-api/tests/script_domains.rs::script_domain_mode_through_cos_operations"
+   ],
+   "adopt": false,
+   "reason": "同じURLを返す1行のformatだけで、共通化によるsetupやbuildの削減効果が小さいため局所helperを保つ。",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-f48e0db4164e",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/task-api/src/cos/basis/job_wait_extend.rs::tests::seq",
+    "crates/task-api/src/cos/basis/review_rework.rs::tests::seq"
+   ],
+   "names": [
+    "seq"
+   ],
+   "users": [
+    "crates/task-api/src/cos/basis/job_wait_extend.rs::tests::timed_out_wait_is_none_for_a_satisfied_wait_or_a_wait_after_the_question",
+    "crates/task-api/src/cos/basis/job_wait_extend.rs::tests::timed_out_wait_reads_the_wait_before_the_question",
+    "crates/task-api/src/cos/basis/job_wait_extend.rs::tests::timeouts_count_only_waits_sharing_a_job",
+    "crates/task-api/src/cos/basis/review_rework.rs::tests::rejection_is_none_without_a_reviewer_verdict_or_after_a_reopen",
+    "crates/task-api/src/cos/basis/review_rework.rs::tests::rejection_reads_the_failing_reviewer_verdicts_of_the_last_run"
+   ],
+   "adopt": true,
+   "reason": "両helperは同じEvent列へ0始まりの通し番号を付けるfixtureで、待ち延長と差し戻しの入力生成を重複実装している。",
+   "keep_tests": [
+    "crates/task-api/src/cos/basis/job_wait_extend.rs::tests::timed_out_wait_is_none_for_a_satisfied_wait_or_a_wait_after_the_question",
+    "crates/task-api/src/cos/basis/job_wait_extend.rs::tests::timed_out_wait_reads_the_wait_before_the_question",
+    "crates/task-api/src/cos/basis/job_wait_extend.rs::tests::timeouts_count_only_waits_sharing_a_job",
+    "crates/task-api/src/cos/basis/review_rework.rs::tests::rejection_is_none_without_a_reviewer_verdict_or_after_a_reopen",
+    "crates/task-api/src/cos/basis/review_rework.rs::tests::rejection_reads_the_failing_reviewer_verdicts_of_the_last_run"
+   ],
+   "action": "merge",
+   "plan": "cos/basis配下のcfg(test)共通helperへ連番付与だけを移し、待ち延長とreview差し戻しの全5試験と固有event列は残す。",
+   "mutation_target": "crates/task-api/src/cos/basis/job_wait_extend.rs"
+  },
+  {
+   "id": "dup-fd90bf6dec0e",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/task-api/tests/script_exhaustive.rs::sha_of",
+    "crates/task-api/tests/script_generations.rs::sha"
+   ],
+   "names": [
+    "sha",
+    "sha_of"
+   ],
+   "users": [
+    "crates/task-api/tests/script_generations.rs::script_domain_generation_limit_409",
+    "crates/task-api/tests/script_generations.rs::script_domain_generation_register_503_when_unwired",
+    "crates/task-api/tests/script_generations.rs::script_domain_generation_register_invalid_422",
+    "crates/task-api/tests/script_generations.rs::script_domain_generation_register_not_deployed_409_is_retryable",
+    "crates/task-api/tests/script_generations.rs::script_domain_generation_retire_active_409_and_unknown_404",
+    "crates/task-api/tests/script_generations.rs::script_domain_generation_through_cos_operations"
+   ],
+   "adopt": false,
+   "reason": "64文字の疑似hashを作る1行の標準iterator式だけで、generation登録fixtureそのものは異なり共通化の効果が小さい。",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  }
+ ]
+}

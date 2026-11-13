@@ -297,6 +297,11 @@ fn classify(verdicts: &[Verdict]) -> Option<RepairDecision> {
 
 /// 受け入れ条件 0: report を書かない・壊れた report・方針を読めない candidate は、reviewer が合格を書いても
 /// 承認の子を作って待つ（題は candidate の SHA の鍵、本文に不明の理由）。
+///
+/// `[review]` の無い（absent）repo の report の故障は、`[review]` のある repo と同じ理由の文になる。ADR
+/// 2026-11-11-health-generic-review-input の R1・R4 で absent の repo も同じ材料の構築を通り、absent 専用の
+/// 省略の理由（旧い「policy の状態を決められない」）は撤去したので、期待する文を report の故障の文に替えた。
+/// 守る不変条件（I8・D6.4 の fail closed）は変えていない。
 #[test]
 fn health_review_policy_unknown_candidates_wait_for_a_human() {
     let cases = [
@@ -311,7 +316,7 @@ fn health_review_policy_unknown_candidates_wait_for_a_human() {
         ),
         (
             Some((Policy::Absent, Report::Missing)),
-            "policy の状態を決められない",
+            "repo_health.py が report を書かなかった",
         ),
     ];
     for (checker, why) in cases {
@@ -406,7 +411,12 @@ fn health_review_policy_unknown_rebuilt_report_decides() {
 }
 
 /// 受け入れ条件 1: `[review]` の無い（absent）が検査器のある repo で policy の file を変えた candidate は、
-/// reviewer に health 文脈を渡さないまま、report の `policy.changed` で承認を求める。
+/// reviewer に health の材料を渡し、report の `policy.changed` で承認を求める。
+///
+/// 守る不変条件: absent の repo でも、candidate が policy を変えたことは材料（`HealthReviewInputBuilt` の
+/// `input.policy.changed = true`）に残り、関門は人の承認なしに合格させない（I8）。旧い試験は「absent では
+/// `HealthReviewInputBuilt` を作らない」を固定していたが、ADR 2026-11-11-health-generic-review-input の R1・R4 で
+/// その省略を撤去したので、材料が 1 件あり `policy.changed` を運ぶことを確かめる形に替えた。承認の子の assert は残す。
 #[test]
 fn health_review_policy_unknown_absent_policy_change_needs_approval() {
     let c = case(Some((Policy::Absent, Report::Valid(true))), POLICY_FILE);
@@ -418,13 +428,24 @@ fn health_review_policy_unknown_absent_policy_change_needs_approval() {
         "{}",
         child.objective
     );
+    let built: Vec<task_worker::protocol::HealthRepoInput> = c
+        .store
+        .events_for(c.task.id)
+        .unwrap()
+        .into_iter()
+        .filter_map(|(_, e)| match e {
+            Event::HealthReviewInputBuilt { input, .. } => {
+                Some(serde_json::from_value(input).unwrap())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(built.len(), 1, "an absent policy still builds the material");
+    assert!(built[0].policy.changed, "{:?}", built[0].policy);
     assert!(
-        !c.store
-            .events_for(c.task.id)
-            .unwrap()
-            .iter()
-            .any(|(_, e)| matches!(e, Event::HealthReviewInputBuilt { .. })),
-        "the reviewer gets no health input for an absent policy"
+        built[0].owner_rows.is_empty() && built[0].invariants.is_empty(),
+        "an absent policy has no owner map nor invariants: {:?}",
+        built[0]
     );
 }
 

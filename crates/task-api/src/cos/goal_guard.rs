@@ -93,6 +93,12 @@ fn class_refusal(class: ActionClass) -> (&'static str, &'static str) {
             IRREVERSIBLE_REQUIRES_HUMAN,
             "this operation cannot be undone",
         ),
+        // No operation is classified as a routine answer (`job_wait_extend` grants are checked by the
+        // basis of the inbox answer, ADR 2026-11-11-cos-standing-context D4); keep the safe refusal.
+        ActionClass::JobWaitExtend => (
+            IRREVERSIBLE_REQUIRES_HUMAN,
+            "a routine-answer grant does not cover this operation",
+        ),
     }
 }
 
@@ -189,6 +195,24 @@ pub(crate) fn authority_gate(
             class.as_str()
         ),
     ))
+}
+
+/// After an operation: settle the authority pass (A7) and audit the use of a standing grant the
+/// routine basis cites (ADR 2026-11-11-cos-standing-context D4).
+pub(crate) fn settle_after(
+    store: &SqliteStore,
+    audit: &OperationAudit,
+    pass: &Option<AuthorityPass>,
+    routine: &Option<super::basis::DelegatedBasis>,
+    wait: &Option<super::inbox::OperationWait>,
+    result: &Result<CosOperation, ApiProblem>,
+) {
+    if let Some(pass) = pass {
+        settle(store, audit, pass, result);
+    }
+    if let (Ok(op), Some(routine), Some(wait)) = (result, routine, wait) {
+        super::basis::grant_used(store, routine, &wait.target, audit, op);
+    }
 }
 
 /// 実行の結果を監査に記録する。`pending` のまま（外部の効果の結果が不明）なら `unknown` を残す（fail closed）。

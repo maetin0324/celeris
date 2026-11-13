@@ -509,6 +509,13 @@ fn change_rules_design_review_prompt_shows_the_plan_and_the_design_shape() {
         );
     }
     let viewpoint = section_after(section, "### 判定の観点");
+    // ADR 2026-11-11-unit-task-dependencies D7: DB と git で決まる事実を人に見張らせる決定を指摘する観点。
+    assert!(
+        viewpoint
+            .contains("別の task の完了・取り込み（DB と git で決まる事実）を人に見張らせていたら")
+            && viewpoint.contains("`task:<task id>`"),
+        "{viewpoint}"
+    );
     for kind in HealthFindingKind::ALL {
         assert!(
             viewpoint.contains(&format!("`{}`", kind.as_str())),

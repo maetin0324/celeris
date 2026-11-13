@@ -1170,6 +1170,7 @@ host = "sirius"
     cfg.validate().unwrap();
     assert_eq!(cfg.clusters[0].job_wait.poll_secs, 300);
     assert_eq!(cfg.clusters[0].job_wait.max_wait_secs, 86_400);
+    assert_eq!(cfg.clusters[0].job_wait.queued_wake_secs, 3600);
     let cfg: Config = toml::from_str(&base(
         "job_wait = { poll_secs = 600, max_wait_secs = 43200 }",
     ))
@@ -1178,13 +1179,20 @@ host = "sirius"
     let spec = cfg.cluster_specs();
     assert_eq!(
         spec["sirius"].job_wait,
-        task_core::cluster_job::ClusterJobWaitLimits {
-            poll_secs: 600,
-            max_wait_secs: 43_200
-        }
+        task_core::cluster_job::ClusterJobWaitLimits::new(600, 43_200)
+    );
+    let custom = toml::from_str::<Config>(&base("job_wait = { queued_wake_secs = 90 }")).unwrap();
+    custom.validate().unwrap();
+    assert_eq!(
+        custom.cluster_specs()["sirius"].job_wait.queued_wake_secs,
+        90
     );
     for (bad, needle) in [
         ("job_wait = { poll_secs = 5 }", "poll_secs must be >= 30"),
+        (
+            "job_wait = { queued_wake_secs = 0 }",
+            "queued_wake_secs must be > 0",
+        ),
         (
             "job_wait = { poll_secs = 600, max_wait_secs = 60 }",
             "must be >= job_wait.poll_secs",
@@ -1794,7 +1802,7 @@ fn backoff_and_reviewer_settings_map_to_dispatch_config() {
     assert_eq!(d.retry_backoff_base, Duration::from_secs(10));
     assert_eq!(d.retry_backoff_max, Duration::from_secs(300));
     assert_eq!(d.max_requeues, 5);
-    assert_eq!(d.min_free_disk_mb, 5120);
+    assert_eq!(d.min_free_disk_pct, 10.0);
     assert_eq!(
         d.reviewer_hint,
         WorkerHint {
@@ -1928,9 +1936,19 @@ fn scratch_can_be_disabled() {
 }
 
 #[test]
-fn dispatch_min_free_disk_mb_can_be_configured() {
-    let cfg: Config = toml::from_str("[dispatch]\nmin_free_disk_mb = 2048\n").unwrap();
-    assert_eq!(cfg.dispatch_config().min_free_disk_mb, 2048);
+fn dispatch_min_free_disk_pct_can_be_configured_and_the_mib_field_is_rejected() {
+    let cfg: Config = toml::from_str("[dispatch]\nmin_free_disk_pct = 15.0\n").unwrap();
+    assert_eq!(cfg.dispatch_config().min_free_disk_pct, 15.0);
+    // ADR 2026-11-11-disk-aware-dispatch D2: 旧い固定 MiB の欄は読み込みエラー。
+    let err = toml::from_str::<Config>("[dispatch]\nmin_free_disk_mb = 2048\n")
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    assert!(err.contains("min_free_disk_mb"), "{err}");
+    let out_of_range: Config = toml::from_str("[dispatch]\nmin_free_disk_pct = 100.0\n").unwrap();
+    assert!(out_of_range.validate().is_err());
+    let bad_ratio: Config = toml::from_str("[scratch]\nforecast_disk_ratio = 0.0\n").unwrap();
+    assert!(bad_ratio.validate().is_err());
 }
 
 /// ADR-0010 D9: Reviewer run を満たせるプロバイダが無い設定はエラー。未知キーも拒否。

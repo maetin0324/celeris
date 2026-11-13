@@ -323,10 +323,14 @@ fn design_viewpoint_lines() -> String {
          path class と保護する不変条件に対して足りているかを見る。宣言の無い新しい状態・分岐・fallback・外への口を\
          計画が足すなら、それも finding にする。\n\
          - `root_cause` を `owner` で直す計画かを見る。owner 地図があれば、計画の write path の owner 行を作業ツリーで\
-         引いて確かめる。\n\n",
+         引いて確かめる。\n\
+         - 計画の `decisions` の問いが「〜が終わったら答えてください」「〜が main に入ったら答えてください」のように、\
+         別の task の完了・取り込み（DB と git で決まる事実）を人に見張らせていたら `{dual}` の finding に\
+         する。待ちは unit の `depends_on` の `task:<task id>` で書ける。人の決定は人にしか決められない選択だけに置く。\n\n",
         generic = generic_heading(),
         count = HealthFindingKind::ALL.len(),
         kinds = quoted(HealthFindingKind::ALL.iter().copied()),
+        dual = HealthFindingKind::DualSourceOfTruth.as_str(),
     )
 }
 

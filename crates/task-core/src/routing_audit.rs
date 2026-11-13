@@ -312,8 +312,7 @@ mod tests {
                 metrics: Some(RunMetrics {
                     wall_ms: 1234,
                     retries: 1,
-                    peak_context_tokens: None,
-                    turns: None,
+                    ..Default::default()
                 }),
                 end: None,
             },

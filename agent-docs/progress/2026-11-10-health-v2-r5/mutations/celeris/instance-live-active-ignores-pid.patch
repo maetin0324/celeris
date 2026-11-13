@@ -1,0 +1,13 @@
+diff --git a/crates/celeris/src/instance.rs b/crates/celeris/src/instance.rs
+index aa918523..96d11c20 100644
+--- a/crates/celeris/src/instance.rs
++++ b/crates/celeris/src/instance.rs
+@@ -90,7 +90,7 @@ pub fn pid_alive(pid: u32) -> bool {
+ /// プロセスがまだ生きている行。heartbeat が古くても、プロセスが生きていれば手放すまで active とみなす
+ /// （古いと見て引き継ぐと、生きたままの旧 instance と二重に dispatch する）。
+ pub fn is_live_active(row: &DaemonInstance, alive: &dyn Fn(u32) -> bool) -> bool {
+-    row.role == InstanceRole::Active && row.drained_at.is_none() && alive(row.pid)
++    row.role == InstanceRole::Active && row.drained_at.is_none()
+ }
+ 
+ /// `self_id` 以外に生きている `active` が 1 つも無いか（active になってよい条件）。store の

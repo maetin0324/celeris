@@ -4,44 +4,14 @@
 //! （`roadmap.jsonl`）に書く。
 mod common;
 
-use common::cos_ops::{OPS, op_body};
+use common::cos_ops::{OPS, cos_run_bearer, op_body};
 use common::*;
 use serde_json::{Value, json};
 use task_api::{ApiToken, Principal};
-use task_core::chat::{ChatPostMessageRequest, ChatSendMode};
 use task_core::{ProjectId, TaskId, TaskStore, Trigger};
-use time::{Duration, OffsetDateTime};
+use time::OffsetDateTime;
 
 const OP_TOKEN: &str = "operator-token-a5";
-
-fn bearer_for(env: &TestEnv, thread_id: &str, key: &str) -> String {
-    let now = OffsetDateTime::now_utc();
-    env.store
-        .chat_message_post(
-            thread_id,
-            &ChatPostMessageRequest {
-                client_message_id: format!("message-{key}"),
-                text: "input".into(),
-                attachment_ids: vec![],
-                reply_to_id: None,
-                mode: ChatSendMode::Queue,
-                resume_queue: false,
-            },
-            now,
-        )
-        .expect("message");
-    let run = format!("run-{key}");
-    env.store
-        .chat_run_claim_next(thread_id, &run, &json!({}), now)
-        .expect("claim")
-        .expect("run");
-    let bearer = task_api::cos::issue_run_bearer(&env.store, thread_id, &run, Duration::hours(1))
-        .expect("issue");
-    env.store
-        .chat_run_record_policy(&run, "1", "test")
-        .expect("policy");
-    format!("Bearer {bearer}")
-}
 
 struct Fx {
     env: TestEnv,
@@ -292,7 +262,7 @@ async fn project_roadmap_human_approval_advances_and_supersedes() {
 #[tokio::test]
 async fn project_roadmap_cos_and_operator_cannot_decide() {
     let f = fx();
-    let bearer = bearer_for(&f.env, &f.thread, "rm");
+    let bearer = cos_run_bearer(&f.env, &f.thread, "rm");
     let headers = [("authorization", bearer.as_str())];
     // CoS は /cos/operations で提案できる（版は進まない）。
     let prop = send(

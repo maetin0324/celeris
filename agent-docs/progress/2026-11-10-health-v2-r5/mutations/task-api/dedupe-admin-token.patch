@@ -1,0 +1,25 @@
+diff --git a/crates/task-api/src/middleware.rs b/crates/task-api/src/middleware.rs
+index b201acd0..a21d2cff 100644
+--- a/crates/task-api/src/middleware.rs
++++ b/crates/task-api/src/middleware.rs
+@@ -230,11 +230,7 @@ pub(crate) fn resolve_principal(
+             });
+         }
+     }
+-    if inner.auth_enabled() {
+-        Err(ApiProblem::unauthorized())
+-    } else {
+-        Ok(Principal::Unauthenticated)
+-    }
++    Ok(Principal::Unauthenticated)
+ }
+ 
+ /// ADR-0017 D1: 管理系エンドポイントは token 未設定（loopback 限定構成）でも認証をスキップしない
+@@ -248,7 +244,6 @@ pub(crate) fn require_admin(state: &ApiState, headers: &HeaderMap) -> Result<(),
+         return Ok(());
+     }
+     match resolve_principal(state, headers)? {
+-        Principal::Unauthenticated => Err(ApiProblem::unauthorized()),
+         _ => Ok(()),
+     }
+ }

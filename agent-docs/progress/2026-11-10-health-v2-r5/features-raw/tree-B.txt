@@ -1,0 +1,1144 @@
+
+adler2 v2.0.1 
+aead feature "alloc"
+aead feature "getrandom"
+aead feature "rand_core"
+aead feature "std"
+aead v0.5.2 alloc,getrandom,rand_core,std
+ahash v0.8.12 
+aho-corasick feature "perf-literal"
+aho-corasick feature "std"
+aho-corasick v1.1.5 perf-literal,std
+anstream feature "auto"
+anstream feature "default"
+anstream feature "wincon"
+anstream v1.0.0 auto,default,wincon
+anstyle feature "default"
+anstyle feature "std"
+anstyle v1.0.14 default,std
+anstyle-parse feature "default"
+anstyle-parse feature "utf8"
+anstyle-parse v1.0.0 default,utf8
+anstyle-query feature "default"
+anstyle-query v1.1.5 
+anyhow feature "default"
+anyhow feature "std"
+anyhow v1.0.104 default,std
+async-trait feature "default"
+async-trait v0.1.92 
+atomic-waker feature "default"
+atomic-waker v1.1.2 
+autocfg feature "default"
+autocfg v1.5.1 
+aws-lc-rs feature "aws-lc-sys"
+aws-lc-rs feature "prebuilt-nasm"
+aws-lc-rs v1.18.1 aws-lc-sys,prebuilt-nasm
+aws-lc-sys feature "prebuilt-nasm"
+aws-lc-sys v0.45.0 prebuilt-nasm
+axum feature "http1"
+axum feature "json"
+axum feature "multipart"
+axum feature "query"
+axum feature "tokio"
+axum v0.8.9 http1,json,multipart,query,tokio
+axum-core feature "default"
+axum-core v0.5.6 
+base64 feature "alloc"
+base64 feature "default"
+base64 feature "simd-unsafe"
+base64 feature "std"
+base64 v0.22.1 alloc,default,std
+base64 v0.23.1 alloc,default,simd-unsafe,std
+base64-simd feature "alloc"
+base64-simd feature "default"
+base64-simd feature "detect"
+base64-simd feature "std"
+base64-simd v0.8.0 alloc,default,detect,std
+bindgen feature "default"
+bindgen feature "logging"
+bindgen feature "prettyplease"
+bindgen feature "runtime"
+bindgen v0.72.1 default,logging,prettyplease,runtime
+bit-set feature "default"
+bit-set feature "std"
+bit-set v0.8.0 default,std
+bit-vec feature "default"
+bit-vec feature "std"
+bit-vec v0.8.0 default,std
+bitflags feature "default"
+bitflags feature "std"
+bitflags v2.13.2 std
+bitvec feature "alloc"
+bitvec feature "atomic"
+bitvec feature "default"
+bitvec feature "std"
+bitvec v1.1.1 alloc,atomic,default,std
+block-buffer feature "default"
+block-buffer v0.10.4 
+boxed_error feature "default"
+boxed_error v0.2.3 
+bytemuck feature "default"
+bytemuck feature "extern_crate_alloc"
+bytemuck v1.25.2 extern_crate_alloc
+byteorder-lite feature "default"
+byteorder-lite feature "std"
+byteorder-lite v0.1.0 default,std
+bytes feature "default"
+bytes feature "std"
+bytes v1.12.1 default,std
+calendrical_calculations feature "default"
+calendrical_calculations v0.2.4 
+cc feature "default"
+cc feature "parallel"
+cc v1.4.6 parallel
+celeris feature "default"
+celeris v0.1.0 
+celeris-campaign feature "default"
+celeris-campaign v0.1.0 
+celeris-credentiald feature "default"
+celeris-credentiald feature "same-uid-harness"
+celeris-credentiald v0.1.0 same-uid-harness
+celeris-mcp feature "default"
+celeris-mcp v0.1.0 
+celeris-script feature "default"
+celeris-script v0.1.0 
+celerisctl v0.1.0 
+cexpr feature "default"
+cexpr v0.6.0 
+cfg-if feature "default"
+cfg-if v1.0.4 
+cfg_aliases feature "default"
+cfg_aliases v0.2.2 
+chacha20 feature "default"
+chacha20 feature "zeroize"
+chacha20 v0.9.1 zeroize
+chacha20poly1305 feature "alloc"
+chacha20poly1305 feature "default"
+chacha20poly1305 feature "getrandom"
+chacha20poly1305 feature "rand_core"
+chacha20poly1305 feature "std"
+chacha20poly1305 v0.10.1 alloc,default,getrandom,rand_core,std
+cipher feature "default"
+cipher feature "zeroize"
+cipher v0.4.4 zeroize
+clang-sys feature "clang_10_0"
+clang-sys feature "clang_11_0"
+clang-sys feature "clang_3_5"
+clang-sys feature "clang_3_6"
+clang-sys feature "clang_3_7"
+clang-sys feature "clang_3_8"
+clang-sys feature "clang_3_9"
+clang-sys feature "clang_4_0"
+clang-sys feature "clang_5_0"
+clang-sys feature "clang_6_0"
+clang-sys feature "clang_7_0"
+clang-sys feature "clang_8_0"
+clang-sys feature "clang_9_0"
+clang-sys feature "default"
+clang-sys feature "libloading"
+clang-sys feature "runtime"
+clang-sys v1.9.1 clang_10_0,clang_11_0,clang_3_5,clang_3_6,clang_3_7,clang_3_8,clang_3_9,clang_4_0,clang_5_0,clang_6_0,clang_7_0,clang_8_0,clang_9_0,libloading,runtime
+clap feature "color"
+clap feature "default"
+clap feature "derive"
+clap feature "env"
+clap feature "error-context"
+clap feature "help"
+clap feature "std"
+clap feature "suggestions"
+clap feature "usage"
+clap v4.6.6 color,default,derive,env,error-context,help,std,suggestions,usage
+clap_builder feature "color"
+clap_builder feature "env"
+clap_builder feature "error-context"
+clap_builder feature "help"
+clap_builder feature "std"
+clap_builder feature "suggestions"
+clap_builder feature "usage"
+clap_builder v4.6.6 color,env,error-context,help,std,suggestions,usage
+clap_derive feature "default"
+clap_derive v4.6.4 default
+clap_lex feature "default"
+clap_lex v1.1.0 
+cmake feature "default"
+cmake v0.1.58 
+color_quant feature "default"
+color_quant v1.1.0 
+colorchoice feature "default"
+colorchoice v1.0.5 
+cooked-waker feature "default"
+cooked-waker v5.0.0 
+core_detect feature "default"
+core_detect v1.0.0 default
+core_maths feature "default"
+core_maths v0.1.1 
+cpufeatures feature "default"
+cpufeatures v0.2.17 
+crc32fast feature "default"
+crc32fast feature "std"
+crc32fast v1.5.2 default,std
+crypto-common feature "default"
+crypto-common feature "getrandom"
+crypto-common feature "rand_core"
+crypto-common feature "std"
+crypto-common v0.1.7 getrandom,rand_core,std
+data-encoding feature "alloc"
+data-encoding feature "default"
+data-encoding feature "std"
+data-encoding v2.11.1 alloc,default,std
+debugid feature "default"
+debugid feature "serde"
+debugid v0.8.0 serde
+deno_core feature "default"
+deno_core feature "reactor-tokio"
+deno_core feature "v8"
+deno_core feature "v8_use_custom_libcxx"
+deno_core v0.413.0 default,reactor-tokio,v8,v8_use_custom_libcxx
+deno_error feature "default"
+deno_error feature "serde"
+deno_error feature "serde_json"
+deno_error feature "tokio"
+deno_error feature "url"
+deno_error v0.7.1 serde,serde_json,tokio,url
+deno_error_macro feature "default"
+deno_error_macro v0.7.1 
+deno_ops feature "default"
+deno_ops v0.289.0 
+deno_path_util feature "default"
+deno_path_util v0.6.4 
+deno_unsync feature "tokio"
+deno_unsync v0.4.4 tokio
+deno_v8 feature "simdutf"
+deno_v8 feature "use_custom_libcxx"
+deno_v8 feature "v8"
+deno_v8 v0.5.0 simdutf,use_custom_libcxx,v8
+deranged feature "default"
+deranged feature "serde"
+deranged v0.5.8 default,serde
+digest feature "alloc"
+digest feature "block-buffer"
+digest feature "core-api"
+digest feature "default"
+digest feature "std"
+digest v0.10.7 alloc,block-buffer,core-api,default,std
+diplomat v0.16.1 
+diplomat-runtime v0.16.1 
+diplomat_core v0.16.1 
+displaydoc v0.2.7 
+dunce feature "default"
+dunce v1.0.5 
+dyn-clone feature "default"
+dyn-clone v1.0.20 
+either feature "default"
+either feature "std"
+either v1.19.0 default,std
+encoding_rs feature "alloc"
+encoding_rs feature "default"
+encoding_rs v0.8.41 alloc,default
+equivalent v1.0.2 
+errno feature "default"
+errno feature "std"
+errno v0.3.14 default,std
+fallible-iterator feature "alloc"
+fallible-iterator feature "default"
+fallible-iterator v0.3.0 alloc,default
+fallible-streaming-iterator feature "default"
+fallible-streaming-iterator v0.1.9 
+fastrand feature "alloc"
+fastrand feature "default"
+fastrand feature "std"
+fastrand v2.5.0 alloc,default,std
+fdeflate feature "default"
+fdeflate v0.3.7 
+find-msvc-tools feature "default"
+find-msvc-tools v0.1.12 
+flate2 feature "any_impl"
+flate2 feature "default"
+flate2 feature "miniz_oxide"
+flate2 feature "runtime_detection"
+flate2 feature "rust_backend"
+flate2 v1.1.10 any_impl,default,miniz_oxide,runtime_detection,rust_backend
+fnv feature "default"
+fnv feature "std"
+fnv v1.0.7 default,std
+form_urlencoded feature "alloc"
+form_urlencoded feature "default"
+form_urlencoded feature "std"
+form_urlencoded v1.2.2 alloc,default,std
+fs_extra feature "default"
+fs_extra v1.3.0 
+fslock feature "default"
+fslock feature "std"
+fslock v0.2.1 default,std
+funty v2.0.0 
+futures feature "alloc"
+futures feature "async-await"
+futures feature "default"
+futures feature "executor"
+futures feature "futures-executor"
+futures feature "std"
+futures v0.3.34 alloc,async-await,default,executor,futures-executor,std
+futures-channel feature "alloc"
+futures-channel feature "default"
+futures-channel feature "futures-sink"
+futures-channel feature "sink"
+futures-channel feature "std"
+futures-channel v0.3.34 alloc,default,futures-sink,sink,std
+futures-core feature "alloc"
+futures-core feature "default"
+futures-core feature "std"
+futures-core v0.3.34 alloc,default,std
+futures-executor feature "std"
+futures-executor v0.3.34 std
+futures-io feature "std"
+futures-io v0.3.34 std
+futures-macro v0.3.34 
+futures-sink feature "alloc"
+futures-sink feature "default"
+futures-sink feature "std"
+futures-sink v0.3.34 alloc,default,std
+futures-task feature "alloc"
+futures-task feature "std"
+futures-task v0.3.34 alloc,std
+futures-util feature "alloc"
+futures-util feature "async-await"
+futures-util feature "async-await-macro"
+futures-util feature "channel"
+futures-util feature "futures-channel"
+futures-util feature "futures-io"
+futures-util feature "futures-macro"
+futures-util feature "futures-sink"
+futures-util feature "io"
+futures-util feature "memchr"
+futures-util feature "sink"
+futures-util feature "slab"
+futures-util feature "std"
+futures-util v0.3.34 alloc,async-await,async-await-macro,channel,futures-channel,futures-io,futures-macro,futures-sink,io,memchr,sink,slab,std
+generic-array feature "default"
+generic-array feature "more_lengths"
+generic-array v0.14.7 more_lengths
+getrandom feature "default"
+getrandom feature "std"
+getrandom v0.2.17 
+getrandom v0.3.4 std
+getrandom v0.4.3 
+gif feature "color_quant"
+gif feature "default"
+gif feature "raii_no_panic"
+gif feature "std"
+gif v0.14.2 color_quant,default,raii_no_panic,std
+glob feature "default"
+glob v0.3.4 
+gzip-header feature "default"
+gzip-header feature "std"
+gzip-header v1.1.0 default,std
+h2 feature "default"
+h2 v0.4.19 
+hashbrown feature "ahash"
+hashbrown feature "inline-more"
+hashbrown v0.14.5 ahash,inline-more
+hashbrown v0.17.1 
+hashlink feature "default"
+hashlink v0.9.1 
+heck feature "default"
+heck v0.5.0 
+hex feature "alloc"
+hex feature "default"
+hex feature "std"
+hex v0.4.3 alloc,default,std
+home feature "default"
+home v0.5.12 
+http feature "default"
+http feature "std"
+http v1.5.0 default,std
+http-body feature "default"
+http-body v1.1.0 
+http-body-util feature "default"
+http-body-util v0.1.5 default
+httparse feature "default"
+httparse feature "std"
+httparse v1.10.1 default,std
+httpdate feature "default"
+httpdate v1.0.3 
+hyper feature "client"
+hyper feature "default"
+hyper feature "http1"
+hyper feature "http2"
+hyper feature "server"
+hyper v1.11.1 client,default,http1,http2,server
+hyper-rustls feature "aws-lc-rs"
+hyper-rustls feature "http1"
+hyper-rustls feature "http2"
+hyper-rustls feature "tls12"
+hyper-rustls v0.27.9 aws-lc-rs,http1,http2,tls12
+hyper-util feature "client"
+hyper-util feature "client-legacy"
+hyper-util feature "client-proxy"
+hyper-util feature "default"
+hyper-util feature "http1"
+hyper-util feature "http2"
+hyper-util feature "server"
+hyper-util feature "service"
+hyper-util feature "tokio"
+hyper-util v0.1.20 client,client-legacy,client-proxy,default,http1,http2,server,service,tokio
+icu_calendar feature "compiled_data"
+icu_calendar v2.4.0 compiled_data
+icu_calendar_data v2.4.0 
+icu_collections v2.3.0 
+icu_locale_core feature "alloc"
+icu_locale_core feature "default"
+icu_locale_core feature "zerovec"
+icu_locale_core v2.4.0 alloc,zerovec
+icu_locale_fallback feature "compiled_data"
+icu_locale_fallback v2.4.0 compiled_data
+icu_locale_fallback_data v2.4.0 
+icu_normalizer feature "compiled_data"
+icu_normalizer v2.3.0 compiled_data
+icu_normalizer_data v2.3.0 
+icu_properties feature "compiled_data"
+icu_properties v2.3.0 compiled_data
+icu_properties_data v2.3.0 
+icu_provider feature "alloc"
+icu_provider feature "baked"
+icu_provider v2.4.0 alloc,baked
+idna feature "alloc"
+idna feature "compiled_data"
+idna feature "std"
+idna v1.1.0 alloc,compiled_data,std
+idna_adapter feature "compiled_data"
+idna_adapter feature "default"
+idna_adapter v1.2.2 compiled_data
+if_chain feature "default"
+if_chain v1.0.3 
+image feature "gif"
+image feature "jpeg"
+image feature "png"
+image feature "webp"
+image v0.25.10 gif,jpeg,png,webp
+image-webp feature "default"
+image-webp v0.2.4 
+indexmap feature "default"
+indexmap feature "serde"
+indexmap feature "std"
+indexmap v2.14.2 default,serde,std
+inout feature "default"
+inout v0.1.4 
+inventory feature "default"
+inventory v0.3.25 
+ipnet feature "default"
+ipnet feature "std"
+ipnet v2.12.2 default,std
+is_terminal_polyfill feature "default"
+is_terminal_polyfill v1.70.2 default
+itertools v0.13.0 
+itoa feature "default"
+itoa v1.0.18 
+ixdtf feature "default"
+ixdtf feature "duration"
+ixdtf v0.6.7 default,duration
+jev-classifier feature "default"
+jev-classifier v0.1.0 
+jiff feature "alloc"
+jiff feature "std"
+jiff feature "tz-system"
+jiff feature "tzdb-zoneinfo"
+jiff v0.2.37 alloc,std,tz-system,tzdb-zoneinfo
+jiff-core feature "alloc"
+jiff-core feature "std"
+jiff-core v0.1.1 alloc,std
+jobserver v0.1.35 
+lazy_static feature "default"
+lazy_static v1.5.0 
+libc feature "default"
+libc feature "extra_traits"
+libc feature "std"
+libc v0.2.189 default,extra_traits,std
+libc v0.2.189 default,std
+libloading feature "default"
+libloading v0.8.9 
+libm feature "arch"
+libm feature "default"
+libm v0.2.16 arch,default
+libsqlite3-sys feature "bundled"
+libsqlite3-sys feature "bundled_bindings"
+libsqlite3-sys feature "cc"
+libsqlite3-sys feature "default"
+libsqlite3-sys feature "min_sqlite_version_3_14_0"
+libsqlite3-sys feature "pkg-config"
+libsqlite3-sys feature "vcpkg"
+libsqlite3-sys v0.30.1 bundled,bundled_bindings,cc,default,min_sqlite_version_3_14_0,pkg-config,vcpkg
+linux-raw-sys feature "auxvec"
+linux-raw-sys feature "elf"
+linux-raw-sys feature "errno"
+linux-raw-sys feature "general"
+linux-raw-sys feature "ioctl"
+linux-raw-sys feature "no_std"
+linux-raw-sys v0.12.1 auxvec,elf,errno,general,ioctl,no_std
+linux-raw-sys v0.4.15 elf,errno,general,ioctl,no_std
+litemap feature "alloc"
+litemap v0.8.3 alloc
+llm-proxy feature "default"
+llm-proxy v0.1.0 
+lock_api feature "atomic_usize"
+lock_api feature "default"
+lock_api v0.4.14 atomic_usize,default
+log feature "alloc"
+log feature "default"
+log feature "std"
+log v0.4.34 
+log v0.4.34 alloc,std
+matchers feature "default"
+matchers v0.2.0 
+matchit feature "default"
+matchit v0.8.4 default
+memchr feature "alloc"
+memchr feature "default"
+memchr feature "std"
+memchr v2.8.3 alloc,default,std
+memchr v2.8.3 alloc,std
+mime feature "default"
+mime v0.3.17 
+minimal-lexical feature "std"
+minimal-lexical v0.2.1 std
+miniz_oxide feature "default"
+miniz_oxide feature "simd"
+miniz_oxide feature "simd-adler32"
+miniz_oxide feature "with-alloc"
+miniz_oxide v0.8.9 default,simd,simd-adler32,with-alloc
+miniz_oxide v0.8.9 default,with-alloc
+miniz_oxide v0.9.1 default,simd,simd-adler32,with-alloc
+mio feature "net"
+mio feature "os-ext"
+mio feature "os-poll"
+mio v1.2.3 net,os-ext,os-poll
+moxcms feature "avx"
+moxcms feature "avx_luts"
+moxcms feature "avx_shaper_fixed_point_paths"
+moxcms feature "avx_shaper_paths"
+moxcms feature "default"
+moxcms feature "lut"
+moxcms feature "neon"
+moxcms feature "neon_luts"
+moxcms feature "neon_shaper_fixed_point_paths"
+moxcms feature "neon_shaper_paths"
+moxcms feature "sse"
+moxcms feature "sse_luts"
+moxcms feature "sse_shaper_fixed_point_paths"
+moxcms feature "sse_shaper_paths"
+moxcms v0.8.1 avx,avx_luts,avx_shaper_fixed_point_paths,avx_shaper_paths,default,lut,neon,neon_luts,neon_shaper_fixed_point_paths,neon_shaper_paths,sse,sse_luts,sse_shaper_fixed_point_paths,sse_shaper_paths
+multer feature "default"
+multer v3.1.0 default
+multiversion v0.9.0 
+multiversion-macros v0.9.0 
+multiversion_no_op feature "default"
+multiversion_no_op v1.0.0 
+nix feature "default"
+nix feature "feature"
+nix feature "fs"
+nix feature "process"
+nix feature "signal"
+nix feature "user"
+nix v0.30.1 default,feature,fs,process,signal,user
+nom feature "alloc"
+nom feature "std"
+nom v7.1.3 alloc,std
+nu-ansi-term feature "default"
+nu-ansi-term feature "std"
+nu-ansi-term v0.50.3 default,std
+num-bigint feature "default"
+num-bigint feature "std"
+num-bigint v0.4.8 default,std
+num-conv feature "default"
+num-conv v0.2.2 
+num-integer feature "i128"
+num-integer feature "std"
+num-integer v0.1.47 i128,std
+num-traits feature "default"
+num-traits feature "i128"
+num-traits feature "std"
+num-traits v0.2.19 default,i128,std
+once_cell feature "alloc"
+once_cell feature "default"
+once_cell feature "race"
+once_cell feature "std"
+once_cell v1.21.4 alloc,default,race,std
+opaque-debug feature "default"
+opaque-debug v0.3.1 
+openssl-probe feature "default"
+openssl-probe v0.2.1 
+outref feature "default"
+outref v0.5.2 
+parking_lot feature "default"
+parking_lot v0.12.5 default
+parking_lot_core feature "default"
+parking_lot_core v0.9.12 
+paste feature "default"
+paste v1.0.15 
+percent-encoding feature "alloc"
+percent-encoding feature "default"
+percent-encoding feature "std"
+percent-encoding v2.3.2 alloc,default,std
+pin-project feature "default"
+pin-project v1.1.13 
+pin-project-internal feature "default"
+pin-project-internal v1.1.13 
+pin-project-lite feature "default"
+pin-project-lite v0.2.17 
+pkg-config feature "default"
+pkg-config v0.3.34 
+png feature "default"
+png v0.18.1 
+poly1305 feature "default"
+poly1305 v0.8.0 
+potential_utf feature "alloc"
+potential_utf feature "writeable"
+potential_utf feature "zerovec"
+potential_utf v0.1.6 alloc,writeable,zerovec
+powerfmt v0.2.0 
+ppv-lite86 feature "simd"
+ppv-lite86 feature "std"
+ppv-lite86 v0.2.21 simd,std
+prettyplease feature "default"
+prettyplease feature "verbatim"
+prettyplease v0.2.37 verbatim
+proc-macro2 feature "default"
+proc-macro2 feature "proc-macro"
+proc-macro2 feature "span-locations"
+proc-macro2 v1.0.107 default,proc-macro,span-locations
+proc-macro2 v1.0.107 proc-macro
+pulldown-cmark feature "html"
+pulldown-cmark feature "pulldown-cmark-escape"
+pulldown-cmark v0.13.4 html,pulldown-cmark-escape
+pulldown-cmark-escape feature "default"
+pulldown-cmark-escape v0.11.0 
+pxfm feature "default"
+pxfm v0.1.30 
+quick-error feature "default"
+quick-error v2.0.1 
+quote feature "default"
+quote feature "proc-macro"
+quote v1.0.47 default,proc-macro
+quote v1.0.47 proc-macro
+radium feature "default"
+radium v0.7.0 
+rand feature "alloc"
+rand feature "default"
+rand feature "os_rng"
+rand feature "small_rng"
+rand feature "std"
+rand feature "std_rng"
+rand feature "thread_rng"
+rand v0.9.5 alloc,default,os_rng,small_rng,std,std_rng,thread_rng
+rand_chacha feature "std"
+rand_chacha v0.9.0 std
+rand_core feature "default"
+rand_core feature "getrandom"
+rand_core feature "os_rng"
+rand_core feature "std"
+rand_core v0.6.4 getrandom
+rand_core v0.9.5 os_rng,std
+ref-cast feature "default"
+ref-cast v1.0.27 
+ref-cast-impl feature "default"
+ref-cast-impl v1.0.27 
+regex feature "default"
+regex feature "perf"
+regex feature "perf-backtrack"
+regex feature "perf-cache"
+regex feature "perf-dfa"
+regex feature "perf-inline"
+regex feature "perf-literal"
+regex feature "perf-onepass"
+regex feature "std"
+regex feature "unicode"
+regex feature "unicode-age"
+regex feature "unicode-bool"
+regex feature "unicode-case"
+regex feature "unicode-gencat"
+regex feature "unicode-perl"
+regex feature "unicode-script"
+regex feature "unicode-segment"
+regex v1.13.1 default,perf,perf-backtrack,perf-cache,perf-dfa,perf-inline,perf-literal,perf-onepass,std,unicode,unicode-age,unicode-bool,unicode-case,unicode-gencat,unicode-perl,unicode-script,unicode-segment
+regex v1.13.1 std,unicode-perl
+regex-automata feature "alloc"
+regex-automata feature "dfa-build"
+regex-automata feature "dfa-onepass"
+regex-automata feature "dfa-search"
+regex-automata feature "hybrid"
+regex-automata feature "meta"
+regex-automata feature "nfa-backtrack"
+regex-automata feature "nfa-pikevm"
+regex-automata feature "nfa-thompson"
+regex-automata feature "perf-inline"
+regex-automata feature "perf-literal"
+regex-automata feature "perf-literal-multisubstring"
+regex-automata feature "perf-literal-substring"
+regex-automata feature "std"
+regex-automata feature "syntax"
+regex-automata feature "unicode"
+regex-automata feature "unicode-age"
+regex-automata feature "unicode-bool"
+regex-automata feature "unicode-case"
+regex-automata feature "unicode-gencat"
+regex-automata feature "unicode-perl"
+regex-automata feature "unicode-script"
+regex-automata feature "unicode-segment"
+regex-automata feature "unicode-word-boundary"
+regex-automata v0.4.18 alloc,dfa-build,dfa-onepass,dfa-search,hybrid,meta,nfa-backtrack,nfa-pikevm,nfa-thompson,perf-inline,perf-literal,perf-literal-multisubstring,perf-literal-substring,std,syntax,unicode,unicode-age,unicode-bool,unicode-case,unicode-gencat,unicode-perl,unicode-script,unicode-segment,unicode-word-boundary
+regex-automata v0.4.18 alloc,meta,nfa-pikevm,nfa-thompson,std,syntax,unicode-perl,unicode-word-boundary
+regex-syntax feature "default"
+regex-syntax feature "std"
+regex-syntax feature "unicode"
+regex-syntax feature "unicode-age"
+regex-syntax feature "unicode-bool"
+regex-syntax feature "unicode-case"
+regex-syntax feature "unicode-gencat"
+regex-syntax feature "unicode-perl"
+regex-syntax feature "unicode-script"
+regex-syntax feature "unicode-segment"
+regex-syntax v0.8.11 default,std,unicode,unicode-age,unicode-bool,unicode-case,unicode-gencat,unicode-perl,unicode-script,unicode-segment
+regex-syntax v0.8.11 std,unicode-perl
+reqwest feature "__rustls"
+reqwest feature "__rustls-aws-lc-rs"
+reqwest feature "__tls"
+reqwest feature "blocking"
+reqwest feature "charset"
+reqwest feature "http2"
+reqwest feature "json"
+reqwest feature "rustls"
+reqwest feature "stream"
+reqwest v0.13.5 __rustls,__rustls-aws-lc-rs,__tls,blocking,charset,http2,json,rustls,stream
+resb v0.1.2 
+ring feature "alloc"
+ring feature "default"
+ring feature "dev_urandom_fallback"
+ring v0.17.14 alloc,default,dev_urandom_fallback
+routing-eval feature "default"
+routing-eval v0.1.0 
+rusqlite feature "backup"
+rusqlite feature "bundled"
+rusqlite feature "default"
+rusqlite feature "hooks"
+rusqlite feature "limits"
+rusqlite feature "modern_sqlite"
+rusqlite v0.32.1 backup,bundled,hooks,limits,modern_sqlite
+rustc-hash feature "default"
+rustc-hash feature "std"
+rustc-hash v2.1.3 default,std
+rustix feature "alloc"
+rustix feature "default"
+rustix feature "fs"
+rustix feature "libc-extra-traits"
+rustix feature "std"
+rustix v0.38.44 alloc,fs,libc-extra-traits,std
+rustix v1.1.4 alloc,default,fs,std
+rustls feature "aws-lc-rs"
+rustls feature "aws_lc_rs"
+rustls feature "std"
+rustls feature "tls12"
+rustls v0.23.45 aws-lc-rs,aws_lc_rs,std,tls12
+rustls-native-certs feature "default"
+rustls-native-certs v0.8.4 
+rustls-pki-types feature "alloc"
+rustls-pki-types feature "default"
+rustls-pki-types feature "std"
+rustls-pki-types v1.15.1 alloc,default,std
+rustls-platform-verifier feature "default"
+rustls-platform-verifier v0.7.0 
+rustls-webpki feature "alloc"
+rustls-webpki feature "aws-lc-rs"
+rustls-webpki feature "std"
+rustls-webpki v0.103.15 alloc,aws-lc-rs,std
+rustversion feature "default"
+rustversion v1.0.23 
+ryu feature "default"
+ryu v1.0.23 
+schemars feature "default"
+schemars feature "derive"
+schemars feature "schemars_derive"
+schemars feature "std"
+schemars v1.2.2 default,derive,schemars_derive,std
+schemars_derive feature "default"
+schemars_derive v1.2.2 
+scopeguard v1.2.0 
+serde feature "alloc"
+serde feature "default"
+serde feature "derive"
+serde feature "serde_derive"
+serde feature "std"
+serde v1.0.229 alloc,default,derive,serde_derive,std
+serde v1.0.229 alloc,derive,serde_derive
+serde_core feature "alloc"
+serde_core feature "default"
+serde_core feature "result"
+serde_core feature "std"
+serde_core v1.0.229 alloc,default,result,std
+serde_core v1.0.229 alloc,result
+serde_derive feature "default"
+serde_derive v1.0.229 default
+serde_derive_internals feature "default"
+serde_derive_internals v0.30.0 
+serde_json feature "alloc"
+serde_json feature "default"
+serde_json feature "raw_value"
+serde_json feature "std"
+serde_json v1.0.151 alloc,default,raw_value,std
+serde_path_to_error feature "default"
+serde_path_to_error v0.1.20 
+serde_spanned feature "alloc"
+serde_spanned feature "serde"
+serde_spanned feature "std"
+serde_spanned v1.1.1 alloc,serde,std
+serde_urlencoded feature "default"
+serde_urlencoded v0.7.1 
+serde_v8 feature "v8"
+serde_v8 v0.322.0 v8
+sha2 feature "default"
+sha2 feature "std"
+sha2 v0.10.9 default,std
+sharded-slab feature "default"
+sharded-slab v0.1.7 
+shlex feature "default"
+shlex feature "std"
+shlex v1.3.0 default,std
+shlex v2.0.1 default,std
+signal-hook-registry feature "default"
+signal-hook-registry v1.4.8 
+simd-adler32 feature "const-generics"
+simd-adler32 feature "default"
+simd-adler32 feature "std"
+simd-adler32 v0.3.10 const-generics,default,std
+simdutf8 feature "aarch64_neon"
+simdutf8 feature "public_imp"
+simdutf8 v0.1.5 aarch64_neon,public_imp
+slab feature "default"
+slab feature "std"
+slab v0.4.12 default,std
+smallvec feature "const_generics"
+smallvec feature "const_new"
+smallvec feature "default"
+smallvec feature "union"
+smallvec v1.16.1 
+smallvec v1.16.1 const_generics,const_new,union
+socket2 feature "all"
+socket2 feature "default"
+socket2 v0.5.10 all
+socket2 v0.6.5 all
+sourcemap feature "default"
+sourcemap v9.3.2 
+spin feature "mutex"
+spin feature "spin_mutex"
+spin v0.9.9 mutex,spin_mutex
+stable_deref_trait feature "alloc"
+stable_deref_trait v1.2.1 alloc
+static_assertions feature "default"
+static_assertions v1.1.0 
+strck feature "default"
+strck feature "ident"
+strck v1.0.0 ident
+stringcase feature "default"
+stringcase v0.4.0 
+strsim feature "default"
+strsim v0.11.1 
+strum feature "default"
+strum feature "derive"
+strum feature "std"
+strum feature "strum_macros"
+strum v0.27.2 default,derive,std,strum_macros
+strum_macros feature "default"
+strum_macros v0.27.2 
+subtle v2.6.1 
+syn feature "clone-impls"
+syn feature "default"
+syn feature "derive"
+syn feature "extra-traits"
+syn feature "fold"
+syn feature "full"
+syn feature "parsing"
+syn feature "printing"
+syn feature "proc-macro"
+syn feature "visit"
+syn feature "visit-mut"
+syn v2.0.119 clone-impls,default,derive,extra-traits,full,parsing,printing,proc-macro,visit-mut
+syn v2.0.119 clone-impls,default,derive,full,parsing,printing,proc-macro,visit
+syn v3.0.5 clone-impls,default,derive,extra-traits,fold,full,parsing,printing,proc-macro,visit,visit-mut
+syn-match feature "default"
+syn-match v0.3.1 
+sync_wrapper feature "default"
+sync_wrapper feature "futures"
+sync_wrapper feature "futures-core"
+sync_wrapper v1.0.2 futures,futures-core
+synstructure feature "default"
+synstructure feature "proc-macro"
+synstructure v0.14.0 default,proc-macro
+sys_traits feature "default"
+sys_traits feature "real"
+sys_traits v0.1.29 default,real
+sys_traits_macros feature "default"
+sys_traits_macros v0.1.0 
+tap feature "default"
+tap v1.0.1 
+task-api feature "default"
+task-api v0.1.0 
+task-core feature "default"
+task-core v0.1.0 
+task-dispatch feature "default"
+task-dispatch v0.1.0 
+task-ops feature "default"
+task-ops v0.1.0 
+task-worker feature "attack-test-hooks"
+task-worker feature "default"
+task-worker feature "h3-e2e-insecure-cert"
+task-worker feature "live-cross-test-support"
+task-worker feature "same-uid-harness"
+task-worker v0.1.0 attack-test-hooks,h3-e2e-insecure-cert,live-cross-test-support,same-uid-harness
+tempfile feature "default"
+tempfile feature "getrandom"
+tempfile v3.27.0 default,getrandom
+temporal_capi feature "default"
+temporal_capi feature "zoneinfo64"
+temporal_capi v0.2.6 zoneinfo64
+temporal_rs v0.2.6 
+thiserror feature "default"
+thiserror feature "std"
+thiserror v2.0.20 default,std
+thiserror-impl feature "default"
+thiserror-impl v2.0.20 
+thread_local feature "default"
+thread_local v1.1.10 
+time feature "alloc"
+time feature "default"
+time feature "formatting"
+time feature "macros"
+time feature "parsing"
+time feature "serde"
+time feature "std"
+time v0.3.55 alloc,default,formatting,macros,parsing,serde,std
+time-core feature "default"
+time-core v0.1.9 
+time-macros feature "default"
+time-macros feature "formatting"
+time-macros feature "parsing"
+time-macros feature "serde"
+time-macros v0.2.32 formatting,parsing,serde
+timezone_provider feature "zoneinfo64"
+timezone_provider v0.2.6 zoneinfo64
+tinystr feature "alloc"
+tinystr feature "default"
+tinystr feature "zerovec"
+tinystr v0.8.5 alloc,default,zerovec
+tokio feature "bytes"
+tokio feature "default"
+tokio feature "fs"
+tokio feature "full"
+tokio feature "io-std"
+tokio feature "io-util"
+tokio feature "libc"
+tokio feature "macros"
+tokio feature "mio"
+tokio feature "net"
+tokio feature "parking_lot"
+tokio feature "process"
+tokio feature "rt"
+tokio feature "rt-multi-thread"
+tokio feature "signal"
+tokio feature "signal-hook-registry"
+tokio feature "socket2"
+tokio feature "sync"
+tokio feature "test-util"
+tokio feature "time"
+tokio feature "tokio-macros"
+tokio v1.53.1 bytes,default,fs,full,io-std,io-util,libc,macros,mio,net,parking_lot,process,rt,rt-multi-thread,signal,signal-hook-registry,socket2,sync,test-util,time,tokio-macros
+tokio-macros feature "default"
+tokio-macros v2.7.2 
+tokio-rustls feature "aws-lc-rs"
+tokio-rustls feature "aws_lc_rs"
+tokio-rustls feature "tls12"
+tokio-rustls v0.26.5 aws-lc-rs,aws_lc_rs,tls12
+tokio-util feature "codec"
+tokio-util feature "default"
+tokio-util feature "io"
+tokio-util feature "libc"
+tokio-util v0.7.19 codec,default,io,libc
+toml feature "default"
+toml feature "display"
+toml feature "parse"
+toml feature "serde"
+toml feature "std"
+toml v0.9.12+spec-1.1.0 default,display,parse,serde,std
+toml_datetime feature "alloc"
+toml_datetime feature "default"
+toml_datetime feature "serde"
+toml_datetime feature "std"
+toml_datetime v0.6.11 
+toml_datetime v0.7.5+spec-1.1.0 alloc,serde,std
+toml_edit feature "default"
+toml_edit feature "display"
+toml_edit feature "parse"
+toml_edit v0.22.27 default,display,parse
+toml_parser feature "alloc"
+toml_parser feature "std"
+toml_parser v1.1.3+spec-1.1.0 alloc,std
+toml_write feature "alloc"
+toml_write feature "default"
+toml_write feature "std"
+toml_write v0.1.2 alloc,default,std
+toml_writer feature "alloc"
+toml_writer feature "std"
+toml_writer v1.1.2+spec-1.1.0 alloc,std
+tower feature "default"
+tower feature "futures-core"
+tower feature "futures-util"
+tower feature "make"
+tower feature "pin-project-lite"
+tower feature "retry"
+tower feature "sync_wrapper"
+tower feature "timeout"
+tower feature "tokio"
+tower feature "util"
+tower v0.5.3 futures-core,futures-util,make,pin-project-lite,retry,sync_wrapper,timeout,tokio,util
+tower-http feature "follow-redirect"
+tower-http feature "futures-util"
+tower-http feature "tower"
+tower-http v0.6.11 follow-redirect,futures-util,tower
+tower-layer feature "default"
+tower-layer v0.3.3 
+tower-service feature "default"
+tower-service v0.3.3 
+tracing feature "attributes"
+tracing feature "default"
+tracing feature "std"
+tracing feature "tracing-attributes"
+tracing v0.1.44 attributes,default,std,tracing-attributes
+tracing-attributes feature "default"
+tracing-attributes v0.1.31 
+tracing-core feature "default"
+tracing-core feature "once_cell"
+tracing-core feature "std"
+tracing-core v0.1.36 default,once_cell,std
+tracing-log feature "log-tracer"
+tracing-log feature "std"
+tracing-log v0.2.0 log-tracer,std
+tracing-serde feature "default"
+tracing-serde v0.2.0 
+tracing-subscriber feature "alloc"
+tracing-subscriber feature "ansi"
+tracing-subscriber feature "default"
+tracing-subscriber feature "env-filter"
+tracing-subscriber feature "fmt"
+tracing-subscriber feature "json"
+tracing-subscriber feature "matchers"
+tracing-subscriber feature "nu-ansi-term"
+tracing-subscriber feature "once_cell"
+tracing-subscriber feature "registry"
+tracing-subscriber feature "serde"
+tracing-subscriber feature "serde_json"
+tracing-subscriber feature "sharded-slab"
+tracing-subscriber feature "smallvec"
+tracing-subscriber feature "std"
+tracing-subscriber feature "thread_local"
+tracing-subscriber feature "tracing"
+tracing-subscriber feature "tracing-log"
+tracing-subscriber feature "tracing-serde"
+tracing-subscriber v0.3.23 alloc,ansi,default,env-filter,fmt,json,matchers,nu-ansi-term,once_cell,registry,serde,serde_json,sharded-slab,smallvec,std,thread_local,tracing,tracing-log,tracing-serde
+try-lock feature "default"
+try-lock v0.2.5 
+typenum feature "default"
+typenum v1.20.1 
+ulid feature "default"
+ulid feature "rand"
+ulid feature "serde"
+ulid feature "std"
+ulid v1.2.1 default,rand,serde,std
+unicase feature "default"
+unicase v2.9.0 
+unicode-id-start feature "default"
+unicode-id-start v1.5.0 
+unicode-ident feature "default"
+unicode-ident v1.0.24 
+universal-hash v0.5.1 
+untrusted feature "default"
+untrusted v0.9.0 
+url feature "default"
+url feature "expose_internals"
+url feature "serde"
+url feature "std"
+url v2.5.8 default,expose_internals,serde,std
+utf8_iter feature "default"
+utf8_iter v1.0.4 
+utf8parse feature "default"
+utf8parse v0.2.2 default
+uuid feature "default"
+uuid feature "rng"
+uuid feature "std"
+uuid feature "v4"
+uuid v1.29.0 default,rng,std,v4
+v8 feature "simdutf"
+v8 feature "use_custom_libcxx"
+v8 v150.4.0 simdutf,use_custom_libcxx
+vcpkg feature "default"
+vcpkg v0.2.15 
+version_check feature "default"
+version_check v0.9.5 
+vsimd feature "alloc"
+vsimd feature "default"
+vsimd feature "detect"
+vsimd feature "std"
+vsimd v0.8.0 alloc,detect,std
+want feature "default"
+want v0.3.1 
+wasm_dep_analyzer feature "default"
+wasm_dep_analyzer v0.4.0 
+weezl feature "alloc"
+weezl feature "default"
+weezl feature "std"
+weezl v0.1.12 alloc,default,std
+which feature "default"
+which v6.0.3 
+winnow feature "alloc"
+winnow feature "default"
+winnow feature "std"
+winnow v0.7.15 alloc,default,std
+winnow v1.0.4 
+writeable feature "alloc"
+writeable feature "default"
+writeable v0.6.4 alloc,default
+wyz v0.5.1 
+yoke feature "alloc"
+yoke feature "derive"
+yoke feature "zerofrom"
+yoke v0.8.4 alloc,derive,zerofrom
+yoke-derive v0.8.4 
+zerocopy feature "default"
+zerocopy feature "simd"
+zerocopy v0.8.57 simd
+zerofrom feature "alloc"
+zerofrom feature "derive"
+zerofrom v0.1.8 alloc,derive
+zerofrom-derive v0.1.8 
+zeroize feature "alloc"
+zeroize feature "default"
+zeroize v1.9.0 alloc,default
+zerotrie feature "alloc"
+zerotrie feature "default"
+zerotrie feature "yoke"
+zerotrie feature "zerofrom"
+zerotrie v0.2.5 alloc,default,yoke,zerofrom
+zerovec feature "alloc"
+zerovec feature "default"
+zerovec feature "derive"
+zerovec feature "yoke"
+zerovec v0.11.9 alloc,derive,yoke
+zerovec-derive v0.11.7 
+zmij feature "default"
+zmij v1.0.23 
+zoneinfo64 feature "default"
+zoneinfo64 v0.3.0 
+zune-core feature "default"
+zune-core feature "std"
+zune-core v0.5.3 std
+zune-jpeg feature "default"
+zune-jpeg feature "neon"
+zune-jpeg feature "std"
+zune-jpeg feature "x86"
+zune-jpeg v0.5.15 default,neon,std,x86

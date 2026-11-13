@@ -151,9 +151,29 @@ fn the_tick_rules_are_symmetric() {
         TickDecision::Stay
     );
     me.handoff_requested_at = Some(at(1));
+    // 要求元（自分より新しい standby）が生きていれば drain、居なければ要求を捨てる。
+    let requester = started(row("requester", "y", InstanceRole::Standby, 0), 5);
+    assert_eq!(
+        decide_tick(
+            InstanceRole::Active,
+            "me",
+            &[me.clone(), requester.clone()],
+            &live
+        ),
+        TickDecision::Drain
+    );
     assert_eq!(
         decide_tick(InstanceRole::Active, "me", std::slice::from_ref(&me), &live),
-        TickDecision::Drain
+        TickDecision::DropStaleHandoff
+    );
+    assert_eq!(
+        decide_tick(
+            InstanceRole::Active,
+            "me",
+            &[me.clone(), requester.clone()],
+            &|_| false
+        ),
+        TickDecision::DropStaleHandoff
     );
     // 生きた新しい active がいれば、古い自分が drain する（新しい方を残す）。
     me.handoff_requested_at = None;
@@ -407,6 +427,65 @@ fn the_handoff_runs_through_the_store() {
         .map(|r| r.instance_id)
         .collect();
     assert_eq!(left, ["inst-new"], "drained の行は消える");
+}
+
+/// ADR 2026-11-11-scratch-lock-tick-stall: 要求した新 daemon の行が消えた（promote.sh が止めた）か
+/// pid が死んだ後に古い active が要求を処理しても、draining に入らず要求を捨てて active のまま残る。
+/// 不変条件: active が 0 にならない。既存の試験は要求元が常に生きている handoff しか作らないので
+/// 検出できない。
+#[test]
+fn a_handoff_request_from_a_gone_requester_is_dropped_and_the_active_stays() {
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
+    let Started::Running(mut old) = supervisor(&store, "old", at(0), Duration::from_secs(60))
+    else {
+        panic!("active");
+    };
+    // 要求元の行が消えた場合（promote.sh が新 daemon を止めて deregister した）。
+    let Started::Running(new) = supervisor(&store, "new", at(1), Duration::from_secs(60)) else {
+        panic!("standby");
+    };
+    new.deregister();
+    assert_eq!(old.step(at(2), 1).expect("step"), Step::Stay);
+    assert_eq!(old.role(), InstanceRole::Active);
+    assert_eq!(active_ids(&store), ["inst-old"]);
+    let old_row = |store: &Arc<dyn TaskStore>| {
+        store
+            .instance_list()
+            .expect("list")
+            .into_iter()
+            .find(|r| r.instance_id == "inst-old")
+            .expect("old row")
+    };
+    assert_eq!(
+        old_row(&store).handoff_requested_at,
+        None,
+        "残った要求は消える"
+    );
+    assert_eq!(old.step(at(3), 1).expect("step"), Step::Stay);
+
+    // 要求元の pid が死んだ場合（行は残る）。
+    let Started::Running(_dead) = supervisor_as(
+        &store,
+        "dead",
+        DEAD_PID,
+        at(4),
+        Duration::from_secs(60),
+        false,
+    ) else {
+        panic!("standby");
+    };
+    assert!(old_row(&store).handoff_requested_at.is_some());
+    assert_eq!(old.step(at(5), 1).expect("step"), Step::Stay);
+    assert_eq!(old.role(), InstanceRole::Active);
+    assert_eq!(old_row(&store).handoff_requested_at, None);
+
+    // 要求元が生きていれば従来どおり引き継ぐ。
+    let Started::Running(mut live) = supervisor(&store, "live", at(6), Duration::from_secs(60))
+    else {
+        panic!("standby");
+    };
+    assert_eq!(old.step(at(7), 1).expect("step"), Step::Draining);
+    assert_eq!(live.step(at(8), 0).expect("step"), Step::Promoted);
 }
 
 /// (d) 同じ版をもう一度起こしたら行を書かずに `Duplicate`。

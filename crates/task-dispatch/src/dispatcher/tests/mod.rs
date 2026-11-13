@@ -89,6 +89,27 @@ pub(super) fn new_task(dir: &std::path::Path, check: Check, max_retries: u32) ->
     }
 }
 
+/// ADR 2026-11-12-host-check-slots D3: 試験の dispatcher が検査に使う枠の取得元。process に 1 つの一時 dir（`TempDir`）の
+/// host の枠で、本物の host の枠の dir（`$XDG_RUNTIME_DIR/celeris/check-slots`）も env（`CELERIS_CHECK_SLOT*`）も見ない
+/// （test-affected.sh・test-parallel.sh が枠を持つ間に走っても、親の枠や他の検査と取り合わない）。枠の数（64）は 1 つの
+/// process で同時に走る試験の検査より多く、試験どうしも待たない。static の `TempDir` は drop されないので、process の
+/// 終わりに `atexit` で消す。
+pub(super) fn test_check_slots() -> Option<task_worker::check_slots::SlotSource> {
+    use task_worker::check_slots::{CheckSlots, SlotSource};
+    static DIR: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
+    extern "C" fn remove_dir() {
+        if let Some(dir) = DIR.get() {
+            let _ = std::fs::remove_dir_all(dir.path());
+        }
+    }
+    let dir = DIR.get_or_init(|| {
+        // SAFETY: `remove_dir` は panic せず、初期化済みの static の path を消すだけ。
+        unsafe { libc::atexit(remove_dir) };
+        tempfile::tempdir().expect("check slot tempdir")
+    });
+    Some(SlotSource::Host(CheckSlots::new(dir.path(), 64)))
+}
+
 pub(super) fn dispatcher(
     store: Arc<dyn TaskStore>,
     adapter: Arc<dyn WorkerAdapter>,
@@ -150,6 +171,7 @@ fn new_test_dispatcher(
             idle_timeout: Duration::from_secs(5),
             kill_grace: Duration::from_millis(100),
             review_timeout: Duration::from_secs(5),
+            check_slots: test_check_slots(),
             review_resync_quiet: Duration::from_secs(900),
             workspace_roots: task_core::local_machine::WorkspaceRoots::new(
                 PathBuf::from("/nonexistent"),
@@ -167,7 +189,7 @@ fn new_test_dispatcher(
             max_infra_retries: 5,
             // 空き容量を検証しない試験を host の残量から切り離す。
             // disk gate の試験は u64::MAX 等で閾値を明示する。
-            min_free_disk_mb: 0,
+            min_free_disk_pct: 0.0,
             roles: Vec::new(),
             genres: Vec::new(),
             delegation: DelegationLimits::default(),
@@ -1283,6 +1305,7 @@ fn pool_dispatcher_with_requeues(
             idle_timeout: Duration::from_secs(5),
             kill_grace: Duration::from_millis(100),
             review_timeout: Duration::from_secs(5),
+            check_slots: test_check_slots(),
             review_resync_quiet: Duration::from_secs(900),
             workspace_roots: task_core::local_machine::WorkspaceRoots::new(
                 PathBuf::from("/nonexistent"),
@@ -1300,7 +1323,7 @@ fn pool_dispatcher_with_requeues(
             max_infra_retries: 5,
             // 空き容量を検証しない試験を host の残量から切り離す。
             // disk gate の試験は u64::MAX 等で閾値を明示する。
-            min_free_disk_mb: 0,
+            min_free_disk_pct: 0.0,
             roles: Vec::new(),
             genres: Vec::new(),
             delegation: DelegationLimits::default(),
@@ -2910,15 +2933,15 @@ async fn run_gate_until_second_checks(
 fn scratch_on(d: &mut Dispatcher, dir: &Path) -> task_worker::scratch::ScratchSettings {
     let s = task_worker::scratch::ScratchSettings::with_dir(dir);
     d.config.shared_build_cache = true;
-    // GC は実 filesystem の空きを読む。既定の 5120 MB のままだと host の空き（tmpfs の /tmp など）が
-    // 10 GiB を割ったとき LowDisk の GC が seed・完了 target を消し、試験が host の具合で落ちる。
-    // 空きの判定を試す試験は、この後で自分の値（u64::MAX など）を置く。
-    d.config.min_free_disk_mb = 0;
+    // GC は実 filesystem の空きを読む。既定の 10% のままだと host の空き（tmpfs の /tmp など）が
+    // 容量の 20% を割ったとき LowDisk の GC が seed・完了 target を消し、試験が host の具合で落ちる。
+    // 空きの判定を試す試験は、この後で自分の値（99.9 など）を置く。
+    d.config.min_free_disk_pct = 0.0;
     d.config.scratch = s.clone();
-    // scratch の GC は tempdir の filesystem の実の空き（statvfs）を `min_free_disk_mb` と比べる。既定の 5120 MB の
-    // ままだと host の空きが 5〜10 GiB の間で LowDisk になり、seed（同じ repo が使用中の P3）まで回収されて adopt の
+    // scratch の GC は tempdir の filesystem の実の空き（statvfs）を `min_free_disk_pct` の下限と比べる。既定の 10% の
+    // ままだと host の空きが容量の 10〜20% の間で LowDisk になり、seed（同じ repo が使用中の P3）まで回収されて adopt の
     // 試験が host の空きで変わる（N1 fix-build-cache-adopt）。空きを見る試験はこの後で明示的に上書きする。
-    d.config.min_free_disk_mb = 0;
+    d.config.min_free_disk_pct = 0.0;
     s
 }
 
@@ -3075,9 +3098,13 @@ mod credential_gate;
 mod credential_logcap;
 mod cron_cos_review;
 mod cron_jobs;
+mod disk_forecast;
 mod dispatch_ready_phases;
 mod git_workspace;
 mod health_enforce;
+mod health_generic;
+mod health_generic_limits;
+mod health_generic_stale;
 mod health_limits_integration;
 mod integration_check_progress;
 mod integration_ready_race;
@@ -3143,6 +3170,10 @@ mod tree_decisions;
 /// （`StallDetected`）・人の replan の 2 回目の試行（`src/dispatcher/tests/tree_approval.rs`）。
 mod tree_approval;
 
+/// ADR 2026-11-11-replan-unit-kind-change: replan で unit の kind を task と leaf の間で変えたときの行の kind と、子 task の
+/// ある行の kind の変更を採用の前に拒むこと（`src/dispatcher/tests/tree_kind_change.rs`）。
+mod tree_kind_change;
+
 /// ADR-0074「F5-fix8 実装時の明確化」: 仕事の残っていない計画の最終レビュー（空の replan の事故の再現）と、
 /// 木でない Task の生存確認（`src/dispatcher/tests/finished_plan.rs`）。
 mod finished_plan;
@@ -3168,6 +3199,7 @@ mod cos_slot_wait;
 mod dep_integration;
 mod human_gates;
 mod task_waits;
+mod unit_task_deps;
 /// ADR 2026-11-09-unscheduled-restart-hold: 再起動直後の停滞の判定の保留。
 mod unscheduled_restart;
 
@@ -3178,6 +3210,7 @@ mod work_unit_check_failures;
 /// ADR-0098（Phase R7-10）: worker の run が作る task は元の task の案件とリポジトリを継ぐ
 /// （`src/dispatcher/tests/followups.rs`）。
 mod followups;
+mod knowledge_usage;
 /// ADR-0074「R7-11 実装時の明確化」: planner / WU の run の予算が `RunRequest.task.budget` に届く
 /// （`src/dispatcher/tests/planner_budget.rs`）。
 mod planner_budget;

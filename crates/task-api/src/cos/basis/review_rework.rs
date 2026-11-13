@@ -122,6 +122,8 @@ pub(super) fn validate(
         )));
     }
     // The rejections CoS already reopened for, read at each applied reopen of this category.
+    // ADR 2026-11-12-cos-triage-scope D3: the audit rows before policy 12 say 定型の代答（…）; the
+    // rows stay as written (append-only), so both wordings count.
     let prefix = reason_prefix(&DelegatedBasis {
         category: BasisCategory::ReviewRework,
         refs: Vec::new(),
@@ -129,12 +131,13 @@ pub(super) fn validate(
         failures: None,
         plan: None,
     });
+    let recorded_prefix = "定型の代答（review_rework）";
     let previous: Vec<Rejection> = events
         .iter()
         .enumerate()
         .filter(|(_, (_, e))| {
             matches!(e, Event::CosOperation { state, target_kind, reason, .. }
-                if state == "applied" && target_kind == "task" && reason.starts_with(&prefix))
+                if state == "applied" && target_kind == "task" && (reason.starts_with(&prefix) || reason.starts_with(recorded_prefix)))
         })
         .filter_map(|(i, _)| rejection(&events[..i], false))
         .collect();

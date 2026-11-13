@@ -126,7 +126,8 @@ scripts/selfdeploy/release.sh celeris/01M2XXX # 自己改善の案件の実装�
   → web `install --frozen-lockfile` → `typecheck` → `test` → `release`（build を含む）。
   pnpm は web/package.json の packageManager に固定する。web の段を飛ばす切替は無い。
 - **※※ `cargo-test` はテストバイナリを並列に回す（Phase SD-2、ADR-0041 §8、人の判断 2026-09-28）**: `scripts/dev/test-parallel.sh`
-  = `cargo nextest run --workspace --no-fail-fast --test-threads $CELERIS_TEST_JOBS`（既定 `min(8, max(2, nproc/3))`）の後に
+  = `cargo nextest run --workspace --no-fail-fast --test-threads $CELERIS_TEST_JOBS`（既定は host の検査の枠の並列度
+  `max(1, nproc / 枠の数)`、24 core・枠 2 で 12。準備の build の前に host 共通の枠を取る。ADR 2026-11-12-host-check-slots D2・D3）の後に
   `cargo test --doc --workspace`（nextest は doc-test を回さない）。範囲は `cargo test --workspace` と同じ。直列が要るテストは
   **ビルドする sha の** `.config/nextest.toml` の test-group で縛る。gate.json の `cargo_test` は
   `{runner: "nextest", nextest_version, jobs, binaries（nextest のバイナリ数 + doc-test の crate 数）, nextest_binaries, doc_binaries,
@@ -401,6 +402,13 @@ CoS に直接の `promote.sh` 実行を許可したものではない。202 は�
 走らない（新しい昇格スクリプトは、それ自身が一度昇格されてから次の昇格で使われる）。
 `current` に `scripts/` が無い（Phase 48 以前・初回）ときだけ昇格先のものを使い、
 応答の `script_from` が `"current"` / `"target"` のどちらかを言う。
+
+**CoS の skill の写し**（[ADR 2026-11-11 cos-skill-sync](../../agent-docs/adr/2026-11-11-cos-skill-sync.md) D2）:
+`promote.sh`・`rollback.sh` は切り替えを記録した後で、切り替え先の release の `skills/cos-*` を
+`[knowledge] root` の `skills/` に写し、KB の git に commit する（失敗は exit 4。config が読めないときも写さず exit 4）。
+写しの段も `current` の `promote.sh` が走らせるので、写しの段を含む release の**最初の**昇格では写らない。
+そのときは昇格の直後に `bash ~/.local/celeris/releases/<sha12>/scripts/sync-skills.sh ~/.local/celeris/releases/<sha12> <knowledge root>`
+を 1 回実行する。KB の skill の版が `[cos.triage] policy_version` と合うまで、daemon は CoS の run を起こさず受信箱に 1 件知らせる。
 
 **安全に関わる変更があるリリース**（`changes.sensitive` が空でない。§2）は、画面が赤いバッジ
 「安全に関わる変更 N 件」とパス一覧を**最初から開いて**出し、「昇格」ボタンは**押す前に sha12 を

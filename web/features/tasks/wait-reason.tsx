@@ -1,5 +1,10 @@
 import { Link } from "@tanstack/react-router";
-import type { HumanGateKind, TaskSummary, TaskWait } from "../../api/generated/types";
+import type {
+  HumanGateKind,
+  TaskDependencyCause,
+  TaskSummary,
+  TaskWait,
+} from "../../api/generated/types";
 
 function humanGateReason(gate: HumanGateKind, stage: string | null | undefined): string {
   switch (gate) {
@@ -54,6 +59,8 @@ export function waitReason(wait: TaskWait): string {
       return "再試行待ち";
     case "disk_critical":
       return "空き容量の回復待ち";
+    case "disk_forecast":
+      return `空き容量の見込み待ち（必要 ${(wait.need_bytes / 1e9).toFixed(1)} GB）`;
     case "delegated_children":
       return `委譲した子 ${wait.task_ids.length} 件待ち`;
     case "review_awaiting_human":
@@ -64,6 +71,28 @@ export function waitReason(wait: TaskWait): string {
         : wait.cause === "unmerged"
           ? `依存先 ${wait.task_id} の成果が main に未取り込み`
           : `依存先 ${wait.task_id} は取り込まれない（${wait.cause === "held" ? "保留" : "破棄"}）`;
+    case "task_dependency":
+      return `unit ${wait.unit_keys.join(", ")} が task ${wait.task_id} を待っている（${taskDependencyCause(wait.cause)}）`;
+  }
+}
+
+// ADR 2026-11-11-unit-task-dependencies D5: 計画の unit の `task:<id>` 依存の理由（人の操作待ちではない）。
+function taskDependencyCause(cause: TaskDependencyCause): string {
+  switch (cause) {
+    case "unfinished":
+      return "完了待ち";
+    case "unmerged":
+      return "main への取り込み待ち";
+    case "delivery_skipped":
+      return "取り込みが見送られた";
+    case "held":
+      return "取り込みを保留中";
+    case "discarded":
+      return "取り込まないと決まった";
+    case "failed":
+      return "依存先が失敗";
+    case "cancelled":
+      return "依存先が中止";
   }
 }
 
@@ -74,6 +103,7 @@ export function waitTargets(wait: TaskWait): string[] {
     case "depends_on":
       return wait.task_ids;
     case "depends_on_integration":
+    case "task_dependency":
       return [wait.task_id];
     case "approval_parent":
       return [wait.task_id];

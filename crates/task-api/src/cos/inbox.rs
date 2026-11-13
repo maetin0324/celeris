@@ -84,10 +84,23 @@ pub struct EscalationOption {
     pub detail: Option<String>,
 }
 
+/// ADR 2026-11-12-cos-triage-scope D2: who an escalated item is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Addressee {
+    /// The person: the outbox notification (Discord) and the card in the general CoS window.
+    Human,
+    /// The external operator (an operation outside Celeris: a policy-only branch to main, a
+    /// promote or rollback, a host operation). The route only; nothing is sent to Discord.
+    Operator,
+}
+
 /// D3 escalation packet. `recommended` is one of `options[].key` or null (then the reason says why).
 #[derive(Debug, Clone, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EscalationPacket {
+    /// ADR 2026-11-12-cos-triage-scope D2: `human` or `operator`.
+    pub to: Addressee,
     pub summary: String,
     /// ADR 2026-10-30-cos-review-open-waits D3: which request and task the item comes from and why
     /// the decision is needed now, with task-internal words paraphrased.
@@ -242,9 +255,12 @@ pub(crate) fn answers_wait(action: &str) -> bool {
 /// The wait a `/cos/operations` request answers: its explicit `human_required` and what a routine
 /// basis is checked against (ADR 2026-10-28-cos-routine-delegated-answers D2). `None` when the
 /// action answers no wait.
+#[derive(Default)]
 pub(crate) struct OperationWait {
     pub human_required: Option<String>,
     pub target: BasisTarget,
+    /// ADR 2026-11-12-cos-triage-scope D1/D4: what a person keeps of the open wait.
+    pub reserved: Option<task_ops::triage_match::Reserved>,
 }
 
 /// `human_required` and the basis target of a `/cos/operations` request that answers a wait.
@@ -321,21 +337,27 @@ pub(crate) async fn wait_for_operation(
             .then(|| matched.id.clone())
             .flatten(),
     };
-    let human_required = state
+    let open = found.cloned();
+    let (human_required, reserved) = state
         .blocking(move |store| {
+            let reserved = match open.as_ref() {
+                Some(wait) => reserved(store, wait.kind.as_str(), Some(wait))?,
+                None => None,
+            };
             if let Some((source_kind, id)) = override_source
                 && store
                     .cos_override_wait_requires_human(source_kind, &id)
                     .map_err(cos_problem)?
             {
-                return Ok(Some("human override wait".into()));
+                return Ok((Some("human override wait".into()), reserved));
             }
-            human_required_reason(store, kind, task_id)
+            Ok((human_required_reason(store, kind, task_id)?, reserved))
         })
         .await?;
     Ok(Some(OperationWait {
         human_required,
         target,
+        reserved,
     }))
 }
 
@@ -515,11 +537,8 @@ async fn resolve(
                     id: i.clone(),
                 })));
             };
-            if item.is_terminal() {
-                return Err(reject(revision_conflict(format!(
-                    "triage item {i} is already {}",
-                    item.state
-                ))));
+            if let Some(problem) = terminal_conflict(&db, &item).map_err(cos_problem)? {
+                return Err(reject(problem));
             }
             if item.source_revision != req.expected_revision {
                 return Err(reject(revision_conflict(format!(
@@ -558,30 +577,21 @@ async fn resolve(
                             unprocessable("validation", "a notice has nothing to answer")
                         }));
                     };
-                    if store.cos_override_wait_requires_human(&item.source_kind,&item.source_key).map_err(cos_problem)? {
-                        return Err(reject(human_required_problem("human override wait")));
-                    }
-                    if let Some(why) = human_required_reason(
-                        store,
-                        Some(found.kind),
-                        found.task.as_ref().map(|t| t.id),
-                    )? {
-                        return Err(reject(human_required_problem(&why)));
+                    if let Some(kept) = kept_by_person(store, &item, Some(found))? {
+                        return Err(reject(kept.refuse_answer()));
                     }
                     crate::inbox_notifications::validate_answer(found, input)
                         .map_err(|e| reject(unprocessable("validation", e.detail())))?;
                     let Some(routine) = req.basis.as_ref() else {
                         return Err(reject(basis::missing()));
                     };
-                    basis::validate(store, routine, &answer_target(found, input)).map_err(&reject)?;
+                    let target = answer_target(found, input);
+                    basis::validate(store, routine, &target).map_err(&reject)?;
                     audit.ctx.reason =
                         format!("{}: {}", basis::reason_prefix(routine), audit.ctx.reason);
                     let (method, domain_path, domain_body) =
                         delegated_request(found, input).map_err(&reject)?;
-                    audit.item = Some(ItemMark {
-                        item_id: item.id.clone(),
-                        outcome: "answered",
-                    });
+                    audit.item = Some(ItemMark::new(&item.id, "answered"));
                     let op = dispatch(
                         store,
                         &env,
@@ -590,6 +600,8 @@ async fn resolve(
                         &domain_path,
                         domain_body,
                     )?;
+                    // ADR 2026-11-11-cos-standing-context D4: audit the use of a standing grant.
+                    basis::grant_used(store, routine, &target, &audit, &op);
                     Ok((op, None))
                 }
                 ResolveOutcome::Observe => {
@@ -599,16 +611,13 @@ async fn resolve(
                             "answer, escalation and basis must be null for outcome=observe",
                         )));
                     }
-                    if source.is_some() {
+                    if source.is_some_and(|s| !s.kind.observable_while_open()) {
                         return Err(reject(unprocessable(
                             "cos_observe_needs_judgment",
                             "the source is an unresolved wait that needs a judgment; answer or escalate it",
                         )));
                     }
-                    audit.item = Some(ItemMark {
-                        item_id: item.id.clone(),
-                        outcome: "observed",
-                    });
+                    audit.item = Some(ItemMark::new(&item.id, "observed"));
                     let op = audit.apply(store, "cos_inbox_item", &item.id, action, |_| {
                         Ok(serde_json::json!({"item_id": item.id, "outcome": "observed", "confidence": confidence}))
                     })?;
@@ -633,23 +642,12 @@ async fn resolve(
                         ))));
                     }
                     validate_packet(packet, &item, source).map_err(&reject)?;
-                    let outbox = serde_json::json!({
-                        "item_id": item.id,
-                        "source_kind": item.source_kind,
-                        "source_key": item.source_key,
-                        "source_revision": item.source_revision,
-                        "operation_id": audit.ctx.operation_id,
-                        "summary": packet.summary,
-                        "background": packet.background,
-                        "on_answer": packet.on_answer,
-                        "options": packet.options,
-                        "recommended": packet.recommended,
-                        "recommendation_reason": packet.recommendation_reason,
-                        "blocking": source.map(|s| s.blocking.summary.clone()),
-                        "web_path": packet.web_path,
-                        // ADR 2026-10-28-single-human-window-general-cos D2: the general card names the task.
-                        "task_id": source.and_then(|s| s.task.as_ref()).map(|t| t.id.to_string()),
-                    });
+                    if packet.to == Addressee::Operator {
+                        let op = escalate_to_operator(store, &mut audit, &item, source, action)
+                            .map_err(&reject)?;
+                        return Ok((op, None));
+                    }
+                    let outbox = outbox_body(&item, packet, source, &audit.ctx.operation_id);
                     // Claim first: a crash after the claim leaves the outbox, and a retried resolve
                     // finds the route taken and still records the outcome.
                     let notification_id = store
@@ -660,13 +658,11 @@ async fn resolve(
                             OffsetDateTime::now_utc(),
                         )
                         .map_err(cos_problem)?;
-                    audit.item = Some(ItemMark {
-                        item_id: item.id.clone(),
-                        outcome: "escalated",
-                    });
+                    audit.item = Some(ItemMark::new(&item.id, "escalated"));
                     let result = serde_json::json!({
                         "item_id": item.id,
                         "outcome": "escalated",
+                        "addressee": "human",
                         "notification_id": notification_id,
                         "already_routed": notification_id.is_none(),
                         "confidence": confidence,
@@ -691,6 +687,174 @@ async fn resolve(
             notification_id,
         },
     ))
+}
+
+/// Why `resolve` refuses an item that already has an outcome, or `None` when CoS may still judge it.
+/// ADR 2026-11-11-cos-fallback-timing D2: a fallback the notifier has not sent yields to CoS's
+/// judgment; a sent one stays with the person (this judgment is recorded as rejected and nothing
+/// is sent again).
+fn terminal_conflict(
+    db: &std::path::Path,
+    item: &CosInboxItem,
+) -> Result<Option<ApiProblem>, ChatError> {
+    if !item.is_terminal()
+        || (item.state == "fallback" && triage_view::fallback_unsent(db, &item.id)?)
+    {
+        return Ok(None);
+    }
+    let i = &item.id;
+    Ok(Some(revision_conflict(if item.state == "fallback" {
+        format!(
+            "triage item {i} was already sent to the person by the fallback; this judgment is recorded and nothing is sent again"
+        )
+    } else {
+        format!("triage item {i} is already {}", item.state)
+    })))
+}
+
+/// ADR 2026-11-12-cos-triage-scope D1/D3: the basis of a CoS answer to `wait` without a human
+/// instruction: not a matter a person keeps, present, and passing its category's checks.
+pub(crate) fn own_judgment<'a>(
+    store: &SqliteStore,
+    wait: &OperationWait,
+    routine: Option<&'a DelegatedBasis>,
+) -> Result<&'a DelegatedBasis, ApiProblem> {
+    if let Some(reserved) = wait.reserved {
+        return Err(basis::reserved_for_human(reserved));
+    }
+    let routine = routine.ok_or_else(basis::missing)?;
+    basis::validate(store, routine, &wait.target)?;
+    Ok(routine)
+}
+
+/// What a person keeps of an open item (D3「人に回す基準」and ADR 2026-11-12-cos-triage-scope
+/// D1/D2): CoS may neither answer it nor route it to the operator.
+enum Kept {
+    /// A human override wait or an explicit `human_required` (label, human check).
+    HumanRequired(String),
+    /// A matter the deterministic match reserves for a person.
+    Reserved(task_ops::triage_match::Reserved),
+}
+
+impl Kept {
+    /// The refusal of a CoS answer: 403 for an explicit `human_required`, 422 for a reserved matter.
+    fn refuse_answer(self) -> ApiProblem {
+        match self {
+            Kept::HumanRequired(why) => human_required_problem(&why),
+            Kept::Reserved(reserved) => basis::reserved_for_human(reserved),
+        }
+    }
+
+    /// The refusal of an escalation to the operator (D2): 422, escalate it with to=human.
+    fn refuse_operator(self) -> ApiProblem {
+        match self {
+            Kept::HumanRequired(why) => basis::kept_for_human(&why),
+            Kept::Reserved(reserved) => basis::reserved_for_human(reserved),
+        }
+    }
+}
+
+/// What a person keeps of this item, or `None` when CoS may answer it or route it to the operator:
+/// a human override wait, an explicit `human_required` of its source wait, or a matter the
+/// deterministic match reserves for a person.
+fn kept_by_person(
+    store: &SqliteStore,
+    item: &CosInboxItem,
+    source: Option<&InboxItem>,
+) -> Result<Option<Kept>, ApiProblem> {
+    let override_wait = store
+        .cos_override_wait_requires_human(&item.source_kind, &item.source_key)
+        .map_err(cos_problem)?;
+    if override_wait {
+        return Ok(Some(Kept::HumanRequired("human override wait".into())));
+    }
+    let task = source.and_then(|s| s.task.as_ref()).map(|t| t.id);
+    if let Some(why) = human_required_reason(store, source.map(|s| s.kind), task)? {
+        return Ok(Some(Kept::HumanRequired(why)));
+    }
+    Ok(reserved(store, &item.source_kind, source)?.map(Kept::Reserved))
+}
+
+/// The outbox (Discord) body of an escalation addressed to the person.
+fn outbox_body(
+    item: &CosInboxItem,
+    packet: &EscalationPacket,
+    source: Option<&InboxItem>,
+    operation_id: &str,
+) -> Value {
+    serde_json::json!({
+        "item_id": item.id,
+        "source_kind": item.source_kind,
+        "source_key": item.source_key,
+        "source_revision": item.source_revision,
+        "operation_id": operation_id,
+        "summary": packet.summary,
+        "background": packet.background,
+        "on_answer": packet.on_answer,
+        "options": packet.options,
+        "recommended": packet.recommended,
+        "recommendation_reason": packet.recommendation_reason,
+        "blocking": source.map(|s| s.blocking.summary.clone()),
+        "web_path": packet.web_path,
+        // ADR 2026-10-28-single-human-window-general-cos D2: the general card names the task.
+        "task_id": source.and_then(|s| s.task.as_ref()).map(|t| t.id.to_string()),
+    })
+}
+
+/// ADR 2026-11-12-cos-triage-scope D2: route an escalated item to the external operator. A matter
+/// a person keeps (D1, `human_required` included) is refused; the route is taken in the audit's
+/// transaction and nothing is sent (no notification row, no card in the person's window).
+fn escalate_to_operator(
+    store: &SqliteStore,
+    audit: &mut OperationAudit,
+    item: &CosInboxItem,
+    source: Option<&InboxItem>,
+    action: &str,
+) -> Result<task_core::chat::CosOperation, ApiProblem> {
+    if let Some(kept) = kept_by_person(store, item, source)? {
+        return Err(kept.refuse_operator());
+    }
+    audit.item = Some(ItemMark::new(&item.id, "escalated"));
+    let confidence = audit
+        .payload
+        .get("confidence")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let at = OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .map_err(|e| unprocessable("validation", e.to_string()))?;
+    audit.apply(store, "cos_inbox_item", &item.id, action, |tx| {
+        let routed = task_core::cos_fallback::take_operator_route(tx, &item.id, &at)?;
+        Ok(serde_json::json!({
+            "item_id": item.id,
+            "outcome": "escalated",
+            "addressee": "operator",
+            "notification_id": null,
+            "already_routed": !routed,
+            "confidence": confidence,
+        }))
+    })
+}
+
+/// ADR 2026-11-12-cos-triage-scope D1/D4: what a person keeps of this item, by the same
+/// deterministic match the daemon shows CoS before it judges.
+pub(crate) fn reserved(
+    store: &SqliteStore,
+    source_kind: &str,
+    source: Option<&InboxItem>,
+) -> Result<Option<task_ops::triage_match::Reserved>, ApiProblem> {
+    let body = source
+        .and_then(|s| s.detail_full.as_deref().or(s.detail.as_deref()))
+        .unwrap_or("");
+    let input = task_ops::triage_match::MatchInput {
+        source_kind,
+        title: source.map_or("", |s| s.title.as_str()),
+        body,
+        project_id: source.and_then(|s| s.project_id.as_deref()),
+    };
+    task_ops::triage_match::match_item(store, input, OffsetDateTime::now_utc())
+        .map(|m| m.reserved)
+        .map_err(store_problem)
 }
 
 /// What a routine-answer basis is checked against: the derived wait and the chosen answer.

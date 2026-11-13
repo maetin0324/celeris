@@ -8,10 +8,11 @@ use time::format_description::well_known::Rfc3339;
 
 use super::decision_log::intervention_of;
 use super::{SqliteStore, StoreError};
+use crate::cos_fallback::is_operator_route;
 use crate::decision_log::InterventionActorKind;
 use crate::request_ledger::{
-    ActorAt, HumanWaitSpan, REQUEST_LEDGER_SCHEMA, RequestCampaign, RequestLedger,
-    RequestLedgerSummary, RequestReturn, RequestRevision, RequestRow,
+    ActorAt, REQUEST_LEDGER_SCHEMA, RequestCampaign, RequestLedger, RequestLedgerSummary,
+    RequestReturn, RequestRevision, RequestRow, RouteWaitSpan,
 };
 
 /// 一次対応の入力 message の本文の頭（`cos_triage_claim` が書く）。
@@ -367,11 +368,8 @@ impl SqliteStore {
                 .entry(resolved.to_string())
                 .or_default() += 1;
             summary.first_ai_response_missing += usize::from(row.first_ai_response.is_none());
-            summary.open_human_waits += row
-                .human_waits
-                .iter()
-                .filter(|w| w.ended_at.is_none())
-                .count();
+            summary.open_human_waits += open_waits(&row.human_waits);
+            summary.open_operator_waits += open_waits(&row.operator_waits);
             requests.push(row);
         }
         summary.requests = requests.len();
@@ -433,7 +431,7 @@ impl SqliteStore {
         let mut operations = BTreeSet::new();
         let mut policy = BTreeSet::new();
         let mut cos_runs: Vec<String> = Vec::new();
-        let mut human_waits = Vec::new();
+        let mut waits = Vec::new();
         let mut first_ai: Option<(OffsetDateTime, ActorAt)> = None;
         for (n, item) in items.iter().enumerate() {
             let op = item
@@ -526,12 +524,9 @@ impl SqliteStore {
                     source: format!("cos_operation:{op_id}"),
                 });
             }
-            let (route, routed_at) = match raw.routes.get(&item.id) {
-                Some((route, at)) => (Some(route.clone()), Some(at.clone())),
-                None => (None, None),
-            };
-            if let (Some(route), Some(at)) = (&route, &routed_at) {
-                human_waits.push(HumanWaitSpan {
+            let routed = raw.routes.get(&item.id).cloned();
+            if let Some((route, at)) = &routed {
+                waits.push(RouteWaitSpan {
                     item_id: item.id.clone(),
                     revision: item.revision.clone(),
                     route: route.clone(),
@@ -555,8 +550,8 @@ impl SqliteStore {
                 run_ids,
                 operation_id: item.operation_id.clone(),
                 operation_state: op.map(|(_, op)| op.state.clone()),
-                route,
-                routed_at,
+                route: routed.as_ref().map(|(r, _)| r.clone()),
+                routed_at: routed.as_ref().map(|(_, a)| a.clone()),
                 resolved,
             });
         }
@@ -646,6 +641,8 @@ impl SqliteStore {
             None => (None, None),
         };
         let last = items[items.len() - 1];
+        let (operator_waits, human_waits) =
+            waits.into_iter().partition(|w| is_operator_route(&w.route));
         Ok(RequestRow {
             request_ref: format!("{}:{}", first.kind, first.key),
             source_kind: first.kind.clone(),
@@ -657,6 +654,7 @@ impl SqliteStore {
             returns,
             first_ai_response: first_ai.map(|(_, a)| a),
             human_waits,
+            operator_waits,
             resolved,
             resumed_at,
             resume_run_id,
@@ -721,3 +719,8 @@ fn resume_after(
 #[cfg(test)]
 #[path = "request_ledger_tests.rs"]
 mod tests;
+
+/// Open spans (no `ended_at`) of one wait list.
+fn open_waits(waits: &[RouteWaitSpan]) -> usize {
+    waits.iter().filter(|w| w.ended_at.is_none()).count()
+}

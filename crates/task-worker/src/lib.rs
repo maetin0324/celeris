@@ -25,6 +25,7 @@ pub mod build_cache;
 pub mod campaign_pin;
 /// ADR 2026-11-07-health-review-integration D1: 変更の汎用規約（generic.md）と repo 固有の規約を prompt に配る。
 pub mod change_rules;
+pub mod check_slots;
 pub mod claude_account;
 pub mod claude_code;
 pub mod cluster_login;
@@ -157,3 +158,5 @@ pub use workspace::{ExecResult, LocalWorkspace, Workspace, WorkspaceError};
 
 pub use browser_live::BrowserControl;
 pub use browser_policy::{BrowserAuthority, BrowserPorts};
+
+pub mod cluster_jobs_continuation;

@@ -204,7 +204,7 @@ pub(crate) fn dispatch(
         }
         "authority.grant_revoke" | "authority.check" | "authority.grant_propose" => {
             let raw_id = matched.id.unwrap_or_default();
-            let id = crate::handlers::parse_project_id(&raw_id)
+            let id = crate::handlers::authority::Ledger::parse(&raw_id)
                 .map_err(|problem| audit.reject(store, "project", &raw_id, problem))?;
             match matched.action {
                 "authority.grant_revoke" => {

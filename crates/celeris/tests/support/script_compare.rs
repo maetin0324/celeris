@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use celeris::{ClusterMasters, Config, ScriptPolicy, build_dispatcher};
+use celeris::{ClusterMasters, Config, Exit, RunOptions, ScriptPolicy, build_dispatcher};
 use celeris_script::manifest::{VerifiedBundle, load_bundle_dir, sha256_hex};
 use celeris_script::{ScriptRuntimeHandle, ScriptSource};
 use task_core::script_compare::{
@@ -21,8 +21,8 @@ use task_core::script_compare::{
     ScriptGenerationState, ScriptGenerationTransition, ScriptMode, ScriptModeChange,
 };
 use task_core::{
-    Budget, Check, Criterion, Event, RoutingRecord, SqliteStore, Status, Task, TaskId, TaskKind,
-    TaskRouting, TaskStore, Tier, TierSource, WorkerHint, WorkspaceSpec,
+    Budget, Check, Criterion, DaemonMode, Event, RoutingRecord, SqliteStore, Status, Task, TaskId,
+    TaskKind, TaskRouting, TaskStore, Tier, TierSource, WorkerHint, WorkspaceSpec,
 };
 use task_dispatch::Dispatcher;
 use time::OffsetDateTime;
@@ -435,6 +435,22 @@ pub fn load_config(home: &Path, script: &str) -> Config {
     write_config(home, &config_text("", script))
 }
 
+/// `config` の一時 DB で daemon（`celeris::run`、mode normal）を 3 tick だけ回し、終わり方を返す。
+/// 起動時の `[script]` の判定（generation の行・rust への戻し）と、tick の中の compare を記録させる。
+pub async fn run_daemon(config: Config) -> Exit {
+    celeris::run(
+        config,
+        RunOptions {
+            until_idle: false,
+            max_ticks: 3,
+            mode: DaemonMode::Normal,
+            release: None,
+        },
+    )
+    .await
+    .expect("daemon run")
+}
+
 pub struct Env {
     pub dir: tempfile::TempDir,
     pub store: SqliteStore,
@@ -456,7 +472,17 @@ impl Env {
     pub fn with_config(domain: &'static str, sources: &str, extra: &str) -> Self {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir_all(dir.path().join("ws")).expect("ws");
-        let config = write_config(dir.path(), &config_text(sources, extra));
+        let mut config = write_config(dir.path(), &config_text(sources, extra));
+        // ADR 2026-11-11-cos-skill-sync D3: a KB of this test whose CoS skills fit `[cos.triage]`
+        // (not the default `~/.local/share/celeris/knowledge`).
+        config.knowledge.root = dir.path().join("knowledge");
+        let triage = &config.cos.triage;
+        task_ops::cos_skill_gate::write_fixture(
+            &config.knowledge.root.join("skills"),
+            &triage.policy_skill,
+            &triage.policy_version,
+        )
+        .expect("CoS skills");
         let store = SqliteStore::open(&config.db.path).expect("store");
         Self {
             dir,

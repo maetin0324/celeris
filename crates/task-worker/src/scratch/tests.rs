@@ -239,6 +239,110 @@ impl StatusLookup for Db {
     fn work_unit_status(&self, id: &str) -> Option<WorkUnitStatus> {
         self.wus.get(id).copied()
     }
+    fn task_work_units(&self, _: &str) -> Vec<UnitTargetUse> {
+        Vec::new()
+    }
+}
+
+/// `running` の task の WU の状態だけを与える lookup（[`task_awaits_work_units`] の試験）。
+struct Plan(Vec<UnitTargetUse>);
+impl StatusLookup for Plan {
+    fn task_status(&self, _: &str) -> Option<Status> {
+        Some(Status::Running)
+    }
+    fn work_unit_status(&self, _: &str) -> Option<WorkUnitStatus> {
+        None
+    }
+    fn task_work_units(&self, _: &str) -> Vec<UnitTargetUse> {
+        self.0.clone()
+    }
+}
+
+fn unit(status: WorkUnitStatus, shares_task_worktree: bool) -> UnitTargetUse {
+    UnitTargetUse {
+        status,
+        shares_task_worktree,
+    }
+}
+
+/// 不変条件（ADR 2026-11-11-disk-aware-dispatch 付記 2026-11-12、親の数え方）: `running` の親の owner `task-<id>` は、
+/// 親の target に書く run・検査（WU の無い task の run、Task の worktree を共有する WU）があるときだけ「今書いている」。
+/// 自分の worktree を持つ WU・子 task だけが走っている、またはどの WU も走っていない親は書いていない。上の
+/// `only_running_and_reviewing_owners_count_as_written_now` は WU の無い task しか見ないので、親を一律に `task running`
+/// と数える旧い分類（本番で WU 1 本に repo の見込みの 2 倍を予約した）を検出できない。
+#[test]
+fn a_running_parent_is_written_only_while_a_run_shares_its_target() {
+    let s = ScratchSettings::with_dir("/s");
+    let parent = Owner::parse("task-P").unwrap();
+    let reason = |units: Vec<UnitTargetUse>| {
+        let (class, reason) = classify(
+            &parent,
+            Some(&lease_for(&parent)),
+            at(T0),
+            at(T0 + 10),
+            &s,
+            &Plan(units),
+            true,
+        );
+        assert_eq!(
+            class,
+            Class::Pinned,
+            "the parent's target is never reclaimed"
+        );
+        reason
+    };
+    use WorkUnitStatus::*;
+    // WU の run 1 本が自分の worktree で走っているだけ（本番の 2026-11-12 17:12Z の形）。
+    let r = reason(vec![unit(Running, false), unit(Pending, true)]);
+    assert_eq!(r, TASK_AWAITING_WORK_UNITS);
+    assert!(!target_written_now(r));
+    // どの WU も走っていない（次の WU が判定で待っている）。
+    assert!(!target_written_now(reason(vec![
+        unit(Done, false),
+        unit(Ready, true),
+    ])));
+    // 統合 WU・repair WU・並列 1 に倒した WU が Task の worktree で走っている。
+    let r = reason(vec![unit(Done, false), unit(Running, true)]);
+    assert_eq!(r, TASK_RUNNING);
+    assert!(target_written_now(r));
+    // WU の無い task（Task 単位の run）と、WU がすべて終わった task の run。
+    assert!(target_written_now(reason(Vec::new())));
+    assert!(target_written_now(reason(vec![
+        unit(Done, false),
+        unit(Superseded, true),
+    ])));
+}
+
+/// WU の行から材料を作る: branch のある WU は自分の worktree、branch の無い WU は Task の worktree を共有し、子 task の
+/// unit は共有しない。
+#[test]
+fn a_unit_shares_the_task_target_when_it_has_no_branch_of_its_own() {
+    let spec: task_core::WorkUnitSpec = serde_json::from_value(serde_json::json!({
+        "key": "a", "kind": "implement", "title": "t", "objective": "o", "phase": "p"
+    }))
+    .unwrap();
+    let row = |kind: task_core::WorkUnitKind, branch: Option<&str>| {
+        let mut r = task_core::WorkUnitRow::new(
+            "w".into(),
+            "t".into(),
+            "plan".into(),
+            1,
+            spec.clone(),
+            Running,
+            "2026-11-12T00:00:00Z".into(),
+        );
+        r.kind = kind;
+        r.branch = branch.map(str::to_string);
+        UnitTargetUse::of(&r)
+    };
+    use WorkUnitStatus::Running;
+    use task_core::WorkUnitKind::*;
+    assert!(!row(Implement, Some("celeris-wu/t/a")).shares_task_worktree);
+    assert!(row(Implement, None).shares_task_worktree);
+    assert!(row(Integrate, None).shares_task_worktree);
+    assert!(row(Repair, None).shares_task_worktree);
+    assert!(!row(Task, None).shares_task_worktree);
+    assert_eq!(row(Implement, None).status, Running);
 }
 
 fn lease_for(owner: &Owner) -> Lease {
@@ -257,6 +361,39 @@ fn lease_for(owner: &Owner) -> Lease {
         adopted_from: None,
         ttl_secs: None,
     }
+}
+
+/// 不変条件（ADR 2026-11-11-disk-aware-dispatch D1）: dispatch の見込みが「増える target」と見るのは、run か review の
+/// 検査が今書いている owner だけ。P0 でも release の lease とまだ始まらない WU は含めない。`classify_follows_the_adr_table`
+/// は class しか見ないので、P0 の中の区別（理由）を確かめない。
+#[test]
+fn only_running_and_reviewing_owners_count_as_written_now() {
+    let s = ScratchSettings::with_dir("/s");
+    let db = Db {
+        tasks: HashMap::from([
+            ("R".to_string(), Status::Running),
+            ("V".to_string(), Status::Reviewing),
+        ]),
+        wus: HashMap::from([
+            ("w-run".to_string(), WorkUnitStatus::Running),
+            ("w-pend".to_string(), WorkUnitStatus::Pending),
+            ("w-cont".to_string(), WorkUnitStatus::NeedsContinuation),
+        ]),
+    };
+    let now = at(T0 + 10);
+    let written = |o: &str| {
+        let owner = Owner::parse(o).unwrap();
+        let (class, reason) =
+            classify(&owner, Some(&lease_for(&owner)), at(T0), now, &s, &db, true);
+        assert_eq!(class, Class::Pinned, "{o}");
+        target_written_now(reason)
+    };
+    assert!(written("task-R"));
+    assert!(written("task-V"));
+    assert!(written("task-R/wu-w-run"));
+    assert!(!written("task-R/wu-w-pend"));
+    assert!(!written("task-R/wu-w-cont"));
+    assert!(!written("release-0123456789ab"));
 }
 
 #[test]
@@ -1386,7 +1523,15 @@ fn seed_copy_drops_workspace_member_artifacts_and_keeps_registry_ones() {
         copy: &cp_reflink_auto,
         is_shared: &shared,
     };
-    let origin = seed_target(&pool, &owner_dir, &key, &SeedPolicy::unchecked(), &copy_ops);
+    let pin = pin_current_seed(&pool, &key).unwrap();
+    let origin = seed_target(
+        &pool,
+        &owner_dir,
+        &key,
+        &SeedPolicy::unchecked(),
+        &copy_ops,
+        pin.as_ref(),
+    );
     assert!(matches!(origin, TargetOrigin::Seed { .. }), "{origin:?}");
     let owner_target = owner_dir.join(TARGET_SUBDIR);
     assert!(
@@ -1697,6 +1842,21 @@ fn seed_gc_keeps_current_and_removes_stale_generations_and_abandoned_builds() {
     .unwrap();
     std::fs::create_dir_all(repo_dir.join("gen-000000000000-2/target")).unwrap();
     let registered: BTreeSet<String> = [key.clone()].into();
+    // 不変条件: pool が Busy なら削除せず戻り、解放後の GC で回収する。
+    // 従来の claim 競合だけでは pool の待機を検出できない。
+    let pool_lock = pool.lock().unwrap();
+    assert!(pool.try_lock().unwrap().is_none());
+    let (finished, receive) = std::sync::mpsc::channel();
+    let guard = std::thread::spawn(move || {
+        let progressed = receive.recv_timeout(Duration::from_secs(30)).is_ok();
+        drop(pool_lock);
+        progressed
+    });
+    let deferred = seed_gc(&pool, &registered, at(T0 + 30));
+    let _ = finished.send(());
+    assert!(guard.join().unwrap(), "seed GC waited for the pool lock");
+    assert_eq!(deferred, SeedGcResult::default());
+    assert!(repo_dir.join("gen-000000000000-2").is_dir());
     // build 中（`claim_seed` を他が持つ）なら build も旧世代も触らない。
     let held = claim_seed(&repo_dir).unwrap().unwrap();
     let r = seed_gc(&pool, &registered, at(T0 + 60));
@@ -1832,4 +1992,99 @@ fn low_disk_reclaims_the_warm_seed_that_would_be_adopted() {
     // 空きを見ない設定（min_free = 0）なら、同じ空きでも seed は残る。
     p.min_free_bytes = 0;
     assert!(ids(&plan_gc(&entries, &p)).is_empty());
+}
+
+/// ADR 2026-11-11-scratch-lock-tick-stall: seed の写しの間、pool の `.lock` は空いていて（tick の掃除・他の
+/// 割り当てが待たない）、写している世代は seed の GC で退避されず、owner は owner の GC から守られる。
+/// 不変条件: 写しが pool 全体のロックを握らない・写し中の seed と owner が消えない。既存の試験は写しを途中で
+/// 止めないので、写している最中の lock と GC を観測できない。偽の写しを channel で止めて決定的に再現する。
+#[test]
+fn seed_copy_runs_without_the_pool_lock_and_gc_keeps_the_pinned_generation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = Pool::new(tmp.path());
+    write_seed(&pool, MANIFEST);
+    let key = crate::build_cache::repo_cache_key(Path::new(SEED_REPO));
+    let repo_dir = pool.root().join(SEEDS_DIR).join(&key);
+    let owner = Owner::task("T1");
+    let (entered_tx, entered_rx) = std::sync::mpsc::channel::<()>();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let origin = std::thread::scope(|s| {
+        let (pool, owner) = (&pool, &owner);
+        let copier = s.spawn(move || {
+            let none = |_: &AdoptCandidate| None;
+            let shared = |_: &Path| Ok(true);
+            let gated = move |from: &Path, to: &Path| {
+                if from.is_dir() {
+                    let _ = entered_tx.send(());
+                    // 保険の上限。通常は試験が直ちに release を送る。
+                    let _ = release_rx.recv_timeout(Duration::from_secs(30));
+                }
+                cp_reflink_auto(from, to)
+            };
+            let ops = SeedCopyOps {
+                copy: &gated,
+                is_shared: &shared,
+            };
+            allocate_with_seed(
+                pool,
+                &seed_req(owner, &none),
+                &SeedPolicy::unchecked(),
+                &ops,
+            )
+        });
+        entered_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("the copy started");
+        // 写している最中: pool の `.lock` は空いている。
+        assert!(
+            pool.try_lock().unwrap().is_some(),
+            "the copy holds the pool lock"
+        );
+        // owner は割り当て中の印を持つ（owner の GC はこれを見て残す）。
+        assert!(lock_file_held(&pool.owner_dir(owner), OWNER_ALLOC_LOCK));
+        // seed が新しい世代へ切り替わっても、写している世代は GC で退避されない。
+        let gen2 = repo_dir.join("gen-2");
+        std::fs::create_dir_all(gen2.join(TARGET_SUBDIR)).unwrap();
+        std::fs::write(gen2.join(SEED_MANIFEST), MANIFEST).unwrap();
+        switch_current(&repo_dir, "gen-2", SystemTime::now()).unwrap();
+        let registered: BTreeSet<String> = [key.clone()].into();
+        let gc = seed_gc(pool, &registered, SystemTime::now());
+        assert!(gc.retired.is_empty(), "{gc:?}");
+        assert!(repo_dir.join("gen-1").is_dir());
+        release_tx.send(()).unwrap();
+        copier.join().unwrap().unwrap().origin
+    });
+    assert!(
+        matches!(&origin, TargetOrigin::Seed { seed, .. } if seed.ends_with("gen-1/target")),
+        "{origin:?}"
+    );
+    assert!(!lock_file_held(&pool.owner_dir(&owner), OWNER_ALLOC_LOCK));
+    // 写し終われば、古い世代は次の GC で退避される。
+    let registered: BTreeSet<String> = [key.clone()].into();
+    let gc = seed_gc(&pool, &registered, SystemTime::now());
+    assert_eq!(gc.retired.len(), 1, "{gc:?}");
+    assert!(!repo_dir.join("gen-1").exists());
+}
+
+/// ADR 2026-11-11-scratch-lock-tick-stall: tick の検査の env の割り当ては、pool の `.lock` を別の持ち主が
+/// 握っていても待たずに `None` を返し、空いていれば lease を書く。seed があっても写さない（写しは tick を止める）。
+/// 不変条件: tick から pool の `.lock` と seed の写しを待つ経路が無い。既存の試験は競合する lock を作らない。
+#[test]
+fn check_allocation_does_not_wait_for_the_pool_lock_nor_copy_the_seed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = Pool::new(tmp.path());
+    write_seed(&pool, MANIFEST);
+    let owner = Owner::task("T1");
+    let held = pool.lock().unwrap();
+    assert!(try_allocate_for_check(&pool, &owner, Path::new(SEED_REPO)).is_none());
+    assert!(!pool.lease_path(&owner).exists());
+    drop(held);
+    let a = try_allocate_for_check(&pool, &owner, Path::new(SEED_REPO)).expect("allocated");
+    assert_eq!(a.origin, TargetOrigin::Empty { reason: None });
+    assert!(is_empty_dir(&a.target_dir));
+    assert!(pool.lease_path(&owner).is_file());
+    // 割り当て中の owner（seed を写している）も待たない。
+    let owner_alloc = lock_owner_alloc(&pool.owner_dir(&owner)).unwrap();
+    assert!(try_allocate_for_check(&pool, &owner, Path::new(SEED_REPO)).is_none());
+    drop(owner_alloc);
 }

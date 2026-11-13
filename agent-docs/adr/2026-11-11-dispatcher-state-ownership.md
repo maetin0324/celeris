@@ -4,8 +4,9 @@ status: accepted
 ---
 # ADR 2026-11-11: Dispatcher の状態の owner と、判断と副作用の分け方
 
-- 状態: 採用（未実装）。実装は task 01M6TYVJT4S29ZMP6P0D4831JG（健全性 v2 R4）の unit own-cluster・own-maint・own-routing・
-  own-hooks・own-quota・own-supervisor・own-orchestration・settle・admit・review-decide。反例試験は unit cex-lease・cex-review が先に固定する。
+- 状態: 採用（実装中。own-cluster・own-maint・own-routing・own-hooks は済み）。実装は task 01M6TYVJT4S29ZMP6P0D4831JG（健全性 v2 R4）の
+  unit own-cluster・own-maint・own-routing・own-hooks・own-quota・own-supervisor・own-coord-a・own-coord-b・own-orchestration・settle・admit・
+  review-decide。反例試験は unit cex-lease・cex-review が先に固定する。field の置き場と移す unit の正本は D1 の表、共有する判定の正本は D4 の表。
 - 根拠の実測: [change-map.md](../progress/2026-11-11-health-v2-r4/change-map.md) と
   [change-map.json](../progress/2026-11-11-health-v2-r4/change-map.json)（field 116 件・co_change・equivalence 6 件）、
   owner 候補の規則は [owners.json](../progress/2026-11-11-health-v2-r4/owners.json)。
@@ -38,18 +39,20 @@ field を下位の struct に包んで Dispatcher から互いに参照させる
 
 ## D1 境界と field の owner
 
-owner は 8 つ。`Dispatcher` は組み立て（config と port の注入）と tick の順序だけを持つ。
+owner は 9 つ（`TestHooks` と `ProbePorts` は置き場が違うので行を分ける）。`Dispatcher` は組み立て（config と port の注入）と
+tick の順序だけを持つ。field 数は下の field → owner の表の owner 列で数えた。「移し済み」は owner の struct に既にある数。
 
-| owner | module（`crates/task-dispatch/src/`） | 持つ状態 | field 数 |
-|---|---|---|---:|
-| `ExecutionCoordination` | `execution_coordination.rs` | task・WU の待ち、check・統合の process、review の同期、write set の予約 | 31 |
-| `RunSupervisor` | `run_supervisor.rs` | 実行中の run の表（run の集合の正本）、review run、infra backoff、lease の照合 | 7 |
-| `RoutingRuntime` | `routing_runtime.rs`（`routing_runtime/quota.rs`・`routing_runtime/quota_estimate.rs`） | account・source の cooldown、quota の窓、分類待ち、eval run | 14 |
-| `ClusterRuntime` | `cluster_runtime.rs` | クラスタの接続・tunnel・job の poll | 16 |
-| `HostMaintenance` | `host_maintenance.rs` | disk・scratch・build cache・repo target の掃除 | 9 |
-| `ProjectOrchestration` | `project_orchestration.rs` | 案件の停滞の見張り、CoS chat の起動の待ち | 2 |
-| `Dispatcher`（組み立て） | `dispatcher.rs` | config・store・port・registry | 22 |
-| `TestHooks`・`ProbePorts` | `test_hooks.rs` | 試験の時計・遅延・停止点・ablation（`TestHooks`、`#[cfg(test)]`）と本番の既定を持つ probe（`ProbePorts`） | 15 |
+| owner | module（`crates/task-dispatch/src/`） | 持つ状態 | field 数 | 移し済み |
+|---|---|---|---:|---:|
+| `ExecutionCoordination` | `execution_coordination.rs` | task・WU の待ち、check・統合の process、review の同期、write set の予約、credential・browser・cluster の待ち、channel と tick | 30 | 0 |
+| `RunSupervisor` | `run_supervisor.rs` | 実行中の run の表（run の集合の正本）、review run、infra backoff、lease の照合 | 7 | 0 |
+| `RoutingRuntime` | `routing_runtime.rs`（`routing_runtime/route_state.rs`・`routing_runtime/classification_board.rs`・`routing_runtime/quota.rs`・`routing_runtime/quota_estimate.rs`） | 経路の宣言と登録簿・routing mode・harness adapter、account の上限と帳簿・source の cooldown、分類待ち、経路なし、quota の窓と較正、eval run、knowledge の到達性の cache | 19 | 15 |
+| `ClusterRuntime` | `cluster_runtime.rs` | クラスタの接続・tunnel・job の poll と、それを行う port | 25 | 25 |
+| `HostMaintenance` | `host_maintenance.rs` | disk・scratch・build cache・repo target の掃除と sweep の port、中止された task の作業場所、cron の棚卸しの印、TS の比較の状態 | 12 | 10 |
+| `ProjectOrchestration` | `project_orchestration.rs` | 案件の停滞の見張り、CoS chat の起動の待ち | 2 | 0 |
+| `ProbePorts` | `probe_ports.rs` | 本番の既定を持つ注入 port（壁時計・knowledge の到達性・eval の harness の版） | 3 | 0 |
+| `Dispatcher`（組み立て） | `dispatcher.rs` | config・store・snapshot の publisher・credential の gate と再開・孤児の回収・variant の観測・面倒を見る task の述語 | 8 | — |
+| `TestHooks` | `dispatcher/tests/hooks.rs`（ablation は `dispatcher/tests/phase_effect_ab.rs` の `EffectAblation`） | 試験の時計・遅延・停止点・ablation（`#[cfg(test)]`） | 10 | 10 |
 
 ### 境界の根拠（change-map.json の co_change）
 
@@ -94,130 +97,142 @@ owner ごとの合計は、組の両側を `owners.json` の `modules` で owner
 
 ### field → owner の表
 
-change-map.json の `fields` 116 件すべて。「change-map の候補」は `fields[].owner`。owner はすべて候補どおりで、割り当ては変えていない。
-候補 test-hooks の 15 件は、`#[cfg(test)]` の 10 件を `TestHooks`（うち phase_effect_ab の 4 件はその中の評価用 fixture `PhaseAblation`）に、
-本番の既定（実時計・実 ssh・実 knowledge の probe）を持つ 5 件を `ProbePorts` に置く。`ProbePorts` は owner が引数で受ける。
+change-map.json の `fields` 116 件すべて。「change-map の候補」は `fields[].owner`。この表が field の置き場と、移す unit の正本で、
+後の unit の check は unit 列から field を引く。表を変えるのはこの ADR の改訂で、owner を移す unit は表を変えない。
 
-| field | change-map の候補 | owner | cfg(test) | 書き手の扱い |
-|---|---|---|:-:|---|
-| `accepting_new_work` | execution-coordination | `ExecutionCoordination` |  |  |
-| `awaiting_children` | execution-coordination | `ExecutionCoordination` |  |  |
-| `awaiting_human` | execution-coordination | `ExecutionCoordination` |  | leases の削除は `RunSupervisor` が返す鍵を入力に受けて行う |
-| `browser_ledger` | execution-coordination | `ExecutionCoordination` |  |  |
-| `browser_prereq_rescan` | execution-coordination | `ExecutionCoordination` |  |  |
-| `checking` | execution-coordination | `ExecutionCoordination` |  | 同上（WU の check の process。run の集合ではない） |
-| `cluster_waiting` | execution-coordination | `ExecutionCoordination` |  |  |
-| `credential_busy` | execution-coordination | `ExecutionCoordination` |  |  |
-| `credential_held` | execution-coordination | `ExecutionCoordination` |  |  |
-| `dispatch_waits` | execution-coordination | `ExecutionCoordination` |  |  |
-| `integrated_deps` | execution-coordination | `ExecutionCoordination` |  |  |
-| `integrating` | execution-coordination | `ExecutionCoordination` |  | 同上（統合の process。run の集合ではない） |
-| `last_tick_gap_ms` | execution-coordination | `ExecutionCoordination` |  |  |
-| `last_tick_started` | execution-coordination | `ExecutionCoordination` |  |  |
-| `liveness_checked_at` | execution-coordination | `ExecutionCoordination` |  |  |
-| `max_concurrency` | execution-coordination | `ExecutionCoordination` |  |  |
-| `pending_subjects` | execution-coordination | `ExecutionCoordination` |  | 同上。worker_finish の書き込みも `ExecutionCoordination` の method を通す |
-| `review_resync_halted` | execution-coordination | `ExecutionCoordination` |  |  |
-| `review_sync_queue` | execution-coordination | `ExecutionCoordination` |  |  |
-| `review_sync_seq` | execution-coordination | `ExecutionCoordination` |  |  |
-| `run_write_bases` | execution-coordination | `ExecutionCoordination` |  |  |
-| `rx` | execution-coordination | `ExecutionCoordination` |  |  |
-| `stall_watch` | execution-coordination | `ExecutionCoordination` |  |  |
-| `stalled_tasks` | execution-coordination | `ExecutionCoordination` |  |  |
-| `task_workspaces` | execution-coordination | `ExecutionCoordination` |  | housekeeping の削除は `ExecutionCoordination` の method を通す（鍵は `HostMaintenance` が返す） |
-| `ticks` | execution-coordination | `ExecutionCoordination` |  |  |
-| `tx` | execution-coordination | `ExecutionCoordination` |  |  |
-| `write_reservations` | execution-coordination | `ExecutionCoordination` |  |  |
-| `write_set_hold_seq` | execution-coordination | `ExecutionCoordination` |  |  |
-| `write_set_waits` | execution-coordination | `ExecutionCoordination` |  |  |
-| `wu_prepare_failures` | execution-coordination | `ExecutionCoordination` |  |  |
-| `infra_backoff` | run-supervisor | `RunSupervisor` |  | dispatch_run の読み取り・削除と worker_finish の書き込みは `RunSupervisor` の method を通す |
-| `just_aborted` | run-supervisor | `RunSupervisor` |  |  |
-| `lost_review_watch` | run-supervisor | `RunSupervisor` |  | lease の照合の状態 |
-| `ownerless_reconciled_at` | run-supervisor | `RunSupervisor` |  | lease の照合の状態 |
-| `reviewing` | run-supervisor | `RunSupervisor` |  | review run の表。review_spawn・review_verdict の書き込みは `RunSupervisor` の method を通す |
-| `running` | run-supervisor | `RunSupervisor` |  | run の集合の正本。dispatch_run の登録は `RunSupervisor` の method を通す |
-| `terminal_records_reconciled_at` | run-supervisor | `RunSupervisor` |  | lease の照合の状態 |
-| `account_books` | routing | `RoutingRuntime` |  |  |
-| `account_limits` | routing | `RoutingRuntime` |  |  |
-| `accounts_scan_cache` | routing | `RoutingRuntime` |  | snapshot の書き込みは `RoutingRuntime` の method を通す |
-| `classification_board` | routing | `RoutingRuntime` |  |  |
-| `classification_deferred_since` | routing | `RoutingRuntime` |  |  |
-| `classification_wait` | routing | `RoutingRuntime` |  |  |
-| `eval_runs` | routing | `RoutingRuntime` |  |  |
-| `knowledge_probe_cache` | routing | `RoutingRuntime` |  |  |
-| `login_pending_accounts` | routing | `RoutingRuntime` |  |  |
-| `quota_activity` | routing | `RoutingRuntime` |  |  |
-| `quota_calibration` | routing | `RoutingRuntime` |  |  |
-| `source_cooldowns` | routing | `RoutingRuntime` |  |  |
-| `unroutable` | routing | `RoutingRuntime` |  |  |
-| `warned_unroutable` | routing | `RoutingRuntime` |  |  |
-| `cluster_conn` | cluster-runtime | `ClusterRuntime` |  |  |
-| `cluster_connected` | cluster-runtime | `ClusterRuntime` |  |  |
-| `cluster_cooldown` | cluster-runtime | `ClusterRuntime` |  |  |
-| `cluster_disconnect_info` | cluster-runtime | `ClusterRuntime` |  |  |
-| `cluster_job_polls` | cluster-runtime | `ClusterRuntime` |  |  |
-| `cluster_login_needed` | cluster-runtime | `ClusterRuntime` |  |  |
-| `connect_pending_clusters` | cluster-runtime | `ClusterRuntime` |  |  |
-| `container_probe` | cluster-runtime | `ClusterRuntime` |  |  |
-| `last_cluster_command_probe` | cluster-runtime | `ClusterRuntime` |  |  |
-| `last_cluster_liveness` | cluster-runtime | `ClusterRuntime` |  |  |
-| `last_cluster_tunnel_refresh` | cluster-runtime | `ClusterRuntime` |  |  |
-| `tunnel_events` | cluster-runtime | `ClusterRuntime` |  |  |
-| `tunnel_probe_state` | cluster-runtime | `ClusterRuntime` |  |  |
-| `tunnel_prober_stop` | cluster-runtime | `ClusterRuntime` |  |  |
-| `tunnel_state` | cluster-runtime | `ClusterRuntime` |  |  |
-| `warned_cluster_tool` | cluster-runtime | `ClusterRuntime` |  |  |
-| `disk_low` | host-maintenance | `HostMaintenance` |  |  |
-| `disk_ready` | host-maintenance | `HostMaintenance` |  |  |
-| `disk_watch` | host-maintenance | `HostMaintenance` |  |  |
-| `health_inventory` | host-maintenance | `HostMaintenance` |  |  |
-| `removing_build_caches` | host-maintenance | `HostMaintenance` |  |  |
-| `removing_repo_targets` | host-maintenance | `HostMaintenance` |  |  |
-| `repo_target_gc_at` | host-maintenance | `HostMaintenance` |  |  |
-| `scratch` | host-maintenance | `HostMaintenance` |  | dispatcher.rs の書き込みは `HostMaintenance` の method を通す |
-| `script_compare` | host-maintenance | `HostMaintenance` |  |  |
-| `cos_chat_launch` | project-orchestration | `ProjectOrchestration` |  | cos_chat/launch の書き込みは `ProjectOrchestration` の method を通す |
-| `stagnation` | project-orchestration | `ProjectOrchestration` |  | tree_units の書き込みは `ProjectOrchestration` の method を通す |
-| `cluster_command_probe` | composition-root | `Dispatcher`（組み立て） |  |  |
-| `cluster_connector` | composition-root | `Dispatcher`（組み立て） |  |  |
-| `cluster_job_poller` | composition-root | `Dispatcher`（組み立て） |  |  |
-| `cluster_master_watcher` | composition-root | `Dispatcher`（組み立て） |  |  |
-| `config` | composition-root | `Dispatcher`（組み立て） |  |  |
-| `credential_gates` | composition-root | `Dispatcher`（組み立て） |  |  |
-| `credential_resumer` | composition-root | `Dispatcher`（組み立て） |  |  |
-| `dispatch_routing` | composition-root | `Dispatcher`（組み立て） |  |  |
-| `eligible` | composition-root | `Dispatcher`（組み立て） |  |  |
-| `harness_adapters` | composition-root | `Dispatcher`（組み立て） |  |  |
-| `llm_route_registry` | composition-root | `Dispatcher`（組み立て） |  |  |
-| `orphan_takeover` | composition-root | `Dispatcher`（組み立て） |  |  |
-| `publisher` | composition-root | `Dispatcher`（組み立て） |  |  |
-| `routing_context_registry` | composition-root | `Dispatcher`（組み立て） |  |  |
-| `routing_mode` | composition-root | `Dispatcher`（組み立て） |  |  |
-| `store` | composition-root | `Dispatcher`（組み立て） |  |  |
-| `target_sweep` | composition-root | `Dispatcher`（組み立て） |  |  |
-| `target_sweep_scope` | composition-root | `Dispatcher`（組み立て） |  |  |
-| `tunnel_forward_ensurer` | composition-root | `Dispatcher`（組み立て） |  |  |
-| `tunnel_listener_probe` | composition-root | `Dispatcher`（組み立て） |  |  |
-| `tunnel_probe` | composition-root | `Dispatcher`（組み立て） |  |  |
-| `variant_observation` | composition-root | `Dispatcher`（組み立て） |  |  |
-| `before_integration_start` | test-hooks | `TestHooks` | † | 時計・遅延・停止点 |
-| `cluster_liveness_probe` | test-hooks | `ProbePorts` |  | 本番の既定を持つ注入 port（`#[cfg(test)]` ではない） |
-| `cluster_ssh_command_override` | test-hooks | `ProbePorts` |  | 本番の既定を持つ注入 port（`#[cfg(test)]` ではない） |
-| `eval_version_probe` | test-hooks | `ProbePorts` |  | 本番の既定を持つ注入 port（`#[cfg(test)]` ではない） |
-| `knowledge_probe` | test-hooks | `ProbePorts` |  | 本番の既定を持つ注入 port（`#[cfg(test)]` ではない） |
-| `now_unix_fn` | test-hooks | `ProbePorts` |  | 本番の既定を持つ注入 port（`#[cfg(test)]` ではない） |
-| `test_cos_reserved_sources` | test-hooks | `TestHooks` | † | 時計・遅延・停止点 |
-| `test_disable_stale_priority` | test-hooks | `TestHooks` の `PhaseAblation`（評価用 fixture） | † | phase_effect_ab::stale_priority。owner には引数で渡す |
-| `test_disable_write_set_gate` | test-hooks | `TestHooks` の `PhaseAblation`（評価用 fixture） | † | phase_effect_ab::write_set。owner には引数で渡す |
-| `test_halt_after_wu_transition` | test-hooks | `TestHooks` | † | 時計・遅延・停止点 |
-| `test_now` | test-hooks | `TestHooks` | † | 時計・遅延・停止点 |
-| `test_policy_clock` | test-hooks | `TestHooks` | † | 時計・遅延・停止点 |
-| `test_skip_pre_review_sync` | test-hooks | `TestHooks` の `PhaseAblation`（評価用 fixture） | † | phase_effect_ab::review_sync。owner には引数で渡す |
-| `test_sync_conflict_as_review_fail` | test-hooks | `TestHooks` の `PhaseAblation`（評価用 fixture） | † | phase_effect_ab::review_sync。owner には引数で渡す |
-| `test_worker_start_delay` | test-hooks | `TestHooks` | † | 時計・遅延・停止点 |
+- unit 列は、その field を移す（移した）unit。stay は `Dispatcher` に残る組み立て。
+- 終わった unit（own-cluster・own-maint・own-routing・own-hooks）の行は、owner 列に実際の置き場を書いた。その field は `Dispatcher` に無い。
+  候補と違う置き場は 17 件: 候補 composition-root の port 14 件（`ClusterRuntime` へ 7 件、`HostMaintenance` へ 2 件、`RoutingRuntime` へ 5 件）、
+  候補 test-hooks の probe 2 件（`ClusterRuntime` へ）、候補 execution-coordination の `task_workspaces`（`HostMaintenance` へ）。
+  理由は各付記に書いた（移した port を読むのはその owner の method だけ、など）。
+- まだ `Dispatcher` にある field の owner 列は移す先で、候補どおり。
+- 候補 test-hooks の 15 件は、`#[cfg(test)]` の 10 件を `TestHooks` に置いた（うち phase_effect_ab の 4 件はその中の評価用 fixture
+  `EffectAblation`。D6 の `PhaseAblation` はこの名で置いた）。本番の既定（実時計・実 ssh・実 knowledge の probe）を持つ 5 件のうち、
+  クラスタの 2 件は `ClusterRuntime` に置き、残る 3 件を `ProbePorts`（`probe_ports.rs`）に置く。`ProbePorts` は owner が引数で受ける。
+- main の取り込み（unit sync-policy）で `Dispatcher` に増えた field は無い（own-hooks の統合の後と取り込みの後で `pub struct Dispatcher`
+  の field の一覧が同じ）。今の `Dispatcher` の field は 60 件で、owner の struct を持つ 4 件（`cluster`・`maint`・`routing`・`test_hooks`）
+  を除く 56 件がこの表の unit 列が own-quota・own-supervisor・own-coord-a・own-coord-b・own-orchestration・stay の行と一致する。
 
-（116 件。† は `#[cfg(test)]`。）
+| field | change-map の候補 | owner | cfg(test) | 書き手の扱い | unit |
+|---|---|---|:-:|---|---|
+| `accepting_new_work` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-b |
+| `awaiting_children` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-b |
+| `awaiting_human` | execution-coordination | `ExecutionCoordination` |  | leases の削除は `RunSupervisor` が返す鍵を入力に受けて行う | own-coord-b |
+| `browser_ledger` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-a |
+| `browser_prereq_rescan` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-a |
+| `checking` | execution-coordination | `ExecutionCoordination` |  | 同上（WU の check の process。run の集合ではない） | own-coord-b |
+| `cluster_waiting` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-a |
+| `credential_busy` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-a |
+| `credential_held` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-a |
+| `dispatch_waits` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-b |
+| `integrated_deps` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-a |
+| `integrating` | execution-coordination | `ExecutionCoordination` |  | 同上（統合の process。run の集合ではない） | own-coord-b |
+| `last_tick_gap_ms` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-b |
+| `last_tick_started` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-b |
+| `liveness_checked_at` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-b |
+| `max_concurrency` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-b |
+| `pending_subjects` | execution-coordination | `ExecutionCoordination` |  | 同上。worker_finish の書き込みも `ExecutionCoordination` の method を通す | own-coord-b |
+| `review_resync_halted` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-a |
+| `review_sync_queue` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-a |
+| `review_sync_seq` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-a |
+| `run_write_bases` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-a |
+| `rx` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-b |
+| `stall_watch` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-b |
+| `stalled_tasks` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-b |
+| `task_workspaces` | execution-coordination | `HostMaintenance` |  | 書くのは run の起動（`remember_task_workspaces`）と中止の片付けだけで、どちらも `HostMaintenance` の method を通す | own-maint |
+| `ticks` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-b |
+| `tx` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-b |
+| `write_reservations` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-a |
+| `write_set_hold_seq` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-a |
+| `write_set_waits` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-a |
+| `wu_prepare_failures` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-a |
+| `infra_backoff` | run-supervisor | `RunSupervisor` |  | dispatch_run の読み取り・削除と worker_finish の書き込みは `RunSupervisor` の method を通す | own-supervisor |
+| `just_aborted` | run-supervisor | `RunSupervisor` |  |  | own-supervisor |
+| `lost_review_watch` | run-supervisor | `RunSupervisor` |  | lease の照合の状態 | own-supervisor |
+| `ownerless_reconciled_at` | run-supervisor | `RunSupervisor` |  | lease の照合の状態 | own-supervisor |
+| `reviewing` | run-supervisor | `RunSupervisor` |  | review run の表。review_spawn・review_verdict の書き込みは `RunSupervisor` の method を通す | own-supervisor |
+| `running` | run-supervisor | `RunSupervisor` |  | run の集合の正本。dispatch_run の登録は `RunSupervisor` の method を通す | own-supervisor |
+| `terminal_records_reconciled_at` | run-supervisor | `RunSupervisor` |  | lease の照合の状態 | own-supervisor |
+| `account_books` | routing | `RoutingRuntime` |  |  | own-routing |
+| `account_limits` | routing | `RoutingRuntime` |  |  | own-routing |
+| `accounts_scan_cache` | routing | `RoutingRuntime` |  | snapshot の書き込みは `RoutingRuntime` の method を通す | own-routing |
+| `classification_board` | routing | `RoutingRuntime` |  |  | own-routing |
+| `classification_deferred_since` | routing | `RoutingRuntime` |  |  | own-routing |
+| `classification_wait` | routing | `RoutingRuntime` |  |  | own-routing |
+| `eval_runs` | routing | `RoutingRuntime` |  |  | own-quota |
+| `knowledge_probe_cache` | routing | `RoutingRuntime` |  |  | own-quota |
+| `login_pending_accounts` | routing | `RoutingRuntime` |  |  | own-routing |
+| `quota_activity` | routing | `RoutingRuntime` |  | quota の窓と較正。下位 owner `routing_runtime/quota.rs` に置く（D3・D8） | own-quota |
+| `quota_calibration` | routing | `RoutingRuntime` |  | quota の窓と較正。下位 owner `routing_runtime/quota.rs` に置く（D3・D8） | own-quota |
+| `source_cooldowns` | routing | `RoutingRuntime` |  |  | own-routing |
+| `unroutable` | routing | `RoutingRuntime` |  |  | own-routing |
+| `warned_unroutable` | routing | `RoutingRuntime` |  |  | own-routing |
+| `cluster_conn` | cluster-runtime | `ClusterRuntime` |  |  | own-cluster |
+| `cluster_connected` | cluster-runtime | `ClusterRuntime` |  |  | own-cluster |
+| `cluster_cooldown` | cluster-runtime | `ClusterRuntime` |  |  | own-cluster |
+| `cluster_disconnect_info` | cluster-runtime | `ClusterRuntime` |  |  | own-cluster |
+| `cluster_job_polls` | cluster-runtime | `ClusterRuntime` |  |  | own-cluster |
+| `cluster_login_needed` | cluster-runtime | `ClusterRuntime` |  |  | own-cluster |
+| `connect_pending_clusters` | cluster-runtime | `ClusterRuntime` |  |  | own-cluster |
+| `container_probe` | cluster-runtime | `ClusterRuntime` |  |  | own-cluster |
+| `last_cluster_command_probe` | cluster-runtime | `ClusterRuntime` |  |  | own-cluster |
+| `last_cluster_liveness` | cluster-runtime | `ClusterRuntime` |  |  | own-cluster |
+| `last_cluster_tunnel_refresh` | cluster-runtime | `ClusterRuntime` |  |  | own-cluster |
+| `tunnel_events` | cluster-runtime | `ClusterRuntime` |  |  | own-cluster |
+| `tunnel_probe_state` | cluster-runtime | `ClusterRuntime` |  |  | own-cluster |
+| `tunnel_prober_stop` | cluster-runtime | `ClusterRuntime` |  |  | own-cluster |
+| `tunnel_state` | cluster-runtime | `ClusterRuntime` |  |  | own-cluster |
+| `warned_cluster_tool` | cluster-runtime | `ClusterRuntime` |  |  | own-cluster |
+| `disk_low` | host-maintenance | `HostMaintenance` |  |  | own-maint |
+| `disk_ready` | host-maintenance | `HostMaintenance` |  |  | own-maint |
+| `disk_watch` | host-maintenance | `HostMaintenance` |  |  | own-maint |
+| `health_inventory` | host-maintenance | `HostMaintenance` |  |  | own-orchestration |
+| `removing_build_caches` | host-maintenance | `HostMaintenance` |  |  | own-maint |
+| `removing_repo_targets` | host-maintenance | `HostMaintenance` |  |  | own-maint |
+| `repo_target_gc_at` | host-maintenance | `HostMaintenance` |  |  | own-maint |
+| `scratch` | host-maintenance | `HostMaintenance` |  | dispatcher.rs の書き込みは `HostMaintenance` の method を通す | own-maint |
+| `script_compare` | host-maintenance | `HostMaintenance` |  |  | own-orchestration |
+| `cos_chat_launch` | project-orchestration | `ProjectOrchestration` |  | cos_chat/launch の書き込みは `ProjectOrchestration` の method を通す | own-orchestration |
+| `stagnation` | project-orchestration | `ProjectOrchestration` |  | tree_units の書き込みは `ProjectOrchestration` の method を通す | own-orchestration |
+| `cluster_command_probe` | composition-root | `ClusterRuntime` |  | `Dispatcher` の setter が `ClusterRuntime` の setter に渡す（celeris の配線は変えない）。読むのは `ClusterRuntime` の method だけ | own-cluster |
+| `cluster_connector` | composition-root | `ClusterRuntime` |  | `Dispatcher` の setter が `ClusterRuntime` の setter に渡す（celeris の配線は変えない）。読むのは `ClusterRuntime` の method だけ | own-cluster |
+| `cluster_job_poller` | composition-root | `ClusterRuntime` |  | `Dispatcher` の setter が `ClusterRuntime` の setter に渡す（celeris の配線は変えない）。読むのは `ClusterRuntime` の method だけ | own-cluster |
+| `cluster_master_watcher` | composition-root | `ClusterRuntime` |  | `Dispatcher` の setter が `ClusterRuntime` の setter に渡す（celeris の配線は変えない）。読むのは `ClusterRuntime` の method だけ | own-cluster |
+| `config` | composition-root | `Dispatcher`（組み立て） |  |  | stay |
+| `credential_gates` | composition-root | `Dispatcher`（組み立て） |  |  | stay |
+| `credential_resumer` | composition-root | `Dispatcher`（組み立て） |  |  | stay |
+| `dispatch_routing` | composition-root | `RoutingRuntime` |  | 組み立てで注入し `RoutingRuntime` が持つ。`Dispatcher` は `RoutingRuntime` の method だけを呼ぶ | own-routing |
+| `eligible` | composition-root | `Dispatcher`（組み立て） |  |  | stay |
+| `harness_adapters` | composition-root | `RoutingRuntime` |  | 組み立てで注入し `RoutingRuntime` が持つ。`Dispatcher` は `RoutingRuntime` の method だけを呼ぶ | own-routing |
+| `llm_route_registry` | composition-root | `RoutingRuntime` |  | 組み立てで注入し `RoutingRuntime` が持つ。`Dispatcher` は `RoutingRuntime` の method だけを呼ぶ | own-routing |
+| `orphan_takeover` | composition-root | `Dispatcher`（組み立て） |  |  | stay |
+| `publisher` | composition-root | `Dispatcher`（組み立て） |  |  | stay |
+| `routing_context_registry` | composition-root | `RoutingRuntime` |  | 組み立てで注入し `RoutingRuntime` が持つ。`Dispatcher` は `RoutingRuntime` の method だけを呼ぶ | own-routing |
+| `routing_mode` | composition-root | `RoutingRuntime` |  | 組み立てで注入し `RoutingRuntime` が持つ。`Dispatcher` は `RoutingRuntime` の method だけを呼ぶ | own-routing |
+| `store` | composition-root | `Dispatcher`（組み立て） |  |  | stay |
+| `target_sweep` | composition-root | `HostMaintenance` |  | `Dispatcher` の setter が `HostMaintenance` の setter に渡す。読むのは保守 executor と repo target の掃除だけ | own-maint |
+| `target_sweep_scope` | composition-root | `HostMaintenance` |  | `Dispatcher` の setter が `HostMaintenance` の setter に渡す。読むのは保守 executor と repo target の掃除だけ | own-maint |
+| `tunnel_forward_ensurer` | composition-root | `ClusterRuntime` |  | `Dispatcher` の setter が `ClusterRuntime` の setter に渡す（celeris の配線は変えない）。読むのは `ClusterRuntime` の method だけ | own-cluster |
+| `tunnel_listener_probe` | composition-root | `ClusterRuntime` |  | `Dispatcher` の setter が `ClusterRuntime` の setter に渡す（celeris の配線は変えない）。読むのは `ClusterRuntime` の method だけ | own-cluster |
+| `tunnel_probe` | composition-root | `ClusterRuntime` |  | `Dispatcher` の setter が `ClusterRuntime` の setter に渡す（celeris の配線は変えない）。読むのは `ClusterRuntime` の method だけ | own-cluster |
+| `variant_observation` | composition-root | `Dispatcher`（組み立て） |  |  | stay |
+| `before_integration_start` | test-hooks | `TestHooks` の `before_integration_start` | † | 時計・遅延・停止点 | own-hooks |
+| `cluster_liveness_probe` | test-hooks | `ClusterRuntime` |  | 本番の既定を持つ注入 port（`#[cfg(test)]` ではない）。`Dispatcher` の setter が `ClusterRuntime` の setter に渡す | own-cluster |
+| `cluster_ssh_command_override` | test-hooks | `ClusterRuntime` |  | 本番の既定を持つ注入 port（`#[cfg(test)]` ではない）。`Dispatcher` の setter が `ClusterRuntime` の setter に渡す | own-cluster |
+| `eval_version_probe` | test-hooks | `ProbePorts`（`probe_ports.rs`） |  | 本番の既定を持つ注入 port（`#[cfg(test)]` ではない） | own-orchestration |
+| `knowledge_probe` | test-hooks | `ProbePorts`（`probe_ports.rs`） |  | 本番の既定を持つ注入 port（`#[cfg(test)]` ではない） | own-orchestration |
+| `now_unix_fn` | test-hooks | `ProbePorts`（`probe_ports.rs`） |  | 本番の既定を持つ注入 port（`#[cfg(test)]` ではない） | own-orchestration |
+| `test_cos_reserved_sources` | test-hooks | `TestHooks` の `cos_reserved_sources` | † | 時計・遅延・停止点 | own-hooks |
+| `test_disable_stale_priority` | test-hooks | `TestHooks` の `ablation`（`EffectAblation` の `disable_stale_priority`） | † | phase_effect_ab::stale_priority。`Dispatcher` の薄い入口が `test_hooks` から読み、owner の関数へ引数で渡す（own-coord-b、D6） | own-hooks |
+| `test_disable_write_set_gate` | test-hooks | `TestHooks` の `ablation`（`EffectAblation` の `disable_write_set_gate`） | † | phase_effect_ab::write_set。`Dispatcher` の薄い入口が `test_hooks` から読み、owner の関数へ引数で渡す（own-coord-a、D6） | own-hooks |
+| `test_halt_after_wu_transition` | test-hooks | `TestHooks` の `halt_after_wu_transition` | † | 時計・遅延・停止点 | own-hooks |
+| `test_now` | test-hooks | `TestHooks` の `now` | † | 時計・遅延・停止点 | own-hooks |
+| `test_policy_clock` | test-hooks | `TestHooks` の `policy_clock` | † | 時計・遅延・停止点 | own-hooks |
+| `test_skip_pre_review_sync` | test-hooks | `TestHooks` の `ablation`（`EffectAblation` の `skip_pre_review_sync`） | † | phase_effect_ab::review_sync。`Dispatcher` の薄い入口が `test_hooks` から読み、owner の関数へ引数で渡す（D6） | own-hooks |
+| `test_sync_conflict_as_review_fail` | test-hooks | `TestHooks` の `ablation`（`EffectAblation` の `sync_conflict_as_review_fail`） | † | phase_effect_ab::review_sync。`Dispatcher` の薄い入口が `test_hooks` から読み、owner の関数へ引数で渡す（D6） | own-hooks |
+| `test_worker_start_delay` | test-hooks | `TestHooks` の `worker_start_delay` | † | 時計・遅延・停止点 | own-hooks |
+
+（116 件。† は `#[cfg(test)]`。unit 別: own-cluster 25・own-maint 10・own-routing 15・own-hooks 10・own-quota 4・own-supervisor 7・own-coord-a 14・own-coord-b 16・own-orchestration 7・stay 8。）
 
 ## D2 owner の規則
 
@@ -253,15 +268,42 @@ transaction の範囲は今と同じにする。今 1 つの transaction で書�
 ## D4 等価性から共有するものと、しないもの
 
 change-map の equivalence 6 件は verdict がすべて different で、経路全体は共有しない。共有するのは次の純粋な判定だけ。
+この表が共有する判定の正本で、後の unit の check は「共有の関数」と「担当 unit」の列を引く。
 
-| id | 共有する | 共有しない |
-|---|---|---|
-| continuation-resume | 保存 session の互換性・拒否・context 上限から Resume か Fresh を返す判定 | session の解決（既に共通） |
-| retry-backoff | infra 障害の連続回数と上限から再試行するかの判定と `infra_backoff_delay(n)`（worker 完了と lease 回収で 1 つ） | 回収側の lease の検証 |
-| review-result | 決定的 check が不合格なら成功にしない判定と、check 結果から失敗一覧を作る処理 | check の実行（既に共通） |
-| run-close | run id・usage・metrics・終端から終了記録を組み立てる処理 | lease の検証・状態遷移・transaction の境界（一律の close(run) は作らない） |
-| wu-failure | 失敗の署名・同じ失敗の回数・replan の残り・禁止の理由から Replan か Ask を返す上限判定（似た判定 3 か所を 1 つに） | replan の実行 |
-| lease-renew | 無し。`renew_lease` の store 操作は既に共通 | Ok(false) と Err を同じに扱う wrapper（回収の安全条件を壊す） |
+- 共有の関数は `crates/task-dispatch/src/` からの `module::fn`。担当 unit はその関数を表の module に 1 つだけ定義し、
+  2 か所以上の経路から呼び、写しを消す。関数の名は crate の中で 1 つだけにする（同名の関数を他の module に置かない）。
+- lease-renew は共有する関数も担当 unit も無い（none）。
+
+| id | 共有する | 共有しない | 共有の関数 | 担当 unit |
+|---|---|---|---|---|
+| continuation-resume | 保存 session の互換性・拒否・context 上限から Resume か Fresh を返す判定 | session の解決（既に共通） | `sessions::stored_session_fresh_reason` | settle |
+| retry-backoff | infra 障害の連続回数と上限から再試行するかの判定と `infra_backoff_delay(n)`（worker 完了と lease 回収で 1 つ） | 回収側の lease の検証 | `run_supervisor::infra_retry_after` | own-supervisor |
+| review-result | 決定的 check が不合格なら成功にしない判定と、check 結果から失敗一覧を作る処理 | check の実行（既に共通） | `review_decision::failed_checks` | review-decide |
+| run-close | run id・usage・metrics・終端から終了記録を組み立てる処理 | lease の検証・状態遷移・transaction の境界（一律の close(run) は作らない） | `run_settlement::run_end_record` | settle |
+| wu-failure | 失敗の署名・同じ失敗の回数・replan の残り・禁止の理由から Replan か Ask を返す上限判定（似た判定 3 か所を 1 つに） | replan の実行 | `run_settlement::replan_or_ask` | settle |
+| lease-renew | 無し。`renew_lease` の store 操作は既に共通 | Ok(false) と Err を同じに扱う wrapper（回収の安全条件を壊す） | none | none |
+
+各関数の契約（入力と返す値。今の実装で既に共有されているものの扱いを含む）:
+
+- `sessions::stored_session_fresh_reason`: 今、task と WU の Resume か Fresh の判定は `sessions::decide_continuation` の 1 つで、
+  `resolve_continuation_session`（task と WU で共通）だけが呼ぶ。CoS chat は `sessions::cos_chat::decide_cos_chat_session` が別に
+  同じ種類の判定（照合 key の変化・前回の拒否・不正な id・context の枯渇・token の上限）をする。共有するのはこの保存 session の照合で、
+  入力は照合 key の一致・前回の拒否・id の妥当性・context の枯渇・測った token と上限、返す値は Fresh にする理由（無ければ Resume）。
+  `decide_continuation` と `decide_cos_chat_session` の両方がこれを呼ぶ。役割・continuation かどうか・設定の fresh 指定・container・
+  cache の有無・token の測り方（`approx_tokens` と `rollover_measure`）・理由の enum への写し方は各関数に残し、理由ごとの
+  session の作成と引退（`starts_session`・`retire`）を変えない。
+- `run_supervisor::infra_retry_after`: 入力は infra 障害の連続回数 n と `max_infra_retries`、返す値は再試行までの時間
+  （n が上限以内なら `task_ops::derive::infra_backoff_delay(n)`、超えたら None）。worker 完了（`worker_finish.rs`）と lease の回収
+  （`leases.rs`）の両方が使い、`max_infra_retries` と直接比べる式を残さない。`infra_backoff_delay` は task-ops のまま使う。
+- `review_decision::failed_checks`: 今の `review::failed_checks`（verdict の列から `FailedCheck` の列を作る。呼ぶのは
+  `review_verdict.rs` の 1 か所）を `review_decision` へ移し、WU の check（`work_units.rs`）と統合の check（`phase_integration.rs`）も
+  使う。列が空でなければ成功にしない。`review.rs` に定義を残さない。lease・snapshot の鮮度の条件・event の型・retry と repair の上限は経路ごとに残す。
+- `run_settlement::run_end_record`: 入力は run id・usage・metrics・明示の終端、返す値は終了記録（`WorkerFinished` などの組み立て）だけ。
+  run を閉じる関数にしない。lease の検証・状態遷移・transaction の境界は経路ごとに残し、`close_aborted_run`・
+  `close_run_after_finalisation_failure`・`reconcile_ownerless_runs` を 1 つの閉じる経路にまとめない。
+- `run_settlement::replan_or_ask`: 入力は失敗の署名・同じ失敗の回数（既存の `failure_signature`・`task_ops::plan_gate::stalled_replans` の結果）・replan の回数と
+  上限（`effective_max_replans`）・replan を禁止する理由（health の停止など）、返す値は Replan か Ask とその理由。`worker_finish.rs`・
+  `work_units.rs`・`phase_integration.rs` の上限の比較をこれに置き換える。replan の実行・WU の書き込み・決定要求は各経路に残す。
 
 分けたままにするもの: security 境界の独立の検証（credential gate・db guard・browser の policy broker は、それぞれが自分で検証する）、
 eval の試行（`eval_trials`）と CoS chat（`cos_chat`）の run の起動と終わり（試行の隔離と thread の session という別の契約を持つ）。
@@ -306,9 +348,18 @@ change-map の「反例試験の不足」の 5 節に対応する。各試験の
 1. cex-lease・cex-review: 反例試験を今の実装に対して固定する。
 2. own-cluster・own-maint・own-routing・own-hooks: 他の owner と共変更の少ない状態から分ける（cluster は `dispatcher.rs` との組だけ）。
 3. sync-policy: operator が D8 の patch を main に入れた後、その main を取り込む。
-4. own-quota・own-supervisor・own-orchestration: lease と予算の状態を移す（D8 の高 risk の class が新しい file に当たってから）。
-5. settle・admit・review-decide: D3 の判断を純粋関数に分ける。
-6. record: 実測を取り直して進捗と ADR の状態を締める。
+4. adr-align: D1 の表に unit 列を足して終わった unit の置き場を畳み、D4 の表に共有の関数と担当 unit の列を足す。後の unit の check は
+   この 2 つの表を引き、unit は ADR を変えない。
+5. own-quota → own-supervisor → own-coord-a → own-coord-b → own-orchestration（この順に直列）: lease と予算の状態、調整の状態、
+   残りの周辺の状態を移す（D8 の高 risk の class が新しい file に当たってから）。own-coord-a は `ExecutionCoordination` を作って
+   write set・review の同期・統合の依存・WU 準備の失敗・credential・browser・cluster の待ちを移し、own-coord-b は task・WU の待ち・
+   check と統合の process・channel・tick・停滞の見張りを移す。
+   - own-supervisor から own-coord-b までの間、lease の回収で消す待ち（`awaiting_human`・`checking`・`integrating`・`pending_subjects`）は
+     まだ `Dispatcher` にある。この間は `Dispatcher` の薄い入口が、`RunSupervisor` の回収の提案が返す鍵（`RunKey`・`TaskId`）でこれらを消す。
+     own-coord-b がこれらを `ExecutionCoordination` に移し、鍵を受ける `ExecutionCoordination` の method で消すようにして、薄い入口の削除を消す
+     （D1「run の集合と lease の照合」、D3 の reclaim_expired_leases の行）。
+6. settle → admit → review-decide: D3 の判断を純粋関数に分け、D4 の共有の関数を定義する。
+7. record: 実測を取り直して進捗と ADR の状態を締める。
 
 ### 戻し方
 
@@ -340,13 +391,11 @@ profile の高 risk の class と capability-map.json の owner path に、こ�
 
 ## 付記 2026-11-12: own-cluster の実装（ClusterRuntime）
 
-- `ClusterRuntime`（`crates/task-dispatch/src/cluster_runtime.rs`）は D1 の表の cluster-runtime の 16 field に加えて、表で
-  `Dispatcher`（組み立て）とした 7 件（`cluster_command_probe`・`cluster_connector`・`cluster_job_poller`・`cluster_master_watcher`・
-  `tunnel_forward_ensurer`・`tunnel_listener_probe`・`tunnel_probe`）と `ProbePorts` とした 2 件（`cluster_liveness_probe`・
-  `cluster_ssh_command_override`）も持つ（計 25 field）。理由: unit own-cluster の受け入れ条件が「cluster の field が `Dispatcher`
-  から消え `ClusterRuntime` 1 個になる」で、この 9 件の port を読むのは `ClusterRuntime` の method だけだから。port は
-  `Dispatcher` の setter（celeris の配線は変えない）が `ClusterRuntime` の setter に渡す。
-- `cluster_waiting` は表どおり `ExecutionCoordination` の範囲で、`Dispatcher` に残した（その owner を作る unit が移す）。
+- `ClusterRuntime`（`crates/task-dispatch/src/cluster_runtime.rs`）が持つ field の置き場は D1 の表（unit 列が own-cluster の行）。
+  候補が cluster-runtime でない port 9 件（候補 composition-root の 7 件と候補 test-hooks の probe 2 件）も移した理由: unit own-cluster の
+  受け入れ条件が「cluster の field が `Dispatcher` から消え `ClusterRuntime` 1 個になる」で、この port を読むのは `ClusterRuntime` の
+  method だけだから。port は `Dispatcher` の setter（celeris の配線は変えない）が `ClusterRuntime` の setter に渡す。
+- クラスタの待ちの置き場も D1 の表（unit 列 own-coord-a）。own-cluster は移していない。
 - クラスタ job の durable wait のうち、wait の行・task と WU の遷移（`finish_cluster_job_wait`・`time_out_cluster_job_wait`・再開）は
   task・WU の待ちなので `dispatcher/cluster_job_wait.rs` に残した。`ClusterRuntime` は poll のスレッドと結果の受け口
   （`take_job_poll`・`start_job_poll`）と poll の要求の組み立て（`job_poll_request`）を持つ。
@@ -356,17 +405,13 @@ profile の高 risk の class と capability-map.json の owner path に、こ�
 
 ## 付記 2026-11-12: own-maint の実装（HostMaintenance）
 
-- `HostMaintenance`（`crates/task-dispatch/src/host_maintenance.rs`）は 10 field を持つ: D1 の表の host-maintenance の
-  `disk_low`・`disk_ready`・`disk_watch`・`removing_build_caches`・`removing_repo_targets`・`repo_target_gc_at`・`scratch` と、表で
-  `Dispatcher`（組み立て）とした `target_sweep`・`target_sweep_scope`、表で `ExecutionCoordination` とした `task_workspaces`。
-  理由: unit own-maint の objective がこの 3 件を移す field に挙げ、受け入れ条件が「挙げた field が `Dispatcher` から消え
-  `HostMaintenance` 1 個になる」だから。`target_sweep`・`target_sweep_scope` を読むのは保守 executor と repo target の掃除だけで、
-  `Dispatcher` の setter（celeris の配線は変えない）が `HostMaintenance` の setter に渡す。`task_workspaces` を書くのは run の起動
-  （`remember_task_workspaces`）と中止の片付けだけ。ExecutionCoordination を作る unit が、表どおりに移すかをそこで決める。
-- `disk_ready` は表どおり `HostMaintenance` に置いた。facade の `tick` は `refresh_disk_ready` を drain より前に呼び、他の module は
-  `disk_ready()` で読む。
-- 表で host-maintenance の `health_inventory`（cron の棚卸しの Busy の印）と `script_compare`（TS の比較の状態）は、unit own-maint の
-  objective に挙がっていないので `Dispatcher` に残した。
+- `HostMaintenance`（`crates/task-dispatch/src/host_maintenance.rs`）が持つ field の置き場は D1 の表（unit 列が own-maint の行）。
+  候補が host-maintenance でない 3 件（候補 composition-root の sweep の port 2 件と候補 execution-coordination の中止された task の
+  作業場所）も移した理由: unit own-maint の objective がこの 3 件を移す field に挙げ、受け入れ条件が「挙げた field が `Dispatcher` から
+  消え `HostMaintenance` 1 個になる」だから。sweep の port は `Dispatcher` の setter（celeris の配線は変えない）が `HostMaintenance` の
+  setter に渡す。中止された task の作業場所は `HostMaintenance` に置いたままにする（own-coord-a・own-coord-b は移さない。D1 の表）。
+- facade の `tick` は `refresh_disk_ready` を drain より前に呼び、他の module は `disk_ready()` で読む。
+- 候補 host-maintenance のうち own-maint が移さなかった 2 件の置き場も D1 の表（unit 列 own-orchestration。owner は `HostMaintenance`）。
 - 実行中の run と判定中の review の作業場所を消さない条件は、`Dispatcher::tasks_in_flight`（`running` の鍵の task と `reviewing` の鍵）を
   入口が組んで `HostMaintenance::cleanup_cancelled_worktrees` に渡す。片付けの判断は純粋関数 `plan_workspace_cleanup`
   （走っている → 触らない、中止 → 消す、終端 → 残して未コミットを 1 行記録、task が無い → 記録だけ落とす）。
@@ -377,13 +422,10 @@ profile の高 risk の class と capability-map.json の owner path に、こ�
 
 ## 付記 2026-11-12: own-routing の実装（RoutingRuntime）
 
-- `RoutingRuntime`（`crates/task-dispatch/src/routing_runtime.rs`）は 15 field を持つ: D1 の表の routing の `account_books`・
-  `account_limits`・`accounts_scan_cache`・`classification_board`・`classification_deferred_since`・`classification_wait`・
-  `login_pending_accounts`・`source_cooldowns`・`unroutable`・`warned_unroutable` と、表で `Dispatcher`（組み立て）とした
-  `dispatch_routing`・`routing_context_registry`・`routing_mode`、表に無い `llm_route_registry`・`harness_adapters`。
-  理由: unit own-routing の objective がこの 15 件を移す field に挙げ、受け入れ条件が「挙げた field が `Dispatcher` から消え
-  `RoutingRuntime` 1 個になる」だから。`eval_runs`・`knowledge_probe_cache`・`quota_activity`・`quota_calibration` は表では routing だが、
-  objective が own-quota などに任せているので `Dispatcher` に残した。
+- `RoutingRuntime`（`crates/task-dispatch/src/routing_runtime.rs`）が持つ field の置き場は D1 の表（unit 列が own-routing の行）。
+  候補 composition-root の 5 件も移した理由: unit own-routing の objective がこの 5 件を移す field に挙げ、受け入れ条件が「挙げた field が
+  `Dispatcher` から消え `RoutingRuntime` 1 個になる」だから（この付記の初版は 5 件のうち 2 件を「表に無い」と書いたが、2 件とも
+  表に候補 composition-root の行があった）。候補 routing のうち own-routing が移さなかった 4 件の置き場も D1 の表（unit 列 own-quota）。
 - `route_state`（約 220 行）は D3 に従い、判断を `routing_runtime/route_state.rs` の純粋関数 `build_route_state(RouteStateInputs) -> RouteState`
   に分けた。走っている run・review の `(source, account)` は `Dispatcher::route_state` が集めて渡す（run の表の owner は別 unit が作る）。
   `RoutingRuntime::route_state` が走査 cache を満たし、帳簿の lock を借りて関数を呼ぶ。`RouteState`・`account_adapter_for_source_kind`・
@@ -399,10 +441,11 @@ profile の高 risk の class と capability-map.json の owner path に、こ�
 ## 付記 2026-11-12: own-hooks の実装（TestHooks・EffectAblation）
 
 - `Dispatcher` の `#[cfg(test)]` の field は `test_hooks: tests::hooks::TestHooks` の 1 個（`crates/task-dispatch/src/dispatcher/tests/hooks.rs`）。
-  `TestHooks` は `now`・`policy_clock`・`worker_start_delay`・`halt_after_wu_transition`・`cos_reserved_sources`・
-  `before_integration_start`・`ablation` を持つ。D6 の `PhaseAblation` は `EffectAblation`（`dispatcher/tests/phase_effect_ab.rs`）の名で置いた。
+  `TestHooks` が持つ field の置き場は D1 の表（unit 列が own-hooks の行。owner 列に `TestHooks` の中の名を書いた）。D6 の `PhaseAblation` は
+  `EffectAblation`（`dispatcher/tests/phase_effect_ab.rs`）の名で置いた。
 - 本体が ablation を読むのは `test_hooks.ablation` の 1 か所で、読む行は今と同じ `#[cfg(test)]` の行（本番の build に型も分岐も無い）。
-  write-set gate と stale 優先の判断はまだ `impl Dispatcher` の method なので、引数で渡すのは判断を純粋関数に分ける unit（admit・review-decide）が行う。
+  write-set gate と stale 優先の判断はまだ `impl Dispatcher` の method。引数で渡すのは、write-set gate は own-coord-a、stale 優先は
+  own-coord-b が行う（D1 の表の書き手の扱い。この付記の初版は admit・review-decide と書いた）。
 - 試験 `dispatcher/tests/structure_guard.rs` が、`Dispatcher` の struct の本体で条件に `test` を含む `#[cfg(...)]` 属性が 1 個より多いこと、
   一覧 `OWNER_STRUCTS`（今は `ClusterRuntime`・`HostMaintenance`・`RoutingRuntime`）の struct に 1 個でもあることを落とす。field の名前は見ない。
   owner を作る unit は自分の struct をこの一覧に足す。owner ごとの guard にあった同じ assert は消した。

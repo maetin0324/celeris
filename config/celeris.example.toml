@@ -89,10 +89,12 @@ dir = "../memory"
 # 人が手で回すこともできる。
 # prune_after_secs = 86400
 
-# 新しい run の起動前に /、workspace_root、build_cache_dir の空きを確認する（MiB）。
-# 0 で無効。不足中は通知を 1 回出して保留し、回復すると自動で再開する。
+# 新しい run の起動前に /、workspace_root、build_cache_dir、scratch の空きを確認する。下限は各 filesystem の
+# 容量に対する %（ADR 2026-11-11-disk-aware-dispatch D2）。既定 10 は使用率 90% で止める（disk_watch の critical
+# 95% より手前）。0 で無効。不足中は通知を 1 回出して保留し、回復すると自動で再開する。旧い min_free_disk_mb は
+# 読み込みエラー。
 [dispatch]
-# min_free_disk_mb = 5120
+# min_free_disk_pct = 10
 
 # 変更の取り込み（ADR-0043 D5、Phase 54）。タスクが作ったブランチを**人が** GUI から
 # 「main に取り込む」「PR を作る」「捨てる」する（`GET/POST /api/v1/tasks/{id}/changes...`）。
@@ -722,7 +724,7 @@ workspace_target_after_hours = 6    # 終端 task の workspace target を消す
 
 # ADR 2026-10-07-build-tmp-hygiene D4: ディスク使用率の監視。dispatcher の tick が 60 秒ごとに statvfs で測り、
 # warn_pct 以上で通知（種類 disk）、critical_pct 以上で受信箱（disk_full）に出す。level が上がったときだけ作り、
-# しきい値より 5 ポイント下がると解除。critical 中は新規 coding run・そのレビューを保留（min_free_disk_mb も引き続き有効）。
+# しきい値より 5 ポイント下がると解除。critical 中は新規 coding run・そのレビューを保留（min_free_disk_pct も引き続き有効）。
 # 省略すると下の 3 つ（値は既定値）。`disk_watch = []`（[maintenance] の下）で監視しない。
 [[maintenance.disk_watch]]
 path = "/"
@@ -774,18 +776,17 @@ worker_reserve_five_hour = 0.90
 
 [cos.triage]
 policy_skill = "cos-inbox-triage"
-policy_version = "11"  # cos-inbox-triage の metadata.version と同じ（ADR 2026-10-28-cos-routine-delegated-answers 付記 A5）
+policy_version = "12"  # cos-inbox-triage の metadata.version と同じ（ADR 2026-10-28-cos-routine-delegated-answers 付記 A5）
 min_confidence = 0.85
 human_required = ["objective_change", "beyond_frame", "external_publish", "destructive", "secret_or_security", "standing_permission", "explicit_human"]
-# 人への直接通知（Discord の「CoS 不在のため直接通知」）までの待ち。認可（authorization）以外の件は、
-# CoS run が動いていても到着から unavailable_after_secs 秒で人に送る。
-unavailable_after_secs = 120
-# 認可の件は CoS の一次対応が終わるまで送らない（ADR 2026-10-29-cos-authorization-fallback-after-triage）。
-# 送るのは CoS が escalate したとき、run が failed・stopped・interrupted・記録無し・completed 未処理で
-# 終わったとき、cos.enabled=false のとき。安全網として、run が始まらないまま到着から、または run が
-# 始まってから、この秒数を超えたら人に送る。未設定なら max_wall_secs + 300（既定 1200）。
-# run は max_wall_secs で止まるので、それより長い値にする。unavailable_after_secs より長い値だけ受ける。
-# authorization_unavailable_after_secs = 1200
+# 人への直接通知（Discord の「CoS 不在のため直接通知」）は、どの種類の件も CoS の一次対応が終わるまで
+# 送らない（ADR 2026-11-11-cos-fallback-timing）。送るのは CoS が escalate したとき（CoS の文面）、run が
+# failed・stopped・interrupted・記録無し・completed 未処理で終わったとき、cos.enabled=false のとき。
+# 安全網として、その件の run（またはその件が後ろで待つ同じ thread の run）が始まってから、run が無ければ
+# 件を拾える状態になってから（到着か thread の直前の run の終わりの遅い方）、この秒数を超えたら人に送る。
+# 未設定なら max_wall_secs + 300（既定 1200）。run は max_wall_secs で止まるので、それより長い値だけ受ける。
+# 旧い unavailable_after_secs・authorization_unavailable_after_secs は読み込みエラー。
+# fallback_after_secs = 1200
 
 [cos.attachments]
 max_file_bytes = 26214400           # 1 ファイル 25 MiB（upload の body limit もこれに合わせる）

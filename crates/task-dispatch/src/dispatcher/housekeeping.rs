@@ -64,7 +64,7 @@ impl Dispatcher {
                 shared_build_cache: self.config.shared_build_cache,
                 build_cache_dir: &self.config.build_cache_dir,
                 releases_dir: self.config.releases_dir.as_deref(),
-                min_free_disk_mb: self.config.min_free_disk_mb,
+                min_free_disk_pct: self.config.min_free_disk_pct,
                 workspace_roots: &self.config.workspace_roots,
                 workspace_prune_after_secs: self.config.workspace_prune_after_secs,
                 verify_smoke,
@@ -126,7 +126,8 @@ impl Dispatcher {
                 adopt: false,
                 ..self.config.scratch.clone()
             };
-            allocate_scratch_target(&settings, &[], &owner, repo, None);
+            // tick の中なので待たず、seed も写さない（ADR 2026-11-11-scratch-lock-tick-stall）。
+            task_worker::scratch::try_allocate_for_check(&settings.pool(), &owner, &repo.source);
             // ADR-0129 (1): run と同じ env（`CARGO_TARGET_DIR` と `[scratch.cargo]`。sccache 系は足さない）。
             return super::worker_task::scratch_cargo_env(&settings, &owner);
         }

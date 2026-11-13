@@ -407,6 +407,16 @@ impl Dispatcher {
             Some(w) => Some(w.workspaces.clone()),
             None => worktree,
         };
+        // ADR 2026-11-11-disk-aware-dispatch D1: 予備を割るなら待たせ（M12）、通した見込みは起動した後で数える。
+        let target_wu = wu_workspace.as_ref().and(v2_wu.as_ref());
+        let (view, wu) = (self.maint.scratch_view(), run_key.work_unit.as_deref());
+        let repo_of = || self.cargo_target_repo(&task).map(|r| r.source);
+        let gate = (!is_planner_dispatch).then_some(self.maint.admission());
+        let disk = gate.and_then(|g| g.judge_run(view, &task, wu, target_wu, repo_of));
+        if let Some(crate::disk_admission::Admission::Wait(wait)) = disk {
+            self.note_dispatch_wait(task.id, wait);
+            return Ok(false);
+        }
         // Capture before any worker can write; retries load the same WU-id snapshot.
         let mut wu_scope_env = Vec::new();
         if let Some(wu) = &current_wu
@@ -921,11 +931,9 @@ impl Dispatcher {
         }
         if let Some(w) = &wu_workspace {
             extras.artifacts_dir_override = Some(w.artifacts_dir.clone());
-            // ADR-0074 F5-fix（不具合 1）: WU ごとの `CARGO_TARGET_DIR`。
-            if let Some(wu) = &v2_wu {
-                extras.cargo_target_work_unit = Some((wu.id.clone(), wu.key.clone()));
-            }
         }
+        // ADR-0074 F5-fix（不具合 1）: 自分の worktree を持つ WU だけ WU ごとの `CARGO_TARGET_DIR`。
+        extras.cargo_target_work_unit = target_wu.map(|w| (w.id.clone(), w.key.clone()));
         // ADR 2026-10-10-local-disk-growth-paths D1: 作業場所の先頭に git の repo が無い（`repos=[]` の子 task・
         // shared の Rust checkout）なら、代わりの checkout を決めて `run_worker` に渡す（repo 直下 target を防ぐ）。
         if remote.is_none()
@@ -1117,6 +1125,7 @@ impl Dispatcher {
                 route: Some((pick.candidate.source, pick.account)),
             },
         );
+        self.maint.admission().started(disk);
         Ok(true)
     }
 

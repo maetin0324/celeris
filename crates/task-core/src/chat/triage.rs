@@ -149,7 +149,10 @@ pub fn cos_triage_resolve_tx(
     ) {
         return Err(ChatError::Invalid("invalid triage outcome".into()));
     }
-    Ok(tx.execute("UPDATE cos_inbox_items SET state=?2,operation_id=?3,reason=?4,updated_at=?5 WHERE id=?1 AND state IN ('pending','running')", params![item_id,outcome,operation_id,reason,chat_ts(now)])? == 1)
+    // ADR 2026-11-11-cos-fallback-timing D2: CoS's judgment before the notifier sent the fallback
+    // withdraws it and takes the item back (a pending or running item is never `fallback`).
+    let from = crate::cos_fallback::judged_from(tx, item_id, outcome)?;
+    Ok(tx.execute("UPDATE cos_inbox_items SET state=?2,operation_id=?3,reason=?4,updated_at=?5 WHERE id=?1 AND state IN ('pending','running',?6)", params![item_id,outcome,operation_id,reason,chat_ts(now),from])? == 1)
 }
 
 fn put_cursor(tx: &Transaction<'_>, name: &str, value: &str) -> Result<(), ChatError> {
@@ -360,7 +363,10 @@ impl SqliteStore {
             return Ok(None);
         }
         let notification_id = Ulid::new().to_string();
-        let claimed = tx.execute("INSERT INTO cos_notification_routes(item_id,notification_id,route,source_kind,source_key,source_revision,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?7) ON CONFLICT DO NOTHING", params![item_id,notification_id,route,source_kind,source_key,revision,at])?;
+        // ADR 2026-11-11-cos-fallback-timing D2: CoS escalates an item whose fallback the notifier
+        // has not sent: the fallback is withdrawn and CoS's text takes its route (sent once).
+        let claimed = crate::cos_fallback::take_route(&tx, route, item_id, &notification_id, &at)?
+            .map_or_else(|| tx.execute("INSERT INTO cos_notification_routes(item_id,notification_id,route,source_kind,source_key,source_revision,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?7) ON CONFLICT DO NOTHING", params![item_id,notification_id,route,source_kind,source_key,revision,at]), Ok)?;
         if claimed == 0 {
             return Ok(None);
         }

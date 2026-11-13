@@ -324,8 +324,14 @@ pub fn execute(pool: &Pool, plan: &GcPlan, scan: &Scan, emergency: bool) -> Exec
             reclaimed_bytes: 0,
         };
     }
-    let _lock = match pool.lock() {
-        Ok(l) => l,
+    let _lock = match pool.try_lock() {
+        Ok(Some(l)) => l,
+        Ok(None) => {
+            return Executed {
+                removed,
+                reclaimed_bytes: 0,
+            };
+        }
         Err(e) => {
             tracing::warn!(dir = %pool.root().display(), error = %e, "scratch: could not take the pool lock; GC skipped");
             return Executed {
@@ -341,6 +347,12 @@ pub fn execute(pool: &Pool, plan: &GcPlan, scan: &Scan, emergency: bool) -> Exec
             tracing::debug!(path = %pick.path.display(), "scratch: cargo is building; keeping target");
             continue;
         };
+        // 割り当て中（seed を写している）owner は pool の `.lock` を持たないので、owner の印で守る。
+        if let Some(o) = &pick.owner
+            && scratch::lock_file_held(&pool.owner_dir(o), scratch::OWNER_ALLOC_LOCK)
+        {
+            continue;
+        }
         let flat = match &pick.owner {
             Some(o) => o.flat(),
             None => pick
@@ -646,6 +658,15 @@ pub fn build_status(
         high_watermark: settings.high_watermark,
         low_watermark: settings.low_watermark,
         pressure: plan.pressure.as_str().to_string(),
+        admission: crate::disk_admission::forecast(
+            &crate::disk_admission::Inputs {
+                free_bytes: fs.map(|f| f.1),
+                reserve_bytes: min_free_bytes,
+                ratio: settings.forecast_disk_ratio,
+                samples: crate::disk_admission::samples_from_owners(&owners),
+            },
+            None,
+        ),
         owners,
         legacy,
         last_gc,
@@ -673,6 +694,7 @@ pub fn disabled_status(settings: &ScratchSettings, now: SystemTime) -> ScratchSt
         high_watermark: settings.high_watermark,
         low_watermark: settings.low_watermark,
         pressure: "none".to_string(),
+        admission: task_ops::daemon::ScratchAdmissionView::default(),
         owners: Vec::new(),
         legacy: Vec::new(),
         last_gc: None,
@@ -715,6 +737,8 @@ pub struct GcRun {
     pub scan: Scan,
     pub plan: GcPlan,
     pub fs: Option<(u64, u64)>,
+    /// ADR 2026-11-11-disk-aware-dispatch D2: pool の filesystem の空きの下限（容量 × `min_free_disk_pct`）。
+    pub min_free_bytes: u64,
     pub executed: Option<Executed>,
 }
 
@@ -725,7 +749,7 @@ pub fn run_gc(
     lookup: &dyn StatusLookup,
     has_db: bool,
     sizes: &HashMap<PathBuf, Measured>,
-    min_free_bytes: u64,
+    min_free_pct: f64,
     emergency: bool,
     extra_active_repo_keys: &BTreeSet<String>,
     dry_run: bool,
@@ -733,6 +757,9 @@ pub fn run_gc(
     let now = SystemTime::now();
     let scan = scan(settings, legacy, lookup, has_db, sizes, now);
     let fs = fs_stats(settings.pool().root());
+    let min_free_bytes = fs
+        .map(|f| crate::disk_admission::min_free_bytes(f.0, min_free_pct))
+        .unwrap_or(0);
     let mut active = scan.active_repo_keys.clone();
     active.extend(extra_active_repo_keys.iter().cloned());
     let params = GcParams::from_settings(
@@ -749,6 +776,7 @@ pub fn run_gc(
         scan,
         plan,
         fs,
+        min_free_bytes,
         executed,
     }
 }

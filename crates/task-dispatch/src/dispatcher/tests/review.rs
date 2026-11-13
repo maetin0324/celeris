@@ -211,6 +211,59 @@ async fn done_then_command_review_passes_and_events_are_recorded() {
     );
 }
 
+/// 不変条件（ADR 2026-11-12-host-check-slots D3）: review の重い検査（cargo の語を含む command）は `DispatchConfig` に注入した
+/// 枠の取得元から枠を取り、その lock の path を `CELERIS_CHECK_SLOT` で受け取る。dispatcher は検査の度に env を読まず、
+/// host の枠の dir を開かない（注入した枠の dir には検査の後に lock だけが残り、holder・waiting は残らない）。2026-11-12 の
+/// final review までは dispatcher が検査の度に process の env から host の枠を開いており、既存の試験は注入した枠が
+/// 使われることを確かめていなかった（枠が全部使用中の host で review 系の試験 4 件が落ちた）。
+#[tokio::test]
+async fn a_heavy_review_check_takes_the_injected_slot_and_receives_its_path() {
+    use task_worker::check_slots::{CheckSlots, SlotSource};
+    let dir = tempfile::tempdir().unwrap();
+    let slot_dir = tempfile::tempdir().unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let seen = out.path().join("slot-seen");
+    let cmd = format!(
+        "echo cargo >/dev/null; printf %s \"$CELERIS_CHECK_SLOT\" > '{}'",
+        seen.display()
+    );
+    assert!(task_worker::check_slots::is_heavy(&cmd));
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = new_task(
+        dir.path(),
+        Check::Command {
+            cmd: cmd.clone(),
+            expect_exit: 0,
+        },
+        0,
+    );
+    store.insert(&task).unwrap();
+    let adapter = Arc::new(InstantAdapter {
+        terminal: Terminal::Done {
+            summary: "ok".into(),
+            evidence: vec![],
+            usage: None,
+        },
+        delay: Duration::from_millis(10),
+    });
+    let mut d = dispatcher(store.clone(), adapter, 2);
+    d.config.check_slots = Some(SlotSource::Host(CheckSlots::new(slot_dir.path(), 1)));
+    let report = run_until_idle(&mut d, 200).await;
+    assert!(report.idle);
+    let t = store.get(task.id).unwrap().unwrap();
+    assert_eq!(t.status, Status::Done);
+    assert_eq!(
+        std::fs::read_to_string(&seen).unwrap(),
+        slot_dir.path().join("slot-0.lock").to_string_lossy()
+    );
+    let names: Vec<String> = std::fs::read_dir(slot_dir.path())
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    assert_eq!(names, vec!["slot-0.lock".to_string()]);
+}
+
 /// Phase 44（実機 2026-09-18）: 委譲した子タスクが失敗し `retry_then_ask`（max_retries 到達）で親が
 /// `blocked` に落ちる質問は、ワーカーの `Question` ではなくディスパッチャ自身が立てるものだが、
 /// Phase 26 と同じく `approvals` にも 1 件残る（そうしないと認可画面に出ず、`approval_pending` の
@@ -547,6 +600,7 @@ async fn department_reviewer_runs_share_and_continue_one_lead_session() {
             idle_timeout: Duration::from_secs(5),
             kill_grace: Duration::from_millis(100),
             review_timeout: Duration::from_secs(5),
+            check_slots: super::test_check_slots(),
             review_resync_quiet: Duration::from_secs(900),
             workspace_roots: task_core::local_machine::WorkspaceRoots::new(
                 PathBuf::from("/nonexistent"),
@@ -562,7 +616,7 @@ async fn department_reviewer_runs_share_and_continue_one_lead_session() {
             max_requeues: 5,
             max_reviewer_retries: 3,
             max_infra_retries: 5,
-            min_free_disk_mb: 5120,
+            min_free_disk_pct: 10.0,
             roles: Vec::new(),
             genres: Vec::new(),
             delegation: DelegationLimits::default(),
@@ -666,6 +720,7 @@ async fn a_rejected_lead_session_resume_retires_it_and_the_next_review_starts_fr
             idle_timeout: Duration::from_secs(5),
             kill_grace: Duration::from_millis(100),
             review_timeout: Duration::from_secs(5),
+            check_slots: super::test_check_slots(),
             review_resync_quiet: Duration::from_secs(900),
             workspace_roots: task_core::local_machine::WorkspaceRoots::new(
                 PathBuf::from("/nonexistent"),
@@ -681,7 +736,7 @@ async fn a_rejected_lead_session_resume_retires_it_and_the_next_review_starts_fr
             max_requeues: 5,
             max_reviewer_retries: 3,
             max_infra_retries: 5,
-            min_free_disk_mb: 5120,
+            min_free_disk_pct: 10.0,
             roles: Vec::new(),
             genres: Vec::new(),
             delegation: DelegationLimits::default(),
@@ -788,6 +843,7 @@ async fn a_resume_rejection_that_still_produced_a_result_self_heals_and_the_retr
             idle_timeout: Duration::from_secs(5),
             kill_grace: Duration::from_millis(100),
             review_timeout: Duration::from_secs(5),
+            check_slots: super::test_check_slots(),
             review_resync_quiet: Duration::from_secs(900),
             workspace_roots: task_core::local_machine::WorkspaceRoots::new(
                 PathBuf::from("/nonexistent"),
@@ -803,7 +859,7 @@ async fn a_resume_rejection_that_still_produced_a_result_self_heals_and_the_retr
             max_requeues: 5,
             max_reviewer_retries: 3,
             max_infra_retries: 5,
-            min_free_disk_mb: 5120,
+            min_free_disk_pct: 10.0,
             roles: Vec::new(),
             genres: Vec::new(),
             delegation: DelegationLimits::default(),
@@ -1881,6 +1937,143 @@ async fn exceeding_the_per_class_repair_limit_falls_back_to_review_fail() {
         ),
         "{events:?}"
     );
+}
+
+/// acceptance[0] が fmt の検査（`.repair-done` があれば合格）、acceptance[1] が `Check::Reviewer` の task（`max_retries`
+/// = 0: `ReviewFail` 1 回で failed になる）。
+fn fmt_and_reviewer_task(dir: &std::path::Path) -> Task {
+    let mut task = new_task(
+        dir,
+        Check::Command {
+            cmd: "echo 'cargo fmt --check' >/dev/null; test -f .repair-done".into(),
+            expect_exit: 0,
+        },
+        0,
+    );
+    task.acceptance.push(Criterion {
+        text: "the change is complete".into(),
+        check: Check::Reviewer,
+    });
+    task
+}
+
+fn review_repair_classes(events: &[(u64, Event)]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|(_, e)| match e {
+            Event::RepairScheduled { class, origin, .. }
+                if *origin == task_core::execution::RepairOrigin::Review =>
+            {
+                Some(class.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// ADR-0072 D16 付記（G4-S1）。不変条件: `Check::Reviewer` のある task で決定的な検査（fmt）だけが落ちたとき、review は
+/// reviewer run を起こさず reviewer の項目を `REVIEWER_NOT_EVALUATED_REASON` の不合格にするが、その項目は修復の分類と
+/// repair の失敗した検査に入らない。fmt の不合格は repair（class `format`、attempts 不変）に回り、修復の後の review で
+/// reviewer が合格を返して done になる。failed にならない。既存の `a_format_only_review_failure_*` は `Check::Reviewer`
+/// の無い task なので、未評価の reviewer の項目が分類を `Substantive` にする欠けを検出できない。
+#[tokio::test]
+async fn review_repair_not_evaluated_reviewer_does_not_block_a_format_repair() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = fmt_and_reviewer_task(dir.path());
+    store.insert(&task).unwrap();
+    let adapter = Arc::new(
+        ParallelWuAdapter::new(Duration::ZERO)
+            .with_review(r#"{"verdicts":[{"criterion":1,"pass":true,"reason":"fine"}]}"#)
+            .with_file("repair-1", ".repair-done", "x"),
+    );
+    let mut d = dispatcher(store.clone(), adapter, 1);
+    assert!(run_until_idle(&mut d, 400).await.idle);
+
+    let events = store.events_for(task.id).unwrap();
+    // 1 回目の review は reviewer を起こさず、reviewer の項目を未評価の不合格にした（この経路を通ったことの確認）。
+    assert!(
+        events.iter().any(|(_, e)| matches!(
+            e,
+            Event::ReviewVerdict { criterion_idx: 1, pass: false, reason, .. }
+                if reason == crate::review::REVIEWER_NOT_EVALUATED_REASON
+        )),
+        "{events:?}"
+    );
+    assert_eq!(review_repair_classes(&events), vec!["format".to_string()]);
+    assert!(
+        !events.iter().any(
+            |(_, e)| matches!(e, Event::Transitioned { reason, .. } if reason == "review_fail")
+        ),
+        "{events:?}"
+    );
+    let repair = store
+        .work_units_for(task.id)
+        .unwrap()
+        .into_iter()
+        .find(|u| u.key == "repair-1")
+        .expect("repair wu");
+    assert!(
+        !repair
+            .spec
+            .objective
+            .contains(crate::review::REVIEWER_NOT_EVALUATED_REASON),
+        "{}",
+        repair.spec.objective
+    );
+    let stored = store.get(task.id).unwrap().unwrap();
+    assert_eq!(
+        (stored.status, stored.attempts),
+        (Status::Done, 0),
+        "{stored:?}"
+    );
+}
+
+/// ADR-0072 D16 付記（G4-S1）。不変条件: reviewer が実際に不合格にした項目（reason が `REVIEWER_NOT_EVALUATED_REASON`
+/// でない）は今までどおり分類に数え、修復できる fmt の不合格と混ざれば `Substantive`（repair にせず `ReviewFail`）。
+/// 上の試験だけでは、`Check::Reviewer` の項目をすべて外す誤った直し方を検出できない。
+#[tokio::test]
+async fn review_repair_not_evaluated_only_skips_the_not_evaluated_reason() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut task = fmt_and_reviewer_task(dir.path());
+    task.status = Status::Reviewing;
+    store.insert(&task).unwrap();
+    let mut d = instant_done_dispatcher(store.clone());
+    let verdict = |idx: usize, reason: &str| Verdict {
+        criterion_idx: idx,
+        pass: false,
+        reason: reason.into(),
+        repair_hint: None,
+    };
+    d.on_review_finished(
+        task.id,
+        "run1".into(),
+        crate::review::ReviewOutcome {
+            verdicts: vec![
+                verdict(0, "exit 1: cargo fmt --check: Diff in src/lib.rs"),
+                verdict(1, "reviewer(r1): the change is incomplete"),
+            ],
+            plan: None,
+            provider_failure: None,
+            reviewer_run: None,
+            target_stale: None,
+            required_checks: vec![],
+            command_checks: vec![],
+        },
+    )
+    .unwrap();
+
+    let events = store.events_for(task.id).unwrap();
+    assert!(review_repair_classes(&events).is_empty(), "{events:?}");
+    assert!(
+        events.iter().any(
+            |(_, e)| matches!(e, Event::Transitioned { reason, .. } if reason == "review_fail")
+        ),
+        "{events:?}"
+    );
+    assert!(store.work_units_for(task.id).unwrap().is_empty());
+    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Failed);
 }
 
 /// ADR-0072 D5（E2b の指摘、Phase E3 で配線）: 計画の無い Task（暗黙の WorkUnit）の worker run と

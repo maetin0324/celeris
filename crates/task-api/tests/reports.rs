@@ -23,13 +23,6 @@ fn p(path: &str, body: &serde_json::Value) -> axum::http::Request<axum::body::Bo
     post_json_with(path, body, &[("authorization", auth_header().as_str())])
 }
 
-fn env_with_token() -> TestEnv {
-    TestEnv::with(EnvOptions {
-        token: Some(TOKEN.into()),
-        ..Default::default()
-    })
-}
-
 #[allow(clippy::too_many_arguments)]
 fn report(
     store: &SqliteStore,
@@ -60,7 +53,7 @@ fn report(
 
 #[tokio::test]
 async fn reports_are_listed_newest_first_and_can_be_filtered() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     let now = OffsetDateTime::now_utc();
     let project = ProjectId::new();
@@ -152,7 +145,7 @@ async fn reports_are_listed_newest_first_and_can_be_filtered() {
 
 #[tokio::test]
 async fn marking_reports_read_is_an_admin_operation() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     let now = OffsetDateTime::now_utc();
     let one = report(
@@ -256,7 +249,7 @@ async fn the_daemon_snapshot_carries_the_unread_counts_and_the_notification_deci
     assert_eq!(reports["notify_now"], true);
 
     // 通知時刻は管理系でしか進められないので、トークンのある環境で確かめる。
-    let env2 = env_with_token();
+    let env2 = admin_env();
     let app2 = env2.router();
     env2.daemon_tx.send_replace(Some(snapshot(3)));
     let unread = report(
@@ -301,7 +294,7 @@ async fn the_daemon_snapshot_carries_the_unread_counts_and_the_notification_deci
 #[tokio::test]
 async fn count_endpoints_count_every_row_beyond_the_page_limit() {
     use task_core::TaskStore;
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     let now = OffsetDateTime::now_utc();
     let project = ProjectId::new();

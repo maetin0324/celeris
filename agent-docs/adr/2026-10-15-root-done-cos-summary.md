@@ -135,3 +135,5 @@ release があれば事実ブロックの release 項目に入る。notice の `
 
 - 既に鳴っていなかった root 完了が、CoS のまとめ付きで 1 root 1 通、スレッドと task へのリンク付きで届く。
 - migration が 1 本（0080: `root_done_summaries` と旧 `task_ready` 行の移行）。`chat_threads` は変えない。
+
+付記 2026-11-11（[2026-11-11-cos-fallback-timing](2026-11-11-cos-fallback-timing.md) D4）: 待ち時間は `unavailable_after_secs` でなく `fallback_after_secs` を使い、root 完了の時刻でなく run の開始か入力を拾えるようになった時刻から数える。

@@ -2,6 +2,7 @@
 
 use super::*;
 use std::collections::BTreeMap;
+use task_worker::check_slots::CheckLimits;
 
 /// ADR 2026-11-08-health-enforcement-loop: 検査の列の項目の記録と health の項目。file は size の制約で `health_review/` に置く。
 #[path = "../health_review/check_item.rs"]
@@ -127,13 +128,16 @@ pub(crate) struct ObservedIntegration {
 /// 評価し（`check_item::run_item`）、同じ列の最後の項目（cmd `HEALTH_CHECK_ID`）として `WorkUnitCheckFinished`・
 /// `IntegrationCheckFinished` の `health` 欄に証跡を残す。列に足す行（NotApplicable でなければ）は戻り値の `checks` の後の
 /// 1 行。WU の check と段の統合はここだけを通り、経路ごとに検査器を起こさない。
+///
+/// ADR 2026-11-12-host-check-slots D3: 重い検査は `limits.slots`（daemon の起動時に決めた `DispatchConfig::check_slots`）の
+/// 枠を取ってから走らせる。`limits.timeout` は枠を取った後の実行にだけかかる。
 pub(super) async fn run_integration_checks(
     store: &dyn task_core::TaskStore,
     task_id: TaskId,
     observed: &ObservedIntegration,
     ws: &task_worker::LocalWorkspace,
     checks: &[task_core::WorkUnitCheck],
-    command_timeout: Duration,
+    limits: CheckLimits,
     health: Option<check_item::HealthTarget>,
 ) -> Vec<(bool, String)> {
     let total = u32::try_from(checks.len() + usize::from(health.is_some())).unwrap_or(u32::MAX);
@@ -155,12 +159,13 @@ pub(super) async fn run_integration_checks(
             log_path.display().to_string(),
         );
         let clock = std::time::Instant::now();
-        let check_ws = ws.clone().with_output_log(&log_path);
+        // ADR 2026-11-12-host-check-slots D3: 重い検査は host 共通の枠を取ってから走らせる（待ちは timeout に数えない）。
+        let check_ws = limits.check_workspace(ws.clone().with_output_log(&log_path), &observed.key);
         let outcome = crate::review::exec_check_outcome(
-            &check_ws,
+            check_ws.as_ref(),
             &c.cmd,
             c.expect_exit,
-            command_timeout,
+            limits.timeout,
             "",
         )
         .await;
@@ -622,7 +627,7 @@ impl Dispatcher {
         let task_dir = ws.task_dir.clone();
         // ADR-0074 F5-fix: 統合 WU の検査は Task の worktree で走るので `<repo-key>`。
         let check_env = self.check_cargo_target_env(task, None);
-        let timeout = self.config.review_timeout;
+        let timeout = CheckLimits::new(self.config.review_timeout, &self.config.check_slots);
         let tx = self.tx.clone();
         let task_id = task.id;
         let work_unit_id = integ.id.clone();

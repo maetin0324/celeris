@@ -125,6 +125,8 @@ export type ActualWriteSetView = {
   "status": string;
 };
 
+export type Addressee = "human" | "operator";
+
 export type AdoptRequest = {
   "stage": string;
   "task_id": TaskId;
@@ -386,7 +388,7 @@ export type AutoReplanSource = "integration" | "work_unit";
 
 export type BackoffCause = "retry" | "infra";
 
-export type BasisCategory = "within_approved_frame" | "raise_once" | "documented_default" | "work_guidance" | "review_rework" | "plan_conforms" | "job_wait_extend";
+export type BasisCategory = "within_approved_frame" | "raise_once" | "task_scope" | "review_rework" | "plan_conforms" | "job_wait_extend";
 
 export type BasisFailures = {
   "current": string;
@@ -412,7 +414,7 @@ export type BasisRef = {
   "kind": BasisRefKind;
 };
 
-export type BasisRefKind = "standing_rule" | "decision" | "approval" | "usage" | "ledger" | "commit" | "artifact" | "progress" | "adr" | "doc" | "message" | "review" | "authority_grant";
+export type BasisRefKind = "standing_rule" | "decision" | "approval" | "usage" | "ledger" | "commit" | "artifact" | "progress" | "adr" | "doc" | "message" | "review" | "authority_grant" | "task";
 
 export type BehaviorChangeEvent = {
   "action": BehaviorChangeState;
@@ -781,9 +783,10 @@ export type ChatEventType = "message" | "text_delta" | "status" | "tool" | "run"
 
 export type ChatForwardRequest = {
   "client_message_id": string;
-  "expires_at": string;
+  "expires_at"?: string | null;
+  "grant_id"?: string | null;
   "message_id": string;
-  "task_ids": Array<string>;
+  "task_ids"?: Array<string>;
 };
 
 export type ChatMessage = {
@@ -887,6 +890,7 @@ export type ChatReferenceResponse = {
 };
 
 export type ChatRelay = {
+  "grant_id"?: string | null;
   "relayed_by": string;
   "said_at": string;
   "scope": ChatRelayScope;
@@ -1190,7 +1194,10 @@ export type ClusterJobState = "queued" | "held" | "running" | "exiting" | "finis
 export type ClusterJobStatus = {
   "exit_status"?: number | null;
   "job_id": string;
+  "queue_notified"?: boolean;
+  "queued_since"?: string | null;
   "raw_state"?: string | null;
+  "scheduling"?: Array<string>;
   "state": ClusterJobState;
 };
 
@@ -1605,6 +1612,7 @@ export type CosDigestFallback = {
 };
 
 export type CosInboxItem = {
+  "addressee"?: string | null;
   "created_at": string;
   "id": string;
   "message_id": string;
@@ -2248,6 +2256,7 @@ export type EscalationPacket = {
   "recommendation_reason": string;
   "recommended"?: string | null;
   "summary": string;
+  "to": Addressee;
   "web_path": string;
 };
 
@@ -3872,6 +3881,13 @@ export type KnowledgeTree = {
   "scope"?: string | null;
   "scopes"?: Array<string>;
   "truncated": boolean;
+};
+
+export type KnowledgeUse = {
+  "failed"?: number;
+  "get": number;
+  "record": number;
+  "search": number;
 };
 
 export type LaneAssistRecord = {
@@ -5668,6 +5684,7 @@ export type RunList = {
 };
 
 export type RunMetrics = {
+  "knowledge"?: KnowledgeUse | null;
   "peak_context_tokens"?: number | null;
   "retries": number;
   "turns"?: number | null;
@@ -5753,6 +5770,18 @@ export type SavedCredentialList = {
   "items": Array<SavedCredentialItem>;
 };
 
+export type ScratchAdmissionView = {
+  "expected_by_repo": {
+  [key: string]: number;
+};
+  "free_bytes"?: number | null;
+  "held"?: Array<ScratchHeldRunView> | null;
+  "owners": Array<ScratchOwnerForecastView>;
+  "ratio": number;
+  "reserve_bytes": number;
+  "running_growth_bytes": number;
+};
+
 export type ScratchCacheStats = {
   "flush_dropped": number;
   "flush_last_at"?: string | null;
@@ -5818,10 +5847,29 @@ export type ScratchGcView = {
   "removed": Array<ScratchGcRemovedView>;
 };
 
+export type ScratchHeldRunView = {
+  "need_bytes": number;
+  "owner": string;
+  "reason": string;
+  "repo_key": string;
+  "since": string;
+  "task_id": string;
+  "work_unit_id"?: string | null;
+};
+
 export type ScratchLegacyView = {
   "class": string;
   "last_write"?: string | null;
   "path": string;
+  "size_bytes"?: number | null;
+};
+
+export type ScratchOwnerForecastView = {
+  "expected_bytes": number;
+  "grows": boolean;
+  "growth_bytes": number;
+  "owner": string;
+  "repo_key": string;
   "size_bytes"?: number | null;
 };
 
@@ -5861,6 +5909,7 @@ export type ScratchSccacheView = {
 };
 
 export type ScratchStatus = {
+  "admission": ScratchAdmissionView;
   "cache"?: ScratchCacheView | null;
   "dir": string;
   "disabled_reason"?: string | null;
@@ -6299,6 +6348,8 @@ export type TaskComment = {
   "task_id": TaskId;
 };
 
+export type TaskDependencyCause = "unfinished" | "unmerged" | "delivery_skipped" | "held" | "discarded" | "failed" | "cancelled";
+
 export type TaskDetail = {
   "actions": Array<Action>;
   "actual_run_write_sets": Array<ActualWriteSetView>;
@@ -6625,6 +6676,10 @@ export type TaskWait = {
   "kind": "disk_critical";
   "path": string;
 } | {
+  "detail": string;
+  "kind": "disk_forecast";
+  "need_bytes": number;
+} | {
   "kind": "delegated_children";
   "task_ids": Array<TaskId>;
 } | {
@@ -6634,6 +6689,12 @@ export type TaskWait = {
   "detail": string;
   "kind": "depends_on_integration";
   "task_id": TaskId;
+} | {
+  "cause": TaskDependencyCause;
+  "detail": string;
+  "kind": "task_dependency";
+  "task_id": TaskId;
+  "unit_keys": Array<string>;
 };
 
 export type TextPart = {

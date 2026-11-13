@@ -1,0 +1,20 @@
+warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGER` causes the socket to block the thread on drop
+   --> crates/script-runtime/vendor/deno_core/uv_compat/tcp.rs:818:17
+    |
+818 |       && stream.set_linger(Some(std::time::Duration::ZERO)).is_err()
+    |                 ^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: `deno_core` (lib) generated 1 warning
+   Compiling celeris v0.1.0 (/local/celeris/data/workspaces/01M6TYVJT53598CPKMGSQGA7XM/wu/measure-build/repos/agent-platform/crates/celeris)
+warning: unused import: `ScriptGenerationControl`
+  --> crates/celeris/tests/script_exhaustive.rs:23:36
+   |
+23 | use task_api::script_generations::{ScriptGenerationControl, ScriptGenerationError};
+   |                                    ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `celeris` (test "script_exhaustive") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 24.89s

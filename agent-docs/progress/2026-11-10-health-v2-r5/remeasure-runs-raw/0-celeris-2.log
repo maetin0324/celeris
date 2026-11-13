@@ -1,0 +1,1638 @@
+warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGER` causes the socket to block the thread on drop
+   --> crates/script-runtime/vendor/deno_core/uv_compat/tcp.rs:818:17
+    |
+818 |       && stream.set_linger(Some(std::time::Duration::ZERO)).is_err()
+    |                 ^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: `deno_core` (lib) generated 1 warning
+warning: unused import: `ScriptGenerationControl`
+  --> crates/celeris/tests/script_exhaustive.rs:23:36
+   |
+23 | use task_api::script_generations::{ScriptGenerationControl, ScriptGenerationError};
+   |                                    ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `celeris` (test "script_exhaustive") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.30s
+────────────
+ Nextest run ID 9cb4aaba-23f1-43b4-82cd-0e9681d09380 with nextest profile: default
+    Starting 805 tests across 47 binaries (2 tests skipped)
+        PASS [   0.016s] (  1/805) celeris browser_doctor::tests::browser_doctor_dns_rejects_wrong_transaction_and_server_error
+        PASS [   0.021s] (  2/805) celeris accounts_admin::tests::spawn_check_missing_account_is_not_found
+        PASS [   0.023s] (  3/805) celeris accounts_admin::tests::spawn_check_codex_auth_failed
+        PASS [   0.025s] (  4/805) celeris accounts_admin::tests::spawn_check_reports_ok_and_records_observation_via_event
+        PASS [   0.025s] (  5/805) celeris accounts_admin::tests::spawn_check_codex_reports_ok_and_records_observation
+        PASS [   0.011s] (  6/805) celeris cluster_admin::tests::expire_returns_ids_and_does_not_send_on_a_channel
+        PASS [   0.014s] (  7/805) celeris cluster_admin::tests::code_without_a_session_is_not_started
+        PASS [   0.019s] (  8/805) celeris cluster_admin::tests::cancel_without_a_session_succeeds
+        PASS [   0.036s] (  9/805) celeris accounts_admin::tests::login_start_code_cancel_round_trip
+        PASS [   0.013s] ( 10/805) celeris cluster_admin::tests::manual_cluster_refuses_to_connect
+        PASS [   0.013s] ( 11/805) celeris cluster_admin::tests::unknown_cluster_is_not_found_for_all_three
+        PASS [   0.010s] ( 12/805) celeris config::cos::tests::chat_config_attachment_data_dir_is_db_dir
+        PASS [   0.013s] ( 13/805) celeris config::cos::tests::chat_config_defaults_follow_adr_d4
+        PASS [   0.012s] ( 14/805) celeris config::cos::tests::chat_config_overrides_are_read
+        PASS [   0.013s] ( 15/805) celeris config::cos::tests::chat_config_partial_override_keeps_other_defaults
+        PASS [   0.015s] ( 16/805) celeris config::cos::tests::chat_config_rejects_invalid_values
+        PASS [   0.054s] ( 17/805) celeris accounts_admin::tests::expire_stale_logins_cancels_sessions_older_than_the_injected_expiry
+        PASS [   0.055s] ( 18/805) celeris accounts_admin::tests::expire_stale_codex_logins_cancels_sessions_older_than_the_injected_expiry
+        PASS [   0.020s] ( 19/805) celeris config::cos::tests::chat_config_example_toml_carries_the_defaults
+        PASS [   0.013s] ( 20/805) celeris config::cos::tests::chat_config_rejects_unknown_and_negative_keys
+        PASS [   0.014s] ( 21/805) celeris config::cos::tests::cos_chat_config_rejects_legacy_route_fields
+        PASS [   0.014s] ( 22/805) celeris config::cos::tests::cos_chat_config_defaults_to_fixed_harness_and_route_candidates
+        PASS [   0.012s] ( 23/805) celeris config::cos::tests::repo_cos_skills_pass_the_gate_under_the_default_triage_config
+        PASS [   0.015s] ( 24/805) celeris config::cos::tests::cos_triage_human_required_uses_the_routine_answer_vocabulary
+        PASS [   0.023s] ( 25/805) celeris config::cos::tests::cos_triage_fallback_safety_net_default_override_and_removed_fields
+        PASS [   0.015s] ( 26/805) celeris config::cron::tests::cron_seed_parses_fields_and_defaults
+        PASS [   0.019s] ( 27/805) celeris config::cron::tests::cron_seed_rejects_invalid_seeds_at_load
+        PASS [   0.021s] ( 28/805) celeris config::cron::tests::seed_objective_describes_curation_content_hashes_and_diff_scope
+        PASS [   0.012s] ( 29/805) celeris config::edit::tests::arrays_of_tables_and_bad_paths
+        PASS [   0.011s] ( 30/805) celeris config::edit::tests::new_nested_key_creates_tables_and_null_removes
+        PASS [   0.011s] ( 31/805) celeris config::fields::tests::flatten_keeps_arrays_as_one_field
+        PASS [   0.012s] ( 32/805) celeris config::edit::tests::replacing_a_value_keeps_comments_and_order
+        PASS [   0.010s] ( 33/805) celeris config::fields::tests::longest_prefix_wins_and_unknown_is_startup
+        PASS [   0.010s] ( 34/805) celeris config::fields::tests::secrets_are_redacted
+        PASS [   0.013s] ( 35/805) celeris config::jev::tests::disabled_by_default_with_or_without_the_table
+        PASS [   0.015s] ( 36/805) celeris config::jev::tests::every_field_round_trips
+        PASS [   0.015s] ( 37/805) celeris config::jev::tests::invalid_values_are_load_errors_even_when_disabled
+        PASS [   0.015s] ( 38/805) celeris config::jev::tests::unknown_field_is_a_load_error
+        PASS [   0.012s] ( 39/805) celeris config::llm_route::tests::execution_class_harness_requires_route_defaults
+        PASS [   0.015s] ( 40/805) celeris config::llm_route::tests::harness_balance_is_off_by_default_and_names_only_known_classes
+        PASS [   0.015s] ( 41/805) celeris config::llm_route::tests::harness_decl_rejects_kind_or_format_mismatch
+        PASS [   0.015s] ( 42/805) celeris config::llm_route::tests::harness_decl_rejects_unknown_route_source
+        PASS [   0.016s] ( 43/805) celeris config::llm_route::tests::lane_route_defaults_override_harness_default_and_settings_load
+        PASS [   0.015s] ( 44/805) celeris config::llm_route::tests::llm_sources_harness_decl_builds_registry_from_adr_tables
+        PASS [   0.019s] ( 45/805) celeris config::llm_route::tests::lane_route_defaults_reject_unknown_source_and_settings_reject_bad_values
+        PASS [   0.016s] ( 46/805) celeris config::llm_route::tests::proxy_bound_harness_candidates_all_need_a_via_llm_proxy_route
+        PASS [   0.016s] ( 47/805) celeris config::llm_route::tests::wait_for_credential_builds_a_gate_and_requires_a_credential_ref
+        PASS [   0.017s] ( 48/805) celeris config::maintenance::tests::disk_watch_config_defaults_and_overrides
+        PASS [   0.018s] ( 49/805) celeris config::maintenance::tests::target_sweep_config_defaults_match_sweep_params_default
+        PASS [   0.031s] ( 50/805) celeris config::maintenance::tests::disk_watch_config_rejects_invalid_entries
+        PASS [   0.030s] ( 51/805) celeris config::maintenance::tests::target_sweep_config_example_toml_matches_defaults
+        PASS [   0.021s] ( 52/805) celeris config::maintenance::tests::target_sweep_config_overrides_and_resolves_relative_roots
+        PASS [   0.019s] ( 53/805) celeris config::maintenance::tests::target_sweep_config_rejects_invalid_values
+        PASS [   0.014s] ( 54/805) celeris config::model_catalog::tests::models_missing_from_the_catalog_are_left_alone
+        PASS [   0.024s] ( 55/805) celeris config::maintenance::tests::target_sweep_scope_defaults_and_disable_are_resolved
+        PASS [   0.239s] ( 56/805) celeris accounts_admin::tests::codex_login_start_returns_user_code_and_poll_detects_completion
+        PASS [   0.017s] ( 57/805) celeris config::model_catalog::tests::unavailable_and_disabled_models_leave_the_candidates
+        PASS [   0.014s] ( 58/805) celeris config::project_controller::tests::budget_rates_need_all_four_fields_and_reject_priced_table_rows
+        PASS [   0.014s] ( 59/805) celeris config::project_controller::tests::legacy_token_cap_is_rejected_on_load
+        PASS [   0.015s] ( 60/805) celeris config::project_controller::tests::project_controller_config_defaults_and_unknown_field
+        PASS [   0.019s] ( 61/805) celeris config::project_controller::tests::max_usd_per_day_default_is_100_and_must_be_finite_positive
+        PASS [   0.014s] ( 62/805) celeris config::project_controller::tests::project_controller_retention_config_requires_archive_dir_and_positive_values
+        PASS [   0.016s] ( 63/805) celeris config::routing_eval::tests::routing_eval_defaults_to_zero_reserved_runs
+        PASS [   0.019s] ( 64/805) celeris config::routing_eval::tests::routing_eval_rejects_unknown_fields
+        PASS [   0.019s] ( 65/805) celeris config::routing_eval::tests::routing_eval_reserved_runs_reaches_dispatch_config
+        PASS [   0.018s] ( 66/805) celeris config::routing_mode::tests::both_modes_parse
+        PASS [   0.016s] ( 67/805) celeris config::routing_mode::tests::mode_defaults_to_fixed_without_the_table_or_the_field
+        PASS [   0.014s] ( 68/805) celeris config::routing_mode::tests::unknown_mode_or_field_is_a_load_error
+        PASS [   0.016s] ( 69/805) celeris config::script::tests::config_active_bundle_sha256_is_rejected
+        PASS [   0.018s] ( 70/805) celeris config::script::tests::script_runtime_config_is_absent_by_default
+        PASS [   0.016s] ( 71/805) celeris config::script::tests::script_runtime_config_reads_values_and_defaults
+        PASS [   0.016s] ( 72/805) celeris config::script::tests::script_runtime_config_rejects_invalid_values
+        PASS [   0.016s] ( 73/805) celeris config::tests::accepts_acp_adapter_with_default_config
+        PASS [   0.018s] ( 74/805) celeris config::tests::accepts_claude_code_adapter_with_default_config
+        PASS [   0.018s] ( 75/805) celeris config::tests::accepts_codex_adapter_with_default_config
+        PASS [   0.014s] ( 76/805) celeris config::tests::accepts_local_deep_research_adapter_with_default_config
+        PASS [   0.016s] ( 77/805) celeris config::tests::accepts_paperqa_adapter_with_default_config
+        PASS [   0.017s] ( 78/805) celeris config::tests::accounts_section_rejects_zero_max_runs_and_unknown_keys
+        PASS [   0.019s] ( 79/805) celeris config::tests::accounts_section_defaults_and_relative_dirs_are_resolved
+        PASS [   0.016s] ( 80/805) celeris config::tests::adapter_subagents_setting_resolves_deterministically_and_defaults_to_deny
+        PASS [   0.021s] ( 81/805) celeris config::tests::api_section_defaults_to_disabled_and_requires_token_off_loopback
+        PASS [   0.017s] ( 82/805) celeris config::tests::apply_verify_smoke_drops_smoke_from_class_candidates
+        PASS [   0.015s] ( 83/805) celeris config::tests::browser_runtime_defaults_to_daemon
+        PASS [   0.018s] ( 84/805) celeris config::tests::backoff_and_reviewer_settings_map_to_dispatch_config
+        PASS [   0.015s] ( 85/805) celeris config::tests::browser_runtime_launcher_uid_reaches_the_runtime_kind
+        PASS [   0.016s] ( 86/805) celeris config::tests::browser_runtime_launcher_with_socket_validates
+        PASS [   0.015s] ( 87/805) celeris config::tests::browser_runtime_launcher_without_socket_is_rejected
+        PASS [   0.016s] ( 88/805) celeris config::tests::browser_runtime_unknown_value_is_rejected
+        PASS [   0.019s] ( 89/805) celeris config::tests::browser_settings_default_to_unconfigured_and_site_policy_validates
+        PASS [   0.018s] ( 90/805) celeris config::tests::class_candidates_are_validated_like_harness_candidates
+        PASS [   0.020s] ( 91/805) celeris config::tests::budget_rates_table_is_validated_by_config
+        PASS [   0.018s] ( 92/805) celeris config::tests::claude_code_class_route_override_picks_opus_for_coding_only
+        PASS [   0.018s] ( 93/805) celeris config::tests::cluster_auth_defaults_to_manual_and_only_three_values_are_accepted
+        PASS [   0.015s] ( 94/805) celeris config::tests::coding_harness_default_config_rejects_fixed_adapter_and_unknown_policy
+        PASS [   0.019s] ( 95/805) celeris config::tests::cluster_control_persist_defaults_to_yes_and_accepts_only_yes_or_positive_seconds
+        PASS [   0.019s] ( 96/805) celeris config::tests::cluster_job_wait_defaults_and_validation
+        PASS [   0.017s] ( 97/805) celeris config::tests::containers_build_dir_expands_home_and_resolves_relative_paths
+        PASS [   0.017s] ( 98/805) celeris config::tests::containers_defaults_reach_the_dispatcher_and_bad_values_are_rejected
+        PASS [   0.017s] ( 99/805) celeris config::tests::conversation_genre_defaults_to_secretary_and_an_unknown_genre_is_a_config_error
+        PASS [   0.013s] (100/805) celeris config::tests::delivery_auto_resolve_defaults_follow_the_parallel_integration_adr
+        PASS [   0.017s] (101/805) celeris config::tests::db_accepts_both_the_bare_path_string_and_the_table_form
+        PASS [   0.015s] (102/805) celeris config::tests::delegation_on_child_failure_is_parsed_and_validated
+        PASS [   0.040s] (103/805) celeris config::tests::config_examples_load
+        PASS [   0.014s] (104/805) celeris config::tests::delivery_auto_resolve_overrides_and_validation
+        PASS [   0.014s] (105/805) celeris config::tests::dispatch_min_free_disk_mb_can_be_configured
+        PASS [   0.015s] (106/805) celeris config::tests::dispatch_config_resolves_the_langmem_api_key_from_secrets
+        PASS [   0.014s] (107/805) celeris config::tests::empty_class_candidates_are_a_config_error
+        PASS [   0.014s] (108/805) celeris config::tests::ensure_accounts_dir_creates_the_directories_with_0700
+        PASS [   0.014s] (109/805) celeris config::tests::ensure_secrets_dir_creates_the_directory_with_0700
+        PASS [   0.464s] (110/805) celeris browser_doctor::tests::browser_doctor_db_is_authoritative_warns_on_seed_difference_and_unknown_grant
+        PASS [   0.014s] (111/805) celeris config::tests::env_from_secrets_is_parsed_on_adapters
+        PASS [   0.477s] (112/805) celeris browser_doctor::tests::browser_doctor_each_missing_item_has_a_fix_without_touching_production
+        PASS [   0.477s] (113/805) celeris browser_doctor::tests::browser_doctor_rejects_test_launcher_broker_denial_stale_ledger_and_bad_key
+        PASS [   0.477s] (114/805) celeris browser_doctor::tests::browser_doctor_reports_username_selector_and_post_login_per_site_policy
+        PASS [   0.015s] (115/805) celeris config::tests::execution_max_cos_runs_default_and_validation
+        PASS [   0.015s] (116/805) celeris config::tests::execution_continuation_hard_limit_default_validation_and_old_field_is_an_error
+        PASS [   0.016s] (117/805) celeris config::tests::genres_are_parsed_and_mapped
+        PASS [   0.016s] (118/805) celeris config::tests::execution_tree_defaults_and_validation
+        PASS [   0.430s] (119/805) celeris config::cron::tests::cron_seed_inserts_once_into_empty_cron_jobs
+        PASS [   0.032s] (120/805) celeris config::tests::example_org_routes_ui_work_to_ui_ux_and_api_work_to_software_engineering
+        PASS [   0.488s] (121/805) celeris chat_gc::tests::chat_gc_expires_upload_reservations
+        PASS [   0.013s] (122/805) celeris config::tests::hot_mount_check_refuses_a_plain_directory_on_the_root_filesystem
+        PASS [   0.016s] (123/805) celeris config::tests::github_defaults_to_gh_and_merge_and_rejects_other_merge_methods
+        PASS [   0.015s] (124/805) celeris config::tests::hot_paths_follow_the_adr_0136_keys_and_default_to_the_previous_locations
+        PASS [   0.013s] (125/805) celeris config::tests::legacy_providers_rejected_with_new_config_guidance
+        PASS [   0.015s] (126/805) celeris config::tests::langmem_api_key_config_uses_the_secret_for_other_endpoints_and_warns_if_missing
+        PASS [   0.015s] (127/805) celeris config::tests::langmem_auth_warnings_config_reports_a_missing_proxy_bearer
+        PASS [   0.018s] (128/805) celeris config::tests::langmem_api_key_config_uses_the_proxy_token_when_targeting_llm_proxy
+        PASS [   0.442s] (129/805) celeris config::cron::tests::cron_seed_example_toml_has_daily_curation_and_knowledge_curation_harness
+        PASS [   0.441s] (130/805) celeris config::cron::tests::cron_seed_is_not_applied_when_cron_jobs_already_has_a_job
+        PASS [   0.014s] (131/805) celeris config::tests::legacy_token_caps_are_rejected_with_the_field_name
+        PASS [   0.504s] (132/805) celeris browser_doctor::tests::browser_doctor_launcher_dns_credential_ping_and_versions_are_checked
+        PASS [   0.018s] (133/805) celeris config::tests::loads_acp_opencode_example_config
+        PASS [   0.018s] (134/805) celeris config::tests::loads_aider_example_config
+        PASS [   0.017s] (135/805) celeris config::tests::loads_claude_code_dogfood_example_config
+        PASS [   0.017s] (136/805) celeris config::tests::loads_codex_dogfood_example_config
+        PASS [   0.015s] (137/805) celeris config::tests::mcp_listeners_parse_and_validate_are_wired_into_config
+        PASS [   0.018s] (138/805) celeris config::tests::loads_the_org_example_and_maps_it_to_org_nodes
+        PASS [   0.019s] (139/805) celeris config::tests::loads_research_example_config
+        PASS [   0.439s] (140/805) celeris config::cron::tests::target_sweep_cron_seed_example_toml_passes_validation
+        PASS [   0.016s] (141/805) celeris config::tests::memory_dir_is_resolved_created_with_0700_and_passed_to_the_dispatcher
+        PASS [   0.019s] (142/805) celeris config::tests::loads_web_research_example_config
+        PASS [   0.015s] (143/805) celeris config::tests::model_routing_section_rejected_with_route_defaults_guidance
+        PASS [   0.019s] (144/805) celeris config::tests::migration_runbook_toml_loads
+        PASS [   0.027s] (145/805) celeris config::tests::loads_example_config_and_resolves_relative_paths
+        PASS [   0.519s] (146/805) celeris chat_gc::tests::chat_gc_applies_stream_retention_after_run_end
+        PASS [   0.016s] (147/805) celeris config::tests::notify_defaults_are_used_when_the_section_is_absent
+        PASS [   0.017s] (148/805) celeris config::tests::multi_account_example_mentions_account_pool_commented_out
+        PASS [   0.014s] (149/805) celeris config::tests::opencode_model_namespace_deserializes_and_validates
+        PASS [   0.017s] (150/805) celeris config::tests::opencode_go_example_config_loads_and_routes_as_opencode_go_subscription
+        PASS [   0.018s] (151/805) celeris config::tests::omitted_paths_default_to_the_celeris_xdg_layout
+        PASS [   0.016s] (152/805) celeris config::tests::org_include_is_optional_but_must_exist_when_written
+        PASS [   0.015s] (153/805) celeris config::tests::paperqa_paths_are_resolved_relative_to_the_config_file
+        PASS [   0.014s] (154/805) celeris config::tests::plan_auto_accept_is_parsed_and_unknown_plan_keys_are_rejected
+        PASS [   0.013s] (155/805) celeris config::tests::planner_adapter_is_rejected_with_candidate_guidance
+        PASS [   0.015s] (156/805) celeris config::tests::pi_harness_declaration_deserializes_extensions_tools_and_env
+        PASS [   0.013s] (157/805) celeris config::tests::proxy_tier_alias_rejected_in_celeris_config
+        PASS [   0.017s] (158/805) celeris config::tests::parses_worktree_sync_and_maps_it_to_the_worker_settings
+        PASS [   0.014s] (159/805) celeris config::tests::planner_without_adapter_keeps_its_budget_and_permission_settings
+        PASS [   0.014s] (160/805) celeris config::tests::reads_paperqa_acquire_and_evidence_tables
+        PASS [   0.016s] (161/805) celeris config::tests::reads_local_deep_research_evidence_thresholds
+        PASS [   0.017s] (162/805) celeris config::tests::reads_local_deep_research_adapter_settings
+        PASS [   0.015s] (163/805) celeris config::tests::rejects_duplicate_genre_ids_and_genres_referencing_unknown_or_mismatched_roles
+        PASS [   0.013s] (164/805) celeris config::tests::rejects_unknown_acp_permission_value
+        PASS [   0.017s] (165/805) celeris config::tests::rejects_duplicate_roles_removed_role_adapter_and_zero_limits
+        PASS [   0.013s] (166/805) celeris config::tests::rejects_unknown_fields_in_claude_code_adapter_config
+        PASS [   0.543s] (167/805) celeris accounts_admin::tests::remove_account_codex_uses_the_codex_root
+        PASS [   0.015s] (168/805) celeris config::tests::rejects_unknown_fields_in_acp_adapter_config
+        PASS [   0.014s] (169/805) celeris config::tests::rejects_unknown_fields_in_local_deep_research_adapter_config
+        PASS [   0.014s] (170/805) celeris config::tests::rejects_unknown_fields_in_codex_adapter_config
+        PASS [   0.013s] (171/805) celeris config::tests::rejects_unknown_fields_in_local_deep_research_evidence_table
+        PASS [   0.013s] (172/805) celeris config::tests::rejects_unknown_fields_in_paperqa_adapter_config
+        PASS [   0.020s] (173/805) celeris config::tests::rejects_org_seeds_that_do_not_form_one_tree
+        PASS [   0.016s] (174/805) celeris config::tests::rejects_zero_cooldown_and_unsafe_lease_grace
+        PASS [   0.014s] (175/805) celeris config::tests::removed_scratch_cache_sections_are_load_errors
+        PASS [   0.018s] (176/805) celeris config::tests::rejects_unknown_sync_modes_and_worktree_auto_removal
+        PASS [   0.015s] (177/805) celeris config::tests::route_defaults_classes_build_the_registry
+        PASS [   0.016s] (178/805) celeris config::tests::scratch_can_be_disabled
+        PASS [   0.018s] (179/805) celeris config::tests::reviewer_adapter_must_name_a_declared_harness_and_unknown_reviewer_keys_fail
+        PASS [   0.018s] (180/805) celeris config::tests::roles_and_delegation_are_parsed_and_mapped
+        PASS [   0.016s] (181/805) celeris config::tests::scratch_cargo_defaults_disable_incremental
+        PASS [   0.015s] (182/805) celeris config::tests::selfdeploy_delivery_projects_is_removed_and_rejected
+        PASS [   0.017s] (183/805) celeris config::tests::scratch_defaults_follow_the_build_cache_parent
+        PASS [   0.016s] (184/805) celeris config::tests::scratch_mount_falls_back_to_default_dir_and_seed_reflink_defaults_off
+        PASS [   0.016s] (185/805) celeris config::tests::selfdeploy_push_defaults_to_true_and_origin_and_rejects_blank_remote
+        PASS [   0.560s] (186/805) celeris accounts_admin::tests::usage_poll_skips_logged_out_and_logging_in_accounts_and_throttles_checks
+        PASS [   0.018s] (187/805) celeris config::tests::selfdeploy_releases_dir_defaults_to_the_state_dir_and_resolves_relative_paths
+        PASS [   0.018s] (188/805) celeris config::tests::secrets_dir_is_parsed_and_resolved_relative_to_the_config_file
+        PASS [   0.561s] (189/805) celeris chat_gc::tests::chat_gc_loop_skips_passes_while_gate_is_closed
+        PASS [   0.013s] (190/805) celeris config::tests::verify_mode_config_does_not_serve_the_llm_proxy
+        PASS [   0.019s] (191/805) celeris config::tests::the_knowledge_section_resolves_its_root_and_checks_the_default_mounts
+        PASS [   0.022s] (192/805) celeris config::tests::the_knowledge_harness_fallback_is_configurable
+        PASS [   0.017s] (193/805) celeris config::tests::unknown_execution_class_is_a_config_error
+        PASS [   0.014s] (194/805) celeris control_path::tests::a_parent_dir_not_mine_or_not_0700_is_a_warning
+        PASS [   0.015s] (195/805) celeris control_path::tests::a_normal_setup_has_no_warnings_only_the_persist_info
+        PASS [   0.014s] (196/805) celeris control_path::tests::a_path_over_90_bytes_is_a_warning_and_exactly_90_is_not
+        PASS [   0.014s] (197/805) celeris control_path::tests::an_unexpanded_token_skips_the_length_and_directory_checks
+        PASS [   0.014s] (198/805) celeris control_path::tests::controlpath_none_is_a_warning
+        PASS [   0.015s] (199/805) celeris control_path::tests::controlmaster_no_is_a_warning
+        PASS [   0.020s] (200/805) celeris config::tests::workspace_worktree_branch_prefix_defaults_to_celeris_slash_and_reaches_the_dispatcher
+        PASS [   0.015s] (201/805) celeris control_path::tests::linger_off_under_xdg_runtime_dir_is_a_warning
+        PASS [   0.576s] (202/805) celeris accounts_admin::tests::remove_account_missing_directory_is_not_found
+        PASS [   0.017s] (203/805) celeris daemon::adapters::harness_adapter_tests::opencode_harness_passes_model_namespace
+        PASS [   0.015s] (204/805) celeris daemon::adapters::harness_adapter_tests::route_select_dispatch_adapter_daemon_rejects_unknown_harness_kind
+        PASS [   0.018s] (205/805) celeris daemon::adapters::harness_adapter_tests::pi_harness_declaration_reaches_pi_config
+        PASS [   0.018s] (206/805) celeris daemon::adapters::harness_adapter_tests::route_select_dispatch_adapter_daemon_builds_one_adapter_per_declared_harness
+        PASS [   0.035s] (207/805) celeris config::tests::the_two_example_files_load_together_through_org_include
+        PASS [   0.013s] (208/805) celeris daemon::bootstrap::jev_verifier::ping_body_tests::noul_ping_has_no_string_criteria
+        PASS [   0.584s] (209/805) celeris chat_gc::tests::chat_gc_removes_unsent_upload_after_orphan_ttl
+        PASS [   0.015s] (210/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_production_config_unparsable_is_unknown_for_test_db
+        PASS [   0.016s] (211/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_production_config_invalid_db_is_unknown_for_test_db
+        PASS [   0.016s] (212/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_production_config_unreadable_is_unknown_for_test_db
+        PASS [   0.019s] (213/805) celeris daemon::bootstrap::worker_db_guard_tests::egress_test_loopback_production_db_or_config_daemon_refuses_test_launcher
+        PASS [   0.015s] (214/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_production_db_tilde_uses_passwd_home_not_env_home
+        PASS [   0.016s] (215/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_refuse_action_table
+        PASS [   0.015s] (216/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_refuse_production_db
+        PASS [   0.018s] (217/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_refuse_action_never_probes_inside_worker_run
+        PASS [   0.035s] (218/805) celeris daemon::adapters::harness_adapter_tests::pi_harness_declaration_reaches_pi_process
+        PASS [   0.018s] (219/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_refuse_precheck_before_opening_db
+        PASS [   0.014s] (220/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_refuse_production_token
+        PASS [   0.015s] (221/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_refuse_state_dir_overlap
+        PASS [   0.017s] (222/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_refuse_relative_path_with_dotdot
+        PASS [   0.014s] (223/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_refuse_under_marker_path
+        PASS [   0.014s] (224/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_refuses_production_db_from_production_config
+        PASS [   0.015s] (225/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_refuse_via_symlink
+        PASS [   0.605s] (226/805) celeris chat_gc::tests::chat_gc_keeps_referenced_blob_and_deletes_after_unreferenced_retention
+        PASS [   0.015s] (227/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_refuses_production_state_dir_from_production_config
+        PASS [   0.015s] (228/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_test_db_is_exempt_outside_worker_run
+        PASS [   0.017s] (229/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_refuses_production_token_relative_to_production_config
+        PASS [   0.014s] (230/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_test_db_is_exempt_without_production_config
+        PASS [   0.015s] (231/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_test_db_is_exempt_with_production_config
+        PASS [   0.015s] (232/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_unknown_home_is_unknown_for_test_db
+        PASS [   0.014s] (233/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_guard_opt_out_refuses_production_inside_worker_run
+        PASS [   0.018s] (234/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_guard_exempt_test_db_without_marker
+        PASS [   0.013s] (235/805) celeris daemon::browser_ledger_path::tests::browser_ledger_release_env_override_wins
+        PASS [   0.012s] (236/805) celeris daemon::browser_ledger_path::tests::browser_ledger_release_none_without_env_or_release
+        PASS [   0.013s] (237/805) celeris daemon::browser_ledger_path::tests::browser_ledger_release_uses_release_dir_of_current_exe
+        PASS [   0.021s] (238/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_guard_opt_out_precheck_refuses_before_opening_db
+        PASS [   0.018s] (239/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_guard_probe_production_without_marker
+        PASS [   0.014s] (240/805) celeris daemon::classify_stage::tests::board_call_carries_response_versions_and_fallback_has_none
+        PASS [   0.015s] (241/805) celeris daemon::classify_stage::tests::classification_log_shows_specificity_and_confidence_but_no_input_text
+        PASS [   0.014s] (242/805) celeris daemon::classify_stage::tests::failures_become_fell_back_to_fixed_with_a_reason_name
+        PASS [   0.015s] (243/805) celeris daemon::classify_stage::tests::classification_never_lowers_to_cheap_and_carries_no_success_rate
+        PASS [   0.016s] (244/805) celeris daemon::classify_stage::tests::fallback_records_fell_back_while_real_api_verified_stays_false
+        PASS [   0.015s] (245/805) celeris daemon::classify_stage::tests::fixed_mode_never_calls_the_classifier_and_leaves_the_board_empty
+        PASS [   0.015s] (246/805) celeris daemon::classify_stage::tests::missing_key_hands_the_gate_to_the_existing_credential_wait
+        PASS [   0.014s] (247/805) celeris daemon::classify_stage::tests::success_is_jev_ok_with_a_hint_and_never_marks_the_real_api_verified
+        PASS [   0.648s] (248/805) celeris chat_gc::tests::chat_gc_loop_runs_each_interval_with_injected_clock
+        PASS [   0.071s] (249/805) celeris daemon::classify_tick::tests::disabled_config_builds_no_stage
+        PASS [   0.693s] (250/805) celeris accounts_admin::tests::remove_account_moves_the_directory_cancels_login_and_clears_the_book
+        PASS [   0.145s] (251/805) celeris daemon::jev_key::tests::auth_failures_401_403_request_credential_and_the_key_is_sent_as_bearer
+        PASS [   0.822s] (252/805) celeris config::cron::tests::cron_seed_with_an_invalid_template_is_a_config_error_and_writes_nothing
+        PASS [   0.198s] (253/805) celeris daemon::jev_key::tests::rate_limit_429_and_server_errors_do_not_request_credential
+        PASS [   0.274s] (254/805) celeris daemon::classify_tick::tests::running_task_with_only_a_running_unit_still_classifies_its_pending_units
+        PASS [   0.019s] (255/805) celeris daemon::jev_key::tests::unregistered_registered_and_reregistered_are_read_each_call
+        PASS [   0.019s] (256/805) celeris daemon::jev_key::tests::value_never_appears_in_debug_output
+        PASS [   0.077s] (257/805) celeris daemon::jev_key::tests::unregistered_key_enters_credential_wait_without_a_request
+        PASS [   0.016s] (258/805) celeris daemon::process_memory::tests::process_memory_parses_proc_status_fields
+        PASS [   0.297s] (259/805) celeris daemon::classify_tick::tests::enabled_fills_the_board_for_a_ready_task_and_is_idempotent
+        PASS [   0.297s] (260/805) celeris daemon::classify_tick::tests::fixed_mode_leaves_the_board_empty_and_never_calls_the_classifier
+        PASS [   0.302s] (261/805) celeris daemon::classify_tick::tests::classifications_per_run_are_capped
+        PASS [   0.015s] (262/805) celeris daemon::process_memory::tests::process_memory_reads_this_process
+        PASS [   0.015s] (263/805) celeris daemon::process_memory::tests::process_memory_sums_v8_generations
+        PASS [   0.305s] (264/805) celeris daemon::classify_tick::tests::pending_work_units_are_classified_ahead_but_integrate_units_are_not
+        PASS [   0.015s] (265/805) celeris daemon::routing_guardrail::tests::plan_pair_keeps_enforce_below_thresholds_and_skips_shadow
+        PASS [   0.015s] (266/805) celeris daemon::routing_guardrail::tests::plan_pair_quota_low_only_notifies_and_never_promotes
+        PASS [   0.028s] (267/805) celeris daemon::repo_health_path::tests::health_evidence_bundled_checker_tree_gives_base_formula
+        PASS [   0.023s] (268/805) celeris daemon::repo_health_path::tests::health_evidence_bundled_without_release_is_none
+        PASS [   0.017s] (269/805) celeris daemon::routing_guardrail::tests::plan_pair_reverts_on_each_stop_condition
+        PASS [   0.031s] (270/805) celeris daemon::repo_health_path::tests::health_evidence_bundled_missing_or_broken_checker_tree_is_none
+        PASS [   0.015s] (271/805) celeris daemon::routing_guardrail::tests::select_evidence_follows_route_defaults_then_largest_n
+        PASS [   0.016s] (272/805) celeris daemon::routing_guardrail::tests::ticker_runs_on_the_injected_clock_only_after_the_interval
+        PASS [   0.022s] (273/805) celeris daemon::script_exhaustive::tests::exhaustive_generation_gone_aborts
+        PASS [   0.030s] (274/805) celeris daemon::script_exhaustive::tests::exhaustive_failure_rate_stops
+        PASS [   0.024s] (275/805) celeris daemon::script_exhaustive::tests::exhaustive_mismatch_stops_at_first
+        PASS [   0.022s] (276/805) celeris daemon::script_exhaustive::tests::exhaustive_safety_violation_stops
+        PASS [   0.023s] (277/805) celeris daemon::script_exhaustive::tests::exhaustive_stop_signal_aborts
+        PASS [   0.023s] (278/805) celeris daemon::script_exhaustive::tests::exhaustive_timeout_backs_off_and_stops_at_three
+        PASS [   0.017s] (279/805) celeris daemon::script_exhaustive::tests::nearest_rank_percentiles
+        PASS [   0.030s] (280/805) celeris daemon::script_exhaustive::tests::exhaustive_wall_limit_aborts
+        PASS [   0.598s] (281/805) celeris daemon::admin::cos_chat_config_tests::cos_chat_config_reload_keeps_old_config_on_invalid_mapping
+        PASS [   0.551s] (282/805) celeris daemon::classify_tick::tests::credential_failures_are_reclassified_but_other_fallbacks_are_not
+        PASS [   0.561s] (283/805) celeris daemon::config_admin::tests::execution_class_defaults_routing_and_jev_reach_the_running_daemon
+        PASS [   0.617s] (284/805) celeris daemon::api::chat_tests::chat_wiring_passes_data_dir_and_limits_to_api
+        PASS [   0.568s] (285/805) celeris daemon::config_admin::tests::account_max_runs_changes_without_restart_and_survives_a_config_change
+        PASS [   0.578s] (286/805) celeris daemon::config_admin::tests::invalid_or_fixed_changes_are_rejected_and_change_nothing
+        PASS [   0.582s] (287/805) celeris daemon::config_admin::tests::fields_view_classifies_redacts_and_flags_pending_restart
+        PASS [   0.585s] (288/805) celeris daemon::classify_tick::tests::task_routing_override_beats_the_config_mode
+        PASS [   0.291s] (289/805) celeris daemon::routing_guardrail::tests::run_tick_quota_low_only_notifies_and_keeps_enforce
+        PASS [   0.655s] (290/805) celeris daemon::admin::routing_mode_wire_tests::reload_writes_back_the_jev_section_so_the_next_tick_builds_the_stage
+        PASS [   0.585s] (291/805) celeris daemon::config_admin::tests::max_replans_changes_without_restart_and_is_written_back_with_comments
+        PASS [   0.319s] (292/805) celeris daemon::routing_guardrail::tests::run_tick_reverts_to_shadow_with_event_and_notice_once
+        PASS [   0.315s] (293/805) celeris daemon::routing_guardrail::tests::run_tick_skips_pairs_without_evidence_rows
+        PASS [   0.010s] (294/805) celeris daemon::script_guard::tests::script_inbox_reason_code_takes_leading_code
+        PASS [   0.010s] (295/805) celeris daemon::script_layer::tests::script_restore_reason_checks_stored_checkpoint_versions
+        PASS [   0.010s] (296/805) celeris daemon::script_layer::tests::script_restore_reason_keeps_usable_generation_modes
+        PASS [   0.011s] (297/805) celeris daemon::script_layer::tests::script_restore_reason_codes_for_each_failure
+        PASS [   0.010s] (298/805) celeris daemon::script_policy::tests::script_policy_denied_maps_to_safety_violation_code
+        PASS [   0.010s] (299/805) celeris daemon::script_policy::tests::script_policy_error_kind_matches_script_error_serialization
+        PASS [   0.735s] (300/805) celeris daemon::api::chat_tests::chat_wiring_daemon_store_open_runs_legacy_migration
+        PASS [   0.696s] (301/805) celeris daemon::classify_tick::e2e::rate_limit_never_becomes_a_credential_wait
+        PASS [   0.014s] (302/805) celeris daemon::stranded_sweep::tests::stranded_sweep_overlapping_ticks_do_not_start_a_second_run
+        PASS [   0.767s] (303/805) celeris daemon::admin::routing_mode_wire_tests::routing_mode_reaches_the_dispatcher_through_bootstrap_and_reload
+        PASS [   0.013s] (304/805) celeris daemon::stranded_sweep::tests::stranded_sweep_runs_immediately_and_repeats_on_period
+        PASS [   0.017s] (305/805) celeris daemon::stranded_sweep::tests::stranded_sweep_slot_is_released_after_a_panicking_sweep
+        PASS [   0.015s] (306/805) celeris daemon::tick_loop::script_tick_wait_log_tests::script_tick_wait_log_is_due_every_ten_minutes
+        PASS [   0.066s] (307/805) celeris daemon::stranded_sweep::tests::stranded_heads_are_read_once_per_repository
+        PASS [   0.014s] (308/805) celeris db_maintenance::tests::backup_retention_daily_and_weekly_generations_are_kept
+        PASS [   0.015s] (309/805) celeris db_maintenance::tests::backup_retention_ignores_other_file_names
+        PASS [   0.016s] (310/805) celeris db_maintenance::tests::backup_retention_integrity_failure_skips_all_deletions
+        PASS [   0.015s] (311/805) celeris db_maintenance::tests::backup_retention_keeps_every_backup_inside_48_hours
+        PASS [   0.014s] (312/805) celeris db_maintenance::tests::backup_retention_protects_latest_per_kind_and_three_rollbacks
+        PASS [   0.895s] (313/805) celeris daemon::api::account_limits_tests::implicit_source_account_limit_survives_reload
+        PASS [   0.017s] (314/805) celeris db_maintenance::tests::backup_retention_total_limit_prunes_periodic_before_promote
+        PASS [   0.987s] (315/805) celeris daemon::api::account_limits_tests::patch_account_limits_validate_persist_and_survive_reload_and_restart
+        PASS [   0.308s] (316/805) celeris daemon::services::routing_tests::proxy_sink_appends_only_correlated_requests_once
+        PASS [   0.128s] (317/805) celeris db_maintenance::tests::incomplete_backups_are_cleaned_and_cancel_does_not_publish
+        PASS [   0.424s] (318/805) celeris daemon::script_guard::tests::script_inbox_generation_invalidated_and_halt_items
+        PASS [   1.029s] (319/805) celeris daemon::classify_tick::e2e::unregistered_key_waits_notifies_then_resumes_once_and_classifies
+        PASS [   0.464s] (320/805) celeris daemon::script_guard::tests::script_inbox_human_actor_creates_no_item_and_closes_open_ones
+        PASS [   0.412s] (321/805) celeris db_maintenance::tests::backup_once_fails_clearly_when_the_backup_dir_is_missing
+        PASS [   0.159s] (322/805) celeris db_maintenance::tests::vacuum_progress_handler_interrupts_an_active_copy
+        PASS [   0.602s] (323/805) celeris daemon::script_guard::tests::script_inbox_item_once_per_event_survives_restart
+        PASS [   0.382s] (324/805) celeris db_maintenance::tests::checkpoint_once_runs_on_a_fresh_wal_db_without_error
+        PASS [   0.288s] (325/805) celeris db_maintenance::tests::incremental_backup_progress_restarts_after_other_connection_writes
+        PASS [   0.589s] (326/805) celeris daemon::services::routing_tests::one_registry_is_shared_by_the_dispatcher_and_the_proxy
+        PASS [   0.317s] (327/805) celeris db_maintenance::tests::vacuum_backup_finishes_with_a_concurrent_writer_and_integrity_ok
+        PASS [   0.011s] (328/805) celeris delivery::tests::delivery_failure_classification_is_limited_to_merge_base_and_format
+        PASS [   0.427s] (329/805) celeris delivery::tests::advance_pushes_to_origin_right_after_merge_before_release_prep
+        PASS [   0.560s] (330/805) celeris db_maintenance::tests::spawned_tasks_run_on_their_interval_and_stop_cleanly
+        PASS [   1.177s] (331/805) celeris daemon::script_guard::ops_measure_tests::script_ops_restart_drain_retire_cycles
+        PASS [   0.989s] (332/805) celeris daemon::script_guard::stop_tests::script_guard_safety_violation_invalidates_generation
+        PASS [   1.056s] (333/805) celeris daemon::script_guard::stop_tests::script_guard_rolls_back_on_one_mismatch
+        PASS [   0.415s] (334/805) celeris delivery::tests::auto_resolve_local_repair_limit_requests_integration
+        PASS [   0.470s] (335/805) celeris delivery::tests::auto_resolve_clean_main_follow_is_counted_and_left_to_the_legacy_path
+        PASS [   0.461s] (336/805) celeris delivery::tests::auto_resolve_code_conflict_requests_integration_and_aborts_merge
+        PASS [   1.097s] (337/805) celeris daemon::script_guard::stop_tests::script_guard_sweep_sees_violation_appended_after_retention_gc
+        PASS [   1.101s] (338/805) celeris daemon::script_guard::stop_tests::script_guard_unvalidated_effect_halts_all
+        PASS [   0.393s] (339/805) celeris delivery::tests::health_enforce::health_enforce_delivery_base_sha_mismatch_is_rejected
+        PASS [   0.515s] (340/805) celeris delivery::tests::auto_resolve_progress_append_conflict_is_resolved_and_regated
+        PASS [   1.359s] (341/805) celeris daemon::script_guard::stop_tests::script_guard_counts_survive_restart
+        PASS [   0.709s] (342/805) celeris delivery::tests::auto_resolve_cargo_lock_conflict_is_regenerated_and_regated
+        PASS [   0.691s] (343/805) celeris delivery::tests::auto_resolve_cargo_lock_with_cargo_toml_conflict_requests_integration
+        PASS [   0.407s] (344/805) celeris delivery::tests::health_enforce::health_enforce_delivery_policy_only_is_rejected_without_bound_approval
+        PASS [   1.544s] (345/805) celeris daemon::script_guard::stop_tests::script_guard_counts_canary_records_on_both_sides
+        PASS [   1.373s] (346/805) celeris daemon::script_guard::stop_tests::script_guard_sweep_reads_compare_log_incrementally
+        PASS [   0.313s] (347/805) celeris delivery::tests::maybe_retry_push_noop_when_push_disabled
+        PASS [   0.533s] (348/805) celeris delivery::tests::health_enforce::health_enforce_delivery_review_evidence_passes
+        PASS [   0.502s] (349/805) celeris delivery::tests::health_evidence::health_evidence_delivery_non_celeris_repo_passes_with_bundled_pass
+        PASS [   1.573s] (350/805) celeris daemon::script_guard::stop_tests::script_guard_rolls_back_on_failure_rate_and_streak
+        PASS [   0.273s] (351/805) celeris delivery::tests::new_commits_or_moved_base_cannot_reuse_approval
+        PASS [   0.026s] (352/805) celeris delivery::tests::prepare_child_counts_as_in_flight_until_it_exits
+        PASS [   0.915s] (353/805) celeris delivery::tests::auto_resolve_stops_at_max_attempts_and_when_disabled
+        PASS [   0.489s] (354/805) celeris delivery::tests::health_evidence::health_evidence_delivery_rejects_evidence_for_another_tree
+        PASS [   1.642s] (355/805) celeris daemon::script_guard::stop_tests::script_guard_no_automatic_promotion
+        PASS [   0.176s] (356/805) celeris delivery::tests::overlapping_untracked_files_block_merge_without_loss
+        PASS [   0.537s] (357/805) celeris delivery::tests::merge_rejects_evidence_missing_a_required_check_of_the_candidate
+        PASS [   0.270s] (358/805) celeris delivery::tests::other_gate_failure_keeps_legacy_reopen_once
+        PASS [   0.647s] (359/805) celeris delivery::tests::integration_repair_fallback_delivers
+        PASS [   0.171s] (360/805) celeris delivery::tests::push_merged_reports_failure_reason_when_remote_is_unreachable
+        PASS [   0.193s] (361/805) celeris delivery::tests::push_merged_skips_when_remote_is_already_up_to_date
+        PASS [   0.242s] (362/805) celeris delivery::tests::push_merged_pushes_new_commits_to_a_bare_remote
+        PASS [   0.491s] (363/805) celeris delivery::tests::non_self_repo_is_merged_without_release_or_push
+        PASS [   0.308s] (364/805) celeris delivery::tests::preparation_requires_all_gates_and_notifies_cos_only_when_ready
+        PASS [   0.512s] (365/805) celeris delivery::tests::non_self_repo_with_a_remote_is_pushed_but_still_has_no_release
+        PASS [   0.740s] (366/805) celeris delivery::tests::merge_base_repair_revalidates_and_delivers_only_the_repaired_branch
+        PASS [   0.171s] (367/805) celeris delivery::tests::reviewed_merge_preserves_unrelated_user_deletion_and_branch
+        PASS [   2.194s] (368/805) celeris daemon::script_exhaustive::tests::exhaustive_drive_all_inputs_forward_then_reverse
+        PASS [   0.451s] (369/805) celeris delivery::tests::pre_review_sync_conflict_unsynced_candidate_goes_to_merge_base_repair
+        PASS [   0.012s] (370/805) celeris instance::tests::a_dead_pid_or_pid_zero_in_promote_lock_is_rejected
+        PASS [   0.016s] (371/805) celeris instance::tests::a_fresh_matching_marker_authorizes_and_stale_or_foreign_ones_do_not
+        PASS [   0.900s] (372/805) celeris delivery::tests::health_evidence::health_evidence_delivery_prototype_still_requires_health
+        PASS [   0.016s] (373/805) celeris instance::tests::a_live_active_of_another_release_makes_standby_listing_every_live_active
+        PASS [   0.016s] (374/805) celeris instance::tests::a_live_pid_and_a_fresh_promote_lock_authorize_the_old_promote_script
+        PASS [   0.329s] (375/805) celeris delivery::tests::ready_notification_reports_push_failure_without_the_retry_marker
+        PASS [   0.281s] (376/805) celeris delivery::tests::ready_notification_reports_successful_push
+        PASS [   0.944s] (377/805) celeris delivery::tests::health_evidence::health_evidence_delivery_rejects_another_checker_version
+        PASS [   0.014s] (378/805) celeris instance::tests::a_stale_or_future_promote_lock_is_rejected_even_with_a_live_pid
+        PASS [   0.016s] (379/805) celeris instance::tests::an_unreadable_promote_lock_is_rejected_with_its_reason
+        PASS [   0.481s] (380/805) celeris delivery::tests::push_failure_after_merge_does_not_block_release_prep_and_retries_once
+        PASS [   0.015s] (381/805) celeris instance::tests::current_pointing_at_the_release_authorizes_by_name
+        PASS [   0.015s] (382/805) celeris instance::tests::dev_and_unmanaged_releases_skip_the_promotion_gate
+        PASS [   0.018s] (383/805) celeris instance::tests::read_promotion_evidence_reads_current_and_the_marker
+        PASS [   0.016s] (384/805) celeris instance::tests::read_promotion_evidence_reads_promote_lock_pid_liveness_and_mtime
+        PASS [   0.016s] (385/805) celeris instance::tests::removable_rows_never_include_a_stale_live_active
+        PASS [   0.014s] (386/805) celeris instance::tests::rules_one_and_two_still_win_over_a_bad_promote_lock
+        PASS [   0.015s] (387/805) celeris instance::tests::stale_but_alive_rows_finds_only_drained_rows_whose_pid_is_still_running
+        PASS [   2.339s] (388/805) celeris daemon::script_exhaustive::tests::exhaustive_waits_for_live_in_flight
+        PASS [   1.075s] (389/805) celeris delivery::tests::health_evidence::health_evidence_delivery_prefers_the_base_checker_over_the_bundled_one
+        PASS [   0.013s] (390/805) celeris instance::tests::the_freshness_window_is_three_ticks_plus_the_lease_grace
+        PASS [   0.331s] (391/805) celeris delivery::tests::technical_failure_is_repaired_once_with_no_cos_review_or_message
+        PASS [   1.208s] (392/805) celeris delivery::tests::health_evidence::health_evidence_delivery_applies_requires_the_health_item
+        PASS [   0.439s] (393/805) celeris delivery::tests::required_definition_absence_is_allowed_but_git_and_parse_failures_are_rejected
+        PASS [   0.293s] (394/805) celeris doc_gardener::tests::disabled_and_interval_boundaries
+        PASS [   0.012s] (395/805) celeris instance::tests::the_same_release_running_as_active_is_a_duplicate
+        PASS [   0.398s] (396/805) celeris delivery::tests::target_advanced_before_merge_requests_rereview_instead_of_stale_reviewed_sha
+        PASS [   0.014s] (397/805) celeris instance::tests::the_release_string_comes_from_the_flag_then_the_env_then_dev
+        PASS [   0.016s] (398/805) celeris instance::tests::the_tick_rules_are_symmetric
+        PASS [   0.290s] (399/805) celeris instance::tests::a_killed_active_is_taken_over_at_start_and_its_row_is_removed
+        PASS [   0.302s] (400/805) celeris instance::tests::a_handoff_request_from_a_gone_requester_is_dropped_and_the_active_stays
+        PASS [   0.424s] (401/805) celeris delivery::tests::target_advanced_rereview_beyond_limit_still_requests_rereview
+        PASS [   0.299s] (402/805) celeris instance::tests::a_newer_active_asks_the_older_live_one_to_hand_off
+        PASS [   0.306s] (403/805) celeris instance::tests::a_missing_row_is_registered_again_and_deregister_removes_it
+        PASS [   0.370s] (404/805) celeris doc_gardener::tests::managed_scan_schedules_bounded_review_and_survives_state_loss
+        PASS [   0.441s] (405/805) celeris delivery::tests::tick_advances_only_projects_with_auto_integrate
+        PASS [   0.306s] (406/805) celeris instance::tests::a_second_live_active_makes_the_older_one_drain
+        PASS [   0.309s] (407/805) celeris instance::tests::a_stale_but_alive_active_keeps_the_standby_waiting_until_it_drains
+        PASS [   1.252s] (408/805) celeris delivery::tests::health_evidence::health_evidence_delivery_unavailable_is_rejected
+        PASS [   0.293s] (409/805) celeris instance::tests::the_drain_timeout_does_not_abort_alive_runs_by_default
+        PASS [   0.300s] (410/805) celeris instance::tests::starting_the_same_release_twice_is_refused_without_touching_the_table
+        PASS [   0.313s] (411/805) celeris instance::tests::the_drain_timeout_ends_the_drain_with_runs_left_when_force_abort_is_set
+        PASS [   0.313s] (412/805) celeris instance::tests::the_handoff_request_reaches_every_live_active
+        PASS [   2.493s] (413/805) celeris daemon::script_guard::stop_tests::script_guard_rolls_back_on_timeout_rate_and_burst
+        PASS [   0.309s] (414/805) celeris instance::tests::the_handoff_runs_through_the_store
+        PASS [   0.305s] (415/805) celeris instance::tests::two_actives_never_coexist_when_the_old_one_is_stale_but_alive
+        PASS [   0.321s] (416/805) celeris knowledge_curation::tests::curation_diff_mismatch_rejects_the_plan_without_approval
+        PASS [   0.337s] (417/805) celeris knowledge_curation::tests::curation_human_decision_apply_is_raised_and_not_auto_approved
+        PASS [   0.360s] (418/805) celeris knowledge_curation::tests::curation_diff_match_moves_the_worker_diff_and_writes_the_canonical_one
+        PASS [   0.331s] (419/805) celeris knowledge_curation::tests::curation_human_decision_dry_run_raises_exactly_one_decision
+        PASS [   0.328s] (420/805) celeris knowledge_curation::tests::curation_human_decision_is_not_raised_without_candidates
+        PASS [   0.305s] (421/805) celeris knowledge_curation::tests::extraction_tests::backfill_interval_includes_midnight_and_excludes_next_midnight
+        PASS [   0.341s] (422/805) celeris knowledge_curation::tests::extraction_tests::failed_sources_require_an_explicit_rerun_before_another_extraction
+        PASS [   0.346s] (423/805) celeris knowledge_curation::tests::extraction_tests::failed_extraction_does_not_block_curation_and_reaches_summary_and_inbox
+        PASS [   0.334s] (424/805) celeris knowledge_curation::tests::extraction_tests::full_inbox_defers_backfill_without_claiming_sources
+        PASS [   0.408s] (425/805) celeris knowledge_curation::tests::extraction_tests::backfill_batches_ten_sources_and_continues_the_same_utc_day
+        PASS [   0.395s] (426/805) celeris knowledge_curation::tests::extraction_tests::daily_extraction_precedes_snapshot_and_is_recovered_without_duplicate_candidates
+        PASS [   0.452s] (427/805) celeris knowledge_curation::tests::extraction_tests::daily_extraction_caps_sources_and_reports_the_overflow_days
+        PASS [   0.316s] (428/805) celeris knowledge_curation::tests::extraction_tests::stuck_extraction_has_a_deterministic_deadline
+        PASS [   0.374s] (429/805) celeris knowledge_curation::tests::extraction_tests::repeating_backfill_day_excludes_claimed_source_tasks
+        PASS [   0.368s] (430/805) celeris knowledge_curation::tests::knowledge_curation_job_dry_run_leaves_the_kb_unchanged_and_writes_the_diff
+        PASS [   0.339s] (431/805) celeris knowledge_curation::tests::knowledge_curation_job_rejects_inbox_proposals_outside_the_inputs
+        PASS [   0.369s] (432/805) celeris knowledge_curation::tests::knowledge_curation_job_prepares_inputs_before_the_run
+        PASS [   0.548s] (433/805) celeris knowledge_curation::tests::extraction_tests::guessed_project_slugs_are_repaired_to_the_source_project_or_experience
+        PASS [   0.355s] (434/805) celeris knowledge_curation::tests::knowledge_curation_job_reports_exactly_one_summary_per_task
+        PASS [   0.284s] (435/805) celeris knowledge_gc::tests::gc_rejects_create_and_always_inboxes_updates_without_touching_dirty_content
+        PASS [   0.216s] (436/805) celeris knowledge_gc::tests::scanner_bounds_determinism_neighbours_and_hash_reviews
+        PASS [   0.016s] (437/805) celeris model_discovery::tests::claude_without_a_logged_in_account_or_with_an_expired_token_fails_cleanly
+        PASS [   0.338s] (438/805) celeris knowledge_gc::tests::failed_or_missing_output_is_not_reviewed_and_interval_is_consumed
+        PASS [   0.021s] (439/805) celeris model_discovery::tests::codex_pages_through_model_list_over_stdio
+        PASS [   1.728s] (440/805) celeris delivery::tests::merge_requires_passing_evidence_bound_to_the_candidate_and_base
+        PASS [   0.513s] (441/805) celeris knowledge_curation::tests::knowledge_curation_apply_is_not_applied_when_the_page_changed
+        PASS [   0.354s] (442/805) celeris knowledge_gc::tests::lost_derived_state_still_does_not_duplicate_active_support_task
+        PASS [   0.535s] (443/805) celeris knowledge_curation::tests::knowledge_curation_apply_push_failure_keeps_the_commit_and_does_not_fail_the_task
+        PASS [   0.520s] (444/805) celeris knowledge_curation::tests::knowledge_curation_apply_without_remote_commits_and_records_no_remote
+        PASS [   0.082s] (445/805) celeris model_discovery::tests::claude_uses_the_oauth_bearer_and_beta_header
+        PASS [   0.445s] (446/805) celeris knowledge_curation::tests::knowledge_curation_legacy_awaiting_approval_becomes_stale_when_the_page_changed
+        PASS [   0.017s] (447/805) celeris model_discovery::tests::targets_come_from_the_config_and_the_defaults_are_set
+        PASS [   0.018s] (448/805) celeris model_discovery::tests::ticker_respects_interval_disable_and_overlap
+        PASS [   0.015s] (449/805) celeris notify::tests::base_url_drops_the_trailing_slash_and_treats_empty_as_absent
+        PASS [   0.598s] (450/805) celeris knowledge_curation::tests::knowledge_curation_apply_commits_and_pushes_without_approval
+        PASS [   0.018s] (451/805) celeris notify::tests::content_is_clamped_to_one_discord_message
+        PASS [   0.016s] (452/805) celeris notify::tests::defaults_match_the_adr
+        PASS [   0.074s] (453/805) celeris model_discovery::tests::opencode_go_falls_back_to_the_cli_stdout
+        PASS [   0.078s] (454/805) celeris model_discovery::tests::openai_compatible_sends_the_key_and_parses
+        PASS [   0.017s] (455/805) celeris notify::tests::excerpt_cuts_by_characters_and_flattens_newlines
+        PASS [   0.014s] (456/805) celeris notify::tests::links_are_omitted_without_a_base_url
+        PASS [   0.015s] (457/805) celeris notify::tests::notify_rejects_retired_link_config
+        PASS [   0.076s] (458/805) celeris model_discovery::tests::opencode_go_uses_the_gateway_models_url
+        PASS [   0.015s] (459/805) celeris notify::tests::webhook_url_is_none_without_a_secrets_dir_or_file
+        PASS [   0.017s] (460/805) celeris release_notes::tests::aggregate_cuts_at_current_when_it_is_inside_the_target_first_parent
+        PASS [   0.015s] (461/805) celeris release_notes::tests::aggregate_dedupes_tasks_across_releases_with_the_same_base
+        PASS [   0.016s] (462/805) celeris release_notes::tests::aggregate_follows_the_base_chain
+        PASS [   0.016s] (463/805) celeris release_notes::tests::aggregate_merges_child_tasks_once
+        PASS [   0.016s] (464/805) celeris release_notes::tests::aggregate_reports_incomplete_when_the_chain_cannot_be_followed
+        PASS [   0.461s] (465/805) celeris knowledge_curation::tests::knowledge_curation_legacy_awaiting_approval_is_applied_on_the_next_tick
+        PASS [   0.015s] (466/805) celeris release_notes::tests::markdown_renderers_contain_titles_and_schema
+        PASS [   0.021s] (467/805) celeris release_notes::tests::preview_from_dir_reads_release_dirs_and_the_current_symlink
+        PASS [   0.014s] (468/805) celeris release_notes::tests::task_id_in_parses_branch_forms_and_rejects_non_ulids
+        PASS [   2.972s] (469/805) celeris db_maintenance::tests::backup_once_writes_a_restorable_copy_and_keeps_recent_generations
+        PASS [   0.014s] (470/805) celeris release_notes::tests::task_info_picks_the_last_done_worker_outcome
+        PASS [   0.018s] (471/805) celeris releases::audit::tests::history_preserves_provenance_and_verify_snapshot
+        PASS [   0.400s] (472/805) celeris knowledge_gc::tests::schedules_once_across_restarts_disabled_and_inflight_do_not_schedule
+        PASS [   0.016s] (473/805) celeris releases::tests::broken_json_and_build_directories_do_not_break_the_scan
+        PASS [   0.019s] (474/805) celeris releases::audit::tests::script_environment_carries_explicit_context
+        PASS [   0.017s] (475/805) celeris releases::tests::changes_json_becomes_changes_with_stale_computed_against_current
+        PASS [   0.068s] (476/805) celeris release_notes::tests::notes_without_a_known_base_are_empty_but_valid
+        PASS [   0.017s] (477/805) celeris releases::tests::gate_failed_step_empty_string_is_normalized_to_none
+        PASS [   0.014s] (478/805) celeris releases::tests::promote_exec_command_inline_is_setsid
+        PASS [   0.013s] (479/805) celeris releases::tests::promote_exec_command_wraps_with_systemd_run
+        PASS [   0.029s] (480/805) celeris releases::tests::missing_checks_and_gate_default_to_empty_without_breaking_the_scan
+        PASS [   0.026s] (481/805) celeris releases::tests::promote_failed_json_becomes_promote_failed
+        PASS [   0.028s] (482/805) celeris releases::tests::promote_not_stale_when_lock_pid_is_alive
+        PASS [   0.027s] (483/805) celeris releases::tests::promote_not_stale_when_promoted_json_exists
+        PASS [   0.027s] (484/805) celeris releases::tests::promote_stale_when_lock_pid_is_dead_and_not_promoted
+        PASS [   0.033s] (485/805) celeris releases::tests::promoted_json_becomes_promoted_at
+        PASS [   0.032s] (486/805) celeris releases::tests::promotion_is_refused_for_unknown_unverified_current_and_running_releases
+        PASS [   0.014s] (487/805) celeris releases::tests::scanning_an_empty_or_missing_directory_yields_nothing_and_does_not_fail
+        PASS [   0.011s] (488/805) celeris releases::tests::sha12_validation_rejects_path_traversal
+        PASS [   0.484s] (489/805) celeris knowledge_gc::tests::successful_noop_preserves_canonical_and_excluded_pages_never_enter_batch
+        PASS [   0.075s] (490/805) celeris releases::tests::promoting_spawns_the_bundled_script_detached_and_writes_the_lock
+        PASS [   0.072s] (491/805) celeris releases::tests::promoting_via_fake_systemd_run_writes_the_lock_and_streams_the_log
+        PASS [   0.028s] (492/805) celeris releases::tests::starting_a_new_promotion_clears_the_previous_failure_marker
+        PASS [   0.026s] (493/805) celeris releases::tests::two_releases_are_sorted_newest_first_with_the_symlinks_applied
+        PASS [   0.022s] (494/805) celeris releases::tests::verify_checks_and_gate_steps_are_carried_through
+        PASS [   0.418s] (495/805) celeris knowledge_maint::tests::a_failed_run_is_retried_exactly_once
+        PASS [   0.398s] (496/805) celeris knowledge_maint::tests::terminal_tasks_do_not_get_a_knowledge_task_any_more
+        PASS [   0.243s] (497/805) celeris release_notes::tests::fast_forward_delivery_attributes_only_down_to_delivery_base
+        PASS [   0.343s] (498/805) celeris model_discovery::tests::opencode_go_reports_both_failures_without_touching_the_catalog
+        PASS [   0.277s] (499/805) celeris notify::tests::notify_digest_waits_for_interval_and_never_sends_notice_kind_immediately
+        PASS [   0.322s] (500/805) celeris model_discovery::tests::run_discovery_applies_and_reports_deltas_for_one_source
+        PASS [   0.283s] (501/805) celeris notify::tests::root_done_summary_is_selected_and_rendered_as_is
+        PASS [   0.014s] (502/805) celeris tests::config_view_exposes_genre_capabilities_and_artifacts
+        PASS [   0.129s] (503/805) celeris releases::tests::promotion_runs_the_promote_script_of_the_current_release
+        PASS [   0.019s] (504/805) celeris tests::api_settings_carries_secrets_dir_and_usage
+        PASS [   0.439s] (505/805) celeris knowledge_maint::tests::retry_noops_when_disabled_or_the_kb_is_missing
+        PASS [   0.015s] (506/805) celeris tests::config_view_exposes_genres
+        PASS [   0.208s] (507/805) celeris releases::tests::on_main_is_true_false_or_null
+        PASS [   0.954s] (508/805) celeris knowledge_curation::tests::extraction_tests::malformed_missing_unattributed_and_oversized_outputs_are_visible_failures
+        PASS [   0.455s] (509/805) celeris knowledge_maint::tests::a_fallback_run_is_applied_the_same_way_and_records_its_via
+        PASS [   0.452s] (510/805) celeris knowledge_maint::tests::apply_finished_applies_a_done_run_and_fails_a_failed_run
+        PASS [   0.013s] (511/805) celeris tests::langmem_knowledge_config_defaults_to_disabled
+        PASS [   0.016s] (512/805) celeris tests::merged_env_with_secrets_follows_the_precedence_order_and_falls_back_when_a_secret_is_missing
+        PASS [   0.696s] (513/805) celeris knowledge_gc::tests::missing_and_malformed_success_output_are_not_reviews
+        PASS [   0.016s] (514/805) celeris tests::unknown_adapter_message_lists_langmem
+        PASS [   0.361s] (515/805) celeris model_discovery::tests::ticker_spawns_once_and_clears_the_flag
+        PASS [   0.310s] (516/805) celeris release_notes::tests::notes_group_a_merged_task_branch_and_list_the_rest
+        PASS [   1.632s] (517/805) celeris delivery::tests::target_advanced_absent_merges_only_the_matching_reviewed_sha_candidate
+        PASS [   0.021s] (518/805) celeris::bin_smoke help_exits_zero_and_missing_config_exits_two
+        PASS [   0.439s] (519/805) celeris notify::tests::notify_digest_phase_checkpoint_is_batched_as_inbox_new
+        PASS [   0.014s] (520/805) celeris::browser_eval_surface_suite fake_http::async_one_shot_survives_noise_and_silent_connection
+        PASS [   0.241s] (521/805) celeris reports::tests::a_recently_failed_compaction_task_backs_off_until_compress_after_secs_passes
+        PASS [   0.011s] (522/805) celeris::browser_eval_surface_suite fake_http::framing_requires_every_header_and_body_byte
+        PASS [   0.252s] (523/805) celeris reports::tests::once_the_summary_exists_the_children_are_no_longer_pending
+        PASS [   0.040s] (524/805) celeris::browser_eval_surface_suite fake_http::sync_one_shot_survives_noise_and_silent_connection
+        PASS [   0.272s] (525/805) celeris reports::tests::an_old_report_schedules_a_run_even_below_the_count
+        PASS [   0.281s] (526/805) celeris reports::tests::four_reports_schedule_a_run_but_three_do_not
+        PASS [   0.283s] (527/805) celeris reports::tests::reports_of_different_projects_get_one_run_each
+        PASS [   2.625s] (528/805) celeris delivery::tests::health_evidence::health_evidence_delivery_rejects_error_and_fail_evidence
+        PASS [   0.437s] (529/805) celeris tests::seed_org_if_empty_writes_nothing_when_one_node_breaks_the_tree
+        PASS [   0.443s] (530/805) celeris tests::seeds_the_org_once_into_an_empty_db_and_never_again
+        PASS [   0.446s] (531/805) celeris tests::without_org_include_nothing_is_seeded
+        PASS [   0.444s] (532/805) celeris::browser_eval_surface_suite browser_startup_reap::startup_reaps_dead_instance_and_preserves_live_instance
+        PASS [   0.529s] (533/805) celeris tests::reload_rereads_roles_genres_delegation_and_reports_notify_conversation
+        PASS [   0.560s] (534/805) celeris::actor_trace_flow1 authorized_project_cos_keeps_actor_and_consumption_through_evaluation
+        PASS [   0.603s] (535/805) celeris tests::a_totp_cluster_with_a_live_master_skips_the_connector_but_ensures_the_forward_phase_84b
+        PASS [   0.605s] (536/805) celeris tests::a_totp_cluster_with_a_forward_does_not_panic_the_first_tick_phase_66b
+        PASS [   0.617s] (537/805) celeris tests::a_publickey_cluster_with_a_ready_task_does_not_panic_the_first_tick_phase_81
+        PASS [   0.599s] (538/805) celeris tests::reload_providers_keeps_the_startup_only_accounts_section_and_flags_a_pending_restart
+        PASS [   0.621s] (539/805) celeris::actor_trace_flow3 general_cos_responds_to_stagnation_with_source_evidence
+        PASS [   1.446s] (540/805) celeris knowledge_curation::tests::knowledge_curation_job_rejects_changed_inputs_and_replaced_snapshot
+        PASS [   0.688s] (541/805) celeris tests::implicit_account_limit_survives_reload_and_is_pruned_with_its_source
+        PASS [   0.671s] (542/805) celeris::actor_trace_flow3 general_cos_escalates_stagnation_and_keeps_human_judgment_separate
+        PASS [   0.772s] (543/805) celeris::actor_trace_flow5 redelivery_and_restart_duplicate_no_operation_or_count
+        PASS [   0.652s] (544/805) celeris::browser_eval_surface_suite workspace_roots::running_run_workspace_stable_after_root_change
+        PASS [   0.863s] (545/805) celeris::actor_trace_flow2 forwarded_requests_keep_the_human_decider_apart_from_cos_and_operator_executors
+        PASS [   0.685s] (546/805) celeris::browser_eval_surface_suite workspace_roots::new_task_uses_store_workspace_root
+        PASS [   0.030s] (547/805) celeris::cap_probe_real_daemon unreachable_daemon_is_env_failure_not_a_pass
+        PASS [   0.022s] (548/805) celeris::cluster_login_script cluster_login_script_passes_control_persist_and_keepalive_to_the_master
+        PASS [   0.839s] (549/805) celeris::campaign_acceptance_e2e budget_stop_cancels_through_the_api_and_stops_further_submissions
+        PASS [   0.907s] (550/805) celeris::campaign_acceptance_e2e final_accounting_shows_budget_view_versus_final_cutoff_after_a_budget_stop
+        PASS [   1.174s] (551/805) celeris::campaign_acceptance_e2e arm_pin_is_set_on_the_task_through_the_api_not_by_the_global_config
+        PASS [   1.244s] (552/805) celeris::browser_eval_surface_suite workspace_roots::existing_workspace_unchanged_after_root_change
+        PASS [   0.536s] (553/805) celeris::cos_delivery_suite cos_chat_stagnation_notify::human_wait_aging_is_live_held_and_withdrawn_when_answered
+        PASS [   0.532s] (554/805) celeris::cos_delivery_suite cos_chat_stagnation_notify::resolved_stagnation_is_withdrawn_before_post
+        PASS [   1.216s] (555/805) celeris::campaign_acceptance_e2e communication_failures_keep_tracking_and_never_double_submit
+        PASS [   0.855s] (556/805) celeris::campaign_wiring_e2e post_tasks_to_export_connects_children_retries_review_cos_jev_and_interventions
+        PASS [   0.070s] (557/805) celeris::cos_delivery_suite cos_chat_triage_notify::cos_chat_triage_webhook_disables_mentions_and_obeys_retry_after
+        PASS [   1.207s] (558/805) celeris::campaign_acceptance_e2e daemon_restart_resumes_the_same_tasks_without_resubmitting
+        PASS [   0.519s] (559/805) celeris::cos_delivery_suite cos_chat_triage_notify::cos_chat_triage_cutover_supersedes_legacy_pending_and_is_idempotent
+        PASS [   0.268s] (560/805) celeris::cos_delivery_suite cos_chat_triage_notify::cos_chat_triage_escalation_packet_has_bounded_text_and_absolute_link
+        PASS [   0.267s] (561/805) celeris::cos_delivery_suite cos_chat_triage_notify::cos_chat_triage_long_packet_keeps_link_within_1900_characters
+        PASS [   1.125s] (562/805) celeris::campaign_acceptance_e2e wrong_artifact_completed_run_is_not_a_success
+        PASS [   1.210s] (563/805) celeris::campaign_acceptance_e2e normal_path_post_tasks_to_independent_grade_to_final_export
+        PASS [   0.268s] (564/805) celeris::cos_delivery_suite cos_chat_triage_notify::cos_chat_triage_only_escalation_and_fallback_are_sendable
+        PASS [   1.271s] (565/805) celeris::campaign_acceptance_e2e final_accounting_is_regenerated_from_the_router_tree_with_jev_cos_gaps
+        PASS [   0.454s] (566/805) celeris::cos_delivery_suite cos_chat_triage_notify::cos_chat_triage_resolved_source_is_withdrawn_before_post
+        PASS [   0.464s] (567/805) celeris::cos_delivery_suite cos_chat_triage_notify::cos_chat_triage_notice_revision_is_checked_before_post
+        PASS [   0.434s] (568/805) celeris::cos_delivery_suite cos_chat_triage_notify::cos_chat_triage_three_send_failures_keep_the_unresolved_item
+        PASS [   0.524s] (569/805) celeris::cos_delivery_suite cos_chat_triage_scenarios::cos_chat_triage_b_webhook_packet_and_stop_after_human_answer
+        PASS [   0.486s] (570/805) celeris::cos_delivery_suite releases_api::get_deliveries_is_200_with_items
+        PASS [   0.549s] (571/805) celeris::cos_delivery_suite cos_chat_triage_scenarios::cos_chat_triage_unified_only_cos_escalation_reaches_the_webhook
+        PASS [   0.494s] (572/805) celeris::cos_delivery_suite releases_api::promote_requires_a_token
+        PASS [   0.517s] (573/805) celeris::cos_delivery_suite releases_api::get_releases_sorts_newest_first_and_tolerates_broken_releases
+        PASS [   0.527s] (574/805) celeris::cos_delivery_suite releases_api::get_releases_is_200_on_an_empty_directory
+        PASS [   1.590s] (575/805) celeris::cap_probe_real_daemon a_second_daemon_on_the_same_port_is_detected
+        PASS [   1.599s] (576/805) celeris::cap_probe_real_daemon daemon_missing_toolchain_or_variable_is_env_failure_even_if_cli_has_it
+        PASS [   0.012s] (577/805) celeris::credential_wait_notify webhook_ignores_eof_before_complete_request
+        PASS [   1.413s] (578/805) celeris::cos_delivery_suite cos_chat_stagnation_notify::stagnation_findings_are_live_held_and_withdrawn_on_revision
+        PASS [   0.056s] (579/805) celeris::daemon_ready_wait finished_daemon_fails_without_waiting_for_the_limit
+        PASS [   0.663s] (580/805) celeris::cos_delivery_suite releases_api::promoting_a_verified_release_starts_the_bundled_script_and_returns_202
+        PASS [   0.733s] (581/805) celeris::cos_delivery_suite releases_api::get_releases_carries_promoted_at_on_main_and_changes
+        PASS [   1.718s] (582/805) celeris::cap_probe_real_daemon daemon_only_toolchain_and_variable_pass_through_the_real_worker_path
+        PASS [   1.904s] (583/805) celeris::campaign_acceptance_e2e ungraded_trials_block_the_final_export_until_graded
+        PASS [   0.557s] (584/805) celeris::cos_delivery_suite releases_api::promoting_an_unknown_release_is_404
+        PASS [   0.541s] (585/805) celeris::cos_delivery_suite releases_api::promoting_prefers_the_promote_script_of_the_current_release
+        PASS [   0.371s] (586/805) celeris::cos_delivery_suite stranded_default_branch::stranded_default_branch_null_with_main_is_integrated
+        PASS [   0.607s] (587/805) celeris::cos_delivery_suite releases_api::promoting_is_409_when_unverified_already_current_or_already_promoting
+        PASS [   0.366s] (588/805) celeris::cos_delivery_suite stranded_default_branch::stranded_default_branch_null_with_origin_head_is_integrated_for_repoless_task
+        PASS [   0.355s] (589/805) celeris::cos_delivery_suite stranded_default_branch::stranded_default_branch_unresolvable_is_unintegrated_with_reason
+        PASS [   0.409s] (590/805) celeris::cos_delivery_suite stranded_integration::stranded_detects_inbox_merge_discard_hold_and_promotion_independently
+        PASS [   0.420s] (591/805) celeris::cos_skill_sync promote_deploys_the_cos_skills_and_leaves_curation_pages
+        PASS [   0.287s] (592/805) celeris::daemon_ready_wait silent_connection_does_not_use_up_the_limit
+        PASS [   0.017s] (593/805) celeris::instance_handoff the_builtin_smoke_role_and_genre_override_a_config_entry_of_the_same_id
+        PASS [   0.012s] (594/805) celeris::instance_handoff two_listeners_bind_the_same_port_with_so_reuseport
+        PASS [   0.018s] (595/805) celeris::instance_handoff the_cli_overrides_replace_the_config_values
+        PASS [   0.640s] (596/805) celeris::cos_delivery_suite releases_api::promotion_preview_merges_releases_between_current_and_target
+        PASS [   2.062s] (597/805) celeris::cap_probe_real_daemon daemon_socket_and_mount_are_checked_from_the_worker
+        PASS [   0.406s] (598/805) celeris::daily_curation knowledge_curation_job_dry_run_bundles_human_decisions_into_one_decision
+        PASS [   0.447s] (599/805) celeris::daily_curation knowledge_curation_job_seed_schedule_inputs_dry_run_and_summary
+        SKIP [         ] (───────) celeris::long_run_soak long_run_soak_lease_holder
+        PASS [   0.063s] (600/805) celeris::long_run_soak long_run_soak_enabled
+        PASS [   0.587s] (601/805) celeris::daily_curation knowledge_curation_job_apply_without_approval_commits_pushes_and_terminal_task_maintenance
+        PASS [   0.068s] (602/805) celeris::long_run_soak long_run_soak_off
+        PASS [   0.072s] (603/805) celeris::long_run_soak long_run_soak_shadow
+        PASS [   0.617s] (604/805) celeris::evidence_mode_e2e contradictory_evidence_mode_is_rejected_before_any_task_exists
+        PASS [   0.653s] (605/805) celeris::instance_handoff a_stale_heartbeat_does_not_replace_a_live_active_until_its_process_is_gone
+        PASS [   0.166s] (606/805) celeris::long_run_soak long_run_soak_v8_load
+        PASS [   0.525s] (607/805) celeris::integration_api integration_api_repoless_branch_in_main_is_integrated
+        PASS [   0.938s] (608/805) celeris::credential_wait_notify wait_notify_register_verify_and_resume_once_through_the_fake_webhook
+        PASS [   0.669s] (609/805) celeris::instance_handoff starting_the_same_release_twice_exits_three
+        PASS [   0.463s] (610/805) celeris::integration_api integration_api_repoless_task_without_branch_records_nothing
+        PASS [   0.816s] (611/805) celeris::evidence_mode_e2e ticked_runs_record_the_evidence_mode_and_the_table_version_actually_used
+        PASS [   0.666s] (612/805) celeris::integration_api integration_api_merge_conflict_keeps_main_unintegrated
+        PASS [   0.603s] (613/805) celeris::integration_api integration_api_repoless_done_task_detected_in_inbox_and_detail_then_discarded
+        PASS [   3.278s] (614/805) celeris::actor_trace_flow4 operator_deployment_and_rollback_join_release_decision_and_request
+        PASS [   0.056s] (615/805) celeris::notify an_unreachable_webhook_never_reveals_the_host
+        PASS [   1.081s] (616/805) celeris::daemon_ready_wait no_listener_fails_at_the_limit_with_elapsed_time
+        PASS [   0.366s] (617/805) celeris::notify a_done_task_is_not_announced_by_the_scan
+        PASS [   0.450s] (618/805) celeris::notify a_failing_webhook_is_retried_three_times_and_then_given_up
+        PASS [   0.364s] (619/805) celeris::notify a_milestone_without_any_real_task_is_never_ready
+        PASS [   0.366s] (620/805) celeris::notify a_root_plan_without_approval_posts_nothing
+        PASS [   0.370s] (621/805) celeris::notify a_single_daemon_decision_uses_the_decision_key
+        PASS [   0.435s] (622/805) celeris::notify a_rate_limited_response_is_not_counted_as_an_attempt
+        PASS [   1.156s] (623/805) celeris::evidence_mode_e2e none_survives_post_child_grandchild_retry_and_ignores_table_updates
+        PASS [   0.450s] (624/805) celeris::notify a_pending_notification_is_posted_once_and_marked_sent
+        PASS [   0.406s] (625/805) celeris::notify a_store_without_bad_news_produces_nothing
+        PASS [   1.021s] (626/805) celeris::instance_handoff verify_mode_never_dispatches_and_never_touches_daemon_instances
+        PASS [   0.388s] (627/805) celeris::notify a_task_blocked_after_startup_is_scanned_even_though_it_was_created_long_before
+        PASS [   3.066s] (628/805) celeris::campaign_lock_e2e locked_measurement_runs_through_task_api_to_the_final_export
+        PASS [   0.360s] (629/805) celeris::notify answered_and_withdrawn_decisions_do_not_notify
+        PASS [   0.412s] (630/805) celeris::notify active_and_global_conversations_notify_each_new_reply_but_not_answered_replies
+        PASS [   0.061s] (631/805) celeris::notify send_test_posts_one_message_to_the_url_in_the_secrets_dir
+        PASS [   0.400s] (632/805) celeris::notify approval_pending_fires_once_per_undecided_approval
+        PASS [   1.296s] (633/805) celeris::instance_handoff a_newer_release_takes_over_while_the_old_one_finishes_its_run
+        PASS [   0.010s] (634/805) celeris::notify the_webhook_secret_is_read_from_the_secrets_dir
+        PASS [   0.405s] (635/805) celeris::notify bad_news_fires_once_for_level_zero_reports_only
+        PASS [   0.405s] (636/805) celeris::notify child_events_do_not_notify
+        PASS [   0.066s] (637/805) celeris::notify the_fake_webhook_answers_a_connection_even_if_another_request_finishes_first
+        PASS [   0.394s] (638/805) celeris::notify decisions_are_notified_once_per_plan
+        PASS [   0.379s] (639/805) celeris::notify events_created_before_celeris_started_are_never_scanned_or_recorded
+        PASS [   0.355s] (640/805) celeris::notify links_are_added_only_when_a_web_base_url_is_configured
+        PASS [   0.400s] (641/805) celeris::notify human_plan_decisions_are_bundled_per_plan
+        PASS [   0.378s] (642/805) celeris::notify milestone_without_cos_reply_no_longer_notifies
+        PASS [   0.388s] (643/805) celeris::notify only_one_message_is_sent_per_tick_even_with_several_kinds_pending
+        PASS [   0.423s] (644/805) celeris::notify milestone_ready_is_retired
+        PASS [   0.388s] (645/805) celeris::notify question_blocked_fires_once_and_defers_to_approval_pending
+        PASS [   0.401s] (646/805) celeris::notify plan_approval_is_notified_once_with_the_plans_decisions
+        PASS [   1.250s] (647/805) celeris::integration_api integration_api_stranded_branch_round_trip_through_routes_and_events
+        PASS [   0.402s] (648/805) celeris::notify secretary_reply_fires_once_when_a_proposed_project_gets_a_node_message
+        PASS [   0.354s] (649/805) celeris::notify task_failed_fires_once_and_is_classified_infra_or_work
+        PASS [   0.435s] (650/805) celeris::notify open_decisions_are_reminded_once_after_24h
+        PASS [   3.251s] (651/805) celeris::cap_probe_real_daemon probe_runs_under_each_real_harness_adapter_env
+        PASS [   0.008s] (652/805) celeris::project_controller_e2e project_controller_core_escalation_categories_match_cos_triage
+        PASS [   3.525s] (653/805) celeris::campaign_lock_e2e wrong_initial_repo_submodule_materials_kb_or_inputs_cause_no_post_or_external_run
+        PASS [   0.403s] (654/805) celeris::notify task_failed_notes_when_the_task_was_already_delivered
+        PASS [   0.348s] (655/805) celeris::notify without_a_secret_nothing_is_sent_and_no_pending_row_is_kept
+        PASS [   0.368s] (656/805) celeris::notify unresolved_approval_and_question_survive_restart_and_decided_approval_does_not_hide_question
+        PASS [   0.063s] (657/805) celeris::project_controller_e2e project_controller_core_s11_other_project_root_is_denied
+        PASS [   3.622s] (658/805) celeris::campaign_lock_e2e changed_lock_or_inputs_refuse_to_resume_an_existing_measurement
+        PASS [   0.054s] (659/805) celeris::project_controller_e2e project_controller_core_s2_s3_root1_to_root2_to_achieved
+        PASS [   0.458s] (660/805) celeris::notify two_bad_news_are_bundled_into_one_message_and_both_rows_are_marked_ok
+        PASS [   3.671s] (661/805) celeris::campaign_lock_e2e swapped_grader_or_tests_are_rejected_at_grade_bind_and_export
+        PASS [   0.050s] (662/805) celeris::project_controller_e2e project_controller_core_s5b_no_commits_root_is_not_achieved
+        PASS [   0.065s] (663/805) celeris::project_controller_e2e project_controller_core_s8_no_outcomes_asks_once
+        PASS [   0.050s] (664/805) celeris::project_controller_e2e project_controller_core_s9_open_human_question_waits
+        PASS [   0.250s] (665/805) celeris::project_controller_e2e project_controller_core_s4_concurrent_events_create_one_root
+        PASS [   0.358s] (666/805) celeris::project_controller_e2e project_controller_core_s10_narrowed_acceptance_is_rejected
+        PASS [   0.048s] (667/805) celeris::project_cos_shadow project_cos_ts_change_without_rust
+        PASS [   0.049s] (668/805) celeris::project_cos_shadow project_cos_ts_failure_classified
+        PASS [   0.047s] (669/805) celeris::project_cos_shadow project_cos_ts_injection_does_not_change_the_decision
+        PASS [   0.054s] (670/805) celeris::project_cos_shadow project_cos_ts_review_failed_retries_after_brief
+        PASS [   0.255s] (671/805) celeris::project_cos_shadow project_cos_ts_dry_run_compare_domain
+        PASS [   0.347s] (672/805) celeris::project_controller_replay project_controller_replay_resource_v8_100_projects
+        PASS [   0.650s] (673/805) celeris::project_controller_e2e project_controller_core_s12_paused_and_stale_never_launch
+        PASS [   0.650s] (674/805) celeris::project_controller_e2e project_controller_core_s5_not_integrated_continues
+        PASS [   0.839s] (675/805) celeris::ops_r1_trace ops_r1_trace_missing_report_is_null_with_reason
+        PASS [   0.649s] (676/805) celeris::project_controller_e2e project_controller_core_s6_review_failed_replans_once
+        PASS [   0.856s] (677/805) celeris::ops_r1_trace ops_r1_trace_rejects_bad_input_with_exit_2
+        PASS [   0.891s] (678/805) celeris::ops_r1_trace ops_r1_trace_emits_all_six_stages
+        PASS [   0.051s] (679/805) celeris::routing_budget_suite script_compare_execution_gate::script_compare_gate_largest_input_still_matches
+        PASS [   0.968s] (680/805) celeris::ops_r1_trace ops_r1_trace_cutoff_hides_later_rows
+        PASS [   0.752s] (681/805) celeris::project_controller_e2e project_controller_core_s7_infra_failure_waits
+        PASS [   0.153s] (682/805) celeris::routing_budget_suite script_compare_execution_gate::script_compare_gate_real_bundle_records_match_without_text
+        PASS [   1.040s] (683/805) celeris::ops_r1_trace ops_r1_trace_is_byte_identical_and_leaves_db_copy_unchanged
+        PASS [   0.964s] (684/805) celeris::project_controller_e2e project_controller_core_s1_first_launches_root1
+        PASS [   0.142s] (685/805) celeris::routing_budget_suite script_compare_report::script_compare_report_before_migration_exits_3
+        PASS [   0.536s] (686/805) celeris::root_done_summary child_done_emits_nothing
+        PASS [   0.261s] (687/805) celeris::routing_budget_suite script_compare_execution_gate::script_compare_gate_real_host_matches_rust_on_all_fixtures
+        PASS [   1.368s] (688/805) celeris::ops_r1_attr ops_r1_attr_excludes_runs_outside_trial_tree
+        PASS [   1.419s] (689/805) celeris::ops_r1_attr ops_r1_attr_rejects_bad_input_with_exit_2
+        PASS [   0.703s] (690/805) celeris::root_done_summary cos_failure_uses_fallback_notice
+        PASS [   1.469s] (691/805) celeris::ops_r1_attr ops_r1_attr_unattributable_turns_are_null_with_reason
+        PASS [   1.487s] (692/805) celeris::ops_r1_attr ops_r1_attr_rows_and_totals_match_fixture
+        PASS [   1.542s] (693/805) celeris::ops_r1_attr ops_r1_attr_is_byte_identical_and_leaves_db_copy_unchanged
+        PASS [   0.069s] (694/805) celeris::script_compare_cos_digest script_compare_cos_digest_compare_answers_ops_from_rust_snapshot
+        PASS [   0.504s] (695/805) celeris::routing_budget_suite script_compare_report::script_compare_report_classifies_every_outcome
+        PASS [   0.069s] (696/805) celeris::script_compare_cos_digest script_compare_cos_digest_dispatch_match_replay_and_rollback
+        PASS [   0.754s] (697/805) celeris::root_done_summary root_done_runs_cos_once_and_notifies_once
+        PASS [   0.482s] (698/805) celeris::routing_budget_suite script_compare_report::script_compare_report_counts_explained_cos_records
+        PASS [   0.170s] (699/805) celeris::script_compare_cos_digest script_compare_cos_digest_daemon_restart_without_bundle_restores_rust
+        PASS [   1.651s] (700/805) celeris::ops_r1_attr ops_r1_pipeline_attribution_v2_copies_model_and_harness_read_only
+        PASS [   0.065s] (701/805) celeris::script_compare_cos_digest script_compare_cos_digest_ts_mode_falls_back_to_rust
+        PASS [   0.850s] (702/805) celeris::routing_budget_suite script_compare_execution_gate::script_compare_gate_different_answer_keeps_rust_decision_bytes
+        PASS [   0.062s] (703/805) celeris::script_compare_lane_rules script_compare_dispatch_match_rollback_and_replay
+        PASS [   0.169s] (704/805) celeris::script_compare_lane_rules script_compare_daemon_injects_records_and_restores_rust
+        PASS [   1.731s] (705/805) celeris::ops_r1_pipeline ops_r1_pipeline_passing_a_and_cut_off_b_agree
+        PASS [   0.873s] (706/805) celeris::routing_budget_suite script_compare_execution_gate::script_compare_gate_reserved_rule_is_a_safety_violation
+        PASS [   0.272s] (707/805) celeris::script_compare_cos_digest script_compare_cos_digest_ts_mode_applies_ts_commands
+        PASS [   0.875s] (708/805) celeris::routing_budget_suite script_compare_execution_gate::script_compare_gate_throwing_bundle_keeps_rust_and_withholds_text
+        PASS [   0.792s] (709/805) celeris::routing_budget_suite script_compare_report::script_compare_report_cos_gate_uses_the_log_table
+        PASS [   1.116s] (710/805) celeris::root_done_summary restart_does_not_duplicate
+        PASS [   0.162s] (711/805) celeris::script_compare_lane_rules script_compare_real_host_matches_rust_on_all_fixtures
+        PASS [   0.017s] (712/805) celeris::script_compare_route_priority script_compare_stale_dist_matching_domains_is_used
+        PASS [   0.017s] (713/805) celeris::script_compare_route_priority script_compare_stale_dist_missing_domain_is_skipped
+        PASS [   0.014s] (714/805) celeris::script_compare_route_priority script_compare_stale_dist_required_panics
+        PASS [   0.014s] (715/805) celeris::script_compare_route_priority script_compare_stale_dist_unknown_domain_is_skipped
+        PASS [   0.183s] (716/805) celeris::script_compare_route_priority script_compare_fresh_bundle_follows_source
+        PASS [   0.788s] (717/805) celeris::routing_budget_suite script_compare_report::script_compare_report_refuses_counts_without_records
+        PASS [   0.802s] (718/805) celeris::routing_budget_suite script_compare_report::script_compare_report_reads_dispatched_records
+        PASS [   3.469s] (719/805) celeris::instance_handoff normal_mode_does_not_inject_the_smoke_builtins
+        PASS [   0.130s] (720/805) celeris::script_compare_route_priority script_compare_unbuildable_bundle_is_skipped_and_logged
+        PASS [   0.066s] (721/805) celeris::script_exhaustive exhaustive_real_bundle_all_inputs_match_and_persist
+        PASS [   2.051s] (722/805) celeris::ops_r1_pipeline ops_r1_pipeline_all_stages_agree_and_two_passes_are_byte_identical
+        PASS [   0.564s] (723/805) celeris::script_compare_cos_digest script_compare_cos_digest_real_host_matches_rust_on_all_fixtures
+        PASS [   0.362s] (724/805) celeris::script_compare_route_priority script_compare_route_priority_dispatch_match_rollback_and_replay
+        PASS [   0.463s] (725/805) celeris::script_compare_route_priority script_compare_route_priority_real_host_matches_rust_on_all_fixtures
+        PASS [   0.988s] (726/805) celeris::script_compare_cos_digest script_compare_cos_digest_daemon_ts_restart_keeps_one_message
+        PASS [   1.154s] (727/805) celeris::routing_eval_run daemon_runs_two_stub_trials_with_hidden_checks_and_eval_records
+        PASS [   0.854s] (728/805) celeris::script_compare_lane_rules script_compare_different_answer_keeps_rust_decision_bytes
+        PASS [   0.472s] (729/805) celeris::script_generation_daemon script_daemon_drain_cutoff_30s_generation_gone
+        PASS [   0.847s] (730/805) celeris::script_compare_lane_rules script_compare_throwing_bundle_keeps_rust_lane
+        PASS [   0.080s] (731/805) celeris::script_generation_e2e script_generation_e2e_switch_error_rollback_restart
+        PASS [   0.015s] (732/805) celeris::script_runtime exit_holder_entry
+        PASS [   0.423s] (733/805) celeris::script_generation_daemon script_daemon_register_before_deploy_is_retryable
+        PASS [   0.883s] (734/805) celeris::script_compare_route_priority script_compare_route_priority_different_answer_keeps_rust_route
+        PASS [   1.231s] (735/805) celeris::script_compare_cos_digest script_compare_cos_digest_different_answer_keeps_rust_digest
+        PASS [   0.918s] (736/805) celeris::script_compare_route_priority script_compare_route_priority_throwing_bundle_keeps_rust_route
+        PASS [   0.472s] (737/805) celeris::script_generation_daemon script_daemon_registers_generation_in_new_isolate
+        PASS [   0.941s] (738/805) celeris::script_compare_route_priority script_compare_route_priority_undeclared_candidate_keeps_rust_route
+        PASS [   1.678s] (739/805) celeris::routing_budget_suite script_compare_report::script_compare_report_pure_gate_counts_real_records
+        PASS [   1.290s] (740/805) celeris::script_compare_cos_digest script_compare_cos_digest_throwing_bundle_keeps_rust_digest
+        PASS [   0.422s] (741/805) celeris::script_generation_daemon script_daemon_store_refusal_discards_isolate
+        PASS [   0.014s] (742/805) celeris::script_runtime script_thread_census_counts_actor_read_before_its_own_naming
+        PASS [   0.012s] (743/805) celeris::script_runtime script_thread_census_counts_actors_in_turn_as_two
+        PASS [   0.014s] (744/805) celeris::script_runtime script_thread_census_counts_child_only_seen_renamed
+        PASS [   0.012s] (745/805) celeris::script_runtime script_thread_census_counts_two_actors_as_two
+        PASS [   0.450s] (746/805) celeris::script_generation_daemon script_daemon_switch_drains_old_generation
+        PASS [   0.013s] (747/805) celeris::script_runtime script_thread_census_excludes_child_before_naming
+        PASS [   1.034s] (748/805) celeris::script_exhaustive exhaustive_always_different_bundle_fails
+        PASS [   0.014s] (749/805) celeris::script_runtime script_thread_census_no_thread_is_zero
+        PASS [   0.017s] (750/805) celeris::script_runtime script_thread_census_real_child_inherits_then_renames
+        SKIP [         ] (───────) celeris::tick_prod_copy_steps prod_copy_tick_steps
+        PASS [   0.014s] (751/805) celeris::script_runtime script_thread_live_comm_reads_stat_lines
+        PASS [   0.024s] (752/805) celeris::script_runtime script_thread_count_skips_joined_but_listed_thread
+        PASS [   1.033s] (753/805) celeris::script_exhaustive exhaustive_does_not_move_live_counters
+        PASS [   1.061s] (754/805) celeris::script_exhaustive exhaustive_new_generation_invalidates_evidence
+        PASS [   1.095s] (755/805) celeris::script_exhaustive exhaustive_restart_marks_running_aborted
+        PASS [   0.024s] (756/805) celeris::ui_ux_skills_delivery ui_ux_skills_mounts_resolve_from_org_example_toml
+        PASS [   1.103s] (757/805) celeris::script_exhaustive exhaustive_waits_for_live_in_flight
+        PASS [   2.205s] (758/805) celeris::routing_budget_suite script_compare_report::script_compare_report_counts_rollbacks
+        PASS [   0.312s] (759/805) celeris::ui_ux_skills_delivery ui_ux_skills_acp_delivery_copies_attachments_and_unmounts_owned_files
+        PASS [   0.233s] (760/805) celeris::ui_ux_skills_delivery ui_ux_skills_review_run_only_delivers_the_quality_gate
+        PASS [   0.371s] (761/805) celeris::ui_ux_skills_delivery ui_ux_skills_reach_claude_code_workspace_with_real_bodies
+        PASS [   0.937s] (762/805) celeris::script_runtime script_runtime_absent_no_thread
+        PASS [   2.318s] (763/805) celeris::routing_budget_suite tick_scale_baseline::tick_scale_baseline
+        PASS [   0.967s] (764/805) celeris::script_runtime script_runtime_no_pointed_generation_no_thread
+        PASS [   1.592s] (765/805) celeris::script_exhaustive exhaustive_tick_continues_while_running
+        PASS [   1.071s] (766/805) celeris::script_runtime script_runtime_restore_host_api_mismatch_rolls_back
+        PASS [   1.027s] (767/805) celeris::script_runtime script_runtime_restore_missing_bundle_rolls_back
+        PASS [   1.039s] (768/805) celeris::script_runtime script_runtime_restore_missing_capability_rolls_back
+        PASS [   0.097s] (769/805) celeris::unpromoted_release an_unpromoted_release_does_not_migrate_an_old_schema_db
+        PASS [   1.081s] (770/805) celeris::script_runtime script_runtime_restore_pending_top_level_await_rolls_back
+        PASS [   0.018s] (771/805) celeris::unpromoted_release an_unpromoted_release_without_current_never_creates_the_db
+        PASS [   1.077s] (772/805) celeris::script_runtime script_runtime_restore_throwing_bundle_rolls_back
+        PASS [   1.130s] (773/805) celeris::script_runtime script_runtime_restore_tampered_bundle_rolls_back
+        PASS [   0.631s] (774/805) celeris::unmapped_suite legacy_event_startup::startup_loads_legacy_routing_decided_event
+        PASS [   0.127s] (775/805) celeris::unpromoted_release old_promote_dead_lock_is_rejected_without_opening_the_db
+        PASS [   0.649s] (776/805) celeris::unmapped_suite variant_propagation::foreign_assignee_is_not_accepted
+        PASS [   1.463s] (777/805) celeris::script_runtime script_runtime_daemon_shutdown_count_skips_unreaped_actor
+        PASS [   0.616s] (778/805) celeris::unmapped_suite variant_propagation::missing_daemon_observation_blocks_the_run
+        PASS [   0.121s] (779/805) celeris::unpromoted_release the_binary_exits_four_for_an_unpromoted_release
+        PASS [   0.015s] (780/805) celeris::bin/celeris cluster_id_local_is_reserved_config_error
+        PASS [   0.099s] (781/805) celeris::worker_db_guard_refuse worker_db_guard_refuse_real_binary_inside_worker_run
+        PASS [   0.209s] (782/805) celeris::unpromoted_release stale_or_foreign_promoting_markers_are_rejected
+        PASS [   0.097s] (783/805) celeris::worker_db_guard_refuse worker_db_guard_refuse_with_opt_out
+        PASS [   0.659s] (784/805) celeris::unmapped_suite variant_propagation::org_drift_after_post_blocks_before_any_run
+        PASS [   0.405s] (785/805) celeris::unpromoted_release an_unpromoted_release_does_not_request_a_handoff
+        PASS [   0.615s] (786/805) celeris::unpromoted_release a_fresh_promoting_marker_authorizes_the_live_takeover
+        PASS [   0.903s] (787/805) celeris::unmapped_suite variant_propagation::daemon_build_path_pins_observed_identity
+        PASS [   0.565s] (788/805) celeris::unpromoted_release a_release_that_current_points_to_starts_as_before
+        PASS [   1.441s] (789/805) celeris::script_runtime script_thread_census_daemon_sampler_detects_second_actor
+        PASS [   0.538s] (790/805) celeris::unpromoted_release old_promote_live_lock_authorizes_the_live_takeover
+        PASS [   0.379s] (791/805) celeris::bin/celeris config_identity_reports_effective_values_without_secrets
+        PASS [   1.932s] (792/805) celeris::script_runtime script_runtime_daemon_restore_keeps_loaded_modes
+        PASS [   0.534s] (793/805) celeris::unpromoted_release verify_mode_is_not_gated
+        PASS [   0.449s] (794/805) celeris::bin/celeris cli_workspace_root_ignores_store_and_pins
+        PASS [   1.034s] (795/805) celeris::unmapped_suite variant_propagation::spec_off_normal_path_keeps_hash_and_org
+        PASS [   2.016s] (796/805) celeris::script_runtime script_runtime_daemon_restore_retires_unpointed_draining
+        PASS [   0.984s] (797/805) celeris::unmapped_suite variant_propagation::spec_on_normal_path_keeps_hash_and_org
+        PASS [   0.706s] (798/805) celeris::bin/celeris effective_max_concurrency_store_beats_config
+        PASS [   2.102s] (799/805) celeris::trial_context_canary_e2e trial_tasks_through_the_real_router_see_only_the_trial_kb
+        PASS [   3.383s] (800/805) celeris::trial_context_canary_e2e resumed_daemon_gives_the_same_canary_result
+        PASS [   3.866s] (801/805) celeris::trial_context_canary_e2e reset_environment_gives_the_same_canary_result
+        PASS [   3.062s] (802/805) celeris::bin/celeris tests::shutdown_timeout_gives_up_within_its_bound_even_with_a_stuck_background_task
+        PASS [   9.294s] (803/805) celeris::ops_r1_measure ops_r1_measure_cos_path_with_stub_harness
+        PASS [  24.154s] (804/805) celeris::script_generation_daemon script_daemon_api_registers_and_switches_while_running
+        PASS [  30.366s] (805/805) celeris::cos_delivery_suite deployment_audit::deployment_scripts_require_provenance_and_preserve_history
+────────────
+     Summary [  36.495s] 805 tests run: 805 passed, 2 skipped
+        PASS [   0.016s] (  1/805) celeris browser_doctor::tests::browser_doctor_dns_rejects_wrong_transaction_and_server_error
+        PASS [   0.021s] (  2/805) celeris accounts_admin::tests::spawn_check_missing_account_is_not_found
+        PASS [   0.023s] (  3/805) celeris accounts_admin::tests::spawn_check_codex_auth_failed
+        PASS [   0.025s] (  4/805) celeris accounts_admin::tests::spawn_check_reports_ok_and_records_observation_via_event
+        PASS [   0.025s] (  5/805) celeris accounts_admin::tests::spawn_check_codex_reports_ok_and_records_observation
+        PASS [   0.011s] (  6/805) celeris cluster_admin::tests::expire_returns_ids_and_does_not_send_on_a_channel
+        PASS [   0.014s] (  7/805) celeris cluster_admin::tests::code_without_a_session_is_not_started
+        PASS [   0.019s] (  8/805) celeris cluster_admin::tests::cancel_without_a_session_succeeds
+        PASS [   0.036s] (  9/805) celeris accounts_admin::tests::login_start_code_cancel_round_trip
+        PASS [   0.013s] ( 10/805) celeris cluster_admin::tests::manual_cluster_refuses_to_connect
+        PASS [   0.013s] ( 11/805) celeris cluster_admin::tests::unknown_cluster_is_not_found_for_all_three
+        PASS [   0.010s] ( 12/805) celeris config::cos::tests::chat_config_attachment_data_dir_is_db_dir
+        PASS [   0.013s] ( 13/805) celeris config::cos::tests::chat_config_defaults_follow_adr_d4
+        PASS [   0.012s] ( 14/805) celeris config::cos::tests::chat_config_overrides_are_read
+        PASS [   0.013s] ( 15/805) celeris config::cos::tests::chat_config_partial_override_keeps_other_defaults
+        PASS [   0.015s] ( 16/805) celeris config::cos::tests::chat_config_rejects_invalid_values
+        PASS [   0.054s] ( 17/805) celeris accounts_admin::tests::expire_stale_logins_cancels_sessions_older_than_the_injected_expiry
+        PASS [   0.055s] ( 18/805) celeris accounts_admin::tests::expire_stale_codex_logins_cancels_sessions_older_than_the_injected_expiry
+        PASS [   0.020s] ( 19/805) celeris config::cos::tests::chat_config_example_toml_carries_the_defaults
+        PASS [   0.013s] ( 20/805) celeris config::cos::tests::chat_config_rejects_unknown_and_negative_keys
+        PASS [   0.014s] ( 21/805) celeris config::cos::tests::cos_chat_config_rejects_legacy_route_fields
+        PASS [   0.014s] ( 22/805) celeris config::cos::tests::cos_chat_config_defaults_to_fixed_harness_and_route_candidates
+        PASS [   0.012s] ( 23/805) celeris config::cos::tests::repo_cos_skills_pass_the_gate_under_the_default_triage_config
+        PASS [   0.015s] ( 24/805) celeris config::cos::tests::cos_triage_human_required_uses_the_routine_answer_vocabulary
+        PASS [   0.023s] ( 25/805) celeris config::cos::tests::cos_triage_fallback_safety_net_default_override_and_removed_fields
+        PASS [   0.015s] ( 26/805) celeris config::cron::tests::cron_seed_parses_fields_and_defaults
+        PASS [   0.019s] ( 27/805) celeris config::cron::tests::cron_seed_rejects_invalid_seeds_at_load
+        PASS [   0.021s] ( 28/805) celeris config::cron::tests::seed_objective_describes_curation_content_hashes_and_diff_scope
+        PASS [   0.012s] ( 29/805) celeris config::edit::tests::arrays_of_tables_and_bad_paths
+        PASS [   0.011s] ( 30/805) celeris config::edit::tests::new_nested_key_creates_tables_and_null_removes
+        PASS [   0.011s] ( 31/805) celeris config::fields::tests::flatten_keeps_arrays_as_one_field
+        PASS [   0.012s] ( 32/805) celeris config::edit::tests::replacing_a_value_keeps_comments_and_order
+        PASS [   0.010s] ( 33/805) celeris config::fields::tests::longest_prefix_wins_and_unknown_is_startup
+        PASS [   0.010s] ( 34/805) celeris config::fields::tests::secrets_are_redacted
+        PASS [   0.013s] ( 35/805) celeris config::jev::tests::disabled_by_default_with_or_without_the_table
+        PASS [   0.015s] ( 36/805) celeris config::jev::tests::every_field_round_trips
+        PASS [   0.015s] ( 37/805) celeris config::jev::tests::invalid_values_are_load_errors_even_when_disabled
+        PASS [   0.015s] ( 38/805) celeris config::jev::tests::unknown_field_is_a_load_error
+        PASS [   0.012s] ( 39/805) celeris config::llm_route::tests::execution_class_harness_requires_route_defaults
+        PASS [   0.015s] ( 40/805) celeris config::llm_route::tests::harness_balance_is_off_by_default_and_names_only_known_classes
+        PASS [   0.015s] ( 41/805) celeris config::llm_route::tests::harness_decl_rejects_kind_or_format_mismatch
+        PASS [   0.015s] ( 42/805) celeris config::llm_route::tests::harness_decl_rejects_unknown_route_source
+        PASS [   0.016s] ( 43/805) celeris config::llm_route::tests::lane_route_defaults_override_harness_default_and_settings_load
+        PASS [   0.015s] ( 44/805) celeris config::llm_route::tests::llm_sources_harness_decl_builds_registry_from_adr_tables
+        PASS [   0.019s] ( 45/805) celeris config::llm_route::tests::lane_route_defaults_reject_unknown_source_and_settings_reject_bad_values
+        PASS [   0.016s] ( 46/805) celeris config::llm_route::tests::proxy_bound_harness_candidates_all_need_a_via_llm_proxy_route
+        PASS [   0.016s] ( 47/805) celeris config::llm_route::tests::wait_for_credential_builds_a_gate_and_requires_a_credential_ref
+        PASS [   0.017s] ( 48/805) celeris config::maintenance::tests::disk_watch_config_defaults_and_overrides
+        PASS [   0.018s] ( 49/805) celeris config::maintenance::tests::target_sweep_config_defaults_match_sweep_params_default
+        PASS [   0.031s] ( 50/805) celeris config::maintenance::tests::disk_watch_config_rejects_invalid_entries
+        PASS [   0.030s] ( 51/805) celeris config::maintenance::tests::target_sweep_config_example_toml_matches_defaults
+        PASS [   0.021s] ( 52/805) celeris config::maintenance::tests::target_sweep_config_overrides_and_resolves_relative_roots
+        PASS [   0.019s] ( 53/805) celeris config::maintenance::tests::target_sweep_config_rejects_invalid_values
+        PASS [   0.014s] ( 54/805) celeris config::model_catalog::tests::models_missing_from_the_catalog_are_left_alone
+        PASS [   0.024s] ( 55/805) celeris config::maintenance::tests::target_sweep_scope_defaults_and_disable_are_resolved
+        PASS [   0.239s] ( 56/805) celeris accounts_admin::tests::codex_login_start_returns_user_code_and_poll_detects_completion
+        PASS [   0.017s] ( 57/805) celeris config::model_catalog::tests::unavailable_and_disabled_models_leave_the_candidates
+        PASS [   0.014s] ( 58/805) celeris config::project_controller::tests::budget_rates_need_all_four_fields_and_reject_priced_table_rows
+        PASS [   0.014s] ( 59/805) celeris config::project_controller::tests::legacy_token_cap_is_rejected_on_load
+        PASS [   0.015s] ( 60/805) celeris config::project_controller::tests::project_controller_config_defaults_and_unknown_field
+        PASS [   0.019s] ( 61/805) celeris config::project_controller::tests::max_usd_per_day_default_is_100_and_must_be_finite_positive
+        PASS [   0.014s] ( 62/805) celeris config::project_controller::tests::project_controller_retention_config_requires_archive_dir_and_positive_values
+        PASS [   0.016s] ( 63/805) celeris config::routing_eval::tests::routing_eval_defaults_to_zero_reserved_runs
+        PASS [   0.019s] ( 64/805) celeris config::routing_eval::tests::routing_eval_rejects_unknown_fields
+        PASS [   0.019s] ( 65/805) celeris config::routing_eval::tests::routing_eval_reserved_runs_reaches_dispatch_config
+        PASS [   0.018s] ( 66/805) celeris config::routing_mode::tests::both_modes_parse
+        PASS [   0.016s] ( 67/805) celeris config::routing_mode::tests::mode_defaults_to_fixed_without_the_table_or_the_field
+        PASS [   0.014s] ( 68/805) celeris config::routing_mode::tests::unknown_mode_or_field_is_a_load_error
+        PASS [   0.016s] ( 69/805) celeris config::script::tests::config_active_bundle_sha256_is_rejected
+        PASS [   0.018s] ( 70/805) celeris config::script::tests::script_runtime_config_is_absent_by_default
+        PASS [   0.016s] ( 71/805) celeris config::script::tests::script_runtime_config_reads_values_and_defaults
+        PASS [   0.016s] ( 72/805) celeris config::script::tests::script_runtime_config_rejects_invalid_values
+        PASS [   0.016s] ( 73/805) celeris config::tests::accepts_acp_adapter_with_default_config
+        PASS [   0.018s] ( 74/805) celeris config::tests::accepts_claude_code_adapter_with_default_config
+        PASS [   0.018s] ( 75/805) celeris config::tests::accepts_codex_adapter_with_default_config
+        PASS [   0.014s] ( 76/805) celeris config::tests::accepts_local_deep_research_adapter_with_default_config
+        PASS [   0.016s] ( 77/805) celeris config::tests::accepts_paperqa_adapter_with_default_config
+        PASS [   0.017s] ( 78/805) celeris config::tests::accounts_section_rejects_zero_max_runs_and_unknown_keys
+        PASS [   0.019s] ( 79/805) celeris config::tests::accounts_section_defaults_and_relative_dirs_are_resolved
+        PASS [   0.016s] ( 80/805) celeris config::tests::adapter_subagents_setting_resolves_deterministically_and_defaults_to_deny
+        PASS [   0.021s] ( 81/805) celeris config::tests::api_section_defaults_to_disabled_and_requires_token_off_loopback
+        PASS [   0.017s] ( 82/805) celeris config::tests::apply_verify_smoke_drops_smoke_from_class_candidates
+        PASS [   0.015s] ( 83/805) celeris config::tests::browser_runtime_defaults_to_daemon
+        PASS [   0.018s] ( 84/805) celeris config::tests::backoff_and_reviewer_settings_map_to_dispatch_config
+        PASS [   0.015s] ( 85/805) celeris config::tests::browser_runtime_launcher_uid_reaches_the_runtime_kind
+        PASS [   0.016s] ( 86/805) celeris config::tests::browser_runtime_launcher_with_socket_validates
+        PASS [   0.015s] ( 87/805) celeris config::tests::browser_runtime_launcher_without_socket_is_rejected
+        PASS [   0.016s] ( 88/805) celeris config::tests::browser_runtime_unknown_value_is_rejected
+        PASS [   0.019s] ( 89/805) celeris config::tests::browser_settings_default_to_unconfigured_and_site_policy_validates
+        PASS [   0.018s] ( 90/805) celeris config::tests::class_candidates_are_validated_like_harness_candidates
+        PASS [   0.020s] ( 91/805) celeris config::tests::budget_rates_table_is_validated_by_config
+        PASS [   0.018s] ( 92/805) celeris config::tests::claude_code_class_route_override_picks_opus_for_coding_only
+        PASS [   0.018s] ( 93/805) celeris config::tests::cluster_auth_defaults_to_manual_and_only_three_values_are_accepted
+        PASS [   0.015s] ( 94/805) celeris config::tests::coding_harness_default_config_rejects_fixed_adapter_and_unknown_policy
+        PASS [   0.019s] ( 95/805) celeris config::tests::cluster_control_persist_defaults_to_yes_and_accepts_only_yes_or_positive_seconds
+        PASS [   0.019s] ( 96/805) celeris config::tests::cluster_job_wait_defaults_and_validation
+        PASS [   0.017s] ( 97/805) celeris config::tests::containers_build_dir_expands_home_and_resolves_relative_paths
+        PASS [   0.017s] ( 98/805) celeris config::tests::containers_defaults_reach_the_dispatcher_and_bad_values_are_rejected
+        PASS [   0.017s] ( 99/805) celeris config::tests::conversation_genre_defaults_to_secretary_and_an_unknown_genre_is_a_config_error
+        PASS [   0.013s] (100/805) celeris config::tests::delivery_auto_resolve_defaults_follow_the_parallel_integration_adr
+        PASS [   0.017s] (101/805) celeris config::tests::db_accepts_both_the_bare_path_string_and_the_table_form
+        PASS [   0.015s] (102/805) celeris config::tests::delegation_on_child_failure_is_parsed_and_validated
+        PASS [   0.040s] (103/805) celeris config::tests::config_examples_load
+        PASS [   0.014s] (104/805) celeris config::tests::delivery_auto_resolve_overrides_and_validation
+        PASS [   0.014s] (105/805) celeris config::tests::dispatch_min_free_disk_mb_can_be_configured
+        PASS [   0.015s] (106/805) celeris config::tests::dispatch_config_resolves_the_langmem_api_key_from_secrets
+        PASS [   0.014s] (107/805) celeris config::tests::empty_class_candidates_are_a_config_error
+        PASS [   0.014s] (108/805) celeris config::tests::ensure_accounts_dir_creates_the_directories_with_0700
+        PASS [   0.014s] (109/805) celeris config::tests::ensure_secrets_dir_creates_the_directory_with_0700
+        PASS [   0.464s] (110/805) celeris browser_doctor::tests::browser_doctor_db_is_authoritative_warns_on_seed_difference_and_unknown_grant
+        PASS [   0.014s] (111/805) celeris config::tests::env_from_secrets_is_parsed_on_adapters
+        PASS [   0.477s] (112/805) celeris browser_doctor::tests::browser_doctor_each_missing_item_has_a_fix_without_touching_production
+        PASS [   0.477s] (113/805) celeris browser_doctor::tests::browser_doctor_rejects_test_launcher_broker_denial_stale_ledger_and_bad_key
+        PASS [   0.477s] (114/805) celeris browser_doctor::tests::browser_doctor_reports_username_selector_and_post_login_per_site_policy
+        PASS [   0.015s] (115/805) celeris config::tests::execution_max_cos_runs_default_and_validation
+        PASS [   0.015s] (116/805) celeris config::tests::execution_continuation_hard_limit_default_validation_and_old_field_is_an_error
+        PASS [   0.016s] (117/805) celeris config::tests::genres_are_parsed_and_mapped
+        PASS [   0.016s] (118/805) celeris config::tests::execution_tree_defaults_and_validation
+        PASS [   0.430s] (119/805) celeris config::cron::tests::cron_seed_inserts_once_into_empty_cron_jobs
+        PASS [   0.032s] (120/805) celeris config::tests::example_org_routes_ui_work_to_ui_ux_and_api_work_to_software_engineering
+        PASS [   0.488s] (121/805) celeris chat_gc::tests::chat_gc_expires_upload_reservations
+        PASS [   0.013s] (122/805) celeris config::tests::hot_mount_check_refuses_a_plain_directory_on_the_root_filesystem
+        PASS [   0.016s] (123/805) celeris config::tests::github_defaults_to_gh_and_merge_and_rejects_other_merge_methods
+        PASS [   0.015s] (124/805) celeris config::tests::hot_paths_follow_the_adr_0136_keys_and_default_to_the_previous_locations
+        PASS [   0.013s] (125/805) celeris config::tests::legacy_providers_rejected_with_new_config_guidance
+        PASS [   0.015s] (126/805) celeris config::tests::langmem_api_key_config_uses_the_secret_for_other_endpoints_and_warns_if_missing
+        PASS [   0.015s] (127/805) celeris config::tests::langmem_auth_warnings_config_reports_a_missing_proxy_bearer
+        PASS [   0.018s] (128/805) celeris config::tests::langmem_api_key_config_uses_the_proxy_token_when_targeting_llm_proxy
+        PASS [   0.442s] (129/805) celeris config::cron::tests::cron_seed_example_toml_has_daily_curation_and_knowledge_curation_harness
+        PASS [   0.441s] (130/805) celeris config::cron::tests::cron_seed_is_not_applied_when_cron_jobs_already_has_a_job
+        PASS [   0.014s] (131/805) celeris config::tests::legacy_token_caps_are_rejected_with_the_field_name
+        PASS [   0.504s] (132/805) celeris browser_doctor::tests::browser_doctor_launcher_dns_credential_ping_and_versions_are_checked
+        PASS [   0.018s] (133/805) celeris config::tests::loads_acp_opencode_example_config
+        PASS [   0.018s] (134/805) celeris config::tests::loads_aider_example_config
+        PASS [   0.017s] (135/805) celeris config::tests::loads_claude_code_dogfood_example_config
+        PASS [   0.017s] (136/805) celeris config::tests::loads_codex_dogfood_example_config
+        PASS [   0.015s] (137/805) celeris config::tests::mcp_listeners_parse_and_validate_are_wired_into_config
+        PASS [   0.018s] (138/805) celeris config::tests::loads_the_org_example_and_maps_it_to_org_nodes
+        PASS [   0.019s] (139/805) celeris config::tests::loads_research_example_config
+        PASS [   0.439s] (140/805) celeris config::cron::tests::target_sweep_cron_seed_example_toml_passes_validation
+        PASS [   0.016s] (141/805) celeris config::tests::memory_dir_is_resolved_created_with_0700_and_passed_to_the_dispatcher
+        PASS [   0.019s] (142/805) celeris config::tests::loads_web_research_example_config
+        PASS [   0.015s] (143/805) celeris config::tests::model_routing_section_rejected_with_route_defaults_guidance
+        PASS [   0.019s] (144/805) celeris config::tests::migration_runbook_toml_loads
+        PASS [   0.027s] (145/805) celeris config::tests::loads_example_config_and_resolves_relative_paths
+        PASS [   0.519s] (146/805) celeris chat_gc::tests::chat_gc_applies_stream_retention_after_run_end
+        PASS [   0.016s] (147/805) celeris config::tests::notify_defaults_are_used_when_the_section_is_absent
+        PASS [   0.017s] (148/805) celeris config::tests::multi_account_example_mentions_account_pool_commented_out
+        PASS [   0.014s] (149/805) celeris config::tests::opencode_model_namespace_deserializes_and_validates
+        PASS [   0.017s] (150/805) celeris config::tests::opencode_go_example_config_loads_and_routes_as_opencode_go_subscription
+        PASS [   0.018s] (151/805) celeris config::tests::omitted_paths_default_to_the_celeris_xdg_layout
+        PASS [   0.016s] (152/805) celeris config::tests::org_include_is_optional_but_must_exist_when_written
+        PASS [   0.015s] (153/805) celeris config::tests::paperqa_paths_are_resolved_relative_to_the_config_file
+        PASS [   0.014s] (154/805) celeris config::tests::plan_auto_accept_is_parsed_and_unknown_plan_keys_are_rejected
+        PASS [   0.013s] (155/805) celeris config::tests::planner_adapter_is_rejected_with_candidate_guidance
+        PASS [   0.015s] (156/805) celeris config::tests::pi_harness_declaration_deserializes_extensions_tools_and_env
+        PASS [   0.013s] (157/805) celeris config::tests::proxy_tier_alias_rejected_in_celeris_config
+        PASS [   0.017s] (158/805) celeris config::tests::parses_worktree_sync_and_maps_it_to_the_worker_settings
+        PASS [   0.014s] (159/805) celeris config::tests::planner_without_adapter_keeps_its_budget_and_permission_settings
+        PASS [   0.014s] (160/805) celeris config::tests::reads_paperqa_acquire_and_evidence_tables
+        PASS [   0.016s] (161/805) celeris config::tests::reads_local_deep_research_evidence_thresholds
+        PASS [   0.017s] (162/805) celeris config::tests::reads_local_deep_research_adapter_settings
+        PASS [   0.015s] (163/805) celeris config::tests::rejects_duplicate_genre_ids_and_genres_referencing_unknown_or_mismatched_roles
+        PASS [   0.013s] (164/805) celeris config::tests::rejects_unknown_acp_permission_value
+        PASS [   0.017s] (165/805) celeris config::tests::rejects_duplicate_roles_removed_role_adapter_and_zero_limits
+        PASS [   0.013s] (166/805) celeris config::tests::rejects_unknown_fields_in_claude_code_adapter_config
+        PASS [   0.543s] (167/805) celeris accounts_admin::tests::remove_account_codex_uses_the_codex_root
+        PASS [   0.015s] (168/805) celeris config::tests::rejects_unknown_fields_in_acp_adapter_config
+        PASS [   0.014s] (169/805) celeris config::tests::rejects_unknown_fields_in_local_deep_research_adapter_config
+        PASS [   0.014s] (170/805) celeris config::tests::rejects_unknown_fields_in_codex_adapter_config
+        PASS [   0.013s] (171/805) celeris config::tests::rejects_unknown_fields_in_local_deep_research_evidence_table
+        PASS [   0.013s] (172/805) celeris config::tests::rejects_unknown_fields_in_paperqa_adapter_config
+        PASS [   0.020s] (173/805) celeris config::tests::rejects_org_seeds_that_do_not_form_one_tree
+        PASS [   0.016s] (174/805) celeris config::tests::rejects_zero_cooldown_and_unsafe_lease_grace
+        PASS [   0.014s] (175/805) celeris config::tests::removed_scratch_cache_sections_are_load_errors
+        PASS [   0.018s] (176/805) celeris config::tests::rejects_unknown_sync_modes_and_worktree_auto_removal
+        PASS [   0.015s] (177/805) celeris config::tests::route_defaults_classes_build_the_registry
+        PASS [   0.016s] (178/805) celeris config::tests::scratch_can_be_disabled
+        PASS [   0.018s] (179/805) celeris config::tests::reviewer_adapter_must_name_a_declared_harness_and_unknown_reviewer_keys_fail
+        PASS [   0.018s] (180/805) celeris config::tests::roles_and_delegation_are_parsed_and_mapped
+        PASS [   0.016s] (181/805) celeris config::tests::scratch_cargo_defaults_disable_incremental
+        PASS [   0.015s] (182/805) celeris config::tests::selfdeploy_delivery_projects_is_removed_and_rejected
+        PASS [   0.017s] (183/805) celeris config::tests::scratch_defaults_follow_the_build_cache_parent
+        PASS [   0.016s] (184/805) celeris config::tests::scratch_mount_falls_back_to_default_dir_and_seed_reflink_defaults_off
+        PASS [   0.016s] (185/805) celeris config::tests::selfdeploy_push_defaults_to_true_and_origin_and_rejects_blank_remote
+        PASS [   0.560s] (186/805) celeris accounts_admin::tests::usage_poll_skips_logged_out_and_logging_in_accounts_and_throttles_checks
+        PASS [   0.018s] (187/805) celeris config::tests::selfdeploy_releases_dir_defaults_to_the_state_dir_and_resolves_relative_paths
+        PASS [   0.018s] (188/805) celeris config::tests::secrets_dir_is_parsed_and_resolved_relative_to_the_config_file
+        PASS [   0.561s] (189/805) celeris chat_gc::tests::chat_gc_loop_skips_passes_while_gate_is_closed
+        PASS [   0.013s] (190/805) celeris config::tests::verify_mode_config_does_not_serve_the_llm_proxy
+        PASS [   0.019s] (191/805) celeris config::tests::the_knowledge_section_resolves_its_root_and_checks_the_default_mounts
+        PASS [   0.022s] (192/805) celeris config::tests::the_knowledge_harness_fallback_is_configurable
+        PASS [   0.017s] (193/805) celeris config::tests::unknown_execution_class_is_a_config_error
+        PASS [   0.014s] (194/805) celeris control_path::tests::a_parent_dir_not_mine_or_not_0700_is_a_warning
+        PASS [   0.015s] (195/805) celeris control_path::tests::a_normal_setup_has_no_warnings_only_the_persist_info
+        PASS [   0.014s] (196/805) celeris control_path::tests::a_path_over_90_bytes_is_a_warning_and_exactly_90_is_not
+        PASS [   0.014s] (197/805) celeris control_path::tests::an_unexpanded_token_skips_the_length_and_directory_checks
+        PASS [   0.014s] (198/805) celeris control_path::tests::controlpath_none_is_a_warning
+        PASS [   0.015s] (199/805) celeris control_path::tests::controlmaster_no_is_a_warning
+        PASS [   0.020s] (200/805) celeris config::tests::workspace_worktree_branch_prefix_defaults_to_celeris_slash_and_reaches_the_dispatcher
+        PASS [   0.015s] (201/805) celeris control_path::tests::linger_off_under_xdg_runtime_dir_is_a_warning
+        PASS [   0.576s] (202/805) celeris accounts_admin::tests::remove_account_missing_directory_is_not_found
+        PASS [   0.017s] (203/805) celeris daemon::adapters::harness_adapter_tests::opencode_harness_passes_model_namespace
+        PASS [   0.015s] (204/805) celeris daemon::adapters::harness_adapter_tests::route_select_dispatch_adapter_daemon_rejects_unknown_harness_kind
+        PASS [   0.018s] (205/805) celeris daemon::adapters::harness_adapter_tests::pi_harness_declaration_reaches_pi_config
+        PASS [   0.018s] (206/805) celeris daemon::adapters::harness_adapter_tests::route_select_dispatch_adapter_daemon_builds_one_adapter_per_declared_harness
+        PASS [   0.035s] (207/805) celeris config::tests::the_two_example_files_load_together_through_org_include
+        PASS [   0.013s] (208/805) celeris daemon::bootstrap::jev_verifier::ping_body_tests::noul_ping_has_no_string_criteria
+        PASS [   0.584s] (209/805) celeris chat_gc::tests::chat_gc_removes_unsent_upload_after_orphan_ttl
+        PASS [   0.015s] (210/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_production_config_unparsable_is_unknown_for_test_db
+        PASS [   0.016s] (211/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_production_config_invalid_db_is_unknown_for_test_db
+        PASS [   0.016s] (212/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_production_config_unreadable_is_unknown_for_test_db
+        PASS [   0.019s] (213/805) celeris daemon::bootstrap::worker_db_guard_tests::egress_test_loopback_production_db_or_config_daemon_refuses_test_launcher
+        PASS [   0.015s] (214/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_production_db_tilde_uses_passwd_home_not_env_home
+        PASS [   0.016s] (215/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_refuse_action_table
+        PASS [   0.015s] (216/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_refuse_production_db
+        PASS [   0.018s] (217/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_refuse_action_never_probes_inside_worker_run
+        PASS [   0.035s] (218/805) celeris daemon::adapters::harness_adapter_tests::pi_harness_declaration_reaches_pi_process
+        PASS [   0.018s] (219/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_refuse_precheck_before_opening_db
+        PASS [   0.014s] (220/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_refuse_production_token
+        PASS [   0.015s] (221/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_refuse_state_dir_overlap
+        PASS [   0.017s] (222/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_refuse_relative_path_with_dotdot
+        PASS [   0.014s] (223/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_refuse_under_marker_path
+        PASS [   0.014s] (224/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_refuses_production_db_from_production_config
+        PASS [   0.015s] (225/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_refuse_via_symlink
+        PASS [   0.605s] (226/805) celeris chat_gc::tests::chat_gc_keeps_referenced_blob_and_deletes_after_unreferenced_retention
+        PASS [   0.015s] (227/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_refuses_production_state_dir_from_production_config
+        PASS [   0.015s] (228/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_test_db_is_exempt_outside_worker_run
+        PASS [   0.017s] (229/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_refuses_production_token_relative_to_production_config
+        PASS [   0.014s] (230/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_test_db_is_exempt_without_production_config
+        PASS [   0.015s] (231/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_test_db_is_exempt_with_production_config
+        PASS [   0.015s] (232/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_db_guard_unknown_home_is_unknown_for_test_db
+        PASS [   0.014s] (233/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_guard_opt_out_refuses_production_inside_worker_run
+        PASS [   0.018s] (234/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_guard_exempt_test_db_without_marker
+        PASS [   0.013s] (235/805) celeris daemon::browser_ledger_path::tests::browser_ledger_release_env_override_wins
+        PASS [   0.012s] (236/805) celeris daemon::browser_ledger_path::tests::browser_ledger_release_none_without_env_or_release
+        PASS [   0.013s] (237/805) celeris daemon::browser_ledger_path::tests::browser_ledger_release_uses_release_dir_of_current_exe
+        PASS [   0.021s] (238/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_guard_opt_out_precheck_refuses_before_opening_db
+        PASS [   0.018s] (239/805) celeris daemon::bootstrap::worker_db_guard_tests::worker_guard_probe_production_without_marker
+        PASS [   0.014s] (240/805) celeris daemon::classify_stage::tests::board_call_carries_response_versions_and_fallback_has_none
+        PASS [   0.015s] (241/805) celeris daemon::classify_stage::tests::classification_log_shows_specificity_and_confidence_but_no_input_text
+        PASS [   0.014s] (242/805) celeris daemon::classify_stage::tests::failures_become_fell_back_to_fixed_with_a_reason_name
+        PASS [   0.015s] (243/805) celeris daemon::classify_stage::tests::classification_never_lowers_to_cheap_and_carries_no_success_rate
+        PASS [   0.016s] (244/805) celeris daemon::classify_stage::tests::fallback_records_fell_back_while_real_api_verified_stays_false
+        PASS [   0.015s] (245/805) celeris daemon::classify_stage::tests::fixed_mode_never_calls_the_classifier_and_leaves_the_board_empty
+        PASS [   0.015s] (246/805) celeris daemon::classify_stage::tests::missing_key_hands_the_gate_to_the_existing_credential_wait
+        PASS [   0.014s] (247/805) celeris daemon::classify_stage::tests::success_is_jev_ok_with_a_hint_and_never_marks_the_real_api_verified
+        PASS [   0.648s] (248/805) celeris chat_gc::tests::chat_gc_loop_runs_each_interval_with_injected_clock
+        PASS [   0.071s] (249/805) celeris daemon::classify_tick::tests::disabled_config_builds_no_stage
+        PASS [   0.693s] (250/805) celeris accounts_admin::tests::remove_account_moves_the_directory_cancels_login_and_clears_the_book
+        PASS [   0.145s] (251/805) celeris daemon::jev_key::tests::auth_failures_401_403_request_credential_and_the_key_is_sent_as_bearer
+        PASS [   0.822s] (252/805) celeris config::cron::tests::cron_seed_with_an_invalid_template_is_a_config_error_and_writes_nothing
+        PASS [   0.198s] (253/805) celeris daemon::jev_key::tests::rate_limit_429_and_server_errors_do_not_request_credential
+        PASS [   0.274s] (254/805) celeris daemon::classify_tick::tests::running_task_with_only_a_running_unit_still_classifies_its_pending_units
+        PASS [   0.019s] (255/805) celeris daemon::jev_key::tests::unregistered_registered_and_reregistered_are_read_each_call
+        PASS [   0.019s] (256/805) celeris daemon::jev_key::tests::value_never_appears_in_debug_output
+        PASS [   0.077s] (257/805) celeris daemon::jev_key::tests::unregistered_key_enters_credential_wait_without_a_request
+        PASS [   0.016s] (258/805) celeris daemon::process_memory::tests::process_memory_parses_proc_status_fields
+        PASS [   0.297s] (259/805) celeris daemon::classify_tick::tests::enabled_fills_the_board_for_a_ready_task_and_is_idempotent
+        PASS [   0.297s] (260/805) celeris daemon::classify_tick::tests::fixed_mode_leaves_the_board_empty_and_never_calls_the_classifier
+        PASS [   0.302s] (261/805) celeris daemon::classify_tick::tests::classifications_per_run_are_capped
+        PASS [   0.015s] (262/805) celeris daemon::process_memory::tests::process_memory_reads_this_process
+        PASS [   0.015s] (263/805) celeris daemon::process_memory::tests::process_memory_sums_v8_generations
+        PASS [   0.305s] (264/805) celeris daemon::classify_tick::tests::pending_work_units_are_classified_ahead_but_integrate_units_are_not
+        PASS [   0.015s] (265/805) celeris daemon::routing_guardrail::tests::plan_pair_keeps_enforce_below_thresholds_and_skips_shadow
+        PASS [   0.015s] (266/805) celeris daemon::routing_guardrail::tests::plan_pair_quota_low_only_notifies_and_never_promotes
+        PASS [   0.028s] (267/805) celeris daemon::repo_health_path::tests::health_evidence_bundled_checker_tree_gives_base_formula
+        PASS [   0.023s] (268/805) celeris daemon::repo_health_path::tests::health_evidence_bundled_without_release_is_none
+        PASS [   0.017s] (269/805) celeris daemon::routing_guardrail::tests::plan_pair_reverts_on_each_stop_condition
+        PASS [   0.031s] (270/805) celeris daemon::repo_health_path::tests::health_evidence_bundled_missing_or_broken_checker_tree_is_none
+        PASS [   0.015s] (271/805) celeris daemon::routing_guardrail::tests::select_evidence_follows_route_defaults_then_largest_n
+        PASS [   0.016s] (272/805) celeris daemon::routing_guardrail::tests::ticker_runs_on_the_injected_clock_only_after_the_interval
+        PASS [   0.022s] (273/805) celeris daemon::script_exhaustive::tests::exhaustive_generation_gone_aborts
+        PASS [   0.030s] (274/805) celeris daemon::script_exhaustive::tests::exhaustive_failure_rate_stops
+        PASS [   0.024s] (275/805) celeris daemon::script_exhaustive::tests::exhaustive_mismatch_stops_at_first
+        PASS [   0.022s] (276/805) celeris daemon::script_exhaustive::tests::exhaustive_safety_violation_stops
+        PASS [   0.023s] (277/805) celeris daemon::script_exhaustive::tests::exhaustive_stop_signal_aborts
+        PASS [   0.023s] (278/805) celeris daemon::script_exhaustive::tests::exhaustive_timeout_backs_off_and_stops_at_three
+        PASS [   0.017s] (279/805) celeris daemon::script_exhaustive::tests::nearest_rank_percentiles
+        PASS [   0.030s] (280/805) celeris daemon::script_exhaustive::tests::exhaustive_wall_limit_aborts
+        PASS [   0.598s] (281/805) celeris daemon::admin::cos_chat_config_tests::cos_chat_config_reload_keeps_old_config_on_invalid_mapping
+        PASS [   0.551s] (282/805) celeris daemon::classify_tick::tests::credential_failures_are_reclassified_but_other_fallbacks_are_not
+        PASS [   0.561s] (283/805) celeris daemon::config_admin::tests::execution_class_defaults_routing_and_jev_reach_the_running_daemon
+        PASS [   0.617s] (284/805) celeris daemon::api::chat_tests::chat_wiring_passes_data_dir_and_limits_to_api
+        PASS [   0.568s] (285/805) celeris daemon::config_admin::tests::account_max_runs_changes_without_restart_and_survives_a_config_change
+        PASS [   0.578s] (286/805) celeris daemon::config_admin::tests::invalid_or_fixed_changes_are_rejected_and_change_nothing
+        PASS [   0.582s] (287/805) celeris daemon::config_admin::tests::fields_view_classifies_redacts_and_flags_pending_restart
+        PASS [   0.585s] (288/805) celeris daemon::classify_tick::tests::task_routing_override_beats_the_config_mode
+        PASS [   0.291s] (289/805) celeris daemon::routing_guardrail::tests::run_tick_quota_low_only_notifies_and_keeps_enforce
+        PASS [   0.655s] (290/805) celeris daemon::admin::routing_mode_wire_tests::reload_writes_back_the_jev_section_so_the_next_tick_builds_the_stage
+        PASS [   0.585s] (291/805) celeris daemon::config_admin::tests::max_replans_changes_without_restart_and_is_written_back_with_comments
+        PASS [   0.319s] (292/805) celeris daemon::routing_guardrail::tests::run_tick_reverts_to_shadow_with_event_and_notice_once
+        PASS [   0.315s] (293/805) celeris daemon::routing_guardrail::tests::run_tick_skips_pairs_without_evidence_rows
+        PASS [   0.010s] (294/805) celeris daemon::script_guard::tests::script_inbox_reason_code_takes_leading_code
+        PASS [   0.010s] (295/805) celeris daemon::script_layer::tests::script_restore_reason_checks_stored_checkpoint_versions
+        PASS [   0.010s] (296/805) celeris daemon::script_layer::tests::script_restore_reason_keeps_usable_generation_modes
+        PASS [   0.011s] (297/805) celeris daemon::script_layer::tests::script_restore_reason_codes_for_each_failure
+        PASS [   0.010s] (298/805) celeris daemon::script_policy::tests::script_policy_denied_maps_to_safety_violation_code
+        PASS [   0.010s] (299/805) celeris daemon::script_policy::tests::script_policy_error_kind_matches_script_error_serialization
+        PASS [   0.735s] (300/805) celeris daemon::api::chat_tests::chat_wiring_daemon_store_open_runs_legacy_migration
+        PASS [   0.696s] (301/805) celeris daemon::classify_tick::e2e::rate_limit_never_becomes_a_credential_wait
+        PASS [   0.014s] (302/805) celeris daemon::stranded_sweep::tests::stranded_sweep_overlapping_ticks_do_not_start_a_second_run
+        PASS [   0.767s] (303/805) celeris daemon::admin::routing_mode_wire_tests::routing_mode_reaches_the_dispatcher_through_bootstrap_and_reload
+        PASS [   0.013s] (304/805) celeris daemon::stranded_sweep::tests::stranded_sweep_runs_immediately_and_repeats_on_period
+        PASS [   0.017s] (305/805) celeris daemon::stranded_sweep::tests::stranded_sweep_slot_is_released_after_a_panicking_sweep
+        PASS [   0.015s] (306/805) celeris daemon::tick_loop::script_tick_wait_log_tests::script_tick_wait_log_is_due_every_ten_minutes
+        PASS [   0.066s] (307/805) celeris daemon::stranded_sweep::tests::stranded_heads_are_read_once_per_repository
+        PASS [   0.014s] (308/805) celeris db_maintenance::tests::backup_retention_daily_and_weekly_generations_are_kept
+        PASS [   0.015s] (309/805) celeris db_maintenance::tests::backup_retention_ignores_other_file_names
+        PASS [   0.016s] (310/805) celeris db_maintenance::tests::backup_retention_integrity_failure_skips_all_deletions
+        PASS [   0.015s] (311/805) celeris db_maintenance::tests::backup_retention_keeps_every_backup_inside_48_hours
+        PASS [   0.014s] (312/805) celeris db_maintenance::tests::backup_retention_protects_latest_per_kind_and_three_rollbacks
+        PASS [   0.895s] (313/805) celeris daemon::api::account_limits_tests::implicit_source_account_limit_survives_reload
+        PASS [   0.017s] (314/805) celeris db_maintenance::tests::backup_retention_total_limit_prunes_periodic_before_promote
+        PASS [   0.987s] (315/805) celeris daemon::api::account_limits_tests::patch_account_limits_validate_persist_and_survive_reload_and_restart
+        PASS [   0.308s] (316/805) celeris daemon::services::routing_tests::proxy_sink_appends_only_correlated_requests_once
+        PASS [   0.128s] (317/805) celeris db_maintenance::tests::incomplete_backups_are_cleaned_and_cancel_does_not_publish
+        PASS [   0.424s] (318/805) celeris daemon::script_guard::tests::script_inbox_generation_invalidated_and_halt_items
+        PASS [   1.029s] (319/805) celeris daemon::classify_tick::e2e::unregistered_key_waits_notifies_then_resumes_once_and_classifies
+        PASS [   0.464s] (320/805) celeris daemon::script_guard::tests::script_inbox_human_actor_creates_no_item_and_closes_open_ones
+        PASS [   0.412s] (321/805) celeris db_maintenance::tests::backup_once_fails_clearly_when_the_backup_dir_is_missing
+        PASS [   0.159s] (322/805) celeris db_maintenance::tests::vacuum_progress_handler_interrupts_an_active_copy
+        PASS [   0.602s] (323/805) celeris daemon::script_guard::tests::script_inbox_item_once_per_event_survives_restart
+        PASS [   0.382s] (324/805) celeris db_maintenance::tests::checkpoint_once_runs_on_a_fresh_wal_db_without_error
+        PASS [   0.288s] (325/805) celeris db_maintenance::tests::incremental_backup_progress_restarts_after_other_connection_writes
+        PASS [   0.589s] (326/805) celeris daemon::services::routing_tests::one_registry_is_shared_by_the_dispatcher_and_the_proxy
+        PASS [   0.317s] (327/805) celeris db_maintenance::tests::vacuum_backup_finishes_with_a_concurrent_writer_and_integrity_ok
+        PASS [   0.011s] (328/805) celeris delivery::tests::delivery_failure_classification_is_limited_to_merge_base_and_format
+        PASS [   0.427s] (329/805) celeris delivery::tests::advance_pushes_to_origin_right_after_merge_before_release_prep
+        PASS [   0.560s] (330/805) celeris db_maintenance::tests::spawned_tasks_run_on_their_interval_and_stop_cleanly
+        PASS [   1.177s] (331/805) celeris daemon::script_guard::ops_measure_tests::script_ops_restart_drain_retire_cycles
+        PASS [   0.989s] (332/805) celeris daemon::script_guard::stop_tests::script_guard_safety_violation_invalidates_generation
+        PASS [   1.056s] (333/805) celeris daemon::script_guard::stop_tests::script_guard_rolls_back_on_one_mismatch
+        PASS [   0.415s] (334/805) celeris delivery::tests::auto_resolve_local_repair_limit_requests_integration
+        PASS [   0.470s] (335/805) celeris delivery::tests::auto_resolve_clean_main_follow_is_counted_and_left_to_the_legacy_path
+        PASS [   0.461s] (336/805) celeris delivery::tests::auto_resolve_code_conflict_requests_integration_and_aborts_merge
+        PASS [   1.097s] (337/805) celeris daemon::script_guard::stop_tests::script_guard_sweep_sees_violation_appended_after_retention_gc
+        PASS [   1.101s] (338/805) celeris daemon::script_guard::stop_tests::script_guard_unvalidated_effect_halts_all
+        PASS [   0.393s] (339/805) celeris delivery::tests::health_enforce::health_enforce_delivery_base_sha_mismatch_is_rejected
+        PASS [   0.515s] (340/805) celeris delivery::tests::auto_resolve_progress_append_conflict_is_resolved_and_regated
+        PASS [   1.359s] (341/805) celeris daemon::script_guard::stop_tests::script_guard_counts_survive_restart
+        PASS [   0.709s] (342/805) celeris delivery::tests::auto_resolve_cargo_lock_conflict_is_regenerated_and_regated
+        PASS [   0.691s] (343/805) celeris delivery::tests::auto_resolve_cargo_lock_with_cargo_toml_conflict_requests_integration
+        PASS [   0.407s] (344/805) celeris delivery::tests::health_enforce::health_enforce_delivery_policy_only_is_rejected_without_bound_approval
+        PASS [   1.544s] (345/805) celeris daemon::script_guard::stop_tests::script_guard_counts_canary_records_on_both_sides
+        PASS [   1.373s] (346/805) celeris daemon::script_guard::stop_tests::script_guard_sweep_reads_compare_log_incrementally
+        PASS [   0.313s] (347/805) celeris delivery::tests::maybe_retry_push_noop_when_push_disabled
+        PASS [   0.533s] (348/805) celeris delivery::tests::health_enforce::health_enforce_delivery_review_evidence_passes
+        PASS [   0.502s] (349/805) celeris delivery::tests::health_evidence::health_evidence_delivery_non_celeris_repo_passes_with_bundled_pass
+        PASS [   1.573s] (350/805) celeris daemon::script_guard::stop_tests::script_guard_rolls_back_on_failure_rate_and_streak
+        PASS [   0.273s] (351/805) celeris delivery::tests::new_commits_or_moved_base_cannot_reuse_approval
+        PASS [   0.026s] (352/805) celeris delivery::tests::prepare_child_counts_as_in_flight_until_it_exits
+        PASS [   0.915s] (353/805) celeris delivery::tests::auto_resolve_stops_at_max_attempts_and_when_disabled
+        PASS [   0.489s] (354/805) celeris delivery::tests::health_evidence::health_evidence_delivery_rejects_evidence_for_another_tree
+        PASS [   1.642s] (355/805) celeris daemon::script_guard::stop_tests::script_guard_no_automatic_promotion
+        PASS [   0.176s] (356/805) celeris delivery::tests::overlapping_untracked_files_block_merge_without_loss
+        PASS [   0.537s] (357/805) celeris delivery::tests::merge_rejects_evidence_missing_a_required_check_of_the_candidate
+        PASS [   0.270s] (358/805) celeris delivery::tests::other_gate_failure_keeps_legacy_reopen_once
+        PASS [   0.647s] (359/805) celeris delivery::tests::integration_repair_fallback_delivers
+        PASS [   0.171s] (360/805) celeris delivery::tests::push_merged_reports_failure_reason_when_remote_is_unreachable
+        PASS [   0.193s] (361/805) celeris delivery::tests::push_merged_skips_when_remote_is_already_up_to_date
+        PASS [   0.242s] (362/805) celeris delivery::tests::push_merged_pushes_new_commits_to_a_bare_remote
+        PASS [   0.491s] (363/805) celeris delivery::tests::non_self_repo_is_merged_without_release_or_push
+        PASS [   0.308s] (364/805) celeris delivery::tests::preparation_requires_all_gates_and_notifies_cos_only_when_ready
+        PASS [   0.512s] (365/805) celeris delivery::tests::non_self_repo_with_a_remote_is_pushed_but_still_has_no_release
+        PASS [   0.740s] (366/805) celeris delivery::tests::merge_base_repair_revalidates_and_delivers_only_the_repaired_branch
+        PASS [   0.171s] (367/805) celeris delivery::tests::reviewed_merge_preserves_unrelated_user_deletion_and_branch
+        PASS [   2.194s] (368/805) celeris daemon::script_exhaustive::tests::exhaustive_drive_all_inputs_forward_then_reverse
+        PASS [   0.451s] (369/805) celeris delivery::tests::pre_review_sync_conflict_unsynced_candidate_goes_to_merge_base_repair
+        PASS [   0.012s] (370/805) celeris instance::tests::a_dead_pid_or_pid_zero_in_promote_lock_is_rejected
+        PASS [   0.016s] (371/805) celeris instance::tests::a_fresh_matching_marker_authorizes_and_stale_or_foreign_ones_do_not
+        PASS [   0.900s] (372/805) celeris delivery::tests::health_evidence::health_evidence_delivery_prototype_still_requires_health
+        PASS [   0.016s] (373/805) celeris instance::tests::a_live_active_of_another_release_makes_standby_listing_every_live_active
+        PASS [   0.016s] (374/805) celeris instance::tests::a_live_pid_and_a_fresh_promote_lock_authorize_the_old_promote_script
+        PASS [   0.329s] (375/805) celeris delivery::tests::ready_notification_reports_push_failure_without_the_retry_marker
+        PASS [   0.281s] (376/805) celeris delivery::tests::ready_notification_reports_successful_push
+        PASS [   0.944s] (377/805) celeris delivery::tests::health_evidence::health_evidence_delivery_rejects_another_checker_version
+        PASS [   0.014s] (378/805) celeris instance::tests::a_stale_or_future_promote_lock_is_rejected_even_with_a_live_pid
+        PASS [   0.016s] (379/805) celeris instance::tests::an_unreadable_promote_lock_is_rejected_with_its_reason
+        PASS [   0.481s] (380/805) celeris delivery::tests::push_failure_after_merge_does_not_block_release_prep_and_retries_once
+        PASS [   0.015s] (381/805) celeris instance::tests::current_pointing_at_the_release_authorizes_by_name
+        PASS [   0.015s] (382/805) celeris instance::tests::dev_and_unmanaged_releases_skip_the_promotion_gate
+        PASS [   0.018s] (383/805) celeris instance::tests::read_promotion_evidence_reads_current_and_the_marker
+        PASS [   0.016s] (384/805) celeris instance::tests::read_promotion_evidence_reads_promote_lock_pid_liveness_and_mtime
+        PASS [   0.016s] (385/805) celeris instance::tests::removable_rows_never_include_a_stale_live_active
+        PASS [   0.014s] (386/805) celeris instance::tests::rules_one_and_two_still_win_over_a_bad_promote_lock
+        PASS [   0.015s] (387/805) celeris instance::tests::stale_but_alive_rows_finds_only_drained_rows_whose_pid_is_still_running
+        PASS [   2.339s] (388/805) celeris daemon::script_exhaustive::tests::exhaustive_waits_for_live_in_flight
+        PASS [   1.075s] (389/805) celeris delivery::tests::health_evidence::health_evidence_delivery_prefers_the_base_checker_over_the_bundled_one
+        PASS [   0.013s] (390/805) celeris instance::tests::the_freshness_window_is_three_ticks_plus_the_lease_grace
+        PASS [   0.331s] (391/805) celeris delivery::tests::technical_failure_is_repaired_once_with_no_cos_review_or_message
+        PASS [   1.208s] (392/805) celeris delivery::tests::health_evidence::health_evidence_delivery_applies_requires_the_health_item
+        PASS [   0.439s] (393/805) celeris delivery::tests::required_definition_absence_is_allowed_but_git_and_parse_failures_are_rejected
+        PASS [   0.293s] (394/805) celeris doc_gardener::tests::disabled_and_interval_boundaries
+        PASS [   0.012s] (395/805) celeris instance::tests::the_same_release_running_as_active_is_a_duplicate
+        PASS [   0.398s] (396/805) celeris delivery::tests::target_advanced_before_merge_requests_rereview_instead_of_stale_reviewed_sha
+        PASS [   0.014s] (397/805) celeris instance::tests::the_release_string_comes_from_the_flag_then_the_env_then_dev
+        PASS [   0.016s] (398/805) celeris instance::tests::the_tick_rules_are_symmetric
+        PASS [   0.290s] (399/805) celeris instance::tests::a_killed_active_is_taken_over_at_start_and_its_row_is_removed
+        PASS [   0.302s] (400/805) celeris instance::tests::a_handoff_request_from_a_gone_requester_is_dropped_and_the_active_stays
+        PASS [   0.424s] (401/805) celeris delivery::tests::target_advanced_rereview_beyond_limit_still_requests_rereview
+        PASS [   0.299s] (402/805) celeris instance::tests::a_newer_active_asks_the_older_live_one_to_hand_off
+        PASS [   0.306s] (403/805) celeris instance::tests::a_missing_row_is_registered_again_and_deregister_removes_it
+        PASS [   0.370s] (404/805) celeris doc_gardener::tests::managed_scan_schedules_bounded_review_and_survives_state_loss
+        PASS [   0.441s] (405/805) celeris delivery::tests::tick_advances_only_projects_with_auto_integrate
+        PASS [   0.306s] (406/805) celeris instance::tests::a_second_live_active_makes_the_older_one_drain
+        PASS [   0.309s] (407/805) celeris instance::tests::a_stale_but_alive_active_keeps_the_standby_waiting_until_it_drains
+        PASS [   1.252s] (408/805) celeris delivery::tests::health_evidence::health_evidence_delivery_unavailable_is_rejected
+        PASS [   0.293s] (409/805) celeris instance::tests::the_drain_timeout_does_not_abort_alive_runs_by_default
+        PASS [   0.300s] (410/805) celeris instance::tests::starting_the_same_release_twice_is_refused_without_touching_the_table
+        PASS [   0.313s] (411/805) celeris instance::tests::the_drain_timeout_ends_the_drain_with_runs_left_when_force_abort_is_set
+        PASS [   0.313s] (412/805) celeris instance::tests::the_handoff_request_reaches_every_live_active
+        PASS [   2.493s] (413/805) celeris daemon::script_guard::stop_tests::script_guard_rolls_back_on_timeout_rate_and_burst
+        PASS [   0.309s] (414/805) celeris instance::tests::the_handoff_runs_through_the_store
+        PASS [   0.305s] (415/805) celeris instance::tests::two_actives_never_coexist_when_the_old_one_is_stale_but_alive
+        PASS [   0.321s] (416/805) celeris knowledge_curation::tests::curation_diff_mismatch_rejects_the_plan_without_approval
+        PASS [   0.337s] (417/805) celeris knowledge_curation::tests::curation_human_decision_apply_is_raised_and_not_auto_approved
+        PASS [   0.360s] (418/805) celeris knowledge_curation::tests::curation_diff_match_moves_the_worker_diff_and_writes_the_canonical_one
+        PASS [   0.331s] (419/805) celeris knowledge_curation::tests::curation_human_decision_dry_run_raises_exactly_one_decision
+        PASS [   0.328s] (420/805) celeris knowledge_curation::tests::curation_human_decision_is_not_raised_without_candidates
+        PASS [   0.305s] (421/805) celeris knowledge_curation::tests::extraction_tests::backfill_interval_includes_midnight_and_excludes_next_midnight
+        PASS [   0.341s] (422/805) celeris knowledge_curation::tests::extraction_tests::failed_sources_require_an_explicit_rerun_before_another_extraction
+        PASS [   0.346s] (423/805) celeris knowledge_curation::tests::extraction_tests::failed_extraction_does_not_block_curation_and_reaches_summary_and_inbox
+        PASS [   0.334s] (424/805) celeris knowledge_curation::tests::extraction_tests::full_inbox_defers_backfill_without_claiming_sources
+        PASS [   0.408s] (425/805) celeris knowledge_curation::tests::extraction_tests::backfill_batches_ten_sources_and_continues_the_same_utc_day
+        PASS [   0.395s] (426/805) celeris knowledge_curation::tests::extraction_tests::daily_extraction_precedes_snapshot_and_is_recovered_without_duplicate_candidates
+        PASS [   0.452s] (427/805) celeris knowledge_curation::tests::extraction_tests::daily_extraction_caps_sources_and_reports_the_overflow_days
+        PASS [   0.316s] (428/805) celeris knowledge_curation::tests::extraction_tests::stuck_extraction_has_a_deterministic_deadline
+        PASS [   0.374s] (429/805) celeris knowledge_curation::tests::extraction_tests::repeating_backfill_day_excludes_claimed_source_tasks
+        PASS [   0.368s] (430/805) celeris knowledge_curation::tests::knowledge_curation_job_dry_run_leaves_the_kb_unchanged_and_writes_the_diff
+        PASS [   0.339s] (431/805) celeris knowledge_curation::tests::knowledge_curation_job_rejects_inbox_proposals_outside_the_inputs
+        PASS [   0.369s] (432/805) celeris knowledge_curation::tests::knowledge_curation_job_prepares_inputs_before_the_run
+        PASS [   0.548s] (433/805) celeris knowledge_curation::tests::extraction_tests::guessed_project_slugs_are_repaired_to_the_source_project_or_experience
+        PASS [   0.355s] (434/805) celeris knowledge_curation::tests::knowledge_curation_job_reports_exactly_one_summary_per_task
+        PASS [   0.284s] (435/805) celeris knowledge_gc::tests::gc_rejects_create_and_always_inboxes_updates_without_touching_dirty_content
+        PASS [   0.216s] (436/805) celeris knowledge_gc::tests::scanner_bounds_determinism_neighbours_and_hash_reviews
+        PASS [   0.016s] (437/805) celeris model_discovery::tests::claude_without_a_logged_in_account_or_with_an_expired_token_fails_cleanly
+        PASS [   0.338s] (438/805) celeris knowledge_gc::tests::failed_or_missing_output_is_not_reviewed_and_interval_is_consumed
+        PASS [   0.021s] (439/805) celeris model_discovery::tests::codex_pages_through_model_list_over_stdio
+        PASS [   1.728s] (440/805) celeris delivery::tests::merge_requires_passing_evidence_bound_to_the_candidate_and_base
+        PASS [   0.513s] (441/805) celeris knowledge_curation::tests::knowledge_curation_apply_is_not_applied_when_the_page_changed
+        PASS [   0.354s] (442/805) celeris knowledge_gc::tests::lost_derived_state_still_does_not_duplicate_active_support_task
+        PASS [   0.535s] (443/805) celeris knowledge_curation::tests::knowledge_curation_apply_push_failure_keeps_the_commit_and_does_not_fail_the_task
+        PASS [   0.520s] (444/805) celeris knowledge_curation::tests::knowledge_curation_apply_without_remote_commits_and_records_no_remote
+        PASS [   0.082s] (445/805) celeris model_discovery::tests::claude_uses_the_oauth_bearer_and_beta_header
+        PASS [   0.445s] (446/805) celeris knowledge_curation::tests::knowledge_curation_legacy_awaiting_approval_becomes_stale_when_the_page_changed
+        PASS [   0.017s] (447/805) celeris model_discovery::tests::targets_come_from_the_config_and_the_defaults_are_set
+        PASS [   0.018s] (448/805) celeris model_discovery::tests::ticker_respects_interval_disable_and_overlap
+        PASS [   0.015s] (449/805) celeris notify::tests::base_url_drops_the_trailing_slash_and_treats_empty_as_absent
+        PASS [   0.598s] (450/805) celeris knowledge_curation::tests::knowledge_curation_apply_commits_and_pushes_without_approval
+        PASS [   0.018s] (451/805) celeris notify::tests::content_is_clamped_to_one_discord_message
+        PASS [   0.016s] (452/805) celeris notify::tests::defaults_match_the_adr
+        PASS [   0.074s] (453/805) celeris model_discovery::tests::opencode_go_falls_back_to_the_cli_stdout
+        PASS [   0.078s] (454/805) celeris model_discovery::tests::openai_compatible_sends_the_key_and_parses
+        PASS [   0.017s] (455/805) celeris notify::tests::excerpt_cuts_by_characters_and_flattens_newlines
+        PASS [   0.014s] (456/805) celeris notify::tests::links_are_omitted_without_a_base_url
+        PASS [   0.015s] (457/805) celeris notify::tests::notify_rejects_retired_link_config
+        PASS [   0.076s] (458/805) celeris model_discovery::tests::opencode_go_uses_the_gateway_models_url
+        PASS [   0.015s] (459/805) celeris notify::tests::webhook_url_is_none_without_a_secrets_dir_or_file
+        PASS [   0.017s] (460/805) celeris release_notes::tests::aggregate_cuts_at_current_when_it_is_inside_the_target_first_parent
+        PASS [   0.015s] (461/805) celeris release_notes::tests::aggregate_dedupes_tasks_across_releases_with_the_same_base
+        PASS [   0.016s] (462/805) celeris release_notes::tests::aggregate_follows_the_base_chain
+        PASS [   0.016s] (463/805) celeris release_notes::tests::aggregate_merges_child_tasks_once
+        PASS [   0.016s] (464/805) celeris release_notes::tests::aggregate_reports_incomplete_when_the_chain_cannot_be_followed
+        PASS [   0.461s] (465/805) celeris knowledge_curation::tests::knowledge_curation_legacy_awaiting_approval_is_applied_on_the_next_tick
+        PASS [   0.015s] (466/805) celeris release_notes::tests::markdown_renderers_contain_titles_and_schema
+        PASS [   0.021s] (467/805) celeris release_notes::tests::preview_from_dir_reads_release_dirs_and_the_current_symlink
+        PASS [   0.014s] (468/805) celeris release_notes::tests::task_id_in_parses_branch_forms_and_rejects_non_ulids
+        PASS [   2.972s] (469/805) celeris db_maintenance::tests::backup_once_writes_a_restorable_copy_and_keeps_recent_generations
+        PASS [   0.014s] (470/805) celeris release_notes::tests::task_info_picks_the_last_done_worker_outcome
+        PASS [   0.018s] (471/805) celeris releases::audit::tests::history_preserves_provenance_and_verify_snapshot
+        PASS [   0.400s] (472/805) celeris knowledge_gc::tests::schedules_once_across_restarts_disabled_and_inflight_do_not_schedule
+        PASS [   0.016s] (473/805) celeris releases::tests::broken_json_and_build_directories_do_not_break_the_scan
+        PASS [   0.019s] (474/805) celeris releases::audit::tests::script_environment_carries_explicit_context
+        PASS [   0.017s] (475/805) celeris releases::tests::changes_json_becomes_changes_with_stale_computed_against_current
+        PASS [   0.068s] (476/805) celeris release_notes::tests::notes_without_a_known_base_are_empty_but_valid
+        PASS [   0.017s] (477/805) celeris releases::tests::gate_failed_step_empty_string_is_normalized_to_none
+        PASS [   0.014s] (478/805) celeris releases::tests::promote_exec_command_inline_is_setsid
+        PASS [   0.013s] (479/805) celeris releases::tests::promote_exec_command_wraps_with_systemd_run
+        PASS [   0.029s] (480/805) celeris releases::tests::missing_checks_and_gate_default_to_empty_without_breaking_the_scan
+        PASS [   0.026s] (481/805) celeris releases::tests::promote_failed_json_becomes_promote_failed
+        PASS [   0.028s] (482/805) celeris releases::tests::promote_not_stale_when_lock_pid_is_alive
+        PASS [   0.027s] (483/805) celeris releases::tests::promote_not_stale_when_promoted_json_exists
+        PASS [   0.027s] (484/805) celeris releases::tests::promote_stale_when_lock_pid_is_dead_and_not_promoted
+        PASS [   0.033s] (485/805) celeris releases::tests::promoted_json_becomes_promoted_at
+        PASS [   0.032s] (486/805) celeris releases::tests::promotion_is_refused_for_unknown_unverified_current_and_running_releases
+        PASS [   0.014s] (487/805) celeris releases::tests::scanning_an_empty_or_missing_directory_yields_nothing_and_does_not_fail
+        PASS [   0.011s] (488/805) celeris releases::tests::sha12_validation_rejects_path_traversal
+        PASS [   0.484s] (489/805) celeris knowledge_gc::tests::successful_noop_preserves_canonical_and_excluded_pages_never_enter_batch
+        PASS [   0.075s] (490/805) celeris releases::tests::promoting_spawns_the_bundled_script_detached_and_writes_the_lock
+        PASS [   0.072s] (491/805) celeris releases::tests::promoting_via_fake_systemd_run_writes_the_lock_and_streams_the_log
+        PASS [   0.028s] (492/805) celeris releases::tests::starting_a_new_promotion_clears_the_previous_failure_marker
+        PASS [   0.026s] (493/805) celeris releases::tests::two_releases_are_sorted_newest_first_with_the_symlinks_applied
+        PASS [   0.022s] (494/805) celeris releases::tests::verify_checks_and_gate_steps_are_carried_through
+        PASS [   0.418s] (495/805) celeris knowledge_maint::tests::a_failed_run_is_retried_exactly_once
+        PASS [   0.398s] (496/805) celeris knowledge_maint::tests::terminal_tasks_do_not_get_a_knowledge_task_any_more
+        PASS [   0.243s] (497/805) celeris release_notes::tests::fast_forward_delivery_attributes_only_down_to_delivery_base
+        PASS [   0.343s] (498/805) celeris model_discovery::tests::opencode_go_reports_both_failures_without_touching_the_catalog
+        PASS [   0.277s] (499/805) celeris notify::tests::notify_digest_waits_for_interval_and_never_sends_notice_kind_immediately
+        PASS [   0.322s] (500/805) celeris model_discovery::tests::run_discovery_applies_and_reports_deltas_for_one_source
+        PASS [   0.283s] (501/805) celeris notify::tests::root_done_summary_is_selected_and_rendered_as_is
+        PASS [   0.014s] (502/805) celeris tests::config_view_exposes_genre_capabilities_and_artifacts
+        PASS [   0.129s] (503/805) celeris releases::tests::promotion_runs_the_promote_script_of_the_current_release
+        PASS [   0.019s] (504/805) celeris tests::api_settings_carries_secrets_dir_and_usage
+        PASS [   0.439s] (505/805) celeris knowledge_maint::tests::retry_noops_when_disabled_or_the_kb_is_missing
+        PASS [   0.015s] (506/805) celeris tests::config_view_exposes_genres
+        PASS [   0.208s] (507/805) celeris releases::tests::on_main_is_true_false_or_null
+        PASS [   0.954s] (508/805) celeris knowledge_curation::tests::extraction_tests::malformed_missing_unattributed_and_oversized_outputs_are_visible_failures
+        PASS [   0.455s] (509/805) celeris knowledge_maint::tests::a_fallback_run_is_applied_the_same_way_and_records_its_via
+        PASS [   0.452s] (510/805) celeris knowledge_maint::tests::apply_finished_applies_a_done_run_and_fails_a_failed_run
+        PASS [   0.013s] (511/805) celeris tests::langmem_knowledge_config_defaults_to_disabled
+        PASS [   0.016s] (512/805) celeris tests::merged_env_with_secrets_follows_the_precedence_order_and_falls_back_when_a_secret_is_missing
+        PASS [   0.696s] (513/805) celeris knowledge_gc::tests::missing_and_malformed_success_output_are_not_reviews
+        PASS [   0.016s] (514/805) celeris tests::unknown_adapter_message_lists_langmem
+        PASS [   0.361s] (515/805) celeris model_discovery::tests::ticker_spawns_once_and_clears_the_flag
+        PASS [   0.310s] (516/805) celeris release_notes::tests::notes_group_a_merged_task_branch_and_list_the_rest
+        PASS [   1.632s] (517/805) celeris delivery::tests::target_advanced_absent_merges_only_the_matching_reviewed_sha_candidate
+        PASS [   0.021s] (518/805) celeris::bin_smoke help_exits_zero_and_missing_config_exits_two
+        PASS [   0.439s] (519/805) celeris notify::tests::notify_digest_phase_checkpoint_is_batched_as_inbox_new
+        PASS [   0.014s] (520/805) celeris::browser_eval_surface_suite fake_http::async_one_shot_survives_noise_and_silent_connection
+        PASS [   0.241s] (521/805) celeris reports::tests::a_recently_failed_compaction_task_backs_off_until_compress_after_secs_passes
+        PASS [   0.011s] (522/805) celeris::browser_eval_surface_suite fake_http::framing_requires_every_header_and_body_byte
+        PASS [   0.252s] (523/805) celeris reports::tests::once_the_summary_exists_the_children_are_no_longer_pending
+        PASS [   0.040s] (524/805) celeris::browser_eval_surface_suite fake_http::sync_one_shot_survives_noise_and_silent_connection
+        PASS [   0.272s] (525/805) celeris reports::tests::an_old_report_schedules_a_run_even_below_the_count
+        PASS [   0.281s] (526/805) celeris reports::tests::four_reports_schedule_a_run_but_three_do_not
+        PASS [   0.283s] (527/805) celeris reports::tests::reports_of_different_projects_get_one_run_each
+        PASS [   2.625s] (528/805) celeris delivery::tests::health_evidence::health_evidence_delivery_rejects_error_and_fail_evidence
+        PASS [   0.437s] (529/805) celeris tests::seed_org_if_empty_writes_nothing_when_one_node_breaks_the_tree
+        PASS [   0.443s] (530/805) celeris tests::seeds_the_org_once_into_an_empty_db_and_never_again
+        PASS [   0.446s] (531/805) celeris tests::without_org_include_nothing_is_seeded
+        PASS [   0.444s] (532/805) celeris::browser_eval_surface_suite browser_startup_reap::startup_reaps_dead_instance_and_preserves_live_instance
+        PASS [   0.529s] (533/805) celeris tests::reload_rereads_roles_genres_delegation_and_reports_notify_conversation
+        PASS [   0.560s] (534/805) celeris::actor_trace_flow1 authorized_project_cos_keeps_actor_and_consumption_through_evaluation
+        PASS [   0.603s] (535/805) celeris tests::a_totp_cluster_with_a_live_master_skips_the_connector_but_ensures_the_forward_phase_84b
+        PASS [   0.605s] (536/805) celeris tests::a_totp_cluster_with_a_forward_does_not_panic_the_first_tick_phase_66b
+        PASS [   0.617s] (537/805) celeris tests::a_publickey_cluster_with_a_ready_task_does_not_panic_the_first_tick_phase_81
+        PASS [   0.599s] (538/805) celeris tests::reload_providers_keeps_the_startup_only_accounts_section_and_flags_a_pending_restart
+        PASS [   0.621s] (539/805) celeris::actor_trace_flow3 general_cos_responds_to_stagnation_with_source_evidence
+        PASS [   1.446s] (540/805) celeris knowledge_curation::tests::knowledge_curation_job_rejects_changed_inputs_and_replaced_snapshot
+        PASS [   0.688s] (541/805) celeris tests::implicit_account_limit_survives_reload_and_is_pruned_with_its_source
+        PASS [   0.671s] (542/805) celeris::actor_trace_flow3 general_cos_escalates_stagnation_and_keeps_human_judgment_separate
+        PASS [   0.772s] (543/805) celeris::actor_trace_flow5 redelivery_and_restart_duplicate_no_operation_or_count
+        PASS [   0.652s] (544/805) celeris::browser_eval_surface_suite workspace_roots::running_run_workspace_stable_after_root_change
+        PASS [   0.863s] (545/805) celeris::actor_trace_flow2 forwarded_requests_keep_the_human_decider_apart_from_cos_and_operator_executors
+        PASS [   0.685s] (546/805) celeris::browser_eval_surface_suite workspace_roots::new_task_uses_store_workspace_root
+        PASS [   0.030s] (547/805) celeris::cap_probe_real_daemon unreachable_daemon_is_env_failure_not_a_pass
+        PASS [   0.022s] (548/805) celeris::cluster_login_script cluster_login_script_passes_control_persist_and_keepalive_to_the_master
+        PASS [   0.839s] (549/805) celeris::campaign_acceptance_e2e budget_stop_cancels_through_the_api_and_stops_further_submissions
+        PASS [   0.907s] (550/805) celeris::campaign_acceptance_e2e final_accounting_shows_budget_view_versus_final_cutoff_after_a_budget_stop
+        PASS [   1.174s] (551/805) celeris::campaign_acceptance_e2e arm_pin_is_set_on_the_task_through_the_api_not_by_the_global_config
+        PASS [   1.244s] (552/805) celeris::browser_eval_surface_suite workspace_roots::existing_workspace_unchanged_after_root_change
+        PASS [   0.536s] (553/805) celeris::cos_delivery_suite cos_chat_stagnation_notify::human_wait_aging_is_live_held_and_withdrawn_when_answered
+        PASS [   0.532s] (554/805) celeris::cos_delivery_suite cos_chat_stagnation_notify::resolved_stagnation_is_withdrawn_before_post
+        PASS [   1.216s] (555/805) celeris::campaign_acceptance_e2e communication_failures_keep_tracking_and_never_double_submit
+        PASS [   0.855s] (556/805) celeris::campaign_wiring_e2e post_tasks_to_export_connects_children_retries_review_cos_jev_and_interventions
+        PASS [   0.070s] (557/805) celeris::cos_delivery_suite cos_chat_triage_notify::cos_chat_triage_webhook_disables_mentions_and_obeys_retry_after
+        PASS [   1.207s] (558/805) celeris::campaign_acceptance_e2e daemon_restart_resumes_the_same_tasks_without_resubmitting
+        PASS [   0.519s] (559/805) celeris::cos_delivery_suite cos_chat_triage_notify::cos_chat_triage_cutover_supersedes_legacy_pending_and_is_idempotent
+        PASS [   0.268s] (560/805) celeris::cos_delivery_suite cos_chat_triage_notify::cos_chat_triage_escalation_packet_has_bounded_text_and_absolute_link
+        PASS [   0.267s] (561/805) celeris::cos_delivery_suite cos_chat_triage_notify::cos_chat_triage_long_packet_keeps_link_within_1900_characters
+        PASS [   1.125s] (562/805) celeris::campaign_acceptance_e2e wrong_artifact_completed_run_is_not_a_success
+        PASS [   1.210s] (563/805) celeris::campaign_acceptance_e2e normal_path_post_tasks_to_independent_grade_to_final_export
+        PASS [   0.268s] (564/805) celeris::cos_delivery_suite cos_chat_triage_notify::cos_chat_triage_only_escalation_and_fallback_are_sendable
+        PASS [   1.271s] (565/805) celeris::campaign_acceptance_e2e final_accounting_is_regenerated_from_the_router_tree_with_jev_cos_gaps
+        PASS [   0.454s] (566/805) celeris::cos_delivery_suite cos_chat_triage_notify::cos_chat_triage_resolved_source_is_withdrawn_before_post
+        PASS [   0.464s] (567/805) celeris::cos_delivery_suite cos_chat_triage_notify::cos_chat_triage_notice_revision_is_checked_before_post
+        PASS [   0.434s] (568/805) celeris::cos_delivery_suite cos_chat_triage_notify::cos_chat_triage_three_send_failures_keep_the_unresolved_item
+        PASS [   0.524s] (569/805) celeris::cos_delivery_suite cos_chat_triage_scenarios::cos_chat_triage_b_webhook_packet_and_stop_after_human_answer
+        PASS [   0.486s] (570/805) celeris::cos_delivery_suite releases_api::get_deliveries_is_200_with_items
+        PASS [   0.549s] (571/805) celeris::cos_delivery_suite cos_chat_triage_scenarios::cos_chat_triage_unified_only_cos_escalation_reaches_the_webhook
+        PASS [   0.494s] (572/805) celeris::cos_delivery_suite releases_api::promote_requires_a_token
+        PASS [   0.517s] (573/805) celeris::cos_delivery_suite releases_api::get_releases_sorts_newest_first_and_tolerates_broken_releases
+        PASS [   0.527s] (574/805) celeris::cos_delivery_suite releases_api::get_releases_is_200_on_an_empty_directory
+        PASS [   1.590s] (575/805) celeris::cap_probe_real_daemon a_second_daemon_on_the_same_port_is_detected
+        PASS [   1.599s] (576/805) celeris::cap_probe_real_daemon daemon_missing_toolchain_or_variable_is_env_failure_even_if_cli_has_it
+        PASS [   0.012s] (577/805) celeris::credential_wait_notify webhook_ignores_eof_before_complete_request
+        PASS [   1.413s] (578/805) celeris::cos_delivery_suite cos_chat_stagnation_notify::stagnation_findings_are_live_held_and_withdrawn_on_revision
+        PASS [   0.056s] (579/805) celeris::daemon_ready_wait finished_daemon_fails_without_waiting_for_the_limit
+        PASS [   0.663s] (580/805) celeris::cos_delivery_suite releases_api::promoting_a_verified_release_starts_the_bundled_script_and_returns_202
+        PASS [   0.733s] (581/805) celeris::cos_delivery_suite releases_api::get_releases_carries_promoted_at_on_main_and_changes
+        PASS [   1.718s] (582/805) celeris::cap_probe_real_daemon daemon_only_toolchain_and_variable_pass_through_the_real_worker_path
+        PASS [   1.904s] (583/805) celeris::campaign_acceptance_e2e ungraded_trials_block_the_final_export_until_graded
+        PASS [   0.557s] (584/805) celeris::cos_delivery_suite releases_api::promoting_an_unknown_release_is_404
+        PASS [   0.541s] (585/805) celeris::cos_delivery_suite releases_api::promoting_prefers_the_promote_script_of_the_current_release
+        PASS [   0.371s] (586/805) celeris::cos_delivery_suite stranded_default_branch::stranded_default_branch_null_with_main_is_integrated
+        PASS [   0.607s] (587/805) celeris::cos_delivery_suite releases_api::promoting_is_409_when_unverified_already_current_or_already_promoting
+        PASS [   0.366s] (588/805) celeris::cos_delivery_suite stranded_default_branch::stranded_default_branch_null_with_origin_head_is_integrated_for_repoless_task
+        PASS [   0.355s] (589/805) celeris::cos_delivery_suite stranded_default_branch::stranded_default_branch_unresolvable_is_unintegrated_with_reason
+        PASS [   0.409s] (590/805) celeris::cos_delivery_suite stranded_integration::stranded_detects_inbox_merge_discard_hold_and_promotion_independently
+        PASS [   0.420s] (591/805) celeris::cos_skill_sync promote_deploys_the_cos_skills_and_leaves_curation_pages
+        PASS [   0.287s] (592/805) celeris::daemon_ready_wait silent_connection_does_not_use_up_the_limit
+        PASS [   0.017s] (593/805) celeris::instance_handoff the_builtin_smoke_role_and_genre_override_a_config_entry_of_the_same_id
+        PASS [   0.012s] (594/805) celeris::instance_handoff two_listeners_bind_the_same_port_with_so_reuseport
+        PASS [   0.018s] (595/805) celeris::instance_handoff the_cli_overrides_replace_the_config_values
+        PASS [   0.640s] (596/805) celeris::cos_delivery_suite releases_api::promotion_preview_merges_releases_between_current_and_target
+        PASS [   2.062s] (597/805) celeris::cap_probe_real_daemon daemon_socket_and_mount_are_checked_from_the_worker
+        PASS [   0.406s] (598/805) celeris::daily_curation knowledge_curation_job_dry_run_bundles_human_decisions_into_one_decision
+        PASS [   0.447s] (599/805) celeris::daily_curation knowledge_curation_job_seed_schedule_inputs_dry_run_and_summary
+        PASS [   0.063s] (600/805) celeris::long_run_soak long_run_soak_enabled
+        PASS [   0.587s] (601/805) celeris::daily_curation knowledge_curation_job_apply_without_approval_commits_pushes_and_terminal_task_maintenance
+        PASS [   0.068s] (602/805) celeris::long_run_soak long_run_soak_off
+        PASS [   0.072s] (603/805) celeris::long_run_soak long_run_soak_shadow
+        PASS [   0.617s] (604/805) celeris::evidence_mode_e2e contradictory_evidence_mode_is_rejected_before_any_task_exists
+        PASS [   0.653s] (605/805) celeris::instance_handoff a_stale_heartbeat_does_not_replace_a_live_active_until_its_process_is_gone
+        PASS [   0.166s] (606/805) celeris::long_run_soak long_run_soak_v8_load
+        PASS [   0.525s] (607/805) celeris::integration_api integration_api_repoless_branch_in_main_is_integrated
+        PASS [   0.938s] (608/805) celeris::credential_wait_notify wait_notify_register_verify_and_resume_once_through_the_fake_webhook
+        PASS [   0.669s] (609/805) celeris::instance_handoff starting_the_same_release_twice_exits_three
+        PASS [   0.463s] (610/805) celeris::integration_api integration_api_repoless_task_without_branch_records_nothing
+        PASS [   0.816s] (611/805) celeris::evidence_mode_e2e ticked_runs_record_the_evidence_mode_and_the_table_version_actually_used
+        PASS [   0.666s] (612/805) celeris::integration_api integration_api_merge_conflict_keeps_main_unintegrated
+        PASS [   0.603s] (613/805) celeris::integration_api integration_api_repoless_done_task_detected_in_inbox_and_detail_then_discarded
+        PASS [   3.278s] (614/805) celeris::actor_trace_flow4 operator_deployment_and_rollback_join_release_decision_and_request
+        PASS [   0.056s] (615/805) celeris::notify an_unreachable_webhook_never_reveals_the_host
+        PASS [   1.081s] (616/805) celeris::daemon_ready_wait no_listener_fails_at_the_limit_with_elapsed_time
+        PASS [   0.366s] (617/805) celeris::notify a_done_task_is_not_announced_by_the_scan
+        PASS [   0.450s] (618/805) celeris::notify a_failing_webhook_is_retried_three_times_and_then_given_up
+        PASS [   0.364s] (619/805) celeris::notify a_milestone_without_any_real_task_is_never_ready
+        PASS [   0.366s] (620/805) celeris::notify a_root_plan_without_approval_posts_nothing
+        PASS [   0.370s] (621/805) celeris::notify a_single_daemon_decision_uses_the_decision_key
+        PASS [   0.435s] (622/805) celeris::notify a_rate_limited_response_is_not_counted_as_an_attempt
+        PASS [   1.156s] (623/805) celeris::evidence_mode_e2e none_survives_post_child_grandchild_retry_and_ignores_table_updates
+        PASS [   0.450s] (624/805) celeris::notify a_pending_notification_is_posted_once_and_marked_sent
+        PASS [   0.406s] (625/805) celeris::notify a_store_without_bad_news_produces_nothing
+        PASS [   1.021s] (626/805) celeris::instance_handoff verify_mode_never_dispatches_and_never_touches_daemon_instances
+        PASS [   0.388s] (627/805) celeris::notify a_task_blocked_after_startup_is_scanned_even_though_it_was_created_long_before
+        PASS [   3.066s] (628/805) celeris::campaign_lock_e2e locked_measurement_runs_through_task_api_to_the_final_export
+        PASS [   0.360s] (629/805) celeris::notify answered_and_withdrawn_decisions_do_not_notify
+        PASS [   0.412s] (630/805) celeris::notify active_and_global_conversations_notify_each_new_reply_but_not_answered_replies
+        PASS [   0.061s] (631/805) celeris::notify send_test_posts_one_message_to_the_url_in_the_secrets_dir
+        PASS [   0.400s] (632/805) celeris::notify approval_pending_fires_once_per_undecided_approval
+        PASS [   1.296s] (633/805) celeris::instance_handoff a_newer_release_takes_over_while_the_old_one_finishes_its_run
+        PASS [   0.010s] (634/805) celeris::notify the_webhook_secret_is_read_from_the_secrets_dir
+        PASS [   0.405s] (635/805) celeris::notify bad_news_fires_once_for_level_zero_reports_only
+        PASS [   0.405s] (636/805) celeris::notify child_events_do_not_notify
+        PASS [   0.066s] (637/805) celeris::notify the_fake_webhook_answers_a_connection_even_if_another_request_finishes_first
+        PASS [   0.394s] (638/805) celeris::notify decisions_are_notified_once_per_plan
+        PASS [   0.379s] (639/805) celeris::notify events_created_before_celeris_started_are_never_scanned_or_recorded
+        PASS [   0.355s] (640/805) celeris::notify links_are_added_only_when_a_web_base_url_is_configured
+        PASS [   0.400s] (641/805) celeris::notify human_plan_decisions_are_bundled_per_plan
+        PASS [   0.378s] (642/805) celeris::notify milestone_without_cos_reply_no_longer_notifies
+        PASS [   0.388s] (643/805) celeris::notify only_one_message_is_sent_per_tick_even_with_several_kinds_pending
+        PASS [   0.423s] (644/805) celeris::notify milestone_ready_is_retired
+        PASS [   0.388s] (645/805) celeris::notify question_blocked_fires_once_and_defers_to_approval_pending
+        PASS [   0.401s] (646/805) celeris::notify plan_approval_is_notified_once_with_the_plans_decisions
+        PASS [   1.250s] (647/805) celeris::integration_api integration_api_stranded_branch_round_trip_through_routes_and_events
+        PASS [   0.402s] (648/805) celeris::notify secretary_reply_fires_once_when_a_proposed_project_gets_a_node_message
+        PASS [   0.354s] (649/805) celeris::notify task_failed_fires_once_and_is_classified_infra_or_work
+        PASS [   0.435s] (650/805) celeris::notify open_decisions_are_reminded_once_after_24h
+        PASS [   3.251s] (651/805) celeris::cap_probe_real_daemon probe_runs_under_each_real_harness_adapter_env
+        PASS [   0.008s] (652/805) celeris::project_controller_e2e project_controller_core_escalation_categories_match_cos_triage
+        PASS [   3.525s] (653/805) celeris::campaign_lock_e2e wrong_initial_repo_submodule_materials_kb_or_inputs_cause_no_post_or_external_run
+        PASS [   0.403s] (654/805) celeris::notify task_failed_notes_when_the_task_was_already_delivered
+        PASS [   0.348s] (655/805) celeris::notify without_a_secret_nothing_is_sent_and_no_pending_row_is_kept
+        PASS [   0.368s] (656/805) celeris::notify unresolved_approval_and_question_survive_restart_and_decided_approval_does_not_hide_question
+        PASS [   0.063s] (657/805) celeris::project_controller_e2e project_controller_core_s11_other_project_root_is_denied
+        PASS [   3.622s] (658/805) celeris::campaign_lock_e2e changed_lock_or_inputs_refuse_to_resume_an_existing_measurement
+        PASS [   0.054s] (659/805) celeris::project_controller_e2e project_controller_core_s2_s3_root1_to_root2_to_achieved
+        PASS [   0.458s] (660/805) celeris::notify two_bad_news_are_bundled_into_one_message_and_both_rows_are_marked_ok
+        PASS [   3.671s] (661/805) celeris::campaign_lock_e2e swapped_grader_or_tests_are_rejected_at_grade_bind_and_export
+        PASS [   0.050s] (662/805) celeris::project_controller_e2e project_controller_core_s5b_no_commits_root_is_not_achieved
+        PASS [   0.065s] (663/805) celeris::project_controller_e2e project_controller_core_s8_no_outcomes_asks_once
+        PASS [   0.050s] (664/805) celeris::project_controller_e2e project_controller_core_s9_open_human_question_waits
+        PASS [   0.250s] (665/805) celeris::project_controller_e2e project_controller_core_s4_concurrent_events_create_one_root
+        PASS [   0.358s] (666/805) celeris::project_controller_e2e project_controller_core_s10_narrowed_acceptance_is_rejected
+        PASS [   0.048s] (667/805) celeris::project_cos_shadow project_cos_ts_change_without_rust
+        PASS [   0.049s] (668/805) celeris::project_cos_shadow project_cos_ts_failure_classified
+        PASS [   0.047s] (669/805) celeris::project_cos_shadow project_cos_ts_injection_does_not_change_the_decision
+        PASS [   0.054s] (670/805) celeris::project_cos_shadow project_cos_ts_review_failed_retries_after_brief
+        PASS [   0.255s] (671/805) celeris::project_cos_shadow project_cos_ts_dry_run_compare_domain
+        PASS [   0.347s] (672/805) celeris::project_controller_replay project_controller_replay_resource_v8_100_projects
+        PASS [   0.650s] (673/805) celeris::project_controller_e2e project_controller_core_s12_paused_and_stale_never_launch
+        PASS [   0.650s] (674/805) celeris::project_controller_e2e project_controller_core_s5_not_integrated_continues
+        PASS [   0.839s] (675/805) celeris::ops_r1_trace ops_r1_trace_missing_report_is_null_with_reason
+        PASS [   0.649s] (676/805) celeris::project_controller_e2e project_controller_core_s6_review_failed_replans_once
+        PASS [   0.856s] (677/805) celeris::ops_r1_trace ops_r1_trace_rejects_bad_input_with_exit_2
+        PASS [   0.891s] (678/805) celeris::ops_r1_trace ops_r1_trace_emits_all_six_stages
+        PASS [   0.051s] (679/805) celeris::routing_budget_suite script_compare_execution_gate::script_compare_gate_largest_input_still_matches
+        PASS [   0.968s] (680/805) celeris::ops_r1_trace ops_r1_trace_cutoff_hides_later_rows
+        PASS [   0.752s] (681/805) celeris::project_controller_e2e project_controller_core_s7_infra_failure_waits
+        PASS [   0.153s] (682/805) celeris::routing_budget_suite script_compare_execution_gate::script_compare_gate_real_bundle_records_match_without_text
+        PASS [   1.040s] (683/805) celeris::ops_r1_trace ops_r1_trace_is_byte_identical_and_leaves_db_copy_unchanged
+        PASS [   0.964s] (684/805) celeris::project_controller_e2e project_controller_core_s1_first_launches_root1
+        PASS [   0.142s] (685/805) celeris::routing_budget_suite script_compare_report::script_compare_report_before_migration_exits_3
+        PASS [   0.536s] (686/805) celeris::root_done_summary child_done_emits_nothing
+        PASS [   0.261s] (687/805) celeris::routing_budget_suite script_compare_execution_gate::script_compare_gate_real_host_matches_rust_on_all_fixtures
+        PASS [   1.368s] (688/805) celeris::ops_r1_attr ops_r1_attr_excludes_runs_outside_trial_tree
+        PASS [   1.419s] (689/805) celeris::ops_r1_attr ops_r1_attr_rejects_bad_input_with_exit_2
+        PASS [   0.703s] (690/805) celeris::root_done_summary cos_failure_uses_fallback_notice
+        PASS [   1.469s] (691/805) celeris::ops_r1_attr ops_r1_attr_unattributable_turns_are_null_with_reason
+        PASS [   1.487s] (692/805) celeris::ops_r1_attr ops_r1_attr_rows_and_totals_match_fixture
+        PASS [   1.542s] (693/805) celeris::ops_r1_attr ops_r1_attr_is_byte_identical_and_leaves_db_copy_unchanged
+        PASS [   0.069s] (694/805) celeris::script_compare_cos_digest script_compare_cos_digest_compare_answers_ops_from_rust_snapshot
+        PASS [   0.504s] (695/805) celeris::routing_budget_suite script_compare_report::script_compare_report_classifies_every_outcome
+        PASS [   0.069s] (696/805) celeris::script_compare_cos_digest script_compare_cos_digest_dispatch_match_replay_and_rollback
+        PASS [   0.754s] (697/805) celeris::root_done_summary root_done_runs_cos_once_and_notifies_once
+        PASS [   0.482s] (698/805) celeris::routing_budget_suite script_compare_report::script_compare_report_counts_explained_cos_records
+        PASS [   0.170s] (699/805) celeris::script_compare_cos_digest script_compare_cos_digest_daemon_restart_without_bundle_restores_rust
+        PASS [   1.651s] (700/805) celeris::ops_r1_attr ops_r1_pipeline_attribution_v2_copies_model_and_harness_read_only
+        PASS [   0.065s] (701/805) celeris::script_compare_cos_digest script_compare_cos_digest_ts_mode_falls_back_to_rust
+        PASS [   0.850s] (702/805) celeris::routing_budget_suite script_compare_execution_gate::script_compare_gate_different_answer_keeps_rust_decision_bytes
+        PASS [   0.062s] (703/805) celeris::script_compare_lane_rules script_compare_dispatch_match_rollback_and_replay
+        PASS [   0.169s] (704/805) celeris::script_compare_lane_rules script_compare_daemon_injects_records_and_restores_rust
+        PASS [   1.731s] (705/805) celeris::ops_r1_pipeline ops_r1_pipeline_passing_a_and_cut_off_b_agree
+        PASS [   0.873s] (706/805) celeris::routing_budget_suite script_compare_execution_gate::script_compare_gate_reserved_rule_is_a_safety_violation
+        PASS [   0.272s] (707/805) celeris::script_compare_cos_digest script_compare_cos_digest_ts_mode_applies_ts_commands
+        PASS [   0.875s] (708/805) celeris::routing_budget_suite script_compare_execution_gate::script_compare_gate_throwing_bundle_keeps_rust_and_withholds_text
+        PASS [   0.792s] (709/805) celeris::routing_budget_suite script_compare_report::script_compare_report_cos_gate_uses_the_log_table
+        PASS [   1.116s] (710/805) celeris::root_done_summary restart_does_not_duplicate
+        PASS [   0.162s] (711/805) celeris::script_compare_lane_rules script_compare_real_host_matches_rust_on_all_fixtures
+        PASS [   0.017s] (712/805) celeris::script_compare_route_priority script_compare_stale_dist_matching_domains_is_used
+        PASS [   0.017s] (713/805) celeris::script_compare_route_priority script_compare_stale_dist_missing_domain_is_skipped
+        PASS [   0.014s] (714/805) celeris::script_compare_route_priority script_compare_stale_dist_required_panics
+        PASS [   0.014s] (715/805) celeris::script_compare_route_priority script_compare_stale_dist_unknown_domain_is_skipped
+        PASS [   0.183s] (716/805) celeris::script_compare_route_priority script_compare_fresh_bundle_follows_source
+        PASS [   0.788s] (717/805) celeris::routing_budget_suite script_compare_report::script_compare_report_refuses_counts_without_records
+        PASS [   0.802s] (718/805) celeris::routing_budget_suite script_compare_report::script_compare_report_reads_dispatched_records
+        PASS [   3.469s] (719/805) celeris::instance_handoff normal_mode_does_not_inject_the_smoke_builtins
+        PASS [   0.130s] (720/805) celeris::script_compare_route_priority script_compare_unbuildable_bundle_is_skipped_and_logged
+        PASS [   0.066s] (721/805) celeris::script_exhaustive exhaustive_real_bundle_all_inputs_match_and_persist
+        PASS [   2.051s] (722/805) celeris::ops_r1_pipeline ops_r1_pipeline_all_stages_agree_and_two_passes_are_byte_identical
+        PASS [   0.564s] (723/805) celeris::script_compare_cos_digest script_compare_cos_digest_real_host_matches_rust_on_all_fixtures
+        PASS [   0.362s] (724/805) celeris::script_compare_route_priority script_compare_route_priority_dispatch_match_rollback_and_replay
+        PASS [   0.463s] (725/805) celeris::script_compare_route_priority script_compare_route_priority_real_host_matches_rust_on_all_fixtures
+        PASS [   0.988s] (726/805) celeris::script_compare_cos_digest script_compare_cos_digest_daemon_ts_restart_keeps_one_message
+        PASS [   1.154s] (727/805) celeris::routing_eval_run daemon_runs_two_stub_trials_with_hidden_checks_and_eval_records
+        PASS [   0.854s] (728/805) celeris::script_compare_lane_rules script_compare_different_answer_keeps_rust_decision_bytes
+        PASS [   0.472s] (729/805) celeris::script_generation_daemon script_daemon_drain_cutoff_30s_generation_gone
+        PASS [   0.847s] (730/805) celeris::script_compare_lane_rules script_compare_throwing_bundle_keeps_rust_lane
+        PASS [   0.080s] (731/805) celeris::script_generation_e2e script_generation_e2e_switch_error_rollback_restart
+        PASS [   0.015s] (732/805) celeris::script_runtime exit_holder_entry
+        PASS [   0.423s] (733/805) celeris::script_generation_daemon script_daemon_register_before_deploy_is_retryable
+        PASS [   0.883s] (734/805) celeris::script_compare_route_priority script_compare_route_priority_different_answer_keeps_rust_route
+        PASS [   1.231s] (735/805) celeris::script_compare_cos_digest script_compare_cos_digest_different_answer_keeps_rust_digest
+        PASS [   0.918s] (736/805) celeris::script_compare_route_priority script_compare_route_priority_throwing_bundle_keeps_rust_route
+        PASS [   0.472s] (737/805) celeris::script_generation_daemon script_daemon_registers_generation_in_new_isolate
+        PASS [   0.941s] (738/805) celeris::script_compare_route_priority script_compare_route_priority_undeclared_candidate_keeps_rust_route
+        PASS [   1.678s] (739/805) celeris::routing_budget_suite script_compare_report::script_compare_report_pure_gate_counts_real_records
+        PASS [   1.290s] (740/805) celeris::script_compare_cos_digest script_compare_cos_digest_throwing_bundle_keeps_rust_digest
+        PASS [   0.422s] (741/805) celeris::script_generation_daemon script_daemon_store_refusal_discards_isolate
+        PASS [   0.014s] (742/805) celeris::script_runtime script_thread_census_counts_actor_read_before_its_own_naming
+        PASS [   0.012s] (743/805) celeris::script_runtime script_thread_census_counts_actors_in_turn_as_two
+        PASS [   0.014s] (744/805) celeris::script_runtime script_thread_census_counts_child_only_seen_renamed
+        PASS [   0.012s] (745/805) celeris::script_runtime script_thread_census_counts_two_actors_as_two
+        PASS [   0.450s] (746/805) celeris::script_generation_daemon script_daemon_switch_drains_old_generation
+        PASS [   0.013s] (747/805) celeris::script_runtime script_thread_census_excludes_child_before_naming
+        PASS [   1.034s] (748/805) celeris::script_exhaustive exhaustive_always_different_bundle_fails
+        PASS [   0.014s] (749/805) celeris::script_runtime script_thread_census_no_thread_is_zero
+        PASS [   0.017s] (750/805) celeris::script_runtime script_thread_census_real_child_inherits_then_renames
+        PASS [   0.014s] (751/805) celeris::script_runtime script_thread_live_comm_reads_stat_lines
+        PASS [   0.024s] (752/805) celeris::script_runtime script_thread_count_skips_joined_but_listed_thread
+        PASS [   1.033s] (753/805) celeris::script_exhaustive exhaustive_does_not_move_live_counters
+        PASS [   1.061s] (754/805) celeris::script_exhaustive exhaustive_new_generation_invalidates_evidence
+        PASS [   1.095s] (755/805) celeris::script_exhaustive exhaustive_restart_marks_running_aborted
+        PASS [   0.024s] (756/805) celeris::ui_ux_skills_delivery ui_ux_skills_mounts_resolve_from_org_example_toml
+        PASS [   1.103s] (757/805) celeris::script_exhaustive exhaustive_waits_for_live_in_flight
+        PASS [   2.205s] (758/805) celeris::routing_budget_suite script_compare_report::script_compare_report_counts_rollbacks
+        PASS [   0.312s] (759/805) celeris::ui_ux_skills_delivery ui_ux_skills_acp_delivery_copies_attachments_and_unmounts_owned_files
+        PASS [   0.233s] (760/805) celeris::ui_ux_skills_delivery ui_ux_skills_review_run_only_delivers_the_quality_gate
+        PASS [   0.371s] (761/805) celeris::ui_ux_skills_delivery ui_ux_skills_reach_claude_code_workspace_with_real_bodies
+        PASS [   0.937s] (762/805) celeris::script_runtime script_runtime_absent_no_thread
+        PASS [   2.318s] (763/805) celeris::routing_budget_suite tick_scale_baseline::tick_scale_baseline
+        PASS [   0.967s] (764/805) celeris::script_runtime script_runtime_no_pointed_generation_no_thread
+        PASS [   1.592s] (765/805) celeris::script_exhaustive exhaustive_tick_continues_while_running
+        PASS [   1.071s] (766/805) celeris::script_runtime script_runtime_restore_host_api_mismatch_rolls_back
+        PASS [   1.027s] (767/805) celeris::script_runtime script_runtime_restore_missing_bundle_rolls_back
+        PASS [   1.039s] (768/805) celeris::script_runtime script_runtime_restore_missing_capability_rolls_back
+        PASS [   0.097s] (769/805) celeris::unpromoted_release an_unpromoted_release_does_not_migrate_an_old_schema_db
+        PASS [   1.081s] (770/805) celeris::script_runtime script_runtime_restore_pending_top_level_await_rolls_back
+        PASS [   0.018s] (771/805) celeris::unpromoted_release an_unpromoted_release_without_current_never_creates_the_db
+        PASS [   1.077s] (772/805) celeris::script_runtime script_runtime_restore_throwing_bundle_rolls_back
+        PASS [   1.130s] (773/805) celeris::script_runtime script_runtime_restore_tampered_bundle_rolls_back
+        PASS [   0.631s] (774/805) celeris::unmapped_suite legacy_event_startup::startup_loads_legacy_routing_decided_event
+        PASS [   0.127s] (775/805) celeris::unpromoted_release old_promote_dead_lock_is_rejected_without_opening_the_db
+        PASS [   0.649s] (776/805) celeris::unmapped_suite variant_propagation::foreign_assignee_is_not_accepted
+        PASS [   1.463s] (777/805) celeris::script_runtime script_runtime_daemon_shutdown_count_skips_unreaped_actor
+        PASS [   0.616s] (778/805) celeris::unmapped_suite variant_propagation::missing_daemon_observation_blocks_the_run
+        PASS [   0.121s] (779/805) celeris::unpromoted_release the_binary_exits_four_for_an_unpromoted_release
+        PASS [   0.015s] (780/805) celeris::bin/celeris cluster_id_local_is_reserved_config_error
+        PASS [   0.099s] (781/805) celeris::worker_db_guard_refuse worker_db_guard_refuse_real_binary_inside_worker_run
+        PASS [   0.209s] (782/805) celeris::unpromoted_release stale_or_foreign_promoting_markers_are_rejected
+        PASS [   0.097s] (783/805) celeris::worker_db_guard_refuse worker_db_guard_refuse_with_opt_out
+        PASS [   0.659s] (784/805) celeris::unmapped_suite variant_propagation::org_drift_after_post_blocks_before_any_run
+        PASS [   0.405s] (785/805) celeris::unpromoted_release an_unpromoted_release_does_not_request_a_handoff
+        PASS [   0.615s] (786/805) celeris::unpromoted_release a_fresh_promoting_marker_authorizes_the_live_takeover
+        PASS [   0.903s] (787/805) celeris::unmapped_suite variant_propagation::daemon_build_path_pins_observed_identity
+        PASS [   0.565s] (788/805) celeris::unpromoted_release a_release_that_current_points_to_starts_as_before
+        PASS [   1.441s] (789/805) celeris::script_runtime script_thread_census_daemon_sampler_detects_second_actor
+        PASS [   0.538s] (790/805) celeris::unpromoted_release old_promote_live_lock_authorizes_the_live_takeover
+        PASS [   0.379s] (791/805) celeris::bin/celeris config_identity_reports_effective_values_without_secrets
+        PASS [   1.932s] (792/805) celeris::script_runtime script_runtime_daemon_restore_keeps_loaded_modes
+        PASS [   0.534s] (793/805) celeris::unpromoted_release verify_mode_is_not_gated
+        PASS [   0.449s] (794/805) celeris::bin/celeris cli_workspace_root_ignores_store_and_pins
+        PASS [   1.034s] (795/805) celeris::unmapped_suite variant_propagation::spec_off_normal_path_keeps_hash_and_org
+        PASS [   2.016s] (796/805) celeris::script_runtime script_runtime_daemon_restore_retires_unpointed_draining
+        PASS [   0.984s] (797/805) celeris::unmapped_suite variant_propagation::spec_on_normal_path_keeps_hash_and_org
+        PASS [   0.706s] (798/805) celeris::bin/celeris effective_max_concurrency_store_beats_config
+        PASS [   2.102s] (799/805) celeris::trial_context_canary_e2e trial_tasks_through_the_real_router_see_only_the_trial_kb
+        PASS [   3.383s] (800/805) celeris::trial_context_canary_e2e resumed_daemon_gives_the_same_canary_result
+        PASS [   3.866s] (801/805) celeris::trial_context_canary_e2e reset_environment_gives_the_same_canary_result
+        PASS [   3.062s] (802/805) celeris::bin/celeris tests::shutdown_timeout_gives_up_within_its_bound_even_with_a_stuck_background_task
+        PASS [   9.294s] (803/805) celeris::ops_r1_measure ops_r1_measure_cos_path_with_stub_harness
+        PASS [  24.154s] (804/805) celeris::script_generation_daemon script_daemon_api_registers_and_switches_while_running
+        PASS [  30.366s] (805/805) celeris::cos_delivery_suite deployment_audit::deployment_scripts_require_provenance_and_preserve_history
+        SKIP [         ] (───────) celeris::long_run_soak long_run_soak_lease_holder
+        SKIP [         ] (───────) celeris::tick_prod_copy_steps prod_copy_tick_steps

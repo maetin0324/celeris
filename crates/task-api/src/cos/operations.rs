@@ -162,6 +162,15 @@ pub(crate) struct ItemMark {
     pub(crate) outcome: &'static str,
 }
 
+impl ItemMark {
+    pub(crate) fn new(item_id: &str, outcome: &'static str) -> Self {
+        Self {
+            item_id: item_id.to_owned(),
+            outcome,
+        }
+    }
+}
+
 impl OperationAudit {
     /// Persist the first half of a C-class operation before its external effect. `now` is
     /// injected so retries and stale-pending behavior can be tested without wall-clock waits.
@@ -688,13 +697,11 @@ async fn create_operation(
             && let Ok((dm, dp, _)) = crate::inbox_notifications::delegated_request(found, &input)
             && let Ok(delegated) = match_operation(dm.as_str(), &dp)
         {
-            let human_required =
-                super::inbox::wait_for_operation(&state, &delegated, &dp, &Value::Null)
-                    .await?
-                    .and_then(|w| w.human_required);
+            let delegated_wait =
+                super::inbox::wait_for_operation(&state, &delegated, &dp, &Value::Null).await?;
             wait = Some(super::inbox::OperationWait {
-                human_required,
                 target: super::inbox::answer_target(found, &input),
+                ..delegated_wait.unwrap_or_default()
             });
         }
         env.inbox_feed = Some(std::sync::Arc::new(feed.items));
@@ -770,12 +777,8 @@ async fn create_operation(
             if instructed_by.is_none()
                 && let Some(wait) = wait.as_ref().filter(|w| w.target.kind.is_some())
             {
-                let Some(routine) = routine.as_ref() else {
-                    return Err(audit.reject(store, "api", &path, super::basis::missing()));
-                };
-                if let Err(problem) = super::basis::validate(store, routine, &wait.target) {
-                    return Err(audit.reject(store, "api", &path, problem));
-                }
+                let routine = super::inbox::own_judgment(store, wait, routine.as_ref())
+                    .map_err(|problem| audit.reject(store, "api", &path, problem))?;
                 audit.ctx.reason = format!(
                     "{}: {}",
                     super::basis::reason_prefix(routine),
@@ -808,9 +811,7 @@ async fn create_operation(
                 Err(problem) => return Err(audit.reject(store, "api", &path, problem)),
             };
             let result = dispatch(store, &env, &audit, &method, &path, req.request.body);
-            if let Some(pass) = &pass {
-                super::goal_guard::settle(store, &audit, pass, &result);
-            }
+            super::goal_guard::settle_after(store, &audit, &pass, &routine, &wait, &result);
             result
         })
         .await?;

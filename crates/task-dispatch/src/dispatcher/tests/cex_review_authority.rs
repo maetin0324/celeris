@@ -101,9 +101,12 @@ impl WorkerAdapter for ReviewGateAdapter {
             let verdicts: Vec<serde_json::Value> = (0..8)
                 .map(|criterion| serde_json::json!({"criterion": criterion, "pass": pass, "reason": reason}))
                 .collect();
+            // `health` も書く: main の ADR 2026-11-11-health-generic-review-input R1・R6 で `[review]` の無い repo の
+            // reviewer も health の材料を受け、判定が無い review.json は不合格になる。試験が守る不変条件は変えない。
             std::fs::write(
                 req.artifacts_dir.join("review.json"),
-                serde_json::json!({ "verdicts": verdicts }).to_string(),
+                serde_json::json!({ "verdicts": verdicts, "health": { "findings": [] } })
+                    .to_string(),
             )
             .unwrap();
             return Ok(done_outcome());
@@ -918,9 +921,12 @@ impl WorkerAdapter for ConflictRepairAdapter {
             let verdicts: Vec<serde_json::Value> = (0..8)
                 .map(|criterion| serde_json::json!({"criterion": criterion, "pass": true, "reason": "ok"}))
                 .collect();
+            // `health` も書く: main の ADR 2026-11-11-health-generic-review-input R1・R6 で `[review]` の無い repo の
+            // reviewer も health の材料を受け、判定が無い review.json は不合格になる。試験が守る不変条件は変えない。
             std::fs::write(
                 req.artifacts_dir.join("review.json"),
-                serde_json::json!({ "verdicts": verdicts }).to_string(),
+                serde_json::json!({ "verdicts": verdicts, "health": { "findings": [] } })
+                    .to_string(),
             )
             .unwrap();
             return Ok(done_outcome());

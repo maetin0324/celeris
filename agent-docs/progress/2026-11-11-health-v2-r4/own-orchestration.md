@@ -36,6 +36,9 @@ completed: 2026-11-13
   exit 1 になった。当たったのは `structure_guard_project_orchestration` の doc comment の文言（「`&mut Dispatcher` を受けても」）で、コードではない。
 - doc comment を「Dispatcher の可変参照を受けても」に書き換えた。`probe_ports.rs` の同じ文言もそろえた（check は見ないが同じ種類の文）。コードと試験の中身は変えていない。
 - commit: 「phase 1: own-orchestration の structure_guard の doc comment を WU check の grep に当たらない文言にする」。
+- 直した後の HEAD で実行: WU check（上の grep と `cargo nextest run -p task-dispatch -E 'test(structure_guard_) | test(cex_)'`）exit 0（36 passed）、
+  `bash scripts/dev/test-affected.sh` exit 0（3875 passed、11 skipped、約 11 分）、`cargo clippy --workspace -- -D warnings` exit 0、
+  `cargo fmt --all -- --check` exit 0、`check-health.sh --base "$CELERIS_WU_BASE"` exit 0、`check-architecture-map.py` exit 0、`progress-index.sh --check` exit 0。
 
 ## 受け入れ条件
 

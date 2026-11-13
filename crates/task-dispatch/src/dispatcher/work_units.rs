@@ -1,6 +1,7 @@
 //! WorkUnit の gate・準備・並列・checks（ADR-0072、ADR-0074）。`ExecutionGated` と routing は同じ transaction のまま。ADR-0082 の L2。
 
 use super::*;
+use crate::run_settlement::{self, AskReason, ReplanOrAsk};
 
 impl Dispatcher {
     /// ADR-0072 D14/D6・E4 (g): `wu.spec.checks` を `review::run_work_unit_checks`（review.rs の `Check::Command` 実行を再利用）で
@@ -1192,20 +1193,20 @@ impl Dispatcher {
                 vec![text],
             ));
         }
-        let replans_so_far = self.counted_replans(task_id)?;
         // ADR 2026-10-22-stalled-auto-replan D1 / D4: 同じ WU・同じ止まり方の自動 replan が進展なしに続いたら止める。
         let failure = task_ops::plan_gate::failure_signature(
             &[format!("{:?}/{:?}", wu.status, wu.blocked_reason)],
             "",
         );
-        let stalled = task_ops::plan_gate::stalled_replans(&events, &wu.key, &failure);
-        if stalled >= task_ops::plan_gate::STALLED_REPLAN_LIMIT {
+        let limits = self.replan_limits(task_id, Some((&wu.key, &failure)), None)?;
+        let verdict = run_settlement::replan_or_ask(limits);
+        if verdict == ReplanOrAsk::Ask(AskReason::Stalled) {
             let text = task_ops::plan_gate::replan_stalled_question(
                 &wu.key,
-                stalled,
+                limits.stalled,
                 &format!("work unit {} did not finish", wu.key),
             );
-            tracing::warn!(%task_id, key = %wu.key, stalled, "the same work unit failure repeated without progress; asking a human instead of replanning (ADR 2026-10-22-stalled-auto-replan)");
+            tracing::warn!(%task_id, key = %wu.key, stalled = limits.stalled, "the same work unit failure repeated without progress; asking a human instead of replanning (ADR 2026-10-22-stalled-auto-replan)");
             self.store.append_event(
                 task_id,
                 &Event::QuestionRaised {
@@ -1219,7 +1220,7 @@ impl Dispatcher {
                 vec![text],
             ));
         }
-        if replans_so_far < self.effective_max_replans(task_id)? {
+        if verdict == ReplanOrAsk::Replan {
             self.store.append_event(
                 task_id,
                 &Event::AutoReplanRequested {
@@ -1260,7 +1261,7 @@ impl Dispatcher {
             let (trigger, outcome) = self.replan_exhausted_ask(
                 &task,
                 &format!("work unit {} failed", wu.key),
-                replans_so_far,
+                limits.replans,
             )?;
             let questions = match outcome.strip_prefix("question: ") {
                 Some(q) => {
@@ -1461,16 +1462,15 @@ impl Dispatcher {
         self.replan_gate(task_id)
     }
 
-    /// ADR-0072 D17/D18（Phase E4）: replan の余地（`max_replans`）があれば `RunPlanner{replan:
-    /// true}`、無ければ `Skip`（進められる WU が無いまま何もしない。呼び出し元が既に上限を見て
-    /// `Continue{why: Replan}` を避けていれば通常ここには来ない防御的フォールバック）。
+    /// ADR-0072 D17/D18（Phase E4）: replan の余地（`max_replans`。判定は D4 wu-failure の `run_settlement::replan_or_ask`）があれば
+    /// `RunPlanner{replan: true}`、無ければ `Skip`（進められる WU が無いまま何もしない。呼び出し元が既に上限を見て `Continue{why: Replan}` を避けていれば通常ここには来ない防御的フォールバック）。
     pub(super) fn replan_gate(&self, task_id: TaskId) -> Result<WuDispatchGate, DispatchError> {
-        let replans_so_far = self.counted_replans(task_id)?;
-        if replans_so_far < self.effective_max_replans(task_id)? {
+        let limits = self.replan_limits(task_id, None, None)?;
+        if run_settlement::replan_or_ask(limits) == ReplanOrAsk::Replan {
             Ok(WuDispatchGate::RunPlanner { replan: true })
         } else {
             // ADR-0079 D9（Phase R2b）: 木の節点では上限の超過を人への決定の要求にする（黙って止まらない）。
-            self.raise_node_replan_limit(task_id, replans_so_far)?;
+            self.raise_node_replan_limit(task_id, limits.replans)?;
             Ok(WuDispatchGate::Skip)
         }
     }

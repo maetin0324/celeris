@@ -1,6 +1,7 @@
 //! lease の回収・abort・orphan の引き取り・drain の打ち切り。`run_holds_lease` を確かめてから結果を適用し、`stop_run` は kill_tree → abort の順。ADR-0082 の L3。
 
 use super::*;
+use crate::run_settlement::run_end_record;
 
 impl Dispatcher {
     /// ADR-0040 D4: `[handoff] drain_timeout_secs` を超えたときに、残っている run とレビューを
@@ -145,17 +146,14 @@ impl Dispatcher {
         {
             return Ok(());
         }
-        let finished = |outcome: String| Event::WorkerFinished {
-            run_id: run_id.to_string(),
-            outcome,
-            usage: None,
-            role: None,
-            metrics: Some(task_core::RunMetrics {
+        let finished = |outcome: String| {
+            let metrics = task_core::RunMetrics {
                 wall_ms: wall_ms_since(since),
                 retries: task.attempts,
                 ..Default::default()
-            }),
-            end: Some(task_core::RunEnd::Cancelled),
+            };
+            let end = Some(task_core::RunEnd::Cancelled);
+            run_end_record(run_id, outcome, None, None, Some(metrics), end)
         };
         let holds_task_lease = task.status == Status::Running
             && task
@@ -428,14 +426,9 @@ impl Dispatcher {
                 return;
             }
         };
-        let finished = Event::WorkerFinished {
-            run_id: run_id.to_string(),
-            outcome: format!("interrupted: {why}"),
-            usage: None,
-            role,
-            metrics: None,
-            end: Some(task_core::RunEnd::Cancelled),
-        };
+        let outcome = format!("interrupted: {why}");
+        let end = Some(task_core::RunEnd::Cancelled);
+        let finished = run_end_record(run_id, outcome, None, role, None, end);
         if !already && let Err(e) = self.store.append_event(task_id, &finished) {
             tracing::warn!(%task_id, %run_id, error = %e, "failed to close an aborted run");
             return;
@@ -727,19 +720,12 @@ impl Dispatcher {
             .iter()
             .any(|(_, e)| matches!(e, Event::WorkerFinished { run_id: r, .. } if r == run_id));
         if !already {
-            self.store.append_event(
-                task.id,
-                &Event::WorkerFinished {
-                    run_id: run_id.to_string(),
-                    outcome: format!("interrupted: {ORPHAN_WHY} (run_id={run_id})"),
-                    usage: None,
-                    role: None,
-                    metrics: None,
-                    end: Some(task_core::RunEnd::HarnessError {
-                        class: task_core::HarnessErrorClass::Infra,
-                    }),
-                },
-            )?;
+            let outcome = format!("interrupted: {ORPHAN_WHY} (run_id={run_id})");
+            let end = Some(task_core::RunEnd::HarnessError {
+                class: task_core::HarnessErrorClass::Infra,
+            });
+            let finished = run_end_record(run_id, outcome, None, None, None, end);
+            self.store.append_event(task.id, &finished)?;
         }
         self.reconcile_work_unit_run(task.id, run_id, crate::orphan::ORPHAN_TAKEOVER_REASON)
     }

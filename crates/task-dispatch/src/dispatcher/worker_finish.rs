@@ -1,6 +1,7 @@
 //! worker run の終了処理（`finish_worker_result` と finalise の失敗の後始末）。同じ transaction の組と `release_quota_if_tracked` はそのまま。ADR-0082 の L3。
 
 use super::*;
+use crate::run_settlement::{self, AskReason, ReplanOrAsk};
 
 fn repair_git(dir: &Path, args: &[&str]) -> Option<String> {
     let output = std::process::Command::new("git")
@@ -901,9 +902,8 @@ impl Dispatcher {
                     } else if !misplaced_result
                         && matches!(decision.reason, "failed" | "limit" | "plan_issue")
                     {
-                        let replans_so_far = self.counted_replans(task_id)?;
                         // ADR 2026-10-22-stalled-auto-replan D1 / D4: 同じ WU・同じ失敗の自動 replan が進展なしに
-                        // 続いたら、`max_replans` に余りがあっても止めて人に聞く。
+                        // 続いたら、`max_replans` に余りがあっても止めて人に聞く（D4 wu-failure の `replan_or_ask`）。
                         let failure = match &check_failure {
                             Some(f) => f.failure_signature(),
                             None => task_ops::plan_gate::failure_signature(
@@ -911,25 +911,25 @@ impl Dispatcher {
                                 &outcome_str,
                             ),
                         };
-                        let stalled = task_ops::plan_gate::stalled_replans(
-                            &self.store.events_for(task_id)?,
-                            &wu.key,
-                            &failure,
-                        );
-                        if stalled >= task_ops::plan_gate::STALLED_REPLAN_LIMIT {
+                        let limits =
+                            self.replan_limits(task_id, Some((&wu.key, &failure)), None)?;
+                        let verdict = run_settlement::replan_or_ask(limits);
+                        if verdict == ReplanOrAsk::Ask(AskReason::Stalled) {
                             let msg = outcome_str
                                 .strip_prefix("error(retryable=false): ")
                                 .unwrap_or(outcome_str.as_str())
                                 .to_string();
-                            tracing::warn!(%task_id, key = %wu.key, stalled, "the same work unit failure repeated without progress; asking a human instead of replanning (ADR 2026-10-22-stalled-auto-replan)");
+                            tracing::warn!(%task_id, key = %wu.key, stalled = limits.stalled, "the same work unit failure repeated without progress; asking a human instead of replanning (ADR 2026-10-22-stalled-auto-replan)");
                             trigger = Trigger::WorkerQuestion;
                             outcome_str = format!(
                                 "question: {}",
                                 task_ops::plan_gate::replan_stalled_question(
-                                    &wu.key, stalled, &msg
+                                    &wu.key,
+                                    limits.stalled,
+                                    &msg
                                 )
                             );
-                        } else if replans_so_far < self.effective_max_replans(task_id)? {
+                        } else if verdict == ReplanOrAsk::Replan {
                             auto_replan_event = Some(Event::AutoReplanRequested {
                                 key: wu.key.clone(),
                                 failure,
@@ -960,7 +960,7 @@ impl Dispatcher {
                                 .strip_prefix("error(retryable=false): ")
                                 .unwrap_or(outcome_str.as_str())
                                 .to_string();
-                            let (t, o) = self.replan_exhausted_ask(&task, &msg, replans_so_far)?;
+                            let (t, o) = self.replan_exhausted_ask(&task, &msg, limits.replans)?;
                             trigger = t;
                             outcome_str = o;
                         } else if decision.reason == "plan_issue" {
@@ -1443,14 +1443,14 @@ impl Dispatcher {
                 infra_requeue = None;
             }
         }
-        let finished = Event::WorkerFinished {
-            run_id: run_id.clone(),
-            outcome: outcome_str.clone(),
+        let finished = run_settlement::run_end_record(
+            &run_id,
+            outcome_str.clone(),
             usage,
-            role: None,
+            None,
             metrics,
-            end: run_end,
-        };
+            run_end,
+        );
         let mut events = vec![finished];
         if let Some(event) = integration_exhausted_event {
             events.push(event);
@@ -1785,15 +1785,11 @@ impl Dispatcher {
         };
         let now = OffsetDateTime::now_utc();
         let events = self.store.events_for(task_id)?;
-        let finished = |outcome: String| Event::WorkerFinished {
-            run_id: run_id.to_string(),
-            outcome,
-            usage: None,
-            role: None,
-            metrics: None,
-            end: Some(task_core::RunEnd::HarnessError {
-                class: task_core::HarnessErrorClass::Infra,
-            }),
+        let infra_end = task_core::RunEnd::HarnessError {
+            class: task_core::HarnessErrorClass::Infra,
+        };
+        let finished = |outcome: String| {
+            run_settlement::run_end_record(run_id, outcome, None, None, None, Some(infra_end))
         };
         if let Err(e) = self.store.run_index_finish(
             run_id,

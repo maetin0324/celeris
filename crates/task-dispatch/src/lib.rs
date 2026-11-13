@@ -52,6 +52,8 @@ pub mod review;
 /// ADR 2026-11-07-root-done-tick-phase-timing: root_done_tick の段別計測と事実の収集。
 pub(crate) mod root_done_probe;
 pub mod routing_runtime;
+/// ADR 2026-11-11 dispatcher-state-ownership D3・D4: run の終わりの判断の純粋関数（D4 wu-failure の `replan_or_ask`）。
+pub(crate) mod run_settlement;
 pub(crate) mod run_supervisor;
 /// ADR-0075 D2 / D6（Phase G1）: scratch pool の走査・GC の実行・削除と測定のスレッド・状態の組み立て。
 pub mod scratch_gc;

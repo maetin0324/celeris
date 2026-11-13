@@ -1,6 +1,7 @@
 //! planner run の結果の採用・やり直し・replan と planner の文脈（ADR-0072、ADR-0079）。ADR-0082 の L3。
 
 use super::*;
+use crate::run_settlement::run_end_record;
 
 /// 計画の採用の共通部（設計 review を通った計画と共有）。file は size の制約で `health_review/` に置く。
 #[path = "../health_review/plan_adoption.rs"]
@@ -173,17 +174,12 @@ impl Dispatcher {
         match validation {
             Ok((validated, gate)) => {
                 let replan = active_plan.is_some();
-                let finished = Event::WorkerFinished {
-                    run_id: run_id.clone(),
-                    outcome: format!(
-                        "done: {} work unit(s) planned",
-                        validated.spec.work_units.len()
-                    ),
-                    usage,
-                    role: Some(RunRole::Planner),
-                    metrics,
-                    end: run_end,
-                };
+                let outcome = format!(
+                    "done: {} work unit(s) planned",
+                    validated.spec.work_units.len()
+                );
+                let role = Some(RunRole::Planner);
+                let finished = run_end_record(&run_id, outcome, usage, role, metrics, run_end);
                 // unit の gate・子 task の検証・採用・root の承認の判定は `plan_adoption`（設計 review を通った計画と共有）。
                 let prepared = match self.prepare_adoption(
                     task,
@@ -281,14 +277,9 @@ impl Dispatcher {
                 }
             }
             Err(reason) => {
-                let finished = Event::WorkerFinished {
-                    run_id: run_id.clone(),
-                    outcome: format!("error(retryable=true): invalid execution plan: {reason}"),
-                    usage,
-                    role: Some(RunRole::Planner),
-                    metrics,
-                    end: run_end,
-                };
+                let outcome = format!("error(retryable=true): invalid execution plan: {reason}");
+                let role = Some(RunRole::Planner);
+                let finished = run_end_record(&run_id, outcome, usage, role, metrics, run_end);
                 self.give_up_or_retry_planner(
                     task_id,
                     task,
@@ -670,7 +661,7 @@ impl Dispatcher {
             .into_iter()
             .filter(|d| d.status == task_core::DecisionStatus::Open)
             .count();
-        let node_replans = u64::from(self.counted_replans(task.id)?);
+        let node = self.replan_limits(task.id, None, None)?;
         let chain =
             task_ops::tree::ancestors_with_self(self.store.as_ref(), task).map_err(ops_to_store)?;
         let ancestors = chain
@@ -699,8 +690,7 @@ impl Dispatcher {
             leaves_left: u64::from(tree.max_tree_leaves.saturating_sub(counters.leaves)),
             runs_left: u64::from(tree.max_tree_runs.saturating_sub(counters.runs)),
             replans_left: u64::from(tree.max_tree_replans.saturating_sub(counters.replans)),
-            node_replans_left: u64::from(self.effective_max_replans(task.id)?)
-                .saturating_sub(node_replans),
+            node_replans_left: u64::from(node.max_replans.saturating_sub(node.replans)),
             usd_left: tree
                 .max_tree_usd_micros
                 .map(|max| max.saturating_sub(counters.usd_micros) as f64 / 1e6),

@@ -1,0 +1,117 @@
+//! ADR 2026-11-11 dispatcher-state-ownership D3・D4: run の終わりの判断（純粋関数）。
+//!
+//! D4 の wu-failure の共有の関数 [`replan_or_ask`] を置く。自動 replan をするか人に聞くかの上限の判定は、
+//! WU の失敗（worker 完了）・終わらない WU（遅延 WU の照合）・統合の失敗・仕事の残らない計画の gate・木の liveness の
+//! 事実のすべてがこの 1 つで行う。replan の実行・event の追記・質問の文・決定の要求は各経路に残す。
+//!
+//! D4 の run-close の共有の関数 [`run_end_record`] を置く。run の終了記録（`WorkerFinished`）の組み立てだけを共有し、
+//! lease の検証・二重の終了記録の確認・状態遷移・transaction の境界は閉じる経路ごとに残す。
+//!
+//! この module は入力の値だけを読む。永続化・file・process に触れず、`dispatcher` module を使わない（D2 の 3）。
+
+/// [`replan_or_ask`] の入力。各経路が読んだ値を詰める。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ReplanLimits {
+    /// 同じ unit・同じ失敗の署名の自動 replan が進展なしに続いた回数（`task_ops::plan_gate::stalled_replans` の結果）。
+    /// 失敗の署名を持たない経路（仕事の残らない計画の gate・木の liveness）は 0。
+    pub stalled: u32,
+    /// `[execution] max_replans` に数える replan の回数（`task_ops::plan_gate::counted_replans`。人の replan は数えない）。
+    pub replans: u32,
+    /// 節点の replan の上限（`[execution] max_replans` に、`limit:max_replans` の回答で上げた分を足した値）。
+    pub max_replans: u32,
+    /// replan を禁止する理由。無ければ `None`。
+    pub ban: Option<ReplanBan>,
+}
+
+impl ReplanLimits {
+    /// 経路が読んだ task の events と節点の上限から入力を作る。`failure` は (unit の key, 失敗の署名)。失敗の署名を
+    /// 持たない経路（仕事の残らない計画の gate・木の liveness・planner の文脈）は `None` で、`stalled` は 0。
+    pub(crate) fn from_events(
+        events: &[(u64, task_core::Event)],
+        failure: Option<(&str, &str)>,
+        max_replans: u32,
+        ban: Option<ReplanBan>,
+    ) -> Self {
+        Self {
+            stalled: failure.map_or(0, |(key, signature)| {
+                task_ops::plan_gate::stalled_replans(events, key, signature)
+            }),
+            replans: task_ops::plan_gate::counted_replans(events),
+            max_replans,
+            ban,
+        }
+    }
+}
+
+/// replan を禁止する理由。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReplanBan {
+    /// health の Error・同じ指摘の往復・health の上限の使い切りで統合が止まった
+    /// （ADR 2026-11-08-health-enforcement-loop D3.4・D4.3・D4.4。`health_review::check_item::stops_without_replan`）。
+    HealthStop,
+}
+
+/// [`replan_or_ask`] が返す判定。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReplanOrAsk {
+    /// 自動 replan をする。
+    Replan,
+    /// replan せず人に聞く（質問か、木の節点では `limit:max_replans` の決定の要求。どちらにするかは経路が決める）。
+    Ask(AskReason),
+}
+
+/// 人に聞く理由。数（`stalled`・`replans`）は入力の [`ReplanLimits`] にある。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AskReason {
+    /// 同じ失敗の自動 replan が進展なしに `task_ops::plan_gate::STALLED_REPLAN_LIMIT` 回以上続いた
+    /// （ADR 2026-10-22-stalled-auto-replan D4。`max_replans` に余りがあっても止める）。
+    Stalled,
+    /// replan を禁止する理由がある（[`ReplanBan`]）。
+    Banned,
+    /// replan の上限を使い切った（ADR-0079 付記「R6-1」D3・D9）。
+    Exhausted,
+}
+
+/// D4 wu-failure: 自動 replan をするか、人に聞くか。
+///
+/// 理由の優先は stalled → 禁止 → 上限の使い切り。stalled を先に見るのは、統合の失敗が health で禁止されていても
+/// 進展の無い繰り返しなら stalled の質問文を出す今の挙動を保つため。
+pub(crate) fn replan_or_ask(limits: ReplanLimits) -> ReplanOrAsk {
+    if limits.stalled >= task_ops::plan_gate::STALLED_REPLAN_LIMIT {
+        return ReplanOrAsk::Ask(AskReason::Stalled);
+    }
+    if limits.ban.is_some() {
+        return ReplanOrAsk::Ask(AskReason::Banned);
+    }
+    if limits.replans < limits.max_replans {
+        ReplanOrAsk::Replan
+    } else {
+        ReplanOrAsk::Ask(AskReason::Exhausted)
+    }
+}
+
+/// D4 run-close: run の終了記録（`Event::WorkerFinished`）を組み立てる。
+///
+/// 入力は run id・outcome の文・usage・role（`None` はワーカー run）・metrics・終端。終端は呼ぶ経路が明示し、
+/// この関数は補わない（`None` を渡せば `None` のまま）。返すのは event だけで、追記・lease の検証・二重の終了記録の
+/// 確認・状態遷移・transaction の境界は呼ぶ経路が持つ（run を閉じる関数にしない）。
+pub(crate) fn run_end_record(
+    run_id: &str,
+    outcome: String,
+    usage: Option<task_core::Usage>,
+    role: Option<task_core::RunRole>,
+    metrics: Option<task_core::RunMetrics>,
+    end: Option<task_core::RunEnd>,
+) -> task_core::Event {
+    task_core::Event::WorkerFinished {
+        run_id: run_id.to_string(),
+        outcome,
+        usage,
+        role,
+        metrics,
+        end,
+    }
+}
+
+#[cfg(test)]
+mod tests;

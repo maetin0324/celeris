@@ -171,23 +171,25 @@ fn input(result: Result<RunOutcome, AdapterError>) -> RunFinishInput<'static> {
         browser_prereq: None,
         cluster_wait: None,
         max_requeues: 3,
-        max_infra_retries: 3,
+        infra_retry: (1, Some(std::time::Duration::from_secs(30))),
         check_failure: None,
     }
 }
 
 fn adapter_failure(
     max_requeues: u32,
-    max_infra_retries: u32,
+    infra_retry: (u32, Option<std::time::Duration>),
     supply_failure: Option<ProviderOutcome>,
 ) -> RunFinishProposal {
     settle(RunFinishInput {
         supply_failure,
         max_requeues,
-        max_infra_retries,
+        infra_retry,
         ..input(Err(AdapterError::Other("boom".to_string())))
     })
 }
+
+const RETRY: (u32, Option<std::time::Duration>) = (1, Some(std::time::Duration::from_secs(30)));
 
 /// 不変条件: 供給側の失敗は連続 requeue 数が上限未満なら attempts を消費せず requeue し、上限ちょうどで retryable な失敗
 /// にする（ADR-0010 D5・ADR-0011）。認証失敗は上限に数えない（ADR 2026-10-17）。どの場合も quota と cooldown には供給側の
@@ -197,13 +199,13 @@ fn settle_requeues_supply_failures_below_the_limit() {
     let throttled = ProviderOutcome::Throttled {
         retry_after: std::time::Duration::from_secs(5),
     };
-    let below = adapter_failure(1, 3, Some(throttled.clone()));
+    let below = adapter_failure(1, RETRY, Some(throttled.clone()));
     assert_eq!(below.trigger, Trigger::Requeue);
     assert_eq!(below.outcome, "requeue: adapter: boom");
     assert_eq!(below.provider_outcome, throttled);
     assert_eq!(below.run_end, None);
 
-    let at_limit = adapter_failure(0, 3, Some(throttled.clone()));
+    let at_limit = adapter_failure(0, RETRY, Some(throttled.clone()));
     assert_eq!(at_limit.trigger, Trigger::WorkerError { retryable: true });
     assert_eq!(
         at_limit.outcome,
@@ -211,30 +213,31 @@ fn settle_requeues_supply_failures_below_the_limit() {
     );
     assert_eq!(at_limit.provider_outcome, throttled);
 
-    let auth = adapter_failure(0, 3, Some(ProviderOutcome::AuthFailed));
+    let auth = adapter_failure(0, RETRY, Some(ProviderOutcome::AuthFailed));
     assert_eq!(auth.trigger, Trigger::Requeue);
     assert_eq!(auth.provider_outcome, ProviderOutcome::AuthFailed);
 }
 
-/// 不変条件: 分類できない失敗は `infra_retry_after` が許す間だけ `InfraRequeue` にし、backoff の (n, 待ち時間) を提案に
-/// 載せる。上限を超えたら `WorkerError{retryable:false}` で `"infra failure ×N"` を付け、backoff を載せない（ADR-0070 D3）。
-/// 既存の試験は dispatcher の backoff の期限か遷移の片方しか見ず、提案の (n, 待ち時間) と打ち切りの文を同時に固定しない。
+/// 不変条件: 分類できない失敗は、D4 retry-backoff の共有の関数 `infra_retry_after` が待ち時間を返した間だけ `InfraRequeue`
+/// にし、backoff の (n, 待ち時間) を提案に載せる。待ち時間が無ければ（上限を超えた）`WorkerError{retryable:false}` で
+/// `"infra failure ×N"` を付け、backoff を載せない（ADR-0070 D3）。既存の試験は dispatcher の backoff の期限か遷移の
+/// 片方しか見ず、提案の (n, 待ち時間) と打ち切りの文を同時に固定しない。
 #[test]
 fn settle_retries_infra_failures_until_the_limit() {
-    let retry = adapter_failure(3, 1, None);
+    let retry = adapter_failure(3, RETRY, None);
     assert_eq!(retry.trigger, Trigger::InfraRequeue);
     assert_eq!(retry.outcome, "infra_requeue: adapter: boom");
     assert_eq!(
         retry.infra_requeue,
-        crate::run_supervisor::infra_retry_after(1, 1).map(|delay| (1, delay))
+        Some((1, std::time::Duration::from_secs(30)))
     );
-    assert!(retry.infra_requeue.is_some());
+    assert_eq!(retry.run_end, None);
 
-    let stop = adapter_failure(3, 0, None);
+    let stop = adapter_failure(3, (4, None), None);
     assert_eq!(stop.trigger, Trigger::WorkerError { retryable: false });
     assert_eq!(
         stop.outcome,
-        format!("{}1: adapter: boom", task_ops::derive::INFRA_FAILURE_MARKER)
+        format!("{}4: adapter: boom", task_ops::derive::INFRA_FAILURE_MARKER)
     );
     assert_eq!(stop.infra_requeue, None);
     assert_eq!(stop.provider_outcome, ProviderOutcome::Ok);

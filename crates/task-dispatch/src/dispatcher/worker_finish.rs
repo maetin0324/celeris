@@ -385,9 +385,11 @@ impl Dispatcher {
             .as_ref()
             .err()
             .and_then(|e| browser_prereq::worker_error_code(&e.to_string()));
+        let events_now = self.store.events_for(task_id)?;
+        let infra_n = consecutive_infra_requeues(&events_now) + 1;
         let proposal = crate::run_settlement::settle(run_settlement::RunFinishInput {
             result,
-            events: &self.store.events_for(task_id)?,
+            events: &events_now,
             run_id: &run_id,
             conversation: task_core::is_conversation(&task),
             work_unit: current_wu.is_some(),
@@ -395,13 +397,19 @@ impl Dispatcher {
             browser_prereq: browser_code,
             cluster_wait: cluster_wait_checked,
             max_requeues: self.config.max_requeues,
-            max_infra_retries: self.config.max_infra_retries,
+            infra_retry: (
+                infra_n,
+                infra_retry_after(infra_n, self.config.max_infra_retries),
+            ),
             check_failure: check_failure.as_ref().map(|f| (f.usage, f.summary())),
         });
         let misplaced_result = proposal.misplaced;
         let cross_department = proposal.cross_department;
         let check_failure_suffix = proposal.check_failure_suffix;
-        let mut subject = proposal.subject;
+        let mut subject = ReviewSubject {
+            summary: proposal.done_summary,
+            evidence: proposal.done_evidence,
+        };
         // ADR-0070 D3（Phase 116）: `Trigger::InfraRequeue` を選んだときだけ `Some((n, 待ち時間))`。遷移の後に
         // `RunSupervisor` の infra backoff のバックオフ期限を立てるのに使う。
         let mut infra_requeue = proposal.infra_requeue;

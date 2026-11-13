@@ -75,14 +75,19 @@ policy-paths.diff は移動先ごとに 1 行だったが、operator は移動�
 
 ### 検査の結果
 
-- check 0: exit 0（6 つの移動先すべてが main の high_risk の lease・budget に当たる。policy の 2 file は main と差分 0）。
-- `cargo check --workspace --tests --keep-going`: exit 0（warning は main と同じ `script_exhaustive.rs` の 1 件だけ）。
-- `bash scripts/dev/test-affected.sh`: exit 0、781 秒（load 15〜19）。nextest 8408 件すべて合格（23 skipped）、web の unit 713 件・
+3 回目の run（コードは 2 回目の run と同じ）。test-affected・clippy は commit「phase 1: sync-policy: 新しい health の base の規則で
+WU の check を再評価した結果を進捗に書き、done にする」で実行した。その後の commit はこの節の文だけで、check 0・fmt・
+progress-index・health は最後の commit でも実行し直した。
+
+- check 0: exit 0（6 つの移動先すべてが main の high_risk の lease・budget に当たる。policy の 2 file は今の main とも差分 0）。
+- `bash scripts/dev/test-affected.sh`: exit 0、832 秒（load 7〜10）。nextest 8408 件すべて合格（23 skipped）、web の unit 713 件・
   134 件合格、`repo_health_gate: all checks passed`、`test-ts-verify: 20 passed, 0 failed`。
-  1 回目（cex の直しの前の取り込みの commit）は exit 100（8406 passed・2 failed、上の cex の 2 本）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。
 - `cargo fmt --all -- --check`: exit 0。
 - `sh scripts/dev/progress-index.sh --check`: exit 0。
+- health（新しい規則の 2 回。下の節）: どちらも exit 0、fail_grade 0。
+- 2 回目の run の結果: `cargo check --workspace --tests --keep-going` exit 0（warning は main と同じ `script_exhaustive.rs` の 1 件だけ）、
+  test-affected exit 0（781 秒、8408 件合格）。取り込みの commit の 1 回目の test-affected は exit 100（8406 passed・2 failed、上の cex の 2 本）。
 
 ## WU の check の health の再評価（3 回目の run）
 

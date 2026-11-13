@@ -1443,14 +1443,14 @@ impl Dispatcher {
                 infra_requeue = None;
             }
         }
-        let finished = Event::WorkerFinished {
-            run_id: run_id.clone(),
-            outcome: outcome_str.clone(),
+        let finished = run_settlement::run_end_record(
+            &run_id,
+            outcome_str.clone(),
             usage,
-            role: None,
+            None,
             metrics,
-            end: run_end,
-        };
+            run_end,
+        );
         let mut events = vec![finished];
         if let Some(event) = integration_exhausted_event {
             events.push(event);
@@ -1785,15 +1785,11 @@ impl Dispatcher {
         };
         let now = OffsetDateTime::now_utc();
         let events = self.store.events_for(task_id)?;
-        let finished = |outcome: String| Event::WorkerFinished {
-            run_id: run_id.to_string(),
-            outcome,
-            usage: None,
-            role: None,
-            metrics: None,
-            end: Some(task_core::RunEnd::HarnessError {
-                class: task_core::HarnessErrorClass::Infra,
-            }),
+        let infra_end = task_core::RunEnd::HarnessError {
+            class: task_core::HarnessErrorClass::Infra,
+        };
+        let finished = |outcome: String| {
+            run_settlement::run_end_record(run_id, outcome, None, None, None, Some(infra_end))
         };
         if let Err(e) = self.store.run_index_finish(
             run_id,

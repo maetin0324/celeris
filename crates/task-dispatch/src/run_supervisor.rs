@@ -15,6 +15,7 @@ use time::OffsetDateTime;
 use tokio::task::JoinHandle;
 
 use crate::policy::ProviderId;
+use crate::run_settlement::run_end_record;
 
 /// ADR 2026-10-11 llm-source-harness-selection: run が admission で予約した `(source, account)`。
 pub(crate) type RouteReservation = (
@@ -364,17 +365,14 @@ impl<S> RunSupervisor<S> {
         metrics: Option<task_core::RunMetrics>,
         now: OffsetDateTime,
     ) -> Result<task_core::Outcome, task_core::StoreError> {
+        let end = Some(task_core::RunEnd::HarnessError {
+            class: verdict.class,
+        });
         let finished: Vec<Event> = lease_runs
             .iter()
-            .map(|run_id| Event::WorkerFinished {
-                run_id: run_id.clone(),
-                outcome: verdict.outcome.clone(),
-                usage: None,
-                role: None,
-                metrics,
-                end: Some(task_core::RunEnd::HarnessError {
-                    class: verdict.class,
-                }),
+            .map(|run_id| {
+                let outcome = verdict.outcome.clone();
+                run_end_record(run_id, outcome, None, None, metrics, end)
             })
             .collect();
         let outcome =

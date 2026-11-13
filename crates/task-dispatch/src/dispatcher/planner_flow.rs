@@ -1,6 +1,7 @@
 //! planner run の結果の採用・やり直し・replan と planner の文脈（ADR-0072、ADR-0079）。ADR-0082 の L3。
 
 use super::*;
+use crate::run_settlement::run_end_record;
 
 /// 計画の採用の共通部（設計 review を通った計画と共有）。file は size の制約で `health_review/` に置く。
 #[path = "../health_review/plan_adoption.rs"]
@@ -173,17 +174,12 @@ impl Dispatcher {
         match validation {
             Ok((validated, gate)) => {
                 let replan = active_plan.is_some();
-                let finished = Event::WorkerFinished {
-                    run_id: run_id.clone(),
-                    outcome: format!(
-                        "done: {} work unit(s) planned",
-                        validated.spec.work_units.len()
-                    ),
-                    usage,
-                    role: Some(RunRole::Planner),
-                    metrics,
-                    end: run_end,
-                };
+                let outcome = format!(
+                    "done: {} work unit(s) planned",
+                    validated.spec.work_units.len()
+                );
+                let role = Some(RunRole::Planner);
+                let finished = run_end_record(&run_id, outcome, usage, role, metrics, run_end);
                 // unit の gate・子 task の検証・採用・root の承認の判定は `plan_adoption`（設計 review を通った計画と共有）。
                 let prepared = match self.prepare_adoption(
                     task,
@@ -281,14 +277,9 @@ impl Dispatcher {
                 }
             }
             Err(reason) => {
-                let finished = Event::WorkerFinished {
-                    run_id: run_id.clone(),
-                    outcome: format!("error(retryable=true): invalid execution plan: {reason}"),
-                    usage,
-                    role: Some(RunRole::Planner),
-                    metrics,
-                    end: run_end,
-                };
+                let outcome = format!("error(retryable=true): invalid execution plan: {reason}");
+                let role = Some(RunRole::Planner);
+                let finished = run_end_record(&run_id, outcome, usage, role, metrics, run_end);
                 self.give_up_or_retry_planner(
                     task_id,
                     task,

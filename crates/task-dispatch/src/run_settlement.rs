@@ -4,6 +4,9 @@
 //! WU の失敗（worker 完了）・終わらない WU（遅延 WU の照合）・統合の失敗・仕事の残らない計画の gate・木の liveness の
 //! 事実のすべてがこの 1 つで行う。replan の実行・event の追記・質問の文・決定の要求は各経路に残す。
 //!
+//! D4 の run-close の共有の関数 [`run_end_record`] を置く。run の終了記録（`WorkerFinished`）の組み立てだけを共有し、
+//! lease の検証・二重の終了記録の確認・状態遷移・transaction の境界は閉じる経路ごとに残す。
+//!
 //! この module は入力の値だけを読む。永続化・file・process に触れず、`dispatcher` module を使わない（D2 の 3）。
 
 /// [`replan_or_ask`] の入力。各経路が読んだ値を詰める。
@@ -84,6 +87,29 @@ pub(crate) fn replan_or_ask(limits: ReplanLimits) -> ReplanOrAsk {
         ReplanOrAsk::Replan
     } else {
         ReplanOrAsk::Ask(AskReason::Exhausted)
+    }
+}
+
+/// D4 run-close: run の終了記録（`Event::WorkerFinished`）を組み立てる。
+///
+/// 入力は run id・outcome の文・usage・role（`None` はワーカー run）・metrics・終端。終端は呼ぶ経路が明示し、
+/// この関数は補わない（`None` を渡せば `None` のまま）。返すのは event だけで、追記・lease の検証・二重の終了記録の
+/// 確認・状態遷移・transaction の境界は呼ぶ経路が持つ（run を閉じる関数にしない）。
+pub(crate) fn run_end_record(
+    run_id: &str,
+    outcome: String,
+    usage: Option<task_core::Usage>,
+    role: Option<task_core::RunRole>,
+    metrics: Option<task_core::RunMetrics>,
+    end: Option<task_core::RunEnd>,
+) -> task_core::Event {
+    task_core::Event::WorkerFinished {
+        run_id: run_id.to_string(),
+        outcome,
+        usage,
+        role,
+        metrics,
+        end,
     }
 }
 

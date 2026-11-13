@@ -13,6 +13,9 @@
 //! 木の token 予算切れ（[`stop_at_token_budget`]）は、WU と atomic task の分岐の後に決まる trigger を見るので別の関数にする。
 //! 提案の適用（backoff・quota・cooldown・遷移と events の追記）は worker 完了の経路と owner の method が今と同じ順で行う。
 //!
+//! WU の run の判断（[`settle_work_unit`]。WU の遷移は `execution_scheduler` の遷移の関数を呼ぶ）は `work_unit` に置く。
+//! WU の失敗の自動 replan か質問は [`settle_work_unit_failure`] が [`replan_or_ask`] で決める。
+//!
 //! この module は入力の値だけを読む。永続化・file・process に触れず、`dispatcher` module を使わない（D2 の 3）。
 
 use std::time::Duration;
@@ -23,6 +26,12 @@ use task_core::{BudgetKind, Event, RunEnd, Trigger, Usage};
 use task_worker::{AdapterError, Evidence, RunOutcome, Terminal};
 
 use crate::policy::ProviderOutcome;
+
+mod work_unit;
+pub(crate) use work_unit::{
+    WorkUnitFailureStep, WorkUnitRunInput, hold_for_worker_decisions, integration_repair_exhausted,
+    settle_work_unit, settle_work_unit_failure, work_unit_run_end, work_unit_saves_checkpoint,
+};
 
 /// [`replan_or_ask`] の入力。各経路が読んだ値を詰める。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

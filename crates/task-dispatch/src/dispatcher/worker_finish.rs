@@ -1,7 +1,7 @@
 //! worker run の終了処理（`finish_worker_result` と finalise の失敗の後始末）。同じ transaction の組と `release_quota_if_tracked` はそのまま。ADR-0082 の L3。
 
 use super::*;
-use crate::run_settlement::{self, AskReason, ReplanOrAsk};
+use crate::run_settlement;
 
 fn repair_git(dir: &Path, args: &[&str]) -> Option<String> {
     let output = std::process::Command::new("git")
@@ -449,16 +449,8 @@ impl Dispatcher {
         // ADR-0090 D2: この WU の run が unit を `blocked(cluster_jobs)` にした。
         let mut wu_parked_on_cluster_jobs = false;
         if let Some(wu) = &current_wu {
-            // ADR-0072 D6（Phase E2）: WU の run。`end` が無ければ（分類できない供給側・インフラの
-            // 失敗）、harness_error 相当として WU を ready に戻すだけで、Task レベルの trigger は
-            // 触らない（既存の Requeue/InfraRequeue/WorkerError の経路のまま。D6 の表どおり）。
-            let effective_end = run_end.unwrap_or(task_core::RunEnd::HarnessError {
-                class: task_core::HarnessErrorClass::Infra,
-            });
-            let reset_only = matches!(
-                effective_end,
-                task_core::RunEnd::HarnessError { .. } | task_core::RunEnd::Cancelled
-            );
+            // ADR-0072 D6（Phase E2）: WU の run。`end` が無い run の扱いは `run_settlement::work_unit_run_end`。
+            let effective_end = run_settlement::work_unit_run_end(run_end);
             let tree = self.config.execution.limits.tree;
             let auto_counts = if tree.enabled && tree.auto_leaf {
                 auto_leaf::counts(
@@ -478,11 +470,11 @@ impl Dispatcher {
             let mut no_progress_before = 0u32;
             let mut continuations_since_answer = 0u32;
             let mut progress_checkpoints = 0u32;
-            // ADR-0090 D1: クラスタ job の wait も checkpoint を残す（`[execution] continuation` に依らない）。
-            if (effective_end.is_continuable()
-                && (self.config.execution.continuation || auto_exceeded))
-                || effective_end == task_core::RunEnd::Waiting
-            {
+            if run_settlement::work_unit_saves_checkpoint(
+                effective_end,
+                self.config.execution.continuation,
+                auto_exceeded,
+            ) {
                 let events_so_far = self.store.events_for(task_id)?;
                 // ADR-0074 D1.6（Phase F2b）: v2 の WU は WU の worktree・ブランチ・base で取る。
                 let (artifacts_dir, cwd_buf, branch, base) =
@@ -551,315 +543,138 @@ impl Dispatcher {
                 checkpoint_opt = Some(checkpoint);
             }
             checkpoint_for_index = checkpoint_opt.clone();
-
-            if effective_end.is_continuable()
-                && !self.config.execution.continuation
-                && !auto_exceeded
-            {
-                // ADR-0072 §6 (f): `[execution] continuation = false` なら従来どおり
-                // `WorkerError{retryable:true}` に戻す（WU の状態は変えない）。
-                trigger = Trigger::WorkerError { retryable: true };
-                outcome_str = format!(
-                    "error(retryable=true): {} (continuation disabled)",
-                    run_settlement::describe_run_end(effective_end)
-                );
-            } else {
-                let units = self.store.work_units_for(task_id)?;
-                // The measured auto-leaf guard replaces the generic continuation /
-                // no-progress replan caps for this leaf. Failures and plan_issue remain unchanged.
-                let limits = crate::execution_scheduler::WuLimits {
-                    continuation_hard_limit: if auto_counts.is_some() {
-                        u32::MAX
-                    } else {
-                        self.config.execution.continuation_hard_limit
-                    },
-                    no_progress_limit: if auto_counts.is_some() {
-                        u32::MAX
-                    } else {
-                        self.config.execution.no_progress_limit
-                    },
-                    max_retries: task.budget.max_retries,
-                };
-                let mut decision = crate::execution_scheduler::decide(
-                    effective_end,
-                    &run_id,
+            // ADR 2026-11-11 dispatcher-state-ownership D3: WU の遷移と task の trigger・outcome の文は
+            // `run_settlement::settle_work_unit` が決める（遷移の正本は `execution_scheduler`）。ここでは WU の行・auto-leaf
+            // の決定の要求・integration repair の結果の信頼を読んで渡し、提案の副作用を今と同じ順で行う。
+            let units = self.store.work_units_for(task_id)?;
+            let auto_leaf_request = match auto_counts.as_ref().filter(|c| c.exceeded(tree)) {
+                Some(counts) => Some(self.auto_leaf_decision(
+                    &task,
                     wu,
-                    &units,
-                    crate::execution_scheduler::ContinuationInputs {
-                        checkpoint: checkpoint_opt.as_ref(),
-                        prev_checkpoint: prev_checkpoint_opt.as_ref(),
-                        no_progress_before,
-                        continuations_since_answer,
-                        progress_checkpoints,
-                    },
-                    limits,
-                );
-                if let Some(counts) = auto_counts.filter(|counts| counts.exceeded(tree))
-                    && decision.reason == "continue"
+                    &run_id,
+                    counts,
+                    checkpoint_opt.as_ref(),
+                )?),
+                None => None,
+            };
+            let integration_repair_trusted =
+                if task_core::is_integration_repair_unit(wu.kind, &wu.spec.title) {
+                    Some(self.integration_repair_result_trusted(&task, wu)?)
+                } else {
+                    None
+                };
+            let mut settled = run_settlement::settle_work_unit(run_settlement::WorkUnitRunInput {
+                end: effective_end,
+                run_id: &run_id,
+                wu,
+                units: &units,
+                continuation: crate::execution_scheduler::ContinuationInputs {
+                    checkpoint: checkpoint_opt.as_ref(),
+                    prev_checkpoint: prev_checkpoint_opt.as_ref(),
+                    no_progress_before,
+                    continuations_since_answer,
+                    progress_checkpoints,
+                },
+                continuation_enabled: self.config.execution.continuation,
+                continuation_hard_limit: self.config.execution.continuation_hard_limit,
+                no_progress_limit: self.config.execution.no_progress_limit,
+                max_retries: task.budget.max_retries,
+                auto_leaf_measured: auto_counts.is_some(),
+                auto_leaf_request,
+                integration_repair_trusted,
+                trigger,
+                outcome: outcome_str,
+                check_failure_suffix: &check_failure_suffix,
+                check_failure_signature: check_failure.as_ref().map(|f| f.failure_signature()),
+                misplaced: misplaced_result,
+            });
+            if let Some(reason) = settled.integration_repair_exhaust {
+                let (fallback, event) = self.integration_repair_exhaustion(&task, wu, reason)?;
+                integration_exhausted_event = event;
+                (settled.trigger, settled.outcome) =
+                    run_settlement::integration_repair_exhausted(&wu.key, fallback);
+            }
+            if let Some(failure) = settled.failure.as_ref().map(|f| f.failure.clone()) {
+                let limits = self.replan_limits(task_id, Some((&wu.key, &failure)), None)?;
+                match run_settlement::settle_work_unit_failure(&mut settled, limits) {
+                    run_settlement::WorkUnitFailureStep::Settled => {}
+                    run_settlement::WorkUnitFailureStep::Stalled { stalled } => {
+                        tracing::warn!(%task_id, key = %wu.key, stalled, "the same work unit failure repeated without progress; asking a human instead of replanning (ADR 2026-10-22-stalled-auto-replan)");
+                    }
+                    run_settlement::WorkUnitFailureStep::AskExhausted { why, used } => {
+                        (settled.trigger, settled.outcome) =
+                            self.replan_exhausted_ask(&task, &why, used)?;
+                    }
+                }
+            }
+            auto_replan_event = settled.auto_replan.take();
+            if let Some(decision) = &settled.decision
+                && !settled.reset_only
+                && decision.plan_complete
+            {
+                // D15: Task の完了。`ReviewSubject.summary` は WU ごとの最終 checkpoint の `completed` を key ごとに
+                // 1 段落ずつ並べた決定的な要約にする（evidence はこの最後の run のものを残す）。checkpoint が無い WU は
+                // 「完了」とだけ書く。
+                let mut paragraphs = Vec::new();
+                for u in &units {
+                    if u.id == wu.id {
+                        continue;
+                    }
+                    if !u.status.is_active() || u.status != task_core::WorkUnitStatus::Done {
+                        continue;
+                    }
+                    let completed = u
+                        .last_run_id
+                        .as_deref()
+                        .and_then(|rid| self.store.run_index_get(rid).ok().flatten())
+                        .and_then(|r| r.checkpoint)
+                        .map(|cp| cp.completed.join("; "))
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| "完了".to_string());
+                    paragraphs.push(format!("{}: {}", u.spec.title, completed));
+                }
+                let this_completed = checkpoint_for_index
+                    .as_ref()
+                    .map(|cp| cp.completed.join("; "))
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| subject.summary.clone());
+                paragraphs.push(format!("{}: {}", wu.spec.title, this_completed));
+                subject.summary = paragraphs.join("\n");
+            }
+            // ADR-0079 D7（Phase R3a）: 木の節点の leaf の run が `result.json` の `decisions` で人への決定の要求を
+            // 出した。記録し（path 付き）、`needed_before: self` ならこの leaf を done にせず止める。他の unit を指した
+            // 決定はその unit だけを止め、この run の完了は妨げない。
+            if settled.reads_worker_decisions() {
+                let (site_artifacts, _, _, _) = self.work_unit_checkpoint_site(&task, Some(wu));
+                if let Some(found) =
+                    self.worker_decisions(&task, Some(wu), site_artifacts.as_deref(), &run_id)?
                 {
-                    let request = self.auto_leaf_decision(
-                        &task,
-                        wu,
-                        &run_id,
-                        &counts,
-                        checkpoint_opt.as_ref(),
-                    )?;
-                    outcome_str = format!("decision: {}", request.question);
-                    decision.updated.status = task_core::WorkUnitStatus::Blocked;
-                    decision.updated.blocked_reason =
-                        Some(task_core::WorkUnitBlockedReason::Decision);
-                    decision.reason = "auto_leaf_budget";
-                    decision.trigger = Trigger::Continue {
-                        why: task_core::ContinueWhy::Advance,
-                    };
-                    decision.plan_complete = false;
-                    decision.newly_ready.clear();
-                    decision.newly_blocked.clear();
-                    worker_decisions = Some(WorkerDecisions {
-                        events: vec![Event::DecisionRequested {
-                            decision: Box::new(request),
-                        }],
-                        held_rows: vec![],
-                        self_hold: true,
-                        count: 1,
-                    });
+                    if found.self_hold {
+                        run_settlement::hold_for_worker_decisions(
+                            &mut settled,
+                            &wu.key,
+                            found.count,
+                        );
+                    }
+                    worker_decisions = Some(found);
                 }
-                super::phase_integration::merge_repair::retire_if_failed(wu, &mut decision);
-                if !reset_only {
-                    trigger = decision.trigger;
-                    match decision.reason {
-                        "failed" => {
-                            let msg = outcome_str
-                                .strip_prefix("error(retryable=false): ")
-                                .or_else(|| outcome_str.strip_prefix("error(retryable=true): "))
-                                .unwrap_or(outcome_str.as_str());
-                            outcome_str = format!(
-                                "error(retryable=false): work unit {} failed: {msg}",
-                                wu.key
-                            );
-                        }
-                        "limit" | "continuation_cap" | "merge_repair_failed" => {
-                            if let Some(question) = &decision.outcome_override {
-                                outcome_str = question.clone();
-                            }
-                        }
-                        "continue" => {
-                            outcome_str = format!(
-                                "continue: {} の続き（WorkUnit {}, Run #{}）",
-                                run_settlement::describe_run_end(effective_end),
-                                wu.key,
-                                wu.runs + 1
-                            );
-                        }
-                        "retry" => {
-                            outcome_str = format!(
-                                "work_unit_retry: WorkUnit {} を最初からやり直します（{}/{}）{check_failure_suffix}",
-                                wu.key, decision.updated.retries, limits.max_retries
-                            );
-                        }
-                        // ADR-0090 D2: unit はクラスタ job を待つ（`blocked(cluster_jobs)`）。v2 の task は兄弟を止めず
-                        // `advance` で進み、段階の unit を順に並べる v1 の task は task ごと待つ。
-                        "cluster_jobs" => {
-                            outcome_str = format!("{outcome_str}（WorkUnit {}）", wu.key);
-                            if wu.phase.is_none() {
-                                trigger = Trigger::ClusterJobWait;
-                            }
-                        }
-                        // ADR-0072 D17 3.（Phase E4b 項目2）: worker の checkpoint/result.json が
-                        // `plan_issue` を書いた。
-                        "plan_issue" => {
-                            let text = checkpoint_opt
-                                .as_ref()
-                                .and_then(|cp| cp.plan_issue.clone())
-                                .unwrap_or_default();
-                            outcome_str = format!(
-                                "question: WorkUnit {} が計画の問題を申告しました: {text}",
-                                wu.key
-                            );
-                        }
-                        _ => {}
-                    }
-                    // ADR-0072 D17（Phase E4）/ D17 3.（Phase E4b 項目2）: WU が failed、または
-                    // 進捗なし/continuation の上限（"limit"）に達した、または `plan_issue` を
-                    // 申告したら、replan の余地（`max_replans`）があれば Task を failed/blocked に
-                    // する代わりに replan の planner run を起こす（`ContinueWhy::Replan`）。
-                    // D12「失敗にしないもの」: 進捗なし・継続の上限到達は元々失敗にしない。D12 3.: WU failed は「replan できない」ときだけ failed にする。
-                    if task_core::is_integration_repair_unit(wu.kind, &wu.spec.title)
-                        && (matches!(decision.reason, "failed" | "limit" | "plan_issue")
-                            || (decision.reason == "completed"
-                                && !self.integration_repair_result_trusted(&task, wu)?))
-                    {
-                        let reason = match decision.reason {
-                            "plan_issue" => task_core::IntegrationRepairExhaustReason::PlanIssue,
-                            "failed" => task_core::IntegrationRepairExhaustReason::WorkUnitFailed,
-                            "completed" => {
-                                task_core::IntegrationRepairExhaustReason::ResultUntrusted
-                            }
-                            _ if matches!(
-                                effective_end,
-                                task_core::RunEnd::BudgetExhausted { .. }
-                            ) =>
-                            {
-                                task_core::IntegrationRepairExhaustReason::BudgetExhausted
-                            }
-                            _ => task_core::IntegrationRepairExhaustReason::WorkUnitFailed,
-                        };
-                        let (fallback, event) =
-                            self.integration_repair_exhaustion(&task, wu, reason)?;
-                        integration_exhausted_event = event;
-                        trigger = if fallback {
-                            Trigger::WorkerDone
-                        } else {
-                            Trigger::WorkerQuestion
-                        };
-                        outcome_str = if fallback {
-                            format!(
-                                "integration repair {} exhausted; review unsynced HEAD",
-                                wu.key
-                            )
-                        } else {
-                            format!(
-                                "question: integration repair {} needs manual inspection",
-                                wu.key
-                            )
-                        };
-                    } else if !misplaced_result
-                        && matches!(decision.reason, "failed" | "limit" | "plan_issue")
-                    {
-                        // ADR 2026-10-22-stalled-auto-replan D1 / D4: 同じ WU・同じ失敗の自動 replan が進展なしに
-                        // 続いたら、`max_replans` に余りがあっても止めて人に聞く（D4 wu-failure の `replan_or_ask`）。
-                        let failure = match &check_failure {
-                            Some(f) => f.failure_signature(),
-                            None => task_ops::plan_gate::failure_signature(
-                                &[decision.reason],
-                                &outcome_str,
-                            ),
-                        };
-                        let limits =
-                            self.replan_limits(task_id, Some((&wu.key, &failure)), None)?;
-                        let verdict = run_settlement::replan_or_ask(limits);
-                        if verdict == ReplanOrAsk::Ask(AskReason::Stalled) {
-                            let msg = outcome_str
-                                .strip_prefix("error(retryable=false): ")
-                                .unwrap_or(outcome_str.as_str())
-                                .to_string();
-                            tracing::warn!(%task_id, key = %wu.key, stalled = limits.stalled, "the same work unit failure repeated without progress; asking a human instead of replanning (ADR 2026-10-22-stalled-auto-replan)");
-                            trigger = Trigger::WorkerQuestion;
-                            outcome_str = format!(
-                                "question: {}",
-                                task_ops::plan_gate::replan_stalled_question(
-                                    &wu.key,
-                                    limits.stalled,
-                                    &msg
-                                )
-                            );
-                        } else if verdict == ReplanOrAsk::Replan {
-                            auto_replan_event = Some(Event::AutoReplanRequested {
-                                key: wu.key.clone(),
-                                failure,
-                                source: task_core::AutoReplanSource::WorkUnit,
-                            });
-                            let why = match decision.reason {
-                                "failed" => {
-                                    format!("work unit {} failed{check_failure_suffix}", wu.key)
-                                }
-                                "limit" => format!("work unit {} made no progress", wu.key),
-                                _ => {
-                                    let text = checkpoint_opt
-                                        .as_ref()
-                                        .and_then(|cp| cp.plan_issue.clone())
-                                        .unwrap_or_default();
-                                    format!("work unit {} reported a plan issue: {text}", wu.key)
-                                }
-                            };
-                            trigger = Trigger::Continue {
-                                why: task_core::ContinueWhy::Replan,
-                            };
-                            outcome_str = format!("replan: {why}");
-                        } else if decision.reason == "failed" {
-                            // ADR-0079 付記「R6-1」D3: replan を使い切った後の WU の失敗で task を黙って `failed`
-                            // にしない（web Phase 0 の 17:56Z）。木の節点は `limit:max_replans` の決定、木で
-                            // ない task は人への質問（回答 = 人の replan、上限に数えない）。
-                            let msg = outcome_str
-                                .strip_prefix("error(retryable=false): ")
-                                .unwrap_or(outcome_str.as_str())
-                                .to_string();
-                            let (t, o) = self.replan_exhausted_ask(&task, &msg, limits.replans)?;
-                            trigger = t;
-                            outcome_str = o;
-                        } else if decision.reason == "plan_issue" {
-                            // ADR 2026-10-22-plan-issue-answer-replans D6: 同じ check での再開は同じ申告を
-                            // 繰り返し得るので、計画を直す答え方を質問に添える。
-                            outcome_str.push_str(task_ops::gate::PLAN_ISSUE_REPLAN_HINT);
-                        }
-                    }
-                    if decision.plan_complete {
-                        // D15: Task の完了。`ReviewSubject.summary` は WU ごとの最終 checkpoint の
-                        // `completed` を key ごとに 1 段落ずつ並べた決定的な要約にする（evidence は
-                        // この最後の run のものを残す）。checkpoint が無い WU は「完了」とだけ書く。
-                        let mut paragraphs = Vec::new();
-                        for u in &units {
-                            if u.id == wu.id {
-                                continue;
-                            }
-                            if !u.status.is_active() || u.status != task_core::WorkUnitStatus::Done
-                            {
-                                continue;
-                            }
-                            let completed = u
-                                .last_run_id
-                                .as_deref()
-                                .and_then(|rid| self.store.run_index_get(rid).ok().flatten())
-                                .and_then(|r| r.checkpoint)
-                                .map(|cp| cp.completed.join("; "))
-                                .filter(|s| !s.is_empty())
-                                .unwrap_or_else(|| "完了".to_string());
-                            paragraphs.push(format!("{}: {}", u.spec.title, completed));
-                        }
-                        let this_completed = checkpoint_for_index
-                            .as_ref()
-                            .map(|cp| cp.completed.join("; "))
-                            .filter(|s| !s.is_empty())
-                            .unwrap_or_else(|| subject.summary.clone());
-                        paragraphs.push(format!("{}: {}", wu.spec.title, this_completed));
-                        subject.summary = paragraphs.join("\n");
-                    }
-                }
-                let mut all_new_rows = decision.newly_blocked.clone();
-                all_new_rows.extend(decision.newly_ready.clone());
-                let mut updated_row = decision.updated;
-                let mut wu_reason = decision.reason;
-                // ADR-0079 D7（Phase R3a）: 木の節点の leaf の run が `result.json` の `decisions` で人への決定の
-                // 要求を出した。記録し（path 付き）、`needed_before: self` ならこの leaf を done にせず
-                // `blocked(decision)` にする（答えは次の run の前置きの「人の決定」節に入る）。他の unit を指した決定は
-                // その unit だけを止め、この run の完了は妨げない。
-                if wu_reason == "completed" && !reset_only {
-                    let (site_artifacts, _, _, _) = self.work_unit_checkpoint_site(&task, Some(wu));
-                    if let Some(found) =
-                        self.worker_decisions(&task, Some(wu), site_artifacts.as_deref(), &run_id)?
-                    {
-                        if found.self_hold {
-                            updated_row.status = task_core::WorkUnitStatus::Blocked;
-                            updated_row.blocked_reason =
-                                Some(task_core::WorkUnitBlockedReason::Decision);
-                            wu_reason = "decision";
-                            // この leaf はまだ done ではないので、それを待つ unit は ready にしない。
-                            all_new_rows.clear();
-                            if matches!(trigger, Trigger::WorkerDone) {
-                                trigger = Trigger::Continue {
-                                    why: task_core::ContinueWhy::Advance,
-                                };
-                            }
-                            outcome_str = format!(
-                                "decision: WorkUnit {} は人の決定を待ちます（決定の要求 {} 件。ADR-0079 D7）",
-                                wu.key, found.count
-                            );
-                        }
-                        worker_decisions = Some(found);
-                    }
-                }
-                wu_parked_on_cluster_jobs = wu_reason == "cluster_jobs";
-                wu_update = Some((updated_row, wu_reason, all_new_rows));
+            } else if let Some(request) = settled.auto_leaf_request.take() {
+                worker_decisions = Some(WorkerDecisions {
+                    events: vec![Event::DecisionRequested {
+                        decision: Box::new(request),
+                    }],
+                    held_rows: vec![],
+                    self_hold: true,
+                    count: 1,
+                });
+            }
+            trigger = settled.trigger;
+            outcome_str = settled.outcome;
+            if let Some(decision) = settled.decision {
+                let mut all_new_rows = decision.newly_blocked;
+                all_new_rows.extend(decision.newly_ready);
+                wu_parked_on_cluster_jobs = decision.reason == "cluster_jobs";
+                wu_update = Some((decision.updated, decision.reason, all_new_rows));
             }
         } else if let Some(end) = run_end
             && end.saves_checkpoint()

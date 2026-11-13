@@ -49,6 +49,15 @@ ADR 2026-11-11-dispatcher-state-ownership D4 の契約（入力は照合 key の
 - `sh scripts/dev/progress-index.sh --check` → exit 0（ok）、`sh scripts/dev/check-doc-links.sh` → exit 0
 - コードを変えていないので test-affected・clippy・fmt はこの unit では走らせていない
 
+## 再提出（2 回目の run）
+
+- 1 回目の run の `result.json` は `summary` と `yield`（`plan_issue`）を両方持っていた。worker は `summary` を `yield` より先に読む
+  （`crates/task-worker/src/result_report.rs` の `interpret_result_text`: question > wait > summary > yield）ので、done として扱われ、
+  WU の check（`stored_session_fresh_reason` の定義の数）が落ちて retry になった。
+- 2 回目の run は上の分析を試験で確かめ直した（`sessions/tests.rs` の `session_resume_session_reuse_rejected_resume_falls_back_to_checkpoint`
+  は保存 session が無くても `ResumeRejected` を求め、`cos_chat/tests.rs` の `cos_chat_run_session_reason_precedence_is_fixed` は
+  key の変化と拒否が重なると `key_changed` を求める）。結論は変わらない。`result.json` は `yield` だけにして replan を申告した。
+
 ## 未解決
 
 - D4 の continuation-resume の行と `stored_session_fresh_reason` の契約を、等価に共有できる形に改める決定（ADR の変更）が要る。

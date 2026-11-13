@@ -1,17 +1,30 @@
 ---
 title: "健全性v2 R4 settle-fresh: continuation-resume の Resume か Fresh の照合を stored_session_fresh_reason の 1 つにする"
 tasks: [01M7B2KBNJ72C5F75RAEWSFECG]
-status: blocked
+status: done
 updated: 2026-11-13
+completed: 2026-11-13
 ---
 # 健全性v2 R4 settle-fresh
 
+完了日: 2026-11-13
+
 ## 結論
 
-ADR 2026-11-11-dispatcher-state-ownership D4 の契約（入力は照合 key の一致・前回の拒否・id の妥当性・context の枯渇・測った token と上限）の
-`sessions::stored_session_fresh_reason` は、今の `sessions::decide_continuation`（task・WU）と
-`sessions::cos_chat::decide_cos_chat_session`（CoS chat）の両方から等価に呼べない。Objective の指示どおり実装せず、replan を申告した
-（yield plan_issue）。repo のコードは変えていない。
+人の決定 fresh-contract の答え a に従い、共有の範囲を「保存 session の id の妥当性・context の枯渇・測った token と上限」に絞った。
+絞り込みと理由は [ADR 2026-11-13-continuation-resume-shared-inputs](../../adr/2026-11-13-continuation-resume-shared-inputs.md) に書き、
+実装より先に commit した。ADR 2026-11-11-dispatcher-state-ownership の本文は変えていない。
+
+- `sessions::stored_session_fresh_reason`（`crates/task-dispatch/src/sessions.rs`）を 1 つだけ定義した。入力は `StoredSessionFacts`
+  （adapter・id・context の枯渇・測った token・上限）、返す値は `Option<StoredSessionFreshReason>`（`InvalidId`・`ContextExhausted`・
+  `TokenRollover`。`None` なら Resume）。順は id → context → token。
+- `decide_continuation` は `InvalidId` を `SessionMissing`、`ContextExhausted` と `TokenRollover` を `ContextRollover` に写す。
+- `decide_cos_chat_session` は cache の消失を今のまま先に見て `CacheMissing`、その後に共有の照合を呼び、`InvalidId` → `CacheMissing`、
+  `ContextExhausted` → `ContextExhausted`、`TokenRollover` → `TokenRollover` に写す。
+- 2 つの関数の中にあった id の検査と token・context の比較の写しは消した。照合 key・前回の拒否・cache の有無・cwd、
+  token の測り方（`approx_tokens` と `rollover_measure`）、理由ごとの session の作成と引退、`resolve_continuation_session` は変えていない。
+
+以下の「確かめたこと」は 1・2 回目の run の分析（照合の順の違い）で、ADR 2026-11-13 の背景の根拠として残す。
 
 ## 確かめたこと（adr-align の未解決）
 
@@ -41,15 +54,28 @@ ADR 2026-11-11-dispatcher-state-ownership D4 の契約（入力は照合 key の
 
 ## 変更
 
-- `phase 1: settle-fresh: continuation-resume を等価に共有できない理由を進捗に書く` — この進捗ファイルだけ。コードと ADR は変えていない。
+- `phase 1: settle-fresh: continuation-resume を等価に共有できない理由を進捗に書く` — 1 回目の run。この進捗ファイルだけ。
+- `phase 1: settle-fresh: 再提出の経緯（result.json の summary が yield より先に読まれた）を進捗に書く` — 2 回目の run。この進捗ファイルだけ。
+- `phase 1: settle-fresh: continuation-resume で共有する照合を id・context・token に絞る ADR を足す` — 3 回目の run。ADR だけを先に commit した。
+- `phase 1: settle-fresh: stored_session_fresh_reason を sessions に 1 つだけ定義し、decide_continuation と decide_cos_chat_session から呼ぶ` —
+  `sessions.rs`・`sessions/cos_chat.rs`・試験 2 file・`docs/architecture-map.md`（sessions と CoS chat の行に共有の関数と ADR 2026-11-13 を足した）・この進捗。
+
+足した試験（守る不変条件と既存の試験で検出できない理由は各試験の doc comment に書いた）:
+
+- `sessions/tests.rs` の `stored_session_fresh_reason_checks_id_then_context_then_tokens` — 共有の関数の単体試験。理由が重なると
+  id → context → token の順で 1 つ選び、token は上限と等しければ上限に達したと数える。
+- `sessions/tests.rs` の `session_resume_broken_id_wins_over_context_exhaustion` — task・WU で壊れた id と context の枯渇が重なると `session_missing`。
+- `sessions/cos_chat/tests.rs` の `cos_chat_run_bad_id_wins_over_context_and_tokens` — CoS chat で cache があっても id が不正なら、
+  context の枯渇・token の上限と重なっても `cache_missing`。
+
+既存の試験の assertion は変えていない（`session_resume_session_reuse_rejected_resume_falls_back_to_checkpoint`・
+`cos_chat_run_session_reason_precedence_is_fixed` を含む）。
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
-- `sh "$CELERIS_WU_SCOPE_PATHS"` → この進捗ファイルだけ
-- `sh scripts/dev/progress-index.sh --check` → exit 0（ok）、`sh scripts/dev/check-doc-links.sh` → exit 0
-- コードを変えていないので test-affected・clippy・fmt はこの unit では走らせていない
+EVIDENCE_PLACEHOLDER
 
-## 再提出（2 回目の run）
+## 再提出の経緯（1・2 回目の run）
 
 - 1 回目の run の `result.json` は `summary` と `yield`（`plan_issue`）を両方持っていた。worker は `summary` を `yield` より先に読む
   （`crates/task-worker/src/result_report.rs` の `interpret_result_text`: question > wait > summary > yield）ので、done として扱われ、
@@ -60,12 +86,16 @@ ADR 2026-11-11-dispatcher-state-ownership D4 の契約（入力は照合 key の
 
 ## 未解決
 
-- D4 の continuation-resume の行と `stored_session_fresh_reason` の契約を、等価に共有できる形に改める決定（ADR の変更）が要る。
-  この unit は ADR を変えられない（範囲の check が拒む）。
+- D4 の表と実装の差: ADR 2026-11-11 D4 の continuation-resume の行は「拒否」を共有すると書くが、実装は拒否と照合 key を共有しない
+  （ADR 2026-11-13 D4 が正本の付記）。
+- 拒否と照合 key を見る順を task・WU と CoS chat で 1 つにそろえるか（前回の選択肢 c に当たる。どちらかの振る舞いと試験の assertion を変える）は、
+  後で人が決める問いとして残す。
+- node 単位の session の `sessions::decide`（ADR-0054 D1、`dispatcher/run_context.rs` が呼ぶ）にも id の検査と token の比較があるが、
+  D4 の表に無く順も id → account → token なので、この unit では変えていない（ADR 2026-11-13 D3）。
 
 ## 提案
 
-推奨は案 A。
+（1・2 回目の run の提案。人は案 A を選び、この run で実装した。）
 
 - 案 A（推奨）: 共有の範囲を「保存 session の id の妥当性・context の枯渇・測った token と上限」に絞る。key の照合と前回の拒否は各関数に残す。
   - 順は両方で id → context の枯渇 → token の上限になり、等価に共有できる（task・WU は context の枯渇と token の上限を同じ `ContextRollover` に写すので、

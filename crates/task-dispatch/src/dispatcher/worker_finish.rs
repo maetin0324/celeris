@@ -1,6 +1,7 @@
 //! worker run の終了処理（`finish_worker_result` と finalise の失敗の後始末）。同じ transaction の組と `release_quota_if_tracked` はそのまま。ADR-0082 の L3。
 
 use super::*;
+use crate::run_settlement::{self, AskReason, ReplanOrAsk};
 
 fn repair_git(dir: &Path, args: &[&str]) -> Option<String> {
     let output = std::process::Command::new("git")
@@ -901,9 +902,9 @@ impl Dispatcher {
                     } else if !misplaced_result
                         && matches!(decision.reason, "failed" | "limit" | "plan_issue")
                     {
-                        let replans_so_far = self.counted_replans(task_id)?;
                         // ADR 2026-10-22-stalled-auto-replan D1 / D4: 同じ WU・同じ失敗の自動 replan が進展なしに
-                        // 続いたら、`max_replans` に余りがあっても止めて人に聞く。
+                        // 続いたら、`max_replans` に余りがあっても止めて人に聞く。上限の判定は D4 wu-failure の
+                        // `run_settlement::replan_or_ask`（遅延 WU・統合の失敗と共有）。
                         let failure = match &check_failure {
                             Some(f) => f.failure_signature(),
                             None => task_ops::plan_gate::failure_signature(
@@ -911,16 +912,23 @@ impl Dispatcher {
                                 &outcome_str,
                             ),
                         };
-                        let stalled = task_ops::plan_gate::stalled_replans(
-                            &self.store.events_for(task_id)?,
-                            &wu.key,
-                            &failure,
-                        );
-                        if stalled >= task_ops::plan_gate::STALLED_REPLAN_LIMIT {
+                        let limits = run_settlement::ReplanLimits {
+                            stalled: task_ops::plan_gate::stalled_replans(
+                                &self.store.events_for(task_id)?,
+                                &wu.key,
+                                &failure,
+                            ),
+                            replans: self.counted_replans(task_id)?,
+                            max_replans: self.effective_max_replans(task_id)?,
+                            ban: None,
+                        };
+                        let verdict = run_settlement::replan_or_ask(limits);
+                        if verdict == ReplanOrAsk::Ask(AskReason::Stalled) {
                             let msg = outcome_str
                                 .strip_prefix("error(retryable=false): ")
                                 .unwrap_or(outcome_str.as_str())
                                 .to_string();
+                            let stalled = limits.stalled;
                             tracing::warn!(%task_id, key = %wu.key, stalled, "the same work unit failure repeated without progress; asking a human instead of replanning (ADR 2026-10-22-stalled-auto-replan)");
                             trigger = Trigger::WorkerQuestion;
                             outcome_str = format!(
@@ -929,7 +937,7 @@ impl Dispatcher {
                                     &wu.key, stalled, &msg
                                 )
                             );
-                        } else if replans_so_far < self.effective_max_replans(task_id)? {
+                        } else if verdict == ReplanOrAsk::Replan {
                             auto_replan_event = Some(Event::AutoReplanRequested {
                                 key: wu.key.clone(),
                                 failure,
@@ -960,7 +968,7 @@ impl Dispatcher {
                                 .strip_prefix("error(retryable=false): ")
                                 .unwrap_or(outcome_str.as_str())
                                 .to_string();
-                            let (t, o) = self.replan_exhausted_ask(&task, &msg, replans_so_far)?;
+                            let (t, o) = self.replan_exhausted_ask(&task, &msg, limits.replans)?;
                             trigger = t;
                             outcome_str = o;
                         } else if decision.reason == "plan_issue" {

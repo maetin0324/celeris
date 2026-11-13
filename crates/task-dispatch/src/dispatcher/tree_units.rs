@@ -1,6 +1,7 @@
 //! 木の子 task（tree units）の gate・liveness・plan_invalid と一括作成（ADR-0079）。ADR-0082 の L2。
 
 use super::*;
+use crate::run_settlement::{self, ReplanOrAsk};
 
 impl Dispatcher {
     /// ADR-0079 D4 (3) / D3（Phase R2a）: 採用する /3 の計画に unit の gate をかけ（上げる・下げるを spec に
@@ -104,8 +105,15 @@ impl Dispatcher {
             .collect();
         let mut facts = Vec::with_capacity(nodes.len());
         for t in &nodes {
-            let replans_so_far = self.counted_replans(t.id)?;
-            let replans_left = replans_so_far < self.effective_max_replans(t.id)?;
+            // 節点の replan の余地は D4 wu-failure の `run_settlement::replan_or_ask` と同じ判定（失敗の署名を持たない
+            // ので stalled は 0、禁止の理由も無い）。liveness は「WU が失敗したら自動 replan が来るか」を見る。
+            let limits = run_settlement::ReplanLimits {
+                stalled: 0,
+                replans: self.counted_replans(t.id)?,
+                max_replans: self.effective_max_replans(t.id)?,
+                ban: None,
+            };
+            let replans_left = run_settlement::replan_or_ask(limits) == ReplanOrAsk::Replan;
             facts.push(
                 task_ops::tree::node_liveness_facts(
                     self.store.as_ref(),

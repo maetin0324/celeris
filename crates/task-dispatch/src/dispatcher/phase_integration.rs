@@ -4,6 +4,8 @@ use super::*;
 use std::collections::BTreeMap;
 use task_worker::check_slots::CheckLimits;
 
+use crate::run_settlement::{self, AskReason, ReplanBan, ReplanOrAsk};
+
 /// ADR 2026-11-08-health-enforcement-loop: 検査の列の項目の記録と health の項目。file は size の制約で `health_review/` に置く。
 #[path = "../health_review/check_item.rs"]
 pub(super) mod check_item;
@@ -1315,20 +1317,24 @@ impl Dispatcher {
         why: &str,
         failure: Option<String>,
     ) -> Result<(), DispatchError> {
-        let replans_so_far = self.counted_replans(task.id)?;
         let failure =
             failure.unwrap_or_else(|| task_ops::plan_gate::failure_signature::<&str>(&[], why));
-        let stalled = task_ops::plan_gate::stalled_replans(
-            &self.store.events_for(task.id)?,
-            &integ.key,
-            &failure,
-        );
-        let stalled_stop = stalled >= task_ops::plan_gate::STALLED_REPLAN_LIMIT;
-        // ADR 2026-11-08-health-enforcement-loop D3.4・D4.3・D4.4: health の Error・往復・上限の使い切りは replan せず人に聞く。
-        let may_replan = !check_item::stops_without_replan(why);
-        let can_replan =
-            may_replan && !stalled_stop && replans_so_far < self.effective_max_replans(task.id)?;
-        let question_text = if stalled_stop {
+        // 上限の判定は D4 wu-failure の `run_settlement::replan_or_ask`（worker 完了・遅延 WU と共有）。
+        let limits = run_settlement::ReplanLimits {
+            stalled: task_ops::plan_gate::stalled_replans(
+                &self.store.events_for(task.id)?,
+                &integ.key,
+                &failure,
+            ),
+            replans: self.counted_replans(task.id)?,
+            max_replans: self.effective_max_replans(task.id)?,
+            // ADR 2026-11-08-health-enforcement-loop D3.4・D4.3・D4.4: health の Error・往復・上限の使い切りは replan せず人に聞く。
+            ban: check_item::stops_without_replan(why).then_some(ReplanBan::HealthStop),
+        };
+        let verdict = run_settlement::replan_or_ask(limits);
+        let can_replan = verdict == ReplanOrAsk::Replan;
+        let question_text = if verdict == ReplanOrAsk::Ask(AskReason::Stalled) {
+            let stalled = limits.stalled;
             tracing::warn!(task_id = %task.id, key = %integ.key, stalled, "the same integration failure repeated without progress; asking a human instead of replanning (ADR 2026-10-22-stalled-auto-replan)");
             task_ops::plan_gate::replan_stalled_question(&integ.key, stalled, why)
         } else {

@@ -638,6 +638,23 @@ harness ごとの可否:
 - **配送の repair（E4 の後半、任意）**: `[delivery-repair]` の `Trigger::Reopen`（タスク全体の再実行）を、「Reopen + `merge_base` の
   repair WU を同じトランザクションで作る」に変える。Reopen 後の dispatch は、残っている repair WU だけを走らせる。
 
+> **付記（2026-11-10、G4-S1）: reviewer run を起こさなかった `Check::Reviewer` の項目は分類に入れない。**
+> review（`crates/task-dispatch/src/review.rs`）は決定的な条件が 1 つでも落ちると reviewer run を起こさず、`Check::Reviewer`
+> の項目を reason `REVIEWER_NOT_EVALUATED_REASON`（同じ file の `pub(crate) const`。文字列の正本はここ 1 か所）の不合格にする
+> （ADR-0007 D5 2.）。`Dispatcher::try_review_repair`（`dispatcher/review_verdict.rs`）はこの項目も不合格として分類に渡していた
+> ため、class の無い reviewer の項目と修復できる決定的な不合格が混ざって `Substantive` になり、`Check::Reviewer` のある task では
+> fmt・lint などの不合格も health の Fail（`health:<rule_id>`）も repair に回らず `ReviewFail`（retry 切れなら failed）になっていた。
+> 決定: `try_review_repair` は、分類（`classify_review_failure`）と repair の `failing_details` に渡す不合格の一覧を作るとき、
+> 決定的な不合格（`Check::Reviewer` でない項目の不合格）が 1 件以上あれば、`Check::Reviewer` の項目で reason がこの const の
+> ものを外す。reviewer の判定ではないので、修復できるかどうかの根拠にしない。verdict を `FailedCheck` に写す処理（暗黙の条件を
+> `Verdict::implicit_check` で写す）は review module の `review::failed_checks` に移した（dispatcher module の行を増やさない。
+> health の `size.responsibility-growth`）。reviewer が実際に不合格にした項目（reason が違う）は今までどおり数え、
+> 決定的な不合格と混ざれば `Substantive` のまま。修復の後の review では決定的な検査と reviewer run がもう一度走る（上の
+> 「repair の run が done になったら…再判定する」のとおり）ので、reviewer の判定を飛ばして done にはならない。
+> `task_core::classify_review_failure`・`health_review/` は変えない。試験は `dispatcher/tests/review.rs` の
+> `review_repair_not_evaluated_reviewer_does_not_block_a_format_repair`・`review_repair_not_evaluated_only_skips_the_not_evaluated_reason`
+> と `dispatcher/tests/health_enforce.rs` の `review_repair_not_evaluated_reviewer_does_not_block_a_health_repair`。
+
 ### D17. replanning（誰が・いつ・どう監査するか）
 
 - **起こすもの**（すべて daemon が決定的に判定する）:

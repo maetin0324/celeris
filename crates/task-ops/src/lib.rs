@@ -18,6 +18,8 @@ pub mod comment;
 /// ADR-0048 D1/D2（Phase 60a）: Console の一本の流れを組み立てる決定的な部品。
 pub mod console;
 pub mod conversation;
+pub mod cos_first_response;
+pub mod cos_skill_gate;
 pub mod cron_jobs;
 pub mod daemon;
 pub mod decision;
@@ -44,6 +46,8 @@ pub mod integrate_task;
 pub mod knowledge;
 /// ADR-0131 D10: 日次の知識整理計画を検証し、差分と反映を決定的に作る。
 pub mod knowledge_curation;
+/// ADR 2026-11-12-knowledge-usage-per-run D4: KB の使われ方の report。
+pub mod knowledge_usage;
 /// ADR-0044 D6（Phase 55）: 案件・途中目標の中止・一時停止・アーカイブ。
 pub mod lifecycle;
 /// ADR-0046 D5（Phase 59）: 担当の決定的な選び方（capability matching）。
@@ -84,7 +88,9 @@ pub mod tree_adopt;
 pub mod tree_plan;
 /// ADR-0079 D11（Phase R4a）: 木の閲覧・roll-up の材料・案件の root の合計・段階の子の要約。
 pub mod tree_view;
+pub mod triage_match;
 pub mod unblocks;
+pub mod unit_task_deps;
 pub mod view;
 pub mod wait;
 pub mod workspace;

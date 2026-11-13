@@ -39,6 +39,7 @@ use std::{
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use task_core::local_machine::WorkspaceRoots;
 use task_core::{Status, TaskId, TaskStore};
 use task_dispatch::{
     ClusterSpec, ContainersRuntimeConfig, DispatchConfig, Dispatcher, ExecutionConfig,
@@ -1506,10 +1507,10 @@ fn build_dispatcher(shared: &Arc<Shared>, paths: &Paths, store: Arc<dyn TaskStor
         work_dir: None,
         keepalive_secs: 0,
         liveness_probe_secs: 0,
-        job_wait: task_core::cluster_job::ClusterJobWaitLimits {
-            poll_secs: shared.spec.poll_secs,
-            max_wait_secs: task_core::cluster_job::MAX_WAIT_SECS_CEILING,
-        },
+        job_wait: task_core::cluster_job::ClusterJobWaitLimits::new(
+            shared.spec.poll_secs,
+            task_core::cluster_job::MAX_WAIT_SECS_CEILING,
+        ),
     };
     let mut d = Dispatcher::new(
         store,
@@ -1521,11 +1522,11 @@ fn build_dispatcher(shared: &Arc<Shared>, paths: &Paths, store: Arc<dyn TaskStor
             idle_timeout: Duration::from_secs(600),
             kill_grace: Duration::from_millis(100),
             review_timeout: Duration::from_secs(60),
+            // ADR 2026-11-12-host-check-slots D3: dagbench の WU の検査は合成の軽い command（`true` と採点の台本）で枠を
+            // 取らない。host の枠を渡すと、計測が他の検査の混み具合と env（`CELERIS_CHECK_SLOT`）に左右されるので渡さない。
+            check_slots: None,
             review_resync_quiet: Duration::from_secs(900),
-            workspace_roots: task_core::local_machine::WorkspaceRoots::new(
-                paths.workspaces.clone(),
-                None,
-            ),
+            workspace_roots: WorkspaceRoots::new(paths.workspaces.clone(), None),
             plan_auto_accept: false,
             retry_backoff_base: Duration::ZERO,
             retry_backoff_max: Duration::ZERO,
@@ -1536,7 +1537,7 @@ fn build_dispatcher(shared: &Arc<Shared>, paths: &Paths, store: Arc<dyn TaskStor
             max_requeues: 5,
             max_reviewer_retries: 3,
             max_infra_retries: 5,
-            min_free_disk_mb: 0,
+            min_free_disk_pct: 0.0,
             roles: Vec::new(),
             genres: Vec::new(),
             delegation: Default::default(),

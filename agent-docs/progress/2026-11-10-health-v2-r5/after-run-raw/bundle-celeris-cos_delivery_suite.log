@@ -1,0 +1,44 @@
+warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGER` causes the socket to block the thread on drop
+   --> crates/script-runtime/vendor/deno_core/uv_compat/tcp.rs:818:17
+    |
+818 |       && stream.set_linger(Some(std::time::Duration::ZERO)).is_err()
+    |                 ^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: `deno_core` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.35s
+     Running tests/cos_delivery_suite/main.rs (/local/celeris/data/scratch/targets/task-01M76AG298YER7PJB6M781C77X/wu-01M76B4XA44CN8G9F3TMYM6DNM/target/debug/deps/cos_delivery_suite-d67d09f8c9d82668)
+
+running 28 tests
+test cos_chat_triage_notify::cos_chat_triage_webhook_disables_mentions_and_obeys_retry_after ... ok
+test cos_chat_triage_notify::cos_chat_triage_escalation_packet_has_bounded_text_and_absolute_link ... ok
+test cos_chat_triage_notify::cos_chat_triage_only_escalation_and_fallback_are_sendable ... ok
+test cos_chat_triage_notify::cos_chat_triage_long_packet_keeps_link_within_1900_characters ... ok
+test cos_chat_stagnation_notify::human_wait_aging_is_live_held_and_withdrawn_when_answered ... ok
+test cos_chat_triage_notify::cos_chat_triage_resolved_source_is_withdrawn_before_post ... ok
+test cos_chat_stagnation_notify::resolved_stagnation_is_withdrawn_before_post ... ok
+test cos_chat_triage_notify::cos_chat_triage_three_send_failures_keep_the_unresolved_item ... ok
+test cos_chat_triage_notify::cos_chat_triage_cutover_supersedes_legacy_pending_and_is_idempotent ... ok
+test cos_chat_triage_notify::cos_chat_triage_notice_revision_is_checked_before_post ... ok
+test releases_api::get_deliveries_is_200_with_items ... ok
+test stranded_default_branch::stranded_default_branch_null_with_main_is_integrated ... ok
+test releases_api::promote_requires_a_token ... ok
+test releases_api::promoting_an_unknown_release_is_404 ... ok
+test releases_api::get_releases_is_200_on_an_empty_directory ... ok
+test cos_chat_triage_scenarios::cos_chat_triage_b_webhook_packet_and_stop_after_human_answer ... ok
+test releases_api::get_releases_sorts_newest_first_and_tolerates_broken_releases ... ok
+test releases_api::promoting_prefers_the_promote_script_of_the_current_release ... ok
+test cos_chat_triage_scenarios::cos_chat_triage_unified_only_cos_escalation_reaches_the_webhook ... ok
+test releases_api::promoting_a_verified_release_starts_the_bundled_script_and_returns_202 ... ok
+test releases_api::promoting_is_409_when_unverified_already_current_or_already_promoting ... ok
+test stranded_default_branch::stranded_default_branch_null_with_origin_head_is_integrated_for_repoless_task ... ok
+test releases_api::promotion_preview_merges_releases_between_current_and_target ... ok
+test stranded_default_branch::stranded_default_branch_unresolvable_is_unintegrated_with_reason ... ok
+test stranded_integration::stranded_detects_inbox_merge_discard_hold_and_promotion_independently ... ok
+test releases_api::get_releases_carries_promoted_at_on_main_and_changes ... ok
+test cos_chat_stagnation_notify::stagnation_findings_are_live_held_and_withdrawn_on_revision ... ok
+test deployment_audit::deployment_scripts_require_provenance_and_preserve_history ... ok
+
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 38.60s
+

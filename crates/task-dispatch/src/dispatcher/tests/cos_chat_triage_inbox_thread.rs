@@ -14,7 +14,7 @@ impl Fixture {
             .expect("one item")
     }
 
-    fn item_state(&self, id: &str) -> String {
+    pub(crate) fn item_state(&self, id: &str) -> String {
         let conn = rusqlite::Connection::open(&self.db_path).expect("db");
         conn.query_row("SELECT state FROM cos_inbox_items WHERE id=?1", [id], |r| {
             r.get(0)

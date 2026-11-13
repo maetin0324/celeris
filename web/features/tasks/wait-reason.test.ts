@@ -33,6 +33,11 @@ describe("task wait reasons", () => {
     expect(waitReason({ kind: "human_gate", gate: "phase_checkpoint", stage: "remove" })).toBe("途中確認待ち: remove");
     expect(waitReason({ kind: "human_gate", gate: "phase_checkpoint", stage: null })).toBe("途中確認待ち");
   });
+  test("shows the disk forecast hold with the run's need (ADR 2026-11-11-disk-aware-dispatch)", () => {
+    expect(
+      waitReason({ kind: "disk_forecast", need_bytes: 100_000_000_000, detail: "free 150.0 GB − … < reserve 30.0 GB" }),
+    ).toBe("空き容量の見込み待ち（必要 100.0 GB）");
+  });
 });
 
 describe("credential wait", () => {

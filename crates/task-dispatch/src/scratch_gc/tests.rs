@@ -54,7 +54,7 @@ fn gc_dry_run_lists_without_removing_and_execute_renames() {
         &NoDb,
         false,
         &HashMap::new(),
-        0,
+        0.0,
         false,
         &BTreeSet::new(),
         false,
@@ -68,11 +68,25 @@ fn gc_dry_run_lists_without_removing_and_execute_renames() {
         &NoDb,
         false,
         &HashMap::new(),
-        0,
+        0.0,
         false,
         &BTreeSet::new(),
         true,
     );
+    // 不変条件: pool の競合中は退避せず即座に戻り、解放後に同じ plan を実行できる。
+    // cargo lock だけの既存試験は pool の待機を検出できない。
+    let held = pool.lock().unwrap();
+    let (finished, receive) = std::sync::mpsc::channel();
+    let guard = std::thread::spawn(move || {
+        let progressed = receive.recv_timeout(Duration::from_secs(30)).is_ok();
+        drop(held);
+        progressed
+    });
+    let deferred = execute(&pool, &run.plan, &run.scan, false);
+    let _ = finished.send(());
+    assert!(guard.join().unwrap(), "GC waited for the pool lock");
+    assert!(deferred.removed.is_empty());
+    assert!(pool.target_dir(&owner).exists());
     assert_eq!(run.plan.selected.len(), 1);
     assert!(run.executed.is_none());
     assert!(pool.target_dir(&owner).exists());
@@ -82,7 +96,7 @@ fn gc_dry_run_lists_without_removing_and_execute_renames() {
         &NoDb,
         false,
         &HashMap::new(),
-        0,
+        0.0,
         false,
         &BTreeSet::new(),
         false,
@@ -180,7 +194,7 @@ fn status_has_no_sccache_or_cache_server_and_gc_keeps_old_l1_dirs() {
         &NoDb,
         false,
         &HashMap::new(),
-        0,
+        0.0,
         true,
         &BTreeSet::new(),
         false,
@@ -317,7 +331,7 @@ fn seed_is_not_reclaimed_by_owner_gc_even_in_emergency() {
         &NoDb,
         false,
         &HashMap::new(),
-        u64::MAX,
+        99.9,
         true,
         &BTreeSet::new(),
         false,
@@ -421,4 +435,158 @@ fn seed_refresh_seeds_follows_main_and_holds_on_low_space() {
             .as_deref(),
         Some("c2")
     );
+}
+
+// ---------------------------------------------------------------------------
+// ADR 2026-11-11-disk-aware-dispatch 付記（2026-11-12、親の数え方）
+// ---------------------------------------------------------------------------
+
+/// 親 task とその WU の状態を与える lookup。
+struct ParentLookup {
+    parent: task_core::Status,
+    units: Vec<scratch::UnitTargetUse>,
+}
+impl StatusLookup for ParentLookup {
+    fn task_status(&self, id: &str) -> Option<task_core::Status> {
+        Some(match id {
+            "P" => self.parent,
+            _ => task_core::Status::Done,
+        })
+    }
+    /// `wu-W` は自分の worktree の WU（`shares_task_worktree = false` の材料と同じ状態）。
+    fn work_unit_status(&self, _: &str) -> Option<task_core::WorkUnitStatus> {
+        self.units
+            .iter()
+            .find(|u| !u.shares_task_worktree)
+            .map(|u| u.status)
+    }
+    fn task_work_units(&self, id: &str) -> Vec<scratch::UnitTargetUse> {
+        if id == "P" {
+            self.units.clone()
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+/// 不変条件（受け入れ条件 3）: 親 task が `running` で自分の worktree の WU の run が 1 本走っているとき、走っている
+/// target の増分（`admission.running_growth_bytes`）はその WU の owner の分だけで、親の owner（lease だけで target の
+/// 無い `task-<id>`）は数えない。Task の worktree を共有する WU が走る親と、`reviewing` の親（review の検査）は数える。
+/// `disk_admission` の試験は `Sample` の `grows` を直接与え、`task_worker::scratch` の試験は分類の理由までしか見ない
+/// ので、pool の走査から status の増分までの経路で本番の形（WU 1 本で repo の見込みの 2 倍）を確かめるのはここだけ。
+#[test]
+fn a_parent_waiting_for_its_work_unit_reserves_only_the_work_unit_growth() {
+    const GB: u64 = 1_000_000_000;
+    let tmp = tempfile::tempdir().unwrap();
+    let s = ScratchSettings::with_dir(tmp.path().join("scratch"));
+    let pool = s.pool();
+    let none = |_: &AdoptCandidate| None;
+    let mut sizes = HashMap::new();
+    let now = SystemTime::now();
+    for (owner, size) in [
+        ("task-old", Some(70 * GB)),
+        ("task-P", None),
+        ("task-P/wu-W", Some(4 * GB)),
+    ] {
+        let owner = Owner::parse(owner).unwrap();
+        scratch::allocate(
+            &pool,
+            &AllocateRequest {
+                owner: &owner,
+                repo_path: Path::new("/repo/ap"),
+                base_commit: None,
+                work_unit_key: None,
+                checkout: None,
+                candidates: &[],
+                distance: &none,
+                adopt: false,
+                max_distance: 0,
+            },
+        )
+        .unwrap();
+        let target = pool.target_dir(&owner);
+        match size {
+            Some(bytes) => {
+                std::fs::create_dir_all(&target).unwrap();
+                sizes.insert(
+                    target,
+                    Measured {
+                        bytes,
+                        last_write: now,
+                        measured_at: now,
+                    },
+                );
+            }
+            // 親の dir は lease と `wu-*` だけ（本番の 2026-11-12 の形）。
+            None => {
+                let _ = std::fs::remove_dir_all(&target);
+            }
+        }
+    }
+    let admission = |lookup: &ParentLookup| {
+        let run = run_gc(
+            &s,
+            &[],
+            lookup,
+            true,
+            &sizes,
+            0.0,
+            false,
+            &BTreeSet::new(),
+            true,
+        );
+        build_status(&s, &run.scan, &run.plan, run.fs, 0, &sizes, None, now)
+    };
+    let reason = |st: &ScratchStatus, owner: &str| {
+        st.owners
+            .iter()
+            .find(|o| o.owner == owner)
+            .map(|o| o.reason.clone())
+    };
+    let growth = |a: &task_ops::daemon::ScratchAdmissionView, owner: &str| {
+        a.owners
+            .iter()
+            .find(|o| o.owner == owner)
+            .map(|o| (o.grows, o.growth_bytes))
+    };
+    use task_core::Status::{Reviewing, Running};
+    use task_core::WorkUnitStatus as W;
+    let own_tree = |status| scratch::UnitTargetUse {
+        status,
+        shares_task_worktree: false,
+    };
+    let shared = |status| scratch::UnitTargetUse {
+        status,
+        shares_task_worktree: true,
+    };
+    // 自分の worktree の WU が 1 本走っているだけ: 増分は WU の 66 GB だけ（旧い数え方は親の 70 GB を足して 136 GB）。
+    // 親は P0 のまま（消さない）で、target が無いので見込みの材料にも出ない。
+    let st = admission(&ParentLookup {
+        parent: Running,
+        units: vec![own_tree(W::Running), shared(W::Pending)],
+    });
+    assert_eq!(
+        reason(&st, "task-P").as_deref(),
+        Some(scratch::TASK_AWAITING_WORK_UNITS)
+    );
+    let a = st.admission;
+    assert_eq!(a.expected_by_repo.values().copied().max(), Some(70 * GB));
+    assert_eq!(growth(&a, "task-P/wu-W"), Some((true, 66 * GB)));
+    assert_eq!(growth(&a, "task-P"), None);
+    assert_eq!(a.running_growth_bytes, 66 * GB);
+    // Task の worktree を共有する WU（統合 WU・repair WU）が走る間は、親の owner の増分を数える。
+    let a = admission(&ParentLookup {
+        parent: Running,
+        units: vec![own_tree(W::Done), shared(W::Running)],
+    })
+    .admission;
+    assert_eq!(growth(&a, "task-P"), Some((true, 70 * GB)));
+    assert_eq!(a.running_growth_bytes, 70 * GB);
+    // review の検査は親の owner で build する。
+    let a = admission(&ParentLookup {
+        parent: Reviewing,
+        units: vec![own_tree(W::Done)],
+    })
+    .admission;
+    assert_eq!(growth(&a, "task-P"), Some((true, 70 * GB)));
 }

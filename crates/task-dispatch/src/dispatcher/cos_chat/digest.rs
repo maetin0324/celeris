@@ -1088,9 +1088,6 @@ impl Dispatcher {
         for (run_id, outcome) in result.runs {
             match outcome {
                 CosDigestRunApply::Applied { applied, guard, .. } => {
-                    if applied.requeued > 0 {
-                        launch.triage.dirty = true;
-                    }
                     if let Some(g) = guard.filter(|g| !g.rolled_back.is_empty()) {
                         tracing::warn!(stop = ?g.stop, "script-guard rolled cos_digest back to rust");
                         rolled_back = true;

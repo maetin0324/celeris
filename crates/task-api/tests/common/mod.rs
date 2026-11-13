@@ -4,8 +4,9 @@
 #![allow(dead_code)]
 
 pub mod cos_ops;
+pub mod plan_conforms;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use axum::Router;
@@ -545,6 +546,23 @@ pub fn admin_env() -> TestEnv {
     })
 }
 
+/// `TOKEN` を持たず、名前付きの token 2 本（web の人 `human:web` と外部 operator
+/// `operator:claude-code`）だけを持つ env（ADR 2026-10-27-api-principals）。token の値は呼び出し元の file が決める。
+pub fn web_operator_env(web_token: &str, operator_token: &str) -> TestEnv {
+    TestEnv::with(EnvOptions {
+        extra_tokens: vec![
+            task_api::ApiToken::new(task_api::Principal::Human { name: "web".into() }, web_token),
+            task_api::ApiToken::new(
+                task_api::Principal::Operator {
+                    name: "claude-code".into(),
+                },
+                operator_token,
+            ),
+        ],
+        ..EnvOptions::default()
+    })
+}
+
 /// `admin_env()` に対する `Authorization: Bearer`。
 pub fn admin_headers() -> [(&'static str, &'static str); 1] {
     [("authorization", "Bearer s3cret-token-value")]
@@ -560,6 +578,14 @@ pub fn post_admin(path: &str, body: &Value) -> Request<Body> {
 
 pub fn patch_admin(path: &str, body: &Value) -> Request<Body> {
     patch_json_with(path, body, &admin_headers())
+}
+
+pub fn put_admin(path: &str, body: &Value) -> Request<Body> {
+    put_json_with(path, body, &admin_headers())
+}
+
+pub fn delete_admin(path: &str) -> Request<Body> {
+    delete_with(path, &admin_headers())
 }
 
 pub fn post_json(path: &str, body: &Value) -> Request<Body> {
@@ -856,4 +882,69 @@ pub fn project_cos_thread(
         )
         .expect("project thread")
         .thread
+}
+
+/// 秘書の組織 node を API から作る（201 を確かめる）。
+pub async fn seed_secretary(app: &Router) {
+    let resp = send(
+        app,
+        post_admin(
+            "/api/v1/org",
+            &serde_json::json!({"id": "secretary", "name": "秘書", "kind": "secretary", "brief": "案件を受け取る"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 201, "{}", resp.text());
+}
+
+/// cron job の作成本文（毎日 04:00 Asia/Tokyo の知識整理）。
+pub fn job_body(name: &str) -> Value {
+    serde_json::json!({
+        "name": name,
+        "schedule": "0 4 * * *",
+        "timezone": "Asia/Tokyo",
+        "template": {
+            "title": "知識整理: {date}",
+            "objective": "KB と受信箱を整理する",
+            "acceptance": [{"type": "reviewer", "text": "整理の記録がある"}],
+            "lane": "cheap"
+        }
+    })
+}
+
+/// `git -C <dir> <args...>`（試験の下ごしらえ専用。失敗で止める）。
+pub fn git(dir: &Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .unwrap_or_else(|e| panic!("git {args:?}: {e}"));
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// 実 browser の試験が起動する chrome-headless-shell（`CELERIS_TEST_BROWSER`、無ければ playwright の cache の最新）。
+pub fn playwright_headless_shell() -> PathBuf {
+    if let Ok(p) = std::env::var("CELERIS_TEST_BROWSER") {
+        return PathBuf::from(p);
+    }
+    let home = std::env::var("HOME").expect("HOME");
+    let base = Path::new(&home).join(".cache/ms-playwright");
+    let mut found: Vec<PathBuf> = std::fs::read_dir(&base)
+        .expect("playwright cache (agent-browser's browser) is required")
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("chromium_headless_shell-"))
+        })
+        .map(|p| p.join("chrome-headless-shell-linux64/chrome-headless-shell"))
+        .filter(|p| p.exists())
+        .collect();
+    found.sort();
+    found.pop().expect("chrome-headless-shell not installed")
 }

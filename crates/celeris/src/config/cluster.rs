@@ -103,6 +103,8 @@ pub struct ClusterJobWaitConfig {
     /// 待ちの上限（秒、既定 86400、`poll_secs` 以上 14 日以下）。worker の `timeout_secs` の上限と既定。
     #[serde(default = "default_job_wait_max_wait_secs")]
     pub max_wait_secs: u64,
+    #[serde(default = "task_core::cluster_job::default_queued_wake_secs")]
+    pub queued_wake_secs: u64,
 }
 
 impl Default for ClusterJobWaitConfig {
@@ -110,6 +112,7 @@ impl Default for ClusterJobWaitConfig {
         Self {
             poll_secs: default_job_wait_poll_secs(),
             max_wait_secs: default_job_wait_max_wait_secs(),
+            queued_wake_secs: task_core::cluster_job::default_queued_wake_secs(),
         }
     }
 }
@@ -119,6 +122,7 @@ impl ClusterJobWaitConfig {
         task_core::cluster_job::ClusterJobWaitLimits {
             poll_secs: self.poll_secs,
             max_wait_secs: self.max_wait_secs,
+            queued_wake_secs: self.queued_wake_secs,
         }
     }
 }

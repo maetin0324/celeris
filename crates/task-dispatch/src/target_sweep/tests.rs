@@ -381,6 +381,9 @@ fn target_sweep_scratch_cap_preserves_live_owners_and_cargo_locks() {
         fn work_unit_status(&self, _: &str) -> Option<task_core::WorkUnitStatus> {
             None
         }
+        fn task_work_units(&self, _: &str) -> Vec<task_worker::scratch::UnitTargetUse> {
+            Vec::new()
+        }
     }
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("targets");

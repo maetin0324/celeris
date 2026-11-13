@@ -7,17 +7,6 @@ use common::*;
 use serde_json::{Value, json};
 use task_core::{Event, Status, Task, TaskId, TaskKind, TaskStore};
 
-fn admin() -> [(&'static str, &'static str); 1] {
-    [("authorization", "Bearer s3cret-token-value")]
-}
-
-fn env_with_token() -> TestEnv {
-    TestEnv::with(EnvOptions {
-        token: Some(TOKEN.to_string()),
-        ..EnvOptions::default()
-    })
-}
-
 /// `running` のタスクは**必ずリースを持つ**（`acquire_lease` がそう作る）。割り込みの
 /// `WorkerFinished` はそのリースの run にだけ付くので、テストでも同じ形にする。
 fn seeded(env: &TestEnv, status: Status) -> Task {
@@ -37,7 +26,7 @@ fn seeded(env: &TestEnv, status: Status) -> Task {
 /// 書いた項目だけが変わり、`Event::Edited{fields}` が残る。`priority` はラベルでも整数でも書ける。
 #[tokio::test]
 async fn patch_task_changes_only_the_written_fields_and_records_an_edited_event() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     let task = seeded(&env, Status::Ready);
     let id = task.id;
@@ -54,7 +43,7 @@ async fn patch_task_changes_only_the_written_fields_and_records_an_edited_event(
                 "tier": "frontier",
                 "max_turns": 42
             }),
-            &admin(),
+            &admin_headers(),
         ),
     )
     .await;
@@ -87,9 +76,12 @@ async fn patch_task_changes_only_the_written_fields_and_records_an_edited_event(
     assert_eq!(edited.0.len(), 6);
 
     // `GET /tasks/{id}` にも `priority_label` が出る。
-    let detail = send(&app, get_with(&format!("/api/v1/tasks/{id}"), &admin()))
-        .await
-        .json();
+    let detail = send(
+        &app,
+        get_with(&format!("/api/v1/tasks/{id}"), &admin_headers()),
+    )
+    .await
+    .json();
     assert_eq!(detail["priority_label"], "P0");
 }
 
@@ -97,7 +89,7 @@ async fn patch_task_changes_only_the_written_fields_and_records_an_edited_event(
 /// 何も書かない本文は 422。`running` は受け付けて次の run から効く。
 #[tokio::test]
 async fn patch_task_validates_and_refuses_terminal_tasks() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
 
     for status in [Status::Done, Status::Failed, Status::Cancelled] {
@@ -107,7 +99,7 @@ async fn patch_task_validates_and_refuses_terminal_tasks() {
             patch_json_with(
                 &format!("/api/v1/tasks/{}", task.id),
                 &json!({"title": "x"}),
-                &admin(),
+                &admin_headers(),
             ),
         )
         .await;
@@ -122,7 +114,7 @@ async fn patch_task_validates_and_refuses_terminal_tasks() {
     let path = format!("/api/v1/tasks/{}", ready.id);
     // 空の本文。
     assert_problem(
-        &send(&app, patch_json_with(&path, &json!({}), &admin())).await,
+        &send(&app, patch_json_with(&path, &json!({}), &admin_headers())).await,
         422,
         "validation",
     );
@@ -130,7 +122,7 @@ async fn patch_task_validates_and_refuses_terminal_tasks() {
     assert_problem(
         &send(
             &app,
-            patch_json_with(&path, &json!({"labels": ["Bad Label"]}), &admin()),
+            patch_json_with(&path, &json!({"labels": ["Bad Label"]}), &admin_headers()),
         )
         .await,
         422,
@@ -138,7 +130,11 @@ async fn patch_task_validates_and_refuses_terminal_tasks() {
     );
     // 知らない項目。
     assert_problem(
-        &send(&app, patch_json_with(&path, &json!({"bogus": 1}), &admin())).await,
+        &send(
+            &app,
+            patch_json_with(&path, &json!({"bogus": 1}), &admin_headers()),
+        )
+        .await,
         400,
         "bad_request",
     );
@@ -149,7 +145,7 @@ async fn patch_task_validates_and_refuses_terminal_tasks() {
             patch_json_with(
                 &path,
                 &json!({"title": "x", "expected_status": "running"}),
-                &admin(),
+                &admin_headers(),
             ),
         )
         .await,
@@ -174,7 +170,7 @@ async fn patch_task_validates_and_refuses_terminal_tasks() {
         patch_json_with(
             &format!("/api/v1/tasks/{}", running.id),
             &json!({"objective": "直した目的"}),
-            &admin(),
+            &admin_headers(),
         ),
     )
     .await;
@@ -187,7 +183,7 @@ async fn patch_task_validates_and_refuses_terminal_tasks() {
 /// `Remote.cluster` が設定に無ければ 422（`PATCH /projects/{id}` と同じ `validated_workspace`）。
 #[tokio::test]
 async fn patch_task_workspace_switches_to_local_and_refuses_running_and_unknown_clusters() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
 
     let ready = seeded(&env, Status::Ready);
@@ -196,7 +192,7 @@ async fn patch_task_workspace_switches_to_local_and_refuses_running_and_unknown_
         patch_json_with(
             &format!("/api/v1/tasks/{}", ready.id),
             &json!({"workspace": {"kind": "local", "path": "/tmp/patched-local"}}),
-            &admin(),
+            &admin_headers(),
         ),
     )
     .await;
@@ -219,7 +215,7 @@ async fn patch_task_workspace_switches_to_local_and_refuses_running_and_unknown_
         patch_json_with(
             &format!("/api/v1/tasks/{}", running.id),
             &json!({"workspace": {"kind": "local", "path": "/tmp/x"}}),
-            &admin(),
+            &admin_headers(),
         ),
     )
     .await;
@@ -232,7 +228,7 @@ async fn patch_task_workspace_switches_to_local_and_refuses_running_and_unknown_
         patch_json_with(
             &format!("/api/v1/tasks/{}", ready2.id),
             &json!({"workspace": {"kind": "remote", "cluster": "no-such-cluster", "path": "~"}}),
-            &admin(),
+            &admin_headers(),
         ),
     )
     .await;
@@ -244,7 +240,7 @@ async fn patch_task_workspace_switches_to_local_and_refuses_running_and_unknown_
 /// 人のコメントの効き方の表（ADR-0044 D2）を API の層で全状態ぶん確かめる。
 #[tokio::test]
 async fn posting_a_human_comment_follows_the_effect_table() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
 
     for (status, effect, next, can_reopen) in [
@@ -262,7 +258,7 @@ async fn posting_a_human_comment_follows_the_effect_table() {
             post_json_with(
                 &format!("/api/v1/tasks/{}/comments", task.id),
                 &json!({"body": "ちょっと待った"}),
-                &admin(),
+                &admin_headers(),
             ),
         )
         .await;
@@ -291,7 +287,10 @@ async fn posting_a_human_comment_follows_the_effect_table() {
         // どの状態でも `GET` で読める。
         let list = send(
             &app,
-            get_with(&format!("/api/v1/tasks/{}/comments", task.id), &admin()),
+            get_with(
+                &format!("/api/v1/tasks/{}/comments", task.id),
+                &admin_headers(),
+            ),
         )
         .await
         .json();
@@ -321,7 +320,7 @@ async fn posting_a_human_comment_follows_the_effect_table() {
         post_json_with(
             &format!("/api/v1/tasks/{}/comments", blocked.id),
             &json!({"body": "postgres で"}),
-            &admin(),
+            &admin_headers(),
         ),
     )
     .await;
@@ -340,14 +339,14 @@ async fn posting_a_human_comment_follows_the_effect_table() {
 /// 空の本文は 422、トークン無しは 401、知らないタスクは 404。
 #[tokio::test]
 async fn comment_validation_and_auth() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     let task = seeded(&env, Status::Ready);
     let path = format!("/api/v1/tasks/{}/comments", task.id);
     assert_problem(
         &send(
             &app,
-            post_json_with(&path, &json!({"body": "  "}), &admin()),
+            post_json_with(&path, &json!({"body": "  "}), &admin_headers()),
         )
         .await,
         422,
@@ -365,7 +364,7 @@ async fn comment_validation_and_auth() {
             post_json_with(
                 &format!("/api/v1/tasks/{}/comments", TaskId::new()),
                 &json!({"body": "x"}),
-                &admin(),
+                &admin_headers(),
             ),
         )
         .await,
@@ -377,7 +376,7 @@ async fn comment_validation_and_auth() {
             &app,
             get_with(
                 &format!("/api/v1/tasks/{}/comments", TaskId::new()),
-                &admin(),
+                &admin_headers(),
             ),
         )
         .await,
@@ -389,7 +388,7 @@ async fn comment_validation_and_auth() {
 /// `reopen`: `done` / `failed` は `ready`（attempts 0）、`cancelled` と非終端は 409。
 #[tokio::test]
 async fn reopen_restarts_done_and_failed_tasks_only() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
 
     for status in [Status::Done, Status::Failed] {
@@ -401,7 +400,7 @@ async fn reopen_restarts_done_and_failed_tasks_only() {
             post_json_with(
                 &format!("/api/v1/tasks/{}/reopen", task.id),
                 &json!({}),
-                &admin(),
+                &admin_headers(),
             ),
         )
         .await;
@@ -415,7 +414,7 @@ async fn reopen_restarts_done_and_failed_tasks_only() {
         // 再開した後は `actions` に `reopen` が無い。
         let detail = send(
             &app,
-            get_with(&format!("/api/v1/tasks/{}", task.id), &admin()),
+            get_with(&format!("/api/v1/tasks/{}", task.id), &admin_headers()),
         )
         .await
         .json();
@@ -432,7 +431,7 @@ async fn reopen_restarts_done_and_failed_tasks_only() {
                 post_json_with(
                     &format!("/api/v1/tasks/{}/reopen", task.id),
                     &json!({}),
-                    &admin(),
+                    &admin_headers(),
                 ),
             )
             .await,
@@ -566,7 +565,7 @@ async fn list_tasks_filters_by_label_category_tier_priority_and_comment_text() {
 /// イベント・コメント・委譲が 1 本になり、時刻の昇順に並ぶ。
 #[tokio::test]
 async fn the_timeline_merges_events_comments_and_delegations_in_time_order() {
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     let parent = seeded(&env, Status::Running);
 
@@ -594,7 +593,7 @@ async fn the_timeline_merges_events_comments_and_delegations_in_time_order() {
         post_json_with(
             &format!("/api/v1/tasks/{}/comments", parent.id),
             &json!({"body": "方針を変えたい"}),
-            &admin(),
+            &admin_headers(),
         ),
     )
     .await;
@@ -602,7 +601,10 @@ async fn the_timeline_merges_events_comments_and_delegations_in_time_order() {
 
     let timeline = send(
         &app,
-        get_with(&format!("/api/v1/tasks/{}/timeline", parent.id), &admin()),
+        get_with(
+            &format!("/api/v1/tasks/{}/timeline", parent.id),
+            &admin_headers(),
+        ),
     )
     .await;
     assert_eq!(timeline.status, 200, "{}", timeline.text());
@@ -651,7 +653,7 @@ async fn the_timeline_merges_events_comments_and_delegations_in_time_order() {
             &app,
             get_with(
                 &format!("/api/v1/tasks/{}/timeline", TaskId::new()),
-                &admin(),
+                &admin_headers(),
             ),
         )
         .await,
@@ -667,7 +669,7 @@ async fn the_timeline_merges_events_comments_and_delegations_in_time_order() {
 async fn the_timeline_lists_the_integrations_of_this_task() {
     use task_core::{IntegrationMethod, IntegrationState, TaskIntegration};
 
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     let task = seeded(&env, Status::Done);
     let now = time::OffsetDateTime::now_utc();
@@ -699,7 +701,10 @@ async fn the_timeline_lists_the_integrations_of_this_task() {
 
     let resp = send(
         &app,
-        get_with(&format!("/api/v1/tasks/{}/timeline", task.id), &admin()),
+        get_with(
+            &format!("/api/v1/tasks/{}/timeline", task.id),
+            &admin_headers(),
+        ),
     )
     .await;
     assert_eq!(resp.status, 200, "{}", resp.text());
@@ -741,7 +746,7 @@ async fn the_timeline_lists_the_integrations_of_this_task() {
 async fn the_timeline_shows_the_knowledge_maintenance_run() {
     use task_core::{KnowledgeRunState, KnowledgeRunStore, KnowledgeRunSummary};
 
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     let task = seeded(&env, Status::Done);
     let run_task = seeded(&env, Status::Done);
@@ -752,7 +757,10 @@ async fn the_timeline_shows_the_knowledge_maintenance_run() {
         .expect("create run");
     let scheduled = send(
         &app,
-        get_with(&format!("/api/v1/tasks/{}/timeline", task.id), &admin()),
+        get_with(
+            &format!("/api/v1/tasks/{}/timeline", task.id),
+            &admin_headers(),
+        ),
     )
     .await;
     let items = scheduled.json()["items"]
@@ -785,7 +793,10 @@ async fn the_timeline_shows_the_knowledge_maintenance_run() {
         .expect("finish run");
     let applied = send(
         &app,
-        get_with(&format!("/api/v1/tasks/{}/timeline", task.id), &admin()),
+        get_with(
+            &format!("/api/v1/tasks/{}/timeline", task.id),
+            &admin_headers(),
+        ),
     )
     .await;
     let items = applied.json()["items"].as_array().cloned().expect("items");
@@ -802,7 +813,10 @@ async fn the_timeline_shows_the_knowledge_maintenance_run() {
     let plain = seeded(&env, Status::Done);
     let resp = send(
         &app,
-        get_with(&format!("/api/v1/tasks/{}/timeline", plain.id), &admin()),
+        get_with(
+            &format!("/api/v1/tasks/{}/timeline", plain.id),
+            &admin_headers(),
+        ),
     )
     .await;
     let items = resp.json()["items"].as_array().cloned().expect("items");
@@ -909,7 +923,10 @@ async fn the_timeline_lists_the_releases_that_contain_this_tasks_commits() {
     // 目印が無いうちはリリースを出さない。
     let before = send(
         &app,
-        get_with(&format!("/api/v1/tasks/{}/timeline", task.id), &admin()),
+        get_with(
+            &format!("/api/v1/tasks/{}/timeline", task.id),
+            &admin_headers(),
+        ),
     )
     .await
     .json();
@@ -941,7 +958,10 @@ async fn the_timeline_lists_the_releases_that_contain_this_tasks_commits() {
 
     let body = send(
         &app,
-        get_with(&format!("/api/v1/tasks/{}/timeline", task.id), &admin()),
+        get_with(
+            &format!("/api/v1/tasks/{}/timeline", task.id),
+            &admin_headers(),
+        ),
     )
     .await
     .json();
@@ -965,7 +985,7 @@ async fn the_timeline_lists_the_releases_that_contain_this_tasks_commits() {
 #[tokio::test]
 async fn patch_task_attaches_a_project_to_a_project_less_task_once() {
     use task_core::{Project, ProjectId, ProjectRepo, ProjectStatus, RepoId, RepoKind, RepoRun};
-    let env = env_with_token();
+    let env = admin_env();
     let app = env.router();
     let now = time::OffsetDateTime::now_utc();
     let mk_project = |title: &str| {
@@ -1006,7 +1026,11 @@ async fn patch_task_attaches_a_project_to_a_project_less_task_once() {
     let path = format!("/api/v1/tasks/{}", task.id);
     let resp = send(
         &app,
-        patch_json_with(&path, &json!({"project_id": project.to_string()}), &admin()),
+        patch_json_with(
+            &path,
+            &json!({"project_id": project.to_string()}),
+            &admin_headers(),
+        ),
     )
     .await;
     assert_eq!(resp.status, 200, "{}", resp.text());
@@ -1017,7 +1041,11 @@ async fn patch_task_attaches_a_project_to_a_project_less_task_once() {
 
     let resp = send(
         &app,
-        patch_json_with(&path, &json!({"project_id": other.to_string()}), &admin()),
+        patch_json_with(
+            &path,
+            &json!({"project_id": other.to_string()}),
+            &admin_headers(),
+        ),
     )
     .await;
     assert_eq!(resp.status, 422, "{}", resp.text());
@@ -1028,7 +1056,7 @@ async fn patch_task_attaches_a_project_to_a_project_less_task_once() {
         patch_json_with(
             &format!("/api/v1/tasks/{}", fresh.id),
             &json!({"project_id": ProjectId::new().to_string()}),
-            &admin(),
+            &admin_headers(),
         ),
     )
     .await;
@@ -1042,7 +1070,7 @@ async fn patch_task_attaches_a_project_to_a_project_less_task_once() {
         patch_json_with(
             &format!("/api/v1/tasks/{}", ran.id),
             &json!({"project_id": project.to_string()}),
-            &admin(),
+            &admin_headers(),
         ),
     )
     .await;

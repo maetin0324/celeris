@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 /// 出力の schema 名。欄を変えたら版を上げる。
-pub const REQUEST_LEDGER_SCHEMA: &str = "celeris.eval-requests/1";
+pub const REQUEST_LEDGER_SCHEMA: &str = "celeris.eval-requests/2";
 
 /// `celerisctl eval requests` の出力全体。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -34,6 +34,8 @@ pub struct RequestLedgerSummary {
     pub first_ai_response_missing: usize,
     /// 終わっていない人の待ち区間の数。
     pub open_human_waits: usize,
+    /// 終わっていない外部 operator の待ち区間の数（ADR 2026-11-12-cos-triage-scope D2。人の待ちではない）。
+    pub open_operator_waits: usize,
 }
 
 /// 論理要求 1 件。
@@ -50,7 +52,10 @@ pub struct RequestRow {
     pub revisions: Vec<RequestRevision>,
     pub returns: Vec<RequestReturn>,
     pub first_ai_response: Option<ActorAt>,
-    pub human_waits: Vec<HumanWaitSpan>,
+    /// 人を待った区間（経路 `escalation`・`fallback`）。
+    pub human_waits: Vec<RouteWaitSpan>,
+    /// 外部 operator（AI の運用補助。`docs/ops/external-operator.md`）を待った区間（経路 `operator`）。人の待ちに数えない。
+    pub operator_waits: Vec<RouteWaitSpan>,
     /// 最後の revision の解決。無ければ `null`。
     pub resolved: Option<ActorAt>,
     /// 解決の後に関係 task（と子孫）で最初に始まった run の開始時刻。
@@ -106,9 +111,10 @@ pub struct ActorAt {
     pub source: String,
 }
 
-/// 人を待った区間（人への経路の作成から、その revision の解決まで）。
+/// 経路の宛先を待った区間（経路の作成から、その revision の解決まで）。`route` が `escalation`・`fallback` なら人、
+/// `operator` なら外部 operator（`RequestRow::human_waits`・`operator_waits` のどちらに入るかで区別する）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct HumanWaitSpan {
+pub struct RouteWaitSpan {
     pub item_id: String,
     pub revision: String,
     pub route: String,

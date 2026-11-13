@@ -117,6 +117,16 @@ impl Owner {
         }
     }
 
+    /// ADR-0075 D3: run の `CARGO_TARGET_DIR` の owner。自分の worktree を持つ WU の run なら `task-<id>/wu-<id>`、
+    /// Task 単位の run と Task の worktree を共有する WU（並列 1 に倒した Task・統合の repair WU）は `task-<id>`。
+    /// worker の割り当てと dispatch の空きの見込み（ADR 2026-11-11-disk-aware-dispatch D1）が同じ owner を使う。
+    pub fn of_run(task_id: impl Into<String>, own_worktree_work_unit: Option<&str>) -> Self {
+        match own_worktree_work_unit {
+            Some(wu) => Owner::work_unit(task_id, wu),
+            None => Owner::task(task_id),
+        }
+    }
+
     /// `task-<id>` / `task-<id>/wu-<id>` / `release-<sha12>` / `agent-<name>` を読む。
     pub fn parse(s: &str) -> Result<Self, String> {
         let bad = || {
@@ -240,6 +250,9 @@ pub struct ScratchSettings {
     pub mount: Option<PathBuf>,
     /// `apply_mount_check` が `dir` を従来の場所へ戻した理由（起動ログに出す）。
     pub dir_fallback_reason: Option<String>,
+    /// ADR 2026-11-11-disk-aware-dispatch D1: dispatch の前の空きの見込みで、測った見かけの大きさを disk 上の量に
+    /// 直す係数（既定 1.0。範囲 (0, 1]）。
+    pub forecast_disk_ratio: f64,
 }
 
 /// ADR-0075 D4（Phase G2）: `[scratch.cargo]` を解決した値。scratch が有効な経路に常に与える。
@@ -289,6 +302,7 @@ impl ScratchSettings {
             seed_reflink: false,
             mount: None,
             dir_fallback_reason: None,
+            forecast_disk_ratio: 1.0,
         }
     }
 
@@ -432,16 +446,40 @@ impl Pool {
         self.owner_dir(owner).join(LEASE_FILE)
     }
 
-    /// `.lock` を排他で取る（無ければ作る）。
-    pub fn lock(&self) -> io::Result<PoolLock> {
+    fn open_lock_file(&self) -> io::Result<std::fs::File> {
         std::fs::create_dir_all(&self.root)?;
-        let file = std::fs::OpenOptions::new()
+        std::fs::OpenOptions::new()
             .create(true)
             .truncate(false)
             .write(true)
-            .open(self.root.join(LOCK_FILE))?;
+            .open(self.root.join(LOCK_FILE))
+    }
+
+    /// `.lock` を排他で取る（無ければ作る）。
+    #[track_caller]
+    pub fn lock(&self) -> io::Result<PoolLock> {
+        let file = self.open_lock_file()?;
+        let started = std::time::Instant::now();
         file.lock()?;
+        let waited = started.elapsed();
+        if waited >= Duration::from_secs(1) {
+            tracing::warn!(pool = %self.root.display(), caller = %std::panic::Location::caller(), wait_secs = waited.as_secs_f64(), "scratch: pool lock acquired after waiting");
+        }
         Ok(PoolLock { _file: file })
+    }
+
+    /// tick の掃除用。競合したら待たずに `None` を返し、呼び出し側が次回に回す。
+    #[track_caller]
+    pub fn try_lock(&self) -> io::Result<Option<PoolLock>> {
+        let file = self.open_lock_file()?;
+        match file.try_lock() {
+            Ok(()) => Ok(Some(PoolLock { _file: file })),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                tracing::debug!(pool = %self.root.display(), caller = %std::panic::Location::caller(), "scratch: pool lock busy; deferring to the next tick");
+                Ok(None)
+            }
+            Err(std::fs::TryLockError::Error(error)) => Err(error),
+        }
     }
 
     /// `targets/` の下の owner のディレクトリを列挙する（`task-*` の中の `wu-*` も）。`.deleting-*` は除く。
@@ -681,14 +719,63 @@ pub fn allocate(pool: &Pool, req: &AllocateRequest<'_>) -> io::Result<Allocation
 }
 
 /// `allocate` の seed の条件と写し方を指定する版（dispatcher は `[scratch.cargo]` と rustc の版を渡す）。
-/// seed の写しは `.lock` の下で行う（seed の切り替え・GC と直列）。
+/// seed の写しは pool の `.lock` を外して行う（世代は pin、owner は `.alloc.lock` で守る）。待つので tick から呼ばない
+/// （通常の run と評価試行は run の future の `spawn_blocking` で呼ぶ）。
 pub fn allocate_with_seed(
     pool: &Pool,
     req: &AllocateRequest<'_>,
     seed: &SeedPolicy<'_>,
     ops: &SeedCopyOps<'_>,
 ) -> io::Result<Allocation> {
-    let _lock = pool.lock()?;
+    // 同じ owner の割り当ては pool の `.lock` の外で直列にする（seed の写しは `.lock` を持たない）。
+    let owner_alloc = lock_owner_alloc(&pool.owner_dir(req.owner))?;
+    let lock = pool.lock()?;
+    allocate_locked(pool, req, seed, ops, owner_alloc, lock)
+}
+
+/// tick（検査の env）用の割り当て: 待たず、seed を写さない（ADR 2026-11-11-scratch-lock-tick-stall）。
+/// owner が割り当て中か pool の `.lock` が使用中なら `None`（次の呼び出しに回す。target の path はそのまま使える）。
+pub fn try_allocate_for_check(pool: &Pool, owner: &Owner, repo_path: &Path) -> Option<Allocation> {
+    let none = |_: &AdoptCandidate| None;
+    let req = AllocateRequest {
+        owner,
+        repo_path,
+        base_commit: None,
+        work_unit_key: None,
+        checkout: None,
+        candidates: &[],
+        distance: &none,
+        adopt: false,
+        max_distance: 0,
+    };
+    let owner_dir = pool.owner_dir(owner);
+    let locks = std::fs::create_dir_all(&owner_dir)
+        .and_then(|()| try_lock_owner_alloc(&owner_dir))
+        .and_then(|o| Ok(o.zip(pool.try_lock()?)));
+    let result = match locks {
+        Ok(Some((owner_alloc, lock))) => {
+            let ops = SeedCopyOps::real();
+            allocate_locked(pool, &req, &SeedPolicy::disabled(), &ops, owner_alloc, lock)
+        }
+        Ok(None) => {
+            tracing::info!(owner = %owner, "scratch: the owner or the pool is busy; the check uses the target path without touching the lease");
+            return None;
+        }
+        Err(e) => Err(e),
+    };
+    result
+        .inspect_err(|e| tracing::warn!(owner = %owner, error = %e, "scratch: could not write the lease; using the target path without it"))
+        .ok()
+}
+
+fn allocate_locked(
+    pool: &Pool,
+    req: &AllocateRequest<'_>,
+    seed: &SeedPolicy<'_>,
+    ops: &SeedCopyOps<'_>,
+    _owner_alloc: std::fs::File,
+    mut lock: PoolLock,
+) -> io::Result<Allocation> {
     let owner_dir = pool.owner_dir(req.owner);
     let lease_path = owner_dir.join(LEASE_FILE);
     let target = owner_dir.join(TARGET_SUBDIR);
@@ -759,9 +846,24 @@ pub fn allocate_with_seed(
             Some(from) => TargetOrigin::Adopted { from: from.clone() },
             None => TargetOrigin::Existing,
         }
+    } else if !seed.enabled {
+        remove_partial_copies(&owner_dir);
+        TargetOrigin::Empty { reason: None }
     } else {
-        seed_target(pool, &owner_dir, &repo_key, seed, ops)
+        // ADR 2026-11-11-scratch-lock-tick-stall: 世代の固定と lease の書き込みだけを `.lock` の下で行い、
+        // 数十 GB の写しは `.lock` を外して行う（seed の切り替え・GC・他の割り当てを止めない）。
+        let pin = pin_current_seed(pool, &repo_key).unwrap_or_else(|e| {
+            tracing::warn!(owner = %req.owner, error = %e, "scratch: could not pin the seed generation");
+            None
+        });
+        write_lease(&lease_path, &lease)?;
+        drop(lock);
+        let origin = seed_target(pool, &owner_dir, &repo_key, seed, ops, pin.as_ref());
+        drop(pin);
+        lock = pool.lock()?;
+        origin
     };
+    let _lock = lock;
     std::fs::create_dir_all(&target)?;
     if origin != TargetOrigin::Existing {
         match &origin {
@@ -791,6 +893,20 @@ pub fn allocate_with_seed(
 /// 外部の owner の lease（`celerisctl scratch lease`）。adopt は呼び出し側が候補を渡したときだけ。
 pub fn touch(pool: &Pool, owner: &Owner) -> io::Result<bool> {
     let _lock = pool.lock()?;
+    touch_locked(pool, owner)
+}
+
+/// tick 用の `touch`（ADR 2026-11-11-scratch-lock-tick-stall）: pool の `.lock` が使用中なら待たずに `Ok(false)`
+/// （lease の TTL の内なので、触れなくても回収されない）。
+#[track_caller]
+pub fn try_touch(pool: &Pool, owner: &Owner) -> io::Result<bool> {
+    let Some(_lock) = pool.try_lock()? else {
+        return Ok(false);
+    };
+    touch_locked(pool, owner)
+}
+
+fn touch_locked(pool: &Pool, owner: &Owner) -> io::Result<bool> {
     let path = pool.lease_path(owner);
     if !path.exists() {
         return Ok(false);
@@ -814,6 +930,21 @@ pub fn set_ttl(pool: &Pool, owner: &Owner, ttl_secs: Option<u64>) -> io::Result<
 /// `released_at` を書き、P3 に落とす。
 pub fn release(pool: &Pool, owner: &Owner) -> io::Result<bool> {
     let _lock = pool.lock()?;
+    release_locked(pool, owner)
+}
+
+/// tick 用の `release`（ADR 2026-11-11-scratch-lock-tick-stall）: pool の `.lock` が使用中なら待たずに `Ok(false)`。
+/// `released_at` を書けなかった lease は TTL が切れると `scratch_gc` が回収する。
+#[track_caller]
+pub fn try_release(pool: &Pool, owner: &Owner) -> io::Result<bool> {
+    let Some(_lock) = pool.try_lock()? else {
+        tracing::info!(%owner, caller = %std::panic::Location::caller(), "scratch: pool lock busy; the lease is left to its TTL");
+        return Ok(false);
+    };
+    release_locked(pool, owner)
+}
+
+fn release_locked(pool: &Pool, owner: &Owner) -> io::Result<bool> {
     let path = pool.lease_path(owner);
     let Some(mut lease) = read_lease(&path)? else {
         return Ok(false);

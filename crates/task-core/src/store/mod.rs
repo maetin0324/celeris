@@ -118,7 +118,7 @@ mod request_ledger;
 mod task_integration_state;
 pub use model_catalog::ModelCatalogStore;
 mod account_limits;
-mod authority;
+pub(crate) mod authority;
 mod completion_outcomes;
 mod cos_digest_apply;
 mod credential_wait;

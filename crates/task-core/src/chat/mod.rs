@@ -301,6 +301,10 @@ pub struct ChatRelay {
     /// thread this relay forwards (`chat.relay_forward`). Absent for operator / MCP relays.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<ChatRelaySource>,
+    /// ADR 2026-11-11-cos-standing-context D4: the grant whose basis is the forwarded message; it
+    /// backs a forward without tasks or an expiry. Never an `instructed_by` (CoS cites the grant).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grant_id: Option<String>,
 }
 /// The original message a forwarded relay copies (D3).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -536,10 +540,15 @@ pub struct ChatForwardRequest {
     pub client_message_id: String,
     /// The person's message of the general thread.
     pub message_id: String,
-    /// Tasks of the target project the instruction applies to (1..=`CHAT_RELAY_TASKS_MAX`).
+    /// Tasks of the target project the instruction applies to (1..=`CHAT_RELAY_TASKS_MAX`;
+    /// may be empty only with `grant_id`, then the whole project).
+    #[serde(default)]
     pub task_ids: Vec<String>,
-    /// RFC 3339 expiry (required, after now).
-    pub expires_at: String,
+    /// RFC 3339 expiry (after now). Required without `grant_id`; with it, absent = while the grant lives.
+    pub expires_at: Option<String>,
+    /// ADR 2026-11-11-cos-standing-context D4: a live grant of the authority ledger (global or the
+    /// target project's own, project or global scope) whose basis is `message_id`.
+    pub grant_id: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

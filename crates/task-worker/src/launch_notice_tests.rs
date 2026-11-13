@@ -118,6 +118,11 @@ fn adapters(dir: &Path, log: &Path, missing: bool) -> Vec<(&'static str, Box<dyn
         (
             "codex",
             Box::new(crate::CodexAdapter::new(crate::CodexConfig {
+                // 起動前の rules 作成も試験の一時領域に閉じ、継承した account を触らない。
+                env: vec![(
+                    "CODEX_HOME".into(),
+                    dir.join("codex-home").display().to_string(),
+                )],
                 command: program.clone(),
                 ..Default::default()
             })),
@@ -147,13 +152,13 @@ async fn notice_is_called_before_the_process_is_spawned() {
             .find(|(n, _)| *n == name)
             .unwrap();
         let sink = NoticeSink::new(&log, None);
-        let _ = adapter
+        let result = adapter
             .run(request(dir.path()), "run-order", limits(), &sink)
             .await;
         assert_eq!(
             lines(&log),
             vec!["notify".to_string(), "spawned".to_string()],
-            "{name}: notice must precede the spawn (and be sent once for one spawn)"
+            "{name}: notice must precede the spawn (and be sent once for one spawn): {result:?}"
         );
         assert_eq!(sink.calls(), 1, "{name}: one notice per spawn");
     }

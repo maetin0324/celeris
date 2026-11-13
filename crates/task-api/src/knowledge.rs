@@ -30,6 +30,7 @@ use task_core::knowledge::{self as kb, Confidence, PathError};
 use task_ops::docs::{self as ops_docs, DocCommit};
 use task_ops::knowledge::{self as ops_kb, InboxOutcome, PageEdit, WriteOutcome};
 
+use crate::cos::CosCaller;
 use crate::cos::operations::{Applied, OperationAudit};
 use crate::handlers::{ApiResult, Params, json_response, no_query, read_json};
 use crate::middleware::require_admin;
@@ -406,8 +407,16 @@ fn render_markdown(body: &str, from: &str) -> String {
 
 async fn tree(
     axum::extract::State(state): axum::extract::State<ApiState>,
+    caller: Option<axum::Extension<CosCaller>>,
     axum::extract::RawQuery(raw): axum::extract::RawQuery,
 ) -> ApiResult {
+    let result = tree_view(&state, raw).await;
+    let caller = caller.as_ref().map(|c| &c.0);
+    crate::cos::knowledge_use::note(&state, caller, kb::KnowledgeOp::Search, result.is_ok()).await;
+    result
+}
+
+async fn tree_view(state: &ApiState, raw: Option<String>) -> ApiResult {
     let query = QueryParams::parse(raw.as_deref(), &["scope", "q", "limit"])?;
     let scope = query
         .single("scope")?
@@ -419,7 +428,7 @@ async fn tree(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string);
-    let root = root_of(&state)?;
+    let root = root_of(state)?;
     let view = state
         .blocking(move |_| {
             let initialized = ops_kb::exists(&root);
@@ -485,11 +494,19 @@ async fn tree(
 
 async fn page(
     axum::extract::State(state): axum::extract::State<ApiState>,
+    caller: Option<axum::Extension<CosCaller>>,
     axum::extract::RawQuery(raw): axum::extract::RawQuery,
 ) -> ApiResult {
+    let result = page_view(&state, raw).await;
+    let caller = caller.as_ref().map(|c| &c.0);
+    crate::cos::knowledge_use::note(&state, caller, kb::KnowledgeOp::Get, result.is_ok()).await;
+    result
+}
+
+async fn page_view(state: &ApiState, raw: Option<String>) -> ApiResult {
     let query = QueryParams::parse(raw.as_deref(), &["path"])?;
     let requested = query.single("path")?.unwrap_or_default().to_string();
-    let root = root_of(&state)?;
+    let root = root_of(state)?;
     let view = state
         .blocking(move |_| {
             let path = page_path(&requested)?;

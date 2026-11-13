@@ -229,9 +229,12 @@ impl WorkerAdapter for ReviewShaAdapter {
                 .unwrap()
                 .push(git_out(&repo_dir, &["rev-parse", "HEAD"]));
             std::fs::create_dir_all(&req.artifacts_dir).unwrap();
+            // `health` も書く: reviewer に health の材料を渡した review は `health` の判定を求める（I7、ADR
+            // 2026-11-07-health-review-integration D5.2）。ADR 2026-11-11-health-generic-review-input の R1 で `[review]` の
+            // 無い（absent）repo も材料を受けるので、この偽の reviewer も空の判定を書く（R6）。試験が守る不変条件は変えない。
             std::fs::write(
                 req.artifacts_dir.join("review.json"),
-                r#"{"verdicts":[{"criterion":1,"pass":true,"reason":"ok"}]}"#,
+                r#"{"verdicts":[{"criterion":1,"pass":true,"reason":"ok"}],"health":{"findings":[]}}"#,
             )
             .unwrap();
         }
@@ -305,6 +308,8 @@ fn resolved_events(events: &[Event]) -> Vec<(String, String, String, u32)> {
         .collect()
 }
 
+/// 不変条件: 統合修復後の review は最新 target で再開し、worker の attempts を消費しない。
+/// 変更理由: ADR R1・R6 により Absent でも材料が届くため、偽 reviewer にも health 判定が要る。
 #[tokio::test]
 async fn integration_repair_resumes_review_on_latest_target() {
     let repo = tempfile::tempdir().unwrap();
@@ -1083,9 +1088,12 @@ impl WorkerAdapter for CountingReviewer {
         std::fs::create_dir_all(&req.artifacts_dir).unwrap();
         if req.task.kind == TaskKind::Review {
             *self.reviews.lock().unwrap() += 1;
+            // `health` も書く: reviewer に health の材料を渡した review は `health` の判定を求める（I7、ADR
+            // 2026-11-07-health-review-integration D5.2）。ADR 2026-11-11-health-generic-review-input の R1 で `[review]` の
+            // 無い（absent）repo も材料を受けるので、この偽の reviewer も空の判定を書く（R6）。試験が守る不変条件は変えない。
             std::fs::write(
                 req.artifacts_dir.join("review.json"),
-                r#"{"verdicts":[{"criterion":1,"pass":true,"reason":"fine"}]}"#,
+                r#"{"verdicts":[{"criterion":1,"pass":true,"reason":"fine"}],"health":{"findings":[]}}"#,
             )
             .unwrap();
         }
@@ -1243,6 +1251,8 @@ async fn reviewer_runs_after_target_advanced_with_store(
 /// reviewer の合格を再利用した回でも、配送の行に検査済み SHA が書かれる
 /// （ADR 2026-11-06-reuse-pass-delivery-review-run）。修正前は review_run が worker run id で
 /// 照合が空文字と比べて常に偽になり、target_sha・reviewed_sha・merge_candidate_sha が NULL のまま残った。
+/// 不変条件: 合格の再利用でも配送に検査済み candidate の SHA を記録する。
+/// 変更理由: ADR R1・R6 により Absent でも材料が届くため、偽 reviewer にも health 判定が要る。
 #[tokio::test]
 async fn reuse_pass_records_candidate() {
     let (reviews, events, status, store, task_id, _repo) =
@@ -1289,6 +1299,8 @@ async fn reuse_pass_records_candidate() {
 /// Fresh 条件を満たす: target_sha が既定ブランチの現在地、candidate == reviewed == branch の HEAD == 行の head。
 /// 修正前は 3 つの SHA が NULL で「検査済みの merge candidate が記録されていません」の Stale になり、
 /// request_rereview が再 review へ戻していた。
+/// 不変条件: 合格を再利用した配送は Fresh 条件を満たして merge に進む。
+/// 変更理由: ADR R1・R6 により Absent でも材料が届くため、偽 reviewer にも health 判定が要る。
 #[tokio::test]
 async fn reuse_pass_delivery_reaches_merge() {
     let (_, events, status, store, task_id, repo) = reviewer_runs_after_target_advanced_with_store(
@@ -1332,6 +1344,8 @@ async fn reuse_pass_delivery_reaches_merge() {
 /// ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D1・D2: reviewer が合格した後に main が task の差分と
 /// 重ならない file だけ進んだら、reviewer をやり直さず決定的 check の再実行だけで合格を保つ（`ReviewerPassed` →
 /// `ReviewerPassReused`、reviewer run は 1 回）。
+/// 不変条件: target の変更が task と重ならなければ reviewer の合格を再利用する。
+/// 変更理由: ADR R1・R6 により Absent でも材料が届くため、偽 reviewer にも health 判定が要る。
 #[tokio::test]
 async fn reviewer_pass_is_reused_when_target_advances_without_overlap() {
     let (reviews, events, status) =
@@ -1418,6 +1432,8 @@ async fn reviewer_pass_is_reused_when_target_advances_without_overlap() {
 
 /// 同 ADR D2: main の進みが task の差分と重なる file を触っていれば（rebase は衝突しなくても）reviewer をやり直す
 /// （reviewer run は 2 回）。task は `shared.txt` の 1 行目、main は 30 行目を変える。
+/// 不変条件: target の変更が task と重なれば reviewer を再実行する。
+/// 変更理由: ADR R1・R6 により Absent でも材料が届くため、偽 reviewer にも health 判定が要る。
 #[tokio::test]
 async fn reviewer_runs_again_when_target_advances_touching_the_task_files() {
     let (reviews, events, status) = reviewer_runs_after_target_advanced(

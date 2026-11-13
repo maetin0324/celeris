@@ -1,0 +1,13 @@
+diff --git a/crates/task-api/src/cos/mod.rs b/crates/task-api/src/cos/mod.rs
+index a1148f53..68d0da2c 100644
+--- a/crates/task-api/src/cos/mod.rs
++++ b/crates/task-api/src/cos/mod.rs
+@@ -47,7 +47,7 @@ pub struct CosCaller {
+ impl From<CosRunIdentity> for CosCaller {
+     fn from(identity: CosRunIdentity) -> Self {
+         Self {
+-            thread_id: identity.thread_id,
++            thread_id: String::new(),
+             run_id: identity.run_id,
+         }
+     }

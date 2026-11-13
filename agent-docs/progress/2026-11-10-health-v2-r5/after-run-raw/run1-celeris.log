@@ -1,0 +1,31 @@
+warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGER` causes the socket to block the thread on drop
+   --> crates/script-runtime/vendor/deno_core/uv_compat/tcp.rs:818:17
+    |
+818 |       && stream.set_linger(Some(std::time::Duration::ZERO)).is_err()
+    |                 ^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: `deno_core` (lib) generated 1 warning
+warning: unused import: `ScriptGenerationControl`
+  --> crates/celeris/tests/script_exhaustive.rs:23:36
+   |
+23 | use task_api::script_generations::{ScriptGenerationControl, ScriptGenerationError};
+   |                                    ^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: `celeris` (test "script_exhaustive") generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.32s
+────────────
+ Nextest run ID 163152eb-c170-40b5-ab52-43a8d43df9fb with nextest profile: default
+    Starting 801 tests across 46 binaries (2 tests skipped)
+────────────
+     Summary [ 117.982s] 801 tests run: 801 passed (7 slow), 2 skipped
+        SLOW [  98.304s] (795/801) celeris::ops_r1_pipeline ops_r1_pipeline_passing_a_and_cut_off_b_agree
+        SLOW [ 106.836s] (796/801) celeris::cap_probe_real_daemon a_second_daemon_on_the_same_port_is_detected
+        SLOW [  98.909s] (797/801) celeris::ops_r1_pipeline ops_r1_pipeline_all_stages_agree_and_two_passes_are_byte_identical
+        SLOW [ 106.706s] (798/801) celeris::cap_probe_real_daemon daemon_only_toolchain_and_variable_pass_through_the_real_worker_path
+        SLOW [ 106.888s] (799/801) celeris::cap_probe_real_daemon daemon_missing_toolchain_or_variable_is_env_failure_even_if_cli_has_it
+        SLOW [ 107.164s] (800/801) celeris::cap_probe_real_daemon daemon_socket_and_mount_are_checked_from_the_worker
+        SLOW [ 108.235s] (801/801) celeris::cap_probe_real_daemon probe_runs_under_each_real_harness_adapter_env

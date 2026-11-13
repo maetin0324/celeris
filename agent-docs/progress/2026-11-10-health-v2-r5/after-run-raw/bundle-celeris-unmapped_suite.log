@@ -1,0 +1,23 @@
+warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGER` causes the socket to block the thread on drop
+   --> crates/script-runtime/vendor/deno_core/uv_compat/tcp.rs:818:17
+    |
+818 |       && stream.set_linger(Some(std::time::Duration::ZERO)).is_err()
+    |                 ^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: `deno_core` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.39s
+     Running tests/unmapped_suite/main.rs (/local/celeris/data/scratch/targets/task-01M76AG298YER7PJB6M781C77X/wu-01M76B4XA44CN8G9F3TMYM6DNM/target/debug/deps/unmapped_suite-349adbf2923da6df)
+
+running 7 tests
+test variant_propagation::foreign_assignee_is_not_accepted ... ok
+test variant_propagation::org_drift_after_post_blocks_before_any_run ... ok
+test variant_propagation::missing_daemon_observation_blocks_the_run ... ok
+test legacy_event_startup::startup_loads_legacy_routing_decided_event ... ok
+test variant_propagation::daemon_build_path_pins_observed_identity ... ok
+test variant_propagation::spec_on_normal_path_keeps_hash_and_org ... ok
+test variant_propagation::spec_off_normal_path_keeps_hash_and_org ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.62s
+

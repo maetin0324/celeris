@@ -51,6 +51,7 @@ fn finished(run_id: &str, cost: Option<f64>, end: RunEnd) -> Event {
             retries: 1,
             peak_context_tokens: None,
             turns: None,
+            knowledge: None,
         }),
         end: Some(end),
     }

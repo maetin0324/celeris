@@ -175,8 +175,15 @@ sd_log "rolled back to $PREV with a restored DB. Lost: everything after $SRC was
 # 失敗（exit 3）で EXIT trap が failed に書き換えないようにする。
 sd_audit finish "$AUDIT_FILE" 0
 AUDIT_FINISHED=true
+# ADR 2026-11-11-cos-skill-sync D2: 戻した先の release の CoS の skill を KB に写す（失敗は exit 4）。
+SKILLS_SYNCED=true
+sd_sync_cos_skills "$PREV_DIR" || SKILLS_SYNCED=false
 # credentiald は link の付け替え・印の片付けの後に切り替える（失敗しても rollback は取り消さない）。
 if ! sd_credentiald_after_switch "$PREV_DIR" "$PREV" "$CUR"; then
   echo "rollback.sh: rolled back to $PREV, but the credentiald switch failed (see $PREV_DIR/credentiald_switch_failed.json)" >&2
   exit 3
+fi
+if [ "$SKILLS_SYNCED" != true ]; then
+  echo "rollback.sh: rolled back to $PREV, but sync-skills.sh failed" >&2
+  exit 4
 fi

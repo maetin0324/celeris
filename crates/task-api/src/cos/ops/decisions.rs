@@ -200,12 +200,9 @@ pub(crate) fn dispatch(
                 .clone()
                 .map_err(|problem| audit.reject(store, "knowledge", "new", problem))?;
             let input = serde_json::from_value(body).map_err(decode)?;
-            audited(crate::knowledge::record_op(
-                store,
-                &root,
-                None,
-                input,
-                Some(audit),
+            let recorded = crate::knowledge::record_op(store, &root, None, input, Some(audit));
+            audited(super::super::knowledge_use::counted_record(
+                store, audit, recorded,
             )?)
         }
         "inbox.answer" => {

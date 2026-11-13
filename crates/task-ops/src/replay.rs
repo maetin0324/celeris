@@ -568,8 +568,9 @@ pub fn rebuild_work_units_and_runs(
 ///   `depends_on` / spec / `needs_decisions`（/3）を新しい版に、`runs` / `continuations` / `retries` /
 ///   `last_run_id` を 0 / 無しに戻す（replan のたびに窓を作り直す。ADR-0072 D17）。kind task の unit は子が
 ///   走っていなければ子の結び付き・commit を外す。`phase` は新しい版の段階に、`seq` は新しい版の並びに
-///   書き換える（R6-4。store の `update_work_unit_tx` は R6-4 から `seq` も書く）。**`kind` は書き換えない**。
-///   （R6-4 より前: store は `seq` の列を書かず、R2b の replay は
+///   書き換える（R6-4。store の `update_work_unit_tx` は R6-4 から `seq` も書く）。`kind` も新しい版の unit の kind に
+///   書き換える（ADR 2026-11-11-replan-unit-kind-change D1。store は `kind` の列も書く。それより前の replan で kind を
+///   変えた行は、DB の旧い kind と食い違って出る〈D3〉）。（R6-4 より前: store は `seq` の列を書かず、R2b の replay は
 ///   `seq` を新しい版の並びにしていたが、行の実際の値は最初に作った版の並びのまま）。
 /// - 未完了の統合 WU（/2・/3）: 新しい版の統合 WU の依存に、前の版の計画に無い依存（統合の repair）を
 ///   足したもの。カウンタは戻さない。
@@ -696,6 +697,8 @@ fn apply_replan_step(
             && row.status == WorkUnitStatus::Running
             && row.child_task_id.is_some();
         row.plan_id = new_plan_id.to_string();
+        // ADR 2026-11-11-replan-unit-kind-change D1（`execution::replan` と同じ）: 行の kind は新しい版の unit の kind。
+        row.kind = new_spec.kind;
         // ADR 2026-10-20-replan-dep-change-wu-rebase D1/D2（`execution::replan` と同じ判定）。
         if row.kind != task_core::WorkUnitKind::Task
             && task_core::same_phase_dependencies_changed(

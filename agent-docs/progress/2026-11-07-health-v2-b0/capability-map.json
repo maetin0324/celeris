@@ -2285,6 +2285,16 @@
      "crate": "celeris",
      "module": "accounts_admin",
      "path": "crates/celeris/src/accounts_admin.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "routing_runtime::quota",
+     "path": "crates/task-dispatch/src/routing_runtime/quota.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "routing_runtime::quota_estimate",
+     "path": "crates/task-dispatch/src/routing_runtime/quota_estimate.rs"
     }
    ],
    "invariants": [
@@ -2410,6 +2420,16 @@
      "crate": "task-dispatch",
      "module": "dispatcher::token_budget",
      "path": "crates/task-dispatch/src/dispatcher/token_budget.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "run_settlement",
+     "path": "crates/task-dispatch/src/run_settlement.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "dispatch_admission",
+     "path": "crates/task-dispatch/src/dispatch_admission.rs"
     }
    ],
    "invariants": [
@@ -3371,6 +3391,16 @@
      "crate": "task-dispatch",
      "module": "dispatcher::leases",
      "path": "crates/task-dispatch/src/dispatcher/leases.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "run_supervisor",
+     "path": "crates/task-dispatch/src/run_supervisor.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "run_settlement",
+     "path": "crates/task-dispatch/src/run_settlement.rs"
     }
    ],
    "invariants": [
@@ -3459,6 +3489,11 @@
      "crate": "task-dispatch",
      "module": "dispatcher::leases",
      "path": "crates/task-dispatch/src/dispatcher/leases.rs"
+    },
+    {
+     "crate": "task-dispatch",
+     "module": "run_supervisor",
+     "path": "crates/task-dispatch/src/run_supervisor.rs"
     }
    ],
    "invariants": [

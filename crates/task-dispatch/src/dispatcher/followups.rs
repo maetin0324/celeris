@@ -12,7 +12,8 @@ use task_ops::followup::{
     ENV_FOLLOWUPS_FILE, ENV_RUN_DB, ENV_RUN_ID, ENV_TASK_ID, FOLLOWUPS_FILE_NAME,
 };
 
-/// ADR-0098 D6: worker の run に渡す env（`CELERIS_TASK_ID` / `CELERIS_RUN_ID` / `CELERIS_FOLLOWUPS_FILE`、
+/// ADR-0098 D6: worker の run に渡す env（`CELERIS_TASK_ID` / `CELERIS_RUN_ID` / `CELERIS_FOLLOWUPS_FILE`・
+/// ADR 2026-11-12-knowledge-usage-per-run D2 の `CELERIS_KNOWLEDGE_USAGE_FILE`、
 /// daemon の DB が分かれば `CELERIS_RUN_DB`）。`run_db` は ADR-0095 の `db_guard` が守る DB（入っていなければ `None`。
 /// そのときは run の中の `celerisctl add` は従来どおり DB に向かう）。
 pub(super) fn followups_env(
@@ -31,6 +32,7 @@ pub(super) fn followups_env(
                 .display()
                 .to_string(),
         ),
+        crate::knowledge_usage::env(artifacts_dir),
     ];
     if let Some(db) = run_db {
         env.push((ENV_RUN_DB.to_string(), db.display().to_string()));
@@ -44,8 +46,11 @@ pub(super) fn followups_env(
 }
 
 /// ADR-0098 D1: 前の run（lease を失った・daemon ごと落ちた）が残した宣言を今回のものと誤読しない。
-pub(super) async fn clear_stale_followups(artifacts_dir: &Path) {
+/// ADR 2026-11-12-knowledge-usage-per-run D2: KB の操作の台帳も同じく run ごとに置き直す（`local` でない
+/// Remote の run は台帳が手元に無いので消すだけ。`RunMetrics.knowledge` は `None`）。
+pub(super) async fn clear_stale_followups(artifacts_dir: &Path, local: bool) {
     let _ = tokio::fs::remove_file(artifacts_dir.join(FOLLOWUPS_FILE_NAME)).await;
+    crate::knowledge_usage::reset(artifacts_dir, local).await;
 }
 
 /// `Dispatcher::run_holds_lease` と同じ規則（v1・atomic は Task の lease、v2 は running の WU の `lease_run_id`）。

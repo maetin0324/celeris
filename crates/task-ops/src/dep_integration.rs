@@ -23,29 +23,44 @@ pub fn integration_wait(
     deps.sort();
     deps.dedup();
     for dep_id in deps {
+        // 取り込み済みと分かった依存先は store も読まない（tick の読み取りを増やさない）。
         if integrated.contains(&dep_id) {
             continue;
         }
         let Some(dep) = store.get(dep_id)? else {
             continue;
         };
-        if dep.status != Status::Done || is_tree_child(&dep) || support_kind(&dep).is_some() {
-            continue;
-        }
-        match dependency_state(store, &dep)? {
-            None => {
-                integrated.insert(dep_id);
-            }
-            Some((cause, detail)) => {
-                return Ok(Some(TaskWait::DependsOnIntegration {
-                    task_id: dep_id,
-                    cause,
-                    detail,
-                }));
-            }
+        if let Some((cause, detail)) = dependency_integration(store, task, &dep, integrated)? {
+            return Ok(Some(TaskWait::DependsOnIntegration {
+                task_id: dep_id,
+                cause,
+                detail,
+            }));
         }
     }
     Ok(None)
+}
+
+/// 依存元 `dependent` が待つ依存先 `dep` 1 件の取り込みの待ち（D1・D2。無ければ `None`）。root 同士（どちらも木の子でない）・
+/// 依存元が対話でない・依存先が done で support task でないときだけ git を読む。task 全体の `depends_on`（[`integration_wait`]）と
+/// 計画の unit の `task:<id>` 依存（ADR 2026-11-11-unit-task-dependencies D2。依存元は計画を持つ task）が同じこの関数を呼ぶ。
+pub fn dependency_integration(
+    store: &dyn TaskStore,
+    dependent: &Task,
+    dep: &Task,
+    integrated: &mut BTreeSet<TaskId>,
+) -> Result<Option<(IntegrationWaitCause, String)>, StoreError> {
+    if is_conversation(dependent) || is_tree_child(dependent) || integrated.contains(&dep.id) {
+        return Ok(None);
+    }
+    if dep.status != Status::Done || is_tree_child(dep) || support_kind(dep).is_some() {
+        return Ok(None);
+    }
+    let state = dependency_state(store, dep)?;
+    if state.is_none() {
+        integrated.insert(dep.id);
+    }
+    Ok(state)
 }
 
 /// `None` = 取り込み済み（または取り込む物が無い）。`Some` = まだ入っていない理由。

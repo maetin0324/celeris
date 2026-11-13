@@ -333,6 +333,13 @@ pub fn run(cli_db: Option<PathBuf>, command: ScratchCommand) -> Result<ExitCode,
                 outln!("{body}");
             } else {
                 print_status(&status);
+                // ADR 2026-11-12-host-check-slots D6: host 共通の検査の枠（使用中と、枠を待つ検査と理由）。
+                match task_worker::check_slots::CheckSlots::from_env() {
+                    Some(slots) => print_check_slots(&slots.status()),
+                    None => outln!(
+                        "check slots: unknown dir (neither CELERIS_CHECK_SLOTS_DIR nor XDG_RUNTIME_DIR is set)"
+                    ),
+                }
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -375,7 +382,7 @@ pub fn status_of(
         Some(&cfg.selfdeploy.releases_dir),
     );
     let sizes = measure_unleased(&settings, &legacy);
-    let min_free = cfg.dispatch.min_free_disk_mb.saturating_mul(1024 * 1024);
+    let min_free_pct = cfg.dispatch.min_free_disk_pct;
     // ADR-0129 (1): sccache / cache server の欄は `build_status` が `None` にする（Celeris の外）。
     let status = with_lookup(cfg, cli_db, |lookup, has_db| {
         let run = scratch_gc::run_gc(
@@ -384,13 +391,20 @@ pub fn status_of(
             lookup,
             has_db,
             &sizes,
-            min_free,
+            min_free_pct,
             false,
             &BTreeSet::new(),
             true,
         );
         scratch_gc::build_status(
-            &settings, &run.scan, &run.plan, run.fs, min_free, &sizes, None, now,
+            &settings,
+            &run.scan,
+            &run.plan,
+            run.fs,
+            run.min_free_bytes,
+            &sizes,
+            None,
+            now,
         )
     });
     Ok(status)
@@ -407,7 +421,6 @@ fn gc(
         Some(&cfg.selfdeploy.releases_dir),
     );
     let sizes = measure_unleased(settings, &legacy);
-    let min_free = cfg.dispatch.min_free_disk_mb.saturating_mul(1024 * 1024);
     let run = with_lookup(cfg, cli_db, |lookup, has_db| {
         scratch_gc::run_gc(
             settings,
@@ -415,7 +428,7 @@ fn gc(
             lookup,
             has_db,
             &sizes,
-            min_free,
+            cfg.dispatch.min_free_disk_pct,
             false,
             &BTreeSet::new(),
             dry_run,
@@ -453,6 +466,31 @@ fn gc(
     }
     out.push_str(&format!("{} candidate(s)\n", picks.len()));
     Ok(out)
+}
+
+/// ADR 2026-11-12-host-check-slots D6: 枠の一覧と、枠を待つ検査（label・開始・理由）。
+fn print_check_slots(s: &task_worker::check_slots::SlotStatus) {
+    use task_worker::check_slots::{host_cores, test_threads};
+    outln!(
+        "check slots {} · {} / {} in use · {} waiting · --test-threads {}",
+        s.dir.display(),
+        s.held.len(),
+        s.slots,
+        s.waiting.len(),
+        test_threads(host_cores(), s.slots)
+    );
+    for h in &s.held {
+        outln!("  slot {} since {}: {}", h.slot, h.since, h.label);
+    }
+    for w in &s.waiting {
+        outln!(
+            "  waiting since {} (pid {}): {} — {}",
+            w.since,
+            w.pid,
+            w.label,
+            w.reason
+        );
+    }
 }
 
 fn print_status(s: &task_ops::daemon::ScratchStatus) {
@@ -493,6 +531,36 @@ fn print_status(s: &task_ops::daemon::ScratchStatus) {
                 .map(|f| format!(" (adopted from {f})"))
                 .unwrap_or_default()
         );
+    }
+    // ADR 2026-11-11-disk-aware-dispatch D4: 空きの見込みと、それで待たせている run。
+    let a = &s.admission;
+    outln!(
+        "admission: free {} · reserve {} · running growth {} · ratio {}",
+        a.free_bytes.map(gb).unwrap_or_else(|| "-".to_string()),
+        gb(a.reserve_bytes),
+        gb(a.running_growth_bytes),
+        a.ratio
+    );
+    for (repo, bytes) in &a.expected_by_repo {
+        outln!("  expected {repo} {}", gb(*bytes));
+    }
+    for o in a.owners.iter().filter(|o| o.grows) {
+        outln!("  growth {} {}", o.owner, gb(o.growth_bytes));
+    }
+    match &a.held {
+        Some(held) => {
+            for h in held {
+                outln!(
+                    "  held {} (need {}, since {}): {}",
+                    h.owner,
+                    gb(h.need_bytes),
+                    h.since,
+                    h.reason
+                );
+            }
+        }
+        // 待たせている run は daemon の判定のメモリにだけある（pool の走査では分からない）。
+        None => outln!("  held: only the daemon knows (GET /api/v1/metrics/scratch)"),
     }
     if !s.legacy.is_empty() {
         outln!("legacy ({}):", s.legacy.len());

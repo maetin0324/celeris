@@ -273,7 +273,7 @@ async fn a_silent_failing_scope_check_gets_a_hint_in_its_detail() {
         &observed,
         &ws,
         &checks,
-        Duration::from_secs(30),
+        task_worker::check_slots::CheckLimits::new(Duration::from_secs(30), &None),
         None,
     )
     .await;

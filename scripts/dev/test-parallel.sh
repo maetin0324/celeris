@@ -17,7 +17,8 @@
 # どちらかが失敗する・集計が読めない（＝全部走った証拠が無い）なら exit 非 0。
 #
 # env:
-#   CELERIS_TEST_JOBS   同時に走らせるテストの数。既定 min(8, max(2, nproc/3))（このホストには daemon の run が同居する）
+#   CELERIS_TEST_JOBS   同時に走らせるテストの数。既定は host の検査の枠の並列度 max(1, nproc / 枠の数)（24 core・枠 2 で 12。
+#                       ADR 2026-11-12-host-check-slots D2、scripts/dev/lib/check-slot.sh の check_slot_test_threads）
 #   CELERIS_NEXTEST_ANY_VERSION  1 なら tools/nextest/VERSION と版が違っても続ける（既定は止める）
 #   CELERIS_TEST_SKIP_DOC        1 なら doc-test を回さない（開発時の短縮用。release.sh は使わない）
 #   CELERIS_USERNS_TESTS / CELERIS_ISOLATION_TESTS  試験側が読む（ADR-0126 B2/B4）。1 / require のとき userns が作れない
@@ -48,10 +49,13 @@ if [ "$have_ver" != "$pin" ] && [ "${CELERIS_NEXTEST_ANY_VERSION:-0}" != 1 ]; th
 fi
 
 ncpu="$(nproc 2>/dev/null || echo 4)"
-jobs_default=$((ncpu / 3))
-[ "$jobs_default" -lt 2 ] && jobs_default=2
-[ "$jobs_default" -gt 8 ] && jobs_default=8
-jobs="${CELERIS_TEST_JOBS:-$jobs_default}"
+# ADR 2026-11-12-host-check-slots D3: 準備の build の前に host 共通の枠を取り、nextest の並列度を枠に合わせる
+# （review の検査・worker の test-affected と同じ上限に従う）。
+# shellcheck source=lib/check-slot.sh
+. "$here/scripts/dev/lib/check-slot.sh"
+check_slot_acquire "release gate test-parallel $(git rev-parse --short=12 HEAD 2>/dev/null || echo HEAD)" || exit 2
+jobs="${CELERIS_TEST_JOBS:-$CHECK_SLOT_TEST_THREADS}"
+# 以下の子（cargo・試験）には `{CHECK_SLOT_FD}>&-` を付け、枠の lock の fd を継がせない（lib/check-slot.sh の冒頭）。
 
 # userns の preflight（ADR-0126 B2/B4）: release gate と同じ env（CELERIS_USERNS_TESTS=1 か CELERIS_ISOLATION_TESTS=require）
 # なのに unprivileged user namespace が作れない host では、実 bwrap / unshare / launcher の試験が「Operation not permitted」で
@@ -111,9 +115,9 @@ run_tee() {
 echo "test-parallel: prepare: cargo nextest list --workspace --list-type binaries-only" >&2
 prc=0
 ttl_run cargo nextest list --workspace --list-type binaries-only --message-format json --color never \
-  >"$logdir/prepare.json" || prc=$?
+  >"$logdir/prepare.json" {CHECK_SLOT_FD}>&- || prc=$?
 if [ "$prc" -eq 0 ]; then
-  ttl_run cargo metadata --no-deps --format-version 1 >"$logdir/metadata.json" || prc=$?
+  ttl_run cargo metadata --no-deps --format-version 1 >"$logdir/metadata.json" {CHECK_SLOT_FD}>&- || prc=$?
 fi
 if [ "$prc" -eq 0 ]; then
   python3 - "$logdir/metadata.json" "$logdir/prepare.json" <<'PY' || prc=$?
@@ -169,7 +173,7 @@ nrc=0
 if [ "$prc" -eq 0 ]; then
   echo "test-parallel: cargo nextest run --workspace (nextest $have_ver, $jobs jobs of $ncpu cpus)" >&2
   run_tee "$logdir/nextest.log" cargo nextest run --workspace --no-fail-fast --color never --hide-progress-bar \
-    --test-threads "$jobs" "$@" || nrc=$?
+    --test-threads "$jobs" "$@" {CHECK_SLOT_FD}>&- || nrc=$?
 else
   : >"$logdir/nextest.log"
 fi
@@ -181,7 +185,7 @@ if [ "${CELERIS_TEST_SKIP_DOC:-0}" = 1 ]; then
   drc=skipped
 else
   echo "test-parallel: cargo test --doc --workspace" >&2
-  run_tee "$logdir/doc.log" cargo test --doc --workspace --color never || drc=$?
+  run_tee "$logdir/doc.log" cargo test --doc --workspace --color never {CHECK_SLOT_FD}>&- || drc=$?
 fi
 t2="$(date +%s.%N)"
 

@@ -1,0 +1,13 @@
+warning: failed to save last-use data
+This may prevent cargo from accurately tracking what is being used in its global cache. This information is used for automatically removing unused data in the cache.
+
+database is locked
+
+Caused by:
+  Error code 5: database is locked
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.27s
+────────────
+ Nextest run ID 11215663-646c-400f-91ef-f4bc4709615b with nextest profile: default
+    Starting 1283 tests across 25 binaries (9 tests skipped)
+────────────
+     Summary [  20.570s] 1283 tests run: 1283 passed, 9 skipped

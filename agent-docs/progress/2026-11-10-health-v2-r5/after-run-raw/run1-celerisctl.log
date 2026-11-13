@@ -1,0 +1,15 @@
+warning: use of deprecated method `tokio::net::TcpStream::set_linger`: `SO_LINGER` causes the socket to block the thread on drop
+   --> crates/script-runtime/vendor/deno_core/uv_compat/tcp.rs:818:17
+    |
+818 |       && stream.set_linger(Some(std::time::Duration::ZERO)).is_err()
+    |                 ^^^^^^^^^^
+    |
+    = note: `#[warn(deprecated)]` on by default
+
+warning: `deno_core` (lib) generated 1 warning
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.69s
+────────────
+ Nextest run ID e7c8bf54-3391-4f5b-b9a5-969f7d790b1f with nextest profile: default
+    Starting 205 tests across 15 binaries
+────────────
+     Summary [   5.962s] 205 tests run: 205 passed, 0 skipped

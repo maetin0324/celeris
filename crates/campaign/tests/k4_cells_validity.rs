@@ -473,20 +473,16 @@ fn numeric_error_in_one_valid_cell_is_rejected_on_its_own() {
 /// 欠測を分母から除外・有効セルの数値誤りは落ちる。
 #[test]
 fn real_k4_archive_grades_thirty_of_thirty_two() {
-    let tgz = std::env::var("CAMPAIGN_K4_TGZ")
-        .map(std::path::PathBuf::from)
-        .ok()
-        .filter(|p| p.is_file())
-        .or_else(|| {
-            let p = std::path::PathBuf::from(
-                "/local/celeris/data/workspaces/01M5SRJMA9CFNG2C9KCCS5VS4B/artifacts/k4-inputs-v2/main-v3-n2-43706-public2.tgz",
-            );
-            p.is_file().then_some(p)
-        });
-    let Some(tgz) = tgz else {
-        eprintln!("SKIPPED(実物検証): 原票 tgz が無い");
+    // 不変条件: 実物 fixture は明示指定だけを使う。合成試験ではホストの原票探索の混入を検出できない。
+    let Some(tgz) = std::env::var_os("CAMPAIGN_K4_TGZ").map(std::path::PathBuf::from) else {
+        eprintln!("SKIPPED(実物検証): CAMPAIGN_K4_TGZ が未指定");
         return;
     };
+    assert!(
+        tgz.is_file(),
+        "CAMPAIGN_K4_TGZ must name a file: {}",
+        tgz.display()
+    );
     let src = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("fixtures/grade-cases/final/k4-cmp4-validity-analysis");
     let t = tempfile::tempdir().expect("tmp");

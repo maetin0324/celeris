@@ -4,6 +4,7 @@ use super::route_select::{RouteInput, RoutePick, RouteTrace};
 use super::token_budget::run_watch;
 use super::*;
 use crate::review::RepoHealth;
+use task_worker::check_slots::CheckLimits;
 
 /// ADR-0118 D4 付記 / ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3・D4: 直近の遷移（自動の
 /// 再レビューの遷移を除く）または再開（`ReviewResyncResumed`）以後の stale（`ReviewTargetAdvanced`）の数、
@@ -912,7 +913,7 @@ impl Dispatcher {
             // （`on_review_finished` が `resolve_quota_estimate` で閉じる）。
             self.quota_begin(account.as_deref(), account_adapter, review_run_id);
         }
-        let timeout = self.config.review_timeout;
+        let limits = CheckLimits::new(self.config.review_timeout, &self.config.check_slots);
         // ADR-0036 D1/D2: 判定（`plan.json` / `review.json` / `summary.md` / `ArtifactExists` の既定パス）は
         // 対象タスクの成果物ディレクトリを基準にする。
         let artifacts_dir = self.artifacts_dir(&task, &dir);
@@ -922,7 +923,7 @@ impl Dispatcher {
         let tx = self.tx.clone();
         let remote_review = remote_settings.clone();
         // ADR-0019 D1 6. / ADR-0041 D1: 判定コマンドは worktree の中で実行する（元のリポジトリでは実行しない）。
-        let review_work_dir = self.work_dir_for(&task);
+        let review_work_dir = self.work_dir_for(&task).filter(|w| w.is_dir());
         // ADR-0074 F5-fix: reviewer の checks は Task の worktree で走るので `<repo-key>`
         // （Task 単位の run と同じ target）。
         let review_check_env = self.check_cargo_target_env(&task, None);
@@ -969,15 +970,14 @@ impl Dispatcher {
                     )),
                     commands,
                     reusable: Default::default(),
-                    workspace: if index == 0 {
-                        None
-                    } else {
-                        Some(Box::new(
+                    workspace: (index != 0).then(|| {
+                        limits.check_workspace(
                             LocalWorkspace::new(&dir)
                                 .with_work_dir(repo.dir.clone())
                                 .with_cargo_env(review_check_env.clone()),
-                        ) as Box<dyn Workspace>)
-                    },
+                            format!("review {task_id} {}", repo.name),
+                        )
+                    }),
                 });
             }
         }
@@ -1005,14 +1005,12 @@ impl Dispatcher {
                     }
                     Box::new(ssh)
                 }
-                None => Box::new(
-                    match review_work_dir {
-                        Some(work) if work.is_dir() => {
-                            LocalWorkspace::new(&dir).with_work_dir(work)
-                        }
-                        _ => LocalWorkspace::new(&dir),
-                    }
-                    .with_cargo_env(review_check_env),
+                // ADR 2026-11-12-host-check-slots D3: local の検査だけ host の枠で包む（remote は包まない）。
+                None => limits.check_workspace(
+                    LocalWorkspace::new(&dir)
+                        .with_work_dir(review_work_dir.unwrap_or_else(|| dir.clone()))
+                        .with_cargo_env(review_check_env),
+                    format!("review {task_id}"),
                 ),
             };
             let extras = ReviewExtras {
@@ -1039,7 +1037,7 @@ impl Dispatcher {
                 &dir,
                 &artifacts_dir,
                 &produced,
-                timeout,
+                limits.timeout,
                 extras,
             )
             .await;

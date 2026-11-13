@@ -126,6 +126,18 @@ impl InboxKind {
         Self::STAGNATION_KINDS.iter().any(|k| k.as_str() == kind)
     }
 
+    /// ADR 2026-11-12-cos-triage-scope D8: an open item of this kind needs no answer, so CoS may close
+    /// it by observing. `dependents_reopened` only offers to undo the daemon's own default (cancel a
+    /// reopened dependent); keeping them is the usual answer and the item goes away on its own.
+    pub fn observable_while_open(self) -> bool {
+        matches!(self, InboxKind::DependentsReopened)
+    }
+
+    /// The kind of an `as_str` name (`None` for `notice` and unknown names).
+    pub fn from_name(name: &str) -> Option<InboxKind> {
+        Self::ALL.into_iter().find(|k| k.as_str() == name)
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             InboxKind::Decision => "decision",
@@ -1128,6 +1140,7 @@ impl Builder<'_> {
             AttentionItem::PlanApproval {
                 task,
                 plan_version,
+                reasons,
                 summary,
                 stages,
                 decision_ids,
@@ -1135,14 +1148,7 @@ impl Builder<'_> {
                 ..
             } => {
                 let path = format!("/api/v1/tasks/{}/execution/plan-gate", task.id);
-                let detail = std::iter::once(summary.clone())
-                    .chain(
-                        stages
-                            .iter()
-                            .map(|s| format!("{}: {}（{} 件）", s.key, s.title, s.units.len())),
-                    )
-                    .collect::<Vec<_>>()
-                    .join("\n");
+                let detail = plan_gate_detail(summary, reasons, stages);
                 // D1.1: 計画の決定の要求は別の `decision` 項目として並び、この項目の `blocked_by` に載る。
                 let blocked_by = decision_ids
                     .iter()
@@ -1297,7 +1303,7 @@ impl Builder<'_> {
                     detail: Some(Detail::Whole(detail)),
                     options,
                     // ADR 2026-10-28-cos-routine-delegated-answers 付記: integrate task は ADR が定めた既定の
-                    // 答え方なので推奨にする（CoS は documented_default の根拠で代答する）。
+                    // 答え方なので推奨にする（CoS は task_scope の根拠で代答する）。
                     recommended: integrate_task_offered
                         .then(|| task_core::integration_request::INTEGRATE_TASK_OPTION.to_string()),
                     due_at: None,
@@ -1602,7 +1608,7 @@ impl Builder<'_> {
             detail: clip(&format!(
                 "{} の使用率が {pct} で critical のしきい値を超えている。空きを作る（`celerisctl target sweep --apply`、\
                  不要な file の削除）。使用率がしきい値より 5 ポイント下がると自動で消える。run は止めない\
-                 （空きの下限による停止は ADR-0074 の min_free_disk_mb）。",
+                 （空きの下限による停止は ADR-0074 の min_free_disk_pct）。",
                 d.path
             )),
             options: vec![opt(
@@ -1899,6 +1905,25 @@ mod item_task;
 pub use item_task::item_task_id;
 
 pub mod dependents_reopened;
+
+/// The body of a plan gate item: the summary, the approval reasons and the stages. ADR
+/// 2026-11-12-cos-triage-scope D4: the reasons (`near_limit:` …) are in the body, so the triage
+/// match and the person read why a person approves this plan.
+fn plan_gate_detail(
+    summary: &str,
+    reasons: &[String],
+    stages: &[crate::inbox::PlanApprovalStage],
+) -> String {
+    std::iter::once(summary.to_owned())
+        .chain((!reasons.is_empty()).then(|| format!("承認の理由: {}", reasons.join(", "))))
+        .chain(
+            stages
+                .iter()
+                .map(|s| format!("{}: {}（{} 件）", s.key, s.title, s.units.len())),
+        )
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 
 #[cfg(test)]
 mod tests;

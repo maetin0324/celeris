@@ -1,0 +1,44 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.21s
+     Running tests/cos_delivery_suite_b/main.rs (/local/celeris/data/scratch/targets/task-01M76AG298YER7PJB6M781C77X/wu-01M76B4XA4MZRYHBP348ZP7R49/target/debug/deps/cos_delivery_suite_b-8a14874f77f07e05)
+
+running 36 tests
+test cos_triage_override::cos_chat_triage_override_human_revision_wins_race_with_cos_answer ... ok
+test cos_triage_override::cos_chat_triage_override_external_effect_without_task_still_creates_remediation ... ok
+test cos_ops_registry::cos_ops_registry_unregistered_and_recursive_subtree_bodies_are_redacted ... ok
+test cos_ops_registry::cos_ops_registry_exclusion_precedes_body_and_instruction_validation ... ok
+test cos_routine_answers::cos_routine_operations_need_a_basis_without_instruction ... ok
+test cos_review_rework::review_rework_applies_to_a_direct_reopen_operation ... ok
+test cos_plan_conforms_guards::human_check_and_human_required_label_are_for_a_person ... ok
+test cos_plan_conforms_guards::plan_churn_keeps_its_limit ... ok
+test cos_plan_conforms_guards::a_failed_plan_check_stays_with_a_person_and_names_its_kind ... ok
+test cos_plan_conforms_guards::approval_reasons_beyond_the_plans_human_steps_are_for_a_person ... ok
+test cos_routine_answers::cos_routine_c_documented_default_is_the_recommended_option ... ok
+test cos_plan_conforms_guards::within_approved_frame_on_a_plan_gate_takes_the_same_human_conditions ... ok
+test cos_routine_answers::cos_routine_d_work_guidance_answers_a_question_without_replan ... ok
+test cos_ops_projects_cron_docs::cos_ops_projects_cron_docs_init_and_maintenance_are_audited ... ok
+test cos_review_rework::review_rework_leaves_human_checks_labels_and_other_failures_to_a_person ... ok
+test cos_plan_conforms_guards::objective_or_acceptance_edits_since_the_previous_approval_are_for_a_person ... ok
+test cos_review_rework::review_rework_reopens_and_hands_the_rejection_to_the_next_attempt ... ok
+test cos_review_rework::review_rework_stops_at_the_limit_and_on_a_repeated_rejection ... ok
+test cos_routine_answers::cos_routine_b_raise_once_only_once_and_not_for_a_repeated_failure ... ok
+test cos_ops_projects_cron_docs::cos_ops_projects_cron_knowledge_page_put_is_external_once ... ok
+test cos_ops_registry::cos_ops_registry_exclusions_record_reasoned_rejections_without_body_or_side_effects ... ok
+test cos_routine_answers::cos_routine_a_within_approved_frame_answers_and_over_frame_escalates ... ok
+fatal: path 'docs/a.md' does not exist in 'main'
+test cos_ops_projects_cron_docs::cos_ops_projects_cron_docs_page_put_delete_are_external_once ... ok
+test cos_triage_override::cos_chat_triage_override_reblocks_released_work_unit_until_human_answer ... ok
+test cos_triage_override::cos_chat_triage_override_irreversible_op_creates_remediation_task ... ok
+test cos_plan_conforms_guards::every_stage_kind_needs_a_guard ... ok
+test cos_triage_override::cos_chat_triage_override_rejects_cos_credential_and_missing_reason ... ok
+test general_cos_consult::general_cos_consult_consult_answers_without_a_task ... ok
+test general_cos_consult::general_cos_consult_proposal_is_cos_words_and_never_an_instruction ... ok
+test cos_triage_override::cos_chat_triage_override_return_pauses_consumed_task_and_blocks_old_epoch ... ok
+test general_cos_consult::general_cos_consult_general_and_project_sessions_stay_separate ... ok
+test cos_triage_override::cos_chat_triage_override_revoke_preserves_approval_and_opens_new_authorization ... ok
+test cos_triage_override::cos_chat_triage_override_revoke_reopens_unconsumed_decision_and_preserves_audit ... ok
+test general_cos_consult::general_cos_consult_delegate_creates_one_task_traced_to_the_origin_thread ... ok
+test general_cos_consult::general_cos_consult_read_completes_inside_the_run ... ok
+test general_cos_consult::general_cos_consult_relay_forward_with_cos_text_is_refused ... ok
+
+test result: ok. 36 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.16s
+

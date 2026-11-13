@@ -1,0 +1,67 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.22s
+     Running tests/cos_delivery_suite_c/main.rs (/local/celeris/data/scratch/targets/task-01M76AG298YER7PJB6M781C77X/wu-01M76B4XA4MZRYHBP348ZP7R49/target/debug/deps/cos_delivery_suite_c-0ad3e59f3d9cf519)
+
+running 60 tests
+test daemon_clusters_config::config_is_returned_as_given_and_secrets_never_appear ... ok
+test daemon_clusters_config::config_identity_is_authenticated_only_and_has_no_secret ... ok
+test integration_api::integration_api_disposition_requires_human_auth_and_nonempty_reason ... ok
+test notify::the_test_endpoint_is_409_without_an_admin_channel ... ok
+test notify::get_notify_shows_the_fingerprint_and_recent_sends_but_never_the_url ... ok
+test daemon_clusters_config::clusters_combine_config_and_snapshot ... ok
+test daemon_clusters_config::clusters_endpoint_rejects_query_parameters ... ok
+test integration_principals::integration_request_answers_record_web_and_operator ... ok
+test integration_api::integration_api_rejects_unknown_state_filter ... ok
+test notify::get_notify_reports_not_configured_without_a_secret ... ok
+test daemon_clusters_config::daemon_view_is_null_until_a_snapshot_is_sent ... ok
+test notify::celeris_side_unavailability_becomes_409 ... ok
+test notify::the_test_endpoint_is_409_when_no_webhook_is_registered ... ok
+test notify::the_test_endpoint_is_409_without_a_secrets_section ... ok
+test notify::a_failed_send_is_reported_as_ok_false ... ok
+test notify::get_notify_omits_project_id_for_kinds_without_a_project ... ok
+test integration_api::integration_api_lists_and_filters_states ... ok
+test daemon_clusters_config::schema_endpoint_returns_the_committed_file ... ok
+test integration_api::integration_api_task_detail_and_list_include_unintegrated_state ... ok
+test integration_api::integration_api_inbox_unintegrated_items_are_per_repo_and_need_note ... ok
+test integration_principals::integration_routes_apply_common_guard_without_changing_authorization ... ok
+test daemon_clusters_config::stream_sends_daemon_events_when_the_snapshot_changes ... ok
+test notify::the_test_endpoint_requires_a_token ... ok
+test notify::the_test_endpoint_requires_a_token_when_token_file_is_not_configured ... ok
+test notify::the_test_endpoint_returns_200_with_the_outcome_from_celeris ... ok
+test operations::answer_covers_blocked_not_blocked_and_blank ... ok
+test operations::approve_covers_accept_approve_and_both_invalid_cases ... ok
+test operations::accept_moves_a_draft_task_to_ready_and_rejects_other_statuses ... ok
+test notify::get_notify_status_exposes_route_settings_and_last_successful_sends ... ok
+test operations::cancelling_a_predecessor_lists_dependents_in_cascaded ... ok
+test operations::create_plan_is_gone ... ok
+test operations::cancel_of_done_or_cancelled_is_invalid_and_failed_can_be_cancelled ... ok
+test operations::approving_the_same_task_twice_is_an_invalid_transition ... ok
+test operations::browser_allowed_domains_api_patch_cannot_add_skill_without_origins ... ok
+test operations::browser_allowed_domains_api_create_rejects_missing_empty_and_invalid ... ok
+test operations::operations_on_missing_tasks_are_404 ... ok
+test operations::expected_status_mismatch_is_a_conflict_that_changes_nothing ... ok
+test operations::create_task_validation_errors_insert_nothing ... ok
+test operations::create_task_max_tokens_lands_in_the_budget ... ok
+test operations::create_task_returns_201_with_location_and_cli_defaults ... ok
+test operations::project_and_milestone_mutations_require_a_bearer_token ... ok
+test operations::every_mutating_endpoint_requires_a_bearer_token ... ok
+test integration_principals::all_dispositions_and_inbox_forwarding_preserve_token_principals ... ok
+test operations::reject_covers_approval_and_draft ... ok
+test operations::rejecting_an_approval_lists_cancelled_children_in_cascaded ... ok
+test operations::replay_reports_zero_mismatches_after_api_operations ... ok
+test operations::retry_defaults_to_ready_when_accept_is_omitted ... ok
+test operations::retry_duplicates_a_failed_task_and_rewires_dependents ... ok
+test task_wait_api::task_wait_api_tree_shows_unit_waiting_keys_and_stage_order ... ok
+test task_list_with::unknown_with_value_is_400 ... ok
+test operations::retry_workspace_override_switches_to_local_and_validates_the_cluster ... ok
+test task_wait_api::task_wait_api_run_state_splits_runnable_and_waiting ... ok
+test task_wait_api::task_wait_api_tree_child_nodes_carry_waits ... ok
+test operations::retry_with_accept_starts_ready_and_non_terminal_or_done_is_409 ... ok
+test task_wait_api::task_wait_api_list_reports_children_depends_on_paused_and_snapshot_capacity ... ok
+test task_wait_api::task_wait_api_stale_snapshot_adds_no_memory_waits ... ok
+test task_wait_api::task_wait_api_detail_carries_the_same_waits ... ok
+test single_human_window::project_escalation_is_answered_through_the_general_cos_and_relayed_to_the_project_cos ... ok
+test task_list_with::default_list_spawns_no_git ... ok
+test task_list_with::with_integrations_counts_do_not_scale_with_rows ... ok
+
+test result: ok. 60 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.50s
+

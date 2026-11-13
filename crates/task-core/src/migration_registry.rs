@@ -412,6 +412,21 @@ pub(crate) const MIGRATIONS: &[(u32, &str)] = &[
         122,
         include_str!("../migrations/0122_events_dependents_reopened_index.sql"),
     ),
+    // ADR 2026-11-11-cos-standing-context D4: authority ledger の global の範囲と定型の代答の分類（表の作り直し）。
+    (
+        123,
+        include_str!("../migrations/0123_authority_global_routine.sql"),
+    ),
+    // ADR 2026-11-12-cos-triage-scope D2: CoS の operator 宛ての経路（表の作り直し）。
+    (
+        124,
+        include_str!("../migrations/0124_cos_operator_route.sql"),
+    ),
+    // ADR 2026-11-12-knowledge-usage-per-run D3: `chat_runs.knowledge_use_json`（CoS run の KB の操作の回数）。
+    (
+        125,
+        include_str!("../migrations/0125_chat_run_knowledge_use.sql"),
+    ),
 ];
 
 /// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0038 work_unit_sessions、

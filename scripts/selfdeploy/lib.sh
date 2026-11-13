@@ -986,6 +986,19 @@ sd_release_prune_enforce_limit() {
   sd_release_prune_record_start "$target"
 }
 
+# ADR 2026-11-11-disk-aware-dispatch D3: build の**後**にも上限を確かめる（release.sh の EXIT trap）。開始時だけでは
+# build で上限を超えて育った target（本番 88.0 GB > 64 GiB）が、次の release の開始まで lease（P0）のまま残る。
+# この build の開始時刻（`.celeris-release-build-start`）より古い workspace の成果物を開始時と同じ規則で刈り、
+# それでも上限を超えていれば target を作り直す。`sd_release_target_settle <target> <tree>`。
+sd_release_target_settle() {
+  local target="$1" tree="$2" start
+  [ -d "$target" ] || return 0
+  start="$(cat "$target/.celeris-release-build-start" 2>/dev/null || printf '0')"
+  case "$start" in *[!0-9.]*|'') start=0 ;; esac
+  sd_release_prune_stale_test_binaries "$target" "$tree" "$start"
+  sd_release_prune_enforce_limit "$target"
+}
+
 # lease を返す（P3 に落ち、GC が即回収する）。Phase SD-1 から release.sh の終了時には呼ばない（上の説明）。
 # 共有の target を今すぐ手放したいとき（人の手作業）に使う。
 sd_scratch_release() {
@@ -1388,4 +1401,57 @@ except Exception: print("")' 2>/dev/null || true)"
   SD_BROWSER_LEDGER_CODE=ok
   sd_log "browser-ledger: placed $final/conformance.json (p4b=$p4b)"
   return 0
+}
+
+# ADR 2026-11-11-cos-skill-sync D2: copy the CoS skills (cos-skills.txt) of the build into `<stage>/skills/`.
+sd_bundle_cos_skills() {
+  local build="$1" stage="$2" name
+  mkdir -p "$stage/skills"
+  while IFS= read -r name; do
+    case "$name" in ''|'#'*) continue ;; esac
+    [ -f "$build/config/skills/$name/SKILL.md" ] || { echo "missing $build/config/skills/$name/SKILL.md" >&2; return 1; }
+    cp -R "$build/config/skills/$name" "$stage/skills/$name" || return 1
+  done <"$build/scripts/selfdeploy/cos-skills.txt"
+}
+
+# `[knowledge] root` of $SD_CONFIG (relative to the config file, `~` expanded). The daemon's default
+# ~/.local/share/celeris/knowledge only when the config has no such key or no config file exists
+# (as sd_db_path). A config that exists but cannot be read fails: no guessed KB
+# (ADR 2026-11-11-cos-skill-sync D2). SD_KNOWLEDGE_ROOT overrides it.
+sd_knowledge_root() {
+  if [ -n "${SD_KNOWLEDGE_ROOT:-}" ]; then printf '%s\n' "$SD_KNOWLEDGE_ROOT"; return 0; fi
+  python3 - "${SD_CONFIG:-}" <<'PY'
+import os, sys
+root = "~/.local/share/celeris/knowledge"
+path = sys.argv[1]
+if path and os.path.exists(path):
+    try:
+        import tomllib
+        with open(path, "rb") as f:
+            root = tomllib.load(f).get("knowledge", {}).get("root", root)
+        if not isinstance(root, str):
+            raise ValueError("[knowledge] root is not a string")
+    except Exception as e:
+        sys.exit(f"sd_knowledge_root: cannot read [knowledge] root of {path}: {e}")
+root = os.path.expanduser(root)
+if not os.path.isabs(root) and path:
+    root = os.path.join(os.path.dirname(os.path.abspath(path)), root)
+print(root)
+PY
+}
+
+# After promote/rollback switched to `<release dir>`: deploy its CoS skills to the KB. Failure is
+# logged and returned (the caller exits 4 after its other steps; the switch itself stands).
+sd_sync_cos_skills() {
+  local rel="$1" kb
+  if ! kb="$(sd_knowledge_root 2>>"${SD_LOG_FILE:-/dev/stderr}")"; then
+    sd_log "warning: could not resolve the KB root from $SD_CONFIG; the CoS skills were not synced and CoS runs stay held (ADR 2026-11-11-cos-skill-sync D3)"
+    return 1
+  fi
+  if bash "$(dirname "${BASH_SOURCE[0]}")/sync-skills.sh" "$rel" "$kb" >>"${SD_LOG_FILE:-/dev/stderr}" 2>&1; then
+    sd_log "sync-skills: deployed the CoS skills of $(basename "$rel") to $kb/skills"
+  else
+    sd_log "warning: sync-skills.sh $rel $kb failed; CoS runs stay held until the KB skills fit (ADR 2026-11-11-cos-skill-sync D3)"
+    return 1
+  fi
 }

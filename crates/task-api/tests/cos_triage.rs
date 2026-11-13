@@ -5,14 +5,11 @@
 //! durable outbox row. Item times come from an injected clock; nothing sleeps.
 mod common;
 
+use common::cos_ops::{cos_bearer, db, decision_answered_by, raise_decision};
 use common::*;
 use serde_json::{Value, json};
 use task_core::chat::triage::CosTriageSource;
 use task_core::chat::{ChatPostMessageRequest, ChatSendMode};
-use task_core::decision::{
-    CostOfReversal, DecisionKind, DecisionOption, DecisionOrigin, DecisionPathEntry,
-    DecisionRaisedBy, DecisionRequest, DecisionStatus,
-};
 use task_core::{Event, Status, TaskKind, TaskStore};
 use time::{Duration, OffsetDateTime};
 
@@ -21,78 +18,6 @@ const OPS: &str = "/api/v1/cos/operations";
 /// The injected clock of the ingest side: `T0 + secs`.
 fn at(secs: i64) -> OffsetDateTime {
     OffsetDateTime::from_unix_timestamp(1_790_000_000 + secs).expect("time")
-}
-
-/// A live CoS run of a new thread: `(thread_id, run_id, "Bearer …")`.
-fn cos_bearer(env: &TestEnv, key: &str) -> (String, String, String) {
-    let store = &env.store;
-    let now = OffsetDateTime::now_utc();
-    let thread = common::project_cos_thread(store, &task_core::ProjectId::new().to_string());
-    store
-        .chat_message_post(
-            &thread.id,
-            &ChatPostMessageRequest {
-                client_message_id: format!("message-{key}"),
-                text: "input".into(),
-                attachment_ids: vec![],
-                reply_to_id: None,
-                mode: ChatSendMode::Queue,
-                resume_queue: false,
-            },
-            now,
-        )
-        .expect("message");
-    let run = format!("run-{key}");
-    store
-        .chat_run_claim_next(&thread.id, &run, &json!({}), now)
-        .expect("claim")
-        .expect("run");
-    let bearer = task_api::cos::issue_run_bearer(store, &thread.id, &run, Duration::hours(1))
-        .expect("issue");
-    store
-        .chat_run_record_policy(&run, "1", "test")
-        .expect("policy");
-    (thread.id, run, format!("Bearer {bearer}"))
-}
-
-fn raise_decision(env: &TestEnv, task: &task_core::Task, id: &str) {
-    let opt = |key: &str| DecisionOption {
-        key: key.into(),
-        label: key.into(),
-        consequence: None,
-    };
-    env.store
-        .append_event(
-            task.id,
-            &Event::DecisionRequested {
-                decision: Box::new(DecisionRequest {
-                    id: id.into(),
-                    key: "h1".into(),
-                    kind: DecisionKind::Choice,
-                    question: "which?".into(),
-                    options: vec![opt("vault"), opt("manual")],
-                    recommended: "vault".into(),
-                    cost_of_reversal: CostOfReversal::Low,
-                    cost_note: None,
-                    needed_before: vec!["c".into()],
-                    path: vec![DecisionPathEntry {
-                        task_id: task.id,
-                        title: "root".into(),
-                        stage: Some("s1".into()),
-                        unit: None,
-                    }],
-                    raised_by: DecisionRaisedBy {
-                        task_id: task.id,
-                        run_id: None,
-                        origin: DecisionOrigin::Planner,
-                    },
-                    status: DecisionStatus::Open,
-                    answer: None,
-                    withdrawn_reason: None,
-                }),
-            },
-        )
-        .expect("raise");
 }
 
 /// A task with one open decision; returns `(task, derived inbox item id)`.
@@ -150,9 +75,9 @@ fn resolve_body(key: &str, revision: &str, outcome: &str, extra: Value) -> Value
     // recommended `vault` is a documented default, a free-text note is work guidance.
     if outcome == "answer" && body.get("basis").is_none() {
         body["basis"] = if body["answer"]["option"] == "vault" {
-            common::cos_ops::documented_default_basis()
+            common::cos_ops::task_scope_basis()
         } else {
-            common::cos_ops::work_guidance_basis()
+            common::cos_ops::task_scope_basis()
         };
     }
     body
@@ -160,16 +85,13 @@ fn resolve_body(key: &str, revision: &str, outcome: &str, extra: Value) -> Value
 
 fn packet(options: Value, recommended: Value, web_path: &str) -> Value {
     json!({
+        "to": "human",
         "summary": "公開前の確認",
         "options": options,
         "recommended": recommended,
         "recommendation_reason": "公開先が未確認",
         "web_path": web_path,
     })
-}
-
-fn db(env: &TestEnv) -> rusqlite::Connection {
-    rusqlite::Connection::open(&env.db_path).expect("open db")
 }
 
 fn item_state(env: &TestEnv, item: &str) -> String {
@@ -180,18 +102,6 @@ fn item_state(env: &TestEnv, item: &str) -> String {
             |r| r.get(0),
         )
         .expect("item")
-}
-
-fn decision_answered_by(env: &TestEnv, task: &task_core::Task) -> Vec<String> {
-    env.store
-        .events_for(task.id)
-        .expect("events")
-        .into_iter()
-        .filter_map(|(_, e)| match e {
-            Event::DecisionAnswered { by, .. } => Some(by),
-            _ => None,
-        })
-        .collect()
 }
 
 fn audit_events(env: &TestEnv, operation_id: &str) -> Vec<Value> {
@@ -1244,7 +1154,7 @@ async fn cos_free_text_question_resumes_through_resolve_and_relay() {
                         &format!("/api/v1/inbox/items/{inbox_id}/answer"),
                         answer,
                     ),
-                    common::cos_ops::work_guidance_basis(),
+                    common::cos_ops::task_scope_basis(),
                 )
             } else {
                 resolve_body(key, "r1", "answer", json!({"answer": answer}))

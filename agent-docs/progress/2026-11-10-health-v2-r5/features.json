@@ -1,0 +1,95 @@
+{
+ "schema": "health-v2-r5-features/1",
+ "label": "features",
+ "git_head": "2166a26556364c94851dc30f5f6a6cf5ad0b98bc",
+ "merge_base_main": "2166a26556364c94851dc30f5f6a6cf5ad0b98bc",
+ "measured_src_equals_merge_base": true,
+ "host": {
+  "nproc": 24,
+  "uname": "Linux 6.8.12-9-pve",
+  "cargo": "cargo 1.98.1 (797e8a9bc 2026-08-05)",
+  "nextest": "cargo-nextest 0.9.146 (8af696ddc 2026-09-21)",
+  "cargo_target_dir": "/local/celeris/data/scratch/targets/task-01M6TYVJT53598CPKMGSQGA7XM/wu-01M736HS0NBRBGGK1RFRS3AYZ1/target"
+ },
+ "started_at": "2026-11-10T18:01:18Z",
+ "elapsed_secs": 52.8,
+ "loadavg_before": "26.19 48.50 47.87",
+ "loadavg_after": "48.00 50.25 48.46",
+ "crates": {
+  "_tree": {
+   "feature_diff": {
+    "packages_A": 342,
+    "packages_B": 343,
+    "differing": {
+     "celeris-credentiald v0.1.0": {
+      "only_in_A": [],
+      "only_in_B": [
+       "same-uid-harness"
+      ]
+     },
+     "syn v2.0.119": {
+      "only_in_A": [],
+      "only_in_B": [
+       "visit"
+      ]
+     },
+     "task-worker v0.1.0": {
+      "only_in_A": [],
+      "only_in_B": [
+       "attack-test-hooks",
+       "h3-e2e-insecure-cert",
+       "live-cross-test-support",
+       "same-uid-harness"
+      ]
+     },
+     "time v0.3.55": {
+      "only_in_A": [],
+      "only_in_B": [
+       "macros"
+      ]
+     }
+    }
+   }
+  },
+  "_build": {
+   "1-A": {
+    "set": "celeris,celerisctl",
+    "exit": 0,
+    "secs": 5.97,
+    "compiled": [
+     "celerisctl"
+    ],
+    "loadavg_before": "26.19 48.50 47.87",
+    "loadavg_after": "27.43 48.01 47.71"
+   },
+   "2-B": {
+    "set": "celeris,celeris-campaign,celerisctl,llm-proxy,task-api,task-dispatch,task-worker",
+    "exit": 0,
+    "secs": 40.22,
+    "compiled": [
+     "celeris",
+     "celerisctl"
+    ],
+    "loadavg_before": "27.43 48.01 47.71",
+    "loadavg_after": "49.83 50.65 48.58"
+   },
+   "3-A": {
+    "set": "celeris,celerisctl",
+    "exit": 0,
+    "secs": 1.65,
+    "compiled": [],
+    "loadavg_before": "49.83 50.65 48.58",
+    "loadavg_after": "49.83 50.65 48.58"
+   },
+   "4-B": {
+    "set": "celeris,celeris-campaign,celerisctl,llm-proxy,task-api,task-dispatch,task-worker",
+    "exit": 0,
+    "secs": 2.95,
+    "compiled": [],
+    "loadavg_before": "49.83 50.65 48.58",
+    "loadavg_after": "48.00 50.25 48.46"
+   }
+  }
+ },
+ "skipped": []
+}

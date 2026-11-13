@@ -1319,6 +1319,7 @@ pub(crate) fn relay_record(
         relayed_by: relayed_by.to_owned(),
         said_at: chat_ts(said_at),
         source: None,
+        grant_id: None,
         scope: ChatRelayScope {
             project_id: thread.project_id,
             task_ids: req.task_ids.clone(),

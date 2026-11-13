@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use serde_json::{Value, json};
+use support::proc_stats::{pct, status_kb, threads};
 use support::script_compare::{dist_bundle, start_policy};
 use task_core::project_wake::{ControllerMode, ProjectDecideInput};
 use task_core::store::SqliteStore;
@@ -41,27 +42,6 @@ fn raw(value: Value) {
         .open(std::path::Path::new(&dir).join("resource.jsonl"))
         .and_then(|mut f| f.write_all(format!("{v}\n").as_bytes()))
         .expect("raw");
-}
-
-fn status_kb(field: &str) -> u64 {
-    std::fs::read_to_string("/proc/self/status")
-        .ok()
-        .and_then(|s| {
-            s.lines()
-                .find(|l| l.starts_with(field))
-                .and_then(|l| l.split_whitespace().nth(1)?.parse().ok())
-        })
-        .unwrap_or(0)
-}
-
-fn threads() -> usize {
-    std::fs::read_dir("/proc/self/task").map_or(0, |d| d.count())
-}
-
-fn pct(v: &[u64], p: usize) -> u64 {
-    let mut v = v.to_vec();
-    v.sort_unstable();
-    v.get((v.len().max(1) - 1) * p / 100).copied().unwrap_or(0)
 }
 
 fn project(store: &SqliteStore, n: usize) -> ProjectId {

@@ -153,6 +153,8 @@ case "$PREVIOUS_BUILD_START" in *[!0-9.]*|'') PREVIOUS_BUILD_START=0 ;; esac
 sd_release_prune_stale_test_binaries "$SD_CARGO_TARGET" "$BUILD" "$PREVIOUS_BUILD_START"
 sd_release_prune_enforce_limit "$SD_CARGO_TARGET"
 sd_release_prune_record_start "$SD_CARGO_TARGET"
+# ADR 2026-11-11-disk-aware-dispatch D3: 終了時（成功・失敗とも）にも刈って上限を確かめる（build で育った分を残さない）。
+trap 'rm -f "$GATE_TSV"; sd_release_target_settle "$SD_CARGO_TARGET" "$BUILD" || sd_log "release prune: settle failed"; sd_scratch_touch' EXIT
 
 # 共有 target が**この作業ツリーから**作られたものか（Phase SD-1）。違えば（新しい target・他の owner から
 # adopt した target・Phase SD-1 より前の `.cargo-target`）workspace のメンバーを先に掃除する（従来の
@@ -589,6 +591,8 @@ sd_bundle_selfdeploy_scripts "$BUILD/scripts/selfdeploy" "$STAGE/scripts"
 # CHECKER_TREE（tree id と blob id の 2 行）を書く。base に検査器の無い repo は daemon がこれを使う。
 # 写せなければ sd_die（release を失敗にする。lib.sh の sd_bundle_repo_health）。
 sd_bundle_repo_health "$BUILD" "$STAGE/repo-health"
+# ADR 2026-11-11-cos-skill-sync D2: the CoS skills promote.sh deploys to the KB.
+sd_bundle_cos_skills "$BUILD" "$STAGE" || sd_die "could not bundle the CoS skills (cos-skills.txt)"
 sd_log "repo-health: bundled the checker into $STAGE/repo-health ($(tr '\n' ' ' <"$STAGE/repo-health/CHECKER_TREE"))"
 
 BUNDLE_JSON="{\"secs\": $(sd_secs_since "$BUNDLE_T0"), \"web_bundle_secs\": $WEB_BUNDLE_SECS, \"release_total_secs\": $(sd_secs_since "$RELEASE_T0")}"

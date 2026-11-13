@@ -28,6 +28,7 @@ use task_core::route_record::{
 use task_core::routing_eval_trial::{EvalTrial, EvalTrialStatus};
 use task_core::store::StoredRouteDecision;
 use task_core::{Budget, WorkerHint};
+use task_worker::adapter::NullSink;
 use task_worker::protocol::SelectedLlmRoute;
 
 use super::route_select::{RoutePick, with_account_limits};
@@ -342,7 +343,8 @@ impl Dispatcher {
         if pool.root().as_os_str().is_empty() || !pool.root().is_absolute() {
             return;
         }
-        if let Err(e) = task_worker::scratch::release(&pool, &owner) {
+        // tick から呼ぶので pool の `.lock` を待たない（使用中なら lease は TTL で回収される）。
+        if let Err(e) = task_worker::scratch::try_release(&pool, &owner) {
             tracing::warn!(%trial_id, %owner, error = %e, "eval trials: could not release the scratch lease");
         }
         let target = pool.target_dir(&owner);
@@ -381,40 +383,6 @@ impl Dispatcher {
         ))
     }
 
-    /// 試行の target の lease を作る（adopt しない。seed は通常の run と同じ条件）。TTL は run の壁時計と
-    /// hidden check の上限に余裕を足した値。`CARGO_TARGET_DIR` に渡す path を返す。
-    fn eval_allocate_target(&self, trial: &EvalTrial, worktree: &Path) -> Result<PathBuf, String> {
-        let owner = eval_target_owner(&trial.trial_id)?;
-        let settings = &self.config.scratch;
-        let pool = settings.pool();
-        let no_distance = |_: &task_worker::scratch::AdoptCandidate| None;
-        let req = task_worker::scratch::AllocateRequest {
-            owner: &owner,
-            repo_path: Path::new(&trial.repo),
-            base_commit: Some(trial.base_commit.clone()),
-            work_unit_key: None,
-            checkout: None,
-            candidates: &[],
-            distance: &no_distance,
-            adopt: false,
-            max_distance: 0,
-        };
-        let rustc = || rustc_version(worktree);
-        let seed = task_worker::scratch::SeedPolicy {
-            enabled: settings.seed_reflink,
-            cargo: Some(settings.cargo.clone()),
-            rustc: Some(&rustc),
-        };
-        let ops = task_worker::scratch::SeedCopyOps::real();
-        let allocation = task_worker::scratch::allocate_with_seed(&pool, &req, &seed, &ops)
-            .map_err(|e| format!("scratch lease for {owner}: {e}"))?;
-        let ttl =
-            EVAL_MAX_WALL_SECS + trial.check_timeout_secs as u64 + EVAL_TARGET_LEASE_MARGIN_SECS;
-        task_worker::scratch::set_ttl(&pool, &owner, Some(ttl))
-            .map_err(|e| format!("scratch lease ttl for {owner}: {e}"))?;
-        Ok(allocation.target_dir)
-    }
-
     fn score_eval_trial(
         &self,
         trial: &EvalTrial,
@@ -438,7 +406,7 @@ impl Dispatcher {
             }
         };
         if let Ok(owner) = eval_target_owner(&trial.trial_id) {
-            let _ = task_worker::scratch::touch(&self.config.scratch.pool(), &owner);
+            let _ = task_worker::scratch::try_touch(&self.config.scratch.pool(), &owner);
         }
         let scored = run_eval_check(
             cwd,
@@ -666,10 +634,9 @@ impl Dispatcher {
             worktree_path: Some(worktree.to_string_lossy().into_owned()),
             ..trial.clone()
         };
-        let target_dir = self.eval_allocate_target(&trial, &worktree).map_err(|e| {
-            self.fail_and_cleanup_eval_trial(&started_trial, &format!("cargo target: {e}"));
-            e
-        })?;
+        let owner = eval_target_owner(&trial.trial_id)?;
+        let target_dir = self.config.scratch.pool().target_dir(&owner);
+        let alloc = (self.config.scratch.clone(), trial.clone(), worktree.clone());
         let Ok(adapter) = task_worker::configure_env(&route.adapter, cargo_env.set) else {
             let why = format!(
                 "cargo target: adapter {} cannot take CARGO_TARGET_DIR",
@@ -718,17 +685,20 @@ impl Dispatcher {
         let tx = self.tx.clone();
         let completion_run_id = run_id.clone();
         let handle = tokio::spawn(async move {
+            // target（seed の写しと pool の `.lock` の待ち）は tick の外で用意する
+            // （ADR 2026-11-11-scratch-lock-tick-stall）。失敗は adapter の失敗として試行を `error` にする。
+            let allocated = tokio::task::spawn_blocking(move || eval_allocate_target(&alloc)).await;
             // 評価 run は worker の run 経路（`run_worker`）を通らない: tasks 行を持たないので、
             // `store.get(task_id)` から組み立てる文脈（担当・組織・計画）が存在しない。adapter を
             // 直接呼ぶ（CoS の対話 run と同じ形）。
-            let result = adapter
-                .run(
-                    req,
-                    &completion_run_id,
-                    limits,
-                    &task_worker::adapter::NullSink,
-                )
-                .await;
+            let result = match allocated.map_err(|e| e.to_string()).and_then(|r| r) {
+                Ok(()) => {
+                    adapter
+                        .run(req, &completion_run_id, limits, &NullSink)
+                        .await
+                }
+                Err(e) => Err(AdapterError::Other(format!("cargo target: {e}"))),
+            };
             let _ = tx.send(Completion::EvalWorker {
                 run_id: completion_run_id,
                 result,
@@ -1392,6 +1362,41 @@ fn eval_path_within(root: &Path, leaf: &str, path: &Path) -> Result<PathBuf, Str
         ));
     }
     Ok(real)
+}
+
+/// 試行の target の lease を作る（adopt しない。seed は通常の run と同じ条件）。TTL は run の壁時計と
+/// hidden check の上限に余裕を足した値。seed の写しと pool の `.lock` を待つので run の future の
+/// `spawn_blocking` で呼ぶ（tick では呼ばない。ADR 2026-11-11-scratch-lock-tick-stall）。
+fn eval_allocate_target(
+    (settings, trial, worktree): &(task_worker::scratch::ScratchSettings, EvalTrial, PathBuf),
+) -> Result<(), String> {
+    let owner = eval_target_owner(&trial.trial_id)?;
+    let pool = settings.pool();
+    let no_distance = |_: &task_worker::scratch::AdoptCandidate| None;
+    let req = task_worker::scratch::AllocateRequest {
+        owner: &owner,
+        repo_path: Path::new(&trial.repo),
+        base_commit: Some(trial.base_commit.clone()),
+        work_unit_key: None,
+        checkout: None,
+        candidates: &[],
+        distance: &no_distance,
+        adopt: false,
+        max_distance: 0,
+    };
+    let rustc = || rustc_version(worktree);
+    let seed = task_worker::scratch::SeedPolicy {
+        enabled: settings.seed_reflink,
+        cargo: Some(settings.cargo.clone()),
+        rustc: Some(&rustc),
+    };
+    let ops = task_worker::scratch::SeedCopyOps::real();
+    task_worker::scratch::allocate_with_seed(&pool, &req, &seed, &ops)
+        .map_err(|e| format!("scratch lease for {owner}: {e}"))?;
+    let ttl = EVAL_MAX_WALL_SECS + trial.check_timeout_secs as u64 + EVAL_TARGET_LEASE_MARGIN_SECS;
+    task_worker::scratch::set_ttl(&pool, &owner, Some(ttl))
+        .map_err(|e| format!("scratch lease ttl for {owner}: {e}"))?;
+    Ok(())
 }
 
 /// 試行の scratch target の owner（`agent-eval-<trial_id>`。試行どうしで共有しない）。外部 owner の形なので

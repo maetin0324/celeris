@@ -21,3 +21,7 @@ ADR 2026-10-05 CoS chat D3/D6 の store 契約を次のように固定する。
 ## 設計上の境界
 
 store は元の判断待ちが解決済みかを推測しない。dispatcher は現在の未解決集合を渡し、notifier は送信直前に元 source を再確認する。時刻は呼出側から渡す。イベント全履歴の tick ごとの走査はしない。
+
+## 付記 2026-11-11（[2026-11-11-cos-fallback-timing](2026-11-11-cos-fallback-timing.md)）
+
+不在退避（CosFallback）はどの種類の件も CoS の一次対応が終わるまで送らない。fallback を取った後でも notifier が送る前なら、CoS の answer・observe・escalate を採り、fallback の通知を取り下げる。送信済みの後の判定は記録だけで送り直さない。

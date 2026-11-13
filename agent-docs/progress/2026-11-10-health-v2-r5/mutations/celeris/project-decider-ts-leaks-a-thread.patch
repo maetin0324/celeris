@@ -1,0 +1,12 @@
+diff --git a/crates/task-dispatch/src/dispatcher/project_decider_ts.rs b/crates/task-dispatch/src/dispatcher/project_decider_ts.rs
+index 2f7c38f0..c0927dec 100644
+--- a/crates/task-dispatch/src/dispatcher/project_decider_ts.rs
++++ b/crates/task-dispatch/src/dispatcher/project_decider_ts.rs
+@@ -187,6 +187,7 @@ impl ProjectDecider for TsProjectDecider {
+     }
+ 
+     fn decide(&mut self, input: &ProjectDecideInput) -> Result<ProjectDecision, String> {
++        let _ = std::thread::spawn(|| std::thread::sleep(std::time::Duration::from_secs(600)));
+         self.record = None;
+         let store = self
+             .store

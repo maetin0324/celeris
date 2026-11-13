@@ -39,7 +39,8 @@ pub(crate) struct MaintenanceInputs<'a> {
     pub(crate) shared_build_cache: bool,
     pub(crate) build_cache_dir: &'a Path,
     pub(crate) releases_dir: Option<&'a Path>,
-    pub(crate) min_free_disk_mb: u64,
+    /// ADR 2026-11-11-disk-aware-dispatch D2: 空きの下限（filesystem の容量 × この %。0 以下は検査しない）。
+    pub(crate) min_free_disk_pct: f64,
     pub(crate) workspace_roots: &'a WorkspaceRoots,
     pub(crate) workspace_prune_after_secs: u64,
     /// ADR-0040 D3 / ADR-0041 D5: `--mode verify` の煙試験インスタンス（本番と共有の物を消さない・staging DB に書かない）。
@@ -80,6 +81,8 @@ struct ScratchState {
     last_measure: Option<Instant>,
     /// 直近の走査で P3 だった target（run の開始時の adopt の候補）。
     candidates: Vec<AdoptCandidate>,
+    /// ADR 2026-11-11-disk-aware-dispatch D1: 空きの見込みで待たせている run。
+    admission: crate::disk_admission::Gate,
     /// `DaemonSnapshot.scratch`。
     view: Option<task_ops::daemon::ScratchStatus>,
     last_gc: Option<task_ops::daemon::ScratchGcView>,
@@ -180,17 +183,6 @@ impl SweepEnv for DispatcherClock {
     }
 }
 
-/// `path` を含む filesystem の空き（MiB）。`path` が無ければ、在る一番近い祖先で測る。
-pub(crate) fn free_disk_mb(path: &Path) -> Result<u64, String> {
-    let existing = path
-        .ancestors()
-        .find(|p| p.exists())
-        .ok_or_else(|| format!("{}: no existing ancestor", path.display()))?;
-    let stat =
-        nix::sys::statvfs::statvfs(existing).map_err(|e| format!("{}: {e}", existing.display()))?;
-    Ok(stat.blocks_available().saturating_mul(stat.fragment_size()) / (1024 * 1024))
-}
-
 impl HostMaintenance {
     /// ADR 2026-10-07-build-tmp-hygiene D1.4: 掃除の roots と上限（celeris が `[maintenance.target_sweep]` から渡す）。
     pub(crate) fn set_target_sweep(&mut self, params: SweepParams) {
@@ -230,16 +222,7 @@ impl HostMaintenance {
 
     /// 付記 A4: 監視している path の一覧（`TaskWait::DiskCritical` の本文）。
     pub(crate) fn disk_watch_paths(&self) -> String {
-        self.disk_watch
-            .as_ref()
-            .map(|r| {
-                r.entries
-                    .iter()
-                    .map(|e| e.path.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            })
-            .unwrap_or_default()
+        crate::disk_watch::paths_label(self.disk_watch.as_ref())
     }
 
     /// tick の段 `disk_watch`（前回から 60 秒経っていれば測る。時計は注入時計）。
@@ -270,6 +253,17 @@ impl HostMaintenance {
     /// `DaemonSnapshot.scratch`（ADR-0075 D6）。
     pub(crate) fn scratch_view(&self) -> Option<&task_ops::daemon::ScratchStatus> {
         self.scratch.view.as_ref()
+    }
+
+    /// ADR 2026-11-11-disk-aware-dispatch D1: dispatch の前の空きの見込みの門（待たせている run の唯一の正本）。
+    pub(crate) fn admission(&self) -> &crate::disk_admission::Gate {
+        &self.scratch.admission
+    }
+
+    /// 試験用: 門の空きの見込みの probe を差し替える（大きな file を作らない）。
+    #[cfg(test)]
+    pub(crate) fn admission_mut(&mut self) -> &mut crate::disk_admission::Gate {
+        &mut self.scratch.admission
     }
 
     /// 直近の走査で P3 だった target（run の開始時の adopt の候補。ADR-0075 D3）。
@@ -317,7 +311,7 @@ impl HostMaintenance {
 
     /// ADR-0075 D2（Phase G1）: tick の `scratch_gc` phase。lease と DB の状態を読み、`plan_gc` で決めた target を
     /// `.deleting-*` へ rename する（`remove_dir_all` は削除スレッド、サイズは測定スレッド）。`emergency` は空き <
-    /// `min_free_disk_mb` のときの緊急モード。rename した件数を返す。
+    /// 空きの下限（`min_free_disk_pct`）のときの緊急モード。rename した件数を返す。
     pub(crate) fn scratch_gc(&mut self, inputs: &MaintenanceInputs<'_>, emergency: bool) -> usize {
         use task_worker::scratch::{GIB, Pressure};
         // ADR-0041 D5: verify は本番と同じ scratch pool を見る。staging DB の状態で本番の target を消さない。
@@ -332,7 +326,6 @@ impl HostMaintenance {
             .lock()
             .map(|m| m.clone())
             .unwrap_or_default();
-        let min_free = inputs.min_free_disk_mb.saturating_mul(1024 * 1024);
         let lookup = task_worker::scratch::StoreLookup(inputs.store.as_ref());
         let run = crate::scratch_gc::run_gc(
             &settings,
@@ -340,7 +333,7 @@ impl HostMaintenance {
             &lookup,
             true,
             &sizes,
-            min_free,
+            inputs.min_free_disk_pct,
             emergency,
             &BTreeSet::new(),
             false,
@@ -368,6 +361,7 @@ impl HostMaintenance {
             }
             self.scratch.pressure = Some(run.plan.pressure);
         }
+        let min_free = run.min_free_bytes;
         let eff = crate::scratch_gc::effective_max(
             settings.total_max_bytes,
             run.fs,
@@ -488,7 +482,7 @@ impl HostMaintenance {
             .scratch
             .pressure
             .is_some_and(|p| p != task_worker::scratch::Pressure::None);
-        let min_free = inputs.min_free_disk_mb.saturating_mul(1024 * 1024);
+        let min_free_pct = inputs.min_free_disk_pct;
         let busy = self.scratch.seed_refreshing.clone();
         let spawned = std::thread::Builder::new()
             .name("celeris-scratch-seed".to_string())
@@ -516,10 +510,13 @@ impl HostMaintenance {
                         .collect();
                     let root = settings.pool().root().to_path_buf();
                     let hold = |seed_bytes: Option<u64>| {
+                        let fs = crate::scratch_gc::fs_stats(&root);
+                        let min_free =
+                            fs.map(|f| crate::disk_admission::min_free_bytes(f.0, min_free_pct));
                         task_worker::scratch::seed_refresh_hold(
                             pressure_high,
-                            crate::scratch_gc::fs_stats(&root).map(|f| f.1),
-                            min_free,
+                            fs.map(|f| f.1),
+                            min_free.unwrap_or(0),
                             seed_bytes,
                         )
                     };
@@ -543,7 +540,7 @@ impl HostMaintenance {
     /// ディスク不足は Phase 116 の infra 障害として一度だけ通知し、空きが戻ると自動で解除する。
     /// 検査不能も安全側に倒して run を開始しない。
     pub(crate) fn check_disk_space(&mut self, inputs: &MaintenanceInputs<'_>) -> bool {
-        if inputs.min_free_disk_mb == 0 {
+        if inputs.min_free_disk_pct <= 0.0 {
             self.disk_low = false;
             return true;
         }
@@ -567,16 +564,9 @@ impl HostMaintenance {
         if inputs.scratch_active() {
             paths.push(inputs.scratch.dir.clone());
         }
-        let min_free = inputs.min_free_disk_mb;
+        let pct = inputs.min_free_disk_pct;
         let find_low = move |paths: &[PathBuf]| {
-            paths.iter().find_map(|path| match free_disk_mb(path) {
-                Ok(free) if free < min_free => Some(format!(
-                    "{}: {free} MiB free (minimum {min_free} MiB)",
-                    path.display(),
-                )),
-                Err(error) => Some(error),
-                _ => None,
-            })
+            crate::disk_admission::find_low_disk(paths, pct, crate::scratch_gc::fs_stats)
         };
         let mut low = find_low(&paths);
         // ADR-0075 D3: 空きが足りなければ、新しい run を始める前にこの tick で緊急 GC（rename まで）を回す。
@@ -999,10 +989,15 @@ impl HostMaintenance {
             }
         }
         // Serialize scratch allocation/adoption and GC while paths are scanned and renamed.
+        // tick の中なので待たない。pool が使用中なら task を ready のまま次の tick に回す
+        // （ADR 2026-11-11-scratch-lock-tick-stall）。
         let _pool_lock = if scratch_roots.is_empty() {
             None
         } else {
-            Some(inputs.scratch.pool().lock()?)
+            let Some(lock) = inputs.scratch.pool().try_lock()? else {
+                return Ok(());
+            };
+            Some(lock)
         };
         store.apply_transition(task.id, Trigger::Dispatch, None)?;
         let lookup = task_worker::scratch::StoreLookup(store.as_ref());

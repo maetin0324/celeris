@@ -51,7 +51,7 @@ export function useShellServerState(authenticated: boolean) {
     refetchIntervalInBackground: false,
   });
 
-  // 通知の未読数（nav の badge とブラウザ通知の根拠）。notifications_changed で取り直し、15 s の poll は補完。
+  // 通知の未読数（nav の badge の根拠。ブラウザ通知は出さない: ADR 2026-11-11-cos-fallback-timing D6）。notifications_changed で取り直し、15 s の poll は補完。
   const notifications = useQuery({
     ...unreadCountQuery,
     enabled: authenticated,

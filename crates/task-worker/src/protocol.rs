@@ -919,7 +919,7 @@ pub struct ClusterJobsContinuation {
     pub cluster: String,
     /// `pbs` | `slurm`。
     pub scheduler: String,
-    /// wait の終わり方（`satisfied` | `timed_out` | `cancelled`）。
+    /// wait の再開理由（`satisfied` | `job_failed` | `queue_stalled` | `timed_out` | `cancelled`）。
     pub state: String,
     /// job ごとの 1 行（`42634: finished (Exit_status 0 / scheduler: F)` の形。申告の順）。
     pub jobs: Vec<String>,
@@ -980,7 +980,7 @@ pub struct ActiveMilestoneContext {
     pub status: String,
 }
 
-/// ADR-0047 D2（Phase 61）: 前置きに出す知識の索引（`preamble::knowledge_section` が読む）。
+/// 知識のマウントと索引。前置きはマウントだけを案内し、PaperQA は索引で比較対象を探す。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct KnowledgeContext {
     /// 実効マウント（組織の和 ＋ 案件の `projects/<slug>` ＋ タスクの明示）。
@@ -1385,11 +1385,16 @@ pub use health::{
     HealthVerdictOut, OwnerRow, PathStat, PolicyVerdictOut,
 };
 mod cos_chat;
+mod cos_standing;
 pub use cos_chat::{
     COS_CHAT_IMAGE_MEDIA_TYPES, COS_RUN_CREDENTIAL_ENV, CosChatAttachment, CosChatContext,
     CosChatDelivery, CosChatHistory, CosChatHistoryMessage, CosChatInboxDecision, CosChatInboxItem,
     CosChatInboxOption, CosChatInput, CosChatProjectSummary, CosChatRelayedInstruction,
     is_cos_chat_run,
+};
+pub use cos_standing::{
+    COS_MEMORY_PAGE, COS_MEMORY_SCOPE, CosStandingContext, CosStandingGrant, CosStandingPage,
+    CosThreadRole,
 };
 
 /// 試験用の最小の `Task`。他 crate の試験が `RunRequest` を組むために公開している（製品の経路では使わない）。

@@ -21,11 +21,15 @@
 //!   `input` を使う（reviewer run の再試行・stale 再同期の後の再 review）。無ければ diff 統計・owner 地図の行・
 //!   repo health の report から作って追記する。report は経路共通の評価（`health_review::gate::check_with`。entry の
 //!   入口 `run_health_check` と同じ評価）が読んだものを使い、同じ candidate で検査器を 2 回起こさない。
-//!   方針が `absent`・読めない repo、health を当てない repo、remote workspace・同期の無い repo は
-//!   `Event::HealthReviewInputSkipped` に理由を残す（その repo の分は `ReviewRequest.health` に入らない）。
+//!   review 方針が `Absent`（base の profile に `[review]` が無い。組み込み generic も同じ）の repo も同じ手順で作り、
+//!   方針の値である `owner_rows`・`invariants` だけを空にする（ADR 2026-11-11-health-generic-review-input R1）。
+//!   再利用の鍵の 4 つ目は、適用判定が選んだ検査器の `required_checks::definition_digest(&[], Some(&checker))`
+//!   （R2。base の profile は `target_sha` で束縛する）。方針を読めない repo、health を当てない repo、remote
+//!   workspace・同期の無い repo は `Event::HealthReviewInputSkipped` に理由を残す（その repo の分は
+//!   `ReviewRequest.health` に入らない）。
 //! - policy の関門（I8・D6.4。`dispatcher::policy_review`）のため、health を当てる repo は candidate の policy の
 //!   状態を必ず event に残す: 材料を作った repo は `HealthReviewInputBuilt` の `input.policy`、作らなかった repo は
-//!   `HealthReviewInputSkipped` の `policy`。方針が `absent` の repo も report を走らせて決める（reviewer には渡さない）。
+//!   `HealthReviewInputSkipped` の `policy`。
 //!   適用判定が `Unavailable`（base にも同梱にも検査器が無い・事実を読めない）・report を作れない・方針を読めない・
 //!   diff を取れないときは `source =` [`POLICY_UNKNOWN`]（不明）にする（当てないのではなく合格にしない。J4）。不明の
 //!   材料は再利用しない（次の review で作り直す。D4.3）。
@@ -51,6 +55,7 @@ use crate::dispatcher::Dispatcher;
 use crate::dispatcher::review_spawn::ReviewSync;
 use crate::review::{RequiredRepoChecks, ReviewerRun};
 use task_core::RepoId;
+use task_core::required_checks::definition_digest;
 use task_core::required_checks::health::CheckerId;
 
 /// 1 回の材料作り（全 repo の方針の読み込み・diff・owner 地図・repo health）の時間の上限。
@@ -69,8 +74,6 @@ pub const NOT_APPLICABLE: &str = "repo health を当てない";
 /// 適用判定が `Unavailable`（base にも同梱にも検査器が無い・事実を読めない）の repo の理由の接頭辞。policy の状態は
 /// 不明（[`POLICY_UNKNOWN`]）にして関門に掛ける（合格にしない）。
 pub const CHECKER_UNAVAILABLE: &str = "検査器を当てられない";
-/// 方針が absent の repo の理由（policy の状態は report で決めて関門に掛ける）。
-pub const POLICY_ABSENT: &str = "review 方針が absent（base の profile に [review] が無い）";
 /// reviewer run の無い review の理由（policy の状態は report で決めて関門に掛ける）。
 pub const NO_REVIEWER: &str = "reviewer run の無い review（policy の状態だけを決める）";
 /// policy の状態を決められなかった（report を作れない・方針を読めない・diff を取れない）ことを表す
@@ -320,8 +323,9 @@ impl HealthInputWork {
         }
     }
 
-    /// 1 repo の材料。方針が `Present` でなければ理由と policy の状態（skip）。適用判定が `Unavailable`・検査器を
-    /// 出せない・方針を読めない・diff を取れないときの policy の状態は不明（[`POLICY_UNKNOWN`]）。
+    /// 1 repo の材料（review 方針が `Present`・`Absent` で同じ手順。`Absent` は `owner_rows`・`invariants` が空）。
+    /// 作れなければ理由と policy の状態（skip）。適用判定が `Unavailable`・検査器を出せない・方針を読めない・diff を
+    /// 取れないときの policy の状態は不明（[`POLICY_UNKNOWN`]）。
     fn repo_input(
         &self,
         candidate: &CandidateRepo,
@@ -338,21 +342,22 @@ impl HealthInputWork {
             deadline,
             |checker, id| {
                 let policy = match parse_review_policy(&checker.print_review_policy(&c.dir)?) {
-                    ReviewPolicyState::Present(policy) => policy,
-                    ReviewPolicyState::Absent => {
-                        return Ok(Err(self.absent_policy(checker, id, c, recorded, deadline)));
-                    }
+                    ReviewPolicyState::Present(policy) => Some(policy),
+                    ReviewPolicyState::Absent => None,
                     ReviewPolicyState::Unavailable(why) => {
                         return Err(format!("review 方針を読めない: {why}"));
                     }
                 };
-                let definition = policy.definition_sha256.clone();
+                // 鍵は選んだ検査器の版（R2）。方針は base の tree から読むので `target_sha` が束縛する。
+                let definition = definition_digest(&[], Some(id));
                 if let Some(input) = find_recorded(recorded, c, &definition) {
-                    return Ok(Ok(input));
+                    return Ok(input);
                 }
                 let (diff, changed) = diff_stat(c, deadline)?;
-                let owner_rows = policy
-                    .owner_map
+                let (owner_map, invariants) = policy
+                    .map(|p| (p.owner_map, p.invariants))
+                    .unwrap_or_default();
+                let owner_rows = owner_map
                     .as_deref()
                     .and_then(|map| show_at(&c.dir, &c.target_sha, map, deadline))
                     .map(|text| owner_rows(&text, &changed))
@@ -369,12 +374,12 @@ impl HealthInputWork {
                     owner_rows,
                     findings,
                     policy: policy_state,
-                    invariants: policy.invariants,
+                    invariants,
                 };
                 // 走らせられなかった report（時間切れ・壊れた report）も policy の関門のために記録する（不明）。
                 // 再利用はしない（`find_recorded`）ので次の review でやり直す。
                 self.record(c, definition, &input);
-                Ok(Ok(input))
+                Ok(input)
             },
         );
         match chosen {
@@ -385,7 +390,7 @@ impl HealthInputWork {
                 format!("{CHECKER_UNAVAILABLE}: {reason}"),
                 Some(unknown_policy()),
             )),
-            CheckerChoice::Ran(Ok(result)) => result,
+            CheckerChoice::Ran(Ok(input)) => Ok(input),
             CheckerChoice::Ran(Err(why)) => Err((why, Some(unknown_policy()))),
         }
     }
@@ -429,28 +434,6 @@ impl HealthInputWork {
             CheckerChoice::Ran(Ok(Err(why)) | Err(why)) => unknown(&why),
         };
         self.skip(&c.repo_id, &reason, Some((c, policy)));
-    }
-
-    /// 方針が absent の repo: reviewer には渡さず、policy の状態だけを report で決める（同じ candidate の既知の
-    /// 状態があれば使う）。
-    fn absent_policy(
-        &self,
-        checker: &BaseChecker,
-        id: &CheckerId,
-        c: &CandidateRepo,
-        recorded: &[(u64, Event)],
-        deadline: Instant,
-    ) -> Skip {
-        if let Some(known) = find_recorded_policy(recorded, c) {
-            return (POLICY_ABSENT.into(), Some(known));
-        }
-        match self.run_report(checker, id, c, deadline) {
-            Ok(report) => (POLICY_ABSENT.into(), Some(summarize_report(report).1)),
-            Err(why) => (
-                format!("{POLICY_ABSENT}。policy の状態を決められない: {why}"),
-                Some(unknown_policy()),
-            ),
-        }
     }
 
     fn record(&self, c: &CandidateRepo, definition_sha256: String, input: &HealthRepoInput) {

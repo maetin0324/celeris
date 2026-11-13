@@ -121,6 +121,16 @@ describe("cos_digest item state", () => {
     expect(p.cards[0]?.state).toBe(cardState);
   });
 
+  it("an escalated item routed to the operator is not a person's wait (ADR 2026-11-12-cos-triage-scope D2)", () => {
+    const p = post(input({ items: [item({ state: "escalated", route: "operator" })] }));
+    expect(p.text).toContain("- 判断: 外部 operator に回した（人の判断は不要。Discord 通知なし）\n");
+    expect(p.cards[0]?.state).toBe("operator");
+    // 他の state では経路は判断の文も card も変えない。
+    const answered = post(input({ items: [item({ state: "answered", route: "operator" })] }));
+    expect(answered.text).toContain("- 判断: 代わりに答えた\n");
+    expect(answered.cards[0]?.state).toBe("answered");
+  });
+
   it("maps source kinds to labels and card kinds", () => {
     const kinds = ["decision", "question", "authorization", "acceptance_check", "plan_gate", "phase_gate", "notice", "task"];
     const p = post(input({ items: kinds.map((k, n) => item({ source_kind: k, source_key: `${k}:${n}` })) }));

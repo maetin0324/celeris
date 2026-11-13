@@ -2,41 +2,12 @@
 //! `project.controller_put`・`project.controller_wake`、人の操作の `human_epoch`（接頭辞 `project_wake_api_`）。
 mod common;
 
-use common::cos_ops::{OPS, op_body};
+use common::cos_ops::{OPS, cos_run_bearer, op_body};
 use common::*;
 use serde_json::{Value, json};
 use task_core::ProjectId;
 use task_core::chat::{ChatPostMessageRequest, ChatSendMode};
 use time::{Duration, OffsetDateTime};
-
-fn bearer_for(env: &TestEnv, thread_id: &str, key: &str) -> String {
-    let now = OffsetDateTime::now_utc();
-    env.store
-        .chat_message_post(
-            thread_id,
-            &ChatPostMessageRequest {
-                client_message_id: format!("message-{key}"),
-                text: "input".into(),
-                attachment_ids: vec![],
-                reply_to_id: None,
-                mode: ChatSendMode::Queue,
-                resume_queue: false,
-            },
-            now,
-        )
-        .expect("message");
-    let run = format!("run-{key}");
-    env.store
-        .chat_run_claim_next(thread_id, &run, &json!({}), now)
-        .expect("claim")
-        .expect("run");
-    let bearer = task_api::cos::issue_run_bearer(&env.store, thread_id, &run, Duration::hours(1))
-        .expect("issue");
-    env.store
-        .chat_run_record_policy(&run, "1", "test")
-        .expect("policy");
-    format!("Bearer {bearer}")
-}
 
 /// 案件 thread と、その案件だけを許可リストに載せた router。
 fn setup(
@@ -194,7 +165,7 @@ async fn project_wake_api_cos_may_only_turn_it_off() {
     )
     .await;
     assert_eq!(ok.status.as_u16(), 200, "{}", ok.text());
-    let bearer = bearer_for(&env, &thread.id, "pc");
+    let bearer = cos_run_bearer(&env, &thread.id, "pc");
     let headers = [("authorization", bearer.as_str())];
     let raise = send(
         &app,

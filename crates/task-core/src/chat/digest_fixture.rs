@@ -166,50 +166,55 @@ fn hand_cases() -> Vec<(String, CosDigestInput)> {
         "hand/title-fallback".into(),
         input("completed", None, vec![it]),
     ));
-    // Decision packets on escalated / fallback / running / handled items.
-    for state in ["escalated", "fallback", "running", "handled"] {
-        for (name, decision) in [
-            ("none", None),
-            ("empty", Some(CosTriageDecision::default())),
-            ("full", Some(full_decision())),
-            (
-                "empty-strings",
-                Some(CosTriageDecision {
-                    background: Some(String::new()),
-                    on_answer: Some(String::new()),
-                    recommendation_reason: Some(String::new()),
-                    recommended: Some(String::new()),
-                    ..CosTriageDecision::default()
-                }),
-            ),
-            (
-                "option-details",
-                Some(CosTriageDecision {
-                    options: vec![
-                        option("a", "A 案", Some("A を選ぶと…")),
-                        option("b", "B 案", None),
-                    ],
-                    recommended: Some("b".into()),
-                    ..full_decision()
-                }),
-            ),
-            (
-                "recommended-unknown",
-                Some(CosTriageDecision {
-                    recommended: Some("z".into()),
-                    ..full_decision()
-                }),
-            ),
-        ] {
-            for run_state in ["completed", "stopped"] {
-                let mut it = item(0, "decision", state);
-                it.route = decision.as_ref().map(|_| "escalation".to_owned());
-                it.decision = decision.clone();
-                it.operation_id = Some("op-1".into());
-                cases.push((
-                    format!("hand/decision/{state}/{name}/{run_state}"),
-                    input(run_state, None, vec![it]),
-                ));
+    // Decision packets on escalated / fallback / running / handled items, routed to the person
+    // (`escalation`) or to the external operator (`operator`; ADR 2026-11-12-cos-triage-scope D2:
+    // the judgment line and the card state of an escalated item differ, other states do not).
+    for route in ["escalation", "operator"] {
+        for state in ["escalated", "fallback", "running", "handled"] {
+            for (name, decision) in [
+                ("none", None),
+                ("empty", Some(CosTriageDecision::default())),
+                ("full", Some(full_decision())),
+                (
+                    "empty-strings",
+                    Some(CosTriageDecision {
+                        background: Some(String::new()),
+                        on_answer: Some(String::new()),
+                        recommendation_reason: Some(String::new()),
+                        recommended: Some(String::new()),
+                        ..CosTriageDecision::default()
+                    }),
+                ),
+                (
+                    "option-details",
+                    Some(CosTriageDecision {
+                        options: vec![
+                            option("a", "A 案", Some("A を選ぶと…")),
+                            option("b", "B 案", None),
+                        ],
+                        recommended: Some("b".into()),
+                        ..full_decision()
+                    }),
+                ),
+                (
+                    "recommended-unknown",
+                    Some(CosTriageDecision {
+                        recommended: Some("z".into()),
+                        ..full_decision()
+                    }),
+                ),
+            ] {
+                for run_state in ["completed", "stopped"] {
+                    let mut it = item(0, "decision", state);
+                    it.route =
+                        (route == "operator" || decision.is_some()).then(|| route.to_owned());
+                    it.decision = decision.clone();
+                    it.operation_id = Some("op-1".into());
+                    cases.push((
+                        format!("hand/decision/{route}/{state}/{name}/{run_state}"),
+                        input(run_state, None, vec![it]),
+                    ));
+                }
             }
         }
     }

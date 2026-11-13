@@ -48,9 +48,12 @@ impl WorkerAdapter for ReviewAdapter {
     ) -> Result<RunOutcome, AdapterError> {
         assert_eq!(req.task.kind, TaskKind::Review, "only reviews run here");
         std::fs::create_dir_all(&req.artifacts_dir).unwrap();
+        // `health` も書く: reviewer に health の材料を渡した review は `health` の判定を求める（I7、ADR
+        // 2026-11-07-health-review-integration D5.2）。ADR 2026-11-11-health-generic-review-input の R1 で `[review]` の
+        // 無い（absent）repo も材料を受けるので、この偽の reviewer も空の判定を書く（R6）。試験が守る不変条件は変えない。
         std::fs::write(
             req.artifacts_dir.join("review.json"),
-            r#"{"verdicts":[{"criterion":1,"pass":true,"reason":"ok"}]}"#,
+            r#"{"verdicts":[{"criterion":1,"pass":true,"reason":"ok"}],"health":{"findings":[]}}"#,
         )
         .unwrap();
         let started = self.clock.fetch_add(REVIEW_RUN_SECS, Ordering::SeqCst);
@@ -184,6 +187,8 @@ async fn run_variant(variant: Variant) -> (AbMetric, u64) {
 
 /// off は到着順で fresh が先に review され、長く stale な task は reviewer run 1 本ぶん待つ。on は stale を
 /// 先に同期・review するので待ちが 0 になる（run 数・合計時間は同じ）。
+/// 不変条件: 長く stale な task を先に同期して review 待ちを減らす。
+/// 変更理由: ADR R1・R6 により Absent でも材料が届くため、偽 reviewer にも health 判定が要る。
 #[tokio::test]
 async fn phase_effect_ab_stale_priority_syncs_the_long_stale_task_first() {
     let (off, off_wait) = run_variant(Variant::Off).await;

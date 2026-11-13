@@ -35,7 +35,7 @@ impl Fixture {
 }
 
 /// 受け入れ条件 0: the CoS run that claimed the authorization item is still running past
-/// `unavailable_after_secs` (120): no fallback outbox. The run is never awaited, so it stays live.
+/// the old 120-second deadline: no fallback outbox. The run is never awaited, so it stays live.
 #[tokio::test]
 async fn cos_chat_authorization_no_fallback_while_its_run_is_live() {
     let mut f = fixture(true);
@@ -55,7 +55,7 @@ async fn cos_chat_authorization_no_fallback_while_its_run_is_live() {
     assert_eq!(f.state_count("running"), 1);
 }
 
-/// 受け入れ条件 2: a run that hangs past `authorization_unavailable_after_secs` (counted from
+/// 受け入れ条件 2: a run that hangs past `fallback_after_secs` (counted from
 /// the run's start) reaches the person once.
 #[tokio::test]
 async fn cos_chat_authorization_safety_net_for_a_hung_run() {
@@ -102,7 +102,7 @@ async fn cos_chat_authorization_safety_net_is_configurable() {
         .expect("launch")
         .config
         .triage
-        .authorization_unavailable_after_secs = 300;
+        .fallback_after_secs = 300;
     f.d.accepting_new_work = false;
     f.tick();
     f.authorization("短い上限");
@@ -262,19 +262,6 @@ async fn cos_chat_authorization_answered_or_observed_sends_nothing() {
     }
 }
 
-/// 認可以外の件は従来どおり: a question whose run is still live goes out after 120 seconds.
-#[tokio::test]
-async fn cos_chat_non_authorization_keeps_the_120_second_deadline() {
-    let mut f = fixture(true);
-    f.tick();
-    f.question("質問", vec![]);
-    f.tick();
-    assert_eq!(f.live_runs(), 1);
-    f.advance(130);
-    f.tick();
-    f.assert_one_fallback("120 秒");
-}
-
 #[test]
 fn cos_chat_authorization_reason_is_deterministic() {
     let now = OffsetDateTime::from_unix_timestamp(1_790_000_000).expect("now");
@@ -293,6 +280,8 @@ fn cos_chat_authorization_reason_is_deterministic() {
         run_state: None,
         run_reason: None,
         run_started_at: None,
+        thread_run_started_at: None,
+        thread_idle_since: None,
         route: None,
         summary: String::new(),
         detail: String::new(),
@@ -301,9 +290,9 @@ fn cos_chat_authorization_reason_is_deterministic() {
         created_at: ts(300),
         ..pending.clone()
     };
-    assert!(unavailable_reason(&fresh, true, DEADLINES, now).is_none());
+    assert!(unavailable_reason(&fresh, true, AFTER_SECS, now).is_none());
     assert!(
-        unavailable_reason(&pending, true, DEADLINES, now)
+        unavailable_reason(&pending, true, AFTER_SECS, now)
             .expect("no run")
             .contains("始まらない")
     );
@@ -316,7 +305,7 @@ fn cos_chat_authorization_reason_is_deterministic() {
             ..pending.clone()
         };
         assert!(
-            unavailable_reason(&live, true, DEADLINES, now).is_none(),
+            unavailable_reason(&live, true, AFTER_SECS, now).is_none(),
             "{state}"
         );
         let hung = FallbackCandidate {
@@ -324,7 +313,7 @@ fn cos_chat_authorization_reason_is_deterministic() {
             ..live
         };
         assert!(
-            unavailable_reason(&hung, true, DEADLINES, now)
+            unavailable_reason(&hung, true, AFTER_SECS, now)
                 .expect(state)
                 .contains("終わらない")
         );
@@ -344,20 +333,20 @@ fn cos_chat_authorization_reason_is_deterministic() {
             ..pending.clone()
         };
         assert!(
-            unavailable_reason(&ended, true, DEADLINES, now)
+            unavailable_reason(&ended, true, AFTER_SECS, now)
                 .expect(state)
                 .contains(part),
             "{state}"
         );
     }
-    assert!(unavailable_reason(&fresh, false, DEADLINES, now).is_some());
+    assert!(unavailable_reason(&fresh, false, AFTER_SECS, now).is_some());
     let missing = FallbackCandidate {
         run_id: Some("run".into()),
         created_at: ts(10),
         ..pending
     };
     assert!(
-        unavailable_reason(&missing, true, DEADLINES, now)
+        unavailable_reason(&missing, true, AFTER_SECS, now)
             .expect("crash")
             .contains("crash")
     );

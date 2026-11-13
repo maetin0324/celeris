@@ -178,6 +178,31 @@ async fn metrics_scratch_matches_the_status_schema() {
         high_watermark: 0.9,
         low_watermark: 0.7,
         pressure: "none".into(),
+        // ADR 2026-11-11-disk-aware-dispatch D4: 見込みと待たせている run。
+        admission: task_ops::daemon::ScratchAdmissionView {
+            free_bytes: Some(91 << 30),
+            reserve_bytes: 25 << 30,
+            ratio: 1.0,
+            running_growth_bytes: 0,
+            expected_by_repo: [("agent-platform-0123456789".to_string(), 18u64 << 30)].into(),
+            owners: vec![task_ops::daemon::ScratchOwnerForecastView {
+                owner: "task-01ABC".into(),
+                repo_key: "agent-platform-0123456789".into(),
+                grows: true,
+                size_bytes: Some(18 << 30),
+                expected_bytes: 18 << 30,
+                growth_bytes: 0,
+            }],
+            held: Some(vec![task_ops::daemon::ScratchHeldRunView {
+                task_id: "01XYZ".into(),
+                work_unit_id: None,
+                owner: "task-01XYZ".into(),
+                repo_key: "agent-platform-0123456789".into(),
+                need_bytes: 18 << 30,
+                reason: "free − running growth − admitted − need < reserve".into(),
+                since: "2026-09-28T00:00:00Z".into(),
+            }]),
+        },
         owners: vec![task_ops::daemon::ScratchOwnerView {
             owner: "task-01ABC".into(),
             kind: "task".into(),

@@ -204,6 +204,11 @@ pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[
     ),
     (
         "POST",
+        "/api/v1/cos/knowledge-use",
+        "recursive_cos: CoS run が自分の KB の操作の回数を数える CoS 制御 API（ADR 2026-11-12-knowledge-usage-per-run D1）。操作 envelope 内から呼ばない。",
+    ),
+    (
+        "POST",
         "/api/v1/tasks/{id}/browser/live/{run}/{session}/check",
         "browser_credential_attestation: 人の決定 secrets=exclude。credential・封緘 state・receipt・owner attestation／信頼端末を扱う系列。値を含まない失効・削除も除外。",
     ),

@@ -1,0 +1,3583 @@
+{
+ "schema": "celeris.health-v2-r5.contracts-mapping/1",
+ "fragment": "cli",
+ "scope": "^crates/(celeris/tests/|celerisctl/)",
+ "scan": {
+  "commit": "e9ef080c62043b38abecb99068d6cad4bb47dfd1",
+  "crates_tree": "a94cbae58bd70c2172084c0fde7bd40fe7726478",
+  "trees": {
+   "task-api": "6a18a4c653a70e85fb401a57f69138834084cd73",
+   "celeris": "1854b5ea716699d333a6192178b8994571187901",
+   "celerisctl": "eff59f0f09c329a66f000c8455c0b2eb7ce9d64f"
+  },
+  "adr_tree": "c4655b86806c0143de23f035c7cc26d682775b07",
+  "capability_map_blob": "ac77c1e4f12b5053c3619618bb3fa8cbd8365e80",
+  "architecture_map_blob": "f2430cd3b005b09f90683f3081ca277e4f621624",
+  "architecture_map_checker_blob": "999f10bc0c656a1a5a1eb211211fa702ad761ad2"
+ },
+ "extra_capabilities": [
+  {
+   "id": "celeris-daemon-wiring",
+   "name": "celeris daemon の起動順・配線と tick ループ（celeris::lib・daemon の bootstrap と tick_loop）",
+   "owner_paths": [
+    "crates/celeris/src/lib.rs",
+    "crates/celeris/src/daemon/bootstrap.rs",
+    "crates/celeris/src/daemon/tick_loop.rs"
+   ],
+   "reason": "B0 は daemon の起動・配線と tick の時間を release/selfdeploy の結線と別の capability にしていない"
+  },
+  {
+   "id": "test-fixtures-shared",
+   "name": "試験の土台（一時 daemon の待ち・偽 HTTP の読み取り・実 CLI の解決）",
+   "owner_paths": [
+    "crates/celeris/tests/daemon_port/mod.rs",
+    "crates/celeris/tests/support/mod.rs",
+    "crates/celerisctl/tests/common/mod.rs"
+   ],
+   "reason": "B0 は製品の capability だけを持ち、試験の土台そのものを守る試験の行き先が無い"
+  },
+  {
+   "id": "knowledge-curation-gc",
+   "name": "知識ベースの日次整理 job・curation plan の検証・GC（celeris::knowledge_curation 等）",
+   "owner_paths": [
+    "crates/celeris/src/knowledge_curation.rs",
+    "crates/celeris/src/knowledge_gc.rs",
+    "crates/celerisctl/src/commands/curation.rs"
+   ],
+   "reason": "B0 は知識の日次整理と curation plan の検証を capability にしていない"
+  },
+  {
+   "id": "skills-delivery",
+   "name": "skill の worker 作業場所への配送（task-worker::skills、ADR-0122）",
+   "owner_paths": [
+    "crates/task-worker/src/skills.rs"
+   ],
+   "reason": "B0 の required-rules-delivery は CLAUDE.md の配送で、skill の本文の配送と mount の解決を含まない"
+  },
+  {
+   "id": "db-maintenance",
+   "name": "DB の backup と integrity check（celerisctl db・celeris::db_maintenance）",
+   "owner_paths": [
+    "crates/celerisctl/src/commands/db.rs",
+    "crates/celeris/src/db_maintenance.rs"
+   ],
+   "reason": "B0 は DB の保守（backup・整合の検査）を capability にしていない"
+  },
+  {
+   "id": "event-replay",
+   "name": "events からの表の再構築と照合（task_ops::replay・celerisctl replay）",
+   "owner_paths": [
+    "crates/task-ops/src/replay.rs",
+    "crates/celerisctl/src/commands/replay.rs"
+   ],
+   "reason": "B0 は events から tasks・work_units・runs を作り直す replay を capability にしていない"
+  },
+  {
+   "id": "worker-followup-tasks",
+   "name": "worker の run が宣言した後続 task（followups.json、ADR-0098）",
+   "owner_paths": [
+    "crates/task-ops/src/followup.rs",
+    "crates/task-dispatch/src/dispatcher/followups.rs"
+   ],
+   "reason": "B0 の recursive-task-tree は子 task の gate と作成で、run の外へ出す後続 task の経路を含まない"
+  },
+  {
+   "id": "cluster-admin-connect",
+   "name": "クラスタの接続管理と作業ディレクトリ設定の API",
+   "owner_paths": [
+    "crates/task-api/src/handlers/clusters.rs"
+   ],
+   "reason": "B0 にクラスタの接続・設定の API を持つ capability が無い"
+  },
+  {
+   "id": "task-genres-roles",
+   "name": "task の genre・role の検証と既定の適用（[[genres]]・[[roles]]）",
+   "owner_paths": [
+    "crates/celeris/src/config/harness.rs",
+    "crates/task-api/src/handlers/tasks.rs",
+    "crates/task-core/src/model.rs"
+   ],
+   "reason": "B0 は genre・role の既定の適用を capability にしていない"
+  },
+  {
+   "id": "knowledge-base",
+   "name": "知識ベースの page・tree・候補（_inbox）の API と人の受け入れ（ADR-0068）",
+   "owner_paths": [
+    "crates/task-api/src/knowledge.rs",
+    "crates/task-ops/src/knowledge.rs",
+    "crates/task-core/src/knowledge.rs"
+   ],
+   "reason": "B0 は知識ベースの操作を capability にしていない"
+  },
+  {
+   "id": "task-read-views",
+   "name": "task の一覧・詳細・events・graph の読み取り view（task-ops::view、ADR-0004）",
+   "owner_paths": [
+    "crates/task-ops/src/view.rs",
+    "crates/task-api/src/query.rs"
+   ],
+   "reason": "B0 は task の読み取り view を capability にしていない"
+  },
+  {
+   "id": "local-machine-settings",
+   "name": "ローカルマシン設定（CLI > store > 設定 file の優先順位・PUT の監査と反映）",
+   "owner_paths": [
+    "crates/task-core/src/local_machine.rs",
+    "crates/task-core/src/store/local_machine.rs",
+    "crates/task-api/src/handlers/clusters.rs"
+   ],
+   "reason": "B0 はローカルマシン設定（ADR 2026-10-14）を capability にしていない"
+  },
+  {
+   "id": "model-catalog",
+   "name": "model catalog の発見・人の上書き・routing への反映（ADR 2026-10-06）",
+   "owner_paths": [
+    "crates/task-core/src/model_catalog.rs",
+    "crates/task-core/src/store/model_catalog.rs",
+    "crates/task-api/src/model_catalog.rs"
+   ],
+   "reason": "B0 は model catalog を lane・route の選択と別の capability にしていない"
+  },
+  {
+   "id": "org-projects-reports",
+   "name": "組織・案件・途中目標・報告の API（DB が正本、ADR-0033）",
+   "owner_paths": [
+    "crates/task-core/src/org.rs",
+    "crates/task-core/src/store/org.rs",
+    "crates/task-core/src/store/projects.rs",
+    "crates/task-core/src/report.rs",
+    "crates/task-api/src/handlers/org.rs",
+    "crates/task-api/src/handlers/projects.rs",
+    "crates/task-api/src/reports.rs"
+   ],
+   "reason": "B0 は組織・案件・報告の API を capability にしていない"
+  },
+  {
+   "id": "knowledge-pages-skills",
+   "name": "知識pageとskillの管理・組織へのmount",
+   "owner_paths": [
+    "crates/task-api/src/knowledge.rs",
+    "crates/task-api/src/skills.rs"
+   ],
+   "reason": "B0のCoS監査と必須規則配送は、知識pageのpath境界とskill CRUD・継承mountの契約を表していない。"
+  },
+  {
+   "id": "terminal-sessions",
+   "name": "人のWeb端末sessionとcluster接続条件・開閉監査",
+   "owner_paths": [
+    "crates/task-api/src/handlers/terminals.rs"
+   ],
+   "reason": "B0のweb-gatewayとHTTP認証だけでは端末sessionの開閉記録とcluster work dirの契約を表せない。"
+  }
+ ],
+ "files": {
+  "crates/celeris/tests/actor_trace_flow1.rs": {
+   "capability": "campaign-eval",
+   "contract": "許可を得た案件 CoS の判断は decision log export・human-ops report・eval requests のどれでも AI の仕事として残り、消費も同じ主体に付く",
+   "b0_hint": [],
+   "tests": [
+    "authorized_project_cos_keeps_actor_and_consumption_through_evaluation"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/actor_trace_flow2.rs": {
+   "capability": "campaign-eval",
+   "contract": "人を要する要求は受信箱と CoS を経て人が決め、実行した CoS・operator とは別の判断者として評価の出力 3 種に残る",
+   "b0_hint": [],
+   "tests": [
+    "forwarded_requests_keep_the_human_decider_apart_from_cos_and_operator_executors"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/actor_trace_flow3.rs": {
+   "capability": "campaign-eval",
+   "contract": "案件をまたぐ停滞は統括 CoS に届き、根拠と行為者を分けたまま評価の出力に残る",
+   "b0_hint": [],
+   "tests": [
+    "general_cos_escalates_stagnation_and_keeps_human_judgment_separate",
+    "general_cos_responds_to_stagnation_with_source_evidence"
+   ],
+   "fns": {
+    "general_cos_escalates_stagnation_and_keeps_human_judgment_separate": {
+     "contract": "統括 CoS が停滞を人へ escalate すると、人の判断と CoS の実行が別の主体として記録される"
+    },
+    "general_cos_responds_to_stagnation_with_source_evidence": {
+     "contract": "統括 CoS の停滞への応答は元の停滞の根拠（source の参照）を持って記録される"
+    }
+   }
+  },
+  "crates/celeris/tests/actor_trace_flow4.rs": {
+   "capability": "campaign-eval",
+   "contract": "selfdeploy の配備と rollback の受領記録は外部の実行者を人の release 判断と要求に結び付けて評価の出力に残る",
+   "b0_hint": [],
+   "tests": [
+    "operator_deployment_and_rollback_join_release_decision_and_request"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/actor_trace_flow5.rs": {
+   "capability": "campaign-eval",
+   "contract": "同じ要求・event の再配送と CoS run の再起動は操作も評価の件数も増やさず、human-ops report は動かない",
+   "b0_hint": [],
+   "tests": [
+    "redelivery_and_restart_duplicate_no_operation_or_count"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/bin_smoke.rs": {
+   "capability": "celeris-daemon-wiring",
+   "contract": "celeris binary は --help で exit 0、設定 file が無いと exit 2 で終わる",
+   "b0_hint": [],
+   "tests": [
+    "help_exits_zero_and_missing_config_exits_two"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/browser_startup_reap.rs": {
+   "capability": "browser-egress-runtime",
+   "contract": "daemon の instance 起動は死んだ instance が記録した browser の process を回収し、生きている instance の process は残す",
+   "b0_hint": [],
+   "tests": [
+    "startup_reaps_dead_instance_and_preserves_live_instance"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/campaign_acceptance_e2e.rs": {
+   "capability": "campaign-eval",
+   "contract": "campaign の実行器は実 HTTP の POST /tasks から子 task・成果物・独立 grader・最終 export までを API の受けた値だけで駆動する",
+   "b0_hint": [],
+   "tests": [
+    "arm_pin_is_set_on_the_task_through_the_api_not_by_the_global_config",
+    "budget_stop_cancels_through_the_api_and_stops_further_submissions",
+    "communication_failures_keep_tracking_and_never_double_submit",
+    "daemon_restart_resumes_the_same_tasks_without_resubmitting",
+    "final_accounting_is_regenerated_from_the_router_tree_with_jev_cos_gaps",
+    "final_accounting_shows_budget_view_versus_final_cutoff_after_a_budget_stop",
+    "normal_path_post_tasks_to_independent_grade_to_final_export",
+    "ungraded_trials_block_the_final_export_until_graded",
+    "wrong_artifact_completed_run_is_not_a_success"
+   ],
+   "fns": {
+    "arm_pin_is_set_on_the_task_through_the_api_not_by_the_global_config": {
+     "contract": "arm の routing の固定は API で task に付き、全体の config を逆の mode にしても dispatcher の解決は arm の固定に従う"
+    },
+    "budget_stop_cancels_through_the_api_and_stops_further_submissions": {
+     "contract": "上限を超えて消費する試行は実 API の cancel で閉じ、停止を確かめるまで台帳を閉じず、以後の投入をしない"
+    },
+    "communication_failures_keep_tracking_and_never_double_submit": {
+     "contract": "POST の応答喪失や GET の断が続いても、実行器は同じ task を追い続けて二重投入せず最終 export まで進む"
+    },
+    "daemon_restart_resumes_the_same_tasks_without_resubmitting": {
+     "contract": "同じ port で API を起こし直しても、campaign は台帳から同じ task を追い、再投入しない"
+    },
+    "final_accounting_is_regenerated_from_the_router_tree_with_jev_cos_gaps": {
+     "contract": "実 router で作った task 木の run を決定ログへ投影し、Jev・CoS の欠測と観測を変えると最終集計がそのとおりに作り直される"
+    },
+    "final_accounting_shows_budget_view_versus_final_cutoff_after_a_budget_stop": {
+     "contract": "予算停止の後、実行中の予算の見え方（cap まで確保）と最終集計の対象（観測できた token だけ）の差が数値で出る"
+    },
+    "normal_path_post_tasks_to_independent_grade_to_final_export": {
+     "contract": "正常系では POST /tasks から子 task・run・成果物・独立 grader・最終 export までつながり、decision log 側でも接続が確かめられる"
+    },
+    "ungraded_trials_block_the_final_export_until_graded": {
+     "contract": "grade-case の無い試行は成功にも分母の除外にもならず、採点が揃うまで最終 export を作らない"
+    },
+    "wrong_artifact_completed_run_is_not_a_success": {
+     "contract": "実行が完了（executor passed）でも独立 grader が不合格なら成功にならず、分母には残る"
+    }
+   }
+  },
+  "crates/celeris/tests/campaign_lock_e2e.rs": {
+   "capability": "campaign-eval",
+   "contract": "campaign lock は正式な task-api の通常経路で期待 lock・投入・artifact hash・grade・bind・最終 export を通り、入力の食い違いを拒否する",
+   "b0_hint": [],
+   "tests": [
+    "changed_lock_or_inputs_refuse_to_resume_an_existing_measurement",
+    "locked_measurement_runs_through_task_api_to_the_final_export",
+    "swapped_grader_or_tests_are_rejected_at_grade_bind_and_export",
+    "wrong_initial_repo_submodule_materials_kb_or_inputs_cause_no_post_or_external_run"
+   ],
+   "fns": {
+    "changed_lock_or_inputs_refuse_to_resume_an_existing_measurement": {
+     "contract": "lock・入力・定義を変えると通常入口（gate → 期待 lock → watch）が既存測定の再開を拒否し、再投入 0・lock 不変"
+    },
+    "locked_measurement_runs_through_task_api_to_the_final_export": {
+     "contract": "正しい入力は lock → 通常の POST と task 追跡 → 完了 artifact の hash → grade-out → bind → 最終 export まで通る"
+    },
+    "swapped_grader_or_tests_are_rejected_at_grade_bind_and_export": {
+     "contract": "同じ case id・split で grader や公開・隠しテストを差し替えると grade は command 0 回で拒否し、bind・export も拒否する"
+    },
+    "wrong_initial_repo_submodule_materials_kb_or_inputs_cause_no_post_or_external_run": {
+     "contract": "誤った初期 repo・submodule・資料・KB・外部入力では POST も外部 harness の投入も task 作成も 0 で、out を作らずに止まる"
+    }
+   }
+  },
+  "crates/celeris/tests/campaign_wiring_e2e.rs": {
+   "capability": "campaign-eval",
+   "contract": "HTTP で作った campaign の子・孫・再試行・reviewer・CoS・Jev・人の介入は dispatcher と同じ投影で決定ログに入り、verify_connected が接続を確かめる",
+   "b0_hint": [],
+   "tests": [
+    "post_tasks_to_export_connects_children_retries_review_cos_jev_and_interventions"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/cap_probe_real_daemon.rs": {
+   "capability": "campaign-eval",
+   "contract": "B/C の能力 probe は測定専用 daemon の通常の worker 起動経路で走り、daemon 側の環境で toolchain・変数・socket・mount を判定する",
+   "b0_hint": [],
+   "tests": [
+    "a_second_daemon_on_the_same_port_is_detected",
+    "daemon_missing_toolchain_or_variable_is_env_failure_even_if_cli_has_it",
+    "daemon_only_toolchain_and_variable_pass_through_the_real_worker_path",
+    "daemon_socket_and_mount_are_checked_from_the_worker",
+    "probe_runs_under_each_real_harness_adapter_env",
+    "unreachable_daemon_is_env_failure_not_a_pass"
+   ],
+   "fns": {
+    "a_second_daemon_on_the_same_port_is_detected": {
+     "contract": "同じ port に SO_REUSEPORT で 2 つ目の celeris が bind しても、probe は port の持ち主の食い違いとして検出する"
+    },
+    "daemon_missing_toolchain_or_variable_is_env_failure_even_if_cli_has_it": {
+     "contract": "CLI の PATH・変数が揃っていても、daemon の worker に toolchain・変数が無ければその arm の env_failure になる"
+    },
+    "daemon_only_toolchain_and_variable_pass_through_the_real_worker_path": {
+     "contract": "daemon にだけある toolchain と変数で検査が通り、検査先 identity と検査 task が報告に残る"
+    },
+    "daemon_socket_and_mount_are_checked_from_the_worker": {
+     "contract": "承認済みの socket と mount は daemon の worker から見えれば通り、見えなければその arm の env_failure になる"
+    },
+    "probe_runs_under_each_real_harness_adapter_env": {
+     "contract": "検査は arm の実 harness の adapter env で走り、process 環境が同じでも adapter env の違いで結果が変わる"
+    },
+    "unreachable_daemon_is_env_failure_not_a_pass": {
+     "contract": "検査 task が daemon で完了しない（接続不能・検査 harness 無し）なら合格にせず env_failure にする"
+    }
+   }
+  },
+  "crates/celeris/tests/cluster_login_script.rs": {
+   "capability": "cluster-admin-connect",
+   "contract": "scripts/cluster-login.sh は ssh -M -N -f の master 接続に ControlPersist=yes と keepalive の option を渡す",
+   "b0_hint": [],
+   "tests": [
+    "cluster_login_script_passes_control_persist_and_keepalive_to_the_master"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/cos_chat_stagnation_notify.rs": {
+   "capability": "notifications",
+   "contract": "停滞 4 種の CoS の escalation は送信直前に snapshot と照合し、生きていれば送り、解消・改訂なら撤回し、snapshot が無ければ保留する",
+   "b0_hint": [],
+   "tests": [
+    "human_wait_aging_is_live_held_and_withdrawn_when_answered",
+    "resolved_stagnation_is_withdrawn_before_post",
+    "stagnation_findings_are_live_held_and_withdrawn_on_revision"
+   ],
+   "fns": {
+    "human_wait_aging_is_live_held_and_withdrawn_when_answered": {
+     "contract": "閾値を過ぎた人の待ちの項目は snapshot があれば送れて、無ければ保留、回答されたら撤回される"
+    },
+    "resolved_stagnation_is_withdrawn_before_post": {
+     "contract": "昇格で判定から消えた release_unpromoted の旧い通知は送らずに撤回される"
+    },
+    "stagnation_findings_are_live_held_and_withdrawn_on_revision": {
+     "contract": "project_stalled・release_unpromoted・task_unscheduled の項目は生きた revision なら送れ、照合を繰り返しても行は増えず、改訂で撤回される"
+    }
+   }
+  },
+  "crates/celeris/tests/cos_chat_triage_notify.rs": {
+   "capability": "notifications",
+   "contract": "CoS 一次対応の Discord 送信は escalation と fallback だけを送り、送信前に解決と revision を確かめ、本文と link を上限内に収める",
+   "b0_hint": [],
+   "tests": [
+    "cos_chat_triage_cutover_supersedes_legacy_pending_and_is_idempotent",
+    "cos_chat_triage_escalation_packet_has_bounded_text_and_absolute_link",
+    "cos_chat_triage_long_packet_keeps_link_within_1900_characters",
+    "cos_chat_triage_notice_revision_is_checked_before_post",
+    "cos_chat_triage_only_escalation_and_fallback_are_sendable",
+    "cos_chat_triage_resolved_source_is_withdrawn_before_post",
+    "cos_chat_triage_three_send_failures_keep_the_unresolved_item",
+    "cos_chat_triage_webhook_disables_mentions_and_obeys_retry_after"
+   ],
+   "fns": {
+    "cos_chat_triage_cutover_supersedes_legacy_pending_and_is_idempotent": {
+     "contract": "一次対応への切替は route を cos_v1 にして旧来の pending の通知を消し、繰り返しても同じ結果になる"
+    },
+    "cos_chat_triage_escalation_packet_has_bounded_text_and_absolute_link": {
+     "contract": "escalation の packet は本文が上限内で、web への絶対 link を持つ"
+    },
+    "cos_chat_triage_long_packet_keeps_link_within_1900_characters": {
+     "contract": "長い packet は本文を切り詰めて link を 1,900 字の内側に残す"
+    },
+    "cos_chat_triage_notice_revision_is_checked_before_post": {
+     "contract": "送信の直前に notice の revision を照合し、古い revision は送らない"
+    },
+    "cos_chat_triage_only_escalation_and_fallback_are_sendable": {
+     "contract": "送信できる kind は escalation と fallback だけで、ほかの kind は webhook に届かない"
+    },
+    "cos_chat_triage_resolved_source_is_withdrawn_before_post": {
+     "contract": "元の項目が解決済みなら送信の直前に撤回し、webhook に送らない"
+    },
+    "cos_chat_triage_three_send_failures_keep_the_unresolved_item": {
+     "contract": "送信が 3 回失敗しても未解決の項目は受信箱に残る"
+    },
+    "cos_chat_triage_webhook_disables_mentions_and_obeys_retry_after": {
+     "contract": "webhook の本文は mention を無効にし、429 の Retry-After に従って再送を待つ"
+    }
+   }
+  },
+  "crates/celeris/tests/cos_chat_triage_scenarios.rs": {
+   "capability": "cos-inbox-triage-operations-audit",
+   "contract": "daemon の tick と同じ順で回す CoS 一次対応の送信は、CoS の escalation だけを偽 webhook に届け、人の回答の後は送らない",
+   "b0_hint": [
+    "cos-inbox-triage-operations-audit"
+   ],
+   "tests": [
+    "cos_chat_triage_b_webhook_packet_and_stop_after_human_answer",
+    "cos_chat_triage_unified_only_cos_escalation_reaches_the_webhook"
+   ],
+   "fns": {
+    "cos_chat_triage_b_webhook_packet_and_stop_after_human_answer": {
+     "contract": "一次対応 B の escalate は要点・選択肢・推奨の理由・止まる範囲・web の link を持つ packet を 1 回送り、人が答えた後は送らない"
+    },
+    "cos_chat_triage_unified_only_cos_escalation_reaches_the_webhook": {
+     "contract": "旧来の全通知 kind を pending に入れても、偽 webhook に届くのは CoS の escalation だけ"
+    }
+   }
+  },
+  "crates/celeris/tests/credential_wait_notify.rs": {
+   "capability": "credential-broker-resume",
+   "contract": "credential 未登録の work unit は tick で待ちへ移り受信箱と escalation を作り、秘密の保存と検証の成功で一度だけ再開する",
+   "b0_hint": [],
+   "tests": [
+    "wait_notify_register_verify_and_resume_once_through_the_fake_webhook",
+    "webhook_ignores_eof_before_complete_request"
+   ],
+   "fns": {
+    "wait_notify_register_verify_and_resume_once_through_the_fake_webhook": {
+     "contract": "未登録の credential で待ち・受信箱・偽 webhook への通知ができ、秘密の保存と mock 検証の成功で work unit が一度だけ再開する"
+    },
+    "webhook_ignores_eof_before_complete_request": {
+     "contract": "偽 webhook は要求が揃う前の EOF の接続を受信と数えない"
+    }
+   }
+  },
+  "crates/celeris/tests/daemon_ready_wait.rs": {
+   "capability": "test-fixtures-shared",
+   "contract": "試験の daemon_port::wait_api_ready は daemon の終了・答えない接続・listener 無しを区別し、上限と経過を文面に出す",
+   "b0_hint": [],
+   "tests": [
+    "finished_daemon_fails_without_waiting_for_the_limit",
+    "no_listener_fails_at_the_limit_with_elapsed_time",
+    "silent_connection_does_not_use_up_the_limit"
+   ],
+   "fns": {
+    "finished_daemon_fails_without_waiting_for_the_limit": {
+     "contract": "終わった daemon の JoinHandle は上限を待たずにエラーになり、run の結果を文面に出す"
+    },
+    "no_listener_fails_at_the_limit_with_elapsed_time": {
+     "contract": "listener が無ければ上限でエラーになり、文面に経過秒と最後の接続エラーがある"
+    },
+    "silent_connection_does_not_use_up_the_limit": {
+     "contract": "答えない最初の接続は要求の timeout で打ち切り、次に答える接続で成功する"
+    }
+   }
+  },
+  "crates/celeris/tests/daily_curation.rs": {
+   "capability": "knowledge-curation-gc",
+   "contract": "知識の日次整理 job は時計と worker の成果だけで seed・dry-run・承認不要の apply を行い、人の判断を 1 件の決定に束ねる",
+   "b0_hint": [],
+   "tests": [
+    "knowledge_curation_job_apply_without_approval_commits_pushes_and_terminal_task_maintenance",
+    "knowledge_curation_job_dry_run_bundles_human_decisions_into_one_decision",
+    "knowledge_curation_job_seed_schedule_inputs_dry_run_and_summary"
+   ],
+   "fns": {
+    "knowledge_curation_job_apply_without_approval_commits_pushes_and_terminal_task_maintenance": {
+     "contract": "承認不要の apply は KB を commit・push し、終わった task の整理まで行う"
+    },
+    "knowledge_curation_job_dry_run_bundles_human_decisions_into_one_decision": {
+     "contract": "dry-run で人の判断が要る項目は 1 件の決定に束ねられる"
+    },
+    "knowledge_curation_job_seed_schedule_inputs_dry_run_and_summary": {
+     "contract": "job の seed は schedule と入力を決め、dry-run は要約を書き KB を変えない"
+    }
+   }
+  },
+  "crates/celeris/tests/deployment_audit.rs": {
+   "capability": "release-selfdeploy-wiring",
+   "contract": "配備の台本は実行者などの provenance が無ければ拒否し、配備と rollback の履歴を消さずに残す",
+   "b0_hint": [
+    "release-selfdeploy-wiring"
+   ],
+   "tests": [
+    "deployment_scripts_require_provenance_and_preserve_history"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/evidence_mode_e2e.rs": {
+   "capability": "routing-eval",
+   "contract": "task の evidence_mode（none・pinned・latest）は子・孫・retry へ引き継がれ、route 判断が使った根拠表の版を記録する",
+   "b0_hint": [],
+   "tests": [
+    "contradictory_evidence_mode_is_rejected_before_any_task_exists",
+    "none_survives_post_child_grandchild_retry_and_ignores_table_updates",
+    "ticked_runs_record_the_evidence_mode_and_the_table_version_actually_used"
+   ],
+   "fns": {
+    "contradictory_evidence_mode_is_rejected_before_any_task_exists": {
+     "contract": "矛盾する evidence_mode の指定は起票の時点で拒否され、task は作られない"
+    },
+    "none_survives_post_child_grandchild_retry_and_ignores_table_updates": {
+     "contract": "none は子・孫・retry に引き継がれ、根拠表を差し替えても route は変わらず根拠表の lookup は 0 回"
+    },
+    "ticked_runs_record_the_evidence_mode_and_the_table_version_actually_used": {
+     "contract": "tick で走った run の routing_decided と GET /tasks/{id} に evidence_mode と実際に使った根拠表の版が出る"
+    }
+   }
+  },
+  "crates/celeris/tests/fake_http.rs": {
+   "capability": "test-fixtures-shared",
+   "contract": "共有の偽 HTTP の読み取りは probe や雑音の接続で一度きりの応答を使い切らず、header と body を全 byte 揃うまで待つ",
+   "b0_hint": [],
+   "tests": [
+    "async_one_shot_survives_noise_and_silent_connection",
+    "framing_requires_every_header_and_body_byte",
+    "sync_one_shot_survives_noise_and_silent_connection"
+   ],
+   "fns": {
+    "async_one_shot_survives_noise_and_silent_connection": {
+     "contract": "async の一度きりの応答は雑音の接続と答えない接続の後でも本来の要求に返る"
+    },
+    "framing_requires_every_header_and_body_byte": {
+     "contract": "要求は header の終わりと Content-Length 分の body が揃うまで完了と見なさない"
+    },
+    "sync_one_shot_survives_noise_and_silent_connection": {
+     "contract": "sync の一度きりの応答も雑音の接続と答えない接続の後で本来の要求に返る"
+    }
+   }
+  },
+  "crates/celeris/tests/instance_handoff.rs": {
+   "capability": "release-selfdeploy-wiring",
+   "contract": "同じ SQLite の 2 つの celeris は standby → draining → active の順で引き継ぎ、旧は手元の run を終えるまで持ち、新は二重に dispatch しない",
+   "b0_hint": [
+    "release-selfdeploy-wiring"
+   ],
+   "tests": [
+    "a_newer_release_takes_over_while_the_old_one_finishes_its_run",
+    "a_stale_heartbeat_does_not_replace_a_live_active_until_its_process_is_gone",
+    "normal_mode_does_not_inject_the_smoke_builtins",
+    "starting_the_same_release_twice_exits_three",
+    "the_builtin_smoke_role_and_genre_override_a_config_entry_of_the_same_id",
+    "the_cli_overrides_replace_the_config_values",
+    "two_listeners_bind_the_same_port_with_so_reuseport",
+    "verify_mode_never_dispatches_and_never_touches_daemon_instances"
+   ],
+   "fns": {
+    "a_newer_release_takes_over_while_the_old_one_finishes_its_run": {
+     "contract": "新しい release は standby で起き、旧が draining になって手元の run を終え、新が active になる"
+    },
+    "a_stale_heartbeat_does_not_replace_a_live_active_until_its_process_is_gone": {
+     "contract": "heartbeat が止まっても process が生きている active は、手放すまで新に置き換えられない"
+    },
+    "normal_mode_does_not_inject_the_smoke_builtins": {
+     "contract": "通常の mode は smoke の組み込みの role・harness を足さない"
+    },
+    "starting_the_same_release_twice_exits_three": {
+     "contract": "同じ release の二重起動は exit 3 で、違う release なら standby として起きる"
+    },
+    "the_builtin_smoke_role_and_genre_override_a_config_entry_of_the_same_id": {
+     "contract": "verify の mode では組み込みの smoke の role・genre が設定 file の同じ id の項目より優先される"
+    },
+    "the_cli_overrides_replace_the_config_values": {
+     "contract": "CLI の --db・--listen・--workspace-root・--token-file は設定 file の値の後に効いて置き換える"
+    },
+    "two_listeners_bind_the_same_port_with_so_reuseport": {
+     "contract": "SO_REUSEPORT で新旧 2 つの listener が同じ port に bind できる"
+    },
+    "verify_mode_never_dispatches_and_never_touches_daemon_instances": {
+     "contract": "--mode verify は smoke 以外の ready な task を dispatch せず、daemon_instances の行を書かない"
+    }
+   }
+  },
+  "crates/celeris/tests/integration_api.rs": {
+   "capability": "pre-review-sync-auto-resolve-integration-repair",
+   "contract": "取り残しの done branch は定期 sweep で一覧・task 詳細・受信箱に出て、人の hold・discard・reopen・merge の route が event に残る",
+   "b0_hint": [
+    "delivery-merge-candidate"
+   ],
+   "tests": [
+    "integration_api_merge_conflict_keeps_main_unintegrated",
+    "integration_api_repoless_branch_in_main_is_integrated",
+    "integration_api_repoless_done_task_detected_in_inbox_and_detail_then_discarded",
+    "integration_api_repoless_task_without_branch_records_nothing",
+    "integration_api_stranded_branch_round_trip_through_routes_and_events"
+   ],
+   "fns": {
+    "integration_api_merge_conflict_keeps_main_unintegrated": {
+     "contract": "API の merge が衝突したら main を変えず、branch は unintegrated のまま残る"
+    },
+    "integration_api_repoless_branch_in_main_is_integrated": {
+     "contract": "repo を持たない task の branch でも main に入っていれば integrated になる"
+    },
+    "integration_api_repoless_done_task_detected_in_inbox_and_detail_then_discarded": {
+     "contract": "repo を持たない done task の取り残しは受信箱と詳細に出て、discard で片付く"
+    },
+    "integration_api_repoless_task_without_branch_records_nothing": {
+     "contract": "branch の無い repo を持たない task は取り残しとして何も記録しない"
+    },
+    "integration_api_stranded_branch_round_trip_through_routes_and_events": {
+     "contract": "取り残しは hold → reopen → discard → reopen → merge の route を通り、各段の状態と event が残る"
+    }
+   }
+  },
+  "crates/celeris/tests/legacy_event_startup.rs": {
+   "capability": "celeris-daemon-wiring",
+   "contract": "旧い routing 実装が DB に書いた routing_decided の event があっても、daemon の起動と dispatch の tick は止まらずに読む",
+   "b0_hint": [],
+   "tests": [
+    "startup_loads_legacy_routing_decided_event"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/long_run_soak.rs": {
+   "capability": "script-runtime",
+   "contract": "本物の control-ts の bundle を載せた dispatcher の長時間運用で RSS・V8 heap・dispatch の遅延・比較行を測り、持ち主の SIGKILL 後に lease を回収する",
+   "b0_hint": [],
+   "tests": [
+    "long_run_soak_enabled",
+    "long_run_soak_lease_holder",
+    "long_run_soak_off",
+    "long_run_soak_shadow",
+    "long_run_soak_v8_load"
+   ],
+   "fns": {
+    "long_run_soak_enabled": {
+     "contract": "TS の判定を有効にした条件で長時間の負荷を流し、資源と遅延の時系列を記録する"
+    },
+    "long_run_soak_lease_holder": {
+     "contract": "crash_and_reclaim が別 process で起こす run を持ったまま殺される daemon の役で、単独では何もしない"
+    },
+    "long_run_soak_off": {
+     "contract": "TS 層を使わない条件で同じ負荷を流し、比較の基準の資源と遅延を記録する"
+    },
+    "long_run_soak_shadow": {
+     "contract": "shadow（compare）の条件で同じ負荷を流し、比較行の増え方と資源を記録する"
+    },
+    "long_run_soak_v8_load": {
+     "contract": "V8 の isolate を載せただけの条件で同じ負荷を流し、isolate 由来の資源の増え方を記録する"
+    }
+   }
+  },
+  "crates/celeris/tests/notify.rs": {
+   "capability": "notifications",
+   "contract": "人の判断が要るときだけ Discord に知らせ、各判定は条件成立で 1 件、2 回目の tick で増えず、解消したら作らない",
+   "b0_hint": [
+    "notifications"
+   ],
+   "tests": [
+    "a_done_task_is_not_announced_by_the_scan",
+    "a_failing_webhook_is_retried_three_times_and_then_given_up",
+    "a_milestone_without_any_real_task_is_never_ready",
+    "a_pending_notification_is_posted_once_and_marked_sent",
+    "a_rate_limited_response_is_not_counted_as_an_attempt",
+    "a_root_plan_without_approval_posts_nothing",
+    "a_single_daemon_decision_uses_the_decision_key",
+    "a_store_without_bad_news_produces_nothing",
+    "a_task_blocked_after_startup_is_scanned_even_though_it_was_created_long_before",
+    "active_and_global_conversations_notify_each_new_reply_but_not_answered_replies",
+    "an_unreachable_webhook_never_reveals_the_host",
+    "answered_and_withdrawn_decisions_do_not_notify",
+    "approval_pending_fires_once_per_undecided_approval",
+    "bad_news_fires_once_for_level_zero_reports_only",
+    "child_events_do_not_notify",
+    "decisions_are_notified_once_per_plan",
+    "events_created_before_celeris_started_are_never_scanned_or_recorded",
+    "human_plan_decisions_are_bundled_per_plan",
+    "links_are_added_only_when_a_web_base_url_is_configured",
+    "milestone_ready_is_retired",
+    "milestone_without_cos_reply_no_longer_notifies",
+    "only_one_message_is_sent_per_tick_even_with_several_kinds_pending",
+    "open_decisions_are_reminded_once_after_24h",
+    "plan_approval_is_notified_once_with_the_plans_decisions",
+    "question_blocked_fires_once_and_defers_to_approval_pending",
+    "secretary_reply_fires_once_when_a_proposed_project_gets_a_node_message",
+    "send_test_posts_one_message_to_the_url_in_the_secrets_dir",
+    "task_failed_fires_once_and_is_classified_infra_or_work",
+    "task_failed_notes_when_the_task_was_already_delivered",
+    "the_fake_webhook_answers_a_connection_even_if_another_request_finishes_first",
+    "the_webhook_secret_is_read_from_the_secrets_dir",
+    "two_bad_news_are_bundled_into_one_message_and_both_rows_are_marked_ok",
+    "unresolved_approval_and_question_survive_restart_and_decided_approval_does_not_hide_question",
+    "without_a_secret_nothing_is_sent_and_no_pending_row_is_kept"
+   ],
+   "fns": {
+    "a_done_task_is_not_announced_by_the_scan": {
+     "contract": "root の done は走査（scan・schedule）では通知を作らない（root 完了の要約の経路だけが鳴らす）"
+    },
+    "a_failing_webhook_is_retried_three_times_and_then_given_up": {
+     "contract": "失敗する webhook への送信は 3 回まで再試行し、その後は諦めて行を閉じる"
+    },
+    "a_milestone_without_any_real_task_is_never_ready": {
+     "contract": "実の task を持たない milestone は ready の通知を作らない"
+    },
+    "a_pending_notification_is_posted_once_and_marked_sent": {
+     "contract": "pending の通知は 1 回だけ送られ、sent と記録される"
+    },
+    "a_rate_limited_response_is_not_counted_as_an_attempt": {
+     "contract": "429 の応答は再試行の回数に数えない"
+    },
+    "a_root_plan_without_approval_posts_nothing": {
+     "contract": "承認を挟まない root の計画は progress に 1 件残るだけで Discord には送らない"
+    },
+    "a_single_daemon_decision_uses_the_decision_key": {
+     "contract": "raised_by.run_id の無い daemon 発の決定は decision:<id> の key の 1 通になる"
+    },
+    "a_store_without_bad_news_produces_nothing": {
+     "contract": "悪い知らせの無い store からは通知を作らない"
+    },
+    "a_task_blocked_after_startup_is_scanned_even_though_it_was_created_long_before": {
+     "contract": "起動よりずっと前に作られた task でも、起動後に blocked になれば走査の対象になる"
+    },
+    "active_and_global_conversations_notify_each_new_reply_but_not_answered_replies": {
+     "contract": "動いている会話と全体の会話は新しい返答ごとに知らせ、回答済みの返答は知らせない"
+    },
+    "an_unreachable_webhook_never_reveals_the_host": {
+     "contract": "届かない webhook の失敗の記録と log に webhook の host を出さない"
+    },
+    "answered_and_withdrawn_decisions_do_not_notify": {
+     "contract": "回答済み・取り下げ済みの決定は最初の走査でも通知を作らない"
+    },
+    "approval_pending_fires_once_per_undecided_approval": {
+     "contract": "未決の認可要求 1 件につき approval_pending を 1 回だけ作る"
+    },
+    "bad_news_fires_once_for_level_zero_reports_only": {
+     "contract": "悪い知らせは level 0 の報告だけで 1 回作られ、下位の報告では作らない"
+    },
+    "child_events_do_not_notify": {
+     "contract": "木の子の失敗（親が replan で吸収する）は通知を作らない"
+    },
+    "decisions_are_notified_once_per_plan": {
+     "contract": "同じ計画採用の run で出た決定は plan:<plan_id>:decisions の 1 通に束ねる"
+    },
+    "events_created_before_celeris_started_are_never_scanned_or_recorded": {
+     "contract": "celeris の起動前に作られた event は走査も記録もしない"
+    },
+    "human_plan_decisions_are_bundled_per_plan": {
+     "contract": "人の計画（origin human）の決定も run を持たないまま計画ごとの 1 通に束ねる"
+    },
+    "links_are_added_only_when_a_web_base_url_is_configured": {
+     "contract": "web の base URL を設定したときだけ通知に link を付ける"
+    },
+    "milestone_ready_is_retired": {
+     "contract": "廃止した milestone_ready は以前なら鳴った状態でも通知を作らない"
+    },
+    "milestone_without_cos_reply_no_longer_notifies": {
+     "contract": "CoS の返答の無い milestone は通知を作らない"
+    },
+    "only_one_message_is_sent_per_tick_even_with_several_kinds_pending": {
+     "contract": "複数の kind が pending でも 1 tick に送るのは 1 通だけ"
+    },
+    "open_decisions_are_reminded_once_after_24h": {
+     "contract": "未回答のまま 24 時間たった決定の束は 1 回だけ再通知し、回答・取り下げ済みは再通知しない"
+    },
+    "plan_approval_is_notified_once_with_the_plans_decisions": {
+     "contract": "root の計画の承認待ちは plan:<plan_id>:approval の 1 通に、その計画の決定を含めて送る"
+    },
+    "question_blocked_fires_once_and_defers_to_approval_pending": {
+     "contract": "質問で blocked の task は 1 回だけ知らせ、同じ task に承認待ちがあればそちらに譲る"
+    },
+    "secretary_reply_fires_once_when_a_proposed_project_gets_a_node_message": {
+     "contract": "提案中の案件に node の message が付いたら 1 回だけ知らせる"
+    },
+    "send_test_posts_one_message_to_the_url_in_the_secrets_dir": {
+     "contract": "send_test は secrets dir の URL へ 1 通だけ送る"
+    },
+    "task_failed_fires_once_and_is_classified_infra_or_work": {
+     "contract": "失敗した task は 1 回だけ知らせ、infra の失敗と work の失敗を書き分ける"
+    },
+    "task_failed_notes_when_the_task_was_already_delivered": {
+     "contract": "配送済みの task が failed になったら、通知に配送済みであることを書く"
+    },
+    "the_fake_webhook_answers_a_connection_even_if_another_request_finishes_first": {
+     "contract": "偽 webhook は先に別の要求が終わっても後の接続に答える（試験の土台の回帰）"
+    },
+    "the_webhook_secret_is_read_from_the_secrets_dir": {
+     "contract": "webhook の URL は secrets dir の file から読む"
+    },
+    "two_bad_news_are_bundled_into_one_message_and_both_rows_are_marked_ok": {
+     "contract": "2 件の悪い知らせは 1 通に束ね、送信後に両方の行を ok にする"
+    },
+    "unresolved_approval_and_question_survive_restart_and_decided_approval_does_not_hide_question": {
+     "contract": "未解決の承認待ちと質問は再起動の後も残り、承認が決まっても同じ task の質問は隠れない"
+    },
+    "without_a_secret_nothing_is_sent_and_no_pending_row_is_kept": {
+     "contract": "webhook の secret が無ければ送らず、pending の行も残さない"
+    }
+   }
+  },
+  "crates/celeris/tests/ops_r1_attr.rs": {
+   "capability": "campaign-eval",
+   "contract": "ops-r1 の trial 別消費（ops-r1-attribution）は role ごとの行と合計を出し、試行の外の run を入れず、DB の写しを変えない",
+   "b0_hint": [],
+   "tests": [
+    "ops_r1_attr_excludes_runs_outside_trial_tree",
+    "ops_r1_attr_is_byte_identical_and_leaves_db_copy_unchanged",
+    "ops_r1_attr_rejects_bad_input_with_exit_2",
+    "ops_r1_attr_rows_and_totals_match_fixture",
+    "ops_r1_attr_unattributable_turns_are_null_with_reason",
+    "ops_r1_pipeline_attribution_v2_copies_model_and_harness_read_only"
+   ],
+   "fns": {
+    "ops_r1_attr_excludes_runs_outside_trial_tree": {
+     "contract": "試行の task 木の外の run は消費の行に入らない"
+    },
+    "ops_r1_attr_is_byte_identical_and_leaves_db_copy_unchanged": {
+     "contract": "同じ入力から 2 回出した出力は byte 一致し、読んだ DB の写しは変わらない"
+    },
+    "ops_r1_attr_rejects_bad_input_with_exit_2": {
+     "contract": "不正な入力は exit 2 で拒否する"
+    },
+    "ops_r1_attr_rows_and_totals_match_fixture": {
+     "contract": "role ごとの行と合計は fixture の期待値と一致する"
+    },
+    "ops_r1_attr_unattributable_turns_are_null_with_reason": {
+     "contract": "帰属できない turn は 0 でなく null で、理由を付ける"
+    },
+    "ops_r1_pipeline_attribution_v2_copies_model_and_harness_read_only": {
+     "contract": "attribution v2 は model と harness を DB から読むだけで写し、DB を変えない"
+    }
+   }
+  },
+  "crates/celeris/tests/ops_r1_measure.rs": {
+   "capability": "campaign-eval",
+   "contract": "ops-r1 の測定 daemon（stub harness・無 LLM）は人の message から CoS の起票・worker run・root 完了の CoS run までを通す",
+   "b0_hint": [],
+   "tests": [
+    "ops_r1_measure_cos_path_with_stub_harness"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/ops_r1_pipeline.rs": {
+   "capability": "campaign-eval",
+   "contract": "ops-r1 の採点から集計までの全段は A・B の stub 記録で exit 0 になり、試行数・分母・終了理由・合否が段の間で一致する",
+   "b0_hint": [],
+   "tests": [
+    "ops_r1_pipeline_all_stages_agree_and_two_passes_are_byte_identical",
+    "ops_r1_pipeline_passing_a_and_cut_off_b_agree"
+   ],
+   "fns": {
+    "ops_r1_pipeline_all_stages_agree_and_two_passes_are_byte_identical": {
+     "contract": "全段が exit 0 で段の間の件数が一致し、同じ raw から 2 回出した出力が byte 一致する"
+    },
+    "ops_r1_pipeline_passing_a_and_cut_off_b_agree": {
+     "contract": "合格の A と打ち切りの B の組でも、段の間の試行数・終了理由・合否が一致する"
+    }
+   }
+  },
+  "crates/celeris/tests/ops_r1_trace.rs": {
+   "capability": "campaign-eval",
+   "contract": "ops-r1 の工程 trace（ops-r1-trace）は 6 段を出し、欠けた段に理由を付け、byte 一致し、DB の写しを変えない",
+   "b0_hint": [],
+   "tests": [
+    "ops_r1_trace_cutoff_hides_later_rows",
+    "ops_r1_trace_emits_all_six_stages",
+    "ops_r1_trace_is_byte_identical_and_leaves_db_copy_unchanged",
+    "ops_r1_trace_missing_report_is_null_with_reason",
+    "ops_r1_trace_rejects_bad_input_with_exit_2"
+   ],
+   "fns": {
+    "ops_r1_trace_cutoff_hides_later_rows": {
+     "contract": "打ち切りの時刻より後の行は trace に出ない"
+    },
+    "ops_r1_trace_emits_all_six_stages": {
+     "contract": "trace は 6 段すべての行を出す"
+    },
+    "ops_r1_trace_is_byte_identical_and_leaves_db_copy_unchanged": {
+     "contract": "同じ入力の 2 回の出力は byte 一致し、DB の写しは変わらない"
+    },
+    "ops_r1_trace_missing_report_is_null_with_reason": {
+     "contract": "報告の無い段は null で理由を付ける"
+    },
+    "ops_r1_trace_rejects_bad_input_with_exit_2": {
+     "contract": "不正な入力は exit 2 で拒否する"
+    }
+   }
+  },
+  "crates/celeris/tests/project_controller_e2e.rs": {
+   "capability": "project-controller",
+   "contract": "案件の snapshot → TS の proposal → Rust の検証 → 適用を本物の bundle で通し、安全違反の proposal は起票 0 で拒否する",
+   "b0_hint": [],
+   "tests": [
+    "project_controller_core_escalation_categories_match_cos_triage",
+    "project_controller_core_s10_narrowed_acceptance_is_rejected",
+    "project_controller_core_s11_other_project_root_is_denied",
+    "project_controller_core_s12_paused_and_stale_never_launch",
+    "project_controller_core_s1_first_launches_root1",
+    "project_controller_core_s2_s3_root1_to_root2_to_achieved",
+    "project_controller_core_s4_concurrent_events_create_one_root",
+    "project_controller_core_s5_not_integrated_continues",
+    "project_controller_core_s5b_no_commits_root_is_not_achieved",
+    "project_controller_core_s6_review_failed_replans_once",
+    "project_controller_core_s7_infra_failure_waits",
+    "project_controller_core_s8_no_outcomes_asks_once",
+    "project_controller_core_s9_open_human_question_waits"
+   ],
+   "fns": {
+    "project_controller_core_escalation_categories_match_cos_triage": {
+     "contract": "escalate の category の名は CoS triage の human_required の名と同じ"
+    },
+    "project_controller_core_s10_narrowed_acceptance_is_rejected": {
+     "contract": "TS の出力で acceptance を減らした proposal は root_acceptance_narrowed の安全違反で拒否され、起票 0"
+    },
+    "project_controller_core_s11_other_project_root_is_denied": {
+     "contract": "別案件の root は snapshot の scope に入らず、それを指す proposal は Denied になる"
+    },
+    "project_controller_core_s12_paused_and_stale_never_launch": {
+     "contract": "paused の案件では TS は起票せず、差し替えて起票させても launch_on_paused の安全違反で拒否される"
+    },
+    "project_controller_core_s1_first_launches_root1": {
+     "contract": "root が 0 件の案件では Outcome の文を acceptance にした root を 1 件起票する"
+    },
+    "project_controller_core_s2_s3_root1_to_root2_to_achieved": {
+     "contract": "root1 の完了で o1 に印を付けて root2 を続きとして起票し、全 Outcome に届けば達成になり、root1 の done と events は変わらない"
+    },
+    "project_controller_core_s4_concurrent_events_create_one_root": {
+     "contract": "同じ snapshot を 8 回並行に評価・適用しても root は 1 件だけ"
+    },
+    "project_controller_core_s5_not_integrated_continues": {
+     "contract": "done だが未取り込みの root は continue で起票 0、取り込み後に続きへ進む"
+    },
+    "project_controller_core_s5b_no_commits_root_is_not_achieved": {
+     "contract": "repo を持つ案件で delivery が NoCommits で見送られただけの root は達成にしない"
+    },
+    "project_controller_core_s6_review_failed_replans_once": {
+     "contract": "review 不合格の root は replan(review_failed) で案件 CoS への入力を 1 件作り、起票 0"
+    },
+    "project_controller_core_s7_infra_failure_waits": {
+     "contract": "基盤の失敗（再試行不可の worker の失敗）は wait（backoff）で起票 0"
+    },
+    "project_controller_core_s8_no_outcomes_asks_once": {
+     "contract": "Outcome の無い案件は replan(no_outcomes) を 1 回出し、同じ版の 2 回目は wait"
+    },
+    "project_controller_core_s9_open_human_question_waits": {
+     "contract": "開いた人の判断がある案件は wait{waiting_on human} で起票 0"
+    }
+   }
+  },
+  "crates/celeris/tests/project_controller_replay.rs": {
+   "capability": "project-controller",
+   "contract": "本物の bundle の 1 つの V8 で 100 案件を判定したときの RSS・isolate 数・thread 数・判定の遅延・1 周の loop cost を測る",
+   "b0_hint": [],
+   "tests": [
+    "project_controller_replay_resource_v8_100_projects"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/project_cos_shadow.rs": {
+   "capability": "project-controller",
+   "contract": "TsProjectDecider は本物の bundle で snapshot → TS → 検証 → 効果を作り、TS の規則の変更だけで判定が変わる",
+   "b0_hint": [],
+   "tests": [
+    "project_cos_ts_change_without_rust",
+    "project_cos_ts_dry_run_compare_domain",
+    "project_cos_ts_failure_classified",
+    "project_cos_ts_injection_does_not_change_the_decision",
+    "project_cos_ts_review_failed_retries_after_brief"
+   ],
+   "fns": {
+    "project_cos_ts_change_without_rust": {
+     "contract": "TS の規則の 1 行（POLICY.watchSecs）を変えた bundle で判定が変わり、Rust の binary は同じまま"
+    },
+    "project_cos_ts_dry_run_compare_domain": {
+     "contract": "dry_run の案件は compare の領域でも本物の bundle を呼び、判定を書かない"
+    },
+    "project_cos_ts_failure_classified": {
+     "contract": "review 不合格の root に TS は分類（spec_gap）付きの replan を返し、効果は案件 thread への system 入力になる"
+    },
+    "project_cos_ts_injection_does_not_change_the_decision": {
+     "contract": "brief や root の題に命令の文を書いても判定は変わらず root も増えない"
+    },
+    "project_cos_ts_review_failed_retries_after_brief": {
+     "contract": "review 不合格の後、TS は案件 CoS に 1 回だけ頼み、CoS が brief を書き直すまで待ってから続きを起票する"
+    }
+   }
+  },
+  "crates/celeris/tests/releases_api.rs": {
+   "capability": "release-selfdeploy-wiring",
+   "contract": "GET /releases と POST /releases/{sha12}/promote は本物の release dir を読み、検証済みの release だけを同梱の promote.sh で昇格させる",
+   "b0_hint": [
+    "release-selfdeploy-wiring"
+   ],
+   "tests": [
+    "get_deliveries_is_200_with_items",
+    "get_releases_carries_promoted_at_on_main_and_changes",
+    "get_releases_is_200_on_an_empty_directory",
+    "get_releases_sorts_newest_first_and_tolerates_broken_releases",
+    "promote_requires_a_token",
+    "promoting_a_verified_release_starts_the_bundled_script_and_returns_202",
+    "promoting_an_unknown_release_is_404",
+    "promoting_is_409_when_unverified_already_current_or_already_promoting",
+    "promoting_prefers_the_promote_script_of_the_current_release",
+    "promotion_preview_merges_releases_between_current_and_target"
+   ],
+   "fns": {
+    "get_deliveries_is_200_with_items": {
+     "contract": "GET /deliveries は 200 で items を返し、配送が無ければ空"
+    },
+    "get_releases_carries_promoted_at_on_main_and_changes": {
+     "contract": "GET /releases の各 release は promoted_at・on_main・changes を持つ"
+    },
+    "get_releases_is_200_on_an_empty_directory": {
+     "contract": "空の releases_dir でも 200 で、running は GET /health と同じ値"
+    },
+    "get_releases_sorts_newest_first_and_tolerates_broken_releases": {
+     "contract": "一覧は built_at の新しい順で current・previous の印と verify の要約を持ち、壊れた release があっても返る"
+    },
+    "promote_requires_a_token": {
+     "contract": "昇格は token が無ければ 401（token_file の設定の有無によらない）"
+    },
+    "promoting_a_verified_release_starts_the_bundled_script_and_returns_202": {
+     "contract": "検証済みの release の昇格は同梱の scripts/promote.sh を detached で起こして 202 を返し、出力は promote.log に入る"
+    },
+    "promoting_an_unknown_release_is_404": {
+     "contract": "知らない sha や sha12 の形でない値の昇格は 404"
+    },
+    "promoting_is_409_when_unverified_already_current_or_already_promoting": {
+     "contract": "未検証・既に current・既に昇格中の release の昇格は 409"
+    },
+    "promoting_prefers_the_promote_script_of_the_current_release": {
+     "contract": "current が scripts/promote.sh を持っていれば、対象でなく current の台本を起こす"
+    },
+    "promotion_preview_merges_releases_between_current_and_target": {
+     "contract": "promotion-preview は current から対象までの release の変更をまとめて返す"
+    }
+   }
+  },
+  "crates/celeris/tests/root_done_summary.rs": {
+   "capability": "notifications",
+   "contract": "root task の done で CoS の run が 1 回、thread への書き込みが 1 回、Discord への通知が 1 回だけ起きる",
+   "b0_hint": [
+    "notifications"
+   ],
+   "tests": [
+    "child_done_emits_nothing",
+    "cos_failure_uses_fallback_notice",
+    "restart_does_not_duplicate",
+    "root_done_runs_cos_once_and_notifies_once"
+   ],
+   "fns": {
+    "child_done_emits_nothing": {
+     "contract": "子 task の done では要約の run も通知も起きない"
+    },
+    "cos_failure_uses_fallback_notice": {
+     "contract": "CoS の run が失敗したら fallback の文で 1 回知らせる"
+    },
+    "restart_does_not_duplicate": {
+     "contract": "再起動しても要約の run と通知は増えない"
+    },
+    "root_done_runs_cos_once_and_notifies_once": {
+     "contract": "root の done で CoS の要約の run が 1 回走り、Discord に 1 回知らせる"
+    }
+   }
+  },
+  "crates/celeris/tests/routing_eval_run.rs": {
+   "capability": "routing-eval",
+   "contract": "試験 daemon は API から投入した 2 つの stub の評価試行を走らせ、hidden check と評価の記録を残す",
+   "b0_hint": [
+    "routing-eval"
+   ],
+   "tests": [
+    "daemon_runs_two_stub_trials_with_hidden_checks_and_eval_records"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/script_compare_cos_digest.rs": {
+   "capability": "script-runtime",
+   "contract": "cos_digest の compare は TS の答えを Rust の結果と照合して記録し、mode ts では Rust が検証した TS の command を apply し、使えなければ Rust に戻る",
+   "b0_hint": [],
+   "tests": [
+    "script_compare_cos_digest_compare_answers_ops_from_rust_snapshot",
+    "script_compare_cos_digest_daemon_restart_without_bundle_restores_rust",
+    "script_compare_cos_digest_daemon_ts_restart_keeps_one_message",
+    "script_compare_cos_digest_different_answer_keeps_rust_digest",
+    "script_compare_cos_digest_dispatch_match_replay_and_rollback",
+    "script_compare_cos_digest_real_host_matches_rust_on_all_fixtures",
+    "script_compare_cos_digest_throwing_bundle_keeps_rust_digest",
+    "script_compare_cos_digest_ts_mode_applies_ts_commands",
+    "script_compare_cos_digest_ts_mode_falls_back_to_rust"
+   ],
+   "fns": {
+    "script_compare_cos_digest_compare_answers_ops_from_rust_snapshot": {
+     "contract": "mode compare の TS の op は Rust が apply の前に読んだ凍結の snapshot から答える"
+    },
+    "script_compare_cos_digest_daemon_restart_without_bundle_restores_rust": {
+     "contract": "[script] の起動で generation の行ができて digest の compare が記録され、bundle の無い再起動では rust に戻る"
+    },
+    "script_compare_cos_digest_daemon_ts_restart_keeps_one_message": {
+     "contract": "mode ts の daemon を同じ bundle で再起動しても ts を保ち、digest の message は冪等 key で 1 件のまま"
+    },
+    "script_compare_cos_digest_different_answer_keeps_rust_digest": {
+     "contract": "どの run も digest しない答えの bundle は invalid_output（run_missing）で、digest は Rust の結果のまま"
+    },
+    "script_compare_cos_digest_dispatch_match_replay_and_rollback": {
+     "contract": "mode compare の digest pass は run ごとに match を残し、message と requeue は Rust の結果、replay と rollback も一致する"
+    },
+    "script_compare_cos_digest_real_host_matches_rust_on_all_fixtures": {
+     "contract": "cases.jsonl の全行で本物の host の答えが Rust の cos_digest_decide と byte 一致する"
+    },
+    "script_compare_cos_digest_throwing_bundle_keeps_rust_digest": {
+     "contract": "例外を投げる bundle は ts_error（exception）で、digest は Rust の結果のまま"
+    },
+    "script_compare_cos_digest_ts_mode_applies_ts_commands": {
+     "contract": "mode ts の TS の pass は list_runs・read_run を await して store から読み、Rust が検証した command を apply する"
+    },
+    "script_compare_cos_digest_ts_mode_falls_back_to_rust": {
+     "contract": "mode ts で違う答え・throw・op の denied・deadline 超えの bundle では、その pass は Rust の command を apply する"
+    }
+   }
+  },
+  "crates/celeris/tests/script_compare_execution_gate.rs": {
+   "capability": "script-runtime",
+   "contract": "execution_gate の compare は TS の score を Rust と照合して記録し、判定は常に Rust の byte 列のまま、本文を記録に残さない",
+   "b0_hint": [],
+   "tests": [
+    "script_compare_gate_different_answer_keeps_rust_decision_bytes",
+    "script_compare_gate_largest_input_still_matches",
+    "script_compare_gate_real_bundle_records_match_without_text",
+    "script_compare_gate_real_host_matches_rust_on_all_fixtures",
+    "script_compare_gate_reserved_rule_is_a_safety_violation",
+    "script_compare_gate_throwing_bundle_keeps_rust_and_withholds_text"
+   ],
+   "fns": {
+    "script_compare_gate_different_answer_keeps_rust_decision_bytes": {
+     "contract": "違う答えの bundle は mismatch を記録し、判定は Rust のまま"
+    },
+    "script_compare_gate_largest_input_still_matches": {
+     "contract": "上限ちょうど（256 KiB）の本文の入力も評価でき、Rust と一致する"
+    },
+    "script_compare_gate_real_bundle_records_match_without_text": {
+     "contract": "本物の bundle の dispatch は match を記録し、判定は rust のときと byte 一致、記録に本文は無い"
+    },
+    "script_compare_gate_real_host_matches_rust_on_all_fixtures": {
+     "contract": "fixture の全件で本物の host の答えが Rust の score と正順・逆順とも byte 一致する"
+    },
+    "script_compare_gate_reserved_rule_is_a_safety_violation": {
+     "contract": "Rust だけが書く rule_id を名乗る bundle は安全違反で、判定は Rust のまま"
+    },
+    "script_compare_gate_throwing_bundle_keeps_rust_and_withholds_text": {
+     "contract": "例外を投げる bundle でも判定は Rust のままで、本文を写した例外文は記録に残らない"
+    }
+   }
+  },
+  "crates/celeris/tests/script_compare_lane_rules.rs": {
+   "capability": "script-runtime",
+   "contract": "lane_rules の compare は TS の答えを Rust の match_rule と照合して記録し、lane と判定の byte 列は Rust のまま",
+   "b0_hint": [],
+   "tests": [
+    "script_compare_daemon_injects_records_and_restores_rust",
+    "script_compare_different_answer_keeps_rust_decision_bytes",
+    "script_compare_dispatch_match_rollback_and_replay",
+    "script_compare_real_host_matches_rust_on_all_fixtures",
+    "script_compare_throwing_bundle_keeps_rust_lane"
+   ],
+   "fns": {
+    "script_compare_daemon_injects_records_and_restores_rust": {
+     "contract": "[script] の起動で generation の行ができ、compare の dispatch が記録され、bundle の無い再起動で rust に戻る"
+    },
+    "script_compare_different_answer_keeps_rust_decision_bytes": {
+     "contract": "常に違う答えの bundle でも、判定の byte 列は rust のときと同じ"
+    },
+    "script_compare_dispatch_match_rollback_and_replay": {
+     "contract": "mode compare の dispatch は match を残し、lane は Rust の結果、rollback と replay も一致する"
+    },
+    "script_compare_real_host_matches_rust_on_all_fixtures": {
+     "contract": "fixture の全件で本物の host の答えが Rust の match_rule と一致する"
+    },
+    "script_compare_throwing_bundle_keeps_rust_lane": {
+     "contract": "例外を投げる bundle でも lane は Rust の結果で、outcome は ts_error"
+    }
+   }
+  },
+  "crates/celeris/tests/script_compare_report.rs": {
+   "capability": "script-runtime",
+   "contract": "集計の台本 script-compare.py report は本物の store が書いた記録を読むだけで、分類・件数の gate・戻しを数え、DB を変えない",
+   "b0_hint": [],
+   "tests": [
+    "script_compare_report_before_migration_exits_3",
+    "script_compare_report_classifies_every_outcome",
+    "script_compare_report_cos_gate_uses_the_log_table",
+    "script_compare_report_counts_explained_cos_records",
+    "script_compare_report_counts_rollbacks",
+    "script_compare_report_pure_gate_counts_real_records",
+    "script_compare_report_reads_dispatched_records",
+    "script_compare_report_refuses_counts_without_records"
+   ],
+   "fns": {
+    "script_compare_report_before_migration_exits_3": {
+     "contract": "表の無い DB（migration 前）は exit 3 で、表を作らない"
+    },
+    "script_compare_report_classifies_every_outcome": {
+     "contract": "不一致・timeout・失敗を分類し、不一致で streak が 0 に戻って API と同じく ready でなくなる"
+    },
+    "script_compare_report_cos_gate_uses_the_log_table": {
+     "contract": "CoS の gate は log の表の 200 件で ready になり、閉じていない outbox の行は件数に入れず別に出す"
+    },
+    "script_compare_report_counts_explained_cos_records": {
+     "contract": "承認した改善仕様が説明する差分（explained）は数え、streak を切らず、match の率の分母に入れる"
+    },
+    "script_compare_report_counts_rollbacks": {
+     "contract": "canary の不一致で system:script-guard が rust へ戻した回数と、安全違反で invalid になった generation を数える"
+    },
+    "script_compare_report_pure_gate_counts_real_records": {
+     "contract": "純粋判定の gate は 1000 件で ready、unavailable は分母に入れず、latency は記録の値"
+    },
+    "script_compare_report_reads_dispatched_records": {
+     "contract": "本物の dispatcher が書いた event の形を読み、違う答えの bundle は mismatch、実 bundle は match と数える"
+    },
+    "script_compare_report_refuses_counts_without_records": {
+     "contract": "記録の無い計数だけで補った DB は ready にせず exit 1"
+    }
+   }
+  },
+  "crates/celeris/tests/script_compare_route_priority.rs": {
+   "capability": "script-runtime",
+   "contract": "route_priority の compare は TS の答えを Rust の route_priority_decide と照合して記録し、route は Rust のまま、使えない bundle は SKIP か失敗にする",
+   "b0_hint": [],
+   "tests": [
+    "script_compare_fresh_bundle_follows_source",
+    "script_compare_route_priority_different_answer_keeps_rust_route",
+    "script_compare_route_priority_dispatch_match_rollback_and_replay",
+    "script_compare_route_priority_real_host_matches_rust_on_all_fixtures",
+    "script_compare_route_priority_throwing_bundle_keeps_rust_route",
+    "script_compare_route_priority_undeclared_candidate_keeps_rust_route",
+    "script_compare_stale_dist_matching_domains_is_used",
+    "script_compare_stale_dist_missing_domain_is_skipped",
+    "script_compare_stale_dist_required_panics",
+    "script_compare_stale_dist_unknown_domain_is_skipped",
+    "script_compare_unbuildable_bundle_is_skipped_and_logged"
+   ],
+   "fns": {
+    "script_compare_fresh_bundle_follows_source": {
+     "contract": "試験は source の内容 hash の dir の bundle を読み、source を変えると作り直す"
+    },
+    "script_compare_route_priority_different_answer_keeps_rust_route": {
+     "contract": "宣言済みの候補で違う basis を返す bundle は mismatch で、安全違反にならず route は Rust のまま"
+    },
+    "script_compare_route_priority_dispatch_match_rollback_and_replay": {
+     "contract": "mode compare の dispatch は match を 1 件残し、route の event は mode rust の基準と byte 一致する"
+    },
+    "script_compare_route_priority_real_host_matches_rust_on_all_fixtures": {
+     "contract": "fixture の全件で本物の host の答えが Rust の route_priority_decide と一致する"
+    },
+    "script_compare_route_priority_throwing_bundle_keeps_rust_route": {
+     "contract": "例外を投げる bundle は ts_error（exception）で route は Rust のまま"
+    },
+    "script_compare_route_priority_undeclared_candidate_keeps_rust_route": {
+     "contract": "table に無い候補を返す bundle は mismatch（undeclared_candidate）で route は Rust のまま"
+    },
+    "script_compare_stale_dist_matching_domains_is_used": {
+     "contract": "manifest の domains が config と揃った bundle は使う"
+    },
+    "script_compare_stale_dist_missing_domain_is_skipped": {
+     "contract": "route_priority を含まない古い bundle は使わずに SKIP する"
+    },
+    "script_compare_stale_dist_required_panics": {
+     "contract": "bundle を必須にした条件では古い bundle を失敗にする"
+    },
+    "script_compare_stale_dist_unknown_domain_is_skipped": {
+     "contract": "config に無い領域を要る試験は、揃った bundle でも使わない"
+    },
+    "script_compare_unbuildable_bundle_is_skipped_and_logged": {
+     "contract": "bundle を作れない環境は SKIP し、log の file に試験名と理由の 1 行を書く"
+    }
+   }
+  },
+  "crates/celeris/tests/script_exhaustive.rs": {
+   "capability": "script-runtime",
+   "contract": "lane_rules の網羅は実行中の daemon の generation の isolate へ全入力を流して証拠を残し、live の計数と dispatch の tick を妨げない",
+   "b0_hint": [],
+   "tests": [
+    "exhaustive_always_different_bundle_fails",
+    "exhaustive_does_not_move_live_counters",
+    "exhaustive_new_generation_invalidates_evidence",
+    "exhaustive_real_bundle_all_inputs_match_and_persist",
+    "exhaustive_restart_marks_running_aborted",
+    "exhaustive_tick_continues_while_running",
+    "exhaustive_waits_for_live_in_flight"
+   ],
+   "fns": {
+    "exhaustive_always_different_bundle_fails": {
+     "contract": "常に違う答えの bundle は 1 件目で mismatch の不合格で、compare の mode も live の計数も変わらない"
+    },
+    "exhaustive_does_not_move_live_counters": {
+     "contract": "網羅は live の script_guard_state・script_compare_log を変えない"
+    },
+    "exhaustive_new_generation_invalidates_evidence": {
+     "contract": "generation を替えると、前の generation の合否は新しい generation の証拠にならない（missing）"
+    },
+    "exhaustive_real_bundle_all_inputs_match_and_persist": {
+     "contract": "本物の bundle に全 19,683 通りを 2 回流すと全件 match で合格し、証拠は再起動後も残る"
+    },
+    "exhaustive_restart_marks_running_aborted": {
+     "contract": "停止で runner は aborted（daemon_stopped）を書き、止めずに消えた daemon の running の行は次の起動で aborted になる"
+    },
+    "exhaustive_tick_continues_while_running": {
+     "contract": "網羅の実行中も dispatch の tick は止まらず、live の lane_rules の compare は unavailable・busy にならない"
+    },
+    "exhaustive_waits_for_live_in_flight": {
+     "contract": "live の要求が in-flight の間は runner が呼ばず、live の要求を先に通す"
+    }
+   }
+  },
+  "crates/celeris/tests/script_generation_daemon.rs": {
+   "capability": "script-runtime",
+   "contract": "実行中の daemon の generation は新しい isolate で検証して登録し、切替では旧 generation が in-flight の要求を終えてから退役する",
+   "b0_hint": [],
+   "tests": [
+    "script_daemon_api_registers_and_switches_while_running",
+    "script_daemon_drain_cutoff_30s_generation_gone",
+    "script_daemon_register_before_deploy_is_retryable",
+    "script_daemon_registers_generation_in_new_isolate",
+    "script_daemon_store_refusal_discards_isolate",
+    "script_daemon_switch_drains_old_generation"
+   ],
+   "fns": {
+    "script_daemon_api_registers_and_switches_while_running": {
+     "contract": "動いている daemon に API で 2 つの generation を登録し、mode を A から B に切り替えると A は退役する"
+    },
+    "script_daemon_drain_cutoff_30s_generation_gone": {
+     "contract": "drain から 30 秒を過ぎて残る要求は GenerationGone で打ち切り、cancelled_in_flight を 1 と記録する"
+    },
+    "script_daemon_register_before_deploy_is_retryable": {
+     "contract": "配備先の dir が無い hash の登録は NotDeployed で表に行を書かず、後で登録し直せる"
+    },
+    "script_daemon_registers_generation_in_new_isolate": {
+     "contract": "登録は新しい isolate で検証してから loaded と記録し、module の状態は generation の間で共有されない"
+    },
+    "script_daemon_store_refusal_discards_isolate": {
+     "contract": "登録簿は受けたが store が拒んだ（生きた行が上限）ときは isolate を捨てる"
+    },
+    "script_daemon_switch_drains_old_generation": {
+     "contract": "切替の前に送った要求は旧 generation で終わり、後の要求は新しい generation へ行く"
+    }
+   }
+  },
+  "crates/celeris/tests/script_generation_e2e.rs": {
+   "capability": "script-runtime",
+   "contract": "本物の bundle の generation は人の token でだけ compare → canary → ts に進み、途中の error で自動で戻され、再起動の後も状態を保つ",
+   "b0_hint": [],
+   "tests": [
+    "script_generation_e2e_switch_error_rollback_restart"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/script_runtime.rs": {
+   "capability": "script-runtime",
+   "contract": "[script] の daemon への結線は起動時に指された generation を新しい isolate で復元し、検証に落ちれば rust に戻し、停止で actor の thread を join する",
+   "b0_hint": [
+    "script-runtime"
+   ],
+   "tests": [
+    "exit_holder_entry",
+    "script_runtime_absent_no_thread",
+    "script_runtime_daemon_restore_keeps_loaded_modes",
+    "script_runtime_daemon_restore_retires_unpointed_draining",
+    "script_runtime_daemon_shutdown_count_skips_unreaped_actor",
+    "script_runtime_no_pointed_generation_no_thread",
+    "script_runtime_restore_host_api_mismatch_rolls_back",
+    "script_runtime_restore_missing_bundle_rolls_back",
+    "script_runtime_restore_missing_capability_rolls_back",
+    "script_runtime_restore_pending_top_level_await_rolls_back",
+    "script_runtime_restore_tampered_bundle_rolls_back",
+    "script_runtime_restore_throwing_bundle_rolls_back",
+    "script_thread_census_counts_actor_read_before_its_own_naming",
+    "script_thread_census_counts_actors_in_turn_as_two",
+    "script_thread_census_counts_child_only_seen_renamed",
+    "script_thread_census_counts_two_actors_as_two",
+    "script_thread_census_daemon_sampler_detects_second_actor",
+    "script_thread_census_excludes_child_before_naming",
+    "script_thread_census_no_thread_is_zero",
+    "script_thread_census_real_child_inherits_then_renames",
+    "script_thread_count_skips_joined_but_listed_thread",
+    "script_thread_live_comm_reads_stat_lines"
+   ],
+   "fns": {
+    "exit_holder_entry": {
+     "contract": "ExitHolder の子 process の本体で、環境変数が無ければ何もしない"
+    },
+    "script_runtime_absent_no_thread": {
+     "contract": "[script] が無い daemon は script の thread を作らない"
+    },
+    "script_runtime_daemon_restore_keeps_loaded_modes": {
+     "contract": "起動時に指された generation を新しい isolate で load して mode を保ち、停止で thread を join する"
+    },
+    "script_runtime_daemon_restore_retires_unpointed_draining": {
+     "contract": "起動時に mode の行から指されない draining の generation は drain の終わりとして退役させる"
+    },
+    "script_runtime_daemon_shutdown_count_skips_unreaped_actor": {
+     "contract": "join した actor が kernel に外される前に読まれても、shutdown 後の thread の数に数えない"
+    },
+    "script_runtime_no_pointed_generation_no_thread": {
+     "contract": "[script] があっても mode の行が generation を指さなければ isolate を作らない"
+    },
+    "script_runtime_restore_host_api_mismatch_rolls_back": {
+     "contract": "起動時の復元で host_api が合わなければ rust に戻す"
+    },
+    "script_runtime_restore_missing_bundle_rolls_back": {
+     "contract": "起動時の復元で bundle の file が無ければ rust に戻す"
+    },
+    "script_runtime_restore_missing_capability_rolls_back": {
+     "contract": "起動時の復元でその領域の capability が足りなければ rust に戻す"
+    },
+    "script_runtime_restore_pending_top_level_await_rolls_back": {
+     "contract": "解決しない top-level await の bundle でも daemon の起動は止まらず rust に戻す"
+    },
+    "script_runtime_restore_tampered_bundle_rolls_back": {
+     "contract": "配備先の本文が書き換わり hash が違えば rust に戻す"
+    },
+    "script_runtime_restore_throwing_bundle_rolls_back": {
+     "contract": "load で例外を投げる bundle は検証に落ちて rust に戻す"
+    },
+    "script_thread_census_counts_actor_read_before_its_own_naming": {
+     "contract": "改名の前に spawn 元の thread の名前で読まれた actor も 1 本と数える"
+    },
+    "script_thread_census_counts_actors_in_turn_as_two": {
+     "contract": "先に終わった actor の後に別の actor が走れば、同時でなくても 2 本と数える"
+    },
+    "script_thread_census_counts_child_only_seen_renamed": {
+     "contract": "改名の前に一度も読まれなかった子は 1 本と数える"
+    },
+    "script_thread_census_counts_two_actors_as_two": {
+     "contract": "同時に走る 2 つの actor を 2 本と数える"
+    },
+    "script_thread_census_daemon_sampler_detects_second_actor": {
+     "contract": "daemon の actor のほかにもう 1 本同じ名の thread があれば、sampler は 2 本と数える"
+    },
+    "script_thread_census_excludes_child_before_naming": {
+     "contract": "親の名前を引き継いだだけの改名前の子は actor と数えない"
+    },
+    "script_thread_census_no_thread_is_zero": {
+     "contract": "actor の thread が無ければ 0 本と数える"
+    },
+    "script_thread_census_real_child_inherits_then_renames": {
+     "contract": "本物の thread で、親の名前を引き継いだ子が改名する順を channel で再現し、数を確かめる"
+    },
+    "script_thread_count_skips_joined_but_listed_thread": {
+     "contract": "join 済みで一覧に残る zombie の thread は live_comm が除く"
+    },
+    "script_thread_live_comm_reads_stat_lines": {
+     "contract": "live_comm は comm に空白・括弧があっても stat の行を読み、終わりかけの thread を除く"
+    }
+   }
+  },
+  "crates/celeris/tests/stranded_default_branch.rs": {
+   "capability": "pre-review-sync-auto-resolve-integration-repair",
+   "contract": "取り残しの sweep は delivery と同じ resolver で既定 branch を解き（設定 → origin/HEAD → main → master）、解けない repo だけを理由付きで unintegrated にする",
+   "b0_hint": [],
+   "tests": [
+    "stranded_default_branch_null_with_main_is_integrated",
+    "stranded_default_branch_null_with_origin_head_is_integrated_for_repoless_task",
+    "stranded_default_branch_unresolvable_is_unintegrated_with_reason"
+   ],
+   "fns": {
+    "stranded_default_branch_null_with_main_is_integrated": {
+     "contract": "project_repos.default_branch が NULL でも main に入った branch は integrated になる"
+    },
+    "stranded_default_branch_null_with_origin_head_is_integrated_for_repoless_task": {
+     "contract": "repo を持たない task でも origin/HEAD から既定 branch を解いて integrated にする"
+    },
+    "stranded_default_branch_unresolvable_is_unintegrated_with_reason": {
+     "contract": "既定 branch を解けない repo の branch は理由付きの unintegrated になる"
+    }
+   }
+  },
+  "crates/celeris/tests/stranded_integration.rs": {
+   "capability": "pre-review-sync-auto-resolve-integration-repair",
+   "contract": "取り残しの branch の受信箱・merge・discard・hold・昇格待ちの状態は互いに独立に検出される",
+   "b0_hint": [
+    "pre-review-sync-auto-resolve-integration-repair"
+   ],
+   "tests": [
+    "stranded_detects_inbox_merge_discard_hold_and_promotion_independently"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/tick_prod_copy_steps.rs": {
+   "capability": "celeris-daemon-wiring",
+   "contract": "本番 DB の写しを一時 dir に複製し、fake harness だけの dispatcher で tick の段ごとの時間を測り、元の file に書かない（手動の計測）",
+   "b0_hint": [],
+   "tests": [
+    "prod_copy_tick_steps"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/tick_scale_baseline.rs": {
+   "capability": "celeris-daemon-wiring",
+   "contract": "blocked の task を N 件に複写した DB で tick と dispatch の時間を測り、blocked の数と遅延の関係の基準を出す",
+   "b0_hint": [],
+   "tests": [
+    "tick_scale_baseline"
+   ],
+   "fns": {}
+  },
+  "crates/celeris/tests/trial_context_canary_e2e.rs": {
+   "capability": "campaign-eval",
+   "contract": "試行の task は実 router と実 dispatcher で走り、reviewer を含む全 run が試行の KB と成果だけを見て、通常運用の知識や他の試行を見ない",
+   "b0_hint": [],
+   "tests": [
+    "reset_environment_gives_the_same_canary_result",
+    "resumed_daemon_gives_the_same_canary_result",
+    "trial_tasks_through_the_real_router_see_only_the_trial_kb"
+   ],
+   "fns": {
+    "reset_environment_gives_the_same_canary_result": {
+     "contract": "環境を捨てて作り直しても、同じ試行は同じ canary の結果（署名）になる"
+    },
+    "resumed_daemon_gives_the_same_canary_result": {
+     "contract": "daemon を作り直して同じ DB・out に別の反復を足しても、同じ canary の結果になる"
+    },
+    "trial_tasks_through_the_real_router_see_only_the_trial_kb": {
+     "contract": "実 router で作った試行の親・子・planner の run は試行の KB だけを検索・読取できる"
+    }
+   }
+  },
+  "crates/celeris/tests/ui_ux_skills_delivery.rs": {
+   "capability": "skills-delivery",
+   "contract": "org.example.toml の ui-ux の skills_mounts を解決し、KB に取り込んだ skill の本文を各 harness の worker 作業場所に実際に書く",
+   "b0_hint": [],
+   "tests": [
+    "ui_ux_skills_acp_delivery_copies_attachments_and_unmounts_owned_files",
+    "ui_ux_skills_mounts_resolve_from_org_example_toml",
+    "ui_ux_skills_reach_claude_code_workspace_with_real_bodies",
+    "ui_ux_skills_review_run_only_delivers_the_quality_gate"
+   ],
+   "fns": {
+    "ui_ux_skills_acp_delivery_copies_attachments_and_unmounts_owned_files": {
+     "contract": "ACP への配送は skill の添付も写し、配送を外すと自分が置いた file だけを消す"
+    },
+    "ui_ux_skills_mounts_resolve_from_org_example_toml": {
+     "contract": "org.example.toml の ui-ux は決められた skills_mounts を持ち、KB の skill に解決できる"
+    },
+    "ui_ux_skills_reach_claude_code_workspace_with_real_bodies": {
+     "contract": "claude-code の作業場所の .claude/skills/<name>/SKILL.md に本物の本文が書かれる"
+    },
+    "ui_ux_skills_review_run_only_delivers_the_quality_gate": {
+     "contract": "review の run には quality gate の skill だけが届く"
+    }
+   }
+  },
+  "crates/celeris/tests/unpromoted_release.rs": {
+   "capability": "release-selfdeploy-wiring",
+   "contract": "current が指さず有効な promoting の印も無い release は exit 4 で起動を止め、DB を開かず migration も handoff の要求もしない",
+   "b0_hint": [
+    "release-selfdeploy-wiring"
+   ],
+   "tests": [
+    "a_fresh_promoting_marker_authorizes_the_live_takeover",
+    "a_release_that_current_points_to_starts_as_before",
+    "an_unpromoted_release_does_not_migrate_an_old_schema_db",
+    "an_unpromoted_release_does_not_request_a_handoff",
+    "an_unpromoted_release_without_current_never_creates_the_db",
+    "old_promote_dead_lock_is_rejected_without_opening_the_db",
+    "old_promote_live_lock_authorizes_the_live_takeover",
+    "stale_or_foreign_promoting_markers_are_rejected",
+    "the_binary_exits_four_for_an_unpromoted_release",
+    "verify_mode_is_not_gated"
+   ],
+   "fns": {
+    "a_fresh_promoting_marker_authorizes_the_live_takeover": {
+     "contract": "current が旧のままでも新しい promoting.json があれば live の引き継ぎを認める"
+    },
+    "a_release_that_current_points_to_starts_as_before": {
+     "contract": "current が自分を指す release は従来どおり起動する"
+    },
+    "an_unpromoted_release_does_not_migrate_an_old_schema_db": {
+     "contract": "未昇格の release は古い schema の DB を migrate しない"
+    },
+    "an_unpromoted_release_does_not_request_a_handoff": {
+     "contract": "最新 schema の DB に active が居ても、未昇格の release は行を書かず handoff も要求しない"
+    },
+    "an_unpromoted_release_without_current_never_creates_the_db": {
+     "contract": "current も DB も無いとき、未昇格の release は拒否して DB の file を作らない"
+    },
+    "old_promote_dead_lock_is_rejected_without_opening_the_db": {
+     "contract": "旧 promote.sh の lock の pid が終わっていれば拒否し、DB・migration・instance の登録をしない"
+    },
+    "old_promote_live_lock_authorizes_the_live_takeover": {
+     "contract": "旧 promote.sh の lock の pid が生きていれば、promoting.json が無くても live の引き継ぎを認める"
+    },
+    "stale_or_foreign_promoting_markers_are_rejected": {
+     "contract": "900 秒より古い印や sha12 の違う印は認めず、DB も開かない"
+    },
+    "the_binary_exits_four_for_an_unpromoted_release": {
+     "contract": "binary は未昇格の release で exit 4 で終わり、理由を出す"
+    },
+    "verify_mode_is_not_gated": {
+     "contract": "--mode verify は current も印も無くても migrate して動き、instance の行を書かない"
+    }
+   }
+  },
+  "crates/celeris/tests/variant_propagation.rs": {
+   "capability": "campaign-eval",
+   "contract": "variant の指定は通常の daemon の POST /tasks から子孫と dispatcher まで hash と org を保ち、観測値や org の食い違いでは run を起こさない",
+   "b0_hint": [],
+   "tests": [
+    "daemon_build_path_pins_observed_identity",
+    "foreign_assignee_is_not_accepted",
+    "missing_daemon_observation_blocks_the_run",
+    "org_drift_after_post_blocks_before_any_run",
+    "spec_off_normal_path_keeps_hash_and_org",
+    "spec_on_normal_path_keeps_hash_and_org"
+   ],
+   "fns": {
+    "daemon_build_path_pins_observed_identity": {
+     "contract": "build_daemon_dispatcher が渡す instance id と config sha256 が variant の観測値として run に固定される"
+    },
+    "foreign_assignee_is_not_accepted": {
+     "contract": "pin の外の課を assignee に持つ task は割り当てない"
+    },
+    "missing_daemon_observation_blocks_the_run": {
+     "contract": "daemon の観測値（instance id・config sha256）の無い dispatcher は variant 付きの run を起動しない"
+    },
+    "org_drift_after_post_blocks_before_any_run": {
+     "contract": "割り当て後か起動前に org が変わると run を起動せず、blocked と理由の event を残す"
+    },
+    "spec_off_normal_path_keeps_hash_and_org": {
+     "contract": "spec-off の環境で POST・GET・冪等の再送・DB の再 open・子孫・dispatch を通しても variant の hash と org が変わらない"
+    },
+    "spec_on_normal_path_keeps_hash_and_org": {
+     "contract": "spec-on の環境で POST・GET・冪等の再送・DB の再 open・子孫・dispatch を通しても variant の hash と org が変わらない"
+    }
+   }
+  },
+  "crates/celeris/tests/worker_db_guard_refuse.rs": {
+   "capability": "sandbox-db-guard",
+   "contract": "worker run の中（guard が読み取り専用にした本番 DB の dir）で本番の DB を使う celeris は userns の probe に進まず、非 0 で起動を止める",
+   "b0_hint": [
+    "sandbox-db-guard"
+   ],
+   "tests": [
+    "worker_db_guard_refuse_real_binary_inside_worker_run",
+    "worker_db_guard_refuse_with_opt_out"
+   ],
+   "fns": {
+    "worker_db_guard_refuse_real_binary_inside_worker_run": {
+     "contract": "worker sandbox の印の配下の DB を指す celeris binary は拒否の文言を出して非 0 で終わる"
+    },
+    "worker_db_guard_refuse_with_opt_out": {
+     "contract": "worker_read_only = false の config でも、印が ReadOnly で DB が印の配下なら起動を拒否する"
+    }
+   }
+  },
+  "crates/celeris/tests/workspace_roots.rs": {
+   "capability": "local-machine-settings",
+   "contract": "足回りの root は WorkspaceRoots 1 本で解き、store の workspace_root を変えても既存 task と走行中 run の場所は動かず、新しい task だけが新 root に作られる",
+   "b0_hint": [],
+   "tests": [
+    "existing_workspace_unchanged_after_root_change",
+    "new_task_uses_store_workspace_root",
+    "running_run_workspace_stable_after_root_change"
+   ],
+   "fns": {
+    "existing_workspace_unchanged_after_root_change": {
+     "contract": "既存 task の artifacts・worktree.json・runs/ は store の root を変えた後も元の場所のまま"
+    },
+    "new_task_uses_store_workspace_root": {
+     "contract": "新しい task は store の root に作られて task_workspace_roots に固定され、子 task はその後 root が変わっても親の固定を継ぐ"
+    },
+    "running_run_workspace_stable_after_root_change": {
+     "contract": "走行中 run の cwd と runs/<run_id>/ は store の root を変えても動かない"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/accept.rs": {
+   "capability": "task-lifecycle",
+   "contract": "celerisctl accept は draft の task だけを ready にし、不正な id や無い task には文面付きのエラーを返す",
+   "b0_hint": [],
+   "tests": [
+    "tests::run_on_invalid_id_returns_message_error",
+    "tests::run_on_missing_task_returns_message_error"
+   ],
+   "fns": {
+    "tests::run_on_invalid_id_returns_message_error": {
+     "contract": "accept に task id の形でない値を渡すと文面付きのエラーを返す"
+    },
+    "tests::run_on_missing_task_returns_message_error": {
+     "contract": "accept に無い task の id を渡すと文面付きのエラーを返す"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/add_tests.rs": {
+   "capability": "task-lifecycle",
+   "contract": "celerisctl add は受け入れ条件のある task と created の event を挿入し、親・依存・config の不備では何も挿入しない",
+   "b0_hint": [],
+   "tests": [
+    "run_acceptance_order_is_accept_then_cmd_then_artifact_then_reviewer",
+    "run_inserts_task_and_created_event",
+    "run_with_approval_kind_starts_ready",
+    "run_with_genre_and_config_applies_genre_default_role_defaults",
+    "run_with_genre_but_no_config_stores_the_name_only",
+    "run_with_invalid_parent_id_returns_error",
+    "run_with_missing_dependency_errors_and_inserts_nothing",
+    "run_with_role_and_config_applies_role_defaults",
+    "run_with_role_but_no_config_stores_the_name_only",
+    "run_with_unknown_genre_or_role_genre_mismatch_errors_when_config_given",
+    "run_with_unreadable_config_errors_and_inserts_nothing",
+    "run_without_any_acceptance_criterion_errors_and_inserts_nothing"
+   ],
+   "fns": {
+    "run_acceptance_order_is_accept_then_cmd_then_artifact_then_reviewer": {
+     "contract": "add の受け入れ条件は accept・cmd・artifact・reviewer の順に並ぶ"
+    },
+    "run_inserts_task_and_created_event": {
+     "contract": "add は task と created の event を 1 件ずつ挿入する"
+    },
+    "run_with_approval_kind_starts_ready": {
+     "contract": "approval の kind の task は ready で作られる"
+    },
+    "run_with_genre_and_config_applies_genre_default_role_defaults": {
+     "capability": "task-genres-roles",
+     "contract": "--genre と --config では、その分野の default_role の既定（tier・予算）が省いた値に入る"
+    },
+    "run_with_genre_but_no_config_stores_the_name_only": {
+     "capability": "task-genres-roles",
+     "contract": "--config の無い --genre は分野名だけを保存して検証せず、stderr に警告を出す"
+    },
+    "run_with_invalid_parent_id_returns_error": {
+     "contract": "親の id が不正ならエラーを返す"
+    },
+    "run_with_missing_dependency_errors_and_inserts_nothing": {
+     "contract": "依存先の task が無ければエラーで、何も挿入しない"
+    },
+    "run_with_role_and_config_applies_role_defaults": {
+     "capability": "task-genres-roles",
+     "contract": "--role と --config では、省いた tier・予算が役割の既定になる"
+    },
+    "run_with_role_but_no_config_stores_the_name_only": {
+     "capability": "task-genres-roles",
+     "contract": "--config の無い --role は役割名だけを保存し、既定は全体の既定のまま"
+    },
+    "run_with_unknown_genre_or_role_genre_mismatch_errors_when_config_given": {
+     "capability": "task-genres-roles",
+     "contract": "--config があるとき、知らない --genre や --genre と --role の不整合はエラーで何も挿入しない"
+    },
+    "run_with_unreadable_config_errors_and_inserts_nothing": {
+     "contract": "読めない --config はエラーで何も挿入しない"
+    },
+    "run_without_any_acceptance_criterion_errors_and_inserts_nothing": {
+     "contract": "受け入れ条件が 1 つも無ければエラーで何も挿入しない"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/browser.rs": {
+   "capability": "browser-site-policy-trusted-devices",
+   "contract": "celerisctl browser owner-session approve は非秘密の challenge を GUI の非公開の Unix socket に 1 行で渡し、DB と HTTP の bearer API を使わない",
+   "b0_hint": [],
+   "tests": [
+    "tests::approve_talks_one_line_to_a_private_socket",
+    "tests::challenge_format"
+   ],
+   "fns": {
+    "tests::approve_talks_one_line_to_a_private_socket": {
+     "contract": "approve は 0600 の socket に challenge の 1 行を書いて応答を読む"
+    },
+    "tests::challenge_format": {
+     "contract": "challenge は 12 文字の英大文字と数字（16 進）の形だけを有効とし、長さや文字の違う値を無効にする"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/build_cache.rs": {
+   "capability": "scratch-build-cache-disk-guard",
+   "contract": "celerisctl build-cache prune は共有 Cargo キャッシュの cargo の直下の古い repo-key の dir だけを消し、dry-run では消さない",
+   "b0_hint": [],
+   "tests": [
+    "tests::dry_run_preserves_cache_and_prune_removes_only_old_entry",
+    "tests::only_old_directories_directly_under_cargo_are_candidates"
+   ],
+   "fns": {
+    "tests::dry_run_preserves_cache_and_prune_removes_only_old_entry": {
+     "contract": "dry-run はキャッシュを残し、prune は古い entry だけを消す"
+    },
+    "tests::only_old_directories_directly_under_cargo_are_candidates": {
+     "contract": "消す候補は cargo の直下の古い dir だけ"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/campaign.rs": {
+   "capability": "campaign-eval",
+   "contract": "celerisctl campaign export は秘密の形の文字列を伏せ、普通の文はそのまま残す",
+   "b0_hint": [],
+   "tests": [
+    "tests::scrub_hides_secret_shapes_and_keeps_plain_text"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/cancel.rs": {
+   "capability": "task-lifecycle",
+   "contract": "celerisctl cancel は task_ops::gate::cancel を呼び、不正な id や無い task には文面付きのエラーを返す",
+   "b0_hint": [],
+   "tests": [
+    "tests::run_on_invalid_id_returns_message_error",
+    "tests::run_on_missing_task_returns_message_error"
+   ],
+   "fns": {
+    "tests::run_on_invalid_id_returns_message_error": {
+     "contract": "cancel に task id の形でない値を渡すと文面付きのエラーを返す"
+    },
+    "tests::run_on_missing_task_returns_message_error": {
+     "contract": "cancel に無い task の id を渡すと文面付きのエラーを返す"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/cos_ops_tests.rs": {
+   "capability": "cos-inbox-triage-operations-audit",
+   "contract": "CoS の run の celerisctl の変更は run の credential の bearer で /cos/operations に包んで送り、reason の欠落や header の注入は接続の前に断る",
+   "b0_hint": [],
+   "tests": [
+    "cos_chat_ops_ctl_credential_wraps_domain_mutation_and_uses_run_bearer",
+    "cos_chat_ops_ctl_missing_reason_fails_before_connection",
+    "cos_chat_ops_ctl_rejects_header_injection_before_connection",
+    "cos_chat_ops_ctl_without_credential_preserves_domain_request"
+   ],
+   "fns": {
+    "cos_chat_ops_ctl_credential_wraps_domain_mutation_and_uses_run_bearer": {
+     "contract": "run の credential があると変更の要求を /cos/operations に包み、run の bearer で送る"
+    },
+    "cos_chat_ops_ctl_missing_reason_fails_before_connection": {
+     "contract": "空白だけの reason は接続の前にエラーになる"
+    },
+    "cos_chat_ops_ctl_rejects_header_injection_before_connection": {
+     "contract": "改行を含む credential は header の注入として接続の前に断る"
+    },
+    "cos_chat_ops_ctl_without_credential_preserves_domain_request": {
+     "contract": "run の credential が無ければ変更の要求を包まずにそのまま送る"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/cron_tests.rs": {
+   "capability": "cron-jobs",
+   "contract": "celerisctl cron の各 subcommand は daemon の cron API の対応する path と本文で要求を作る",
+   "b0_hint": [],
+   "tests": [
+    "cron_create_parses_template_and_calls_api",
+    "cron_history_calls_api",
+    "cron_list_calls_api",
+    "cron_pause_calls_api",
+    "cron_request_keeps_the_api_v1_prefix_separator",
+    "cron_resume_calls_api",
+    "cron_run_calls_api",
+    "cron_show_calls_api",
+    "cron_template_must_be_json_object",
+    "cron_update_calls_api"
+   ],
+   "fns": {
+    "cron_create_parses_template_and_calls_api": {
+     "contract": "cron create は template の JSON を読んで作成の API を呼ぶ"
+    },
+    "cron_history_calls_api": {
+     "contract": "cron history は履歴の API を呼ぶ"
+    },
+    "cron_list_calls_api": {
+     "contract": "cron list は一覧の API を呼ぶ"
+    },
+    "cron_pause_calls_api": {
+     "contract": "cron pause は一時停止の API を呼ぶ"
+    },
+    "cron_request_keeps_the_api_v1_prefix_separator": {
+     "contract": "本番の /api/v1 の base URL でも path の区切りの / を落とさない"
+    },
+    "cron_resume_calls_api": {
+     "contract": "cron resume は再開の API を呼ぶ"
+    },
+    "cron_run_calls_api": {
+     "contract": "cron run は手動実行の API を呼ぶ"
+    },
+    "cron_show_calls_api": {
+     "contract": "cron show は 1 件の詳細の API を呼ぶ"
+    },
+    "cron_template_must_be_json_object": {
+     "contract": "template が JSON の object でなければエラーで API を呼ばない"
+    },
+    "cron_update_calls_api": {
+     "contract": "cron update は更新の API を呼ぶ"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/curation_tests.rs": {
+   "capability": "knowledge-curation-gc",
+   "contract": "celerisctl curation validate は日次知識整理の curation-plan.json を daemon と同じ検証で点検し、計画外の変更や入力の改変を通さない",
+   "b0_hint": [],
+   "tests": [
+    "adding_inbox_id_does_not_authorize_a_proposal",
+    "diff_touching_unplanned_path_is_rejected",
+    "discovers_workspace_root_from_repo_worktree_cwd",
+    "edited_kb_with_rehashed_plan_is_rejected_but_content_only_edit_passes",
+    "inbox_proposal_for_unknown_task_is_rejected",
+    "input_mutation_or_missing_snapshot_cannot_pass_even_for_minimal_plan",
+    "minimal_plan_passes",
+    "more_than_max_inbox_candidates_is_rejected",
+    "worker_shape_of_2026_10_03_is_rejected_with_reason"
+   ],
+   "fns": {
+    "adding_inbox_id_does_not_authorize_a_proposal": {
+     "contract": "inbox の id を足しただけでは提案は認められない"
+    },
+    "diff_touching_unplanned_path_is_rejected": {
+     "contract": "計画に無い path に触る差分は拒否される"
+    },
+    "discovers_workspace_root_from_repo_worktree_cwd": {
+     "contract": "repo の worktree の cwd から作業場所の root を見つける"
+    },
+    "edited_kb_with_rehashed_plan_is_rejected_but_content_only_edit_passes": {
+     "contract": "KB を編集して計画の hash を作り直したものは拒否され、本文だけの編集は通る"
+    },
+    "inbox_proposal_for_unknown_task_is_rejected": {
+     "contract": "知らない task への inbox の提案は拒否される"
+    },
+    "input_mutation_or_missing_snapshot_cannot_pass_even_for_minimal_plan": {
+     "contract": "入力の改変か snapshot の欠落があれば最小の計画でも通らない"
+    },
+    "minimal_plan_passes": {
+     "contract": "最小の正しい計画は検証を通る"
+    },
+    "more_than_max_inbox_candidates_is_rejected": {
+     "contract": "inbox の候補が上限を超える計画は拒否される"
+    },
+    "worker_shape_of_2026_10_03_is_rejected_with_reason": {
+     "contract": "2026-10-03 の worker が書いた形の計画は理由付きで拒否される"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/db.rs": {
+   "capability": "db-maintenance",
+   "contract": "celerisctl db の backup と integrity-check は通常の経路で DB を開かずに専用の接続で動き、壊れた file を panic でなく失敗として報告する",
+   "b0_hint": [],
+   "tests": [
+    "tests::backup_of_a_missing_source_is_a_clean_error",
+    "tests::backup_then_integrity_check_round_trip",
+    "tests::integrity_check_on_garbage_bytes_is_a_failure_not_a_panic"
+   ],
+   "fns": {
+    "tests::backup_of_a_missing_source_is_a_clean_error": {
+     "contract": "無い DB の backup は panic せずエラーになる"
+    },
+    "tests::backup_then_integrity_check_round_trip": {
+     "contract": "backup した file は integrity-check を通る"
+    },
+    "tests::integrity_check_on_garbage_bytes_is_a_failure_not_a_panic": {
+     "contract": "でたらめな byte の file の integrity-check は panic でなく失敗になる"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/execution_tests.rs": {
+   "capability": "execution-plan-adoption",
+   "contract": "celerisctl execution plan set は計画を検証して採用し、show で同じ計画を返し、不正な計画や無い task は断る",
+   "b0_hint": [],
+   "tests": [
+    "phase_gate_on_a_missing_task_is_an_error",
+    "set_adopts_a_v3_plan_with_the_configured_tree_limits",
+    "set_rejects_an_invalid_plan",
+    "set_rejects_an_unknown_task",
+    "set_then_show_round_trips",
+    "show_without_a_plan_succeeds_and_says_so",
+    "tree_adopt_needs_the_tree_and_put_is_an_alias_of_set"
+   ],
+   "fns": {
+    "phase_gate_on_a_missing_task_is_an_error": {
+     "capability": "decisions-plan-gate",
+     "contract": "途中確認で止まっていない（ここでは無い）task への phase gate はエラーになる"
+    },
+    "set_adopts_a_v3_plan_with_the_configured_tree_limits": {
+     "contract": "plan set は --config の [execution.tree] の上限で /3 の計画を検証して採用する"
+    },
+    "set_rejects_an_invalid_plan": {
+     "contract": "不正な計画の set は拒否する"
+    },
+    "set_rejects_an_unknown_task": {
+     "contract": "無い task への set は拒否する"
+    },
+    "set_then_show_round_trips": {
+     "contract": "set した計画を show が同じ内容で返す"
+    },
+    "show_without_a_plan_succeeds_and_says_so": {
+     "contract": "計画の無い task の show は成功し、計画が無いと出す"
+    },
+    "tree_adopt_needs_the_tree_and_put_is_an_alias_of_set": {
+     "capability": "recursive-task-tree",
+     "contract": "tree adopt は木が無効なら拒否し、put は set の別名として登録されている"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/gate.rs": {
+   "capability": "task-lifecycle",
+   "contract": "celerisctl approve・reject・answer は task_ops::gate を呼び、無い task には文面付きのエラーを返す",
+   "b0_hint": [],
+   "tests": [
+    "tests::run_answer_on_missing_task_returns_message_error",
+    "tests::run_approve_on_missing_task_returns_message_error"
+   ],
+   "fns": {
+    "tests::run_answer_on_missing_task_returns_message_error": {
+     "contract": "answer に無い task の id を渡すと文面付きのエラーを返す"
+    },
+    "tests::run_approve_on_missing_task_returns_message_error": {
+     "contract": "approve に無い task の id を渡すと文面付きのエラーを返す"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/integration_tests.rs": {
+   "capability": "pre-review-sync-auto-resolve-integration-repair",
+   "contract": "celerisctl integration は取り残しの branch の一覧と処分を daemon の integrations API の path と本文で要求し、不正な引数を parse で断る",
+   "b0_hint": [],
+   "tests": [
+    "integration_api_actions_build_paths_and_bodies",
+    "integration_api_discard_and_hold_require_reason",
+    "integration_api_filter_and_table_render_items",
+    "integration_api_http_calls_reach_the_daemon_route",
+    "integration_api_list_paths_and_filters",
+    "integration_api_rejects_unknown_state_at_parse_time"
+   ],
+   "fns": {
+    "integration_api_actions_build_paths_and_bodies": {
+     "contract": "hold・discard・reopen・merge の各操作は対応する path と本文を作る"
+    },
+    "integration_api_discard_and_hold_require_reason": {
+     "contract": "discard と hold は reason が無ければ断る"
+    },
+    "integration_api_filter_and_table_render_items": {
+     "contract": "一覧は filter を適用して item を表に出す"
+    },
+    "integration_api_http_calls_reach_the_daemon_route": {
+     "contract": "HTTP の要求は daemon の integrations の route に届く"
+    },
+    "integration_api_list_paths_and_filters": {
+     "contract": "一覧の path に状態の filter が query で付く"
+    },
+    "integration_api_rejects_unknown_state_at_parse_time": {
+     "contract": "知らない状態の指定は引数の parse で断る"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/knowledge_tests.rs": {
+   "capability": "knowledge-base",
+   "contract": "celerisctl knowledge は tempdir の KB だけで init・record・search・get が完結し、CoS の record は KB を書かずに API の候補に送る",
+   "b0_hint": [],
+   "tests": [
+    "cos_live_fix_d2_cli_direct_record_refuses_attachment_ids",
+    "cos_live_fix_d2_cli_idempotency_key_is_stable",
+    "cos_live_fix_d2_cli_record_with_cos_credential_calls_the_api",
+    "rerun_resets_the_knowledge_run_row_and_rejects_unknown_ids",
+    "the_cli_works_on_a_temporary_knowledge_base",
+    "the_root_flag_wins_over_an_unreadable_config"
+   ],
+   "fns": {
+    "cos_live_fix_d2_cli_direct_record_refuses_attachment_ids": {
+     "contract": "CoS でない record は --attachment-id を受けない"
+    },
+    "cos_live_fix_d2_cli_idempotency_key_is_stable": {
+     "contract": "同じ題名・本文の再送は同じ冪等 key になる"
+    },
+    "cos_live_fix_d2_cli_record_with_cos_credential_calls_the_api": {
+     "contract": "CoS の credential のある record は KB を書かず POST /api/v1/knowledge/inbox を呼ぶ"
+    },
+    "rerun_resets_the_knowledge_run_row_and_rejects_unknown_ids": {
+     "contract": "knowledge rerun は knowledge_runs の 1 行を戻し、知らない id は拒否する"
+    },
+    "the_cli_works_on_a_temporary_knowledge_base": {
+     "contract": "init → record → search → get が tempdir の KB だけで完結し、DB も network も使わない"
+    },
+    "the_root_flag_wins_over_an_unreadable_config": {
+     "contract": "--root が最優先で、設定が読めなければ既定の KB の場所に落ちる"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/models.rs": {
+   "capability": "model-catalog",
+   "contract": "celerisctl models list は daemon の model catalog を表に出し、空の catalog では discover を案内する",
+   "b0_hint": [],
+   "tests": [
+    "tests::empty_catalog_points_at_discover",
+    "tests::table_shows_state_override_and_discovery"
+   ],
+   "fns": {
+    "tests::empty_catalog_points_at_discover": {
+     "contract": "空の catalog の一覧は models discover を案内する"
+    },
+    "tests::table_shows_state_override_and_discovery": {
+     "contract": "表は各 model の状態・人の上書き・発見の情報を出す"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/org.rs": {
+   "capability": "org-projects-reports",
+   "contract": "celerisctl org migrate-v2 の写像は決定的で、poc の節を合わせて新しい木に写す",
+   "b0_hint": [],
+   "tests": [
+    "tests::the_map_is_deterministic_and_merges_the_poc_section"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/src/commands/plan.rs": {
+   "capability": "task-lifecycle",
+   "contract": "celerisctl plan は kind = plan の task を DB に挿入し、空の goal はエラーにする",
+   "b0_hint": [],
+   "tests": [
+    "tests::run_inserts_plan_task",
+    "tests::run_with_blank_goal_returns_error"
+   ],
+   "fns": {
+    "tests::run_inserts_plan_task": {
+     "contract": "plan は kind = plan の task を 1 件挿入する"
+    },
+    "tests::run_with_blank_goal_returns_error": {
+     "contract": "空白だけの goal はエラーで挿入しない"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/plan_lint_tests.rs": {
+   "capability": "task-lifecycle",
+   "contract": "celerisctl plan-lint は draft と ready の task の受け入れ条件を計画時と同じ規則で点検し、人の check に成果物が無い違反を一覧する",
+   "b0_hint": [],
+   "tests": [
+    "lints_draft_and_ready_tasks_but_not_other_statuses",
+    "no_violations_when_every_human_check_has_a_deliverable"
+   ],
+   "fns": {
+    "lints_draft_and_ready_tasks_but_not_other_statuses": {
+     "contract": "点検の対象は draft と ready の task だけで、ほかの状態は見ない"
+    },
+    "no_violations_when_every_human_check_has_a_deliverable": {
+     "contract": "人の check がすべて成果物を持てば違反は 0 件"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/projects.rs": {
+   "capability": "org-projects-reports",
+   "contract": "celerisctl projects ls・show は DB を読むだけで案件と milestone を出し、計画の subcommand は持たない",
+   "b0_hint": [],
+   "tests": [
+    "tests::projects_plan_subcommand_is_removed",
+    "tests::run_ls_hides_archived_projects_unless_all",
+    "tests::run_show_reads_the_project_and_its_milestones"
+   ],
+   "fns": {
+    "tests::projects_plan_subcommand_is_removed": {
+     "contract": "projects plan の subcommand は無い（案件は計画を持たない）"
+    },
+    "tests::run_ls_hides_archived_projects_unless_all": {
+     "contract": "ls は既定で archive 済みの案件を隠し、--all で出す"
+    },
+    "tests::run_show_reads_the_project_and_its_milestones": {
+     "contract": "show は案件と milestone を出し、無い id はエラーになる"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/query_tests.rs": {
+   "capability": "task-read-views",
+   "contract": "celerisctl ls・show・log は store の task を読み、show --json は API と同じ task の詳細を出し、無い task はエラーにする",
+   "b0_hint": [],
+   "tests": [
+    "run_log_without_follow_succeeds",
+    "run_ls_tree_groups_children_under_parent",
+    "run_ls_with_status_filter_matches_store_list",
+    "run_ls_without_filter_lists_all_tasks",
+    "run_show_found_task_succeeds",
+    "run_show_json_missing_task_errors",
+    "run_show_json_prints_task_detail_with_actions_and_matches_task_id",
+    "run_show_missing_task_errors",
+    "task_detail_json_is_parseable_and_contains_task_id_and_actions",
+    "task_detail_json_with_a_config_reports_the_worktree"
+   ],
+   "fns": {
+    "run_log_without_follow_succeeds": {
+     "contract": "--follow の無い log は成功して終わる"
+    },
+    "run_ls_tree_groups_children_under_parent": {
+     "contract": "ls --tree は子 task を親の下にまとめて出す"
+    },
+    "run_ls_with_status_filter_matches_store_list": {
+     "contract": "状態の filter 付きの ls は store の一覧と同じ task を出す"
+    },
+    "run_ls_without_filter_lists_all_tasks": {
+     "contract": "filter の無い ls は全 task を出す"
+    },
+    "run_show_found_task_succeeds": {
+     "contract": "在る task の show（表の出力）は成功する"
+    },
+    "run_show_json_missing_task_errors": {
+     "contract": "無い task の show --json はエラーになる"
+    },
+    "run_show_json_prints_task_detail_with_actions_and_matches_task_id": {
+     "contract": "在る task の show --json は成功する（本文の検査は task_detail_json の試験が持つ）"
+    },
+    "run_show_missing_task_errors": {
+     "contract": "無い task の show（表の出力）はエラーになる"
+    },
+    "task_detail_json_is_parseable_and_contains_task_id_and_actions": {
+     "contract": "task の詳細の JSON は parse でき、task id と actions を持つ"
+    },
+    "task_detail_json_with_a_config_reports_the_worktree": {
+     "contract": "--config を渡すと show --json の worktree が API と同じ値になる"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/release_tests.rs": {
+   "capability": "release-selfdeploy-wiring",
+   "contract": "celerisctl release notes・preview は DB を開かずに git と release の dir から説明と昇格の要約を作り、知らない sha はエラーにする",
+   "b0_hint": [],
+   "tests": [
+    "notes_fails_on_unknown_sha",
+    "notes_writes_json_and_markdown_without_api",
+    "parses_notes_args",
+    "parses_preview_args",
+    "preview_missing_release_is_none"
+   ],
+   "fns": {
+    "notes_fails_on_unknown_sha": {
+     "contract": "知らない sha の notes はエラーになる"
+    },
+    "notes_writes_json_and_markdown_without_api": {
+     "contract": "notes は API なしで notes.json と notes.md を書く"
+    },
+    "parses_notes_args": {
+     "contract": "notes の引数を parse する"
+    },
+    "parses_preview_args": {
+     "contract": "preview の引数を parse する"
+    },
+    "preview_missing_release_is_none": {
+     "contract": "無い release の preview は空（None）を返す"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/replay.rs": {
+   "capability": "event-replay",
+   "contract": "celerisctl replay は events から表を作り直して照合し、食い違いがあれば失敗の exit code を返す",
+   "b0_hint": [],
+   "tests": [
+    "tests::run_reports_failure_exit_code_on_drift",
+    "tests::run_reports_success_when_no_tasks"
+   ],
+   "fns": {
+    "tests::run_reports_failure_exit_code_on_drift": {
+     "contract": "表と events の食い違いがあれば失敗の exit code を返す"
+    },
+    "tests::run_reports_success_when_no_tasks": {
+     "contract": "task が無ければ成功を返す"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/rereview.rs": {
+   "capability": "review-runs-final-review",
+   "contract": "celerisctl rereview は task_ops::comment::rereview を呼び、不正な id や無い task には文面付きのエラーを返す",
+   "b0_hint": [],
+   "tests": [
+    "tests::run_on_invalid_id_returns_message_error",
+    "tests::run_on_missing_task_returns_message_error"
+   ],
+   "fns": {
+    "tests::run_on_invalid_id_returns_message_error": {
+     "contract": "rereview に task id の形でない値を渡すと文面付きのエラーを返す"
+    },
+    "tests::run_on_missing_task_returns_message_error": {
+     "contract": "rereview に無い task の id を渡すと文面付きのエラーを返す"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/retry.rs": {
+   "capability": "task-lifecycle",
+   "contract": "celerisctl retry は failed・cancelled の task を複製した新しい task を作り、不正な id や無い task には文面付きのエラーを返す",
+   "b0_hint": [],
+   "tests": [
+    "tests::run_on_invalid_id_returns_message_error",
+    "tests::run_on_missing_task_returns_message_error"
+   ],
+   "fns": {
+    "tests::run_on_invalid_id_returns_message_error": {
+     "contract": "retry に task id の形でない値を渡すと文面付きのエラーを返す"
+    },
+    "tests::run_on_missing_task_returns_message_error": {
+     "contract": "retry に無い task の id を渡すと文面付きのエラーを返す"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/routing.rs": {
+   "capability": "routing-lane-route",
+   "contract": "celerisctl routing show は設定の llm source・harness・route と execution class の候補を出す",
+   "b0_hint": [],
+   "tests": [
+    "tests::a_source_without_harnesses_or_routes_says_so",
+    "tests::show_prints_class_candidates",
+    "tests::shows_llm_sources_harnesses_and_routes"
+   ],
+   "fns": {
+    "tests::a_source_without_harnesses_or_routes_says_so": {
+     "contract": "harness も route も無い source はその旨を出す"
+    },
+    "tests::show_prints_class_candidates": {
+     "contract": "execution class ごとの候補を出す"
+    },
+    "tests::shows_llm_sources_harnesses_and_routes": {
+     "contract": "llm source・harness・route を一覧する"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/scratch_tests.rs": {
+   "capability": "scratch-build-cache-disk-guard",
+   "contract": "celerisctl scratch の env・status・lease・gc は daemon と同じ scratch pool の規則で動き、Celeris の外の sccache を扱わない",
+   "b0_hint": [
+    "scratch-build-cache-disk-guard"
+   ],
+   "tests": [
+    "disabled_scratch_makes_lease_fail_so_release_sh_falls_back",
+    "env_has_only_target_and_cargo_tuning",
+    "gc_dry_run_lists_without_removing",
+    "lease_touch_release_round_trip",
+    "status_has_no_sccache_or_cache_server"
+   ],
+   "fns": {
+    "disabled_scratch_makes_lease_fail_so_release_sh_falls_back": {
+     "contract": "scratch が無効なら lease は失敗し、release.sh が別の経路に落ちる"
+    },
+    "env_has_only_target_and_cargo_tuning": {
+     "contract": "scratch env は CARGO_TARGET_DIR と [scratch.cargo] の値だけを出す"
+    },
+    "gc_dry_run_lists_without_removing": {
+     "contract": "gc --dry-run は一覧だけで消さず、gc は daemon と同じ plan_gc で消し、legacy は 1 時間以上 idle のものだけ"
+    },
+    "lease_touch_release_round_trip": {
+     "contract": "外部の lease は作成 → touch → release → 再 lease を往復でき、daemon の owner には lease を取らせない"
+    },
+    "status_has_no_sccache_or_cache_server": {
+     "contract": "scratch status は sccache と cache server の欄を持たない"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/script_tests.rs": {
+   "capability": "script-runtime",
+   "contract": "celerisctl script の subcommand は読み取りか request_of の要求のどちらかで、CoS の run では変更系を /cos/operations に包む",
+   "b0_hint": [],
+   "tests": [
+    "script_canary_generations_and_guard_requests",
+    "script_cos_read_only_and_request_of_partition_every_subcommand",
+    "script_cos_read_only_guard_clear_help_names_403_and_422",
+    "script_cos_read_only_is_domains_generations_list_and_guard_status",
+    "script_cos_wrapped_requests_match_the_operations_table",
+    "script_domain_mode_request_carries_mode_version_and_generation",
+    "script_domain_table_shows_mode_version_and_short_bundle",
+    "script_exhaustive_cos_read_only_and_wrapped",
+    "script_exhaustive_table_shows_standing_and_counts",
+    "script_generation_table_and_guard_line"
+   ],
+   "fns": {
+    "script_canary_generations_and_guard_requests": {
+     "contract": "canary・generation・guard の subcommand は対応する API の要求を作る"
+    },
+    "script_cos_read_only_and_request_of_partition_every_subcommand": {
+     "contract": "全 subcommand は読み取りか request_of の要求のどちらか一方に入る"
+    },
+    "script_cos_read_only_guard_clear_help_names_403_and_422": {
+     "contract": "guard clear の help は CoS の run の 422 と operator・MCP の 403 を書き分ける"
+    },
+    "script_cos_read_only_is_domains_generations_list_and_guard_status": {
+     "contract": "CoS の run で包まずに通るのは読み取りの 4 つだけで、変更系は入らない"
+    },
+    "script_cos_wrapped_requests_match_the_operations_table": {
+     "contract": "CoS の run の変更系は /cos/operations の表どおりに包まれる"
+    },
+    "script_domain_mode_request_carries_mode_version_and_generation": {
+     "contract": "domain mode の要求は mode・version・generation を本文に持つ"
+    },
+    "script_domain_table_shows_mode_version_and_short_bundle": {
+     "contract": "domain の表は mode・version・短い bundle の hash を出す"
+    },
+    "script_exhaustive_cos_read_only_and_wrapped": {
+     "contract": "網羅の run は generation と reason の本文の POST で、status は CoS の run でも GET で直接読める"
+    },
+    "script_exhaustive_table_shows_standing_and_counts": {
+     "contract": "網羅の表は立場と件数を出す"
+    },
+    "script_generation_table_and_guard_line": {
+     "contract": "generation の表と guard の行を出す"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/target_sweep_tests.rs": {
+   "capability": "scratch-build-cache-disk-guard",
+   "contract": "celerisctl target sweep は共有 cargo target の古い dir を root ごとに掃除し、dry-run の JSON では何も消さない",
+   "b0_hint": [],
+   "tests": [
+    "target_sweep_cli_apply_with_root",
+    "target_sweep_cli_default_roots",
+    "target_sweep_cli_dry_run_json_deletes_nothing"
+   ],
+   "fns": {
+    "target_sweep_cli_apply_with_root": {
+     "contract": "--root を渡した apply はその root の対象を消す"
+    },
+    "target_sweep_cli_default_roots": {
+     "contract": "root を渡さなければ設定の既定の root を掃除の対象にする"
+    },
+    "target_sweep_cli_dry_run_json_deletes_nothing": {
+     "contract": "dry-run の JSON の出力は候補を挙げて何も消さない"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/worker_tests.rs": {
+   "capability": "worker-protocol-adapters",
+   "contract": "celerisctl worker run は worker の結果を exit code に写し、cluster の作業場所と route を task と引数から決め、決められなければ閉じて失敗する",
+   "b0_hint": [],
+   "tests": [
+    "normalize_outcome_maps_adapter_errors_to_provider_failure",
+    "normalize_outcome_maps_done_question_and_error_to_exit_codes",
+    "resolve_cluster_target_errors_when_cluster_missing",
+    "resolve_cluster_target_rejects_running_or_reviewing_task_even_with_workspace_arg",
+    "resolve_cluster_target_requires_workspace_arg_for_local_task",
+    "resolve_cluster_target_uses_task_remote_path_without_workspace_arg",
+    "resolve_cluster_target_warns_when_task_targets_a_different_cluster",
+    "resolve_cluster_target_workspace_arg_overrides_task_path",
+    "worker_route_cli_account_flag_narrows_the_pool",
+    "worker_route_cli_fails_closed",
+    "worker_route_cli_model_flag_selects_that_model",
+    "worker_route_cli_openai_compatible_source_carries_its_endpoint",
+    "worker_route_cli_uses_the_given_harness_and_the_first_declared_candidate"
+   ],
+   "fns": {
+    "normalize_outcome_maps_adapter_errors_to_provider_failure": {
+     "contract": "adapter のエラーは provider_failure の結果に写す"
+    },
+    "normalize_outcome_maps_done_question_and_error_to_exit_codes": {
+     "contract": "done・question・error の結果をそれぞれの exit code に写す"
+    },
+    "resolve_cluster_target_errors_when_cluster_missing": {
+     "contract": "task の cluster が設定に無ければエラーになる"
+    },
+    "resolve_cluster_target_rejects_running_or_reviewing_task_even_with_workspace_arg": {
+     "contract": "running・reviewing の task は --workspace があっても cluster の実行を断る"
+    },
+    "resolve_cluster_target_requires_workspace_arg_for_local_task": {
+     "contract": "local の task を cluster で走らせるには --workspace が要る"
+    },
+    "resolve_cluster_target_uses_task_remote_path_without_workspace_arg": {
+     "contract": "--workspace が無ければ task の remote の path を使う"
+    },
+    "resolve_cluster_target_warns_when_task_targets_a_different_cluster": {
+     "contract": "task が別の cluster を指すときは警告を出す"
+    },
+    "resolve_cluster_target_workspace_arg_overrides_task_path": {
+     "contract": "--workspace は task の path より優先される"
+    },
+    "worker_route_cli_account_flag_narrows_the_pool": {
+     "capability": "routing-lane-route",
+     "contract": "--account は route の account の pool をその 1 つに絞る"
+    },
+    "worker_route_cli_fails_closed": {
+     "capability": "routing-lane-route",
+     "contract": "route を決められなければ閉じて失敗する"
+    },
+    "worker_route_cli_model_flag_selects_that_model": {
+     "capability": "routing-lane-route",
+     "contract": "--model はその model の route を選ぶ"
+    },
+    "worker_route_cli_openai_compatible_source_carries_its_endpoint": {
+     "capability": "routing-lane-route",
+     "contract": "openai 互換の source の route はその endpoint を持つ"
+    },
+    "worker_route_cli_uses_the_given_harness_and_the_first_declared_candidate": {
+     "capability": "routing-lane-route",
+     "contract": "--harness を渡すとその harness と最初に宣言した候補の route を使う"
+    }
+   }
+  },
+  "crates/celerisctl/src/commands/workspace_tests.rs": {
+   "capability": "celerisctl-cli",
+   "contract": "celerisctl workspace prune・backfill-artifacts は古い作業場所を消して event を残し、成果物を task ごとに 1 回だけ登録する",
+   "b0_hint": [
+    "celerisctl-cli"
+   ],
+   "tests": [
+    "backfill_artifacts_isolates_local_retry_and_original_tasks",
+    "backfill_artifacts_registers_remote_mirror_artifacts_once",
+    "backfill_artifacts_with_an_unknown_task_is_an_error",
+    "dry_run_lists_candidates_without_deleting",
+    "older_than_overrides_the_config",
+    "prune_deletes_and_records_the_event"
+   ],
+   "fns": {
+    "backfill_artifacts_isolates_local_retry_and_original_tasks": {
+     "contract": "親の無い retry は元の作業場所を共有するが、その file を自分の成果物として登録しない"
+    },
+    "backfill_artifacts_registers_remote_mirror_artifacts_once": {
+     "contract": "remote の task の写しの artifacts/ から成果物を 1 回だけ登録し、--dry-run は登録しない"
+    },
+    "backfill_artifacts_with_an_unknown_task_is_an_error": {
+     "contract": "知らない task の backfill はエラーになる"
+    },
+    "dry_run_lists_candidates_without_deleting": {
+     "contract": "prune --dry-run は候補を挙げて消さない"
+    },
+    "older_than_overrides_the_config": {
+     "contract": "--older-than は設定の期間より優先される"
+    },
+    "prune_deletes_and_records_the_event": {
+     "contract": "prune は古い作業場所を消して event を記録する"
+    }
+   }
+  },
+  "crates/celerisctl/src/main.rs": {
+   "capability": "cos-inbox-triage-operations-audit",
+   "contract": "登録した CoS operation の変更系の subcommand はすべて cos_mapped の表で /cos/operations に包まれる",
+   "b0_hint": [
+    "celerisctl-cli"
+   ],
+   "tests": [
+    "cos_mapping_tests::cos_mapped_subcommands_match_registered_operations",
+    "cos_mapping_tests::cos_mapped_table_wraps_every_allowed_subcommand"
+   ],
+   "fns": {
+    "cos_mapping_tests::cos_mapped_subcommands_match_registered_operations": {
+     "contract": "cos_mapped の subcommand は登録された operation と一対一に対応する"
+    },
+    "cos_mapping_tests::cos_mapped_table_wraps_every_allowed_subcommand": {
+     "contract": "ALLOWED の operation を持つ変更系の subcommand はすべて表で包まれる"
+    }
+   }
+  },
+  "crates/celerisctl/tests/bin_smoke.rs": {
+   "capability": "celerisctl-cli",
+   "contract": "celerisctl binary は --help で exit 0 で終わる",
+   "b0_hint": [
+    "celerisctl-cli"
+   ],
+   "tests": [
+    "help_exits_zero"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/tests/browser_doctor.rs": {
+   "capability": "browser-site-policy-trusted-devices",
+   "contract": "celerisctl browser doctor は一時の設定の偽 daemon を読み、欠けた項目を 1 行ずつ出して exit 1、daemon に届かなければ 1 行で exit 2 にする",
+   "b0_hint": [
+    "browser-site-policy-trusted-devices"
+   ],
+   "tests": [
+    "browser_doctor_api_url_and_token_file_overrides_config",
+    "browser_doctor_daemon_unavailable_is_one_line_exit_two",
+    "browser_doctor_json_ok_warn_and_skip_exit_zero_with_env_config",
+    "browser_doctor_prints_one_line_per_missing_item_and_exits_one"
+   ],
+   "fns": {
+    "browser_doctor_api_url_and_token_file_overrides_config": {
+     "contract": "--api-url と --token-file は設定 file の値より優先される"
+    },
+    "browser_doctor_daemon_unavailable_is_one_line_exit_two": {
+     "contract": "daemon に届かなければ 1 行の文面で exit 2"
+    },
+    "browser_doctor_json_ok_warn_and_skip_exit_zero_with_env_config": {
+     "contract": "環境変数の設定で JSON の ok・warn・skip を出し exit 0"
+    },
+    "browser_doctor_prints_one_line_per_missing_item_and_exits_one": {
+     "contract": "欠けた項目ごとに 1 行を出して exit 1"
+    }
+   }
+  },
+  "crates/celerisctl/tests/browser_ledger_release.rs": {
+   "capability": "browser-site-policy-trusted-devices",
+   "contract": "release の browser 台帳の検査は合格を exit 0、欠落・不正・古さ・適合 backend 無しを status 名付きの exit 3 で返し、credential の証拠の無い backend を公開扱いに留める",
+   "b0_hint": [],
+   "tests": [
+    "browser_ledger_release_host_probe_uses_explicit_executable",
+    "browser_ledger_release_invalid",
+    "browser_ledger_release_json_keeps_public_backend_without_credential_proof",
+    "browser_ledger_release_missing",
+    "browser_ledger_release_no_conformant_backend",
+    "browser_ledger_release_ok_json_and_text_without_host_probe",
+    "browser_ledger_release_stale_agent_browser",
+    "browser_ledger_release_stale_release"
+   ],
+   "fns": {
+    "browser_ledger_release_host_probe_uses_explicit_executable": {
+     "contract": "host の probe は明示した実行 file を使う"
+    },
+    "browser_ledger_release_invalid": {
+     "contract": "不正な台帳は status invalid で exit 3"
+    },
+    "browser_ledger_release_json_keeps_public_backend_without_credential_proof": {
+     "contract": "credential の証拠の無い backend は JSON で公開の backend として残り、credential の backend に入らない"
+    },
+    "browser_ledger_release_missing": {
+     "contract": "台帳の file が無ければ status missing で exit 3"
+    },
+    "browser_ledger_release_no_conformant_backend": {
+     "contract": "適合する backend が無ければ status no_conformant_backend で exit 3"
+    },
+    "browser_ledger_release_ok_json_and_text_without_host_probe": {
+     "contract": "host の probe なしで適合の台帳は JSON と text の両方で ok を出し exit 0"
+    },
+    "browser_ledger_release_stale_agent_browser": {
+     "contract": "台帳の agent-browser の版が古ければ status stale_agent_browser で exit 3"
+    },
+    "browser_ledger_release_stale_release": {
+     "contract": "台帳の release が検査する release と違えば status stale_release で exit 3"
+    }
+   }
+  },
+  "crates/celerisctl/tests/campaign_connected.rs": {
+   "capability": "campaign-eval",
+   "contract": "campaign export --verify-connected は結合済み export が全欄を持てば成功し、空・必須欄の欠測・消費の未計上・採点の欠落なら非 0 で失敗する",
+   "b0_hint": [],
+   "tests": [
+    "connected_campaign_exports_every_joined_field_and_passes",
+    "empty_campaign_fails_the_connection_check",
+    "export_keeps_raw_run_and_call_keys_and_states",
+    "grade_row_joins_every_run_of_the_trial",
+    "grade_with_foreign_manifest_hash_is_rejected",
+    "missing_required_fields_or_unmetered_consumption_fail",
+    "run_without_routing_decision_may_lack_proposed_first",
+    "unobserved_usage_row_is_missing_not_zero",
+    "verify_connected_requires_grades"
+   ],
+   "fns": {
+    "connected_campaign_exports_every_joined_field_and_passes": {
+     "contract": "結合済みの campaign の export は全欄を持ち、接続の検査を通る"
+    },
+    "empty_campaign_fails_the_connection_check": {
+     "contract": "空の campaign は接続の検査に落ちる"
+    },
+    "export_keeps_raw_run_and_call_keys_and_states": {
+     "contract": "export は run と呼び出しの生の key と状態を保つ"
+    },
+    "grade_row_joins_every_run_of_the_trial": {
+     "contract": "試行の grade の 1 行は worker と reviewer を含む試行のすべての run に付く"
+    },
+    "grade_with_foreign_manifest_hash_is_rejected": {
+     "contract": "別の manifest の hash を持つ grade は拒否される"
+    },
+    "missing_required_fields_or_unmetered_consumption_fail": {
+     "contract": "必須欄の欠測や消費の未計上があれば失敗する"
+    },
+    "run_without_routing_decision_may_lack_proposed_first": {
+     "contract": "routing 判断を持たない reviewer の run は推奨候補が無くても接続の検査を通る"
+    },
+    "unobserved_usage_row_is_missing_not_zero": {
+     "contract": "観測できなかった usage の行は 0 でなく欠測として出る"
+    },
+    "verify_connected_requires_grades": {
+     "contract": "採点の無い試行があれば接続の検査に落ちる"
+    }
+   }
+  },
+  "crates/celerisctl/tests/campaign_export.rs": {
+   "capability": "campaign-eval",
+   "contract": "campaign export は一時 DB の fixture から決定的で二重計上の無い、別 campaign を除いた、秘密を含まない出力を作る",
+   "b0_hint": [
+    "celerisctl-cli"
+   ],
+   "tests": [
+    "campaign_export_is_deterministic_deduped_scoped_and_secret_free"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/tests/cli_resolution.rs": {
+   "capability": "test-fixtures-shared",
+   "contract": "試験の common::resolve_cli は実行時の写像を埋め込みの path より優先し、写像が無いときだけ埋め込みに落ち、使えない値ははっきり失敗させる",
+   "b0_hint": [],
+   "tests": [
+    "embedded_path_is_the_fallback_without_runtime_mapping",
+    "invalid_mapping_values_fail_clearly",
+    "missing_runtime_mapping_target_fails_clearly_without_embedded_fallback",
+    "resolved_cli_is_the_real_binary",
+    "runtime_mapping_wins_over_stale_embedded_path",
+    "stale_embedded_path_without_mapping_fails_clearly"
+   ],
+   "fns": {
+    "embedded_path_is_the_fallback_without_runtime_mapping": {
+     "contract": "実行時の写像が無ければ埋め込みの path を使う"
+    },
+    "invalid_mapping_values_fail_clearly": {
+     "contract": "不正な写像の値ははっきりした文面で失敗する"
+    },
+    "missing_runtime_mapping_target_fails_clearly_without_embedded_fallback": {
+     "contract": "写像の指す file が無ければ埋め込みに落とさずに失敗する"
+    },
+    "resolved_cli_is_the_real_binary": {
+     "contract": "解決した path は本物の celerisctl binary を指す"
+    },
+    "runtime_mapping_wins_over_stale_embedded_path": {
+     "contract": "実行時の写像は古い埋め込みの path より優先される"
+    },
+    "stale_embedded_path_without_mapping_fails_clearly": {
+     "contract": "写像が無く埋め込みの path が古ければはっきり失敗する"
+    }
+   }
+  },
+  "crates/celerisctl/tests/cos_ops.rs": {
+   "capability": "cos-inbox-triage-operations-audit",
+   "contract": "CoS の run の celerisctl は DB を開かずに監査付きの HTTP で変更を送り、run の credential・reason・方針の版が無ければ送らない",
+   "b0_hint": [],
+   "tests": [
+    "cos_chat_ops_ctl_add_uses_audited_http_without_opening_database",
+    "cos_chat_ops_ctl_api_request_can_send_registered_comment_shape",
+    "cos_chat_ops_ctl_api_request_without_run_credential_does_not_send",
+    "cos_chat_ops_ctl_prefers_api_url_env_over_config",
+    "cos_chat_ops_ctl_reason_and_policy_can_come_from_environment",
+    "cos_chat_ops_ctl_unsupported_db_mutation_is_rejected_before_db_open",
+    "cos_chat_ops_ctl_without_policy_version_env_fails"
+   ],
+   "fns": {
+    "cos_chat_ops_ctl_add_uses_audited_http_without_opening_database": {
+     "contract": "CoS の run の add は DB を開かず、監査付きの HTTP で送る"
+    },
+    "cos_chat_ops_ctl_api_request_can_send_registered_comment_shape": {
+     "contract": "登録された comment の形の要求は api request で送れる"
+    },
+    "cos_chat_ops_ctl_api_request_without_run_credential_does_not_send": {
+     "contract": "run の credential の無い api request は送らない"
+    },
+    "cos_chat_ops_ctl_prefers_api_url_env_over_config": {
+     "contract": "API の URL は設定 file より環境変数を優先する"
+    },
+    "cos_chat_ops_ctl_reason_and_policy_can_come_from_environment": {
+     "contract": "reason と方針の版は環境変数から取れる"
+    },
+    "cos_chat_ops_ctl_unsupported_db_mutation_is_rejected_before_db_open": {
+     "contract": "operation に無い DB の変更は DB を開く前に拒否する"
+    },
+    "cos_chat_ops_ctl_without_policy_version_env_fails": {
+     "contract": "方針の版の環境変数が無ければ既定の版で送らずに失敗する"
+    }
+   }
+  },
+  "crates/celerisctl/tests/eval_requests.rs": {
+   "capability": "campaign-eval",
+   "contract": "celerisctl eval requests は同じ要求の再通知と担当の再起動でも 1 行のままで、範囲外の要求を出さず、DB を書き換えない",
+   "b0_hint": [],
+   "tests": [
+    "renotify_and_restart_do_not_add_rows"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/tests/followups.rs": {
+   "capability": "worker-followup-tasks",
+   "contract": "worker の run の中で daemon の DB に向けた celerisctl add は DB を開かず followups.json に追記し、ほかの DB や run の外では DB に書く",
+   "b0_hint": [],
+   "tests": [
+    "add_inside_a_run_queues_a_followup_instead_of_opening_the_db",
+    "add_to_another_db_or_outside_a_run_writes_the_db_as_before"
+   ],
+   "fns": {
+    "add_inside_a_run_queues_a_followup_instead_of_opening_the_db": {
+     "contract": "run の中で CELERIS_RUN_DB に向けた add は DB を開かず、その run の followups.json に追記する"
+    },
+    "add_to_another_db_or_outside_a_run_writes_the_db_as_before": {
+     "contract": "別の DB に向けた add と run の外の add は従来どおり DB に書く"
+    }
+   }
+  },
+  "crates/celerisctl/tests/mcp_client_scopes.rs": {
+   "capability": "celeris-mcp",
+   "contract": "celerisctl mcp client scopes は token を変えずに MCP client の scope の一覧を置き換える",
+   "b0_hint": [],
+   "tests": [
+    "scopes_replaces_the_scope_list_and_keeps_the_token"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/tests/no_migrate.rs": {
+   "capability": "celerisctl-cli",
+   "contract": "celerisctl は migration をせず、無い DB を作らず、古い DB を拒否し、新しい DB は読むだけで書かない",
+   "b0_hint": [
+    "celerisctl-cli"
+   ],
+   "tests": [
+    "celerisctl_does_not_create_a_missing_db",
+    "celerisctl_reads_a_newer_db_but_refuses_to_write_it",
+    "celerisctl_reads_and_writes_a_db_at_its_own_version",
+    "celerisctl_refuses_an_older_db_and_leaves_its_schema_alone"
+   ],
+   "fns": {
+    "celerisctl_does_not_create_a_missing_db": {
+     "contract": "無い DB を指すと作らずに失敗する"
+    },
+    "celerisctl_reads_a_newer_db_but_refuses_to_write_it": {
+     "contract": "自分より新しい schema の DB は読めるが書き込みは拒否する"
+    },
+    "celerisctl_reads_and_writes_a_db_at_its_own_version": {
+     "contract": "同じ版の DB は読み書きできる"
+    },
+    "celerisctl_refuses_an_older_db_and_leaves_its_schema_alone": {
+     "contract": "古い schema の DB は拒否し、schema を変えない"
+    }
+   }
+  },
+  "crates/celerisctl/tests/org_migrate_v2.rs": {
+   "capability": "org-projects-reports",
+   "contract": "celerisctl org migrate-v2 は tempdir の DB と記憶を新しい木へ写し、rollback で元と同一に戻す",
+   "b0_hint": [],
+   "tests": [
+    "config_to_harnesses_prints_the_new_shape_from_the_legacy_one",
+    "migrate_v2_maps_the_tree_and_rollback_restores_it_exactly"
+   ],
+   "fns": {
+    "config_to_harnesses_prints_the_new_shape_from_the_legacy_one": {
+     "capability": "celerisctl-cli",
+     "contract": "celerisctl config to-harnesses は旧い設定を [[harnesses]] の形に写して出す"
+    },
+    "migrate_v2_maps_the_tree_and_rollback_restores_it_exactly": {
+     "contract": "forward で木を写し、rollback で DB と記憶が元と同一に戻る"
+    }
+   }
+  },
+  "crates/celerisctl/tests/pipe.rs": {
+   "capability": "celerisctl-cli",
+   "contract": "celerisctl ls は閉じた pipe に出力しても panic せず exit 0 で終わる",
+   "b0_hint": [],
+   "tests": [
+    "ls_on_a_closed_pipe_exits_cleanly_without_panicking"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/tests/routing_cli.rs": {
+   "capability": "routing-audit-outcome",
+   "contract": "celerisctl routing は版付きの学習用 JSONL を出し、根拠の無い enforce への stage の変更を拒否する",
+   "b0_hint": [
+    "routing-audit-outcome"
+   ],
+   "tests": [
+    "routing_export_emits_one_training_row_and_supports_text_omission",
+    "routing_stage_set_refuses_enforce_without_evidence_then_lists_the_human_change"
+   ],
+   "fns": {
+    "routing_export_emits_one_training_row_and_supports_text_omission": {
+     "contract": "routing export は学習用の行を 1 行出し、本文を省く指定に従う"
+    },
+    "routing_stage_set_refuses_enforce_without_evidence_then_lists_the_human_change": {
+     "contract": "根拠の無い enforce への stage set は拒否し、人の変更は一覧に出る"
+    }
+   }
+  },
+  "crates/celerisctl/tests/skills_import.rs": {
+   "capability": "knowledge-pages-skills",
+   "contract": "celerisctl skills import は repo の config/skills/ を DB を開かずに KB へ取り込み、mount はしない",
+   "b0_hint": [],
+   "tests": [
+    "ui_ux_skills_cli_imports_config_skills_without_a_db"
+   ],
+   "fns": {}
+  },
+  "crates/celerisctl/tests/terminal_pty.rs": {
+   "capability": "terminal-sessions",
+   "contract": "celerisctl terminal-pty は入出力・resize・exit code を中継し、stdin の EOF か SIGTERM で session を抜けた job を含む全 process を終わらせる",
+   "b0_hint": [],
+   "tests": [
+    "input_output_resize_and_exit_code",
+    "sigterm_ends_a_job_that_left_the_session_holding_the_tty",
+    "sigterm_ends_the_whole_session",
+    "stdin_eof_ends_a_job_that_left_the_session_holding_the_tty",
+    "stdin_eof_ends_the_whole_session"
+   ],
+   "fns": {
+    "input_output_resize_and_exit_code": {
+     "contract": "入力・出力・resize を中継し、shell の exit code で終わる"
+    },
+    "sigterm_ends_a_job_that_left_the_session_holding_the_tty": {
+     "contract": "SIGTERM で、setsid で session を抜けて tty を持つ job も終わらせる"
+    },
+    "sigterm_ends_the_whole_session": {
+     "contract": "SIGTERM で session の全 process（別 process group・SIGHUP を無視する job を含む）を終わらせる"
+    },
+    "stdin_eof_ends_a_job_that_left_the_session_holding_the_tty": {
+     "contract": "stdin の EOF で、setsid で session を抜けて tty を持つ job も終わらせる"
+    },
+    "stdin_eof_ends_the_whole_session": {
+     "contract": "stdin の EOF で session の全 process を終わらせる"
+    }
+   }
+  },
+  "crates/celerisctl/tests/worker_run.rs": {
+   "capability": "worker-protocol-adapters",
+   "contract": "celerisctl worker run は fake adapter の結果を exit code と出力に写し、harness・account で route を選び、store に一切書かない",
+   "b0_hint": [],
+   "tests": [
+    "codex_route_reaches_the_cli_without_mutating_the_store",
+    "done_prints_progress_artifact_and_result_without_touching_the_store",
+    "error_with_provider_failure_exits_four_and_preserves_provider_failure",
+    "harness_flag_starts_the_declared_harness_command",
+    "manual_run_cannot_silently_drop_browser_capability",
+    "question_exits_three",
+    "running_task_requires_explicit_workspace",
+    "unknown_harness_errors"
+   ],
+   "fns": {
+    "codex_route_reaches_the_cli_without_mutating_the_store": {
+     "contract": "codex の route は宣言した harness の command を route の model で起こし、store を変えない"
+    },
+    "done_prints_progress_artifact_and_result_without_touching_the_store": {
+     "contract": "done は progress・artifact・result を順に出し、事前の Answered を context に載せ、store を変えない"
+    },
+    "error_with_provider_failure_exits_four_and_preserves_provider_failure": {
+     "contract": "provider_failure 付きの worker の error は exit 4 で、provider_failure を出力に保つ"
+    },
+    "harness_flag_starts_the_declared_harness_command": {
+     "capability": "routing-lane-route",
+     "contract": "--harness はその harness の宣言した command を起こし、無ければ harness_selection の規則が選ぶ"
+    },
+    "manual_run_cannot_silently_drop_browser_capability": {
+     "contract": "browser の能力を要る task の手動の run は dispatcher の実行が要ると断り、作業場所も event も作らない"
+    },
+    "question_exits_three": {
+     "contract": "question の結果は exit 3 で、result の行に question を出す"
+    },
+    "running_task_requires_explicit_workspace": {
+     "contract": "running・reviewing の task は --workspace が無ければ拒否し、あれば走らせる"
+    },
+    "unknown_harness_errors": {
+     "contract": "宣言の無い harness は exit 1 で閉じて失敗する"
+    }
+   }
+  },
+  "crates/celerisctl/tests/worker_run_signal.rs": {
+   "capability": "worker-protocol-adapters",
+   "contract": "celerisctl worker run は SIGTERM を受けると worker の process を kill し、exit 130 で終わる",
+   "b0_hint": [],
+   "tests": [
+    "sigterm_kills_the_worker_process_and_exits_130"
+   ],
+   "fns": {}
+  }
+ },
+ "groups": [
+  {
+   "id": "dup-0904376f7e74",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/campaign_acceptance_e2e.rs::dechunk",
+    "crates/celeris/tests/campaign_lock_e2e.rs::dechunk"
+   ],
+   "names": [
+    "dechunk"
+   ],
+   "users": [],
+   "adopt": true,
+   "reason": "chunked の応答を解く同じ 12 行の dechunk を campaign の 2 つの e2e が写している",
+   "keep_tests": [
+    "crates/celeris/tests/campaign_acceptance_e2e.rs::normal_path_post_tasks_to_independent_grade_to_final_export",
+    "crates/celeris/tests/campaign_lock_e2e.rs::locked_measurement_runs_through_task_api_to_the_final_export"
+   ],
+   "action": "merge",
+   "plan": "dechunk を 2 file が #[path] で読む campaign の試験の共通 module（crates/campaign/tests/support_cases など）に 1 つ置き、写しを消す",
+   "mutation_target": "crates/campaign/src/celeris_exec.rs"
+  },
+  {
+   "id": "dup-10f3897537da",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/campaign_lock_e2e.rs::campaign_root",
+    "crates/celeris/tests/cap_probe_real_daemon.rs::campaign_root",
+    "crates/celeris/tests/ops_r1_pipeline.rs::campaign_root"
+   ],
+   "names": [
+    "campaign_root"
+   ],
+   "users": [],
+   "adopt": false,
+   "reason": "CARGO_MANIFEST_DIR に ../campaign を足すだけの 1 行で、1 か所にまとめても build も読みやすさも変わらない",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-144d72381022",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/stranded_default_branch.rs::git",
+    "crates/celeris/tests/stranded_integration.rs::git"
+   ],
+   "names": [
+    "git"
+   ],
+   "users": [
+    "crates/celeris/tests/stranded_default_branch.rs::stranded_default_branch_null_with_main_is_integrated",
+    "crates/celeris/tests/stranded_default_branch.rs::stranded_default_branch_null_with_origin_head_is_integrated_for_repoless_task",
+    "crates/celeris/tests/stranded_integration.rs::stranded_detects_inbox_merge_discard_hold_and_promotion_independently"
+   ],
+   "adopt": true,
+   "reason": "git を -C で走らせて失敗を assert する同じ helper を取り残しの sweep の 2 file が写している",
+   "keep_tests": [
+    "crates/celeris/tests/stranded_default_branch.rs::stranded_default_branch_null_with_main_is_integrated",
+    "crates/celeris/tests/stranded_integration.rs::stranded_detects_inbox_merge_discard_hold_and_promotion_independently"
+   ],
+   "action": "merge",
+   "plan": "git helper を crates/celeris/tests/support/mod.rs に移し、2 file は mod support から使う",
+   "mutation_target": "crates/celeris/src/daemon/stranded_sweep.rs"
+  },
+  {
+   "id": "dup-198c3e7de362",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/long_run_soak.rs::threads",
+    "crates/celeris/tests/project_controller_replay.rs::threads"
+   ],
+   "names": [
+    "threads"
+   ],
+   "users": [
+    "crates/celeris/tests/project_controller_replay.rs::project_controller_replay_resource_v8_100_projects"
+   ],
+   "adopt": false,
+   "reason": "/proc/self/task を数える 1 行で単独では束ねる益が無い。status_kb・pct を束ねるとき（dup-d504e49feb3f）に一緒に移せば足りる",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-22354769b5d1",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/instance_handoff.rs::wait_until",
+    "crates/celeris/tests/unpromoted_release.rs::wait_until"
+   ],
+   "names": [
+    "wait_until"
+   ],
+   "users": [
+    "crates/celeris/tests/instance_handoff.rs::a_newer_release_takes_over_while_the_old_one_finishes_its_run",
+    "crates/celeris/tests/instance_handoff.rs::a_stale_heartbeat_does_not_replace_a_live_active_until_its_process_is_gone"
+   ],
+   "adopt": true,
+   "reason": "selfdeploy の 2 file が同じ poll の wait_until（25 ms の sleep）を写している",
+   "keep_tests": [
+    "crates/celeris/tests/instance_handoff.rs::a_newer_release_takes_over_while_the_old_one_finishes_its_run",
+    "crates/celeris/tests/instance_handoff.rs::a_stale_heartbeat_does_not_replace_a_live_active_until_its_process_is_gone"
+   ],
+   "action": "merge",
+   "plan": "wait_until を crates/celeris/tests/support/mod.rs に移して 2 file から使う（出来事待ちへの置き換えは別の判断）",
+   "mutation_target": "crates/celeris/src/instance.rs"
+  },
+  {
+   "id": "dup-56a254cea5ba",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/script_compare_cos_digest.rs::general_thread",
+    "crates/celeris/tests/script_generation_e2e.rs::general_thread"
+   ],
+   "names": [
+    "general_thread"
+   ],
+   "users": [],
+   "adopt": false,
+   "reason": "store の cos_thread_open を 1 回呼ぶだけの包みで、まとめても build も読みやすさも変わらない",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-62cc1d4b470e",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/campaign_acceptance_e2e.rs::ev_started",
+    "crates/celeris/tests/campaign_lock_e2e.rs::ev_started",
+    "crates/celeris/tests/campaign_wiring_e2e.rs::started"
+   ],
+   "names": [
+    "ev_started",
+    "started"
+   ],
+   "users": [
+    "crates/celeris/tests/campaign_wiring_e2e.rs::post_tasks_to_export_connects_children_retries_review_cos_jev_and_interventions"
+   ],
+   "adopt": true,
+   "reason": "dispatcher が積む WorkerStarted の event の雛形を campaign の 3 つの e2e が写し、Event の欄が変わると 3 か所を直す",
+   "keep_tests": [
+    "crates/celeris/tests/campaign_wiring_e2e.rs::post_tasks_to_export_connects_children_retries_review_cos_jev_and_interventions",
+    "crates/celeris/tests/campaign_acceptance_e2e.rs::normal_path_post_tasks_to_independent_grade_to_final_export"
+   ],
+   "action": "merge",
+   "plan": "ev_started を ev_finished（dup-712f03d8c8d3）と一緒に campaign の試験の共通 module に移し、3 file から使う",
+   "mutation_target": "crates/task-dispatch/src/dispatcher/decision_log_wire.rs"
+  },
+  {
+   "id": "dup-69e6476ee890",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celerisctl/tests/mcp_client_scopes.rs::ctl",
+    "crates/celerisctl/tests/no_migrate.rs::ctl"
+   ],
+   "names": [
+    "ctl"
+   ],
+   "users": [
+    "crates/celerisctl/tests/mcp_client_scopes.rs::scopes_replaces_the_scope_list_and_keeps_the_token",
+    "crates/celerisctl/tests/no_migrate.rs::celerisctl_does_not_create_a_missing_db",
+    "crates/celerisctl/tests/no_migrate.rs::celerisctl_reads_a_newer_db_but_refuses_to_write_it",
+    "crates/celerisctl/tests/no_migrate.rs::celerisctl_reads_and_writes_a_db_at_its_own_version",
+    "crates/celerisctl/tests/no_migrate.rs::celerisctl_refuses_an_older_db_and_leaves_its_schema_alone"
+   ],
+   "adopt": true,
+   "reason": "--db 付きで celerisctl を env を外して起こす同じ helper を 2 file が写し、外す env の一覧が file ごとにずれうる",
+   "keep_tests": [
+    "crates/celerisctl/tests/no_migrate.rs::celerisctl_refuses_an_older_db_and_leaves_its_schema_alone",
+    "crates/celerisctl/tests/mcp_client_scopes.rs::scopes_replaces_the_scope_list_and_keeps_the_token"
+   ],
+   "action": "merge",
+   "plan": "env を外した Command を返す 1 関数を crates/celerisctl/tests/common/mod.rs に置き、--db の有無は呼び出し側で足す（dup-f65355edd1ac と同じ関数）",
+   "mutation_target": "crates/celerisctl/src/main.rs"
+  },
+  {
+   "id": "dup-712f03d8c8d3",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/campaign_acceptance_e2e.rs::ev_finished",
+    "crates/celeris/tests/campaign_lock_e2e.rs::ev_finished"
+   ],
+   "names": [
+    "ev_finished"
+   ],
+   "users": [],
+   "adopt": true,
+   "reason": "dispatcher が積む WorkerFinished の event（usage・metrics 付き）の雛形を campaign の 2 つの e2e が写している",
+   "keep_tests": [
+    "crates/celeris/tests/campaign_acceptance_e2e.rs::final_accounting_is_regenerated_from_the_router_tree_with_jev_cos_gaps",
+    "crates/celeris/tests/campaign_lock_e2e.rs::locked_measurement_runs_through_task_api_to_the_final_export"
+   ],
+   "action": "merge",
+   "plan": "ev_finished を ev_started と一緒に campaign の試験の共通 module に移し、2 file から使う",
+   "mutation_target": "crates/task-dispatch/src/dispatcher/decision_log_wire.rs"
+  },
+  {
+   "id": "dup-774ffe890ee1",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/cap_probe_real_daemon.rs::write_executable",
+    "crates/celeris/tests/ops_r1_measure.rs::write_executable"
+   ],
+   "names": [
+    "write_executable"
+   ],
+   "users": [],
+   "adopt": true,
+   "reason": "ETXTBSY を避けて実行 file を書く同じ 15 行の helper を、起動の型を写した ops_r1_measure が cap_probe から写している",
+   "keep_tests": [
+    "crates/celeris/tests/cap_probe_real_daemon.rs::daemon_only_toolchain_and_variable_pass_through_the_real_worker_path",
+    "crates/celeris/tests/ops_r1_measure.rs::ops_r1_measure_cos_path_with_stub_harness"
+   ],
+   "action": "merge",
+   "plan": "write_executable を crates/celeris/tests/support/mod.rs に移して 2 file から使う",
+   "mutation_target": "crates/campaign/src/cap_probe.rs"
+  },
+  {
+   "id": "dup-843a2fd1e3a4",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/script_compare_cos_digest.rs::run_daemon",
+    "crates/celeris/tests/script_compare_lane_rules.rs::run_daemon"
+   ],
+   "names": [
+    "run_daemon"
+   ],
+   "users": [
+    "crates/celeris/tests/script_compare_cos_digest.rs::script_compare_cos_digest_daemon_restart_without_bundle_restores_rust",
+    "crates/celeris/tests/script_compare_cos_digest.rs::script_compare_cos_digest_daemon_ts_restart_keeps_one_message",
+    "crates/celeris/tests/script_compare_lane_rules.rs::script_compare_daemon_injects_records_and_restores_rust"
+   ],
+   "adopt": true,
+   "reason": "2 file が既に読む support/script_compare.rs の隣で、同じ RunOptions（max_ticks 3）の run_daemon を写し、RunOptions の欄が増えると 2 か所を直す",
+   "keep_tests": [
+    "crates/celeris/tests/script_compare_lane_rules.rs::script_compare_daemon_injects_records_and_restores_rust",
+    "crates/celeris/tests/script_compare_cos_digest.rs::script_compare_cos_digest_daemon_restart_without_bundle_restores_rust"
+   ],
+   "action": "merge",
+   "plan": "run_daemon を crates/celeris/tests/support/script_compare.rs に移し、2 file の写しを消す",
+   "mutation_target": "crates/celeris/src/daemon/script_layer.rs"
+  },
+  {
+   "id": "dup-8db4cd6a7654",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celerisctl/tests/followups.rs::text",
+    "crates/celerisctl/tests/no_migrate.rs::text"
+   ],
+   "names": [
+    "text"
+   ],
+   "users": [
+    "crates/celerisctl/tests/followups.rs::add_inside_a_run_queues_a_followup_instead_of_opening_the_db",
+    "crates/celerisctl/tests/followups.rs::add_to_another_db_or_outside_a_run_writes_the_db_as_before",
+    "crates/celerisctl/tests/no_migrate.rs::celerisctl_does_not_create_a_missing_db",
+    "crates/celerisctl/tests/no_migrate.rs::celerisctl_reads_a_newer_db_but_refuses_to_write_it",
+    "crates/celerisctl/tests/no_migrate.rs::celerisctl_reads_and_writes_a_db_at_its_own_version",
+    "crates/celerisctl/tests/no_migrate.rs::celerisctl_refuses_an_older_db_and_leaves_its_schema_alone"
+   ],
+   "adopt": false,
+   "reason": "stdout と stderr をつなぐ 1 式の format で、まとめても build も読みやすさも変わらない",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-908b0aaa67e2",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/ops_r1_measure.rs::repo_root",
+    "crates/celeris/tests/ops_r1_pipeline.rs::repo",
+    "crates/celeris/tests/support/script_compare.rs::repo_root"
+   ],
+   "names": [
+    "repo",
+    "repo_root"
+   ],
+   "users": [],
+   "adopt": false,
+   "reason": "CARGO_MANIFEST_DIR に ../.. を足すだけの 1 行で、まとめても build も読みやすさも変わらない",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-94548694d704",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celerisctl/tests/campaign_connected.rs::cand",
+    "crates/celerisctl/tests/campaign_export.rs::cand"
+   ],
+   "names": [
+    "cand"
+   ],
+   "users": [],
+   "adopt": false,
+   "reason": "3 欄の CandidateRef の literal を作るだけの短い fixture で、まとめても build も読みやすさも変わらない",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-9724302dd110",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/ops_r1_attr.rs::sha",
+    "crates/celeris/tests/ops_r1_trace.rs::sha"
+   ],
+   "names": [
+    "sha"
+   ],
+   "users": [
+    "crates/celeris/tests/ops_r1_attr.rs::ops_r1_attr_is_byte_identical_and_leaves_db_copy_unchanged",
+    "crates/celeris/tests/ops_r1_attr.rs::ops_r1_attr_rows_and_totals_match_fixture",
+    "crates/celeris/tests/ops_r1_attr.rs::ops_r1_pipeline_attribution_v2_copies_model_and_harness_read_only",
+    "crates/celeris/tests/ops_r1_trace.rs::ops_r1_trace_emits_all_six_stages",
+    "crates/celeris/tests/ops_r1_trace.rs::ops_r1_trace_is_byte_identical_and_leaves_db_copy_unchanged"
+   ],
+   "adopt": false,
+   "reason": "file の sha256 を 16 進で返す 1 行で、まとめても build も読みやすさも変わらない",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-bc38edb0ba29",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/script_compare_cos_digest.rs::is_timeout",
+    "crates/celeris/tests/script_generation_e2e.rs::is_timeout",
+    "crates/celeris/tests/support/script_compare.rs::is_timeout"
+   ],
+   "names": [
+    "is_timeout"
+   ],
+   "users": [
+    "crates/celeris/tests/script_compare_cos_digest.rs::script_compare_cos_digest_daemon_restart_without_bundle_restores_rust",
+    "crates/celeris/tests/script_compare_lane_rules.rs::script_compare_daemon_injects_records_and_restores_rust"
+   ],
+   "adopt": true,
+   "reason": "support/script_compare.rs に既にある is_timeout を、script_compare_cos_digest（support を読む）と script_generation_e2e が写している",
+   "keep_tests": [
+    "crates/celeris/tests/script_compare_cos_digest.rs::script_compare_cos_digest_daemon_restart_without_bundle_restores_rust",
+    "crates/celeris/tests/script_compare_lane_rules.rs::script_compare_daemon_injects_records_and_restores_rust"
+   ],
+   "action": "merge",
+   "plan": "2 file の写しを消して support::script_compare::is_timeout を使う（script_generation_e2e には mod support を足す）",
+   "mutation_target": "crates/celeris/src/daemon/script_layer.rs"
+  },
+  {
+   "id": "dup-d504e49feb3f",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/long_run_soak.rs::status_kb",
+    "crates/celeris/tests/project_controller_replay.rs::status_kb"
+   ],
+   "names": [
+    "status_kb"
+   ],
+   "users": [
+    "crates/celeris/tests/project_controller_replay.rs::project_controller_replay_resource_v8_100_projects"
+   ],
+   "adopt": true,
+   "reason": "/proc/self/status の欄を kB で読む同じ helper を、資源を測る 2 file（long_run_soak から replay へ）が写している",
+   "keep_tests": [
+    "crates/celeris/tests/project_controller_replay.rs::project_controller_replay_resource_v8_100_projects"
+   ],
+   "action": "merge",
+   "plan": "status_kb・pct・threads を計測用の共通 module（crates/celeris/tests/support/ の下）に移し、2 file から使う",
+   "mutation_target": "crates/task-dispatch/src/dispatcher/project_decider_ts.rs"
+  },
+  {
+   "id": "dup-d5d47080695d",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/long_run_soak.rs::env_usize",
+    "crates/celeris/tests/tick_scale_baseline.rs::env_usize"
+   ],
+   "names": [
+    "env_usize"
+   ],
+   "users": [
+    "crates/celeris/tests/tick_scale_baseline.rs::tick_scale_baseline"
+   ],
+   "adopt": false,
+   "reason": "環境変数を usize で読む 4 行で、計測の 2 file に 1 つずつあっても build も読みやすさも変わらない",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-dee4f55b084a",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/actor_trace/support.rs::ts",
+    "crates/celeris/tests/ops_r1/trace_fixture.rs::ts"
+   ],
+   "names": [
+    "ts"
+   ],
+   "users": [],
+   "adopt": false,
+   "reason": "本体は同じだが、呼ぶ at の基準時刻が file ごとに違い（2026-10-28 と 2026-10-29）、意味が違う",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-e49ce410e3fa",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/cos_chat_triage_scenarios.rs::hook",
+    "crates/celeris/tests/root_done_summary.rs::hook"
+   ],
+   "names": [
+    "hook"
+   ],
+   "users": [
+    "crates/celeris/tests/cos_chat_triage_scenarios.rs::cos_chat_triage_b_webhook_packet_and_stop_after_human_answer",
+    "crates/celeris/tests/cos_chat_triage_scenarios.rs::cos_chat_triage_unified_only_cos_escalation_reaches_the_webhook"
+   ],
+   "adopt": true,
+   "reason": "偽の Discord webhook（listener・受信の記録・204 の応答）を作る同じ 25 行の hook を通知の 2 つの通し試験が写している",
+   "keep_tests": [
+    "crates/celeris/tests/cos_chat_triage_scenarios.rs::cos_chat_triage_b_webhook_packet_and_stop_after_human_answer",
+    "crates/celeris/tests/cos_chat_triage_scenarios.rs::cos_chat_triage_unified_only_cos_escalation_reaches_the_webhook"
+   ],
+   "action": "merge",
+   "plan": "Hook と hook を crates/celeris/tests/support/mod.rs に移し、2 file から使う（credential_wait_notify の別の hook は本体が違うので含めない）",
+   "mutation_target": "crates/celeris/src/notify.rs"
+  },
+  {
+   "id": "dup-e4daf219e7b1",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/cos_chat_triage_notify.rs::config",
+    "crates/celeris/tests/cos_chat_triage_scenarios.rs::config"
+   ],
+   "names": [
+    "config"
+   ],
+   "users": [
+    "crates/celeris/tests/cos_chat_triage_notify.rs::cos_chat_triage_escalation_packet_has_bounded_text_and_absolute_link",
+    "crates/celeris/tests/cos_chat_triage_notify.rs::cos_chat_triage_long_packet_keeps_link_within_1900_characters"
+   ],
+   "adopt": false,
+   "reason": "web_base_url だけを入れた NotifyConfig の literal で、まとめても build も読みやすさも変わらない",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-ed20d226ff08",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/long_run_soak.rs::count",
+    "crates/celeris/tests/tick_scale_baseline.rs::count"
+   ],
+   "names": [
+    "count"
+   ],
+   "users": [],
+   "adopt": false,
+   "reason": "query_row で数を 1 つ読む 1 行で、まとめても build も読みやすさも変わらない",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-f65355edd1ac",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celerisctl/tests/campaign_export.rs::ctl",
+    "crates/celerisctl/tests/eval_requests.rs::ctl",
+    "crates/celerisctl/tests/routing_cli.rs::ctl"
+   ],
+   "names": [
+    "ctl"
+   ],
+   "users": [
+    "crates/celerisctl/tests/eval_requests.rs::renotify_and_restart_do_not_add_rows",
+    "crates/celerisctl/tests/routing_cli.rs::routing_export_emits_one_training_row_and_supports_text_omission",
+    "crates/celerisctl/tests/routing_cli.rs::routing_stage_set_refuses_enforce_without_evidence_then_lists_the_human_change"
+   ],
+   "adopt": true,
+   "reason": "celerisctl を env を外して起こす同じ helper を 3 file が写し、外す env の一覧が file ごとにずれうる",
+   "keep_tests": [
+    "crates/celerisctl/tests/routing_cli.rs::routing_export_emits_one_training_row_and_supports_text_omission",
+    "crates/celerisctl/tests/eval_requests.rs::renotify_and_restart_do_not_add_rows"
+   ],
+   "action": "merge",
+   "plan": "dup-69e6476ee890 と同じ env を外した Command の関数を crates/celerisctl/tests/common/mod.rs に置き、3 file から使う",
+   "mutation_target": "crates/celerisctl/src/main.rs"
+  },
+  {
+   "id": "dup-fc3ff8d60204",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/stranded_default_branch.rs::now",
+    "crates/celeris/tests/workspace_roots.rs::now"
+   ],
+   "names": [
+    "now"
+   ],
+   "users": [
+    "crates/celeris/tests/workspace_roots.rs::existing_workspace_unchanged_after_root_change",
+    "crates/celeris/tests/workspace_roots.rs::new_task_uses_store_workspace_root",
+    "crates/celeris/tests/workspace_roots.rs::running_run_workspace_stable_after_root_change"
+   ],
+   "adopt": false,
+   "reason": "固定の時刻を 1 つ返す 1 行で、まとめても build も読みやすさも変わらない",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "dup-fc9d9545a731",
+   "kind": "duplicate_setup",
+   "members": [
+    "crates/celeris/tests/long_run_soak.rs::pct",
+    "crates/celeris/tests/project_controller_replay.rs::pct"
+   ],
+   "names": [
+    "pct"
+   ],
+   "users": [
+    "crates/celeris/tests/project_controller_replay.rs::project_controller_replay_resource_v8_100_projects"
+   ],
+   "adopt": true,
+   "reason": "百分位を返す同じ helper を資源を測る 2 file（long_run_soak から replay へ）が写している",
+   "keep_tests": [
+    "crates/celeris/tests/project_controller_replay.rs::project_controller_replay_resource_v8_100_projects"
+   ],
+   "action": "merge",
+   "plan": "pct を status_kb・threads と一緒に計測用の共通 module に移し、2 file から使う",
+   "mutation_target": "crates/task-dispatch/src/dispatcher/project_decider_ts.rs"
+  },
+  {
+   "id": "eq-22eed0cc9a76",
+   "kind": "equivalent_scenario",
+   "members": [
+    "crates/celerisctl/src/commands/query_tests.rs::run_show_found_task_succeeds",
+    "crates/celerisctl/src/commands/query_tests.rs::run_show_json_prints_task_detail_with_actions_and_matches_task_id"
+   ],
+   "basis": "same_file",
+   "adopt": true,
+   "reason": "在る task の run_show を json の false・true で呼び、どちらも is_ok だけを確かめる同じ本体",
+   "keep_tests": [
+    "crates/celerisctl/src/commands/query_tests.rs::run_show_found_task_succeeds"
+   ],
+   "action": "merge",
+   "plan": "json の false・true の 2 行の表で回す 1 本にし、JSON の本文は task_detail_json_is_parseable_and_contains_task_id_and_actions に任せる",
+   "mutation_target": "crates/celerisctl/src/commands/query.rs"
+  },
+  {
+   "id": "eq-8b8e2eda5104",
+   "kind": "equivalent_scenario",
+   "members": [
+    "crates/celerisctl/src/commands/query_tests.rs::run_show_json_missing_task_errors",
+    "crates/celerisctl/src/commands/query_tests.rs::run_show_missing_task_errors"
+   ],
+   "basis": "same_file",
+   "adopt": true,
+   "reason": "無い task の run_show を json の false・true で呼び、どちらも is_err だけを確かめる同じ本体",
+   "keep_tests": [
+    "crates/celerisctl/src/commands/query_tests.rs::run_show_missing_task_errors"
+   ],
+   "action": "merge",
+   "plan": "json の false・true の 2 行の表で回す 1 本にする",
+   "mutation_target": "crates/celerisctl/src/commands/query.rs"
+  },
+  {
+   "id": "eq-dccee8fda663",
+   "kind": "equivalent_scenario",
+   "members": [
+    "crates/celerisctl/src/commands/cos_ops_tests.rs::cos_chat_ops_ctl_missing_reason_fails_before_connection",
+    "crates/celerisctl/src/commands/cos_ops_tests.rs::cos_chat_ops_ctl_rejects_header_injection_before_connection"
+   ],
+   "basis": "same_file",
+   "adopt": false,
+   "reason": "形は同じだが、確かめる検証が違う（reason の空白と credential の改行による header の注入）。別の入力検証の枝を守る",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "eq-ec5010cee9b2",
+   "kind": "equivalent_scenario",
+   "members": [
+    "crates/celeris/tests/variant_propagation.rs::spec_off_normal_path_keeps_hash_and_org",
+    "crates/celeris/tests/variant_propagation.rs::spec_on_normal_path_keeps_hash_and_org"
+   ],
+   "basis": "same_file",
+   "adopt": false,
+   "reason": "既に共通の normal_path を引数で呼ぶ 2 本で、spec-on と spec-off は別の一時 DB の別の腕。束ねても本体は減らず、落ちた腕が分からなくなる",
+   "keep_tests": [],
+   "action": "",
+   "plan": "",
+   "mutation_target": ""
+  },
+  {
+   "id": "eq-f044c8f087db",
+   "kind": "equivalent_scenario",
+   "members": [
+    "crates/celerisctl/tests/worker_run.rs::error_with_provider_failure_exits_four_and_preserves_provider_failure",
+    "crates/celerisctl/tests/worker_run.rs::question_exits_three"
+   ],
+   "basis": "same_file",
+   "adopt": true,
+   "reason": "同じ fake の worker の run を script の出力だけ変えて流し、結果の型から exit code への写像（question は 3、provider_failure 付きの error は 4）の行を確かめる同じ本体",
+   "keep_tests": [
+    "crates/celerisctl/tests/worker_run.rs::error_with_provider_failure_exits_four_and_preserves_provider_failure"
+   ],
+   "action": "merge",
+   "plan": "script の出力・期待 exit code・stdout の断片の表で回す 1 本にし、question と provider_failure の 2 行を残す",
+   "mutation_target": "crates/celerisctl/src/commands/worker.rs"
+  }
+ ]
+}

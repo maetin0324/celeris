@@ -8,9 +8,6 @@ use task_worker::check_slots::CheckLimits;
 #[path = "../health_review/check_item.rs"]
 pub(super) mod check_item;
 pub(super) mod merge_repair;
-/// ADR 2026-11-13-health-base-merged-target: health の base を決める 1 つの関数。`check_item` から使う。
-#[path = "../health_review/target_base.rs"]
-pub(super) mod target_base;
 
 /// ADR-0118 D4 / D5: 同じ子の merge candidate が古くなったときの自動の再 sync・再レビューの回数
 /// （初回に加えて 2 回 = 合計 3 attempt）。超えたら統合を諦めて理由を残す。

@@ -29,7 +29,7 @@ use std::path::Path;
 
 use super::super::*;
 use super::ObservedIntegration;
-use super::target_base;
+use crate::health_review::gate::target_base;
 use crate::health_review::gate::{
     self, BundledChecker, HealthGateDecision, HealthGateOutcome, HealthGateRequest,
 };

@@ -660,7 +660,7 @@ mod tests {
     /// 使わない、field は D1 の表の own-supervisor の 7 件。`#[cfg(test)]` の field は
     /// `dispatcher/tests/structure_guard.rs` の `OWNER_STRUCTS` が数える）、`crate::review` を使わない（review は dispatcher に
     /// 依存し、使うと deps.cycle の循環が広がる）。既存の試験は振る舞いだけを見るので、
-    /// field を `pub` に戻しても、method が `&mut Dispatcher` を受けても通る。
+    /// field を `pub` に戻しても、method が dispatcher の本体を引数に受けても通る。
     #[test]
     fn structure_guard_run_supervisor() {
         let src = include_str!("run_supervisor.rs");

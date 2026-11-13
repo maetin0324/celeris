@@ -54,10 +54,18 @@ updated: 2026-11-13
 - 変えた試験: field の直参照を method に置き換えた（読みは `runs()`・`reviews()`、handle を待つ・`since` を差し替える試験は `#[cfg(test)]` の
   `runs_mut_for_test`・`reviews_mut_for_test`、`clear_infra_backoff_for_test`・`reset_reconcile`・`watches_lost_reviews`）。assertion は変えていない。
 
+## 前回の run の check の不合格（attempt 1 の再提出）
+
+- 計画の check（`grep -rnE '(impl|&mut|&) *Dispatcher\b' crates/task-dispatch/src/run_supervisor*` が 0 件であること）が exit 1 で落ちた。
+  原因は `run_supervisor.rs` の試験 `structure_guard_run_supervisor` の doc comment の 1 行が、説明の文として `&mut Dispatcher` の語を含んでいたこと。
+  コードの参照ではない（試験の本体は語を `["Dis", "patcher"].concat()` で組み立てて grep に当たらないようにしていた）。
+- 直し: その doc comment を「method が dispatcher の本体を引数に受けても通る」に書き換えた。コードと試験の assertion は変えていない。
+- 同じ cwd で計画の check を走らせ、exit 0（`structure_guard_` 8 件 passed）。
+
 ## 証拠（提出時の HEAD で実行）
 
 commit（件名）: 「phase 1: move the run table and lease supervision to RunSupervisor」「phase 1: keep run_supervisor out of the review dependency cycle」
-「phase 1: own-supervisor の進捗に検査の結果を書く」。
+「phase 1: own-supervisor の進捗に検査の結果を書く」「phase 1: run_supervisor の doc comment から Dispatcher の参照の語を外す」。
 
 - `bash scripts/dev/test-affected.sh`: exit 0。repo-health は verdict=pass fail_grade=0（new=1 は fail-grade でない）、nextest 3866 passed・11 skipped。
   1 回目は deps.cycle で exit 1（`run_supervisor` が `crate::review` を使い、base の dispatcher・review・undeclared_artifacts の循環に 4 つ目の節点として入った）。

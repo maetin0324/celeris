@@ -4,8 +4,7 @@
 //! 1. 終了したワーカー／レビューの結果を取り込み、状態遷移をストアに書く
 //! 2. 期限切れリースを回収（`running → ready|failed`、`LeaseExpired`）
 //! 3. 自分が起動した run のうち、ストア上で既に `running` でない／run_id が変わったものを強制終了（cancel 等）
-//! 4. `reviewing` なのに判定中でないタスクのレビューを開始（再起動後の復旧、または前 tick で `Reviewer` run の
-//!    枠が無く見送ったもの）
+//! 4. `reviewing` なのに判定中でないタスクのレビューを開始（再起動後の復旧、または前 tick で `Reviewer` run の枠が無く見送ったもの）
 //! 5. 有効な cron job の期限を評価し、通常の task として作る
 //! 6. `ready_tasks` を `priority DESC, created_at ASC` で取り、route registry と並列度上限に従って dispatch
 //!

@@ -20,6 +20,26 @@ pub(crate) struct ReplanLimits {
     pub ban: Option<ReplanBan>,
 }
 
+impl ReplanLimits {
+    /// 経路が読んだ task の events と節点の上限から入力を作る。`failure` は (unit の key, 失敗の署名)。失敗の署名を
+    /// 持たない経路（仕事の残らない計画の gate・木の liveness・planner の文脈）は `None` で、`stalled` は 0。
+    pub(crate) fn from_events(
+        events: &[(u64, task_core::Event)],
+        failure: Option<(&str, &str)>,
+        max_replans: u32,
+        ban: Option<ReplanBan>,
+    ) -> Self {
+        Self {
+            stalled: failure.map_or(0, |(key, signature)| {
+                task_ops::plan_gate::stalled_replans(events, key, signature)
+            }),
+            replans: task_ops::plan_gate::counted_replans(events),
+            max_replans,
+            ban,
+        }
+    }
+}
+
 /// replan を禁止する理由。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReplanBan {

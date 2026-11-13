@@ -670,7 +670,7 @@ impl Dispatcher {
             .into_iter()
             .filter(|d| d.status == task_core::DecisionStatus::Open)
             .count();
-        let node_replans = u64::from(self.counted_replans(task.id)?);
+        let node = self.replan_limits(task.id, None, None)?;
         let chain =
             task_ops::tree::ancestors_with_self(self.store.as_ref(), task).map_err(ops_to_store)?;
         let ancestors = chain
@@ -699,8 +699,7 @@ impl Dispatcher {
             leaves_left: u64::from(tree.max_tree_leaves.saturating_sub(counters.leaves)),
             runs_left: u64::from(tree.max_tree_runs.saturating_sub(counters.runs)),
             replans_left: u64::from(tree.max_tree_replans.saturating_sub(counters.replans)),
-            node_replans_left: u64::from(self.effective_max_replans(task.id)?)
-                .saturating_sub(node_replans),
+            node_replans_left: u64::from(node.max_replans.saturating_sub(node.replans)),
             usd_left: tree
                 .max_tree_usd_micros
                 .map(|max| max.saturating_sub(counters.usd_micros) as f64 / 1e6),

@@ -131,3 +131,7 @@ owner は型引数 `ExecutionCoordination<S, C>` で受ける。lease の回収�
 `RunSupervisor` が手放した review の鍵を受ける `release_reclaimed_review` と、drain の `abort_in_hand` を通す。stale 優先の ablation は
 `stale_priority.rs` の `stale_priority_disabled` が `TestHooks` から読み、`enter_review_sync_queue` に引数で渡す。module map の
 `execution_coordination` の行を直した。移した module の旧い行は無かった（`leases`・`tree_units`・`snapshot` などの行は入口として残る）。
+`ExecutionCoordination` の method が repo-health の閾値（型 1 つに 60）を超えないよう、WU の check と段の統合の process（`checking`・
+`integrating`）を下位 owner `ProcessTable`、停滞の見張り（`stall_watch`・`stalled_tasks`・`liveness_checked_at`）を下位 owner
+`LivenessWatch` に置いた（同じ file、`ExecutionCoordination` の private な field としてだけ作る。`RoutingRuntime` の中の `QuotaBook` と同じ形）。
+入口は `processes()`・`liveness()`（と `_mut`）から method を呼ぶ。write set の blocker の判断は純粋関数 `write_set_blocker` にした。

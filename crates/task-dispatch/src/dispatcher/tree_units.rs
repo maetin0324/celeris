@@ -75,7 +75,11 @@ impl Dispatcher {
     pub(super) fn check_tree_liveness(&mut self) -> Result<(), DispatchError> {
         let tree = self.config.execution.limits.tree;
         let now = self.now_utc();
-        if !self.coord.liveness_due(now, LIVENESS_CHECK_INTERVAL_SECS) {
+        if !self
+            .coord
+            .liveness_mut()
+            .liveness_due(now, LIVENESS_CHECK_INTERVAL_SECS)
+        {
             return Ok(());
         }
         let mut nodes: Vec<Task> = Vec::new();
@@ -89,7 +93,7 @@ impl Dispatcher {
             }
         }
         if nodes.is_empty() {
-            self.coord.clear_stall_watch();
+            self.coord.liveness_mut().clear_stall_watch();
             return Ok(());
         }
         let eligible: std::collections::HashSet<TaskId> = self
@@ -134,6 +138,7 @@ impl Dispatcher {
                 // 既に知らせた止まり方（何か起きるまで繰り返さない）。受信箱には出し続ける（D5）。
                 let at = self
                     .coord
+                    .liveness()
                     .stalled_task(v.task_id)
                     .map(|s| s.at.clone())
                     .unwrap_or_else(|| since.clone());
@@ -150,7 +155,10 @@ impl Dispatcher {
                 continue;
             }
             watching.insert(v.task_id);
-            let since = self.coord.stall_since(v.task_id, *last_seq, now);
+            let since = self
+                .coord
+                .liveness_mut()
+                .stall_since(v.task_id, *last_seq, now);
             let elapsed = (now - since).whole_seconds();
             if elapsed < i64::try_from(tree.liveness_timeout_secs).unwrap_or(i64::MAX) {
                 continue;
@@ -210,10 +218,12 @@ impl Dispatcher {
                     at: rfc3339(now),
                 },
             );
-            self.coord.forget_stall(v.task_id);
+            self.coord.liveness_mut().forget_stall(v.task_id);
             watching.remove(&v.task_id);
         }
-        self.coord.finish_stall_round(&watching, stalled);
+        self.coord
+            .liveness_mut()
+            .finish_stall_round(&watching, stalled);
         Ok(())
     }
 
@@ -292,8 +302,13 @@ impl Dispatcher {
             .map(|k| k.task)
             .chain(self.supervisor.reviews().keys().copied())
             .collect();
-        let excluded: std::collections::HashSet<TaskId> =
-            self.coord.stalled_tasks().keys().copied().collect();
+        let excluded: std::collections::HashSet<TaskId> = self
+            .coord
+            .liveness()
+            .stalled_tasks()
+            .keys()
+            .copied()
+            .collect();
         let memory = task_ops::wait::MemoryWaits::from_waits(
             self.snapshot_task_waits()
                 .into_iter()

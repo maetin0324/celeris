@@ -13,6 +13,14 @@ const OWNER_STRUCTS: &[(&str, &str)] = &[
         "ExecutionCoordination<S, C>",
         include_str!("../../execution_coordination.rs"),
     ),
+    (
+        "ProcessTable",
+        include_str!("../../execution_coordination.rs"),
+    ),
+    (
+        "LivenessWatch",
+        include_str!("../../execution_coordination.rs"),
+    ),
 ];
 
 /// `src` の `struct <name> {` の本体（次の行頭の `}` まで）の行のうち、`test` を条件に含む `#[cfg(...)]` 属性の数。

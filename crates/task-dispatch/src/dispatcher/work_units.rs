@@ -124,7 +124,7 @@ impl Dispatcher {
         });
         // Phase F5-fix2: 検査の間も「手元の仕事」として数える（`in_flight`・lease の照合）。
         let (work_unit_id, key, n, terminal, account, account_adapter, provider) = entry_meta;
-        self.coord.start_checks(
+        self.coord.processes_mut().start_checks(
             checking_run_id,
             CheckingEntry {
                 task_id,
@@ -204,12 +204,12 @@ impl Dispatcher {
     /// 手を離す（毎 tick、完了の記録の後。active のときは何もしない）。検査は新しい active が result.json から
     /// やり直す（検査は冪等）。止めた数を返す。
     pub(super) fn hand_off_checks_in_hand(&mut self) -> Result<usize, DispatchError> {
-        if self.coord.accepting_new_work() || !self.coord.has_checks() {
+        if self.coord.accepting_new_work() || !self.coord.processes().has_checks() {
             return Ok(0);
         }
         let mut count = 0;
-        for (run_id, _) in self.coord.checking_runs() {
-            let Some(entry) = self.coord.checking_entry(&run_id) else {
+        for (run_id, _) in self.coord.processes().checking_runs() {
+            let Some(entry) = self.coord.processes().checking_entry(&run_id) else {
                 continue;
             };
             let Some(task) = self.store.get(entry.task_id)? else {
@@ -224,7 +224,7 @@ impl Dispatcher {
             if !self.record_check_hand_off(&task, &wu_id, &key, n, &run_id, &terminal)? {
                 continue;
             }
-            let Some(entry) = self.coord.take_checks(&run_id) else {
+            let Some(entry) = self.coord.processes_mut().take_checks(&run_id) else {
                 continue;
             };
             entry.handle.abort();
@@ -327,7 +327,9 @@ impl Dispatcher {
                         )
                 })
                 .filter_map(|u| u.lease_run_id.or(u.last_run_id))
-                .filter(|r| !self.supervisor.holds_run_id(r) && !self.coord.is_checking(r))
+                .filter(|r| {
+                    !self.supervisor.holds_run_id(r) && !self.coord.processes().is_checking(r)
+                })
                 .collect();
             if candidates.is_empty() {
                 continue;
@@ -1343,7 +1345,8 @@ impl Dispatcher {
                     continue;
                 };
                 // Phase F5-fix2: 検査中の run（`checking`）も手元の run。
-                let ours = self.supervisor.holds_run_id(&run_id) || self.coord.is_checking(&run_id);
+                let ours = self.supervisor.holds_run_id(&run_id)
+                    || self.coord.processes().is_checking(&run_id);
                 let expired = u
                     .lease_expires_at
                     .as_deref()
@@ -1372,7 +1375,9 @@ impl Dispatcher {
                     self.requeue_orphaned_work_unit_run(&task, &run_id)?;
                 }
             }
-            if self.supervisor.runs_for_task(task.id) > 0 || self.coord.is_integrating(task.id) {
+            if self.supervisor.runs_for_task(task.id) > 0
+                || self.coord.processes().is_integrating(task.id)
+            {
                 continue;
             }
             let units = self.store.work_units_for(task.id)?;
@@ -1868,7 +1873,7 @@ impl Dispatcher {
         for task in self.store.running_tasks_with_runnable_work_units(window)? {
             if !self.is_eligible(&task)
                 || self.supervisor.runs_for_task(task.id) == 0
-                || self.coord.is_integrating(task.id)
+                || self.coord.processes().is_integrating(task.id)
                 || self.supervisor.was_just_aborted(task.id)
             {
                 continue;

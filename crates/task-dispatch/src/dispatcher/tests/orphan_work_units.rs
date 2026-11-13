@@ -424,7 +424,7 @@ async fn periodic_recovery_waits_for_check_owner_and_uses_the_injected_clock() {
     let now = OffsetDateTime::now_utc();
     d.test_hooks.now = Some(Arc::new(std::sync::Mutex::new(now)));
     let wu = f.unit();
-    d.coord.start_checks(
+    d.coord.processes_mut().start_checks(
         f.run.clone(),
         CheckingEntry {
             task_id: f.task,
@@ -448,7 +448,12 @@ async fn periodic_recovery_waits_for_check_owner_and_uses_the_injected_clock() {
         WorkUnitStatus::Running,
         "a terminal run can still have live checks"
     );
-    d.coord.take_checks(&f.run).unwrap().handle.abort();
+    d.coord
+        .processes_mut()
+        .take_checks(&f.run)
+        .unwrap()
+        .handle
+        .abort();
     *d.test_hooks.now.as_ref().unwrap().lock().unwrap() =
         now + time::Duration::seconds(RUNS_RECONCILE_INTERVAL_SECS - 1);
     d.reconcile_ownerless_runs();
@@ -475,7 +480,7 @@ async fn interrupt_or_cancel_during_checks_recovers_the_work_unit_immediately() 
                 OffsetDateTime::now_utc(),
             )
             .unwrap();
-        d.coord.start_checks(
+        d.coord.processes_mut().start_checks(
             f.run.clone(),
             CheckingEntry {
                 task_id: f.task,
@@ -505,7 +510,7 @@ async fn interrupt_or_cancel_during_checks_recovers_the_work_unit_immediately() 
             )
             .unwrap();
         d.abort_stale_runs().unwrap();
-        assert!(!d.coord.has_checks());
+        assert!(!d.coord.processes().has_checks());
         assert!(d.supervisor.was_just_aborted(f.task));
         assert_eq!(
             f.store.run_index_get(&f.run).unwrap().unwrap().status,

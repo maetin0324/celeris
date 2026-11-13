@@ -805,7 +805,7 @@ async fn tree_disabled_is_unchanged() {
         Event::PlanApprovalRequested { .. } | Event::StallDetected { .. }
     )));
     assert!(reports_of(&store, task_id).is_empty());
-    assert!(d.coord.stall_watch_is_empty());
+    assert!(d.coord.liveness().stall_watch_is_empty());
     // ADR-0074「F5-fix8 実装時の明確化」3.: 木が無効でも、計画を持つ `ready` の Task の生存確認は走る（ここでは
     // 何も検出しない。上の `StallDetected` 無し）。以前は `liveness_checked_at.is_none()`（確認そのものをしない）。
 }

@@ -12,6 +12,12 @@
 //! 値 `C` は dispatcher の型で、この module は型引数で受ける（review の module と `dispatcher` module を使わない）。
 //! lease の回収と abort で待ちを消すときは、`RunSupervisor` が手放した run の鍵（`TaskId`）を method の引数で受ける。
 //!
+//! WU の check と段の統合の process（`checking`・`integrating`）は下位 owner [`ProcessTable`]、停滞の見張り
+//! （`stall_watch`・`stalled_tasks`・`liveness_checked_at`）は下位 owner [`LivenessWatch`] に置く。どちらも
+//! `ExecutionCoordination` の private な field としてだけ作り、呼び元は `processes()`・`liveness()`（と `_mut`）から
+//! method を呼ぶ。子待ち・review の持ち越しと合わせて見る `holds_task`・`abort_in_hand` は `ExecutionCoordination` が持つ。
+//! write set の blocker の判断は予約と待機の表を引数で受ける純粋関数 `write_set_blocker`、見送りの記録は owner の method。
+//!
 //! run の集合は持たない（D1「run の集合と lease の照合」。正本は `crate::run_supervisor::RunSupervisor`）。write set の
 //! blocker の絞り込みと予約の刈り込みは、呼び元が `RunSupervisor::run_keys` で渡す実行中の run の鍵だけを見る。
 //! store・時計・試験の ablation は引数で受ける。この module は `dispatcher` module を使わない（D2 の 3）。
@@ -94,6 +100,45 @@ pub(crate) fn reservations_overlap(
     }
     a.repos.iter().any(|repo| b.repos.contains(repo))
         && task_core::write_set::write_set_overlap(&a.paths, &b.paths)
+}
+
+/// 実行中の run の予約のうち、`candidate` と強く重なる最初のもの（`RunKey` の順で決定的）。
+/// 実行中の run に重ならなくても、`candidate` より先に待ち始めて先取りを持つ待機と重なれば、その
+/// 待機を返す（後から来た重なる候補が、長く待った run を追い越し続けない）。予約と待機の表を引数で受ける純粋関数
+/// （判断。見送りの記録は owner の `note_write_set_hold`）。
+fn write_set_blocker<'a>(
+    write_reservations: &HashMap<RunKey, WriteReservation>,
+    write_set_waits: &HashMap<RunKey, WriteSetWait>,
+    key: &RunKey,
+    candidate: &WriteReservation,
+    running_keys: impl IntoIterator<Item = &'a RunKey>,
+) -> Option<RunKey> {
+    let mut blockers: Vec<&RunKey> = running_keys
+        .into_iter()
+        .filter(|other| *other != key)
+        .filter(|other| {
+            write_reservations
+                .get(*other)
+                .is_some_and(|res| reservations_overlap(key.task, candidate, other.task, res))
+        })
+        .collect();
+    blockers.sort_by(|a, b| {
+        (a.task.to_string(), &a.work_unit).cmp(&(b.task.to_string(), &b.work_unit))
+    });
+    if let Some(k) = blockers.first() {
+        return Some((*k).clone());
+    }
+    let own = write_set_waits.get(key).map(wait_order);
+    write_set_waits
+        .iter()
+        .filter(|(other, w)| *other != key && w.claims())
+        .map(|(other, w)| (wait_order(w), other, w))
+        .filter(|(order, _, _)| own.as_ref().is_none_or(|own| order < own))
+        .filter(|(_, other, w)| {
+            reservations_overlap(key.task, candidate, other.task, &w.reservation)
+        })
+        .min_by(|a, b| a.0.cmp(&b.0))
+        .map(|(_, other, _)| other.clone())
 }
 
 /// write-set gate の結果（ADR-0130 D3）。
@@ -204,22 +249,17 @@ pub(crate) struct ExecutionCoordination<S, C> {
     cluster_waiting: HashSet<TaskId>,
     /// レビューを開始できなかった（`Reviewer` run の枠が無い）タスクの `done` 内容。次 tick で使う。
     pending_subjects: HashMap<TaskId, S>,
-    /// ADR-0079 D10（Phase R3b）: 理由なく止まっている（`LivenessClass::Unexplained`）と最初に見た木の節点と、その時の節点の最後の event の seq（seq が変われば数え直す）。プロセス内メモリのみ（再起動で数え直す = 安全側）。
-    stall_watch: HashMap<TaskId, (u64, OffsetDateTime)>,
-    /// ADR 2026-10-23-stage-order-and-plan-stall D5: `StallDetected` を出した後まだ何も起きていない task（snapshot の `stalled_tasks`。受信箱の attention の元）。生存確認ごとに作り直す。プロセス内メモリのみ。
-    stalled_tasks: BTreeMap<TaskId, SnapshotStalledTask>,
-    /// ADR-0079 D10（Phase R3b）: 最後に生存確認をした時刻（`LIVENESS_CHECK_INTERVAL_SECS` ごと）。
-    liveness_checked_at: Option<OffsetDateTime>,
+    /// ADR-0079 D10・ADR 2026-10-23 D5: 停滞の見張り（下位 owner [`LivenessWatch`]。`stall_watch`・`stalled_tasks`・
+    /// `liveness_checked_at`）。
+    liveness: LivenessWatch,
     /// ADR 2026-10-11-task-wait-reasons D4: この tick で `dispatch_one` が見送った ready タスクの理由（メモリにしか無い M1〜M6・M9。`dispatch_ready` の先頭で空にし、同じ task の 2 件目は上書きしない）。snapshot の `task_waits` に載る。
     dispatch_waits: HashMap<TaskId, TaskWait>,
     /// 人間の承認待ちで延期中の reviewing タスク（`is_idle` 判定用。ADR-0010 D8）。
     awaiting_human: HashSet<TaskId>,
     /// ADR-0016 D2 / M5: レビューは全 pass だが、委譲した子が終端になるのを待っている reviewing タスク。値はその run の id と、Plan kind なら検証済みの plan（子が終わってから `complete_plan` する）。
     awaiting_children: HashMap<TaskId, AwaitingChildren>,
-    /// ADR-0074 D1.4（Phase F2b）: 工程の統合を走らせている Task（spawn した git 操作と検査）。再起動の照合（D1.7）は「running の統合 WU で、ここに無いもの」を pending に戻す。
-    integrating: HashMap<TaskId, IntegrationEntry>,
-    /// Phase F5-fix2: WU の `checks` を走らせている run（キーは run id）。
-    checking: HashMap<String, CheckingEntry>,
+    /// 手元の WU の check と段の統合の process（下位 owner [`ProcessTable`]。`checking`・`integrating`）。
+    processes: ProcessTable,
     /// worker・review・WU の check・統合・評価・設計 review の完了の channel（spawn した task が送り、`drain_completions` が受ける）。
     tx: mpsc::UnboundedSender<C>,
     rx: mpsc::UnboundedReceiver<C>,
@@ -253,14 +293,11 @@ impl<S, C> ExecutionCoordination<S, C> {
             browser_prereq_rescan: true,
             cluster_waiting: HashSet::new(),
             pending_subjects: HashMap::new(),
-            stall_watch: HashMap::new(),
-            stalled_tasks: BTreeMap::new(),
-            liveness_checked_at: None,
+            liveness: LivenessWatch::default(),
             dispatch_waits: HashMap::new(),
             awaiting_human: HashSet::new(),
             awaiting_children: HashMap::new(),
-            integrating: HashMap::new(),
-            checking: HashMap::new(),
+            processes: ProcessTable::default(),
             tx,
             rx,
             ticks: 0,
@@ -290,50 +327,19 @@ impl<S, C> ExecutionCoordination<S, C> {
         let Some(reservation) = reservation else {
             return WriteSetAdmission::Admit(None);
         };
-        match self.write_set_blocker(key, &reservation, running_keys) {
+        match write_set_blocker(
+            &self.write_reservations,
+            &self.write_set_waits,
+            key,
+            &reservation,
+            running_keys,
+        ) {
             Some(blocker) => {
                 self.note_write_set_hold(key, &blocker, &reservation, tick);
                 WriteSetAdmission::Hold { blocker }
             }
             None => WriteSetAdmission::Admit(Some(reservation)),
         }
-    }
-
-    /// 実行中の run の予約のうち、`candidate` と強く重なる最初のもの（`RunKey` の順で決定的）。
-    /// 実行中の run に重ならなくても、`candidate` より先に待ち始めて先取りを持つ待機と重なれば、その
-    /// 待機を返す（後から来た重なる候補が、長く待った run を追い越し続けない）。
-    fn write_set_blocker<'a>(
-        &self,
-        key: &RunKey,
-        candidate: &WriteReservation,
-        running_keys: impl IntoIterator<Item = &'a RunKey>,
-    ) -> Option<RunKey> {
-        let mut blockers: Vec<&RunKey> = running_keys
-            .into_iter()
-            .filter(|other| *other != key)
-            .filter(|other| {
-                self.write_reservations
-                    .get(*other)
-                    .is_some_and(|res| reservations_overlap(key.task, candidate, other.task, res))
-            })
-            .collect();
-        blockers.sort_by(|a, b| {
-            (a.task.to_string(), &a.work_unit).cmp(&(b.task.to_string(), &b.work_unit))
-        });
-        if let Some(k) = blockers.first() {
-            return Some((*k).clone());
-        }
-        let own = self.write_set_waits.get(key).map(wait_order);
-        self.write_set_waits
-            .iter()
-            .filter(|(other, w)| *other != key && w.claims())
-            .map(|(other, w)| (wait_order(w), other, w))
-            .filter(|(order, _, _)| own.as_ref().is_none_or(|own| order < own))
-            .filter(|(_, other, w)| {
-                reservations_overlap(key.task, candidate, other.task, &w.reservation)
-            })
-            .min_by(|a, b| a.0.cmp(&b.0))
-            .map(|(_, other, _)| other.clone())
     }
 
     /// 見送りを記録して log に残す（状態遷移・attempts には触らない）。
@@ -637,9 +643,10 @@ impl<S, C> ExecutionCoordination<S, C> {
 
     // ---- クラスタ待ち（ADR-0018 D2） ----
 
-    /// tick の dispatch の頭で、前の tick のクラスタ待ちを忘れる。
-    pub(crate) fn clear_cluster_waiting(&mut self) {
+    /// tick の dispatch の頭（`dispatch_ready`）で、前の tick のクラスタ待ちと見送りの理由（ADR 2026-10-11 D4）を忘れる。
+    pub(crate) fn begin_dispatch_round(&mut self) {
         self.cluster_waiting.clear();
+        self.dispatch_waits.clear();
     }
 
     /// この tick にクラスタの接続待ちで見送った task を覚える。
@@ -707,10 +714,6 @@ impl<S, C> ExecutionCoordination<S, C> {
 
     // ---- この tick の見送りの理由（ADR 2026-10-11-task-wait-reasons D4） ----
 
-    pub(crate) fn clear_dispatch_waits(&mut self) {
-        self.dispatch_waits.clear();
-    }
-
     /// 見送りの理由を記録する（同じ task の 2 件目は上書きしない）。
     pub(crate) fn note_dispatch_wait(&mut self, task_id: TaskId, wait: TaskWait) {
         self.dispatch_waits.entry(task_id).or_insert(wait);
@@ -775,8 +778,63 @@ impl<S, C> ExecutionCoordination<S, C> {
         self.awaiting_children.remove(&task_id)
     }
 
-    // ---- WU の check と段の統合の process ----
+    // ---- WU の check と段の統合の process（下位 owner `ProcessTable`） ----
 
+    /// 手元の WU の check と段の統合の process（読み取り）。
+    pub(crate) fn processes(&self) -> &ProcessTable {
+        &self.processes
+    }
+
+    /// 手元の WU の check と段の統合の process（始める・取り出す）。
+    pub(crate) fn processes_mut(&mut self) -> &mut ProcessTable {
+        &mut self.processes
+    }
+
+    /// その task の check・統合・子待ちを手元に持っているか（`crate::orphan` の定義の 1. のうちこの owner の分）。
+    pub(crate) fn holds_task(&self, task_id: TaskId) -> bool {
+        self.processes
+            .checking
+            .values()
+            .any(|e| e.task_id == task_id)
+            || self.processes.integrating.contains_key(&task_id)
+            || self.awaiting_children.contains_key(&task_id)
+    }
+
+    /// drain・持ち主の喪失で、手元の check と統合を全部手放し、review の持ち越しを消す（止めるのは呼び元）。
+    pub(crate) fn abort_in_hand(&mut self) -> InHand {
+        self.pending_subjects.clear();
+        InHand {
+            checking: self.processes.checking.drain().collect(),
+            integrating: self.processes.integrating.drain().collect(),
+        }
+    }
+
+    // ---- 停滞の見張り（下位 owner `LivenessWatch`。ADR-0079 D10・ADR 2026-10-23 D5） ----
+
+    /// 停滞の見張り（読み取り。snapshot の `stalled_tasks`）。
+    pub(crate) fn liveness(&self) -> &LivenessWatch {
+        &self.liveness
+    }
+
+    /// 停滞の見張り（生存確認の 1 回分の更新）。
+    pub(crate) fn liveness_mut(&mut self) -> &mut LivenessWatch {
+        &mut self.liveness
+    }
+}
+
+/// [`ExecutionCoordination`] の下位 owner: 手元の WU の check と段の統合の process（ADR 2026-11-11 D1 の表の
+/// `checking`・`integrating`。owner は `ExecutionCoordination` で、この型はその field としてだけ作る）。
+/// field は private で、`holds_task`・`abort_in_hand` のように子待ち・review の持ち越しと合わせて見る処理は
+/// `ExecutionCoordination` の method が持つ。
+#[derive(Default)]
+pub(crate) struct ProcessTable {
+    /// ADR-0074 D1.4（Phase F2b）: 工程の統合を走らせている Task（spawn した git 操作と検査）。再起動の照合（D1.7）は「running の統合 WU で、ここに無いもの」を pending に戻す。
+    integrating: HashMap<TaskId, IntegrationEntry>,
+    /// Phase F5-fix2: WU の `checks` を走らせている run（キーは run id）。
+    checking: HashMap<String, CheckingEntry>,
+}
+
+impl ProcessTable {
     pub(crate) fn start_integration(&mut self, task_id: TaskId, entry: IntegrationEntry) {
         self.integrating.insert(task_id, entry);
     }
@@ -841,28 +899,25 @@ impl<S, C> ExecutionCoordination<S, C> {
     }
 
     /// 走っている check と統合の数（`in_flight` に数える）。
-    pub(crate) fn processes_in_flight(&self) -> usize {
+    pub(crate) fn in_flight(&self) -> usize {
         self.checking.len() + self.integrating.len()
     }
+}
 
-    /// その task の check・統合・子待ちを手元に持っているか（`crate::orphan` の定義の 1. のうちこの owner の分）。
-    pub(crate) fn holds_task(&self, task_id: TaskId) -> bool {
-        self.checking.values().any(|e| e.task_id == task_id)
-            || self.integrating.contains_key(&task_id)
-            || self.awaiting_children.contains_key(&task_id)
-    }
+/// [`ExecutionCoordination`] の下位 owner: 停滞の見張り（ADR-0079 D10・ADR 2026-10-23 D5。ADR 2026-11-11 D1 の表の
+/// `stall_watch`・`stalled_tasks`・`liveness_checked_at`。owner は `ExecutionCoordination` で、この型はその field として
+/// だけ作る）。プロセス内メモリのみ（再起動で数え直す = 安全側）。
+#[derive(Default)]
+pub(crate) struct LivenessWatch {
+    /// ADR-0079 D10（Phase R3b）: 理由なく止まっている（`LivenessClass::Unexplained`）と最初に見た木の節点と、その時の節点の最後の event の seq（seq が変われば数え直す）。プロセス内メモリのみ（再起動で数え直す = 安全側）。
+    stall_watch: HashMap<TaskId, (u64, OffsetDateTime)>,
+    /// ADR 2026-10-23-stage-order-and-plan-stall D5: `StallDetected` を出した後まだ何も起きていない task（snapshot の `stalled_tasks`。受信箱の attention の元）。生存確認ごとに作り直す。プロセス内メモリのみ。
+    stalled_tasks: BTreeMap<TaskId, SnapshotStalledTask>,
+    /// ADR-0079 D10（Phase R3b）: 最後に生存確認をした時刻（`LIVENESS_CHECK_INTERVAL_SECS` ごと）。
+    liveness_checked_at: Option<OffsetDateTime>,
+}
 
-    /// drain・持ち主の喪失で、手元の check と統合を全部手放し、review の持ち越しを消す（止めるのは呼び元）。
-    pub(crate) fn abort_in_hand(&mut self) -> InHand {
-        self.pending_subjects.clear();
-        InHand {
-            checking: self.checking.drain().collect(),
-            integrating: self.integrating.drain().collect(),
-        }
-    }
-
-    // ---- 停滞の見張り（ADR-0079 D10・ADR 2026-10-23 D5） ----
-
+impl LivenessWatch {
     /// 生存確認の時刻か（前回から `interval_secs` 以上たったか）。時刻なら `now` を記録して `true`。
     pub(crate) fn liveness_due(&mut self, now: OffsetDateTime, interval_secs: i64) -> bool {
         if let Some(last) = self.liveness_checked_at
@@ -956,7 +1011,10 @@ impl<S, C> ExecutionCoordination<S, C> {
             f.retry_at = OffsetDateTime::UNIX_EPOCH;
         }
     }
+}
 
+#[cfg(test)]
+impl LivenessWatch {
     pub(crate) fn stall_watch_is_empty(&self) -> bool {
         self.stall_watch.is_empty()
     }
@@ -1060,8 +1118,10 @@ mod tests {
         let mut coord = ExecutionCoordination::<&str, ()>::new(2);
         coord.defer_review(a, "a");
         coord.defer_review(b, "b");
-        coord.start_checks("run-c".into(), checking_entry(c));
-        coord.start_integration(
+        coord
+            .processes_mut()
+            .start_checks("run-c".into(), checking_entry(c));
+        coord.processes_mut().start_integration(
             b,
             IntegrationEntry {
                 work_unit_id: "integrate-1".into(),
@@ -1073,13 +1133,16 @@ mod tests {
         assert_eq!(coord.take_deferred_review(a), None);
         assert_eq!(coord.take_deferred_review(b), Some("b"));
         coord.defer_review(b, "b");
-        assert_eq!(coord.checking_run_of(c).as_deref(), Some("run-c"));
-        assert_eq!(coord.processes_in_flight(), 2);
+        assert_eq!(
+            coord.processes().checking_run_of(c).as_deref(),
+            Some("run-c")
+        );
+        assert_eq!(coord.processes().in_flight(), 2);
         let in_hand = coord.abort_in_hand();
         assert_eq!(in_hand.checking.len(), 1);
         assert_eq!(in_hand.integrating.len(), 1);
         assert_eq!(coord.take_deferred_review(b), None);
-        assert!(!coord.holds_task(b) && !coord.holds_task(c) && !coord.has_checks());
+        assert!(!coord.holds_task(b) && !coord.holds_task(c) && !coord.processes().has_checks());
     }
 
     /// 不変条件（ADR-0079 D10・ADR 2026-10-23 D5、停滞の通知の冪等性）: 同じ最後の seq の間は最初に見た時刻を
@@ -1092,35 +1155,34 @@ mod tests {
         let t0 = OffsetDateTime::UNIX_EPOCH;
         let t1 = t0 + time::Duration::seconds(30);
         let mut coord = ExecutionCoordination::<(), ()>::new(1);
-        assert!(coord.liveness_due(t0, 60));
-        assert!(!coord.liveness_due(t1, 60));
-        assert!(coord.liveness_due(t0 + time::Duration::seconds(60), 60));
-        assert_eq!(coord.stall_since(a, 5, t0), t0);
-        assert_eq!(coord.stall_since(a, 5, t1), t0);
-        assert_eq!(coord.stall_since(a, 6, t1), t1);
-        assert_eq!(coord.stall_since(b, 1, t0), t0);
+        assert!(coord.liveness_mut().liveness_due(t0, 60));
+        assert!(!coord.liveness_mut().liveness_due(t1, 60));
+        assert!(
+            coord
+                .liveness_mut()
+                .liveness_due(t0 + time::Duration::seconds(60), 60)
+        );
+        assert_eq!(coord.liveness_mut().stall_since(a, 5, t0), t0);
+        assert_eq!(coord.liveness_mut().stall_since(a, 5, t1), t0);
+        assert_eq!(coord.liveness_mut().stall_since(a, 6, t1), t1);
+        assert_eq!(coord.liveness_mut().stall_since(b, 1, t0), t0);
         let watching: HashSet<TaskId> = [a].into_iter().collect();
-        coord.finish_stall_round(&watching, BTreeMap::new());
-        assert_eq!(coord.stall_since(a, 6, t0), t1);
-        assert_eq!(coord.stall_since(b, 1, t1), t1);
-        coord.clear_stall_watch();
-        assert!(coord.stall_watch_is_empty() && coord.stalled_tasks().is_empty());
+        coord
+            .liveness_mut()
+            .finish_stall_round(&watching, BTreeMap::new());
+        assert_eq!(coord.liveness_mut().stall_since(a, 6, t0), t1);
+        assert_eq!(coord.liveness_mut().stall_since(b, 1, t1), t1);
+        coord.liveness_mut().clear_stall_watch();
+        assert!(
+            coord.liveness().stall_watch_is_empty() && coord.liveness().stalled_tasks().is_empty()
+        );
     }
 
-    /// 不変条件: ADR 2026-11-11 D2 の 1〜3・7（field が private、dispatcher の本体を受けない・`dispatcher` module を
-    /// 使わない、field は D1 の表の own-coord-a の 14 件と own-coord-b の 16 件で run の集合を持たない。`#[cfg(test)]` の field は
-    /// `dispatcher/tests/structure_guard.rs` の `OWNER_STRUCTS` が数える）、`crate::review` を使わない（review は
-    /// dispatcher に依存し、使うと deps.cycle の循環が広がる）。既存の試験は振る舞いだけを見るので、field を `pub` に
-    /// 戻しても、method が dispatcher の本体を引数に受けても、run の表を field に足しても通る。
-    #[test]
-    fn structure_guard_execution_coordination() {
-        let src = include_str!("execution_coordination.rs");
-        let src = &src[..src
-            .find("#[cfg(test)]\nimpl WriteReservation")
-            .expect("the test-only impl is in the source")];
+    /// `src` の `pub(crate) struct <head> {` の本体の field の名（`///` と空行を除く）。field が `pub` なら落とす。
+    fn private_fields(src: &str, head: &str) -> Vec<String> {
         let start = src
-            .find("pub(crate) struct ExecutionCoordination<S, C> {")
-            .expect("ExecutionCoordination is defined");
+            .find(&format!("pub(crate) struct {head} {{"))
+            .unwrap_or_else(|| panic!("{head} is defined"));
         let body = &src[start..];
         let body = &body[..body.find("\n}\n").expect("the struct body ends")];
         let mut fields = Vec::new();
@@ -1131,12 +1193,43 @@ mod tests {
             }
             assert!(
                 !t.starts_with("pub"),
-                "an ExecutionCoordination field is not private: {line}"
+                "a {head} field is not private: {line}"
             );
             if let Some((name, _)) = t.split_once(": ") {
                 fields.push(name.to_string());
             }
         }
+        fields
+    }
+
+    /// 不変条件: ADR 2026-11-11 D2 の 1〜3・7（field が private、dispatcher の本体を受けない・`dispatcher` module を
+    /// 使わない、field は D1 の表の own-coord-a の 14 件と own-coord-b の 16 件で run の集合を持たない。`#[cfg(test)]` の field は
+    /// `dispatcher/tests/structure_guard.rs` の `OWNER_STRUCTS` が数える）、`crate::review` を使わない（review は
+    /// dispatcher に依存し、使うと deps.cycle の循環が広がる）。下位 owner（`ProcessTable`・`LivenessWatch`）は
+    /// `ExecutionCoordination` の field としてだけ置き、その field も private で、3 つの struct の field の和が D1 の表の 30 件になる。
+    /// 既存の試験は振る舞いだけを見るので、field を `pub` に戻しても、method が dispatcher の本体を引数に受けても、
+    /// run の表を field に足しても、下位 owner を `ExecutionCoordination` の外に置いても通る。
+    #[test]
+    fn structure_guard_execution_coordination() {
+        let src = include_str!("execution_coordination.rs");
+        let src = &src[..src
+            .find("#[cfg(test)]\nimpl WriteReservation")
+            .expect("the test-only impl is in the source")];
+        let mut own = private_fields(src, "ExecutionCoordination<S, C>");
+        own.sort();
+        assert_eq!(
+            own.iter()
+                .filter(|f| *f == "processes" || *f == "liveness")
+                .count(),
+            2,
+            "ExecutionCoordination holds ProcessTable and LivenessWatch as its own fields"
+        );
+        let mut fields: Vec<String> = own
+            .into_iter()
+            .filter(|f| f != "processes" && f != "liveness")
+            .chain(private_fields(src, "ProcessTable"))
+            .chain(private_fields(src, "LivenessWatch"))
+            .collect();
         fields.sort();
         assert_eq!(
             fields,
@@ -1172,7 +1265,7 @@ mod tests {
                 "write_set_waits",
                 "wu_prepare_failures",
             ],
-            "ExecutionCoordination owns the 14 own-coord-a and 16 own-coord-b fields of ADR D1"
+            "ExecutionCoordination (with its sub-owners) owns the 14 own-coord-a and 16 own-coord-b fields of ADR D1"
         );
         let owner = ["Dis", "patcher"].concat();
         for bad in [

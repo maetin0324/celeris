@@ -116,7 +116,13 @@ impl Dispatcher {
             in_flight,
             cooldowns,
             task_waits,
-            stalled_tasks: self.coord.stalled_tasks().values().cloned().collect(),
+            stalled_tasks: self
+                .coord
+                .liveness()
+                .stalled_tasks()
+                .values()
+                .cloned()
+                .collect(),
             stagnation: self.stagnation.findings.clone(),
             stagnation_policy: Some(self.stagnation.policy),
             review_resync_halted: self

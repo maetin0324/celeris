@@ -1307,7 +1307,7 @@ impl Dispatcher {
         self.supervisor.worker_run_count()
             + self.cos_in_flight()
             + self.supervisor.reviews().len()
-            + self.coord.processes_in_flight()
+            + self.coord.processes().in_flight()
             + self.routing.eval_run_count()
             + self.health_inventory.in_flight()
     }
@@ -1878,7 +1878,7 @@ impl Dispatcher {
                     checks,
                     check_cwd,
                 } => {
-                    self.coord.take_checks(&run_id);
+                    self.coord.processes_mut().take_checks(&run_id);
                     if let Err(e) = self.on_work_unit_checks_finished(
                         task_id,
                         run_id.clone(),
@@ -1979,8 +1979,7 @@ impl Dispatcher {
 
     fn dispatch_ready(&mut self) -> Result<usize, DispatchError> {
         self.routing.begin_dispatch_pass();
-        self.coord.clear_cluster_waiting();
-        self.coord.clear_dispatch_waits();
+        self.coord.begin_dispatch_round();
         // ADR-0089（Phase R6-5）: 非 CoS の枠が埋まっていても、CoS の対話 run の枠が空いていれば走査する。
         if !self.run_load().any_slot() {
             // 容量切れで照合しなかった tick: write-set の待機の数えを戻さない（2026-10-03-write-set-no-starvation）。
@@ -1996,7 +1995,7 @@ impl Dispatcher {
             .supervisor
             .run_keys()
             .map(|k| (k.task, k.work_unit.clone()));
-        let checks = self.coord.checking_tasks();
+        let checks = self.coord.processes().checking_tasks();
         let others = self.supervisor.reviews().keys().copied().chain(checks);
         self.maint.admission().begin_pass(runs, others);
         // 上位から見て見送りが続いても後続を試せるよう、窓は広めに取る。

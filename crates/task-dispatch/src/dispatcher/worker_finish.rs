@@ -1890,7 +1890,7 @@ impl Dispatcher {
     /// 本番では draining の旧デーモンが WU の検査の途中で exit し、完了した run が `lease expired`
     /// で捨てられてやり直しになった。確定させた（または確定の失敗を記録した）ら `true`。
     pub(super) fn finalise_from_result_json(&mut self, task: &Task, run_id: &str) -> bool {
-        if self.supervisor.holds_run_id(run_id) || self.coord.is_checking(run_id) {
+        if self.supervisor.holds_run_id(run_id) || self.coord.processes().is_checking(run_id) {
             return false;
         }
         let Some(dir) = self.task_dir(task) else {

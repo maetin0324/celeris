@@ -227,7 +227,7 @@ impl Dispatcher {
     /// Reviewer run・WU の検査）。
     fn holds_run_in_hand(&self, run_id: &str) -> bool {
         self.supervisor.holds_run_or_review(run_id)
-            || self.coord.is_checking(run_id)
+            || self.coord.processes().is_checking(run_id)
             || self.holds_eval_run(run_id)
     }
 

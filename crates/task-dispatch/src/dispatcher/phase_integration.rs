@@ -726,7 +726,7 @@ impl Dispatcher {
                 result: Box::new(result),
             });
         });
-        self.coord.start_integration(
+        self.coord.processes_mut().start_integration(
             task.id,
             IntegrationEntry {
                 work_unit_id: wu_id_for_entry,
@@ -744,8 +744,8 @@ impl Dispatcher {
         work_unit_id: &str,
         result: Result<IntegrationRun, String>,
     ) -> Result<(), DispatchError> {
-        if self.coord.integration_work_unit(task_id) == Some(work_unit_id) {
-            self.coord.take_integration(task_id);
+        if self.coord.processes().integration_work_unit(task_id) == Some(work_unit_id) {
+            self.coord.processes_mut().take_integration(task_id);
         }
         let Some(task) = self.store.get(task_id)? else {
             return Ok(());

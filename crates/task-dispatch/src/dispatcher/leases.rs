@@ -254,7 +254,7 @@ impl Dispatcher {
             }
             // Phase F5-fix2: run は終わったが WU の `checks` がまだ走っている（`checking`）。検査が
             // 延ばした lease（`review_timeout × (2n+1)`）より長引いても、検査の完了を受け取るまで回収しない。
-            let checking_run = self.coord.checking_run_of(task.id);
+            let checking_run = self.coord.processes().checking_run_of(task.id);
             if let Some(run_id) = checking_run {
                 let ttl = self.config.review_timeout + self.config.lease_grace;
                 match self.store.renew_lease(task.id, &run_id, ttl) {
@@ -271,7 +271,7 @@ impl Dispatcher {
             }
             // 2026-10-20 ADR: 段の統合の検査が走っている間は、lease が切れても回収しない（検査は
             // 1 件ごとに時間切れで必ず終わる。繰り返す時間切れは検査の失敗として扱う）。
-            if self.coord.is_integrating(task.id) {
+            if self.coord.processes().is_integrating(task.id) {
                 match self
                     .store
                     .extend_task_lease(task.id, self.integration_ttl())
@@ -535,11 +535,11 @@ impl Dispatcher {
         }
         // ADR-0074 D1.4/D1.6（Phase F2b）: Running でなくなった Task の統合も止める。Cancel なら
         // 未完了の WU を cancelled にし、WU の worktree とブランチを消す。
-        let integrating: Vec<TaskId> = self.coord.integrating_tasks();
+        let integrating: Vec<TaskId> = self.coord.processes().integrating_tasks();
         for id in integrating {
             let still_running =
                 matches!(self.store.get(id)?, Some(t) if t.status == Status::Running);
-            if !still_running && let Some(entry) = self.coord.take_integration(id) {
+            if !still_running && let Some(entry) = self.coord.processes_mut().take_integration(id) {
                 tracing::warn!(task_id = %id, "aborting the phase integration (task no longer running)");
                 entry.handle.abort();
                 self.supervisor.mark_just_aborted(id);
@@ -547,11 +547,11 @@ impl Dispatcher {
         }
         // Phase F5-fix2: Running でなくなった Task の WU の検査も止める（結果は捨てられるだけなので、
         // draining のインスタンスを待たせない）。
-        let checking: Vec<(String, TaskId)> = self.coord.checking_runs();
+        let checking: Vec<(String, TaskId)> = self.coord.processes().checking_runs();
         for (run_id, id) in checking {
             let still_running =
                 matches!(self.store.get(id)?, Some(t) if t.status == Status::Running);
-            if !still_running && let Some(entry) = self.coord.take_checks(&run_id) {
+            if !still_running && let Some(entry) = self.coord.processes_mut().take_checks(&run_id) {
                 tracing::warn!(task_id = %id, %run_id, "aborting the work unit checks (task no longer running)");
                 entry.handle.abort();
                 self.supervisor.mark_just_aborted(id);

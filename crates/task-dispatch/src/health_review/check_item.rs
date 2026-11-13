@@ -727,3 +727,7 @@ impl Dispatcher {
 #[cfg(test)]
 #[path = "check_item_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "target_base_tests.rs"]
+mod target_base_tests;

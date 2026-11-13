@@ -56,7 +56,19 @@ updated: 2026-11-13
 
 ## 証拠（提出時の HEAD で実行）
 
-EVIDENCE_PLACEHOLDER
+commit（件名）: 「phase 1: move the run table and lease supervision to RunSupervisor」「phase 1: keep run_supervisor out of the review dependency cycle」
+「phase 1: own-supervisor の進捗に検査の結果を書く」。
+
+- `bash scripts/dev/test-affected.sh`: exit 0。repo-health は verdict=pass fail_grade=0（new=1 は fail-grade でない）、nextest 3866 passed・11 skipped。
+  1 回目は deps.cycle で exit 1（`run_supervisor` が `crate::review` を使い、base の dispatcher・review・undeclared_artifacts の循環に 4 つ目の節点として入った）。
+  `ReviewEntry`・`RunSupervisor` が review の対象を型引数で受けるように直し（`Dispatcher` は `RunSupervisor<ReviewSubject>`）、2 回目で通った。
+  `structure_guard_run_supervisor` は `crate::review` の語も拒む。
+- `cargo nextest run -p task-dispatch`: 1811 passed（1 回目の commit の時点。試験の assertion は変えていない）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+- `python3 scripts/dev/check-architecture-map.py`: OK（1032 件）。
+- `grep` で `self.running` などの 7 field の直参照が `run_supervisor.rs` の外（CoS chat と棚卸しの別の struct の同名 field を除く）に 0 件、
+  `dispatcher.rs` の `Dispatcher` の field に 7 件のどれも無いことを確かめた。`max_infra_retries` と直接比べる式は crate の本体に 0 件（`infra_retry_after` の定義だけ）。
+- `sh "$CELERIS_WU_SCOPE_PATHS"`: 変更は `crates/task-dispatch/`・`agent-docs/adr/0082-dispatcher-module-split.md`・`docs/architecture-map.md`・この進捗だけ。
 
 ## 未解決事項
 

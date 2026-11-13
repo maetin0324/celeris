@@ -67,7 +67,7 @@ impl ProjectControllerRuntime {
 impl Dispatcher {
     /// `[budget_rates]` の換算単価を入れる（案件の日次上限・木の上限の判定が使う。ADR 2026-11-06-budget-usd-caps D2）。
     pub fn set_budget_rates(&mut self, rates: task_core::pricing::BudgetRates) {
-        self.stagnation.budget_rates = rates;
+        self.orchestration.set_budget_rates(rates);
     }
 
     /// controller を入れる（CoS chat の後に呼ぶ。CoS chat が無い構成では入らず `false`）。
@@ -77,7 +77,7 @@ impl Dispatcher {
         decider: Box<dyn ProjectDecider>,
         owner: String,
     ) -> bool {
-        let Some(launch) = self.cos_chat_launch.as_mut() else {
+        let Some(launch) = self.orchestration.launch_mut() else {
             return false;
         };
         launch.project_controller = Some(ProjectControllerRuntime {
@@ -97,8 +97,8 @@ impl Dispatcher {
     #[cfg(test)]
     pub(crate) fn set_project_controller_hook(&mut self, hook: BoundaryHook) {
         if let Some(rt) = self
-            .cos_chat_launch
-            .as_mut()
+            .orchestration
+            .launch_mut()
             .and_then(|l| l.project_controller.as_mut())
         {
             rt.hook = Some(hook);
@@ -109,8 +109,8 @@ impl Dispatcher {
     #[cfg(test)]
     pub(crate) fn set_project_controller_effect_fail(&mut self, hook: EffectFailHook) {
         if let Some(rt) = self
-            .cos_chat_launch
-            .as_mut()
+            .orchestration
+            .launch_mut()
             .and_then(|l| l.project_controller.as_mut())
         {
             rt.fail_effect = Some(hook);
@@ -120,8 +120,8 @@ impl Dispatcher {
     /// 試験・診断: 直前の tick の集計。
     #[cfg(test)]
     pub(crate) fn project_controller_last(&self) -> Option<ControllerTickStats> {
-        self.cos_chat_launch
-            .as_ref()
+        self.orchestration
+            .launch()
             .and_then(|l| l.project_controller.as_ref())
             .map(|rt| rt.last.clone())
     }
@@ -129,14 +129,14 @@ impl Dispatcher {
     /// tick の段（`tick_cron_jobs` から呼ぶ。draining・disk 不足では呼ばれない）。
     pub(crate) fn tick_project_controller(&mut self) {
         let now = self.now_utc();
-        let findings = self.stagnation.findings.clone();
+        let findings = self.orchestration.stagnation_findings().to_vec();
         let roles = self.config.roles.clone();
         let genres = self.config.genres.clone();
-        let rates = self.stagnation.budget_rates.clone();
+        let rates = self.orchestration.budget_rates().clone();
         // A3: その tick の領域 `project_controller` の宛先（mode の表は tick ごとに 1 回読む）。
         let access = if self
-            .cos_chat_launch
-            .as_ref()
+            .orchestration
+            .launch()
             .and_then(|l| l.project_controller.as_ref())
             .is_some_and(|rt| rt.settings.enabled)
         {
@@ -154,7 +154,7 @@ impl Dispatcher {
         } else {
             None
         };
-        let Some(launch) = self.cos_chat_launch.as_mut() else {
+        let Some(launch) = self.orchestration.launch_mut() else {
             return;
         };
         let Some(mut rt) = launch.project_controller.take() else {
@@ -177,7 +177,7 @@ impl Dispatcher {
             pass.stats.pass_micros = started.elapsed().as_micros() as u64;
             rt.last = pass.stats;
         }
-        if let Some(launch) = self.cos_chat_launch.as_mut() {
+        if let Some(launch) = self.orchestration.launch_mut() {
             launch.project_controller = Some(rt);
         }
     }

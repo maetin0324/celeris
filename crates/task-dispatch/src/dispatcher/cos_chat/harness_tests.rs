@@ -106,8 +106,8 @@ async fn run(d: &mut Dispatcher, store: &SqliteStore, thread: &str) -> task_core
         .active_run_id
         .expect("claimed run");
     let handle = d
-        .cos_chat_launch
-        .as_mut()
+        .orchestration
+        .launch_mut()
         .expect("launch")
         .running
         .remove(thread)
@@ -406,8 +406,8 @@ async fn run_any(
         .active_run_id
         .expect("claimed run");
     let handle = d
-        .cos_chat_launch
-        .as_mut()
+        .orchestration
+        .launch_mut()
         .expect("launch")
         .running
         .remove(thread)

@@ -15,7 +15,7 @@ impl Dispatcher {
         account_adapter: Option<AccountAdapter>,
         run_id: &str,
     ) {
-        let now = (self.now_unix_fn)();
+        let now = self.probes.now_unix();
         self.routing
             .quota_begin(account.zip(account_adapter), run_id, now);
     }

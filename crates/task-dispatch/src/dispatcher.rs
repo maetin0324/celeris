@@ -1054,18 +1054,21 @@ struct RunExtras {
 /// 手元で判定している review の 1 件（延期のときに持ち越す対象は `ReviewSubject`）。
 type ReviewEntry = crate::run_supervisor::ReviewEntry<ReviewSubject>;
 
-type EvalVersionProbe = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
+/// 保守の owner（TS の比較の状態は `ScriptCompareState`）。
+type Maintenance = crate::host_maintenance::HostMaintenance<dispatch_run::ScriptCompareState>;
+
+/// 案件の停滞の見張りと CoS chat の起動の待ちの owner（起動の状態は `CosChatLaunch`）。
+type Orchestration = ProjectOrchestration<cos_chat::launch::CosChatLaunch>;
 
 /// 実行の調整の owner（review の持ち越しは `ReviewSubject`、完了の channel は `Completion`）。
 type Coordination = ExecutionCoordination<ReviewSubject, Completion>;
 
 pub struct Dispatcher {
     store: Arc<dyn TaskStore>,
-    cos_chat_launch: Option<cos_chat::launch::CosChatLaunch>,
     config: DispatchConfig,
     /// ADR 2026-11-11 dispatcher-state-ownership D1: disk・scratch・build cache・repo target の掃除と、中止された
     /// task の作業場所の片付けの状態の owner（`crate::host_maintenance`。入口は `housekeeping.rs`・`maintenance.rs`）。
-    maint: crate::host_maintenance::HostMaintenance,
+    maint: Maintenance,
     #[cfg(test)]
     test_hooks: tests::hooks::TestHooks,
     /// ADR 2026-11-11 dispatcher-state-ownership D1: 実行中の run の表（run の集合の正本）・review run の表・
@@ -1076,11 +1079,9 @@ pub struct Dispatcher {
     /// process・完了の channel・tick・新しい仕事を受けるか・並列度・停滞の見張り）の owner（`crate::execution_coordination`）。
     /// run の集合は持たず、run を見る判断には `supervisor.run_keys()` を渡す。
     coord: Coordination,
-    /// 評価 run の harness の版の測り方（試験用差し替え。`None` なら `probe_harness_version`）。
-    eval_version_probe: Option<EvalVersionProbe>,
-    stagnation: tree_units::StagnationWatch,
-    /// ADR 2026-11-08-health-enforcement-loop D6: 実行中の全体棚卸し（cron の job ごとの Busy の印）。
-    health_inventory: cron_tick::inventory::InventoryRuns,
+    /// ADR 2026-11-11 dispatcher-state-ownership D1: 案件の停滞の見張りと CoS chat の起動の待ちの owner
+    /// （`crate::project_orchestration`）。`tree_units` と `cos_chat/launch` の書き込みは owner の method を通す。
+    orchestration: Orchestration,
     /// ADR 2026-10-15-mlsys-min D4: 外部 provider の credential 待ちの宣言（source ごと）と秘密の置き場。
     credential_gates: credential_gate::CredentialGates,
     /// ADR 2026-11-11 dispatcher-state-ownership D1: クラスタの接続・tunnel・job の poll の状態の owner。
@@ -1097,21 +1098,17 @@ pub struct Dispatcher {
     /// ADR 2026-10-15-mlsys-min-decision-assisted D4: credential 待ちの検証・再開（`credential_resume`）。
     /// 未設定なら何もしない。検証は別 thread（tick は DB を見るだけ）。
     credential_resumer: Option<Arc<crate::credential_resume::CredentialResumer>>,
-    /// 壁時計の Unix 秒（テストで差し替えられるようにした関数。既定は実時刻）。
-    now_unix_fn: Arc<dyn Fn() -> i64 + Send + Sync>,
+    /// ADR 2026-11-11 dispatcher-state-ownership D1: 本番の既定を持つ注入 port（壁時計・knowledge の到達性・
+    /// eval の harness の版）。owner はこれを持たず、入口が読んだ値を引数で受ける。
+    probes: ProbePorts,
     /// ADR-0041 D5: 面倒を見てよいタスクの述語（`None` なら全部）。`--mode verify` の煙試験でだけ使う。
     eligible: Option<TaskFilter>,
-    /// ADR-0052 D1（Phase 64）: 知識整理タスクを dispatch する直前に当てる到達性の検査
-    /// （既定は `task_worker::probe_models`。テストは `set_knowledge_probe` で差し替える）。
-    /// **LLM は呼ばない**（`GET <base_url>/models` の 1 回だけ）。
-    knowledge_probe: KnowledgeProbe,
-    script_compare: dispatch_run::ScriptCompareState,
 }
 
-/// ADR-0052 D1（Phase 65b で `bearer_token` を追加）: 到達性の検査のフック（差し替えられるようにして
-/// ある。既定は本物の HTTP GET）。第 2 引数は `[knowledge.langmem].api_key_secret` から解決した
-/// 平文のトークン（`llm-proxy` のように `/v1/models` が認証を要求する上流のため。値はログに出さない）。
-pub type KnowledgeProbe = Arc<dyn Fn(&str, Option<&str>) -> Reachability + Send + Sync>;
+/// ADR-0052 D1: 到達性の検査のフック（定義は `crate::probe_ports`。公開の path は変えない）。
+pub use crate::probe_ports::KnowledgeProbe;
+use crate::probe_ports::ProbePorts;
+use crate::project_orchestration::ProjectOrchestration;
 
 /// ADR-0052 D2: フォールバックする run に載せる上書き（`run_extras` の結果に混ぜる）。
 #[derive(Debug, Clone)]
@@ -1129,10 +1126,6 @@ const KNOWLEDGE_FALLBACK_MAX_TURNS: u32 = 8;
 const KNOWLEDGE_FALLBACK_MAX_WALL_SECS: u64 = 600;
 /// ADR-0052 D2: フォールバック run が書く候補ファイル（ワーカーから見た位置）。
 const KNOWLEDGE_CANDIDATES_REL: &str = "artifacts/knowledge-candidates.json";
-
-fn real_now_unix() -> i64 {
-    OffsetDateTime::now_utc().unix_timestamp()
-}
 
 impl Dispatcher {
     pub fn new(store: Arc<dyn TaskStore>, config: DispatchConfig) -> Self {
@@ -1165,16 +1158,13 @@ impl Dispatcher {
         };
         Self {
             store,
-            cos_chat_launch: None,
             config,
             maint: Default::default(),
             #[cfg(test)]
             test_hooks: Default::default(),
             supervisor: RunSupervisor::new(),
             coord: ExecutionCoordination::new(max_concurrency),
-            eval_version_probe: None,
-            stagnation: Default::default(),
-            health_inventory: Default::default(),
+            orchestration: Default::default(),
             credential_gates: credential_gate::CredentialGates::default(),
             cluster: ClusterRuntime::new(),
             orphan_takeover: None,
@@ -1182,18 +1172,14 @@ impl Dispatcher {
             publisher: None,
             routing,
             credential_resumer: None,
-            now_unix_fn: Arc::new(real_now_unix),
+            probes: ProbePorts::default(),
             eligible: None,
-            knowledge_probe: Arc::new(|base_url, bearer_token| {
-                task_worker::probe_models(base_url, task_worker::PROBE_TIMEOUT, bearer_token)
-            }),
-            script_compare: Default::default(),
         }
     }
 
     /// ADR-0052 D1: 到達性の検査を差し替える（テストは偽のローカルサーバも起こさずに済ませる）。
     pub fn set_knowledge_probe(&mut self, probe: KnowledgeProbe) {
-        self.knowledge_probe = probe;
+        self.probes.set_knowledge(probe);
         self.routing.clear_knowledge_probe_cache();
     }
 
@@ -1217,7 +1203,7 @@ impl Dispatcher {
         self.routing.knowledge_reachability(&base_url, now, || {
             let token = self.config.knowledge.langmem_api_key.clone();
             let started = Instant::now();
-            let outcome = (self.knowledge_probe)(&base_url, token.as_deref());
+            let outcome = self.probes.probe_knowledge(&base_url, token.as_deref());
             log_slow_step("knowledge_probe", started);
             tracing::debug!(%base_url, ?outcome, "knowledge: probed the langmem endpoint");
             outcome
@@ -1309,7 +1295,7 @@ impl Dispatcher {
             + self.supervisor.reviews().len()
             + self.coord.processes().in_flight()
             + self.routing.eval_run_count()
-            + self.health_inventory.in_flight()
+            + self.maint.health_inventory().in_flight()
     }
 
     /// ADR 2026-10-22-dynamic-config D2: 設定ファイルから組み直した `DispatchConfig` のうち、動的な欄を稼働中の
@@ -1398,7 +1384,7 @@ impl Dispatcher {
 
     /// テスト用: 壁時計の Unix 秒を差し替える（ADR-0024 D3 のスコア計算・cooldown の期限に使う）。
     pub fn set_now_unix_fn(&mut self, f: Arc<dyn Fn() -> i64 + Send + Sync>) {
-        self.now_unix_fn = f;
+        self.probes.set_now_unix(f);
     }
 
     /// ADR-0013 D4: tick ごとにデーモンのスナップショットを `watch` に送るようにする。
@@ -1531,7 +1517,7 @@ impl Dispatcher {
                 .values()
                 .filter(|review| on_source(&review.route))
                 .count()
-            + self.cos_chat_launch.as_ref().map_or(0, |chat| {
+            + self.orchestration.launch().map_or(0, |chat| {
                 chat.route_reservations
                     .values()
                     .filter(|(active, _)| active.as_ref() == source)
@@ -1603,7 +1589,7 @@ impl Dispatcher {
                 .values()
                 .filter(|e| matches(&e.account_adapter, &e.account))
                 .count()
-            + self.cos_chat_launch.as_ref().map_or(0, |chat| {
+            + self.orchestration.launch().map_or(0, |chat| {
                 chat.route_reservations
                     .values()
                     .filter(|(source, account)| {
@@ -1637,7 +1623,7 @@ impl Dispatcher {
         detail: Option<String>,
         observation: Option<RateLimitObservation>,
     ) {
-        let now = (self.now_unix_fn)();
+        let now = self.probes.now_unix();
         let Some(book) = self.account_book(adapter) else {
             return;
         };
@@ -1690,7 +1676,7 @@ impl Dispatcher {
 
     /// 再ログインの成功: 認証失敗の保持を解く（ADR 2026-10-17）。他の理由の cooldown は残す。
     pub fn record_account_login(&mut self, adapter: AccountAdapter, id: &str) {
-        let now = (self.now_unix_fn)();
+        let now = self.probes.now_unix();
         let Some(book) = self.account_book(adapter) else {
             return;
         };
@@ -1723,7 +1709,7 @@ impl Dispatcher {
         self.routing.clear_scan_cache();
         // ADR 2026-10-14-local-machine-settings D4: `max_concurrency` は次の tick から効く（store を 1 行読む）。
         self.refresh_max_concurrency();
-        let now = (self.now_unix_fn)();
+        let now = self.probes.now_unix();
         self.routing.expire_account_books(now);
         // drain_completions からも reviewer run が起動されるため、完了処理より先に判定する。
         self.refresh_disk_ready();
@@ -1810,7 +1796,7 @@ impl Dispatcher {
         steps.mark("cron_and_browser_prereq");
         if self.coord.accepting_new_work() && self.maint.disk_ready() {
             report.dispatched = self.dispatch_ready()?;
-            self.stagnation.waits_known = true; // ADR 2026-11-09-unscheduled-restart-hold D1: メモリの待ちが揃った。
+            self.orchestration.mark_waits_known(); // ADR 2026-11-09-unscheduled-restart-hold D1: メモリの待ちが揃った。
         }
         steps.mark_with("dispatch_ready", crate::phase_timing::take());
         // ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch）D3:
@@ -1931,8 +1917,8 @@ impl Dispatcher {
     fn cos_in_flight(&self) -> usize {
         self.supervisor.cos_run_count()
             + self
-                .cos_chat_launch
-                .as_ref()
+                .orchestration
+                .launch()
                 .map_or(0, |chat| chat.running.len())
     }
 
@@ -2056,8 +2042,8 @@ impl Dispatcher {
     fn is_idle(&self) -> Result<bool, DispatchError> {
         if !self.supervisor.is_idle()
             || self
-                .cos_chat_launch
-                .as_ref()
+                .orchestration
+                .launch()
                 .is_some_and(|chat| !chat.running.is_empty())
         {
             return Ok(false);

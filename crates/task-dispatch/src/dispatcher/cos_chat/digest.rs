@@ -624,7 +624,11 @@ impl Dispatcher {
         reads.frozen = true;
         let (script, runtime) = call;
         let store = launch.store.clone();
-        let ticket = self.script_compare.digest_shadows.ticket(&draft.pass_id);
+        let ticket = self
+            .maint
+            .script_compare()
+            .digest_shadows
+            .ticket(&draft.pass_id);
         self.spawn_compare(
             task_core::script_compare::ScriptDomain::CosDigest,
             &runtime,
@@ -692,7 +696,7 @@ impl Dispatcher {
         let pass_id = ulid::Ulid::new().to_string();
         #[cfg(test)]
         let pass_id = self
-            .script_compare
+            .test_hooks
             .next_digest_pass_id
             .take()
             .unwrap_or_else(|| ulid::Ulid::new().to_string());

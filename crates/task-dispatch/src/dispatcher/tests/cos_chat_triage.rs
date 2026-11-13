@@ -152,8 +152,8 @@ impl Fixture {
         };
         let handle = self
             .d
-            .cos_chat_launch
-            .as_mut()
+            .orchestration
+            .launch_mut()
             .expect("launch")
             .running
             .remove(&thread);
@@ -605,8 +605,8 @@ async fn cos_chat_triage_routes_items_to_the_project_or_general_cos_thread() {
     f.tick();
     assert_eq!(f.count("SELECT COUNT(*) FROM chat_threads"), 2);
     let handles: Vec<_> =
-        f.d.cos_chat_launch
-            .as_mut()
+        f.d.orchestration
+            .launch_mut()
             .expect("launch")
             .running
             .drain()
@@ -716,8 +716,8 @@ async fn cos_chat_triage_relay_after_escalation_rejudges_covered_items_after_the
             .expect("escalate")
     );
     let builds = |f: &Fixture| {
-        f.d.cos_chat_launch
-            .as_ref()
+        f.d.orchestration
+            .launch()
             .expect("launch")
             .triage
             .relay_inbox_builds
@@ -788,8 +788,8 @@ async fn cos_chat_triage_relay_for_a_closed_wait_builds_the_inbox_once() {
     f.tick();
     assert!(f.join_inbox().await, "the relay's own queued run");
     let builds = |f: &Fixture| {
-        f.d.cos_chat_launch
-            .as_ref()
+        f.d.orchestration
+            .launch()
             .expect("launch")
             .triage
             .relay_inbox_builds
@@ -901,8 +901,8 @@ async fn cos_chat_triage_snapshot_defers_concurrent_root_without_loss_or_duplica
         .human_inbox_touching(None, &ctx, f.d.now_utc(), &|_, _| Vec::new(), &ids)
         .expect("inbox");
     let policy =
-        &f.d.cos_chat_launch
-            .as_ref()
+        &f.d.orchestration
+            .launch()
             .expect("launch")
             .config
             .triage

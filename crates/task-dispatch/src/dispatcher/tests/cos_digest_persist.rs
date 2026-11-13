@@ -670,7 +670,10 @@ async fn cos_digest_persist_reconcile_skips_live_shadow() {
         2
     );
     // Force a reconcile on the next tick while the shadow still hangs.
-    f.d.script_compare.digest_shadows.force_reconcile_for_test();
+    f.d.maint
+        .script_compare()
+        .digest_shadows
+        .force_reconcile_for_test();
     f.tick();
     assert_eq!(
         f.store.cos_digest_shadow_pending().expect("outbox").len(),

@@ -661,7 +661,7 @@ impl Dispatcher {
         let counters = task_ops::tree::tree_counters(
             self.store.as_ref(),
             root_id,
-            &self.stagnation.budget_rates,
+            self.orchestration.budget_rates(),
         )
         .map_err(ops_to_store)?;
         let open_decisions = self

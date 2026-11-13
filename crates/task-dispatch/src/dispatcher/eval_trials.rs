@@ -751,9 +751,8 @@ impl Dispatcher {
     /// harness の版（実行 file の `--version`）。生の出力と major の両方を返す
     /// （記録するのは生の出力。major は `task_core::routing_evidence::harness_version_major`）。
     fn eval_harness_version(&self, harness_id: &str) -> Option<String> {
-        if let Some(probe) = &self.eval_version_probe {
-            let raw = probe(harness_id)?;
-            return Some(raw);
+        if let Some(raw) = self.probes.probe_eval_version(harness_id) {
+            return raw;
         }
         let raw = probe_harness_version(harness_id)?;
         // major が出せるなら生の出力の後ろに添える（付記 D4: 両方を記録する）。
@@ -1197,7 +1196,7 @@ impl Dispatcher {
     where
         F: Fn(&str) -> Option<String> + Send + Sync + 'static,
     {
-        self.eval_version_probe = Some(Arc::new(probe));
+        self.probes.set_eval_version(Arc::new(probe));
     }
 }
 

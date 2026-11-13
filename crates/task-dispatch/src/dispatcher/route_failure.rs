@@ -79,7 +79,7 @@ impl Dispatcher {
         reason: &str,
         outcome: &ProviderOutcome,
     ) -> Event {
-        let now = (self.now_unix_fn)();
+        let now = self.probes.now_unix();
         let fallback_secs = match outcome {
             ProviderOutcome::Throttled { retry_after } if retry_after.as_secs() > 0 => {
                 retry_after.as_secs()
@@ -124,7 +124,7 @@ impl Dispatcher {
         let Some(cfg) = &self.config.accounts else {
             return;
         };
-        let now = (self.now_unix_fn)();
+        let now = self.probes.now_unix();
         let fallback_secs = match outcome {
             ProviderOutcome::Throttled { retry_after } if retry_after.as_secs() > 0 => {
                 retry_after.as_secs()
@@ -298,7 +298,10 @@ impl Dispatcher {
                 let delay = task_ops::derive::infra_backoff_delay(attempts.infra_retries + 1);
                 FailureAction::WaitRetry {
                     lane,
-                    not_before: (self.now_unix_fn)().saturating_add(delay.as_secs() as i64),
+                    not_before: self
+                        .probes
+                        .now_unix()
+                        .saturating_add(delay.as_secs() as i64),
                 }
             }
             EscalationDecision::Escalate { to } => FailureAction::Escalate { to },

@@ -115,7 +115,8 @@ async fn health_inventory_running_mark_counts_in_flight_and_skips_overlap() {
         ..
     } = setup();
     let (release, wait) = std::sync::mpsc::channel::<()>();
-    d.health_inventory
+    d.maint
+        .health_inventory_mut()
         .start(job.id, move || {
             let _ = wait.recv();
         })
@@ -129,11 +130,11 @@ async fn health_inventory_running_mark_counts_in_flight_and_skips_overlap() {
     assert_eq!(runs[0].outcome, CronRunOutcome::SkippedOverlap, "{runs:?}");
 
     release.send(()).unwrap();
-    d.health_inventory.join_all().await;
+    d.maint.health_inventory_mut().join_all().await;
     assert_eq!(d.in_flight(), 0);
     *clock.lock().unwrap() = at("2026-11-09T02:00:30Z");
     d.tick().unwrap();
-    d.health_inventory.join_all().await;
+    d.maint.health_inventory_mut().join_all().await;
     let runs = store.cron_job_runs(job.id, None).unwrap();
     assert_eq!(runs.len(), 2, "{runs:?}");
     let created = runs
@@ -209,10 +210,10 @@ async fn health_inventory_does_not_call_llm() {
 
     *clock.lock().unwrap() = at("2026-11-09T01:00:30Z");
     d.tick().unwrap();
-    d.health_inventory.join_all().await;
+    d.maint.health_inventory_mut().join_all().await;
     *clock.lock().unwrap() = at("2026-11-09T01:01:30Z");
     d.tick().unwrap();
-    d.health_inventory.join_all().await;
+    d.maint.health_inventory_mut().join_all().await;
 
     let fired = store
         .health_inventory_fire_counts(job.id, at("2026-11-09T01:00:00Z"))

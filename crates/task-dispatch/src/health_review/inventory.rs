@@ -5,7 +5,7 @@
 //!   repo を読み、[`InventoryFire::run`] を tick の外（`spawn_blocking`）で始める。`CronJobRun.detail` には始めたこと
 //!   （案件と repo の数）だけを書き、評価・省略・対象外の数の正本は表 `health_inventory_runs` の行の集計
 //!   （`SqliteStore::health_inventory_fire_counts`）。
-//! - [`InventoryRuns`]: Busy の印（job id → 実行中の `JoinHandle`）。Dispatcher の欄で、`in_flight` に数えるので、
+//! - [`InventoryRuns`]: Busy の印（job id → 実行中の `JoinHandle`）。`HostMaintenance` の欄で、`in_flight` に数えるので、
 //!   draining の instance は棚卸しの終わりを待ってから exit する。
 //! - [`InventoryFire::inventory_repo`]: 1 repo の差分検査。既定の branch の HEAD を読む（ref・作業ツリーは変えない）。
 //!   検査器の選択と remote workspace の除外は `repo_facts` → `applicability` だけで決める（`celeris::delivery` の
@@ -19,7 +19,6 @@
 //!
 //! LLM・run・chat を起こさない（I4）。起票は draft の task だけで、計画・子 task・run を作らない。
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -38,7 +37,6 @@ use task_ops::health_debt::{
     FiledHealthDebts, HealthDebtInput, MAX_DEBTS_PER_FIRE, file_health_debts,
 };
 use time::OffsetDateTime;
-use tokio::task::JoinHandle;
 use ulid::Ulid;
 
 use crate::dispatcher::cos_chat::review::CosReviewSink;
@@ -46,49 +44,12 @@ use crate::health_review::gate::{bundled_checker, run_health_check_with_details}
 use crate::health_review::input::HEALTH_INPUT_TIMEOUT;
 use crate::health_review::policy::git_stdout;
 
-/// Busy の印: job ごとの実行中の棚卸し（Dispatcher の欄 `health_inventory`）。プロセス内メモリのみ（再起動の後は
-/// 走っていない。次の発火で同じ予定時刻の行が無い repo から評価し直す）。
-#[derive(Debug, Default)]
-pub struct InventoryRuns {
-    running: HashMap<CronJobId, JoinHandle<()>>,
-}
+/// Busy の印（定義と置き場は `HostMaintenance`。ADR 2026-11-11 dispatcher-state-ownership D1）。
+pub use crate::host_maintenance::InventoryRuns;
 
-impl InventoryRuns {
-    /// 終わっていない棚卸しの数（`Dispatcher::in_flight` の 1 項）。
-    pub fn in_flight(&self) -> usize {
-        self.running.values().filter(|h| !h.is_finished()).count()
-    }
-
-    /// `job` の棚卸しが走っているか（終わった印はここで消す）。
-    fn is_running(&mut self, job: CronJobId) -> bool {
-        self.running.retain(|_, handle| !handle.is_finished());
-        self.running.contains_key(&job)
-    }
-
-    /// tick の sink に渡す口（印と、起票に使う `[[roles]]`・`[[genres]]` を持つ tick の文脈）。
-    pub(crate) fn port<'a>(&'a mut self, ctx: &'a CronFireContext<'a>) -> Port<'a> {
-        Port { runs: self, ctx }
-    }
-
-    /// `work` を tick の外（tokio の blocking pool）で始め、`job` の印にする。
-    pub(crate) fn start(
-        &mut self,
-        job: CronJobId,
-        work: impl FnOnce() + Send + 'static,
-    ) -> Result<(), String> {
-        let runtime = tokio::runtime::Handle::try_current()
-            .map_err(|e| format!("no tokio runtime for the health inventory: {e}"))?;
-        self.running.insert(job, runtime.spawn_blocking(work));
-        Ok(())
-    }
-
-    /// 試験用: 走っている棚卸しの終わりを待つ。
-    #[cfg(test)]
-    pub(crate) async fn join_all(&mut self) {
-        for (_, handle) in self.running.drain() {
-            let _ = handle.await;
-        }
-    }
+/// tick の sink に渡す口（印と、起票に使う `[[roles]]`・`[[genres]]` を持つ tick の文脈）。
+pub(crate) fn port<'a>(runs: &'a mut InventoryRuns, ctx: &'a CronFireContext<'a>) -> Port<'a> {
+    Port { runs, ctx }
 }
 
 /// `CosReviewSink` の欄 `inventory`: Busy の印と tick の文脈（起票は cron の task と同じ role・genre の既定を使う）。

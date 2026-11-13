@@ -360,7 +360,7 @@ async fn fire(
 ) {
     *clock.lock().unwrap() = at(&format!("2026-11-09T{hour:02}:00:30Z"));
     d.tick().unwrap();
-    d.health_inventory.join_all().await;
+    d.maint.health_inventory_mut().join_all().await;
     let runs = store.cron_job_runs(job, None).unwrap();
     assert_eq!(runs.len(), usize::from(hour), "{runs:?}");
 }

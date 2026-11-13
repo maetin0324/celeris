@@ -165,8 +165,8 @@ impl Fixture {
     async fn wait_finished(&mut self, thread: &str) {
         let handle = self
             .d
-            .cos_chat_launch
-            .as_mut()
+            .orchestration
+            .launch_mut()
             .expect("launch")
             .running
             .get_mut(thread)
@@ -178,7 +178,7 @@ impl Fixture {
     }
 
     fn slot_held(&self, thread: &str) -> bool {
-        let launch = self.d.cos_chat_launch.as_ref().expect("launch");
+        let launch = self.d.orchestration.launch().expect("launch");
         launch.running.contains_key(thread) || launch.route_reservations.contains_key(thread)
     }
 

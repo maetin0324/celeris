@@ -77,47 +77,44 @@ pub(in crate::dispatcher) struct ScriptCompareState {
     lane_canary: script_canary::LaneCanary,
     /// ADR 2026-11-03-cos-digest-persist: `cos_digest` の影の outbox を閉じる task と再処理の要否。
     pub(in crate::dispatcher) digest_shadows: super::cos_chat::digest::CosDigestShadows,
-    /// 試験専用: 次の `cos_digest` の pass の id（canary の選択は pass id の hash で決まるので、側を決めて試す）。
-    #[cfg(test)]
-    pub(in crate::dispatcher) next_digest_pass_id: Option<String>,
 }
 
 impl Dispatcher {
     /// mode の表と記録の store を渡す（daemon は `[script]` の有無によらず渡す。渡さなければ compare は働かない）。
     pub fn set_script_domain_store(&mut self, store: Arc<dyn ScriptDomainStore>) {
-        self.script_compare.store = Some(store);
-        self.script_compare.read_at_tick = None;
+        self.maint.script_compare_mut().store = Some(store);
+        self.maint.script_compare_mut().read_at_tick = None;
     }
 
     /// TS 制御層の判定の口を渡す（`None` で外す）。無いまま mode が `compare` なら `unavailable` を記録する。
     /// bundle 1 つの口は [`SingleBundleSource`] で包む（generation の `bundle_sha256` と同じときだけ呼ぶ）。
     pub fn set_policy_script(&mut self, script: Option<Arc<dyn PolicyScript>>) {
-        self.script_compare.script =
+        self.maint.script_compare_mut().script =
             script.map(|s| Arc::new(SingleBundleSource(s)) as Arc<dyn PolicyScriptSource>);
     }
 
     /// generation ごとの口を渡す（付記 S5-2。daemon の generation の登録簿）。mode の CAS の後に読んだ行の
     /// generation へ送り、切替の前に送った要求は元の generation で終わる。
     pub fn set_policy_script_source(&mut self, source: Option<Arc<dyn PolicyScriptSource>>) {
-        self.script_compare.script = source;
+        self.maint.script_compare_mut().script = source;
     }
 
     /// この tick の残りで mode の行を読み直す（script-guard が記録と同じ transaction で戻したとき）。
     pub(in crate::dispatcher) fn script_compare_invalidate_modes(&mut self) {
-        self.script_compare.read_at_tick = None;
+        self.maint.script_compare_mut().read_at_tick = None;
     }
 
     /// ADR 2026-11-03-cos-digest-persist 3: この process の task が閉じない `cos_digest` の影の outbox の行を
     /// `unavailable` の記録で閉じる（起動の後と、影が記録を書けずに終わった後だけ store を読む）。
     pub(crate) fn cos_digest_shadow_reconcile(&self, store: &task_core::SqliteStore) {
-        if self.script_compare.store.is_some() {
-            self.script_compare.digest_shadows.reconcile(store);
+        if self.maint.script_compare().store.is_some() {
+            self.maint.script_compare().digest_shadows.reconcile(store);
         }
     }
 
     /// 走っている compare がすべて終わるまで待つ（試験と停止の前の片付け用）。
     pub async fn wait_script_compares(&mut self) {
-        for handle in std::mem::take(&mut self.script_compare.in_flight) {
+        for handle in std::mem::take(&mut self.maint.script_compare_mut().in_flight) {
             if let Err(e) = handle.await {
                 tracing::warn!(error = %e, "script compare task failed");
             }
@@ -127,7 +124,7 @@ impl Dispatcher {
     /// 走っている compare を打ち切って待つ（試験で「dispatcher が落ちた」を作る）。
     #[cfg(test)]
     pub(in crate::dispatcher) async fn abort_script_compares(&mut self) {
-        for handle in std::mem::take(&mut self.script_compare.in_flight) {
+        for handle in std::mem::take(&mut self.maint.script_compare_mut().in_flight) {
             handle.abort();
             let _ = handle.await;
         }
@@ -135,22 +132,23 @@ impl Dispatcher {
 
     /// 付記 S2-4: mode を tick ごとに 1 回だけ読む。
     fn refresh_script_modes(&mut self) {
-        if self.script_compare.read_at_tick == Some(self.coord.ticks()) {
+        if self.maint.script_compare().read_at_tick == Some(self.coord.ticks()) {
             return;
         }
         if self
-            .script_compare
+            .maint
+            .script_compare()
             .read_at_tick
             .is_none_or(|t| t != self.coord.ticks())
         {
-            self.script_compare.lane_canary.clear();
+            self.maint.script_compare_mut().lane_canary.clear();
         }
-        self.script_compare.read_at_tick = Some(self.coord.ticks());
-        let Some(store) = &self.script_compare.store else {
-            self.script_compare.modes.clear();
+        self.maint.script_compare_mut().read_at_tick = Some(self.coord.ticks());
+        let Some(store) = &self.maint.script_compare().store else {
+            self.maint.script_compare_mut().modes.clear();
             return;
         };
-        self.script_compare.modes = match store.script_domain_modes() {
+        self.maint.script_compare_mut().modes = match store.script_domain_modes() {
             Ok(rows) => rows,
             Err(e) => {
                 tracing::warn!(error = %e, "script domain modes unreadable; treating as rust");
@@ -193,7 +191,7 @@ impl Dispatcher {
     pub(in crate::dispatcher) fn script_compare_log_store(
         &self,
     ) -> Option<Arc<dyn ScriptDomainStore>> {
-        self.script_compare.store.clone()
+        self.maint.script_compare().store.clone()
     }
 
     /// mode が `modes` のどれかで generation の id があれば宛先を返す（付記 S4-14: `cos_digest` は `ts` も）。
@@ -204,7 +202,8 @@ impl Dispatcher {
     ) -> Option<CompareTarget> {
         self.refresh_script_modes();
         let row = self
-            .script_compare
+            .maint
+            .script_compare()
             .modes
             .iter()
             .find(|r| r.domain == domain)?;
@@ -213,7 +212,8 @@ impl Dispatcher {
         }
         // 付記 S5-6: 戻しを書けなかった領域は `rust`。
         if self
-            .script_compare
+            .maint
+            .script_compare()
             .pending_rollbacks
             .iter()
             .any(|p| p.domain == domain)
@@ -226,7 +226,7 @@ impl Dispatcher {
             row.version,
             row.canary_bps,
         );
-        let store = self.script_compare.store.clone()?;
+        let store = self.maint.script_compare().store.clone()?;
         let generation_id = row.generation_id.clone()?;
         let generation = match store.script_generation_get(&generation_id) {
             Ok(g) => g,
@@ -239,7 +239,7 @@ impl Dispatcher {
             .as_ref()
             .map(|g| (g.bundle_sha256.clone(), g.host_api.clone()))
             .unwrap_or_default();
-        let pinned = match (&generation, &self.script_compare.script) {
+        let pinned = match (&generation, &self.maint.script_compare().script) {
             (None, _) => Err(format!("script generation `{generation_id}` not found")),
             (Some(g), _) if g.state != ScriptGenerationState::Active => {
                 Err(format!("script generation `{generation_id}` is not active"))
@@ -288,8 +288,11 @@ impl Dispatcher {
         runtime: &tokio::runtime::Handle,
         compare: impl std::future::Future<Output = ()> + Send + 'static,
     ) {
-        self.script_compare.in_flight.retain(|h| !h.is_finished());
-        if self.script_compare.in_flight.len() >= MAX_IN_FLIGHT_COMPARES {
+        self.maint
+            .script_compare_mut()
+            .in_flight
+            .retain(|h| !h.is_finished());
+        if self.maint.script_compare().in_flight.len() >= MAX_IN_FLIGHT_COMPARES {
             tracing::warn!(
                 domain = domain.as_str(),
                 "too many script compares in flight; compare skipped"
@@ -297,7 +300,7 @@ impl Dispatcher {
             return;
         }
         let handle = runtime.spawn(compare);
-        self.script_compare.in_flight.push(handle);
+        self.maint.script_compare_mut().in_flight.push(handle);
     }
 }
 

@@ -21,8 +21,8 @@ impl Fixture {
 
     fn launch_skip(&self, thread: &str) -> Option<TriageSkip> {
         self.d
-            .cos_chat_launch
-            .as_ref()
+            .orchestration
+            .launch()
             .expect("launch")
             .triage
             .launch_skips

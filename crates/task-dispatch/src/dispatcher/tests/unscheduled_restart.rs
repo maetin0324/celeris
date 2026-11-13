@@ -45,8 +45,8 @@ fn advance(clock: &StdMutex<OffsetDateTime>, secs: i64) {
 
 fn unscheduled(d: &Dispatcher) -> Vec<TaskId> {
     let mut ids: Vec<TaskId> = d
-        .stagnation
-        .findings
+        .orchestration
+        .stagnation_findings()
         .iter()
         .filter(|f| f.kind == StagnationKind::TaskUnscheduled)
         .filter_map(|f| f.task_id)
@@ -125,7 +125,11 @@ async fn unscheduled_restart_first_tick_skips_parent_waiting_for_children_but_re
 
     let report = d.tick().unwrap();
     assert_eq!(report.dispatched, 0);
-    assert!(unscheduled(&d).is_empty(), "{:?}", d.stagnation.findings);
+    assert!(
+        unscheduled(&d).is_empty(),
+        "{:?}",
+        d.orchestration.stagnation_findings()
+    );
     assert!(
         !d.stagnation_known(),
         "the first tick holds the stagnation check"
@@ -163,7 +167,11 @@ async fn unscheduled_restart_dependency_integration_wait_is_not_reported() {
     );
 
     assert_eq!(d.tick().unwrap().dispatched, 0);
-    assert!(unscheduled(&d).is_empty(), "{:?}", d.stagnation.findings);
+    assert!(
+        unscheduled(&d).is_empty(),
+        "{:?}",
+        d.orchestration.stagnation_findings()
+    );
     assert!(!d.stagnation_known());
     assert!(matches!(
         memory_wait(&d, dependent.id),
@@ -173,6 +181,10 @@ async fn unscheduled_restart_dependency_integration_wait_is_not_reported() {
         advance(&clock, 60);
         d.tick().unwrap();
         assert!(d.stagnation_known());
-        assert!(unscheduled(&d).is_empty(), "{:?}", d.stagnation.findings);
+        assert!(
+            unscheduled(&d).is_empty(),
+            "{:?}",
+            d.orchestration.stagnation_findings()
+        );
     }
 }

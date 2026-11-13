@@ -254,7 +254,7 @@ pub(super) enum ClaimSource {
 impl Dispatcher {
     /// Install the concrete chat store. It must be the same database as `TaskStore`.
     pub fn set_cos_chat_launch(&mut self, store: Arc<SqliteStore>, config: CosChatLaunchConfig) {
-        self.cos_chat_launch = Some(CosChatLaunch {
+        self.orchestration.install_launch(CosChatLaunch {
             store,
             config,
             run_configs: HashMap::new(),
@@ -273,19 +273,19 @@ impl Dispatcher {
     /// Unlike `enabled=false`, removing the pipeline also omits reconciliation,
     /// fallback and root-done processing. Call before the first tick.
     pub fn disable_cos_chat_for_verify(&mut self) {
-        self.cos_chat_launch = None;
+        self.orchestration.remove_launch();
     }
 
     /// Change only future runs; keep handles, capacity reservations and triage state intact.
     pub fn reload_cos_chat_launch(&mut self, config: CosChatLaunchConfig) {
-        if let Some(launch) = &mut self.cos_chat_launch {
+        if let Some(launch) = self.orchestration.launch_mut() {
             launch.config = config;
         }
     }
 
     /// One non-blocking tick: each eligible thread may start at most one run.
     pub(crate) fn tick_cos_chat_launch(&mut self) -> Vec<(&'static str, u64)> {
-        let Some(mut launch) = self.cos_chat_launch.take() else {
+        let Some(mut launch) = self.orchestration.take_launch() else {
             return Vec::new();
         };
         let mut parts: Vec<(&'static str, u64)> = Vec::new();
@@ -368,7 +368,7 @@ impl Dispatcher {
                     || retries.iter().any(|retry| &retry.thread_id == thread)
             });
         }
-        self.cos_chat_launch = Some(launch);
+        self.orchestration.restore_launch(launch);
         parts.extend(root_done_parts);
         parts
     }

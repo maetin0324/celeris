@@ -5,7 +5,11 @@
 /// 状態を `Dispatcher` から移した owner の unit は、自分の struct をこの一覧に足す。
 const OWNER_STRUCTS: &[(&str, &str)] = &[
     ("ClusterRuntime", include_str!("../../cluster_runtime.rs")),
-    ("HostMaintenance", include_str!("../../host_maintenance.rs")),
+    (
+        "HostMaintenance<C>",
+        include_str!("../../host_maintenance.rs"),
+    ),
+    ("InventoryRuns", include_str!("../../host_maintenance.rs")),
     ("RoutingRuntime", include_str!("../../routing_runtime.rs")),
     ("QuotaBook", include_str!("../../routing_runtime/quota.rs")),
     ("RunSupervisor<S>", include_str!("../../run_supervisor.rs")),
@@ -21,6 +25,15 @@ const OWNER_STRUCTS: &[(&str, &str)] = &[
         "LivenessWatch",
         include_str!("../../execution_coordination.rs"),
     ),
+    (
+        "ProjectOrchestration<L>",
+        include_str!("../../project_orchestration.rs"),
+    ),
+    (
+        "StagnationWatch",
+        include_str!("../../project_orchestration.rs"),
+    ),
+    ("ProbePorts", include_str!("../../probe_ports.rs")),
 ];
 
 /// `src` の `struct <name> {` の本体（次の行頭の `}` まで）の行のうち、`test` を条件に含む `#[cfg(...)]` 属性の数。

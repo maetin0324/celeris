@@ -5,7 +5,7 @@
 //! `CARGO_TARGET_DIR` だけを持つ。
 
 use super::*;
-use crate::host_maintenance::{HostMaintenance, MaintenanceInputs};
+use crate::host_maintenance::MaintenanceInputs;
 
 impl Dispatcher {
     /// ADR-0040 D3 / ADR-0041 D5: `--mode verify` の煙試験インスタンスか（`set_eligible_tasks` が目印。celeris は
@@ -53,7 +53,7 @@ impl Dispatcher {
         }
     }
     /// owner と、owner の外の値（store・config の値・注入時計・verify の印）を分けて借りる。
-    pub(super) fn maintenance_parts(&mut self) -> (&mut HostMaintenance, MaintenanceInputs<'_>) {
+    pub(super) fn maintenance_parts(&mut self) -> (&mut Maintenance, MaintenanceInputs<'_>) {
         let now = self.now_utc();
         let verify_smoke = self.verify_smoke_only();
         (

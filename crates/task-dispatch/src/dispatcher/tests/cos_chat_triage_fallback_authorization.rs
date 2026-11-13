@@ -97,8 +97,8 @@ async fn cos_chat_authorization_safety_net_when_no_run_starts() {
 #[tokio::test]
 async fn cos_chat_authorization_safety_net_is_configurable() {
     let mut f = fixture(true);
-    f.d.cos_chat_launch
-        .as_mut()
+    f.d.orchestration
+        .launch_mut()
         .expect("launch")
         .config
         .triage
@@ -157,8 +157,8 @@ async fn cos_chat_authorization_stopped_run_routes_once() {
     f.tick();
     let run: String = f.count_text("SELECT run_id FROM chat_runs");
     // The person stopped the run (the worker handle is dropped: no outcome is written).
-    f.d.cos_chat_launch
-        .as_mut()
+    f.d.orchestration
+        .launch_mut()
         .expect("launch")
         .running
         .clear();

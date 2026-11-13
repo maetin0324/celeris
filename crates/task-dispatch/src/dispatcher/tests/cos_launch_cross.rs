@@ -72,7 +72,7 @@ fn message_count(store: &SqliteStore, thread: &str) -> usize {
 #[tokio::test]
 async fn route_failure_run_is_not_launched_and_does_not_stop_the_project_budget() {
     let mut f = fake_fixture();
-    let until = (f.d.now_unix_fn)() + 3600;
+    let until = f.d.probes.now_unix() + 3600;
     f.d.routing.insert_source_cooldown_for_test(
         "p1".into(),
         crate::accounts::AccountCooldown {
@@ -312,7 +312,7 @@ fn assert_still_waiting(d: &mut Dispatcher, store: &SqliteStore, t: &str, run: &
 /// 終わりを待ってから（出来事待ち）次の tick に進む。
 async fn launch_after_release(d: &mut Dispatcher, t: &str) {
     for _ in 0..6 {
-        let launch = d.cos_chat_launch.as_mut().expect("launch");
+        let launch = d.orchestration.launch_mut().expect("launch");
         if launch.running.contains_key(t) {
             return;
         }
@@ -324,7 +324,7 @@ async fn launch_after_release(d: &mut Dispatcher, t: &str) {
         advance(d, 1);
         d.tick_cos_chat_launch();
     }
-    assert!(d.cos_chat_launch.as_ref().unwrap().running.contains_key(t));
+    assert!(d.orchestration.launch().unwrap().running.contains_key(t));
 }
 
 fn assert_launched_with_usage(store: &SqliteStore, t: &str, run: &str, d: &Dispatcher) {
@@ -491,7 +491,7 @@ async fn a_real_account_admits_cos_at_the_limit_plus_one_and_waits_beyond_it() {
     d.set_account_limit("claude-code", "a", Some(2)).unwrap();
     advance(&d, 1);
     d.tick_cos_chat_launch();
-    assert!(d.cos_chat_launch.as_ref().unwrap().running.contains_key(&t));
+    assert!(d.orchestration.launch().unwrap().running.contains_key(&t));
     assert_eq!(run_of(&store, &t).id, waiting.id);
     gates.cos.add_permits(1);
     join(&mut d, &t).await;
@@ -509,8 +509,8 @@ async fn max_cos_runs_makes_the_next_input_wait_without_a_failed_run() {
     post(&store, &first, "a1");
     d.tick_cos_chat_launch();
     assert!(
-        d.cos_chat_launch
-            .as_ref()
+        d.orchestration
+            .launch()
             .unwrap()
             .running
             .contains_key(&first)
@@ -532,8 +532,8 @@ async fn max_cos_runs_makes_the_next_input_wait_without_a_failed_run() {
     d.tick_cos_chat_launch();
     let launched = run_of(&store, &second);
     assert!(
-        d.cos_chat_launch
-            .as_ref()
+        d.orchestration
+            .launch()
             .unwrap()
             .running
             .contains_key(&second)
@@ -566,7 +566,7 @@ async fn a_restart_while_waiting_closes_before_launch_and_the_input_launches_lat
     assert!(waiting.launched_at.is_none());
 
     // 再起動: CoS 起動側の表（枠待ちの run 一覧）は空になり、前の持ち主の lease は切れている。
-    let config = d.cos_chat_launch.as_ref().unwrap().config.clone();
+    let config = d.orchestration.launch().unwrap().config.clone();
     d.set_cos_chat_launch(store.clone(), config);
     d.set_orphan_takeover(crate::orphan::OrphanTakeover {
         instance_id: "this-daemon".into(),

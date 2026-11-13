@@ -644,8 +644,8 @@ impl Recorder {
             }
             assert!(captures.len() < 5, "{name}: the digest does not drain");
             s.f.d
-                .cos_chat_launch
-                .as_mut()
+                .orchestration
+                .launch_mut()
                 .expect("launch")
                 .triage
                 .digest_due = true;
@@ -716,8 +716,8 @@ impl Recorder {
         // Idempotent: another pass writes nothing more.
         let before = mark(&s.f);
         s.f.d
-            .cos_chat_launch
-            .as_mut()
+            .orchestration
+            .launch_mut()
             .expect("launch")
             .triage
             .digest_due = true;
@@ -734,7 +734,7 @@ impl Recorder {
 
 /// 生きている CoS の run をすべて待つ（worker の task は await している間だけ進む）。
 async fn trace_finish_runs(f: &mut Fixture) {
-    let launch = f.d.cos_chat_launch.as_mut().expect("launch");
+    let launch = f.d.orchestration.launch_mut().expect("launch");
     let handles: Vec<_> = launch.running.drain().map(|(_, handle)| handle).collect();
     for handle in handles {
         tokio::time::timeout(std::time::Duration::from_secs(30), handle)

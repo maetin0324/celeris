@@ -321,7 +321,7 @@ async fn a_held_run_has_a_wait_reason_and_never_becomes_task_unscheduled() {
             .iter()
             .any(|x| x.kind == StagnationKind::TaskUnscheduled && x.task_id == Some(b.id))
     };
-    assert!(!unscheduled(&f.d.stagnation.findings));
+    assert!(!unscheduled(&f.d.orchestration.stagnation_findings()));
     let none = std::collections::HashSet::new();
     let facts = |memory: &task_ops::wait::MemoryWaits| {
         task_ops::stagnation::gather(f.store.as_ref(), None, &policy, later, &none, &none, memory)

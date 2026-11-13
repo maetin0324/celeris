@@ -51,8 +51,8 @@ impl Fixture {
 
     fn set_unavailable(&mut self, reason: &str) {
         self.d
-            .cos_chat_launch
-            .as_mut()
+            .orchestration
+            .launch_mut()
             .expect("launch")
             .config
             .unavailable_reason = Some(reason.into());
@@ -60,7 +60,7 @@ impl Fixture {
 
     /// A daemon restart: the process-local launch state is rebuilt from config.
     fn restart(&mut self, enabled: bool) {
-        let launch = self.d.cos_chat_launch.take().expect("launch");
+        let launch = self.d.orchestration.take_launch().expect("launch");
         let mut config = launch.config.clone();
         config.enabled = enabled;
         config.unavailable_reason = None;

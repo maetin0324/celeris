@@ -38,10 +38,14 @@ pub(crate) use knowledge_usage::read_site as kb_use;
 pub mod orphan;
 mod phase_timing;
 pub mod policy;
+/// ADR 2026-11-11 dispatcher-state-ownership D1: 本番の既定を持つ注入 port（壁時計・knowledge の到達性・eval の harness の版）。
+pub(crate) mod probe_ports;
 pub mod project_controller;
 /// ADR 2026-11-04-project-controller A3: A1 の判定の口と A2 の TS の接続。
 #[path = "dispatcher/project_decider_ts.rs"]
 pub mod project_decider_ts;
+/// ADR 2026-11-11 dispatcher-state-ownership D1: 案件の停滞の見張りと CoS chat の起動の待ちの owner。
+pub(crate) mod project_orchestration;
 /// ADR-0033 D3（Phase 25）: run の終端から決定的に作る報告。
 pub(crate) mod reports;
 pub mod review;

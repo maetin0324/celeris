@@ -15,7 +15,7 @@ impl Dispatcher {
         parent: TaskId,
         children_wait_started: bool,
     ) -> Result<Vec<TaskId>, DispatchError> {
-        let chat = self.cos_chat_launch.as_ref().map(|c| c.store.clone());
+        let chat = self.orchestration.launch().map(|c| c.store.clone());
         let mut escalated = |child: TaskId| -> Result<bool, task_ops::OpsError> {
             Ok(match &chat {
                 Some(store) => store

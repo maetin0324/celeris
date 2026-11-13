@@ -350,7 +350,7 @@ async fn canary_pass(
     }
     f.d.set_policy_script(Some(Arc::new(script) as Arc<dyn PolicyScript>));
     // 選択は pass id の hash で決まる（乱数を使わない）。欲しい側に落ちる id を探して渡す。
-    f.d.script_compare.next_digest_pass_id = (0u32..).map(|i| format!("pass-{i}")).find(|id| {
+    f.d.test_hooks.next_digest_pass_id = (0u32..).map(|i| format!("pass-{i}")).find(|id| {
         canary_selected(ScriptDomain::CosDigest, &generation, id, CANARY_BPS) == selected
     });
     f.claim_run("run-f-long");

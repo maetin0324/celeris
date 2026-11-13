@@ -213,8 +213,8 @@ impl Fixture {
     /// dispatcher が run の終わりを観測した（worker の handle が終わった・回収した）。
     fn observe_run_end(&mut self) {
         self.d
-            .cos_chat_launch
-            .as_mut()
+            .orchestration
+            .launch_mut()
             .expect("launch")
             .triage
             .digest_due = true;
@@ -881,7 +881,7 @@ async fn cos_digest_script_policy_version_change_and_fresh_session() {
         assert!(f.join_inbox().await, "first triage run");
         f.tick();
         f.d.wait_script_compares().await;
-        let mut cfg = f.d.cos_chat_launch.as_ref().expect("launch").config.clone();
+        let mut cfg = f.d.orchestration.launch().expect("launch").config.clone();
         cfg.triage.policy_version = "7".into();
         let skills = f.d.config.knowledge.root.join("skills");
         task_ops::cos_skill_gate::write_fixture(&skills, "cos-inbox-triage", "7").expect("v7");

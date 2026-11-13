@@ -51,7 +51,7 @@ impl Dispatcher {
         }));
         in_flight.sort_by(|a, b| a.since.cmp(&b.since).then(a.task_id.cmp(&b.task_id)));
         // ADR 2026-10-08 §(e): cooldowns of the implicit accounts (id = source id).
-        let now_unix = (self.now_unix_fn)();
+        let now_unix = self.probes.now_unix();
         let mut cooldowns: Vec<CooldownView> = self
             .routing
             .source_cooldowns()
@@ -123,8 +123,8 @@ impl Dispatcher {
                 .values()
                 .cloned()
                 .collect(),
-            stagnation: self.stagnation.findings.clone(),
-            stagnation_policy: Some(self.stagnation.policy),
+            stagnation: self.orchestration.stagnation_findings().to_vec(),
+            stagnation_policy: Some(self.orchestration.stagnation_policy()),
             review_resync_halted: self
                 .coord
                 .review_resync_halted()
@@ -247,7 +247,7 @@ impl Dispatcher {
         let Some(cfg) = self.config.accounts.clone() else {
             return (None, HashMap::new(), None, Vec::new());
         };
-        let now = (self.now_unix_fn)();
+        let now = self.probes.now_unix();
         let mut items = Vec::new();
         let mut roots = HashMap::new();
         for adapter in AccountAdapter::ALL {

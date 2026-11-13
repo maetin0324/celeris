@@ -71,8 +71,8 @@ fn setup_ts() -> (Fixture, Arc<FakeDigest>) {
 }
 
 fn digest_due(f: &Fixture) -> bool {
-    f.d.cos_chat_launch
-        .as_ref()
+    f.d.orchestration
+        .launch()
         .expect("launch")
         .triage
         .digest_due

@@ -708,20 +708,20 @@ impl Dispatcher {
             .chain(reviewing)
             .collect();
         let cos_holds: Vec<RouteHold> = self
-            .cos_chat_launch
-            .as_ref()
+            .orchestration
+            .launch()
             .map(|launch| launch.route_reservations.values().cloned().collect())
             .unwrap_or_default();
         // `[cos] worker_reserve_five_hour`（CoS が有効なときだけ。既定 0.90）。
         let worker_reserve_five_hour = self
-            .cos_chat_launch
-            .as_ref()
+            .orchestration
+            .launch()
             .filter(|launch| launch.config.enabled)
             .map(|launch| launch.config.worker_reserve_five_hour);
         let default_max_runs = self.default_max_runs();
         let ctx = crate::routing_runtime::RouteStateContext {
             cos,
-            now: (self.now_unix_fn)(),
+            now: self.probes.now_unix(),
             worker_reserve_five_hour,
             holds: &holds,
             cos_holds: &cos_holds,

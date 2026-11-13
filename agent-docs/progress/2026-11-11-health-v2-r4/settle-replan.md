@@ -1,8 +1,9 @@
 ---
 title: "健全性v2 R4 settle-replan: run_settlement を作り、wu-failure の Replan か Ask の上限判定を replan_or_ask の 1 つにする"
 tasks: [01M7B2KBNJ72C5F75RAEWSFECG]
-status: running
+status: done
 updated: 2026-11-13
+completed: 2026-11-13
 ---
 # 健全性v2 R4 settle-replan
 
@@ -19,6 +20,8 @@ updated: 2026-11-13
   - `dispatcher/work_units.rs`: 遅延 WU の分岐（`deferred_work_unit_trigger`）と `replan_gate`。
   - `dispatcher/phase_integration.rs`: 統合の失敗の分岐（`integration_gives_up_with`）。`can_replan` は `Replan` のときだけ。
   - `dispatcher/tree_units.rs`: 木の liveness の事実 `replans_left`。
+- 入力は `dispatcher/tree_units.rs` の薄い読み出し `replan_limits(task_id, failure, ban)`（`counted_replans`・`effective_max_replans` の隣。
+  `failure` が `Some((key, 署名))` なら `stalled_replans`、`None` なら 0）が読む。各経路は `run_settlement::replan_or_ask` を直接呼ぶ。
 - replan の実行（`AutoReplanRequested`・`Continue{Replan}`）・event の追記・質問の文（`replan_stalled_question`・`replan_exhausted_ask`）・
   決定の要求（`raise_node_replan_limit`）・`PLAN_ISSUE_REPLAN_HINT` は各経路に残した。transaction の範囲は変えていない（D3）。
 - `run_settlement` は入力の値だけを読む純粋な module。永続化・file・process・`dispatcher` module に触れない。
@@ -34,13 +37,19 @@ updated: 2026-11-13
   `Replan` と同じ述語。意味が同じなので `replan_or_ask(..) == Replan` から導く（stalled 0・禁止無し）。
 - `planner_flow.rs` の `replans_left`・`node_replans_left`（prompt に渡す残り回数の数）は比較でなく引き算の表示なので、この unit の範囲外として変えていない。
 
-## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`、範囲は `$CELERIS_WU_BASE`）
 
-- `cargo build -p task-dispatch`: exit 0（警告なし）。
-- `cargo nextest run -p task-dispatch -E 'test(run_settlement) | test(cex_) | test(stall) | test(replan) | test(liveness)'`:
-  exit 0、95 passed（`run_settlement::tests` 3 件、cex_ の反例試験、stalled_replan・tree_replan・replan_rebase を含む）。cex_ の試験は書き換えていない。
-- `grep` で `worker_finish.rs`・`phase_integration.rs`・`work_units.rs`・`tree_units.rs` に `replans_so_far`・`STALLED_REPLAN_LIMIT` の比較・
-  `< self.effective_max_replans` が無いことを確かめた（`phase_integration.rs` の doc comment の `STALLED_REPLAN_LIMIT` への参照 1 件だけ）。
+- `bash scripts/dev/test-affected.sh`: exit 0（688 秒）。repo-health verdict=pass fail_grade=0、3878 tests run: 3878 passed、11 skipped。
+  初回は source-size と size.responsibility-growth で落ちた（`work_units.rs`・`worker_finish.rs`・`finish_worker_result_with` の行の増加）。
+  入力の読み出しを `replan_limits` に寄せて呼び元を 1 行にし、増えた行を無くして再実行した。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。`sh scripts/dev/progress-index.sh --check`: exit 0。
+- `cargo nextest run -p task-dispatch -E 'test(run_settlement) | test(cex_) | test(stall) | test(replan) | test(liveness)'`: exit 0、95 passed
+  （`run_settlement::tests` 3 件、cex_ の反例試験、stalled_replan・tree_replan・replan_rebase を含む）。cex_ の試験は書き換えていない。
+- `grep -rn 'replan_or_ask('`: 定義は `run_settlement.rs` の 1 つ。呼ぶのは `worker_finish.rs`・`work_units.rs`（遅延 WU と `replan_gate`）・
+  `phase_integration.rs`・`tree_units.rs`。4 file に `replans_so_far`・`STALLED_REPLAN_LIMIT` との比較・`< self.effective_max_replans` は無い。
+- `run_settlement.rs` と `run_settlement/tests.rs` に、範囲の check が grep する字面は無い（grep exit 1）。
+- main の profile（`scripts/dev/repo-health/profiles/celeris.toml`）の lease と budget の正規表現は、どちらも `crates/task-dispatch/src/run_settlement.rs` に当たる。
+- `sh "$CELERIS_WU_SCOPE_PATHS"`: 変えた path は計画の expected_write_paths の中だけ。
 
 ## 足した試験
 
@@ -52,7 +61,8 @@ updated: 2026-11-13
 
 ## 未解決事項
 
-- 無し。
+- `scripts/dev/check-source-size.py` を `--base "$CELERIS_WU_BASE"` で走らせると、`dispatcher.rs` が 1 行の増加（module map の
+  `run_settlement` の行。Objective が求める行）で落ちる。test-affected と repo-health が使う基準（`git merge-base HEAD main`）では通る。
 
 ## 提案
 

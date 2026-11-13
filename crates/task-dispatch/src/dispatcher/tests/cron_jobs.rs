@@ -460,7 +460,7 @@ async fn verify_skips_ineligible_ready_tasks_before_pre_dispatch_work() {
     }));
     assert_eq!(d.dispatch_ready().unwrap(), 0);
     assert!(
-        d.integrated_deps.is_empty(),
+        d.coord.integrated_deps().is_empty(),
         "excluded dependencies must not be inspected"
     );
     assert_eq!(
@@ -468,13 +468,13 @@ async fn verify_skips_ineligible_ready_tasks_before_pre_dispatch_work() {
         Status::Ready
     );
     assert!(store.events_for(excluded.id).unwrap().is_empty());
-    assert!(d.dispatch_waits.is_empty());
+    assert!(d.coord.dispatch_waits().is_empty());
 
     // Capacity exhaustion must not publish waits for tasks outside this instance either.
-    d.max_concurrency = 0;
+    d.coord.set_max_concurrency(0);
     assert_eq!(d.dispatch_ready().unwrap(), 0);
-    assert!(d.dispatch_waits.is_empty());
-    d.max_concurrency = 1;
+    assert!(d.coord.dispatch_waits().is_empty());
+    d.coord.set_max_concurrency(1);
     let mut smoke = new_task(
         tmp.path(),
         Check::Command {

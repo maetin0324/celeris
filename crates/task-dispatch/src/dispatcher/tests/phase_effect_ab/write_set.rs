@@ -190,10 +190,18 @@ async fn run_variant_with(
         if first_tick {
             first_tick = false;
             match variant {
-                Variant::Off => assert_eq!(d.running.len(), 2, "off: both edits start together"),
+                Variant::Off => assert_eq!(
+                    d.supervisor.runs().len(),
+                    2,
+                    "off: both edits start together"
+                ),
                 Variant::On => {
-                    assert_eq!(d.running.len(), 1, "on: the overlapping edit waits");
-                    assert_eq!(d.write_set_waits.len(), 1);
+                    assert_eq!(
+                        d.supervisor.runs().len(),
+                        1,
+                        "on: the overlapping edit waits"
+                    );
+                    assert_eq!(d.coord.write_set_waits().len(), 1);
                 }
             }
         }
@@ -201,12 +209,12 @@ async fn run_variant_with(
             break;
         }
         // 検査など run 以外の後処理が残っていれば、試験時計を止めたまま次の tick を待つ。
-        // `d.running` には adapter の run が最初に poll される前に入る。走っている全 run が README を
+        // `RunSupervisor` の run の表には adapter の run が最初に poll される前に入る。走っている全 run が README を
         // 読んで終わりの時刻を登録し終えるまで試験時計を進めない（遅れて始まる run が先行 run の書いた版を
         // 読むと off の衝突が消える）。
-        if !d.reviewing.is_empty()
+        if !d.supervisor.reviews().is_empty()
             || adapter.next_end().is_none()
-            || adapter.registered_runs() != d.running.len()
+            || adapter.registered_runs() != d.supervisor.runs().len()
         {
             tokio::time::sleep(Duration::from_millis(5)).await;
             continue;
@@ -218,13 +226,19 @@ async fn run_variant_with(
         };
         adapter.clock.send_replace(end);
         let due: Vec<RunKey> = d
-            .running
+            .supervisor
+            .runs()
             .iter()
             .filter(|(_, e)| adapter.ends_by(&e.run_id, end))
             .map(|(k, _)| k.clone())
             .collect();
         for key in due {
-            (&mut d.running.get_mut(&key).expect("run in flight").handle)
+            (&mut d
+                .supervisor
+                .runs_mut_for_test()
+                .get_mut(&key)
+                .expect("run in flight")
+                .handle)
                 .await
                 .expect("worker task panicked");
         }

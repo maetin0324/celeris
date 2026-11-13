@@ -29,7 +29,8 @@ impl Dispatcher {
         let now_instant = Instant::now();
         let now = OffsetDateTime::now_utc();
         let mut in_flight: Vec<InFlight> = self
-            .running
+            .supervisor
+            .runs()
             .iter()
             .map(|(key, e)| InFlight {
                 task_id: key.task,
@@ -39,7 +40,7 @@ impl Dispatcher {
                 since: rfc3339(e.since),
             })
             .collect();
-        in_flight.extend(self.reviewing.iter().filter_map(|(task_id, e)| {
+        in_flight.extend(self.supervisor.reviews().iter().filter_map(|(task_id, e)| {
             e.route.as_ref().map(|(source, _)| InFlight {
                 task_id: *task_id,
                 run_id: e.review_run_id.clone().unwrap_or_else(|| e.run_id.clone()),
@@ -50,7 +51,7 @@ impl Dispatcher {
         }));
         in_flight.sort_by(|a, b| a.since.cmp(&b.since).then(a.task_id.cmp(&b.task_id)));
         // ADR 2026-10-08 §(e): cooldowns of the implicit accounts (id = source id).
-        let now_unix = (self.now_unix_fn)();
+        let now_unix = self.probes.now_unix();
         let mut cooldowns: Vec<CooldownView> = self
             .routing
             .source_cooldowns()
@@ -110,15 +111,26 @@ impl Dispatcher {
             hostname: publisher.hostname.clone(),
             started_at: publisher.started_at.clone(),
             last_tick_at: rfc3339(now),
-            ticks: self.ticks,
+            ticks: self.coord.ticks(),
             tick_ms: publisher.tick_ms,
             in_flight,
             cooldowns,
             task_waits,
-            stalled_tasks: self.stalled_tasks.values().cloned().collect(),
-            stagnation: self.stagnation.findings.clone(),
-            stagnation_policy: Some(self.stagnation.policy),
-            review_resync_halted: self.review_resync_halted.values().cloned().collect(),
+            stalled_tasks: self
+                .coord
+                .liveness()
+                .stalled_tasks()
+                .values()
+                .cloned()
+                .collect(),
+            stagnation: self.orchestration.stagnation_findings().to_vec(),
+            stagnation_policy: Some(self.orchestration.stagnation_policy()),
+            review_resync_halted: self
+                .coord
+                .review_resync_halted()
+                .values()
+                .cloned()
+                .collect(),
             reports: None,
             // ADR-0033 D5（Phase 26）: 未読の件数は API が応答を組むときに埋める（`reports` と同じ理由）。
             approvals_pending: 0,
@@ -165,11 +177,12 @@ impl Dispatcher {
     /// `dispatch_waits`（M1〜M6・M9）に、reviewing のまま委譲した子を待つ親（M7）と人の承認を待つ親（M8）を足す。
     pub(super) fn snapshot_task_waits(&self) -> Vec<task_ops::daemon::SnapshotTaskWait> {
         let mut waits: std::collections::BTreeMap<TaskId, task_core::TaskWait> = self
-            .dispatch_waits
+            .coord
+            .dispatch_waits()
             .iter()
             .map(|(id, w)| (*id, w.clone()))
             .collect();
-        for parent in self.awaiting_children.keys() {
+        for parent in &self.coord.awaiting_children_tasks() {
             // 未完の子（読めなければ空。snapshot は観測値で、tick を止めない）。
             let mut task_ids: Vec<TaskId> = self
                 .store
@@ -186,9 +199,9 @@ impl Dispatcher {
                 .entry(*parent)
                 .or_insert(task_core::TaskWait::DelegatedChildren { task_ids });
         }
-        for id in &self.awaiting_human {
+        for id in self.coord.awaiting_human() {
             waits
-                .entry(*id)
+                .entry(id)
                 .or_insert(task_core::TaskWait::ReviewAwaitingHuman);
         }
         waits
@@ -234,7 +247,7 @@ impl Dispatcher {
         let Some(cfg) = self.config.accounts.clone() else {
             return (None, HashMap::new(), None, Vec::new());
         };
-        let now = (self.now_unix_fn)();
+        let now = self.probes.now_unix();
         let mut items = Vec::new();
         let mut roots = HashMap::new();
         for adapter in AccountAdapter::ALL {

@@ -270,7 +270,7 @@ fn budgeted(runs: &[[u64; 4]], max_tokens: Option<u64>, usage: u64, hang: bool) 
 impl Fixture {
     /// 走っている run の handle の終わりを待つ（出来事待ち。30 秒は失敗したときだけ効く保険）。終わりの記録は次の tick。
     async fn join_running(&mut self) {
-        for entry in self.d.running.values_mut() {
+        for entry in self.d.supervisor.runs_mut_for_test().values_mut() {
             tokio::time::timeout(Duration::from_secs(30), &mut entry.handle)
                 .await
                 .expect("the design review run ends")

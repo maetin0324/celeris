@@ -1,21 +1,14 @@
 //! ADR-0130 D2: 実装 run の actual write-set（Git の確定差分）を run ごと・WU ごとに残す。
 //!
-//! dispatch の時点で repo ごとの開始 HEAD を固定し（[`Dispatcher::capture_run_write_bases`]）、
+//! dispatch の時点で repo ごとの開始 HEAD を固定し（[`Dispatcher::capture_run_write_bases`]。置き場は
+//! `ExecutionCoordination`、ADR 2026-11-11 dispatcher-state-ownership D1）、
 //! worker の終了処理（WU の自動 commit の後）で `<開始 HEAD>..HEAD` を採って
 //! `run_write_sets` へ、done になった v2 WU は `base_commit..HEAD` を `work_unit_write_sets` へ書く。
 //! git が読めない・開始 HEAD が分からない（daemon の再起動）・手元に Git worktree が無い
 //! （remote / shared）ときは `unavailable` と理由を残す。どの失敗も run の遷移を変えない。
 
 use super::*;
-
-/// run 1 本・repo 1 つ分の採取場所と開始 HEAD（プロセス内メモリのみ）。
-#[derive(Debug, Clone)]
-pub(super) struct RunWriteBase {
-    repo_id: task_core::RepoId,
-    dir: PathBuf,
-    /// `None` は開始 HEAD を読めなかった（終了時に `unavailable`）。
-    start_sha: Option<String>,
-}
+use crate::execution_coordination::RunWriteBase;
 
 struct GitSite {
     repo_id: task_core::RepoId,
@@ -71,9 +64,7 @@ impl Dispatcher {
                 dir: site.dir,
             })
             .collect();
-        if !bases.is_empty() {
-            self.run_write_bases.insert(run_id.to_string(), bases);
-        }
+        self.coord.put_run_write_bases(run_id, bases);
     }
 
     /// worker run の終了時（WU の自動 commit の後）に actual write-set を残す。失敗は warn だけ。
@@ -84,7 +75,7 @@ impl Dispatcher {
         wu: Option<&task_core::WorkUnitRow>,
         wu_completed: bool,
     ) {
-        let bases = self.run_write_bases.remove(run_id);
+        let bases = self.coord.take_run_write_bases(run_id);
         let work_unit_id = wu.map(|w| w.id.clone());
         let records: Vec<task_core::write_set::WriteSetRecord> = match bases {
             Some(bases) => bases

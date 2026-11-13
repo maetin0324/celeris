@@ -69,7 +69,7 @@ impl Dispatcher {
             return Ok(false);
         };
         if self.credential_gates.is_registered(&gate.secret_id) {
-            self.credential_held.remove(&task.id);
+            self.coord.release_credential_hold(task.id);
             return Ok(false);
         }
         let gate = gate.clone();
@@ -87,7 +87,7 @@ impl Dispatcher {
         let wu_id = wu
             .map(|w| w.id.clone())
             .unwrap_or_else(|| format!("task:{}", task.id));
-        if wu.is_none() && !self.credential_held.insert(task.id) {
+        if wu.is_none() && !self.coord.hold_credential(task.id) {
             return Ok(());
         }
         let now = self.now_utc();
@@ -182,7 +182,7 @@ impl Dispatcher {
                 self.block_unit_waiting_for_auth(&task, &unit, now)?;
             } else {
                 // atomic task は dispatch の gate が次の tick で同じ wait を見つけて保持する。
-                self.credential_held.insert(wait.task_id);
+                self.coord.hold_credential(wait.task_id);
             }
             still.push(wait);
         }

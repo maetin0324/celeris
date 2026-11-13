@@ -14,19 +14,11 @@ use task_core::behind_target::{BehindTargetSnapshot, summarize_behind_target};
 use task_core::{Task, TaskId};
 
 use super::{DispatchError, Dispatcher};
+use crate::execution_coordination::ReviewSyncWait;
 
 /// Consecutive eligible ticks without being selected before a task is raised to the FIFO
 /// relief slot ahead of the age order.
 pub(super) const STALE_PRIORITY_RELIEF_TICKS: u32 = 3;
-
-/// One waiter of the pre-review sync queue (in memory; rebuilt after a restart).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct ReviewSyncWait {
-    /// Wait start order (monotonic per dispatcher).
-    pub(super) seq: u64,
-    /// Consecutive eligible ticks in which the review was not started.
-    pub(super) skipped_ticks: u32,
-}
 
 /// Ordering key of one candidate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,26 +62,6 @@ pub(super) fn stale_priority_cmp(a: &StaleCandidate, b: &StaleCandidate) -> Orde
 }
 
 impl Dispatcher {
-    /// Keep the queue entries of `candidates` only and give new waiters the next wait order
-    /// (in `candidates` order, i.e. the store's listing order).
-    fn enter_review_sync_queue(&mut self, candidates: &[Task]) {
-        self.review_sync_queue
-            .retain(|id, _| candidates.iter().any(|t| t.id == *id));
-        for task in candidates {
-            if !self.review_sync_queue.contains_key(&task.id) {
-                let seq = self.review_sync_seq;
-                self.review_sync_seq += 1;
-                self.review_sync_queue.insert(
-                    task.id,
-                    ReviewSyncWait {
-                        seq,
-                        skipped_ticks: 0,
-                    },
-                );
-            }
-        }
-    }
-
     /// Re-measure behind of every local Git repo of `task` against its review sync target.
     fn measure_review_sync_behind(
         &mut self,
@@ -107,32 +79,27 @@ impl Dispatcher {
     }
 
     /// ADR-0130 D5: the order in which `recover_reviews` offers the waiting tasks to the
-    /// pre-review sync.
+    /// pre-review sync. `priority_disabled` is the test ablation read by the entry
+    /// (`stale_priority_disabled`, ADR 2026-11-11 D6); production passes `false`.
     pub(super) fn order_review_sync_queue(
         &mut self,
         candidates: Vec<Task>,
+        priority_disabled: bool,
     ) -> Result<Vec<Task>, DispatchError> {
-        self.enter_review_sync_queue(&candidates);
-        #[cfg(test)]
-        if self.test_hooks.ablation.disable_stale_priority {
-            // phase_effect_ab::stale_priority の off: 並べ替えずに候補の順（store の一覧順）で渡す。
-            return Ok(candidates);
-        }
-        if candidates.len() < 2 {
+        // The queue (wait order, skipped ticks) and whether to reorder are owned by
+        // `ExecutionCoordination` (ADR 2026-11-11 D1). With the ablation off
+        // (phase_effect_ab::stale_priority) the candidates keep the store order.
+        if !self
+            .coord
+            .enter_review_sync_queue(&candidates, priority_disabled)
+        {
             return Ok(candidates);
         }
         let now = self.now_utc();
         let mut keyed = Vec::with_capacity(candidates.len());
         for task in candidates {
             let summary = summarize_behind_target(&self.measure_review_sync_behind(&task)?, now);
-            let wait = self
-                .review_sync_queue
-                .get(&task.id)
-                .copied()
-                .unwrap_or(ReviewSyncWait {
-                    seq: u64::MAX,
-                    skipped_ticks: 0,
-                });
+            let wait = self.coord.review_sync_wait(task.id);
             keyed.push((
                 StaleCandidate {
                     task_id: task.id,
@@ -147,18 +114,14 @@ impl Dispatcher {
         Ok(keyed.into_iter().map(|(_, t)| t).collect())
     }
 
-    /// Record the outcome of one offer: a started review leaves the queue; a deferral that was
-    /// not a human gate counts towards the FIFO relief.
-    pub(super) fn note_review_sync_offer(&mut self, task_id: TaskId, started: bool) {
-        if started {
-            self.review_sync_queue.remove(&task_id);
-            return;
+    /// stale 優先を切っているか（ADR 2026-11-11 D6: 入口が `TestHooks` から読み、
+    /// `ExecutionCoordination::enter_review_sync_queue` に引数で渡す）。本番では常に `false`（効かせる）。試験だけが切れる
+    /// （`test_hooks.ablation.disable_stale_priority`、phase_effect_ab::stale_priority の off）。
+    pub(super) fn stale_priority_disabled(&self) -> bool {
+        #[cfg(test)]
+        if self.test_hooks.ablation.disable_stale_priority {
+            return true;
         }
-        if self.awaiting_human.contains(&task_id) {
-            return;
-        }
-        if let Some(wait) = self.review_sync_queue.get_mut(&task_id) {
-            wait.skipped_ticks = wait.skipped_ticks.saturating_add(1);
-        }
+        false
     }
 }

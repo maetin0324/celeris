@@ -31,17 +31,17 @@ impl Dispatcher {
 
         let (run_end, describe, usage) = design_gate::run_end_of(&result, "planner");
 
-        // ADR-0076: planner run の quota 消費も worker と同じ `resolve_quota_estimate` で見積もる。以降の `?` で抜けても
+        // ADR-0076: planner run の quota 消費も worker と同じ `RoutingRuntime::settle_quota` で見積もる。以降の `?` で抜けても
         // `QuotaActivity` が閉じているよう、分岐より前に一度だけ求め、`WorkerFinished` を保存するすべての分岐で同じトランザクションに添える。
         let quota_event = {
             let model = self.started_model_of(task_id, &run_id);
-            self.resolve_quota_estimate(
+            self.routing.settle_quota(
+                &*self.store,
                 task_id,
                 &run_id,
                 None,
-                account,
-                account_adapter,
-                &provider,
+                account.zip(account_adapter),
+                provider.to_string(),
                 &model,
                 usage.as_ref(),
             )
@@ -661,7 +661,7 @@ impl Dispatcher {
         let counters = task_ops::tree::tree_counters(
             self.store.as_ref(),
             root_id,
-            &self.stagnation.budget_rates,
+            self.orchestration.budget_rates(),
         )
         .map_err(ops_to_store)?;
         let open_decisions = self

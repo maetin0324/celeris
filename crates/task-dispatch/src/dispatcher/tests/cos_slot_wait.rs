@@ -165,12 +165,7 @@ async fn slot_only_wait_keeps_the_run_waiting_then_launches_the_same_run() {
     assert!(waiting.finished_at.is_none());
     assert_eq!(waiting_notices(&store, &b, &waiting.id), 1);
     assert!(
-        d.cos_chat_launch
-            .as_ref()
-            .unwrap()
-            .running
-            .get(&b)
-            .is_none(),
+        d.orchestration.launch().unwrap().running.get(&b).is_none(),
         "a waiting run has no worker"
     );
     // 受け入れ 3: 起動した run だけを数える（葉の 1 件。待機中の B の CoS run は数えない）。
@@ -193,7 +188,7 @@ async fn slot_only_wait_keeps_the_run_waiting_then_launches_the_same_run() {
     d.tick_cos_chat_launch();
     let launched = run_of(&store, &b);
     assert_eq!(launched.id, waiting.id, "the same run launches");
-    assert!(d.cos_chat_launch.as_ref().unwrap().running.contains_key(&b));
+    assert!(d.orchestration.launch().unwrap().running.contains_key(&b));
     assert_eq!(d.cos_in_flight(), 1);
     assert_eq!(d.implicit_account_in_use("p1"), 1);
     // 待機の終わり（Running への遷移）が永続記録に残る。
@@ -224,7 +219,7 @@ async fn slot_only_wait_keeps_the_run_waiting_then_launches_the_same_run() {
 #[tokio::test]
 async fn cooldown_does_not_wait() {
     let (_dir, store, mut d) = fixture(FakeAdapter::default_command(), 2);
-    let until = (d.now_unix_fn)() + 3600;
+    let until = d.probes.now_unix() + 3600;
     d.routing.insert_source_cooldown_for_test(
         "p1".into(),
         crate::accounts::AccountCooldown {
@@ -299,7 +294,7 @@ async fn slot_wait_expires_at_the_run_deadline_and_is_not_extended() {
     let waiting = run_of(&store, &b);
     // 設定の max_wall_secs を延ばしても、待機中の run の期限は延びない（run 開始時の設定を使う）。
     d.reload_cos_chat_launch({
-        let mut cfg = d.cos_chat_launch.as_ref().unwrap().config.clone();
+        let mut cfg = d.orchestration.launch().unwrap().config.clone();
         cfg.max_wall_secs = 10_000;
         cfg
     });
@@ -321,7 +316,7 @@ async fn slot_wait_expires_at_the_run_deadline_and_is_not_extended() {
     advance(&d, 1);
     d.tick_cos_chat_launch();
     assert_eq!(runs(&store, &b).len(), 1);
-    assert!(!d.cos_chat_launch.as_ref().unwrap().running.contains_key(&b));
+    assert!(!d.orchestration.launch().unwrap().running.contains_key(&b));
 }
 
 /// 待機中の run を人が止めたら、起動前の stop として閉じる（起動しない）。
@@ -341,5 +336,5 @@ async fn stop_closes_a_waiting_run_before_launch() {
     );
     release_holder(&mut d, &holder).await;
     d.tick_cos_chat_launch();
-    assert!(!d.cos_chat_launch.as_ref().unwrap().running.contains_key(&b));
+    assert!(!d.orchestration.launch().unwrap().running.contains_key(&b));
 }

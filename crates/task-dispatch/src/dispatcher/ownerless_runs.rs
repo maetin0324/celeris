@@ -28,37 +28,26 @@ impl Dispatcher {
         // `ReviewEntry.since` は実時計で記録される（`spawn_review`）ので、期限も同じ実時計で測る
         // （差し替えた試験用の時計と混ぜると、時計を進める試験で生きたレビューを期限越えと誤る）。
         let now = OffsetDateTime::now_utc();
-        self.lost_review_watch
-            .retain(|id| self.reviewing.contains_key(id));
-        let mut lost: Vec<(TaskId, &'static str)> = Vec::new();
-        let mut finished_now: Vec<TaskId> = Vec::new();
-        for (task_id, entry) in &self.reviewing {
-            if entry.handle.is_finished() {
-                if self.lost_review_watch.contains(task_id) {
-                    lost.push((*task_id, LOST_REVIEW_WHY));
-                } else {
-                    finished_now.push(*task_id);
-                }
-                continue;
-            }
-            let ttl = match self.store.get(*task_id) {
-                Ok(Some(task)) => self.ownerless_ttl(task_core::RunIndexRole::Reviewer, &task),
-                Ok(None) => continue,
+        let store = Arc::clone(&self.store);
+        let config = &self.config;
+        let lost = self.supervisor.take_lost_reviews(
+            now,
+            |task_id| match store.get(task_id) {
+                Ok(Some(task)) => Some(ownerless_ttl_with(
+                    config,
+                    task_core::RunIndexRole::Reviewer,
+                    &task,
+                )),
+                Ok(None) => None,
                 Err(e) => {
                     tracing::warn!(%task_id, error = %e, "could not read a reviewing task to check its review deadline");
-                    continue;
+                    None
                 }
-            };
-            if now >= entry.since + ttl {
-                lost.push((*task_id, STUCK_REVIEW_WHY));
-            }
-        }
-        self.lost_review_watch.extend(finished_now);
-        for (task_id, why) in lost {
-            self.lost_review_watch.remove(&task_id);
-            let Some(entry) = self.reviewing.remove(&task_id) else {
-                continue;
-            };
+            },
+            LOST_REVIEW_WHY,
+            STUCK_REVIEW_WHY,
+        );
+        for (task_id, entry, why) in lost {
             if let Some(review_run_id) = entry.review_run_id.clone() {
                 if let Some(provider) = entry.route.as_ref().map(|(source, _)| source.to_string()) {
                     self.release_quota_if_tracked(
@@ -75,7 +64,7 @@ impl Dispatcher {
                 %task_id, run_id = %entry.run_id, review_run_id = ?entry.review_run_id, why,
                 "closing a review this daemon lost track of; the task is re-reviewed"
             );
-            self.stop_review(entry);
+            stop_review_runs(entry, self.config.kill_grace);
         }
     }
 
@@ -96,16 +85,17 @@ impl Dispatcher {
     ///    で `runs` 行を閉じる）。Task は遷移させない（`reviewing` のまま持ち主の居ないレビューは、同じ tick の
     ///    `recover_reviews` がやり直す）。
     pub(super) fn reconcile_ownerless_runs(&mut self) {
-        if !self.accepting_new_work || self.orphan_takeover.is_none() {
+        if !self.coord.accepting_new_work() || self.orphan_takeover.is_none() {
             return;
         }
         let now = self.now_utc();
-        if let Some(last) = self.ownerless_reconciled_at
-            && (now - last).whole_seconds() < RUNS_RECONCILE_INTERVAL_SECS
-        {
+        if !self.supervisor.reconcile_due(
+            Reconcile::OwnerlessRuns,
+            now,
+            RUNS_RECONCILE_INTERVAL_SECS,
+        ) {
             return;
         }
-        self.ownerless_reconciled_at = Some(now);
         let rows = match self.store.runs_running() {
             Ok(rows) => rows,
             Err(e) => {
@@ -230,27 +220,14 @@ impl Dispatcher {
     /// （長めに倒す。生きている持ち主の run を早く閉じると、後から届く本当の終わりが索引に載らない）。
     /// それ以外の role は Task の `max_wall_secs`。どちらも `lease_grace` を足す。
     pub(super) fn ownerless_ttl(&self, role: task_core::RunIndexRole, task: &Task) -> Duration {
-        let ttl = match role {
-            task_core::RunIndexRole::Reviewer => {
-                let checks = u32::try_from(task.acceptance.len()).unwrap_or(u32::MAX);
-                self.config
-                    .review_timeout
-                    .saturating_mul(checks.saturating_add(2).saturating_mul(3))
-            }
-            _ => Duration::from_secs(task.budget.max_wall_secs),
-        };
-        ttl.saturating_add(self.config.lease_grace)
+        ownerless_ttl_with(&self.config, role, task)
     }
 
     /// このインスタンスがその run（run id）を手元に持っているか（worker run・レビューの対象 run と
     /// Reviewer run・WU の検査）。
     fn holds_run_in_hand(&self, run_id: &str) -> bool {
-        self.running.values().any(|e| e.run_id == run_id)
-            || self
-                .reviewing
-                .values()
-                .any(|e| e.run_id == run_id || e.review_run_id.as_deref() == Some(run_id))
-            || self.checking.contains_key(run_id)
+        self.supervisor.holds_run_or_review(run_id)
+            || self.coord.processes().is_checking(run_id)
             || self.holds_eval_run(run_id)
     }
 
@@ -258,18 +235,47 @@ impl Dispatcher {
     /// task を止めるだけで、DB には何も書かない（`daemon_instances` の行もそのまま）。
     #[cfg(test)]
     pub(super) fn crash_for_test(&mut self) {
-        for (_, entry) in self.running.drain() {
+        for (_, entry) in self.supervisor.take_runs() {
             entry.handle.abort();
         }
-        for (_, entry) in self.reviewing.drain() {
+        for (_, entry) in self.supervisor.take_reviews() {
             entry.handle.abort();
         }
-        for (_, entry) in self.checking.drain() {
+        let in_hand = self.coord.abort_in_hand();
+        for (_, entry) in in_hand.checking {
             entry.handle.abort();
         }
-        for (_, entry) in self.integrating.drain() {
+        for (_, entry) in in_hand.integrating {
             entry.handle.abort();
         }
-        self.pending_subjects.clear();
     }
+}
+
+/// このインスタンスがその run を worker run（[`RunSupervisor`] の表）か WU の検査（Phase F5-fix2。
+/// [`ExecutionCoordination`] の process の表）として手元に持っているか。lease の回収・手放した検査の引き継ぎ・
+/// result.json からの確定が使う。`Dispatcher::holds_run_in_hand` と違い、レビューと eval を見ない。
+pub(super) fn holds_run_or_check(
+    supervisor: &RunSupervisor<ReviewSubject>,
+    coord: &Coordination,
+    run_id: &str,
+) -> bool {
+    supervisor.holds_run_id(run_id) || coord.processes().is_checking(run_id)
+}
+
+/// run の期限（[`Dispatcher::ownerless_ttl`] の本体。手元の review の期限越えの判断にも渡す）。
+fn ownerless_ttl_with(
+    config: &DispatchConfig,
+    role: task_core::RunIndexRole,
+    task: &Task,
+) -> Duration {
+    let ttl = match role {
+        task_core::RunIndexRole::Reviewer => {
+            let checks = u32::try_from(task.acceptance.len()).unwrap_or(u32::MAX);
+            config
+                .review_timeout
+                .saturating_mul(checks.saturating_add(2).saturating_mul(3))
+        }
+        _ => Duration::from_secs(task.budget.max_wall_secs),
+    };
+    ttl.saturating_add(config.lease_grace)
 }

@@ -5,7 +5,7 @@
 //! `CARGO_TARGET_DIR` だけを持つ。
 
 use super::*;
-use crate::host_maintenance::{HostMaintenance, MaintenanceInputs};
+use crate::host_maintenance::MaintenanceInputs;
 
 impl Dispatcher {
     /// ADR-0040 D3 / ADR-0041 D5: `--mode verify` の煙試験インスタンスか（`set_eligible_tasks` が目印。celeris は
@@ -53,7 +53,7 @@ impl Dispatcher {
         }
     }
     /// owner と、owner の外の値（store・config の値・注入時計・verify の印）を分けて借りる。
-    pub(super) fn maintenance_parts(&mut self) -> (&mut HostMaintenance, MaintenanceInputs<'_>) {
+    pub(super) fn maintenance_parts(&mut self) -> (&mut Maintenance, MaintenanceInputs<'_>) {
         let now = self.now_utc();
         let verify_smoke = self.verify_smoke_only();
         (
@@ -83,7 +83,7 @@ impl Dispatcher {
 
     /// tick の頭（drain より前）: 新しい run を始めてよい空きがあるかを決める（draining なら常に可）。
     pub(super) fn refresh_disk_ready(&mut self) {
-        let accepting = self.accepting_new_work;
+        let accepting = self.coord.accepting_new_work();
         let (maint, inputs) = self.maintenance_parts();
         maint.refresh_disk_ready(&inputs, accepting);
     }
@@ -184,12 +184,12 @@ impl Dispatcher {
         Ok(())
     }
 
-    /// run（`running`）か review（`reviewing`）が走っている task（[`Self::running_for_task`] が 1 以上か判定中）。
+    /// run（`running`）か review（`reviewing`）が走っている task（`RunSupervisor::runs_for_task` が 1 以上か判定中）。
     pub(super) fn tasks_in_flight(&self) -> std::collections::HashSet<TaskId> {
-        self.running
-            .keys()
+        self.supervisor
+            .run_keys()
             .map(|k| k.task)
-            .chain(self.reviewing.keys().copied())
+            .chain(self.supervisor.reviews().keys().copied())
             .collect()
     }
 

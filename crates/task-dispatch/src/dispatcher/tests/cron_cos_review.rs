@@ -47,16 +47,18 @@ fn daemon_with(
     d.config.execution.max_cos_runs = 0;
     d.config.min_free_disk_pct = 0.0;
     // Fixed findings: the scan is kept from replacing them (its last check is in the future).
-    d.stagnation.checked_at = Some(at("2100-01-01T00:00:00Z"));
-    d.stagnation.findings = vec![StagnationFinding {
-        kind: StagnationKind::ReleaseUnpromoted,
-        key: "release_unpromoted-selfdeploy".into(),
-        project_id: None,
-        task_id: None,
-        subject: "abcdef123456".into(),
-        since: "2026-10-27T00:10:00Z".into(),
-        detail: "verify 済みで昇格されていない".into(),
-    }];
+    d.orchestration
+        .set_stagnation_checked_at_for_test(at("2100-01-01T00:00:00Z"));
+    d.orchestration
+        .set_stagnation_findings_for_test(vec![StagnationFinding {
+            kind: StagnationKind::ReleaseUnpromoted,
+            key: "release_unpromoted-selfdeploy".into(),
+            project_id: None,
+            task_id: None,
+            subject: "abcdef123456".into(),
+            since: "2026-10-27T00:10:00Z".into(),
+            detail: "verify 済みで昇格されていない".into(),
+        }]);
     d.config.knowledge.root = dir.path().join("knowledge");
     let skills = d.config.knowledge.root.join("skills");
     task_ops::cos_skill_gate::write_fixture(&skills, "cos-inbox-triage", "1").expect("skills");
@@ -544,8 +546,8 @@ async fn cos_review_run_has_the_general_cos_context_and_its_own_session() {
     tick_at(&mut d, &clock, "2026-10-27T01:00:01Z");
     let thread = review_thread(&store);
     let handle = d
-        .cos_chat_launch
-        .as_mut()
+        .orchestration
+        .launch_mut()
         .unwrap()
         .running
         .remove(&thread)

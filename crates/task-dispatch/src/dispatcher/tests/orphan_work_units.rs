@@ -247,7 +247,7 @@ async fn pause_resume_before_and_after_orphan_recovery_preserves_pause_and_redis
         if order != "resume_first" {
             d.tick().unwrap();
             assert!(
-                d.running.is_empty(),
+                d.supervisor.runs().is_empty(),
                 "recovery must not resume a paused task"
             );
             task_ops::lifecycle::resume_task(f.store.as_ref(), f.task, now).unwrap();
@@ -281,7 +281,7 @@ async fn restart_recovery_preserves_other_daemons_scope_and_child_units() {
                     .instance_register(&instance("old", role, std::process::id()))
                     .unwrap();
             }
-            "self_draining" => d.accepting_new_work = false,
+            "self_draining" => d.coord.set_accepting_new_work(false),
             "disabled" => d.orphan_takeover = None,
             "filter" => d.eligible = Some(Arc::new(|_| false)),
             "child" => {
@@ -403,7 +403,8 @@ async fn local_run_is_not_recovered_and_task_cancel_does_not_requeue() {
             OffsetDateTime::now_utc(),
         )
         .unwrap();
-    d.ownerless_reconciled_at = None;
+    d.supervisor
+        .reset_reconcile(crate::run_supervisor::Reconcile::OwnerlessRuns);
     d.reconcile_ownerless_runs();
     assert_eq!(f.unit(), live);
     f.store
@@ -411,7 +412,7 @@ async fn local_run_is_not_recovered_and_task_cancel_does_not_requeue() {
         .unwrap();
     d.tick().unwrap();
     assert_eq!(f.unit().status, WorkUnitStatus::Cancelled);
-    assert!(d.running.is_empty());
+    assert!(d.supervisor.runs().is_empty());
 }
 
 #[tokio::test]
@@ -423,7 +424,7 @@ async fn periodic_recovery_waits_for_check_owner_and_uses_the_injected_clock() {
     let now = OffsetDateTime::now_utc();
     d.test_hooks.now = Some(Arc::new(std::sync::Mutex::new(now)));
     let wu = f.unit();
-    d.checking.insert(
+    d.coord.processes_mut().start_checks(
         f.run.clone(),
         CheckingEntry {
             task_id: f.task,
@@ -447,7 +448,12 @@ async fn periodic_recovery_waits_for_check_owner_and_uses_the_injected_clock() {
         WorkUnitStatus::Running,
         "a terminal run can still have live checks"
     );
-    d.checking.remove(&f.run).unwrap().handle.abort();
+    d.coord
+        .processes_mut()
+        .take_checks(&f.run)
+        .unwrap()
+        .handle
+        .abort();
     *d.test_hooks.now.as_ref().unwrap().lock().unwrap() =
         now + time::Duration::seconds(RUNS_RECONCILE_INTERVAL_SECS - 1);
     d.reconcile_ownerless_runs();
@@ -474,7 +480,7 @@ async fn interrupt_or_cancel_during_checks_recovers_the_work_unit_immediately() 
                 OffsetDateTime::now_utc(),
             )
             .unwrap();
-        d.checking.insert(
+        d.coord.processes_mut().start_checks(
             f.run.clone(),
             CheckingEntry {
                 task_id: f.task,
@@ -504,8 +510,8 @@ async fn interrupt_or_cancel_during_checks_recovers_the_work_unit_immediately() 
             )
             .unwrap();
         d.abort_stale_runs().unwrap();
-        assert!(d.checking.is_empty());
-        assert!(d.just_aborted.contains(&f.task));
+        assert!(!d.coord.processes().has_checks());
+        assert!(d.supervisor.was_just_aborted(f.task));
         assert_eq!(
             f.store.run_index_get(&f.run).unwrap().unwrap().status,
             RunIndexStatus::Completed

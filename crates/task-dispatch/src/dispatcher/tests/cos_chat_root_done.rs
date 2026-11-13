@@ -59,8 +59,8 @@ impl Fixture {
     async fn join_all(&mut self) {
         let handles: Vec<_> = self
             .d
-            .cos_chat_launch
-            .as_mut()
+            .orchestration
+            .launch_mut()
             .expect("launch")
             .running
             .drain()
@@ -263,7 +263,7 @@ async fn without_cos_the_deterministic_fallback_is_notified_once() {
 #[tokio::test]
 async fn root_done_summary_waits_for_the_safety_net_when_cos_cannot_start() {
     let mut f = fixture(true);
-    f.d.accepting_new_work = false;
+    f.d.coord.set_accepting_new_work(false);
     f.tick();
     f.done_task(None);
     f.tick();
@@ -435,8 +435,8 @@ async fn root_done_probe_parts_reach_the_tick_steps_only_over_the_threshold() {
     let mut f = fixture(false);
     f.tick(); // 導入: cursor は現在の末尾から
     let set_threshold = |f: &mut Fixture, t: std::time::Duration| {
-        f.d.cos_chat_launch
-            .as_mut()
+        f.d.orchestration
+            .launch_mut()
             .expect("launch")
             .root_done_probe_threshold = t;
     };
@@ -543,8 +543,8 @@ fn root_done_row_waiting_on_delivery(
     use task_core::DeliveryStore;
     let mut f = fixture(false);
     f.tick(); // 導入: cursor は現在の末尾から
-    f.d.cos_chat_launch
-        .as_mut()
+    f.d.orchestration
+        .launch_mut()
         .expect("launch")
         .root_done_probe_threshold = std::time::Duration::ZERO;
     crate::test_support::project_cos_thread(&f.store, "案件A");

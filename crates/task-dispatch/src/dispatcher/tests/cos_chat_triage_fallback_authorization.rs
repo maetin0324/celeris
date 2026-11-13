@@ -79,7 +79,7 @@ async fn cos_chat_authorization_safety_net_for_a_hung_run() {
 #[tokio::test]
 async fn cos_chat_authorization_safety_net_when_no_run_starts() {
     let mut f = fixture(true);
-    f.d.accepting_new_work = false;
+    f.d.coord.set_accepting_new_work(false);
     f.tick();
     f.authorization("容量待ち");
     f.tick();
@@ -97,13 +97,13 @@ async fn cos_chat_authorization_safety_net_when_no_run_starts() {
 #[tokio::test]
 async fn cos_chat_authorization_safety_net_is_configurable() {
     let mut f = fixture(true);
-    f.d.cos_chat_launch
-        .as_mut()
+    f.d.orchestration
+        .launch_mut()
         .expect("launch")
         .config
         .triage
         .fallback_after_secs = 300;
-    f.d.accepting_new_work = false;
+    f.d.coord.set_accepting_new_work(false);
     f.tick();
     f.authorization("短い上限");
     f.tick();
@@ -157,8 +157,8 @@ async fn cos_chat_authorization_stopped_run_routes_once() {
     f.tick();
     let run: String = f.count_text("SELECT run_id FROM chat_runs");
     // The person stopped the run (the worker handle is dropped: no outcome is written).
-    f.d.cos_chat_launch
-        .as_mut()
+    f.d.orchestration
+        .launch_mut()
         .expect("launch")
         .running
         .clear();

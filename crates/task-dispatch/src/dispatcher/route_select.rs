@@ -693,27 +693,35 @@ impl Dispatcher {
     /// the `(source, account)` pairs of runs and reviews (a leaf run's admission does not count CoS chat runs,
     /// which hold their own slot), and the CoS chat reservations.
     pub(super) fn route_state(&mut self, cos: bool) -> RouteState {
-        let running = self.running.values().filter(|entry| cos || !entry.cos);
-        let reviewing = self.reviewing.values().filter_map(|e| e.route.clone());
+        let running = self
+            .supervisor
+            .runs()
+            .values()
+            .filter(|entry| cos || !entry.cos);
+        let reviewing = self
+            .supervisor
+            .reviews()
+            .values()
+            .filter_map(|e| e.route.clone());
         let holds: Vec<RouteHold> = running
             .filter_map(|entry| entry.route.clone())
             .chain(reviewing)
             .collect();
         let cos_holds: Vec<RouteHold> = self
-            .cos_chat_launch
-            .as_ref()
+            .orchestration
+            .launch()
             .map(|launch| launch.route_reservations.values().cloned().collect())
             .unwrap_or_default();
         // `[cos] worker_reserve_five_hour`（CoS が有効なときだけ。既定 0.90）。
         let worker_reserve_five_hour = self
-            .cos_chat_launch
-            .as_ref()
+            .orchestration
+            .launch()
             .filter(|launch| launch.config.enabled)
             .map(|launch| launch.config.worker_reserve_five_hour);
         let default_max_runs = self.default_max_runs();
         let ctx = crate::routing_runtime::RouteStateContext {
             cos,
-            now: (self.now_unix_fn)(),
+            now: self.probes.now_unix(),
             worker_reserve_five_hour,
             holds: &holds,
             cos_holds: &cos_holds,

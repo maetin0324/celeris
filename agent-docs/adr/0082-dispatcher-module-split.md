@@ -86,3 +86,77 @@ GC・build cache と repo target の掃除・中止された作業場所の片�
 `Dispatcher` を引数に受けない。`route_state` の判断は `routing_runtime/route_state.rs` の純粋関数 `build_route_state` に分け、
 account 一覧の走査 cache の更新と入力の収集は `RoutingRuntime::route_state` が行う。module map に `routing_runtime` の行（層は owner）を足し、
 `route_failure` の行を「`RoutingRuntime` への cooldown の記録」に直した。移した module の旧い行は無かった。
+
+## 付記 2026-11-13: quota の状態と見積りの判断を `RoutingRuntime` へ出した（R4 own-quota）
+
+[ADR 2026-11-11 dispatcher-state-ownership](2026-11-11-dispatcher-state-ownership.md) D1・D3 に従い、`quota_activity`・`quota_calibration` を
+下位 owner `routing_runtime/quota.rs` の `QuotaBook` に、`eval_runs`・`knowledge_probe_cache` を `RoutingRuntime` に移した。
+`resolve_quota_estimate`（約 210 行）の判断は `routing_runtime/quota_estimate.rs` の純粋関数 `propose_estimate` に分け、適用
+（較正の更新と、閉じたグループの他の member の event の追記）は `RoutingRuntime::settle_quota` が行う。
+`quota_book` の行は、run 単位の入口（`quota_begin`・`release_quota_if_tracked`。終了経路は `RoutingRuntime::settle_quota` を直接呼ぶ）だけを持つ行に直した
+（module は入口として残るので行は消さない）。
+
+## 付記 2026-11-13: 実行中の run の表と lease の監督を `RunSupervisor` へ出した（R4 own-supervisor）
+
+[ADR 2026-11-11 dispatcher-state-ownership](2026-11-11-dispatcher-state-ownership.md) D1・D3・D4 に従い、D1 の表で unit 列が own-supervisor の
+7 field（`running`・`reviewing`・`infra_backoff`・`just_aborted`・`lost_review_watch`・`ownerless_reconciled_at`・`terminal_records_reconciled_at`）を
+`crates/task-dispatch/src/run_supervisor.rs` の `RunSupervisor`（private field）に移した。`RunKey`・`RunEntry`・`ReviewEntry` も owner が
+`dispatcher` module を使わないよう同じ file に移した。手元の run の問い合わせ（`runs`・`run_keys`・`holds_run_id`・`runs_for_task` ほか）、
+abort（`abort_runs`・`take_run`）、shutdown の割り込み（`take_runs`・`take_reviews`）は `RunSupervisor` の method にした。
+`reclaim_expired_leases` の判断は純粋関数 `reclaim_reason`・`reclaim_keys`・`reclaim_verdict` に分け、lease の解放と終了記録と backoff の期限は
+`RunSupervisor::release_lease` が行う。WU・統合の照合と待ち（`checking`・`integrating`・`pending_subjects`）は `leases.rs` の入口に残した
+（own-coord-b が `ExecutionCoordination` に移す）。D4 retry-backoff の `run_supervisor::infra_retry_after` を worker 完了と lease の回収・shutdown が使う。
+module map に `run_supervisor` の行（層は owner）を足し、`leases` の行を入口に直した。移した module の旧い行は無かった。
+
+## 付記 2026-11-13: write set・同期・依存・資格の待ちの状態を `ExecutionCoordination` へ出した（R4 own-coord-a）
+
+[ADR 2026-11-11 dispatcher-state-ownership](2026-11-11-dispatcher-state-ownership.md) D1・D2・D6 に従い、D1 の表で unit 列が own-coord-a の
+14 field（`write_reservations`・`write_set_waits`・`write_set_hold_seq`・`run_write_bases`・`review_sync_queue`・`review_sync_seq`・
+`review_resync_halted`・`integrated_deps`・`wu_prepare_failures`・`credential_held`・`credential_busy`・`browser_ledger`・`browser_prereq_rescan`・
+`cluster_waiting`）を `crates/task-dispatch/src/execution_coordination.rs` の `ExecutionCoordination`（private field）に移した。
+`WriteReservation`・`WriteSetWait`・`reservations_overlap`・`RunWriteBase`・`ReviewSyncWait`・`WuPrepareFailures` も owner が `dispatcher` module を
+使わないよう同じ file に移した。write set の blocker の絞り込みと予約の刈り込みは `RunSupervisor::run_keys` を引数で受け、owner は run の集合を持たない。
+`write_set_gate.rs` には store の hint から予約を作る入口と、`TestHooks` の ablation を読んで `admit_write_set` に引数で渡す入口だけを残した。
+`stale_priority.rs`・`browser_prereq.rs`・`credential_gate.rs`・`write_set_record.rs`・`review_spawn.rs` は owner の method を呼ぶ。
+module map に `execution_coordination` の行（層は owner）を足した。移した module の旧い行は無かった（`write_set_gate` などは map に行を持たない）。
+
+## 付記 2026-11-13: task・WU の待ち・check と統合の process・tick の状態を `ExecutionCoordination` へ出した（R4 own-coord-b）
+
+[ADR 2026-11-11 dispatcher-state-ownership](2026-11-11-dispatcher-state-ownership.md) D1・D2・D3・D6 に従い、D1 の表で unit 列が own-coord-b の
+16 field（`accepting_new_work`・`awaiting_children`・`awaiting_human`・`checking`・`dispatch_waits`・`integrating`・`last_tick_gap_ms`・
+`last_tick_started`・`liveness_checked_at`・`max_concurrency`・`pending_subjects`・`rx`・`stall_watch`・`stalled_tasks`・`ticks`・`tx`）を
+`Dispatcher` から `crates/task-dispatch/src/execution_coordination.rs` の `ExecutionCoordination` へ移した。値の型 `IntegrationEntry`・`CheckingEntry`・
+`AwaitingChildren` も同じ file に移した。review の持ち越し（`ReviewSubject`）と完了の channel の値（`Completion`）は dispatcher の型なので、
+owner は型引数 `ExecutionCoordination<S, C>` で受ける。lease の回収・abort の待ちの削除（`leases.rs`・`ownerless_runs.rs`）は、
+`RunSupervisor` が手放した review の鍵を受ける `release_reclaimed_review` と、drain の `abort_in_hand` を通す。stale 優先の ablation は
+`stale_priority.rs` の `stale_priority_disabled` が `TestHooks` から読み、`enter_review_sync_queue` に引数で渡す。module map の
+`execution_coordination` の行を直した。移した module の旧い行は無かった（`leases`・`tree_units`・`snapshot` などの行は入口として残る）。
+`ExecutionCoordination` の method が repo-health の閾値（型 1 つに 60）を超えないよう、WU の check と段の統合の process（`checking`・
+`integrating`）を下位 owner `ProcessTable`、停滞の見張り（`stall_watch`・`stalled_tasks`・`liveness_checked_at`）を下位 owner
+`LivenessWatch` に置いた（同じ file、`ExecutionCoordination` の private な field としてだけ作る。`RoutingRuntime` の中の `QuotaBook` と同じ形）。
+入口は `processes()`・`liveness()`（と `_mut`）から method を呼ぶ。write set の blocker の判断は純粋関数 `write_set_blocker` にした。
+
+## 付記 2026-11-13: 案件の停滞の見張り・CoS chat の起動の状態・残りの保守と probe の port を owner へ出した（R4 own-orchestration）
+
+[ADR 2026-11-11 dispatcher-state-ownership](2026-11-11-dispatcher-state-ownership.md) D1・D2・D6 に従い、D1 の表で unit 列が own-orchestration の
+7 field を `Dispatcher` から表の owner 列の置き場へ移した。
+
+- `cos_chat_launch`・`stagnation` は新しい `crates/task-dispatch/src/project_orchestration.rs` の `ProjectOrchestration` へ。停滞の判定の状態の型
+  `StagnationWatch` も `tree_units.rs` から同じ file に移し、field を private にした。CoS chat の起動の状態（`CosChatLaunch`）は dispatcher の型なので、
+  owner は型引数 `ProjectOrchestration<L>` で受ける。`tree_units` の書き込み（閾値の差し替え・判定の開始・結果の記録）と `cos_chat/launch` の書き込み
+  （差し込み・verify での取り外し・tick の間の取り出しと戻し）は owner の method（`configure_stagnation`・`begin_stagnation_scan`・`record_stagnation`・
+  `install_launch`・`remove_launch`・`take_launch`・`restore_launch`）を通す。判定をするかの判断は既存の純粋関数 `task_ops::stagnation::scan_due`、
+  判定は `task_ops::stagnation::detect` のまま。番号（generation）の進め方と、起動後にメモリの待ちが揃うまで判定しない条件は変えていない。
+- `health_inventory`・`script_compare` は既存の `HostMaintenance` へ。Busy の印の型 `InventoryRuns` は `health_review/inventory.rs` から
+  `host_maintenance.rs` に移した（`inventory.rs` は re-export と `port` の関数だけを持つ）。TS の比較の状態（`ScriptCompareState`）は dispatcher の型なので、
+  owner は型引数 `HostMaintenance<C>` で受け、入口は `script_compare()`・`script_compare_mut()` から読む。`HostMaintenance` の struct に
+  `#[cfg(test)]` の field は無い。`ScriptCompareState` の中の試験専用の field `next_digest_pass_id` は今の場所に残した（`TestHooks` へ移すと、
+  repo-health の size 規則の test mask がそれまで数えていなかった `script_compare.rs` の `impl Dispatcher` の 12 method を数え始め、
+  `Dispatcher` の method 数が 382 から 394 に見かけ上増えて fail になるため。進捗の提案に書いた）。
+- `eval_version_probe`・`knowledge_probe`・`now_unix_fn` は新しい `crates/task-dispatch/src/probe_ports.rs` の `ProbePorts` へ（本番の既定を持つ
+  注入 port。`#[cfg(test)]` ではない）。`KnowledgeProbe` の定義もここに移し、`dispatcher::KnowledgeProbe` は re-export で同じ path のまま。owner は
+  `ProbePorts` を持たず、`Dispatcher` の入口が読んだ値を引数で渡す。
+- 試験 `structure_guard_project_orchestration`・`structure_guard_probe_ports` が D2 の 1〜3 を source から確かめ、`OWNER_STRUCTS` に
+  `ProjectOrchestration<L>`・`StagnationWatch`・`ProbePorts`・`InventoryRuns` を足した（`HostMaintenance` は `HostMaintenance<C>` に直した）。
+- module map に `project_orchestration`・`probe_ports` の行を足し、`host_maintenance`・`tree_units` の行を直した。移した module の旧い行は無かった
+  （`tree_units`・`cos_chat`・`script_compare`・`cron_tick` は入口として残る）。

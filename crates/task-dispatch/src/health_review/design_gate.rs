@@ -355,7 +355,7 @@ impl Dispatcher {
         let artifacts_dir = self.artifacts_dir(task, &dir);
         let subject_task = task.clone();
         let (task_id, end_run_id, provider) = (task.id, run_id.clone(), source.to_string());
-        let tx = self.tx.clone();
+        let tx = self.coord.completion_sender();
         let handle = tokio::spawn(async move {
             let result =
                 run_design_reviewer(&subject_task, &dir, &artifacts_dir, request, run).await;
@@ -366,7 +366,7 @@ impl Dispatcher {
                 result,
             })));
         });
-        self.running.insert(
+        self.supervisor.register_run(
             RunKey {
                 task: task.id,
                 work_unit: None,
@@ -406,13 +406,13 @@ impl Dispatcher {
             .unwrap_or((None, None, None));
         let (run_end, outcome, usage) = run_end_of(&result, "design review");
         let model = self.started_model_of(task_id, &run_id);
-        let quota = self.resolve_quota_estimate(
+        let quota = self.routing.settle_quota(
+            &*self.store,
             task_id,
             &run_id,
             None,
-            account.as_deref(),
-            account_adapter,
-            &provider,
+            account.as_deref().zip(account_adapter),
+            provider.to_string(),
             &model,
             usage.as_ref(),
         );

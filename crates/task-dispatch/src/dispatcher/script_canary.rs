@@ -177,19 +177,19 @@ where
 impl Dispatcher {
     /// tick の始め: tick を数え、前の tick の TS の待ちを集計して予算を戻す（S5-8）。失敗した戻しを書き直す（S5-6）。
     pub(in crate::dispatcher) fn begin_tick(&mut self) {
-        self.ticks += 1;
+        self.coord.count_tick();
         self.script_tick_rollover();
     }
 
     /// 付記 S5-8: tick の終わりに TS の待ちを集計し、予算を戻す。失敗した戻しを書き直す（S5-6）。
     pub(in crate::dispatcher) fn script_tick_rollover(&mut self) {
-        self.script_compare.tick_wait.end_tick();
+        self.maint.script_compare_mut().tick_wait.end_tick();
         self.retry_pending_rollbacks();
     }
 
     /// 付記 S5-8: 直近の tick の TS の待ちの集計。
     pub fn script_tick_wait_summary(&self) -> ScriptTickWaitSummary {
-        self.script_compare.tick_wait.summary()
+        self.maint.script_compare().tick_wait.summary()
     }
 
     /// 付記 S5-8（P1-C）: snapshot に載せる集計。tick をまだ数えていなければ `None`。
@@ -207,20 +207,21 @@ impl Dispatcher {
 
     /// この tick の TS の待ちの残り（S5-8。cos_digest の pass が使う）。
     pub(in crate::dispatcher) fn script_tick_wait_remaining(&self) -> Duration {
-        self.script_compare.tick_wait.remaining()
+        self.maint.script_compare().tick_wait.remaining()
     }
 
     pub(in crate::dispatcher) fn script_tick_charge(&mut self, waited: Duration) {
-        self.script_compare.tick_wait.charge(waited);
+        self.maint.script_compare_mut().tick_wait.charge(waited);
     }
 
     pub(in crate::dispatcher) fn script_tick_budget_hit(&mut self) {
-        self.script_compare.tick_wait.budget_hit();
+        self.maint.script_compare_mut().tick_wait.budget_hit();
     }
 
     /// 戻しの書き込みに失敗して process の中で `rust` と扱っている領域。
     pub fn script_domains_forced_rust(&self) -> Vec<ScriptDomain> {
-        self.script_compare
+        self.maint
+            .script_compare()
             .pending_rollbacks
             .iter()
             .map(|p| p.domain)
@@ -235,7 +236,7 @@ impl Dispatcher {
         expected_version: u64,
         reason: &str,
     ) {
-        let written = match &self.script_compare.store {
+        let written = match &self.maint.script_compare().store {
             Some(store) => store
                 .script_domain_rollback(
                     domain,
@@ -249,26 +250,30 @@ impl Dispatcher {
         if let Err(error) = written {
             tracing::warn!(domain = domain.as_str(), %error, "script rollback write failed; treating the domain as rust");
             if !self
-                .script_compare
+                .maint
+                .script_compare()
                 .pending_rollbacks
                 .iter()
                 .any(|p| p.domain == domain)
             {
-                self.script_compare.pending_rollbacks.push(PendingRollback {
-                    domain,
-                    reason: reason.to_owned(),
-                });
+                self.maint
+                    .script_compare_mut()
+                    .pending_rollbacks
+                    .push(PendingRollback {
+                        domain,
+                        reason: reason.to_owned(),
+                    });
             }
         }
         // この tick の残りは読み直した行で判定する（戻した領域は `rust`）。
-        self.script_compare.read_at_tick = None;
+        self.maint.script_compare_mut().read_at_tick = None;
     }
 
     fn retry_pending_rollbacks(&mut self) {
-        let Some(store) = self.script_compare.store.clone() else {
+        let Some(store) = self.maint.script_compare().store.clone() else {
             return;
         };
-        let pending = std::mem::take(&mut self.script_compare.pending_rollbacks);
+        let pending = std::mem::take(&mut self.maint.script_compare_mut().pending_rollbacks);
         for p in pending {
             let row = store
                 .script_domain_modes()
@@ -287,7 +292,7 @@ impl Dispatcher {
                 Ok(None) | Err(_) => false,
             };
             if !done {
-                self.script_compare.pending_rollbacks.push(p);
+                self.maint.script_compare_mut().pending_rollbacks.push(p);
             }
         }
     }
@@ -311,9 +316,9 @@ impl Dispatcher {
             Ok(script) => script,
             Err(reason) => return unavailable(draft, "unavailable", &reason),
         };
-        let remaining = self.script_compare.tick_wait.remaining();
+        let remaining = self.maint.script_compare().tick_wait.remaining();
         if remaining.is_zero() {
-            self.script_compare.tick_wait.budget_hit();
+            self.maint.script_compare_mut().tick_wait.budget_hit();
             return unavailable(
                 draft,
                 "tick_budget",
@@ -330,10 +335,13 @@ impl Dispatcher {
         else {
             return unavailable(draft, "unavailable", "no runtime for the script call");
         };
-        self.script_compare.tick_wait.charge(elapsed.min(deadline));
+        self.maint
+            .script_compare_mut()
+            .tick_wait
+            .charge(elapsed.min(deadline));
         // 予算で縮めた deadline の超えは TS の timeout に数えない（S5-8）。
         if matches!(result, TsResult::DeadlineExceeded(_)) && deadline < SCRIPT_CALL_DEADLINE {
-            self.script_compare.tick_wait.budget_hit();
+            self.maint.script_compare_mut().tick_wait.budget_hit();
             return unavailable(
                 draft,
                 "tick_budget",
@@ -407,14 +415,21 @@ impl Dispatcher {
             .map(|ts| ceiling.clamp(ts.proposed).0);
         append_observed(store.as_ref(), task_id, side.record, true);
         if let Some(lane) = lane {
-            self.script_compare.lane_canary.insert(task_id, lane);
+            self.maint
+                .script_compare_mut()
+                .lane_canary
+                .insert(task_id, lane);
         }
         lane
     }
 
     /// WU の lane の上限（`decide_lane_for_work_unit`）に、この tick の `lane_rules` の TS の lane を使う。
     pub(in crate::dispatcher) fn lane_canary_for(&self, task_id: TaskId) -> Option<Tier> {
-        self.script_compare.lane_canary.get(&task_id).copied()
+        self.maint
+            .script_compare()
+            .lane_canary
+            .get(&task_id)
+            .copied()
     }
 
     /// 付記 S5-3: `route_priority` の canary・ts。TS の側で TS の候補列が検証を通り Rust と違えば、その列を返す

@@ -234,7 +234,7 @@ impl Dispatcher {
                 if outcome.next == Status::Reviewing
                     && !self.spawn_review(task_id, run_id, &subject)?
                 {
-                    self.pending_subjects.insert(task_id, subject);
+                    self.coord.defer_review(task_id, subject);
                 }
                 Ok(())
             }
@@ -351,7 +351,7 @@ impl Dispatcher {
         run_id: String,
         subject: &ReviewSubject,
     ) -> Result<bool, DispatchError> {
-        if !self.accepting_new_work || !self.maint.disk_ready() {
+        if !self.coord.accepting_new_work() || !self.maint.disk_ready() {
             return Ok(false);
         }
         let Some(task) = self.store.get(task_id)? else {
@@ -414,11 +414,11 @@ impl Dispatcher {
 
         let human = match self.resolve_human_approvals(&task)? {
             Some(h) => {
-                self.awaiting_human.remove(&task_id);
+                self.coord.set_awaiting_human(task_id, false);
                 h
             }
             None => {
-                self.awaiting_human.insert(task_id);
+                self.coord.set_awaiting_human(task_id, true);
                 tracing::debug!(%task_id, "review deferred (waiting for human approval)");
                 return Ok(false);
             }
@@ -910,7 +910,7 @@ impl Dispatcher {
                 }
             }
             // ADR-0076: reviewer run も worker と同じく quota の `before` を登録する
-            // （`on_review_finished` が `resolve_quota_estimate` で閉じる）。
+            // （`on_review_finished` が `RoutingRuntime::settle_quota` で閉じる）。
             self.quota_begin(account.as_deref(), account_adapter, review_run_id);
         }
         let limits = CheckLimits::new(self.config.review_timeout, &self.config.check_slots);
@@ -920,7 +920,7 @@ impl Dispatcher {
         let entry_subject = subject.clone();
         let entry_run_id = run_id.clone();
         let subject = subject.clone();
-        let tx = self.tx.clone();
+        let tx = self.coord.completion_sender();
         let remote_review = remote_settings.clone();
         // ADR-0019 D1 6. / ADR-0041 D1: 判定コマンドは worktree の中で実行する（元のリポジトリでは実行しない）。
         let review_work_dir = self.work_dir_for(&task).filter(|w| w.is_dir());
@@ -1073,7 +1073,7 @@ impl Dispatcher {
                 outcome,
             });
         });
-        self.reviewing.insert(
+        self.supervisor.register_review(
             task_id,
             ReviewEntry {
                 _review_lock: review_lock,
@@ -1259,7 +1259,7 @@ impl Dispatcher {
             .collect();
         let (count, last, halted) = pre_review_stale_state(&events);
         if count <= task_ops::delivery::MAX_TARGET_RESYNCS {
-            self.review_resync_halted.remove(&task_id);
+            self.coord.clear_review_resync_halt(task_id);
             return Ok(false);
         }
         let (review_run, repo_id, reviewed, target) = match halted.or(last) {
@@ -1342,19 +1342,18 @@ impl Dispatcher {
                     ),
                 ),
             )?;
-            self.review_resync_halted.remove(&task_id);
+            self.coord.clear_review_resync_halt(task_id);
             return Ok(false);
         }
-        self.review_resync_halted.entry(task_id).or_insert_with(|| {
-            task_ops::daemon::SnapshotReviewResyncHalted {
+        self.coord
+            .note_review_resync_halt(task_ops::daemon::SnapshotReviewResyncHalted {
                 task_id,
                 repo_id,
                 reviewed_sha: reviewed,
                 target_sha: target,
                 resyncs: count,
                 at: rfc3339(now),
-            }
-        });
+            });
         Ok(true)
     }
 
@@ -1369,7 +1368,7 @@ impl Dispatcher {
         subject_run_id: &str,
         token_budget: Result<Option<Arc<token_budget::TokenBudgetWatch>>, StoreError>,
     ) -> Option<ReviewerPick> {
-        if self.workers_in_flight() >= self.max_concurrency {
+        if self.workers_in_flight() >= self.coord.max_concurrency() {
             return None;
         }
         let org = self.store.org_list().ok()?;

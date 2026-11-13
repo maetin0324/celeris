@@ -1,6 +1,7 @@
 //! run の起動（`dispatch_one`・`spawn_worker`）と、その前段の担当・lane・harness の決定。lease の取得から `running.insert` までは一続きに保つ。ADR-0082 の L4。
 
 use super::*;
+use crate::execution_coordination::WriteSetAdmission;
 
 /// 付記 S2: `lane_rules` の compare の結線（`decide_lane` から呼ぶ）。`dispatcher.rs` を大きくしないよう、ここで宣言する。
 #[path = "script_compare.rs"]
@@ -38,7 +39,7 @@ impl Dispatcher {
         // ADR-0074 D1.3（Phase F2b）: 並列 WU の 2 本目以降（Task は既に Running。担当・gate・
         // バックオフは 1 本目で済んでいる）。
         let second_pass = forced_wu.is_some();
-        if !second_pass && self.running_for_task(task.id) > 0 {
+        if !second_pass && self.supervisor.runs_for_task(task.id) > 0 {
             return Ok(false);
         }
         // ADR-0089（Phase R6-5）: CoS の対話 run は `max_concurrency` ではなく `max_cos_runs` で数える。
@@ -54,7 +55,7 @@ impl Dispatcher {
         }
         // ADR-0044 D2: この tick で打ち切ったばかりの run と同じ worktree に、すぐ次の run を
         // 入れない（孫プロセスが片付く猶予を 1 tick 置く）。
-        if self.just_aborted.contains(&task.id) {
+        if self.supervisor.was_just_aborted(task.id) {
             return Ok(false);
         }
         // ADR-0041 D5: verify モードは `genre = "smoke"` の煙試験だけを起こす（他は ready のまま）。
@@ -216,10 +217,10 @@ impl Dispatcher {
                 return Ok(false);
             }
         }
-        // ADR-0070 D3（Phase 116）: インフラ都合の再試行のバックオフ（`self.infra_backoff`。
+        // ADR-0070 D3（Phase 116）: インフラ都合の再試行のバックオフ（`RunSupervisor` の infra backoff。
         // `task.attempts` に依らない別軸。上のバックオフとは独立にゲートする）。期限を過ぎたら
         // このタスクへのゲートは外す（次に infra 失敗すればまた立て直す）。
-        if !second_pass && let Some(until) = self.infra_backoff.get(&task.id).copied() {
+        if !second_pass && let Some(until) = self.supervisor.infra_backoff_until(task.id) {
             if self.now_utc() < until {
                 tracing::debug!(task_id = %task.id, %until, "infra backoff; not dispatching yet");
                 self.note_dispatch_wait(
@@ -231,7 +232,7 @@ impl Dispatcher {
                 );
                 return Ok(false);
             }
-            self.infra_backoff.remove(&task.id);
+            self.supervisor.clear_infra_backoff(task.id);
         }
         // ADR 2026-10-08-browser-prod-enablement D2: browser の前提（適合台帳）が無い・古いなら、lease・worker の
         // 前に理由つきで止める（worker 起動後の infra_requeue を繰り返さない）。
@@ -250,23 +251,12 @@ impl Dispatcher {
                 .filter(|w| w.phase.is_some())
                 .map(|w| w.id.clone()),
         };
-        let write_reservation = if is_planner_dispatch || self.write_set_gate_disabled() {
-            None
-        } else {
-            self.write_reservation_for(&task, current_wu.as_ref())?
-        };
-        if let Some(reservation) = &write_reservation
-            && let Some(blocker) = self.write_set_blocker(&run_key, reservation)
-        {
-            self.note_write_set_hold(&run_key, &blocker, reservation);
-            self.note_dispatch_wait(
-                task.id,
-                task_core::TaskWait::WriteSet {
-                    blocking_task_ids: vec![blocker.task],
-                },
-            );
-            return Ok(false);
-        }
+        let wu = current_wu.as_ref();
+        let write_reservation =
+            match self.admit_write_set(&task, &run_key, wu, is_planner_dispatch)? {
+                WriteSetAdmission::Admit(reservation) => reservation,
+                WriteSetAdmission::Hold { .. } => return Ok(false),
+            };
         // ADR-0018: リモート実行のタスクは、クラスタの設定・cooldown・並列度・多重接続を先に確かめる。
         // ADR-0062 B1（Phase 107）: `cluster_of` が `None` の理由を分ける。(a) 設定に無いクラスタ
         // → 従来どおり `unroutable`（人が設定を直すまで進まない）。(b) 担当が `cluster:<id>` を
@@ -304,7 +294,7 @@ impl Dispatcher {
                 .is_some_and(|until| until > now)
             {
                 // ADR-0018 D2: 人がログインするまで進まないので、待ち対象には数えない（`--until-idle` を止めない）。
-                self.cluster_waiting.insert(task.id);
+                self.coord.note_cluster_waiting(task.id);
                 self.note_dispatch_wait(task.id, cluster_wait(&spec.id, "cooldown"));
                 return Ok(false);
             }
@@ -334,7 +324,7 @@ impl Dispatcher {
                             &spec,
                             format!("auto-connect failed: {detail}"),
                         )?;
-                        self.cluster_waiting.insert(task.id);
+                        self.coord.note_cluster_waiting(task.id);
                         self.note_dispatch_wait(
                             task.id,
                             cluster_wait(&spec.id, &format!("auto-connect failed: {detail}")),
@@ -350,7 +340,7 @@ impl Dispatcher {
                                 spec.id, spec.host
                             ),
                         )?;
-                        self.cluster_waiting.insert(task.id);
+                        self.coord.note_cluster_waiting(task.id);
                         self.note_dispatch_wait(
                             task.id,
                             cluster_wait(&spec.id, "no ssh ControlMaster connection"),
@@ -385,9 +375,7 @@ impl Dispatcher {
         let mut wu_workspace: Option<WorkUnitWorkspace> = None;
         if let Some(wu) = &current_wu {
             // ADR-0074「Phase F5-fix7 実装時の明確化」: 一時的な失敗の後のバックオフ中は試さない。
-            if let Some(f) = self.wu_prepare_failures.get(&wu.id)
-                && self.now_utc() < f.retry_at
-            {
+            if let Some(f) = self.coord.wu_prepare_backoff(&wu.id, self.now_utc()) {
                 tracing::debug!(task_id = %task.id, work_unit = %wu.key, failures = f.count, retry_at = %f.retry_at, "work unit worktree backoff; not dispatching yet");
                 return Ok(false);
             }
@@ -449,7 +437,7 @@ impl Dispatcher {
             })();
             match prepared {
                 Ok(env) => {
-                    self.wu_prepare_failures.remove(&wu.id);
+                    self.coord.clear_wu_prepare_failures(&wu.id);
                     wu_scope_env = env;
                 }
                 Err(e) => {
@@ -1054,7 +1042,7 @@ impl Dispatcher {
             self.maint.remember_task_workspaces(task.id, ws.clone());
         }
         // ADR-0074 D4（Phase F3 quota）: 観測の `before` を記録する。ADR-0076: planner run も同じく
-        // 登録する（`on_planner_finished` が `resolve_quota_estimate` で閉じる）。
+        // 登録する（`on_planner_finished` が `RoutingRuntime::settle_quota` で閉じる）。
         self.quota_begin(account.as_deref(), account_adapter, &run_id);
         // ADR-0074「R7-11 実装時の明確化」: 上で書いた予算（planner / WU / 知識整理のフォールバック）は手元の写しにしか
         // 無い。`run_worker` は DB から task を読み直すので、実効の予算を必ず渡す（`wall` だけでなく `max_turns` も効かせる）。
@@ -1109,8 +1097,8 @@ impl Dispatcher {
             task: task.id,
             work_unit: v2_wu.as_ref().map(|w| w.id.clone()),
         };
-        self.reserve_write_set(key.clone(), write_reservation);
-        self.running.insert(
+        self.coord.reserve_write_set(key.clone(), write_reservation);
+        self.supervisor.register_run(
             key,
             RunEntry {
                 run_id,
@@ -1301,7 +1289,7 @@ impl Dispatcher {
             adapter.id(),
             task_worker::browser::conformance_record_path().as_deref(),
         );
-        let tx = self.tx.clone();
+        let tx = self.coord.completion_sender();
         let lease = LeaseRenewal {
             ttl: self.config.idle_timeout + self.config.lease_grace,
             every: self.config.lease_grace / 2,
@@ -1363,7 +1351,7 @@ impl Dispatcher {
     /// `ready_tasks` の取得件数。経路なしと分かっているタスク（`warned_unroutable`）の分だけ広げ、それらが窓を埋めて
     /// 後ろの実行可能なタスクが dispatch されない・`is_idle` が誤って真になることを防ぐ（ADR-0012 監査）。
     pub(super) fn ready_window(&self) -> usize {
-        self.max_concurrency * 4 + 16 + self.routing.warned_unroutable_count()
+        self.coord.max_concurrency() * 4 + 16 + self.routing.warned_unroutable_count()
     }
 
     /// ADR-0043 D4: レビュー担当の必須の検査コマンド（ADR 2026-10-23-required-checks-bound-to-candidate:

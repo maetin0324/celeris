@@ -149,8 +149,8 @@ impl Fixture {
     pub(super) async fn join(&mut self, thread: &str) {
         let handle = self
             .d
-            .cos_chat_launch
-            .as_mut()
+            .orchestration
+            .launch_mut()
             .expect("launch")
             .running
             .remove(thread)
@@ -262,8 +262,8 @@ async fn a_spawn_failure_keeps_launched_at() {
 #[tokio::test]
 async fn route_failure_closes_prelaunch_and_counts_as_not_launched() {
     let mut f = fake_fixture();
-    f.d.cos_chat_launch
-        .as_mut()
+    f.d.orchestration
+        .launch_mut()
         .unwrap()
         .config
         .unavailable_reason = Some("CoS unavailable (test)".into());

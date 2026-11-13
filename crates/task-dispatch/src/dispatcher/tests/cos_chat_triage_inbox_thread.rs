@@ -156,8 +156,8 @@ async fn cos_chat_triage_digest_records_each_judgment_with_an_answerable_card() 
     assert!(d.run_id.is_some());
     // Idempotent across ticks and a restart.
     f.tick();
-    f.d.cos_chat_launch
-        .as_mut()
+    f.d.orchestration
+        .launch_mut()
         .expect("launch")
         .triage
         .digest_due = true;
@@ -414,8 +414,8 @@ impl Fixture {
 
     fn digest_due(&self) -> bool {
         self.d
-            .cos_chat_launch
-            .as_ref()
+            .orchestration
+            .launch()
             .expect("launch")
             .triage
             .digest_due
@@ -427,8 +427,8 @@ async fn cos_chat_triage_digest_launch_failure_after_startup_is_recovered_on_nor
     let mut f = fixture(true);
     f.tick(); // Startup reconciliation has already consumed its digest reservation.
     assert!(!f.digest_due());
-    f.d.cos_chat_launch
-        .as_mut()
+    f.d.orchestration
+        .launch_mut()
         .expect("launch")
         .config
         .unavailable_reason = Some("CoS unavailable: quota or login".into());
@@ -503,8 +503,8 @@ async fn cos_chat_triage_digest_scan_failure_retries_on_normal_tick() {
     let mut f = fixture(true);
     f.tick();
     f.seed_digest_run("old", task_core::chat::ChatRunState::Completed);
-    f.d.cos_chat_launch
-        .as_mut()
+    f.d.orchestration
+        .launch_mut()
         .expect("launch")
         .triage
         .digest_due = true;
@@ -529,7 +529,7 @@ async fn cos_chat_triage_digest_orphan_recovery_after_startup_is_scheduled() {
     assert!(!f.digest_due());
     // Intake is allowed while launches are paused. The previous owner left an
     // escalated item and a stopped run whose terminal transition is still due.
-    f.d.accepting_new_work = false;
+    f.d.coord.set_accepting_new_work(false);
     f.question("deploy", vec![]);
     f.tick();
     let claim = f
@@ -557,7 +557,7 @@ async fn cos_chat_triage_digest_orphan_recovery_after_startup_is_scheduled() {
         freshness: std::time::Duration::from_secs(60),
         pid_alive: Arc::new(|_| false),
     });
-    f.d.accepting_new_work = true;
+    f.d.coord.set_accepting_new_work(true);
     f.tick();
     assert_eq!(
         f.store

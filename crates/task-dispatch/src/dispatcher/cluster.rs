@@ -19,7 +19,7 @@ impl Dispatcher {
                 cooldown: self.config.cluster_cooldown,
                 verify_smoke: self.eligible.is_some(),
                 clock,
-                last_tick_gap_ms: self.last_tick_gap_ms,
+                last_tick_gap_ms: self.coord.last_tick_gap_ms(),
             },
         )
     }
@@ -259,12 +259,14 @@ impl Dispatcher {
 
     /// そのクラスタで走っている run の数（ADR-0018 D5: プロバイダとクラスタの二次元）。
     pub(super) fn cluster_in_use(&self, cluster: &str) -> usize {
-        self.running
+        self.supervisor
+            .runs()
             .values()
             .filter(|e| e.cluster.as_deref() == Some(cluster))
             .count()
             + self
-                .reviewing
+                .supervisor
+                .reviews()
                 .values()
                 .filter(|e| e.cluster.as_deref() == Some(cluster))
                 .count()

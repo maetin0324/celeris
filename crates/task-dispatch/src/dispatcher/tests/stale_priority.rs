@@ -2,8 +2,9 @@
 
 use super::*;
 use crate::dispatcher::stale_priority::{
-    ReviewSyncWait, STALE_PRIORITY_RELIEF_TICKS, StaleCandidate, stale_priority_cmp,
+    STALE_PRIORITY_RELIEF_TICKS, StaleCandidate, stale_priority_cmp,
 };
+use crate::execution_coordination::ReviewSyncWait;
 use task_core::behind_target::BehindTargetObservation;
 use time::format_description::well_known::Rfc3339;
 
@@ -90,7 +91,7 @@ async fn behind_target_stale_priority_more_commits_syncs_first() {
     for t in [&a, &b] {
         assert_eq!(store.get(t.id).unwrap().unwrap().status, Status::Done);
     }
-    assert!(d.review_sync_queue.is_empty());
+    assert!(d.coord.review_sync_queue().is_empty());
 }
 
 #[tokio::test]
@@ -208,34 +209,34 @@ async fn behind_target_stale_priority_counts_unselected_ticks() {
     let (a, b) = two_reviewing_tasks(repo.path(), &store);
     let mut d = worktree_dispatcher(store.clone(), checks_adapter(), ws.path(), None);
     let ordered = d
-        .order_review_sync_queue(vec![a.clone(), b.clone()])
+        .order_review_sync_queue(vec![a.clone(), b.clone()], false)
         .unwrap();
     assert_eq!(
         ordered.iter().map(|t| t.id).collect::<Vec<_>>(),
         vec![a.id, b.id]
     );
     for _ in 0..STALE_PRIORITY_RELIEF_TICKS {
-        d.note_review_sync_offer(b.id, false);
+        d.coord.note_review_sync_offer(b.id, false);
     }
     // A human-gate deferral is not an eligible tick.
-    d.awaiting_human.insert(a.id);
-    d.note_review_sync_offer(a.id, false);
-    assert_eq!(d.review_sync_queue[&a.id].skipped_ticks, 0);
+    d.coord.set_awaiting_human(a.id, true);
+    d.coord.note_review_sync_offer(a.id, false);
+    assert_eq!(d.coord.review_sync_queue()[&a.id].skipped_ticks, 0);
     assert_eq!(
-        d.review_sync_queue[&b.id].skipped_ticks,
+        d.coord.review_sync_queue()[&b.id].skipped_ticks,
         STALE_PRIORITY_RELIEF_TICKS
     );
     // b is now in the FIFO relief slot, ahead of a.
     let ordered = d
-        .order_review_sync_queue(vec![a.clone(), b.clone()])
+        .order_review_sync_queue(vec![a.clone(), b.clone()], false)
         .unwrap();
     assert_eq!(
         ordered.iter().map(|t| t.id).collect::<Vec<_>>(),
         vec![b.id, a.id]
     );
     // Selection leaves the queue; a task that left `reviewing` is dropped.
-    d.note_review_sync_offer(b.id, true);
-    assert!(!d.review_sync_queue.contains_key(&b.id));
-    d.order_review_sync_queue(vec![]).unwrap();
-    assert!(d.review_sync_queue.is_empty());
+    d.coord.note_review_sync_offer(b.id, true);
+    assert!(!d.coord.review_sync_queue().contains_key(&b.id));
+    d.order_review_sync_queue(vec![], false).unwrap();
+    assert!(d.coord.review_sync_queue().is_empty());
 }

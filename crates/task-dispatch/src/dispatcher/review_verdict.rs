@@ -23,7 +23,7 @@ impl Dispatcher {
         run_id: String,
         mut outcome: ReviewOutcome,
     ) -> Result<(), DispatchError> {
-        let entry = self.reviewing.remove(&task_id);
+        let entry = self.supervisor.take_review(task_id);
         // 用意した Reviewer run（`spawn_review` が `WorkerStarted{role: reviewer}`・`runs` 行・quota を
         // 起こした）を、決定的な検査が落ちた等で起動しなかった。ここで閉じないと `runs` 行は Task が
         // 終端になるまで `running` のまま残る（Reviewer run は lease を持たない）。判定の扱いは変えない。
@@ -66,7 +66,7 @@ impl Dispatcher {
             metrics: review_metrics,
             end: None,
         });
-        // ADR-0076: Reviewer run の quota 消費も worker と同じ `resolve_quota_estimate` で一度だけ
+        // ADR-0076: Reviewer run の quota 消費も worker と同じ `RoutingRuntime::settle_quota` で一度だけ
         // 見積もる（対象タスクが消えた・stale でも `QuotaActivity` を閉じるため、分岐より前）。
         // Reviewer run を起こさなかったレビュー（command 等だけ）には作らない。
         let reviewer_quota = match (&completed_review_run, entry.as_ref()) {
@@ -77,13 +77,13 @@ impl Dispatcher {
                 .map(|provider| {
                     let model = self.started_model_of(task_id, review_run_id);
                     let usage = worker_finished_usage(&reviewer_finished);
-                    self.resolve_quota_estimate(
+                    self.routing.settle_quota(
+                        &*self.store,
                         task_id,
                         review_run_id,
                         None,
-                        e.account.as_deref(),
-                        e.account_adapter,
-                        &provider,
+                        e.account.as_deref().zip(e.account_adapter),
+                        provider.to_string(),
                         &model,
                         usage.as_ref(),
                     )
@@ -200,7 +200,7 @@ impl Dispatcher {
                 review_metrics,
             );
             if let Some(entry) = entry {
-                self.pending_subjects.insert(task_id, entry.subject);
+                self.coord.defer_review(task_id, entry.subject);
             }
             return Ok(());
         }
@@ -311,7 +311,7 @@ impl Dispatcher {
                     review_metrics,
                 );
                 if let Some(entry) = entry {
-                    self.pending_subjects.insert(task_id, entry.subject);
+                    self.coord.defer_review(task_id, entry.subject);
                 }
                 tracing::warn!(%task_id, %run_id, reason = %pf.message, infra = is_infra_failure, "reviewer run hit a provider/infra failure; review deferred");
                 return Ok(());
@@ -468,7 +468,7 @@ impl Dispatcher {
                         format!("waiting for {pending} delegated child task(s) before completing"),
                     ),
                 )?;
-                self.awaiting_children.insert(
+                self.coord.await_children(
                     task_id,
                     AwaitingChildren {
                         run_id: run_id.clone(),

@@ -101,7 +101,7 @@ struct ScratchState {
 }
 
 /// disk・scratch・build cache・repo target の掃除と、中止された task の作業場所の片付けの状態。
-pub struct HostMaintenance {
+pub struct HostMaintenance<C> {
     /// ADR 2026-10-07-build-tmp-hygiene D1.4: cron の保守 executor（`target_sweep`）の roots と上限。
     /// `None` は既定（[`fallback_sweep_roots`]）。
     target_sweep: Option<SweepParams>,
@@ -125,9 +125,15 @@ pub struct HostMaintenance {
     /// **終端では消さない**（差分を見るために残す）。消すのは**中止**（cancel）のときだけで、worktree と
     /// ブランチを消す。再起動では失われる（残った worktree は人が `git worktree remove` する）。
     task_workspaces: HashMap<TaskId, task_worker::TaskWorkspaces>,
+    /// ADR 2026-11-08-health-enforcement-loop D6: 実行中の全体棚卸し（cron の job ごとの Busy の印）。
+    health_inventory: InventoryRuns,
+    /// ADR 2026-11-02-ts-control-layer-boundary 付記 S2・S5: TS の比較の状態（mode の表・記録の store・in-flight の比較・
+    /// tick の待ち・戻しの失敗・canary の lane・digest の影）。型は `dispatcher` の `ScriptCompareState`（この module は
+    /// `dispatcher` を使わないので型引数で受ける）。
+    script_compare: C,
 }
 
-impl Default for HostMaintenance {
+impl<C: Default> Default for HostMaintenance<C> {
     fn default() -> Self {
         Self {
             target_sweep: None,
@@ -140,6 +146,48 @@ impl Default for HostMaintenance {
             removing_repo_targets: Arc::new(AtomicBool::new(false)),
             scratch: ScratchState::default(),
             task_workspaces: HashMap::new(),
+            health_inventory: InventoryRuns::default(),
+            script_compare: C::default(),
+        }
+    }
+}
+
+/// Busy の印: job ごとの実行中の棚卸し（`HostMaintenance` の欄 `health_inventory`）。プロセス内メモリのみ（再起動の後は
+/// 走っていない。次の発火で同じ予定時刻の行が無い repo から評価し直す）。
+#[derive(Debug, Default)]
+pub struct InventoryRuns {
+    running: HashMap<task_core::CronJobId, tokio::task::JoinHandle<()>>,
+}
+
+impl InventoryRuns {
+    /// 終わっていない棚卸しの数（`Dispatcher::in_flight` の 1 項）。
+    pub fn in_flight(&self) -> usize {
+        self.running.values().filter(|h| !h.is_finished()).count()
+    }
+
+    /// `job` の棚卸しが走っているか（終わった印はここで消す）。
+    pub(crate) fn is_running(&mut self, job: task_core::CronJobId) -> bool {
+        self.running.retain(|_, handle| !handle.is_finished());
+        self.running.contains_key(&job)
+    }
+
+    /// `work` を tick の外（tokio の blocking pool）で始め、`job` の印にする。
+    pub(crate) fn start(
+        &mut self,
+        job: task_core::CronJobId,
+        work: impl FnOnce() + Send + 'static,
+    ) -> Result<(), String> {
+        let runtime = tokio::runtime::Handle::try_current()
+            .map_err(|e| format!("no tokio runtime for the health inventory: {e}"))?;
+        self.running.insert(job, runtime.spawn_blocking(work));
+        Ok(())
+    }
+
+    /// 試験用: 走っている棚卸しの終わりを待つ。
+    #[cfg(test)]
+    pub(crate) async fn join_all(&mut self) {
+        for (_, handle) in self.running.drain() {
+            let _ = handle.await;
         }
     }
 }
@@ -183,7 +231,27 @@ impl SweepEnv for DispatcherClock {
     }
 }
 
-impl HostMaintenance {
+impl<C> HostMaintenance<C> {
+    /// 実行中の全体棚卸しの Busy の印（`Dispatcher::in_flight` に数え、cron の sink が印を付ける）。
+    pub(crate) fn health_inventory(&self) -> &InventoryRuns {
+        &self.health_inventory
+    }
+
+    /// 全体棚卸しの Busy の印を付ける・外す口（cron の sink の `Port` に渡す）。
+    pub(crate) fn health_inventory_mut(&mut self) -> &mut InventoryRuns {
+        &mut self.health_inventory
+    }
+
+    /// TS の比較の状態。
+    pub(crate) fn script_compare(&self) -> &C {
+        &self.script_compare
+    }
+
+    /// TS の比較の状態を書き換える口（`dispatcher::script_compare`・`script_canary`・CoS の digest pass が使う）。
+    pub(crate) fn script_compare_mut(&mut self) -> &mut C {
+        &mut self.script_compare
+    }
+
     /// ADR 2026-10-07-build-tmp-hygiene D1.4: 掃除の roots と上限（celeris が `[maintenance.target_sweep]` から渡す）。
     pub(crate) fn set_target_sweep(&mut self, params: SweepParams) {
         self.target_sweep = Some(params);
@@ -1181,7 +1249,7 @@ mod structure_guard_tests {
             .find("mod structure_guard_tests")
             .expect("the guard module is in the source")];
         let start = src
-            .find("pub struct HostMaintenance {")
+            .find("pub struct HostMaintenance<C> {")
             .expect("HostMaintenance is defined");
         let body = &src[start..];
         let body = &body[..body.find("\n}\n").expect("the struct body ends")];
@@ -1215,6 +1283,8 @@ mod structure_guard_tests {
                 "removing_repo_targets",
                 "scratch",
                 "task_workspaces",
+                "health_inventory",
+                "script_compare",
             ],
             "HostMaintenance owns the host maintenance fields"
         );

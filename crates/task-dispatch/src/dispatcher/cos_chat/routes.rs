@@ -115,7 +115,10 @@ impl CosChatLaunch {
                 &summary,
                 now,
             );
-            if !dispatcher.accepting_new_work || !dispatcher.maint.disk_ready() || !config.enabled {
+            if !dispatcher.coord.accepting_new_work()
+                || !dispatcher.maint.disk_ready()
+                || !config.enabled
+            {
                 self.fail_routes(
                     &run,
                     "CoS の再試行を開始できません（停止中・ディスク・設定を確認してください）",

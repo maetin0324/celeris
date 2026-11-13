@@ -395,7 +395,7 @@ async fn unknown_stagnation_holds_rows_until_the_check_succeeds_again() {
     assert_eq!(f.rows(), rows, "held: no row resolved while unknown");
 
     // The unavailable fallback is due for every item now.
-    if let Some(launch) = f.d.cos_chat_launch.as_mut() {
+    if let Some(launch) = f.d.orchestration.launch_mut() {
         launch.config.triage.fallback_after_secs = 60;
     }
     f.at(3780);

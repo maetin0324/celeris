@@ -12,7 +12,7 @@ pub const RETENTION_ACTOR: &str = "system:project-retention";
 impl Dispatcher {
     pub(crate) fn tick_project_retention(&mut self) {
         let now = self.now_utc();
-        let Some(launch) = self.cos_chat_launch.as_mut() else {
+        let Some(launch) = self.orchestration.launch_mut() else {
             return;
         };
         let store = launch.store.clone();

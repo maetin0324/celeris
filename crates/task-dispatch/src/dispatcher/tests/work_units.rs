@@ -2235,7 +2235,7 @@ async fn draining_dispatcher_hands_off_work_unit_checks_in_hand_to_the_new_activ
     });
     let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 2, 2, 2);
     let run_id = run_gate_until_second_checks(&mut d, &store, task.id).await;
-    assert!(d.checking.contains_key(&run_id));
+    assert!(d.coord.processes().is_checking(&run_id));
 
     // live handoff: このインスタンスは draining になる（新しい仕事は始めない）。
     d.set_accepting_new_work(false);
@@ -2245,7 +2245,7 @@ async fn draining_dispatcher_hands_off_work_unit_checks_in_hand_to_the_new_activ
         0,
         "draining の旧 instance が検査を抱えたまま"
     );
-    assert!(d.checking.is_empty());
+    assert!(!d.coord.processes().has_checks());
     let handed: Vec<String> = events_of(&store, task.id)
         .into_iter()
         .filter_map(|e| match e {
@@ -2348,7 +2348,7 @@ async fn lease_expired_work_unit_run_with_a_result_json_is_finalised_instead_of_
         "{outcomes:?}"
     );
     // result.json から確定させ、WU の検査を走らせ直している（run は増えない）。
-    assert!(active.checking.contains_key(&run_id));
+    assert!(active.coord.processes().is_checking(&run_id));
     let u = gate_row(&store, task.id);
     assert_eq!(u.status, task_core::WorkUnitStatus::Running, "{u:?}");
     assert_eq!(u.runs, 2);
@@ -2570,7 +2570,7 @@ async fn a_finalisation_failure_of_a_parallel_work_unit_resets_only_that_unit() 
     // 後から届いた検査の完了は stale として捨てられる（WorkerFinished は増えない）。
     for _ in 0..100 {
         d.tick().unwrap();
-        if d.checking.is_empty() {
+        if !d.coord.processes().has_checks() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -2932,7 +2932,7 @@ async fn parallel_units_survive_dispatcher_restart() {
         2
     );
     // バックオフを飛ばして続きを走らせる（WU の worktree はそのまま使い回す）。
-    d2.infra_backoff.clear();
+    d2.supervisor.clear_infra_backoff_for_test();
     run_until_idle(&mut d2, 600).await;
     assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
     assert_eq!(second.max_active(), 2);
@@ -2970,7 +2970,11 @@ async fn an_interrupted_integration_is_redone_idempotently_after_restart() {
     // 統合を走らせていたデーモンが落ちた（結果は届かない。merge は済んでいる）。落ちたデーモンの統合はそのデーモンと
     // 一緒に止まるので、spawn 済みの統合の終わりを待ってから捨てる（固定の sleep だと負荷で d1 の merge が d2 の
     // やり直しと同じ worktree で重なり、index.lock で統合が失敗して Blocked になる）。
-    let in_flight = d1.integrating.remove(&id).expect("integration in flight");
+    let in_flight = d1
+        .coord
+        .processes_mut()
+        .take_integration(id)
+        .expect("integration in flight");
     in_flight.handle.await.unwrap();
     drop(d1);
     // 落ちた daemon の統合は spawn_blocking の git merge で、drop しても止まらない。その merge が済む前に
@@ -3008,7 +3012,7 @@ async fn an_interrupted_integration_is_redone_idempotently_after_restart() {
             if key == "integrate-build" && reason == "restart_reconcile"
     )));
     assert!(transitioned_index(&events, "infra_requeue").is_some());
-    d2.infra_backoff.clear();
+    d2.supervisor.clear_infra_backoff_for_test();
     run_until_idle(&mut d2, 600).await;
     assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
     let merges = git_out(
@@ -3065,12 +3069,16 @@ async fn cancel_stops_every_work_unit_run() {
         })
         .await
     );
-    assert_eq!(d.running_for_task(task.id), 2);
+    assert_eq!(d.supervisor.runs_for_task(task.id), 2);
     store
         .apply_transition(task.id, Trigger::Cancel, None)
         .unwrap();
     d.tick().unwrap();
-    assert_eq!(d.running_for_task(task.id), 0, "全 WU の run が止まる");
+    assert_eq!(
+        d.supervisor.runs_for_task(task.id),
+        0,
+        "全 WU の run が止まる"
+    );
     let units = store.work_units_for(task.id).unwrap();
     assert!(
         units
@@ -3131,9 +3139,13 @@ async fn ready_task_first_run_beats_a_second_parallel_unit() {
     );
     let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 2, 3, 3);
     d.tick().unwrap();
-    assert_eq!(d.running_for_task(task.id), 1, "並列 WU の 2 本目は待つ");
     assert_eq!(
-        d.running_for_task(other.id),
+        d.supervisor.runs_for_task(task.id),
+        1,
+        "並列 WU の 2 本目は待つ"
+    );
+    assert_eq!(
+        d.supervisor.runs_for_task(other.id),
         1,
         "Ready の別の Task の 1 本目が先"
     );

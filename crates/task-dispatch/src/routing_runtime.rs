@@ -7,7 +7,9 @@
 //!   store・時計・`[accounts]` の root・走っている run の `(source, account)` は引数で受ける。
 //! - [`RoutingRuntime::route_state`] は account 一覧の cache（走査の結果）を更新してから、純粋関数
 //!   [`route_state::build_route_state`] に入力を渡す。判断はその関数にあり、cache の更新と入力の収集だけがここにある。
-//! - quota の窓・見積り（`quota_activity`・`quota_calibration`・`routing_runtime/quota*`）は unit own-quota が扱う。
+//! - quota の窓と較正は下位 owner [`quota::QuotaBook`]（`quota_activity`・`quota_calibration`）に置く。見積りの判断は純粋関数
+//!   [`quota_estimate::propose_estimate`]、適用（較正の更新と他の member の event の追記）は `quota.rs` の `RoutingRuntime` の method。
+//! - 評価 run の追跡（`eval_runs`）と knowledge の到達性の cache（`knowledge_probe_cache`）もここに置く。
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -20,9 +22,11 @@ use task_core::route_select::RoutingMode;
 use task_core::{AccountAdapter, StoreError, TaskId, TaskStore};
 
 use crate::accounts::{AccountBook, AccountCooldown, AccountDir, scan_accounts};
-use task_worker::WorkerAdapter;
+use task_worker::{Reachability, WorkerAdapter};
 
 pub(crate) mod classification_board;
+pub(crate) mod quota;
+pub(crate) mod quota_estimate;
 pub mod route_state;
 
 use route_state::{RouteState, RouteStateInputs, SavedLimits, account_adapter_for_source_kind};
@@ -45,6 +49,14 @@ pub(crate) struct RouteStateContext<'a> {
     /// `[accounts]` の根ディレクトリ（`[accounts]` が無ければ `None`）。
     pub(crate) account_roots: Option<&'a HashMap<AccountAdapter, PathBuf>>,
     pub(crate) default_max_runs: usize,
+}
+
+/// 起動した評価 run の追跡（プロセス内のみ。真実は `eval_trials` の行と `runs` 索引）。
+pub(crate) struct EvalRunEntry {
+    pub(crate) trial_id: String,
+    /// この run が押さえている `(source, account)`（評価の admission で本番の run と合算する）。
+    pub(crate) route: (SourceId, AccountId),
+    pub(crate) handle: tokio::task::JoinHandle<()>,
 }
 
 /// 経路選択の状態: 宣言（source・harness・route）、account の上限・走査 cache・帳簿・cooldown、routing mode、分類 board、
@@ -80,6 +92,14 @@ pub struct RoutingRuntime {
     dispatch_routing: DispatchRoutingSettings,
     /// run に結ぶ RoutingContext の登録簿。未設定なら登録も `context_ref` の発行もしない。
     routing_context_registry: Option<Arc<dyn RoutingContextRegistry>>,
+    /// quota の窓と較正（下位 owner）。
+    quota: quota::QuotaBook,
+    /// ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch）D4:
+    /// 起動した評価 run（run id → 試行）。`running` に入れないので本番の全体並列度に数えない
+    /// （予約枠は `config.eval.reserved_runs`）。真実は `eval_trials` の行。
+    eval_runs: HashMap<String, EvalRunEntry>,
+    /// ADR-0052 D1: 検査の結果のキャッシュ（`base_url` → (いつ調べたか, 結果)）。60 秒。
+    knowledge_probe_cache: HashMap<String, (Instant, Reachability)>,
 }
 
 fn limit_key(adapter: &str, id: &str) -> (SourceId, AccountId) {
@@ -148,6 +168,9 @@ impl RoutingRuntime {
             unroutable: std::collections::HashSet::new(),
             dispatch_routing: DispatchRoutingSettings::default(),
             routing_context_registry: None,
+            quota: quota::QuotaBook::new(),
+            eval_runs: HashMap::new(),
+            knowledge_probe_cache: HashMap::new(),
         }
     }
 
@@ -394,6 +417,59 @@ impl RoutingRuntime {
         self.routing_context_registry.as_ref()
     }
 
+    // ---- 評価 run の追跡 ----
+
+    pub(crate) fn eval_run_count(&self) -> usize {
+        self.eval_runs.len()
+    }
+
+    pub(crate) fn holds_eval_run(&self, run_id: &str) -> bool {
+        self.eval_runs.contains_key(run_id)
+    }
+
+    pub(crate) fn track_eval_run(&mut self, run_id: String, entry: EvalRunEntry) {
+        self.eval_runs.insert(run_id, entry);
+    }
+
+    /// 終わった評価 run を表から外す（追跡していなければ `None`）。
+    pub(crate) fn finish_eval_run(&mut self, run_id: &str) -> Option<EvalRunEntry> {
+        self.eval_runs.remove(run_id)
+    }
+
+    /// 手元の評価 run を全部表から外して返す（止めるのは呼び出し側）。
+    pub(crate) fn drain_eval_runs(&mut self) -> Vec<(String, EvalRunEntry)> {
+        self.eval_runs.drain().collect()
+    }
+
+    /// 走っている評価 run が押さえている `(source, account)`。
+    pub(crate) fn eval_run_routes(&self) -> impl Iterator<Item = &(SourceId, AccountId)> {
+        self.eval_runs.values().map(|e| &e.route)
+    }
+
+    // ---- knowledge の到達性の cache ----
+
+    pub(crate) fn clear_knowledge_probe_cache(&mut self) {
+        self.knowledge_probe_cache.clear();
+    }
+
+    /// cache の期限判定と更新を所有し、期限内なら probe を呼ばない。
+    pub(crate) fn knowledge_reachability(
+        &mut self,
+        base_url: &str,
+        now: Instant,
+        probe: impl FnOnce() -> Reachability,
+    ) -> Reachability {
+        if let Some((checked_at, cached)) = self.knowledge_probe_cache.get(base_url)
+            && now.duration_since(*checked_at) < task_worker::PROBE_CACHE_TTL
+        {
+            return cached.clone();
+        }
+        let outcome = probe();
+        self.knowledge_probe_cache
+            .insert(base_url.to_string(), (now, outcome.clone()));
+        outcome
+    }
+
     // ---- RouteState ----
 
     /// admission の状態を捕える。走査の cache を満たしてから、帳簿を借りて純粋関数に渡す。
@@ -436,6 +512,13 @@ impl RoutingRuntime {
     // ---- 試験が使う入口（field は露出しない） ----
 
     #[cfg(test)]
+    pub(crate) fn eval_run_handles_for_test(
+        &self,
+    ) -> impl Iterator<Item = &tokio::task::JoinHandle<()>> {
+        self.eval_runs.values().map(|e| &e.handle)
+    }
+
+    #[cfg(test)]
     pub(crate) fn insert_source_cooldown_for_test(
         &mut self,
         source: SourceId,
@@ -459,8 +542,42 @@ impl RoutingRuntime {
 
 #[cfg(test)]
 mod structure_guard_tests {
+    /// 不変条件: cache は URL ごとに期限未満だけ再利用し、期限ちょうどと明示の消去後は再検査する。
+    /// 既存の構造試験は cache の期限境界や probe の呼び出し回数を検出しない。
+    #[test]
+    fn knowledge_cache_expiry_and_clear() {
+        use super::*;
+        let store = task_core::SqliteStore::open_in_memory().unwrap();
+        let mut routing = RoutingRuntime::new(&store, None);
+        let now = Instant::now();
+        let calls = std::cell::Cell::new(0);
+        let probe = || {
+            calls.set(calls.get() + 1);
+            Reachability::Ok
+        };
+        for (url, elapsed, expected) in [
+            ("a", Duration::ZERO, 1),
+            (
+                "a",
+                task_worker::PROBE_CACHE_TTL - Duration::from_nanos(1),
+                1,
+            ),
+            ("b", Duration::ZERO, 2),
+            ("a", task_worker::PROBE_CACHE_TTL, 3),
+        ] {
+            assert!(matches!(
+                routing.knowledge_reachability(url, now + elapsed, probe),
+                Reachability::Ok
+            ));
+            assert_eq!(calls.get(), expected);
+        }
+        routing.clear_knowledge_probe_cache();
+        routing.knowledge_reachability("a", now + task_worker::PROBE_CACHE_TTL, probe);
+        assert_eq!(calls.get(), 4);
+    }
+
     /// 不変条件: ADR 2026-11-11 D2 の 1〜3・7（field が private（`#[cfg(test)]` の field は `dispatcher/tests/structure_guard.rs`）、
-    /// `Dispatcher` を受けない・`dispatcher` module を使わない、field は 15 件）。既存の試験は振る舞いだけを見るので、
+    /// `Dispatcher` を受けない・`dispatcher` module を使わない、field は 18 件）。既存の試験は振る舞いだけを見るので、
     /// field を `pub` に戻しても通る。純粋 module `route_state.rs` は読み書き・時計・lock を持たない。
     #[test]
     fn structure_guard_routing_runtime() {
@@ -489,7 +606,10 @@ mod structure_guard_tests {
                 fields += 1;
             }
         }
-        assert_eq!(fields, 15, "RoutingRuntime owns the 15 routing fields");
+        assert_eq!(
+            fields, 18,
+            "RoutingRuntime owns the 15 routing fields, the quota book, the eval runs and the knowledge probe cache"
+        );
         let owner = ["Dis", "patcher"].concat();
         for bad in [
             format!("&mut {owner}"),
@@ -503,27 +623,48 @@ mod structure_guard_tests {
                 "routing_runtime.rs must not contain {bad:?}"
             );
         }
-        let pure = include_str!("routing_runtime/route_state.rs");
-        let pure = &pure[..pure
-            .find("#[cfg(test)]")
-            .expect("the pure module has tests")];
-        for bad in [
-            owner.clone(),
-            owner.to_lowercase(),
-            "TaskStore".to_string(),
-            "store".to_string(),
-            "&mut".to_string(),
-            "Instant".to_string(),
-            "SystemTime".to_string(),
-            "now_utc".to_string(),
-            "tracing".to_string(),
-            "Mutex".to_string(),
-            "fs::".to_string(),
+        for pure in [
+            include_str!("routing_runtime/route_state.rs"),
+            include_str!("routing_runtime/quota_estimate.rs"),
         ] {
-            assert!(
-                !pure.contains(&bad),
-                "route_state.rs must not contain {bad:?}"
-            );
+            let pure = &pure[..pure
+                .find("#[cfg(test)]")
+                .expect("the pure module has tests")];
+            for bad in [
+                owner.clone(),
+                owner.to_lowercase(),
+                "TaskStore".to_string(),
+                "store".to_string(),
+                "&mut".to_string(),
+                "Instant".to_string(),
+                "SystemTime".to_string(),
+                "now_utc".to_string(),
+                "tracing".to_string(),
+                "Mutex".to_string(),
+                "fs::".to_string(),
+            ] {
+                assert!(
+                    !pure.contains(&bad),
+                    "a pure routing module must not contain {bad:?}"
+                );
+            }
+        }
+        let quota = include_str!("routing_runtime/quota.rs");
+        let quota_struct = quota
+            .find("pub struct QuotaBook {")
+            .expect("QuotaBook is defined");
+        let quota_body = &quota[quota_struct..];
+        let quota_body = &quota_body[..quota_body.find("\n}\n").expect("the struct body ends")];
+        assert!(
+            !quota_body.contains("pub ") || quota_body.matches("pub ").count() == 1,
+            "QuotaBook fields are private"
+        );
+        for bad in [
+            format!("&mut {owner}"),
+            format!("&{owner}"),
+            format!("impl {owner}"),
+        ] {
+            assert!(!quota.contains(&bad), "quota.rs must not contain {bad:?}");
         }
     }
 }

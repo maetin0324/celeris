@@ -676,7 +676,7 @@ async fn a_human_comment_interrupts_the_running_run_and_the_next_run_carries_it(
     // 1 tick で dispatch し、run が**実際に走り出す**まで待つ（spawn されただけでは前置きは組まれない）。
     d.tick().unwrap();
     assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Running);
-    assert_eq!(d.running.len(), 1, "run が手元で走っている");
+    assert_eq!(d.supervisor.runs().len(), 1, "run が手元で走っている");
     for _ in 0..50 {
         if seen.lock().map(|s| !s.is_empty()).unwrap_or(false) {
             break;
@@ -708,7 +708,7 @@ async fn a_human_comment_interrupts_the_running_run_and_the_next_run_carries_it(
     // 次の tick で走っていた run が止まり、同じ tick で走り直す。
     d.tick().unwrap();
     assert!(
-        d.running_for_task(task.id) == 0
+        d.supervisor.runs_for_task(task.id) == 0
             || store.get(task.id).unwrap().unwrap().status == Status::Running,
         "古い run は捨てられている"
     );

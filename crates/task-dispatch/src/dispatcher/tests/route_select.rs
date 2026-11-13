@@ -611,7 +611,8 @@ async fn route_select_dispatch_run_launches_the_selected_harness_model_and_accou
 
     assert_eq!(d.tick().unwrap().dispatched, 1);
     let run_id = d
-        .running
+        .supervisor
+        .runs()
         .get(&RunKey {
             task: task.id,
             work_unit: None,

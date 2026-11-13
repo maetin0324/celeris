@@ -27,7 +27,7 @@ impl Dispatcher {
         if self.verify_smoke_only() {
             return;
         }
-        if !(self.accepting_new_work && self.maint.disk_ready()) {
+        if !(self.coord.accepting_new_work() && self.maint.disk_ready()) {
             return;
         }
         let ctx = task_ops::cron_jobs::CronFireContext {
@@ -37,9 +37,9 @@ impl Dispatcher {
         };
         let now = self.now_utc();
         let mut sink = CosReviewSink {
-            launch: self.cos_chat_launch.as_ref(),
-            findings: &self.stagnation.findings,
-            inventory: self.health_inventory.port(&ctx),
+            launch: self.orchestration.launch(),
+            findings: self.orchestration.stagnation_findings(),
+            inventory: inventory::port(self.maint.health_inventory_mut(), &ctx),
             now,
         };
         let mut fired = Vec::new();

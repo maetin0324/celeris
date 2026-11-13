@@ -78,7 +78,7 @@ async fn ready_wins_before_integration_start_leaves_pending_and_retries() {
     });
     d.start_integration(&task, &wu.id).unwrap();
     d.abort_stale_runs().unwrap();
-    assert!(!d.integrating.contains_key(&task.id));
+    assert!(!d.coord.processes().is_integrating(task.id));
     // 修正前は ready の task に統合を起こし、abort 後も WU が Running のまま残る。
     assert_eq!(
         integration(&store, task.id).status,
@@ -98,7 +98,7 @@ async fn integration_wins_before_advance_keeps_task_running() {
     let (_repo, _root, store, task, mut d) = fixture();
     let wu = integration(&store, task.id);
     d.start_integration(&task, &wu.id).unwrap();
-    assert!(d.integrating.contains_key(&task.id));
+    assert!(d.coord.processes().is_integrating(task.id));
     let advance = store.apply_transition(
         task.id,
         Trigger::Continue {
@@ -110,7 +110,7 @@ async fn integration_wins_before_advance_keeps_task_running() {
     d.abort_stale_runs().unwrap();
     assert!(matches!(advance, Err(StoreError::InvalidTransition(_))));
     assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Running);
-    assert!(d.integrating.contains_key(&task.id));
+    assert!(d.coord.processes().is_integrating(task.id));
     run_until_idle(&mut d, 400).await;
     assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
 }
@@ -197,7 +197,7 @@ async fn ready_integration_recovery_preserves_live_owners_and_dispatcher_scope()
                     .unwrap();
             }
             "local" => {
-                d.integrating.insert(
+                d.coord.processes_mut().start_integration(
                     task.id,
                     IntegrationEntry {
                         work_unit_id: wu.id,
@@ -283,7 +283,7 @@ async fn expired_lease_during_stage_integration_is_extended_not_reclaimed() {
     d.config.lease_grace = Duration::ZERO;
     let wu = integration(&store, task.id);
     d.start_integration(&task, &wu.id).unwrap();
-    assert!(d.integrating.contains_key(&task.id));
+    assert!(d.coord.processes().is_integrating(task.id));
     std::thread::sleep(Duration::from_millis(20));
     let before = store.get(task.id).unwrap().unwrap();
     assert!(before.lease.as_ref().unwrap().expires_at <= OffsetDateTime::now_utc());
@@ -291,7 +291,7 @@ async fn expired_lease_during_stage_integration_is_extended_not_reclaimed() {
     let after = store.get(task.id).unwrap().unwrap();
     assert_eq!(after.status, Status::Running);
     assert!(after.lease.as_ref().unwrap().expires_at > OffsetDateTime::now_utc());
-    assert!(d.integrating.contains_key(&task.id));
+    assert!(d.coord.processes().is_integrating(task.id));
     run_until_idle(&mut d, 400).await;
     assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
 }

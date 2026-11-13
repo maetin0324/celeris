@@ -551,7 +551,7 @@ async fn a_cancelled_task_keeps_its_worktree_while_its_run_is_in_flight() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     assert!(task_dir.join("tree").is_dir());
-    assert_eq!(d.running_for_task(task.id), 1);
+    assert_eq!(d.supervisor.runs_for_task(task.id), 1);
     assert!(d.tasks_in_flight().contains(&task.id));
 
     store

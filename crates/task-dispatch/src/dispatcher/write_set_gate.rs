@@ -141,7 +141,7 @@ impl Dispatcher {
         let mut blockers: Vec<&RunKey> = self
             .write_reservations
             .iter()
-            .filter(|(other, _)| *other != key && self.running.contains_key(*other))
+            .filter(|(other, _)| *other != key && self.supervisor.runs().contains_key(*other))
             .filter(|(other, res)| reservations_overlap(key.task, candidate, other.task, res))
             .map(|(other, _)| other)
             .collect();
@@ -220,7 +220,7 @@ impl Dispatcher {
 
     /// tick の dispatch の前に、終わった run の予約と古い待機記録を捨てる。
     pub(super) fn prune_write_set_state(&mut self) {
-        let running = &self.running;
+        let running = self.supervisor.runs();
         self.write_reservations
             .retain(|k, _| running.contains_key(k));
         let tick = self.ticks;

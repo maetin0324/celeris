@@ -5,7 +5,7 @@ use super::*;
 impl Dispatcher {
     /// ADR-0072 D14/D6・E4 (g): `wu.spec.checks` を `review::run_work_unit_checks`（review.rs の `Check::Command` 実行を再利用）で
     /// 実行し、列の最後に health の項目（ADR 2026-11-08-health-enforcement-loop D1.2。base は `wu.base_commit`、head は WU の HEAD）を
-    /// 足して、終わったら `Completion::WorkUnitChecks` を送る。`self.running` からは既に取り除かれている（`on_worker_finished` の
+    /// 足して、終わったら `Completion::WorkUnitChecks` を送る。`RunSupervisor` の run の表からは既に取り除かれている（`on_worker_finished` の
     /// 冒頭）ので、ここでは lease の維持や snapshot への影響は無い（review run の Command 実行と同じ扱い）。
     #[allow(clippy::too_many_arguments)]
     pub(super) fn spawn_work_unit_checks(
@@ -313,7 +313,7 @@ impl Dispatcher {
             return Ok(());
         }
         for task in self.store.list(Some(Status::Running))? {
-            if !self.is_eligible(&task) || self.just_aborted.contains(&task.id) {
+            if !self.is_eligible(&task) || self.supervisor.was_just_aborted(task.id) {
                 continue;
             }
             let candidates: Vec<String> = self
@@ -328,9 +328,7 @@ impl Dispatcher {
                         )
                 })
                 .filter_map(|u| u.lease_run_id.or(u.last_run_id))
-                .filter(|r| {
-                    !self.running.values().any(|e| &e.run_id == r) && !self.checking.contains_key(r)
-                })
+                .filter(|r| !self.supervisor.holds_run_id(r) && !self.checking.contains_key(r))
                 .collect();
             if candidates.is_empty() {
                 continue;
@@ -1348,8 +1346,8 @@ impl Dispatcher {
                     continue;
                 };
                 // Phase F5-fix2: 検査中の run（`checking`）も手元の run。
-                let ours = self.running.values().any(|e| e.run_id == run_id)
-                    || self.checking.contains_key(&run_id);
+                let ours =
+                    self.supervisor.holds_run_id(&run_id) || self.checking.contains_key(&run_id);
                 let expired = u
                     .lease_expires_at
                     .as_deref()
@@ -1378,7 +1376,8 @@ impl Dispatcher {
                     self.requeue_orphaned_work_unit_run(&task, &run_id)?;
                 }
             }
-            if self.running_for_task(task.id) > 0 || self.integrating.contains_key(&task.id) {
+            if self.supervisor.runs_for_task(task.id) > 0 || self.integrating.contains_key(&task.id)
+            {
                 continue;
             }
             let units = self.store.work_units_for(task.id)?;
@@ -1873,9 +1872,9 @@ impl Dispatcher {
         let window = self.ready_window();
         for task in self.store.running_tasks_with_runnable_work_units(window)? {
             if !self.is_eligible(&task)
-                || self.running_for_task(task.id) == 0
+                || self.supervisor.runs_for_task(task.id) == 0
                 || self.integrating.contains_key(&task.id)
-                || self.just_aborted.contains(&task.id)
+                || self.supervisor.was_just_aborted(task.id)
             {
                 continue;
             }

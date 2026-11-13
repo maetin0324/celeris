@@ -2932,7 +2932,7 @@ async fn parallel_units_survive_dispatcher_restart() {
         2
     );
     // バックオフを飛ばして続きを走らせる（WU の worktree はそのまま使い回す）。
-    d2.infra_backoff.clear();
+    d2.supervisor.clear_infra_backoff_for_test();
     run_until_idle(&mut d2, 600).await;
     assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
     assert_eq!(second.max_active(), 2);
@@ -3008,7 +3008,7 @@ async fn an_interrupted_integration_is_redone_idempotently_after_restart() {
             if key == "integrate-build" && reason == "restart_reconcile"
     )));
     assert!(transitioned_index(&events, "infra_requeue").is_some());
-    d2.infra_backoff.clear();
+    d2.supervisor.clear_infra_backoff_for_test();
     run_until_idle(&mut d2, 600).await;
     assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
     let merges = git_out(
@@ -3065,12 +3065,16 @@ async fn cancel_stops_every_work_unit_run() {
         })
         .await
     );
-    assert_eq!(d.running_for_task(task.id), 2);
+    assert_eq!(d.supervisor.runs_for_task(task.id), 2);
     store
         .apply_transition(task.id, Trigger::Cancel, None)
         .unwrap();
     d.tick().unwrap();
-    assert_eq!(d.running_for_task(task.id), 0, "全 WU の run が止まる");
+    assert_eq!(
+        d.supervisor.runs_for_task(task.id),
+        0,
+        "全 WU の run が止まる"
+    );
     let units = store.work_units_for(task.id).unwrap();
     assert!(
         units
@@ -3131,9 +3135,13 @@ async fn ready_task_first_run_beats_a_second_parallel_unit() {
     );
     let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 2, 3, 3);
     d.tick().unwrap();
-    assert_eq!(d.running_for_task(task.id), 1, "並列 WU の 2 本目は待つ");
     assert_eq!(
-        d.running_for_task(other.id),
+        d.supervisor.runs_for_task(task.id),
+        1,
+        "並列 WU の 2 本目は待つ"
+    );
+    assert_eq!(
+        d.supervisor.runs_for_task(other.id),
         1,
         "Ready の別の Task の 1 本目が先"
     );

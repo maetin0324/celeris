@@ -417,8 +417,7 @@ impl CosChatLaunch {
 
     /// ADR-0089: the CoS slot (or the general slot when `max_cos_runs = 0`).
     pub(super) fn has_capacity(&self, dispatcher: &Dispatcher) -> bool {
-        let in_flight =
-            self.running.len() + dispatcher.running.values().filter(|run| run.cos).count();
+        let in_flight = self.running.len() + dispatcher.supervisor.cos_run_count();
         if dispatcher.config.execution.max_cos_runs == 0 {
             dispatcher.workers_in_flight() + in_flight < dispatcher.max_concurrency
         } else {

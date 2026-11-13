@@ -1073,7 +1073,7 @@ impl Dispatcher {
                 outcome,
             });
         });
-        self.reviewing.insert(
+        self.supervisor.register_review(
             task_id,
             ReviewEntry {
                 _review_lock: review_lock,

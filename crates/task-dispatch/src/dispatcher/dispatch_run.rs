@@ -38,7 +38,7 @@ impl Dispatcher {
         // ADR-0074 D1.3（Phase F2b）: 並列 WU の 2 本目以降（Task は既に Running。担当・gate・
         // バックオフは 1 本目で済んでいる）。
         let second_pass = forced_wu.is_some();
-        if !second_pass && self.running_for_task(task.id) > 0 {
+        if !second_pass && self.supervisor.runs_for_task(task.id) > 0 {
             return Ok(false);
         }
         // ADR-0089（Phase R6-5）: CoS の対話 run は `max_concurrency` ではなく `max_cos_runs` で数える。
@@ -54,7 +54,7 @@ impl Dispatcher {
         }
         // ADR-0044 D2: この tick で打ち切ったばかりの run と同じ worktree に、すぐ次の run を
         // 入れない（孫プロセスが片付く猶予を 1 tick 置く）。
-        if self.just_aborted.contains(&task.id) {
+        if self.supervisor.was_just_aborted(task.id) {
             return Ok(false);
         }
         // ADR-0041 D5: verify モードは `genre = "smoke"` の煙試験だけを起こす（他は ready のまま）。
@@ -216,10 +216,10 @@ impl Dispatcher {
                 return Ok(false);
             }
         }
-        // ADR-0070 D3（Phase 116）: インフラ都合の再試行のバックオフ（`self.infra_backoff`。
+        // ADR-0070 D3（Phase 116）: インフラ都合の再試行のバックオフ（`RunSupervisor` の infra backoff。
         // `task.attempts` に依らない別軸。上のバックオフとは独立にゲートする）。期限を過ぎたら
         // このタスクへのゲートは外す（次に infra 失敗すればまた立て直す）。
-        if !second_pass && let Some(until) = self.infra_backoff.get(&task.id).copied() {
+        if !second_pass && let Some(until) = self.supervisor.infra_backoff_until(task.id) {
             if self.now_utc() < until {
                 tracing::debug!(task_id = %task.id, %until, "infra backoff; not dispatching yet");
                 self.note_dispatch_wait(
@@ -231,7 +231,7 @@ impl Dispatcher {
                 );
                 return Ok(false);
             }
-            self.infra_backoff.remove(&task.id);
+            self.supervisor.clear_infra_backoff(task.id);
         }
         // ADR 2026-10-08-browser-prod-enablement D2: browser の前提（適合台帳）が無い・古いなら、lease・worker の
         // 前に理由つきで止める（worker 起動後の infra_requeue を繰り返さない）。
@@ -1110,7 +1110,7 @@ impl Dispatcher {
             work_unit: v2_wu.as_ref().map(|w| w.id.clone()),
         };
         self.reserve_write_set(key.clone(), write_reservation);
-        self.running.insert(
+        self.supervisor.register_run(
             key,
             RunEntry {
                 run_id,

@@ -1268,14 +1268,18 @@ async fn first_daemon_until_yield(
     let mut d = restart_dispatcher(&store, adapter.clone());
     for _ in 0..50 {
         d.tick().unwrap();
-        if !d.running.is_empty() {
+        if !d.supervisor.runs().is_empty() {
             break;
         }
     }
-    assert_eq!(d.running.len(), 1, "the first run of a was dispatched");
+    assert_eq!(
+        d.supervisor.runs().len(),
+        1,
+        "the first run of a was dispatched"
+    );
     d.set_accepting_new_work(false);
     for _ in 0..50 {
-        for entry in d.running.values_mut() {
+        for entry in d.supervisor.runs_mut_for_test().values_mut() {
             if !entry.handle.is_finished() {
                 (&mut entry.handle).await.expect("worker task panicked");
             }

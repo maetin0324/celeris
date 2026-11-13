@@ -273,7 +273,7 @@ impl Dispatcher {
         task: &Task,
         wu: &task_core::WorkUnitRow,
     ) -> Result<(), DispatchError> {
-        if self.just_aborted.contains(&task.id) || !self.is_eligible(task) {
+        if self.supervisor.was_just_aborted(task.id) || !self.is_eligible(task) {
             return Ok(());
         }
         let holder = format!(

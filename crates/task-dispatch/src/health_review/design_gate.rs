@@ -366,7 +366,7 @@ impl Dispatcher {
                 result,
             })));
         });
-        self.running.insert(
+        self.supervisor.register_run(
             RunKey {
                 task: task.id,
                 work_unit: None,

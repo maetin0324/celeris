@@ -29,7 +29,8 @@ impl Dispatcher {
         let now_instant = Instant::now();
         let now = OffsetDateTime::now_utc();
         let mut in_flight: Vec<InFlight> = self
-            .running
+            .supervisor
+            .runs()
             .iter()
             .map(|(key, e)| InFlight {
                 task_id: key.task,
@@ -39,7 +40,7 @@ impl Dispatcher {
                 since: rfc3339(e.since),
             })
             .collect();
-        in_flight.extend(self.reviewing.iter().filter_map(|(task_id, e)| {
+        in_flight.extend(self.supervisor.reviews().iter().filter_map(|(task_id, e)| {
             e.route.as_ref().map(|(source, _)| InFlight {
                 task_id: *task_id,
                 run_id: e.review_run_id.clone().unwrap_or_else(|| e.run_id.clone()),

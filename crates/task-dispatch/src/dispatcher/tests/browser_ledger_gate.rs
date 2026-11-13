@@ -108,7 +108,7 @@ pub(super) async fn tick_n(d: &mut Dispatcher, n: usize) {
     for _ in 0..n {
         d.tick().unwrap();
         // infra 再試行のバックオフで隠れないよう毎 tick 外す（繰り返しが起きるなら見えるように）。
-        d.infra_backoff.clear();
+        d.supervisor.clear_infra_backoff_for_test();
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
@@ -119,7 +119,7 @@ pub(super) async fn tick_until(d: &mut Dispatcher, mut pred: impl FnMut() -> boo
     let started = std::time::Instant::now();
     loop {
         d.tick().unwrap();
-        d.infra_backoff.clear();
+        d.supervisor.clear_infra_backoff_for_test();
         if pred() {
             return;
         }

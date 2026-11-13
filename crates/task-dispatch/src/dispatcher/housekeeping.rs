@@ -184,12 +184,12 @@ impl Dispatcher {
         Ok(())
     }
 
-    /// run（`running`）か review（`reviewing`）が走っている task（[`Self::running_for_task`] が 1 以上か判定中）。
+    /// run（`running`）か review（`reviewing`）が走っている task（`RunSupervisor::runs_for_task` が 1 以上か判定中）。
     pub(super) fn tasks_in_flight(&self) -> std::collections::HashSet<TaskId> {
-        self.running
-            .keys()
+        self.supervisor
+            .run_keys()
             .map(|k| k.task)
-            .chain(self.reviewing.keys().copied())
+            .chain(self.supervisor.reviews().keys().copied())
             .collect()
     }
 

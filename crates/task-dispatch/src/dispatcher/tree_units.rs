@@ -297,10 +297,11 @@ impl Dispatcher {
         // 判定が失敗したら、前の結果は今の状態として使わない（ADR 2026-10-29-stagnation-triage-notify-wiring D2）。
         self.stagnation.available = false;
         let in_flight: std::collections::HashSet<TaskId> = self
-            .running
+            .supervisor
+            .runs()
             .keys()
             .map(|k| k.task)
-            .chain(self.reviewing.keys().copied())
+            .chain(self.supervisor.reviews().keys().copied())
             .collect();
         let excluded: std::collections::HashSet<TaskId> =
             self.stalled_tasks.keys().copied().collect();

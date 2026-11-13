@@ -247,7 +247,7 @@ async fn pause_resume_before_and_after_orphan_recovery_preserves_pause_and_redis
         if order != "resume_first" {
             d.tick().unwrap();
             assert!(
-                d.running.is_empty(),
+                d.supervisor.runs().is_empty(),
                 "recovery must not resume a paused task"
             );
             task_ops::lifecycle::resume_task(f.store.as_ref(), f.task, now).unwrap();
@@ -403,7 +403,8 @@ async fn local_run_is_not_recovered_and_task_cancel_does_not_requeue() {
             OffsetDateTime::now_utc(),
         )
         .unwrap();
-    d.ownerless_reconciled_at = None;
+    d.supervisor
+        .reset_reconcile(crate::run_supervisor::Reconcile::OwnerlessRuns);
     d.reconcile_ownerless_runs();
     assert_eq!(f.unit(), live);
     f.store
@@ -411,7 +412,7 @@ async fn local_run_is_not_recovered_and_task_cancel_does_not_requeue() {
         .unwrap();
     d.tick().unwrap();
     assert_eq!(f.unit().status, WorkUnitStatus::Cancelled);
-    assert!(d.running.is_empty());
+    assert!(d.supervisor.runs().is_empty());
 }
 
 #[tokio::test]
@@ -505,7 +506,7 @@ async fn interrupt_or_cancel_during_checks_recovers_the_work_unit_immediately() 
             .unwrap();
         d.abort_stale_runs().unwrap();
         assert!(d.checking.is_empty());
-        assert!(d.just_aborted.contains(&f.task));
+        assert!(d.supervisor.was_just_aborted(f.task));
         assert_eq!(
             f.store.run_index_get(&f.run).unwrap().unwrap().status,
             RunIndexStatus::Completed

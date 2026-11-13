@@ -556,7 +556,7 @@ async fn integration_repair_schedules_atomic_and_preserves_results() {
         std::fs::read_to_string(wt.dir.join("README.md")).unwrap(),
         "task\n"
     );
-    assert!(d.reviewing.is_empty());
+    assert!(d.supervisor.reviews().is_empty());
     let current = store.get(task.id).unwrap().unwrap();
     assert_eq!(current.status, Status::Ready);
     assert_eq!(current.attempts, task.attempts);
@@ -765,7 +765,7 @@ async fn pre_review_sync_target_advanced_limit_halts_visibly_and_rereview_resume
         !d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
             .unwrap()
     );
-    assert!(d.reviewing.is_empty());
+    assert!(d.supervisor.reviews().is_empty());
     let snapshot = d
         .review_resync_halted
         .get(&task.id)
@@ -1517,7 +1517,7 @@ async fn integration_repair_schedules_tree_child_on_parent_target() {
     let current = store.get(child.id).unwrap().unwrap();
     assert_eq!(current.status, Status::Ready);
     assert_eq!(current.attempts, child.attempts);
-    assert!(d.reviewing.is_empty());
+    assert!(d.supervisor.reviews().is_empty());
     let events = events_of(&store, &child);
     assert!(no_review_fail(&events));
     assert!(events.iter().any(|e| matches!(e, Event::IntegrationRepairScheduled { target_ref, before_sha, .. } if target_ref == &format!("refs/heads/{parent_branch}") && before_sha == &before)));
@@ -1572,7 +1572,7 @@ async fn integration_repair_schedules_limit_falls_back_to_unsynced_review() {
         d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
             .unwrap()
     );
-    assert!(d.reviewing.contains_key(&task.id));
+    assert!(d.supervisor.reviews().contains_key(&task.id));
     assert_eq!(
         store.get(task.id).unwrap().unwrap().status,
         Status::Reviewing

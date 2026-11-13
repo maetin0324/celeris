@@ -400,7 +400,8 @@ async fn a_reviewer_holding_the_implicit_slot_makes_cos_wait_then_the_same_run_l
     await_worker_completion(&mut d, leaf.id).await;
     d.tick().unwrap();
     assert!(
-        d.reviewing
+        d.supervisor
+            .reviews()
             .get(&leaf.id)
             .is_some_and(|review| review.route.is_some()),
         "the reviewer run holds a route"
@@ -417,7 +418,12 @@ async fn a_reviewer_holding_the_implicit_slot_makes_cos_wait_then_the_same_run_l
     assert_still_waiting(&mut d, &store, &t, &waiting.id, msgs);
 
     gates.review.add_permits(1);
-    (&mut d.reviewing.get_mut(&leaf.id).expect("review").handle)
+    (&mut d
+        .supervisor
+        .reviews_mut_for_test()
+        .get_mut(&leaf.id)
+        .expect("review")
+        .handle)
         .await
         .expect("review task");
     d.tick().unwrap();

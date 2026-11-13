@@ -46,7 +46,8 @@
 //! | `review_verdict` | review の判定の適用と repair | L3 |
 //! | `phase_integration` | 工程の統合と途中報（phase report） | L3 |
 //! | `cluster_job_wait` | クラスタ job の durable wait の行と task・WU の再開（ADR-0090。poll のスレッドは `cluster_runtime`） | L3 |
-//! | `leases` | lease の回収・abort・orphan・drain | L3 |
+//! | `run_supervisor` | 実行中の run の表（run の集合の正本）・review run の表・infra backoff・lease の照合の状態の owner（`crate::run_supervisor::RunSupervisor`。この dir の外）と、lease の回収の判断（純粋関数 `reclaim_reason`・`reclaim_verdict`）・worker 完了と回収が共有する再試行の判定 `infra_retry_after`（ADR 2026-11-11 dispatcher-state-ownership D1・D3・D4） | owner |
+//! | `leases` | `RunSupervisor` を呼ぶ入口: lease の回収（判断は `run_supervisor`、WU・統合の照合と待ちの削除はここ）・abort・orphan・drain・shutdown の割り込み | L3 |
 //! | `dispatch_run` | run の起動（`dispatch_one`・`spawn_worker`）と担当・lane の決定 | L4 |
 
 use std::collections::HashMap;
@@ -72,7 +73,7 @@ use task_ops::derive::{
     ReviewNote, answers_from_events, approval_decision_note, artifacts_for_run,
     consecutive_continuations, consecutive_infra_requeues, consecutive_requeues,
     consecutive_reviewer_infra_failures, consecutive_reviewer_requeues, current_run_seq,
-    human_approval_title, infra_backoff_delay, last_run_id, latest_checkpoint, no_progress_streak,
+    human_approval_title, last_run_id, latest_checkpoint, no_progress_streak,
     prior_review_from_events, retry_backoff,
 };
 use task_worker::{
@@ -95,6 +96,10 @@ use crate::accounts::{
 };
 use crate::policy::{ProviderId, ProviderOutcome};
 use crate::routing_runtime::RoutingRuntime;
+use crate::run_supervisor::{
+    ORPHAN_WHY, ReclaimReason, Reconcile, ReviewEntry, RunEntry, RunKey, RunSupervisor,
+    infra_retry_after, reclaim_reason, reclaim_verdict,
+};
 
 // ADR-0082: 責務別の子モジュール（層は L1 ← L2 ← L3 ← L4 ← tick）。
 mod browser_prereq;
@@ -738,38 +743,6 @@ enum Completion {
     DesignReview(Box<design_gate::DesignReviewEnd>),
 }
 
-/// ADR-0074 D1.5（Phase F2）: `running` の鍵。`work_unit` は v2 の並列 WU の run だけ `Some(work_units.id)`（atomic・planner・v1 の WU の run は `None`。v1 の挙動は 1 バイトも変えない）。
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct RunKey {
-    task: TaskId,
-    work_unit: Option<String>,
-}
-
-struct RunEntry {
-    run_id: String,
-    provider: ProviderId,
-    handle: JoinHandle<()>,
-    /// dispatch した時刻（デーモンのスナップショット用。ADR-0013 D4）。
-    since: OffsetDateTime,
-    /// ADR-0018: コマンドを実行するクラスタ（ローカル実行なら `None`）。並列度の会計に使う。
-    cluster: Option<String>,
-    /// ADR-0024 D2/D3: プールから選んだアカウント（プールを使わないプロバイダなら `None`）。
-    account: Option<String>,
-    /// ADR-0025 D1: `account` が属するアダプタ（`account` が `None` なら `None`）。
-    account_adapter: Option<AccountAdapter>,
-    /// Phase 55/56 の合流（ADR-0044 P55-4 / ADR-0043 P56-7）: この run をコンテナで走らせているなら、
-    /// ラベルでコンテナを止める口。`killpg` はコンテナの中の PID 名前空間には届かないので、
-    /// `stop_run` がこれを `task_worker::kill_tree_with` に渡す。ホスト実行なら `None`。
-    container: Option<Arc<dyn task_worker::ContainerStopper>>,
-    /// ADR-0089（Phase R6-5）: CoS の対話 run か（`max_concurrency`・プールの `concurrency` に数えない）。
-    cos: bool,
-    /// ADR 2026-10-11 llm-source-harness-selection: the admitted `(source, account)` reservation owner.
-    route: Option<(
-        task_core::llm_route::SourceId,
-        task_core::llm_route::AccountId,
-    )>,
-}
-
 /// Phase 33: `recent_work_of` が `list_page` から読む候補の上限（裏方タスクを除いた後に
 /// `RECENT_WORK_LIMIT` 件へ絞るための余裕）。
 const RECENT_WORK_SCAN: usize = 100;
@@ -1112,31 +1085,6 @@ struct RunExtras {
     campaign: Option<task_worker::protocol::CampaignRunPin>,
 }
 
-struct ReviewEntry {
-    /// Keep ownership until the verdict transaction has completed, across daemon handoff.
-    _review_lock: Arc<std::fs::File>,
-    handle: JoinHandle<()>,
-    /// `Reviewer` run を起動する場合に選んだ `(source, account)`（並列度と admission の枠を消費する。
-    /// ADR 2026-10-11 llm-source-harness-selection）。
-    route: Option<(
-        task_core::llm_route::SourceId,
-        task_core::llm_route::AccountId,
-    )>,
-    /// レビューを延期（Reviewer run の供給側失敗）するときに次 tick へ持ち越す `done` の内容。
-    subject: ReviewSubject,
-    /// レビュー対象の run（デーモンのスナップショット用）。
-    run_id: String,
-    /// ADR-0018: 判定コマンドを実行するクラスタ（ローカルなら `None`）。
-    cluster: Option<String>,
-    /// Reviewer run を起動した場合のその run の id（スナップショットの `in_flight` 用。ADR-0014 D1）。
-    review_run_id: Option<String>,
-    since: OffsetDateTime,
-    /// ADR-0024 D2/D3: プールから選んだアカウント（プールを使わない、または Reviewer run 自体を起動しない場合は `None`）。
-    account: Option<String>,
-    /// ADR-0025 D1: `account` が属するアダプタ（`account` が `None` なら `None`）。
-    account_adapter: Option<AccountAdapter>,
-}
-
 type EvalVersionProbe = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
 pub struct Dispatcher {
@@ -1152,18 +1100,13 @@ pub struct Dispatcher {
     maint: crate::host_maintenance::HostMaintenance,
     #[cfg(test)]
     test_hooks: tests::hooks::TestHooks,
-    /// ADR-0074 D1.5（Phase F2）: 鍵は (task, WU)。Task 単位の問いは `running_for_task`。
-    running: HashMap<RunKey, RunEntry>,
+    /// ADR 2026-11-11 dispatcher-state-ownership D1: 実行中の run の表（run の集合の正本）・review run の表・
+    /// infra backoff・lease の照合の状態の owner（`crate::run_supervisor`。入口は `leases.rs`・`ownerless_runs.rs`）。
+    supervisor: RunSupervisor,
     /// 評価 run の harness の版の測り方（試験用差し替え。`None` なら `probe_harness_version`）。
     eval_version_probe: Option<EvalVersionProbe>,
-    reviewing: HashMap<TaskId, ReviewEntry>,
     /// レビューを開始できなかった（`Reviewer` run の枠が無い）タスクの `done` 内容。次 tick で使う。
     pending_subjects: HashMap<TaskId, ReviewSubject>,
-    /// ADR-0070 D3（Phase 116）: `Trigger::InfraRequeue` で `Ready` に戻したタスクの再 dispatch を
-    /// バックオフさせる（`task_ops::derive::infra_backoff_delay`）。プロセス内メモリのみ（DB に
-    /// 永続化しない。dispatcher の再起動で猶予は失われるが、上限判定自体は `consecutive_infra_requeues`
-    /// が events から数え直すので安全側。ADR-0070 §2 D3 参照）。
-    infra_backoff: HashMap<TaskId, OffsetDateTime>,
     /// ADR 2026-10-08-browser-prod-enablement D2: 適合台帳の状態の cache（file が変わったときだけ計算し直す）。
     browser_ledger: task_worker::browser_ledger::LedgerWatch,
     /// 台帳が変わった（または差し替えた）ので、`browser_prerequisite` で止めた task を次の tick で見直す。
@@ -1189,15 +1132,6 @@ pub struct Dispatcher {
     stagnation: tree_units::StagnationWatch,
     /// ADR 2026-11-08-health-enforcement-loop D6: 実行中の全体棚卸し（cron の job ごとの Busy の印）。
     health_inventory: cron_tick::inventory::InventoryRuns,
-    /// ADR-0079 付記「R6-1」D4: 最後に終端の task の未完了 run と統合依頼を照合した時刻（起動後の最初の
-    /// tick と [`RUNS_RECONCILE_INTERVAL_SECS`] ごと）。
-    terminal_records_reconciled_at: Option<OffsetDateTime>,
-    /// 最後に持ち主の居ない `running` の `runs` 行を照合した時刻（active かつ孤児の回収が有効になって
-    /// 最初の tick と [`RUNS_RECONCILE_INTERVAL_SECS`] ごと。`ownerless_runs.rs`）。
-    ownerless_reconciled_at: Option<OffsetDateTime>,
-    /// 手元のレビューのうち、前の tick で「tokio task は終わっているのに判定の完了が届いていない」と見た
-    /// task（`ownerless_runs.rs` の `reap_lost_reviews`。2 tick 続けて見えたら取りこぼしと判定する）。
-    lost_review_watch: std::collections::HashSet<TaskId>,
     /// ADR 2026-10-15-mlsys-min D4: 外部 provider の credential 待ちの宣言（source ごと）と秘密の置き場。
     credential_gates: credential_gate::CredentialGates,
     /// credential 待ちに入れた計画なしの task（tick ごとに同じ wait を書き直さない。再起動で `restore_credential_waits` が戻す）。
@@ -1209,10 +1143,6 @@ pub struct Dispatcher {
     /// 無い M1〜M6・M9。`dispatch_ready` の先頭で空にし、同じ task の 2 件目は上書きしない）。snapshot の
     /// `task_waits` に載る。
     dispatch_waits: HashMap<TaskId, task_core::TaskWait>,
-    /// ADR-0044 D2（Phase 53）: **この tick で run を打ち切った**タスク。次の tick まで dispatch しない。
-    /// 打ち切りは `handle.abort()`（= 子プロセスへの SIGKILL）で、**孫プロセスは即死しない**ので、
-    /// 同じ tick で同じ worktree に次の run を入れると 2 つの書き手が重なる（Phase 53 の監査で発見）。
-    just_aborted: std::collections::HashSet<TaskId>,
     /// ADR-0130 D3: 走っている run の expected write-set の予約（run を起こした時点の hint）。
     write_reservations: HashMap<RunKey, write_set_gate::WriteReservation>,
     /// ADR-0130 D3: write-set の重なりで見送った候補の待機記録（公平性）。
@@ -1337,11 +1267,9 @@ impl Dispatcher {
             maint: Default::default(),
             #[cfg(test)]
             test_hooks: Default::default(),
-            running: HashMap::new(),
+            supervisor: RunSupervisor::new(),
             eval_version_probe: None,
-            reviewing: HashMap::new(),
             pending_subjects: HashMap::new(),
-            infra_backoff: HashMap::new(),
             browser_ledger: task_worker::browser_ledger::LedgerWatch::from_process(),
             browser_prereq_rescan: true,
             wu_prepare_failures: HashMap::new(),
@@ -1352,13 +1280,9 @@ impl Dispatcher {
             liveness_checked_at: None,
             stagnation: Default::default(),
             health_inventory: Default::default(),
-            terminal_records_reconciled_at: None,
-            ownerless_reconciled_at: None,
-            lost_review_watch: std::collections::HashSet::new(),
             credential_gates: credential_gate::CredentialGates::default(),
             credential_held: std::collections::HashSet::new(),
             cluster: ClusterRuntime::new(),
-            just_aborted: std::collections::HashSet::new(),
             write_reservations: HashMap::new(),
             write_set_waits: HashMap::new(),
             write_set_hold_seq: 0,
@@ -1505,9 +1429,9 @@ impl Dispatcher {
     /// 評価 run（`RoutingRuntime` が追跡する）も数える。live 昇格の旧 instance は評価 run の完了（`on_eval_worker_finished` が
     /// `runs` 行を閉じて試行を `scoring` にする）まで draining に留まる（ADR 2026-10-14-eval-verify-isolation D3.2）。
     pub fn in_flight(&self) -> usize {
-        self.running.values().filter(|e| !e.cos).count()
+        self.supervisor.worker_run_count()
             + self.cos_in_flight()
-            + self.reviewing.len()
+            + self.supervisor.reviews().len()
             + self.checking.len()
             + self.integrating.len()
             + self.routing.eval_run_count()
@@ -1721,12 +1645,14 @@ impl Dispatcher {
                 .as_ref()
                 .is_some_and(|(active, _)| active.as_ref() == source)
         };
-        self.running
+        self.supervisor
+            .runs()
             .values()
             .filter(|run| on_source(&run.route))
             .count()
             + self
-                .reviewing
+                .supervisor
+                .reviews()
                 .values()
                 .filter(|review| on_source(&review.route))
                 .count()
@@ -1771,12 +1697,14 @@ impl Dispatcher {
         let matches = |a: &Option<AccountAdapter>, acct: &Option<String>| {
             *a == Some(adapter) && acct.as_deref() == Some(id)
         };
-        self.running
+        self.supervisor
+            .runs()
             .values()
             .filter(|e| !e.cos && matches(&e.account_adapter, &e.account))
             .count()
             + self
-                .reviewing
+                .supervisor
+                .reviews()
                 .values()
                 .filter(|e| matches(&e.account_adapter, &e.account))
                 .count()
@@ -1789,12 +1717,14 @@ impl Dispatcher {
         let matches = |a: &Option<AccountAdapter>, acct: &Option<String>| {
             *a == Some(adapter) && acct.as_deref() == Some(id)
         };
-        self.running
+        self.supervisor
+            .runs()
             .values()
             .filter(|e| matches(&e.account_adapter, &e.account))
             .count()
             + self
-                .reviewing
+                .supervisor
+                .reviews()
                 .values()
                 .filter(|e| matches(&e.account_adapter, &e.account))
                 .count()
@@ -2117,9 +2047,10 @@ impl Dispatcher {
 
     /// 実行中の run と、プロバイダを使っているレビュー run の合計（並列度の分母）。ADR-0089（Phase R6-5）: CoS の対話 run は数えない（`cos_in_flight` で別に数える）。
     fn workers_in_flight(&self) -> usize {
-        self.running.values().filter(|e| !e.cos).count()
+        self.supervisor.worker_run_count()
             + self
-                .reviewing
+                .supervisor
+                .reviews()
                 .values()
                 .filter(|e| e.route.is_some())
                 .count()
@@ -2127,7 +2058,7 @@ impl Dispatcher {
 
     /// ADR-0089（Phase R6-5）: 走っている CoS の対話 run の数。
     fn cos_in_flight(&self) -> usize {
-        self.running.values().filter(|e| e.cos).count()
+        self.supervisor.cos_run_count()
             + self
                 .cos_chat_launch
                 .as_ref()
@@ -2190,9 +2121,12 @@ impl Dispatcher {
             return Ok(0);
         }
         // ADR 2026-11-11-disk-aware-dispatch D1: 通した run は走っている間数え、書き手は run・review・検査中の task。
-        let runs = self.running.keys().map(|k| (k.task, k.work_unit.clone()));
+        let runs = self
+            .supervisor
+            .run_keys()
+            .map(|k| (k.task, k.work_unit.clone()));
         let checks = self.checking.values().map(|c| c.task_id);
-        let others = self.reviewing.keys().copied().chain(checks);
+        let others = self.supervisor.reviews().keys().copied().chain(checks);
         self.maint.admission().begin_pass(runs, others);
         // 上位から見て見送りが続いても後続を試せるよう、窓は広めに取る。
         let window = self.ready_window();
@@ -2253,8 +2187,7 @@ impl Dispatcher {
     }
 
     fn is_idle(&self) -> Result<bool, DispatchError> {
-        if !self.running.is_empty()
-            || !self.reviewing.is_empty()
+        if !self.supervisor.is_idle()
             || self
                 .cos_chat_launch
                 .as_ref()
@@ -2314,9 +2247,6 @@ fn ops_to_store(e: task_ops::OpsError) -> DispatchError {
         other => DispatchError::Store(StoreError::Invalid(other.to_string())),
     }
 }
-
-/// Phase F5-fix6: 孤児の回収で残す `WorkerFinished.outcome` の理由（`interrupted: <これ> (run_id=…)`）。
-const ORPHAN_WHY: &str = "orphan_takeover: the daemon holding this run is gone";
 
 /// Phase F5-fix6: SIGTERM / SIGINT で止まるデーモンが手元の run を止めたときの理由。
 const SHUTDOWN_WHY: &str = "daemon shutdown (SIGTERM/SIGINT)";

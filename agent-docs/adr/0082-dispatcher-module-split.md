@@ -95,3 +95,16 @@ account 一覧の走査 cache の更新と入力の収集は `RoutingRuntime::ro
 （較正の更新と、閉じたグループの他の member の event の追記）は `RoutingRuntime::settle_quota` が行う。
 `quota_book` の行は、run 単位の入口（`quota_begin`・`release_quota_if_tracked`。終了経路は `RoutingRuntime::settle_quota` を直接呼ぶ）だけを持つ行に直した
 （module は入口として残るので行は消さない）。
+
+## 付記 2026-11-13: 実行中の run の表と lease の監督を `RunSupervisor` へ出した（R4 own-supervisor）
+
+[ADR 2026-11-11 dispatcher-state-ownership](2026-11-11-dispatcher-state-ownership.md) D1・D3・D4 に従い、D1 の表で unit 列が own-supervisor の
+7 field（`running`・`reviewing`・`infra_backoff`・`just_aborted`・`lost_review_watch`・`ownerless_reconciled_at`・`terminal_records_reconciled_at`）を
+`crates/task-dispatch/src/run_supervisor.rs` の `RunSupervisor`（private field）に移した。`RunKey`・`RunEntry`・`ReviewEntry` も owner が
+`dispatcher` module を使わないよう同じ file に移した。手元の run の問い合わせ（`runs`・`run_keys`・`holds_run_id`・`runs_for_task` ほか）、
+abort（`abort_runs`・`take_run`）、shutdown の割り込み（`take_runs`・`take_reviews`）は `RunSupervisor` の method にした。
+`reclaim_expired_leases` の判断は純粋関数 `reclaim_reason`・`reclaim_keys`・`reclaim_verdict` に分け、lease の解放と終了記録と backoff の期限は
+`RunSupervisor::release_lease` が行う。WU・統合の照合と待ち（`checking`・`integrating`・`pending_subjects`）は `leases.rs` の入口に残した
+（own-coord-b が `ExecutionCoordination` に移す）。D4 retry-backoff の `run_supervisor::infra_retry_after` を worker 完了と lease の回収・shutdown が使う。
+module map に `run_supervisor` の行（層は owner）を足し、`leases` の行を入口に直した。移した module の旧い行は無かった。
+

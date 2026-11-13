@@ -693,8 +693,16 @@ impl Dispatcher {
     /// the `(source, account)` pairs of runs and reviews (a leaf run's admission does not count CoS chat runs,
     /// which hold their own slot), and the CoS chat reservations.
     pub(super) fn route_state(&mut self, cos: bool) -> RouteState {
-        let running = self.running.values().filter(|entry| cos || !entry.cos);
-        let reviewing = self.reviewing.values().filter_map(|e| e.route.clone());
+        let running = self
+            .supervisor
+            .runs()
+            .values()
+            .filter(|entry| cos || !entry.cos);
+        let reviewing = self
+            .supervisor
+            .reviews()
+            .values()
+            .filter_map(|e| e.route.clone());
         let holds: Vec<RouteHold> = running
             .filter_map(|entry| entry.route.clone())
             .chain(reviewing)

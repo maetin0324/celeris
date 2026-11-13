@@ -321,7 +321,8 @@ async fn await_worker_completion(d: &mut Dispatcher, task_id: TaskId) {
         work_unit: None,
     };
     (&mut d
-        .running
+        .supervisor
+        .runs_mut_for_test()
         .get_mut(&key)
         .expect("worker was dispatched")
         .handle)
@@ -335,7 +336,8 @@ async fn finish_worker_and_review(d: &mut Dispatcher, task_id: TaskId) {
     await_worker_completion(d, task_id).await;
     assert_eq!(d.tick().unwrap().finished, 1);
     (&mut d
-        .reviewing
+        .supervisor
+        .reviews_mut_for_test()
         .get_mut(&task_id)
         .expect("review was spawned")
         .handle)
@@ -2916,12 +2918,12 @@ async fn run_gate_until_second_checks(
     // 2 回目の run の完了を受け取り、検査を spawn するまで（run は `running` から外れる）。
     for _ in 0..200 {
         d.tick().unwrap();
-        if d.running.is_empty() {
+        if d.supervisor.runs().is_empty() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    assert!(d.running.is_empty());
+    assert!(d.supervisor.runs().is_empty());
     let u = gate_row(store, id);
     assert_eq!(u.status, task_core::WorkUnitStatus::Running, "{u:?}");
     assert!(worker_finished_outcomes(store, id, &run_id).is_empty());

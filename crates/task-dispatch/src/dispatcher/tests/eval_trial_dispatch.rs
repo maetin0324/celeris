@@ -892,7 +892,8 @@ impl WorkerAdapter for GatedEvalAdapter {
 
 /// The new instance's ownerless-runs reconciliation, run now (not waiting for its interval).
 fn reconcile_ownerless_now(d: &mut Dispatcher) {
-    d.ownerless_reconciled_at = None;
+    d.supervisor
+        .reset_reconcile(crate::run_supervisor::Reconcile::OwnerlessRuns);
     d.reconcile_ownerless_runs();
 }
 

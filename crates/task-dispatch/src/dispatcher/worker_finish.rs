@@ -366,9 +366,9 @@ impl Dispatcher {
         // （`StoreSink::delegate_impl` が `QuestionRaised` を残している）。
         let cross_department =
             cross_department_questions_of(&self.store.events_for(task_id)?, &run_id);
-        // ADR-0070 D3（Phase 116）: `Trigger::InfraRequeue` を選んだときだけ `Some(n)`（n 回目の
-        // インフラ再試行）。`Ok(outcome) =>` の中で `self.infra_backoff` のバックオフ期限を立てるのに使う。
-        let mut infra_requeue_n: Option<u32> = None;
+        // ADR-0070 D3（Phase 116）: `Trigger::InfraRequeue` を選んだときだけ `Some((n, 待ち時間))`（n 回目の
+        // インフラ再試行と `infra_retry_after` の待ち時間）。`Ok(outcome) =>` の中で `RunSupervisor` の infra backoff のバックオフ期限を立てるのに使う。
+        let mut infra_requeue: Option<(u32, Duration)> = None;
         // ADR 2026-10-08-browser-prod-enablement D2: worker が台帳由来の失敗を返した atomic の run は
         // infra 再試行に回さず `BrowserPrereqBlock` で止める（同じトランザクションで残す event）。
         let mut browser_prereq_event: Option<Event> = None;
@@ -576,8 +576,8 @@ impl Dispatcher {
                 }
                 None => {
                     let infra_n = consecutive_infra_requeues(&self.store.events_for(task_id)?) + 1;
-                    if infra_n <= self.config.max_infra_retries {
-                        infra_requeue_n = Some(infra_n);
+                    if let Some(delay) = infra_retry_after(infra_n, self.config.max_infra_retries) {
+                        infra_requeue = Some((infra_n, delay));
                         (
                             Trigger::InfraRequeue,
                             format!("infra_requeue: adapter: {e}"),
@@ -1440,7 +1440,7 @@ impl Dispatcher {
                 trigger = Trigger::TokenBudgetExhausted;
                 outcome_str = token_budget::outcome(used, max);
                 questions.clear();
-                infra_requeue_n = None;
+                infra_requeue = None;
             }
         }
         let finished = Event::WorkerFinished {
@@ -1558,10 +1558,10 @@ impl Dispatcher {
                 tracing::info!(%task_id, %run_id, next = ?outcome.next, attempts = outcome.attempts, outcome = %outcome_str, "worker finished");
                 // ADR-0070 D3（Phase 116）: `InfraRequeue` は `dispatch_ready` がすぐ拾わないよう、
                 // バックオフの期限を立てる（30秒/2分/5分。`infra_backoff_delay`）。
-                if let Some(n) = infra_requeue_n {
-                    let until = OffsetDateTime::now_utc() + infra_backoff_delay(n);
+                if let Some((n, delay)) = infra_requeue {
+                    let until = OffsetDateTime::now_utc() + delay;
                     tracing::warn!(%task_id, %run_id, attempt = n, until = %until, "infra failure; requeued with backoff (attempts not consumed; ADR-0070 D3)");
-                    self.infra_backoff.insert(task_id, until);
+                    self.supervisor.start_infra_backoff(task_id, until);
                 }
                 // ADR-0033 D4（Phase 24 / 監査 M-5）: 対話用タスクの run なら、`summary`（質問なら本文、
                 // 失敗なら理由）をそのノードの返事として `messages` に残す。**「返事できませんでした」は
@@ -1828,7 +1828,7 @@ impl Dispatcher {
                 })
                 .count() as u32;
             let infra_n = failures_so_far + 1;
-            let exhausted = infra_n > self.config.max_infra_retries;
+            let exhausted = infra_retry_after(infra_n, self.config.max_infra_retries).is_none();
             let outcome = if exhausted {
                 format!("{INFRA_FAILURE_MARKER}{infra_n}: finalisation failed: {error}")
             } else {
@@ -1859,7 +1859,8 @@ impl Dispatcher {
         }
         // Task の lease をこの run が持つ（atomic・v1 の WU の run）: lease 切れの回収と同じ遷移。
         let infra_n = consecutive_infra_requeues(&events) + 1;
-        let (trigger, outcome) = if infra_n <= self.config.max_infra_retries {
+        let retry = infra_retry_after(infra_n, self.config.max_infra_retries);
+        let (trigger, outcome) = if retry.is_some() {
             (
                 Trigger::InfraRequeue,
                 format!("infra_requeue: finalisation failed: {error}"),
@@ -1875,9 +1876,8 @@ impl Dispatcher {
             trigger.clone(),
             vec![finished(outcome)],
         )?;
-        if matches!(trigger, Trigger::InfraRequeue) {
-            self.infra_backoff
-                .insert(task_id, now + infra_backoff_delay(infra_n));
+        if let Some(delay) = retry {
+            self.supervisor.start_infra_backoff(task_id, now + delay);
         }
         self.reconcile_work_unit_run(task_id, run_id, FINALISE_FAILED_REASON)?;
         Ok(())
@@ -1890,7 +1890,7 @@ impl Dispatcher {
     /// 本番では draining の旧デーモンが WU の検査の途中で exit し、完了した run が `lease expired`
     /// で捨てられてやり直しになった。確定させた（または確定の失敗を記録した）ら `true`。
     pub(super) fn finalise_from_result_json(&mut self, task: &Task, run_id: &str) -> bool {
-        if self.running.values().any(|e| e.run_id == run_id) || self.checking.contains_key(run_id) {
+        if self.supervisor.holds_run_id(run_id) || self.checking.contains_key(run_id) {
             return false;
         }
         let Some(dir) = self.task_dir(task) else {

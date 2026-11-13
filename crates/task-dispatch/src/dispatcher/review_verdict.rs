@@ -23,7 +23,7 @@ impl Dispatcher {
         run_id: String,
         mut outcome: ReviewOutcome,
     ) -> Result<(), DispatchError> {
-        let entry = self.reviewing.remove(&task_id);
+        let entry = self.supervisor.take_review(task_id);
         // 用意した Reviewer run（`spawn_review` が `WorkerStarted{role: reviewer}`・`runs` 行・quota を
         // 起こした）を、決定的な検査が落ちた等で起動しなかった。ここで閉じないと `runs` 行は Task が
         // 終端になるまで `running` のまま残る（Reviewer run は lease を持たない）。判定の扱いは変えない。

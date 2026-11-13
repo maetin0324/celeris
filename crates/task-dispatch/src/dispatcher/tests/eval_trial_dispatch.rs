@@ -154,7 +154,7 @@ async fn eval_trial_reserved_slot_hides_checks_and_records_selected_version() {
         0,
         "reserved_runs=1 must prevent a second concurrent start"
     );
-    assert_eq!(dispatcher.eval_runs.len(), 1);
+    assert_eq!(dispatcher.routing.eval_run_count(), 1);
     // Wait for the adapter's explicit started event; don't use a fixed delay.
     started.notified().await;
     let request = seen.lock().unwrap()[0].0.clone();
@@ -659,7 +659,7 @@ async fn eval_trial_target_removed_on_recovery() {
     let (target, lease) = trial_target(temp.path(), &trial.trial_id);
     assert!(target.is_dir());
     // The daemon is gone: its run is not tracked by the next one.
-    for (_, entry) in dead.eval_runs.drain() {
+    for (_, entry) in dead.routing.drain_eval_runs() {
         entry.handle.abort();
     }
 
@@ -783,7 +783,7 @@ async fn eval_recovery_keeps_running_trial_of_live_owner() {
         store.run_index_get(&run_id).unwrap().unwrap().status,
         task_core::RunIndexStatus::Running
     );
-    for (_, entry) in old.eval_runs.drain() {
+    for (_, entry) in old.routing.drain_eval_runs() {
         entry.handle.abort();
     }
 }
@@ -816,7 +816,7 @@ async fn eval_recovery_errors_trial_of_dead_owner_and_cancels_run_row() {
             .unwrap();
         let (mut old, trial) = start_hung_eval_trial(temp.path(), &store, &batch_id, owner).await;
         // The old instance died: nothing holds its run any more.
-        for (_, entry) in old.eval_runs.drain() {
+        for (_, entry) in old.routing.drain_eval_runs() {
             entry.handle.abort();
         }
         let worktree = std::path::PathBuf::from(trial.worktree_path.clone().unwrap());
@@ -1022,7 +1022,7 @@ async fn eval_run_row_not_left_running_after_handoff() {
             ))
             .unwrap();
         let (mut old, trial) = start_hung_eval_trial(temp.path(), &store, &batch_id, owner).await;
-        for (_, entry) in old.eval_runs.drain() {
+        for (_, entry) in old.routing.drain_eval_runs() {
             entry.handle.abort();
         }
         let run_id = trial.run_id.clone().unwrap();
@@ -1072,7 +1072,7 @@ async fn eval_run_row_not_left_running_after_handoff() {
             task_core::RunIndexStatus::Running
         };
         assert_eq!(run_row_status(&store, &run_id), expected, "{label}");
-        for (_, entry) in old.eval_runs.drain() {
+        for (_, entry) in old.routing.drain_eval_runs() {
             entry.handle.abort();
         }
     }
@@ -1291,7 +1291,7 @@ async fn eval_trial_full_account_does_not_block_other_source_in_same_tick() {
             ("p2".into(), 0, S::Running),
         ]
     );
-    assert_eq!(d.eval_runs.len(), 2);
+    assert_eq!(d.routing.eval_run_count(), 2);
     // Both accounts are full now: the next tick starts nothing and leaves the queue as it is.
     assert_eq!(d.tick_eval_trials(), 0);
     assert_eq!(
@@ -1301,8 +1301,8 @@ async fn eval_trial_full_account_does_not_block_other_source_in_same_tick() {
             .count(),
         2
     );
-    for entry in d.eval_runs.values() {
-        entry.handle.abort();
+    for handle in d.routing.eval_run_handles_for_test() {
+        handle.abort();
     }
 }
 
@@ -1334,8 +1334,8 @@ async fn eval_trial_tick_claims_each_trial_at_most_once() {
                 .unwrap()
                 .is_none()
         );
-        for entry in d.eval_runs.values() {
-            entry.handle.abort();
+        for handle in d.routing.eval_run_handles_for_test() {
+            handle.abort();
         }
     }
     assert_eq!(
@@ -1560,7 +1560,7 @@ async fn verify_daemon_leaves_foreign_eval_trial_files() {
     d.abort_eval_runs();
     d.interrupt_runs_on_shutdown();
 
-    assert!(d.eval_runs.is_empty());
+    assert!(d.routing.eval_run_count() == 0);
     assert!(seen.lock().unwrap().is_empty(), "no eval run started");
     assert_eq!(snapshot(&store), before);
     for file in &files {

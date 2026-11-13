@@ -86,3 +86,12 @@ GC・build cache と repo target の掃除・中止された作業場所の片�
 `Dispatcher` を引数に受けない。`route_state` の判断は `routing_runtime/route_state.rs` の純粋関数 `build_route_state` に分け、
 account 一覧の走査 cache の更新と入力の収集は `RoutingRuntime::route_state` が行う。module map に `routing_runtime` の行（層は owner）を足し、
 `route_failure` の行を「`RoutingRuntime` への cooldown の記録」に直した。移した module の旧い行は無かった。
+
+## 付記 2026-11-13: quota の状態と見積りの判断を `RoutingRuntime` へ出した（R4 own-quota）
+
+[ADR 2026-11-11 dispatcher-state-ownership](2026-11-11-dispatcher-state-ownership.md) D1・D3 に従い、`quota_activity`・`quota_calibration` を
+下位 owner `routing_runtime/quota.rs` の `QuotaBook` に、`eval_runs`・`knowledge_probe_cache` を `RoutingRuntime` に移した。
+`resolve_quota_estimate`（約 210 行）の判断は `routing_runtime/quota_estimate.rs` の純粋関数 `propose_estimate` に分け、適用
+（較正の更新と、閉じたグループの他の member の event の追記）は `RoutingRuntime::settle_quota` が行う。
+`quota_book` の行は、run 単位の入口（`quota_begin`・`release_quota_if_tracked`・`resolve_quota_estimate` の薄い呼び出し）だけを持つ行に直した
+（module は入口として残るので行は消さない）。

@@ -12,7 +12,7 @@ impl Dispatcher {
         // ADR-0044 §5 Phase 53 追記（Phase 55）: drain も他の 4 つと同じ止め方
         // （プロセスグループへ SIGTERM → `kill_grace_secs` → SIGKILL）。
         let kill_grace = self.config.kill_grace;
-        let mut aborted = self.eval_runs.len();
+        let mut aborted = self.routing.eval_run_count();
         self.abort_eval_runs();
         for (key, entry) in self.running.drain() {
             let task_id = key.task;

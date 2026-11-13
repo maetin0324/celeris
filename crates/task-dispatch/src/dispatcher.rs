@@ -30,7 +30,7 @@
 //! | `housekeeping` | `HostMaintenance` を呼ぶ入口（`MaintenanceInputs` と run・review の集合を渡す）と、verify の判定・承認と通知 feed の照合・検査の `CARGO_TARGET_DIR` | L1 |
 //! | `maintenance` | `HostMaintenance` の保守 executor（cron の `target_sweep`）と disk 監視の設定の入口 | L1 |
 //! | `snapshot` | デーモン状態の snapshot の組み立てと公開 | L1 |
-//! | `quota_book` | quota の見積りと release | L1 |
+//! | `quota_book` | quota の run 単位の入口（開始・release・見積りの呼び出し）。状態・判断・適用は `routing_runtime`（`routing_runtime/quota.rs`・`routing_runtime/quota_estimate.rs`） | L1 |
 //! | `sinks` | run 途中のイベントの sink（`StoreSink`・`ReviewerSink`） | L1 |
 //! | `routing_runtime` | 経路選択の状態（宣言・account の上限と帳簿・cooldown・routing mode・分類 board・経路なしの task・RoutingContext の登録簿）の owner（`crate::routing_runtime::RoutingRuntime`。この dir の外。`route_state` は `RouteState` の組み立ての純粋関数。ADR 2026-11-11 dispatcher-state-ownership D1・D3） | owner |
 //! | `route_failure` | route の供給側失敗の分類と、`RoutingRuntime` への account cooldown の記録 | L1 |
@@ -1154,10 +1154,6 @@ pub struct Dispatcher {
     test_hooks: tests::hooks::TestHooks,
     /// ADR-0074 D1.5（Phase F2）: 鍵は (task, WU)。Task 単位の問いは `running_for_task`。
     running: HashMap<RunKey, RunEntry>,
-    /// ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch）D4:
-    /// 起動した評価 run（run id → 試行）。`running` に入れないので本番の全体並列度に数えない
-    /// （予約枠は `config.eval.reserved_runs`）。真実は `eval_trials` の行。
-    eval_runs: HashMap<String, eval_trials::EvalRunEntry>,
     /// 評価 run の harness の版の測り方（試験用差し替え。`None` なら `probe_harness_version`）。
     eval_version_probe: Option<EvalVersionProbe>,
     reviewing: HashMap<TaskId, ReviewEntry>,
@@ -1274,13 +1270,6 @@ pub struct Dispatcher {
     /// （既定は `task_worker::probe_models`。テストは `set_knowledge_probe` で差し替える）。
     /// **LLM は呼ばない**（`GET <base_url>/models` の 1 回だけ）。
     knowledge_probe: KnowledgeProbe,
-    /// ADR-0052 D1: 検査の結果のキャッシュ（`base_url` → (いつ調べたか, 結果)）。60 秒。
-    knowledge_probe_cache: HashMap<String, (Instant, Reachability)>,
-    /// ADR-0074 D4（Phase F3 quota）: run の重なりを追跡し、measured/apportioned/pending を決定する
-    /// （プロセス内メモリのみ。`AccountBook` とは別軸で、replay の対象外）。
-    quota_activity: crate::accounts::QuotaActivity,
-    /// ADR-0074 D4.2（Phase F3 quota）: `estimated` の較正材料（source × 窓ごとの直近 `measured`）。
-    quota_calibration: crate::accounts::QuotaCalibrationBook,
     script_compare: dispatch_run::ScriptCompareState,
 }
 
@@ -1349,7 +1338,6 @@ impl Dispatcher {
             #[cfg(test)]
             test_hooks: Default::default(),
             running: HashMap::new(),
-            eval_runs: HashMap::new(),
             eval_version_probe: None,
             reviewing: HashMap::new(),
             pending_subjects: HashMap::new(),
@@ -1400,9 +1388,6 @@ impl Dispatcher {
             knowledge_probe: Arc::new(|base_url, bearer_token| {
                 task_worker::probe_models(base_url, task_worker::PROBE_TIMEOUT, bearer_token)
             }),
-            knowledge_probe_cache: HashMap::new(),
-            quota_activity: crate::accounts::QuotaActivity::new(),
-            quota_calibration: crate::accounts::QuotaCalibrationBook::new(),
             script_compare: Default::default(),
         }
     }
@@ -1410,7 +1395,7 @@ impl Dispatcher {
     /// ADR-0052 D1: 到達性の検査を差し替える（テストは偽のローカルサーバも起こさずに済ませる）。
     pub fn set_knowledge_probe(&mut self, probe: KnowledgeProbe) {
         self.knowledge_probe = probe;
-        self.knowledge_probe_cache.clear();
+        self.routing.clear_knowledge_probe_cache();
     }
 
     /// 多目的 routing Phase 3: run 開始時に RoutingContext を登録する registry を差し込む（daemon が配線する）。
@@ -1430,18 +1415,19 @@ impl Dispatcher {
                 reason: "[knowledge.langmem].base_url が無い".to_string(),
             };
         };
-        if let Some((checked_at, cached)) = self.knowledge_probe_cache.get(&base_url)
-            && now.duration_since(*checked_at) < task_worker::PROBE_CACHE_TTL
+        if let Some(cached) =
+            self.routing
+                .cached_knowledge_probe(&base_url, now, task_worker::PROBE_CACHE_TTL)
         {
-            return cached.clone();
+            return cached;
         }
         let token = self.config.knowledge.langmem_api_key.clone();
         let started = Instant::now();
         let outcome = (self.knowledge_probe)(&base_url, token.as_deref());
         log_slow_step("knowledge_probe", started);
         tracing::debug!(%base_url, ?outcome, "knowledge: probed the langmem endpoint");
-        self.knowledge_probe_cache
-            .insert(base_url, (now, outcome.clone()));
+        self.routing
+            .cache_knowledge_probe(base_url, now, outcome.clone());
         outcome
     }
 
@@ -1522,7 +1508,7 @@ impl Dispatcher {
     /// ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）: draining の instance は検査を始めず、手元の検査も最初の tick で
     /// 手放す（`hand_off_checks_in_hand`）ので、draining 中の `checking` は空になり、drain は run の終わりで完了する。
     ///
-    /// 評価 run（`eval_runs`）も数える。live 昇格の旧 instance は評価 run の完了（`on_eval_worker_finished` が
+    /// 評価 run（`RoutingRuntime` が追跡する）も数える。live 昇格の旧 instance は評価 run の完了（`on_eval_worker_finished` が
     /// `runs` 行を閉じて試行を `scoring` にする）まで draining に留まる（ADR 2026-10-14-eval-verify-isolation D3.2）。
     pub fn in_flight(&self) -> usize {
         self.running.values().filter(|e| !e.cos).count()
@@ -1530,7 +1516,7 @@ impl Dispatcher {
             + self.reviewing.len()
             + self.checking.len()
             + self.integrating.len()
-            + self.eval_runs.len()
+            + self.routing.eval_run_count()
             + self.health_inventory.in_flight()
     }
 

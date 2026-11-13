@@ -26,7 +26,8 @@ updated: 2026-11-13
 - 判定は変えていない: write set の予約の排他（同じ blocker の選び方・`RunKey` の順・先取りの規則・容量切れの引き継ぎ）、stale sync の優先
   （`stale_priority_cmp` は不変、待ち行列の出入りを owner の method に移しただけ）、credential の待ち（`credential_gate.rs` は field の操作を
   `hold_credential`・`release_credential_hold` に置き換えただけ）、browser の待ち（台帳の見張りの差し替え・再読込・見直しの予約を method に置き換えただけ）。
-- 入口に残したもの: `write_set_gate.rs` の `write_reservation_for`（store の hint から予約を作る）と `write_set_gate_disabled`、`stale_priority.rs` の
+- 入口に残したもの: `write_set_gate.rs` の `admit_write_set`（`dispatch_one` の write-set gate の入口。予約を作り、ablation と実行中の run の鍵を
+  引数にして owner に判定させ、`Hold` なら `TaskWait::WriteSet` を記録する）・`write_reservation_for`（store の hint から予約を作る）・`write_set_gate_disabled`、`stale_priority.rs` の
   `order_review_sync_queue`（behind の測定）・`note_review_sync_offer`（`awaiting_human` を読んで owner に bool で渡す。`awaiting_human` は own-coord-b）、
   `browser_prereq.rs`・`credential_gate.rs` の store の操作。
 - `dispatcher/tests/structure_guard.rs` の `OWNER_STRUCTS` に `ExecutionCoordination` を足した。`structure_guard_execution_coordination` が
@@ -55,6 +56,15 @@ updated: 2026-11-13
    `write_set_gate.rs`・`stale_priority.rs`・`write_set_record.rs`・`dispatcher.rs` の値の型の旧い定義、`credential_busy` の swap の写し。
 7. 不変条件と試験: 下の「試験の追加と変更」。
 
+## Run 2: 前回の check の不合格と直し
+
+- 不合格: 計画の check `celeris:repo-health/1` が rule `size.responsibility-growth` の worsened（`dispatch_run.rs` の `fn Dispatcher::dispatch_one`）で落ちた。`Dispatcher::dispatch_one` の
+  関数の行が base（`$CELERIS_WU_BASE`）の 1102 から 1108 に増えた。Run 1 で gate の結果を `match` で受け、`Hold` の待ちの記録を `dispatch_one` の中に
+  書いたため。Run 1 の test-affected の中の health は main の merge-base を base にしていて、この悪化を数えなかった。
+- 直し: gate の入口を `write_set_gate.rs` の `Dispatcher::admit_write_set` にまとめた（予約を作る・ablation を読む・実行中の run の鍵と tick を渡す・
+  `Hold` の待ちを記録する）。`dispatch_one` は結果を受けて `Hold` で `Ok(false)` を返すだけにした。`dispatch_one` は 1089 行（base 1102 以下）。
+  `Dispatcher` の method の数は 382（base 389 以下）。判定（`ExecutionCoordination::admit_write_set`）と待ちの記録の内容は変えていない。
+
 ## 試験の追加と変更
 
 - 足した試験（`execution_coordination.rs`。doc comment に守る不変条件と既存の試験で検出できない理由を書いた）:
@@ -69,17 +79,17 @@ updated: 2026-11-13
 
 ## 証拠（提出時の HEAD で実行）
 
-commit（件名）: 「phase 1: move write set, sync, dependency and credential waits to ExecutionCoordination」「phase 1: own-coord-a の進捗を書く」。
+commit（件名）: 「phase 1: move write set, sync, dependency and credential waits to ExecutionCoordination」「phase 1: own-coord-a の進捗を書く」
+「phase 1: write-set gate の入口を write_set_gate.rs に移し dispatch_one を base より短くする」「phase 1: own-coord-a の進捗に Run 2 の直しを書く」。
 
-- `bash scripts/dev/test-affected.sh`: exit 0（12 分）。repo-health は verdict=pass fail_grade=0（new=1 は fail-grade でない）、nextest 3869 passed・11 skipped。
+- `python3 scripts/dev/repo-health/repo_health.py --repo scripts/dev --base <base> --head worktree --policy-version 1`: base が `$CELERIS_WU_BASE`・
+  `git merge-base HEAD $CELERIS_WU_TARGET`・`git merge-base HEAD main` のどれでも exit 0、verdict=pass、fail_grade=0、worsened=0。
+- `bash scripts/dev/test-affected.sh`: exit 0。nextest 3869 passed・11 skipped（402 秒）、repo-health verdict=pass fail_grade=0。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
-- `bash scripts/dev/check-health.sh`: exit 0（repo_health_gate: all checks passed）。`grep -q '^//! | \`execution_coordination\` |' dispatcher.rs`: exit 0。
+- `bash scripts/dev/check-health.sh`: exit 0（repo_health_gate: all checks passed）。
 - 計画の check 4（D1 の表で unit 列が own-coord-a の 14 行を引き、`pub struct Dispatcher` の field に 1 件も無いこと）: 14 行、残り 0 件。
-- 計画の check 5: `execution_coordination.rs` に `(impl|&mut|&) *Dispatcher` は 0 件、struct の本体に `cfg(test)` は 0 件、`structure_guard.rs` に
-  `ExecutionCoordination` がある、`running`・`reviewing`・`run_keys` などの field は 0 件。
-  `cargo nextest run -p task-dispatch -E 'test(structure_guard_) | test(phase_effect_ab) | test(cex_)'`: 43 passed。
-- 関係する試験（write_set・stale_priority・target_sync・browser・credential・prepare・cluster_tunnel・cron_jobs ほか）: 190 passed。
-- `python3 scripts/dev/check-architecture-map.py`: OK（1036 件）。
+- 計画の check 5: `execution_coordination.rs` に `(impl|&mut|&) *Dispatcher` は 0 件、`structure_guard.rs` に `ExecutionCoordination` がある。
+  `cargo nextest run -p task-dispatch -E 'test(structure_guard_) | test(phase_effect_ab) | test(cex_) | test(write_set) | test(execution_coordination)'`: 55 passed。
 - 範囲の check（`sh "$CELERIS_WU_SCOPE_PATHS"`）: 変更は `crates/task-dispatch/src/`・`agent-docs/adr/0082-dispatcher-module-split.md`・
   `docs/architecture-map.md`・この進捗だけで、範囲外 0 件。
 

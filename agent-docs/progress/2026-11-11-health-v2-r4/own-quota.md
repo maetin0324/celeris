@@ -44,3 +44,11 @@ updated: 2026-11-13
 ## 証拠（提出時の HEAD で実行）
 
 - 結果は下の「検査の結果」。
+
+## 検査の結果（提出時の HEAD で実行）
+
+- `bash scripts/dev/test-affected.sh`: exit 0。3858 件 pass（11 skipped、449 秒）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+- `sh scripts/dev/progress-index.sh --check`: ok。`bash scripts/dev/check-health.sh`: exit 0（all checks passed）。
+- 範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"`）: 変更 path は task-dispatch の routing_runtime・dispatcher の入口と試験、ADR-0082、architecture-map、進捗だけ。
+- `leases.rs`（lease の高 risk path）は `self.eval_runs.len()` を `self.routing.eval_run_count()` に直した 1 行だけで、lease の判定は変えていない。

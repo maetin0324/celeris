@@ -1,12 +1,13 @@
 ---
 title: "健全性v2 R4 own-coord-b: task・WU の待ち・check と統合の process・tick の field を ExecutionCoordination へ移す"
 tasks: [01M6TYVJT4S29ZMP6P0D4831JG]
-status: running
+status: done
 updated: 2026-11-13
+completed: 2026-11-13
 ---
 # 健全性v2 R4 own-coord-b
 
-## 概要（Run 1 の時点。未完了）
+## 概要
 
 - ADR 2026-11-11 dispatcher-state-ownership D1 の表で unit 列が own-coord-b の 16 field（`accepting_new_work`・`awaiting_children`・
   `awaiting_human`・`checking`・`dispatch_waits`・`integrating`・`last_tick_gap_ms`・`last_tick_started`・`liveness_checked_at`・
@@ -25,13 +26,19 @@ updated: 2026-11-13
 - tick の順序は変えていない（`begin_tick` で `count_tick`、その後 `script_tick_rollover`、その後 `note_tick_started(Instant::now())`）。
   停滞の見張りは `liveness_due`・`stall_since`・`forget_stall`・`finish_stall_round`・`clear_stall_watch` に置き換えただけで、通知の冪等性の判定は同じ。
 
-## 未解決（次の run でやること）
+- Run 2: Run 1 の提出は check の repo-health の `size.responsibility-growth`（`ExecutionCoordination` の method 78 > 閾値 60、new）で
+  不合格だった。WU の check と段の統合の process（`checking`・`integrating`）を下位 owner `ProcessTable`、停滞の見張り（`stall_watch`・
+  `stalled_tasks`・`liveness_checked_at`）を下位 owner `LivenessWatch` に分けた。どちらも同じ file に置き、`ExecutionCoordination` の
+  private な field（`processes`・`liveness`）としてだけ作る（`RoutingRuntime` の中の `QuotaBook` と同じ形。D1 の表の owner は変わらない）。
+  入口は `processes()`・`liveness()`（と `_mut`）から method を呼ぶ。子待ち・持ち越しと合わせて見る `holds_task`・`abort_in_hand` は
+  `ExecutionCoordination` に残した。write set の blocker の判断を予約と待機の表を引数で受ける純粋関数 `write_set_blocker` にし、
+  `dispatch_ready` の頭で続けて呼んでいた `clear_cluster_waiting`・`clear_dispatch_waits` を `begin_dispatch_round` 1 つにした。
+  method の数は `ExecutionCoordination` 59・`ProcessTable` 14・`LivenessWatch` 7。tick の順序と停滞の通知の判定は変えていない。
 
-- repo-health の `size.responsibility-growth`（new、fail）: `ExecutionCoordination` の method の数が 78 で閾値 60 を超える。
-  base（`$CELERIS_WU_BASE`）では超えていない。直し方の候補: 停滞の見張り（3 field・7 method）と WU の check・段の統合の process
-  （2 field・16 method）を、`ExecutionCoordination` の中の private な owner の struct（`QuotaBook` が `RoutingRuntime` の中にある形）に分け、
-  `OWNER_STRUCTS` と structure guard を直す。method をまとめて数を減らす（`is_integrating` → `integration_work_unit().is_some()` など）案もある。
-- 上の直しの後に、test-affected・clippy・fmt・repo-health・範囲の check を提出時の HEAD で走らせる。
+## 未解決
+
+- 無し。repo-health の new の 1 件（`migration.remnant`、warning、`crates/task-dispatch/src/host_maintenance.rs` の `legacy`）はこの unit の
+  変更ではなく、fail-grade でもない。
 
 ## 試験の追加と変更
 
@@ -41,8 +48,23 @@ updated: 2026-11-13
     鍵を無視して全部消す実装でも通る。
   - `stall_watch_keeps_the_first_sighting_until_the_seq_moves`: 同じ seq の間は最初に見た時刻を保ち、seq が変われば数え直す。
   - `structure_guard_execution_coordination`: field の一覧を 30 件（own-coord-a 14・own-coord-b 16）にし、struct の頭を `<S, C>` に直した。
+    Run 2 で、`ExecutionCoordination`・`ProcessTable`・`LivenessWatch` の 3 つの struct の field がすべて private で、下位 owner 2 つを
+    `ExecutionCoordination` が field に持ち、3 つの field の和が D1 の表の 30 件になることを確かめる形にした（下位 owner を外に置いたり
+    field を `pub` にしたりすると落ちる）。`OWNER_STRUCTS` に `ProcessTable`・`LivenessWatch` を足した（`#[cfg(test)]` の field の検査）。
 - 変えた試験: field の直参照を owner の method に置き換えた（assertion は不変）。`structure_guard.rs` の `OWNER_STRUCTS` の名を
   `ExecutionCoordination<S, C>` に直した。cex_ の試験は変えていない。
+
+## 証拠（Run 2、提出時の HEAD で実行）
+
+基準は `$CELERIS_WU_BASE`。commit（件名）: Run 1 の 3 件に加え、「phase 1: ExecutionCoordination の check・統合の process と停滞の見張りを
+下位 owner に分け、method を 60 以下にする」「phase 1: ADR-0082 の付記と地図に ExecutionCoordination の下位 owner を書く」と、この進捗の commit。
+
+- `bash scripts/dev/test-affected.sh`: exit 0（738 秒）。nextest 3871 tests run: 3871 passed、11 skipped。repo-health verdict=pass、fail_grade 0。
+- `bash scripts/dev/check-health.sh && s=crates/task-dispatch/src; grep -q '^//! | `execution_coordination` |' $s/dispatcher.rs`: exit 0。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+- `cargo nextest run -p task-dispatch -E 'test(structure_guard) | test(execution_coordination) | test(cex_) | test(phase_effect_ab) | test(stale_priority) | test(drain_hand_off) | test(orphan_work_units) | test(integration_ready_race) | test(tree_approval) | test(finished_plan) | test(unit_task_deps) | test(write_set_gate) | test(cron_jobs) | test(lease)'`: 129 passed（cex_ の試験は書き換えていない）。
+- `pub struct Dispatcher` の本体に D1 の表で unit 列が own-coord-b の 16 field は無い（grep で 0 件）。
+- `sh "$CELERIS_WU_SCOPE_PATHS"`: 変更 path は `crates/task-dispatch/src/`・この進捗・ADR-0082・`docs/architecture-map.md` だけ。
 
 ## 証拠（Run 1、HEAD は未提出）
 

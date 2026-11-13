@@ -73,7 +73,19 @@ completed: 2026-11-13
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
-EVIDENCE_PLACEHOLDER
+コードの commit の後に実行した（その後の commit はこの進捗ファイルだけ）。
+
+- `bash scripts/dev/test-affected.sh`（対象 crate: celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch）→ exit 0
+  （nextest 3878 passed・11 skipped、script bundle SKIP 0 件、doc test は失敗 0）
+- `cargo nextest run -p task-dispatch -E 'test(/session/) | test(/cos_chat/) | test(/continuation/)'` → exit 0（296 passed）
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- `bash scripts/dev/check-health.sh --base "$CELERIS_WU_BASE"` → exit 0（verdict=pass、new=0・worsened=0）
+- `sh scripts/dev/progress-index.sh --check` → exit 0、`sh scripts/dev/check-doc-links.sh` → exit 0、`sh scripts/dev/check-adr-numbers.sh` → exit 0
+- `grep -rn "fn stored_session_fresh_reason" crates/task-dispatch/src` → `sessions.rs` の 1 件。呼ぶのは `sessions.rs` の `decide_continuation` と
+  `sessions/cos_chat.rs` の `decide_cos_chat_session` の 2 か所
+- `git diff "$CELERIS_WU_BASE" -- agent-docs/adr/2026-11-11-dispatcher-state-ownership.md` → 差分無し
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → ADR 2026-11-13・この進捗・`sessions.rs`・`sessions/cos_chat.rs`・試験 2 file・`docs/architecture-map.md` の 7 件
 
 ## 再提出の経緯（1・2 回目の run）
 

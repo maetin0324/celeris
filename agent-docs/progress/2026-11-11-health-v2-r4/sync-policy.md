@@ -75,7 +75,14 @@ policy-paths.diff は移動先ごとに 1 行だったが、operator は移動�
 
 ### 検査の結果
 
-（提出時の HEAD の結果を下に追記する）
+- check 0: exit 0（6 つの移動先すべてが main の high_risk の lease・budget に当たる。policy の 2 file は main と差分 0）。
+- `cargo check --workspace --tests --keep-going`: exit 0（warning は main と同じ `script_exhaustive.rs` の 1 件だけ）。
+- `bash scripts/dev/test-affected.sh`: exit 0、781 秒（load 15〜19）。nextest 8408 件すべて合格（23 skipped）、web の unit 713 件・
+  134 件合格、`repo_health_gate: all checks passed`、`test-ts-verify: 20 passed, 0 failed`。
+  1 回目（cex の直しの前の取り込みの commit）は exit 100（8406 passed・2 failed、上の cex の 2 本）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `cargo fmt --all -- --check`: exit 0。
+- `sh scripts/dev/progress-index.sh --check`: exit 0。
 
 ## 未解決事項
 

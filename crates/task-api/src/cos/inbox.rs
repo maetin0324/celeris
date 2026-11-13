@@ -369,6 +369,7 @@ pub(crate) async fn wait_for_operation(
 }
 
 fn validate_packet(
+    store: &SqliteStore,
     packet: &EscalationPacket,
     item: &CosInboxItem,
     source: Option<&InboxItem>,
@@ -441,7 +442,8 @@ fn validate_packet(
             "escalation.web_path must be {expected} (derived from the target)"
         )));
     }
-    Ok(())
+    // ADR 2026-11-12-discord-person-or-operator D2.
+    reserved_options::check(store, packet, item, source)
 }
 
 fn body_problem(error: serde_json::Error) -> ApiProblem {
@@ -648,8 +650,7 @@ async fn resolve(
                             "the source wait of {i} is no longer open (answered or changed)"
                         ))));
                     }
-                    validate_packet(packet, &item, source).map_err(&reject)?;
-                    reserved_options::check(store, packet, &item, source).map_err(&reject)?;
+                    validate_packet(store, packet, &item, source).map_err(&reject)?;
                     if packet.to == Addressee::Operator {
                         let op = escalate_to_operator(store, &mut audit, &item, source, action)
                             .map_err(&reject)?;

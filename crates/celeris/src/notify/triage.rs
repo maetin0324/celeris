@@ -182,7 +182,7 @@ pub fn source_unresolved(
         return Ok(SourceCheck::Resolved);
     };
     // ADR 2026-11-12-discord-person-or-operator D1: the same checks as the fallback claim.
-    if task_core::chat::triage::superseded(&conn, &row.key).map_err(|e| e.to_string())? {
+    if task_core::cos_revision::superseded(&conn, &row.key).map_err(|e| e.to_string())? {
         return Ok(SourceCheck::Resolved);
     }
     if kind == "notice" {

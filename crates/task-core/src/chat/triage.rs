@@ -10,6 +10,7 @@ use ulid::Ulid;
 use super::store::{
     ChatError, chat_ts, cos_thread_ensure_tx, immediate, task_root_project, writer,
 };
+use crate::cos_revision;
 use crate::store::SqliteStore;
 
 pub const COS_TRIAGE_BATCH_MAX: usize = 20;
@@ -131,49 +132,6 @@ pub(super) fn bind_claim_tx(
     Ok(message_id)
 }
 
-/// ADR 2026-11-12-discord-person-or-operator D1: a newer revision of the same source was ingested
-/// after `item_id` (a later `created_at`, ties broken by id). The one check of the resolve API, the
-/// outbox claim (escalation and fallback) and the notifier just before the send.
-pub fn superseded(conn: &rusqlite::Connection, item_id: &str) -> rusqlite::Result<bool> {
-    conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM cos_inbox_items o JOIN cos_inbox_items i ON i.id=?1 \
-         WHERE o.source_kind=i.source_kind AND o.source_key=i.source_key AND o.id<>i.id \
-         AND (o.created_at>i.created_at OR (o.created_at=i.created_at AND o.id>i.id)))",
-        [item_id],
-        |r| r.get(0),
-    )
-}
-
-/// The `reason` of an older revision closed by the judgment of a newer one (D1).
-pub const CLOSED_BY_NEWER_REVISION: &str = "新しい revision の判定で閉じた";
-
-/// D1: the outcome of `item_id` closes the older revisions of the same source that still wait for
-/// CoS (`pending`, `running`) or sit with a route (`escalated`, `fallback`): they become `resolved`
-/// and their unsent notifications are withdrawn (`superseded`). A sent notification stays sent.
-fn close_older_revisions(
-    conn: &rusqlite::Connection,
-    item_id: &str,
-    at: &str,
-) -> rusqlite::Result<usize> {
-    const OLDER: &str = "SELECT o.id FROM cos_inbox_items o JOIN cos_inbox_items i ON i.id=?1 \
-         WHERE o.source_kind=i.source_kind AND o.source_key=i.source_key AND o.id<>i.id \
-         AND (o.created_at<i.created_at OR (o.created_at=i.created_at AND o.id<i.id)) \
-         AND o.state IN ('pending','running','escalated','fallback')";
-    conn.execute(
-        &format!(
-            "UPDATE notifications SET ok=0,error='superseded' WHERE ok IS NULL AND sent_at IS NULL \
-             AND id IN (SELECT notification_id FROM cos_notification_routes WHERE item_id IN ({OLDER}))"
-        ),
-        [item_id],
-    )?;
-    conn.execute(
-        &format!(
-            "UPDATE cos_inbox_items SET state='resolved',reason=?2,updated_at=?3 WHERE id IN ({OLDER})"
-        ),
-        params![item_id, CLOSED_BY_NEWER_REVISION, at],
-    )
-}
-
 /// [`SqliteStore::cos_triage_resolve`] in the caller's transaction: the resolve API marks the item
 /// inside the `cos_operation_apply` transaction of its audit row, so the audit row and the mark
 /// commit or roll back together (ADR 2026-11-10-taskstore-consumer-ports D5). `false` when the
@@ -196,11 +154,9 @@ pub fn cos_triage_resolve_tx(
     // withdraws it and takes the item back (a pending or running item is never `fallback`).
     let from = crate::cos_fallback::judged_from(tx, item_id, outcome)?;
     let at = chat_ts(now);
-    let marked = tx.execute("UPDATE cos_inbox_items SET state=?2,operation_id=?3,reason=?4,updated_at=?5 WHERE id=?1 AND state IN ('pending','running',?6)", params![item_id,outcome,operation_id,reason,at,from])? == 1;
-    if marked {
-        close_older_revisions(tx, item_id, &at)?;
-    }
-    Ok(marked)
+    let marked = tx.execute("UPDATE cos_inbox_items SET state=?2,operation_id=?3,reason=?4,updated_at=?5 WHERE id=?1 AND state IN ('pending','running',?6)", params![item_id,outcome,operation_id,reason,at,from])?;
+    // ADR 2026-11-12-discord-person-or-operator D1: the judgment closes the older revisions.
+    Ok(cos_revision::after_judgment(tx, item_id, marked, &at)?)
 }
 
 fn put_cursor(tx: &Transaction<'_>, name: &str, value: &str) -> Result<(), ChatError> {
@@ -407,15 +363,9 @@ impl SqliteStore {
         let Some((source_kind, source_key, revision, state, thread_id)) = source else {
             return Err(ChatError::not_found("triage item", item_id));
         };
-        if matches!(state.as_str(), "answered" | "observed" | "resolved") {
-            return Ok(None);
-        }
         // ADR 2026-11-12-discord-person-or-operator D1: an older revision is closed, never routed.
-        if superseded(&tx, item_id)? {
-            tx.execute(
-                "UPDATE cos_inbox_items SET state='resolved',reason=?2,updated_at=?3 WHERE id=?1 AND state IN ('pending','running')",
-                params![item_id, CLOSED_BY_NEWER_REVISION, at],
-            )?;
+        let closed = matches!(state.as_str(), "answered" | "observed" | "resolved");
+        if closed || cos_revision::close_if_superseded(&tx, item_id, &at)? {
             tx.commit()?;
             return Ok(None);
         }
@@ -852,13 +802,7 @@ fn resolve_stale(
         .collect();
     let stale: Vec<String> = {
         let mut stmt = tx.prepare("SELECT id,source_key,source_revision FROM cos_inbox_items WHERE source_kind=?1 AND state IN ('pending','running','escalated')")?;
-        let rows = stmt.query_map([source_kind], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-            ))
-        })?;
+        let rows = stmt.query_map([source_kind], |r| <(String, String, String)>::try_from(r))?;
         rows.collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .filter(|(_, k, r)| !live.contains(&(k.as_str(), r.as_str())))

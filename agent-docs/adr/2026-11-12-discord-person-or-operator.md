@@ -28,7 +28,7 @@ tasks: [01M791DFQGCDG46CCR5KWNDDQA]
 
 ### D1 古い revision は新しい revision の判定で閉じ、退避も escalate も取れない
 
-- 新しい revision の有無の判定は `task_core::chat::triage::superseded`（同じ元の待ちに、後の `created_at` の item がある。同時刻は id で
+- 新しい revision の有無の判定は `task_core::cos_revision::superseded`（同じ元の待ちに、後の `created_at` の item がある。同時刻は id で
   決める）1 つにする。resolve の API（409）、経路の取り合い（`cos_triage_outbox_claim`）、送る直前の再確認（notifier）が同じ関数を使う。
 - item の結果（answered・observed・escalated・fallback・resolved）を記録すると、同じ元の待ちの古い revision で `pending`・`running`・
   `escalated`・`fallback` のものを `resolved`（reason「新しい revision の判定で閉じた」）にし、その未送信の通知を取り下げる
@@ -38,6 +38,9 @@ tasks: [01M791DFQGCDG46CCR5KWNDDQA]
   見つからないときは閉じたと決めず、今までどおり退避する（notifier はそれを送らない）。
 - 送る直前の再確認で元の待ちが閉じていた退避は、通知の取り下げと同じ transaction で item を閉じる（`fallback` を閉じる sweep は無い）。
   escalated の item は今までどおり triage の stale sweep が閉じる。
+- 判定と閉じる SQL は `task_core::cos_revision` に置く（`cos_fallback` と同じ形。`cos_inbox_items`・`cos_notification_routes`・
+  `notifications` の SQL だけ）。書く関数（`close_if_superseded`・`after_judgment`）は crate の中だけで、chat の triage store が
+  自分の transaction の中で呼ぶ。状態の正本は `cos_inbox_items` の 1 つのまま。
 - 再確認から POST までの秒単位の間に閉じた件は防げない（7 日間で 1 件）。送った後に閉じた件の web の札は「既に答えられたか、失効」と出る。
 
 ### D2 人宛ての escalate は人に残す選択肢を名指し、推奨がその外なら CoS が先に答える

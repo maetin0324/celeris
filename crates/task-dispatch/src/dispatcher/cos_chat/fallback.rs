@@ -45,8 +45,10 @@ use super::launch::CosChatLaunch;
 use super::triage::COS_TRIAGE_NOTICE_KIND;
 use crate::dispatcher::Dispatcher;
 use task_core::chat::triage::{
-    COS_FALLBACK_SUMMARY_KEY_PREFIX, COS_FALLBACK_SUMMARY_MAX_ATTEMPTS, COS_FALLBACK_SUMMARY_PREFIX,
+    COS_FALLBACK_SUMMARY_KEY_PREFIX, COS_FALLBACK_SUMMARY_MAX_ATTEMPTS,
+    COS_FALLBACK_SUMMARY_PREFIX, CosTriageItemReport,
 };
+use task_core::feed::notice_revision_open;
 
 /// Fixed headline of every fallback (D6).
 pub const COS_FALLBACK_HEADLINE: &str = "CoS 不在のため直接通知";
@@ -322,7 +324,7 @@ pub(crate) fn clip_with_link(text: &str, max: usize, full_at: &str) -> String {
 pub(crate) fn handoff_text(
     c: &FallbackCandidate,
     reason: &str,
-    report: Option<&task_core::chat::triage::CosTriageItemReport>,
+    report: Option<&CosTriageItemReport>,
     summary_requested: bool,
 ) -> (String, ChatCard) {
     let title = report
@@ -386,12 +388,7 @@ pub(crate) fn handoff_text(
 /// ADR 2026-10-28-cos-inbox-chat-summary D4: the daemon's request that CoS write, after the
 /// fact, a summary of an item handed to the person without it. Pure. The text is the run input
 /// (a queued `role=system` message), never a person's instruction.
-pub(crate) fn summary_request_text(
-    items: &[(
-        FallbackCandidate,
-        task_core::chat::triage::CosTriageItemReport,
-    )],
-) -> String {
+pub(crate) fn summary_request_text(items: &[(FallbackCandidate, CosTriageItemReport)]) -> String {
     let ids: Vec<&str> = items.iter().map(|(c, _)| c.item_id.as_str()).collect();
     let ids = serde_json::to_string(&ids).unwrap_or_default();
     let mut text = format!(
@@ -567,18 +564,15 @@ impl CosChatLaunch {
         c: &FallbackCandidate,
         reason: &str,
         now: OffsetDateTime,
-    ) -> Result<Option<task_core::chat::triage::CosTriageItemReport>, String> {
+    ) -> Result<Option<CosTriageItemReport>, String> {
         if c.route.is_none() {
             // ADR 2026-11-12-discord-person-or-operator D1: a read notice or a grown bundle (a newer
             // revision) is closed, not handed to the person (the notifier's check before the send).
             // A notice that cannot be found is handed over as before: not knowing is not closed.
             let source = if c.source_kind == COS_TRIAGE_NOTICE_KIND {
-                let open = task_core::feed::notice_revision_open(
-                    self.store.as_ref(),
-                    &c.source_key,
-                    &c.source_revision,
-                )
-                .map_err(|e| e.to_string())?;
+                let open =
+                    notice_revision_open(self.store.as_ref(), &c.source_key, &c.source_revision)
+                        .map_err(|e| e.to_string())?;
                 (open != Some(false)).then(|| self.notice_source(c))
             } else {
                 self.fallback_inbox_item(dispatcher, inbox, c, now)?
@@ -631,7 +625,7 @@ impl CosChatLaunch {
         c: &FallbackCandidate,
         reason: &str,
         now: OffsetDateTime,
-    ) -> Option<task_core::chat::triage::CosTriageItemReport> {
+    ) -> Option<CosTriageItemReport> {
         // ADR 2026-10-22-cos-fixed-threads D3: the hand-off line goes to the item's CoS thread.
         let report = match self.store.cos_triage_item_report(&c.item_id) {
             Ok(Some(report)) => report,
@@ -689,10 +683,7 @@ impl CosChatLaunch {
 
     fn queue_summary_request(
         &mut self,
-        items: &[(
-            FallbackCandidate,
-            task_core::chat::triage::CosTriageItemReport,
-        )],
+        items: &[(FallbackCandidate, CosTriageItemReport)],
         now: OffsetDateTime,
     ) {
         let Some((first, _)) = items.first() else {

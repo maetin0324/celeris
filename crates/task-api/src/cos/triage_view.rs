@@ -111,5 +111,5 @@ pub(crate) fn fallback_unsent(db: &Path, id: &str) -> Result<bool, ChatError> {
 /// ADR 2026-11-12-discord-person-or-operator D1).
 pub(crate) fn superseded(db: &Path, item: &CosInboxItem) -> Result<bool, ChatError> {
     let conn = open(db)?;
-    Ok(task_core::chat::triage::superseded(&conn, &item.id)?)
+    Ok(task_core::cos_revision::superseded(&conn, &item.id)?)
 }

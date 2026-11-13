@@ -25,8 +25,6 @@ pub(in crate::dispatcher) struct TestHooks {
     pub(in crate::dispatcher) cos_reserved_sources: std::collections::BTreeSet<SourceId>,
     /// 統合の状態確認直前に別の ready 戻しを差し込む一回フック（`start_integration` が `take` する）。
     pub(in crate::dispatcher) before_integration_start: Option<fn(&mut Dispatcher, TaskId)>,
-    /// 次の `cos_digest` の pass の id（canary の選択は pass id の hash で決まるので、側を決めて試す）。
-    pub(in crate::dispatcher) next_digest_pass_id: Option<String>,
     /// 研究 ablation（phase_effect_ab の off の variant）。本体はこの 1 つの読み口だけを見る。
     pub(in crate::dispatcher) ablation: EffectAblation,
 }

@@ -696,7 +696,8 @@ impl Dispatcher {
         let pass_id = ulid::Ulid::new().to_string();
         #[cfg(test)]
         let pass_id = self
-            .test_hooks
+            .maint
+            .script_compare_mut()
             .next_digest_pass_id
             .take()
             .unwrap_or_else(|| ulid::Ulid::new().to_string());

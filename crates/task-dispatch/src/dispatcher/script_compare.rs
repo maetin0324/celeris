@@ -77,6 +77,9 @@ pub(in crate::dispatcher) struct ScriptCompareState {
     lane_canary: script_canary::LaneCanary,
     /// ADR 2026-11-03-cos-digest-persist: `cos_digest` の影の outbox を閉じる task と再処理の要否。
     pub(in crate::dispatcher) digest_shadows: super::cos_chat::digest::CosDigestShadows,
+    /// 試験専用: 次の `cos_digest` の pass の id（canary の選択は pass id の hash で決まるので、側を決めて試す）。
+    #[cfg(test)]
+    pub(in crate::dispatcher) next_digest_pass_id: Option<String>,
 }
 
 impl Dispatcher {

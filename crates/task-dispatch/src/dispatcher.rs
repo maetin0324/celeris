@@ -26,7 +26,7 @@
 //! |---|---|---|
 //! | `cluster_runtime` | cluster / tunnel の接続・生存確認・probe・job の poll の状態の owner（`crate::cluster_runtime::ClusterRuntime`。この dir の外。ADR 2026-11-11 dispatcher-state-ownership D1） | owner |
 //! | `cluster` | `ClusterRuntime` を呼ぶ入口と、org・run の表を読むクラスタの解決 | L1 |
-//! | `host_maintenance` | disk guard・disk 監視・scratch pool の GC・build cache と repo target の掃除・中止された作業場所の片付けの状態の owner（`crate::host_maintenance::HostMaintenance`。この dir の外。ADR 2026-11-11 dispatcher-state-ownership D1） | owner |
+//! | `host_maintenance` | disk guard・disk 監視・scratch pool の GC・build cache と repo target の掃除・中止された作業場所の片付け・全体棚卸しの Busy の印・TS の比較の状態の owner（`crate::host_maintenance::HostMaintenance`。この dir の外。ADR 2026-11-11 dispatcher-state-ownership D1） | owner |
 //! | `housekeeping` | `HostMaintenance` を呼ぶ入口（`MaintenanceInputs` と run・review の集合を渡す）と、verify の判定・承認と通知 feed の照合・検査の `CARGO_TARGET_DIR` | L1 |
 //! | `maintenance` | `HostMaintenance` の保守 executor（cron の `target_sweep`）と disk 監視の設定の入口 | L1 |
 //! | `snapshot` | デーモン状態の snapshot の組み立てと公開 | L1 |
@@ -38,7 +38,7 @@
 //! | `run_context` | run の文脈（extras・session・knowledge・skills） | L1 |
 //! | `worker_task` | worker 本体（free fn の `run_worker`。`Dispatcher` に依存しない） | L1 |
 //! | `work_units` | WorkUnit の gate・準備・並列・checks | L2 |
-//! | `tree_units` | 木の子 task の gate・liveness・一括作成 | L2 |
+//! | `tree_units` | 木の子 task の gate・liveness・一括作成と、案件の停滞の判定の入口（状態は `project_orchestration`） | L2 |
 //! | `child_tasks` | 委譲した子と承認の子 | L2 |
 //! | `review_spawn` | review run の起動（per-task lock は verdict の保存まで） | L2 |
 //! | `worker_finish` | worker run の終了処理 | L3 |
@@ -49,6 +49,8 @@
 //! | `run_supervisor` | 実行中の run の表（run の集合の正本）・review run の表・infra backoff・lease の照合の状態の owner（`crate::run_supervisor::RunSupervisor`。この dir の外）と、lease の回収の判断（純粋関数 `reclaim_reason`・`reclaim_verdict`）・worker 完了と回収が共有する再試行の判定 `infra_retry_after`（ADR 2026-11-11 dispatcher-state-ownership D1・D3・D4） | owner |
 //! | `leases` | `RunSupervisor` を呼ぶ入口: lease の回収（判断は `run_supervisor`、WU・統合の照合と待ちの削除はここ）・abort・orphan・drain・shutdown の割り込み | L3 |
 //! | `execution_coordination` | task・WU の実行の調整の状態（write set の予約と見送り・actual write-set の採取場所・review 前 sync の待ち行列と再同期の上限で止めた review・root の依存先の統合・WU の worktree の用意の失敗・credential・browser・クラスタの待ち、task・WU の見送りの理由・人の承認待ち・子待ち・review の持ち越し・WU の check と段の統合の process・完了の channel・tick・新しい仕事を受けるか・並列度・停滞の見張り）の owner（`crate::execution_coordination::ExecutionCoordination`。この dir の外。run の集合は持たず、write set の blocker と刈り込みは `RunSupervisor::run_keys` を、lease の回収・abort の待ちの削除は `RunSupervisor` が手放した鍵を引数で受ける。ADR 2026-11-11 dispatcher-state-ownership D1・D2・D3・D6） | owner |
+//! | `project_orchestration` | 案件の停滞の見張り（判定の時刻・成否・番号・換算単価）と CoS chat の起動の状態の owner（`crate::project_orchestration::ProjectOrchestration`。この dir の外。`tree_units` と `cos_chat/launch` の書き込みは owner の method を通す。ADR 2026-11-11 dispatcher-state-ownership D1・D2） | owner |
+//! | `probe_ports` | 本番の既定を持つ注入 port（壁時計・knowledge の到達性・eval の harness の版）（`crate::probe_ports::ProbePorts`。この dir の外。owner はこれを持たず、入口が読んだ値を引数で受ける。同 D1） | owner |
 //! | `dispatch_run` | run の起動（`dispatch_one`・`spawn_worker`）と担当・lane の決定 | L4 |
 
 use std::collections::HashMap;

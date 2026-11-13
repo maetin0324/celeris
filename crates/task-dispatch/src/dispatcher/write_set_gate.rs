@@ -28,9 +28,36 @@
 //! - **actual の併用**: 走行中の run の既知の actual はこの Phase では照合に使わない（expected だけ）。
 
 use super::*;
-use crate::execution_coordination::WriteReservation;
+use crate::execution_coordination::{WriteReservation, WriteSetAdmission};
 
 impl Dispatcher {
+    /// `dispatch_one` の write-set gate の入口。候補の予約を store の hint から作り（planner run は予約しない）、
+    /// 試験の ablation（D6）と実行中の run の鍵を引数にして `ExecutionCoordination::admit_write_set` に判定させる。
+    /// `Hold` なら task の待ち（`TaskWait::WriteSet`）を記録してから返す。呼び元は `Hold` で `Ok(false)` を返すだけ。
+    pub(super) fn admit_write_set(
+        &mut self,
+        task: &Task,
+        run_key: &RunKey,
+        wu: Option<&task_core::WorkUnitRow>,
+        is_planner_dispatch: bool,
+    ) -> Result<WriteSetAdmission, DispatchError> {
+        let candidate = if is_planner_dispatch {
+            None
+        } else {
+            self.write_reservation_for(task, wu)?
+        };
+        let gate_disabled = self.write_set_gate_disabled();
+        let running = self.supervisor.run_keys();
+        let admission =
+            self.coord
+                .admit_write_set(run_key, candidate, running, self.ticks, gate_disabled);
+        if let WriteSetAdmission::Hold { blocker } = &admission {
+            let blocking_task_ids = vec![blocker.task];
+            self.note_dispatch_wait(task.id, task_core::TaskWait::WriteSet { blocking_task_ids });
+        }
+        Ok(admission)
+    }
+
     /// 候補の run の予約。hint なし・planner run・CoS の対話 run は `None`（gate に掛けない）。
     pub(super) fn write_reservation_for(
         &self,

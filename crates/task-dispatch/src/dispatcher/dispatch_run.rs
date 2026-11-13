@@ -251,31 +251,12 @@ impl Dispatcher {
                 .filter(|w| w.phase.is_some())
                 .map(|w| w.id.clone()),
         };
-        let candidate_reservation = if is_planner_dispatch {
-            None
-        } else {
-            self.write_reservation_for(&task, current_wu.as_ref())?
-        };
-        let gate_disabled = self.write_set_gate_disabled();
-        let admission = self.coord.admit_write_set(
-            &run_key,
-            candidate_reservation,
-            self.supervisor.run_keys(),
-            self.ticks,
-            gate_disabled,
-        );
-        let write_reservation = match admission {
-            WriteSetAdmission::Admit(reservation) => reservation,
-            WriteSetAdmission::Hold { blocker } => {
-                self.note_dispatch_wait(
-                    task.id,
-                    task_core::TaskWait::WriteSet {
-                        blocking_task_ids: vec![blocker.task],
-                    },
-                );
-                return Ok(false);
-            }
-        };
+        let wu = current_wu.as_ref();
+        let write_reservation =
+            match self.admit_write_set(&task, &run_key, wu, is_planner_dispatch)? {
+                WriteSetAdmission::Admit(reservation) => reservation,
+                WriteSetAdmission::Hold { .. } => return Ok(false),
+            };
         // ADR-0018: リモート実行のタスクは、クラスタの設定・cooldown・並列度・多重接続を先に確かめる。
         // ADR-0062 B1（Phase 107）: `cluster_of` が `None` の理由を分ける。(a) 設定に無いクラスタ
         // → 従来どおり `unroutable`（人が設定を直すまで進まない）。(b) 担当が `cluster:<id>` を

@@ -129,13 +129,16 @@ pub(super) fn use_passing_stub_checker() {
     }
 }
 
-/// 同梱の検査器を設定しない [`dispatcher`]（同梱の検査器の無い場合を確かめる試験の土台）。process の同梱の検査器が
+/// 同梱の検査器を設定しない [`dispatcher`]（同梱の検査器の無い場合を確かめる試験の土台）。同梱の検査器が
 /// 既に設定されていれば panic する（試験の前提が崩れている）。
 pub(super) fn dispatcher_without_bundled_checker(
     store: Arc<dyn TaskStore>,
     adapter: Arc<dyn WorkerAdapter>,
     max_concurrency: usize,
 ) -> Dispatcher {
+    crate::health_review::gate::bundled_test::require(
+        crate::health_review::gate::bundled_test::Kind::Unset,
+    );
     assert_eq!(
         crate::health_review::gate::bundled_checker(),
         None,

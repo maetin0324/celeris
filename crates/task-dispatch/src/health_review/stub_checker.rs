@@ -46,7 +46,7 @@ const POLICY_FILE: &str = "stub-review-policy.json";
 /// report の mode が書く report（検査器の dir の中の名前）。
 const REPORT_FILE: &str = "stub-report.json";
 
-/// 合格の stub の同梱の検査器を書き（process で 1 回）、[`gate::configure_bundled_checker`] で process に設定する。
+/// 合格の stub の同梱の検査器を書き（process で 1 回）、[`gate::configure_bundled_checker`] で設定する（試験は `gate::bundled_test` で他の種類の試験と直列化される）。
 /// 別の同梱の検査器が既に設定されていれば、その理由の文を返す（上書きしない）。
 pub fn configure_passing_stub_checker() -> Result<&'static BundledChecker, String> {
     static WRITTEN: OnceLock<Result<PathBuf, String>> = OnceLock::new();
@@ -54,6 +54,8 @@ pub fn configure_passing_stub_checker() -> Result<&'static BundledChecker, Strin
         .get_or_init(|| write_passing_stub_checker(&std::env::temp_dir()))
         .as_ref()
         .map_err(Clone::clone)?;
+    #[cfg(test)]
+    gate::bundled_test::require(gate::bundled_test::Kind::Stub);
     gate::configure_bundled_checker(dir)
 }
 

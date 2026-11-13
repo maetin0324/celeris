@@ -35,6 +35,15 @@ completed: 2026-11-13
   `dispatch_ready` の頭で続けて呼んでいた `clear_cluster_waiting`・`clear_dispatch_waits` を `begin_dispatch_round` 1 つにした。
   method の数は `ExecutionCoordination` 59・`ProcessTable` 14・`LivenessWatch` 7。tick の順序と停滞の通知の判定は変えていない。
 
+- Run 3: Run 2 の提出は、WU の check の repo-health（base は `$CELERIS_WU_BASE`）で `size.responsibility-growth`（`work_units.rs` の
+  本体の行 2110 > base 2108、worsened）と `source-size`（production_size 2111 > base 2109）で不合格だった。Run 2 で `.filter(...)` と
+  `||` の式が rustfmt で折り返され、2 行増えていた。Run 2 の手元の確認は `check-health.sh`（base は既定の auto）で、WU の base と違う
+  base と比べていたので見逃した。worker run（`RunSupervisor`）か WU の検査（`ExecutionCoordination` の `ProcessTable`）を手元に持つかの
+  判定は `work_units.rs` の 2 か所（手放した検査の引き継ぎ・WU の lease の回収）と `worker_finish.rs` の `finalise_from_result_json` に
+  同じ式で 3 回書かれていた。これを `ownerless_runs.rs` の自由関数 `holds_run_or_check(supervisor, coord, run_id)` 1 つにまとめた。
+  `Dispatcher` の method にすると method の数が base の 382 から 383 に増えて同じ rule が落ちるので、自由関数にした。
+  レビューと eval も見る `holds_run_in_hand` とは意味が違うので、まとめていない。
+
 ## 未解決
 
 - 無し。repo-health の new の 1 件（`migration.remnant`、warning、`crates/task-dispatch/src/host_maintenance.rs` の `legacy`）はこの unit の
@@ -53,6 +62,19 @@ completed: 2026-11-13
     field を `pub` にしたりすると落ちる）。`OWNER_STRUCTS` に `ProcessTable`・`LivenessWatch` を足した（`#[cfg(test)]` の field の検査）。
 - 変えた試験: field の直参照を owner の method に置き換えた（assertion は不変）。`structure_guard.rs` の `OWNER_STRUCTS` の名を
   `ExecutionCoordination<S, C>` に直した。cex_ の試験は変えていない。
+
+## 証拠（Run 3、提出時の HEAD で実行）
+
+基準は `$CELERIS_WU_BASE`。commit（件名）: Run 1・2 の commit に加え、「phase 1: worker run か WU の検査を手元に持つかの判定を
+holds_run_or_check にまとめ、work_units.rs を base 以下に戻す」と、この進捗の commit。
+
+- `sh scripts/dev/repo-health/ci.sh --base $CELERIS_WU_BASE`（WU の check の `celeris:repo-health/1` と同じ base と commit の head）:
+  exit 0、verdict=pass、fail_grade 0、new 0、worsened 0。`work_units.rs` の本体の行 2107（base 2108）、`Dispatcher` の method 382（base 382）。
+- `python3 scripts/dev/check-source-size.py --root . --base $CELERIS_WU_BASE --baseline scripts/dev/source-size-baseline.json`: 0 failure。
+- `bash scripts/dev/test-affected.sh`: exit 0（628 秒）。nextest 3871 tests run: 3871 passed、11 skipped。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+- `cargo nextest run -p task-dispatch -E 'test(/cex_|orphan|drain_hand_off|lease|finalise|take_over|hand_off|structure_guard|work_units/)'`:
+  130 passed（cex_ の 25 件を含む。`cex_lease_restart.rs`・`cex_review_authority.rs` は `$CELERIS_WU_BASE` から変えていない）。
 
 ## 証拠（Run 2、提出時の HEAD で実行）
 

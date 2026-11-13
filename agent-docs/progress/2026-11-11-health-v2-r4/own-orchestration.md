@@ -1,8 +1,9 @@
 ---
 title: "健全性v2 R4 own-orchestration: ProjectOrchestration を作り、D1 の表の残りの周辺 field（保守・probe）を移す"
 tasks: [01M6TYVJT4S29ZMP6P0D4831JG]
-status: running
+status: done
 updated: 2026-11-13
+completed: 2026-11-13
 ---
 # 健全性v2 R4 own-orchestration
 
@@ -69,3 +70,11 @@ updated: 2026-11-13
 ## 証拠（提出時の HEAD で実行）
 
 基準は `$CELERIS_WU_BASE`（WU の base）。
+
+- `bash scripts/dev/test-affected.sh`: exit 0（3875 件の nextest を含む。約 12 分）。
+- `cargo nextest run -p task-dispatch -E 'test(/structure_guard|project_orchestration|probe_ports|host_maintenance|stagnation|cos_chat|cos_digest|…/)'`:
+  675 passed（停滞・CoS chat・棚卸し・TS の比較・probe・structure_guard の試験）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+- `bash scripts/dev/check-health.sh --base "$CELERIS_WU_BASE"`: exit 0（verdict=pass、fail_grade 0、new 0、worsened 0）。
+- `python3 scripts/dev/check-architecture-map.py`: exit 0。`sh scripts/dev/progress-index.sh --check`: exit 0。
+- `awk '/^pub struct Dispatcher \{/,/^\}/' crates/task-dispatch/src/dispatcher.rs | grep -cE '^\s+(cos_chat_launch|stagnation|health_inventory|script_compare|eval_version_probe|knowledge_probe|now_unix_fn):'`: 0。

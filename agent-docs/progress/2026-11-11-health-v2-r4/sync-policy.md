@@ -1,7 +1,7 @@
 ---
 title: "健全性v2 R4 sync-policy: main の policy の変更を取り込み、high_risk の照合で待ちを判定する"
 tasks: [01M6TYVJT4S29ZMP6P0D4831JG]
-status: completed
+status: blocked
 updated: 2026-11-13
 ---
 # 健全性v2 R4 sync-policy: main の policy の変更を取り込み、high_risk の照合で待ちを判定する
@@ -86,9 +86,22 @@ policy-paths.diff は移動先ごとに 1 行だったが、operator は移動�
 
 ## 未解決事項
 
+- WU の check の health（`celeris:repo-health/1`）は、この unit の目的（main を取り込む）と両立せず、成果をどう直しても通らない。
+  2 回目の run（attempt 1 of 3）で原因を確かめ、done を返さず計画の問題（plan_issue）として申告した。
+  - 原因: WU の health の base は `wu.base_commit`（`Dispatcher::work_unit_health`。main を取り込む前の段の基点
+    「integrate wu/own-hooks (phase owners-edge)」）で、取り込んだ main の commit の変更も候補の変更として数える。
+    段の統合の base（`phase_health_base`）も、段の基点が main の祖先でなければ基点のままなので、後の integrate-policy でも同じになる。
+  - fail-grade の 5 件はどれも main の commit の変更から出る（取り込みの後の WU の変更は進捗と `cex_review_authority.rs` だけ）:
+    `policy.changed`（main の policy の commit が変えた profile・capability-map・検査器。受け入れ条件 0「policy file が main と同じ」と
+    逆の向き）、`progress.index`（main の進捗 5 file の hash が段の基点の祖先でない）、`size.responsibility-growth` 2 件と
+    `source-size`（main の disk-aware-dispatch・host-check-slots が `dispatcher.rs` と `dispatch_one` に足した行。段の基点の 2137 行に対して 2143 行）。
+  - 確かめた式: 段の基点を base にすると上の 5 件で exit 1。取り込みの merge commit を base にすると exit 0（fail_grade 0、new 0、worsened 0）。
 - `crates/celeris/tests/script_exhaustive.rs:23` の unused import の warning（`ScriptGenerationControl`）は main と同じ file の既存の warning。
   この unit では変えていない。
 
 ## 提案
 
-- 無し。
+- 計画: main の取り込みは、基点を持つ WU ではなく Task の作業ツリーで走る基点の無い unit（repair など）か、review 前の main 同期で行う。
+  取り込みの後の段は、取り込み後の commit を基点にする。
+- Celeris: WU と段の統合の health の base に、途中で取り込んだ review target の commit を入れる（例: 取り込みの merge commit を base にする、
+  または policy の file が target と同じなら `policy.changed` にしない）。今の `phase_health_base` は段の基点が target の祖先のときしか効かない。

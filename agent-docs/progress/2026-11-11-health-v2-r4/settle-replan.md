@@ -43,7 +43,7 @@ completed: 2026-11-13
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`、範囲は `$CELERIS_WU_BASE`）
 
-- 前回の run（attempt 1 の前の提出）は celeris の `celeris:repo-health/1`（base は WU の base `ee8ffd95`）で落ちた。
+- 前回の run（attempt 1 の前の提出）は celeris の `celeris:repo-health/1`（base は WU の base。task branch の統合の commit「integrate wu/own-orchestration (phase owners-core)」）で落ちた。
   `size.responsibility-growth` の worsened 3 件（`Dispatcher` の method 382→383〈`replan_limits` を足した〉、`dispatcher` module の本体の行
   32221→32234、`dispatcher.rs` の行 2037→2038〈module map の行〉）と `source-size`（`dispatcher.rs` 2038 > allowed 2037）。
   直し方: `counted_replans` を `replan_limits` に置き換えて method の数を戻し、events からの組み立てを `run_settlement::ReplanLimits::from_events`

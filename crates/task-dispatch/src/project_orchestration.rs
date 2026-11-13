@@ -260,7 +260,7 @@ mod structure_guard_tests {
     /// 不変条件（ADR 2026-11-11 dispatcher-state-ownership D1・D2）: `ProjectOrchestration` は表の 2 field だけを private に持ち、
     /// `Dispatcher` を受けず `dispatcher` module を使わない。`StagnationWatch` の field も private。
     /// 既存の試験で検出できない理由: 停滞と CoS chat の試験は振る舞いだけを見るので、field を pub にしても、method が
-    /// `&mut Dispatcher` を受けても、`dispatcher` の型を直に使っても通る。
+    /// Dispatcher の可変参照を受けても、`dispatcher` の型を直に使っても通る。
     #[test]
     fn structure_guard_project_orchestration() {
         let src = include_str!("project_orchestration.rs");

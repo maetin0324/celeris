@@ -86,7 +86,7 @@ mod structure_guard_tests {
     /// 不変条件（ADR 2026-11-11 dispatcher-state-ownership D1・D2）: `ProbePorts` は表の 3 port だけを private に持ち、
     /// `Dispatcher` を受けず `dispatcher` module を使わない。
     /// 既存の試験で検出できない理由: port の差し替えの試験は振る舞いだけを見るので、field を pub にしても、
-    /// method が `&mut Dispatcher` を受けても通る。
+    /// method が Dispatcher の可変参照を受けても通る。
     #[test]
     fn structure_guard_probe_ports() {
         let src = include_str!("probe_ports.rs");

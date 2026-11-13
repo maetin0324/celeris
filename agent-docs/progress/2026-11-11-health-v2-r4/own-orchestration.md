@@ -30,6 +30,13 @@ completed: 2026-11-13
 - commit: 「phase 1: ProjectOrchestration と ProbePorts を作り、停滞・CoS chat の起動・棚卸し・TS の比較・probe の field を Dispatcher から移す」、
   「phase 1: own-orchestration の module map・ADR-0082 の付記・地図・進捗を書く」。
 
+## WU check の不合格の直し（2 回目の run）
+
+- 1 回目の提出の後、計画の WU check（`grep -nE '(impl|&mut|&) *Dispatcher\b' crates/task-dispatch/src/project_orchestration.rs` が 0 件であること）が
+  exit 1 になった。当たったのは `structure_guard_project_orchestration` の doc comment の文言（「`&mut Dispatcher` を受けても」）で、コードではない。
+- doc comment を「Dispatcher の可変参照を受けても」に書き換えた。`probe_ports.rs` の同じ文言もそろえた（check は見ないが同じ種類の文）。コードと試験の中身は変えていない。
+- commit: 「phase 1: own-orchestration の structure_guard の doc comment を WU check の grep に当たらない文言にする」。
+
 ## 受け入れ条件
 
 - 0（D1 の表で unit 列が own-orchestration の行の field が `Dispatcher` に無い）: `pub struct Dispatcher` の本体に 7 field の名は無い（下の証拠の grep）。

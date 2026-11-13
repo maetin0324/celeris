@@ -83,9 +83,15 @@ fn resolve_body(key: &str, revision: &str, outcome: &str, extra: Value) -> Value
     body
 }
 
+/// ADR 2026-11-12-discord-person-or-operator D2: these escalations leave every option to the person.
 fn packet(options: Value, recommended: Value, web_path: &str) -> Value {
+    let reserved: Vec<Value> = options
+        .as_array()
+        .map(|xs| xs.iter().map(|o| o["key"].clone()).collect())
+        .unwrap_or_default();
     json!({
         "to": "human",
+        "reserved_options": reserved,
         "summary": "公開前の確認",
         "options": options,
         "recommended": recommended,

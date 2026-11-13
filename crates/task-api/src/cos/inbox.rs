@@ -54,6 +54,8 @@ const MAX_SUMMARY_CHARS: usize = 600;
 /// ADR 2026-10-28-cos-inbox-chat-summary D3: bound of one option's text.
 const MAX_OPTION_DETAIL_CHARS: usize = 600;
 
+mod reserved_options;
+
 pub(crate) fn routes() -> axum::Router<ApiState> {
     axum::Router::new()
         .route("/api/v1/cos/inbox", get(list))
@@ -112,6 +114,11 @@ pub struct EscalationPacket {
     pub options: Vec<EscalationOption>,
     pub recommended: Option<String>,
     pub recommendation_reason: String,
+    /// ADR 2026-11-12-discord-person-or-operator D2: the `options[].key` only the person may choose
+    /// (the D1 list of ADR 2026-11-12-cos-triage-scope). Required for `to = human` unless the person
+    /// keeps the whole item; a `recommended` outside it is answered by CoS first (`inbox/reserved_options.rs`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reserved_options: Vec<String>,
     pub web_path: String,
 }
 
@@ -642,6 +649,7 @@ async fn resolve(
                         ))));
                     }
                     validate_packet(packet, &item, source).map_err(&reject)?;
+                    reserved_options::check(store, packet, &item, source).map_err(&reject)?;
                     if packet.to == Addressee::Operator {
                         let op = escalate_to_operator(store, &mut audit, &item, source, action)
                             .map_err(&reject)?;

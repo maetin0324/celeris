@@ -1,7 +1,7 @@
 //! CoS outbox rendering and the final, deterministic source check.
 use std::path::Path;
 
-use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde_json::Value;
 use task_core::chat::triage::CosTriageSource;
 use task_core::{Notification, NotificationKind, NotificationStore, SqliteStore, TaskStore};
@@ -181,32 +181,19 @@ pub fn source_unresolved(
     let Some((kind, key, revision)) = source else {
         return Ok(SourceCheck::Resolved);
     };
-    let newer: bool = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM cos_inbox_items WHERE source_kind=?1 AND source_key=?2 AND created_at>(SELECT created_at FROM cos_inbox_items WHERE id=?3))",
-        params![kind, key, row.key], |r| r.get(0),
-    ).map_err(|e| e.to_string())?;
-    if newer {
+    // ADR 2026-11-12-discord-person-or-operator D1: the same checks as the fallback claim.
+    if task_core::chat::triage::superseded(&conn, &row.key).map_err(|e| e.to_string())? {
         return Ok(SourceCheck::Resolved);
     }
     if kind == "notice" {
-        use task_core::feed::NoticeQuery;
-        let mut query = NoticeQuery {
-            limit: 500,
-            ..NoticeQuery::default()
-        };
-        loop {
-            let page = store.notice_list(&query).map_err(|e| e.to_string())?;
-            if page.items.iter().any(|n| {
-                n.is_unread() && n.id.to_string() == key && n.count.to_string() == revision
-            }) {
-                return Ok(SourceCheck::Live);
-            }
-            let count = page.items.len();
-            query.offset += count;
-            if count == 0 || query.offset >= page.total as usize {
-                return Ok(SourceCheck::Resolved);
-            }
-        }
+        // An unknown notice is not sent (nothing to point the person at).
+        let open = task_core::feed::notice_revision_open(store, &key, &revision)
+            .map_err(|e| e.to_string())?;
+        return Ok(if open == Some(true) {
+            SourceCheck::Live
+        } else {
+            SourceCheck::Resolved
+        });
     }
     if snapshot.is_none() && InboxKind::is_stagnation_kind(&kind) {
         return Ok(SourceCheck::Unknown);

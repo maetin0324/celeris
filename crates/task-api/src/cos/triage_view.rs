@@ -107,13 +107,9 @@ pub(crate) fn fallback_unsent(db: &Path, id: &str) -> Result<bool, ChatError> {
     Ok(task_core::cos_fallback::unsent(&conn, id)?)
 }
 
-/// True when a later revision of the same source was ingested after `item`.
+/// True when a later revision of the same source was ingested after `item` (the store's one check,
+/// ADR 2026-11-12-discord-person-or-operator D1).
 pub(crate) fn superseded(db: &Path, item: &CosInboxItem) -> Result<bool, ChatError> {
     let conn = open(db)?;
-    Ok(conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM cos_inbox_items WHERE source_kind=?1 AND source_key=?2 \
-         AND id<>?3 AND (created_at>?4 OR (created_at=?4 AND id>?3)))",
-        params![item.source_kind, item.source_key, item.id, item.created_at],
-        |r| r.get(0),
-    )?)
+    Ok(task_core::chat::triage::superseded(&conn, &item.id)?)
 }

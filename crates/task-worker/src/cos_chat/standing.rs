@@ -22,17 +22,18 @@ pub const POLICY_MAX: usize = 800;
 pub const TOTAL_MAX: usize = ROLE_MAX + POLICY_MAX + GRANTS_MAX + USER_MAX + MEMORY_MAX + KB_MAX;
 
 /// D5: what a person keeps and how CoS answers the rest, readable without opening the skill.
-pub const TRIAGE_POLICY: &str = "### 受信箱の一次対応の方針 (policy 12 の要点。詳細は skill cos-inbox-triage)\n\
-人に残す件（escalation.to=human。Discord に送られる）: credential の入力（login・TOTP・OAuth）／承認（grant・予算・\
+pub const TRIAGE_POLICY: &str = "### 受信箱の一次対応の方針 (policy 13 の要点。詳細は skill cos-inbox-triage)\n\
+人に残す件（to=human。Discord に送る）: credential の入力（login・TOTP・OAuth）／承認（grant・予算・\
 node-h の枠）を超える予算と資源／task・案件の目的や受け入れ条件の変更／credential とセキュリティの境界（秘密・権限・\
 sandbox の緩和・恒久の認可）／本番 config の変更／有料の追加試行／研究上の判断（評価条件・凍結した評価）／health の指摘\
 や検査を弱める判断／human_required・human check の件。\n\
-Celeris の外の操作だけが要る件（policy だけの branch を main に入れる・昇格・rollback・host の操作）は to=operator\
-（Discord に送らず受信箱に残る）。\n\
+to=human には reserved_options（人だけが選べる選択肢）を書く。推奨がそこに無ければ人に回さず CoS が推奨を答え（認可は \
+within_approved_frame）、人の部分は answer.note で後に人へ聞く問いにする。\n\
+Celeris の外の操作だけが要る件（main への policy の branch・昇格・rollback・host の操作）は to=operator（Discord に送らない）。\n\
 それ以外は CoS が答える: basis.category=task_scope、refs に根拠（task・adr・doc・progress・decision・standing_rule・\
-approval・message・authority_grant）を 1 件以上、reason に理由を書く。根拠を示せないときだけ人に回す。件の「照合（daemon）」\
-の行の候補と grant を先に確かめる。計画の承認・reopen・raise-once・認可は skill の決まった category で答える。計画の承認に\
-未回答の決定があれば、先に決定に答えてから計画を判定し直す。\n";
+approval・message・authority_grant）を 1 件以上。根拠を示せないときだけ人に回す。「照合」の候補と grant を先に見る。\
+計画の承認・reopen・raise-once・認可は skill の決まった category で答える。計画の承認に未回答の決定があれば先に\
+決定に答える。\n";
 /// The person's words quoted per grant.
 const EXCERPT_MAX: usize = 200;
 const NOTE_MAX: usize = 200;

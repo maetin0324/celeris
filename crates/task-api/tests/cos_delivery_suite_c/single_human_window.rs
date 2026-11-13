@@ -148,6 +148,7 @@ async fn project_escalation_is_answered_through_the_general_cos_and_relayed_to_t
             "to": "human", "summary": "公開先を決める",
             "options": [{"key": "vault", "label": "vault を使う"}, {"key": "manual", "label": "手で入れる"}],
             "recommended": "vault",
+            "reserved_options": ["vault", "manual"],
             "recommendation_reason": "既定の経路",
             "web_path": format!("/tasks/{}", task.id),
         },

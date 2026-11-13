@@ -1,19 +1,28 @@
 ---
 name: cos-inbox-triage
-description: Celeris の受信箱の一次対応 policy（policy_version 12）。CoS が新しい通知・decision・question・approval・plan/phase gate・失敗・browser/cluster/KB の待ちを受け取ったとき、answer（代答）/ observe（見届け）/ escalate（人か operator に回す）を選ぶ基準、人に残す件の列挙、CoS が task の目的の範囲で答えるときの根拠（basis）の形、escalation packet の形、confidence の扱い、Discord の扱いを定める。受信箱スレッドの run（この skill は受信箱スレッドか受信箱の件を渡された run にだけ mount される）で、answer/observe/escalate を選び resolve を呼ぶ前に読む。
+description: Celeris の受信箱の一次対応 policy（policy_version 13）。CoS が新しい通知・decision・question・approval・plan/phase gate・失敗・browser/cluster/KB の待ちを受け取ったとき、answer（代答）/ observe（見届け）/ escalate（人か operator に回す）を選ぶ基準、人に残す件の列挙、CoS が task の目的の範囲で答えるときの根拠（basis）の形、escalation packet の形、confidence の扱い、Discord の扱いを定める。受信箱スレッドの run（この skill は受信箱スレッドか受信箱の件を渡された run にだけ mount される）で、answer/observe/escalate を選び resolve を呼ぶ前に読む。
 metadata:
   author: celeris
-  version: "12"
+  version: "13"
 ---
 
-# CoS inbox triage（policy_version "12"）
+# CoS inbox triage（policy_version "13"）
 
 受信箱に届く待ちは全て最初に CoS（あなた）に渡る。あなたは各 item について
 **answer / observe / escalate** のどれかを選び、`POST /api/v1/cos/inbox/{i}/resolve` で 1 件ずつ記録する。
 契約の正本は [ADR 2026-10-05 cos-chat-home](../../../agent-docs/adr/2026-10-05-cos-chat-home.md) の D3 と
-[ADR 2026-11-12 cos-triage-scope](../../../agent-docs/adr/2026-11-12-cos-triage-scope.md)（v12: 人に残す件の列挙以外は CoS が答える）。
+[ADR 2026-11-12 cos-triage-scope](../../../agent-docs/adr/2026-11-12-cos-triage-scope.md)（v12: 人に残す件の列挙以外は CoS が答える）と
+[ADR 2026-11-12 discord-person-or-operator](../../../agent-docs/adr/2026-11-12-discord-person-or-operator.md)（v13: 推奨が人に残す選択肢でなければ CoS が答え、人の部分は後の問いにする）。
 
-## 0. v12 の要点（人に残す件の列挙。これ以外は CoS が task の目的の範囲で答える）
+## 0. v13 の要点（人に残す件の列挙。これ以外は CoS が task の目的の範囲で答える）
+
+v13 で足した規則（ADR 2026-11-12-discord-person-or-operator D2）: 件に人に残す選択肢が含まれていても、**推奨の選択肢が人に残す
+選択肢でなければ人に回さない**。CoS が推奨を答え（認可なら `within_approved_frame`、ほかは §3 の category）、人に残す部分
+（例: 欠測のまま閉じるか＝研究上の判断、上限を上げるか＝承認を超える資源）は `answer.note` に「後で人に聞く問い」として書く
+（例:「案 2 を実行する。記録を読んだ後に task を閉じず、欠測のまま閉じるか・上限を上げて測り直すかを新しい認可で人に聞く」）。
+worker はその区切りで新しい問いを出し、その問いは推奨そのものが人に残す選択肢になるので人に回る。人宛ての escalate には
+`reserved_options`（人だけが選べる選択肢の key）を必ず書く。推奨がそこに無い escalate は API が 422
+`cos_answer_unreserved_recommendation` で断り、Discord に送らない（人が `human_required` を付けた件、照合が人に残すと判定した件は除く）。
 
 人に残す件（`escalation.to = "human"`。Discord に送られる）:
 login・TOTP・OAuth など credential の入力／承認（grant・予算・node-h の枠）を超える予算と資源／task・案件の目的や受け入れ条件の変更／
@@ -113,6 +122,9 @@ job 待ちの延長、replan の指示など）は CoS が答える。`basis.cat
   判断の必要な未解決の待ちには使えない（API は 422 を返す）。迷ったら observe ではなく escalate。
 - **escalate**: §0 の人に残す件、上の表で escalate に当たるもの、根拠を指せないもの、確信が足りないもの。宛先 `to` は
   人に残す件なら `human`、Celeris の外の操作だけが要る件なら `operator`。
+  人宛ては、推奨が人に残す選択肢（`reserved_options`）のときか、推奨を出せないとき（`recommended=null`）だけ。推奨が人に残す
+  選択肢でなければ、推奨を answer し、人の部分を `answer.note` で後の問いに回す（§0 の v13 の規則。事例: 2026-11-12 の
+  task 01M782BS の認可は推奨の案 2 が node-h の枠 20 の内で、欠測のまま閉じるかと上限の変更だけが人の判断だった）。
 
 ### basis の category（ADR 2026-11-12-cos-triage-scope D3。(a)(b) は ADR 2026-10-28-cos-routine-delegated-answers、(e) は ADR 2026-10-29-cos-review-rework-reopen、(f) は ADR 2026-10-30-cos-plan-conforms-approve、(g) は ADR 2026-10-30-cos-job-wait-extend）
 
@@ -189,7 +201,7 @@ job 待ちの延長、replan の指示など）は CoS が答える。`basis.cat
 {"to":"human","summary":"task X の成果を公開するかを決めてください。公開先 https://… の確認が済んでいません。",
  "options":[{"key":"publish","label":"公開する","detail":"成果ページを今すぐ外部に公開する。取り消すには人が手で非公開にする"},
             {"key":"hold","label":"保留","detail":"公開先を確かめるまで task X を止めたままにする"}],
- "recommended":"hold","recommendation_reason":"公開先が未確認",
+ "recommended":"hold","reserved_options":["publish","hold"],"recommendation_reason":"公開先が未確認",
  "web_path":"/tasks/task-id"}
 ```
 
@@ -207,6 +219,10 @@ job 待ちの延長、replan の指示など）は CoS が答える。`basis.cat
   `detail`（任意、1〜600 字）に、選んだら何が起きるか・何を認めるかを書く。認可の「今回だけ認める」のように label だけでは
   中身が分からない選択肢には必ず書く（question 本文の選択肢 A〜C の中身をここへ写す）。チャットは label の下に detail を出す。
 - `recommended`: 推奨する option の key。推奨しないなら `null` にして `recommendation_reason` に理由を書く。
+- `reserved_options`（v13、`to=human` で必須）: 人だけが選べる option の key（§0 の人に残す件に当たる選択肢）。`recommended` は
+  この中の 1 つか `null`。推奨がこの外なら API が 422 `cos_answer_unreserved_recommendation` で断るので、推奨を answer し、
+  人の部分を `answer.note` で後の問いに回す。人が `human_required` を付けた件と照合が人に残すと判定した件は件全体が人のもので、
+  空でもよい。`to=operator` では空にする。
 - `web_path`: 対象の web 画面の、同じアプリ内の path（`/tasks/<id>` など）。サーバが対象から導く path と照合するので、
   外部 URL や推測の path を書かない。
 - 秘密・添付の本文・認証情報を packet に入れない。
@@ -219,6 +235,9 @@ job 待ちの延長、replan の指示など）は CoS が答える。`basis.cat
 ## 7. Discord の扱い
 
 - 人に必要なものだけ escalate する。Discord への送信は resolve を受けた daemon の notifier が行う。
+  notifier は送る直前に、元の待ちが同じ revision のまま開いているかを確かめ、閉じた件・新しい revision に置き換わった件・
+  答え済みの件には送らない。古い revision の件は、あなたが新しい revision を判定すると閉じ、退避の対象にもならない
+  （ADR 2026-11-12-discord-person-or-operator D1）。古い revision の resolve は 409 なので、新しい revision だけを判定すればよい。
   あなたは webhook の URL・秘密を受け取らず、自分で Discord に送らない。
 - **Discord の返信・リアクションでは回答させない**。人の回答は必ず web の認証済み画面（`web_path` のリンク先）で受ける。
   webhook だけでは回答者と対象 revision を確かめられないため。packet や本文に「Discord で返信してください」と書かない。

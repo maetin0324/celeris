@@ -198,6 +198,7 @@ fn escalate(key: &str, web_path: &str) -> Value {
             "to": "human", "summary": "予算の枠を超えるので、続けるかを決めてください",
             "options": [{"key": "continue", "label": "続ける"}, {"key": "stop", "label": "止める"}],
             "recommended": null,
+            "reserved_options": ["continue", "stop"],
             "recommendation_reason": "枠を超える額は人が決める",
             "web_path": web_path,
         },

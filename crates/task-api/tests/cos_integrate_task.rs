@@ -493,6 +493,8 @@ async fn cos_integrate_task_failure_escalates_the_request_to_a_person() {
                 "escalate",
                 json!({"escalation": {
                     "to": "human", "summary": "integrate task が失敗した統合の依頼",
+                    "reserved_options": item["options"].as_array().expect("options").iter()
+                        .map(|o| o["key"].clone()).collect::<Vec<_>>(),
                     "options": item["options"].as_array().expect("options").iter()
                         .map(|o| json!({"key": o["key"], "label": o["label"]})).collect::<Vec<_>>(),
                     "recommended": null,

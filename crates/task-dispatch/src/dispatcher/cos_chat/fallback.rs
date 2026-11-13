@@ -569,8 +569,17 @@ impl CosChatLaunch {
         now: OffsetDateTime,
     ) -> Result<Option<task_core::chat::triage::CosTriageItemReport>, String> {
         if c.route.is_none() {
+            // ADR 2026-11-12-discord-person-or-operator D1: a read notice or a grown bundle (a newer
+            // revision) is closed, not handed to the person (the notifier's check before the send).
+            // A notice that cannot be found is handed over as before: not knowing is not closed.
             let source = if c.source_kind == COS_TRIAGE_NOTICE_KIND {
-                Some(self.notice_source(c))
+                let open = task_core::feed::notice_revision_open(
+                    self.store.as_ref(),
+                    &c.source_key,
+                    &c.source_revision,
+                )
+                .map_err(|e| e.to_string())?;
+                (open != Some(false)).then(|| self.notice_source(c))
             } else {
                 self.fallback_inbox_item(dispatcher, inbox, c, now)?
                     .map(FallbackSource::from_inbox)

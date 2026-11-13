@@ -10866,6 +10866,13 @@
             "null"
           ]
         },
+        "reserved_options": {
+          "description": "ADR 2026-11-12-discord-person-or-operator D2: the `options[].key` only the person may choose\n(the D1 list of ADR 2026-11-12-cos-triage-scope). Required for `to = human` unless the person\nkeeps the whole item; a `recommended` outside it is answered by CoS first (`inbox/reserved_options.rs`).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "summary": {
           "type": "string"
         },

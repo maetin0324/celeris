@@ -97,8 +97,8 @@ use crate::accounts::{
 use crate::policy::{ProviderId, ProviderOutcome};
 use crate::routing_runtime::RoutingRuntime;
 use crate::run_supervisor::{
-    ORPHAN_WHY, ReclaimReason, Reconcile, ReviewEntry, RunEntry, RunKey, RunSupervisor,
-    infra_retry_after, reclaim_reason, reclaim_verdict,
+    ORPHAN_WHY, ReclaimReason, Reconcile, RunEntry, RunKey, RunSupervisor, infra_retry_after,
+    reclaim_reason, reclaim_verdict, stop_review_runs, stop_run_process,
 };
 
 // ADR-0082: 責務別の子モジュール（層は L1 ← L2 ← L3 ← L4 ← tick）。
@@ -1085,6 +1085,9 @@ struct RunExtras {
     campaign: Option<task_worker::protocol::CampaignRunPin>,
 }
 
+/// 手元で判定している review の 1 件（延期のときに持ち越す対象は `ReviewSubject`）。
+type ReviewEntry = crate::run_supervisor::ReviewEntry<ReviewSubject>;
+
 type EvalVersionProbe = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
 pub struct Dispatcher {
@@ -1102,7 +1105,7 @@ pub struct Dispatcher {
     test_hooks: tests::hooks::TestHooks,
     /// ADR 2026-11-11 dispatcher-state-ownership D1: 実行中の run の表（run の集合の正本）・review run の表・
     /// infra backoff・lease の照合の状態の owner（`crate::run_supervisor`。入口は `leases.rs`・`ownerless_runs.rs`）。
-    supervisor: RunSupervisor,
+    supervisor: RunSupervisor<ReviewSubject>,
     /// 評価 run の harness の版の測り方（試験用差し替え。`None` なら `probe_harness_version`）。
     eval_version_probe: Option<EvalVersionProbe>,
     /// レビューを開始できなかった（`Reviewer` run の枠が無い）タスクの `done` 内容。次 tick で使う。

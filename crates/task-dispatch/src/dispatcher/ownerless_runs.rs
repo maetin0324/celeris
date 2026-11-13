@@ -64,7 +64,7 @@ impl Dispatcher {
                 %task_id, run_id = %entry.run_id, review_run_id = ?entry.review_run_id, why,
                 "closing a review this daemon lost track of; the task is re-reviewed"
             );
-            RunSupervisor::stop_review(entry, self.config.kill_grace);
+            stop_review_runs(entry, self.config.kill_grace);
         }
     }
 

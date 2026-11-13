@@ -126,7 +126,7 @@ impl Dispatcher {
                 );
             }
             tracing::warn!(%task_id, review_run_id = ?entry.review_run_id, "daemon shutdown: the review was stopped; the next daemon re-reviews the task");
-            RunSupervisor::stop_review(entry, self.config.kill_grace);
+            stop_review_runs(entry, self.config.kill_grace);
             recorded += 1;
         }
         recorded
@@ -408,7 +408,7 @@ impl Dispatcher {
         handle: JoinHandle<()>,
         container: Option<Arc<dyn task_worker::ContainerStopper>>,
     ) {
-        RunSupervisor::stop_process(run_id, handle, container, self.config.kill_grace);
+        stop_run_process(run_id, handle, container, self.config.kill_grace);
         self.release_routing_context(run_id);
     }
 
@@ -604,7 +604,7 @@ impl Dispatcher {
                         "review aborted (task no longer reviewing)",
                     );
                 }
-                RunSupervisor::stop_review(entry, self.config.kill_grace);
+                stop_review_runs(entry, self.config.kill_grace);
                 self.pending_subjects.remove(&id);
             }
         }

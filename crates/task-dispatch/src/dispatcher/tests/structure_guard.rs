@@ -8,7 +8,7 @@ const OWNER_STRUCTS: &[(&str, &str)] = &[
     ("HostMaintenance", include_str!("../../host_maintenance.rs")),
     ("RoutingRuntime", include_str!("../../routing_runtime.rs")),
     ("QuotaBook", include_str!("../../routing_runtime/quota.rs")),
-    ("RunSupervisor", include_str!("../../run_supervisor.rs")),
+    ("RunSupervisor<S>", include_str!("../../run_supervisor.rs")),
 ];
 
 /// `src` の `struct <name> {` の本体（次の行頭の `}` まで）の行のうち、`test` を条件に含む `#[cfg(...)]` 属性の数。

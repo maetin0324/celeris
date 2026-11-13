@@ -15,7 +15,6 @@ use time::OffsetDateTime;
 use tokio::task::JoinHandle;
 
 use crate::policy::ProviderId;
-use crate::review::ReviewSubject;
 
 /// ADR 2026-10-11 llm-source-harness-selection: run が admission で予約した `(source, account)`。
 pub(crate) type RouteReservation = (
@@ -57,8 +56,9 @@ pub(crate) struct RunEntry {
     pub(crate) route: Option<RouteReservation>,
 }
 
-/// 手元で判定している review の 1 件（判定コマンドの run と、起こしていれば Reviewer run）。
-pub(crate) struct ReviewEntry {
+/// 手元で判定している review の 1 件（判定コマンドの run と、起こしていれば Reviewer run）。`S` は延期のときに持ち越す
+/// review の対象（`ReviewSubject`。review は dispatcher に依存するので、この module は型を引数で受ける）。
+pub(crate) struct ReviewEntry<S> {
     /// Keep ownership until the verdict transaction has completed, across daemon handoff.
     pub(crate) _review_lock: Arc<std::fs::File>,
     pub(crate) handle: JoinHandle<()>,
@@ -66,7 +66,7 @@ pub(crate) struct ReviewEntry {
     /// ADR 2026-10-11 llm-source-harness-selection）。
     pub(crate) route: Option<RouteReservation>,
     /// レビューを延期（Reviewer run の供給側失敗）するときに次 tick へ持ち越す `done` の内容。
-    pub(crate) subject: ReviewSubject,
+    pub(crate) subject: S,
     /// レビュー対象の run（デーモンのスナップショット用）。
     pub(crate) run_id: String,
     /// ADR-0018: 判定コマンドを実行するクラスタ（ローカルなら `None`）。
@@ -90,14 +90,13 @@ pub(crate) enum Reconcile {
 }
 
 /// 実行中の run の表と lease の監督の状態（ADR 2026-11-11 dispatcher-state-ownership D1）。
-/// field は private で、`Dispatcher` は method を通して読み書きする（D2）。
-#[derive(Default)]
-pub(crate) struct RunSupervisor {
+/// field は private で、`Dispatcher` は method を通して読み書きする（D2）。`S` は [`ReviewEntry`] の review の対象。
+pub(crate) struct RunSupervisor<S> {
     /// run の集合の正本。登録は dispatch（`register_run`）、削除は完了（`take_run_by_id`）・lease の回収
     /// （`take_task_runs`）・abort（`take_run`）・drain と shutdown（`take_runs`）。
     running: HashMap<RunKey, RunEntry>,
     /// 判定中の review の表（task ごとに 1 件）。
-    reviewing: HashMap<TaskId, ReviewEntry>,
+    reviewing: HashMap<TaskId, ReviewEntry<S>>,
     /// ADR-0070 D3（Phase 116）: インフラ都合の requeue の後、この時刻までその task を dispatch しない。
     /// プロセス内メモリのみ（DB に持たない。再起動で消えるのは許容）。
     infra_backoff: HashMap<TaskId, OffsetDateTime>,
@@ -111,9 +110,17 @@ pub(crate) struct RunSupervisor {
     terminal_records_reconciled_at: Option<OffsetDateTime>,
 }
 
-impl RunSupervisor {
+impl<S> RunSupervisor<S> {
     pub(crate) fn new() -> Self {
-        Self::default()
+        Self {
+            running: HashMap::new(),
+            reviewing: HashMap::new(),
+            infra_backoff: HashMap::new(),
+            just_aborted: HashSet::new(),
+            lost_review_watch: HashSet::new(),
+            ownerless_reconciled_at: None,
+            terminal_records_reconciled_at: None,
+        }
     }
 
     // ---- 実行中の run の表 ----
@@ -205,22 +212,10 @@ impl RunSupervisor {
         let mut aborted = 0;
         for (key, entry) in self.running.drain() {
             tracing::warn!(task_id = %key.task, run_id = %entry.run_id, "drain timeout; aborting the run (the lease will expire and the new active will reclaim it)");
-            Self::stop_process(&entry.run_id, entry.handle, entry.container, kill_grace);
+            stop_run_process(&entry.run_id, entry.handle, entry.container, kill_grace);
             aborted += 1;
         }
         aborted
-    }
-
-    /// ADR-0044 §5 Phase 53 追記（Phase 55）: run のプロセスグループに SIGTERM → `kill_grace` → SIGKILL を
-    /// 送り（コンテナならラベル越しにも同じ 2 段）、tokio の task を即座に abort する。
-    pub(crate) fn stop_process(
-        run_id: &str,
-        handle: JoinHandle<()>,
-        container: Option<Arc<dyn task_worker::ContainerStopper>>,
-        kill_grace: Duration,
-    ) {
-        task_worker::kill_tree_with(run_id, kill_grace, container);
-        handle.abort();
     }
 
     /// 手元に run・review が 1 件も無いか。
@@ -230,12 +225,12 @@ impl RunSupervisor {
 
     // ---- review run の表 ----
 
-    pub(crate) fn register_review(&mut self, task_id: TaskId, entry: ReviewEntry) {
+    pub(crate) fn register_review(&mut self, task_id: TaskId, entry: ReviewEntry<S>) {
         self.reviewing.insert(task_id, entry);
     }
 
     /// 判定中の review の表（読み取り専用）。
-    pub(crate) fn reviews(&self) -> &HashMap<TaskId, ReviewEntry> {
+    pub(crate) fn reviews(&self) -> &HashMap<TaskId, ReviewEntry<S>> {
         &self.reviewing
     }
 
@@ -243,11 +238,11 @@ impl RunSupervisor {
         self.reviewing.contains_key(&task_id)
     }
 
-    pub(crate) fn take_review(&mut self, task_id: TaskId) -> Option<ReviewEntry> {
+    pub(crate) fn take_review(&mut self, task_id: TaskId) -> Option<ReviewEntry<S>> {
         self.reviewing.remove(&task_id)
     }
 
-    pub(crate) fn take_reviews(&mut self) -> Vec<(TaskId, ReviewEntry)> {
+    pub(crate) fn take_reviews(&mut self) -> Vec<(TaskId, ReviewEntry<S>)> {
         self.reviewing.drain().collect()
     }
 
@@ -260,15 +255,6 @@ impl RunSupervisor {
                 .any(|e| e.run_id == run_id || e.review_run_id.as_deref() == Some(run_id))
     }
 
-    /// review 側（判定コマンドの run と Reviewer run）を止める。run は 2 本ありうるので両方に送る。
-    pub(crate) fn stop_review(entry: ReviewEntry, kill_grace: Duration) {
-        task_worker::kill_tree(&entry.run_id, kill_grace);
-        if let Some(review_run_id) = &entry.review_run_id {
-            task_worker::kill_tree(review_run_id, kill_grace);
-        }
-        entry.handle.abort();
-    }
-
     /// 見失った review（handle が終わったのを前の照合でも見た）と固まった review（`since + ttl` を過ぎた）を
     /// 表から外して理由とともに返す。`ttl_of` が `None` を返した review は飛ばす。今回初めて終わりを見た review は
     /// 見張りに入れて次の照合まで待つ（判定の結果がまだ届いていないだけかもしれない）。
@@ -278,7 +264,7 @@ impl RunSupervisor {
         mut ttl_of: impl FnMut(TaskId) -> Option<Duration>,
         lost_why: &'static str,
         stuck_why: &'static str,
-    ) -> Vec<(TaskId, ReviewEntry, &'static str)> {
+    ) -> Vec<(TaskId, ReviewEntry<S>, &'static str)> {
         let reviewing = &self.reviewing;
         self.lost_review_watch
             .retain(|id| reviewing.contains_key(id));
@@ -400,6 +386,27 @@ impl RunSupervisor {
     }
 }
 
+/// ADR-0044 §5 Phase 53 追記（Phase 55）: run のプロセスグループに SIGTERM → `kill_grace` → SIGKILL を
+/// 送り（コンテナならラベル越しにも同じ 2 段）、tokio の task を即座に abort する。
+pub(crate) fn stop_run_process(
+    run_id: &str,
+    handle: JoinHandle<()>,
+    container: Option<Arc<dyn task_worker::ContainerStopper>>,
+    kill_grace: Duration,
+) {
+    task_worker::kill_tree_with(run_id, kill_grace, container);
+    handle.abort();
+}
+
+/// review 側（判定コマンドの run と Reviewer run）を止める。run は 2 本ありうるので両方に送る。
+pub(crate) fn stop_review_runs<S>(entry: ReviewEntry<S>, kill_grace: Duration) {
+    task_worker::kill_tree(&entry.run_id, kill_grace);
+    if let Some(review_run_id) = &entry.review_run_id {
+        task_worker::kill_tree(review_run_id, kill_grace);
+    }
+    entry.handle.abort();
+}
+
 /// D4 retry-backoff: infra 障害の連続 `n` 回目（1 始まり）を再試行するなら、その前に待つ時間を返す。
 /// `n` が `max_infra_retries` 以内なら `task_ops::derive::infra_backoff_delay(n)`、超えたら `None`（打ち切り）。
 /// worker 完了（`worker_finish.rs`）・lease の回収・shutdown の割り込み（`leases.rs`）が使う。
@@ -505,7 +512,7 @@ pub(crate) fn reclaim_verdict(
 }
 
 #[cfg(test)]
-impl RunSupervisor {
+impl<S> RunSupervisor<S> {
     /// 見張っている review があるか（試験専用）。
     pub(crate) fn watches_lost_reviews(&self) -> bool {
         !self.lost_review_watch.is_empty()
@@ -525,7 +532,7 @@ impl RunSupervisor {
     }
 
     /// 試験専用: review の表を直接触る。
-    pub(crate) fn reviews_mut_for_test(&mut self) -> &mut HashMap<TaskId, ReviewEntry> {
+    pub(crate) fn reviews_mut_for_test(&mut self) -> &mut HashMap<TaskId, ReviewEntry<S>> {
         &mut self.reviewing
     }
 
@@ -640,7 +647,7 @@ mod tests {
     /// 不変条件: 照合は初回と周期を過ぎた後だけ走り、2 つの照合の時刻は独立。
     #[test]
     fn reconcile_due_tracks_each_interval() {
-        let mut s = RunSupervisor::new();
+        let mut s = RunSupervisor::<()>::new();
         assert!(s.reconcile_due(Reconcile::TerminalRecords, at(0), 60));
         assert!(!s.reconcile_due(Reconcile::TerminalRecords, at(59), 60));
         assert!(s.reconcile_due(Reconcile::OwnerlessRuns, at(59), 60));
@@ -651,16 +658,17 @@ mod tests {
 
     /// 不変条件: ADR 2026-11-11 D2 の 1〜3・7（field が private、`Dispatcher` を受けない・`dispatcher` module を
     /// 使わない、field は D1 の表の own-supervisor の 7 件。`#[cfg(test)]` の field は
-    /// `dispatcher/tests/structure_guard.rs` の `OWNER_STRUCTS` が数える）。既存の試験は振る舞いだけを見るので、
+    /// `dispatcher/tests/structure_guard.rs` の `OWNER_STRUCTS` が数える）、`crate::review` を使わない（review は dispatcher に
+    /// 依存し、使うと deps.cycle の循環が広がる）。既存の試験は振る舞いだけを見るので、
     /// field を `pub` に戻しても、method が `&mut Dispatcher` を受けても通る。
     #[test]
     fn structure_guard_run_supervisor() {
         let src = include_str!("run_supervisor.rs");
         let src = &src[..src
-            .find("#[cfg(test)]\nimpl RunSupervisor")
+            .find("#[cfg(test)]\nimpl<S> RunSupervisor<S>")
             .expect("the test-only impl is in the source")];
         let start = src
-            .find("pub(crate) struct RunSupervisor {")
+            .find("pub(crate) struct RunSupervisor<S> {")
             .expect("RunSupervisor is defined");
         let body = &src[start..];
         let body = &body[..body.find("\n}\n").expect("the struct body ends")];
@@ -699,6 +707,7 @@ mod tests {
             format!("impl {owner}"),
             format!("crate::{}", owner.to_lowercase()),
             format!("super::{}", owner.to_lowercase()),
+            "crate::review".to_string(),
         ] {
             assert!(
                 !src.contains(&bad),

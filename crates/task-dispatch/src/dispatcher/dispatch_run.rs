@@ -1,6 +1,7 @@
 //! run の起動（`dispatch_one`・`spawn_worker`）と、その前段の担当・lane・harness の決定。lease の取得から `running.insert` までは一続きに保つ。ADR-0082 の L4。
 
 use super::*;
+use crate::execution_coordination::WriteSetAdmission;
 
 /// 付記 S2: `lane_rules` の compare の結線（`decide_lane` から呼ぶ）。`dispatcher.rs` を大きくしないよう、ここで宣言する。
 #[path = "script_compare.rs"]
@@ -250,23 +251,31 @@ impl Dispatcher {
                 .filter(|w| w.phase.is_some())
                 .map(|w| w.id.clone()),
         };
-        let write_reservation = if is_planner_dispatch || self.write_set_gate_disabled() {
+        let candidate_reservation = if is_planner_dispatch {
             None
         } else {
             self.write_reservation_for(&task, current_wu.as_ref())?
         };
-        if let Some(reservation) = &write_reservation
-            && let Some(blocker) = self.write_set_blocker(&run_key, reservation)
-        {
-            self.note_write_set_hold(&run_key, &blocker, reservation);
-            self.note_dispatch_wait(
-                task.id,
-                task_core::TaskWait::WriteSet {
-                    blocking_task_ids: vec![blocker.task],
-                },
-            );
-            return Ok(false);
-        }
+        let gate_disabled = self.write_set_gate_disabled();
+        let admission = self.coord.admit_write_set(
+            &run_key,
+            candidate_reservation,
+            self.supervisor.run_keys(),
+            self.ticks,
+            gate_disabled,
+        );
+        let write_reservation = match admission {
+            WriteSetAdmission::Admit(reservation) => reservation,
+            WriteSetAdmission::Hold { blocker } => {
+                self.note_dispatch_wait(
+                    task.id,
+                    task_core::TaskWait::WriteSet {
+                        blocking_task_ids: vec![blocker.task],
+                    },
+                );
+                return Ok(false);
+            }
+        };
         // ADR-0018: リモート実行のタスクは、クラスタの設定・cooldown・並列度・多重接続を先に確かめる。
         // ADR-0062 B1（Phase 107）: `cluster_of` が `None` の理由を分ける。(a) 設定に無いクラスタ
         // → 従来どおり `unroutable`（人が設定を直すまで進まない）。(b) 担当が `cluster:<id>` を
@@ -304,7 +313,7 @@ impl Dispatcher {
                 .is_some_and(|until| until > now)
             {
                 // ADR-0018 D2: 人がログインするまで進まないので、待ち対象には数えない（`--until-idle` を止めない）。
-                self.cluster_waiting.insert(task.id);
+                self.coord.note_cluster_waiting(task.id);
                 self.note_dispatch_wait(task.id, cluster_wait(&spec.id, "cooldown"));
                 return Ok(false);
             }
@@ -334,7 +343,7 @@ impl Dispatcher {
                             &spec,
                             format!("auto-connect failed: {detail}"),
                         )?;
-                        self.cluster_waiting.insert(task.id);
+                        self.coord.note_cluster_waiting(task.id);
                         self.note_dispatch_wait(
                             task.id,
                             cluster_wait(&spec.id, &format!("auto-connect failed: {detail}")),
@@ -350,7 +359,7 @@ impl Dispatcher {
                                 spec.id, spec.host
                             ),
                         )?;
-                        self.cluster_waiting.insert(task.id);
+                        self.coord.note_cluster_waiting(task.id);
                         self.note_dispatch_wait(
                             task.id,
                             cluster_wait(&spec.id, "no ssh ControlMaster connection"),
@@ -385,9 +394,7 @@ impl Dispatcher {
         let mut wu_workspace: Option<WorkUnitWorkspace> = None;
         if let Some(wu) = &current_wu {
             // ADR-0074「Phase F5-fix7 実装時の明確化」: 一時的な失敗の後のバックオフ中は試さない。
-            if let Some(f) = self.wu_prepare_failures.get(&wu.id)
-                && self.now_utc() < f.retry_at
-            {
+            if let Some(f) = self.coord.wu_prepare_backoff(&wu.id, self.now_utc()) {
                 tracing::debug!(task_id = %task.id, work_unit = %wu.key, failures = f.count, retry_at = %f.retry_at, "work unit worktree backoff; not dispatching yet");
                 return Ok(false);
             }
@@ -449,7 +456,7 @@ impl Dispatcher {
             })();
             match prepared {
                 Ok(env) => {
-                    self.wu_prepare_failures.remove(&wu.id);
+                    self.coord.clear_wu_prepare_failures(&wu.id);
                     wu_scope_env = env;
                 }
                 Err(e) => {
@@ -1109,7 +1116,7 @@ impl Dispatcher {
             task: task.id,
             work_unit: v2_wu.as_ref().map(|w| w.id.clone()),
         };
-        self.reserve_write_set(key.clone(), write_reservation);
+        self.coord.reserve_write_set(key.clone(), write_reservation);
         self.supervisor.register_run(
             key,
             RunEntry {

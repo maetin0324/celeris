@@ -536,7 +536,7 @@ async fn cex_review_worker_claim_is_not_done_before_or_against_the_reviewer() {
 /// 自動の再同期は上限（`MAX_TARGET_RESYNCS`）で止まり、`ReviewResyncHalted` を 1 件だけ残す。止めた後は target が
 /// さらに進んでも、tick は reviewer run も再同期も検査も起こさない（attempts 不変・reviewing のまま）。
 /// 既存の試験で検出できない理由: `target_sync.rs` の上限の試験は `spawn_review` を直接呼び、止めたことを
-/// Dispatcher の private field（`reviewing`・`review_resync_halted`）で確かめる。`tick()` の `recover_reviews` の
+/// owner の状態（`RunSupervisor` の review run の表・`ExecutionCoordination` の `review_resync_halted`）で確かめる。`tick()` の `recover_reviews` の
 /// 経路で、止めた後に target が進んでも reviewer run・`ReviewTargetSynced`・検査の実行が増えないことは見ない。
 #[tokio::test]
 async fn cex_review_resync_cap_halts_and_starts_no_more_reviewer_runs() {

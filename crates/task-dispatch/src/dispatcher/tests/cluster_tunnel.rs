@@ -193,7 +193,7 @@ async fn offline_cluster_is_reported_in_the_snapshot_and_the_event_carries_the_h
                 && matches!(w.wait, task_core::TaskWait::Unroutable { .. })),
         "人待ちは経路なしではない（監査 4-1）: {snap:?}"
     );
-    assert!(d.cluster_waiting.contains(&task.id));
+    assert!(d.coord.is_cluster_waiting(task.id));
 
     let t = store.get(task.id).unwrap().unwrap();
     assert_eq!((t.status, t.attempts), (Status::Ready, 0));

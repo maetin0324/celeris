@@ -2,8 +2,9 @@
 
 use super::*;
 use crate::dispatcher::stale_priority::{
-    ReviewSyncWait, STALE_PRIORITY_RELIEF_TICKS, StaleCandidate, stale_priority_cmp,
+    STALE_PRIORITY_RELIEF_TICKS, StaleCandidate, stale_priority_cmp,
 };
+use crate::execution_coordination::ReviewSyncWait;
 use task_core::behind_target::BehindTargetObservation;
 use time::format_description::well_known::Rfc3339;
 
@@ -90,7 +91,7 @@ async fn behind_target_stale_priority_more_commits_syncs_first() {
     for t in [&a, &b] {
         assert_eq!(store.get(t.id).unwrap().unwrap().status, Status::Done);
     }
-    assert!(d.review_sync_queue.is_empty());
+    assert!(d.coord.review_sync_queue().is_empty());
 }
 
 #[tokio::test]
@@ -220,9 +221,9 @@ async fn behind_target_stale_priority_counts_unselected_ticks() {
     // A human-gate deferral is not an eligible tick.
     d.awaiting_human.insert(a.id);
     d.note_review_sync_offer(a.id, false);
-    assert_eq!(d.review_sync_queue[&a.id].skipped_ticks, 0);
+    assert_eq!(d.coord.review_sync_queue()[&a.id].skipped_ticks, 0);
     assert_eq!(
-        d.review_sync_queue[&b.id].skipped_ticks,
+        d.coord.review_sync_queue()[&b.id].skipped_ticks,
         STALE_PRIORITY_RELIEF_TICKS
     );
     // b is now in the FIFO relief slot, ahead of a.
@@ -235,7 +236,7 @@ async fn behind_target_stale_priority_counts_unselected_ticks() {
     );
     // Selection leaves the queue; a task that left `reviewing` is dropped.
     d.note_review_sync_offer(b.id, true);
-    assert!(!d.review_sync_queue.contains_key(&b.id));
+    assert!(!d.coord.review_sync_queue().contains_key(&b.id));
     d.order_review_sync_queue(vec![]).unwrap();
-    assert!(d.review_sync_queue.is_empty());
+    assert!(d.coord.review_sync_queue().is_empty());
 }

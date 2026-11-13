@@ -108,3 +108,14 @@ abort（`abort_runs`・`take_run`）、shutdown の割り込み（`take_runs`・
 （own-coord-b が `ExecutionCoordination` に移す）。D4 retry-backoff の `run_supervisor::infra_retry_after` を worker 完了と lease の回収・shutdown が使う。
 module map に `run_supervisor` の行（層は owner）を足し、`leases` の行を入口に直した。移した module の旧い行は無かった。
 
+## 付記 2026-11-13: write set・同期・依存・資格の待ちの状態を `ExecutionCoordination` へ出した（R4 own-coord-a）
+
+[ADR 2026-11-11 dispatcher-state-ownership](2026-11-11-dispatcher-state-ownership.md) D1・D2・D6 に従い、D1 の表で unit 列が own-coord-a の
+14 field（`write_reservations`・`write_set_waits`・`write_set_hold_seq`・`run_write_bases`・`review_sync_queue`・`review_sync_seq`・
+`review_resync_halted`・`integrated_deps`・`wu_prepare_failures`・`credential_held`・`credential_busy`・`browser_ledger`・`browser_prereq_rescan`・
+`cluster_waiting`）を `crates/task-dispatch/src/execution_coordination.rs` の `ExecutionCoordination`（private field）に移した。
+`WriteReservation`・`WriteSetWait`・`reservations_overlap`・`RunWriteBase`・`ReviewSyncWait`・`WuPrepareFailures` も owner が `dispatcher` module を
+使わないよう同じ file に移した。write set の blocker の絞り込みと予約の刈り込みは `RunSupervisor::run_keys` を引数で受け、owner は run の集合を持たない。
+`write_set_gate.rs` には store の hint から予約を作る入口と、`TestHooks` の ablation を読んで `admit_write_set` に引数で渡す入口だけを残した。
+`stale_priority.rs`・`browser_prereq.rs`・`credential_gate.rs`・`write_set_record.rs`・`review_spawn.rs` は owner の method を呼ぶ。
+module map に `execution_coordination` の行（層は owner）を足した。移した module の旧い行は無かった（`write_set_gate` などは map に行を持たない）。

@@ -31,8 +31,7 @@ pub(super) fn worker_error_code(message: &str) -> Option<BrowserPrerequisiteCode
 impl Dispatcher {
     /// 試験・点検用: 台帳の見張りを差し替える（既定は daemon の設定と PATH の agent-browser）。
     pub fn set_browser_ledger_watch(&mut self, watch: task_worker::browser_ledger::LedgerWatch) {
-        self.browser_ledger = watch;
-        self.browser_prereq_rescan = true;
+        self.coord.set_browser_ledger_watch(watch);
     }
 
     /// worker が browser 経路に入るのと同じ条件（`requests_browser`・Execute・planner でない）。
@@ -40,12 +39,6 @@ impl Dispatcher {
         !is_planner_dispatch
             && task.kind == TaskKind::Execute
             && task_core::browser::requests_browser(&task.skills)
-    }
-
-    fn refresh_browser_ledger(&mut self) {
-        if self.browser_ledger.refresh() {
-            self.browser_prereq_rescan = true;
-        }
     }
 
     /// task の前提の code。保存 browser policy が無い（読めない・task の origin と交わらない）task は
@@ -66,12 +59,15 @@ impl Dispatcher {
         let credential_use = policy
             .allowed_actions
             .contains(&task_core::BrowserAction::CredentialUse);
-        self.browser_ledger.status().task_code(credential_use)
+        self.coord
+            .browser_ledger()
+            .status()
+            .task_code(credential_use)
     }
 
     /// dispatch の直前の gate。前提が無ければ task を `blocked` にして `Ok(true)`（この tick は起こさない）。
     pub(super) fn browser_prereq_hold(&mut self, task: &Task) -> Result<bool, DispatchError> {
-        self.refresh_browser_ledger();
+        self.coord.refresh_browser_ledger();
         let code = self.browser_task_code(task);
         if code.is_ok() {
             return Ok(false);
@@ -102,8 +98,8 @@ impl Dispatcher {
         if self.verify_smoke_only() {
             return Ok(0);
         }
-        self.refresh_browser_ledger();
-        let ledger_changed = std::mem::take(&mut self.browser_prereq_rescan);
+        self.coord.refresh_browser_ledger();
+        let ledger_changed = self.coord.take_browser_prereq_rescan();
         if !ledger_changed && !self.ticks.is_multiple_of(RESCAN_EVERY_TICKS) {
             return Ok(0);
         }

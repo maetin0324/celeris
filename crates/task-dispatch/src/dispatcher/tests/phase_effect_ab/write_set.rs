@@ -201,7 +201,7 @@ async fn run_variant_with(
                         1,
                         "on: the overlapping edit waits"
                     );
-                    assert_eq!(d.write_set_waits.len(), 1);
+                    assert_eq!(d.coord.write_set_waits().len(), 1);
                 }
             }
         }

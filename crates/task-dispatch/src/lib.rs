@@ -21,6 +21,8 @@ pub mod credential_resume;
 pub mod disk_admission;
 pub mod disk_watch;
 pub mod dispatcher;
+/// ADR 2026-11-11 dispatcher-state-ownership D1: task・WU の実行の調整の状態（write set・review の同期・依存・資格の待ち）の owner。
+pub(crate) mod execution_coordination;
 /// ADR-0072 D6/D11/D12/D15（Phase E2）: WorkUnit の状態遷移の決定（純粋関数）。
 pub mod execution_scheduler;
 /// ADR 2026-11-07-health-review-integration: 健全性の review（review 方針の読み込み・設計 review・health 文脈・verdict）。

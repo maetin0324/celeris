@@ -278,7 +278,7 @@ async fn transient_prepare_failures_retry_with_backoff_then_block() {
     for n in 1..MAX_WU_PREPARE_ATTEMPTS {
         d.on_work_unit_prepare_failed(&task, &a, &err, false)
             .unwrap();
-        let f = d.wu_prepare_failures.get(&a.id).copied().unwrap();
+        let f = d.coord.wu_prepare_failures(&a.id).unwrap();
         assert_eq!(f.count, n);
         assert!(f.retry_at > OffsetDateTime::now_utc());
     }
@@ -287,7 +287,7 @@ async fn transient_prepare_failures_retry_with_backoff_then_block() {
     assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Ready);
     d.on_work_unit_prepare_failed(&task, &a, &err, false)
         .unwrap();
-    assert!(!d.wu_prepare_failures.contains_key(&a.id));
+    assert!(d.coord.wu_prepare_failures(&a.id).is_none());
     let events = events_of(&store, task.id);
     assert_eq!(transitions_with_reason(&events, "a", "prepare_failed"), 1);
     assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Blocked);

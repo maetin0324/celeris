@@ -48,6 +48,7 @@
 //! | `cluster_job_wait` | クラスタ job の durable wait の行と task・WU の再開（ADR-0090。poll のスレッドは `cluster_runtime`） | L3 |
 //! | `run_supervisor` | 実行中の run の表（run の集合の正本）・review run の表・infra backoff・lease の照合の状態の owner（`crate::run_supervisor::RunSupervisor`。この dir の外）と、lease の回収の判断（純粋関数 `reclaim_reason`・`reclaim_verdict`）・worker 完了と回収が共有する再試行の判定 `infra_retry_after`（ADR 2026-11-11 dispatcher-state-ownership D1・D3・D4） | owner |
 //! | `leases` | `RunSupervisor` を呼ぶ入口: lease の回収（判断は `run_supervisor`、WU・統合の照合と待ちの削除はここ）・abort・orphan・drain・shutdown の割り込み | L3 |
+//! | `execution_coordination` | task・WU の実行の調整の状態（write set の予約と見送り・actual write-set の採取場所・review 前 sync の待ち行列と再同期の上限で止めた review・root の依存先の統合・WU の worktree の用意の失敗・credential・browser・クラスタの待ち）の owner（`crate::execution_coordination::ExecutionCoordination`。この dir の外。run の集合は持たず、write set の blocker と刈り込みは `RunSupervisor::run_keys` を引数で受ける。ADR 2026-11-11 dispatcher-state-ownership D1・D2・D6） | owner |
 //! | `dispatch_run` | run の起動（`dispatch_one`・`spawn_worker`）と担当・lane の決定 | L4 |
 
 use std::collections::HashMap;
@@ -94,6 +95,7 @@ use crate::accounts::{
     AccountBook, AccountCandidate, AccountCheckRecord, AccountCooldownReason, ExcludedReason,
     ObservationSource, account_cooldown_for_failure, cooldown_for_failure, evaluate,
 };
+use crate::execution_coordination::ExecutionCoordination;
 use crate::policy::{ProviderId, ProviderOutcome};
 use crate::routing_runtime::RoutingRuntime;
 use crate::run_supervisor::{
@@ -931,13 +933,6 @@ fn wu_prepare_backoff(n: u32) -> time::Duration {
     time::Duration::seconds(2i64.saturating_pow(n.min(6)).min(60))
 }
 
-/// 同じ WU の worktree の用意が連続して失敗した回数と、次に試してよい時刻（プロセス内メモリのみ）。
-#[derive(Debug, Clone, Copy)]
-struct WuPrepareFailures {
-    count: u32,
-    retry_at: OffsetDateTime,
-}
-
 /// ADR-0016 M5: 子待ちの親について覚えておくもの。
 struct AwaitingChildren {
     run_id: String,
@@ -1106,30 +1101,20 @@ pub struct Dispatcher {
     /// ADR 2026-11-11 dispatcher-state-ownership D1: 実行中の run の表（run の集合の正本）・review run の表・
     /// infra backoff・lease の照合の状態の owner（`crate::run_supervisor`。入口は `leases.rs`・`ownerless_runs.rs`）。
     supervisor: RunSupervisor<ReviewSubject>,
+    /// ADR 2026-11-11 dispatcher-state-ownership D1: task・WU の実行の調整の状態（write set の予約・review 前 sync の
+    /// 待ち・依存の統合・WU の用意の失敗・credential・browser・クラスタの待ち）の owner（`crate::execution_coordination`）。
+    /// run の集合は持たず、run を見る判断には `supervisor.run_keys()` を渡す。
+    coord: ExecutionCoordination,
     /// 評価 run の harness の版の測り方（試験用差し替え。`None` なら `probe_harness_version`）。
     eval_version_probe: Option<EvalVersionProbe>,
     /// レビューを開始できなかった（`Reviewer` run の枠が無い）タスクの `done` 内容。次 tick で使う。
     pending_subjects: HashMap<TaskId, ReviewSubject>,
-    /// ADR 2026-10-08-browser-prod-enablement D2: 適合台帳の状態の cache（file が変わったときだけ計算し直す）。
-    browser_ledger: task_worker::browser_ledger::LedgerWatch,
-    /// 台帳が変わった（または差し替えた）ので、`browser_prerequisite` で止めた task を次の tick で見直す。
-    browser_prereq_rescan: bool,
-    /// ADR-0074「Phase F5-fix7 実装時の明確化」: WU（id）の worktree の用意の一時的な失敗の回数と
-    /// 次に試してよい時刻。成功・blocked にしたら消す。プロセス内メモリのみ（再起動で数え直す）。
-    wu_prepare_failures: HashMap<String, WuPrepareFailures>,
-    /// ADR-0130 D2: run（id）ごとの actual write-set の採取場所と開始 HEAD。dispatch で入れ、worker の
-    /// 終了処理で取り出す。プロセス内メモリのみ（再起動後に終わった run は `unavailable` として残す）。
-    run_write_bases: HashMap<String, Vec<write_set_record::RunWriteBase>>,
     /// ADR-0079 D10（Phase R3b）: 理由なく止まっている（`LivenessClass::Unexplained`）と最初に見た木の節点と、その時の
     /// 節点の最後の event の seq（seq が変われば数え直す）。プロセス内メモリのみ（再起動で数え直す = 安全側）。
     stall_watch: HashMap<TaskId, (u64, OffsetDateTime)>,
     /// ADR 2026-10-23-stage-order-and-plan-stall D5: `StallDetected` を出した後まだ何も起きていない task
     /// （snapshot の `stalled_tasks`。受信箱の attention の元）。生存確認ごとに作り直す。プロセス内メモリのみ。
     stalled_tasks: std::collections::BTreeMap<TaskId, task_ops::daemon::SnapshotStalledTask>,
-    /// ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3: 再同期の上限で止めている reviewing の task
-    /// （snapshot の `review_resync_halted`。受信箱の attention の元）。review 入口で毎回作り直す。
-    review_resync_halted:
-        std::collections::BTreeMap<TaskId, task_ops::daemon::SnapshotReviewResyncHalted>,
     /// ADR-0079 D10（Phase R3b）: 最後に生存確認をした時刻（[`LIVENESS_CHECK_INTERVAL_SECS`] ごと）。
     liveness_checked_at: Option<OffsetDateTime>,
     stagnation: tree_units::StagnationWatch,
@@ -1137,8 +1122,6 @@ pub struct Dispatcher {
     health_inventory: cron_tick::inventory::InventoryRuns,
     /// ADR 2026-10-15-mlsys-min D4: 外部 provider の credential 待ちの宣言（source ごと）と秘密の置き場。
     credential_gates: credential_gate::CredentialGates,
-    /// credential 待ちに入れた計画なしの task（tick ごとに同じ wait を書き直さない。再起動で `restore_credential_waits` が戻す）。
-    credential_held: std::collections::HashSet<TaskId>,
     /// ADR 2026-11-11 dispatcher-state-ownership D1: クラスタの接続・tunnel・job の poll の状態の owner。
     /// field は private で、`Dispatcher` は `ClusterRuntime` の method だけを呼ぶ。
     cluster: ClusterRuntime,
@@ -1146,23 +1129,8 @@ pub struct Dispatcher {
     /// 無い M1〜M6・M9。`dispatch_ready` の先頭で空にし、同じ task の 2 件目は上書きしない）。snapshot の
     /// `task_waits` に載る。
     dispatch_waits: HashMap<TaskId, task_core::TaskWait>,
-    /// ADR-0130 D3: 走っている run の expected write-set の予約（run を起こした時点の hint）。
-    write_reservations: HashMap<RunKey, write_set_gate::WriteReservation>,
-    /// ADR-0130 D3: write-set の重なりで見送った候補の待機記録（公平性）。
-    write_set_waits: HashMap<RunKey, write_set_gate::WriteSetWait>,
-    /// 待機を作った順の通し番号（同じ tick に待ち始めた待機の先後を決定的に決める。2026-10-03-write-set-no-starvation）。
-    write_set_hold_seq: u64,
-    /// ADR-0018 D2（監査 4-1）: この tick でクラスタの多重接続が無い／cooldown 中のため待っている ready タスク。「人のログイン待ち」で
-    /// 経路なし（`unroutable`）とは別物。`is_idle` の待ち対象から外すだけで、スナップショットには出さない（受信箱の (d) が知らせる）。
-    cluster_waiting: std::collections::HashSet<TaskId>,
-    /// ADR 2026-10-17-root-dependency-waits-for-integration D2: 既定 branch の祖先と分かった root の依存先（再起動で忘れてよい）。
-    integrated_deps: std::collections::BTreeSet<TaskId>,
     /// 人間の承認待ちで延期中の reviewing タスク（`is_idle` 判定用。ADR-0010 D8）。
     awaiting_human: std::collections::HashSet<TaskId>,
-    /// ADR-0130 D5: review 前 sync を待つ reviewing task（待機開始順と、選ばれなかった連続 tick 数）。
-    review_sync_queue: HashMap<TaskId, stale_priority::ReviewSyncWait>,
-    /// ADR-0130 D5: 次の待機開始順。
-    review_sync_seq: u64,
     /// ADR-0016 D2 / M5: レビューは全 pass だが、委譲した子が終端になるのを待っている reviewing タスク。
     /// 値はその run の id と、Plan kind なら検証済みの plan（子が終わってから `complete_plan` する）。
     awaiting_children: HashMap<TaskId, AwaitingChildren>,
@@ -1190,7 +1158,6 @@ pub struct Dispatcher {
     /// ADR 2026-10-15-mlsys-min-decision-assisted D4: credential 待ちの検証・再開（`credential_resume`）。
     /// 未設定なら何もしない。検証は別 thread（tick は DB を見るだけ）。
     credential_resumer: Option<Arc<crate::credential_resume::CredentialResumer>>,
-    credential_busy: Arc<std::sync::atomic::AtomicBool>,
     /// 壁時計の Unix 秒（テストで差し替えられるようにした関数。既定は実時刻）。
     now_unix_fn: Arc<dyn Fn() -> i64 + Send + Sync>,
     /// ADR-0040 D4（Phase 47）: 新しい仕事を始めてよいか。`false`（= draining）のときは
@@ -1271,30 +1238,18 @@ impl Dispatcher {
             #[cfg(test)]
             test_hooks: Default::default(),
             supervisor: RunSupervisor::new(),
+            coord: ExecutionCoordination::new(),
             eval_version_probe: None,
             pending_subjects: HashMap::new(),
-            browser_ledger: task_worker::browser_ledger::LedgerWatch::from_process(),
-            browser_prereq_rescan: true,
-            wu_prepare_failures: HashMap::new(),
-            run_write_bases: HashMap::new(),
             stall_watch: HashMap::new(),
             stalled_tasks: std::collections::BTreeMap::new(),
-            review_resync_halted: std::collections::BTreeMap::new(),
             liveness_checked_at: None,
             stagnation: Default::default(),
             health_inventory: Default::default(),
             credential_gates: credential_gate::CredentialGates::default(),
-            credential_held: std::collections::HashSet::new(),
             cluster: ClusterRuntime::new(),
-            write_reservations: HashMap::new(),
-            write_set_waits: HashMap::new(),
-            write_set_hold_seq: 0,
             dispatch_waits: HashMap::new(),
-            cluster_waiting: std::collections::HashSet::new(),
-            integrated_deps: std::collections::BTreeSet::new(),
             awaiting_human: std::collections::HashSet::new(),
-            review_sync_queue: HashMap::new(),
-            review_sync_seq: 0,
             awaiting_children: HashMap::new(),
             integrating: HashMap::new(),
             checking: HashMap::new(),
@@ -1308,7 +1263,6 @@ impl Dispatcher {
             last_tick_started: None,
             last_tick_gap_ms: 0,
             credential_resumer: None,
-            credential_busy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             now_unix_fn: Arc::new(real_now_unix),
             accepting_new_work: true,
             eligible: None,
@@ -1505,10 +1459,9 @@ impl Dispatcher {
         if !self.accepting_new_work || !resumer.has_open_waits() {
             return;
         }
-        if self.credential_busy.swap(true, Ordering::SeqCst) {
+        let Some(busy) = self.coord.begin_credential_processing() else {
             return;
-        }
-        let busy = Arc::clone(&self.credential_busy);
+        };
         std::thread::spawn(move || {
             match resumer.process() {
                 Ok(report) if report.resumed + report.rejected + report.cancelled > 0 => {
@@ -2111,12 +2064,12 @@ impl Dispatcher {
 
     fn dispatch_ready(&mut self) -> Result<usize, DispatchError> {
         self.routing.begin_dispatch_pass();
-        self.cluster_waiting.clear();
+        self.coord.clear_cluster_waiting();
         self.dispatch_waits.clear();
         // ADR-0089（Phase R6-5）: 非 CoS の枠が埋まっていても、CoS の対話 run の枠が空いていれば走査する。
         if !self.run_load().any_slot() {
             // 容量切れで照合しなかった tick: write-set の待機の数えを戻さない（2026-10-03-write-set-no-starvation）。
-            self.carry_write_set_waits();
+            self.coord.carry_write_set_waits(self.ticks);
             // ADR 2026-10-11-task-wait-reasons M9: 照合しなかった ready は全体の枠待ち（窓の分だけ）。
             for task in self.eligible_ready_tasks(self.ready_window())? {
                 self.note_dispatch_wait(task.id, global_capacity());
@@ -2137,8 +2090,9 @@ impl Dispatcher {
         let candidates = crate::phase_timing::ready_tasks(|| self.eligible_ready_tasks(window))?;
         log_slow_step("ready_tasks", ready_started);
         // ADR-0130 D3: 終わった run の予約を捨て、長く待たされた候補を先に照合する。
-        self.prune_write_set_state();
-        let candidates = self.order_write_set_starved_first(candidates);
+        self.coord
+            .prune_write_set_state(self.supervisor.run_keys(), self.ticks);
+        let candidates = self.coord.order_write_set_starved_first(candidates);
         let now = self.monotonic_now();
         let mut dispatched = 0;
         // 容量が尽きて照合しなかった候補が残ったか（残れば write-set の待機の数えを引き継ぐ）。
@@ -2154,11 +2108,7 @@ impl Dispatcher {
                 continue;
             }
             // ADR 2026-10-17-root-dependency-waits-for-integration: root 間の依存先の成果が既定 branch に入るまで待つ。
-            if let Some(wait) = task_ops::dep_integration::integration_wait(
-                self.store.as_ref(),
-                &task,
-                &mut self.integrated_deps,
-            )? {
+            if let Some(wait) = self.coord.integration_wait(self.store.as_ref(), &task)? {
                 self.note_dispatch_wait(task.id, wait);
                 continue;
             }
@@ -2179,7 +2129,7 @@ impl Dispatcher {
         let (parallel, parallel_cut) = self.dispatch_parallel_work_units(now)?;
         dispatched += parallel;
         if capacity_cut || parallel_cut {
-            self.carry_write_set_waits();
+            self.coord.carry_write_set_waits(self.ticks);
         }
         Ok(dispatched)
     }
@@ -2219,7 +2169,7 @@ impl Dispatcher {
         Ok(ready.iter().all(|t| {
             !self.is_eligible(t)
                 || self.routing.is_unroutable(&t.id)
-                || self.cluster_waiting.contains(&t.id)
+                || self.coord.is_cluster_waiting(t.id)
                 || matches!(
                     self.dispatch_waits.get(&t.id),
                     Some(task_core::TaskWait::DependsOnIntegration { .. })

@@ -1259,7 +1259,7 @@ impl Dispatcher {
             .collect();
         let (count, last, halted) = pre_review_stale_state(&events);
         if count <= task_ops::delivery::MAX_TARGET_RESYNCS {
-            self.review_resync_halted.remove(&task_id);
+            self.coord.clear_review_resync_halt(task_id);
             return Ok(false);
         }
         let (review_run, repo_id, reviewed, target) = match halted.or(last) {
@@ -1342,19 +1342,18 @@ impl Dispatcher {
                     ),
                 ),
             )?;
-            self.review_resync_halted.remove(&task_id);
+            self.coord.clear_review_resync_halt(task_id);
             return Ok(false);
         }
-        self.review_resync_halted.entry(task_id).or_insert_with(|| {
-            task_ops::daemon::SnapshotReviewResyncHalted {
+        self.coord
+            .note_review_resync_halt(task_ops::daemon::SnapshotReviewResyncHalted {
                 task_id,
                 repo_id,
                 reviewed_sha: reviewed,
                 target_sha: target,
                 resyncs: count,
                 at: rfc3339(now),
-            }
-        });
+            });
         Ok(true)
     }
 

@@ -692,7 +692,7 @@ impl Dispatcher {
             self.store.as_ref(),
             task_id,
             units,
-            &self.integrated_deps,
+            self.coord.integrated_deps(),
         )?;
         Ok((settled.changed, settled.waiting_on_children))
     }
@@ -948,21 +948,19 @@ impl Dispatcher {
         second_pass: bool,
     ) -> Result<(), DispatchError> {
         let now = self.now_utc();
-        if !error.permanent {
-            let count = self
-                .wu_prepare_failures
-                .get(&wu.id)
-                .map_or(0, |f| f.count)
-                .saturating_add(1);
-            if count < MAX_WU_PREPARE_ATTEMPTS {
-                let retry_at = now + wu_prepare_backoff(count);
-                self.wu_prepare_failures
-                    .insert(wu.id.clone(), WuPrepareFailures { count, retry_at });
-                tracing::warn!(task_id = %task.id, work_unit = %wu.key, error = %error, attempt = count, max_attempts = MAX_WU_PREPARE_ATTEMPTS, %retry_at, "cannot prepare the work unit worktree (transient); retrying after a backoff");
-                return Ok(());
-            }
+        if !error.permanent
+            && let Some(failures) = self.coord.retry_wu_prepare(
+                &wu.id,
+                now,
+                MAX_WU_PREPARE_ATTEMPTS,
+                wu_prepare_backoff,
+            )
+        {
+            let (count, retry_at) = (failures.count, failures.retry_at);
+            tracing::warn!(task_id = %task.id, work_unit = %wu.key, error = %error, attempt = count, max_attempts = MAX_WU_PREPARE_ATTEMPTS, %retry_at, "cannot prepare the work unit worktree (transient); retrying after a backoff");
+            return Ok(());
         }
-        self.wu_prepare_failures.remove(&wu.id);
+        self.coord.clear_wu_prepare_failures(&wu.id);
         tracing::warn!(task_id = %task.id, work_unit = %wu.key, error = %error, permanent = error.permanent, "cannot prepare the work unit worktree; blocking the work unit and asking a human (reason=prepare_failed)");
         let mut row = wu.clone();
         row.status = task_core::WorkUnitStatus::Blocked;

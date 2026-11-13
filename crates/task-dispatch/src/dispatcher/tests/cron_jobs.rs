@@ -460,7 +460,7 @@ async fn verify_skips_ineligible_ready_tasks_before_pre_dispatch_work() {
     }));
     assert_eq!(d.dispatch_ready().unwrap(), 0);
     assert!(
-        d.integrated_deps.is_empty(),
+        d.coord.integrated_deps().is_empty(),
         "excluded dependencies must not be inspected"
     );
     assert_eq!(

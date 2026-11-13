@@ -767,7 +767,8 @@ async fn pre_review_sync_target_advanced_limit_halts_visibly_and_rereview_resume
     );
     assert!(d.supervisor.reviews().is_empty());
     let snapshot = d
-        .review_resync_halted
+        .coord
+        .review_resync_halted()
         .get(&task.id)
         .expect("snapshot entry");
     assert_eq!(snapshot.target_sha, halted[0].0);
@@ -810,7 +811,7 @@ async fn pre_review_sync_target_advanced_limit_halts_visibly_and_rereview_resume
         d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
             .unwrap()
     );
-    assert!(d.review_resync_halted.is_empty());
+    assert!(d.coord.review_resync_halted().is_empty());
     assert_eq!(
         store.get(task.id).unwrap().unwrap().status,
         Status::Reviewing
@@ -869,7 +870,7 @@ async fn delivery_rereview_cycles(cycles: u32) -> (bool, Vec<Event>, Arc<dyn Tas
         .spawn_review(task.id, "worker".into(), &ReviewSubject::default())
         .unwrap();
     if !started {
-        assert!(d.review_resync_halted.contains_key(&task.id));
+        assert!(d.coord.review_resync_halted().contains_key(&task.id));
     }
     let events = events_of(&store, &task);
     (started, events, store, task)
@@ -955,7 +956,7 @@ async fn pre_review_sync_halted_review_resumes_when_target_is_quiet() {
         !d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
             .unwrap()
     );
-    assert!(d.review_resync_halted.contains_key(&task.id));
+    assert!(d.coord.review_resync_halted().contains_key(&task.id));
     // 時計だけ quiet より先へ進める（git は触らない）。
     *clock.lock().unwrap() =
         OffsetDateTime::now_utc() + d.config.review_resync_quiet + Duration::from_secs(1);
@@ -963,7 +964,7 @@ async fn pre_review_sync_halted_review_resumes_when_target_is_quiet() {
         d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
             .unwrap()
     );
-    assert!(d.review_resync_halted.is_empty());
+    assert!(d.coord.review_resync_halted().is_empty());
     let events = events_of(&store, &task);
     assert!(events.iter().any(|e| matches!(
         e,
@@ -1028,7 +1029,7 @@ async fn pre_review_sync_halted_without_reviewer_resumes_by_rereview_and_lands()
             .count(),
         1
     );
-    assert!(d.review_resync_halted.contains_key(&task.id));
+    assert!(d.coord.review_resync_halted().contains_key(&task.id));
     let halted_runs = std::fs::read_to_string(&runs).unwrap().lines().count();
     // 他の取り込みが止んだ。人が受信箱から rereview（reviewer 条件が無くても 422 にしない）。
     std::fs::write(&quiet, "").unwrap();

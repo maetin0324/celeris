@@ -903,8 +903,7 @@ impl Dispatcher {
                         && matches!(decision.reason, "failed" | "limit" | "plan_issue")
                     {
                         // ADR 2026-10-22-stalled-auto-replan D1 / D4: 同じ WU・同じ失敗の自動 replan が進展なしに
-                        // 続いたら、`max_replans` に余りがあっても止めて人に聞く。上限の判定は D4 wu-failure の
-                        // `run_settlement::replan_or_ask`（遅延 WU・統合の失敗と共有）。
+                        // 続いたら、`max_replans` に余りがあっても止めて人に聞く（D4 wu-failure の `replan_or_ask`）。
                         let failure = match &check_failure {
                             Some(f) => f.failure_signature(),
                             None => task_ops::plan_gate::failure_signature(
@@ -912,29 +911,22 @@ impl Dispatcher {
                                 &outcome_str,
                             ),
                         };
-                        let limits = run_settlement::ReplanLimits {
-                            stalled: task_ops::plan_gate::stalled_replans(
-                                &self.store.events_for(task_id)?,
-                                &wu.key,
-                                &failure,
-                            ),
-                            replans: self.counted_replans(task_id)?,
-                            max_replans: self.effective_max_replans(task_id)?,
-                            ban: None,
-                        };
+                        let limits =
+                            self.replan_limits(task_id, Some((&wu.key, &failure)), None)?;
                         let verdict = run_settlement::replan_or_ask(limits);
                         if verdict == ReplanOrAsk::Ask(AskReason::Stalled) {
                             let msg = outcome_str
                                 .strip_prefix("error(retryable=false): ")
                                 .unwrap_or(outcome_str.as_str())
                                 .to_string();
-                            let stalled = limits.stalled;
-                            tracing::warn!(%task_id, key = %wu.key, stalled, "the same work unit failure repeated without progress; asking a human instead of replanning (ADR 2026-10-22-stalled-auto-replan)");
+                            tracing::warn!(%task_id, key = %wu.key, stalled = limits.stalled, "the same work unit failure repeated without progress; asking a human instead of replanning (ADR 2026-10-22-stalled-auto-replan)");
                             trigger = Trigger::WorkerQuestion;
                             outcome_str = format!(
                                 "question: {}",
                                 task_ops::plan_gate::replan_stalled_question(
-                                    &wu.key, stalled, &msg
+                                    &wu.key,
+                                    limits.stalled,
+                                    &msg
                                 )
                             );
                         } else if verdict == ReplanOrAsk::Replan {

@@ -105,14 +105,9 @@ impl Dispatcher {
             .collect();
         let mut facts = Vec::with_capacity(nodes.len());
         for t in &nodes {
-            // 節点の replan の余地は D4 wu-failure の `run_settlement::replan_or_ask` と同じ判定（失敗の署名を持たない
-            // ので stalled は 0、禁止の理由も無い）。liveness は「WU が失敗したら自動 replan が来るか」を見る。
-            let limits = run_settlement::ReplanLimits {
-                stalled: 0,
-                replans: self.counted_replans(t.id)?,
-                max_replans: self.effective_max_replans(t.id)?,
-                ban: None,
-            };
+            // 節点の replan の余地は D4 wu-failure の `run_settlement::replan_or_ask` と同じ判定（「WU が失敗したら
+            // 自動 replan が来るか」）。
+            let limits = self.replan_limits(t.id, None, None)?;
             let replans_left = run_settlement::replan_or_ask(limits) == ReplanOrAsk::Replan;
             facts.push(
                 task_ops::tree::node_liveness_facts(
@@ -662,6 +657,28 @@ impl Dispatcher {
                 task_core::TaskWait::HumanGate { .. } => Some("human_gate"),
                 _ => None,
             })
+    }
+
+    /// D4 wu-failure（`run_settlement::replan_or_ask`）の入力を読む。`failure` は (unit の key, 失敗の署名)。失敗の署名を
+    /// 持たない経路（仕事の残らない計画の `replan_gate`・木の liveness）は `None` で、stalled は 0。
+    pub(super) fn replan_limits(
+        &self,
+        task_id: TaskId,
+        failure: Option<(&str, &str)>,
+        ban: Option<run_settlement::ReplanBan>,
+    ) -> Result<run_settlement::ReplanLimits, DispatchError> {
+        let stalled = match failure {
+            Some((key, sig)) => {
+                task_ops::plan_gate::stalled_replans(&self.store.events_for(task_id)?, key, sig)
+            }
+            None => 0,
+        };
+        Ok(run_settlement::ReplanLimits {
+            stalled,
+            replans: self.counted_replans(task_id)?,
+            max_replans: self.effective_max_replans(task_id)?,
+            ban,
+        })
     }
 
     /// ADR-0079 D7（Phase R3a）: 節点の replan の上限（`[execution] max_replans`）に、`limit:max_replans` への

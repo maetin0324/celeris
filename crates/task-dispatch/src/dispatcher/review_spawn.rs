@@ -910,7 +910,7 @@ impl Dispatcher {
                 }
             }
             // ADR-0076: reviewer run も worker と同じく quota の `before` を登録する
-            // （`on_review_finished` が `resolve_quota_estimate` で閉じる）。
+            // （`on_review_finished` が `RoutingRuntime::settle_quota` で閉じる）。
             self.quota_begin(account.as_deref(), account_adapter, review_run_id);
         }
         let limits = CheckLimits::new(self.config.review_timeout, &self.config.check_slots);

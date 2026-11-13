@@ -30,7 +30,7 @@
 //! | `housekeeping` | `HostMaintenance` を呼ぶ入口（`MaintenanceInputs` と run・review の集合を渡す）と、verify の判定・承認と通知 feed の照合・検査の `CARGO_TARGET_DIR` | L1 |
 //! | `maintenance` | `HostMaintenance` の保守 executor（cron の `target_sweep`）と disk 監視の設定の入口 | L1 |
 //! | `snapshot` | デーモン状態の snapshot の組み立てと公開 | L1 |
-//! | `quota_book` | quota の run 単位の入口（開始・release・見積りの呼び出し）。状態・判断・適用は `routing_runtime`（`routing_runtime/quota.rs`・`routing_runtime/quota_estimate.rs`） | L1 |
+//! | `quota_book` | quota の開始・release の入口。終了経路が直接呼ぶ状態・判断・適用の owner は `routing_runtime`（`routing_runtime/quota.rs`・`routing_runtime/quota_estimate.rs`） | L1 |
 //! | `sinks` | run 途中のイベントの sink（`StoreSink`・`ReviewerSink`） | L1 |
 //! | `routing_runtime` | 経路選択の状態（宣言・account の上限と帳簿・cooldown・routing mode・分類 board・経路なしの task・RoutingContext の登録簿）の owner（`crate::routing_runtime::RoutingRuntime`。この dir の外。`route_state` は `RouteState` の組み立ての純粋関数。ADR 2026-11-11 dispatcher-state-ownership D1・D3） | owner |
 //! | `route_failure` | route の供給側失敗の分類と、`RoutingRuntime` への account cooldown の記録 | L1 |
@@ -1415,20 +1415,14 @@ impl Dispatcher {
                 reason: "[knowledge.langmem].base_url が無い".to_string(),
             };
         };
-        if let Some(cached) =
-            self.routing
-                .cached_knowledge_probe(&base_url, now, task_worker::PROBE_CACHE_TTL)
-        {
-            return cached;
-        }
-        let token = self.config.knowledge.langmem_api_key.clone();
-        let started = Instant::now();
-        let outcome = (self.knowledge_probe)(&base_url, token.as_deref());
-        log_slow_step("knowledge_probe", started);
-        tracing::debug!(%base_url, ?outcome, "knowledge: probed the langmem endpoint");
-        self.routing
-            .cache_knowledge_probe(base_url, now, outcome.clone());
-        outcome
+        self.routing.knowledge_reachability(&base_url, now, || {
+            let token = self.config.knowledge.langmem_api_key.clone();
+            let started = Instant::now();
+            let outcome = (self.knowledge_probe)(&base_url, token.as_deref());
+            log_slow_step("knowledge_probe", started);
+            tracing::debug!(%base_url, ?outcome, "knowledge: probed the langmem endpoint");
+            outcome
+        })
     }
 
     /// ADR-0043 D3（Phase 56）: 起動時にコンテナ runtime を調べる（`podman info` → `docker info`）。

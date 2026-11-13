@@ -452,26 +452,22 @@ impl RoutingRuntime {
         self.knowledge_probe_cache.clear();
     }
 
-    /// `ttl` の内に調べた結果があれば返す。
-    pub(crate) fn cached_knowledge_probe(
-        &self,
+    /// cache の期限判定と更新を所有し、期限内なら probe を呼ばない。
+    pub(crate) fn knowledge_reachability(
+        &mut self,
         base_url: &str,
         now: Instant,
-        ttl: Duration,
-    ) -> Option<Reachability> {
+        probe: impl FnOnce() -> Reachability,
+    ) -> Reachability {
+        if let Some((checked_at, cached)) = self.knowledge_probe_cache.get(base_url)
+            && now.duration_since(*checked_at) < task_worker::PROBE_CACHE_TTL
+        {
+            return cached.clone();
+        }
+        let outcome = probe();
         self.knowledge_probe_cache
-            .get(base_url)
-            .filter(|(checked_at, _)| now.duration_since(*checked_at) < ttl)
-            .map(|(_, cached)| cached.clone())
-    }
-
-    pub(crate) fn cache_knowledge_probe(
-        &mut self,
-        base_url: String,
-        now: Instant,
-        outcome: Reachability,
-    ) {
-        self.knowledge_probe_cache.insert(base_url, (now, outcome));
+            .insert(base_url.to_string(), (now, outcome.clone()));
+        outcome
     }
 
     // ---- RouteState ----
@@ -546,6 +542,40 @@ impl RoutingRuntime {
 
 #[cfg(test)]
 mod structure_guard_tests {
+    /// 不変条件: cache は URL ごとに期限未満だけ再利用し、期限ちょうどと明示の消去後は再検査する。
+    /// 既存の構造試験は cache の期限境界や probe の呼び出し回数を検出しない。
+    #[test]
+    fn knowledge_cache_expiry_and_clear() {
+        use super::*;
+        let store = task_core::SqliteStore::open_in_memory().unwrap();
+        let mut routing = RoutingRuntime::new(&store, None);
+        let now = Instant::now();
+        let calls = std::cell::Cell::new(0);
+        let probe = || {
+            calls.set(calls.get() + 1);
+            Reachability::Ok
+        };
+        for (url, elapsed, expected) in [
+            ("a", Duration::ZERO, 1),
+            (
+                "a",
+                task_worker::PROBE_CACHE_TTL - Duration::from_nanos(1),
+                1,
+            ),
+            ("b", Duration::ZERO, 2),
+            ("a", task_worker::PROBE_CACHE_TTL, 3),
+        ] {
+            assert!(matches!(
+                routing.knowledge_reachability(url, now + elapsed, probe),
+                Reachability::Ok
+            ));
+            assert_eq!(calls.get(), expected);
+        }
+        routing.clear_knowledge_probe_cache();
+        routing.knowledge_reachability("a", now + task_worker::PROBE_CACHE_TTL, probe);
+        assert_eq!(calls.get(), 4);
+    }
+
     /// 不変条件: ADR 2026-11-11 D2 の 1〜3・7（field が private（`#[cfg(test)]` の field は `dispatcher/tests/structure_guard.rs`）、
     /// `Dispatcher` を受けない・`dispatcher` module を使わない、field は 18 件）。既存の試験は振る舞いだけを見るので、
     /// field を `pub` に戻しても通る。純粋 module `route_state.rs` は読み書き・時計・lock を持たない。

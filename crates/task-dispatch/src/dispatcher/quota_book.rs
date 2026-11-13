@@ -7,7 +7,7 @@ impl Dispatcher {
     /// `before` として `QuotaActivity` に登録する。アカウントプールを使わない run
     /// （`account`/`account_adapter` が `None`）は何もしない（D4.2 手順 5 の `free` は完了時に
     /// 決める。プールが無いのでそもそも重なりを追う意味が無い）。ADR-0076: worker / planner /
-    /// reviewer のどの run でも呼ぶ。呼んだ run は終了のすべての経路で `resolve_quota_estimate`
+    /// reviewer のどの run でも呼ぶ。呼んだ run は終了のすべての経路で `RoutingRuntime::settle_quota`
     /// か `release_quota_if_tracked` を通すこと（開いたまま残ると重なりの判定が狂う）。
     pub(super) fn quota_begin(
         &mut self,
@@ -41,7 +41,7 @@ impl Dispatcher {
     /// 破棄）でも `QuotaActivity` の bookkeeping だけは必ず閉じる（さもないと重なりの判定が永遠に
     /// 狂う）。`is_tracked` で「`quota_begin` を呼んだ run か」を確かめてから呼ぶ（誤って無関係な
     /// 他の run のグループを壊さないための防御）。戻り値（この run 自身の Event）は捨てる（グループが閉じて
-    /// 他のメンバー分が確定すれば、それらは `resolve_quota_estimate` の中で別タスクへ直接書かれる）。
+    /// 他のメンバー分が確定すれば、それらは `RoutingRuntime::settle_quota` の中で別タスクへ直接書かれる）。
     pub(super) fn release_quota_if_tracked(
         &mut self,
         run_id: &str,
@@ -56,50 +56,15 @@ impl Dispatcher {
         if !self.routing.quota_is_tracked(adapter, acct, run_id) {
             return;
         }
-        let _ = self.resolve_quota_estimate(
+        let _ = self.routing.settle_quota(
+            &*self.store,
             task_id,
             run_id,
             None,
-            Some(acct),
-            Some(adapter),
-            provider,
+            Some((acct, adapter)),
+            provider.to_string(),
             "",
             None,
         );
-    }
-
-    /// ADR-0074 D4（Phase F3 quota）: run の終了で quota 消費を決定的に見積もり、この run 自身の
-    /// `Event::QuotaEstimated` を返す。重なった run のグループがこの run で閉じた場合は、他の
-    /// メンバーの分の Event を該当タスクへ直接書く（`store.append_event`。「同じ run_id は最後の
-    /// Event が有効」なので、それらの run の以前の暫定 Event を上書きする）。呼び出し側は戻り値を
-    /// 自分の `events` に足す（`WorkerFinished` と同じトランザクション）。
-    ///
-    /// `usage` が `None`（stale な結果の破棄など、`WorkerFinished` 自体を残さない経路）でも呼んでよい
-    /// （`QuotaActivity` の bookkeeping を必ず閉じるため）。戻り値は使わなくてよい。
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn resolve_quota_estimate(
-        &mut self,
-        task_id: TaskId,
-        run_id: &str,
-        work_unit_id: Option<String>,
-        account: Option<&str>,
-        account_adapter: Option<AccountAdapter>,
-        provider: &ProviderId,
-        model: &str,
-        usage: Option<&task_core::Usage>,
-    ) -> Event {
-        let pool = account.zip(account_adapter);
-        self.routing.settle_quota(
-            &*self.store,
-            crate::routing_runtime::quota::QuotaRunEnd {
-                task_id,
-                run_id,
-                work_unit_id,
-                pool,
-                provider_source: provider.to_string(),
-                model,
-                usage,
-            },
-        )
     }
 }

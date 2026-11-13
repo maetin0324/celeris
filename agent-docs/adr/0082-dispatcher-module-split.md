@@ -93,5 +93,5 @@ account 一覧の走査 cache の更新と入力の収集は `RoutingRuntime::ro
 下位 owner `routing_runtime/quota.rs` の `QuotaBook` に、`eval_runs`・`knowledge_probe_cache` を `RoutingRuntime` に移した。
 `resolve_quota_estimate`（約 210 行）の判断は `routing_runtime/quota_estimate.rs` の純粋関数 `propose_estimate` に分け、適用
 （較正の更新と、閉じたグループの他の member の event の追記）は `RoutingRuntime::settle_quota` が行う。
-`quota_book` の行は、run 単位の入口（`quota_begin`・`release_quota_if_tracked`・`resolve_quota_estimate` の薄い呼び出し）だけを持つ行に直した
+`quota_book` の行は、run 単位の入口（`quota_begin`・`release_quota_if_tracked`。終了経路は `RoutingRuntime::settle_quota` を直接呼ぶ）だけを持つ行に直した
 （module は入口として残るので行は消さない）。

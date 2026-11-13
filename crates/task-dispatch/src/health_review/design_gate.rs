@@ -406,13 +406,13 @@ impl Dispatcher {
             .unwrap_or((None, None, None));
         let (run_end, outcome, usage) = run_end_of(&result, "design review");
         let model = self.started_model_of(task_id, &run_id);
-        let quota = self.resolve_quota_estimate(
+        let quota = self.routing.settle_quota(
+            &*self.store,
             task_id,
             &run_id,
             None,
-            account.as_deref(),
-            account_adapter,
-            &provider,
+            account.as_deref().zip(account_adapter),
+            provider.to_string(),
             &model,
             usage.as_ref(),
         );

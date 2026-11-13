@@ -31,19 +31,6 @@ impl QuotaBook {
     }
 }
 
-/// `settle_quota` が受ける run の識別と使用量。
-pub(crate) struct QuotaRunEnd<'a> {
-    pub(crate) task_id: TaskId,
-    pub(crate) run_id: &'a str,
-    pub(crate) work_unit_id: Option<String>,
-    /// アカウントプールを使う run の `(account, adapter)`。使わない run は `None`。
-    pub(crate) pool: Option<(&'a str, AccountAdapter)>,
-    /// アカウントプールを使わない run の source 名（`ProviderId` の文字列）。
-    pub(crate) provider_source: String,
-    pub(crate) model: &'a str,
-    pub(crate) usage: Option<&'a Usage>,
-}
-
 impl RoutingRuntime {
     /// run の開始。そのアカウントの現在の観測値をグループの `before` として登録する。
     /// プールを使わない run（`pool` が `None`）は何もしない。`now` は Unix 秒。
@@ -93,22 +80,33 @@ impl RoutingRuntime {
     /// 見積りの判断は純粋関数に任せ、ここでは提案を適用する: 重なりの追跡を閉じ、`measured` の標本を較正へ足し、
     /// グループがこの run で閉じたときの他の member の event をその task へ直接追記する
     /// （「同じ run_id は最後の event が有効」なので、以前の暫定 event を上書きする）。
-    pub(crate) fn settle_quota(&mut self, store: &dyn TaskStore, end: QuotaRunEnd<'_>) -> Event {
-        let usage = end.usage.copied().unwrap_or_default();
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn settle_quota(
+        &mut self,
+        store: &dyn TaskStore,
+        task_id: TaskId,
+        run_id: &str,
+        work_unit_id: Option<String>,
+        pool: Option<(&str, AccountAdapter)>,
+        provider_source: String,
+        model: &str,
+        usage: Option<&Usage>,
+    ) -> Event {
+        let usage = usage.copied().unwrap_or_default();
         let list_price_usd = usage.cost_usd;
-        let input = match end.pool {
+        let input = match pool {
             None => EstimateInput {
-                run_id: end.run_id.to_string(),
-                work_unit_id: end.work_unit_id,
-                weighted_tokens: weighted_tokens_of(&usage, end.model, &end.provider_source),
-                source: end.provider_source,
+                run_id: run_id.to_string(),
+                work_unit_id,
+                weighted_tokens: weighted_tokens_of(&usage, model, &provider_source),
+                source: provider_source,
                 list_price_usd,
                 calibrations: Vec::new(),
                 shape: EndShape::Free,
             },
             Some((account_id, adapter)) => {
                 let source = crate::accounts::quota_source_label(adapter).to_string();
-                let weighted_tokens = weighted_tokens_of(&usage, end.model, &source);
+                let weighted_tokens = weighted_tokens_of(&usage, model, &source);
                 let after = self.observed_usage(adapter, account_id);
                 let calibrations = windows_for(adapter)
                     .into_iter()
@@ -120,17 +118,17 @@ impl RoutingRuntime {
                     })
                     .collect();
                 let member = QuotaGroupMember {
-                    task_id: end.task_id,
-                    run_id: end.run_id.to_string(),
-                    work_unit_id: end.work_unit_id.clone(),
+                    task_id,
+                    run_id: run_id.to_string(),
+                    work_unit_id: work_unit_id.clone(),
                     source: source.clone(),
                     weighted_tokens,
                     list_price_usd,
                 };
                 let outcome = self.quota.quota_activity.end(adapter, account_id, member);
                 EstimateInput {
-                    run_id: end.run_id.to_string(),
-                    work_unit_id: end.work_unit_id,
+                    run_id: run_id.to_string(),
+                    work_unit_id,
                     source,
                     weighted_tokens,
                     list_price_usd,

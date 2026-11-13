@@ -1489,16 +1489,16 @@ impl Dispatcher {
         }
         // ADR-0074 D4（Phase F3 quota）: この run の quota 消費を見積もる（`WorkerFinished` と同じ
         // トランザクションで残す。重なった run のグループがこれで閉じれば、他のメンバー分は
-        // `resolve_quota_estimate` の中で別タスクへ直接書く）。
+        // `RoutingRuntime::settle_quota` の中で別タスクへ直接書く）。
         {
             let model_for_quota = self.started_model_of(task_id, &run_id);
-            let quota_event = self.resolve_quota_estimate(
+            let quota_event = self.routing.settle_quota(
+                &*self.store,
                 task_id,
                 &run_id,
                 current_wu.as_ref().map(|wu| wu.id.clone()),
-                account.as_deref(),
-                account_adapter,
-                &provider,
+                account.as_deref().zip(account_adapter),
+                provider.to_string(),
                 &model_for_quota,
                 usage.as_ref(),
             );

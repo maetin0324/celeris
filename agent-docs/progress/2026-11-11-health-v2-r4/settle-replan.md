@@ -50,7 +50,7 @@ completed: 2026-11-13
   に移して module の行を減らし、`dispatcher.rs` の冒頭の手順 4 の折り返し（2 行）を 1 行にして module map の 1 行を相殺した。
   結果は module の本体の行 −2、method 0、`dispatcher.rs` 2037。
 - `sh scripts/dev/repo-health/ci.sh --base <WU の base> --head HEAD`: exit 0、verdict=pass、fail_grade=0、new=0、worsened=0。
-- `bash scripts/dev/test-affected.sh`: 未実行
+- `bash scripts/dev/test-affected.sh`: exit 0（634 秒）。repo-health verdict=pass fail_grade=0、3878 tests run: 3878 passed、11 skipped。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。`sh scripts/dev/progress-index.sh --check`: exit 0。
 - 計画の check: 範囲（scope）exit 0、cex と ADR の不変 exit 0、純粋さ・main の high_risk・`cex_ | structure_guard_` の nextest exit 0（36 passed）、
   `replan_or_ask` の定義と呼び出しの grep exit 0。

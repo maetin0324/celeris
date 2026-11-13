@@ -1462,9 +1462,8 @@ impl Dispatcher {
         self.replan_gate(task_id)
     }
 
-    /// ADR-0072 D17/D18（Phase E4）: replan の余地（`max_replans`）があれば `RunPlanner{replan:
-    /// true}`、無ければ `Skip`（進められる WU が無いまま何もしない。呼び出し元が既に上限を見て
-    /// `Continue{why: Replan}` を避けていれば通常ここには来ない防御的フォールバック）。
+    /// ADR-0072 D17/D18（Phase E4）: replan の余地（`max_replans`。判定は D4 wu-failure の `run_settlement::replan_or_ask`）があれば
+    /// `RunPlanner{replan: true}`、無ければ `Skip`（進められる WU が無いまま何もしない。呼び出し元が既に上限を見て `Continue{why: Replan}` を避けていれば通常ここには来ない防御的フォールバック）。
     pub(super) fn replan_gate(&self, task_id: TaskId) -> Result<WuDispatchGate, DispatchError> {
         let limits = self.replan_limits(task_id, None, None)?;
         if run_settlement::replan_or_ask(limits) == ReplanOrAsk::Replan {

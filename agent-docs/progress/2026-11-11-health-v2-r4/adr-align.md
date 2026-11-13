@@ -58,6 +58,7 @@ updated: 2026-11-13
 
 ## 変更
 - `phase 1: adr-align: D1・D4 の表に担当 unit の列を足し、付記の field の割当てを表に畳む` — 上の ADR の変更と、この進捗ファイル。
+- `phase 1: adr-align: 進捗に検査の結果を書く` — 証拠の節。
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
@@ -65,7 +66,9 @@ updated: 2026-11-13
 - 計画の check 1（D4 の 5 行の `module::fn` と担当 unit、lease-renew は none none）→ exit 0
 - 計画の check 2 `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check` → exit 0
 - 計画の check 3（範囲。ADR とこの進捗の dir だけ）→ exit 0
-- repo の検査の結果は下の「repo の検査」に書く。
+- `bash scripts/dev/test-affected.sh` → exit 0（138 秒。「試験対象の変更なし（docs のみ等）」、repo_health_gate: all checks passed）
+- `cargo clippy --workspace -- -D warnings` → exit 0（49 秒）
+- `cargo fmt --all -- --check` → exit 0
 
 ## 未解決
 

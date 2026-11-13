@@ -16,6 +16,10 @@
 //! WU の run の判断（[`settle_work_unit`]。WU の遷移は `execution_scheduler` の遷移の関数を呼ぶ）は `work_unit` に置く。
 //! WU の失敗の自動 replan か質問は [`settle_work_unit_failure`] が [`replan_or_ask`] で決める。
 //!
+//! atomic task の run の続け方（[`settle_task_run`]。continuation・子 task 待ち・進捗なしの連続・固い上限の質問）と、
+//! v2 の WU の行を書いた後の段の進み方（[`phase_step_after_write`]。段の状態は `execution_scheduler` の段の関数）は
+//! `task_run` に置く。
+//!
 //! この module は入力の値だけを読む。永続化・file・process に触れず、`dispatcher` module を使わない（D2 の 3）。
 
 use std::time::Duration;
@@ -27,6 +31,11 @@ use task_worker::{AdapterError, Evidence, RunOutcome, Terminal};
 
 use crate::policy::ProviderOutcome;
 
+mod task_run;
+pub(crate) use task_run::{
+    PhaseStep, TaskRunInput, hold_task_for_worker_decisions, phase_step_after_write,
+    settle_task_run, task_checkpoint_end, task_reads_worker_decisions,
+};
 mod work_unit;
 pub(crate) use work_unit::{
     WorkUnitFailureStep, WorkUnitRunInput, hold_for_worker_decisions, integration_repair_exhausted,

@@ -160,3 +160,25 @@ owner は型引数 `ExecutionCoordination<S, C>` で受ける。lease の回収�
   `ProjectOrchestration<L>`・`StagnationWatch`・`ProbePorts`・`InventoryRuns` を足した（`HostMaintenance` は `HostMaintenance<C>` に直した）。
 - module map に `project_orchestration`・`probe_ports` の行を足し、`host_maintenance`・`tree_units` の行を直した。移した module の旧い行は無かった
   （`tree_units`・`cos_chat`・`script_compare`・`cron_tick` は入口として残る）。
+
+## 付記 2026-11-13: worker 完了の判断を `run_settlement` に置き、`worker_finish` を適用だけにした（R4 settle）
+
+[ADR 2026-11-11 dispatcher-state-ownership](2026-11-11-dispatcher-state-ownership.md) D3・D4・D5 に従い、`finish_worker_result_with`
+（`dispatcher/worker_finish.rs`）の判断を純粋な module `crates/task-dispatch/src/run_settlement.rs`（と下の `run_settlement/work_unit.rs`・
+`run_settlement/task_run.rs`）に移した。`run_settlement` は `dispatcher` の外に置き、永続化・file・process に触れず、`dispatcher` module を使わない
+（層は判断。module map の `run_settlement` の行）。
+
+- 入口（`worker_finish` が順に呼ぶ）: `settle`（run の終わり方・`Trigger`・outcome の文・retry の可否）→ WU の run は `settle_work_unit`
+  （WU の遷移は `execution_scheduler::decide` を呼ぶ）と `settle_work_unit_failure`（D4 wu-failure の `replan_or_ask`）、atomic task の run は
+  `settle_task_run`（子 task 待ち・cluster job の wait・continuation・進捗なしの連続と固い上限の質問。質問の文は `execution_scheduler` の関数を呼ぶ）と
+  `task_reads_worker_decisions`・`hold_task_for_worker_decisions` → `questions_of_run`（部をまたぐ質問）→ WU の行を書いた後の
+  `phase_step_after_write`（段の進み方。`execution_scheduler::settle_phase` を呼ぶ）→ `stop_at_token_budget`（木の token 予算切れ）→
+  `run_end_record`（D4 run-close の終了記録の組み立て）。
+- `worker_finish` に残したもの（入力を集めることと提案の適用。順と transaction の範囲は変えていない）: events・WU の行・runs 索引・委譲した子・
+  token の使用量の読み出し、checkpoint の組み立て（git・`checkpoint.json`・`result.json` の `yield`）、auto-leaf の決定の要求と integration repair の
+  結果の信頼の読み出し、integration repair の打ち切り（git の巻き戻し）、replan の上限の読み出しと使い切った後の決定の要求、worker の決定の要求の
+  読み出し、WU の commit・遷移・依存 WU の昇格・write set、兄弟が走っている間に止まった unit の trigger（`deferred_work_unit_trigger`。WU の行の
+  読み直しと events の追記）、session の usage、承認の行、統合の開始、`apply_transition_with_events` と backoff・quota・cooldown・報告・review の起動。
+- `worker_finish` は `execution_scheduler` の判断の関数（`decide`・`no_progress_question`・`continuation_cap_question`・`settle_phase`）を直接呼ばない。
+  `finish_worker_result_with` は 800 行以下にした。
+

@@ -480,40 +480,13 @@ impl Dispatcher {
                 let (artifacts_dir, cwd_buf, branch, base) =
                     self.work_unit_checkpoint_site(&task, Some(wu));
                 let cwd = cwd_buf.as_deref();
-                let activity: Vec<crate::checkpoint::ToolActivity> = events_so_far
-                    .iter()
-                    .filter_map(|(_, ev)| match ev {
-                        Event::WorkerProgress {
-                            run_id: r,
-                            kind: Some(task_core::ProgressKind::ToolUse),
-                            tool,
-                            summary,
-                            ..
-                        } if r == &run_id => Some(crate::checkpoint::ToolActivity::Use {
-                            tool: tool.clone(),
-                            summary: summary.clone(),
-                        }),
-                        Event::WorkerProgress {
-                            run_id: r,
-                            kind: Some(task_core::ProgressKind::ToolResult),
-                            error,
-                            ..
-                        } if r == &run_id => {
-                            Some(crate::checkpoint::ToolActivity::Result { error: *error })
-                        }
-                        _ => None,
-                    })
-                    .collect();
+                let activity = tool_activity(&events_so_far, &run_id);
                 let mechanical =
                     crate::checkpoint::gather_from(cwd, &branch, base.as_deref(), &activity);
-                let worker_checkpoint = yield_checkpoint_json
-                    .as_ref()
-                    .and_then(|v| serde_json::from_value(v.clone()).ok())
-                    .or_else(|| {
-                        artifacts_dir
-                            .as_deref()
-                            .and_then(crate::checkpoint::read_worker_checkpoint)
-                    });
+                let worker_checkpoint = worker_checkpoint_input(
+                    yield_checkpoint_json.as_ref(),
+                    artifacts_dir.as_deref(),
+                );
                 let checkpoint_end = effective_end
                     .as_checkpoint_end()
                     .unwrap_or(task_core::CheckpointEnd::BudgetExhausted);
@@ -679,6 +652,8 @@ impl Dispatcher {
         } else if let Some(end) = run_end
             && end.saves_checkpoint()
         {
+            // atomic task の run。続け方は `run_settlement::settle_task_run` が決める。ここでは checkpoint を組み立て、
+            // events と委譲した子（ADR 2026-10-18-parent-waits-for-children）を読んで渡す。
             let events_so_far = self.store.events_for(task_id)?;
             let run_seq = current_run_seq(&events_so_far);
             let workspace_dir = self.task_dir(&task);
@@ -690,162 +665,55 @@ impl Dispatcher {
                 .and_then(|w| w.repos.first())
                 .and_then(|r| r.branch())
                 .unwrap_or_default();
-            // ADR-0072 D8: `tests_run`（最大 10 件）と `recent_activity`（最大 20 行）は、この run の
-            // `WorkerProgress{kind: tool_use}` と、それに続く `tool_result` の組から作る。
-            let activity: Vec<crate::checkpoint::ToolActivity> = events_so_far
-                .iter()
-                .filter_map(|(_, ev)| match ev {
-                    Event::WorkerProgress {
-                        run_id: r,
-                        kind: Some(task_core::ProgressKind::ToolUse),
-                        tool,
-                        summary,
-                        ..
-                    } if r == &run_id => Some(crate::checkpoint::ToolActivity::Use {
-                        tool: tool.clone(),
-                        summary: summary.clone(),
-                    }),
-                    Event::WorkerProgress {
-                        run_id: r,
-                        kind: Some(task_core::ProgressKind::ToolResult),
-                        error,
-                        ..
-                    } if r == &run_id => {
-                        Some(crate::checkpoint::ToolActivity::Result { error: *error })
-                    }
-                    _ => None,
-                })
-                .collect();
-            let mechanical = crate::checkpoint::gather(cwd, branch, &activity);
+            let mechanical =
+                crate::checkpoint::gather(cwd, branch, &tool_activity(&events_so_far, &run_id));
             // D9: 優先順位は `result.json.yield` > `checkpoint.json` > mechanical。
-            let worker_checkpoint = yield_checkpoint_json
-                .as_ref()
-                .and_then(|v| serde_json::from_value(v.clone()).ok())
-                .or_else(|| {
-                    artifacts_dir
-                        .as_deref()
-                        .and_then(crate::checkpoint::read_worker_checkpoint)
-                });
-            // ADR 2026-10-18-parent-waits-for-children: 委譲した子が未完了か、失敗した子に「再実行を待て」の印が
-            // あるなら、親の続きの run は進むものが無い。子待ちとして止め（continuation・進捗なしに数えない）、
-            // 子が終わってから dispatch する。
+            let worker_checkpoint =
+                worker_checkpoint_input(yield_checkpoint_json.as_ref(), artifacts_dir.as_deref());
             let children_pending = end != task_core::RunEnd::Waiting
                 && !self.awaited_children(task_id, true)?.is_empty();
-            let checkpoint_end = if children_pending {
-                task_core::CheckpointEnd::Waiting
-            } else {
-                end.as_checkpoint_end()
-                    .unwrap_or(task_core::CheckpointEnd::BudgetExhausted)
-            };
             let ctx = task_core::CheckpointContext {
                 task_id: task_id.to_string(),
                 work_unit: None,
                 run_id: run_id.clone(),
                 run_seq,
-                end: checkpoint_end,
+                end: run_settlement::task_checkpoint_end(end, children_pending),
                 created_at: rfc3339(OffsetDateTime::now_utc()),
             };
             let checkpoint = task_core::merge_checkpoint(worker_checkpoint, mechanical, ctx);
-
-            if end == task_core::RunEnd::Waiting || children_pending {
-                // ADR-0090 D1: クラスタ job の wait。checkpoint は残すが continuation の上限・進捗なしには数えない
-                // （trigger は `ClusterJobWait` のまま）。子待ち（children_pending）も同じ扱いで、trigger だけ
-                // `ChildrenWait` に替える。
+            let settled = run_settlement::settle_task_run(run_settlement::TaskRunInput {
+                end,
+                events: &events_so_far,
+                run_seq,
+                checkpoint: &checkpoint,
+                children_pending,
+                continuation_enabled: self.config.execution.continuation,
+                continuation_hard_limit: self.config.execution.continuation_hard_limit,
+                no_progress_limit: self.config.execution.no_progress_limit,
+                trigger,
+                outcome: outcome_str,
+            });
+            (trigger, outcome_str) = (settled.trigger, settled.outcome);
+            if settled.saves_checkpoint {
                 checkpoint_for_index = Some(checkpoint.clone());
                 checkpoint_event = Some(Event::CheckpointSaved {
                     run_id: run_id.clone(),
                     work_unit_id: None,
                     checkpoint: Box::new(checkpoint),
                 });
-                if children_pending {
-                    trigger = Trigger::Continue {
-                        why: task_core::ContinueWhy::ChildrenWait,
-                    };
-                    outcome_str = format!(
-                        "continue: 委譲した子の完了を待ちます（{} の続き）",
-                        run_settlement::describe_run_end(end)
-                    );
-                }
-            } else if self.config.execution.continuation {
-                let continuations_so_far = consecutive_continuations(&events_so_far);
-                let prev_checkpoint =
-                    task_ops::derive::latest_progress_checkpoint(&events_so_far, None);
-                let progressed =
-                    task_core::checkpoint_shows_progress(prev_checkpoint.as_ref(), &checkpoint);
-                let no_progress = if progressed {
-                    0
-                } else {
-                    no_progress_streak(&events_so_far, None) + 1
-                };
-                checkpoint_for_index = Some(checkpoint.clone());
-                let cap_checkpoint = checkpoint.clone();
-                checkpoint_event = Some(Event::CheckpointSaved {
-                    run_id: run_id.clone(),
-                    work_unit_id: None,
-                    checkpoint: Box::new(checkpoint),
-                });
-                // 2026-10-20-continuation-limit-by-progress D2: 進捗がある間は回数で聞かない。聞くのは進捗なしの連続と
-                // 固い上限（暴走止め）だけ。いずれも失敗にせず人に聞く（blocked）。
-                if no_progress >= self.config.execution.no_progress_limit {
-                    trigger = Trigger::WorkerQuestion;
-                    outcome_str = crate::execution_scheduler::no_progress_question(
-                        None,
-                        no_progress,
-                        continuations_so_far,
-                    );
-                } else if continuations_so_far >= self.config.execution.continuation_hard_limit {
-                    trigger = Trigger::WorkerQuestion;
-                    outcome_str = crate::execution_scheduler::continuation_cap_question(
-                        None,
-                        self.config.execution.continuation_hard_limit,
-                        &crate::execution_scheduler::ContinuationFacts::new(
-                            continuations_so_far,
-                            task_ops::derive::progress_checkpoints_since_answer(
-                                &events_so_far,
-                                None,
-                            ),
-                            &cap_checkpoint,
-                        ),
-                    );
-                } else {
-                    trigger = Trigger::Continue {
-                        why: task_core::ContinueWhy::Continue,
-                    };
-                    outcome_str = format!(
-                        "continue: {} の続き（Run #{}）",
-                        run_settlement::describe_run_end(end),
-                        run_seq + 1
-                    );
-                }
-            } else {
-                // ADR-0072 §6 (f): `[execution] continuation = false` なら従来どおり
-                // `WorkerError{retryable:true}` に戻す（checkpoint も保存しない）。
-                trigger = Trigger::WorkerError { retryable: true };
-                outcome_str = format!(
-                    "error(retryable=true): {} (continuation disabled)",
-                    run_settlement::describe_run_end(end)
-                );
             }
         }
         // ADR-0079 D7（Phase R3a）: 木の節点の atomic の run（WU を持たない）が `result.json` の `decisions` を
         // 書いた。記録し、`needed_before: self` なら最終レビューに進めず `ready` に戻して（`advance`）、答えが
         // 出るまで run を起こさない（`decision_self_hold`。答えは次の run の前置きの `answers` に入る）。
-        if current_wu.is_none()
-            && matches!(trigger, Trigger::WorkerDone)
-            && matches!(run_end, Some(task_core::RunEnd::Completed))
-        {
+        if current_wu.is_none() && run_settlement::task_reads_worker_decisions(&trigger, run_end) {
             let artifacts_dir = self.task_dir(&task).map(|d| self.artifacts_dir(&task, &d));
             if let Some(found) =
                 self.worker_decisions(&task, None, artifacts_dir.as_deref(), &run_id)?
             {
                 if found.self_hold {
-                    trigger = Trigger::Continue {
-                        why: task_core::ContinueWhy::Advance,
-                    };
-                    outcome_str = format!(
-                        "decision: 人の決定を待ちます（決定の要求 {} 件。ADR-0079 D7）",
-                        found.count
-                    );
+                    (trigger, outcome_str) =
+                        run_settlement::hold_task_for_worker_decisions(found.count);
                 }
                 worker_decisions = Some(found);
             }
@@ -1014,50 +882,34 @@ impl Dispatcher {
                 tracing::warn!(%task_id, %run_id, error = %e, "failed to finish the runs index row");
             }
         }
-        // ADR-0074 D1.6（Phase F2b）: v2 の WU の run。兄弟の WU（または統合）が走っていれば Task は
-        // 遷移させない。in-flight が 0 になったら工程の状態（question → 失敗 → 起こせる WU → 統合）で決める。
-        let mut v2_settle: Option<crate::execution_scheduler::PhaseSettle> = None;
+        // ADR-0074 D1.6（Phase F2b）: v2 の WU の run。段の進み方は WU の行を書いた後に
+        // `run_settlement::phase_step_after_write` が決める。ここでは WU の行を読み直し、兄弟が走っている間に止まった
+        // unit の trigger と質問（`deferred_work_unit_trigger`。events の追記を伴う）を適用する。
+        let mut phase_step: Option<run_settlement::PhaseStep> = None;
         if let Some(wu) = &current_wu
             && wu.phase.is_some()
         {
-            use crate::execution_scheduler::PhaseSettle;
             let units_now = self.store.work_units_for(task_id)?;
-            let settle = crate::execution_scheduler::settle_phase(&units_now);
-            match &settle {
-                PhaseSettle::Wait | PhaseSettle::Integrate(_) => {
-                    // 質問は in-flight が 0 になってから（承認の行もそのときに作る）。
-                    questions.clear();
-                }
-                PhaseSettle::Advance => {
-                    if matches!(trigger, Trigger::WorkerDone) {
-                        trigger = Trigger::Continue {
-                            why: task_core::ContinueWhy::Advance,
-                        };
-                    }
-                }
-                PhaseSettle::Question(id) | PhaseSettle::Failure(id) if id != &wu.id => {
-                    let (t, _outcome, q) =
-                        self.deferred_work_unit_trigger(task_id, &units_now, id)?;
-                    trigger = t;
-                    questions = q;
-                }
-                PhaseSettle::AllDone => {
-                    trigger = Trigger::WorkerDone;
-                }
-                _ => {}
+            let step = run_settlement::phase_step_after_write(&units_now, &wu.id, &trigger);
+            if step.clear_questions {
+                questions.clear();
             }
-            v2_settle = Some(settle);
+            if let Some(t) = step.trigger.clone() {
+                trigger = t;
+            }
+            if let Some(id) = &step.deferred_unit {
+                let (t, _outcome, q) = self.deferred_work_unit_trigger(task_id, &units_now, id)?;
+                trigger = t;
+                questions = q;
+            }
+            phase_step = Some(step);
         }
         // ADR 2026-10-20-mlsys-main2-fixes D1-4: 次の run（continuation・retry・requeue・次の unit・replan）や
         // reviewer を起こす終わり方でも、task 木の消費（この run を含む）が `max_tokens` に達していたら起こさず、
         // task を failed にする（人には聞かない）。兄弟の unit が走っている間（task を遷移させない）は最後の 1 本で決める。
-        let stays_running = matches!(
-            v2_settle,
-            Some(
-                crate::execution_scheduler::PhaseSettle::Wait
-                    | crate::execution_scheduler::PhaseSettle::Integrate(_)
-            )
-        );
+        let stays_running = phase_step
+            .as_ref()
+            .is_some_and(run_settlement::PhaseStep::stays_running);
         if run_settlement::needs_tree_tokens(&trigger, stays_running)
             && let Some((root, max)) = token_budget::budget_scope(self.store.as_ref(), &task)?
         {
@@ -1163,20 +1015,14 @@ impl Dispatcher {
         }
         // ADR-0074 D1.6（Phase F2b）: 兄弟が走っている／工程の統合を始めるなら、Task は遷移させない
         // （events だけを残す）。
-        if let Some(settle) = &v2_settle
-            && matches!(
-                settle,
-                crate::execution_scheduler::PhaseSettle::Wait
-                    | crate::execution_scheduler::PhaseSettle::Integrate(_)
-            )
-        {
+        if let Some(step) = phase_step.as_ref().filter(|step| step.stays_running()) {
             for ev in &events {
                 self.store.append_event(task_id, ev)?;
             }
-            tracing::info!(%task_id, %run_id, settle = ?settle, outcome = %outcome_str, "work unit finished (task stays running)");
+            tracing::info!(%task_id, %run_id, settle = ?step.phase, outcome = %outcome_str, "work unit finished (task stays running)");
             // ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）D1: draining の旧 instance は統合を始めない。段の WU が
             // 全部済んだ Task は lease の照合（ADR-0074 D1.7）で ready に戻り、新しい active の dispatch が統合を始める。
-            if let crate::execution_scheduler::PhaseSettle::Integrate(id) = settle
+            if let Some(id) = step.integration()
                 && self.coord.accepting_new_work()
             {
                 self.start_integration(&task, id)?;
@@ -1677,4 +1523,41 @@ pub(super) fn build_continuation_context(
             None
         },
     })
+}
+
+/// ADR-0072 D8: checkpoint の `tests_run`（最大 10 件）と `recent_activity`（最大 20 行）の材料。この run の
+/// `WorkerProgress{kind: tool_use}` と、それに続く `tool_result` の組（WU の run と atomic task の run で同じ）。
+fn tool_activity(events: &[(u64, Event)], run_id: &str) -> Vec<crate::checkpoint::ToolActivity> {
+    events
+        .iter()
+        .filter_map(|(_, ev)| match ev {
+            Event::WorkerProgress {
+                run_id: r,
+                kind: Some(task_core::ProgressKind::ToolUse),
+                tool,
+                summary,
+                ..
+            } if r == run_id => Some(crate::checkpoint::ToolActivity::Use {
+                tool: tool.clone(),
+                summary: summary.clone(),
+            }),
+            Event::WorkerProgress {
+                run_id: r,
+                kind: Some(task_core::ProgressKind::ToolResult),
+                error,
+                ..
+            } if r == run_id => Some(crate::checkpoint::ToolActivity::Result { error: *error }),
+            _ => None,
+        })
+        .collect()
+}
+
+/// ADR-0072 D9: worker が書いた checkpoint。優先順位は `result.json.yield` > `checkpoint.json`。
+fn worker_checkpoint_input(
+    yield_checkpoint: Option<&serde_json::Value>,
+    artifacts_dir: Option<&Path>,
+) -> Option<task_core::WorkerCheckpointInput> {
+    yield_checkpoint
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .or_else(|| artifacts_dir.and_then(crate::checkpoint::read_worker_checkpoint))
 }

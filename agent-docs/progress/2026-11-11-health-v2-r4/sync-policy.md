@@ -1,7 +1,7 @@
 ---
 title: "健全性v2 R4 sync-policy: main の policy の変更を取り込み、high_risk の照合で待ちを判定する"
 tasks: [01M6TYVJT4S29ZMP6P0D4831JG]
-status: blocked
+status: done
 updated: 2026-11-13
 ---
 # 健全性v2 R4 sync-policy: main の policy の変更を取り込み、high_risk の照合で待ちを判定する
@@ -84,24 +84,44 @@ policy-paths.diff は移動先ごとに 1 行だったが、operator は移動�
 - `cargo fmt --all -- --check`: exit 0。
 - `sh scripts/dev/progress-index.sh --check`: exit 0。
 
+## WU の check の health の再評価（3 回目の run）
+
+2 回目の run で申告した不合格（下の「経過」）は、Celeris の規則の側で直った。WU の check と段の統合の health の base を、取り込んだ
+review target の分だけ進める規則（ADR 2026-11-13-health-base-merged-target、task 01M79CHBRY）が本番に入ったので、
+人（外部 operator の運用 session）の回答どおり、コードは変えずに同じ HEAD を新しい規則で評価し直した。
+
+- target は repo の既定 branch（`refs/heads/main`。この task は木の子でない）。T は `git merge-base --all HEAD refs/heads/main` の 1 件で、
+  取り込んだ main の commit（main の merge commit「integrate R4 policy-paths: lease・budget の移動先を repo health の policy に足す
+  （policy の branch、operator の hand merge）」の後の commit）。start は WU の基点「integrate wu/own-hooks (phase owners-edge)」。
+- start と T はどちらも相手の祖先でないので、main の `health_review::target_base` と同じ手順（`git merge-tree --write-tree` の tree を、
+  親 start・T、固定の作者・日付・本文で `git commit-tree`）で base の commit を作った。merge-tree は exit 1（11 file の衝突。
+  検査器の file には当たらない）なので、ADR D3 のとおり base = T の 2 回目の検査も走らせた。検査器はどちらも base の版を
+  `git archive` で一時 dir に出して `python3 -I -B repo_health.py --repo … --base … --head HEAD --policy-version 1 --out …` で起こした。
+- 結果（提出の前の HEAD。この節を足した commit の前）:
+  - 1 回目（base = start と T の merge）: exit 0、verdict pass、fail_grade 0、new 0、worsened 0、`policy.changed` は false。
+  - 2 回目（base = T）: exit 0、verdict pass、fail_grade 0、new 1（warning の `migration.remnant`。`crates/task-dispatch/src/host_maintenance.rs`
+    の `legacy` の語。own-maint が移した `scratch_gc::legacy_paths` の呼び出しで、main の側にはこの file が無いので new になる。fail 級でない）、worsened 0。
+- 2 回目の run の fail 級 5 件（`policy.changed`・`progress.index`・`size.responsibility-growth` 2 件・`source-size`）は、どちらの base でも出ない。
+
+## 経過（2 回目の run の申告）
+
+- WU の check の health（`celeris:repo-health/1`）は、旧い規則ではこの unit の目的（main を取り込む）と両立せず、成果をどう直しても通らなかった。
+  2 回目の run（attempt 1 of 3）で原因を確かめ、done を返さず計画の問題（plan_issue）として申告した。
+  - 原因: 旧い規則の WU の health の base は `wu.base_commit`（main を取り込む前の段の基点
+    「integrate wu/own-hooks (phase owners-edge)」）で、取り込んだ main の commit の変更も候補の変更として数えた。
+  - fail-grade の 5 件はどれも main の commit の変更から出た:
+    `policy.changed`（main の policy の commit が変えた profile・capability-map・検査器）、`progress.index`（main の進捗 5 file の hash が
+    段の基点の祖先でない）、`size.responsibility-growth` 2 件と `source-size`（main の disk-aware-dispatch・host-check-slots が
+    `dispatcher.rs` と `dispatch_one` に足した行）。
+
 ## 未解決事項
 
-- WU の check の health（`celeris:repo-health/1`）は、この unit の目的（main を取り込む）と両立せず、成果をどう直しても通らない。
-  2 回目の run（attempt 1 of 3）で原因を確かめ、done を返さず計画の問題（plan_issue）として申告した。
-  - 原因: WU の health の base は `wu.base_commit`（`Dispatcher::work_unit_health`。main を取り込む前の段の基点
-    「integrate wu/own-hooks (phase owners-edge)」）で、取り込んだ main の commit の変更も候補の変更として数える。
-    段の統合の base（`phase_health_base`）も、段の基点が main の祖先でなければ基点のままなので、後の integrate-policy でも同じになる。
-  - fail-grade の 5 件はどれも main の commit の変更から出る（取り込みの後の WU の変更は進捗と `cex_review_authority.rs` だけ）:
-    `policy.changed`（main の policy の commit が変えた profile・capability-map・検査器。受け入れ条件 0「policy file が main と同じ」と
-    逆の向き）、`progress.index`（main の進捗 5 file の hash が段の基点の祖先でない）、`size.responsibility-growth` 2 件と
-    `source-size`（main の disk-aware-dispatch・host-check-slots が `dispatcher.rs` と `dispatch_one` に足した行。段の基点の 2137 行に対して 2143 行）。
-  - 確かめた式: 段の基点を base にすると上の 5 件で exit 1。取り込みの merge commit を base にすると exit 0（fail_grade 0、new 0、worsened 0）。
 - `crates/celeris/tests/script_exhaustive.rs:23` の unused import の warning（`ScriptGenerationControl`）は main と同じ file の既存の warning。
   この unit では変えていない。
+- main はこの取り込みの後も進んでいる（health base の規則の task など）。policy の 2 file（`scripts/dev/repo-health/` と
+  capability-map.json）は今の main とも差分 0。取り込みの後の main の変更は、review 前の main 同期で入る。
 
 ## 提案
 
-- 計画: main の取り込みは、基点を持つ WU ではなく Task の作業ツリーで走る基点の無い unit（repair など）か、review 前の main 同期で行う。
-  取り込みの後の段は、取り込み後の commit を基点にする。
-- Celeris: WU と段の統合の health の base に、途中で取り込んだ review target の commit を入れる（例: 取り込みの merge commit を base にする、
-  または policy の file が target と同じなら `policy.changed` にしない）。今の `phase_health_base` は段の基点が target の祖先のときしか効かない。
+- 2 回目の run の提案（main の取り込みを基点の無い unit で行う計画の直しと、health の base に取り込んだ target を入れる Celeris の直し）のうち、
+  Celeris の直しが ADR 2026-11-13-health-base-merged-target で採られ、本番に入った。この run の再評価は合格したので、計画の直しは要らない。

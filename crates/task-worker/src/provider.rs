@@ -23,8 +23,17 @@ const AUTH_FAILED_PATTERNS: &[&str] = &[
     "could not be refreshed",
 ];
 const AUTH_FAILED_CODES: &[&str] = &["401"];
+/// 入口（Cloudflare など）が返す一時的な遮断・challenge の印（ADR 2026-11-13）。認証の文言と同じ文に
+/// 現れることがあるので、判定順の最初に見る。
+const EDGE_BLOCK_PATTERNS: &[&str] = &[
+    "cloudflare",
+    "cf-ray",
+    "just a moment",
+    "attention required",
+    "enable javascript and cookies",
+];
 
-/// `text` を大文字小文字を無視した部分一致で分類する。判定順は Exhausted → Throttled → AuthFailed
+/// `text` を大文字小文字を無視した部分一致で分類する。判定順は 入口の遮断（Throttled）→ Exhausted → Throttled → AuthFailed
 /// （`usage limit` のような文言が `rate limit` 等と紛れないよう、より具体的な枯渇を先に見る）。
 /// どれにも当たらなければ `None`（例: モデル非対応のような celeris 側では対処しようのないエラー。
 /// ADR-0010 D5）。
@@ -38,6 +47,12 @@ const AUTH_FAILED_CODES: &[&str] = &["401"];
 /// U34-1 / P-87）。
 pub fn classify_provider_failure(text: &str) -> Option<ProviderFailure> {
     let lower = text.to_lowercase();
+    // 入口の遮断は token の状態を何も示さない。認証の文言が同じ文にあっても AuthFailed（無期限の保持）にしない。
+    if EDGE_BLOCK_PATTERNS.iter().any(|p| lower.contains(p)) {
+        return Some(ProviderFailure::Throttled {
+            retry_after_secs: 60,
+        });
+    }
     if EXHAUSTED_PATTERNS.iter().any(|p| lower.contains(p)) {
         return Some(ProviderFailure::Exhausted);
     }

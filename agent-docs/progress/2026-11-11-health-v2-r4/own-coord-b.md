@@ -49,7 +49,7 @@ updated: 2026-11-13
 commit（件名）: 「phase 1: move task and work unit waits, process, channel and tick state to ExecutionCoordination」、
 「phase 1: own-coord-b の途中経過を書き、Dispatcher の method と work_units.rs の行を base 以下に戻す」。
 
-- `cargo nextest run -p task-dispatch -E 'test(structure_guard) | test(execution_coordination) | test(cex_) | test(phase_effect_ab)'`: 47 passed。
+- 最後の commit の HEAD で `cargo nextest run -p task-dispatch -E 'test(structure_guard) | test(execution_coordination) | test(cex_) | test(phase_effect_ab) | test(stale_priority) | test(drain_hand_off) | test(orphan_work_units)'`: 63 passed。
 - それより前の版で、stale_priority・drain_hand_off・orphan_work_units・integration_ready_race・tree_approval・finished_plan・unit_task_deps・
   cron_jobs・write_set_gate・work_units を含む 156 件中 155 passed（落ちた 1 件は structure guard の doc の語。直した後に上の 47 件で pass）。
 - `cargo clippy --workspace -- -D warnings`: exit 0（最初の commit で）。`cargo fmt --all -- --check`: exit 0。

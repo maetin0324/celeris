@@ -39,6 +39,9 @@ use task_core::required_checks::health::{
 };
 use task_worker::protocol::HealthFindingCounts;
 
+/// ADR 2026-11-13-health-base-merged-target: health の base を決める 1 つの関数。gate の実行の口の隣に置く。
+#[path = "target_base.rs"]
+pub(crate) mod target_base;
 use super::policy::{BaseChecker, CheckerSite, Scratch, git_stdout, with_base_checker};
 
 /// `repo_health.py --policy-version` に渡す版。

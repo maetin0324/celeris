@@ -48,7 +48,7 @@
 //! | `cluster_job_wait` | クラスタ job の durable wait の行と task・WU の再開（ADR-0090。poll のスレッドは `cluster_runtime`） | L3 |
 //! | `run_supervisor` | 実行中の run の表（run の集合の正本）・review run の表・infra backoff・lease の照合の状態の owner（`crate::run_supervisor::RunSupervisor`。この dir の外）と、lease の回収の判断（純粋関数 `reclaim_reason`・`reclaim_verdict`）・worker 完了と回収が共有する再試行の判定 `infra_retry_after`（ADR 2026-11-11 dispatcher-state-ownership D1・D3・D4） | owner |
 //! | `leases` | `RunSupervisor` を呼ぶ入口: lease の回収（判断は `run_supervisor`、WU・統合の照合と待ちの削除はここ）・abort・orphan・drain・shutdown の割り込み | L3 |
-//! | `execution_coordination` | task・WU の実行の調整の状態（write set の予約と見送り・actual write-set の採取場所・review 前 sync の待ち行列と再同期の上限で止めた review・root の依存先の統合・WU の worktree の用意の失敗・credential・browser・クラスタの待ち）の owner（`crate::execution_coordination::ExecutionCoordination`。この dir の外。run の集合は持たず、write set の blocker と刈り込みは `RunSupervisor::run_keys` を引数で受ける。ADR 2026-11-11 dispatcher-state-ownership D1・D2・D6） | owner |
+//! | `execution_coordination` | task・WU の実行の調整の状態（write set の予約と見送り・actual write-set の採取場所・review 前 sync の待ち行列と再同期の上限で止めた review・root の依存先の統合・WU の worktree の用意の失敗・credential・browser・クラスタの待ち、task・WU の見送りの理由・人の承認待ち・子待ち・review の持ち越し・WU の check と段の統合の process・完了の channel・tick・新しい仕事を受けるか・並列度・停滞の見張り）の owner（`crate::execution_coordination::ExecutionCoordination`。この dir の外。run の集合は持たず、write set の blocker と刈り込みは `RunSupervisor::run_keys` を、lease の回収・abort の待ちの削除は `RunSupervisor` が手放した鍵を引数で受ける。ADR 2026-11-11 dispatcher-state-ownership D1・D2・D3・D6） | owner |
 //! | `dispatch_run` | run の起動（`dispatch_one`・`spawn_worker`）と担当・lane の決定 | L4 |
 
 use std::collections::HashMap;
@@ -88,14 +88,15 @@ use task_worker::{
 };
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
-use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::accounts::{
     AccountBook, AccountCandidate, AccountCheckRecord, AccountCooldownReason, ExcludedReason,
     ObservationSource, account_cooldown_for_failure, cooldown_for_failure, evaluate,
 };
-use crate::execution_coordination::ExecutionCoordination;
+use crate::execution_coordination::{
+    AwaitingChildren, CheckingEntry, ExecutionCoordination, IntegrationEntry,
+};
 use crate::policy::{ProviderId, ProviderOutcome};
 use crate::routing_runtime::RoutingRuntime;
 use crate::run_supervisor::{
@@ -837,30 +838,6 @@ fn recent_work_outcome(task: &Task, events: &[(u64, Event)]) -> Option<String> {
     }
 }
 
-/// ADR-0074 D1.4（Phase F2b）: 走っている工程の統合。
-struct IntegrationEntry {
-    work_unit_id: String,
-    handle: JoinHandle<()>,
-}
-
-/// ADR-0072 D14/D6・E4 (g) / Phase F5-fix2: WU の `checks` を走らせている run（`spawn_work_unit_checks` が spawn
-/// した検査。run 自身は `running` から既に外れている）。`in_flight` に数え（draining のインスタンスが検査の途中で
-/// exit して完了を失わないため）、lease の照合では「生きている run」とみなす。
-///
-/// ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）D1: draining になったら検査を止めて手を離す
-/// （`hand_off_checks_in_hand`）ので、WU・検査の数・run の終端（`Done`）・quota の持ち主も持つ。
-struct CheckingEntry {
-    task_id: TaskId,
-    handle: JoinHandle<()>,
-    work_unit_id: String,
-    key: String,
-    checks: usize,
-    terminal: Terminal,
-    account: Option<String>,
-    account_adapter: Option<AccountAdapter>,
-    provider: ProviderId,
-}
-
 /// ADR-0074 D1.4: 工程の統合（spawn した git 操作と検査）の結果。
 #[derive(Debug, Clone, Default)]
 struct IntegrationRun {
@@ -931,12 +908,6 @@ const MAX_WU_PREPARE_ATTEMPTS: u32 = 5;
 /// 一時的な失敗の `n` 回目（1 始まり）の後に待つ時間（2 s, 4 s, 8 s, 16 s …、上限 60 s）。
 fn wu_prepare_backoff(n: u32) -> time::Duration {
     time::Duration::seconds(2i64.saturating_pow(n.min(6)).min(60))
-}
-
-/// ADR-0016 M5: 子待ちの親について覚えておくもの。
-struct AwaitingChildren {
-    run_id: String,
-    plan: Option<PlanOutput>,
 }
 
 /// ADR-0072 D15（Phase E2）: `dispatch_ready` が計画のある Task について何をすべきか
@@ -1085,14 +1056,13 @@ type ReviewEntry = crate::run_supervisor::ReviewEntry<ReviewSubject>;
 
 type EvalVersionProbe = Arc<dyn Fn(&str) -> Option<String> + Send + Sync>;
 
+/// 実行の調整の owner（review の持ち越しは `ReviewSubject`、完了の channel は `Completion`）。
+type Coordination = ExecutionCoordination<ReviewSubject, Completion>;
+
 pub struct Dispatcher {
     store: Arc<dyn TaskStore>,
     cos_chat_launch: Option<cos_chat::launch::CosChatLaunch>,
     config: DispatchConfig,
-    /// 実効の全体並列度（ADR 2026-10-14-local-machine-settings D3・D4: store の `local_settings.max_concurrency`
-    /// があれば store、無ければ `config.config_max_concurrency`）。tick の頭と admin の
-    /// `LocalSettingsChanged` で `refresh_max_concurrency` が読み直す。走行中の run は止めない。
-    max_concurrency: usize,
     /// ADR 2026-11-11 dispatcher-state-ownership D1: disk・scratch・build cache・repo target の掃除と、中止された
     /// task の作業場所の片付けの状態の owner（`crate::host_maintenance`。入口は `housekeeping.rs`・`maintenance.rs`）。
     maint: crate::host_maintenance::HostMaintenance,
@@ -1102,21 +1072,12 @@ pub struct Dispatcher {
     /// infra backoff・lease の照合の状態の owner（`crate::run_supervisor`。入口は `leases.rs`・`ownerless_runs.rs`）。
     supervisor: RunSupervisor<ReviewSubject>,
     /// ADR 2026-11-11 dispatcher-state-ownership D1: task・WU の実行の調整の状態（write set の予約・review 前 sync の
-    /// 待ち・依存の統合・WU の用意の失敗・credential・browser・クラスタの待ち）の owner（`crate::execution_coordination`）。
+    /// 待ち・依存の統合・WU の用意の失敗・credential・browser・クラスタの待ち、task・WU の待ち・WU の check と統合の
+    /// process・完了の channel・tick・新しい仕事を受けるか・並列度・停滞の見張り）の owner（`crate::execution_coordination`）。
     /// run の集合は持たず、run を見る判断には `supervisor.run_keys()` を渡す。
-    coord: ExecutionCoordination,
+    coord: Coordination,
     /// 評価 run の harness の版の測り方（試験用差し替え。`None` なら `probe_harness_version`）。
     eval_version_probe: Option<EvalVersionProbe>,
-    /// レビューを開始できなかった（`Reviewer` run の枠が無い）タスクの `done` 内容。次 tick で使う。
-    pending_subjects: HashMap<TaskId, ReviewSubject>,
-    /// ADR-0079 D10（Phase R3b）: 理由なく止まっている（`LivenessClass::Unexplained`）と最初に見た木の節点と、その時の
-    /// 節点の最後の event の seq（seq が変われば数え直す）。プロセス内メモリのみ（再起動で数え直す = 安全側）。
-    stall_watch: HashMap<TaskId, (u64, OffsetDateTime)>,
-    /// ADR 2026-10-23-stage-order-and-plan-stall D5: `StallDetected` を出した後まだ何も起きていない task
-    /// （snapshot の `stalled_tasks`。受信箱の attention の元）。生存確認ごとに作り直す。プロセス内メモリのみ。
-    stalled_tasks: std::collections::BTreeMap<TaskId, task_ops::daemon::SnapshotStalledTask>,
-    /// ADR-0079 D10（Phase R3b）: 最後に生存確認をした時刻（[`LIVENESS_CHECK_INTERVAL_SECS`] ごと）。
-    liveness_checked_at: Option<OffsetDateTime>,
     stagnation: tree_units::StagnationWatch,
     /// ADR 2026-11-08-health-enforcement-loop D6: 実行中の全体棚卸し（cron の job ごとの Busy の印）。
     health_inventory: cron_tick::inventory::InventoryRuns,
@@ -1125,45 +1086,19 @@ pub struct Dispatcher {
     /// ADR 2026-11-11 dispatcher-state-ownership D1: クラスタの接続・tunnel・job の poll の状態の owner。
     /// field は private で、`Dispatcher` は `ClusterRuntime` の method だけを呼ぶ。
     cluster: ClusterRuntime,
-    /// ADR 2026-10-11-task-wait-reasons D4: この tick で `dispatch_one` が見送った ready タスクの理由（メモリにしか
-    /// 無い M1〜M6・M9。`dispatch_ready` の先頭で空にし、同じ task の 2 件目は上書きしない）。snapshot の
-    /// `task_waits` に載る。
-    dispatch_waits: HashMap<TaskId, task_core::TaskWait>,
-    /// 人間の承認待ちで延期中の reviewing タスク（`is_idle` 判定用。ADR-0010 D8）。
-    awaiting_human: std::collections::HashSet<TaskId>,
-    /// ADR-0016 D2 / M5: レビューは全 pass だが、委譲した子が終端になるのを待っている reviewing タスク。
-    /// 値はその run の id と、Plan kind なら検証済みの plan（子が終わってから `complete_plan` する）。
-    awaiting_children: HashMap<TaskId, AwaitingChildren>,
-    /// ADR-0074 D1.4（Phase F2b）: 工程の統合を走らせている Task（spawn した git 操作と検査）。
-    /// 再起動の照合（D1.7）は「running の統合 WU で、ここに無いもの」を pending に戻す。
-    integrating: HashMap<TaskId, IntegrationEntry>,
-    /// Phase F5-fix2: WU の `checks` を走らせている run（キーは run id）。
-    checking: HashMap<String, CheckingEntry>,
     /// Phase F5-fix6: 居なくなったデーモンの run（孤児）を lease 失効を待たずに回収する（`None` = 無効）。
     orphan_takeover: Option<crate::orphan::OrphanTakeover>,
     /// variant 付き run の観測値（`set_variant_observation`）。無ければ variant 付き task は起動しない。
     variant_observation: Option<variant_pin::VariantObservation>,
-    tx: mpsc::UnboundedSender<Completion>,
-    rx: mpsc::UnboundedReceiver<Completion>,
-    /// tick の回数（スナップショット用）。
-    ticks: u64,
     publisher: Option<SnapshotPublisher>,
     /// ADR 2026-11-11 dispatcher-state-ownership D1: 経路選択の状態（宣言・account の上限と帳簿・cooldown・routing mode・
     /// 分類 board・経路なしの task・RoutingContext の登録簿）の owner。field は private で、`Dispatcher` は method だけを呼ぶ。
     routing: RoutingRuntime,
-    /// ADR-0078 D5: 直前の tick の開始時刻と、その前の tick との間隔（`cluster ssh master lost` の
-    /// `last_tick_gap_ms`。tick の停止による切断〈ADR-0078 C3〉を見分ける）。
-    last_tick_started: Option<Instant>,
-    last_tick_gap_ms: u64,
     /// ADR 2026-10-15-mlsys-min-decision-assisted D4: credential 待ちの検証・再開（`credential_resume`）。
     /// 未設定なら何もしない。検証は別 thread（tick は DB を見るだけ）。
     credential_resumer: Option<Arc<crate::credential_resume::CredentialResumer>>,
     /// 壁時計の Unix 秒（テストで差し替えられるようにした関数。既定は実時刻）。
     now_unix_fn: Arc<dyn Fn() -> i64 + Send + Sync>,
-    /// ADR-0040 D4（Phase 47）: 新しい仕事を始めてよいか。`false`（= draining）のときは
-    /// `dispatch_ready` も `recover_reviews` も動かさず、**手元の run とレビューの面倒だけ見続ける**
-    /// （完了の記録、リースの更新、`aggregate` / `child_failed` の後処理は通常どおり動く）。
-    accepting_new_work: bool,
     /// ADR-0041 D5: 面倒を見てよいタスクの述語（`None` なら全部）。`--mode verify` の煙試験でだけ使う。
     eligible: Option<TaskFilter>,
     /// ADR-0052 D1（Phase 64）: 知識整理タスクを dispatch する直前に当てる到達性の検査
@@ -1201,7 +1136,6 @@ fn real_now_unix() -> i64 {
 
 impl Dispatcher {
     pub fn new(store: Arc<dyn TaskStore>, config: DispatchConfig) -> Self {
-        let (tx, rx) = mpsc::unbounded_channel();
         let routing = RoutingRuntime::new(
             store.as_ref(),
             config.accounts.as_ref().map(|accounts| &accounts.roots),
@@ -1233,38 +1167,22 @@ impl Dispatcher {
             store,
             cos_chat_launch: None,
             config,
-            max_concurrency,
             maint: Default::default(),
             #[cfg(test)]
             test_hooks: Default::default(),
             supervisor: RunSupervisor::new(),
-            coord: ExecutionCoordination::new(),
+            coord: ExecutionCoordination::new(max_concurrency),
             eval_version_probe: None,
-            pending_subjects: HashMap::new(),
-            stall_watch: HashMap::new(),
-            stalled_tasks: std::collections::BTreeMap::new(),
-            liveness_checked_at: None,
             stagnation: Default::default(),
             health_inventory: Default::default(),
             credential_gates: credential_gate::CredentialGates::default(),
             cluster: ClusterRuntime::new(),
-            dispatch_waits: HashMap::new(),
-            awaiting_human: std::collections::HashSet::new(),
-            awaiting_children: HashMap::new(),
-            integrating: HashMap::new(),
-            checking: HashMap::new(),
             orphan_takeover: None,
             variant_observation: None,
-            tx,
-            rx,
-            ticks: 0,
             publisher: None,
             routing,
-            last_tick_started: None,
-            last_tick_gap_ms: 0,
             credential_resumer: None,
             now_unix_fn: Arc::new(real_now_unix),
-            accepting_new_work: true,
             eligible: None,
             knowledge_probe: Arc::new(|base_url, bearer_token| {
                 task_worker::probe_models(base_url, task_worker::PROBE_TIMEOUT, bearer_token)
@@ -1344,7 +1262,7 @@ impl Dispatcher {
     /// `dispatch_ready`（ready なタスクの起動）と `recover_reviews`（他のインスタンスが抱えている
     /// かもしれない reviewing の拾い上げ）を止める。**手元の run とレビューはそのまま面倒を見る**。
     pub fn set_accepting_new_work(&mut self, accepting: bool) {
-        self.accepting_new_work = accepting;
+        self.coord.set_accepting_new_work(accepting);
     }
 
     /// Phase F5-fix6: 孤児の回収を有効にする（celeris が `daemon_instances` の自分の行を持つときに
@@ -1389,8 +1307,7 @@ impl Dispatcher {
         self.supervisor.worker_run_count()
             + self.cos_in_flight()
             + self.supervisor.reviews().len()
-            + self.checking.len()
-            + self.integrating.len()
+            + self.coord.processes_in_flight()
             + self.routing.eval_run_count()
             + self.health_inventory.in_flight()
     }
@@ -1456,7 +1373,7 @@ impl Dispatcher {
         let Some(resumer) = self.credential_resumer.clone() else {
             return;
         };
-        if !self.accepting_new_work || !resumer.has_open_waits() {
+        if !self.coord.accepting_new_work() || !resumer.has_open_waits() {
             return;
         }
         let Some(busy) = self.coord.begin_credential_processing() else {
@@ -1502,21 +1419,23 @@ impl Dispatcher {
     pub fn refresh_max_concurrency(&mut self) {
         match self.store.local_settings_get() {
             Ok(settings) => {
-                self.max_concurrency = task_core::local_machine::resolve_max_concurrency(
-                    self.config.config_max_concurrency,
-                    settings.as_ref(),
-                )
-                .value;
+                self.coord.set_max_concurrency(
+                    task_core::local_machine::resolve_max_concurrency(
+                        self.config.config_max_concurrency,
+                        settings.as_ref(),
+                    )
+                    .value,
+                );
             }
             Err(error) => {
-                tracing::warn!(%error, kept = self.max_concurrency, "cannot read local settings; keeping max_concurrency");
+                tracing::warn!(%error, kept = self.coord.max_concurrency(), "cannot read local settings; keeping max_concurrency");
             }
         }
     }
 
     /// 実効の全体並列度（`refresh_max_concurrency` が最後に解いた値）。
     pub fn max_concurrency(&self) -> usize {
-        self.max_concurrency
+        self.coord.max_concurrency()
     }
 
     /// Reload authoritative account settings. On failure keep account dispatch blocked.
@@ -1799,11 +1718,7 @@ impl Dispatcher {
     /// 1 tick。tokio ランタイム内から呼ぶ（ワーカーとレビューを `tokio::spawn` する）。
     pub fn tick(&mut self) -> Result<TickReport, DispatchError> {
         self.begin_tick();
-        let tick_started = Instant::now();
-        if let Some(prev) = self.last_tick_started.replace(tick_started) {
-            self.last_tick_gap_ms =
-                u64::try_from(tick_started.duration_since(prev).as_millis()).unwrap_or(u64::MAX);
-        }
+        self.coord.note_tick_started(Instant::now());
         // ADR-0024 D1: 選択のたびに読み直さないよう、スキャンは tick ごとに高々 1 回（このキャッシュを毎 tick 捨てる）。
         self.routing.clear_scan_cache();
         // ADR 2026-10-14-local-machine-settings D4: `max_concurrency` は次の tick から効く（store を 1 行読む）。
@@ -1814,7 +1729,7 @@ impl Dispatcher {
         self.refresh_disk_ready();
         // Critical also gates reviewers started by drain_completions. Sample before that phase.
         // Draining instances leave monitoring to the new owner.
-        if self.accepting_new_work {
+        if self.coord.accepting_new_work() {
             self.tick_disk_watch();
         }
         let mut report = TickReport::default();
@@ -1870,7 +1785,7 @@ impl Dispatcher {
         steps.mark("prune_and_sweep");
         // ADR-0040 D4: draining のインスタンスは新しい仕事を始めない（拾い上げも dispatch もしない）。
         // 手元の run とレビューの完了・リース更新・後処理は上の `drain_completions` 以下でそのまま動く。
-        if self.accepting_new_work && self.maint.disk_ready() {
+        if self.coord.accepting_new_work() && self.maint.disk_ready() {
             self.recover_reviews()?;
         }
         steps.mark("recover_reviews");
@@ -1893,14 +1808,14 @@ impl Dispatcher {
             tracing::warn!(error = %e, "browser prerequisite re-evaluation failed");
         }
         steps.mark("cron_and_browser_prereq");
-        if self.accepting_new_work && self.maint.disk_ready() {
+        if self.coord.accepting_new_work() && self.maint.disk_ready() {
             report.dispatched = self.dispatch_ready()?;
             self.stagnation.waits_known = true; // ADR 2026-11-09-unscheduled-restart-hold D1: メモリの待ちが揃った。
         }
         steps.mark_with("dispatch_ready", crate::phase_timing::take());
         // ADR 2026-10-11-llm-source-model-routing-evaluation 付記 2026-10-12（eval-dispatch）D3:
         // 評価 run は本番を先に配った後の予約枠（`[routing_eval] reserved_runs`）の中だけで起こす。
-        if self.accepting_new_work && self.maint.disk_ready() {
+        if self.coord.accepting_new_work() && self.maint.disk_ready() {
             report.eval_started = self.tick_eval_trials();
         }
         steps.mark("tick_eval_trials");
@@ -1910,7 +1825,7 @@ impl Dispatcher {
         report.idle = self.is_idle()?;
         steps.mark("in_flight_and_is_idle");
         // Use the same injected clock as the rest of dispatch; the feed never performs I/O outside the store.
-        if self.accepting_new_work
+        if self.coord.accepting_new_work()
             && let Ok(at) = OffsetDateTime::from_unix_timestamp(now)
         {
             self.sync_notice_feed(at);
@@ -1924,7 +1839,7 @@ impl Dispatcher {
     fn drain_completions(&mut self) -> Result<(usize, usize), DispatchError> {
         let mut finished = 0;
         let mut reviewed = 0;
-        while let Ok(c) = self.rx.try_recv() {
+        while let Some(c) = self.coord.try_recv_completion() {
             match c {
                 Completion::Worker {
                     task_id,
@@ -1963,7 +1878,7 @@ impl Dispatcher {
                     checks,
                     check_cwd,
                 } => {
-                    self.checking.remove(&run_id);
+                    self.coord.take_checks(&run_id);
                     if let Err(e) = self.on_work_unit_checks_finished(
                         task_id,
                         run_id.clone(),
@@ -2025,7 +1940,7 @@ impl Dispatcher {
     fn run_load(&self) -> crate::capacity::RunLoad {
         crate::capacity::RunLoad {
             workers_in_flight: self.workers_in_flight(),
-            max_concurrency: self.max_concurrency,
+            max_concurrency: self.coord.max_concurrency(),
             cos_in_flight: self.cos_in_flight(),
             max_cos_runs: self.config.execution.max_cos_runs,
         }
@@ -2065,11 +1980,11 @@ impl Dispatcher {
     fn dispatch_ready(&mut self) -> Result<usize, DispatchError> {
         self.routing.begin_dispatch_pass();
         self.coord.clear_cluster_waiting();
-        self.dispatch_waits.clear();
+        self.coord.clear_dispatch_waits();
         // ADR-0089（Phase R6-5）: 非 CoS の枠が埋まっていても、CoS の対話 run の枠が空いていれば走査する。
         if !self.run_load().any_slot() {
             // 容量切れで照合しなかった tick: write-set の待機の数えを戻さない（2026-10-03-write-set-no-starvation）。
-            self.coord.carry_write_set_waits(self.ticks);
+            self.coord.carry_write_set_waits(self.coord.ticks());
             // ADR 2026-10-11-task-wait-reasons M9: 照合しなかった ready は全体の枠待ち（窓の分だけ）。
             for task in self.eligible_ready_tasks(self.ready_window())? {
                 self.note_dispatch_wait(task.id, global_capacity());
@@ -2081,7 +1996,7 @@ impl Dispatcher {
             .supervisor
             .run_keys()
             .map(|k| (k.task, k.work_unit.clone()));
-        let checks = self.checking.values().map(|c| c.task_id);
+        let checks = self.coord.checking_tasks();
         let others = self.supervisor.reviews().keys().copied().chain(checks);
         self.maint.admission().begin_pass(runs, others);
         // 上位から見て見送りが続いても後続を試せるよう、窓は広めに取る。
@@ -2091,7 +2006,7 @@ impl Dispatcher {
         log_slow_step("ready_tasks", ready_started);
         // ADR-0130 D3: 終わった run の予約を捨て、長く待たされた候補を先に照合する。
         self.coord
-            .prune_write_set_state(self.supervisor.run_keys(), self.ticks);
+            .prune_write_set_state(self.supervisor.run_keys(), self.coord.ticks());
         let candidates = self.coord.order_write_set_starved_first(candidates);
         let now = self.monotonic_now();
         let mut dispatched = 0;
@@ -2129,14 +2044,14 @@ impl Dispatcher {
         let (parallel, parallel_cut) = self.dispatch_parallel_work_units(now)?;
         dispatched += parallel;
         if capacity_cut || parallel_cut {
-            self.coord.carry_write_set_waits(self.ticks);
+            self.coord.carry_write_set_waits(self.coord.ticks());
         }
         Ok(dispatched)
     }
 
     /// ADR 2026-10-11-task-wait-reasons D4: この tick の見送りの理由を 1 件記録する（同じ task の 2 件目は上書きしない）。
     pub(super) fn note_dispatch_wait(&mut self, task_id: TaskId, wait: task_core::TaskWait) {
-        self.dispatch_waits.entry(task_id).or_insert(wait);
+        self.coord.note_dispatch_wait(task_id, wait);
     }
 
     fn is_idle(&self) -> Result<bool, DispatchError> {
@@ -2152,9 +2067,12 @@ impl Dispatcher {
             return Ok(false);
         }
         // ADR-0010 D8: 人間の承認待ちで延期中の reviewing は、人間が操作しない限り進まないので idle とみなす。
-        if self.store.list(Some(Status::Reviewing))?.iter().any(|t| {
-            !self.awaiting_human.contains(&t.id) && !self.awaiting_children.contains_key(&t.id)
-        }) {
+        if self
+            .store
+            .list(Some(Status::Reviewing))?
+            .iter()
+            .any(|t| !self.coord.is_awaiting_human(t.id) && !self.coord.is_awaiting_children(t.id))
+        {
             return Ok(false);
         }
         // ADR-0012 D2（P-33）: 設定に合うプロバイダが無い ready タスクは、設定を直さない限り進まないので待ち対象から外す。
@@ -2171,7 +2089,7 @@ impl Dispatcher {
                 || self.routing.is_unroutable(&t.id)
                 || self.coord.is_cluster_waiting(t.id)
                 || matches!(
-                    self.dispatch_waits.get(&t.id),
+                    self.coord.dispatch_waits().get(&t.id),
                     Some(task_core::TaskWait::DependsOnIntegration { .. })
                 )
         }))

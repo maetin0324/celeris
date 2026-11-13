@@ -268,7 +268,7 @@ impl Dispatcher {
                 && !self.integration_repair_result_trusted(&task, wu)?)
         {
             // ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）D1: draining の旧 instance は run の終わりで手を離す。
-            if !self.accepting_new_work
+            if !self.coord.accepting_new_work()
                 && self.hand_off_work_unit_checks(
                     &task,
                     wu,
@@ -1544,7 +1544,7 @@ impl Dispatcher {
             // ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）D1: draining の旧 instance は統合を始めない。段の WU が
             // 全部済んだ Task は lease の照合（ADR-0074 D1.7）で ready に戻り、新しい active の dispatch が統合を始める。
             if let crate::execution_scheduler::PhaseSettle::Integrate(id) = settle
-                && self.accepting_new_work
+                && self.coord.accepting_new_work()
             {
                 self.start_integration(&task, id)?;
             }
@@ -1618,7 +1618,7 @@ impl Dispatcher {
                     && !self.spawn_review(task_id, run_id, &subject)?
                 {
                     // Reviewer run の枠が無い: 次 tick の recover_reviews で再試行する。
-                    self.pending_subjects.insert(task_id, subject);
+                    self.coord.defer_review(task_id, subject);
                 }
             }
             Err(StoreError::InvalidTransition(e)) => {
@@ -1890,7 +1890,7 @@ impl Dispatcher {
     /// 本番では draining の旧デーモンが WU の検査の途中で exit し、完了した run が `lease expired`
     /// で捨てられてやり直しになった。確定させた（または確定の失敗を記録した）ら `true`。
     pub(super) fn finalise_from_result_json(&mut self, task: &Task, run_id: &str) -> bool {
-        if self.supervisor.holds_run_id(run_id) || self.checking.contains_key(run_id) {
+        if self.supervisor.holds_run_id(run_id) || self.coord.is_checking(run_id) {
             return false;
         }
         let Some(dir) = self.task_dir(task) else {

@@ -34,18 +34,18 @@ impl Dispatcher {
             aborted += 1;
         }
         // Phase F5-fix2: 検査中の WU と工程の統合も止める（DB は変えない。lease 切れの経路で
-        // 新しい active が拾う。検査前の run の result.json があれば、そこから確定させる）。
-        for (run_id, entry) in self.checking.drain() {
+        // 新しい active が拾う。検査前の run の result.json があれば、そこから確定させる）。review の持ち越しも消す。
+        let in_hand = self.coord.abort_in_hand();
+        for (run_id, entry) in in_hand.checking {
             tracing::warn!(task_id = %entry.task_id, %run_id, "drain timeout; aborting the work unit checks");
             entry.handle.abort();
             aborted += 1;
         }
-        for (task_id, entry) in self.integrating.drain() {
+        for (task_id, entry) in in_hand.integrating {
             tracing::warn!(%task_id, work_unit = %entry.work_unit_id, "drain timeout; aborting the phase integration");
             entry.handle.abort();
             aborted += 1;
         }
-        self.pending_subjects.clear();
         aborted
     }
 
@@ -254,11 +254,7 @@ impl Dispatcher {
             }
             // Phase F5-fix2: run は終わったが WU の `checks` がまだ走っている（`checking`）。検査が
             // 延ばした lease（`review_timeout × (2n+1)`）より長引いても、検査の完了を受け取るまで回収しない。
-            let checking_run = self
-                .checking
-                .iter()
-                .find(|(_, e)| e.task_id == task.id)
-                .map(|(run_id, _)| run_id.clone());
+            let checking_run = self.coord.checking_run_of(task.id);
             if let Some(run_id) = checking_run {
                 let ttl = self.config.review_timeout + self.config.lease_grace;
                 match self.store.renew_lease(task.id, &run_id, ttl) {
@@ -275,7 +271,7 @@ impl Dispatcher {
             }
             // 2026-10-20 ADR: 段の統合の検査が走っている間は、lease が切れても回収しない（検査は
             // 1 件ごとに時間切れで必ず終わる。繰り返す時間切れは検査の失敗として扱う）。
-            if self.integrating.contains_key(&task.id) {
+            if self.coord.is_integrating(task.id) {
                 match self
                     .store
                     .extend_task_lease(task.id, self.integration_ttl())
@@ -539,11 +535,11 @@ impl Dispatcher {
         }
         // ADR-0074 D1.4/D1.6（Phase F2b）: Running でなくなった Task の統合も止める。Cancel なら
         // 未完了の WU を cancelled にし、WU の worktree とブランチを消す。
-        let integrating: Vec<TaskId> = self.integrating.keys().copied().collect();
+        let integrating: Vec<TaskId> = self.coord.integrating_tasks();
         for id in integrating {
             let still_running =
                 matches!(self.store.get(id)?, Some(t) if t.status == Status::Running);
-            if !still_running && let Some(entry) = self.integrating.remove(&id) {
+            if !still_running && let Some(entry) = self.coord.take_integration(id) {
                 tracing::warn!(task_id = %id, "aborting the phase integration (task no longer running)");
                 entry.handle.abort();
                 self.supervisor.mark_just_aborted(id);
@@ -551,15 +547,11 @@ impl Dispatcher {
         }
         // Phase F5-fix2: Running でなくなった Task の WU の検査も止める（結果は捨てられるだけなので、
         // draining のインスタンスを待たせない）。
-        let checking: Vec<(String, TaskId)> = self
-            .checking
-            .iter()
-            .map(|(run_id, e)| (run_id.clone(), e.task_id))
-            .collect();
+        let checking: Vec<(String, TaskId)> = self.coord.checking_runs();
         for (run_id, id) in checking {
             let still_running =
                 matches!(self.store.get(id)?, Some(t) if t.status == Status::Running);
-            if !still_running && let Some(entry) = self.checking.remove(&run_id) {
+            if !still_running && let Some(entry) = self.coord.take_checks(&run_id) {
                 tracing::warn!(task_id = %id, %run_id, "aborting the work unit checks (task no longer running)");
                 entry.handle.abort();
                 self.supervisor.mark_just_aborted(id);
@@ -605,7 +597,8 @@ impl Dispatcher {
                     );
                 }
                 stop_review_runs(entry, self.config.kill_grace);
-                self.pending_subjects.remove(&id);
+                // D3 の reclaim_expired_leases の行: `RunSupervisor` が手放した review の鍵で、持ち越しを owner が消す。
+                self.coord.release_reclaimed_review(id);
             }
         }
         Ok(())
@@ -614,23 +607,24 @@ impl Dispatcher {
     pub(super) fn recover_reviews(&mut self) -> Result<(), DispatchError> {
         let reviewing_tasks = self.store.list(Some(Status::Reviewing))?;
         // 承認待ちの記録は、まだ reviewing のタスクだけに保つ（cancel 等で抜けたものをスナップショットに残さない。ADR-0013 D4）。
-        self.awaiting_human
-            .retain(|id| reviewing_tasks.iter().any(|t| t.id == *id));
+        self.coord
+            .retain_awaiting_human(|id| reviewing_tasks.iter().any(|t| t.id == id));
         // ADR-0041 D5: 面倒を見ないタスクのレビューは拾わない（verify は他人のタスクを判定しない）。
         let candidates: Vec<Task> = reviewing_tasks
             .into_iter()
             .filter(|task| {
                 !self.supervisor.is_reviewing(task.id)
-                    && !self.awaiting_children.contains_key(&task.id)
+                    && !self.coord.is_awaiting_children(task.id)
                     && self.is_eligible(task)
             })
             .collect();
         // ADR-0130 D5: 長く stale な task から review 前 sync に渡す。
-        for task in self.order_review_sync_queue(candidates)? {
+        let priority_disabled = self.stale_priority_disabled();
+        for task in self.order_review_sync_queue(candidates, priority_disabled)? {
             let events = self.store.events_for(task.id)?;
             let run_id = last_run_id(&events).unwrap_or_default();
             // 前 tick で見送った場合はメモリ上の done 内容、再起動後は runs/<run_id>/result.json から復元。
-            let subject = match self.pending_subjects.remove(&task.id) {
+            let subject = match self.coord.take_deferred_review(task.id) {
                 Some(s) => s,
                 None => self
                     .task_dir(&task)
@@ -639,7 +633,7 @@ impl Dispatcher {
             };
             let started = self.spawn_review(task.id, run_id, &subject)?;
             if !started {
-                self.pending_subjects.insert(task.id, subject);
+                self.coord.defer_review(task.id, subject);
             }
             self.note_review_sync_offer(task.id, started);
         }
@@ -660,10 +654,8 @@ impl Dispatcher {
     /// （`crate::orphan` の定義の 1.）。
     pub(super) fn holds_task_in_hand(&self, task_id: TaskId) -> bool {
         self.supervisor.has_task_run(task_id)
-            || self.checking.values().any(|e| e.task_id == task_id)
-            || self.integrating.contains_key(&task_id)
             || self.supervisor.is_reviewing(task_id)
-            || self.awaiting_children.contains_key(&task_id)
+            || self.coord.holds_task(task_id)
     }
 
     /// Phase F5-fix6: run を抱えうる他のデーモンが 1 つも生きていないか（`crate::orphan::holder_gone`）。
@@ -675,7 +667,7 @@ impl Dispatcher {
             return v;
         }
         let gone = match &self.orphan_takeover {
-            Some(t) if self.accepting_new_work => match self.store.instance_list() {
+            Some(t) if self.coord.accepting_new_work() => match self.store.instance_list() {
                 Ok(rows) => crate::orphan::holder_gone(
                     &rows,
                     &t.instance_id,

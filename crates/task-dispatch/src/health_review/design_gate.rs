@@ -355,7 +355,7 @@ impl Dispatcher {
         let artifacts_dir = self.artifacts_dir(task, &dir);
         let subject_task = task.clone();
         let (task_id, end_run_id, provider) = (task.id, run_id.clone(), source.to_string());
-        let tx = self.tx.clone();
+        let tx = self.coord.completion_sender();
         let handle = tokio::spawn(async move {
             let result =
                 run_design_reviewer(&subject_task, &dir, &artifacts_dir, request, run).await;

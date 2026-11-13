@@ -79,7 +79,7 @@ async fn cos_chat_authorization_safety_net_for_a_hung_run() {
 #[tokio::test]
 async fn cos_chat_authorization_safety_net_when_no_run_starts() {
     let mut f = fixture(true);
-    f.d.accepting_new_work = false;
+    f.d.coord.set_accepting_new_work(false);
     f.tick();
     f.authorization("容量待ち");
     f.tick();
@@ -103,7 +103,7 @@ async fn cos_chat_authorization_safety_net_is_configurable() {
         .config
         .triage
         .fallback_after_secs = 300;
-    f.d.accepting_new_work = false;
+    f.d.coord.set_accepting_new_work(false);
     f.tick();
     f.authorization("短い上限");
     f.tick();

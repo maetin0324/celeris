@@ -222,7 +222,7 @@ impl Fixture {
 
     /// 新しい tick（mode を読み直す）の digest pass。
     fn next_tick(&mut self) {
-        self.d.ticks += 1;
+        self.d.coord.count_tick();
         self.tick();
     }
 

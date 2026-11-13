@@ -10,7 +10,7 @@ const OWNER_STRUCTS: &[(&str, &str)] = &[
     ("QuotaBook", include_str!("../../routing_runtime/quota.rs")),
     ("RunSupervisor<S>", include_str!("../../run_supervisor.rs")),
     (
-        "ExecutionCoordination",
+        "ExecutionCoordination<S, C>",
         include_str!("../../execution_coordination.rs"),
     ),
 ];

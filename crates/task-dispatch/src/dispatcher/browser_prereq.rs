@@ -100,7 +100,7 @@ impl Dispatcher {
         }
         self.coord.refresh_browser_ledger();
         let ledger_changed = self.coord.take_browser_prereq_rescan();
-        if !ledger_changed && !self.ticks.is_multiple_of(RESCAN_EVERY_TICKS) {
+        if !ledger_changed && !self.coord.ticks().is_multiple_of(RESCAN_EVERY_TICKS) {
             return Ok(0);
         }
         let mut resumed = 0;

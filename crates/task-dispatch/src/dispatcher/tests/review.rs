@@ -1633,9 +1633,7 @@ async fn non_aggregate_parent_stays_reviewing_until_children_finish_then_complet
             .unwrap()
             .iter()
             .any(|c| c.status == Status::Running);
-        if p.status == Status::Reviewing
-            && child_running
-            && d.awaiting_children.contains_key(&parent.id)
+        if p.status == Status::Reviewing && child_running && d.coord.is_awaiting_children(parent.id)
         {
             observed_waiting = true;
             break;

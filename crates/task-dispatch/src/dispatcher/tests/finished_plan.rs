@@ -424,12 +424,13 @@ async fn a_plan_that_cannot_dispatch_reports_plan_stalled_and_reaches_the_inbox(
     *clock.lock().unwrap() = t0 + time::Duration::seconds(599);
     d.tick().unwrap();
     assert!(stalls(&store, task_id).is_empty(), "not before 600 s");
-    assert!(d.stalled_tasks.is_empty());
+    assert!(d.coord.stalled_tasks().is_empty());
     *clock.lock().unwrap() = t0 + time::Duration::seconds(630);
     d.tick().unwrap();
     assert_eq!(stalls(&store, task_id), vec!["plan_stalled".to_string()]);
     let snap = d
-        .stalled_tasks
+        .coord
+        .stalled_tasks()
         .get(&task_id)
         .expect("stalled task in snapshot");
     assert_eq!(snap.reason, "plan_stalled");
@@ -437,7 +438,7 @@ async fn a_plan_that_cannot_dispatch_reports_plan_stalled_and_reaches_the_inbox(
     // 知らせた後も（StallDetected が最後の event の間）snapshot に残る。
     *clock.lock().unwrap() = t0 + time::Duration::seconds(1300);
     d.tick().unwrap();
-    assert!(d.stalled_tasks.contains_key(&task_id));
+    assert!(d.coord.stalled_tasks().contains_key(&task_id));
     assert_eq!(stalls(&store, task_id).len(), 1, "only once");
     assert_eq!(adapter.worker_runs.load(Ordering::SeqCst), 0);
     assert_eq!(adapter.planner_runs.load(Ordering::SeqCst), 0);
@@ -469,5 +470,5 @@ async fn a_plan_that_cannot_dispatch_reports_plan_stalled_and_reaches_the_inbox(
         .unwrap();
     *clock.lock().unwrap() = t0 + time::Duration::seconds(1400);
     d.tick().unwrap();
-    assert!(!d.stalled_tasks.contains_key(&task_id));
+    assert!(!d.coord.stalled_tasks().contains_key(&task_id));
 }

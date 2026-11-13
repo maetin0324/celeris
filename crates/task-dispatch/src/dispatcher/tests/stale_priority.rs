@@ -209,7 +209,7 @@ async fn behind_target_stale_priority_counts_unselected_ticks() {
     let (a, b) = two_reviewing_tasks(repo.path(), &store);
     let mut d = worktree_dispatcher(store.clone(), checks_adapter(), ws.path(), None);
     let ordered = d
-        .order_review_sync_queue(vec![a.clone(), b.clone()])
+        .order_review_sync_queue(vec![a.clone(), b.clone()], false)
         .unwrap();
     assert_eq!(
         ordered.iter().map(|t| t.id).collect::<Vec<_>>(),
@@ -219,7 +219,7 @@ async fn behind_target_stale_priority_counts_unselected_ticks() {
         d.note_review_sync_offer(b.id, false);
     }
     // A human-gate deferral is not an eligible tick.
-    d.awaiting_human.insert(a.id);
+    d.coord.set_awaiting_human(a.id, true);
     d.note_review_sync_offer(a.id, false);
     assert_eq!(d.coord.review_sync_queue()[&a.id].skipped_ticks, 0);
     assert_eq!(
@@ -228,7 +228,7 @@ async fn behind_target_stale_priority_counts_unselected_ticks() {
     );
     // b is now in the FIFO relief slot, ahead of a.
     let ordered = d
-        .order_review_sync_queue(vec![a.clone(), b.clone()])
+        .order_review_sync_queue(vec![a.clone(), b.clone()], false)
         .unwrap();
     assert_eq!(
         ordered.iter().map(|t| t.id).collect::<Vec<_>>(),
@@ -237,6 +237,6 @@ async fn behind_target_stale_priority_counts_unselected_ticks() {
     // Selection leaves the queue; a task that left `reviewing` is dropped.
     d.note_review_sync_offer(b.id, true);
     assert!(!d.coord.review_sync_queue().contains_key(&b.id));
-    d.order_review_sync_queue(vec![]).unwrap();
+    d.order_review_sync_queue(vec![], false).unwrap();
     assert!(d.coord.review_sync_queue().is_empty());
 }

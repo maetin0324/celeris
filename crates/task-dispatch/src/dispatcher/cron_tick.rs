@@ -27,7 +27,7 @@ impl Dispatcher {
         if self.verify_smoke_only() {
             return;
         }
-        if !(self.accepting_new_work && self.maint.disk_ready()) {
+        if !(self.coord.accepting_new_work() && self.maint.disk_ready()) {
             return;
         }
         let ctx = task_ops::cron_jobs::CronFireContext {

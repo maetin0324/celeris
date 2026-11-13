@@ -135,17 +135,17 @@ impl Dispatcher {
 
     /// 付記 S2-4: mode を tick ごとに 1 回だけ読む。
     fn refresh_script_modes(&mut self) {
-        if self.script_compare.read_at_tick == Some(self.ticks) {
+        if self.script_compare.read_at_tick == Some(self.coord.ticks()) {
             return;
         }
         if self
             .script_compare
             .read_at_tick
-            .is_none_or(|t| t != self.ticks)
+            .is_none_or(|t| t != self.coord.ticks())
         {
             self.script_compare.lane_canary.clear();
         }
-        self.script_compare.read_at_tick = Some(self.ticks);
+        self.script_compare.read_at_tick = Some(self.coord.ticks());
         let Some(store) = &self.script_compare.store else {
             self.script_compare.modes.clear();
             return;

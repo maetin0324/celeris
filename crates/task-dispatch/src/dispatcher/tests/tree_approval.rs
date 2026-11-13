@@ -714,7 +714,7 @@ async fn human_replan_whose_first_attempt_is_invalid_gets_its_second_attempt() {
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    d.accepting_new_work = false;
+    d.coord.set_accepting_new_work(false);
     for _ in 0..300 {
         d.tick().unwrap();
         if store.get(root_id).unwrap().unwrap().status == Status::Ready {
@@ -757,7 +757,7 @@ async fn human_replan_whose_first_attempt_is_invalid_gets_its_second_attempt() {
     );
 
     // 2 回目の試行が起き、v2 が採用される（v2 も木の leaf の上限に近いので承認を挟む）。
-    d.accepting_new_work = true;
+    d.coord.set_accepting_new_work(true);
     run_until_idle(&mut d, 800).await;
     let contexts = adapter.planner_contexts();
     assert_eq!(contexts.len(), 3, "the second replan attempt ran");
@@ -805,7 +805,7 @@ async fn tree_disabled_is_unchanged() {
         Event::PlanApprovalRequested { .. } | Event::StallDetected { .. }
     )));
     assert!(reports_of(&store, task_id).is_empty());
-    assert!(d.stall_watch.is_empty());
+    assert!(d.coord.stall_watch_is_empty());
     // ADR-0074「F5-fix8 実装時の明確化」3.: 木が無効でも、計画を持つ `ready` の Task の生存確認は走る（ここでは
     // 何も検出しない。上の `StallDetected` 無し）。以前は `liveness_checked_at.is_none()`（確認そのものをしない）。
 }

@@ -19,7 +19,7 @@ impl Dispatcher {
                 cooldown: self.config.cluster_cooldown,
                 verify_smoke: self.eligible.is_some(),
                 clock,
-                last_tick_gap_ms: self.last_tick_gap_ms,
+                last_tick_gap_ms: self.coord.last_tick_gap_ms(),
             },
         )
     }

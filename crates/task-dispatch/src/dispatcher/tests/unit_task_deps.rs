@@ -332,8 +332,12 @@ async fn ended_task_dependency_keeps_the_unit_and_notifies_once() {
             vec!["task_dependency_ended".to_string()],
             "{status:?}: exactly one notice"
         );
-        assert_eq!(d.stalled_tasks.len(), 1);
-        let snap = d.stalled_tasks.get(&fx.owner.id).expect("stalled task");
+        assert_eq!(d.coord.stalled_tasks().len(), 1);
+        let snap = d
+            .coord
+            .stalled_tasks()
+            .get(&fx.owner.id)
+            .expect("stalled task");
         assert_eq!(snap.reason, "task_dependency_ended");
         assert_eq!(
             unit_status(&fx.store, fx.owner.id, "final"),

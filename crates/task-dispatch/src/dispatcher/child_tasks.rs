@@ -259,21 +259,21 @@ impl Dispatcher {
 
     /// ADR-0016 M5: 子待ちの親を毎 tick 数え直し、全て終端になったら集約 run（M4）か `ReviewPass`（Plan なら `complete_plan`）。
     pub(super) fn settle_awaiting_children(&mut self) -> Result<(), DispatchError> {
-        let ids: Vec<TaskId> = self.awaiting_children.keys().copied().collect();
+        let ids: Vec<TaskId> = self.coord.awaiting_children_tasks();
         for task_id in ids {
             let Some(task) = self.store.get(task_id)? else {
-                self.awaiting_children.remove(&task_id);
+                self.coord.take_awaiting_children(task_id);
                 continue;
             };
             if task.status != Status::Reviewing {
-                self.awaiting_children.remove(&task_id);
+                self.coord.take_awaiting_children(task_id);
                 continue;
             }
             let pending = pending_children(self.store.as_ref(), task_id).map_err(ops_to_store)?;
             if pending > 0 {
                 continue;
             }
-            let Some(waiting) = self.awaiting_children.remove(&task_id) else {
+            let Some(waiting) = self.coord.take_awaiting_children(task_id) else {
                 continue;
             };
             // ADR-0021 D1: 子が失敗していたら、集約・完了より先に「やり直す or 人に聞く」。health D6.4: policy の

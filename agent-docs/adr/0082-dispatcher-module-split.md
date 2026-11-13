@@ -119,3 +119,15 @@ module map に `run_supervisor` の行（層は owner）を足し、`leases` の
 `write_set_gate.rs` には store の hint から予約を作る入口と、`TestHooks` の ablation を読んで `admit_write_set` に引数で渡す入口だけを残した。
 `stale_priority.rs`・`browser_prereq.rs`・`credential_gate.rs`・`write_set_record.rs`・`review_spawn.rs` は owner の method を呼ぶ。
 module map に `execution_coordination` の行（層は owner）を足した。移した module の旧い行は無かった（`write_set_gate` などは map に行を持たない）。
+
+## 付記 2026-11-13: task・WU の待ち・check と統合の process・tick の状態を `ExecutionCoordination` へ出した（R4 own-coord-b）
+
+[ADR 2026-11-11 dispatcher-state-ownership](2026-11-11-dispatcher-state-ownership.md) D1・D2・D3・D6 に従い、D1 の表で unit 列が own-coord-b の
+16 field（`accepting_new_work`・`awaiting_children`・`awaiting_human`・`checking`・`dispatch_waits`・`integrating`・`last_tick_gap_ms`・
+`last_tick_started`・`liveness_checked_at`・`max_concurrency`・`pending_subjects`・`rx`・`stall_watch`・`stalled_tasks`・`ticks`・`tx`）を
+`Dispatcher` から `crates/task-dispatch/src/execution_coordination.rs` の `ExecutionCoordination` へ移した。値の型 `IntegrationEntry`・`CheckingEntry`・
+`AwaitingChildren` も同じ file に移した。review の持ち越し（`ReviewSubject`）と完了の channel の値（`Completion`）は dispatcher の型なので、
+owner は型引数 `ExecutionCoordination<S, C>` で受ける。lease の回収・abort の待ちの削除（`leases.rs`・`ownerless_runs.rs`）は、
+`RunSupervisor` が手放した review の鍵を受ける `release_reclaimed_review` と、drain の `abort_in_hand` を通す。stale 優先の ablation は
+`stale_priority.rs` の `stale_priority_disabled` が `TestHooks` から読み、`enter_review_sync_queue` に引数で渡す。module map の
+`execution_coordination` の行を直した。移した module の旧い行は無かった（`leases`・`tree_units`・`snapshot` などの行は入口として残る）。

@@ -85,7 +85,7 @@ impl Dispatcher {
     ///    で `runs` 行を閉じる）。Task は遷移させない（`reviewing` のまま持ち主の居ないレビューは、同じ tick の
     ///    `recover_reviews` がやり直す）。
     pub(super) fn reconcile_ownerless_runs(&mut self) {
-        if !self.accepting_new_work || self.orphan_takeover.is_none() {
+        if !self.coord.accepting_new_work() || self.orphan_takeover.is_none() {
             return;
         }
         let now = self.now_utc();
@@ -227,7 +227,7 @@ impl Dispatcher {
     /// Reviewer run・WU の検査）。
     fn holds_run_in_hand(&self, run_id: &str) -> bool {
         self.supervisor.holds_run_or_review(run_id)
-            || self.checking.contains_key(run_id)
+            || self.coord.is_checking(run_id)
             || self.holds_eval_run(run_id)
     }
 
@@ -241,13 +241,13 @@ impl Dispatcher {
         for (_, entry) in self.supervisor.take_reviews() {
             entry.handle.abort();
         }
-        for (_, entry) in self.checking.drain() {
+        let in_hand = self.coord.abort_in_hand();
+        for (_, entry) in in_hand.checking {
             entry.handle.abort();
         }
-        for (_, entry) in self.integrating.drain() {
+        for (_, entry) in in_hand.integrating {
             entry.handle.abort();
         }
-        self.pending_subjects.clear();
     }
 }
 

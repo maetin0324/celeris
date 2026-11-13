@@ -432,5 +432,5 @@ async fn write_set_gate_no_starvation() {
         );
         ready_untouched(&store, y.id);
     }
-    assert_eq!(d.ticks, 6, "a ran in tick 6 = (held at tick 1) + 5");
+    assert_eq!(d.coord.ticks(), 6, "a ran in tick 6 = (held at tick 1) + 5");
 }

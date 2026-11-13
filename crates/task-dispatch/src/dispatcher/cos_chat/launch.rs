@@ -333,7 +333,7 @@ impl Dispatcher {
         let ready = launch.config.enabled && launch.skill_gate.ready(store, kb, policy, now);
         // ADR 2026-11-11-cos-fallback-timing D3: why no CoS run may start now (logged per thread).
         let gate = Skip::gate(
-            self.accepting_new_work,
+            self.coord.accepting_new_work(),
             self.maint.disk_ready(),
             launch.config.enabled,
             ready,
@@ -419,7 +419,7 @@ impl CosChatLaunch {
     pub(super) fn has_capacity(&self, dispatcher: &Dispatcher) -> bool {
         let in_flight = self.running.len() + dispatcher.supervisor.cos_run_count();
         if dispatcher.config.execution.max_cos_runs == 0 {
-            dispatcher.workers_in_flight() + in_flight < dispatcher.max_concurrency
+            dispatcher.workers_in_flight() + in_flight < dispatcher.coord.max_concurrency()
         } else {
             in_flight < dispatcher.config.execution.max_cos_runs
         }

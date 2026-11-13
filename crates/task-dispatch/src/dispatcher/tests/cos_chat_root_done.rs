@@ -263,7 +263,7 @@ async fn without_cos_the_deterministic_fallback_is_notified_once() {
 #[tokio::test]
 async fn root_done_summary_waits_for_the_safety_net_when_cos_cannot_start() {
     let mut f = fixture(true);
-    f.d.accepting_new_work = false;
+    f.d.coord.set_accepting_new_work(false);
     f.tick();
     f.done_task(None);
     f.tick();

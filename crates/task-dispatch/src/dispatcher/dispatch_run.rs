@@ -1289,7 +1289,7 @@ impl Dispatcher {
             adapter.id(),
             task_worker::browser::conformance_record_path().as_deref(),
         );
-        let tx = self.tx.clone();
+        let tx = self.coord.completion_sender();
         let lease = LeaseRenewal {
             ttl: self.config.idle_timeout + self.config.lease_grace,
             every: self.config.lease_grace / 2,
@@ -1351,7 +1351,7 @@ impl Dispatcher {
     /// `ready_tasks` の取得件数。経路なしと分かっているタスク（`warned_unroutable`）の分だけ広げ、それらが窓を埋めて
     /// 後ろの実行可能なタスクが dispatch されない・`is_idle` が誤って真になることを防ぐ（ADR-0012 監査）。
     pub(super) fn ready_window(&self) -> usize {
-        self.max_concurrency * 4 + 16 + self.routing.warned_unroutable_count()
+        self.coord.max_concurrency() * 4 + 16 + self.routing.warned_unroutable_count()
     }
 
     /// ADR-0043 D4: レビュー担当の必須の検査コマンド（ADR 2026-10-23-required-checks-bound-to-candidate:

@@ -200,7 +200,7 @@ impl Dispatcher {
                 review_metrics,
             );
             if let Some(entry) = entry {
-                self.pending_subjects.insert(task_id, entry.subject);
+                self.coord.defer_review(task_id, entry.subject);
             }
             return Ok(());
         }
@@ -311,7 +311,7 @@ impl Dispatcher {
                     review_metrics,
                 );
                 if let Some(entry) = entry {
-                    self.pending_subjects.insert(task_id, entry.subject);
+                    self.coord.defer_review(task_id, entry.subject);
                 }
                 tracing::warn!(%task_id, %run_id, reason = %pf.message, infra = is_infra_failure, "reviewer run hit a provider/infra failure; review deferred");
                 return Ok(());
@@ -468,7 +468,7 @@ impl Dispatcher {
                         format!("waiting for {pending} delegated child task(s) before completing"),
                     ),
                 )?;
-                self.awaiting_children.insert(
+                self.coord.await_children(
                     task_id,
                     AwaitingChildren {
                         run_id: run_id.clone(),

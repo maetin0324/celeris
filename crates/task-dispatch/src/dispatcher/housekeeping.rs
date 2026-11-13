@@ -83,7 +83,7 @@ impl Dispatcher {
 
     /// tick の頭（drain より前）: 新しい run を始めてよい空きがあるかを決める（draining なら常に可）。
     pub(super) fn refresh_disk_ready(&mut self) {
-        let accepting = self.accepting_new_work;
+        let accepting = self.coord.accepting_new_work();
         let (maint, inputs) = self.maintenance_parts();
         maint.refresh_disk_ready(&inputs, accepting);
     }

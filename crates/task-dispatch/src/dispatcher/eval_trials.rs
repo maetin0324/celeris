@@ -674,7 +674,7 @@ impl Dispatcher {
             idle_timeout: self.config.idle_timeout,
             kill_grace: self.config.kill_grace,
         };
-        let tx = self.tx.clone();
+        let tx = self.coord.completion_sender();
         let completion_run_id = run_id.clone();
         let handle = tokio::spawn(async move {
             // target（seed の写しと pool の `.lock` の待ち）は tick の外で用意する
@@ -1061,7 +1061,7 @@ impl Dispatcher {
                         &trial,
                         &format!("could not mark scoring: {e}"),
                     );
-                } else if !self.accepting_new_work {
+                } else if !self.coord.accepting_new_work() {
                     tracing::info!(trial_id = %entry.trial_id, %run_id, "draining: the evaluation run finished; leaving the scoring to the active instance");
                 } else {
                     let wall_secs = trial

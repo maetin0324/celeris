@@ -48,9 +48,13 @@ impl Dispatcher {
         };
         let gate_disabled = self.write_set_gate_disabled();
         let running = self.supervisor.run_keys();
-        let admission =
-            self.coord
-                .admit_write_set(run_key, candidate, running, self.ticks, gate_disabled);
+        let admission = self.coord.admit_write_set(
+            run_key,
+            candidate,
+            running,
+            self.coord.ticks(),
+            gate_disabled,
+        );
         if let WriteSetAdmission::Hold { blocker } = &admission {
             let blocking_task_ids = vec![blocker.task];
             self.note_dispatch_wait(task.id, task_core::TaskWait::WriteSet { blocking_task_ids });

@@ -234,7 +234,7 @@ impl Dispatcher {
                 if outcome.next == Status::Reviewing
                     && !self.spawn_review(task_id, run_id, &subject)?
                 {
-                    self.pending_subjects.insert(task_id, subject);
+                    self.coord.defer_review(task_id, subject);
                 }
                 Ok(())
             }
@@ -351,7 +351,7 @@ impl Dispatcher {
         run_id: String,
         subject: &ReviewSubject,
     ) -> Result<bool, DispatchError> {
-        if !self.accepting_new_work || !self.maint.disk_ready() {
+        if !self.coord.accepting_new_work() || !self.maint.disk_ready() {
             return Ok(false);
         }
         let Some(task) = self.store.get(task_id)? else {
@@ -414,11 +414,11 @@ impl Dispatcher {
 
         let human = match self.resolve_human_approvals(&task)? {
             Some(h) => {
-                self.awaiting_human.remove(&task_id);
+                self.coord.set_awaiting_human(task_id, false);
                 h
             }
             None => {
-                self.awaiting_human.insert(task_id);
+                self.coord.set_awaiting_human(task_id, true);
                 tracing::debug!(%task_id, "review deferred (waiting for human approval)");
                 return Ok(false);
             }
@@ -920,7 +920,7 @@ impl Dispatcher {
         let entry_subject = subject.clone();
         let entry_run_id = run_id.clone();
         let subject = subject.clone();
-        let tx = self.tx.clone();
+        let tx = self.coord.completion_sender();
         let remote_review = remote_settings.clone();
         // ADR-0019 D1 6. / ADR-0041 D1: 判定コマンドは worktree の中で実行する（元のリポジトリでは実行しない）。
         let review_work_dir = self.work_dir_for(&task).filter(|w| w.is_dir());
@@ -1368,7 +1368,7 @@ impl Dispatcher {
         subject_run_id: &str,
         token_budget: Result<Option<Arc<token_budget::TokenBudgetWatch>>, StoreError>,
     ) -> Option<ReviewerPick> {
-        if self.workers_in_flight() >= self.max_concurrency {
+        if self.workers_in_flight() >= self.coord.max_concurrency() {
             return None;
         }
         let org = self.store.org_list().ok()?;

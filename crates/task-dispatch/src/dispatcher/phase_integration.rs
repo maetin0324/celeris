@@ -628,7 +628,7 @@ impl Dispatcher {
         // ADR-0074 F5-fix: 統合 WU の検査は Task の worktree で走るので `<repo-key>`。
         let check_env = self.check_cargo_target_env(task, None);
         let timeout = CheckLimits::new(self.config.review_timeout, &self.config.check_slots);
-        let tx = self.tx.clone();
+        let tx = self.coord.completion_sender();
         let task_id = task.id;
         let work_unit_id = integ.id.clone();
         let wu_id_for_entry = integ.id.clone();
@@ -726,7 +726,7 @@ impl Dispatcher {
                 result: Box::new(result),
             });
         });
-        self.integrating.insert(
+        self.coord.start_integration(
             task.id,
             IntegrationEntry {
                 work_unit_id: wu_id_for_entry,
@@ -744,12 +744,8 @@ impl Dispatcher {
         work_unit_id: &str,
         result: Result<IntegrationRun, String>,
     ) -> Result<(), DispatchError> {
-        if self
-            .integrating
-            .get(&task_id)
-            .is_some_and(|e| e.work_unit_id == work_unit_id)
-        {
-            self.integrating.remove(&task_id);
+        if self.coord.integration_work_unit(task_id) == Some(work_unit_id) {
+            self.coord.take_integration(task_id);
         }
         let Some(task) = self.store.get(task_id)? else {
             return Ok(());
@@ -1557,7 +1553,7 @@ impl Dispatcher {
                         .max()
                         .unwrap_or_default();
                     if !self.spawn_review(task_id, run_id, &subject)? {
-                        self.pending_subjects.insert(task_id, subject);
+                        self.coord.defer_review(task_id, subject);
                     }
                 }
                 Ok(())

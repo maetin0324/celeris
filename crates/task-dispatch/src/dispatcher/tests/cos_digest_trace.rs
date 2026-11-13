@@ -624,7 +624,7 @@ impl Recorder {
         trace_finish_runs(&mut s.f).await;
         self.scenarios += 1;
         let scenario = self.scenarios;
-        s.f.d.accepting_new_work = false;
+        s.f.d.coord.set_accepting_new_work(false);
         let dir = s.f.dir.path().display().to_string();
         let mut ids = HashMap::new();
         let mut write_ids = HashMap::new();
@@ -651,7 +651,7 @@ impl Recorder {
                 .digest_due = true;
             let before = mark(&s.f);
             let records_before = s.f.store.script_compare_log(None).expect("log").len();
-            s.f.d.ticks += 1;
+            s.f.d.coord.count_tick();
             s.f.tick();
             let writes = writes_since(&s.f, &before);
             let writes_norm = trace_normalize(
@@ -721,7 +721,7 @@ impl Recorder {
             .expect("launch")
             .triage
             .digest_due = true;
-        s.f.d.ticks += 1;
+        s.f.d.coord.count_tick();
         s.f.tick();
         assert_eq!(
             writes_since(&s.f, &before),
@@ -748,7 +748,7 @@ async fn trace_finish_runs(f: &mut Fixture) {
 /// report の順の item id を返す。
 fn trace_start_run(f: &mut Fixture, waits: &[&str]) -> Vec<String> {
     f.tick();
-    f.d.accepting_new_work = false;
+    f.d.coord.set_accepting_new_work(false);
     for wait in waits {
         match wait.strip_prefix("notice:") {
             Some(key) => {
@@ -760,7 +760,7 @@ fn trace_start_run(f: &mut Fixture, waits: &[&str]) -> Vec<String> {
         }
         f.tick();
     }
-    f.d.accepting_new_work = true;
+    f.d.coord.set_accepting_new_work(true);
     f.tick();
     assert_eq!(f.inbox_runs(), 1);
     trace_items(f)
@@ -1145,7 +1145,7 @@ async fn trace_read_failure(mode: Mode) -> (Vec<TraceOp>, Writes, Writes) {
     trace_start_run(&mut s.f, &["deploy"]);
     trace_stop(&s.f);
     trace_finish_runs(&mut s.f).await;
-    s.f.d.accepting_new_work = false;
+    s.f.d.coord.set_accepting_new_work(false);
     if let Some(script) = &s.script {
         script.take();
     }
@@ -1154,7 +1154,7 @@ async fn trace_read_failure(mode: Mode) -> (Vec<TraceOp>, Writes, Writes) {
         "ALTER TABLE cos_notification_routes RENAME TO test_routes_away;",
     );
     let before = mark(&s.f);
-    s.f.d.ticks += 1;
+    s.f.d.coord.count_tick();
     s.f.tick();
     let failed = writes_since(&s.f, &before);
     let ops = s.script.as_ref().map(|t| t.take()).unwrap_or_default();
@@ -1163,7 +1163,7 @@ async fn trace_read_failure(mode: Mode) -> (Vec<TraceOp>, Writes, Writes) {
         "ALTER TABLE test_routes_away RENAME TO cos_notification_routes;",
     );
     let before = mark(&s.f);
-    s.f.d.ticks += 1;
+    s.f.d.coord.count_tick();
     s.f.tick();
     (ops, failed, writes_since(&s.f, &before))
 }

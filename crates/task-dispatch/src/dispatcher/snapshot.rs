@@ -111,12 +111,12 @@ impl Dispatcher {
             hostname: publisher.hostname.clone(),
             started_at: publisher.started_at.clone(),
             last_tick_at: rfc3339(now),
-            ticks: self.ticks,
+            ticks: self.coord.ticks(),
             tick_ms: publisher.tick_ms,
             in_flight,
             cooldowns,
             task_waits,
-            stalled_tasks: self.stalled_tasks.values().cloned().collect(),
+            stalled_tasks: self.coord.stalled_tasks().values().cloned().collect(),
             stagnation: self.stagnation.findings.clone(),
             stagnation_policy: Some(self.stagnation.policy),
             review_resync_halted: self
@@ -171,11 +171,12 @@ impl Dispatcher {
     /// `dispatch_waits`（M1〜M6・M9）に、reviewing のまま委譲した子を待つ親（M7）と人の承認を待つ親（M8）を足す。
     pub(super) fn snapshot_task_waits(&self) -> Vec<task_ops::daemon::SnapshotTaskWait> {
         let mut waits: std::collections::BTreeMap<TaskId, task_core::TaskWait> = self
-            .dispatch_waits
+            .coord
+            .dispatch_waits()
             .iter()
             .map(|(id, w)| (*id, w.clone()))
             .collect();
-        for parent in self.awaiting_children.keys() {
+        for parent in &self.coord.awaiting_children_tasks() {
             // 未完の子（読めなければ空。snapshot は観測値で、tick を止めない）。
             let mut task_ids: Vec<TaskId> = self
                 .store
@@ -192,9 +193,9 @@ impl Dispatcher {
                 .entry(*parent)
                 .or_insert(task_core::TaskWait::DelegatedChildren { task_ids });
         }
-        for id in &self.awaiting_human {
+        for id in self.coord.awaiting_human() {
             waits
-                .entry(*id)
+                .entry(id)
                 .or_insert(task_core::TaskWait::ReviewAwaitingHuman);
         }
         waits

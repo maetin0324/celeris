@@ -177,7 +177,7 @@ where
 impl Dispatcher {
     /// tick の始め: tick を数え、前の tick の TS の待ちを集計して予算を戻す（S5-8）。失敗した戻しを書き直す（S5-6）。
     pub(in crate::dispatcher) fn begin_tick(&mut self) {
-        self.ticks += 1;
+        self.coord.count_tick();
         self.script_tick_rollover();
     }
 

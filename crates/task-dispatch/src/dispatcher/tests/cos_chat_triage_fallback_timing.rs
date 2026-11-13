@@ -162,7 +162,7 @@ async fn cos_fallback_timing_behind_a_hung_run_uses_the_run_start() {
 #[tokio::test]
 async fn cos_fallback_timing_standby_to_active_picks_on_the_next_tick() {
     let mut f = fixture(true);
-    f.d.accepting_new_work = false;
+    f.d.coord.set_accepting_new_work(false);
     f.tick();
     f.question("切り替え", vec![]);
     f.tick();
@@ -176,7 +176,7 @@ async fn cos_fallback_timing_standby_to_active_picks_on_the_next_tick() {
         0,
         "the old 120-second deadline is gone"
     );
-    f.d.accepting_new_work = true;
+    f.d.coord.set_accepting_new_work(true);
     f.tick();
     assert_eq!(f.state_count("running"), 1);
     assert_eq!(f.inbox_runs(), 1);
@@ -189,13 +189,13 @@ async fn cos_fallback_timing_standby_to_active_picks_on_the_next_tick() {
 #[tokio::test]
 async fn cos_fallback_timing_idle_thread_after_a_foreign_run_is_picked() {
     let mut f = fixture(true);
-    f.d.accepting_new_work = false;
+    f.d.coord.set_accepting_new_work(false);
     f.tick();
     f.question("引き継ぎ", vec![]);
     f.tick();
     let thread = f.inbox_thread().expect("thread");
     let foreign = f.foreign_live_run(&thread);
-    f.d.accepting_new_work = true;
+    f.d.coord.set_accepting_new_work(true);
     f.tick();
     assert_eq!(f.state_count("pending"), 1);
     assert_eq!(f.launch_skip(&thread), Some(TriageSkip::RunInDb));
@@ -228,7 +228,7 @@ async fn cos_fallback_timing_pickable_clock_starts_at_the_end_of_the_last_run() 
     f.advance(1000);
     f.tick();
     // The run ends; the daemon stops taking new work at the same moment.
-    f.d.accepting_new_work = false;
+    f.d.coord.set_accepting_new_work(false);
     assert!(f.join_inbox().await);
     f.tick();
     assert_eq!(f.item_state(&behind), "pending");

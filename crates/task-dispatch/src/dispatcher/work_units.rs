@@ -74,7 +74,7 @@ impl Dispatcher {
         let checks = wu.spec.checks.clone();
         let health = self.work_unit_health(&task, &wu, ws.work_dir());
         let timeout = CheckLimits::new(self.config.review_timeout, &self.config.check_slots);
-        let tx = self.tx.clone();
+        let tx = self.coord.completion_sender();
         let checking_run_id = run_id.clone();
         // ADR-0079 付記 R7-5 D1: 不合格の記録に残す、check を実際に走らせる所。
         let check_cwd = ws.work_dir().to_path_buf();
@@ -124,7 +124,7 @@ impl Dispatcher {
         });
         // Phase F5-fix2: 検査の間も「手元の仕事」として数える（`in_flight`・lease の照合）。
         let (work_unit_id, key, n, terminal, account, account_adapter, provider) = entry_meta;
-        self.checking.insert(
+        self.coord.start_checks(
             checking_run_id,
             CheckingEntry {
                 task_id,
@@ -204,13 +204,18 @@ impl Dispatcher {
     /// 手を離す（毎 tick、完了の記録の後。active のときは何もしない）。検査は新しい active が result.json から
     /// やり直す（検査は冪等）。止めた数を返す。
     pub(super) fn hand_off_checks_in_hand(&mut self) -> Result<usize, DispatchError> {
-        if self.accepting_new_work || self.checking.is_empty() {
+        if self.coord.accepting_new_work() || !self.coord.has_checks() {
             return Ok(0);
         }
-        let run_ids: Vec<String> = self.checking.keys().cloned().collect();
+        let run_ids: Vec<String> = self
+            .coord
+            .checking_runs()
+            .into_iter()
+            .map(|(run_id, _)| run_id)
+            .collect();
         let mut count = 0;
         for run_id in run_ids {
-            let Some(entry) = self.checking.get(&run_id) else {
+            let Some(entry) = self.coord.checking_entry(&run_id) else {
                 continue;
             };
             let Some(task) = self.store.get(entry.task_id)? else {
@@ -225,7 +230,7 @@ impl Dispatcher {
             if !self.record_check_hand_off(&task, &wu_id, &key, n, &run_id, &terminal)? {
                 continue;
             }
-            let Some(entry) = self.checking.remove(&run_id) else {
+            let Some(entry) = self.coord.take_checks(&run_id) else {
                 continue;
             };
             entry.handle.abort();
@@ -309,7 +314,7 @@ impl Dispatcher {
     /// `running`、手元に無い run を `runs/<run_id>/result.json` から確定し直す（検査はそこで走る）。
     /// 検査の途中でこの instance が止まっても、WU と印は残るので次の active がやり直す（冪等）。
     pub(super) fn take_over_handed_off_checks(&mut self) -> Result<(), DispatchError> {
-        if !self.accepting_new_work {
+        if !self.coord.accepting_new_work() {
             return Ok(());
         }
         for task in self.store.list(Some(Status::Running))? {
@@ -328,7 +333,7 @@ impl Dispatcher {
                         )
                 })
                 .filter_map(|u| u.lease_run_id.or(u.last_run_id))
-                .filter(|r| !self.supervisor.holds_run_id(r) && !self.checking.contains_key(r))
+                .filter(|r| !self.supervisor.holds_run_id(r) && !self.coord.is_checking(r))
                 .collect();
             if candidates.is_empty() {
                 continue;
@@ -1310,7 +1315,7 @@ impl Dispatcher {
         let now = OffsetDateTime::now_utc();
         let mut holders_gone: Option<bool> = None;
         let mut tasks = self.store.list(Some(Status::Running))?;
-        if self.accepting_new_work && self.orphan_takeover.is_some() {
+        if self.coord.accepting_new_work() && self.orphan_takeover.is_some() {
             tasks.extend(self.store.list(Some(Status::Ready))?);
         }
         for task in tasks {
@@ -1344,8 +1349,7 @@ impl Dispatcher {
                     continue;
                 };
                 // Phase F5-fix2: 検査中の run（`checking`）も手元の run。
-                let ours =
-                    self.supervisor.holds_run_id(&run_id) || self.checking.contains_key(&run_id);
+                let ours = self.supervisor.holds_run_id(&run_id) || self.coord.is_checking(&run_id);
                 let expired = u
                     .lease_expires_at
                     .as_deref()
@@ -1374,8 +1378,7 @@ impl Dispatcher {
                     self.requeue_orphaned_work_unit_run(&task, &run_id)?;
                 }
             }
-            if self.supervisor.runs_for_task(task.id) > 0 || self.integrating.contains_key(&task.id)
-            {
+            if self.supervisor.runs_for_task(task.id) > 0 || self.coord.is_integrating(task.id) {
                 continue;
             }
             let units = self.store.work_units_for(task.id)?;
@@ -1863,7 +1866,7 @@ impl Dispatcher {
         &mut self,
         now: Instant,
     ) -> Result<(usize, bool), DispatchError> {
-        if self.workers_in_flight() >= self.max_concurrency {
+        if self.workers_in_flight() >= self.coord.max_concurrency() {
             return Ok((0, true));
         }
         let mut dispatched = 0;
@@ -1871,7 +1874,7 @@ impl Dispatcher {
         for task in self.store.running_tasks_with_runnable_work_units(window)? {
             if !self.is_eligible(&task)
                 || self.supervisor.runs_for_task(task.id) == 0
-                || self.integrating.contains_key(&task.id)
+                || self.coord.is_integrating(task.id)
                 || self.supervisor.was_just_aborted(task.id)
             {
                 continue;
@@ -1884,7 +1887,7 @@ impl Dispatcher {
             let mode = self.parallel_mode(&task)?;
             let mut tried: std::collections::HashSet<String> = std::collections::HashSet::new();
             loop {
-                if self.workers_in_flight() >= self.max_concurrency {
+                if self.workers_in_flight() >= self.coord.max_concurrency() {
                     return Ok((dispatched, true));
                 }
                 let units = self.store.work_units_for(task.id)?;

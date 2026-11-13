@@ -96,7 +96,7 @@ async fn a_draining_instance_leaves_the_work_unit_checks_to_the_new_active() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     assert!(drained, "{:?}", events_of(&store, task.id));
-    assert!(old.checking.is_empty());
+    assert!(!old.coord.has_checks());
     assert!(
         !marker.exists(),
         "draining の旧 instance が WU の検査を流した"
@@ -108,14 +108,14 @@ async fn a_draining_instance_leaves_the_work_unit_checks_to_the_new_active() {
     assert!(worker_finished_outcomes(&store, task.id, &run_id).is_empty());
     // 旧 instance はその後の tick でも検査を始めない。
     old.tick().unwrap();
-    assert!(old.checking.is_empty() && !marker.exists());
+    assert!(!old.coord.has_checks() && !marker.exists());
     drop(old);
 
     // 新しい active instance が store の状態（印・result.json）から拾って検査を行う。
     let mut active = parallel_dispatcher(store.clone(), adapter, root.path(), 2, 2, 2);
     active.tick().unwrap();
     assert!(
-        active.checking.contains_key(&run_id),
+        active.coord.is_checking(&run_id),
         "{:?}",
         events_of(&store, task.id)
     );
@@ -209,7 +209,7 @@ async fn a_draining_instance_does_not_start_the_phase_integration() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     assert!(drained);
-    assert!(old.integrating.is_empty());
+    assert!(old.coord.integrating_tasks().is_empty());
     assert_eq!(
         wu_a(&store, task.id).status,
         task_core::WorkUnitStatus::Done
@@ -234,7 +234,7 @@ async fn a_draining_instance_does_not_start_the_phase_integration() {
         "draining の旧 instance が統合を始めた"
     );
     old.tick().unwrap();
-    assert!(old.integrating.is_empty());
+    assert!(old.coord.integrating_tasks().is_empty());
     drop(old);
     let mut active = parallel_dispatcher(store.clone(), adapter, root.path(), 2, 2, 2);
     run_until_task_terminal(&mut active, &store, task.id).await;

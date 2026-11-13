@@ -6,6 +6,12 @@
 //! （ADR-0074 F5-fix7）、credential 待ちに入れた atomic task と再開の処理中の印（ADR 2026-10-15 D4）、
 //! browser の適合台帳の見張り（ADR 2026-10-08 D2）、クラスタ待ちの task（ADR-0018 D2）。
 //!
+//! unit own-coord-b が移したもの（D1 の表で unit 列が own-coord-b の行）: task・WU の待ち（見送りの理由・人の承認待ち・
+//! 子待ち・review の持ち越し）、WU の check と段の統合の process、完了の channel、tick の数と間隔、新しい仕事を
+//! 受けるか、全体の並列度、停滞の見張り（ADR-0079 D10・ADR 2026-10-23 D5）。review の持ち越しの値 `S` と完了の
+//! 値 `C` は dispatcher の型で、この module は型引数で受ける（review の module と `dispatcher` module を使わない）。
+//! lease の回収と abort で待ちを消すときは、`RunSupervisor` が手放した run の鍵（`TaskId`）を method の引数で受ける。
+//!
 //! run の集合は持たない（D1「run の集合と lease の照合」。正本は `crate::run_supervisor::RunSupervisor`）。write set の
 //! blocker の絞り込みと予約の刈り込みは、呼び元が `RunSupervisor::run_keys` で渡す実行中の run の鍵だけを見る。
 //! store・時計・試験の ablation は引数で受ける。この module は `dispatcher` module を使わない（D2 の 3）。
@@ -14,12 +20,18 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
-use task_core::{StoreError, Task, TaskId, TaskStore};
-use task_ops::daemon::SnapshotReviewResyncHalted;
+use task_core::plan::PlanOutput;
+use task_core::{AccountAdapter, StoreError, Task, TaskId, TaskStore, TaskWait};
+use task_ops::daemon::{SnapshotReviewResyncHalted, SnapshotStalledTask};
+use task_worker::Terminal;
 use task_worker::browser_ledger::LedgerWatch;
 use time::OffsetDateTime;
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
+use crate::policy::ProviderId;
 use crate::run_supervisor::RunKey;
 
 /// 連続してこの回数見送られた ready task は、待機開始の古い順に候補の先頭へ移す（ADR-0130 D3）。
@@ -118,9 +130,46 @@ pub(crate) struct WuPrepareFailures {
     pub(crate) retry_at: OffsetDateTime,
 }
 
+/// ADR-0074 D1.4（Phase F2b）: 走っている工程の統合。
+pub(crate) struct IntegrationEntry {
+    pub(crate) work_unit_id: String,
+    pub(crate) handle: JoinHandle<()>,
+}
+
+/// ADR-0072 D14/D6・E4 (g) / Phase F5-fix2: WU の `checks` を走らせている run（`spawn_work_unit_checks` が spawn
+/// した検査。run 自身は run の表から既に外れている）。`in_flight` に数え（draining のインスタンスが検査の途中で
+/// exit して完了を失わないため）、lease の照合では「生きている run」とみなす。
+///
+/// ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）D1: draining になったら検査を止めて手を離す
+/// （`hand_off_checks_in_hand`）ので、WU・検査の数・run の終端（`Done`）・quota の持ち主も持つ。
+pub(crate) struct CheckingEntry {
+    pub(crate) task_id: TaskId,
+    pub(crate) handle: JoinHandle<()>,
+    pub(crate) work_unit_id: String,
+    pub(crate) key: String,
+    pub(crate) checks: usize,
+    pub(crate) terminal: Terminal,
+    pub(crate) account: Option<String>,
+    pub(crate) account_adapter: Option<AccountAdapter>,
+    pub(crate) provider: ProviderId,
+}
+
+/// ADR-0016 M5: 子待ちの親について覚えておくもの。
+pub(crate) struct AwaitingChildren {
+    pub(crate) run_id: String,
+    pub(crate) plan: Option<PlanOutput>,
+}
+
+/// drain・持ち主の喪失で手放す、手元の WU の check と段の統合（[`ExecutionCoordination::abort_in_hand`]）。
+pub(crate) struct InHand {
+    pub(crate) checking: Vec<(String, CheckingEntry)>,
+    pub(crate) integrating: Vec<(TaskId, IntegrationEntry)>,
+}
+
 /// task・WU の実行の調整の状態（ADR 2026-11-11 dispatcher-state-ownership D1）。
-/// field は private で、呼び元は method を通して読み書きする（D2）。
-pub(crate) struct ExecutionCoordination {
+/// field は private で、呼び元は method を通して読み書きする（D2）。`S` は review の持ち越し（`ReviewSubject`）、
+/// `C` は完了の channel の値（`Completion`）で、どちらも dispatcher の型（この module は型引数で受ける）。
+pub(crate) struct ExecutionCoordination<S, C> {
     /// ADR-0130 D3: 走っている run の expected write-set の予約（run を起こした時点の hint）。
     write_reservations: HashMap<RunKey, WriteReservation>,
     /// ADR-0130 D3: write-set の重なりで見送った候補の待機記録（公平性）。
@@ -153,10 +202,41 @@ pub(crate) struct ExecutionCoordination {
     /// ADR-0018 D2（監査 4-1）: この tick でクラスタの多重接続が無い／cooldown 中のため待っている ready タスク。「人のログイン待ち」で
     /// 経路なし（`unroutable`）とは別物。`is_idle` の待ち対象から外すだけで、スナップショットには出さない（受信箱の (d) が知らせる）。
     cluster_waiting: HashSet<TaskId>,
+    /// レビューを開始できなかった（`Reviewer` run の枠が無い）タスクの `done` 内容。次 tick で使う。
+    pending_subjects: HashMap<TaskId, S>,
+    /// ADR-0079 D10（Phase R3b）: 理由なく止まっている（`LivenessClass::Unexplained`）と最初に見た木の節点と、その時の節点の最後の event の seq（seq が変われば数え直す）。プロセス内メモリのみ（再起動で数え直す = 安全側）。
+    stall_watch: HashMap<TaskId, (u64, OffsetDateTime)>,
+    /// ADR 2026-10-23-stage-order-and-plan-stall D5: `StallDetected` を出した後まだ何も起きていない task（snapshot の `stalled_tasks`。受信箱の attention の元）。生存確認ごとに作り直す。プロセス内メモリのみ。
+    stalled_tasks: BTreeMap<TaskId, SnapshotStalledTask>,
+    /// ADR-0079 D10（Phase R3b）: 最後に生存確認をした時刻（`LIVENESS_CHECK_INTERVAL_SECS` ごと）。
+    liveness_checked_at: Option<OffsetDateTime>,
+    /// ADR 2026-10-11-task-wait-reasons D4: この tick で `dispatch_one` が見送った ready タスクの理由（メモリにしか無い M1〜M6・M9。`dispatch_ready` の先頭で空にし、同じ task の 2 件目は上書きしない）。snapshot の `task_waits` に載る。
+    dispatch_waits: HashMap<TaskId, TaskWait>,
+    /// 人間の承認待ちで延期中の reviewing タスク（`is_idle` 判定用。ADR-0010 D8）。
+    awaiting_human: HashSet<TaskId>,
+    /// ADR-0016 D2 / M5: レビューは全 pass だが、委譲した子が終端になるのを待っている reviewing タスク。値はその run の id と、Plan kind なら検証済みの plan（子が終わってから `complete_plan` する）。
+    awaiting_children: HashMap<TaskId, AwaitingChildren>,
+    /// ADR-0074 D1.4（Phase F2b）: 工程の統合を走らせている Task（spawn した git 操作と検査）。再起動の照合（D1.7）は「running の統合 WU で、ここに無いもの」を pending に戻す。
+    integrating: HashMap<TaskId, IntegrationEntry>,
+    /// Phase F5-fix2: WU の `checks` を走らせている run（キーは run id）。
+    checking: HashMap<String, CheckingEntry>,
+    /// worker・review・WU の check・統合・評価・設計 review の完了の channel（spawn した task が送り、`drain_completions` が受ける）。
+    tx: mpsc::UnboundedSender<C>,
+    rx: mpsc::UnboundedReceiver<C>,
+    /// tick の回数（スナップショット用）。
+    ticks: u64,
+    /// ADR-0078 D5: 直前の tick の開始時刻と、その前の tick との間隔（`cluster ssh master lost` の `last_tick_gap_ms`。tick の停止による切断〈ADR-0078 C3〉を見分ける）。
+    last_tick_started: Option<Instant>,
+    last_tick_gap_ms: u64,
+    /// ADR-0040 D4（Phase 47）: 新しい仕事を始めてよいか。`false`（= draining）のときは `dispatch_ready` も `recover_reviews` も動かさず、手元の run とレビューの面倒だけ見続ける。
+    accepting_new_work: bool,
+    /// 実効の全体並列度（ADR 2026-10-14-local-machine-settings D3・D4: store の `local_settings.max_concurrency` があれば store、無ければ `config.config_max_concurrency`）。tick の頭と admin の `LocalSettingsChanged` で解き直す。走行中の run は止めない。
+    max_concurrency: usize,
 }
 
-impl ExecutionCoordination {
-    pub(crate) fn new() -> Self {
+impl<S, C> ExecutionCoordination<S, C> {
+    pub(crate) fn new(max_concurrency: usize) -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
         Self {
             write_reservations: HashMap::new(),
             write_set_waits: HashMap::new(),
@@ -172,6 +252,22 @@ impl ExecutionCoordination {
             browser_ledger: LedgerWatch::from_process(),
             browser_prereq_rescan: true,
             cluster_waiting: HashSet::new(),
+            pending_subjects: HashMap::new(),
+            stall_watch: HashMap::new(),
+            stalled_tasks: BTreeMap::new(),
+            liveness_checked_at: None,
+            dispatch_waits: HashMap::new(),
+            awaiting_human: HashSet::new(),
+            awaiting_children: HashMap::new(),
+            integrating: HashMap::new(),
+            checking: HashMap::new(),
+            tx,
+            rx,
+            ticks: 0,
+            last_tick_started: None,
+            last_tick_gap_ms: 0,
+            accepting_new_work: true,
+            max_concurrency,
         }
     }
 
@@ -363,7 +459,13 @@ impl ExecutionCoordination {
     // ---- review 前 sync の待ち行列（ADR-0130 D5）と再同期の上限（ADR 2026-10-27） ----
 
     /// `candidates` の待ちだけを残し、新しく待ち始めた task に次の待機開始順を振る（`candidates` の順）。
-    pub(crate) fn enter_review_sync_queue(&mut self, candidates: &[Task]) {
+    /// 返す値は stale 優先で並べ替えるか: 候補が 2 件以上で、`priority_disabled`（試験の ablation。
+    /// phase_effect_ab::stale_priority の off。本番の入口は常に `false` を渡す。ADR 2026-11-11 D6）でないとき。
+    pub(crate) fn enter_review_sync_queue(
+        &mut self,
+        candidates: &[Task],
+        priority_disabled: bool,
+    ) -> bool {
         self.review_sync_queue
             .retain(|id, _| candidates.iter().any(|t| t.id == *id));
         for task in candidates {
@@ -379,6 +481,7 @@ impl ExecutionCoordination {
                 );
             }
         }
+        !priority_disabled && candidates.len() >= 2
     }
 
     /// task の待ち（行列に無ければ最後尾の扱い）。
@@ -394,17 +497,12 @@ impl ExecutionCoordination {
 
     /// 1 回の申し出の結果: review を始めたら行列から外す。人の承認待ち（`awaiting_human`）でない見送りは
     /// FIFO の救済に数える。
-    pub(crate) fn note_review_sync_offer(
-        &mut self,
-        task_id: TaskId,
-        started: bool,
-        awaiting_human: bool,
-    ) {
+    pub(crate) fn note_review_sync_offer(&mut self, task_id: TaskId, started: bool) {
         if started {
             self.review_sync_queue.remove(&task_id);
             return;
         }
-        if awaiting_human {
+        if self.awaiting_human.contains(&task_id) {
             return;
         }
         if let Some(wait) = self.review_sync_queue.get_mut(&task_id) {
@@ -553,6 +651,274 @@ impl ExecutionCoordination {
     pub(crate) fn is_cluster_waiting(&self, task_id: TaskId) -> bool {
         self.cluster_waiting.contains(&task_id)
     }
+
+    // ---- 完了の channel・tick・新しい仕事・並列度 ----
+
+    /// spawn する task に渡す完了の送り口。
+    pub(crate) fn completion_sender(&self) -> mpsc::UnboundedSender<C> {
+        self.tx.clone()
+    }
+
+    /// 届いている完了を 1 件取り出す（無ければ `None`）。
+    pub(crate) fn try_recv_completion(&mut self) -> Option<C> {
+        self.rx.try_recv().ok()
+    }
+
+    /// tick を 1 つ数える（tick の始め）。
+    pub(crate) fn count_tick(&mut self) {
+        self.ticks += 1;
+    }
+
+    /// tick の回数。
+    pub(crate) fn ticks(&self) -> u64 {
+        self.ticks
+    }
+
+    /// tick の開始時刻を記録し、前の tick との間隔（ms）を測り直す（ADR-0078 D5）。
+    pub(crate) fn note_tick_started(&mut self, started: Instant) {
+        if let Some(prev) = self.last_tick_started.replace(started) {
+            self.last_tick_gap_ms =
+                u64::try_from(started.duration_since(prev).as_millis()).unwrap_or(u64::MAX);
+        }
+    }
+
+    /// 直前の tick とその前の tick の間隔（ms）。
+    pub(crate) fn last_tick_gap_ms(&self) -> u64 {
+        self.last_tick_gap_ms
+    }
+
+    /// 新しい仕事を始めてよいか（ADR-0040 D4）。
+    pub(crate) fn accepting_new_work(&self) -> bool {
+        self.accepting_new_work
+    }
+
+    pub(crate) fn set_accepting_new_work(&mut self, accepting: bool) {
+        self.accepting_new_work = accepting;
+    }
+
+    /// 実効の全体並列度。
+    pub(crate) fn max_concurrency(&self) -> usize {
+        self.max_concurrency
+    }
+
+    pub(crate) fn set_max_concurrency(&mut self, max_concurrency: usize) {
+        self.max_concurrency = max_concurrency;
+    }
+
+    // ---- この tick の見送りの理由（ADR 2026-10-11-task-wait-reasons D4） ----
+
+    pub(crate) fn clear_dispatch_waits(&mut self) {
+        self.dispatch_waits.clear();
+    }
+
+    /// 見送りの理由を記録する（同じ task の 2 件目は上書きしない）。
+    pub(crate) fn note_dispatch_wait(&mut self, task_id: TaskId, wait: TaskWait) {
+        self.dispatch_waits.entry(task_id).or_insert(wait);
+    }
+
+    pub(crate) fn dispatch_waits(&self) -> &HashMap<TaskId, TaskWait> {
+        &self.dispatch_waits
+    }
+
+    // ---- review の待ち（持ち越し・人の承認待ち・子待ち） ----
+
+    /// review を始められなかった task の `done` 内容を次の tick に持ち越す。
+    pub(crate) fn defer_review(&mut self, task_id: TaskId, subject: S) {
+        self.pending_subjects.insert(task_id, subject);
+    }
+
+    /// 持ち越した `done` 内容を取り出す。
+    pub(crate) fn take_deferred_review(&mut self, task_id: TaskId) -> Option<S> {
+        self.pending_subjects.remove(&task_id)
+    }
+
+    /// lease の回収・abort で `RunSupervisor` が review を手放した task（`take_review` が返した鍵）の持ち越しを消す
+    /// （ADR 2026-11-11 D3 の reclaim_expired_leases の行）。
+    pub(crate) fn release_reclaimed_review(&mut self, task_id: TaskId) {
+        self.pending_subjects.remove(&task_id);
+    }
+
+    pub(crate) fn set_awaiting_human(&mut self, task_id: TaskId, awaiting: bool) {
+        if awaiting {
+            self.awaiting_human.insert(task_id);
+        } else {
+            self.awaiting_human.remove(&task_id);
+        }
+    }
+
+    pub(crate) fn is_awaiting_human(&self, task_id: TaskId) -> bool {
+        self.awaiting_human.contains(&task_id)
+    }
+
+    /// 承認待ちの記録を `keep` が真の task だけに保つ（まだ reviewing の task。ADR-0013 D4）。
+    pub(crate) fn retain_awaiting_human(&mut self, keep: impl Fn(TaskId) -> bool) {
+        self.awaiting_human.retain(|id| keep(*id));
+    }
+
+    pub(crate) fn awaiting_human(&self) -> impl Iterator<Item = TaskId> + '_ {
+        self.awaiting_human.iter().copied()
+    }
+
+    pub(crate) fn await_children(&mut self, task_id: TaskId, waiting: AwaitingChildren) {
+        self.awaiting_children.insert(task_id, waiting);
+    }
+
+    pub(crate) fn is_awaiting_children(&self, task_id: TaskId) -> bool {
+        self.awaiting_children.contains_key(&task_id)
+    }
+
+    pub(crate) fn awaiting_children_tasks(&self) -> Vec<TaskId> {
+        self.awaiting_children.keys().copied().collect()
+    }
+
+    pub(crate) fn take_awaiting_children(&mut self, task_id: TaskId) -> Option<AwaitingChildren> {
+        self.awaiting_children.remove(&task_id)
+    }
+
+    // ---- WU の check と段の統合の process ----
+
+    pub(crate) fn start_integration(&mut self, task_id: TaskId, entry: IntegrationEntry) {
+        self.integrating.insert(task_id, entry);
+    }
+
+    pub(crate) fn is_integrating(&self, task_id: TaskId) -> bool {
+        self.integrating.contains_key(&task_id)
+    }
+
+    pub(crate) fn integration_work_unit(&self, task_id: TaskId) -> Option<&str> {
+        self.integrating
+            .get(&task_id)
+            .map(|e| e.work_unit_id.as_str())
+    }
+
+    pub(crate) fn integrating_tasks(&self) -> Vec<TaskId> {
+        self.integrating.keys().copied().collect()
+    }
+
+    pub(crate) fn take_integration(&mut self, task_id: TaskId) -> Option<IntegrationEntry> {
+        self.integrating.remove(&task_id)
+    }
+
+    pub(crate) fn start_checks(&mut self, run_id: String, entry: CheckingEntry) {
+        self.checking.insert(run_id, entry);
+    }
+
+    pub(crate) fn is_checking(&self, run_id: &str) -> bool {
+        self.checking.contains_key(run_id)
+    }
+
+    pub(crate) fn has_checks(&self) -> bool {
+        !self.checking.is_empty()
+    }
+
+    pub(crate) fn checking_entry(&self, run_id: &str) -> Option<&CheckingEntry> {
+        self.checking.get(run_id)
+    }
+
+    pub(crate) fn take_checks(&mut self, run_id: &str) -> Option<CheckingEntry> {
+        self.checking.remove(run_id)
+    }
+
+    /// check を走らせている run の id と task（順は不定）。
+    pub(crate) fn checking_runs(&self) -> Vec<(String, TaskId)> {
+        self.checking
+            .iter()
+            .map(|(run_id, e)| (run_id.clone(), e.task_id))
+            .collect()
+    }
+
+    /// その task の check を走らせている run の id（あれば 1 つ）。
+    pub(crate) fn checking_run_of(&self, task_id: TaskId) -> Option<String> {
+        self.checking
+            .iter()
+            .find(|(_, e)| e.task_id == task_id)
+            .map(|(run_id, _)| run_id.clone())
+    }
+
+    /// check を走らせている task（重複あり）。
+    pub(crate) fn checking_tasks(&self) -> impl Iterator<Item = TaskId> + '_ {
+        self.checking.values().map(|c| c.task_id)
+    }
+
+    /// 走っている check と統合の数（`in_flight` に数える）。
+    pub(crate) fn processes_in_flight(&self) -> usize {
+        self.checking.len() + self.integrating.len()
+    }
+
+    /// その task の check・統合・子待ちを手元に持っているか（`crate::orphan` の定義の 1. のうちこの owner の分）。
+    pub(crate) fn holds_task(&self, task_id: TaskId) -> bool {
+        self.checking.values().any(|e| e.task_id == task_id)
+            || self.integrating.contains_key(&task_id)
+            || self.awaiting_children.contains_key(&task_id)
+    }
+
+    /// drain・持ち主の喪失で、手元の check と統合を全部手放し、review の持ち越しを消す（止めるのは呼び元）。
+    pub(crate) fn abort_in_hand(&mut self) -> InHand {
+        self.pending_subjects.clear();
+        InHand {
+            checking: self.checking.drain().collect(),
+            integrating: self.integrating.drain().collect(),
+        }
+    }
+
+    // ---- 停滞の見張り（ADR-0079 D10・ADR 2026-10-23 D5） ----
+
+    /// 生存確認の時刻か（前回から `interval_secs` 以上たったか）。時刻なら `now` を記録して `true`。
+    pub(crate) fn liveness_due(&mut self, now: OffsetDateTime, interval_secs: i64) -> bool {
+        if let Some(last) = self.liveness_checked_at
+            && (now - last).whole_seconds() < interval_secs
+        {
+            return false;
+        }
+        self.liveness_checked_at = Some(now);
+        true
+    }
+
+    /// 見張る節点が無い: 見張りと停滞の一覧を空にする。
+    pub(crate) fn clear_stall_watch(&mut self) {
+        self.stall_watch.clear();
+        self.stalled_tasks.clear();
+    }
+
+    /// 既に知らせた停滞（前の生存確認の一覧）。
+    pub(crate) fn stalled_task(&self, task_id: TaskId) -> Option<&SnapshotStalledTask> {
+        self.stalled_tasks.get(&task_id)
+    }
+
+    pub(crate) fn stalled_tasks(&self) -> &BTreeMap<TaskId, SnapshotStalledTask> {
+        &self.stalled_tasks
+    }
+
+    /// 理由なく止まっていると最初に見た時刻（最後の event の seq が変われば `now` から数え直す）。
+    pub(crate) fn stall_since(
+        &mut self,
+        task_id: TaskId,
+        last_seq: u64,
+        now: OffsetDateTime,
+    ) -> OffsetDateTime {
+        match self.stall_watch.get(&task_id) {
+            Some((seq, since)) if *seq == last_seq => *since,
+            _ => {
+                self.stall_watch.insert(task_id, (last_seq, now));
+                now
+            }
+        }
+    }
+
+    /// 停滞を知らせた task の見張りを外す（次は何か起きてから数え直す）。
+    pub(crate) fn forget_stall(&mut self, task_id: TaskId) {
+        self.stall_watch.remove(&task_id);
+    }
+
+    /// 1 回の生存確認の終わり: 見張りを `watching` だけに保ち、停滞の一覧を `stalled` に置き換える。
+    pub(crate) fn finish_stall_round(
+        &mut self,
+        watching: &HashSet<TaskId>,
+        stalled: BTreeMap<TaskId, SnapshotStalledTask>,
+    ) {
+        self.stall_watch.retain(|id, _| watching.contains(id));
+        self.stalled_tasks = stalled;
+    }
 }
 
 #[cfg(test)]
@@ -567,7 +933,7 @@ impl WriteReservation {
 }
 
 #[cfg(test)]
-impl ExecutionCoordination {
+impl<S, C> ExecutionCoordination<S, C> {
     pub(crate) fn write_set_waits(&self) -> &HashMap<RunKey, WriteSetWait> {
         &self.write_set_waits
     }
@@ -590,6 +956,10 @@ impl ExecutionCoordination {
             f.retry_at = OffsetDateTime::UNIX_EPOCH;
         }
     }
+
+    pub(crate) fn stall_watch_is_empty(&self) -> bool {
+        self.stall_watch.is_empty()
+    }
 }
 
 #[cfg(test)]
@@ -611,7 +981,7 @@ mod tests {
     fn write_set_blockers_come_from_the_running_keys_passed_in() {
         let (a, b) = (TaskId::new(), TaskId::new());
         let res = WriteReservation::for_test(&["repo:r"], &["src/"], false);
-        let mut c = ExecutionCoordination::new();
+        let mut c = ExecutionCoordination::<(), ()>::new(1);
         c.reserve_write_set(key(a), Some(res.clone()));
         // a の予約はあるが、a は実行中の run に無い: b を止めない。
         assert_eq!(
@@ -644,7 +1014,7 @@ mod tests {
     /// 消えることを owner の method 単独では確かめていない。
     #[test]
     fn wu_prepare_failures_count_up_to_the_limit() {
-        let mut c = ExecutionCoordination::new();
+        let mut c = ExecutionCoordination::<(), ()>::new(1);
         let now = OffsetDateTime::UNIX_EPOCH;
         let backoff = |n: u32| time::Duration::seconds(i64::from(n));
         for n in 1..3 {
@@ -657,8 +1027,88 @@ mod tests {
         assert!(c.wu_prepare_failures("wu").is_none());
     }
 
+    fn idle_handle() -> JoinHandle<()> {
+        tokio::spawn(async {})
+    }
+
+    fn checking_entry(task_id: TaskId) -> CheckingEntry {
+        CheckingEntry {
+            task_id,
+            handle: idle_handle(),
+            work_unit_id: "wu".into(),
+            key: "k".into(),
+            checks: 1,
+            terminal: Terminal::Done {
+                summary: String::new(),
+                evidence: Vec::new(),
+                usage: None,
+            },
+            account: None,
+            account_adapter: None,
+            provider: ProviderId::from("p"),
+        }
+    }
+
+    /// 不変条件（D1「run の集合と lease の照合」・D3 の reclaim_expired_leases の行）: lease の回収・abort で
+    /// `RunSupervisor` が手放した review の鍵を受けると、その task の review の持ち越しだけが消え、他の task の
+    /// 持ち越しと check・統合・子待ちの保持は残る。drain（`abort_in_hand`）は check と統合を全部返し、持ち越しを
+    /// 全部消す。既存の試験で検出できない理由: dispatcher 経由の試験（drain_hand_off・orphan_work_units）は手放した後の
+    /// DB の状態を見るので、鍵を無視して持ち越しを全部消す実装や、check の保持を残したまま drain する実装でも通る。
+    #[tokio::test]
+    async fn reclaimed_review_keys_release_only_their_waits() {
+        let (a, b, c) = (TaskId::new(), TaskId::new(), TaskId::new());
+        let mut coord = ExecutionCoordination::<&str, ()>::new(2);
+        coord.defer_review(a, "a");
+        coord.defer_review(b, "b");
+        coord.start_checks("run-c".into(), checking_entry(c));
+        coord.start_integration(
+            b,
+            IntegrationEntry {
+                work_unit_id: "integrate-1".into(),
+                handle: idle_handle(),
+            },
+        );
+        assert!(coord.holds_task(b) && coord.holds_task(c) && !coord.holds_task(a));
+        coord.release_reclaimed_review(a);
+        assert_eq!(coord.take_deferred_review(a), None);
+        assert_eq!(coord.take_deferred_review(b), Some("b"));
+        coord.defer_review(b, "b");
+        assert_eq!(coord.checking_run_of(c).as_deref(), Some("run-c"));
+        assert_eq!(coord.processes_in_flight(), 2);
+        let in_hand = coord.abort_in_hand();
+        assert_eq!(in_hand.checking.len(), 1);
+        assert_eq!(in_hand.integrating.len(), 1);
+        assert_eq!(coord.take_deferred_review(b), None);
+        assert!(!coord.holds_task(b) && !coord.holds_task(c) && !coord.has_checks());
+    }
+
+    /// 不変条件（ADR-0079 D10・ADR 2026-10-23 D5、停滞の通知の冪等性）: 同じ最後の seq の間は最初に見た時刻を
+    /// 保ち、seq が変われば数え直す。見張りから外した task だけが消え、生存確認は間隔の内では 1 回だけ。
+    /// 既存の試験で検出できない理由: tree_approval・finished_plan の試験は通知の event の数を見るので、見張りの
+    /// 時刻を毎回 `now` に上書きする実装は timeout を長くしても同じ数の event で通る場合がある（時計を進めない試験）。
+    #[test]
+    fn stall_watch_keeps_the_first_sighting_until_the_seq_moves() {
+        let (a, b) = (TaskId::new(), TaskId::new());
+        let t0 = OffsetDateTime::UNIX_EPOCH;
+        let t1 = t0 + time::Duration::seconds(30);
+        let mut coord = ExecutionCoordination::<(), ()>::new(1);
+        assert!(coord.liveness_due(t0, 60));
+        assert!(!coord.liveness_due(t1, 60));
+        assert!(coord.liveness_due(t0 + time::Duration::seconds(60), 60));
+        assert_eq!(coord.stall_since(a, 5, t0), t0);
+        assert_eq!(coord.stall_since(a, 5, t1), t0);
+        assert_eq!(coord.stall_since(a, 6, t1), t1);
+        assert_eq!(coord.stall_since(b, 1, t0), t0);
+        let watching: HashSet<TaskId> = [a].into_iter().collect();
+        coord.finish_stall_round(&watching, BTreeMap::new());
+        assert_eq!(coord.stall_since(a, 6, t0), t1);
+        assert_eq!(coord.stall_since(b, 1, t1), t1);
+        coord.clear_stall_watch();
+        assert!(coord.stall_watch_is_empty() && coord.stalled_tasks().is_empty());
+    }
+
     /// 不変条件: ADR 2026-11-11 D2 の 1〜3・7（field が private、dispatcher の本体を受けない・`dispatcher` module を
-    /// 使わない、field は D1 の表の own-coord-a の 14 件で run の集合を持たない。`#[cfg(test)]` の field は
+    /// 使わない、field は D1 の表の own-coord-a の 14 件と own-coord-b の 16 件で run の集合を持たない。`#[cfg(test)]` の field は
     /// `dispatcher/tests/structure_guard.rs` の `OWNER_STRUCTS` が数える）、`crate::review` を使わない（review は
     /// dispatcher に依存し、使うと deps.cycle の循環が広がる）。既存の試験は振る舞いだけを見るので、field を `pub` に
     /// 戻しても、method が dispatcher の本体を引数に受けても、run の表を field に足しても通る。
@@ -669,7 +1119,7 @@ mod tests {
             .find("#[cfg(test)]\nimpl WriteReservation")
             .expect("the test-only impl is in the source")];
         let start = src
-            .find("pub(crate) struct ExecutionCoordination {")
+            .find("pub(crate) struct ExecutionCoordination<S, C> {")
             .expect("ExecutionCoordination is defined");
         let body = &src[start..];
         let body = &body[..body.find("\n}\n").expect("the struct body ends")];
@@ -691,22 +1141,38 @@ mod tests {
         assert_eq!(
             fields,
             [
+                "accepting_new_work",
+                "awaiting_children",
+                "awaiting_human",
                 "browser_ledger",
                 "browser_prereq_rescan",
+                "checking",
                 "cluster_waiting",
                 "credential_busy",
                 "credential_held",
+                "dispatch_waits",
                 "integrated_deps",
+                "integrating",
+                "last_tick_gap_ms",
+                "last_tick_started",
+                "liveness_checked_at",
+                "max_concurrency",
+                "pending_subjects",
                 "review_resync_halted",
                 "review_sync_queue",
                 "review_sync_seq",
                 "run_write_bases",
+                "rx",
+                "stall_watch",
+                "stalled_tasks",
+                "ticks",
+                "tx",
                 "write_reservations",
                 "write_set_hold_seq",
                 "write_set_waits",
                 "wu_prepare_failures",
             ],
-            "ExecutionCoordination owns the 14 own-coord-a fields of ADR D1"
+            "ExecutionCoordination owns the 14 own-coord-a and 16 own-coord-b fields of ADR D1"
         );
         let owner = ["Dis", "patcher"].concat();
         for bad in [

@@ -529,7 +529,7 @@ async fn cos_chat_triage_digest_orphan_recovery_after_startup_is_scheduled() {
     assert!(!f.digest_due());
     // Intake is allowed while launches are paused. The previous owner left an
     // escalated item and a stopped run whose terminal transition is still due.
-    f.d.accepting_new_work = false;
+    f.d.coord.set_accepting_new_work(false);
     f.question("deploy", vec![]);
     f.tick();
     let claim = f
@@ -557,7 +557,7 @@ async fn cos_chat_triage_digest_orphan_recovery_after_startup_is_scheduled() {
         freshness: std::time::Duration::from_secs(60),
         pid_alive: Arc::new(|_| false),
     });
-    f.d.accepting_new_work = true;
+    f.d.coord.set_accepting_new_work(true);
     f.tick();
     assert_eq!(
         f.store

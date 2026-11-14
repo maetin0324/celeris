@@ -151,6 +151,47 @@ pub fn session_id_is_valid_for_adapter(adapter_id: &str, session_id: &str) -> bo
     }
 }
 
+/// [`stored_session_fresh_reason`] が返す、保存 session を続けずに新しく作る理由
+/// （ADR 2026-11-13-continuation-resume-shared-inputs D1）。呼び出し元が自分の理由の enum に写す。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoredSessionFreshReason {
+    /// 保存された id がこの adapter では使えない（[`session_id_is_valid_for_adapter`]）。
+    InvalidId,
+    /// 前回の run で harness が context の枯渇を報告した。
+    ContextExhausted,
+    /// 測った token が `[sessions] rollover_tokens` に達した。
+    TokenRollover,
+}
+
+/// [`stored_session_fresh_reason`] の入力。照合 key・前回の拒否・cache の有無・cwd は含めない
+/// （照合の順が呼び出し元ごとに違うので、各関数に残す。ADR 2026-11-13-continuation-resume-shared-inputs D2）。
+#[derive(Debug, Clone, Copy)]
+pub struct StoredSessionFacts<'a> {
+    /// 保存 session を続ける adapter（呼び出し元が照合 key で一致を確かめた後の値）。
+    pub adapter: &'a str,
+    pub session_id: &'a str,
+    pub context_exhausted: bool,
+    /// 呼び出し元が自分の測り方で測った token（task・WU は `approx_tokens`、CoS chat は `rollover_measure`）。
+    pub measured_tokens: u64,
+    pub rollover_tokens: u64,
+}
+
+/// 保存 session の id・context・token の照合（ADR 2026-11-13-continuation-resume-shared-inputs D1。純粋関数）。
+/// 順は id → context → token。`None` なら Resume してよい。task・WU（[`decide_continuation`]）と
+/// CoS chat（[`cos_chat::decide_cos_chat_session`]）がこれを呼ぶ。
+pub fn stored_session_fresh_reason(f: &StoredSessionFacts<'_>) -> Option<StoredSessionFreshReason> {
+    if !session_id_is_valid_for_adapter(f.adapter, f.session_id) {
+        return Some(StoredSessionFreshReason::InvalidId);
+    }
+    if f.context_exhausted {
+        return Some(StoredSessionFreshReason::ContextExhausted);
+    }
+    if f.measured_tokens >= f.rollover_tokens {
+        return Some(StoredSessionFreshReason::TokenRollover);
+    }
+    None
+}
+
 /// ADR-0054 Phase 67b 追記: このアダプタでこれから使うセッション id を決める（純粋関数）。
 /// `claude-code` は celeris が前もって固定する（`--session-id`）ので、Claude Code CLI が要求する
 /// UUID 形式で発行する。`codex`/`acp` はアダプタ自身が run の途中で初めて確定させるので、確定するまでは
@@ -387,21 +428,26 @@ pub fn decide_continuation(f: &ContinuationFacts<'_>) -> ContinuationDecision {
     if stored.cwd.as_deref() != f.cwd {
         return fresh(R::SurfaceUnsupported);
     }
-    // #9: 壊れた id（claude-code は UUID 必須。ADR-0054 Phase 67b）。
-    if !session_id_is_valid_for_adapter(f.adapter, &stored.session_id) {
-        return fresh(R::SessionMissing);
-    }
-    // #10
-    if stored.approx_tokens.max(0) as u64 >= f.rollover_tokens
-        || previous_end
+    // #9（壊れた id。claude-code は UUID 必須。ADR-0054 Phase 67b）と #10（context の枯渇・token の上限）は
+    // CoS chat と共有の照合（ADR 2026-11-13-continuation-resume-shared-inputs）。
+    let shared = stored_session_fresh_reason(&StoredSessionFacts {
+        adapter: f.adapter,
+        session_id: &stored.session_id,
+        context_exhausted: previous_end
             == (RunEnd::BudgetExhausted {
                 kind: BudgetKind::Context,
-            })
-    {
-        return fresh(R::ContextRollover);
+            }),
+        measured_tokens: stored.approx_tokens.max(0) as u64,
+        rollover_tokens: f.rollover_tokens,
+    });
+    match shared {
+        Some(StoredSessionFreshReason::InvalidId) => fresh(R::SessionMissing),
+        Some(
+            StoredSessionFreshReason::ContextExhausted | StoredSessionFreshReason::TokenRollover,
+        ) => fresh(R::ContextRollover),
+        // #11
+        None => ContinuationDecision::Resume,
     }
-    // #11
-    ContinuationDecision::Resume
 }
 
 #[cfg(test)]

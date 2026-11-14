@@ -871,7 +871,6 @@ fn project_task(f: &Fixture) -> (TaskId, String) {
     let now = OffsetDateTime::now_utc();
     let project = task_core::Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         id: task_core::ProjectId::new(),
         title: "p".into(),

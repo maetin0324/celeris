@@ -31,7 +31,6 @@ fn fixture() -> Fixture {
     let now = at(0);
     let project = Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         archived_at: None,
         paused_from: None,
@@ -53,6 +52,7 @@ fn fixture() -> Fixture {
 impl Fixture {
     fn repo(&self, name: &str, location: WorkspaceSpec) -> ProjectRepo {
         let repo = ProjectRepo {
+            auto_integrate: false,
             id: RepoId::new(),
             project_id: self.project,
             name: name.into(),

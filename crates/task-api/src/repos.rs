@@ -111,6 +111,7 @@ pub(crate) fn plan_create(
         sync: create.sync,
         run: create.run.unwrap_or(RepoRun::Auto),
         is_primary: create.is_primary,
+        auto_integrate: create.auto_integrate,
         created_at: OffsetDateTime::now_utc(),
     })
 }
@@ -174,7 +175,7 @@ pub(crate) fn create_repo_op(
             return Err(problem);
         }
         store.repo_create(&repo).map_err(store_problem)?;
-        tracing::info!(who = "admin", op = "repo_create", project_id = %project_id, repo = %repo.name, "admin: project repo created");
+        tracing::info!(who = "admin", op = "repo_create", project_id = %project_id, repo = %repo.name, auto_integrate = repo.auto_integrate, "admin: project repo created");
         return Ok(Applied::Direct(repo_value(store, repo.id)?));
     };
     if let Some(problem) = missing {
@@ -198,13 +199,32 @@ async fn patch_repo(
     let repo_id = parse_repo_id(&id)?;
     let p: RepoPatchBody = read_json(body, false).await?;
     let location = check_patch(&state, &p)?;
+    let fields = patch_fields(&p);
     let updated = state
         .blocking(move |store| {
             let next = plan_patch(store, repo_id, p, location)?;
             patch_repo_op(store, next, None)?.direct()
         })
         .await?;
+    tracing::info!(who = "admin", op = "repo_update", repo_id = %repo_id, fields = ?fields, auto_integrate = updated.auto_integrate, "admin: project repo updated");
     Ok(json_response(StatusCode::OK, &updated))
+}
+
+/// 管理ログに残す、`PATCH /repos/{id}` が書いた欄の名前。
+fn patch_fields(p: &RepoPatchBody) -> Vec<&'static str> {
+    [
+        ("name", p.name.is_some()),
+        ("kind", p.kind.is_some()),
+        ("location", p.location.is_some()),
+        ("default_branch", p.default_branch.is_some()),
+        ("sync", p.sync.is_some()),
+        ("run", p.run.is_some()),
+        ("is_primary", p.is_primary.is_some()),
+        ("auto_integrate", p.auto_integrate.is_some()),
+    ]
+    .into_iter()
+    .filter_map(|(name, set)| set.then_some(name))
+    .collect()
 }
 
 /// `PATCH /repos/{id}` body checks that do not read the store; returns the validated location.
@@ -219,6 +239,7 @@ pub(crate) fn check_patch(
         && p.sync.is_none()
         && p.run.is_none()
         && p.is_primary.is_none()
+        && p.auto_integrate.is_none()
     {
         return Err(ApiProblem::validation(vec![ValidationError {
             field: None,
@@ -265,6 +286,8 @@ pub(crate) fn plan_patch(
         },
         run: p.run.unwrap_or(current.run),
         is_primary: p.is_primary.unwrap_or(current.is_primary) || current.is_primary,
+        // 条件（local の git だけ）の正本は store の検証。落とさず、そのまま渡して 422 にする。
+        auto_integrate: p.auto_integrate.unwrap_or(current.auto_integrate),
         ..current
     };
     // `kind = dir` に変えたら `default_branch` は意味を失う（検証に落ちるので先に落とす）。
@@ -297,7 +320,6 @@ pub(crate) fn patch_repo_op(
         if !store.repo_update(&next).map_err(store_problem)? {
             return Err(repo_not_found(repo_id));
         }
-        tracing::info!(who = "admin", op = "repo_update", repo_id = %repo_id, "admin: project repo updated");
         return Ok(Applied::Direct(repo_value(store, repo_id)?));
     };
     audited_write(store, audit, repo_id, "repo.update", |tx| {

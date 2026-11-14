@@ -110,12 +110,58 @@ async fn target_sync_pre_review_sync_root_reviews_the_rebased_sha() {
             .any(|(_, event)| matches!(
                 event,
                 Event::DeliverySkipped {
-                    reason: task_core::DeliverySkipReason::ProjectNotEnabled,
+                    reason: task_core::DeliverySkipReason::RepoNotEnabled,
                     ..
                 }
             )),
         "a root task without a reviewer run still records why delivery did not start"
     );
+}
+
+/// ADR 2026-11-14-repo-auto-integrate D5: 2 件以上の repo のうち一部が無効の task は自動取り込みの対象でなく、
+/// reviewer run を必須にしない（`code` が有効でも `paper` が無効なら、無効な repo を理由にした reviewer の費用を出さない）。
+/// 案件の欄の旧い試験では、repo ごとの「すべて有効」の条件を検出できない。
+#[tokio::test]
+async fn partially_enabled_multi_repo_task_does_not_require_a_reviewer_run() {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let (project, mut rows) =
+        project_with_repos_integrating(&store, &[("code", repo.path(), RepoKind::Git)], true);
+    let mut paper = rows[0].clone();
+    paper.id = RepoId::new();
+    paper.name = "paper".into();
+    paper.is_primary = false;
+    paper.auto_integrate = false;
+    store.repo_create(&paper).unwrap();
+    rows.push(store.repo_get(paper.id).unwrap().unwrap());
+    let mut task = git_task(
+        repo.path(),
+        None,
+        Check::Command {
+            cmd: "true".into(),
+            expect_exit: 0,
+        },
+    );
+    task.project_id = Some(project);
+    task.repos = rows.iter().map(RepoRef::of).collect();
+    task.status = Status::Reviewing;
+    store.insert(&task).unwrap();
+    assert!(!task_ops::delivery::auto_integrates(&*store, &task).unwrap());
+    let mut d = worktree_dispatcher(store.clone(), done_adapter(), ws.path(), None);
+    assert!(
+        d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
+            .unwrap()
+    );
+    let skipped: Vec<_> = events_of(&store, &task)
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::DeliverySkipped { reason, .. } => Some(reason),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(skipped, vec![task_core::DeliverySkipReason::RepoNotEnabled]);
 }
 
 #[tokio::test]

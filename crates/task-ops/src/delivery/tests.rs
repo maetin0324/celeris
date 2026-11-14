@@ -28,7 +28,6 @@ fn existing_reviewer_gets_a_pinned_merge_criterion_without_extra_tasks() {
     }
     let project = Project {
         auto_advance: false,
-        auto_integrate: true,
         slug: None,
         id: ProjectId::new(),
         title: "test".into(),
@@ -65,6 +64,7 @@ fn existing_reviewer_gets_a_pinned_merge_criterion_without_extra_tasks() {
         default_branch: Some("main".into()),
         sync: None,
         run: Default::default(),
+        auto_integrate: true,
         is_primary: true,
         created_at: now,
     };
@@ -217,26 +217,6 @@ fn target_advanced_count_resets_only_on_explicit_restart() {
     events.push(transitioned("rereview"));
     events.push(advanced(repo));
     assert_eq!(target_restale_count(&events, repo), 1);
-}
-
-fn enable_project(store: &SqliteStore, id: ProjectId) {
-    let now = time::OffsetDateTime::now_utc();
-    store
-        .project_create(&Project {
-            id,
-            title: "p".into(),
-            request: "r".into(),
-            status: ProjectStatus::Active,
-            workspace: None,
-            archived_at: None,
-            paused_from: None,
-            auto_advance: false,
-            slug: None,
-            auto_integrate: true,
-            created_at: now,
-            updated_at: now,
-        })
-        .unwrap();
 }
 
 fn fallback_fixture() -> (SqliteStore, Task, DeliveryPolicy) {
@@ -448,8 +428,7 @@ fn department_fallback_unresolved_returns_none() {
 #[test]
 fn department_fallback_tree_child_and_outside_project_create_no_delivery() {
     let (store, mut task, policy) = fallback_fixture();
-    let project_id = ProjectId::new();
-    task.project_id = Some(project_id);
+    let project_id = task.project_id.take();
     task.assignee = Some("software".into());
     let root = tempfile::tempdir().unwrap();
     assert!(
@@ -457,7 +436,7 @@ fn department_fallback_tree_child_and_outside_project_create_no_delivery() {
             .unwrap()
             .is_none()
     );
-    enable_project(&store, project_id);
+    task.project_id = project_id;
     task.tree = Some(TreeInfo {
         root_id: TaskId::new(),
         depth: 2,
@@ -514,7 +493,6 @@ fn skip_fixture() -> SkipFixture {
     }
     let project = Project {
         auto_advance: false,
-        auto_integrate: true,
         slug: None,
         id: ProjectId::new(),
         title: "test".into(),
@@ -550,6 +528,7 @@ fn skip_fixture() -> SkipFixture {
         default_branch: Some("main".into()),
         sync: None,
         run: Default::default(),
+        auto_integrate: true,
         is_primary: true,
         created_at: now,
     };
@@ -709,20 +688,79 @@ fn delivery_skip_once_per_head() {
     assert_eq!(f.skips().len(), 3);
 }
 
+fn set_repo_auto_integrate(f: &SkipFixture, on: bool) {
+    let mut row = f
+        .store
+        .repo_list(f.task.project_id.unwrap())
+        .unwrap()
+        .remove(0);
+    row.auto_integrate = on;
+    assert!(f.store.repo_update(&row).unwrap());
+}
+
+/// ADR 2026-11-14-repo-auto-integrate D5 の表: 判定関数と `prepare` の結果（1 件・有効 → 進める、1 件・無効 →
+/// `repo_not_enabled`、2 件以上・すべて有効 → `multiple_repos`、2 件以上・一部が無効 → `repo_not_enabled`）。
+/// 案件の欄で確かめていた旧い試験では、repo ごとの切り替えと「すべて有効」の条件を検出できない。
+#[test]
+fn auto_integrates_follows_every_repo_of_the_task() {
+    let mut f = skip_fixture();
+    let project = f.task.project_id.unwrap();
+    assert!(auto_integrates(&f.store, &f.task).unwrap(), "1 件・有効");
+    // 2 件以上・すべて有効 → 判定は真で、`prepare` は multiple_repos で止める（受信箱には出る）。
+    let mut second = f.store.repo_list(project).unwrap().remove(0);
+    second.id = RepoId::new();
+    second.name = "second".into();
+    second.is_primary = false;
+    f.store.repo_create(&second).unwrap();
+    let mut both = f.task.clone();
+    both.repos.push(task_core::RepoRef {
+        repo_id: second.id,
+        ..f.task.repos[0].clone()
+    });
+    assert!(
+        auto_integrates(&f.store, &both).unwrap(),
+        "2 件・すべて有効"
+    );
+    std::mem::swap(&mut f.task, &mut both);
+    assert!(f.begin().is_none());
+    assert_eq!(f.skips()[0].0, DeliverySkipReason::MultipleRepos);
+    std::mem::swap(&mut f.task, &mut both);
+    // 2 件・一部が無効 → 偽。
+    second.auto_integrate = false;
+    assert!(f.store.repo_update(&second).unwrap());
+    assert!(
+        !auto_integrates(&f.store, &both).unwrap(),
+        "2 件・一部が無効"
+    );
+    std::mem::swap(&mut f.task, &mut both);
+    assert!(f.begin().is_none());
+    assert_eq!(f.skips()[1].0, DeliverySkipReason::RepoNotEnabled);
+    std::mem::swap(&mut f.task, &mut both);
+    // 1 件・無効 → 偽。
+    set_repo_auto_integrate(&f, false);
+    assert!(!auto_integrates(&f.store, &f.task).unwrap(), "1 件・無効");
+    // 行の無い repo・repos が空・project_id 無しは無効。
+    let mut gone = f.task.clone();
+    gone.repos[0].repo_id = RepoId::new();
+    assert!(!auto_integrates(&f.store, &gone).unwrap());
+    let mut none = f.task.clone();
+    none.repos.clear();
+    assert!(!auto_integrates(&f.store, &none).unwrap());
+    let mut no_project = f.task.clone();
+    no_project.project_id = None;
+    assert!(!auto_integrates(&f.store, &no_project).unwrap());
+}
+
 #[test]
 fn delivery_skip_tree_child_and_out_of_policy_are_recorded() {
     let mut f = skip_fixture();
-    // 対象外の案件（marker も部署も無いので project 除外理由を優先する）。
-    f.store
-        .project_set_auto_integrate(f.task.project_id.unwrap(), false)
-        .unwrap();
+    // 対象外のリポジトリ（marker も部署も無いので repo_not_enabled を優先する）。
+    set_repo_auto_integrate(&f, false);
     fs::remove_file(f.root.join(f.task.id.to_string()).join("worktree.json")).unwrap();
     assert!(f.begin().is_none());
-    assert_eq!(f.skips()[0].0, DeliverySkipReason::ProjectNotEnabled);
-    // 対象案件の木の子。
-    f.store
-        .project_set_auto_integrate(f.task.project_id.unwrap(), true)
-        .unwrap();
+    assert_eq!(f.skips()[0].0, DeliverySkipReason::RepoNotEnabled);
+    // 対象リポジトリの木の子。
+    set_repo_auto_integrate(&f, true);
     let parent = TaskId::new();
     f.task.tree = Some(TreeInfo {
         root_id: parent,

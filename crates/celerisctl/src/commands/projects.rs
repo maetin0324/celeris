@@ -73,6 +73,11 @@ fn run_show(store: &dyn TaskStore, args: ProjectsShowArgs) -> Result<ExitCode, C
         None => outln!("archived_at: (none)"),
     }
 
+    outln!("repos:");
+    for line in repo_lines(&store.repo_list(id)?) {
+        outln!("{line}");
+    }
+
     outln!("milestones:");
     for milestone in store.milestone_list(id)? {
         let mark = match milestone.status {
@@ -90,6 +95,20 @@ fn run_show(store: &dyn TaskStore, args: ProjectsShowArgs) -> Result<ExitCode, C
     Ok(ExitCode::SUCCESS)
 }
 
+/// ADR 2026-11-14-repo-auto-integrate D1: 自動取り込みは repo ごとの欄なので、`show` は repo の行ごとに値を出す。
+/// 変更は `PATCH /api/v1/repos/{id}`（`celerisctl` は DB を読むだけ）。
+fn repo_lines(repos: &[task_core::ProjectRepo]) -> Vec<String> {
+    repos
+        .iter()
+        .map(|r| {
+            format!(
+                "  - {} {} auto_integrate={}",
+                r.id, r.name, r.auto_integrate
+            )
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,7 +119,6 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         Project {
             auto_advance: false,
-            auto_integrate: false,
             slug: None,
             id: ProjectId::new(),
             title: "Pluvio".into(),
@@ -167,6 +185,28 @@ mod tests {
             }),
         );
         assert!(bad_id.is_err());
+    }
+
+    /// `show` の repo の行は repo ごとの `auto_integrate` を出す（案件の欄ではない）。
+    #[test]
+    fn repo_lines_show_each_repos_auto_integrate() {
+        let now = OffsetDateTime::now_utc();
+        let mk = |name: &str, on: bool| task_core::ProjectRepo {
+            id: task_core::RepoId::new(),
+            project_id: ProjectId::new(),
+            name: name.into(),
+            kind: task_core::RepoKind::Git,
+            location: task_core::WorkspaceSpec::local("."),
+            default_branch: Some("main".into()),
+            sync: None,
+            run: Default::default(),
+            auto_integrate: on,
+            is_primary: false,
+            created_at: now,
+        };
+        let lines = repo_lines(&[mk("paper", true), mk("code", false)]);
+        assert!(lines[0].ends_with("paper auto_integrate=true"), "{lines:?}");
+        assert!(lines[1].ends_with("code auto_integrate=false"), "{lines:?}");
     }
 
     /// ADR-0079 D13（Phase R5a）: `projects plan` サブコマンドは無い（案件は計画を持たない）。

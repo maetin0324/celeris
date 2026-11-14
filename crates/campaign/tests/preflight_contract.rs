@@ -11,7 +11,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use api_common::{TestEnv, admin_env, get_admin, patch_admin, post_admin, send};
+use api_common::{TestEnv, admin_env, get_admin, post_admin, send};
 use celeris_campaign::{
     celeris_exec::{CelerisExecutor, HttpResponse, Transport},
     manifest::CampaignManifest,
@@ -20,8 +20,10 @@ use celeris_campaign::{
 };
 use preflight_setup::*;
 use serde_json::{Map, Value, json};
+use task_core::TaskStore;
 
-/// 実 router で案件を作り（既定は auto_integrate=false）、repo を足す。`(project id, detail body, repos body)`。
+/// 実 router で案件を作り（repo の既定は auto_integrate=false）、repo を足す。`auto_integrate` が真なら
+/// store で repo の欄を有効にする（API の切り替えは task-api の試験の範囲）。`(project id, detail body, repos body)`。
 async fn real_project(env: &TestEnv, auto_integrate: bool) -> (String, Value, Value) {
     let app = env.router();
     let created = send(
@@ -38,21 +40,17 @@ async fn real_project(env: &TestEnv, auto_integrate: bool) -> (String, Value, Va
         &app,
         post_admin(
             &format!("/api/v1/projects/{id}/repos"),
-            &json!({"name": "scratch", "location": {"kind": "local", "path": "/x"}}),
+            &json!({"name": "scratch", "kind": "git", "location": {"kind": "local", "path": "/x"}}),
         ),
     )
     .await;
     assert_eq!(repo.status.as_u16(), 201, "{}", repo.text());
     if auto_integrate {
-        let p = send(
-            &app,
-            patch_admin(
-                &format!("/api/v1/projects/{id}"),
-                &json!({"auto_integrate": true}),
-            ),
-        )
-        .await;
-        assert_eq!(p.status.as_u16(), 200, "{}", p.text());
+        let pid = id.parse().expect("project id");
+        let mut rows = env.store.repo_list(pid).expect("repo_list");
+        let row = rows.first_mut().expect("repo row");
+        row.auto_integrate = true;
+        assert!(env.store.repo_update(row).expect("repo_update"));
     }
     let detail = send(&app, get_admin(&format!("/api/v1/projects/{id}"))).await;
     assert_eq!(detail.status.as_u16(), 200, "{}", detail.text());
@@ -66,53 +64,64 @@ fn auto_integrate_rejected(v: &[String]) -> bool {
 }
 
 #[tokio::test]
-async fn real_project_detail_with_auto_integrate_false_passes() {
+async fn real_project_detail_with_repos_auto_integrate_false_passes() {
     let env = admin_env();
     let (_, detail, repos) = real_project(&env, false).await;
-    // 実形式の確認: project が入れ子で、auto_integrate はその中。
+    // 実形式の確認: auto_integrate は repos[] の各行にあり、project（案件）には無い。
     assert_eq!(
-        detail["project"]["auto_integrate"],
+        detail["repos"][0]["auto_integrate"],
         json!(false),
         "{detail}"
     );
-    assert!(detail.get("auto_integrate").is_none(), "{detail}");
+    assert!(
+        detail["project"].get("auto_integrate").is_none(),
+        "{detail}"
+    );
     assert!(repos["items"].is_array(), "{repos}");
     let v = check_project_rules(&detail);
     assert!(v.is_empty(), "{v:?}");
 }
 
 #[tokio::test]
-async fn real_project_detail_with_auto_integrate_true_is_rejected() {
+async fn real_project_detail_with_an_enabled_repo_is_rejected() {
     let env = admin_env();
     let (_, detail, _) = real_project(&env, true).await;
-    assert_eq!(detail["project"]["auto_integrate"], json!(true), "{detail}");
+    assert_eq!(
+        detail["repos"][0]["auto_integrate"],
+        json!(true),
+        "{detail}"
+    );
     let v = check_project_rules(&detail);
     assert!(auto_integrate_rejected(&v), "{v:?}");
 }
 
 #[tokio::test]
-async fn missing_or_malformed_auto_integrate_is_rejected() {
+async fn missing_or_malformed_repo_auto_integrate_is_rejected() {
     let env = admin_env();
     let (_, detail, _) = real_project(&env, false).await;
     let mut cases: Vec<(&str, Value)> = Vec::new();
     let mut d = detail.clone();
-    d["project"]
+    d["repos"][0]
         .as_object_mut()
-        .expect("project")
+        .expect("repo")
         .remove("auto_integrate");
     cases.push(("auto_integrate missing", d));
     for bad in [json!("false"), json!(0), json!(null), json!({"v": false})] {
         let mut d = detail.clone();
-        d["project"]["auto_integrate"] = bad.clone();
+        d["repos"][0]["auto_integrate"] = bad.clone();
         cases.push(("auto_integrate not a bool", d));
     }
+    // 1 件でも有効なら、他が無効でも止める。
     let mut d = detail.clone();
-    d.as_object_mut().expect("detail").remove("project");
-    cases.push(("project missing", d));
+    d["repos"] = json!([{"auto_integrate": false}, {"auto_integrate": true}]);
+    cases.push(("one of two enabled", d));
     let mut d = detail.clone();
-    d["project"] = json!("nope");
-    cases.push(("project not an object", d));
-    // 旧い平坦な形（project の外に auto_integrate=false）は通さない。
+    d.as_object_mut().expect("detail").remove("repos");
+    cases.push(("repos missing", d));
+    let mut d = detail.clone();
+    d["repos"] = json!("nope");
+    cases.push(("repos not an array", d));
+    // 旧い平坦な形（repos の外に auto_integrate=false）は通さない。
     cases.push(("flat legacy shape", json!({"auto_integrate": false})));
     cases.push(("null body", Value::Null));
     for (what, d) in cases {
@@ -215,18 +224,18 @@ async fn preflight_over_real_router_bodies_gates_external_execution() {
     let (ok_id, ok_detail, ok_repos) = real_project(&env, false).await;
     let (on_id, on_detail, on_repos) = real_project(&env, true).await;
     let mut missing = ok_detail.clone();
-    missing["project"]
+    missing["repos"][0]
         .as_object_mut()
-        .expect("project")
+        .expect("repo")
         .remove("auto_integrate");
     let mut malformed = ok_detail.clone();
-    malformed["project"]["auto_integrate"] = json!("false");
+    malformed["repos"][0]["auto_integrate"] = json!("false");
 
     let s = setup();
     let m = CampaignManifest::load(&s.inp.manifest_path).expect("manifest");
     let input = m.load_input(&s.inp.manifest_path, None).expect("input");
 
-    // 通る（auto_integrate=false）。
+    // 通る（repo の auto_integrate=false）。
     let inp = with_project_id(&s, &ok_id);
     let r = check(
         &inp,
@@ -235,7 +244,7 @@ async fn preflight_over_real_router_bodies_gates_external_execution() {
     assert!(r.ok, "{:?}", r.missing);
 
     for (what, id, detail, repos) in [
-        ("auto_integrate=true", &on_id, on_detail, on_repos),
+        ("repo auto_integrate=true", &on_id, on_detail, on_repos),
         ("missing", &ok_id, missing, ok_repos.clone()),
         ("malformed", &ok_id, malformed, ok_repos.clone()),
     ] {

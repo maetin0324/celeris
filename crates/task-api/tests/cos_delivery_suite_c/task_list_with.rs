@@ -31,7 +31,6 @@ fn seed(env: &TestEnv, n: usize) -> Vec<PathBuf> {
     let now = time::OffsetDateTime::now_utc();
     let project = Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         id: ProjectId::new(),
         title: "p".into(),
@@ -61,6 +60,7 @@ fn seed(env: &TestEnv, n: usize) -> Vec<PathBuf> {
             sync: None,
             run: RepoRun::Auto,
             is_primary: i == 0,
+            auto_integrate: false,
             created_at: now,
         };
         env.store.repo_create(&repo).expect("repo");

@@ -346,6 +346,7 @@ fn create_docs_repo(
         sync: None,
         run: RepoRun::Auto,
         is_primary: true,
+        auto_integrate: false,
         created_at: OffsetDateTime::now_utc(),
     };
     store.repo_create(&repo).map_err(store_problem)?;

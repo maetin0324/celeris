@@ -567,8 +567,40 @@ async fn auto_close_drops_meaningless_items_and_keeps_failed_needing_a_decision(
         detail: "needs attention".into(),
         head: Some("abc123".into()),
     };
+    // ADR 2026-11-14-repo-auto-integrate D4: 受信箱は、自動取り込みの対象（案件のリポジトリが有効）の
+    // task の項目だけを出す。この項目が R3 で閉じることを見るので、対象になる task にする。
+    let now = OffsetDateTime::now_utc();
+    let project = task_core::Project {
+        id: task_core::ProjectId::new(),
+        title: "paper".into(),
+        request: "paper".into(),
+        status: task_core::ProjectStatus::Active,
+        workspace: None,
+        archived_at: None,
+        paused_from: None,
+        auto_advance: false,
+        slug: None,
+        created_at: now,
+        updated_at: now,
+    };
+    env.store.project_create(&project).expect("project");
+    let repo = task_core::ProjectRepo {
+        id: task_core::RepoId::new(),
+        project_id: project.id,
+        name: "paper".into(),
+        kind: task_core::RepoKind::Git,
+        location: task_core::WorkspaceSpec::local("/srv/paper"),
+        default_branch: None,
+        sync: None,
+        run: task_core::RepoRun::Auto,
+        is_primary: true,
+        auto_integrate: true,
+        created_at: now,
+    };
+    env.store.repo_create(&repo).expect("repo");
     let mut terminal_done = new_task(TaskKind::Execute, Status::Done);
-    terminal_done.project_id = Some(task_core::ProjectId::new());
+    terminal_done.project_id = Some(project.id);
+    terminal_done.repos = vec![task_core::RepoRef::of(&repo)];
     // Still needs a human: the parent has not finished.
     let open_parent = new_task(TaskKind::Execute, Status::Running);
     let needs_decision = tree_child(&open_parent, Status::Failed, "open");

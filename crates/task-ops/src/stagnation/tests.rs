@@ -299,7 +299,6 @@ fn gather_reads_project_and_ready_task_facts_from_the_store() {
     let now = t0();
     let project = task_core::Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         archived_at: None,
         paused_from: None,

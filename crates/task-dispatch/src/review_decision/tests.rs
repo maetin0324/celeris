@@ -124,6 +124,17 @@ fn review_decision_failed_checks_table() {
     assert_eq!(got.len(), 1);
     assert_eq!(got[0].check, Check::Reviewer);
     assert_eq!(got[0].repair_hint, local_hint("format"));
+    // WU の失敗一覧（`WorkUnitChecksFailed` の形）も同じ規則で選び、cmd・expect_exit・判定文を写す。
+    let got = failed_work_unit_checks([
+        CheckResult::command("a".to_string(), 0, true, "ok".to_string()),
+        CheckResult::command("b".to_string(), 2, false, "b broke".to_string()),
+    ]);
+    let want = FailedWorkUnitCheck {
+        cmd: "b".to_string(),
+        expect_exit: 2,
+        detail: "b broke".to_string(),
+    };
+    assert_eq!(got, vec![want]);
 }
 
 #[test]

@@ -14,8 +14,9 @@ completed: 2026-11-14
 - `crates/task-dispatch/src/review_decision.rs` に review の判断の純粋関数を置いた。依存は `task_core` だけで、`review`・
   `dispatcher` に依存しない（verdict は trait `VerdictView` を通して読み、`review::Verdict` が実装する）。
 - D4 review-result: `review_decision::failed_checks` が決定的 check の結果（`CheckResult` の列）から失敗一覧（`FailedCheck`）を
-  作る唯一の関数になった。呼び元は 3 経路: 最終 review（`review_verdict.rs` の `try_review_repair` と `judge_review`）、WU の checks
-  （`work_units.rs` の `WorkUnitCheckRun::failure`）、段の統合の checks（`phase_integration.rs` の `schedule_integration_check_repair`）。
+  作る唯一の関数になった。使う経路は 3 つ: 最終 review（`review_verdict.rs` の `try_review_repair` と `judge_review`）、WU の checks
+  （`work_units.rs` の `WorkUnitCheckRun::failure` が `failed_work_unit_checks` を呼び、これが `failed_checks` の結果を event の形
+  `FailedWorkUnitCheck` に写す）、段の統合の checks（`phase_integration.rs` の `schedule_integration_check_repair`）。
   `review.rs` の `failed_checks` と、WU・段の統合の `filter(!pass).map(..)` の写しを消した。check の実行（`review::run_work_unit_checks`
   など）は変えていない。
 - D3 `judge_review`: 最終 review の結論（`passed` は失敗一覧が空のときだけ true、不合格の理由の連結、`review_discrepancy` の結果）。
@@ -72,6 +73,19 @@ completed: 2026-11-14
   不一致・止めた記録が無い場合・reviewer の合格と決定的 check の不合格の組み合わせ）を表で押さえていなかった。
 - 試験は消していない・弱めていない。`cex_` の試験は変えていない。
 
+## 前回の run の check の不合格（repo-health）と直し方
+
+- 前回の run の後、celeris の check `celeris:repo-health/1` が 2 件の fail で落ちた: `size.responsibility-growth`（`work_units.rs` の
+  本体の行が base の 2107 から 2108 に増えた。閾値 2000 を base で既に超えているので、1 行でも増えると worsened）と `source-size`
+  （`check-source-size.py` が `work_units.rs` の 2109 行を許容の 2108 行より多いとした）。原因は `WorkUnitCheckRun::failure` で
+  `failed_checks` の結果を `FailedWorkUnitCheck` へ戻す `filter_map` を `work_units.rs` に書いたこと。
+- 直し方: この写しを `review_decision::failed_work_unit_checks` に移した。失敗の選び方は `failed_checks` のまま 1 つで、
+  `failed_work_unit_checks` は command の check を `cmd`・`expect_exit`・`detail` に写すだけ。`work_units.rs` は 2109 行 → 2099 行
+  （base の 2108 行より 9 行少ない）。WU の event の中身と順は変わらない。
+- 試験: `review_decision_failed_checks_table` に WU の形の確認（合格を外し、`cmd`・`expect_exit`・判定文を写す）を足した。既存の
+  `dispatcher/tests/work_unit_check_failures.rs` は daemon の経路で 1 件の不合格を見るだけで、`expect_exit` が 0 以外の写しを
+  押さえていなかった。
+
 ## 計画の check 2 の `fn judge` の数について
 
 - check 2 は `fn judge\b` の定義が crate で 2 つであることを求める。計画を承認した時点の 2 つは `health_review::limits::judge` と
@@ -89,8 +103,9 @@ completed: 2026-11-14
   前からあり、この WU の差分ではない）。
 - 計画の check 2（純粋さと関数の定義の数）: exit 0。
 - 計画の check 3（`cargo nextest run -p task-dispatch -E 'test(cex_) | test(review_decision)'`）: exit 0（35 passed）。
-- 計画の check 4（D4 の表の review-decide の行。定義 1 か所、呼び出し 2 か所以上）: exit 0（呼び出しは review_verdict.rs・
-  work_units.rs・phase_integration.rs と judge_review の 4 か所）。
+- 計画の check 4（D4 の表の review-decide の行。定義 1 か所、呼び出し 2 か所以上）: exit 0（`failed_checks(` の呼び出しは
+  review_verdict.rs・phase_integration.rs と review_decision.rs の `judge_review`・`failed_work_unit_checks` の 4 か所。WU の
+  checks は `failed_work_unit_checks` を通して使う）。
 - 計画の check 5（範囲）: exit 0。
 - `python3 scripts/dev/check-architecture-map.py`: exit 0。
 
@@ -99,6 +114,7 @@ completed: 2026-11-14
 - 「phase decide: review の判定と起動の判断を review_decision の純粋関数へ分け、D4 review-result の failed_checks を 3 経路で共有する」
 - 「phase decide: review_decision を review に依存させず（VerdictView）、WU と段の統合の呼び出しを短くする」
 - 「phase decide: review-decide の進捗を書く」
+- 「phase decide: WU の失敗一覧の写しを review_decision へ移し、work_units.rs の行を base より増やさない」
 
 ## 未解決事項
 

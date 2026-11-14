@@ -2019,17 +2019,7 @@ impl WorkUnitCheckRun {
             let reason = scope_check_detail(scope, detail);
             crate::review_decision::CheckResult::command(cmd, expect_exit, *pass, reason)
         });
-        let failed: Vec<task_core::FailedWorkUnitCheck> =
-            (crate::review_decision::failed_checks(results).into_iter())
-                .filter_map(|f| match f.check {
-                    Check::Command { cmd, expect_exit } => Some(task_core::FailedWorkUnitCheck {
-                        cmd,
-                        expect_exit,
-                        detail: f.reason,
-                    }),
-                    _ => None,
-                })
-                .collect();
+        let failed = crate::review_decision::failed_work_unit_checks(results);
         if failed.is_empty() {
             return None;
         }

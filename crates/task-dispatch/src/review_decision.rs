@@ -14,8 +14,8 @@
 //! check の実行は今の共通実装（`review::run_work_unit_checks` など）のまま。
 
 use task_core::{
-    Check, Criterion, Event, FailedCheck, RepairClass, RepairDecision, RepoId, TaskKind,
-    execution::ReviewRepairHint,
+    Check, Criterion, Event, FailedCheck, FailedWorkUnitCheck, RepairClass, RepairDecision, RepoId,
+    TaskKind, execution::ReviewRepairHint,
 };
 
 /// ADR-0007 D5 2.: 決定的な条件が 1 つでも落ちて reviewer run を起動しなかったときの、`Check::Reviewer` の項目の
@@ -53,6 +53,24 @@ pub(crate) fn failed_checks(results: impl IntoIterator<Item = CheckResult>) -> V
             check: r.check,
             reason: r.reason,
             repair_hint: r.repair_hint,
+        })
+        .collect()
+}
+
+/// WU の checks の失敗一覧を event の形（`FailedWorkUnitCheck`）で返す。一覧は [`failed_checks`] が作り、ここは
+/// command の check を `cmd`・`expect_exit`・`detail` に写すだけ（WU の check は [`CheckResult::command`] で作るので
+/// 他の種類は来ない）。
+pub(crate) fn failed_work_unit_checks(
+    results: impl IntoIterator<Item = CheckResult>,
+) -> Vec<FailedWorkUnitCheck> {
+    (failed_checks(results).into_iter())
+        .filter_map(|f| match f.check {
+            Check::Command { cmd, expect_exit } => Some(FailedWorkUnitCheck {
+                cmd,
+                expect_exit,
+                detail: f.reason,
+            }),
+            _ => None,
         })
         .collect()
 }

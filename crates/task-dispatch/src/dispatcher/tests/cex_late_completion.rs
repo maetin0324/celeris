@@ -6,6 +6,10 @@
 //! `runs` 索引・決定）と event と `tick()` の戻り値（`TickReport`）だけを見る。待ちは [`run_until_state`]（出来事待ち・
 //! 壁時計の保険）で、tick の回数の上限で待たない。run の終わりは fake adapter の gate（semaphore）で試験が決め、
 //! 観測の時刻は試験が作る。CPU 負荷は使わない。
+use super::cex_review_authority::{
+    deliverable, git_review_task, merge_queued, reached_done, reviewer_finishes, transitions,
+    write_review_json,
+};
 use super::*;
 
 // ---------------------------------------------------------------------------
@@ -495,33 +499,7 @@ async fn cex_late_integration_after_stage_repair_is_dropped() {
         Some(WorkUnitStatus::Running)
     );
     // 段 `build` の repair を先に確定する（planner の replan が `kind = repair` の unit を足す。done の `a`・`b` は変えない）。
-    let mut spec = store.execution_plan_active(id).unwrap().unwrap().spec;
-    let mut repair = v2_wu(STAGE_REPAIR_KEY, "build", &[]);
-    repair.kind = WorkUnitKind::Repair;
-    spec.work_units.push(repair);
-    task_ops::execution::replan(
-        store.as_ref(),
-        id,
-        spec,
-        "planner repair: fix the build stage".to_string(),
-        PlanOrigin::Planner,
-        None,
-        ExecutionLimits::default(),
-        OffsetDateTime::now_utc(),
-    )
-    .unwrap();
-    assert!(
-        events_of(&store, id).iter().any(|e| matches!(
-            e,
-            Event::RepairScheduled {
-                key,
-                origin: task_core::execution::RepairOrigin::Planner,
-                ..
-            } if key == STAGE_REPAIR_KEY
-        )),
-        "{:?}",
-        events_of(&store, id)
-    );
+    LateChange::StageRepair.apply(&store, id);
     // 旧い統合（repair の前の HEAD の候補）の完了を届ける。repair の run は adapter の gate で止めておく。
     std::fs::write(marks.path().join("open"), "").unwrap();
     let seen = adapter.clone();
@@ -645,19 +623,7 @@ async fn late_integration_after_human_replan() -> (tempfile::TempDir, Arc<dyn Ta
     );
     assert!(phase_integrated_keys(&store, id).is_empty());
     // 人の replan を先に確定する（段 `build` に WU `c` を足す。done の `a`・`b` の spec は変えない）。
-    let mut spec = store.execution_plan_active(id).unwrap().unwrap().spec;
-    spec.work_units.push(v2_wu("c", "build", &[]));
-    task_ops::execution::replan(
-        store.as_ref(),
-        id,
-        spec,
-        "human replan: add c to build".to_string(),
-        task_core::PlanOrigin::Human,
-        None,
-        task_core::ExecutionLimits::default(),
-        OffsetDateTime::now_utc(),
-    )
-    .unwrap();
+    LateChange::HumanReplan.apply(&store, id);
     // 旧い統合（`a`・`b` だけを取り込んだ検査）の完了を届ける。
     std::fs::write(marks.path().join("open"), "").unwrap();
     let s = store.clone();
@@ -724,4 +690,373 @@ async fn cex_late_review_and_integration_after_replan_are_dropped() {
         git_out(repo.path(), &["show", &format!("{branch}:c.txt")]),
         "c"
     );
+}
+
+// ---------------------------------------------------------------------------
+// (i) 人の replan・段の repair が先に確定した後に、旧い最終 review の合格が遅れて届く
+// ---------------------------------------------------------------------------
+
+/// WU の run は [`ParallelWuAdapter`] に任せ、reviewer run（`TaskKind::Review`）は試験が gate（semaphore）を開けるまで
+/// 止めてから全条件の合格を `review.json` に書く adapter（`cex_review_authority.rs` の `ReviewGateAdapter` と同じ止め方と
+/// 同じ `review.json`）。
+struct ReviewGateWuAdapter {
+    units: ParallelWuAdapter,
+    /// review の候補（Task のブランチ `branch`）を読む repo。
+    repo: PathBuf,
+    branch: String,
+    gate: tokio::sync::Semaphore,
+    /// reviewer run ごとの `(run_id, 起動時の Task のブランチの commit)`。
+    reviews: StdMutex<Vec<(String, String)>>,
+}
+
+impl ReviewGateWuAdapter {
+    fn new(units: ParallelWuAdapter, repo: &Path, task: TaskId) -> Arc<Self> {
+        Arc::new(ReviewGateWuAdapter {
+            units,
+            repo: repo.to_path_buf(),
+            branch: format!("celeris/{task}"),
+            gate: tokio::sync::Semaphore::new(0),
+            reviews: StdMutex::new(Vec::new()),
+        })
+    }
+
+    fn reviews(&self) -> Vec<(String, String)> {
+        self.reviews.lock().unwrap().clone()
+    }
+
+    /// 止めている reviewer run を 1 本だけ終わらせる。
+    fn release_one(&self) {
+        self.gate.add_permits(1);
+    }
+
+    /// 以後の reviewer run を止めない（semaphore を閉じると `acquire` は待たずに `Err` を返す）。
+    fn open_for_good(&self) {
+        self.gate.close();
+    }
+}
+
+#[async_trait]
+impl WorkerAdapter for ReviewGateWuAdapter {
+    fn id(&self) -> &str {
+        "instant"
+    }
+    async fn run(
+        &self,
+        req: RunRequest,
+        run_id: &str,
+        limits: RunLimits,
+        sink: &dyn EventSink,
+    ) -> Result<RunOutcome, AdapterError> {
+        if req.task.kind != TaskKind::Review {
+            return self.units.run(req, run_id, limits, sink).await;
+        }
+        std::fs::create_dir_all(&req.artifacts_dir).unwrap();
+        let head = git_out(&self.repo, &["rev-parse", &self.branch]);
+        self.reviews
+            .lock()
+            .unwrap()
+            .push((run_id.to_string(), head));
+        if let Ok(permit) = self.gate.acquire().await {
+            permit.forget();
+        }
+        write_review_json(&req.artifacts_dir, true);
+        Ok(done_outcome())
+    }
+}
+
+/// 段 `build` に足す unit（試験が先に確定する計画の変更）。
+#[derive(Clone, Copy, Debug)]
+enum LateChange {
+    /// 人の replan（`PlanOrigin::Human`）が葉の WU `c`（`c.txt` を書く）を足す。
+    HumanReplan,
+    /// planner の replan（`PlanOrigin::Planner`）が段の repair（`kind = repair` の [`STAGE_REPAIR_KEY`]。Task の worktree で
+    /// 走り、`r.txt` を書く）を足す。`RepairScheduled{origin: planner}` が記録される。
+    StageRepair,
+}
+
+impl LateChange {
+    fn key(self) -> &'static str {
+        match self {
+            LateChange::HumanReplan => "c",
+            LateChange::StageRepair => STAGE_REPAIR_KEY,
+        }
+    }
+
+    fn file(self) -> &'static str {
+        match self {
+            LateChange::HumanReplan => "c.txt",
+            LateChange::StageRepair => "r.txt",
+        }
+    }
+
+    /// 段 `build` にこの unit を足す replan を確定する（done の `a`・`b` の spec は変えない）。
+    fn apply(self, store: &Arc<dyn TaskStore>, id: TaskId) {
+        let mut spec = store.execution_plan_active(id).unwrap().unwrap().spec;
+        let mut unit = v2_wu(self.key(), "build", &[]);
+        let (origin, reason) = match self {
+            LateChange::HumanReplan => (PlanOrigin::Human, "human replan: add c to build"),
+            LateChange::StageRepair => {
+                unit.kind = WorkUnitKind::Repair;
+                (PlanOrigin::Planner, "planner repair: fix the build stage")
+            }
+        };
+        spec.work_units.push(unit);
+        task_ops::execution::replan(
+            store.as_ref(),
+            id,
+            spec,
+            reason.to_string(),
+            origin,
+            None,
+            ExecutionLimits::default(),
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+        if let LateChange::StageRepair = self {
+            assert!(
+                events_of(store, id).iter().any(|e| matches!(
+                    e,
+                    Event::RepairScheduled {
+                        key,
+                        origin: task_core::execution::RepairOrigin::Planner,
+                        ..
+                    } if key == STAGE_REPAIR_KEY
+                )),
+                "{:?}",
+                events_of(store, id)
+            );
+        }
+    }
+}
+
+/// v2 の計画（段 `build` の WU `a`・`b`）の Task が段の統合を終えて最終 review に入り、reviewer run を gate で止めて
+/// いる間に `change` を確定し、その後に旧い reviewer の合格を届ける。旧い合格の後の assert をしてから、gate を開けて
+/// Task が終端になるまで進め、新しい unit を含む候補の review だけが Task を Done にしたことを assert する。
+async fn late_review_pass_after(change: LateChange) {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let root = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    // 案件の repo を持つ自動取り込みの root task（`cex_review_authority.rs` と同じ組織。review 前の同期が候補を束縛し、
+    // `ReviewerPassed` に候補の commit が残る）。この fixture は Task の worker run を経ない（`adopt_v2_plan`）ので
+    // `worktree.json` が無く、配送の行は `DeliverySkipped{NoMarker}` で作られない。`MergeQueued` の assert は、配送の行が
+    // できる経路（planner run が目印を書く本番の順序）でも旧い合格が行を進めないことを守る。Task の検査は変更の前の候補
+    // でも通る（旧い review は検査に受かる。捨てるのは古さの判定だけ）。条件 1 は reviewer。
+    let mut task = git_review_task(repo.path(), &store, "test -f a.txt && test -f b.txt".into());
+    deliverable(&store, &mut task);
+    let id = task.id;
+    store.insert(&task).unwrap();
+    adopt_v2_plan(
+        &store,
+        id,
+        &["build"],
+        vec![v2_wu("a", "build", &[]), v2_wu("b", "build", &[])],
+    );
+    let adapter = ReviewGateWuAdapter::new(
+        ParallelWuAdapter::new(Duration::ZERO)
+            .with_file("a", "a.txt", "a")
+            .with_file("b", "b.txt", "b")
+            .with_file(change.key(), change.file(), change.key()),
+        repo.path(),
+        id,
+    );
+    let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 2, 2, 2);
+    // 段 `build` の統合を終えて最終 review に入り、reviewer run が gate で止まるまで進める。
+    let (s, a) = (store.clone(), adapter.clone());
+    assert!(
+        run_until_state(&mut d, || !a.reviews().is_empty()
+            || status_of(&s, id).is_terminal())
+        .await
+    );
+    assert_eq!(
+        status_of(&store, id),
+        Status::Reviewing,
+        "{:?}",
+        transitions(&store, id)
+    );
+    let (old_review, old_head) = adapter.reviews()[0].clone();
+    let candidate_has = |head: &str| {
+        git_ok(
+            repo.path(),
+            &["cat-file", "-e", &format!("{head}:{}", change.file())],
+        )
+    };
+    assert!(!candidate_has(&old_head), "{old_head}");
+    assert_eq!(
+        wu_status(&store, id, "integrate-build"),
+        Some(WorkUnitStatus::Done)
+    );
+
+    // 計画の変更を先に確定してから、旧い reviewer の合格を届ける。
+    change.apply(&store, id);
+    adapter.release_one();
+    let s = store.clone();
+    assert!(
+        run_until_state(&mut d, || !reviewer_finishes(&s, id, &old_review)
+            .is_empty()
+            || status_of(&s, id).is_terminal())
+        .await
+    );
+    let summary = || {
+        let events = events_of(&store, id);
+        format!(
+            "unit_done={:?} status={:?} transitions={:?} reviews={:?} old_end={:?} reviewer_passed={:?} \
+             delivery={:?} delivery_skipped={:?} units={:?}",
+            wu_done_at(&events, change.key()),
+            status_of(&store, id),
+            transitions(&store, id),
+            adapter.reviews(),
+            reviewer_finishes(&store, id, &old_review),
+            reviewer_passes(&events),
+            store.delivery_get(id).unwrap().map(|row| row.state),
+            events
+                .iter()
+                .filter_map(|e| match e {
+                    Event::DeliverySkipped { reason, detail, .. } => Some((reason, detail)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>(),
+            store
+                .work_units_for(id)
+                .unwrap()
+                .iter()
+                .map(|u| (u.key.clone(), u.status))
+                .collect::<Vec<_>>(),
+        )
+    };
+    // 旧い合格は Task を Done にせず、配送の行を `MergeQueued` にしない。
+    assert!(
+        !reached_done(&store, id) && status_of(&store, id) != Status::Done,
+        "旧い reviewer の合格が計画の変更の後の Task を Done にした: {}",
+        summary()
+    );
+    assert!(
+        !merge_queued(&store, id),
+        "旧い reviewer の合格が配送の行を MergeQueued にした: {}",
+        summary()
+    );
+    assert_old_pass_stays_on(&store, id, &old_review, &old_head);
+
+    // 新しい unit を走らせ、Task が終端になるまで進める（以後の reviewer run は gate で止めない）。
+    adapter.open_for_good();
+    let s = store.clone();
+    assert!(
+        run_until_state(&mut d, || status_of(&s, id).is_terminal()).await,
+        "{}",
+        summary()
+    );
+    let events = events_of(&store, id);
+    let unit_done = wu_done_at(&events, change.key())
+        .unwrap_or_else(|| panic!("{} never done: {}", change.key(), summary()));
+    assert_eq!(status_of(&store, id), Status::Done, "{}", summary());
+    // Done にした review は新しい unit の done の後に起きた reviewer run で、その候補は新しい unit を含む。
+    assert!(
+        task_reached_at(&events, Status::Done).is_some_and(|i| i > unit_done),
+        "{}",
+        summary()
+    );
+    let last_reviewer_start = events.iter().rposition(|e| {
+        matches!(
+            e,
+            Event::WorkerStarted {
+                role: Some(RunRole::Reviewer),
+                ..
+            }
+        )
+    });
+    assert!(
+        last_reviewer_start.is_some_and(|i| i > unit_done),
+        "{}",
+        summary()
+    );
+    let reviews = adapter.reviews();
+    let (last_review, last_head) = reviews.last().unwrap();
+    assert_ne!(last_review, &old_review, "{}", summary());
+    assert!(candidate_has(last_head), "{}", summary());
+    assert_old_pass_stays_on(&store, id, &old_review, &old_head);
+    // Done の時点で、有効な計画の unit（統合 WU を含む）はすべて done。
+    let unfinished: Vec<(String, WorkUnitStatus)> = store
+        .work_units_for(id)
+        .unwrap()
+        .into_iter()
+        .filter(|u| u.status.is_active() && u.status != WorkUnitStatus::Done)
+        .map(|u| (u.key, u.status))
+        .collect();
+    assert!(unfinished.is_empty(), "{unfinished:?}: {}", summary());
+}
+
+/// `ReviewerPassed` の `(review_run, reviewed_sha)` の列（event の順）。
+fn reviewer_passes(events: &[Event]) -> Vec<(String, String)> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::ReviewerPassed {
+                review_run,
+                reviewed_sha,
+                ..
+            } => Some((review_run.clone(), reviewed_sha.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// 旧い reviewer run `old_review` の合格は、変更の前の候補 `old_head` にだけ束縛して残る（`ReviewerPassed` の
+/// `reviewed_sha` は `old_head`）。新しい候補に付けず、`ReviewerPassReused` で新しい候補に持ち越さない。
+fn assert_old_pass_stays_on(
+    store: &Arc<dyn TaskStore>,
+    id: TaskId,
+    old_review: &str,
+    old_head: &str,
+) {
+    let events = events_of(store, id);
+    for (run, sha) in reviewer_passes(&events) {
+        assert!(
+            run != old_review || sha == old_head,
+            "旧い reviewer の合格が別の候補 {sha} に付いた（変更の前の候補は {old_head}）"
+        );
+    }
+    let reused: Vec<&Event> = events
+        .iter()
+        .filter(|e| {
+            matches!(e, Event::ReviewerPassReused { from_reviewed_sha, .. } if from_reviewed_sha == old_head)
+        })
+        .collect();
+    assert!(
+        reused.is_empty(),
+        "旧い reviewer の合格を新しい候補に再利用した: {reused:?}"
+    );
+}
+
+/// 不変条件: （ADR-0074 D1.4・D1.7 と D17、ADR-0118 D3〜D5、CLAUDE.md「完了はレビュアーか決定的な検査が決める」）v2 の
+/// 計画の Task の最終 review で reviewer run が候補（段 `build` の `a`・`b` だけを統合した Task のブランチ）を検査している
+/// 間に人の replan（段 `build` に WU `c` を足す）が確定したら、遅れて届いた旧い reviewer の合格は捨てる。旧い合格は Task を
+/// Done にせず、配送の行を `MergeQueued` にせず、`ReviewerPassed`・`ReviewerPassReused` で `c` を含む候補に付かない。
+/// Task を Done にできるのは、`c` の done（と段の統合のやり直し）の後に起きた reviewer run の、`c.txt` を含む候補の合格だけで、
+/// Done の時点で有効な計画の unit はすべて done。
+/// 既存の試験で検出できない理由: `cex_late_review_and_integration_after_replan_are_dropped` と
+/// `cex_late_integration_after_stage_repair_is_dropped` は統合の検査が走っている間に計画を変え、Task が Reviewing に入る前の
+/// 順序だけを見る。`cex_review_late_pass_on_the_old_candidate_does_not_pass_the_rebased_candidate` は reviewer を止めている
+/// 間に target を進める（候補の commit が変わる）順序で、計画は変えない（候補の commit も検査後の snapshot も変わらないまま
+/// 計画だけが変わる順序を作らない）。`stage_reopen.rs` の試験は統合済みの段に unit を足す replan を、Task が Running の
+/// 間（最終 review の前）に確定する。
+#[tokio::test]
+async fn cex_late_review_pass_after_replan_is_dropped() {
+    late_review_pass_after(LateChange::HumanReplan).await;
+}
+
+/// 不変条件: （ADR-0074 D6.2 と D1.4・D1.7、ADR-0118 D3〜D5、CLAUDE.md「完了はレビュアーか決定的な検査が決める」）v2 の
+/// 計画の Task の最終 review で reviewer run が候補を検査している間に段 `build` の repair（planner の replan が足す
+/// `kind = repair` の unit。`RepairScheduled{origin: planner}`）が確定したら、遅れて届いた旧い reviewer の合格は捨てる。
+/// 旧い合格は Task を Done にせず、配送の行を `MergeQueued` にせず、`ReviewerPassed`・`ReviewerPassReused` で repair の
+/// commit（`r.txt`）を含む候補に付かない。Task を Done にできるのは、repair の done の後に起きた reviewer run の、
+/// `r.txt` を含む候補の合格だけで、Done の時点で有効な計画の unit はすべて done。
+/// 既存の試験で検出できない理由: `cex_late_integration_after_stage_repair_is_dropped` は統合の検査が走っている間に repair を
+/// 確定し、最終 review の前の順序だけを見る。`cex_integration_sync_conflict_schedules_one_repair_*` と review.rs の
+/// `review_repair_*` は review の結果そのものが repair を作る順序（daemon の `try_review_repair`）で、reviewer run が
+/// 走っている間に外から repair が確定する順序を作らない。task-ops の
+/// `replan_records_repair_scheduled_for_a_planner_authored_repair_unit` は store の行と event だけを見て、dispatcher の
+/// review の完了を通さない。
+#[tokio::test]
+async fn cex_late_review_pass_after_repair_is_dropped() {
+    late_review_pass_after(LateChange::StageRepair).await;
 }

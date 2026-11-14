@@ -90,10 +90,10 @@ commit: 「fix-cred: 計画の無い task は開いた credential_wait が resum
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
 - `cargo nextest run -p task-dispatch -E 'test(/cex_/) | test(/credential/) | test(/dispatch_admission::/)'` → exit 0（75 passed）
-- `bash scripts/dev/test-affected.sh` → TEST_AFFECTED
-- `cargo clippy --workspace -- -D warnings` → CLIPPY
+- `bash scripts/dev/test-affected.sh` → exit 0（対象 crate: celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。nextest 3933 passed、11 skipped）
+- `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
-- `bash scripts/dev/check-health.sh --base "$CELERIS_WU_BASE"` → exit 0（verdict pass、worsened 0）
+- `bash scripts/dev/check-health.sh --base "$CELERIS_WU_BASE"` → exit 0（verdict pass、fail_grade 0、new 0、worsened 0）
 - 範囲 check（計画の check 3 と同じ式。`sh "$CELERIS_WU_SCOPE_PATHS"`）→ exit 0。変更 path は credential_gate.rs・
   cex_review_authority.rs・ADR・この進捗の 4 件で、`crates/task-core` は 0 件。
 

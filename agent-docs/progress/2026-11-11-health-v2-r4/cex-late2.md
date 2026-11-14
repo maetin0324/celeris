@@ -250,3 +250,5 @@ repo-health の `size.responsibility-growth` への配慮: `crates/task-dispatch
   `crates/task-dispatch/src/dispatcher/tests/{cex_late_completion.rs,cex_review_authority.rs}`。
 - `python3 scripts/dev/repo-health/repo_health.py --repo . --base "$CELERIS_WU_BASE" --head HEAD --profile celeris --policy-version 1`:
   verdict=pass、worsened 0・new 0。`sh scripts/dev/progress-index.sh --check`: exit 0。
+- `bash scripts/dev/test-affected.sh`（task-core の変更で逆依存の crate・web の型検査と unit・ts-verify も対象）: exit 0。nextest: `Summary [ 566.464s] 8517 tests run: 8517 passed (9 slow), 23 skipped`。
+- commit（追加）: `late-review: 計画 v2 の修正の証拠を進捗に書く`、`late-review: test-affected の結果を進捗に書く`

@@ -86,8 +86,9 @@ store-scope: a
 
 ## attempt 2: 前回の run の後の check（repo health）の不合格と直し方
 
-- 前回の run の後、celeris の check `celeris:repo-health/1`（基点は WU の base 07fca101）が fail-grade 4 件で落ちた。手元で
-  `python3 scripts/dev/repo-health/repo_health.py --repo scripts/dev --base 07fca101 --head worktree --policy-version 1`
+- 前回の run の後、celeris の check `celeris:repo-health/1`（基点はこの WU の base。前の unit の最後の commit
+  「fix-cred: 進捗に提出時の HEAD の test-affected・clippy の結果を書く」）が fail-grade 4 件で落ちた。手元で
+  `python3 scripts/dev/repo-health/repo_health.py --repo scripts/dev --base <その commit> --head worktree --policy-version 1`
   を走らせて同じ 4 件を再現した（exit 1）。
   - `size.responsibility-growth`: `dispatcher/work_units.rs` の本体の行 2098 → 2110（閾値 2000）。
   - `size.responsibility-growth`: `Dispatcher` の method の数 382 → 383（`remove_phase_worktrees` を足した）。

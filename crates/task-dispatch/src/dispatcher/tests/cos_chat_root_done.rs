@@ -534,12 +534,12 @@ fn git_in(dir: &std::path::Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_owned()
 }
 
+type PassParts = Vec<(&'static str, u64)>;
+
 /// ADR 2026-11-07-root-done-tick-fix の試験の 1 回分: 進捗ファイルを `fillers + 2` 件持つ repo と、Reviewing の
 /// delivery を持つ root の new 行を作り、待ちの pass を 3 回、delivery を Ready にした後の pass を 1 回まわす。
 /// 返すのは待ちの pass の内訳 3 つと、待ちが終わった pass の内訳。
-fn root_done_row_waiting_on_delivery(
-    fillers: usize,
-) -> (Vec<Vec<(&'static str, u64)>>, Vec<(&'static str, u64)>) {
+fn root_done_row_waiting_on_delivery(fillers: usize) -> (Vec<PassParts>, PassParts) {
     use task_core::DeliveryStore;
     let mut f = fixture(false);
     f.tick(); // 導入: cursor は現在の末尾から

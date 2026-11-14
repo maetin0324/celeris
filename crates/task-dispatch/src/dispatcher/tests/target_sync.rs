@@ -162,6 +162,45 @@ async fn partially_enabled_multi_repo_task_does_not_require_a_reviewer_run() {
         })
         .collect();
     assert_eq!(skipped, vec![task_core::DeliverySkipReason::RepoNotEnabled]);
+    assert!(!reviewer_run_started(&store, &task));
+}
+
+fn reviewer_run_started(store: &Arc<dyn TaskStore>, task: &Task) -> bool {
+    events_of(store, task).iter().any(|e| {
+        matches!(
+            e,
+            Event::WorkerStarted {
+                role: Some(task_core::RunRole::Reviewer),
+                ..
+            }
+        )
+    })
+}
+
+/// ADR 2026-11-14-repo-auto-integrate D3・D5: 1 件の repo が無効の root task は reviewer run を必須にしない。
+/// 有効な repo の同じ task は必須にする（取り込みの条件が reviewer の合格）。案件単位の旧い判定では、
+/// 同じ案件の別 repo の有効・無効を区別できなかった。
+#[tokio::test]
+async fn reviewer_run_is_required_only_for_an_enabled_repo() {
+    for (enabled, expect_reviewer) in [(false, false), (true, true)] {
+        let repo = tempfile::tempdir().unwrap();
+        init_test_repo(repo.path());
+        let ws = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let task = reviewing_task_integrating(repo.path(), &store, enabled);
+        store.insert(&task).unwrap();
+        assert_eq!(
+            task_ops::delivery::auto_integrates(&*store, &task).unwrap(),
+            enabled
+        );
+        let mut d = worktree_dispatcher(store.clone(), done_adapter(), ws.path(), None);
+        let _ = d.spawn_review(task.id, "worker".into(), &ReviewSubject::default());
+        assert_eq!(
+            reviewer_run_started(&store, &task),
+            expect_reviewer,
+            "enabled={enabled}"
+        );
+    }
 }
 
 #[tokio::test]

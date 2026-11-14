@@ -182,3 +182,40 @@ owner は型引数 `ExecutionCoordination<S, C>` で受ける。lease の回収�
 - `worker_finish` は `execution_scheduler` の判断の関数（`decide`・`no_progress_question`・`continuation_cap_question`・`settle_phase`）を直接呼ばない。
   `finish_worker_result_with` は 800 行以下にした。
 
+## 付記 2026-11-14: run を起こすかの判断を `dispatch_admission` に置き、`dispatch_one` を fact の収集と適用だけにした（R4 admit）
+
+[ADR 2026-11-11 dispatcher-state-ownership](2026-11-11-dispatcher-state-ownership.md) D3・D5 と
+[ADR 2026-11-14 dispatch-admission-order](2026-11-14-dispatch-admission-order.md) D1〜D5 に従い、`dispatch_one`（`dispatcher/dispatch_run.rs`）の
+起動可否の判断の順序と組み合わせを、純粋な module `crates/task-dispatch/src/dispatch_admission.rs` の
+`admit(&AdmissionInput) -> AdmissionProposal` に移した。`dispatch_admission` は `dispatcher` の外に置き、TaskStore・file・process・`Dispatcher` に
+触れない（層は判断。module map の `dispatch_admission` の行）。
+
+- `admit` は、次に集める fact の要求（`Need`）・止め方（`Stop`）・起動（`Launch`）のどれかを返す。gate を見る順序は ADR 2026-11-14 D5 の 1〜30
+  （前の gate が止めたら後ろの fact を求めない）。並列 WU の 2 本目以降が飛ばす gate の集合は移行前と同じ。
+- 個々の判定は既存の関数と owner の結果をそのまま使う（`RunLoad::admits`・`admit_write_set`・`judge_run`・`credential_gate_hold`・
+  `variant_run_pin` など）。`dispatch_admission` に同名の関数の定義は無い。
+- `dispatch_one` に残したもの（移行前の順）: fact の値の収集、待ちの記録・遷移・担当の書き戻し、クラスタの接続、作業場所の用意、route の記録、
+  credential の待ち、lease、`WorkerStarted` などの event、`spawn_worker`。`dispatch_one` は admit の時点で 1089 行から 1017 行になった。
+- 試験は `crates/task-dispatch/src/dispatch_admission/tests.rs`（17 本）。`cex_` の試験と dispatcher の既存の試験は変えていない。
+- module map の `dispatch_admission` の行は unit admit-tidy が足した。同じ unit が、admit の契約が守られていれば通らない `dispatch_one` の
+  7 か所の分岐を `admission_contract_broken`（`tracing::error!` を出して `Ok(false)`）にそろえた。
+
+## 付記 2026-11-14: review の判定と起動の判断を `review_decision` に置いた（R4 review-decide）
+
+[ADR 2026-11-11 dispatcher-state-ownership](2026-11-11-dispatcher-state-ownership.md) D3・D4 に従い、`on_review_finished`（`dispatcher/review_verdict.rs`）と
+`spawn_review`（`dispatcher/review_spawn.rs`）の判断を、純粋な module `crates/task-dispatch/src/review_decision.rs` に移した。`review_decision` は
+`dispatcher` の外に置き、依存は `task_core` だけで、`review`・`dispatcher` を使わない（verdict は trait `VerdictView` を通して読む。層は判断。
+module map の `review_decision` の行）。
+
+- D4 review-result: `review_decision::failed_checks` が決定的 check の結果から失敗一覧を作る唯一の関数になった。最終 review
+  （`review_verdict.rs`）・WU の checks（`work_units.rs` の `failed_work_unit_checks` 経由）・段の統合の checks（`phase_integration.rs`）が使う。
+  `review.rs` の `failed_checks` と、WU・段の統合の写しを消した。
+- D3: 最終 review の結論 `judge_review`（決定的 check が落ちていれば reviewer が合格でも成功にしない）、`reviewer_criteria_passed`、
+  delivery の照合 `delivery_verdict`（reviewed candidate の照合の条件 4 つは減らしていない）、`review_repair_class`、repair の上限 `repair_cap_reached`、
+  再同期の可否 `resync_gate`・`target_quiet`、reviewer の合格の再利用 `reviewer_reuse_overlap`。D3 の表の `plan_review` は、`spawn_review` の中で
+  git の fact を挟む 2 か所の判断（`resync_gate` と `reviewer_reuse_overlap`）として置いた。
+- 既存の純粋関数（`pre_review_stale_state`・`bound_reviewer_pass`・`review_discrepancy` など）は写さず、結果を fact として呼び元が渡す。
+- git の読み出し・event の追記・delivery の保存・通知・review run の起動は `review_verdict`・`review_spawn` に残した。transaction の範囲は変えていない。
+- 試験は `crates/task-dispatch/src/review_decision/tests.rs`（10 本、表の形）。既存の試験は消していない・弱めていない。
+- module map の `review_decision` の行は unit admit-tidy が足した。
+

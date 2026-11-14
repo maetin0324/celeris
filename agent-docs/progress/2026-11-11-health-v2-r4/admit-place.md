@@ -66,8 +66,10 @@ completed: 2026-11-14
   write-set の予約も同じく入力の欄から取り出して `reserve_write_set` に渡す。
 - 設定に無いクラスタの warn: `resolve_cluster` は remote の作業場所にだけ `NotConfigured` を返すので、Local の作業場所の空の
   cluster id で warn する枝は消した（`warn_unroutable_once` は今と同じく必ず呼ぶ）。
-- 試験を広げたこと: admit-gate の試験のうち順を固定する 2 本の期待する列に置き場所の fact を足し、予算の上書きを確かめる 2 本は
-  `Launch` の欄の代わりに `RunOverride` の要求の値を確かめる。確かめる値は同じで、弱めていない。
+- admit-gate の試験の直し方: 求める順を固定する 2 本（`admit_first_pass_asks_facts_in_the_dispatch_order`・
+  `admit_second_parallel_unit_skips_only_the_first_pass_gates`）は、期待する列の後ろに置き場所の fact を足した。予算の上書きの値は
+  `Launch` の欄の代わりに `RunOverride` の要求の値で確かめる（`admit_overrides_the_run_budget_by_run_kind` と 2 本目の WU の試験。
+  確かめる tier と予算の値は同じ）。WU の値は `AdmissionUnit::WorkUnit { budget, phased }` に書き換えた。どれも弱めていない。
 
 ## 試験が順の入れ替えを検出すること（一時的に admit の本体を書き換えて確かめ、元に戻した）
 
@@ -81,10 +83,27 @@ completed: 2026-11-14
 ## 変更（件名）
 
 - `phase admit: write-set・cluster・作業場所・disk の起動可否の順序と組み合わせを dispatch_admission::admit へ移す`
+- `phase admit: admit-place の進捗に検査の結果を書く`（文書だけ）
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`、範囲は `$CELERIS_WU_BASE`）
 
-証拠の節は検査の後に書く。
+- WU の check 4（純粋さと同名の関数の定義なしの grep、`admit`/`AdmissionInput`/`AdmissionProposal` が根の file にあること、
+  `dispatch_admission::admit(` の呼び出し、lease・`spawn_worker(`・`WorkerStarted` が `dispatch_run.rs` に残ること、`second_pass` の
+  条件式と planner の組み合わせの変数が無いこと、`>= spec.concurrency`・`until > now`・`Admission::Wait(` が無いこと、`#[test]` が
+  9 本以上、`cargo nextest run -p task-dispatch -E 'test(cex_) | test(/^dispatch_admission::/) | test(structure_guard_)'`）:
+  exit 0、49 passed、1809 skipped（`#[test]` は 13 本）。
+- `bash scripts/dev/test-affected.sh`: exit 0。対象は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。
+  3913 passed、11 skipped。
+- WU の check 2（`cargo clippy --workspace -- -D warnings && cargo fmt --all -- --check && bash scripts/dev/check-health.sh &&
+  test -f <進捗> && sh scripts/dev/progress-index.sh --check`）: exit 0。check-health は verdict=pass、fail_grade 0、worsened 0。
+  new 1 件は warning の `migration.remnant`（`host_maintenance.rs` の `legacy` の語。この unit は触っていない）。
+- repo health を WU base と比べる（celeris の `celeris:repo-health/1` と同じ基準）:
+  `python3 scripts/dev/repo-health/repo_health.py --repo . --base "$CELERIS_WU_BASE" --head HEAD --policy-version 1`: exit 0、
+  new 0、worsened 0。`dispatch_one` の関数の行 1022 → 1018、`dispatcher` module の本体の行 31662 → 31662（どちらも existing）。
+- 範囲の check（`sh "$CELERIS_WU_SCOPE_PATHS"` の path を計画の許す path と比べる）: exit 0、範囲外 0。変えた path は
+  ADR 2026-11-14・`dispatch_admission.rs`・`dispatch_admission/tests.rs`・`dispatch_run.rs`・`docs/architecture-map.md`・この進捗。
+- `git diff --name-only "$CELERIS_WU_BASE" -- agent-docs/adr/2026-11-11-dispatcher-state-ownership.md crates/task-dispatch/src/dispatcher/tests crates/task-dispatch/tests`:
+  0 件（ADR 2026-11-11 と `cex_` の試験と既存の dispatcher の試験は変えていない）。
 
 ## 未解決事項
 

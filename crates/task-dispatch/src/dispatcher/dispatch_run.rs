@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::dispatch_admission::{
-    self, AdmissionFact, AdmissionInput, AdmissionProposal, AdmissionStop, AdmissionTaskValues,
-    AdmissionUnit, BackoffClock,
+    self, AdmissionCluster, AdmissionFact, AdmissionInput, AdmissionProposal, AdmissionStop,
+    AdmissionTaskValues, AdmissionUnit, BackoffClock, ClusterCooldown, ClusterFact, WorkUnitFact,
 };
 use crate::execution_coordination::WriteSetAdmission;
 
@@ -48,6 +48,13 @@ impl Dispatcher {
             ..AdmissionInput::default()
         };
         let mut task = task;
+        // admit が求めた置き場所の fact を集めたときに決まる値（起動で使う）。
+        let mut original_task_budget = task.budget;
+        let mut dir = None;
+        let mut cluster: Option<(Box<ClusterSpec>, PathBuf, WorkspaceMode)> = None;
+        let mut worktree = None;
+        let mut wu_workspace: Option<WorkUnitWorkspace> = None;
+        let (mut wu_scope_env, mut prepare_error) = (Vec::new(), None);
         let admitted = loop {
             let fact = match dispatch_admission::admit(&input) {
                 AdmissionProposal::Need(fact) => fact,
@@ -69,6 +76,45 @@ impl Dispatcher {
                         }
                         AdmissionStop::StartFinalReview => {
                             self.start_final_review_from_ready(&task)?
+                        }
+                        AdmissionStop::ClusterNotConfigured { wait } => {
+                            // `resolve_cluster` は remote の作業場所にだけ設定に無いクラスタを返す。
+                            if self.routing.warn_unroutable_once(task.id)
+                                && let WorkspaceSpec::Remote { cluster, .. } = &task.workspace
+                            {
+                                tracing::warn!(task_id = %task.id, %cluster, "no such cluster in the config; task left ready");
+                            }
+                            self.routing.mark_unroutable(task.id);
+                            self.note_dispatch_wait(task.id, wait);
+                        }
+                        AdmissionStop::ClusterToolMissing { cluster } => {
+                            self.block_task_missing_cluster_tool(&task, &cluster)?
+                        }
+                        AdmissionStop::Cluster {
+                            unavailable,
+                            waiting,
+                            wait,
+                        } => {
+                            if let (Some(reason), Some((spec, ..))) = (unavailable, &cluster) {
+                                self.mark_cluster_unavailable(task.id, spec, reason)?;
+                            }
+                            if waiting {
+                                self.coord.note_cluster_waiting(task.id);
+                            }
+                            self.note_dispatch_wait(task.id, wait);
+                        }
+                        AdmissionStop::NoTaskDir => {
+                            tracing::warn!(task_id = %task.id, "cannot resolve the workspace directory; task left ready");
+                        }
+                        AdmissionStop::WuPrepareBackoff { failures, retry_at } => {
+                            if let Some(wu) = gate_wu(&gate) {
+                                tracing::debug!(task_id = %task.id, work_unit = %wu.key, failures, %retry_at, "work unit worktree backoff; not dispatching yet");
+                            }
+                        }
+                        AdmissionStop::WuPrepareFailed { forced } => {
+                            if let (Some(wu), Some(e)) = (gate_wu(&gate), &prepare_error) {
+                                self.on_work_unit_prepare_failed(&task, wu, e, forced)?;
+                            }
                         }
                     }
                     return Ok(false);
@@ -157,229 +203,179 @@ impl Dispatcher {
                 AdmissionFact::BrowserPrereqHold => {
                     input.browser_prereq_hold = Some(self.browser_prereq_hold(&task)?)
                 }
+                AdmissionFact::RunOverride { tier, budget } => {
+                    // D18/D14: 上書きする前の Task の予算（WU/planner の既定の計算に使う。ADR-0072 D14）。
+                    original_task_budget = task.budget;
+                    task.worker_hint.tier = tier.unwrap_or(task.worker_hint.tier);
+                    if let Some((max_turns, max_wall_secs)) = budget {
+                        (task.budget.max_turns, task.budget.max_wall_secs) =
+                            (max_turns, max_wall_secs);
+                    }
+                    input.place.run_override_applied = true;
+                }
+                // ADR-0130 D3: lease・遷移・attempts の前。planner run は書き込みを予約しない。
+                AdmissionFact::WriteSet { planner_run } => {
+                    let wu = gate_wu(&gate);
+                    let work_unit = wu.filter(|w| w.phase.is_some()).map(|w| w.id.clone());
+                    let key = RunKey {
+                        task: task.id,
+                        work_unit,
+                    };
+                    let admission = self.admit_write_set(&task, &key, wu, planner_run)?;
+                    input.place.write_set = Some(admission);
+                }
+                AdmissionFact::Cluster => {
+                    let resolved = self.resolve_cluster(&task);
+                    input.place.cluster = Some(AdmissionCluster::of(&resolved));
+                    if let ClusterResolution::Resolved(spec, path, mode) = resolved {
+                        cluster = Some((spec, path, mode));
+                    }
+                }
+                // admit は `resolve_cluster` が remote のクラスタを返した後でだけ求める。
+                AdmissionFact::ClusterState(step) => {
+                    let Some((spec, ..)) = &cluster else {
+                        return Ok(false);
+                    };
+                    let (id, place) = (spec.id.as_str(), &mut input.place);
+                    match step {
+                        ClusterFact::Cooldown => {
+                            let until = self.cluster.cooldown_until(id);
+                            place.cluster_cooldown = Some(ClusterCooldown { until, now });
+                        }
+                        ClusterFact::Load => place.cluster_in_use = Some(self.cluster_in_use(id)),
+                        // この tick の `refresh_cluster_liveness` の結果を使う（1 tick に 1 回だけ `ssh -O check` を呼ぶ）。
+                        ClusterFact::Connected => {
+                            place.cluster_connected = Some(self.cluster.connected(id))
+                        }
+                        // ADR-0032 D3: `auth = "publickey"` かつ接続フックがあれば、cooldown にする前に 1 回だけ接続を
+                        // 試みる（cooldown 中は求められないので、tick ごとに ssh は湧かない。同じ tick の別タスクが同じ
+                        // クラスタを指していても、成功時は `cluster_connected` のキャッシュが true になり、失敗時は
+                        // cooldown が立つので、2 本目は走らない）。
+                        ClusterFact::AutoConnect => {
+                            let attempt = self.try_auto_connect_cluster(spec);
+                            if let Some(result) = &attempt {
+                                self.note_key_auth_attempt(spec, result.is_ok());
+                            }
+                            place.cluster_auto_connect = Some(attempt);
+                        }
+                        ClusterFact::MarkConnected => {
+                            self.set_cluster_connected(id, true, ClusterConnChange::KeyAuth);
+                            place.cluster_marked_connected = true;
+                        }
+                    }
+                }
+                // ADR-0041 D1 / ADR-0043 D2: ローカルの作業場所（1 つ以上のリポジトリ）を用意する
+                // （`dir` はその親 = `runs/` `artifacts/` の置き場）。足回りの root はここで初めて固定する
+                // （ADR 2026-10-14-local-machine-settings D5。以後の解決は固定された root を見る）。
+                AdmissionFact::TaskDir => {
+                    let dir_started = Instant::now();
+                    self.pin_task_root(&task)?;
+                    worktree = self.task_workspaces_for(&task);
+                    dir = worktree.as_ref().map(|ws| ws.task_dir.clone());
+                    dir = dir.or_else(|| self.task_dir(&task));
+                    if dir.is_some() {
+                        log_slow_step("task_dir", dir_started);
+                    }
+                    input.place.task_dir_resolved = Some(dir.is_some());
+                }
+                // admit は WU の run で、作業場所の dir を解決した後でだけ求める。
+                AdmissionFact::WorkUnit(step) => {
+                    let (Some(wu), Some(dir)) = (gate_wu(&gate), dir.as_deref()) else {
+                        return Ok(false);
+                    };
+                    let place = &mut input.place;
+                    match step {
+                        WorkUnitFact::PrepareBackoff => {
+                            let backoff = self.coord.wu_prepare_backoff(&wu.id, self.now_utc());
+                            place.wu_prepare_backoff = Some(backoff.map(|f| (f.count, f.retry_at)));
+                        }
+                        WorkUnitFact::Workspace => {
+                            let prepared =
+                                self.prepare_work_unit_workspace(&task, wu, worktree.as_ref());
+                            place.wu_workspace_ready = Some(prepared.is_ok());
+                            match prepared {
+                                Ok(prepared) => wu_workspace = prepared,
+                                Err(e) => prepare_error = Some(e),
+                            }
+                        }
+                        // Capture before any worker can write; retries load the same WU-id snapshot.
+                        WorkUnitFact::ScopeEnv => {
+                            // WU の worktree を用意したら、その作業場所で確かめる。
+                            let ws = wu_workspace.as_ref().map(|w| &w.workspaces);
+                            let ws = ws.or(worktree.as_ref());
+                            let prepared = (|| {
+                                if let Some(ws) = ws {
+                                    for repo in &ws.repos {
+                                        if let Some(wt) = &repo.worktree {
+                                            wt.ensure_blocking().map_err(|e| {
+                                                WuPrepareError::transient(e.to_string())
+                                            })?;
+                                        }
+                                    }
+                                }
+                                // A shared repository's workspace symlink is installed by the
+                                // worker later; its source resolves to the same git directory.
+                                let cwd = ws
+                                    .and_then(|ws| ws.repos.first())
+                                    .map(|repo| {
+                                        if repo.worktree.is_some() {
+                                            repo.dir.as_path()
+                                        } else {
+                                            repo.source.as_path()
+                                        }
+                                    })
+                                    .unwrap_or(dir);
+                                super::wu_base::scope_env(cwd, &wu.id, true)
+                                    .map_err(|e| WuPrepareError::transient(e.to_string()))
+                            })();
+                            place.wu_scope_env_ready = Some(prepared.is_ok());
+                            match prepared {
+                                Ok(env) => {
+                                    self.coord.clear_wu_prepare_failures(&wu.id);
+                                    wu_scope_env = env;
+                                }
+                                Err(e) => prepare_error = Some(e),
+                            }
+                        }
+                    }
+                }
+                // ADR 2026-11-11-disk-aware-dispatch D1: 予備を割るなら待たせ（M12）、通した見込みは起動した後で数える。
+                AdmissionFact::Disk => {
+                    let v2 = gate_wu(&gate).filter(|w| w.phase.is_some());
+                    let target_wu = wu_workspace.as_ref().and(v2);
+                    let (view, gate) = (self.maint.scratch_view(), self.maint.admission());
+                    let repo_of = || self.cargo_target_repo(&task).map(|r| r.source);
+                    let wu = v2.map(|w| w.id.as_str());
+                    input.place.disk = Some(gate.judge_run(view, &task, wu, target_wu, repo_of));
+                }
             }
         };
+        // admit は作業場所の dir を起動の前に求め、解決できなければ止める。
+        let Some(dir) = dir else { return Ok(false) };
         let current_wu = match gate {
             Some(WuDispatchGate::RunWorkUnit(wu)) => Some(*wu),
             _ => None,
         };
-        let cos = admitted.cos_run;
-        let is_planner_dispatch = admitted.planner_run;
-        let replan_dispatch = admitted.replan;
-        let planner_human_frontier = admitted.planner_human_frontier;
-        // D18/D14: 上書きする前の Task の予算（WU/planner の既定の計算に使う。ADR-0072 D14）。
-        let original_task_budget = task.budget;
-        if let Some(tier) = admitted.tier {
-            task.worker_hint.tier = tier;
-        }
-        if let Some((max_turns, max_wall_secs)) = admitted.budget {
-            task.budget.max_turns = max_turns;
-            task.budget.max_wall_secs = max_wall_secs;
-        }
-        // ADR-0130 D3: 同じ repo で走っている run と expected write-set が強く重なれば、起動を次 tick に回す
-        // （lease・遷移・attempts の前。見送りは `Ok(false)` だけ）。planner run は書き込みを予約しない。
-        let run_key = RunKey {
-            task: task.id,
-            work_unit: current_wu
-                .as_ref()
-                .filter(|w| w.phase.is_some())
-                .map(|w| w.id.clone()),
-        };
-        let wu = current_wu.as_ref();
-        let write_reservation =
-            match self.admit_write_set(&task, &run_key, wu, is_planner_dispatch)? {
-                WriteSetAdmission::Admit(reservation) => reservation,
-                WriteSetAdmission::Hold { .. } => return Ok(false),
-            };
-        // ADR-0018: リモート実行のタスクは、クラスタの設定・cooldown・並列度・多重接続を先に確かめる。
-        // ADR-0062 B1（Phase 107）: `cluster_of` が `None` の理由を分ける。(a) 設定に無いクラスタ
-        // → 従来どおり `unroutable`（人が設定を直すまで進まない）。(b) 担当が `cluster:<id>` を
-        // 持たない → `blocked` にして人に質問を 1 件作る（設定の問題ではなく担当の問題なので、
-        // 「no such cluster in the config」という誤解を招く文言は出さない）。
-        let cluster = match self.resolve_cluster(&task) {
-            ClusterResolution::Local => None,
-            ClusterResolution::Resolved(spec, path, mode) => Some((spec, path, mode)),
-            ClusterResolution::NotConfigured => {
-                if self.routing.warn_unroutable_once(task.id) {
-                    let cluster_id = match &task.workspace {
-                        WorkspaceSpec::Remote { cluster, .. } => cluster.clone(),
-                        WorkspaceSpec::Local { .. } => String::new(),
-                    };
-                    tracing::warn!(task_id = %task.id, cluster = %cluster_id, "no such cluster in the config; task left ready");
-                }
-                self.routing.mark_unroutable(task.id);
-                self.note_dispatch_wait(
-                    task.id,
-                    task_core::TaskWait::Unroutable {
-                        detail: "no such cluster in the config".to_string(),
-                    },
-                );
-                return Ok(false);
-            }
-            ClusterResolution::AssigneeLacksTool { cluster } => {
-                self.block_task_missing_cluster_tool(&task, &cluster)?;
-                return Ok(false);
-            }
-        };
-        if let Some((spec, _, _)) = &cluster {
-            if self
-                .cluster
-                .cooldown_until(&spec.id)
-                .is_some_and(|until| until > now)
-            {
-                // ADR-0018 D2: 人がログインするまで進まないので、待ち対象には数えない（`--until-idle` を止めない）。
-                self.coord.note_cluster_waiting(task.id);
-                self.note_dispatch_wait(task.id, cluster_wait(&spec.id, "cooldown"));
-                return Ok(false);
-            }
-            if self.cluster_in_use(&spec.id) >= spec.concurrency {
-                self.note_dispatch_wait(task.id, cluster_wait(&spec.id, "concurrency full"));
-                return Ok(false);
-            }
-            // この tick の `refresh_cluster_liveness` の結果を使う（1 tick に 1 回だけ `ssh -O check` を呼ぶ）。
-            let alive = self.cluster.connected(&spec.id).unwrap_or(false);
-            if !alive {
-                let spec = spec.clone();
-                // ADR-0032 D3: `auth = "publickey"` かつ接続フックがあれば、cooldown にする前に
-                // 1 回だけ接続を試みる（cooldown 中はここに来ないので、tick ごとに ssh は湧かない。
-                // 同じ tick の別タスクが同じクラスタを指していても、成功時は `cluster_connected` の
-                // キャッシュが true になり、失敗時は下で cooldown が立つので、2 本目は走らない）。
-                let attempt = self.try_auto_connect_cluster(&spec);
-                if let Some(result) = &attempt {
-                    self.note_key_auth_attempt(&spec, result.is_ok());
-                }
-                match attempt {
-                    Some(Ok(())) => {
-                        self.set_cluster_connected(&spec.id, true, ClusterConnChange::KeyAuth);
-                    }
-                    Some(Err(detail)) => {
-                        self.mark_cluster_unavailable(
-                            task.id,
-                            &spec,
-                            format!("auto-connect failed: {detail}"),
-                        )?;
-                        self.coord.note_cluster_waiting(task.id);
-                        self.note_dispatch_wait(
-                            task.id,
-                            cluster_wait(&spec.id, &format!("auto-connect failed: {detail}")),
-                        );
-                        return Ok(false);
-                    }
-                    None => {
-                        self.mark_cluster_unavailable(
-                            task.id,
-                            &spec,
-                            format!(
-                                "no ssh ControlMaster connection to {} (host {})",
-                                spec.id, spec.host
-                            ),
-                        )?;
-                        self.coord.note_cluster_waiting(task.id);
-                        self.note_dispatch_wait(
-                            task.id,
-                            cluster_wait(&spec.id, "no ssh ControlMaster connection"),
-                        );
-                        return Ok(false);
-                    }
-                }
-            }
-        }
-        let dir_started = Instant::now();
-        // ADR-0041 D1 / ADR-0043 D2: ローカルの作業場所（1 つ以上のリポジトリ）を用意する
-        // （`dir` はその親 = `runs/` `artifacts/` の置き場）。足回りの root はここで初めて固定する
-        // （ADR 2026-10-14-local-machine-settings D5。以後の解決は固定された root を見る）。
-        self.pin_task_root(&task)?;
-        let worktree = self.task_workspaces_for(&task);
-        let dir = match &worktree {
-            Some(ws) => ws.task_dir.clone(),
-            None => match self.task_dir(&task) {
-                Some(d) => d,
-                None => {
-                    tracing::warn!(task_id = %task.id, "cannot resolve the workspace directory; task left ready");
-                    return Ok(false);
-                }
-            },
-        };
-        log_slow_step("task_dir", dir_started);
         // ADR-0074 D1.2（Phase F2b）: v2 の WU の run は、WU ごとの worktree
         // （`<task_dir>/wu/<key>/repos/<name>`、ブランチ `celeris-wu/<task_id>/<key>`）で走る。並列 1 に
         // 倒した Task・統合の repair WU は Task の worktree を共有する（`None`）。
         let v2_wu = current_wu.as_ref().filter(|w| w.phase.is_some()).cloned();
         let task_worktree = worktree.clone();
-        let mut wu_workspace: Option<WorkUnitWorkspace> = None;
-        if let Some(wu) = &current_wu {
-            // ADR-0074「Phase F5-fix7 実装時の明確化」: 一時的な失敗の後のバックオフ中は試さない。
-            if let Some(f) = self.coord.wu_prepare_backoff(&wu.id, self.now_utc()) {
-                tracing::debug!(task_id = %task.id, work_unit = %wu.key, failures = f.count, retry_at = %f.retry_at, "work unit worktree backoff; not dispatching yet");
-                return Ok(false);
-            }
-        }
-        if let Some(wu) = &v2_wu {
-            match self.prepare_work_unit_workspace(&task, wu, task_worktree.as_ref()) {
-                Ok(prepared) => {
-                    wu_workspace = prepared;
-                }
-                Err(e) => {
-                    self.on_work_unit_prepare_failed(&task, wu, &e, second_pass)?;
-                    return Ok(false);
-                }
-            }
-        }
         let worktree = match &wu_workspace {
             Some(w) => Some(w.workspaces.clone()),
             None => worktree,
         };
-        // ADR 2026-11-11-disk-aware-dispatch D1: 予備を割るなら待たせ（M12）、通した見込みは起動した後で数える。
         let target_wu = wu_workspace.as_ref().and(v2_wu.as_ref());
-        let (view, wu) = (self.maint.scratch_view(), run_key.work_unit.as_deref());
-        let repo_of = || self.cargo_target_repo(&task).map(|r| r.source);
-        let gate = (!is_planner_dispatch).then_some(self.maint.admission());
-        let disk = gate.and_then(|g| g.judge_run(view, &task, wu, target_wu, repo_of));
-        if let Some(crate::disk_admission::Admission::Wait(wait)) = disk {
-            self.note_dispatch_wait(task.id, wait);
-            return Ok(false);
-        }
-        // Capture before any worker can write; retries load the same WU-id snapshot.
-        let mut wu_scope_env = Vec::new();
-        if let Some(wu) = &current_wu
-            && !matches!(task.workspace, WorkspaceSpec::Remote { .. })
-        {
-            let prepared = (|| {
-                if let Some(ws) = &worktree {
-                    for repo in &ws.repos {
-                        if let Some(wt) = &repo.worktree {
-                            wt.ensure_blocking()
-                                .map_err(|e| WuPrepareError::transient(e.to_string()))?;
-                        }
-                    }
-                }
-                // A shared repository's workspace symlink is installed by the
-                // worker later; its source resolves to the same git directory.
-                let cwd = worktree
-                    .as_ref()
-                    .and_then(|ws| ws.repos.first())
-                    .map(|repo| {
-                        if repo.worktree.is_some() {
-                            repo.dir.as_path()
-                        } else {
-                            repo.source.as_path()
-                        }
-                    })
-                    .unwrap_or(&dir);
-                super::wu_base::scope_env(cwd, &wu.id, true)
-                    .map_err(|e| WuPrepareError::transient(e.to_string()))
-            })();
-            match prepared {
-                Ok(env) => {
-                    self.coord.clear_wu_prepare_failures(&wu.id);
-                    wu_scope_env = env;
-                }
-                Err(e) => {
-                    self.on_work_unit_prepare_failed(&task, wu, &e, second_pass)?;
-                    return Ok(false);
-                }
-            }
-        }
+        // 通した write-set の予約と disk の見込みは、起動した後で数える（ADR-0130 D3・ADR 2026-11-11-disk-aware-dispatch D1）。
+        let write_reservation = match input.place.write_set.take() {
+            Some(WriteSetAdmission::Admit(reservation)) => reservation,
+            _ => None,
+        };
+        let disk = input.place.disk.take().flatten();
+        let cos = admitted.cos_run;
+        let is_planner_dispatch = admitted.planner_run;
+        let replan_dispatch = admitted.replan;
+        let planner_human_frontier = admitted.planner_human_frontier;
         // ADR-0052 D1 / D2（Phase 64）: 知識整理 run は dispatch の直前に `langmem` の接続先へ
         // `GET /models` を当て、届かなければ tier `cheap` の**汎用**ハーネスへ倒す
         // （task harness の固定を外すだけで、通常の route 選択へ戻す）。LLM は呼ばない。
@@ -1623,14 +1619,6 @@ fn describe_escalation(audit: &task_core::EscalationAudit) -> String {
     }
 }
 
-/// ADR 2026-10-11-task-wait-reasons M3: クラスタ待ち。
-fn cluster_wait(cluster_id: &str, detail: &str) -> task_core::TaskWait {
-    task_core::TaskWait::Cluster {
-        cluster_id: cluster_id.to_string(),
-        detail: detail.to_string(),
-    }
-}
-
 /// The lane label kept on the routing request (the default route policy does not read it).
 pub(super) fn tier_label(tier: task_core::Tier) -> &'static str {
     match tier {
@@ -1644,10 +1632,21 @@ pub(super) fn tier_label(tier: task_core::Tier) -> &'static str {
 fn admission_unit(gate: &WuDispatchGate) -> AdmissionUnit {
     match gate {
         WuDispatchGate::Atomic => AdmissionUnit::Atomic,
-        WuDispatchGate::RunWorkUnit(wu) => AdmissionUnit::WorkUnit(wu.spec.budget),
+        WuDispatchGate::RunWorkUnit(wu) => AdmissionUnit::WorkUnit {
+            budget: wu.spec.budget,
+            phased: wu.phase.is_some(),
+        },
         WuDispatchGate::RunPlanner { replan } => AdmissionUnit::Planner { replan: *replan },
         WuDispatchGate::StartIntegration(_) => AdmissionUnit::StartIntegration,
         WuDispatchGate::FinalReview => AdmissionUnit::FinalReview,
         WuDispatchGate::Skip => AdmissionUnit::Skip,
+    }
+}
+
+/// WU の gate が走らせる WU（`RunWorkUnit` のときだけ）。
+fn gate_wu(gate: &Option<WuDispatchGate>) -> Option<&task_core::WorkUnitRow> {
+    match gate {
+        Some(WuDispatchGate::RunWorkUnit(wu)) => Some(wu),
+        _ => None,
     }
 }

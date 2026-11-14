@@ -14,15 +14,25 @@
 //!   WU の gate の種類（段の統合・最終 review・何もしない）
 //! - planner run かの組み合わせと予算の上書き → 再試行の backoff（1 本目で attempts が 1 以上）→ infra の backoff（1 本目だけ。
 //!   期限を過ぎていれば解除を求める）→ browser の前提（1 本目で前提が要る task だけ）
+//! - 予算の上書きを task に当てる → write-set の gate → クラスタの解決（設定に無い・担当が道具を持たないなら止める）→
+//!   remote ならクラスタの cooldown → 並列度 → この tick の接続の確認（切れていれば自動接続を 1 回試し、成功したら接続済みに
+//!   する）→ 作業場所の dir → WU の worktree の用意の backoff（WU の run だけ）→ WU の worktree の用意（phase のある WU だけ）→
+//!   disk の見込み（planner run でないときだけ）→ WU の worktree の確認と scope env（Local の WU の run だけ。用意できたら
+//!   用意の失敗の記録を消す）
 //!
 //! 並列 WU の 2 本目以降が飛ばす gate: 同じ task の run・CoS の対話 run か・担当・execution gate・WU の gate の選択・
 //! 決定と設計 review の待ち・再試行と infra の backoff・browser の前提。飛ばさない gate: 知識整理の入力・並列度の枠・
-//! 打ち切ったばかりの run・eligible・disk の critical・木の上限・WU の gate の種類・予算の上書き。
+//! 打ち切ったばかりの run・eligible・disk の critical・木の上限・WU の gate の種類・予算の上書き・write-set から scope env
+//! までの置き場所の gate（WU の用意に失敗したときの止め方だけが 2 本目以降かを持つ）。
 //!
 //! 既存の dispatcher の試験は 1 つの試験で 1 つの gate だけを止めるので、隣り合う 2 つの gate の順を入れ替えても合格する。
-//! 入れ替えは `tests.rs` の、両方が止める入力で先の gate が勝つことを確かめる試験でだけ検出できる。
+//! 入れ替えは `tests.rs` の、両方が止める入力で先の gate が勝つことを確かめる試験でだけ検出できる。置き場所の gate は
+//! 止めたときの副作用（クラスタを使えないと記録する・WU を blocked にする・待ちを記録する）が gate ごとに違うので、先の gate が
+//! 勝たないと、今は起きない副作用が起きる。
 //!
 //! この module は入力の値だけを読む。永続化・file・process に触れず、dispatcher の module を使わず、log も出さない（D2 の 2・3）。
+
+use std::time::Instant;
 
 use task_core::{
     BackoffCause, CapacityScope, ExecutionMode, GateMode, GateSource, Route, Task, TaskWait, Tier,
@@ -30,11 +40,15 @@ use task_core::{
 };
 use time::OffsetDateTime;
 
+use crate::cluster_runtime::ClusterResolution;
+use crate::disk_admission::Admission;
+use crate::execution_coordination::WriteSetAdmission;
+
 #[cfg(test)]
 mod tests;
 
 /// dispatch_one がそれまでに集めた fact。`None`（bool の欄は `false`）はまだ集めていない（admit が求めていない）。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct AdmissionInput {
     /// 並列 WU の 2 本目以降で dispatch_one が受けた WU（`RunWorkUnit` を落とした値）。task は既に Running で、担当・gate・
     /// backoff は 1 本目で済んでいる。1 本目は `None`。
@@ -79,6 +93,84 @@ pub(crate) struct AdmissionInput {
     pub(crate) browser_prereq_needed: Option<bool>,
     /// browser の前提が無い・古いので止めたか（`browser_prereq_hold`。止めたら task を遷移させてある）。
     pub(crate) browser_prereq_hold: Option<bool>,
+    /// 予算の上書きから scope env までの置き場所の fact。
+    pub(crate) place: AdmissionPlace,
+}
+
+/// 置き場所の fact（予算の上書き・write-set・クラスタ・作業場所・WU の用意・disk）。`None`（bool の欄は `false`）は
+/// まだ集めていない。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct AdmissionPlace {
+    /// run の tier と予算の上書きを task に当てたか。
+    pub(crate) run_override_applied: bool,
+    /// write-set の gate の結果（`admit_write_set`。`Hold` の待ちは gate が記録してある。`Admit` の予約は起動で使う）。
+    pub(crate) write_set: Option<WriteSetAdmission>,
+    /// `resolve_cluster` の結果を落とした値。
+    pub(crate) cluster: Option<AdmissionCluster>,
+    /// クラスタの cooldown の期限（`cooldown_until`）と、dispatch_one が受けた今の時刻。
+    pub(crate) cluster_cooldown: Option<ClusterCooldown>,
+    /// クラスタで走っている run の数（`cluster_in_use`）。
+    pub(crate) cluster_in_use: Option<usize>,
+    /// この tick の接続の確認の結果（`connected`。確かめていなければ内側が `None`）。
+    pub(crate) cluster_connected: Option<Option<bool>>,
+    /// 自動接続の結果（`try_auto_connect_cluster`。接続のフックが無ければ内側が `None`）。
+    pub(crate) cluster_auto_connect: Option<Option<Result<(), String>>>,
+    /// 自動接続できたクラスタを接続済みにしたか（`set_cluster_connected`）。
+    pub(crate) cluster_marked_connected: bool,
+    /// 作業場所の dir を解決できたか（`pin_task_root` の後に `task_workspaces_for`、無ければ `task_dir`）。
+    pub(crate) task_dir_resolved: Option<bool>,
+    /// WU の worktree の用意の backoff（`wu_prepare_backoff`。続いた失敗の回数と次に試してよい時刻。backoff の中で
+    /// なければ内側が `None`）。
+    pub(crate) wu_prepare_backoff: Option<Option<(u32, OffsetDateTime)>>,
+    /// WU の worktree を用意できたか（`prepare_work_unit_workspace`）。
+    pub(crate) wu_workspace_ready: Option<bool>,
+    /// disk の見込みの判定（`judge_run`。判定しなければ内側が `None`）。
+    pub(crate) disk: Option<Option<Admission>>,
+    /// WU の worktree の確認と scope env（`wu_base::scope_env`）を用意できたか（用意できたら dispatch_one が
+    /// `clear_wu_prepare_failures` で用意の失敗の記録を消してある）。
+    pub(crate) wu_scope_env_ready: Option<bool>,
+}
+
+/// `resolve_cluster` の結果（クラスタの設定と作業場所の path は dispatch_one が持つ）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AdmissionCluster {
+    /// Local の作業場所の task（`resolve_cluster` は Local の作業場所にだけこれを返す）。
+    Local,
+    /// remote の作業場所で、クラスタが設定にあり担当が使える（値は設定のクラスタ id・host・並列度）。
+    Remote {
+        id: String,
+        host: String,
+        concurrency: usize,
+    },
+    /// `[[clusters]]` にそのクラスタ id が無い。
+    NotConfigured,
+    /// 担当が `cluster:<id>` を持たない（ADR-0062 B1）。
+    AssigneeLacksTool { cluster: String },
+}
+
+/// クラスタの cooldown の期限（無ければ `None`）と、比べる今の時刻。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ClusterCooldown {
+    pub(crate) until: Option<Instant>,
+    pub(crate) now: Instant,
+}
+
+impl AdmissionCluster {
+    /// `resolve_cluster` の結果から読む（値を写すだけで判定はしない。クラスタの設定は dispatch_one が持つ）。
+    pub(crate) fn of(resolution: &ClusterResolution) -> Self {
+        match resolution {
+            ClusterResolution::Local => Self::Local,
+            ClusterResolution::Resolved(spec, ..) => Self::Remote {
+                id: spec.id.clone(),
+                host: spec.host.clone(),
+                concurrency: spec.concurrency,
+            },
+            ClusterResolution::NotConfigured => Self::NotConfigured,
+            ClusterResolution::AssigneeLacksTool { cluster } => Self::AssigneeLacksTool {
+                cluster: cluster.clone(),
+            },
+        }
+    }
 }
 
 /// WU の gate（dispatcher の非公開の型）を admit の要る値に落としたもの。
@@ -86,8 +178,12 @@ pub(crate) struct AdmissionInput {
 pub(crate) enum AdmissionUnit {
     /// 計画を持たない task の run。
     Atomic,
-    /// 計画の WorkUnit の run。値はその WU の予算（`WorkUnitSpec.budget`）。
-    WorkUnit(Option<WorkUnitBudget>),
+    /// 計画の WorkUnit の run。`budget` はその WU の予算（`WorkUnitSpec.budget`）、`phased` は工程を持つ WU
+    /// （自分の worktree と run の鍵を持つ v2 の WU）か。
+    WorkUnit {
+        budget: Option<WorkUnitBudget>,
+        phased: bool,
+    },
     /// planner run。`replan` は既に計画を持つ task の replan。
     Planner { replan: bool },
     /// 段の WU がすべて done で、統合を始める（run は起こさない）。
@@ -166,7 +262,7 @@ pub(crate) enum AdmissionProposal {
     Need(AdmissionFact),
     /// 起こさない。dispatch_one が止め方を適用して `Ok(false)` を返す。
     Stop(AdmissionStop),
-    /// 起動へ進む。dispatch_one は予算の上書きを task に当て、lease 以降を今のとおり行う。
+    /// 起動へ進む。dispatch_one は lease 以降を今のとおり行う。
     Launch(AdmissionLaunch),
 }
 
@@ -213,6 +309,50 @@ pub(crate) enum AdmissionFact {
     BrowserPrereq { planner_run: bool },
     /// `browser_prereq_hold`（前提が無ければ task を遷移させる）。
     BrowserPrereqHold,
+    /// run の tier と予算の上書きを task に当てる（`None` は上書きしない。上書きの前の予算は dispatch_one が控える）。
+    RunOverride {
+        tier: Option<Tier>,
+        budget: Option<(u32, u64)>,
+    },
+    /// `admit_write_set`（`planner_run` は planner run か。重なれば gate が待ちを記録する）。
+    WriteSet { planner_run: bool },
+    /// `resolve_cluster`。
+    Cluster,
+    /// remote のクラスタの fact。
+    ClusterState(ClusterFact),
+    /// `pin_task_root` の後に `task_workspaces_for`、無ければ `task_dir`。
+    TaskDir,
+    /// WU の run の作業場所の fact。
+    WorkUnit(WorkUnitFact),
+    /// `judge_run`（planner run でないときだけ）。
+    Disk,
+}
+
+/// remote のクラスタの fact（`resolve_cluster` が remote のクラスタを返した後でだけ求める）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClusterFact {
+    /// `cooldown_until` と今の時刻。
+    Cooldown,
+    /// `cluster_in_use`。
+    Load,
+    /// `connected`（この tick の `refresh_cluster_liveness` の結果）。
+    Connected,
+    /// `try_auto_connect_cluster`（試したら `note_key_auth_attempt` で記録する）。
+    AutoConnect,
+    /// `set_cluster_connected`（自動接続できたクラスタを接続済みにする）。
+    MarkConnected,
+}
+
+/// WU の run の作業場所の fact（WU の run でだけ求める）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WorkUnitFact {
+    /// `wu_prepare_backoff`。
+    PrepareBackoff,
+    /// `prepare_work_unit_workspace`（phase のある WU だけ）。
+    Workspace,
+    /// worktree の `ensure_blocking` と `wu_base::scope_env`（Local の作業場所だけ。用意できたら
+    /// `clear_wu_prepare_failures`）。
+    ScopeEnv,
 }
 
 /// 起こさないときの止め方。
@@ -231,6 +371,26 @@ pub(crate) enum AdmissionStop {
     StartIntegration,
     /// 最終 review を ready から始める（`start_final_review_from_ready`）。
     StartFinalReview,
+    /// クラスタが設定に無い（`warn_unroutable_once` の warn・`mark_unroutable` の後に待ちを記録する）。
+    ClusterNotConfigured { wait: TaskWait },
+    /// 担当がクラスタの道具を持たない（`block_task_missing_cluster_tool`）。
+    ClusterToolMissing { cluster: String },
+    /// クラスタの待ち。`unavailable` があれば `mark_cluster_unavailable` にその理由を渡し、`waiting` なら
+    /// `note_cluster_waiting`（ADR-0018 D2: 人がログインするまで進まないので待ち対象に数えない）、最後に待ちを記録する。
+    Cluster {
+        unavailable: Option<String>,
+        waiting: bool,
+        wait: TaskWait,
+    },
+    /// 作業場所の dir を解決できない（warn だけ）。
+    NoTaskDir,
+    /// WU の worktree の用意の backoff の中（debug log だけ）。
+    WuPrepareBackoff {
+        failures: u32,
+        retry_at: OffsetDateTime,
+    },
+    /// WU の worktree か scope env を用意できない（`on_work_unit_prepare_failed`。`forced` は並列 WU の 2 本目以降か）。
+    WuPrepareFailed { forced: bool },
 }
 
 /// 起動へ進むときの run の形。
@@ -246,10 +406,6 @@ pub(crate) struct AdmissionLaunch {
     pub(crate) replan: bool,
     /// 人が task に `tier:frontier` を明示したか（planner run の lane の出所に使う。ADR-0074 D5.3）。
     pub(crate) planner_human_frontier: bool,
-    /// run の tier の上書き（planner run だけ）。
-    pub(crate) tier: Option<Tier>,
-    /// run の turn と壁時計の上書き（planner run と WU の run）。`None` は task の予算のまま。
-    pub(crate) budget: Option<(u32, u64)>,
 }
 
 /// run を起こすかを決める（ADR 2026-11-14 D5 の順）。
@@ -265,6 +421,11 @@ fn fact<T: Clone>(value: &Option<T>, request: AdmissionFact) -> Result<T, Admiss
     value.clone().ok_or(AdmissionProposal::Need(request))
 }
 
+/// 集めた fact を写さずに読む（`fact` と同じく、まだ無ければ求める）。
+fn fact_ref<T>(value: &Option<T>, request: AdmissionFact) -> Result<&T, AdmissionProposal> {
+    value.as_ref().ok_or(AdmissionProposal::Need(request))
+}
+
 fn stop(how: AdmissionStop) -> AdmissionProposal {
     AdmissionProposal::Stop(how)
 }
@@ -272,8 +433,9 @@ fn stop(how: AdmissionStop) -> AdmissionProposal {
 fn decide(input: &AdmissionInput) -> Result<AdmissionLaunch, AdmissionProposal> {
     let cos_run = capacity_and_host(input)?;
     let unit = unit_gate(input)?;
-    let launch = run_shape(input, unit, cos_run)?;
+    let (launch, run_override) = run_shape(input, unit, cos_run)?;
     backoff_and_browser(input, &launch)?;
+    placement(input, unit, &launch, run_override)?;
     Ok(launch)
 }
 
@@ -353,23 +515,23 @@ fn unit_gate(input: &AdmissionInput) -> Result<AdmissionUnit, AdmissionProposal>
         // ADR-0074「F5-fix8 実装時の明確化」: 仕事の残っていない計画の最終レビュー（run は起こさない）。
         AdmissionUnit::FinalReview => Err(stop(AdmissionStop::StartFinalReview)),
         AdmissionUnit::Skip => Err(stop(AdmissionStop::Quiet)),
-        AdmissionUnit::Atomic | AdmissionUnit::WorkUnit(_) | AdmissionUnit::Planner { .. } => {
+        AdmissionUnit::Atomic | AdmissionUnit::WorkUnit { .. } | AdmissionUnit::Planner { .. } => {
             Ok(unit)
         }
     }
 }
 
-/// D5 の 13: planner run かの組み合わせと、run の tier と予算の上書き。
+/// D5 の 13: planner run かの組み合わせと、run の tier と予算の上書き（task に当てる要求）。
 fn run_shape(
     input: &AdmissionInput,
     unit: AdmissionUnit,
     cos_run: bool,
-) -> Result<AdmissionLaunch, AdmissionProposal> {
+) -> Result<(AdmissionLaunch, AdmissionFact), AdmissionProposal> {
     let values = fact(&input.task_values, AdmissionFact::TaskValues)?;
     // ADR-0072 D17（Phase E4）: replan の planner run。
     let replan = matches!(unit, AdmissionUnit::Planner { replan: true });
     let work_unit = match unit {
-        AdmissionUnit::WorkUnit(budget) => Some(budget),
+        AdmissionUnit::WorkUnit { budget, .. } => Some(budget),
         _ => None,
     };
     let decision_is_compound =
@@ -414,15 +576,14 @@ fn run_shape(
     } else {
         (None, None)
     };
-    Ok(AdmissionLaunch {
+    let launch = AdmissionLaunch {
         cos_run,
         direct_route,
         planner_run,
         replan,
         planner_human_frontier,
-        tier,
-        budget,
-    })
+    };
+    Ok((launch, AdmissionFact::RunOverride { tier, budget }))
 }
 
 /// D5 の 14〜16: 再試行の backoff・infra の backoff・browser の前提（どれも 1 本目だけ）。
@@ -466,4 +627,130 @@ fn backoff_and_browser(
         return Err(stop(AdmissionStop::Quiet));
     }
     Ok(())
+}
+
+/// D5 の 17〜: 予算の上書き・write-set・クラスタ・作業場所の dir・WU の用意の backoff と worktree・disk の見込み・scope env
+/// （どれも並列 WU の 2 本目以降も見る）。
+fn placement(
+    input: &AdmissionInput,
+    unit: AdmissionUnit,
+    launch: &AdmissionLaunch,
+    run_override: AdmissionFact,
+) -> Result<(), AdmissionProposal> {
+    let place = &input.place;
+    // D18/D14: 上書きは write-set の gate の前に当てる（ADR-0072 D14）。
+    if !place.run_override_applied {
+        return Err(AdmissionProposal::Need(run_override));
+    }
+    // ADR-0130 D3: 同じ repo で走っている run と expected write-set が強く重なれば次 tick に回す（待ちは gate が記録する）。
+    let planner_run = launch.planner_run;
+    let write_set = fact_ref(&place.write_set, AdmissionFact::WriteSet { planner_run })?;
+    if matches!(write_set, WriteSetAdmission::Hold { .. }) {
+        return Err(stop(AdmissionStop::Quiet));
+    }
+    // ADR-0018・ADR-0062 B1（Phase 107）: 設定に無いクラスタは unroutable、担当が道具を持たなければ blocked にして人に聞く。
+    let remote = match fact(&place.cluster, AdmissionFact::Cluster)? {
+        AdmissionCluster::Local => false,
+        AdmissionCluster::Remote {
+            id,
+            host,
+            concurrency,
+        } => {
+            cluster_link(place, &id, &host, concurrency)?;
+            true
+        }
+        AdmissionCluster::NotConfigured => {
+            let detail = "no such cluster in the config".to_string();
+            let wait = TaskWait::Unroutable { detail };
+            return Err(stop(AdmissionStop::ClusterNotConfigured { wait }));
+        }
+        AdmissionCluster::AssigneeLacksTool { cluster } => {
+            return Err(stop(AdmissionStop::ClusterToolMissing { cluster }));
+        }
+    };
+    // ADR-0041 D1 / ADR-0043 D2: 作業場所の dir を解決できなければ起こさない。
+    if !fact(&place.task_dir_resolved, AdmissionFact::TaskDir)? {
+        return Err(stop(AdmissionStop::NoTaskDir));
+    }
+    let AdmissionUnit::WorkUnit { phased, .. } = unit else {
+        return disk(place, planner_run);
+    };
+    let wu = AdmissionFact::WorkUnit;
+    // ADR-0074「Phase F5-fix7 実装時の明確化」: 一時的な失敗の後の backoff の中は試さない。
+    if let Some((failures, retry_at)) =
+        fact(&place.wu_prepare_backoff, wu(WorkUnitFact::PrepareBackoff))?
+    {
+        return Err(stop(AdmissionStop::WuPrepareBackoff { failures, retry_at }));
+    }
+    let failed = AdmissionStop::WuPrepareFailed {
+        forced: input.forced_unit.is_some(),
+    };
+    // ADR-0074 D1.2（Phase F2b）: phase のある WU は WU ごとの worktree で走る。
+    if phased && !fact(&place.wu_workspace_ready, wu(WorkUnitFact::Workspace))? {
+        return Err(stop(failed));
+    }
+    disk(place, planner_run)?;
+    // worker が書く前に scope の基点を取る（remote の作業場所は取らない）。
+    if !remote && !fact(&place.wu_scope_env_ready, wu(WorkUnitFact::ScopeEnv))? {
+        return Err(stop(failed));
+    }
+    Ok(())
+}
+
+/// remote のクラスタの cooldown・並列度・接続（ADR-0018 D2・ADR-0032 D3）。止めるなら、待ち（`TaskWait::Cluster`）と、
+/// クラスタを使えないと記録する理由を返す。
+fn cluster_link(
+    place: &AdmissionPlace,
+    id: &str,
+    host: &str,
+    concurrency: usize,
+) -> Result<(), AdmissionProposal> {
+    let state = AdmissionFact::ClusterState;
+    let hold = |unavailable: Option<String>, waiting: bool, detail: &str| {
+        let wait = TaskWait::Cluster {
+            cluster_id: id.to_string(),
+            detail: detail.to_string(),
+        };
+        Err(stop(AdmissionStop::Cluster {
+            unavailable,
+            waiting,
+            wait,
+        }))
+    };
+    let cooldown = fact(&place.cluster_cooldown, state(ClusterFact::Cooldown))?;
+    if cooldown.until.is_some_and(|until| cooldown.now < until) {
+        return hold(None, true, "cooldown");
+    }
+    if fact(&place.cluster_in_use, state(ClusterFact::Load))? >= concurrency {
+        return hold(None, false, "concurrency full");
+    }
+    if fact(&place.cluster_connected, state(ClusterFact::Connected))?.unwrap_or(false) {
+        return Ok(());
+    }
+    // 自動接続は cooldown の中では試さない（失敗すれば cooldown が立つので、同じ tick の 2 本目は試さない）。
+    match fact_ref(&place.cluster_auto_connect, state(ClusterFact::AutoConnect))? {
+        Some(Ok(())) if !place.cluster_marked_connected => {
+            Err(AdmissionProposal::Need(state(ClusterFact::MarkConnected)))
+        }
+        Some(Ok(())) => Ok(()),
+        Some(Err(detail)) => {
+            let detail = format!("auto-connect failed: {detail}");
+            hold(Some(detail.clone()), true, &detail)
+        }
+        None => {
+            let reason = format!("no ssh ControlMaster connection to {id} (host {host})");
+            hold(Some(reason), true, "no ssh ControlMaster connection")
+        }
+    }
+}
+
+/// ADR 2026-11-11-disk-aware-dispatch D1: 予備を割るなら待たせる（M12。planner run は判定しない）。
+fn disk(place: &AdmissionPlace, planner_run: bool) -> Result<(), AdmissionProposal> {
+    if planner_run {
+        return Ok(());
+    }
+    match fact_ref(&place.disk, AdmissionFact::Disk)? {
+        Some(Admission::Wait(wait)) => Err(stop(AdmissionStop::Wait(wait.clone()))),
+        Some(Admission::Go(_)) | None => Ok(()),
+    }
 }

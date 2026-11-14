@@ -2,11 +2,13 @@
 //!
 //! 既存の dispatcher の試験は 1 つの試験で 1 つの gate だけを止めるので、隣り合う 2 つの gate の順を入れ替えても合格する。
 //! ここでは admit を直接呼び、両方が止める入力で先の gate が勝つこと、後ろの gate の fact を求めないこと
-//! （副作用を持つ owner の処理を呼ばせないこと）、並列 WU の 2 本目以降が飛ばす gate の集合、planner run の組み合わせを確かめる。
+//! （副作用を持つ owner の処理を呼ばせないこと）、並列 WU の 2 本目以降が飛ばす gate の集合、planner run の組み合わせ、
+//! 置き場所の gate（write-set・クラスタ・作業場所・WU の用意・disk）の順と止め方を確かめる。
 
 use time::{Duration, OffsetDateTime};
 
 use super::*;
+use crate::run_supervisor::RunKey;
 
 fn at(secs: i64) -> OffsetDateTime {
     OffsetDateTime::UNIX_EPOCH + Duration::seconds(secs)
@@ -54,7 +56,67 @@ fn open_world() -> AdmissionInput {
         infra_backoff_cleared: false,
         browser_prereq_needed: Some(false),
         browser_prereq_hold: Some(false),
+        place: open_place(),
     }
+}
+
+/// 置き場所の gate がどれも止めない答え（Local の作業場所、接続済みのクラスタ、用意できる WU、disk は判定しない）。
+fn open_place() -> AdmissionPlace {
+    AdmissionPlace {
+        run_override_applied: false,
+        write_set: Some(WriteSetAdmission::Admit(None)),
+        cluster: Some(AdmissionCluster::Local),
+        cluster_cooldown: Some(ClusterCooldown {
+            until: None,
+            now: Instant::now(),
+        }),
+        cluster_in_use: Some(0),
+        cluster_connected: Some(Some(true)),
+        cluster_auto_connect: Some(Some(Ok(()))),
+        cluster_marked_connected: false,
+        task_dir_resolved: Some(true),
+        wu_prepare_backoff: Some(None),
+        wu_workspace_ready: Some(true),
+        disk: Some(None),
+        wu_scope_env_ready: Some(true),
+    }
+}
+
+fn remote() -> AdmissionCluster {
+    AdmissionCluster::Remote {
+        id: "c1".to_string(),
+        host: "h1".to_string(),
+        concurrency: 2,
+    }
+}
+
+fn work_unit(phased: bool) -> AdmissionUnit {
+    AdmissionUnit::WorkUnit {
+        budget: None,
+        phased,
+    }
+}
+
+fn cluster_stop(unavailable: Option<&str>, waiting: bool, detail: &str) -> AdmissionProposal {
+    AdmissionProposal::Stop(AdmissionStop::Cluster {
+        unavailable: unavailable.map(str::to_string),
+        waiting,
+        wait: TaskWait::Cluster {
+            cluster_id: "c1".to_string(),
+            detail: detail.to_string(),
+        },
+    })
+}
+
+/// 求められた予算の上書き（tier と、turn と壁時計）。
+fn run_override(asked: &[AdmissionFact]) -> (Option<Tier>, Option<(u32, u64)>) {
+    asked
+        .iter()
+        .find_map(|f| match f {
+            AdmissionFact::RunOverride { tier, budget } => Some((*tier, *budget)),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("予算の上書きを求めなかった: {asked:?}"))
 }
 
 /// dispatch_one の代わりに、admit が求めた fact だけを `world` から 1 つずつ写して admit を呼び直す。
@@ -101,6 +163,31 @@ fn drive(world: &AdmissionInput) -> (Vec<AdmissionFact>, AdmissionProposal) {
             AdmissionFact::BrowserPrereqHold => {
                 input.browser_prereq_hold = world.browser_prereq_hold
             }
+            AdmissionFact::RunOverride { .. } => input.place.run_override_applied = true,
+            AdmissionFact::WriteSet { .. } => input.place.write_set = world.place.write_set.clone(),
+            AdmissionFact::Cluster => input.place.cluster = world.place.cluster.clone(),
+            AdmissionFact::ClusterState(step) => {
+                let (to, from) = (&mut input.place, &world.place);
+                match step {
+                    ClusterFact::Cooldown => to.cluster_cooldown = from.cluster_cooldown,
+                    ClusterFact::Load => to.cluster_in_use = from.cluster_in_use,
+                    ClusterFact::Connected => to.cluster_connected = from.cluster_connected,
+                    ClusterFact::AutoConnect => {
+                        to.cluster_auto_connect = from.cluster_auto_connect.clone()
+                    }
+                    ClusterFact::MarkConnected => to.cluster_marked_connected = true,
+                }
+            }
+            AdmissionFact::TaskDir => input.place.task_dir_resolved = world.place.task_dir_resolved,
+            AdmissionFact::WorkUnit(step) => {
+                let (to, from) = (&mut input.place, &world.place);
+                match step {
+                    WorkUnitFact::PrepareBackoff => to.wu_prepare_backoff = from.wu_prepare_backoff,
+                    WorkUnitFact::Workspace => to.wu_workspace_ready = from.wu_workspace_ready,
+                    WorkUnitFact::ScopeEnv => to.wu_scope_env_ready = from.wu_scope_env_ready,
+                }
+            }
+            AdmissionFact::Disk => input.place.disk = world.place.disk.clone(),
         }
     }
 }
@@ -113,7 +200,7 @@ fn launch_of(proposal: AdmissionProposal) -> AdmissionLaunch {
 }
 
 /// 不変条件: どの gate も止めない 1 本目の task では、fact を移行前の dispatch_one と同じ順で 1 回ずつ求める
-/// （ADR 2026-11-14 D5 の 1〜16。attempts が 0 なので再試行の backoff は求めない）。
+/// （ADR 2026-11-14 D5 の 1〜16 と、Local の atomic の run の置き場所の gate）。
 /// 既存の dispatcher の試験は順を見ないので、gate の入れ替えを検出できない。
 #[test]
 fn admit_first_pass_asks_facts_in_the_dispatch_order() {
@@ -150,11 +237,18 @@ fn admit_first_pass_asks_facts_in_the_dispatch_order() {
             AdmissionFact::ClearInfraBackoff,
             AdmissionFact::BrowserPrereq { planner_run: false },
             AdmissionFact::BrowserPrereqHold,
+            AdmissionFact::RunOverride {
+                tier: None,
+                budget: None,
+            },
+            AdmissionFact::WriteSet { planner_run: false },
+            AdmissionFact::Cluster,
+            AdmissionFact::TaskDir,
+            AdmissionFact::Disk,
         ]
     );
     let launch = launch_of(done);
     assert!(!launch.planner_run && !launch.cos_run);
-    assert_eq!((launch.tier, launch.budget), (None, None));
 }
 
 /// 不変条件: 隣り合う 2 つの gate が両方止める入力では、今の順の先の gate が勝ち、後ろの gate の fact を求めない。
@@ -344,7 +438,10 @@ fn admit_second_parallel_unit_skips_only_the_first_pass_gates() {
         max_wall_secs: None,
     };
     let mut world = open_world();
-    world.forced_unit = Some(AdmissionUnit::WorkUnit(Some(wu_budget)));
+    world.forced_unit = Some(AdmissionUnit::WorkUnit {
+        budget: Some(wu_budget),
+        phased: false,
+    });
     world.task_runs = Some(3);
     world.cos_run = Some(true);
     world.assigned = Some(false);
@@ -376,14 +473,23 @@ fn admit_second_parallel_unit_skips_only_the_first_pass_gates() {
             AdmissionFact::DiskCritical,
             AdmissionFact::TreeLimit,
             AdmissionFact::TaskValues,
+            AdmissionFact::RunOverride {
+                tier: None,
+                budget: Some((50, 1800)),
+            },
+            AdmissionFact::WriteSet { planner_run: false },
+            AdmissionFact::Cluster,
+            AdmissionFact::TaskDir,
+            AdmissionFact::WorkUnit(WorkUnitFact::PrepareBackoff),
+            AdmissionFact::Disk,
+            AdmissionFact::WorkUnit(WorkUnitFact::ScopeEnv),
         ]
     );
     let launch = launch_of(done);
     assert!(!launch.cos_run && !launch.planner_run);
-    assert_eq!(launch.budget, Some((50, 1800)));
 
     let mut world = open_world();
-    world.forced_unit = Some(AdmissionUnit::WorkUnit(None));
+    world.forced_unit = Some(work_unit(false));
     world.disk_critical = Some(true);
     let (_, done) = drive(&world);
     assert!(matches!(
@@ -459,7 +565,7 @@ fn admit_planner_run_combination_matches_the_dispatch_rules() {
             true,
         ),
         (
-            AdmissionUnit::WorkUnit(None),
+            work_unit(false),
             GateMode::On,
             compound_policy,
             true,
@@ -521,10 +627,8 @@ fn admit_overrides_the_run_budget_by_run_kind() {
     world.browser_prereq_needed = Some(false);
     let (asked, done) = drive(&world);
     assert!(asked.contains(&AdmissionFact::BrowserPrereq { planner_run: true }));
-    let launch = launch_of(done);
-    assert_eq!(launch.tier, Some(Tier::Cheap));
-    assert_eq!(launch.budget, Some((40, 1200)));
-    assert!(!launch.planner_human_frontier);
+    assert_eq!(run_override(&asked), (Some(Tier::Cheap), Some((40, 1200))));
+    assert!(!launch_of(done).planner_human_frontier);
 
     world.task_values = Some(AdmissionTaskValues {
         gate_mode: GateMode::On,
@@ -534,23 +638,282 @@ fn admit_overrides_the_run_budget_by_run_kind() {
         planner_tier: Tier::Cheap,
         ..values()
     });
-    let launch = launch_of(drive(&world).1);
-    assert!(launch.planner_human_frontier);
-    assert_eq!(launch.tier, Some(Tier::Frontier));
+    let (asked, done) = drive(&world);
+    assert!(launch_of(done).planner_human_frontier);
+    assert_eq!(run_override(&asked).0, Some(Tier::Frontier));
 
     let mut world = open_world();
-    world.unit = Some(AdmissionUnit::WorkUnit(Some(WorkUnitBudget {
-        max_turns: None,
-        max_wall_secs: Some(90),
-    })));
+    world.unit = Some(AdmissionUnit::WorkUnit {
+        budget: Some(WorkUnitBudget {
+            max_turns: None,
+            max_wall_secs: Some(90),
+        }),
+        phased: false,
+    });
     world.task_values = Some(AdmissionTaskValues {
         budget: (45, 600),
         ..values()
     });
-    let launch = launch_of(drive(&world).1);
-    assert_eq!((launch.tier, launch.budget), (None, Some((45, 90))));
+    let (asked, done) = drive(&world);
+    launch_of(done);
+    assert_eq!(run_override(&asked), (None, Some((45, 90))));
 
-    world.unit = Some(AdmissionUnit::WorkUnit(None));
-    let launch = launch_of(drive(&world).1);
-    assert_eq!(launch.budget, Some((45, 1800)));
+    world.unit = Some(work_unit(false));
+    let (asked, done) = drive(&world);
+    launch_of(done);
+    assert_eq!(run_override(&asked).1, Some((45, 1800)));
+}
+
+/// 不変条件: 置き場所の gate は、予算の上書き → write-set → クラスタの解決 → （remote なら）cooldown → 並列度 →
+/// 接続の確認 → 自動接続 → 接続済みにする → 作業場所の dir → WU の用意の backoff → （phase のある WU なら）WU の
+/// worktree → disk の見込み → （Local の WU なら）scope env の順に求める。remote の WU は scope env を、phase の無い WU は
+/// WU の worktree を、planner run は disk の見込みを求めない。
+/// 既存の dispatcher の試験は 1 つの試験で 1 つの gate の結果だけを見るので、求める順と、どの run の種類で gate を
+/// 省くかの入れ替えを検出できない。
+#[test]
+fn admit_place_facts_follow_the_dispatch_order() {
+    let mut world = open_world();
+    world.unit = Some(work_unit(true));
+    world.place.cluster = Some(remote());
+    world.place.cluster_connected = Some(None);
+    let (asked, done) = drive(&world);
+    let at = asked
+        .iter()
+        .position(|f| matches!(f, AdmissionFact::RunOverride { .. }))
+        .unwrap_or_else(|| panic!("予算の上書きを求めなかった: {asked:?}"));
+    let state = AdmissionFact::ClusterState;
+    let wu = AdmissionFact::WorkUnit;
+    assert_eq!(
+        asked[at + 1..],
+        [
+            AdmissionFact::WriteSet { planner_run: false },
+            AdmissionFact::Cluster,
+            state(ClusterFact::Cooldown),
+            state(ClusterFact::Load),
+            state(ClusterFact::Connected),
+            state(ClusterFact::AutoConnect),
+            state(ClusterFact::MarkConnected),
+            AdmissionFact::TaskDir,
+            wu(WorkUnitFact::PrepareBackoff),
+            wu(WorkUnitFact::Workspace),
+            AdmissionFact::Disk,
+        ]
+    );
+    launch_of(done);
+
+    world.place.cluster = Some(AdmissionCluster::Local);
+    world.unit = Some(work_unit(false));
+    let (asked, _) = drive(&world);
+    assert!(
+        !asked
+            .iter()
+            .any(|f| matches!(f, AdmissionFact::ClusterState(_)))
+    );
+    assert!(!asked.contains(&wu(WorkUnitFact::Workspace)));
+    assert_eq!(asked.last(), Some(&wu(WorkUnitFact::ScopeEnv)));
+
+    let mut world = open_world();
+    world.task_values = Some(AdmissionTaskValues {
+        gate_mode: GateMode::On,
+        execution: Some((ExecutionMode::Compound, GateSource::Policy)),
+        ..values()
+    });
+    world.place.disk = Some(Some(Admission::Wait(TaskWait::DiskCritical {
+        path: "/local".to_string(),
+    })));
+    let (asked, done) = drive(&world);
+    assert!(asked.contains(&AdmissionFact::WriteSet { planner_run: true }));
+    assert!(!asked.contains(&AdmissionFact::Disk));
+    assert!(launch_of(done).planner_run);
+}
+
+/// 不変条件: 予算の上書きを当ててから write-set の gate を求め、write-set の保留はクラスタの解決（設定に無いクラスタの
+/// unroutable・担当が道具を持たないときの blocked）より先に勝つ。クラスタの解決で止めたら cooldown 以降と作業場所の dir
+/// （root を固定する）を求めない。
+/// 既存の試験は write-set の保留とクラスタの不備を同時に立てないので、この順の入れ替えを検出できない。
+#[test]
+fn admit_write_set_hold_wins_over_the_cluster_resolution() {
+    let mut world = open_world();
+    let blocker = RunKey {
+        task: task_core::TaskId::new(),
+        work_unit: None,
+    };
+    world.place.write_set = Some(WriteSetAdmission::Hold { blocker });
+    world.place.cluster = Some(AdmissionCluster::NotConfigured);
+    let (asked, done) = drive(&world);
+    assert_eq!(done, AdmissionProposal::Stop(AdmissionStop::Quiet));
+    assert_eq!(
+        asked.last(),
+        Some(&AdmissionFact::WriteSet { planner_run: false })
+    );
+    assert!(matches!(
+        asked[asked.len() - 2],
+        AdmissionFact::RunOverride { .. }
+    ));
+
+    world.place.write_set = Some(WriteSetAdmission::Admit(None));
+    let (asked, done) = drive(&world);
+    let wait = TaskWait::Unroutable {
+        detail: "no such cluster in the config".to_string(),
+    };
+    assert_eq!(
+        done,
+        AdmissionProposal::Stop(AdmissionStop::ClusterNotConfigured { wait })
+    );
+    assert_eq!(asked.last(), Some(&AdmissionFact::Cluster));
+
+    let cluster = "c9".to_string();
+    world.place.cluster = Some(AdmissionCluster::AssigneeLacksTool {
+        cluster: cluster.clone(),
+    });
+    world.place.task_dir_resolved = Some(false);
+    let (asked, done) = drive(&world);
+    assert_eq!(
+        done,
+        AdmissionProposal::Stop(AdmissionStop::ClusterToolMissing { cluster })
+    );
+    assert!(!asked.contains(&AdmissionFact::TaskDir));
+}
+
+/// 不変条件: remote のクラスタは cooldown → 並列度 → 接続の順に見て、先に止めた gate の待ちを返す。cooldown と接続の
+/// 失敗はクラスタの待ちに数え（`note_cluster_waiting`）、並列度は数えない。接続の確認が通れば自動接続を試さず、
+/// 期限を過ぎた cooldown は止めない。
+/// 既存の試験は cooldown・並列度・接続を別々の試験で 1 つずつ止めるので、この順と待ちの数え方の入れ替えを検出できない。
+#[test]
+fn admit_cluster_cooldown_beats_concurrency_and_connection() {
+    let now = Instant::now();
+    let later = now + std::time::Duration::from_secs(60);
+    let mut world = open_world();
+    world.place.cluster = Some(remote());
+    world.place.cluster_cooldown = Some(ClusterCooldown {
+        until: Some(later),
+        now,
+    });
+    world.place.cluster_in_use = Some(2);
+    world.place.cluster_connected = Some(Some(false));
+    let (asked, done) = drive(&world);
+    assert_eq!(done, cluster_stop(None, true, "cooldown"));
+    assert_eq!(
+        asked.last(),
+        Some(&AdmissionFact::ClusterState(ClusterFact::Cooldown))
+    );
+
+    world.place.cluster_cooldown = Some(ClusterCooldown {
+        until: Some(now),
+        now: later,
+    });
+    let (asked, done) = drive(&world);
+    assert_eq!(done, cluster_stop(None, false, "concurrency full"));
+    assert_eq!(
+        asked.last(),
+        Some(&AdmissionFact::ClusterState(ClusterFact::Load))
+    );
+
+    world.place.cluster_in_use = Some(1);
+    world.place.cluster_connected = Some(Some(true));
+    world.place.cluster_auto_connect = Some(None);
+    let (asked, done) = drive(&world);
+    launch_of(done);
+    assert!(!asked.contains(&AdmissionFact::ClusterState(ClusterFact::AutoConnect)));
+}
+
+/// 不変条件: 接続が無いクラスタは自動接続を 1 回試し、失敗の詳細か接続のフックが無いことを理由にクラスタを使えないと
+/// 記録して待つ。そのとき作業場所の dir（root を固定する）を求めない。自動接続できたら接続済みにしてから進む。
+/// 既存の試験は自動接続の成功と失敗を別々に見るので、止め方の取り違えと、止めた後に作業場所を用意する入れ替えを検出できない。
+#[test]
+fn admit_cluster_connection_failure_stops_before_the_workspace() {
+    let mut world = open_world();
+    world.place.cluster = Some(remote());
+    world.place.cluster_connected = Some(None);
+    world.place.cluster_auto_connect = Some(Some(Err("boom".to_string())));
+    let (asked, done) = drive(&world);
+    let detail = "auto-connect failed: boom";
+    assert_eq!(done, cluster_stop(Some(detail), true, detail));
+    assert!(!asked.contains(&AdmissionFact::TaskDir));
+    assert!(!asked.contains(&AdmissionFact::ClusterState(ClusterFact::MarkConnected)));
+
+    world.place.cluster_auto_connect = Some(None);
+    let (_, done) = drive(&world);
+    let reason = "no ssh ControlMaster connection to c1 (host h1)";
+    assert_eq!(
+        done,
+        cluster_stop(Some(reason), true, "no ssh ControlMaster connection")
+    );
+
+    world.place.cluster_auto_connect = Some(Some(Ok(())));
+    world.place.task_dir_resolved = Some(false);
+    let (asked, done) = drive(&world);
+    assert_eq!(done, AdmissionProposal::Stop(AdmissionStop::NoTaskDir));
+    let marked = asked
+        .iter()
+        .position(|f| *f == AdmissionFact::ClusterState(ClusterFact::MarkConnected));
+    let dir = asked.iter().position(|f| *f == AdmissionFact::TaskDir);
+    assert!(marked.is_some() && marked < dir, "{asked:?}");
+}
+
+/// 不変条件: WU の run では、作業場所の dir → 用意の backoff → WU の worktree → disk の見込み → scope env の順に先の
+/// gate が勝つ。用意の backoff の中は worktree を用意せず、worktree か scope env を用意できなければ WU の用意の失敗
+/// （2 本目以降かを持つ）で止め、disk の見込みの待ちは scope env より先に勝つ。
+/// 既存の試験は worktree の失敗・disk の待ち・scope env の失敗を同時に立てないので、この順の入れ替えを検出できない。
+#[test]
+fn admit_workspace_and_disk_stops_keep_the_dispatch_order() {
+    let disk_wait = TaskWait::DiskForecast {
+        need_bytes: 1,
+        detail: "reserve".to_string(),
+    };
+    let mut world = open_world();
+    world.unit = Some(work_unit(true));
+    world.place.task_dir_resolved = Some(false);
+    world.place.wu_prepare_backoff = Some(Some((2, at(500))));
+    let (_, done) = drive(&world);
+    assert_eq!(done, AdmissionProposal::Stop(AdmissionStop::NoTaskDir));
+
+    world.place.task_dir_resolved = Some(true);
+    world.place.wu_workspace_ready = Some(false);
+    let (asked, done) = drive(&world);
+    assert_eq!(
+        done,
+        AdmissionProposal::Stop(AdmissionStop::WuPrepareBackoff {
+            failures: 2,
+            retry_at: at(500),
+        })
+    );
+    assert!(!asked.contains(&AdmissionFact::WorkUnit(WorkUnitFact::Workspace)));
+
+    world.place.wu_prepare_backoff = Some(None);
+    world.place.disk = Some(Some(Admission::Wait(disk_wait.clone())));
+    let (asked, done) = drive(&world);
+    assert_eq!(
+        done,
+        AdmissionProposal::Stop(AdmissionStop::WuPrepareFailed { forced: false })
+    );
+    assert!(!asked.contains(&AdmissionFact::Disk));
+    world.forced_unit = world.unit;
+    let (_, done) = drive(&world);
+    assert_eq!(
+        done,
+        AdmissionProposal::Stop(AdmissionStop::WuPrepareFailed { forced: true })
+    );
+
+    world.forced_unit = None;
+    world.place.wu_workspace_ready = Some(true);
+    world.place.wu_scope_env_ready = Some(false);
+    let (asked, done) = drive(&world);
+    assert_eq!(
+        done,
+        AdmissionProposal::Stop(AdmissionStop::Wait(disk_wait))
+    );
+    assert!(!asked.contains(&AdmissionFact::WorkUnit(WorkUnitFact::ScopeEnv)));
+
+    world.place.disk = Some(None);
+    let (_, done) = drive(&world);
+    assert_eq!(
+        done,
+        AdmissionProposal::Stop(AdmissionStop::WuPrepareFailed { forced: false })
+    );
+
+    world.place.cluster = Some(remote());
+    let (asked, done) = drive(&world);
+    launch_of(done);
+    assert!(!asked.contains(&AdmissionFact::WorkUnit(WorkUnitFact::ScopeEnv)));
 }

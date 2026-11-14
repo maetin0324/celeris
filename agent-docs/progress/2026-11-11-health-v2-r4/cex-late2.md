@@ -63,8 +63,10 @@ updated: 2026-11-14
 
 ## late-review: replan・repair の後に届く旧い最終 review の合格
 
-結論: 反例は今の実装で成り立つ（不変条件が破れる）。2 本の試験は assert したまま残し、今の HEAD で 2 本とも落ちる。
-本体は変えていない。この unit の check（`cex_late_completion.rs` の全試験の合格）は落ちる。直すには repair か replan が要る。
+結論（計画 v2 の後）: 反例は今の実装で成り立った（下の観測）。計画 v2 で late-review が本体の修正も受け持ち、
+[ADR 2026-11-14-review-verdict-after-plan-reopen](../../adr/2026-11-14-review-verdict-after-plan-reopen.md) を足してから
+`on_review_finished` を直した。試験は変えていない。提出時の HEAD で `cex_late_completion.rs` の 6 本すべてが合格する
+（下の「修正（計画 v2）」）。この節の「修正（計画 v2）」より前の記述は、計画 v1（試験だけ）の run の記録として残す。
 
 ### 試験
 
@@ -147,6 +149,8 @@ repair 版は `("repair-build-1", Ready)` で、ほかは同じ。
 
 ### 未解決事項
 
+（計画 v1 の時点の記録。最初の 1 件と後の 2 件は、計画 v2 の「修正（計画 v2）」と「後半の確認」で解決した。）
+
 - 反例が成り立つ（上の観測）。人の `PUT /tasks/{id}/execution-plan`（`task-api` の `put_execution_plan`）と CoS の `put_plan_audited` も
   同じ `task_ops::execution::replan` を Task の状態を見ずに呼ぶ。そのため、本番でも最終 review 中の replan は、未完の unit を残したまま
   Task を Done にしうる（本番での再現は試していない。未確認）。
@@ -175,6 +179,8 @@ repair 版は `("repair-build-1", Ready)` で、ほかは同じ。
 
 ### 提案
 
+（計画 v1 の時点の提案。計画 v2 では案 (a)・(b) のどちらでもなく、SQLite の unit から破棄を導く形にした。理由は ADR の D4。）
+
 - 根本の owner は「Reviewing の Task の計画が変わったこと」を判定に入れていない review の権限の側。案は 2 つ。
   - (a) 推奨: `spawn_review` が review の subject に有効な計画の id（版）を束縛し、`on_review_finished` が判定の適用の前に
     `execution_plan_active` の id と比べる。違えば stale と同じく判定を捨て（`WorkerFinished.end = Cancelled`）、Task を Running に戻して
@@ -184,3 +190,52 @@ repair 版は `("repair-build-1", Ready)` で、ほかは同じ。
     store の transaction に置く必要がある。
 - どちらも本体（`cfg(test)` の外）の変更で、ADR 2026-11-11-dispatcher-state-ownership D7 の「試験だけ」の範囲の外。別の repair か
   replan の leaf に回す。
+
+### 修正（計画 v2）
+
+ADR: [2026-11-14-review-verdict-after-plan-reopen](../../adr/2026-11-14-review-verdict-after-plan-reopen.md)（status: accepted）。
+ADR 2026-11-11-dispatcher-state-ownership D7（成り立たない反例は owner で直す）による修正で、前例は
+ADR 2026-11-14-dependency-promotion-every-plan-version。
+
+- `crates/task-dispatch/src/dispatcher/review_verdict.rs` の `on_review_finished`: Task が Reviewing のとき、`ReviewerPassed`・
+  `RequiredChecksEvaluated`・判定の適用より前に、`store.work_units_for` を既存の `task_core::next_work_unit` で見る。
+  `RunWorkUnit`（ready か needs_continuation の unit が残る）なら判定を合格・不合格とも捨てる。判定を適用しない 3 つの場合
+  （Task が Reviewing でない・計画が開き直された・`target_stale`）を 1 つの分岐にまとめ、`WorkerFinished.end` と run index を
+  `Cancelled` にする処理を共有した（以前は前の 2 つの場合で同じ 11 行を 2 回書いていた）。計画が開き直されたときは、続けて Task を
+  `Trigger::ReviewPlanReopened` で Reviewing → Ready に戻す。
+- `crates/task-core/src/transition.rs`: `Trigger::ReviewPlanReopened`（`reason = "review_plan_reopened"`、Reviewing → Ready、
+  attempts 不変）。遷移は `ReviewRepair` と同じ腕を共有する。`retry_policy::attempt_history` と `plan_awaits_final_review` の表には
+  入れない（判定ではない）。
+- 試験: `crates/task-core/src/transition/tests.rs` の直積に `ReviewPlanReopened` を足し（4 × 8 × 36）、
+  `review_plan_reopened_keeps_attempts_and_returns_to_ready`（attempts 3・`max_retries` 3 でも failed にならない。直積は
+  attempts 0 だけを見るので `retry_or_fail` と取り違えても検出できない）を足した。`crates/task-core/src/retry_policy/tests.rs`
+  の `history_is_derived_from_events` に、`review_plan_reopened` の遷移が試行に数えられないことを足した。
+
+条件を `plan_work_finished`（done でない active な unit が 1 つでも残る）から `next_work_unit` の `RunWorkUnit` に絞った理由:
+最初の版では `dispatcher::tests::target_sync::integration_repair_fallback_*` の 3 本が落ちた（Task が Done でなく Blocked）。
+ADR-0120 の integration repair の打ち切り（fallback）では、repair の WU が `blocked(plan_issue)` のまま Task が同期していない
+HEAD で最終 review に進む。この review の判定は捨ててはいけない。blocked・failed だけが残る計画は `Stuck` で、条件に当たらない。
+
+repo-health の `size.responsibility-growth` への配慮: `crates/task-dispatch/src/dispatcher` の module の本体の行（base で
+閾値 8000 を超える既存の負債）と `Dispatcher::on_review_finished`・`transition::transition` の関数の行は、増えると worsened で
+落ちる。共有の関数を足す最初の版は module を 32 行・`fn transition` を 1 行増やした。3 つの場合を 1 つの分岐にまとめる形に
+変え、`python3 scripts/dev/repo-health/repo_health.py --repo . --base "$CELERIS_WU_BASE" --head HEAD --profile celeris
+--policy-version 1 --rules size.responsibility-growth,source-size` が pass（worsened 0）になることを確かめた。
+
+### guard の一時変更と結果（計画 v2）
+
+| 一時変更（本体） | 結果 |
+|---|---|
+| `review_verdict.rs` の `let plan_reopened = task.status == Status::Reviewing` を `let plan_reopened = false && task.status == Status::Reviewing` にする（足した破棄を外す） | `cex_late_review_pass_after_replan_is_dropped`・`cex_late_review_pass_after_repair_is_dropped` が前の観測と同じ「旧い reviewer の合格が計画の変更の後の Task を Done にした: unit_done=None status=Done transitions=[(Running, "dispatch"), (Reviewing, "worker_done"), (Done, "review_pass")] …」で落ちた。既存の 4 本は合格（6 本中 4 本合格・2 本失敗、exit 100） |
+
+一時変更は `git checkout -- crates/task-dispatch/src/dispatcher/review_verdict.rs` で戻した（commit していない）。共有の関数の版でも
+同じ一時変更で同じ 2 本が落ちることを確かめている。
+
+### 変更（commit の件名、計画 v2）
+
+- `late-review: 最終 review の間に計画が開き直されたら旧い判定を捨て、Task を ReviewPlanReopened で ready に戻す`
+- `late-review: 判定を適用しない 3 つの場合（reviewing でない・計画が開き直された・stale）を 1 つの破棄にまとめ、module の行を増やさない`
+- `late-review: 破棄の条件を走らせる unit の有無に絞り（integration repair の fallback を捨てない）、ADR と進捗に修正と guard の確認を書く`
+
+### 証拠（計画 v2、提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+

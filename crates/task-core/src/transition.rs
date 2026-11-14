@@ -91,7 +91,7 @@ pub enum Trigger {
     /// `reason = "review_blocked"`。再開は既存の `Answer`（comment・answer）。
     ReviewBlocked,
     /// ADR 2026-11-14-review-verdict-after-plan-reopen D3: 最終 review の間に replan・repair が計画を開き直した（有効な計画に
-    /// done でない unit が残る）ので、旧い判定を捨てて新しい版の unit を走らせる。`Reviewing → Ready`、attempts は据え置き
+    /// 走らせる unit が残る）ので、旧い判定を捨てて新しい版の unit を走らせる。`Reviewing → Ready`、attempts は据え置き
     /// （review の不合格ではないので `retry_policy` の試行に数えない）、`reason = "review_plan_reopened"`。
     ReviewPlanReopened,
     /// ADR-0074 D2.2（Phase F3 途中確認）: 停止点の工程の統合の後。`Running → Blocked`、

@@ -29,31 +29,38 @@ planner の replan（段の repair の unit を足す）が `task_ops::execution
 
 ### D1. 破棄の条件は SQLite の有効な計画の unit から導く
 
-`on_review_finished` は、既存の「Task が Reviewing でない」の破棄の直後、`ReviewerPassed`・`RequiredChecksEvaluated`・判定の適用
-（合格・不合格・repair・health の停止のどれも）より前に、`store.work_units_for(task)` を既存の述語 `task_core::plan_work_finished`
-で見る。有効な unit（superseded・cancelled を除く）に done でないものが残れば、判定は旧い計画の候補に対するものなので、合格も
-不合格も捨てる。
+`on_review_finished` は、Task が Reviewing のとき、`ReviewerPassed`・`RequiredChecksEvaluated`・判定の適用（合格・不合格・repair・
+health の停止のどれも）より前に、`store.work_units_for(task)` を既存の述語 `task_core::next_work_unit` で見る。走らせる unit
+（ready か needs_continuation。`NextStep::RunWorkUnit`）が残れば、判定は旧い計画の候補に対するものなので、合格も不合格も捨てる。
 
-- 計画の無い Task（unit が 0 個）と、unit がすべて done の Task では `plan_work_finished` が真で、挙動は変わらない。
+- 計画の無い Task（unit が 0 個、`Stuck`）と、unit がすべて done の Task（`AllDone`）では挙動は変わらない。
+- blocked・failed だけが残る計画（`Stuck`）も捨てない。ADR-0120 の integration repair の打ち切り（fallback）では、repair の WU が
+  `blocked(plan_issue)` のまま Task が同期していない HEAD で最終 review に進む。これは review の間の計画の変更ではない
+  （`dispatcher::tests::target_sync::integration_repair_fallback_*` が守る）。
+- replan・段の repair は、新しい unit（依存の満たされたもの）を ready にし、統合済みの段の統合 WU を pending に戻す。走らせる unit が
+  残るのは、最終 review の間に計画が変わったときである。依存の満たされない pending だけを足す replan（`child:`・`task:` の外部の
+  依存だけを持つ unit）はこの条件に当たらない（範囲外。起きたら別に扱う）。
 - 正本は SQLite の unit の行だけにする。review の subject・メモリの `ReviewEntry` に計画の版を持たせない（新しい状態を足さない）。
-- 最終 review は計画の unit がすべて done になってから始まる（最後の WU か段の統合の完了、または `Trigger::PlanComplete`）ので、
-  Reviewing の Task に done でない unit があるのは、review の間に計画が変わったときだけである。
 
 ### D2. 破棄の記録は既存の破棄と同じ処理で行う
 
-捨てた review は、既存の 2 つの破棄（Task が Reviewing でない・`target_stale`）と同じ共有の関数で閉じる: `WorkerFinished{role:
-reviewer}` の `end` と run index を `Cancelled` にする。`ReviewVerdict`・`ReviewerPassed`・`RequiredChecksEvaluated` は書かない。
-旧い合格は新しい候補に束縛されず、`ReviewerPassReused` の材料にもならない。
+判定を適用しない場合は 3 つになる: Task が Reviewing でない・D1 の計画の開き直し・検査中の snapshot の変化（`target_stale`）。
+`on_review_finished` はこの 3 つを 1 つの分岐で閉じる: `WorkerFinished{role: reviewer}` の `end` と run index を `Cancelled` に
+する。前の 2 つでは `ReviewerPassed`・`ReviewVerdict`・`RequiredChecksEvaluated` を書かない。旧い合格は新しい候補に束縛されず、
+`ReviewerPassReused` の材料にもならない。`target_stale` の場合の扱い（`ReviewerPassed` を先に残し、reviewing のまま次の tick で
+再同期する）は変えない。
 
 ### D3. 新しい遷移 `Trigger::ReviewPlanReopened`（Reviewing → Ready、attempts 不変）
 
-D1 で捨てたとき、Task を `Trigger::ReviewPlanReopened`（`reason = "review_plan_reopened"`）で Reviewing → Ready に戻す。遷移と
-`WorkerFinished` は `apply_transition_with_events` の 1 つの transaction に入れる。Ready に戻った Task は、dispatch gate が
-新しい版の unit（新しい unit、開き直された統合 WU）を走らせ、終わったら新しい候補で最終 review をやり直す。
+D1 で捨てたとき、`WorkerFinished` を書いた後に、Task を `Trigger::ReviewPlanReopened`（`reason = "review_plan_reopened"`）で
+Reviewing → Ready に戻す。Ready に戻った Task は、dispatch gate が新しい版の unit（新しい unit、開き直された統合 WU）を走らせ、
+終わったら新しい候補で最終 review をやり直す。
 
 - attempts を消費しない。`retry_policy::attempt_history` の試行の表にも入れない（review の不合格ではない）。
 - `plan_awaits_final_review` の「判定」の表（`review_pass`・`review_fail`・`review_repair`）にも入れない。判定は適用していない
   ので、新しい版はまだ最終 review を受けていない。
+- `WorkerFinished` の追記と遷移は別の書き込みにする（既存の破棄の分岐の書き込みをそのまま使う）。間で daemon が止まると Task は
+  Reviewing のまま残るが、再起動の後の review の結果も D1 の条件で捨てられ、そのときに遷移する（reviewer run が 1 回余計に走る）。
 - 既存の trigger は意味が違うので使わない。`Interrupt` は人のコメントの割り込み（`reason = "comment"`、ADR-0044 D2）。
   `ReviewRepair` は review の不合格から repair の unit を作る遷移で、`plan_awaits_final_review` では判定として数える。
   `ReviewFail` は attempts を消費する。

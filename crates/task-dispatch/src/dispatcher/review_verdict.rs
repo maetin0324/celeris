@@ -3,6 +3,7 @@
 use super::*;
 use crate::review_decision;
 use crate::run_settlement::run_end_record;
+use task_core::NextStep;
 
 /// health の Error・往復・修復の上限の使い切りで review を止める（health enforcement loop D3.4・D4.3・D4.4）。file は
 /// size の制約と依存の向き（`dispatcher` → `health_review` を足さない）のため `health_review/` に置く。
@@ -120,9 +121,10 @@ impl Dispatcher {
                 }
             }
         }
-        // ADR 2026-11-14-review-verdict-after-plan-reopen D1: review の間に計画が開き直された（done でない unit が残る）判定も捨てる。
+        // ADR 2026-11-14-review-verdict-after-plan-reopen D1: review の間に計画が開き直された（走らせる unit が残る）判定も捨てる。
+        let units = self.store.work_units_for(task_id)?;
         let plan_reopened = task.status == Status::Reviewing
-            && !task_core::plan_work_finished(&self.store.work_units_for(task_id)?);
+            && matches!(task_core::next_work_unit(&units), NextStep::RunWorkUnit(_));
         let discarded = task.status != Status::Reviewing || plan_reopened;
         // 判定を束ねる review run（reviewer を省いた review は worker の run。以下の event と stale の延期で共有）。
         let review_run = completed_review_run

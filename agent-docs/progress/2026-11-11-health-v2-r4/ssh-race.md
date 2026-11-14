@@ -63,10 +63,21 @@ completed: 2026-11-14
 ## 変更（件名）
 
 - `ssh-race: timeout の試験の helper を回収中の子（状態 X）を終わりと読ませ、loop の観測で assert する`
+- `ssh-race: 検査の結果を進捗に書く`
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`、範囲は `$CELERIS_WU_BASE`）
 
-<!-- evidence -->
+- `cargo nextest run -p task-worker -E 'test(ssh::tests::)'`: exit 0、26 passed（`proc_stat_dead_states_are_not_running` と 3 本の timeout 試験を含む）。
+- `cargo nextest run -p task-worker -E 'test(times_out_and_kills) | test(proc_stat_dead_states_are_not_running)'` を 5 回: 5 回とも 5 passed（各 2.03 秒）。
+- 判定を旧い `state != "Z"` に一時的に戻した `proc_stat_dead_states_are_not_running`: exit 100（`state X is a finished process`）。戻した後は合格。
+- `bash scripts/dev/test-affected.sh`: exit 0。対象は celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker。
+  6138 passed、22 skipped。repo_health_gate は all checks passed。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+- `bash scripts/dev/check-health.sh`: exit 0（verdict=pass、fail_grade=0。new=1 は `host_maintenance.rs` の migration.remnant で、この変更とは無関係）。
+- `sh scripts/dev/progress-index.sh --check`・`bash scripts/dev/check-doc-links.sh`: exit 0。
+- `git diff --name-only $(git merge-base HEAD main) -- crates/task-worker`: `crates/task-worker/src/ssh/tests.rs` の 1 path だけ。
+  `git diff --quiet $(git merge-base HEAD main) -- crates/task-worker/src/ssh.rs crates/task-worker/src/process_group.rs`: exit 0。
+- `sh "$CELERIS_WU_SCOPE_PATHS"`: この file・R4 の進捗・`crates/task-worker/src/ssh/tests.rs` の 3 path。
 
 ## 未解決
 

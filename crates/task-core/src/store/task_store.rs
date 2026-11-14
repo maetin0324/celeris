@@ -428,9 +428,6 @@ pub trait TaskStore:
     /// （API は 422）、他の案件が使っていれば `StoreError::InUse`（409）。無い案件は `Ok(false)`。
     /// **知識ベースのディレクトリは動かさない**（`projects/<旧>/` を `projects/<新>/` へ動かすのは人）。
     fn project_set_slug(&self, id: ProjectId, slug: &str) -> Result<bool, StoreError>;
-    /// ADR 2026-10-16-project-auto-integrate D1: `projects.auto_integrate`（レビュー合格した root task を
-    /// 既定ブランチへ自動で取り込む）を書く。無い案件は `Ok(false)`。
-    fn project_set_auto_integrate(&self, id: ProjectId, enabled: bool) -> Result<bool, StoreError>;
 
     // ---- ADR-0043 D1（Phase 52）: 案件のリポジトリ（`project_repos`）----
 

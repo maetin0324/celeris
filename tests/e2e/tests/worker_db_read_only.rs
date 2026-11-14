@@ -39,7 +39,6 @@ fn project_with_primary(store: &SqliteStore, dir: &Path) -> (ProjectId, RepoId) 
     let now = OffsetDateTime::now_utc();
     let project = Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         archived_at: None,
         paused_from: None,
@@ -61,6 +60,7 @@ fn project_with_primary(store: &SqliteStore, dir: &Path) -> (ProjectId, RepoId) 
         default_branch: None,
         sync: None,
         run: RepoRun::Auto,
+        auto_integrate: false,
         is_primary: true,
         created_at: now,
     };

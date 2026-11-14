@@ -50,7 +50,6 @@ impl FakePorts {
             paused_from: None,
             auto_advance: false,
             slug: None,
-            auto_integrate: false,
             created_at: at(created_secs),
             updated_at: at(created_secs),
         });

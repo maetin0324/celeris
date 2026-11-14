@@ -1455,7 +1455,7 @@ fn credential_dispatcher(
 }
 
 /// 不変条件: 未登録の task と WU は時間だけで再開せず、WU は再検証の backoff を越えた tick でも run を起こさない。
-/// 範囲: atomic task のファイル登録後・検証一時失敗の待機は成立しないため、記録の「反例」に残し assert しない。
+/// 範囲: atomic task のファイル登録後・検証一時失敗の待機は `cex_credential_atomic_task_waits_for_verified_resume` が見る。
 /// 既存の試験で検出できない理由: credential_e2e は resumer の再検証だけを見て、待機中の tick の起動数と runs 索引を見ない。
 #[tokio::test]
 async fn cex_credential_wait_holds_task_and_unit_across_retry_deadline() {
@@ -1519,6 +1519,100 @@ async fn cex_credential_wait_holds_task_and_unit_across_retry_deadline() {
             task_core::CredentialWaitState::Waiting
         );
         assert_eq!(reviewer_starts(&e.store(), task.id), 0);
+    }
+}
+
+/// 不変条件: 計画の無い（atomic）task は、`task:<id>` の開いた credential_wait（waiting・rejected・verified）が resumer の
+/// claim で resumed になるまで、秘密 file があっても run を起こさない。daemon の再起動（同じ store で新しい dispatcher と
+/// `restore_credential_waits`）の後も同じ（ADR 2026-11-14-atomic-task-credential-verified）。
+/// 既存の試験で検出できない理由: 試験 11 は検証の一時失敗の後の tick を WU のある task（WU の Blocked 行が止める）でだけ見て、
+/// atomic task には秘密 file を置かない。credential_gate・credential_e2e の試験は秘密 file が無い間の待ちと resumer の遷移を見て、
+/// file がある・wait が開いている間の atomic task の tick の起動数と runs 索引を見ない。
+#[tokio::test]
+async fn cex_credential_atomic_task_waits_for_verified_resume() {
+    use super::credential_e2e::{DUMMY, E2e, Scripted};
+    use crate::credential_resume::{VerifyOutcome, secret_fingerprint};
+    use task_core::CredentialWaitState;
+    // crash_before_claim: resumer が検証に成功して verified を書き、claim の前に daemon が落ちた跡を作る。
+    for crash_before_claim in [false, true] {
+        let e = E2e::new();
+        let task = new_task(e.dir.path(), Check::Reviewer, 1);
+        e.sqlite.insert(&task).unwrap();
+        let adapter = HumanGateAdapter::new(done_outcome().terminal);
+        let mut d = credential_dispatcher(&e, adapter.clone());
+        let s = e.store();
+        assert!(
+            run_until_state(&mut d, || !s
+                .credential_waits_list_waiting()
+                .unwrap()
+                .is_empty())
+            .await
+        );
+        let wait = e.sqlite.credential_waits_list_waiting().unwrap().remove(0);
+        assert_eq!(wait.work_unit_id, format!("task:{}", task.id));
+        assert!(e.sqlite.work_units_for(task.id).unwrap().is_empty());
+        let state = || {
+            e.sqlite
+                .credential_wait_get(&wait.work_unit_id, &wait.secret_id)
+                .unwrap()
+                .unwrap()
+                .state
+        };
+        let held = |d: &mut Dispatcher, at: &str| {
+            let report = d.tick().unwrap();
+            assert_eq!(
+                report.dispatched, 0,
+                "crash_before_claim={crash_before_claim} {at}: {report:?}"
+            );
+            assert!(
+                e.sqlite.runs_for_task(task.id).unwrap().is_empty(),
+                "crash_before_claim={crash_before_claim} {at}"
+            );
+            assert_eq!(status_of(&e.store(), task.id), Status::Ready, "{at}");
+        };
+        // 秘密 file はあるが、検証は一時失敗で wait は waiting のまま。
+        e.put_secret(DUMMY);
+        let verifier = Scripted::new(&[VerifyOutcome::Transient, VerifyOutcome::Valid]);
+        assert_eq!(e.resumer(&verifier).process().unwrap().transient, 1);
+        assert_eq!(state(), CredentialWaitState::Waiting);
+        held(&mut d, "after transient");
+        // daemon の再起動: 同じ store で新しい dispatcher を作り、起動時の復元を通す。
+        drop(d);
+        let mut d = credential_dispatcher(&e, adapter.clone());
+        assert_eq!(d.restore_credential_waits().unwrap().len(), 1);
+        held(&mut d, "after restart");
+        e.advance(31);
+        held(&mut d, "after the retry deadline");
+        // 検証の成功と claim（再起動後の新しい resumer）。
+        let resumer = e.resumer(&verifier);
+        if crash_before_claim {
+            let now = *e.clock.lock().unwrap();
+            assert!(
+                e.sqlite
+                    .credential_wait_mark_verified(
+                        &wait.work_unit_id,
+                        &wait.secret_id,
+                        &secret_fingerprint(DUMMY),
+                        now
+                    )
+                    .unwrap()
+            );
+            assert_eq!(state(), CredentialWaitState::Verified);
+            held(&mut d, "verified but not claimed");
+            drop(d);
+            d = credential_dispatcher(&e, adapter.clone());
+            assert_eq!(d.restore_credential_waits().unwrap().len(), 1);
+            held(&mut d, "verified but not claimed, after restart");
+        }
+        assert_eq!(resumer.process().unwrap().resumed, 1);
+        assert_eq!(state(), CredentialWaitState::Resumed);
+        // claim の印は verifier の 2 回目（Valid）か、落ちる前の verified から取った（verified は再検証しない）。
+        assert_eq!(verifier.calls(), if crash_before_claim { 1 } else { 2 });
+        // resumed の後に初めて起動する（run は 1 本だけ）。
+        let s = e.store();
+        assert!(run_until_state(&mut d, || s.get(task.id).unwrap().unwrap().lease.is_some()).await);
+        assert_eq!(e.sqlite.runs_for_task(task.id).unwrap().len(), 1);
+        release_human_worker(&adapter).await;
     }
 }
 

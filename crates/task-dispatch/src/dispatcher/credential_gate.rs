@@ -51,6 +51,18 @@ impl CredentialGates {
     }
 }
 
+/// wait の `work_unit_id`。計画の無い（atomic）task は task 自身を 1 つの unit として数える。
+fn wait_unit_id(task: &Task, wu: Option<&WorkUnitRow>) -> String {
+    wu.map_or_else(|| format!("task:{}", task.id), |w| w.id.clone())
+}
+
+/// 計画の無い task の `secret` の開いた wait が store（正本の `credential_waits`）にあるか。
+fn atomic_wait_open(store: &dyn TaskStore, task: &Task, secret: &str) -> Result<bool, StoreError> {
+    let unit = wait_unit_id(task, None);
+    let is_open = |w: &CredentialWait| w.work_unit_id == unit && w.secret_id == secret;
+    Ok(store.credential_waits_list_waiting()?.iter().any(is_open))
+}
+
 impl Dispatcher {
     /// daemon の配線（bootstrap・reload）。
     pub fn set_credential_gates(&mut self, gates: CredentialGates) {
@@ -59,6 +71,8 @@ impl Dispatcher {
 
     /// `pick` の source が未登録の credential を要するなら、その work unit を待機へ移して `true`
     /// （呼び出し側は run を起こさない）。登録済み・宣言なしなら `false`。冪等。
+    /// 計画の無い task は、開いた wait（waiting・rejected・verified）が store にあれば登録済みでも `true`
+    /// （resumer の claim で resumed になるまで外さない。ADR 2026-11-14-atomic-task-credential-verified D2）。
     pub(super) fn credential_gate_hold(
         &mut self,
         task: &Task,
@@ -68,11 +82,13 @@ impl Dispatcher {
         let Some(gate) = self.credential_gates.by_source.get(&pick.candidate.source) else {
             return Ok(false);
         };
-        if self.credential_gates.is_registered(&gate.secret_id) {
+        let gate = gate.clone();
+        // WU のある task は WU の Blocked 行が resume まで止める。atomic task は store の wait が正本（D1）。
+        let open = wu.is_none() && atomic_wait_open(&*self.store, task, &gate.secret_id)?;
+        if !open && self.credential_gates.is_registered(&gate.secret_id) {
             self.coord.release_credential_hold(task.id);
             return Ok(false);
         }
-        let gate = gate.clone();
         self.enter_credential_wait(task, wu, &gate)?;
         Ok(true)
     }
@@ -83,10 +99,9 @@ impl Dispatcher {
         wu: Option<&WorkUnitRow>,
         gate: &CredentialGate,
     ) -> Result<(), DispatchError> {
-        // 計画の無い（atomic）task は task 自身を 1 つの unit として数える。
-        let wu_id = wu
-            .map(|w| w.id.clone())
-            .unwrap_or_else(|| format!("task:{}", task.id));
+        // atomic task の `coord` の印は、同じ wait を tick ごとに入れ直さないための cache で、hold の判断には使わない
+        // （判断は gate が store の wait で行う。ADR 2026-11-14-atomic-task-credential-verified D3）。
+        let wu_id = wait_unit_id(task, wu);
         if wu.is_none() && !self.coord.hold_credential(task.id) {
             return Ok(());
         }
@@ -165,24 +180,15 @@ impl Dispatcher {
         let now = self.now_utc();
         let mut still = Vec::new();
         for wait in self.store.credential_waits_list_waiting()? {
-            let Some(task) = self.store.get(wait.task_id)? else {
+            let task = self.store.get(wait.task_id)?;
+            let Some(task) = task.filter(|t| t.status != Status::Cancelled) else {
                 self.store.credential_wait_cancel(wait.task_id, now)?;
                 continue;
             };
-            if task.status == Status::Cancelled {
-                self.store.credential_wait_cancel(wait.task_id, now)?;
-                continue;
-            }
-            if let Some(unit) = self
-                .store
-                .work_units_for(wait.task_id)?
-                .into_iter()
-                .find(|u| u.id == wait.work_unit_id)
-            {
-                self.block_unit_waiting_for_auth(&task, &unit, now)?;
-            } else {
-                // atomic task は dispatch の gate が次の tick で同じ wait を見つけて保持する。
-                self.coord.hold_credential(wait.task_id);
+            // atomic task（unit の行が無い）は、gate が次の tick で同じ wait を store から見つけて保持する（D1）。
+            let units = self.store.work_units_for(wait.task_id)?;
+            if let Some(unit) = units.iter().find(|u| u.id == wait.work_unit_id) {
+                self.block_unit_waiting_for_auth(&task, unit, now)?;
             }
             still.push(wait);
         }

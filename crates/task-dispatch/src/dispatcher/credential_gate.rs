@@ -73,6 +73,7 @@ impl Dispatcher {
     /// （呼び出し側は run を起こさない）。登録済み・宣言なしなら `false`。冪等。
     /// 計画の無い task は、開いた wait（waiting・rejected・verified）が store にあれば登録済みでも `true`
     /// （resumer の claim で resumed になるまで外さない。ADR 2026-11-14-atomic-task-credential-verified D2）。
+    /// 待ちの有無はメモリに写さず、毎回 store から決める（同 ADR の付記 2026-11-14 cred-cache）。
     pub(super) fn credential_gate_hold(
         &mut self,
         task: &Task,
@@ -83,28 +84,27 @@ impl Dispatcher {
             return Ok(false);
         };
         let gate = gate.clone();
-        // WU のある task は WU の Blocked 行が resume まで止める。atomic task は store の wait が正本（D1）。
-        let open = wu.is_none() && atomic_wait_open(&*self.store, task, &gate.secret_id)?;
-        if !open && self.credential_gates.is_registered(&gate.secret_id) {
-            self.coord.release_credential_hold(task.id);
+        // WU のある task は WU の Blocked 行が resume まで止める。atomic task は store の wait が正本（D1）で、
+        // 開いた wait があれば入り直す物は無い（wait 行・受信箱の item は最初の入りで作ってある）。
+        if wu.is_none() && atomic_wait_open(&*self.store, task, &gate.secret_id)? {
+            return Ok(true);
+        }
+        if self.credential_gates.is_registered(&gate.secret_id) {
             return Ok(false);
         }
         self.enter_credential_wait(task, wu, &gate)?;
         Ok(true)
     }
 
+    /// 待ちに入る。wait 行・受信箱の item・triage の reconcile は store の `credential_wait_enter` が新しい行を
+    /// 作ったとき（`outcome.created`）だけ行う。開いた wait が既にあれば store はそれを返すだけで、何度呼んでも増えない。
     pub(super) fn enter_credential_wait(
         &mut self,
         task: &Task,
         wu: Option<&WorkUnitRow>,
         gate: &CredentialGate,
     ) -> Result<(), DispatchError> {
-        // atomic task の `coord` の印は、同じ wait を tick ごとに入れ直さないための cache で、hold の判断には使わない
-        // （判断は gate が store の wait で行う。ADR 2026-11-14-atomic-task-credential-verified D3）。
         let wu_id = wait_unit_id(task, wu);
-        if wu.is_none() && !self.coord.hold_credential(task.id) {
-            return Ok(());
-        }
         let now = self.now_utc();
         let outcome = self.store.credential_wait_enter(
             &CredentialWaitEnter {

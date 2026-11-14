@@ -1727,6 +1727,102 @@ async fn cex_credential_atomic_task_waits_for_verified_resume() {
     }
 }
 
+/// 不変条件: 計画の無い（atomic）task の credential の待ちは store の `credential_waits` の `task:<id>` の 1 行だけが正本で、
+/// tick を 3 回重ねても、daemon を再起動して（同じ store で新しい dispatcher と `restore_credential_waits`）tick を重ねても、
+/// 待ちの入り（wait 行・受信箱の item とその印 `notice_item_id`・task の event）は最初の 1 回だけで、run を起こさない。
+/// 秘密 file が置かれて wait が waiting のままの間（ADR 2026-11-14-atomic-task-credential-verified D2）も同じ。
+/// Dispatcher のメモリに待ちの写しを持たないこと（同 ADR の付記 2026-11-14 cred-cache）を、tick の経路で確かめる。
+/// 既存の試験で検出できない理由: credential_gate の `a_task_without_a_plan_waits_as_one_unit_and_never_rewrites_the_wait` は
+/// 同じ dispatcher で gate を直に 2 回呼ぶだけで、tick（route の選択から gate に入る経路）と再起動を通らない。
+/// `cex_credential_atomic_task_waits_for_verified_resume` は tick と再起動を通るが、待ちの間は起動数と runs 索引だけを見て、
+/// wait 行・受信箱の item・event の数を数えない。tick ごとに開いた wait を閉じて入れ直す改変では、resume まで進めた後の
+/// 検証の回数の差で間接に落ちるだけで、resume に進まない待ちの間の入り直しは見ない（cred-cache.md の改変の記録）。
+#[tokio::test]
+async fn credential_wait_for_atomic_task_is_entered_once_across_ticks() {
+    use super::credential_e2e::{DUMMY, E2e};
+    for secret_saved in [false, true] {
+        let e = E2e::new();
+        let task = new_task(e.dir.path(), Check::Reviewer, 1);
+        e.sqlite.insert(&task).unwrap();
+        let adapter = HumanGateAdapter::new(done_outcome().terminal);
+        let mut d = credential_dispatcher(&e, adapter.clone());
+        let s = e.store();
+        assert!(
+            run_until_state(&mut d, || !s
+                .credential_waits_list_waiting()
+                .unwrap()
+                .is_empty())
+            .await
+        );
+        if secret_saved {
+            // 秘密は置かれたが、resumer はまだ検証していない（wait は waiting のまま）。
+            e.put_secret(DUMMY);
+        }
+        let opened = e.sqlite.credential_waits_list_waiting().unwrap();
+        assert_eq!(opened.len(), 1, "secret_saved={secret_saved}");
+        let wait = opened[0].clone();
+        assert_eq!(wait.work_unit_id, format!("task:{}", task.id));
+        assert_eq!(wait.state, task_core::CredentialWaitState::Waiting);
+        assert!(
+            wait.notice_item_id.is_some(),
+            "the first entry marks the inbox item"
+        );
+        let events = e.sqlite.events_for(task.id).unwrap().len();
+        let db = e.dir.path().join("db.sqlite");
+        let rows = || -> i64 {
+            rusqlite::Connection::open(&db)
+                .unwrap()
+                .query_row(
+                    "SELECT COUNT(*) FROM credential_waits WHERE task_id = ?1",
+                    [task.id.to_string()],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        let entered_once = |d: &mut Dispatcher, at: &str| {
+            let report = d.tick().unwrap();
+            assert_eq!(
+                report.dispatched, 0,
+                "secret_saved={secret_saved} {at}: {report:?}"
+            );
+            assert_eq!(
+                e.sqlite.credential_waits_list_waiting().unwrap(),
+                vec![wait.clone()],
+                "secret_saved={secret_saved} {at}"
+            );
+            assert_eq!(rows(), 1, "secret_saved={secret_saved} {at}");
+            let inbox = e.inbox();
+            assert_eq!(
+                inbox.len(),
+                1,
+                "secret_saved={secret_saved} {at}: {inbox:?}"
+            );
+            assert_eq!(inbox[0].blocking.tasks.len(), 1, "{at}: {inbox:?}");
+            assert_eq!(
+                e.sqlite.events_for(task.id).unwrap().len(),
+                events,
+                "secret_saved={secret_saved} {at}"
+            );
+            assert!(
+                e.sqlite.runs_for_task(task.id).unwrap().is_empty(),
+                "secret_saved={secret_saved} {at}"
+            );
+            assert_eq!(status_of(&e.store(), task.id), Status::Ready, "{at}");
+        };
+        for round in 1..=3 {
+            entered_once(&mut d, &format!("tick {round}"));
+        }
+        // daemon の再起動: 同じ store で新しい dispatcher を作り、起動時の復元を通す。
+        drop(d);
+        let mut d = credential_dispatcher(&e, adapter.clone());
+        assert_eq!(d.restore_credential_waits().unwrap(), vec![wait.clone()]);
+        for round in 1..=3 {
+            entered_once(&mut d, &format!("tick {round} after restart"));
+        }
+        assert_eq!(reviewer_starts(&e.store(), task.id), 0);
+    }
+}
+
 /// 不変条件: credential resume の claim が成功した後に cancel が確定しても task・WU の run を起こさない。
 /// 既存の試験で検出できない理由: credential_e2e は claim より先の cancel だけで、claim 後の cancel と tick を組み合わせない。
 #[tokio::test]

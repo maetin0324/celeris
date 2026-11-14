@@ -26,6 +26,16 @@ dispatcher/tests 以下の試験も `ProjectRepo.auto_integrate`（repo の欄�
 - `cargo clippy --workspace -- -D warnings` → exit 0
 - `cargo fmt --all -- --check` → exit 0
 
+## check の不合格への対応（2 回目の run）
+- `cargo clippy -p task-dispatch --all-targets -- -D warnings` が既存の試験コード 7 件で落ちていた。
+  `gate.rs`（`OnceLock` を `cfg(not(test))`、不要な deref）、`disk_forecast.rs`、`dispatch_ready_phases.rs`、
+  `health_enforce.rs`・`cos_chat_root_done.rs`（type 別名）、`cos_slot_wait.rs` を直した。挙動は変えていない。
+- `cargo test -p task-dispatch` は 1 回目に 2 件落ちた（`build_cache`・`cron_jobs`）が、単独では通り、再実行の全体でも 1762 passed で通った。負荷下の揺れとみる（原因は未調査）。
+
+## 証拠（提出時の HEAD で実行）
+- `cargo clippy -p task-dispatch --all-targets -- -D warnings` → exit 0
+- `cargo fmt --all -- --check` → exit 0
+- `cargo test -p task-dispatch` → 1762 passed, 0 failed
+
 ## 未解決事項
-- `cargo clippy -p task-dispatch --all-targets -- -D warnings` は、この変更と無関係の既存の試験コード 7 件
-  （`health_review/gate.rs` の未使用 import、`disk_forecast.rs` の clone ほか）で落ちる。規定の検査には含まれない。
+- 上記 2 件の試験の負荷下の揺れ（未調査）。

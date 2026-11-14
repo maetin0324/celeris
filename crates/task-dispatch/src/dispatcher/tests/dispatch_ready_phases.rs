@@ -40,9 +40,8 @@ async fn tick_reports_dispatch_ready_phases_and_resets_each_tick() {
     store.insert(&task).unwrap();
     let busy = d.tick().unwrap();
     let names = parts(&busy);
-    for want in ["dispatch_ready.dispatch_one"] {
-        assert!(names.contains(&want), "{want} missing: {names:?}");
-    }
+    let want = "dispatch_ready.dispatch_one";
+    assert!(names.contains(&want), "{want} missing: {names:?}");
     // 名前は 1 tick に 1 回だけ（候補が増えても合計される）。
     let mut sorted = names.clone();
     sorted.sort_unstable();

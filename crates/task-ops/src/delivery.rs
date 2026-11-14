@@ -52,6 +52,24 @@ pub fn review_resync_halted(events: &[Event]) -> Option<&Event> {
     halted
 }
 
+/// ADR 2026-11-14-repo-auto-integrate D3: task が自動取り込みの対象か。`prepare`・`tick`・
+/// reviewer run の必須判定・再取り込み・受信箱が同じ関数を使う。条件は、`project_id` があり、`task.repos` が
+/// 1 件以上あり、すべての repo の案件のリポジトリの行が存在して `auto_integrate = true`（行が無い repo は無効）。
+/// support task・木の子を外す条件は呼び出し側に残る。
+pub fn auto_integrates(store: &dyn TaskStore, task: &Task) -> Result<bool, StoreError> {
+    let Some(project_id) = task.project_id else {
+        return Ok(false);
+    };
+    if task.repos.is_empty() {
+        return Ok(false);
+    }
+    let rows = store.repo_list(project_id)?;
+    Ok(task
+        .repos
+        .iter()
+        .all(|tr| rows.iter().any(|r| r.id == tr.repo_id && r.auto_integrate)))
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct DeliveryPolicy {
     pub default_departments: BTreeMap<String, String>,
@@ -191,14 +209,13 @@ fn prepare(
     };
     // ADR-0079 D6（Phase R1c）: 木の子 task は main に取り込まない（成果は親の段階末尾の統合で親の
     // ブランチに入る）。部署の取り込み判定・`deliveries` の行・release は root だけ。
-    // ADR 2026-10-16-project-auto-integrate D1: 自動取り込みは案件の属性（DB）。
-    if !store
-        .project_get(project_id)?
-        .is_some_and(|p| p.auto_integrate)
-    {
+    // ADR 2026-11-14-repo-auto-integrate D3: 自動取り込みは案件のリポジトリの行の欄（DB）。
+    if !auto_integrates(store, task)? {
         return Ok(Err(report(
-            DeliverySkipReason::ProjectNotEnabled,
-            format!("project {project_id} は自動取り込み（auto_integrate）が無効です"),
+            DeliverySkipReason::RepoNotEnabled,
+            format!(
+                "task の repo に auto_integrate が有効でないものがある（project {project_id}）"
+            ),
         )));
     }
     if task_core::support_kind(task).is_some() {

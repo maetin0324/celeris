@@ -122,7 +122,6 @@ fn project_with_brief(store: &SqliteStore, title: &str, updated: OffsetDateTime)
         paused_from: None,
         auto_advance: false,
         slug: None,
-        auto_integrate: false,
         created_at: updated,
         updated_at: updated,
     };

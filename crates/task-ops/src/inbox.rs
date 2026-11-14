@@ -1220,6 +1220,13 @@ fn build_attention(
         if reason == task_core::DeliverySkipReason::NoCommits {
             continue;
         }
+        // ADR 2026-11-14-repo-auto-integrate D4: 無効のリポジトリの task は出さない。読んだ時点の判定も見る
+        // （無効にしたリポジトリの過去の項目も消えるように）。
+        if reason == task_core::DeliverySkipReason::RepoNotEnabled
+            || !crate::delivery::auto_integrates(store, t)?
+        {
+            continue;
+        }
         let delivered = store
             .delivery_get(t.id)?
             .is_some_and(|d| head.as_ref().is_none_or(|h| *h == d.head));

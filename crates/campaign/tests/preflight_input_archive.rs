@@ -88,7 +88,7 @@ fn host() -> FakeHost {
         api: vec![
             (
                 "/api/v1/projects/01ABC",
-                json!({"project":{"id":"01ABC","auto_integrate":false},"repos":[]}),
+                json!({"project":{"id":"01ABC"},"repos":[]}),
             ),
             (
                 "/api/v1/projects/01ABC/repos",

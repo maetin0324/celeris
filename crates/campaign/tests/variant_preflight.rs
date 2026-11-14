@@ -58,7 +58,7 @@ impl Host for OrgHost {
             "/api/v1/llm/accounts" => Ok(
                 json!({"items":[{"source_id":"claude_oauth","account_id":"lab","dir":"/tmp","logged_in":true}]}),
             ),
-            "/api/v1/projects/01ABC" => Ok(json!({"project": {"auto_integrate": false}})),
+            "/api/v1/projects/01ABC" => Ok(json!({"project": {}, "repos": []})),
             "/api/v1/projects/01ABC/repos" => Ok(json!({"items": []})),
             "/api/v1/org" => Ok(self.org.clone()),
             _ => Err(format!("GET {path}: HTTP 404")),

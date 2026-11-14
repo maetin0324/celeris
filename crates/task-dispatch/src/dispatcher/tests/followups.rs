@@ -61,7 +61,6 @@ fn project_with_primary(store: &Arc<dyn TaskStore>, dir: &std::path::Path) -> (P
     let now = OffsetDateTime::now_utc();
     let project = Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         archived_at: None,
         paused_from: None,
@@ -75,6 +74,7 @@ fn project_with_primary(store: &Arc<dyn TaskStore>, dir: &std::path::Path) -> (P
     };
     store.project_create(&project).unwrap();
     let repo = ProjectRepo {
+        auto_integrate: false,
         id: RepoId::new(),
         project_id: project.id,
         name: "agent-platform".into(),

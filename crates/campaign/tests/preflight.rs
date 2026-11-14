@@ -83,12 +83,12 @@ impl Host for FakeHost {
     }
 }
 
-/// 専用の campaign 案件（auto_integrate off・ローカル repo）と A のアカウントを返す偽 API。
+/// 専用の campaign 案件（repo の auto_integrate off・ローカル repo）と A のアカウントを返す偽 API。
 fn api(acct_dir: &Path) -> Vec<(&'static str, Value)> {
     vec![
         (
             "/api/v1/projects/01ABC",
-            json!({"project":{"id":"01ABC","auto_integrate":false},"repos":[]}),
+            json!({"project":{"id":"01ABC"},"repos":[]}),
         ),
         (
             "/api/v1/projects/01ABC/repos",
@@ -954,13 +954,13 @@ fn remote_primary_repo_is_irrelevant_but_template_repos_are_rejected() {
     );
 }
 
-/// 自動取り込みが有効な案件は、試行 task が自己改善の main に入り得るので拒否する。
+/// 案件のリポジトリのどれかで自動取り込みが有効なら、試行 task が自己改善の main に入り得るので拒否する。
 #[test]
-fn auto_integrate_project_is_rejected() {
+fn project_with_auto_integrate_repo_is_rejected() {
     let s = setup();
     let h = with_api(vec![(
         "/api/v1/projects/01ABC",
-        json!({"project":{"id":"01ABC","auto_integrate":true},"repos":[]}),
+        json!({"project":{"id":"01ABC"},"repos":[{"auto_integrate":false},{"auto_integrate":true}]}),
     )]);
     let r = check(&s.inp, &h);
     assert!(

@@ -594,6 +594,7 @@ fn root_done_row_waiting_on_delivery(
         default_branch: Some("main".into()),
         sync: None,
         run: task_core::RepoRun::Auto,
+        auto_integrate: false,
         is_primary: true,
         created_at: OffsetDateTime::now_utc(),
     };

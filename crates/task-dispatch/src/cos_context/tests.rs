@@ -24,7 +24,6 @@ fn project(store: &SqliteStore, title: &str) -> String {
         paused_from: None,
         auto_advance: false,
         slug: None,
-        auto_integrate: false,
         created_at: now,
         updated_at: now,
     };

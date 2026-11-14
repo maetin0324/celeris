@@ -33,7 +33,6 @@ fn setup() -> Setup {
     let clock = Arc::new(StdMutex::new(at("2026-11-09T00:00:00Z")));
     let project = Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         archived_at: None,
         paused_from: None,
@@ -180,6 +179,7 @@ async fn health_inventory_does_not_call_llm() {
     commit(repo_dir.path(), &refs, "checker");
     store
         .repo_create(&task_core::ProjectRepo {
+            auto_integrate: false,
             id: task_core::RepoId::new(),
             project_id: project,
             name: "code".into(),

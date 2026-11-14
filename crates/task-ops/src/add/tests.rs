@@ -469,7 +469,6 @@ fn unknown_assignee_project_or_milestone_is_rejected() {
     let now_ts = OffsetDateTime::now_utc();
     let project = task_core::Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         archived_at: None,
         paused_from: None,
@@ -521,7 +520,6 @@ fn a_project(store: &dyn task_core::TaskStore) -> task_core::Project {
     let now_ts = OffsetDateTime::now_utc();
     let project = task_core::Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         archived_at: None,
         paused_from: None,
@@ -544,7 +542,6 @@ fn a_project_with_workspace(
     let now_ts = OffsetDateTime::now_utc();
     let project = task_core::Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         archived_at: None,
         paused_from: None,

@@ -39,3 +39,9 @@ dispatcher/tests 以下の試験も `ProjectRepo.auto_integrate`（repo の欄�
 
 ## 未解決事項
 - 上記 2 件の試験の負荷下の揺れ（未調査）。
+
+## check の不合格への対応（3 回目の run）
+- 前回の `cargo test -p task-dispatch` は `health_enforce_g2_unavailable_is_not_pass` の 1 件が落ちた（承認の子が 0 件）。
+  単独で 3 回、全体で 1 回再実行したところ全て通った（全体 1762 passed, 0 failed、提出時の HEAD で実行）。
+  この試験は同梱検査器の process 共有状態（`bundled_test`）に依存する。この WorkUnit の変更（reviewer 必須の判定・試験の repo 単位化）とは別の経路で、原因は未特定。コードは変えていない。
+- 未解決: 全体実行で稀に落ちる試験が 3 種（`build_cache`・`cron_jobs`・`health_enforce_g2_unavailable_is_not_pass`）。いずれも負荷下の揺れとみるが原因は未調査。

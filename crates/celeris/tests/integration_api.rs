@@ -312,7 +312,6 @@ async fn integration_api_stranded_branch_round_trip_through_routes_and_events() 
     let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("fixed clock");
     let project = Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         id: ProjectId::new(),
         title: "agent-platform".into(),
@@ -334,6 +333,7 @@ async fn integration_api_stranded_branch_round_trip_through_routes_and_events() 
         default_branch: Some("main".into()),
         sync: None,
         run: RepoRun::Auto,
+        auto_integrate: false,
         is_primary: true,
         created_at: now,
     };
@@ -563,7 +563,6 @@ async fn integration_api_merge_conflict_keeps_main_unintegrated() {
     let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("fixed clock");
     let project = Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         id: ProjectId::new(),
         title: "agent-platform".into(),
@@ -585,6 +584,7 @@ async fn integration_api_merge_conflict_keeps_main_unintegrated() {
         default_branch: Some("main".into()),
         sync: None,
         run: RepoRun::Auto,
+        auto_integrate: false,
         is_primary: true,
         created_at: now,
     };
@@ -663,7 +663,6 @@ fn register_repo(store: &SqliteStore, repo_path: &Path) -> ProjectRepo {
     let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("fixed clock");
     let project = Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         id: ProjectId::new(),
         title: "agent-platform".into(),
@@ -685,6 +684,7 @@ fn register_repo(store: &SqliteStore, repo_path: &Path) -> ProjectRepo {
         default_branch: Some("main".into()),
         sync: None,
         run: RepoRun::Auto,
+        auto_integrate: false,
         is_primary: true,
         created_at: now,
     };

@@ -254,6 +254,19 @@ fn decode_null(body: Value) -> Value {
     }
 }
 
+/// ADR 2026-11-14-repo-auto-integrate D6: 既定ブランチへの自動 merge の許可は人の管理操作で、
+/// CoS は書けない。欄があれば値によらず 422（理由は操作の記録に残る）。それ以外は本文を `T` に読む。
+fn decode_repo_body<T: serde::de::DeserializeOwned>(body: Value) -> Result<T, ApiProblem> {
+    if body.get("auto_integrate").is_some() {
+        return Err(unprocessable(
+            "validation",
+            "request.body.auto_integrate: CoS cannot change a repo's auto_integrate; a human sets it with PATCH /api/v1/repos/{id}",
+        ));
+    }
+    serde_json::from_value(body)
+        .map_err(|e| unprocessable("validation", format!("request.body: {e}")))
+}
+
 fn empty_body(body: &Value) -> Result<(), ApiProblem> {
     if body.is_null() || *body == serde_json::json!({}) {
         Ok(())
@@ -357,16 +370,14 @@ pub(crate) fn dispatch(
         }
         "repo.create" => {
             let id = matched.id.unwrap_or_default();
-            let repo = serde_json::from_value(body)
-                .map_err(|e| unprocessable("validation", format!("request.body: {e}")))
+            let repo = decode_repo_body(body)
                 .and_then(|input| crate::repos::plan_create(&env.api, &id, input))
                 .map_err(|p| audit.reject(store, "repo", &id, p))?;
             audited(crate::repos::create_repo_op(store, repo, Some(audit))?)
         }
         "repo.update" => {
             let id = matched.id.unwrap_or_default();
-            let next = serde_json::from_value::<crate::types::RepoPatchBody>(body)
-                .map_err(|e| unprocessable("validation", format!("request.body: {e}")))
+            let next = decode_repo_body::<crate::types::RepoPatchBody>(body)
                 .and_then(|input| {
                     let repo_id = crate::repos::repo_id_of(&id)?;
                     let location = crate::repos::check_patch(&env.api, &input)?;

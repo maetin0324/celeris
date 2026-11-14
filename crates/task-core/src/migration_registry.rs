@@ -427,6 +427,11 @@ pub(crate) const MIGRATIONS: &[(u32, &str)] = &[
         125,
         include_str!("../migrations/0125_chat_run_knowledge_use.sql"),
     ),
+    // ADR 2026-11-14-repo-auto-integrate D7: `project_repos.auto_integrate`（`projects.auto_integrate` を移して削除）。
+    (
+        126,
+        include_str!("../migrations/0126_repo_auto_integrate.sql"),
+    ),
 ];
 
 /// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0038 work_unit_sessions、

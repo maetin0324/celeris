@@ -126,7 +126,6 @@ fn setup() -> (
     let now = time::OffsetDateTime::now_utc();
     let project = Project {
         auto_advance: false,
-        auto_integrate: true,
         slug: None,
         archived_at: None,
         paused_from: None,
@@ -140,6 +139,7 @@ fn setup() -> (
     };
     store.project_create(&project).unwrap();
     let repo = task_core::ProjectRepo {
+        auto_integrate: true,
         id: RepoId::new(),
         project_id: project.id,
         name: "app".into(),

@@ -1747,7 +1747,7 @@ mode は `off`（既定）・`dry_run`・`shadow`・`enabled`。`off` の案件�
 
 #### 3.48 `PATCH /projects/{id}` → 200 `Project`（**管理系**）
 
-`{"status":…, "workspace":…, "slug":…, "title":…, "request":…, "auto_integrate":…}` のうち**書いたものだけ**を変える。
+`{"status":…, "workspace":…, "slug":…, "title":…, "request":…}` のうち**書いたものだけ**を変える。
 知らない欄・知らない `status` の値は 400 `bad_request`（本文の解析で落ちる）。
 
 - `status`: `"proposed"` / `"active"` / `"done"`。**`paused` / `cancelled` は入れられない**
@@ -1760,8 +1760,8 @@ mode は `off`（既定）・`dry_run`・`shadow`・`enabled`。`off` の案件�
   （ADR-0044 D7）。
 - `title`（前後の空白を除いて 1〜200 文字）/ `request`（同じく 1〜20,000 文字）。空・長すぎるものは 422。
   `request` を書き換えても run は起きない（ADR-0072）。
-- `auto_integrate`（boolean）: レビュー合格した root task を既定ブランチへ自動で取り込むか（既定 `false`。
-  ADR 2026-10-16-project-auto-integrate）。reload は要らない。自己リポジトリ以外の案件は取り込みで止まり、release・promote には進まない。
+- `auto_integrate` は案件の欄ではなくなった（リポジトリの欄。§3.69・§3.70）。書けば（値によらず）422 `validation`
+  （`errors[0].field = "auto_integrate"`。ADR 2026-11-14-repo-auto-integrate D8）。
 - `auto_advance` は廃止（書けば 422 `validation`、`errors[0].field = "auto_advance"`。ADR-0079 D13）。
 - どれも書かない（`{}`）は 422 `validation`。
 - ULID でない id・無い案件は 404 `project_not_found`。
@@ -2288,7 +2288,8 @@ commit を task に結ぶのに使う。クエリは受け付けない。`items[
   "location": {"kind": "local", "path": "~/workspace/rust/benchfs"},
   "default_branch": "main",
   "run": "auto",
-  "is_primary": true
+  "is_primary": true,
+  "auto_integrate": false
 }
 ```
 
@@ -2304,12 +2305,21 @@ commit を task に結ぶのに使う。クエリは受け付けない。`items[
   **`sync: "none"` は 422**（ADR-0043 D7 のリモート (b) は未実装）
 - `run` は `auto`（既定。`workspace.toml` の `[run] mode` に従う）/ `host` / `container`。
   `container` または `auto` で `[run] mode = "container"` なら container 実行を選ぶ。
+- `auto_integrate`（boolean、既定 `false`）: このリポジトリだけに書く（`task.repos` のすべてが有効な）レビュー合格の
+  root task を既定ブランチへ自動で取り込むか（ADR 2026-11-14-repo-auto-integrate D1）。**`kind = "git"` かつ
+  `location.kind = "local"` の行だけ**が有効にできる。remote・`dir` の行で `true` は 422 `validation`
+  （条件の正本は task-core の検証。何も書かない）。管理トークンが要り、CoS の `repo.create` は欄があれば 422（D6）。
+  一覧・`GET /projects/{id}` の `repos[]` にも出る。
 
 #### 3.70 `PATCH /repos/{id}` → 200 `ProjectRepo`
 
 - 書いたものだけ変える（1 つも書かなければ 422）。`default_branch` / `sync` は `null` を明示すると消える
 - `is_primary: true` でこの行が primary になる（`false` は何もしない。primary を空にはできない）
 - `kind` を `dir` にすると `default_branch` は落ちる。`location` を `local` にすると `sync` は落ちる
+- `auto_integrate: true/false`（§3.69）。省略なら変えない。変更を当てた後の行が remote か `dir` で `true` なら 422
+  `validation`。`location` を remote に・`kind` を `dir` に変える要求で、既に有効な行も 422（黙って `false` に落とさない。
+  同じ要求で `auto_integrate: false` を書くか、先に無効にする）。変えたら管理系のログに `op = "repo_update"` と書いた欄の名前
+  （`fields`）を残す。CoS の `repo.update` は `auto_integrate` を書けない（欄があれば 422、拒否の理由が操作の記録に残る）
 - 知らない id は 404 `repo_not_found`
 
 #### 3.71 `DELETE /repos/{id}` → 204

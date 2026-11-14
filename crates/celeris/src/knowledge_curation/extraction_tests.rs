@@ -433,7 +433,6 @@ fn guessed_project_slugs_are_repaired_to_the_source_project_or_experience() {
     env.git_init(Remote::None);
     let project = task_core::org::Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: Some("asmr-one-remix-rust".into()),
         id: task_core::org::ProjectId::new(),
         title: "ASMR one remix".into(),

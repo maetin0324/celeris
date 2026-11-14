@@ -65,7 +65,6 @@ fn project_row(request: &str, title: &str) -> Project {
     let now = OffsetDateTime::now_utc();
     Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         archived_at: None,
         paused_from: None,

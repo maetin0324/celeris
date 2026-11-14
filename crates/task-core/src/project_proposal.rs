@@ -276,7 +276,6 @@ pub struct SnapshotProject {
     pub status: String,
     pub request: String,
     pub request_sha256: String,
-    pub auto_integrate: bool,
 }
 
 /// root の受け入れ条件 1 件と結果。

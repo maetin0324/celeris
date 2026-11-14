@@ -34,7 +34,6 @@ fn fixture() -> Fixture {
     let store = SqliteStore::open(&dir.path().join("celeris.db")).expect("store");
     let project = Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         archived_at: None,
         paused_from: None,
@@ -71,6 +70,7 @@ impl Fixture {
         let refs: Vec<(&str, &str)> = files.iter().map(|(p, b)| (*p, b.as_str())).collect();
         commit(dir.path(), &refs, "checker");
         let repo = ProjectRepo {
+            auto_integrate: false,
             id: RepoId::new(),
             project_id: self.project,
             name: name.into(),

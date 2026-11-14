@@ -67,7 +67,6 @@ async fn integration_api_task_detail_and_list_include_unintegrated_state() {
     let now = time::OffsetDateTime::now_utc();
     let project = Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         id: ProjectId::new(),
         title: "p".into(),
@@ -90,6 +89,7 @@ async fn integration_api_task_detail_and_list_include_unintegrated_state() {
         sync: None,
         run: RepoRun::Auto,
         is_primary: true,
+        auto_integrate: false,
         created_at: now,
     };
     env.store.repo_create(&repo).expect("repo");
@@ -232,6 +232,7 @@ fn fixture_repo(
         sync: None,
         run: RepoRun::Auto,
         is_primary: false,
+        auto_integrate: false,
         created_at: now,
     }
 }
@@ -255,7 +256,6 @@ async fn integration_api_inbox_unintegrated_items_are_per_repo_and_need_note() {
     let now = time::OffsetDateTime::now_utc();
     let project = Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         id: ProjectId::new(),
         title: "p".into(),

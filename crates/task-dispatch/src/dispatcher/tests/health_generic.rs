@@ -463,7 +463,7 @@ struct Flags {
     /// selfdeploy の欄（`DispatchConfig.releases_dir` = `[selfdeploy] releases_dir`）を設定し、その親の
     /// `current/manifest.json` に fixture の base の sha を書く（base は変えない）。
     selfdeploy: bool,
-    /// 案件の自動統合（`Project.auto_integrate`）を有効にする。`self_improve` という欄はコードに無い（進捗の記録）。
+    /// 案件のリポジトリの自動統合（`ProjectRepo.auto_integrate`）を有効にする。`self_improve` という欄はコードに無い（進捗の記録）。
     auto_integrate: bool,
 }
 
@@ -484,7 +484,11 @@ fn review_task(
     } else {
         "code"
     };
-    let (project, repos) = project_with_repos(store, &[(name, repo, task_core::RepoKind::Git)]);
+    let (project, repos) = project_with_repos_integrating(
+        store,
+        &[(name, repo, task_core::RepoKind::Git)],
+        flags.auto_integrate,
+    );
     if flags.project_named_celeris {
         assert!(
             sqlite
@@ -494,9 +498,6 @@ fn review_task(
                 .unwrap()
         );
         assert!(store.project_set_slug(project, "celeris").unwrap());
-    }
-    if flags.auto_integrate {
-        assert!(store.project_set_auto_integrate(project, true).unwrap());
     }
     let mut task = git_task(
         repo,

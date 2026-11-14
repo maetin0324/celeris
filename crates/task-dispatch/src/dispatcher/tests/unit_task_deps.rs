@@ -52,7 +52,6 @@ fn fixture(
     let now = OffsetDateTime::now_utc();
     let project = Project {
         auto_advance: false,
-        auto_integrate: true,
         slug: None,
         archived_at: None,
         paused_from: None,
@@ -67,6 +66,7 @@ fn fixture(
     store.project_create(&project).unwrap();
     store
         .repo_create(&ProjectRepo {
+            auto_integrate: true,
             id: RepoId::new(),
             project_id: project.id,
             name: "r".into(),

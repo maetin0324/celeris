@@ -37,7 +37,6 @@ fn db() -> Db {
     let now = OffsetDateTime::now_utc();
     let p = Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         archived_at: None,
         paused_from: None,

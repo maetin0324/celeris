@@ -1265,19 +1265,23 @@ fn check_inputs(a: &mut Acc, m: &CampaignManifest, set: &CaseSet, inp: &Inputs) 
     }
 }
 
-/// 自動取り込みされる案件を、案件（`ProjectDetail`）の JSON から判定する。executor は repos を選ばず
-/// trial workspace を cwd にする（`repos: []` + `workspace_mode: shared`。ADR 2026-10-20-mlsys-main2-fixes D2）ので、
-/// 案件の repo の場所（リモートなど）は投入の可否に関係しない。
+/// 自動取り込みされうる案件を、案件（`ProjectDetail`）の JSON から判定する。案件のリポジトリ
+/// （`repos[]`）のどれかで `auto_integrate` が有効なら止める（ADR 2026-11-14-repo-auto-integrate D8）。
+/// executor は repos を選ばず trial workspace を cwd にする（`repos: []` + `workspace_mode: shared`。
+/// ADR 2026-10-20-mlsys-main2-fixes D2）ので、案件の repo の場所（リモートなど）は投入の可否に関係しない。
 pub fn check_project_rules(detail: &Value) -> Vec<String> {
     let mut v = Vec::new();
-    // 実 `GET /projects/{id}` は `ProjectDetail`（`{"project":{"auto_integrate":..},"repos":[..],..}`）。
-    // 欠落・bool でない・project が無い場合も on 扱い（安全側）。
-    if detail["project"]["auto_integrate"]
-        .as_bool()
-        .unwrap_or(true)
-    {
+    // 実 `GET /projects/{id}` は `ProjectDetail`（`{"project":{..},"repos":[{"auto_integrate":..},..],..}`）。
+    // `repos` が無い・配列でない、repo の欄が欠落・bool でない場合も on 扱い（安全側）。
+    let on = match detail["repos"].as_array() {
+        Some(repos) => repos
+            .iter()
+            .any(|r| r["auto_integrate"].as_bool().unwrap_or(true)),
+        None => true,
+    };
+    if on {
         v.push(
-            "the project has auto_integrate on (or unknown); trial tasks could be merged into the repo's main. Use a dedicated campaign project with auto_integrate=false"
+            "a repo of the project has auto_integrate on (or unknown); trial tasks could be merged into the repo's main. Use a dedicated campaign project whose repos all have auto_integrate=false"
                 .into(),
         );
     }

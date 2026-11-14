@@ -89,7 +89,6 @@ fn talking_to_a_node_records_the_message_and_makes_one_ready_conversation_task()
     let (roles, genres) = specs();
     let project = Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         archived_at: None,
         paused_from: None,
@@ -634,7 +633,6 @@ fn a_second_message_waits_for_the_first_reply() {
     let (roles, genres) = specs();
     let project = Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         archived_at: None,
         paused_from: None,
@@ -747,7 +745,6 @@ fn the_cos_serializes_across_projects_but_other_nodes_do_not() {
     let (roles, genres) = specs();
     let project = Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         archived_at: None,
         paused_from: None,

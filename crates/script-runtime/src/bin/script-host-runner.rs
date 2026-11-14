@@ -782,7 +782,7 @@ fn project_controller_probe_input() -> Value {
         "now": "2026-11-04T00:00:00Z",
         "truncated": false,
         "project": {"id": "P", "title": "probe", "status": "active", "request": "r",
-                    "request_sha256": "0".repeat(64), "auto_integrate": false},
+                    "request_sha256": "0".repeat(64)},
         "brief": null,
         "outcomes": [{"id": "o1", "title": "t", "acceptance": ["a"], "depends_on": [], "priority": 0,
                       "source": "request_block"}],

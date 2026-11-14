@@ -96,6 +96,15 @@ fn stored_delivery() -> (task_core::SqliteStore, Delivery) {
 
 /// `mode` の task の配送（[`stored_delivery`] と同じ組織・案件）。
 fn stored_delivery_in_mode(mode: task_core::TaskMode) -> (task_core::SqliteStore, Delivery) {
+    stored_delivery_with(mode, false)
+}
+
+/// `with_repo` なら、案件に repo の行（`auto_integrate` は無効）を作って task がそれを使う（取り込み判定の試験用。
+/// 位置は `register_repo` が実 repo に直す）。無しなら案件に repo の行が無く、task の `repos` は空。
+fn stored_delivery_with(
+    mode: task_core::TaskMode,
+    with_repo: bool,
+) -> (task_core::SqliteStore, Delivery) {
     use task_core::*;
     let store = SqliteStore::open_in_memory().unwrap();
     let now = OffsetDateTime::now_utc();
@@ -120,7 +129,6 @@ fn stored_delivery_in_mode(mode: task_core::TaskMode) -> (task_core::SqliteStore
     }
     let p = Project {
         auto_advance: false,
-        auto_integrate: true,
         slug: None,
         id: ProjectId::new(),
         title: "test".into(),
@@ -133,7 +141,30 @@ fn stored_delivery_in_mode(mode: task_core::TaskMode) -> (task_core::SqliteStore
         updated_at: now,
     };
     store.project_create(&p).unwrap();
-    let mut spec: task_ops::add::NewTaskSpec = serde_json::from_value(serde_json::json!({"title":"fix","objective":"implement","acceptance":[],"project_id":p.id,"assignee":"engineering"})).unwrap();
+    // ADR 2026-11-14-repo-auto-integrate D3: 取り込みの可否は task の repo の行。位置は `register_repo` が実 repo に直す。
+    let repo_row = task_core::ProjectRepo {
+        id: RepoId::new(),
+        project_id: p.id,
+        name: "asmr".into(),
+        kind: task_core::RepoKind::Git,
+        location: task_core::WorkspaceSpec::Local {
+            path: std::path::PathBuf::from("/nonexistent/placeholder"),
+            mode: None,
+        },
+        default_branch: Some("main".into()),
+        sync: None,
+        run: Default::default(),
+        auto_integrate: false,
+        is_primary: true,
+        created_at: now,
+    };
+    let repos: Vec<&str> = if with_repo {
+        store.repo_create(&repo_row).unwrap();
+        vec!["asmr"]
+    } else {
+        vec![]
+    };
+    let mut spec: task_ops::add::NewTaskSpec = serde_json::from_value(serde_json::json!({"title":"fix","objective":"implement","acceptance":[],"project_id":p.id,"assignee":"engineering","repos":repos})).unwrap();
     spec.mode = Some(mode);
     let task = task_ops::add::create_support_task(&store, spec, &[], &[], now).unwrap();
     for trigger in [Trigger::Dispatch, Trigger::WorkerDone, Trigger::ReviewPass] {
@@ -142,6 +173,9 @@ fn stored_delivery_in_mode(mode: task_core::TaskMode) -> (task_core::SqliteStore
     let mut d = record();
     d.task_id = task.id;
     d.project_id = p.id;
+    if with_repo {
+        d.repo_id = repo_row.id;
+    }
     (store, d)
 }
 #[test]
@@ -521,8 +555,16 @@ fn merge_queued_without_evidence() -> (task_core::SqliteStore, tempfile::TempDir
 fn merge_queued_in_mode(
     mode: task_core::TaskMode,
 ) -> (task_core::SqliteStore, tempfile::TempDir, Delivery) {
+    merge_queued_with(mode, false)
+}
+
+/// [`merge_queued_in_mode`]。`with_repo` は [`stored_delivery_with`] と同じ。
+fn merge_queued_with(
+    mode: task_core::TaskMode,
+    with_repo: bool,
+) -> (task_core::SqliteStore, tempfile::TempDir, Delivery) {
     use task_core::DeliveryStore;
-    let (store, mut d) = stored_delivery_in_mode(mode);
+    let (store, mut d) = stored_delivery_with(mode, with_repo);
     let (dir, repo_d) = repository();
     d.base = repo_d.base;
     d.head = repo_d.head;
@@ -748,19 +790,26 @@ fn cfg_for(repo: &Path, releases_dir: &Path) -> Config {
 /// 案件のリポジトリ行（`delivery_repo` が取り込み先を引く）を `dir` で登録する。
 fn register_repo(store: &task_core::SqliteStore, d: &Delivery, dir: &Path) {
     use task_core::TaskStore;
+    let location = task_core::WorkspaceSpec::Local {
+        path: dir.to_path_buf(),
+        mode: None,
+    };
+    if let Some(mut row) = store.repo_get(d.repo_id).unwrap() {
+        row.location = location;
+        assert!(store.repo_update(&row).unwrap());
+        return;
+    }
     store
         .repo_create(&task_core::ProjectRepo {
             id: d.repo_id,
             project_id: d.project_id,
             name: "asmr".into(),
             kind: task_core::RepoKind::Git,
-            location: task_core::WorkspaceSpec::Local {
-                path: dir.to_path_buf(),
-                mode: None,
-            },
+            location,
             default_branch: Some("main".into()),
             sync: None,
             run: Default::default(),
+            auto_integrate: false,
             is_primary: true,
             created_at: OffsetDateTime::now_utc(),
         })
@@ -828,30 +877,30 @@ fn non_self_repo_with_a_remote_is_pushed_but_still_has_no_release() {
     assert_eq!(sha(bare.path(), "refs/heads/main").unwrap(), after.head);
 }
 
-/// `tick`（[`tick_with`]）は案件の `auto_integrate`（DB）が有効な配送だけを進める。無効なら従来どおり取り込まない。
+fn set_repo_auto_integrate(store: &task_core::SqliteStore, d: &Delivery, on: bool) {
+    use task_core::TaskStore;
+    let mut row = store.repo_get(d.repo_id).unwrap().unwrap();
+    row.auto_integrate = on;
+    assert!(store.repo_update(&row).unwrap());
+}
+
+/// `tick`（[`tick_with`]）は task の repo の `auto_integrate`（DB）が有効な配送だけを進める。無効なら取り込まない。
 #[test]
-fn tick_advances_only_projects_with_auto_integrate() {
-    use task_core::{DeliveryStore, TaskStore};
-    let (store, dir, d) = merge_queued_delivery();
+fn tick_advances_only_repos_with_auto_integrate() {
+    use task_core::DeliveryStore;
+    let (store, dir, d) = merge_queued_with(task_core::TaskMode::Production, true);
+    record_evidence(&store, dir.path(), &d, &[]);
     register_repo(&store, &d, dir.path());
     let self_repo = tempfile::tempdir().unwrap();
     let tmp = tempfile::tempdir().unwrap();
     let cfg = cfg_for(self_repo.path(), &tmp.path().join("releases"));
     let before = sha(dir.path(), "refs/heads/main").unwrap();
-    assert!(
-        store
-            .project_set_auto_integrate(d.project_id, false)
-            .unwrap()
-    );
+    set_repo_auto_integrate(&store, &d, false);
     tick_with(&store, &cfg, OffsetDateTime::now_utc(), Some(&bundled())).unwrap();
     let off = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(off.state, State::MergeQueued);
     assert_eq!(sha(dir.path(), "refs/heads/main").unwrap(), before);
-    assert!(
-        store
-            .project_set_auto_integrate(d.project_id, true)
-            .unwrap()
-    );
+    set_repo_auto_integrate(&store, &d, true);
     tick_with(&store, &cfg, OffsetDateTime::now_utc(), Some(&bundled())).unwrap();
     let on = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(on.state, State::Ready);

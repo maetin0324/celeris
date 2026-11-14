@@ -424,15 +424,10 @@ impl Dispatcher {
             }
         };
 
-        let delivery_requires_reviewer_run = task.project_id.is_some_and(|project_id| {
-            self.store
-                .project_get(project_id)
-                .ok()
-                .flatten()
-                .is_some_and(|p| p.auto_integrate)
+        let delivery_requires_reviewer_run =
+            task_ops::delivery::auto_integrates(&*self.store, &task).unwrap_or(false)
                 && task_core::support_kind(&task).is_none()
-                && !task_core::tree::is_tree_child(&task)
-        });
+                && !task_core::tree::is_tree_child(&task);
         let reviewer = if needs_reviewer_run(&task) || delivery_requires_reviewer_run {
             match self.pick_reviewer(&task, &run_id, run_watch(&*self.store, &task, None)) {
                 Some(r) => Some(r),

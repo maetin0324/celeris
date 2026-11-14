@@ -249,7 +249,7 @@ impl Dispatcher {
                 // admit は `resolve_cluster` が remote のクラスタを返した後でだけ求める。
                 AdmissionFact::ClusterState(step) => {
                     let Some((spec, ..)) = &cluster else {
-                        return Ok(false);
+                        return admission_contract_broken(task.id, "ClusterState: cluster");
                     };
                     let (id, place) = (spec.id.as_str(), &mut input.place);
                     match step {
@@ -296,7 +296,7 @@ impl Dispatcher {
                 // admit は WU の run で、作業場所の dir を解決した後でだけ求める。
                 AdmissionFact::WorkUnit(step) => {
                     let (Some(wu), Some(dir)) = (gate_wu(&gate), dir.as_deref()) else {
-                        return Ok(false);
+                        return admission_contract_broken(task.id, "WorkUnit: work unit or dir");
                     };
                     let place = &mut input.place;
                     match step {
@@ -407,7 +407,7 @@ impl Dispatcher {
                 // admit は lane を決めた run でだけ求める。
                 AdmissionFact::LaneAssist => {
                     let Some(decision) = lane_decision.as_mut() else {
-                        return Ok(false);
+                        return admission_contract_broken(task.id, "LaneAssist: lane decision");
                     };
                     let (record, held) = self.apply_lane_assist(&task, gate_wu(&gate), decision)?;
                     (lane_assist_record, input.route.lane_assist_held) = (record, Some(held));
@@ -538,7 +538,7 @@ impl Dispatcher {
                 // admit は route を受けた後でだけ求める。
                 AdmissionFact::CredentialGate => {
                     let Some((pick, ..)) = &launched else {
-                        return Ok(false);
+                        return admission_contract_broken(task.id, "CredentialGate: launch");
                     };
                     let hold = self.credential_gate_hold(&task, gate_wu(&gate), pick)?;
                     input.route.credential_hold = Some(hold);
@@ -546,7 +546,7 @@ impl Dispatcher {
                 // variant 付き試行は、lease と run 記録の前にもう一度 pin を確かめる（割当後に org が変わっていたら起動しない）。
                 AdmissionFact::VariantPin => {
                     let Some((.., llm_route)) = &launched else {
-                        return Ok(false);
+                        return admission_contract_broken(task.id, "VariantPin: launch");
                     };
                     let pin = self.variant_run_pin(&task, Some(llm_route));
                     input.route.variant_pinned = Some(pin.is_ok());
@@ -555,7 +555,9 @@ impl Dispatcher {
             }
         };
         // admit は作業場所の dir を起動の前に求め、解決できなければ止める。
-        let Some(dir) = dir else { return Ok(false) };
+        let Some(dir) = dir else {
+            return admission_contract_broken(task.id, "launch: task dir");
+        };
         let current_wu = match gate {
             Some(WuDispatchGate::RunWorkUnit(wu)) => Some(*wu),
             _ => None,
@@ -581,7 +583,7 @@ impl Dispatcher {
         let (Some(route), Some((pick, adapter, llm_route)), Some(Ok(campaign_pin))) =
             (route, launched, campaign_pin)
         else {
-            return Ok(false);
+            return admission_contract_broken(task.id, "launch: route, launch or variant pin");
         };
         let (run_id, route_input, route_features, route_outcome, mut route_trace) = route;
         let adapter_id = adapter.id().to_string();
@@ -634,11 +636,7 @@ impl Dispatcher {
                 account: account.clone(),
                 // ADR-0072 D14（Phase E3）: planner run だけ `Some(Planner)`（ワーカー run は
                 // 従来どおり `None`）。
-                role: if is_planner_dispatch {
-                    Some(RunRole::Planner)
-                } else {
-                    None
-                },
+                role: is_planner_dispatch.then_some(RunRole::Planner),
                 task_role: task.role.clone(),
             },
         )?;
@@ -933,11 +931,7 @@ impl Dispatcher {
                 && let Some(dept_node) = org.iter().find(|n| n.id == dept_id)
             {
                 let effective = task_core::resolve_profile(&org, &dept_node.id);
-                extras.profile = if effective.is_trivial() {
-                    None
-                } else {
-                    Some(effective.with_task(&task))
-                };
+                extras.profile = (!effective.is_trivial()).then(|| effective.with_task(&task));
                 extras.node = Some(NodeContext {
                     id: dept_node.id.clone(),
                     name: dept_node.name.clone(),
@@ -1649,4 +1643,11 @@ fn gate_wu(gate: &Option<WuDispatchGate>) -> Option<&task_core::WorkUnitRow> {
         Some(WuDispatchGate::RunWorkUnit(wu)) => Some(wu),
         _ => None,
     }
+}
+
+/// admit の契約（fact を求める前と起動の前に、前提の値を dispatch_one が集めている）が崩れたときの見送り。
+/// `Err` は tick の後ろの task の dispatch も打ち切るので返さず、記録して task を ready のまま次の tick に回す。
+fn admission_contract_broken(task_id: TaskId, missing: &str) -> Result<bool, DispatchError> {
+    tracing::error!(%task_id, missing, "dispatch admission contract broken; task left ready");
+    Ok(false)
 }

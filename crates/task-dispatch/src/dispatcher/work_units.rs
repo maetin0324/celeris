@@ -2011,24 +2011,15 @@ impl WorkUnitCheckRun {
         &self,
         result: &Result<RunOutcome, AdapterError>,
     ) -> Option<WorkUnitCheckFailure> {
-        let failed: Vec<task_core::FailedWorkUnitCheck> = self
-            .results
-            .iter()
-            .enumerate()
-            .filter(|(_, (pass, _))| !pass)
-            .map(|(i, (_, detail))| {
-                let (cmd, expect_exit, scope) = self
-                    .checks
-                    .get(i)
-                    .map(|c| (c.cmd.clone(), c.expect_exit, c.scope))
-                    .unwrap_or_default();
-                task_core::FailedWorkUnitCheck {
-                    cmd,
-                    expect_exit,
-                    detail: scope_check_detail(scope, detail),
-                }
-            })
-            .collect();
+        // D4 review-result: 失敗一覧は最終 review・段の統合と同じ `review_decision::failed_checks` で作る。
+        let results = self.results.iter().enumerate().map(|(i, (pass, detail))| {
+            let (cmd, expect_exit, scope) = (self.checks.get(i))
+                .map(|c| (c.cmd.clone(), c.expect_exit, c.scope))
+                .unwrap_or_default();
+            let reason = scope_check_detail(scope, detail);
+            crate::review_decision::CheckResult::command(cmd, expect_exit, *pass, reason)
+        });
+        let failed = crate::review_decision::failed_work_unit_checks(results);
         if failed.is_empty() {
             return None;
         }

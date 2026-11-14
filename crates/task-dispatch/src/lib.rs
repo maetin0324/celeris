@@ -51,6 +51,8 @@ pub(crate) mod project_orchestration;
 /// ADR-0033 D3（Phase 25）: run の終端から決定的に作る報告。
 pub(crate) mod reports;
 pub mod review;
+/// ADR 2026-11-11 dispatcher-state-ownership D3・D4: review の判定と起動の判断の純粋関数（D4 review-result の `failed_checks`）。
+pub(crate) mod review_decision;
 /// ADR 2026-11-07-root-done-tick-phase-timing: root_done_tick の段別計測と事実の収集。
 pub(crate) mod root_done_probe;
 pub mod routing_runtime;

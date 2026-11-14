@@ -791,13 +791,13 @@ fn evaluate(
             return Err(format!("{}: {e}", e.token()));
         }
     };
-    let judged = judge(c, repo, deadline, run, &ran, &out, &scratch);
+    let judged = judge_report(c, repo, deadline, run, &ran, &out, &scratch);
     *report = Some(Ok(ran.report));
     judged
 }
 
 /// 検査器が書いた report（`out`）から D2.3 の値と D3.1 の判定を `run` に書く（Fail は fail 級の finding も。D3.2）。
-fn judge(
+fn judge_report(
     c: &BaseChecker,
     repo: &Path,
     deadline: Instant,

@@ -1091,19 +1091,12 @@ impl Dispatcher {
         run: &IntegrationRun,
     ) -> Result<(), DispatchError> {
         let phase = integ.phase.clone().unwrap_or_default();
-        let failing: Vec<task_core::FailedCheck> = run
-            .checks
-            .iter()
-            .filter(|(_, pass, _)| !pass)
-            .map(|(cmd, _, reason)| task_core::FailedCheck {
-                check: Check::Command {
-                    cmd: cmd.clone(),
-                    expect_exit: 0,
-                },
-                reason: reason.clone(),
-                repair_hint: None,
-            })
-            .collect();
+        // D4 review-result: 失敗一覧は最終 review・WU の checks と同じ `review_decision::failed_checks` で作る。
+        let failing =
+            crate::review_decision::failed_checks(run.checks.iter().map(|(cmd, pass, reason)| {
+                let (cmd, reason) = (cmd.clone(), reason.clone());
+                crate::review_decision::CheckResult::command(cmd, 0, *pass, reason)
+            }));
         let summary: Vec<String> = failing.iter().map(|f| f.reason.clone()).collect();
         // 2026-10-20 ADR: 検査の時間切れ（`command timed out after Ns: <cmd>`）は理由に
         // `integration_check_timeout` を付け、人が受信箱で原因（どの cmd が止まったか）を読めるようにする。
@@ -1142,8 +1135,13 @@ impl Dispatcher {
             .collect();
         // ADR 2026-11-08-health-enforcement-loop D3.2・D4.1: health の修復は rule ごと（`health:<rule_id>`）に数える。
         let (bucket, same_class) = check_item::repair_count(class, &summary, &repairs);
-        let exhausted = repairs.len() as u32 >= self.config.execution.max_repairs
-            || same_class as u32 >= self.config.execution.max_repairs_per_class;
+        let exhausted =
+            crate::review_decision::repair_cap_reached(crate::review_decision::RepairUsage {
+                repairs: repairs.len(),
+                max_repairs: self.config.execution.max_repairs,
+                same_class,
+                max_per_class: self.config.execution.max_repairs_per_class,
+            });
         // D4.3・D4.4: health だけの不合格の往復・上限の使い切りは、replan しない質問（`stops_without_replan`）で止める。
         let used = exhausted.then_some((bucket.as_str(), repairs.len(), same_class));
         if let Some(stop) = self.phase_health_stop(task, &phase, class, used, &summary)? {

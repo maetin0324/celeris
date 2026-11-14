@@ -1094,15 +1094,8 @@ impl Dispatcher {
         // D4 review-result: 失敗一覧は最終 review・WU の checks と同じ `review_decision::failed_checks` で作る。
         let failing =
             crate::review_decision::failed_checks(run.checks.iter().map(|(cmd, pass, reason)| {
-                crate::review_decision::CheckResult {
-                    check: Check::Command {
-                        cmd: cmd.clone(),
-                        expect_exit: 0,
-                    },
-                    pass: *pass,
-                    reason: reason.clone(),
-                    repair_hint: None,
-                }
+                let (cmd, reason) = (cmd.clone(), reason.clone());
+                crate::review_decision::CheckResult::command(cmd, 0, *pass, reason)
             }));
         let summary: Vec<String> = failing.iter().map(|f| f.reason.clone()).collect();
         // 2026-10-20 ADR: 検査の時間切れ（`command timed out after Ns: <cmd>`）は理由に

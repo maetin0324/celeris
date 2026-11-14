@@ -18,7 +18,21 @@ use task_core::{
     execution::ReviewRepairHint,
 };
 
-use crate::review::{REVIEWER_NOT_EVALUATED_REASON, Verdict};
+/// ADR-0007 D5 2.: 決定的な条件が 1 つでも落ちて reviewer run を起動しなかったときの、`Check::Reviewer` の項目の
+/// reason。文字列の正本はここ 1 か所（verdict を作る `review::review_task` もこれを使う）。reviewer の判定ではないので、
+/// [`review_repair_class`] は決定的な不合格があるときこの項目を修復の分類から外す（ADR-0072 D16 付記 G4-S1）。
+pub(crate) const REVIEWER_NOT_EVALUATED_REASON: &str =
+    "not evaluated: a deterministic check failed";
+
+/// review の verdict の読み方。`review::Verdict` が実装する（この module は `review` に依存しない）。
+pub(crate) trait VerdictView {
+    fn criterion_idx(&self) -> usize;
+    fn pass(&self) -> bool;
+    fn reason(&self) -> &str;
+    /// 受け入れ条件に無い暗黙の条件の check（`Verdict::implicit_check`）。
+    fn implicit_check(&self) -> Check;
+    fn repair_hint(&self) -> Option<&ReviewRepairHint>;
+}
 
 /// 1 件の決定的 check の結果。最終 review の verdict・WU の check・段の統合の check のどれも同じ形にして
 /// [`failed_checks`] に渡す。
@@ -46,40 +60,55 @@ pub(crate) fn failed_checks(results: impl IntoIterator<Item = CheckResult>) -> V
 /// 最終 review の verdict を [`CheckResult`] にする（ADR-0072 D16）。check は task の受け入れ条件の check。暗黙の条件
 /// （plan・aggregate・必須検査・research）は受け入れ条件に無いので `Verdict::implicit_check`（health の Fail だけ
 /// `Check::Command`、他は修復できない `Check::Human`）。
-pub(crate) fn verdict_results<'a>(
+pub(crate) fn verdict_results<'a, V: VerdictView>(
     acceptance: &'a [Criterion],
-    verdicts: &'a [Verdict],
+    verdicts: &'a [V],
 ) -> impl Iterator<Item = CheckResult> + 'a {
     verdicts.iter().map(move |v| CheckResult {
-        check: (acceptance.get(v.criterion_idx))
+        check: (acceptance.get(v.criterion_idx()))
             .map(|c| c.check.clone())
             .unwrap_or_else(|| v.implicit_check()),
-        pass: v.pass,
-        reason: v.reason.clone(),
-        repair_hint: v.repair_hint.clone(),
+        pass: v.pass(),
+        reason: v.reason().to_string(),
+        repair_hint: v.repair_hint().cloned(),
     })
+}
+
+/// 1 件の command の check の結果（WU の checks・段の統合の checks。repair のヒントは無い）。
+impl CheckResult {
+    pub(crate) fn command(cmd: String, expect_exit: i32, pass: bool, reason: String) -> Self {
+        let check = Check::Command { cmd, expect_exit };
+        CheckResult {
+            check,
+            pass,
+            reason,
+            repair_hint: None,
+        }
+    }
 }
 
 /// ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D1: reviewer の条件（`Check::Reviewer`）が 1 つ以上あり、
 /// すべて合格なら、その条件の idx（昇順）。適用側はこれを review の snapshot に束ねて `ReviewerPassed` に残す。
-pub(crate) fn reviewer_criteria_passed(
+pub(crate) fn reviewer_criteria_passed<V: VerdictView>(
     acceptance: &[Criterion],
-    verdicts: &[Verdict],
+    verdicts: &[V],
 ) -> Option<Vec<usize>> {
     let criteria: Vec<usize> = (acceptance.iter().enumerate())
         .filter(|(_, c)| matches!(c.check, Check::Reviewer))
         .map(|(idx, _)| idx)
         .collect();
-    let all_passed = criteria
-        .iter()
-        .all(|idx| verdicts.iter().any(|v| v.criterion_idx == *idx && v.pass));
+    let all_passed = criteria.iter().all(|idx| {
+        verdicts
+            .iter()
+            .any(|v| v.criterion_idx() == *idx && v.pass())
+    });
     (!criteria.is_empty() && all_passed).then_some(criteria)
 }
 
 /// [`judge_review`] の入力。`discrepancy` は `review_discrepancy` の結果（reviewer は合格・決定的 check は不合格）。
-pub(crate) struct ReviewFacts<'a> {
+pub(crate) struct ReviewFacts<'a, V> {
     pub(crate) acceptance: &'a [Criterion],
-    pub(crate) verdicts: &'a [Verdict],
+    pub(crate) verdicts: &'a [V],
     pub(crate) discrepancy: Option<String>,
 }
 
@@ -95,7 +124,7 @@ pub(crate) struct ReviewJudgement {
 }
 
 /// D3 `judge_review`: 決定的 check が不合格なら成功にしない。
-pub(crate) fn judge_review(facts: ReviewFacts<'_>) -> ReviewJudgement {
+pub(crate) fn judge_review<V: VerdictView>(facts: ReviewFacts<'_, V>) -> ReviewJudgement {
     let failing = failed_checks(verdict_results(facts.acceptance, facts.verdicts));
     let passed = failing.is_empty();
     let fail_message = (!passed).then(|| {
@@ -132,34 +161,34 @@ pub(crate) struct DeliveryVerdict {
 /// review run が一致し、`Reviewing` のまま）で、行の条件の verdict があるときだけ結論を返す。合格は review 全体の結論と
 /// 行の条件の verdict の両方が合格のとき。detail は不合格の理由と行の条件の理由（reviewer が `[needs-human]` で
 /// 始めた理由は先頭にも置く）。
-pub(crate) fn delivery_verdict(
+pub(crate) fn delivery_verdict<V: VerdictView>(
     row: &DeliveryRow<'_>,
     run_id: &str,
     review_run: &str,
     passed: bool,
-    verdicts: &[Verdict],
+    verdicts: &[V],
 ) -> Option<DeliveryVerdict> {
     if row.worker_run != run_id || row.review_run != review_run || !row.reviewing {
         return None;
     }
     let verdict = verdicts
         .iter()
-        .find(|v| v.criterion_idx == row.criterion_idx)?;
+        .find(|v| v.criterion_idx() == row.criterion_idx)?;
     let detail = (verdicts.iter())
-        .filter(|v| !v.pass || v.criterion_idx == row.criterion_idx)
-        .map(|v| v.reason.clone())
+        .filter(|v| !v.pass() || v.criterion_idx() == row.criterion_idx)
+        .map(|v| v.reason())
         .collect::<Vec<_>>()
         .join("\n");
-    let review_reason = (verdict.reason)
+    let review_reason = (verdict.reason())
         .strip_prefix(&format!("reviewer({}): ", row.review_run))
-        .unwrap_or(&verdict.reason);
+        .unwrap_or(verdict.reason());
     let detail = if review_reason.trim_start().starts_with("[needs-human]") {
         format!("{review_reason}\n{detail}")
     } else {
         detail
     };
     Some(DeliveryVerdict {
-        pass: passed && verdict.pass,
+        pass: passed && verdict.pass(),
         detail,
     })
 }

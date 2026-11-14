@@ -2016,17 +2016,12 @@ impl WorkUnitCheckRun {
             let (cmd, expect_exit, scope) = (self.checks.get(i))
                 .map(|c| (c.cmd.clone(), c.expect_exit, c.scope))
                 .unwrap_or_default();
-            crate::review_decision::CheckResult {
-                check: Check::Command { cmd, expect_exit },
-                pass: *pass,
-                reason: scope_check_detail(scope, detail),
-                repair_hint: None,
-            }
+            let reason = scope_check_detail(scope, detail);
+            crate::review_decision::CheckResult::command(cmd, expect_exit, *pass, reason)
         });
         let failed: Vec<task_core::FailedWorkUnitCheck> =
             (crate::review_decision::failed_checks(results).into_iter())
                 .filter_map(|f| match f.check {
-                    // WU の check は上で `Check::Command` だけを作る。
                     Check::Command { cmd, expect_exit } => Some(task_core::FailedWorkUnitCheck {
                         cmd,
                         expect_exit,

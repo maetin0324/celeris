@@ -10,12 +10,40 @@
 use super::*;
 use task_core::execution::ReviewRepairHint;
 
+/// review の verdict の写し（`VerdictView` だけを通して読む。`implicit` は受け入れ条件に無い条件の check）。
+struct Verdict {
+    criterion_idx: usize,
+    pass: bool,
+    reason: String,
+    repair_hint: Option<ReviewRepairHint>,
+    implicit: Check,
+}
+
+impl VerdictView for Verdict {
+    fn criterion_idx(&self) -> usize {
+        self.criterion_idx
+    }
+    fn pass(&self) -> bool {
+        self.pass
+    }
+    fn reason(&self) -> &str {
+        &self.reason
+    }
+    fn implicit_check(&self) -> Check {
+        self.implicit.clone()
+    }
+    fn repair_hint(&self) -> Option<&ReviewRepairHint> {
+        self.repair_hint.as_ref()
+    }
+}
+
 fn verdict(idx: usize, pass: bool, reason: &str) -> Verdict {
     Verdict {
         criterion_idx: idx,
         pass,
         reason: reason.to_string(),
         repair_hint: None,
+        implicit: Check::Human,
     }
 }
 
@@ -107,6 +135,7 @@ fn review_decision_verdict_results_map_criteria_and_implicit_checks() {
             scope: health_id.to_string(),
             class: "other".to_string(),
         }),
+        implicit: cmd(health_id),
         ..verdict(3, false, "health:rule:abc")
     };
     let verdicts = vec![

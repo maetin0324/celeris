@@ -94,7 +94,13 @@ commit: 「admit-tidy: dispatch_one の契約違反の分岐を記録し、modul
 
 ### 検査の結果
 
-（提出前に書く）
+- `bash scripts/dev/test-affected.sh`: exit 0（対象 crate は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。
+  3933 passed、11 skipped、script bundle の SKIP 0 件）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `cargo fmt --all -- --check`: exit 0。
+- 範囲の check: exit 0（変えた path は `dispatcher.rs`・`dispatch_run.rs`・この file の 3 つ）。
+- `git diff --name-only "$CELERIS_WU_BASE" HEAD -- agent-docs/adr crates/task-dispatch/src/dispatch_admission.rs crates/task-dispatch/src/dispatch_admission/`: 出力 0 行
+  （ADR と `dispatch_admission` の型は変わっていない）。
 
 ## 未解決事項
 

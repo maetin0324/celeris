@@ -378,9 +378,9 @@ export function ProjectControllerPanel({
             {view.budget_today.usd_unknown_runs > 0
               ? `、費用不明の run ${view.budget_today.usd_unknown_runs} 件（上限に達したものとして止まる）`
               : ""}
-            、CoS の起動 {view.budget_today.chat_starts} 回と CoS
-            への依頼 {view.budget_today.cos_inputs} 件 / 各 {view.summary.budget_limits.max_cos_inputs_per_day}、起票{" "}
-            {view.budget_today.roots} 件 / {view.summary.budget_limits.max_roots_per_day}
+            、CoS の起動 {view.budget_today.chat_starts} 回と CoS への依頼 {view.budget_today.cos_inputs} 件 / 各{" "}
+            {view.summary.budget_limits.max_cos_inputs_per_day}、起票 {view.budget_today.roots} 件 /{" "}
+            {view.summary.budget_limits.max_roots_per_day}
           </p>
         ) : null}
         <p className="text-label text-muted-foreground" data-testid="controller-guard-limits">

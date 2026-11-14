@@ -10,9 +10,9 @@ import {
 import { Button } from "../../components/ui/button";
 import { ConfirmDialog } from "../../components/ui/confirm-dialog";
 import { StatusBadge } from "../../components/ui/status-badge";
-import { AUTO_INTEGRATE_ACTION_ID, AutoIntegrateToggle, autoIntegrateAction } from "./auto-integrate";
 import { MilestoneBadge, ProjectSection } from "./project-detail-view";
 import { inputClass } from "./project-list-screen";
+import { REPO_AUTO_INTEGRATE_ACTION_ID, RepoAutoIntegrate, repoAutoIntegrateAction } from "./repo-auto-integrate";
 
 // R10 /projects/:id の操作（P4-03〜P4-05）。どれも celeris の応答をそのまま出し、GUI 側で検証しない。
 // 計画・途中目標の intent は web ADR-W2 の後継 API に写す（410 の入口は呼ばない）。
@@ -118,11 +118,6 @@ export function ProjectOps({ detail }: { detail: ProjectDetail }) {
           名前と依頼を保存
         </Button>
       </form>
-      <AutoIntegrateToggle
-        enabled={project.auto_integrate ?? false}
-        pending={pending}
-        onToggle={(next) => act(autoIntegrateAction(id, next))}
-      />
       <div className="flex flex-wrap items-end gap-2">
         <label className="text-label font-medium">
           状態
@@ -251,7 +246,6 @@ export function ProjectOps({ detail }: { detail: ProjectDetail }) {
         results={results}
         ids={[
           "project_edit",
-          AUTO_INTEGRATE_ACTION_ID,
           "project_status",
           "project_pause",
           "project_resume",
@@ -496,7 +490,12 @@ function RepoRow({ repo, projectId }: { repo: ProjectRepo; projectId: string }) 
           onConfirm={() => run([{ id: "repo_delete", method: "DELETE", path }])}
         />
       </div>
-      <Results results={results} ids={["repo_patch", "repo_primary", "repo_delete"]} />
+      <RepoAutoIntegrate
+        repo={repo}
+        pending={pending}
+        onToggle={(next) => void run([repoAutoIntegrateAction(repo.id, next)])}
+      />
+      <Results results={results} ids={["repo_patch", "repo_primary", REPO_AUTO_INTEGRATE_ACTION_ID, "repo_delete"]} />
     </li>
   );
 }

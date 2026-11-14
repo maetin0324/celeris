@@ -50,6 +50,11 @@ task を遷移させる、`design_review_hold` は設計 review の run を起�
   期限を過ぎた infra backoff の解除（`clear_infra_backoff`）、browser の前提の保留（`browser_prereq_hold`）。
 - dispatcher module の非公開の型（`WuDispatchGate`）は dispatch_one が admit の要る値（`AdmissionUnit`）に落として渡す。
   `tree_units::next_run` のように dispatcher の型を受ける既存の関数は dispatch_one が呼ぶ。
+- planner run かの組み合わせ・予算の上書き・再試行に要る値（`AdmissionTaskValues`）は、dispatch_one が担当と execution gate の後の
+  task と、`[execution]` の gate・planner の tier と予算（`ExecutionConfig` は dispatcher module の型なので値に落とす）を
+  `AdmissionTaskValues::read` に渡して作る。read は task_core の型の欄を写すだけで判定しない（木の子 task かは既存の
+  `task_core::tree::is_tree_child`）。read を dispatch_admission に置くのは、`dispatcher` module の本体の行の合計
+  （repo health の size.responsibility-growth）を base より増やさないためである。
 
 ### D3 止め方と起動
 

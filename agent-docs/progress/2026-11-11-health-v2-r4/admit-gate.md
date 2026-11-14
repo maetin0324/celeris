@@ -18,7 +18,7 @@ completed: 2026-11-14
   止め方（待ちの記録・統合の開始・最終 review の開始）と起動（予算の上書き）は admit の提案を dispatch_one が適用する。
 - `dispatch_run.rs` に `second_pass` の条件式と `shadow_human_explicit_compound`・`tree_child_compound` は無い。
   `second_pass` は WU の worktree の用意の失敗と task の lease の引数（admit-place・admit-launch の範囲）にだけ残る。
-- `dispatch_one` の行数: 移行前 1089 行（30〜1118 行）→ 移行後 1023 行（34〜1056 行）。`dispatch_run.rs` は 1704 行 → 1676 行。
+- `dispatch_one` の行数: 移行前 1089 行（30〜1118 行）→ 移行後 1022 行（34〜1055 行）。`dispatch_run.rs` は 1704 行 → 1653 行。
 - ADR 2026-11-11 と `cex_` の試験と既存の試験は変えていない。
 
 ## 実装前 brief
@@ -38,6 +38,8 @@ completed: 2026-11-14
 5. 新しい状態・分岐・fallback・port: 状態と fallback は無し。新しい型は入出力の値（`AdmissionInput`・`AdmissionUnit`・
    `AdmissionTaskValues`・`BackoffClock`・`AdmissionProposal`・`AdmissionFact`・`AdmissionStop`・`AdmissionLaunch`）だけで、
    判定の型は足していない（ADR 2026-11-11 D5）。`AdmissionUnit` は dispatcher の非公開の型 `WuDispatchGate` を落とした値。
+   `AdmissionTaskValues::read` は task の欄と、dispatch_one が `[execution]` から渡す gate・planner の tier と予算を写すだけの
+   constructor（ADR 2026-11-14 D2）。
 6. 撤去対象: `dispatch_one` の中の gate の順序の分岐（`second_pass` の条件式 8 か所）、planner run の組み合わせの変数
    （`gate_decision`・`decision_is_compound`・`shadow_human_explicit_compound`・`tree_child_compound`・`direct_route` の計算・
    `is_planner_dispatch` の式）、予算の上書きの計算、`replan_dispatch` の `mut` の書き換え。地図の行の
@@ -60,7 +62,21 @@ completed: 2026-11-14
 ## 変更（件名）
 
 - `phase admit: dispatch_one の前半の起動可否の順序と組み合わせを dispatch_admission::admit へ移す`
-- `phase admit: admit-gate の進捗に検査の結果を書く`（文書だけ。clippy・test-affected は前の commit と同じコードで走らせた）
+- `phase admit: admit-gate の進捗に検査の結果を書く`（文書だけ）
+- `phase admit: AdmissionTaskValues の読み出しを dispatch_admission へ移し、dispatcher module の行を base 以下に戻す`
+
+## 1 回目の提出の check の不合格と直し方
+
+- celeris の check `celeris:repo-health/1` が `health:size.responsibility-growth:5ac03d663ce8b3be` で落ちた。
+  単位 `crates/task-dispatch/src/dispatcher` の module の本体の行（空行・注釈・use・mod 宣言を除く）の合計が、
+  WU base（`$CELERIS_WU_BASE`）の 31668 から 31682 に 14 行増えて worsened になった。
+- 1 回目の手元の `bash scripts/dev/check-health.sh` は既定の `--base auto`（`git merge-base HEAD main`）と比べたので、
+  main の merge-base の 34962 より減った existing として通っていた。celeris の check は WU base と比べる。
+- 直し方: `dispatch_run.rs` の自由関数 `admission_task_values`（task と設定の欄を写すだけ）を `dispatch_admission.rs` の
+  `AdmissionTaskValues::read` に移し、`ExecutionConfig`（dispatcher module の型）は dispatch_one が gate・planner の tier と予算の
+  値に落として渡す。再試行の backoff の fact を集める arm も詰めた（呼ぶ関数と順序は同じ）。dispatcher module は 31662 行になった。
+- `read` の写し方は前の `admission_task_values` と同じで、挙動の差は無い。planner run・直行経路・WU の予算の挙動は既存の
+  dispatcher の試験（test-affected）が確かめる。
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`、範囲は `$CELERIS_WU_BASE`）
 

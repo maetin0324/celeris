@@ -25,7 +25,7 @@
 //! この module は入力の値だけを読む。永続化・file・process に触れず、dispatcher の module を使わず、log も出さない（D2 の 2・3）。
 
 use task_core::{
-    BackoffCause, CapacityScope, ExecutionMode, GateMode, GateSource, Route, TaskWait, Tier,
+    BackoffCause, CapacityScope, ExecutionMode, GateMode, GateSource, Route, Task, TaskWait, Tier,
     TierSource, WorkUnitBudget,
 };
 use time::OffsetDateTime;
@@ -121,6 +121,35 @@ pub(crate) struct AdmissionTaskValues {
     pub(crate) planner_budget: (u32, u64),
     /// task の attempts。
     pub(crate) attempts: u32,
+}
+
+impl AdmissionTaskValues {
+    /// 担当と execution gate の後の task と、dispatch_one が `[execution]` から渡す gate・planner の tier と予算から読む
+    /// （ADR 2026-11-14 D2。値を写すだけで判定はしない。木の子 task かは `task_core::tree::is_tree_child`）。
+    pub(crate) fn read(
+        task: &Task,
+        gate_mode: GateMode,
+        planner_tier: Tier,
+        planner_budget: (u32, u64),
+    ) -> Self {
+        let routing = task.routing.as_ref();
+        Self {
+            gate_mode,
+            execution: routing
+                .and_then(|r| r.execution.as_ref())
+                .map(|d| (d.mode, d.source)),
+            tree_child: task_core::tree::is_tree_child(task),
+            route: routing
+                .and_then(|r| r.route.as_ref())
+                .map(|r| (r.route, r.shadow)),
+            tier_source: routing.map(|r| r.tier_source),
+            tier: task.worker_hint.tier,
+            budget: (task.budget.max_turns, task.budget.max_wall_secs),
+            planner_tier,
+            planner_budget,
+            attempts: task.attempts,
+        }
+    }
 }
 
 /// backoff の期限と、比べる今の時刻（`now_utc`）。

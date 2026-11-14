@@ -127,18 +127,17 @@ impl Dispatcher {
                     input.tree_limit_hold = Some(hold);
                 }
                 AdmissionFact::TaskValues => {
-                    input.task_values = Some(admission_task_values(&task, &self.config.execution))
+                    let ex = &self.config.execution;
+                    let budget = (ex.planner.max_turns, ex.planner.max_wall_secs);
+                    let values = AdmissionTaskValues::read(&task, ex.gate, ex.planner.tier, budget);
+                    input.task_values = Some(values);
                 }
                 AdmissionFact::RetryBackoff => {
-                    let (base, max) = (
-                        self.config.retry_backoff_base,
-                        self.config.retry_backoff_max,
-                    );
-                    let until = task.updated_at + retry_backoff(base, max, task.attempts);
-                    input.retry_backoff = Some(BackoffClock {
-                        until,
-                        now: self.now_utc(),
-                    });
+                    let c = &self.config;
+                    let delay =
+                        retry_backoff(c.retry_backoff_base, c.retry_backoff_max, task.attempts);
+                    let (until, now) = (task.updated_at + delay, self.now_utc());
+                    input.retry_backoff = Some(BackoffClock { until, now });
                 }
                 AdmissionFact::InfraBackoff => {
                     let until = self.supervisor.infra_backoff_until(task.id);
@@ -1650,27 +1649,5 @@ fn admission_unit(gate: &WuDispatchGate) -> AdmissionUnit {
         WuDispatchGate::StartIntegration(_) => AdmissionUnit::StartIntegration,
         WuDispatchGate::FinalReview => AdmissionUnit::FinalReview,
         WuDispatchGate::Skip => AdmissionUnit::Skip,
-    }
-}
-
-/// ADR 2026-11-14 dispatch-admission-order D2: planner run かの組み合わせ・予算の上書き・再試行に要る値を、担当と
-/// execution gate の後の task と `[execution]` から読む（木の子 task かは `task_core::tree::is_tree_child`）。
-fn admission_task_values(task: &Task, execution: &ExecutionConfig) -> AdmissionTaskValues {
-    let routing = task.routing.as_ref();
-    AdmissionTaskValues {
-        gate_mode: execution.gate,
-        execution: routing
-            .and_then(|r| r.execution.as_ref())
-            .map(|d| (d.mode, d.source)),
-        tree_child: task_core::tree::is_tree_child(task),
-        route: routing
-            .and_then(|r| r.route.as_ref())
-            .map(|r| (r.route, r.shadow)),
-        tier_source: routing.map(|r| r.tier_source),
-        tier: task.worker_hint.tier,
-        budget: (task.budget.max_turns, task.budget.max_wall_secs),
-        planner_tier: execution.planner.tier,
-        planner_budget: (execution.planner.max_turns, execution.planner.max_wall_secs),
-        attempts: task.attempts,
     }
 }

@@ -20,7 +20,7 @@ use celeris_script::manifest::{deploy_bundle, deployed_dir, host_schema_sha256, 
 use celeris_script::{GenerationRegistry, RuntimeLimits};
 use serde_json::json;
 use support::script_compare::{Env as CompareEnv, dist_bundle, dist_dir};
-use task_api::script_generations::{ScriptGenerationControl, ScriptGenerationError};
+use task_api::script_generations::ScriptGenerationError;
 use task_core::SqliteStore;
 use task_core::script_compare::{
     CompareOutcome, ScriptDomain, ScriptGeneration, ScriptMode, ScriptModeChange,

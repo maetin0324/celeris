@@ -66,14 +66,11 @@ fn merge_queued_with_base_checker() -> (task_core::SqliteStore, tempfile::TempDi
     (store, dir, d)
 }
 
-type AppliesCase = (&'static str, fn(&task_core::SqliteStore, &Delivery));
-type EvidenceMutation = (&'static str, fn(&mut health::HealthEvidence));
-
 /// 不変条件: 適用判定が `Applies` の repo では、health の項目の証跡が無い合格（health 導入前の review が残した
 /// 証跡・health の項目を欠く証跡・証跡の無い health の項目）で main に取り込まない。
 #[test]
 fn health_evidence_delivery_applies_requires_the_health_item() {
-    let cases: [AppliesCase; 3] = [
+    let cases: [(&str, fn(&task_core::SqliteStore, &Delivery)); 3] = [
         // health 導入前の review の証跡（定義指紋に検査器の版が無い）。
         ("定義指紋", |s, d| {
             record_results(s, d, Vec::new(), &[], None)
@@ -172,7 +169,7 @@ fn health_evidence_delivery_prefers_the_base_checker_over_the_bundled_one() {
 /// でも verdict で決まる）。dirty な作業ツリーの report と、report の digest の無い証跡も取り込まない（D2.7）。
 #[test]
 fn health_evidence_delivery_rejects_error_and_fail_evidence() {
-    let cases: [EvidenceMutation; 6] = [
+    let cases: [(&str, fn(&mut health::HealthEvidence)); 6] = [
         ("Error", |e| e.verdict = health::HealthVerdict::Error),
         ("Fail", |e| e.verdict = health::HealthVerdict::Fail),
         ("policy の変更だけ", |e| {

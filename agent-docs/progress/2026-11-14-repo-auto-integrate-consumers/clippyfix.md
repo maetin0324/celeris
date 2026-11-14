@@ -17,5 +17,4 @@
 - 該当 2 箇所の tuple 配列の型を `type` 別名に切り出す小修正を、`celeris` WU か統合時に行う。
 
 ## 追補（check 不合格の対応）
-- 前回の check は `crates/celeris/src/delivery/health_evidence_tests.rs`（lib test）の `clippy::type_complexity` 2 件で落ちた。tests/ の外だが、受け入れ条件 0 を満たすため型 alias（`AppliesCase`・`EvidenceMutation`）を足して直した。試験の中身は変えていない。
-- 提出時の HEAD で `cargo clippy -p celeris --all-targets -- -D warnings` と `cargo fmt --all -- --check` が exit 0。`cargo test -p celeris --lib health_evidence_delivery` は 8 件 pass。
+- 範囲 check（crates/celeris/tests/ 等だけ許可）は src/ の変更を不合格にする。src の health_evidence_tests.rs は元に戻した。受け入れ条件 0 は src の 2 件が残るため、この範囲では満たせない。plan_issue として申告した（src の型 alias 化を範囲に含めるか、別 WU で行う）。

@@ -57,7 +57,42 @@ fn open_world() -> AdmissionInput {
         browser_prereq_needed: Some(false),
         browser_prereq_hold: Some(false),
         place: open_place(),
+        route: open_route(),
     }
+}
+
+/// route の gate がどれも止めない答え（lane を決め、分類を待たず、引き上げで保留せず、route を受け、credential を
+/// 待たず、variant の pin を確かめられる）。
+fn open_route() -> AdmissionRoute {
+    AdmissionRoute {
+        lane_decided: Some(true),
+        classification_deferred: Some(false),
+        lane_assist_held: Some(false),
+        route_launched: Some(true),
+        credential_hold: Some(false),
+        variant_pinned: Some(true),
+    }
+}
+
+/// lane を決めた planner run でない run が、置き場所の gate の後に求める route の fact（ADR 2026-11-14 D5 の 25〜30）。
+fn route_facts(launch: AdmissionLaunch) -> Vec<AdmissionFact> {
+    vec![
+        AdmissionFact::Lane(launch),
+        AdmissionFact::ClassificationDefer,
+        AdmissionFact::LaneAssist,
+        AdmissionFact::Route(launch),
+        AdmissionFact::CredentialGate,
+        AdmissionFact::VariantPin,
+    ]
+}
+
+/// route の gate（lane の fact から）より前に求めた fact。
+fn before_route(asked: &[AdmissionFact]) -> &[AdmissionFact] {
+    let at = asked
+        .iter()
+        .position(|f| matches!(f, AdmissionFact::Lane(_)))
+        .unwrap_or(asked.len());
+    &asked[..at]
 }
 
 /// 置き場所の gate がどれも止めない答え（Local の作業場所、接続済みのクラスタ、用意できる WU、disk は判定しない）。
@@ -188,6 +223,18 @@ fn drive(world: &AdmissionInput) -> (Vec<AdmissionFact>, AdmissionProposal) {
                 }
             }
             AdmissionFact::Disk => input.place.disk = world.place.disk.clone(),
+            AdmissionFact::Lane(_) => input.route.lane_decided = world.route.lane_decided,
+            AdmissionFact::ClassificationDefer => {
+                input.route.classification_deferred = world.route.classification_deferred
+            }
+            AdmissionFact::LaneAssist => {
+                input.route.lane_assist_held = world.route.lane_assist_held
+            }
+            AdmissionFact::Route(_) => input.route.route_launched = world.route.route_launched,
+            AdmissionFact::CredentialGate => {
+                input.route.credential_hold = world.route.credential_hold
+            }
+            AdmissionFact::VariantPin => input.route.variant_pinned = world.route.variant_pinned,
         }
     }
 }
@@ -215,6 +262,7 @@ fn admit_first_pass_asks_facts_in_the_dispatch_order() {
     }));
     world.browser_prereq_needed = Some(true);
     let (asked, done) = drive(&world);
+    let launch = launch_of(done);
     assert_eq!(
         asked,
         vec![
@@ -246,8 +294,10 @@ fn admit_first_pass_asks_facts_in_the_dispatch_order() {
             AdmissionFact::TaskDir,
             AdmissionFact::Disk,
         ]
+        .into_iter()
+        .chain(route_facts(launch))
+        .collect::<Vec<_>>()
     );
-    let launch = launch_of(done);
     assert!(!launch.planner_run && !launch.cos_run);
 }
 
@@ -463,6 +513,7 @@ fn admit_second_parallel_unit_skips_only_the_first_pass_gates() {
     world.browser_prereq_needed = Some(true);
     world.browser_prereq_hold = Some(true);
     let (asked, done) = drive(&world);
+    let launch = launch_of(done);
     assert_eq!(
         asked,
         vec![
@@ -484,8 +535,10 @@ fn admit_second_parallel_unit_skips_only_the_first_pass_gates() {
             AdmissionFact::Disk,
             AdmissionFact::WorkUnit(WorkUnitFact::ScopeEnv),
         ]
+        .into_iter()
+        .chain(route_facts(launch))
+        .collect::<Vec<_>>()
     );
-    let launch = launch_of(done);
     assert!(!launch.cos_run && !launch.planner_run);
 
     let mut world = open_world();
@@ -698,8 +751,10 @@ fn admit_place_facts_follow_the_dispatch_order() {
             wu(WorkUnitFact::Workspace),
             AdmissionFact::Disk,
         ]
+        .into_iter()
+        .chain(route_facts(launch_of(done)))
+        .collect::<Vec<_>>()
     );
-    launch_of(done);
 
     world.place.cluster = Some(AdmissionCluster::Local);
     world.unit = Some(work_unit(false));
@@ -710,7 +765,10 @@ fn admit_place_facts_follow_the_dispatch_order() {
             .any(|f| matches!(f, AdmissionFact::ClusterState(_)))
     );
     assert!(!asked.contains(&wu(WorkUnitFact::Workspace)));
-    assert_eq!(asked.last(), Some(&wu(WorkUnitFact::ScopeEnv)));
+    assert_eq!(
+        before_route(&asked).last(),
+        Some(&wu(WorkUnitFact::ScopeEnv))
+    );
 
     let mut world = open_world();
     world.task_values = Some(AdmissionTaskValues {
@@ -916,4 +974,165 @@ fn admit_workspace_and_disk_stops_keep_the_dispatch_order() {
     let (asked, done) = drive(&world);
     launch_of(done);
     assert!(!asked.contains(&AdmissionFact::WorkUnit(WorkUnitFact::ScopeEnv)));
+}
+
+/// 不変条件: lane の fact（langmem の確認の後に lane を決める）は置き場所の gate の後に求める。分類の待ちが止めたら
+/// lane の引き上げを求めず、どちらかが止めたら route を求めない（route の選択と記録を起こさない）。lane を決めなかった
+/// run と planner run は、分類の待ちと引き上げを求めずに route へ進む（planner run も lane の fact は求める）。
+/// 既存の dispatcher の試験は分類の待ちか引き上げの保留の片方だけを立てるので、2 つの順と、route より先に止めることの
+/// 入れ替えを検出できない。
+#[test]
+fn admit_lane_holds_come_after_the_place_and_before_the_route() {
+    let mut world = open_world();
+    world.route.classification_deferred = Some(true);
+    world.route.lane_assist_held = Some(true);
+    let (asked, done) = drive(&world);
+    assert_eq!(done, AdmissionProposal::Stop(AdmissionStop::Quiet));
+    assert_eq!(before_route(&asked).last(), Some(&AdmissionFact::Disk));
+    assert_eq!(asked.last(), Some(&AdmissionFact::ClassificationDefer));
+
+    world.route.classification_deferred = Some(false);
+    let (asked, done) = drive(&world);
+    assert_eq!(done, AdmissionProposal::Stop(AdmissionStop::Quiet));
+    assert_eq!(asked.last(), Some(&AdmissionFact::LaneAssist));
+
+    // lane を決めなかった run は、分類の待ちと引き上げを求めない。
+    world.route.lane_decided = Some(false);
+    world.route.classification_deferred = Some(true);
+    let (asked, done) = drive(&world);
+    let launch = launch_of(done);
+    assert!(!asked.contains(&AdmissionFact::ClassificationDefer));
+    assert!(!asked.contains(&AdmissionFact::LaneAssist));
+    assert!(asked.contains(&AdmissionFact::Route(launch)));
+
+    // planner run は lane の fact（admit が決めた tier の記録）を求め、分類の待ちと引き上げを求めない。
+    let mut world = open_world();
+    world.task_values = Some(AdmissionTaskValues {
+        gate_mode: GateMode::On,
+        execution: Some((ExecutionMode::Compound, GateSource::Policy)),
+        ..values()
+    });
+    world.route.classification_deferred = Some(true);
+    world.route.lane_assist_held = Some(true);
+    let (asked, done) = drive(&world);
+    let launch = launch_of(done);
+    assert!(launch.planner_run);
+    assert_eq!(
+        asked[before_route(&asked).len()..],
+        [
+            AdmissionFact::Lane(launch),
+            AdmissionFact::Route(launch),
+            AdmissionFact::CredentialGate,
+            AdmissionFact::VariantPin,
+        ]
+    );
+}
+
+/// 不変条件: route を選べないか起こせなければ `RouteRefused`（dispatch_one が `note_route_refusal` を当てる）で止め、
+/// credential の待ちと variant の pin を求めない（未登録の credential の待ちに入れず、variant の task を blocked にしない）。
+/// lane の保留は route の拒否より先に勝つ（route を選ばないので拒否も記録しない）。
+/// 既存の dispatcher の試験は route の拒否と credential の待ちや variant の pin の不一致を同時に立てないので、
+/// この順の入れ替えを検出できない。
+#[test]
+fn admit_route_refusal_stops_before_the_credential_wait_and_the_pin() {
+    let mut world = open_world();
+    world.route.route_launched = Some(false);
+    world.route.credential_hold = Some(true);
+    world.route.variant_pinned = Some(false);
+    let (asked, done) = drive(&world);
+    assert_eq!(done, AdmissionProposal::Stop(AdmissionStop::RouteRefused));
+    assert!(matches!(asked.last(), Some(AdmissionFact::Route(_))));
+    assert!(!asked.contains(&AdmissionFact::CredentialGate));
+    assert!(!asked.contains(&AdmissionFact::VariantPin));
+
+    world.route.lane_assist_held = Some(true);
+    let (asked, done) = drive(&world);
+    assert_eq!(done, AdmissionProposal::Stop(AdmissionStop::Quiet));
+    assert!(!asked.iter().any(|f| matches!(f, AdmissionFact::Route(_))));
+}
+
+/// 不変条件: credential の待ち（`credential_gate_hold` がこの unit を待ちへ移した）は variant の pin より先に勝ち、
+/// variant の pin を求めず、起動（dispatch_one の lease・`WorkerStarted`・spawn）へ進まない。variant の pin を
+/// 確かめられなければ `VariantPinFailed`（dispatch_one が `block_variant_task` を当てる）で止め、起動しない。
+/// 起動へ進むのは variant の pin を確かめた後だけで、pin が最後に求める fact である。
+/// 既存の dispatcher の試験は credential の待ちと variant の pin の不一致を同時に立てないので、この順と、lease より先に
+/// 止めることの入れ替えを検出できない。
+#[test]
+fn admit_credential_wait_precedes_the_variant_pin_and_the_launch() {
+    let mut world = open_world();
+    world.route.credential_hold = Some(true);
+    world.route.variant_pinned = Some(false);
+    let (asked, done) = drive(&world);
+    assert_eq!(done, AdmissionProposal::Stop(AdmissionStop::Quiet));
+    assert_eq!(asked.last(), Some(&AdmissionFact::CredentialGate));
+    assert!(!asked.contains(&AdmissionFact::VariantPin));
+
+    world.route.credential_hold = Some(false);
+    let (asked, done) = drive(&world);
+    assert_eq!(
+        done,
+        AdmissionProposal::Stop(AdmissionStop::VariantPinFailed)
+    );
+    assert_eq!(asked.last(), Some(&AdmissionFact::VariantPin));
+
+    world.route.variant_pinned = Some(true);
+    let (asked, done) = drive(&world);
+    launch_of(done);
+    assert_eq!(asked.last(), Some(&AdmissionFact::VariantPin));
+}
+
+/// 不変条件: 並列 WU の 2 本目以降も route の gate（lane の保留・route の拒否・credential の待ち・variant の pin）を
+/// 1 本目と同じ順で見る（1 本目だけの gate ではない）。
+/// 既存の dispatcher の試験は 2 本目以降で route の gate が止める値を立てないので、2 本目以降で飛ばす変更を検出できない。
+#[test]
+fn admit_second_parallel_unit_keeps_the_route_gates() {
+    let mut world = open_world();
+    world.forced_unit = Some(work_unit(true));
+    let stops = [
+        (
+            AdmissionRoute {
+                classification_deferred: Some(true),
+                ..open_route()
+            },
+            AdmissionStop::Quiet,
+        ),
+        (
+            AdmissionRoute {
+                lane_assist_held: Some(true),
+                ..open_route()
+            },
+            AdmissionStop::Quiet,
+        ),
+        (
+            AdmissionRoute {
+                route_launched: Some(false),
+                ..open_route()
+            },
+            AdmissionStop::RouteRefused,
+        ),
+        (
+            AdmissionRoute {
+                credential_hold: Some(true),
+                variant_pinned: Some(false),
+                ..open_route()
+            },
+            AdmissionStop::Quiet,
+        ),
+        (
+            AdmissionRoute {
+                variant_pinned: Some(false),
+                ..open_route()
+            },
+            AdmissionStop::VariantPinFailed,
+        ),
+    ];
+    for (route, stop) in stops {
+        world.route = route;
+        let (asked, done) = drive(&world);
+        assert_eq!(done, AdmissionProposal::Stop(stop), "{asked:?}");
+    }
+    world.route = open_route();
+    let (asked, done) = drive(&world);
+    let launch = launch_of(done);
+    assert_eq!(asked[before_route(&asked).len()..], route_facts(launch)[..]);
 }

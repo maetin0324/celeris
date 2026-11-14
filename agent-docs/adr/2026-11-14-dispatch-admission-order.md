@@ -5,7 +5,8 @@ status: accepted
 # ADR 2026-11-14: run を起こすかの順序と組み合わせを `dispatch_admission::admit` に置く
 
 - 状態: 採用（実装は task 01M7BYQNFCE4Z8PFD95T6VQ37J の WorkUnit admit-gate・admit-place・admit-launch。admit-gate は
-  capacity から browser の前提までを、admit-place は予算の上書きを当てる位置から scope env までを移した）
+  capacity から browser の前提までを、admit-place は予算の上書きを当てる位置から scope env までを、admit-launch は lane の保留から
+  variant の pin までを移した）
 - 関係: [ADR 2026-11-11 Dispatcher の状態の owner と、判断と副作用の分け方](2026-11-11-dispatcher-state-ownership.md) の
   D2（owner の規則）・D3（dispatch_one の行）・D5（接続の契約）・D8（budget の移動先）を、dispatch_one について具体にする。
   ADR 2026-11-11 の本文は変えない。
@@ -61,6 +62,17 @@ task を遷移させる、`design_review_hold` は設計 review の run を起�
   `AdmissionTaskValues::read` に渡して作る。read は task_core の型の欄を写すだけで判定しない（木の子 task かは既存の
   `task_core::tree::is_tree_child`）。read を dispatch_admission に置くのは、`dispatcher` module の本体の行の合計
   （repo health の size.responsibility-growth）を base より増やさないためである。
+- lane と route の fact（`AdmissionFact::Lane`・`AdmissionFact::Route`）は、admit が決めた run の形（`AdmissionLaunch`。planner run か・
+  人が frontier を明示したか・CoS の枠で選ぶか）を持つ。lane の fact は langmem の確認（`knowledge_fallback_reason` と汎用の
+  harness へ倒す上書き）と lane の決定（`decide_lane_for_work_unit`・`decide_lane`）を今の順で 1 回に行い、決定を返したかだけを
+  fact にする。route の fact は決めた lane を task に当て、`select_route_with`（`compare_route_priority` で選び直す）と
+  `route_adapter`・`route_launch_target` を行い、launch の形を作れたかだけを fact にする。lane の決定・選んだ route・
+  launch の形・variant の pin の値は dispatch_one が持ち、起動と止め方の適用に使う（admit は値を持たない）。
+- planner run の lane の記録（`planner_lane`）は dispatch_admission に置く。planner run の tier は admit が決めた予算の上書き
+  （`[execution.planner]` の tier、人が frontier を明示していれば frontier）で、lane の policy は丸めない。`planner_lane` は
+  task に当てた tier と人が明示したかを `LaneDecision` に写すだけで判定しない（規則 id と理由の文は移す前と同じ。tier の語は
+  dispatcher の `tier_label` と同じ写像の `task_core::model_catalog::assignments::tier_str`）。置き場所の理由は
+  `AdmissionTaskValues::read` と同じく、`dispatcher` module の本体の行の合計を base より増やさないためである。
 
 ### D3 止め方と起動
 
@@ -70,7 +82,9 @@ task を遷移させる、`design_review_hold` は設計 review の run を起�
   クラスタの待ち（クラスタを使えないと記録する理由・クラスタの待ちに数えるか・`TaskWait::Cluster`。dispatch_one は
   `mark_cluster_unavailable` → `note_cluster_waiting` → 待ちの記録の順に当てる）、作業場所の dir を解決できない（warn）、
   WU の用意の backoff の中（debug log）、WU の worktree か scope env を用意できない（`on_work_unit_prepare_failed`。並列 WU の
-  2 本目以降かを持つ）のどれかである。待ちの `TaskWait` とクラスタを使えないと記録する理由は、admit が fact から作る値である。
+  2 本目以降かを持つ）、route を選べないか起こせない（`note_route_refusal`）、variant の pin を確かめられない
+  （`block_variant_task` に `variant_run_pin` の理由を渡す）のどれかである。lane の保留（分類の待ち・lane の引き上げの保留）と
+  credential の待ちは、fact を集めた owner の処理が待ちを済ませているので、待ちを記録しない見送りで止める。待ちの `TaskWait` とクラスタを使えないと記録する理由は、admit が fact から作る値である。
 - 予算の上書き（run の tier と、turn と壁時計）は、16 の後で `RunOverride` の要求として返す。dispatch_one は上書きの前の予算を
   控えてから上書きを task に当て、write-set の gate 以降の fact を集める。
 - `AdmissionLaunch` は、CoS の対話 run か・直行経路か・planner run か・replan か・人が frontier を明示した planner run かを持つ。
@@ -80,7 +94,7 @@ task を遷移させる、`design_review_hold` は設計 review の run を起�
 待ちの記録・遷移・接続・作業場所・route の記録・credential の待ち・lease・event・spawn は dispatch_one（と、それが呼ぶ owner の
 method）に残す。admit が要求したとき、または止め方・起動として返したときだけ、今の順で行う。
 
-### D5 守る順序（admit-gate と admit-place の範囲）
+### D5 守る順序
 
 admit は次の順で fact を求め、最初に止めた gate で止める。「1 本目だけ」は並列 WU の 2 本目以降では fact を求めずに通す。
 
@@ -123,14 +137,28 @@ id・attempts・更新時刻・種類・skills・requirements だけで、tier �
 24. Local の作業場所の WU の run だけ: worktree の確認と scope env（失敗したら WU の用意の失敗で止め、用意できたら
     `clear_wu_prepare_failures`）。
 
-admit-launch は、lane の保留・route・credential・variant の pin を同じ形（`AdmissionFact` の variant と `AdmissionStop` の止め方）で
-24 の後ろに足す。
+route の gate（admit-launch。どれも並列 WU の 2 本目以降も見る）:
+
+25. langmem の確認（毎日の抽出でない知識整理 run だけ `knowledge_fallback_reason`。届かなければ汎用の harness へ倒す上書きを task に
+    当てる）の後に lane の決定（planner run は `planner_lane`、WU の run は `decide_lane_for_work_unit`、ほかは `decide_lane`）。
+26. 分類の待ち（`defer_for_classification`。lane を決めた planner run でない run だけ。待つなら止める）。
+27. lane の引き上げ（`apply_lane_assist`。26 と同じ run だけ。credential の待ちに入れたら止める）。
+28. route（決めた lane を task に当て、`select_route_with` と launch の形。受けたら `clear_warned_unroutable`、選べないか起こせなければ
+    `note_route_refusal` を当てて止める）。
+29. credential の待ち（`credential_gate_hold`。未登録の credential を要する経路なら、この unit を待ちへ移したので止める）。
+30. variant の pin（`variant_run_pin`。確かめられなければ `block_variant_task` を当てて止める）。
+
+30 を通ったら起動へ進む。dispatch_one は lease（`acquire_lease`・`acquire_work_unit_lease`）・`WorkerStarted` 等の event・
+`spawn_worker` を今のとおり行う。credential の待ちと variant の pin はどちらも lease より先である（移す前と同じ）。
+移す前と比べて、adapter の id・source・model・account の値を読む位置が variant の pin の後になった。どれも route の pick と
+設定を読むだけで副作用が無い（`source_account_adapter` は登録表を引くだけ）ので、結果は同じである。
 
 ### D6 試験
 
 - `dispatch_admission/tests.rs` は、隣り合う 2 つの gate が両方止める入力で今の順の先が勝つこと、2 本目の WU が飛ばす gate の集合、
   planner run の組み合わせ、置き場所の gate の順と止め方（write-set の保留・クラスタの cooldown・並列度・接続の失敗・
-  WU の用意・disk の待ち）を、admit を直接呼んで確かめる。
+  WU の用意・disk の待ち）、route の gate の順と止め方（lane の保留が route より先・route の拒否が credential の待ちより先・
+  credential の待ちが variant の pin と起動より先・2 本目の WU も route の gate を見る）を、admit を直接呼んで確かめる。
 - 既存の dispatcher の試験は 1 つの試験で 1 つの gate だけを止めるので、隣り合う gate の順を入れ替えても合格する。
   入れ替えはこの試験でだけ検出できる。
 - ADR 2026-11-11 の試験と `cex_` の試験と既存の試験は変えない。

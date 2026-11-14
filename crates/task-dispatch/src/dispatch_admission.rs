@@ -19,24 +19,33 @@
 //!   する）→ 作業場所の dir → WU の worktree の用意の backoff（WU の run だけ）→ WU の worktree の用意（phase のある WU だけ）→
 //!   disk の見込み（planner run でないときだけ）→ WU の worktree の確認と scope env（Local の WU の run だけ。用意できたら
 //!   用意の失敗の記録を消す）
+//! - langmem の確認と lane の決定（planner run は [`planner_lane`]）→ 分類の待ち → lane の引き上げの保留（どちらも lane を
+//!   決めた planner run でない run だけ。分類を待つなら引き上げを求めない）→ route の選択と launch の形（選べないか
+//!   起こせなければ `RouteRefused`）→ credential の待ち → variant の pin（確かめられなければ `VariantPinFailed`）→ 起動
+//!   （lease・`WorkerStarted`・spawn は dispatch_one）
 //!
 //! 並列 WU の 2 本目以降が飛ばす gate: 同じ task の run・CoS の対話 run か・担当・execution gate・WU の gate の選択・
 //! 決定と設計 review の待ち・再試行と infra の backoff・browser の前提。飛ばさない gate: 知識整理の入力・並列度の枠・
 //! 打ち切ったばかりの run・eligible・disk の critical・木の上限・WU の gate の種類・予算の上書き・write-set から scope env
-//! までの置き場所の gate（WU の用意に失敗したときの止め方だけが 2 本目以降かを持つ）。
+//! までの置き場所の gate（WU の用意に失敗したときの止め方だけが 2 本目以降かを持つ）・lane から variant の pin までの
+//! route の gate。
 //!
 //! 既存の dispatcher の試験は 1 つの試験で 1 つの gate だけを止めるので、隣り合う 2 つの gate の順を入れ替えても合格する。
 //! 入れ替えは `tests.rs` の、両方が止める入力で先の gate が勝つことを確かめる試験でだけ検出できる。置き場所の gate は
 //! 止めたときの副作用（クラスタを使えないと記録する・WU を blocked にする・待ちを記録する）が gate ごとに違うので、先の gate が
-//! 勝たないと、今は起きない副作用が起きる。
+//! 勝たないと、今は起きない副作用が起きる。route の gate も同じで、route の拒否が credential の待ちに負けると未登録の
+//! credential の待ちに入れてしまい、credential の待ちが variant の pin に負けると variant の task を blocked にしてしまう。
+//! 既存の dispatcher の試験は route の拒否・credential の待ち・variant の pin の不一致を 1 つずつしか立てないので、この順も
+//! `tests.rs` でだけ検出できる。
 //!
 //! この module は入力の値だけを読む。永続化・file・process に触れず、dispatcher の module を使わず、log も出さない（D2 の 2・3）。
 
 use std::time::Instant;
 
+use task_core::model_catalog::assignments::tier_str;
 use task_core::{
-    BackoffCause, CapacityScope, ExecutionMode, GateMode, GateSource, Route, Task, TaskWait, Tier,
-    TierSource, WorkUnitBudget,
+    BackoffCause, CapacityScope, ExecutionMode, GateMode, GateSource, LaneDecision, Route, Task,
+    TaskWait, Tier, TierSource, WorkUnitBudget,
 };
 use time::OffsetDateTime;
 
@@ -95,6 +104,8 @@ pub(crate) struct AdmissionInput {
     pub(crate) browser_prereq_hold: Option<bool>,
     /// 予算の上書きから scope env までの置き場所の fact。
     pub(crate) place: AdmissionPlace,
+    /// langmem の確認から variant の pin までの route の fact。
+    pub(crate) route: AdmissionRoute,
 }
 
 /// 置き場所の fact（予算の上書き・write-set・クラスタ・作業場所・WU の用意・disk）。`None`（bool の欄は `false`）は
@@ -129,6 +140,25 @@ pub(crate) struct AdmissionPlace {
     /// WU の worktree の確認と scope env（`wu_base::scope_env`）を用意できたか（用意できたら dispatch_one が
     /// `clear_wu_prepare_failures` で用意の失敗の記録を消してある）。
     pub(crate) wu_scope_env_ready: Option<bool>,
+}
+
+/// route の fact（lane・分類の待ち・lane の引き上げ・route・credential の待ち・variant の pin）。`None` はまだ集めていない。
+/// 値の本体（lane の決定・選んだ route・pin）は dispatch_one が持つ。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct AdmissionRoute {
+    /// lane を決めたか（langmem の確認の後に、planner run の固定・`decide_lane_for_work_unit`・`decide_lane` が
+    /// 決定を返したか）。
+    pub(crate) lane_decided: Option<bool>,
+    /// 分類段の結果を待って見送るか（`defer_for_classification`）。
+    pub(crate) classification_deferred: Option<bool>,
+    /// lane の引き上げで credential の待ちに入れたか（`apply_lane_assist` の held）。
+    pub(crate) lane_assist_held: Option<bool>,
+    /// route を選び、その adapter と launch の形を作れたか（`select_route_with`・`route_adapter`・`route_launch_target`）。
+    pub(crate) route_launched: Option<bool>,
+    /// 未登録の credential を要する経路で、この unit を待ちへ移したか（`credential_gate_hold`）。
+    pub(crate) credential_hold: Option<bool>,
+    /// variant の pin を確かめられたか（`variant_run_pin` が `Ok` を返したか）。
+    pub(crate) variant_pinned: Option<bool>,
 }
 
 /// `resolve_cluster` の結果（クラスタの設定と作業場所の path は dispatch_one が持つ）。
@@ -248,6 +278,43 @@ impl AdmissionTaskValues {
     }
 }
 
+/// planner run の lane の記録（ADR-0074 D5.3（Phase F1））。planner run の tier は admit が決めた予算の上書き
+/// （`[execution.planner] tier`、人が `tier:frontier` を明示していれば frontier）で、lane の policy では丸めない。
+/// ここは task に当てた tier と、人が明示したか（`human_frontier`）を `LaneDecision` に写すだけで判定しない
+/// （ADR 2026-11-14 D2。dispatch_one が lane の fact を集めるときに呼ぶ）。
+pub(crate) fn planner_lane(task: &Task, human_frontier: bool) -> LaneDecision {
+    let tier = task.worker_hint.tier;
+    let (source, rule_id, reason) = if human_frontier {
+        (
+            TierSource::Human,
+            "planner/human-frontier".to_string(),
+            "human explicitly set tier:frontier on this task; the planner run \
+             inherits it (ADR-0074 D5.3)"
+                .to_string(),
+        )
+    } else {
+        (
+            TierSource::System,
+            format!("planner/system-{}", tier_str(tier)),
+            "ADR-0074 D5.3: planner run runs at [execution.planner] tier, fixed by \
+             celeris code"
+                .to_string(),
+        )
+    };
+    LaneDecision {
+        lane: tier,
+        proposed: tier,
+        source,
+        rule_id,
+        policy_version: task_core::LANE_POLICY_VERSION.to_string(),
+        features: task_core::TaskFeatures::infer(task),
+        reasons: vec![reason],
+        clamped_by: None,
+        hint: None,
+        escalation: None,
+    }
+}
+
 /// backoff の期限と、比べる今の時刻（`now_utc`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BackoffClock {
@@ -326,6 +393,22 @@ pub(crate) enum AdmissionFact {
     WorkUnit(WorkUnitFact),
     /// `judge_run`（planner run でないときだけ）。
     Disk,
+    /// langmem の確認（毎日の抽出でない知識整理 run は `knowledge_fallback_reason`。届かなければ汎用の harness へ倒す
+    /// 上書きを当てる）の後に lane の決定（planner run は [`planner_lane`]、WU の run は `decide_lane_for_work_unit`、
+    /// ほかは `decide_lane`）。値は admit が決めた run の形。
+    Lane(AdmissionLaunch),
+    /// `defer_for_classification`。
+    ClassificationDefer,
+    /// `apply_lane_assist`（分類で lane を引き上げ得る。credential の待ちに入れたら held）。
+    LaneAssist,
+    /// 決めた lane を task に当て、`select_route_with`（`compare_route_priority` で選び直すことを含む）・
+    /// `route_adapter`・`route_launch_target`（受けたら `clear_warned_unroutable`）。値は admit が決めた run の形
+    /// （planner run か・CoS の枠で選ぶか）。
+    Route(AdmissionLaunch),
+    /// `credential_gate_hold`（route を受けた後でだけ）。
+    CredentialGate,
+    /// `variant_run_pin`（選んだ route で確かめる）。
+    VariantPin,
 }
 
 /// remote のクラスタの fact（`resolve_cluster` が remote のクラスタを返した後でだけ求める）。
@@ -391,6 +474,10 @@ pub(crate) enum AdmissionStop {
     },
     /// WU の worktree か scope env を用意できない（`on_work_unit_prepare_failed`。`forced` は並列 WU の 2 本目以降か）。
     WuPrepareFailed { forced: bool },
+    /// route を選べないか起こせない（`note_route_refusal`。別の source へ倒さない）。
+    RouteRefused,
+    /// variant の pin を確かめられない（`block_variant_task` に `variant_run_pin` の理由を渡す）。
+    VariantPinFailed,
 }
 
 /// 起動へ進むときの run の形。
@@ -436,6 +523,7 @@ fn decide(input: &AdmissionInput) -> Result<AdmissionLaunch, AdmissionProposal> 
     let (launch, run_override) = run_shape(input, unit, cos_run)?;
     backoff_and_browser(input, &launch)?;
     placement(input, unit, &launch, run_override)?;
+    route_gates(&input.route, &launch)?;
     Ok(launch)
 }
 
@@ -753,4 +841,35 @@ fn disk(place: &AdmissionPlace, planner_run: bool) -> Result<(), AdmissionPropos
         Some(Admission::Wait(wait)) => Err(stop(AdmissionStop::Wait(wait.clone()))),
         Some(Admission::Go(_)) | None => Ok(()),
     }
+}
+
+/// D5 の 25〜30: langmem の確認と lane の決定・分類の待ち・lane の引き上げの保留・route・credential の待ち・variant の pin
+/// （どれも並列 WU の 2 本目以降も見る）。credential の待ちは variant の pin より先で、どちらも dispatch_one の lease より先。
+fn route_gates(route: &AdmissionRoute, launch: &AdmissionLaunch) -> Result<(), AdmissionProposal> {
+    // ADR-0052 D1 / D2（Phase 64）: langmem に届かなければ汎用の harness へ倒す上書きを、lane を決める前に当てる。
+    let decided = fact(&route.lane_decided, AdmissionFact::Lane(*launch))?;
+    // `routing.mode = decision_assisted`: planner run でなく lane を決めた run だけ、分類を待つか、引き上げで保留するかを
+    // 見る。分類を待つなら引き上げを求めない。
+    if decided && !launch.planner_run {
+        let deferred = fact(
+            &route.classification_deferred,
+            AdmissionFact::ClassificationDefer,
+        )?;
+        if deferred || fact(&route.lane_assist_held, AdmissionFact::LaneAssist)? {
+            return Err(stop(AdmissionStop::Quiet));
+        }
+    }
+    // ADR 2026-10-11 llm-source-harness-selection: 選べないか起こせない route では起動しない（別の source へ倒さない）。
+    if !fact(&route.route_launched, AdmissionFact::Route(*launch))? {
+        return Err(stop(AdmissionStop::RouteRefused));
+    }
+    // ADR 2026-10-15-mlsys-min D4: 未登録の credential を要する経路は、この unit だけを待ちへ移した（variant の pin の前）。
+    if fact(&route.credential_hold, AdmissionFact::CredentialGate)? {
+        return Err(stop(AdmissionStop::Quiet));
+    }
+    // variant 付き試行は、lease と run の記録の前にもう一度 pin を確かめる（割当後に org が変わっていたら起動しない）。
+    if !fact(&route.variant_pinned, AdmissionFact::VariantPin)? {
+        return Err(stop(AdmissionStop::VariantPinFailed));
+    }
+    Ok(())
 }

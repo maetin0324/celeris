@@ -1,7 +1,7 @@
 ---
 title: "健全性v2 R4 cex-race: lease の renew の競合と、ownerless で閉じた旧 reviewer の遅れた合格の反例試験"
 tasks: [01M7DYMCZ4T7C5RNQ3JZQAF4G7]
-status: blocked
+status: running
 updated: 2026-11-14
 ---
 # 健全性v2 R4 cex-race
@@ -135,10 +135,48 @@ G-proto は確認のための一時変更で、修正の案ではない（A の 
   （`cex_lease_restart.rs:615`、A の `runs` 行 `Some(Completed)`、A の `WorkerFinished` 2 件）で落ちた。試験・本体とも変えていない。
 - この run は `result.json` に `yield`（`plan_issue`）だけを書き、`summary` を書かない。
 
+### replan v2: old-review（2026-11-14）
+
+計画 v2 で old-review は「反例の試験を残し、同じ file の不安定な既存試験を出来事待ちに直す」になった。本体の修正は次の unit
+fix-verdict（`review_verdict.rs` の `on_review_finished`）が行う。この run の変更は試験と進捗だけで、本体（`cfg(test)` の外）は
+変えていない。
+
+変更（commit の件名）:
+
+- `old-review: wait for the WU check's last WorkUnitCheckFinished before the one tick (cex_run_finish_and_work_unit_check_finish_in_one_tick)`
+  - `cex_run_finish_and_work_unit_check_finish_in_one_tick`: flag を置き、run `b` を返した後、WU `a` の検査の列の最後の項目の
+    `WorkUnitCheckFinished`（`key == "a"`、`index + 1 == total`）が store に載るまで待ってから 1 回 tick する（保険は
+    `STATE_WAIT_GUARD`、20 ms の sleep で待つ。tick の回数では待たない）。検査の task は最後の項目の `record_finish` から
+    `Completion::WorkUnitChecks` の送信まで await を挟まないので、current-thread の runtime でこの event が見えれば完了は
+    channel に入っている。assert（`report.finished == 2`、各 WU done、`WorkerFinished` 各 1 件、`runs` 行 completed、統合 1 回）は
+    変えていない。doc comment に待ち方と変えた理由を書いた。
+  - `cex_restart_old_reviewer_pass_after_ownerless_close_is_ignored`: 手順と assert は変えていない（足した commit の版と関数の本体
+    142 行が一致）。doc comment から「今の実装では」の語を外した（不変条件と T1a〜T1c の理由は残した。観測はこのファイルに置く）。
+- この進捗ファイル（この節、front matter の status を running に）。
+
+出来事待ちの確認（試験専用の遅延。一時変更は `git checkout --` で戻し commit していない。戻した後 `git status --short` は空）:
+
+| 一時変更 | 結果 |
+|---|---|
+| WU `a` の検査の command の `test -f a.txt` の前に `sleep 1` を足す（新しい待ち方のまま） | 合格（exit 0、2.8 秒） |
+| 同じ `sleep 1` のまま、足した待ち（`a_checks_done` の loop と assert）を外す（以前の待ち方） | 落ちる（exit 100）。`cex_lease_restart.rs:1099` の `assert_eq!(report.finished, 2)` が left 1・right 2。load 19.6 で観測した失敗と同じ |
+
+証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）:
+
+- `cargo nextest run -p task-dispatch --no-fail-fast --no-tests=fail -E 'test(/cex_lease_restart::/)'` → exit 100。11 本中 10 本合格、
+  落ちたのは反例の試験 `cex_restart_old_reviewer_pass_after_ownerless_close_is_ignored` の 1 本だけ（`cex_lease_restart.rs:615`、
+  上の「観測」と同じ）。
+- `cex_run_finish_and_work_unit_check_finish_in_one_tick` を単独で 5 回 → 5 回とも合格（load average 4.9）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `bash scripts/dev/check-health.sh` → 下の「check-health」の行。
+- `bash scripts/dev/test-affected.sh` はこの unit では走らせない。反例の試験が本体の修正まで落ちるので exit 0 にならない。
+  fix-verdict が本体を直した後に走らせる。
+
 ### 未解決
 
-- `cex_run_finish_and_work_unit_check_finish_in_one_tick` は負荷の下で落ちうる（上の 2 回目の run の節）。修正の unit の
-  check（`-E 'test(/cex_lease_restart::/)'`）を巻き込むので、検査の完了を出来事で待つ形に直す unit を別に置くとよい。
+- 反例の試験は fix-verdict が `on_review_finished` を直すまで落ちる。fix-verdict の check で `-E 'test(/cex_lease_restart::/)'`
+  と `bash scripts/dev/test-affected.sh` を走らせる。`cex_run_finish_and_work_unit_check_finish_in_one_tick` の負荷依存は
+  replan v2 の old-review の節で直した。
 - 反例（今の実装で成り立つ）: 新 active が reviewer run A を ownerless として閉じた後に、A を持っていた旧 draining instance に
   A の合格が届くと、`on_review_finished` がその合格で Task を Done にし、A の `WorkerFinished` を 2 件目として書き、`runs` 行を
   cancelled から completed に書き換える。この unit の範囲（本体を変えない）では直さない。試験は assert を残して落ちる。

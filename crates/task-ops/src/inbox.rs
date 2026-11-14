@@ -1216,15 +1216,8 @@ fn build_attention(
         else {
             continue;
         };
-        // 取り込む commit が無い root は正常な no-op（監査用に event だけ残る）。
-        if reason == task_core::DeliverySkipReason::NoCommits {
-            continue;
-        }
-        // ADR 2026-11-14-repo-auto-integrate D4: 無効のリポジトリの task は出さない。読んだ時点の判定も見る
-        // （無効にしたリポジトリの過去の項目も消えるように）。
-        if reason == task_core::DeliverySkipReason::RepoNotEnabled
-            || !crate::delivery::auto_integrates(store, t)?
-        {
+        // 取り込む commit が無い・無効のリポジトリの root は出さない（D4。読んだ時点の判定も見る）。
+        if !crate::delivery::skip_needs_attention(store, t, reason)? {
             continue;
         }
         let delivered = store

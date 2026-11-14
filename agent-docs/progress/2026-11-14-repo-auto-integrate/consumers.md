@@ -24,10 +24,14 @@ updated: 2026-11-14
 
 ## 証拠（提出時の HEAD で実行。基準は $CELERIS_WU_BASE）
 - `cargo test -p task-ops` → lib 673 passed ほか全て成功。
-- `cargo test -p task-dispatch` → lib 1760 passed（新規試験の追加前）、追加後は新規 1 件も成功。
+- `cargo test -p task-dispatch` → lib 1761 passed。
 - `cargo fmt --all -- --check` → exit 0。
 - `cargo clippy -p task-ops -p task-dispatch -- -D warnings` → exit 0。`--all-targets` は gate.rs・disk_forecast.rs・dispatch_ready_phases.rs（この WU が触れていないファイル）の既存の指摘で落ちる。
 - `cargo check -p celeris-campaign --lib` → 成功。
+
+## 再提出の修正
+- repo-health `size.responsibility-growth`（`inbox.rs` の行数増）を、受信箱の判定を `delivery::skip_needs_attention` に置いて解消した（`inbox.rs` は base と同じ 1462 行）。
+- 計画の check の package 名 `campaign` は誤り。package 名は `celeris-campaign`。
 
 ## 未解決
 - campaign の試験（`cargo test -p celeris-campaign`）は dev-dependency の task-api が api unit の置き換えまで compile しないため、この WU では実行できていない（未確認）。試験は api unit の後に通す。`preflight_contract.rs` の `real_project` は repo の欄を store で有効にしている（API の切り替えは task-api の試験の範囲）。

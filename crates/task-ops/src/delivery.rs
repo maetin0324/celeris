@@ -70,6 +70,20 @@ pub fn auto_integrates(store: &dyn TaskStore, task: &Task) -> Result<bool, Store
         .all(|tr| rows.iter().any(|r| r.id == tr.repo_id && r.auto_integrate)))
 }
 
+/// 受信箱に DeliverySkipped を出すか。no_commits は正常な no-op、repo_not_enabled は無効のリポジトリの
+/// 意図した結果なので出さない。それ以外も、読んだ時点で `auto_integrates` が偽なら出さない。
+pub fn skip_needs_attention(
+    store: &dyn TaskStore,
+    task: &Task,
+    reason: task_core::DeliverySkipReason,
+) -> Result<bool, StoreError> {
+    use task_core::DeliverySkipReason::{NoCommits, RepoNotEnabled};
+    if matches!(reason, NoCommits | RepoNotEnabled) {
+        return Ok(false);
+    }
+    auto_integrates(store, task)
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct DeliveryPolicy {
     pub default_departments: BTreeMap<String, String>,

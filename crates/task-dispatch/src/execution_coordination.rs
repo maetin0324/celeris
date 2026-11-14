@@ -3,8 +3,10 @@
 //! unit own-coord-a が移したもの（D1 の表で unit 列が own-coord-a の行）: write set の予約と見送りの記録（ADR-0130 D3）、
 //! actual write-set の採取場所（ADR-0130 D2）、review 前 sync の待ち行列（ADR-0130 D5）と再同期の上限で止めた review
 //! （ADR 2026-10-27）、既定 branch に入った root の依存先（ADR 2026-10-17）、WU の worktree の用意の失敗の回数
-//! （ADR-0074 F5-fix7）、credential 待ちに入れた atomic task と再開の処理中の印（ADR 2026-10-15 D4）、
+//! （ADR-0074 F5-fix7）、credential 待ちの検証・再開の処理中の印（ADR 2026-10-15 D4）、
 //! browser の適合台帳の見張り（ADR 2026-10-08 D2）、クラスタ待ちの task（ADR-0018 D2）。
+//! credential の待ちそのものはメモリに写さない。正本は store の `credential_waits` で、gate が毎回読む
+//! （ADR 2026-11-14-atomic-task-credential-verified D1 と付記 2026-11-14 cred-cache）。
 //!
 //! unit own-coord-b が移したもの（D1 の表で unit 列が own-coord-b の行）: task・WU の待ち（見送りの理由・人の承認待ち・
 //! 子待ち・review の持ち越し）、WU の check と段の統合の process、完了の channel、tick の数と間隔、新しい仕事を
@@ -236,8 +238,6 @@ pub(crate) struct ExecutionCoordination<S, C> {
     /// ADR-0074「Phase F5-fix7 実装時の明確化」: WU（id）の worktree の用意の一時的な失敗の回数と
     /// 次に試してよい時刻。成功・blocked にしたら消す。プロセス内メモリのみ（再起動で数え直す）。
     wu_prepare_failures: HashMap<String, WuPrepareFailures>,
-    /// credential 待ちに入れた計画なしの task（tick ごとに同じ wait を書き直さない。再起動で `restore_credential_waits` が戻す）。
-    credential_held: HashSet<TaskId>,
     /// ADR 2026-10-15-mlsys-min-decision-assisted D4: credential 待ちの検証・再開の thread が走っているか（同時に 1 つまで）。
     credential_busy: Arc<AtomicBool>,
     /// ADR 2026-10-08-browser-prod-enablement D2: 適合台帳の状態の cache（file が変わったときだけ計算し直す）。
@@ -287,7 +287,6 @@ impl<S, C> ExecutionCoordination<S, C> {
             review_resync_halted: BTreeMap::new(),
             integrated_deps: BTreeSet::new(),
             wu_prepare_failures: HashMap::new(),
-            credential_held: HashSet::new(),
             credential_busy: Arc::new(AtomicBool::new(false)),
             browser_ledger: LedgerWatch::from_process(),
             browser_prereq_rescan: true,
@@ -596,16 +595,6 @@ impl<S, C> ExecutionCoordination<S, C> {
     }
 
     // ---- credential の待ち（ADR 2026-10-15 D4） ----
-
-    /// 計画の無い task を credential 待ちとして覚える。既に覚えていれば `false`（同じ wait を書き直さない）。
-    pub(crate) fn hold_credential(&mut self, task_id: TaskId) -> bool {
-        self.credential_held.insert(task_id)
-    }
-
-    /// credential が登録済みになった task の印を消す。
-    pub(crate) fn release_credential_hold(&mut self, task_id: TaskId) {
-        self.credential_held.remove(&task_id);
-    }
 
     /// credential 待ちの検証・再開の thread を 1 つ始めてよいか。始めてよければ印を立てて返す
     /// （thread の終わりに `false` に戻す）。既に走っていれば `None`。
@@ -1242,7 +1231,6 @@ mod tests {
                 "checking",
                 "cluster_waiting",
                 "credential_busy",
-                "credential_held",
                 "dispatch_waits",
                 "integrated_deps",
                 "integrating",
@@ -1265,7 +1253,7 @@ mod tests {
                 "write_set_waits",
                 "wu_prepare_failures",
             ],
-            "ExecutionCoordination (with its sub-owners) owns the 14 own-coord-a and 16 own-coord-b fields of ADR D1"
+            "ExecutionCoordination (with its sub-owners) owns the 13 remaining own-coord-a and 16 own-coord-b fields of ADR D1 (the credential wait lives only in the store)"
         );
         let owner = ["Dis", "patcher"].concat();
         for bad in [

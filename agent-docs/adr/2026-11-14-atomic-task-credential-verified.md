@@ -70,3 +70,29 @@ run が 1 本起きることを確かめる。
 ## 戻し方
 
 `git revert`（store の列・migration は変えていないので、DB の移行は要らない）。
+
+## 付記 2026-11-14 cred-cache: atomic task の待ちのメモリの写しを消す（D3 を置き換える）
+
+task 01M6TYVJT4S29ZMP6P0D4831JG の最終 review の advisory（dual_source_of_truth・removal_missing）を受け、WorkUnit cred-cache で
+D3 の「印」（`ExecutionCoordination` が持っていた atomic task の集合）と、印を立てる・消す 2 つの method を消した。
+atomic task の credential の待ちは D1 の store の `credential_waits` だけが持つ。D3 の「再起動で `restore_credential_waits` が
+印を戻す」という旧い説明も、写しと一緒に消えた（fix-cred が復元の処理を既に消していた）。
+
+- gate（`credential_gate_hold`）: atomic task で、今の route の `secret_id` の開いた wait が store にあれば、入り直さずに `true`。
+  開いた wait が無く秘密が登録済みなら `false`。それ以外は `enter_credential_wait` で待ちに入って `true`。WU のある task は
+  開いた wait を見ず、従来どおり（D4）。
+- `enter_credential_wait` は写しを見ずに store の `credential_wait_enter` を呼ぶ。store は同じ unit と秘密の開いた wait が
+  あればそれを返し（`created = false`）、行も受信箱の item も増やさない。受信箱の item の印と triage の reconcile は
+  `outcome.created` のときだけ行う（従来どおり）。lane assist の入口（`lane_assist.rs`）も同じ関数を通る。
+- D3 が写しを置いた理由（tick ごとに writer の lock を取る入れ直し）は、gate が開いた wait を読み取り接続
+  （`credential_waits_list_waiting`）で見つけたら入り直さないことで無くなった。
+- D3 の最後の項目（印が残ったまま開いた wait が無くなり、秘密 file も消えた場合に新しい wait が作られない）は、印が無いので起きない。
+  開いた wait が無く秘密が未登録なら、gate は新しい wait を作る（コードを読んだ見込み。試験では確かめていない）。
+- 安全確認は変えない: resumer の検証、再開の claim（`claim_resume`）、予算の stop、`dispatch_admission` の `CredentialGate` の
+  fact の意味と順序。
+- 試験: `crates/task-dispatch/src/dispatcher/tests/cex_review_authority.rs` の
+  `credential_wait_for_atomic_task_is_entered_once_across_ticks`（tick 3 回と再起動の後の tick 3 回で、wait 行 1 件・受信箱の
+  item 1 件・task の event の数が変わらない・run を起こさない。秘密 file の無い場合と、置いたが検証前の場合）。
+- [ADR 2026-11-11 Dispatcher の状態の owner](2026-11-11-dispatcher-state-ownership.md) の D1 の表には、消した field の行が
+  残っている。表の更新は WorkUnit cred-cache の範囲外で、進捗
+  `agent-docs/progress/2026-11-11-health-v2-r4/cred-cache.md` の提案に書いた。

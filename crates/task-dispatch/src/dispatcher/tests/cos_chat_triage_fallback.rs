@@ -537,6 +537,35 @@ async fn cos_chat_triage_fallback_disabled_queues_no_summary() {
     );
 }
 
+/// Record one event of the notice bundle `report:bundle`; returns the notice id.
+fn record_notice(f: &Fixture, key: &str, title: &str, summary: &str) -> NoticeId {
+    f.store
+        .notice_record(&NoticeEvent {
+            source_key: key.into(),
+            kind: NoticeKind::Report,
+            group_key: "report:bundle".into(),
+            title: title.into(),
+            summary: summary.into(),
+            project_id: None,
+            task_id: None,
+            target: None,
+            links: Vec::new(),
+            at: f.d.now_utc(),
+        })
+        .expect("notice")
+        .notice_id()
+}
+
+fn revision_item(f: &Fixture, revision: &str) -> (String, String, String, String) {
+    let conn = rusqlite::Connection::open(&f.db_path).expect("db");
+    conn.query_row(
+        "SELECT id,state,summary,detail FROM cos_inbox_items WHERE source_revision=?1",
+        [revision],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    )
+    .expect("item")
+}
+
 /// ADR 2026-10-28-cos-inbox-chat-summary D2 (受け入れ条件 2): a notice bundle that grows after
 /// ingestion keeps its title and body together. The fallback of the first revision quotes that
 /// revision's body, never the later event's body under the earlier title.
@@ -606,6 +635,67 @@ async fn cos_chat_triage_fallback_notice_title_and_body_stay_together() {
     let summary = body["summary"].as_str().expect("summary");
     assert_eq!(summary, "日次整理が完了 — KB の受信箱を 3 件整理した");
     assert!(!summary.contains("task X"), "{summary}");
+}
+
+/// 不変条件（ADR 2026-11-12-discord-person-or-operator D1、事例 2 の形）: 知らせの束が育って同じ知らせの
+/// 2 つの revision が受信箱の件になり、CoS が新しい revision を見届けた後に run が終わっても、古い revision
+/// は退避（CosFallback）の対象にならず閉じる（Discord の行ができない）。本番 2026-11-12 は古い rev 2 の
+/// resolve が 409 で閉じられず、run の終了後に退避の行が積まれた。既存の試験は revision ごとに outbox が
+/// 1 つできることだけを見ていた。
+#[tokio::test]
+async fn cos_chat_triage_fallback_older_notice_revision_is_closed_not_handed_over() {
+    let mut f = fixture(true);
+    f.tick();
+    record_notice(
+        &f,
+        "report:1",
+        "skill と config が合わない",
+        "skill 12・config 11",
+    );
+    f.tick();
+    assert_eq!(f.inbox_runs(), 1, "revision 1 is with the live run");
+    record_notice(&f, "report:2", "skill と config が合わない", "同期の途中");
+    f.tick();
+    // CoS observes the newest revision (the older one's resolve is 409 for CoS).
+    let (newest, ..) = revision_item(&f, "2");
+    assert!(
+        f.store
+            .cos_triage_resolve(
+                &newest,
+                "observed",
+                None,
+                Some("一時的な不一致"),
+                f.d.now_utc()
+            )
+            .expect("observe")
+    );
+    assert!(f.join_inbox().await);
+    for _ in 0..3 {
+        f.tick();
+    }
+    assert_eq!(f.fallback_outbox(), 0, "no fallback for the older revision");
+    assert_eq!(f.state_count("fallback"), 0);
+    assert_eq!(revision_item(&f, "1").1, "resolved");
+}
+
+/// 不変条件（D1）: 退避の前に知らせが既読になった（閉じた）件は、退避せずに閉じる。前は知らせの状態を
+/// 見ずに退避の行を積み、送る直前の再確認が取り下げても item は `fallback` のまま残った。
+#[tokio::test]
+async fn cos_chat_triage_fallback_read_notice_is_closed_not_handed_over() {
+    let mut f = fixture(true);
+    f.tick();
+    let notice = record_notice(&f, "report:1", "release を昇格した", "4daa2a16 を昇格");
+    f.tick();
+    assert_eq!(f.inbox_runs(), 1);
+    f.store
+        .notice_mark_read(notice, f.d.now_utc())
+        .expect("read");
+    assert!(f.join_inbox().await);
+    for _ in 0..3 {
+        f.tick();
+    }
+    assert_eq!(f.fallback_outbox(), 0, "no fallback for a closed notice");
+    assert_eq!(f.state_count("fallback"), 0);
 }
 
 /// ADR 2026-10-28-cos-inbox-chat-summary D4: a summary request whose CoS run fails is queued

@@ -39,6 +39,9 @@ use task_core::required_checks::health::{
 };
 use task_worker::protocol::HealthFindingCounts;
 
+/// ADR 2026-11-13-health-base-merged-target: health の base を決める 1 つの関数。gate の実行の口の隣に置く。
+#[path = "target_base.rs"]
+pub(crate) mod target_base;
 use super::policy::{BaseChecker, CheckerSite, Scratch, git_stdout, with_base_checker};
 
 /// `repo_health.py --policy-version` に渡す版。
@@ -252,13 +255,18 @@ pub struct BundledChecker {
     pub id: CheckerId,
 }
 
+/// 同梱の検査器の保管場所（process に 1 つの `OnceLock`）。試験は [`bundled_test`] の保管場所を使う。
+#[cfg(not(test))]
 static BUNDLED: OnceLock<BundledChecker> = OnceLock::new();
 
-/// 同梱の検査器の所在を process に 1 回設定する（daemon の起動で呼ぶ）。`dir` の `CHECKER_TREE` を読んで版を計算する。
+/// 同梱の検査器の所在を設定する（daemon の起動で呼ぶ）。`dir` の `CHECKER_TREE` を読んで版を計算する。
 /// 別の dir・版で 2 回目を呼ぶと拒否する（同じ値なら設定済みの値を返す）。
 pub fn configure_bundled_checker(dir: &Path) -> Result<&'static BundledChecker, String> {
     let found = read_bundled_checker(dir)?;
+    #[cfg(not(test))]
     let set = BUNDLED.get_or_init(|| found.clone());
+    #[cfg(test)]
+    let set = bundled_test::set_or_get(&found);
     if *set != found {
         return Err(format!(
             "同梱の検査器は既に {} に設定されている",
@@ -270,7 +278,106 @@ pub fn configure_bundled_checker(dir: &Path) -> Result<&'static BundledChecker, 
 
 /// 設定した同梱の検査器（未設定なら `None`）。
 pub fn bundled_checker() -> Option<&'static BundledChecker> {
-    BUNDLED.get()
+    #[cfg(not(test))]
+    return BUNDLED.get();
+    #[cfg(test)]
+    return bundled_test::get();
+}
+
+/// 試験用の同梱の検査器の保管場所（本番には無い）。
+///
+/// 不変条件: `cargo test` は 1 process で全試験を走らせ、nextest は試験ごとに process を分ける。どちらでも、各試験が
+/// 見る同梱の検査器は、その試験が [`Kind`] で宣言したものだけである（stub を設定する試験と未設定を assert する試験
+/// が実行順で競合しない）。既存の試験は process 共有の static を前提にしており、nextest でしか通らなかった。
+/// dispatcher は worker thread・blocking pool で同梱の検査器を読むので、thread-local ではなく process の保管場所を、
+/// 種類の違う試験の間で直列化して使う。同じ種類（stub・未設定）の試験は並行に走れる。
+/// 種類を宣言した試験の thread が終わると（libtest は試験ごとに thread を作る）保管場所は空に戻る。
+#[cfg(test)]
+pub(crate) mod bundled_test {
+    use super::BundledChecker;
+    use std::cell::RefCell;
+    use std::sync::{Condvar, Mutex, MutexGuard};
+
+    /// 試験が必要とする同梱の検査器の状態。
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(crate) enum Kind {
+        /// 合格の stub（同じ値なので並行に走れる）。
+        Stub,
+        /// 未設定（`bundled_checker()` が `None`。並行に走れる）。
+        Unset,
+        /// 試験が自分で設定する検査器（排他。他の試験と同時に走らない）。
+        Custom,
+    }
+
+    struct State {
+        kind: Option<Kind>,
+        holders: usize,
+        value: Option<&'static BundledChecker>,
+    }
+
+    static STATE: Mutex<State> = Mutex::new(State {
+        kind: None,
+        holders: 0,
+        value: None,
+    });
+    static CHANGED: Condvar = Condvar::new();
+
+    fn lock() -> MutexGuard<'static, State> {
+        STATE.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// 試験の thread が持つ宣言。drop（thread の終了、または別の種類への切替）で手放す。
+    struct Held(Kind);
+
+    impl Drop for Held {
+        fn drop(&mut self) {
+            let mut st = lock();
+            st.holders -= 1;
+            if st.holders == 0 {
+                st.kind = None;
+                st.value = None;
+                CHANGED.notify_all();
+            }
+        }
+    }
+
+    thread_local! {
+        static HELD: RefCell<Option<Held>> = const { RefCell::new(None) };
+    }
+
+    /// この thread（試験）の同梱の検査器の種類を宣言する。違う種類の試験が走っている間は待つ。
+    pub(crate) fn require(kind: Kind) {
+        let already = HELD.with(|h| h.borrow().as_ref().map(|h| h.0));
+        if already == Some(kind) && kind != Kind::Custom {
+            return;
+        }
+        // 別の種類へ切り替えるときは先に手放す（同じ thread の前の試験が終わっている場合を含む）。
+        HELD.with(|h| h.borrow_mut().take());
+        let mut st = lock();
+        while st.kind.is_some_and(|k| k != kind || kind == Kind::Custom) {
+            st = CHANGED.wait(st).unwrap_or_else(|e| e.into_inner());
+        }
+        st.kind = Some(kind);
+        st.holders += 1;
+        drop(st);
+        HELD.with(|h| *h.borrow_mut() = Some(Held(kind)));
+    }
+
+    pub(super) fn get() -> Option<&'static BundledChecker> {
+        lock().value
+    }
+
+    /// 未設定なら `found` を設定し、設定済みならその値を返す。種類を宣言していない試験は `Custom` として扱う。
+    pub(super) fn set_or_get(found: &BundledChecker) -> &'static BundledChecker {
+        if HELD.with(|h| h.borrow().is_none()) {
+            require(Kind::Custom);
+        }
+        let mut st = lock();
+        *st.value.get_or_insert_with(|| {
+            // 試験 process の終了で消えるので leak してよい。
+            Box::leak(Box::new(found.clone()))
+        })
+    }
 }
 
 /// `dir` の同梱の検査器を読む（`CHECKER_TREE` と `repo_health.py` が要る）。

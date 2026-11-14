@@ -237,10 +237,18 @@ fn start_daemon() -> Daemon {
     assert!(cp.success());
     let triage = skills_src.join("cos-inbox-triage/SKILL.md");
     let text = fs::read_to_string(&triage).expect("triage skill");
+    // The measurement pins policy 6 whatever the current skill version is (read from the front matter).
+    let current = text
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("version: \"")?.strip_suffix('"'))
+        .expect("triage skill version");
     fs::write(
         &triage,
-        text.replace("version: \"12\"", "version: \"6\"")
-            .replace("policy_version \"12\"", "policy_version \"6\""),
+        text.replace(&format!("version: \"{current}\""), "version: \"6\"")
+            .replace(
+                &format!("policy_version \"{current}\""),
+                "policy_version \"6\"",
+            ),
     )
     .expect("write triage skill");
     let out = Command::new("sh")

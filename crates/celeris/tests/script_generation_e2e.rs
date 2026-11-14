@@ -156,12 +156,6 @@ impl World {
     fn config(&self, cos: bool) -> Config {
         let home = self.env.dir.path();
         let knowledge = home.join("knowledge");
-        task_ops::cos_skill_gate::write_fixture(
-            &knowledge.join("skills"),
-            "cos-inbox-triage",
-            "12",
-        )
-        .expect("CoS skills");
         let cos = if cos {
             format!(
                 "[cos]\nenabled = true\nmax_turns = 2\nmax_wall_secs = 600\n\
@@ -176,7 +170,7 @@ impl World {
         } else {
             format!("{COS_OFF}\n")
         };
-        load_config(
+        let config = load_config(
             home,
             &format!(
                 "{cos}[api]\nlisten = \"{}\"\n\n\
@@ -185,7 +179,16 @@ impl World {
                  [script]\nstate_dir = \"state\"\n",
                 self.reservation.addr()
             ),
+        );
+        // ADR 2026-11-11-cos-skill-sync D3: CoS skills that fit `[cos.triage]` (its default version).
+        let triage = &config.cos.triage;
+        task_ops::cos_skill_gate::write_fixture(
+            &knowledge.join("skills"),
+            &triage.policy_skill,
+            &triage.policy_version,
         )
+        .expect("CoS skills");
+        config
     }
 
     /// daemon を起こし、API が答えて起動時の復元が終わるのを待つ。

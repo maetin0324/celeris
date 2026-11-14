@@ -10,6 +10,7 @@ use ulid::Ulid;
 use super::store::{
     ChatError, chat_ts, cos_thread_ensure_tx, immediate, task_root_project, writer,
 };
+use crate::cos_revision;
 use crate::store::SqliteStore;
 
 pub const COS_TRIAGE_BATCH_MAX: usize = 20;
@@ -152,7 +153,10 @@ pub fn cos_triage_resolve_tx(
     // ADR 2026-11-11-cos-fallback-timing D2: CoS's judgment before the notifier sent the fallback
     // withdraws it and takes the item back (a pending or running item is never `fallback`).
     let from = crate::cos_fallback::judged_from(tx, item_id, outcome)?;
-    Ok(tx.execute("UPDATE cos_inbox_items SET state=?2,operation_id=?3,reason=?4,updated_at=?5 WHERE id=?1 AND state IN ('pending','running',?6)", params![item_id,outcome,operation_id,reason,chat_ts(now),from])? == 1)
+    let at = chat_ts(now);
+    let marked = tx.execute("UPDATE cos_inbox_items SET state=?2,operation_id=?3,reason=?4,updated_at=?5 WHERE id=?1 AND state IN ('pending','running',?6)", params![item_id,outcome,operation_id,reason,at,from])?;
+    // ADR 2026-11-12-discord-person-or-operator D1: the judgment closes the older revisions.
+    Ok(cos_revision::after_judgment(tx, item_id, marked, &at)?)
 }
 
 fn put_cursor(tx: &Transaction<'_>, name: &str, value: &str) -> Result<(), ChatError> {
@@ -359,7 +363,10 @@ impl SqliteStore {
         let Some((source_kind, source_key, revision, state, thread_id)) = source else {
             return Err(ChatError::not_found("triage item", item_id));
         };
-        if matches!(state.as_str(), "answered" | "observed" | "resolved") {
+        // ADR 2026-11-12-discord-person-or-operator D1: an older revision is closed, never routed.
+        let closed = matches!(state.as_str(), "answered" | "observed" | "resolved");
+        if closed || cos_revision::close_if_superseded(&tx, item_id, &at)? {
+            tx.commit()?;
             return Ok(None);
         }
         let notification_id = Ulid::new().to_string();
@@ -457,8 +464,11 @@ impl SqliteStore {
                 "UPDATE notifications SET ok=0,error='superseded' WHERE id=?1 AND ok IS NULL",
                 [notification_id],
             )?;
+            // ADR 2026-11-12-discord-person-or-operator D1: a fallback item whose source closed (or
+            // was superseded) before the send closes with its withdrawn notification; no sweep
+            // closes `fallback`. An escalated item is closed by the triage stale sweep.
             if !source_unresolved {
-                tx.execute("UPDATE cos_inbox_items SET state='resolved',updated_at=?2 WHERE id=(SELECT item_id FROM cos_notification_routes WHERE notification_id=?1) AND state IN ('pending','running')", params![notification_id,chat_ts(now)])?;
+                tx.execute("UPDATE cos_inbox_items SET state='resolved',updated_at=?2 WHERE id=(SELECT item_id FROM cos_notification_routes WHERE notification_id=?1) AND state IN ('pending','running','fallback')", params![notification_id,chat_ts(now)])?;
             }
         }
         tx.commit()?;
@@ -792,13 +802,7 @@ fn resolve_stale(
         .collect();
     let stale: Vec<String> = {
         let mut stmt = tx.prepare("SELECT id,source_key,source_revision FROM cos_inbox_items WHERE source_kind=?1 AND state IN ('pending','running','escalated')")?;
-        let rows = stmt.query_map([source_kind], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-            ))
-        })?;
+        let rows = stmt.query_map([source_kind], |r| <(String, String, String)>::try_from(r))?;
         rows.collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .filter(|(_, k, r)| !live.contains(&(k.as_str(), r.as_str())))

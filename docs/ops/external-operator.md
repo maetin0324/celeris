@@ -97,6 +97,10 @@ DB 復旧も events を書き換え・削除せず、credential を消さず、�
    `instructed_by` で参照でき、監査には判断者 human・取り次ぎ operator・実行者 CoS が別々に残る。
    MCP では `console_instruct` の `relay: {said_at, task_ids?, expires_at?}` を使う。
    自分の判断を人の発言として投稿しない。operator 自身が回答を実行する場合も A1 の principal を使う。
+   人宛ての件（`addressee = human`、Discord に送った件）には、人の発言の取り次ぎ（`instructed_by`）でなければ答えない
+   （ADR 2026-11-12-discord-person-or-operator D4）。件の一部が CoS の範囲（枠の内の推奨など）だったと気づいたら、件に答えず、
+   統括 CoS への指示か CoS の方針の直しの task で扱う。operator 宛ての件（`addressee = operator`）は Discord に送られないので、
+   §1 の拾い方で見張る（D3）。
 4. 既存 CoS は監査経路の `idempotency_key`・`expected_revision`・`reason`・`policy_version` を保持する。
    同じ送信の再送は同じ key。operator と CoS で key を揃えるだけでは主体間の排他にはならない。
 5. **409 は正常な競合**として detail と最新状態を読む。解消済み/実行中なら終了または観測へ移る。

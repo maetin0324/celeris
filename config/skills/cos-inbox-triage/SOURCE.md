@@ -49,3 +49,6 @@ license: このリポジトリと同じ（外部の license は無い）
   定型の (c) `documented_default`・(d) `work_guidance` を `task_scope` に置き換えた。escalate に宛先 `to`（`human`・`operator`）を足し、
   operator 宛ては Discord に送らない。計画の承認で未回答の決定があれば先に決定に答える流れを書いた。policy_version を 12 に上げた。
   config の `[cos.triage] policy_version` の既定も "12"。
+- 2026-11-12（ADR 2026-11-12-discord-person-or-operator）: 推奨が人に残す選択肢でなければ人に回さず、CoS が推奨を答えて人の部分を
+  `answer.note` で後の問いにする規則（§0・§3）、escalation packet の `reserved_options`（§6）、送る直前の再確認と古い revision の
+  閉じ方（§7）を足した。policy_version を 13 に上げた。config の `[cos.triage] policy_version` の既定も "13"。

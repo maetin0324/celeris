@@ -152,7 +152,7 @@ fn default_policy_skill() -> String {
     "cos-inbox-triage".into()
 }
 fn default_policy_version() -> String {
-    "12".into()
+    "13".into()
 }
 fn default_min_confidence() -> f64 {
     0.85

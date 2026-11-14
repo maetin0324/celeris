@@ -2255,6 +2255,7 @@ export type EscalationPacket = {
   "options": Array<EscalationOption>;
   "recommendation_reason": string;
   "recommended"?: string | null;
+  "reserved_options"?: Array<string>;
   "summary": string;
   "to": Addressee;
   "web_path": string;

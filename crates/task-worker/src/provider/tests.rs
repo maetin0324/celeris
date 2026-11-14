@@ -260,3 +260,41 @@ fn claude_oauth_session_expired_is_auth_failed() {
         );
     }
 }
+
+#[test]
+fn edge_block_with_auth_wording_is_throttled_not_auth_failed() {
+    // 2026-11-13 の本番の outcome。ADR 2026-11-13。
+    for text in [
+        "Failed to authenticate. API Error: 403 Attention Required! | Cloudflare",
+        "403 Just a moment... cf-ray: 8a1b2c3d4e5f",
+        "<html><title>Attention Required! | Cloudflare</title> 401 Unauthorized</html>",
+    ] {
+        assert_eq!(
+            classify_provider_failure(text),
+            Some(ProviderFailure::Throttled {
+                retry_after_secs: 60
+            }),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn real_auth_failures_stay_auth_failed_after_edge_block_rule() {
+    for text in [
+        "Failed to authenticate: OAuth session expired and could not be refreshed",
+        "API Error: 401 Unauthorized",
+        "Not logged in. Please run /login",
+    ] {
+        assert_eq!(
+            classify_provider_failure(text),
+            Some(ProviderFailure::AuthFailed),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn bare_403_without_edge_mark_is_unclassified() {
+    assert_eq!(classify_provider_failure("API Error: 403 Forbidden"), None);
+}

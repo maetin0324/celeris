@@ -693,3 +693,135 @@ fn cos_triage_judgment_before_the_send_withdraws_the_fallback() {
     };
     assert_eq!(pending, [format!("cos_escalation:{b}")]);
 }
+
+fn item_state(s: &SqliteStore, id: &str) -> String {
+    s.lock()
+        .expect("lock")
+        .query_row("SELECT state FROM cos_inbox_items WHERE id=?1", [id], |r| {
+            r.get(0)
+        })
+        .expect("state")
+}
+
+fn item_of(s: &SqliteStore, key: &str, revision: &str) -> String {
+    s.lock()
+        .expect("lock")
+        .query_row(
+            "SELECT id FROM cos_inbox_items WHERE source_key=?1 AND source_revision=?2",
+            params![key, revision],
+            |r| r.get(0),
+        )
+        .expect("item")
+}
+
+/// 不変条件（ADR 2026-11-12-discord-person-or-operator D1、事例 2）: 同じ元の待ちの新しい revision を
+/// CoS が判定すると、CoS を待つ古い revision（pending・running）と未送信の退避が付いた古い revision は
+/// `resolved` になり、退避の通知は取り下げられる（Discord に行かない）。前は古い revision が running の
+/// まま残り、run の終了後の退避の対象になった。既存の試験は新しい revision ごとに outbox が 1 つできる
+/// ことだけを見ていて、古い revision の行方を見ていない。
+#[test]
+fn cos_triage_judging_a_newer_revision_closes_the_older_ones() {
+    let s = SqliteStore::open_in_memory().expect("store");
+    s.cos_triage_ingest_batch("notices", "1", &[item("n", "2")], at(0))
+        .expect("rev 2");
+    s.cos_triage_ingest_batch("notices", "2", &[item("n", "3")], at(1))
+        .expect("rev 3");
+    let claim = s
+        .cos_triage_claim(&general(&s), "run-1", at(2))
+        .expect("claim")
+        .expect("items");
+    assert_eq!(claim.item_ids.len(), 2, "one run holds both revisions");
+    let (old, new) = (item_of(&s, "n", "2"), item_of(&s, "n", "3"));
+    assert!(
+        s.cos_triage_resolve(&new, "observed", Some("op"), Some("一時的"), at(3))
+            .expect("observe")
+    );
+    assert_eq!(
+        item_state(&s, &old),
+        "resolved",
+        "the older revision closes"
+    );
+
+    // An older revision already handed to the person by an unsent fallback closes too.
+    s.cos_triage_ingest_batch("notices", "3", &[item("f", "1")], at(4))
+        .expect("f1");
+    let f1 = item_of(&s, "f", "1");
+    let notification = s
+        .cos_triage_outbox_claim(&f1, "fallback", "{}", at(5))
+        .expect("claim")
+        .expect("route");
+    assert!(
+        s.cos_triage_resolve(
+            &f1,
+            "fallback",
+            None,
+            Some("CoS run は終了したがこの項目は未処理"),
+            at(5)
+        )
+        .expect("fallback")
+    );
+    s.cos_triage_ingest_batch("notices", "4", &[item("f", "2")], at(6))
+        .expect("f2");
+    let f2 = item_of(&s, "f", "2");
+    assert!(
+        s.cos_triage_resolve(&f2, "observed", Some("op2"), Some("判断不要"), at(7))
+            .expect("observe f2")
+    );
+    assert_eq!(item_state(&s, &f1), "resolved");
+    let (ok, error): (Option<i64>, Option<String>) = s
+        .lock()
+        .expect("lock")
+        .query_row(
+            "SELECT ok,error FROM notifications WHERE id=?1",
+            [&notification],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("row");
+    assert_eq!((ok, error.as_deref()), (Some(0), Some("superseded")));
+}
+
+/// 不変条件（D1）: 新しい revision がある古い revision には、退避も人宛ての escalate も経路を取れず
+/// （通知の行ができない）、古い revision は閉じる。前は古い revision の退避の行が積まれ、送る直前の
+/// 再確認で取り下げられた後も item は `fallback` のまま人の待ちに見えた。
+#[test]
+fn cos_triage_outbox_claim_refuses_an_older_revision() {
+    let s = SqliteStore::open_in_memory().expect("store");
+    s.cos_triage_ingest_batch("notices", "1", &[item("c", "2")], at(0))
+        .expect("rev 2");
+    s.cos_triage_ingest_batch("notices", "2", &[item("c", "3")], at(1))
+        .expect("rev 3");
+    let old = item_of(&s, "c", "2");
+    for route in ["fallback", "escalation"] {
+        assert_eq!(
+            s.cos_triage_outbox_claim(&old, route, "{}", at(2))
+                .expect("claim"),
+            None,
+            "{route}"
+        );
+    }
+    assert_eq!(count(&s, "notifications"), 0);
+    assert_eq!(item_state(&s, &old), "resolved");
+}
+
+/// 不変条件（D1）: 送る直前の再確認で元の待ちが閉じていた退避は、通知を取り下げ、item も閉じる。前は
+/// pending・running だけを閉じ、`fallback` の item は人の待ちとして残った（本番の事例 2 の rev 2）。
+#[test]
+fn cos_triage_withdrawn_fallback_closes_its_item() {
+    let s = SqliteStore::open_in_memory().expect("store");
+    s.cos_triage_ingest_batch("notices", "1", &[item("w", "1")], at(0))
+        .expect("ingest");
+    let id = item_of(&s, "w", "1");
+    let notification = s
+        .cos_triage_outbox_claim(&id, "fallback", "{}", at(1))
+        .expect("claim")
+        .expect("route");
+    assert!(
+        s.cos_triage_resolve(&id, "fallback", None, Some("未処理"), at(1))
+            .expect("fallback")
+    );
+    assert!(
+        !s.cos_triage_outbox_sendable(&notification, false, at(2))
+            .expect("recheck")
+    );
+    assert_eq!(item_state(&s, &id), "resolved");
+}

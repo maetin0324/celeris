@@ -253,6 +253,10 @@ async fn health_limits_review_error_blocks_without_repair() {
 /// 合格にせず、repair も再実行もせずに Blocked と質問 1 件で止まる。
 #[tokio::test]
 async fn health_limits_review_unavailable_is_not_pass() {
+    // 未設定の試験として宣言する（stub を設定する試験と実行順で競合しない。`gate::bundled_test`）。
+    crate::health_review::gate::bundled_test::require(
+        crate::health_review::gate::bundled_test::Kind::Unset,
+    );
     assert_eq!(crate::health_review::gate::bundled_checker(), None);
     let mut s = Scenario::atomic(None, "true", |_, _| {});
     s.review().await;

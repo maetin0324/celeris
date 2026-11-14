@@ -192,6 +192,24 @@ impl Notice {
     }
 }
 
+/// ADR 2026-11-12-discord-person-or-operator D1: whether the CoS inbox item of a notice
+/// (`source_key` = the notice id, `source_revision` = its bundle count) is still the open notice at
+/// the same revision: `Some(false)` for a read notice or a grown bundle (a newer revision), `None`
+/// when no such notice exists. The one check of the fallback and of the notifier just before the
+/// send; each decides what an unknown notice means for it.
+pub fn notice_revision_open<S: NoticeStore + ?Sized>(
+    store: &S,
+    key: &str,
+    revision: &str,
+) -> Result<Option<bool>, StoreError> {
+    let Ok(id) = key.parse::<NoticeId>() else {
+        return Ok(None);
+    };
+    Ok(store
+        .notice_get(id)?
+        .map(|n| n.is_unread() && n.count.to_string() == revision))
+}
+
 /// 束に足す 1 件の出来事（`NoticeStore::notice_record` の入力）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoticeEvent {

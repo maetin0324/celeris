@@ -991,6 +991,7 @@ async fn project_wake_api_human_inbox_cos_answer_and_resolve_are_not_counted() {
                     "to": "human", "summary": "決める",
                     "options": [{"key": "vault", "label": "vault"}, {"key": "manual", "label": "manual"}],
                     "recommended": "vault",
+                    "reserved_options": ["vault", "manual"],
                     "recommendation_reason": "既定",
                     "web_path": format!("/tasks/{}", task.id),
                 },

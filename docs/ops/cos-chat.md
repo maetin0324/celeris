@@ -27,7 +27,7 @@ worker_reserve_five_hour = 0.90
 
 [cos.triage]
 policy_skill = "cos-inbox-triage"
-policy_version = "12"
+policy_version = "13"
 min_confidence = 0.85
 human_required = ["objective_change", "beyond_frame", "external_publish", "destructive", "secret_or_security", "standing_permission", "explicit_human"]
 # fallback_after_secs = 1200  # 安全網。未設定なら max_wall_secs + 300

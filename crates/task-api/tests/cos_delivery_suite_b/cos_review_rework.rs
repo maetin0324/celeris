@@ -340,6 +340,7 @@ async fn review_rework_stops_at_the_limit_and_on_a_repeated_rejection() {
                     "options": [{"key": "reopen", "label": "開き直す", "detail": "同じ task をもう一度実行する"},
                                 {"key": "cancel", "label": "諦める", "detail": "task を取り消す"}],
                     "recommended": null,
+                    "reserved_options": ["reopen", "cancel"],
                     "recommendation_reason": "上限を超えたので人が決める",
                     "web_path": format!("/tasks/{}", task.id)
                 }

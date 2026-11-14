@@ -218,7 +218,7 @@ async fn env(jev_status: u16, jev_body: &'static str, register_key: bool) -> Env
     let secrets = root.join("secrets");
     std::fs::create_dir_all(&secrets).expect("secrets dir");
     let knowledge = root.join("knowledge");
-    task_ops::cos_skill_gate::write_fixture(&knowledge.join("skills"), "cos-inbox-triage", "12")
+    task_ops::cos_skill_gate::write_fixture(&knowledge.join("skills"), "cos-inbox-triage", "13")
         .expect("CoS skills");
     // `[llm_sources.jev]` は置かない（ADR jev-wire D5）。worker の source は別名の fake。
     let config_path = root.join("config.toml");

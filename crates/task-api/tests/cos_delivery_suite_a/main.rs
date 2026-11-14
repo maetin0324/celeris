@@ -2,6 +2,7 @@
 mod common;
 
 mod chat_attachments;
+mod cos_answer_first_defer;
 mod cos_auth;
 mod cos_chat_attach_handoff_kb;
 mod cos_chat_triage_scenarios;

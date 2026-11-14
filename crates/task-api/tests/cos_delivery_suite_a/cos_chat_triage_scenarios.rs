@@ -499,6 +499,8 @@ async fn cos_chat_triage_b_escalates_human_matters_and_keeps_the_wait() {
                     why,
                     json!({"escalation": {
                         "to": "human", "summary": summary,
+                        "reserved_options": options.as_array().map(|xs| xs.iter()
+                            .map(|o| o["key"].clone()).collect::<Vec<_>>()).unwrap_or_default(),
                         "options": options,
                         "recommended": recommended,
                         "recommendation_reason": why,

@@ -3234,6 +3234,9 @@ mod browser_ledger_gate;
 /// ADR 2026-10-08-browser-prod-enablement D2 末尾・D4: 保存 policy の無い browser task は
 /// `browser_policy_missing` で止まり、PUT で戻る（`src/dispatcher/tests/browser_policy_missing.rs`）。
 mod browser_policy_missing;
+/// 健全性v2 R4 cex-late: replan・段の repair の後に遅れて届く旧い完了と、同じ quota group の run の続けての終わりの反例試験
+/// （`src/dispatcher/tests/cex_late_completion.rs`）。
+mod cex_late_completion;
 /// 健全性v2 R4 cex-lease: lease・restart・同時完了の反例試験（`src/dispatcher/tests/cex_lease_restart.rs`）。
 mod cex_lease_restart;
 /// 健全性v2 R4 cex-review: review の権限（検査した候補の同一性・自己申告で完了しないこと・再同期の上限）の反例試験

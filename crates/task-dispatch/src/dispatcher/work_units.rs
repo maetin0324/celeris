@@ -473,9 +473,9 @@ impl Dispatcher {
         if changed {
             units = self.store.work_units_for(task_id)?;
         }
-        // ADR-0079 付記「R6-1」D2: 人の gate の間に上げなかった unit（段階の `review: human` の後の次の段階、
-        // 止めている間に子が終わって依存が満たされた unit）を、gate が解けた今 `ready` に上げる。
-        if v2 && self.promote_newly_ready(task_id, &units)? {
+        // ADR-0079 付記「R6-1」D2・ADR 2026-11-14-dependency-promotion-every-plan-version D1: 依存の満たされた pending の unit
+        // （人の gate の間・finish の途中で落ちた間に上げなかったもの）を、計画の版によらず今 `ready` に上げる。
+        if self.promote_newly_ready(task_id, &units)? {
             units = self.store.work_units_for(task_id)?;
         }
         // ADR-0079 付記「R7-9」D3: 統合済みの段階に統合されていない unit（修正前の replan が足した unit など）が
@@ -614,7 +614,8 @@ impl Dispatcher {
     /// ADR-0079 付記「R6-1」D2: 依存と工程の障壁が満たされた `pending` の unit を `ready` に上げる
     /// （行と event は [`super::phase_integration::ready_promotions`]。`finish_phase_integration` と同じ。子 task の
     /// 状態を写した後の `reconcile_tree_units` もこれで上げる）。人の gate の間は上げずにおくので、gate が解けた後の
-    /// 最初の dispatch で上げる。上げたら `true`。
+    /// 最初の dispatch で上げる。dispatch gate は計画の版によらず呼ぶ（ADR 2026-11-14-dependency-promotion-every-plan-version
+    /// D1）。上げたら `true`。
     pub(super) fn promote_newly_ready(
         &self,
         task_id: TaskId,

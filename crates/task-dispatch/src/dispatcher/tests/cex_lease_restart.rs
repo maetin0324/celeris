@@ -403,9 +403,14 @@ async fn cex_draining_instance_reclaims_its_expired_lease_without_redispatching(
 /// 依存 WU の更新の前で落ちた（WU は done、Task は Running のまま、run A に `WorkerFinished` 無し）状態から再起動しても、
 /// 回収は A を 1 回だけ閉じ、done の WU を作り直さず（A の WU を走らせ直さない）、もう一度再起動しても何も足さない。
 ///
-/// 範囲: 再実行の冪等性だけを固定する。この状態からの前進（依存 WU b・c の昇格と Task の完了）は今の実装で成り立たない
-/// （b・c が pending のまま Task が ready で止まる）ので、ここでは assert せず、反例として
-/// `agent-docs/progress/2026-11-11-health-v2-r4/cex-lease.md` の「未解決」に再現手順を記録した。
+/// 範囲: 種の状態（WU a の done を store に直に書く）からの回収の冪等性を固定する。依存 WU の昇格の数と、実際の finish を
+/// `halt_after_wu_transition` で止めた状態からの前進は [`cex_restart_after_wu_done_promotes_dependents_once`] が固定する。
+///
+/// 変えた理由（ADR 2026-11-14-dependency-promotion-every-plan-version）: 以前は v1 の計画の dispatch gate が依存 WU を
+/// 上げず、この状態から Task が ready のまま進まなかった。この試験はその停止を前提に、最初の再起動の 1 tick の後で
+/// dispatcher を落として 2 回目の再起動を比べていた。修正の後は最初の tick で b が上がって走るので、その時点で落とすと
+/// b の run が新しい孤児になり、2 回目の再起動が正しく回収する（`reclaimed == 1`）。そこで最初の再起動は Task が Done に
+/// 届くまで回し、その後の再起動で何も足さないことを見る。
 ///
 /// 既存試験で検出できない理由: `test_hooks.halt_after_wu_transition` を使う試験（`cluster_job_wait.rs`）は cluster の待ちの
 /// WU 遷移だけを見る。`orphan_work_units.rs` は WU が running のまま落ちた状態だけを種にし、WU が先に done になった
@@ -438,6 +443,8 @@ async fn cex_restart_after_crash_between_wu_and_task_transitions_is_idempotent()
     assert_eq!(report.reclaimed, 1, "{report:?}");
     assert_eq!(finishes(&store, id, &run_a).len(), 1);
     assert_eq!(wu_row(&store, id, "a").status, WorkUnitStatus::Done);
+    let s = store.clone();
+    assert!(run_until_state(&mut d, || status_of(&s, id) == Status::Done).await);
     let snapshot = events_of(&store, id).len();
     drop(d);
 
@@ -454,9 +461,93 @@ async fn cex_restart_after_crash_between_wu_and_task_transitions_is_idempotent()
         ]
     );
     assert_eq!(wu_row(&store, id, "a").last_run_id, Some(run_a.clone()));
-    assert_eq!(worker_starts(&store, id), vec![run_a.clone()]);
+    let starts = worker_starts(&store, id);
+    assert_eq!(starts.len(), 3, "{starts:?}");
+    assert_eq!(starts.iter().filter(|r| **r == run_a).count(), 1);
     assert_eq!(events_of(&store, id).len(), snapshot);
     assert!(store.runs_running().unwrap().is_empty());
+}
+
+/// `key` の WU の `dependency_ready` の遷移の数。
+fn dependency_ready_count(store: &Arc<dyn TaskStore>, id: TaskId, key: &str) -> usize {
+    wu_transitions(store, id, key)
+        .into_iter()
+        .filter(|(to, reason)| *to == WorkUnitStatus::Ready && reason == "dependency_ready")
+        .count()
+}
+
+/// 不変条件（ADR 2026-11-14-dependency-promotion-every-plan-version・ADR-0072 D15）: v1 の計画（a → b → c）で、
+/// finish が WU a の done を書いた直後（依存 WU の `dependency_ready`・Task の遷移・`runs` の閉じの前）で落ちても、
+/// 再起動の後の dispatch gate が SQLite の依存の状態から b を ready に上げ、b・c は `dependency_ready` で 1 回ずつ
+/// ready に上がり、Task は Done に届く。a は走らせ直さない。もう一度再起動しても何も足さない。
+///
+/// 既存試験で検出できない理由: [`cex_restart_after_crash_between_wu_and_task_transitions_is_idempotent`] は WU a の done を
+/// store に直に書いた種から始め、finish の実際の書き込みの順（a の done の後の打ち切り）を通らず、依存 WU の
+/// `dependency_ready` の数を見ない（gate と finish の両方が b を上げても落ちない）。`halt_after_wu_transition` を使う
+/// `cluster_job_wait.rs` の試験は v3 の計画の cluster の待ちの遷移だけを見る。`orphan_work_units.rs` は WU が running の
+/// まま落ちた状態だけを種にする。
+#[tokio::test]
+async fn cex_restart_after_wu_done_promotes_dependents_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = true_task(dir.path());
+    let id = task.id;
+    store.insert(&task).unwrap();
+    adopt_three_step_plan(&store, id);
+
+    // 旧い instance: 実際の finish を WU a の done の書き込みの直後で止める（`daemon_instances` に行を持たない =
+    // 再起動の後は持ち主が居ない）。
+    let mut old = dispatcher(store.clone(), done_adapter(), 1);
+    old.test_hooks.halt_after_wu_transition = true;
+    let s = store.clone();
+    assert!(
+        run_until_state(&mut old, || wu_row(&s, id, "a").status
+            == WorkUnitStatus::Done)
+        .await
+    );
+    drop(old);
+    let run_a = wu_row(&store, id, "a").last_run_id.unwrap();
+    assert_eq!(status_of(&store, id), Status::Running);
+    assert!(finishes(&store, id, &run_a).is_empty());
+    assert_eq!(wu_row(&store, id, "b").status, WorkUnitStatus::Pending);
+    assert_eq!(wu_row(&store, id, "c").status, WorkUnitStatus::Pending);
+
+    // 再起動: 新しい active が A を回収して Task を ready に戻し、gate が b を上げて b・c を走らせる。
+    let mut active = new_active(&store, done_adapter());
+    let s = store.clone();
+    let reached = run_until_state(&mut active, || status_of(&s, id) == Status::Done).await;
+    assert!(
+        reached,
+        "status={:?} b={:?} c={:?}",
+        status_of(&store, id),
+        wu_transitions(&store, id, "b"),
+        wu_transitions(&store, id, "c")
+    );
+    assert_eq!(dependency_ready_count(&store, id, "b"), 1);
+    assert_eq!(dependency_ready_count(&store, id, "c"), 1);
+    assert_eq!(
+        wu_transitions(&store, id, "a"),
+        vec![
+            (WorkUnitStatus::Running, "dispatch".to_string()),
+            (WorkUnitStatus::Done, "completed".to_string())
+        ]
+    );
+    for key in ["b", "c"] {
+        assert_eq!(wu_row(&store, id, key).status, WorkUnitStatus::Done);
+    }
+    assert_eq!(finishes(&store, id, &run_a).len(), 1);
+    assert_eq!(worker_starts(&store, id).len(), 3);
+    assert!(store.runs_running().unwrap().is_empty());
+    let snapshot = events_of(&store, id).len();
+    drop(active);
+
+    // もう一度再起動（同じ store に新しい active）。回収も昇格も 2 回目に書かない。
+    let mut again = new_active(&store, done_adapter());
+    let report = again.tick().unwrap();
+    assert_eq!(report.reclaimed, 0, "{report:?}");
+    assert_eq!(events_of(&store, id).len(), snapshot);
+    assert_eq!(dependency_ready_count(&store, id, "b"), 1);
+    assert_eq!(dependency_ready_count(&store, id, "c"), 1);
 }
 
 /// 不変条件（ADR 2026-10-03-ownerless-running-runs D3・`close_aborted_run` の再実行の注記）: `WorkerFinished` を

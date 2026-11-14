@@ -15,7 +15,7 @@ commit は件名で挙げる（hash は書かない。基準は `$CELERIS_WU_BAS
 - 消費側: [consumers.md](2026-11-14-repo-auto-integrate/consumers.md)
   - 件名: `consumers: 取り込み判定を repo の auto_integrate 欄から読む 1 関数へ置き換える`
 - web: `web: 案件の自動取り込みの切替を消し、リポジトリの設定に移す`
-- docs: `docs: 取り込みの説明を repo の欄の判定にする`。`config/celeris.example.toml` の説明コメントは close-out の範囲（docs・ADR・進捗）の外なので直していない（提案を参照）。
+- docs: `docs: 取り込みの説明を repo の欄の判定にする`。`config/celeris.example.toml` の説明コメントは leftovers WU で直した（提案を参照）。
 - `docs/SPEC.md`・`docs/architecture-map.md` に案件の `auto_integrate` の記述は残っていない（`grep -n "auto_integrate\|自動取り込み"` が 0 件）。
 
 ## 証拠
@@ -26,7 +26,7 @@ commit は件名で挙げる（hash は書かない。基準は `$CELERIS_WU_BAS
 - `cargo clippy --workspace --all-targets` は task-dispatch の lib test などで、この task が触れていないファイル由来の指摘で落ちる（store WU・consumers WU の報告）。base 側から既にある不備と見ており、未確認。
 
 ## 本番への移行
-- config 変更: 無し。`~/.config/celeris` の config に `auto_integrate` の欄は無く（`config/celeris.example.toml` を確認。欄は無く、コメントだけが旧い案件単位の説明のまま）、読み込みエラーになる欄は消していない。
+- config 変更: 無し。`~/.config/celeris` の config に `auto_integrate` の欄は無く（`config/celeris.example.toml` を確認。欄は無く、コメントは leftovers WU でリポジトリ単位に直した）、読み込みエラーになる欄は消していない。
 - DB: release の起動時に migration 0126 が自動で適用される。`auto_integrate = 1` だった案件の local の git リポジトリは自動で有効になり、取り込みの動作は変わらない。remote・dir のリポジトリは移行後に自動取り込みの対象にならない。事前に確認する SQL は rest.md の「本番への移行」の 1 を参照。
 - 運用者の手順（release 昇格の後。昇格は人が押す）:
   1. benchfs-paper（repo id 01M7A3NAAKPM9ECBE2CR14V0BC）を有効にする。
@@ -35,4 +35,4 @@ commit は件名で挙げる（hash は書かない。基準は `$CELERIS_WU_BAS
   3. 案件への `auto_integrate` の書き込み（`PATCH /projects/{id}`）は 422 になる。使っている script があれば repo の API に直す。
 
 ## 提案
-- `config/celeris.example.toml` の 461〜462 行（`[selfdeploy]` の説明コメント）が「PATCH /api/v1/projects/{id} {"auto_integrate": true}、案件画面の切替。ADR 2026-10-16-project-auto-integrate」のままである。「PATCH /api/v1/repos/{id}、リポジトリの設定画面、ADR 2026-11-14-repo-auto-integrate」に直す小さな追加変更が要る（コメントだけで動作は変わらない）。
+- `config/celeris.example.toml` の `[selfdeploy]` の説明コメントは、リポジトリの欄（`PATCH /api/v1/repos/{id}`、ADR 2026-11-14-repo-auto-integrate）に直した（leftovers WU）。control-ts の `ProjectSnapshot.project.auto_integrate` の型と試験の値も消した。

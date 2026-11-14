@@ -32,6 +32,7 @@ use crate::health_review::design::{
     pending_design_review, plan_summary, planner_run_before, write_paths_by_repo,
 };
 use crate::health_review::policy::{REVIEW_POLICY_TIMEOUT, load_review_policy};
+use crate::run_settlement::run_end_record;
 use task_core::ExecutionPlanSpec;
 use task_core::design_review::ReviewPolicyState;
 use task_worker::protocol::DesignReviewRequest;
@@ -422,17 +423,9 @@ impl Dispatcher {
             ..Default::default()
         });
         tracing::info!(%task_id, %run_id, %outcome, "design review run finished (the verdict is read by design_verdict, not by the final review)");
-        self.store.append_event(
-            task_id,
-            &Event::WorkerFinished {
-                run_id: run_id.clone(),
-                outcome,
-                usage,
-                role: Some(RunRole::Reviewer),
-                metrics,
-                end: run_end,
-            },
-        )?;
+        let role = Some(RunRole::Reviewer);
+        let finished = run_end_record(&run_id, outcome, usage, role, metrics, run_end);
+        self.store.append_event(task_id, &finished)?;
         self.store.append_event(task_id, &quota)?;
         let status = run_end
             .map(task_core::RunIndexStatus::from_run_end)

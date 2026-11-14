@@ -74,11 +74,6 @@ pub(super) fn exhausted(
     Ok(watch.filter(|w| w.exceeded()).map(|w| (w.prior, w.max)))
 }
 
-/// `WorkerFinished.outcome` / 遷移の理由に書く文（`token_budget_exhausted: <used>/<max>`）。
-pub(super) fn outcome(used: u64, max: u64) -> String {
-    format!("token_budget_exhausted: {used}/{max}")
-}
-
 /// run の途中の監視。`prior`（この run 以外の消費）＋この run の累積値 ≥ `max` で `wake` を鳴らす。
 #[derive(Debug)]
 pub(crate) struct TokenBudgetWatch {

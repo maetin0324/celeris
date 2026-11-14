@@ -660,3 +660,87 @@ fn session_resume_container_and_adapter_are_decided_before_first_run_and_not_con
         assert!(!reason.starts_session(), "{reason:?}");
     }
 }
+
+// ---- ADR 2026-11-13-continuation-resume-shared-inputs: 共有の照合 `stored_session_fresh_reason` ----
+
+fn stored_facts(session_id: &str) -> StoredSessionFacts<'_> {
+    StoredSessionFacts {
+        adapter: "claude-code",
+        session_id,
+        context_exhausted: false,
+        measured_tokens: 0,
+        rollover_tokens: 1000,
+    }
+}
+
+/// 守る不変条件: 共有の照合は不正な id → context の枯渇 → token の上限の順で理由を 1 つ選び、どれも無ければ
+/// `None`（Resume）を返す。token は上限と等しければ上限に達したと数える。
+/// 既存の試験は `decide_continuation`（context と token を同じ `ContextRollover` に写す）と
+/// `decide_cos_chat_session`（cache の消失を id より前に見る）を通してしか見ないので、共有の関数で
+/// 不正な id と context の枯渇が重なったときに id を先に選ぶことを直接には確かめていない。
+#[test]
+fn stored_session_fresh_reason_checks_id_then_context_then_tokens() {
+    let all = StoredSessionFacts {
+        context_exhausted: true,
+        measured_tokens: 5000,
+        ..stored_facts("not-a-uuid")
+    };
+    assert_eq!(
+        stored_session_fresh_reason(&all),
+        Some(StoredSessionFreshReason::InvalidId)
+    );
+    // 空文字の id はどの adapter でも不正（`session_id_is_valid_for_adapter`）。
+    let empty_codex = StoredSessionFacts {
+        adapter: "codex",
+        ..stored_facts("")
+    };
+    assert_eq!(
+        stored_session_fresh_reason(&empty_codex),
+        Some(StoredSessionFreshReason::InvalidId)
+    );
+    let context_and_tokens = StoredSessionFacts {
+        session_id: UUID,
+        ..all
+    };
+    assert_eq!(
+        stored_session_fresh_reason(&context_and_tokens),
+        Some(StoredSessionFreshReason::ContextExhausted)
+    );
+    let at_limit = StoredSessionFacts {
+        measured_tokens: 1000,
+        ..stored_facts(UUID)
+    };
+    assert_eq!(
+        stored_session_fresh_reason(&at_limit),
+        Some(StoredSessionFreshReason::TokenRollover)
+    );
+    let below = StoredSessionFacts {
+        measured_tokens: 999,
+        ..stored_facts(UUID)
+    };
+    assert_eq!(stored_session_fresh_reason(&below), None);
+}
+
+/// 守る不変条件: task・WU では、壊れた id と context の枯渇が重なると、共有の照合の順（id が先）に従って
+/// `session_missing` を記録する（共有の前の `decide_continuation` と同じ。どちらも保存 session を引退させる）。
+/// 既存の試験 `session_resume_session_reuse_missing_or_broken_session_falls_back` と
+/// `session_resume_session_reuse_fresh_request_rollover_and_surface_fall_back` は壊れた id と context の枯渇を
+/// 1 つずつしか与えないので、共有の関数の順が変わって `context_rollover` を記録しても落ちない。
+#[test]
+fn session_resume_broken_id_wins_over_context_exhaustion() {
+    let broken = WorkUnitSession {
+        session_id: "01M323X6TJQSFEP0MKXABWVY78".into(),
+        approx_tokens: 400_000,
+        ..wu_session("claude-code", Some("acct-1"), "wu-a")
+    };
+    let both = ContinuationFacts {
+        previous_end: Some(RunEnd::BudgetExhausted {
+            kind: BudgetKind::Context,
+        }),
+        ..facts(Some(&broken))
+    };
+    assert_eq!(
+        decide_continuation(&both),
+        fresh(ContinuationFreshReason::SessionMissing, true)
+    );
+}

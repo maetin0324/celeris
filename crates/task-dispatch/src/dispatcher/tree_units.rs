@@ -1,6 +1,7 @@
 //! 木の子 task（tree units）の gate・liveness・plan_invalid と一括作成（ADR-0079）。ADR-0082 の L2。
 
 use super::*;
+use crate::run_settlement::{self, ReplanLimits, ReplanOrAsk};
 
 impl Dispatcher {
     /// ADR-0079 D4 (3) / D3（Phase R2a）: 採用する /3 の計画に unit の gate をかけ（上げる・下げるを spec に
@@ -104,8 +105,10 @@ impl Dispatcher {
             .collect();
         let mut facts = Vec::with_capacity(nodes.len());
         for t in &nodes {
-            let replans_so_far = self.counted_replans(t.id)?;
-            let replans_left = replans_so_far < self.effective_max_replans(t.id)?;
+            // 節点の replan の余地は D4 wu-failure の `run_settlement::replan_or_ask` と同じ判定（「WU が失敗したら
+            // 自動 replan が来るか」）。
+            let limits = self.replan_limits(t.id, None, None)?;
+            let replans_left = run_settlement::replan_or_ask(limits) == ReplanOrAsk::Replan;
             facts.push(
                 task_ops::tree::node_liveness_facts(
                     self.store.as_ref(),
@@ -616,12 +619,19 @@ impl Dispatcher {
         Ok(task_core::tree::limits_with_allowances(&tree, &allowances))
     }
 
-    /// ADR-0079 付記「R6-1」D3: `[execution] max_replans` に数える replan の数（人が起こした replan は数えない。
-    /// `task_ops::plan_gate::counted_replans`）。以前は版の数 − 1。
-    pub(super) fn counted_replans(&self, task_id: TaskId) -> Result<u32, DispatchError> {
-        Ok(task_ops::plan_gate::counted_replans(
-            &self.store.events_for(task_id)?,
-        ))
+    /// ADR-0079 付記「R6-1」D3・ADR 2026-11-11 dispatcher-state-ownership D4 wu-failure: `run_settlement::replan_or_ask`
+    /// の入力を読む。`[execution] max_replans` に数える replan の数（人が起こした replan は数えない。
+    /// `task_ops::plan_gate::counted_replans`。以前は版の数 − 1）・節点の上限（`effective_max_replans`）・stalled の数
+    /// （`failure` が (unit の key, 失敗の署名) のとき。`None` なら 0）。組み立ては `ReplanLimits::from_events`。
+    pub(super) fn replan_limits(
+        &self,
+        task_id: TaskId,
+        failure: Option<(&str, &str)>,
+        ban: Option<run_settlement::ReplanBan>,
+    ) -> Result<ReplanLimits, DispatchError> {
+        let max = self.effective_max_replans(task_id)?;
+        let events = self.store.events_for(task_id)?;
+        Ok(ReplanLimits::from_events(&events, failure, max, ban))
     }
 
     /// ADR-0079 付記「R6-1」D1 / D2: 人の gate がこの task の unit を止めているなら、その理由。

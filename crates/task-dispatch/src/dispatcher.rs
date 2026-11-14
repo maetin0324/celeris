@@ -4,8 +4,7 @@
 //! 1. 終了したワーカー／レビューの結果を取り込み、状態遷移をストアに書く
 //! 2. 期限切れリースを回収（`running → ready|failed`、`LeaseExpired`）
 //! 3. 自分が起動した run のうち、ストア上で既に `running` でない／run_id が変わったものを強制終了（cancel 等）
-//! 4. `reviewing` なのに判定中でないタスクのレビューを開始（再起動後の復旧、または前 tick で `Reviewer` run の
-//!    枠が無く見送ったもの）
+//! 4. `reviewing` なのに判定中でないタスクのレビューを開始（再起動後の復旧、または前 tick で `Reviewer` run の枠が無く見送ったもの）
 //! 5. 有効な cron job の期限を評価し、通常の task として作る
 //! 6. `ready_tasks` を `priority DESC, created_at ASC` で取り、route registry と並列度上限に従って dispatch
 //!
@@ -41,12 +40,13 @@
 //! | `tree_units` | 木の子 task の gate・liveness・一括作成と、案件の停滞の判定の入口（状態は `project_orchestration`） | L2 |
 //! | `child_tasks` | 委譲した子と承認の子 | L2 |
 //! | `review_spawn` | review run の起動（per-task lock は verdict の保存まで） | L2 |
-//! | `worker_finish` | worker run の終了処理 | L3 |
+//! | `worker_finish` | worker run の終了処理（入力を集め、`run_settlement` の提案を今と同じ順と transaction で適用する） | L3 |
 //! | `planner_flow` | planner の結果の採用と replan | L3 |
 //! | `review_verdict` | review の判定の適用と repair | L3 |
 //! | `phase_integration` | 工程の統合と途中報（phase report） | L3 |
 //! | `cluster_job_wait` | クラスタ job の durable wait の行と task・WU の再開（ADR-0090。poll のスレッドは `cluster_runtime`） | L3 |
 //! | `run_supervisor` | 実行中の run の表（run の集合の正本）・review run の表・infra backoff・lease の照合の状態の owner（`crate::run_supervisor::RunSupervisor`。この dir の外）と、lease の回収の判断（純粋関数 `reclaim_reason`・`reclaim_verdict`）・worker 完了と回収が共有する再試行の判定 `infra_retry_after`（ADR 2026-11-11 dispatcher-state-ownership D1・D3・D4） | owner |
+//! | `run_settlement` | run の終わりの判断の純粋関数（`crate::run_settlement`。この dir の外。状態を持たない）。D4 wu-failure の共有の関数 `replan_or_ask`（自動 replan か人に聞くかの上限の判定。`worker_finish`・`work_units`・`phase_integration`・`tree_units` が呼び、replan の実行・event・質問・決定の要求は呼び元に残す）と D4 run-close の `run_end_record`（終了記録の組み立てだけ。lease の検証・状態遷移・transaction の境界は閉じる経路ごとに残す）と D3 の `settle`（worker の run の終わり方・`Trigger`・outcome の文・retry の可否を `RunFinishInput` から `RunFinishProposal` で返す。`worker_finish` が呼び、適用は `worker_finish` と owner の method）・`questions_of_run`・`stop_at_token_budget`・`describe_run_end`・`trigger_starts_another_run`と WU の run の `settle_work_unit`（`execution_scheduler::decide` を呼ぶ）・`settle_work_unit_failure`と atomic task の run の `settle_task_run`（質問の文は `execution_scheduler` の関数を呼ぶ）と WU の書き込みの後の段の進み方 `phase_step_after_write`（`execution_scheduler::settle_phase` を呼ぶ。読み直しと遅れた unit の trigger は `worker_finish`）（ADR 2026-11-11 dispatcher-state-ownership D3・D4） | 判断 |
 //! | `leases` | `RunSupervisor` を呼ぶ入口: lease の回収（判断は `run_supervisor`、WU・統合の照合と待ちの削除はここ）・abort・orphan・drain・shutdown の割り込み | L3 |
 //! | `execution_coordination` | task・WU の実行の調整の状態（write set の予約と見送り・actual write-set の採取場所・review 前 sync の待ち行列と再同期の上限で止めた review・root の依存先の統合・WU の worktree の用意の失敗・credential・browser・クラスタの待ち、task・WU の見送りの理由・人の承認待ち・子待ち・review の持ち越し・WU の check と段の統合の process・完了の channel・tick・新しい仕事を受けるか・並列度・停滞の見張り）の owner（`crate::execution_coordination::ExecutionCoordination`。この dir の外。run の集合は持たず、write set の blocker と刈り込みは `RunSupervisor::run_keys` を、lease の回収・abort の待ちの削除は `RunSupervisor` が手放した鍵を引数で受ける。ADR 2026-11-11 dispatcher-state-ownership D1・D2・D3・D6） | owner |
 //! | `project_orchestration` | 案件の停滞の見張り（判定の時刻・成否・番号・換算単価）と CoS chat の起動の状態の owner（`crate::project_orchestration::ProjectOrchestration`。この dir の外。`tree_units` と `cos_chat/launch` の書き込みは owner の method を通す。ADR 2026-11-11 dispatcher-state-ownership D1・D2） | owner |
@@ -74,10 +74,9 @@ use task_ops::delegate::{pending_children, plan_delegation};
 use task_ops::derive::{
     AnswerNote, INFRA_FAILURE_MARKER, REVIEWER_INFRA_FAILURE_PREFIX, REVIEWER_REQUEUED_PREFIX,
     ReviewNote, answers_from_events, approval_decision_note, artifacts_for_run,
-    consecutive_continuations, consecutive_infra_requeues, consecutive_requeues,
-    consecutive_reviewer_infra_failures, consecutive_reviewer_requeues, current_run_seq,
-    human_approval_title, last_run_id, latest_checkpoint, no_progress_streak,
-    prior_review_from_events, retry_backoff,
+    consecutive_continuations, consecutive_infra_requeues, consecutive_reviewer_infra_failures,
+    consecutive_reviewer_requeues, current_run_seq, human_approval_title, last_run_id,
+    latest_checkpoint, no_progress_streak, prior_review_from_events, retry_backoff,
 };
 use task_worker::{
     ActiveProjectContext, AdapterError, Answer, ChildSummary, CommentContext,

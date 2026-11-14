@@ -239,3 +239,19 @@ fn cos_chat_run_rollover_measure_falls_back_for_legacy_rows() {
     );
     assert_eq!(rollover_measure(&stored(-5)), 0);
 }
+
+/// 守る不変条件: CoS chat では、cache があっても保存された id が不正なら、context の枯渇や token の上限と
+/// 重なっても `cache_missing` を記録する（共有の照合 `stored_session_fresh_reason` の順で id が先。
+/// ADR 2026-11-13-continuation-resume-shared-inputs D1）。
+/// 既存の `cos_chat_run_session_reason_precedence_is_fixed` は cache の消失（`cache_present = false`）でしか
+/// `cache_missing` と context の枯渇を重ねず、`cos_chat_run_session_cache_missing_or_bad_id_retires` は不正な id を
+/// 単独でしか与えないので、共有の関数の順が変わって `context_exhausted` を記録しても落ちない。
+#[test]
+fn cos_chat_run_bad_id_wins_over_context_and_tokens() {
+    let k = key();
+    let mut s = ChatSession::new(k.clone(), "not-a-uuid", OffsetDateTime::UNIX_EPOCH);
+    s.approx_tokens = 5000;
+    let mut f = facts(&k, Some(&s));
+    f.context_exhausted = true;
+    assert_eq!(decide_cos_chat_session(&f).reason(), Some("cache_missing"));
+}

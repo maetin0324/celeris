@@ -1,6 +1,7 @@
 //! review の判定の適用（`on_review_finished`・`try_review_repair`）。Plan の子の挿入と `ReviewPass` は同じ transaction に入れる。ADR-0082 の L3。
 
 use super::*;
+use crate::run_settlement::run_end_record;
 
 /// health の Error・往復・修復の上限の使い切りで review を止める（health enforcement loop D3.4・D4.3・D4.4）。file は
 /// size の制約と依存の向き（`dispatcher` → `health_review` を足さない）のため `health_review/` に置く。
@@ -58,13 +59,9 @@ impl Dispatcher {
             retries: 0,
             ..Default::default()
         });
-        let mut reviewer_finished = outcome.reviewer_run.take().map(|r| Event::WorkerFinished {
-            run_id: r.run_id,
-            outcome: r.outcome,
-            usage: r.usage,
-            role: Some(RunRole::Reviewer),
-            metrics: review_metrics,
-            end: None,
+        let mut reviewer_finished = outcome.reviewer_run.take().map(|r| {
+            let role = Some(RunRole::Reviewer);
+            run_end_record(&r.run_id, r.outcome, r.usage, role, review_metrics, None)
         });
         // ADR-0076: Reviewer run の quota 消費も worker と同じ `RoutingRuntime::settle_quota` で一度だけ
         // 見積もる（対象タスクが消えた・stale でも `QuotaActivity` を閉じるため、分岐より前）。

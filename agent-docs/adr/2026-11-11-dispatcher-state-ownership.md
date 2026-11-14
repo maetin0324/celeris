@@ -4,9 +4,17 @@ status: accepted
 ---
 # ADR 2026-11-11: Dispatcher の状態の owner と、判断と副作用の分け方
 
-- 状態: 採用（実装中。own-cluster・own-maint・own-routing・own-hooks は済み）。実装は task 01M6TYVJT4S29ZMP6P0D4831JG（健全性 v2 R4）の
-  unit own-cluster・own-maint・own-routing・own-hooks・own-quota・own-supervisor・own-coord-a・own-coord-b・own-orchestration・settle・admit・
-  review-decide。反例試験は unit cex-lease・cex-review が先に固定する。field の置き場と移す unit の正本は D1 の表、共有する判定の正本は D4 の表。
+- 状態: 採用・実装済み（2026-11-14。R4 の unit record が実測と表の照合で確かめた。記録は
+  [2026-11-11-health-v2-r4.md](../progress/2026-11-11-health-v2-r4.md)）。実装は task 01M6TYVJT4S29ZMP6P0D4831JG（健全性 v2 R4）。
+  field の置き場と移す unit の正本は D1 の表、共有する判定の正本は D4 の表（どちらも record では変えていない）。決定と unit の対応:
+
+  | 決定 | 実装した unit |
+  |---|---|
+  | D0 write-set・D8 policy の path | adr（patch を書いた）、operator（policy だけの branch で main に入れた）、sync-policy（取り込み） |
+  | D1 field の owner | own-cluster・own-maint・own-routing・own-hooks・own-quota・own-supervisor・own-coord-a・own-coord-b・own-orchestration（表と照合する unit 列は adr-align が足した） |
+  | D3 判断と副作用・D4 共有の判定 | settle（`replan_or_ask`・`run_end_record`・`stored_session_fresh_reason`）・own-supervisor（`infra_retry_after`）・admit（`dispatch_admission::admit`）・review-decide（`failed_checks`） |
+  | D6 ablation と試験用フック | own-hooks |
+  | D7 反例試験 | cex-lease・cex-review（分割の前に固定） |
 - 根拠の実測: [change-map.md](../progress/2026-11-11-health-v2-r4/change-map.md) と
   [change-map.json](../progress/2026-11-11-health-v2-r4/change-map.json)（field 116 件・co_change・equivalence 6 件）、
   owner 候補の規則は [owners.json](../progress/2026-11-11-health-v2-r4/owners.json)。

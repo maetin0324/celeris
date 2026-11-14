@@ -67,7 +67,7 @@ completed: 2026-11-14
 
 ## 1 回目の提出の check の不合格と直し方
 
-- celeris の check `celeris:repo-health/1` が `health:size.responsibility-growth:5ac03d663ce8b3be` で落ちた。
+- celeris の check `celeris:repo-health/1` が size.responsibility-growth の module_lines の finding で落ちた。
   単位 `crates/task-dispatch/src/dispatcher` の module の本体の行（空行・注釈・use・mod 宣言を除く）の合計が、
   WU base（`$CELERIS_WU_BASE`）の 31668 から 31682 に 14 行増えて worsened になった。
 - 1 回目の手元の `bash scripts/dev/check-health.sh` は既定の `--base auto`（`git merge-base HEAD main`）と比べたので、
@@ -80,23 +80,24 @@ completed: 2026-11-14
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`、範囲は `$CELERIS_WU_BASE`）
 
-- `cargo nextest run -p task-dispatch -E 'test(cex_) | test(/^dispatch_admission::/) | test(structure_guard_)'`: exit 0、44 passed、1809 skipped。
-- 順序の入れ替えを試験が検出すること（作業中に一時的に本体を書き換えて確かめ、元に戻した）:
-  再試行と infra の backoff の順を入れ替えると 2 本が落ちた。決定と設計 review の待ちから「1 本目だけ」を外すと 1 本が落ちた。戻した後は 8 passed。
-- WU の check 3 の grep の部分（純粋さ・同名の関数の定義なし・`admit`/`AdmissionInput`/`AdmissionProposal` が根の file・
-  `dispatch_admission::admit(` の呼び出し・lease と spawn と `WorkerStarted` が `dispatch_run.rs` に残る・`second_pass` の条件式と
-  planner の組み合わせの変数が無い・`#[test]` 8 本）: exit 0。
-- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
-- `bash scripts/dev/check-health.sh`: exit 0（verdict=pass、fail_grade 0、worsened 0、new 1）。new の 1 件は warning の
-  `migration.remnant`（`host_maintenance.rs` の `legacy` の語。この unit は触っていない）。size.responsibility-growth の悪化は無い
-  （`Dispatcher` に method を足さず、落とす関数 `admission_unit`・`admission_task_values` は `dispatch_run.rs` の自由関数にした）。
+- WU の check 3（grep の部分と `cargo nextest run -p task-dispatch -E 'test(cex_) | test(/^dispatch_admission::/) | test(structure_guard_)'`）:
+  exit 0、44 passed、1809 skipped。grep の部分は純粋さ・同名の関数の定義なし・`admit`/`AdmissionInput`/`AdmissionProposal` が
+  根の file・`dispatch_admission::admit(` の呼び出し・lease と spawn と `WorkerStarted` が `dispatch_run.rs` に残る・`second_pass` の
+  条件式と planner の組み合わせの変数が無い・`#[test]` 8 本。
+- 順序の入れ替えを試験が検出すること（1 回目の run で一時的に本体を書き換えて確かめ、元に戻した）:
+  再試行と infra の backoff の順を入れ替えると 2 本が落ちた。決定と設計 review の待ちから「1 本目だけ」を外すと 1 本が落ちた。
+- WU の check 2（`cargo clippy --workspace -- -D warnings && cargo fmt --all -- --check && bash scripts/dev/check-health.sh &&
+  test -f <進捗> && sh scripts/dev/progress-index.sh --check && test -f <ADR>`）: exit 0。check-health は verdict=pass、
+  fail_grade 0、worsened 0。new は warning の `migration.remnant`（`host_maintenance.rs` の `legacy` の語。この unit は触っていない）。
+- repo health を WU base と比べる（celeris の `celeris:repo-health/1` と同じ基準）:
+  `python3 scripts/dev/repo-health/repo_health.py --repo . --base "$CELERIS_WU_BASE" --head HEAD --policy-version 1`: exit 0。
+  dispatcher module の本体の行は 31668 → 31662 で existing（worsened 0）。
 - `bash scripts/dev/test-affected.sh`: exit 0。対象は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。
-  3908 passed、11 skipped。repo_health_gate は all checks passed。
-- `sh scripts/dev/progress-index.sh --check`: exit 0。
-- `git diff --quiet "$CELERIS_WU_BASE" -- agent-docs/adr/2026-11-11-dispatcher-state-ownership.md <cex_ の試験の file>`: exit 0。
-  `git diff --name-only "$CELERIS_WU_BASE" -- crates/task-dispatch/src/dispatcher/tests crates/task-dispatch/tests`: 0 件。
-- 範囲の check（`sh "$CELERIS_WU_SCOPE_PATHS"`）: 変更 path は ADR・この進捗・`dispatch_admission.rs`・`dispatch_admission/tests.rs`・
-  `dispatch_run.rs`・`lib.rs`・`docs/architecture-map.md` の 7 件で、範囲外 0。
+  3908 passed、11 skipped。
+- `git diff --quiet "$CELERIS_WU_BASE" -- agent-docs/adr/2026-11-11-dispatcher-state-ownership.md`: exit 0。
+  `git diff --name-only "$CELERIS_WU_BASE" -- crates/task-dispatch/src/dispatcher/tests crates/task-dispatch/tests`: 0 件
+  （`cex_` の試験と既存の試験は変えていない）。
+- 範囲の check（`sh "$CELERIS_WU_SCOPE_PATHS"` の path を計画の許す path と比べる）: exit 0、範囲外 0。
 
 ## 未解決事項
 

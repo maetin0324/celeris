@@ -1,6 +1,10 @@
 //! run の起動（`dispatch_one`・`spawn_worker`）と、その前段の担当・lane・harness の決定。lease の取得から `running.insert` までは一続きに保つ。ADR-0082 の L4。
 
 use super::*;
+use crate::dispatch_admission::{
+    self, AdmissionFact, AdmissionInput, AdmissionProposal, AdmissionStop, AdmissionTaskValues,
+    AdmissionUnit, BackoffClock,
+};
 use crate::execution_coordination::WriteSetAdmission;
 
 /// 付記 S2: `lane_rules` の compare の結線（`decide_lane` から呼ぶ）。`dispatcher.rs` を大きくしないよう、ここで宣言する。
@@ -33,214 +37,145 @@ impl Dispatcher {
         forced_wu: Option<task_core::WorkUnitRow>,
         now: Instant,
     ) -> Result<bool, DispatchError> {
-        if !task_ops::knowledge_curation::inputs_ready(self.store.as_ref(), &task)? {
-            return Ok(false);
-        }
-        // ADR-0074 D1.3（Phase F2b）: 並列 WU の 2 本目以降（Task は既に Running。担当・gate・
-        // バックオフは 1 本目で済んでいる）。
+        // ADR 2026-11-14 dispatch-admission-order: 起こすかの順序と組み合わせ（どの gate をどの順で見るか、並列 WU の
+        // 2 本目以降が飛ばす gate、planner run か、予算の上書き）は `dispatch_admission::admit` が決める。ここは admit が
+        // 求めた fact を既存の関数で集め、止めるなら止め方を適用して見送り、進むなら lease 以降を今のとおり行う。
+        // ADR-0074 D1.3（Phase F2b）: 並列 WU の 2 本目以降は `forced_wu` で WU を受ける（Task は既に Running）。
         let second_pass = forced_wu.is_some();
-        if !second_pass && self.supervisor.runs_for_task(task.id) > 0 {
-            return Ok(false);
-        }
-        // ADR-0089（Phase R6-5）: CoS の対話 run は `max_concurrency` ではなく `max_cos_runs` で数える。
-        let cos = !second_pass && self.is_cos_task(&task)?;
-        if !self.run_load().admits(cos) {
-            let scope = if cos {
-                task_core::CapacityScope::Cos
-            } else {
-                task_core::CapacityScope::Global
+        let mut gate = forced_wu.map(|wu| WuDispatchGate::RunWorkUnit(Box::new(wu)));
+        let mut input = AdmissionInput {
+            forced_unit: gate.as_ref().map(admission_unit),
+            ..AdmissionInput::default()
+        };
+        let mut task = task;
+        let admitted = loop {
+            let fact = match dispatch_admission::admit(&input) {
+                AdmissionProposal::Need(fact) => fact,
+                AdmissionProposal::Launch(admitted) => break admitted,
+                AdmissionProposal::Stop(how) => {
+                    match how {
+                        AdmissionStop::Quiet => {}
+                        AdmissionStop::Wait(wait) => self.note_dispatch_wait(task.id, wait),
+                        AdmissionStop::Backoff { until, cause } => {
+                            tracing::debug!(task_id = %task.id, %until, ?cause, "backoff; not dispatching yet");
+                            let until = rfc3339(until);
+                            let wait = task_core::TaskWait::Backoff { until, cause };
+                            self.note_dispatch_wait(task.id, wait);
+                        }
+                        AdmissionStop::StartIntegration => {
+                            if let Some(WuDispatchGate::StartIntegration(wu)) = &gate {
+                                self.start_integration_from_ready(&task, wu)?;
+                            }
+                        }
+                        AdmissionStop::StartFinalReview => {
+                            self.start_final_review_from_ready(&task)?
+                        }
+                    }
+                    return Ok(false);
+                }
             };
-            self.note_dispatch_wait(task.id, task_core::TaskWait::Capacity { scope, id: None });
-            return Ok(false);
-        }
-        // ADR-0044 D2: この tick で打ち切ったばかりの run と同じ worktree に、すぐ次の run を
-        // 入れない（孫プロセスが片付く猶予を 1 tick 置く）。
-        if self.supervisor.was_just_aborted(task.id) {
-            return Ok(false);
-        }
-        // ADR-0041 D5: verify モードは `genre = "smoke"` の煙試験だけを起こす（他は ready のまま）。
-        if !self.is_eligible(&task) {
-            return Ok(false);
-        }
-        // ADR 2026-10-07-build-tmp-hygiene 付記 A4: 監視している path が `critical` のあいだは新しい coding run を
-        // 起こさない（ready のまま。attempts を消費しない。並列 WU の 2 本目以降も同じ）。
-        if self.held_by_disk_critical(&task) {
-            let path = self.maint.disk_watch_paths();
-            self.note_dispatch_wait(task.id, task_core::TaskWait::DiskCritical { path });
-            return Ok(false);
-        }
-        // ADR-0046 D5（Phase 59）: 担当が決まっていないタスクは dispatch の前に matching で決める
-        // （計画 run の子、人が作ったタスク、Console から作られたタスクが全部ここを通る）。
-        let mut task = if second_pass {
-            task
-        } else {
-            match self.assign_if_needed(task)? {
-                Some(task) => task,
-                // 候補が無くて `blocked` にした（人に聞いた）。この tick では dispatch しない。
-                None => return Ok(false),
+            match fact {
+                AdmissionFact::KnowledgeInputs => {
+                    let ready =
+                        task_ops::knowledge_curation::inputs_ready(self.store.as_ref(), &task)?;
+                    input.knowledge_inputs_ready = Some(ready);
+                }
+                AdmissionFact::TaskRuns => {
+                    input.task_runs = Some(self.supervisor.runs_for_task(task.id))
+                }
+                AdmissionFact::CosRun => input.cos_run = Some(self.is_cos_task(&task)?),
+                AdmissionFact::Capacity { cos } => {
+                    input.capacity_admits = Some(self.run_load().admits(cos))
+                }
+                AdmissionFact::JustAborted => {
+                    input.just_aborted = Some(self.supervisor.was_just_aborted(task.id))
+                }
+                AdmissionFact::Eligible => input.eligible = Some(self.is_eligible(&task)),
+                AdmissionFact::DiskCritical => {
+                    input.disk_critical = Some(self.held_by_disk_critical(&task))
+                }
+                AdmissionFact::DiskWatchPaths => {
+                    input.disk_watch_paths = Some(self.maint.disk_watch_paths())
+                }
+                // ADR-0046 D5（Phase 59）: 候補が無ければ blocked にして人に聞き `None` を返す（その後は見送るだけ）。
+                AdmissionFact::Assignee => {
+                    let assigned = self.assign_if_needed(task.clone())?;
+                    input.assigned = Some(assigned.is_some());
+                    task = assigned.unwrap_or(task);
+                }
+                AdmissionFact::ExecutionGate => {
+                    task = self.execution_gate_if_needed(task)?;
+                    task = self.apply_plan_invalid_atomic(task)?;
+                    input.execution_gate_applied = true;
+                }
+                AdmissionFact::Unit => {
+                    let unit = self.wu_dispatch_gate(task.id)?;
+                    input.unit = Some(admission_unit(&unit));
+                    gate = Some(unit);
+                }
+                AdmissionFact::DecisionSelfHold => {
+                    input.decision_self_hold = Some(self.decision_self_hold(&task)?)
+                }
+                AdmissionFact::DesignReviewHold => {
+                    input.design_review_hold = Some(self.design_review_hold(&task)?)
+                }
+                AdmissionFact::TreeLimit => {
+                    let hold = match gate.as_ref().and_then(tree_units::next_run) {
+                        Some(next) => self.tree_limit_hold_for(&task, next)?,
+                        None => false,
+                    };
+                    input.tree_limit_hold = Some(hold);
+                }
+                AdmissionFact::TaskValues => {
+                    input.task_values = Some(admission_task_values(&task, &self.config.execution))
+                }
+                AdmissionFact::RetryBackoff => {
+                    let (base, max) = (
+                        self.config.retry_backoff_base,
+                        self.config.retry_backoff_max,
+                    );
+                    let until = task.updated_at + retry_backoff(base, max, task.attempts);
+                    input.retry_backoff = Some(BackoffClock {
+                        until,
+                        now: self.now_utc(),
+                    });
+                }
+                AdmissionFact::InfraBackoff => {
+                    let until = self.supervisor.infra_backoff_until(task.id);
+                    input.infra_backoff = Some(until.map(|until| BackoffClock {
+                        until,
+                        now: self.now_utc(),
+                    }));
+                }
+                AdmissionFact::ClearInfraBackoff => {
+                    self.supervisor.clear_infra_backoff(task.id);
+                    input.infra_backoff_cleared = true;
+                }
+                AdmissionFact::BrowserPrereq { planner_run } => {
+                    input.browser_prereq_needed =
+                        Some(Self::browser_prereq_applies(&task, planner_run));
+                }
+                AdmissionFact::BrowserPrereqHold => {
+                    input.browser_prereq_hold = Some(self.browser_prereq_hold(&task)?)
+                }
             }
         };
-        // ADR-0072 D13（Phase E3）: Complexity Gate（assign_if_needed の後、decide_lane の前。
-        // 最初の dispatch で 1 回だけ判定する）。
-        if !second_pass {
-            task = self.execution_gate_if_needed(task)?;
-            // ADR-0079 D9 / D7（Phase R3a）: `plan_invalid` に atomic と答えた節点は 1 run で走らせる。
-            task = self.apply_plan_invalid_atomic(task)?;
-        }
-        // ADR-0072 D6/D15（Phase E2）: 計画のある Task は、次に走らせる WorkUnit を
-        // 決定的な scheduler（`task_core::next_work_unit`）で選ぶ。計画が無ければ従来どおり
-        // （`current_wu = None`。プロンプト・遷移は E1 までと 1 バイトも変わらない。(i)）。
-        let mut replan_dispatch = false;
-        let gate = match forced_wu {
-            Some(wu) => WuDispatchGate::RunWorkUnit(Box::new(wu)),
-            None => self.wu_dispatch_gate(task.id)?,
-        };
-        // ADR-0079 D9（Phase R2b）/ D7（Phase R3a）: `needed_before: [self]` の未回答の決定（plan_invalid・run 時の木の上限・worker の self）
-        // を待つ task と、設計 review を待つ task（ADR 2026-11-07-health-review-integration D3.5。`design_review_hold`）は run を起こさない。
-        if !second_pass && (self.decision_self_hold(&task)? || self.design_review_hold(&task)?) {
-            return Ok(false);
-        }
-        if let Some(next) = tree_units::next_run(&gate)
-            && self.tree_limit_hold_for(&task, next)?
-        {
-            return Ok(false);
-        }
         let current_wu = match gate {
-            WuDispatchGate::Atomic => None,
-            WuDispatchGate::RunWorkUnit(wu) => Some(*wu),
-            WuDispatchGate::StartIntegration(wu) => {
-                self.start_integration_from_ready(&task, &wu)?;
-                return Ok(false);
-            }
-            // ADR-0074「F5-fix8 実装時の明確化」: 仕事の残っていない計画の最終レビュー（run は起こさない）。
-            WuDispatchGate::FinalReview => {
-                self.start_final_review_from_ready(&task)?;
-                return Ok(false);
-            }
-            // ADR-0072 D17（Phase E4）: replan の planner run。既存の `is_planner_dispatch` の
-            // 配線（budget/lane/role の上書き）をそのまま使うが、`ExecutionPlannerContext.replan`
-            // を `true` にする（下）。
-            WuDispatchGate::RunPlanner { replan } => {
-                replan_dispatch = replan;
-                None
-            }
-            WuDispatchGate::Skip => return Ok(false),
+            Some(WuDispatchGate::RunWorkUnit(wu)) => Some(*wu),
+            _ => None,
         };
-        // ADR-0072 D14（Phase E3）/ D17（Phase E4）: gate が compound と判定し、`gate = "on"` で、
-        // まだ計画が無い（`current_wu` が None = atomic 経路）なら、この run は task-local な
-        // planner run にする。`replan_dispatch` は既に計画がある Task の replan（`wu_dispatch_gate`
-        // が上限まで確認済み）。
-        // ADR-0074「Phase F3（途中確認）実装時の逸脱・明確化」: `gate = "shadow"` でも、人が
-        // `execution: compound` を明示した Task（`ExecutionGateDecision.source = Human`、
-        // `rule_id = human/explicit`）は採用して planner run に進む（F5-1 dogfood で見つかった
-        // 不具合の修正）。CoS のヒント（source = Hint）と規則表の判定（source = Policy）は
-        // shadow では従来どおり記録だけ（採用しない）。
-        let gate_decision = task.routing.as_ref().and_then(|r| r.execution.as_ref());
-        let decision_is_compound =
-            gate_decision.map(|d| d.mode) == Some(task_core::ExecutionMode::Compound);
-        let shadow_human_explicit_compound = self.config.execution.gate
-            == task_core::GateMode::Shadow
-            && decision_is_compound
-            && gate_decision.map(|d| d.source) == Some(task_core::GateSource::Human);
-        // ADR-0079 D4 (1)（Phase R2a）: 木の子 task の compound は `[execution] gate` に関わらず採用する
-        // （root が compound で分けると決めた木を途中で 1 run に潰さない）。root は従来どおり（U-R5）。
-        let tree_child_compound = decision_is_compound && task_core::tree::is_tree_child(&task);
-        // ADR-0124 D3: 直行経路（`route = direct`・shadow でない）と記録した Task は planner を挟まず、
-        // 計画の無い 1 本の implementation run で走る（その後は従来の review 前同期 → command checks →
-        // reviewer）。`replan_dispatch` は計画を持つ Task だけなので触らない。
-        let direct_route = task
-            .routing
-            .as_ref()
-            .and_then(|r| r.route.as_ref())
-            .filter(|r| r.route == task_core::Route::Direct && !r.shadow);
-        let is_planner_dispatch = replan_dispatch
-            || (current_wu.is_none()
-                && direct_route.is_none()
-                && decision_is_compound
-                && (self.config.execution.gate == task_core::GateMode::On
-                    || shadow_human_explicit_compound
-                    || tree_child_compound));
+        let cos = admitted.cos_run;
+        let is_planner_dispatch = admitted.planner_run;
+        let replan_dispatch = admitted.replan;
+        let planner_human_frontier = admitted.planner_human_frontier;
         // D18/D14: 上書きする前の Task の予算（WU/planner の既定の計算に使う。ADR-0072 D14）。
         let original_task_budget = task.budget;
-        // ADR-0074 D5.3（Phase F1）: planner run は `[execution.planner] tier`（既定 standard）で
-        // 走る。人が Task に `tier:frontier` を明示していれば、それが優先される
-        // （`TierSource::Human` かつ `worker_hint.tier == Frontier`）。
-        let planner_human_frontier = task
-            .routing
-            .as_ref()
-            .is_some_and(|r| r.tier_source == task_core::TierSource::Human)
-            && task.worker_hint.tier == task_core::Tier::Frontier;
-        if is_planner_dispatch {
-            // D14: harness/adapter は `[execution.planner]`、lane は固定（下の `lane_decision` で
-            // `TierSource::System`／人の明示なら `TierSource::Human` にする）。
-            task.worker_hint.tier = if planner_human_frontier {
-                task_core::Tier::Frontier
-            } else {
-                self.config.execution.planner.tier
-            };
-            task.budget.max_turns = self.config.execution.planner.max_turns;
-            task.budget.max_wall_secs = self.config.execution.planner.max_wall_secs;
-        } else if let Some(wu) = &current_wu {
-            // ADR-0072 D18/E2 申し送り（Phase E3）: WU の予算（`WorkUnitSpec.budget`）を実際の
-            // run の wall-clock/turn 上限に反映する。書かなければ D18 の既定
-            // （`max(task.budget.*, 既定)`）。
-            let default_max_turns = task.budget.max_turns.max(30);
-            let default_max_wall = task.budget.max_wall_secs.max(1800);
-            task.budget.max_turns = wu
-                .spec
-                .budget
-                .and_then(|b| b.max_turns)
-                .unwrap_or(default_max_turns);
-            task.budget.max_wall_secs = wu
-                .spec
-                .budget
-                .and_then(|b| b.max_wall_secs)
-                .unwrap_or(default_max_wall);
+        if let Some(tier) = admitted.tier {
+            task.worker_hint.tier = tier;
         }
-        // ADR-0010 D6（P-3）: ready に入った時刻（DB の updated_at）からのバックオフ。
-        // 並列 WU の 2 本目以降（Task は Running）は 1 本目で済んでいるので見ない。
-        if !second_pass && task.attempts > 0 {
-            let delay = retry_backoff(
-                self.config.retry_backoff_base,
-                self.config.retry_backoff_max,
-                task.attempts,
-            );
-            if self.now_utc() < task.updated_at + delay {
-                tracing::debug!(task_id = %task.id, attempts = task.attempts, delay_ms = delay.as_millis() as u64, "retry backoff; not dispatching yet");
-                self.note_dispatch_wait(
-                    task.id,
-                    task_core::TaskWait::Backoff {
-                        until: rfc3339(task.updated_at + delay),
-                        cause: task_core::BackoffCause::Retry,
-                    },
-                );
-                return Ok(false);
-            }
-        }
-        // ADR-0070 D3（Phase 116）: インフラ都合の再試行のバックオフ（`RunSupervisor` の infra backoff。
-        // `task.attempts` に依らない別軸。上のバックオフとは独立にゲートする）。期限を過ぎたら
-        // このタスクへのゲートは外す（次に infra 失敗すればまた立て直す）。
-        if !second_pass && let Some(until) = self.supervisor.infra_backoff_until(task.id) {
-            if self.now_utc() < until {
-                tracing::debug!(task_id = %task.id, %until, "infra backoff; not dispatching yet");
-                self.note_dispatch_wait(
-                    task.id,
-                    task_core::TaskWait::Backoff {
-                        until: rfc3339(until),
-                        cause: task_core::BackoffCause::Infra,
-                    },
-                );
-                return Ok(false);
-            }
-            self.supervisor.clear_infra_backoff(task.id);
-        }
-        // ADR 2026-10-08-browser-prod-enablement D2: browser の前提（適合台帳）が無い・古いなら、lease・worker の
-        // 前に理由つきで止める（worker 起動後の infra_requeue を繰り返さない）。
-        if !second_pass
-            && Self::browser_prereq_applies(&task, is_planner_dispatch)
-            && self.browser_prereq_hold(&task)?
-        {
-            return Ok(false);
+        if let Some((max_turns, max_wall_secs)) = admitted.budget {
+            task.budget.max_turns = max_turns;
+            task.budget.max_wall_secs = max_wall_secs;
         }
         // ADR-0130 D3: 同じ repo で走っている run と expected write-set が強く重なれば、起動を次 tick に回す
         // （lease・遷移・attempts の前。見送りは `Ok(false)` だけ）。planner run は書き込みを予約しない。
@@ -940,7 +875,10 @@ impl Dispatcher {
         // ADR-0079 D7（Phase R3a）: 木の節点の worker の run は `result.json` の `decisions` で決定の要求を出せる。
         // ADR-0124 D4: 直行経路の implementation run にだけ worker への節を渡す。
         if current_wu.is_none() && !is_planner_dispatch {
-            extras.direct_route = direct_route.map(direct_route_context);
+            let route = task.routing.as_ref().and_then(|r| r.route.as_ref());
+            extras.direct_route = route
+                .filter(|_| admitted.direct_route)
+                .map(direct_route_context);
         }
         extras.decision_requests = !is_planner_dispatch
             && self.config.execution.limits.tree.enabled
@@ -1700,5 +1638,39 @@ pub(super) fn tier_label(tier: task_core::Tier) -> &'static str {
         task_core::Tier::Frontier => "frontier",
         task_core::Tier::Standard => "standard",
         task_core::Tier::Cheap => "cheap",
+    }
+}
+
+/// ADR 2026-11-14 dispatch-admission-order D2: WU の gate（dispatcher の非公開の型）を admit の要る値に落とす。
+fn admission_unit(gate: &WuDispatchGate) -> AdmissionUnit {
+    match gate {
+        WuDispatchGate::Atomic => AdmissionUnit::Atomic,
+        WuDispatchGate::RunWorkUnit(wu) => AdmissionUnit::WorkUnit(wu.spec.budget),
+        WuDispatchGate::RunPlanner { replan } => AdmissionUnit::Planner { replan: *replan },
+        WuDispatchGate::StartIntegration(_) => AdmissionUnit::StartIntegration,
+        WuDispatchGate::FinalReview => AdmissionUnit::FinalReview,
+        WuDispatchGate::Skip => AdmissionUnit::Skip,
+    }
+}
+
+/// ADR 2026-11-14 dispatch-admission-order D2: planner run かの組み合わせ・予算の上書き・再試行に要る値を、担当と
+/// execution gate の後の task と `[execution]` から読む（木の子 task かは `task_core::tree::is_tree_child`）。
+fn admission_task_values(task: &Task, execution: &ExecutionConfig) -> AdmissionTaskValues {
+    let routing = task.routing.as_ref();
+    AdmissionTaskValues {
+        gate_mode: execution.gate,
+        execution: routing
+            .and_then(|r| r.execution.as_ref())
+            .map(|d| (d.mode, d.source)),
+        tree_child: task_core::tree::is_tree_child(task),
+        route: routing
+            .and_then(|r| r.route.as_ref())
+            .map(|r| (r.route, r.shadow)),
+        tier_source: routing.map(|r| r.tier_source),
+        tier: task.worker_hint.tier,
+        budget: (task.budget.max_turns, task.budget.max_wall_secs),
+        planner_tier: execution.planner.tier,
+        planner_budget: (execution.planner.max_turns, execution.planner.max_wall_secs),
+        attempts: task.attempts,
     }
 }

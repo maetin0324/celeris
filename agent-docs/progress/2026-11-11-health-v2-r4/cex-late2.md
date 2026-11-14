@@ -142,15 +142,36 @@ repair 版は `("repair-build-1", Ready)` で、ほかは同じ。
 ### 変更（commit の件名）
 
 - `late-review: replan・repair の後に届く旧い最終 review の合格の反例試験を足す（今の実装で落ちる）`
+- `late-review: 再実行で反例の再現を確かめ、本体の修正が要るため plan_issue を申告したことを進捗に書く`
+- `late-review: 一時修正で試験の後半の合格を確かめ、plan_issue が届かなかった理由を進捗に書く`
 
 ### 未解決事項
 
 - 反例が成り立つ（上の観測）。人の `PUT /tasks/{id}/execution-plan`（`task-api` の `put_execution_plan`）と CoS の `put_plan_audited` も
   同じ `task_ops::execution::replan` を Task の状態を見ずに呼ぶ。そのため、本番でも最終 review 中の replan は、未完の unit を残したまま
   Task を Done にしうる（本番での再現は試していない。未確認）。
-- 新しい 2 本の後半（新しい unit の done の後の review だけが Done にする）の assert は、前半で落ちるため一度も実行されていない（未確認）。
+- 新しい 2 本の後半（新しい unit の done の後の review だけが Done にする）の assert は、今の HEAD では前半で落ちるため実行されない。
+  3 回目の run で本体に一時修正を当てて後半を実行し、合格を確かめた（下の「後半の確認」）。
 - この fixture では配送の行ができない（`NoMarker`）。`MergeQueued` の assert は今は行が無いので効いていない。
 - この unit の再実行（check の不合格の後）で同じ check を再実行した: 6 本中 4 本合格・新しい 2 本が同じ観測（`status=Done`、`c`／`repair-build-1` が Ready、`integrate-build` が Pending）で失敗、exit 100。原因は試験ではなく本体にある。`review_verdict.rs` と `review_spawn.rs` には有効な計画の版と照合する処理が無い（`execution_plan_active` を読むのは最終 review の主題の組み立てと repair の追加だけ）。`task-api` の `put_execution_plan` も Task の状態を見ずに `replan` を呼ぶ。この unit は本体を変えられないので、check は通せない。celeris に `plan_issue` を申告し、本体を直す leaf（上の提案 (a) か (b)）を計画に足すよう求めた。
+- 2 回目の run の `plan_issue` の申告は届かなかった。その run の `result.json` は `yield` と `summary` を両方持っていた。
+  `task-worker` の `interpret_result_text`（`result_report.rs`）は `summary` を `yield` より先に見るので、run は done として扱われた。
+  celeris は check を走らせ、WU を retry（2/2）に戻した。3 回目の run（この run）は `summary` を書かず `{"yield": {"plan_issue": …}}`
+  だけを書く。
+
+### 後半の確認（3 回目の run、一時変更は commit していない）
+
+試験の後半が本体の修正の受け入れの check として働くかを確かめるため、本体に次の一時修正を当てた。
+
+| 一時変更（本体） | 結果 |
+|---|---|
+| `review_verdict.rs` の `on_review_finished` で、`task.status != Status::Reviewing` の破棄の直後に「`work_units_for(task_id)` に done でない active な unit があれば、判定を捨て（`WorkerFinished.end = Cancelled`、run index も Cancelled）、`Trigger::Interrupt` で Task を Reviewing → Ready に戻して return」を足す | `cex_late_completion::` の 6 本すべて合格（`Summary 6 tests run: 6 passed`、exit 0）。新しい 2 本は後半（新しい unit の done の後の reviewer run が `c.txt`／`r.txt` を含む候補で Done にする、Done の時点で全 unit が done）まで通った。既存の 4 本も合格 |
+
+一時変更は `git checkout -- crates/task-dispatch/src/dispatcher/review_verdict.rs` で戻した。戻した後の同じ check は
+6 本中 4 本合格・新しい 2 本が手順 6 の最初の assert で失敗（exit 100）。
+
+この一時修正は試験の確認のためのもので、修正の案ではない（`Trigger::Interrupt` は人のコメントの遷移で、reason が `comment` になる）。
+本体を直す leaf では、上の提案 (a)（計画の版の束縛）か (b)（replan で Task を Running に戻す）を ADR に書いてから実装する。
 
 ### 提案
 

@@ -23,8 +23,7 @@ updated: 2026-11-14
   store の拒否（remote・dir の作成、local→remote への更新、remote の行を有効にする更新。拒否は何も書かない）、
   旧 reason の alias。schema を巻き戻す既存の試験（cluster_job・cron・roadmap・script_domains）は新しい列に合わせた。
 - 生成物: `docs/api/v1/event.schema.json`（reason の enum 名。task-core の schema 試験が要求）、
-  `control-ts/fixtures/project_controller/invariants.jsonl` と `control-ts/src/domains/project_controller.ts`・同 test の
-  snapshot の `auto_integrate` 欄（`SnapshotProject` の欄を消したため）。
+  `control-ts/fixtures/project_controller/invariants.jsonl`（`SnapshotProject` の欄を消したため）。`control-ts/src/` の型は未変更（後続 unit の範囲）。
 
 ## 証拠（提出時の HEAD で実行。基準は $CELERIS_WU_BASE）
 - `cargo test -p task-core` → lib 1357 passed、script_fixtures 15 passed（下の「未解決」の clippy 注記を参照）
@@ -33,10 +32,6 @@ updated: 2026-11-14
 
 ## 未解決
 - clippy の既存の指摘（`cluster_job/tests.rs`・`chat/store_tests.rs`）は同じ変更で直した。`cargo clippy -p task-core --all-targets -- -D warnings` と `cargo fmt --all -- --check` は exit 0。
-- 範囲の check が task-core・進捗・ADR 以外を許さないため、次の生成物は更新していない。次の unit が再生成する:
-  `docs/api/v1/event.schema.json`（`RepoNotEnabled` への改名で変わる。`UPDATE_SCHEMA=1 cargo test -p task-core`）と、
-  `control-ts/` の project_controller の fixture・型（Project の auto_integrate 削除）。
-  それまで `store::tests::event_row_schema_matches_committed` は schema 差分で落ちる。
 - `cargo clippy --workspace -- -D warnings` は他 crate の置き換え後に通す。
 
 ## 本番への移行

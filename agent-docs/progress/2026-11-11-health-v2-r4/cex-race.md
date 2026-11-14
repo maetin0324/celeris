@@ -172,22 +172,92 @@ fix-verdict（`review_verdict.rs` の `on_review_finished`）が行う。この 
 - `bash scripts/dev/test-affected.sh` はこの unit では走らせない。反例の試験が本体の修正まで落ちるので exit 0 にならない。
   fix-verdict が本体を直した後に走らせる。
 
+## fix-verdict: 閉じた reviewer run の遅れた判定を捨てる（2026-11-14）
+
+結論: `review_verdict.rs` の `on_review_finished` を直した。reviewer run を伴う結果を受けたら、遷移・event・`runs` 行の更新より
+前に `run_index_get` でその run の行を読み、行があって `running` でなければ結果を捨てる。反例の試験
+`cex_restart_old_reviewer_pass_after_ownerless_close_is_ignored` は試験 file を変えずに合格する。基準は `$CELERIS_WU_BASE`。
+
+### 変更（commit の件名）
+
+- `fix-verdict: ADR ownerless-running-runs addendum (discard a closed reviewer run's late verdict in on_review_finished)`
+  — `agent-docs/adr/2026-10-03-ownerless-running-runs.md` に付記 2026-11-14 を足し、D3 の「持ち主が後から書く
+  `WorkerFinished` はそのまま追記される」の一文に置き換えの注を付けた。
+- `fix-verdict: on_review_finished discards a reviewer run's late result once its runs row is closed`
+  — `on_review_finished` の部署の lead session の usage の記録の後、`task.status != Reviewing` の判定の前に照合を 1 つ足した。
+  捨てるとき: Task の遷移・`ReviewVerdict`・`ReviewerPassed`・`RequiredChecksEvaluated`・delivery の判定に使わない。
+  2 件目の `WorkerFinished` を書かず、`runs` 行を書き換えない。take した `ReviewEntry` を放す（review lock が解ける）。
+  `defer_review` の持ち越しは置かない。tracing の warn に run id・review run id・行の status を出す。行が無いとき・
+  `running` のときは従来どおり。
+- この節。試験 file（`crates/task-dispatch/src/dispatcher/tests/`）は変えていない。
+
+### 作業前 brief
+
+1. 根本原因: `on_review_finished` が判定を捨てる条件は `task.status != Reviewing` と `target_stale` だけで、reviewer run の
+   `runs` 行（lease を持たない reviewer run の生存の記録）が別の instance の ownerless の照合で閉じたかを見ない。
+2. 責務 owner: `crates/task-dispatch/src/dispatcher/review_verdict.rs` の `on_review_finished`（判定を適用する所）。
+3. 既存の再利用先: `TaskStore::run_index_get`（`ownerless_runs.rs` の `reconcile_ownerless_work_units` と同じ読み方）、
+   この関数の先頭の `reviewer_quota`（`settle_quota` の 1 回の精算）。試験は old-review の反例の試験をそのまま使う。
+4. 選択肢: (a) `on_review_finished` で行を読んで捨てる（採用。owner で直り、D3 の判定は変えない）。(b) D3 が review lock を
+   取れない reviewer run を閉じない（D3 の判定の材料と反例の試験の前提を変えるので採らない）。(c) store の比較更新で判定の
+   書き込みと照合を 1 つの transaction にする（store の高 risk の class。提案に回す）。
+5. 新しい状態・分岐・fallback・port: 分岐 1 つ（閉じた行の結果を捨てる）。状態・fallback・port は無し。
+6. 撤去対象: ADR D3 の「持ち主が後から書く `WorkerFinished` はそのまま追記される（行は終端のまま）」の決定（付記で
+   置き換え）。コード・試験の撤去は無し。
+7. 不変条件: 閉じた reviewer run の結果は Task の遷移・判定・`WorkerFinished`・`runs` 行に使われない。確かめる試験は
+   `cex_restart_old_reviewer_pass_after_ownerless_close_is_ignored`。
+
+### quota の扱いとその理由
+
+捨てる場合も、結果の usage で `settle_quota` を 1 回だけ通し（関数の先頭の `reviewer_quota`。変えていない）、A の
+`QuotaEstimated` を書く。
+
+- 旧 instance の `QuotaActivity` に A が開いたまま残ると、同じ account の重なりの判定が狂う（ADR-0074 D4）。閉じるのは
+  `quota_begin` を呼んだ旧 instance だけができる。
+- ownerless の照合（新 active の `reconcile_ownerless_runs` → `close_aborted_run`）は quota を精算しない。閉じた側の
+  `WorkerFinished` は usage を持たず、`QuotaEstimated` も書かない。新 active の `QuotaActivity` に A は無い。したがって
+  旧 instance の 1 回が A の唯一の精算で、二重に数えない（`QuotaEstimated` は同じ run id の最後の event が有効なので、
+  仮に重なっても畳まれる）。
+- usage 無しの解放（`release_quota_if_tracked`）は採らない。A の重みが 0 になり、同じ account の group が閉じるときに
+  他の run が A の消費を按分で負う。
+- `runs` 行は書き換えないので、A の `runs.usage_json` は閉じた側の値（usage 無し）のまま残る。案件の USD 上限は `runs` 行
+  を読む（`project_run_usage_between`）ので、adapter・model の入った A の行は費用不明として数えられる（fail-closed。試験では
+  確かめていない。未解決に書いた）。
+
+### 照合を一時的に外した確認
+
+一時変更は `git checkout --` で戻し、commit していない（戻した後に `git status --short` は空、`grep -rn "GUARD-OFF" crates/` は 0 件）。
+
+| 一時変更 | 結果 |
+|---|---|
+| 足した照合の条件に `&& false` を足す（照合を無効にする） | `cargo nextest run -p task-dispatch --no-fail-fast --no-tests=fail -E 'test(/cex_lease_restart::/)'` → exit 100。11 本中 10 本合格、`cex_restart_old_reviewer_pass_after_ownerless_close_is_ignored` が `cex_lease_restart.rs:615` の `A's late pass was used after A was closed as an ownerless run`（A の `runs` 行 `Some(Completed)`、A の `WorkerFinished` 2 件、`Transitioned{Reviewing → Done, review_pass}`）で落ちた。old-review の節の観測と同じ |
+| 戻した後（照合あり） | 同じ command で 11 本すべて合格 |
+
+### 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+
+- `cargo nextest run -p task-dispatch --no-fail-fast --no-tests=fail -E 'test(/cex_/) | test(/ownerless/) | test(/review/)'`
+  → exit 0、363 本すべて合格。
+- `bash scripts/dev/test-affected.sh` → exit 0、3944 本すべて合格（11 skipped）。対象 crate は celeris・celeris-campaign・
+  celerisctl・llm-proxy・task-dispatch。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `git diff --stat $CELERIS_WU_BASE HEAD -- crates/task-dispatch/src/dispatcher/tests` → 差分なし（試験 file は変えていない）。
+
 ### 未解決
 
-- 反例の試験は fix-verdict が `on_review_finished` を直すまで落ちる。fix-verdict の check で `-E 'test(/cex_lease_restart::/)'`
-  と `bash scripts/dev/test-affected.sh` を走らせる。`cex_run_finish_and_work_unit_check_finish_in_one_tick` の負荷依存は
-  replan v2 の old-review の節で直した。
-- 反例（今の実装で成り立つ）: 新 active が reviewer run A を ownerless として閉じた後に、A を持っていた旧 draining instance に
-  A の合格が届くと、`on_review_finished` がその合格で Task を Done にし、A の `WorkerFinished` を 2 件目として書き、`runs` 行を
-  cancelled から completed に書き換える。この unit の範囲（本体を変えない）では直さない。試験は assert を残して落ちる。
+- 反例（旧 reviewer A の遅れた合格）は fix-verdict が `on_review_finished` で直した（fix-verdict の節）。
+  `cex_run_finish_and_work_unit_check_finish_in_one_tick` の負荷依存は replan v2 の old-review の節で直した。
+- 読みと書きの間の窓: fix-verdict の照合は `run_index_get` で行を読んでから判定を書く。その間に別の instance の
+  ownerless の照合が行を閉じると、遅れた判定は今までどおり適用される（worker run の `run_holds_lease` の照合と同じ水準）。
+  試験は無い。
+- 捨てた reviewer run の usage は `runs` 行に載らない（閉じた側の usage 無しのまま）。案件の USD 上限はこの run を費用不明として
+  数えるはず（fail-closed。`project_run_usage_between` の述語を読んだだけで、試験では未確認）。`QuotaEstimated` には載る。
+  ownerless の照合で閉じた run の usage が `runs` 行に残らないのは、この変更の前から同じ（D3 の閉じは usage を持たない）。
 
 ### 提案
 
-- owner は `dispatcher/review_verdict.rs` の `on_review_finished`（判定を適用する所）。A の `runs` 行が既に閉じていれば
-  （別の instance が ownerless として閉じた）、判定・遷移・`WorkerFinished` を書かずに捨て、lock を放して Task を reviewing の
-  まま残す（次の review が決める）。行の照合は判定の適用と同じ書き込みの中で行う方が、照合と書き込みの間に他の instance が
-  閉じる競合を残さない（store の比較更新が要るなら store の高 risk の class に当たる）。quota の精算を捨てた run でも行うかは
-  修正の unit で決める。
-- 別の選択肢は、ownerless の照合（`reconcile_ownerless_runs`）が review lock を取れない reviewer run を閉じないこと（lock を持つ
-  process が生きている印として使う）。この場合は試験の手順 2 の assert（A を閉じる）を変える必要があり、D7 の表の行の前提も
-  変わるので、replan で決める。
+- store の比較更新（fix-verdict の読みと書きの間の窓を閉じる）: 判定の適用（`apply_transition_with_events`・`complete_plan`
+  と reviewer run の `WorkerFinished`・`run_index_finish`）を、reviewer run の `runs` 行が `running` であることを同じ writer
+  transaction の中で照合してから書く store の API にする。行が閉じていれば何も書かずに知らせる。`crates/task-core/src/store/`
+  の高 risk の class に当たるので、設計 brief と設計 review を通す別の変更で行う。
+- 別の選択肢（採らなかった）: ownerless の照合（`reconcile_ownerless_runs`）が review lock を取れない reviewer run を閉じない
+  （lock を持つ process が生きている印として使う）。D3 の判定の材料と、反例の試験の手順 2 の前提（A を閉じる）が変わる。

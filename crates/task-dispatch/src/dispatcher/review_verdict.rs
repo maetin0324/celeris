@@ -1,6 +1,7 @@
 //! review の判定の適用（`on_review_finished`・`try_review_repair`）。Plan の子の挿入と `ReviewPass` は同じ transaction に入れる。ADR-0082 の L3。
 
 use super::*;
+use crate::review_decision;
 use crate::run_settlement::run_end_record;
 
 /// health の Error・往復・修復の上限の使い切りで review を止める（health enforcement loop D3.4・D4.3・D4.4）。file は
@@ -141,35 +142,21 @@ impl Dispatcher {
         // ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D1: reviewer 条件を全部合格にしたら、その
         // snapshot（必須検査と同じ束縛）に束ねて残す。検査後の stale でも reviewer が見た commit と基底は確定して
         // いるので先に残す（次の同期で target の進みが候補の差分と重ならなければ reviewer を省く材料）。
+        if let Some(reviewer_criteria) =
+            review_decision::reviewer_criteria_passed(&task.acceptance, &outcome.verdicts)
         {
-            let reviewer_criteria: Vec<usize> = task
-                .acceptance
-                .iter()
-                .enumerate()
-                .filter(|(_, c)| matches!(c.check, task_core::Check::Reviewer))
-                .map(|(idx, _)| idx)
-                .collect();
-            if !reviewer_criteria.is_empty()
-                && reviewer_criteria.iter().all(|idx| {
-                    outcome
-                        .verdicts
-                        .iter()
-                        .any(|v| v.criterion_idx == *idx && v.pass)
-                })
-            {
-                for result in &outcome.required_checks {
-                    if let Some(binding) = &result.binding {
-                        self.store.append_event(
-                            task_id,
-                            &Event::ReviewerPassed {
-                                review_run: review_run.clone(),
-                                repo_id: binding.repo_id,
-                                target_sha: binding.target_sha.clone(),
-                                reviewed_sha: binding.reviewed_sha.clone(),
-                                criteria: reviewer_criteria.clone(),
-                            },
-                        )?;
-                    }
+            for result in &outcome.required_checks {
+                if let Some(binding) = &result.binding {
+                    self.store.append_event(
+                        task_id,
+                        &Event::ReviewerPassed {
+                            review_run: review_run.clone(),
+                            repo_id: binding.repo_id,
+                            target_sha: binding.target_sha.clone(),
+                            reviewed_sha: binding.reviewed_sha.clone(),
+                            criteria: reviewer_criteria.clone(),
+                        },
+                    )?;
                 }
             }
         }
@@ -345,58 +332,46 @@ impl Dispatcher {
         }
         // health D6.4: policy の file を変えた candidate は人の承認を待つ・承認・却下を verdict に足す。
         self.policy_review_gate(&task, completed_review_run.as_deref(), &mut outcome)?;
-        let all_pass = outcome.all_pass();
         // ADR 2026-11-05-a9-llm-pilot-findings D4: 決定的な検査が落ちているのに reviewer が合格を返した
-        // 食い違いは、検査の結果を優先して done にせず（上の `all_pass` は全 verdict の AND）、event に残す。
-        let discrepancy = review_discrepancy(&task, &outcome.verdicts);
+        // 食い違いは、検査の結果を優先して done にせず（`passed` は失敗一覧が空のときだけ）、event に残す。
+        // ADR-0034 D2（監査 M-1〜M-3）: `fail_message` はレビュー不合格の理由（この run が `Status::Failed` に直結した
+        // 場合の bad_news の材料。`Status::Ready` に戻るだけの途中の失敗では使わない）。
+        let review_decision::ReviewJudgement {
+            passed: all_pass,
+            fail_message: review_fail_message,
+            discrepancy,
+        } = review_decision::judge_review(review_decision::ReviewFacts {
+            acceptance: &task.acceptance,
+            verdicts: &outcome.verdicts,
+            discrepancy: review_discrepancy(&task, &outcome.verdicts),
+        });
         // ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D2: reviewer を省いた review は worker の
-        // run id を review run として delivery に登録している（`delivery::begin` と同じ既定）。
+        // run id を review run として delivery に登録している（`delivery::begin` と同じ既定。`review_run` と同じ値）。
         if let Some(old) = self.store.delivery_get(task_id)?
-            && old.worker_run == run_id
-            && completed_review_run.as_deref().unwrap_or(run_id.as_str()) == old.review_run
-            && old.state == task_core::DeliveryState::Reviewing
-            && let Some(verdict) = outcome
-                .verdicts
-                .iter()
-                .find(|v| v.criterion_idx == old.criterion_idx)
+            && let Some(verdict) = review_decision::delivery_verdict(
+                &review_decision::DeliveryRow {
+                    worker_run: &old.worker_run,
+                    review_run: &old.review_run,
+                    reviewing: old.state == task_core::DeliveryState::Reviewing,
+                    criterion_idx: old.criterion_idx,
+                },
+                &run_id,
+                &review_run,
+                all_pass,
+                &outcome.verdicts,
+            )
         {
             let mut next = old.clone();
-            next.decision = Some(all_pass && verdict.pass);
-            next.state = if all_pass && verdict.pass {
+            next.decision = Some(verdict.pass);
+            next.state = if verdict.pass {
                 task_core::DeliveryState::MergeQueued
             } else {
                 task_core::DeliveryState::Blocked
             };
-            next.detail = outcome
-                .verdicts
-                .iter()
-                .filter(|v| !v.pass || v.criterion_idx == old.criterion_idx)
-                .map(|v| v.reason.clone())
-                .collect::<Vec<_>>()
-                .join("\n");
-            let review_reason = verdict
-                .reason
-                .strip_prefix(&format!("reviewer({}): ", old.review_run))
-                .unwrap_or(&verdict.reason);
-            if review_reason.trim_start().starts_with("[needs-human]") {
-                next.detail = format!("{}\n{}", review_reason, next.detail);
-            }
+            next.detail = verdict.detail;
             self.store.delivery_save(Some(&old), &next)?;
         }
 
-        // ADR-0034 D2（監査 M-1〜M-3）: レビュー不合格の理由（この run が `Status::Failed` に直結した場合の
-        // bad_news の材料。`Status::Ready` に戻るだけの途中の失敗では使わない）。
-        let review_fail_message = if all_pass {
-            None
-        } else {
-            let reasons: Vec<String> = outcome
-                .verdicts
-                .iter()
-                .filter(|v| !v.pass)
-                .map(|v| v.reason.clone())
-                .collect();
-            Some(reasons.join("; "))
-        };
         let reviewer_index_status = match &reviewer_finished {
             Some(Event::WorkerFinished { outcome, .. })
                 if outcome.starts_with("error(retryable=false)") =>
@@ -636,20 +611,15 @@ impl Dispatcher {
         if let Some(outcome) = review_limits::stop_on_error(store, task, verdicts, events)? {
             return Ok(Some(outcome));
         }
-        if task.kind != TaskKind::Execute {
+        // Execute の task だけを修復する。D16 付記（G4-S1）: 決定的な不合格があれば、reviewer run を起こさなかった
+        // `Check::Reviewer` の項目は分類と `failing_details` から外す（`review_decision::review_repair_class`）。
+        let failing = review_decision::failed_checks(review_decision::verdict_results(
+            &task.acceptance,
+            verdicts,
+        ));
+        let Some((class, failing)) = review_decision::review_repair_class(task.kind, failing)
+        else {
             return Ok(None);
-        }
-        // D16 付記（G4-S1）: 決定的な不合格（`Check::Reviewer` でない項目の不合格）があれば、reviewer run を起こさなかった
-        // `Check::Reviewer` の項目（reason が `REVIEWER_NOT_EVALUATED_REASON`）は reviewer の判定ではないので、分類と
-        // `failing_details` から外す。reviewer が実際に不合格にした項目（reason が違う）は数える（混ざれば `Substantive`）。
-        let mut failing = crate::review::failed_checks(task, verdicts);
-        if failing.iter().any(|f| f.check != Check::Reviewer) {
-            let not_evaluated = crate::review::REVIEWER_NOT_EVALUATED_REASON;
-            failing.retain(|f| !(f.check == Check::Reviewer && f.reason == not_evaluated));
-        }
-        let class = match task_core::classify_review_failure(&failing) {
-            task_core::RepairDecision::Repairable(c) => c,
-            task_core::RepairDecision::Substantive => return Ok(None),
         };
         let health = class == task_core::RepairClass::Health;
         if health && let Some(outcome) = review_limits::stop_on_repeat(store, task, events)? {
@@ -670,9 +640,12 @@ impl Dispatcher {
         let (bucket, same_class) =
             super::phase_integration::check_item::repair_count(class, &failing_details, &repairs);
         let limits = &self.config.execution;
-        if repairs.len() as u32 >= limits.max_repairs
-            || same_class as u32 >= limits.max_repairs_per_class
-        {
+        if review_decision::repair_cap_reached(review_decision::RepairUsage {
+            repairs: repairs.len(),
+            max_repairs: limits.max_repairs,
+            same_class,
+            max_per_class: limits.max_repairs_per_class,
+        }) {
             let used = (
                 repairs.len(),
                 limits.max_repairs,

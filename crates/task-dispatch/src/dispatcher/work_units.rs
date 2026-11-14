@@ -2011,24 +2011,30 @@ impl WorkUnitCheckRun {
         &self,
         result: &Result<RunOutcome, AdapterError>,
     ) -> Option<WorkUnitCheckFailure> {
-        let failed: Vec<task_core::FailedWorkUnitCheck> = self
-            .results
-            .iter()
-            .enumerate()
-            .filter(|(_, (pass, _))| !pass)
-            .map(|(i, (_, detail))| {
-                let (cmd, expect_exit, scope) = self
-                    .checks
-                    .get(i)
-                    .map(|c| (c.cmd.clone(), c.expect_exit, c.scope))
-                    .unwrap_or_default();
-                task_core::FailedWorkUnitCheck {
-                    cmd,
-                    expect_exit,
-                    detail: scope_check_detail(scope, detail),
-                }
-            })
-            .collect();
+        // D4 review-result: 失敗一覧は最終 review・段の統合と同じ `review_decision::failed_checks` で作る。
+        let results = self.results.iter().enumerate().map(|(i, (pass, detail))| {
+            let (cmd, expect_exit, scope) = (self.checks.get(i))
+                .map(|c| (c.cmd.clone(), c.expect_exit, c.scope))
+                .unwrap_or_default();
+            crate::review_decision::CheckResult {
+                check: Check::Command { cmd, expect_exit },
+                pass: *pass,
+                reason: scope_check_detail(scope, detail),
+                repair_hint: None,
+            }
+        });
+        let failed: Vec<task_core::FailedWorkUnitCheck> =
+            (crate::review_decision::failed_checks(results).into_iter())
+                .filter_map(|f| match f.check {
+                    // WU の check は上で `Check::Command` だけを作る。
+                    Check::Command { cmd, expect_exit } => Some(task_core::FailedWorkUnitCheck {
+                        cmd,
+                        expect_exit,
+                        detail: f.reason,
+                    }),
+                    _ => None,
+                })
+                .collect();
         if failed.is_empty() {
             return None;
         }

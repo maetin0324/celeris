@@ -4,6 +4,7 @@ use super::route_select::{RouteInput, RoutePick, RouteTrace};
 use super::token_budget::run_watch;
 use super::*;
 use crate::review::RepoHealth;
+use crate::review_decision;
 use task_worker::check_slots::CheckLimits;
 
 /// ADR-0118 D4 付記 / ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3・D4: 直近の遷移（自動の
@@ -1167,10 +1168,7 @@ impl Dispatcher {
                     return Ok(None);
                 }
             };
-            let overlap: Vec<&String> = target_files
-                .iter()
-                .filter(|f| task_files.contains(f))
-                .collect();
+            let overlap = review_decision::reviewer_reuse_overlap(&target_files, &task_files);
             if !overlap.is_empty() {
                 self.store.append_event(
                     task.id,
@@ -1181,11 +1179,7 @@ impl Dispatcher {
                             s.name,
                             s.target_ref,
                             s.target_sha,
-                            overlap
-                                .iter()
-                                .map(|f| f.as_str())
-                                .collect::<Vec<_>>()
-                                .join(", ")
+                            overlap.join(", ")
                         ),
                     ),
                 )?;
@@ -1257,35 +1251,27 @@ impl Dispatcher {
             .into_iter()
             .map(|(_, e)| e)
             .collect();
-        let (count, last, halted) = pre_review_stale_state(&events);
-        if count <= task_ops::delivery::MAX_TARGET_RESYNCS {
-            self.coord.clear_review_resync_halt(task_id);
-            return Ok(false);
-        }
-        let (review_run, repo_id, reviewed, target) = match halted.or(last) {
-            Some(Event::ReviewTargetAdvanced {
-                review_run,
-                repo_id,
-                reviewed_sha,
-                target_sha,
-                ..
-            })
-            | Some(Event::ReviewResyncHalted {
-                review_run,
-                repo_id,
-                reviewed_sha,
-                target_sha,
-                ..
-            }) => (
-                review_run.clone(),
-                *repo_id,
-                reviewed_sha.clone(),
-                target_sha.clone(),
-            ),
-            _ => return Ok(false),
+        let (first, halted) = match review_decision::resync_gate(
+            pre_review_stale_state(&events),
+            task_ops::delivery::MAX_TARGET_RESYNCS,
+        ) {
+            review_decision::ResyncGate::Proceed { clear_halt } => {
+                if clear_halt {
+                    self.coord.clear_review_resync_halt(task_id);
+                }
+                return Ok(false);
+            }
+            review_decision::ResyncGate::Halt { first, halted } => (first, halted),
         };
+        let review_decision::HaltedReview {
+            review_run,
+            repo_id,
+            reviewed_sha: reviewed,
+            target_sha: target,
+            resyncs: count,
+        } = halted;
         let now = self.now_utc();
-        if halted.is_none() {
+        if first {
             tracing::warn!(%task_id, count, %reviewed, %target, "review target kept moving; review halted until the target is quiet or a human resumes it (ADR 2026-10-27 D3)");
             self.store.append_event(
                 task_id,
@@ -1321,7 +1307,11 @@ impl Dispatcher {
                 tracing::error!(%task_id, %error, "failed to record the review resync halt notice");
             }
         } else if let Some(committed) = self.target_commit_time(task, repo_id)
-            && now.unix_timestamp() - committed >= self.config.review_resync_quiet.as_secs() as i64
+            && review_decision::target_quiet(
+                now.unix_timestamp(),
+                committed,
+                self.config.review_resync_quiet.as_secs(),
+            )
         {
             tracing::info!(%task_id, "review target quiet; resuming the halted review (ADR 2026-10-27 D4)");
             self.store.append_event(

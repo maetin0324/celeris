@@ -512,7 +512,7 @@ async fn tick_until_review_delivered(d: &mut Dispatcher) -> bool {
 /// reviewer run B の結果だけで決まる（A は合格・B は不合格にして区別する。Task は Done にならず、`review_fail` で
 /// ready に戻る）。
 ///
-/// 作る順序: 今の実装では、旧 instance が A の `ReviewEntry` と一緒に task ごとの review lock
+/// 作る順序: 旧 instance が A の `ReviewEntry` と一緒に task ごとの review lock
 /// （`runs/.review-<id>.lock`）を判定の保存まで持つので、新しい active は A を閉じた後も B を起こせない
 /// （`spawn_review` の `try_lock` が WouldBlock）。B が起きるのは、旧 instance が A の完了を `drain_completions` で
 /// 受けて lock を放した後になる。そこで D7 の「B を始めた後に A の合格が届く」順序のうち lock の下で作れる順序
@@ -1036,6 +1036,13 @@ async fn cex_two_parallel_work_unit_runs_finishing_in_one_tick_lose_no_update() 
 ///
 /// 既存試験で検出できない理由: WU の検査の試験（`drain_hand_off.rs`・`integration_check_progress.rs`）は検査の完了と
 /// 別の run の完了を同じ tick に揃えず、検査中の WU（`checking`）と走っている兄弟の WU が同時に終わる順序を作らない。
+///
+/// 待ち方（出来事待ち）: tick の前に `a` の検査の完了を、検査の列の最後の項目の `WorkUnitCheckFinished`
+/// （`index + 1 == total`）が store に載ることで待つ。検査の task は最後の項目の `record_finish` から
+/// `Completion::WorkUnitChecks` の送信まで await を挟まないので、current-thread の runtime の試験の task がこの event を
+/// 見た時点で完了は channel に入っている。以前は flag を置いた後に run `b` の完了（`release_held_runs_without_ticking`
+/// の 200 ms の譲り）だけを待って tick したので、`sleep 0.05` の loop の検査がその間に終わらないと `report.finished`
+/// が 1 になって落ちた（load average 19.6 で 1 回観測）。
 #[tokio::test]
 async fn cex_run_finish_and_work_unit_check_finish_in_one_tick() {
     let repo = tempfile::tempdir().unwrap();
@@ -1080,6 +1087,17 @@ async fn cex_run_finish_and_work_unit_check_finish_in_one_tick() {
     // 検査と run を同時に終わらせ、両方の完了が channel に溜まってから 1 回 tick する。
     std::fs::write(&flag, "").unwrap();
     release_held_runs_without_ticking(&adapter).await;
+    let a_checks_done = |store: &Arc<dyn TaskStore>| {
+        events_of(store, id).iter().any(|e| {
+            matches!(e, Event::WorkUnitCheckFinished { key, index, total, .. }
+                if key == "a" && index + 1 == *total)
+        })
+    };
+    let deadline = Instant::now() + STATE_WAIT_GUARD;
+    while !a_checks_done(&store) && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(a_checks_done(&store), "the checks of a did not finish");
     let report = d.tick().unwrap();
     assert_eq!(report.finished, 2, "{report:?}");
 

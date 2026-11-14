@@ -504,9 +504,8 @@ pub fn transition(s: &StateView, t: &Trigger) -> Result<Outcome, InvalidTransiti
             }
         }
 
-        // ADR-0072 D16（Phase E4）: repair は attempts を消費しない（`ReviewFail` と違い
-        // `retry_or_fail` を通さない）。ADR 2026-11-14-review-verdict-after-plan-reopen D3: 計画が開き直された review の
-        // 判定の破棄も同じ形（判定ではないので試行に数えない）。
+        // ADR-0072 D16（Phase E4）: repair は attempts を消費しない（`ReviewFail` と違い `retry_or_fail` を通さない）。
+        // 計画が開き直された review の判定の破棄も同じ形（ADR 2026-11-14-review-verdict-after-plan-reopen D3）。
         Trigger::ReviewRepair | Trigger::ReviewPlanReopened => {
             if s.status == Status::Reviewing {
                 Ok(Outcome {

@@ -104,8 +104,31 @@ G-proto は確認のための一時変更で、修正の案ではない（A の 
 - `cargo fmt --all -- --check` → exit 0。
 - `git diff --stat $CELERIS_WU_BASE HEAD -- ':!crates/task-dispatch/src/dispatcher/tests' ':!agent-docs'` → 差分なし（本体は変えていない）。
 
+### 2 回目の run: check の不合格の確認（2026-11-14）
+
+前回の run の後、celeris の check 2 本（`cargo nextest run -p task-dispatch --no-fail-fast --no-tests=fail -E 'test(/cex_lease_restart::/)'`
+と `bash scripts/dev/test-affected.sh`）が exit 100 で落ちた。原因は上の観測と同じで、新しい試験が A の合格による
+`Reviewing → Done (review_pass)` で落ちる。
+
+- 提出時の HEAD で同じ check を走らせ直した: `cargo nextest run -p task-dispatch --no-fail-fast --no-tests=fail -E 'test(/cex_lease_restart::/)'`
+  → exit 100。`cex_restart_old_reviewer_pass_after_ownerless_close_is_ignored` が同じ assert（`A's late pass was used after A
+  was closed as an ownerless run`、A の `runs` 行 `Some(Completed)`、A の `WorkerFinished` 2 件）で落ちた。
+- `review_verdict.rs` の `on_review_finished` を読み直した。判定を捨てる条件は `task.status != Status::Reviewing` と
+  `target_stale` だけで、reviewer run の `runs` 行が閉じたかは見ていない。`crates/celeris/src/instance.rs` の `step` は
+  自分の行が消えると `register_again` で登録し直すだけで、手元の完了を捨てない。反例は本番の構成でも成り立つ。
+- この unit は本体（`cfg(test)` の外）を変えないので、試験をどう直しても check は exit 0 にならない。done を返して
+  再試行しても同じ結果になるため、この run は計画の問題（`plan_issue`）として申告し、修正の unit（repair）か replan に回す。
+- 同じ実行で、base からある `cex_run_finish_and_work_unit_check_finish_in_one_tick` も 1 回落ちた（`cex_lease_restart.rs`
+  の `assert_eq!(report.finished, 2)`、left 1・right 2、`drain_completions` に 477 ms、host の load average 19.6）。
+  単独で 3 回走らせると 3 回とも合格した（exit 0）。この試験は flag を置いた後に run `b` の完了だけを待って tick するので、
+  WU `a` の検査（`sleep 0.05` の loop）の完了がその tick に間に合わないと落ちる。この unit の範囲外で、変えていない。
+- `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0、
+  `sh "$CELERIS_WU_SCOPE_PATHS"` → この 2 file だけ、本体の差分なし。
+
 ### 未解決
 
+- `cex_run_finish_and_work_unit_check_finish_in_one_tick` は負荷の下で落ちうる（上の 2 回目の run の節）。修正の unit の
+  check（`-E 'test(/cex_lease_restart::/)'`）を巻き込むので、検査の完了を出来事で待つ形に直す unit を別に置くとよい。
 - 反例（今の実装で成り立つ）: 新 active が reviewer run A を ownerless として閉じた後に、A を持っていた旧 draining instance に
   A の合格が届くと、`on_review_finished` がその合格で Task を Done にし、A の `WorkerFinished` を 2 件目として書き、`runs` 行を
   cancelled から completed に書き換える。この unit の範囲（本体を変えない）では直さない。試験は assert を残して落ちる。

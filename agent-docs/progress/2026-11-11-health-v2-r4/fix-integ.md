@@ -138,18 +138,27 @@ sqlite3 -readonly <本番 DB の path> "SELECT w.task_id, w.key FROM work_units 
 
 commit: 「fix-integ: 統合の完了（統合 WU の done・promote・PhaseIntegrated・Task の遷移）を 1 つの transaction で書く」、
 「fix-integ: 遷移と WU の行を 1 transaction で書く store の実装を 1 つにする（apply_transition_with_events と work_unit_transition の重複を畳む）」、
-「fix-integ: 進捗に提出時の HEAD の検査結果を書く」。基準は `$CELERIS_WU_BASE`。
+「fix-integ: 進捗に提出時の HEAD の検査結果を書く」、
+「fix-integ: repo health の責務の増加を出さない（ready_promotions を phase_integration.rs へ移し、worktree の削除を finish に戻し、reconcile_tree_units の昇格の重複を promote_newly_ready に畳む）」、
+「fix-integ: 進捗の attempt 2 の節で WU の base を件名で書く」、この節を書いた commit。基準は `$CELERIS_WU_BASE`。
+下の検査は attempt 2 の最後のコードの commit の後に実行した（その後の commit は この進捗の file だけ）。
 
-- `cargo nextest run -p task-dispatch -E 'test(cex_integration_restart) | test(pause_after_design_blocks_with_awaiting_human)'`:
-  exit 0、4 passed（試験 7、`cex_integration_restart_keeps_the_stage_pause`、試験 6、`pause_after_design_blocks_with_awaiting_human`）。
-- `cargo nextest run -p task-core -E 'test(apply_transition_with_work_units) | test(work_unit_transition)'`: exit 0、2 passed。
-- `bash scripts/dev/test-affected.sh`: exit 0。8497 tests run: 8497 passed、23 skipped。web の typecheck・unit、ts-verify も通った。
-  repo health は verdict=pass、fail_grade=0、new=1（`host_maintenance.rs` の `migration.remnant` の warning。この変更とは無関係）、
-  worsened=0。
-- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
-- `sh "$CELERIS_WU_SCOPE_PATHS"`: exit 0。変えた path は ADR・この進捗・`crates/task-core/src/store/` の 6 file・
-  `crates/task-dispatch/src/dispatcher/` の 3 file。
+- 計画の check 0: `awk … | grep -q 'PhaseIntegrated' && cargo nextest run -p task-dispatch -E 'test(/cex_/) | test(/phase_integration/) | test(/stage_reopen/) | test(/tree_branches/) | test(/health_enforce/) | test(/work_units::/)'`:
+  exit 0、150 passed（試験 7 と `cex_integration_restart_keeps_the_stage_pause` を含む）。
+- 計画の check 1（ADR・`store-scope: a` の行・試験の名）: exit 0。
+- 計画の check 2: `cargo nextest run -p task-core -E 'test(/store::/)'`: exit 0、310 passed。
+- 計画の check 3: `bash scripts/dev/test-affected.sh`: exit 0。8497 tests run: 8497 passed、23 skipped。ts-verify 20 passed。
+  その中の repo health（基点 auto）は verdict=pass、fail_grade=0、new=1（`host_maintenance.rs` の `migration.remnant` の
+  warning。この変更とは無関係）、worsened=0。`cargo clippy --workspace -- -D warnings`: exit 0。
+  `cargo fmt --all -- --check`: exit 0。
+- 前回落ちた check と同じ基点（この WU の base）の repo health:
+  `python3 scripts/dev/repo-health/repo_health.py --repo scripts/dev --base <WU の base> --head worktree --policy-version 1`:
+  exit 0、verdict=pass、fail_grade=0、new=0、worsened=0（`work_units.rs` 2084、module 31597、method 382）。
+- 計画の check 4・5（範囲、`sh "$CELERIS_WU_SCOPE_PATHS"`）: exit 0。変えた path は ADR・この進捗・
+  `crates/task-core/src/store/` の 6 file・`crates/task-dispatch/src/dispatcher/` の 4 file（`phase_integration.rs`・
+  `tests/cex_review_authority.rs`・`tree_units.rs`・`work_units.rs`）。
 - `awk '/pub\(super\) fn finish_phase_integration/,/^    }$/' crates/task-dispatch/src/dispatcher/phase_integration.rs | grep -c "work_unit_transition\|promote_newly_ready\|apply_transition_with_events"`: 0。
+- `sh scripts/dev/progress-index.sh --check`: exit 0。
 
 ## 未解決事項
 

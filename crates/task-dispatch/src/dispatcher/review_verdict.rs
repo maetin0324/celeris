@@ -120,6 +120,24 @@ impl Dispatcher {
                 }
             }
         }
+        // ADR 2026-10-03-ownerless-running-runs 付記 2026-11-14: reviewer run の `runs` 行が既に閉じていれば（別の
+        // instance の ownerless の照合など）、遅れた結果を捨てる。判定・遷移・2 件目の `WorkerFinished`・`runs` 行の
+        // 書き換えに使わない。quota はこの instance の `QuotaActivity` を閉じる 1 回だけの精算（閉じた側は quota を
+        // 精算しない）。entry を放して review lock を解き、Task は reviewing のまま次の review が決める。
+        if let Some(review_run_id) = completed_review_run.as_deref()
+            && let Some(row) = self.store.run_index_get(review_run_id)?
+            && row.status != task_core::RunIndexStatus::Running
+        {
+            tracing::warn!(
+                %task_id, %run_id, review_run_id, row_status = row.status.as_str(),
+                "late reviewer result discarded (its runs row was already closed)"
+            );
+            for ev in reviewer_quota.iter() {
+                self.store.append_event(task_id, ev)?;
+            }
+            drop(entry);
+            return Ok(());
+        }
         if task.status != Status::Reviewing {
             tracing::warn!(%task_id, status = ?task.status, "review result discarded (task no longer reviewing)");
             set_worker_finished_end(&mut reviewer_finished, task_core::RunEnd::Cancelled);

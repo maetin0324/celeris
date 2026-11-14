@@ -47,7 +47,6 @@ fn managed_scan_schedules_bounded_review_and_survives_state_loss() {
     let now = OffsetDateTime::now_utc();
     let project = Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         id: ProjectId::new(),
         title: "fixture".into(),
@@ -72,6 +71,7 @@ fn managed_scan_schedules_bounded_review_and_survives_state_loss() {
         default_branch: Some("main".into()),
         sync: None,
         run: RepoRun::Auto,
+        auto_integrate: false,
         is_primary: true,
         created_at: now,
     };

@@ -113,7 +113,7 @@ impl Host for OkHost {
         Ok(match path {
             "/api/v1/config" => daemon_identity::matching_daemon_body(),
             "/api/v1/projects/01ABC" => {
-                json!({"project":{"id":"01ABC","auto_integrate":false},"repos":[]})
+                json!({"project":{"id":"01ABC"},"repos":[]})
             }
             "/api/v1/projects/01ABC/repos" => {
                 json!({"items":[{"name":"scratch","is_primary":true,"location":{"kind":"local","path":"/x"}}]})

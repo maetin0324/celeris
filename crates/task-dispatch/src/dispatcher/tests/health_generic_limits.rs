@@ -402,7 +402,6 @@ async fn health_generic_limits_inventory_skips_unchanged() {
     let clock = Arc::new(StdMutex::new(at("2026-11-09T00:00:00Z")));
     let project = task_core::Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         archived_at: None,
         paused_from: None,
@@ -423,6 +422,7 @@ async fn health_generic_limits_inventory_skips_unchanged() {
             let fx = build_fixture(kind, "dep-inversion", &path);
             assert_eq!(git_out(&path, &["rev-parse", "main"]), fx.base());
             let repo = task_core::ProjectRepo {
+                auto_integrate: false,
                 id: task_core::RepoId::new(),
                 project_id: project.id,
                 name: kind.into(),

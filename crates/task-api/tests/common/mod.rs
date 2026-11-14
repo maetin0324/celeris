@@ -867,7 +867,6 @@ pub fn project_cos_thread(
         archived_at: None,
         paused_from: None,
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         created_at: now,
         updated_at: now,

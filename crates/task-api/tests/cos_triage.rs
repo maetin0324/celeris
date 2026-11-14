@@ -71,14 +71,9 @@ fn resolve_body(key: &str, revision: &str, outcome: &str, extra: Value) -> Value
             object.insert(k.clone(), v.clone());
         }
     }
-    // ADR 2026-10-28-cos-routine-delegated-answers D2: an answer carries its routine basis — the
-    // recommended `vault` is a documented default, a free-text note is work guidance.
+    // ADR 2026-10-28-cos-routine-delegated-answers D2: an answer carries its routine basis.
     if outcome == "answer" && body.get("basis").is_none() {
-        body["basis"] = if body["answer"]["option"] == "vault" {
-            common::cos_ops::task_scope_basis()
-        } else {
-            common::cos_ops::task_scope_basis()
-        };
+        body["basis"] = common::cos_ops::task_scope_basis();
     }
     body
 }

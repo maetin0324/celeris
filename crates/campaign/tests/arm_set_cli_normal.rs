@@ -261,10 +261,7 @@ fn handle(st: &Mutex<State>, cfg: &Path, method: &str, path: &str, body: &[u8]) 
                     json!({"items": [{"source_id": "claude_oauth", "account_id": "lab",
                         "dir": cfg.parent().expect("dir").join("account"), "logged_in": true}]}),
                 ),
-                "/api/v1/projects/01ABC" => (
-                    200,
-                    json!({"project": {"id": "01ABC", "auto_integrate": false}, "repos": []}),
-                ),
+                "/api/v1/projects/01ABC" => (200, json!({"project": {"id": "01ABC"}, "repos": []})),
                 "/api/v1/projects/01ABC/repos" => (
                     200,
                     json!({"items": [{"name": "scratch", "is_primary": true,
@@ -1493,9 +1490,7 @@ mod unused_arm_requests {
             self.api_gets.borrow_mut().push(path.to_string());
             match path {
                 "/api/v1/config" => Ok(crate::daemon_identity::matching_daemon_body()),
-                "/api/v1/projects/01ABC" => {
-                    Ok(json!({"project":{"id":"01ABC","auto_integrate":false},"repos":[]}))
-                }
+                "/api/v1/projects/01ABC" => Ok(json!({"project":{"id":"01ABC"},"repos":[]})),
                 "/api/v1/projects/01ABC/repos" => Ok(json!({"items":[
                     {"name":"scratch","is_primary":true,"location":{"kind":"local","path":"/x"}}]})),
                 "/api/v1/llm/accounts" => {

@@ -19,7 +19,6 @@ fn project(store: &SqliteStore, title: &str) -> ProjectId {
     let now = OffsetDateTime::now_utc();
     let project = Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         archived_at: None,
         paused_from: None,
@@ -37,6 +36,7 @@ fn project(store: &SqliteStore, title: &str) -> ProjectId {
 
 fn repo(store: &SqliteStore, project: ProjectId, name: &str, primary: bool) -> ProjectRepo {
     let repo = ProjectRepo {
+        auto_integrate: false,
         id: RepoId::new(),
         project_id: project,
         name: name.into(),

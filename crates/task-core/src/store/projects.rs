@@ -65,8 +65,6 @@ impl SqliteStore {
                 auto_advance: row.get::<_, i64>(9)? != 0,
                 // Phase K-1: 11 列目 `slug`。
                 slug: row.get(10)?,
-                // ADR 2026-10-16-project-auto-integrate D1: 12 列目 `auto_integrate`。
-                auto_integrate: row.get::<_, i64>(11)? != 0,
                 created_at: parse_rfc3339(&created_at)?,
                 updated_at: parse_rfc3339(&updated_at)?,
             })
@@ -297,8 +295,8 @@ impl SqliteStore {
         };
         tx.execute(
             "INSERT INTO projects (id, title, request, status, created_at, updated_at, workspace, \
-             archived_at, paused_from, auto_advance, slug, auto_integrate) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+             archived_at, paused_from, auto_advance, slug) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 project.id.to_string(),
                 project.title,
@@ -311,7 +309,6 @@ impl SqliteStore {
                 project.paused_from.map(|s| s.as_str()),
                 i64::from(project.auto_advance),
                 slug,
-                i64::from(project.auto_integrate),
             ],
         )?;
         // ADR-0043 D1: 案件の作業場所は `is_primary = 1` のリポジトリ 1 件として持つ
@@ -328,6 +325,7 @@ impl SqliteStore {
                 sync: None,
                 run: RepoRun::Auto,
                 is_primary: true,
+                auto_integrate: false,
                 created_at: project.created_at,
             };
             crate::repos::validate_upsert(&[], &repo)?;
@@ -419,32 +417,6 @@ impl SqliteStore {
             "UPDATE projects SET archived_at = ?1, updated_at = ?2 WHERE id = ?3",
             params![
                 at.map(format_rfc3339).transpose()?,
-                format_rfc3339(OffsetDateTime::now_utc())?,
-                id.to_string()
-            ],
-        )?;
-        Ok(affected == 1)
-    }
-
-    pub(super) fn project_set_auto_integrate_impl(
-        &self,
-        id: ProjectId,
-        enabled: bool,
-    ) -> Result<bool, StoreError> {
-        let conn = self.lock()?;
-        Self::project_set_auto_integrate_tx(&conn, id, enabled)
-    }
-
-    /// `project_set_auto_integrate` on a caller-owned transaction.
-    pub fn project_set_auto_integrate_tx(
-        conn: &Connection,
-        id: ProjectId,
-        enabled: bool,
-    ) -> Result<bool, StoreError> {
-        let affected = conn.execute(
-            "UPDATE projects SET auto_integrate = ?1, updated_at = ?2 WHERE id = ?3",
-            params![
-                i64::from(enabled),
                 format_rfc3339(OffsetDateTime::now_utc())?,
                 id.to_string()
             ],
@@ -571,6 +543,7 @@ impl SqliteStore {
                     sync: None,
                     run: RepoRun::Auto,
                     is_primary: true,
+                    auto_integrate: false,
                     created_at: OffsetDateTime::now_utc(),
                 };
                 crate::repos::validate_upsert(&existing, &repo)?;

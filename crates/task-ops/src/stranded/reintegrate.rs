@@ -188,14 +188,8 @@ pub fn run(
         if task.status != Status::Done || task.parent_id.is_some() {
             continue;
         }
-        // D1.2: 案件の自動取り込みが有効なものだけ。
-        let enabled = match task.project_id {
-            Some(project) => store
-                .project_get(project)?
-                .is_some_and(|p| p.auto_integrate),
-            None => false,
-        };
-        if !enabled {
+        // D1.2: task の repo がすべて自動取り込みが有効なものだけ。
+        if !crate::delivery::auto_integrates(store, &task)? {
             continue;
         }
         // D1.5: 走行中の配送が自分で扱う。

@@ -1297,12 +1297,48 @@ fn inbox_attention_cluster_unavailable_hidden_once_reconnected_and_host_filled_f
     assert!(cluster_unavailable_find(&hidden.attention, "pegasus").is_none());
 }
 
+/// ADR 2026-11-14-repo-auto-integrate D3: 案件と local の git リポジトリの行（`auto_integrate` は引数）を作り、
+/// `task` をその repo の root task にする。受信箱の `DeliverySkipped` は読んだ時点の判定が真のときだけ出る。
+fn put_in_repo(store: &SqliteStore, task: &mut Task, auto_integrate: bool) {
+    let now = OffsetDateTime::now_utc();
+    let project = task_core::Project {
+        auto_advance: false,
+        slug: None,
+        archived_at: None,
+        paused_from: None,
+        id: task_core::ProjectId::new(),
+        title: "p".into(),
+        request: "r".into(),
+        status: task_core::ProjectStatus::Active,
+        workspace: None,
+        created_at: now,
+        updated_at: now,
+    };
+    store.project_create(&project).expect("project");
+    let repo = task_core::ProjectRepo {
+        id: task_core::RepoId::new(),
+        project_id: project.id,
+        name: "app".into(),
+        kind: task_core::RepoKind::Git,
+        location: task_core::WorkspaceSpec::local("/nonexistent/app"),
+        default_branch: Some("main".into()),
+        sync: None,
+        run: Default::default(),
+        auto_integrate,
+        is_primary: true,
+        created_at: now,
+    };
+    store.repo_create(&repo).expect("repo");
+    task.project_id = Some(project.id);
+    task.repos = vec![task_core::RepoRef::of(&repo)];
+}
+
 /// ADR-0131 D7 R3: done の古い snapshot は理由を問わず表示から外し、event は保持する。
 #[test]
 fn inbox_cleanup_terminal_delivery_skip_is_suppressed() {
     let store = SqliteStore::open_in_memory().expect("store");
     let mut task = sample_task(TaskKind::Execute, Status::Done);
-    task.project_id = Some(task_core::ProjectId::new());
+    put_in_repo(&store, &mut task, true);
     store.insert(&task).expect("insert");
     store
         .append_event(
@@ -1331,9 +1367,9 @@ fn inbox_cleanup_terminal_delivery_skip_is_suppressed() {
 #[test]
 fn delivery_skip_no_commits_is_not_attention() {
     let store = SqliteStore::open_in_memory().expect("store");
-    let attention_for = |reason: task_core::DeliverySkipReason| {
+    let attention_for = |reason: task_core::DeliverySkipReason, enabled: bool| {
         let mut task = sample_task(TaskKind::Execute, Status::Done);
-        task.project_id = Some(task_core::ProjectId::new());
+        put_in_repo(&store, &mut task, enabled);
         store.insert(&task).expect("insert");
         store
             .append_event(
@@ -1364,11 +1400,31 @@ fn delivery_skip_no_commits_is_not_attention() {
         })
         .count()
     };
-    assert_eq!(attention_for(task_core::DeliverySkipReason::NoCommits), 0);
-    // 他の理由は従来どおり注意事項になる（対照）。repo を持つ案件の NotGit も理由付きで出る（A9 D1）。
-    assert_eq!(attention_for(task_core::DeliverySkipReason::NotGit), 1);
     assert_eq!(
-        attention_for(task_core::DeliverySkipReason::DepartmentUnresolved),
+        attention_for(task_core::DeliverySkipReason::NoCommits, true),
+        0
+    );
+    // ADR 2026-11-14-repo-auto-integrate D4: repo_not_enabled は出さない。
+    assert_eq!(
+        attention_for(task_core::DeliverySkipReason::RepoNotEnabled, true),
+        0
+    );
+    assert_eq!(
+        attention_for(task_core::DeliverySkipReason::RepoNotEnabled, false),
+        0
+    );
+    // 読んだ時点で repo が無効なら、過去の理由（no_marker など）の項目も出ない。
+    assert_eq!(
+        attention_for(task_core::DeliverySkipReason::NoMarker, false),
+        0
+    );
+    // 有効な repo の他の理由は従来どおり注意事項になる（対照）。NotGit も理由付きで出る（A9 D1）。
+    assert_eq!(
+        attention_for(task_core::DeliverySkipReason::NotGit, true),
+        1
+    );
+    assert_eq!(
+        attention_for(task_core::DeliverySkipReason::DepartmentUnresolved, true),
         1
     );
 }
@@ -1864,7 +1920,7 @@ fn browser_policy_missing_inbox_item_carries_message_and_disappears_after_resume
 fn delivery_skip_attention_names_waiting_dependents() {
     let store = SqliteStore::open_in_memory().expect("store");
     let mut dep = sample_task(TaskKind::Execute, Status::Done);
-    dep.project_id = Some(task_core::ProjectId::new());
+    put_in_repo(&store, &mut dep, true);
     store.insert(&dep).expect("insert dep");
     let mut waiting = sample_task(TaskKind::Execute, Status::Ready);
     waiting.depends_on = vec![dep.id];

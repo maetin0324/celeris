@@ -51,7 +51,6 @@ impl Harness {
             archived_at: None,
             paused_from: None,
             auto_advance: false,
-            auto_integrate: false,
             slug: None,
             created_at: at(0),
             updated_at: at(0),

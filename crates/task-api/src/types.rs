@@ -1134,10 +1134,6 @@ pub struct ProjectPatchBody {
     /// （`true`）、途中目標の `reached`（人の `ok`）まで待つか（`false`、既定）。省略なら変えない。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_advance: Option<bool>,
-    /// ADR 2026-10-16-project-auto-integrate D1/D4: レビュー合格した root task を既定ブランチへ自動で取り込むか。
-    /// 省略なら変えない。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub auto_integrate: Option<bool>,
     /// ADR-0044 D7 追記（Phase K-1）: 知識ベースの置き場 `projects/<slug>/` の slug を変える
     /// （小文字の `[a-z0-9-]`、案件 ID の形は不可、案件の間で一意。重複は 409）。省略なら変えない。
     /// **KB のディレクトリは動かさない**（`projects/<旧>/` を動かすのは人）。
@@ -1894,8 +1890,7 @@ pub struct RepoCreateBody {
     /// 案件の中で一意の slug。省略すると `location` のディレクトリ名から作る。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// 省略すると `location` から決める（`<path>/.git` があれば `git`、無ければ `dir`。
-    /// リモートは `git`）。
+    /// 省略すると `location` から決める（`<path>/.git` があれば `git`、無ければ `dir`、リモートは `git`）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<task_core::RepoKind>,
     /// `{"kind":"local","path":"~/workspace/benchfs"}` か
@@ -1913,6 +1908,9 @@ pub struct RepoCreateBody {
     /// 案件の「主なリポジトリ」にする。案件の最初の 1 件は自動的に primary。
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub is_primary: bool,
+    /// 既定ブランチへ自動で取り込むか（既定 `false`。remote・`dir` で `true` は 422。CoS は書けない）。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_integrate: bool,
 }
 
 /// `PATCH /repos/{id}` の要求本文（管理系）。書いたものだけ変える。
@@ -1941,10 +1939,12 @@ pub struct RepoPatchBody {
     pub sync: Option<Option<task_core::RepoSync>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<task_core::RepoRun>,
-    /// `true` にするとこの行が案件の primary になる（他は落ちる）。`false` は何もしない
-    /// （primary を空にはできない。別の行を primary にする）。
+    /// `true` でこの行が案件の primary になる（他は落ちる）。`false` は何もしない（primary は空にできない）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_primary: Option<bool>,
+    /// 自動取り込み。省略なら変えない（当てた後の行が remote・`dir` で `true` は 422。CoS は書けない）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_integrate: Option<bool>,
 }
 
 /// `GET /tasks/{id}/tree` の応答（ADR-0043 D6。読み取り。トークンは要らない）。

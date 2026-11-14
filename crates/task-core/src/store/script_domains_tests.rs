@@ -1752,6 +1752,8 @@ fn script_generation_rejected_rows_migrate_to_invalid() {
              ALTER TABLE chat_runs DROP COLUMN attempts_usage_missing; \
              ALTER TABLE chat_runs DROP COLUMN knowledge_use_json; \
              DROP TABLE health_inventory_runs; \
+             ALTER TABLE project_repos DROP COLUMN auto_integrate; \
+             ALTER TABLE projects ADD COLUMN auto_integrate INTEGER NOT NULL DEFAULT 0; \
              DELETE FROM schema_migrations WHERE version >= 103;",
         )
         .unwrap();

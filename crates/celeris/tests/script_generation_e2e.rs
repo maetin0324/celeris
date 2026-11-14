@@ -1309,7 +1309,6 @@ fn project_thread(store: &task_core::SqliteStore, key: &str) -> String {
         archived_at: None,
         paused_from: None,
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         created_at: now,
         updated_at: now,

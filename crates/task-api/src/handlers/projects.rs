@@ -26,7 +26,7 @@ use crate::types::{
 };
 
 use super::{
-    ApiResult, Params, json_response, no_query, parse_project_id, read_json, rfc3339,
+    ApiResult, Params, json_response, no_query, parse_project_id, read_body, read_json, rfc3339,
     validated_workspace,
 };
 
@@ -122,7 +122,6 @@ pub(crate) fn create_project_op(
     let now = OffsetDateTime::now_utc();
     let project = Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         archived_at: None,
         paused_from: None,
@@ -306,7 +305,19 @@ pub(super) async fn patch_project(
     no_query(&raw)?;
     require_admin(&state, &headers)?;
     let project_id = parse_project_id(&id)?;
-    let patch: ProjectPatchBody = read_json(body, false).await?;
+    let bytes = read_body(body).await?;
+    // ADR 2026-11-14-repo-auto-integrate D8: 案件の `auto_integrate` は無くなった（リポジトリの欄）。
+    // 未知の欄の 400 ではなく、移す先を示す 422 にする（古い呼び出しが理由を読めるように）。
+    if serde_json::from_slice::<serde_json::Value>(&bytes)
+        .is_ok_and(|v| v.get("auto_integrate").is_some())
+    {
+        return Err(ApiProblem::validation(vec![ValidationError {
+            field: Some("auto_integrate".into()),
+            message: "projects have no auto_integrate; set it per repository with PATCH /api/v1/repos/{id} (ADR 2026-11-14-repo-auto-integrate)"
+                .into(),
+        }]));
+    }
+    let patch: ProjectPatchBody = read_json(Body::from(bytes), false).await?;
     // ADR-0079 D13（Phase R5a）: `auto_advance`（ADR-0074 D3.2 / ADR-0077 の途中目標の自動 reached）は廃止。
     // 列 `projects.auto_advance` は残すが書かない・読まない。
     if patch.auto_advance.is_some() {
@@ -321,16 +332,14 @@ pub(super) async fn patch_project(
         && patch.slug.is_none()
         && patch.title.is_none()
         && patch.request.is_none()
-        && patch.auto_integrate.is_none()
     {
         return Err(ApiProblem::validation(vec![ValidationError {
             field: None,
-            message: "specify at least one of `status`, `workspace`, `slug`, `title`, `request` or `auto_integrate`"
+            message: "specify at least one of `status`, `workspace`, `slug`, `title` or `request`"
                 .into(),
         }]));
     }
     let (title, request) = project_text_input(patch.title.as_deref(), patch.request.as_deref())?;
-    let auto_integrate = patch.auto_integrate;
     // Phase K-1: slug の綴りは先に見る（422）。重複は store が 409 で返す。
     if let Some(slug) = patch.slug.as_deref()
         && !task_core::knowledge::is_valid_project_slug(slug.trim())
@@ -397,11 +406,6 @@ pub(super) async fn patch_project(
                 if let Some(slug) = patch.slug.as_deref() {
                     written(SqliteStore::project_set_slug_tx(tx, project_id, slug))?;
                 }
-                if let Some(enabled) = patch.auto_integrate {
-                    written(SqliteStore::project_set_auto_integrate_tx(
-                        tx, project_id, enabled,
-                    ))?;
-                }
                 // ADR-0072「Phase F6 実装時の決定」: 変わった欄だけを書き、監査用に名前を返す。
                 if !text_fields.is_empty() {
                     written(SqliteStore::project_set_text_tx(
@@ -421,9 +425,6 @@ pub(super) async fn patch_project(
         })
         .await?;
     let (project, text_fields, old_title) = project;
-    if let Some(enabled) = auto_integrate {
-        tracing::info!(who = "admin", op = "project_updated", project_id = %project_id, fields = ?["auto_integrate"], auto_integrate = enabled, "admin: project updated");
-    }
     if !text_fields.is_empty() {
         // 案件には events の列が無い（events は Task ごと）ので、監査は管理系の構造化ログに残す
         // （ADR-0072「Phase F6 実装時の決定」P4）。

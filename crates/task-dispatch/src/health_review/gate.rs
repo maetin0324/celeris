@@ -26,6 +26,7 @@
 //! 決める（`scripts/dev/check-health.sh` と同じ呼び方）。Rust に同じ判定を書かない。LLM は呼ばない（I4）。
 
 use std::path::{Path, PathBuf};
+#[cfg(not(test))]
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
@@ -373,7 +374,7 @@ pub(crate) mod bundled_test {
             require(Kind::Custom);
         }
         let mut st = lock();
-        *st.value.get_or_insert_with(|| {
+        st.value.get_or_insert_with(|| {
             // 試験 process の終了で消えるので leak してよい。
             Box::leak(Box::new(found.clone()))
         })

@@ -218,19 +218,16 @@ fn tick_with(
     bundled: Option<&health::CheckerId>,
 ) -> Result<(), StoreError> {
     for delivery in store.delivery_list()? {
+        let Some(task) = store.get(delivery.task_id)? else {
+            continue;
+        };
         // ADR-0079 D6（Phase R1c）: 木の子 task は main に取り込まない（`task_ops::delivery::begin` が行を
         // 作らない。旧い行が残っていても merge / release に進めない保険）。
-        if store
-            .get(delivery.task_id)?
-            .is_some_and(|t| task_core::tree::is_tree_child(&t))
-        {
+        if task_core::tree::is_tree_child(&task) {
             continue;
         }
-        // ADR 2026-10-16-project-auto-integrate D1: 自動取り込みは案件の属性（DB）。
-        if store
-            .project_get(delivery.project_id)?
-            .is_some_and(|p| p.auto_integrate)
-        {
+        // ADR 2026-11-14-repo-auto-integrate D1/D3: 自動取り込みは task の repo ごとの属性（DB）。
+        if task_ops::delivery::auto_integrates(store, &task)? {
             advance(store, config, &delivery, now, bundled)?;
         }
     }

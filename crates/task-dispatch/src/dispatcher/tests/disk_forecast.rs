@@ -269,7 +269,7 @@ async fn a_held_run_has_a_wait_reason_and_never_becomes_task_unscheduled() {
         task_unscheduled_secs: 1800,
         ..Default::default()
     };
-    f.d.set_stagnation(policy.clone(), 60);
+    f.d.set_stagnation(policy, 60);
     let (tx, rx) = tokio::sync::watch::channel(None);
     f.d.set_snapshot_publisher(SnapshotPublisher {
         tx,

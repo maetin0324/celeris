@@ -152,6 +152,10 @@ pub(super) fn case_for(checker: Option<(Policy, Report)>, changed: &str, reviewe
     task.status = Status::Reviewing;
     store.insert(&task).unwrap();
     let repo = RepoId::new();
+    // 同梱の検査器は設定しない（`checker = None` の repo は base にも同梱にも検査器が無い場合）。材料作りも
+    // `gate::bundled_checker()` を読むので、宣言（`Kind::Unset`）は材料作りの前に置く。後に置くと、`cargo test` の
+    // 1 process で並行に走る stub の試験が設定した合格の stub で材料を作り、`checker_missing` を記録しない。
+    let d = dispatcher_without_bundled_checker(store.clone(), done_adapter(), 1);
     let work = HealthInputWork {
         store: store.clone(),
         task_id: task.id,
@@ -169,8 +173,6 @@ pub(super) fn case_for(checker: Option<(Policy, Report)>, changed: &str, reviewe
         evaluated: Default::default(),
     };
     build_health_input(&work);
-    // 同梱の検査器は設定しない（`checker = None` の repo は base にも同梱にも検査器が無い場合）。
-    let d = dispatcher_without_bundled_checker(store.clone(), done_adapter(), 1);
     Case {
         store,
         d,

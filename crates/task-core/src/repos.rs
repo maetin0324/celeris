@@ -156,6 +156,11 @@ pub struct ProjectRepo {
     /// 案件の「主なリポジトリ」。1 案件に 1 つ（成果物と文書の既定の置き場。ADR-0044 D7）。
     #[serde(default)]
     pub is_primary: bool,
+    /// ADR 2026-11-14-repo-auto-integrate D1: `true` なら、このリポジトリだけに書く（`task.repos` の
+    /// すべてが有効な）レビュー合格の root task を既定ブランチへ自動で取り込む。`kind = git` かつ
+    /// `location` が local の行だけが持てる（D2。[`RepoError::AutoIntegrateNotLocalGit`]）。
+    #[serde(default)]
+    pub auto_integrate: bool,
     #[serde(with = "time::serde::rfc3339")]
     #[schemars(with = "String")]
     pub created_at: OffsetDateTime,
@@ -197,6 +202,10 @@ pub enum RepoError {
         "remote repositories with sync = \"none\" and run = \"remote\" are not supported yet (ADR-0043 D7)"
     )]
     RemoteBUnsupported,
+    #[error(
+        "auto_integrate = true is only allowed for a local git repository (kind = git, location = local); repo {0:?} is not"
+    )]
+    AutoIntegrateNotLocalGit(String),
     #[error("task repo {0:?} is not one of this project's repositories")]
     UnknownName(String),
     #[error("a task cannot mix a remote repository with other repositories yet (ADR-0043 D2)")]
@@ -288,6 +297,12 @@ pub fn validate_upsert(existing: &[ProjectRepo], repo: &ProjectRepo) -> Result<(
     if repo.kind == RepoKind::Dir && repo.default_branch.is_some() {
         return Err(RepoError::BranchOnDir);
     }
+    // ADR 2026-11-14-repo-auto-integrate D2: 取り込めない行（remote・dir）は有効にできない。黙って false に落とさない。
+    if repo.auto_integrate
+        && !(repo.kind == RepoKind::Git && matches!(repo.location, WorkspaceSpec::Local { .. }))
+    {
+        return Err(RepoError::AutoIntegrateNotLocalGit(repo.name.clone()));
+    }
     Ok(())
 }
 
@@ -337,6 +352,7 @@ mod tests {
             sync: None,
             run: RepoRun::Auto,
             is_primary: false,
+            auto_integrate: false,
             created_at: OffsetDateTime::now_utc(),
         }
     }

@@ -13,7 +13,6 @@ fn snapshot() -> ProjectSnapshot {
             status: "active".into(),
             request: REQUEST.into(),
             request_sha256: sha256_hex(REQUEST),
-            auto_integrate: false,
         },
         brief: None,
         outcomes: parse_outcomes(REQUEST).unwrap(),

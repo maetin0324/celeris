@@ -1900,7 +1900,7 @@ fn queued_thread_enumeration_cost_is_flat_while_full_scan_grows_with_rows() {
             )?;
             let old = vm_steps(conn, super::store::THREAD_SELECT);
             let new = vm_steps(conn, new_sql);
-            samples.push((i64::from(target), old, new));
+            samples.push((target, old, new));
             Ok(())
         })
         .unwrap();
@@ -1972,7 +1972,7 @@ fn relay_candidate_cost_is_flat_in_thread_messages_with_the_relay_index() {
             conn.execute_batch("SAVEPOINT noidx; DROP INDEX idx_chat_messages_relay;")?;
             let old = vm_steps(conn, sql);
             conn.execute_batch("ROLLBACK TO noidx; RELEASE noidx;")?;
-            samples.push((i64::from(target), old, new));
+            samples.push((target, old, new));
             Ok(())
         })
         .unwrap();

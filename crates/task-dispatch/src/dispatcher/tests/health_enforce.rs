@@ -760,11 +760,13 @@ async fn review_repair_not_evaluated_reviewer_does_not_block_a_health_repair() {
     );
 }
 
+type RepairAction = Box<dyn Fn(&Path, &str) + Send + Sync>;
+
 /// review の repair の WU（key `repair-*`）の run の後に、その作業ツリーと key で `on_repair` を呼ぶ adapter（修復の代わり。
 /// ほかは [`WuScriptAdapter`]）。
 pub(super) struct RepairActionAdapter {
     inner: WuScriptAdapter,
-    on_repair: Box<dyn Fn(&Path, &str) + Send + Sync>,
+    on_repair: RepairAction,
 }
 
 impl RepairActionAdapter {

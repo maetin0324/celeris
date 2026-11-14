@@ -390,7 +390,6 @@ impl<'a> Trial<'a> {
             paused_from: None,
             auto_advance: false,
             slug: None,
-            auto_integrate: false,
             created_at: t0,
             updated_at: t0,
         };

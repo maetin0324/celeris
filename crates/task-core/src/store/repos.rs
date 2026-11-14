@@ -52,6 +52,7 @@ impl SqliteStore {
         };
         Ok((|| {
             let is_primary: i64 = row.get(8)?;
+            let auto_integrate: i64 = row.get(10)?;
             Ok(ProjectRepo {
                 id,
                 project_id,
@@ -62,12 +63,13 @@ impl SqliteStore {
                 sync,
                 run,
                 is_primary: is_primary != 0,
+                auto_integrate: auto_integrate != 0,
                 created_at: parse_rfc3339(&created_at)?,
             })
         })())
     }
 
-    pub(super) const REPO_COLUMNS: &'static str = "id, project_id, name, kind, location_json, default_branch, sync, run, is_primary, created_at";
+    pub(super) const REPO_COLUMNS: &'static str = "id, project_id, name, kind, location_json, default_branch, sync, run, is_primary, created_at, auto_integrate";
 
     pub(super) fn repo_list_tx(
         conn: &Connection,
@@ -105,7 +107,7 @@ impl SqliteStore {
             .map_err(|e| StoreError::Invalid(format!("cannot serialize repo location: {e}")))?;
         conn.execute(
             &format!(
-                "INSERT OR REPLACE INTO project_repos ({}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                "INSERT OR REPLACE INTO project_repos ({}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 Self::REPO_COLUMNS
             ),
             params![
@@ -119,6 +121,7 @@ impl SqliteStore {
                 repo.run.as_str(),
                 i64::from(repo.is_primary),
                 format_rfc3339(repo.created_at)?,
+                i64::from(repo.auto_integrate),
             ],
         )?;
         Ok(())
@@ -197,20 +200,27 @@ impl SqliteStore {
             let Ok(location) = serde_json::from_str::<WorkspaceSpec>(&workspace) else {
                 continue;
             };
-            let repo = ProjectRepo {
-                id: RepoId::new(),
-                project_id,
-                name: crate::repos::default_repo_name(&location),
-                kind: detect_repo_kind(&location),
-                location,
-                default_branch: None,
-                sync: None,
-                run: RepoRun::Auto,
-                is_primary: true,
-                created_at: parse_rfc3339(&created_at)
-                    .unwrap_or_else(|_| OffsetDateTime::now_utc()),
-            };
-            Self::repo_write_tx(conn, &repo)?;
+            let kind = detect_repo_kind(&location);
+            // migration 0012 の時点のスキーマに合わせて 0012 の列だけを書く（`auto_integrate` は 0126 で足す。
+            // `repo_write_tx` は今のスキーマの列を書くのでここでは使えない）。
+            conn.execute(
+                "INSERT OR REPLACE INTO project_repos \
+                 (id, project_id, name, kind, location_json, default_branch, sync, run, is_primary, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, NULL, NULL, ?6, 1, ?7)",
+                params![
+                    RepoId::new().to_string(),
+                    project_id.to_string(),
+                    crate::repos::default_repo_name(&location),
+                    kind.as_str(),
+                    serde_json::to_string(&location).map_err(|e| StoreError::Invalid(format!(
+                        "cannot serialize repo location: {e}"
+                    )))?,
+                    RepoRun::Auto.as_str(),
+                    format_rfc3339(
+                        parse_rfc3339(&created_at).unwrap_or_else(|_| OffsetDateTime::now_utc())
+                    )?,
+                ],
+            )?;
         }
         Ok(())
     }

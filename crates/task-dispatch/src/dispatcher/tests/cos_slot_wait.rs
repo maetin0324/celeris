@@ -165,7 +165,7 @@ async fn slot_only_wait_keeps_the_run_waiting_then_launches_the_same_run() {
     assert!(waiting.finished_at.is_none());
     assert_eq!(waiting_notices(&store, &b, &waiting.id), 1);
     assert!(
-        d.orchestration.launch().unwrap().running.get(&b).is_none(),
+        !d.orchestration.launch().unwrap().running.contains_key(&b),
         "a waiting run has no worker"
     );
     // 受け入れ 3: 起動した run だけを数える（葉の 1 件。待機中の B の CoS run は数えない）。

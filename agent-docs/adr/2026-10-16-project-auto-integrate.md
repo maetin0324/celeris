@@ -1,7 +1,11 @@
 # ADR: 「自動取り込み」を案件の属性（DB）にし、自己リポジトリ以外も既定ブランチへ取り込む
 
+> **置き換え済み（2026-11-14）**: この ADR は [ADR 2026-11-14-repo-auto-integrate](2026-11-14-repo-auto-integrate.md) で置き換えた。
+> 自動取り込みの切り替えは案件の属性 `projects.auto_integrate` ではなく、リポジトリの行の `project_repos.auto_integrate` になる。
+> D1・D4 の案件の欄・API の欄・GUI の切り替えは新しい ADR の D8 で廃止する。D2・D3・D5 は新しい ADR の D9 が引き継ぐ。以下は当時の記録。
+
 - Date: 2026-10-16
-- Status: Accepted
+- Status: Superseded（2026-11-14、[ADR 2026-11-14-repo-auto-integrate](2026-11-14-repo-auto-integrate.md)）
 - 決定者: 人の依頼（2026-10-16「asmr案件も自動でmainに取り込む対象になっていて欲しい。案件ごとにWeb UIから設定できるように」）
 - 関連: ADR-0051（supervised delivery）、ADR-0118（pre-review target sync）、ADR-0120（integration repair）、ADR-0121（root delivery）、
   [破壊的変更を是とする](2026-10-11-breaking-changes-by-default.md)

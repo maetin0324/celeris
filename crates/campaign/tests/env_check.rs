@@ -48,7 +48,7 @@ async fn served(view: task_api::ConfigView) -> Value {
     r.json()
 }
 
-/// 実 router で作った案件（auto_integrate=false）。`(project id, detail, repos)`。
+/// 実 router で作った案件（repo の auto_integrate=false）。`(project id, detail, repos)`。
 async fn real_project() -> (String, Value, Value) {
     let env = admin_env();
     let app = env.router();

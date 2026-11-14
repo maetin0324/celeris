@@ -723,7 +723,6 @@ async fn adopted_done_task_already_in_base_is_skipped_by_integration() {
     let now = OffsetDateTime::now_utc();
     let project = task_core::Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         id: task_core::ProjectId::new(),
         title: "browser".to_string(),
@@ -863,7 +862,6 @@ async fn an_adopt_unit_waiting_for_its_task_never_spawns_a_new_child() {
     let now = OffsetDateTime::now_utc();
     let project = task_core::Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         id: task_core::ProjectId::new(),
         title: "browser".to_string(),

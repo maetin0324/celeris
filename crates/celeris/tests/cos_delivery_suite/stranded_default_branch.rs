@@ -44,7 +44,6 @@ fn merged_repo(path: &Path, task: TaskId) -> String {
 fn register_repo(store: &SqliteStore, path: &Path) -> ProjectRepo {
     let project = Project {
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         id: ProjectId::new(),
         title: "stranded default branch".into(),
@@ -66,6 +65,7 @@ fn register_repo(store: &SqliteStore, path: &Path) -> ProjectRepo {
         default_branch: None,
         sync: None,
         run: RepoRun::Auto,
+        auto_integrate: false,
         is_primary: true,
         created_at: now(),
     };

@@ -88,6 +88,8 @@ struct Fixture {
     store: SqliteStore,
     project: ProjectId,
     now: OffsetDateTime,
+    /// task の repo の行（`project_repos.auto_integrate`）に入れる値。
+    auto_integrate: bool,
 }
 
 fn fixture(auto_integrate: bool) -> Fixture {
@@ -101,7 +103,6 @@ fn fixture(auto_integrate: bool) -> Fixture {
     let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).expect("clock");
     let project = Project {
         auto_advance: false,
-        auto_integrate,
         slug: None,
         archived_at: None,
         paused_from: None,
@@ -120,6 +121,7 @@ fn fixture(auto_integrate: bool) -> Fixture {
         store,
         project: project.id,
         now,
+        auto_integrate,
     }
 }
 
@@ -175,7 +177,35 @@ fn done_task(project: ProjectId, done_at: OffsetDateTime) -> Task {
 impl Fixture {
     /// done の task と、その task branch（`path` を `content` に変える 1 commit）を作る。
     fn task(&self, path: &str, content: &str, repo: RepoId) -> (TaskId, BranchRecord) {
-        let task = done_task(self.project, self.now);
+        let mut task = done_task(self.project, self.now);
+        // ADR 2026-11-14-repo-auto-integrate D3: 判定は task の repo の行の欄を読む。
+        if !self
+            .store
+            .repo_list(self.project)
+            .expect("repos")
+            .iter()
+            .any(|r| r.id == repo)
+        {
+            self.store
+                .repo_create(&task_core::ProjectRepo {
+                    id: repo,
+                    project_id: self.project,
+                    name: "app".into(),
+                    kind: task_core::RepoKind::Git,
+                    location: WorkspaceSpec::local(self.dir.clone()),
+                    default_branch: Some("main".into()),
+                    sync: None,
+                    run: Default::default(),
+                    auto_integrate: self.auto_integrate,
+                    is_primary: true,
+                    created_at: self.now,
+                })
+                .expect("repo");
+        }
+        task.repos = vec![task_core::RepoRef {
+            repo_id: repo,
+            name: "app".into(),
+        }];
         self.store.insert(&task).expect("insert");
         let branch = format!("celeris/{}", task.id);
         git(&self.dir, &["switch", "-q", "-c", &branch, "main"]);

@@ -879,7 +879,6 @@ fn parse_with_repo(store: &SqliteStore, text: &str) -> (Vec<ConsoleAction>, Vec<
         request: "r".into(),
         status: ProjectStatus::Active,
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         archived_at: None,
         paused_from: None,
@@ -898,6 +897,7 @@ fn parse_with_repo(store: &SqliteStore, text: &str) -> (Vec<ConsoleAction>, Vec<
     }
     store
         .repo_create(&ProjectRepo {
+            auto_integrate: false,
             id: RepoId::new(),
             project_id: project.id,
             name: "code".into(),

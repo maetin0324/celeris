@@ -58,7 +58,6 @@ fn fixture(env: &TestEnv) -> Fixture {
     let now = OffsetDateTime::now_utc();
     let project = Project {
         auto_advance: false,
-        auto_integrate: true,
         slug: None,
         archived_at: None,
         paused_from: None,
@@ -84,6 +83,7 @@ fn fixture(env: &TestEnv) -> Fixture {
         sync: None,
         run: RepoRun::default(),
         is_primary: true,
+        auto_integrate: true,
         created_at: now,
     };
     env.store.repo_create(&repo).expect("repo");

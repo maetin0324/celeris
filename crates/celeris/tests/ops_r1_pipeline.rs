@@ -5,7 +5,8 @@
 //! 実 binary で走らせ、全段 exit 0、試行数・分母・終了理由・合否が段の間で一致すること、同じ raw から 2 回出した
 //! 出力が byte 一致することを確かめる。LLM・daemon・本番 DB・~/.config/celeris は使わない。
 #[path = "../../campaign/tests/support_cases/mod.rs"]
-#[allow(dead_code)]
+// 3 つの統合試験 binary が別々に同じ support module を取り込む（crate が別なので共通 module にできない）。
+#[allow(dead_code, clippy::duplicate_mod)]
 mod support_cases;
 #[path = "ops_r1/trace_fixture.rs"]
 mod trace_fixture;

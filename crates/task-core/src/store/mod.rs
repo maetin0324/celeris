@@ -129,6 +129,8 @@ mod migration_harness_tests;
 pub(crate) mod migrations;
 mod org;
 mod org_directory;
+#[cfg(test)]
+mod repo_auto_integrate_tests;
 pub use org_directory::OrgDirectory;
 mod project_briefs;
 mod project_guard;

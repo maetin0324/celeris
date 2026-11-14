@@ -411,7 +411,6 @@ pub fn build(
                 .unwrap_or_default(),
             request_sha256: pp::sha256_hex(&project.request),
             request: project.request.clone(),
-            auto_integrate: project.auto_integrate,
         },
         brief,
         outcomes,

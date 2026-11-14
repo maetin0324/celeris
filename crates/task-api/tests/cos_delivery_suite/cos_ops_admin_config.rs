@@ -335,6 +335,21 @@ async fn cos_ops_admin_config_repos_and_cluster_settings_are_audited() {
                 json!({"name": "Bad Name"}),
                 422,
             ),
+            // ADR 2026-11-14-repo-auto-integrate D6: CoS は auto_integrate を書けない（値によらず 422）。
+            (
+                "auto-integrate-update",
+                "PATCH",
+                &format!("/api/v1/repos/{repo_id}"),
+                json!({"auto_integrate": true}),
+                422,
+            ),
+            (
+                "auto-integrate-create",
+                "POST",
+                &format!("/api/v1/projects/{project}/repos"),
+                json!({"name": "other", "kind": "dir", "location": {"kind": "local", "path": "/srv/other"}, "auto_integrate": false}),
+                422,
+            ),
             (
                 "no-repo",
                 "DELETE",

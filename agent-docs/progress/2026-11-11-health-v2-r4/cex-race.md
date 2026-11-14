@@ -125,6 +125,16 @@ G-proto は確認のための一時変更で、修正の案ではない（A の 
 - `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0、
   `sh "$CELERIS_WU_SCOPE_PATHS"` → この 2 file だけ、本体の差分なし。
 
+### 3 回目の run: plan_issue が届かなかった理由（2026-11-14）
+
+- 2 回目の run の `result.json` は `summary` と `yield` の両方を持っていた。`crates/task-worker/src/result_report.rs` は
+  `question` > `wait` > `summary` > `yield` の順に読むので、celeris はこれを done と読み、check を走らせて retry（2/2）にした。
+  `plan_issue` は計画に届いていない。
+- 提出時の HEAD で `cargo nextest run -p task-dispatch --no-fail-fast --no-tests=fail -E 'test(/cex_lease_restart::/)'` を
+  走らせ直した → exit 100。11 本中 10 本合格、`cex_restart_old_reviewer_pass_after_ownerless_close_is_ignored` が同じ assert
+  （`cex_lease_restart.rs:615`、A の `runs` 行 `Some(Completed)`、A の `WorkerFinished` 2 件）で落ちた。試験・本体とも変えていない。
+- この run は `result.json` に `yield`（`plan_issue`）だけを書き、`summary` を書かない。
+
 ### 未解決
 
 - `cex_run_finish_and_work_unit_check_finish_in_one_tick` は負荷の下で落ちうる（上の 2 回目の run の節）。修正の unit の

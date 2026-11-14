@@ -150,6 +150,7 @@ repair 版は `("repair-build-1", Ready)` で、ほかは同じ。
   Task を Done にしうる（本番での再現は試していない。未確認）。
 - 新しい 2 本の後半（新しい unit の done の後の review だけが Done にする）の assert は、前半で落ちるため一度も実行されていない（未確認）。
 - この fixture では配送の行ができない（`NoMarker`）。`MergeQueued` の assert は今は行が無いので効いていない。
+- この unit の再実行（check の不合格の後）で同じ check を再実行した: 6 本中 4 本合格・新しい 2 本が同じ観測（`status=Done`、`c`／`repair-build-1` が Ready、`integrate-build` が Pending）で失敗、exit 100。原因は試験ではなく本体にある。`review_verdict.rs` と `review_spawn.rs` には有効な計画の版と照合する処理が無い（`execution_plan_active` を読むのは最終 review の主題の組み立てと repair の追加だけ）。`task-api` の `put_execution_plan` も Task の状態を見ずに `replan` を呼ぶ。この unit は本体を変えられないので、check は通せない。celeris に `plan_issue` を申告し、本体を直す leaf（上の提案 (a) か (b)）を計画に足すよう求めた。
 
 ### 提案
 

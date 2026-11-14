@@ -47,3 +47,8 @@ updated: 2026-11-14
 
 ## 提案
 なし。
+
+## 生成物の再生成（check 不合格の対応）
+- `cargo test -p task-core` が `store::tests::event_row_schema_matches_committed` と `script_fixtures_project_controller_match_committed_fixture` で落ちた。理由は、理由名の改名と案件の欄の削除に対し、コミット済みの生成物が古かったこと。
+- `UPDATE_SCHEMA=1 cargo test -p task-core event_row_schema` で `docs/api/v1/event.schema.json` を、`dump-project-controller-fixtures` で `control-ts/fixtures/project_controller/invariants.jsonl` を作り直した。
+- 提出時の HEAD で `cargo test -p task-core` は全て成功（1357 + 1 + 15 + 3 件）。`cargo fmt --all -- --check` も成功。

@@ -37,21 +37,21 @@ atomic task の credential の待ちの正本は、SQLite の `credential_waits`
 `resumed` になる（または cancel で `cancelled` になる）と開いた wait が無くなり、そのあとは従来どおり `is_registered` で決める。
 
 - 検証の一時失敗（`waiting` のまま）・誤キー（`rejected`）・検証済みで claim 前（`verified`）は、どれも hold を保つ。
-- 開いた wait が無く、秘密が未登録なら、従来どおり wait を作る（`enter_credential_wait`）。wait を作る前の重複の判断も
-  store の開いた wait で行う（D3）。
+- 開いた wait が無く、秘密が未登録なら、従来どおり wait を作る（`enter_credential_wait`）。
 - 開いた wait が無く、秘密が登録済みなら通す。最初から登録済みで一度も待たなかった task は検証を経ない（ADR 2026-10-15 D4 と同じ。
   検証は待ちに入った wait にだけかかる）。
 - 照合は今の route の `secret_id` で行う。別の秘密の wait は、その秘密を要する route でだけ hold する。
 
-### D3 `ExecutionCoordination` の `credential_held` は写しで、判断に使わない
+### D3 `ExecutionCoordination` の `credential_held` は cache で、hold の判断に使わない
 
-`credential_held` はメモリの写しで、正本ではない。gate と `enter_credential_wait` は印の有無で判断しない
-（以前は印があると wait を作らずに戻ったため、resume の後に秘密 file が消えると、wait も受信箱の item も無いまま task が止まり得た。コードを読んだ見込みで、試験では確かめていない）。
-写しは開いた wait を見たとき・wait を作ったときに立て、gate を通したときに消す（daemon の起動時の `restore_credential_waits` も立てる）。
+`credential_held` はメモリの写しで、正本ではない。run を起こすかの判断（gate の `true`・`false`）は D1 の store の wait だけで決める。
+印は `enter_credential_wait` が「この process で同じ wait を既に入れた」ことを覚え、tick ごとに `credential_wait_enter`
+（writer の lock を取る冪等の入れ直し）を呼ばないための cache としてだけ使う。gate を通したときに消す。
 
-写しを残すのは、この変更の書き込み範囲（`crates/task-dispatch/src/dispatcher/`）に `execution_coordination.rs` が無いためである。
-撤去の条件は「`credential_held` を読む判断が無いこと」で、この変更の後は満たす。撤去は `ExecutionCoordination` の owner の変更で行い、
-R4 の record-fix（D1 の表を締め直す unit）か後の task が、D1 の表の `credential_held` の行と一緒に消す。
+- daemon の起動時の `restore_credential_waits` は、atomic task の印を立て直さない。gate が store の wait で hold し、最初の
+  `enter_credential_wait` が印を立てる（そのときの `credential_wait_enter` は開いた wait をそのまま返し、新しい行も受信箱の item も作らない）。
+- 印が残ったまま開いた wait が無くなり、秘密 file も消えた場合（resume の直後に file が消えた場合）は、印のために新しい wait が
+  作られない。これは従来からの挙動で、この変更では変えていない（コードを読んだ見込み。試験では確かめていない）。
 
 ### D4 WU のある task の挙動は変えない
 

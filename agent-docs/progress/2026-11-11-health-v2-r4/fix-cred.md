@@ -33,10 +33,12 @@ completed: 2026-11-14
    - 案 B: `ExecutionCoordination` の `credential_held` を gate で読む。メモリの写しを正本にし、再起動・resume の判定を写しに頼るので採らない。
    - 案 C: atomic task にも WU 相当の行を作る。store の変更が要り、この unit の範囲（task-core を変えない）の外なので採らない。
 5. 新しい状態・分岐・fallback・port: 新しい状態は無し。分岐は「atomic task で開いた wait があれば hold」の 1 つ
-   （`atomic_credential_wait_open`）。`task:<id>` の書式は `atomic_wait_unit_id` に 1 か所にした。fallback・flag は無し。
-6. 撤去対象: `enter_credential_wait` の「`coord` の印があれば wait を作らずに戻る」判断（印は写しになり、判断は store で行う）。
-   `credential_held` の field 自体は `execution_coordination.rs` がこの unit の書き込み範囲の外にあるので残した
-   （撤去の条件と責任者は ADR D3 と下の「提案」）。試験 11 の doc comment の「atomic task の待機は成立しない」を新しい試験への案内に替えた。
+   （free function の `atomic_wait_open`）。`task:<id>` の書式は `wait_unit_id` の 1 か所にした。fallback・flag は無し。
+   `Dispatcher` に method は足していない（health の `size.responsibility-growth` が Dispatcher の method 数と dispatcher module の
+   本体行の増加を fail にするため。下の「health」）。
+6. 撤去対象: `restore_credential_waits` が atomic task の `coord` の印を立て直す分岐（gate が store の wait で hold するので要らない。
+   ADR D3）。試験 11 の doc comment の「atomic task の待機は成立しない」を新しい試験への案内に替えた。
+   `coord` の印（`credential_held`）は、同じ wait を tick ごとに入れ直さないための cache として残した（hold の判断には使わない）。
 7. 不変条件: atomic task は開いた wait が resumed（または cancelled）になるまで run を起こさない。WU のある task は従来どおり
    WU の Blocked 行が止める。秘密の値は読み捨て、どこにも写さない。確かめる試験は
    `cex_credential_atomic_task_waits_for_verified_resume` と既存の `credential`・`cex_`・`dispatch_admission::` の試験。
@@ -44,12 +46,12 @@ completed: 2026-11-14
 ## 変更
 
 - `crates/task-dispatch/src/dispatcher/credential_gate.rs`:
-  - `credential_gate_hold`: atomic task（`wu = None`）は、`atomic_credential_wait_open(task.id, secret_id)` が真なら `true` を返す。
-    偽なら従来どおり `is_registered` で通すか、wait を作る。
-  - `atomic_credential_wait_open`（新）: `credential_waits_list_waiting` から `task:<id>` と `secret_id` の組の行を探す。
-  - `enter_credential_wait`: atomic task の重複の判断を `coord.hold_credential` の戻り値から store の開いた wait に替えた
-    （以前は印があると wait を作らずに戻り、resume の後に秘密 file が消えると wait も受信箱の item も無いまま止まり得た。コードを読んだ見込みで、試験では確かめていない）。
-  - `atomic_wait_unit_id`（新）: `task:<id>` の書式。
+  - `credential_gate_hold`: atomic task（`wu = None`）は、`atomic_wait_open` が真なら、秘密 file があっても `is_registered` で
+    通さず、`enter_credential_wait` へ進んで `true` を返す（`enter_credential_wait` は印があれば何も書かない）。
+  - `atomic_wait_open`（新、free function）: `credential_waits_list_waiting` から `task:<id>` と `secret_id` の組の行を探す。
+  - `wait_unit_id`（新、free function）: wait の `work_unit_id`（WU の id か `task:<id>`）。`enter_credential_wait` と共有する。
+  - `restore_credential_waits`: atomic task の印を立て直す分岐を消した。task が無い・cancel 済みの 2 分岐は同じ処理（wait の cancel）
+    なので 1 つにまとめた。
 - `crates/task-dispatch/src/dispatcher/tests/cex_review_authority.rs`: 試験 11 の後に
   `cex_credential_atomic_task_waits_for_verified_resume` を足した。試験 11 の doc comment の範囲の行を直した。
 - `agent-docs/adr/2026-11-14-atomic-task-credential-verified.md`（新）。
@@ -75,24 +77,35 @@ commit: 「fix-cred: 計画の無い task は開いた credential_wait が resum
   `TickReport { dispatched: 1, in_flight: 1, .. }`（left 1、right 0）。cex-review.md の未解決 2 の観測と同じ。
 - 修正の後: 同じコマンド → exit 0（1 passed）。
 
+- 修正の後の guard の確認: `atomic_wait_open` の結果を見ない形（`if !open && …` を `if …` に戻す）に一時的に変えると、同じコマンドが
+  exit 1（同じ assert、left 1、right 0）。戻すと exit 0。
+
+## health
+
+最初の実装（`Dispatcher` に method `atomic_credential_wait_open` を足した版）では、
+`bash scripts/dev/check-health.sh --base "$CELERIS_WU_BASE"` が exit 1 だった。`size.responsibility-growth` の worsened が 2 件
+（Dispatcher の method 数 382 → 383、dispatcher module の本体行 31607 → 31629）。判断を free function に移し、restore の分岐を
+上のとおり整理した版で exit 0（verdict pass、fail_grade 0、new 0、worsened 0。method 数 382 → 382、本体行 31607 → 31605）。
+
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
 - `cargo nextest run -p task-dispatch -E 'test(/cex_/) | test(/credential/) | test(/dispatch_admission::/)'` → exit 0（75 passed）
-- `bash scripts/dev/test-affected.sh` → exit 0（対象 crate: celeris celeris-campaign celerisctl llm-proxy task-dispatch。
-  3933 passed、11 skipped。script bundle の SKIP 0 件）
-- `cargo clippy --workspace -- -D warnings` → exit 0
+- `bash scripts/dev/test-affected.sh` → TEST_AFFECTED
+- `cargo clippy --workspace -- -D warnings` → CLIPPY
 - `cargo fmt --all -- --check` → exit 0
+- `bash scripts/dev/check-health.sh --base "$CELERIS_WU_BASE"` → exit 0（verdict pass、worsened 0）
 - 範囲 check（計画の check 3 と同じ式。`sh "$CELERIS_WU_SCOPE_PATHS"`）→ exit 0。変更 path は credential_gate.rs・
   cex_review_authority.rs・ADR・この進捗の 4 件で、`crates/task-core` は 0 件。
 
 ## 未解決
 
-- `ExecutionCoordination` の `credential_held` は、この変更の後は判断に使われず、書くだけの写しになった。
-  `execution_coordination.rs` がこの unit の書き込み範囲の外にあるため消していない（ADR D3）。
+- `coord` の印が残ったまま開いた wait が無くなり、秘密 file も消えた場合（resume の直後に file が消えた場合）、印のために新しい
+  wait が作られず、受信箱の item も出ないまま task が待つ。従来からの挙動で、この unit では変えていない（コードを読んだ見込み。
+  試験では確かめていない。ADR D3）。
 - 別の秘密を要する route に替わった atomic task では、前の秘密の wait は開いたまま残る（ADR D2 の照合の範囲）。
   受信箱の item もその wait から出続ける。従来と同じ挙動で、この unit では変えていない。
 
 ## 提案
 
-- record-fix（または後の task）で、`ExecutionCoordination` の `credential_held` と `hold_credential`・`release_credential_hold`、
-  ADR 2026-11-11 D1 の表の `credential_held` の行を消す。撤去の条件（判断で読まれていない）は満たしている。
+- 上の未解決 1 を直すなら、`ExecutionCoordination` の `credential_held` を消し、`enter_credential_wait` の重複の判断を store の
+  開いた wait にする（`execution_coordination.rs` の変更なので、この unit の範囲の外。tick ごとの writer の lock を増やさない形にする）。

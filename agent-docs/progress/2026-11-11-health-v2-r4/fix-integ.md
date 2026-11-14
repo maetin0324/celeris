@@ -40,7 +40,8 @@ store-scope: a
    `INTEGRATION_RESULT_NOT_APPLIED`。新しい状態・列・fallback は無し。
 6. 撤去対象: `finish_phase_integration` の中の 3 回の書き込み（`work_unit_transition`・`promote_newly_ready`・
    `apply_transition_with_events` の呼び出し）。`promote_newly_ready` の行と event の組み立ては `ready_promotions` に移し、
-   `promote_newly_ready`（人の gate の後の dispatch で使う）はそれを書くだけにした。試験 7 の旧い準備（統合 WU の done を
+   `promote_newly_ready`（人の gate の後の dispatch で使う）はそれを書くだけにした。`reconcile_tree_units`（子 task の状態を
+   写した後）に同じ昇格のループがもう 1 つあったので、`promote_newly_ready` の呼び出しに畳んだ。試験 7 の旧い準備（統合 WU の done を
    store に直接書く）は、修正の後は起きない状態なので消した。
 7. 不変条件: 統合の完了は 1 回の書き込みで、再起動の後に `PhaseIntegrated` はちょうど 1 件、merge は二重にならず、途中確認の
    段の `PhaseGate` を飛ばさない。試験は試験 7・`cex_integration_restart_keeps_the_stage_pause`・
@@ -58,10 +59,13 @@ store-scope: a
   705 → 704。
 - `crates/task-dispatch/src/dispatcher/phase_integration.rs`: `finish_phase_integration` は、統合 WU を done に置いた行の集合
   から trigger・events・promote の行を組み立て、`apply_transition_with_work_units` で 1 回だけ書く。worktree の削除
-  （`remove_phase_worktrees` に括った。中身は以前と同じ）と最終レビューの起動は commit の後。遷移が通らなければ
-  `reconcile_integration(task, "integration_result_not_applied")`。
-- `crates/task-dispatch/src/dispatcher/work_units.rs`: `ready_promotions`（純粋関数。`promote_newly_ready` と
-  `finish_phase_integration` が共有）。
+  （中身は以前と同じ。同じ関数の中で書き込みの後へ移した）と最終レビューの起動は commit の後。遷移が通らなければ
+  `reconcile_integration(task, "integration_result_not_applied")`。同じ file に `ready_promotions`（純粋関数。
+  `promote_newly_ready` と `finish_phase_integration` が共有）を置いた。
+- `crates/task-dispatch/src/dispatcher/work_units.rs`: `promote_newly_ready` は `ready_promotions` の行を 1 行ずつ書くだけ。
+- `crates/task-dispatch/src/dispatcher/tree_units.rs`: `reconcile_tree_units` の昇格のループ（`promote_newly_ready` の旧い
+  中身と同じ。`newly_ready`・`Ready`・`dependency_ready`・行ごとの `work_unit_transition`）を `promote_newly_ready` の呼び出しに
+  畳んだ。`updated_at` は tick の始めの時刻から呼び出しの時刻になる（どちらも `OffsetDateTime::now_utc()`）。
 - 試験: `cex_review_authority.rs` の試験 7 と `cex_integration_restart_keeps_the_stage_pause`、fixture の
   `crash_mid_integration_check_with`（途中確認の段 `build` と次の段 `ship`）・`finish_crashed_integration_checks`。
   `task-core/src/store/tests.rs` の `apply_transition_with_work_units_writes_nothing_when_the_transition_is_rejected`。
@@ -79,6 +83,24 @@ store-scope: a
 - `cex_integration_restart_keeps_the_stage_pause`: `pause_after = after(build)` の段 `build` の統合の完了の前で落ちた後、再起動
   した dispatcher は `PhaseGate` で Blocked（`awaiting_human`）にし、`PhaseIntegrated`・`PhaseReported` は 1 件ずつ、段 `ship`
   の WU `c` は pending のままで走らない。完了を書いた後にもう一度作り直して 3 tick 回しても同じ。
+
+## attempt 2: 前回の run の後の check（repo health）の不合格と直し方
+
+- 前回の run の後、celeris の check `celeris:repo-health/1`（基点は WU の base 07fca101）が fail-grade 4 件で落ちた。手元で
+  `python3 scripts/dev/repo-health/repo_health.py --repo scripts/dev --base 07fca101 --head worktree --policy-version 1`
+  を走らせて同じ 4 件を再現した（exit 1）。
+  - `size.responsibility-growth`: `dispatcher/work_units.rs` の本体の行 2098 → 2110（閾値 2000）。
+  - `size.responsibility-growth`: `Dispatcher` の method の数 382 → 383（`remove_phase_worktrees` を足した）。
+  - `size.responsibility-growth`: `dispatcher` module の本体の行 31605 → 31618。
+  - `source-size`: `work_units.rs` の production_size 2111（許容 2099）。
+- 直し方（振る舞いは変えていない。試験は変えていない）:
+  - `remove_phase_worktrees` を消し、中身を `finish_phase_integration` の書き込みの後に戻した（method 383 → 382）。
+  - `ready_promotions` を `work_units.rs` から `phase_integration.rs` へ移した（`work_units.rs` 2110 → 2084）。
+    意味の上の owner は WU の遷移の決定を持つ `crate::execution_scheduler`（純粋関数）だが、この WU の範囲 check が
+    `crates/task-dispatch/src/execution_scheduler.rs` を許していないので、dispatcher の中に置いた（提案に書いた）。
+  - `reconcile_tree_units` の重複した昇格のループを `promote_newly_ready` に畳んだ（規約 2。module 31618 → 31597、
+    `reconcile_tree_units` の行 282 → 263）。
+- 直した後の同じ検査: verdict=pass、exit 0、fail_grade=0、new=0、worsened=0。
 
 ## 統合 WU を done にするほかの経路（目的 (4)）
 
@@ -133,6 +155,10 @@ commit: 「fix-integ: 統合の完了（統合 WU の done・promote・PhaseInte
 - 無し（上の「確かめられない事項」の 2 点は試験の限界として記録した）。
 
 ## 提案
+
+- `ready_promotions`（pending の WU を ready にした行と `WorkUnitTransitioned{dependency_ready}`）は WU の遷移の決定なので、
+  `crate::execution_scheduler`（`decide` が同じ `newly_ready` から `newly_ready` の行を作る）へ移すのがよい。この WU の範囲
+  check の外なので、record-fix か別 task で移す。
 
 - `on_integration_finished` の stale discard（Task が running でない統合の結果を捨てる）も、統合 WU を running のまま残す。
   同じ `reconcile_integration` で pending に戻すかを別 task で決める（この WU の範囲外。今回は変えていない）。

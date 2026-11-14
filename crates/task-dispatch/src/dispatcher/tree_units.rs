@@ -999,26 +999,7 @@ impl Dispatcher {
             } else if changed {
                 let units = self.store.work_units_for(task_id)?;
                 // 子の done で依存が満たされた unit を ready に（段階の障壁は `newly_ready` が見る）。
-                for id in task_core::newly_ready(&units) {
-                    let Some(u) = units.iter().find(|u| u.id == id) else {
-                        continue;
-                    };
-                    let mut row = u.clone();
-                    row.status = task_core::WorkUnitStatus::Ready;
-                    row.updated_at = rfc3339(now);
-                    self.store.work_unit_transition(
-                        task_id,
-                        row,
-                        Event::WorkUnitTransitioned {
-                            work_unit_id: u.id.clone(),
-                            key: u.key.clone(),
-                            from: task_core::WorkUnitStatus::Pending,
-                            to: task_core::WorkUnitStatus::Ready,
-                            reason: "dependency_ready".to_string(),
-                            run_id: None,
-                        },
-                    )?;
-                }
+                self.promote_newly_ready(task_id, &units)?;
                 self.store.work_units_for(task_id)?
             } else {
                 units

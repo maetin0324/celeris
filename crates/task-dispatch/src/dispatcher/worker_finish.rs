@@ -541,7 +541,7 @@ impl Dispatcher {
                 run_id: &run_id,
                 wu,
                 units: &units,
-                continuation: crate::execution_scheduler::ContinuationInputs {
+                continuation: run_settlement::ContinuationInputs {
                     checkpoint: checkpoint_opt.as_ref(),
                     prev_checkpoint: prev_checkpoint_opt.as_ref(),
                     no_progress_before,

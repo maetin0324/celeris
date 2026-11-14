@@ -28,6 +28,9 @@ completed: 2026-11-14
   [ADR 2026-11-13-continuation-resume-shared-inputs](../../adr/2026-11-13-continuation-resume-shared-inputs.md) に書いた。D4 の
   continuation-resume の契約を id・context・token の照合に絞り、表の「拒否」と契約の入力「照合 key の一致」「前回の拒否」は共有しない（同 ADR D4 が正本の付記）。
 - ADR 2026-11-11-dispatcher-state-ownership と cex_ の試験は変えていない。transaction の範囲は変えていない（D3）。
+- task の最終 review で受け入れ条件 0 が落ちた（根の `run_settlement.rs` に `execution_scheduler::` の参照が無かった）。settle-root が根で
+  `pub(crate) use crate::execution_scheduler::ContinuationInputs;` と再公開し、`worker_finish.rs` は `run_settlement::ContinuationInputs` で
+  入力を作るようにした。`worker_finish.rs` に `execution_scheduler::` の字面は無い（[settle-root.md](settle-root.md)）。
 
 ## 各 unit の要点
 

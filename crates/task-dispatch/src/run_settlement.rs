@@ -31,6 +31,10 @@ use task_worker::{AdapterError, Evidence, RunOutcome, Terminal};
 
 use crate::policy::ProviderOutcome;
 
+// WU の run の continuation の入力（[`WorkUnitRunInput`] の欄）。型の正本は `execution_scheduler` で、ここは同じ型を
+// 再公開するだけで写さない。worker 完了の経路はこの名前で入力を作り、WU の run の入口を run_settlement だけにする。
+pub(crate) use crate::execution_scheduler::ContinuationInputs;
+
 mod task_run;
 pub(crate) use task_run::{
     PhaseStep, TaskRunInput, hold_task_for_worker_decisions, phase_step_after_write,

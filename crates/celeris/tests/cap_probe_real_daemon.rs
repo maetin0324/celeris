@@ -9,7 +9,8 @@
 //! CLI にあって daemon に無い toolchain・変数・socket は該当 arm の `env_failure` になる。
 
 #[path = "../../campaign/tests/support_cases/mod.rs"]
-#[allow(dead_code)]
+// 3 つの統合試験 binary が別々に同じ support module を取り込む（crate が別なので共通 module にできない）。
+#[allow(dead_code, clippy::duplicate_mod)]
 mod support_cases;
 use std::{
     fs,

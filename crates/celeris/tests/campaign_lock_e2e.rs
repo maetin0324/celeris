@@ -9,7 +9,8 @@
 //! dispatcher 相当の状態遷移、worker の run イベントと成果物、A arm の harness、grader の評価 command。
 //! 時計は注入（`Clock::sleep` が実行内部を 1 歩進める）。外部 LLM・有料 job・本番変更・userns は使わない。
 #[path = "../../campaign/tests/support_cases/mod.rs"]
-#[allow(dead_code)]
+// 3 つの統合試験 binary が別々に同じ support module を取り込む（crate が別なので共通 module にできない）。
+#[allow(dead_code, clippy::duplicate_mod)]
 mod support_cases;
 use std::{
     collections::BTreeMap,

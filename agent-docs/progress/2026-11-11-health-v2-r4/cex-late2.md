@@ -239,3 +239,14 @@ repo-health の `size.responsibility-growth` への配慮: `crates/task-dispatch
 
 ### 証拠（計画 v2、提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
+
+- WU の check 0（ADR・試験 2 本・進捗の ADR の参照の grep）: exit 0。
+- `cargo nextest run -p task-dispatch -E 'test(/cex_late_completion::/)'`: 6 本すべて合格、exit 0。
+- `cargo nextest run -p task-dispatch -p task-core`: 3264 本すべて合格、exit 0。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+- `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh`: exit 0（`check-adr-numbers: ok (446 files)`）。
+- 範囲の check（`sh "$CELERIS_WU_SCOPE_PATHS"` を許す path で絞る）: 範囲外の path は無し。変更 path は ADR・この file・
+  `crates/task-core/src/{transition.rs,transition/tests.rs,retry_policy/tests.rs}`・`crates/task-dispatch/src/dispatcher/review_verdict.rs`・
+  `crates/task-dispatch/src/dispatcher/tests/{cex_late_completion.rs,cex_review_authority.rs}`。
+- `python3 scripts/dev/repo-health/repo_health.py --repo . --base "$CELERIS_WU_BASE" --head HEAD --profile celeris --policy-version 1`:
+  verdict=pass、worsened 0・new 0。`sh scripts/dev/progress-index.sh --check`: exit 0。

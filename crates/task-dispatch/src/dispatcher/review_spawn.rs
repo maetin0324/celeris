@@ -403,7 +403,7 @@ impl Dispatcher {
                 Trigger::TokenBudgetExhausted,
                 Some(Event::worker_progress(
                     run_id.clone(),
-                    token_budget::outcome(used, max),
+                    crate::run_settlement::token_budget_outcome(used, max),
                 )),
             )?;
             return Ok(true);

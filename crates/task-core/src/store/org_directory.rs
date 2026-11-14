@@ -61,7 +61,7 @@ impl OrgDirectory for SqliteStore {
                      COALESCE((SELECT r.location_json FROM project_repos r \
                                WHERE r.project_id = p.id AND r.is_primary = 1 \
                                ORDER BY r.created_at ASC, r.id ASC LIMIT 1), p.workspace), \
-                     p.archived_at, p.paused_from, p.auto_advance, p.slug, p.auto_integrate \
+                     p.archived_at, p.paused_from, p.auto_advance, p.slug \
                  FROM projects p ORDER BY p.created_at DESC, p.id DESC",
             )?;
             let rows = stmt.query_map([], Self::project_row)?;
@@ -81,7 +81,7 @@ impl OrgDirectory for SqliteStore {
                      COALESCE((SELECT r.location_json FROM project_repos r \
                                WHERE r.project_id = p.id AND r.is_primary = 1 \
                                ORDER BY r.created_at ASC, r.id ASC LIMIT 1), p.workspace), \
-                     p.archived_at, p.paused_from, p.auto_advance, p.slug, p.auto_integrate \
+                     p.archived_at, p.paused_from, p.auto_advance, p.slug \
                      FROM projects p WHERE p.id = ?1",
                     params![id.to_string()],
                     Self::project_row,

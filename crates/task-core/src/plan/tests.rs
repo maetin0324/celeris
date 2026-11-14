@@ -959,6 +959,7 @@ fn project_repo(name: &str, primary: bool) -> crate::repos::ProjectRepo {
         sync: None,
         run: crate::repos::RepoRun::Auto,
         is_primary: primary,
+        auto_integrate: false,
         created_at: OffsetDateTime::now_utc(),
     }
 }

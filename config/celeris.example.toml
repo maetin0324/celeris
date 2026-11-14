@@ -458,8 +458,8 @@ interval_secs = 30                                # 判定と送信の間隔（�
 #
 # `repo` は**人の作業チェックアウト**。`GET /releases` の `on_main`
 # （`git -C <repo> merge-base --is-ancestor <sha> main`）の判定に使う。
-# 自動取り込みはリポジトリの属性（PATCH /api/v1/repos/{id} {"auto_integrate": true}、リポジトリの設定画面の切替。ADR 2026-11-14-repo-auto-integrate）。
-# このrepoの task は取り込み後にrelease準備へ進み、他のrepoの task は既定ブランチへ取り込んで終わる。
+# 自動取り込みは案件の属性（PATCH /api/v1/projects/{id} {"auto_integrate": true}、案件画面の切替。ADR 2026-10-16-project-auto-integrate）。
+# このrepoの案件は取り込み後にrelease準備へ進み、他のrepoの案件は既定ブランチへ取り込んで終わる。
 # `~` は celeris の $HOME で展開する。無ければ `on_main` が null になるだけ。
 # [selfdeploy]
 # releases_dir = "~/.local/celeris/releases"   # 既定

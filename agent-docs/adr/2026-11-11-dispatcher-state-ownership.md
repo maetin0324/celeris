@@ -6,7 +6,8 @@ status: accepted
 
 - 状態: 採用・実装済み（2026-11-14。R4 の unit record が実測と表の照合で確かめた。記録は
   [2026-11-11-health-v2-r4.md](../progress/2026-11-11-health-v2-r4.md)）。実装は task 01M6TYVJT4S29ZMP6P0D4831JG（健全性 v2 R4）。
-  field の置き場と移す unit の正本は D1 の表、共有する判定の正本は D4 の表（どちらも record では変えていない）。決定と unit の対応:
+  field の置き場と移す unit の正本は D1 の表、共有する判定の正本は D4 の表（record では変えていない。2026-11-14 に record-fix が D1 の表の
+  `ProbePorts` の 3 行の名と「移し済み」列を実装に合わせた）。決定と unit の対応:
 
   | 決定 | 実装した unit |
   |---|---|
@@ -14,7 +15,7 @@ status: accepted
   | D1 field の owner | own-cluster・own-maint・own-routing・own-hooks・own-quota・own-supervisor・own-coord-a・own-coord-b・own-orchestration（表と照合する unit 列は adr-align が足した） |
   | D3 判断と副作用・D4 共有の判定 | settle（`replan_or_ask`・`run_end_record`・`stored_session_fresh_reason`）・own-supervisor（`infra_retry_after`）・admit（`dispatch_admission::admit`）・review-decide（`failed_checks`） |
   | D6 ablation と試験用フック | own-hooks |
-  | D7 反例試験 | cex-lease・cex-review（分割の前に固定） |
+  | D7 反例試験 | cex-lease・cex-review（分割の前に固定）、cex-late（残りの反例 2 つ）、fix-cred・fix-integ（今の実装で成り立たなかった反例 2 件を owner で直した）。行ごとの試験名は付記 2026-11-14 |
 - 根拠の実測: [change-map.md](../progress/2026-11-11-health-v2-r4/change-map.md) と
   [change-map.json](../progress/2026-11-11-health-v2-r4/change-map.json)（field 116 件・co_change・equivalence 6 件）、
   owner 候補の規則は [owners.json](../progress/2026-11-11-health-v2-r4/owners.json)。
@@ -48,17 +49,18 @@ field を下位の struct に包んで Dispatcher から互いに参照させる
 ## D1 境界と field の owner
 
 owner は 9 つ（`TestHooks` と `ProbePorts` は置き場が違うので行を分ける）。`Dispatcher` は組み立て（config と port の注入）と
-tick の順序だけを持つ。field 数は下の field → owner の表の owner 列で数えた。「移し済み」は owner の struct に既にある数。
+tick の順序だけを持つ。field 数は下の field → owner の表の owner 列で数えた。「移し済み」は owner の struct に既にある数
+（2026-11-14 に unit record-fix が表の行ごとに owner の module の struct を読んで数え直した。stay 以外のすべての行が移し済み）。
 
 | owner | module（`crates/task-dispatch/src/`） | 持つ状態 | field 数 | 移し済み |
 |---|---|---|---:|---:|
-| `ExecutionCoordination` | `execution_coordination.rs` | task・WU の待ち、check・統合の process、review の同期、write set の予約、credential・browser・cluster の待ち、channel と tick | 30 | 0 |
-| `RunSupervisor` | `run_supervisor.rs` | 実行中の run の表（run の集合の正本）、review run、infra backoff、lease の照合 | 7 | 0 |
-| `RoutingRuntime` | `routing_runtime.rs`（`routing_runtime/route_state.rs`・`routing_runtime/classification_board.rs`・`routing_runtime/quota.rs`・`routing_runtime/quota_estimate.rs`） | 経路の宣言と登録簿・routing mode・harness adapter、account の上限と帳簿・source の cooldown、分類待ち、経路なし、quota の窓と較正、eval run、knowledge の到達性の cache | 19 | 15 |
+| `ExecutionCoordination` | `execution_coordination.rs` | task・WU の待ち、check・統合の process、review の同期、write set の予約、credential・browser・cluster の待ち、channel と tick | 30 | 30 |
+| `RunSupervisor` | `run_supervisor.rs` | 実行中の run の表（run の集合の正本）、review run、infra backoff、lease の照合 | 7 | 7 |
+| `RoutingRuntime` | `routing_runtime.rs`（`routing_runtime/route_state.rs`・`routing_runtime/classification_board.rs`・`routing_runtime/quota.rs`・`routing_runtime/quota_estimate.rs`） | 経路の宣言と登録簿・routing mode・harness adapter、account の上限と帳簿・source の cooldown、分類待ち、経路なし、quota の窓と較正、eval run、knowledge の到達性の cache | 19 | 19 |
 | `ClusterRuntime` | `cluster_runtime.rs` | クラスタの接続・tunnel・job の poll と、それを行う port | 25 | 25 |
-| `HostMaintenance` | `host_maintenance.rs` | disk・scratch・build cache・repo target の掃除と sweep の port、中止された task の作業場所、cron の棚卸しの印、TS の比較の状態 | 12 | 10 |
-| `ProjectOrchestration` | `project_orchestration.rs` | 案件の停滞の見張り、CoS chat の起動の待ち | 2 | 0 |
-| `ProbePorts` | `probe_ports.rs` | 本番の既定を持つ注入 port（壁時計・knowledge の到達性・eval の harness の版） | 3 | 0 |
+| `HostMaintenance` | `host_maintenance.rs` | disk・scratch・build cache・repo target の掃除と sweep の port、中止された task の作業場所、cron の棚卸しの印、TS の比較の状態 | 12 | 12 |
+| `ProjectOrchestration` | `project_orchestration.rs` | 案件の停滞の見張り、CoS chat の起動の待ち | 2 | 2 |
+| `ProbePorts` | `probe_ports.rs` | 本番の既定を持つ注入 port（壁時計・knowledge の到達性・eval の harness の版） | 3 | 3 |
 | `Dispatcher`（組み立て） | `dispatcher.rs` | config・store・snapshot の publisher・credential の gate と再開・孤児の回収・variant の観測・面倒を見る task の述語 | 8 | — |
 | `TestHooks` | `dispatcher/tests/hooks.rs`（ablation は `dispatcher/tests/phase_effect_ab.rs` の `EffectAblation`） | 試験の時計・遅延・停止点・ablation（`#[cfg(test)]`） | 10 | 10 |
 
@@ -108,18 +110,20 @@ owner ごとの合計は、組の両側を `owners.json` の `modules` で owner
 change-map.json の `fields` 116 件すべて。「change-map の候補」は `fields[].owner`。この表が field の置き場と、移す unit の正本で、
 後の unit の check は unit 列から field を引く。表を変えるのはこの ADR の改訂で、owner を移す unit は表を変えない。
 
-- unit 列は、その field を移す（移した）unit。stay は `Dispatcher` に残る組み立て。
-- 終わった unit（own-cluster・own-maint・own-routing・own-hooks）の行は、owner 列に実際の置き場を書いた。その field は `Dispatcher` に無い。
+- field 列は `Dispatcher` に居たときの field の名（change-map の名）。ただし `ProbePorts` の 3 行は実装の名（`probe_ports.rs` の `now_unix`・`knowledge`・
+  `eval_version`）で書く（change-map の名との対応は付記 2026-11-14 の record-fix）。
+- unit 列は、その field を移した unit。stay は `Dispatcher` に残る組み立て。
+- unit はすべて終わった（2026-11-14）。owner 列は実際の置き場で、stay 以外の field は `Dispatcher` に無い。
   候補と違う置き場は 17 件: 候補 composition-root の port 14 件（`ClusterRuntime` へ 7 件、`HostMaintenance` へ 2 件、`RoutingRuntime` へ 5 件）、
   候補 test-hooks の probe 2 件（`ClusterRuntime` へ）、候補 execution-coordination の `task_workspaces`（`HostMaintenance` へ）。
   理由は各付記に書いた（移した port を読むのはその owner の method だけ、など）。
-- まだ `Dispatcher` にある field の owner 列は移す先で、候補どおり。
 - 候補 test-hooks の 15 件は、`#[cfg(test)]` の 10 件を `TestHooks` に置いた（うち phase_effect_ab の 4 件はその中の評価用 fixture
   `EffectAblation`。D6 の `PhaseAblation` はこの名で置いた）。本番の既定（実時計・実 ssh・実 knowledge の probe）を持つ 5 件のうち、
-  クラスタの 2 件は `ClusterRuntime` に置き、残る 3 件を `ProbePorts`（`probe_ports.rs`）に置く。`ProbePorts` は owner が引数で受ける。
+  クラスタの 2 件は `ClusterRuntime` に置き、残る 3 件を `ProbePorts`（`probe_ports.rs`）の `now_unix`・`knowledge`・`eval_version` に置いた。
+  `ProbePorts` は owner が持たず、`Dispatcher` の入口が読んだ値を owner の method に引数で渡す。
 - main の取り込み（unit sync-policy）で `Dispatcher` に増えた field は無い（own-hooks の統合の後と取り込みの後で `pub struct Dispatcher`
-  の field の一覧が同じ）。今の `Dispatcher` の field は 60 件で、owner の struct を持つ 4 件（`cluster`・`maint`・`routing`・`test_hooks`）
-  を除く 56 件がこの表の unit 列が own-quota・own-supervisor・own-coord-a・own-coord-b・own-orchestration・stay の行と一致する。
+  の field の一覧が同じ）。sync-policy の時点の `Dispatcher` の field は 60 件だった。今（2026-11-14）は 16 件で、この表の stay の 8 件、
+  owner の struct 7 件（`maint`・`supervisor`・`coord`・`orchestration`・`cluster`・`routing`・`probes`）、`#[cfg(test)]` の `test_hooks` 1 件。
 
 | field | change-map の候補 | owner | cfg(test) | 書き手の扱い | unit |
 |---|---|---|:-:|---|---|
@@ -227,9 +231,9 @@ change-map.json の `fields` 116 件すべて。「change-map の候補」は `f
 | `before_integration_start` | test-hooks | `TestHooks` の `before_integration_start` | † | 時計・遅延・停止点 | own-hooks |
 | `cluster_liveness_probe` | test-hooks | `ClusterRuntime` |  | 本番の既定を持つ注入 port（`#[cfg(test)]` ではない）。`Dispatcher` の setter が `ClusterRuntime` の setter に渡す | own-cluster |
 | `cluster_ssh_command_override` | test-hooks | `ClusterRuntime` |  | 本番の既定を持つ注入 port（`#[cfg(test)]` ではない）。`Dispatcher` の setter が `ClusterRuntime` の setter に渡す | own-cluster |
-| `eval_version_probe` | test-hooks | `ProbePorts`（`probe_ports.rs`） |  | 本番の既定を持つ注入 port（`#[cfg(test)]` ではない） | own-orchestration |
-| `knowledge_probe` | test-hooks | `ProbePorts`（`probe_ports.rs`） |  | 本番の既定を持つ注入 port（`#[cfg(test)]` ではない） | own-orchestration |
-| `now_unix_fn` | test-hooks | `ProbePorts`（`probe_ports.rs`） |  | 本番の既定を持つ注入 port（`#[cfg(test)]` ではない） | own-orchestration |
+| `eval_version` | test-hooks | `ProbePorts`（`probe_ports.rs`） |  | 本番の既定を持つ注入 port（`#[cfg(test)]` ではない） | own-orchestration |
+| `knowledge` | test-hooks | `ProbePorts`（`probe_ports.rs`） |  | 本番の既定を持つ注入 port（`#[cfg(test)]` ではない） | own-orchestration |
+| `now_unix` | test-hooks | `ProbePorts`（`probe_ports.rs`） |  | 本番の既定を持つ注入 port（`#[cfg(test)]` ではない） | own-orchestration |
 | `test_cos_reserved_sources` | test-hooks | `TestHooks` の `cos_reserved_sources` | † | 時計・遅延・停止点 | own-hooks |
 | `test_disable_stale_priority` | test-hooks | `TestHooks` の `ablation`（`EffectAblation` の `disable_stale_priority`） | † | phase_effect_ab::stale_priority。`Dispatcher` の薄い入口が `test_hooks` から読み、owner の関数へ引数で渡す（own-coord-b、D6） | own-hooks |
 | `test_disable_write_set_gate` | test-hooks | `TestHooks` の `ablation`（`EffectAblation` の `disable_write_set_gate`） | † | phase_effect_ab::write_set。`Dispatcher` の薄い入口が `test_hooks` から読み、owner の関数へ引数で渡す（own-coord-a、D6） | own-hooks |
@@ -457,3 +461,31 @@ profile の高 risk の class と capability-map.json の owner path に、こ�
 - 試験 `dispatcher/tests/structure_guard.rs` が、`Dispatcher` の struct の本体で条件に `test` を含む `#[cfg(...)]` 属性が 1 個より多いこと、
   一覧 `OWNER_STRUCTS`（今は `ClusterRuntime`・`HostMaintenance`・`RoutingRuntime`）の struct に 1 個でもあることを落とす。field の名前は見ない。
   owner を作る unit は自分の struct をこの一覧に足す。owner ごとの guard にあった同じ assert は消した。
+
+## 付記 2026-11-14: D7 の反例ごとの試験と、成り立たなかった反例の修正（record-fix）
+
+D7 の表の行ごとに、反例を固定した試験の名を書く。試験はすべて `crates/task-dispatch/src/dispatcher/tests/` の下
+（`cex_lease_restart.rs`・`cex_review_authority.rs`・`cex_late_completion.rs`）。対応は各試験の doc comment の不変条件を読んで付けた。
+「試験の無い部分」は、この付記の時点で反例の名を持つ試験を確かめられなかった部分で、進捗
+[2026-11-11-health-v2-r4.md](../progress/2026-11-11-health-v2-r4.md) の未解決事項に書いた。
+
+| 範囲 | 試験 | 試験の無い部分 |
+|---|---|---|
+| lease | `cex_stale_holder_late_finish_does_not_overwrite_the_reassigned_run`（run B が取った後に旧持ち主 A の完了が遅れて届く）、`cex_orphan_takeover_leaves_the_run_held_in_this_instance`・`cex_orphan_takeover_leaves_a_run_whose_active_holder_lives`（現在の保持者を回収しない） | 回収側が期限切れの snapshot を取った直後に別の接続が renew する順序（cex-lease の 9 本には無い。未確認） |
+| restart | `cex_draining_instance_reclaims_its_expired_lease_without_redispatching`、`cex_restart_after_crash_between_wu_and_task_transitions_is_idempotent`、`cex_reclosing_a_run_after_worker_finished_does_not_write_twice`、`cex_holder_reclosing_an_already_finished_run_does_not_write_twice`、`cex_integration_restart_mid_phase_integration_does_not_merge_twice`、`cex_integration_restart_after_the_integration_unit_is_done_does_not_integrate_again`、`cex_integration_restart_keeps_the_stage_pause` | 新 active が reviewer A を ownerless として閉じて reviewer B を始めた後に、旧 draining instance から A の合格が届く順序（cex_ の試験には無い。`tests/ownerless_runs.rs` の `startup_closes_an_ownerless_reviewer_run_and_rereviews` がこの順序を作るかは未確認） |
+| 同時完了 | `cex_two_parallel_work_unit_runs_finishing_in_one_tick_lose_no_update`、`cex_run_finish_and_work_unit_check_finish_in_one_tick`、`cex_human_cancel_precedes_successful_worker_completion`、`cex_human_pause_survives_completion_and_holds_continuation`、`cex_human_unanswered_question_stays_blocked_across_housekeeping` | Done の処理待ちと lease の期限が同じ tick に来る組み合わせ、WU 遷移の直後と task 遷移の直前に人の操作を挟む順序（未確認） |
+| review/integration | `cex_review_late_pass_on_the_old_candidate_does_not_pass_the_rebased_candidate`（合格の後、verdict の保存の前に target が進む）、`cex_review_worker_claim_does_not_override_a_failing_check`、`cex_review_worker_claim_is_not_done_before_or_against_the_reviewer`、`cex_review_resync_cap_halts_and_starts_no_more_reviewer_runs`、`cex_integration_sync_conflict_schedules_one_repair_and_never_passes_the_conflict`、`cex_late_review_and_integration_after_replan_are_dropped`（人の replan が先に確定した後に旧い統合の完了が届く。cex-late） | 段の repair が先に確定した後の旧い統合の完了、replan・repair の後の旧 review の合格（cex-late の進捗の「残り」1・2。試験は無い） |
+| 権限/予算 | `cex_credential_wait_holds_task_and_unit_across_retry_deadline`、`cex_credential_atomic_task_waits_for_verified_resume`（fix-cred）、`cex_credential_cancel_after_resume_claim_never_dispatches`、`cex_budget_tokens_after_credential_resume_stops_continuation_and_review`、`cex_budget_tree_usd_limit_holds_continuation`、`cex_budget_unknown_cost_holds_continuation`、`cex_budget_credential_resume_does_not_bypass_tree_stop`、`cex_quota_group_two_consecutive_ends_are_both_counted`・`cex_quota_group_two_consecutive_ends_unknown_cost_stops`（quota group の 2 つの終わりが続けて届く。cex-late） | 無し |
+
+今の実装で成り立たなかった反例 2 件（cex-review の未解決 1・2）は、D7 の規則どおり別の unit が owner で直した。
+
+- restart と integration（統合 WU を done にした後、Task の遷移の前で落ちると `PhaseIntegrated` が残らない）: fix-integ が
+  `finish_phase_integration` の書き込みを 1 つの transaction にした（[ADR 2026-11-14 phase-integration-finish-one-write](2026-11-14-phase-integration-finish-one-write.md)）。
+  試験は `cex_integration_restart_after_the_integration_unit_is_done_does_not_integrate_again`（`PhaseIntegrated` 1 件の assert を足した。
+  修正の前は left 0・right 1 で落ち、修正の後に通った）と `cex_integration_restart_keeps_the_stage_pause`。
+- 権限（atomic task は credential の検証の一時失敗の後も秘密 file だけで run を起こす）: fix-cred が `credential_gate_hold` で開いた
+  credential_wait を見るようにした（[ADR 2026-11-14 atomic-task-credential-verified](2026-11-14-atomic-task-credential-verified.md)）。
+  試験は `cex_credential_atomic_task_waits_for_verified_resume`（修正の前は `dispatched` が left 1・right 0 で落ち、修正の後に通った）。
+
+D1 の表の `ProbePorts` の 3 行の field 列は、change-map の名 `now_unix_fn`・`knowledge_probe`・`eval_version_probe` から、実装の名
+`now_unix`・`knowledge`・`eval_version` に直した（owner と unit は変えていない）。

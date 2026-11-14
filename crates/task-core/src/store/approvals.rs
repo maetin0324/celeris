@@ -2,20 +2,28 @@
 
 use rusqlite::TransactionBehavior;
 
+use crate::execution_plan::WorkUnitRow;
 use crate::model::{Event, Task, TaskId};
 use crate::transition::{Outcome, Trigger};
 
 use super::{SqliteStore, StoreError};
 
 impl SqliteStore {
-    pub(super) fn apply_transition_with_events_impl(
+    /// `TaskStore::apply_transition_with_work_units` の本体（`apply_transition_with_events` は `work_units` が空の形）。
+    /// 既存の tx 関数 `update_work_unit_tx`・`append_event_tx`・`apply_transition_tx` を 1 つの transaction で組むだけ。
+    pub(super) fn apply_transition_with_work_units_impl(
         &self,
         task_id: TaskId,
+        work_units: Vec<(WorkUnitRow, Event)>,
         trigger: Trigger,
         extra_events: Vec<Event>,
     ) -> Result<Outcome, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for (row, event) in &work_units {
+            Self::update_work_unit_tx(&tx, row)?;
+            Self::append_event_tx(&tx, task_id, event)?;
+        }
         let outcome = Self::apply_transition_tx(&tx, task_id, trigger, extra_events)?;
         tx.commit()?;
         Ok(outcome)

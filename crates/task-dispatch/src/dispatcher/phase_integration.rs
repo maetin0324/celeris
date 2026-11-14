@@ -90,9 +90,40 @@ pub(super) fn integration_checks_for_phase(
 /// 2026-10-04 統合の検査の進み具合 D2: 統合の検査のログの置き場所
 /// （`<root>/<task_id>/integration-checks/<wu_key>`。葉の WU のログと同じく `check_log_root` を見よ）。
 pub(crate) const INTEGRATION_CHECK_LOG_DIR: &str = "integration-checks";
+/// ADR 2026-11-14-phase-integration-finish-one-write D3: 統合の完了を書けなかった（Task の遷移が通らなかった）ので
+/// 統合 WU を pending に戻した `WorkUnitTransitioned` の reason。
+pub(crate) const INTEGRATION_RESULT_NOT_APPLIED: &str = "integration_result_not_applied";
 /// 2026-10-04 WU 検査の引き継ぎ D3: 葉の WU の受け入れ検査のログの置き場所
 /// （`<root>/<task_id>/work-unit-checks/<wu_key>`。`check_log_root` を見よ）。
 pub(crate) const WORK_UNIT_CHECK_LOG_DIR: &str = "work-unit-checks";
+
+/// ADR-0079 付記「R6-1」D2・ADR 2026-11-14-phase-integration-finish-one-write D2: `units` の中で
+/// [`task_core::newly_ready`] に当たる `pending` の unit を `ready` にした行と、その
+/// `WorkUnitTransitioned{dependency_ready}` の列（書き込みは呼び出し側。`promote_newly_ready` は 1 行ずつ、
+/// `finish_phase_integration` は統合の完了と同じ 1 回の書き込みで書く）。
+pub(super) fn ready_promotions(
+    units: &[task_core::WorkUnitRow],
+    now: &str,
+) -> Vec<(task_core::WorkUnitRow, Event)> {
+    task_core::newly_ready(units)
+        .iter()
+        .filter_map(|id| units.iter().find(|u| &u.id == id))
+        .map(|u| {
+            let mut row = u.clone();
+            row.status = task_core::WorkUnitStatus::Ready;
+            row.updated_at = now.to_string();
+            let event = Event::WorkUnitTransitioned {
+                work_unit_id: u.id.clone(),
+                key: u.key.clone(),
+                from: task_core::WorkUnitStatus::Pending,
+                to: task_core::WorkUnitStatus::Ready,
+                reason: "dependency_ready".to_string(),
+                run_id: None,
+            };
+            (row, event)
+        })
+        .collect()
+}
 
 impl Dispatcher {
     /// 2026-10-11 WU 検査ログの置き場所: 検査ログは repo の作業ツリーの外の `<root>/<task_id>` に置く
@@ -1391,8 +1422,11 @@ impl Dispatcher {
     }
 
     /// ADR-0074 D1.4 5.（Phase F2b）: 統合の成功。`PhaseIntegrated` を残し、統合 WU を done にし、
-    /// その工程の WU の worktree を消し（ブランチは残す）、次の工程の WU を ready にする。次の工程が
+    /// 次の工程の WU を ready にし、その工程の WU の worktree を消す（ブランチは残す）。次の工程が
     /// あれば `Continue{advance}`、最後の工程なら `WorkerDone`（→ 最終レビュー）。
+    /// ADR 2026-11-14-phase-integration-finish-one-write: 判断（trigger・events・promote の行）を先に組み立て、
+    /// 統合 WU の done・promote・events・Task の遷移を `apply_transition_with_work_units` の 1 回で書く。worktree の削除と
+    /// 最終レビューの起動は commit の後の副作用。
     pub(super) fn finish_phase_integration(
         &mut self,
         task: &Task,
@@ -1401,50 +1435,27 @@ impl Dispatcher {
     ) -> Result<(), DispatchError> {
         let task_id = task.id;
         let phase = integ.phase.clone().unwrap_or_default();
+        let now = rfc3339(OffsetDateTime::now_utc());
         let mut done = integ.clone();
         done.status = task_core::WorkUnitStatus::Done;
         done.clear_lease();
-        done.updated_at = rfc3339(OffsetDateTime::now_utc());
+        done.updated_at = now.clone();
         if !run.head.is_empty() {
             done.integrated_commit = Some(run.head.clone());
         }
-        self.store.work_unit_transition(
-            task_id,
-            done,
-            Event::WorkUnitTransitioned {
-                work_unit_id: integ.id.clone(),
-                key: integ.key.clone(),
-                from: task_core::WorkUnitStatus::Running,
-                to: task_core::WorkUnitStatus::Done,
-                reason: "integrated".to_string(),
-                run_id: None,
-            },
-        )?;
-        let units = self.store.work_units_for(task_id)?;
-        // D1.2: 統合が済んだ WU の worktree を消す（ブランチは Task の終端まで残す）。
-        if let Some(ws) = self.task_workspaces_for(task) {
-            for u in units
-                .iter()
-                .filter(|u| u.phase.as_deref() == Some(phase.as_str()) && u.branch.is_some())
-            {
-                for repo in ws.repos.iter().filter(|r| r.is_git()) {
-                    let lwt = crate::integration::wu_worktree(
-                        &ws.task_dir,
-                        &task_id.to_string(),
-                        &u.key,
-                        &repo.name,
-                        &repo.source,
-                        u.base_commit.as_deref().unwrap_or_default(),
-                    );
-                    if let Err(e) = crate::integration::remove_wu_worktree(&lwt) {
-                        tracing::warn!(%task_id, work_unit = %u.key, error = %e, "could not remove the work unit worktree after integration");
-                    }
-                }
-            }
+        let done_event = Event::WorkUnitTransitioned {
+            work_unit_id: integ.id.clone(),
+            key: integ.key.clone(),
+            from: task_core::WorkUnitStatus::Running,
+            to: task_core::WorkUnitStatus::Done,
+            reason: "integrated".to_string(),
+            run_id: None,
+        };
+        // D2: 判断は統合 WU を done に置いた行の集合で組み立てる（書き込みは下の 1 回だけ）。
+        let mut units = self.store.work_units_for(task_id)?;
+        if let Some(u) = units.iter_mut().find(|u| u.id == done.id) {
+            *u = done.clone();
         }
-        // ADR-0079 D6（Phase R1c）: 取り込んだ子 task の worktree を消す（ブランチ `celeris/<child_id>` は
-        // root の終端まで残す。監査のため）。
-        self.remove_integrated_child_worktrees(task_id, &units, &phase);
         // 次の工程の WU（工程の障壁が外れた）を ready にするのは、途中確認で止めるかを決めた後（下）。
         // ADR-0079 付記「R6-1」D2: 途中確認（`review: human`・`pause_after`）で止めるなら次の工程は `pending` の
         // まま残す（ADR-0074 D2.2「次の工程の WU を ready にする前に適用する」。以前は先に `ready` にしていたので、
@@ -1526,39 +1537,67 @@ impl Dispatcher {
                 };
             }
         }
+        let mut writes = vec![(done, done_event)];
         if !matches!(trigger, Trigger::PhaseGate { .. }) {
-            self.promote_newly_ready(task_id, &units)?;
+            writes.extend(ready_promotions(&units, &now));
         }
-        let units = self.store.work_units_for(task_id)?;
-        match self
-            .store
-            .apply_transition_with_events(task_id, trigger, extra_events)
-        {
-            Ok(outcome) => {
-                tracing::info!(%task_id, %phase, next = ?outcome.next, "phase integrated");
-                if outcome.next == Status::Reviewing {
-                    let subject = ReviewSubject {
-                        summary: self.plan_summary(&units),
-                        evidence: Vec::new(),
-                    };
-                    let run_id = units
-                        .iter()
-                        .filter(|u| u.kind != task_core::WorkUnitKind::Integrate)
-                        .filter_map(|u| u.last_run_id.clone())
-                        .max()
-                        .unwrap_or_default();
-                    if !self.spawn_review(task_id, run_id, &subject)? {
-                        self.coord.defer_review(task_id, subject);
+        let outcome = match self.store.apply_transition_with_work_units(
+            task_id,
+            writes,
+            trigger,
+            extra_events,
+        ) {
+            Ok(outcome) => outcome,
+            Err(StoreError::InvalidTransition(e)) => {
+                // D3: 何も書いていない。統合 WU を pending に戻し、Task が Ready に戻ったら冪等にやり直す。
+                tracing::warn!(%task_id, error = %e, "phase integration result could not be applied; returning the integration to pending");
+                return self.reconcile_integration(task_id, INTEGRATION_RESULT_NOT_APPLIED);
+            }
+            Err(e) => return Err(e.into()),
+        };
+        tracing::info!(%task_id, %phase, next = ?outcome.next, "phase integrated");
+        // D1.2: 統合が済んだ WU の worktree を消す（ブランチは Task の終端まで残す）。統合の完了を書いた後の
+        // 冪等な副作用で、失敗は log だけ。
+        if let Some(ws) = self.task_workspaces_for(task) {
+            for u in units
+                .iter()
+                .filter(|u| u.phase.as_deref() == Some(phase.as_str()) && u.branch.is_some())
+            {
+                for repo in ws.repos.iter().filter(|r| r.is_git()) {
+                    let lwt = crate::integration::wu_worktree(
+                        &ws.task_dir,
+                        &task_id.to_string(),
+                        &u.key,
+                        &repo.name,
+                        &repo.source,
+                        u.base_commit.as_deref().unwrap_or_default(),
+                    );
+                    if let Err(e) = crate::integration::remove_wu_worktree(&lwt) {
+                        tracing::warn!(%task_id, work_unit = %u.key, error = %e, "could not remove the work unit worktree after integration");
                     }
                 }
-                Ok(())
             }
-            Err(StoreError::InvalidTransition(e)) => {
-                tracing::warn!(%task_id, error = %e, "phase integration result could not be applied");
-                Ok(())
-            }
-            Err(e) => Err(e.into()),
         }
+        // ADR-0079 D6（Phase R1c）: 取り込んだ子 task の worktree を消す（ブランチ `celeris/<child_id>` は
+        // root の終端まで残す。監査のため）。
+        self.remove_integrated_child_worktrees(task_id, &units, &phase);
+        let units = self.store.work_units_for(task_id)?;
+        if outcome.next == Status::Reviewing {
+            let subject = ReviewSubject {
+                summary: self.plan_summary(&units),
+                evidence: Vec::new(),
+            };
+            let run_id = units
+                .iter()
+                .filter(|u| u.kind != task_core::WorkUnitKind::Integrate)
+                .filter_map(|u| u.last_run_id.clone())
+                .max()
+                .unwrap_or_default();
+            if !self.spawn_review(task_id, run_id, &subject)? {
+                self.coord.defer_review(task_id, subject);
+            }
+        }
+        Ok(())
     }
 
     /// ADR-0074 D2.3（Phase F3 途中確認）: 停止点の工程の統合の後に、決定的に途中報告を組み立てる

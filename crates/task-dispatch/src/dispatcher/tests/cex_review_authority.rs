@@ -634,7 +634,13 @@ async fn cex_review_resync_cap_halts_and_starts_no_more_reviewer_runs() {
 /// 段 `build` の 2 件の WU（`a`・`b`、互いに独立）の v2 計画。`a` の検査は、統合の作業ツリー（`a.txt` と `b.txt` が
 /// 揃う）で最初に走ったときだけ、試験が `<marks>/open` を置くまで（または `marks` が消えるまで）止まる。止まったことは
 /// `<marks>/first` の dir で分かる。WU `a` の作業ツリー（`a.txt` だけ）と 2 回目以降の統合では止まらない。
-fn adopt_blocking_integration_plan(store: &Arc<dyn TaskStore>, id: TaskId, marks: &Path) {
+/// `next_stage` なら段 `ship`（WU `c`、独立）を `build` の後に足す（`build` が最後の段でなくなる）。
+fn adopt_blocking_integration_plan(
+    store: &Arc<dyn TaskStore>,
+    id: TaskId,
+    marks: &Path,
+    next_stage: bool,
+) {
     let mut a = v2_wu("a", "build", &[]);
     a.checks = vec![task_core::WorkUnitCheck {
         cmd: format!(
@@ -647,7 +653,16 @@ fn adopt_blocking_integration_plan(store: &Arc<dyn TaskStore>, id: TaskId, marks
         expect_exit: 0,
         scope: false,
     }];
-    adopt_v2_plan(store, id, &["build"], vec![a, v2_wu("b", "build", &[])]);
+    if next_stage {
+        adopt_v2_plan(
+            store,
+            id,
+            &["build", "ship"],
+            vec![a, v2_wu("b", "build", &[]), v2_wu("c", "ship", &[])],
+        );
+    } else {
+        adopt_v2_plan(store, id, &["build"], vec![a, v2_wu("b", "build", &[])]);
+    }
 }
 
 /// 再起動後の新しい active（自分の行を登録し、孤児の回収を有効にした並列 WU の dispatcher）。
@@ -741,19 +756,34 @@ impl Drop for MidIntegration {
 /// 段 `build`（WU `a`・`b`）の統合が 2 件の merge を済ませ、統合の検査の途中で daemon が落ちた跡を作る（統合 WU は
 /// running、Task は running、`PhaseIntegrated` 無し、落ちた daemon の dispatcher は drop 済み）。
 async fn crash_mid_integration_check() -> MidIntegration {
+    crash_mid_integration_check_with(false).await
+}
+
+/// [`crash_mid_integration_check`] と同じ跡。`pause_build` なら Task の `pause_after = after(build)` で、`build` の後に
+/// 段 `ship`（WU `c`）を置く（`build` は途中確認の段。`PausePointsResolved` は `review: human` の段と同じく `build` を持つ）。
+async fn crash_mid_integration_check_with(pause_build: bool) -> MidIntegration {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
     let marks = tempfile::tempdir().unwrap();
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let task = parallel_task(repo.path(), "test -f a.txt && test -f b.txt");
+    let mut task = parallel_task(repo.path(), "test -f a.txt && test -f b.txt");
+    if pause_build {
+        task.routing = Some(task_core::TaskRouting {
+            pause_after: task_core::PausePolicy::After {
+                phases: vec!["build".to_string()],
+            },
+            ..Default::default()
+        });
+    }
     let id = task.id;
     store.insert(&task).unwrap();
-    adopt_blocking_integration_plan(&store, id, marks.path());
+    adopt_blocking_integration_plan(&store, id, marks.path(), pause_build);
     let adapter = Arc::new(
         ParallelWuAdapter::new(Duration::ZERO)
             .with_file("a", "a.txt", "a")
-            .with_file("b", "b.txt", "b"),
+            .with_file("b", "b.txt", "b")
+            .with_file("c", "c.txt", "c"),
     );
     let mut d1 = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 2, 2, 2);
     let first = marks.path().join("first");
@@ -1108,45 +1138,48 @@ async fn cex_integration_sync_conflict_schedules_one_repair_and_never_passes_the
     assert_eq!(row.target_sha.as_deref(), Some(target.as_str()));
 }
 
-/// 不変条件: （ADR-0074 D1.4・D1.7）段の統合の完了の書き込みの途中（統合 WU を done にした後、Task の遷移と
-/// `PhaseIntegrated` の前）で daemon が落ちた後に、作り直した dispatcher（新しい active）は統合をやり直さない（統合 WU は
-/// running に戻らず、統合の検査を走らせ直さず、WU のブランチの merge commit は 1 つずつのまま）。Task は Ready を経て
-/// 最終レビューに 1 回だけ進み、Done になる。
-/// 範囲: この順序では `PhaseIntegrated` が 1 件も記録されない（統合の完了の記録が失われる）。今の実装で成り立たないので
-/// assert せず、`agent-docs/progress/2026-11-11-health-v2-r4/cex-review.md` の「節: integration」の「反例」に再現手順と
-/// 観測した event を記録した。
-/// 既存の試験で検出できない理由: 統合の再起動の試験（`work_units.rs` の
-/// `an_interrupted_integration_is_redone_idempotently_after_restart` と上の試験）は統合 WU が running のまま落ちた状態
-/// だけを作り、`finish_phase_integration` の書き込みの間（WU の done と Task の遷移が別の書き込み）で落ちた状態を作らない。
+/// 落ちた daemon の統合（[`crash_mid_integration_check`] の跡）の検査を最後まで走らせる。`open` を置き、最後の
+/// `IntegrationCheckFinished`（`index + 1 == total`）が store に残るまで待つ。落ちた daemon の結果は誰も受け取らないので、
+/// 統合は merge と検査を終えたが、完了（`apply_transition_with_work_units` の 1 回の書き込み）は書いていない形になる。
+async fn finish_crashed_integration_checks(f: &MidIntegration) {
+    std::fs::write(f.marks.path().join("open"), "").unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    while !events_of(&f.store, f.id).iter().any(|e| {
+        matches!(e, Event::IntegrationCheckFinished { index, total, .. } if index + 1 == *total)
+    }) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{:?}",
+            events_of(&f.store, f.id)
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// 不変条件: （ADR-0074 D1.4・D1.7、ADR 2026-11-14-phase-integration-finish-one-write D1）段の統合が merge と検査を終え、
+/// 統合の完了（統合 WU の done・`PhaseIntegrated`・Task の遷移の 1 回の書き込み）の前で daemon が落ちた後に、作り直した
+/// dispatcher（新しい active）は統合を冪等にやり直し、WU のブランチを二重に merge しない（merge commit は WU のブランチ
+/// ごとに 1 つ、やり直しの `PhaseIntegrated.merged` は両方 skipped）。`PhaseIntegrated` はちょうど 1 件、統合 WU の done も
+/// 1 回だけ記録する。Task は最終レビューに 1 回だけ進み、Done になる。
+/// 試験を変えた理由: 以前の準備は store に統合 WU の done だけを直接書き、`finish_phase_integration` の最初の書き込みの後で
+/// 落ちた形を作っていた。そこから再起動すると `PhaseIntegrated` が 1 件も残らなかった（修正の前に、この試験に足した
+/// `PhaseIntegrated` 1 件の assert が left 0 で落ちた。`agent-docs/progress/2026-11-11-health-v2-r4/fix-integ.md`）。
+/// 修正の後は統合 WU の done と `PhaseIntegrated` と Task の遷移が 1 つの transaction なので、統合 WU だけが done の状態は
+/// 作れない。準備を「1 回の書き込みの前で落ちた形」（統合 WU は running、検査は終わり、完了は未記録）に変えた。統合の
+/// 試験名は検査が参照するので変えない。更新前の版が残した行を扱わない理由は ADR の D4。
+/// 既存の試験で検出できない理由: 上の `cex_integration_restart_mid_phase_integration_does_not_merge_twice` は検査の途中で
+/// 落とし、落ちた daemon の検査が終わる前に作り直す。統合が検査まで終えて完了だけを書いていない形を作らない。
 #[tokio::test]
 async fn cex_integration_restart_after_the_integration_unit_is_done_does_not_integrate_again() {
     let f = crash_mid_integration_check().await;
     let (store, id) = (f.store.clone(), f.id);
-    // 落ちた daemon の `finish_phase_integration` が統合 WU を done にした書き込みだけが残った。
-    let integ = store
-        .work_units_for(id)
-        .unwrap()
-        .into_iter()
-        .find(|u| u.key == "integrate-build")
-        .unwrap();
-    let mut done = integ.clone();
-    done.status = WorkUnitStatus::Done;
-    done.clear_lease();
-    done.integrated_commit = Some(git_out(f.repo.path(), &["rev-parse", &f.task_branch]));
-    store
-        .work_unit_transition(
-            id,
-            done,
-            Event::WorkUnitTransitioned {
-                work_unit_id: integ.id.clone(),
-                key: integ.key.clone(),
-                from: WorkUnitStatus::Running,
-                to: WorkUnitStatus::Done,
-                reason: "integrated".into(),
-                run_id: None,
-            },
-        )
-        .unwrap();
+    // 落ちた daemon の統合は検査まで終えた。完了は書いていない（統合 WU は running、`PhaseIntegrated` 無し）。
+    finish_crashed_integration_checks(&f).await;
+    assert_eq!(
+        wu_status_of(&store, id, "integrate-build"),
+        Some(WorkUnitStatus::Running)
+    );
+    assert!(phase_integrated(&store, id).is_empty());
     assert_eq!(status_of(&store, id), Status::Running);
 
     let mut d2 = restarted_parallel_dispatcher(&store, f.adapter.clone(), f.root.path());
@@ -1158,21 +1191,23 @@ async fn cex_integration_restart_after_the_integration_unit_is_done_does_not_int
         "{:?}",
         events_of(&store, id)
     );
-    // 統合をやり直さない（統合 WU は running に戻らず、統合の検査も 1 回だけ）。
+    // 統合の完了はちょうど 1 件（やり直しは済んだ merge を飛ばす）。
     assert_eq!(
-        wu_transitions(&store, id, "integrate-build"),
-        vec![
-            (WorkUnitStatus::Running, "integrate".to_string()),
-            (WorkUnitStatus::Done, "integrated".to_string())
-        ]
+        phase_integrated(&store, id),
+        vec![vec![("a".to_string(), true), ("b".to_string(), true)]],
+        "{:?}",
+        events_of(&store, id)
     );
+    let integ = wu_transitions(&store, id, "integrate-build");
     assert_eq!(
-        count(&store, id, |e| matches!(
-            e,
-            Event::IntegrationCheckStarted { .. }
-        )),
-        1
+        integ
+            .iter()
+            .filter(|(to, _)| *to == WorkUnitStatus::Done)
+            .count(),
+        1,
+        "{integ:?}"
     );
+    // merge は二重にならない（WU のブランチごとに merge commit は 1 つ）。
     let parents = merged_parents(f.repo.path(), &f.task_branch);
     assert_eq!(parents.len(), 2, "{parents:?}");
     for head in &f.wu_heads {
@@ -1197,6 +1232,82 @@ async fn cex_integration_restart_after_the_integration_unit_is_done_does_not_int
         )),
         1
     );
+}
+
+/// 途中確認の段 `build` の後で止まった形（[`cex_integration_restart_keeps_the_stage_pause`]）: Task は `PhaseGate` で
+/// Blocked（最後の遷移の reason は `awaiting_human`）、`PhaseIntegrated`・`PhaseReported` は 1 件ずつ、次の段 `ship` の
+/// WU `c` は pending のままで走っていない。Task は最終レビューに進んでいない。
+fn assert_paused_after_build(store: &Arc<dyn TaskStore>, id: TaskId, adapter: &ParallelWuAdapter) {
+    assert_eq!(
+        status_of(store, id),
+        Status::Blocked,
+        "{:?}",
+        events_of(store, id)
+    );
+    let reasons: Vec<String> = events_of(store, id)
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::Transitioned { reason, .. } => Some(reason),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        reasons.last().map(String::as_str),
+        Some("awaiting_human"),
+        "{reasons:?}"
+    );
+    assert_eq!(
+        phase_integrated(store, id).len(),
+        1,
+        "{:?}",
+        events_of(store, id)
+    );
+    assert_eq!(
+        count(store, id, |e| matches!(e, Event::PhaseReported { .. })),
+        1
+    );
+    assert_eq!(wu_status_of(store, id, "c"), Some(WorkUnitStatus::Pending));
+    assert!(!adapter.keys_seen().contains(&"c".to_string()));
+    assert!(
+        !transitions(store, id)
+            .iter()
+            .any(|(to, _)| matches!(to, Status::Reviewing | Status::Done))
+    );
+}
+
+/// 不変条件: （ADR-0074 D2.2・ADR-0079 付記「R6-1」D2、ADR 2026-11-14-phase-integration-finish-one-write D1・D2）途中確認の
+/// 段（`pause_after = after(build)`。`review: human` の段と同じく `PausePointsResolved` に `build` が入る）の統合の完了の
+/// 途中で daemon が落ちて再起動した後も、`PhaseGate` を飛ばさない（Task は `awaiting_human` で Blocked、次の段の WU は
+/// pending のまま走らない）。`PhaseIntegrated` は 1 件だけ残る。完了を書いた後（worktree の削除・次の tick の前）でもう一度
+/// 落ちて作り直しても同じ。
+/// 既存の試験で検出できない理由: `work_units.rs` の `pause_after_design_blocks_with_awaiting_human` は daemon を落とさない。
+/// 上の試験 7 は最後の段（`WorkerDone`）だけを通り、途中確認の段の `PhaseGate` と次の段の promote の順を見ない。以前の実装で
+/// 統合 WU の done の後で落ちると、次の dispatch の `promote_newly_ready` が次の段を ready にし、確認を飛ばした。
+#[tokio::test]
+async fn cex_integration_restart_keeps_the_stage_pause() {
+    let f = crash_mid_integration_check_with(true).await;
+    let (store, id) = (f.store.clone(), f.id);
+    finish_crashed_integration_checks(&f).await;
+    assert!(phase_integrated(&store, id).is_empty());
+    assert_eq!(wu_status_of(&store, id, "c"), Some(WorkUnitStatus::Pending));
+
+    let mut d2 = restarted_parallel_dispatcher(&store, f.adapter.clone(), f.root.path());
+    let s = store.clone();
+    assert!(
+        run_until_state(&mut d2, || status_of(&s, id) == Status::Blocked
+            || terminal(&s, id))
+        .await
+    );
+    assert_paused_after_build(&store, id, &f.adapter);
+
+    // 完了を書いた後で落ちて作り直しても、段の確認を飛ばさず、統合の完了を記録し直さない。
+    drop(d2);
+    let mut d3 = restarted_parallel_dispatcher(&store, f.adapter.clone(), f.root.path());
+    for _ in 0..3 {
+        d3.tick().unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_paused_after_build(&store, id, &f.adapter);
 }
 
 /// 実行中の worker を終了直前に止める。試験は store の lease を見てから gate を開ける。

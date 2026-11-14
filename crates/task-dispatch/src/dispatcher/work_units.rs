@@ -612,35 +612,21 @@ impl Dispatcher {
     }
 
     /// ADR-0079 付記「R6-1」D2: 依存と工程の障壁が満たされた `pending` の unit を `ready` に上げる
-    /// （`WorkUnitTransitioned{dependency_ready}`。`finish_phase_integration` と同じ）。人の gate の間は上げずに
-    /// おくので、gate が解けた後の最初の dispatch で上げる。上げたら `true`。
+    /// （行と event は [`super::phase_integration::ready_promotions`]。`finish_phase_integration` と同じ。子 task の
+    /// 状態を写した後の `reconcile_tree_units` もこれで上げる）。人の gate の間は上げずにおくので、gate が解けた後の
+    /// 最初の dispatch で上げる。上げたら `true`。
     pub(super) fn promote_newly_ready(
         &self,
         task_id: TaskId,
         units: &[task_core::WorkUnitRow],
     ) -> Result<bool, DispatchError> {
-        let ids = task_core::newly_ready(units);
-        for id in &ids {
-            let Some(u) = units.iter().find(|u| &u.id == id) else {
-                continue;
-            };
-            let mut row = u.clone();
-            row.status = task_core::WorkUnitStatus::Ready;
-            row.updated_at = rfc3339(OffsetDateTime::now_utc());
-            self.store.work_unit_transition(
-                task_id,
-                row,
-                Event::WorkUnitTransitioned {
-                    work_unit_id: u.id.clone(),
-                    key: u.key.clone(),
-                    from: task_core::WorkUnitStatus::Pending,
-                    to: task_core::WorkUnitStatus::Ready,
-                    reason: "dependency_ready".to_string(),
-                    run_id: None,
-                },
-            )?;
+        let now = rfc3339(OffsetDateTime::now_utc());
+        let promotions = super::phase_integration::ready_promotions(units, &now);
+        let promoted = !promotions.is_empty();
+        for (row, event) in promotions {
+            self.store.work_unit_transition(task_id, row, event)?;
         }
-        Ok(!ids.is_empty())
+        Ok(promoted)
     }
 
     /// ADR-0079 付記「R7-9」D3: [`task_core::stale_stage_integrations`] に当たる done の統合 WU を

@@ -430,6 +430,191 @@ fn adopt_blocking_plan(store: &Arc<dyn TaskStore>, id: TaskId, marks: &Path) {
     adopt_v2_plan(store, id, &["build"], vec![a, v2_wu("b", "build", &[])]);
 }
 
+/// 段 `build` の repair（planner の replan が足す `kind = repair` の unit。Task の worktree で走り、`r.txt` を書く）。
+const STAGE_REPAIR_KEY: &str = "repair-build-1";
+
+/// `key` の WU が done になった最初の event の位置。
+fn wu_done_at(events: &[Event], key: &str) -> Option<usize> {
+    events.iter().position(|e| {
+        matches!(e, Event::WorkUnitTransitioned { key: k, to: WorkUnitStatus::Done, .. } if k == key)
+    })
+}
+
+/// Task が `to` に遷移した最初の event の位置。
+fn task_reached_at(events: &[Event], to: Status) -> Option<usize> {
+    events
+        .iter()
+        .position(|e| matches!(e, Event::Transitioned { to: t, .. } if *t == to))
+}
+
+/// 不変条件: （ADR-0074 D1.4・D1.7 と D6.2、CLAUDE.md「完了はレビュアーか決定的な検査が決める」）段 `build` の統合の
+/// 検査が走っている間に段の repair（`kind = repair` の unit。`RepairScheduled{origin: planner}`）が先に確定したら、
+/// 遅れて届いた旧い統合の完了（repair の前の HEAD の候補の合格）は捨てる。repair の done の前には `PhaseIntegrated` を
+/// 付けず、統合 WU を done にせず、Task を Reviewing・Done に進めない。`PhaseIntegrated` は repair の done の後に、
+/// repair の commit（`r.txt`）を含む HEAD の統合にだけ付く。Task は repair を含む候補で Done になる。
+/// 既存の試験で検出できない理由: `cex_late_review_and_integration_after_replan_are_dropped` は replan が葉の WU を足す
+/// 変種で、足した WU は自分のブランチを持ち、`PhaseIntegrated.merged` の key で新旧の統合を見分けられる。repair の unit は
+/// Task の worktree で走って merge の item にならないので、旧い統合の完了を新しい統合と取り違えても key では分からない
+/// （この試験は HEAD に repair の commit があるかで見分ける）。`cex_integration_sync_conflict_schedules_one_repair_*` と
+/// `cex_integration_restart_*` は統合の結果そのものが repair を作る順序と再起動の順序だけで、統合の検査が走っている間に
+/// 段の repair が確定する順序を作らない。task-ops の `replan_records_repair_scheduled_for_a_planner_authored_repair_unit`
+/// は store の行と event だけを見て、dispatcher の統合の完了を通さない。
+#[tokio::test]
+async fn cex_late_integration_after_stage_repair_is_dropped() {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let root = tempfile::tempdir().unwrap();
+    let marks = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    // Task の検査は repair の前の HEAD でも通る（旧い統合の候補は検査に受かる。捨てるのは古さの判定だけ）。
+    let task = parallel_task(repo.path(), "test -f a.txt && test -f b.txt");
+    let id = task.id;
+    store.insert(&task).unwrap();
+    adopt_blocking_plan(&store, id, marks.path());
+    let adapter = Arc::new(
+        ParallelWuAdapter::new(Duration::ZERO)
+            .with_file("a", "a.txt", "a")
+            .with_file("b", "b.txt", "b")
+            .with_file(STAGE_REPAIR_KEY, "r.txt", "r")
+            .holding(STAGE_REPAIR_KEY),
+    );
+    let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 2, 2, 2);
+    // 段 `build` の統合の検査が `a.txt` と `b.txt` の揃った作業ツリーで止まるまで進める。
+    let first = marks.path().join("first");
+    let s = store.clone();
+    assert!(
+        run_until_state(&mut d, || first.is_dir()
+            && events_of(&s, id)
+                .iter()
+                .any(|e| matches!(e, Event::IntegrationCheckStarted { .. })))
+        .await
+    );
+    assert!(phase_integrated_keys(&store, id).is_empty());
+    assert_eq!(
+        wu_status(&store, id, "integrate-build"),
+        Some(WorkUnitStatus::Running)
+    );
+    // 段 `build` の repair を先に確定する（planner の replan が `kind = repair` の unit を足す。done の `a`・`b` は変えない）。
+    let mut spec = store.execution_plan_active(id).unwrap().unwrap().spec;
+    let mut repair = v2_wu(STAGE_REPAIR_KEY, "build", &[]);
+    repair.kind = WorkUnitKind::Repair;
+    spec.work_units.push(repair);
+    task_ops::execution::replan(
+        store.as_ref(),
+        id,
+        spec,
+        "planner repair: fix the build stage".to_string(),
+        PlanOrigin::Planner,
+        None,
+        ExecutionLimits::default(),
+        OffsetDateTime::now_utc(),
+    )
+    .unwrap();
+    assert!(
+        events_of(&store, id).iter().any(|e| matches!(
+            e,
+            Event::RepairScheduled {
+                key,
+                origin: task_core::execution::RepairOrigin::Planner,
+                ..
+            } if key == STAGE_REPAIR_KEY
+        )),
+        "{:?}",
+        events_of(&store, id)
+    );
+    // 旧い統合（repair の前の HEAD の候補）の完了を届ける。repair の run は adapter の gate で止めておく。
+    std::fs::write(marks.path().join("open"), "").unwrap();
+    let seen = adapter.clone();
+    assert!(
+        run_until_state(&mut d, || seen
+            .keys_seen()
+            .iter()
+            .any(|k| k == STAGE_REPAIR_KEY))
+        .await
+    );
+    // 統合の process が残る間は Task の WU を起こさないので、repair の run の開始は旧い統合の完了の後。
+    // repair の done の前: 旧い完了は段を統合済みにせず、統合 WU と Task を進めない。
+    let events = events_of(&store, id);
+    let summary = |events: &[Event]| {
+        format!(
+            "repair_done={:?} integrated={:?} integ_done={:?} reviewing={:?} done={:?} status={:?} keys={:?}",
+            wu_done_at(events, STAGE_REPAIR_KEY),
+            phase_integrated_keys(&store, id),
+            wu_done_at(events, "integrate-build"),
+            task_reached_at(events, Status::Reviewing),
+            task_reached_at(events, Status::Done),
+            store.get(id).unwrap().unwrap().status,
+            adapter.keys_seen(),
+        )
+    };
+    assert!(
+        wu_done_at(&events, STAGE_REPAIR_KEY).is_none(),
+        "{}",
+        summary(&events)
+    );
+    assert!(
+        phase_integrated_keys(&store, id).is_empty(),
+        "旧い統合の完了が repair の done の前に PhaseIntegrated を付けた: {}",
+        summary(&events)
+    );
+    assert!(
+        wu_done_at(&events, "integrate-build").is_none(),
+        "{}",
+        summary(&events)
+    );
+    assert!(
+        task_reached_at(&events, Status::Reviewing).is_none()
+            && task_reached_at(&events, Status::Done).is_none(),
+        "{}",
+        summary(&events)
+    );
+    // repair を終える（gate の permit は待ちの前に出しても残る）。Task が終端になるまで進める。
+    adapter.gate.notify_one();
+    let s = store.clone();
+    assert!(run_until_state(&mut d, || s.get(id).unwrap().unwrap().status.is_terminal()).await);
+    let _ = std::fs::remove_dir_all(marks.path());
+    let events = events_of(&store, id);
+    let repair_done = wu_done_at(&events, STAGE_REPAIR_KEY)
+        .unwrap_or_else(|| panic!("repair never done: {}", summary(&events)));
+    let integrated: Vec<(usize, String)> = events
+        .iter()
+        .enumerate()
+        .filter_map(|(i, e)| match e {
+            Event::PhaseIntegrated { head, .. } => Some((i, head.clone())),
+            _ => None,
+        })
+        .collect();
+    assert!(!integrated.is_empty(), "{}", summary(&events));
+    for (i, head) in &integrated {
+        assert!(
+            *i > repair_done && git_ok(repo.path(), &["cat-file", "-e", &format!("{head}:r.txt")]),
+            "PhaseIntegrated が repair を含まない統合に付いた（head {head}）: {}",
+            summary(&events)
+        );
+    }
+    assert!(
+        wu_done_at(&events, "integrate-build").is_some_and(|i| i > repair_done),
+        "{}",
+        summary(&events)
+    );
+    assert!(
+        task_reached_at(&events, Status::Reviewing).is_some_and(|i| i > repair_done),
+        "{}",
+        summary(&events)
+    );
+    assert_eq!(
+        store.get(id).unwrap().unwrap().status,
+        Status::Done,
+        "{}",
+        summary(&events)
+    );
+    let branch = format!("celeris/{id}");
+    assert_eq!(
+        git_out(repo.path(), &["show", &format!("{branch}:r.txt")]),
+        "r"
+    );
+}
+
 /// 段 `build` の統合の検査を走らせたまま止め、人の replan（段 `build` に WU `c` を足す）を先に確定してから、
 /// 旧い統合の完了を届ける。Task が終端になるまで進め、event の列を返す材料（store・id・repo）を返す。
 async fn late_integration_after_human_replan() -> (tempfile::TempDir, Arc<dyn TaskStore>, TaskId) {

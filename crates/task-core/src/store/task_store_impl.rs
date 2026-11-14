@@ -909,6 +909,16 @@ impl TaskStore for SqliteStore {
         self.work_unit_transition_impl(task_id, updated, events)
     }
 
+    fn phase_integration_finish(
+        &self,
+        task_id: TaskId,
+        work_units: Vec<(WorkUnitRow, Event)>,
+        trigger: Trigger,
+        extra_events: Vec<Event>,
+    ) -> Result<Outcome, StoreError> {
+        self.phase_integration_finish_impl(task_id, work_units, trigger, extra_events)
+    }
+
     fn recover_work_unit(
         &self,
         task_id: TaskId,

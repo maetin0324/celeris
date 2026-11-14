@@ -612,35 +612,19 @@ impl Dispatcher {
     }
 
     /// ADR-0079 付記「R6-1」D2: 依存と工程の障壁が満たされた `pending` の unit を `ready` に上げる
-    /// （`WorkUnitTransitioned{dependency_ready}`。`finish_phase_integration` と同じ）。人の gate の間は上げずに
+    /// （行と event は [`ready_promotions`]。`finish_phase_integration` と同じ）。人の gate の間は上げずに
     /// おくので、gate が解けた後の最初の dispatch で上げる。上げたら `true`。
     pub(super) fn promote_newly_ready(
         &self,
         task_id: TaskId,
         units: &[task_core::WorkUnitRow],
     ) -> Result<bool, DispatchError> {
-        let ids = task_core::newly_ready(units);
-        for id in &ids {
-            let Some(u) = units.iter().find(|u| &u.id == id) else {
-                continue;
-            };
-            let mut row = u.clone();
-            row.status = task_core::WorkUnitStatus::Ready;
-            row.updated_at = rfc3339(OffsetDateTime::now_utc());
-            self.store.work_unit_transition(
-                task_id,
-                row,
-                Event::WorkUnitTransitioned {
-                    work_unit_id: u.id.clone(),
-                    key: u.key.clone(),
-                    from: task_core::WorkUnitStatus::Pending,
-                    to: task_core::WorkUnitStatus::Ready,
-                    reason: "dependency_ready".to_string(),
-                    run_id: None,
-                },
-            )?;
+        let promotions = ready_promotions(units, &rfc3339(OffsetDateTime::now_utc()));
+        let promoted = !promotions.is_empty();
+        for (row, event) in promotions {
+            self.store.work_unit_transition(task_id, row, event)?;
         }
-        Ok(!ids.is_empty())
+        Ok(promoted)
     }
 
     /// ADR-0079 付記「R7-9」D3: [`task_core::stale_stage_integrations`] に当たる done の統合 WU を
@@ -2096,4 +2080,32 @@ impl WorkUnitCheckFailure {
             failed: self.failed.clone(),
         }
     }
+}
+
+/// ADR-0079 付記「R6-1」D2・ADR 2026-11-14-phase-integration-finish-one-write D2: `units` の中で
+/// [`task_core::newly_ready`] に当たる `pending` の unit を `ready` にした行と、その
+/// `WorkUnitTransitioned{dependency_ready}` の列（書き込みは呼び出し側。`promote_newly_ready` は 1 行ずつ、
+/// `finish_phase_integration` は統合の完了と同じ 1 回の書き込みで書く）。
+pub(super) fn ready_promotions(
+    units: &[task_core::WorkUnitRow],
+    now: &str,
+) -> Vec<(task_core::WorkUnitRow, Event)> {
+    task_core::newly_ready(units)
+        .iter()
+        .filter_map(|id| units.iter().find(|u| &u.id == id))
+        .map(|u| {
+            let mut row = u.clone();
+            row.status = task_core::WorkUnitStatus::Ready;
+            row.updated_at = now.to_string();
+            let event = Event::WorkUnitTransitioned {
+                work_unit_id: u.id.clone(),
+                key: u.key.clone(),
+                from: task_core::WorkUnitStatus::Pending,
+                to: task_core::WorkUnitStatus::Ready,
+                reason: "dependency_ready".to_string(),
+                run_id: None,
+            };
+            (row, event)
+        })
+        .collect()
 }

@@ -20,6 +20,8 @@ pub mod credential_resume;
 /// ADR 2026-10-07-build-tmp-hygiene D4: ディスク使用率の監視（`DiskProbe`・判定の純関数・tick の段）。
 pub mod disk_admission;
 pub mod disk_watch;
+/// ADR 2026-11-14 dispatch-admission-order: run を起こすかの順序と組み合わせの純粋関数（`admit`）。
+pub(crate) mod dispatch_admission;
 pub mod dispatcher;
 /// ADR 2026-11-11 dispatcher-state-ownership D1: task・WU の実行の調整の状態（write set・review の同期・依存・資格の待ち）の owner。
 pub(crate) mod execution_coordination;

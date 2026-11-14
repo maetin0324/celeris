@@ -908,6 +908,26 @@ fn tick_advances_only_repos_with_auto_integrate() {
     assert!(on.release.is_none());
 }
 
+/// 不変条件: 走行中に repo が無効化されると、次の tick から配送は進まない（判定は毎 tick に DB から読む）。
+/// 有効な間に進んだ後で無効にし、`Preparing` の配送が tick で変わらないことで確かめる。
+#[test]
+fn tick_stops_advancing_after_repo_is_disabled_mid_run() {
+    use task_core::DeliveryStore;
+    let (store, dir, d) = merge_queued_with(task_core::TaskMode::Production, true);
+    record_evidence(&store, dir.path(), &d, &[]);
+    register_repo(&store, &d, dir.path());
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = cfg_for(dir.path(), &tmp.path().join("releases"));
+    set_repo_auto_integrate(&store, &d, true);
+    tick_with(&store, &cfg, OffsetDateTime::now_utc(), Some(&bundled())).unwrap();
+    let merged = store.delivery_get(d.task_id).unwrap().unwrap();
+    assert_eq!(merged.state, State::Preparing);
+    set_repo_auto_integrate(&store, &d, false);
+    tick_with(&store, &cfg, OffsetDateTime::now_utc(), Some(&bundled())).unwrap();
+    let after = store.delivery_get(d.task_id).unwrap().unwrap();
+    assert_eq!(after, merged);
+}
+
 #[test]
 fn advance_pushes_to_origin_right_after_merge_before_release_prep() {
     use task_core::DeliveryStore;

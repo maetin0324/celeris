@@ -38,3 +38,10 @@ store の進捗ファイルの節に従う（`PATCH /api/v1/repos/<id>` に `{"a
 
 ## 提案
 なし。
+
+## 再実行（check 不合格の修正）
+- `crates/campaign/tests/preflight_contract.rs` の変更を base に戻した（この unit の範囲外）。
+- `crates/task-api/tests/cos_triage.rs` の同一ブロックの `if` を 1 つにした（clippy `if_same_then_else`）。
+- `cos/ops/admin.rs` の repo 本文の読み込みを `decode_repo_body` に集約し、`types.rs` の注釈を詰めて行数を base 以下に戻した（repo-health の size.responsibility-growth）。
+- docs/api の schema を再生成した。
+- 未解決: `cargo test -p celeris-campaign` は `crates/celeris/src/delivery.rs:232`（`p.auto_integrate`）で compile できない。unit rest の担当。rest の統合後に再実行が要る。

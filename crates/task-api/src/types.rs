@@ -1890,8 +1890,7 @@ pub struct RepoCreateBody {
     /// 案件の中で一意の slug。省略すると `location` のディレクトリ名から作る。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// 省略すると `location` から決める（`<path>/.git` があれば `git`、無ければ `dir`。
-    /// リモートは `git`）。
+    /// 省略すると `location` から決める（`<path>/.git` があれば `git`、無ければ `dir`、リモートは `git`）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<task_core::RepoKind>,
     /// `{"kind":"local","path":"~/workspace/benchfs"}` か
@@ -1909,9 +1908,7 @@ pub struct RepoCreateBody {
     /// 案件の「主なリポジトリ」にする。案件の最初の 1 件は自動的に primary。
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub is_primary: bool,
-    /// ADR 2026-11-14-repo-auto-integrate D1/D2: レビュー合格した root task を既定ブランチへ自動で
-    /// 取り込むか。省略は `false`。remote か `dir` の行で `true` は 422。管理トークンだけが書ける
-    /// （CoS の `repo.create` は 422、D6）。
+    /// 既定ブランチへ自動で取り込むか（既定 `false`。remote・`dir` で `true` は 422。CoS は書けない）。
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub auto_integrate: bool,
 }
@@ -1942,12 +1939,10 @@ pub struct RepoPatchBody {
     pub sync: Option<Option<task_core::RepoSync>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<task_core::RepoRun>,
-    /// `true` にするとこの行が案件の primary になる（他は落ちる）。`false` は何もしない
-    /// （primary を空にはできない。別の行を primary にする）。
+    /// `true` でこの行が案件の primary になる（他は落ちる）。`false` は何もしない（primary は空にできない）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_primary: Option<bool>,
-    /// ADR 2026-11-14-repo-auto-integrate D1/D2: 省略なら変えない。変更を当てた後の行が remote か
-    /// `dir` で `true` なら 422（黙って `false` に落とさない）。CoS の `repo.update` は 422（D6）。
+    /// 自動取り込み。省略なら変えない（当てた後の行が remote・`dir` で `true` は 422。CoS は書けない）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_integrate: Option<bool>,
 }

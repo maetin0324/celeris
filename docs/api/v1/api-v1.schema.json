@@ -26064,7 +26064,7 @@
       "description": "`POST /projects/{id}/repos` の要求本文（管理系）。",
       "properties": {
         "auto_integrate": {
-          "description": "ADR 2026-11-14-repo-auto-integrate D1/D2: レビュー合格した root task を既定ブランチへ自動で\n取り込むか。省略は `false`。remote か `dir` の行で `true` は 422。管理トークンだけが書ける\n（CoS の `repo.create` は 422、D6）。",
+          "description": "既定ブランチへ自動で取り込むか（既定 `false`。remote・`dir` で `true` は 422。CoS は書けない）。",
           "type": "boolean"
         },
         "default_branch": {
@@ -26086,7 +26086,7 @@
               "type": "null"
             }
           ],
-          "description": "省略すると `location` から決める（`<path>/.git` があれば `git`、無ければ `dir`。\nリモートは `git`）。"
+          "description": "省略すると `location` から決める（`<path>/.git` があれば `git`、無ければ `dir`、リモートは `git`）。"
         },
         "location": {
           "$ref": "#/$defs/WorkspaceSpec",
@@ -26159,7 +26159,7 @@
       "description": "`PATCH /repos/{id}` の要求本文（管理系）。書いたものだけ変える。",
       "properties": {
         "auto_integrate": {
-          "description": "ADR 2026-11-14-repo-auto-integrate D1/D2: 省略なら変えない。変更を当てた後の行が remote か\n`dir` で `true` なら 422（黙って `false` に落とさない）。CoS の `repo.update` は 422（D6）。",
+          "description": "自動取り込み。省略なら変えない（当てた後の行が remote・`dir` で `true` は 422。CoS は書けない）。",
           "type": [
             "boolean",
             "null"
@@ -26173,7 +26173,7 @@
           ]
         },
         "is_primary": {
-          "description": "`true` にするとこの行が案件の primary になる（他は落ちる）。`false` は何もしない\n（primary を空にはできない。別の行を primary にする）。",
+          "description": "`true` でこの行が案件の primary になる（他は落ちる）。`false` は何もしない（primary は空にできない）。",
           "type": [
             "boolean",
             "null"

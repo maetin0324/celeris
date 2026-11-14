@@ -2048,7 +2048,7 @@ export type DeliveryList = {
   "items": Array<DeliveryHead>;
 };
 
-export type DeliverySkipReason = "no_project" | "project_not_enabled" | "support_task" | "tree_child" | "multiple_repos" | "no_marker" | "marker_repo_mismatch" | "repo_row_missing" | "repo_not_local" | "repo_path_mismatch" | "not_git" | "no_branch" | "branch_name_mismatch" | "refs_unresolvable" | "department_unresolved" | "no_commits";
+export type DeliverySkipReason = "no_project" | "support_task" | "tree_child" | "multiple_repos" | "no_marker" | "marker_repo_mismatch" | "repo_row_missing" | "repo_not_local" | "repo_path_mismatch" | "not_git" | "no_branch" | "branch_name_mismatch" | "refs_unresolvable" | "department_unresolved" | "repo_not_enabled" | "no_commits";
 
 export type DeliveryState = "reviewing" | "merge_queued" | "merging" | "preparing" | "ready" | "blocked";
 
@@ -4709,7 +4709,6 @@ export type ProgressKind = "tool_use" | "tool_result" | "text" | "thinking" | "s
 export type Project = {
   "archived_at"?: string | null;
   "auto_advance"?: boolean;
-  "auto_integrate"?: boolean;
   "created_at": string;
   "id": ProjectId;
   "paused_from"?: ProjectStatus | null;
@@ -4785,7 +4784,6 @@ export type ProjectList = {
 export type ProjectListItem = {
   "archived_at"?: string | null;
   "auto_advance"?: boolean;
-  "auto_integrate"?: boolean;
   "brief"?: ProjectBrief | null;
   "created_at": string;
   "human_waits"?: number;
@@ -4806,7 +4804,6 @@ export type ProjectListItem = {
 
 export type ProjectPatchBody = {
   "auto_advance"?: boolean | null;
-  "auto_integrate"?: boolean | null;
   "request"?: string | null;
   "slug"?: string | null;
   "status"?: ProjectStatus | null;
@@ -4869,6 +4866,7 @@ export type ProjectPlanSpec = {
 };
 
 export type ProjectRepo = {
+  "auto_integrate"?: boolean;
   "created_at": string;
   "default_branch"?: string | null;
   "id": RepoId;
@@ -5203,6 +5201,7 @@ export type RepoChangesView = {
 };
 
 export type RepoCreateBody = {
+  "auto_integrate"?: boolean;
   "default_branch"?: string | null;
   "is_primary"?: boolean;
   "kind"?: RepoKind | null;
@@ -5221,6 +5220,7 @@ export type RepoList = {
 };
 
 export type RepoPatchBody = {
+  "auto_integrate"?: boolean | null;
   "default_branch"?: string | null;
   "is_primary"?: boolean | null;
   "kind"?: RepoKind | null;

@@ -235,6 +235,11 @@ fn history_is_derived_from_events() {
     let mut with_reopen = events.clone();
     with_reopen.push(tr("reopen"));
     assert!(attempt_history(&t, &with_reopen).is_empty());
+    // ADR 2026-11-14-review-verdict-after-plan-reopen D3: 計画が開き直された review の破棄は試行に数えない。
+    let reopened = crate::transition::Trigger::ReviewPlanReopened.reason();
+    let mut with_plan_reopened = events.clone();
+    with_plan_reopened.push(tr(reopened));
+    assert_eq!(attempt_history(&t, &with_plan_reopened), h);
 }
 
 #[test]

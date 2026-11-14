@@ -120,19 +120,20 @@ impl Dispatcher {
                 }
             }
         }
-        if task.status != Status::Reviewing {
-            tracing::warn!(%task_id, status = ?task.status, "review result discarded (task no longer reviewing)");
-            set_worker_finished_end(&mut reviewer_finished, task_core::RunEnd::Cancelled);
-            for ev in reviewer_finished.iter().chain(reviewer_quota.iter()) {
-                self.store.append_event(task_id, ev)?;
-            }
-            finish_reviewer_run_index(
+        // ADR 2026-11-14-review-verdict-after-plan-reopen D1: 有効な計画に done でない unit が残る（review の間に開き直された）判定も捨てる。
+        let plan_reopened = task.status == Status::Reviewing
+            && !task_core::plan_work_finished(&self.store.work_units_for(task_id)?);
+        if task.status != Status::Reviewing || plan_reopened {
+            tracing::warn!(%task_id, status = ?task.status, plan_reopened, "review result discarded (task no longer reviewing, or its plan was reopened)");
+            discard_review_verdict(
                 self.store.as_ref(),
+                task_id,
+                plan_reopened.then_some(Trigger::ReviewPlanReopened),
+                reviewer_finished,
+                reviewer_quota,
                 &completed_review_run,
-                task_core::RunIndexStatus::Cancelled,
-                worker_finished_usage(&reviewer_finished),
                 review_metrics,
-            );
+            )?;
             return Ok(());
         }
         // 判定を束ねる review run（reviewer を省いた review は worker の run。以下の event と stale の延期で共有）。
@@ -172,17 +173,15 @@ impl Dispatcher {
                 &stale.target_sha,
                 &stale.reason,
             )?;
-            set_worker_finished_end(&mut reviewer_finished, task_core::RunEnd::Cancelled);
-            for ev in reviewer_finished.iter().chain(reviewer_quota.iter()) {
-                self.store.append_event(task_id, ev)?;
-            }
-            finish_reviewer_run_index(
+            discard_review_verdict(
                 self.store.as_ref(),
+                task_id,
+                None,
+                reviewer_finished,
+                reviewer_quota,
                 &completed_review_run,
-                task_core::RunIndexStatus::Cancelled,
-                worker_finished_usage(&reviewer_finished),
                 review_metrics,
-            );
+            )?;
             if let Some(entry) = entry {
                 self.coord.defer_review(task_id, entry.subject);
             }
@@ -972,6 +971,44 @@ impl Dispatcher {
             Err(e) => Err(e.into()),
         }
     }
+}
+
+/// 判定を適用しない review の終わりを残す（Task が reviewing でない・計画が開き直された・検査中の stale で共有）:
+/// `WorkerFinished{role: reviewer}` の `end` と run index を `Cancelled` にする。`reopen` があれば Task の遷移と同じ
+/// transaction に入れる（ADR 2026-11-14-review-verdict-after-plan-reopen D2・D3）。
+fn discard_review_verdict(
+    store: &dyn TaskStore,
+    task_id: TaskId,
+    reopen: Option<Trigger>,
+    mut reviewer_finished: Option<Event>,
+    reviewer_quota: Option<Event>,
+    completed_review_run: &Option<String>,
+    review_metrics: Option<task_core::RunMetrics>,
+) -> Result<(), DispatchError> {
+    set_worker_finished_end(&mut reviewer_finished, task_core::RunEnd::Cancelled);
+    let usage = worker_finished_usage(&reviewer_finished);
+    let events: Vec<Event> = reviewer_finished
+        .into_iter()
+        .chain(reviewer_quota)
+        .collect();
+    match reopen {
+        Some(trigger) => {
+            store.apply_transition_with_events(task_id, trigger, events)?;
+        }
+        None => {
+            for ev in &events {
+                store.append_event(task_id, ev)?;
+            }
+        }
+    }
+    finish_reviewer_run_index(
+        store,
+        completed_review_run,
+        task_core::RunIndexStatus::Cancelled,
+        usage,
+        review_metrics,
+    );
+    Ok(())
 }
 
 /// reviewer の条件が合格なのに、決定的な検査（reviewer 以外の判定）が落ちているときの記録文。

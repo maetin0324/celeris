@@ -90,6 +90,10 @@ pub enum Trigger {
     /// attempts は据え置き（`retry_or_fail` を通さない。再実行・replan・review_rework に進めない）、
     /// `reason = "review_blocked"`。再開は既存の `Answer`（comment・answer）。
     ReviewBlocked,
+    /// ADR 2026-11-14-review-verdict-after-plan-reopen D3: 最終 review の間に replan・repair が計画を開き直した（有効な計画に
+    /// done でない unit が残る）ので、旧い判定を捨てて新しい版の unit を走らせる。`Reviewing → Ready`、attempts は据え置き
+    /// （review の不合格ではないので `retry_policy` の試行に数えない）、`reason = "review_plan_reopened"`。
+    ReviewPlanReopened,
     /// ADR-0074 D2.2（Phase F3 途中確認）: 停止点の工程の統合の後。`Running → Blocked`、
     /// `reason = "awaiting_human"`、attempts 不変。`phase` はどの工程の後かを運ぶだけ
     /// （遷移そのものの判定には使わない）。
@@ -178,6 +182,7 @@ impl Trigger {
             Trigger::Continue { why } => why.name(),
             Trigger::ReviewRepair => "review_repair",
             Trigger::ReviewBlocked => "review_blocked",
+            Trigger::ReviewPlanReopened => "review_plan_reopened",
             Trigger::PhaseGate { .. } => "awaiting_human",
             Trigger::PhaseResume { mode } => mode.name(),
             Trigger::BrowserWait { approval: false } => "waiting_for_auth",
@@ -500,8 +505,9 @@ pub fn transition(s: &StateView, t: &Trigger) -> Result<Outcome, InvalidTransiti
         }
 
         // ADR-0072 D16（Phase E4）: repair は attempts を消費しない（`ReviewFail` と違い
-        // `retry_or_fail` を通さない）。
-        Trigger::ReviewRepair => {
+        // `retry_or_fail` を通さない）。ADR 2026-11-14-review-verdict-after-plan-reopen D3: 計画が開き直された review の
+        // 判定の破棄も同じ形（判定ではないので試行に数えない）。
+        Trigger::ReviewRepair | Trigger::ReviewPlanReopened => {
             if s.status == Status::Reviewing {
                 Ok(Outcome {
                     next: Status::Ready,

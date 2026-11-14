@@ -38,7 +38,7 @@ completed: 2026-11-14
 5. 新しい状態・分岐・fallback・port: 状態と fallback は無し。新しい型は入出力の値（`AdmissionInput`・`AdmissionUnit`・
    `AdmissionTaskValues`・`BackoffClock`・`AdmissionProposal`・`AdmissionFact`・`AdmissionStop`・`AdmissionLaunch`）だけで、
    判定の型は足していない（ADR 2026-11-11 D5）。`AdmissionUnit` は dispatcher の非公開の型 `WuDispatchGate` を落とした値。
-6. 撤去対象: `dispatch_one` の中の gate の順序の分岐（`second_pass` の条件式 9 か所）、planner run の組み合わせの変数
+6. 撤去対象: `dispatch_one` の中の gate の順序の分岐（`second_pass` の条件式 8 か所）、planner run の組み合わせの変数
    （`gate_decision`・`decision_is_compound`・`shadow_human_explicit_compound`・`tree_child_compound`・`direct_route` の計算・
    `is_planner_dispatch` の式）、予算の上書きの計算、`replan_dispatch` の `mut` の書き換え。地図の行の
    「`dispatch_run.rs` の `is_planner_dispatch` で分岐」の記述も admit を指すように直した。
@@ -60,6 +60,7 @@ completed: 2026-11-14
 ## 変更（件名）
 
 - `phase admit: dispatch_one の前半の起動可否の順序と組み合わせを dispatch_admission::admit へ移す`
+- `phase admit: admit-gate の進捗に検査の結果を書く`（文書だけ。clippy・test-affected は前の commit と同じコードで走らせた）
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`、範囲は `$CELERIS_WU_BASE`）
 
@@ -70,7 +71,16 @@ completed: 2026-11-14
   `dispatch_admission::admit(` の呼び出し・lease と spawn と `WorkerStarted` が `dispatch_run.rs` に残る・`second_pass` の条件式と
   planner の組み合わせの変数が無い・`#[test]` 8 本）: exit 0。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
-- `bash scripts/dev/check-health.sh`・`bash scripts/dev/test-affected.sh`・範囲の check: 下の「提出時の検査」に書く。
+- `bash scripts/dev/check-health.sh`: exit 0（verdict=pass、fail_grade 0、worsened 0、new 1）。new の 1 件は warning の
+  `migration.remnant`（`host_maintenance.rs` の `legacy` の語。この unit は触っていない）。size.responsibility-growth の悪化は無い
+  （`Dispatcher` に method を足さず、落とす関数 `admission_unit`・`admission_task_values` は `dispatch_run.rs` の自由関数にした）。
+- `bash scripts/dev/test-affected.sh`: exit 0。対象は celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。
+  3908 passed、11 skipped。repo_health_gate は all checks passed。
+- `sh scripts/dev/progress-index.sh --check`: exit 0。
+- `git diff --quiet "$CELERIS_WU_BASE" -- agent-docs/adr/2026-11-11-dispatcher-state-ownership.md <cex_ の試験の file>`: exit 0。
+  `git diff --name-only "$CELERIS_WU_BASE" -- crates/task-dispatch/src/dispatcher/tests crates/task-dispatch/tests`: 0 件。
+- 範囲の check（`sh "$CELERIS_WU_SCOPE_PATHS"`）: 変更 path は ADR・この進捗・`dispatch_admission.rs`・`dispatch_admission/tests.rs`・
+  `dispatch_run.rs`・`lib.rs`・`docs/architecture-map.md` の 7 件で、範囲外 0。
 
 ## 未解決事項
 

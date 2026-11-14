@@ -48,7 +48,7 @@
 //!   （`runs` 行の終端化・木の `work_units.child_task_id`・`decisions` 行と `decisions` の行変換）、
 //!   events を読む/追記する `TaskStore` 本体（`append_event`/`events_for*`/`events_since`/
 //!   `latest_event_id`）。
-//! - `approvals.rs`: 遷移と判断の適用（`apply_transition_with_events`、Plan の承認 `complete_plan`）。
+//! - `approvals.rs`: 遷移と判断の適用（`apply_transition_with_work_units`〈`apply_transition_with_events` はその WU の行が無い形〉、Plan の承認 `complete_plan`）。
 //!   どれも 1 つの IMMEDIATE tx で `apply_transition_tx`/`append_event_tx` を呼ぶ（`transition.rs` は tx 内の
 //!   部品、ここは入口）。
 //! - `transition.rs`: `apply_transition_tx`（状態機械の適用と Event の追記を同じ tx で行う）と

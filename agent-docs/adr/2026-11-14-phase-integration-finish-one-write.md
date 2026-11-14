@@ -28,7 +28,7 @@ status: accepted
 
 ### D1. store の method を 1 つ足し、3 種類の書き込みを 1 つの Immediate transaction にする
 
-`TaskStore::phase_integration_finish(task_id, work_units, trigger, extra_events) -> Outcome` を足す。`work_units` は
+`TaskStore::apply_transition_with_work_units(task_id, work_units, trigger, extra_events) -> Outcome` を足す。`work_units` は
 `(書き込む WU の行, その WorkUnitTransitioned)` の列で、統合 WU の done を先頭に、promote する行を続ける。中身は既存の tx 関数
 `update_work_unit_tx`・`append_event_tx`・`apply_transition_tx` を順に呼ぶだけで、`execution_plan_replan_tx` と同じ組み方にする。
 SQL 文・migration・列は足さない。新しい WU 行を INSERT する `repair_apply`（`review_repair_apply`・`delivery_repair_apply` と共有）
@@ -49,13 +49,13 @@ transaction の中で以前と同じく通る。
 - promote の行。`task_core::newly_ready` で求め、行と event は `promote_newly_ready` と同じ関数（`ready_promotions`）で作る。
   `PhaseGate` のときは promote しない（ADR-0079 付記「R6-1」D2）。
 
-組み立てたものを `phase_integration_finish` で 1 回だけ書く。WU の worktree と取り込んだ子 task の worktree の削除は、commit の後の
+組み立てたものを `apply_transition_with_work_units` で 1 回だけ書く。WU の worktree と取り込んだ子 task の worktree の削除は、commit の後の
 冪等な副作用として残す（削除に失敗しても log を出すだけで、次の統合・Task の終端で消える）。途中報告の artifact の file は
 書き込みの前に書く（event に path を載せるため。落ちて書き直しても同じ path に同じ内容を書く）。最終レビューの起動は commit の後。
 
 ### D3. Task の遷移が通らなければ何も書かず、統合 WU を pending に戻す
 
-`phase_integration_finish` が `InvalidTransition` を返すのは、統合の結果を読んだ後に人が Task を cancel・interrupt した場合である。
+`apply_transition_with_work_units` が `InvalidTransition` を返すのは、統合の結果を読んだ後に人が Task を cancel・interrupt した場合である。
 このとき transaction は何も書かない（以前は統合 WU の done と promote だけが残り、`PhaseIntegrated` の無い done の統合 WU ができた）。
 `finish_phase_integration` は既存の `reconcile_integration`（running の統合 WU を pending に戻す）を reason
 `integration_result_not_applied` で呼ぶ。Task が再び Ready になれば、統合は既存の冪等な手順でやり直す（済んだ merge は飛ばす）。
@@ -98,5 +98,5 @@ Task の遷移を伴わない。寄せる対象は無い。
 - 同じ file に `cex_integration_restart_keeps_the_stage_pause` を足す。途中確認の段の統合の完了の前で落ちて再起動した後も、
   `PhaseGate` で Blocked になり、`PhaseIntegrated` は 1 件、次の段の WU は pending のまま。完了を書いた後でもう一度再起動しても
   同じ。
-- `crates/task-core/src/store/tests.rs` に、Task の遷移が通らないとき `phase_integration_finish` が WU の行も events も書かないことを
+- `crates/task-core/src/store/tests.rs` に、Task の遷移が通らないとき `apply_transition_with_work_units` が WU の行も events も書かないことを
   足す。

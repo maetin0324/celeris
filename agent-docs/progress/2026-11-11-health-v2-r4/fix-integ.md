@@ -17,7 +17,7 @@ store-scope: a
   ready・`PhaseIntegrated` と Task の遷移を別々に書いていたので、統合 WU の done の後で落ちると `PhaseIntegrated` が残らず、
   途中確認の段では `PhaseGate` を飛ばす窓があった。
 - 決定 store-scope の答えは a（operator の判断。人は 2026-11-14 08:07Z から不在中の inbox 対応を operator に任せた）。
-  `TaskStore::phase_integration_finish` を 1 つ足し、統合 WU の done・promote の行とその `WorkUnitTransitioned`・
+  `TaskStore::apply_transition_with_work_units` を 1 つ足し、統合 WU の done・promote の行とその `WorkUnitTransitioned`・
   `PhaseIntegrated` などの events・Task の遷移を 1 つの Immediate transaction で書く。中身は既存の `update_work_unit_tx`・
   `append_event_tx`・`apply_transition_tx` を組むだけ。SQL 文・migration・列は足していない。`repair_apply` は変えていない。
 - 判断は ADR [2026-11-14-phase-integration-finish-one-write](../../adr/2026-11-14-phase-integration-finish-one-write.md) に書いた。
@@ -34,7 +34,7 @@ store-scope: a
    `restarted_parallel_dispatcher`・`phase_integrated`。
 4. 選択肢: a（store の method 1 つで 1 transaction）と b（store を変えず、再起動の照合で記録し直す）。決定どおり a。b は窓を
    残し、照合の経路を 1 本増やす。
-5. 新しい状態・分岐・fallback・port: store の method 1 つ（`phase_integration_finish`）。Task の遷移が通らないときに統合 WU を
+5. 新しい状態・分岐・fallback・port: store の method 1 つ（`apply_transition_with_work_units`）。Task の遷移が通らないときに統合 WU を
    pending に戻す分岐（ADR D3。以前は統合 WU の done だけが残った）と、その reason の定数
    `INTEGRATION_RESULT_NOT_APPLIED`。新しい状態・列・fallback は無し。
 6. 撤去対象: `finish_phase_integration` の中の 3 回の書き込み（`work_unit_transition`・`promote_newly_ready`・
@@ -43,21 +43,21 @@ store-scope: a
    store に直接書く）は、修正の後は起きない状態なので消した。
 7. 不変条件: 統合の完了は 1 回の書き込みで、再起動の後に `PhaseIntegrated` はちょうど 1 件、merge は二重にならず、途中確認の
    段の `PhaseGate` を飛ばさない。試験は試験 7・`cex_integration_restart_keeps_the_stage_pause`・
-   `phase_integration_finish_writes_nothing_when_the_transition_is_rejected`。
+   `apply_transition_with_work_units_writes_nothing_when_the_transition_is_rejected`。
 
 ## 変更
 
-- `crates/task-core/src/store/task_store.rs`・`task_store_impl.rs`・`execution/work_units.rs`: `phase_integration_finish` と
-  その本体 `phase_integration_finish_impl`。
+- `crates/task-core/src/store/task_store.rs`・`task_store_impl.rs`・`execution/work_units.rs`: `apply_transition_with_work_units` と
+  その本体 `apply_transition_with_work_units_impl`。
 - `crates/task-dispatch/src/dispatcher/phase_integration.rs`: `finish_phase_integration` は、統合 WU を done に置いた行の集合
-  から trigger・events・promote の行を組み立て、`phase_integration_finish` で 1 回だけ書く。worktree の削除
+  から trigger・events・promote の行を組み立て、`apply_transition_with_work_units` で 1 回だけ書く。worktree の削除
   （`remove_phase_worktrees` に括った。中身は以前と同じ）と最終レビューの起動は commit の後。遷移が通らなければ
   `reconcile_integration(task, "integration_result_not_applied")`。
 - `crates/task-dispatch/src/dispatcher/work_units.rs`: `ready_promotions`（純粋関数。`promote_newly_ready` と
   `finish_phase_integration` が共有）。
 - 試験: `cex_review_authority.rs` の試験 7 と `cex_integration_restart_keeps_the_stage_pause`、fixture の
   `crash_mid_integration_check_with`（途中確認の段 `build` と次の段 `ship`）・`finish_crashed_integration_checks`。
-  `task-core/src/store/tests.rs` の `phase_integration_finish_writes_nothing_when_the_transition_is_rejected`。
+  `task-core/src/store/tests.rs` の `apply_transition_with_work_units_writes_nothing_when_the_transition_is_rejected`。
 
 ## 試験 7 の修正の前と後
 

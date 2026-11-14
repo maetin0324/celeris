@@ -5134,12 +5134,12 @@ fn running_tasks_with_runnable_work_units_lists_only_running_v2_tasks() {
     );
 }
 
-/// 不変条件: （ADR 2026-11-14-phase-integration-finish-one-write D1・D3）`phase_integration_finish` は WU の行・
+/// 不変条件: （ADR 2026-11-14-phase-integration-finish-one-write D1・D3）`apply_transition_with_work_units` は WU の行・
 /// その event・Task の遷移を 1 つの transaction で書き、遷移が通らなければ WU の行も event も残さない。
 /// 既存の試験で検出できない理由: `work_unit_transition` と `apply_transition_with_events` の試験はそれぞれ単独の
 /// 書き込みだけを見る。dispatcher の再起動の試験は、書き込みの間で落ちた形（統合 WU だけが done）を作れない。
 #[test]
-fn phase_integration_finish_writes_nothing_when_the_transition_is_rejected() {
+fn apply_transition_with_work_units_writes_nothing_when_the_transition_is_rejected() {
     let store = SqliteStore::open_in_memory().unwrap();
     let task = sample_task(Status::Draft);
     store.insert(&task).unwrap();
@@ -5186,7 +5186,7 @@ fn phase_integration_finish_writes_nothing_when_the_transition_is_rejected() {
     };
     // Draft の task に WorkerDone は通らない（統合の結果を読んだ後に人が task を変えた形）。
     let err = store
-        .phase_integration_finish(task.id, vec![(done, event)], Trigger::WorkerDone, vec![])
+        .apply_transition_with_work_units(task.id, vec![(done, event)], Trigger::WorkerDone, vec![])
         .unwrap_err();
     assert!(matches!(err, StoreError::InvalidTransition(_)), "{err:?}");
     assert_eq!(

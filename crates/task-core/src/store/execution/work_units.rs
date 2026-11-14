@@ -229,43 +229,6 @@ impl SqliteStore {
         })
     }
 
-    pub(in crate::store) fn work_unit_transition_impl(
-        &self,
-        task_id: TaskId,
-        updated: WorkUnitRow,
-        events: Vec<Event>,
-    ) -> Result<(), StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::update_work_unit_tx(&tx, &updated)?;
-        for event in &events {
-            Self::append_event_tx(&tx, task_id, event)?;
-        }
-        tx.commit()?;
-        Ok(())
-    }
-
-    /// `TaskStore::phase_integration_finish` の本体（ADR 2026-11-14-phase-integration-finish-one-write D1）。既存の
-    /// `update_work_unit_tx`・`append_event_tx`・`apply_transition_tx` を 1 つの transaction で組むだけ
-    /// （`execution_plan_replan_tx` と同じ組み方）。
-    pub(in crate::store) fn phase_integration_finish_impl(
-        &self,
-        task_id: TaskId,
-        work_units: Vec<(WorkUnitRow, Event)>,
-        trigger: crate::transition::Trigger,
-        extra_events: Vec<Event>,
-    ) -> Result<crate::transition::Outcome, StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        for (row, event) in &work_units {
-            Self::update_work_unit_tx(&tx, row)?;
-            Self::append_event_tx(&tx, task_id, event)?;
-        }
-        let outcome = Self::apply_transition_tx(&tx, task_id, trigger, extra_events)?;
-        tx.commit()?;
-        Ok(outcome)
-    }
-
     pub(in crate::store) fn recover_work_unit_impl(
         &self,
         task_id: TaskId,

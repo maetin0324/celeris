@@ -1140,7 +1140,7 @@ async fn cex_integration_sync_conflict_schedules_one_repair_and_never_passes_the
 
 /// 落ちた daemon の統合（[`crash_mid_integration_check`] の跡）の検査を最後まで走らせる。`open` を置き、最後の
 /// `IntegrationCheckFinished`（`index + 1 == total`）が store に残るまで待つ。落ちた daemon の結果は誰も受け取らないので、
-/// 統合は merge と検査を終えたが、完了（`phase_integration_finish` の 1 回の書き込み）は書いていない形になる。
+/// 統合は merge と検査を終えたが、完了（`apply_transition_with_work_units` の 1 回の書き込み）は書いていない形になる。
 async fn finish_crashed_integration_checks(f: &MidIntegration) {
     std::fs::write(f.marks.path().join("open"), "").unwrap();
     let deadline = std::time::Instant::now() + Duration::from_secs(60);

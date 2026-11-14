@@ -1397,7 +1397,7 @@ impl Dispatcher {
     /// 次の工程の WU を ready にし、その工程の WU の worktree を消す（ブランチは残す）。次の工程が
     /// あれば `Continue{advance}`、最後の工程なら `WorkerDone`（→ 最終レビュー）。
     /// ADR 2026-11-14-phase-integration-finish-one-write: 判断（trigger・events・promote の行）を先に組み立て、
-    /// 統合 WU の done・promote・events・Task の遷移を `phase_integration_finish` の 1 回で書く。worktree の削除と
+    /// 統合 WU の done・promote・events・Task の遷移を `apply_transition_with_work_units` の 1 回で書く。worktree の削除と
     /// 最終レビューの起動は commit の後の副作用。
     pub(super) fn finish_phase_integration(
         &mut self,
@@ -1515,7 +1515,7 @@ impl Dispatcher {
         }
         match self
             .store
-            .phase_integration_finish(task_id, writes, trigger, extra_events)
+            .apply_transition_with_work_units(task_id, writes, trigger, extra_events)
         {
             Ok(outcome) => {
                 tracing::info!(%task_id, %phase, next = ?outcome.next, "phase integrated");

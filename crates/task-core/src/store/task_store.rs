@@ -275,6 +275,19 @@ pub trait TaskStore:
         task_id: TaskId,
         trigger: Trigger,
         extra_events: Vec<Event>,
+    ) -> Result<Outcome, StoreError> {
+        self.apply_transition_with_work_units(task_id, Vec::new(), trigger, extra_events)
+    }
+    /// `apply_transition_with_events` の一般形（ADR 2026-11-14-phase-integration-finish-one-write D1）。`work_units` の
+    /// `(書き込む行, その WorkUnitTransitioned)` を順に書いてから `trigger` を適用し、全体を 1 つの Immediate
+    /// transaction にする（段の統合の完了: 統合 WU の done・次の工程の WU の ready・`PhaseIntegrated`・Task の遷移）。
+    /// 遷移が通らなければ（`InvalidTransition` など）何も書かない。
+    fn apply_transition_with_work_units(
+        &self,
+        task_id: TaskId,
+        work_units: Vec<(WorkUnitRow, Event)>,
+        trigger: Trigger,
+        extra_events: Vec<Event>,
     ) -> Result<Outcome, StoreError>;
 
     /// ADR-0007 D3: Plan の子タスク群を挿入（`Created`、`accept_children` なら続けて `Accept`）し、
@@ -824,18 +837,6 @@ pub trait TaskStore:
         updated: WorkUnitRow,
         events: Vec<Event>,
     ) -> Result<(), StoreError>;
-
-    /// ADR 2026-11-14-phase-integration-finish-one-write D1: 段の統合の完了（統合 WU の done、次の工程の WU の ready、
-    /// `PhaseIntegrated` などの events と Task の遷移）を 1 つの Immediate transaction で書く。`work_units` は
-    /// `(書き込む行, その WorkUnitTransitioned)` の列で、この順に行を差し替え event を追記してから `trigger` を適用する。
-    /// 遷移が通らなければ（`InvalidTransition` など）何も書かない。
-    fn phase_integration_finish(
-        &self,
-        task_id: TaskId,
-        work_units: Vec<(WorkUnitRow, Event)>,
-        trigger: Trigger,
-        extra_events: Vec<Event>,
-    ) -> Result<Outcome, StoreError>;
 
     /// ADR-0070/0074 付記（2026-10-06）: 持ち主の無い Running WU を checkpoint の有無で
     /// Ready / NeedsContinuation に戻す。生死は呼び出し側が確認する。writer transaction 内で

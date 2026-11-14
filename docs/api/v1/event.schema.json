@@ -1499,6 +1499,7 @@
         {
           "enum": [
             "no_project",
+            "project_not_enabled",
             "support_task",
             "tree_child",
             "multiple_repos",
@@ -1513,11 +1514,6 @@
             "refs_unresolvable",
             "department_unresolved"
           ],
-          "type": "string"
-        },
-        {
-          "const": "repo_not_enabled",
-          "description": "ADR 2026-11-14-repo-auto-integrate D4: task の repo に自動取り込みが有効でないものがある。旧い\nevent の `project_not_enabled`（案件が無効）は、ここへ読み替える（events は追記専用で書き換えない）。",
           "type": "string"
         },
         {

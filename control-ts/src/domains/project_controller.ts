@@ -63,6 +63,7 @@ export interface ProjectSnapshot {
     status: string;
     request: string;
     request_sha256: string;
+    auto_integrate: boolean;
   };
   brief: unknown;
   outcomes: Outcome[];

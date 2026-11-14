@@ -533,7 +533,7 @@ fn queue_clock_resets_and_receipts_survive_serialization() {
         );
         let reason = wakeup::observe(
             wait,
-            &[wait.clone()],
+            std::slice::from_ref(wait),
             &mut statuses,
             now + time::Duration::seconds(at),
             60,
@@ -568,7 +568,7 @@ fn queue_clock_resets_and_receipts_survive_serialization() {
     assert_eq!(
         wakeup::observe(
             &qualified,
-            &[restored.clone()],
+            std::slice::from_ref(&restored),
             &mut statuses,
             now + time::Duration::seconds(300),
             60

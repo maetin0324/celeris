@@ -32,8 +32,12 @@ updated: 2026-11-14
   この WU 単独では workspace 全体は compile しない。
 
 ## 未解決
-- `cargo clippy -p task-core --all-targets` は `cluster_job/tests.rs`・`chat/store_tests.rs` の既存の指摘（この変更の外）で落ちる。
-  `cargo clippy --workspace -- -D warnings`（test を含まない）は他 crate の置き換え後に通す。
+- clippy の既存の指摘（`cluster_job/tests.rs`・`chat/store_tests.rs`）は同じ変更で直した。`cargo clippy -p task-core --all-targets -- -D warnings` と `cargo fmt --all -- --check` は exit 0。
+- 範囲の check が task-core・進捗・ADR 以外を許さないため、次の生成物は更新していない。次の unit が再生成する:
+  `docs/api/v1/event.schema.json`（`RepoNotEnabled` への改名で変わる。`UPDATE_SCHEMA=1 cargo test -p task-core`）と、
+  `control-ts/` の project_controller の fixture・型（Project の auto_integrate 削除）。
+  それまで `store::tests::event_row_schema_matches_committed` は schema 差分で落ちる。
+- `cargo clippy --workspace -- -D warnings` は他 crate の置き換え後に通す。
 
 ## 本番への移行
 - 移行の前に、有効な案件の remote・dir の行を数える:

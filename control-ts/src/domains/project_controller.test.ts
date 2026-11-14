@@ -21,6 +21,7 @@ function snapshot(): ProjectSnapshot {
       status: "active",
       request: "依頼",
       request_sha256: "a".repeat(64),
+      auto_integrate: false,
     },
     brief: null,
     outcomes: [

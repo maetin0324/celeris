@@ -168,7 +168,7 @@ fix-verdict（`review_verdict.rs` の `on_review_finished`）が行う。この 
   上の「観測」と同じ）。
 - `cex_run_finish_and_work_unit_check_finish_in_one_tick` を単独で 5 回 → 5 回とも合格（load average 4.9）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
-- `bash scripts/dev/check-health.sh` → 下の「check-health」の行。
+- `bash scripts/dev/check-health.sh` → exit 0（repo-health の verdict pass、fail_grade 0、new 1・worsened 0、検査器の試験 99 本と gate の試験 7 件も合格）。
 - `bash scripts/dev/test-affected.sh` はこの unit では走らせない。反例の試験が本体の修正まで落ちるので exit 0 にならない。
   fix-verdict が本体を直した後に走らせる。
 

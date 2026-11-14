@@ -34,7 +34,8 @@ store-scope: a
    `restarted_parallel_dispatcher`・`phase_integrated`。
 4. 選択肢: a（store の method 1 つで 1 transaction）と b（store を変えず、再起動の照合で記録し直す）。決定どおり a。b は窓を
    残し、照合の経路を 1 本増やす。
-5. 新しい状態・分岐・fallback・port: store の method 1 つ（`apply_transition_with_work_units`）。Task の遷移が通らないときに統合 WU を
+5. 新しい状態・分岐・fallback・port: store の method 1 つ（`apply_transition_with_work_units`。同じ組み方の
+   `apply_transition_with_events_impl`・`work_unit_transition_impl` を畳んだ）。Task の遷移が通らないときに統合 WU を
    pending に戻す分岐（ADR D3。以前は統合 WU の done だけが残った）と、その reason の定数
    `INTEGRATION_RESULT_NOT_APPLIED`。新しい状態・列・fallback は無し。
 6. 撤去対象: `finish_phase_integration` の中の 3 回の書き込み（`work_unit_transition`・`promote_newly_ready`・
@@ -47,8 +48,14 @@ store-scope: a
 
 ## 変更
 
-- `crates/task-core/src/store/task_store.rs`・`task_store_impl.rs`・`execution/work_units.rs`: `apply_transition_with_work_units` と
-  その本体 `apply_transition_with_work_units_impl`。
+- `crates/task-core/src/store/task_store.rs`・`task_store_impl.rs`・`approvals.rs`: `apply_transition_with_work_units` と
+  その本体 `apply_transition_with_work_units_impl`（旧 `apply_transition_with_events_impl` を一般にした）。
+  `apply_transition_with_events` は trait の既定の method で `work_units` が空の形を渡す。
+- `crates/task-core/src/store/execution/work_units.rs`: `work_unit_transition_impl` を消した（挿入の無い
+  `work_units_apply_impl` と同じ transaction。`work_unit_transition`・`work_unit_transition_with_events` はそちらに渡す）。
+  最初の版は store の行を 33 行、`SqliteStore` の method を 2 つ増やし、repo health の `size.responsibility-growth` が
+  fail-grade 2 件（store の module の行 19364 → 19397、method 705 → 707）で落ちた。重複 2 つを畳んだ後は 19364 → 19364、
+  705 → 704。
 - `crates/task-dispatch/src/dispatcher/phase_integration.rs`: `finish_phase_integration` は、統合 WU を done に置いた行の集合
   から trigger・events・promote の行を組み立て、`apply_transition_with_work_units` で 1 回だけ書く。worktree の削除
   （`remove_phase_worktrees` に括った。中身は以前と同じ）と最終レビューの起動は commit の後。遷移が通らなければ
@@ -106,7 +113,20 @@ sqlite3 -readonly <本番 DB の path> "SELECT w.task_id, w.key FROM work_units 
 
 ## 証拠（提出時の HEAD で実行）
 
-（下の「検査」に記入）
+commit: 「fix-integ: 統合の完了（統合 WU の done・promote・PhaseIntegrated・Task の遷移）を 1 つの transaction で書く」、
+「fix-integ: 遷移と WU の行を 1 transaction で書く store の実装を 1 つにする（apply_transition_with_events と work_unit_transition の重複を畳む）」、
+「fix-integ: 進捗に提出時の HEAD の検査結果を書く」。基準は `$CELERIS_WU_BASE`。
+
+- `cargo nextest run -p task-dispatch -E 'test(cex_integration_restart) | test(pause_after_design_blocks_with_awaiting_human)'`:
+  exit 0、4 passed（試験 7、`cex_integration_restart_keeps_the_stage_pause`、試験 6、`pause_after_design_blocks_with_awaiting_human`）。
+- `cargo nextest run -p task-core -E 'test(apply_transition_with_work_units) | test(work_unit_transition)'`: exit 0、2 passed。
+- `bash scripts/dev/test-affected.sh`: exit 0。8497 tests run: 8497 passed、23 skipped。web の typecheck・unit、ts-verify も通った。
+  repo health は verdict=pass、fail_grade=0、new=1（`host_maintenance.rs` の `migration.remnant` の warning。この変更とは無関係）、
+  worsened=0。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+- `sh "$CELERIS_WU_SCOPE_PATHS"`: exit 0。変えた path は ADR・この進捗・`crates/task-core/src/store/` の 6 file・
+  `crates/task-dispatch/src/dispatcher/` の 3 file。
+- `awk '/pub\(super\) fn finish_phase_integration/,/^    }$/' crates/task-dispatch/src/dispatcher/phase_integration.rs | grep -c "work_unit_transition\|promote_newly_ready\|apply_transition_with_events"`: 0。
 
 ## 未解決事項
 

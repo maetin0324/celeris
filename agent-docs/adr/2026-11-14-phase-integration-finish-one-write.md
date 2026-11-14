@@ -34,6 +34,13 @@ status: accepted
 SQL 文・migration・列は足さない。新しい WU 行を INSERT する `repair_apply`（`review_repair_apply`・`delivery_repair_apply` と共有）
 は使わず、変えない。
 
+同じ組み方の実装を 2 つにしない。`apply_transition_with_events` は `work_units` が空の `apply_transition_with_work_units`
+と同じなので、trait の既定の method で後者に渡す（`apply_transition` が `apply_transition_with_events` に渡すのと同じ形）。
+本体は `approvals.rs` の 1 つ（旧 `apply_transition_with_events_impl` を一般にした）。`work_unit_transition`・
+`work_unit_transition_with_events` の本体（`work_unit_transition_impl`）は、挿入の無い `work_units_apply_impl` と同じ
+transaction なので消し、両方を `work_units_apply_impl` に渡す。これで store の module の行と `SqliteStore` の method の数は
+増えない（repo health の `size.responsibility-growth`。store の module は閾値を超えている）。
+
 events の順は以前の 3 回の書き込みと同じ（統合 WU の `WorkUnitTransitioned`、promote の `WorkUnitTransitioned`、`Transitioned`、
 `PhaseIntegrated`、`PhaseReported` 等）にする。replay・投影が読む順は変わらない。統合 WU を先に done にするので、
 `apply_transition_tx` の `integration_running` の拒否（`Continue{advance}` は running の統合 WU があると通さない）は同じ

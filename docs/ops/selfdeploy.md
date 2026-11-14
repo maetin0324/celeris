@@ -613,9 +613,12 @@ draining のまま run の面倒を見る上限（§4b）。
 
 ## 9. 部署レビューから自動で候補を準備する（ADR-0051）
 
-自動取り込みは**案件の属性**（`auto_integrate`。既定は無効＝手動取り込み。ADR 2026-10-16-project-auto-integrate）。
-`PATCH /api/v1/projects/{id}` に `{"auto_integrate": true}` を送るか、Web の案件画面の「自動取り込み」で切り替える
-（reload・再起動は要らない）。有効な案件の root task は、次のReviewer runでマージ可否も判定する。
+自動取り込みは**リポジトリの属性**（`project_repos.auto_integrate`。既定は無効＝手動取り込み。ADR 2026-11-14-repo-auto-integrate）。
+`PATCH /api/v1/repos/{id}` に `{"auto_integrate": true}` を送るか、Web のリポジトリ画面で切り替える（人の管理操作。reload・再起動は要らない）。
+有効にできるのは local の git リポジトリだけ。案件の `auto_integrate` は廃止（書くと 422）。
+取り込むかどうかは判定関数 `task_ops::delivery::auto_integrates` が task の `repos` から決める。
+root task が書く repo がすべて有効のときだけ取り込み対象で、無効の repo の root task は、同じ案件の別 repo が有効でも取り込まず、受信箱にも項目を出さない。
+対象の root task は、次のReviewer runでマージ可否も判定する。
 部署長の別runが既存レビューを担当するため、CoSに技術的な再承認は求めない。
 合格した固定SHAを task の repo（案件のローカルリポジトリ）の既定ブランチへfast-forwardする。
 取り込み先が `[selfdeploy] repo`（自己リポジトリ）なら、そのあとrelease/verifyを準備し、成功後にCoSからデプロイ候補を通知する

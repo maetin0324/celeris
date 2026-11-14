@@ -91,6 +91,7 @@ tick で b が上がって走るので、そこで落とすと b の run が新�
 ## 変更（件名）
 
 - 「fix-promote: dispatch gate の依存 WU の昇格を計画の版によらず行い、WU の done の後の再起動の反例を試験で固定する」
+- 「fix-promote: promote_newly_ready の doc comment を元の行数に戻し、work_units.rs の source-size の伸びを無くす」
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`、範囲は `$CELERIS_WU_BASE`）
 
@@ -103,6 +104,12 @@ tick で b が上がって走るので、そこで落とすと b の run が新�
   前回の最終 review の記録にも同じものがある）。
 - 最初の test-affected は repo health の `size.responsibility-growth`（`wu_dispatch_gate` が 204 行で閾値 200 を超えた）で
   exit 1 だった。gate のコメントを 2 行に戻して再実行し、上の結果になった。
+- 1 回目の提出の後、celeris の WU の check `celeris:repo-health/1`（基準 `$CELERIS_WU_BASE`）が 2 件の fail で落ちた:
+  `size.responsibility-growth`（`work_units.rs` の本体 2085 行が閾値 2000 を超えたまま伸びた）と `source-size`
+  （`check-source-size.py` の `production_size` が value 2086・allowed 2085）。原因は `promote_newly_ready` の doc comment を
+  3 行から 4 行に伸ばしたこと。doc comment を 3 行に戻して `work_units.rs` を基準と同じ 2085 行にした（コードは変えていない）。
+  `python3 scripts/dev/repo-health/repo_health.py --repo scripts/dev --base "$CELERIS_WU_BASE" --head worktree --policy-version 1`
+  は exit 0、verdict=pass、fail_grade 0、new 0。`check-source-size.py --base "$CELERIS_WU_BASE"` は exit 0（0 failure）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
 - 範囲: `sh "$CELERIS_WU_SCOPE_PATHS"` の変更 path は ADR・`work_units.rs`・`cex_lease_restart.rs`・この進捗の 4 件。
 

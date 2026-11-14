@@ -612,10 +612,9 @@ impl Dispatcher {
     }
 
     /// ADR-0079 付記「R6-1」D2: 依存と工程の障壁が満たされた `pending` の unit を `ready` に上げる
-    /// （行と event は [`super::phase_integration::ready_promotions`]。`finish_phase_integration` と同じ。子 task の
-    /// 状態を写した後の `reconcile_tree_units` もこれで上げる）。人の gate の間は上げずにおくので、gate が解けた後の
-    /// 最初の dispatch で上げる。dispatch gate は計画の版によらず呼ぶ（ADR 2026-11-14-dependency-promotion-every-plan-version
-    /// D1）。上げたら `true`。
+    /// （行と event は [`super::phase_integration::ready_promotions`]。`finish_phase_integration`・子 task の状態を写した
+    /// 後の `reconcile_tree_units` と同じ）。人の gate の間は上げずにおき、gate が解けた後の最初の dispatch で上げる。
+    /// dispatch gate は計画の版によらず呼ぶ（ADR 2026-11-14-dependency-promotion-every-plan-version D1）。上げたら `true`。
     pub(super) fn promote_newly_ready(
         &self,
         task_id: TaskId,

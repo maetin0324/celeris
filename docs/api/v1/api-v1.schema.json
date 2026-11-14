@@ -9861,7 +9861,6 @@
         {
           "enum": [
             "no_project",
-            "project_not_enabled",
             "support_task",
             "tree_child",
             "multiple_repos",
@@ -9876,6 +9875,11 @@
             "refs_unresolvable",
             "department_unresolved"
           ],
+          "type": "string"
+        },
+        {
+          "const": "repo_not_enabled",
+          "description": "ADR 2026-11-14-repo-auto-integrate D4: task の repo に自動取り込みが有効でないものがある。旧い\nevent の `project_not_enabled`（案件が無効）は、ここへ読み替える（events は追記専用で書き換えない）。",
           "type": "string"
         },
         {
@@ -23601,11 +23605,6 @@
           "description": "ADR-0074 D3.2（Phase F4b）: `true` なら、案件計画のマイルストーン Task は依存先が `done` になった\n時点で進む（途中目標の `reached` = 人の `ok` を待たない。判定のレビューは後から行う）。既定 `false`。",
           "type": "boolean"
         },
-        "auto_integrate": {
-          "default": false,
-          "description": "ADR 2026-10-16-project-auto-integrate D1: `true` なら、この案件のレビュー合格した root task を\n既定ブランチへ自動で取り込む（delivery）。既定 `false`。",
-          "type": "boolean"
-        },
         "created_at": {
           "type": "string"
         },
@@ -23979,11 +23978,6 @@
           "description": "ADR-0074 D3.2（Phase F4b）: `true` なら、案件計画のマイルストーン Task は依存先が `done` になった\n時点で進む（途中目標の `reached` = 人の `ok` を待たない。判定のレビューは後から行う）。既定 `false`。",
           "type": "boolean"
         },
-        "auto_integrate": {
-          "default": false,
-          "description": "ADR 2026-10-16-project-auto-integrate D1: `true` なら、この案件のレビュー合格した root task を\n既定ブランチへ自動で取り込む（delivery）。既定 `false`。",
-          "type": "boolean"
-        },
         "brief": {
           "anyOf": [
             {
@@ -24089,13 +24083,6 @@
       "properties": {
         "auto_advance": {
           "description": "ADR-0074 D3.2（Phase F4b (d)）: 案件計画のマイルストーン Task を、依存先の `done` で進めるか\n（`true`）、途中目標の `reached`（人の `ok`）まで待つか（`false`、既定）。省略なら変えない。",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "auto_integrate": {
-          "description": "ADR 2026-10-16-project-auto-integrate D1/D4: レビュー合格した root task を既定ブランチへ自動で取り込むか。\n省略なら変えない。",
           "type": [
             "boolean",
             "null"
@@ -24404,6 +24391,11 @@
     "ProjectRepo": {
       "description": "案件のリポジトリ 1 件（`project_repos` の 1 行。ADR-0043 D1）。",
       "properties": {
+        "auto_integrate": {
+          "default": false,
+          "description": "ADR 2026-11-14-repo-auto-integrate D1: `true` なら、このリポジトリだけに書く（`task.repos` の\nすべてが有効な）レビュー合格の root task を既定ブランチへ自動で取り込む。`kind = git` かつ\n`location` が local の行だけが持てる（D2。[`RepoError::AutoIntegrateNotLocalGit`]）。",
+          "type": "boolean"
+        },
         "created_at": {
           "type": "string"
         },
@@ -26071,6 +26063,10 @@
       "additionalProperties": false,
       "description": "`POST /projects/{id}/repos` の要求本文（管理系）。",
       "properties": {
+        "auto_integrate": {
+          "description": "ADR 2026-11-14-repo-auto-integrate D1/D2: レビュー合格した root task を既定ブランチへ自動で\n取り込むか。省略は `false`。remote か `dir` の行で `true` は 422。管理トークンだけが書ける\n（CoS の `repo.create` は 422、D6）。",
+          "type": "boolean"
+        },
         "default_branch": {
           "type": [
             "string",
@@ -26162,6 +26158,13 @@
       "additionalProperties": false,
       "description": "`PATCH /repos/{id}` の要求本文（管理系）。書いたものだけ変える。",
       "properties": {
+        "auto_integrate": {
+          "description": "ADR 2026-11-14-repo-auto-integrate D1/D2: 省略なら変えない。変更を当てた後の行が remote か\n`dir` で `true` なら 422（黙って `false` に落とさない）。CoS の `repo.update` は 422（D6）。",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "default_branch": {
           "description": "省略なら変えない、`null` なら消す。",
           "type": [

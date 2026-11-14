@@ -11,7 +11,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
-use api_common::{TestEnv, admin_env, get_admin, post_admin, send};
+use api_common::{TestEnv, admin_env, get_admin, patch_admin, post_admin, send};
 use celeris_campaign::{
     celeris_exec::{CelerisExecutor, HttpResponse, Transport},
     manifest::CampaignManifest,
@@ -22,7 +22,7 @@ use preflight_setup::*;
 use serde_json::{Map, Value, json};
 
 /// 実 router で案件を作り（repo の既定は auto_integrate=false）、repo を足す。`auto_integrate` が真なら
-/// store で repo の欄を有効にする（API の切り替えは task-api の試験の範囲）。`(project id, detail body, repos body)`。
+/// `PATCH /repos/{id}` で repo の欄を有効にする。`(project id, detail body, repos body)`。
 async fn real_project(env: &TestEnv, auto_integrate: bool) -> (String, Value, Value) {
     let app = env.router();
     let created = send(
@@ -39,17 +39,22 @@ async fn real_project(env: &TestEnv, auto_integrate: bool) -> (String, Value, Va
         &app,
         post_admin(
             &format!("/api/v1/projects/{id}/repos"),
-            &json!({"name": "scratch", "location": {"kind": "local", "path": "/x"}}),
+            &json!({"name": "scratch", "kind": "git", "location": {"kind": "local", "path": "/x"}}),
         ),
     )
     .await;
     assert_eq!(repo.status.as_u16(), 201, "{}", repo.text());
     if auto_integrate {
-        let pid = id.parse().expect("project id");
-        let mut rows = env.store.repo_list(pid).expect("repo_list");
-        let row = rows.first_mut().expect("repo row");
-        row.auto_integrate = true;
-        assert!(env.store.repo_update(row).expect("repo_update"));
+        let repo_id = repo.json()["id"].as_str().expect("repo id").to_string();
+        let on = send(
+            &app,
+            patch_admin(
+                &format!("/api/v1/repos/{repo_id}"),
+                &json!({"auto_integrate": true}),
+            ),
+        )
+        .await;
+        assert_eq!(on.status.as_u16(), 200, "{}", on.text());
     }
     let detail = send(&app, get_admin(&format!("/api/v1/projects/{id}"))).await;
     assert_eq!(detail.status.as_u16(), 200, "{}", detail.text());

@@ -1134,10 +1134,6 @@ pub struct ProjectPatchBody {
     /// （`true`）、途中目標の `reached`（人の `ok`）まで待つか（`false`、既定）。省略なら変えない。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_advance: Option<bool>,
-    /// ADR 2026-10-16-project-auto-integrate D1/D4: レビュー合格した root task を既定ブランチへ自動で取り込むか。
-    /// 省略なら変えない。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub auto_integrate: Option<bool>,
     /// ADR-0044 D7 追記（Phase K-1）: 知識ベースの置き場 `projects/<slug>/` の slug を変える
     /// （小文字の `[a-z0-9-]`、案件 ID の形は不可、案件の間で一意。重複は 409）。省略なら変えない。
     /// **KB のディレクトリは動かさない**（`projects/<旧>/` を動かすのは人）。
@@ -1913,6 +1909,11 @@ pub struct RepoCreateBody {
     /// 案件の「主なリポジトリ」にする。案件の最初の 1 件は自動的に primary。
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub is_primary: bool,
+    /// ADR 2026-11-14-repo-auto-integrate D1/D2: レビュー合格した root task を既定ブランチへ自動で
+    /// 取り込むか。省略は `false`。remote か `dir` の行で `true` は 422。管理トークンだけが書ける
+    /// （CoS の `repo.create` は 422、D6）。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub auto_integrate: bool,
 }
 
 /// `PATCH /repos/{id}` の要求本文（管理系）。書いたものだけ変える。
@@ -1945,6 +1946,10 @@ pub struct RepoPatchBody {
     /// （primary を空にはできない。別の行を primary にする）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub is_primary: Option<bool>,
+    /// ADR 2026-11-14-repo-auto-integrate D1/D2: 省略なら変えない。変更を当てた後の行が remote か
+    /// `dir` で `true` なら 422（黙って `false` に落とさない）。CoS の `repo.update` は 422（D6）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_integrate: Option<bool>,
 }
 
 /// `GET /tasks/{id}/tree` の応答（ADR-0043 D6。読み取り。トークンは要らない）。

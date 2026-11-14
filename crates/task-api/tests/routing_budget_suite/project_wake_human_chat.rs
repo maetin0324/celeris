@@ -599,6 +599,7 @@ fn integrated_task(f: &Fixture, state: TaskRepoIntegrationStatus) -> (task_core:
         sync: None,
         run: RepoRun::Auto,
         is_primary: true,
+        auto_integrate: false,
         created_at: now,
     };
     f.env.store.repo_create(&repo).expect("repo");

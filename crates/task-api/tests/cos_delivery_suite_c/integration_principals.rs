@@ -52,7 +52,6 @@ fn fixture(env: &TestEnv) -> (task_core::Task, RepoId) {
         request: "r".into(),
         status: ProjectStatus::Active,
         auto_advance: false,
-        auto_integrate: false,
         slug: None,
         workspace: None,
         archived_at: None,
@@ -82,6 +81,7 @@ fn fixture(env: &TestEnv) -> (task_core::Task, RepoId) {
         sync: None,
         run: RepoRun::Auto,
         is_primary: true,
+        auto_integrate: false,
         created_at: now,
     };
     env.store.repo_create(&repo).unwrap();

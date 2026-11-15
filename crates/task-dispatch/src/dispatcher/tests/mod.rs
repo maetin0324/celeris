@@ -3241,6 +3241,9 @@ mod cex_lease_restart;
 /// 健全性v2 R4 cex-review: review の権限（検査した候補の同一性・自己申告で完了しないこと・再同期の上限）の反例試験
 /// （`src/dispatcher/tests/cex_review_authority.rs`）。
 mod cex_review_authority;
+/// 健全性v2 R4 cex-tick: 同じ tick の Done と lease の期限、先に確定した人の操作の反例試験
+/// （`src/dispatcher/tests/cex_same_tick.rs`）。
+mod cex_same_tick;
 /// 判断・実行・成果ログの配線（`src/dispatcher/tests/decision_log.rs`）。
 mod decision_log;
 /// ADR-0124: atomic coding task の planner なし直行経路（`src/dispatcher/tests/direct_route.rs`）。

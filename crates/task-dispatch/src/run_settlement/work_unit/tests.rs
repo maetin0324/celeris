@@ -131,11 +131,13 @@ fn limits(stalled: u32, replans: u32, max_replans: u32) -> ReplanLimits {
     }
 }
 
-/// 不変条件: `[execution] continuation = false` の continuation に回る run は WU の行を変えずに retryable な失敗に
-/// し、auto-leaf の上限を超えた leaf だけは continuation を無効にしても遷移させて止める。WU の行を変えない分岐は
-/// 遷移の関数を通らないので、`execution_scheduler` の試験では検出できない。
+/// 不変条件: `[execution] continuation = false`（または run の性質で続けられない）の continuation に回る run は、
+/// retryable な失敗として WU の retry に回し（WU は `ready`、task は `work_unit_retry`）、auto-leaf の上限を超えた leaf
+/// だけは遷移させて止める。以前の「WU の行を変えない」契約は WU を `running` のまま残して task を止めた
+/// （`dispatcher::tests::research_deadline` の WU の試験が検出した）ので廃止した。この分岐は遷移の関数の入力を
+/// 差し替えるので、`execution_scheduler` の試験では検出できない。
 #[test]
-fn continuation_disabled_keeps_the_unit_unless_the_auto_leaf_limit_stops_it() {
+fn continuation_disabled_retries_the_unit_unless_the_auto_leaf_limit_stops_it() {
     let wu = row("a", WorkUnitKind::Implement, WorkUnitStatus::Running);
     let units = [wu.clone()];
     let cp = checkpoint(1, None);
@@ -145,12 +147,19 @@ fn continuation_disabled_keeps_the_unit_unless_the_auto_leaf_limit_stops_it() {
     };
     let mut disabled = input(budget(), &wu, &units, ci, "error(retryable=true): budget");
     disabled.continuation_enabled = false;
+    disabled.max_retries = 1;
     let s = settle_work_unit(disabled);
-    assert!(s.decision.is_none());
-    assert_eq!(s.trigger, Trigger::WorkerError { retryable: true });
+    let d = s.decision.as_ref().expect("the unit is retried");
+    assert_eq!(d.updated.status, WorkUnitStatus::Ready);
+    assert_eq!(
+        s.trigger,
+        Trigger::Continue {
+            why: task_core::ContinueWhy::WorkUnitRetry
+        }
+    );
     assert_eq!(
         s.outcome,
-        "error(retryable=true): budget_exhausted(turns) (continuation disabled)"
+        "work_unit_retry: WorkUnit a を最初からやり直します（1/1）"
     );
 
     let mut stopped = input(budget(), &wu, &units, ci, "error(retryable=true): budget");

@@ -327,7 +327,9 @@ async fn empty_report_is_retryable_error() {
     assert!(!dir.path().join("artifacts/result.json").exists());
 }
 
-/// 壁時計の超過でプロセスグループごと SIGKILL する（paperqa/acp と同じ確認方法: `/proc/<pid>` の消滅）。
+/// 壁時計の超過でプロセスグループごと SIGKILL し（paperqa/acp と同じ確認方法: `/proc/<pid>` の消滅）、終端は
+/// 予算切れ `BudgetExhausted{WallClock}` にする（ADR 2026-11-15-research-adapter-deadline D1。
+/// `runs/<run_id>/result.json` の行も `budget_exhausted`）。
 #[tokio::test]
 async fn wall_clock_exceeded_kills_the_process_group() {
     let dir = tempfile::tempdir().unwrap();
@@ -353,14 +355,29 @@ while true; do sleep 0.1; done
     let outcome = adapter.run(req, "run-5", limits, &sink).await.unwrap();
     assert!(start.elapsed() < Duration::from_secs(5));
     match outcome.terminal {
-        Terminal::Error {
-            retryable, message, ..
+        Terminal::BudgetExhausted {
+            kind,
+            message,
+            usage,
         } => {
-            assert!(retryable);
-            assert!(message.contains("wall clock exceeded"), "{message}");
+            assert_eq!(kind, task_core::BudgetKind::WallClock);
+            assert_eq!(message, "wall clock exceeded");
+            assert_eq!(usage, None);
         }
-        other => panic!("expected error, got {other:?}"),
+        other => panic!("expected budget_exhausted, got {other:?}"),
     }
+    let run_result = std::fs::read_to_string(dir.path().join("runs/run-5/result.json")).unwrap();
+    assert!(
+        matches!(
+            serde_json::from_str::<crate::protocol::WorkerMessage>(run_result.trim()).unwrap(),
+            crate::protocol::WorkerMessage::BudgetExhausted {
+                kind: task_core::BudgetKind::WallClock,
+                ..
+            }
+        ),
+        "{run_result}"
+    );
+    assert!(!dir.path().join("artifacts/result.json").exists());
     let pid_text = std::fs::read_to_string(&pid_file)
         .expect("stub should have recorded its pid before looping");
     let pid: i32 = pid_text
@@ -371,6 +388,36 @@ while true; do sleep 0.1; done
         !std::path::Path::new(&format!("/proc/{pid}")).exists(),
         "process {pid} should have been killed"
     );
+}
+
+/// 不変条件: 成功の枝は `artifacts/result.json` を書けたときだけ `Done` で、書けなければ `read_result_file` に
+/// 進まず retryable な `Error` になる（ADR 2026-11-15-research-adapter-deadline D4）。これまでは warn だけで
+/// `Done` にしていて、既存の試験は書ける置き場だけを使うので、reviewer が読む file の無い `Done` を検出できない。
+/// 置き場に同名の directory を置いて書き込みを失敗させる。
+#[tokio::test]
+async fn an_unwritable_result_file_is_a_retryable_error_not_done() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("artifacts/result.json")).unwrap();
+    let config = stub_ldr(dir.path(), &success_script());
+    let adapter = LdrAdapter::new(config);
+    let req = sample_req(dir.path().to_path_buf());
+    let sink = RecordingSink::default();
+    let outcome = adapter
+        .run(req, "run-5b", default_limits(), &sink)
+        .await
+        .unwrap();
+    match outcome.terminal {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
+            assert!(retryable);
+            assert!(
+                message.contains("could not write artifacts/result.json"),
+                "{message}"
+            );
+        }
+        other => panic!("expected error, got {other:?}"),
+    }
 }
 
 fn read_json(path: &Path) -> serde_json::Value {
@@ -842,7 +889,7 @@ async fn configure_env_overrides_a_same_name_key_already_in_config_env() {
 }
 
 /// LLM 供給側のエラー文面（認証失敗）が `AdapterError::AuthFailed` として分類される（ADR-0010 D5）。
-/// タイムアウトでは分類しない（別テストで確認済みの `wall_clock_exceeded` はプレーンな Error）。
+/// タイムアウトでは分類しない（別テストで確認済みの `wall_clock_exceeded` は `BudgetExhausted{WallClock}`）。
 #[tokio::test]
 async fn llm_auth_failure_is_classified_as_adapter_error() {
     let dir = tempfile::tempdir().unwrap();

@@ -3728,6 +3728,94 @@ async fn misplaced_wu_result_records_failure_without_infra_requeue() {
     assert!(!artifacts.join("result.json").exists());
 }
 
+/// ADR 2026-11-15-research-adapter-deadline D5 の付記: an adapter's `Ok` terminal is settled by the
+/// adapter itself (`result_report::read_result_file`, or the stdout protocol), so the dispatcher does
+/// not search for strays again and does not replace it with a misplaced-report error. Invariant: only
+/// `Err(AdapterError::Other)` is searched (the test above). The test above cannot catch a dispatcher
+/// that searches `Ok` terminals too; this one fails if that branch comes back.
+#[tokio::test]
+async fn an_adapters_ok_terminal_is_not_replaced_by_a_dispatcher_misplaced_search() {
+    struct OkErrorAdapter(Arc<ParallelWuAdapter>);
+    #[async_trait]
+    impl WorkerAdapter for OkErrorAdapter {
+        fn id(&self) -> &str {
+            "instant"
+        }
+        async fn run(
+            &self,
+            req: RunRequest,
+            run_id: &str,
+            limits: RunLimits,
+            sink: &dyn EventSink,
+        ) -> Result<RunOutcome, AdapterError> {
+            self.0.run(req, run_id, limits, sink).await?;
+            Ok(RunOutcome {
+                terminal: Terminal::Error {
+                    message: "worker gave up".into(),
+                    retryable: false,
+                    usage: None,
+                },
+                exit_code: Some(1),
+            })
+        }
+    }
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let root = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = parallel_task(repo.path(), "true");
+    store.insert(&task).unwrap();
+    adopt_v2_plan(
+        &store,
+        task.id,
+        &["build"],
+        vec![v2_wu("e2e", "build", &[])],
+    );
+    let adapter = Arc::new(
+        ParallelWuAdapter::new(Duration::ZERO).with_action("e2e", |cwd| {
+            let misplaced = cwd.parent().unwrap().join("artifacts");
+            std::fs::create_dir_all(&misplaced).unwrap();
+            std::fs::write(misplaced.join("result.json"), r#"{"summary":"done"}"#).unwrap();
+            std::fs::write(cwd.join("result.json"), r#"{"summary":"done"}"#).unwrap();
+        }),
+    );
+    let mut d = parallel_dispatcher(
+        store.clone(),
+        Arc::new(OkErrorAdapter(adapter.clone())),
+        root.path(),
+        3,
+        3,
+        3,
+    );
+    let s = store.clone();
+    let id = task.id;
+    assert!(
+        run_until(&mut d, 200, || {
+            wu_status(&s, id, "e2e") == Some(task_core::WorkUnitStatus::Failed)
+        })
+        .await
+    );
+    let outcomes: Vec<String> = events_of(&store, id)
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::WorkerFinished { outcome, .. } => Some(outcome),
+            _ => None,
+        })
+        .collect();
+    // The adapter's own failure takes the WU failure path (auto-replan); a dispatcher search would
+    // have recorded it as the misplaced-report contract failure instead (the test above).
+    assert!(
+        outcomes.iter().any(|o| o.starts_with("replan: ")),
+        "{outcomes:?}"
+    );
+    assert!(
+        outcomes
+            .iter()
+            .all(|o| !o.contains("result.json misplaced")),
+        "{outcomes:?}"
+    );
+}
+
 /// ADR 2026-10-22-plan-issue-answer-replans: plan_issue の申告と人の回答の意図を回す計画（a → b → c）。`b` の check は
 /// `b_check`（計画に固定）。
 fn adopt_plan_with_b_check(store: &Arc<dyn TaskStore>, task_id: TaskId, b_check: &str) {

@@ -791,16 +791,14 @@ pub(super) async fn run_worker(
             run.await
         }
     };
-    // A misplaced report is a worker contract failure, not an infrastructure retry.
+    // A misplaced report is a worker contract failure, not an infrastructure retry. An adapter's
+    // `Ok` terminal is already settled by its own `result_report::read_result_file` (or comes from
+    // the stdout protocol), so only `Err(AdapterError::Other)` is searched here: the browser
+    // candidates loop (`browser::run_with_candidates`) folds an inner adapter's terminal, including
+    // its misplaced-report error, into `Err(Other)` after the worker may have written the file
+    // (ADR 2026-11-15-research-adapter-deadline D5 の付記).
     let outcome = if requires_result_file
-        && matches!(
-            &outcome,
-            Err(AdapterError::Other(_))
-                | Ok(RunOutcome {
-                    terminal: Terminal::Done { .. } | Terminal::Error { .. },
-                    ..
-                })
-        )
+        && matches!(&outcome, Err(AdapterError::Other(_)))
         && let Some(terminal) = task_worker::result_location::misplaced_report(
             task_worker::result_location::RESULT_FILE_NAME,
             &result_artifacts,
@@ -811,7 +809,7 @@ pub(super) async fn run_worker(
     {
         Ok(RunOutcome {
             terminal,
-            exit_code: outcome.as_ref().ok().and_then(|o| o.exit_code),
+            exit_code: None,
         })
     } else {
         outcome

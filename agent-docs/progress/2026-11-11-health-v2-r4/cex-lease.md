@@ -2,7 +2,7 @@
 title: "健全性v2 R4 cex-lease: lease・restart・同時完了の反例試験"
 tasks: [01M6TYVJT4S29ZMP6P0D4831JG]
 status: completed
-updated: 2026-11-11
+updated: 2026-11-15
 ---
 # 健全性v2 R4 cex-lease: lease・restart・同時完了の反例試験
 
@@ -65,6 +65,7 @@ G7 について: `cex_restart_after_crash_…` を落とす guard は dispatcher
 
 - 反例（今の実装で成り立たない）: WU a を done にした書き込みの直後（`finish_worker_result_with` の WU 遷移の後、依存 WU の `dependency_ready` 遷移の前。`test_halt_after_wu_transition` と同じ所）で落ちると、再起動後に b・c が pending のまま残り、Task は ready（lease 無し）で止まる。`run_until_state` の保険まで Done に届かない。観測した event: `work_unit_transitioned a running→done (completed)`、`worker_progress orphan_takeover…`、`transitioned running→ready (infra_requeue)`、`worker_finished … harness_error(infra)` の後に何も起きない。再現: `cex_restart_after_crash_between_wu_and_task_transitions_is_idempotent` の最後に `assert!(run_until_state(&mut again, || status_of(&s, id) == Status::Done).await)` を足す。今回の範囲では本体を直さず、試験はこの前進を assert していない（doc comment に明記）。
 - G7 と再起動の閉じ直しの guard 確認は上の理由で未完了。
+- 上の反例は fix-promote が直した（2026-11-14。[fix-promote.md](fix-promote.md)、ADR [2026-11-14-dependency-promotion-every-plan-version](../../adr/2026-11-14-dependency-promotion-every-plan-version.md)）。dispatch gate の `promote_newly_ready` を計画の版によらず呼ぶ形にし、試験 `cex_restart_after_wu_done_promotes_dependents_once` で固定した（修正の前は exit 100、`status=Ready b=[] c=[]` の assert で落ちた。修正の後は合格し、b・c の `dependency_ready` は 1 件ずつ）。`cex_restart_after_crash_between_wu_and_task_transitions_is_idempotent` は fix-promote が Task の Done まで回す形に直した。この記録の上の項は cex-lease の時点の観測として残す。
 
 ## 証拠（提出時の HEAD で実行）
 

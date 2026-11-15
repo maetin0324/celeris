@@ -88,13 +88,24 @@ blocked・failed だけが残る計画（ADR-0120 の integration repair の fal
 ### 変更（commit の件名、late-close）
 
 - `late-close: 既存 3 本の guard を確かめ、cex-late2 を総括して cex-late を done にする`
+- `late-close: 提出時の HEAD の検査の結果を進捗に書く`
 
 試験 file（`cex_late_completion.rs`）は変えていない。doc comment の不変条件と assert は、上の一時変更で全 6 本が落ちることを
 確かめたので、補強は要らないと判断した。
 
 ### 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
-（late-close の検査の後に書く）
+- `cargo nextest run -p task-dispatch -E 'test(/cex_late_completion::/)'`: exit 0、`6 tests run: 6 passed, 1883 skipped`。
+- 同じコマンドに `--no-fail-fast` を付け、E1〜E8 を 1 つずつ当てた結果は上の総表（当てる前の基準の実行も 6 本合格）。
+- `bash scripts/dev/test-affected.sh`: exit 0。この WU の差分（`$CELERIS_WU_BASE` から）は進捗の 2 file だけなので
+  「試験対象の変更なし（docs のみ等）」で crate の試験は対象外。repo-health の script の試験（`Ran 99 tests … OK`、
+  `repo_health_gate: all checks passed`）は走った。late-integ・late-review の code の変更は、各節の test-affected が見ている
+  （late-review の最後の実行は 8517 本合格）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `cargo fmt --all -- --check`: exit 0（差分無し）。
+- `sh scripts/dev/check-doc-links.sh`: exit 0（`check-doc-links: ok`）。`sh scripts/dev/check-adr-numbers.sh`: exit 0
+  （`check-adr-numbers: ok (446 files)`）。`sh scripts/dev/progress-index.sh --check`: exit 0。
+- `sh "$CELERIS_WU_SCOPE_PATHS"`: `agent-docs/progress/2026-11-11-health-v2-r4/cex-late.md` と `cex-late2.md` だけ（範囲内）。
 
 ### 未解決
 

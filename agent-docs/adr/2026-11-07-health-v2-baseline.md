@@ -105,3 +105,11 @@ tasks: [01M6TYVJSPEYA2P8B7G56HSQ73]
   - `^web/api/generated/schema\.json$`
 - 理由: B0 が R6 に割り当てた api-scratch-cache-stats-field（delete）と、R5 から回った old-console-milestone-review-block は API の欄を消すので、生成した schema の JSON（`docs/api/v1/api-v1.schema.json`・`web/api/generated/schema.json`）が変わる。R5 から回った duplicate_setup の一部（D01・D16・D41 ほか）は file 名に数字を含む。B0 の write_set はどちらも許さず、`slices-check.py --write-set R6` が exit 1 になって R6 が止まっていた。健全性 v2 の R2〜R5 は done で、V0 は R6 の後に動くので、広げた範囲を兄弟の工程と同時に触ることは無い。
 - 検査の範囲の変更なので、この付記と slices.json の変更は 1 commit にまとめ、他の変更と混ぜない。D6 の 4（基準値は書き換えない）は変わらない。write_set は基準値ではなく範囲の規則である。
+
+## 付記 r6-plan-e2e（2026-11-15、R6 の write_set に e2e の plan_scenarios.rs を足す）
+- 決定: 人の決定 r6-plan-e2e（ADR-0079 D7）の答えは a（R6 の write_set に `tests/e2e/tests/plan_scenarios.rs` を足し、e2e の 2 つの Plan task の作成を `env.store.create_task` に替えて、`celerisctl plan` と `task_ops::plan::create_plan` を消す。推奨どおり）。
+- 答えた者: 運用者（operator の Claude Code の対話 session）。人が 2026-11-15 に「R6が止まっているのにも対処してください」と指示し、それを受けて運用者が a を選んだ。人が a を選んだのではない。
+- 変更: [slices.json](../progress/2026-11-07-health-v2-b0/slices.json) の R6（task 01M6TYVJT7EJ6WWHEF0EBH3JPS）の `write_set` に正規表現 `^tests/e2e/tests/plan_scenarios\.rs$` を 1 つだけ足した。R6 の他の欄、他の slice、付記 r6-write-set で足した 4 つの正規表現は変えていない。`tests/` で始まる path を許すのはこの 1 file だけで、`tests/e2e` の他の file と `tests/common` は範囲の外のまま。
+- 理由: R6 の legacy が `celerisctl plan`（DB に直接 kind = plan の task を作る旧い入口）を消すと、この file の 2 つの e2e（`celerisctl_plan_generates_children_that_complete_after_human_approval` と `invalid_plan_is_retried_once_with_prior_review`）が実 binary の `celerisctl plan` で Plan task を作っているので落ちる。B0 の write_set は `tests/e2e/` を許さず、legacy が旧い入口を消すと `slices-check.py --write-set R6` が exit 1 になる。兄弟の slice（G1〜G4・R1〜R5・V0）の write_set に `tests/` で始まるものは無く、R1〜R5・G1〜G4 は done、V0 は R6 の後に動くので、兄弟と同じ file を同時に触ることは無い。
+- 条件: e2e の 2 つの試験で替えるのは Plan task の作成だけにし、人の承認・子 task の完了・再試行の assert は弱めない。
+- 検査の範囲の変更なので、この付記と slices.json の変更は 1 commit にまとめ、他の変更と混ぜない。D6 の 4（基準値は書き換えない）は変わらない。

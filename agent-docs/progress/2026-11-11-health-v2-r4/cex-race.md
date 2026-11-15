@@ -1,7 +1,7 @@
 ---
 title: "健全性v2 R4 cex-race: lease の renew の競合と、ownerless で閉じた旧 reviewer の遅れた合格の反例試験"
 tasks: [01M7DYMCZ4T7C5RNQ3JZQAF4G7]
-status: blocked
+status: running
 updated: 2026-11-15
 ---
 # 健全性v2 R4 cex-race
@@ -411,3 +411,40 @@ events after the expiry [Transitioned { from: Running, to: Ready, reason: "infra
   `WorkerFinished` を書く。違えば何も書かずに知らせ、回収側はその Task を飛ばす。`crates/task-core/src/store/` と
   `run_supervisor.rs`（lease の高 risk の class）に当たるので、設計 brief と設計 review を通す修正の unit で行う。
   fix-verdict の節の提案（reviewer run の判定の比較更新）と同じ形の store の API にまとめられるかも、その設計で決める。
+
+### replan v3: renew-race（2026-11-15）
+
+計画 v3 で renew-race は「反例の試験を残し、修正の unit に渡す」になった。反例 (i)（上の「観測」）は、次の 2 つの unit が直す:
+
+- fix-store: store に、期待する lease を同じ writer transaction の中で照合してから遷移を書く口を足し、使われなくなる
+  `release_lease` を消す。
+- fix-reclaim: `reclaim_expired_leases` の回収の書き込みを、snapshot の lease との照合付きの口（fix-store が足す）に替える。
+  `cex_lease_renew_after_expired_snapshot_keeps_the_holder` は試験 file を変えずに合格する見込み（上の G-proto の一時変更で
+  12 本すべて合格を確かめた。照合の窓の無い本当の修正では未確認）。
+
+この run の変更（commit の件名）:
+
+- `renew-race: keep only the invariant and the detection reason in the renew-after-snapshot test's doc comment`
+  - doc comment から、今の実装の書き込みの経路を説明する 2 文（`release_lease` → `apply_transition_with_events` が期待する
+    lease を取らないこと、期待する行を取る store の API が WU の行のものだけであること）を外した。fix-store・fix-reclaim の後は
+    事実でなくなるため。継ぎ目が無い理由は上の「既存の継ぎ目の有無」に残っている。doc comment には不変条件と既存の試験で
+    検出できない理由だけが残る。「今の実装では落ちる」の類の記述は前の版から無い。
+  - 試験の手順と assert は変えていない（関数の本体を前の commit と比べて sha256 が一致）。hook（`TestHooks::after_reclaim_decision`）と
+    `leases.rs` の `#[cfg(test)]` の 4 行も変えていない。
+- この節と front matter の status（running）。
+
+この unit では `bash scripts/dev/test-affected.sh` を走らせない。反例 (i) の試験が fix-reclaim まで落ちるので exit 0 にならない
+（前の run の結果: exit 100、3945 本中 3944 本合格、失敗は反例 (i) の 1 本だけ）。fix-reclaim の後に走らせる。
+
+証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）:
+
+- `cargo nextest run -p task-dispatch --no-fail-fast --no-tests=fail -E '(test(/cex_/) | test(/ownerless/)) & not test(/cex_lease_renew_after_expired_snapshot_keeps_the_holder/)'`
+  → exit 0、48 本すべて合格（old-review の反例 `cex_restart_old_reviewer_pass_after_ownerless_close_is_ignored` を含む）。
+- `cargo nextest run -p task-dispatch --no-fail-fast --no-tests=fail -E 'test(/cex_lease_restart::/) & not test(/cex_lease_renew_after_expired_snapshot_keeps_the_holder/)'`
+  → exit 0、11 本すべて合格。
+- `cargo nextest run -p task-dispatch --no-fail-fast -E 'test(/cex_/) | test(/ownerless/)'` → exit 100、49 本中 48 本合格。
+  落ちたのは反例 (i) の 1 本だけ（上の「観測」と同じ assert、`report.reclaimed` が 1）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `bash scripts/dev/check-health.sh` → 下に追記する。
+- `git diff $CELERIS_WU_BASE HEAD -- crates ':!crates/task-dispatch/src/dispatcher/tests'` → `leases.rs` の `#[cfg(test)]` の追加 4 行だけ
+  （`cfg(test)` の外の差分は無い）。

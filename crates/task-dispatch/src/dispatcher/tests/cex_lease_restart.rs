@@ -1131,9 +1131,7 @@ async fn cex_run_finish_and_work_unit_check_finish_in_one_tick() {
 /// その後の通常の完了で 1 回だけ閉じる。
 ///
 /// 既存試験で検出できない理由: `reclaim_expired_leases` は同期で await を持たないので、試験の task は snapshot
-/// （`store.list(Running)`）と回収の書き込み（`release_lease` → `apply_transition_with_events`。期待する lease を引数に取らない）
-/// の間に他の接続の書き込みを挟めない。期待する行を引数に取り writer transaction の中で照合する store の API
-/// （`recover_work_unit`・`try_start_work_unit_integration`）は WU の行のもので、Task の lease の回収は通らない。
+/// （`store.list(Running)`）と回収の書き込みの間に他の接続の書き込みを挟めない。
 /// [`cex_stale_holder_late_finish_does_not_overwrite_the_reassigned_run`] は回収が済んだ後の旧保持者の完了だけを、
 /// `orphan_takeover.rs` は持ち主の居ない run の回収だけを、store の `renew_lease_extends_only_the_matching_running_lease`
 /// は renew 単独を見る。回収側自身の延長（ADR-0070 D5 の `alive_task_run`）は回収側の手元の run にしか効かない。どれも

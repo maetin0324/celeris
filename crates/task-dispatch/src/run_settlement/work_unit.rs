@@ -82,7 +82,7 @@ pub(crate) struct WorkUnitRunInput<'a> {
 pub(crate) struct WorkUnitSettlement {
     pub trigger: Trigger,
     pub outcome: String,
-    /// WU の遷移。`None` は `[execution] continuation = false` の run（WU の行を変えない）。
+    /// WU の遷移。
     pub decision: Option<WuDecision>,
     /// WU の状態だけを戻す run（harness_error・cancelled）。task の trigger と outcome の文は settle のまま。
     pub reset_only: bool,
@@ -137,16 +137,21 @@ pub(crate) fn settle_work_unit(input: WorkUnitRunInput<'_>) -> WorkUnitSettlemen
         failure: None,
         auto_replan: None,
     };
-    if end.is_continuable() && !input.continuation_enabled && input.auto_leaf_request.is_none() {
-        // ADR-0072 §6 (f): `[execution] continuation = false` なら従来どおり `WorkerError{retryable:true}` に戻す
-        // （WU の状態は変えない）。
-        s.trigger = Trigger::WorkerError { retryable: true };
-        s.outcome = format!(
-            "error(retryable=true): {} (continuation disabled)",
-            describe_run_end(end)
-        );
-        return s;
-    }
+    // ADR-0072 §6 (f)・ADR 2026-11-15-research-adapter-deadline D3: continuation を使えない run（`[execution]
+    // continuation = false`、または run の性質で続けられない）の予算切れ・yield は、checkpoint を残さない retryable な
+    // 失敗として WU の retry（`max_retries` を使い切れば失敗）に回す。以前は WU の行を変えずに返したので、WU が
+    // `running` のまま task だけが `ready` に戻り、次の WU を選べずに止まった。
+    let end =
+        if end.is_continuable() && !input.continuation_enabled && input.auto_leaf_request.is_none()
+        {
+            s.outcome = format!(
+                "error(retryable=true): {} (continuation disabled)",
+                describe_run_end(end)
+            );
+            RunEnd::Failed { retryable: true }
+        } else {
+            end
+        };
     // auto-leaf で測っている leaf は、測った回数の上限が continuation と進捗なしの上限の代わりになる。失敗と
     // plan_issue の扱いは変えない。
     let limits = WuLimits {

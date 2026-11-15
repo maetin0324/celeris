@@ -290,6 +290,15 @@ pub trait WorkerAdapter: Send + Sync {
         sink: &dyn EventSink,
     ) -> Result<RunOutcome, AdapterError>;
 
+    /// ADR 2026-11-15-research-adapter-deadline D2: この adapter の run が、前の run の checkpoint（prompt の
+    /// 「続きの実行」の節）から続けられるか。性質の正本はこの method だけで、adapter の名前の一覧は持たない。
+    /// `false` の adapter の予算切れ・yield は、dispatcher の worker 完了の経路が continuation に回さず、checkpoint を
+    /// 残さない retryable な失敗にする。既定は `true`（`claude_code::build_prompt` 系で prompt を組む adapter は
+    /// continuation の節を描く）。目的文だけを入力にする adapter は `false` に上書きする。
+    fn continues_from_checkpoint(&self) -> bool {
+        true
+    }
+
     /// ADR 2026-11-10-worker-capability-ports D3: `settings` を 1 回で適用した複製と、受けられない項目を
     /// 返す。各 adapter は受ける項目を [`AdapterSettings::configured`] に渡して宣言する。
     /// 既定は何も受けない（複製なし、指定された項目を全部 `unsupported` に入れる）。許可側に倒れない。

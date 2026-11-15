@@ -29,6 +29,11 @@ impl WorkerAdapter for BrowserSpecialistAdapter {
         self.inner.account_id()
     }
 
+    /// ADR 2026-11-15-research-adapter-deadline D2: 続けられるかは内側の harness の性質。
+    fn continues_from_checkpoint(&self) -> bool {
+        self.inner.continues_from_checkpoint()
+    }
+
     /// ADR 2026-11-10-worker-capability-ports D3: 内側の harness の `configure` へ転送し、複製を包み直す
     /// （id は `browser-specialist` のまま）。`unsupported` は内側の報告をそのまま返す。
     fn configure(&self, settings: &AdapterSettings) -> Configured {

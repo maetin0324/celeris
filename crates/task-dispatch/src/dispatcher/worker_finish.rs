@@ -386,6 +386,10 @@ impl Dispatcher {
             .err()
             .and_then(|e| browser_prereq::worker_error_code(&e.to_string()));
         let events_now = self.store.events_for(task_id)?;
+        // ADR 2026-11-15-research-adapter-deadline D2: checkpoint から続けられない run は continuation・auto-leaf に乗せない。
+        let continues = self
+            .routing
+            .run_continues_from_checkpoint(&events_now, &run_id);
         let infra_n = consecutive_infra_requeues(&events_now) + 1;
         let proposal = crate::run_settlement::settle(run_settlement::RunFinishInput {
             result,
@@ -421,12 +425,8 @@ impl Dispatcher {
         let yield_checkpoint_json = proposal.yield_checkpoint;
         // ADR-0090 D1/D2: `Terminal::Waiting` を検証して組んだクラスタ job の wait（`ClusterJobWaitStarted` にする）。
         let mut cluster_wait = proposal.cluster_wait;
-        let (mut trigger, mut outcome_str, usage, provider_outcome) = (
-            proposal.trigger,
-            proposal.outcome,
-            proposal.usage,
-            proposal.provider_outcome,
-        );
+        let (mut trigger, mut outcome_str) = (proposal.trigger, proposal.outcome);
+        let (usage, provider_outcome) = (proposal.usage, proposal.provider_outcome);
         // ADR-0072 D7/D8/D9/D11/D18（Phase E1/E2）: 予算切れ・yield の続き（continuation）。
         // checkpoint は常に合成して残す（(b)）。continuation そのものの可否・上限到達の扱いは
         // `[execution]` で決める。無効化・上限到達のときは trigger/outcome_str を従来の形に戻す。
@@ -452,7 +452,7 @@ impl Dispatcher {
             // ADR-0072 D6（Phase E2）: WU の run。`end` が無い run の扱いは `run_settlement::work_unit_run_end`。
             let effective_end = run_settlement::work_unit_run_end(run_end);
             let tree = self.config.execution.limits.tree;
-            let auto_counts = if tree.enabled && tree.auto_leaf {
+            let auto_counts = if tree.enabled && tree.auto_leaf && continues {
                 auto_leaf::counts(
                     &self.store.events_for(task_id)?,
                     wu,
@@ -472,7 +472,7 @@ impl Dispatcher {
             let mut progress_checkpoints = 0u32;
             if run_settlement::work_unit_saves_checkpoint(
                 effective_end,
-                self.config.execution.continuation,
+                self.config.execution.continuation && continues,
                 auto_exceeded,
             ) {
                 let events_so_far = self.store.events_for(task_id)?;
@@ -548,7 +548,7 @@ impl Dispatcher {
                     continuations_since_answer,
                     progress_checkpoints,
                 },
-                continuation_enabled: self.config.execution.continuation,
+                continuation_enabled: self.config.execution.continuation && continues,
                 continuation_hard_limit: self.config.execution.continuation_hard_limit,
                 no_progress_limit: self.config.execution.no_progress_limit,
                 max_retries: task.budget.max_retries,
@@ -687,7 +687,7 @@ impl Dispatcher {
                 run_seq,
                 checkpoint: &checkpoint,
                 children_pending,
-                continuation_enabled: self.config.execution.continuation,
+                continuation_enabled: self.config.execution.continuation && continues,
                 continuation_hard_limit: self.config.execution.continuation_hard_limit,
                 no_progress_limit: self.config.execution.no_progress_limit,
                 trigger,

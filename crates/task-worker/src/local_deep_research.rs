@@ -190,6 +190,11 @@ impl WorkerAdapter for LdrAdapter {
         Self::ID
     }
 
+    /// ADR 2026-11-15-research-adapter-deadline D2: 問いは目的文（と前回の report・不合格の理由）だけで、checkpoint を読まない。予算切れは最初からのやり直し（retry）にする。
+    fn continues_from_checkpoint(&self) -> bool {
+        false
+    }
+
     async fn run(
         &self,
         req: RunRequest,

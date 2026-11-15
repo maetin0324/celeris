@@ -60,3 +60,52 @@ task 01M7FYEHKMY34MM5Z75W2ESSGN（R6 の子 task research）の進捗。計画�
 ### 提案
 
 1. `sessions::SUPPORTED_ADAPTERS`（継続 session を持てる adapter の名前の一覧）も `WorkerAdapter` の性質に移す。今は名前の一覧で、ADR-0054 D1 の範囲。本 task の範囲外。
+
+## unit adapters（完了日: 2026-11-15）
+
+### commit
+
+- `research adapters: 研究 3 adapter の監視 loop を deadline_terminal に寄せ、成功の枝で read_result_file を通す`
+- `research adapters: 進捗に unit adapters の節を書く`
+
+### 変更（ADR の D1・D4）
+
+- `langmem.rs`・`local_deep_research.rs`・`paperqa.rs`（paperqa は両方の段で使う `stream_child`）の監視 loop: 締め切りの写し（`wall_elapsed`・`idle_elapsed`・`min` の待ち・`"wall clock exceeded"`・`"idle timeout"` の `Error` の組み立て）を消し、`adapter::deadline_terminal` を呼ぶようにした。wall clock の超過は `BudgetExhausted{WallClock, "wall clock exceeded", usage: None}`、idle の超過は今と同じ `Error{retryable: true, "idle timeout"}`。
+- langmem は `min([adapters.langmem].idle_timeout_secs, limits.idle_timeout)` を `deadline_terminal` の `idle_timeout` に値で渡す。欄は残した。paperqa は取得と回答の 2 段で同じ `start`（`run_paperqa` の始まり）を使う（壁時計は run 全体。これまでと同じ）。
+- `force_kill` の bool を消し、`timeout_terminal.is_some()` から導いた（同じ状態を 2 つ持たない）。
+- stderr を写す task の写し 3 つ（paperqa は `stream_child` の 1 つ）は `adapter::spawn_capture_stderr` に替えた。終端の書き出しの写し（`write_result_json` → `from_provider_failure` → `RunOutcome`）は `subprocess::finish_run` に替えた。paperqa の取得の段の締め切りは、kill した取得ランナーの exit status も `finish_run` に渡す（`exit_code` はこれまで `None` 固定。signal で終わればこれまでどおり `None`）。ADR の状態の記録に付記した。
+- D4: 成功の枝は各 adapter の `terminal_from_summary` が `artifacts/result.json`（`{"summary", "evidence": []}`）を書き、`result_report::read_result_file` を 1 回通して `interpret_result_text` で終端を作る。書けなければ `read_result_file` を呼ばずに `Error{retryable: true}`（`<adapter> adapter could not write <artifacts_rel>/result.json: …`）。これまでは warn だけで `Done` にしていた。締め切りの枝と engine の失敗の枝は result.json を書かず、`read_result_file` も呼ばない。
+- unit adr が足した `continues_from_checkpoint` の上書き（`false`）は変えていない（差分 0）。
+- 共通の interface（`adapter.rs`・`result_report.rs`・`subprocess.rs`）は変えていない。研究 harness 専用の分岐・新しい fallback・切替 flag は足していない。
+- `docs/architecture-map.md` の研究 adapter の行に langmem と ADR 2026-11-15 と不変条件を足した。ADR の「状態」と「状態の記録」を更新した。
+
+### 試験
+
+| 試験 | 守る不変条件 | 既存の試験で検出できない理由 |
+|---|---|---|
+| `{langmem,local_deep_research,paperqa}::tests::wall_clock_exceeded_kills_the_process_group`（変更） | wall clock の超過は `BudgetExhausted{WallClock}`、`runs/<run_id>/result.json` の行も `budget_exhausted`、`artifacts/result.json` を書かない | 旧い契約（`Error{retryable: true}`）を確かめていた。D1 で廃止した |
+| `langmem::tests::idle_timeout_secs_cannot_exceed_the_harness_budget`（強化） | config の 3600 秒は予算の 300 ms を超えて効かない。終端は `Error{retryable: true, "idle timeout"}` | これまでは `Error` であることだけを見ていた。上回れたなら wall clock の `BudgetExhausted` になるので、終端の種類で区別できるようにした |
+| `langmem::tests::idle_timeout_secs_shorter_than_the_budget_takes_effect`（新規） | config の 1 秒は予算（idle・wall clock とも 20 秒）より先に効き、idle の `Error` になる | 上の試験は予算が勝つ側だけを見るので、config の値を `deadline_terminal` に渡し忘れても通る |
+| `{langmem,local_deep_research,paperqa}::tests::an_unwritable_result_file_is_a_retryable_error_not_done`（新規） | `artifacts/result.json` を書けない成功の枝は `Done` でなく retryable な `Error`（D4） | 既存の試験は書ける置き場だけを使い、warn だけの `Done` を検出できない |
+| `paperqa::tests::wall_clock_exceeded_in_the_acquire_stage_stops_before_the_answer_stage`（新規） | 取得の段で壁時計が尽きれば `BudgetExhausted{WallClock}` で終わり、取得ランナーを kill し、回答の段を起こさない | 既存の wall clock の試験は取得の段の無い構成（`max_candidates = 0`）だけを見ていた |
+
+### 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+
+- 受け入れ条件 0: `grep -nE "wall_elapsed|idle_elapsed|\"wall clock exceeded\"|\"idle timeout\"|force_kill|stderr_log_path_for_task|tokio::spawn\(|write_result_json" crates/task-worker/src/{langmem,local_deep_research,paperqa}.rs` → 0 件（exit 1）。`grep -c "deadline_terminal("` → 各 file 1 件。
+- 受け入れ条件 1: `grep -nB3 'contains("wall clock exceeded")' crates/task-worker/src/{langmem,local_deep_research,paperqa}/tests.rs` → 0 件（exit 1）。
+- 受け入れ条件 2・3: `cargo nextest run -p task-worker -p task-dispatch -E 'test(/research_deadline_/) | test(/^langmem::/) | test(/^local_deep_research::/) | test(/^paperqa::/)'` → 138 件合格、失敗 0。task-worker の `research_deadline_continues_from_checkpoint_per_adapter`、task-dispatch の `research_deadline_atomic_run_neither_continues_nor_saves_a_checkpoint`・`research_deadline_work_unit_run_neither_continues_nor_saves_a_checkpoint`・`research_deadline_session_adapters_continue_and_research_adapters_do_not` を含む。
+- `bash scripts/dev/test-affected.sh`（対象 crate: celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker）: exit 0。nextest は 6162 件実行、6162 件合格（slow 10）、skip 22。script bundle の SKIP 0 件。repo-health は verdict=pass、new=0、worsened=0。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `cargo fmt --all -- --check`: exit 0。
+- 範囲 check（計画の check と同じ command）: 範囲外 0 件。`git diff --name-only $CELERIS_WU_BASE | python3 -I agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R6 agent-docs/progress/2026-11-07-health-v2-b0/slices.json`: `write-set R6: ok`、exit 0。
+- 凍結の path（campaign・routing-eval・jev-classifier・script-runtime・control-ts・migrations・events.rs・script_guard・credentiald）の差分: 0 件。変えた file は 3 adapter の `.rs`・`tests.rs`、ADR、この進捗、`docs/architecture-map.md` だけ。
+
+### 未解決
+
+1. 3 adapter の `terminal_from_summary` は同じ形の写し（20 行ほど。違いは文言の adapter 名だけ）。置く先は結果契約の正本 `result_report.rs` が自然だが、この unit の範囲 check の外なので各 adapter に置いた（提案 1）。
+2. `subprocess::prepare_run` は使っていない。使うと前回の `delegate.json` の消去と、browser の run の log を `/dev/null` にする分岐が加わり、挙動が変わる。研究 harness は委譲も browser もしないので、寄せるかは別の判断にする。
+3. unit net へ（ADR の D5 の 1）: 研究 3 本の `Done` は、自分で書いた `artifacts/result.json` を `read_result_file` で読んでから返すようになった。dispatcher の `misplaced_report` の探索が研究 harness に届くのは `Error` の枝（engine が書かない file の探索）だけ。
+
+### 提案
+
+1. `result_report.rs` に「adapter が engine の代わりに `{"summary", "evidence": []}` を書いて読み直す」関数を 1 つ置き、研究 3 本の `terminal_from_summary` の写しを消す（文言の adapter 名は引数）。`result_report.rs` を書ける unit（unit net か R6 の close）で行う。

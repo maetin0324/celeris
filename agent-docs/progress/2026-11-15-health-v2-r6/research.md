@@ -67,6 +67,8 @@ task 01M7FYEHKMY34MM5Z75W2ESSGN（R6 の子 task research）の進捗。計画�
 
 - `research adapters: 研究 3 adapter の監視 loop を deadline_terminal に寄せ、成功の枝で read_result_file を通す`
 - `research adapters: 進捗に unit adapters の節を書く`
+- `research adapters: architecture-map の研究 adapter の行で result.json を path として書かない`
+- `research adapters: 2 回目の run の検査の結果を進捗に書く`
 
 ### 変更（ADR の D1・D4）
 
@@ -99,6 +101,18 @@ task 01M7FYEHKMY34MM5Z75W2ESSGN（R6 の子 task research）の進捗。計画�
 - `cargo fmt --all -- --check`: exit 0。
 - 範囲 check（計画の check と同じ command）: 範囲外 0 件。`git diff --name-only $CELERIS_WU_BASE | python3 -I agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R6 agent-docs/progress/2026-11-07-health-v2-b0/slices.json`: `write-set R6: ok`、exit 0。
 - 凍結の path（campaign・routing-eval・jev-classifier・script-runtime・control-ts・migrations・events.rs・script_guard・credentiald）の差分: 0 件。変えた file は 3 adapter の `.rs`・`tests.rs`、ADR、この進捗、`docs/architecture-map.md` だけ。
+
+### 2 回目の run（celeris の check の不合格の修正）
+
+- 原因: 1 回目の run の提出の後、celeris が走らせた `bash scripts/dev/test-affected.sh` が exit 1 になった。repo-health の `arch-map.wrong_path` が fail（`docs/architecture-map.md` の 103 行目の `artifacts/result.json` が存在しない）。検査器（`scripts/dev/check-architecture-map.py` の `looks_like_path`）は表の行の backtick の語に `/` があれば repo の path として扱う。この語は run の成果物ディレクトリの file で、repo にはない。1 回目の run の証拠（上の test-affected.sh の exit 0）がこの行を足す前の HEAD で取ったものかは未確認。
+- 修正: 103 行目の語を「adapter が成果物ディレクトリに書いた `result.json`」に替えた（意味は同じ。`/` を含まないので path として扱われない）。コードの変更は無い。
+- 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）:
+  - `python3 scripts/dev/check-architecture-map.py`: `OK: 1069 件のパスを確認した`、exit 0。
+  - `bash scripts/dev/test-affected.sh`（対象 crate: celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker）: exit 0。nextest は 6162 件実行、6162 件合格（slow 7）、skip 22。script bundle の SKIP 0 件。repo-health は verdict=pass、`arch-map.wrong_path` は pass（findings=0）、new=0、worsened=0。
+  - `cargo nextest run -p task-worker -p task-dispatch -E 'test(/research_deadline_/) | test(/^langmem::/) | test(/^local_deep_research::/) | test(/^paperqa::/)'`: 138 件合格、失敗 0。
+  - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+  - `sh "$CELERIS_WU_SCOPE_PATHS"`: 9 件（3 adapter の `.rs`・`tests.rs`、ADR、この進捗、`docs/architecture-map.md`）、exit 0。`git diff --name-only $CELERIS_WU_BASE | python3 -I agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R6 agent-docs/progress/2026-11-07-health-v2-b0/slices.json`: `write-set R6: ok`、exit 0。
+  - 凍結の path（events.rs・migrations ほか）の差分: 0 件。
 
 ### 未解決
 

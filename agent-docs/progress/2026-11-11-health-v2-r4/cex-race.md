@@ -1,10 +1,16 @@
 ---
 title: "健全性v2 R4 cex-race: lease の renew の競合と、ownerless で閉じた旧 reviewer の遅れた合格の反例試験"
 tasks: [01M7DYMCZ4T7C5RNQ3JZQAF4G7]
-status: running
+status: done
 updated: 2026-11-15
+completed: 2026-11-15
 ---
 # 健全性v2 R4 cex-race
+
+完了日: 2026-11-15
+
+両方の反例の試験（`cex_restart_old_reviewer_pass_after_ownerless_close_is_ignored` と
+`cex_lease_renew_after_expired_snapshot_keeps_the_holder`）は試験 file を変えずに合格する（fix-verdict と fix-reclaim の節）。
 
 ## old-review: ownerless で閉じた旧 reviewer A の遅れた合格
 
@@ -553,3 +559,120 @@ events after the expiry [Transitioned { from: Running, to: Ready, reason: "infra
 
 - 反例 (i) は fix-reclaim の後に直る見込み。この unit の時点で `cex_lease_renew_after_expired_snapshot_keeps_the_holder` が落ちることは
   走らせて確かめていない（回収の経路を変えていないので、renew-race の節の「観測」と同じく落ちる見込み）。
+
+## fix-reclaim: lease の回収の書き込みを snapshot の lease との照合付きにする（2026-11-15）
+
+結論: `RunSupervisor::release_lease` が `TaskStore::apply_transition_if_lease` で snapshot の lease を照合してから書く形にした。
+反例 (i) の試験 `cex_lease_renew_after_expired_snapshot_keeps_the_holder` は試験 file を変えずに合格する。
+`dispatcher/tests/` は変えていない。基準は `$CELERIS_WU_BASE`。
+
+### 変更（commit の件名）
+
+- `fix-reclaim: reclaim an expired lease only when the snapshot lease still matches (RunSupervisor::release_lease calls apply_transition_if_lease; the orphan_takeover note is written in the same transaction)`
+  - `crates/task-dispatch/src/run_supervisor.rs`: `release_lease` に `expected: &Lease`（snapshot の lease）と
+    `takeover: Option<Event>`（孤児の回収の記録）を足し、`apply_transition_with_events` を `apply_transition_if_lease` に替えた。
+    戻り値は `Result<Option<Outcome>, StoreError>`。`None` なら backoff を立てない。引数が 9 個になるので
+    `#[allow(clippy::too_many_arguments)]` を付けた（repo に同じ例が 151 件ある）。記録の event を組む関数
+    `orphan_takeover_note` を `note_orphan_takeover` から移した（`dispatcher` の外から使うため。文面は同じ）。
+  - `crates/task-dispatch/src/dispatcher/leases.rs`（`reclaim_expired_leases`）: snapshot の lease を渡す。`Ok(None)` なら
+    `tracing::warn!`（task id・run id・「the lease changed after the snapshot; not reclaiming it」）を出し、回収を数えず、
+    WU・統合の照合と decision log をせずに次の task へ進む。回収の判断の直後の `note_orphan_takeover` の追記を外した。
+    renew-race の `#[cfg(test)]` の hook の呼び出しは残した。
+- `fix-reclaim: pin release_lease writing nothing (no takeover note, no backoff) for a stale snapshot lease and the takeover note with the reclaim`
+  - `run_supervisor.rs` の試験 module に試験 1 本（下の「試験」）。
+- `fix-reclaim: link the lease-reclaim compare-and-release ADR from the run table and lease supervision row of the architecture map`
+  - `docs/architecture-map.md` の「実行中の run の表と lease の監督」の行の ADR の欄と不変条件の欄。
+- この節と front matter（status done、完了日）。
+
+### 作業前 brief
+
+1. 根本原因: `reclaim_expired_leases` の回収の書き込み（`RunSupervisor::release_lease` → `apply_transition_with_events`）が
+   snapshot の lease を照合しない（renew-race の節の「観測」）。
+2. 責務 owner: 書き込みの口の差し替えは `RunSupervisor::release_lease`（lease の解放と終了記録の owner）。`None` の扱い
+   （数えない・照合しない）は呼び元の `reclaim_expired_leases`。
+3. 既存の再利用先: fix-store の `TaskStore::apply_transition_if_lease`、`run_end_record`、`reclaim_verdict`、
+   `note_orphan_takeover` の event の文面。
+4. 選択肢: 孤児の回収の記録を (a) `apply_transition_if_lease` の `extra_events` に入れて同じ transaction で書く、
+   (b) `Some` の後に `append_event` する。(a) を採った（下の「`orphan_takeover` の記録の置き方」）。
+5. 新しい状態・分岐・fallback・port: 分岐 1 つ（`Ok(None)` は回収しない）。状態・fallback・port は無し。
+6. 撤去対象: `release_lease` の `apply_transition_with_events` の呼び出しと、回収の判断の直後の `note_orphan_takeover` の
+   無条件の追記。
+7. 不変条件: snapshot の lease が DB の lease と違えば、遷移・終了記録・`orphan_takeover` の記録・backoff・WU の照合の
+   どれも作らない。試験は反例 (i) と下の試験。
+
+### `orphan_takeover` の記録の置き方（ADR D4）
+
+- `dispatcher/tests/orphan_takeover.rs` の既存の試験は event の順を assert していない（`took_over` も `finished_of` も
+  `iter().any`・`filter` で見る。`cex_lease_restart.rs` の `took_over`、`crates/celeris/tests/long_run_soak.rs` の数え方も同じ）。
+  そこで (a) を採った。回収と記録が 1 つの transaction になり、片方だけが残ることが無い。
+- 記録は `extra_events` の先頭（終了記録の前）に置く。event の順は `[記録, Transitioned, WorkerFinished]` から
+  `[Transitioned, 記録, WorkerFinished]` に変わる（`apply_transition_tx` は `Transitioned` を先に書く）。記録が終了記録の前に
+  来ることは前と同じ。
+- 終端の result.json で確定する経路（`finalise_from_result_json`、ADR の範囲外で照合しない）は、確定したとき
+  （`finalised_any`）だけ `note_orphan_takeover` で追記する。記録は確定の event の後に来る（前は確定の前）。
+  `an_orphaned_run_with_an_error_result_is_retried_without_waiting_for_the_lease`・`an_orphaned_run_with_a_done_result_is_finalised`
+  は記録の有無だけを見るので合格する。
+- WU の孤児の経路（`work_units.rs` の `note_orphan_takeover`）は Task の lease の回収を通らないので変えていない。
+
+### 試験
+
+`release_lease_writes_nothing_for_a_stale_snapshot_and_the_takeover_note_with_the_reclaim`（`run_supervisor.rs`、in-memory の
+store、時計の注入 `at(0)`）: 同じ run id のまま `renew_lease` で延ばした後に、snapshot の lease で `release_lease` を呼ぶ。
+期限切れ（backoff あり）と孤児（記録あり）の両方で `None`、events は不変、lease は延ばした lease のまま、backoff は無い。
+DB の lease で呼ぶと `Some(ready)` で、追記された event は `[Transitioned, WorkerProgress{orphan_takeover…}, WorkerFinished]`。
+doc comment に、守る不変条件と、既存の試験（`orphan_takeover.rs` と反例 (i)）が記録の置き場所と `None` の backoff を
+検出できない理由を書いた。
+
+### 照合を一時的に外した確認
+
+一時変更は commit の後に入れ、走らせるたびに `git checkout --` で戻した（commit していない。戻した後に
+`git status --short` は空、`grep -rn "GUARD-OFF" crates/` は 0 件）。command は
+`cargo nextest run -p task-dispatch --no-fail-fast --no-tests=fail -E 'test(/cex_lease_restart::/) | test(/orphan_takeover::/)'`
+（G2・G3 は `| test(/run_supervisor::/)` を足した）。
+
+| 一時変更 | 結果 |
+|---|---|
+| G1: `release_lease` が `store.get` で読んだ DB の今の lease を `expected` に渡す（照合を外す） | exit 100、18 本中 17 本合格。反例 (i) が `cex_lease_restart.rs:1202` の `assert_eq!(report.reclaimed, 0)`（left 1）で落ちた。status Ready、lease None、A の `runs` 行 `HarnessError`、events は `Transitioned{running→ready, infra_requeue}` と `WorkerFinished{lease_expired}`（renew-race の節の「観測」と同じ） |
+| G2: 孤児の記録を照合の前に `append_event` で追記する（`extra_events` に入れない） | exit 100、25 本中 24 本合格。足した試験が events の不変の assert で落ちた。`orphan_takeover.rs` の 6 本と `cex_lease_restart.rs` の 12 本は合格（既存の試験では検出できない） |
+| G3: `None` でも backoff を立てる（`outcome.is_some() &&` を外す） | exit 100、25 本中 24 本合格。足した試験が backoff の assert（left `Some(…)`、right `None`）で落ちた |
+| 戻した後 | 同じ command で全部合格（下の「証拠」） |
+
+### 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+
+- `cargo nextest run -p task-dispatch --no-fail-fast --no-tests=fail -E 'test(/cex_/) | test(/ownerless/)'` → exit 0、49 本すべて合格
+  （反例 (i) と old-review の反例を含む）。
+- `cargo nextest run -p task-dispatch --no-fail-fast --no-tests=fail -E 'test(/cex_/) | test(/ownerless/) | test(/orphan/)'` → exit 0、69 本すべて合格。
+- `cargo nextest run -p task-dispatch --no-fail-fast --no-tests=fail -E 'test(/cex_lease_restart::/) | test(/orphan_takeover::/)'` → exit 0、18 本すべて合格。
+- `cargo nextest run -p task-dispatch --no-fail-fast --no-tests=fail -E 'test(/run_supervisor::/)'` → exit 0、7 本すべて合格。
+- `bash scripts/dev/test-affected.sh` → exit 0、3946 本すべて合格（11 skipped）。対象 crate は celeris・celeris-campaign・
+  celerisctl・llm-proxy・task-dispatch。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `bash scripts/dev/check-health.sh` → exit 0（verdict pass、fail_grade 0、worsened 0）。auto の base に対する new 1 件
+  （`migration.remnant` の warning、`crates/task-dispatch/src/host_maintenance.rs`）はこの unit の変更ではない（fix-store の節と同じ）。
+- `python3 scripts/dev/repo-health/repo_health.py --repo . --base "$CELERIS_WU_BASE" --head worktree --policy-version 1 --out <file>`
+  → exit 0、verdict pass、new 0・worsened 0（dispatcher の module の本体の行は増やしていない）。
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → `leases.rs`・`run_supervisor.rs`・`architecture-map.md` とこの進捗ファイルだけ。
+  `crates/task-dispatch/src/dispatcher/tests/` の差分は無い。
+
+### 未解決
+
+- `finalise_from_result_json` は照合なしで書く: 終端の result.json で確定する経路（`reclaim_expired_leases` と WU の孤児の
+  経路）は `on_worker_finished` を通り、snapshot の lease を照合しない（ADR 2026-11-15 の範囲外）。保持者が同じ run id のまま
+  延ばした後でも、result.json があれば確定する。試験は無い。
+- fix-verdict の読んでから書く窓: `on_review_finished` は `run_index_get` で reviewer run の `runs` 行を読んでから判定を書く。
+  その間に別の instance が行を閉じると、遅れた判定は適用される（fix-verdict の節の「未解決」）。試験は無い。
+- 照合の前の副作用（観測。試験では未確認）: `reclaim_expired_leases` は照合より前に、手元の run を `take_task_runs` で外して
+  止める。`None` のとき外した entry は戻さない。この位置に来る entry は、生きている entry が無いか、その entry の
+  `renew_lease` が false（lease がその run を指していない）だったものだけなので、生きて lease を持つ run を止めることは
+  無いと読んだ。`None` で手元の entry がある場合を作る試験は無い。
+- 孤児の回収を `release_lease` で書いたとき、`note_orphan_takeover` の説明の log（`taking it over without waiting for the lease`）は
+  出ない。回収の log（`orphan_takeover: the daemon holding this run is gone; reclaimed`、`orphaned = true`）は出る。
+
+### 提案
+
+- reviewer run の判定も store の照合付きの口に揃える: `on_review_finished` の判定の適用（`apply_transition_with_events`・
+  `complete_plan` と reviewer run の `WorkerFinished`・`run_index_finish`）を、reviewer run の `runs` 行が `running` であることを
+  同じ writer transaction で照合してから書く store の API にする（`apply_transition_if_lease` と同じ形。照合が合わなければ
+  何も書かずに `None`）。fix-verdict の読んでから書く窓が閉じる。`crates/task-core/src/store/` の高 risk の class なので、
+  設計 brief と設計 review を通す別の変更で行う。
+- `finalise_from_result_json` にも snapshot の lease の照合を足すかを、同じ設計で決める。

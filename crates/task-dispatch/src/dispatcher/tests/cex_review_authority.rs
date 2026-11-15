@@ -91,24 +91,7 @@ impl WorkerAdapter for ReviewGateAdapter {
                 permit.forget();
             }
             let pass = self.verdicts.lock().unwrap().pop_front().unwrap_or(true);
-            let reason = if pass {
-                "reviewer: looks complete"
-            } else {
-                "reviewer: not complete"
-            };
-            // reviewer が判定する条件（task の reviewer 条件と、配送の始まる root task の暗黙の条件）すべてに同じ
-            // 判定を書く。reviewer の判定しない条件の行は読まれない。
-            let verdicts: Vec<serde_json::Value> = (0..8)
-                .map(|criterion| serde_json::json!({"criterion": criterion, "pass": pass, "reason": reason}))
-                .collect();
-            // `health` も書く: main の ADR 2026-11-11-health-generic-review-input R1・R6 で `[review]` の無い repo の
-            // reviewer も health の材料を受け、判定が無い review.json は不合格になる。試験が守る不変条件は変えない。
-            std::fs::write(
-                req.artifacts_dir.join("review.json"),
-                serde_json::json!({ "verdicts": verdicts, "health": { "findings": [] } })
-                    .to_string(),
-            )
-            .unwrap();
+            write_review_json(&req.artifacts_dir, pass);
             return Ok(done_outcome());
         }
         if let Some((path, content)) = &self.commit {
@@ -132,6 +115,28 @@ impl WorkerAdapter for ReviewGateAdapter {
             exit_code: Some(0),
         })
     }
+}
+
+/// reviewer run の `review.json` を `artifacts_dir` に書く。reviewer が判定する条件（task の reviewer 条件と、配送の始まる
+/// root task の暗黙の条件）すべてに同じ判定 `pass` を書く。reviewer の判定しない条件の行は読まれない。
+/// `health` も書く: main の ADR 2026-11-11-health-generic-review-input R1・R6 で `[review]` の無い repo の reviewer も
+/// health の材料を受け、判定が無い review.json は不合格になる。試験が守る不変条件は変えない。
+pub(super) fn write_review_json(artifacts_dir: &Path, pass: bool) {
+    let reason = if pass {
+        "reviewer: looks complete"
+    } else {
+        "reviewer: not complete"
+    };
+    let verdicts: Vec<serde_json::Value> = (0..8)
+        .map(
+            |criterion| serde_json::json!({"criterion": criterion, "pass": pass, "reason": reason}),
+        )
+        .collect();
+    std::fs::write(
+        artifacts_dir.join("review.json"),
+        serde_json::json!({ "verdicts": verdicts, "health": { "findings": [] } }).to_string(),
+    )
+    .unwrap();
 }
 
 /// 全条件を合格と申告する evidence（`command` の条件は exit 0 と出力を添える）。
@@ -165,7 +170,7 @@ fn terminal(store: &Arc<dyn TaskStore>, id: TaskId) -> bool {
 }
 
 /// `Transitioned` の `(to, reason)` の列。
-fn transitions(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<(Status, String)> {
+pub(super) fn transitions(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<(Status, String)> {
     events_of(store, id)
         .into_iter()
         .filter_map(|e| match e {
@@ -175,14 +180,18 @@ fn transitions(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<(Status, String)> 
         .collect()
 }
 
-fn reached_done(store: &Arc<dyn TaskStore>, id: TaskId) -> bool {
+pub(super) fn reached_done(store: &Arc<dyn TaskStore>, id: TaskId) -> bool {
     transitions(store, id)
         .iter()
         .any(|(to, reason)| *to == Status::Done || reason == "review_pass")
 }
 
 /// `run_id` の `WorkerFinished{role: reviewer}` の終わり方（event の数 = 長さ）。
-fn reviewer_finishes(store: &Arc<dyn TaskStore>, id: TaskId, run_id: &str) -> Vec<Option<RunEnd>> {
+pub(super) fn reviewer_finishes(
+    store: &Arc<dyn TaskStore>,
+    id: TaskId,
+    run_id: &str,
+) -> Vec<Option<RunEnd>> {
     events_of(store, id)
         .into_iter()
         .filter_map(|e| match e {
@@ -231,7 +240,7 @@ fn last_verdict(store: &Arc<dyn TaskStore>, id: TaskId, criterion: usize) -> Opt
         })
 }
 
-fn merge_queued(store: &Arc<dyn TaskStore>, id: TaskId) -> bool {
+pub(super) fn merge_queued(store: &Arc<dyn TaskStore>, id: TaskId) -> bool {
     matches!(
         store.delivery_get(id).unwrap(),
         Some(row) if row.state == task_core::DeliveryState::MergeQueued
@@ -248,7 +257,11 @@ fn lines(first: &str, last: &str) -> String {
 }
 
 /// 案件の repo を持つ git の task（`ready`、retry 無し）。条件は `cmd` の検査と reviewer（index 1）。
-fn git_review_task(repo: &std::path::Path, store: &Arc<dyn TaskStore>, cmd: String) -> Task {
+pub(super) fn git_review_task(
+    repo: &std::path::Path,
+    store: &Arc<dyn TaskStore>,
+    cmd: String,
+) -> Task {
     let (project, repos) =
         project_with_repos_integrating(store, &[("code", repo, RepoKind::Git)], true);
     let mut task = git_task(
@@ -270,7 +283,7 @@ fn git_review_task(repo: &std::path::Path, store: &Arc<dyn TaskStore>, cmd: Stri
 
 /// 配送（delivery）が始まる root task にする: 案件は自動取り込み（[`git_review_task`]）、担当は部署 `engineering`。
 /// 合格すれば配送の行が `MergeQueued` になる（`target_sync.rs` の `reuse_pass_delivery_reaches_merge` と同じ組織）。
-fn deliverable(store: &Arc<dyn TaskStore>, task: &mut Task) {
+pub(super) fn deliverable(store: &Arc<dyn TaskStore>, task: &mut Task) {
     let now = OffsetDateTime::now_utc();
     for (id, parent, kind) in [
         ("cos", None, task_core::OrgKind::Secretary),

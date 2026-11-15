@@ -1,17 +1,19 @@
 ---
 title: "健全性v2 R4 cex-late: replan・段の repair の後の遅れた完了と quota group の続けての終わりの反例試験"
 tasks: [01M6TYVJT4S29ZMP6P0D4831JG]
-status: running
-updated: 2026-11-14
+status: done
+updated: 2026-11-15
 ---
 # 健全性v2 R4 cex-late: replan・段の repair の後の遅れた完了と quota group の続けての終わりの反例試験
+
+完了日: 2026-11-15
 
 ## 概要
 
 - 目的: ADR 2026-11-11-dispatcher-state-ownership D7 の表で cex-review に割り当てたのに試験が無かった反例 2 つを、
   `crates/task-dispatch/src/dispatcher/tests/cex_late_completion.rs` に試験として固定する。本体のコードは変えない。
 - 基準は `$CELERIS_WU_BASE`。変更は `cex_late_completion.rs`（新規）と `tests/mod.rs` の `mod cex_late_completion;` の宣言だけ。
-- 状態: 途中（attempt 2 で区切った）。残りは「残り」の節。
+- 状態: 完了。attempt 2 で区切った残りは task 01M7DYMCVS1PMDK2N0WW3ME9T8 で終えた（「残り」の節）。
 
 ## 試験の規約
 
@@ -27,15 +29,15 @@ updated: 2026-11-14
 | `cex_quota_group_two_consecutive_ends_unknown_cost_stops` | 2 本目が usage を返さない（費用不明）とき、1 本目の既知の費用が上限の内側でも 2 本目の後に木を止め、決定要求に費用不明 1 件を書く | 合格 |
 | `cex_late_review_and_integration_after_replan_are_dropped`（replan × 統合の変種） | 段 `build` の統合の検査が走っている間に人の replan（WU `c` を足す）が確定したら、旧い統合（`a`・`b` だけ）の完了は `PhaseIntegrated` を付けず、統合 WU の done と最終 review は `c` の done の後。Task は `c` を含む候補で Done | 合格 |
 
-観測: 人の replan は daemon が足した統合 WU を running のまま持ち越す（`task_ops::execution::plan_replan`）が、旧い統合の完了は
-`c` を含まない `PhaseIntegrated` を付けなかった。どの guard が止めたかは「残り」の guard の確認で特定する。
+観測: 旧い統合の完了は `c` を含まない `PhaseIntegrated` を付けなかった。この節の最初の版は「人の replan は統合 WU を running の
+まま持ち越す」と書いたが、誤りだった。`task_ops::execution::plan_replan` は running の統合 WU を pending に戻し、
+`on_integration_finished` が running でない統合 WU の結果を捨てる。この組が旧い完了を止めた（[cex-late2.md](cex-late2.md) の
+「replan × 統合で旧い完了を止めた guard」）。
 
 ## 残り
 
-1. (i) の repair の変種（統合）: 統合の検査を止めている間に段の repair が先に確定した状態を作り、旧い統合の完了を届ける。
-2. (i) の旧 review の合格の変種（replan と repair）: v2 Task の最終 reviewer を gate で止め、replan か repair を確定してから合格を届ける。
-3. guard を一時的に外して落ちることの確認（一時変更は `git checkout --` で戻し、commit しない）。
-4. test-affected・clippy・fmt を提出時の HEAD で実行し、証拠を書く。
+残り 1〜4（段の repair の後の旧い統合、旧い最終 review の合格の 2 変種、guard の確認、検査）は task
+01M7DYMCVS1PMDK2N0WW3ME9T8 で終えた。結果は [cex-late2.md](cex-late2.md)（6 本の試験、guard の一時変更の総表、本体の修正、証拠）。
 
 ## 変更（commit の件名）
 

@@ -250,6 +250,14 @@ fn expected_simple(kind: TaskKind, status: Status, trigger: &Trigger) -> Expecte
                 expect_err()
             }
         }
+        // ADR 2026-11-14-review-verdict-after-plan-reopen D3: 計画が開き直された review の破棄は reviewing からだけ。
+        Trigger::ReviewPlanReopened => {
+            if status == Status::Reviewing {
+                expect_ok(Status::Ready)
+            } else {
+                expect_err()
+            }
+        }
         // ADR 2026-10-20-mlsys-main2-fixes D1-4: token 予算の到達は次の run・reviewer を起こさず failed へ。
         Trigger::TokenBudgetExhausted => {
             if matches!(status, Status::Ready | Status::Running | Status::Reviewing) {
@@ -323,6 +331,8 @@ fn table_simple_triggers_full_cross_product() {
         Trigger::DependencyReopened { draft: true },
         // ADR 2026-11-08-health-enforcement-loop D3.4・D4.3・D4.4: 人に聞く review の不合格（attempts 据え置き）。
         Trigger::ReviewBlocked,
+        // ADR 2026-11-14-review-verdict-after-plan-reopen D3: 計画が開き直された review の破棄（attempts 据え置き）。
+        Trigger::ReviewPlanReopened,
     ];
 
     let mut count = 0usize;
@@ -378,8 +388,29 @@ fn table_simple_triggers_full_cross_product() {
     // BrowserWait×2 / BrowserResume / BrowserFail×2、ADR-0090 D2 で ClusterJobWait / ClusterJobResume、
     // ADR 2026-10-08-browser-prod-enablement D2 で BrowserPrereqBlock / BrowserPrereqResume、
     // ADR 2026-10-20-mlsys-main2-fixes D1-4 で TokenBudgetExhausted、ADR 2026-11-08-health-enforcement-loop D7 で
-    // DependencyReopened×2、同 D3.4・D4.3・D4.4 で ReviewBlocked を追加）
-    assert_eq!(count, 4 * 8 * 35);
+    // DependencyReopened×2、同 D3.4・D4.3・D4.4 で ReviewBlocked、ADR 2026-11-14-review-verdict-after-plan-reopen D3 で
+    // ReviewPlanReopened を追加）
+    assert_eq!(count, 4 * 8 * 36);
+}
+
+/// ADR 2026-11-14-review-verdict-after-plan-reopen D3: 最終 review の間に計画が開き直されたときの破棄は、試行を使った
+/// Task でも attempts を進めず（`max_retries` に達していても failed にしない）、`review_plan_reopened` で ready に戻す。
+/// 上の直積は attempts 0 だけを見るので、`ReviewFail` の `retry_or_fail` と取り違えても attempts 0 では区別できない。
+#[test]
+fn review_plan_reopened_keeps_attempts_and_returns_to_ready() {
+    for kind in ALL_KINDS {
+        let s = StateView {
+            kind,
+            status: Status::Reviewing,
+            attempts: 3,
+            max_retries: 3,
+        };
+        let outcome = transition(&s, &Trigger::ReviewPlanReopened).unwrap();
+        assert_eq!(outcome.next, Status::Ready, "kind={kind:?}");
+        assert_eq!(outcome.attempts, 3, "attempts は据え置き: kind={kind:?}");
+        assert_eq!(outcome.reason, "review_plan_reopened");
+        assert_eq!(Trigger::ReviewPlanReopened.reason(), "review_plan_reopened");
+    }
 }
 
 /// ADR-0072 D6（Phase E1）: `Trigger::Continue` の `reason` は `why` ごとに静的な名前になる

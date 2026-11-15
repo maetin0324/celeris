@@ -3,6 +3,7 @@
 use super::*;
 use crate::review_decision;
 use crate::run_settlement::run_end_record;
+use task_core::NextStep;
 
 /// health の Error・往復・修復の上限の使い切りで review を止める（health enforcement loop D3.4・D4.3・D4.4）。file は
 /// size の制約と依存の向き（`dispatcher` → `health_review` を足さない）のため `health_review/` に置く。
@@ -120,21 +121,11 @@ impl Dispatcher {
                 }
             }
         }
-        if task.status != Status::Reviewing {
-            tracing::warn!(%task_id, status = ?task.status, "review result discarded (task no longer reviewing)");
-            set_worker_finished_end(&mut reviewer_finished, task_core::RunEnd::Cancelled);
-            for ev in reviewer_finished.iter().chain(reviewer_quota.iter()) {
-                self.store.append_event(task_id, ev)?;
-            }
-            finish_reviewer_run_index(
-                self.store.as_ref(),
-                &completed_review_run,
-                task_core::RunIndexStatus::Cancelled,
-                worker_finished_usage(&reviewer_finished),
-                review_metrics,
-            );
-            return Ok(());
-        }
+        // ADR 2026-11-14-review-verdict-after-plan-reopen D1: review の間に計画が開き直された（走らせる unit が残る）判定も捨てる。
+        let units = self.store.work_units_for(task_id)?;
+        let plan_reopened = task.status == Status::Reviewing
+            && matches!(task_core::next_work_unit(&units), NextStep::RunWorkUnit(_));
+        let discarded = task.status != Status::Reviewing || plan_reopened;
         // 判定を束ねる review run（reviewer を省いた review は worker の run。以下の event と stale の延期で共有）。
         let review_run = completed_review_run
             .clone()
@@ -142,8 +133,9 @@ impl Dispatcher {
         // ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D1: reviewer 条件を全部合格にしたら、その
         // snapshot（必須検査と同じ束縛）に束ねて残す。検査後の stale でも reviewer が見た commit と基底は確定して
         // いるので先に残す（次の同期で target の進みが候補の差分と重ならなければ reviewer を省く材料）。
-        if let Some(reviewer_criteria) =
-            review_decision::reviewer_criteria_passed(&task.acceptance, &outcome.verdicts)
+        if !discarded
+            && let Some(reviewer_criteria) =
+                review_decision::reviewer_criteria_passed(&task.acceptance, &outcome.verdicts)
         {
             for result in &outcome.required_checks {
                 if let Some(binding) = &result.binding {
@@ -162,7 +154,8 @@ impl Dispatcher {
         }
         // ADR-0118 D4 付記: 検査中に review snapshot が変わった判定は適用しない（stale は不合格ではない）。
         // attempts を消費せず reviewing のまま、次の tick の review 入口で再 sync → 再 check → 再 review。
-        if let Some(stale) = outcome.target_stale.take() {
+        let stale = outcome.target_stale.take().filter(|_| !discarded);
+        if let Some(stale) = &stale {
             self.defer_stale_review(
                 task_id,
                 &run_id,
@@ -172,6 +165,10 @@ impl Dispatcher {
                 &stale.target_sha,
                 &stale.reason,
             )?;
+        }
+        // 判定を適用しない 3 つの場合（reviewing でない・計画が開き直された・stale）は reviewer run を Cancelled で閉じる。
+        if discarded || stale.is_some() {
+            tracing::warn!(%task_id, status = ?task.status, plan_reopened, stale = stale.is_some(), "review result not applied (task no longer reviewing, plan reopened, or snapshot stale)");
             set_worker_finished_end(&mut reviewer_finished, task_core::RunEnd::Cancelled);
             for ev in reviewer_finished.iter().chain(reviewer_quota.iter()) {
                 self.store.append_event(task_id, ev)?;
@@ -183,7 +180,11 @@ impl Dispatcher {
                 worker_finished_usage(&reviewer_finished),
                 review_metrics,
             );
-            if let Some(entry) = entry {
+            if plan_reopened {
+                let reopened = Trigger::ReviewPlanReopened;
+                self.store.apply_transition(task_id, reopened, None)?;
+            }
+            if let Some(entry) = entry.filter(|_| stale.is_some()) {
                 self.coord.defer_review(task_id, entry.subject);
             }
             return Ok(());

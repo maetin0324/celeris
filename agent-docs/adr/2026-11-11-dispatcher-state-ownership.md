@@ -12,10 +12,10 @@ status: accepted
   | 決定 | 実装した unit |
   |---|---|
   | D0 write-set・D8 policy の path | adr（patch を書いた）、operator（policy だけの branch で main に入れた）、sync-policy（取り込み） |
-  | D1 field の owner | own-cluster・own-maint・own-routing・own-hooks・own-quota・own-supervisor・own-coord-a・own-coord-b・own-orchestration（表と照合する unit 列は adr-align が足した） |
+  | D1 field の owner | own-cluster・own-maint・own-routing・own-hooks・own-quota・own-supervisor・own-coord-a・own-coord-b・own-orchestration（表と照合する unit 列は adr-align が足した）。cred-cache が `credential_held` を消した |
   | D3 判断と副作用・D4 共有の判定 | settle（`replan_or_ask`・`run_end_record`・`stored_session_fresh_reason`）・own-supervisor（`infra_retry_after`）・admit（`dispatch_admission::admit`）・review-decide（`failed_checks`） |
   | D6 ablation と試験用フック | own-hooks |
-  | D7 反例試験 | cex-lease・cex-review（分割の前に固定）、cex-late（残りの反例 2 つ）、fix-cred・fix-integ（今の実装で成り立たなかった反例 2 件を owner で直した）。行ごとの試験名は付記 2026-11-14 |
+  | D7 反例試験 | cex-lease・cex-review（分割の前に固定）、cex-late（残りの反例 2 つ）、cex-race・cex-tick・cex-late2（表の試験の無かった順序）、fix-cred・fix-integ・fix-promote・fix-verdict・fix-store・fix-reclaim・late-review（今の実装で成り立たなかった反例 6 件を owner で直した）。行ごとの試験名は付記 2026-11-14（2026-11-15 に record-d7 が締めた） |
 - 根拠の実測: [change-map.md](../progress/2026-11-11-health-v2-r4/change-map.md) と
   [change-map.json](../progress/2026-11-11-health-v2-r4/change-map.json)（field 116 件・co_change・equivalence 6 件）、
   owner 候補の規則は [owners.json](../progress/2026-11-11-health-v2-r4/owners.json)。
@@ -51,10 +51,11 @@ field を下位の struct に包んで Dispatcher から互いに参照させる
 owner は 9 つ（`TestHooks` と `ProbePorts` は置き場が違うので行を分ける）。`Dispatcher` は組み立て（config と port の注入）と
 tick の順序だけを持つ。field 数は下の field → owner の表の owner 列で数えた。「移し済み」は owner の struct に既にある数
 （2026-11-14 に unit record-fix が表の行ごとに owner の module の struct を読んで数え直した。stay 以外のすべての行が移し済み）。
+2026-11-15 に unit record-d7 が、cred-cache の消した `credential_held` を `ExecutionCoordination` の移し済みの数から除いた（30 → 29。field 数は表の行の数なので 30 のまま）。
 
 | owner | module（`crates/task-dispatch/src/`） | 持つ状態 | field 数 | 移し済み |
 |---|---|---|---:|---:|
-| `ExecutionCoordination` | `execution_coordination.rs` | task・WU の待ち、check・統合の process、review の同期、write set の予約、credential・browser・cluster の待ち、channel と tick | 30 | 30 |
+| `ExecutionCoordination` | `execution_coordination.rs` | task・WU の待ち、check・統合の process、review の同期、write set の予約、credential・browser・cluster の待ち、channel と tick | 30 | 29 |
 | `RunSupervisor` | `run_supervisor.rs` | 実行中の run の表（run の集合の正本）、review run、infra backoff、lease の照合 | 7 | 7 |
 | `RoutingRuntime` | `routing_runtime.rs`（`routing_runtime/route_state.rs`・`routing_runtime/classification_board.rs`・`routing_runtime/quota.rs`・`routing_runtime/quota_estimate.rs`） | 経路の宣言と登録簿・routing mode・harness adapter、account の上限と帳簿・source の cooldown、分類待ち、経路なし、quota の窓と較正、eval run、knowledge の到達性の cache | 19 | 19 |
 | `ClusterRuntime` | `cluster_runtime.rs` | クラスタの接続・tunnel・job の poll と、それを行う port | 25 | 25 |
@@ -113,7 +114,8 @@ change-map.json の `fields` 116 件すべて。「change-map の候補」は `f
 - field 列は `Dispatcher` に居たときの field の名（change-map の名）。ただし `ProbePorts` の 3 行は実装の名（`probe_ports.rs` の `now_unix`・`knowledge`・
   `eval_version`）で書く（change-map の名との対応は付記 2026-11-14 の record-fix）。
 - unit 列は、その field を移した unit。stay は `Dispatcher` に残る組み立て。
-- unit はすべて終わった（2026-11-14）。owner 列は実際の置き場で、stay 以外の field は `Dispatcher` に無い。
+- unit はすべて終わった（2026-11-14）。owner 列は実際の置き場で、stay 以外の field は `Dispatcher` に無い。`credential_held` は
+  cred-cache が消したので、どの struct にも無い（2026-11-15）。
   候補と違う置き場は 17 件: 候補 composition-root の port 14 件（`ClusterRuntime` へ 7 件、`HostMaintenance` へ 2 件、`RoutingRuntime` へ 5 件）、
   候補 test-hooks の probe 2 件（`ClusterRuntime` へ）、候補 execution-coordination の `task_workspaces`（`HostMaintenance` へ）。
   理由は各付記に書いた（移した port を読むのはその owner の method だけ、など）。
@@ -135,7 +137,7 @@ change-map.json の `fields` 116 件すべて。「change-map の候補」は `f
 | `checking` | execution-coordination | `ExecutionCoordination` |  | 同上（WU の check の process。run の集合ではない） | own-coord-b |
 | `cluster_waiting` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-a |
 | `credential_busy` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-a |
-| `credential_held` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-a |
+| `credential_held` | execution-coordination | `ExecutionCoordination`（cred-cache が消した） |  | store の `credential_waits` の写しだった。cred-cache が field と印を立てる・消す 2 つの method を消し、gate は store の開いた wait だけで決める（[ADR 2026-11-14 atomic-task-credential-verified](2026-11-14-atomic-task-credential-verified.md) の付記 cred-cache） | own-coord-a（移した）・cred-cache（消した） |
 | `dispatch_waits` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-b |
 | `integrated_deps` | execution-coordination | `ExecutionCoordination` |  |  | own-coord-a |
 | `integrating` | execution-coordination | `ExecutionCoordination` |  | 同上（統合の process。run の集合ではない） | own-coord-b |
@@ -465,19 +467,22 @@ profile の高 risk の class と capability-map.json の owner path に、こ�
 ## 付記 2026-11-14: D7 の反例ごとの試験と、成り立たなかった反例の修正（record-fix）
 
 D7 の表の行ごとに、反例を固定した試験の名を書く。試験はすべて `crates/task-dispatch/src/dispatcher/tests/` の下
-（`cex_lease_restart.rs`・`cex_review_authority.rs`・`cex_late_completion.rs`）。対応は各試験の doc comment の不変条件を読んで付けた。
-「試験の無い部分」は、この付記の時点で反例の名を持つ試験を確かめられなかった部分で、進捗
-[2026-11-11-health-v2-r4.md](../progress/2026-11-11-health-v2-r4.md) の未解決事項に書いた。
+（`cex_lease_restart.rs`・`cex_review_authority.rs`・`cex_late_completion.rs`・`cex_same_tick.rs`）。対応は各試験の doc comment の不変条件を読んで付けた。
+初版（record-fix）は右の列に、反例の名を持つ試験が無い順序を書いた。2026-11-15 に unit record-d7 が、計画 v10 の段 dep-fix（fix-promote）と
+段 pin-rest（cex-race・cex-tick・cex-late2）の試験を足し、右の列を全行「無し」にした。進捗は
+[2026-11-11-health-v2-r4.md](../progress/2026-11-11-health-v2-r4.md) の「D7 の反例と試験」。
 
 | 範囲 | 試験 | 試験の無い部分 |
 |---|---|---|
-| lease | `cex_stale_holder_late_finish_does_not_overwrite_the_reassigned_run`（run B が取った後に旧持ち主 A の完了が遅れて届く）、`cex_orphan_takeover_leaves_the_run_held_in_this_instance`・`cex_orphan_takeover_leaves_a_run_whose_active_holder_lives`（現在の保持者を回収しない） | 回収側が期限切れの snapshot を取った直後に別の接続が renew する順序（cex-lease の 9 本には無い。未確認） |
-| restart | `cex_draining_instance_reclaims_its_expired_lease_without_redispatching`、`cex_restart_after_crash_between_wu_and_task_transitions_is_idempotent`、`cex_reclosing_a_run_after_worker_finished_does_not_write_twice`、`cex_holder_reclosing_an_already_finished_run_does_not_write_twice`、`cex_integration_restart_mid_phase_integration_does_not_merge_twice`、`cex_integration_restart_after_the_integration_unit_is_done_does_not_integrate_again`、`cex_integration_restart_keeps_the_stage_pause` | 新 active が reviewer A を ownerless として閉じて reviewer B を始めた後に、旧 draining instance から A の合格が届く順序（cex_ の試験には無い。`tests/ownerless_runs.rs` の `startup_closes_an_ownerless_reviewer_run_and_rereviews` がこの順序を作るかは未確認） |
-| 同時完了 | `cex_two_parallel_work_unit_runs_finishing_in_one_tick_lose_no_update`、`cex_run_finish_and_work_unit_check_finish_in_one_tick`、`cex_human_cancel_precedes_successful_worker_completion`、`cex_human_pause_survives_completion_and_holds_continuation`、`cex_human_unanswered_question_stays_blocked_across_housekeeping` | Done の処理待ちと lease の期限が同じ tick に来る組み合わせ、WU 遷移の直後と task 遷移の直前に人の操作を挟む順序（未確認） |
-| review/integration | `cex_review_late_pass_on_the_old_candidate_does_not_pass_the_rebased_candidate`（合格の後、verdict の保存の前に target が進む）、`cex_review_worker_claim_does_not_override_a_failing_check`、`cex_review_worker_claim_is_not_done_before_or_against_the_reviewer`、`cex_review_resync_cap_halts_and_starts_no_more_reviewer_runs`、`cex_integration_sync_conflict_schedules_one_repair_and_never_passes_the_conflict`、`cex_late_review_and_integration_after_replan_are_dropped`（人の replan が先に確定した後に旧い統合の完了が届く。cex-late） | 段の repair が先に確定した後の旧い統合の完了、replan・repair の後の旧 review の合格（cex-late の進捗の「残り」1・2。試験は無い） |
+| lease | `cex_stale_holder_late_finish_does_not_overwrite_the_reassigned_run`（run B が取った後に旧持ち主 A の完了が遅れて届く）、`cex_orphan_takeover_leaves_the_run_held_in_this_instance`・`cex_orphan_takeover_leaves_a_run_whose_active_holder_lives`（現在の保持者を回収しない）、`cex_lease_renew_after_expired_snapshot_keeps_the_holder`（回収側が期限切れの snapshot を取った直後に保持者が renew する。cex-race。fix-store・fix-reclaim が直した） | 無し |
+| restart | `cex_draining_instance_reclaims_its_expired_lease_without_redispatching`、`cex_restart_after_crash_between_wu_and_task_transitions_is_idempotent`、`cex_restart_after_wu_done_promotes_dependents_once`（WU の done の後に落ちても依存 WU が 1 回だけ ready に上がる。fix-promote）、`cex_reclosing_a_run_after_worker_finished_does_not_write_twice`、`cex_holder_reclosing_an_already_finished_run_does_not_write_twice`、`cex_integration_restart_mid_phase_integration_does_not_merge_twice`、`cex_integration_restart_after_the_integration_unit_is_done_does_not_integrate_again`、`cex_integration_restart_keeps_the_stage_pause`、`cex_restart_old_reviewer_pass_after_ownerless_close_is_ignored`（新 active が reviewer A を ownerless として閉じた後に、旧 instance から A の合格が届く。cex-race。fix-verdict が直した。旧 instance は判定の保存まで task ごとの review lock を持つので、B は A の合格の後に起きる。試験はこの lock が B を止めることも assert する） | 無し |
+| 同時完了 | `cex_two_parallel_work_unit_runs_finishing_in_one_tick_lose_no_update`、`cex_run_finish_and_work_unit_check_finish_in_one_tick`、`cex_human_cancel_precedes_successful_worker_completion`、`cex_human_pause_survives_completion_and_holds_continuation`、`cex_human_unanswered_question_stays_blocked_across_housekeeping`、`cex_done_and_lease_expiry_in_one_tick_close_the_run_once`（人の cancel の確定の後、run の Done の処理と lease の期限が同じ tick に来る。cex-tick）、`cex_human_cancel_between_wu_and_task_transitions_is_kept`・`cex_human_comment_between_wu_and_task_transitions_is_kept`（WU の done の直後、Task の遷移の前に人の cancel・comment が確定し、再起動する。v1 の計画で固定した。cex-tick） | 無し |
+| review/integration | `cex_review_late_pass_on_the_old_candidate_does_not_pass_the_rebased_candidate`（合格の後、verdict の保存の前に target が進む）、`cex_review_worker_claim_does_not_override_a_failing_check`、`cex_review_worker_claim_is_not_done_before_or_against_the_reviewer`、`cex_review_resync_cap_halts_and_starts_no_more_reviewer_runs`、`cex_integration_sync_conflict_schedules_one_repair_and_never_passes_the_conflict`、`cex_late_review_and_integration_after_replan_are_dropped`（人の replan が先に確定した後に旧い統合の完了が届く。cex-late）、`cex_late_integration_after_stage_repair_is_dropped`（段の repair が先に確定した後に旧い統合の完了が届く。cex-late2）、`cex_late_review_pass_after_replan_is_dropped`・`cex_late_review_pass_after_repair_is_dropped`（replan・段の repair の後に旧 review の合格が届く。cex-late2。late-review が直した） | 無し |
 | 権限/予算 | `cex_credential_wait_holds_task_and_unit_across_retry_deadline`、`cex_credential_atomic_task_waits_for_verified_resume`（fix-cred）、`cex_credential_cancel_after_resume_claim_never_dispatches`、`cex_budget_tokens_after_credential_resume_stops_continuation_and_review`、`cex_budget_tree_usd_limit_holds_continuation`、`cex_budget_unknown_cost_holds_continuation`、`cex_budget_credential_resume_does_not_bypass_tree_stop`、`cex_quota_group_two_consecutive_ends_are_both_counted`・`cex_quota_group_two_consecutive_ends_unknown_cost_stops`（quota group の 2 つの終わりが続けて届く。cex-late） | 無し |
 
-今の実装で成り立たなかった反例 2 件（cex-review の未解決 1・2）は、D7 の規則どおり別の unit が owner で直した。
+今の実装で成り立たなかった反例は 6 件で、D7 の規則どおり、反例を見つけた run は本体を直さず、repair か replan で owner を直した
+（5 件は別の unit が直し、late-review は replan で同じ unit の key のまま修正を受け持った）。1・2 件目は cex-review の未解決 1・2、
+3 件目は cex-lease の未解決、4〜6 件目は段 pin-rest で見つけたもの。
 
 - restart と integration（統合 WU を done にした後、Task の遷移の前で落ちると `PhaseIntegrated` が残らない）: fix-integ が
   `finish_phase_integration` の書き込みを 1 つの transaction にした（[ADR 2026-11-14 phase-integration-finish-one-write](2026-11-14-phase-integration-finish-one-write.md)）。
@@ -486,6 +491,24 @@ D7 の表の行ごとに、反例を固定した試験の名を書く。試験�
 - 権限（atomic task は credential の検証の一時失敗の後も秘密 file だけで run を起こす）: fix-cred が `credential_gate_hold` で開いた
   credential_wait を見るようにした（[ADR 2026-11-14 atomic-task-credential-verified](2026-11-14-atomic-task-credential-verified.md)）。
   試験は `cex_credential_atomic_task_waits_for_verified_resume`（修正の前は `dispatched` が left 1・right 0 で落ち、修正の後に通った）。
+- restart と依存 WU（v1 の計画で WU a を done にした書き込みの直後、依存 WU の `dependency_ready` の前で落ちると、再起動の後に b・c が
+  pending のまま残り Task が進まない）: fix-promote が `Dispatcher::wu_dispatch_gate`（`dispatcher/work_units.rs`）の `promote_newly_ready` を
+  計画の版によらず呼ぶようにした（[ADR 2026-11-14 dependency-promotion-every-plan-version](2026-11-14-dependency-promotion-every-plan-version.md)）。
+  試験は `cex_restart_after_wu_done_promotes_dependents_once`（修正の前は exit 100。60.3 秒で `status=Ready b=[] c=[]` の assert で落ちた。
+  修正の後は通り、b・c の `dependency_ready` は 1 件ずつ）。`cex_restart_after_crash_between_wu_and_task_transitions_is_idempotent` は
+  Task が Done に届くまで回す形に直した（回収の冪等性の assert は残した）。
+- lease（回収側が期限切れの snapshot を取った直後に保持者が renew しても、回収側が古い判断のまま lease を消す）: fix-store が
+  `TaskStore::apply_transition_if_lease` を足し、fix-reclaim が `RunSupervisor::release_lease` を snapshot の lease との照合付きにした
+  （[ADR 2026-11-15 lease-reclaim-compare-and-release](2026-11-15-lease-reclaim-compare-and-release.md)）。試験は
+  `cex_lease_renew_after_expired_snapshot_keeps_the_holder`（修正の前は exit 100。`report.reclaimed` が left 1・right 0 で落ちた。修正の後に通った）。
+- restart と review（ownerless として閉じた reviewer A の遅れた合格が Task を Done にし、A の `WorkerFinished` が 2 件になる）: fix-verdict が
+  `on_review_finished` で reviewer run の `runs` 行が閉じていれば結果を捨てるようにした（[ADR 2026-10-03 ownerless-running-runs](2026-10-03-ownerless-running-runs.md) の付記 2026-11-14）。
+  試験は `cex_restart_old_reviewer_pass_after_ownerless_close_is_ignored`（修正の前は exit 100。`cex_lease_restart.rs` の A の合格を使った assert で落ちた。修正の後に通った）。
+- review と計画の開き直し（最終 review の間に replan・段の repair が確定しても、旧い合格が Task を Done にする）: late-review が
+  `on_review_finished` で、走らせる unit が残る計画なら判定を捨て、`Trigger::ReviewPlanReopened` で Reviewing → Ready に戻すようにした
+  （[ADR 2026-11-14 review-verdict-after-plan-reopen](2026-11-14-review-verdict-after-plan-reopen.md)）。試験は
+  `cex_late_review_pass_after_replan_is_dropped`・`cex_late_review_pass_after_repair_is_dropped`（修正の前は 2 本とも
+  `status=Done transitions=[… (Done, "review_pass")]` の assert で落ちた。修正の後に通った）。
 
 D1 の表の `ProbePorts` の 3 行の field 列は、change-map の名 `now_unix_fn`・`knowledge_probe`・`eval_version_probe` から、実装の名
 `now_unix`・`knowledge`・`eval_version` に直した（owner と unit は変えていない）。

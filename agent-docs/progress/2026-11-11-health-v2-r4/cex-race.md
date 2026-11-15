@@ -644,8 +644,9 @@ doc comment に、守る不変条件と、既存の試験（`orphan_takeover.rs`
 - `cargo nextest run -p task-dispatch --no-fail-fast --no-tests=fail -E 'test(/cex_/) | test(/ownerless/) | test(/orphan/)'` → exit 0、69 本すべて合格。
 - `cargo nextest run -p task-dispatch --no-fail-fast --no-tests=fail -E 'test(/cex_lease_restart::/) | test(/orphan_takeover::/)'` → exit 0、18 本すべて合格。
 - `cargo nextest run -p task-dispatch --no-fail-fast --no-tests=fail -E 'test(/run_supervisor::/)'` → exit 0、7 本すべて合格。
-- `bash scripts/dev/test-affected.sh` → exit 0、3946 本すべて合格（11 skipped）。対象 crate は celeris・celeris-campaign・
-  celerisctl・llm-proxy・task-dispatch。
+- 2 回目の run で上の 4 本の filter を `|` でつないで 1 回で走らせた → exit 0、76 本すべて合格。
+- `bash scripts/dev/test-affected.sh` → exit 0、3946 本すべて合格（11 skipped、nextest 390 秒）。対象 crate は celeris・
+  celeris-campaign・celerisctl・llm-proxy・task-dispatch。2 回目の run で再実行した結果（下の「前の run の check の不合格」）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 - `bash scripts/dev/check-health.sh` → exit 0（verdict pass、fail_grade 0、worsened 0）。auto の base に対する new 1 件
   （`migration.remnant` の warning、`crates/task-dispatch/src/host_maintenance.rs`）はこの unit の変更ではない（fix-store の節と同じ）。
@@ -653,6 +654,21 @@ doc comment に、守る不変条件と、既存の試験（`orphan_takeover.rs`
   → exit 0、verdict pass、new 0・worsened 0（dispatcher の module の本体の行は増やしていない）。
 - `sh "$CELERIS_WU_SCOPE_PATHS"` → `leases.rs`・`run_supervisor.rs`・`architecture-map.md` とこの進捗ファイルだけ。
   `crates/task-dispatch/src/dispatcher/tests/` の差分は無い。
+
+### 前の run の check の不合格（2026-11-15、2 回目の run）
+
+前の run は done を返したが、celeris の check `bash scripts/dev/test-affected.sh` が exit 100 で落ちた。原因は
+`task-dispatch auto_resolve::generated::tests::cargo_lock_only_conflict_regenerates_with_both_deps` の 600 秒の TIMEOUT
+（3946 本中この 1 本だけ）。同じ回で、子 process の `cargo metadata` を呼ぶ別の 2 本
+（`integration::tests::wu_cargo_lock_only_conflict_is_regenerated` 75 秒、
+`integration::tests::child_cargo_lock_conflict_is_regenerated_and_toml_conflict_needs_human` 106 秒）も遅かった。
+
+- この試験は統合の自動解決の Cargo.lock の再生成（`auto_resolve`）を見るもので、この unit が変えた
+  `run_supervisor.rs`・`leases.rs` の経路を通らない。
+- 2 回目の run で確かめたこと: 走っている cargo の process は無かった（`ps`）。
+  `cargo nextest run -p task-dispatch -E 'test(/auto_resolve::generated/) | test(/cargo_lock/)'` → exit 0、15 本合格、1.4 秒。
+  負荷 1.2 のときに同じ check を走らせると exit 0、3946 本合格（nextest 390 秒）。cargo_lock の試験は SLOW に出なかった。
+- 時間切れの原因（cargo の lock 待ちか、host の負荷か）は未確認。repo のコードは変えていない。
 
 ### 未解決
 

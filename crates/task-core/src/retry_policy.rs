@@ -367,9 +367,11 @@ impl EscalationPolicy {
 }
 
 /// `WorkerFinished.outcome` が予算切れか（wall-clock / max_turns / budget / context 超過の文言。
-/// 決定的な字句判定）。ADR-0072 D7: 構造化した `RunEnd` を返さない古い経路・アダプタのための
-/// 「二重の安全網」として `pub` にした（`task-dispatch` がここを呼ぶ）。
-pub fn is_budget_outcome(outcome: &str) -> bool {
+/// 決定的な字句判定）。試行の履歴（`attempt_history_with_interval`）だけが使う。events は追記専用なので、
+/// `end` の無い古い event（ADR-0072 E1 より前）と、構造化した予算切れの文（`budget exhausted (…)`、
+/// continuation を使えない run の `budget_exhausted(…) (continuation disabled)`）の両方をこの文で数える。
+/// 試行の履歴が `WorkerFinished.end` を読むようになるまで残す（ADR 2026-11-15-research-adapter-deadline D5 の付記）。
+fn is_budget_outcome(outcome: &str) -> bool {
     let o = outcome.to_lowercase();
     [
         "wall-clock",

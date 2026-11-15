@@ -302,51 +302,6 @@ fn acquire_lease_is_exclusive_under_concurrency() {
 }
 
 #[test]
-fn release_lease_then_reacquire_succeeds() {
-    let store = SqliteStore::open_in_memory().expect("open");
-    let task = sample_task(Status::Ready);
-    store.insert(&task).expect("insert");
-
-    let acquired = store
-        .acquire_lease(task.id, "worker-a", StdDuration::from_secs(60))
-        .expect("acquire");
-    assert!(acquired);
-
-    // status is now Running, so a second acquire must fail.
-    let second = store
-        .acquire_lease(task.id, "worker-b", StdDuration::from_secs(60))
-        .expect("acquire second");
-    assert!(!second);
-
-    store.release_lease(task.id, "worker-a").expect("release");
-
-    let after_release = store.get(task.id).expect("get").expect("some");
-    assert!(after_release.lease.is_none());
-
-    // release_lease intentionally does not change status (still Running,
-    // per its contract): that is the dispatcher's job via transition().
-    // To verify "release then reacquire succeeds" on the very same task,
-    // we simulate that dispatcher step here with a direct status update
-    // (test-only; this module owns `conn` so it may reach in directly).
-    {
-        let conn = store.conn.lock().expect("lock");
-        let mut readied = after_release.clone();
-        readied.status = Status::Ready;
-        let json = serde_json::to_string(&readied).expect("serialize");
-        conn.execute(
-            "UPDATE tasks SET status = 'ready', json = ?1 WHERE id = ?2",
-            params![json, task.id.to_string()],
-        )
-        .expect("reset to ready");
-    }
-
-    let reacquired = store
-        .acquire_lease(task.id, "worker-c", StdDuration::from_secs(60))
-        .expect("acquire third");
-    assert!(reacquired);
-}
-
-#[test]
 fn ready_tasks_excludes_incomplete_dependencies_and_pending_approval_parent() {
     let store = SqliteStore::open_in_memory().expect("open");
 

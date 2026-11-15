@@ -74,6 +74,8 @@ bounds `upto_event_id` 937415・`upto_log_id` 571）と `/local/celeris/state/sc
 - `python3 agent-docs/progress/2026-11-07-health-v2-b0/dup-candidates-scan.py` → exit 0（出力は run の成果物 dir の `dup-candidates-scan-head.json`）
 - `cargo tree -p <crate> --offline -e normal --prefix none | sort -u | wc -l` → 235・174・148・198（celeris-script）
 - `git diff --stat $CELERIS_WU_BASE -- crates web config control-ts scripts` → 差分 0
+- `bash scripts/dev/test-affected.sh` → exit 0（「試験対象の変更なし（docs のみ等）」、check-health は verdict=pass・new 0・worsened 0）
+- `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0、`sh scripts/dev/progress-index.sh --check` → ok
 
 ## 未解決事項
 - `set_knowledge_probe` と `test_architecture_map_diffs.py` の扱いは人の判断を待つ（消さずに残している）。

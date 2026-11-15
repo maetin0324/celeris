@@ -1,12 +1,13 @@
 ---
 title: R6 research（研究 harness の締め切りの分類と continuation からの除外）
 tasks: [01M7FYEHKMY34MM5Z75W2ESSGN]
-status: running
+status: done
+completed: 2026-11-15
 updated: 2026-11-15
 ---
 # R6 research（研究 harness の締め切りの分類と continuation からの除外）
 
-task 01M7FYEHKMY34MM5Z75W2ESSGN（R6 の子 task research）の進捗。計画は unit adr → adapters → net。この file は unit adr の分を書いた。adapters・net は同じ file に節を足す。
+task 01M7FYEHKMY34MM5Z75W2ESSGN（R6 の子 task research）の進捗。計画は unit adr → adapters → net。unit adr・adapters・net の節を持つ。3 unit とも完了した（完了日: 2026-11-15）。
 
 ## unit adr（完了日: 2026-11-15）
 
@@ -123,3 +124,47 @@ task 01M7FYEHKMY34MM5Z75W2ESSGN（R6 の子 task research）の進捗。計画�
 ### 提案
 
 1. `result_report.rs` に「adapter が engine の代わりに `{"summary", "evidence": []}` を書いて読み直す」関数を 1 つ置き、研究 3 本の `terminal_from_summary` の写しを消す（文言の adapter 名は引数）。`result_report.rs` を書ける unit（unit net か R6 の close）で行う。
+
+## unit net（完了日: 2026-11-15）
+
+### commit
+
+- `research net: dispatcher の誤配置の探索を Err(AdapterError::Other) の経路に縮め、文言の安全網を残す理由を ADR に書く`
+- `research net: 進捗に unit net の節を書き、status を done にする`
+
+### 決定（ADR の「D5 の付記」）
+
+- (1) `dispatcher/worker_task.rs` の `misplaced_report` の呼び出しを `Err(AdapterError::Other)` の枝だけに縮めた。`Ok(Done | Error)` の枝は消した。8 adapter（claude_code・codex・acp・pi・aider・研究 3 本）は成功の枝で自分で `read_result_file` を通し、`fake`（`run_subprocess`）と締め切り・engine の失敗の枝は終端を result.json から作らない。`Err(Other)` の枝は、`browser::run_with_candidates` が候補の adapter の誤配置の `Error` を `Err(Other)` に畳むので残した（撤去の条件は ADR）。
+- (2) `run_settlement::classify_budget_kind_from_text` は残した。文だけで予算切れを返す producer（`run_subprocess` の wall clock、pi の `stream.error`・acp の RPC の失敗の文、protocol の `error` の文）が残る。消さないので `run_subprocess` は `deadline_terminal` に寄せていない。`task_core::is_budget_outcome` は試行の履歴が追記専用の `WorkerFinished.outcome` の文を読むので残し、外の呼び出し元が無いので `pub` と `lib.rs` の re-export を消し、誤った説明（「task-dispatch がここを呼ぶ」）を直した。
+- `adapter.rs`・`adapter_tests.rs`・`run_settlement.rs` の安全網への言及を今の producer と呼び出し元に合わせた。`docs/architecture-map.md` には該当する行が無い（grep 0 件）ので変えていない。新しい fallback・切替 flag は足していない。events.rs・migration は変えていない。
+
+### 試験
+
+| 試験 | 守る不変条件 | 既存の試験で検出できない理由 |
+|---|---|---|
+| `dispatcher::tests::work_units::an_adapters_ok_terminal_is_not_replaced_by_a_dispatcher_misplaced_search`（新規） | adapter の `Ok` の終端は dispatcher が探索し直さず、誤配置に置き換えない（誤配置 2 つと `Ok(Error{retryable:false})` で WU の失敗の経路〈`replan: …`〉に進む） | 既存の `misplaced_wu_result_records_failure_without_infra_requeue` は `Err(Other)` の枝だけを見る。旧い `worker_task.rs` に戻すとこの試験が落ちることを確かめた（FAILED 1） |
+| `dispatcher::tests::work_units::misplaced_wu_result_records_failure_without_infra_requeue`（既存、変更なし） | `Err(Other)` の後の誤配置 2 つは `error(retryable=false): result.json misplaced`（契約違反） | — |
+| `retry_policy::tests::past_worker_finished_outcomes_keep_their_attempt_classification`（新規） | 過去と今の outcome の文 9 件（D1 前の `wall clock exceeded`、`budget exhausted (WallClock)`・`(Turns)`、`budget_exhausted(wall_clock) (continuation disabled)`、`yielded (continuation disabled)`、context 超過、idle、誤配置、書けない result.json）の試行の分類 | 既存の `history_is_derived_from_events` は 1 文しか見ない |
+
+### 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+
+- 受け入れ条件 0: ADR に「D5 の付記」の節（(1)(2)、grep と試験の根拠、残すものの撤去の条件）と状態の記録の行を足した。
+- 受け入れ条件 1: `grep -n "misplaced_report" crates/task-dispatch/src/dispatcher/worker_task.rs` は 1 件で、条件は `matches!(&outcome, Err(AdapterError::Other(_)))` だけ。`cargo nextest run -p task-dispatch -E 'test(/misplaced|an_adapters_ok_terminal|research_deadline_|run_settlement::/)'`: 30 件合格、失敗 0。
+- 受け入れ条件 2: 消した関数は無い。`is_budget_outcome` の `pub`・re-export を消した（`grep -rn is_budget_outcome crates tests --include=*.rs` で `retry_policy.rs` の外は説明の文 3 件だけ）。残した 2 関数の理由と撤去の条件は ADR にある。
+- 受け入れ条件 3: `cargo nextest run -p task-core -E 'test(/retry_policy::/)'`: 7 件合格、失敗 0（新規の試験を含む）。
+- `bash scripts/dev/test-affected.sh`（対象 crate: celeris・celeris-campaign・celeris-credentiald・celeris-mcp・celeris-script・celerisctl・e2e・llm-proxy・routing-eval・task-api・task-core・task-dispatch・task-ops・task-worker、web の型検査と unit 試験、ts-verify）: exit 0。nextest は 8544 件実行、8544 件合格（slow 10）、skip 23。web の unit 試験 714 件合格。script bundle の SKIP 0 件。repo-health は verdict=pass、new=0、worsened=0。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。
+- `sh "$CELERIS_WU_SCOPE_PATHS"`: 進捗を含めて 10 件（ADR、この進捗、`task-core/src/{lib,retry_policy}.rs`・`retry_policy/tests.rs`、`task-dispatch/src/dispatcher/{worker_task,tests/work_units}.rs`・`run_settlement.rs`、`task-worker/src/{adapter,adapter_tests}.rs`）、exit 0。`git diff --name-only $CELERIS_WU_BASE | python3 -I agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R6 agent-docs/progress/2026-11-07-health-v2-b0/slices.json`: `write-set R6: ok`、exit 0。
+- 凍結の path（campaign・routing-eval・jev-classifier・script-runtime・control-ts・migrations・events.rs・script_guard・credentiald）の差分: 0 件。
+
+### 未解決
+
+1. `classify_budget_kind_from_text` の撤去は ADR の条件 (a)〜(c) が揃うまで待つ。(a) の `subprocess.rs` は sandbox の高 risk の path class で、設計 review が要る。
+2. `misplaced_report` の `Err(Other)` の枝は、`browser::run_with_candidates` が候補の誤配置の終端を畳む限り残る。
+3. unit adr の未解決 1（D6 を dispatcher で走らせる試験が無い）は変わっていない。
+
+### 提案
+
+2. 文言の安全網を消す後続の task: `run_subprocess` の締め切りを `deadline_terminal` に寄せ、pi・acp の失敗の文を `looks_like_context_exceeded` で `BudgetExhausted{Context}` にし、protocol（ADR-0003）に予算切れは `budget_exhausted` で返すと書いてから、`classify_budget_kind_from_text` を消す。R6 の close が提案に移す。
+3. `browser::run_with_candidates` が候補の誤配置の終端（`MISPLACED_RESULT_MARKER`）をそのまま返すようにし、dispatcher の `misplaced_report` の呼び出しを消す。
+4. 試行の履歴（`attempt_history_with_interval`）が `WorkerFinished.end` を読むようにし、`is_budget_outcome` を消す。`end` の無い古い event の扱いを設計の記録で決める。

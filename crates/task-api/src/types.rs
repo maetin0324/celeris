@@ -2110,7 +2110,8 @@ pub struct ConsolePage {
     pub next_cursor: Option<String>,
 }
 
-/// Console の 1 ブロック（ADR-0048 D1 の 8 種 + 予約の `knowledge`）。
+/// Console の 1 ブロック（ADR-0048 D1 の 8 種から `milestone` を除いた 7 種 + `knowledge`）。`milestone`（途中目標の提案）は
+/// ADR-0079 D13 で途中目標を凍結したので外した（行は `GET /projects/{id}?include_frozen=true` が読む）。
 /// `at` は RFC 3339、`cursor` はそのブロックの位置（`since` にそのまま渡せる）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -2207,14 +2208,6 @@ pub enum ConsoleBlock {
         at: String,
         cursor: String,
         approval: task_core::Approval,
-    },
-    /// 途中目標の提案（ADR-0038）。秘書のレビューの返事が付いていれば一緒に渡す。
-    Milestone {
-        at: String,
-        cursor: String,
-        milestone: task_core::Milestone,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        review: Option<MilestoneReviewView>,
     },
     /// 報告（ADR-0034）。見出しと本文を渡す（GUI は見出しだけ出して開かせる）。
     Report {

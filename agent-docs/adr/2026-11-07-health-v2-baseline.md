@@ -94,3 +94,14 @@ tasks: [01M6TYVJSPEYA2P8B7G56HSQ73]
 - 行数の削減目標（例: 本体 30 万行以下）を V0 の受け入れ条件にする案: D5 の理由で採らない。
 - R3・R4 を旧 task の reopen で再開する案: 旧 task は run 0 本で成果物が無く、出発点の数も変わっているため、v2 の子として起票し直した。
 - 正本を capability ごとに人が選ぶ案: 41 個を B0 で決めると時間がかかる。owners の先頭を既定にし、担当工程の着手時に確かめる（未確認事項として進捗に残す）。
+
+## 付記 r6-write-set（2026-11-15、R6 の write_set を広げる）
+- 決定: 人の決定 r6-write-set（ADR-0079 D7）の答えは a（生成した API schema の JSON と、数字を含む Rust の file 名の両方を足す。推奨どおり）。
+- 答えた者: 運用者（operator の Claude Code の対話 session）。人が 2026-11-15 に「R6が止まっているのにも対処してください」と指示し、それを受けて運用者が a を選んだ。人が a を選んだのではない。
+- 変更: [slices.json](../progress/2026-11-07-health-v2-b0/slices.json) の R6（task 01M6TYVJT7EJ6WWHEF0EBH3JPS）の `write_set` に次の 4 つの正規表現を足した。R6 の他の欄と他の slice は変えていない。B0 の既存の 9 つの正規表現も残し、差分は追加の 4 行だけにした（新しい 2 つの Rust の正規表現は旧い 2 つを含む）。
+  - `^crates/[a-z-]+/src/[a-z0-9_/]+\.rs$`
+  - `^crates/[a-z-]+/(tests/[a-z0-9_/]+)\.rs$`
+  - `^docs/api/v1/[a-z0-9_.-]+\.json$`
+  - `^web/api/generated/schema\.json$`
+- 理由: B0 が R6 に割り当てた api-scratch-cache-stats-field（delete）と、R5 から回った old-console-milestone-review-block は API の欄を消すので、生成した schema の JSON（`docs/api/v1/api-v1.schema.json`・`web/api/generated/schema.json`）が変わる。R5 から回った duplicate_setup の一部（D01・D16・D41 ほか）は file 名に数字を含む。B0 の write_set はどちらも許さず、`slices-check.py --write-set R6` が exit 1 になって R6 が止まっていた。健全性 v2 の R2〜R5 は done で、V0 は R6 の後に動くので、広げた範囲を兄弟の工程と同時に触ることは無い。
+- 検査の範囲の変更なので、この付記と slices.json の変更は 1 commit にまとめ、他の変更と混ぜない。D6 の 4（基準値は書き換えない）は変わらない。write_set は基準値ではなく範囲の規則である。

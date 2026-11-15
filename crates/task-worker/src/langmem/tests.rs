@@ -341,7 +341,8 @@ echo 'CELERIS_RESULT {"summary": "", "candidates": 0}'
     }
 }
 
-/// 壁時計の超過でプロセスグループごと SIGKILL する（他の python サイドカーと同じ確認方法）。
+/// 壁時計の超過でプロセスグループごと SIGKILL し、終端は予算切れ `BudgetExhausted{WallClock}` にする
+/// （ADR 2026-11-15-research-adapter-deadline D1。`runs/<run_id>/result.json` の行も `budget_exhausted`）。
 #[tokio::test]
 async fn wall_clock_exceeded_kills_the_process_group() {
     let dir = tempfile::tempdir().unwrap();
@@ -365,14 +366,29 @@ async fn wall_clock_exceeded_kills_the_process_group() {
     let outcome = adapter.run(req, "run-6", limits, &sink).await.unwrap();
     assert!(start.elapsed() < std::time::Duration::from_secs(5));
     match outcome.terminal {
-        Terminal::Error {
-            retryable, message, ..
+        Terminal::BudgetExhausted {
+            kind,
+            message,
+            usage,
         } => {
-            assert!(retryable);
-            assert!(message.contains("wall clock exceeded"), "{message}");
+            assert_eq!(kind, task_core::BudgetKind::WallClock);
+            assert_eq!(message, "wall clock exceeded");
+            assert_eq!(usage, None);
         }
-        other => panic!("expected error, got {other:?}"),
+        other => panic!("expected budget_exhausted, got {other:?}"),
     }
+    let run_result = std::fs::read_to_string(dir.path().join("runs/run-6/result.json")).unwrap();
+    assert!(
+        matches!(
+            serde_json::from_str::<crate::protocol::WorkerMessage>(run_result.trim()).unwrap(),
+            crate::protocol::WorkerMessage::BudgetExhausted {
+                kind: task_core::BudgetKind::WallClock,
+                ..
+            }
+        ),
+        "{run_result}"
+    );
+    assert!(!dir.path().join("artifacts/result.json").exists());
     let pid_text = std::fs::read_to_string(&pid_file)
         .expect("stub should have recorded its pid before looping");
     let pid: i32 = pid_text
@@ -385,7 +401,8 @@ async fn wall_clock_exceeded_kills_the_process_group() {
     );
 }
 
-/// `[adapters.langmem].idle_timeout_secs` はハーネスの予算を上回れない（min を取る）。
+/// `[adapters.langmem].idle_timeout_secs` はハーネスの予算を上回れない（min を取る。ADR-0047 D4）。
+/// 上回れたなら 30 秒の wall clock まで走り `BudgetExhausted{WallClock}` になるので、終端の種類で区別できる。
 #[tokio::test]
 async fn idle_timeout_secs_cannot_exceed_the_harness_budget() {
     let dir = tempfile::tempdir().unwrap();
@@ -409,7 +426,74 @@ async fn idle_timeout_secs_cannot_exceed_the_harness_budget() {
     let start = Instant::now();
     let outcome = adapter.run(req, "run-7", limits, &sink).await.unwrap();
     assert!(start.elapsed() < std::time::Duration::from_secs(5));
-    assert!(matches!(outcome.terminal, Terminal::Error { .. }));
+    match outcome.terminal {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
+            assert!(retryable);
+            assert_eq!(message, "idle timeout");
+        }
+        other => panic!("expected the idle timeout error, got {other:?}"),
+    }
+}
+
+/// 不変条件: `[adapters.langmem].idle_timeout_secs` は予算より短いときに効く（`deadline_terminal` に値で渡る。
+/// ADR 2026-11-15-research-adapter-deadline D1）。上の試験は予算が勝つ側だけを見るので、config の値を
+/// 渡し忘れて `limits.idle_timeout` を使っても通ってしまう。予算（idle・wall clock とも 20 秒）より先に
+/// config の 1 秒で idle の `Error` になること（渡し忘れなら wall clock が先で `BudgetExhausted`）で確かめる。
+#[tokio::test]
+async fn idle_timeout_secs_shorter_than_the_budget_takes_effect() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = stub_langmem(dir.path(), "while true; do sleep 0.1; done\n");
+    config.idle_timeout_secs = Some(1);
+    let adapter = LangMemAdapter::new(config);
+    let req = sample_req(dir.path().to_path_buf());
+    let sink = RecordingSink::default();
+    let limits = RunLimits {
+        wall_clock: std::time::Duration::from_secs(20),
+        idle_timeout: std::time::Duration::from_secs(20),
+        kill_grace: std::time::Duration::from_millis(200),
+    };
+    let outcome = adapter.run(req, "run-7b", limits, &sink).await.unwrap();
+    match outcome.terminal {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
+            assert!(retryable);
+            assert_eq!(message, "idle timeout");
+        }
+        other => panic!("expected the idle timeout error, got {other:?}"),
+    }
+}
+
+/// 不変条件: 成功の枝は `artifacts/result.json` を書けたときだけ `Done` で、書けなければ `read_result_file` に
+/// 進まず retryable な `Error` になる（ADR 2026-11-15-research-adapter-deadline D4）。これまでは warn だけで
+/// `Done` にしていて、既存の試験は書ける置き場だけを使うので、reviewer が読む file の無い `Done` を検出できない。
+/// 置き場に同名の directory を置いて書き込みを失敗させる。
+#[tokio::test]
+async fn an_unwritable_result_file_is_a_retryable_error_not_done() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("artifacts/result.json")).unwrap();
+    let config = stub_langmem(dir.path(), &fake_extractor_script());
+    let adapter = LangMemAdapter::new(config);
+    let req = sample_req(dir.path().to_path_buf());
+    let sink = RecordingSink::default();
+    let outcome = adapter
+        .run(req, "run-7c", default_limits(), &sink)
+        .await
+        .unwrap();
+    match outcome.terminal {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
+            assert!(retryable);
+            assert!(
+                message.contains("could not write artifacts/result.json"),
+                "{message}"
+            );
+        }
+        other => panic!("expected error, got {other:?}"),
+    }
 }
 
 /// `configure` の env の追加分は既存の同名キーより後に環境を組み立てるので勝つ（他アダプタと同じ規則）。

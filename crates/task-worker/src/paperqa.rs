@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -39,14 +39,15 @@ use tracing::warn;
 
 use crate::adapter::{
     AdapterError, AdapterSetting, AdapterSettings, Configured, EventSink, RunLimits, RunOutcome,
-    Terminal, WorkerAdapter,
+    Terminal, WorkerAdapter, deadline_terminal, spawn_capture_stderr,
 };
 use crate::progress;
 use crate::protocol::{Answer, RunContext, RunRequest};
 use crate::provider::classify_provider_failure;
+use crate::result_report::{ResultFileRead, interpret_result_text, read_result_file};
 use crate::subprocess::{
-    LineOutcome, MAX_LINE_BYTES, kill_now, read_line_limited, read_tail, reap_after_terminal,
-    write_result_json,
+    LineOutcome, MAX_LINE_BYTES, finish_run, kill_now, read_line_limited, read_tail,
+    reap_after_terminal,
 };
 
 mod render;
@@ -980,6 +981,7 @@ struct AcquireCounts {
 }
 
 /// 子プロセスの標準出力を 1 行ずつ読み、生存監視（壁時計・無出力）を行う（両方の段で共用）。
+/// 締め切りの規則は `adapter::deadline_terminal`（ADR 2026-11-15-research-adapter-deadline D1）。
 struct StreamedRun {
     stdout: String,
     stderr_tail: String,
@@ -999,59 +1001,30 @@ async fn stream_child(
     sink: &dyn EventSink,
     mut on_line: impl FnMut(&str),
 ) -> Result<StreamedRun, AdapterError> {
-    let stderr_log_path_for_task = stderr_log_path.clone();
     let stdout = child
         .stdout
         .take()
         .ok_or_else(|| AdapterError::Other("worker stdout was not piped".into()))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| AdapterError::Other("worker stderr was not piped".into()))?;
-
-    let stderr_task = tokio::spawn(async move {
-        let mut reader = stderr;
-        match tokio::fs::File::create(&stderr_log_path_for_task).await {
-            Ok(mut file) => {
-                if let Err(e) = tokio::io::copy(&mut reader, &mut file).await {
-                    warn!("failed to write worker stderr.log: {e}");
-                }
-            }
-            Err(e) => warn!("failed to create worker stderr.log: {e}"),
-        }
-    });
+    let stderr_task = spawn_capture_stderr(&mut child, &stderr_log_path, run_id)?;
 
     let mut stdout_file = tokio::fs::File::create(&stdout_log_path).await?;
     let mut reader = BufReader::new(stdout);
 
     let mut last_activity = Instant::now();
     let mut stdout_buf = String::new();
-    let mut force_kill = false;
     let mut timeout_terminal: Option<Terminal> = None;
 
     loop {
-        // 壁時計は run 全体（取得 + pqa）で数える。2 段目に入る時点で残りが無ければすぐ打ち切る。
-        let wall_elapsed = start.elapsed();
-        if wall_elapsed >= limits.wall_clock {
-            timeout_terminal = Some(Terminal::Error {
-                message: "wall clock exceeded".into(),
-                retryable: true,
-                usage: None,
-            });
-            force_kill = true;
-            break;
-        }
-        let idle_elapsed = last_activity.elapsed();
-        if idle_elapsed >= limits.idle_timeout {
-            timeout_terminal = Some(Terminal::Error {
-                message: "idle timeout".into(),
-                retryable: true,
-                usage: None,
-            });
-            force_kill = true;
-            break;
-        }
-        let wait = (limits.wall_clock - wall_elapsed).min(limits.idle_timeout - idle_elapsed);
+        // 壁時計は run 全体（取得 + pqa）で数える（`start` は `run_paperqa` の始まり）。2 段目に入る時点で
+        // 残りが無ければすぐ打ち切る。
+        let wait =
+            match deadline_terminal(start, last_activity, limits.wall_clock, limits.idle_timeout) {
+                Ok(wait) => wait,
+                Err(terminal) => {
+                    timeout_terminal = Some(*terminal);
+                    break;
+                }
+            };
 
         let outcome = match tokio::time::timeout(
             wait,
@@ -1059,7 +1032,7 @@ async fn stream_child(
         )
         .await
         {
-            Err(_elapsed) => continue, // タイムアウト。ループ先頭で上限超過を検知する。
+            Err(_elapsed) => continue, // タイムアウト。ループ先頭の `deadline_terminal` が上限超過を検知する。
             Ok(Err(e)) => return Err(AdapterError::Io(e)),
             Ok(Ok(outcome)) => outcome,
         };
@@ -1089,7 +1062,7 @@ async fn stream_child(
         }
     }
 
-    let exit = if force_kill {
+    let exit = if timeout_terminal.is_some() {
         kill_now(&mut child, limits.kill_grace).await?
     } else {
         reap_after_terminal(&mut child, limits.kill_grace).await?
@@ -1109,7 +1082,8 @@ async fn stream_child(
 }
 
 /// 取得の段（ADR-0035 D1 / D2 手順 1）。**失敗しても run は止めない**（`progress` に残して `pqa` に進み、
-/// 判定は証拠ゲートに任せる）。壁時計・無出力の上限に当たったときだけ終端を返す。
+/// 判定は証拠ゲートに任せる）。壁時計・無出力の上限に当たったときだけ終端（と kill した取得ランナーの
+/// exit status）を返す。
 #[allow(clippy::too_many_arguments)]
 async fn run_acquire(
     config: &PaperQaConfig,
@@ -1122,7 +1096,7 @@ async fn run_acquire(
     artifacts_dir: &Path,
     paper_directory: &Path,
     seed_urls: &[SeedUrl],
-) -> Result<(AcquireCounts, Option<Terminal>), AdapterError> {
+) -> Result<(AcquireCounts, Option<(Terminal, std::process::ExitStatus)>), AdapterError> {
     // ADR-0035 D5（Phase 36）: 検索語はランナーの中で LLM が立てる。ここで作るのは
     // **LLM の答えが壊れていたときの受け皿**（Phase 34 までの決定的な抽出）。
     let queries = build_search_queries(&req.task.objective);
@@ -1280,7 +1254,7 @@ async fn run_acquire(
     .await?;
 
     if let Some(terminal) = streamed.timeout {
-        return Ok((counts.unwrap_or_default(), Some(terminal)));
+        return Ok((counts.unwrap_or_default(), Some((terminal, streamed.exit))));
     }
     if !streamed.exit.success() {
         let tail = streamed
@@ -1414,13 +1388,9 @@ async fn run_paperqa(
             &fetchable_seeds,
         )
         .await?;
-        if let Some(terminal) = timeout {
+        if let Some((terminal, exit)) = timeout {
             // タイムアウトは供給側失敗として分類しない（他アダプタと同じ。ADR-0010 D5）。
-            write_result_json(&run_dir, &terminal, None).await?;
-            return Ok(RunOutcome {
-                terminal,
-                exit_code: None,
-            });
+            return finish_run(&run_dir, terminal, None, exit).await;
         }
         counts
     } else {
@@ -1530,11 +1500,7 @@ async fn run_paperqa(
 
     if let Some(terminal) = streamed.timeout {
         // タイムアウトは供給側失敗として分類しない（他アダプタと同じ。ADR-0010 D5）。
-        write_result_json(&run_dir, &terminal, None).await?;
-        return Ok(RunOutcome {
-            terminal,
-            exit_code: streamed.exit.code(),
-        });
+        return finish_run(&run_dir, terminal, None, streamed.exit).await;
     }
 
     let exit_status = streamed.exit;
@@ -1788,26 +1754,7 @@ async fn run_paperqa(
                 .map(|a| a.answer.as_str())
                 .unwrap_or("");
             let summary = single_line_summary(summary_source, SUMMARY_MAX_CHARS);
-            let result_file = serde_json::json!({ "summary": summary, "evidence": [] });
-            match serde_json::to_string_pretty(&result_file) {
-                Ok(text) => {
-                    if let Err(e) =
-                        tokio::fs::write(artifacts_dir.join("result.json"), format!("{text}\n"))
-                            .await
-                    {
-                        warn!("run {run_id}: could not write artifacts/result.json: {e}");
-                    }
-                }
-                Err(e) => warn!("run {run_id}: could not serialize artifacts/result.json: {e}"),
-            }
-            (
-                Terminal::Done {
-                    summary,
-                    evidence: Vec::new(),
-                    usage: None,
-                },
-                None,
-            )
+            (terminal_from_summary(req, start, &summary).await, None)
         }
     } else {
         let pf = classify_provider_failure(&classify_text);
@@ -1821,16 +1768,34 @@ async fn run_paperqa(
         )
     };
 
-    write_result_json(&run_dir, &terminal, provider_failure).await?;
+    finish_run(&run_dir, terminal, provider_failure, exit_status).await
+}
 
-    if let (Terminal::Error { message, .. }, Some(pf)) = (&terminal, provider_failure) {
-        return Err(AdapterError::from_provider_failure(pf, message));
+/// ADR 2026-11-15-research-adapter-deadline D4: 回答の要約から `artifacts/result.json` を書き、結果契約の
+/// 正本（`result_report::read_result_file`・`interpret_result_text`。ADR 2026-11-10-adapter-result-contract D1）で
+/// 読み直して終端を作る。期待の置き場に file があるので誤配置の回収は探索しない。書けなければ
+/// `read_result_file` を呼ばずに `Error{retryable: true}`（reviewer が読む file の無い run を `Done` にしない）。
+/// `start` は `run_paperqa` の始まり（`read_result_file` の `run_started` に直す）。
+async fn terminal_from_summary(req: &RunRequest, start: Instant, summary: &str) -> Terminal {
+    let artifacts_rel = req.artifacts_rel();
+    let body = serde_json::json!({ "summary": summary, "evidence": [] });
+    let written = tokio::fs::write(req.artifact_path("result.json"), format!("{body:#}\n")).await;
+    if let Err(e) = written {
+        return Terminal::Error {
+            message: format!("paperqa adapter could not write {artifacts_rel}/result.json: {e}"),
+            retryable: true,
+            usage: None,
+        };
     }
-
-    Ok(RunOutcome {
-        terminal,
-        exit_code: exit_status.code(),
-    })
+    match read_result_file(req, SystemTime::now() - start.elapsed()).await {
+        ResultFileRead::Misplaced(error) => *error,
+        ResultFileRead::Missing => Terminal::Error {
+            message: format!("paperqa adapter could not read back {artifacts_rel}/result.json"),
+            retryable: true,
+            usage: None,
+        },
+        ResultFileRead::Text(text) => interpret_result_text(&text, &artifacts_rel, None),
+    }
 }
 
 /// ADR-0035 D3 / ADR-0063 D1: 証拠の内訳を集計し、閾値未達をどう扱うか決める。

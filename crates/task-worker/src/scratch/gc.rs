@@ -640,10 +640,6 @@ pub struct SharedExtentIndex {
 type FiemapReader = dyn Fn(&Path) -> io::Result<Vec<(u64, u64, u32)>>;
 
 impl SharedExtentIndex {
-    pub fn replace_owner(&mut self, owner: String, ranges: Vec<(u64, u64)>) {
-        self.owners.insert(owner, ranges);
-    }
-
     pub fn replace_measurement(&mut self, owner: String, ranges: Vec<(u64, u64)>, fallback: u64) {
         self.owners.insert(owner.clone(), ranges);
         self.fallback.insert(owner, fallback);
@@ -695,28 +691,6 @@ impl SharedExtentIndex {
             .filter(|(name, _)| name.as_str() != owner)
             .map(|(_, ranges)| ranges.len())
             .sum()
-    }
-
-    pub fn unique_bytes(&self) -> u64 {
-        let mut ranges: Vec<_> = self.owners.values().flatten().copied().collect();
-        ranges.sort_unstable();
-        let mut total = 0u64;
-        let mut current: Option<(u64, u64)> = None;
-        for (start, len) in ranges {
-            let end = start.saturating_add(len);
-            match current {
-                Some((lo, hi)) if start <= hi => current = Some((lo, hi.max(end))),
-                Some((lo, hi)) => {
-                    total = total.saturating_add(hi - lo);
-                    current = Some((start, end));
-                }
-                None => current = Some((start, end)),
-            }
-        }
-        if let Some((lo, hi)) = current {
-            total = total.saturating_add(hi - lo);
-        }
-        total
     }
 }
 

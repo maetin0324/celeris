@@ -249,3 +249,23 @@ fn route_record_redact_large_input_replaces_every_secret() {
     assert_eq!(out, redacted.repeat(n));
     assert_eq!(redact_secrets(&input), out);
 }
+
+#[test]
+fn feature_hash_fixed_bytes() {
+    let aux = FeaturesAux {
+        genre: Some("eval_problem".into()),
+        harness: Some("codex".into()),
+        ..FeaturesAux::default()
+    };
+    let hash = task_features_hash(
+        TASK_FEATURES_SCHEMA,
+        "eval",
+        "固定入力\nquoted \"text\"",
+        &aux,
+    )
+    .unwrap();
+    assert_eq!(
+        hash,
+        "sha256:d7c838872304e2486d7ab93a63c269c60d359941b944a33034bba9a4ed64fcfa"
+    );
+}

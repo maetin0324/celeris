@@ -258,24 +258,9 @@ pub struct RouteOptionBinds {
     pub harness_id: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct RouteDecision {
-    pub schema: String,
-    pub decision_id: String,
-    pub subject: DecisionSubject,
-    pub run_id: Option<String>,
-    pub input: serde_json::Value,
-    pub output: serde_json::Value,
-    pub judge: serde_json::Value,
-}
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct RouteOutcome {
     pub schema: String,
     pub labels: serde_json::Value,
-}
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DecisionSubject {
-    pub kind: String,
-    pub id: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Candidate {
@@ -425,16 +410,8 @@ pub fn build_task_features(input: &FeaturesInput) -> TaskFeatures {
             aux.missing.push(name.into());
         }
     }
-    let body = FeatureBody {
-        schema: TASK_FEATURES_SCHEMA,
-        template: TASK_BRIEF_TEMPLATE,
-        brief: &brief,
-        aux: &aux,
-    };
-    let hash = format!(
-        "sha256:{}",
-        digest(&serde_json::to_vec(&body).expect("features serialize"))
-    );
+    let hash = task_features_hash(TASK_FEATURES_SCHEMA, TASK_BRIEF_TEMPLATE, &brief, &aux)
+        .expect("features serialize");
     TaskFeatures {
         schema: TASK_FEATURES_SCHEMA.into(),
         template: TASK_BRIEF_TEMPLATE.into(),
@@ -615,11 +592,28 @@ fn ascii_run(bytes: &[u8], keep: impl Fn(u8) -> bool) -> usize {
 }
 #[derive(Serialize)]
 struct FeatureBody<'a> {
-    schema: &'static str,
-    template: &'static str,
+    schema: &'a str,
+    template: &'a str,
     brief: &'a str,
     aux: &'a FeaturesAux,
 }
+/// Content address of `route_features`: field order and JSON bytes are part of the contract.
+/// Used by both production briefs and evaluation trials without changing their templates.
+pub fn task_features_hash(
+    schema: &str,
+    template: &str,
+    brief: &str,
+    aux: &FeaturesAux,
+) -> Result<String, serde_json::Error> {
+    let body = FeatureBody {
+        schema,
+        template,
+        brief,
+        aux,
+    };
+    Ok(format!("sha256:{}", digest(&serde_json::to_vec(&body)?)))
+}
+
 fn digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }

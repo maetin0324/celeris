@@ -331,3 +331,25 @@ fn account_pool_setting_accepts_bool_or_adapter_name() {
         "true"
     );
 }
+
+/// `AccountCheckResult::as_str` は `AccountBook` の `last_check.result` に保存する文字列で、API の wire
+/// （serde の `snake_case`）と同じ名前でなければならない。task-worker・task-api・dispatcher が 1 つの型を
+/// 共有した後、文字列の写しはこの関数だけなので、4 値すべてを serde と突き合わせる。
+#[test]
+fn account_check_result_as_str_matches_the_wire_name() {
+    for result in [
+        AccountCheckResult::Ok,
+        AccountCheckResult::AuthFailed,
+        AccountCheckResult::Throttled,
+        AccountCheckResult::SpawnFailed,
+    ] {
+        assert_eq!(
+            serde_json::to_value(result).expect("serialize"),
+            serde_json::Value::String(result.as_str().to_string()),
+        );
+        let parsed: AccountCheckResult =
+            serde_json::from_value(serde_json::Value::String(result.as_str().to_string()))
+                .expect("deserialize");
+        assert_eq!(parsed, result);
+    }
+}

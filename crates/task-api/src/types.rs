@@ -811,13 +811,6 @@ pub struct AccountView {
     pub models: Vec<String>,
 }
 
-/// `PATCH /api/v1/llm/sources/{source_id}/accounts/{account_id}` の要求本文（ADR 2026-10-08 account-concurrency-limits §(d)）。
-/// `max_runs` は必須（`null` で保存値を消して既定に戻す）。値は 1..=32 の整数。未知の欄は 400。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct AccountLimitPatchBody {
-    pub max_runs: Option<usize>,
-}
-
 /// `RateLimitObservation` を RFC 3339 に直したもの。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AccountUsageView {
@@ -865,7 +858,7 @@ pub struct AccountCreateBody {
 /// `POST /api/v1/llm/sources/{source_id}/accounts/{account_id}/check` の応答（ADR-0024 D6）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AccountCheckResponse {
-    pub result: crate::admin::AccountCheckResult,
+    pub result: task_core::AccountCheckResult,
     pub checked_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,

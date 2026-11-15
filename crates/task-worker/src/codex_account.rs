@@ -4,8 +4,8 @@
 //! `codex` CLI を直接起動する（アカウント選択・`AccountBook` の更新・cooldown の判断はしない。それは
 //! celeris/task-dispatch 側の責務。ADR-0025 D3/D4/D5）。
 //!
-//! `AccountCheck` / `AccountCheckResult` / `LoginOutcome` / `LoginResult` はアダプタに依存しない語彙なので
-//! `claude_account` のものをそのまま再利用する。
+//! `AccountCheck` / `LoginOutcome` / `LoginResult` はアダプタに依存しない語彙なので `claude_account` の
+//! ものをそのまま再利用する（結果の種別 `AccountCheckResult` の正本は `task_core::accounts`）。
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -13,13 +13,13 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use nix::sys::signal::Signal;
-use task_core::RateLimitObservation;
+use task_core::{AccountCheckResult, RateLimitObservation};
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 
 use crate::claude_account::{
-    AccountCheck, AccountCheckResult, LoginError, LoginOutcome, LoginResult, drain_readers,
-    pump_reader, strip_escape_codes,
+    AccountCheck, LoginError, LoginOutcome, LoginResult, drain_readers, pump_reader,
+    strip_escape_codes,
 };
 use crate::codex::now_unix_secs;
 use crate::protocol::ProviderFailure;

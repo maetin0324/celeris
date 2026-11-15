@@ -7,7 +7,7 @@
 //!
 //! claude-code（ADR-0024 D6/D7）と codex（ADR-0025 D4/D5）はログインの流儀が違うので、`LoginSessions` を
 //! アダプタごとに別のマップに分ける（claude-code はコード貼り付け式、codex は端末を跨いだデバイス認証で
-//! `login/code` を使わない）。確認は共通の語彙（`AccountCheckResult` 等）に写して扱う。
+//! `login/code` を使わない）。確認の結果の種別は task-core の `AccountCheckResult`（正本）をそのまま使う。
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -17,10 +17,10 @@ use std::time::Duration;
 use task_api::{
     AccountAdminError, AccountCheckOutcome, AccountLoginCodeOutcome, AccountLoginStartOutcome,
 };
-use task_core::{AccountAdapter, RateLimitObservation};
+use task_core::{AccountAdapter, AccountCheckResult, RateLimitObservation};
 use task_worker::{
-    AccountCheckResult, CodexLoginSession, LoginOutcome, LoginSession, check_account,
-    check_account_codex, check_account_opencode_go, start_login, start_login_codex,
+    CodexLoginSession, LoginOutcome, LoginSession, check_account, check_account_codex,
+    check_account_opencode_go, start_login, start_login_codex,
 };
 use tokio::sync::{Mutex, mpsc, oneshot};
 
@@ -58,7 +58,7 @@ pub enum AccountAdminEvent {
     Checked {
         adapter: AccountAdapter,
         id: String,
-        result: String,
+        result: AccountCheckResult,
         detail: Option<String>,
         observation: Option<RateLimitObservation>,
     },
@@ -412,9 +412,8 @@ async fn finish_check(
     events: mpsc::Sender<AccountAdminEvent>,
     reply: oneshot::Sender<Result<AccountCheckOutcome, AccountAdminError>>,
 ) {
-    let result_name = account_check_result_name(&result).to_string();
     let outcome = AccountCheckOutcome {
-        result: map_check_result(result),
+        result,
         detail: detail.clone(),
         observation: observation.clone(),
     };
@@ -422,7 +421,7 @@ async fn finish_check(
         .send(AccountAdminEvent::Checked {
             adapter,
             id,
-            result: result_name,
+            result,
             detail,
             observation,
         })
@@ -632,24 +631,6 @@ pub fn spawn_login_cancel(
 
 fn unix_now() -> i64 {
     time::OffsetDateTime::now_utc().unix_timestamp()
-}
-
-fn account_check_result_name(result: &AccountCheckResult) -> &'static str {
-    match result {
-        AccountCheckResult::Ok => "ok",
-        AccountCheckResult::AuthFailed => "auth_failed",
-        AccountCheckResult::Throttled => "throttled",
-        AccountCheckResult::SpawnFailed => "spawn_failed",
-    }
-}
-
-fn map_check_result(result: AccountCheckResult) -> task_api::AccountCheckResult {
-    match result {
-        AccountCheckResult::Ok => task_api::AccountCheckResult::Ok,
-        AccountCheckResult::AuthFailed => task_api::AccountCheckResult::AuthFailed,
-        AccountCheckResult::Throttled => task_api::AccountCheckResult::Throttled,
-        AccountCheckResult::SpawnFailed => task_api::AccountCheckResult::SpawnFailed,
-    }
 }
 
 #[cfg(test)]

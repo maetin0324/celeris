@@ -59,7 +59,7 @@ async fn spawn_check_reports_ok_and_records_observation_via_event() {
         reply_tx,
     );
     let outcome = reply_rx.await.unwrap().unwrap();
-    assert_eq!(outcome.result, task_api::AccountCheckResult::Ok);
+    assert_eq!(outcome.result, AccountCheckResult::Ok);
     let event = rx.recv().await.unwrap();
     match event {
         AccountAdminEvent::Checked {
@@ -70,7 +70,7 @@ async fn spawn_check_reports_ok_and_records_observation_via_event() {
         } => {
             assert_eq!(adapter, AccountAdapter::ClaudeCode);
             assert_eq!(id, "a");
-            assert_eq!(result, "ok");
+            assert_eq!(result, AccountCheckResult::Ok);
         }
         _ => panic!("expected Checked event"),
     }
@@ -124,7 +124,7 @@ echo '{"id":3,"result":{"rateLimits":{"primary":{"usedPercent":25,"windowDuratio
         reply_tx,
     );
     let outcome = reply_rx.await.unwrap().unwrap();
-    assert_eq!(outcome.result, task_api::AccountCheckResult::Ok);
+    assert_eq!(outcome.result, AccountCheckResult::Ok);
     let event = rx.recv().await.unwrap();
     match event {
         AccountAdminEvent::Checked {
@@ -135,7 +135,7 @@ echo '{"id":3,"result":{"rateLimits":{"primary":{"usedPercent":25,"windowDuratio
         } => {
             assert_eq!(adapter, AccountAdapter::Codex);
             assert_eq!(id, "a");
-            assert_eq!(result, "ok");
+            assert_eq!(result, AccountCheckResult::Ok);
         }
         _ => panic!("expected Checked event"),
     }
@@ -163,7 +163,7 @@ echo '{"id":1,"error":{"message":"401 Unauthorized"}}'"#,
         reply_tx,
     );
     let outcome = reply_rx.await.unwrap().unwrap();
-    assert_eq!(outcome.result, task_api::AccountCheckResult::AuthFailed);
+    assert_eq!(outcome.result, AccountCheckResult::AuthFailed);
 }
 
 #[tokio::test]
@@ -431,7 +431,7 @@ echo '{"id":2,"result":{"account":{"type":"apiKey"}}}'"#,
         .unwrap()
         .unwrap();
     assert!(
-        matches!(event, AccountAdminEvent::Checked { adapter: AccountAdapter::Codex, result, .. } if result == "ok")
+        matches!(event, AccountAdminEvent::Checked { adapter: AccountAdapter::Codex, result, .. } if result == AccountCheckResult::Ok)
     );
     assert_eq!(checks.last.len(), 1);
     assert!(checks.last.contains_key("a"));

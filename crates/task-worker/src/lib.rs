@@ -95,8 +95,7 @@ pub use adapter::{
 pub use aider::{AiderAdapter, AiderConfig};
 pub use browser_specialist::BrowserSpecialistAdapter;
 pub use claude_account::{
-    AccountCheck, AccountCheckResult, LoginError, LoginOutcome, LoginResult, LoginSession,
-    check_account, start_login,
+    AccountCheck, LoginError, LoginOutcome, LoginResult, LoginSession, check_account, start_login,
 };
 pub use claude_code::{ClaudeCodeAdapter, ClaudeCodeConfig};
 pub use cluster_login::{

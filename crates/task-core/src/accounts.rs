@@ -70,6 +70,31 @@ impl std::fmt::Display for AccountAdapter {
     }
 }
 
+// アカウントの確認（ADR-0024 D5/D6）の結果の語彙の正本。task-worker の `check_account*` が返し、
+// task-api の `AccountCheckOutcome`・`AccountCheckResponse` と task-dispatch の `AccountBook` の記録が
+// そのまま使う。下の doc comment は API の schema（docs/api/v1）の description になるので変えない。
+/// Account connectivity check result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountCheckResult {
+    Ok,
+    AuthFailed,
+    Throttled,
+    SpawnFailed,
+}
+
+impl AccountCheckResult {
+    /// serde と同じ `snake_case` の名前（`AccountCheckRecord.result` に保存する文字列）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AccountCheckResult::Ok => "ok",
+            AccountCheckResult::AuthFailed => "auth_failed",
+            AccountCheckResult::Throttled => "throttled",
+            AccountCheckResult::SpawnFailed => "spawn_failed",
+        }
+    }
+}
+
 /// provider 行の `account_pool`（ADR-0024 D2 / ADR 2026-10-06 D2）。
 ///
 /// `false` / `true` に加え、pool の adapter 名（`"opencode-go"` 等）を文字列で書ける。`true` は
@@ -87,11 +112,6 @@ pub enum AccountPoolSetting {
 }
 
 impl AccountPoolSetting {
-    /// pool を使う行か。
-    pub fn is_on(self) -> bool {
-        !matches!(self, AccountPoolSetting::Off)
-    }
-
     /// 行の adapter 名 `row_adapter` に対する pool の adapter。`Off` や解決できなければ `None`。
     pub fn pool_adapter(self, row_adapter: &str) -> Option<AccountAdapter> {
         match self {

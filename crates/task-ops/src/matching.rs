@@ -36,10 +36,6 @@ pub enum Assignment {
 /// ADR-0062 B1（Phase 107）: `required_cluster_tool` が `Some` なら、原因がクラスタの道具不足で
 /// あることも分かるようにする（`cluster:<id>` を持つノードが 1 つも無い、または harness と両方を
 /// 満たすノードが無い）。
-pub fn unroutable_question(harness: &str, skills: &[String]) -> String {
-    unroutable_question_with_cluster(harness, skills, None)
-}
-
 fn unroutable_question_with_cluster(
     harness: &str,
     skills: &[String],

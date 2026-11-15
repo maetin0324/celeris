@@ -48,17 +48,6 @@ pub(crate) fn revoke_conn(conn: &Connection, run_id: &str, at: &str) -> Result<(
 }
 
 impl SqliteStore {
-    /// Issue a fresh 256-bit bearer credential for a live run. The caller owns the plaintext;
-    /// this method never writes it to a log, event, or database row.
-    pub fn cos_run_credential_issue(
-        &self,
-        thread_id: &str,
-        run_id: &str,
-        ttl: Duration,
-    ) -> Result<String, ChatError> {
-        self.cos_run_credential_issue_at(thread_id, run_id, ttl, OffsetDateTime::now_utc())
-    }
-
     /// Clock-injected issuance. A revoked credential may be replaced only while the run
     /// is running (route failover after the former worker exits); its old hash stays invalid.
     pub fn cos_run_credential_issue_at(

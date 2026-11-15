@@ -283,3 +283,63 @@ fn cos_chat_ops_ctl_prefers_api_url_env_over_config() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// Every config-backed daemon command must use the shared resolver. Existing transport tests
+/// construct ApiConfig directly and cannot detect a command retaining its own config loader.
+#[test]
+fn daemon_commands_share_config_and_url_environment_resolution() {
+    for (args, path, body) in [
+        (vec!["cron", "list"], "/api/v1/cron-jobs", "{\"items\":[]}"),
+        (
+            vec!["models", "list", "--json"],
+            "/api/v1/llm/models",
+            "{\"items\":[]}",
+        ),
+        (
+            vec!["script", "domains", "--json"],
+            "/api/v1/script/domains",
+            "{\"items\":[]}",
+        ),
+    ] {
+        for use_url in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let config = dir.path().join("config.toml");
+            std::fs::write(dir.path().join("token"), "shared-test-token\n").unwrap();
+            std::fs::write(&config, format!(
+                "[api]\nlisten = '{addr}'\n[[api.tokens]]\nprincipal = 'operator:test'\ntoken_file = 'token'\n"
+            )).unwrap();
+            let server = thread::spawn(move || {
+                let (mut stream, raw) = fake_http::accept(&listener, "GET", path);
+                assert_eq!(
+                    raw.contains("Authorization: Bearer shared-test-token\r\n"),
+                    !use_url
+                );
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .unwrap();
+            });
+            let mut cmd = Command::new(common::celerisctl_path());
+            cmd.env_remove("CELERIS_COS_RUN_CREDENTIAL")
+                .env_remove("CELERIS_API_URL")
+                .env("CELERIS_CONFIG", &config)
+                .args(&args);
+            if use_url {
+                // URL overrides must work without reading config or its administrator token.
+                cmd.env("CELERIS_CONFIG", dir.path().join("absent.toml"))
+                    .env("CELERIS_API_URL", format!("http://{addr}/api/v1/"));
+            }
+            let out = cmd.output().unwrap();
+            assert!(
+                out.status.success(),
+                "{args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            server.join().unwrap();
+        }
+    }
+}

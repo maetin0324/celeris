@@ -69,49 +69,7 @@ pub fn run(args: DoctorArgs, api_url: Option<&str>) -> Result<ExitCode, CliError
 }
 
 fn fetch(args: &DoctorArgs, api_url: Option<&str>) -> Result<Report, CliError> {
-    let url = api_url
-        .map(str::to_owned)
-        .or_else(|| std::env::var("CELERIS_API_URL").ok());
-    let mut api = if let Some(url) = url {
-        if !url.trim_end_matches('/').ends_with("/api/v1") {
-            return Err(CliError::msg("API URL must end in /api/v1"));
-        }
-        ApiConfig {
-            base_url: url.trim_end_matches('/').into(),
-            token: None,
-        }
-    } else {
-        let config =
-            celeris::Config::load(&args.config).map_err(|_| CliError::msg("cannot load config"))?;
-        ApiConfig {
-            base_url: format!(
-                "http://{}/api/v1",
-                config
-                    .api
-                    .listen
-                    .ok_or_else(|| CliError::msg("API listen missing"))?
-            ),
-            token: config
-                .api
-                .client_token()
-                .map_err(|_| CliError::msg("cannot read API token"))?,
-        }
-    };
-    if let Some(path) = &args.token_file {
-        api.token = Some(
-            std::fs::read_to_string(path)
-                .map_err(|_| CliError::msg("cannot read API token"))?
-                .trim()
-                .to_owned(),
-        );
-    }
-    if api
-        .token
-        .as_ref()
-        .is_some_and(|t| t.is_empty() || t.chars().any(char::is_control))
-    {
-        return Err(CliError::msg("invalid token"));
-    }
+    let api = ApiConfig::from_config(Some(&args.config), api_url, args.token_file.as_deref())?;
     let report: Report = serde_json::from_value(request(&api, "GET", "/browser/readiness", None)?)
         .map_err(|_| CliError::msg("invalid readiness report"))?;
     if report.items.is_empty()

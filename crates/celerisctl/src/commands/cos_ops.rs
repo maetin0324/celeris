@@ -1,6 +1,5 @@
 //! HTTP transport for audited CoS operations. The API owns the allowlist and audit transaction.
 
-use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::Args;
@@ -39,7 +38,7 @@ pub(crate) fn run(args: ApiRequestArgs, options: &Options) -> Result<ExitCode, C
         .ok_or_else(|| CliError::msg("api-request requires CELERIS_COS_RUN_CREDENTIAL"))?;
     let body: Value = serde_json::from_str(&args.body)
         .map_err(|e| CliError::msg(format!("invalid JSON body: {e}")))?;
-    let api = api_config(options.api_url.as_deref())?;
+    let api = ApiConfig::from_config(None, options.api_url.as_deref(), None)?;
     let result = send(
         &api,
         &args.method,
@@ -54,47 +53,6 @@ pub(crate) fn run(args: ApiRequestArgs, options: &Options) -> Result<ExitCode, C
 
 pub(crate) fn credential() -> Option<String> {
     std::env::var(CREDENTIAL_ENV).ok().filter(|s| !s.is_empty())
-}
-
-/// The daemon puts its own API base here for CoS chat and triage runs.
-pub(crate) const API_URL_ENV: &str = "CELERIS_API_URL";
-
-/// API base: `--api-url` > `CELERIS_API_URL` > `[api] listen` of `CELERIS_CONFIG`.
-pub(crate) fn api_config(api_url: Option<&str>) -> Result<ApiConfig, CliError> {
-    let from_env = std::env::var(API_URL_ENV).ok().filter(|s| !s.is_empty());
-    let chosen = match api_url {
-        Some(url) => Some((url.to_owned(), "--api-url")),
-        None => from_env.map(|url| (url, API_URL_ENV)),
-    };
-    if let Some((url, source)) = chosen {
-        if !url.trim_end_matches('/').ends_with("/api/v1") {
-            return Err(CliError::msg(format!("{source} must end in /api/v1")));
-        }
-        return Ok(ApiConfig {
-            base_url: url.trim_end_matches('/').to_string(),
-            token: None,
-        });
-    }
-    let path = std::env::var_os("CELERIS_CONFIG")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("~/.config/celeris/config.toml"));
-    let config = celeris::Config::load(&path)
-        .map_err(|e| CliError::msg(format!("config {}: {e}", path.display())))?;
-    let listen = config
-        .api
-        .listen
-        .ok_or_else(|| CliError::msg("[api] listen is not configured"))?;
-    Ok(ApiConfig {
-        base_url: format!("http://{listen}/api/v1"),
-        token: if credential().is_some() {
-            None
-        } else {
-            config
-                .api
-                .client_token()
-                .map_err(|e| CliError::msg(e.to_string()))?
-        },
-    })
 }
 
 fn safe_header(value: &str, name: &str) -> Result<(), CliError> {

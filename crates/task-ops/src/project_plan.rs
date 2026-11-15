@@ -70,10 +70,6 @@ impl ProjectPlanState {
     pub fn version(&self, version: u32) -> Option<&PlanVersion> {
         self.versions.iter().find(|v| v.version == version)
     }
-    /// 次に提案する版（既存の最大 + 1。却下された版の番号も再利用しない）。
-    pub fn next_version(&self) -> u32 {
-        self.versions.iter().map(|v| v.version).max().unwrap_or(0) + 1
-    }
 }
 
 /// 案件の plan タスク（`is_milestones_plan_task`）の events から、案件計画の全版を決定的に組み立てる。

@@ -1,0 +1,1586 @@
+{
+ "schema": "health-v2-v0/loop-cost/1",
+ "measured_at": "2026-11-15T23:36:03Z",
+ "source": "read-only sqlite URI (mode=ro): runs, events, tasks, execution_plans, work_units",
+ "windows": {
+  "b0": {
+   "start": "2026-10-24",
+   "end": "2026-11-07T12:00"
+  },
+  "after": {
+   "start": "2026-11-07T12:00",
+   "end": "2026-11-15T23:34:53Z"
+  }
+ },
+ "measures": {
+  "a_reviewer_runs": {
+   "b0": {
+    "window": "2026-10-24..2026-11-07T12:00",
+    "all_reviewer": {
+     "claude": {
+      "runs": 517,
+      "with_usage": 351,
+      "cost_usd_sum": 165.73,
+      "cost_usd_n": 326,
+      "cost_usd_median": 0.4521,
+      "cost_usd_p90": 0.9155,
+      "tokens_median": 494692,
+      "tokens_p90": 1347122
+     },
+     "gpt": {
+      "runs": 34,
+      "with_usage": 31,
+      "cost_usd_sum": 0,
+      "cost_usd_n": 0,
+      "cost_usd_median": null,
+      "cost_usd_p90": null,
+      "tokens_median": 633586,
+      "tokens_p90": 1728388
+     }
+    },
+    "design_review_only": {},
+    "final_review_only": {
+     "claude": {
+      "runs": 517,
+      "with_usage": 351,
+      "cost_usd_sum": 165.73,
+      "cost_usd_n": 326,
+      "cost_usd_median": 0.4521,
+      "cost_usd_p90": 0.9155,
+      "tokens_median": 494692,
+      "tokens_p90": 1347122
+     },
+     "gpt": {
+      "runs": 34,
+      "with_usage": 31,
+      "cost_usd_sum": 0,
+      "cost_usd_n": 0,
+      "cost_usd_median": null,
+      "cost_usd_p90": null,
+      "tokens_median": 633586,
+      "tokens_p90": 1728388
+     }
+    }
+   },
+   "after": {
+    "window": "2026-11-07T12:00..2026-11-15T23:34:53Z",
+    "all_reviewer": {
+     "claude": {
+      "runs": 188,
+      "with_usage": 159,
+      "cost_usd_sum": 307.4,
+      "cost_usd_n": 149,
+      "cost_usd_median": 1.8586,
+      "cost_usd_p90": 3.8959,
+      "tokens_median": 3664821,
+      "tokens_p90": 10261058
+     },
+     "gpt": {
+      "runs": 8,
+      "with_usage": 4,
+      "cost_usd_sum": 0,
+      "cost_usd_n": 0,
+      "cost_usd_median": null,
+      "cost_usd_p90": null,
+      "tokens_median": 942740.0,
+      "tokens_p90": 984920
+     }
+    },
+    "design_review_only": {
+     "claude": {
+      "runs": 38,
+      "with_usage": 38,
+      "cost_usd_sum": 64.48,
+      "cost_usd_n": 38,
+      "cost_usd_median": 1.631,
+      "cost_usd_p90": 2.7791,
+      "tokens_median": 3154681.0,
+      "tokens_p90": 5595447
+     },
+     "gpt": {
+      "runs": 1,
+      "with_usage": 1,
+      "cost_usd_sum": 0,
+      "cost_usd_n": 0,
+      "cost_usd_median": null,
+      "cost_usd_p90": null,
+      "tokens_median": 591730,
+      "tokens_p90": 591730
+     }
+    },
+    "final_review_only": {
+     "claude": {
+      "runs": 150,
+      "with_usage": 121,
+      "cost_usd_sum": 242.92,
+      "cost_usd_n": 111,
+      "cost_usd_median": 2.1359,
+      "cost_usd_p90": 4.2427,
+      "tokens_median": 4227932,
+      "tokens_p90": 11072271
+     },
+     "gpt": {
+      "runs": 7,
+      "with_usage": 3,
+      "cost_usd_sum": 0,
+      "cost_usd_n": 0,
+      "cost_usd_median": null,
+      "cost_usd_p90": null,
+      "tokens_median": 984920,
+      "tokens_p90": 984920
+     }
+    }
+   },
+   "b0_recount_vs_published": {
+    "published": {
+     "claude": {
+      "runs": 517,
+      "with_usage": 351,
+      "cost_usd_n": 326,
+      "cost_usd_sum": 165.73,
+      "cost_usd_median": 0.4521,
+      "cost_usd_p90": 0.9155,
+      "tokens_median": 494692,
+      "tokens_p90": 1347122
+     },
+     "gpt": {
+      "runs": 34,
+      "with_usage": 31,
+      "tokens_median": 633586,
+      "tokens_p90": 1728388
+     }
+    },
+    "claude_runs_unfinished_at_b0_measure": 0,
+    "claude_runs_unfinished_at_b0_measure_now_with_cost": 0,
+    "claude_runs_still_unfinished": 0
+   }
+  },
+  "b_health_cost": {
+   "b0": {
+    "wu": {
+     "runs": 0,
+     "verdicts": {},
+     "failed": 0,
+     "timed_out": 0,
+     "seconds_sum": 0,
+     "seconds_median": null,
+     "seconds_p90": null,
+     "all_checks_seconds_sum": 54885.9
+    },
+    "integration": {
+     "runs": 0,
+     "verdicts": {},
+     "failed": 0,
+     "timed_out": 0,
+     "seconds_sum": 0,
+     "seconds_median": null,
+     "seconds_p90": null,
+     "all_checks_seconds_sum": 120556.5
+    },
+    "review": {
+     "runs": 0,
+     "verdicts": {},
+     "failed": 0,
+     "timed_out": 0,
+     "seconds_sum": null,
+     "seconds_median": null,
+     "seconds_p90": null
+    },
+    "review_input": {
+     "built": 0,
+     "built_verdicts": {},
+     "skipped": 0,
+     "skipped_reasons": {},
+     "seconds": null
+    },
+    "findings_repeated_events": 0,
+    "design_review": {
+     "requested": 0,
+     "reviewed": 0,
+     "passed": 0,
+     "failed": 0,
+     "runs_with_cost": 0,
+     "cost_usd_sum": 0,
+     "cost_usd_median": null,
+     "cost_usd_p90": null,
+     "tokens_median": null,
+     "tokens_p90": null,
+     "wall_seconds_sum": 0,
+     "wall_seconds_median": null,
+     "request_to_verdict_seconds_median": null,
+     "request_to_verdict_seconds_p90": null
+    }
+   },
+   "after": {
+    "wu": {
+     "runs": 271,
+     "verdicts": {
+      "error": 3,
+      "fail": 27,
+      "pass": 241
+     },
+     "failed": 30,
+     "timed_out": 0,
+     "seconds_sum": 21828.7,
+     "seconds_median": 94.872,
+     "seconds_p90": 136.713,
+     "all_checks_seconds_sum": 206783.5
+    },
+    "integration": {
+     "runs": 123,
+     "verdicts": {
+      "fail": 6,
+      "pass": 117
+     },
+     "failed": 6,
+     "timed_out": 0,
+     "seconds_sum": 10888.2,
+     "seconds_median": 97.531,
+     "seconds_p90": 148.931,
+     "all_checks_seconds_sum": 213491.0
+    },
+    "review": {
+     "runs": 128,
+     "verdicts": {
+      "error": 1,
+      "fail": 2,
+      "pass": 125
+     },
+     "failed": 3,
+     "timed_out": 0,
+     "seconds_sum": null,
+     "seconds_median": null,
+     "seconds_p90": null
+    },
+    "review_input": {
+     "built": 117,
+     "built_verdicts": {
+      "error": 12,
+      "fail": 2,
+      "pass": 103
+     },
+     "skipped": 33,
+     "skipped_reasons": {
+      "remote workspace": 12,
+      "review 前の同期が無い": 1,
+      "reviewer run の無い review": 20
+     },
+     "seconds": null
+    },
+    "findings_repeated_events": 3,
+    "design_review": {
+     "requested": 39,
+     "reviewed": 39,
+     "passed": 23,
+     "failed": 16,
+     "runs_with_cost": 38,
+     "cost_usd_sum": 64.48,
+     "cost_usd_median": 1.631,
+     "cost_usd_p90": 2.7791,
+     "tokens_median": 3025736,
+     "tokens_p90": 5595447,
+     "wall_seconds_sum": 9419.5,
+     "wall_seconds_median": 206.017,
+     "request_to_verdict_seconds_median": 214.5823,
+     "request_to_verdict_seconds_p90": 435.6683
+    }
+   }
+  },
+  "c_false_positives": {
+   "b0": {
+    "counts": {
+     "review": {
+      "changed_then_passed": 35,
+      "git_unavailable": 1,
+      "human_decision": 11,
+      "no_paths": 54,
+      "not_passed": 6,
+      "passed_without_path_change": 3
+     }
+    },
+    "policy_changed_stops": 0,
+    "examples": {
+     "review": {
+      "changed_then_passed": [
+       {
+        "task": "01M5XXF7QNDDFANAXYRND6T9VY",
+        "ts": "2026-10-27T05:38:39",
+        "review_run": "01M5XXQGB2KWCWA6CJNRA619GS",
+        "paths": [
+         "docs/ops/browser-credential-login-v5.md",
+         "tests/credentiald_switch.sh"
+        ],
+        "criteria_failed": 2,
+        "passed_at": "2026-10-27T09:05:41",
+        "why": "docs/ops/browser-credential-login-v5.md"
+       },
+       {
+        "task": "01M5XXF7Q9FFYE8S18VMNQ34MH",
+        "ts": "2026-10-27T06:41:47",
+        "review_run": "01M5Y0T5XH0WBB29GG739J6SVV",
+        "paths": [
+         "agent-docs/progress/2026-10-27-operator-usage.md"
+        ],
+        "criteria_failed": 1,
+        "passed_at": "2026-10-27T07:12:13",
+        "why": "agent-docs/progress/2026-10-27-operator-usage.md"
+       },
+       {
+        "task": "01M5XXF7Q7VE9G6Q3S83CA9ZBE",
+        "ts": "2026-10-27T06:47:09",
+        "review_run": "01M5Y0TBBVRTQMM2NJREJWQ11E",
+        "paths": [
+         "agent-docs/progress/2026-10-27-cos-usage-context.md"
+        ],
+        "criteria_failed": 1,
+        "passed_at": "2026-10-27T08:16:14",
+        "why": "agent-docs/progress/2026-10-27-cos-usage-context.md"
+       },
+       {
+        "task": "01M5XXF7Q9FFYE8S18VMNQ34MH",
+        "ts": "2026-10-27T08:13:08",
+        "review_run": "01M5Y6HTAYRG4Y3XBAGHECZGNC",
+        "paths": [
+         "agent-docs/progress/2026-10-27-operator-usage-delivery-repair.md"
+        ],
+        "criteria_failed": 1,
+        "passed_at": "2026-10-27T08:30:37",
+        "why": "agent-docs/progress/2026-10-27-operator-usage-delivery-repair.md"
+       },
+       {
+        "task": "01M5XXF7QAXTD8E7MM6DF25JRG",
+        "ts": "2026-10-27T08:52:54",
+        "review_run": "01M5Y80YVC7JBP3HJ75M1725HE",
+        "paths": [
+         "agent-docs/progress/2026-10-27-trial-observed-versions.md"
+        ],
+        "criteria_failed": 1,
+        "passed_at": "2026-10-27T09:34:39",
+        "why": "agent-docs/progress/2026-10-27-trial-observed-versions.md"
+       }
+      ],
+      "git_unavailable": [
+       {
+        "task": "01M5XXF7QP63BMV6AS0WNDW01N",
+        "ts": "2026-10-27T11:04:58",
+        "review_run": "01M5YG6V2H8EYATH3VBPJ409RK",
+        "paths": [
+         "docs/ops/selfdeploy.md",
+         "scripts/selfdeploy/tests/credentiald_switch.sh"
+        ],
+        "criteria_failed": 1,
+        "passed_at": "2026-10-27T11:21:18",
+        "why": null
+       }
+      ],
+      "human_decision": [
+       {
+        "task": "01M5SRJMB1CSGBYT028X0B67N2",
+        "ts": "2026-10-25T20:46:44",
+        "review_run": "01M5TCV4EBXYTVKW99VEZASX7N",
+        "paths": [
+         "docs/ops/mlsys-main-4-ab-contract.md"
+        ],
+        "criteria_failed": 5,
+        "passed_at": "2026-10-26T17:56:11",
+        "why": "01M5SRJMB1CSGBYT028X0B67N2 2026-10-25T21:00:32 decision_answered"
+       },
+       {
+        "task": "01M5WARE6D56GEHRCK17XJH5JC",
+        "ts": "2026-10-26T19:38:47",
+        "review_run": "01M5WVG9WEM1NSABWADT33N9AJ",
+        "paths": [],
+        "criteria_failed": 1,
+        "passed_at": "2026-10-26T23:11:13",
+        "why": "01M5WARE6D56GEHRCK17XJH5JC 2026-10-26T19:41:06 transitioned:answer"
+       },
+       {
+        "task": "01M5WARE6D56GEHRCK17XJH5JC",
+        "ts": "2026-10-26T19:44:17",
+        "review_run": "01M5WVTZW22718Y7ND74HAKGK1",
+        "paths": [],
+        "criteria_failed": 1,
+        "passed_at": "2026-10-26T23:11:13",
+        "why": "01M5WARE6D56GEHRCK17XJH5JC 2026-10-26T19:46:19 transitioned:answer"
+       },
+       {
+        "task": "01M5XXF7Q3N2619D5RQA5J7C7N",
+        "ts": "2026-10-27T06:08:22",
+        "review_run": "01M5XZ473RDNFSFB7FNRZV2QJW",
+        "paths": [],
+        "criteria_failed": 0,
+        "passed_at": "2026-10-27T16:46:48",
+        "why": "01M5XXF7Q3N2619D5RQA5J7C7N 2026-10-27T15:16:33 transitioned:comment"
+       },
+       {
+        "task": "01M5XXF7QMD919KZ07G80MESYF",
+        "ts": "2026-10-27T06:40:07",
+        "review_run": "01M5Y11B0R78V3QQ032R5MC34J",
+        "paths": [],
+        "criteria_failed": 0,
+        "passed_at": "2026-10-27T17:57:10",
+        "why": "01M5XXF7QMD919KZ07G80MESYF 2026-10-27T15:16:33 transitioned:comment"
+       }
+      ],
+      "no_paths": [
+       {
+        "task": "01M5P06QFRX6697DV1FSTHNRD9",
+        "ts": "2026-10-24T04:23:35",
+        "review_run": "01M5P2A6PEN4AX46KYNGJSE4N4",
+        "paths": [
+         "docs/design/settings-facts.md"
+        ],
+        "criteria_failed": 2,
+        "passed_at": "2026-10-24T04:34:01",
+        "why": null
+       },
+       {
+        "task": "01M5SRJMB1CSGBYT028X0B67N2",
+        "ts": "2026-10-26T16:25:23",
+        "review_run": "01M5WG6W6X6S3F7GEMRS7ZF3TX",
+        "paths": [],
+        "criteria_failed": 4,
+        "passed_at": "2026-10-26T17:56:11",
+        "why": null
+       },
+       {
+        "task": "01M5YYZ7FJ4REHEKFMDPV4KCGG",
+        "ts": "2026-10-27T16:38:36",
+        "review_run": "01M5Z3DDG03P9K6G37SHPD700D",
+        "paths": [],
+        "criteria_failed": 0,
+        "passed_at": "2026-10-27T19:30:14",
+        "why": null
+       },
+       {
+        "task": "01M5XXF7QMD919KZ07G80MESYF",
+        "ts": "2026-10-27T16:42:30",
+        "review_run": "01M5Z3PMH1WVWMNFT5PEP93MDV",
+        "paths": [],
+        "criteria_failed": 0,
+        "passed_at": "2026-10-27T17:57:10",
+        "why": null
+       },
+       {
+        "task": "01M5Z79FN06T6ZM434H4MHZS12",
+        "ts": "2026-10-27T18:48:33",
+        "review_run": "01M5ZAA2WQTM8A3TF7KAZ3K2W0",
+        "paths": [],
+        "criteria_failed": 2,
+        "passed_at": "2026-10-27T19:14:26",
+        "why": null
+       }
+      ],
+      "not_passed": [
+       {
+        "task": "01M69YXTFWZT56XCZFY2PCPZMB",
+        "ts": "2026-10-31T21:50:19",
+        "review_run": "01M69YZXVHNPZ2EPKRTKP7Q5HR",
+        "paths": [],
+        "criteria_failed": 5,
+        "passed_at": null,
+        "why": null
+       },
+       {
+        "task": "01M69YXTFWZT56XCZFY2PCPZMB",
+        "ts": "2026-10-31T21:51:16",
+        "review_run": "01M69Z3JJKMRDSCTTPT0NFDQSE",
+        "paths": [],
+        "criteria_failed": 5,
+        "passed_at": null,
+        "why": null
+       },
+       {
+        "task": "01M69YXTFWZT56XCZFY2PCPZMB",
+        "ts": "2026-10-31T21:52:22",
+        "review_run": "01M69Z5KHM2QE15HCBX6A0WMG9",
+        "paths": [],
+        "criteria_failed": 5,
+        "passed_at": null,
+        "why": null
+       },
+       {
+        "task": "01M6FPPJN7A8H427MXFVYFY7H4",
+        "ts": "2026-11-03T16:49:36",
+        "review_run": "01M6H4JA0A05243KXXX1VZENQ5",
+        "paths": [],
+        "criteria_failed": 0,
+        "passed_at": null,
+        "why": null
+       },
+       {
+        "task": "01M6FPPJN7A8H427MXFVYFY7H4",
+        "ts": "2026-11-03T17:18:54",
+        "review_run": "01M6H5NQXKD3QMHAHMEW9K0H3Z",
+        "paths": [],
+        "criteria_failed": 1,
+        "passed_at": null,
+        "why": null
+       }
+      ],
+      "passed_without_path_change": [
+       {
+        "task": "01M6EVP95S9VM3DBMZFRD8FS35",
+        "ts": "2026-11-02T22:00:35",
+        "review_run": "01M6F3NCYFQAZ49VRMZW8BDAJ9",
+        "paths": [
+         "scripts/selfdeploy"
+        ],
+        "criteria_failed": 1,
+        "passed_at": "2026-11-02T22:55:16",
+        "why": null
+       },
+       {
+        "task": "01M6N7XY9KX62X9TX696TEHXNF",
+        "ts": "2026-11-05T12:43:20",
+        "review_run": "01M6NV6CFE07BY9F62K2SNPXJE",
+        "paths": [
+         "scripts/dev/test-long-horizon-bench.sh"
+        ],
+        "criteria_failed": 2,
+        "passed_at": "2026-11-05T13:27:04",
+        "why": null
+       },
+       {
+        "task": "01M6PAMC3S9QN740JWEQTXV60J",
+        "ts": "2026-11-06T00:08:19",
+        "review_run": "01M6Q2SN38Z18S38SQBNVMWWZF",
+        "paths": [
+         "crates/celeris/src/daemon/script_guard.rs"
+        ],
+        "criteria_failed": 2,
+        "passed_at": "2026-11-06T00:58:56",
+        "why": null
+       }
+      ]
+     }
+    }
+   },
+   "after": {
+    "counts": {
+     "design_review": {
+      "human_decision": 5,
+      "passed_after_replan": 11
+     },
+     "health": {
+      "changed_then_passed": 19,
+      "error_not_finding": 4,
+      "human_decision": 7,
+      "no_paths": 1,
+      "not_passed": 2,
+      "policy_changed": 6
+     },
+     "review": {
+      "changed_then_passed": 14,
+      "exception": 2,
+      "human_decision": 15,
+      "no_paths": 30,
+      "passed_without_path_change": 2
+     }
+    },
+    "policy_changed_stops": 8,
+    "examples": {
+     "design_review": {
+      "human_decision": [
+       {
+        "task": "01M6ZDF99MKHFN57PN0H7G6Z9Z",
+        "ts": "2026-11-09T06:03:55",
+        "findings": [
+         "duplicate_implementation",
+         "duplicate_implementation",
+         "duplicate_implementation"
+        ],
+        "paths": [
+         "crates/task-core/src/store/",
+         "crates/task-dispatch/src/dispatcher/cos_chat/review.rs",
+         "crates/task-dispatch/src/health_review/gate.rs"
+        ],
+        "passed_at": "2026-11-09T06:16:35",
+        "why": "01M6ZDF99MKHFN57PN0H7G6Z9Z 2026-11-09T06:08:14 decision_answered"
+       },
+       {
+        "task": "01M6TYVJT0Z1CBGNK8VTNK8ZJH",
+        "ts": "2026-11-10T23:23:49",
+        "findings": [
+         "removal_missing",
+         "duplicate_implementation",
+         "removal_missing"
+        ],
+        "paths": [
+         "crates/celeris-credentiald/src/lib.rs",
+         "crates/task-dispatch/src/dispatcher.rs",
+         "crates/task-worker/src/browser_launcher_run.rs"
+        ],
+        "passed_at": "2026-11-10T23:53:50",
+        "why": "01M6TYVJT0Z1CBGNK8VTNK8ZJH 2026-11-10T23:36:41 plan_gate_decided"
+       },
+       {
+        "task": "01M6TYVJT0Z1CBGNK8VTNK8ZJH",
+        "ts": "2026-11-10T23:34:35",
+        "findings": [
+         "removal_missing",
+         "duplicate_implementation",
+         "symptom_fix_outside_owner"
+        ],
+        "paths": [
+         "crates/task-core/src/browser_control_ops.rs",
+         "crates/task-worker/src/browser_cdp_sink.rs",
+         "crates/task-worker/src/browser_runtime.rs"
+        ],
+        "passed_at": "2026-11-10T23:53:50",
+        "why": "01M6TYVJT0Z1CBGNK8VTNK8ZJH 2026-11-10T23:36:41 plan_gate_decided"
+       },
+       {
+        "task": "01M6TYVJT4S29ZMP6P0D4831JG",
+        "ts": "2026-11-11T07:40:33",
+        "findings": [
+         "symptom_fix_outside_owner",
+         "duplicate_implementation",
+         "symptom_fix_outside_owner"
+        ],
+        "paths": [
+         "crates/task-dispatch/src/dispatch_admission.rs",
+         "crates/task-dispatch/src/dispatcher.rs",
+         "crates/task-dispatch/src/dispatcher/ownerless_runs.rs"
+        ],
+        "passed_at": "2026-11-11T08:10:08",
+        "why": "01M6TYVJT4S29ZMP6P0D4831JG 2026-11-11T07:58:00 decision_answered"
+       },
+       {
+        "task": "01M6TYVJT4S29ZMP6P0D4831JG",
+        "ts": "2026-11-11T07:52:13",
+        "findings": [
+         "removal_missing",
+         "duplicate_implementation",
+         "local_hook_in_shared_interface"
+        ],
+        "paths": [
+         "crates/task-dispatch/src/dispatcher/quota_book.rs",
+         "crates/task-dispatch/src/execution_coordination.rs",
+         "crates/task-dispatch/src/review_decision.rs"
+        ],
+        "passed_at": "2026-11-11T08:10:08",
+        "why": "01M6TYVJT4S29ZMP6P0D4831JG 2026-11-11T07:58:00 decision_answered"
+       }
+      ],
+      "passed_after_replan": [
+       {
+        "task": "01M6YJF7HJ9J0EQHRM5SN5TWV4",
+        "ts": "2026-11-09T01:46:35",
+        "findings": [
+         "duplicate_implementation",
+         "duplicate_implementation",
+         "dual_source_of_truth"
+        ],
+        "paths": [
+         "crates/celeris/src/daemon/repo_health_path.rs",
+         "crates/task-api/src/handlers/task_io.rs",
+         "crates/task-core/src/model/events.rs"
+        ],
+        "passed_at": "2026-11-09T01:54:57",
+        "why": null
+       },
+       {
+        "task": "01M6ZDF99MKHFN57PN0H7G6Z9Z",
+        "ts": "2026-11-09T07:29:52",
+        "findings": [
+         "removal_missing",
+         "symptom_fix_outside_owner",
+         "removal_missing"
+        ],
+        "paths": [
+         "crates/task-core/src/health_inventory.rs",
+         "crates/task-core/src/migration_registry.rs",
+         "crates/task-ops/src/cron_jobs.rs"
+        ],
+        "passed_at": "2026-11-09T07:33:52",
+        "why": null
+       },
+       {
+        "task": "01M70C8NHEANARRKZD9RGKZ87D",
+        "ts": "2026-11-09T14:55:24",
+        "findings": [
+         "removal_missing",
+         "duplicate_implementation"
+        ],
+        "paths": [
+         "crates/task-dispatch/src/dispatcher/review_verdict.rs",
+         "crates/task-dispatch/src/health_review/limits.rs"
+        ],
+        "passed_at": "2026-11-09T14:59:07",
+        "why": null
+       },
+       {
+        "task": "01M70C8NHEANARRKZD9RGKZ87D",
+        "ts": "2026-11-09T21:22:01",
+        "findings": [
+         "removal_missing",
+         "duplicate_implementation",
+         "removal_missing"
+        ],
+        "paths": [
+         "agent-docs/adr/2026-11-08-health-enforcement-loop.md",
+         "crates/task-dispatch/src/health_review/check_item.rs",
+         "docs/api/v1/api.md"
+        ],
+        "passed_at": "2026-11-09T21:26:50",
+        "why": null
+       },
+       {
+        "task": "01M6TYVJSWEY3ZE50S02ETYDNM",
+        "ts": "2026-11-10T01:52:45",
+        "findings": [
+         "symptom_fix_outside_owner",
+         "test_change_unjustified",
+         "test_change_unjustified"
+        ],
+        "paths": [
+         "crates/task-core/src/transition.rs",
+         "crates/task-dispatch/src/dispatcher/tests/health_limits_budget.rs",
+         "crates/task-ops/src/"
+        ],
+        "passed_at": "2026-11-10T02:02:28",
+        "why": null
+       }
+      ]
+     },
+     "health": {
+      "changed_then_passed": [
+       {
+        "task": "01M6TYVJSXBZMSBC0YGAT2TTX0",
+        "site": "wu:py-detect",
+        "ts": "2026-11-10T17:54:29",
+        "blocking": [
+         "doc.links:66b41a3fa560b0b7"
+        ],
+        "paths": [
+         "scripts/tests/repo_health_fixtures.py"
+        ],
+        "passed_at": "2026-11-10T18:04:13",
+        "why": "scripts/tests/repo_health_fixtures.py"
+       },
+       {
+        "task": "01M6TYVJT0Z1CBGNK8VTNK8ZJH",
+        "site": "integration:integrate-settings",
+        "ts": "2026-11-11T02:49:12",
+        "blocking": [
+         "size.responsibility-growth:5ac03d663ce8b3be"
+        ],
+        "paths": [
+         "crates/task-dispatch/src/dispatcher.rs",
+         "crates/task-dispatch/src/dispatcher/cos_chat/digest.rs",
+         "crates/task-dispatch/src/dispatcher/cos_chat/fallback.rs"
+        ],
+        "passed_at": "2026-11-11T03:51:04",
+        "why": "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs, crates/task-dispatch/src/dispatcher/eval_trials.rs"
+       },
+       {
+        "task": "01M6TYVJT2HG9NY5FW9FMCZS9A",
+        "site": "wu:mcp-port",
+        "ts": "2026-11-10T16:23:00",
+        "blocking": [
+         "size.responsibility-growth:c62541b5a9f36c19"
+        ],
+        "paths": [
+         "crates/task-core/src/store/authority.rs",
+         "crates/task-core/src/store/completion_outcomes.rs",
+         "crates/task-core/src/store/credential_wait.rs"
+        ],
+        "passed_at": "2026-11-10T18:04:05",
+        "why": "crates/task-core/src/store/events.rs, crates/task-core/src/store/mod.rs, crates/task-core/src/store/org.rs"
+       },
+       {
+        "task": "01M6TYVJT4S29ZMP6P0D4831JG",
+        "site": "wu:fix-integ",
+        "ts": "2026-11-14T14:48:35",
+        "blocking": [
+         "size.responsibility-growth:186dfa1dd9e7f272",
+         "size.responsibility-growth:49dda14ab6e05ab2",
+         "size.responsibility-growth:5ac03d663ce8b3be"
+        ],
+        "paths": [
+         "crates/task-dispatch/src/dispatcher.rs",
+         "crates/task-dispatch/src/dispatcher/child_tasks.rs",
+         "crates/task-dispatch/src/dispatcher/cluster.rs"
+        ],
+        "passed_at": "2026-11-14T15:36:10",
+        "why": "crates/task-dispatch/src/dispatcher/phase_integration.rs, crates/task-dispatch/src/dispatcher/tree_units.rs, crates/task-dispatch/src/dispatcher/work_units.rs"
+       },
+       {
+        "task": "01M6TYVJT4S29ZMP6P0D4831JG",
+        "site": "wu:fix-promote",
+        "ts": "2026-11-14T20:16:51",
+        "blocking": [
+         "size.responsibility-growth:186dfa1dd9e7f272",
+         "source-size:bbf931d224b0274c"
+        ],
+        "paths": [
+         "crates/task-dispatch/src/dispatcher/work_units.rs",
+         "scripts/dev/check-source-size.py"
+        ],
+        "passed_at": "2026-11-14T20:46:34",
+        "why": "crates/task-dispatch/src/dispatcher/work_units.rs"
+       }
+      ],
+      "error_not_finding": [
+       {
+        "task": "01M6TYVJSZDSCB697193J01FYW",
+        "site": "wu:run-common",
+        "ts": "2026-11-10T12:18:14",
+        "reason": "unsupported:arch-map.missing_row(checker_missing: /tmp/celeris-review-policy-01M72P79B46WZKSMPZ5C62BNNK/tree/scripts/dev"
+       },
+       {
+        "task": "01M6TYVJT2HG9NY5FW9FMCZS9A",
+        "site": "wu:mcp-port",
+        "ts": "2026-11-10T11:40:14",
+        "reason": "unsupported:arch-map.missing_row(checker_missing: /tmp/celeris-review-policy-01M72M1SJPA1NTK8346FDCK4YH/tree/scripts/dev"
+       },
+       {
+        "task": "01M6TYVJT2HG9NY5FW9FMCZS9A",
+        "site": "wu:table-writers",
+        "ts": "2026-11-10T11:40:24",
+        "reason": "unsupported:arch-map.missing_row(checker_missing: /tmp/celeris-review-policy-01M72M1VCJ0JCDKXMGDFPE3WMR/tree/scripts/dev"
+       },
+       {
+        "task": "01M72DBBE7AFCNXYWSB5M0YZW9",
+        "site": "review:01M2XPE3NZ1FZE061FKDY4A9PK",
+        "ts": "2026-11-10T11:12:15",
+        "reason": "unsupported:arch-map.missing_row(checker_missing: /tmp/celeris-review-policy-01M72JF2CZD1GTZ2R16SDEE78V/tree/scripts/dev"
+       }
+      ],
+      "human_decision": [
+       {
+        "task": "01M6TYVJT0Z1CBGNK8VTNK8ZJH",
+        "site": "integration:integrate-settings",
+        "ts": "2026-11-10T23:13:01",
+        "blocking": [
+         "size.responsibility-growth:5ac03d663ce8b3be"
+        ],
+        "paths": [
+         "crates/task-dispatch/src/dispatcher.rs",
+         "crates/task-dispatch/src/dispatcher/cos_chat/digest.rs",
+         "crates/task-dispatch/src/dispatcher/cos_chat/fallback.rs"
+        ],
+        "passed_at": "2026-11-11T03:51:04",
+        "why": "01M6TYVJT0Z1CBGNK8VTNK8ZJH 2026-11-10T23:36:41 plan_gate_decided"
+       },
+       {
+        "task": "01M6TYVJT0Z1CBGNK8VTNK8ZJH",
+        "site": "integration:integrate-settings",
+        "ts": "2026-11-11T01:38:48",
+        "blocking": [
+         "size.responsibility-growth:5ac03d663ce8b3be"
+        ],
+        "paths": [
+         "crates/task-dispatch/src/dispatcher.rs",
+         "crates/task-dispatch/src/dispatcher/cos_chat/digest.rs",
+         "crates/task-dispatch/src/dispatcher/cos_chat/fallback.rs"
+        ],
+        "passed_at": "2026-11-11T03:51:04",
+        "why": "01M6TYVJT0Z1CBGNK8VTNK8ZJH 2026-11-11T02:16:28 transitioned:answer"
+       },
+       {
+        "task": "01M6TYVJT0Z1CBGNK8VTNK8ZJH",
+        "site": "integration:integrate-settings",
+        "ts": "2026-11-11T02:13:05",
+        "blocking": [
+         "size.responsibility-growth:5ac03d663ce8b3be"
+        ],
+        "paths": [
+         "crates/task-dispatch/src/dispatcher.rs",
+         "crates/task-dispatch/src/dispatcher/cos_chat/digest.rs",
+         "crates/task-dispatch/src/dispatcher/cos_chat/fallback.rs"
+        ],
+        "passed_at": "2026-11-11T03:51:04",
+        "why": "01M6TYVJT0Z1CBGNK8VTNK8ZJH 2026-11-11T02:16:28 transitioned:answer"
+       },
+       {
+        "task": "01M6TYVJT53598CPKMGSQGA7XM",
+        "site": "wu:bundle-api-a",
+        "ts": "2026-11-10T20:14:11",
+        "blocking": [
+         "arch-map.wrong_path:37c92fb117189b77",
+         "arch-map.wrong_path:99d784dc49a220cd",
+         "arch-map.wrong_path:e9621bd2f1df6b0f"
+        ],
+        "paths": [
+         "docs/architecture-map.md"
+        ],
+        "passed_at": "2026-11-10T23:12:11",
+        "why": "01M6TYVJT53598CPKMGSQGA7XM 2026-11-10T22:02:19 plan_gate_decided"
+       },
+       {
+        "task": "01M6TYVJT53598CPKMGSQGA7XM",
+        "site": "wu:bundle-api-a",
+        "ts": "2026-11-10T20:22:58",
+        "blocking": [
+         "arch-map.wrong_path:37c92fb117189b77",
+         "arch-map.wrong_path:99d784dc49a220cd",
+         "arch-map.wrong_path:e9621bd2f1df6b0f"
+        ],
+        "paths": [
+         "docs/architecture-map.md"
+        ],
+        "passed_at": "2026-11-10T23:12:11",
+        "why": "01M6TYVJT53598CPKMGSQGA7XM 2026-11-10T22:02:19 plan_gate_decided"
+       }
+      ],
+      "no_paths": [
+       {
+        "task": "01M6TYVJT53598CPKMGSQGA7XM",
+        "site": "wu:adjust-worker",
+        "ts": "2026-11-11T08:54:56",
+        "blocking": [
+         "doc.links:66b41a3fa560b0b7"
+        ],
+        "paths": [
+         "scripts/tests/repo_health_fixtures.py"
+        ],
+        "passed_at": "2026-11-11T09:34:36",
+        "why": null
+       }
+      ],
+      "not_passed": [
+       {
+        "task": "01M6TYVJT53598CPKMGSQGA7XM",
+        "site": "wu:resync-g4",
+        "ts": "2026-11-11T12:29:50",
+        "blocking": [
+         "policy.changed:f765968d4fb09eb9"
+        ],
+        "paths": [
+         "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json",
+         "scripts/dev/repo-health/profiles/celeris.toml"
+        ],
+        "passed_at": null,
+        "why": null
+       },
+       {
+        "task": "01M6TYVJT53598CPKMGSQGA7XM",
+        "site": "wu:resync-g4",
+        "ts": "2026-11-11T13:42:50",
+        "blocking": [
+         "policy.changed:f765968d4fb09eb9"
+        ],
+        "paths": [
+         "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json",
+         "scripts/dev/repo-health/profiles/celeris.toml"
+        ],
+        "passed_at": null,
+        "why": null
+       }
+      ],
+      "policy_changed": [
+       {
+        "task": "01M6TYVJSXBZMSBC0YGAT2TTX0",
+        "site": "integration:integrate-design",
+        "ts": "2026-11-10T14:11:33",
+        "blocking": [
+         "policy.changed:acced2a7f412b7c3"
+        ],
+        "paths": [],
+        "passed_at": "2026-11-10T17:34:05",
+        "why": null
+       },
+       {
+        "task": "01M6TYVJSXBZMSBC0YGAT2TTX0",
+        "site": "integration:integrate-design",
+        "ts": "2026-11-10T14:19:32",
+        "blocking": [
+         "policy.changed:acced2a7f412b7c3"
+        ],
+        "paths": [],
+        "passed_at": "2026-11-10T17:34:05",
+        "why": null
+       },
+       {
+        "task": "01M6TYVJT4S29ZMP6P0D4831JG",
+        "site": "wu:sync-policy",
+        "ts": "2026-11-13T01:35:25",
+        "blocking": [
+         "policy.changed:ffe502d50e6810f5",
+         "progress.index:92db900991dc031f",
+         "size.responsibility-growth:44b9ca4976609552"
+        ],
+        "paths": [
+         "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json",
+         "agent-docs/progress/2026-11-10-health-v2-r5.md",
+         "agent-docs/progress/2026-11-10-health-v2-r5/merge-fix.md"
+        ],
+        "passed_at": "2026-11-13T09:03:29",
+        "why": null
+       },
+       {
+        "task": "01M6TYVJT4S29ZMP6P0D4831JG",
+        "site": "wu:sync-policy",
+        "ts": "2026-11-13T02:00:52",
+        "blocking": [
+         "policy.changed:ffe502d50e6810f5",
+         "progress.index:92db900991dc031f",
+         "size.responsibility-growth:44b9ca4976609552"
+        ],
+        "paths": [
+         "agent-docs/progress/2026-11-07-health-v2-b0/capability-map.json",
+         "agent-docs/progress/2026-11-10-health-v2-r5.md",
+         "agent-docs/progress/2026-11-10-health-v2-r5/merge-fix.md"
+        ],
+        "passed_at": "2026-11-13T09:03:29",
+        "why": null
+       },
+       {
+        "task": "01M76BYGKY7R8SBZ22AZGJ72SP",
+        "site": "review:01M2XPE3NZ1FZE061FKDY4A9PK",
+        "ts": "2026-11-11T22:53:35",
+        "blocking": [
+         "policy.changed:53c12c18820cc14b"
+        ],
+        "paths": [
+         "scripts/dev/repo-health/repo_health.py",
+         "scripts/dev/repo-health/rules/existing_checks.py"
+        ],
+        "passed_at": "2026-11-12T01:49:57",
+        "why": null
+       }
+      ]
+     },
+     "review": {
+      "changed_then_passed": [
+       {
+        "task": "01M6TYVJSTYGRPHERB93MM7J59",
+        "ts": "2026-11-08T17:16:40",
+        "review_run": "01M6Y1RWMFQHQCWV2Z69BGMT9M",
+        "paths": [
+         "crates/task-core/src/tree/limits.rs",
+         "docs/architecture-map.md"
+        ],
+        "criteria_failed": 1,
+        "passed_at": "2026-11-08T18:46:16",
+        "why": "crates/task-core/src/tree/limits.rs, docs/architecture-map.md"
+       },
+       {
+        "task": "01M70C8NHEANARRKZD9RGKZ87D",
+        "ts": "2026-11-09T21:11:45",
+        "review_run": "01M711X9HE5NGBWWS8AEYYRKAX",
+        "paths": [
+         "crates/task-dispatch/src/health_review/limits.rs"
+        ],
+        "criteria_failed": 1,
+        "passed_at": "2026-11-09T23:37:40",
+        "why": "crates/task-dispatch/src/health_review/limits.rs"
+       },
+       {
+        "task": "01M6TYVJSWEY3ZE50S02ETYDNM",
+        "ts": "2026-11-10T01:39:21",
+        "review_run": "01M71G34Y5DVAMXYK493P24P4V",
+        "paths": [
+         "agent-docs/progress/2026-11-07-health-v2-g3.md",
+         "crates/task-dispatch/src/dispatcher/tests/health_limits_budget.rs"
+        ],
+        "criteria_failed": 1,
+        "passed_at": "2026-11-10T09:27:43",
+        "why": "agent-docs/progress/2026-11-07-health-v2-g3.md, crates/task-dispatch/src/dispatcher/tests/health_limits_budget.rs"
+       },
+       {
+        "task": "01M757GNJA20FHCF54DED64RBT",
+        "ts": "2026-11-11T15:17:11",
+        "review_run": "01M75GS2FRNWAD7NYJ33DBVE4M",
+        "paths": [
+         "agent-docs/adr/2026-11-11-scratch-lock-tick-stall.md"
+        ],
+        "criteria_failed": 3,
+        "passed_at": "2026-11-11T18:34:09",
+        "why": "agent-docs/adr/2026-11-11-scratch-lock-tick-stall.md"
+       },
+       {
+        "task": "01M75722RHE7ZQ6KS09FMSXD3V",
+        "ts": "2026-11-11T17:36:47",
+        "review_run": "01M75TKZTX47WRYCP0ST62SMQS",
+        "paths": [
+         "crates/celeris/src/config/cos.rs",
+         "crates/celeris/src/releases.rs",
+         "docs/ops/selfdeploy.md"
+        ],
+        "criteria_failed": 1,
+        "passed_at": "2026-11-11T18:57:53",
+        "why": "docs/ops/selfdeploy.md"
+       }
+      ],
+      "exception": [
+       {
+        "task": "01M6TYVJSXBZMSBC0YGAT2TTX0",
+        "ts": "2026-11-11T07:08:36",
+        "review_run": "01M74PHGP7KH97FTKMT1KT1V33",
+        "paths": [],
+        "criteria_failed": 0,
+        "passed_at": "2026-11-11T22:29:09",
+        "why": "exception files: scripts/dev/repo-health/profiles/celeris.toml"
+       },
+       {
+        "task": "01M6TYVJSXBZMSBC0YGAT2TTX0",
+        "ts": "2026-11-11T08:50:54",
+        "review_run": "01M74VFJ7JXYGYWAXA7QX4MKHS",
+        "paths": [
+         "crates/task-dispatch/src/dispatcher/tests/health_generic.rs"
+        ],
+        "criteria_failed": 2,
+        "passed_at": "2026-11-11T22:29:09",
+        "why": "exception files: scripts/dev/repo-health/profiles/celeris.toml"
+       }
+      ],
+      "human_decision": [
+       {
+        "task": "01M6VCXJCXEPBQCR5PNR195JCH",
+        "ts": "2026-11-07T18:28:29",
+        "review_run": null,
+        "paths": [],
+        "criteria_failed": 0,
+        "passed_at": "2026-11-07T19:16:10",
+        "why": "01M6VCXJCXEPBQCR5PNR195JCH 2026-11-07T19:09:42 decision_answered"
+       },
+       {
+        "task": "01M6Y8EG6QN8S421XYJNVDCPTA",
+        "ts": "2026-11-08T21:29:35",
+        "review_run": "01M6YGSSGDPEWP6R3VMGSBP2A8",
+        "paths": [
+         "agent-docs/progress/2026-11-07-health-v2-g3/ci-entry.md",
+         "scripts/dev/repo-health/ci.sh",
+         "scripts/dev/tests/repo_health_gate.sh"
+        ],
+        "criteria_failed": 1,
+        "passed_at": "2026-11-08T21:52:21",
+        "why": "01M6Y8EG6QN8S421XYJNVDCPTA 2026-11-08T21:42:09 decision_answered"
+       },
+       {
+        "task": "01M6TYVJT2HG9NY5FW9FMCZS9A",
+        "ts": "2026-11-10T19:57:25",
+        "review_run": "01M73EV9Z2QNESPVP1E6M56SA7",
+        "paths": [
+         "crates/celeris-mcp/src",
+         "tools/org.rs",
+         "tools/projects.rs"
+        ],
+        "criteria_failed": 2,
+        "passed_at": "2026-11-11T04:15:29",
+        "why": "01M6TYVJT2HG9NY5FW9FMCZS9A 2026-11-10T20:11:21 decision_answered"
+       },
+       {
+        "task": "01M73GMDSMTSTTR8ET7GAJ6276",
+        "ts": "2026-11-10T20:37:28",
+        "review_run": "01M73JRMZZJ651SADQKFP2YZY0",
+        "paths": [
+         ".celeris/remote-exec"
+        ],
+        "criteria_failed": 4,
+        "passed_at": "2026-11-12T09:18:26",
+        "why": "01M73GMDSMTSTTR8ET7GAJ6276 2026-11-11T09:44:05 transitioned:answer"
+       },
+       {
+        "task": "01M752V5864CMYZZ2QHYAJ4X0E",
+        "ts": "2026-11-11T13:02:22",
+        "review_run": "01M759APCR7FAAE5755K2Q4EGP",
+        "paths": [],
+        "criteria_failed": 0,
+        "passed_at": "2026-11-11T20:40:58",
+        "why": "01M752V5864CMYZZ2QHYAJ4X0E 2026-11-11T19:10:12 transitioned:answer"
+       }
+      ],
+      "no_paths": [
+       {
+        "task": "01M6TYVJSTYGRPHERB93MM7J59",
+        "ts": "2026-11-08T10:35:09",
+        "review_run": "01M6XA5X9W8V2DCAXMQ0631PR9",
+        "paths": [],
+        "criteria_failed": 3,
+        "passed_at": "2026-11-08T18:46:16",
+        "why": null
+       },
+       {
+        "task": "01M71K2HHSJ20836QAMXJ0YMEW",
+        "ts": "2026-11-10T06:36:54",
+        "review_run": null,
+        "paths": [],
+        "criteria_failed": 0,
+        "passed_at": "2026-11-10T08:00:01",
+        "why": null
+       },
+       {
+        "task": "01M72DBBE7AFCNXYWSB5M0YZW9",
+        "ts": "2026-11-10T13:08:58",
+        "review_run": null,
+        "paths": [],
+        "criteria_failed": 0,
+        "passed_at": "2026-11-10T14:08:11",
+        "why": null
+       },
+       {
+        "task": "01M6TYVJSZDSCB697193J01FYW",
+        "ts": "2026-11-10T15:01:46",
+        "review_run": "01M72XZVE02HYBYF1QREM24SBA",
+        "paths": [],
+        "criteria_failed": 2,
+        "passed_at": "2026-11-10T16:43:58",
+        "why": null
+       },
+       {
+        "task": "01M75722QN630BBASEQ759KG4T",
+        "ts": "2026-11-11T13:09:01",
+        "review_run": "01M759V709989AKXNSV099M88B",
+        "paths": [],
+        "criteria_failed": 0,
+        "passed_at": "2026-11-12T04:40:03",
+        "why": null
+       }
+      ],
+      "passed_without_path_change": [
+       {
+        "task": "01M6VTFG9K5HEE817EW05JASMZ",
+        "ts": "2026-11-08T06:33:26",
+        "review_run": "01M6WWJ7J37JJKBFZ5RVFBQTKJ",
+        "paths": [
+         "scripts/dev/repo-health"
+        ],
+        "criteria_failed": 1,
+        "passed_at": "2026-11-08T09:19:11",
+        "why": null
+       },
+       {
+        "task": "01M74TM8Y43C5EMYF7FP525DZ5",
+        "ts": "2026-11-11T11:11:21",
+        "review_run": "01M752S16A4RJYBZHSZ1V5WCK7",
+        "paths": [
+         "crates/task-core/src/delegate.rs"
+        ],
+        "criteria_failed": 2,
+        "passed_at": "2026-11-12T06:40:57",
+        "why": null
+       }
+      ]
+     }
+    }
+   }
+  },
+  "d_dev_loop": {
+   "parent": "01M6TYV9DTZESAJJMXRQVGZ56V",
+   "children": [
+    {
+     "id": "01M6TYVJSPEYA2P8B7G56HSQ73",
+     "title": "[健全性v2 B0] 現状・負債・不変条件の基準計測と統合設計（最新 main・既存 task・中止理由の確認）",
+     "subtree_tasks": 3,
+     "status_at_end": "done",
+     "plan_versions": 5,
+     "work_units": 23,
+     "repair_work_units": 0,
+     "repair_scheduled": 0,
+     "replan_transitions": 1,
+     "auto_replan_requested": 1,
+     "review_fail": 0,
+     "design_review_fail": 0,
+     "runs": {
+      "planner": 5,
+      "worker": 19,
+      "reviewer": 2
+     },
+     "claude_usd": 34.19,
+     "gpt_runs": 0,
+     "started_at": "2026-11-07T12:13:54",
+     "done_at": "2026-11-07T18:35:42",
+     "hours_to_done": 6.36,
+     "delivery": "merged"
+    },
+    {
+     "id": "01M6TYVJSRM3SFQ3VHWQE4MZ9M",
+     "title": "[健全性v2 G1] 汎用 repo health 契約と決定的な差分検査",
+     "subtree_tasks": 1,
+     "status_at_end": "done",
+     "plan_versions": 1,
+     "work_units": 11,
+     "repair_work_units": 1,
+     "repair_scheduled": 1,
+     "replan_transitions": 0,
+     "auto_replan_requested": 0,
+     "review_fail": 0,
+     "design_review_fail": 0,
+     "runs": {
+      "planner": 1,
+      "worker": 8,
+      "reviewer": 1
+     },
+     "claude_usd": 24.25,
+     "gpt_runs": 0,
+     "started_at": "2026-11-07T14:12:02",
+     "done_at": "2026-11-07T17:16:58",
+     "hours_to_done": 3.08,
+     "delivery": "merged"
+    },
+    {
+     "id": "01M6TYVJSTYGRPHERB93MM7J59",
+     "title": "[健全性v2 G2] 汎用アーキテクチャレビューとエージェント規約を既存 planner/reviewer に組み込む",
+     "subtree_tasks": 14,
+     "status_at_end": "done",
+     "plan_versions": 13,
+     "work_units": 70,
+     "repair_work_units": 3,
+     "repair_scheduled": 3,
+     "replan_transitions": 1,
+     "auto_replan_requested": 1,
+     "review_fail": 4,
+     "design_review_fail": 0,
+     "runs": {
+      "planner": 18,
+      "worker": 54,
+      "reviewer": 6
+     },
+     "claude_usd": 175.99,
+     "gpt_runs": 0,
+     "started_at": "2026-11-07T15:55:04",
+     "done_at": "2026-11-08T18:46:16",
+     "hours_to_done": 26.85,
+     "delivery": "merged"
+    },
+    {
+     "id": "01M6TYVJSWEY3ZE50S02ETYDNM",
+     "title": "[健全性v2 G3] 通常の開発・統合ループへの強制、証跡の結び付け・修復・費用上限",
+     "subtree_tasks": 7,
+     "status_at_end": "done",
+     "plan_versions": 17,
+     "work_units": 88,
+     "repair_work_units": 4,
+     "repair_scheduled": 4,
+     "replan_transitions": 6,
+     "auto_replan_requested": 7,
+     "review_fail": 4,
+     "design_review_fail": 7,
+     "runs": {
+      "planner": 38,
+      "worker": 73,
+      "reviewer": 27
+     },
+     "claude_usd": 301.48,
+     "gpt_runs": 2,
+     "started_at": "2026-11-08T18:46:39",
+     "done_at": "2026-11-10T09:27:43",
+     "hours_to_done": 38.68,
+     "delivery": "merged"
+    },
+    {
+     "id": "01M6TYVJSXBZMSBC0YGAT2TTX0",
+     "title": "[健全性v2 G4] 非 Celeris プロジェクトで汎用性とバイパス耐性を実証（isolated Git fixture）",
+     "subtree_tasks": 5,
+     "status_at_end": "done",
+     "plan_versions": 14,
+     "work_units": 46,
+     "repair_work_units": 4,
+     "repair_scheduled": 4,
+     "replan_transitions": 8,
+     "auto_replan_requested": 9,
+     "review_fail": 3,
+     "design_review_fail": 0,
+     "runs": {
+      "planner": 16,
+      "worker": 41,
+      "reviewer": 3
+     },
+     "claude_usd": 115.33,
+     "gpt_runs": 9,
+     "started_at": "2026-11-10T09:28:11",
+     "done_at": "2026-11-11T22:29:09",
+     "hours_to_done": 37.02,
+     "delivery": "merged"
+    },
+    {
+     "id": "01M6TYVJSZDSCB697193J01FYW",
+     "title": "[健全性v2 R1] Celeris adapter の結果契約（ResultFile/lenient_evidence）と実行共通処理の整理",
+     "subtree_tasks": 1,
+     "status_at_end": "done",
+     "plan_versions": 3,
+     "work_units": 10,
+     "repair_work_units": 0,
+     "repair_scheduled": 0,
+     "replan_transitions": 1,
+     "auto_replan_requested": 1,
+     "review_fail": 1,
+     "design_review_fail": 0,
+     "runs": {
+      "planner": 4,
+      "worker": 8,
+      "reviewer": 2
+     },
+     "claude_usd": 32.07,
+     "gpt_runs": 0,
+     "started_at": "2026-11-10T09:28:11",
+     "done_at": "2026-11-10T16:43:58",
+     "hours_to_done": 7.26,
+     "delivery": "merged"
+    },
+    {
+     "id": "01M6TYVJT0Z1CBGNK8VTNK8ZJH",
+     "title": "[健全性v2 R2] EventSink/WorkerAdapter の能力分離（通知・観測と Browser の認可・制御・secret 操作）",
+     "subtree_tasks": 3,
+     "status_at_end": "done",
+     "plan_versions": 6,
+     "work_units": 20,
+     "repair_work_units": 2,
+     "repair_scheduled": 2,
+     "replan_transitions": 4,
+     "auto_replan_requested": 4,
+     "review_fail": 0,
+     "design_review_fail": 3,
+     "runs": {
+      "planner": 8,
+      "worker": 45,
+      "reviewer": 7
+     },
+     "claude_usd": 56.08,
+     "gpt_runs": 5,
+     "started_at": "2026-11-10T16:44:34",
+     "done_at": "2026-11-11T07:48:21",
+     "hours_to_done": 15.06,
+     "delivery": "merged"
+    },
+    {
+     "id": "01M6TYVJT2HG9NY5FW9FMCZS9A",
+     "title": "[健全性v2 R3] TaskStore の consumer 駆動分割と domain/storage 境界",
+     "subtree_tasks": 2,
+     "status_at_end": "done",
+     "plan_versions": 6,
+     "work_units": 19,
+     "repair_work_units": 1,
+     "repair_scheduled": 1,
+     "replan_transitions": 3,
+     "auto_replan_requested": 3,
+     "review_fail": 1,
+     "design_review_fail": 0,
+     "runs": {
+      "planner": 6,
+      "worker": 21,
+      "reviewer": 2
+     },
+     "claude_usd": 64.21,
+     "gpt_runs": 1,
+     "started_at": "2026-11-10T09:28:12",
+     "done_at": "2026-11-11T04:52:05",
+     "hours_to_done": 19.4,
+     "delivery": "merged"
+    },
+    {
+     "id": "01M6TYVJT4S29ZMP6P0D4831JG",
+     "title": "[健全性v2 R4] Dispatcher の状態所有と判断/副作用の分割",
+     "subtree_tasks": 8,
+     "status_at_end": "done",
+     "plan_versions": 22,
+     "work_units": 95,
+     "repair_work_units": 4,
+     "repair_scheduled": 4,
+     "replan_transitions": 10,
+     "auto_replan_requested": 9,
+     "review_fail": 4,
+     "design_review_fail": 5,
+     "runs": {
+      "planner": 26,
+      "worker": 109,
+      "reviewer": 23
+     },
+     "claude_usd": 310.44,
+     "gpt_runs": 8,
+     "started_at": "2026-11-11T07:21:09",
+     "done_at": "2026-11-15T08:43:45",
+     "hours_to_done": 97.38,
+     "delivery": "merged"
+    },
+    {
+     "id": "01M6TYVJT53598CPKMGSQGA7XM",
+     "title": "[健全性v2 R5] テストの意味的整理と build/link 負荷の低減",
+     "subtree_tasks": 4,
+     "status_at_end": "done",
+     "plan_versions": 14,
+     "work_units": 72,
+     "repair_work_units": 3,
+     "repair_scheduled": 3,
+     "replan_transitions": 8,
+     "auto_replan_requested": 12,
+     "review_fail": 2,
+     "design_review_fail": 0,
+     "runs": {
+      "planner": 19,
+      "worker": 75,
+      "reviewer": 4
+     },
+     "claude_usd": 167.09,
+     "gpt_runs": 23,
+     "started_at": "2026-11-10T16:44:36",
+     "done_at": "2026-11-12T16:54:15",
+     "hours_to_done": 48.16,
+     "delivery": "merged"
+    },
+    {
+     "id": "01M6TYVJT7EJ6WWHEF0EBH3JPS",
+     "title": "[健全性v2 R6] 旧経路・移行残骸・周辺機能の収束",
+     "subtree_tasks": 3,
+     "status_at_end": "done",
+     "plan_versions": 4,
+     "work_units": 21,
+     "repair_work_units": 0,
+     "repair_scheduled": 0,
+     "replan_transitions": 3,
+     "auto_replan_requested": 4,
+     "review_fail": 0,
+     "design_review_fail": 1,
+     "runs": {
+      "planner": 6,
+      "worker": 27,
+      "reviewer": 3
+     },
+     "claude_usd": 69.2,
+     "gpt_runs": 2,
+     "started_at": "2026-11-15T08:44:20",
+     "done_at": "2026-11-15T23:18:06",
+     "hours_to_done": 14.56,
+     "delivery": "merged"
+    },
+    {
+     "id": "01M6TYVJT97XH88TEEAVRD7JK6",
+     "title": "[健全性v2 V0] 統合評価・導入と完了判定（release 候補まで。本番昇格は人の承認）",
+     "subtree_tasks": 1,
+     "status_at_end": "running",
+     "plan_versions": 1,
+     "work_units": 10,
+     "repair_work_units": 0,
+     "repair_scheduled": 0,
+     "replan_transitions": 0,
+     "auto_replan_requested": 0,
+     "review_fail": 0,
+     "design_review_fail": 0,
+     "runs": {
+      "planner": 1,
+      "worker": 3,
+      "reviewer": 0
+     },
+     "claude_usd": 1.89,
+     "gpt_runs": 0,
+     "started_at": "2026-11-15T23:18:24",
+     "done_at": null,
+     "hours_to_done": null,
+     "delivery": null
+    }
+   ],
+   "totals": {
+    "plan_versions": 106,
+    "work_units": 485,
+    "repair_work_units": 22,
+    "repair_scheduled": 22,
+    "replan_transitions": 45,
+    "auto_replan_requested": 51,
+    "review_fail": 19,
+    "design_review_fail": 16,
+    "claude_usd": 1352.22,
+    "gpt_runs": 50
+   }
+  }
+ },
+ "unmeasured": [
+  "GPT 系（codex）の reviewer run の USD: runs.usage_json の cost_usd が 0 で記録される。tokens だけ数えた",
+  "final review の材料（HealthReviewInputBuilt）と RequiredChecksEvaluated の health の秒: event に所要時間の欄が無い",
+  "usage_json の無い reviewer run の費用",
+  "設計 review の拒否が『指摘の path を変えずに通った』か: 計画は commit でないので git で比べられない"
+ ]
+}

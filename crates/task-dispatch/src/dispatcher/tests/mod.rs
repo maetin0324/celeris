@@ -3116,6 +3116,7 @@ mod jev_synth_e2e;
 mod mlsys_mock_e2e;
 mod planning_and_gate;
 mod project_wake;
+mod research_deadline;
 mod review;
 mod review_route;
 mod route_failure_escalation;

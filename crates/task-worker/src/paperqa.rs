@@ -307,6 +307,11 @@ impl WorkerAdapter for PaperQaAdapter {
         Self::ID
     }
 
+    /// ADR 2026-11-15-research-adapter-deadline D2: 取得と索引・回答を毎回最初から行い、checkpoint から再開する手段が無い。予算切れは最初からのやり直し（retry）にする。
+    fn continues_from_checkpoint(&self) -> bool {
+        false
+    }
+
     async fn run(
         &self,
         req: RunRequest,

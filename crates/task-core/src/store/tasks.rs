@@ -278,48 +278,6 @@ impl SqliteStore {
         Ok(true)
     }
 
-    pub(super) fn release_lease_impl(
-        &self,
-        task_id: TaskId,
-        worker_run_id: &str,
-    ) -> Result<(), StoreError> {
-        let mut conn = self.lock()?;
-        // 読んだ json を書き戻すので、間に別接続（celerisctl / API）の書き込みが挟まらないよう IMMEDIATE で囲む（Phase 9 監査）。
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-
-        let current: Option<(Option<String>, String)> = tx
-            .query_row(
-                "SELECT lease_worker_run_id, json FROM tasks WHERE id = ?1",
-                params![task_id.to_string()],
-                |row| Ok((row.get(0)?, row.get::<_, String>(1)?)),
-            )
-            .optional()?;
-
-        let (lease_worker_run_id, json) = match current {
-            Some(v) => v,
-            None => return Ok(()),
-        };
-
-        if lease_worker_run_id.as_deref() != Some(worker_run_id) {
-            return Ok(());
-        }
-
-        let mut task = Self::row_to_task(json)?;
-        task.lease = None;
-        task.updated_at = OffsetDateTime::now_utc();
-        let new_json = serde_json::to_string(&task)?;
-        let updated_at_str = format_rfc3339(task.updated_at)?;
-
-        tx.execute(
-            "UPDATE tasks SET lease_worker_run_id = NULL, lease_expires_at = NULL, json = ?1, \
-             updated_at = ?2 WHERE id = ?3 AND lease_worker_run_id = ?4",
-            params![new_json, updated_at_str, task_id.to_string(), worker_run_id],
-        )?;
-        tx.commit()?;
-
-        Ok(())
-    }
-
     pub(super) fn halted_by_pause_impl(&self, task: &Task) -> Result<bool, StoreError> {
         if is_conversation(task) {
             return Ok(false);

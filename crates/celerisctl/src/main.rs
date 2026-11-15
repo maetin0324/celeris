@@ -32,7 +32,6 @@ use commands::knowledge::{self, KnowledgeCommand};
 use commands::mcp::{self, McpCommand};
 use commands::models::{self as models_cmd, ModelsCommand};
 use commands::org::{self as org_cmd, OrgCommand};
-use commands::plan::{self, PlanArgs};
 use commands::plan_lint;
 use commands::projects::{self, ProjectsCommand};
 use commands::query::{self, LogArgs, LsArgs, ShowArgs};
@@ -119,7 +118,6 @@ enum Command {
         command: commands::docs_maintenance::DocsMaintenanceCommand,
     },
     Add(AddArgs),
-    Plan(PlanArgs),
     /// ADR-0067 D5（Phase 111）: draft/ready の受け入れ条件を「human チェックには artifacts か知識ベースの
     /// 参照が要る」規則（D2）で点検する。読み取り専用（直しはしない）。
     PlanLint,
@@ -327,7 +325,6 @@ fn dispatch(store: &SqliteStore, db_path: &Path, command: Command) -> Result<Exi
         // `Routing` も同じ（設定ファイルだけを読む。`main` を見よ）。
         Command::Routing { command } => routing_cmd::run(Some(db_path), command),
         Command::Add(args) => add::run(store, args),
-        Command::Plan(args) => plan::run(store, args),
         Command::PlanLint => plan_lint::run(store),
         Command::Ls(args) => query::run_ls(store, args),
         Command::Show(args) => query::run_show(store, args),

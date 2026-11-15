@@ -34,7 +34,6 @@ pub mod mcp;
 pub mod models;
 /// ADR-0046 D7（Phase 59）: `celerisctl org migrate-v2`。
 pub mod org;
-pub mod plan;
 /// ADR-0067 D5（Phase 111）: `celerisctl plan-lint`。draft/ready の受け入れ条件を D2 の規則で点検する
 /// 読み取り専用コマンド。
 pub mod plan_lint;

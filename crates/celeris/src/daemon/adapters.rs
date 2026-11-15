@@ -307,6 +307,7 @@ pub fn secret_usage(config: &Config) -> HashMap<String, Vec<task_api::types::Sec
 mod harness_adapter_tests {
     use super::{build_harness_adapters, pi_config};
     use crate::Config;
+    use crate::test_support::write_executable;
 
     fn load(text: &str) -> Config {
         Config::parse_with_delivery(text).unwrap()
@@ -397,23 +398,6 @@ env = { OPENAI_BASE_URL = "http://proxy" }
     /// ADR 2026-10-11 付記 §2: the declaration must reach the process `PiAdapter` starts. A stub `pi`
     /// records its argv (one per line) and its environment; no real pi or network is used.
     /// The same executable writer as `model_discovery/tests.rs` (ETXTBSY-safe).
-    fn write_executable(path: &std::path::Path, script: &str) {
-        use std::io::Write;
-        let mut child = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(r#"cat > "$1" && chmod 755 "$1""#)
-            .arg("sh")
-            .arg(path)
-            .stdin(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
-        let mut stdin = child.stdin.take().unwrap();
-        stdin
-            .write_all(format!("#!/bin/sh\n{script}\n").as_bytes())
-            .unwrap();
-        drop(stdin);
-        assert!(child.wait().unwrap().success());
-    }
 
     #[tokio::test]
     async fn pi_harness_declaration_reaches_pi_process() {

@@ -7,6 +7,9 @@
 //! mock にしてよい「実行内部」だけを test が担う: dispatcher 相当の task の状態遷移（`apply_transition`）、
 //! worker の run イベントと成果物の書き込み、A arm の harness、grader の評価 command。
 //! 時計は注入（`Clock::sleep` が mock の実行内部を 1 歩進める）で、実時間を待たず、CPU 負荷も掛けない。
+#[path = "support/campaign_e2e.rs"]
+mod campaign_e2e;
+use campaign_e2e::{dechunk, ev_finished, ev_started};
 use std::{
     collections::BTreeMap,
     fs,
@@ -45,8 +48,8 @@ use routing_eval::manifest::Manifest as Input;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use task_core::{
-    DaemonMode, Event, InstanceRole, RunEnd, RunMetrics, RunRole, SharedRole, SqliteStore, Status,
-    TaskId, TaskStore, Trigger, Usage as RunUsage,
+    DaemonMode, Event, InstanceRole, RunRole, SharedRole, SqliteStore, Status, TaskId, TaskStore,
+    Trigger,
     decision_log::{
         CampaignVerdict, CandidateRef, DecisionLogOutcome, DecisionLogProposal, DecisionLogUsage,
         UsageRole,
@@ -174,19 +177,6 @@ struct Http {
 fn take(c: &AtomicU32) -> bool {
     c.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
         .is_ok()
-}
-
-fn dechunk(mut b: &[u8]) -> Vec<u8> {
-    let mut out = Vec::new();
-    while let Some(i) = b.windows(2).position(|w| w == b"\r\n") {
-        let n = usize::from_str_radix(String::from_utf8_lossy(&b[..i]).trim(), 16).unwrap_or(0);
-        if n == 0 || b.len() < i + 2 + n {
-            break;
-        }
-        out.extend_from_slice(&b[i + 2..i + 2 + n]);
-        b = &b[(i + 2 + n + 2).min(b.len())..];
-    }
-    out
 }
 
 impl Http {
@@ -377,44 +367,6 @@ struct Interior {
     children: Mutex<BTreeMap<TaskId, TaskId>>,
     stalled: Mutex<Vec<TaskId>>,
     runs: AtomicU32,
-}
-
-fn ev_started(run: &str, role: Option<RunRole>) -> Event {
-    Event::WorkerStarted {
-        run_id: run.into(),
-        adapter: "claude-code".into(),
-        model: "m-exec".into(),
-        provider: Some("src".into()),
-        account: None,
-        role,
-        task_role: None,
-    }
-}
-
-fn ev_finished(run: &str, role: Option<RunRole>, tokens: u64) -> Event {
-    Event::WorkerFinished {
-        run_id: run.into(),
-        outcome: "x".into(),
-        usage: Some(RunUsage {
-            input_tokens: Some(tokens),
-            output_tokens: Some(1),
-            cache_read_tokens: Some(0),
-            cache_creation_tokens: Some(0),
-            cost_usd: Some(0.5),
-            duplicate_reads: None,
-            session_resumed: None,
-            context_tokens: None,
-        }),
-        role,
-        metrics: Some(RunMetrics {
-            wall_ms: 100,
-            retries: 0,
-            peak_context_tokens: None,
-            turns: None,
-            knowledge: None,
-        }),
-        end: Some(RunEnd::Completed),
-    }
 }
 
 impl Interior {

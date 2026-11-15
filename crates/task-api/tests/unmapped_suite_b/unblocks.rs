@@ -34,11 +34,6 @@ fn task_id(resp: &Resp) -> TaskId {
         .expect("ulid")
 }
 
-fn count(env: &TestEnv, sql: &str) -> i64 {
-    let conn = rusqlite::Connection::open(&env.db_path).expect("db");
-    conn.query_row(sql, [], |r| r.get(0)).expect("count")
-}
-
 fn write_release(dir: &std::path::Path, sha12: &str, promoted_at: &str, fix: TaskId) {
     let release = dir.join(sha12);
     std::fs::create_dir_all(&release).expect("release dir");

@@ -8,21 +8,11 @@ use axum::http::Request;
 use common::*;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use task_core::chat::attachments::ChatAttachmentLimits;
 use task_core::chat::{ChatOpenThreadRequest, ChatPostMessageRequest, ChatSendMode};
 use time::{Duration, OffsetDateTime};
 
 const PDF: &[u8] = b"%PDF-1.4 fern03 manual";
 const REQUEST: &str = "この PDF を KB に入れておいて";
-
-fn env_with_attachments() -> TestEnv {
-    let mut env = admin_env();
-    env.state = env.state.clone().with_chat_attachments(
-        env.dir.path().to_path_buf(),
-        ChatAttachmentLimits::default(),
-    );
-    env
-}
 
 fn admin() -> String {
     format!("Bearer {TOKEN}")

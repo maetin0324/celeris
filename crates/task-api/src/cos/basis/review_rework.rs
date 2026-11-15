@@ -163,6 +163,7 @@ pub(super) fn validate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cos::basis::test_support::seq;
     use task_core::{RunRole, Status};
 
     fn started(run: &str, role: Option<RunRole>) -> Event {
@@ -184,14 +185,6 @@ mod tests {
             pass,
             reason: reason.into(),
         }
-    }
-
-    fn seq(events: Vec<Event>) -> Vec<(u64, Event)> {
-        events
-            .into_iter()
-            .enumerate()
-            .map(|(i, e)| (i as u64, e))
-            .collect()
     }
 
     #[test]

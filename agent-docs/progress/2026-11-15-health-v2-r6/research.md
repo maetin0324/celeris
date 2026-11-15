@@ -42,7 +42,10 @@ task 01M7FYEHKMY34MM5Z75W2ESSGN（R6 の子 task research）の進捗。計画�
 - `cargo clippy --workspace -- -D warnings`: exit 0。
 - `cargo fmt --all -- --check`: exit 0。
 - `bash scripts/dev/check-health.sh`: verdict=pass、new=0、worsened=0。
-- `bash scripts/dev/test-affected.sh`: 結果は下の「提出時の検査」に書く。
+- `bash scripts/dev/test-affected.sh`（対象 crate: celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker）: exit 0。nextest は 6157 件実行、6157 件合格（slow 17）、skip 22。script bundle の SKIP 0 件。repo-health は verdict=pass、worsened=0。
+- `git diff --name-only $CELERIS_WU_BASE | python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R6 agent-docs/progress/2026-11-07-health-v2-b0/slices.json`: `write-set R6: ok`、exit 0。`sh "$CELERIS_WU_SCOPE_PATHS"` の path は上の「変えた file」と同じ 14 件。
+- 凍結の path（campaign・routing-eval・jev-classifier・script-runtime・control-ts・migrations・events.rs・script_guard・credentiald）の差分: 0 件。3 adapter の差分は `continues_from_checkpoint` の上書き（各 5 行）だけで、監視 loop の差分は 0。
+- `grep -n -i -w "langmem\|paperqa\|local-deep-research\|local_deep_research\|LdrAdapter"` を `run_settlement` と `worker_finish.rs` に当てた結果: 0 件（exit 1）。
 
 ### 未解決
 

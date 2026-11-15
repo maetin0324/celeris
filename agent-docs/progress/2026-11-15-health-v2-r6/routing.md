@@ -37,7 +37,14 @@ owner 地図: docs/architecture-map.md の「LLM source / model の選択」「r
 6. 撤去: 上表の未使用定義、無効な設定例と説明、EvalFeatureBody。
 7. 不変条件: hash の byte 一致、wire・DB・events・履歴の維持。既存試験は固定の期待値を持たず同時の変化を検出できないため固定 hash 試験を追加。廃止欄の true / false を config が拒否する試験を追加する。
 
-設計: agent-docs/adr/2026-11-15-routing-record-cleanup.md。
+## 決定（ADR は置かない）
+
+この WU の範囲の check は agent-docs/adr/ を許さないため、前回の run が書いた agent-docs/adr/2026-11-15-routing-record-cleanup.md を消し、決定の本文をこの節に移した。決定の中身は task の Objective が指定したもので、新しい設計判断は含まない。
+
+- `route_record` を `{schema, template, brief, aux}` の直列化と `sha256:` + 小文字 hex の owner にし、通常の特徴量生成と dispatcher の評価記録が同じ関数を呼ぶ。欄順・null・空配列・日本語の UTF-8 を含めて既存の byte 列を変えない。schema と template の版は変えない。
+- 参照の無い `route_record::{RouteDecision, DecisionSubject}`、`model_router::cost::ScoreBreakdown`、`LlmSourceRef::to_key`、`task_ops::routing_audit::task_routing_audit` を消す。現行の `route_select::trace::RouteDecision`、直行経路の同名型、API、履歴の投影は残す。
+- 効かない `[execution].cheap_local_first` を消す。既存の `deny_unknown_fields` により、この欄を書いた config は読み込みエラーになる。互換分岐は置かない。本番 config の確認と削除は「本番への移行」節に人の手順として書く。
+- 検証: 共通化の前の両実装に固定入力の試験を置いて同じ期待値を確かめてから、共通関数の呼び出しに置き換える。従来の同一性の試験は両経路の hash が同時に変わる退行を検出できないため、固定の期待値を足す。config には true と false の両方の拒否の試験を置く。既存の config の試験はこの欄の再導入を検出できない。
 
 ## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
@@ -62,7 +69,8 @@ owner 地図: docs/architecture-map.md の「LLM source / model の選択」「r
 
 ## 未解決
 
-機能上の未解決事項は無し。必須検査の終了後に scratch の `.trash-*` 内の `own-eval` 3件で清掃の Permission denied が出た（検査自体は exit 0）。この WU では当該 scratch 領域を変更していない。環境準備で遭遇した3種類の失敗は上の手順で解消した。
+- 計画の check の誤り（plan_issue として申告した）: check の `! grep -n 'pub fn task_routing_audit' crates/task-ops/src/routing_audit.rs` は前方一致で、残すべき `pub fn task_routing_audit_with_requests`（crates/task-ops/src/routing_audit.rs:54）に当たる。この関数は `GET /tasks/{id}/routing` の handler（crates/task-api/src/routing.rs:40）が呼んでおり、Objective の削除対象ではない。名前を変えるには範囲外の crates/task-api を変える必要があり、別名の `pub use` で grep を避けるのは互換の別名になるので採らない。直し方: 該当部分を `! grep -n 'pub fn task_routing_audit(' crates/task-ops/src/routing_audit.rs` にする。この形では exit 1（一致無し）で、check 全体は exit 0 になることを確かめた。
+- 機能上の未解決事項は無し。必須検査の終了後に scratch の `.trash-*` 内の `own-eval` 3件で清掃の Permission denied が出た（検査自体は exit 0）。この WU では当該 scratch 領域を変更していない。環境準備で遭遇した3種類の失敗は上の手順で解消した。
 
 
 ## 提案

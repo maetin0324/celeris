@@ -24,17 +24,10 @@ use crate::subprocess::{LineOutcome, MAX_LINE_BYTES, read_line_limited, send_sig
 /// 既に `wait()` 済みなのでパイプはすぐ閉じるはずだが、何かで詰まっても中継全体を止めないための保険。
 pub(crate) const READER_JOIN_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// `check_account` / `AccountLoginResult` の結果種別（ADR-0024 D5/D6。serde は `snake_case`）。
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum AccountCheckResult {
-    Ok,
-    AuthFailed,
-    Throttled,
-    SpawnFailed,
-}
+/// `check_account` / `AccountLoginResult` の結果種別（ADR-0024 D5/D6）。型の正本は `task_core::accounts`
+/// で、ここは `AccountCheck.result` の型を task-worker の利用者（`codex_account`・`opencode_account`・
+/// `examples/codex_usage.rs`）へ同じ path で見せる再公開（写しの型ではない）。
+pub use task_core::AccountCheckResult;
 
 /// `check_account` の結果（ADR-0024 D6）。
 #[derive(Debug, Clone, PartialEq)]

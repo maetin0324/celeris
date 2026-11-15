@@ -13,6 +13,9 @@ use futures_util::stream::BoxStream;
 use crate::openai::{ChatCompletionChunk, ChatCompletionResponse};
 
 /// upstream が返した／通信に失敗した結果の分類。**メッセージに秘密の値を含めない**。
+///
+/// 各 source の `send` は bytes を送り始める前にしか `Err` を返さない（stream の開始後の失敗は stream の
+/// 要素の `Err`）。だから `send` の `Err` は他の候補へやり直してよい（ADR-0053 D1）。
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SourceError {
     /// 401（または OAuth の再認証が必要）。呼び出し側が cooldown（`AuthFailed`）にする。
@@ -37,15 +40,6 @@ pub enum SourceError {
     /// この source は無効（設定に無い／`enabled = false`）。
     #[error("source unavailable: {0}")]
     Unavailable(String),
-}
-
-impl SourceError {
-    /// stream 開始前に起きたエラーは、他の候補へやり直してよい（ADR-0053 D1）。
-    /// （このクレートの `send`/`send_stream` は、実際に bytes を送り始める前にしか `Err` を返さない
-    /// 契約なので、常に true。呼び出し側の理解を明文化するためのメソッド。）
-    pub fn retryable_before_any_bytes(&self) -> bool {
-        true
-    }
 }
 
 pub enum SendOutcome {

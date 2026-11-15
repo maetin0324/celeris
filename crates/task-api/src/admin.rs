@@ -3,9 +3,7 @@
 //! 稼働中の `Dispatcher` の差し替え・実際のワーカー起動が要るので、celeris（task-worker/task-dispatch に依存する側）
 //! へ `AdminRequest` で委譲する（ADR-0017 M2）。
 
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use task_core::AccountAdapter;
+use task_core::{AccountAdapter, AccountCheckResult};
 use tokio::sync::oneshot;
 
 /// task-api → celeris（`ApiSettings.admin_tx` 経由）。稼働中の `Dispatcher`・ワーカーの起動が要る操作だけを運ぶ。
@@ -153,16 +151,6 @@ pub enum AccountAdminError {
     InUse,
     /// ADR-0025 D5: codex は `login/code` を使わない（device フローで完結する）。
     LoginCodeNotSupported,
-}
-
-/// Account connectivity check result.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AccountCheckResult {
-    Ok,
-    AuthFailed,
-    Throttled,
-    SpawnFailed,
 }
 
 /// ADR-0032 D5: `POST /clusters/{id}/connect` の結果。

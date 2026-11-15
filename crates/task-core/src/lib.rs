@@ -142,7 +142,9 @@ pub mod wait;
 pub mod workspace_config;
 pub mod write_set;
 
-pub use accounts::{AccountAdapter, AccountPoolSetting, RateLimitObservation, RateWindow};
+pub use accounts::{
+    AccountAdapter, AccountCheckResult, AccountPoolSetting, RateLimitObservation, RateWindow,
+};
 pub use approval::{Approval, ApprovalId, ApprovalStore, Decision, StandingRule, StandingRuleId};
 pub use artifacts::{
     ARTIFACTS_DIR_NAME, SHARED_ARTIFACTS_PREFIX, artifacts_dir_for, artifacts_rel_for,

@@ -2,7 +2,7 @@
 title: "健全性v2 R4 cex-race: lease の renew の競合と、ownerless で閉じた旧 reviewer の遅れた合格の反例試験"
 tasks: [01M7DYMCZ4T7C5RNQ3JZQAF4G7]
 status: running
-updated: 2026-11-14
+updated: 2026-11-15
 ---
 # 健全性v2 R4 cex-race
 
@@ -189,7 +189,34 @@ fix-verdict（`review_verdict.rs` の `on_review_finished`）が行う。この 
   2 件目の `WorkerFinished` を書かず、`runs` 行を書き換えない。take した `ReviewEntry` を放す（review lock が解ける）。
   `defer_review` の持ち越しは置かない。tracing の warn に run id・review run id・行の status を出す。行が無いとき・
   `running` のときは従来どおり。
+- `fix-verdict: keep on_review_finished and the dispatcher module from growing (merge the two report records, flatten the lead-session usage, trim the guard)`
+  — 前の run の check（repo-health）の不合格を直した（下の「前の run の check の不合格」）。挙動は変えていない。
 - この節。試験 file（`crates/task-dispatch/src/dispatcher/tests/`）は変えていない。
+
+### 前の run の check の不合格（2026-11-15）
+
+前の run は done を返したが、celeris の check `celeris:repo-health/1` が `size.responsibility-growth` の 2 件で落ちた。
+`check-health.sh` の既定（base auto = main）では 2 件とも existing で exit 0 になり、前の run はこれで合格と読んでいた。
+基準を `$CELERIS_WU_BASE` にすると再現した:
+`python3 scripts/dev/repo-health/repo_health.py --repo scripts/dev --base "$CELERIS_WU_BASE" --head worktree --policy-version 1`
+→ exit 1、worsened 2。
+
+| finding | WU base | 前の run の HEAD | この run の HEAD |
+|---|---|---|---|
+| `on_review_finished` の関数の行（閾値 200、注釈と空行も数える） | 563 | 581（worsened） | 563（existing） |
+| module `crates/task-dispatch/src/dispatcher` の本体の行（閾値 8000、注釈・空行・use を除く） | 31588 | 31602（worsened） | 31585（existing） |
+
+直し方（`review_verdict.rs` の中だけ。照合の条件・捨てるときの動作・quota の扱いは変えていない）:
+
+- 部署の lead session の usage の記録: `org_list` の `match` の入れ子を `let` の連鎖にした（`org_list` の失敗の warn は
+  `inspect_err` で同じ文のまま残した）。
+- 報告の記録: `Status::Done`（`result`）と `Status::Failed`（bad_news）で 2 回書いていた `record_run_report` の呼び出しを、
+  報告の種類を `match` で選んでから 1 回呼ぶ形にした。宣言された `report.kind` は従来どおり `Done` のときだけ読む。
+- 足した照合: tracing の warn を 1 行にし、`drop(entry)` を消した（return で entry は落ちる。`take_review` が `reviewing`
+  の表から外した時点で review lock は解けている）。quota の event の追記は `if let` にした。注釈を 3 行にした。
+
+`#[path]` で file を dispatcher の module の外に移す方法（`review_limits` の形）は採らなかった。数え方の上で減るだけで、
+責務は減らないため。
 
 ### 作業前 brief
 
@@ -232,6 +259,8 @@ fix-verdict（`review_verdict.rs` の `on_review_finished`）が行う。この 
 |---|---|
 | 足した照合の条件に `&& false` を足す（照合を無効にする） | `cargo nextest run -p task-dispatch --no-fail-fast --no-tests=fail -E 'test(/cex_lease_restart::/)'` → exit 100。11 本中 10 本合格、`cex_restart_old_reviewer_pass_after_ownerless_close_is_ignored` が `cex_lease_restart.rs:615` の `A's late pass was used after A was closed as an ownerless run`（A の `runs` 行 `Some(Completed)`、A の `WorkerFinished` 2 件、`Transitioned{Reviewing → Done, review_pass}`）で落ちた。old-review の節の観測と同じ |
 | 戻した後（照合あり） | 同じ command で 11 本すべて合格 |
+| この run（2026-11-15）の形に直した後、同じく照合の条件に `&& false // GUARD-OFF` を足す | 同じ command で exit 100。11 本中 10 本合格、`cex_restart_old_reviewer_pass_after_ownerless_close_is_ignored` が `cex_lease_restart.rs:615` で落ちた |
+| `git checkout --` で戻した後 | 同じ command で exit 0、11 本すべて合格。`git status --short` は空、`grep -rn "GUARD-OFF" crates/` は 0 件 |
 
 ### 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
@@ -241,6 +270,9 @@ fix-verdict（`review_verdict.rs` の `on_review_finished`）が行う。この 
   celerisctl・llm-proxy・task-dispatch。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 - `git diff --stat $CELERIS_WU_BASE HEAD -- crates/task-dispatch/src/dispatcher/tests` → 差分なし（試験 file は変えていない）。
+- `python3 scripts/dev/repo-health/repo_health.py --repo scripts/dev --base "$CELERIS_WU_BASE" --head worktree --policy-version 1`
+  → exit 0、verdict pass、fail_grade 0、new 0・worsened 0。
+- `bash scripts/dev/check-health.sh`（base auto）→ exit 0。
 
 ### 未解決
 

@@ -112,7 +112,7 @@ fn took_over(store: &Arc<dyn TaskStore>, id: TaskId) -> bool {
     })
 }
 
-fn wu_transitions(
+pub(super) fn wu_transitions(
     store: &Arc<dyn TaskStore>,
     id: TaskId,
     key: &str,
@@ -128,7 +128,7 @@ fn wu_transitions(
         .collect()
 }
 
-fn wu_row(store: &Arc<dyn TaskStore>, id: TaskId, key: &str) -> task_core::WorkUnitRow {
+pub(super) fn wu_row(store: &Arc<dyn TaskStore>, id: TaskId, key: &str) -> task_core::WorkUnitRow {
     store
         .work_units_for(id)
         .unwrap()
@@ -741,7 +741,7 @@ async fn cex_restart_after_crash_between_wu_and_task_transitions_is_idempotent()
 }
 
 /// `key` の WU の `dependency_ready` の遷移の数。
-fn dependency_ready_count(store: &Arc<dyn TaskStore>, id: TaskId, key: &str) -> usize {
+pub(super) fn dependency_ready_count(store: &Arc<dyn TaskStore>, id: TaskId, key: &str) -> usize {
     wu_transitions(store, id, key)
         .into_iter()
         .filter(|(to, reason)| *to == WorkUnitStatus::Ready && reason == "dependency_ready")

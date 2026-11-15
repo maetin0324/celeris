@@ -7,7 +7,7 @@
 //! 戻り値（`TickReport`）だけを見る。待ちは出来事待ち（adapter の通知と store の event。保険は [`STATE_WAIT_GUARD`]
 //! の壁時計）で、tick の回数で待たない。run の終わりは fake adapter の gate（semaphore）で試験が決め、lease の失効は
 //! `renew_lease(.., 0)` で store の lease 時刻を今にして作る（実時計を進めない）。CPU 負荷は使わない。
-use super::orphan_takeover::{SELF_ID, instance};
+use super::orphan_takeover::{SELF_ID, instance, new_active};
 use super::*;
 use crate::orphan::{ORPHAN_TAKEOVER_REASON, OrphanTakeover};
 
@@ -289,4 +289,308 @@ async fn cex_done_and_lease_expiry_in_one_tick_close_the_run_once() {
         assert_eq!(report.reviewed, 0, "{report:?}");
         assert_closed_once(&store, "in a later tick");
     }
+}
+
+// ---- WU の done と Task の遷移の間に確定した人の操作（cancel・comment）と再起動 ----
+
+/// 旧い instance（`daemon_instances` に行を持たない = 再起動の後は持ち主が居ない）に、v1 の計画（a → b → c）の
+/// Task の WU a の run を Done で終えさせ、`test_hooks.halt_after_wu_transition` で WU a の done を書いた直後
+/// （依存 WU の `dependency_ready`・Task の遷移・`runs` の閉じ・`WorkerFinished` の前）で止める
+/// （[`super::cex_lease_restart`] の `cex_restart_after_wu_done_promotes_dependents_once` と同じ作り）。旧い
+/// dispatcher は返し、落とすのは呼び出し側（人の操作を確定した後）。戻り値は `(旧 dispatcher, run A)`。
+///
+/// v1 の計画を使う理由: v2（工程つき）の Task では、同じ tick の `reconcile_parallel_tasks` が「走っている WU も
+/// 統合も無い Running の v2 Task」を Ready に戻して次の WU を起こすので、この停止点が残らない（finish を止める
+/// hook は tick の残りを止めない。進捗の cex-tick.md の観測）。
+async fn halt_after_wu_a_done(store: &Arc<dyn TaskStore>, id: TaskId) -> (Dispatcher, String) {
+    use super::cex_lease_restart::wu_row;
+    adopt_three_step_plan(store, id);
+    let mut old = dispatcher(store.clone(), done_adapter(), 1);
+    old.test_hooks.halt_after_wu_transition = true;
+    let s = store.clone();
+    assert!(
+        run_until_state(&mut old, || wu_row(&s, id, "a").status
+            == WorkUnitStatus::Done)
+        .await
+    );
+    let run_a = wu_row(store, id, "a").last_run_id.unwrap();
+    // 停止点: WU a は done、Task は Running のまま lease は A、A の `WorkerFinished` は無く `runs` 行は running。
+    let task = store.get(id).unwrap().unwrap();
+    assert_eq!(task.status, Status::Running);
+    assert_eq!(
+        task.lease.map(|l| l.worker_run_id),
+        Some(run_a.clone()),
+        "the halted finish keeps A's lease"
+    );
+    assert!(finishes(store, id, &run_a).is_empty());
+    assert_eq!(
+        store.run_index_get(&run_a).unwrap().map(|r| r.status),
+        Some(task_core::RunIndexStatus::Running)
+    );
+    for key in ["b", "c"] {
+        assert_eq!(
+            wu_row(store, id, key).status,
+            WorkUnitStatus::Pending,
+            "{key}"
+        );
+    }
+    assert_eq!(starts(store, id), vec![(run_a.clone(), None)]);
+    (old, run_a)
+}
+
+/// WU a の遷移が dispatch と completed の 2 つだけ（戻されず、走らせ直されていない）か。
+fn assert_wu_a_kept_done(store: &Arc<dyn TaskStore>, id: TaskId, run_a: &str, when: &str) {
+    use super::cex_lease_restart::{wu_row, wu_transitions};
+    assert_eq!(
+        wu_transitions(store, id, "a"),
+        vec![
+            (WorkUnitStatus::Running, "dispatch".to_string()),
+            (WorkUnitStatus::Done, "completed".to_string())
+        ],
+        "WU a was moved back or run again {when}"
+    );
+    let a = wu_row(store, id, "a");
+    assert_eq!(a.status, WorkUnitStatus::Done, "{when}");
+    assert_eq!(a.last_run_id.as_deref(), Some(run_a), "{when}");
+}
+
+/// 不変条件（ADR-0072 D15・`CLAUDE.md` の SQLite 正本・ADR-0079 付記「R6-1」D4・ADR 2026-11-11-dispatcher-state-ownership
+/// D7）: finish が WU a の done を書いた直後（Task の遷移・`runs` の閉じ・`WorkerFinished` の前）で落ちた状態に人の
+/// cancel が確定してから再起動しても、人の cancel が勝つ。Task は Cancelled のまま lease を持たず、WU a は done のまま
+/// （a の `WorkUnitTransitioned` は dispatch と completed の 2 つだけ）、run A の `WorkerFinished` は cancel の遷移が
+/// 積んだ `end: cancelled` の 1 件だけで二重に無く、`runs` 行は cancelled のまま閉じ直さない。新しい active は
+/// worker・reviewer の run を起こさず（`WorkerStarted` は A の 1 件だけ）、依存 WU b・c を起こさず、review・delivery・
+/// Done に進めない。
+///
+/// 既存試験で検出できない理由: `cex_restart_after_crash_between_wu_and_task_transitions_is_idempotent`（WU a の done を
+/// store に直に書いた種）と `cex_restart_after_wu_done_promotes_dependents_once`（`halt_after_wu_transition` の実際の
+/// 停止点）は、停止点と再起動の間に人の操作を挟まない。どちらも Task が Running のまま再起動し、回収が A を閉じて
+/// Task を Ready に戻し Done まで進めることを固定するので、再起動の照合（孤児の回収・持ち主の居ない run の閉じ・
+/// 終端の task の `runs` 行・dispatch の選別）が停止点の後に確定した Cancelled を見落として A を回収し直す・WU a を
+/// 戻す・b を起こす・Task を進める不具合を作っても、Cancelled の Task が無いので落ちない。
+/// `cex_done_and_lease_expiry_in_one_tick_close_the_run_once` と `cex_human_cancel_precedes_successful_worker_completion`
+/// は WU の計画を持たず、再起動もしない。
+#[tokio::test]
+async fn cex_human_cancel_between_wu_and_task_transitions_is_kept() {
+    use super::cex_lease_restart::{dependency_ready_count, wu_row, wu_transitions};
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = new_task(
+        dir.path(),
+        Check::Command {
+            cmd: "true".into(),
+            expect_exit: 0,
+        },
+        2,
+    );
+    let id = task.id;
+    store.insert(&task).unwrap();
+    let (old, run_a) = halt_after_wu_a_done(&store, id).await;
+
+    // 人の cancel を確定する（API の `POST /tasks/{id}/cancel` と同じ op）。store は同じトランザクションで lease を
+    // 外し、A の `runs` 行を閉じる（R6-1）。これが A の唯一の閉じになる。
+    let cancelled = task_ops::gate::cancel(store.as_ref(), id, None).unwrap();
+    assert_eq!(cancelled.to, Status::Cancelled);
+    assert_eq!(status_of(&store, id), Status::Cancelled);
+    assert!(store.get(id).unwrap().unwrap().lease.is_none());
+    let closed_by_cancel = finishes(&store, id, &run_a);
+    assert_eq!(closed_by_cancel.len(), 1, "{closed_by_cancel:?}");
+    assert_eq!(closed_by_cancel[0].0, Some(RunEnd::Cancelled));
+    let closed_at = store.run_index_get(&run_a).unwrap().unwrap().finished_at;
+    assert!(closed_at.is_some());
+    let transitions_before = transitions(&store, id);
+    assert_eq!(
+        transitions_before.last(),
+        Some(&(Status::Cancelled, "cancel".to_string()))
+    );
+    let units_before: Vec<(String, WorkUnitStatus, Option<String>)> = ["b", "c"]
+        .iter()
+        .map(|k| {
+            let u = wu_row(&store, id, k);
+            (u.key, u.status, u.last_run_id)
+        })
+        .collect();
+    let wu_events_before: Vec<_> = ["b", "c"]
+        .iter()
+        .map(|k| wu_transitions(&store, id, k))
+        .collect();
+
+    // 旧 instance を落とし、同じ store に新しい active を起こす。
+    drop(old);
+    let mut active = new_active(&store, done_adapter());
+    let assert_kept = |store: &Arc<dyn TaskStore>, when: &str| {
+        assert_eq!(status_of(store, id), Status::Cancelled, "{when}");
+        assert!(store.get(id).unwrap().unwrap().lease.is_none(), "{when}");
+        assert_wu_a_kept_done(store, id, &run_a, when);
+        assert_eq!(
+            finishes(store, id, &run_a),
+            closed_by_cancel,
+            "A was closed again {when}"
+        );
+        let row = store.run_index_get(&run_a).unwrap().unwrap();
+        assert_eq!(row.status, task_core::RunIndexStatus::Cancelled, "{when}");
+        assert_eq!(row.finished_at, closed_at, "A's runs row reclosed {when}");
+        assert_eq!(orphan_records(store, id), 0, "orphan takeover {when}");
+        assert_eq!(
+            starts(store, id),
+            vec![(run_a.clone(), None)],
+            "no worker or reviewer run started {when}"
+        );
+        let units: Vec<(String, WorkUnitStatus, Option<String>)> = ["b", "c"]
+            .iter()
+            .map(|k| {
+                let u = wu_row(store, id, k);
+                (u.key, u.status, u.last_run_id)
+            })
+            .collect();
+        assert_eq!(units, units_before, "dependent units moved {when}");
+        let wu_events: Vec<_> = ["b", "c"]
+            .iter()
+            .map(|k| wu_transitions(store, id, k))
+            .collect();
+        assert_eq!(wu_events, wu_events_before, "{when}");
+        assert_eq!(dependency_ready_count(store, id, "b"), 0, "{when}");
+        assert_eq!(transitions(store, id), transitions_before, "{when}");
+        assert!(
+            !events_of(store, id)
+                .iter()
+                .any(|e| matches!(e, Event::ReviewVerdict { .. })),
+            "{when}"
+        );
+        assert!(store.delivery_get(id).unwrap().is_none(), "{when}");
+        assert!(store.runs_running().unwrap().is_empty(), "{when}");
+    };
+
+    // 再起動の最初の tick（起動時の照合: 孤児の回収・持ち主の居ない run・終端の task の `runs` 行）。
+    let report = active.tick().unwrap();
+    assert_eq!(report.reclaimed, 0, "{report:?}");
+    assert_eq!(report.dispatched, 0, "{report:?}");
+    assert_eq!(report.finished, 0, "{report:?}");
+    assert_eq!(report.in_flight, 0, "{report:?}");
+    assert_kept(&store, "on the first tick after the restart");
+    // その後の tick でも何も起こさない（各 tick の戻り値と store を確かめる。待ちではない）。
+    for _ in 0..3 {
+        let report = active.tick().unwrap();
+        assert_eq!(report.dispatched, 0, "{report:?}");
+        assert_eq!(report.reviewed, 0, "{report:?}");
+        assert_eq!(report.reclaimed, 0, "{report:?}");
+        assert_kept(&store, "in a later tick");
+    }
+}
+
+/// 不変条件（ADR-0044 D2 の人のコメントの規則・ADR-0072 D15・ADR 2026-10-03-ownerless-running-runs D3・
+/// ADR 2026-11-11-dispatcher-state-ownership D7）: finish が WU a の done を書いた直後（Task の遷移・`runs` の閉じ・
+/// `WorkerFinished` の前）で落ちた状態に人の comment が確定してから再起動しても、comment と規則どおりの遷移
+/// （Running → Ready、理由 `comment`、attempts 据え置き、A に `WorkerFinished{interrupted: comment}`）が残る。
+/// 再起動の照合は A を閉じ直しても `WorkerFinished` を二重に書かず（A は 1 回だけ閉じる）、done の WU a を戻さず
+/// 走らせ直さない。次に起こす run は done でない WU（b、続いて c）だけで、b・c は `dependency_ready` で 1 回ずつ
+/// ready に上がり、Task は Done に届く。
+///
+/// 既存試験で検出できない理由: `cex_restart_after_crash_between_wu_and_task_transitions_is_idempotent` と
+/// `cex_restart_after_wu_done_promotes_dependents_once` は停止点と再起動の間に人の操作を挟まないので、A を閉じるのは
+/// 回収（`WorkerFinished` の無い run）だけで、comment が先に `WorkerFinished` を積んだ run を閉じ直す順序、Task が
+/// Running でなく Ready（lease 無し）で再起動する順序を作らない。持ち主の居ない run の閉じ（`close_aborted_run`）が
+/// 記録済みの `WorkerFinished` を見落として二重に書く・done の WU を回収で戻すといった不具合を作っても、どちらの
+/// 試験も落ちない。`cex_reclosing_a_run_after_worker_finished_does_not_write_twice` は interrupt の種を store に直に
+/// 書き、WU a が running のまま（done の前）で、done の WU を戻さないことを確かめない。
+#[tokio::test]
+async fn cex_human_comment_between_wu_and_task_transitions_is_kept() {
+    use super::cex_lease_restart::{dependency_ready_count, wu_row};
+    use task_ops::comment::{CommentEffect, list_comments, post_human_comment_as};
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = new_task(
+        dir.path(),
+        Check::Command {
+            cmd: "true".into(),
+            expect_exit: 0,
+        },
+        2,
+    );
+    let id = task.id;
+    store.insert(&task).unwrap();
+    let (old, run_a) = halt_after_wu_a_done(&store, id).await;
+    let attempts_before = store.get(id).unwrap().unwrap().attempts;
+
+    // 人の comment を確定する（API の `POST /tasks/{id}/comments` と同じ op。Running なので Interrupt）。
+    const BODY: &str = "b の前に方針を確かめて";
+    let result = post_human_comment_as(
+        store.as_ref(),
+        id,
+        Some("human:web".into()),
+        BODY.into(),
+        OffsetDateTime::now_utc(),
+    )
+    .unwrap();
+    assert_eq!(result.effect, CommentEffect::Interrupted);
+    let moved = result.transition.expect("the comment interrupted the run");
+    assert_eq!(
+        (moved.from, moved.to, moved.reason.as_str()),
+        (Status::Running, Status::Ready, "comment")
+    );
+    let task_now = store.get(id).unwrap().unwrap();
+    assert_eq!(task_now.status, Status::Ready);
+    assert!(task_now.lease.is_none());
+    assert_eq!(
+        task_now.attempts, attempts_before,
+        "a comment keeps attempts"
+    );
+    let closed_by_comment = finishes(&store, id, &run_a);
+    assert_eq!(
+        closed_by_comment,
+        vec![(None, task_ops::comment::INTERRUPTED_OUTCOME.to_string())],
+        "the comment closed A once"
+    );
+    let comment_transition = (Status::Ready, "comment".to_string());
+    assert_eq!(transitions(&store, id).last(), Some(&comment_transition));
+
+    // 旧 instance を落とし、同じ store に新しい active を起こす。Task が Done に届くまで回す（出来事待ち）。
+    drop(old);
+    let mut active = new_active(&store, done_adapter());
+    let s = store.clone();
+    let reached = run_until_state(&mut active, || status_of(&s, id) == Status::Done).await;
+    assert!(
+        reached,
+        "status={:?} transitions={:?} starts={:?}",
+        status_of(&store, id),
+        transitions(&store, id),
+        starts(&store, id)
+    );
+
+    // comment は残り、規則どおりの遷移（Running → Ready、理由 comment）は書き換わらない。
+    let comments = list_comments(store.as_ref(), id).unwrap();
+    assert_eq!(
+        comments.iter().filter(|c| c.body == BODY).count(),
+        1,
+        "{comments:?}"
+    );
+    let all = transitions(&store, id);
+    assert_eq!(
+        all.iter().filter(|t| **t == comment_transition).count(),
+        1,
+        "{all:?}"
+    );
+    // A は 1 回だけ閉じた（再起動の照合が閉じ直しても二重に書かない）。WU a は done のまま、走らせ直さない。
+    assert_eq!(finishes(&store, id, &run_a), closed_by_comment);
+    assert_ne!(
+        store.run_index_get(&run_a).unwrap().map(|r| r.status),
+        Some(task_core::RunIndexStatus::Running)
+    );
+    assert_wu_a_kept_done(&store, id, &run_a, "after the restart");
+    // 次に起こした run は done でない WU（b、続いて c）だけ。
+    let run_b = wu_row(&store, id, "b").last_run_id.expect("b ran");
+    let run_c = wu_row(&store, id, "c").last_run_id.expect("c ran");
+    assert_eq!(
+        starts(&store, id),
+        vec![(run_a.clone(), None), (run_b, None), (run_c, None)]
+    );
+    for key in ["b", "c"] {
+        assert_eq!(
+            wu_row(&store, id, key).status,
+            WorkUnitStatus::Done,
+            "{key}"
+        );
+        assert_eq!(dependency_ready_count(&store, id, key), 1, "{key}");
+    }
+    assert!(store.runs_running().unwrap().is_empty());
 }

@@ -128,6 +128,9 @@ event の kind は `crates/task-core/src/model/events.rs` の doc に従った�
 - `python3 agent-docs/progress/2026-11-15-health-v2-v0/loop-cost.py --db 'file:/local/celeris/data/db/celeris.sqlite3?mode=ro' --out agent-docs/progress/2026-11-15-health-v2-v0/loop-cost.json` → exit 0（約 10 秒）
 - `python3 agent-docs/progress/2026-11-15-health-v2-v0/loop-cost.py --db 'file:/local/celeris/data/db/celeris.sqlite3?mode=ro' --verify agent-docs/progress/2026-11-15-health-v2-v0/loop-cost.json` → exit 0（`loop-cost verify: ok`）
 - `python3 agent-docs/progress/2026-11-15-health-v2-v0/loop-cost.py --db /local/celeris/data/db/celeris.sqlite3 --out …` → exit 1（`mode=ro` の無い指定を拒む）
+- `bash scripts/dev/test-affected.sh` → exit 0（repo-health verdict=pass、fail_grade=0。「試験対象の変更なし（docs のみ等）」）。`--list` は空。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check` → exit 0。`sh "$CELERIS_WU_SCOPE_PATHS"` → この dir の 3 file だけ。
 
 ## 未解決事項
 

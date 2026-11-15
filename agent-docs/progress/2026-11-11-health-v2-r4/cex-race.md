@@ -445,6 +445,9 @@ events after the expiry [Transitioned { from: Running, to: Ready, reason: "infra
 - `cargo nextest run -p task-dispatch --no-fail-fast -E 'test(/cex_/) | test(/ownerless/)'` → exit 100、49 本中 48 本合格。
   落ちたのは反例 (i) の 1 本だけ（上の「観測」と同じ assert、`report.reclaimed` が 1）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
-- `bash scripts/dev/check-health.sh` → 下に追記する。
+- `bash scripts/dev/check-health.sh` → exit 0（repo-health の verdict pass、fail_grade 0、worsened 0、gate の試験も合格）。
+- `python3 scripts/dev/repo-health/repo_health.py --repo . --base "$CELERIS_WU_BASE" --head worktree --policy-version 1 --out <file>`
+  → exit 0、verdict pass、new 0・worsened 0。
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → `cex-race.md`・`leases.rs`・`cex_lease_restart.rs`・`hooks.rs` の 4 file だけ。
 - `git diff $CELERIS_WU_BASE HEAD -- crates ':!crates/task-dispatch/src/dispatcher/tests'` → `leases.rs` の `#[cfg(test)]` の追加 4 行だけ
   （`cfg(test)` の外の差分は無い）。

@@ -23,7 +23,7 @@ use task_core::llm_route::{
 };
 use task_core::route_record::{
     FeaturesAux, ROUTE_OPTIONS_SCHEMA, RouteOption, RouteOptionBinds, RouteOptions,
-    TASK_FEATURES_SCHEMA, TaskFeatures,
+    TASK_FEATURES_SCHEMA, TaskFeatures, task_features_hash,
 };
 use task_core::routing_eval_trial::{EvalTrial, EvalTrialStatus};
 use task_core::store::StoredRouteDecision;
@@ -72,16 +72,6 @@ enum EvalRouteError {
 /// 評価の manifest・候補表は `-`、設定の宣言は `_` で書く）。
 fn normalize_id(id: &str) -> String {
     id.trim().to_ascii_lowercase().replace('-', "_")
-}
-
-/// `route_features.hash` の材料（`task_core::route_record::FeatureBody` と同じ形の直列化。
-/// 内容アドレスなので、同じ特徴量は同じ hash になる）。
-#[derive(serde::Serialize)]
-struct EvalFeatureBody<'a> {
-    schema: &'a str,
-    template: &'a str,
-    brief: &'a str,
-    aux: &'a FeaturesAux,
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -877,15 +867,8 @@ impl Dispatcher {
             schema: TASK_FEATURES_SCHEMA.to_owned(),
             template: EVAL_FEATURES_TEMPLATE.to_owned(),
             brief: brief.clone(),
-            hash: sha256(
-                &serde_json::to_vec(&EvalFeatureBody {
-                    schema: TASK_FEATURES_SCHEMA,
-                    template: EVAL_FEATURES_TEMPLATE,
-                    brief: &brief,
-                    aux: &aux,
-                })
+            hash: task_features_hash(TASK_FEATURES_SCHEMA, EVAL_FEATURES_TEMPLATE, &brief, &aux)
                 .map_err(|e| e.to_string())?,
-            ),
             aux,
         };
         self.store
@@ -1663,5 +1646,29 @@ mod score_tests {
         );
         assert_eq!(decide(None, &rows, long_ago), Some(EVAL_RECOVERY_DEADLINE));
         assert_eq!(decide(Some("old"), &rows, None), None);
+    }
+}
+
+#[cfg(test)]
+mod hash_tests {
+    use super::*;
+    #[test]
+    fn eval_feature_hash_fixed_bytes() {
+        let aux = FeaturesAux {
+            genre: Some("eval_problem".into()),
+            harness: Some("codex".into()),
+            ..FeaturesAux::default()
+        };
+        let hash = task_features_hash(
+            TASK_FEATURES_SCHEMA,
+            EVAL_FEATURES_TEMPLATE,
+            "固定入力\nquoted \"text\"",
+            &aux,
+        )
+        .unwrap();
+        assert_eq!(
+            hash,
+            "sha256:d7c838872304e2486d7ab93a63c269c60d359941b944a33034bba9a4ed64fcfa"
+        );
     }
 }

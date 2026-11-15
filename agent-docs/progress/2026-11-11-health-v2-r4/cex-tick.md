@@ -23,6 +23,8 @@ updated: 2026-11-15
   doc comment 付きの `mod cex_same_tick;` の 1 行。
 - `tick-expiry: record the same-tick cancel, Done and lease expiry test and the guard checks in cex-tick`
   — この進捗ファイル。
+- `tick-expiry: make the guard check a level-2 section in cex-tick (## guard を外した確認, per-WU subsections)`
+  — guard の節を `##` に上げた（attempt 1 の check の不合格の修正）。
 
 ### 作業前 brief
 
@@ -89,7 +91,32 @@ doc comment に、守る不変条件と、`cex_human_cancel_precedes_successful_
   見るので、期限切れの lease は cancel で既に消えており、何もしない（`reclaimed == 0`）。
 - この順序で lease の期限が効くのは、cancel が lease を外さなかった場合だけになる（下の G2 の行）。
 
-### guard を外した確認
+### 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+
+attempt 1 の run の後の check は exit 1 だった。原因は見出しの段で、`### guard を外した確認` が check の
+`grep -q '^## guard を外した確認'` に当たらなかった。attempt 2 で節を `## guard を外した確認` に上げ、WU ごとの小節
+（`### tick-expiry`）に分けた。試験と本体は変えていない。下の検査は attempt 2 の commit
+`tick-expiry: make the guard check a level-2 section in cex-tick (## guard を外した確認, per-WU subsections)` の上で
+実行した（その後の変更はこの進捗ファイルの文面だけで、同じ commit に入れた）。
+
+- 計画の check（`grep -q '^## guard を外した確認' … && grep -q 'cex_done_and_lease_expiry_in_one_tick_close_the_run_once' …
+  && grep -q '^mod cex_same_tick;' crates/task-dispatch/src/dispatcher/tests/mod.rs`）→ exit 0。
+- `cargo nextest run -p task-dispatch -E 'test(/cex_/)'` → exit 0（35 passed、`cex_same_tick::` の 1 本を含む）。
+- `bash scripts/dev/test-affected.sh` → exit 0。3947 本すべて合格（11 skipped、7 slow、9 分 4 秒）。対象 crate は
+  celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。script bundle の SKIP は 0 件。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → この進捗ファイル・`cex_same_tick.rs`・`tests/mod.rs` の 3 つだけ。
+- `git diff --stat $CELERIS_WU_BASE -- ':!crates/task-dispatch/src/dispatcher/tests' ':!agent-docs'` と
+  `git diff --stat $CELERIS_WU_BASE -- crates/task-dispatch/src/dispatcher/tests/hooks.rs` → どちらも差分なし（本体と
+  `tests/hooks.rs` は変えていない）。
+- `sh scripts/dev/progress-index.sh --check` → exit 0（ok）。
+
+## guard を外した確認
+
+WU ごとに節を分ける。tick-wu-human は (ii) の試験の行を自分の節に書く。
+
+### tick-expiry（`cex_done_and_lease_expiry_in_one_tick_close_the_run_once`）
 
 一時変更は `git checkout --` で戻し、commit していない（戻した後に `grep -rn "GUARD-OFF" crates/` は 0 件、
 `git status --short` に本体の file は無い）。command はどれも
@@ -99,20 +126,6 @@ doc comment に、守る不変条件と、`cex_human_cancel_precedes_successful_
 |---|---|---|---|---|
 | G1（完了処理の照合）: `crates/task-dispatch/src/dispatcher/worker_finish.rs` の `on_worker_finished` の `if !lease_matches {` を `if false && !lease_matches {` にする（cancel 済み・lease の保持者でない run の Done を捨てない） | 上の command | 100 | `cex_same_tick.rs` の `assert_closed_once` の `runs` 行の status: `A's runs row in the same tick`、left `Completed`、right `Cancelled`。cancel で閉じた A の `runs` 行を、捨てるべき Done が completed に書き換えた | `git checkout -- crates/task-dispatch/src/dispatcher/worker_finish.rs` の後、上の command は exit 0（1 passed） |
 | G2（回収の照合）: `crates/task-dispatch/src/dispatcher/leases.rs` の `reclaim_expired_leases` の `self.store.list(Some(Status::Running))?` を `self.store.list(None)?` にする（Cancelled の Task も回収の対象に入れる） | 上の command | 0 | 無し（合格）。cancel が同じトランザクションで lease を外すので、回収は lease の無い Task を飛ばす。この順序で回収側を守るのは store の lease の解放（`apply_transition` の `leaving_running`）で、試験は 3 でそれを assert する | `git checkout -- crates/task-dispatch/src/dispatcher/leases.rs` の後、`cargo nextest run -p task-dispatch -E 'test(/cex_/)'` は exit 0（35 passed） |
-
-### 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
-
-- `cargo nextest run -p task-dispatch -E 'test(/cex_same_tick::/)'` → exit 0（1 passed）。続けて 3 回走らせ、3 回とも合格
-  （各 0.32 秒前後）。
-- `cargo nextest run -p task-dispatch -E 'test(/cex_/)'` → exit 0（35 passed）。
-- `bash scripts/dev/test-affected.sh` → exit 0。3947 本すべて合格（11 skipped、9 slow）。対象 crate は celeris・
-  celeris-campaign・celerisctl・llm-proxy・task-dispatch。
-- `cargo clippy --workspace -- -D warnings` → exit 0。
-- `cargo fmt --all -- --check` → exit 0。
-- `sh "$CELERIS_WU_SCOPE_PATHS"` → この進捗ファイル・`cex_same_tick.rs`・`tests/mod.rs` の 3 つだけ。
-- `git diff $CELERIS_WU_BASE -- ':!crates/task-dispatch/src/dispatcher/tests' ':!agent-docs'` と
-  `git diff $CELERIS_WU_BASE -- crates/task-dispatch/src/dispatcher/tests/hooks.rs` → どちらも差分なし（本体と
-  `tests/hooks.rs` は変えていない）。
 
 ## 未解決事項
 

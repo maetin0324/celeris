@@ -5,6 +5,10 @@
 //! 識別は HTTP でだけ入れる（`task_campaigns` への直挿入なし）。子 task は dispatcher が作るので store に挿入し、
 //! run の events は dispatcher が追記するものと同じ形で積む。temp DB・loopback・mock のみ（実 LLM・本番 DB なし）。
 
+#[path = "support/campaign_e2e.rs"]
+#[allow(dead_code)] // この file は `ev_started` だけを使う
+mod campaign_e2e;
+use campaign_e2e::ev_started;
 use std::net::SocketAddr;
 use std::time::Duration;
 
@@ -166,18 +170,6 @@ async fn child_of(d: &Daemon, parent: TaskId, title: &str) -> TaskId {
     v["id"].as_str().expect("id").parse().expect("task id")
 }
 
-fn started(run: &str, role: Option<RunRole>) -> Event {
-    Event::WorkerStarted {
-        run_id: run.into(),
-        adapter: "claude-code".into(),
-        model: "m-exec".into(),
-        provider: Some("src".into()),
-        account: None,
-        role,
-        task_role: None,
-    }
-}
-
 fn finished(run: &str, role: Option<RunRole>, end: RunEnd, tokens: u64) -> Event {
     Event::WorkerFinished {
         run_id: run.into(),
@@ -269,27 +261,27 @@ async fn post_tasks_to_export_connects_children_retries_review_cos_jev_and_inter
     let ev = |t: TaskId, e: Event| {
         d.store.append_event(t, &e).expect("event");
     };
-    ev(root, started("r-plan", Some(RunRole::Planner)));
+    ev(root, ev_started("r-plan", Some(RunRole::Planner)));
     ev(
         root,
         finished("r-plan", Some(RunRole::Planner), RunEnd::Completed, 50),
     );
-    ev(root, started("r-1", None));
+    ev(root, ev_started("r-1", None));
     ev(
         root,
         finished("r-1", None, RunEnd::Failed { retryable: true }, 100),
     );
-    ev(root, started("r-2", None));
+    ev(root, ev_started("r-2", None));
     ev(root, finished("r-2", None, RunEnd::Completed, 200));
-    ev(child, started("r-child", None));
+    ev(child, ev_started("r-child", None));
     ev(child, finished("r-child", None, RunEnd::Completed, 300));
-    ev(grand, started("r-review", Some(RunRole::Reviewer)));
+    ev(grand, ev_started("r-review", Some(RunRole::Reviewer)));
     ev(
         grand,
         finished("r-review", Some(RunRole::Reviewer), RunEnd::Completed, 20),
     );
     // 他 arm の trial（混ざらないことの確認用）。
-    ev(other_root, started("r-other", None));
+    ev(other_root, ev_started("r-other", None));
     ev(
         other_root,
         finished("r-other", None, RunEnd::Completed, 999),

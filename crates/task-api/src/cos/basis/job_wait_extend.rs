@@ -320,6 +320,7 @@ pub(super) fn validate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cos::basis::test_support::seq;
     use task_core::cluster_job::{ClusterJobWait, ClusterScheduler};
 
     fn wait(id: &str, jobs: &[&str]) -> Event {
@@ -372,14 +373,6 @@ mod tests {
             run_id: "run-1".into(),
             text: text.into(),
         }
-    }
-
-    fn seq(events: Vec<Event>) -> Vec<(u64, Event)> {
-        events
-            .into_iter()
-            .enumerate()
-            .map(|(i, e)| (i as u64, e))
-            .collect()
     }
 
     #[test]

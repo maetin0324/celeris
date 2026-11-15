@@ -11,9 +11,11 @@
 //! 試験だけの追加: 生成した daemon.toml の末尾に人の token（`human:ops-r1-e2e`）を 1 つ足す。人の message は
 //! 人の principal で送る（`celeris-campaign ops-r1-intake` は author が `human:` の message だけを記録する）。
 
+#[path = "support/executable.rs"]
+mod executable;
+use executable::write_executable;
 use std::{
     fs,
-    io::Write,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     time::{Duration, Instant},
@@ -34,22 +36,6 @@ fn repo_root() -> PathBuf {
 }
 
 /// 実行可能 file は別 process で書く（ETXTBSY 回避）。
-fn write_executable(path: &Path, body: &str) {
-    let mut c = Command::new("/bin/sh")
-        .arg("-c")
-        .arg(r#"cat > "$1" && chmod 755 "$1""#)
-        .arg("sh")
-        .arg(path)
-        .stdin(Stdio::piped())
-        .spawn()
-        .expect("spawn");
-    c.stdin
-        .take()
-        .expect("stdin")
-        .write_all(body.as_bytes())
-        .expect("write");
-    assert!(c.wait().expect("wait").success());
-}
 
 /// 3 役を受ける stub（CoS run・worker run・root 完了の CoS run）。役は env で分ける: CoS run だけが
 /// `CELERIS_COS_RUN_CREDENTIAL` を持つ。CoS run は、人の依頼の目印を含む最初の入力でだけ起票し

@@ -150,11 +150,6 @@ fn inbox_files(env: &TestEnv) -> Vec<String> {
     names
 }
 
-fn count(env: &TestEnv, sql: &str) -> i64 {
-    let conn = rusqlite::Connection::open(&env.db_path).expect("db");
-    conn.query_row(sql, [], |r| r.get(0)).expect("count")
-}
-
 #[tokio::test]
 async fn cos_live_fix_d2_api_creates_candidate_with_provenance() {
     let env = env_with_kb();

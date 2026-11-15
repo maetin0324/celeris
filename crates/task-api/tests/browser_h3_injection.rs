@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use common::browser::bridge_binary;
 use common::*;
 use ring::signature::KeyPair;
 use serde_json::{Value, json};
@@ -44,32 +45,6 @@ struct World {
     live: Mutex<Vec<String>>,
     llm_input: Arc<Mutex<Vec<Vec<u8>>>>,
     password: String,
-}
-
-fn bridge_binary() -> PathBuf {
-    // `cargo test --workspace` builds the broker binary next to the test's deps directory.
-    let exe = std::env::current_exe().expect("test exe");
-    let bin = exe
-        .parent()
-        .and_then(Path::parent)
-        .expect("target dir")
-        .join("celeris-credentiald");
-    if !bin.exists() {
-        let status = std::process::Command::new(env!("CARGO"))
-            .args([
-                "build",
-                "-q",
-                "-p",
-                "celeris-credentiald",
-                "--bin",
-                "celeris-credentiald",
-            ])
-            .status()
-            .expect("cargo build");
-        assert!(status.success());
-    }
-    assert!(bin.exists(), "missing {}", bin.display());
-    bin
 }
 
 fn keypair() -> ring::signature::Ed25519KeyPair {

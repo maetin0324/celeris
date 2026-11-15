@@ -8,18 +8,8 @@ use axum::http::Request;
 use common::cos_ops::post_op;
 use common::*;
 use serde_json::{Value, json};
-use task_core::chat::attachments::ChatAttachmentLimits;
 use task_core::chat::{ChatOpenThreadRequest, ChatPostMessageRequest, ChatSendMode};
 use time::{Duration, OffsetDateTime};
-
-fn env_with_attachments() -> TestEnv {
-    let mut env = admin_env();
-    env.state = env.state.clone().with_chat_attachments(
-        env.dir.path().to_path_buf(),
-        ChatAttachmentLimits::default(),
-    );
-    env
-}
 
 /// Upload one attachment (admin) to a new thread, then open a CoS run on that thread.
 async fn attachment_and_bearer(env: &TestEnv, app: &axum::Router) -> (String, String) {

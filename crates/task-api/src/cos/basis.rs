@@ -26,6 +26,8 @@ mod plan_conforms;
 mod review_rework;
 pub use plan_conforms::{BasisPlan, GuardedStage, StageGuardKind, StageRiskKind};
 pub(crate) use review_rework::REOPEN_OPTION;
+#[cfg(test)]
+mod test_support;
 
 /// The option key of a run-time tree limit decision that adds one allowance (ADR-0079 D7).
 pub const RAISE_ONCE_OPTION: &str = "raise-once";

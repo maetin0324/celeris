@@ -145,7 +145,8 @@ impl DaemonSnapshot {
     }
 }
 
-/// `ScratchStatus.schema` の値。
+/// `ScratchStatus.schema` の値。scratch status の schema 名の唯一の定義（wire の型 `ScratchStatus` と同じ場所に置く。
+/// task-ops は task-worker に依存しないので、pool の実装〈`task_worker::scratch`〉の側には置かない）。
 pub const SCRATCH_STATUS_SCHEMA: &str = "celeris.scratch-status/1";
 
 /// ADR-0075 D6（Phase G1）: scratch pool の状態（`celeris.scratch-status/1`）。**観測値**で DB には書かない。

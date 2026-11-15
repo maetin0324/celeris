@@ -205,31 +205,6 @@ impl RoutingRuntime {
         self.harness_adapters.iter()
     }
 
-    /// ADR 2026-11-15-research-adapter-deadline D2: run の adapter（`WorkerStarted.adapter`）が checkpoint から続けられるか
-    /// （性質の正本は `WorkerAdapter::continues_from_checkpoint`）。宣言された harness の adapter から同じ id のものを引く。
-    /// 記録が無い run・宣言に同じ id の adapter が無い run は、続けられると確かめられないので `false`（continuation では
-    /// なく最初からのやり直しにする）。同じ id の adapter は同じ型で、性質も同じ。
-    pub(crate) fn run_continues_from_checkpoint(
-        &self,
-        events: &[(u64, task_core::Event)],
-        run_id: &str,
-    ) -> bool {
-        let Some(adapter_id) = events.iter().rev().find_map(|(_, e)| match e {
-            task_core::Event::WorkerStarted {
-                run_id: started,
-                adapter,
-                ..
-            } if started == run_id => Some(adapter.as_str()),
-            _ => None,
-        }) else {
-            return false;
-        };
-        self.harness_adapters
-            .values()
-            .find(|adapter| adapter.id() == adapter_id)
-            .is_some_and(|adapter| adapter.continues_from_checkpoint())
-    }
-
     /// 宣言された source の account のアダプタ（OAuth プールを持たない source は `None`）。
     pub(crate) fn source_account_adapter(&self, source: &SourceId) -> Option<AccountAdapter> {
         self.llm_route_registry

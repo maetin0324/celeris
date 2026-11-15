@@ -18,7 +18,7 @@ task 01M7FYEHKMY34MM5Z75W2ESSGN（R6 の子 task research）の進捗。計画�
 ### 決定（[ADR 2026-11-15-research-adapter-deadline](../../adr/2026-11-15-research-adapter-deadline.md)）
 
 - D1: 研究 3 adapter の wall clock の超過は `BudgetExhausted{WallClock}` に揃える。監視 loop の置き換えは unit adapters。
-- D2: `WorkerAdapter::continues_from_checkpoint`（既定 `true`）を足した。langmem・local-deep-research・paperqa が `false`、browser-specialist は内側の値。dispatcher は `RoutingRuntime::run_continues_from_checkpoint` で `WorkerStarted.adapter` から性質を引き（引けなければ `false`）、`worker_finish.rs` が atomic task・WU・WU の checkpoint の判定の continuation の入力を「`[execution] continuation` かつ性質」にした。`sessions::SUPPORTED_ADAPTERS` は続けられる adapter の部分集合。
+- D2: `WorkerAdapter::continues_from_checkpoint`（既定 `true`）を足した。langmem・local-deep-research・paperqa が `false`、browser-specialist は上書きせず既定（daemon が包む内側は acp だけ）。dispatcher は純粋関数 `sessions::run_continues_from_checkpoint` に `RoutingRuntime::harness_adapters()` を渡し、`WorkerStarted.adapter` から性質を引く（引けなければ `false`）。`worker_finish.rs` が atomic task・WU・WU の checkpoint の判定の continuation の入力を「`[execution] continuation` かつ性質」にした。`sessions::SUPPORTED_ADAPTERS` は続けられる adapter の部分集合。
 - D3: atomic task は既存の枝で `WorkerError{retryable:true}`・checkpoint なし。WU は既存の枝が WU を `running` のまま残して task を止めていたので、`RunEnd::Failed{retryable:true}` として WU の retry（`work_unit_retry`）に回すよう直した（`[execution] continuation = false` の WU も同じく直る）。
 - D4: 3 adapter は成功の枝で result.json を書いた直後に `read_result_file` を 1 回通す（unit adapters）。
 - D5: `worker_task.rs` の `misplaced_report`・`classify_budget_kind_from_text`・`is_budget_outcome` の撤去の条件を書いた（unit net が判断する）。
@@ -26,9 +26,9 @@ task 01M7FYEHKMY34MM5Z75W2ESSGN（R6 の子 task research）の進捗。計画�
 
 ### 変えた file
 
-- `crates/task-worker/src/adapter.rs`（trait の method）、`browser_specialist.rs`（転送）、`langmem.rs`・`local_deep_research.rs`・`paperqa.rs`（`false` の上書きだけ。監視 loop は変えていない）、`adapter_tests.rs`（試験）。
-- `crates/task-dispatch/src/routing_runtime.rs`（性質の引き方）、`dispatcher/worker_finish.rs`（continuation の入力と auto-leaf）、`run_settlement/work_unit.rs`（D3 の WU の枝）、`run_settlement/work_unit/tests.rs`（試験の改名と期待値）、`dispatcher/tests/research_deadline.rs`・`dispatcher/tests/mod.rs`（試験）。
-- `worker_finish.rs` の `finish_worker_result_with` は repo-health の `size.responsibility-growth` の基準（772 行）を超えないよう、`proposal` の 4 欄の取り出しを 2 行にまとめた（意味は同じ）。性質の引き方を `Dispatcher` の method にすると `Dispatcher` の method 数（基準 382）と dispatcher module の行（基準 31581）が増えて fail になったので、harness adapter の表を持つ `RoutingRuntime`（method 52）に置いた。
+- `crates/task-worker/src/adapter.rs`（trait の method）、`langmem.rs`・`local_deep_research.rs`・`paperqa.rs`（`false` の上書きだけ。監視 loop は変えていない）、`adapter_tests.rs`（試験）。
+- `crates/task-dispatch/src/sessions.rs`（性質の引き方。純粋関数）、`dispatcher/worker_finish.rs`（continuation の入力と auto-leaf）、`run_settlement/work_unit.rs`（D3 の WU の枝）、`run_settlement/work_unit/tests.rs`（試験の改名と期待値）、`dispatcher/tests/research_deadline.rs`・`dispatcher/tests/mod.rs`（試験）。
+- `worker_finish.rs` の `finish_worker_result_with` は repo-health の `size.responsibility-growth` の基準（772 行）を超えないよう、`proposal` の 4 欄の取り出しを 2 行にまとめた（意味は同じ）。性質の引き方を `Dispatcher` の method にすると `Dispatcher` の method 数（基準 382）と dispatcher module の行（基準 31581）が増えて fail になった。1 回目の run は `RoutingRuntime` の method に置いたが、`routing_runtime.rs` と `browser_specialist.rs`（転送の上書き）はこの unit の範囲 check の外で不合格になった（2 回目の run で確認）。2 回目は `routing_runtime.rs`・`browser_specialist.rs` を base に戻し、性質の引き方を `sessions.rs` の純粋関数にして `worker_finish.rs` から `harness_adapters()` を渡す形にした。browser-specialist は既定値（`true`）のまま。
 
 ### 試験（不変条件と、既存の試験で検出できない理由は ADR の「試験」節）
 

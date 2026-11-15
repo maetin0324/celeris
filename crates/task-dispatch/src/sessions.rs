@@ -4,7 +4,8 @@
 //! `Dispatcher::resolve_node_session`（`dispatcher.rs`）が行う。ここに置くのは、テストしやすい形の
 //! 「続けるか、新しく作るか」の判断と、前置きに出す差分・要約の行の組み立てだけ。
 
-use task_core::{BudgetKind, MessageRole, NodeSession, RunEnd, WorkUnitSession};
+use task_core::{BudgetKind, Event, MessageRole, NodeSession, RunEnd, WorkUnitSession};
+use task_worker::WorkerAdapter;
 use time::OffsetDateTime;
 
 pub mod cos_chat;
@@ -448,6 +449,32 @@ pub fn decide_continuation(f: &ContinuationFacts<'_>) -> ContinuationDecision {
         // #11
         None => ContinuationDecision::Resume,
     }
+}
+
+/// ADR 2026-11-15-research-adapter-deadline D2: run の adapter（`WorkerStarted.adapter`）が checkpoint から続けられるか。
+/// 性質の正本は `WorkerAdapter::continues_from_checkpoint` で、`adapters` は宣言された harness の adapter（dispatcher が
+/// `RoutingRuntime::harness_adapters` を渡す）。同じ id の adapter は同じ型で、性質も同じ。記録が無い run・宣言に同じ id の
+/// adapter が無い run は、続けられると確かめられないので `false`（continuation ではなく最初からのやり直しにする）。
+/// `SUPPORTED_ADAPTERS`（継続 session）とは別の性質で、session を持てる adapter は checkpoint からも続けられるが逆は成り立たない。
+pub fn run_continues_from_checkpoint<'a>(
+    adapters: impl IntoIterator<Item = &'a dyn WorkerAdapter>,
+    events: &[(u64, Event)],
+    run_id: &str,
+) -> bool {
+    let Some(adapter_id) = events.iter().rev().find_map(|(_, e)| match e {
+        Event::WorkerStarted {
+            run_id: started,
+            adapter,
+            ..
+        } if started == run_id => Some(adapter.as_str()),
+        _ => None,
+    }) else {
+        return false;
+    };
+    adapters
+        .into_iter()
+        .find(|adapter| adapter.id() == adapter_id)
+        .is_some_and(|adapter| adapter.continues_from_checkpoint())
 }
 
 #[cfg(test)]

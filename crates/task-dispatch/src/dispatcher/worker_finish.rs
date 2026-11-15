@@ -1,7 +1,7 @@
 //! worker run の終了処理（`finish_worker_result` と finalise の失敗の後始末）。同じ transaction の組と `release_quota_if_tracked` はそのまま。ADR-0082 の L3。
 
 use super::*;
-use crate::run_settlement;
+use crate::{run_settlement, sessions};
 
 fn repair_git(dir: &Path, args: &[&str]) -> Option<String> {
     let output = std::process::Command::new("git")
@@ -387,9 +387,8 @@ impl Dispatcher {
             .and_then(|e| browser_prereq::worker_error_code(&e.to_string()));
         let events_now = self.store.events_for(task_id)?;
         // ADR 2026-11-15-research-adapter-deadline D2: checkpoint から続けられない run は continuation・auto-leaf に乗せない。
-        let continues = self
-            .routing
-            .run_continues_from_checkpoint(&events_now, &run_id);
+        let adapters = self.routing.harness_adapters().map(|(_, a)| a.as_ref());
+        let continues = sessions::run_continues_from_checkpoint(adapters, &events_now, &run_id);
         let infra_n = consecutive_infra_requeues(&events_now) + 1;
         let proposal = crate::run_settlement::settle(run_settlement::RunFinishInput {
             result,

@@ -37,14 +37,14 @@ dispatcher の `run_settlement::settle_terminal` は、`Error{retryable: true}` 
 | pi（`pi`） | `true`（既定） | `build_prompt_with_skill_list`（CoS の対話 run は別の入力） |
 | aider（`aider`） | `true`（既定） | `build_prompt` |
 | fake（`fake`） | `true`（既定） | protocol 準拠の worker で、`RunRequest` の `context.continuation` を受け取る |
-| browser_specialist（`browser-specialist`） | 内側の harness の値 | 内側へ転送する（daemon は acp を包むので `true`） |
+| browser_specialist（`browser-specialist`） | `true`（既定） | 上書きしない。daemon が包む内側は acp だけ（`crates/celeris/src/daemon/adapters.rs`）で、内側の prompt が continuation の節を描く。内側を続けられない adapter にする変更は、同じ変更で `browser_specialist.rs` に転送の上書きを足す（この ADR の unit では `browser_specialist.rs` は write set の外） |
 | langmem（`langmem`） | `false` | 入力は `objective` だけで、前置きを足さない（ADR-0047 D4） |
 | local_deep_research（`local-deep-research`） | `false` | 問いは目的文・不合格の理由・前回の report だけ（ADR-0029、Phase 109） |
 | paperqa（`paperqa`） | `false` | continuation の節を描かず、取得・索引・回答を毎回最初から行う（ADR-0035） |
 
 `sessions::SUPPORTED_ADAPTERS`（`claude-code`・`codex`・`acp`）は、続けられる adapter（値が `true`）の部分集合である。継続 session（会話の resume）を持てる adapter は checkpoint からも続けられるが、逆は成り立たない（pi・aider は session を持たず、checkpoint の節で続ける）。2 つは別の性質なので 1 つの表にまとめない。`SUPPORTED_ADAPTERS` を trait の性質に移すかは本 ADR の範囲外（研究の進捗の提案）。
 
-dispatcher は run の adapter の性質をこう引く。worker 完了の経路（`dispatcher/worker_finish.rs` の `finish_worker_result_with`）が、`RoutingRuntime::run_continues_from_checkpoint(events, run_id)` を呼ぶ。この method は `WorkerStarted.adapter`（events が正本。orphan の確定〈`finalise_from_result_json`〉でも同じ）から adapter の id を取り、宣言された harness の adapter（`RoutingRuntime` の harness adapter の表）から同じ id のものを引いて性質を返す。同じ id の adapter は同じ型なので性質も同じ。記録が無い run と、宣言に同じ id の adapter が無い run（設定の再読み込みで harness が消えた run）は `false` にする。続けられると確かめられない run を continuation に回すより、最初からのやり直し（retry）の方が常に正しいからである。これは新しい切替 flag でも互換の分岐でもなく、性質を引けない run の分類である。
+dispatcher は run の adapter の性質をこう引く。worker 完了の経路（`dispatcher/worker_finish.rs` の `finish_worker_result_with`）が、純粋関数 `sessions::run_continues_from_checkpoint(adapters, events, run_id)` に `RoutingRuntime::harness_adapters()`（宣言された harness の adapter の表）を渡して呼ぶ。この関数は `WorkerStarted.adapter`（events が正本。orphan の確定〈`finalise_from_result_json`〉でも同じ）から adapter の id を取り、渡された adapter から同じ id のものを引いて性質を返す。`sessions.rs` に置くのは、継続 session の判断（`SUPPORTED_ADAPTERS`・`decide_continuation`）と同じ「続けられるか」の純粋な判断で、I/O を持たないからである（`RoutingRuntime` と `Dispatcher` の method は増やさない）。同じ id の adapter は同じ型なので性質も同じ。記録が無い run と、宣言に同じ id の adapter が無い run（設定の再読み込みで harness が消えた run）は `false` にする。続けられると確かめられない run を continuation に回すより、最初からのやり直し（retry）の方が常に正しいからである。これは新しい切替 flag でも互換の分岐でもなく、性質を引けない run の分類である。
 
 worker 完了の経路は、continuation の入力を「`[execution] continuation` かつ性質が `true`」にする。対象は atomic task の `TaskRunInput.continuation_enabled`、WU の `WorkUnitRunInput.continuation_enabled`、WU の checkpoint を残すかの判定 `run_settlement::work_unit_saves_checkpoint` の `continuation` の 3 つ。`run_settlement` には adapter・harness で分ける分岐を足さない。`run_settlement` は「continuation が使えない run」を今と同じ入力で受け、理由（設定か性質か）を知らない。`run_settlement` と `worker_finish.rs` には adapter・harness の名前を書かない。
 
@@ -85,7 +85,7 @@ checkpoint から続けられない adapter の run は、auto-leaf の回数を
 
 | 試験 | 置き場 | 守る不変条件 | 既存の試験で検出できない理由 |
 |---|---|---|---|
-| `research_deadline_continues_from_checkpoint_per_adapter` | `crates/task-worker/src/adapter_tests.rs` | D2 の表（10 adapter の値、browser-specialist は内側の値を返す） | 既存の試験はこの性質を持たず、上書きを消しても既定値を変えても通った |
+| `research_deadline_continues_from_checkpoint_per_adapter` | `crates/task-worker/src/adapter_tests.rs` | D2 の表（10 adapter の値。browser-specialist は acp を包んで `true`） | 既存の試験はこの性質を持たず、上書きを消しても既定値を変えても通った |
 | `research_deadline_atomic_run_neither_continues_nor_saves_a_checkpoint` | `crates/task-dispatch/src/dispatcher/tests/research_deadline.rs` | 続けられない adapter の atomic task の run は、文言の `Error`・`BudgetExhausted{WallClock}`・`Yielded` のどれでも reason `continue` の遷移と `CheckpointSaved` を残さず、`end` は予算切れ・yield のまま、outcome は `(continuation disabled)`。続けられる adapter の同じ run は continuation に回る | 既存の continuation の試験は性質を持たない偽アダプタだけを使い、研究 harness の run が continuation に回ることを検出できなかった |
 | `research_deadline_work_unit_run_neither_continues_nor_saves_a_checkpoint` | 同上 | WU の経路で同じ 3 つの終わり方。WU は `needs_continuation` にならず、task は止まらずに idle まで進む（WU の retry と失敗の経路） | 同上。加えて、continuation が使えない WU の run を dispatcher で走らせる試験が無く、WU が `running` のまま task が止まる不具合（D3）を検出できなかった |
 | `research_deadline_session_adapters_continue_and_research_adapters_do_not` | 同上 | `sessions::SUPPORTED_ADAPTERS` の adapter は `true`、研究 3 本は `false` で session も持たない | 2 つの性質の関係を見る試験が無かった |

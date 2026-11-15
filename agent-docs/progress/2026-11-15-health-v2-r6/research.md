@@ -14,6 +14,8 @@ task 01M7FYEHKMY34MM5Z75W2ESSGN（R6 の子 task research）の進捗。計画�
 
 - `research adr: 研究 adapter を continuation から外す（continues_from_checkpoint）と ADR を足す`
 - `research adr: 進捗に提出時の検査の結果を書く`
+- `research adr: 性質の引き方を sessions.rs の純粋関数に移し、範囲外の routing_runtime.rs と browser_specialist.rs を base に戻す`
+- `research adr: 2 回目の run の検査の結果を進捗に書く`
 
 ### 決定（[ADR 2026-11-15-research-adapter-deadline](../../adr/2026-11-15-research-adapter-deadline.md)）
 
@@ -36,16 +38,19 @@ task 01M7FYEHKMY34MM5Z75W2ESSGN（R6 の子 task research）の進捗。計画�
 - task-dispatch: `dispatcher::tests::research_deadline::research_deadline_atomic_run_neither_continues_nor_saves_a_checkpoint`、`…::research_deadline_work_unit_run_neither_continues_nor_saves_a_checkpoint`、`…::research_deadline_session_adapters_continue_and_research_adapters_do_not`
 - 変えた試験: `run_settlement::work_unit::tests::continuation_disabled_retries_the_unit_unless_the_auto_leaf_limit_stops_it`（旧名 `…_keeps_the_unit_…`。WU を変えない契約は task を止めるので廃止した。WU の試験が修正前に `run_until_idle` 400 tick で idle にならず、dispatched 0 で止まったことで確かめた）
 
-### 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+### 証拠（2 回目の run。提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
 
+1 回目の run の check（範囲 check）は `crates/task-dispatch/src/routing_runtime.rs` と `crates/task-worker/src/browser_specialist.rs` が範囲外で exit 1 だった。2 回目は 2 file を base に戻し、以下を提出時の HEAD で再実行した。
+
+- 範囲 check（計画の check と同じ command。`sh "$CELERIS_WU_SCOPE_PATHS"` の path を write set の正規表現で絞る）: 範囲外 0 件、exit 0。path は 13 件（ADR・この進捗・`sessions.rs`・`dispatcher/worker_finish.rs`・`dispatcher/tests/{mod,research_deadline}.rs`・`run_settlement/work_unit.rs`・`run_settlement/work_unit/tests.rs`・`task-worker/src/{adapter,adapter_tests,langmem,local_deep_research,paperqa}.rs`）。
 - `cargo nextest run -p task-dispatch -p task-worker -E 'test(/research_deadline_|continuation|auto_leaf|work_unit|langmem|paperqa|local_deep_research|browser_specialist|session/)'`: 427 件合格、失敗 0。
 - `cargo clippy --workspace -- -D warnings`: exit 0。
 - `cargo fmt --all -- --check`: exit 0。
-- `bash scripts/dev/check-health.sh`: verdict=pass、new=0、worsened=0。
-- `bash scripts/dev/test-affected.sh`（対象 crate: celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker）: exit 0。nextest は 6157 件実行、6157 件合格（slow 17）、skip 22。script bundle の SKIP 0 件。repo-health は verdict=pass、worsened=0。
-- `git diff --name-only $CELERIS_WU_BASE | python3 agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R6 agent-docs/progress/2026-11-07-health-v2-b0/slices.json`: `write-set R6: ok`、exit 0。`sh "$CELERIS_WU_SCOPE_PATHS"` の path は上の「変えた file」と同じ 14 件。
+- `bash scripts/dev/check-health.sh --base "$CELERIS_WU_BASE"`: verdict=pass、new=0、worsened=0（`sessions.rs` へ移した直後の 5 行の呼び出しでは `finish_worker_result_with` の行 774 と dispatcher module の行が worsened で fail になったので、呼び出しを 2 行にして pass にした）。
+- `bash scripts/dev/test-affected.sh`（対象 crate: celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker）: exit 0。nextest は 6157 件実行、6157 件合格（slow 8）、skip 22。script bundle の SKIP 0 件。repo-health は verdict=pass、worsened=0。
+- `git diff --name-only $CELERIS_WU_BASE | python3 -I agent-docs/progress/2026-11-07-health-v2-b0/slices-check.py --write-set R6 agent-docs/progress/2026-11-07-health-v2-b0/slices.json`: `write-set R6: ok`、exit 0。
 - 凍結の path（campaign・routing-eval・jev-classifier・script-runtime・control-ts・migrations・events.rs・script_guard・credentiald）の差分: 0 件。3 adapter の差分は `continues_from_checkpoint` の上書き（各 5 行）だけで、監視 loop の差分は 0。
-- `grep -n -i -w "langmem\|paperqa\|local-deep-research\|local_deep_research\|LdrAdapter"` を `run_settlement` と `worker_finish.rs` に当てた結果: 0 件（exit 1）。
+- `grep -n -i -w "langmem\|paperqa\|local-deep-research\|local_deep_research\|LdrAdapter"` を `run_settlement.rs`・`run_settlement/`・`dispatcher/worker_finish.rs` に当てた結果: 0 件（exit 1）。
 
 ### 未解決
 

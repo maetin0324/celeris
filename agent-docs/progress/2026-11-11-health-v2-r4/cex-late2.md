@@ -1,13 +1,111 @@
 ---
 title: "健全性v2 R4 cex-late2: 段の repair・replan の後に届く旧い統合・旧い review の合格の反例試験と guard の確認"
 tasks: [01M7DYMCVS1PMDK2N0WW3ME9T8]
-status: running
-updated: 2026-11-14
+status: done
+updated: 2026-11-15
 ---
 # 健全性v2 R4 cex-late2
 
-`cex-late.md` の「残り」1〜3 を終える task。WU ごとに節を分ける。この節は WU `late-integ`（段の repair の後に届く旧い統合の
-完了）の結果。基準は `$CELERIS_WU_BASE`。本体（`cfg(test)` の外）は変えていない。
+完了日: 2026-11-15
+
+[cex-late.md](cex-late.md) の「残り」1〜4 を終える task。WU ごとに節を分ける（`late-integ`・`late-review`・`late-close`）。
+最初の「総括」節が task 全体の結論で、WU `late-close` が書いた。基準は `$CELERIS_WU_BASE`。`late-integ` と `late-close` は
+本体（`cfg(test)` の外）を変えていない。`late-review` は ADR
+[2026-11-14-review-verdict-after-plan-reopen](../../adr/2026-11-14-review-verdict-after-plan-reopen.md) を足してから本体を直した。
+
+## 総括（late-close）
+
+結論: `crates/task-dispatch/src/dispatcher/tests/cex_late_completion.rs` の 6 本はすべて合格する。6 本とも、対応する guard を
+本体で一時的に外すと落ちる（下の総表の E1・E3〜E8）。replan × 統合の試験で旧い統合の完了を止めたのは、task-ops の
+`plan_replan` が running の統合 WU を pending に戻すことと、dispatcher の `on_integration_finished` が running でない統合 WU の
+結果を捨てることの組だった（E1・E3。E2 で Task の状態の側は効いていないことも確かめた）。試験 file は変えていない。
+
+### 6 本の試験と guard
+
+| 試験 | 守る不変条件（要約） | 外すと落ちた guard（総表の番号） |
+|---|---|---|
+| `cex_quota_group_two_consecutive_ends_are_both_counted` | 同じ quota group の run 2 本の終わりが続けて届いても、2 本とも帳簿（runs 索引の usage、group が閉じたときの `QuotaEstimated` の按分）に入る。木の USD 上限は 2 本の和（1.2 USD ≥ 1 USD）で判定し、1 本目だけ（0.6 USD）では止めない | E4（group が閉じたときの他 member への按分の event）、E5（USD 上限の判定） |
+| `cex_quota_group_two_consecutive_ends_unknown_cost_stops` | 2 本目が usage を返さない（費用不明）とき、1 本目の既知の費用が上限の内側でも 2 本目の後に木を止め、決定要求に費用不明 1 件を書く。費用不明を 0 USD に倒さない | E4、E6（費用不明で止める判定）、E7（費用不明の数え上げ） |
+| `cex_late_review_and_integration_after_replan_are_dropped` | 統合の検査が走っている間に人の replan（段 `build` に WU `c`）が確定したら、旧い統合（`a`・`b` だけ）の完了は `PhaseIntegrated` を付けない。統合 WU の done と最終 review は `c` の done の後 | E1、E3 |
+| `cex_late_integration_after_stage_repair_is_dropped` | 統合の検査が走っている間に段の repair（`repair-build-1`、`RepairScheduled{origin: planner}`）が確定したら、旧い統合の完了は捨てる。`PhaseIntegrated` は repair の commit（`r.txt`）を含む HEAD にだけ付く | E1、E3 |
+| `cex_late_review_pass_after_replan_is_dropped` | 最終 review の reviewer run が止まっている間に人の replan が確定したら、旧い合格は Task を Done にせず、新しい候補に付かない。Done にするのは `c.txt` を含む候補の review だけ | E8（late-review の修正の guard） |
+| `cex_late_review_pass_after_repair_is_dropped` | 同じ順序で段の repair が確定したときも同じ（新しい候補は `r.txt` を含む） | E8（late-review の修正の guard） |
+
+### guard の一時変更の総表
+
+どれも 1 つずつ当て、`cargo nextest run -p task-dispatch -E 'test(/cex_late_completion::/)' --no-fail-fast` を実行し、
+`git checkout -- <file>` で戻した（commit していない）。E1〜E8 の後の `git status --short` は空。E1 は late-integ、E8 は
+late-review の確認を、提出時の本体でやり直したもの。
+
+| # | 一時変更（本体） | 結果（6 本中） |
+|---|---|---|
+| E1 | `crates/task-dispatch/src/dispatcher/phase_integration.rs` の `on_integration_finished` の破棄 `if task.status != Status::Running \|\| integ.status != task_core::WorkUnitStatus::Running` から `\|\| integ.status != …Running` を外す | 4 合格・2 失敗。`cex_late_integration_after_stage_repair_is_dropped`: 「旧い統合の完了が repair の done の前に PhaseIntegrated を付けた: repair_done=None integrated=[["a", "b"]] integ_done=Some(32) … status=Running」。`cex_late_review_and_integration_after_replan_are_dropped`: 「旧い統合の完了が新しい計画の段に PhaseIntegrated を付けた: c_done=Some(39) integrated=[(33, ["a", "b"])] …」 |
+| E2 | 同じ行から `task.status != Status::Running \|\|` だけを外す（統合 WU の状態の半分は残す） | 6 合格（この順序では効かない。下の「確かめられなかった guard」） |
+| E3 | `crates/task-ops/src/execution.rs` の `plan_replan`（v2 の統合 WU の持ち越し）で、running の統合 WU を pending に戻さず running のまま持ち越す（`row.status` と `WorkUnitTransitioned` の event の条件の 2 か所） | 4 合格・2 失敗。E1 と同じ 2 本が同じ assert で落ちた（`integrated=[["a", "b"]]`、`integrated=[(32, ["a", "b"])]`） |
+| E4 | `crates/task-dispatch/src/routing_runtime/quota.rs` の見積りの記録で、group が閉じたときの他 member への按分の event（`proposal.others`）を append しない | 4 合格・2 失敗。quota の 2 本とも `cex_late_completion.rs:344` の `node_events.len()` で落ちた（left 1・right 2。先に終わった run の event は暫定の `Unknown` 1 件のまま） |
+| E5 | `crates/task-core/src/tree/limits.rs` の `run_limit_breach` の `counters.usd_micros >= max` を `false && …` にする | 5 合格・1 失敗。`cex_quota_group_two_consecutive_ends_are_both_counted` が `:299` の `run_until_state(… limit_decisions > 0)` で落ちた（決定要求が出ず、60 秒の保険で false） |
+| E6 | 同じ関数の `counters.unknown_cost_runs > 0` を `false && …` にする | 5 合格・1 失敗。`cex_quota_group_two_consecutive_ends_unknown_cost_stops` が `:299` で落ちた（同上） |
+| E7 | 同じ file の `TreeCounters::cost_add` で、`RunBudgetCost::Unknown` のとき `unknown_cost_runs` を増やさない（費用不明を 0 USD に倒す） | 5 合格・1 失敗。`cex_quota_group_two_consecutive_ends_unknown_cost_stops` が `:299` で落ちた（同上） |
+| E8 | `crates/task-dispatch/src/dispatcher/review_verdict.rs` の `on_review_finished` の `let plan_reopened = task.status == Status::Reviewing && …` を `false && …` にする（late-review が足した破棄を外す） | 4 合格・2 失敗。review の 2 本が `:928` で「旧い reviewer の合格が計画の変更の後の Task を Done にした: unit_done=None status=Done transitions=[(Running, "dispatch"), (Reviewing, "worker_done"), (Done, "review_pass")] …」 |
+
+E5〜E7 の失敗は 60 秒の保険（`STATE_WAIT_GUARD`）の後に出る。待ちは出来事待ちのままで、tick の回数では待っていない。
+
+### replan × 統合で旧い完了を止めた guard
+
+late-integ の確認の続き。旧い統合の完了を止めたのは次の 2 つの組で、どちらを外しても落ちる。
+
+1. `task_ops::execution::plan_replan`（`crates/task-ops/src/execution.rs`）は、未統合の段の統合 WU を新しい版の依存（`c` か
+   `repair-build-1` を含む）に付け替え、running でも `pending` に戻す（`WorkUnitTransitioned` の reason は `replan v2`）。
+   行（id）は持ち越すが、状態は持ち越さない（E3）。
+2. `on_integration_finished`（`crates/task-dispatch/src/dispatcher/phase_integration.rs`）は、統合 WU が running でない結果を
+   「stale integration result discarded」として捨てる（E1）。
+
+統合の process は replan の後も走り続け（統合の process が残る間、dispatcher は Task の WU を起こさない）、その完了が 2. で
+捨てられる。新しい unit の done の後、統合 WU は ready に戻り、統合をやり直す。[cex-late.md](cex-late.md) の観測
+「人の replan は daemon が足した統合 WU を running のまま持ち越す」は誤りで、この節で正した（running のまま持ち越すのは
+ADR-0079 D9 の kind task の unit の子が走っている場合だけ）。
+
+### 確かめられなかった guard（外しても落ちなかったもの）
+
+- `on_integration_finished` の `task.status != Status::Running`（E2）: この file の順序では replan も repair も Task の状態を
+  変えず、Task は Running のままなので、この半分は旧い完了を止めていない。Task が Running でない間に統合の結果が届く順序は
+  この file の試験では作っていない（他の file の試験が覆うかは未確認）。
+- late-review の計画 v1 の記録（late-review の節）: `review_verdict.rs` の `task.status != Status::Reviewing` の破棄と
+  `review_spawn.rs` の検査後の snapshot の照合（HEAD・branch・target）を外しても、review の 2 本の落ち方は変わらず、他の 4 本は
+  合格した。この順序は Task の状態も候補の commit・target も変えず、計画だけを変えるため。
+- 外していない guard: runs 索引の usage の記録（各 run の終わりで書く）。quota group に固有の guard ではなく、
+  `after_first` の `(600_000, 0)` と `after_second` の `(1_200_000, 0)` の assert が直接見る。
+
+### 本体の修正（late-review の要約）
+
+ADR [2026-11-14-review-verdict-after-plan-reopen](../../adr/2026-11-14-review-verdict-after-plan-reopen.md)。
+`on_review_finished`（`review_verdict.rs`）は、Task が Reviewing で `task_core::next_work_unit` が `RunWorkUnit`（ready か
+needs_continuation の unit が残る）を返すとき、判定を合格・不合格とも捨て（`WorkerFinished.end` と run index を `Cancelled`）、
+Task を `Trigger::ReviewPlanReopened`（reason `review_plan_reopened`、attempts 不変）で Reviewing → Ready に戻す。
+blocked・failed だけが残る計画（ADR-0120 の integration repair の fallback）は条件に当たらず、判定を捨てない。
+詳細は下の late-review の節の「修正（計画 v2）」。
+
+### 変更（commit の件名、late-close）
+
+- `late-close: 既存 3 本の guard を確かめ、cex-late2 を総括して cex-late を done にする`
+
+試験 file（`cex_late_completion.rs`）は変えていない。doc comment の不変条件と assert は、上の一時変更で全 6 本が落ちることを
+確かめたので、補強は要らないと判断した。
+
+### 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+
+（late-close の検査の後に書く）
+
+### 未解決
+
+- 無し。6 本の反例はすべて試験で固定し、guard を外すと落ちることを確かめた。
+- 本番で最終 review 中の replan が `MergeQueued` まで進むかは試していない（fixture は配送の行を作らない。late-review の節）。
+  late-review の修正は判定の適用より前に捨てるので、この順序では配送に進まないはず（コードからの判断。本番では未確認）。
+
+### 提案
+
+- Task が Running でない間に統合の結果が届く順序（E2 の半分）を固定する試験が要るかを、ADR D7 の付記（親の段 `close-d7`）で
+  判断する。この task の範囲（`cex-late.md` の「残り」）には入らない。
 
 ## late-integ: 段の repair の後に届く旧い統合の完了
 

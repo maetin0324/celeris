@@ -19,7 +19,7 @@ use commands::campaign::{self as campaign_cmd, CampaignCommand};
 use commands::cancel::{self, CancelArgs};
 use commands::config::{self as config_cmd, ConfigCommand};
 use commands::cos_ops::{self, ApiRequestArgs};
-use commands::cron::{self as cron_cmd, CronCommand};
+use commands::cron::{self as cron_cmd, ApiConfig, CronCommand};
 use commands::curation::{self as curation_cmd, CurationCommand};
 use commands::db::{self as db_cmd, DbCommand};
 use commands::eval::{self as eval_cmd, EvalCommand};
@@ -490,7 +490,7 @@ fn main() -> ExitCode {
         if let Command::Add(args) = cli.command {
             let result = (|| {
                 let body = add::cos_body(args)?;
-                let api = cos_ops::api_config(cos_options.api_url.as_deref())?;
+                let api = ApiConfig::from_config(None, cos_options.api_url.as_deref(), None)?;
                 cos_ops::send(
                     &api,
                     "POST",
@@ -525,13 +525,13 @@ fn main() -> ExitCode {
                 }
             };
         }
-        // ADR 2026-10-09-cos-operations-all-mutations D3: subcommands whose domain request is a
-        // registered CoS operation go through `/cos/operations` with the run credential.
+        // ADR 2026-10-09-cos-operations-all-mutations D3: registered operations use the run credential.
         match cos_mapped(&cli.command) {
             Ok(Some((method, path, body))) => {
-                let result = cos_ops::api_config(cos_options.api_url.as_deref()).and_then(|api| {
-                    cos_ops::send(&api, method, &path, body, &cos_options, Some(&credential))
-                });
+                let result = ApiConfig::from_config(None, cos_options.api_url.as_deref(), None)
+                    .and_then(|api| {
+                        cos_ops::send(&api, method, &path, body, &cos_options, Some(&credential))
+                    });
                 return match result {
                     Ok(value) => {
                         println!("{value}");

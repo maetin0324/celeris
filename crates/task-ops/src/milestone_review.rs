@@ -69,13 +69,6 @@ pub struct ReviewState {
     pub reply: Option<Message>,
 }
 
-impl ReviewState {
-    /// 人に知らせてよいか（返事が付いているか。ADR-0038 D4: 通知は返事の後）。
-    pub fn has_reply(&self) -> bool {
-        self.reply.is_some()
-    }
-}
-
 /// レビューの対話とその返事を引く（決定的。無ければ空の `ReviewState`）。
 pub fn review_state(
     store: &dyn TaskStore,

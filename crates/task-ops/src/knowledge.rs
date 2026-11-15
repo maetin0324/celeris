@@ -537,12 +537,6 @@ fn parse_commit(line: &str) -> Option<DocCommit> {
 // ページ 1 枚
 // ---------------------------------------------------------------------------
 
-/// KB のファイルの絶対パス（境界の検査を通したものだけ）。
-pub fn page_file(root: &Path, path: &str) -> Result<PathBuf, PathError> {
-    let path = kb::page_path(path)?;
-    Ok(root.join(path))
-}
-
 /// ページの中身（**作業ツリーのファイル**。人が編集中のものもそのまま見える）。
 pub fn read_page(root: &Path, path: &str) -> Option<String> {
     std::fs::read_to_string(root.join(path)).ok()

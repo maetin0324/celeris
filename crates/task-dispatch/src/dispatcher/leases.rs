@@ -224,6 +224,10 @@ impl Dispatcher {
             ) else {
                 continue;
             };
+            #[cfg(test)]
+            if let Some(hook) = self.test_hooks.after_reclaim_decision.take() {
+                hook(task.id);
+            }
             let orphaned = reason == ReclaimReason::Orphaned;
             if orphaned {
                 self.note_orphan_takeover(&task, &lease.worker_run_id, lease.expires_at);

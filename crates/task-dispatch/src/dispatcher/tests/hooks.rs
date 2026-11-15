@@ -25,6 +25,9 @@ pub(in crate::dispatcher) struct TestHooks {
     pub(in crate::dispatcher) cos_reserved_sources: std::collections::BTreeSet<SourceId>,
     /// 統合の状態確認直前に別の ready 戻しを差し込む一回フック（`start_integration` が `take` する）。
     pub(in crate::dispatcher) before_integration_start: Option<fn(&mut Dispatcher, TaskId)>,
+    /// lease の回収を決めた直後（`reclaim_expired_leases` が snapshot の lease で回収の理由を得た後、回収の書き込みの前）
+    /// に 1 回だけ呼ぶ一回フック（`take` する）。別の接続（保持者の instance の store）の `renew_lease` の割り込みを再現する。
+    pub(in crate::dispatcher) after_reclaim_decision: Option<Box<dyn FnOnce(TaskId) + Send>>,
     /// 研究 ablation（phase_effect_ab の off の variant）。本体はこの 1 つの読み口だけを見る。
     pub(in crate::dispatcher) ablation: EffectAblation,
 }

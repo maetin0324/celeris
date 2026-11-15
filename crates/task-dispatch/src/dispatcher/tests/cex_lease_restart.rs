@@ -1123,3 +1123,109 @@ async fn cex_run_finish_and_work_unit_check_finish_in_one_tick() {
     assert_eq!(integrations, 1);
     assert!(store.runs_running().unwrap().is_empty());
 }
+
+/// 不変条件（lease の単一保持者、ADR-0002 D9・ADR-0070 D5・ADR 2026-10-03-ownerless-running-runs）: 回収側が期限切れの
+/// snapshot で lease の回収を決めた後、書き込む前に、保持者が別の接続から `renew_lease` で lease を延ばしたら（本番では保持者の
+/// instance の `StoreSink::heartbeat`）、回収側はその lease を回収しない。保持者・lease の run id と延ばした期限・`runs` 行・
+/// Task の状態と attempts は変わらず、回収側は `WorkerFinished` も `orphan_takeover` の event も書かない。保持者の run は
+/// その後の通常の完了で 1 回だけ閉じる。
+///
+/// 既存試験で検出できない理由: `reclaim_expired_leases` は同期で await を持たないので、試験の task は snapshot
+/// （`store.list(Running)`）と回収の書き込み（`release_lease` → `apply_transition_with_events`。期待する lease を引数に取らない）
+/// の間に他の接続の書き込みを挟めない。期待する行を引数に取り writer transaction の中で照合する store の API
+/// （`recover_work_unit`・`try_start_work_unit_integration`）は WU の行のもので、Task の lease の回収は通らない。
+/// [`cex_stale_holder_late_finish_does_not_overwrite_the_reassigned_run`] は回収が済んだ後の旧保持者の完了だけを、
+/// `orphan_takeover.rs` は持ち主の居ない run の回収だけを、store の `renew_lease_extends_only_the_matching_running_lease`
+/// は renew 単独を見る。回収側自身の延長（ADR-0070 D5 の `alive_task_run`）は回収側の手元の run にしか効かない。どれも
+/// 「期限切れの snapshot → 別の接続の renew → 回収の書き込み」の順を作らないので、回収の書き込みが lease を照合しなくても
+/// 通る。この順は `TestHooks::after_reclaim_decision`（回収を決めた直後の一回フック）で作る。
+#[tokio::test]
+async fn cex_lease_renew_after_expired_snapshot_keeps_the_holder() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lease.db");
+    // 保持者と回収側は同じ DB の別の接続（別の `SqliteStore`）を持つ（同じ DB の 2 instance）。
+    let holder_store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open(&db).unwrap());
+    let reclaim_store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open(&db).unwrap());
+    let task = true_task(dir.path());
+    let id = task.id;
+    holder_store.insert(&task).unwrap();
+    let gated = GatedAdapter::new();
+    let mut holder = dispatcher(holder_store.clone(), gated.clone(), 1);
+    let (s, g) = (holder_store.clone(), gated.clone());
+    assert!(
+        run_until_state(&mut holder, || g.started().len() == 1
+            && lease_run(&s, id).is_some())
+        .await
+    );
+    let run_a = lease_run(&holder_store, id).unwrap();
+    let attempts = holder_store.get(id).unwrap().unwrap().attempts;
+
+    // A の lease を切らす（store の lease 時刻を今にする）。回収側は A を手元に持たない。
+    assert!(
+        holder_store
+            .renew_lease(id, &run_a, Duration::ZERO)
+            .unwrap()
+    );
+    let events_before = events_of(&reclaim_store, id).len();
+    let renewed: Arc<StdMutex<Option<(bool, Option<task_core::Lease>)>>> = Arc::default();
+    let (slot, hs, a) = (renewed.clone(), holder_store.clone(), run_a.clone());
+    let mut reclaimer = dispatcher(reclaim_store.clone(), slow_adapter(), 1);
+    reclaimer.test_hooks.after_reclaim_decision = Some(Box::new(move |task_id| {
+        // 回収を決めた直後に、保持者の接続が lease を延ばす。
+        let ok = hs
+            .renew_lease(task_id, &a, Duration::from_secs(3600))
+            .unwrap();
+        let lease = hs.get(task_id).unwrap().and_then(|t| t.lease);
+        *slot.lock().unwrap() = Some((ok, lease));
+    }));
+    let report = reclaimer.tick().unwrap();
+
+    let decided = renewed.lock().unwrap().clone();
+    let Some((ok, Some(extended))) = decided else {
+        panic!(
+            "the reclaimer did not decide to reclaim the expired lease, or the lease vanished: {decided:?}"
+        );
+    };
+    assert!(
+        ok,
+        "the holder's renew_lease must succeed before the reclaim writes"
+    );
+    assert_eq!(extended.worker_run_id, run_a);
+    let t = reclaim_store.get(id).unwrap().unwrap();
+    let after: Vec<Event> = events_of(&reclaim_store, id).split_off(events_before);
+    let observed = format!(
+        "report {report:?}; status {:?}; attempts {} (before {attempts}); lease {:?} (extended {extended:?}); \
+         A's runs row {:?}; events after the expiry {after:?}",
+        t.status,
+        t.attempts,
+        t.lease,
+        index_status(&reclaim_store, &run_a),
+    );
+    assert_eq!(report.reclaimed, 0, "{observed}");
+    assert_eq!(t.status, Status::Running, "{observed}");
+    assert_eq!(t.lease.as_ref(), Some(&extended), "{observed}");
+    assert_eq!(t.attempts, attempts, "{observed}");
+    assert_eq!(
+        index_status(&reclaim_store, &run_a),
+        Some(task_core::RunIndexStatus::Running),
+        "{observed}"
+    );
+    assert!(
+        finishes(&reclaim_store, id, &run_a).is_empty(),
+        "{observed}"
+    );
+    assert!(!took_over(&reclaim_store, id), "{observed}");
+    assert!(
+        !after
+            .iter()
+            .any(|e| matches!(e, Event::Transitioned { .. })),
+        "{observed}"
+    );
+
+    // 保持者は A を持ち続け、A の通常の完了で 1 回だけ閉じる。
+    gated.release_one();
+    let s = holder_store.clone();
+    assert!(run_until_state(&mut holder, || status_of(&s, id) == Status::Done).await);
+    assert_eq!(finishes(&holder_store, id, &run_a).len(), 1);
+    assert_eq!(worker_starts(&holder_store, id), vec![run_a]);
+}

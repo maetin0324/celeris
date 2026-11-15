@@ -27,7 +27,7 @@ async fn main() -> std::process::ExitCode {
             "usage": check.observation,
         })
     );
-    if check.result == task_core::AccountCheckResult::Ok {
+    if check.result == task_worker::AccountCheckResult::Ok {
         std::process::ExitCode::SUCCESS
     } else {
         std::process::ExitCode::FAILURE

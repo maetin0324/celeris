@@ -139,7 +139,7 @@ async fn auth_failure_excludes_the_account_reroutes_notifies_and_recovers() {
     d.record_account_check(
         AccountAdapter::ClaudeCode,
         "a",
-        AccountCheckResult::AuthFailed,
+        "auth_failed",
         Some(AUTH_MESSAGE.into()),
         None,
     );
@@ -155,7 +155,7 @@ async fn auth_failure_excludes_the_account_reroutes_notifies_and_recovers() {
     d.record_account_check(
         AccountAdapter::ClaudeCode,
         "a",
-        AccountCheckResult::Ok,
+        "ok",
         Some("ok".into()),
         None,
     );
@@ -166,13 +166,7 @@ async fn auth_failure_excludes_the_account_reroutes_notifies_and_recovers() {
     );
 
     // 再ログインでも戻る。
-    d.record_account_check(
-        AccountAdapter::ClaudeCode,
-        "a",
-        AccountCheckResult::AuthFailed,
-        None,
-        None,
-    );
+    d.record_account_check(AccountAdapter::ClaudeCode, "a", "auth_failed", None, None);
     assert!(!account_live(&mut d, "a").logged_in);
     d.record_account_login(AccountAdapter::ClaudeCode, "a");
     let a = account_live(&mut d, "a");

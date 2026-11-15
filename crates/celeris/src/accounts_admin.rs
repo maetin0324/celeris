@@ -58,7 +58,8 @@ pub enum AccountAdminEvent {
     Checked {
         adapter: AccountAdapter,
         id: String,
-        result: AccountCheckResult,
+        /// `AccountCheckResult::as_str` の名前（`Dispatcher::record_account_check` が受ける文字列）。
+        result: String,
         detail: Option<String>,
         observation: Option<RateLimitObservation>,
     },
@@ -421,7 +422,7 @@ async fn finish_check(
         .send(AccountAdminEvent::Checked {
             adapter,
             id,
-            result,
+            result: result.as_str().to_string(),
             detail,
             observation,
         })

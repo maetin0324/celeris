@@ -711,8 +711,8 @@ pub(crate) async fn tick_loop(
             Some(event) = account_rx.recv() => {
                 match event {
                     accounts_admin::AccountAdminEvent::Checked { adapter, id, result, detail, observation } => {
-                        tracing::info!(who = "admin", op = "account_check", account_id = %id, %adapter, result = result.as_str(), "account check recorded");
-                        dispatcher.record_account_check(adapter, &id, result, detail, observation);
+                        tracing::info!(who = "admin", op = "account_check", account_id = %id, %adapter, result = %result, "account check recorded");
+                        dispatcher.record_account_check(adapter, &id, &result, detail, observation);
                     }
                     accounts_admin::AccountAdminEvent::LoggedIn { adapter, id } => {
                         dispatcher.record_account_login(adapter, &id);

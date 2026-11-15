@@ -12,10 +12,9 @@
 use std::path::Path;
 use std::time::Duration;
 
-use task_core::AccountCheckResult;
 use task_core::accounts::parse_opencode_go_usage;
 
-use crate::claude_account::AccountCheck;
+use crate::claude_account::{AccountCheck, AccountCheckResult};
 
 /// `auth.json` から読んだ opencode go の鍵。`Debug` は値を出さない。
 pub(crate) struct GoKey(pub(crate) String);

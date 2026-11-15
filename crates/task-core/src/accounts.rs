@@ -71,8 +71,9 @@ impl std::fmt::Display for AccountAdapter {
 }
 
 // アカウントの確認（ADR-0024 D5/D6）の結果の語彙の正本。task-worker の `check_account*` が返し、
-// task-api の `AccountCheckOutcome`・`AccountCheckResponse` と task-dispatch の `AccountBook` の記録が
-// そのまま使う。下の doc comment は API の schema（docs/api/v1）の description になるので変えない。
+// task-api の `AccountCheckOutcome`・`AccountCheckResponse` がそのまま使う。task-dispatch の
+// `AccountBook`（`last_check.result`）には `as_str` の名前で記録する。下の doc comment は API の
+// schema（docs/api/v1）の description になるので変えない。
 /// Account connectivity check result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

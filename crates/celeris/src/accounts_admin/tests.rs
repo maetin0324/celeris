@@ -70,7 +70,7 @@ async fn spawn_check_reports_ok_and_records_observation_via_event() {
         } => {
             assert_eq!(adapter, AccountAdapter::ClaudeCode);
             assert_eq!(id, "a");
-            assert_eq!(result, AccountCheckResult::Ok);
+            assert_eq!(result, "ok");
         }
         _ => panic!("expected Checked event"),
     }
@@ -135,7 +135,7 @@ echo '{"id":3,"result":{"rateLimits":{"primary":{"usedPercent":25,"windowDuratio
         } => {
             assert_eq!(adapter, AccountAdapter::Codex);
             assert_eq!(id, "a");
-            assert_eq!(result, AccountCheckResult::Ok);
+            assert_eq!(result, "ok");
         }
         _ => panic!("expected Checked event"),
     }
@@ -431,7 +431,7 @@ echo '{"id":2,"result":{"account":{"type":"apiKey"}}}'"#,
         .unwrap()
         .unwrap();
     assert!(
-        matches!(event, AccountAdminEvent::Checked { adapter: AccountAdapter::Codex, result, .. } if result == AccountCheckResult::Ok)
+        matches!(event, AccountAdminEvent::Checked { adapter: AccountAdapter::Codex, result, .. } if result == "ok")
     );
     assert_eq!(checks.last.len(), 1);
     assert!(checks.last.contains_key("a"));

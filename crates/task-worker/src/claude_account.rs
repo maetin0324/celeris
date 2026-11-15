@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use nix::sys::signal::Signal;
-use task_core::{AccountCheckResult, RateLimitObservation};
+use task_core::RateLimitObservation;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::task::JoinHandle;
@@ -23,6 +23,11 @@ use crate::subprocess::{LineOutcome, MAX_LINE_BYTES, read_line_limited, send_sig
 /// N5: ログイン中継の読み取りタスク（stdout/stderr の `pump_reader`）の join を待つ上限。子プロセスは
 /// 既に `wait()` 済みなのでパイプはすぐ閉じるはずだが、何かで詰まっても中継全体を止めないための保険。
 pub(crate) const READER_JOIN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// `check_account` / `AccountLoginResult` の結果種別（ADR-0024 D5/D6）。型の正本は `task_core::accounts`
+/// で、ここは `AccountCheck.result` の型を task-worker の利用者（`codex_account`・`opencode_account`・
+/// `examples/codex_usage.rs`）へ同じ path で見せる再公開（写しの型ではない）。
+pub use task_core::AccountCheckResult;
 
 /// `check_account` の結果（ADR-0024 D6）。
 #[derive(Debug, Clone, PartialEq)]

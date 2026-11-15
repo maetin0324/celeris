@@ -61,11 +61,10 @@ use std::time::{Duration, Instant};
 use task_core::plan::{PlanLimits, PlanOutput, materialize_logging};
 use task_core::report::{HEADLINE_MAX_CHARS, first_line, truncate_chars};
 use task_core::{
-    AccountAdapter, AccountCheckResult, ArtifactRef, Check, DelegateTask, DelegationLimits, Event,
-    GenreSpec, ListFilter, ListOrder, NodeSession, NotificationKind, OnChildFailure, OrgKind,
-    ProjectId, ProjectStatus, RateLimitObservation, RoleSpec, RunRole, SessionKind, Status,
-    StoreError, Task, TaskId, TaskKind, TaskStore, Tier, Trigger, WorkspaceMode, WorkspaceSpec,
-    support_kind,
+    AccountAdapter, ArtifactRef, Check, DelegateTask, DelegationLimits, Event, GenreSpec,
+    ListFilter, ListOrder, NodeSession, NotificationKind, OnChildFailure, OrgKind, ProjectId,
+    ProjectStatus, RateLimitObservation, RoleSpec, RunRole, SessionKind, Status, StoreError, Task,
+    TaskId, TaskKind, TaskStore, Tier, Trigger, WorkspaceMode, WorkspaceSpec, support_kind,
 };
 use task_ops::daemon::{
     AccountCheckView, AccountCooldownLive, AccountLive, AccountUsageLive, ClusterLive,
@@ -1621,7 +1620,7 @@ impl Dispatcher {
         &mut self,
         adapter: AccountAdapter,
         id: &str,
-        result: AccountCheckResult,
+        result: &str,
         detail: Option<String>,
         observation: Option<RateLimitObservation>,
     ) {
@@ -1634,38 +1633,40 @@ impl Dispatcher {
         if let Some(obs) = observation {
             book.record_observation(id, obs, ObservationSource::Check);
         }
-        let failure = match result {
-            AccountCheckResult::Ok => {
+        match result {
+            "ok" => {
                 book.clear_cooldown(id);
                 if adapter == AccountAdapter::Codex && !has_observation {
                     book.clear_observation(id);
                 }
-                None
             }
-            AccountCheckResult::AuthFailed => Some(AccountCooldownReason::AuthFailed),
-            AccountCheckResult::Throttled => Some(AccountCooldownReason::Throttled),
-            AccountCheckResult::SpawnFailed => None, // 通信失敗だけでは前回の観測を消さない。
-        };
-        if let Some(reason) = failure {
-            if reason == AccountCooldownReason::AuthFailed && !book.auth_failed_held(id, now) {
-                self.notify_account_auth_failed(adapter, id);
+            "auth_failed" | "throttled" => {
+                let reason = if result == "auth_failed" {
+                    AccountCooldownReason::AuthFailed
+                } else {
+                    AccountCooldownReason::Throttled
+                };
+                if reason == AccountCooldownReason::AuthFailed && !book.auth_failed_held(id, now) {
+                    self.notify_account_auth_failed(adapter, id);
+                }
+                let cooldown = account_cooldown_for_failure(
+                    book.state(id),
+                    reason,
+                    now,
+                    self.config
+                        .accounts
+                        .as_ref()
+                        .map_or(300, |c| c.fallback_cooldown_secs),
+                );
+                book.set_cooldown(id, cooldown, now);
             }
-            let cooldown = account_cooldown_for_failure(
-                book.state(id),
-                reason,
-                now,
-                self.config
-                    .accounts
-                    .as_ref()
-                    .map_or(300, |c| c.fallback_cooldown_secs),
-            );
-            book.set_cooldown(id, cooldown, now);
+            _ => {} // 通信失敗だけでは前回の観測を消さない。
         }
         book.record_check(
             id,
             AccountCheckRecord {
                 at: now,
-                result: result.as_str().to_string(),
+                result: result.to_string(),
                 detail,
             },
         );

@@ -451,3 +451,105 @@ events after the expiry [Transitioned { from: Running, to: Ready, reason: "infra
 - `sh "$CELERIS_WU_SCOPE_PATHS"` → `cex-race.md`・`leases.rs`・`cex_lease_restart.rs`・`hooks.rs` の 4 file だけ。
 - `git diff $CELERIS_WU_BASE HEAD -- crates ':!crates/task-dispatch/src/dispatcher/tests'` → `leases.rs` の `#[cfg(test)]` の追加 4 行だけ
   （`cfg(test)` の外の差分は無い）。
+
+## fix-store: lease を同じ transaction で照合してから遷移を書く store の口（2026-11-15）
+
+結論: store に `TaskStore::apply_transition_if_lease` を足し、本番の呼び出しの無い `TaskStore::release_lease` を消した。
+回収の経路（`reclaim_expired_leases`・`RunSupervisor::release_lease`）は変えていない（fix-reclaim の仕事）。反例 (i) の試験
+`cex_lease_renew_after_expired_snapshot_keeps_the_holder` は、fix-reclaim がこの口に替えるまで落ちる見込み（回収の経路を
+変えていないため。この unit では task-dispatch の試験を走らせていない）。task-dispatch は変えていない。
+基準は `$CELERIS_WU_BASE`。
+
+### 変更（commit の件名）
+
+- `fix-store: add TaskStore::apply_transition_if_lease (compare the lease in the same transaction) and remove the unused release_lease`
+  - `agent-docs/adr/2026-11-15-lease-reclaim-compare-and-release.md`（D1〜D4 と範囲外）。実装の前に書いた。
+  - `crates/task-core/src/store/task_store.rs`: trait に `apply_transition_if_lease(&self, task_id, expected: &Lease, trigger,
+    extra_events) -> Result<Option<Outcome>, StoreError>` を足し、`release_lease` の宣言を消した。`update_task` の doc comment の
+    「`acquire_lease` / `release_lease` と同じ規律」を `apply_transition_if_lease` に替えた。
+  - `crates/task-core/src/store/approvals.rs`: 本体 `apply_transition_if_lease_impl`。1 つの Immediate transaction で `get_locked`、
+    `status == Running && task.lease.as_ref() == Some(expected)` でなければ commit せずに `Ok(None)`、一致すれば
+    `apply_transition_tx`（遷移・`Transitioned`・`extra_events` と、その投影〈`runs` 行の閉じなど〉）を書いて commit し `Ok(Some(outcome))`。
+  - `crates/task-core/src/store/task_store_impl.rs`: 1 行の転送を足し、`release_lease` の転送を消した。
+  - `crates/task-core/src/store/tasks.rs`: `release_lease_impl` を消した。
+  - `crates/task-core/src/store/tests.rs`: `release_lease_then_reacquire_succeeds` を消した（置き換えは試験 (e)）。
+  - `crates/task-core/src/store/lease_reclaim_tests.rs`（新規、`store/mod.rs` に `#[cfg(test)]` で登録）: 試験 (a)〜(e)。
+  - `crates/task-core/src/store/mod.rs`: module map の `tasks.rs` の行から `release_lease` を外し、`approvals.rs` の行に
+    `apply_transition_if_lease` を足した。
+- この節（commit の件名 `fix-store: record the compare-and-release store API, the guard checks and the hand-off to fix-reclaim in cex-race`）。
+
+### 作業前 brief
+
+1. 根本原因: lease の回収の書き込み（`RunSupervisor::release_lease` → `apply_transition_with_events`）が snapshot の lease を
+   照合しない。症状は renew-race の節の「観測」（保持者が延ばした lease を回収側の古い snapshot が消す）。
+2. 責務 owner: store の書き込み口（`crates/task-core/src/store/`）。照合は writer transaction の中でしか正しくできない
+   （dispatcher 側の読み直しは読みと書きの間に窓が残る。renew-race の G-proto）。回収側の呼び出しの差し替えは fix-reclaim。
+3. 既存の再利用先: `apply_transition_tx`（遷移・events・終端の cascade を同じ tx で書く部品）、`get_locked`、
+   `apply_transition_with_work_units_impl` と同じ transaction の組み方。`Lease` の `PartialEq`（run id と期限）。
+4. 選択肢: (a) 新しい口を足し照合と遷移を同じ tx にする、(b) `apply_transition_with_events` に `Option<&Lease>` を足す、
+   (c) dispatcher で読み直してから書く。(b) は共通の口に回収だけの分岐を足す（`local_hook_in_shared_interface`）。(c) は窓が残る。
+   (a) を採った。本体の置き場所は `approvals.rs`（遷移の入口。`tasks.rs` に置くと `tasks` → `transition` の依存になり、module map
+   の依存の向き〈`transition` → `tasks`〉に逆らう）。
+5. 新しい状態・分岐・fallback・port: store の method 1 つ（照合の分岐 1 つ）。状態・fallback・flag は無し。`release_lease` を
+   消すので `TaskStore` と `SqliteStore` の method の数は増えない。
+6. 撤去対象: `TaskStore::release_lease`・`SqliteStore::release_lease_impl`・試験 `release_lease_then_reacquire_succeeds`・
+   module map と `update_task` の doc comment の `release_lease` の記述。
+7. 不変条件: 照合が合えば遷移と終了記録を同じ tx で書く。合わなければ（無い・running でない・run id が違う・期限が違う）
+   `tasks` 行・events・`runs` 行のどれも書かない。回収の後は別の run が lease を取り直せる。試験は下の (a)〜(e)。
+
+### 試験（`crates/task-core/src/store/lease_reclaim_tests.rs`）
+
+各試験の doc comment に、守る不変条件と既存の試験で検出できない理由を書いた。「何も書かない」は、`tasks` 行の生の列
+（status・`lease_worker_run_id`・`lease_expires_at`・`json`・`updated_at`）、`events_for`、run の `runs` 行の 3 つを呼ぶ前後で比べる。
+
+| 試験 | 手順と assert |
+|---|---|
+| (a) `apply_transition_if_lease_writes_the_reclaim_when_the_lease_matches` | lease を取った Task に DB の lease と `InfraRequeue` と `WorkerFinished{lease_expired}` → `Some`（next ready、attempts 0）。Task は ready、lease と lease の 2 列は無し、events の末尾は `Transitioned{running→ready, infra_requeue}` と `WorkerFinished`、`runs` 行は `harness_error` |
+| (b) `apply_transition_if_lease_writes_nothing_after_a_renew_on_another_connection` | 同じ DB file を `SqliteStore::open` で 2 回開く。回収側が `list(Some(Running))` で snapshot を取り、保持者が別の接続で `renew_lease(.., 3600 秒)`（run id は同じ、期限だけが延びる）。回収側が snapshot の lease で呼ぶ → `None`、3 つとも不変、lease は延ばした lease |
+| (c) `apply_transition_if_lease_writes_nothing_for_another_run_id` | 期限は同じで run id が違う lease → `None`、3 つとも不変 |
+| (d) `apply_transition_if_lease_writes_nothing_when_the_task_is_not_running` | blocked で lease の列が渡す lease と等しい Task に `Cancel`（blocked からも通る遷移）→ `None`、3 つとも不変、status は blocked のまま。無い Task も `None` |
+| (e) `acquire_lease_succeeds_after_a_compare_and_release_reclaim` | 回収（`Some`）の後に `acquire_lease(run-b)` が true、lease は run-b。古い snapshot の lease でもう一度呼ぶ → `None`、3 つとも不変 |
+
+### guard を一時的に外した確認
+
+`approvals.rs` の照合を一時的に変え、`cargo nextest run -p task-core --no-fail-fast -E 'test(/lease_reclaim_tests::/)'` を走らせた。
+一時変更は実装の commit の後に入れ、走らせるたびに `git checkout --` で戻した（commit していない。戻した後に `git status --short` は空、
+`grep -rn "GUARD-OFF" crates/` は 0 件）。
+
+| 一時変更 | 結果 |
+|---|---|
+| G1: 照合を外す（`held` を見ずに必ず書く） | exit 100、5 本中 4 本落ちる（(b)・(c)・(d)・(e)）。(a) は合格 |
+| G2: run id だけを比べる（期限を比べない） | exit 100、(b) だけ落ちる（renew で延びた lease を回収した） |
+| G3: status を見ない（lease だけを比べる） | exit 100、(d) だけ落ちる（blocked の Task を cancelled にした） |
+
+### 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+
+- `cargo nextest run -p task-core --no-fail-fast -E 'test(/lease_reclaim_tests::/)'` → exit 0、5 本すべて合格。
+- `cargo nextest run -p task-core --no-fail-fast -E 'test(/store::/)'` → exit 0、317 本すべて合格。
+- `cargo nextest run -p task-core --no-fail-fast` → exit 0、1378 本すべて合格。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `bash scripts/dev/check-health.sh` → exit 0（verdict pass、fail_grade 0、worsened 0、gate の試験も合格）。auto の base に対する
+  new 1 件（`migration.remnant`、`crates/task-dispatch/src/host_maintenance.rs`）はこの unit の変更ではない（下の WU base の比較で new 0）。
+- `python3 scripts/dev/repo-health/repo_health.py --repo . --base "$CELERIS_WU_BASE" --head worktree --policy-version 1 --out <file>`
+  → exit 0、verdict pass、new 0・worsened 0。
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → ADR・`approvals.rs`・`lease_reclaim_tests.rs`・`mod.rs`・`task_store.rs`・`task_store_impl.rs`・
+  `tasks.rs`・`tests.rs` とこの進捗ファイルだけ。task-dispatch の差分は無い。
+- `grep -rn "release_lease" crates --include=*.rs` → `RunSupervisor::release_lease`（dispatcher の別の関数）とその呼び出し、
+  target_sweep の無関係な試験名だけ。`TaskStore::release_lease` は残っていない。
+- `bash scripts/dev/test-affected.sh` は走らせていない（Objective の指示。反例 (i) の試験が fix-reclaim まで落ちる）。
+
+### fix-reclaim への引き継ぎ
+
+- `RunSupervisor::release_lease` の `store.apply_transition_with_events(task_id, verdict.trigger.clone(), finished)` を、snapshot の
+  lease（`reclaim_expired_leases` の `task.lease`）を渡す `store.apply_transition_if_lease(task_id, &lease, verdict.trigger.clone(), finished)`
+  に替える。`None` は「回収しない」（ADR D2: 終了記録・WU の照合・統合の照合・decision log・backoff の期限を作らず、`count` も
+  増やさない）。
+- ADR D4: `note_orphan_takeover` は今は回収の書き込みの前に `append_event` している。`Some` のときだけ残す形にする（`extra_events`
+  に入れるか、`Some` の後に追記するか）。
+- 観測（未確認の影響）: `reclaim_expired_leases` は書き込みの前に `take_task_runs`（手元の run の停止）と `finalise_from_result_json`
+  （範囲外）を行う。照合が `None` を返したときにこれらが先に済んでいることの扱いは fix-reclaim が決める。
+
+### 未解決
+
+- 反例 (i) は fix-reclaim の後に直る見込み。この unit の時点で `cex_lease_renew_after_expired_snapshot_keeps_the_holder` が落ちることは
+  走らせて確かめていない（回収の経路を変えていないので、renew-race の節の「観測」と同じく落ちる見込み）。

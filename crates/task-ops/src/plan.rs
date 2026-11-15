@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use task_core::Tier;
 
 // 下の `///` は生成 API schema（`docs/api/v1/api-v1.schema.json`・`web/api/generated/schema.json`）の description に
-// 写る。schema はこの unit の範囲の外なので文言を変えない（型ごと消す案は R6 の進捗 legacy.md の「提案」）。
+// 写る。schema はこの unit の範囲の外なので文言を変えない（型ごと消す案は R6 の進捗の「提案」）。
 /// `celerisctl plan` から組み立てる新規 Plan タスクの指定。API の `POST /plans` の本文でもある（`docs/api/v1/api.md` §3.14）。
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

@@ -641,6 +641,95 @@ mod tests {
         }
     }
 
+    /// 不変条件（ADR 2026-11-15 lease-reclaim-compare-and-release D2・D4）: snapshot の lease が DB の lease と違えば
+    /// （保持者が同じ run id のまま延ばした）、`release_lease` は遷移・終了記録・孤児の回収の記録（`orphan_takeover`）の
+    /// どれも書かず、backoff も立てない。合えば、記録は遷移と同じ transaction で終了記録の前に残る。
+    ///
+    /// 既存の試験で検出できない理由: `dispatcher/tests/orphan_takeover.rs` は回収が書ける場合だけを作り、記録の有無を
+    /// `any` で見る。`cex_lease_renew_after_expired_snapshot_keeps_the_holder` の回収の理由は期限切れで、孤児の記録を
+    /// 作らず、回収側の backoff も見ない。記録を照合の外で先に追記しても、`None` で backoff を立てても、どれも落ちない。
+    #[test]
+    fn release_lease_writes_nothing_for_a_stale_snapshot_and_the_takeover_note_with_the_reclaim() {
+        let store = task_core::SqliteStore::open_in_memory().expect("store");
+        let spec: task_ops::add::NewTaskSpec = serde_json::from_value(serde_json::json!({
+            "title": "t", "objective": "o", "status": "ready",
+            "acceptance": [{"type": "command", "cmd": "true"}],
+        }))
+        .expect("spec");
+        let task = task_ops::add::create_task(&store, spec, at(0)).expect("task");
+        let lease_of = || store.get(task.id).expect("get").expect("task").lease;
+        assert!(
+            store
+                .acquire_lease(task.id, "run-a", Duration::from_secs(60))
+                .expect("acquire")
+        );
+        let snapshot = lease_of().expect("lease");
+        assert!(
+            store
+                .renew_lease(task.id, "run-a", Duration::from_secs(3600))
+                .expect("renew")
+        );
+        let extended = lease_of().expect("lease");
+        let runs = ["run-a".to_string()];
+        let note = || Some(orphan_takeover_note("run-a", snapshot.expires_at));
+        let before = store.events_for(task.id).expect("events");
+        let mut sup = RunSupervisor::<()>::new();
+        for reason in [ReclaimReason::Expired, ReclaimReason::Orphaned] {
+            let verdict = reclaim_verdict(reason, 1, 3, "run-a");
+            let takeover = (reason == ReclaimReason::Orphaned).then(note).flatten();
+            let stale = sup.release_lease(
+                &store,
+                task.id,
+                &snapshot,
+                &verdict,
+                takeover,
+                &runs,
+                None,
+                at(0),
+            );
+            assert_eq!(stale.expect("release"), None, "{reason:?}");
+            assert_eq!(
+                store.events_for(task.id).expect("events"),
+                before,
+                "{reason:?}"
+            );
+            assert_eq!(lease_of(), Some(extended.clone()), "{reason:?}");
+            assert_eq!(sup.infra_backoff_until(task.id), None, "{reason:?}");
+        }
+
+        let verdict = reclaim_verdict(ReclaimReason::Orphaned, 1, 3, "run-a");
+        let written = sup.release_lease(
+            &store,
+            task.id,
+            &extended,
+            &verdict,
+            note(),
+            &runs,
+            None,
+            at(0),
+        );
+        assert_eq!(
+            written.expect("release").expect("written").next,
+            task_core::Status::Ready
+        );
+        let after: Vec<Event> = store.events_for(task.id).expect("events")[before.len()..]
+            .iter()
+            .map(|(_, e)| e.clone())
+            .collect();
+        assert!(
+            matches!(
+                after.as_slice(),
+                [
+                    Event::Transitioned { .. },
+                    Event::WorkerProgress { run_id: p, msg, .. },
+                    Event::WorkerFinished { run_id: f, .. },
+                ] if p == "run-a" && f == "run-a" && msg.starts_with(crate::orphan::ORPHAN_TAKEOVER_REASON)
+            ),
+            "{after:?}"
+        );
+        assert_eq!(lease_of(), None);
+    }
+
     /// 不変条件（D3）: 回収する鍵はその task の鍵すべて（v2 の並列 WU の run を含む）で、他の task の鍵を含まない。
     #[test]
     fn reclaim_keys_selects_the_task_runs() {

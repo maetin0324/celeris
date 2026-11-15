@@ -43,12 +43,14 @@
 //! - `tasks.rs`: task 行の読み書き（`get_locked`/`insert_tx`/`update_task_tx`/`rewrite_task_tx`）と、
 //!   task・lease の `TaskStore` 本体（`insert`/`get`/`list`/`count_by_status`/`children`/
 //!   `create_task`/`delegate_children`/`retry_task`/`update_task`/`acquire_lease`/`renew_lease`/
-//!   `extend_task_lease`/`release_lease`/`ready_tasks`/`halted_by_pause`）。
+//!   `extend_task_lease`/`ready_tasks`/`halted_by_pause`）。lease を照合してから書く遷移（回収）は `approvals.rs`。
 //! - `events.rs`: `append_event_tx`（events への追記）と、同じ tx で書く Event 由来の投影
 //!   （`runs` 行の終端化・木の `work_units.child_task_id`・`decisions` 行と `decisions` の行変換）、
 //!   events を読む/追記する `TaskStore` 本体（`append_event`/`events_for*`/`events_since`/
 //!   `latest_event_id`）。
-//! - `approvals.rs`: 遷移と判断の適用（`apply_transition_with_work_units`〈`apply_transition_with_events` はその WU の行が無い形〉、Plan の承認 `complete_plan`）。
+//! - `approvals.rs`: 遷移と判断の適用（`apply_transition_with_work_units`〈`apply_transition_with_events` はその WU の行が無い形〉、Plan の承認 `complete_plan`、
+//!   lease の回収 `apply_transition_if_lease`〈同じ tx で status と lease を照合し、違えば何も書かない。
+//!   ADR 2026-11-15-lease-reclaim-compare-and-release〉）。
 //!   どれも 1 つの IMMEDIATE tx で `apply_transition_tx`/`append_event_tx` を呼ぶ（`transition.rs` は tx 内の
 //!   部品、ここは入口）。
 //! - `transition.rs`: `apply_transition_tx`（状態機械の適用と Event の追記を同じ tx で行う）と
@@ -1080,6 +1082,8 @@ mod client_open_tests;
 mod decision_log_tests;
 #[cfg(test)]
 mod dependency_reopen_tests;
+#[cfg(test)]
+mod lease_reclaim_tests;
 #[cfg(test)]
 mod principal_tests;
 #[cfg(test)]

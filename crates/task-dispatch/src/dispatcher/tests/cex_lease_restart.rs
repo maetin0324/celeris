@@ -399,6 +399,278 @@ async fn cex_draining_instance_reclaims_its_expired_lease_without_redispatching(
     assert_eq!(adapter.started(), vec![run_a]);
 }
 
+/// reviewer run を試験が開けるまで止め、開いたら `pass` の判定を `review.json` に書く adapter（reviewer run ごとに
+/// permit を 1 つ消費する）。worker run は返らない（Task が ready に戻った後の run は試験の終わりに止める）。
+struct VerdictGate {
+    pass: bool,
+    started: StdMutex<Vec<String>>,
+    gate: tokio::sync::Semaphore,
+    returned: AtomicUsize,
+}
+
+impl VerdictGate {
+    fn new(pass: bool) -> Arc<Self> {
+        Arc::new(VerdictGate {
+            pass,
+            started: StdMutex::new(Vec::new()),
+            gate: tokio::sync::Semaphore::new(0),
+            returned: AtomicUsize::new(0),
+        })
+    }
+
+    fn started(&self) -> Vec<String> {
+        self.started.lock().unwrap().clone()
+    }
+}
+
+#[async_trait]
+impl WorkerAdapter for VerdictGate {
+    fn id(&self) -> &str {
+        "instant"
+    }
+    async fn run(
+        &self,
+        req: RunRequest,
+        run_id: &str,
+        _limits: RunLimits,
+        _sink: &dyn EventSink,
+    ) -> Result<RunOutcome, AdapterError> {
+        if req.task.kind != TaskKind::Review {
+            return std::future::pending().await;
+        }
+        self.started.lock().unwrap().push(run_id.to_string());
+        if let Ok(permit) = self.gate.acquire().await {
+            permit.forget();
+        }
+        std::fs::create_dir_all(&req.artifacts_dir).unwrap();
+        let reason = if self.pass {
+            "reviewer: looks complete"
+        } else {
+            "reviewer: not complete"
+        };
+        std::fs::write(
+            req.artifacts_dir.join("review.json"),
+            serde_json::json!({
+                "verdicts": [{"criterion": 0, "pass": self.pass, "reason": reason}],
+                "health": {"findings": []},
+            })
+            .to_string(),
+        )
+        .unwrap();
+        self.returned.fetch_add(1, Ordering::SeqCst);
+        Ok(done_outcome())
+    }
+}
+
+/// `WorkerStarted{role: reviewer}` の run id（起きた順）。
+fn reviewer_runs(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<String> {
+    events_of(store, id)
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::WorkerStarted {
+                run_id,
+                role: Some(RunRole::Reviewer),
+                ..
+            } => Some(run_id),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `run_id` の `WorkerFinished` の outcome（event の数 = 長さ）。
+fn finish_outcomes(store: &Arc<dyn TaskStore>, id: TaskId, run_id: &str) -> Vec<String> {
+    events_of(store, id)
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::WorkerFinished {
+                run_id: r, outcome, ..
+            } if r == run_id => Some(outcome),
+            _ => None,
+        })
+        .collect()
+}
+
+/// review の完了を `drain_completions` が受け取る（`TickReport.reviewed` が 1 以上）まで `d` の tick を駆動する
+/// （出来事待ち。保険は [`STATE_WAIT_GUARD`] の壁時計）。
+async fn tick_until_review_delivered(d: &mut Dispatcher) -> bool {
+    let deadline = Instant::now() + STATE_WAIT_GUARD;
+    loop {
+        if d.tick().unwrap().reviewed > 0 {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// 不変条件（ADR 2026-10-03-ownerless-running-runs・ADR 2026-11-11-dispatcher-state-ownership D7 の restart の行）:
+/// 新しい active が reviewer run A を持ち主の居ない run として閉じた（`WorkerFinished{end: cancelled, outcome:
+/// "interrupted: <ownerless>"}`）後に、A を手元に持っていた旧 draining instance から A の合格が遅れて届いても、A の
+/// `runs` 行は Running に戻らず、A の合格は `ReviewVerdict`・Task の遷移に使われない。Task は新しい active が始めた
+/// reviewer run B の結果だけで決まる（A は合格・B は不合格にして区別する。Task は Done にならず、`review_fail` で
+/// ready に戻る）。
+///
+/// 作る順序: 旧 instance が A の `ReviewEntry` と一緒に task ごとの review lock
+/// （`runs/.review-<id>.lock`）を判定の保存まで持つので、新しい active は A を閉じた後も B を起こせない
+/// （`spawn_review` の `try_lock` が WouldBlock）。B が起きるのは、旧 instance が A の完了を `drain_completions` で
+/// 受けて lock を放した後になる。そこで D7 の「B を始めた後に A の合格が届く」順序のうち lock の下で作れる順序
+/// （A を閉じる → B は lock で起きない → A の合格が旧 instance の drain に届く → B が起きて不合格）を作り、lock が
+/// B を止めることも assert する。持ち主の居ない run として閉じるのは、旧 instance の行を消して作る（注入時計を進めるには
+/// private field の `test_hooks` に触る必要がある）。
+///
+/// 既存試験で検出できない理由: `tests/ownerless_runs.rs` の T1a（`startup_closes_an_ownerless_reviewer_run_and_rereviews`）
+/// と T1b（`ownerless_runs_are_reconciled_again_after_the_interval`）は、持ち主の居ない reviewer run の行を
+/// `seed_reviewer_run` で store に直接作るので、その run を走らせて後から合格を届けうる instance が無い。T1c
+/// （`an_ownerless_run_is_kept_while_another_instance_lives_until_its_deadline`）は draining の他の instance の行を
+/// 登録するが、その instance は dispatcher を持たず reviewer run を走らせないので、閉じた後に A の完了が届く順序を
+/// 作らない（Task も blocked で、レビューをやり直さない）。T0a・T0b は旧 instance の停止・クラッシュで A の完了が
+/// 届かない順序だけを作る。
+#[tokio::test]
+async fn cex_restart_old_reviewer_pass_after_ownerless_close_is_ignored() {
+    use crate::orphan::OWNERLESS_GONE_WHY;
+    use task_core::RunIndexStatus;
+    const OLD_ID: &str = "01OLDREVIEWER00000000000000";
+
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut task = new_task(dir.path(), Check::Reviewer, 2);
+    task.status = Status::Reviewing;
+    let id = task.id;
+    store.insert(&task).unwrap();
+    store
+        .append_event(
+            id,
+            &Event::Created {
+                created_by: None,
+                task: Box::new(task.clone()),
+                origin: None,
+            },
+        )
+        .unwrap();
+
+    // 旧 instance（active）が reviewer run A を起こし、A は gate で止まる。その後ライブ切替で draining になる。
+    store
+        .instance_register(&instance(OLD_ID, InstanceRole::Active, std::process::id()))
+        .unwrap();
+    let old_reviewer = VerdictGate::new(true);
+    let mut old = dispatcher(store.clone(), old_reviewer.clone(), 1);
+    let (s, o) = (store.clone(), old_reviewer.clone());
+    assert!(
+        run_until_state(&mut old, || o.started().len() == 1
+            && reviewer_runs(&s, id).len() == 1)
+        .await
+    );
+    let run_a = reviewer_runs(&store, id).remove(0);
+    assert_eq!(old_reviewer.started(), vec![run_a.clone()]);
+    assert_eq!(index_status(&store, &run_a), Some(RunIndexStatus::Running));
+    old.set_accepting_new_work(false);
+    store
+        .instance_set_role(OLD_ID, InstanceRole::Draining, OffsetDateTime::now_utc())
+        .unwrap();
+
+    // 旧 instance の行が消えた（旧 process は A を手元に持ったまま）。新しい active の照合が A を持ち主の居ない run
+    // として閉じる。
+    store.instance_delete(OLD_ID).unwrap();
+    let new_reviewer = VerdictGate::new(false);
+    let mut new = new_active(&store, new_reviewer.clone());
+    let (s, a) = (store.clone(), run_a.clone());
+    assert!(
+        run_until_state(&mut new, || index_status(&s, &a)
+            != Some(RunIndexStatus::Running))
+        .await
+    );
+    assert_eq!(finishes(&store, id, &run_a), vec![Some(RunEnd::Cancelled)]);
+    assert_eq!(
+        finish_outcomes(&store, id, &run_a),
+        vec![format!("interrupted: {OWNERLESS_GONE_WHY}")]
+    );
+    // 旧 instance が A とともに review lock を持つ間、新しい active は B を起こさない（tick の中の `recover_reviews` の
+    // `spawn_review` が lock を取れない）。
+    new.tick().unwrap();
+    assert_eq!(
+        reviewer_runs(&store, id),
+        vec![run_a.clone()],
+        "the new active started a reviewer while the old instance still holds review A"
+    );
+    assert!(new_reviewer.started().is_empty());
+    assert_eq!(status_of(&store, id), Status::Reviewing);
+    let events_before = events_of(&store, id).len();
+
+    // A の合格が旧 instance の channel に入ってから、旧 instance が tick する（`drain_completions` が受け取る）。
+    old_reviewer.gate.add_permits(1);
+    let o = old_reviewer.clone();
+    let deadline = Instant::now() + STATE_WAIT_GUARD;
+    while o.returned.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(old_reviewer.returned.load(Ordering::SeqCst), 1);
+    assert!(
+        tick_until_review_delivered(&mut old).await,
+        "the late completion of A must reach the old instance's drain"
+    );
+    let after: Vec<Event> = events_of(&store, id).split_off(events_before);
+    assert_ne!(index_status(&store, &run_a), Some(RunIndexStatus::Running));
+    assert!(
+        !after
+            .iter()
+            .any(|e| matches!(e, Event::ReviewVerdict { .. } | Event::Transitioned { .. })),
+        "A's late pass was used after A was closed as an ownerless run (A's runs row {:?}, \
+         A's WorkerFinished {:?}): {after:?}",
+        index_status(&store, &run_a),
+        finish_outcomes(&store, id, &run_a),
+    );
+    assert_eq!(status_of(&store, id), Status::Reviewing);
+
+    // 旧 instance が lock を放した後に新しい active が B を起こし、B は不合格で終わる。
+    let (s, n) = (store.clone(), new_reviewer.clone());
+    assert!(
+        run_until_state(&mut new, || n.started().len() == 1
+            && reviewer_runs(&s, id).len() == 2)
+        .await
+    );
+    let run_b = reviewer_runs(&store, id).remove(1);
+    assert_ne!(run_b, run_a);
+    assert_eq!(new_reviewer.started(), vec![run_b.clone()]);
+    new_reviewer.gate.add_permits(1);
+    let s = store.clone();
+    assert!(run_until_state(&mut new, || status_of(&s, id) != Status::Reviewing).await);
+
+    let events = events_of(&store, id);
+    let verdicts: Vec<bool> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::ReviewVerdict { pass, .. } => Some(*pass),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(verdicts, vec![false], "{events:?}");
+    let transitions: Vec<(Status, String)> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Transitioned { to, reason, .. } => Some((*to, reason.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        transitions.first(),
+        Some(&(Status::Ready, "review_fail".to_string())),
+        "{transitions:?}"
+    );
+    assert!(
+        !transitions
+            .iter()
+            .any(|(to, reason)| *to == Status::Done || reason == "review_pass"),
+        "{transitions:?}"
+    );
+    assert_ne!(status_of(&store, id), Status::Done);
+    assert_eq!(finishes(&store, id, &run_b), vec![Some(RunEnd::Completed)]);
+    assert_ne!(index_status(&store, &run_a), Some(RunIndexStatus::Running));
+    new.abort_all_runs();
+    old.abort_all_runs();
+}
+
 /// 不変条件（ADR-0072 D15・`CLAUDE.md` の SQLite 正本）: WU を done にした書き込みの後、Task の遷移・`runs` の閉じ・
 /// 依存 WU の更新の前で落ちた（WU は done、Task は Running のまま、run A に `WorkerFinished` 無し）状態から再起動しても、
 /// 回収は A を 1 回だけ閉じ、done の WU を作り直さず（A の WU を走らせ直さない）、もう一度再起動しても何も足さない。
@@ -764,6 +1036,13 @@ async fn cex_two_parallel_work_unit_runs_finishing_in_one_tick_lose_no_update() 
 ///
 /// 既存試験で検出できない理由: WU の検査の試験（`drain_hand_off.rs`・`integration_check_progress.rs`）は検査の完了と
 /// 別の run の完了を同じ tick に揃えず、検査中の WU（`checking`）と走っている兄弟の WU が同時に終わる順序を作らない。
+///
+/// 待ち方（出来事待ち）: tick の前に `a` の検査の完了を、検査の列の最後の項目の `WorkUnitCheckFinished`
+/// （`index + 1 == total`）が store に載ることで待つ。検査の task は最後の項目の `record_finish` から
+/// `Completion::WorkUnitChecks` の送信まで await を挟まないので、current-thread の runtime の試験の task がこの event を
+/// 見た時点で完了は channel に入っている。以前は flag を置いた後に run `b` の完了（`release_held_runs_without_ticking`
+/// の 200 ms の譲り）だけを待って tick したので、`sleep 0.05` の loop の検査がその間に終わらないと `report.finished`
+/// が 1 になって落ちた（load average 19.6 で 1 回観測）。
 #[tokio::test]
 async fn cex_run_finish_and_work_unit_check_finish_in_one_tick() {
     let repo = tempfile::tempdir().unwrap();
@@ -808,6 +1087,17 @@ async fn cex_run_finish_and_work_unit_check_finish_in_one_tick() {
     // 検査と run を同時に終わらせ、両方の完了が channel に溜まってから 1 回 tick する。
     std::fs::write(&flag, "").unwrap();
     release_held_runs_without_ticking(&adapter).await;
+    let a_checks_done = |store: &Arc<dyn TaskStore>| {
+        events_of(store, id).iter().any(|e| {
+            matches!(e, Event::WorkUnitCheckFinished { key, index, total, .. }
+                if key == "a" && index + 1 == *total)
+        })
+    };
+    let deadline = Instant::now() + STATE_WAIT_GUARD;
+    while !a_checks_done(&store) && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(a_checks_done(&store), "the checks of a did not finish");
     let report = d.tick().unwrap();
     assert_eq!(report.finished, 2, "{report:?}");
 
@@ -832,4 +1122,108 @@ async fn cex_run_finish_and_work_unit_check_finish_in_one_tick() {
         .count();
     assert_eq!(integrations, 1);
     assert!(store.runs_running().unwrap().is_empty());
+}
+
+/// 不変条件（lease の単一保持者、ADR-0002 D9・ADR-0070 D5・ADR 2026-10-03-ownerless-running-runs）: 回収側が期限切れの
+/// snapshot で lease の回収を決めた後、書き込む前に、保持者が別の接続から `renew_lease` で lease を延ばしたら（本番では保持者の
+/// instance の `StoreSink::heartbeat`）、回収側はその lease を回収しない。保持者・lease の run id と延ばした期限・`runs` 行・
+/// Task の状態と attempts は変わらず、回収側は `WorkerFinished` も `orphan_takeover` の event も書かない。保持者の run は
+/// その後の通常の完了で 1 回だけ閉じる。
+///
+/// 既存試験で検出できない理由: `reclaim_expired_leases` は同期で await を持たないので、試験の task は snapshot
+/// （`store.list(Running)`）と回収の書き込みの間に他の接続の書き込みを挟めない。
+/// [`cex_stale_holder_late_finish_does_not_overwrite_the_reassigned_run`] は回収が済んだ後の旧保持者の完了だけを、
+/// `orphan_takeover.rs` は持ち主の居ない run の回収だけを、store の `renew_lease_extends_only_the_matching_running_lease`
+/// は renew 単独を見る。回収側自身の延長（ADR-0070 D5 の `alive_task_run`）は回収側の手元の run にしか効かない。どれも
+/// 「期限切れの snapshot → 別の接続の renew → 回収の書き込み」の順を作らないので、回収の書き込みが lease を照合しなくても
+/// 通る。この順は `TestHooks::after_reclaim_decision`（回収を決めた直後の一回フック）で作る。
+#[tokio::test]
+async fn cex_lease_renew_after_expired_snapshot_keeps_the_holder() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("lease.db");
+    // 保持者と回収側は同じ DB の別の接続（別の `SqliteStore`）を持つ（同じ DB の 2 instance）。
+    let holder_store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open(&db).unwrap());
+    let reclaim_store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open(&db).unwrap());
+    let task = true_task(dir.path());
+    let id = task.id;
+    holder_store.insert(&task).unwrap();
+    let gated = GatedAdapter::new();
+    let mut holder = dispatcher(holder_store.clone(), gated.clone(), 1);
+    let (s, g) = (holder_store.clone(), gated.clone());
+    assert!(
+        run_until_state(&mut holder, || g.started().len() == 1
+            && lease_run(&s, id).is_some())
+        .await
+    );
+    let run_a = lease_run(&holder_store, id).unwrap();
+    let attempts = holder_store.get(id).unwrap().unwrap().attempts;
+
+    // A の lease を切らす（store の lease 時刻を今にする）。回収側は A を手元に持たない。
+    assert!(
+        holder_store
+            .renew_lease(id, &run_a, Duration::ZERO)
+            .unwrap()
+    );
+    let events_before = events_of(&reclaim_store, id).len();
+    let renewed: Arc<StdMutex<Option<(bool, Option<task_core::Lease>)>>> = Arc::default();
+    let (slot, hs, a) = (renewed.clone(), holder_store.clone(), run_a.clone());
+    let mut reclaimer = dispatcher(reclaim_store.clone(), slow_adapter(), 1);
+    reclaimer.test_hooks.after_reclaim_decision = Some(Box::new(move |task_id| {
+        // 回収を決めた直後に、保持者の接続が lease を延ばす。
+        let ok = hs
+            .renew_lease(task_id, &a, Duration::from_secs(3600))
+            .unwrap();
+        let lease = hs.get(task_id).unwrap().and_then(|t| t.lease);
+        *slot.lock().unwrap() = Some((ok, lease));
+    }));
+    let report = reclaimer.tick().unwrap();
+
+    let decided = renewed.lock().unwrap().clone();
+    let Some((ok, Some(extended))) = decided else {
+        panic!(
+            "the reclaimer did not decide to reclaim the expired lease, or the lease vanished: {decided:?}"
+        );
+    };
+    assert!(
+        ok,
+        "the holder's renew_lease must succeed before the reclaim writes"
+    );
+    assert_eq!(extended.worker_run_id, run_a);
+    let t = reclaim_store.get(id).unwrap().unwrap();
+    let after: Vec<Event> = events_of(&reclaim_store, id).split_off(events_before);
+    let observed = format!(
+        "report {report:?}; status {:?}; attempts {} (before {attempts}); lease {:?} (extended {extended:?}); \
+         A's runs row {:?}; events after the expiry {after:?}",
+        t.status,
+        t.attempts,
+        t.lease,
+        index_status(&reclaim_store, &run_a),
+    );
+    assert_eq!(report.reclaimed, 0, "{observed}");
+    assert_eq!(t.status, Status::Running, "{observed}");
+    assert_eq!(t.lease.as_ref(), Some(&extended), "{observed}");
+    assert_eq!(t.attempts, attempts, "{observed}");
+    assert_eq!(
+        index_status(&reclaim_store, &run_a),
+        Some(task_core::RunIndexStatus::Running),
+        "{observed}"
+    );
+    assert!(
+        finishes(&reclaim_store, id, &run_a).is_empty(),
+        "{observed}"
+    );
+    assert!(!took_over(&reclaim_store, id), "{observed}");
+    assert!(
+        !after
+            .iter()
+            .any(|e| matches!(e, Event::Transitioned { .. })),
+        "{observed}"
+    );
+
+    // 保持者は A を持ち続け、A の通常の完了で 1 回だけ閉じる。
+    gated.release_one();
+    let s = holder_store.clone();
+    assert!(run_until_state(&mut holder, || status_of(&s, id) == Status::Done).await);
+    assert_eq!(finishes(&holder_store, id, &run_a).len(), 1);
+    assert_eq!(worker_starts(&holder_store, id), vec![run_a]);
 }

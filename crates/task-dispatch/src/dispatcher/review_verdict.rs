@@ -96,29 +96,34 @@ impl Dispatcher {
         // 判定の材料。turns も 1 進む）。部署が無い・対応しないアダプタでは `node_session_touch` が no-op。
         if let Some(Event::WorkerFinished { usage, .. }) = &reviewer_finished
             && let Some(node_id) = task.assignee.as_deref()
+            && let Some(department) = (self.store.org_list())
+                .inspect_err(|e| tracing::warn!(%task_id, error = %e, "failed to list org for department lead session touch"))
+                .ok()
+                .and_then(|org| task_core::department_of(&org, node_id))
         {
-            match self.store.org_list() {
-                Ok(org) => {
-                    if let Some(department) = task_core::department_of(&org, node_id) {
-                        let tokens = usage
-                            .as_ref()
-                            .map(|u| u.input_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0))
-                            .unwrap_or(0);
-                        if let Err(e) = self.store.node_session_touch(
-                            &department,
-                            task_core::SessionKind::Lead,
-                            None,
-                            tokens as i64,
-                            OffsetDateTime::now_utc(),
-                        ) {
-                            tracing::warn!(%task_id, error = %e, "failed to record department lead session usage");
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(%task_id, error = %e, "failed to list org for department lead session touch");
-                }
+            let tokens = usage.map_or(0, |u| u.input_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0));
+            if let Err(e) = self.store.node_session_touch(
+                &department,
+                task_core::SessionKind::Lead,
+                None,
+                tokens as i64,
+                OffsetDateTime::now_utc(),
+            ) {
+                tracing::warn!(%task_id, error = %e, "failed to record department lead session usage");
             }
+        }
+        // ADR 2026-10-03-ownerless-running-runs 付記 2026-11-14: reviewer run の `runs` 行が既に閉じていれば（別の instance
+        // の ownerless の照合など）遅れた結果を捨てる。判定・遷移・2 件目の `WorkerFinished`・`runs` 行に使わず、quota だけ
+        // 1 回精算する（閉じた側は精算しない）。take した entry は戻さない（review lock が解け、次の review が決める）。
+        if let Some(review_run_id) = completed_review_run.as_deref()
+            && let Some(row) = self.store.run_index_get(review_run_id)?
+            && row.status != task_core::RunIndexStatus::Running
+        {
+            tracing::warn!(%task_id, %run_id, review_run_id, row_status = row.status.as_str(), "late reviewer result discarded (its runs row was already closed)");
+            if let Some(ev) = &reviewer_quota {
+                self.store.append_event(task_id, ev)?;
+            }
+            return Ok(());
         }
         if task.status != Status::Reviewing {
             tracing::warn!(%task_id, status = ?task.status, "review result discarded (task no longer reviewing)");
@@ -533,46 +538,41 @@ impl Dispatcher {
             Ok(outcome) => {
                 tracing::info!(%task_id, %run_id, all_pass, next = ?outcome.next, attempts = outcome.attempts, "review finished");
                 // ADR-0034 D2（監査 M-1〜M-3）: `result` はレビューを通って `Status::Done` になったときだけ作る
-                // (ワーカーの「できました」がここで差し戻された分は報告にしない。DESIGN 原則 4)。
-                if outcome.next == Status::Done
-                    && let Some(review_entry) = entry.as_ref()
-                {
-                    let terminal = crate::reports::TerminalReport::Done {
-                        summary: review_entry.subject.summary.clone(),
-                        evidence: crate::reports::format_evidence(&review_entry.subject.evidence),
-                    };
-                    // ADR-0034 D7: ワーカーが結果ファイルで宣言した `report.kind`（無ければ既定の `result`）。
-                    let declared = self.task_dir(&task).and_then(|ws| {
-                        task_worker::read_result_report_kind(&self.artifacts_dir(&task, &ws))
-                    });
-                    if let Err(e) = crate::reports::record_run_report(
+                // (ワーカーの「できました」がここで差し戻された分は報告にしない。DESIGN 原則 4)。レビュー不合格が
+                // retry を使い切って `Status::Failed` になった場合は bad_news（原因を問わない。監査 M-1）。
+                let terminal = match (outcome.next, entry.as_ref(), review_fail_message) {
+                    (Status::Done, Some(e), _) => Some(crate::reports::TerminalReport::Done {
+                        summary: e.subject.summary.clone(),
+                        evidence: crate::reports::format_evidence(&e.subject.evidence),
+                    }),
+                    (Status::Failed, _, Some(message)) => {
+                        Some(crate::reports::TerminalReport::Error {
+                            message,
+                            retryable: false,
+                        })
+                    }
+                    _ => None,
+                };
+                // ADR-0034 D7: ワーカーが結果ファイルで宣言した `report.kind`（無ければ既定の `result`）。`Done` だけが読む。
+                let declared = match &terminal {
+                    Some(crate::reports::TerminalReport::Done { .. }) => {
+                        self.task_dir(&task).and_then(|ws| {
+                            task_worker::read_result_report_kind(&self.artifacts_dir(&task, &ws))
+                        })
+                    }
+                    _ => None,
+                };
+                if let Some(terminal) = &terminal
+                    && let Err(e) = crate::reports::record_run_report(
                         self.store.as_ref(),
                         &task,
                         &run_id,
-                        &terminal,
+                        terminal,
                         declared.as_deref(),
                         OffsetDateTime::now_utc(),
-                    ) {
-                        tracing::warn!(%task_id, %run_id, error = %e, "failed to record the report for this run");
-                    }
-                } else if outcome.next == Status::Failed
-                    && let Some(message) = review_fail_message.as_ref()
+                    )
                 {
-                    // レビュー不合格が retry を使い切って `Status::Failed` になった場合の bad_news（原因を問わない。監査 M-1）。
-                    let terminal = crate::reports::TerminalReport::Error {
-                        message: message.clone(),
-                        retryable: false,
-                    };
-                    if let Err(e) = crate::reports::record_run_report(
-                        self.store.as_ref(),
-                        &task,
-                        &run_id,
-                        &terminal,
-                        None,
-                        OffsetDateTime::now_utc(),
-                    ) {
-                        tracing::warn!(%task_id, %run_id, error = %e, "failed to record the report for this run");
-                    }
+                    tracing::warn!(%task_id, %run_id, error = %e, "failed to record the report for this run");
                 }
             }
             Err(StoreError::InvalidTransition(e)) => {

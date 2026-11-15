@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::run_settlement::run_end_record;
+use crate::run_supervisor::orphan_takeover_note;
 
 impl Dispatcher {
     /// ADR-0040 D4: `[handoff] drain_timeout_secs` を超えたときに、残っている run とレビューを
@@ -224,10 +225,12 @@ impl Dispatcher {
             ) else {
                 continue;
             };
-            let orphaned = reason == ReclaimReason::Orphaned;
-            if orphaned {
-                self.note_orphan_takeover(&task, &lease.worker_run_id, lease.expires_at);
+            #[cfg(test)]
+            if let Some(hook) = self.test_hooks.after_reclaim_decision.take() {
+                hook(task.id);
             }
+            // ADR 2026-11-15 lease-reclaim-compare-and-release D4: 孤児の回収の記録は回収が書けたときだけ残す。
+            let orphaned = reason == ReclaimReason::Orphaned;
             // ADR-0074 D1.5（Phase F2）: v2 の並列 WU では同じ Task の run が複数ありうる。
             // どれか 1 本でも生きていれば、その run の lease（WU の lease）を延ばす
             // （`renew_lease` が Task の lease も延ばす）。
@@ -319,6 +322,9 @@ impl Dispatcher {
                 }
             }
             if finalised_any {
+                if orphaned {
+                    self.note_orphan_takeover(&task, &lease.worker_run_id, lease.expires_at);
+                }
                 count += 1;
                 continue;
             }
@@ -342,15 +348,22 @@ impl Dispatcher {
             } else {
                 "lease expired"
             };
+            // ADR 2026-11-15 D1・D2: snapshot の lease で照合して書く。`None` は snapshot の後に lease が変わった
+            // （保持者が延ばした、別の instance が回収した）印で、回収を数えず、WU・統合の照合も decision log もしない。
             match self.supervisor.release_lease(
                 self.store.as_ref(),
                 task.id,
+                lease,
                 &verdict,
+                orphaned.then(|| orphan_takeover_note(&lease.worker_run_id, lease.expires_at)),
                 &wu_runs,
                 metrics,
                 now,
             ) {
-                Ok(outcome) => {
+                Ok(None) => {
+                    tracing::warn!(task_id = %task.id, run_id = %lease.worker_run_id, "the lease changed after the snapshot; not reclaiming it (ADR 2026-11-15 lease-reclaim-compare-and-release D2)");
+                }
+                Ok(Some(outcome)) => {
                     tracing::warn!(task_id = %task.id, run_id = %lease.worker_run_id, next = ?outcome.next, attempts = outcome.attempts, orphaned, "{why}; reclaimed");
                     // 孤児（再起動の中断）はバックオフしない（`reclaim_verdict` の backoff が None）。
                     // ADR-0072 D15（Phase E2）: この run が計画のある Task の WU のものだったなら、
@@ -693,14 +706,7 @@ impl Dispatcher {
             reason = crate::orphan::ORPHAN_TAKEOVER_REASON,
             "the daemon that held this run is gone (no live active/draining instance besides this one, and the run is not in hand); taking it over without waiting for the lease (Phase F5-fix6)"
         );
-        let ev = Event::worker_progress(
-            run_id.to_string(),
-            format!(
-                "{}: このランを持っていたデーモンが居ないため、lease の期限（{}）を待たずに回収します。",
-                crate::orphan::ORPHAN_TAKEOVER_REASON,
-                rfc3339(lease_until)
-            ),
-        );
+        let ev = orphan_takeover_note(run_id, lease_until);
         if let Err(e) = self.store.append_event(task.id, &ev) {
             tracing::warn!(task_id = %task.id, %run_id, error = %e, "failed to record the orphan takeover");
         }

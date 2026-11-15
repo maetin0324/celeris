@@ -57,7 +57,7 @@ drain が正常に終わる場合は従来どおり: `in_flight` は review を�
   - 他の instance が生きていても、行の期限を過ぎた。期限は `started_at +`（reviewer run は `review_timeout + lease_grace`、それ以外は task の `max_wall_secs + lease_grace`）。draining の旧 instance が自分の review を見ている間は横取りしない。その instance 自身が行を閉じ忘れた場合もこの期限で閉じる。
 - task は遷移させない。`Reviewing` で誰も抱えていない task は同じ tick の `recover_reviews` が review をやり直す。lease を持つ worker run の task は既存の `InfraRequeue`（attempts を消費しない）で `Ready` に戻る。
 
-持ち主がまだ生きていた run を期限で閉じた場合、持ち主が後から書く `WorkerFinished` はそのまま追記される（行は終端のまま）。
+持ち主がまだ生きていた run を期限で閉じた場合、持ち主が後から書く `WorkerFinished` はそのまま追記される（行は終端のまま）。（reviewer run は付記 2026-11-14 で置き換え: 持ち主の `on_review_finished` は閉じた行の遅れた結果を捨てる。）
 
 ### D5. 手元のレビューの取りこぼしは毎 tick 閉じる（同じ instance の中、引き継ぎと無関係）
 
@@ -85,3 +85,47 @@ D3 は「手元に無い行」だけを見る。同じ instance が `reviewing` 
 - 旧 instance が reviewer run を抱えたまま引き継ぎ・停止したとき、その行が終端になり、新 instance が review をやり直す（`crates/task-dispatch/src/dispatcher/tests/ownerless_runs.rs`）。修正前はこの行が running のまま残る。
 - どの instance にも持ち主がいない running の行を、新 instance が起動時と定期的に閉じ、task が先へ進む（同上。時計の差し替えで決定的に再現）。
 - 同じ instance の中で、判定を届けずに終わったレビュー（handle の abort で模す）と期限を越えたレビュー（`since` の差し替え）が閉じられ、レビューがやり直される（同上 T2a / T2b）。
+
+## 付記 2026-11-14: 閉じた reviewer run の遅れた判定を捨てる（`on_review_finished`）
+
+task `01M7DYMCZ4T7C5RNQ3JZQAF4G7`（健全性v2 R4 cex-race）。
+
+### 状況
+
+D3 は「持ち主がまだ生きていた run を期限で閉じた場合、持ち主が後から書く `WorkerFinished` はそのまま追記される（行は
+終端のまま）」と決めていた。反例の試験 `cex_restart_old_reviewer_pass_after_ownerless_close_is_ignored`
+（`crates/task-dispatch/src/dispatcher/tests/cex_lease_restart.rs`）で、この決定のままでは不変条件が破れると分かった:
+新しい active が reviewer run A を D3 で閉じた後に、A を手元に持つ旧 draining instance に A の合格が届くと、
+`Dispatcher::on_review_finished` は Task が `reviewing` かと `target_stale` だけを見て判定を適用し、Task を
+`Reviewing → Done (review_pass)` にした。A の `WorkerFinished` は 2 件になり、`runs` 行は `run_index_finish` で
+`cancelled` から `completed` に書き換わった（`agent-docs/progress/2026-11-11-health-v2-r4/cex-race.md` の old-review の節）。
+
+### 決定
+
+D3 の上の一文をこの付記で置き換える。
+
+- `on_review_finished` は reviewer run を伴う結果（`ReviewOutcome.reviewer_run` がある）を受けたら、Task の遷移・event・
+  `runs` 行の更新より前に `TaskStore::run_index_get` でその run の行を読む。行があって `status` が `running` でなければ
+  （別の instance の D3、D2・D5 など、誰かが既に閉じた）結果を捨てる:
+  - Task の遷移・`ReviewVerdict`・`ReviewerPassed`・`RequiredChecksEvaluated`・delivery の判定に使わない。
+  - 2 件目の `WorkerFinished` を書かず、`runs` 行を書き換えない（A の終わりの記録は閉じた側の 1 件だけ）。
+  - take した `ReviewEntry` を放す（task ごとの review lock が解ける）。Task は `reviewing` のまま、次の review
+    （`recover_reviews`）が決める。持ち越しの subject（`defer_review`）は置かない（次の review は `result.json` から復元する）。
+  - tracing の warn に run id と行の status を出す。
+- quota: この instance の `QuotaActivity` に残った A を閉じるため、結果の usage で `settle_quota` を 1 回だけ通し、A の
+  `QuotaEstimated` を書く。D3 の閉じは quota を精算しない（`QuotaActivity` は `quota_begin` を呼んだ process の memory に
+  しかなく、閉じた側の `WorkerFinished` は usage を持たない）ので二重にならない。usage 無しの解放
+  （`release_quota_if_tracked`）にすると、同じ account の group の他の run が A の消費を按分で負う。
+- 行が無いとき・`running` のときの挙動は変えない。
+- 判定の材料は `runs` 行だけ（DB の正本）。LLM は呼ばない。
+
+### 残る窓
+
+`run_index_get` の読みと判定の書き込みの間に、別の instance の D3 が行を閉じる窓は残る（worker run の
+`run_holds_lease` の照合と同じ水準）。閉じるには、判定の適用と同じ transaction の中で行が `running` であることを
+照合する store の比較更新が要る（store の高 risk の class。別の変更で決める）。
+
+### 採らない
+
+- D3 が review lock を取れない reviewer run を閉じない（lock を持つ process が生きている印にする）: D3 の判定を
+  `runs` 行・lease・`daemon_instances` だけで行うという決定と、反例の試験の前提（A を閉じる）を変える。

@@ -472,7 +472,7 @@ token_file = "api.token"
 | 84 | PUT | `/projects/{id}/docs/page` | ページを既定のブランチに直接コミットする（**管理系**） | 200 `DocPageResult` | 一時 worktree + `git commit` |
 | 85 | DELETE | `/projects/{id}/docs/page` | ページを消す（**管理系**） | 200 `DocPageResult` | 一時 worktree + `git commit` |
 | 86 | POST | `/tasks/{id}/artifacts/promote` | 成果物をページに昇格する（**管理系**） | 200 `DocPageResult` | 成果物 + 一時 worktree |
-| 87 | GET | `/console` | 全案件の流れ（正規化したブロック、時刻順、カーソル付き。ADR-0048 D1、Phase 60a） | `ConsolePage` | events + messages + approvals + milestones + reports |
+| 87 | GET | `/console` | 全案件の流れ（正規化したブロック、時刻順、カーソル付き。ADR-0048 D1、Phase 60a） | `ConsolePage` | events + messages + approvals + reports + knowledge_runs |
 | 88 | GET | `/console/stream` | 同じブロックを SSE で流す（`event: console.block`） | SSE | 同上 |
 | 89 | GET | `/tasks/{id}/runs/{run_id}/events` | その run のイベントだけ（折り畳んだ進行を開いたとき） | `EventsPage` | store `event_rows_for` |
 | 90 | GET | `/knowledge/tree` | 知識ベースのツリー（`?scope=` / `?q=`。ADR-0047、Phase 61） | `KnowledgeTree` | `index.json` + `grep` |
@@ -2791,7 +2791,8 @@ CoS の `actions` は ADR-0048 D3（§3.107）。
 - 引きはすべて上限付き（`events` は 1 回 4,000 件の窓、対話・認可・報告は `limit × 4`（最大 800））。
   窓より古いものは `GET /tasks/{id}/events` や `GET /reports` で見る。
 
-ブロックは `kind` で 9 種（ADR-0048 D1 の 8 種 + ADR-0047 D5 の `knowledge`）。
+ブロックは `kind` で 8 種（ADR-0048 D1 の 8 種から `milestone` を除いた 7 種 + ADR-0047 D5 の `knowledge`）。
+`milestone`（途中目標の提案）は ADR-0079 D13 で途中目標を凍結したので出さない（行は `GET /projects/{id}?include_frozen=true` で読む）。
 どれも `at`（RFC 3339）と `cursor` を持つ:
 
 | `kind` | 中身 | 由来 |
@@ -2802,16 +2803,15 @@ CoS の `actions` は ADR-0048 D3（§3.107）。
 | `progress` | run ごとに束ねたワーカーの進行。`progress`: `run_id` / `count` / `tool_count` / `last_status` / `started_at` / `updated_at` / `first[]` / `last[]` / `truncated`。見出し用に `title` / `assignee` / `harness` / `tier` | `Event::WorkerProgress`（ADR-0048 D2 の正規化） |
 | `question` | ディスパッチャの質問（`text` / `answered` / `answer` / `run_id`） | `Event::QuestionRaised` + `Event::Answered` |
 | `approval` | 認可 1 件（`Approval` をそのまま。`decision` / `answer` / `decided_at` 付き） | `approvals` |
-| `milestone` | 途中目標の提案（`proposed` のものだけ）と秘書のレビューの返事 | `milestones` + `messages` |
 | `report` | 報告（見出しと本文） | `reports` |
 | `knowledge` | 知識整理 run の結果（ADR-0047 D4/D5）。`task_id` / `task_title` / `run_task_id` / `state`（`applied` \| `failed`。`scheduled` は出ない）/ `ingested` / `inbox` / `discarded` / `via`（ADR-0052 D2。`"langmem"` \| `"fallback:<adapter>"`。GUI は後者に「cheap のハーネスで抽出」を出す） | `knowledge_runs`（`state != scheduled`）+ 元のタスク |
 
 範囲の効き方:
 
 - `project:<id>`: そのタスク（`tasks.project_id`）・その案件についての対話（`messages.project_id`）・
-  報告（`reports.project_id`）・その案件の途中目標。
+  報告（`reports.project_id`）。
 - `node:<id>`: そのノードが担当のタスク（`tasks.assignee`）・そのノードとの対話（`messages.node_id`）・
-  そのノードの報告（`reports.node_id`）。**途中目標は出ない**（途中目標は案件のもの）。
+  そのノードの報告（`reports.node_id`）。
 - 同じ質問が `approvals` にもあるときは **`approval` の側だけ**出す（同じことを 2 回出さない）。
 
 `progress` の `first[]` / `last[]` は折り畳みの見出し用に**始めの 3 行と終わりの 3 行**だけ
@@ -2847,7 +2847,7 @@ data: {"now":"…"}
   流す（1 回の道具呼び出しごとにフレームが飛ばない）。流れてくる `progress` ブロックは**その run の積み上げ**
   （`count` / `tool_count` はその接続で見た合計）。育つ `reply` は**その接続で見た増分だけ**（`text` は
   その回で届いた分だけ・GUI 側が同じ `run_id` の既存の吹き出しに追記する。`thinking` は最新の値で置き換え）。
-- `task` / `human` / `question` / `approval` / `milestone` / `report` と、確定した `reply`
+- `task` / `human` / `question` / `approval` / `report` と、確定した `reply`
   （`state = "done"`）はまとめずにそのまま流す（対話・認可・報告は 1 秒ごとに見に行く）。
 - `Last-Event-ID` は使わない（`id:` を付けない。再開は `since` で行う）。
 

@@ -3,40 +3,21 @@
 //! ADR-0079 D13（Phase R5a）: 途中目標は凍結した。判定の run（`start_review`。celeris の
 //! `milestone_review::schedule`）・結果ファイルの `milestone_proposal` の取り込み（`record_proposal`）・人の判定
 //! （`decide`。`POST /milestones/{id}/decide` は 410）・`MilestoneReady` の通知は外した。既存の行とレビューの
-//! 対話を `GET /projects/{id}?include_frozen=true` と Console が履歴として読むための関数だけが残る。
+//! 対話を `GET /projects/{id}?include_frozen=true` が履歴として読むための関数だけが残る（Console の `milestone`
+//! ブロックと id から引く `find` は R6 で外した）。
 //!
 //! I/O は `TaskStore` の読み取りだけ（DESIGN 原則 1）。
 
 use task_core::{
-    Message, MessageRole, Milestone, MilestoneId, MilestoneStatus, Project, ProjectId, Task,
-    TaskStore,
+    Message, MessageRole, Milestone, MilestoneId, MilestoneStatus, ProjectId, Task, TaskStore,
 };
 
 use crate::error::OpsError;
 
-/// 案件を跨いで途中目標を引くときに見る案件の数の上限（案件はそう多くない）。
-const PROJECT_SCAN: usize = 500;
 /// レビューの対話を探すときに 1 案件あたりに見るタスクの上限。
 const REVIEW_TASK_SCAN: usize = 1_000;
 /// レビューの返事を探すときに読む対話の件数。
 const REVIEW_MESSAGE_SCAN: usize = 200;
-
-/// 途中目標とその案件を id から引く（`milestones` は案件ごとにしか引けないので順に見る）。
-pub fn find(
-    store: &dyn TaskStore,
-    id: MilestoneId,
-) -> Result<Option<(Project, Milestone)>, OpsError> {
-    for project in store.project_list()?.into_iter().take(PROJECT_SCAN) {
-        if let Some(found) = store
-            .milestone_list(project.id)?
-            .into_iter()
-            .find(|m| m.id == id)
-        {
-            return Ok(Some((project, found)));
-        }
-    }
-    Ok(None)
-}
 
 /// その案件の最新の `proposed` の途中目標（`seq` の大きい方。`exclude` は除く）。
 pub fn latest_proposal(
@@ -59,8 +40,8 @@ pub fn latest_proposal(
 
 // ---- D1: レビューの対話 run ----
 
-/// その途中目標のレビューの対話の状態（ADR-0038 D1 / D4）。GUI のカード（`GET /projects/{id}`）と
-/// 通知（`milestone_ready`）とレビュー run の重複判定が、同じ 1 つの読み取りを使う。
+/// その途中目標のレビューの対話の状態（ADR-0038 D1 / D4）。案件ページのカード（`GET /projects/{id}?include_frozen=true`）
+/// が履歴として読む。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ReviewState {
     /// 一番新しいレビューの対話タスク（まだ無ければ `None`。run 中なら `reply` が `None`）。

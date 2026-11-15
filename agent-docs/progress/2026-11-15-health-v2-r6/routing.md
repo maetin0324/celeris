@@ -11,6 +11,8 @@ updated: 2026-11-15
 ## commit
 
 - `phase 1: converge routing records and remove unused definitions`
+- `routing: ADR の本文を進捗へ移して範囲外の file を消し、check の grep の誤りを未解決に書く`
+- `routing: replan で直った check を再実行し、check の誤りを『replan で直した』に書き換える`
 
 ## 判定と削除前の検索
 
@@ -46,7 +48,7 @@ owner 地図: docs/architecture-map.md の「LLM source / model の選択」「r
 - 効かない `[execution].cheap_local_first` を消す。既存の `deny_unknown_fields` により、この欄を書いた config は読み込みエラーになる。互換分岐は置かない。本番 config の確認と削除は「本番への移行」節に人の手順として書く。
 - 検証: 共通化の前の両実装に固定入力の試験を置いて同じ期待値を確かめてから、共通関数の呼び出しに置き換える。従来の同一性の試験は両経路の hash が同時に変わる退行を検出できないため、固定の期待値を足す。config には true と false の両方の拒否の試験を置く。既存の config の試験はこの欄の再導入を検出できない。
 
-## 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+## 証拠（前回の run の HEAD で実行。基準は `$CELERIS_WU_BASE`。最新の結果は下の「replan 後の check の再実行」）
 
 - 共通化前: `cargo nextest run --workspace -E 'test(feature_hash_fixed_bytes)'` → exit 0、2 passed。core の FeatureBody + digest と dispatch の EvalFeatureBody + sha256 をそれぞれ使う旧実装で確認した。入力は schema `celeris.task-features/1`、template `eval`、brief `固定入力\nquoted "text"`、aux の genre `eval_problem`・harness `codex`・残り Default。期待値は `sha256:d7c838872304e2486d7ab93a63c269c60d359941b944a33034bba9a4ed64fcfa`。ログ: hash-before-fixed.log。初期の値の採取は hash-before-core.log・hash-before-dispatch.log。
 - `bash scripts/dev/test-affected.sh --list` → exit 0、14 crate と web typecheck+unit、test-ts-verify。
@@ -69,9 +71,25 @@ owner 地図: docs/architecture-map.md の「LLM source / model の選択」「r
 
 ## 未解決
 
-- 計画の check の誤り（plan_issue として申告した）: check の `! grep -n 'pub fn task_routing_audit' crates/task-ops/src/routing_audit.rs` は前方一致で、残すべき `pub fn task_routing_audit_with_requests`（crates/task-ops/src/routing_audit.rs:54）に当たる。この関数は `GET /tasks/{id}/routing` の handler（crates/task-api/src/routing.rs:40）が呼んでおり、Objective の削除対象ではない。名前を変えるには範囲外の crates/task-api を変える必要があり、別名の `pub use` で grep を避けるのは互換の別名になるので採らない。直し方: 該当部分を `! grep -n 'pub fn task_routing_audit(' crates/task-ops/src/routing_audit.rs` にする。この形では exit 1（一致無し）で、check 全体は exit 0 になることを確かめた。
-- 機能上の未解決事項は無し。必須検査の終了後に scratch の `.trash-*` 内の `own-eval` 3件で清掃の Permission denied が出た（検査自体は exit 0）。この WU では当該 scratch 領域を変更していない。環境準備で遭遇した3種類の失敗は上の手順で解消した。
+- 機能上の未解決事項は無し。
+- test-affected の終了後に scratch の `.trash-*` 内の `own-eval` 3 件で清掃の Permission denied が出る（検査自体は exit 0）。この WU は当該 scratch 領域を変更していない。
 
+## 前回の check の誤り（replan で直した）
+
+- 誤り: v1 の check の `! grep -n 'pub fn task_routing_audit' crates/task-ops/src/routing_audit.rs` は前方一致で、残すべき `pub fn task_routing_audit_with_requests`（`GET /tasks/{id}/routing` の handler の crates/task-api/src/routing.rs が呼ぶ）に当たって落ちた。実装の誤りではない。前回の run が plan_issue として申告した。
+- replan で直した: replan（計画 v2）は否定の grep を語の境界の `grep -nw` にし、`grep -qw 'pub fn task_routing_audit_with_requests' crates/task-ops/src/routing_audit.rs` で残す関数が在ることも確かめる形にした。コードは変えていない。
+
+## replan 後の check の再実行（提出時の HEAD で実行。run 01M7FS8JSTRJ06KRNPE0XW6E02、2026-11-15）
+
+基準は `git merge-base HEAD main`（範囲 check は `$CELERIS_WU_BASE` と `$CELERIS_WU_SCOPE_PATHS`）。
+check 1・2 と対象試験は、本 file の更新だけの commit の直前の HEAD で実行した（提出時の HEAD とのコードの差分は無い）。check 3〜5・fmt・`progress-index.sh --check` は提出時の HEAD で再実行した。
+
+- check 1 `bash scripts/dev/test-affected.sh` → exit 0（14:21〜14:37Z）。health は verdict=pass、新規 0・悪化 0。nextest は 8,530 passed / 23 skipped（12 slow）、563.195 秒。doc test は失敗 0。web は 103 files / 714 passed、gateway は 113 passed / 0 fail、test-ts-verify は 20 passed / 0 failed、script bundle SKIP は 0 件。前回の run で要った cache・pnpm・検査枠の迂回は無しで通った。
+- check 2 `cargo clippy --workspace -- -D warnings && cargo fmt --all -- --check` → clippy exit 0（警告は vendor の deno_core の既存の deprecated 1 件だけ）、fmt exit 0・差分 0。
+- check 3（語の境界の否定の grep 6 本と `task_routing_audit_with_requests` が在る確認）→ exit 0。
+- check 4（凍結 path の `git diff --quiet` と `slices-check.py --write-set R6`）→ exit 0、`write-set R6: ok`。
+- check 5（範囲 check、`sh "$CELERIS_WU_SCOPE_PATHS"`）→ exit 0、範囲外の path 無し。変更 path は本 file を含む 9 件。
+- 対象試験: `cargo nextest run -p task-core -p task-dispatch -p celeris -E 'test(feature_hash_fixed_bytes) | test(removed_cheap_local_first_is_a_config_error)'` → exit 0、3 passed（固定 hash の 2 本と config 拒否の 1 本）。
 
 ## 提案
 

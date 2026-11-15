@@ -1,4 +1,4 @@
-//! `task-ops`: `celerisctl` の approve/reject/answer/cancel/add/plan/replay の判断と検証、および
+//! `task-ops`: `celerisctl` の approve/reject/answer/cancel/add/replay の判断と検証、および
 //! イベントからの派生ビュー（質問文・answers・prior_review・連続 requeue・バックオフ・Human check の
 //! Approval 子の対応など）を 1 か所にまとめる（ADR-0013 D7）。`task-api`（Phase 9b）からも同じ関数を
 //! 呼べるようにするための下ごしらえ。
@@ -58,6 +58,7 @@ pub mod notify_feed;
 pub mod op_writes;
 /// ADR-0074 D2（Phase F3 途中確認）: 工程の後の途中確認（`awaiting_human`）の判定と人の操作。
 pub mod phase_gate;
+/// 撤去済みの `POST /plans`（410）の本文の型 `NewPlanSpec` だけを持つ（`task-api` の schema が参照する）。
 pub mod plan;
 /// ADR-0079 D8（Phase R3b）: root の計画の承認（`awaiting_plan_approval`）の判定と人の操作。
 pub mod plan_gate;

@@ -1,8 +1,9 @@
 //! DESIGN §6 Phase 5 の受け入れ条件（ADR-0007）。fake ワーカー（`sh` スクリプト）と実バイナリ
-//! `celerisctl` / `celeris` だけで動き、ネットワークに出ない。
+//! `celerisctl` / `celeris` だけで動き、ネットワークに出ない。根の Plan task だけは試験が store に直接作る
+//! （`celerisctl plan` は R6 で消した。新しい仕事の入口は root task と `execution plan set`）。
 //!
-//! 1. `celerisctl plan "<大目標>"` → `celerisctl approve` → `celeris` がプランナー（fake）を走らせ、`artifacts/plan.json` から
-//!    4 個の子タスクを `draft` で生成する（`plan.auto_accept = false`）。子は人間が `celerisctl approve` するまで
+//! 1. Plan task（draft・acceptance 空）→ `celerisctl approve` → `celeris` がプランナー（fake）を走らせ、
+//!    `artifacts/plan.json` から 4 個の子タスクを `draft` で生成する（`plan.auto_accept = false`）。子は人間が `celerisctl approve` するまで
 //!    dispatch されない。承認後に `celeris` を再実行すると全て `done`（うち 1 つは `Reviewer` 条件を fake の
 //!    レビュー run で判定）。`celerisctl replay` 差分ゼロ。
 //! 2. 1 回目の `plan.json` が不正（依存が範囲外）→ `review_fail` → 2 回目の run の `prior_review` に理由が渡り、
@@ -13,7 +14,11 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use task_core::{Event, SqliteStore, Status, Task, TaskId, TaskKind, TaskStore, Tier};
+use task_core::{
+    Budget, Event, SqliteStore, Status, Task, TaskId, TaskKind, TaskStore, Tier, WorkerHint,
+    WorkspaceSpec,
+};
+use time::OffsetDateTime;
 
 fn bin(name: &str) -> PathBuf {
     let exe = std::env::current_exe().unwrap();
@@ -158,6 +163,61 @@ candidates = [{{ source = "fake", model = "fake" }}]
         self.store.get(id).unwrap().unwrap()
     }
 
+    /// 根の `kind = plan` の task を draft で作る（insert + `Created` を 1 トランザクション）。受け入れ条件は空で、
+    /// 暗黙の plan 検証だけが掛かる（ADR-0007 D4）。新しい仕事の入口は root task と `execution plan set`（plan/3）で、
+    /// planner の経路そのものを試すためにだけ試験の中で作る。
+    fn create_plan_task(&self, goal: &str, dir: &Path) -> TaskId {
+        let now = OffsetDateTime::now_utc();
+        let task = Task {
+            harness_id: None,
+            requirements: Default::default(),
+            tree: None,
+            paused_at: None,
+            routing: None,
+            repos: Vec::new(),
+            id: TaskId::new(),
+            parent_id: None,
+            kind: TaskKind::Plan,
+            title: goal.into(),
+            objective: goal.into(),
+            acceptance: vec![],
+            inputs: vec![],
+            depends_on: vec![],
+            status: Status::Draft,
+            priority: 0,
+            worker_hint: WorkerHint {
+                tier: Tier::Frontier,
+            },
+            workspace: WorkspaceSpec::Local {
+                path: dir.to_path_buf(),
+                mode: None,
+            },
+            budget: Budget {
+                max_turns: 30,
+                max_wall_secs: 900,
+                max_retries: 1,
+                max_tokens: None,
+            },
+            attempts: 0,
+            lease: None,
+            created_at: now,
+            updated_at: now,
+            role: None,
+            genre: None,
+            aggregate: false,
+            skills: Vec::new(),
+            mode: Default::default(),
+            project_id: None,
+            milestone_id: None,
+            assignee: None,
+            conversation: None,
+            labels: Vec::new(),
+            category: Default::default(),
+        };
+        self.store.create_task(&task, vec![]).unwrap();
+        task.id
+    }
+
     fn children_of(&self, parent: TaskId) -> Vec<Task> {
         let mut v: Vec<Task> = self
             .store
@@ -250,9 +310,9 @@ rm -f "$RUN"
 
 const GOAL: &str = "examples/hello-crate に CLI 引数パースを追加し、テストとREADMEを整備";
 
-/// シナリオ 1: plan → approve → 子 4 件が draft → 人間承認 → 全て done。
+/// シナリオ 1: Plan task → approve → 子 4 件が draft → 人間承認 → 全て done。
 #[test]
-fn celerisctl_plan_generates_children_that_complete_after_human_approval() {
+fn plan_task_generates_children_that_complete_after_human_approval() {
     let env = Env::new();
     let plan_source = env.root.join("plan-source.json");
     std::fs::write(&plan_source, PLAN_JSON).unwrap();
@@ -261,12 +321,8 @@ fn celerisctl_plan_generates_children_that_complete_after_human_approval() {
     let dir = env.root.join("workspaces").join("hello-crate");
     std::fs::create_dir_all(&dir).unwrap();
 
-    // celerisctl plan "<大目標>" → Plan タスク（draft、Frontier、acceptance 空）。
-    let id: TaskId = env
-        .celerisctl(&["plan", GOAL, "--workspace", dir.to_str().unwrap()])
-        .trim()
-        .parse()
-        .unwrap();
+    // Plan タスク（draft、Frontier、acceptance 空、max_retries = 1）。
+    let id = env.create_plan_task(GOAL, &dir);
     let plan = env.task(id);
     assert_eq!(plan.kind, TaskKind::Plan);
     assert_eq!(plan.status, Status::Draft);
@@ -457,11 +513,7 @@ fn invalid_plan_is_retried_once_with_prior_review() {
     let dir = env.root.join("workspaces").join("retry");
     std::fs::create_dir_all(&dir).unwrap();
 
-    let id: TaskId = env
-        .celerisctl(&["plan", "retry goal", "--workspace", dir.to_str().unwrap()])
-        .trim()
-        .parse()
-        .unwrap();
+    let id = env.create_plan_task("retry goal", &dir);
     env.celerisctl(&["approve", &id.to_string()]);
     let log = env.run_celeris(&config, Duration::from_secs(60));
 

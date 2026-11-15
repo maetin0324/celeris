@@ -381,7 +381,7 @@ token_file = "api.token"
 | 14 | POST | `/tasks/{id}/reject` | `celerisctl reject` | `TransitionResult` | task-ops |
 | 15 | POST | `/tasks/{id}/answer` | `celerisctl answer` | `TransitionResult` | task-ops |
 | 16 | POST | `/tasks/{id}/cancel` | `celerisctl cancel` | `TransitionResult` | task-ops |
-| 17 | POST | `/plans` | **ADR-0079 R5a で撤去（410 `removed_by_adr_0079`。§3.125.8）**。旧: `celerisctl plan` 相当 | 410 `Problem`（旧 201 `Task`） | task-ops |
+| 17 | POST | `/plans` | **ADR-0079 R5a で撤去（410 `removed_by_adr_0079`。§3.125.8）**。旧: `celerisctl plan` 相当（`celerisctl plan` も R6 で撤去） | 410 `Problem`（旧 201 `Task`） | task-ops |
 | 18 | POST | `/replay` | `celerisctl replay`（読み取りのみ） | `ReplayReport` | task-ops |
 | 19 | GET | `/graph` | DAG（`depends_on` の辺、`parent_id` の入れ子） | `Graph` | task-ops |
 | 20 | GET | `/events` | 全タスク横断のイベント（`after_id`。ポーリング / `curl` 用） | `EventsPage` | store `events_since` |
@@ -4199,9 +4199,9 @@ events を後ろから見て最初に見つかった質問。次の 2 つを同�
 
 無ければ空文字列。
 
-### 5.6 検証（`task_ops::add::create_task` / `task_ops::plan::create_plan` の中）
+### 5.6 検証（`task_ops::add::create_task` の中）
 
-文言は §3.4 / §3.14 のとおり（`OpsError::Validation` → 422）。`title` / `objective` の空白、`parent` / `depends_on` / `project` の存在を検査する（ADR-0014 D3）。`celerisctl add` / `plan` も同じ関数を通す。テーブル駆動テストは `crates/task-ops/src/add/tests.rs` / `plan/tests.rs`。
+文言は §3.4 のとおり（`OpsError::Validation` → 422）。`title` / `objective` の空白、`parent` / `depends_on` / `project` の存在を検査する（ADR-0014 D3）。`celerisctl add` も同じ関数を通す。テーブル駆動テストは `crates/task-ops/src/add/tests.rs`。
 
 ### 5.7 `TransitionResult.cascaded`（`task_ops::gate`。`#[serde(default)]`）
 

@@ -10,8 +10,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use task_core::{AccountAdapter, Event, HarnessErrorClass, TaskId, TaskStore, Trigger};
+use task_core::{AccountAdapter, Event, HarnessErrorClass, Lease, TaskId, TaskStore, Trigger};
 use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use tokio::task::JoinHandle;
 
 use crate::policy::ProviderId;
@@ -25,6 +26,20 @@ pub(crate) type RouteReservation = (
 
 /// Phase F5-fix6: 持ち主のデーモンが居なくなった run を回収するときの理由の文。
 pub(crate) const ORPHAN_WHY: &str = "orphan_takeover: the daemon holding this run is gone";
+
+/// Phase F5-fix6: 孤児を回収することを残す event（`worker_progress`、`orphan_takeover: …`）。`lease_until` は回収する
+/// run の lease の期限。ADR 2026-11-15 lease-reclaim-compare-and-release D4: 回収が書けたときだけ残す
+/// （Task の lease の回収は [`RunSupervisor::release_lease`] が同じ transaction で積む）。
+pub(crate) fn orphan_takeover_note(run_id: &str, lease_until: OffsetDateTime) -> Event {
+    Event::worker_progress(
+        run_id.to_string(),
+        format!(
+            "{}: このランを持っていたデーモンが居ないため、lease の期限（{}）を待たずに回収します。",
+            crate::orphan::ORPHAN_TAKEOVER_REASON,
+            lease_until.format(&Rfc3339).unwrap_or_default()
+        ),
+    )
+}
 
 /// ADR-0074 D1.5（Phase F2）: 実行中の run の鍵。`work_unit` は v2 の並列 WU の run だけ `Some(work_units.id)`
 /// （atomic・planner・v1 の WU の run は `None`）。
@@ -354,30 +369,38 @@ impl<S> RunSupervisor<S> {
 
     // ---- lease の解放と run の終了記録（D3 reclaim_expired_leases の副作用） ----
 
-    /// [`reclaim_verdict`] の提案で lease を解放する: lease を持っていた run（`lease_runs`）ごとに終了記録
-    /// （`WorkerFinished`）を作り、遷移と同じ transaction で積む。成功して提案が backoff を持てば期限を立てる。
+    /// [`reclaim_verdict`] の提案で lease を解放する: 孤児の回収の記録（`takeover`）と、lease を持っていた run
+    /// （`lease_runs`）ごとの終了記録（`WorkerFinished`）を作り、遷移と同じ transaction で積む。
+    ///
+    /// ADR 2026-11-15 lease-reclaim-compare-and-release D1・D2: 書く前に、同じ transaction の中で DB の lease が
+    /// snapshot の lease（`expected`）と等しく Task が running かを照合する。違えば（snapshot の後に保持者が
+    /// `renew_lease` で延ばした、別の instance が回収した、など）何も書かずに `Ok(None)` を返し、backoff も立てない。
+    /// 書けて提案が backoff を持てば期限を立てる。
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn release_lease(
         &mut self,
         store: &dyn TaskStore,
         task_id: TaskId,
+        expected: &Lease,
         verdict: &ReclaimVerdict,
+        takeover: Option<Event>,
         lease_runs: &[String],
         metrics: Option<task_core::RunMetrics>,
         now: OffsetDateTime,
-    ) -> Result<task_core::Outcome, task_core::StoreError> {
+    ) -> Result<Option<task_core::Outcome>, task_core::StoreError> {
         let end = Some(task_core::RunEnd::HarnessError {
             class: verdict.class,
         });
-        let finished: Vec<Event> = lease_runs
-            .iter()
-            .map(|run_id| {
-                let outcome = verdict.outcome.clone();
-                run_end_record(run_id, outcome, None, None, metrics, end)
-            })
-            .collect();
+        let finished = lease_runs.iter().map(|run_id| {
+            let outcome = verdict.outcome.clone();
+            run_end_record(run_id, outcome, None, None, metrics, end)
+        });
+        let events: Vec<Event> = takeover.into_iter().chain(finished).collect();
         let outcome =
-            store.apply_transition_with_events(task_id, verdict.trigger.clone(), finished)?;
-        if let Some(delay) = verdict.backoff {
+            store.apply_transition_if_lease(task_id, expected, verdict.trigger.clone(), events)?;
+        if outcome.is_some()
+            && let Some(delay) = verdict.backoff
+        {
             self.start_infra_backoff(task_id, now + delay);
         }
         Ok(outcome)

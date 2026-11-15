@@ -8,9 +8,26 @@ updated: 2026-11-15
 
 ## 実装前 brief と owner
 
-[設計判断と brief](../../adr/2026-11-15-cli-api-resolution.md) に記録した。
-architecture-map の celerisctl、知識ベースの置き場、CoS チャット設定の owner に限定した。
-credential の時計注入実装、KB の置き場 validator、matching の cluster 対応実装は変更しない。
+R6 の計画が API の解決を `ApiConfig::from_config` へ寄せると決め、挙動の差は進捗に書くと指定した。
+この unit の範囲は `agent-docs/adr/` を含まないため、ADR は足さず、brief と挙動の差をこの進捗に書く。
+前の run は ADR `2026-11-15-cli-api-resolution.md` を足したが、範囲 check で落ちたので消した。
+
+1. 根本原因: celerisctl の command ごとに config・listen・token の解決の写しがあり、接続先と token の扱いが command で違っていた。
+2. 責務 owner: architecture-map の celerisctl の行。接続設定は `commands/cron.rs` の `ApiConfig`、未参照の定義は各定義の module。
+3. 既存の再利用先: `celeris::Config::load`、`api.client_token()`、cos_ops の URL の優先順、cron の HTTP transport と既存の試験。
+4. 選択肢: 各写しを個別に直す案と、`ApiConfig` に 1 つの解決関数を置く案を比べ、後者を採った。base の時点で `ApiConfig::from_config` は無かったので足した。新しい共通基盤は作らない。
+5. 新しい状態・分岐・fallback・port: 無し。既存の URL override と token file の解決を owner に移しただけ。
+6. 撤去対象: 6 command の解決の写し、`cos_ops::api_config`・`API_URL_ENV`、未参照の 8 定義と、それ専用の private helper・import。
+7. 不変条件: credential を表示・記録しない。CoS run credential があるときは人の token を読まない。明示 URL のときは config と token を読まない。時計注入の発行・KB の validator・review の判定は残す。既存の CoS・cron・browser の試験と、追加した共通 resolver の実 CLI 試験で確かめる。
+
+`ApiConfig::from_config(path, url, token_file)` の優先順:
+
+- URL: 引数の URL（`--api-url`）、`CELERIS_API_URL`（空は未指定）の順。どちらかがあれば `/api/v1` で終わることを求め、config と人の token を読まない。
+- config: 引数の path、`CELERIS_CONFIG`、既定 `~/.config/celeris/config.toml` の順。`[api] listen` と `client_token` を読む。`CELERIS_COS_RUN_CREDENTIAL` があれば人の token を読まない。
+- token file（browser doctor の `--token-file`）は最後に当て、token を上書きする。空や制御文字を含む token は拒む。
+
+範囲は architecture-map の celerisctl、知識ベースの置き場、CoS チャット設定の owner に限った。
+credential の時計注入の実装、KB の置き場の validator、matching の cluster 対応の実装は変えていない。
 
 ## 項目ごとの判定
 
@@ -48,28 +65,33 @@ API の wire、schema、events、履歴、credential 本体、認可の契約の
 
 ## 証拠（提出時の HEAD で実行。基準は $CELERIS_WU_BASE）
 
-- `bash scripts/dev/test-affected.sh --list` → exit 0。変更 crate と逆依存14 crate、web 型検査・unit、TS 検証を選択。
-- `PNPM_CONFIG_STORE_DIR="$PWD/.pnpm-store" CELERIS_SCRIPT_RUNNER_CACHE="$CARGO_TARGET_DIR/script-runner-cache" bash scripts/dev/test-affected.sh` → 未完走（中断 exit 130）。health pass（新規0・悪化0）、web 型検査・unit714件・gateway113件、TS検証20件は通過。Rust 8528件の実行中、既存 CoS 試験が URL エラー文の指定元の欠落を検出した。修正して下記対象8件は通過。run の残り時間を考慮し全体の affected tests は引き継ぐ。
-- `cargo nextest run --workspace -E 'package(=celerisctl) & binary(=cos_ops)'` → exit 0、8 passed。既存の URL 優先順・エラー文の試験と、追加の共通 resolver 実 CLI 試験を含む。host 共通枠を取得して実行した。
-- `cargo clippy --workspace -- -D warnings` → exit 0。vendor deno_core の既存 deprecated warning 1件はあるが workspace の検査は合格。
+- `bash scripts/dev/test-affected.sh --list` → exit 0。変更した crate と逆依存の 14 crate、web の型検査と unit、ts-verify を選んだ。
+- `PNPM_CONFIG_STORE_DIR="$PWD/.pnpm-store" CELERIS_SCRIPT_RUNNER_CACHE="$CARGO_TARGET_DIR/script-runner-cache" bash scripts/dev/test-affected.sh` → exit 0（911 秒）。health は verdict=pass（new 0・worsened 0）。web は 103 file・714 件 passed、gateway は 113 件 passed、ts-verify は 20 passed・0 failed、Rust は 8528 件 passed・23 skipped。
+- `cargo nextest run --workspace -E 'package(=celerisctl) & binary(=cos_ops)'` → exit 0、8 passed（前の run）。既存の URL の優先順・エラー文の試験と、追加した共通 resolver の実 CLI 試験を含む。全体の affected tests にも含まれる。
+- `cargo clippy --workspace -- -D warnings` → exit 0。vendor の deno_core の既存の deprecated warning 1 件は出るが、workspace の検査は合格。
 - `cargo fmt --all -- --check` → exit 0。
-- 文書リンク・ADR名・進捗書式検査 → 各 exit 0。
-- `sh "$CELERIS_WU_SCOPE_PATHS"` と担当範囲の照合 → exit 0、18 path、範囲外0。K2/K4/IEEE Access の fixture・評価器・比較条件の変更0。
+- 計画の範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"` の path を許可 path と照合）→ exit 0、17 path、範囲外 0。K2・K4・IEEE Access の fixture・評価器・比較条件の変更は 0。
 
-検査環境の解決: 共有 runner cache の読取専用を避け、`CELERIS_SCRIPT_RUNNER_CACHE="$CARGO_TARGET_DIR/script-runner-cache"` を指定した。
-pnpm の offline store の不足は、先に offline install が失敗することを確認してから、試験とは別に依存を補充した。
-pnpm v12 は `npm_config_store_dir` を参照しないため、`PNPM_CONFIG_STORE_DIR="$PWD/.pnpm-store"` を指定した。
-試験の install は offline のまま。host 共通枠への書き込みには sandbox 外実行の自動承認を得た。枠の回避はしていない。
-初回の health は main の整形による行数増加で失敗した。import と説明を整理し、関数の行数を元に戻して解決した。
+検査の環境: 共有の runner cache は読み取り専用なので、`CELERIS_SCRIPT_RUNNER_CACHE="$CARGO_TARGET_DIR/script-runner-cache"` を指定した。
+pnpm v12 は `npm_config_store_dir` を読まないので、`PNPM_CONFIG_STORE_DIR="$PWD/.pnpm-store"` を指定した（`.pnpm-store` は `.git/info/exclude` で除外済み）。試験の install は offline のまま。
+
+## 計画の check の不備（plan_issue として申告）
+
+前の run の後、計画の check が 2 つ落ちた。
+
+1. 範囲 check: 前の run が足した `agent-docs/adr/2026-11-15-cli-api-resolution.md` が範囲外だった。この run で ADR を消し、brief を上の節に移した。範囲 check は exit 0 になった。
+2. 定義の撤去の check: `! grep -n 'pub fn cos_run_credential_issue' crates/task-core/src/chat/credential.rs` が前方一致のため、残すべき `pub fn cos_run_credential_issue_at(`（53 行目）に当たって exit 1 になる。
+   `cos_run_credential_issue_at` は `crates/task-api/src/cos/mod.rs:77` と `crates/task-dispatch/src/dispatcher/cos_chat/launch.rs:713` が呼ぶ生きた API で、名前の変更や移動はこの unit の範囲外の file を変える。check だけを通すための改名や file の移動はしない。
+   check を `grep -nE 'pub fn cos_run_credential_issue\b'`（または `'pub fn cos_run_credential_issue('`）に直せば、現在の HEAD で exit 0 になることを確かめた。
 
 ## commit
 
 - `phase 1: consolidate CLI API config and remove unused cos knowledge helpers`
+- `cos-cli: ADR を消して brief を進捗に移し、affected tests の完走の結果を書く`
 
 ## 未解決
 
-実装と対象試験8件は完了。最終 source で affected tests 全体を完走し、その結果を追記して status を done にする必要がある。
-再実行には上記の PNPM_CONFIG_STORE_DIR と CELERIS_SCRIPT_RUNNER_CACHE を指定する。sandbox 内では host 共通枠が read-only のため sandbox 外実行が必要（本 run は自動承認済み）。共有枠を迂回しない。人の判断を要する事項は無い。
+計画の check 2 の前方一致の修正（replan）を待つ。実装・試験・範囲は完了している。人が判断する事項は無い。
 
 ## 提案
 

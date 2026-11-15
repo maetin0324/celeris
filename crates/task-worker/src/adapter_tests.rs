@@ -23,8 +23,8 @@ fn usage(cost_usd: Option<f64>) -> Option<Usage> {
     })
 }
 
-/// 不変条件: wall clock の超過は `BudgetExhausted{WallClock}`、文言 `wall clock exceeded`（dispatcher の
-/// `classify_budget_kind_from_text`・`is_budget_outcome` が見る語）で、idle も超過していても wall clock が勝つ。
+/// 不変条件: wall clock の超過は `BudgetExhausted{WallClock}`、文言 `wall clock exceeded`（試行の履歴の
+/// `retry_policy::is_budget_outcome` が outcome の文で見る語）で、idle も超過していても wall clock が勝つ。
 /// adapter の試験は実時間の打ち切りを 1 経路ずつしか見ず、両方の超過の優先順位を固定していなかった。
 #[test]
 fn run_common_deadline_wall_clock_is_budget_exhausted() {

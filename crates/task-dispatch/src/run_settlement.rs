@@ -469,8 +469,11 @@ fn cross_department_questions(events: &[(u64, Event)], run_id: &str) -> Vec<Stri
     out
 }
 
-/// ADR-0072 D7（Phase E1）: 「二重の安全網」。構造化した `Terminal::BudgetExhausted` を返さない古い経路・アダプタのために、
-/// `Terminal::Error{retryable:true}` の文を字句判定する（`task_core::is_budget_outcome` と同じ語彙。分類できなければ `None`）。
+/// ADR-0072 D7（Phase E1）: 「二重の安全網」。構造化した `Terminal::BudgetExhausted` を返さない経路のために、
+/// `Terminal::Error{retryable:true}` の文を字句判定する（`retry_policy::is_budget_outcome` と同じ語彙。分類できなければ `None`）。
+/// 残る producer は `subprocess::run_subprocess` の wall clock（`fake` など protocol の worker）、pi の `stream.error`・acp の
+/// RPC の失敗の文（context 超過を adapter で分類していない）、protocol の `error` の文。撤去の条件は ADR
+/// 2026-11-15-research-adapter-deadline D5 の付記。
 fn classify_budget_kind_from_text(message: &str) -> Option<BudgetKind> {
     let m = message.to_lowercase();
     if task_core::looks_like_context_exceeded(&m) {

@@ -16,9 +16,11 @@ use crate::protocol::{Evidence, ProviderFailure, RunRequest};
 
 /// run の終端結果（ADR-0003 D3）。タイムアウト・終端無し exit も `Error{retryable:true}` に正規化する（D4）。
 ///
-/// ADR-0072 D7（Phase E1）: `Yielded` / `BudgetExhausted` を追加した。アダプタが構造化して返せない
-/// 古い経路のためには、dispatcher 側に `task_core::is_budget_outcome` を使う「二重の安全網」がある
-/// （`Terminal::Error` のままでも予算切れとして拾われる）。
+/// ADR-0072 D7（Phase E1）: `Yielded` / `BudgetExhausted` を追加した。予算切れを構造化して返せない経路
+/// （`subprocess::run_subprocess` の wall clock、pi・acp が harness の失敗の文をそのまま返す枝、protocol の
+/// `error` の文）のために、dispatcher の `run_settlement::classify_budget_kind_from_text` が
+/// `Terminal::Error{retryable: true}` の文を予算切れとして拾う（残す理由と撤去の条件は ADR
+/// 2026-11-15-research-adapter-deadline D5 の付記）。
 #[derive(Debug, Clone, PartialEq)]
 pub enum Terminal {
     Done {

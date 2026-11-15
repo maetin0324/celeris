@@ -49,6 +49,12 @@ ADR [2026-11-11-dispatcher-state-ownership](../../adr/2026-11-11-dispatcher-stat
 
 R4 の進捗の「受け入れ条件ごとの証拠（record-d7 の unit）」に同じものを書いた。
 
+- 付記の表の 5 行の右の列はすべて「無し」（`未確認`・`試験は無い`・`には無い` の grep は 0）。8 つの試験名は ADR と R4 の進捗の両方にある。
+- `cargo nextest run --locked -p task-dispatch --no-fail-fast -E '<足した 9 本と cred-cache の試験>'` → exit 0、10 passed。`-E 'test(/cex_/)'` → exit 0、40 passed。
+- `bash scripts/dev/check-doc-links.sh`・`bash scripts/dev/check-adr-numbers.sh`・`sh scripts/dev/progress-index.sh --check`・`bash scripts/dev/check-health.sh` → すべて exit 0。
+- `bash scripts/dev/test-affected.sh` → exit 0（docs のみ）。`cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `sh "$CELERIS_WU_SCOPE_PATHS"` → 4 path（ADR 2026-11-11・R4 の進捗・cex-lease.md・この file）。
+
 ## 未解決
 
 - 無し（D7 の表の外の窓は R4 の進捗の未解決事項に、各 unit の未解決として挙げた）。

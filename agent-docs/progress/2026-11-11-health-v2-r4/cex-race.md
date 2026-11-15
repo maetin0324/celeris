@@ -1,7 +1,7 @@
 ---
 title: "健全性v2 R4 cex-race: lease の renew の競合と、ownerless で閉じた旧 reviewer の遅れた合格の反例試験"
 tasks: [01M7DYMCZ4T7C5RNQ3JZQAF4G7]
-status: running
+status: blocked
 updated: 2026-11-15
 ---
 # 健全性v2 R4 cex-race
@@ -293,3 +293,121 @@ fix-verdict（`review_verdict.rs` の `on_review_finished`）が行う。この 
   の高 risk の class に当たるので、設計 brief と設計 review を通す別の変更で行う。
 - 別の選択肢（採らなかった）: ownerless の照合（`reconcile_ownerless_runs`）が review lock を取れない reviewer run を閉じない
   （lock を持つ process が生きている印として使う）。D3 の判定の材料と、反例の試験の手順 2 の前提（A を閉じる）が変わる。
+
+## renew-race: 回収側の期限切れ snapshot の直後の renew（2026-11-15）
+
+結論: 反例は今の実装で成り立つ（不変条件が破れる）。試験 `cex_lease_renew_after_expired_snapshot_keeps_the_holder` は
+assert を残したまま落ちる。本体（`cfg(test)` の外）は変えていない。この unit の check は落ち、repair か replan に回す（D7 の規則）。
+基準は `$CELERIS_WU_BASE`。
+
+### 変更（commit の件名）
+
+- `renew-race: pin the holder's renew after the reclaimer's expired snapshot (cex_lease_renew_after_expired_snapshot_keeps_the_holder, TestHooks::after_reclaim_decision)`
+  - `crates/task-dispatch/src/dispatcher/tests/hooks.rs`: `TestHooks` に一回フック `after_reclaim_decision: Option<Box<dyn FnOnce(TaskId) + Send>>` を足した。
+  - `crates/task-dispatch/src/dispatcher/leases.rs`: `reclaim_expired_leases` で `reclaim_reason` が回収の理由を返した直後に、
+    `#[cfg(test)] if let Some(hook) = self.test_hooks.after_reclaim_decision.take() { hook(task.id); }` の 4 行だけを足した
+    （`halt_after_wu_transition`・`before_integration_start` と同じ形。既存の行は変えていない。`cfg(test)` の外の挙動は同じ）。
+  - `crates/task-dispatch/src/dispatcher/tests/cex_lease_restart.rs` の末尾に試験 1 本を足した。
+- この節と front matter の status（blocked）。
+
+### 作業前 brief
+
+1. 根本原因: D7 の表の lease の行（回収側が期限切れの snapshot を取った直後に、保持者が renew する）に試験が無い。
+2. 責務 owner: 試験は `dispatcher/tests/`。対象の判断は `dispatcher/leases.rs` の `reclaim_expired_leases` と、
+   `run_supervisor.rs` の `RunSupervisor::release_lease`（→ store の `apply_transition_with_events`）。
+3. 既存の再利用先: `cex_lease_restart.rs` の `GatedAdapter`・`true_task`・`lease_run`・`status_of`・`finishes`・`worker_starts`・
+   `index_status`・`took_over`、`orphan_takeover.rs` の `slow_adapter`、`tests/mod.rs` の `dispatcher`・`run_until_state`・`events_of`。
+4. 選択肢: (a) 既存の継ぎ目（期待する行を引数に取り writer transaction の中で照合する store の API）で順序を作る、
+   (b) 試験で `TaskStore` を包む store を作り書き込みの前に renew を挟む、(c) `TestHooks` に一回フックを足す。(a) は継ぎ目が
+   無い（下）。(b) は `TaskStore` の 181 個の method をすべて転送する包みが要り、試験 1 本には大きすぎる。(c) を採った。
+5. 新しい状態・分岐・fallback・port: `TestHooks` の一回フック 1 つ（`cfg(test)` の中だけ）。本体の状態・分岐は無し。
+6. 撤去対象: 無し。
+7. 不変条件: 下の「試験」。
+
+### 既存の継ぎ目の有無（hook を足した理由）
+
+- `reclaim_expired_leases` は同期で await を持たない。snapshot（`self.store.list(Some(Status::Running))`）から回収の書き込みまでの
+  間に、試験の task も別の接続の書き込みも挟めない。
+- 回収の書き込み `RunSupervisor::release_lease` → `TaskStore::apply_transition_with_events(task_id, trigger, finished)` は
+  期待する lease（run id・期限）を引数に取らない。transaction の中の照合は `transition()` の状態（running か）だけ。
+- 期待する行を引数に取り writer transaction の中で照合する store の API は `recover_work_unit`・`try_start_work_unit_integration`
+  （WU の行）だけで、Task の lease の回収はこれを通らない。
+- `dispatcher.rs` に試験から差し込める store の包み・遅延の口は無い（`TestHooks` の既存の口は `worker_start_delay`・
+  `halt_after_wu_transition`・`before_integration_start` で、どれも回収の経路に無い）。
+
+### 試験
+
+`cex_lease_renew_after_expired_snapshot_keeps_the_holder`（Dispatcher の private field は `test_hooks` の設定だけで、既存の試験と
+同じ形。待ちは `run_until_state` の出来事待ちと壁時計の保険 `STATE_WAIT_GUARD`。run の終わりは `GatedAdapter` の semaphore で試験が
+決める。lease の失効は `renew_lease(.., 0)` で store の lease 時刻を今にする。CPU 負荷なし）:
+
+1. tempdir の DB file を `SqliteStore::open` で 2 回開き、保持者の store と回収側の store にする（同じ DB の別の接続）。
+2. 保持者の dispatcher が run A を起こす（gate で止まる）。保持者の store で `renew_lease(id, A, 0)` として lease を切らす。
+3. 回収側の dispatcher（A を手元に持たない）に `after_reclaim_decision` を置く。フックは保持者の store で
+   `renew_lease(id, A, 3600 秒)` を呼び、結果と延ばした後の lease を記録する。回収側を 1 回 tick する。
+4. assert: フックが呼ばれ renew が true を返した。`report.reclaimed == 0`、Task は running、lease は延ばした lease（run id A・
+   延ばした期限）と等しい、attempts は変わらない、A の `runs` 行は running、A の `WorkerFinished` が無い、`orphan_takeover` の
+   event が無い、失効の後に `Transitioned` が無い。
+5. A の gate を開け、保持者が A の通常の完了で Task を Done にする。A の `WorkerFinished` は 1 件、`WorkerStarted` は A だけ。
+
+doc comment に、守る不変条件と、既存の試験（`cex_stale_holder_late_finish_does_not_overwrite_the_reassigned_run`・`orphan_takeover.rs`・
+store の `renew_lease_extends_only_the_matching_running_lease`・ADR-0070 D5 の手元の run の延長）がこの順序を作らない理由を書いた。
+
+### 観測（今の実装で反例が成り立つ）
+
+手順 3 のフックは呼ばれ、保持者の renew は成功した（true、lease は A のまま期限が 1 時間後）。その後、回収側は古い snapshot の
+判断のまま回収を書いた。手順 4 の最初の assert で落ちる:
+
+```
+panicked at crates/task-dispatch/src/dispatcher/tests/cex_lease_restart.rs:1204:5:
+assertion `left == right` failed: report TickReport { reclaimed: 1, dispatched: 0, finished: 0, ... };
+status Ready; attempts 0 (before 0); lease None (extended Lease { worker_run_id: "<A>", expires_at: <renew の 1 時間後> });
+A's runs row Some(HarnessError);
+events after the expiry [Transitioned { from: Running, to: Ready, reason: "infra_requeue" },
+  WorkerFinished { run_id: "<A>", outcome: "infra_requeue: lease expired (run_id=<A>)", role: None, end: Some(HarnessError { class: LeaseExpired }) }]
+  left: 1
+ right: 0
+```
+
+- 保持者が延ばした直後の lease が回収側に消された（Task は ready、lease は None）。保持者の A は gate で生きたまま。
+- 回収側が A の `WorkerFinished{lease_expired}` を書き、A の `runs` 行を `harness_error` に閉じた。attempts は変わらない（0）。
+- `orphan_takeover` の event は無い（回収側は孤児の回収を設定していない。理由は Expired）。
+- 原因: `release_lease` → `apply_transition_with_events` が snapshot の lease を照合しない（上の「既存の継ぎ目の有無」）。
+- 再現: `cargo nextest run -p task-dispatch --no-fail-fast -E 'test(/cex_lease_renew/)'`（exit 100、0.6 秒前後で落ちる）。
+
+### guard を一時的に外した確認
+
+回収の書き込みに lease を照合する guard は今の実装に無い（上の観測）。試験は外す前から手順 4 で落ちる。代わりに次の 2 つを
+一時変更で確かめた。一時変更は `git checkout --` で戻し、commit していない（戻した後に `git status --short` は空、
+`grep -rn "GUARD-OFF\|GUARD-PROTO" crates/` は 0 件）。
+
+| 一時変更 | 結果 |
+|---|---|
+| G-hook-off: `leases.rs` の足した呼び出しの `hook(task.id)` を呼ばない形にする（renew を挟まない） | 落ちる（exit 100）。`the reclaimer did not decide to reclaim the expired lease, or the lease vanished: None`。フックが無いと試験の順序は作れない |
+| G-proto（逆向きの確認）: `release_lease` の直前に「store の Task の lease が snapshot の lease と違えば回収しない」読み直しを足す | `cargo nextest run -p task-dispatch --no-fail-fast --no-tests=fail -E 'test(/cex_lease_restart::/)'` → exit 0、12 本すべて合格（新しい試験は手順 1〜5 すべて）。G-proto は確認のための一時変更で、修正の案ではない（読み直しと書き込みの間の窓が残る） |
+
+### 証拠（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+
+- `cargo nextest run -p task-dispatch --no-fail-fast -E 'test(/cex_/) | test(/ownerless/)'` → exit 100。49 本中 48 本合格、
+  落ちたのは `cex_lease_renew_after_expired_snapshot_keeps_the_holder` の 1 本だけ（上の観測）。old-review の反例の試験
+  `cex_restart_old_reviewer_pass_after_ownerless_close_is_ignored` を含む既存の試験は合格。
+- `bash scripts/dev/test-affected.sh` → exit 100。3945 本中 3944 本合格（11 skipped）、失敗は同じ 1 本だけ。対象 crate は
+  celeris・celeris-campaign・celerisctl・llm-proxy・task-dispatch。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `bash scripts/dev/check-health.sh` → exit 0。
+- `python3 scripts/dev/repo-health/repo_health.py --repo . --base "$CELERIS_WU_BASE" --head worktree --policy-version 1 --out <file>`
+  → exit 0、verdict pass、fail_grade 0、new 0・worsened 0。
+- `git diff $CELERIS_WU_BASE HEAD -- crates/task-dispatch/src/dispatcher/leases.rs` → 追加 4 行（`#[cfg(test)]` の呼び出し）だけ。
+
+### 未解決
+
+- 反例（回収側の古い snapshot の回収が、保持者の延ばした lease を消す）は直っていない。この unit は本体を変えないので、
+  check は exit 0 にならない。修正の unit（repair）か replan に回す。
+
+### 提案
+
+- 回収の書き込みを比較更新にする: `RunSupervisor::release_lease` が snapshot の lease（run id と期限）を store に渡し、store が
+  writer transaction の中で「Task が running で lease が期待どおり（同じ run id、期限が延びていない）」を照合してから遷移と
+  `WorkerFinished` を書く。違えば何も書かずに知らせ、回収側はその Task を飛ばす。`crates/task-core/src/store/` と
+  `run_supervisor.rs`（lease の高 risk の class）に当たるので、設計 brief と設計 review を通す修正の unit で行う。
+  fix-verdict の節の提案（reviewer run の判定の比較更新）と同じ形の store の API にまとめられるかも、その設計で決める。

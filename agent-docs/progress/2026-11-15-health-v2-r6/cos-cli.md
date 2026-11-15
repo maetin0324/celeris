@@ -1,10 +1,12 @@
 ---
 title: 健全性v2 R6 cos-cli 接続設定の集約と未参照公開関数の撤去
 tasks: [01M6TYVJT7EJ6WWHEF0EBH3JPS]
-status: running
+status: done
 updated: 2026-11-15
 ---
 # 健全性v2 R6 cos-cli
+
+完了日: 2026-11-15
 
 ## 実装前 brief と owner
 
@@ -65,33 +67,40 @@ API の wire、schema、events、履歴、credential 本体、認可の契約の
 
 ## 証拠（提出時の HEAD で実行。基準は $CELERIS_WU_BASE）
 
-- `bash scripts/dev/test-affected.sh --list` → exit 0。変更した crate と逆依存の 14 crate、web の型検査と unit、ts-verify を選んだ。
-- `PNPM_CONFIG_STORE_DIR="$PWD/.pnpm-store" CELERIS_SCRIPT_RUNNER_CACHE="$CARGO_TARGET_DIR/script-runner-cache" bash scripts/dev/test-affected.sh` → exit 0（911 秒）。health は verdict=pass（new 0・worsened 0）。web は 103 file・714 件 passed、gateway は 113 件 passed、ts-verify は 20 passed・0 failed、Rust は 8528 件 passed・23 skipped。
-- `cargo nextest run --workspace -E 'package(=celerisctl) & binary(=cos_ops)'` → exit 0、8 passed（前の run）。既存の URL の優先順・エラー文の試験と、追加した共通 resolver の実 CLI 試験を含む。全体の affected tests にも含まれる。
+この run（attempt 1、replan 後）はコードを変えていない。前の run の後に main の取り込み・rebase は無く、次の検査を提出時の HEAD で再実行した。
+
+- `bash scripts/dev/test-affected.sh --list` → exit 0（前の run）。変更した crate と逆依存の 14 crate、web の型検査と unit、ts-verify を選んだ。
+- `PNPM_CONFIG_STORE_DIR="$PWD/.pnpm-store" CELERIS_SCRIPT_RUNNER_CACHE="$CARGO_TARGET_DIR/script-runner-cache" bash scripts/dev/test-affected.sh` → exit 0（804 秒）。health は verdict=pass（new 0・worsened 0）。web は 103 file・714 件 passed、gateway は 113 件 passed・0 failed、ts-verify は 20 passed・0 failed、Rust は 8528 件 passed・23 skipped。
+- `cargo nextest run --workspace -E 'package(=celerisctl) & binary(=cos_ops)'` → exit 0、8 passed（前の run）。既存の URL の優先順・エラー文の試験と、追加した共通 resolver の実 CLI 試験を含む。上の affected tests にも含まれる。
 - `cargo clippy --workspace -- -D warnings` → exit 0。vendor の deno_core の既存の deprecated warning 1 件は出るが、workspace の検査は合格。
 - `cargo fmt --all -- --check` → exit 0。
-- 計画の範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"` の path を許可 path と照合）→ exit 0、17 path、範囲外 0。K2・K4・IEEE Access の fixture・評価器・比較条件の変更は 0。
+- 計画の範囲 check（`sh "$CELERIS_WU_SCOPE_PATHS"` の path を許可 path と照合）→ 17 path、範囲外 0。K2・K4・IEEE Access の fixture・評価器・比較条件の変更は 0。
 
 検査の環境: 共有の runner cache は読み取り専用なので、`CELERIS_SCRIPT_RUNNER_CACHE="$CARGO_TARGET_DIR/script-runner-cache"` を指定した。
 pnpm v12 は `npm_config_store_dir` を読まないので、`PNPM_CONFIG_STORE_DIR="$PWD/.pnpm-store"` を指定した（`.pnpm-store` は `.git/info/exclude` で除外済み）。試験の install は offline のまま。
 
-## 計画の check の不備（plan_issue として申告）
+## 計画の check の不備（replan で直した）
 
-前の run の後、計画の check が 2 つ落ちた。
+前の run の後、計画の check が 2 つ落ちた。どちらもコードの誤りではない。
 
-1. 範囲 check: 前の run が足した `agent-docs/adr/2026-11-15-cli-api-resolution.md` が範囲外だった。この run で ADR を消し、brief を上の節に移した。範囲 check は exit 0 になった。
-2. 定義の撤去の check: `! grep -n 'pub fn cos_run_credential_issue' crates/task-core/src/chat/credential.rs` が前方一致のため、残すべき `pub fn cos_run_credential_issue_at(`（53 行目）に当たって exit 1 になる。
-   `cos_run_credential_issue_at` は `crates/task-api/src/cos/mod.rs:77` と `crates/task-dispatch/src/dispatcher/cos_chat/launch.rs:713` が呼ぶ生きた API で、名前の変更や移動はこの unit の範囲外の file を変える。check だけを通すための改名や file の移動はしない。
-   check を `grep -nE 'pub fn cos_run_credential_issue\b'`（または `'pub fn cos_run_credential_issue('`）に直せば、現在の HEAD で exit 0 になることを確かめた。
+1. 範囲 check: 前の run が足した `agent-docs/adr/2026-11-15-cli-api-resolution.md` が範囲外だった。ADR を消し、brief を上の節に移した。範囲 check は 17 path・範囲外 0 になった。
+2. 定義の撤去の check: `! grep -n 'pub fn cos_run_credential_issue' crates/task-core/src/chat/credential.rs` は前方一致のため、残すべき `pub fn cos_run_credential_issue_at(`（53 行目。`crates/task-api/src/cos/mod.rs` と `crates/task-dispatch/src/dispatcher/cos_chat/launch.rs` が呼ぶ）に当たって exit 1 になった。
+   replan で、この check は語の境界の一致（`grep -w`）に直り、残す `cos_run_credential_issue_at` が在ることも確かめる形になった。コードは変えていない（改名・移動はしない）。
+
+replan 後の check を提出時の HEAD で再実行した結果:
+
+- `! grep -nw 'pub fn cos_harness_capability_warnings' crates/celeris/src/config/cos.rs && ! grep -nw 'pub fn cos_run_credential_issue' crates/task-core/src/chat/credential.rs && grep -nw 'pub fn cos_run_credential_issue_at' crates/task-core/src/chat/credential.rs && ! grep -nwE 'pub const TOP_DIRS|pub fn project_slugs' crates/task-core/src/knowledge/layout.rs && ! grep -nw 'pub fn page_file' crates/task-ops/src/knowledge.rs && ! grep -nw 'pub fn unroutable_question' crates/task-ops/src/matching.rs && ! grep -nw 'pub fn has_reply' crates/task-ops/src/milestone_review.rs && ! grep -nw 'pub fn next_version' crates/task-ops/src/project_plan.rs` → exit 0。出力は残す関数の 1 行（`53:    pub fn cos_run_credential_issue_at(`）だけ。
+- 比較のため元の前方一致の check（`! grep -n 'pub fn cos_run_credential_issue' …`）も実行し、同じ 53 行目に当たって exit 1 になることを確かめた。
 
 ## commit
 
 - `phase 1: consolidate CLI API config and remove unused cos knowledge helpers`
 - `cos-cli: ADR を消して brief を進捗に移し、affected tests の完走の結果を書く`
+- `cos-cli: replan で直った check の再実行の結果を進捗に書く`
 
 ## 未解決
 
-計画の check 2 の前方一致の修正（replan）を待つ。実装・試験・範囲は完了している。人が判断する事項は無い。
+無し。計画の check 2 の前方一致の誤りは replan で直り、直った check は提出時の HEAD で exit 0 になった。実装・試験・範囲は完了している。人が判断する事項は無い。
 
 ## 提案
 

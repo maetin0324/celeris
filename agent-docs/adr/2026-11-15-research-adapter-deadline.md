@@ -5,7 +5,7 @@ tasks: [01M7FYEHKMY34MM5Z75W2ESSGN]
 # 研究 harness の締め切りの分類と、checkpoint から続けられない adapter を continuation から外す
 
 - 日付: 2026-11-15
-- 状態: D2・D3・D6 は実装済み（unit adr、task 01M7FYEHKMY34MM5Z75W2ESSGN）。D1・D4 は unit adapters、D5 は unit net が実装する。記録は [research の進捗](../progress/2026-11-15-health-v2-r6/research.md)
+- 状態: D2・D3・D6 は実装済み（unit adr、task 01M7FYEHKMY34MM5Z75W2ESSGN）。D1・D4 は実装済み（unit adapters）。D5 は unit net が実装する。記録は [research の進捗](../progress/2026-11-15-health-v2-r6/research.md)
 - 関係: [ADR 2026-11-10 adapter の結果契約](2026-11-10-adapter-result-contract.md) の (5)・D1・D2、[R1 の進捗](../progress/2026-11-10-health-v2-r1.md) の提案 2・3、ADR-0072 D7・D9・§6 (f)（予算切れ・yield・continuation の無効化）、ADR-0054 D1（継続 session の `sessions::SUPPORTED_ADAPTERS`）、ADR-0079（auto-leaf）、ADR-0027 D3・ADR-0029・ADR-0047 D4（研究 harness）、[ADR 2026-11-06 誤配置した report の回収](2026-11-06-misplaced-report-recovery-generalized.md)、[ADR 2026-10-11 破壊的変更](2026-10-11-breaking-changes-by-default.md)
 
 ## 背景
@@ -104,3 +104,4 @@ checkpoint から続けられない adapter の run は、auto-leaf の回数を
 ## 状態の記録
 
 - 2026-11-15: unit adr が D1〜D6 を書き、D2・D3・D6 と試験を実装した。D1・D4 は unit adapters、D5 は unit net が実装し、実装との食い違いをこの ADR に付記する。
+- 2026-11-15: unit adapters が D1・D4 を実装した。3 adapter の監視 loop は `deadline_terminal` を呼び、stderr の写しは `spawn_capture_stderr`、終端の書き出しは `subprocess::finish_run` に寄せた。成功の枝は各 adapter の `terminal_from_summary` が `artifacts/result.json` を書いて `read_result_file`・`interpret_result_text` で読み直す（`Missing` の文言は adapter が持つ。ADR 2026-11-10 (3)）。D1 との差: paperqa の取得の段で締め切りに当たった run の `exit_code` は、これまでの `None` から kill した取得ランナーの exit status（signal で終わればこれまでどおり `None`）になった。

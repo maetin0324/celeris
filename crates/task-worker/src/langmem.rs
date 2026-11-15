@@ -21,7 +21,7 @@
 
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -31,14 +31,15 @@ use tracing::warn;
 
 use crate::adapter::{
     AdapterError, AdapterSetting, AdapterSettings, Configured, EventSink, RunLimits, RunOutcome,
-    Terminal, WorkerAdapter,
+    Terminal, WorkerAdapter, deadline_terminal, spawn_capture_stderr,
 };
 use crate::progress;
 use crate::protocol::RunRequest;
 use crate::provider::classify_provider_failure;
+use crate::result_report::{ResultFileRead, interpret_result_text, read_result_file};
 use crate::subprocess::{
-    LineOutcome, MAX_LINE_BYTES, kill_now, read_line_limited, read_tail, reap_after_terminal,
-    write_result_json,
+    LineOutcome, MAX_LINE_BYTES, finish_run, kill_now, read_line_limited, read_tail,
+    reap_after_terminal,
 };
 
 /// run ごとに `runs/<run_id>/langmem_run.py` として書き出すランナー（ADR-0047 D4）。
@@ -221,7 +222,6 @@ async fn run_langmem(
     tokio::fs::create_dir_all(&run_dir).await?;
     let stdout_log_path = run_dir.join("stdout.log");
     let stderr_log_path = run_dir.join("stderr.log");
-    let stderr_log_path_for_task = stderr_log_path.clone();
 
     // ADR-0036 D1/D2: 成果物の置き場はディスパッチャが決めた `artifacts_dir`（共有 workspace ではタスクごと）。
     let artifacts_dir = req.artifacts_dir.clone();
@@ -284,29 +284,15 @@ async fn run_langmem(
         .stdout
         .take()
         .ok_or_else(|| AdapterError::Other("worker stdout was not piped".into()))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| AdapterError::Other("worker stderr was not piped".into()))?;
-
-    let stderr_task = tokio::spawn(async move {
-        let mut reader = stderr;
-        match tokio::fs::File::create(&stderr_log_path_for_task).await {
-            Ok(mut file) => {
-                if let Err(e) = tokio::io::copy(&mut reader, &mut file).await {
-                    warn!("failed to write worker stderr.log: {e}");
-                }
-            }
-            Err(e) => warn!("failed to create worker stderr.log: {e}"),
-        }
-    });
+    let stderr_task = spawn_capture_stderr(&mut child, &stderr_log_path, run_id)?;
 
     let mut stdout_file = tokio::fs::File::create(&stdout_log_path).await?;
     let mut reader = BufReader::new(stdout);
 
     let start = Instant::now();
     // ADR-0047 D4: `[adapters.langmem].idle_timeout_secs` はハーネスの予算（`limits.idle_timeout`）を
-    // 上回らない範囲でだけ効く（config が長い秒数を書いても予算を突破できない）。
+    // 上回らない範囲でだけ効く（config が長い秒数を書いても予算を突破できない）。締め切りの規則は
+    // `deadline_terminal` が持ち、この値を `idle_timeout` として受ける（ADR 2026-11-15-research-adapter-deadline D1）。
     let idle_timeout = config
         .idle_timeout_secs
         .map(Duration::from_secs)
@@ -315,31 +301,16 @@ async fn run_langmem(
     let mut last_activity = Instant::now();
     let mut stdout_buf = String::new();
     let mut task_result: Option<serde_json::Value> = None;
-    let mut force_kill = false;
     let mut timeout_terminal: Option<Terminal> = None;
 
     loop {
-        let wall_elapsed = start.elapsed();
-        if wall_elapsed >= limits.wall_clock {
-            timeout_terminal = Some(Terminal::Error {
-                message: "wall clock exceeded".into(),
-                retryable: true,
-                usage: None,
-            });
-            force_kill = true;
-            break;
-        }
-        let idle_elapsed = last_activity.elapsed();
-        if idle_elapsed >= idle_timeout {
-            timeout_terminal = Some(Terminal::Error {
-                message: "idle timeout".into(),
-                retryable: true,
-                usage: None,
-            });
-            force_kill = true;
-            break;
-        }
-        let wait = (limits.wall_clock - wall_elapsed).min(idle_timeout - idle_elapsed);
+        let wait = match deadline_terminal(start, last_activity, limits.wall_clock, idle_timeout) {
+            Ok(wait) => wait,
+            Err(terminal) => {
+                timeout_terminal = Some(*terminal);
+                break;
+            }
+        };
 
         let outcome = match tokio::time::timeout(
             wait,
@@ -347,7 +318,7 @@ async fn run_langmem(
         )
         .await
         {
-            Err(_elapsed) => continue, // タイムアウト。ループ先頭で上限超過を検知する。
+            Err(_elapsed) => continue, // タイムアウト。ループ先頭の `deadline_terminal` が上限超過を検知する。
             Ok(Err(e)) => return Err(AdapterError::Io(e)),
             Ok(Ok(outcome)) => outcome,
         };
@@ -383,7 +354,7 @@ async fn run_langmem(
         }
     }
 
-    let exit_status = if force_kill {
+    let exit_status = if timeout_terminal.is_some() {
         kill_now(&mut child, limits.kill_grace).await?
     } else {
         reap_after_terminal(&mut child, limits.kill_grace).await?
@@ -396,11 +367,7 @@ async fn run_langmem(
 
     if let Some(terminal) = timeout_terminal {
         // タイムアウトは供給側失敗として分類しない（他アダプタと同じ。ADR-0010 D5）。
-        write_result_json(&run_dir, &terminal, None).await?;
-        return Ok(RunOutcome {
-            terminal,
-            exit_code: exit_status.code(),
-        });
+        return finish_run(&run_dir, terminal, None, exit_status).await;
     }
 
     let stderr_tail = read_tail(&stderr_log_path, 4096).await;
@@ -417,11 +384,7 @@ async fn run_langmem(
             retryable: false,
             usage: None,
         };
-        write_result_json(&run_dir, &terminal, None).await?;
-        return Ok(RunOutcome {
-            terminal,
-            exit_code: exit_status.code(),
-        });
+        return finish_run(&run_dir, terminal, None, exit_status).await;
     }
 
     let candidates_len = tokio::fs::read_to_string(&candidates_path)
@@ -490,37 +453,37 @@ async fn run_langmem(
             Ok(artifact) => sink.artifact(&artifact),
             Err(e) => warn!("run {run_id}: could not register knowledge-candidates.json: {e}"),
         }
-        let result_file = serde_json::json!({ "summary": summary, "evidence": [] });
-        match serde_json::to_string_pretty(&result_file) {
-            Ok(text) => {
-                if let Err(e) =
-                    tokio::fs::write(artifacts_dir.join("result.json"), format!("{text}\n")).await
-                {
-                    warn!("run {run_id}: could not write artifacts/result.json: {e}");
-                }
-            }
-            Err(e) => warn!("run {run_id}: could not serialize artifacts/result.json: {e}"),
-        }
-        (
-            Terminal::Done {
-                summary,
-                evidence: Vec::new(),
-                usage: None,
-            },
-            None,
-        )
+        (terminal_from_summary(req, start, &summary).await, None)
     };
 
-    write_result_json(&run_dir, &terminal, provider_failure).await?;
+    finish_run(&run_dir, terminal, provider_failure, exit_status).await
+}
 
-    if let (Terminal::Error { message, .. }, Some(pf)) = (&terminal, provider_failure) {
-        return Err(AdapterError::from_provider_failure(pf, message));
+/// ADR 2026-11-15-research-adapter-deadline D4: ランナーの要約から `artifacts/result.json` を書き、結果契約の
+/// 正本（`result_report::read_result_file`・`interpret_result_text`。ADR 2026-11-10-adapter-result-contract D1）で
+/// 読み直して終端を作る。期待の置き場に file があるので誤配置の回収は探索しない。書けなければ
+/// `read_result_file` を呼ばずに `Error{retryable: true}`（reviewer が読む file の無い run を `Done` にしない）。
+/// `start` は監視 loop の開始（`read_result_file` の `run_started` に直す。aider と同じ）。
+async fn terminal_from_summary(req: &RunRequest, start: Instant, summary: &str) -> Terminal {
+    let artifacts_rel = req.artifacts_rel();
+    let body = serde_json::json!({ "summary": summary, "evidence": [] });
+    let written = tokio::fs::write(req.artifact_path("result.json"), format!("{body:#}\n")).await;
+    if let Err(e) = written {
+        return Terminal::Error {
+            message: format!("langmem adapter could not write {artifacts_rel}/result.json: {e}"),
+            retryable: true,
+            usage: None,
+        };
     }
-
-    Ok(RunOutcome {
-        terminal,
-        exit_code: exit_status.code(),
-    })
+    match read_result_file(req, SystemTime::now() - start.elapsed()).await {
+        ResultFileRead::Misplaced(error) => *error,
+        ResultFileRead::Missing => Terminal::Error {
+            message: format!("langmem adapter could not read back {artifacts_rel}/result.json"),
+            retryable: true,
+            usage: None,
+        },
+        ResultFileRead::Text(text) => interpret_result_text(&text, &artifacts_rel, None),
+    }
 }
 
 fn single_line_summary(text: &str, max_chars: usize) -> String {

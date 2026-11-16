@@ -136,16 +136,6 @@ pub trait ProjectDecider: Send {
     }
 }
 
-/// A1 の既定: 常に効果なし（起票も CoS 入力もしない）。
-#[derive(Debug, Default)]
-pub struct NoopProjectDecider;
-
-impl ProjectDecider for NoopProjectDecider {
-    fn decide(&mut self, _input: &ProjectDecideInput) -> Result<ProjectDecision, String> {
-        Ok(ProjectDecision::none("pc/noop"))
-    }
-}
-
 /// crash の境界（ADR D12 の B1〜B6 と、判断の後・tx1 の前）。試験の hook が panic する場所。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Boundary {

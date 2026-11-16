@@ -1,5 +1,7 @@
 // 停止・キュー・割り込み・入力（Enter/Shift+Enter/IME）の e2e（ADR 2026-10-05-cos-chat-home D2・D5・D6）。
 // run の状態は偽 daemon の emit（run event）で決定的に進める（worker の進行は試験しない）。
+// 入力できるのは固定の thread（統括 CoS と案件ごとの CoS。ADR 2026-10-22-cos-fixed-threads）だけなので、
+// 統括 CoS の chat-main で確かめる。移行前の legacy の thread は読むだけで入力欄を出さない（最後の試験）。
 
 import { expect, test } from "@playwright/test";
 import { conversation, expectComposerStatus, startChatGateway, waitForStream } from "./support";
@@ -13,10 +15,10 @@ test("Enter で送信、Shift+Enter は改行だけ、IME composition 中の Ent
   const gateway = await startChatGateway();
   const { composer, input } = conversation(page);
   try {
-    await page.goto(`${gateway.base}/?thread=chat-legacy`);
+    await page.goto(`${gateway.base}/?thread=chat-main`);
     await expect(composer).toBeVisible();
-    await waitForStream(gateway, "chat-legacy");
-    const sent = async () => bodyOf(await gateway.requests(), "chat-legacy");
+    await waitForStream(gateway, "chat-main");
+    const sent = async () => bodyOf(await gateway.requests(), "chat-main");
 
     // Shift+Enter: 改行だけで送らない。
     await input.fill("一行目");
@@ -65,7 +67,7 @@ test("キューに追加された順に表示し、取消で消す", async ({ pa
   const gateway = await startChatGateway();
   const { input } = conversation(page);
   try {
-    await page.goto(`${gateway.base}/?thread=chat-legacy`);
+    await page.goto(`${gateway.base}/?thread=chat-main`);
     await expect(input).toBeVisible();
     await input.fill("1 件目");
     await input.press("Enter");
@@ -89,9 +91,9 @@ test("停止でキューが停止し、停止中の送信は resume_queue で再
   const { input } = conversation(page);
   try {
     await page.setViewportSize({ width: 1440, height: 900 });
-    await page.goto(`${gateway.base}/?thread=chat-legacy`);
-    await gateway.hold("chat-legacy");
-    await waitForStream(gateway, "chat-legacy");
+    await page.goto(`${gateway.base}/?thread=chat-main`);
+    await gateway.hold("chat-main");
+    await waitForStream(gateway, "chat-main");
 
     // 実行中に 1 件キューへ。
     await input.fill("待ち 1");
@@ -109,7 +111,7 @@ test("停止でキューが停止し、停止中の送信は resume_queue で再
     // 停止中の送信は resume_queue=true（明示再開）が付き、キューへ並ぶ。
     await input.fill("復旧");
     await input.press("Enter");
-    const sent = async () => bodyOf(await gateway.requests(), "chat-legacy");
+    const sent = async () => bodyOf(await gateway.requests(), "chat-main");
     await expect.poll(async () => (await sent()).length, { timeout: 10_000 }).toBe(2);
     expect((await sent()).at(-1)).toMatchObject({ text: "復旧", mode: "queue", resume_queue: true });
     // 再開してキュー 2 件が元の順番で表示される。
@@ -125,9 +127,9 @@ test("停止のあと「キューを再開」でキューを再開できる", as
   const gateway = await startChatGateway();
   const { input } = conversation(page);
   try {
-    await page.goto(`${gateway.base}/?thread=chat-legacy`);
-    await gateway.hold("chat-legacy");
-    await waitForStream(gateway, "chat-legacy");
+    await page.goto(`${gateway.base}/?thread=chat-main`);
+    await gateway.hold("chat-main");
+    await waitForStream(gateway, "chat-main");
     await input.fill("停止待ち");
     await input.press("Enter");
     await expect(page.getByRole("list", { name: "送信待ち" })).toContainText("停止待ち");
@@ -139,7 +141,7 @@ test("停止のあと「キューを再開」でキューを再開できる", as
     await page.getByRole("button", { name: "キューを再開" }).click();
     await expect
       .poll(
-        async () => (await (await fetch(`${gateway.base}/api/chat/threads/chat-legacy`)).json()).thread.queue_paused,
+        async () => (await (await fetch(`${gateway.base}/api/chat/threads/chat-main`)).json()).thread.queue_paused,
         { timeout: 10_000 },
       )
       .toBe(false);
@@ -154,25 +156,54 @@ test("割り込み送信は mode=interrupt で active run を stopping にする
   const gateway = await startChatGateway();
   const { input } = conversation(page);
   try {
-    await page.goto(`${gateway.base}/?thread=chat-legacy`);
-    await gateway.hold("chat-legacy");
-    await waitForStream(gateway, "chat-legacy");
+    await page.goto(`${gateway.base}/?thread=chat-main`);
+    await gateway.hold("chat-main");
+    await waitForStream(gateway, "chat-main");
     await input.fill("急ぎです");
     await expect(page.getByRole("button", { name: "割り込んで送信" })).toBeEnabled();
     await page.getByRole("button", { name: "割り込んで送信" }).click();
-    const sent = async () => bodyOf(await gateway.requests(), "chat-legacy");
+    const sent = async () => bodyOf(await gateway.requests(), "chat-main");
     await expect.poll(async () => (await sent()).length, { timeout: 10_000 }).toBe(1);
     expect((await sent()).at(-1)).toMatchObject({ text: "急ぎです", mode: "interrupt" });
     // 割り込みで active run は stopping（キューは止めない）。
     await expect
       .poll(
-        async () => (await (await fetch(`${gateway.base}/api/chat/threads/chat-legacy`)).json()).active_run?.state,
+        async () => (await (await fetch(`${gateway.base}/api/chat/threads/chat-main`)).json()).active_run?.state,
         {
           timeout: 10_000,
         },
       )
       .toBe("stopping");
     await expectComposerStatus(page, "停止を要求中です");
+  } finally {
+    await gateway.close();
+  }
+});
+
+test("案件の CoS の thread でも送信がキューに並び、legacy の thread は読むだけで入力欄を出さない", async ({ page }) => {
+  const gateway = await startChatGateway();
+  const { composer, input } = conversation(page);
+  try {
+    // 案件の CoS（chat-history, kind=project）: 入力欄があり、Enter の送信は queue で届く。
+    await page.goto(`${gateway.base}/?thread=chat-history`);
+    await expect(composer).toBeVisible();
+    await waitForStream(gateway, "chat-history");
+    await input.fill("案件の相談");
+    await input.press("Enter");
+    const sent = async () => bodyOf(await gateway.requests(), "chat-history");
+    await expect.poll(async () => (await sent()).length, { timeout: 10_000 }).toBe(1);
+    expect((await sent())[0]).toMatchObject({ text: "案件の相談", mode: "queue" });
+
+    // legacy: 履歴は読めるが、入力欄・送信の button の代わりに注記を出す（daemon も投稿に 409 を返す）。
+    await page.goto(`${gateway.base}/?thread=chat-legacy`);
+    await expect(page.getByText("以前の相談")).toBeVisible();
+    await expect(page.locator("[data-legacy-read-only]")).toHaveText(
+      "この会話は移行前のもので、読むだけです。続きは統括 CoS か案件の CoS で話してください。",
+    );
+    await expect(composer).toHaveCount(0);
+    await expect(input).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "割り込んで送信" })).toHaveCount(0);
+    expect(bodyOf(await gateway.requests(), "chat-legacy")).toHaveLength(0);
   } finally {
     await gateway.close();
   }

@@ -161,6 +161,9 @@ test("board: すべての案件では行に案件名、内部の英語値は日�
   try {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(`${gateway.base}/board`);
+    // 偽 daemon は本物と同じく status で絞るので、状態ごとの要求に分けても各 task は 1 回だけ出る。
+    await expect(page.locator("[data-task-id]")).toHaveCount(2);
+    await expect(page.locator("[data-task-id='T1']")).toHaveCount(1);
     await expect(page.locator("[data-task-id='T1'] [data-testid='board-row-project']")).toHaveText(
       "案件: 一件目の案件",
     );

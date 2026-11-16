@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { TaskList } from "../../api/generated/types";
-import { richFixtures } from "../support/fake-daemon.mjs";
+import { richFixtures, taskListPage } from "../support/fake-daemon.mjs";
 import { startFixtureGateway } from "../support/fixture-gateway";
 
 test("board and task list show runnable and waiting tasks with links on mobile", async ({ page }) => {
@@ -23,13 +23,16 @@ test("board and task list show runnable and waiting tasks with links on mobile",
             : runState === "waiting"
               ? items.filter((x) => !x.runnable)
               : items;
-        return { ...original, items: visible, total: visible.length, next_cursor: null };
+        // status・order・limit は本物の daemon と同じ意味で扱う（board は状態ごとに要求を分ける）。
+        return taskListPage({ ...original, items: visible }, url).body;
       },
     },
   });
   try {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(`${gateway.base}/board`);
+    await expect(page.locator("[data-task-id]")).toHaveCount(2);
+    await expect(page.getByTestId("task-wait-reason")).toHaveCount(1);
     await expect(page.getByTestId("task-wait-reason")).toContainText("子 1 件待ち");
     await expect(page.getByTestId("task-wait-reason").getByRole("link", { name: "T3 を開く" })).toHaveAttribute(
       "href",

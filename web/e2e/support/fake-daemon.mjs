@@ -2423,14 +2423,9 @@ export function createBrowserBackend({
     }
     if (p === "/api/v1/tasks") {
       const list = structuredClone(base(p) ?? { items: [], total: 0, counts_by_status: {} });
-      const statuses = url.searchParams.get("status")?.split(",");
-      list.items = [
-        ...browserTaskIds.map(taskSummary),
-        ...list.items.filter((x) => !browserTaskIds.includes(x.id)),
-      ].filter((x) => !statuses || statuses.includes(x.status));
-      list.total = list.items.length;
-      list.next_cursor = null;
-      return json(200, list);
+      list.items = [...browserTaskIds.map(taskSummary), ...list.items.filter((x) => !browserTaskIds.includes(x.id))];
+      const page = taskListPage(list, url);
+      return json(page.status, page.body);
     }
     if (p === "/api/v1/inbox" || p === "/inbox") {
       const value = base(p);
@@ -2458,6 +2453,52 @@ export function createBrowserBackend({
       if (!live[key]) live[key] = [];
       const list = live[key];
       list.push({ seq: (list.at(-1)?.seq ?? 0) + 1, body });
+    },
+  };
+}
+
+/**
+ * `GET /api/v1/tasks` の 1 頁を、本物の daemon（crates/task-api の list_tasks）と同じ意味で fixture の一覧から作る。
+ * - `status`: 繰り返しと comma 区切りの両方（`query.list("status")`）。指定した状態の task だけを返す。
+ * - `order`: `created_desc` は created_at の新しい順、`updated_desc` は updated_at の新しい順。省略・`dispatch` は
+ *   fixture の並びを daemon の並びとみなす（既存の fixture の並びを変えない）。
+ * - `limit`: 既定 100、上限 500（それより大きい値は 500 に丸める）、0 は 400。`cursor` はこの helper が返す
+ *   `next_cursor`（`offset:<n>`）。
+ * - `total` は絞り込んだ後の件数。`counts_by_status` は fixture の値を残す（無ければ絞り込み前の一覧から数える）。
+ * board は終端でない 5 状態と終端の 3 状態を別の要求で読むので、status を見ない fixture は各 task を 4 回返していた。
+ * @returns {{ status: number, body: object }}
+ */
+export function taskListPage(list, url) {
+  const all = list?.items ?? [];
+  const statuses = url.searchParams
+    .getAll("status")
+    .flatMap((value) => value.split(","))
+    .filter((value) => value !== "");
+  let items = statuses.length ? all.filter((item) => statuses.includes(item.status)) : [...all];
+  const order = url.searchParams.get("order");
+  const newest = (key) => (a, b) => String(b[key] ?? "").localeCompare(String(a[key] ?? ""));
+  if (order === "created_desc") items.sort(newest("created_at"));
+  else if (order === "updated_desc") items.sort(newest("updated_at"));
+  const rawLimit = url.searchParams.get("limit");
+  const limit = rawLimit === null ? 100 : Math.min(Number(rawLimit), 500);
+  if (!Number.isInteger(limit) || limit < 1)
+    return { status: 400, body: { error: "query parameter `limit` must be at least 1" } };
+  const cursor = url.searchParams.get("cursor");
+  const offset = cursor ? Number(cursor.replace(/^offset:/, "")) : 0;
+  if (!Number.isInteger(offset) || offset < 0) return { status: 400, body: { error: "invalid cursor" } };
+  const total = items.length;
+  items = items.slice(offset, offset + limit);
+  const counts =
+    list?.counts_by_status ??
+    all.reduce((acc, item) => ({ ...acc, [item.status]: (acc[item.status] ?? 0) + 1 }), {});
+  return {
+    status: 200,
+    body: {
+      ...list,
+      items,
+      total,
+      next_cursor: offset + limit < total ? `offset:${offset + limit}` : null,
+      counts_by_status: counts,
     },
   };
 }
@@ -2621,9 +2662,11 @@ export function createFakeDaemon({
   const server = http.createServer((req, res) => {
     const pathname = new URL(req.url ?? "/", `http://${host === "::1" ? "[::1]" : host}`).pathname;
     // Loopback is shared with other host processes. Probes must not enter request accounting.
+    // 試験の制御の endpoint（/__fixture/・/__fake/）は通す（/__fake/releases が 404 だと昇格の台本が設定されない）。
     if (
       !pathname.startsWith("/api/v1/") &&
       !pathname.startsWith("/__fixture/") &&
+      !pathname.startsWith("/__fake/") &&
       !streamPaths.has(pathname) &&
       !(pathname in fixtures) &&
       !(pathname in files) &&
@@ -3340,10 +3383,18 @@ export function createFakeDaemon({
       return;
     }
     const raw = fixtures[pathname] ?? fixtures[pathname.replace(/^\/api\/v1/, "")];
-    const value = typeof raw === "function" ? raw(new URL(req.url ?? "/", "http://x")) : raw;
+    const requestUrl = new URL(req.url ?? "/", "http://x");
+    // 一覧の静的 fixture は本物の daemon と同じく status・order・limit・cursor で絞って返す。関数の fixture は
+    // 要求を自分で読む（頁の台本など）。daemon の意味が要るなら関数の中で taskListPage を呼ぶ。
+    const page =
+      pathname === "/api/v1/tasks" && raw !== undefined && typeof raw !== "function"
+        ? taskListPage(raw, requestUrl)
+        : null;
+    const value = page ? page.body : typeof raw === "function" ? raw(requestUrl) : raw;
+    const status = page ? page.status : value === undefined ? 404 : 200;
     const respond = () => {
       if (res.destroyed) return;
-      res.writeHead(value === undefined ? 404 : 200, { "content-type": "application/json" });
+      res.writeHead(status, { "content-type": "application/json" });
       res.end(JSON.stringify(value === undefined ? { error: "not found" } : value));
     };
     if (delay) setTimeout(respond, delay);

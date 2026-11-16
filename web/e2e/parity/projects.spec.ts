@@ -2,7 +2,7 @@ import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
-import { createFakeDaemon, defaultFixtures } from "../support/fake-daemon.mjs";
+import { createFakeDaemon, defaultFixtures, taskListPage } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
 import { makeTmpDir } from "../support/tmp-dir";
 
@@ -562,9 +562,10 @@ test.describe("P4-07 board", () => {
     }));
     const h = harness({
       "/api/v1/projects": { items: [project("P1", "一件目")] },
+      // 本物の daemon と同じく status・order・limit で絞る。board は終端でない 5 状態と終端の 3 状態を別の要求で読む。
       "/api/v1/tasks": (url: URL) => {
         calls.push(url.search);
-        return { items, total: 6, next_cursor: null, counts_by_status: {} };
+        return taskListPage({ items, counts_by_status: {} }, url).body;
       },
     });
     const gateway = await h.start();
@@ -582,6 +583,12 @@ test.describe("P4-07 board", () => {
       await page.goto(`${gateway.base}/board?project=P1`);
       await expect(page.locator("[data-board-column]")).toHaveCount(6);
       await expect(page.locator("[data-task-id]")).toHaveCount(6);
+      // 要求を状態ごとに分けても、各 task は 1 回だけ出る。
+      for (const item of items) await expect(page.locator(`[data-task-id='${item.id}']`)).toHaveCount(1);
+      const statusesOf = (q: string) => new URLSearchParams(q).get("status");
+      expect([...new Set(calls.map(statusesOf))].sort()).toEqual(
+        ["cancelled", "done", "draft,ready,running,reviewing,blocked", "failed"].sort(),
+      );
       // card wall でなく 1 行 1 task の表。スマホ幅でも表もページも横に溢れない（web ADR D5）。
       await expect(page.getByRole("table")).toHaveCount(1);
       expect(

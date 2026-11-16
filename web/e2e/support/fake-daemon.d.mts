@@ -131,6 +131,11 @@ export type FakeDaemonOptions = {
   notices?: import("../../api/generated/types").Notice[] | null;
   browser?: boolean | BrowserBackendOptions | null;
 };
+/** `GET /api/v1/tasks` の 1 頁を本物の daemon と同じ意味（status・order・limit・cursor）で作る。 */
+export function taskListPage(
+  list: { items: Array<Record<string, unknown>>; [key: string]: unknown },
+  url: URL,
+): { status: number; body: Record<string, unknown> & { items: Array<Record<string, unknown>>; total: number } };
 export function createFakeDaemon(options?: FakeDaemonOptions): {
   requests: FakeDaemonRequest[];
   chat: ChatFixtureControl;

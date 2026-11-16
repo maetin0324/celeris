@@ -29,12 +29,17 @@ test.describe("P4-16 releases", () => {
     await daemon.close();
     rmSync(dir, { recursive: true, force: true });
   });
-  const control = (body: { mode?: "succeed" | "fail"; pendingMs?: number }) =>
-    fetch(`${daemonUrl}/__fake/releases`, {
+  // 偽 daemon の昇格の台本を設定する。応答は設定後の値で、設定が効いたことをここで確かめる
+  // （迷い込み接続の filter が /__fake/ を 404 にすると、台本が既定の succeed・0 ms のまま試験が進んでいた）。
+  const control = async (body: { mode: "succeed" | "fail"; pendingMs: number }) => {
+    const res = await fetch(`${daemonUrl}/__fake/releases`, {
       method: "POST",
       headers: { authorization: `Bearer ${FIXTURE_TOKEN}` },
       body: JSON.stringify(body),
     });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(body);
+  };
 
   // 昇格・巻き戻しは確認表示を挟む。一覧のボタンで開き、確認表示の同じ名前のボタンで確定する。
   const confirmPromote = async (page: Page, name: string) => {
@@ -45,13 +50,18 @@ test.describe("P4-16 releases", () => {
   };
 
   test("parity: /releases 昇格と失敗表示 保留は成功と出さず、結果で成功になる", async ({ page }) => {
-    await control({ mode: "succeed", pendingMs: 2500 });
+    const pendingMs = 2500;
+    await control({ mode: "succeed", pendingMs });
     await page.goto(`${gateway.base}/releases`);
     await expect(page.getByRole("heading", { level: 1, name: "リリース" })).toBeVisible();
+    // 偽 daemon は POST を受けてから pendingMs の間 promoting を返す。POST は確定の click の後なので、
+    // click の前から成功の表示までは必ず pendingMs 以上かかる（成功を早く出していないことの確認）。
+    const startedAt = Date.now();
     await confirmPromote(page, "bbbbbbbbbbbb を昇格する");
     await expect(page.getByTestId("promote-pending")).toBeVisible();
     await expect(page.getByTestId("promote-succeeded")).toHaveCount(0);
     await expect(page.getByTestId("promote-succeeded")).toBeVisible({ timeout: 15_000 });
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(pendingMs);
     await expect(page.getByTestId("promote-pending")).toHaveCount(0);
     await expect(page.getByTestId("release-bbbbbbbbbbbb")).toContainText("current");
   });

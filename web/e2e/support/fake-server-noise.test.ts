@@ -35,6 +35,29 @@ it("fake daemon ignores empty, foreign and incomplete requests before a real API
   }
 });
 
+// 迷い込み接続の filter は試験の制御の endpoint を落とさない。/__fake/releases が 404 だと parity/ops.spec.ts の
+// 昇格の台本（失敗の mode・pending の時間）が設定されず、失敗の表示の試験が成功の表示で進んでしまう。
+it("fake daemon lets the /__fake/ control endpoint through the probe filter", async () => {
+  const daemon = createFakeDaemon({});
+  const base = await daemon.start();
+  try {
+    const set = await fetch(`${base}/__fake/releases`, {
+      method: "POST",
+      body: JSON.stringify({ mode: "fail", pendingMs: 1200 }),
+    });
+    expect(set.status).toBe(200);
+    expect(await set.json()).toEqual({ mode: "fail", pendingMs: 1200 });
+    const promote = await fetch(`${base}/api/v1/releases/bbbbbbbbbbbb/promote`, { method: "POST" });
+    expect(promote.status).toBe(202);
+    await promote.text();
+    const list = await fetch(`${base}/api/v1/releases`);
+    const body = JSON.stringify(await list.json());
+    expect(body).toContain('"promoting":true');
+  } finally {
+    await daemon.close();
+  }
+});
+
 it("fake dashboard ignores host probes and still records gateway traffic", async () => {
   const dashboard = await startFakeDashboard();
   const base = `http://${dashboard.authority}`;

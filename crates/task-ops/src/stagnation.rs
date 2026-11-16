@@ -10,7 +10,6 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
-use task_core::OrgDirectory;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

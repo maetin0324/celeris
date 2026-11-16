@@ -7,7 +7,6 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
-use task_core::OrgDirectory;
 
 use task_core::{InstanceRole, RepoId, SharedRole, SqliteStore, Status, WorkspaceSpec};
 use time::OffsetDateTime;

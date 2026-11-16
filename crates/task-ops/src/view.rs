@@ -7,7 +7,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::time::Duration;
-use task_core::TaskQuery;
 
 use schemars::JsonSchema;
 use serde::Serialize;

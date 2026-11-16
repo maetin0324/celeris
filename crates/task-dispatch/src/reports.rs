@@ -16,7 +16,6 @@
 //!   `sources` は同じ案件の子報告に限る（監査 H-1。案件をまたいで混ざらない）。
 //! - 途中経過（`progress`）は作らない（通知は数時間単位なので run の途中は要らない）。
 
-use task_core::OrgDirectory;
 use task_core::report::{self, Report};
 use task_core::{Event, SqliteStore, StoreError, Task, TaskId};
 use task_worker::{AdapterError, Evidence, RunOutcome, Terminal};

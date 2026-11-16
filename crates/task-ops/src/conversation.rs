@@ -8,8 +8,6 @@
 //! I/O は `SqliteStore` の読み書きだけ。LLM 呼び出しは無い（DESIGN 原則 1）。
 
 use std::path::PathBuf;
-use task_core::OrgDirectory;
-use task_core::TaskQuery;
 
 use task_core::approval::{Approval, Decision, StandingRule};
 use task_core::{

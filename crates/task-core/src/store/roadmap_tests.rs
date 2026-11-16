@@ -1,4 +1,3 @@
-use crate::store::OrgDirectory;
 use rusqlite::Connection;
 use time::OffsetDateTime;
 

@@ -6,7 +6,6 @@
 //! 同じ `outcome_id` は二度追記しない（冪等）。events は追記のみ（書き換え・削除はしない）。
 
 use std::collections::{BTreeMap, BTreeSet};
-use task_core::TaskQuery;
 use task_core::model_router::feedback::{
     RewardNormalization, RoutingOutcome, pending_run_outcomes,
 };

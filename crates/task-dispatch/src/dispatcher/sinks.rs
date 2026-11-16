@@ -2,7 +2,6 @@
 //! browser ブランチの統合後に facade から移した（L1。`worker_task` と `review_spawn` が組み立てる）。
 
 use super::*;
-use task_core::OrgDirectory;
 use task_core::browser_wait::{consume_credential_approval, consume_operation_approval};
 
 /// run 途中のイベントをストアに追記するシンク。ワーカーの出力（heartbeat）があればリースを延長する（ADR-0010 D7）。

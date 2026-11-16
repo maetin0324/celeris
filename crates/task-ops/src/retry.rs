@@ -9,7 +9,6 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use task_core::OrgDirectory;
 use task_core::{SqliteStore, Status, Task, TaskId, WorkspaceSpec};
 use time::OffsetDateTime;
 

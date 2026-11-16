@@ -27,7 +27,6 @@
 //! 進み具合は daemon の状態ファイル（`<db>.knowledge-curation.json`）に task ごとに残す（worker が書ける
 //! 作業場所には置かない）。
 
-use task_core::OrgDirectory;
 mod extraction;
 
 use std::collections::{BTreeMap, BTreeSet};

@@ -1,7 +1,6 @@
 //! 受信箱（`docs/api/v1/api.md` §3.2 / §5.1 / §6.2）。原則 5「人間は承認待ちキューだけを見ればよい」の画面の元データ。
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use task_core::TaskQuery;
 
 use schemars::JsonSchema;
 use serde::Serialize;

@@ -2,8 +2,6 @@
 //! State is disposable; neither successful review nor scheduling writes canonical Markdown.
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::Path};
-use task_core::OrgDirectory;
-use task_core::TaskQuery;
 use task_core::{GenreSpec, RoleSpec, SqliteStore, Status, TaskId, knowledge as kb};
 use time::OffsetDateTime;
 

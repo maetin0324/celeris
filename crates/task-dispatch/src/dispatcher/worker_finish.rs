@@ -2,7 +2,6 @@
 
 use super::*;
 use crate::{run_settlement, sessions};
-use task_core::OrgDirectory;
 
 fn repair_git(dir: &Path, args: &[&str]) -> Option<String> {
     let output = std::process::Command::new("git")

@@ -12,7 +12,6 @@
 //!   持つ最も浅いノード。
 //! - 候補が無ければ `blocked` にして人に聞く（ADR-0021 の質問経路）。
 
-use task_core::OrgDirectory;
 use task_core::{OrgNode, SqliteStore, Task};
 
 use crate::error::OpsError;

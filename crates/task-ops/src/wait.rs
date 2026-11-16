@@ -5,7 +5,6 @@
 //! どれも決定的（LLM なし）で、dispatcher と同じ関数を呼ぶ。画面用の別の推測は作らない。
 
 use std::collections::HashMap;
-use task_core::TaskQuery;
 
 use task_core::{
     ChildFacts, DecisionKind, DecisionStatus, Event, ExecutionPlanRow, HumanGateKind, SqliteStore,

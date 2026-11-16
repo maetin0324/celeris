@@ -1,5 +1,4 @@
 use super::*;
-use task_core::OrgDirectory;
 fn fixture() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     task_ops::knowledge::init(dir.path()).unwrap();

@@ -14,9 +14,8 @@ use task_core::decision::{
     DecisionRaisedBy, DecisionRequest, DecisionStatus,
 };
 use task_core::{
-    ArtifactRef, Budget, Check, Criterion, Event, GenreSpec, McpClient, McpScope, OrgDirectory,
-    OrgKind, OrgNode, RoleSpec, SqliteStore, Status, Task, TaskId, TaskKind, Tier, WorkerHint,
-    WorkspaceSpec,
+    ArtifactRef, Budget, Check, Criterion, Event, GenreSpec, McpClient, McpScope, OrgKind, OrgNode,
+    RoleSpec, SqliteStore, Status, Task, TaskId, TaskKind, Tier, WorkerHint, WorkspaceSpec,
 };
 use time::OffsetDateTime;
 

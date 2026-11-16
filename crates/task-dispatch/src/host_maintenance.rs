@@ -14,7 +14,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
-use task_core::OrgDirectory;
 
 use task_core::local_machine::WorkspaceRoots;
 use task_core::model::TargetSweepMode;

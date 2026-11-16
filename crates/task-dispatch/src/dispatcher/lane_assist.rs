@@ -6,7 +6,6 @@
 //! 鍵未登録・認証失敗は既存の credential 待ち（`credential_gate`）へ渡す。新しい待ち機構は作らない。
 
 use std::collections::HashMap;
-use task_core::OrgDirectory;
 
 use task_core::model::Tier;
 use task_core::model_policy::{Level, TaskFeatures};

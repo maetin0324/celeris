@@ -5,7 +5,6 @@
 //! 不変であることの証明にはしない（それは campaign 側の封印期待値との照合 = campaign-proof が行う）。
 
 use super::*;
-use task_core::OrgDirectory;
 use task_core::variant_wire::{CampaignOrgPin, org_effective_digest};
 use task_worker::protocol::{CampaignRunPin, CampaignSelected};
 

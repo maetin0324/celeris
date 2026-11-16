@@ -33,8 +33,6 @@ use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
-use task_core::OrgDirectory;
-use task_core::TaskQuery;
 
 use serde::Deserialize;
 use task_core::message::MessageRole;

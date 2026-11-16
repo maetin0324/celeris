@@ -1,6 +1,5 @@
 //! 起動時の組み立て: DB の置き場所の検査、`Dispatcher` の構築、組織図と定期実行 job の種まき。
 
-use task_core::OrgDirectory;
 #[path = "jev_verifier.rs"]
 mod jev_verifier;
 

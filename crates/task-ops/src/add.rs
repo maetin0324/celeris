@@ -15,7 +15,6 @@
 //! ディスパッチャが `workspace_root` 基準で解決する（ADR-0005 D3, ADR-0010 D4, P-19）。
 
 use std::path::PathBuf;
-use task_core::OrgDirectory;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

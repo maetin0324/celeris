@@ -243,7 +243,6 @@ pub fn run_with_store(
 /// ADR 2026-11-12-knowledge-usage-per-run D4: agent の種類・案件ごとの読み取り率と、curation ごとの
 /// 新規・統合・削除・修正と統合の比率を出す。集計は `task_ops::knowledge_usage::report`（events が正本）。
 fn run_usage(store: &SqliteStore, args: &UsageArgs) -> Result<ExitCode, CliError> {
-    use task_core::OrgDirectory;
     let db = |e: task_core::StoreError| CliError::msg(e.to_string());
     let projects: std::collections::BTreeMap<_, _> = store
         .project_list()

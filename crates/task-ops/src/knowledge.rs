@@ -17,7 +17,6 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use task_core::OrgDirectory;
 
 use task_core::knowledge::{
     self as kb, Confidence, FrontMatter, INBOX_DIR, INDEX_FILE, Index, IndexItem, PathError,

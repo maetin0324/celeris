@@ -2,7 +2,7 @@ use super::*;
 use std::sync::Arc;
 use task_core::org::{OrgKind, OrgNode};
 use task_core::{
-    Budget, OrgDirectory, ProjectId, SqliteStore, Status, TaskKind, Tier, WorkerHint, WorkspaceSpec,
+    Budget, ProjectId, SqliteStore, Status, TaskKind, Tier, WorkerHint, WorkspaceSpec,
 };
 use task_worker::Evidence;
 

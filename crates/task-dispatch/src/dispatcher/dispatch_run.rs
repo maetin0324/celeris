@@ -7,7 +7,6 @@ use crate::dispatch_admission::{
     planner_lane,
 };
 use crate::execution_coordination::WriteSetAdmission;
-use task_core::OrgDirectory;
 
 /// 付記 S2: `lane_rules` の compare の結線（`decide_lane` から呼ぶ）。`dispatcher.rs` を大きくしないよう、ここで宣言する。
 #[path = "script_compare.rs"]

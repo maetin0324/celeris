@@ -14,7 +14,8 @@
 //! 領域の公開 method（`pub fn`）を置く（helper の可視性は `pub(super)`、`execution/` 配下は
 //! `pub(in crate::store)`、既存の `pub(crate)` はそのまま）。呼び手は具体型 `SqliteStore` の固有 method を
 //! 呼ぶ（全 method を宣言する trait は持たない。ADR 2026-11-16-taskstore-trait-removal）。能力 trait
-//! （`OrgDirectory`・`TaskQuery`）の method は trait file の `impl … for SqliteStore` に本体を置く。
+//! （`OrgDirectory`・`TaskQuery`）は偽物で差し替える consumer のための口で、本体は trait file の固有 method に置き、
+//! `impl … for SqliteStore` はそこへ転送するだけ。
 //!
 //! 依存の向き: 領域 → `mod.rs` 基盤、`execution/*` → `tasks`/`events`/`transition`、
 //! `approvals`/`messages` → `transition`、`transition` → `tasks`/`events`、`events` → `execution`（行変換）。
@@ -32,14 +33,14 @@
 //!   （領域の method は持たない）。
 //! - `migrations.rs`: `SCHEMA_VERSION`・`apply_migration_version`（版数 → SQL の対応と飛ばす版数は
 //!   `crate::migration_registry` の表）。
-//! - `query.rs`: `TaskQuery::list_page` 系の一覧部品（`ListFilter`・`ListOrder`・`Page`・
+//! - `query.rs`: `list_page` 系の一覧部品（`ListFilter`・`ListOrder`・`Page`・
 //!   `CursorPayload`・cursor の符号化・`filter_predicate`・keyset 述語）。
 //! - `task_store_impl.rs`: 領域 file に属さない method（`create_task`・`apply_transition` などの薄い入口と
 //!   `record_route_features`）。
 //! - `org_directory.rs`: `OrgDirectory`（`org_list`/`org_get`/`org_upsert`、`project_list`/`project_get`/
-//!   `milestone_list`）。SQL 本体は `impl OrgDirectory for SqliteStore` にあり、`org.rs` の
+//!   `milestone_list`）。SQL 本体は同じ file の `impl SqliteStore` にあり、`org.rs` の
 //!   `org_list_tx`・`org_upsert_tx` を使う。
-//! - `task_query.rs`: `TaskQuery`（`list_page`・`event_rows_for`）。SQL 本体は `impl TaskQuery for SqliteStore` にある。
+//! - `task_query.rs`: `TaskQuery`（`list_page`・`event_rows_for`）。SQL 本体は同じ file の `impl SqliteStore` にある。
 //! - `tasks.rs`: task 行の読み書き（`get_locked`/`insert_tx`/`update_task_tx`/`rewrite_task_tx`）と、
 //!   task・lease の method（`insert`/`get`/`list`/`count_by_status`/`children`/
 //!   `create_task`/`delegate_children`/`retry_task`/`update_task`/`acquire_lease`/`renew_lease`/

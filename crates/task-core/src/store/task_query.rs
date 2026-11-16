@@ -1,10 +1,9 @@
 //! ADR 2026-11-10-taskstore-consumer-ports D2: task を読む能力（一覧のページ・1 task の event 行）。
-//! `get` は具体型で呼ぶ file が多く（D2）、`SqliteStore` の固有 method のまま。
 //!
-//! `SqliteStore` が実装する能力の trait（呼び手は trait を import して使う。ADR 2026-11-16-taskstore-trait-removal）。
+//! 偽物で差し替えたい consumer のための能力の trait（ADR 2026-11-16-taskstore-trait-removal D3）。本体（SQL）は
+//! `SqliteStore` の固有 method で、具体型の呼び手は trait を import せずに呼ぶ。`impl TaskQuery for SqliteStore` は固有 method への転送。
 //! task の一覧と event 行だけを読む consumer（celeris-mcp の `tools/tasks`・`tools/projects`）はこの trait に依存する。
-//! 実装（SQL）は下の `impl TaskQuery for SqliteStore` にだけある。cursor・
-//! 絞り込みの部品は `query.rs`、行の変換は `tasks.rs` の `row_to_task`・`events.rs` の `read_event_rows` を使う。
+//! cursor・絞り込みの部品は `query.rs`、行の変換は `tasks.rs` の `row_to_task`・`events.rs` の `read_event_rows` を使う。
 
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{params, params_from_iter};
@@ -38,8 +37,8 @@ pub trait TaskQuery: Send + Sync {
     ) -> Result<Vec<EventRow>, StoreError>;
 }
 
-impl TaskQuery for SqliteStore {
-    fn list_page(
+impl SqliteStore {
+    pub fn list_page(
         &self,
         filter: &ListFilter,
         order: ListOrder,
@@ -101,7 +100,7 @@ impl TaskQuery for SqliteStore {
         })
     }
 
-    fn event_rows_for(
+    pub fn event_rows_for(
         &self,
         task_id: TaskId,
         after_seq: Option<u64>,
@@ -114,5 +113,25 @@ impl TaskQuery for SqliteStore {
             let after: i64 = after_seq.map(u64_to_i64).unwrap_or(-1);
             read_event_rows(stmt.query(params![task_id.to_string(), after, usize_to_i64(limit)])?)
         })
+    }
+}
+
+impl TaskQuery for SqliteStore {
+    fn list_page(
+        &self,
+        filter: &ListFilter,
+        order: ListOrder,
+        cursor: Option<&str>,
+        limit: usize,
+    ) -> Result<Page<Task>, StoreError> {
+        SqliteStore::list_page(self, filter, order, cursor, limit)
+    }
+    fn event_rows_for(
+        &self,
+        task_id: TaskId,
+        after_seq: Option<u64>,
+        limit: usize,
+    ) -> Result<Vec<EventRow>, StoreError> {
+        SqliteStore::event_rows_for(self, task_id, after_seq, limit)
     }
 }

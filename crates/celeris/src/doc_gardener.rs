@@ -1,8 +1,6 @@
 //! Managed repository documentation scans. No LLM runs in the daemon.
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use task_core::OrgDirectory;
-use task_core::TaskQuery;
 use task_core::local_machine::WorkspaceRoots;
 use task_core::{GenreSpec, ListFilter, ListOrder, RoleSpec, SqliteStore, TaskId, WorkspaceSpec};
 use task_ops::docs_maintenance as docs;

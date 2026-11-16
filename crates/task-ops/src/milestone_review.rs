@@ -8,8 +8,6 @@
 //!
 //! I/O は `SqliteStore` の読み取りだけ（DESIGN 原則 1）。
 
-use task_core::OrgDirectory;
-use task_core::TaskQuery;
 use task_core::{
     Message, MessageRole, Milestone, MilestoneId, MilestoneStatus, ProjectId, SqliteStore, Task,
 };

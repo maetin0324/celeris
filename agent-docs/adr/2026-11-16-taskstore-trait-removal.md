@@ -27,6 +27,7 @@ tasks: [01M7J3NKV7PY9DPT0K9D1VX4B7]
 
 ### D3. 残す trait
 - 試験の偽物という 2 つ目の実装がある trait は、差し替えの口として使われているので残す: `OrgDirectory`・`TaskQuery`（celeris-mcp の `tools/fake_ports.rs`）、`ScriptDomainStore`（task-dispatch の `FlakyRollback`）。
+- `OrgDirectory`・`TaskQuery` の本体（SQL）は `SqliteStore` の固有 method に移し、`impl OrgDirectory for SqliteStore`・`impl TaskQuery for SqliteStore` はそこへの転送（計 8 個）にする。具体型で呼ぶ所は trait を import しなくてよくなり、それまで 100 余りの file にあった `use task_core::OrgDirectory`・`TaskQuery` の import を消せる。trait を名指すのは偽物を差す celeris-mcp だけになる。
 - `CredentialWaitStore`（path class `credential`）は、設計 review の範囲を増やさないため、この変更では残す。`KnowledgeUseStore`・`RequestLog` は監査 A の候補の外で、この変更では扱わない。
 
 ### D4. 変えないもの

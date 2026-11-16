@@ -11,8 +11,6 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use task_core::OrgDirectory;
-use task_core::TaskQuery;
 use task_core::{
     Event, ListFilter, ListOrder, Milestone, MilestoneId, MilestoneStatus, Project, ProjectId,
     ProjectStatus, ProposedMilestone, SqliteStore, Status, Task, TaskId, TaskKind,

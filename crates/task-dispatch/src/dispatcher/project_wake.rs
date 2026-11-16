@@ -23,7 +23,7 @@ use task_core::store::{
     CommitOutcome, EffectAdmit, EffectDeferKind, EffectDeferral, IdempotencyClaim,
     NewProjectDecision, RootCreate, SqliteStore,
 };
-use task_core::{Event, OrgDirectory, Status, TaskId};
+use task_core::{Event, Status, TaskId};
 use task_ops::add::NewTaskSpec;
 use time::OffsetDateTime;
 

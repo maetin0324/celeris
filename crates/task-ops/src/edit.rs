@@ -15,7 +15,6 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use task_core::OrgDirectory;
 use task_core::{
     Budget, Event, GenreSpec, MilestoneId, SqliteStore, Status, StoreError, Task, TaskCategory,
     TaskId, Tier, Trigger, WorkspaceSpec,

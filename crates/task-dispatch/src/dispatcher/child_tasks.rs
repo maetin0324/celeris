@@ -1,7 +1,6 @@
 //! 委譲した子（集約 run・失敗の escalate・待ちの解消）と人の承認の子の作成（ADR-0010）。ADR-0082 の L2。
 
 use super::*;
-use task_core::OrgDirectory;
 
 /// health D6.4: policy の変更の承認の子（`Approval`）の作成・待ち・判定。file は `health_review/` に置く。
 #[path = "../health_review/policy_review.rs"]

@@ -2,7 +2,6 @@
 
 use super::*;
 use crate::run_settlement::{self, AskReason, ReplanOrAsk};
-use task_core::OrgDirectory;
 
 impl Dispatcher {
     /// ADR-0072 D14/D6・E4 (g): `wu.spec.checks` を `review::run_work_unit_checks`（review.rs の `Check::Command` 実行を再利用）で

@@ -4,7 +4,6 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
-use task_core::OrgDirectory;
 use task_core::local_machine::WorkspaceRoots;
 use task_core::{
     Check, Criterion, Delivery, DeliverySkipReason, DeliveryState, Event, OrgNode, PlanOrigin,

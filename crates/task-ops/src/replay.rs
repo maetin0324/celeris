@@ -8,7 +8,6 @@
 //! `CheckpointSaved`）だけから再構築できる（D5「events が正本、3 つの表は派生の索引」）。
 
 use std::collections::{BTreeMap, BTreeSet};
-use task_core::TaskQuery;
 
 use schemars::JsonSchema;
 use serde::Serialize;

@@ -11,7 +11,6 @@
 //!
 //! 新しい表・config の欄は無く、正本は追記専用の events。
 use std::collections::{HashMap, HashSet};
-use task_core::TaskQuery;
 
 use schemars::JsonSchema;
 use serde::Serialize;

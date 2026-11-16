@@ -12,7 +12,6 @@
 //!
 //! I/O は `SqliteStore` の読み取りだけ。
 
-use task_core::OrgDirectory;
 use task_core::{
     DecisionRow, DecisionStatus, DelegateTask, ExecutionPlanSpec, GenreSpec, ParentUnit,
     PlanUnitSpec, RoleSpec, SqliteStore, Status, Task, TaskId, TreeInfo, WorkUnitStatus,

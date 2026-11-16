@@ -3,7 +3,6 @@
 //! （`validate_each`）にある。I/O は `SqliteStore` の読み取りだけ。LLM 呼び出し・挿入は無い
 //! （挿入は `SqliteStore::delegate_children` が行う）。
 
-use task_core::OrgDirectory;
 use task_core::{
     DelegateDep, DelegateTask, DelegationLimits, GenreSpec, RoleSpec, SqliteStore, Status, Task,
     TaskId, WorkspaceSpec,

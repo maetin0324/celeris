@@ -1,6 +1,5 @@
 //! Daily batch orchestration. All durable claims live in SQLite; no LLM calls here.
 use super::*;
-use task_core::OrgDirectory;
 use task_core::{KnowledgeRunState, KnowledgeRunSummary};
 
 const LABEL: &str = "knowledge-daily";

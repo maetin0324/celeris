@@ -13,8 +13,6 @@
 //! まとめが失敗し続けても tick ごとに新しいタスクが積み上がることはない。
 
 use serde::Deserialize;
-use task_core::OrgDirectory;
-use task_core::TaskQuery;
 use task_core::report::{self, Report};
 use task_core::{
     Budget, GenreSpec, ListFilter, ListOrder, OrgNode, ProjectId, RoleSpec, SqliteStore, Status,

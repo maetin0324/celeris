@@ -11,7 +11,6 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use task_core::OrgDirectory;
 use task_core::{
     DecisionStatus, Event, ExecutionMode, ExecutionPlanRow, PhaseResumeMode, PlanApprovalFacts,
     SqliteStore, Status, Task, TaskId, Trigger, WorkUnitBlockedReason, WorkUnitKind,

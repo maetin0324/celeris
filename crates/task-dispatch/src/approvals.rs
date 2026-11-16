@@ -5,7 +5,6 @@
 //! （DESIGN 原則 1）: 追記する文面は run の自己申告（または部をまたぐ委譲の質問）そのままで、判断は
 //! 「誰宛てにするか」（`task.assignee`、無ければ秘書）だけの決定的な処理。
 
-use task_core::OrgDirectory;
 use task_core::approval::{Approval, ApprovalId};
 use task_core::{OrgKind, SqliteStore, StoreError, Task};
 use time::OffsetDateTime;

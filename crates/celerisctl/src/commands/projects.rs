@@ -9,7 +9,6 @@
 //! `POST /projects/{id}/project-plan/{version}/decide` の CLI 版）は削除した。
 
 use std::process::ExitCode;
-use task_core::OrgDirectory;
 
 use clap::{Args, Subcommand};
 use task_core::{MilestoneStatus, ProjectId};
@@ -115,7 +114,7 @@ fn repo_lines(repos: &[task_core::ProjectRepo]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use task_core::{OrgDirectory, Project, ProjectStatus, SqliteStore};
+    use task_core::{Project, ProjectStatus, SqliteStore};
     use time::OffsetDateTime;
 
     fn sample_project(status: ProjectStatus, archived: bool) -> Project {

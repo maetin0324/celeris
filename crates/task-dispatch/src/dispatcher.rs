@@ -57,7 +57,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
-use task_core::OrgDirectory;
 
 use task_core::plan::{PlanLimits, PlanOutput, materialize_logging};
 use task_core::report::{HEADLINE_MAX_CHARS, first_line, truncate_chars};

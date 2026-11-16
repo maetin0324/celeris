@@ -5,7 +5,6 @@
 
 use std::path::Path;
 
-use task_core::OrgDirectory;
 use task_core::authority::grant_denial;
 use task_core::chat::ChatRunSessionMode;
 use task_core::chat::ChatThreadKind;

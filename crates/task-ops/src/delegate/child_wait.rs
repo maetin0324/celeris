@@ -4,7 +4,6 @@
 //! または子の最後の失敗より後の人・CoS・operator の回答・comment）を待つ。印の無い `failed` の子は
 //! 従来どおり終端として扱い、親を起こす。読むのはストアだけ。LLM は呼ばない（DESIGN 原則 1）。
 
-use task_core::TaskQuery;
 use task_core::comment::CommentAuthorKind;
 use task_core::{Event, SqliteStore, Status, Task, TaskId};
 use time::OffsetDateTime;

@@ -24,7 +24,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use task_core::{
     COS_ID, Event, EventRow, KnowledgeRunState, ListFilter, ListOrder, Message, MessageRole,
-    OrgDirectory, OrgKind, ProjectId, ReportFilter, SqliteStore, Status, Task, TaskId, TaskQuery,
+    OrgKind, ProjectId, ReportFilter, SqliteStore, Status, Task, TaskId,
 };
 use task_ops::console::{ConsoleCursor, at_nanos, group_progress, task_line};
 use time::OffsetDateTime;

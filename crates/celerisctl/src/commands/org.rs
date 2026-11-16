@@ -23,7 +23,7 @@ use std::process::ExitCode;
 use celeris::config::Config;
 use clap::Subcommand;
 use serde::{Deserialize, Serialize};
-use task_core::{OrgDirectory, OrgNode, SqliteStore};
+use task_core::{OrgNode, SqliteStore};
 use time::OffsetDateTime;
 
 use crate::error::CliError;

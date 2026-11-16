@@ -25,8 +25,6 @@
 //!
 //! LLM も I/O も使わない（DESIGN 原則 1）。
 
-use task_core::OrgDirectory;
-use task_core::TaskQuery;
 use task_core::{
     MilestoneId, MilestoneStatus, Project, ProjectId, ProjectStatus, SqliteStore, Status, Trigger,
 };

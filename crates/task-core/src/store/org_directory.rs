@@ -1,10 +1,9 @@
 //! ADR 2026-11-10-taskstore-consumer-ports D2: 組織のノード 1 つ・案件・途中目標の名簿を読む能力。
 //!
-//! `SqliteStore` が実装する能力の trait（呼び手は trait を import して使う。ADR 2026-11-16-taskstore-trait-removal）。
+//! 偽物で差し替えたい consumer のための能力の trait（ADR 2026-11-16-taskstore-trait-removal D3）。本体（SQL）は
+//! `SqliteStore` の固有 method で、具体型の呼び手は trait を import せずに呼ぶ。`impl OrgDirectory for SqliteStore` は固有 method への転送。
 //! 名簿を読むだけの consumer（celeris-mcp の `tools/org`・`tools/projects`）はこの trait に依存する。
-//! 実装（SQL）は下の `impl OrgDirectory for SqliteStore` にだけある。行の変換は
-//! `org.rs` の `org_row`・`projects.rs` の `project_row`・`milestone_row` を使う。
-//! org の一覧・取得・upsert と案件/途中目標の名簿操作を集約する。SQL 本体はこの trait の実装に置く。
+//! 行の変換は `org.rs` の `org_row`・`projects.rs` の `project_row`・`milestone_row` を使う。
 
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
@@ -27,12 +26,12 @@ pub trait OrgDirectory: Send + Sync {
     fn milestone_list(&self, project_id: ProjectId) -> Result<Vec<Milestone>, StoreError>;
 }
 
-impl OrgDirectory for SqliteStore {
-    fn org_list(&self) -> Result<Vec<OrgNode>, StoreError> {
+impl SqliteStore {
+    pub fn org_list(&self) -> Result<Vec<OrgNode>, StoreError> {
         self.with_read_conn(Self::org_list_tx)
     }
 
-    fn org_get(&self, id: &str) -> Result<Option<OrgNode>, StoreError> {
+    pub fn org_get(&self, id: &str) -> Result<Option<OrgNode>, StoreError> {
         self.with_read_conn(|conn| {
             let row = conn
                 .query_row(
@@ -46,7 +45,7 @@ impl OrgDirectory for SqliteStore {
         })
     }
 
-    fn org_upsert(&self, node: &OrgNode) -> Result<OrgNode, StoreError> {
+    pub fn org_upsert(&self, node: &OrgNode) -> Result<OrgNode, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let stored = Self::org_upsert_tx(&tx, node, None)?;
@@ -54,7 +53,7 @@ impl OrgDirectory for SqliteStore {
         Ok(stored)
     }
 
-    fn project_list(&self) -> Result<Vec<Project>, StoreError> {
+    pub fn project_list(&self) -> Result<Vec<Project>, StoreError> {
         self.with_read_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT p.id, p.title, p.request, p.status, p.created_at, p.updated_at, \
@@ -73,7 +72,7 @@ impl OrgDirectory for SqliteStore {
         })
     }
 
-    fn project_get(&self, id: ProjectId) -> Result<Option<Project>, StoreError> {
+    pub fn project_get(&self, id: ProjectId) -> Result<Option<Project>, StoreError> {
         self.with_read_conn(|conn| {
             let row = conn
                 .query_row(
@@ -91,7 +90,7 @@ impl OrgDirectory for SqliteStore {
         })
     }
 
-    fn milestone_list(&self, project_id: ProjectId) -> Result<Vec<Milestone>, StoreError> {
+    pub fn milestone_list(&self, project_id: ProjectId) -> Result<Vec<Milestone>, StoreError> {
         self.with_read_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, project_id, seq, title, description, status, created_at, updated_at, paused_from, plan_key \
@@ -104,5 +103,26 @@ impl OrgDirectory for SqliteStore {
             }
             Ok(out)
         })
+    }
+}
+
+impl OrgDirectory for SqliteStore {
+    fn org_list(&self) -> Result<Vec<OrgNode>, StoreError> {
+        SqliteStore::org_list(self)
+    }
+    fn org_get(&self, id: &str) -> Result<Option<OrgNode>, StoreError> {
+        SqliteStore::org_get(self, id)
+    }
+    fn org_upsert(&self, node: &OrgNode) -> Result<OrgNode, StoreError> {
+        SqliteStore::org_upsert(self, node)
+    }
+    fn project_list(&self) -> Result<Vec<Project>, StoreError> {
+        SqliteStore::project_list(self)
+    }
+    fn project_get(&self, id: ProjectId) -> Result<Option<Project>, StoreError> {
+        SqliteStore::project_get(self, id)
+    }
+    fn milestone_list(&self, project_id: ProjectId) -> Result<Vec<Milestone>, StoreError> {
+        SqliteStore::milestone_list(self, project_id)
     }
 }

@@ -6,8 +6,8 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use std::collections::HashMap;
 
 use task_core::{
-    ListFilter, ListOrder, OrgDirectory, Project, ProjectBrief, ProjectBriefInput, ProjectId,
-    ProjectStatus, SqliteStore, TaskQuery,
+    ListFilter, ListOrder, Project, ProjectBrief, ProjectBriefInput, ProjectId, ProjectStatus,
+    SqliteStore,
 };
 use time::format_description::well_known::Rfc3339;
 

@@ -5,7 +5,6 @@ use super::token_budget::run_watch;
 use super::*;
 use crate::review::RepoHealth;
 use crate::review_decision;
-use task_core::OrgDirectory;
 use task_worker::check_slots::CheckLimits;
 
 /// ADR-0118 D4 付記 / ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3・D4: 直近の遷移（自動の

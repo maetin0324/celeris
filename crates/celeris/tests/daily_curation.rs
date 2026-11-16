@@ -12,8 +12,7 @@ use git_support::git;
 use task_core::org::{OrgKind, OrgNode};
 use task_core::report::{Report, ReportFilter, ReportId, ReportKind};
 use task_core::{
-    CronOverlap, DecisionStatus, Event, OrgDirectory, SqliteStore, Status, Task, Tier, Trigger,
-    WorkspaceSpec,
+    CronOverlap, DecisionStatus, Event, SqliteStore, Status, Task, Tier, Trigger, WorkspaceSpec,
 };
 use task_ops::knowledge_curation::{
     self as curation, Action, CurationPlan, HumanDecision, KbAction,

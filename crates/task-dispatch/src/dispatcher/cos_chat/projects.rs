@@ -1,7 +1,7 @@
 //! ADR 2026-10-27-project-brief D5: the project summaries a CoS chat run receives. Deterministic
 //! (store reads only): the general CoS gets every non-archived project, a project CoS its own.
 
-use task_core::{OrgDirectory, ProjectId, SqliteStore};
+use task_core::{ProjectId, SqliteStore};
 use task_worker::protocol::CosChatProjectSummary;
 use time::format_description::well_known::Rfc3339;
 

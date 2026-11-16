@@ -154,6 +154,6 @@ tasks: [01M6TYVJT2HG9NY5FW9FMCZS9A]
 
 ## 付記 2026-11-16: TaskStore の trait の撤去（D2 の前提の置き換え）
 - [ADR 2026-11-16 TaskStore の trait の撤去](2026-11-16-taskstore-trait-removal.md) で `TaskStore` の trait と 144 個の 1 行転送を消し、method は `SqliteStore` の固有 method になった。D2 の「TaskStore はその trait を supertrait に持ち、`dyn TaskStore`・`T: TaskStore` の consumer はそのまま動く」と「`impl <trait> for SqliteStore` は `<method>_impl` への 1 行転送」はもう成り立たない。
-- `OrgDirectory`・`TaskQuery` は celeris-mcp の偽物（`tools/fake_ports.rs`）が 2 つ目の実装なので残した。celeris-mcp はこの 2 つの trait を import して使い、`get` などそれ以外は `SqliteStore` の固有 method を呼ぶ。
+- `OrgDirectory`・`TaskQuery` は celeris-mcp の偽物（`tools/fake_ports.rs`）が 2 つ目の実装なので残した。SQL の本体は `SqliteStore` の固有 method に移し、`impl … for SqliteStore` はその転送にした（D2 の「SQL 本体は trait の実装に置く」を改める）。具体型で呼ぶ所は trait の import が要らない。D4 の「宣言を移すと具体型で呼ぶ file に import が要る」もこれで成り立たなくなった。
 - D2 で `NodeSessionStore`・`McpClientStore`・`McpCallStore`・`ReportStore` として名指した狭い trait は、実装が `SqliteStore` だけだったので同じ ADR の D2 で消した（celeris-mcp の `McpState.node_sessions` も消した）。
 - D6 の指標の `TaskStore の fn 宣言`（`task_store.rs`）は、数える file が無くなった。

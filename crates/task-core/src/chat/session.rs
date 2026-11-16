@@ -315,20 +315,6 @@ impl SqliteStore {
         )? > 0)
     }
 
-    /// Raises the summary watermark of row `row_id` (never lowers it).
-    pub fn chat_session_set_summary_through(
-        &self,
-        row_id: &str,
-        seq: i64,
-    ) -> Result<bool, ChatError> {
-        let conn = writer(self)?;
-        Ok(conn.execute(
-            "UPDATE node_sessions SET summary_through_seq=MAX(summary_through_seq,?2) \
-             WHERE id=?1 AND kind='cos_chat'",
-            params![row_id, seq.max(0)],
-        )? > 0)
-    }
-
     /// Raises the delivery cursor of the live row `row_id` to `seq` (never lowers it). Called only
     /// after a run on this row ended `done`; a retired or unknown row is left alone (`false`).
     pub fn chat_session_set_delivered_through(

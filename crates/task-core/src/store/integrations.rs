@@ -115,19 +115,6 @@ impl SqliteStore {
         Self::integration_put_tx(&conn, integration)
     }
 
-    pub fn integration_get(
-        &self,
-        id: IntegrationId,
-    ) -> Result<Option<TaskIntegration>, StoreError> {
-        self.with_read_conn(|conn| {
-            Ok(
-                Self::integration_query_tx(conn, "id = ?1", params![id.to_string()])?
-                    .into_iter()
-                    .next(),
-            )
-        })
-    }
-
     /// そのタスクの記録（新しい順）。ADR-0044 B1 の timeline はこれを読めばよい。
     pub fn integration_list_for_task(
         &self,

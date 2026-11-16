@@ -3443,10 +3443,6 @@ fn integrations_are_recorded_and_the_latest_one_per_task_and_repo_is_listed() {
     store.integration_put(&elsewhere).unwrap();
 
     assert_eq!(
-        store.integration_get(first.id).unwrap().as_ref(),
-        Some(&first)
-    );
-    assert_eq!(
         store.integration_latest(task.id, "code").unwrap().as_ref(),
         Some(&first)
     );

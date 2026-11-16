@@ -283,20 +283,20 @@ fn wu_session(
 }
 
 #[test]
-fn work_unit_session_create_then_active_round_trips() {
+fn work_unit_session_create_then_current_round_trips() {
     let store = store();
     let now = OffsetDateTime::now_utc();
     let task = TaskId::new();
     assert_eq!(
         store
-            .work_unit_session_active(task, Some("wu-a"), "claude-code", Some("acct-a"))
+            .work_unit_session_current(task, Some("wu-a"))
             .expect("active"),
         None
     );
     let created = wu_session(task, Some("wu-a"), Some("acct-a"), "uuid-1", now);
     store.work_unit_session_create(&created).expect("create");
     let active = store
-        .work_unit_session_active(task, Some("wu-a"), "claude-code", Some("acct-a"))
+        .work_unit_session_current(task, Some("wu-a"))
         .expect("active")
         .expect("some");
     assert_eq!(active.id, created.id);
@@ -327,48 +327,11 @@ fn work_unit_session_create_then_active_round_trips() {
             .expect("touch other account")
     );
     let active = store
-        .work_unit_session_active(task, Some("wu-a"), "claude-code", Some("acct-a"))
+        .work_unit_session_current(task, Some("wu-a"))
         .expect("active")
         .expect("some");
     assert_eq!(active.turns, 1);
     assert_eq!(active.approx_tokens, 500);
-}
-
-#[test]
-fn work_unit_session_other_account_or_adapter_is_not_returned() {
-    let store = store();
-    let now = OffsetDateTime::now_utc();
-    let task = TaskId::new();
-    store
-        .work_unit_session_create(&wu_session(task, Some("wu-a"), Some("acct-a"), "u1", now))
-        .expect("create");
-    // 別 account の session は返さない（account isolation、ADR-0140 D3）。
-    assert_eq!(
-        store
-            .work_unit_session_active(task, Some("wu-a"), "claude-code", Some("acct-b"))
-            .expect("active"),
-        None
-    );
-    // account 無し（None）とも一致しない。
-    assert_eq!(
-        store
-            .work_unit_session_active(task, Some("wu-a"), "claude-code", None)
-            .expect("active"),
-        None
-    );
-    // 別 adapter とも一致しない。
-    assert_eq!(
-        store
-            .work_unit_session_active(task, Some("wu-a"), "codex", Some("acct-a"))
-            .expect("active"),
-        None
-    );
-    // current は判定用に adapter・account を問わず返す（dispatcher が account_changed を見て retire する）。
-    let current = store
-        .work_unit_session_current(task, Some("wu-a"))
-        .expect("current")
-        .expect("some");
-    assert_eq!(current.account_id.as_deref(), Some("acct-a"));
 }
 
 #[test]
@@ -391,7 +354,7 @@ fn work_unit_session_is_not_returned_after_retire() {
     );
     assert_eq!(
         store
-            .work_unit_session_active(task, Some("wu-a"), "claude-code", Some("acct-a"))
+            .work_unit_session_current(task, Some("wu-a"))
             .expect("active"),
         None
     );
@@ -418,7 +381,7 @@ fn work_unit_session_is_not_returned_after_retire() {
         .expect("create 2");
     assert_eq!(
         store
-            .work_unit_session_active(task, Some("wu-a"), "claude-code", Some("acct-a"))
+            .work_unit_session_current(task, Some("wu-a"))
             .expect("active")
             .expect("some")
             .session_id,
@@ -438,21 +401,19 @@ fn work_unit_session_other_work_unit_or_task_is_not_returned() {
     // 別 WU（独立 WU）は他 WU の session を引き継がない。
     assert_eq!(
         store
-            .work_unit_session_active(task, Some("wu-b"), "claude-code", Some("acct-a"))
+            .work_unit_session_current(task, Some("wu-b"))
             .expect("active"),
         None
     );
     // atomic（work_unit_id = None）とも混ざらない。
     assert_eq!(
-        store
-            .work_unit_session_active(task, None, "claude-code", Some("acct-a"))
-            .expect("active"),
+        store.work_unit_session_current(task, None).expect("active"),
         None
     );
     // 別 Task の同名 WU とも混ざらない。
     assert_eq!(
         store
-            .work_unit_session_active(other_task, Some("wu-a"), "claude-code", Some("acct-a"))
+            .work_unit_session_current(other_task, Some("wu-a"))
             .expect("active"),
         None
     );
@@ -464,7 +425,7 @@ fn work_unit_session_other_work_unit_or_task_is_not_returned() {
     );
     assert!(
         store
-            .work_unit_session_active(task, Some("wu-a"), "claude-code", Some("acct-a"))
+            .work_unit_session_current(task, Some("wu-a"))
             .expect("active")
             .is_some()
     );
@@ -481,7 +442,7 @@ fn work_unit_session_atomic_task_and_node_sessions_are_independent() {
         .expect("create");
     assert_eq!(
         store
-            .work_unit_session_active(task, None, "claude-code", Some("acct-a"))
+            .work_unit_session_current(task, None)
             .expect("active")
             .expect("some")
             .session_id,

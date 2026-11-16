@@ -129,14 +129,11 @@ fn cos_chat_run_session_touch_set_id_and_summary_watermark() {
         )
         .expect("touch")
     );
-    assert!(s.chat_session_set_summary_through(&row.id, 7).expect("wm"));
-    assert!(s.chat_session_set_summary_through(&row.id, 3).expect("wm"));
     let got = s.chat_session_active(&t).expect("active").expect("live");
     assert_eq!(got.session_id, "thread-abc");
     assert_eq!(got.turns, 2);
     assert_eq!(got.approx_tokens, 1200);
     assert_eq!(got.last_used_at, at(6));
-    assert_eq!(got.summary_through_seq, 7);
 
     s.chat_session_retire(&t, at(7)).expect("retire");
     assert!(
@@ -401,14 +398,6 @@ fn cos_chat_resume_delta_cursor_rises_only_on_live_row_and_is_independent_of_sum
     let live = s.chat_session_active(&t).expect("active").expect("live");
     assert_eq!(live.delivered_through_seq, 6, "the cursor never goes back");
     assert_eq!(live.summary_through_seq, 0, "the cursor is not the summary");
-
-    // The checkpoint watermark moves alone.
-    assert!(s.chat_session_set_summary_through(&row.id, 9).expect("wm"));
-    let live = s.chat_session_active(&t).expect("active").expect("live");
-    assert_eq!(
-        (live.summary_through_seq, live.delivered_through_seq),
-        (9, 6)
-    );
 
     // A fresh row starts at 0 and a retired row is not advanced.
     let fresh = ChatSession::new(key(&t), "22222222-2222-4222-8222-222222222222", at(2));

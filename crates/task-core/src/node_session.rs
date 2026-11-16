@@ -490,39 +490,9 @@ impl SqliteStore {
         )?;
         Ok(())
     }
-    /// `(task_id, work_unit_id)` の現役セッションのうち、`adapter` と `account_id` が**一致する**ものだけを返す
-    /// （resume に使ってよい行。別 adapter・別 account の行は返さない）。複数あれば `last_used_at` が最新の 1 件。
-    pub fn work_unit_session_active(
-        &self,
-        task_id: TaskId,
-        work_unit_id: Option<&str>,
-        adapter: &str,
-        account_id: Option<&str>,
-    ) -> Result<Option<WorkUnitSession>, StoreError> {
-        let conn = self.lock()?;
-        let sql = format!(
-            "{SELECT_WORK_UNIT_SESSION} WHERE kind = ?1 AND task_id = ?2 AND work_unit_id IS ?3 \
-             AND adapter = ?4 AND account_id IS ?5 AND retired_at IS NULL \
-             ORDER BY last_used_at DESC, id DESC LIMIT 1"
-        );
-        let row = conn
-            .query_row(
-                &sql,
-                rusqlite::params![
-                    SessionKind::Continuation.as_str(),
-                    task_id.to_string(),
-                    work_unit_id,
-                    adapter,
-                    account_id,
-                ],
-                row_to_work_unit_session,
-            )
-            .optional()?;
-        row.transpose()
-    }
     /// `(task_id, work_unit_id)` の現役セッションを adapter・account を問わず返す（最新の 1 件）。
-    /// resume には使わない: dispatcher が判断表 #6 / #7（`adapter_changed` / `account_changed`）を
-    /// 判定して retire するためだけに使う。
+    /// resume してよいか（判断表 #6 / #7 の `adapter_changed` / `account_changed` を含む）は dispatcher の
+    /// `decide_continuation` が決める。
     pub fn work_unit_session_current(
         &self,
         task_id: TaskId,

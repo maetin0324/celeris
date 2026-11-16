@@ -184,7 +184,7 @@ pub fn open_rows(store: &SqliteStore) -> Result<Vec<DecisionRow>, OpsError> {
     Ok(out)
 }
 
-fn rfc3339(t: OffsetDateTime) -> String {
+pub(crate) fn rfc3339(t: OffsetDateTime) -> String {
     t.format(&Rfc3339).unwrap_or_default()
 }
 

@@ -669,24 +669,6 @@ impl SqliteStore {
         })
     }
 
-    /// 状態だけを変える。無い途中目標は `Ok(false)`。
-    pub fn milestone_set_status(
-        &self,
-        id: MilestoneId,
-        status: MilestoneStatus,
-    ) -> Result<bool, StoreError> {
-        let conn = self.lock()?;
-        let affected = conn.execute(
-            "UPDATE milestones SET status = ?1, updated_at = ?2 WHERE id = ?3",
-            params![
-                status.as_str(),
-                format_rfc3339(OffsetDateTime::now_utc())?,
-                id.to_string()
-            ],
-        )?;
-        Ok(affected == 1)
-    }
-
     /// ADR-0044 D6（Phase 55）: 状態と `paused_from` を**同時に**書く（`pause` / `resume` / `cancel`）。
     /// `paused_from` は `Some(None)` で消し、`None` なら触らない。無い途中目標は `Ok(false)`。
     /// ADR-0044 D6（Phase 55）: 状態と `paused_from` を 1 回の UPDATE で書く（`project_set_lifecycle` と同じ）。

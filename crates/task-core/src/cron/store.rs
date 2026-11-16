@@ -343,19 +343,6 @@ impl SqliteStore {
         tx.commit()?;
         Ok(deleted)
     }
-    /// `enabled` で `next_fire_at <= now` の job（`next_fire_at` 昇順、同時刻は `name` 順）。
-    pub fn cron_job_due(&self, now: OffsetDateTime) -> Result<Vec<CronJob>, StoreError> {
-        let mut due: Vec<CronJob> = self.with_read_conn(|conn| {
-            query_jobs(conn, "WHERE enabled = 1 AND next_fire_at IS NOT NULL", &[])
-        })?;
-        due.retain(|j| j.next_fire_at.is_some_and(|t| t <= now));
-        due.sort_by(|a, b| {
-            a.next_fire_at
-                .cmp(&b.next_fire_at)
-                .then_with(|| a.name.cmp(&b.name))
-        });
-        Ok(due)
-    }
     /// 1 回の発火の記録: 履歴 `runs` を足し、job の `next_fire_at` と `updated_at` を書き換える（同じ
     /// トランザクション）。`(job_id, scheduled_for, trigger)` が既にあれば何も書かず `StoreError::InUse`
     /// （二重発火の最後の砦）。job が無ければ `StoreError::Invalid`。

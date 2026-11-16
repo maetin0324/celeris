@@ -28,7 +28,6 @@ use task_core::{
     TreeInfo, TreeLimits, WorkUnitKind, WorkUnitRow, WorkUnitStatus,
 };
 use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
 use crate::error::OpsError;
 
@@ -82,10 +81,6 @@ fn refuse(conflict: bool, code: &'static str, detail: impl Into<String>) -> OpsE
         code,
         detail: detail.into(),
     }
-}
-
-fn rfc3339(t: OffsetDateTime) -> String {
-    t.format(&Rfc3339).unwrap_or_default()
 }
 
 /// 対象の今の扱い。
@@ -221,7 +216,7 @@ fn link(
     row.blocked_reason = None;
     row.child_task_id = Some(target.id.to_string());
     row.clear_lease();
-    row.updated_at = rfc3339(now);
+    row.updated_at = crate::decision::rfc3339(now);
     let events = vec![
         Event::WorkUnitTransitioned {
             work_unit_id: unit_row.id.clone(),
@@ -275,7 +270,7 @@ fn release_dependents(rows: &mut [WorkUnitRow], now: OffsetDateTime) -> (Vec<Str
     for id in &ids {
         if let Some(r) = rows.iter_mut().find(|r| &r.id == id) {
             r.status = WorkUnitStatus::Ready;
-            r.updated_at = rfc3339(now);
+            r.updated_at = crate::decision::rfc3339(now);
             events.push(Event::WorkUnitTransitioned {
                 work_unit_id: r.id.clone(),
                 key: r.key.clone(),

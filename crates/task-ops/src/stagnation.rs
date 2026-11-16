@@ -122,10 +122,6 @@ pub struct StagnationFacts {
     pub ready_tasks: Vec<ReadyTaskFact>,
 }
 
-fn rfc3339(t: OffsetDateTime) -> String {
-    t.format(&Rfc3339).unwrap_or_default()
-}
-
 fn reached(since: OffsetDateTime, threshold_secs: u64, now: OffsetDateTime) -> bool {
     threshold_secs > 0
         && (now - since).whole_seconds() >= i64::try_from(threshold_secs).unwrap_or(i64::MAX)
@@ -176,7 +172,7 @@ pub fn detect(
                 project_id: Some(p.project_id),
                 task_id: None,
                 subject: p.title.clone(),
-                since: rfc3339(p.last_event_at),
+                since: crate::decision::rfc3339(p.last_event_at),
                 detail: format!(
                     "開いている task が {} 件あるが、最後の出来事から {} 何も起きていない（閾値 {} 秒）",
                     p.open_tasks,
@@ -205,7 +201,7 @@ pub fn detect(
                 project_id: None,
                 task_id: None,
                 subject: newest.sha12.clone(),
-                since: rfc3339(oldest.verified_at),
+                since: crate::decision::rfc3339(oldest.verified_at),
                 detail: format!(
                     "verify 済みで昇格されていない release が {} 件（{}）。最初の verify から {}（閾値 {} 秒）",
                     shas.len(),
@@ -230,7 +226,7 @@ pub fn detect(
                 project_id: t.project_id,
                 task_id: Some(t.task_id),
                 subject: t.title.clone(),
-                since: rfc3339(t.last_event_at),
+                since: crate::decision::rfc3339(t.last_event_at),
                 detail: format!(
                     "ready のまま run も待ちの理由も無く、最後の出来事から {}（閾値 {} 秒）",
                     duration_ja((now - t.last_event_at).whole_seconds()),

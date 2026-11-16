@@ -3035,20 +3035,6 @@ fn projects_and_milestones_round_trip() {
             .collect::<Vec<_>>(),
         vec![first.id, second.id]
     );
-    assert!(
-        store
-            .milestone_set_status(second.id, MilestoneStatus::Approved)
-            .unwrap()
-    );
-    assert_eq!(
-        store.milestone_list(project.id).unwrap()[1].status,
-        MilestoneStatus::Approved
-    );
-    assert!(
-        !store
-            .milestone_set_status(MilestoneId::new(), MilestoneStatus::Reached)
-            .unwrap()
-    );
 
     let err = store
         .milestone_create(ProjectId::new(), "無い案件", "", MilestoneStatus::Proposed)

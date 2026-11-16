@@ -119,33 +119,6 @@ fn cron_job_store_crud_round_trips() {
 }
 
 #[test]
-fn cron_job_due_filters_by_time_not_by_string_order() {
-    let store = SqliteStore::open_in_memory().unwrap();
-    let early = job("early", Some("2026-10-02T04:00:00Z"));
-    // 小数秒つき（文字列では "…00.5Z" < "…00Z" になるが、時刻としては後）。
-    let fractional = job("fractional", Some("2026-10-02T05:00:00.5Z"));
-    let later = job("later", Some("2026-10-02T06:00:00Z"));
-    let paused = job("paused", None);
-    for j in [&early, &fractional, &later, &paused] {
-        store.cron_job_insert(j).unwrap();
-    }
-    let due: Vec<String> = store
-        .cron_job_due(t("2026-10-02T05:00:00Z"))
-        .unwrap()
-        .into_iter()
-        .map(|j| j.name)
-        .collect();
-    assert_eq!(due, vec!["early"]);
-    let due: Vec<String> = store
-        .cron_job_due(t("2026-10-02T06:00:00Z"))
-        .unwrap()
-        .into_iter()
-        .map(|j| j.name)
-        .collect();
-    assert_eq!(due, vec!["early", "fractional", "later"]);
-}
-
-#[test]
 fn cron_job_record_is_atomic_and_rejects_double_fire() {
     let store = SqliteStore::open_in_memory().unwrap();
     let j = job("daily", Some("2026-10-02T19:30:00Z"));

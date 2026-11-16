@@ -289,17 +289,6 @@ pub fn group_conversation_progress<'a>(
         .collect()
 }
 
-/// `acc` に続きの積み上げ（`next`）を足す（SSE が同じ run の更新を 1 件にまとめるため。`merge_progress`
-/// の対話版。ここは先頭・末尾で切らない＝取りこぼしが無い）。
-pub fn merge_conversation_reply(acc: &mut ConsoleReplyAccum, next: &ConsoleReplyAccum) {
-    if next.thinking.is_some() {
-        acc.thinking = next.thinking.clone();
-    }
-    acc.steps.extend(next.steps.iter().cloned());
-    acc.text.push_str(&next.text);
-    acc.updated_at = next.updated_at.clone();
-}
-
 /// `acc` に続きの束（`next`）を足す（SSE が同じ run の更新を 1 件にまとめるため。ADR-0048 D1）。
 ///
 /// 件数と道具の回数は足し、最後の `status` と `updated_at` は新しい方で置き換え、

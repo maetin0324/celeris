@@ -15,7 +15,6 @@ use task_core::{
     WorkUnitStatus,
 };
 use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
 use crate::error::OpsError;
 
@@ -50,10 +49,6 @@ pub fn relaxed_tree_plan_limits(limits: ExecutionLimits) -> ExecutionLimits {
 pub struct TreePlanOutcome {
     pub report: task_core::UnitGateReport,
     pub holds: Vec<task_core::LimitHold>,
-}
-
-fn rfc3339(t: OffsetDateTime) -> String {
-    t.format(&Rfc3339).unwrap_or_default()
 }
 
 /// ADR-0079 D4 (3) / D3（Phase R2a）: 採用する /3 の計画に unit の gate をかけ（上げる・下げるを spec に
@@ -217,7 +212,7 @@ pub fn plan_hold_writes(
         let mut updated = row.clone();
         updated.status = WorkUnitStatus::Blocked;
         updated.blocked_reason = Some(WorkUnitBlockedReason::Decision);
-        updated.updated_at = rfc3339(now);
+        updated.updated_at = crate::decision::rfc3339(now);
         events.push(Event::WorkUnitTransitioned {
             work_unit_id: row.id.clone(),
             key: row.key.clone(),

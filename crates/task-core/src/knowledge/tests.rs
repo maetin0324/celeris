@@ -12,6 +12,7 @@ fn front_matter_round_trips() {
         confidence: Some(Confidence::High),
         path: None,
         op: None,
+        tasks: Vec::new(),
     };
     let page = render_page(&front, "# pegasus\n\npjsub で投げる。\n");
     let (again, body) = front_matter(&page);

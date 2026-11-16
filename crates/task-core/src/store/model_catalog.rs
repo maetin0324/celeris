@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, TransactionBehavior, params};
 
 use crate::model::Event;
 use crate::model_catalog::assignments::{tier_from_str, tier_str};
@@ -221,24 +221,6 @@ impl SqliteStore {
                 out.push(row?);
             }
             Ok(out)
-        })
-    }
-    pub fn model_catalog_override_get(
-        &self,
-        source: &CatalogSource,
-        model_id: &str,
-    ) -> Result<Option<CatalogOverrideRow>, StoreError> {
-        self.with_read_conn(|conn| {
-            Ok(conn
-                .query_row(
-                    &format!(
-                        "SELECT {OVERRIDE_COLUMNS} FROM model_catalog_overrides \
-                         WHERE source = ?1 AND model_id = ?2"
-                    ),
-                    params![source.as_str(), model_id],
-                    override_from_row,
-                )
-                .optional()?)
         })
     }
     /// 上書きを置く（あれば置き換える）。catalog に無いモデルにも置ける（発見前に決めておける）。

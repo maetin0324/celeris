@@ -219,6 +219,7 @@ fn seed_files() -> Vec<(String, String)> {
                 confidence: Some(Confidence::Medium),
                 path: None,
                 op: None,
+                tasks: Vec::new(),
             },
             body,
         )
@@ -312,6 +313,7 @@ fn cluster_page(today: &str, id: &str) -> String {
             confidence: Some(Confidence::Low),
             path: None,
             op: None,
+            tasks: Vec::new(),
         },
         &format!(
             "# {id} の使い方\n\n\
@@ -948,6 +950,7 @@ pub fn record_in(
             confidence: request.confidence,
             path: Some(target.clone()),
             op: op.map(|o| o.as_str().to_string()),
+            tasks: Vec::new(),
         },
         body,
     );
@@ -1602,6 +1605,7 @@ fn commit_candidate_directly(
         confidence: Some(candidate.confidence),
         path: None,
         op: None,
+        tasks: Vec::new(),
     };
     let page = kb::render_page(&front, candidate.body.trim());
     let edit = PageEdit {
@@ -1676,6 +1680,7 @@ fn write_inbox_candidate(
         confidence: Some(candidate.confidence),
         path: Some(target_path.to_string()),
         op: Some(candidate.op.as_str().to_string()),
+        tasks: Vec::new(),
     };
     let page = kb::render_page(&front, candidate.body.trim());
     let dir = root.join(INBOX_DIR);

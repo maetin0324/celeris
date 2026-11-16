@@ -215,48 +215,6 @@ fn notify_feed_secretary_reply_only_for_node_messages() {
 }
 
 #[test]
-fn notify_feed_observed_release_cron_recovery_and_warning_are_idempotent() {
-    let store = SqliteStore::open_in_memory().unwrap();
-    let now = OffsetDateTime::now_utc();
-    let sources = [
-        FeedObservation::Release {
-            id: "abc123".into(),
-            summary: "昇格しました".into(),
-            at: now,
-        },
-        FeedObservation::CronRun {
-            run_id: "run-1".into(),
-            job_id: "job-1".into(),
-            summary: "日次整理完了".into(),
-            at: now,
-        },
-        FeedObservation::AutoRecovered {
-            task_id: "child-1".into(),
-            root_id: "root-1".into(),
-            summary: "自動で解決".into(),
-            at: now,
-        },
-        FeedObservation::RequeueLimitNear {
-            task_id: "task-1".into(),
-            summary: "再試行の上限が近い".into(),
-            at: now,
-        },
-    ];
-    assert_eq!(record_observations(&store, now, &sources).unwrap(), 4);
-    assert_eq!(record_observations(&store, now, &sources).unwrap(), 0);
-    let found: std::collections::HashSet<_> = notices(&store).iter().map(|n| n.kind).collect();
-    for kind in [
-        NoticeKind::Release,
-        NoticeKind::CronRun,
-        NoticeKind::AutoRecovered,
-        NoticeKind::RequeueLimitNear,
-    ] {
-        assert!(found.contains(&kind), "missing {kind:?}");
-    }
-    assert_eq!(notices(&store).len(), 4);
-}
-
-#[test]
 fn notify_feed_delivery_ready_and_release_creation() {
     use task_core::{Delivery, DeliveryState, ProjectId, RepoId};
     let store = SqliteStore::open_in_memory().unwrap();

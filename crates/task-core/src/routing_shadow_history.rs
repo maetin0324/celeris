@@ -3,8 +3,6 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-pub const SHADOW_RECORD_VERSION: u32 = 1;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ShadowKind {

@@ -540,21 +540,6 @@ impl SqliteStore {
         )?;
         Ok(n > 0)
     }
-    /// 未読を全て（`kinds` が空でなければその種類だけ）既読にし、既読にした件数を返す。
-    pub fn notice_mark_all_read(
-        &self,
-        kinds: &[NoticeKind],
-        at: OffsetDateTime,
-    ) -> Result<u64, StoreError> {
-        let extra = kinds_clause(kinds)
-            .map(|c| format!(" AND {c}"))
-            .unwrap_or_default();
-        let n = self.lock()?.execute(
-            &format!("UPDATE feed_notices SET read_at = ?1 WHERE read_at IS NULL{extra}"),
-            params![format_rfc3339(at)?],
-        )?;
-        Ok(n as u64)
-    }
     pub fn notice_unread_count(&self) -> Result<NoticeUnreadCount, StoreError> {
         self.with_read_conn(|conn| {
             let mut stmt = conn.prepare(
@@ -572,24 +557,6 @@ impl SqliteStore {
             }
             Ok(out)
         })
-    }
-    /// 既読が `before` より前の束（とその出来事の記録）を消し、消した束の数を返す（D3.2 の保持）。
-    pub fn notice_prune_read(&self, before: OffsetDateTime) -> Result<u64, StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let before = format_rfc3339(before)?;
-        // `foreign_keys` は off なので、出来事の記録は明示的に消す。
-        tx.execute(
-            "DELETE FROM feed_sources WHERE notice_id IN (SELECT id FROM feed_notices \
-             WHERE read_at IS NOT NULL AND julianday(read_at) < julianday(?1))",
-            params![before],
-        )?;
-        let n = tx.execute(
-            "DELETE FROM feed_notices WHERE read_at IS NOT NULL AND julianday(read_at) < julianday(?1)",
-            params![before],
-        )?;
-        tx.commit()?;
-        Ok(n as u64)
     }
     /// ADR-0133 付記: `keys` のうち既に `feed_sources` にある `source_key`。読み取り接続だけを使う
     /// （同期は記録済みの出来事に書き込みの transaction を開かない）。

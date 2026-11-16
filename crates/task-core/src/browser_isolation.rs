@@ -429,55 +429,6 @@ pub fn verify_launcher_session(
     }
 }
 
-/// bubblewrap の argv（決定的）。起動方式の既定案。実際の起動と観測は worker が行い、
-/// その結果の [`RuntimeFacts`] を [`verify_isolation`] で検査する。
-pub fn bwrap_argv(
-    runtime_uid: u32,
-    session_dir_host: &str,
-    controller_dir_host: &str,
-) -> Vec<String> {
-    let mut a: Vec<String> = [
-        "bwrap",
-        "--unshare-user",
-        "--unshare-pid",
-        "--unshare-net",
-        "--unshare-ipc",
-        "--unshare-uts",
-        "--die-with-parent",
-        "--new-session",
-        "--cap-drop",
-        "ALL",
-        "--ro-bind",
-        "/usr",
-        "/usr",
-        "--ro-bind",
-        "/etc/ssl",
-        "/etc/ssl",
-        "--proc",
-        "/proc",
-        "--dev",
-        "/dev",
-        "--tmpfs",
-        "/tmp",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect();
-    a.extend([
-        "--uid".into(),
-        runtime_uid.to_string(),
-        "--bind".into(),
-        session_dir_host.into(),
-        SESSION_ROOT.into(),
-        "--bind".into(),
-        controller_dir_host.into(),
-        "/run/cdp".into(),
-        "--remount-ro".into(),
-        "/".into(),
-    ]);
-    a
-}
-
 // ---- egress ----
 
 /// egress の許可。browser の network namespace の唯一の出口（filtering proxy）が使う。
@@ -688,40 +639,6 @@ pub fn check_egress(policy: &EgressPolicy, req: &EgressRequest) -> Result<(), Eg
             Ok(())
         }
     }
-}
-
-// ---- orphan ----
-
-/// host 上の process の観測。`session_label` は runtime 起動時に付けた印（cgroup 名など）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProcessRecord {
-    pub pid: i32,
-    pub pgid: i32,
-    pub uid: u32,
-    pub session_label: Option<String>,
-}
-
-/// 回収する process group。印が付き、runtime の UID で、生きている session に属さないもの。
-/// daemon 自身の UID の process と印の無い process には触らない。
-pub fn orphan_groups(
-    procs: &[ProcessRecord],
-    live_sessions: &BTreeSet<String>,
-    runtime_uids: &BTreeSet<u32>,
-    host_uid: u32,
-) -> Vec<i32> {
-    let mut out = BTreeSet::new();
-    for p in procs {
-        let Some(label) = &p.session_label else {
-            continue;
-        };
-        if p.uid == host_uid || p.uid == 0 || !runtime_uids.contains(&p.uid) || p.pgid <= 1 {
-            continue;
-        }
-        if !live_sessions.contains(label) {
-            out.insert(p.pgid);
-        }
-    }
-    out.into_iter().collect()
 }
 
 /// 稼働中の隔離 session（ADR-0105 D5）。呼ぶたびに事実を採り直して検査する。

@@ -139,7 +139,7 @@ fn notification_feed_read_bundle_starts_a_new_bundle() {
 }
 
 #[test]
-fn notification_feed_mark_all_read_and_unread_count_by_kind() {
+fn notification_feed_unread_count_by_kind() {
     let s = store();
     s.notice_record(&ev(
         "e:1",
@@ -172,22 +172,6 @@ fn notification_feed_mark_all_read_and_unread_count_by_kind() {
     assert_eq!(c.by_kind.get("task_done"), Some(&2));
     assert_eq!(c.by_kind.get("release"), Some(&1));
     assert_eq!(c.by_kind.get("report"), None);
-
-    // 種類を絞った全件既読。
-    assert_eq!(
-        s.notice_mark_all_read(&[NoticeKind::TaskDone], T2).unwrap(),
-        2
-    );
-    let c = s.notice_unread_count().unwrap();
-    assert_eq!(c.total, 2);
-    assert_eq!(c.by_kind.get("task_done"), None);
-    // 全件既読。2 回目は 0 件。
-    assert_eq!(s.notice_mark_all_read(&[], T2).unwrap(), 2);
-    assert_eq!(s.notice_mark_all_read(&[], T2).unwrap(), 0);
-    assert_eq!(
-        s.notice_unread_count().unwrap(),
-        NoticeUnreadCount::default()
-    );
 }
 
 #[test]
@@ -245,7 +229,7 @@ fn notification_feed_list_filters_unread_kind_and_pages() {
 }
 
 #[test]
-fn notification_feed_prune_and_cursor() {
+fn notification_feed_cursor() {
     let s = store();
     let id = s
         .notice_record(&ev(
@@ -260,11 +244,6 @@ fn notification_feed_prune_and_cursor() {
     s.notice_record(&ev("e:2", NoticeKind::Release, "release", "R", T0))
         .unwrap();
     s.notice_mark_read(id, T0).unwrap();
-    // 未読は消さない。既読でも before 以降は消さない。
-    assert_eq!(s.notice_prune_read(T0).unwrap(), 0);
-    assert_eq!(s.notice_prune_read(T1).unwrap(), 1);
-    assert!(s.notice_get(id).unwrap().is_none());
-    assert_eq!(s.notice_list(&NoticeQuery::default()).unwrap().total, 1);
 
     assert_eq!(s.feed_cursor_get("events").unwrap(), None);
     s.feed_cursor_set("events", "10").unwrap();

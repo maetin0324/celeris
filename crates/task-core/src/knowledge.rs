@@ -107,6 +107,9 @@ pub struct FrontMatter {
     /// `retire`。`record`（Phase 61）が書く候補には無い（`None` は「素の accept/reject」= 従来どおり）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub op: Option<String>,
+    /// 文書リポジトリ（ADR-0044 D7）の `tasks`: 素の ULID。[`render_page`] は書かない。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tasks: Vec<String>,
 }
 
 /// ADR-0047 D1 / D4。
@@ -186,6 +189,7 @@ pub fn front_matter(raw: &str) -> (FrontMatter, &str) {
             match current.as_deref() {
                 Some("tags") => front.tags.push(unquote(item)),
                 Some("sources") => front.sources.push(unquote(item)),
+                Some("tasks") => front.tasks.push(unquote(item)),
                 _ => {}
             }
             continue;
@@ -230,6 +234,10 @@ pub fn front_matter(raw: &str) -> (FrontMatter, &str) {
             }
             "sources" => {
                 front.sources.extend(parse_list(value));
+                current = Some(key);
+            }
+            "tasks" => {
+                front.tasks.extend(parse_list(value));
                 current = Some(key);
             }
             _ => current = None,
@@ -360,8 +368,8 @@ fn unquote(value: &str) -> String {
     value.trim().to_string()
 }
 
-/// YAML のスカラ（記号を含むなら引用する。最小限。`task_ops::docs` と同じ規則）。
-fn yaml_scalar(value: &str) -> String {
+/// YAML のスカラ（記号を含むなら引用する。最小限。`task_ops::docs` も使う）。
+pub fn yaml_scalar(value: &str) -> String {
     let plain = !value.is_empty()
         && !value.starts_with([
             '-', '[', '{', '#', '&', '*', '!', '|', '>', '\'', '"', '%', '@', '`',

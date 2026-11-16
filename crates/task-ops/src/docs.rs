@@ -15,6 +15,9 @@ use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
 use crate::changes::{GIT_TIMEOUT, GIT_WRITE_TIMEOUT, git};
+use task_core::knowledge::yaml_scalar;
+/// front matter（最小の YAML もどき）・題名・slug の規則は KB と同じ（ADR-0044 D7、ADR-0047 D1）。
+pub use task_core::knowledge::{FrontMatter, front_matter, slugify, title_of};
 
 /// ADR-0044 D7: 人の編集のコミットの author / committer。
 pub const DOCS_AUTHOR_NAME: &str = "Celeris (human)";
@@ -123,161 +126,12 @@ pub fn resolve_relative(root: &str, from: &str, link: &str) -> Option<String> {
     }
 }
 
-/// 題名から `*.md` のファイル名のもとになる slug を作る（ASCII だけ。何も残らなければ `None`）。
-pub fn slugify(raw: &str) -> Option<String> {
-    let mut out = String::new();
-    for c in raw.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c.to_ascii_lowercase());
-        } else if !out.ends_with('-') {
-            out.push('-');
-        }
-    }
-    let out = out.trim_matches('-').to_string();
-    let out: String = out.chars().take(48).collect();
-    let out = out.trim_matches('-').to_string();
-    if out.is_empty() { None } else { Some(out) }
-}
-
 /// ADR-0044 D7: 既定の文書リポジトリのディレクトリ名（案件の題名の slug。作れなければ案件の id）。
 pub fn project_slug(title: &str, project_id: &str) -> String {
     match slugify(title) {
         Some(slug) => slug,
         None => project_id.to_ascii_lowercase(),
     }
-}
-
-// ---------------------------------------------------------------------------
-// front matter（最小の YAML もどき）
-// ---------------------------------------------------------------------------
-
-/// ページの先頭の `---` … `---`（ADR-0044 D7。`title` / `tags` / `tasks` だけ読む）。
-#[derive(
-    Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
-pub struct FrontMatter {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<String>,
-    /// タスクの id（`celeris:task/<ULID>` ではなく素の ULID）。
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tasks: Vec<String>,
-}
-
-/// front matter と、その後ろの本文を分ける（純粋関数）。
-///
-/// `serde_yaml` は入れない（ADR-0044 D7 が求めるのは `title` / `tags` / `tasks` の 3 つだけ）。
-/// 読める形:
-///
-/// ```text
-/// ---
-/// title: 調べたこと
-/// tags: [research, fs]
-/// tasks:
-///   - 01J...
-/// ---
-/// ```
-pub fn front_matter(raw: &str) -> (FrontMatter, &str) {
-    let body = raw.strip_prefix('\u{feff}').unwrap_or(raw);
-    let Some(rest) = body
-        .strip_prefix("---\n")
-        .or_else(|| body.strip_prefix("---\r\n"))
-    else {
-        return (FrontMatter::default(), body);
-    };
-    let mut front = FrontMatter::default();
-    let mut consumed = 0usize;
-    let mut closed = false;
-    let mut current: Option<String> = None;
-    for line in rest.split_inclusive('\n') {
-        consumed += line.len();
-        let text = line.trim_end_matches(['\n', '\r']);
-        if text.trim_end() == "---" || text.trim_end() == "..." {
-            closed = true;
-            break;
-        }
-        if let Some(item) = text.trim().strip_prefix("- ").map(str::trim) {
-            match current.as_deref() {
-                Some("tags") => front.tags.push(unquote(item)),
-                Some("tasks") => front.tasks.push(unquote(item)),
-                _ => {}
-            }
-            continue;
-        }
-        let Some((key, value)) = text.split_once(':') else {
-            continue;
-        };
-        let key = key.trim().to_ascii_lowercase();
-        let value = value.trim();
-        match key.as_str() {
-            "title" => {
-                if !value.is_empty() {
-                    front.title = Some(unquote(value));
-                }
-                current = None;
-            }
-            "tags" | "tasks" => {
-                let items = parse_list(value);
-                if key == "tags" {
-                    front.tags.extend(items);
-                } else {
-                    front.tasks.extend(items);
-                }
-                current = Some(key);
-            }
-            _ => current = None,
-        }
-    }
-    if !closed {
-        // 閉じていない `---` は front matter ではない（本文の水平線）。
-        return (FrontMatter::default(), body);
-    }
-    (front, &rest[consumed..])
-}
-
-/// `[a, b]` / 空（次の行から `- ` が続く）。
-fn parse_list(value: &str) -> Vec<String> {
-    let value = value.trim();
-    let Some(inner) = value.strip_prefix('[').and_then(|v| v.strip_suffix(']')) else {
-        if value.is_empty() {
-            return Vec::new();
-        }
-        return vec![unquote(value)];
-    };
-    inner
-        .split(',')
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(unquote)
-        .collect()
-}
-
-fn unquote(value: &str) -> String {
-    let value = value.trim();
-    let value = value
-        .strip_prefix('"')
-        .and_then(|v| v.strip_suffix('"'))
-        .or_else(|| value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')))
-        .unwrap_or(value);
-    value.trim().to_string()
-}
-
-/// ページの題名（front matter の `title` → 本文の最初の `# ` → ファイル名）。
-pub fn title_of(raw: &str, path: &str) -> String {
-    let (front, body) = front_matter(raw);
-    if let Some(title) = front.title.filter(|t| !t.trim().is_empty()) {
-        return title;
-    }
-    for line in body.lines().take(50) {
-        if let Some(heading) = line.trim_start().strip_prefix("# ") {
-            let heading = heading.trim();
-            if !heading.is_empty() {
-                return heading.to_string();
-            }
-        }
-    }
-    path.rsplit('/').next().unwrap_or(path).to_string()
 }
 
 /// front matter を書き足す（昇格のとき。既にあれば `title` / `tasks` を混ぜる）。
@@ -327,20 +181,6 @@ pub fn merge_front_matter(raw: &str, title: Option<&str>, task_id: &str) -> Stri
         out.push_str(body);
     }
     out
-}
-
-/// YAML のスカラ（記号を含むなら引用する。最小限）。
-fn yaml_scalar(value: &str) -> String {
-    let plain = !value.is_empty()
-        && !value.starts_with([
-            '-', '[', '{', '#', '&', '*', '!', '|', '>', '\'', '"', '%', '@', '`',
-        ])
-        && !value.contains([':', ',', '[', ']', '{', '}', '\n', '"']);
-    if plain {
-        value.to_string()
-    } else {
-        format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
-    }
 }
 
 // ---------------------------------------------------------------------------

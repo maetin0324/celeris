@@ -19,10 +19,6 @@ use sha2::{Digest, Sha256};
 
 use crate::project_brief::WaitingOn;
 
-/// snapshot の schema 名。
-pub const PROJECT_SNAPSHOT_SCHEMA: &str = "celeris.project-snapshot/1";
-/// proposal の schema 名。
-pub const PROJECT_PROPOSAL_SCHEMA: &str = "celeris.project-proposal/1";
 /// snapshot の直列化の上限（byte）。超える分は古い done の root から落とし `truncated` を真にする。
 pub const SNAPSHOT_MAX_BYTES: usize = 1024 * 1024;
 /// `RootSpec.title` の上限（文字）。

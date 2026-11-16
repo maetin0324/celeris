@@ -68,9 +68,16 @@ for (const width of [360, 390]) {
         const row = rows.nth(i);
         await expect(row.getByText("状態:")).toBeVisible();
         await expect(row.getByText(/判断待ち/).first()).toBeVisible();
+        // tree は自動運営・Roadmap の節の下にあり、高さ 800 の viewport の下に出る（toBeInViewport は scroll しない）。
+        // 行を縦に scroll して見せてから、状態の badge が横に切れず全部見えることを確かめる。
         const status = row.locator("[data-status]");
-        await expect(status).toBeInViewport();
-        const right = await status.evaluate((el) => el.getBoundingClientRect().right);
+        await status.scrollIntoViewIfNeeded();
+        await expect(status).toBeInViewport({ ratio: 1 });
+        const { left, right } = await status.evaluate((el) => {
+          const rect = el.getBoundingClientRect();
+          return { left: rect.left, right: rect.right };
+        });
+        expect(left).toBeGreaterThanOrEqual(0);
         expect(right).toBeLessThanOrEqual(width);
       }
     } finally {

@@ -187,14 +187,9 @@ impl Dispatcher {
         self.retry_pending_rollbacks();
     }
 
-    /// 付記 S5-8: 直近の tick の TS の待ちの集計。
-    pub fn script_tick_wait_summary(&self) -> ScriptTickWaitSummary {
-        self.maint.script_compare().tick_wait.summary()
-    }
-
     /// 付記 S5-8（P1-C）: snapshot に載せる集計。tick をまだ数えていなければ `None`。
     pub fn script_tick_wait_live(&self) -> Option<task_ops::daemon::ScriptTickWaitLive> {
-        let s = self.script_tick_wait_summary();
+        let s = self.maint.script_compare().tick_wait.summary();
         (s.ticks > 0).then(|| task_ops::daemon::ScriptTickWaitLive {
             ticks: s.ticks as u64,
             p50_us: s.p50_us,

@@ -85,10 +85,6 @@ impl Dispatcher {
         self.routing.set_harness_adapters(adapters);
     }
 
-    pub fn harness_adapter(&self, harness: &HarnessId) -> Option<&Arc<dyn WorkerAdapter>> {
-        self.routing.harness_adapter(harness)
-    }
-
     /// The adapter that runs `pick`: the harness adapter with the picked model, plus the picked
     /// account's environment when the source is an OAuth pool. An adapter that has no model
     /// option keeps its own configuration.

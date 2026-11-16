@@ -259,11 +259,6 @@ impl Dispatcher {
         !self.verify_smoke_only() && self.orchestration.stagnation_available()
     }
 
-    /// 同 D3: 停滞の判定が成功するたびに 1 進む番号。CoS の取り込みは番号が変わったときだけ照合し直す。
-    pub(crate) fn stagnation_generation(&self) -> u64 {
-        self.orchestration.stagnation_generation()
-    }
-
     /// tick の段: 木の生存確認（ADR-0079 D10）と、続けて案件単位の停滞（ADR 2026-10-27-project-stagnation-inbox D3）。
     /// 停滞は生存確認の `stalled` に載った task を除くので、この順に呼ぶ。失敗は log だけで tick を止めない。
     pub(super) fn check_liveness_and_stagnation(&mut self) {

@@ -455,7 +455,7 @@ impl CosChatLaunch {
         if !dispatcher.stagnation_known() {
             return Ok(());
         }
-        let generation = dispatcher.stagnation_generation();
+        let generation = dispatcher.orchestration.stagnation_generation();
         if self.triage.stagnation_generation == Some(generation) {
             return Ok(());
         }
@@ -493,7 +493,7 @@ impl CosChatLaunch {
         // Read the head first: events after it are re-read (idempotently).
         let head = self.store.latest_event_id().map_err(|e| e.to_string())?;
         let known = dispatcher.stagnation_known();
-        let generation = dispatcher.stagnation_generation();
+        let generation = dispatcher.orchestration.stagnation_generation();
         let inbox = self.human_inbox(dispatcher, now)?;
         let mut by_kind = sources_by_kind(&inbox, &policy, known);
         for item in inbox.items.iter().filter(|i| is_direct(i)) {

@@ -74,4 +74,6 @@ export const inAppRoutes: Record<string, InAppRoute> = {
   "/projects/P1/docs/maintenance": { parent: "/projects/P1/docs" },
   "/knowledge/inbox": { parent: "/knowledge" },
   "/knowledge/skills": { parent: "/knowledge" },
+  // 定期実行の一覧の job 名が詳細への SPA のリンク（偽 daemon の既定の cron fixture は daily）。
+  "/cron/daily": { parent: "/cron" },
 };

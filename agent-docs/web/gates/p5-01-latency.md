@@ -189,3 +189,12 @@ S1 は nav にリンクの無い経路（`/org/cos`、`/projects/P1` 以下 3 �
 
 celeris の check と同じ `corepack pnpm@12.6.0 -C web build` の後に `corepack pnpm@12.6.0 -C web e2e e2e/latency/transition.spec.ts e2e/parity/latency-gate.spec.ts --retries=0` を 3 回続けて実行し、3 回とも **33 passed / 0 failed**（exit 0、各 2.4〜2.5 m）。S1 の 270 計測で URL 中央値 13 / 最大 177 ms、見出し中央値 25 / 最大 230 ms、10 s−0 s 差（見出し）の最大 41 ms。
 
+
+## 付記（2026-11-16）: ホームの統括 CoS・定期実行の詳細・画面データの測り方
+
+task 01M7HKKB3ZKPFEGYQ6P0J36KTC で、S1 の既存の不合格 5 件（`/`・`/knowledge`・`/knowledge/inbox`・`/tasks/$id/runs/$runId`・`/cron/$id`）を直した。予算 300 ms・10 s−0 s 差 100 ms・retries 0・click から URL・見出しまでの測り方は変えない。
+
+- `/`: ホームは統括 CoS を開き、URL を `/?thread=<統括 CoS>` に置き換える（ADR 2026-10-28-single-human-window-general-cos D5）。S1 は `/?thread=chat-main`（偽 daemon の統括 CoS）を URL の終点にする。現在地と同じ link は遷移しないので、ホームへの遷移は `/help` から始める（a11y/axe.spec.ts と同じ）。偽 daemon の chat API（`/api/v1/chat/`）は JSON の遅延の対象外なので、`/?thread=chat-main` への置き換えは遅延に依らない。
+- 画面データ: h1 の兄弟ではなく、画面の枠（`[data-screen]`）の子のうち h1 と page header（`data-slot="page-header"`）を除いた本文で測る。page header（パンくず・主操作）を持ち説明の無い画面では h1 の親に h1 しかなく、説明のある画面では説明文を測っていた。
+- `/cron/$id`: 定期実行の一覧の job 名が詳細への SPA のリンクなので、`in-app-routes.ts` の表に `/cron` → `/cron/daily` を足した（pushState をやめた）。詳細の見出しは job 名で、詳細の JSON を待っていた。一覧で取得済みの名前を先に見出しに出すよう画面を直した（ADR-0081 D7）。
+- 計測（提出時の HEAD、`pnpm -C web exec playwright test latency/transition.spec.ts`、37 passed）: 5 件の URL・見出しの最大は `/` 70 / 86 ms、`/knowledge` 39 / 47 ms、`/knowledge/inbox` 20 / 39 ms、`/tasks/$id/runs/$runId` 30 / 38 ms、`/cron/$id` 26 / 59 ms。

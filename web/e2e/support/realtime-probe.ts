@@ -3,7 +3,9 @@ import { expect, type Page } from "@playwright/test";
 
 // 試験側だけの観測点（画面の実装は変えない）。addInitScript で app の module より先に入れ、
 // - EventSource の listener を包み、app の listener が frame を処理し終えた数を種類ごとに数える。
-// - window.fetch を包み、app が呼んだ取得を daemon の path（/api/v1/...）で呼んだ順に記録し、進行中の本数を数える。
+// - window.fetch を包み、app が呼んだ取得を daemon の path と query（/api/v1/...?...）で呼んだ順に記録し、進行中の
+//   本数を数える。同じ path でも query の違う取得（例: 受信箱の全件と kind=credential_wait）は別の query なので、
+//   query まで残して見分けられるようにする。path だけで数えるなら呼ぶ側で query を落とす（requestPath）。
 // 固定時間を待たず「app が SSE を処理し終えた」「app の取得が全部終わった」という出来事を待つために使う。
 export type RealtimeProbeState = {
   handled: Record<string, number>;
@@ -48,13 +50,19 @@ export async function installRealtimeProbe(page: Page) {
       const url = new URL(raw, window.location.href);
       // gateway の中継先（daemon の path）に揃える: `/api/x` と `/files/x` は daemon の `/api/v1/x`。
       const relayed = url.pathname.replace(/^\/(api(?!\/v1\/)|files)\//, "/api/v1/");
-      if (relayed.startsWith("/api/")) state.fetches.push(relayed);
+      if (relayed.startsWith("/api/")) state.fetches.push(relayed + url.search);
       state.inflight++;
       return nativeFetch(input, init).finally(() => {
         state.inflight--;
       });
     };
   });
+}
+
+/** probe が記録した取得（path と query）の path だけ。 */
+export function requestPath(fetch: string): string {
+  const query = fetch.indexOf("?");
+  return query === -1 ? fetch : fetch.slice(0, query);
 }
 
 export function readRealtimeProbe(page: Page): Promise<RealtimeProbeState> {

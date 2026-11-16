@@ -1,6 +1,6 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import type { ChatMessage, CronJobRun, CronJobView, CronRunOutcome } from "../../api/generated/types";
+import type { ChatMessage, CronJobList, CronJobRun, CronJobView, CronRunOutcome } from "../../api/generated/types";
 import { ActionResultView, useActionResult } from "../../components/actions/use-action-result";
 import { Markdown } from "../../components/content/markdown";
 import { FetchFrame } from "../../components/fetch-state/fetch-frame";
@@ -167,9 +167,13 @@ export function CronScreen() {
 }
 export function CronDetailScreen({ id }: { id: string }) {
   const query = useQuery(cronDetailQuery(id));
+  // 見出しは詳細の JSON を待たない（ADR-0081 D7）。一覧から来たときは一覧で取得済みの名前を先に出す。
+  const listed = useQueryClient()
+    .getQueryData<CronJobList>(cronListQuery.queryKey)
+    ?.items.find((job) => job.id === id);
   return (
     <ScreenFrame
-      title={query.data?.job.name ?? "定期実行の詳細"}
+      title={query.data?.job.name ?? listed?.name ?? "定期実行の詳細"}
       route="/cron/$id"
       breadcrumb={[{ label: "定期実行", link: { to: "/cron" } }, { label: "詳細" }]}
     >

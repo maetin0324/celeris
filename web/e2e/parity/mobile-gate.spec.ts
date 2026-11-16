@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { spaRoutePatterns } from "../../server/spa-routes.js";
 import { seriousViolations } from "../support/axe";
+import { startBrowserGateway } from "../support/browser-gateway";
 import { startFixtureGateway } from "../support/fixture-gateway";
 import { screens } from "../support/screens";
 
@@ -25,18 +26,28 @@ test.afterAll(async () => {
 
 for (const screen of fixtures) {
   test(`parity-x: axe ${screen.fixture} 4 幅で critical/serious 0・横溢れ 0`, async ({ page }) => {
-    for (const width of WIDTHS) {
-      await page.setViewportSize({ width, height: 800 });
-      await page.goto(`${gateway.base}${screen.fixture}`);
-      await expect(page.getByRole("heading", { level: 1, name: screen.heading })).toBeVisible();
-      if (screen.fixture === "/browser/settings") {
-        await expect(page.getByRole("list", { name: "許可 origin の一覧" }).getByRole("listitem")).toHaveCount(2);
+    // /browser/settings の設定 form は本人（owner）の session にだけ出る（ADR 2026-10-08-browser-prod-enablement D3
+    // 「web の扱い」。本人でなければ本人確認の案内だけ）。form（許可 origin 2 件）を 4 幅で検査するため、この画面だけは
+    // owner socket を持つ browser gateway に本人として login して開く。
+    const owner = screen.fixture === "/browser/settings" ? await startBrowserGateway() : null;
+    try {
+      if (owner) await owner.loginAsOwner(page);
+      const base = owner?.base ?? gateway.base;
+      for (const width of WIDTHS) {
+        await page.setViewportSize({ width, height: 800 });
+        await page.goto(`${base}${screen.fixture}`);
+        await expect(page.getByRole("heading", { level: 1, name: screen.heading })).toBeVisible();
+        if (owner) {
+          await expect(page.getByRole("list", { name: "許可 origin の一覧" }).getByRole("listitem")).toHaveCount(2);
+        }
+        const overflow = await page.evaluate(
+          () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        );
+        expect(overflow, `${screen.fixture} @${width}`).toBe(0);
+        expect(await seriousViolations(page), `${screen.fixture} @${width}`).toEqual([]);
       }
-      const overflow = await page.evaluate(
-        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
-      );
-      expect(overflow, `${screen.fixture} @${width}`).toBe(0);
-      expect(await seriousViolations(page), `${screen.fixture} @${width}`).toEqual([]);
+    } finally {
+      await owner?.close();
     }
   });
 }

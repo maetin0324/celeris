@@ -19,6 +19,22 @@ async function armClick(link: Locator): Promise<() => Promise<void>> {
   return () => link.click({ force: true });
 }
 
+// 画面データ = 画面の枠（[data-screen]）の子のうち、見出し（h1）と page header（パンくず・見出し・説明・主操作）を
+// 除いた本文。h1 の兄弟は本文ではない: header の slot を持つ画面では h1 は header の中にあり、兄弟は説明文か
+// （説明あり）、無い（パンくず・主操作だけ。/knowledge・/knowledge/inbox・/tasks/$id/runs/$runId・/cron/$id）。
+function screenBody(heading: Locator): Locator {
+  return heading
+    .locator("xpath=ancestor::*[@data-screen][1]")
+    .locator(':scope > :not(h1):not([data-slot="page-header"])')
+    .first();
+}
+
+// ホーム（/）は統括 CoS を開き、URL を /?thread=<統括 CoS の thread> に置き換える
+// （ADR 2026-10-28-single-human-window-general-cos D5）。偽 daemon の統括 CoS は chat-main。
+// 現在地と同じ link は遷移しないので、ホームへの遷移は別の画面（/help）から始める（a11y/axe.spec.ts と同じ）。
+const landingOf = (fixture: string) => (fixture === "/" ? "/?thread=chat-main" : fixture);
+const startOf = (fixture: string) => (fixture === "/" ? "/help" : "/");
+
 // baseline と同じくクリックを起点に URL、見出し、画面データ（現 Phase は準備中の枠）を別々に測る。
 for (const screen of v3Screens()) {
   test(`S1 ${screen.path}: JSON 0/5/10s でも shell 遷移は独立`, async ({ page }) => {
@@ -43,7 +59,7 @@ for (const screen of v3Screens()) {
         await waitForBootIdle(page);
         warmupNavigate = await armClick(link);
       } else {
-        await page.goto(gateway.base);
+        await page.goto(`${gateway.base}${startOf(screen.fixture)}`);
         await waitForBootIdle(page);
         const link = page
           .getByRole("navigation", { name: "主要", exact: true })
@@ -58,12 +74,12 @@ for (const screen of v3Screens()) {
       }
       const coldStart = performance.now();
       await warmupNavigate();
-      await expect(page).toHaveURL(`${gateway.base}${screen.fixture}`);
+      await expect(page).toHaveURL(`${gateway.base}${landingOf(screen.fixture)}`);
       const coldUrl = performance.now() - coldStart;
       const coldHeadingNode = page.getByRole("heading", { level: 1, name: screen.heading });
       await expect(coldHeadingNode).toBeVisible();
       const coldHeading = performance.now() - coldStart;
-      await expect(coldHeadingNode.locator("..").locator(":scope > :not(h1)").first()).toBeVisible();
+      await expect(screenBody(coldHeadingNode)).toBeVisible();
       const coldPath = { url: coldUrl, heading: coldHeading, data: performance.now() - coldStart };
       for (const delay of [0, 5000, 10000]) {
         // 計測区間は click（またはアプリ内の popstate）から。文書の読み込み・起動は区間の外で済ませる
@@ -80,7 +96,7 @@ for (const screen of v3Screens()) {
           navigate = await armClick(link);
         } else {
           daemon.setDelay(delay);
-          await page.goto(gateway.base);
+          await page.goto(`${gateway.base}${startOf(screen.fixture)}`);
           // goto 直後の起動の long task を計測に含めない（ADR-0081 付記、人の決定 b）。
           await waitForBootIdle(page);
           const link = page
@@ -96,12 +112,12 @@ for (const screen of v3Screens()) {
         }
         const start = performance.now();
         await navigate();
-        await expect(page).toHaveURL(`${gateway.base}${screen.fixture}`);
+        await expect(page).toHaveURL(`${gateway.base}${landingOf(screen.fixture)}`);
         const url = performance.now() - start;
         const headingNode = page.getByRole("heading", { level: 1, name: screen.heading });
         await expect(headingNode).toBeVisible();
         const heading = performance.now() - start;
-        await expect(headingNode.locator("..").locator(":scope > :not(h1)").first()).toBeVisible();
+        await expect(screenBody(headingNode)).toBeVisible();
         const data = performance.now() - start;
         measures.push({ delay, url, heading, data });
         expect(url, `${screen.path} URL @${delay}`).toBeLessThanOrEqual(300);

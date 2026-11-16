@@ -5,7 +5,13 @@ import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { createFakeDaemon } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
 import { recordLatency } from "../support/latency-results";
-import { installRealtimeProbe, readRealtimeProbe, waitFetchesSettled, waitHandled } from "../support/realtime-probe";
+import {
+  installRealtimeProbe,
+  readRealtimeProbe,
+  requestPath,
+  waitFetchesSettled,
+  waitHandled,
+} from "../support/realtime-probe";
 import { v3Screens } from "../support/screens";
 import { makeTmpDir } from "../support/tmp-dir";
 
@@ -26,6 +32,16 @@ const STREAM_ONLY = [
   "/api/v1/daemon",
 ];
 const CANARY_TASK = "e2e-canary";
+// 計測区間で進める仮想時間（2 s の daemon tick × 10）。
+const VIRTUAL_MS = 20_000;
+// 画面が自分の timer で読み直す query（SSE とは無関係）と、その間隔。probe の記録（path と query）で引く。
+// 進めた仮想時間の分（VIRTUAL_MS / 間隔 回）までは読み直してよい。これを超えた分は SSE による取り直しなので落とす。
+// それ以外の取得は従来どおり path で数える。
+// 間隔は画面の refetchInterval と同じ値を書く（e2e の tsconfig は app の値を import できない）。画面が間隔を縮めれば
+// 上限を超えて落ちるので、ここも合わせて直す。
+// - /accounts の「登録待ちの work unit」（features/ops/credential-waits.tsx の refetchInterval: 5000）は受信箱の
+//   credential_wait を 5 s ごとに読み直す（cw-web の設計。待ちが消えたら「続行しました」を出す）。
+const SCREEN_TIMER_POLLS = new Map<string, number>([["/api/v1/inbox/items?kind=credential_wait", 5_000]]);
 
 for (const screen of v3Screens()) {
   test(`S2 ${screen.path}: unrelated SSE does not refetch screen queries`, async ({ page }) => {
@@ -51,7 +67,10 @@ for (const screen of v3Screens()) {
       await waitFetchesSettled(page);
       const before = await readRealtimeProbe(page);
       const screenPaths = new Set(
-        before.fetches.filter((route) => route.startsWith("/api/v1/") && !STREAM_ONLY.includes(route)),
+        before.fetches
+          .filter((request) => !SCREEN_TIMER_POLLS.has(request))
+          .map(requestPath)
+          .filter((route) => route.startsWith("/api/v1/") && !STREAM_ONLY.includes(route)),
       );
 
       for (let i = 1; i <= 20; i++)
@@ -63,12 +82,12 @@ for (const screen of v3Screens()) {
           event: { type: "worker_progress" },
         });
       await waitHandled(page, "task.event", (before.handled["task.event"] ?? 0) + 20);
-      // 10 回の daemon tick と 2 s ずつの仮想時間（計 20 s。受信箱の 15 s poll を 1 回含む）。
+      // 10 回の daemon tick と 2 s ずつの仮想時間（計 VIRTUAL_MS = 20 s。受信箱の 15 s poll を 1 回含む）。
       for (let i = 0; i < 10; i++) {
         const ticks = (await readRealtimeProbe(page)).handled.daemon ?? 0;
         daemon.sendEvent("daemon", { cursor: i + 21 });
         await waitHandled(page, "daemon", ticks + 1);
-        await page.clock.runFor(2000);
+        await page.clock.runFor(VIRTUAL_MS / 10);
       }
       await waitFetchesSettled(page);
 
@@ -85,13 +104,21 @@ for (const screen of v3Screens()) {
       const marker = (await readRealtimeProbe(page)).fetches.length;
       await page.clock.runFor(1000);
       await expect
-        .poll(async () => (await readRealtimeProbe(page)).fetches.slice(marker).includes("/api/v1/inbox/items"), {
-          message: "canary event refetches the inbox",
-        })
+        .poll(
+          async () =>
+            (await readRealtimeProbe(page)).fetches.slice(marker).map(requestPath).includes("/api/v1/inbox/items"),
+          { message: "canary event refetches the inbox" },
+        )
         .toBe(true);
       await waitFetchesSettled(page);
       const after = await readRealtimeProbe(page);
-      const unrelated = after.fetches.slice(before.fetches.length, marker);
+      const measured = after.fetches.slice(before.fetches.length, marker);
+      for (const [request, intervalMs] of SCREEN_TIMER_POLLS)
+        expect(
+          measured.filter((item) => item === request).length,
+          `${screen.path}: ${request} is read again only by its ${intervalMs} ms timer`,
+        ).toBeLessThanOrEqual(Math.floor(VIRTUAL_MS / intervalMs));
+      const unrelated = measured.filter((item) => !SCREEN_TIMER_POLLS.has(item)).map(requestPath);
       const refetched = (route: string) => unrelated.filter((item) => item === route).length;
 
       // One or two inbox refreshes may be its 15 s fallback poll. SSE must not

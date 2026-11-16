@@ -94,6 +94,18 @@ describe("cron screen and the review thread (ADR 2026-10-28-cos-review-back-thre
     expect(html).not.toContain("見直しの記録");
   });
 
+  // ADR-0081 D7: 見出しは詳細の JSON を待たない。一覧から開いた詳細は、詳細の取得前でも一覧の名前を見出しに出す。
+  // S1（e2e/latency/transition.spec.ts）は偽 daemon の遅延で同じことを見るが、e2e の全体は release gate でしか流れない。
+  it("cron_detail_heading_uses_the_listed_name_before_the_detail_arrives", () => {
+    const client = new QueryClient();
+    client.setQueryData(cronListQuery.queryKey, { items: [job({ id: "daily", name: "日次整理" })] });
+    configureApiClient({ fetcher: () => new Promise<Response>(() => {}) });
+    const html = render(client, <CronDetailScreen id="daily" />);
+    expect(html).toMatch(/<h1[^>]*>日次整理<\/h1>/);
+    const unlisted = render(new QueryClient(), <CronDetailScreen id="daily" />);
+    expect(unlisted).toMatch(/<h1[^>]*>定期実行の詳細<\/h1>/);
+  });
+
   it("review_thread_messages_say_when_empty", () => {
     expect(renderToStaticMarkup(<ReviewThreadMessages messages={[]} />)).toContain("見直しの記録はまだありません。");
   });

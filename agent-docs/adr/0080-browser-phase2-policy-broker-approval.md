@@ -232,3 +232,7 @@ launcher runtime における `CredentialUse` は ADR-0138 D-L の launcher sess
 ## 付記（2026-10-10、credential session の本人への Live View）
 
 D3 の「認証後は Live View を出さない」という範囲を、credential session の本人の owner session に対する揮発 frame 表示に限って緩和する。配送経路・owner session の認可・背圧・永続層に残さない契約は [ADR 2026-10-10: browser launcher の本人向け Live View frame 経路](2026-10-10-browser-launcher-live-view-frames.md) に従う。agent/LLM、別 viewer、他 session へ frame を渡さず、frame を DB/WAL/events/logs/artifacts/core dump/一時 file に永続化しない。input 転送・takeover は緩和せず、D6 の読み取り専用・拒否を維持する。credential session の既定公開範囲は人の決定 `live-credential-default`（2026-10-10）で既定表示に確定し、site policy の opt-in は設けない（[ADR 2026-10-10 D7](2026-10-10-browser-launcher-live-view-frames.md)）。
+
+## 付記（2026-11-16、未配線の縮小検査 `check_narrowing` の削除）
+
+D1 の「モデルからの編集は既存実効 policy を狭める変更だけ認める」を実装した `EffectiveBrowserPolicy::check_narrowing`（task-core `browser.rs`）と、それだけが返す `BrowserPolicyError::PolicyExpansion` を、人の決定（2026-11-16、LoC 削減 v3 D）で消した。本体の呼び手は無かった。task-api・task-ops の本体で `BrowserTaskPolicy` を扱うのは管理者の経路（task-api `browser.rs`、`require_admin` の下）だけで、モデルやページが policy を編集する入口は見つからなかった（2026-11-16 の grep による確認）。削除で実行時の挙動は変わらない。D1 の規則は残す。モデル・ページ由来の policy 編集の入口を足すときは、その変更で縮小の検査（domain の包含・action と credential の部分集合・承認の保持・revision の増加・artifact policy の一致）を実装し、拒否の試験を置く。

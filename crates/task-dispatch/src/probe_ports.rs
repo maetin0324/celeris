@@ -77,6 +77,7 @@ impl ProbePorts {
     }
 
     /// 評価 run の harness の版の測り方を差し替える。
+    #[cfg(test)]
     pub(crate) fn set_eval_version(&mut self, probe: EvalVersionProbe) {
         self.eval_version = Some(probe);
     }

@@ -458,17 +458,7 @@ pub struct DiskWatchOutcome {
     pub notice: Option<NoticeRecordOutcome>,
 }
 
-/// 全 entry を 1 回測って状態を進める（`statvfs` は軽いので同期）。書き込みは変化のあった path だけ。
-pub fn run_disk_watch(
-    store: &SqliteStore,
-    probe: &dyn DiskProbe,
-    entries: &[DiskWatchEntry],
-    now: OffsetDateTime,
-) -> Result<Vec<DiskWatchOutcome>, StoreError> {
-    run_disk_watch_with(store, probe, None, entries, now)
-}
-
-/// [`run_disk_watch`] に付記 A4 の census を足したもの。`warn` の通知（初回・再通知）を作るときだけ census で
+/// 全 entry を 1 回測って状態を進める（`statvfs` は軽いので同期。書き込みは変化のあった path だけ）。付記 A4 の census を渡せば、`warn` の通知（初回・再通知）を作るときだけ census で
 /// 大きい target の上位 [`TOP_TARGETS`] 件を測り、本文に足す（1 回の測定で複数 path が warn なら 1 回だけ測る）。
 pub fn run_disk_watch_with(
     store: &SqliteStore,

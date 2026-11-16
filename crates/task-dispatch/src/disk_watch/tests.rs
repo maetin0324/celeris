@@ -68,9 +68,10 @@ impl Env {
     /// `pct` にして `minutes` 分後に 1 回測る。
     fn measure(&self, path: &str, pct: Option<f64>, minutes: i64) -> Vec<DiskWatchOutcome> {
         self.probe.set(path, pct);
-        run_disk_watch(
+        run_disk_watch_with(
             &self.store,
             &self.probe,
+            None,
             &self.entries,
             t0() + time::Duration::minutes(minutes),
         )

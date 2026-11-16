@@ -87,7 +87,8 @@ async fn cos_run_bypasses_max_concurrency_but_leaves_do_not() {
         2,
         4,
     );
-    d.set_config_max_concurrency(1);
+    d.config.config_max_concurrency = 1;
+    d.refresh_max_concurrency();
 
     let first = leaf(ws.path());
     store.insert(&first).unwrap();
@@ -128,7 +129,8 @@ async fn max_cos_runs_zero_disables_the_exemption() {
         2,
         4,
     );
-    d.set_config_max_concurrency(1);
+    d.config.config_max_concurrency = 1;
+    d.refresh_max_concurrency();
     d.config.execution.max_cos_runs = 0;
 
     let first = leaf(ws.path());
@@ -280,7 +282,8 @@ async fn cos_account_usage_does_not_consume_leaf_capacity() {
         1,
         1,
     );
-    d.set_config_max_concurrency(8);
+    d.config.config_max_concurrency = 8;
+    d.refresh_max_concurrency();
     let chat = cos_chat(ws.path());
     store.insert(&chat).unwrap();
     assert_eq!(d.tick().unwrap().dispatched, 1);
@@ -374,7 +377,8 @@ async fn store_max_concurrency_applies_next_tick_without_stopping_running_runs()
         8,
         8,
     );
-    d.set_config_max_concurrency(1);
+    d.config.config_max_concurrency = 1;
+    d.refresh_max_concurrency();
     let set_store_max = |n: Option<u32>| {
         store
             .local_settings_set(
@@ -426,7 +430,8 @@ async fn store_max_concurrency_applies_next_tick_without_stopping_running_runs()
 
     // 上書きを消すと設定ファイルの値（reload で入れ直した値）に戻る。
     set_store_max(None);
-    d.set_config_max_concurrency(4);
+    d.config.config_max_concurrency = 4;
+    d.refresh_max_concurrency();
     assert_eq!(d.max_concurrency(), 4);
     assert_eq!(d.tick().unwrap().dispatched, 1);
 }

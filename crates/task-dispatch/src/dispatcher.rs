@@ -1378,13 +1378,6 @@ impl Dispatcher {
         self.publisher = Some(publisher);
     }
 
-    /// reload で読み直した設定ファイルの `max_concurrency` を入れ、実効値を解き直す
-    /// （ADR 2026-10-14-local-machine-settings D3: store に値があれば reload 後も store が勝つ）。
-    pub fn set_config_max_concurrency(&mut self, value: usize) {
-        self.config.config_max_concurrency = value;
-        self.refresh_max_concurrency();
-    }
-
     /// 実効の全体並列度を store から解き直す（store > 設定ファイル）。tick の頭と、API が admin チャネルで
     /// `LocalSettingsChanged` を知らせたときに呼ぶ。下げても走行中の run は止めず、超過分は終わるのを待つ。
     /// store が読めなければ直前の値のまま動く。

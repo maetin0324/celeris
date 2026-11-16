@@ -146,7 +146,9 @@ async fn eval_trial_reserved_slot_hides_checks_and_records_selected_version() {
         task_core::local_machine::WorkspaceRoots::new(temp.path().join("data"), None);
     scratch_on(&mut dispatcher, &temp.path().join("scratch"));
     dispatcher.config.eval.reserved_runs = 1;
-    dispatcher.set_eval_version_probe(|_| Some("eval-stub 3.4.1".into()));
+    dispatcher
+        .probes
+        .set_eval_version(Arc::new(|_: &str| Some("eval-stub 3.4.1".into())));
 
     assert_eq!(dispatcher.tick_eval_trials(), 1);
     assert_eq!(
@@ -348,7 +350,9 @@ fn eval_dispatcher(
         task_core::local_machine::WorkspaceRoots::new(root.join("data"), None);
     scratch_on(&mut dispatcher, &root.join("scratch"));
     dispatcher.config.eval.reserved_runs = 1;
-    dispatcher.set_eval_version_probe(|_| Some("eval-scripted 1.0.0".into()));
+    dispatcher
+        .probes
+        .set_eval_version(Arc::new(|_: &str| Some("eval-scripted 1.0.0".into())));
     dispatcher
 }
 
@@ -516,7 +520,8 @@ async fn eval_run_request_sets_per_trial_cargo_target_dir() {
         task_core::local_machine::WorkspaceRoots::new(temp.path().join("data"), None);
     let scratch = scratch_on(&mut d, &temp.path().join("scratch"));
     d.config.eval.reserved_runs = 2;
-    d.set_eval_version_probe(|_| Some("eval-stub 1.0.0".into()));
+    d.probes
+        .set_eval_version(Arc::new(|_: &str| Some("eval-stub 1.0.0".into())));
 
     assert_eq!(d.tick_eval_trials(), 2);
     // Wait for both adapters to have been called (event wait, no fixed delay).
@@ -651,7 +656,8 @@ async fn eval_trial_target_removed_on_recovery() {
         task_core::local_machine::WorkspaceRoots::new(temp.path().join("data"), None);
     scratch_on(&mut dead, &temp.path().join("scratch"));
     dead.config.eval.reserved_runs = 1;
-    dead.set_eval_version_probe(|_| Some("eval-stub 1.0.0".into()));
+    dead.probes
+        .set_eval_version(Arc::new(|_: &str| Some("eval-stub 1.0.0".into())));
     assert_eq!(dead.tick_eval_trials(), 1);
     // The target is allocated off the tick, before the run starts.
     started.notified().await;
@@ -721,7 +727,8 @@ async fn start_hung_eval_trial(
         task_core::local_machine::WorkspaceRoots::new(temp.join("data"), None);
     scratch_on(&mut old, &temp.join("scratch"));
     old.config.eval.reserved_runs = 1;
-    old.set_eval_version_probe(|_| Some("eval-stub 1.0.0".into()));
+    old.probes
+        .set_eval_version(Arc::new(|_: &str| Some("eval-stub 1.0.0".into())));
     assert_eq!(old.tick_eval_trials(), 1);
     started.notified().await;
     let trial = only_trial(store, batch_id);
@@ -932,7 +939,8 @@ async fn live_handoff_keeps_running_eval_trial() {
         task_core::local_machine::WorkspaceRoots::new(temp.path().join("data"), None);
     scratch_on(&mut old, &temp.path().join("scratch"));
     old.config.eval.reserved_runs = 1;
-    old.set_eval_version_probe(|_| Some("eval-gated 1.0.0".into()));
+    old.probes
+        .set_eval_version(Arc::new(|_: &str| Some("eval-gated 1.0.0".into())));
     assert_eq!(old.tick_eval_trials(), 1);
     let trial = only_trial(&store, &batch_id);
     assert_eq!(trial.status, S::Running);
@@ -1252,7 +1260,8 @@ fn two_source_eval_dispatcher(
         task_core::local_machine::WorkspaceRoots::new(root.join("data"), None);
     scratch_on(&mut d, &root.join("scratch"));
     d.config.eval.reserved_runs = reserved_runs;
-    d.set_eval_version_probe(|_| Some("eval-stub 1.0.0".into()));
+    d.probes
+        .set_eval_version(Arc::new(|_: &str| Some("eval-stub 1.0.0".into())));
     d
 }
 
@@ -1552,7 +1561,8 @@ async fn verify_daemon_leaves_foreign_eval_trial_files() {
         task_core::local_machine::WorkspaceRoots::new(temp.path().join("staging"), None);
     scratch_on(&mut d, &prod_scratch);
     d.config.eval.reserved_runs = 2;
-    d.set_eval_version_probe(|_| Some("eval-stub 1.0.0".into()));
+    d.probes
+        .set_eval_version(Arc::new(|_: &str| Some("eval-stub 1.0.0".into())));
     d.set_accepting_new_work(true);
     for _ in 0..2 {
         d.tick().unwrap();
@@ -1595,7 +1605,8 @@ async fn eval_trial_tick_does_not_wait_for_a_held_pool_lock() {
         task_core::local_machine::WorkspaceRoots::new(temp.path().join("data"), None);
     let pool = scratch_on(&mut d, &temp.path().join("scratch")).pool();
     d.config.eval.reserved_runs = 1;
-    d.set_eval_version_probe(|_| Some("eval-stub 1.0.0".into()));
+    d.probes
+        .set_eval_version(Arc::new(|_: &str| Some("eval-stub 1.0.0".into())));
 
     // Another holder keeps the pool lock (a separate open file description: flock conflicts).
     let held = pool.lock().unwrap();

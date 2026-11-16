@@ -1173,14 +1173,6 @@ impl Dispatcher {
     pub(super) fn holds_eval_run(&self, run_id: &str) -> bool {
         self.routing.holds_eval_run(run_id)
     }
-
-    /// 評価 run の harness の版の測り方を差し替える（試験用。既定は `probe_harness_version`）。
-    pub fn set_eval_version_probe<F>(&mut self, probe: F)
-    where
-        F: Fn(&str) -> Option<String> + Send + Sync + 'static,
-    {
-        self.probes.set_eval_version(Arc::new(probe));
-    }
 }
 
 struct EvalCheckResult {

@@ -84,18 +84,6 @@ impl SqliteStore {
         row.ok_or_else(|| ScriptDomainError::UnknownDomain(domain.as_str().to_owned()))
     }
 
-    /// 領域の active generation（mode が `rust` なら `None`）。
-    pub fn script_domain_active_generation(
-        &self,
-        domain: &str,
-    ) -> Result<Option<ScriptGeneration>, ScriptDomainError> {
-        let row = self.script_domain_mode(domain)?;
-        match row.generation_id {
-            None => Ok(None),
-            Some(id) => Ok(self.script_generation_get(&id)?),
-        }
-    }
-
     /// 全領域の mode と、その行が指す generation（起動時の復元が読む。S5-2）。`domain` の順。
     pub fn script_domain_active_generations(
         &self,
@@ -502,15 +490,6 @@ impl SqliteStore {
 
     /// `script_compare_recorded` を task の events に追記する（S2-4）。同じ task・同じ `domain` の直前の
     /// 記録と `generation`・`input_digest`・`outcome` が同じなら追記せず `Ok(false)`。
-    pub fn script_compare_append(
-        &self,
-        task_id: TaskId,
-        record: &ScriptCompareRecord,
-        now: OffsetDateTime,
-    ) -> Result<bool, StoreError> {
-        self.write_tx(|tx| Self::script_compare_append_tx(tx, task_id, record, now))
-    }
-
     pub(super) fn script_compare_append_tx(
         tx: &rusqlite::Transaction<'_>,
         task_id: TaskId,

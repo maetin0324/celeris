@@ -32,6 +32,20 @@ fn format_rfc3339(t: OffsetDateTime) -> Result<String, OpsError> {
         .map_err(|e| OpsError::Validation(format!("time formatting error: {e}")))
 }
 
+/// ADR-0074 D2.1（Phase F3 途中確認）: 採用・replan と同じ transaction で `Task.routing.pause_after` を
+/// 計画 `spec` の工程の key の集合へ解決する event。v1（`phases` が空）は常に空集合（無害）。
+fn pause_points_resolved(task: &task_core::Task, plan_id: &str, spec: &ExecutionPlanSpec) -> Event {
+    let routing = task.routing.as_ref();
+    Event::PausePointsResolved {
+        plan_id: plan_id.to_owned(),
+        phases: task_core::resolve_plan_pause_points(
+            &routing.map(|r| r.pause_after.clone()).unwrap_or_default(),
+            spec,
+        ),
+        source: routing.map(|r| r.pause_after_source).unwrap_or_default(),
+    }
+}
+
 /// D14 の検証エラーを 1 行の文言にする（`OpsError::Validation`。API は 422、`celerisctl` はそのまま表示）。
 pub fn describe_validation_errors(errors: &[PlanValidationError]) -> String {
     errors
@@ -150,21 +164,7 @@ pub fn adopt_plan_with_children(
 
     // ADR-0074 D2.1（Phase F3 途中確認）: 採用と同じトランザクションで `Task.routing.pause_after`
     // を工程の key の集合へ解決する。v1（`phases` が空）は常に空集合（無害）。
-    let pause_after = task
-        .routing
-        .as_ref()
-        .map(|r| r.pause_after.clone())
-        .unwrap_or_default();
-    let pause_after_source = task
-        .routing
-        .as_ref()
-        .map(|r| r.pause_after_source)
-        .unwrap_or_default();
-    let pause_points_event = Event::PausePointsResolved {
-        plan_id: plan_id.clone(),
-        phases: task_core::resolve_plan_pause_points(&pause_after, &validated.spec),
-        source: pause_after_source,
-    };
+    let pause_points_event = pause_points_resolved(&task, &plan_id, &validated.spec);
 
     let plan = ExecutionPlanRow {
         id: plan_id.clone(),
@@ -350,22 +350,7 @@ pub fn prepare_human_plan_adoption(
             reason: None,
             plan: Box::new(plan.spec),
         };
-        let pause = Event::PausePointsResolved {
-            plan_id: row.id.clone(),
-            phases: task_core::resolve_plan_pause_points(
-                &task
-                    .routing
-                    .as_ref()
-                    .map(|r| r.pause_after.clone())
-                    .unwrap_or_default(),
-                &row.spec,
-            ),
-            source: task
-                .routing
-                .as_ref()
-                .map(|r| r.pause_after_source)
-                .unwrap_or_default(),
-        };
+        let pause = pause_points_resolved(&task, &row.id, &row.spec);
         return Ok(PreparedHumanPlanAdoption {
             result: HumanPlanAdopted {
                 plan: row,
@@ -408,21 +393,7 @@ pub fn prepare_human_plan_adoption(
         &created_at,
         &mut |_| new_id(),
     );
-    let pause_after = task
-        .routing
-        .as_ref()
-        .map(|r| r.pause_after.clone())
-        .unwrap_or_default();
-    let pause_after_source = task
-        .routing
-        .as_ref()
-        .map(|r| r.pause_after_source)
-        .unwrap_or_default();
-    let pause_points_event = Event::PausePointsResolved {
-        plan_id: plan_id.clone(),
-        phases: task_core::resolve_plan_pause_points(&pause_after, &validated.spec),
-        source: pause_after_source,
-    };
+    let pause_points_event = pause_points_resolved(&task, &plan_id, &validated.spec);
     let plan = ExecutionPlanRow {
         id: plan_id.clone(),
         task_id: task_id.to_string(),
@@ -1105,21 +1076,7 @@ pub fn plan_replan(
     // 工程の key の集合へ解決し直す（済んだ工程の分もそのまま新しい集合に含めてよい。D2.2 の
     // `PhaseGate` はまだ来ていない工程の統合の後にしか発火しないため、既に統合済みの工程を挙げても
     // 無害）。
-    let pause_after = task
-        .routing
-        .as_ref()
-        .map(|r| r.pause_after.clone())
-        .unwrap_or_default();
-    let pause_after_source = task
-        .routing
-        .as_ref()
-        .map(|r| r.pause_after_source)
-        .unwrap_or_default();
-    extra_events.push(Event::PausePointsResolved {
-        plan_id: new_plan_id.clone(),
-        phases: task_core::resolve_plan_pause_points(&pause_after, &validated.spec),
-        source: pause_after_source,
-    });
+    extra_events.push(pause_points_resolved(&task, &new_plan_id, &validated.spec));
     // ADR-0074 D5.3（Phase F1）: 版の差分の件数を `reason` の後ろに決定的な形で足す（E5 の未実装
     // 「版の差分の件数」の解消）。
     let mut reason_with_diff = format!(

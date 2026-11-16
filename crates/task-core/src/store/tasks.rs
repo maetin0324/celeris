@@ -265,18 +265,7 @@ impl SqliteStore {
             to: Status::Running,
             reason: "dispatch".to_string(),
         };
-        let next_seq: i64 = tx.query_row(
-            "SELECT COALESCE(MAX(seq), -1) + 1 FROM events WHERE task_id = ?1",
-            params![task_id.to_string()],
-            |row| row.get(0),
-        )?;
-        let ts = format_rfc3339(OffsetDateTime::now_utc())?;
-        let event_json = serde_json::to_string(&event)?;
-        tx.execute(
-            "INSERT INTO events (task_id, seq, ts, json) VALUES (?1, ?2, ?3, ?4)",
-            params![task_id.to_string(), next_seq, ts, event_json],
-        )?;
-
+        Self::append_event_tx(&tx, task_id, &event)?;
         tx.commit()?;
         Ok(true)
     }

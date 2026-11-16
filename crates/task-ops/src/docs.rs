@@ -12,7 +12,7 @@
 //! 子プロセスには全部待ち時間の上限がある。
 
 use std::collections::HashMap;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use crate::changes::{GIT_TIMEOUT, GIT_WRITE_TIMEOUT, git};
 use task_core::knowledge::yaml_scalar;
@@ -64,32 +64,12 @@ pub fn normalize_root(docs: &str) -> String {
 /// - 文書の根（`docs`）で始まっていなければ根の下だと解釈して前に付ける
 ///   （GUI の `?path=docs/x.md` も、ページの中の `[[x.md]]` も同じ 1 本の表記になる）
 pub fn page_path(root: &str, raw: &str) -> Result<String, PathError> {
-    let raw = raw.trim().trim_start_matches("./");
-    if raw.is_empty() {
-        return Err(PathError::Empty);
-    }
-    let path = Path::new(raw);
-    let escapes = path.is_absolute()
-        || path.components().any(|c| {
-            matches!(
-                c,
-                Component::ParentDir | Component::RootDir | Component::Prefix(_)
-            )
-        });
-    if escapes {
-        return Err(PathError::Forbidden);
-    }
-    let cleaned = path
-        .components()
-        .filter_map(|c| match c {
-            Component::Normal(part) => Some(part.to_string_lossy().into_owned()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("/");
-    if cleaned.is_empty() {
-        return Err(PathError::Empty);
-    }
+    use task_core::knowledge::PathError as Kb;
+    let cleaned = task_core::knowledge::scope_path(raw).map_err(|e| match e {
+        Kb::Forbidden => PathError::Forbidden,
+        Kb::NotMarkdown => PathError::NotMarkdown,
+        Kb::Empty => PathError::Empty,
+    })?;
     if !cleaned.to_ascii_lowercase().ends_with(".md") {
         return Err(PathError::NotMarkdown);
     }

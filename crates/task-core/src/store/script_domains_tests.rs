@@ -67,10 +67,6 @@ fn script_domain_initial_modes_are_rust() {
         assert_eq!(r.generation_id, None);
         assert_eq!(r.version, 0);
     }
-    assert_eq!(
-        store.script_domain_active_generation("lane_rules").unwrap(),
-        None
-    );
     assert_eq!(event_count(&store), 0);
 }
 
@@ -80,10 +76,6 @@ fn script_domain_unknown_domain_is_rejected() {
     assert!(matches!(
         store.script_domain_mode("routing_shadow"),
         Err(ScriptDomainError::UnknownDomain(d)) if d == "routing_shadow"
-    ));
-    assert!(matches!(
-        store.script_domain_active_generation("direct_route"),
-        Err(ScriptDomainError::UnknownDomain(_))
     ));
     assert!(matches!(
         store.script_domain_set_mode(&change("nope", ScriptMode::Rust, None, 0), now()),
@@ -205,10 +197,7 @@ fn script_domain_compare_cas_updates_row_and_appends_event() {
     assert_eq!(row.generation_id.as_deref(), Some(g.id.as_str()));
     assert_eq!(row.version, 1);
     assert_eq!(row.updated_by, "human:web");
-    let active = store
-        .script_domain_active_generation("lane_rules")
-        .unwrap()
-        .unwrap();
+    let active = store.script_generation_get(&g.id).unwrap().unwrap();
     assert_eq!(
         (active.id.as_str(), active.state),
         (g.id.as_str(), ScriptGenerationState::Active)
@@ -507,24 +496,29 @@ fn script_compare_append_dedups_same_generation_digest_outcome() {
     let task = sample_task(Status::Ready);
     store.create_task(&task, vec![]).unwrap();
     let before = store.events_for(task.id).unwrap().len();
+    let append = |r: &ScriptCompareRecord| {
+        store
+            .write_tx(|tx| SqliteStore::script_compare_append_tx(tx, task.id, r, now()))
+            .unwrap()
+    };
 
     let r1 = record("G1", "sha256:aa", CompareOutcome::Match);
-    assert!(store.script_compare_append(task.id, &r1, now()).unwrap());
+    assert!(append(&r1));
     // 同じ generation・digest・outcome は足さない（elapsed などが違っても）。
     let mut r1b = r1.clone();
     r1b.elapsed_us = 999;
-    assert!(!store.script_compare_append(task.id, &r1b, now()).unwrap());
+    assert!(!append(&r1b));
     // outcome が変われば足す。
     let r2 = record("G1", "sha256:aa", CompareOutcome::TsError);
-    assert!(store.script_compare_append(task.id, &r2, now()).unwrap());
+    assert!(append(&r2));
     // 直前と比べるので、元に戻れば足す。
-    assert!(store.script_compare_append(task.id, &r1, now()).unwrap());
+    assert!(append(&r1));
     // 別の領域は別に数える。
     let mut other = r1.clone();
     other.domain = ScriptDomain::RoutePriority;
     other.call_site = "route_select.route_select_one".into();
-    assert!(store.script_compare_append(task.id, &other, now()).unwrap());
-    assert!(!store.script_compare_append(task.id, &r1, now()).unwrap());
+    assert!(append(&other));
+    assert!(!append(&r1));
 
     let events = store.events_for(task.id).unwrap();
     let compares: Vec<_> = events[before..]
@@ -901,8 +895,11 @@ fn script_domain_mode_cas_moves_generation_states() {
     set_compare(&store, "route_priority", &b.id);
     assert_eq!(state_of(&store, &a.id), ScriptGenerationState::Draining);
     assert_eq!(state_of(&store, &b.id), ScriptGenerationState::Active);
-    let active = store.script_domain_active_generation("lane_rules").unwrap();
-    assert_eq!(active.unwrap().id, b.id);
+    let active = store
+        .script_domain_mode("lane_rules")
+        .unwrap()
+        .generation_id;
+    assert_eq!(active, Some(b.id.clone()));
     let all = store.script_domain_active_generations().unwrap();
     assert_eq!(
         all.iter()
@@ -1816,9 +1813,13 @@ fn script_generation_rejected_rows_migrate_to_invalid() {
         (ScriptMode::Compare, Some("G-ACTIVE"), 3, None)
     );
     assert_eq!(store.script_domain_mode("cos_digest").unwrap().version, 7);
+    let active = store
+        .script_domain_mode("cos_digest")
+        .unwrap()
+        .generation_id;
     assert_eq!(
         store
-            .script_domain_active_generation("cos_digest")
+            .script_generation_get(&active.unwrap())
             .unwrap()
             .unwrap()
             .id,

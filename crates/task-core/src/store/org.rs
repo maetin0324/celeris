@@ -17,6 +17,38 @@ fn browser_settings_snapshot(node: &OrgNode) -> serde_json::Value {
     })
 }
 
+/// `org_nodes` の 1 行を書く。`upsert` なら同じ `id` の行の `created_at` 以外を上書きし、そうでなければ
+/// 同じ `id` の行があると失敗する。
+fn org_node_put_tx(tx: &Connection, node: &OrgNode, upsert: bool) -> Result<(), StoreError> {
+    let on_conflict = if upsert {
+        " ON CONFLICT(id) DO UPDATE SET parent_id = excluded.parent_id, name = excluded.name, \
+         kind = excluded.kind, genre = excluded.genre, brief = excluded.brief, \
+         position = excluded.position, updated_at = excluded.updated_at, \
+         profile_json = excluded.profile_json"
+    } else {
+        ""
+    };
+    tx.execute(
+        &format!(
+            "INSERT INTO org_nodes (id, parent_id, name, kind, genre, brief, position, created_at, \
+             updated_at, profile_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10){on_conflict}"
+        ),
+        params![
+            node.id,
+            node.parent_id,
+            node.name,
+            node.kind.as_str(),
+            node.genre,
+            node.brief,
+            node.position,
+            format_rfc3339(node.created_at)?,
+            format_rfc3339(node.updated_at)?,
+            profile_json(&node.profile)?,
+        ],
+    )?;
+    Ok(())
+}
+
 impl SqliteStore {
     // ---- ADR-0046 D7（Phase 59）: `celerisctl org migrate-v2` のための低レベルの書き換え。
     // 通常の経路（`org_upsert` / `update_task`）は状態機械と検証を通すが、移行は「id の付け替え」だけを
@@ -79,22 +111,7 @@ impl SqliteStore {
         let mut existing: Vec<OrgNode> = Vec::with_capacity(nodes.len());
         for node in nodes {
             crate::org::validate_upsert(&existing, node)?;
-            tx.execute(
-                "INSERT INTO org_nodes (id, parent_id, name, kind, genre, brief, position, created_at, updated_at, \
-                 profile_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-                params![
-                    node.id,
-                    node.parent_id,
-                    node.name,
-                    node.kind.as_str(),
-                    node.genre,
-                    node.brief,
-                    node.position,
-                    format_rfc3339(node.created_at)?,
-                    format_rfc3339(node.updated_at)?,
-                    profile_json(&node.profile)?,
-                ],
-            )?;
+            org_node_put_tx(&tx, node, false)?;
             existing.push(node.clone());
         }
         tx.commit()?;
@@ -200,27 +217,7 @@ impl SqliteStore {
         if let Some(previous) = previous {
             stored.created_at = previous.created_at;
         }
-        tx.execute(
-            "INSERT INTO org_nodes (id, parent_id, name, kind, genre, brief, position, created_at, updated_at, \
-             profile_json) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) \
-             ON CONFLICT(id) DO UPDATE SET parent_id = excluded.parent_id, name = excluded.name, \
-             kind = excluded.kind, genre = excluded.genre, brief = excluded.brief, \
-             position = excluded.position, updated_at = excluded.updated_at, \
-             profile_json = excluded.profile_json",
-            params![
-                stored.id,
-                stored.parent_id,
-                stored.name,
-                stored.kind.as_str(),
-                stored.genre,
-                stored.brief,
-                stored.position,
-                format_rfc3339(stored.created_at)?,
-                format_rfc3339(stored.updated_at)?,
-                profile_json(&stored.profile)?,
-            ],
-        )?;
+        org_node_put_tx(tx, &stored, true)?;
         if let Some(actor) = actor {
             let before = previous.map(browser_settings_snapshot);
             let after = browser_settings_snapshot(&stored);
@@ -250,27 +247,7 @@ impl SqliteStore {
         let mut existing = Self::org_list_tx(&tx)?;
         for node in nodes {
             crate::org::validate_upsert(&existing, node)?;
-            tx.execute(
-                "INSERT INTO org_nodes (id, parent_id, name, kind, genre, brief, position, created_at, updated_at, \
-                 profile_json) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) \
-                 ON CONFLICT(id) DO UPDATE SET parent_id = excluded.parent_id, name = excluded.name, \
-                 kind = excluded.kind, genre = excluded.genre, brief = excluded.brief, \
-                 position = excluded.position, updated_at = excluded.updated_at, \
-                 profile_json = excluded.profile_json",
-                params![
-                    node.id,
-                    node.parent_id,
-                    node.name,
-                    node.kind.as_str(),
-                    node.genre,
-                    node.brief,
-                    node.position,
-                    format_rfc3339(node.created_at)?,
-                    format_rfc3339(node.updated_at)?,
-                    profile_json(&node.profile)?,
-                ],
-            )?;
+            org_node_put_tx(&tx, node, true)?;
             existing.push(node.clone());
         }
         tx.commit()?;

@@ -123,8 +123,14 @@ scripts/selfdeploy/release.sh celeris/01M2XXX # 自己改善の案件の実装�
   `cargo-workspace-clean`（自前の workspace パッケージの `cargo clean -p …`。外部依存は保持。**共有 target がこの作業ツリーから
   作られていれば飛ばす**）→ `cargo fmt --check` → `cargo-test`※※（`scripts/dev/test-parallel.sh`）→ `cargo clippy --workspace -- -D warnings`
   → `cargo build --release -p celeris -p celerisctl`
-  → web `install --frozen-lockfile` → `typecheck` → `test` → `release`（build を含む）。
+  → web `install --frozen-lockfile` → `typecheck` → `test` → `release`（build を含む）
+  → `web-e2e-chromium`（`pnpm e2e:chromium`: e2e が使う chromium を 1 回起動して閉じる）→ `web-pnpm-e2e`（`pnpm e2e` = functional、
+  retries 0。release が作った dist/ をそのまま試し、偽 daemon と vite preview だけを使う）。
   pnpm は web/package.json の packageManager に固定する。web の段を飛ばす切替は無い。
+  e2e の chromium は release を作る user の `~/.cache/ms-playwright`（`PLAYWRIGHT_BROWSERS_PATH` があればそこ）にある物だけを使い、
+  gate は download しない。無ければ `web-e2e-chromium` で落ちる（e2e は走らない）ので、`pnpm -C web exec playwright install chromium`
+  で `@playwright/test` の版に合う chromium を入れる。e2e の不合格は `failed_step` が `web-pnpm-e2e` で、`.gate-web-pnpm-e2e.log` に
+  落ちた試験が残る。`e2e:nfr`・`e2e:all` は gate に入っていない（ADR 2026-11-16-release-gate-web-e2e）。
 - **※※ `cargo-test` はテストバイナリを並列に回す（Phase SD-2、ADR-0041 §8、人の判断 2026-09-28）**: `scripts/dev/test-parallel.sh`
   = `cargo nextest run --workspace --no-fail-fast --test-threads $CELERIS_TEST_JOBS`（既定は host の検査の枠の並列度
   `max(1, nproc / 枠の数)`、24 core・枠 2 で 12。準備の build の前に host 共通の枠を取る。ADR 2026-11-12-host-check-slots D2・D3）の後に

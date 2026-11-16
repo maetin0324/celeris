@@ -197,7 +197,7 @@ archive_dir = "/local/celeris/state/retention-archive"
 - [ ] 導入する commit が `main` にあることを確かめる（`git merge-base --is-ancestor <sha> refs/heads/main` が 0）。
 - [ ] `scripts/selfdeploy/release.sh <sha>` を人が回し、gate の全段が通る（`cargo-fmt-check`・`control-ts-install`・`control-ts-bundle`・
   `script-bundle-verify`・`cargo-test`（全体の試験。日頃の `test-affected.sh` では回さない）・`script-bundle-tests`・`cargo-clippy`・
-  `cargo-build`・`web-pnpm-typecheck`・`web-pnpm-test`・`web-pnpm-release`）。確認は `<release>/gate.json` の `failed_step` が無いこと。
+  `cargo-build`・`web-pnpm-typecheck`・`web-pnpm-test`・`web-pnpm-release`・`web-e2e-chromium`・`web-pnpm-e2e`）。確認は `<release>/gate.json` の `failed_step` が無いこと。
 - [ ] `scripts/selfdeploy/verify.sh <sha12>` が通る（staging の煙試験と件数一致）。
 - [ ] release の `notes.md` と `celerisctl release preview <sha12>` で、migration の有無と変わる config 欄を読む。
 

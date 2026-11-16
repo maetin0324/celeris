@@ -95,10 +95,15 @@ done
 - check に重い負荷の台本（CPU 焼き、`stress-ng`、並走 cargo）を置かない。
 - 高負荷の host で落ちた試験は、単独で再実行して結果を記録し、必要なら上の方法で決定的な回帰試験を足す。
 - web の e2e は機能（`pnpm -C web e2e`）と非機能（`pnpm -C web e2e:nfr`: 全画面の axe・latency・
-  refetch-scope の掃引）に分かれている（`web/playwright.config.ts` の project）。WU の check は対象画面の
-  functional spec を指定して流し（例: `pnpm -C web build && pnpm -C web e2e parity/inbox.spec.ts`）、
-  nfr と `e2e:all` は visual-qa・最終の受け入れ・release gate の段で流す。webServer は dist/ が無いか
-  古いときだけ build するので、check で先に build しても二重には build しない。
+  refetch-scope の掃引）に分かれている（`web/playwright.config.ts` の project）。WU・task の受け入れ・review の check は
+  対象画面の functional spec を名指しで流す（例: `pnpm -C web build && pnpm -C web e2e parity/inbox.spec.ts`）。
+  e2e の全体を流すのは release gate だけ: gate の web の段は `web-pnpm-release` の後に `web-e2e-chromium`（chromium の起動確認、
+  download しない）と `web-pnpm-e2e`（`pnpm e2e` = functional の全体、retries 0）を流し、落ちれば release を作らない
+  （ADR 2026-11-16-release-gate-web-e2e）。`e2e:nfr` と `e2e:all` は gate に入っておらず、visual-qa と最終の受け入れで流す。
+  webServer は dist/ が無いか古いときだけ build するので、check で先に build しても二重には build しない。
+- e2e の偽 daemon（`web/e2e/support/fake-daemon.mjs`）の `/api/v1/tasks` は、本物の daemon と同じく `status`（繰り返しと
+  comma 区切り）・`order`・`limit`・`cursor` で絞る（`taskListPage`）。静的な一覧の fixture には自動で効く。要求を自分で読む
+  関数の fixture で daemon の意味が要るなら、関数の中で `taskListPage` を呼ぶ。
 
 ## loopback の fake server は期待する要求だけを数える
 

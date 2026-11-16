@@ -330,7 +330,7 @@ fn build_prompt_replaces_the_objective_and_acceptance_with_the_work_unit_when_pr
             title: "core model".into(),
             objective: "add the WorkUnit data model".into(),
             done_when: vec!["cargo test -p task-core passes".into()],
-            task_objective_excerpt: task.objective.clone(),
+            task_objective: task.objective.clone(),
             dependency_summaries: vec!["survey: 完了".into()],
             plan_overview: vec!["survey done, core-model running, tests pending".into()],
             branch: None,
@@ -342,7 +342,9 @@ fn build_prompt_replaces_the_objective_and_acceptance_with_the_work_unit_when_pr
     };
     let prompt = build_prompt(&task, &context, "run-wu", "artifacts");
     assert!(prompt.contains("add the WorkUnit data model"));
-    assert!(prompt.contains("## このタスク全体の目的（参考）"));
+    assert!(prompt.contains(
+        "## このタスク全体の目的（全文。目標・禁止事項・不変条件はこの WorkUnit にも掛かる）"
+    ));
     assert!(prompt.contains(&task.objective));
     assert!(prompt.contains("cargo test -p task-core passes"));
     assert!(prompt.contains("## 最終レビューで確かめる Task の受け入れ条件（参考）"));

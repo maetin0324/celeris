@@ -17,6 +17,7 @@
   - task の進捗ファイル `agent-docs/progress/YYYY-MM-DD-<slug>.md` を更新（front matter と完了日、証拠コマンドと結果、未解決事項、提案。並列 WorkUnit は `agent-docs/progress/YYYY-MM-DD-<slug>/<wu-key>.md`。ADR-0128 D3）。共有の索引・`agent-docs/PROGRESS.md` には追記しない
   - 進捗ファイルと報告では commit を件名で列挙し hash を書かない（celeris は review 前の main 同期で task branch を rebase し、hash が変わる）。基準は「`git merge-base HEAD main`」（WU は `$CELERIS_WU_BASE`）と書き、固定 hash を書かない。検査結果は「提出時の HEAD で実行」とし、最後の同期（main 取り込み・rebase・merge）の後に再実行する。報告本文で hash を挙げるなら提出直前に `git merge-base --is-ancestor <hash> HEAD` が 0 のものだけ。`sh scripts/dev/progress-index.sh --check` は変えた進捗ファイルの main の祖先でない hash で落ちる（`agent-docs/adr/2026-10-23-commit-refs-by-subject.md`、書式は `agent-docs/guides/progress-files.md`）
   - `git add -A && git commit -m "phase N: <summary>"`
+- 行数の純減を目的とする task の測定 command は `scripts/dev/source-size-report.py --exclusive-classes --rev <rev> --format json` を使い、script と `source-size-report.toml` は base の commit から `git show <base>:<path>` で取り出して base と HEAD の両方に当てる（分類規則を base に固定する。production 全言語・production Rust・own_total_with_tests を分けて書く。`agent-docs/adr/2026-11-16-reduction-goal-delivery.md`）
 - 仕様・設計の変更の提案は task の進捗ファイルの「提案」節に書く（ADR-0128 D3）
 - 同じアプローチを3回失敗したら、task の進捗ファイルに状況を書き、報告本文で人間に質問する
 - 試験・検査・検証で CPU を焼く負荷（busy loop、stress-ng、並走 cargo の負荷台本）をかけない。WU の check にも重い負荷の台本を置かない。時間依存の不具合は時計の差し替え（tokio::time::pause・注入した時計）、出来事待ち、対象 process への SIGSTOP/SIGCONT、試験専用の遅延フックで決定的に再現する（詳細は `agent-docs/guides/testing.md`）

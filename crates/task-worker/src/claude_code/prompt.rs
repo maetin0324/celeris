@@ -177,8 +177,8 @@ fn prompt_header(task: &Task, context: &RunContext, run_id: &str, artifacts: &st
         Some(wu) => {
             out.push_str(&format!("## Objective\n{}\n\n", wu.objective));
             out.push_str(&format!(
-                "## このタスク全体の目的（参考）\n{}\n\n",
-                wu.task_objective_excerpt
+                "## このタスク全体の目的（全文。目標・禁止事項・不変条件はこの WorkUnit にも掛かる）\n{}\n\n",
+                wu.task_objective
             ));
             if !wu.plan_overview.is_empty() {
                 out.push_str("## 計画の中のこの WorkUnit\n");

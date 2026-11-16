@@ -112,7 +112,7 @@ celeris ◀─stdout── {"type":"progress", ...}\n
 | `context.session_diff` | array | –（省略可。空なら省略） | 継続セッションの前回からの差分（文字列の配列） |
 | `context.skills` | array | –（省略可。空なら省略） | mount された skill。`{name, path, description?}`（`path` は `SKILL.md` を含むディレクトリの絶対パス） |
 | `context.continuation` | object | –（省略可） | 続きの run（yield・予算切れ・wait の後）だけ。`{run_seq, previous_end, checkpoint, prior_runs?, cluster_jobs?}` |
-| `context.work_unit` | object | –（省略可） | WorkUnit の run だけ。`{key, title, objective, done_when?, task_objective_excerpt, dependency_summaries?, plan_overview?, branch?, parallel_siblings?, human_decisions?, previous_check_failures?}` |
+| `context.work_unit` | object | –（省略可） | WorkUnit の run だけ。`{key, title, objective, done_when?, task_objective, dependency_summaries?, plan_overview?, branch?, parallel_siblings?, human_decisions?, previous_check_failures?}` |
 | `context.execution_planner` | object | –（省略可） | 実行計画を書く planner run だけ。上限・gate の結果・replan の情報（`ExecutionPlannerContext`。欄は schema を参照） |
 | `context.decision_requests` | bool | –（省略可。既定 false） | true なら結果ファイルに人への決定の要求（`decisions`）を書ける |
 | `context.browser` / `context.browser_policy` | object | –（省略可） | browser capability を使う run だけ（`crate::browser::BrowserContext` / `task_core::BrowserTaskPolicy`） |

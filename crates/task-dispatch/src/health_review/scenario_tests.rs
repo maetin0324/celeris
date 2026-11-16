@@ -49,7 +49,7 @@ fn report() -> serde_json::Value {
 
 /// main に stub の検査器と owner 地図を commit した repo。`with_policy = false` なら検査器の方針は `[review]` の無い
 /// `source = absent`。
-fn project_repo(with_policy: bool) -> tempfile::TempDir {
+pub(super) fn project_repo(with_policy: bool) -> tempfile::TempDir {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     // `[review]` の無い repo も base に検査器を持つ（source = absent）。検査器の無い repo は適用判定が Unavailable で

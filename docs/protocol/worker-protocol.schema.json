@@ -5475,8 +5475,8 @@
           },
           "type": "array"
         },
-        "task_objective_excerpt": {
-          "description": "D9: Task 全体の目的の先頭 1,500 文字（参考として渡す）。",
+        "task_objective": {
+          "description": "D9: Task 全体の目的の全文（削減目標・禁止事項などを切らない。ADR 2026-11-16-reduction-goal-delivery）。",
           "type": "string"
         },
         "title": {
@@ -5487,7 +5487,7 @@
         "key",
         "title",
         "objective",
-        "task_objective_excerpt"
+        "task_objective"
       ],
       "type": "object"
     },

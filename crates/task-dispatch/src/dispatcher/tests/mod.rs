@@ -3303,6 +3303,10 @@ mod health_review_policy;
 #[path = "../../health_review/scenario_tests.rs"]
 mod health_review_scenario;
 mod orphan_work_units;
+/// ADR 2026-11-16-reduction-goal-delivery: 削減の目的と差分が planner・WU・reviewer に届き、純増・移動だけ・測定の欠損は
+/// 合格にならず、通常の機能追加には純減を求めない（`src/health_review/reduction_flow_tests.rs`）。
+#[path = "../../health_review/reduction_flow_tests.rs"]
+mod reduction_flow;
 /// ADR 2026-10-27-project-stagnation-inbox D3: dispatcher の停滞の判定（偽の時計・一時 releases_dir）
 /// （`src/dispatcher/tests/stagnation.rs`）。
 mod stagnation;

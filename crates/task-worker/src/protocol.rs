@@ -863,8 +863,8 @@ pub struct WorkUnitPromptContext {
     /// D14 の `done_when`（この WU の完了の目安。`## Acceptance criteria` に載る）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub done_when: Vec<String>,
-    /// D9: Task 全体の目的の先頭 1,500 文字（参考として渡す）。
-    pub task_objective_excerpt: String,
+    /// D9: Task 全体の目的の全文（削減目標・禁止事項などを切らない。ADR 2026-11-16-reduction-goal-delivery）。
+    pub task_objective: String,
     /// D9: 依存する WU の最終 checkpoint の要約（`"<title>: <completed の最後の1件、または「完了」>"`
     /// の形。依存が無ければ空）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

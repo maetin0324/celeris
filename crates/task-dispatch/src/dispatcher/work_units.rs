@@ -1543,10 +1543,10 @@ impl Dispatcher {
         wu: &task_core::WorkUnitRow,
         run_id: &str,
     ) -> Result<task_worker::protocol::WorkUnitPromptContext, DispatchError> {
-        let task_objective_excerpt = self
+        let task_objective = self
             .store
             .get(task_id)?
-            .map(|t| t.objective.chars().take(1500).collect::<String>())
+            .map(|t| t.objective)
             .unwrap_or_default();
         let plan_overview: Vec<String> = units
             .iter()
@@ -1616,7 +1616,7 @@ impl Dispatcher {
             title: wu.spec.title.clone(),
             objective: wu.spec.objective.clone(),
             done_when: wu.spec.done_when.clone(),
-            task_objective_excerpt,
+            task_objective,
             dependency_summaries,
             plan_overview,
             branch,

@@ -84,6 +84,7 @@ G1 の進捗 file の front matter は `status: running` のまま（task は Do
 ## 変更（commit の件名）
 - `Merge branch 'main' into celeris-wu/01M6TYV9DTZESAJJMXRQVGZ56V/closeout` — main の取り込み（衝突なし）。
 - `health-v2 親 closeout: 子 12 件の取り込みを確かめ、親の進捗 file を書く` — この file を足した。変更は `agent-docs/progress/` の下だけ。
+- `health-v2 親 closeout: 進捗に提出時の HEAD の検査の結果を書く` — 検査の結果の節に clippy の結果を書いた。
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`、WU は `$CELERIS_WU_BASE`）
 - `celerisctl show <id>`（子 12 件）→ 12 件とも `status: Done`。
@@ -102,7 +103,7 @@ G1 の進捗 file の front matter は `status: running` のまま（task は Do
 - `bash scripts/dev/test-affected.sh`（基準 `git merge-base HEAD main`。`CELERIS_WU_BASE` を外して実行）→ exit 0、docs だけで試験対象なし。
   `$CELERIS_WU_BASE` を基準にすると、objective の手順 2 で取り込んだ main の変更（293 commit）が差分に入り、`--list` は task-api・task-core・
   task-dispatch・task-ops・task-worker・routing-eval ほかと web を対象にする。この WU 自身の変更（`git diff --name-only main HEAD`）はこの file の 1 path だけ。
-- `cargo clippy --workspace -- -D warnings` → 結果は報告の本文に書く。
+- `cargo clippy --workspace -- -D warnings` → exit 0（72 秒）。
 - 範囲: `git diff --name-only main HEAD` → この file の 1 path。`sh "$CELERIS_WU_SCOPE_PATHS"` は main の取り込みを含むので 458 path を出す
   （取り込んだ main の path とこの file）。
 

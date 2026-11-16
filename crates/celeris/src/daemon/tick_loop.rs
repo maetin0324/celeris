@@ -217,9 +217,7 @@ pub(crate) async fn tick_loop(
             )
             .await
             {
-                dispatcher
-                    .cluster_mut()
-                    .set_cluster_connect_pending(&id, false);
+                dispatcher.cluster().set_cluster_connect_pending(&id, false);
             }
             // ADR-0033 D3 / B1: 報告の圧縮（まとめの run を起こすかの決定的な判断）。チャネルには送らず、
             // tick の直前にストアを見るだけ（LLM もワーカーも起動しない。起動するのは次の tick の dispatch）。
@@ -726,7 +724,7 @@ pub(crate) async fn tick_loop(
             }
             // ADR-0032 D5: クラスタ接続の進行状況を `ClusterLive.connect_pending` に反映する。
             Some(cluster_admin::ClusterConnectPending { id, pending }) = cluster_rx.recv() => {
-                dispatcher.cluster_mut().set_cluster_connect_pending(&id, pending);
+                dispatcher.cluster().set_cluster_connect_pending(&id, pending);
             }
         }
     }

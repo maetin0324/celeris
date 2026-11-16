@@ -1,6 +1,6 @@
 //! cluster / tunnel の `Dispatcher` の側の入口（ADR-0082 の L1）。状態と処理は [`ClusterRuntime`]
 //! （`crate::cluster_runtime`。ADR 2026-11-11 dispatcher-state-ownership D1・D2）が持ち、hook の差し込みと
-//! tunnel の状態の読み出しは [`Dispatcher::cluster_mut`] から owner を直接呼ぶ。ここは [`ClusterInputs`] を
+//! tunnel の状態の読み出しは [`Dispatcher::cluster`] から owner を直接呼ぶ。ここは [`ClusterInputs`] を
 //! 組んで owner の method を呼ぶ入口と、org・run の表を読むクラスタの解決だけを持つ。
 
 use super::*;
@@ -26,7 +26,7 @@ impl Dispatcher {
     }
 
     /// cluster・tunnel の hook と状態の owner（daemon の結線はここから owner の method を呼ぶ）。
-    pub fn cluster_mut(&mut self) -> &mut ClusterRuntime {
+    pub fn cluster(&mut self) -> &mut ClusterRuntime {
         &mut self.cluster
     }
 

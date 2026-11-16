@@ -651,14 +651,13 @@ pub fn build_dispatcher(
         super::cos_launch::build_cos_chat_launch(config, &config.db.path, config.api.listen),
     );
     // ADR 2026-10-06 model-role-assignments D2: DB の割り当てを同じ store から読む（run 起動のたびに解決）。
-    dispatcher
-        .cluster_mut()
-        .set_cluster_connector(cluster_connector(
-            masters.clone(),
-            master_launchers(config),
-            cluster_keepalive_secs(config),
-            cluster_control_persist(config),
-        ));
+    let cluster = dispatcher.cluster();
+    cluster.set_cluster_connector(cluster_connector(
+        masters.clone(),
+        master_launchers(config),
+        cluster_keepalive_secs(config),
+        cluster_control_persist(config),
+    ));
     // ADR-0062 A（Phase 107）: master 越しの実通信 probe・死んだ接続の片付け・celeris 保持 master の
     // 終了検出は、ここ（テストからも広く呼ばれる `build_dispatcher`）では配線しない。実 ssh を打つ
     // フックなので、テストの偽 `cluster_liveness_probe`（`alive = true`）だけでは防げず、本物の
@@ -668,15 +667,11 @@ pub fn build_dispatcher(
     // 設定に forward が無ければ `refresh_cluster_tunnels` 自体が早期に戻るので、挿しても無害。
     let tunnel_forward_children: TunnelForwardChildren =
         Arc::new(std::sync::Mutex::new(TunnelForwardRegistry::default()));
-    dispatcher
-        .cluster_mut()
-        .set_tunnel_forward_ensurer(tunnel_forward_ensurer(tunnel_forward_children));
+    cluster.set_tunnel_forward_ensurer(tunnel_forward_ensurer(tunnel_forward_children));
     // ADR-0053 Phase 85: listener（手元の待ち受け。軽い TCP connect）と target の健康
     // （`/v1/models`。バックオフされる）を別のフックで挿す。
-    dispatcher
-        .cluster_mut()
-        .set_tunnel_listener_probe(tunnel_listener_probe());
-    dispatcher.cluster_mut().set_tunnel_probe(tunnel_probe());
+    cluster.set_tunnel_listener_probe(tunnel_listener_probe());
+    cluster.set_tunnel_probe(tunnel_probe());
     // ADR-0043 D3（Phase 56）: 起動時に 1 度だけコンテナ runtime を調べる（`podman info` → `docker info`）。
     // 結果はログと `GET /daemon` の `containers` に出る。使えなければ `run = container` のタスクは
     // dispatch されず `blocked`（「コンテナ runtime が使えません」）になる。

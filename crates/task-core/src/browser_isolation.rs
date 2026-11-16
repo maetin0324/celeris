@@ -429,6 +429,55 @@ pub fn verify_launcher_session(
     }
 }
 
+/// bubblewrap の argv（決定的）。起動方式の既定案。実際の起動と観測は worker が行い、
+/// その結果の [`RuntimeFacts`] を [`verify_isolation`] で検査する。
+pub fn bwrap_argv(
+    runtime_uid: u32,
+    session_dir_host: &str,
+    controller_dir_host: &str,
+) -> Vec<String> {
+    let mut a: Vec<String> = [
+        "bwrap",
+        "--unshare-user",
+        "--unshare-pid",
+        "--unshare-net",
+        "--unshare-ipc",
+        "--unshare-uts",
+        "--die-with-parent",
+        "--new-session",
+        "--cap-drop",
+        "ALL",
+        "--ro-bind",
+        "/usr",
+        "/usr",
+        "--ro-bind",
+        "/etc/ssl",
+        "/etc/ssl",
+        "--proc",
+        "/proc",
+        "--dev",
+        "/dev",
+        "--tmpfs",
+        "/tmp",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    a.extend([
+        "--uid".into(),
+        runtime_uid.to_string(),
+        "--bind".into(),
+        session_dir_host.into(),
+        SESSION_ROOT.into(),
+        "--bind".into(),
+        controller_dir_host.into(),
+        "/run/cdp".into(),
+        "--remount-ro".into(),
+        "/".into(),
+    ]);
+    a
+}
+
 // ---- egress ----
 
 /// egress の許可。browser の network namespace の唯一の出口（filtering proxy）が使う。

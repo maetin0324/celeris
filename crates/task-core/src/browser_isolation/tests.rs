@@ -173,6 +173,29 @@ fn privileges_and_pgid_are_checked() {
     assert!(v.contains(&IsolationViolation::InvalidSession));
 }
 
+#[test]
+fn bwrap_argv_unshares_everything_and_remounts_ro() {
+    let a = bwrap_argv(
+        200_001,
+        "/var/lib/x/s1",
+        "/run/celeris/browser-controller/s1",
+    );
+    for flag in [
+        "--unshare-user",
+        "--unshare-pid",
+        "--unshare-net",
+        "--unshare-ipc",
+        "--unshare-uts",
+        "--die-with-parent",
+        "--new-session",
+    ] {
+        assert!(a.iter().any(|x| x == flag), "{flag}");
+    }
+    assert!(!a.iter().any(|x| x.contains("credentiald")));
+    assert_eq!(a.last().map(String::as_str), Some("/"));
+    assert!(a.windows(2).any(|w| w[0] == "--uid" && w[1] == "200001"));
+}
+
 fn policy() -> EgressPolicy {
     EgressPolicy {
         allow: ["example.com:443".to_string()].into_iter().collect(),

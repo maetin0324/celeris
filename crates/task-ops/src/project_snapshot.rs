@@ -492,11 +492,6 @@ pub fn launch_root_claim(
     ))
 }
 
-/// snapshot の root の id のうち、`project_controller:read_root_evidence` が読んでよいもの（op の scope）。
-pub fn evidence_scope(snapshot: &ProjectSnapshot) -> BTreeSet<String> {
-    snapshot.roots.iter().map(|r| r.id.clone()).collect()
-}
-
 /// `TaskId` の文字列を読む（snapshot の id から）。
 pub fn parse_task_id(id: &str) -> Option<TaskId> {
     id.parse().ok()

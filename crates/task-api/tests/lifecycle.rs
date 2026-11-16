@@ -190,11 +190,14 @@ async fn an_existing_paused_milestone_still_stops_only_its_own_tasks() {
     let inside = seed_task(&env, &project, Some(&milestone), Status::Ready);
     let outside = seed_task(&env, &project, None, Status::Ready);
     env.store
-        .milestone_set_lifecycle(
-            milestone.parse().expect("milestone id"),
-            task_core::MilestoneStatus::Paused,
-            Some(Some(task_core::MilestoneStatus::Proposed)),
-        )
+        .write_tx(|tx| {
+            task_core::SqliteStore::milestone_set_lifecycle_tx(
+                tx,
+                milestone.parse().expect("milestone id"),
+                task_core::MilestoneStatus::Paused,
+                Some(Some(task_core::MilestoneStatus::Proposed)),
+            )
+        })
         .expect("pause row");
     let ready = ready_ids(&env);
     assert!(!ready.contains(&inside.id.to_string()));

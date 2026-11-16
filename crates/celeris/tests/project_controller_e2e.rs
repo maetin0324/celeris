@@ -798,7 +798,6 @@ async fn project_controller_core_s11_other_project_root_is_denied() {
     };
     let snap = h.snapshot();
     assert!(snap.roots.is_empty());
-    assert!(!ps::evidence_scope(&snap).contains(&other_root.to_string()));
     // 本物の TS は B の成果を A の到達に数えない（起票は o1 から）。
     let (_, raw, _) = h.step(policy.as_ref()).await;
     assert_eq!(raw["action"]["root"]["key"], "outcome:o1:1", "{raw}");
@@ -865,7 +864,9 @@ async fn project_controller_core_s12_paused_and_stale_never_launch() {
     assert_eq!(kind(&raw), "launch_root");
     // 人が判断と適用の間に案件を止めた。
     h.store
-        .project_set_status(h.project, ProjectStatus::Paused)
+        .write_tx(|tx| {
+            task_core::SqliteStore::project_set_status_tx(tx, h.project, ProjectStatus::Paused)
+        })
         .expect("pause");
     h.controller.human_epoch += 1;
     let stale = h.apply(&snap, &raw);

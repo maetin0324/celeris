@@ -585,7 +585,9 @@ fn secretary_reply_fires_once_when_a_proposed_project_gets_a_node_message() {
         })
         .unwrap();
     env.store
-        .project_set_status(project, ProjectStatus::Active)
+        .write_tx(|tx| {
+            task_core::SqliteStore::project_set_status_tx(tx, project, ProjectStatus::Active)
+        })
         .unwrap_or_else(|e| panic!("status: {e}"));
     assert!(env.scanned(NotificationKind::SecretaryReply).is_empty());
 }

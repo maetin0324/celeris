@@ -229,7 +229,14 @@ fn only_a_terminal_project_can_be_archived_and_archived_tasks_are_hidden_by_defa
     ));
 
     store
-        .project_set_lifecycle(project.id, ProjectStatus::Done, Some(None))
+        .write_tx(|tx| {
+            task_core::SqliteStore::project_set_lifecycle_tx(
+                tx,
+                project.id,
+                ProjectStatus::Done,
+                Some(None),
+            )
+        })
         .unwrap_or_else(|e| panic!("{e}"));
     let archived = archive_project(&store, project.id, now).unwrap_or_else(|e| panic!("{e}"));
     assert!(archived.project.archived_at.is_some());
@@ -300,11 +307,14 @@ fn a_paused_milestone_stops_dispatch_of_its_tasks_only() {
 
     // ADR-0079 D13（Phase R5a）: 新しく paused にする入口は無いが、既存の paused の行の抑止は残る。
     store
-        .milestone_set_lifecycle(
-            milestone.id,
-            MilestoneStatus::Paused,
-            Some(Some(MilestoneStatus::InProgress)),
-        )
+        .write_tx(|tx| {
+            task_core::SqliteStore::milestone_set_lifecycle_tx(
+                tx,
+                milestone.id,
+                MilestoneStatus::Paused,
+                Some(Some(MilestoneStatus::InProgress)),
+            )
+        })
         .unwrap_or_else(|e| panic!("{e}"));
     let ready: Vec<_> = store
         .ready_tasks(100)

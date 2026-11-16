@@ -333,16 +333,7 @@ impl SqliteStore {
     }
 
     /// 状態だけを変える（`updated_at` も更新）。無い案件は `Ok(false)`。
-    pub fn project_set_status(
-        &self,
-        id: ProjectId,
-        status: ProjectStatus,
-    ) -> Result<bool, StoreError> {
-        let conn = self.lock()?;
-        Self::project_set_status_tx(&conn, id, status)
-    }
-
-    /// `project_set_status` on a caller-owned transaction (D12 of ADR 2026-11-04-project-controller).
+    /// Runs on a caller-owned transaction(D12 of ADR 2026-11-04-project-controller).
     pub fn project_set_status_tx(
         conn: &Connection,
         id: ProjectId,
@@ -363,17 +354,7 @@ impl SqliteStore {
     /// `paused_from` は `Some(None)` で消し、`None` なら触らない。無い案件は `Ok(false)`。
     /// ADR-0044 D6（Phase 55）: `pause` / `resume` / `cancel` は状態と `paused_from` を 1 回の UPDATE で書く
     /// （`resume` が「戻り先」を読んだ後に別の書き込みが割り込まないように）。
-    pub fn project_set_lifecycle(
-        &self,
-        id: ProjectId,
-        status: ProjectStatus,
-        paused_from: Option<Option<ProjectStatus>>,
-    ) -> Result<bool, StoreError> {
-        let conn = self.lock()?;
-        Self::project_set_lifecycle_tx(&conn, id, status, paused_from)
-    }
-
-    /// `project_set_lifecycle` on a caller-owned transaction (ADR 2026-10-09-cos-operations-all-mutations D3).
+    /// Runs on a caller-owned transaction(ADR 2026-10-09-cos-operations-all-mutations D3).
     pub fn project_set_lifecycle_tx(
         conn: &Connection,
         id: ProjectId,
@@ -400,16 +381,6 @@ impl SqliteStore {
     }
 
     /// ADR-0044 D6（Phase 55）: アーカイブの時刻を書く（`None` で解除）。無い案件は `Ok(false)`。
-    pub fn project_set_archived_at(
-        &self,
-        id: ProjectId,
-        at: Option<OffsetDateTime>,
-    ) -> Result<bool, StoreError> {
-        let conn = self.lock()?;
-        Self::project_set_archived_at_tx(&conn, id, at)
-    }
-
-    /// `project_set_archived_at` on a caller-owned transaction.
     pub fn project_set_archived_at_tx(
         conn: &Connection,
         id: ProjectId,
@@ -429,11 +400,6 @@ impl SqliteStore {
     /// ADR-0044 D7 追記（Phase K-1）: `projects.slug` を書く。綴りが違えば `StoreError::Invalid`
     /// （API は 422）、他の案件が使っていれば `StoreError::InUse`（409）。無い案件は `Ok(false)`。
     /// **知識ベースのディレクトリは動かさない**（`projects/<旧>/` を `projects/<新>/` へ動かすのは人）。
-    pub fn project_set_slug(&self, id: ProjectId, slug: &str) -> Result<bool, StoreError> {
-        self.write_tx(|tx| Self::project_set_slug_tx(tx, id, slug))
-    }
-
-    /// `project_set_slug` on a caller-owned transaction.
     pub fn project_set_slug_tx(
         tx: &Connection,
         id: ProjectId,
@@ -471,21 +437,6 @@ impl SqliteStore {
     }
 
     /// ADR-0039 D1: 作業場所だけを変える（`None` で消す。`updated_at` も更新）。無い案件は `Ok(false)`。
-    pub fn project_set_workspace(
-        &self,
-        id: ProjectId,
-        workspace: Option<&WorkspaceSpec>,
-    ) -> Result<bool, StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let written = Self::project_set_workspace_tx(&tx, id, workspace)?;
-        if written {
-            tx.commit()?;
-        }
-        Ok(written)
-    }
-
-    /// `project_set_workspace` on a caller-owned transaction.
     pub fn project_set_workspace_tx(
         tx: &Connection,
         id: ProjectId,
@@ -663,18 +614,7 @@ impl SqliteStore {
 
     /// ADR-0044 D6（Phase 55）: 状態と `paused_from` を**同時に**書く（`pause` / `resume` / `cancel`）。
     /// `paused_from` は `Some(None)` で消し、`None` なら触らない。無い途中目標は `Ok(false)`。
-    /// ADR-0044 D6（Phase 55）: 状態と `paused_from` を 1 回の UPDATE で書く（`project_set_lifecycle` と同じ）。
-    pub fn milestone_set_lifecycle(
-        &self,
-        id: MilestoneId,
-        status: MilestoneStatus,
-        paused_from: Option<Option<MilestoneStatus>>,
-    ) -> Result<bool, StoreError> {
-        let conn = self.lock()?;
-        Self::milestone_set_lifecycle_tx(&conn, id, status, paused_from)
-    }
-
-    /// `milestone_set_lifecycle` on a caller-owned transaction.
+    /// ADR-0044 D6（Phase 55）: 状態と `paused_from` を 1 回の UPDATE で書く（`project_set_lifecycle_tx` と同じ）。
     pub fn milestone_set_lifecycle_tx(
         conn: &Connection,
         id: MilestoneId,

@@ -585,7 +585,9 @@ async fn long_horizon_pilot_cancel_and_rewind() {
         ("o3", &["o2"]),
     ]));
     p.store
-        .project_set_status(p.p.id, ProjectStatus::Cancelled)
+        .write_tx(|tx| {
+            task_core::SqliteStore::project_set_status_tx(tx, p.p.id, ProjectStatus::Cancelled)
+        })
         .unwrap();
     p.mode(ControllerMode::Off, false);
     p.mode(ControllerMode::Enabled, true);

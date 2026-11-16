@@ -112,7 +112,11 @@ impl Fixture {
         assert!(
             self.env
                 .store
-                .project_set_status(self.project, status)
+                .write_tx(|tx| task_core::SqliteStore::project_set_status_tx(
+                    tx,
+                    self.project,
+                    status
+                ))
                 .expect("status")
         );
     }
@@ -134,11 +138,14 @@ impl Fixture {
             Route::Resume => {
                 self.env
                     .store
-                    .project_set_lifecycle(
-                        project,
-                        ProjectStatus::Paused,
-                        Some(Some(ProjectStatus::Active)),
-                    )
+                    .write_tx(|tx| {
+                        task_core::SqliteStore::project_set_lifecycle_tx(
+                            tx,
+                            project,
+                            ProjectStatus::Paused,
+                            Some(Some(ProjectStatus::Active)),
+                        )
+                    })
                     .expect("paused");
                 (
                     "POST",
@@ -163,7 +170,13 @@ impl Fixture {
                 self.set_project_status(ProjectStatus::Cancelled);
                 self.env
                     .store
-                    .project_set_archived_at(project, Some(OffsetDateTime::now_utc()))
+                    .write_tx(|tx| {
+                        task_core::SqliteStore::project_set_archived_at_tx(
+                            tx,
+                            project,
+                            Some(OffsetDateTime::now_utc()),
+                        )
+                    })
                     .expect("archived");
                 (
                     "POST",

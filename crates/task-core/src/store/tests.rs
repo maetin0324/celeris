@@ -2994,14 +2994,22 @@ fn projects_and_milestones_round_trip() {
 
     assert!(
         store
-            .project_set_status(project.id, ProjectStatus::Active)
+            .write_tx(|tx| crate::SqliteStore::project_set_status_tx(
+                tx,
+                project.id,
+                ProjectStatus::Active
+            ))
             .unwrap()
     );
     let got = store.project_get(project.id).unwrap().unwrap();
     assert_eq!(got.status, ProjectStatus::Active);
     assert!(
         !store
-            .project_set_status(ProjectId::new(), ProjectStatus::Done)
+            .write_tx(|tx| crate::SqliteStore::project_set_status_tx(
+                tx,
+                ProjectId::new(),
+                ProjectStatus::Done
+            ))
             .unwrap()
     );
 
@@ -3087,16 +3095,28 @@ fn project_workspace_round_trips_and_can_be_set_and_cleared() {
     // 後から付ける / 消す。
     assert!(
         store
-            .project_set_workspace(none.id, Some(&remote_spec))
+            .write_tx(|tx| crate::SqliteStore::project_set_workspace_tx(
+                tx,
+                none.id,
+                Some(&remote_spec)
+            ))
             .unwrap()
     );
     assert_eq!(
         store.project_get(none.id).unwrap().unwrap().workspace,
         Some(remote_spec)
     );
-    assert!(store.project_set_workspace(none.id, None).unwrap());
+    assert!(
+        store
+            .write_tx(|tx| crate::SqliteStore::project_set_workspace_tx(tx, none.id, None))
+            .unwrap()
+    );
     assert_eq!(store.project_get(none.id).unwrap().unwrap().workspace, None);
-    assert!(!store.project_set_workspace(ProjectId::new(), None).unwrap());
+    assert!(
+        !store
+            .write_tx(|tx| crate::SqliteStore::project_set_workspace_tx(tx, ProjectId::new(), None))
+            .unwrap()
+    );
 }
 
 /// ADR-0039 D1: 版数 9 の DB に migration 0010 が当たり、既存の案件は `workspace = NULL` のまま読める。
@@ -3145,7 +3165,11 @@ fn migration_0010_adds_the_projects_workspace_column_to_a_schema_9_db() {
         path: std::path::PathBuf::from("/home/rmaeda/workspace/rust/pluvio-poc"),
         mode: None,
     };
-    assert!(store.project_set_workspace(legacy, Some(&spec)).unwrap());
+    assert!(
+        store
+            .write_tx(|tx| crate::SqliteStore::project_set_workspace_tx(tx, legacy, Some(&spec)))
+            .unwrap()
+    );
     assert_eq!(
         store.project_get(legacy).unwrap().unwrap().workspace,
         Some(spec)
@@ -3503,7 +3527,11 @@ fn setting_the_project_workspace_keeps_the_primary_repo_in_step() {
     let first = WorkspaceSpec::local("/srv/benchfs");
     assert!(
         store
-            .project_set_workspace(project.id, Some(&first))
+            .write_tx(|tx| crate::SqliteStore::project_set_workspace_tx(
+                tx,
+                project.id,
+                Some(&first)
+            ))
             .unwrap()
     );
     let repos = store.repo_list(project.id).unwrap();
@@ -3515,7 +3543,11 @@ fn setting_the_project_workspace_keeps_the_primary_repo_in_step() {
     let moved = WorkspaceSpec::local("/srv/moved");
     assert!(
         store
-            .project_set_workspace(project.id, Some(&moved))
+            .write_tx(|tx| crate::SqliteStore::project_set_workspace_tx(
+                tx,
+                project.id,
+                Some(&moved)
+            ))
             .unwrap()
     );
     let repos = store.repo_list(project.id).unwrap();
@@ -3528,7 +3560,11 @@ fn setting_the_project_workspace_keeps_the_primary_repo_in_step() {
     );
 
     // `null` は primary を消す（= 案件を「作業場所なし」に戻す）。
-    assert!(store.project_set_workspace(project.id, None).unwrap());
+    assert!(
+        store
+            .write_tx(|tx| crate::SqliteStore::project_set_workspace_tx(tx, project.id, None))
+            .unwrap()
+    );
     assert!(store.repo_list(project.id).unwrap().is_empty());
     assert_eq!(
         store.project_get(project.id).unwrap().unwrap().workspace,
@@ -3640,19 +3676,31 @@ fn migration_0015_adds_the_lifecycle_columns_to_a_schema_14_db() {
 
     // 新しい値も往復する。
     store
-        .project_set_lifecycle(
-            project_id,
-            ProjectStatus::Paused,
-            Some(Some(ProjectStatus::Active)),
-        )
+        .write_tx(|tx| {
+            crate::SqliteStore::project_set_lifecycle_tx(
+                tx,
+                project_id,
+                ProjectStatus::Paused,
+                Some(Some(ProjectStatus::Active)),
+            )
+        })
         .unwrap();
-    store.project_set_archived_at(project_id, None).unwrap();
+    store
+        .write_tx(|tx| crate::SqliteStore::project_set_archived_at_tx(tx, project_id, None))
+        .unwrap();
     let project = store.project_get(project_id).unwrap().expect("project");
     assert_eq!(project.status, ProjectStatus::Paused);
     assert_eq!(project.paused_from, Some(ProjectStatus::Active));
 
     store
-        .milestone_set_lifecycle(milestone_id, MilestoneStatus::Cancelled, Some(None))
+        .write_tx(|tx| {
+            crate::SqliteStore::milestone_set_lifecycle_tx(
+                tx,
+                milestone_id,
+                MilestoneStatus::Cancelled,
+                Some(None),
+            )
+        })
         .unwrap();
     let milestone = store
         .milestone_get(milestone_id)
@@ -4388,19 +4436,31 @@ fn migration_29_backfills_unique_project_slugs() {
     // 変えられる。重複・綴り違いは拒否。
     let ap: ProjectId = "01M2WTS3DKNZBSZ2JMVB4CZMBW".parse().unwrap();
     assert!(matches!(
-        store.project_set_slug(ap, "benchfs"),
+        store.write_tx(|tx| crate::SqliteStore::project_set_slug_tx(tx, ap, "benchfs")),
         Err(StoreError::InUse {
             kind: "project slug",
             ..
         })
     ));
     assert!(matches!(
-        store.project_set_slug(ap, "01M2WTS3DKNZBSZ2JMVB4CZMBW"),
+        store.write_tx(|tx| crate::SqliteStore::project_set_slug_tx(
+            tx,
+            ap,
+            "01M2WTS3DKNZBSZ2JMVB4CZMBW"
+        )),
         Err(StoreError::Invalid(_))
     ));
-    assert!(store.project_set_slug(ap, "celeris").unwrap());
+    assert!(
+        store
+            .write_tx(|tx| crate::SqliteStore::project_set_slug_tx(tx, ap, "celeris"))
+            .unwrap()
+    );
     assert_eq!(slug_of("01M2WTS3DKNZBSZ2JMVB4CZMBW"), "celeris");
-    assert!(!store.project_set_slug(ProjectId::new(), "x").unwrap());
+    assert!(
+        !store
+            .write_tx(|tx| crate::SqliteStore::project_set_slug_tx(tx, ProjectId::new(), "x"))
+            .unwrap()
+    );
     // 新しい案件は作るときに付く（既に使われている slug は避ける）。
     let mut fresh = sample_project();
     fresh.title = "agent-platform の続き".into();

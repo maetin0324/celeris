@@ -497,7 +497,11 @@ fn review_task(
                 })
                 .unwrap()
         );
-        assert!(store.project_set_slug(project, "celeris").unwrap());
+        assert!(
+            store
+                .write_tx(|tx| task_core::SqliteStore::project_set_slug_tx(tx, project, "celeris"))
+                .unwrap()
+        );
     }
     let mut task = git_task(
         repo,

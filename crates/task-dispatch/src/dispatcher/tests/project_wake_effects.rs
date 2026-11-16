@@ -297,7 +297,11 @@ async fn project_wake_pending_paused() {
         |store, p, _| {
             assert!(
                 store
-                    .project_set_status(p.id, ProjectStatus::Paused)
+                    .write_tx(|tx| task_core::SqliteStore::project_set_status_tx(
+                        tx,
+                        p.id,
+                        ProjectStatus::Paused
+                    ))
                     .unwrap()
             );
         },
@@ -311,7 +315,11 @@ async fn project_wake_pending_cancelled() {
         |store, p, _| {
             assert!(
                 store
-                    .project_set_status(p.id, ProjectStatus::Cancelled)
+                    .write_tx(|tx| task_core::SqliteStore::project_set_status_tx(
+                        tx,
+                        p.id,
+                        ProjectStatus::Cancelled
+                    ))
                     .unwrap()
             );
         },

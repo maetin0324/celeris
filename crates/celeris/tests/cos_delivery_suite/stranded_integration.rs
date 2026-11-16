@@ -274,8 +274,12 @@ fn stranded_detects_inbox_merge_discard_hold_and_promotion_independently() {
     );
 
     let releases = tempfile::tempdir().expect("release fixture");
-    let promotion =
-        stranded::promotion_view("agent-platform", repo.path(), &first_head, releases.path());
+    let promotion = stranded::promotion_view_for(
+        "agent-platform",
+        repo.path(),
+        &first_head,
+        &stranded::NewestRelease::read(releases.path()),
+    );
     assert_eq!(
         promotion.status,
         stranded::PromotionStatus::PromotionPending

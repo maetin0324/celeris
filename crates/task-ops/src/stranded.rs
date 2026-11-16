@@ -52,22 +52,6 @@ pub struct PromotionView {
     pub release_sha: Option<String>,
 }
 
-/// Determine deployment state from the newest successfully promoted release and git ancestry.
-/// Only the agent-platform repository participates; `releases_dir` is supplied by the caller.
-pub fn promotion_view(
-    repository: &str,
-    repository_path: &Path,
-    branch_head: &str,
-    releases_dir: &Path,
-) -> PromotionView {
-    promotion_view_for(
-        repository,
-        repository_path,
-        branch_head,
-        &NewestRelease::read(releases_dir),
-    )
-}
-
 fn newest_release_sha(releases_dir: &Path) -> Option<String> {
     std::fs::read_dir(releases_dir)
         .ok()
@@ -88,7 +72,8 @@ fn newest_release_sha(releases_dir: &Path) -> Option<String> {
         .map(|(_, sha)| sha)
 }
 
-/// `promotion_view` の本体。最新 release は呼び出し側が 1 回だけ読んで渡す。
+/// Determine deployment state from the newest successfully promoted release and git ancestry.
+/// Only the agent-platform repository participates. 最新 release は呼び出し側が 1 回だけ読んで渡す。
 pub fn promotion_view_for(
     repository: &str,
     repository_path: &Path,

@@ -538,7 +538,11 @@ async fn project_controller_replay_paused_project() {
     d.tick().unwrap();
     assert!(
         store
-            .project_set_status(p.id, ProjectStatus::Paused)
+            .write_tx(|tx| task_core::SqliteStore::project_set_status_tx(
+                tx,
+                p.id,
+                ProjectStatus::Paused
+            ))
             .unwrap()
     );
     for hour in 1..=24 {
@@ -557,7 +561,11 @@ async fn project_controller_replay_paused_project() {
     // 再開: 1 回だけ評価する。
     assert!(
         store
-            .project_set_status(p.id, ProjectStatus::Active)
+            .write_tx(|tx| task_core::SqliteStore::project_set_status_tx(
+                tx,
+                p.id,
+                ProjectStatus::Active
+            ))
             .unwrap()
     );
     spin(&env, &mut d, 3);
@@ -584,7 +592,11 @@ async fn project_controller_replay_cancelled_project() {
     d.tick().unwrap();
     assert!(
         store
-            .project_set_status(p.id, ProjectStatus::Cancelled)
+            .write_tx(|tx| task_core::SqliteStore::project_set_status_tx(
+                tx,
+                p.id,
+                ProjectStatus::Cancelled
+            ))
             .unwrap()
     );
     for hour in 1..=24 {

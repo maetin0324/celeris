@@ -686,7 +686,11 @@ async fn project_recovery_k37_pause_and_cancel_are_not_lifted_by_time_or_answers
         (ProjectStatus::Cancelled, ControllerPhase::Cancelled),
     ] {
         let mut c = case(Some(ControllerMode::Enabled), launch);
-        assert!(c.store.project_set_status(c.p.id, status).unwrap());
+        assert!(
+            c.store
+                .write_tx(|tx| task_core::SqliteStore::project_set_status_tx(tx, c.p.id, status))
+                .unwrap()
+        );
         let calls = c.calls();
         for day in 0..8 {
             brief_put(&c, &format!("{day}"));

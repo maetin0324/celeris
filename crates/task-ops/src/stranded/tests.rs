@@ -49,7 +49,13 @@ fn stranded_promotion_tracks_latest_promoted_release_independently() {
     )
     .expect("marker");
     assert_eq!(
-        promotion_view("agent-platform", &repo, &task_head, &releases).status,
+        promotion_view_for(
+            "agent-platform",
+            &repo,
+            &task_head,
+            &NewestRelease::read(&releases)
+        )
+        .status,
         PromotionStatus::PromotionPending
     );
     git(&["merge", "--ff-only", "task"]);
@@ -60,11 +66,23 @@ fn stranded_promotion_tracks_latest_promoted_release_independently() {
     )
     .expect("manifest update");
     assert_eq!(
-        promotion_view("agent-platform", &repo, &task_head, &releases).status,
+        promotion_view_for(
+            "agent-platform",
+            &repo,
+            &task_head,
+            &NewestRelease::read(&releases)
+        )
+        .status,
         PromotionStatus::Promoted
     );
     assert_eq!(
-        promotion_view("other-repo", &repo, &task_head, &releases).status,
+        promotion_view_for(
+            "other-repo",
+            &repo,
+            &task_head,
+            &NewestRelease::read(&releases)
+        )
+        .status,
         PromotionStatus::NotApplicable
     );
 }
@@ -715,13 +733,25 @@ fn stranded_promotion_remembers_decided_ancestry() {
     )
     .expect("marker");
     assert_eq!(
-        promotion_view("agent-platform", &repo, &head, &releases).status,
+        promotion_view_for(
+            "agent-platform",
+            &repo,
+            &head,
+            &NewestRelease::read(&releases)
+        )
+        .status,
         PromotionStatus::Promoted
     );
     // With the repository gone git cannot answer; the remembered answer is served.
     fs::remove_dir_all(&repo).expect("remove repo");
     assert_eq!(
-        promotion_view("agent-platform", &repo, &head, &releases).status,
+        promotion_view_for(
+            "agent-platform",
+            &repo,
+            &head,
+            &NewestRelease::read(&releases)
+        )
+        .status,
         PromotionStatus::Promoted
     );
     // An undecided answer (git failed) is not remembered.

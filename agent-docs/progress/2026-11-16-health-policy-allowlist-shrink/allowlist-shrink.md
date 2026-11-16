@@ -1,7 +1,7 @@
 ---
 title: 許可の一覧の行を消すだけの変更を policy.changed に数えない（ADR・profile・engine・試験）
 tasks: [01M7KATBGCRQRZ5NWXHXVWYPZ8]
-status: done
+status: blocked
 updated: 2026-11-16
 completed: 2026-11-16
 ---
@@ -47,9 +47,15 @@ completed: 2026-11-16
 - `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace -- -D warnings` → exit 0
 - `bash scripts/dev/test-affected.sh --list` → 対象なし（crate の変更が無い）。`bash scripts/dev/test-affected.sh` → exit 1。先頭の `check-health.sh` が `policy.changed`（必須）の fail で止まった。ほかの必須 rule は全部 pass。この branch は policy の file に ADR・進捗・試験を加えて変えるので、D6.2 の「変更 path が全部 `policy.files`」に当たらず exit 0 にならない（ADR health-review-integration の実装の記録「進捗 file と検査器の試験は policy の file に入らない」と同じ。先例の policy の branch も人の承認と operator の merge で通した）。
 
+## WU の health check（`celeris:repo-health/1`）が通らない（attempt 2 で確認）
+- 前回の run の後、celeris の WU の check `celeris:repo-health/1`（expected 0）が `health:policy.changed:<fingerprint>`（evidence: `engine.py`・`profile.py`・`celeris.toml`・`rules/policy_changed.py`）で落ちた。
+- 再現（提出時の HEAD で実行）: `$CELERIS_WU_BASE` の検査器を `git archive` で一時 dir に出し、`repo_health.py --repo . --base $CELERIS_WU_BASE --head HEAD --policy-version 1` → exit 1。必須 rule の不合格は `policy.changed` だけ、fail 級の finding も rule `policy.changed` の 1 件だけ。
+- 同じ検査器の `engine.policy_review_files(report, changed)`（gate が PolicyOnly〈合格〉を決める D6.2 の判定）は、WU の変更 path 全部では `None`、policy の 4 file だけなら 4 file を返す。`None` にしているのは policy でない 4 file（`agent-docs/adr/2026-11-07-repo-health-contract.md`・`agent-docs/adr/2026-11-16-health-policy-allowlist-shrink.md`・この進捗・`scripts/tests/test_repo_health_allowlist_shrink.py`）で、どれもこの WU の受け入れ条件 0・3・4 が求める file。
+- このため、受け入れ条件を満たしたままこの check を exit 0 にする変更は無い。計画の問題として replan を申告した（`plan_issue`）。コードは変えていない。
+
 ## 未解決
 - 判定は main に入った後の branch から効く（契約 D2: policy は base 側で評価する）。この branch 自身は `policy.changed=true` で、D6.4 の人の承認で通す。LoC 削減 v3 E（01M7J3NKVAH9NG53C5FEFNQJYK）の `human-text-lint.allow` の 3 行の削除は、この branch が main に入った後の base で `policy.changed` に数えられなくなる。
 - `HealthPolicyState.files`（`crates/task-dispatch/src/health_review/input.rs`）は blob の違う policy の file の一覧なので、数えなかった許可の一覧も reviewer の prompt に `changed=false` と並んで出る。D6.1・D6.3・D6.4 は `changed=false` では働かない（ADR D4）。Rust は task の指示どおり変えていない。
 
 ## 提案
-- 無し。
+- 計画の直し方（どちらかを planner か人が選ぶ）: (a) policy の 4 file だけを変える WU を、ADR の WU（前の段）と試験・進捗の WU（後の段）から別の段に分け、その WU と段の統合の diff を policy の file だけにする（D6.2 の PolicyOnly で合格）。(b) 先例 01M76BYGKY と同じく、この WU の health の不合格を人が承認し、operator が merge する（ADR health-review-integration の実装の記録「policy の branch は人の承認と operator の merge で通した」）。task の最終 review でも同じ理由で D6.1 の `policy_mixed` になるので、(a) を選ぶなら task も policy の file だけの task とほかの task に分ける必要がある。

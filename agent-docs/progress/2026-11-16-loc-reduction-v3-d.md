@@ -108,7 +108,12 @@ completed: 2026-11-16
 - write set: production の変更は task-core・task-ops だけ。外の 3 file は試験。
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main。main は動いていない）
-EVIDENCE_PLACEHOLDER
+- `bash scripts/dev/test-affected.sh` → 1 回目は exit 100: nextest 8,528 件のうち 8,527 件 pass、`celeris-campaign::dagbench_process recovery_notice_continuation` が 600 秒で打ち切り（load average 約 7 の下）。この試験は単独の `cargo nextest run -p celeris-campaign --test dagbench_process -E 'test(recovery_notice_continuation) | test(recovery_lost_response)'` で 2 件 pass（19.5 秒）。campaign の crate は今回消した関数を使っていない。2 回目（同じ HEAD）は exit 0: repo-health verdict=pass（fail_grade 0、new 0、worsened 0）、nextest 8,528 件すべて pass（skip 23）、web の unit 716 件 pass、test-ts-verify 20 件 pass。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- 受け入れの size check（閾値 `2500 1 - - -`）→ exit 0、`OK []`。net_reduction: prod unit 2,577・fixed 5,278、rust unit 2,577・fixed 5,278、own unit 3,637・fixed 6,063。
+- `cargo nextest run -p task-core -p task-ops --status-level pass -E '…'`（replay・atomicity・retention・schema・browser policy の名指し 22 件）→ 22 件 pass。`replay_reports_zero_mismatches_when_events_match_current_state`、`acquire_lease_appends_transitioned_event_atomically`・`apply_transition_appends_extra_event_atomically`・`create_task_inserts_task_and_events_atomically`、`notification_feed_batch_rolls_back_rows_and_cursors_together`、`project_retention_*` 7 件（`crash_after_archive_keeps_rows_and_rerun_completes`・`concurrent_gc_and_controller_writes_keep_pending_rows` を含む）、`project_retention_scale_30d_before_after_gc`、`project_plan::tests::committed_schema_matches_generated`・`committed_delta_schema_matches_generated`、`hash_binds_policy_changes`、`credential_use_is_always_approved_without_standing_approval`。
+- `sh scripts/dev/progress-index.sh --check --base $(git merge-base HEAD main)` → exit 0。
 
 ## 受け入れ条件との対応
 - 条件 0（候補の廃止・集約、移動・付け替えなし、削除の一覧と 2 通りの実測）: 上の「消した対象」と「測定」。満たす。

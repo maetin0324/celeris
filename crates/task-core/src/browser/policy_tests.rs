@@ -134,17 +134,6 @@ fn click_and_download_are_unapproved_by_default_and_approval_is_opt_in() {
     let parsed: BrowserCapability =
         serde_json::from_value(serde_json::to_value(grant()).unwrap()).unwrap();
     assert!(parsed.approval_actions.is_empty());
-
-    // A model-originated edit cannot drop an approval the grant imposes.
-    let mut drop_approval = task(&BrowserAction::PHASE1);
-    drop_approval.revision = 2;
-    assert_eq!(
-        drop_approval.check_narrowing(&by_grant),
-        Err(BrowserPolicyError::PolicyExpansion)
-    );
-    let mut keep_approval = drop_approval.clone();
-    keep_approval.approval_actions = vec![BrowserAction::Download];
-    assert!(keep_approval.check_narrowing(&by_grant).is_ok());
 }
 
 #[test]
@@ -173,10 +162,6 @@ fn credential_use_is_always_approved_without_standing_approval() {
     let allow = policy.harness_action_policy().unwrap().allow;
     assert!(!allow.iter().any(|a| a == "auth_login"));
     assert!(!allow.iter().any(|a| a == CREDENTIAL_PLUGIN_ACTION));
-    // A narrowing edit cannot remove the credential approval either.
-    let mut edit = with_credential.clone();
-    edit.revision = 2;
-    assert!(edit.check_narrowing(&policy).is_ok());
 }
 
 #[test]
@@ -394,35 +379,12 @@ fn domain_patterns_are_normalized_and_intersected_by_containment() {
 }
 
 #[test]
-fn page_or_model_originated_expansion_is_rejected_and_hash_binds_changes() {
+fn hash_binds_policy_changes() {
     let current = derive(
         &grant(),
         &task(&[BrowserAction::Snapshot, BrowserAction::Extract]),
     )
     .unwrap();
-    let mut narrower = task(&[BrowserAction::Snapshot]);
-    narrower.revision = 2;
-    narrower.network_domains = vec!["https://example.com".into()];
-    assert!(narrower.check_narrowing(&current).is_ok());
-    type Edit = Box<dyn Fn(&mut BrowserTaskPolicy)>;
-    let expansions: Vec<Edit> = vec![
-        Box::new(|p| p.allowed_actions.push(BrowserAction::Download)),
-        Box::new(|p| p.network_domains.push("https://evil.example".into())),
-        Box::new(|p| p.network_domains = vec!["https://*.example.org".into()]),
-        Box::new(|p| p.credential_policy_ids = vec!["cred-policy-1".into()]),
-        Box::new(|p| p.revision = 1),
-        Box::new(|p| p.policy_id = "other".into()),
-        Box::new(|p| p.artifact_policy_id = Some("keep-all".into())),
-    ];
-    for expand in expansions {
-        let mut request = narrower.clone();
-        expand(&mut request);
-        assert_eq!(
-            request.check_narrowing(&current),
-            Err(BrowserPolicyError::PolicyExpansion)
-        );
-    }
-
     let binding = current.binding();
     assert_eq!(binding.revision, 1);
     assert!(binding.hash.starts_with("sha256:") && binding.hash.len() == 71);

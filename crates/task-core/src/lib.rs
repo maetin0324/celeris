@@ -252,11 +252,8 @@ pub use project_brief::{
 // ---- ADR-0074 D3.3（Phase F4a）: 案件レベルの計画（マイルストーン Task の DAG）----
 pub use project_plan::{
     MILESTONES_PLAN_LABEL, MILESTONES_REPLAN_LABEL, MilestoneModify, MilestoneSpec,
-    PROJECT_PLAN_DELTA_SCHEMA, PROJECT_PLAN_SCHEMA, PlanNodeState, ProjectPlanDelta,
-    ProjectPlanDeltaError, ProjectPlanLimits, ProjectPlanSpec, ProjectPlanValidationError,
-    ValidatedProjectPlan, ValidatedProjectPlanDelta, is_milestones_plan_task,
-    is_milestones_replan_task, validate as validate_project_plan,
-    validate_delta as validate_project_plan_delta,
+    PROJECT_PLAN_DELTA_SCHEMA, PROJECT_PLAN_SCHEMA, ProjectPlanDelta, ProjectPlanSpec,
+    is_milestones_plan_task, is_milestones_replan_task,
 };
 pub use report::{
     COMPACTION_ROLE, Report, ReportFilter, ReportId, ReportKind, ReportsLive, support_kind,

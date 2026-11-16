@@ -340,7 +340,6 @@ pub enum BrowserPolicyError {
     UnsupportedOriginSeparation,
     EmptyActions,
     EmptyDomains,
-    PolicyExpansion,
 }
 
 impl BrowserPolicyError {
@@ -356,7 +355,6 @@ impl BrowserPolicyError {
             Self::UnsupportedOriginSeparation => "unsupported_origin_separation",
             Self::EmptyActions => "empty_browser_actions",
             Self::EmptyDomains => "empty_browser_domains",
-            Self::PolicyExpansion => "browser_policy_expansion",
         }
     }
 }
@@ -421,45 +419,6 @@ impl BrowserTaskPolicy {
             .any(|a| !self.allowed_actions.contains(a))
         {
             return Err(BrowserPolicyError::ApprovalNotAllowed);
-        }
-        Ok(())
-    }
-
-    /// Model/page-originated edits may only narrow the policy in force. Grant, credential
-    /// binding and approval removal stay on administrator paths (ADR-0080 D1).
-    pub fn check_narrowing(
-        &self,
-        current: &EffectiveBrowserPolicy,
-    ) -> Result<(), BrowserPolicyError> {
-        self.validate()?;
-        let domains = self
-            .network_domains
-            .iter()
-            .map(|d| parse_allowed_origin(d).map(|o| o.canonical()))
-            .collect::<Result<Vec<_>, _>>()?;
-        let within_domains = domains
-            .iter()
-            .all(|d| current.allowed_domains.iter().any(|c| origin_covers(c, d)));
-        let actions: BTreeSet<_> = self.allowed_actions.iter().copied().collect();
-        let within_actions = actions.is_subset(&current.actions);
-        let credentials: BTreeSet<_> = self.credential_policy_ids.iter().cloned().collect();
-        let within_credentials = credentials.is_subset(&current.credential_policy_ids);
-        let keeps_approvals = current
-            .approval_actions
-            .iter()
-            .filter(|a| actions.contains(a))
-            .all(|a| {
-                self.approval_actions.contains(a) || BrowserAction::ALWAYS_APPROVED.contains(a)
-            });
-        if self.policy_id != current.policy_id
-            || self.revision <= current.task_revision
-            || !within_domains
-            || !within_actions
-            || !within_credentials
-            || !keeps_approvals
-            || self.artifact_policy_id != current.artifact_policy_id
-        {
-            return Err(BrowserPolicyError::PolicyExpansion);
         }
         Ok(())
     }

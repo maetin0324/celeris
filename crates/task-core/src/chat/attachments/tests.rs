@@ -170,34 +170,6 @@ fn chat_attach_idempotent_client_upload_id() {
 }
 
 #[test]
-fn chat_attach_message_count_and_thread_checks() {
-    let limits = ChatAttachmentLimits {
-        max_file_bytes: 8,
-        max_message_bytes: 8,
-        max_files_per_message: 1,
-        ..ChatAttachmentLimits::default()
-    };
-    let (_temp, store) = fixture(limits);
-    let first = store
-        .upload("thread", "a", "a", None, Cursor::new(b"abc"), now())
-        .expect("first");
-    let second = store
-        .upload("thread", "b", "b", None, Cursor::new(b"abc"), now())
-        .expect("second");
-    store
-        .validate_message("thread", std::slice::from_ref(&first.id))
-        .expect("one file");
-    assert!(matches!(
-        store.validate_message("thread", &[first.id.clone(), second.id]),
-        Err(AttachmentError::Limit)
-    ));
-    assert!(matches!(
-        store.validate_message("another", std::slice::from_ref(&first.id)),
-        Err(AttachmentError::Conflict)
-    ));
-}
-
-#[test]
 fn cos_chat_attach_handoff_list_for_owner_returns_ready_pins_in_pin_order() {
     let (_temp, store) = fixture(ChatAttachmentLimits::default());
     let first = store
@@ -274,33 +246,6 @@ fn chat_attach_refs_block_delete_and_gc_by_injected_clock() {
     store
         .delete_unreferenced(&first.id)
         .expect("idempotent delete");
-}
-
-#[test]
-fn chat_attach_message_byte_limit_exact_and_over() {
-    let limits = ChatAttachmentLimits {
-        max_file_bytes: 8,
-        max_message_bytes: 5,
-        max_files_per_message: 2,
-        ..ChatAttachmentLimits::default()
-    };
-    let (_temp, store) = fixture(limits);
-    let a = store
-        .upload("thread", "a", "a", None, Cursor::new(b"abc"), now())
-        .expect("a");
-    let b = store
-        .upload("thread", "b", "b", None, Cursor::new(b"de"), now())
-        .expect("b");
-    let c = store
-        .upload("thread", "c", "c", None, Cursor::new(b"def"), now())
-        .expect("c");
-    store
-        .validate_message("thread", &[a.id.clone(), b.id])
-        .expect("exact message bytes");
-    assert!(matches!(
-        store.validate_message("thread", &[a.id, c.id]),
-        Err(AttachmentError::Limit)
-    ));
 }
 
 #[test]

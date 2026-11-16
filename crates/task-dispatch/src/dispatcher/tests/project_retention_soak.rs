@@ -106,15 +106,15 @@ fn run(env: &Env, retention: Option<&std::path::Path>, name: &str) -> (Outcome, 
         max_wakes = max_wakes.max(wakes);
         max_decisions = max_decisions.max(decisions);
         if hour % 24 == 0 || hour == hours {
-            let stats = store.retention_stats().unwrap();
             raw(&serde_json::json!({
                 "schema": "celeris.project-retention-soak/1", "test": test, "condition": name,
                 "virtual_hour": hour, "projects": PROJECTS,
                 "wake_rows": wakes, "decision_rows": decisions,
-                "wakes_pending": stats.wakes_pending,
+                "wakes_pending": env.count("SELECT COUNT(*) FROM project_wakes WHERE consumed_by IS NULL"),
                 "retention_runs": env.count("SELECT COUNT(*) FROM project_retention_runs"),
                 "retention_deleted": env.count("SELECT COALESCE(SUM(deleted), 0) FROM project_retention_runs"),
-                "page_count": stats.page_count, "freelist_count": stats.freelist_count,
+                "page_count": env.count("PRAGMA page_count"),
+                "freelist_count": env.count("PRAGMA freelist_count"),
                 "tick_micros_p50": pct(&hour_ticks, 50), "tick_micros_p95": pct(&hour_ticks, 95),
             }));
         }

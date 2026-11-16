@@ -3,8 +3,6 @@
 //! 読み書きは `store/project_retention.rs`（migration 0117）。events は追記専用の正本のまま触らない。
 //! 消してよい行の条件はここの定数と store の SQL が持ち、DB の trigger が二重に守る。
 
-use std::collections::BTreeMap;
-
 use serde::{Deserialize, Serialize};
 
 /// GC の対象の表（処理の順）。
@@ -84,45 +82,6 @@ impl RetentionReport {
     pub fn deleted(&self) -> u64 {
         self.tables.iter().map(|t| t.deleted).sum()
     }
-}
-
-/// `project_retention_runs` の 1 行（GC の追記専用の記録）。
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct RetentionRun {
-    pub id: i64,
-    pub ts: String,
-    pub actor: String,
-    pub table_name: String,
-    pub archived: u64,
-    pub deleted: u64,
-    pub first_key: Option<String>,
-    pub last_key: Option<String>,
-    pub cutoff: String,
-    pub archive_path: Option<String>,
-    pub archive_sha256: Option<String>,
-}
-
-/// 表の行数と DB の大きさ（可視化）。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub struct RetentionStats {
-    pub wakes_total: u64,
-    pub wakes_pending: u64,
-    /// GC の条件に当たる wake（消費済みの cron。表の最大 id の行は除く。保持の期間は見ない）。
-    pub wakes_consumed_cron: u64,
-    pub decisions_total: u64,
-    /// `effect_state` ごとの判断の数。
-    pub decisions_by_effect: BTreeMap<String, u64>,
-    pub compare_log_total: u64,
-    /// TS が適用した compare の記録（GC は消さない）。
-    pub compare_log_ts_applied: u64,
-    /// GC の条件に当たる compare の記録（TS 適用でなく、表の最大 id の行でもない。保持の期間は見ない）。
-    pub compare_log_gc_eligible: u64,
-    pub page_size: u64,
-    pub page_count: u64,
-    /// 消した行の空き page（file は縮まず、次の書き込みが使う）。
-    pub freelist_count: u64,
-    /// 新しい順の GC の記録（最大 10 件）。
-    pub last_runs: Vec<RetentionRun>,
 }
 
 /// 案件 1 件の行数（`GET …/controller` の `summary.retention`）。

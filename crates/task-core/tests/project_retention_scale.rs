@@ -128,7 +128,12 @@ fn micros<T>(f: impl FnOnce() -> T) -> (T, u64) {
 }
 
 /// controller の 1 評価が store から読む主な query（`project_guard`・`project_resume`・summary）の時間。
-fn probe(store: &SqliteStore, project: &str, now: OffsetDateTime) -> serde_json::Value {
+fn probe(
+    store: &SqliteStore,
+    path: &std::path::Path,
+    project: &str,
+    now: OffsetDateTime,
+) -> serde_json::Value {
     let (due, due_us) = micros(|| store.project_controller_due(now, 10).unwrap().len());
     let (_, pending_us) = micros(|| store.project_wakes_pending(project).unwrap().len());
     let (all, all_us) = micros(|| store.project_wakes_all(project).unwrap().len());
@@ -145,7 +150,8 @@ fn probe(store: &SqliteStore, project: &str, now: OffsetDateTime) -> serde_json:
             .len()
     });
     let (_, input_us) = micros(|| store.project_controller_last_input_at(project).unwrap());
-    let (stats, stats_us) = micros(|| store.retention_stats().unwrap());
+    let c = Connection::open(path).unwrap();
+    let n = |sql: &str| c.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap();
     serde_json::json!({
         "due_projects": due, "due_micros": due_us,
         "wakes_pending_micros": pending_us,
@@ -153,12 +159,12 @@ fn probe(store: &SqliteStore, project: &str, now: OffsetDateTime) -> serde_json:
         "decisions_256_micros": d256_us,
         "decisions_scan_rows": scan, "decisions_scan_micros": scan_us,
         "last_input_at_micros": input_us,
-        "stats_micros": stats_us,
         "evaluation_reads_micros": pending_us + all_us + d256_us + scan_us + input_us,
-        "wakes_total": stats.wakes_total, "decisions_total": stats.decisions_total,
-        "compare_log_total": stats.compare_log_total,
-        "db_bytes": stats.page_count * stats.page_size,
-        "freelist_bytes": stats.freelist_count * stats.page_size,
+        "wakes_total": n("SELECT COUNT(*) FROM project_wakes"),
+        "decisions_total": n("SELECT COUNT(*) FROM project_controller_decisions"),
+        "compare_log_total": n("SELECT COUNT(*) FROM script_compare_log"),
+        "db_bytes": n("PRAGMA page_count") * n("PRAGMA page_size"),
+        "freelist_bytes": n("PRAGMA freelist_count") * n("PRAGMA page_size"),
     })
 }
 
@@ -176,7 +182,7 @@ fn project_retention_scale_30d_before_after_gc() {
     let store = SqliteStore::open(&path).unwrap();
     let now = t0() + time::Duration::hours(HOURS);
     let probe_project = format!("P{:05}", projects / 2);
-    let before = probe(&store, &probe_project, now);
+    let before = probe(&store, &path, &probe_project, now);
     let applied_before: i64 = Connection::open(&path)
         .unwrap()
         .query_row(
@@ -208,7 +214,7 @@ fn project_retention_scale_30d_before_after_gc() {
         }
     }
     let gc_us = gc_started.elapsed().as_micros() as u64;
-    let after = probe(&store, &probe_project, now);
+    let after = probe(&store, &path, &probe_project, now);
     let conn = Connection::open(&path).unwrap();
     let applied_after: i64 = conn
         .query_row(

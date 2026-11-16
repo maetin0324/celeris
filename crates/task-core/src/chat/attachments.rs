@@ -381,26 +381,6 @@ impl ChatAttachmentStore {
         Ok(file)
     }
 
-    pub fn validate_message(&self, thread_id: &str, ids: &[String]) -> Result<(), AttachmentError> {
-        if ids.len() > self.limits.max_files_per_message {
-            return Err(AttachmentError::Limit);
-        }
-        let mut total = 0u64;
-        for id in ids {
-            let row = self.get(id)?;
-            if row.thread_id != thread_id {
-                return Err(AttachmentError::Conflict);
-            }
-            total = total
-                .checked_add(row.size_bytes)
-                .ok_or(AttachmentError::Limit)?;
-            if total > self.limits.max_message_bytes {
-                return Err(AttachmentError::Limit);
-            }
-        }
-        Ok(())
-    }
-
     /// Pin `id` to the owner ([`add_ref_tx`] checks the arguments).
     pub fn add_ref(
         &self,

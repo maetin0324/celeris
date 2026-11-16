@@ -16,8 +16,8 @@ use time::OffsetDateTime;
 
 use super::{SqliteStore, StoreError, format_rfc3339};
 use crate::project_retention::{
-    ProjectRetentionCounts, RETENTION_TABLES, RetentionPolicy, RetentionReport, RetentionRun,
-    RetentionStats, RetentionTableReport,
+    ProjectRetentionCounts, RETENTION_TABLES, RetentionPolicy, RetentionReport,
+    RetentionTableReport,
 };
 
 /// 判断の DELETE の付け直しの条件（trigger と同じ。trigger が abort しないように DELETE 文でも外す）。
@@ -32,11 +32,9 @@ const DECISION_GUARD: &str = "effect_state = 'none' AND validation NOT LIKE 'pc/
 /// AUTOINCREMENT の無い `INTEGER PRIMARY KEY`（0104）なので、最大 id の行を消すと次の INSERT が同じ id を
 /// 使い直し、`id > cursor` だけを読む script guard の見回り（`script_compare_log_after`）が新しい行を
 /// 見落とす。wake（AUTOINCREMENT）と判断（TEXT の id）は使い直しが起きないが、同じ形にそろえる。
-const WAKE_GUARD: &str = "consumed_by IS NOT NULL AND kind = 'cron' \
+pub(super) const WAKE_GUARD: &str = "consumed_by IS NOT NULL AND kind = 'cron' \
      AND project_wakes.id < (SELECT MAX(m.id) FROM project_wakes m)";
-/// TS が適用した compare の記録（見回りの違反の根拠）。GC は消さない。
-const COMPARE_TS_APPLIED: &str = "COALESCE(json_extract(json, '$.applied_by'), '') = 'ts'";
-const COMPARE_GUARD: &str = "COALESCE(json_extract(json, '$.applied_by'), '') <> 'ts' \
+pub(super) const COMPARE_GUARD: &str = "COALESCE(json_extract(json, '$.applied_by'), '') <> 'ts' \
      AND script_compare_log.id < (SELECT MAX(m.id) FROM script_compare_log m)";
 
 #[cfg(test)]
@@ -367,65 +365,6 @@ impl SqliteStore {
         tx.commit()?;
         t.archive_paths.push(path_text);
         Ok(deleted)
-    }
-
-    /// 表の行数・DB の page 数・新しい順の GC の記録 10 件。
-    pub fn retention_stats(&self) -> Result<RetentionStats, StoreError> {
-        self.with_read_conn(|c| {
-            let n = |sql: &str| -> Result<u64, StoreError> {
-                Ok(c.query_row(sql, [], |r| r.get::<_, i64>(0))?.max(0) as u64)
-            };
-            let mut s = RetentionStats {
-                wakes_total: n("SELECT COUNT(*) FROM project_wakes")?,
-                wakes_pending: n(
-                    "SELECT COUNT(*) FROM project_wakes WHERE consumed_by IS NULL",
-                )?,
-                wakes_consumed_cron: n(&format!(
-                    "SELECT COUNT(*) FROM project_wakes WHERE {WAKE_GUARD}"
-                ))?,
-                decisions_total: n("SELECT COUNT(*) FROM project_controller_decisions")?,
-                compare_log_total: n("SELECT COUNT(*) FROM script_compare_log")?,
-                compare_log_ts_applied: n(&format!(
-                    "SELECT COUNT(*) FROM script_compare_log WHERE {COMPARE_TS_APPLIED}"
-                ))?,
-                compare_log_gc_eligible: n(&format!(
-                    "SELECT COUNT(*) FROM script_compare_log WHERE {COMPARE_GUARD}"
-                ))?,
-                page_size: n("PRAGMA page_size")?,
-                page_count: n("PRAGMA page_count")?,
-                freelist_count: n("PRAGMA freelist_count")?,
-                ..Default::default()
-            };
-            let mut st = c.prepare(
-                "SELECT effect_state, COUNT(*) FROM project_controller_decisions GROUP BY effect_state",
-            )?;
-            for row in st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))? {
-                let (k, v) = row?;
-                s.decisions_by_effect.insert(k, v.max(0) as u64);
-            }
-            let mut st = c.prepare(
-                "SELECT id, ts, actor, table_name, archived, deleted, first_key, last_key, cutoff, \
-                 archive_path, archive_sha256 FROM project_retention_runs ORDER BY id DESC LIMIT 10",
-            )?;
-            for row in st.query_map([], |r| {
-                Ok(RetentionRun {
-                    id: r.get(0)?,
-                    ts: r.get(1)?,
-                    actor: r.get(2)?,
-                    table_name: r.get(3)?,
-                    archived: r.get::<_, i64>(4)?.max(0) as u64,
-                    deleted: r.get::<_, i64>(5)?.max(0) as u64,
-                    first_key: r.get(6)?,
-                    last_key: r.get(7)?,
-                    cutoff: r.get(8)?,
-                    archive_path: r.get(9)?,
-                    archive_sha256: r.get(10)?,
-                })
-            })? {
-                s.last_runs.push(row?);
-            }
-            Ok(s)
-        })
     }
 
     /// 案件 1 件の wake・判断の行数。

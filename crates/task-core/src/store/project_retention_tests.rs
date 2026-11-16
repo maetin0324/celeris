@@ -5,7 +5,7 @@ use std::path::Path;
 use rusqlite::params;
 use time::OffsetDateTime;
 
-use super::project_retention::FAIL_AFTER_ARCHIVE;
+use super::project_retention::{COMPARE_GUARD, FAIL_AFTER_ARCHIVE, WAKE_GUARD};
 use super::{SqliteStore, format_rfc3339};
 use crate::project_retention::RetentionPolicy;
 
@@ -294,20 +294,30 @@ fn project_retention_gc_deletes_only_eligible_rows_and_archives_them() {
         archived_lines(dir.path()) as i64,
         wakes + decisions + compares
     );
-    let stats = store.retention_stats().unwrap();
     let runs = count(&store, "SELECT COUNT(*) FROM project_retention_runs");
     assert!(runs >= 3);
     let sum: i64 = count(&store, "SELECT SUM(deleted) FROM project_retention_runs");
     assert_eq!(sum, wakes + decisions + compares);
-    let run = &stats.last_runs[0];
-    let bytes = std::fs::read(run.archive_path.as_deref().unwrap()).unwrap();
+    let (archive_path, archive_sha256): (String, String) = store
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT archive_path, archive_sha256 FROM project_retention_runs ORDER BY id DESC LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    let bytes = std::fs::read(archive_path).unwrap();
     use sha2::Digest as _;
     assert_eq!(
-        run.archive_sha256.as_deref().unwrap(),
+        archive_sha256,
         format!("{:x}", sha2::Sha256::digest(&bytes))
     );
-    assert_eq!(stats.wakes_pending, 3);
-    assert_eq!(stats.compare_log_ts_applied, 2);
+    let pending = "SELECT COUNT(*) FROM project_wakes WHERE consumed_by IS NULL";
+    assert_eq!(count(&store, pending), 3);
+    let ts_applied =
+        "SELECT COUNT(*) FROM script_compare_log WHERE json_extract(json, '$.applied_by') = 'ts'";
+    assert_eq!(count(&store, ts_applied), 2);
     // 2 回目は何も消さない（冪等）。
     let again = store
         .retention_gc(&policy(), now(), dir.path(), "system:test")
@@ -543,10 +553,10 @@ fn project_retention_keeps_max_id_rows_so_compare_ids_are_not_reused() {
     let max = |sql: &str| count(&store, sql);
     let cmp_max = max("SELECT MAX(id) FROM script_compare_log");
     let wake_max = max("SELECT MAX(id) FROM project_wakes");
-    let stats = store.retention_stats().unwrap();
-    assert_eq!(stats.compare_log_gc_eligible, 9, "{stats:?}");
-    assert_eq!(stats.wakes_consumed_cron, 9, "{stats:?}");
-    assert_eq!(stats.compare_log_ts_applied, 0);
+    let cmp_eligible = format!("SELECT COUNT(*) FROM script_compare_log WHERE {COMPARE_GUARD}");
+    let wake_eligible = format!("SELECT COUNT(*) FROM project_wakes WHERE {WAKE_GUARD}");
+    assert_eq!(count(&store, &cmp_eligible), 9);
+    assert_eq!(count(&store, &wake_eligible), 9);
 
     let dir = tempfile::tempdir().unwrap();
     let policy = RetentionPolicy {
@@ -574,9 +584,8 @@ fn project_retention_keeps_max_id_rows_so_compare_ids_are_not_reused() {
         max("SELECT COUNT(*) FROM project_controller_decisions WHERE id = 'z-max'"),
         1
     );
-    let stats = store.retention_stats().unwrap();
-    assert_eq!(stats.compare_log_gc_eligible, 0);
-    assert_eq!(stats.wakes_consumed_cron, 0);
+    assert_eq!(count(&store, &cmp_eligible), 0);
+    assert_eq!(count(&store, &wake_eligible), 0);
 
     // 次の compare の id は GC の前の最大 id より大きい（使い直さない）。
     compare(&store, 41 * DAY, "rust");

@@ -560,13 +560,6 @@ pub struct ValidatedProjectPlanDelta {
     pub topological_order: Vec<usize>,
 }
 
-impl ValidatedProjectPlanDelta {
-    /// `add` に書かれた key か。
-    pub fn is_added(&self, key: &str) -> bool {
-        self.delta.add.iter().any(|m| m.key == key)
-    }
-}
-
 /// D3.4: 差分を検証する（純粋関数）。`base` は現行の（承認済みの `current_version` の）計画全体、
 /// `states` はその各 key の実行状態（無い key は「dispatch されていない・終端でない」扱い）。
 ///

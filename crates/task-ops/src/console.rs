@@ -47,11 +47,6 @@ impl ConsoleCursor {
         }
     }
 
-    /// 並びのキー（`event_id` は読み進みの覚えなので並びには使わない）。
-    pub fn order_key(&self) -> (i128, &str) {
-        (self.at_nanos, self.tie.as_str())
-    }
-
     /// 文字列表現（GUI にはただの不透明な文字列として渡す）。`at_nanos` は 0 詰め 20 桁。
     pub fn encode(&self) -> String {
         format!(

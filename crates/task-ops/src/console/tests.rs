@@ -22,10 +22,11 @@ fn cursors_round_trip_and_order_by_time_then_tie() {
     // 同時刻は tie の順、時刻が違えば時刻の順（`event_id` は並びに効かない）。
     let older = ConsoleCursor::new(1, "z", 9999);
     let newer = ConsoleCursor::new(2, "a", 0);
-    assert!(older.order_key() < newer.order_key());
+    let key = |c: &ConsoleCursor| (c.at_nanos, c.tie.clone());
+    assert!(key(&older) < key(&newer));
     let a = ConsoleCursor::new(2, "a", 0);
     let b = ConsoleCursor::new(2, "b", 0);
-    assert!(a.order_key() < b.order_key());
+    assert!(key(&a) < key(&b));
     // 小数秒のある RFC 3339 も時刻として比べる（文字列比較では逆になる）。
     assert!(at_nanos("2026-09-20T01:00:00Z") < at_nanos("2026-09-20T01:00:00.5Z"));
     assert_eq!(at_nanos("読めない"), 0);

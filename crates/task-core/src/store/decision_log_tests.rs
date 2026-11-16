@@ -57,14 +57,9 @@ fn outcome_attributes_to_executed_candidate_not_first_recommendation() {
     )
     .unwrap();
 
-    assert!(
-        s.decision_log_runs_by_exec("src-a", "model-a")
-            .unwrap()
-            .is_empty()
-    );
-    let hit = s.decision_log_runs_by_exec("src-b", "model-b").unwrap();
-    assert_eq!(hit.len(), 1);
-    let run = &hit[0];
+    let run = s.decision_log_run_get("r1").unwrap().unwrap();
+    assert_eq!(run.execution.exec_source_id.as_deref(), Some("src-b"));
+    assert_eq!(run.execution.exec_model.as_deref(), Some("model-b"));
     assert_eq!(run.exec_equals_proposed_first(), Some(false));
     assert_eq!(run.execution.fallback_reason.as_deref(), Some("rate_limit"));
     assert_eq!(run.proposal.proposed_first, Some(cand("src-a", "model-a")));

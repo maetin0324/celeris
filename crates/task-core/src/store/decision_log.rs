@@ -343,22 +343,6 @@ impl SqliteStore {
         rows.map(|r| r?).collect()
     }
 
-    /// 実行した候補（`exec_*`）に帰属する run。提案先頭（`proposed_first_*`）では引かない。
-    pub fn decision_log_runs_by_exec(
-        &self,
-        source_id: &str,
-        model: &str,
-    ) -> Result<Vec<DecisionLogRun>, StoreError> {
-        let conn = self.lock()?;
-        let sql = format!(
-            "SELECT {RUN_COLUMNS} FROM decision_log_runs \
-             WHERE exec_source_id = ?1 AND exec_model = ?2 ORDER BY run_id"
-        );
-        let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map([source_id, model], |r| Ok(read_run(r)))?;
-        rows.map(|r| r?).collect()
-    }
-
     /// 消費 1 行を書く（`dedup_key` の置換。合算しない）。
     pub fn decision_log_record_usage(
         &self,

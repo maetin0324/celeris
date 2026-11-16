@@ -3375,7 +3375,6 @@ fn a_repo_used_by_an_unfinished_task_cannot_be_deleted() {
     task.repos = vec![crate::repos::RepoRef::of(&repo)];
     store.insert(&task).unwrap();
 
-    assert_eq!(store.repo_active_tasks(repo.id).unwrap(), vec![task.id]);
     assert!(matches!(
         store.repo_delete(repo.id),
         Err(StoreError::InUse {
@@ -3388,7 +3387,6 @@ fn a_repo_used_by_an_unfinished_task_cannot_be_deleted() {
     store
         .apply_transition(task.id, Trigger::Cancel, None)
         .unwrap();
-    assert!(store.repo_active_tasks(repo.id).unwrap().is_empty());
     assert!(store.repo_delete(repo.id).unwrap());
     // primary が消えたので案件は「作業場所なし」に戻る。
     assert_eq!(

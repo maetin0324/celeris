@@ -97,12 +97,6 @@ fn fallback_keeps_proposal_and_execution_in_separate_fields() {
     // 提案の側は別欄で、結果・消費は実行側にだけ付く（提案先頭へ誤帰属しない）。
     assert!(run.proposal.proposed_first.is_none());
     assert_eq!(run.outcome.run_end, Some(RunEndLabel::Completed));
-    assert!(
-        store
-            .decision_log_runs_by_exec("src-a", "m-a")
-            .unwrap()
-            .is_empty()
-    );
 }
 
 #[test]

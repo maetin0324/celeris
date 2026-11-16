@@ -369,8 +369,8 @@ fn delta_modify_and_remove_only_touch_undispatched_milestones() {
         .unwrap();
     assert_eq!(poc.title, "PoC v2");
     assert_eq!(poc.depends_on, vec!["survey".to_string()]);
-    assert!(ok.is_added("paper"));
-    assert!(!ok.is_added("poc"));
+    assert!(ok.delta.add.iter().any(|m| m.key == "paper"));
+    assert!(!ok.delta.add.iter().any(|m| m.key == "poc"));
 }
 
 #[test]

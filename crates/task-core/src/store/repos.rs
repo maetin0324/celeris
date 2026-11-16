@@ -365,9 +365,4 @@ impl SqliteStore {
         tx.commit()?;
         Ok(true)
     }
-
-    /// そのリポジトリを参照している未終端のタスク（`DELETE` の 409 の理由に使う）。
-    pub fn repo_active_tasks(&self, id: RepoId) -> Result<Vec<TaskId>, StoreError> {
-        self.with_read_conn(|conn| Self::repo_active_tasks_tx(conn, id))
-    }
 }

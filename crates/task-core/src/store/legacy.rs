@@ -273,11 +273,7 @@ impl SqliteStore {
                 )?;
             }
         }
-        tx.execute(
-            "INSERT INTO feed_cursor(name,value) VALUES(?1,?2) \
-             ON CONFLICT(name) DO UPDATE SET value=excluded.value",
-            params![CURSOR, highest.to_string()],
-        )?;
+        crate::feed::feed_cursor_put(&tx, CURSOR, &highest.to_string())?;
         let retired_at = format_rfc3339(OffsetDateTime::now_utc())?;
         tx.execute(
             "UPDATE node_sessions SET retired_at=?1 WHERE node_id='cos' \

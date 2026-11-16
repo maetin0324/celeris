@@ -188,21 +188,6 @@ impl SqliteStore {
         })
     }
 
-    /// Retention may remove old rows; the next append still allocates a higher sequence.
-    pub fn browser_live_prune_before(
-        &self,
-        key: BrowserSessionKey<'_>,
-        before: u64,
-    ) -> Result<usize, StoreError> {
-        nonempty_key(key)?;
-        let conn = self.lock()?;
-        let before = i64::try_from(before).unwrap_or(i64::MAX);
-        Ok(conn.execute(
-            "DELETE FROM browser_live_events WHERE task_id=?1 AND run_id=?2 AND session_id=?3 AND event_seq<?4 AND event_seq < (SELECT MAX(event_seq) FROM browser_live_events WHERE task_id=?1 AND run_id=?2 AND session_id=?3)",
-            params![key.task_id, key.run_id, key.session_id, before],
-        )?)
-    }
-
     pub fn browser_control_get(
         &self,
         key: BrowserSessionKey<'_>,
@@ -368,8 +353,7 @@ mod tests {
     }
 
     #[test]
-    fn live_events_are_scrubbed_and_retention_exposes_oldest()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn live_events_are_scrubbed_and_expose_oldest() -> Result<(), Box<dyn std::error::Error>> {
         let store = SqliteStore::open_in_memory()?;
         let inputs = [
             LiveEvent::Console {
@@ -405,13 +389,10 @@ mod tests {
         let json = serde_json::to_string(&page.events)?;
         assert!(!json.contains("SENTINEL"));
         assert!(!json.contains("u:p"));
-        store.browser_live_prune_before(key(), 3)?;
         let page = store.browser_live_after(key(), 1, 20)?;
-        assert_eq!(page.oldest_seq, Some(3));
+        assert_eq!(page.oldest_seq, Some(1));
         assert_eq!(page.latest_seq, Some(3));
-        assert_eq!(page.events.len(), 1);
-        // Even an aggressive prune leaves the latest sequence anchor.
-        store.browser_live_prune_before(key(), 100)?;
+        assert_eq!(page.events.len(), 2);
         let status = ScrubbedLiveEvent::from_event(&LiveEvent::Status {
             state: "paused".into(),
         })

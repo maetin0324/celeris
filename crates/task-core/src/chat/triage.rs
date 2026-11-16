@@ -159,14 +159,6 @@ pub fn cos_triage_resolve_tx(
     Ok(cos_revision::after_judgment(tx, item_id, marked, &at)?)
 }
 
-fn put_cursor(tx: &Transaction<'_>, name: &str, value: &str) -> Result<(), ChatError> {
-    tx.execute(
-        "INSERT INTO feed_cursor(name,value) VALUES(?1,?2) ON CONFLICT(name) DO UPDATE SET value=excluded.value",
-        params![name,value],
-    )?;
-    Ok(())
-}
-
 impl SqliteStore {
     /// Read the saved cursor for one source. An absent cursor means initial ingestion.
     pub fn cos_triage_cursor(&self, source: &str) -> Result<Option<String>, ChatError> {
@@ -202,7 +194,7 @@ impl SqliteStore {
         let mut conn = writer(self)?;
         let tx = immediate(&mut conn)?;
         let inserted = insert_items(&tx, items, &chat_ts(now))?;
-        put_cursor(&tx, &name, cursor)?;
+        crate::feed::feed_cursor_put(&tx, &name, cursor)?;
         tx.commit()?;
         Ok(inserted)
     }
@@ -504,8 +496,8 @@ impl SqliteStore {
             tx.execute("INSERT INTO cos_legacy_notification_links(notification_id,item_id,created_at) VALUES(?1,?2,?3) ON CONFLICT(notification_id) DO NOTHING", params![notification_id,item_id,at])?;
             tx.execute("UPDATE notifications SET ok=0,error='superseded' WHERE id=?1 AND ok IS NULL AND sent_at IS NULL", [notification_id])?;
         }
-        put_cursor(&tx, &name, cursor)?;
-        put_cursor(&tx, ROUTE_VERSION_CURSOR, "cos_v1")?;
+        crate::feed::feed_cursor_put(&tx, &name, cursor)?;
+        crate::feed::feed_cursor_put(&tx, ROUTE_VERSION_CURSOR, "cos_v1")?;
         tx.commit()?;
         Ok(true)
     }

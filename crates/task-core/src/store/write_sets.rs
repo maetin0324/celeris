@@ -60,14 +60,6 @@ impl SqliteStore {
         Ok(())
     }
 
-    /// The task's own explicit hint (no inheritance).
-    pub fn task_expected_write_paths(
-        &self,
-        task_id: TaskId,
-    ) -> Result<Option<Vec<String>>, StoreError> {
-        self.with_read_conn(|conn| Self::task_hint_conn(conn, &task_id.to_string()))
-    }
-
     /// ADR-0130 D1: the task's own hint, else (for a child task) its parent unit's
     /// effective hint. Returns `None` when nothing up the tree specifies one.
     pub fn effective_task_write_paths(
@@ -441,7 +433,7 @@ mod tests {
             .set_task_expected_write_paths(task.id, Some(&["docs/".into(), "docs".into()]), now)
             .unwrap();
         let docs = Some(vec!["docs".to_string()]);
-        assert_eq!(store.task_expected_write_paths(task.id).unwrap(), docs);
+        assert_eq!(store.effective_task_write_paths(task.id).unwrap(), docs);
         assert_eq!(store.work_unit_expected_write_paths(&p3_id).unwrap(), docs);
         assert_eq!(
             store.work_unit_expected_write_paths(&p1_id).unwrap(),
@@ -459,7 +451,6 @@ mod tests {
                 params![child.id.to_string(), p1_id],
             )
             .unwrap();
-        assert_eq!(store.task_expected_write_paths(child.id).unwrap(), None);
         assert_eq!(
             store.effective_task_write_paths(child.id).unwrap(),
             crates_a
@@ -478,7 +469,7 @@ mod tests {
                 .set_task_expected_write_paths(task.id, Some(&["../x".into()]), now)
                 .is_err()
         );
-        assert_eq!(store.task_expected_write_paths(task.id).unwrap(), docs);
+        assert_eq!(store.effective_task_write_paths(task.id).unwrap(), docs);
         store
             .set_task_expected_write_paths(task.id, Some(&[]), now)
             .unwrap();

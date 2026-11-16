@@ -22,17 +22,6 @@ pub fn tier_from_str(s: &str) -> Option<Tier> {
     }
 }
 
-/// LLM source から catalog の source 名を求める。catalog を持たない source は `None`。
-pub fn source_name_for_llm_source(source: &crate::LlmSourceRef) -> Option<String> {
-    match source {
-        crate::LlmSourceRef::ClaudeOauth => Some(CatalogSource::CLAUDE_OAUTH.to_string()),
-        crate::LlmSourceRef::CodexOauth => Some(CatalogSource::CODEX_OAUTH.to_string()),
-        crate::LlmSourceRef::OpencodeGo => Some(CatalogSource::OPENCODE_GO.to_string()),
-        crate::LlmSourceRef::OpenaiCompatible(id) => Some(CatalogSource::openai_compatible(id).0),
-        _ => None,
-    }
-}
-
 /// llm-proxy が `WireRule.adapter` に渡す名前（proxy は上流へ接頭辞なしの model_id を送る）。
 pub const LLM_PROXY_ADAPTER: &str = "llm-proxy";
 
@@ -173,29 +162,5 @@ mod tests {
             "qwen3.8-27b"
         );
         assert_eq!(WireRule::catalog_model_id("qwen3.8-27b"), "qwen3.8-27b");
-    }
-
-    #[test]
-    fn source_names_follow_the_catalog() {
-        use crate::LlmSourceRef as L;
-        assert_eq!(
-            source_name_for_llm_source(&L::ClaudeOauth).as_deref(),
-            Some("claude-oauth")
-        );
-        assert_eq!(
-            source_name_for_llm_source(&L::CodexOauth).as_deref(),
-            Some("codex-oauth")
-        );
-        assert_eq!(
-            source_name_for_llm_source(&L::OpencodeGo).as_deref(),
-            Some("opencode-go")
-        );
-        assert_eq!(
-            source_name_for_llm_source(&L::OpenaiCompatible("qwen".into())).as_deref(),
-            Some("openai-compatible:qwen")
-        );
-        assert_eq!(source_name_for_llm_source(&L::Celeris), None);
-        assert_eq!(source_name_for_llm_source(&L::None), None);
-        assert_eq!(source_name_for_llm_source(&L::Unknown), None);
     }
 }

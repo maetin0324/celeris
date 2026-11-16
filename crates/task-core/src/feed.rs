@@ -468,11 +468,7 @@ impl SqliteStore {
             outcomes.push(record_in_tx(&tx, event)?);
         }
         for (name, value) in cursors {
-            tx.execute(
-                "INSERT INTO feed_cursor (name, value) VALUES (?1, ?2) \
-                 ON CONFLICT(name) DO UPDATE SET value = excluded.value",
-                params![name, value],
-            )?;
+            feed_cursor_put(&tx, name, value)?;
         }
         tx.commit()?;
         Ok(outcomes)
@@ -598,13 +594,23 @@ impl SqliteStore {
         })
     }
     pub fn feed_cursor_set(&self, name: &str, value: &str) -> Result<(), StoreError> {
-        self.lock()?.execute(
-            "INSERT INTO feed_cursor (name, value) VALUES (?1, ?2) \
-             ON CONFLICT(name) DO UPDATE SET value = excluded.value",
-            params![name, value],
-        )?;
-        Ok(())
+        Ok(feed_cursor_put(&*self.lock()?, name, value)?)
     }
+}
+
+/// The one writer of `feed_cursor`: upsert `name` to `value` on `conn` (callers pass their open
+/// transaction, so the cursor moves atomically with the rows it covers).
+pub(crate) fn feed_cursor_put(
+    conn: &rusqlite::Connection,
+    name: &str,
+    value: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO feed_cursor (name, value) VALUES (?1, ?2) \
+         ON CONFLICT(name) DO UPDATE SET value = excluded.value",
+        params![name, value],
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]

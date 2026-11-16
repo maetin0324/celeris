@@ -104,16 +104,6 @@ pub fn write_set_overlap(a: &[String], b: &[String]) -> bool {
     })
 }
 
-/// Repository-aware entry point for dispatcher reservations.
-pub fn write_set_overlap_for_repo(
-    left_repo: crate::repos::RepoId,
-    left: &[String],
-    right_repo: crate::repos::RepoId,
-    right: &[String],
-) -> bool {
-    left_repo == right_repo && write_set_overlap(left, right)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,12 +126,6 @@ mod tests {
             &paths(&["srcx/a.rs"])
         ));
         assert!(!write_set_overlap(&[], &paths(&["src/"])));
-        assert!(!write_set_overlap_for_repo(
-            crate::repos::RepoId::new(),
-            &paths(&["src/"]),
-            crate::repos::RepoId::new(),
-            &paths(&["src/a.rs"]),
-        ));
     }
 
     #[test]

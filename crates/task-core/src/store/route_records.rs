@@ -124,62 +124,6 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub fn route_features_get(&self, hash: &str) -> Result<Option<TaskFeatures>, StoreError> {
-        self.with_read_conn(|c| {
-            c.query_row(
-                "SELECT schema,template,brief,aux_json,hash FROM route_features WHERE hash=?1",
-                [hash],
-                |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, String>(2)?,
-                        r.get::<_, String>(3)?,
-                        r.get::<_, String>(4)?,
-                    ))
-                },
-            )
-            .optional()?
-            .map(|(schema, template, brief, aux, hash)| {
-                Ok(TaskFeatures {
-                    schema,
-                    template,
-                    brief,
-                    aux: serde_json::from_str(&aux)?,
-                    hash,
-                })
-            })
-            .transpose()
-        })
-    }
-
-    pub fn route_options_get(&self, hash: &str) -> Result<Option<RouteOptions>, StoreError> {
-        self.with_read_conn(|c| {
-            c.query_row(
-                "SELECT schema,builder,question,options_json FROM route_options WHERE hash=?1",
-                [hash],
-                |r| {
-                    Ok((
-                        r.get::<_, String>(0)?,
-                        r.get::<_, String>(1)?,
-                        r.get::<_, String>(2)?,
-                        r.get::<_, String>(3)?,
-                    ))
-                },
-            )
-            .optional()?
-            .map(|(schema, builder, question, json)| {
-                Ok(RouteOptions {
-                    schema,
-                    builder,
-                    question,
-                    options: serde_json::from_str(&json)?,
-                })
-            })
-            .transpose()
-        })
-    }
-
     /// Decisions are returned in stable decision_id order for an inclusive time window.
     pub fn route_decisions_export(
         &self,
@@ -279,7 +223,7 @@ mod tests {
     }
 
     #[test]
-    fn route_store_content_records_are_idempotent_and_readable() {
+    fn route_store_content_records_are_idempotent() {
         let s = store();
         let (f, o) = fixtures();
         s.insert_route_features(&f.hash, "work_unit", "w1", &f, "2026-01-01T00:00:00Z")
@@ -290,14 +234,16 @@ mod tests {
             .unwrap();
         s.insert_route_options("oh", &o, "2026-01-01T00:00:00Z")
             .unwrap();
-        assert_eq!(s.route_features_get(&f.hash).unwrap().unwrap(), f);
-        assert_eq!(s.route_options_get("oh").unwrap().unwrap(), o);
         let count: i64 = s
             .lock()
             .unwrap()
-            .query_row("SELECT COUNT(*) FROM route_features", [], |r| r.get(0))
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM route_features)+(SELECT COUNT(*) FROM route_options)",
+                [],
+                |r| r.get(0),
+            )
             .unwrap();
-        assert_eq!(count, 1);
+        assert_eq!(count, 2);
     }
 
     fn decision(id: &str, at: &str, stage: &str, features_hash: &str) -> StoredRouteDecision {
@@ -348,6 +294,8 @@ mod tests {
             ["a"]
         );
         assert!(rows[0].outcome.is_some());
+        // The export reads the content rows back unchanged.
+        assert_eq!((&rows[0].features, &rows[0].options), (&f, &o));
         assert_eq!(
             s.route_decisions_export(None, None, None)
                 .unwrap()

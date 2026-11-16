@@ -236,11 +236,6 @@ impl LatestFrameSlot {
     pub fn is_closed(&self) -> bool {
         self.state.lock().map(|s| s.closed).unwrap_or(true)
     }
-
-    /// 上書きで捨てた frame の数（診断用）。
-    pub fn replaced_count(&self) -> u64 {
-        self.state.lock().map(|s| s.replaced).unwrap_or(0)
-    }
 }
 
 /// `LatestFrameSlot::next` の future。
@@ -312,7 +307,6 @@ mod tests {
         for seq in 2..=5 {
             assert_eq!(slot.publish(frame(seq)), FramePublish::Replaced);
         }
-        assert_eq!(slot.replaced_count(), 4);
 
         let Poll::Ready(Some(got)) = poll_next(&slot, &waker) else {
             panic!("latest frame expected");

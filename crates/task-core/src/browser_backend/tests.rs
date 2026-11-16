@@ -292,27 +292,3 @@ fn explicit_backend_is_honoured_or_refused() {
         }
     );
 }
-
-#[test]
-fn same_task_evaluation_ranks_and_refuses_mixed_fixtures() {
-    let run = |id: &str, ok: bool, viol: u32, cost: f64| SameTaskRun {
-        backend_id: id.into(),
-        task_fixture: "login-and-download".into(),
-        accepted: ok,
-        policy_violations: viol,
-        recoveries: 0,
-        cost_usd: cost,
-        wall_secs: 60,
-    };
-    let runs = vec![
-        run("a", true, 1, 0.1),
-        run("b", true, 0, 0.5),
-        run("c", false, 0, 0.1),
-        run("d", true, 0, 0.2),
-    ];
-    assert_eq!(rank_same_task(&runs).unwrap(), vec!["d", "b", "c", "a"]);
-    let mut mixed = runs.clone();
-    mixed[0].task_fixture = "other".into();
-    assert!(rank_same_task(&mixed).is_none());
-    assert!(rank_same_task(&[]).is_none());
-}

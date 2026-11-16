@@ -351,11 +351,7 @@ impl SqliteStore {
             inserted += Self::pc_wake_insert_tx(&tx, w, &at, &until)?;
         }
         if let Some((name, value)) = cursor {
-            tx.execute(
-                "INSERT INTO feed_cursor (name, value) VALUES (?1, ?2) \
-                 ON CONFLICT(name) DO UPDATE SET value = excluded.value",
-                params![name, value.to_string()],
-            )?;
+            crate::feed::feed_cursor_put(&tx, name, &value.to_string())?;
         }
         tx.commit()?;
         Ok(inserted)

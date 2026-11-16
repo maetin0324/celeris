@@ -263,11 +263,6 @@ impl HarnessRegistry {
         Self { harnesses }
     }
 
-    /// 組み込みだけのレジストリ（`[[harnesses]]` も `[[genres]]` も無い最小構成）。
-    pub fn builtins_only() -> Self {
-        Self::new(Vec::new())
-    }
-
     pub fn get(&self, id: &str) -> Option<&HarnessSpec> {
         self.harnesses.iter().find(|h| h.id == id)
     }
@@ -539,7 +534,7 @@ mod tests {
     /// `fallback = false` と明示したときだけ無効になる。
     #[test]
     fn the_knowledge_harness_falls_back_to_cheap_by_default() {
-        let registry = HarnessRegistry::builtins_only();
+        let registry = HarnessRegistry::new(Vec::new());
         let knowledge = registry.get(BUILTIN_KNOWLEDGE).expect("knowledge");
         assert_eq!(knowledge.fallback_tier(), Some(Tier::Cheap));
         // 他の組み込みは倒さない。

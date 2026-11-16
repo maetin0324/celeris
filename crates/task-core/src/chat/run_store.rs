@@ -1111,11 +1111,7 @@ impl SqliteStore {
                 .optional()?
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(0);
-            tx.execute(
-                "INSERT INTO feed_cursor(name,value) VALUES(?1,?2) \
-                 ON CONFLICT(name) DO UPDATE SET value=excluded.value",
-                params![name, prev.max(max_id).to_string()],
-            )?;
+            crate::feed::feed_cursor_put(&tx, &name, &prev.max(max_id).to_string())?;
         }
         tx.commit()?;
         Ok(removed)

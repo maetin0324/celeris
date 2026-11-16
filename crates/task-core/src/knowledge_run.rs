@@ -277,23 +277,6 @@ impl SqliteStore {
             None => Ok(None),
         }
     }
-    pub fn knowledge_run_by_run_task(
-        &self,
-        run_task_id: TaskId,
-    ) -> Result<Option<KnowledgeRun>, StoreError> {
-        let conn = self.lock()?;
-        let row = conn
-            .query_row(
-                &format!("{SELECT_KNOWLEDGE_RUN} WHERE run_task_id = ?1"),
-                rusqlite::params![run_task_id.to_string()],
-                row_to_knowledge_run,
-            )
-            .optional()?;
-        match row {
-            Some(r) => Ok(Some(r?)),
-            None => Ok(None),
-        }
-    }
     pub fn knowledge_run_exists(&self, task_id: TaskId) -> Result<bool, StoreError> {
         Ok(self.knowledge_run_get(task_id)?.is_some())
     }
@@ -381,12 +364,6 @@ mod tests {
         assert_eq!(run.via.as_deref(), Some(VIA_LANGMEM));
         assert!(run.retried_at.is_none());
 
-        let by_run = store
-            .knowledge_run_by_run_task(run_task_id)
-            .expect("by run")
-            .expect("some");
-        assert_eq!(by_run.task_id, task_id);
-
         let recent = store.knowledge_run_recent(10).expect("recent");
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].task_id, task_id);
@@ -396,10 +373,6 @@ mod tests {
     fn unknown_task_returns_none() {
         let store = store();
         assert_eq!(store.knowledge_run_get(TaskId::new()).expect("get"), None);
-        assert_eq!(
-            store.knowledge_run_by_run_task(TaskId::new()).expect("get"),
-            None
-        );
         assert!(store.knowledge_run_recent(10).expect("recent").is_empty());
     }
 

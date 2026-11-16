@@ -397,38 +397,6 @@ pub fn route(
     })
 }
 
-/// 同一 task を各 backend で走らせた結果（H7 の比較の材料）。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SameTaskRun {
-    pub backend_id: String,
-    pub task_fixture: String,
-    pub accepted: bool,
-    pub policy_violations: u32,
-    pub recoveries: u32,
-    pub cost_usd: f64,
-    pub wall_secs: u64,
-}
-
-/// 比較の順位。違反 0 を先に、受け入れ、少ない復旧、安い、速いの順。
-/// 異なる task fixture の結果は混ぜない（`None`）。
-pub fn rank_same_task(runs: &[SameTaskRun]) -> Option<Vec<String>> {
-    let first = runs.first()?;
-    if runs.iter().any(|r| r.task_fixture != first.task_fixture) {
-        return None;
-    }
-    let mut v: Vec<&SameTaskRun> = runs.iter().collect();
-    v.sort_by(|a, b| {
-        (a.policy_violations > 0)
-            .cmp(&(b.policy_violations > 0))
-            .then(b.accepted.cmp(&a.accepted))
-            .then(a.recoveries.cmp(&b.recoveries))
-            .then(a.cost_usd.total_cmp(&b.cost_usd))
-            .then(a.wall_secs.cmp(&b.wall_secs))
-            .then(a.backend_id.cmp(&b.backend_id))
-    });
-    Some(v.into_iter().map(|r| r.backend_id.clone()).collect())
-}
-
 #[cfg(test)]
 #[path = "browser_backend/tests.rs"]
 mod tests;

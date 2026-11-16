@@ -142,25 +142,36 @@ mod tests {
     #[test]
     fn conflict_replay_key_reuse_and_other_lease() -> Result<(), Box<dyn std::error::Error>> {
         let store = SqliteStore::open_in_memory()?;
-        let p = store.browser_control_apply(KEY, &req(ControlCommand::Pause, 0, "p"), 100)?;
+        let p = store
+            .browser_control_mutate(KEY, |s| s.apply(&req(ControlCommand::Pause, 0, "p"), 100))?;
         assert_eq!(p.phase, ControlPhase::Paused);
         // 古い version は version_conflict。
-        let e = store.browser_control_apply(KEY, &req(takeover("me", None), 0, "t"), 100);
+        let e =
+            store.browser_control_mutate(KEY, |s| s.apply(&req(takeover("me", None), 0, "t"), 100));
         assert!(matches!(
             e.err().and_then(control_err),
             Some(ControlError::VersionConflict { .. })
         ));
-        let t =
-            store.browser_control_apply(KEY, &req(takeover("me", None), p.version, "t"), 100)?;
+        let t = store.browser_control_mutate(KEY, |s| {
+            s.apply(&req(takeover("me", None), p.version, "t"), 100)
+        })?;
         assert_eq!(t.lease_expires_at, Some(100 + CONTROL_LEASE_DEFAULT_SECS));
         // 同じ key の再送は前回の結果を返し、lease を延ばさない。
-        let again =
-            store.browser_control_apply(KEY, &req(takeover("me", None), p.version, "t"), 150)?;
+        let again = store.browser_control_mutate(KEY, |s| {
+            s.apply(&req(takeover("me", None), p.version, "t"), 150)
+        })?;
         assert!(again.replayed);
         assert_eq!(again.lease_expires_at, t.lease_expires_at);
-        assert_eq!(store.browser_control_get(KEY)?.version(), t.version);
+        assert_eq!(
+            store
+                .browser_control_mutate(KEY, |s| Ok(s.clone()))?
+                .version(),
+            t.version
+        );
         // 同じ key を別 command に流用すると拒否。
-        let e = store.browser_control_apply(KEY, &req(ControlCommand::Stop, t.version, "t"), 150);
+        let e = store.browser_control_mutate(KEY, |s| {
+            s.apply(&req(ControlCommand::Stop, t.version, "t"), 150)
+        });
         assert_eq!(
             e.err().and_then(control_err),
             Some(ControlError::IdempotencyConflict)
@@ -170,13 +181,14 @@ mod tests {
             holder: "other".into(),
             ttl_secs: None,
         };
-        let e = store.browser_control_apply(KEY, &req(renew, t.version, "r"), 150);
+        let e = store.browser_control_mutate(KEY, |s| s.apply(&req(renew, t.version, "r"), 150));
         assert_eq!(
             e.err().and_then(control_err),
             Some(ControlError::NotLeaseHolder)
         );
-        let e =
-            store.browser_control_apply(KEY, &req(takeover("other", None), t.version, "o"), 150);
+        let e = store.browser_control_mutate(KEY, |s| {
+            s.apply(&req(takeover("other", None), t.version, "o"), 150)
+        });
         assert_eq!(
             e.err().and_then(control_err),
             Some(ControlError::NotLeaseHolder)
@@ -187,27 +199,30 @@ mod tests {
     #[test]
     fn lease_limits_expiry_and_no_auto_resume() -> Result<(), Box<dyn std::error::Error>> {
         let store = SqliteStore::open_in_memory()?;
-        let p = store.browser_control_apply(KEY, &req(ControlCommand::Pause, 0, "p"), 100)?;
-        let e = store.browser_control_apply(
-            KEY,
-            &req(
-                takeover("me", Some(CONTROL_LEASE_MAX_SECS + 1)),
-                p.version,
-                "long",
-            ),
-            100,
-        );
+        let p = store
+            .browser_control_mutate(KEY, |s| s.apply(&req(ControlCommand::Pause, 0, "p"), 100))?;
+        let e = store.browser_control_mutate(KEY, |s| {
+            s.apply(
+                &req(
+                    takeover("me", Some(CONTROL_LEASE_MAX_SECS + 1)),
+                    p.version,
+                    "long",
+                ),
+                100,
+            )
+        });
         assert!(matches!(
             e.err().and_then(control_err),
             Some(ControlError::LeaseTooLong { .. })
         ));
-        let t =
-            store.browser_control_apply(KEY, &req(takeover("me", None), p.version, "t"), 100)?;
+        let t = store.browser_control_mutate(KEY, |s| {
+            s.apply(&req(takeover("me", None), p.version, "t"), 100)
+        })?;
         assert_eq!(t.lease_expires_at, Some(160));
         // 切断相当: lease 切れで Paused に戻り、agent は自動再開しない。
         let expired = store.browser_control_mutate(KEY, |s| Ok(s.expire(161)))?;
         assert!(expired);
-        let s = store.browser_control_get(KEY)?;
+        let s = store.browser_control_mutate(KEY, |s| Ok(s.clone()))?;
         assert_eq!(s.phase(), ControlPhase::Paused);
         assert!(s.lease().is_none());
         let begin = store.browser_control_mutate(KEY, |s| s.begin_agent_action());
@@ -216,14 +231,18 @@ mod tests {
             Some(ControlError::InvalidPhase { .. })
         ));
         // 明示的な切断も同じ。
-        let v = store.browser_control_get(KEY)?.version();
-        store.browser_control_apply(KEY, &req(takeover("me", None), v, "t2"), 200)?;
+        let v = store
+            .browser_control_mutate(KEY, |s| Ok(s.clone()))?
+            .version();
+        store.browser_control_mutate(KEY, |s| s.apply(&req(takeover("me", None), v, "t2"), 200))?;
         store.browser_control_mutate(KEY, |s| {
             s.human_disconnected("me");
             Ok(())
         })?;
         assert_eq!(
-            store.browser_control_get(KEY)?.phase(),
+            store
+                .browser_control_mutate(KEY, |s| Ok(s.clone()))?
+                .phase(),
             ControlPhase::Paused
         );
         Ok(())
@@ -232,17 +251,21 @@ mod tests {
     #[test]
     fn auth_section_revokes_lease_and_rejects_takeover() -> Result<(), Box<dyn std::error::Error>> {
         let store = SqliteStore::open_in_memory()?;
-        let p = store.browser_control_apply(KEY, &req(ControlCommand::Pause, 0, "p"), 100)?;
-        store.browser_control_apply(KEY, &req(takeover("me", None), p.version, "t"), 100)?;
+        let p = store
+            .browser_control_mutate(KEY, |s| s.apply(&req(ControlCommand::Pause, 0, "p"), 100))?;
+        store.browser_control_mutate(KEY, |s| {
+            s.apply(&req(takeover("me", None), p.version, "t"), 100)
+        })?;
         store.browser_control_mutate(KEY, |s| {
             s.enter_auth_section();
             Ok(())
         })?;
-        let s = store.browser_control_get(KEY)?;
+        let s = store.browser_control_mutate(KEY, |s| Ok(s.clone()))?;
         assert_eq!(s.phase(), ControlPhase::Paused);
         assert!(s.lease().is_none());
-        let e =
-            store.browser_control_apply(KEY, &req(takeover("me", None), s.version(), "t2"), 101);
+        let e = store.browser_control_mutate(KEY, |s| {
+            s.apply(&req(takeover("me", None), s.version(), "t2"), 101)
+        });
         assert_eq!(
             e.err().and_then(control_err),
             Some(ControlError::AuthSectionActive)
@@ -253,10 +276,13 @@ mod tests {
     #[test]
     fn task_cancel_stops_and_rejects_later_ops() -> Result<(), Box<dyn std::error::Error>> {
         let store = SqliteStore::open_in_memory()?;
-        let p = store.browser_control_apply(KEY, &req(ControlCommand::Pause, 0, "p"), 100)?;
-        store.browser_control_apply(KEY, &req(takeover("me", None), p.version, "t"), 100)?;
+        let p = store
+            .browser_control_mutate(KEY, |s| s.apply(&req(ControlCommand::Pause, 0, "p"), 100))?;
+        store.browser_control_mutate(KEY, |s| {
+            s.apply(&req(takeover("me", None), p.version, "t"), 100)
+        })?;
         assert_eq!(store.browser_control_stop_task("T1", 110)?, 1);
-        let s = store.browser_control_get(KEY)?;
+        let s = store.browser_control_mutate(KEY, |s| Ok(s.clone()))?;
         assert_eq!(s.phase(), ControlPhase::Stopped);
         assert!(s.lease().is_none());
         // 二度目は何もしない。
@@ -267,11 +293,12 @@ mod tests {
         };
         assert!(
             store
-                .browser_control_apply(KEY, &req(renew, s.version(), "r"), 112)
+                .browser_control_mutate(KEY, |s| s.apply(&req(renew, s.version(), "r"), 112))
                 .is_err()
         );
-        let e =
-            store.browser_control_apply(KEY, &req(takeover("me", None), s.version(), "t9"), 112);
+        let e = store.browser_control_mutate(KEY, |s| {
+            s.apply(&req(takeover("me", None), s.version(), "t9"), 112)
+        });
         assert!(matches!(
             e.err().and_then(control_err),
             Some(ControlError::InvalidPhase {
@@ -307,7 +334,7 @@ impl SqliteStore {
         now: u64,
     ) -> Result<BrowserControl, BrowserStoreError> {
         match op {
-            AgentActionOp::Read => Ok(self.browser_control_get(key)?),
+            AgentActionOp::Read => Ok(self.browser_control_mutate(key, |s| Ok(s.clone()))?),
             AgentActionOp::Begin => self.browser_control_mutate(key, |s| {
                 s.expire(now);
                 if s.auth_section_active() {

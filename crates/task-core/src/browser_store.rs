@@ -3,7 +3,7 @@
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 
-use crate::browser_control::{BrowserControl, ControlError, ControlOutcome, ControlRequest};
+use crate::browser_control::ControlError;
 use crate::browser_identity::{
     self, BrowserIdentity, IdentityDenied, IdentityRegistration, IdentityState, SealedEnvelope,
 };
@@ -188,56 +188,6 @@ impl SqliteStore {
         })
     }
 
-    pub fn browser_control_get(
-        &self,
-        key: BrowserSessionKey<'_>,
-    ) -> Result<BrowserControl, StoreError> {
-        nonempty_key(key)?;
-        let conn = self.lock()?;
-        let json: Option<String> = conn.query_row(
-            "SELECT state_json FROM browser_control_state WHERE task_id=?1 AND run_id=?2 AND session_id=?3",
-            params![key.task_id, key.run_id, key.session_id],
-            |r| r.get(0),
-        ).optional()?;
-        json.map(|s| serde_json::from_str(&s).map_err(StoreError::from))
-            .unwrap_or_else(|| Ok(BrowserControl::new()))
-    }
-
-    /// CAS and idempotency check run under one IMMEDIATE transaction.
-    pub fn browser_control_apply(
-        &self,
-        key: BrowserSessionKey<'_>,
-        req: &ControlRequest,
-        now: u64,
-    ) -> Result<ControlOutcome, BrowserStoreError> {
-        nonempty_key(key)?;
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let json: Option<String> = tx.query_row(
-            "SELECT state_json FROM browser_control_state WHERE task_id=?1 AND run_id=?2 AND session_id=?3",
-            params![key.task_id, key.run_id, key.session_id], |r| r.get(0),
-        ).optional()?;
-        let mut state: BrowserControl = match json {
-            Some(json) => serde_json::from_str(&json).map_err(StoreError::from)?,
-            None => BrowserControl::new(),
-        };
-        let outcome = state.apply(req, now)?;
-        if !outcome.replayed {
-            let phase = serde_json::to_string(&state.phase()).map_err(StoreError::from)?;
-            tx.execute(
-                "INSERT INTO browser_control_state(task_id,run_id,session_id,phase,version,lease_holder,lease_expires_at,state_json) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)
-                 ON CONFLICT(task_id,run_id,session_id) DO UPDATE SET phase=excluded.phase,version=excluded.version,lease_holder=excluded.lease_holder,lease_expires_at=excluded.lease_expires_at,state_json=excluded.state_json",
-                params![key.task_id, key.run_id, key.session_id, phase, state.version(), state.lease().map(|l| l.holder.as_str()), state.lease().map(|l| l.expires_at), serde_json::to_string(&state).map_err(StoreError::from)?],
-            )?;
-            tx.execute(
-                "INSERT INTO browser_control_actions(task_id,run_id,session_id,idempotency_key,command_json,outcome_json) VALUES (?1,?2,?3,?4,?5,?6)",
-                params![key.task_id, key.run_id, key.session_id, req.idempotency_key, serde_json::to_string(&req.command).map_err(StoreError::from)?, serde_json::to_string(&outcome).map_err(StoreError::from)?],
-            )?;
-        }
-        tx.commit()?;
-        Ok(outcome)
-    }
-
     pub fn browser_identity_get(
         &self,
         identity_id: &str,
@@ -341,7 +291,7 @@ impl SqliteStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::browser_control::{ControlCommand, ControlPhase};
+    use crate::browser_control::{ControlCommand, ControlPhase, ControlRequest};
     use crate::browser_live::{LiveEvent, LiveTab};
 
     fn key() -> BrowserSessionKey<'static> {
@@ -422,10 +372,10 @@ mod tests {
             expected_version: 0,
             idempotency_key: "pause-1".into(),
         };
-        let first = store.browser_control_apply(key(), &pause, 100)?;
+        let first = store.browser_control_mutate(key(), |s| s.apply(&pause, 100))?;
         assert_eq!(first.phase, ControlPhase::Paused);
         assert_eq!(first.version, 1);
-        let replay = store.browser_control_apply(key(), &pause, 500)?;
+        let replay = store.browser_control_mutate(key(), |s| s.apply(&pause, 500))?;
         assert!(replay.replayed);
         assert_eq!(replay.version, first.version);
         let conflict = ControlRequest {
@@ -434,7 +384,7 @@ mod tests {
             idempotency_key: "pause-1".into(),
         };
         assert!(matches!(
-            store.browser_control_apply(key(), &conflict, 500),
+            store.browser_control_mutate(key(), |s| s.apply(&conflict, 500)),
             Err(BrowserStoreError::Control(
                 ControlError::IdempotencyConflict
             ))
@@ -445,7 +395,7 @@ mod tests {
             idempotency_key: "stop-1".into(),
         };
         assert!(matches!(
-            store.browser_control_apply(key(), &stale, 500),
+            store.browser_control_mutate(key(), |s| s.apply(&stale, 500)),
             Err(BrowserStoreError::Control(
                 ControlError::VersionConflict { .. }
             ))
@@ -458,11 +408,16 @@ mod tests {
             expected_version: 1,
             idempotency_key: "takeover-1".into(),
         };
-        let held = store.browser_control_apply(key(), &takeover, 100)?;
+        let held = store.browser_control_mutate(key(), |s| s.apply(&takeover, 100))?;
         assert_eq!(held.lease_expires_at, Some(160));
-        let replay = store.browser_control_apply(key(), &takeover, 120)?;
+        let replay = store.browser_control_mutate(key(), |s| s.apply(&takeover, 120))?;
         assert_eq!(replay.lease_expires_at, Some(160));
-        assert_eq!(store.browser_control_get(key())?.version(), held.version);
+        assert_eq!(
+            store
+                .browser_control_mutate(key(), |s| Ok(s.clone()))?
+                .version(),
+            held.version
+        );
         Ok(())
     }
 

@@ -143,25 +143,18 @@ impl Fixture {
     }
 
     fn phase(&self) -> ControlPhase {
-        self.store
-            .browser_control_mutate(key(), |s| Ok(s.clone()))
-            .unwrap()
-            .phase()
+        self.store.browser_control_get(key()).unwrap().phase()
     }
 
     fn command(&self, command: ControlCommand, idem: &str) {
-        let version = self
-            .store
-            .browser_control_mutate(key(), |s| Ok(s.clone()))
-            .unwrap()
-            .version();
+        let version = self.store.browser_control_get(key()).unwrap().version();
         let req = ControlRequest {
             command,
             expected_version: version,
             idempotency_key: idem.into(),
         };
         self.store
-            .browser_control_mutate(key(), |s| s.apply(&req, now()))
+            .browser_control_apply(key(), &req, now())
             .unwrap();
     }
 }
@@ -202,13 +195,7 @@ fn gate_wire_running_actions_reach_the_browser() {
     assert!(f.shim(&["snapshot"]));
     assert!(f.shim(&["click", "@e1"]));
     assert_eq!(f.seen(), ["snapshot", "click"]);
-    assert_eq!(
-        f.store
-            .browser_control_mutate(key(), |s| Ok(s.clone()))
-            .unwrap()
-            .in_flight(),
-        0
-    );
+    assert_eq!(f.store.browser_control_get(key()).unwrap().in_flight(), 0);
 }
 
 #[test]
@@ -220,21 +207,14 @@ fn gate_wire_human_control_blocks_agent_until_resume() {
     assert!(!f.shim(&["snapshot"]), "agent action during human control");
     assert!(f.seen().is_empty(), "blocked action reached the browser");
     // The lease is exclusive: another controller cannot act or resume.
-    let mut state = f
-        .store
-        .browser_control_mutate(key(), |s| Ok(s.clone()))
-        .unwrap();
+    let mut state = f.store.browser_control_get(key()).unwrap();
     assert!(state.authorize_human_action("human-b", now()).is_err());
     let req = ControlRequest {
         command: resume("human-b"),
         expected_version: state.version(),
         idempotency_key: "r-other".into(),
     };
-    assert!(
-        f.store
-            .browser_control_mutate(key(), |s| s.apply(&req, now()))
-            .is_err()
-    );
+    assert!(f.store.browser_control_apply(key(), &req, now()).is_err());
     assert!(!f.shim(&["snapshot"]));
     assert!(f.seen().is_empty());
     f.command(resume("human-a"), "r1");
@@ -259,13 +239,7 @@ fn gate_wire_pause_converges_after_in_flight_then_blocks() {
             .success()
     });
     wait_until("click in flight", || f.seen() == ["click"]);
-    assert_eq!(
-        f.store
-            .browser_control_mutate(key(), |s| Ok(s.clone()))
-            .unwrap()
-            .in_flight(),
-        1
-    );
+    assert_eq!(f.store.browser_control_get(key()).unwrap().in_flight(), 1);
     f.command(ControlCommand::Pause, "p1");
     assert_eq!(f.phase(), ControlPhase::Pausing);
     release.send(()).unwrap();
@@ -288,20 +262,13 @@ fn gate_wire_auth_section_blocks_agent_until_left() {
     assert!(!f.shim(&["click", "@e1"]));
     assert!(f.seen().is_empty());
     // H3 stays: no takeover while the auth section is active.
-    let state = f
-        .store
-        .browser_control_mutate(key(), |s| Ok(s.clone()))
-        .unwrap();
+    let state = f.store.browser_control_get(key()).unwrap();
     let req = ControlRequest {
         command: takeover("human-a"),
         expected_version: state.version(),
         idempotency_key: "t-auth".into(),
     };
-    assert!(
-        f.store
-            .browser_control_mutate(key(), |s| s.apply(&req, now()))
-            .is_err()
-    );
+    assert!(f.store.browser_control_apply(key(), &req, now()).is_err());
     f.store.browser_control_auth_section(key(), false).unwrap();
     assert!(f.shim(&["snapshot"]));
     assert_eq!(f.seen(), ["snapshot"]);

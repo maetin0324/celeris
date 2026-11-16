@@ -38,7 +38,14 @@ completed: 2026-11-16
 新しい処理を外すと落ちることの確認（提出時の HEAD の前、作業ツリーで一時的に書き換えて戻した）: `allocate_locked` の `remove_stale_build_outputs(pool, &target, &target)` を `Ok(Vec::new())` に、`seed_target` の `remove_stale_build_outputs(pool, &tmp, &target)?` を `Vec::new()` に替えて `cargo nextest run -p task-worker --no-fail-fast -E 'test(/stale_build_output|removes_packages_that_point|adopt_discards_the_target/)'` → `4 tests run: 1 passed, 3 failed`（adopt・seed・D4 の 3 件が `v8 must be removed` などで落ちる。関数を直接呼ぶ `stale_build_output_rule_details` だけ通る）。戻した後は 4 件とも通る。fixture を `.cargo-lock` に替えた後にもう一度行い、同じ結果だった。
 
 ## 証拠（提出時の HEAD で実行。基準は git merge-base HEAD main）
-EVIDENCE_PLACEHOLDER
+- `bash scripts/dev/test-affected.sh` → exit 0。対象 crate は celeris・celeris-campaign・celerisctl・llm-proxy・task-api・task-dispatch・task-worker。`6165 tests run: 6165 passed (16 slow), 22 skipped`（567 秒）。続けて走る repo-health は `verdict=pass exit=0`（fail_grade=0、new=0、worsened=0）、`repo_health_gate: all checks passed`。
+- 途中の経過: 1 回目の test-affected は exit 0 だったが、repo-health が `dup.public-surface` の new を 1 件出した（`profile_dirs` の重複）。2 回目（既存の `workspace_targets::profile_dirs` を使う形）は `deps.cycle` の worsened で exit 1 になった。`profile_dirs` を `scratch` 側へ移して 3 回目で上の結果になった。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- `sh scripts/dev/progress-index.sh --check` → exit 0（`progress-index --check: ok`）。`sh scripts/dev/check-doc-links.sh` → exit 0（`check-doc-links: ok`）。`python3 scripts/dev/check-architecture-map.py` → exit 0。`python3 scripts/dev/check-human-text.py --root .` → 0 findings。
+- `cargo nextest run -p task-worker -E 'test(/scratch::|workspace_targets|workspace_prune/)'` → `65 tests run: 65 passed`。
+- 新しい処理を外したときの確認は上の「試験」の節（最後のコードでもう一度行い、`4 tests run: 1 passed, 3 failed`、戻して 4 件 passed）。
+- この file の最後の更新（検査の結果を書いただけ）の後に、`progress-index --check`・`check-doc-links`・`cargo fmt --all -- --check`・`bash scripts/dev/check-health.sh` を再実行した（結果は報告に書く）。Rust のコードはその更新で変わっていない。
 
 ## 本番への移行
 config・DB・API の変更は無い。新しい release に昇格した後の新しい引き継ぎ・seed の写しから効く。

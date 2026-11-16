@@ -1563,7 +1563,8 @@ fn credential_dispatcher(
 ) -> Dispatcher {
     let mut d = dispatcher(e.store(), adapter, 1);
     let clock = e.clock.clone();
-    d.set_now_unix_fn(Arc::new(move || clock.lock().unwrap().unix_timestamp()));
+    d.probes
+        .set_now_unix(Arc::new(move || clock.lock().unwrap().unix_timestamp()));
     d.set_credential_gates(crate::dispatcher::CredentialGates {
         secrets_dir: Some(e.secrets.clone()),
         by_source: HashMap::from([(

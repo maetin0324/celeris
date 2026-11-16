@@ -1021,7 +1021,7 @@ async fn a_container_task_is_blocked_with_a_question_when_no_runtime_works() {
         )
     });
     assert!(!probe.is_available(), "{probe:?}");
-    d.set_container_probe(probe);
+    d.cluster.set_container_probe(probe);
     run_until_idle(&mut d, 60).await;
 
     assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Blocked);
@@ -1077,7 +1077,7 @@ async fn a_host_task_still_runs_when_no_container_runtime_is_available() {
     });
     let mut d = worktree_dispatcher(store.clone(), adapter, root.path(), None);
     // 既定（`RuntimeProbe::default()` = 何も使えない）のまま走らせる。
-    assert!(!d.container_probe().is_available());
+    assert!(!d.cluster.container_probe().is_available());
     run_until_terminal(&mut d, &store, &[task.id]).await;
     assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
     assert_eq!(

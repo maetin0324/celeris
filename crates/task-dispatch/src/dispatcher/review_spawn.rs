@@ -361,7 +361,7 @@ impl Dispatcher {
         if task.status != Status::Reviewing {
             return Ok(true);
         }
-        if self.held_by_disk_critical(&task) {
+        if self.maint.held_by_disk_critical(&task) {
             return Ok(false);
         }
         let Some(dir) = self.task_dir(&task) else {

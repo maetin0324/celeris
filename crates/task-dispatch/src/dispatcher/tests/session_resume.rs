@@ -825,10 +825,11 @@ async fn session_resume_container_no_session() {
     let mut d = claude_dispatcher(&store, adapter.clone());
     d.config.workspace_roots =
         task_core::local_machine::WorkspaceRoots::new(root.path().join("ws"), None);
-    d.set_container_probe(task_worker::container::detect_with(
-        task_worker::RuntimePreference::Auto,
-        |_| Ok(()),
-    ));
+    d.cluster
+        .set_container_probe(task_worker::container::detect_with(
+            task_worker::RuntimePreference::Auto,
+            |_| Ok(()),
+        ));
     let report = run_until_idle(&mut d, 400).await;
     assert!(report.idle, "{report:?}");
     assert_eq!(store.get(task_id).unwrap().unwrap().status, Status::Done);

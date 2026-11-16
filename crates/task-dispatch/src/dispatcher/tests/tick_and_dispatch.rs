@@ -65,7 +65,7 @@ fn tick_feed_sync_is_bounded_and_idle_ticks_do_not_scale_with_events() {
         let mut d = dispatcher(store.clone(), adapter, 1);
         // 注入した時計: 種の events より後の時刻で tick する（秒に丸めた `now` で取り残さない）。
         let at = OffsetDateTime::now_utc().unix_timestamp() + 2;
-        d.set_now_unix_fn(Arc::new(move || at));
+        d.probes.set_now_unix(Arc::new(move || at));
         let cursor = |s: &SqliteStore| {
             s.feed_cursor_get("events")
                 .unwrap()

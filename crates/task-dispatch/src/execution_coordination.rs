@@ -608,6 +608,7 @@ impl<S, C> ExecutionCoordination<S, C> {
     // ---- browser の適合台帳（ADR 2026-10-08 D2） ----
 
     /// 台帳の見張りを差し替え、止めた task を次の tick で見直す。
+    #[cfg(test)]
     pub(crate) fn set_browser_ledger_watch(&mut self, watch: LedgerWatch) {
         self.browser_ledger = watch;
         self.browser_prereq_rescan = true;

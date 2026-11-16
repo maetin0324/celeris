@@ -56,6 +56,7 @@ impl ProbePorts {
     }
 
     /// 壁時計を差し替える。
+    #[cfg(test)]
     pub(crate) fn set_now_unix(&mut self, f: NowUnixFn) {
         self.now_unix = f;
     }

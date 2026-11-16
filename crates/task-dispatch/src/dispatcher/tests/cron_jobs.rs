@@ -400,16 +400,17 @@ async fn target_sweep_executor_cleans_finished_workspaces_and_scratch_at_critica
             })
         }
     }
-    d.set_disk_watch_with_probe(
+    d.set_disk_watch_with(
         vec![crate::disk_watch::DiskWatchEntry {
             path: "/fake/local".into(),
             warn_pct: 80.0,
             critical_pct: 95.0,
         }],
         Box::new(Critical),
+        None,
     );
     d.tick_disk_watch();
-    assert!(d.disk_watch_critical());
+    assert!(d.maint.disk_watch_critical());
     let mut maintenance = new_task(tmp.path(), Check::Reviewer, 0);
     maintenance.labels = vec![
         "maintenance-action-target-sweep".into(),

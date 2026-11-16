@@ -144,7 +144,7 @@ async fn browser_ledger_gate_missing_ledger_blocks_before_dispatch_without_infra
         calls: AtomicUsize::new(0),
     });
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
-    d.set_browser_ledger_watch(LedgerWatch::fixed(
+    d.coord.set_browser_ledger_watch(LedgerWatch::fixed(
         Some(ledger_dir.path().join("conformance.json")),
         Some(RELEASE.into()),
         None,
@@ -183,7 +183,7 @@ async fn browser_ledger_gate_stale_release_blocks_and_resumes_after_regeneration
         calls: AtomicUsize::new(0),
     });
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
-    d.set_browser_ledger_watch(LedgerWatch::fixed(
+    d.coord.set_browser_ledger_watch(LedgerWatch::fixed(
         Some(ledger.clone()),
         Some(RELEASE.into()),
         None,
@@ -230,7 +230,7 @@ async fn verify_mode_does_not_resume_browser_prerequisite_blocked_tasks() {
         calls: AtomicUsize::new(0),
     });
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
-    d.set_browser_ledger_watch(LedgerWatch::fixed(
+    d.coord.set_browser_ledger_watch(LedgerWatch::fixed(
         Some(ledger.clone()),
         Some(RELEASE.into()),
         None,
@@ -264,7 +264,8 @@ async fn browser_ledger_gate_placed_ledger_dispatches_and_worker_ledger_error_is
         calls: AtomicUsize::new(0),
     });
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
-    d.set_browser_ledger_watch(LedgerWatch::fixed(Some(ledger), Some(RELEASE.into()), None));
+    d.coord
+        .set_browser_ledger_watch(LedgerWatch::fixed(Some(ledger), Some(RELEASE.into()), None));
     tick_n(&mut d, 1).await;
     let reasons = transition_reasons(&store, task.id);
     assert_eq!(reasons.first().map(String::as_str), Some("dispatch"));
@@ -305,7 +306,7 @@ async fn browser_ledger_gate_ignores_tasks_without_browser_skill() {
         calls: AtomicUsize::new(0),
     });
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
-    d.set_browser_ledger_watch(LedgerWatch::fixed(
+    d.coord.set_browser_ledger_watch(LedgerWatch::fixed(
         Some(ledger_dir.path().join("conformance.json")),
         None,
         None,

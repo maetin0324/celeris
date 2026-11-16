@@ -153,7 +153,7 @@ impl Dispatcher {
                 }
                 AdmissionFact::Eligible => input.eligible = Some(self.is_eligible(&task)),
                 AdmissionFact::DiskCritical => {
-                    input.disk_critical = Some(self.held_by_disk_critical(&task))
+                    input.disk_critical = Some(self.maint.held_by_disk_critical(&task))
                 }
                 AdmissionFact::DiskWatchPaths => {
                     input.disk_watch_paths = Some(self.maint.disk_watch_paths())

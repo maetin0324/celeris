@@ -29,11 +29,6 @@ pub(super) fn worker_error_code(message: &str) -> Option<BrowserPrerequisiteCode
 }
 
 impl Dispatcher {
-    /// 試験・点検用: 台帳の見張りを差し替える（既定は daemon の設定と PATH の agent-browser）。
-    pub fn set_browser_ledger_watch(&mut self, watch: task_worker::browser_ledger::LedgerWatch) {
-        self.coord.set_browser_ledger_watch(watch);
-    }
-
     /// worker が browser 経路に入るのと同じ条件（`requests_browser`・Execute・planner でない）。
     pub(super) fn browser_prereq_applies(task: &Task, is_planner_dispatch: bool) -> bool {
         !is_planner_dispatch

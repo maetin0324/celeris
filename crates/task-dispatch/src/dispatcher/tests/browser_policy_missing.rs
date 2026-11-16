@@ -73,7 +73,8 @@ async fn browser_policy_missing_blocks_before_dispatch_without_waking_the_worker
         calls: AtomicUsize::new(0),
     });
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
-    d.set_browser_ledger_watch(valid_ledger(ledger_dir.path()));
+    d.coord
+        .set_browser_ledger_watch(valid_ledger(ledger_dir.path()));
     tick_n(&mut d, 1).await;
     let t = store.get(task.id).unwrap().unwrap();
     assert_eq!((t.status, t.attempts), (Status::Blocked, 0));
@@ -113,7 +114,8 @@ async fn browser_policy_missing_resumes_after_policy_put() {
         calls: AtomicUsize::new(0),
     });
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
-    d.set_browser_ledger_watch(valid_ledger(ledger_dir.path()));
+    d.coord
+        .set_browser_ledger_watch(valid_ledger(ledger_dir.path()));
     tick_n(&mut d, 1).await;
     assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Blocked);
 
@@ -176,7 +178,8 @@ async fn browser_policy_missing_policy_outside_task_origins_blocks() {
         calls: AtomicUsize::new(0),
     });
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
-    d.set_browser_ledger_watch(valid_ledger(ledger_dir.path()));
+    d.coord
+        .set_browser_ledger_watch(valid_ledger(ledger_dir.path()));
     tick_n(&mut d, 3).await;
     let t = store.get(task.id).unwrap().unwrap();
     assert_eq!((t.status, t.attempts), (Status::Blocked, 0));
@@ -214,7 +217,8 @@ async fn browser_policy_missing_worker_rejection_is_not_infra_requeue() {
         calls: AtomicUsize::new(0),
     });
     let mut d = dispatcher(store.clone(), adapter.clone(), 1);
-    d.set_browser_ledger_watch(valid_ledger(ledger_dir.path()));
+    d.coord
+        .set_browser_ledger_watch(valid_ledger(ledger_dir.path()));
     // 試験専用の遅延: worker の拒否を 300ms 遅らせ、高負荷で終了が遅れる状況を負荷なしで再現する。
     // 旧形（tick_n(5) ≒ 50ms だけ待つ）ならこの遅延で必ず落ちる（下の事前確認がその証拠）。
     d.test_hooks.worker_start_delay = Some(Duration::from_millis(300));

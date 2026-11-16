@@ -1235,16 +1235,6 @@ impl Dispatcher {
         self.cluster.set_container_probe(probe);
     }
 
-    /// 調べた結果を差し替える（celeris の起動経路とテスト用）。
-    pub fn set_container_probe(&mut self, probe: task_worker::RuntimeProbe) {
-        self.cluster.set_container_probe(probe);
-    }
-
-    /// 起動時に調べたコンテナ runtime（スナップショット用）。
-    pub fn container_probe(&self) -> &task_worker::RuntimeProbe {
-        self.cluster.container_probe()
-    }
-
     /// ADR-0040 D4（Phase 47）: 新しい仕事を始めるのをやめる／再開する。`false` にすると
     /// `dispatch_ready`（ready なタスクの起動）と `recover_reviews`（他のインスタンスが抱えている
     /// かもしれない reviewing の拾い上げ）を止める。**手元の run とレビューはそのまま面倒を見る**。
@@ -1381,11 +1371,6 @@ impl Dispatcher {
             }
             busy.store(false, Ordering::SeqCst);
         });
-    }
-
-    /// テスト用: 壁時計の Unix 秒を差し替える（ADR-0024 D3 のスコア計算・cooldown の期限に使う）。
-    pub fn set_now_unix_fn(&mut self, f: Arc<dyn Fn() -> i64 + Send + Sync>) {
-        self.probes.set_now_unix(f);
     }
 
     /// ADR-0013 D4: tick ごとにデーモンのスナップショットを `watch` に送るようにする。

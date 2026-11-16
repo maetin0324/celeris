@@ -238,13 +238,14 @@ async fn disk_watch_tick_phase_holds_coding_until_pressure_recovers() {
     ));
     d.test_hooks.now = Some(clock.clone());
     let pct = Arc::new(StdMutex::new(85));
-    d.set_disk_watch_with_probe(
+    d.set_disk_watch_with(
         vec![DiskWatchEntry {
             path: "/local".into(),
             warn_pct: 80.0,
             critical_pct: 95.0,
         }],
         Box::new(Probe(pct.clone())),
+        None,
     );
     let disk_notices = || {
         store
@@ -310,10 +311,10 @@ async fn disk_watch_tick_phase_holds_coding_until_pressure_recovers() {
     let held = store.get(task.id).unwrap().unwrap();
     assert_eq!(held.status, Status::Ready);
     assert_eq!(held.attempts, task.attempts);
-    assert!(d.disk_watch_critical());
+    assert!(d.maint.disk_watch_critical());
     let mut conversation = task.clone();
     conversation.genre = Some("conversation".into());
-    assert!(!d.held_by_disk_critical(&conversation));
+    assert!(!d.maint.held_by_disk_critical(&conversation));
     let review = new_task(dir.path(), Check::Reviewer, 0);
     store.insert(&review).unwrap();
     store
@@ -344,7 +345,7 @@ async fn disk_watch_tick_phase_holds_coding_until_pressure_recovers() {
     *pct.lock().unwrap() = 89;
     *clock.lock().unwrap() += time::Duration::seconds(60);
     assert_eq!(d.tick().unwrap().dispatched, 1);
-    assert!(!d.disk_watch_critical());
+    assert!(!d.maint.disk_watch_critical());
 }
 
 /// ADR 2026-10-10-local-disk-growth-paths D2: cron の `target_sweep` が無くても、tick が終端の木の repo 直下

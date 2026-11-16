@@ -20,7 +20,7 @@ fn test_dispatcher(now: i64) -> Dispatcher {
         delay: Duration::ZERO,
     });
     let mut d = dispatcher(store, adapter, 1);
-    d.set_now_unix_fn(Arc::new(move || now));
+    d.probes.set_now_unix(Arc::new(move || now));
     d
 }
 

@@ -42,15 +42,6 @@ impl Dispatcher {
         );
     }
 
-    /// [`Self::set_disk_watch`] の測り方を差し替える（試験は偽の使用率を返す probe を渡す）。
-    pub fn set_disk_watch_with_probe(
-        &mut self,
-        entries: Vec<crate::disk_watch::DiskWatchEntry>,
-        probe: Box<dyn crate::disk_watch::DiskProbe>,
-    ) {
-        self.set_disk_watch_with(entries, probe, None);
-    }
-
     /// [`Self::set_disk_watch`] の probe と census（付記 A4）を差し替える（試験は host を見ない偽物を渡す）。
     pub fn set_disk_watch_with(
         &mut self,
@@ -59,16 +50,6 @@ impl Dispatcher {
         census: Option<Box<dyn crate::disk_watch::TargetCensus>>,
     ) {
         self.maint.set_disk_watch(entries, probe, census);
-    }
-
-    /// 付記 A4: 最後の測定で監視している path のどれかが `critical` か（新しい coding run を起こさない）。
-    pub fn disk_watch_critical(&self) -> bool {
-        self.maint.disk_watch_critical()
-    }
-
-    /// 付記 A4: この task の run は `critical` のあいだ止める coding run か（genre が `coding` か未指定）。
-    pub(super) fn held_by_disk_critical(&self, task: &Task) -> bool {
-        self.maint.held_by_disk_critical(task)
     }
 
     /// tick の段 `disk_watch`（前回から 60 秒経っていれば測る。時計は注入時計）。

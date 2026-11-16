@@ -140,3 +140,6 @@ python3 scripts/dev/repo-health/repo_health.py --repo <path> --base <rev> --head
 - 採らなかった: 実行時の時計で判定する案。D8 の決定性に反し、同じ commit の review の結論が走らせた日で変わる。
 - 採らなかった: head 側の profile の `expires` で判定する案。D2 の「採らなかった」と同じく、候補が期限を延ばして自分を合格にできる。
 - 採らなかった: 期限切れの例外を `exception` に残し、fail 級の式に期限の条件を足す案。式の写しが検査器・検証器・dispatcher の 3 か所にあり、3 か所を同時に変えないと判定が食い違う。
+
+## 付記（2026-11-16、許可の一覧の行の削除）
+task 01M7KATBGCRQRZ5NWXHXVWYPZ8（人の決定 2026-11-16）。D2 の「head が policy の file を 1 つでも変えていれば `policy.changed=true`」に例外を 1 つ足す: policy の file のうち、base 側の profile の `policy_allowlists` に当たる許可の一覧の file で、base と head の両方にあり、両方 UTF-8 で読め、head の内容の行（空行と列 0 の `#` の行を除く）が base の内容の行の集合に含まれる（行を消すだけの）変更は数えない。行を足す・書き換える・file の追加と削除・読めない内容は今までどおり数える。report の `policy.changed` と rule `policy.changed` の finding は engine の同じ判定を使い、`policy.files` の形は変えない。dispatcher（D6.1 の `policy_mixed`・D6.4 の人の承認）は report の `policy.changed` を読むだけなので変えない。詳細と読み手の確認は [ADR 2026-11-16 許可の一覧の行の削除](2026-11-16-health-policy-allowlist-shrink.md)。

@@ -1089,7 +1089,7 @@ impl<C> HostMaintenance<C> {
                 .roots
                 .iter()
                 .filter(|r| r.after_bytes > params.max_bytes_per_root)
-                .map(|r| (r.root.display().to_string(), r.after_bytes))
+                .map(|r| (r.root.clone(), r.after_bytes))
                 .collect();
             let notice = crate::disk_watch::target_sweep_notice(
                 task.id,

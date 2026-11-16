@@ -66,24 +66,6 @@ impl SweepEnv for SystemEnv {
     }
 }
 
-/// root 1 つ分の結果（`TargetSweepRootReport` と同じ形）。
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct RootReport {
-    pub root: PathBuf,
-    pub before_bytes: u64,
-    pub after_bytes: u64,
-    pub deleted_bytes: u64,
-    pub deleted_items: u64,
-    pub by_reason: ByReason,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ByReason {
-    pub age: u64,
-    pub cap: u64,
-    pub stale_target: u64,
-}
-
 /// 消した（dry_run なら消す予定の）項目 1 件。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeletedItem {
@@ -105,7 +87,7 @@ pub struct SkippedItem {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SweepReport {
     pub mode: TargetSweepMode,
-    pub roots: Vec<RootReport>,
+    pub roots: Vec<TargetSweepRootReport>,
     pub deleted: Vec<DeletedItem>,
     pub skipped: Vec<SkippedItem>,
     pub over_cap_unresolved: bool,
@@ -119,25 +101,6 @@ pub struct SweepReport {
 impl SweepReport {
     pub fn deleted_bytes(&self) -> u64 {
         self.roots.iter().map(|r| r.deleted_bytes).sum()
-    }
-
-    /// `Event::TargetSweepRan` の root 1 つ分へ写す。
-    pub fn root_reports(&self) -> Vec<TargetSweepRootReport> {
-        self.roots
-            .iter()
-            .map(|r| TargetSweepRootReport {
-                root: r.root.display().to_string(),
-                before_bytes: r.before_bytes,
-                after_bytes: r.after_bytes,
-                deleted_bytes: r.deleted_bytes,
-                deleted_items: r.deleted_items,
-                by_reason: TargetSweepByReason {
-                    age: r.by_reason.age,
-                    cap: r.by_reason.cap,
-                    stale_target: r.by_reason.stale_target,
-                },
-            })
-            .collect()
     }
 
     /// skip の先頭 [`SKIPPED_EVENT_LIMIT`] 件。
@@ -156,12 +119,26 @@ impl SweepReport {
     pub fn to_event(&self) -> Event {
         Event::TargetSweepRan {
             mode: self.mode,
-            roots: self.root_reports(),
+            roots: self.roots.clone(),
             skipped: self.skipped_head(),
             skipped_total: self.skipped.len() as u64,
             over_cap_unresolved: self.over_cap_unresolved,
             duration_ms: self.duration_ms,
         }
+    }
+}
+
+/// 量が 0 の root 1 つ分（`Event::TargetSweepRan` の型をそのまま報告に使う）。
+fn root_report(root: &Path) -> TargetSweepRootReport {
+    let by_reason = TargetSweepByReason::default();
+    let root = root.display().to_string();
+    TargetSweepRootReport {
+        root,
+        before_bytes: 0,
+        after_bytes: 0,
+        deleted_bytes: 0,
+        deleted_items: 0,
+        by_reason,
     }
 }
 
@@ -593,14 +570,11 @@ pub fn run_sweep_with_scratch(
     }
 
     // root ごとの量（apply は実際に rename できた分だけ数える）。
-    let mut roots_out: Vec<RootReport> = Vec::new();
+    let mut roots_out = Vec::new();
     let mut over_cap_unresolved = false;
     for summary in &plan.roots {
-        let mut r = RootReport {
-            root: summary.root.clone(),
-            before_bytes: summary.before_bytes,
-            ..RootReport::default()
-        };
+        let mut r = root_report(&summary.root);
+        r.before_bytes = summary.before_bytes;
         for d in deleted.iter().filter(|d| d.root == summary.root) {
             r.deleted_bytes = r.deleted_bytes.saturating_add(d.bytes);
             r.deleted_items += 1;
@@ -785,7 +759,7 @@ pub fn sweep_workspace_targets(
     let started = Instant::now();
     let apply = report.mode == TargetSweepMode::Apply;
     let gc = repo_target_gc_move_aside(store, roots, after_secs, now, apply);
-    let mut by_root: BTreeMap<PathBuf, RootReport> = BTreeMap::new();
+    let mut by_root = BTreeMap::new();
     for m in gc.moved {
         let task_root = match roots.task_root(store, &m.task_id) {
             Ok(r) => r,
@@ -799,10 +773,7 @@ pub fn sweep_workspace_targets(
         };
         let root = by_root
             .entry(task_root.clone())
-            .or_insert_with(|| RootReport {
-                root: task_root.clone(),
-                ..RootReport::default()
-            });
+            .or_insert_with(|| root_report(&task_root));
         root.before_bytes = root.before_bytes.saturating_add(m.bytes);
         root.deleted_bytes = root.deleted_bytes.saturating_add(m.bytes);
         root.deleted_items += 1;

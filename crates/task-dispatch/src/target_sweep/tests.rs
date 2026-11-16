@@ -227,7 +227,7 @@ fn target_sweep_apply_removes_old_items_and_reports_bytes() {
     assert!(report.errors.is_empty(), "{report:?}");
 
     let r = &report.roots[0];
-    assert_eq!(r.root, root);
+    assert_eq!(r.root, root.display().to_string());
     assert_eq!(r.before_bytes, old_bytes + new_bytes + 500);
     assert_eq!(r.deleted_bytes, old_bytes + 500);
     assert_eq!(r.after_bytes, new_bytes);

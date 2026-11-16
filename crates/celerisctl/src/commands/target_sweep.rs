@@ -107,7 +107,7 @@ fn print_report(report: &SweepReport, json: bool) -> Result<(), CliError> {
     for r in &report.roots {
         outln!(
             "{}: {} {} item(s), {} bytes ({} -> {} bytes)",
-            r.root.display(),
+            r.root,
             verb,
             r.deleted_items,
             r.deleted_bytes,

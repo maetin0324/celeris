@@ -72,7 +72,7 @@ pub struct FamilyDecision {
 /// 3. `ModelProfile.family`（[`ModelFamily::parse`]）
 /// 4. `Unknown`
 ///
-/// `DeploymentProfile.source_ref` のような文字列は判定に使わない。
+/// source の参照のような文字列は判定に使わない。
 /// deployment は family の材料を持たないため引数に含めない。
 /// catalog profile が無い行は `model = None` を渡せる。
 pub fn derive_family(

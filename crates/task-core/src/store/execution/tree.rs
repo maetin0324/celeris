@@ -156,20 +156,18 @@ impl SqliteStore {
         after_events: Vec<Event>,
         adoptions: Vec<TreeAdoption>,
     ) -> Result<bool, StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let result = Self::execution_plan_adopt_tree_tx(
-            &tx,
-            task_id,
-            plan,
-            work_units,
-            extra_events,
-            event,
-            after_events,
-            adoptions,
-        )?;
-        tx.commit()?;
-        Ok(result)
+        self.write_tx(|tx| {
+            Self::execution_plan_adopt_tree_tx(
+                tx,
+                task_id,
+                plan,
+                work_units,
+                extra_events,
+                event,
+                after_events,
+                adoptions,
+            )
+        })
     }
 
     /// Apply plan adoption within a caller-owned transaction (including CoS audit writes).
@@ -214,19 +212,17 @@ impl SqliteStore {
         events: Vec<Event>,
         adoption: TreeAdoption,
     ) -> Result<bool, StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let result = Self::tree_adopt_apply_tx(
-            &tx,
-            owner_id,
-            unit_id,
-            expect_unit_status,
-            updated,
-            events,
-            adoption,
-        )?;
-        tx.commit()?;
-        Ok(result)
+        self.write_tx(|tx| {
+            Self::tree_adopt_apply_tx(
+                tx,
+                owner_id,
+                unit_id,
+                expect_unit_status,
+                updated,
+                events,
+                adoption,
+            )
+        })
     }
 
     /// Apply a late tree adoption within a caller-owned transaction.

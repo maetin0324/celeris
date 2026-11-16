@@ -227,11 +227,7 @@ impl SqliteStore {
         current: &[CosTriageSource],
         now: OffsetDateTime,
     ) -> Result<usize, ChatError> {
-        let mut conn = writer(self)?;
-        let tx = immediate(&mut conn)?;
-        let n = resolve_stale(&tx, source_kind, current, None, &chat_ts(now))?;
-        tx.commit()?;
-        Ok(n)
+        self.write_tx(|tx| resolve_stale(tx, source_kind, current, None, &chat_ts(now)))
     }
 
     /// event 取り込み用: `task_ids` を `source_key` に含む item だけを対象に、`current_by_kind` に無い

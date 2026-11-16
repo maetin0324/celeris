@@ -95,20 +95,18 @@ impl SqliteStore {
         extra_events: Vec<Event>,
         plan_event: Event,
     ) -> Result<(), StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::execution_plan_replan_tx(
-            &tx,
-            task_id,
-            old_plan_id,
-            new_plan,
-            updated_work_units,
-            new_work_units,
-            extra_events,
-            plan_event,
-        )?;
-        tx.commit()?;
-        Ok(())
+        self.write_tx(|tx| {
+            Self::execution_plan_replan_tx(
+                tx,
+                task_id,
+                old_plan_id,
+                new_plan,
+                updated_work_units,
+                new_work_units,
+                extra_events,
+                plan_event,
+            )
+        })
     }
 
     /// `execution_plan_replan` の本体（呼び出し側の transaction の中で書く。ADR 2026-10-09 D5 の CoS 監査経路）。

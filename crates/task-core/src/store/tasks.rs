@@ -414,11 +414,7 @@ impl SqliteStore {
         created_by: &str,
         extra_events: Vec<Event>,
     ) -> Result<(), StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::create_task_tx(&tx, task, origin, created_by, extra_events)?;
-        tx.commit()?;
-        Ok(())
+        self.write_tx(|tx| Self::create_task_tx(tx, task, origin, created_by, extra_events))
     }
 
     /// `create_task_impl` that also runs `also` in the same transaction before the commit
@@ -529,11 +525,7 @@ impl SqliteStore {
         new_task: &Task,
         by: &str,
     ) -> Result<Vec<TaskId>, StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let rewired = Self::retry_task_tx(&tx, original, new_task, by)?;
-        tx.commit()?;
-        Ok(rewired)
+        self.write_tx(|tx| Self::retry_task_tx(tx, original, new_task, by))
     }
 
     /// `retry_task` の本体（呼び出し側の transaction の中で書く。ADR 2026-10-09 D5 の CoS 監査経路）。
@@ -741,11 +733,7 @@ impl SqliteStore {
     /// リースを取っていても、その run を壊さないため。`acquire_lease` / `apply_transition_if_lease` と同じ規律）。
     /// 書き込んだ後の `Task`（= 読み直した状態を持つもの）を返す。無いタスクは `StoreError::Invalid`。
     pub fn update_task(&self, task: &Task, event: Event) -> Result<Task, StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let merged = Self::edit_task_tx(&tx, task, &event)?;
-        tx.commit()?;
-        Ok(merged)
+        self.write_tx(|tx| Self::edit_task_tx(tx, task, &event))
     }
 
     /// `update_task` の本体（呼び出し側の transaction の中で書く。ADR 2026-10-09 D5 の CoS 監査経路）。

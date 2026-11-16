@@ -52,8 +52,8 @@ fn generator_emits_sorted_nonempty_allow_with_default_deny() {
         r#"{"default":"deny","allow":["close","gettext","launch","snapshot"]}"#
     );
     assert_eq!(
-        policy.allowed_domains_arg(),
-        "https://app.example.org,https://example.com"
+        policy.allowed_domains,
+        ["https://app.example.org", "https://example.com"]
     );
     let all = derive(&grant(), &task(&BrowserAction::PHASE1)).unwrap();
     assert_eq!(

@@ -57,36 +57,6 @@ pub struct ModelProfile {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum Billing {
-    Subscription,
-    MeteredApi,
-    SelfHosted,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct DeploymentProfile {
-    pub id: String,
-    pub source_ref: String,
-    pub model_profile_id: String,
-    pub upstream_model: String,
-    pub adapter_constraints: Vec<String>,
-    pub billing: Billing,
-    pub host: Option<String>,
-    pub region: Option<String>,
-    pub trust_zone: Option<String>,
-    pub external_network: bool,
-    pub retains_data: Option<bool>,
-    pub allowed_lanes: Vec<crate::Tier>,
-    pub resource_group_id: Option<String>,
-    pub concurrency_limit: Option<u32>,
-    pub rpm_limit: Option<u32>,
-    pub tpm_limit: Option<u32>,
-    pub price_override: Option<TokenPricing>,
-    pub config_order: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
 pub enum Reachability {
     Unknown,
     Up,

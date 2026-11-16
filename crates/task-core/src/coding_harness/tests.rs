@@ -226,13 +226,12 @@ fn coding_harness_default_source_wins_over_pool_and_profile() {
 }
 
 #[test]
-fn coding_harness_default_prefers_matches_family_harness() {
-    assert!(prefers("claude-code", ModelFamily::Claude));
-    assert!(!prefers("pi", ModelFamily::Claude));
-    assert!(prefers("pi", ModelFamily::Gpt));
-    assert!(prefers("pi", ModelFamily::Unknown));
-    assert!(!prefers("codex", ModelFamily::Gpt));
-    assert!(!prefers("acp", ModelFamily::Qwen));
+fn coding_harness_default_matches_family_harness() {
+    let adapter = |f| CodingHarness::for_family(f).adapter_id();
+    assert_eq!(adapter(ModelFamily::Claude), "claude-code");
+    assert_eq!(adapter(ModelFamily::Gpt), "pi");
+    assert_eq!(adapter(ModelFamily::Unknown), "pi");
+    assert_ne!(adapter(ModelFamily::Qwen), "acp");
     assert_eq!(AdapterPolicy::default(), AdapterPolicy::ProviderOrder);
 }
 

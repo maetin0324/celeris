@@ -5,7 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::model::{Status, Task, TaskId, TaskKind};
 use crate::org::{MilestoneId, ProjectId};
 
-use super::{StoreError, format_rfc3339, kind_str, tier_str};
+use super::{StoreError, format_rfc3339, kind_str};
+use crate::model_catalog::assignments::tier_str;
 
 /// `TaskQuery::list_page` のフィルタ（ADR-0013 D10）。既定は絞り込み無し。
 #[derive(Debug, Clone, Default)]

@@ -20,11 +20,7 @@ impl SqliteStore {
         &self,
         value: &TaskRepoIntegrationState,
     ) -> Result<(), StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        Self::task_integration_write_tx(&tx, value)?;
-        tx.commit()?;
-        Ok(())
+        self.write_tx(|tx| Self::task_integration_write_tx(tx, value))
     }
 
     /// Sweep CAS: persist only while delivery and integration snapshots remain unchanged.

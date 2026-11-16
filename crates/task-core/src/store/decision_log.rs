@@ -674,7 +674,7 @@ impl SqliteStore {
 /// 祖先を辿る上限（task 木の最大深さ 3 より十分大きい。循環の保険）。
 pub(crate) const CAMPAIGN_ANCESTOR_LIMIT: usize = 32;
 
-/// `task_campaign_resend` の結果。
+/// `task_campaign_resend_tx` の結果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CampaignResend {
     New,
@@ -847,14 +847,6 @@ impl SqliteStore {
             Self::campaign_org_check_tx(&conn, pin)?;
         }
         Ok(out)
-    }
-
-    pub fn task_campaign_resend(
-        &self,
-        id: &CampaignIdentity,
-    ) -> Result<CampaignResend, StoreError> {
-        let conn = self.lock()?;
-        Self::task_campaign_resend_tx(&conn, id)
     }
 
     /// 同じ試行（campaign / case / arm / repetition が全て一致）の識別を持つ task。最古を返す。

@@ -114,11 +114,7 @@ impl SqliteStore {
         extra_events: Vec<Event>,
         event: Event,
     ) -> Result<(), StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::adopt_plan_tx(&tx, task_id, plan, work_units, extra_events, event)?;
-        tx.commit()?;
-        Ok(())
+        self.write_tx(|tx| Self::adopt_plan_tx(tx, task_id, plan, work_units, extra_events, event))
     }
 
     /// ADR-0074 D3.7（Phase F4b (f)）: `execution_plan_adopt` と同じことを行い、**同じトランザクションで**

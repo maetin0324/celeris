@@ -269,11 +269,7 @@ impl SqliteStore {
     // ---- ADR-0033 D2: 案件（`projects`）と途中目標（`milestones`）----
     /// 案件を作る（`status` は呼び出し側が決める。API は `proposed`）。
     pub fn project_create(&self, project: &Project) -> Result<(), StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::project_create_tx(&tx, project)?;
-        tx.commit()?;
-        Ok(())
+        self.write_tx(|tx| Self::project_create_tx(tx, project))
     }
 
     /// `project_create` on a caller-owned transaction (ADR 2026-10-09-cos-operations-all-mutations D3).
@@ -434,11 +430,7 @@ impl SqliteStore {
     /// （API は 422）、他の案件が使っていれば `StoreError::InUse`（409）。無い案件は `Ok(false)`。
     /// **知識ベースのディレクトリは動かさない**（`projects/<旧>/` を `projects/<新>/` へ動かすのは人）。
     pub fn project_set_slug(&self, id: ProjectId, slug: &str) -> Result<bool, StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let written = Self::project_set_slug_tx(&tx, id, slug)?;
-        tx.commit()?;
-        Ok(written)
+        self.write_tx(|tx| Self::project_set_slug_tx(tx, id, slug))
     }
 
     /// `project_set_slug` on a caller-owned transaction.

@@ -68,11 +68,7 @@ impl SqliteStore {
                 "unknown node reference: {table}.{column}"
             )));
         }
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        set_node_ref(&tx, table, column, id, old)?;
-        tx.commit()?;
-        Ok(())
+        self.write_tx(|tx| set_node_ref(tx, table, column, id, old))
     }
 
     /// `org_nodes` をまるごと差し替える（親が先に来る並びで渡すこと）。1 トランザクション。
@@ -187,11 +183,7 @@ impl SqliteStore {
         node: &OrgNode,
         actor: Option<&str>,
     ) -> Result<OrgNode, StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let stored = Self::org_upsert_tx(&tx, node, actor)?;
-        tx.commit()?;
-        Ok(stored)
+        self.write_tx(|tx| Self::org_upsert_tx(tx, node, actor))
     }
 
     /// Upsert `node` in the caller's transaction (CoS `org.*`). `actor` also records the browser

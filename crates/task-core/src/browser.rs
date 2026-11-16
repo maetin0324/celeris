@@ -676,11 +676,6 @@ impl EffectiveBrowserPolicy {
         })
     }
 
-    /// Value of `--allowed-domains` (comma-separated, sorted).
-    pub fn allowed_domains_arg(&self) -> String {
-        self.allowed_domains.join(",")
-    }
-
     pub fn requires_approval(&self, action: BrowserAction) -> bool {
         self.approval_actions.contains(&action)
     }

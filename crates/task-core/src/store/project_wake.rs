@@ -208,7 +208,7 @@ pub enum RootCreate {
 }
 
 impl SqliteStore {
-    fn pc_state_tx(
+    pub(super) fn pc_state_tx(
         conn: &Connection,
         project_id: &str,
     ) -> Result<Option<ProjectControllerState>, StoreError> {
@@ -251,18 +251,9 @@ impl SqliteStore {
         by: &str,
         now: OffsetDateTime,
     ) -> Result<ModeChange, StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let out = Self::project_controller_set_mode_tx(
-            &tx,
-            project_id,
-            mode,
-            expected_revision,
-            by,
-            now,
-        )?;
-        tx.commit()?;
-        Ok(out)
+        self.write_tx(|tx| {
+            Self::project_controller_set_mode_tx(tx, project_id, mode, expected_revision, by, now)
+        })
     }
 
     /// [`Self::project_controller_set_mode`] を呼び出し側の transaction で（CoS の operation の監査と同じ tx）。
@@ -322,14 +313,6 @@ impl SqliteStore {
         let at = format_rfc3339(now)?;
         let until = format_rfc3339(now + time::Duration::seconds(coalesce_secs as i64))?;
         Ok(Self::pc_wake_insert_tx(tx, wake, &at, &until)? > 0)
-    }
-
-    /// 状態の行を読む（呼び出し側の transaction）。
-    pub fn project_controller_state_tx(
-        tx: &Connection,
-        project_id: &str,
-    ) -> Result<Option<ProjectControllerState>, StoreError> {
-        Self::pc_state_tx(tx, project_id)
     }
 
     /// 取り込み: wake を入れ（`shadow`・`enabled` の案件だけ）、`cursor` があれば同じ transaction で進める。

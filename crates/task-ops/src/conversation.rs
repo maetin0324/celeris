@@ -64,66 +64,6 @@ pub fn start(
         node_id,
         project_id,
         None,
-        None,
-        text,
-        roles,
-        genres,
-        conversation_genre,
-        now,
-        true,
-    )
-}
-
-/// ADR-0056 D2（Phase 78）: `start` と同じ対話を、**外部の発言者**（`mcp:<client_id>`）を印として
-/// 添えて起こす。人が Console から話しかける経路（`start`）は常に `author = None`。
-#[allow(clippy::too_many_arguments)]
-pub fn start_as(
-    store: &SqliteStore,
-    node_id: &str,
-    project_id: Option<ProjectId>,
-    author: &str,
-    text: &str,
-    roles: &[RoleSpec],
-    genres: &[GenreSpec],
-    conversation_genre: &str,
-    now: OffsetDateTime,
-) -> Result<StartedConversation, OpsError> {
-    start_full(
-        store,
-        node_id,
-        project_id,
-        None,
-        Some(author),
-        text,
-        roles,
-        genres,
-        conversation_genre,
-        now,
-        true,
-    )
-}
-
-/// Phase 41（ADR-0038 D1）: `start` と同じ対話を、**途中目標に紐づけて**起こす（レビューの対話）。
-/// `milestone_id` が入った対話用タスクは裏方の `support = "milestone_review"`（`task_core::support_kind`）
-/// になり、仕事の木には出ない。人が話しかける経路（`start`）は常に `None` を渡す。
-#[allow(clippy::too_many_arguments)]
-pub fn start_with_milestone(
-    store: &SqliteStore,
-    node_id: &str,
-    project_id: Option<ProjectId>,
-    milestone_id: Option<task_core::MilestoneId>,
-    text: &str,
-    roles: &[RoleSpec],
-    genres: &[GenreSpec],
-    conversation_genre: &str,
-    now: OffsetDateTime,
-) -> Result<StartedConversation, OpsError> {
-    start_full(
-        store,
-        node_id,
-        project_id,
-        milestone_id,
-        None,
         text,
         roles,
         genres,
@@ -151,7 +91,6 @@ pub fn start_console_cos(
         store,
         task_core::COS_ID,
         project_id,
-        None,
         author,
         text,
         roles,
@@ -166,13 +105,12 @@ pub fn start_console_cos(
     Ok(started)
 }
 
-/// `start` / `start_with_milestone` / `start_as` の共通の芯（ADR-0056 D2 で `author` を足した）。
+/// `start` の共通の芯（ADR-0056 D2 で `author` を足した）。
 #[allow(clippy::too_many_arguments)]
 fn start_full(
     store: &SqliteStore,
     node_id: &str,
     project_id: Option<ProjectId>,
-    milestone_id: Option<task_core::MilestoneId>,
     author: Option<&str>,
     text: &str,
     roles: &[RoleSpec],
@@ -214,7 +152,6 @@ fn start_full(
         now,
     );
     task.depends_on = depends_on;
-    task.milestone_id = milestone_id;
     if !activate {
         task.labels.push("cos_legacy_receipt".to_owned());
     }

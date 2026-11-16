@@ -82,10 +82,5 @@ pub fn coding_harness_default_adapter(explicit: Option<&str>, family: ModelFamil
     }
 }
 
-/// provider 行の adapter `row_adapter` が、その行の family の既定ハーネスに一致するか。
-pub fn prefers(row_adapter: &str, family: ModelFamily) -> bool {
-    row_adapter == CodingHarness::for_family(family).adapter_id()
-}
-
 #[cfg(test)]
 mod tests;

@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::org::ProjectId;
 use crate::project_brief::{ProjectActivity, ProjectBrief};
@@ -69,11 +69,7 @@ impl SqliteStore {
 
     /// 要約を全置換で書く。案件が無ければ `false`（何も書かない）。
     pub fn project_brief_put(&self, brief: &ProjectBrief) -> Result<bool, StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let saved = Self::project_brief_put_tx(&tx, brief)?;
-        tx.commit()?;
-        Ok(saved)
+        self.write_tx(|tx| Self::project_brief_put_tx(tx, brief))
     }
 
     /// [`Self::project_brief_put`] on a caller-owned transaction (CoS op `project.status_put`).
@@ -234,7 +230,7 @@ mod tests {
             let tx = conn.transaction().unwrap();
             SqliteStore::project_brief_put_tx(&tx, &b).unwrap();
             assert_eq!(
-                SqliteStore::project_controller_state_tx(&tx, &id)
+                SqliteStore::pc_state_tx(&tx, &id)
                     .unwrap()
                     .unwrap()
                     .human_epoch,

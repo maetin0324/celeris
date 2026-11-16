@@ -444,11 +444,7 @@ impl SqliteStore {
     /// 出来事を 1 件束に足す（冪等）。同じ `source_key` は 1 回だけ、同じ `group_key` の未読の束が
     /// あれば件数を増やし、無ければ新しい束を作る。`feed_sources` の挿入と件数の加算は同じ transaction。
     pub fn notice_record(&self, event: &NoticeEvent) -> Result<NoticeRecordOutcome, StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let outcome = record_in_tx(&tx, event)?;
-        tx.commit()?;
-        Ok(outcome)
+        self.write_tx(|tx| record_in_tx(tx, event))
     }
     /// ADR-0133 付記: 複数の出来事の記録と走査位置（`feed_cursor`）の更新を 1 つの書き込み transaction で行う
     /// （同期 1 回の書き込みを 1 回にする。NFS 上の DB では commit の回数がそのまま tick の時間になる）。

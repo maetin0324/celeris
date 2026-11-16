@@ -1,4 +1,4 @@
-use rusqlite::{OptionalExtension, TransactionBehavior, params, params_from_iter};
+use rusqlite::{OptionalExtension, params, params_from_iter};
 use time::OffsetDateTime;
 
 use crate::comment::{CommentAuthorKind, TaskComment};
@@ -237,11 +237,7 @@ impl SqliteStore {
         comment: &TaskComment,
         transition: Option<(Trigger, Vec<Event>)>,
     ) -> Result<Option<Outcome>, StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let outcome = Self::comment_add_tx(&tx, comment, transition)?;
-        tx.commit()?;
-        Ok(outcome)
+        self.write_tx(|tx| Self::comment_add_tx(tx, comment, transition))
     }
 
     /// `comment_add` inside a caller's transaction (ADR 2026-10-05 D3).

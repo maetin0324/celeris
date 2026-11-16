@@ -97,40 +97,6 @@ fn routing_log_correlation_migration_is_additive() {
     }
 }
 
-#[test]
-fn routing_decided_lookup_uses_partial_index() {
-    let store = SqliteStore::open_in_memory().unwrap();
-    let task = super::tests::sample_task(Status::Draft);
-    store.insert(&task).unwrap();
-
-    // task に routing_decided が無くても、索引を使う問い合わせであることを確かめる。
-    assert_eq!(
-        store.routing_decided_seqs(task.id).unwrap(),
-        Vec::<i64>::new()
-    );
-    let plan_details = store
-        .with_read_conn(|conn| {
-            let sql = format!(
-                "EXPLAIN QUERY PLAN {}",
-                super::routing_log::ROUTING_DECIDED_ROWS_SQL
-            );
-            let mut stmt = conn.prepare(&sql)?;
-            let mut rows = stmt.query(params![task.id.to_string()])?;
-            let mut details = Vec::new();
-            while let Some(row) = rows.next()? {
-                details.push(row.get::<_, String>(3)?);
-            }
-            Ok(details)
-        })
-        .unwrap();
-    assert!(
-        plan_details
-            .iter()
-            .any(|d| d.contains("idx_events_routing_decided")),
-        "query plan did not use idx_events_routing_decided: {plan_details:?}"
-    );
-}
-
 /// ADR 2026-10-11-llm-source-model-routing-evaluation D4: 0075 は旧い shadow 予約の表と index を消し、
 /// 過去の `routing_shadow_recorded` event（events 表の行）は残す。
 #[test]

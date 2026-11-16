@@ -856,11 +856,7 @@ impl SqliteStore {
         if ids.is_empty() {
             return Ok(0);
         }
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let changed = SqliteStore::report_mark_read_tx(&tx, ids, at)?;
-        tx.commit()?;
-        Ok(changed)
+        self.write_tx(|tx| SqliteStore::report_mark_read_tx(tx, ids, at))
     }
     /// `parent_node_id` の子ノードの報告のうち、まだどの報告の `sources` にも入っていないもの（古い順）。
     pub fn report_unreviewed_children(

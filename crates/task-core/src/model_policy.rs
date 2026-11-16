@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::model::{
     Check, Task, TaskCategory, TaskKind, TaskMode, Tier, TierSource, WorkspaceSpec,
 };
+use crate::model_catalog::assignments::tier_str;
 
 /// policy の版（監査記録に残す。規則表を変えたら上げる）。
 pub const LANE_POLICY_VERSION: &str = "lane-policy/1";
@@ -403,14 +404,6 @@ pub fn lane_up(lane: Tier) -> Option<Tier> {
 /// 低い順の全 lane。
 pub const LANES: [Tier; 3] = [Tier::Cheap, Tier::Standard, Tier::Frontier];
 
-fn lane_name(lane: Tier) -> &'static str {
-    match lane {
-        Tier::Cheap => "cheap",
-        Tier::Standard => "standard",
-        Tier::Frontier => "frontier",
-    }
-}
-
 /// ADR-0069 D2: 組織（実効 profile）から継いだ lane の天井。`allowed` が空なら集合の制限なし。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct LaneCeiling {
@@ -441,11 +434,11 @@ impl LaneCeiling {
             return (lane, None);
         }
         let describe = || {
-            let allowed: Vec<&str> = self.allowed.iter().map(|t| lane_name(*t)).collect();
+            let allowed: Vec<&str> = self.allowed.iter().map(|t| tier_str(*t)).collect();
             format!(
                 "org ceiling (allowed_tiers=[{}], max_lane={})",
                 allowed.join(","),
-                self.max_lane.map(lane_name).unwrap_or("none")
+                self.max_lane.map(tier_str).unwrap_or("none")
             )
         };
         let below = LANES
@@ -463,8 +456,8 @@ impl LaneCeiling {
                 Some(format!(
                     "{}: {} -> {}",
                     describe(),
-                    lane_name(lane),
-                    lane_name(to)
+                    tier_str(lane),
+                    tier_str(to)
                 )),
             ),
             None => (
@@ -472,7 +465,7 @@ impl LaneCeiling {
                 Some(format!(
                     "{}: no lane satisfies the ceiling; kept {}",
                     describe(),
-                    lane_name(lane)
+                    tier_str(lane)
                 )),
             ),
         }
@@ -749,7 +742,7 @@ pub fn decide_for_task(task: &Task, ceiling: &LaneCeiling) -> Option<LaneDecisio
         decision.hint = Some(task.worker_hint.tier);
         decision.reasons.push(format!(
             "LLM-supplied tier {} recorded as a hint only",
-            lane_name(task.worker_hint.tier)
+            tier_str(task.worker_hint.tier)
         ));
     }
     if !overridden.is_empty() {
@@ -870,9 +863,9 @@ pub fn decide_for_work_unit(
         if lane_rank(decision.lane) > lane_rank(cap) {
             let note = format!(
                 "work-unit lane cap (task lane {}): {} -> {}",
-                lane_name(task_lane),
-                lane_name(decision.lane),
-                lane_name(cap)
+                tier_str(task_lane),
+                tier_str(decision.lane),
+                tier_str(cap)
             );
             decision.clamped_by = Some(match decision.clamped_by.take() {
                 Some(prev) => format!("{prev}; {note}"),

@@ -851,6 +851,74 @@ pub(super) fn is_done_carry_over(
         .any(|(k, s)| *k == unit.key && same_except_checks(s, &unit.to_work_unit_spec()))
 }
 
+/// 1 つの WU の文字数・件数の上限（title・objective・done_when）。
+fn work_unit_text_limit_errors(
+    wu: &WorkUnitSpec,
+    limits: ExecutionLimits,
+    errors: &mut Vec<PlanValidationError>,
+) {
+    let title_len = wu.title.chars().count();
+    if title_len > limits.max_title_chars {
+        errors.push(PlanValidationError::TitleTooLong {
+            key: wu.key.clone(),
+            len: title_len,
+            max: limits.max_title_chars,
+        });
+    }
+    let objective_len = wu.objective.chars().count();
+    if objective_len > limits.max_objective_chars {
+        errors.push(PlanValidationError::ObjectiveTooLong {
+            key: wu.key.clone(),
+            len: objective_len,
+            max: limits.max_objective_chars,
+        });
+    }
+    if wu.done_when.len() > limits.max_done_when_items {
+        errors.push(PlanValidationError::TooManyDoneWhen {
+            key: wu.key.clone(),
+            count: wu.done_when.len(),
+            max: limits.max_done_when_items,
+        });
+    }
+    for (index, item) in wu.done_when.iter().enumerate() {
+        let len = item.chars().count();
+        if len > limits.max_done_when_chars {
+            errors.push(PlanValidationError::DoneWhenItemTooLong {
+                key: wu.key.clone(),
+                index,
+                len,
+                max: limits.max_done_when_chars,
+            });
+        }
+    }
+}
+
+/// 重複の検出: title を正規化して一致、または objective のトークン Jaccard >= 0.9。
+fn duplicate_work_unit_errors(units: &[WorkUnitSpec], errors: &mut Vec<PlanValidationError>) {
+    for i in 0..units.len() {
+        for j in (i + 1)..units.len() {
+            let a = &units[i];
+            let b = &units[j];
+            if normalize_title(&a.title) == normalize_title(&b.title) && !a.title.is_empty() {
+                errors.push(PlanValidationError::DuplicateWorkUnit {
+                    a: a.key.clone(),
+                    b: b.key.clone(),
+                    reason: "identical normalized title".to_string(),
+                });
+                continue;
+            }
+            let sim = jaccard(&token_set(&a.objective), &token_set(&b.objective));
+            if sim >= 0.9 {
+                errors.push(PlanValidationError::DuplicateWorkUnit {
+                    a: a.key.clone(),
+                    b: b.key.clone(),
+                    reason: format!("objective token overlap {sim:.2}"),
+                });
+            }
+        }
+    }
+}
+
 /// 持ち越しの done の WU（spec が done の spec と `checks` の他は同じ）か。大きさの上限（title・objective・
 /// done_when）は新しく書く WU のためのもので、持ち越しの done の WU には掛けない。掛けると、上限より長い
 /// objective で記録された done の WU（例: 暗黙の WU を task の objective のまま実体化したもの）を持つ task は、
@@ -1222,40 +1290,7 @@ pub fn validate_with(
         if is_unchanged_done_work_unit(wu, done_work_units) {
             continue;
         }
-        let title_len = wu.title.chars().count();
-        if title_len > limits.max_title_chars {
-            errors.push(PlanValidationError::TitleTooLong {
-                key: wu.key.clone(),
-                len: title_len,
-                max: limits.max_title_chars,
-            });
-        }
-        let objective_len = wu.objective.chars().count();
-        if objective_len > limits.max_objective_chars {
-            errors.push(PlanValidationError::ObjectiveTooLong {
-                key: wu.key.clone(),
-                len: objective_len,
-                max: limits.max_objective_chars,
-            });
-        }
-        if wu.done_when.len() > limits.max_done_when_items {
-            errors.push(PlanValidationError::TooManyDoneWhen {
-                key: wu.key.clone(),
-                count: wu.done_when.len(),
-                max: limits.max_done_when_items,
-            });
-        }
-        for (index, item) in wu.done_when.iter().enumerate() {
-            let len = item.chars().count();
-            if len > limits.max_done_when_chars {
-                errors.push(PlanValidationError::DoneWhenItemTooLong {
-                    key: wu.key.clone(),
-                    index,
-                    len,
-                    max: limits.max_done_when_chars,
-                });
-            }
-        }
+        work_unit_text_limit_errors(wu, limits, &mut errors);
     }
     let plan_bytes = serde_json::to_vec(spec).map(|v| v.len()).unwrap_or(0);
     if plan_bytes > limits.max_plan_json_bytes {
@@ -1275,29 +1310,7 @@ pub fn validate_with(
         }
     }
 
-    // 重複の検出: title を正規化して一致、または objective のトークン Jaccard >= 0.9。
-    for i in 0..spec.work_units.len() {
-        for j in (i + 1)..spec.work_units.len() {
-            let a = &spec.work_units[i];
-            let b = &spec.work_units[j];
-            if normalize_title(&a.title) == normalize_title(&b.title) && !a.title.is_empty() {
-                errors.push(PlanValidationError::DuplicateWorkUnit {
-                    a: a.key.clone(),
-                    b: b.key.clone(),
-                    reason: "identical normalized title".to_string(),
-                });
-                continue;
-            }
-            let sim = jaccard(&token_set(&a.objective), &token_set(&b.objective));
-            if sim >= 0.9 {
-                errors.push(PlanValidationError::DuplicateWorkUnit {
-                    a: a.key.clone(),
-                    b: b.key.clone(),
-                    reason: format!("objective token overlap {sim:.2}"),
-                });
-            }
-        }
-    }
+    duplicate_work_unit_errors(&spec.work_units, &mut errors);
 
     // replan の不変条件: done の WU の key/spec は変わらない（ADR-0079 R5b-fix1: 人の replan は spec の
     // 上書きだけを許す。[`done_carry_over_errors`]）。
@@ -1809,40 +1822,7 @@ fn validate_v3(
         if is_unchanged_done_work_unit(wu, done_work_units) {
             continue;
         }
-        let title_len = wu.title.chars().count();
-        if title_len > limits.max_title_chars {
-            errors.push(PlanValidationError::TitleTooLong {
-                key: wu.key.clone(),
-                len: title_len,
-                max: limits.max_title_chars,
-            });
-        }
-        let objective_len = wu.objective.chars().count();
-        if objective_len > limits.max_objective_chars {
-            errors.push(PlanValidationError::ObjectiveTooLong {
-                key: wu.key.clone(),
-                len: objective_len,
-                max: limits.max_objective_chars,
-            });
-        }
-        if wu.done_when.len() > limits.max_done_when_items {
-            errors.push(PlanValidationError::TooManyDoneWhen {
-                key: wu.key.clone(),
-                count: wu.done_when.len(),
-                max: limits.max_done_when_items,
-            });
-        }
-        for (index, item) in wu.done_when.iter().enumerate() {
-            let len = item.chars().count();
-            if len > limits.max_done_when_chars {
-                errors.push(PlanValidationError::DoneWhenItemTooLong {
-                    key: wu.key.clone(),
-                    index,
-                    len,
-                    max: limits.max_done_when_chars,
-                });
-            }
-        }
+        work_unit_text_limit_errors(wu, limits, &mut errors);
     }
     // Only the planner portion consumes the per-plan JSON budget (the brief included).
     if planner_bytes > limits.max_plan_json_bytes_v3 {
@@ -1860,28 +1840,7 @@ fn validate_v3(
         }
     }
 
-    for i in 0..internal.work_units.len() {
-        for j in (i + 1)..internal.work_units.len() {
-            let a = &internal.work_units[i];
-            let b = &internal.work_units[j];
-            if normalize_title(&a.title) == normalize_title(&b.title) && !a.title.is_empty() {
-                errors.push(PlanValidationError::DuplicateWorkUnit {
-                    a: a.key.clone(),
-                    b: b.key.clone(),
-                    reason: "identical normalized title".to_string(),
-                });
-                continue;
-            }
-            let sim = jaccard(&token_set(&a.objective), &token_set(&b.objective));
-            if sim >= 0.9 {
-                errors.push(PlanValidationError::DuplicateWorkUnit {
-                    a: a.key.clone(),
-                    b: b.key.clone(),
-                    reason: format!("objective token overlap {sim:.2}"),
-                });
-            }
-        }
-    }
+    duplicate_work_unit_errors(&internal.work_units, &mut errors);
 
     errors.extend(done_carry_over_errors(
         &internal.work_units,

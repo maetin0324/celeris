@@ -229,11 +229,7 @@ impl SqliteStore {
     /// 案件のリポジトリを 1 件作る。`repos::validate_upsert` に落ちれば `StoreError::Repo`（API は 422）。
     /// `is_primary` を立てた行を作ると、同じ案件の他の行の `is_primary` は落ちる（1 案件に 1 つ）。
     pub fn repo_create(&self, repo: &ProjectRepo) -> Result<(), StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::repo_create_tx(&tx, repo)?;
-        tx.commit()?;
-        Ok(())
+        self.write_tx(|tx| Self::repo_create_tx(tx, repo))
     }
 
     /// `repo_create` in the caller's transaction (CoS operations); the same validation and refusals.

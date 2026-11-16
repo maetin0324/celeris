@@ -92,11 +92,7 @@ impl SqliteStore {
 
     /// The general CoS thread id, created on first use (ADR 2026-10-28-cos-inbox-chat-summary D4).
     pub fn cos_general_thread_ensure(&self, now: OffsetDateTime) -> Result<String, ChatError> {
-        let mut conn = writer(self)?;
-        let tx = immediate(&mut conn)?;
-        let id = cos_thread_ensure_tx(&tx, None, &chat_ts(now))?;
-        tx.commit()?;
-        Ok(id)
+        self.write_tx(|tx| cos_thread_ensure_tx(tx, None, &chat_ts(now)))
     }
 
     /// ADR 2026-10-28-cos-inbox-chat-summary D4: a daemon request queued as a CoS run input. It is
@@ -111,11 +107,7 @@ impl SqliteStore {
         now: OffsetDateTime,
     ) -> Result<ChatMessage, ChatError> {
         let at = chat_ts(now);
-        let mut conn = writer(self)?;
-        let tx = immediate(&mut conn)?;
-        let message = chat_system_queue_once_tx(&tx, thread_id, key, text, &at)?;
-        tx.commit()?;
-        Ok(message)
+        self.write_tx(|tx| chat_system_queue_once_tx(tx, thread_id, key, text, &at))
     }
 
     /// ADR 2026-10-28-cos-inbox-chat-summary D4: queues again each daemon request (`role=system`,

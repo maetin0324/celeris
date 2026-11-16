@@ -208,11 +208,7 @@ impl DecisionLogProposal {
 
     /// 旧い `routing_decided` event（新欄なし）からも作れる。無い欄は `None` のまま。
     pub fn from_routing_record(run_id: &str, task_id: &str, record: &RoutingRecord) -> Self {
-        let lane = |t: crate::model::Tier| match t {
-            crate::model::Tier::Cheap => "cheap",
-            crate::model::Tier::Standard => "standard",
-            crate::model::Tier::Frontier => "frontier",
-        };
+        let lane = crate::model_catalog::assignments::tier_str;
         let decision = record.features.as_ref().and_then(|f| f.decision.as_deref());
         let mut p = Self {
             run_id: run_id.to_string(),

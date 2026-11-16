@@ -102,65 +102,6 @@ pub fn unit_view(parent: &Task, unit: &crate::execution_plan::PlanUnitSpec) -> T
     view
 }
 
-/// D4 (3) の表の 5 行目: kind task の unit を task のまま残す構造上の理由（人の acceptance・決定を待つ・
-/// 既存の task の採用・親と違う genre / repos / 部署〈親の skills に無い skill〉）。空なら理由なし。
-/// `needs_decisions` は実効の値（`effective_needs_decisions`）。
-pub fn structural_reasons(
-    parent: &Task,
-    parent_repo_names: &[String],
-    unit: &crate::execution_plan::PlanUnitSpec,
-    needs_decisions: &[String],
-) -> Vec<String> {
-    let mut out = Vec::new();
-    if unit
-        .acceptance
-        .iter()
-        .any(|c| c.check == crate::model::Check::Human)
-    {
-        out.push("human acceptance".to_string());
-    }
-    if !needs_decisions.is_empty() {
-        out.push(format!("needs decisions [{}]", needs_decisions.join(", ")));
-    }
-    if let Some(adopt) = unit.adopt {
-        out.push(format!("adopts task {adopt}"));
-    }
-    if let Some(genre) = unit.genre.as_deref()
-        && parent.genre.as_deref() != Some(genre)
-    {
-        out.push(format!(
-            "genre {genre} differs from the parent's {}",
-            parent.genre.as_deref().unwrap_or("(none)")
-        ));
-    }
-    if !unit.repos.is_empty() {
-        let unit_set: std::collections::BTreeSet<&str> =
-            unit.repos.iter().map(String::as_str).collect();
-        let parent_set: std::collections::BTreeSet<&str> =
-            parent_repo_names.iter().map(String::as_str).collect();
-        if unit_set != parent_set {
-            out.push(format!(
-                "repos [{}] differ from the parent's [{}]",
-                unit.repos.join(", "),
-                parent_repo_names.join(", ")
-            ));
-        }
-    }
-    let foreign: Vec<&str> = unit
-        .skills
-        .iter()
-        .filter(|s| !parent.skills.iter().any(|p| p == *s))
-        .map(String::as_str)
-        .collect();
-    if !foreign.is_empty() {
-        out.push(format!(
-            "skills [{}] beyond the parent's (another department)",
-            foreign.join(", ")
-        ));
-    }
-    out
-}
-
 /// ADR-0079「R6-2」（R5b-fix3 を改める）: kind task の unit から作る子 task の `routing.execution_hint`（unit の
 /// gate も同じ値を使う）。**計画の書き手（人・planner）によらず明示**（`explicit = true`、gate は
 /// `human/explicit`）で、`mode` は unit の `gate`（無ければ `compound`: kind task を選んだこと自体が「自分の計画が
@@ -180,9 +121,6 @@ pub fn task_unit_execution_hint(
 pub fn unit_gate(
     ctx: &UnitGateContext<'_>,
     unit: &crate::execution_plan::PlanUnitSpec,
-    // R6-2: kind task の unit を task のまま残す構造上の理由（`structural_reasons`）は、kind task の gate が明示に
-    // なったので見なくなった（引数は呼び出し側の形のために残す）。
-    _needs_decisions: &[String],
 ) -> UnitGate {
     use crate::execution_gate::{ExecutionMode, GateThreshold};
     let depth = ctx.parent_depth.saturating_add(1);
@@ -412,8 +350,7 @@ pub fn apply_unit_gates(
         if skip.contains(&unit.key) {
             continue;
         }
-        let needs = crate::execution_plan::effective_needs_decisions(spec, &unit.key);
-        let gate = unit_gate(ctx, unit, &needs);
+        let gate = unit_gate(ctx, unit);
         match gate.action {
             Some(UnitGateAction::Promoted) => out.units[i] = promote_to_task(unit),
             Some(UnitGateAction::Demoted) => {

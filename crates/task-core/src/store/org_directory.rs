@@ -5,7 +5,7 @@
 //! 名簿を読むだけの consumer（celeris-mcp の `tools/org`・`tools/projects`）はこの trait に依存する。
 //! 行の変換は `org.rs` の `org_row`・`projects.rs` の `project_row`・`milestone_row` を使う。
 
-use rusqlite::{OptionalExtension, TransactionBehavior, params};
+use rusqlite::{OptionalExtension, params};
 
 use crate::org::{Milestone, OrgNode, Project, ProjectId};
 
@@ -46,11 +46,7 @@ impl SqliteStore {
     }
 
     pub fn org_upsert(&self, node: &OrgNode) -> Result<OrgNode, StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let stored = Self::org_upsert_tx(&tx, node, None)?;
-        tx.commit()?;
-        Ok(stored)
+        self.write_tx(|tx| Self::org_upsert_tx(tx, node, None))
     }
 
     pub fn project_list(&self) -> Result<Vec<Project>, StoreError> {

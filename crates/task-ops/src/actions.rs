@@ -421,11 +421,7 @@ pub fn human_mentions_node(text: &str, node: &str) -> bool {
 
 /// ADR-0069 D1: 人の発言が `tier:<lane>` / `tier=<lane>` でその lane を明示しているか。
 pub fn human_mentions_tier(text: &str, tier: task_core::Tier) -> bool {
-    let name = match tier {
-        task_core::Tier::Frontier => "frontier",
-        task_core::Tier::Standard => "standard",
-        task_core::Tier::Cheap => "cheap",
-    };
+    let name = task_core::model_catalog::assignments::tier_str(tier);
     let lower = text.to_lowercase();
     [":", "=", ": ", " = ", "："]
         .iter()

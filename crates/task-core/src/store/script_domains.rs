@@ -508,11 +508,7 @@ impl SqliteStore {
         record: &ScriptCompareRecord,
         now: OffsetDateTime,
     ) -> Result<bool, StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let appended = Self::script_compare_append_tx(&tx, task_id, record, now)?;
-        tx.commit()?;
-        Ok(appended)
+        self.write_tx(|tx| Self::script_compare_append_tx(tx, task_id, record, now))
     }
 
     pub(super) fn script_compare_append_tx(
@@ -555,11 +551,7 @@ impl SqliteStore {
         record: &CosDigestCompareRecord,
         now: OffsetDateTime,
     ) -> Result<bool, StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let appended = Self::script_compare_log_append_tx(&tx, record, now)?;
-        tx.commit()?;
-        Ok(appended)
+        self.write_tx(|tx| Self::script_compare_log_append_tx(tx, record, now))
     }
 
     pub(super) fn script_compare_log_append_tx(

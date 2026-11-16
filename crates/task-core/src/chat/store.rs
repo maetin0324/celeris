@@ -681,11 +681,7 @@ impl SqliteStore {
         req: &ChatOpenThreadRequest,
         now: OffsetDateTime,
     ) -> Result<ChatThreadCreated, ChatError> {
-        let mut conn = writer(self)?;
-        let tx = immediate(&mut conn)?;
-        let created = cos_thread_open_tx(&tx, req, now)?;
-        tx.commit()?;
-        Ok(created)
+        self.write_tx(|tx| cos_thread_open_tx(tx, req, now))
     }
 
     /// D3: the CoS thread a task's items and reports go to — the project of its root, else
@@ -711,11 +707,7 @@ impl SqliteStore {
         req: &ChatReadThreadRequest,
         now: OffsetDateTime,
     ) -> Result<ChatThread, ChatError> {
-        let mut conn = writer(self)?;
-        let tx = immediate(&mut conn)?;
-        let thread = chat_thread_mark_read_tx(&tx, id, req, now)?;
-        tx.commit()?;
-        Ok(thread)
+        self.write_tx(|tx| chat_thread_mark_read_tx(tx, id, req, now))
     }
 
     pub fn chat_thread_get(&self, id: &str) -> Result<Option<ChatThread>, ChatError> {
@@ -853,11 +845,7 @@ impl SqliteStore {
         req: &ChatPatchThreadRequest,
         now: OffsetDateTime,
     ) -> Result<ChatThread, ChatError> {
-        let mut conn = writer(self)?;
-        let tx = immediate(&mut conn)?;
-        let thread = chat_thread_patch_tx(&tx, id, req, now)?;
-        tx.commit()?;
-        Ok(thread)
+        self.write_tx(|tx| chat_thread_patch_tx(tx, id, req, now))
     }
 
     /// D2 `POST /chat/threads/{t}/resume-queue`: clears `queue_paused` under `expected_revision`.
@@ -867,11 +855,7 @@ impl SqliteStore {
         expected_revision: u64,
         now: OffsetDateTime,
     ) -> Result<ChatThread, ChatError> {
-        let mut conn = writer(self)?;
-        let tx = immediate(&mut conn)?;
-        let thread = chat_thread_resume_queue_tx(&tx, id, expected_revision, now)?;
-        tx.commit()?;
-        Ok(thread)
+        self.write_tx(|tx| chat_thread_resume_queue_tx(tx, id, expected_revision, now))
     }
 
     /// D2 `POST /chat/threads/{t}/messages`. Validation, seq allocation, queue insertion and the
@@ -1036,11 +1020,7 @@ impl SqliteStore {
         message_id: &str,
         now: OffsetDateTime,
     ) -> Result<ChatMessage, ChatError> {
-        let mut conn = writer(self)?;
-        let tx = immediate(&mut conn)?;
-        let message = chat_message_cancel_tx(&tx, thread_id, message_id, now)?;
-        tx.commit()?;
-        Ok(message)
+        self.write_tx(|tx| chat_message_cancel_tx(tx, thread_id, message_id, now))
     }
 
     /// One message of a thread by id (404 when the thread or the message is missing).
@@ -1157,22 +1137,20 @@ impl SqliteStore {
         run_id: Option<&str>,
         now: OffsetDateTime,
     ) -> Result<ChatMessage, ChatError> {
-        let mut conn = writer(self)?;
-        let tx = immediate(&mut conn)?;
-        let message = daemon_message_add_keyed_tx(
-            &tx,
-            DaemonMessage {
-                thread_id,
-                role,
-                key,
-                text,
-                cards,
-                run_id,
-            },
-            now,
-        )?;
-        tx.commit()?;
-        Ok(message)
+        self.write_tx(|tx| {
+            daemon_message_add_keyed_tx(
+                tx,
+                DaemonMessage {
+                    thread_id,
+                    role,
+                    key,
+                    text,
+                    cards,
+                    run_id,
+                },
+                now,
+            )
+        })
     }
 }
 
@@ -1332,14 +1310,9 @@ pub(crate) fn relay_record(
     })
 }
 
-pub(crate) fn message_post_with(
-    tx: &Connection,
-    thread_id: &str,
-    req: &ChatPostMessageRequest,
-    provenance: &MessageProvenance,
-    now: OffsetDateTime,
-) -> Result<ChatMessagePosted, ChatError> {
-    check_key("client_message_id", &req.client_message_id)?;
+/// Body limits shared by every message post (human, relay, review, CoS): text size, attachment
+/// count, blank text without attachment, duplicate attachment ids.
+fn check_post_body(req: &ChatPostMessageRequest) -> Result<(), ChatError> {
     if req.text.len() > CHAT_MESSAGE_TEXT_MAX_BYTES {
         return Err(ChatError::TooLarge(format!(
             "text is {} bytes (max {CHAT_MESSAGE_TEXT_MAX_BYTES})",
@@ -1359,6 +1332,63 @@ pub(crate) fn message_post_with(
     if !req.attachment_ids.iter().all(|a| seen.insert(a.as_str())) {
         return Err(ChatError::Invalid("duplicate attachment id".into()));
     }
+    Ok(())
+}
+
+/// The reply target must be a message of the thread and every attachment a ready attachment of it.
+fn check_post_refs(
+    tx: &Connection,
+    thread_id: &str,
+    req: &ChatPostMessageRequest,
+) -> Result<(), ChatError> {
+    if let Some(reply) = &req.reply_to_id
+        && message_get_conn(tx, thread_id, reply)?.is_none()
+    {
+        return Err(ChatError::Invalid(format!(
+            "reply_to_id {reply} is not a message of this thread"
+        )));
+    }
+    for a in &req.attachment_ids {
+        let ok: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM chat_attachments WHERE id=?1 AND thread_id=?2 \
+             AND state='ready')",
+            params![a, thread_id],
+            |row| row.get(0),
+        )?;
+        if !ok {
+            return Err(ChatError::Invalid(format!(
+                "attachment {a} is not a ready attachment of this thread"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn insert_message_attachment_refs(
+    tx: &Connection,
+    message_id: &str,
+    attachment_ids: &[String],
+    at: &str,
+) -> Result<(), ChatError> {
+    for a in attachment_ids {
+        tx.execute(
+            "INSERT INTO chat_attachment_refs(attachment_id,owner_kind,owner_id,created_at) \
+             VALUES(?1,'message',?2,?3)",
+            params![a, message_id, at],
+        )?;
+    }
+    Ok(())
+}
+
+pub(crate) fn message_post_with(
+    tx: &Connection,
+    thread_id: &str,
+    req: &ChatPostMessageRequest,
+    provenance: &MessageProvenance,
+    now: OffsetDateTime,
+) -> Result<ChatMessagePosted, ChatError> {
+    check_key("client_message_id", &req.client_message_id)?;
+    check_post_body(req)?;
     let interrupt = req.mode == ChatSendMode::Interrupt;
     let mode = enum_str(&req.mode)?;
     let at = chat_ts(now);
@@ -1414,26 +1444,7 @@ pub(crate) fn message_post_with(
             limit: CHAT_QUEUE_MAX,
         });
     }
-    if let Some(reply) = &req.reply_to_id
-        && message_get_conn(tx, thread_id, reply)?.is_none()
-    {
-        return Err(ChatError::Invalid(format!(
-            "reply_to_id {reply} is not a message of this thread"
-        )));
-    }
-    for a in &req.attachment_ids {
-        let ok: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM chat_attachments WHERE id=?1 AND thread_id=?2 \
-             AND state='ready')",
-            params![a, thread_id],
-            |row| row.get(0),
-        )?;
-        if !ok {
-            return Err(ChatError::Invalid(format!(
-                "attachment {a} is not a ready attachment of this thread"
-            )));
-        }
-    }
+    check_post_refs(tx, thread_id, req)?;
     let mut meta =
         json!({"mode": mode, "interrupt": interrupt, "attachment_ids": req.attachment_ids});
     if let Some(author) = &provenance.author {
@@ -1459,13 +1470,7 @@ pub(crate) fn message_post_with(
         },
         &at,
     )?;
-    for a in &req.attachment_ids {
-        tx.execute(
-            "INSERT INTO chat_attachment_refs(attachment_id,owner_kind,owner_id,created_at) \
-             VALUES(?1,'message',?2,?3)",
-            params![a, id, at],
-        )?;
-    }
+    insert_message_attachment_refs(tx, &id, &req.attachment_ids, &at)?;
     let message = message_require(tx, thread_id, &id)?;
     emit_message(tx, &message, &at)?;
     if req.resume_queue && thread.queue_paused {
@@ -1879,25 +1884,7 @@ pub fn chat_message_post_cos_tx(
             "a CoS message is a notice: mode must be queue and resume_queue false".into(),
         ));
     }
-    if req.text.len() > CHAT_MESSAGE_TEXT_MAX_BYTES {
-        return Err(ChatError::TooLarge(format!(
-            "text is {} bytes (max {CHAT_MESSAGE_TEXT_MAX_BYTES})",
-            req.text.len()
-        )));
-    }
-    if req.attachment_ids.len() > CHAT_MESSAGE_ATTACHMENTS_MAX {
-        return Err(ChatError::TooLarge(format!(
-            "{} attachments (max {CHAT_MESSAGE_ATTACHMENTS_MAX})",
-            req.attachment_ids.len()
-        )));
-    }
-    if req.text.trim().is_empty() && req.attachment_ids.is_empty() {
-        return Err(ChatError::Invalid("blank text needs an attachment".into()));
-    }
-    let mut seen = std::collections::BTreeSet::new();
-    if !req.attachment_ids.iter().all(|a| seen.insert(a.as_str())) {
-        return Err(ChatError::Invalid("duplicate attachment id".into()));
-    }
+    check_post_body(req)?;
     let at = chat_ts(now);
     let thread = thread_require(tx, thread_id)?;
     if thread.kind == ChatThreadKind::Review {
@@ -1934,26 +1921,7 @@ pub fn chat_message_post_cos_tx(
             "thread {thread_id} is a read-only legacy thread"
         )));
     }
-    if let Some(reply) = &req.reply_to_id
-        && message_get_conn(tx, thread_id, reply)?.is_none()
-    {
-        return Err(ChatError::Invalid(format!(
-            "reply_to_id {reply} is not a message of this thread"
-        )));
-    }
-    for a in &req.attachment_ids {
-        let ok: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM chat_attachments WHERE id=?1 AND thread_id=?2 \
-             AND state='ready')",
-            params![a, thread_id],
-            |row| row.get(0),
-        )?;
-        if !ok {
-            return Err(ChatError::Invalid(format!(
-                "attachment {a} is not a ready attachment of this thread"
-            )));
-        }
-    }
+    check_post_refs(tx, thread_id, req)?;
     let meta = json!({
         "attachment_ids": req.attachment_ids,
         "posted_by": "cos",
@@ -1973,13 +1941,7 @@ pub fn chat_message_post_cos_tx(
         },
         &at,
     )?;
-    for a in &req.attachment_ids {
-        tx.execute(
-            "INSERT INTO chat_attachment_refs(attachment_id,owner_kind,owner_id,created_at) \
-             VALUES(?1,'message',?2,?3)",
-            params![a, id, at],
-        )?;
-    }
+    insert_message_attachment_refs(tx, &id, &req.attachment_ids, &at)?;
     let message = message_require(tx, thread_id, &id)?;
     emit_message(tx, &message, &at)?;
     Ok(message)

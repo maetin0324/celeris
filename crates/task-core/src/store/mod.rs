@@ -647,15 +647,6 @@ fn kind_str(k: TaskKind) -> &'static str {
     }
 }
 
-/// ADR-0044 D4: `worker_hint.tier` の JSON 表現（`json_extract` の照合に使う）。
-fn tier_str(t: crate::model::Tier) -> &'static str {
-    match t {
-        crate::model::Tier::Frontier => "frontier",
-        crate::model::Tier::Standard => "standard",
-        crate::model::Tier::Cheap => "cheap",
-    }
-}
-
 pub(crate) fn format_rfc3339(t: OffsetDateTime) -> Result<String, StoreError> {
     Ok(t.format(&Rfc3339)?)
 }

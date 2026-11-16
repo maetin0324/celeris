@@ -1010,11 +1010,7 @@ impl SqliteStore {
         run_id: &str,
         now: OffsetDateTime,
     ) -> Result<ChatStopOutcome, ChatError> {
-        let mut conn = writer(self)?;
-        let tx = immediate(&mut conn)?;
-        let outcome = chat_run_stop_tx(&tx, thread_id, run_id, now)?;
-        tx.commit()?;
-        Ok(outcome)
+        self.write_tx(|tx| chat_run_stop_tx(tx, thread_id, run_id, now))
     }
 
     /// Validates an SSE/event cursor for `thread_id` (404 thread, 400 malformed/future, 410

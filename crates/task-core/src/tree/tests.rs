@@ -171,7 +171,7 @@ fn enabled() -> TreeLimits {
     }
 }
 
-fn gate_of(parent: &Task, depth: u32, unit: &PlanUnitSpec, needs: &[String]) -> UnitGate {
+fn gate_of(parent: &Task, depth: u32, unit: &PlanUnitSpec) -> UnitGate {
     let limits = enabled();
     let names = vec!["app".to_string()];
     let ctx = UnitGateContext {
@@ -182,7 +182,7 @@ fn gate_of(parent: &Task, depth: u32, unit: &PlanUnitSpec, needs: &[String]) -> 
         work_unit_max_turns: 80,
         work_unit_max_wall_secs: 3600,
     };
-    unit_gate(&ctx, unit, needs)
+    unit_gate(&ctx, unit)
 }
 
 fn v3_limits() -> ExecutionLimits {
@@ -213,7 +213,7 @@ fn task_units_carry_the_explicit_gate_of_the_plan_author() {
             explicit: true
         })
     );
-    let g = gate_of(&parent, 1, &unit, &[]);
+    let g = gate_of(&parent, 1, &unit);
     assert_eq!(g.decision.mode, ExecutionMode::Compound);
     assert_eq!(g.decision.rule_id, "human/explicit");
     assert_eq!(g.decision.source, crate::execution_gate::GateSource::Human);
@@ -221,7 +221,7 @@ fn task_units_carry_the_explicit_gate_of_the_plan_author() {
     // `gate: compound` も同じ。
     let mut compound = task_spec("c", "s1", false);
     compound.gate = Some(ExecutionMode::Compound);
-    let g = gate_of(&parent, 1, &compound, &[]);
+    let g = gate_of(&parent, 1, &compound);
     assert_eq!(
         (g.decision.mode, g.decision.rule_id.as_str(), g.action),
         (ExecutionMode::Compound, "human/explicit", None)
@@ -236,7 +236,7 @@ fn task_units_carry_the_explicit_gate_of_the_plan_author() {
             explicit: true
         })
     );
-    let g = gate_of(&parent, 1, &atomic, &[]);
+    let g = gate_of(&parent, 1, &atomic);
     assert_eq!(
         (g.decision.mode, g.decision.rule_id.as_str()),
         (ExecutionMode::Atomic, "human/explicit")
@@ -245,7 +245,7 @@ fn task_units_carry_the_explicit_gate_of_the_plan_author() {
     // leaf の unit には手掛かりを足さない。
     let leaf = leaf_spec("a", "s1", false);
     assert_eq!(hint(&unit_view(&parent, &leaf)), None);
-    let g = gate_of(&parent, 1, &leaf, &[]);
+    let g = gate_of(&parent, 1, &leaf);
     assert!(!g.decision.signals.iter().any(|s| s.name == "H"));
     assert_ne!(g.decision.rule_id, "human/explicit");
 }
@@ -255,7 +255,7 @@ fn task_units_carry_the_explicit_gate_of_the_plan_author() {
 fn unit_gate_table() {
     let parent = parent_task(30);
     // 1. leaf + atomic → leaf（一致、記録なし）。
-    let g = gate_of(&parent, 1, &leaf_spec("a", "s1", false), &[]);
+    let g = gate_of(&parent, 1, &leaf_spec("a", "s1", false));
     assert_eq!(g.declared, UnitDeclared::Leaf);
     assert_eq!(g.decision.mode, ExecutionMode::Atomic);
     assert_eq!((g.depth, g.threshold), (2, 7));
@@ -264,19 +264,19 @@ fn unit_gate_table() {
 
     // 2. leaf + compound、子 task を持てる深さ（親 1 / 2）→ task に上げる。
     for depth in [1, 2] {
-        let g = gate_of(&parent, depth, &leaf_spec("a", "s1", true), &[]);
+        let g = gate_of(&parent, depth, &leaf_spec("a", "s1", true));
         assert_eq!(g.decision.mode, ExecutionMode::Compound);
         assert_eq!(g.action, Some(UnitGateAction::Promoted), "depth {depth}");
         assert!(g.reason.contains("promoted"), "{}", g.reason);
     }
     // 3. leaf + compound、子 task を持てない深さ（親 3 = max_depth）→ 自動実行。
-    let g = gate_of(&parent, 3, &leaf_spec("a", "s1", true), &[]);
+    let g = gate_of(&parent, 3, &leaf_spec("a", "s1", true));
     assert_eq!(g.action, Some(UnitGateAction::AutoLeaf));
     assert_eq!((g.depth, g.threshold), (4, 11));
     assert!(g.reason.contains("max_depth 3"), "{}", g.reason);
 
     // 4. task + compound → task（一致）。
-    let g = gate_of(&parent, 1, &task_spec("c", "s1", true), &[]);
+    let g = gate_of(&parent, 1, &task_spec("c", "s1", true));
     assert_eq!(g.declared, UnitDeclared::Task);
     assert_eq!(g.decision.mode, ExecutionMode::Compound);
     assert_eq!(g.action, None);
@@ -293,15 +293,15 @@ fn unit_gate_table() {
     let mut plain = task_spec("c", "s1", false);
     plain.gate = Some(ExecutionMode::Atomic);
     for unit in [&human, &skills, &task_spec("c", "s1", false)] {
-        let g = gate_of(&parent, 1, unit, &[]);
+        let g = gate_of(&parent, 1, unit);
         assert_eq!(g.decision.mode, ExecutionMode::Compound);
         assert_eq!(g.action, None);
     }
-    let g = gate_of(&parent, 1, &plain, &[]);
+    let g = gate_of(&parent, 1, &plain);
     assert_eq!(g.decision.mode, ExecutionMode::Atomic);
     assert_eq!(g.action, None);
     let big = parent_task(200);
-    let g = gate_of(&big, 1, &plain, &["h1".to_string()]);
+    let g = gate_of(&big, 1, &plain);
     assert_eq!(g.action, None);
 
     // 7. task を子 task を持てない深さ（3）の計画に書く → 検証で拒否（ChildTaskTooDeep）、最後の試行では
@@ -635,7 +635,7 @@ fn leaf_too_large_text_states_the_real_gate_basis() {
         origin: crate::decision::DecisionOrigin::Daemon,
     };
     let parent = parent_task(30);
-    let mut g = gate_of(&parent, 3, &leaf_spec("a", "s1", true), &[]);
+    let mut g = gate_of(&parent, 3, &leaf_spec("a", "s1", true));
     g.decision.rule_id = "compound/long-and-broad".into();
     g.decision.score = 7;
     g.threshold = 11;
@@ -1067,7 +1067,7 @@ fn daemon_decisions_have_the_d7_shape() {
     };
     assert!(crate::decision::validate_shape(&spec).is_empty());
     let parent = parent_task(30);
-    let g = gate_of(&parent, 3, &leaf_spec("a", "s1", true), &[]);
+    let g = gate_of(&parent, 3, &leaf_spec("a", "s1", true));
     let d = leaf_too_large_decision(&g, "Leaf a", vec![], raised_by);
     assert_eq!(d.kind, crate::decision::DecisionKind::LeafTooLarge);
     assert_eq!(d.key, "leaf_too_large:a");

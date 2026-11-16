@@ -337,11 +337,7 @@ impl SqliteStore {
     }
     /// job と履歴を消す（作った task は残る）。行が無ければ `Ok(false)`。
     pub fn cron_job_delete(&self, id: CronJobId) -> Result<bool, StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let deleted = cron_job_delete_tx(&tx, id)?;
-        tx.commit()?;
-        Ok(deleted)
+        self.write_tx(|tx| cron_job_delete_tx(tx, id))
     }
     /// 1 回の発火の記録: 履歴 `runs` を足し、job の `next_fire_at` と `updated_at` を書き換える（同じ
     /// トランザクション）。`(job_id, scheduled_for, trigger)` が既にあれば何も書かず `StoreError::InUse`

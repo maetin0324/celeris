@@ -38,11 +38,7 @@ impl SqliteStore {
         observation: ScriptGuardObservation,
         now: OffsetDateTime,
     ) -> Result<ScriptGuardOutcome, ScriptDomainError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let outcome = observe_tx(&tx, domain, generation_id, observation, now)?;
-        tx.commit()?;
-        Ok(outcome)
+        self.write_tx(|tx| observe_tx(tx, domain, generation_id, observation, now))
     }
 
     /// `script_compare_recorded` の追記と計数を 1 つの transaction で行う（S5-7）。重複で追記しなかった記録と

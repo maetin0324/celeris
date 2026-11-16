@@ -8,6 +8,7 @@ use super::lane::{
     RoutingMode, clamp_to_limits, classification_lane, decide_lane, fixed_lane, tier_rank,
 };
 use crate::model::Tier;
+use crate::model_catalog::assignments::tier_str;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -116,14 +117,6 @@ pub struct AssistOutcome {
     pub record: Option<LaneAssistRecord>,
 }
 
-fn name(t: Tier) -> &'static str {
-    match t {
-        Tier::Cheap => "cheap",
-        Tier::Standard => "standard",
-        Tier::Frontier => "frontier",
-    }
-}
-
 fn specificity_name(s: super::lane::SpecificityHint) -> &'static str {
     use super::lane::SpecificityHint as S;
     match s {
@@ -154,7 +147,7 @@ pub fn assist_lane(input: &AssistInput<'_>, available: impl Fn(Tier) -> bool) ->
         .entry
         .map_or(ClassifierStatus::NotAttempted, |e| e.status.clone());
     let lane_name = |c: LaneChoice| match c {
-        LaneChoice::Lane(t) => name(t).to_owned(),
+        LaneChoice::Lane(t) => tier_str(t).to_owned(),
         LaneChoice::Replan => "replan".to_owned(),
     };
     let fixed = fixed_lane(&input.facts).map(lane_name);
@@ -174,7 +167,7 @@ pub fn assist_lane(input: &AssistInput<'_>, available: impl Fn(Tier) -> bool) ->
             mode: "decision_assisted".into(),
             classifier_status: status.clone(),
             real_api_verified: REAL_API_VERIFIED,
-            base_lane: name(input.base).into(),
+            base_lane: tier_str(input.base).into(),
             proposed_lane: proposed.map(lane_name),
             fixed_lane: fixed.clone(),
             jev_lane: jev.clone(),
@@ -184,7 +177,7 @@ pub fn assist_lane(input: &AssistInput<'_>, available: impl Fn(Tier) -> bool) ->
             response_model: response_model.clone(),
             observed_snapshot: None,
             call_id: None,
-            final_lane: name(lane).into(),
+            final_lane: tier_str(lane).into(),
             basis: basis_name(basis).into(),
             overridden_by: overridden_by.map(str::to_owned),
         }),

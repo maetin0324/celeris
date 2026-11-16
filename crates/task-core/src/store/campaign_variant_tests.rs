@@ -114,10 +114,10 @@ fn resend_same_is_same_and_changed_or_dropped_variant_conflicts() {
     let tid = t.id.to_string();
     let v = with_variant("spec-on", "M1-spec-on", H1);
     s.task_campaign_set(&tid, &v, now()).unwrap();
-    assert_eq!(
-        s.task_campaign_resend(&v).unwrap(),
-        CampaignResend::Same(tid.clone())
-    );
+    let resend = |id: &CampaignIdentity| {
+        SqliteStore::task_campaign_resend_tx(&s.lock().unwrap(), id).unwrap()
+    };
+    assert_eq!(resend(&v), CampaignResend::Same(tid.clone()));
     // variant の変更（内容 hash）、構成 pin の変更、variant の脱落はどれも同じ試行の別内容 → Conflict。
     let mut changed = v.clone();
     changed.variant.as_mut().unwrap().content_sha256 = H2.into();
@@ -130,7 +130,7 @@ fn resend_same_is_same_and_changed_or_dropped_variant_conflicts() {
     let dropped = plain("spec-on");
     for other in [changed, org_changed, dropped] {
         assert_eq!(
-            s.task_campaign_resend(&other).unwrap(),
+            resend(&other),
             CampaignResend::Conflict(tid.clone()),
             "{other:?}"
         );

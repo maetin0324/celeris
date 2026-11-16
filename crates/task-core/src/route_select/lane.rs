@@ -216,14 +216,6 @@ pub fn clamp_to_limits(choice: LaneChoice, limits: &LaneLimits) -> LaneChoice {
         .map_or(LaneChoice::Replan, LaneChoice::Lane)
 }
 
-fn lane_name(tier: Tier) -> &'static str {
-    match tier {
-        Tier::Frontier => "frontier",
-        Tier::Standard => "standard",
-        Tier::Cheap => "cheap",
-    }
-}
-
 /// lane → model/source 対応表（版付き）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LanePolicyTable {
@@ -238,8 +230,10 @@ impl LanePolicyTable {
             .into_iter()
             .map(|t| {
                 (
-                    lane_name(t).to_owned(),
-                    registry.route_defaults_for(harness, lane_name(t)).to_vec(),
+                    crate::model_catalog::assignments::tier_str(t).to_owned(),
+                    registry
+                        .route_defaults_for(harness, crate::model_catalog::assignments::tier_str(t))
+                        .to_vec(),
                 )
             })
             .collect();
@@ -251,7 +245,7 @@ impl LanePolicyTable {
 
     pub fn candidates(&self, tier: Tier) -> &[CandidateKey] {
         self.lanes
-            .get(lane_name(tier))
+            .get(crate::model_catalog::assignments::tier_str(tier))
             .map(Vec::as_slice)
             .unwrap_or(&[])
     }

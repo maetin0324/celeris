@@ -62,13 +62,15 @@ test("360px browser list stacks run state before links, with accessible targets"
   }
 });
 
+// control bar は Live View の映像が無い run（中継の無い daemon runtime など）に出る。映像がある launcher の run の
+// 読み取りだけの帯の並びは lease.spec.ts の最後の試験が確かめる。
 test("360px run puts the sticky control bar before Live View, waits and events", async ({ page }) => {
-  const gateway = await startBrowserGateway({ backend: { credentialWait: false } });
+  const gateway = await startBrowserGateway({ liveUpstream: false, backend: { credentialWait: false } });
   try {
     await gateway.loginAsOwner(page);
     await page.goto(`${gateway.base}/browser/runs/T1/R1`);
     await expect(page.getByTestId("browser-control-phase")).toHaveText("監視のみ — エージェントが操作中");
-    await expect(page.getByTestId("browser-live-iframe")).toBeVisible();
+    await expect(page.getByTestId("browser-live-unavailable")).toBeVisible();
     const selectors = [
       "[data-testid=browser-control-phase]",
       "[data-testid=browser-control-bar] button",

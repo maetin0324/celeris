@@ -21,7 +21,9 @@ test("受信箱の browser_wait から run へ、task 詳細から Live View と
     await expect(section.locator('[data-browser-run="R1"]')).toContainText("待ち 1 件");
     await section.locator('[data-browser-run="R1"]').getByRole("link", { name: "Live View を開く" }).click();
     await expect(page).toHaveURL(`${gateway.base}/browser/runs/T1/R1`);
-    await expect(page.getByTestId("browser-live-iframe")).toHaveAttribute("src", "/browser/live/T1/R1");
+    // Live View の映像の枠（WebSocket の画像）と、読み取りだけの帯が出る。
+    await expect(page.getByTestId("browser-live-frame")).toBeVisible();
+    await expect(page.getByTestId("browser-control-bar")).toContainText("読み取り専用");
 
     await page.goto(`${gateway.base}/tasks/T1#browser-waits`);
     await expect(page.getByTestId("task-browser-section").getByTestId("browser-decision-form")).toBeVisible();

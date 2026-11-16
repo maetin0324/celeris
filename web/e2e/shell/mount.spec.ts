@@ -46,12 +46,21 @@ test("shell は daemon の停止と復帰で入れ替わらない", async ({ pag
   }
 });
 
+// 揺れの原因（2026-11-16）: 以前は daemon の無い gateway で流していた。戻るたびに一覧の取得がやり直されて失敗し、
+// 読み込み中（64px）が失敗の表示（116px）に替わる。その時刻が scroll の復元（onResolved の次の frame）の前か後かで、
+// 後なら伸びた 52px を browser の scroll anchoring が足して scrollY が 1252 になった。偽 daemon で一覧を読み込み済みに
+// してから scroll し、戻った後も cache の一覧が同じ高さで出るので、復元の後に高さが変わらない（時刻に依らない）。
 test("遷移後に見出しへ focus、戻るでスクロール位置が戻る", async ({ page }) => {
-  const gateway = await startGateway();
+  const daemon = createFakeDaemon({ profile: "rich" });
+  const gateway = await startGateway({ daemonUrl: await daemon.start() });
   try {
     await page.setViewportSize({ width: 390, height: 700 });
     await page.goto(`${gateway.base}/tasks`);
     await expect(page.getByRole("heading", { level: 1, name: "タスク" })).toBeVisible();
+    // 一覧と状態別件数が読み込み済みになる（読み込み中・失敗の枠が無い）のを待ってから位置を決める。
+    await expect(page.locator("#main [data-task-id]").first()).toBeVisible();
+    await expect(page.locator('#main [data-fetch-state="loading"], #main [data-fetch-state="error"]')).toHaveCount(0);
+    const settledHeight = await page.evaluate(() => document.querySelector("#main")?.getBoundingClientRect().height);
     // 枠だけの画面は短いので、root の外に高さを足してスクロールできるようにする。
     await page.evaluate(() => {
       const spacer = document.createElement("div");
@@ -70,7 +79,12 @@ test("遷移後に見出しへ focus、戻るでスクロール位置が戻る",
     await expect(page.getByRole("heading", { level: 1, name: "タスク" })).toBeVisible();
     await expect.poll(() => page.evaluate(() => Math.abs(window.scrollY - 1200))).toBeLessThanOrEqual(20);
     await expect(page.getByRole("heading", { level: 1, name: "タスク" })).toBeFocused();
+    // 戻った画面は cache の一覧を同じ高さで出している（高さが変わると anchoring が位置をずらす）。
+    expect(await page.evaluate(() => document.querySelector("#main")?.getBoundingClientRect().height)).toBe(
+      settledHeight,
+    );
   } finally {
     await gateway.close();
+    await daemon.close();
   }
 });

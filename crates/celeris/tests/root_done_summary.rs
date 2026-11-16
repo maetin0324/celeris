@@ -7,7 +7,7 @@
 //! 待ちは DB の状態（run の終了・通知の pending）を出来事として待つ。CPU 負荷は掛けない。
 //! 再起動は `build_dispatcher` をもう一度呼んで同じ DB を再走査する（tick 状態は作り直し）。
 //!
-//! 時計: dispatcher の注入時計は task-dispatch の内部（`test_now`）で外から差せない。この試験の結果は
+//! 時計: dispatcher の注入時計は task-dispatch の内部（`test_hooks.now`）で外から差せない。この試験の結果は
 //! 時間に依存しない（fallback は run の失敗で即決まり、待ち時間の経過に頼らない）。
 
 #[cfg(test)]

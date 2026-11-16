@@ -553,7 +553,7 @@ async fn liveness_flags_only_unexplained_stalls() {
     // 偽の時計: 0 → 599 → 630 → 1,300 → 2,000 秒。
     let t0 = OffsetDateTime::now_utc() + time::Duration::minutes(5);
     let clock = Arc::new(StdMutex::new(t0));
-    d.test_now = Some(clock.clone());
+    d.test_hooks.now = Some(clock.clone());
     for secs in [0, 599, 630, 1300, 2000] {
         *clock.lock().unwrap() = t0 + time::Duration::seconds(secs);
         d.tick().unwrap();
@@ -595,7 +595,7 @@ async fn liveness_flags_only_unexplained_stalls() {
         .unwrap();
     let t0 = OffsetDateTime::now_utc() + time::Duration::minutes(5);
     let clock = Arc::new(StdMutex::new(t0));
-    d.test_now = Some(clock.clone());
+    d.test_hooks.now = Some(clock.clone());
     d.tick().unwrap();
     *clock.lock().unwrap() = t0 + time::Duration::seconds(599);
     d.tick().unwrap();
@@ -714,7 +714,7 @@ async fn human_replan_whose_first_attempt_is_invalid_gets_its_second_attempt() {
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    d.accepting_new_work = false;
+    d.coord.set_accepting_new_work(false);
     for _ in 0..300 {
         d.tick().unwrap();
         if store.get(root_id).unwrap().unwrap().status == Status::Ready {
@@ -757,7 +757,7 @@ async fn human_replan_whose_first_attempt_is_invalid_gets_its_second_attempt() {
     );
 
     // 2 回目の試行が起き、v2 が採用される（v2 も木の leaf の上限に近いので承認を挟む）。
-    d.accepting_new_work = true;
+    d.coord.set_accepting_new_work(true);
     run_until_idle(&mut d, 800).await;
     let contexts = adapter.planner_contexts();
     assert_eq!(contexts.len(), 3, "the second replan attempt ran");
@@ -795,7 +795,7 @@ async fn tree_disabled_is_unchanged() {
     let mut d = tree_dispatcher(&store, adapter);
     d.config.execution.limits.tree.enabled = false;
     let t0 = OffsetDateTime::now_utc() + time::Duration::minutes(5);
-    d.test_now = Some(Arc::new(StdMutex::new(t0)));
+    d.test_hooks.now = Some(Arc::new(StdMutex::new(t0)));
     let report = run_until_idle(&mut d, 400).await;
     assert!(report.idle, "{report:?}");
     assert_eq!(store.get(task_id).unwrap().unwrap().status, Status::Done);
@@ -805,7 +805,7 @@ async fn tree_disabled_is_unchanged() {
         Event::PlanApprovalRequested { .. } | Event::StallDetected { .. }
     )));
     assert!(reports_of(&store, task_id).is_empty());
-    assert!(d.stall_watch.is_empty());
+    assert!(d.coord.liveness().stall_watch_is_empty());
     // ADR-0074「F5-fix8 実装時の明確化」3.: 木が無効でも、計画を持つ `ready` の Task の生存確認は走る（ここでは
     // 何も検出しない。上の `StallDetected` 無し）。以前は `liveness_checked_at.is_none()`（確認そのものをしない）。
 }

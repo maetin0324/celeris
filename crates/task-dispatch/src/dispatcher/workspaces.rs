@@ -412,10 +412,10 @@ impl Dispatcher {
         let Some(choice) = task_worker::container::decide(&inputs, adapter_id) else {
             return ContainerDecision::Host;
         };
-        let Some(runtime) = self.container_probe.runtime else {
+        let Some(runtime) = self.cluster.container_probe().runtime else {
             return ContainerDecision::Unavailable {
                 question: task_worker::container::unavailable_question(
-                    &self.container_probe,
+                    self.cluster.container_probe(),
                     &choice.repo,
                 ),
             };

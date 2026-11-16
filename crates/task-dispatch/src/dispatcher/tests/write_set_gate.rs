@@ -65,7 +65,7 @@ fn hinted_task(
 }
 
 fn is_running(d: &Dispatcher, id: TaskId) -> bool {
-    d.running.contains_key(&RunKey {
+    d.supervisor.runs().contains_key(&RunKey {
         task: id,
         work_unit: None,
     })
@@ -88,7 +88,12 @@ async fn finish_one(d: &mut Dispatcher, adapter: &HoldAdapter, id: TaskId) {
         task: id,
         work_unit: None,
     };
-    (&mut d.running.get_mut(&key).expect("run is in flight").handle)
+    (&mut d
+        .supervisor
+        .runs_mut_for_test()
+        .get_mut(&key)
+        .expect("run is in flight")
+        .handle)
         .await
         .expect("worker task panicked");
 }
@@ -105,7 +110,7 @@ async fn write_set_gate_runs_disjoint_hints_in_parallel() {
     let report = d.tick().unwrap();
     assert_eq!(report.dispatched, 2);
     assert!(is_running(&d, a.id) && is_running(&d, b.id));
-    assert!(d.write_set_waits.is_empty());
+    assert!(d.coord.write_set_waits().is_empty());
 
     adapter.release.add_permits(2);
     run_until_idle(&mut d, 200).await;
@@ -128,8 +133,8 @@ async fn write_set_gate_serializes_strong_overlap_until_the_first_run_finishes()
         assert!(!is_running(&d, b.id));
         ready_untouched(&store, b.id);
     }
-    assert_eq!(d.running.len(), 1);
-    let wait = &d.write_set_waits[&RunKey {
+    assert_eq!(d.supervisor.runs().len(), 1);
+    let wait = &d.coord.write_set_waits()[&RunKey {
         task: b.id,
         work_unit: None,
     }];
@@ -142,7 +147,7 @@ async fn write_set_gate_serializes_strong_overlap_until_the_first_run_finishes()
     assert!(!is_running(&d, a.id));
     assert!(is_running(&d, b.id));
     assert_eq!(store.get(b.id).unwrap().unwrap().attempts, 0);
-    assert!(d.write_set_waits.is_empty());
+    assert!(d.coord.write_set_waits().is_empty());
 
     adapter.release.add_permits(1);
     run_until_idle(&mut d, 200).await;
@@ -166,7 +171,7 @@ async fn write_set_gate_without_hints_keeps_the_previous_parallelism() {
     let report = d.tick().unwrap();
     assert_eq!(report.dispatched, 3);
     assert!(is_running(&d, a.id) && is_running(&d, b.id) && is_running(&d, c.id));
-    assert!(d.write_set_waits.is_empty());
+    assert!(d.coord.write_set_waits().is_empty());
 
     adapter.release.add_permits(3);
     run_until_idle(&mut d, 200).await;
@@ -222,13 +227,16 @@ async fn write_set_gate_wakes_the_longest_waiter_before_a_newer_higher_priority_
 
 #[test]
 fn write_set_gate_same_task_siblings_with_only_the_inherited_hint_do_not_block() {
-    use super::super::write_set_gate::reservations_overlap;
+    use crate::execution_coordination::reservations_overlap;
     let task = TaskId::new();
     let other = TaskId::new();
     let inherited =
-        super::super::write_set_gate::WriteReservation::for_test(&["repo:r"], &["src/"], true);
-    let own =
-        super::super::write_set_gate::WriteReservation::for_test(&["repo:r"], &["src/a.rs"], false);
+        crate::execution_coordination::WriteReservation::for_test(&["repo:r"], &["src/"], true);
+    let own = crate::execution_coordination::WriteReservation::for_test(
+        &["repo:r"],
+        &["src/a.rs"],
+        false,
+    );
     assert!(!reservations_overlap(task, &inherited, task, &inherited));
     assert!(reservations_overlap(task, &inherited, task, &own));
     assert!(reservations_overlap(task, &inherited, other, &inherited));
@@ -363,16 +371,19 @@ async fn write_set_gate_no_starvation() {
 
     // tick 1: x と a0 が起き、a は x に待たされる。a の後ろの非重複 b は同じ tick に走る（走査が a で止まらない）。
     d.tick().unwrap();
-    assert!(d.running.contains_key(&x_key));
-    assert!(d.running.contains_key(&a0));
-    assert!(!d.running.contains_key(&a), "a overlaps x and waits");
+    assert!(d.supervisor.runs().contains_key(&x_key));
+    assert!(d.supervisor.runs().contains_key(&a0));
     assert!(
-        d.running.contains_key(&b),
+        !d.supervisor.runs().contains_key(&a),
+        "a overlaps x and waits"
+    );
+    assert!(
+        d.supervisor.runs().contains_key(&b),
         "the disjoint sibling behind the held WU runs in the same tick"
     );
-    assert!(!d.running.contains_key(&c));
-    assert_eq!(d.running.len(), 3, "max_concurrency is now full");
-    let first = d.write_set_waits[&a].clone();
+    assert!(!d.supervisor.runs().contains_key(&c));
+    assert_eq!(d.supervisor.runs().len(), 3, "max_concurrency is now full");
+    let first = d.coord.write_set_waits()[&a].clone();
     assert_eq!(first.consecutive, 1);
 
     // tick 2..=5: 容量は満ちたまま。毎 tick、優先度の高い重なる ready task が後から来る。容量切れの tick でも
@@ -381,8 +392,8 @@ async fn write_set_gate_no_starvation() {
     for n in 2..=5u32 {
         newcomers.push(hinted(&["crates/core/"], 9));
         d.tick().unwrap();
-        assert!(!d.running.contains_key(&a));
-        let wait = &d.write_set_waits[&a];
+        assert!(!d.supervisor.runs().contains_key(&a));
+        let wait = &d.coord.write_set_waits()[&a];
         assert_eq!(
             wait.since_tick, first.since_tick,
             "a capacity-full tick does not reset the wait"
@@ -390,25 +401,30 @@ async fn write_set_gate_no_starvation() {
         assert_eq!(wait.consecutive, n);
     }
     assert!(
-        d.write_set_waits[&a].consecutive
-            >= super::super::write_set_gate::WRITE_SET_STARVATION_TICKS
+        d.coord.write_set_waits()[&a].consecutive
+            >= crate::execution_coordination::WRITE_SET_STARVATION_TICKS
     );
 
     // x が終わった最初の tick（tick 6）に、長く待った a が走る。後から来た重なる ready task は a の先取りに
     // 止められ、c も a の後ろに並ぶ（先に待ち始めた a が先）。
-    let x_run = d.running[&x_key].run_id.clone();
+    let x_run = d.supervisor.runs()[&x_key].run_id.clone();
     adapter.release(&x_run);
-    (&mut d.running.get_mut(&x_key).expect("x in flight").handle)
+    (&mut d
+        .supervisor
+        .runs_mut_for_test()
+        .get_mut(&x_key)
+        .expect("x in flight")
+        .handle)
         .await
         .expect("worker task panicked");
     d.tick().unwrap();
-    assert!(!d.running.contains_key(&x_key));
+    assert!(!d.supervisor.runs().contains_key(&x_key));
     assert!(
-        d.running.contains_key(&a),
+        d.supervisor.runs().contains_key(&a),
         "the starved WU runs within a bounded number of ticks"
     );
-    assert!(!d.write_set_waits.contains_key(&a));
-    assert!(!d.running.contains_key(&c));
+    assert!(!d.coord.write_set_waits().contains_key(&a));
+    assert!(!d.supervisor.runs().contains_key(&c));
     for y in &newcomers {
         assert!(
             !is_running(&d, y.id),
@@ -416,5 +432,5 @@ async fn write_set_gate_no_starvation() {
         );
         ready_untouched(&store, y.id);
     }
-    assert_eq!(d.ticks, 6, "a ran in tick 6 = (held at tick 1) + 5");
+    assert_eq!(d.coord.ticks(), 6, "a ran in tick 6 = (held at tick 1) + 5");
 }

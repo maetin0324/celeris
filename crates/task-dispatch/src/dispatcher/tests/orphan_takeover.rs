@@ -370,7 +370,7 @@ async fn an_orphaned_run_without_a_result_is_requeued_as_interrupted() {
         "{row:?}"
     );
     // 孤児（人の再起動）はバックオフしない。
-    assert!(!d.infra_backoff.contains_key(&task_id));
+    assert!(!d.supervisor.infra_backoff_until(task_id).is_some());
     assert_eq!(store.get(task_id).unwrap().unwrap().attempts, 0);
 }
 
@@ -394,7 +394,8 @@ async fn a_shutdown_records_the_interrupted_runs_before_exiting() {
     let mut d = new_active(&store, slow_adapter());
     d.tick().unwrap();
     let run_id = d
-        .running
+        .supervisor
+        .runs()
         .values()
         .next()
         .expect("dispatched")
@@ -403,7 +404,7 @@ async fn a_shutdown_records_the_interrupted_runs_before_exiting() {
     assert_eq!(store.get(task_id).unwrap().unwrap().status, Status::Running);
 
     assert_eq!(d.interrupt_runs_on_shutdown(), 1);
-    assert!(d.running.is_empty());
+    assert!(d.supervisor.runs().is_empty());
     let finished = finished_of(&store, task_id, &run_id);
     assert_eq!(finished.len(), 1, "{finished:?}");
     assert!(

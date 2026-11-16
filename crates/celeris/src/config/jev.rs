@@ -77,14 +77,7 @@ impl JevSectionConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
-
-    fn load(extra: &str) -> Result<Config, ConfigError> {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("config.toml");
-        std::fs::write(&path, format!("db = \"t.sqlite3\"\n{extra}")).expect("write config");
-        Config::load(&path)
-    }
+    use crate::config::test_support::load;
 
     #[test]
     fn disabled_by_default_with_or_without_the_table() {

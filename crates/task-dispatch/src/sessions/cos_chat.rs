@@ -4,7 +4,8 @@
 //! session cache があれば resume。key 変更・方針の変更（ADR 2026-10-28-cos-session-policy-key D1）・cache 消失・前回の resume 拒否・context 上限
 //! （`[sessions] rollover_tokens` 超過、または harness の context 枯渇 event）なら旧 session を retire して
 //! fresh にする（理由付き）。DB の読み書き（`chat_session_rotate` 等）と cache の有無の確認は呼び出し側。
-//! Claude の UUID 形式（ADR-0054 Phase 67b）は [`super::session_id_is_valid_for_adapter`] を共用する。
+//! 不正な id（Claude の UUID 形式。ADR-0054 Phase 67b）・context の枯渇・token の上限の照合は task・WU と
+//! [`super::stored_session_fresh_reason`] を共有する（ADR 2026-11-13-continuation-resume-shared-inputs）。
 
 use task_core::chat::{ChatRunSessionMode, ChatSession, ChatSessionKey};
 
@@ -125,18 +126,24 @@ pub fn decide_cos_chat_session(f: &CosChatSessionFacts<'_>) -> CosChatSessionDec
     if f.previous_resume_refused {
         return D::Retire(R::ResumeRefused);
     }
-    if !f.cache_present
-        || !super::session_id_is_valid_for_adapter(&f.key.harness, &stored.session_id)
-    {
+    if !f.cache_present {
         return D::Retire(R::CacheMissing);
     }
-    if f.context_exhausted {
-        return D::Retire(R::ContextExhausted);
+    // 不正な id → context の枯渇 → token の上限は task・WU と共有の照合
+    // （ADR 2026-11-13-continuation-resume-shared-inputs）。
+    let shared = super::stored_session_fresh_reason(&super::StoredSessionFacts {
+        adapter: &f.key.harness,
+        session_id: &stored.session_id,
+        context_exhausted: f.context_exhausted,
+        measured_tokens: rollover_measure(stored),
+        rollover_tokens: f.rollover_tokens,
+    });
+    match shared {
+        Some(super::StoredSessionFreshReason::InvalidId) => D::Retire(R::CacheMissing),
+        Some(super::StoredSessionFreshReason::ContextExhausted) => D::Retire(R::ContextExhausted),
+        Some(super::StoredSessionFreshReason::TokenRollover) => D::Retire(R::TokenRollover),
+        None => D::Resume,
     }
-    if rollover_measure(stored) >= f.rollover_tokens {
-        return D::Retire(R::TokenRollover);
-    }
-    D::Resume
 }
 
 #[cfg(test)]

@@ -42,7 +42,7 @@ async fn write_set_record_stores_committed_paths_of_completed_work_unit_runs() {
     let stored = store.get(task.id).unwrap().unwrap();
     assert_eq!(stored.status, Status::Done, "{stored:?}");
     assert!(
-        d.run_write_bases.is_empty(),
+        !d.coord.has_run_write_bases(),
         "終了した run の開始 HEAD は残さない"
     );
 

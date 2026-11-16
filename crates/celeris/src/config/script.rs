@@ -69,7 +69,7 @@ impl ScriptConfig {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::Config;
+    use crate::config::test_support::load;
 
     const SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -82,13 +82,6 @@ mod tests {
         .expect_err("removed field")
         .to_string();
         assert!(err.contains("active_bundle_sha256"), "{err}");
-    }
-
-    fn load(extra: &str) -> Result<Config, crate::config::ConfigError> {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("config.toml");
-        std::fs::write(&path, format!("db = \"t.sqlite3\"\n{extra}")).expect("write config");
-        Config::load(&path)
     }
 
     #[test]

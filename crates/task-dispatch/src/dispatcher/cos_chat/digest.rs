@@ -48,8 +48,8 @@ use task_core::script_compare::{
 use time::OffsetDateTime;
 
 use super::launch::CosChatLaunch;
+use crate::cluster_runtime::run_cluster_hooks_off_async;
 use crate::dispatcher::Dispatcher;
-use crate::dispatcher::cluster::run_cluster_hooks_off_async;
 use crate::script_policy::{
     COS_DIGEST_OP_SINK_CAPACITY, COS_DIGEST_PASS_DEADLINE, COS_DIGEST_PASS_MAX_OPS, CosDigestOp,
     CosDigestOpCall, CosDigestOpReply, CosDigestPassCall, CosDigestPassClassified,
@@ -624,7 +624,11 @@ impl Dispatcher {
         reads.frozen = true;
         let (script, runtime) = call;
         let store = launch.store.clone();
-        let ticket = self.script_compare.digest_shadows.ticket(&draft.pass_id);
+        let ticket = self
+            .maint
+            .script_compare()
+            .digest_shadows
+            .ticket(&draft.pass_id);
         self.spawn_compare(
             task_core::script_compare::ScriptDomain::CosDigest,
             &runtime,
@@ -692,7 +696,8 @@ impl Dispatcher {
         let pass_id = ulid::Ulid::new().to_string();
         #[cfg(test)]
         let pass_id = self
-            .script_compare
+            .maint
+            .script_compare_mut()
             .next_digest_pass_id
             .take()
             .unwrap_or_else(|| ulid::Ulid::new().to_string());

@@ -129,7 +129,7 @@ fn fixture() -> Fixture {
         serde_json::json!({"ok": true, "at": at}),
     );
     d.config.releases_dir = Some(releases.clone());
-    d.test_now = Some(Arc::new(StdMutex::new(t0)));
+    d.test_hooks.now = Some(Arc::new(StdMutex::new(t0)));
     Fixture {
         dir,
         db_path,
@@ -143,7 +143,7 @@ fn fixture() -> Fixture {
 
 impl Fixture {
     fn at(&mut self, secs: i64) {
-        if let Some(clock) = &self.d.test_now {
+        if let Some(clock) = &self.d.test_hooks.now {
             *clock.lock().expect("clock") = self.t0 + time::Duration::seconds(secs);
         }
         self.d.tick().expect("tick");
@@ -190,7 +190,8 @@ impl Fixture {
         let snapshot = self.d.stagnation_snapshot().expect("stagnation known");
         let now = *self
             .d
-            .test_now
+            .test_hooks
+            .now
             .as_ref()
             .expect("clock")
             .lock()
@@ -394,7 +395,7 @@ async fn unknown_stagnation_holds_rows_until_the_check_succeeds_again() {
     assert_eq!(f.rows(), rows, "held: no row resolved while unknown");
 
     // The unavailable fallback is due for every item now.
-    if let Some(launch) = f.d.cos_chat_launch.as_mut() {
+    if let Some(launch) = f.d.orchestration.launch_mut() {
         launch.config.triage.fallback_after_secs = 60;
     }
     f.at(3780);

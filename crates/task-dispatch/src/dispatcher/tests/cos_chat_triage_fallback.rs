@@ -51,8 +51,8 @@ impl Fixture {
 
     fn set_unavailable(&mut self, reason: &str) {
         self.d
-            .cos_chat_launch
-            .as_mut()
+            .orchestration
+            .launch_mut()
             .expect("launch")
             .config
             .unavailable_reason = Some(reason.into());
@@ -60,7 +60,7 @@ impl Fixture {
 
     /// A daemon restart: the process-local launch state is rebuilt from config.
     fn restart(&mut self, enabled: bool) {
-        let launch = self.d.cos_chat_launch.take().expect("launch");
+        let launch = self.d.orchestration.take_launch().expect("launch");
         let mut config = launch.config.clone();
         config.enabled = enabled;
         config.unavailable_reason = None;
@@ -143,7 +143,7 @@ async fn cos_chat_triage_fallback_disabled_routes_immediately() {
 async fn cos_chat_triage_fallback_deadline_covers_capacity_wait() {
     let mut f = fixture(true);
     // Stopped intake of new work: CoS never starts, so only the deadline fires.
-    f.d.accepting_new_work = false;
+    f.d.coord.set_accepting_new_work(false);
     f.tick();
     f.question("waiting", vec![]);
     f.tick();
@@ -242,7 +242,7 @@ async fn cos_chat_triage_fallback_restart_and_recovery_neither_resend_nor_answer
 #[tokio::test]
 async fn cos_chat_triage_fallback_recovers_claim_whose_mark_was_lost() {
     let mut f = fixture(true);
-    f.d.accepting_new_work = false;
+    f.d.coord.set_accepting_new_work(false);
     f.tick();
     f.question("crashed", vec![]);
     f.tick();
@@ -254,7 +254,7 @@ async fn cos_chat_triage_fallback_recovers_claim_whose_mark_was_lost() {
         .expect("claimed");
     assert_eq!(f.state_count("pending"), 1);
     f.restart(true);
-    f.d.accepting_new_work = false;
+    f.d.coord.set_accepting_new_work(false);
     f.tick();
     assert_eq!(f.state_count("fallback"), 1);
     assert_eq!(f.fallback_outbox(), 1);
@@ -263,7 +263,7 @@ async fn cos_chat_triage_fallback_recovers_claim_whose_mark_was_lost() {
 #[tokio::test]
 async fn cos_chat_triage_fallback_escalation_race_keeps_one_pending() {
     let mut f = fixture(true);
-    f.d.accepting_new_work = false;
+    f.d.coord.set_accepting_new_work(false);
     f.tick();
     f.question("raced", vec![]);
     f.tick();
@@ -435,7 +435,7 @@ impl Fixture {
 async fn cos_chat_triage_fallback_hands_over_the_whole_body_and_queues_a_summary() {
     let mut f = fixture(true);
     // Stopped intake of new work: CoS never starts, so only the deadline fires.
-    f.d.accepting_new_work = false;
+    f.d.coord.set_accepting_new_work(false);
     f.tick();
     let body = format!(
         "{}\nA: cluster-hpc へ今回だけ委譲する\nB: software-engineering が自分で実行する\nC: 委譲をやめて人が手で行う",
@@ -492,7 +492,7 @@ async fn cos_chat_triage_fallback_hands_over_the_whole_body_and_queues_a_summary
     );
 
     // CoS is back: the normal queue claim runs CoS on the request.
-    f.d.accepting_new_work = true;
+    f.d.coord.set_accepting_new_work(true);
     f.tick();
     assert_eq!(
         f.count("SELECT COUNT(*) FROM chat_runs"),

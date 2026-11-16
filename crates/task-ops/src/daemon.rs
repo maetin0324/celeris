@@ -145,7 +145,8 @@ impl DaemonSnapshot {
     }
 }
 
-/// `ScratchStatus.schema` の値。
+/// `ScratchStatus.schema` の値。scratch status の schema 名の唯一の定義（wire の型 `ScratchStatus` と同じ場所に置く。
+/// task-ops は task-worker に依存しないので、pool の実装〈`task_worker::scratch`〉の側には置かない）。
 pub const SCRATCH_STATUS_SCHEMA: &str = "celeris.scratch-status/1";
 
 /// ADR-0075 D6（Phase G1）: scratch pool の状態（`celeris.scratch-status/1`）。**観測値**で DB には書かない。
@@ -208,72 +209,6 @@ pub struct ScratchCacheView {
     /// sccache の server が起動時に選んだ backend（`celerisctl scratch env --server` が `<scratch>/bin/sccache-server.mode`
     /// に書く）: `webdav`（この cache server）| `disk`（G2 の local disk）。記録が無ければ `None`。
     pub sccache_mode: Option<String>,
-    /// cache server の `/stats`（応答が無ければ `None`）。
-    pub stats: Option<ScratchCacheStats>,
-}
-
-/// `ScratchCacheStats.schema` の値。
-pub const SCRATCH_CACHE_STATS_SCHEMA: &str = "celeris.scratch-cache-stats/1";
-
-/// 廃止（ADR-0129）: cache server の `/stats`（`celeris.scratch-cache-stats/1`）。型だけ残す（値は常に `None`）。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ScratchCacheStats {
-    /// 常に `celeris.scratch-cache-stats/1`。
-    pub schema: String,
-    pub started_at: String,
-    pub observed_at: String,
-    /// GET（HEAD を含み、`.sccache_check` を除く）と PUT の数。
-    pub gets: u64,
-    pub puts: u64,
-    /// GET の結果: L1 hit / L2 hit / miss（`gets = l1_hits + l2_hits + misses`）。
-    pub l1_hits: u64,
-    pub l2_hits: u64,
-    pub misses: u64,
-    /// L2 hit を L1 へ書き戻した数。
-    pub promotes: u64,
-    /// L1（ローカル）。
-    pub l1_dir: String,
-    pub l1_bytes: u64,
-    pub l1_entries: u64,
-    pub l1_max_bytes: u64,
-    /// L1 の上限で LRU に落とした数（未 flush の entry は落とさない）。
-    pub l1_evicted: u64,
-    /// L2（NFS。content-addressed な immutable `<k0k1>/<key>.zst`）。
-    pub l2_enabled: bool,
-    pub l2_dir: Option<String>,
-    /// `ok` | `degraded`（連続失敗で切り離し中。GET は L1 だけで応答し、flusher は待つ）| `disabled`。
-    pub l2_state: String,
-    /// L2 の使用量と entry 数（直近の走査〈GC〉と以後の flush から。走査前は `None`）。
-    pub l2_bytes: Option<u64>,
-    pub l2_entries: Option<u64>,
-    pub l2_scanned_at: Option<String>,
-    pub l2_max_bytes: u64,
-    /// L2 の I/O の失敗・GET のタイムアウト・checksum 不一致で捨てた entry の数。
-    pub l2_errors: u64,
-    pub l2_timeouts: u64,
-    pub l2_corrupt: u64,
-    pub l2_degraded_since: Option<String>,
-    /// 切り離し中なら次に L2 を試す時刻。
-    pub l2_retry_at: Option<String>,
-    pub l2_last_error: Option<String>,
-    /// 直近の L2 の GC（`l2_max_bytes` を超えた分を mtime の古い順に消す）。
-    pub l2_gc_last_at: Option<String>,
-    pub l2_gc_removed: u64,
-    pub l2_gc_removed_bytes: u64,
-    /// flusher（L1 → L2 の非同期 write-back）の待ち行列と遅延。
-    pub flush_queue_len: u64,
-    pub flush_queue_bytes: u64,
-    /// 待ち行列の先頭（最古）の待ち時間（秒）。空なら `None`。
-    pub flush_oldest_age_secs: Option<u64>,
-    pub flush_last_at: Option<String>,
-    pub flush_written: u64,
-    pub flush_written_bytes: u64,
-    /// L2 に既にあったので書かなかった数。
-    pub flush_skipped_existing: u64,
-    /// 待ち行列の上限で「L2 に書かない」で落とした数。
-    pub flush_dropped: u64,
-    /// flusher の帯域の上限（MB/s、0 = 無制限）。
-    pub flush_mbps: u64,
 }
 
 /// 廃止（ADR-0129）: sccache L1（`<scratch>/sccache-l1`）の配線は撤去した。`ScratchStatus.sccache` が旧 client

@@ -1,6 +1,7 @@
 //! 木の子 task（tree units）の gate・liveness・plan_invalid と一括作成（ADR-0079）。ADR-0082 の L2。
 
 use super::*;
+use crate::run_settlement::{self, ReplanLimits, ReplanOrAsk};
 
 impl Dispatcher {
     /// ADR-0079 D4 (3) / D3（Phase R2a）: 採用する /3 の計画に unit の gate をかけ（上げる・下げるを spec に
@@ -75,12 +76,13 @@ impl Dispatcher {
     pub(super) fn check_tree_liveness(&mut self) -> Result<(), DispatchError> {
         let tree = self.config.execution.limits.tree;
         let now = self.now_utc();
-        if let Some(last) = self.liveness_checked_at
-            && (now - last).whole_seconds() < LIVENESS_CHECK_INTERVAL_SECS
+        if !self
+            .coord
+            .liveness_mut()
+            .liveness_due(now, LIVENESS_CHECK_INTERVAL_SECS)
         {
             return Ok(());
         }
-        self.liveness_checked_at = Some(now);
         let mut nodes: Vec<Task> = Vec::new();
         let mut tree_nodes: std::collections::HashSet<TaskId> = std::collections::HashSet::new();
         for t in self.store.list(Some(Status::Ready))? {
@@ -92,8 +94,7 @@ impl Dispatcher {
             }
         }
         if nodes.is_empty() {
-            self.stall_watch.clear();
-            self.stalled_tasks.clear();
+            self.coord.liveness_mut().clear_stall_watch();
             return Ok(());
         }
         let eligible: std::collections::HashSet<TaskId> = self
@@ -104,8 +105,10 @@ impl Dispatcher {
             .collect();
         let mut facts = Vec::with_capacity(nodes.len());
         for t in &nodes {
-            let replans_so_far = self.counted_replans(t.id)?;
-            let replans_left = replans_so_far < self.effective_max_replans(t.id)?;
+            // 節点の replan の余地は D4 wu-failure の `run_settlement::replan_or_ask` と同じ判定（「WU が失敗したら
+            // 自動 replan が来るか」）。
+            let limits = self.replan_limits(t.id, None, None)?;
+            let replans_left = run_settlement::replan_or_ask(limits) == ReplanOrAsk::Replan;
             facts.push(
                 task_ops::tree::node_liveness_facts(
                     self.store.as_ref(),
@@ -137,8 +140,9 @@ impl Dispatcher {
             {
                 // 既に知らせた止まり方（何か起きるまで繰り返さない）。受信箱には出し続ける（D5）。
                 let at = self
-                    .stalled_tasks
-                    .get(&v.task_id)
+                    .coord
+                    .liveness()
+                    .stalled_task(v.task_id)
                     .map(|s| s.at.clone())
                     .unwrap_or_else(|| since.clone());
                 stalled.insert(
@@ -154,13 +158,10 @@ impl Dispatcher {
                 continue;
             }
             watching.insert(v.task_id);
-            let since = match self.stall_watch.get(&v.task_id) {
-                Some((seq, since)) if seq == last_seq => *since,
-                _ => {
-                    self.stall_watch.insert(v.task_id, (*last_seq, now));
-                    now
-                }
-            };
+            let since = self
+                .coord
+                .liveness_mut()
+                .stall_since(v.task_id, *last_seq, now);
             let elapsed = (now - since).whole_seconds();
             if elapsed < i64::try_from(tree.liveness_timeout_secs).unwrap_or(i64::MAX) {
                 continue;
@@ -220,11 +221,12 @@ impl Dispatcher {
                     at: rfc3339(now),
                 },
             );
-            self.stall_watch.remove(&v.task_id);
+            self.coord.liveness_mut().forget_stall(v.task_id);
             watching.remove(&v.task_id);
         }
-        self.stall_watch.retain(|id, _| watching.contains(id));
-        self.stalled_tasks = stalled;
+        self.coord
+            .liveness_mut()
+            .finish_stall_round(&watching, stalled);
         Ok(())
     }
 
@@ -235,16 +237,9 @@ impl Dispatcher {
         policy: task_ops::stagnation::StagnationPolicy,
         scan_interval_secs: u64,
     ) {
-        self.stagnation = StagnationWatch {
-            policy,
-            scan_interval_secs,
-            // 取り込み側が照合済みの generation と食い違うよう、作り直しても番号は戻さない。
-            generation: self.stagnation.generation,
-            // 閾値を差し替えても、メモリの待ちが揃ったという事実は変わらない（ADR 2026-11-09-unscheduled-restart-hold D1）。
-            waits_known: self.stagnation.waits_known,
-            budget_rates: std::mem::take(&mut self.stagnation.budget_rates),
-            ..Default::default()
-        };
+        // 番号・メモリの待ちが揃ったという事実・換算単価は owner が保つ（ADR 2026-11-09-unscheduled-restart-hold D1）。
+        self.orchestration
+            .configure_stagnation(policy, scan_interval_secs);
     }
 
     /// ADR 2026-10-29-stagnation-triage-notify-wiring D1: 最後の停滞の判定を停滞の欄だけの snapshot にして返す。
@@ -254,19 +249,19 @@ impl Dispatcher {
             return None;
         }
         Some(task_ops::daemon::DaemonSnapshot::stagnation_only(
-            self.stagnation.findings.clone(),
-            self.stagnation.policy,
+            self.orchestration.stagnation_findings().to_vec(),
+            self.orchestration.stagnation_policy(),
         ))
     }
 
     /// 同 D1: 最後の停滞の判定が今の状態として使えるか（`stagnation_snapshot` が `Some` になるか）。
     pub(crate) fn stagnation_known(&self) -> bool {
-        !self.verify_smoke_only() && self.stagnation.available
+        !self.verify_smoke_only() && self.orchestration.stagnation_available()
     }
 
     /// 同 D3: 停滞の判定が成功するたびに 1 進む番号。CoS の取り込みは番号が変わったときだけ照合し直す。
     pub(crate) fn stagnation_generation(&self) -> u64 {
-        self.stagnation.generation
+        self.orchestration.stagnation_generation()
     }
 
     /// tick の段: 木の生存確認（ADR-0079 D10）と、続けて案件単位の停滞（ADR 2026-10-27-project-stagnation-inbox D3）。
@@ -288,22 +283,26 @@ impl Dispatcher {
     /// `project_stalled`・`release_unpromoted`・`task_unscheduled` を判定して snapshot の `stagnation` を作り直す。
     /// 読み取りだけで、状態は変えず event も書かない（LLM なし）。
     pub(super) fn check_stagnation(&mut self) -> Result<(), DispatchError> {
-        let (now, s) = (self.now_utc(), &self.stagnation);
+        let now = self.now_utc();
         // ADR 2026-11-09-unscheduled-restart-hold D1/D2: 起動後に `dispatch_ready` が終わるまで（メモリの待ちが揃うまで）保留。
-        if !task_ops::stagnation::scan_due(s.checked_at, s.scan_interval_secs, s.waits_known, now) {
-            return Ok(());
-        }
-        self.stagnation.checked_at = Some(now);
         // 判定が失敗したら、前の結果は今の状態として使わない（ADR 2026-10-29-stagnation-triage-notify-wiring D2）。
-        self.stagnation.available = false;
+        let Some(policy) = self.orchestration.begin_stagnation_scan(now) else {
+            return Ok(());
+        };
         let in_flight: std::collections::HashSet<TaskId> = self
-            .running
+            .supervisor
+            .runs()
             .keys()
             .map(|k| k.task)
-            .chain(self.reviewing.keys().copied())
+            .chain(self.supervisor.reviews().keys().copied())
             .collect();
-        let excluded: std::collections::HashSet<TaskId> =
-            self.stalled_tasks.keys().copied().collect();
+        let excluded: std::collections::HashSet<TaskId> = self
+            .coord
+            .liveness()
+            .stalled_tasks()
+            .keys()
+            .copied()
+            .collect();
         let memory = task_ops::wait::MemoryWaits::from_waits(
             self.snapshot_task_waits()
                 .into_iter()
@@ -312,17 +311,15 @@ impl Dispatcher {
         let facts = task_ops::stagnation::gather(
             self.store.as_ref(),
             self.config.releases_dir.as_deref(),
-            &self.stagnation.policy,
+            &policy,
             now,
             &in_flight,
             &excluded,
             &memory,
         )
         .map_err(ops_to_store)?;
-        self.stagnation.findings =
-            task_ops::stagnation::detect(&facts, &self.stagnation.policy, now);
-        self.stagnation.available = true;
-        self.stagnation.generation += 1;
+        self.orchestration
+            .record_stagnation(task_ops::stagnation::detect(&facts, &policy, now));
         Ok(())
     }
 
@@ -622,12 +619,19 @@ impl Dispatcher {
         Ok(task_core::tree::limits_with_allowances(&tree, &allowances))
     }
 
-    /// ADR-0079 付記「R6-1」D3: `[execution] max_replans` に数える replan の数（人が起こした replan は数えない。
-    /// `task_ops::plan_gate::counted_replans`）。以前は版の数 − 1。
-    pub(super) fn counted_replans(&self, task_id: TaskId) -> Result<u32, DispatchError> {
-        Ok(task_ops::plan_gate::counted_replans(
-            &self.store.events_for(task_id)?,
-        ))
+    /// ADR-0079 付記「R6-1」D3・ADR 2026-11-11 dispatcher-state-ownership D4 wu-failure: `run_settlement::replan_or_ask`
+    /// の入力を読む。`[execution] max_replans` に数える replan の数（人が起こした replan は数えない。
+    /// `task_ops::plan_gate::counted_replans`。以前は版の数 − 1）・節点の上限（`effective_max_replans`）・stalled の数
+    /// （`failure` が (unit の key, 失敗の署名) のとき。`None` なら 0）。組み立ては `ReplanLimits::from_events`。
+    pub(super) fn replan_limits(
+        &self,
+        task_id: TaskId,
+        failure: Option<(&str, &str)>,
+        ban: Option<run_settlement::ReplanBan>,
+    ) -> Result<ReplanLimits, DispatchError> {
+        let max = self.effective_max_replans(task_id)?;
+        let events = self.store.events_for(task_id)?;
+        Ok(ReplanLimits::from_events(&events, failure, max, ban))
     }
 
     /// ADR-0079 付記「R6-1」D1 / D2: 人の gate がこの task の unit を止めているなら、その理由。
@@ -804,7 +808,7 @@ impl Dispatcher {
         let counters = task_ops::tree::tree_counters(
             self.store.as_ref(),
             root_id,
-            &self.stagnation.budget_rates,
+            self.orchestration.budget_rates(),
         )
         .map_err(ops_to_store)?;
         // ADR-0079 D7（Phase R3a）: `raise-once` / `replan` の回答で足した余裕を当てる。
@@ -995,26 +999,7 @@ impl Dispatcher {
             } else if changed {
                 let units = self.store.work_units_for(task_id)?;
                 // 子の done で依存が満たされた unit を ready に（段階の障壁は `newly_ready` が見る）。
-                for id in task_core::newly_ready(&units) {
-                    let Some(u) = units.iter().find(|u| u.id == id) else {
-                        continue;
-                    };
-                    let mut row = u.clone();
-                    row.status = task_core::WorkUnitStatus::Ready;
-                    row.updated_at = rfc3339(now);
-                    self.store.work_unit_transition(
-                        task_id,
-                        row,
-                        Event::WorkUnitTransitioned {
-                            work_unit_id: u.id.clone(),
-                            key: u.key.clone(),
-                            from: task_core::WorkUnitStatus::Pending,
-                            to: task_core::WorkUnitStatus::Ready,
-                            reason: "dependency_ready".to_string(),
-                            run_id: None,
-                        },
-                    )?;
-                }
+                self.promote_newly_ready(task_id, &units)?;
                 self.store.work_units_for(task_id)?
             } else {
                 units
@@ -1356,40 +1341,5 @@ pub(super) fn next_run(gate: &WuDispatchGate) -> Option<task_core::NextRun> {
         WuDispatchGate::StartIntegration(_)
         | WuDispatchGate::FinalReview
         | WuDispatchGate::Skip => None,
-    }
-}
-
-/// ADR 2026-10-27-project-stagnation-inbox D3・D4: dispatcher の停滞の判定の状態。閾値と間隔（`set_stagnation` で渡す）、
-/// 最後の判定（snapshot の `stagnation`）と判定した時刻。判定は store と releases_dir から毎回作り直す
-/// （ここは結果の写しだけで、止まり始めた時刻を持たない）。
-#[derive(Debug, Clone)]
-pub(crate) struct StagnationWatch {
-    pub(crate) policy: task_ops::stagnation::StagnationPolicy,
-    pub(crate) scan_interval_secs: u64,
-    pub(crate) findings: Vec<task_ops::stagnation::StagnationFinding>,
-    pub(crate) checked_at: Option<OffsetDateTime>,
-    /// 最後の判定が成功し、`findings` が今の状態か（ADR 2026-10-29-stagnation-triage-notify-wiring D1）。
-    pub(crate) available: bool,
-    /// 判定が成功するたびに 1 進む（同 D3）。
-    pub(crate) generation: u64,
-    /// ADR 2026-11-09-unscheduled-restart-hold D1: この process で `dispatch_ready` が 1 回でも終わったか（`tick` が立てる）。
-    pub(crate) waits_known: bool,
-    /// ADR 2026-11-06-budget-usd-caps D2: `[budget_rates]`（単価表に無い model の換算単価）。案件の日次上限と木の
-    /// 上限の判定が使う（`dispatcher.rs` に欄を足さない行数のため、木の状態のここに置く）。`set_budget_rates` で入る。
-    pub(crate) budget_rates: task_core::pricing::BudgetRates,
-}
-
-impl Default for StagnationWatch {
-    fn default() -> Self {
-        Self {
-            policy: task_ops::stagnation::StagnationPolicy::default(),
-            scan_interval_secs: task_ops::stagnation::DEFAULT_SCAN_INTERVAL_SECS,
-            findings: Vec::new(),
-            checked_at: None,
-            available: false,
-            generation: 0,
-            waits_known: false,
-            budget_rates: task_core::pricing::BudgetRates::default(),
-        }
     }
 }

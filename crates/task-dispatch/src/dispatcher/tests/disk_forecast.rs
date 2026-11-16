@@ -56,7 +56,7 @@ fn fixture(free: u64, samples: Vec<Sample>) -> Fixture {
         samples,
     }));
     let probe = inputs.clone();
-    d.scratch.admission.probe = Some(Arc::new(move || probe.lock().unwrap().clone()));
+    d.maint.admission_mut().probe = Some(Arc::new(move || probe.lock().unwrap().clone()));
     Fixture {
         d,
         store,
@@ -105,8 +105,8 @@ async fn a_new_target_waits_ready_until_the_forecast_fits_and_the_reason_is_note
         assert_eq!(status(&f.store, b.id), Status::Ready);
     }
     assert_eq!(f.store.get(b.id).unwrap().unwrap().attempts, 0);
-    assert_eq!(f.d.scratch.admission.notes(), 1, "the hold is noted once");
-    let held = f.d.scratch.admission.held_views();
+    assert_eq!(f.d.maint.admission().notes(), 1, "the hold is noted once");
+    let held = f.d.maint.admission().held_views();
     assert_eq!(held.len(), 1);
     assert_eq!(held[0].task_id, b.id.to_string());
     assert_eq!(held[0].need_bytes, 100 * GB);
@@ -124,7 +124,7 @@ async fn a_new_target_waits_ready_until_the_forecast_fits_and_the_reason_is_note
     assert_eq!(f.d.tick().unwrap().dispatched, 1);
     assert_eq!(status(&f.store, b.id), Status::Running);
     f.d.tick().unwrap();
-    assert!(f.d.scratch.admission.held_views().is_empty());
+    assert!(f.d.maint.admission().held_views().is_empty());
 }
 
 #[tokio::test]
@@ -157,7 +157,7 @@ async fn a_continuation_is_judged_by_its_increment_only() {
     f.d.tick().unwrap();
     assert_eq!(status(&f.store, cont.id), Status::Running);
     assert_eq!(status(&f.store, fresh.id), Status::Ready);
-    assert_eq!(f.d.scratch.admission.notes(), 1);
+    assert_eq!(f.d.maint.admission().notes(), 1);
 }
 
 #[tokio::test]
@@ -175,7 +175,7 @@ async fn the_only_run_is_never_held_and_unknown_repos_are_not_judged() {
     f.store.insert(&other).unwrap();
     f.d.tick().unwrap();
     assert_eq!(status(&f.store, other.id), Status::Running);
-    assert_eq!(f.d.scratch.admission.notes(), 0);
+    assert_eq!(f.d.maint.admission().notes(), 0);
 }
 
 /// attempt 5 の review の指摘: 同じ tick にまとめて来た run のうち、見込みに入る分だけが始まり、通した run の lease が
@@ -208,7 +208,7 @@ async fn runs_admitted_in_one_tick_keep_their_forecast_until_their_lease_appears
         assert_eq!(f.d.tick().unwrap().dispatched, 0);
         assert_eq!(status(&f.store, ready[0]), Status::Ready);
     }
-    assert_eq!(f.d.scratch.admission.notes(), 1);
+    assert_eq!(f.d.maint.admission().notes(), 1);
     // 通した 2 本が走査に書いている owner として出る（target 60 GB、増分 40 GB ずつ）: 250 − 80 − 100 = 70 ≥ 30 で始まる。
     let started: Vec<Sample> = (ids.iter())
         .filter(|id| **id != ready[0])
@@ -239,7 +239,7 @@ async fn a_parent_waiting_in_review_does_not_stall_its_child() {
     f.store.insert(&child).unwrap();
     assert_eq!(f.d.tick().unwrap().dispatched, 1);
     assert_eq!(status(&f.store, child.id), Status::Running);
-    assert_eq!(f.d.scratch.admission.notes(), 0);
+    assert_eq!(f.d.maint.admission().notes(), 0);
     // 子が走っている間は、子が書き手: 同じ repo の次の新しい target は待つ。
     let (next, _) = rust_task(&root, "next");
     let next = Task {
@@ -254,13 +254,13 @@ async fn a_parent_waiting_in_review_does_not_stall_its_child() {
     f.store.insert(&next).unwrap();
     assert_eq!(f.d.tick().unwrap().dispatched, 0);
     assert_eq!(status(&f.store, next.id), Status::Ready);
-    assert_eq!(f.d.scratch.admission.notes(), 1);
+    assert_eq!(f.d.maint.admission().notes(), 1);
 }
 
 /// attempt 9 の review の指摘: 待たせた task は待ちの理由 M12（`TaskWait::DiskForecast`）を持つ。理由が無いと、停滞の
 /// 判定が「ready のまま run も待ちの理由も無い」task として `task_unscheduled_secs`（既定 1800 秒）の後に受信箱へ出し、
 /// task の `runnable` も true のままになる。上の試験は通知（`notice_list`）しか見ず、停滞の判定と受信箱を検出できない。
-/// 時刻は注入した時計（`test_now`）で 2 時間進める。
+/// 時刻は注入した時計（`test_hooks.now`）で 2 時間進める。
 #[tokio::test]
 async fn a_held_run_has_a_wait_reason_and_never_becomes_task_unscheduled() {
     use task_ops::stagnation::{StagnationKind, StagnationPolicy};
@@ -279,7 +279,7 @@ async fn a_held_run_has_a_wait_reason_and_never_becomes_task_unscheduled() {
         tick_ms: 50,
     });
     let clock = Arc::new(StdMutex::new(OffsetDateTime::now_utc()));
-    f.d.test_now = Some(clock.clone());
+    f.d.test_hooks.now = Some(clock.clone());
     let root = f._root.path().to_path_buf();
     let (a, repo) = rust_task(&root, "a");
     let (b, _) = rust_task(&root, "b");
@@ -321,7 +321,7 @@ async fn a_held_run_has_a_wait_reason_and_never_becomes_task_unscheduled() {
             .iter()
             .any(|x| x.kind == StagnationKind::TaskUnscheduled && x.task_id == Some(b.id))
     };
-    assert!(!unscheduled(&f.d.stagnation.findings));
+    assert!(!unscheduled(&f.d.orchestration.stagnation_findings()));
     let none = std::collections::HashSet::new();
     let facts = |memory: &task_ops::wait::MemoryWaits| {
         task_ops::stagnation::gather(f.store.as_ref(), None, &policy, later, &none, &none, memory)
@@ -360,7 +360,7 @@ async fn a_held_run_has_a_wait_reason_and_never_becomes_task_unscheduled() {
         "{:?}",
         inbox.items.iter().map(|i| i.kind).collect::<Vec<_>>()
     );
-    assert_eq!(f.d.scratch.admission.notes(), 1);
+    assert_eq!(f.d.maint.admission().notes(), 1);
 }
 
 /// attempt 10 の review の指摘: 判定で通した後に経路の選択で拒否される task a（宣言の無い harness）が先に並び、run が
@@ -387,9 +387,9 @@ async fn a_route_refused_run_ahead_does_not_hold_the_next_run() {
     assert_eq!(status(&f.store, a.id), Status::Ready);
     assert_eq!(status(&f.store, b.id), Status::Running);
     // 起動した b の見込みだけを数え、a は数えない。a の待ちは経路の拒否で、空きの見込みではない。
-    assert_eq!(f.d.scratch.admission.admitted_bytes(), 92 * GB);
-    assert!(f.d.scratch.admission.held_views().is_empty());
-    assert_eq!(f.d.scratch.admission.notes(), 0);
+    assert_eq!(f.d.maint.admission().admitted_bytes(), 92 * GB);
+    assert!(f.d.maint.admission().held_views().is_empty());
+    assert_eq!(f.d.maint.admission().notes(), 0);
     let waits = f.d.snapshot_task_waits();
     assert!(
         !waits
@@ -401,6 +401,6 @@ async fn a_route_refused_run_ahead_does_not_hold_the_next_run() {
     for _ in 0..3 {
         f.d.tick().unwrap();
         assert_eq!(status(&f.store, a.id), Status::Ready);
-        assert_eq!(f.d.scratch.admission.admitted_bytes(), 92 * GB);
+        assert_eq!(f.d.maint.admission().admitted_bytes(), 92 * GB);
     }
 }

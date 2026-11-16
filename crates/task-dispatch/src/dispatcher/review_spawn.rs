@@ -1,9 +1,10 @@
 //! review run の起動（`spawn_review`・`pick_reviewer`・最終レビュー）。per-task file lock は verdict の保存まで持ち続ける。ADR-0082 の L2。
 
-use super::route_select::{RouteInput, RoutePick, RouteTrace, account_adapter_for_source_kind};
+use super::route_select::{RouteInput, RoutePick, RouteTrace};
 use super::token_budget::run_watch;
 use super::*;
 use crate::review::RepoHealth;
+use crate::review_decision;
 use task_worker::check_slots::CheckLimits;
 
 /// ADR-0118 D4 付記 / ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3・D4: 直近の遷移（自動の
@@ -182,10 +183,10 @@ fn pending_integration_repair(
 
 impl Dispatcher {
     /// review 前の target 同期（ADR-0118）を行うか。本番では常に行う。試験だけが切れる
-    /// （`test_skip_pre_review_sync`、phase_effect_ab::review_sync の off）。
+    /// （`test_hooks.ablation.skip_pre_review_sync`、phase_effect_ab::review_sync の off）。
     fn pre_review_sync_enabled(&self) -> bool {
         #[cfg(test)]
-        if self.test_skip_pre_review_sync {
+        if self.test_hooks.ablation.skip_pre_review_sync {
             return false;
         }
         true
@@ -234,7 +235,7 @@ impl Dispatcher {
                 if outcome.next == Status::Reviewing
                     && !self.spawn_review(task_id, run_id, &subject)?
                 {
-                    self.pending_subjects.insert(task_id, subject);
+                    self.coord.defer_review(task_id, subject);
                 }
                 Ok(())
             }
@@ -351,7 +352,7 @@ impl Dispatcher {
         run_id: String,
         subject: &ReviewSubject,
     ) -> Result<bool, DispatchError> {
-        if !self.accepting_new_work || !self.disk_ready {
+        if !self.coord.accepting_new_work() || !self.maint.disk_ready() {
             return Ok(false);
         }
         let Some(task) = self.store.get(task_id)? else {
@@ -403,7 +404,7 @@ impl Dispatcher {
                 Trigger::TokenBudgetExhausted,
                 Some(Event::worker_progress(
                     run_id.clone(),
-                    token_budget::outcome(used, max),
+                    crate::run_settlement::token_budget_outcome(used, max),
                 )),
             )?;
             return Ok(true);
@@ -414,11 +415,11 @@ impl Dispatcher {
 
         let human = match self.resolve_human_approvals(&task)? {
             Some(h) => {
-                self.awaiting_human.remove(&task_id);
+                self.coord.set_awaiting_human(task_id, false);
                 h
             }
             None => {
-                self.awaiting_human.insert(task_id);
+                self.coord.set_awaiting_human(task_id, true);
                 tracing::debug!(%task_id, "review deferred (waiting for human approval)");
                 return Ok(false);
             }
@@ -562,7 +563,7 @@ impl Dispatcher {
                                 )
                             })?;
                         #[cfg(test)]
-                        if self.test_sync_conflict_as_review_fail {
+                        if self.test_hooks.ablation.sync_conflict_as_review_fail {
                             // Phase 2 以前の旧経路: 衝突を review の不合格として worker に戻す（attempts を使う）。
                             self.store.apply_transition(
                                 task_id,
@@ -905,7 +906,7 @@ impl Dispatcher {
                 }
             }
             // ADR-0076: reviewer run も worker と同じく quota の `before` を登録する
-            // （`on_review_finished` が `resolve_quota_estimate` で閉じる）。
+            // （`on_review_finished` が `RoutingRuntime::settle_quota` で閉じる）。
             self.quota_begin(account.as_deref(), account_adapter, review_run_id);
         }
         let limits = CheckLimits::new(self.config.review_timeout, &self.config.check_slots);
@@ -915,7 +916,7 @@ impl Dispatcher {
         let entry_subject = subject.clone();
         let entry_run_id = run_id.clone();
         let subject = subject.clone();
-        let tx = self.tx.clone();
+        let tx = self.coord.completion_sender();
         let remote_review = remote_settings.clone();
         // ADR-0019 D1 6. / ADR-0041 D1: 判定コマンドは worktree の中で実行する（元のリポジトリでは実行しない）。
         let review_work_dir = self.work_dir_for(&task).filter(|w| w.is_dir());
@@ -1068,7 +1069,7 @@ impl Dispatcher {
                 outcome,
             });
         });
-        self.reviewing.insert(
+        self.supervisor.register_review(
             task_id,
             ReviewEntry {
                 _review_lock: review_lock,
@@ -1162,10 +1163,7 @@ impl Dispatcher {
                     return Ok(None);
                 }
             };
-            let overlap: Vec<&String> = target_files
-                .iter()
-                .filter(|f| task_files.contains(f))
-                .collect();
+            let overlap = review_decision::reviewer_reuse_overlap(&target_files, &task_files);
             if !overlap.is_empty() {
                 self.store.append_event(
                     task.id,
@@ -1176,11 +1174,7 @@ impl Dispatcher {
                             s.name,
                             s.target_ref,
                             s.target_sha,
-                            overlap
-                                .iter()
-                                .map(|f| f.as_str())
-                                .collect::<Vec<_>>()
-                                .join(", ")
+                            overlap.join(", ")
                         ),
                     ),
                 )?;
@@ -1252,35 +1246,27 @@ impl Dispatcher {
             .into_iter()
             .map(|(_, e)| e)
             .collect();
-        let (count, last, halted) = pre_review_stale_state(&events);
-        if count <= task_ops::delivery::MAX_TARGET_RESYNCS {
-            self.review_resync_halted.remove(&task_id);
-            return Ok(false);
-        }
-        let (review_run, repo_id, reviewed, target) = match halted.or(last) {
-            Some(Event::ReviewTargetAdvanced {
-                review_run,
-                repo_id,
-                reviewed_sha,
-                target_sha,
-                ..
-            })
-            | Some(Event::ReviewResyncHalted {
-                review_run,
-                repo_id,
-                reviewed_sha,
-                target_sha,
-                ..
-            }) => (
-                review_run.clone(),
-                *repo_id,
-                reviewed_sha.clone(),
-                target_sha.clone(),
-            ),
-            _ => return Ok(false),
+        let (first, halted) = match review_decision::resync_gate(
+            pre_review_stale_state(&events),
+            task_ops::delivery::MAX_TARGET_RESYNCS,
+        ) {
+            review_decision::ResyncGate::Proceed { clear_halt } => {
+                if clear_halt {
+                    self.coord.clear_review_resync_halt(task_id);
+                }
+                return Ok(false);
+            }
+            review_decision::ResyncGate::Halt { first, halted } => (first, halted),
         };
+        let review_decision::HaltedReview {
+            review_run,
+            repo_id,
+            reviewed_sha: reviewed,
+            target_sha: target,
+            resyncs: count,
+        } = halted;
         let now = self.now_utc();
-        if halted.is_none() {
+        if first {
             tracing::warn!(%task_id, count, %reviewed, %target, "review target kept moving; review halted until the target is quiet or a human resumes it (ADR 2026-10-27 D3)");
             self.store.append_event(
                 task_id,
@@ -1316,7 +1302,11 @@ impl Dispatcher {
                 tracing::error!(%task_id, %error, "failed to record the review resync halt notice");
             }
         } else if let Some(committed) = self.target_commit_time(task, repo_id)
-            && now.unix_timestamp() - committed >= self.config.review_resync_quiet.as_secs() as i64
+            && review_decision::target_quiet(
+                now.unix_timestamp(),
+                committed,
+                self.config.review_resync_quiet.as_secs(),
+            )
         {
             tracing::info!(%task_id, "review target quiet; resuming the halted review (ADR 2026-10-27 D4)");
             self.store.append_event(
@@ -1337,19 +1327,18 @@ impl Dispatcher {
                     ),
                 ),
             )?;
-            self.review_resync_halted.remove(&task_id);
+            self.coord.clear_review_resync_halt(task_id);
             return Ok(false);
         }
-        self.review_resync_halted.entry(task_id).or_insert_with(|| {
-            task_ops::daemon::SnapshotReviewResyncHalted {
+        self.coord
+            .note_review_resync_halt(task_ops::daemon::SnapshotReviewResyncHalted {
                 task_id,
                 repo_id,
                 reviewed_sha: reviewed,
                 target_sha: target,
                 resyncs: count,
                 at: rfc3339(now),
-            }
-        });
+            });
         Ok(true)
     }
 
@@ -1364,7 +1353,7 @@ impl Dispatcher {
         subject_run_id: &str,
         token_budget: Result<Option<Arc<token_budget::TokenBudgetWatch>>, StoreError>,
     ) -> Option<ReviewerPick> {
-        if self.workers_in_flight() >= self.max_concurrency {
+        if self.workers_in_flight() >= self.coord.max_concurrency() {
             return None;
         }
         let org = self.store.org_list().ok()?;
@@ -1443,7 +1432,7 @@ impl Dispatcher {
             && let Some(decision) = trace.decision.as_mut()
         {
             decision.routing_resolved = Some(task_core::route_select::resolve_routing(
-                self.routing_mode,
+                self.routing.mode(),
                 routing_override.as_ref(),
             ));
         }
@@ -1458,7 +1447,7 @@ impl Dispatcher {
             Ok(v) => v,
             Err(reason) => {
                 // 拒否は task ごとに 1 回だけ残す（毎 tick の再試行で events を増やさない）。
-                if self.warned_unroutable.insert(task.id) {
+                if self.routing.warn_unroutable_once(task.id) {
                     match &outcome {
                         Err(_) => {
                             if let Err(e) = self.record_route_selection(
@@ -1486,11 +1475,7 @@ impl Dispatcher {
                 return None;
             }
         };
-        let account_adapter = self
-            .llm_route_registry
-            .sources
-            .get(&pick.candidate.source)
-            .and_then(|s| account_adapter_for_source_kind(s.kind.as_ref()));
+        let account_adapter = self.routing.source_account_adapter(&pick.candidate.source);
         let account = pick.account.to_string();
         let adapter_id = adapter.id().to_string();
         let review_run_id = ulid::Ulid::new().to_string();

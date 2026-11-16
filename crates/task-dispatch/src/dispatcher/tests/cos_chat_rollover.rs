@@ -203,8 +203,8 @@ fn post(store: &SqliteStore, thread: &str, key: &str) {
 async fn tick_and_join(d: &mut Dispatcher, store: &SqliteStore, thread: &str) -> String {
     d.tick_cos_chat_launch();
     let task = d
-        .cos_chat_launch
-        .as_mut()
+        .orchestration
+        .launch_mut()
         .expect("launch configured")
         .running
         .remove(thread)
@@ -335,13 +335,7 @@ async fn cos_chat_run_rollover_second_refusal_fails_with_reason() {
     );
     // No third attempt: nothing is queued and the next tick starts nothing.
     d.tick_cos_chat_launch();
-    assert!(
-        d.cos_chat_launch
-            .as_ref()
-            .expect("launch")
-            .running
-            .is_empty()
-    );
+    assert!(d.orchestration.launch().expect("launch").running.is_empty());
     assert_eq!(probe.attempts.lock().expect("attempts").len(), 3);
     assert_eq!(run_ids(&store, &t).len(), 2);
 }
@@ -949,7 +943,7 @@ async fn cos_chat_policy_change_makes_next_run_fresh_and_records_new_version() {
     );
 
     // The operator raises the version and reloads.
-    let mut cfg = d.cos_chat_launch.as_ref().expect("launch").config.clone();
+    let mut cfg = d.orchestration.launch().expect("launch").config.clone();
     cfg.triage.policy_version = "7".into();
     let skills = d.config.knowledge.root.join("skills");
     task_ops::cos_skill_gate::write_fixture(&skills, "cos-inbox-triage", "7").expect("v7");

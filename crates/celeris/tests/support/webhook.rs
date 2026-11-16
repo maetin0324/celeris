@@ -1,13 +1,14 @@
 //! 偽の Discord webhook: `POST /hook` に 204 を返し、受けた本文を残す。
 //!
-//! `#[path]` で読む。読む crate の根に `fake_http`（`tests/support/http_async.rs`）が要る。
-//! 読み手: `cos_delivery_suite`（`cos_chat_triage_scenarios`）・`root_done_summary.rs`。
+//! `#[path]` で読む。この module の親（読む側の module）に `fake_http`（`tests/support/http_async.rs`）が要る。
+//! 読み手: `cos_delivery_suite`（`cos_chat_triage_scenarios`）・`root_done_summary.rs`・`credential_wait_notify.rs`・
+//! celeris の unit 試験 `daemon::classify_tick::e2e`。
 
 use std::sync::{Arc, Mutex};
 
 use tokio::io::AsyncWriteExt;
 
-use crate::fake_http;
+use super::fake_http;
 
 pub struct Hook {
     pub url: String,

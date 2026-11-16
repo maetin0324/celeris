@@ -20,8 +20,6 @@ export function blockKindLabel(block: ConsoleBlock): { label: string; tone: Badg
       return block.answered ? { label: "質問（回答済み）", tone: "neutral" } : { label: "質問", tone: "warning" };
     case "approval":
       return { label: "承認待ち", tone: "warning" };
-    case "milestone":
-      return { label: "途中目標", tone: "neutral" };
     case "report":
       return { label: "報告", tone: "success" };
     case "knowledge":

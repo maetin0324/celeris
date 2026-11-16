@@ -88,11 +88,16 @@ fn all_alive() -> Arc<dyn Fn(u32) -> bool + Send + Sync> {
 }
 
 fn clock_now(d: &Dispatcher) -> OffsetDateTime {
-    *d.test_now.as_ref().expect("test clock").lock().unwrap()
+    *d.test_hooks
+        .now
+        .as_ref()
+        .expect("test clock")
+        .lock()
+        .unwrap()
 }
 
 fn advance(d: &Dispatcher, secs: i64) {
-    let clock = d.test_now.as_ref().expect("test clock");
+    let clock = d.test_hooks.now.as_ref().expect("test clock");
     let mut now = clock.lock().unwrap();
     *now += time::Duration::seconds(secs);
 }
@@ -232,12 +237,13 @@ async fn old_daemon_reviewing(store: &Arc<dyn TaskStore>, task: &Task) -> (Dispa
     );
     old.config.review_timeout = Duration::from_secs(600);
     old.tick().unwrap();
-    assert!(old.reviewing.contains_key(&task.id));
+    assert!(old.supervisor.reviews().contains_key(&task.id));
     tokio::time::timeout(Duration::from_secs(30), started.notified())
         .await
         .expect("the old daemon's reviewer run started");
     let review_run = old
-        .reviewing
+        .supervisor
+        .reviews()
         .get(&task.id)
         .and_then(|e| e.review_run_id.clone())
         .expect("a reviewer run was provisioned");
@@ -277,7 +283,7 @@ async fn handoff_shutdown_closes_the_old_reviewer_run_and_the_new_active_rerevie
         tokio::task::yield_now().await;
     }
     assert!(
-        new.reviewing.is_empty(),
+        new.supervisor.reviews().is_empty(),
         "the review lock is still held by the old daemon"
     );
     assert_eq!(
@@ -297,7 +303,7 @@ async fn handoff_shutdown_closes_the_old_reviewer_run_and_the_new_active_rerevie
         task_core::RunIndexStatus::Cancelled,
         "the old reviewer run is still running after the shutdown"
     );
-    assert!(old.reviewing.is_empty());
+    assert!(old.supervisor.reviews().is_empty());
     drop(old);
     store.instance_delete(OLD_ID).unwrap();
     old_alive.store(false, Ordering::SeqCst);
@@ -406,11 +412,17 @@ async fn a_reviewer_run_not_launched_because_a_check_failed_is_closed() {
     let mut d = dispatcher(store.clone(), slow_adapter(), 1);
     d.tick().unwrap();
     let review_run = d
-        .reviewing
+        .supervisor
+        .reviews()
         .get(&task.id)
         .and_then(|e| e.review_run_id.clone())
         .expect("a reviewer run was provisioned");
-    (&mut d.reviewing.get_mut(&task.id).unwrap().handle)
+    (&mut d
+        .supervisor
+        .reviews_mut_for_test()
+        .get_mut(&task.id)
+        .unwrap()
+        .handle)
         .await
         .unwrap();
     assert_eq!(d.tick().unwrap().reviewed, 1);
@@ -583,7 +595,12 @@ async fn a_leased_worker_run_of_a_gone_daemon_is_requeued_by_the_lease_path() {
         task_core::RunIndexStatus::Running
     );
     // 同じ tick で再 dispatch された run（手元にある）以外に `running` の行は無い。
-    let in_hand: Vec<String> = d.running.values().map(|e| e.run_id.clone()).collect();
+    let in_hand: Vec<String> = d
+        .supervisor
+        .runs()
+        .values()
+        .map(|e| e.run_id.clone())
+        .collect();
     for r in running_rows(&store) {
         assert!(in_hand.contains(&r), "{r} is running but not in hand");
     }
@@ -614,7 +631,10 @@ async fn runs_in_hand_under_a_live_lease_or_of_ineligible_tasks_are_not_closed()
         tokio::time::timeout(Duration::from_secs(30), started.notified())
             .await
             .expect("reviewer run started");
-        let review_run = d.reviewing[&task.id].review_run_id.clone().unwrap();
+        let review_run = d.supervisor.reviews()[&task.id]
+            .review_run_id
+            .clone()
+            .unwrap();
         for _ in 0..3 {
             advance(&d, 2 * RUNS_RECONCILE_INTERVAL_SECS);
             d.tick().unwrap();
@@ -719,7 +739,8 @@ async fn self_reviewing(
         .await
         .expect("the reviewer run started");
     let review_run = d
-        .reviewing
+        .supervisor
+        .reviews()
         .get(&task.id)
         .and_then(|e| e.review_run_id.clone())
         .expect("a reviewer run was provisioned");
@@ -742,7 +763,12 @@ async fn a_review_that_ended_without_a_verdict_is_closed_and_redone_in_the_same_
     let (mut d, lost_run) = self_reviewing(&store, &task, false).await;
 
     // 判定を届けずに終わる tokio task（abort で模す。完了は送られない）。entry は手元に残ったまま。
-    let handle = &mut d.reviewing.get_mut(&task.id).unwrap().handle;
+    let handle = &mut d
+        .supervisor
+        .reviews_mut_for_test()
+        .get_mut(&task.id)
+        .unwrap()
+        .handle;
     handle.abort();
     assert!(
         (&mut *handle).await.is_err(),
@@ -752,7 +778,7 @@ async fn a_review_that_ended_without_a_verdict_is_closed_and_redone_in_the_same_
 
     d.tick().unwrap();
     assert!(
-        d.reviewing.contains_key(&task.id),
+        d.supervisor.reviews().contains_key(&task.id),
         "the first tick only watches the finished review"
     );
     assert_eq!(
@@ -779,7 +805,7 @@ async fn a_review_that_ended_without_a_verdict_is_closed_and_redone_in_the_same_
     assert_eq!(starts.len(), 2, "the review was not redone: {starts:?}");
     assert_ne!(starts[1], lost_run);
     assert_eq!(running_rows(&store), vec![starts[1].clone()]);
-    assert!(d.lost_review_watch.is_empty());
+    assert!(!d.supervisor.watches_lost_reviews());
     d.abort_all_runs();
 }
 
@@ -795,16 +821,22 @@ async fn a_review_that_outlives_its_deadline_is_stopped_and_redone_in_the_same_i
     let (mut d, stuck_run) = self_reviewing(&store, &task, false).await;
     let ttl = d.ownerless_ttl(task_core::RunIndexRole::Reviewer, &task);
     // 期限の 1 時間手前（ttl は review_timeout 600 s × 9 + lease_grace なので余裕がある）。
-    d.reviewing.get_mut(&task.id).unwrap().since =
-        OffsetDateTime::now_utc() - ttl + time::Duration::hours(1);
+    d.supervisor
+        .reviews_mut_for_test()
+        .get_mut(&task.id)
+        .unwrap()
+        .since = OffsetDateTime::now_utc() - ttl + time::Duration::hours(1);
     d.tick().unwrap();
     assert_eq!(
         row_status(&store, &stuck_run),
         task_core::RunIndexStatus::Running,
         "a review inside its deadline was touched"
     );
-    d.reviewing.get_mut(&task.id).unwrap().since =
-        OffsetDateTime::now_utc() - ttl - time::Duration::seconds(1);
+    d.supervisor
+        .reviews_mut_for_test()
+        .get_mut(&task.id)
+        .unwrap()
+        .since = OffsetDateTime::now_utc() - ttl - time::Duration::seconds(1);
     d.tick().unwrap();
     assert_eq!(
         row_status(&store, &stuck_run),

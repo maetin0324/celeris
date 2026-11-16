@@ -22,8 +22,8 @@ use celeris::Exit;
 use celeris_script::ScriptRuntimeHandle;
 use celeris_script::manifest::{deploy_bundle, deployed_dir};
 use support::script_compare::{
-    Env, LONG_DEADLINE, TIMEOUT_RETRIES, dist_bundle, dist_dir, load_config, repo_root, run_daemon,
-    start_code, start_policy,
+    Env, LONG_DEADLINE, TIMEOUT_RETRIES, dist_bundle, dist_dir, is_cos_digest_timeout, load_config,
+    repo_root, run_daemon, start_code, start_policy,
 };
 use task_core::SqliteStore;
 use task_core::chat::digest::{CosDigestCommand, CosDigestInput, cos_digest_decide};
@@ -290,11 +290,6 @@ fn log(store: &SqliteStore) -> Vec<CosDigestCompareRecord> {
         .collect()
 }
 
-fn is_timeout(record: &CosDigestCompareRecord) -> bool {
-    record.outcome == CompareOutcome::TsError
-        && record.error.as_ref().is_some_and(|e| e.kind == "timeout")
-}
-
 /// 1 回の digest pass の結果。
 struct Pass {
     env: Env,
@@ -366,7 +361,7 @@ async fn compare_pass(policy: &Arc<dyn PolicyScript>, sha256: &str, base: &Pass)
         assert_eq!(pass.messages, base.messages, "messages are Rust's");
         assert_eq!(pass.items, base.items, "requeue is Rust's");
         assert_eq!(pass.records.len(), 2, "one record per run");
-        if pass.records.iter().any(is_timeout) {
+        if pass.records.iter().any(is_cos_digest_timeout) {
             continue;
         }
         let r = &pass.records;
@@ -569,7 +564,7 @@ async fn script_compare_cos_digest_daemon_restart_without_bundle_restores_rust()
     assert_eq!(records[0].run_id, "run-a-done");
     assert_eq!(records[0].generation, generation.id);
     assert!(
-        records[0].outcome == CompareOutcome::Match || is_timeout(&records[0]),
+        records[0].outcome == CompareOutcome::Match || is_cos_digest_timeout(&records[0]),
         "{:?}",
         records[0]
     );
@@ -883,7 +878,7 @@ async fn script_compare_cos_digest_compare_answers_ops_from_rust_snapshot() {
         let mut records = log(&env.store);
         records.sort_by(|a, b| a.run_id.cmp(&b.run_id));
         assert_eq!(records.len(), 2, "{records:?}");
-        if records.iter().any(is_timeout) {
+        if records.iter().any(is_cos_digest_timeout) {
             continue;
         }
         assert_eq!(world(&env), (base.messages.clone(), base.items.clone()));

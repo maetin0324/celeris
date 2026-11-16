@@ -11,8 +11,6 @@
 //!
 //! LLM は呼ばない。job を `qdel` しない（ADR-0090 D6）。
 
-use std::time::Duration;
-
 use task_core::cluster_job::{
     self, ClusterJobState, ClusterJobStatus, ClusterJobWait, ClusterJobWaitRequest,
     ClusterJobWaitState,
@@ -21,35 +19,7 @@ use task_core::{Event, Status, Task, TaskId, Trigger, WorkUnitBlockedReason, Wor
 use time::OffsetDateTime;
 
 use super::{DispatchError, Dispatcher, rfc3339};
-
-/// poll の ssh の打ち切り（秒）。
-const POLL_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// ADR-0090 D2: poll の要求（フックに渡す）。`script` はクラスタで流す 1 行（`setup` の後に `qstat -xf ...`）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ClusterJobPollRequest {
-    pub cluster: String,
-    pub host: String,
-    pub script: String,
-    pub timeout: Duration,
-}
-
-/// ADR-0090 D2: クラスタ job の poll のフック。本番は `task_worker::run_remote_command_blocking`
-/// （`ssh -o BatchMode=yes <host> -- <script>`。人が張った ControlMaster を借りる）。`None` なら poll しない
-/// （上限の判定だけは行う）。試験は偽物を挿す（外部ネットワークに出ない）。
-pub type ClusterJobPoller = std::sync::Arc<
-    dyn Fn(&ClusterJobPollRequest) -> Result<task_worker::RemoteCommandOutput, String>
-        + Send
-        + Sync,
->;
-
-/// 本番のフック（celeris が `set_cluster_job_poller` で挿す）。
-pub fn ssh_cluster_job_poller() -> ClusterJobPoller {
-    std::sync::Arc::new(|req: &ClusterJobPollRequest| {
-        let ssh_command = task_worker::SshSettings::new("", "", "/").ssh_command;
-        task_worker::run_remote_command_blocking(&ssh_command, &req.host, &req.script, req.timeout)
-    })
-}
+use crate::cluster_runtime::{ClusterJobPoller, ClusterRuntime, JobPollSlot};
 
 fn parse_ts(s: &str) -> Option<OffsetDateTime> {
     OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
@@ -70,7 +40,7 @@ pub(super) use task_worker::cluster_jobs_continuation::{
 impl Dispatcher {
     /// ADR-0090 D7: 本番の poll のフックを挿す（celeris 側の配線）。
     pub fn set_cluster_job_poller(&mut self, poller: ClusterJobPoller) {
-        self.cluster_job_poller = Some(poller);
+        self.cluster.set_cluster_job_poller(poller);
     }
 
     /// ADR-0090 D1/D2: worker の wait の申告を検証し、wait の行を組む。クラスタは申告（省略時は task のクラスタ）で、
@@ -167,34 +137,26 @@ impl Dispatcher {
         let waits = self.store.cluster_job_waits_waiting()?;
         let live: std::collections::HashSet<String> =
             waits.iter().map(|w| w.wait_id.clone()).collect();
-        self.cluster_job_polls.retain(|id, _| live.contains(id));
+        self.cluster.retain_job_polls(&live);
         let now = self.now_utc();
         for wait in waits {
-            if let Some(rx) = self.cluster_job_polls.get(&wait.wait_id) {
-                let result = match rx.try_recv() {
-                    Ok(result) => Some(result),
-                    Err(std::sync::mpsc::TryRecvError::Empty) => None,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        Some(Err("the poll thread ended without a result".to_string()))
-                    }
-                };
-                if let Some(result) = result {
-                    self.cluster_job_polls.remove(&wait.wait_id);
+            match self.cluster.take_job_poll(&wait.wait_id) {
+                JobPollSlot::Idle => {}
+                // poll が走っている間は上限の判定も次の poll も見送る（結果を先に拾う）。
+                JobPollSlot::Running => continue,
+                JobPollSlot::Done(result) => {
                     if self.on_cluster_job_poll(&wait, result, now)? {
                         continue;
                     }
-                } else {
-                    // poll が走っている間は上限の判定も次の poll も見送る（結果を先に拾う）。
-                    continue;
                 }
             }
             if parse_ts(&wait.deadline).is_some_and(|d| d <= now) {
                 self.time_out_cluster_job_wait(&wait, now)?;
                 continue;
             }
-            let Some(poller) = self.cluster_job_poller.clone() else {
+            if !self.cluster.has_job_poller() {
                 continue;
-            };
+            }
             let due = wait
                 .last_polled_at
                 .as_deref()
@@ -216,39 +178,14 @@ impl Dispatcher {
                 continue;
             };
             // 明示的に切れているクラスタ（master が無い）には ssh を流さない（戻ったら次の tick で poll する）。
-            if self.cluster_connected.get(&wait.cluster) == Some(&false) {
+            if self.cluster.connected(&wait.cluster) == Some(false) {
                 continue;
             }
-            let mut script = String::new();
-            for (k, v) in &spec.env {
-                script.push_str(&format!("export {k}={} && ", shell_quote(v)));
-            }
-            for line in &spec.setup {
-                script.push_str(&format!("{{ {line}; }} && "));
-            }
-            script.push_str(&cluster_job::poll_command(wait.scheduler, &wait.jobs));
-            let req = ClusterJobPollRequest {
-                cluster: wait.cluster.clone(),
-                host: spec.host.clone(),
-                script,
-                timeout: POLL_TIMEOUT,
-            };
+            let req = ClusterRuntime::job_poll_request(&spec, &wait);
             // poll を起こした時刻を先に残す（再起動の直後に同じ wait を続けて poll しない）。
             self.store
                 .cluster_job_wait_touch(&wait.wait_id, &rfc3339(now), &wait.last_status)?;
-            let (tx, rx) = std::sync::mpsc::channel();
-            match std::thread::Builder::new()
-                .name(format!("celeris-job-poll-{}", wait.cluster))
-                .spawn(move || {
-                    let _ = tx.send(poller(&req));
-                }) {
-                Ok(_) => {
-                    self.cluster_job_polls.insert(wait.wait_id.clone(), rx);
-                }
-                Err(e) => {
-                    tracing::warn!(wait_id = %wait.wait_id, error = %e, "could not start the cluster job poll thread");
-                }
-            }
+            self.cluster.start_job_poll(&wait.wait_id, req);
         }
         Ok(())
     }
@@ -578,9 +515,4 @@ impl Dispatcher {
             ClusterJobNoticeOutcome::Applied
         })
     }
-}
-
-/// シェルの 1 引数に引用する（`'...'`）。
-fn shell_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
 }

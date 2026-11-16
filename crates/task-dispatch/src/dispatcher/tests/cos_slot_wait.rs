@@ -1,7 +1,7 @@
 //! ADR 2026-11-06-cos-run-launch-accounting-and-drain D2: 枠だけで route を選べない CoS run は失敗にせず、
 //! claim のまま（`launched_at` なし）Waiting で待ち、次 tick で同じ入力・同じ run・同じ route 順で選び直す。
 //! 枠以外の理由（cooldown 等）では待たない。期限は run の `max_wall_secs` 残りで、延ばさない。
-//! 時計は `test_now` の差し替え、待ちは FIFO と task の join（sleep・負荷なし）。
+//! 時計は `test_hooks.now` の差し替え、待ちは FIFO と task の join（sleep・負荷なし）。
 
 use super::cos_chat_launch::{fixture, join, post, runs, thread};
 use super::*;
@@ -53,7 +53,7 @@ pub(super) async fn release(dir: &std::path::Path, thread: &str) {
 }
 
 pub(super) fn advance(d: &Dispatcher, secs: i64) {
-    let clock = d.test_now.as_ref().expect("test clock");
+    let clock = d.test_hooks.now.as_ref().expect("test clock");
     let mut now = clock.lock().unwrap();
     *now += time::Duration::seconds(secs);
 }
@@ -165,7 +165,7 @@ async fn slot_only_wait_keeps_the_run_waiting_then_launches_the_same_run() {
     assert!(waiting.finished_at.is_none());
     assert_eq!(waiting_notices(&store, &b, &waiting.id), 1);
     assert!(
-        !d.cos_chat_launch.as_ref().unwrap().running.contains_key(&b),
+        !d.orchestration.launch().unwrap().running.contains_key(&b),
         "a waiting run has no worker"
     );
     // 受け入れ 3: 起動した run だけを数える（葉の 1 件。待機中の B の CoS run は数えない）。
@@ -188,7 +188,7 @@ async fn slot_only_wait_keeps_the_run_waiting_then_launches_the_same_run() {
     d.tick_cos_chat_launch();
     let launched = run_of(&store, &b);
     assert_eq!(launched.id, waiting.id, "the same run launches");
-    assert!(d.cos_chat_launch.as_ref().unwrap().running.contains_key(&b));
+    assert!(d.orchestration.launch().unwrap().running.contains_key(&b));
     assert_eq!(d.cos_in_flight(), 1);
     assert_eq!(d.implicit_account_in_use("p1"), 1);
     // 待機の終わり（Running への遷移）が永続記録に残る。
@@ -219,8 +219,8 @@ async fn slot_only_wait_keeps_the_run_waiting_then_launches_the_same_run() {
 #[tokio::test]
 async fn cooldown_does_not_wait() {
     let (_dir, store, mut d) = fixture(FakeAdapter::default_command(), 2);
-    let until = (d.now_unix_fn)() + 3600;
-    d.source_cooldowns.insert(
+    let until = d.probes.now_unix() + 3600;
+    d.routing.insert_source_cooldown_for_test(
         "p1".into(),
         crate::accounts::AccountCooldown {
             until,
@@ -244,7 +244,7 @@ async fn cooldown_does_not_wait() {
 #[tokio::test]
 async fn cos_reservation_closes_with_route_unavailable_without_waiting() {
     let (_dir, store, mut d) = fixture(FakeAdapter::default_command(), 2);
-    d.test_cos_reserved_sources.insert("p1".into());
+    d.test_hooks.cos_reserved_sources.insert("p1".into());
     let t = thread(&store, "reserved");
     post(&store, &t, "one");
     d.tick_cos_chat_launch();
@@ -294,7 +294,7 @@ async fn slot_wait_expires_at_the_run_deadline_and_is_not_extended() {
     let waiting = run_of(&store, &b);
     // 設定の max_wall_secs を延ばしても、待機中の run の期限は延びない（run 開始時の設定を使う）。
     d.reload_cos_chat_launch({
-        let mut cfg = d.cos_chat_launch.as_ref().unwrap().config.clone();
+        let mut cfg = d.orchestration.launch().unwrap().config.clone();
         cfg.max_wall_secs = 10_000;
         cfg
     });
@@ -316,7 +316,7 @@ async fn slot_wait_expires_at_the_run_deadline_and_is_not_extended() {
     advance(&d, 1);
     d.tick_cos_chat_launch();
     assert_eq!(runs(&store, &b).len(), 1);
-    assert!(!d.cos_chat_launch.as_ref().unwrap().running.contains_key(&b));
+    assert!(!d.orchestration.launch().unwrap().running.contains_key(&b));
 }
 
 /// 待機中の run を人が止めたら、起動前の stop として閉じる（起動しない）。
@@ -336,5 +336,5 @@ async fn stop_closes_a_waiting_run_before_launch() {
     );
     release_holder(&mut d, &holder).await;
     d.tick_cos_chat_launch();
-    assert!(!d.cos_chat_launch.as_ref().unwrap().running.contains_key(&b));
+    assert!(!d.orchestration.launch().unwrap().running.contains_key(&b));
 }

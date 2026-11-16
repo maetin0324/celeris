@@ -48,10 +48,10 @@ async fn release_unpromoted_appears_at_threshold_once_and_closes_on_promotion() 
         60,
     );
     let clock = Arc::new(StdMutex::new(verified));
-    d.test_now = Some(clock.clone());
+    d.test_hooks.now = Some(clock.clone());
     let release_items = |d: &Dispatcher| {
-        d.stagnation
-            .findings
+        d.orchestration
+            .stagnation_findings()
             .iter()
             .filter(|f| f.kind == task_ops::stagnation::StagnationKind::ReleaseUnpromoted)
             .map(|f| (f.key.clone(), f.since.clone()))

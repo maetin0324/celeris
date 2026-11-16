@@ -97,9 +97,9 @@ pub mod tree;
 pub mod types;
 
 pub use admin::{
-    AccountAdminError, AccountCheckOutcome, AccountCheckResult, AccountLoginCodeOutcome,
-    AccountLoginStartOutcome, AdminRequest, ClusterAdminError, ClusterConnectCodeOutcome,
-    ClusterConnectStartOutcome, ConfigAdminError, NotifyAdminError, NotifyTestOutcome,
+    AccountAdminError, AccountCheckOutcome, AccountLoginCodeOutcome, AccountLoginStartOutcome,
+    AdminRequest, ClusterAdminError, ClusterConnectCodeOutcome, ClusterConnectStartOutcome,
+    ConfigAdminError, NotifyAdminError, NotifyTestOutcome,
 };
 pub use approvals::{
     ApprovalDecideBody, ApprovalDecideResult, ApprovalList, StandingRuleCreateBody,

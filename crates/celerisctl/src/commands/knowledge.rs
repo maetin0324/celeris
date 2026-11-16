@@ -38,7 +38,7 @@ use crate::error::CliError;
 use crate::outln;
 
 /// 設定ファイルの既定（`celeris` と同じ）。
-const DEFAULT_CONFIG: &str = "~/.config/celeris/config.toml";
+use super::cron::DEFAULT_CONFIG;
 
 #[derive(Subcommand, Debug)]
 pub enum KnowledgeCommand {
@@ -200,7 +200,7 @@ pub(crate) fn counted(
 /// CoS run（run credential がある）の 1 回を API の受け側（`POST /api/v1/cos/knowledge-use`）に送る。どの run
 /// かは daemon が credential から決める。送れなくても KB の操作は失敗にしない（D1）。
 fn note_cos_run(op: kb::KnowledgeOp, ok: bool, credential: &str) {
-    let sent = super::cos_ops::api_config(None).and_then(|mut api| {
+    let sent = super::cron::ApiConfig::from_config(None, None, None).and_then(|mut api| {
         api.token = Some(credential.to_string());
         super::cron::request(
             &api,
@@ -470,7 +470,7 @@ pub(crate) fn run_record_cos(
     credential: &str,
 ) -> Result<ExitCode, CliError> {
     let body = read_body()?;
-    let api = super::cos_ops::api_config(options.api_url.as_deref())?;
+    let api = super::cron::ApiConfig::from_config(None, options.api_url.as_deref(), None)?;
     let value = record_via_cos(&api, args, body, options, credential)?;
     let operation = &value["operation"];
     let result = &operation["result"];

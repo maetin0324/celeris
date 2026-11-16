@@ -302,51 +302,6 @@ fn acquire_lease_is_exclusive_under_concurrency() {
 }
 
 #[test]
-fn release_lease_then_reacquire_succeeds() {
-    let store = SqliteStore::open_in_memory().expect("open");
-    let task = sample_task(Status::Ready);
-    store.insert(&task).expect("insert");
-
-    let acquired = store
-        .acquire_lease(task.id, "worker-a", StdDuration::from_secs(60))
-        .expect("acquire");
-    assert!(acquired);
-
-    // status is now Running, so a second acquire must fail.
-    let second = store
-        .acquire_lease(task.id, "worker-b", StdDuration::from_secs(60))
-        .expect("acquire second");
-    assert!(!second);
-
-    store.release_lease(task.id, "worker-a").expect("release");
-
-    let after_release = store.get(task.id).expect("get").expect("some");
-    assert!(after_release.lease.is_none());
-
-    // release_lease intentionally does not change status (still Running,
-    // per its contract): that is the dispatcher's job via transition().
-    // To verify "release then reacquire succeeds" on the very same task,
-    // we simulate that dispatcher step here with a direct status update
-    // (test-only; this module owns `conn` so it may reach in directly).
-    {
-        let conn = store.conn.lock().expect("lock");
-        let mut readied = after_release.clone();
-        readied.status = Status::Ready;
-        let json = serde_json::to_string(&readied).expect("serialize");
-        conn.execute(
-            "UPDATE tasks SET status = 'ready', json = ?1 WHERE id = ?2",
-            params![json, task.id.to_string()],
-        )
-        .expect("reset to ready");
-    }
-
-    let reacquired = store
-        .acquire_lease(task.id, "worker-c", StdDuration::from_secs(60))
-        .expect("acquire third");
-    assert!(reacquired);
-}
-
-#[test]
 fn ready_tasks_excludes_incomplete_dependencies_and_pending_approval_parent() {
     let store = SqliteStore::open_in_memory().expect("open");
 
@@ -5133,6 +5088,69 @@ fn running_tasks_with_runnable_work_units_lists_only_running_v2_tasks() {
             .unwrap()
             .is_empty()
     );
+}
+
+/// 不変条件: （ADR 2026-11-14-phase-integration-finish-one-write D1・D3）`apply_transition_with_work_units` は WU の行・
+/// その event・Task の遷移を 1 つの transaction で書き、遷移が通らなければ WU の行も event も残さない。
+/// 既存の試験で検出できない理由: `work_unit_transition` と `apply_transition_with_events` の試験はそれぞれ単独の
+/// 書き込みだけを見る。dispatcher の再起動の試験は、書き込みの間で落ちた形（統合 WU だけが done）を作れない。
+#[test]
+fn apply_transition_with_work_units_writes_nothing_when_the_transition_is_rejected() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let task = sample_task(Status::Draft);
+    store.insert(&task).unwrap();
+    let validated =
+        crate::execution_plan::validate(&sample_plan_spec(), Default::default(), &[]).unwrap();
+    let plan = ExecutionPlanRow {
+        id: "p1".into(),
+        task_id: task.id.to_string(),
+        version: 1,
+        origin: PlanOrigin::Human,
+        planner_run_id: None,
+        status: PlanStatus::Active,
+        spec: validated.spec.clone(),
+        created_at: "2026-09-24T00:00:00Z".into(),
+        superseded_at: None,
+    };
+    store
+        .execution_plan_adopt(
+            task.id,
+            plan,
+            sample_work_units(task.id, "p1"),
+            Vec::new(),
+            Event::ExecutionPlanned {
+                plan_id: "p1".into(),
+                version: 1,
+                origin: PlanOrigin::Human,
+                supersedes: None,
+                reason: None,
+                plan: Box::new(validated.spec),
+            },
+        )
+        .unwrap();
+    let before = store.events_for(task.id).unwrap().len();
+    let wu = store.work_unit_get("wu-a").unwrap().unwrap();
+    let mut done = wu.clone();
+    done.status = WorkUnitStatus::Done;
+    let event = Event::WorkUnitTransitioned {
+        work_unit_id: "wu-a".into(),
+        key: "a".into(),
+        from: wu.status,
+        to: WorkUnitStatus::Done,
+        reason: "integrated".into(),
+        run_id: None,
+    };
+    // Draft の task に WorkerDone は通らない（統合の結果を読んだ後に人が task を変えた形）。
+    let err = store
+        .apply_transition_with_work_units(task.id, vec![(done, event)], Trigger::WorkerDone, vec![])
+        .unwrap_err();
+    assert!(matches!(err, StoreError::InvalidTransition(_)), "{err:?}");
+    assert_eq!(
+        store.work_unit_get("wu-a").unwrap().unwrap().status,
+        wu.status
+    );
+    assert_eq!(store.events_for(task.id).unwrap().len(), before);
+    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Draft);
 }
 
 #[test]

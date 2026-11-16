@@ -1,0 +1,70 @@
+{
+  "id": "retry-backoff",
+  "sites": [
+    {
+      "at": "crates/task-dispatch/src/dispatcher/dispatch_run.rs:218",
+      "fn": "dispatch_one",
+      "subject": "task"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/worker_finish.rs:578",
+      "fn": "finish_worker_result_with",
+      "subject": "task"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/leases.rs:363",
+      "fn": "reclaim_expired_leases",
+      "subject": "task/work_unit"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/work_units.rs:1014",
+      "fn": "on_work_unit_prepare_failed",
+      "subject": "work_unit"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher.rs:990",
+      "fn": "wu_prepare_backoff",
+      "subject": "work_unit"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/sinks.rs:311",
+      "fn": "heartbeat",
+      "subject": "task/work_unit"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/cos_chat/routes.rs:47",
+      "fn": "retry_routes",
+      "subject": "cos_chat"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/route_failure.rs:285",
+      "fn": "decide_route_failure",
+      "subject": "task"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/eval_trials.rs:1075",
+      "fn": "on_eval_worker_finished",
+      "subject": "eval_trial"
+    }
+  ],
+  "verdict": "different",
+  "evidence": [
+    "crates/task-dispatch/src/dispatcher/dispatch_run.rs:217",
+    "crates/task-dispatch/src/dispatcher/dispatch_run.rs:238",
+    "crates/task-dispatch/src/dispatcher/dispatch_run.rs:409",
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:579",
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:1561",
+    "crates/task-dispatch/src/dispatcher/leases.rs:363",
+    "crates/task-dispatch/src/dispatcher/leases.rs:408",
+    "crates/task-dispatch/src/dispatcher/work_units.rs:1022",
+    "crates/task-dispatch/src/dispatcher/work_units.rs:1038",
+    "crates/task-dispatch/src/dispatcher/sinks.rs:311",
+    "crates/task-dispatch/src/dispatcher/cos_chat/launch.rs:960",
+    "crates/task-dispatch/src/dispatcher/cos_chat/routes.rs:82",
+    "crates/task-dispatch/src/dispatcher/cos_chat/routes.rs:118",
+    "crates/task-dispatch/src/dispatcher/route_failure.rs:296",
+    "crates/task-dispatch/src/dispatcher/eval_trials.rs:1075",
+    "crates/task-dispatch/src/dispatcher.rs:987"
+  ],
+  "shared_contract": "非等価。通常 task retry は DB attempts/updated_at と設定 base/max を retry_backoff に渡し期限まで dispatch を止める（2本目の並列 WU は省略）。インフラ障害は events 由来の連続 infra 回数+1 を max_infra_retries と比べ、以内なら InfraRequeue、超過なら非 retryable WorkerError。成功した遷移後だけメモリの infra_backoff に期限を置く。lease 回収にも同じ上限判定と infra_backoff_delay の使用が重複するが、孤児再起動は待たず、WorkerFinished.end/class と WU 照合も異なる。WU 準備はメモリの連続回数、2^n 秒（60秒cap）、5回目または permanent で Blocked/Question・WorkUnitTransitioned、1本目は task も Unroutable にする。heartbeat は DB busy の操作再試行のみ（3回、固定100ms）で task attempts/event を増やさない。CoS は同一 run/input の経路 index を進める方式で、終了 handle/Running・壁時計予算・capacity が前提、経路通知を記録し利用不能/期限超過なら会話を閉じる。ここに指数 backoff は無い。eval の adapter error は trial error と cleanup で終わり自動 retry しない。失敗: task/回収の InvalidTransition は警告、その他は返却（期限は成功時のみ）。WU 準備の transition error は返却、CoS の停止/finish error は警告。部分共有候補は (infra_n,max)->再試行可否 と既存 infra_backoff_delay(n)->Duration の純粋な規則。期限の時計、回数の正本、適用先状態/event、孤児例外、error 処理を各 owner に残す。通常 retry_backoff の計算本体は範囲外なので式の等価性は推測しない。"
+}

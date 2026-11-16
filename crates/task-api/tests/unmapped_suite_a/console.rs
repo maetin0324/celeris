@@ -16,9 +16,9 @@ use common::*;
 use task_api::StreamTuning;
 use task_core::chat::{ChatPostMessageRequest, ChatSendMode};
 use task_core::{
-    Approval, ApprovalStore, COS_ID, Event, Message, MessageId, MessageRole, MilestoneStatus,
-    ProgressFields, ProgressKind, Project, ProjectId, Report, ReportKind, ReportStore, Status,
-    Task, TaskKind, TaskStore,
+    Approval, ApprovalStore, COS_ID, Event, Message, MessageId, MessageRole, ProgressFields,
+    ProgressKind, Project, ProjectId, Report, ReportKind, ReportStore, Status, Task, TaskKind,
+    TaskStore,
 };
 use time::OffsetDateTime;
 
@@ -625,9 +625,10 @@ async fn the_cursor_pages_through_without_repeating_blocks() {
     assert_eq!(clamped.status, 200);
 }
 
-/// 受け入れ 1: 認可・途中目標・質問のブロック（その場で答えるための状態ごと）。
+/// 受け入れ 1: 認可・質問のブロック（その場で答えるための状態ごと）。途中目標の `milestone` ブロックは
+/// ADR-0079 D13 の凍結で `ConsoleBlock` から外した。
 #[tokio::test]
-async fn approvals_milestones_and_questions_carry_their_state() {
+async fn approvals_and_questions_carry_their_state() {
     let env = TestEnv::new();
     let pluvio = project(&env, "Pluvio");
     let mut task = new_task(TaskKind::Execute, Status::Blocked);
@@ -656,15 +657,6 @@ async fn approvals_milestones_and_questions_carry_their_state() {
         decided_at: None,
     };
     env.store.approval_append(&approval).expect("approval");
-    let milestone = env
-        .store
-        .milestone_create(
-            pluvio.id,
-            "第 1 目標",
-            "まず動かす",
-            MilestoneStatus::Proposed,
-        )
-        .expect("milestone");
 
     let app = env.router();
     let page = send(
@@ -690,14 +682,6 @@ async fn approvals_milestones_and_questions_carry_their_state() {
         .expect("approval block");
     assert_eq!(block["approval"]["id"], approval.id.to_string());
     assert!(block["approval"]["decision"].is_null(), "未決のまま渡る");
-
-    let block = items
-        .iter()
-        .find(|b| b["kind"] == "milestone")
-        .expect("milestone block");
-    assert_eq!(block["milestone"]["id"], milestone.id.to_string());
-    assert_eq!(block["milestone"]["status"], "proposed");
-    assert!(block["review"].is_null(), "秘書の返事はまだ無い");
 
     // 人が答えたら `answered` になる。
     env.store

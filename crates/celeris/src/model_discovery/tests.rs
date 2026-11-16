@@ -4,6 +4,7 @@
 mod fake_http;
 
 use super::*;
+use crate::test_support::write_executable;
 use task_core::SqliteStore;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
@@ -64,23 +65,6 @@ async fn serve(
 }
 
 /// ETXTBSY 対策（ADR-0010 D10）で別プロセスに書かせる。
-fn write_executable(path: &Path, script: &str) {
-    use std::io::Write;
-    let mut child = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(r#"cat > "$1" && chmod 755 "$1""#)
-        .arg("sh")
-        .arg(path)
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let mut stdin = child.stdin.take().unwrap();
-    stdin
-        .write_all(format!("#!/bin/sh\n{script}\n").as_bytes())
-        .unwrap();
-    drop(stdin);
-    assert!(child.wait().unwrap().success());
-}
 
 fn ids(models: &[DiscoveredModel]) -> Vec<&str> {
     models.iter().map(|m| m.model_id.as_str()).collect()

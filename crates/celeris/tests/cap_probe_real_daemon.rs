@@ -8,13 +8,15 @@
 //! この試験 process（= CLI 側）には、daemon とは別の toolchain dir と変数を持たせる。daemon にだけある toolchain は通り、
 //! CLI にあって daemon に無い toolchain・変数・socket は該当 arm の `env_failure` になる。
 
+#[path = "support/executable.rs"]
+mod executable;
 #[path = "../../campaign/tests/support_cases/mod.rs"]
 // 3 つの統合試験 binary が別々に同じ support module を取り込む（crate が別なので共通 module にできない）。
 #[allow(dead_code, clippy::duplicate_mod)]
 mod support_cases;
+use executable::write_executable;
 use std::{
     fs,
-    io::Write,
     os::unix::net::UnixListener,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
@@ -68,22 +70,6 @@ fn campaign_bin() -> PathBuf {
 }
 
 /// 実行可能 file は別 process で書く（ETXTBSY 回避）。
-fn write_executable(path: &Path, body: &str) {
-    let mut c = Command::new("/bin/sh")
-        .arg("-c")
-        .arg(r#"cat > "$1" && chmod 755 "$1""#)
-        .arg("sh")
-        .arg(path)
-        .stdin(Stdio::piped())
-        .spawn()
-        .expect("spawn");
-    c.stdin
-        .take()
-        .expect("stdin")
-        .write_all(body.as_bytes())
-        .expect("write");
-    assert!(c.wait().expect("wait").success());
-}
 
 /// 道具の dir（`python3` の stub。`Python 3 mark=<CAP_MARK>` を出す）。
 fn tools(mark_note: &str) -> PathBuf {

@@ -1483,12 +1483,6 @@ export type ConsoleBlock = {
 } | {
   "at": string;
   "cursor": string;
-  "kind": "milestone";
-  "milestone": Milestone;
-  "review"?: MilestoneReviewView | null;
-} | {
-  "at": string;
-  "cursor": string;
   "kind": "report";
   "report": Report;
 } | {
@@ -5783,54 +5777,11 @@ export type ScratchAdmissionView = {
   "running_growth_bytes": number;
 };
 
-export type ScratchCacheStats = {
-  "flush_dropped": number;
-  "flush_last_at"?: string | null;
-  "flush_mbps": number;
-  "flush_oldest_age_secs"?: number | null;
-  "flush_queue_bytes": number;
-  "flush_queue_len": number;
-  "flush_skipped_existing": number;
-  "flush_written": number;
-  "flush_written_bytes": number;
-  "gets": number;
-  "l1_bytes": number;
-  "l1_dir": string;
-  "l1_entries": number;
-  "l1_evicted": number;
-  "l1_hits": number;
-  "l1_max_bytes": number;
-  "l2_bytes"?: number | null;
-  "l2_corrupt": number;
-  "l2_degraded_since"?: string | null;
-  "l2_dir"?: string | null;
-  "l2_enabled": boolean;
-  "l2_entries"?: number | null;
-  "l2_errors": number;
-  "l2_gc_last_at"?: string | null;
-  "l2_gc_removed": number;
-  "l2_gc_removed_bytes": number;
-  "l2_hits": number;
-  "l2_last_error"?: string | null;
-  "l2_max_bytes": number;
-  "l2_retry_at"?: string | null;
-  "l2_scanned_at"?: string | null;
-  "l2_state": string;
-  "l2_timeouts": number;
-  "misses": number;
-  "observed_at": string;
-  "promotes": number;
-  "puts": number;
-  "schema": string;
-  "started_at": string;
-};
-
 export type ScratchCacheView = {
   "endpoint": string;
   "reason"?: string | null;
   "sccache_mode"?: string | null;
   "state": string;
-  "stats"?: ScratchCacheStats | null;
 };
 
 export type ScratchGcRemovedView = {

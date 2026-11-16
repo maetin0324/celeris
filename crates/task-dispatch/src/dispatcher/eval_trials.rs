@@ -18,12 +18,12 @@ use super::*;
 
 use sha2::{Digest, Sha256};
 use task_core::llm_route::{
-    AccountId, Admission, Candidate, ExclusionReason, HarnessId, ModelId, SourceId, admit_source,
-    constrain_for_harness, wire_model_id,
+    Admission, Candidate, ExclusionReason, HarnessId, ModelId, admit_source, constrain_for_harness,
+    wire_model_id,
 };
 use task_core::route_record::{
     FeaturesAux, ROUTE_OPTIONS_SCHEMA, RouteOption, RouteOptionBinds, RouteOptions,
-    TASK_FEATURES_SCHEMA, TaskFeatures,
+    TASK_FEATURES_SCHEMA, TaskFeatures, task_features_hash,
 };
 use task_core::routing_eval_trial::{EvalTrial, EvalTrialStatus};
 use task_core::store::StoredRouteDecision;
@@ -68,28 +68,10 @@ enum EvalRouteError {
     Deferred(ExclusionReason),
 }
 
-/// 起動した評価 run の追跡（プロセス内のみ。真実は `eval_trials` の行と `runs` 索引）。
-pub(super) struct EvalRunEntry {
-    trial_id: String,
-    /// この run が押さえている `(source, account)`（評価の admission で本番の run と合算する）。
-    route: (SourceId, AccountId),
-    pub(super) handle: JoinHandle<()>,
-}
-
 /// id の比べ方（`claude-oauth` と `claude_oauth`、`claude-code` と `claude_code` は同じ。
 /// 評価の manifest・候補表は `-`、設定の宣言は `_` で書く）。
 fn normalize_id(id: &str) -> String {
     id.trim().to_ascii_lowercase().replace('-', "_")
-}
-
-/// `route_features.hash` の材料（`task_core::route_record::FeatureBody` と同じ形の直列化。
-/// 内容アドレスなので、同じ特徴量は同じ hash になる）。
-#[derive(serde::Serialize)]
-struct EvalFeatureBody<'a> {
-    schema: &'a str,
-    template: &'a str,
-    brief: &'a str,
-    aux: &'a FeaturesAux,
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -178,7 +160,7 @@ impl Dispatcher {
 
     /// 再起動・live 昇格の後に残った行の回復と、採点の続き（ADR 2026-10-14-eval-verify-isolation D3.3・D3.4）。
     ///
-    /// `scoring` は採点する。`running` で手元の `eval_runs` に無い行は、記録された持ち主（`instance_id`）が
+    /// `scoring` は採点する。`running` で手元の評価 run の表に無い行は、記録された持ち主（`instance_id`）が
     /// 生きていないときだけ `error` にする（[`eval_running_recovery`]）。生きている他の instance（live 昇格の
     /// draining の旧 instance）が走らせている試行は、作業ツリーも target も残してそのまま待つ。`error` に
     /// した試行の `runs` 行は同じ処理で `cancelled` に閉じる。`daemon_instances` が読めない tick は
@@ -208,7 +190,7 @@ impl Dispatcher {
                     if !trial
                         .run_id
                         .as_deref()
-                        .is_some_and(|id| self.eval_runs.contains_key(id)) =>
+                        .is_some_and(|id| self.routing.holds_eval_run(id)) =>
                 {
                     let Some(takeover) = self.orphan_takeover.clone() else {
                         return;
@@ -509,7 +491,7 @@ impl Dispatcher {
     /// 本番と同じ admission（`admit_source`。手元の評価 run の `(source, account)` も合算）で選ぶ。
     /// 評価は routing を**しない**（source×model は trial を作ったときに人が決めている）ので、候補は 1 件だけ。
     fn eval_pick(&mut self, trial: &EvalTrial) -> Result<RoutePick, EvalRouteError> {
-        let registry = Arc::clone(&self.llm_route_registry);
+        let registry = self.routing.registry_arc();
         let harness = registry
             .harnesses
             .keys()
@@ -548,7 +530,7 @@ impl Dispatcher {
             )));
         };
         let mut state = self.route_state(false);
-        for (source, account) in self.eval_runs.values().map(|e| &e.route) {
+        for (source, account) in self.routing.eval_run_routes() {
             *state
                 .reservations
                 .source_in_use
@@ -682,7 +664,7 @@ impl Dispatcher {
             idle_timeout: self.config.idle_timeout,
             kill_grace: self.config.kill_grace,
         };
-        let tx = self.tx.clone();
+        let tx = self.coord.completion_sender();
         let completion_run_id = run_id.clone();
         let handle = tokio::spawn(async move {
             // target（seed の写しと pool の `.lock` の待ち）は tick の外で用意する
@@ -704,9 +686,9 @@ impl Dispatcher {
                 result,
             });
         });
-        self.eval_runs.insert(
+        self.routing.track_eval_run(
             run_id,
-            EvalRunEntry {
+            crate::routing_runtime::EvalRunEntry {
                 trial_id: trial.trial_id.clone(),
                 route: (
                     route.pick.candidate.source.clone(),
@@ -759,9 +741,8 @@ impl Dispatcher {
     /// harness の版（実行 file の `--version`）。生の出力と major の両方を返す
     /// （記録するのは生の出力。major は `task_core::routing_evidence::harness_version_major`）。
     fn eval_harness_version(&self, harness_id: &str) -> Option<String> {
-        if let Some(probe) = &self.eval_version_probe {
-            let raw = probe(harness_id)?;
-            return Some(raw);
+        if let Some(raw) = self.probes.probe_eval_version(harness_id) {
+            return raw;
         }
         let raw = probe_harness_version(harness_id)?;
         // major が出せるなら生の出力の後ろに添える（付記 D4: 両方を記録する）。
@@ -886,15 +867,8 @@ impl Dispatcher {
             schema: TASK_FEATURES_SCHEMA.to_owned(),
             template: EVAL_FEATURES_TEMPLATE.to_owned(),
             brief: brief.clone(),
-            hash: sha256(
-                &serde_json::to_vec(&EvalFeatureBody {
-                    schema: TASK_FEATURES_SCHEMA,
-                    template: EVAL_FEATURES_TEMPLATE,
-                    brief: &brief,
-                    aux: &aux,
-                })
+            hash: task_features_hash(TASK_FEATURES_SCHEMA, EVAL_FEATURES_TEMPLATE, &brief, &aux)
                 .map_err(|e| e.to_string())?,
-            ),
             aux,
         };
         self.store
@@ -1018,7 +992,7 @@ impl Dispatcher {
         run_id: String,
         result: Result<RunOutcome, AdapterError>,
     ) {
-        let Some(entry) = self.eval_runs.remove(&run_id) else {
+        let Some(entry) = self.routing.finish_eval_run(&run_id) else {
             tracing::warn!(%run_id, "eval run finished but is not tracked here");
             return;
         };
@@ -1069,7 +1043,7 @@ impl Dispatcher {
                         &trial,
                         &format!("could not mark scoring: {e}"),
                     );
-                } else if !self.accepting_new_work {
+                } else if !self.coord.accepting_new_work() {
                     tracing::info!(trial_id = %entry.trial_id, %run_id, "draining: the evaluation run finished; leaving the scoring to the active instance");
                 } else {
                     let wall_secs = trial
@@ -1099,7 +1073,7 @@ impl Dispatcher {
     /// 手元の評価 run を止める（SIGTERM の shutdown と drain の打ち切り。live 昇格の drain は止めずに完了を待つ）。instance id の無い dispatcher は止めるだけで
     /// 試行・target・`runs` に書かない（ADR 2026-10-14-eval-verify-isolation D1）。
     pub(super) fn abort_eval_runs(&mut self) {
-        let runs: Vec<_> = self.eval_runs.drain().collect();
+        let runs = self.routing.drain_eval_runs();
         for (run_id, entry) in runs {
             tracing::info!(%run_id, trial_id = %entry.trial_id, "aborting an evaluation run");
             entry.handle.abort();
@@ -1197,7 +1171,7 @@ impl Dispatcher {
 
     /// このインスタンスが評価 run（run id）を手元に持っているか。
     pub(super) fn holds_eval_run(&self, run_id: &str) -> bool {
-        self.eval_runs.contains_key(run_id)
+        self.routing.holds_eval_run(run_id)
     }
 
     /// 評価 run の harness の版の測り方を差し替える（試験用。既定は `probe_harness_version`）。
@@ -1205,7 +1179,7 @@ impl Dispatcher {
     where
         F: Fn(&str) -> Option<String> + Send + Sync + 'static,
     {
-        self.eval_version_probe = Some(Arc::new(probe));
+        self.probes.set_eval_version(Arc::new(probe));
     }
 }
 
@@ -1672,5 +1646,29 @@ mod score_tests {
         );
         assert_eq!(decide(None, &rows, long_ago), Some(EVAL_RECOVERY_DEADLINE));
         assert_eq!(decide(Some("old"), &rows, None), None);
+    }
+}
+
+#[cfg(test)]
+mod hash_tests {
+    use super::*;
+    #[test]
+    fn eval_feature_hash_fixed_bytes() {
+        let aux = FeaturesAux {
+            genre: Some("eval_problem".into()),
+            harness: Some("codex".into()),
+            ..FeaturesAux::default()
+        };
+        let hash = task_features_hash(
+            TASK_FEATURES_SCHEMA,
+            EVAL_FEATURES_TEMPLATE,
+            "固定入力\nquoted \"text\"",
+            &aux,
+        )
+        .unwrap();
+        assert_eq!(
+            hash,
+            "sha256:d7c838872304e2486d7ab93a63c269c60d359941b944a33034bba9a4ed64fcfa"
+        );
     }
 }

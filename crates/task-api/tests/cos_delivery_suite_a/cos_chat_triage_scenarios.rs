@@ -22,10 +22,6 @@ fn at(secs: i64) -> OffsetDateTime {
     OffsetDateTime::from_unix_timestamp(1_790_000_000 + secs).expect("time")
 }
 
-fn count(env: &TestEnv, sql: &str) -> i64 {
-    db(env).query_row(sql, [], |r| r.get(0)).expect("count")
-}
-
 /// A live CoS run of the inbox thread: the fake harness's credential.
 fn cos_bearer(env: &TestEnv, key: &str) -> String {
     let store = &env.store;

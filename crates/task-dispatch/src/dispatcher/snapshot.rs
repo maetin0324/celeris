@@ -29,7 +29,8 @@ impl Dispatcher {
         let now_instant = Instant::now();
         let now = OffsetDateTime::now_utc();
         let mut in_flight: Vec<InFlight> = self
-            .running
+            .supervisor
+            .runs()
             .iter()
             .map(|(key, e)| InFlight {
                 task_id: key.task,
@@ -39,7 +40,7 @@ impl Dispatcher {
                 since: rfc3339(e.since),
             })
             .collect();
-        in_flight.extend(self.reviewing.iter().filter_map(|(task_id, e)| {
+        in_flight.extend(self.supervisor.reviews().iter().filter_map(|(task_id, e)| {
             e.route.as_ref().map(|(source, _)| InFlight {
                 task_id: *task_id,
                 run_id: e.review_run_id.clone().unwrap_or_else(|| e.run_id.clone()),
@@ -50,10 +51,10 @@ impl Dispatcher {
         }));
         in_flight.sort_by(|a, b| a.since.cmp(&b.since).then(a.task_id.cmp(&b.task_id)));
         // ADR 2026-10-08 §(e): cooldowns of the implicit accounts (id = source id).
-        let now_unix = (self.now_unix_fn)();
+        let now_unix = self.probes.now_unix();
         let mut cooldowns: Vec<CooldownView> = self
-            .source_cooldowns
-            .iter()
+            .routing
+            .source_cooldowns()
             .filter(|(_, c)| c.until > now_unix)
             .map(|(source, c)| CooldownView {
                 source: source.to_string(),
@@ -74,23 +75,19 @@ impl Dispatcher {
                 host: spec.host.clone(),
                 concurrency: spec.concurrency,
                 in_use: self.cluster_in_use(&spec.id) as u32,
-                connected: self
-                    .cluster_connected
-                    .get(&spec.id)
-                    .copied()
-                    .unwrap_or(false),
+                connected: self.cluster.connected(&spec.id).unwrap_or(false),
                 cooldown_until: self
-                    .cluster_cooldown
-                    .get(&spec.id)
-                    .filter(|until| **until > now_instant)
+                    .cluster
+                    .cooldown_until(&spec.id)
+                    .filter(|until| *until > now_instant)
                     .map(|until| rfc3339(now + until.saturating_duration_since(now_instant))),
                 auth: spec.auth.clone(),
-                connect_pending: self.connect_pending_clusters.contains(&spec.id),
+                connect_pending: self.cluster.connect_pending(&spec.id),
                 // ADR-0053 D3（Phase 66）: トンネル（forward）の生存。`forwards` が無いクラスタは空。
-                tunnel_login_needed: self.cluster_login_needed.contains(&spec.id),
+                tunnel_login_needed: self.cluster.login_needed(&spec.id),
                 connection_stats: self
-                    .cluster_conn
-                    .get(&spec.id)
+                    .cluster
+                    .conn_state(&spec.id)
                     .map(|c| c.stats.clone())
                     .unwrap_or_default(),
                 tunnel_forwards: spec
@@ -114,15 +111,26 @@ impl Dispatcher {
             hostname: publisher.hostname.clone(),
             started_at: publisher.started_at.clone(),
             last_tick_at: rfc3339(now),
-            ticks: self.ticks,
+            ticks: self.coord.ticks(),
             tick_ms: publisher.tick_ms,
             in_flight,
             cooldowns,
             task_waits,
-            stalled_tasks: self.stalled_tasks.values().cloned().collect(),
-            stagnation: self.stagnation.findings.clone(),
-            stagnation_policy: Some(self.stagnation.policy),
-            review_resync_halted: self.review_resync_halted.values().cloned().collect(),
+            stalled_tasks: self
+                .coord
+                .liveness()
+                .stalled_tasks()
+                .values()
+                .cloned()
+                .collect(),
+            stagnation: self.orchestration.stagnation_findings().to_vec(),
+            stagnation_policy: Some(self.orchestration.stagnation_policy()),
+            review_resync_halted: self
+                .coord
+                .review_resync_halted()
+                .values()
+                .cloned()
+                .collect(),
             reports: None,
             // ADR-0033 D5（Phase 26）: 未読の件数は API が応答を組むときに埋める（`reports` と同じ理由）。
             approvals_pending: 0,
@@ -134,15 +142,16 @@ impl Dispatcher {
             accounts,
             implicit_accounts,
             // ADR-0075 D6（Phase G1）: scratch pool の観測値（`scratch_gc` が tick ごとに組む）。
-            scratch: self.scratch.admission.with_held(self.scratch.view.as_ref()),
+            scratch: self.maint.admission().with_held(self.maint.scratch_view()),
             // 付記 S5-8（P1-C）: TS の同期の待ちの集計（`script_tick_wait` の log 行と同じ値）。
             script_tick_wait: self.script_tick_wait_live(),
             // ADR-0043 D3（Phase 56）: コンテナ実行の設定と起動時の検出。
             containers: Some(task_ops::daemon::ContainersLive {
                 preference: self.config.containers.preference.as_str().to_string(),
-                runtime: self.container_probe.program().map(str::to_string),
+                runtime: self.cluster.container_probe().program().map(str::to_string),
                 probes: self
-                    .container_probe
+                    .cluster
+                    .container_probe()
                     .tried
                     .iter()
                     .map(|(runtime, detail)| task_ops::daemon::ContainerProbeView {
@@ -168,11 +177,12 @@ impl Dispatcher {
     /// `dispatch_waits`（M1〜M6・M9）に、reviewing のまま委譲した子を待つ親（M7）と人の承認を待つ親（M8）を足す。
     pub(super) fn snapshot_task_waits(&self) -> Vec<task_ops::daemon::SnapshotTaskWait> {
         let mut waits: std::collections::BTreeMap<TaskId, task_core::TaskWait> = self
-            .dispatch_waits
+            .coord
+            .dispatch_waits()
             .iter()
             .map(|(id, w)| (*id, w.clone()))
             .collect();
-        for parent in self.awaiting_children.keys() {
+        for parent in &self.coord.awaiting_children_tasks() {
             // 未完の子（読めなければ空。snapshot は観測値で、tick を止めない）。
             let mut task_ids: Vec<TaskId> = self
                 .store
@@ -189,9 +199,9 @@ impl Dispatcher {
                 .entry(*parent)
                 .or_insert(task_core::TaskWait::DelegatedChildren { task_ids });
         }
-        for id in &self.awaiting_human {
+        for id in self.coord.awaiting_human() {
             waits
-                .entry(*id)
+                .entry(id)
                 .or_insert(task_core::TaskWait::ReviewAwaitingHuman);
         }
         waits
@@ -204,7 +214,7 @@ impl Dispatcher {
         self.implicit_account_ids()
             .into_iter()
             .map(|source| {
-                let registry = &self.llm_route_registry;
+                let registry = self.routing.registry();
                 let mut models: Vec<String> = registry
                     .route_defaults
                     .values()
@@ -237,7 +247,7 @@ impl Dispatcher {
         let Some(cfg) = self.config.accounts.clone() else {
             return (None, HashMap::new(), None, Vec::new());
         };
-        let now = (self.now_unix_fn)();
+        let now = self.probes.now_unix();
         let mut items = Vec::new();
         let mut roots = HashMap::new();
         for adapter in AccountAdapter::ALL {
@@ -245,11 +255,7 @@ impl Dispatcher {
                 continue;
             };
             roots.insert(adapter.as_str().to_string(), root.display().to_string());
-            let dirs = self
-                .accounts_scan_cache
-                .entry(adapter)
-                .or_insert_with(|| scan_accounts(root, adapter))
-                .clone();
+            let dirs = self.routing.scanned_accounts(adapter, root);
             let Some(book) = self.account_book(adapter) else {
                 continue;
             };
@@ -304,9 +310,7 @@ impl Dispatcher {
                             detail: c.detail.clone(),
                         }
                     }),
-                    login_pending: self
-                        .login_pending_accounts
-                        .contains(&Self::login_pending_key(adapter, &d.id)),
+                    login_pending: self.routing.login_pending(adapter, &d.id),
                 });
             }
         }

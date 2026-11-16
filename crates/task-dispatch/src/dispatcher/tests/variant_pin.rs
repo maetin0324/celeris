@@ -349,7 +349,7 @@ fn capturing(f: &Fx, observe: bool) -> (Dispatcher, Seen) {
 
 async fn start_one(d: &mut Dispatcher, id: TaskId) {
     d.tick().unwrap();
-    if d.running.contains_key(&RunKey {
+    if d.supervisor.runs().contains_key(&RunKey {
         task: id,
         work_unit: None,
     }) {

@@ -165,5 +165,7 @@ pub enum Exit {
 }
 
 #[cfg(test)]
+mod test_support;
+#[cfg(test)]
 #[path = "lib/tests.rs"]
 mod tests;

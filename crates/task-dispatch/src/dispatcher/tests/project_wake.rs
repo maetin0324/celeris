@@ -117,10 +117,11 @@ impl Env {
     ) -> Dispatcher {
         let adapter: Arc<dyn WorkerAdapter> = Arc::new(FakeAdapter::new(vec!["false".into()]));
         let mut d = dispatcher(store.clone(), adapter, 0);
-        d.test_now = Some(self.clock.clone());
+        d.test_hooks.now = Some(self.clock.clone());
         d.config.execution.max_cos_runs = 0;
         d.config.min_free_disk_pct = 0.0;
-        d.stagnation.checked_at = Some(at("2100-01-01T00:00:00Z"));
+        d.orchestration
+            .set_stagnation_checked_at_for_test(at("2100-01-01T00:00:00Z"));
         // ADR 2026-11-11-cos-skill-sync D3: CoS skills that fit (no skill drift notice).
         d.config.knowledge.root = self.dir.path().join("knowledge");
         let skills = d.config.knowledge.root.join("skills");
@@ -449,15 +450,16 @@ async fn project_wake_kind_external_released() {
 #[tokio::test]
 async fn project_wake_kind_stagnation() {
     let env = kind_case(|_, _, p, d| {
-        d.stagnation.findings = vec![StagnationFinding {
-            kind: StagnationKind::ProjectStalled,
-            key: format!("project_stalled-{}", p.id),
-            project_id: Some(p.id),
-            task_id: None,
-            subject: "pilot:wake".into(),
-            since: "2026-10-31T00:00:00Z".into(),
-            detail: "進んでいない".into(),
-        }];
+        d.orchestration
+            .set_stagnation_findings_for_test(vec![StagnationFinding {
+                kind: StagnationKind::ProjectStalled,
+                key: format!("project_stalled-{}", p.id),
+                project_id: Some(p.id),
+                task_id: None,
+                subject: "pilot:wake".into(),
+                since: "2026-10-31T00:00:00Z".into(),
+                detail: "進んでいない".into(),
+            }]);
     });
     assert_one_decide_of(&env, ProjectWakeKind::Stagnation);
 }

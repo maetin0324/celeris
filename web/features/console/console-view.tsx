@@ -325,13 +325,6 @@ function Block({ block }: { block: ConsoleBlock }) {
           <p className="min-w-0 break-all font-mono text-label text-foreground">{block.approval.id}</p>
         </>
       );
-    case "milestone":
-      return (
-        <>
-          <BlockHead block={block} />
-          <p className="min-w-0 break-words text-foreground">{block.milestone.title}</p>
-        </>
-      );
     case "report":
       return (
         <>

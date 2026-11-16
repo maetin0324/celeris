@@ -2,7 +2,7 @@
 //! 共有の作業ディレクトリ）で同じ `README.md` を書く 2 task A/B に、強く重なる expected write-set
 //! （`README.md`）を付けて同時に ready にする。
 //!
-//! - off（`test_disable_write_set_gate = true`）: A と B が同じ tick に起き、両方が同じ版の `README.md` を
+//! - off（`ablation.disable_write_set_gate = true`）: A と B が同じ tick に起き、両方が同じ版の `README.md` を
 //!   読んで編集する。先に書き終えた方の後で、もう片方は読んだ版と今の版が食い違う（同時編集の衝突）ので
 //!   書かずに終わり、受け入れ検査に落ちてやり直しの run（repair）が 1 本足される。
 //! - on（既定）: B は A の run が終わるまで ready のまま待ち、A の結果の上で編集するので衝突も repair もない。
@@ -181,7 +181,7 @@ async fn run_variant_with(
     adapter.start_delay = start_delay;
     let adapter = Arc::new(adapter);
     let mut d = dispatcher(store.clone(), adapter.clone(), 2);
-    d.test_disable_write_set_gate = variant == Variant::Off;
+    d.test_hooks.ablation.disable_write_set_gate = variant == Variant::Off;
 
     let done = |id: TaskId| store.get(id).unwrap().unwrap().status == Status::Done;
     let mut first_tick = true;
@@ -190,10 +190,18 @@ async fn run_variant_with(
         if first_tick {
             first_tick = false;
             match variant {
-                Variant::Off => assert_eq!(d.running.len(), 2, "off: both edits start together"),
+                Variant::Off => assert_eq!(
+                    d.supervisor.runs().len(),
+                    2,
+                    "off: both edits start together"
+                ),
                 Variant::On => {
-                    assert_eq!(d.running.len(), 1, "on: the overlapping edit waits");
-                    assert_eq!(d.write_set_waits.len(), 1);
+                    assert_eq!(
+                        d.supervisor.runs().len(),
+                        1,
+                        "on: the overlapping edit waits"
+                    );
+                    assert_eq!(d.coord.write_set_waits().len(), 1);
                 }
             }
         }
@@ -201,12 +209,12 @@ async fn run_variant_with(
             break;
         }
         // 検査など run 以外の後処理が残っていれば、試験時計を止めたまま次の tick を待つ。
-        // `d.running` には adapter の run が最初に poll される前に入る。走っている全 run が README を
+        // `RunSupervisor` の run の表には adapter の run が最初に poll される前に入る。走っている全 run が README を
         // 読んで終わりの時刻を登録し終えるまで試験時計を進めない（遅れて始まる run が先行 run の書いた版を
         // 読むと off の衝突が消える）。
-        if !d.reviewing.is_empty()
+        if !d.supervisor.reviews().is_empty()
             || adapter.next_end().is_none()
-            || adapter.registered_runs() != d.running.len()
+            || adapter.registered_runs() != d.supervisor.runs().len()
         {
             tokio::time::sleep(Duration::from_millis(5)).await;
             continue;
@@ -218,13 +226,19 @@ async fn run_variant_with(
         };
         adapter.clock.send_replace(end);
         let due: Vec<RunKey> = d
-            .running
+            .supervisor
+            .runs()
             .iter()
             .filter(|(_, e)| adapter.ends_by(&e.run_id, end))
             .map(|(k, _)| k.clone())
             .collect();
         for key in due {
-            (&mut d.running.get_mut(&key).expect("run in flight").handle)
+            (&mut d
+                .supervisor
+                .runs_mut_for_test()
+                .get_mut(&key)
+                .expect("run in flight")
+                .handle)
                 .await
                 .expect("worker task panicked");
         }

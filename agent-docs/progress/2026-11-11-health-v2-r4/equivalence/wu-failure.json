@@ -1,0 +1,62 @@
+{
+  "id": "wu-failure",
+  "sites": [
+    {
+      "at": "crates/task-dispatch/src/dispatcher/worker_finish.rs:902",
+      "fn": "finish_worker_result_with",
+      "subject": "work_unit"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/work_units.rs:1219",
+      "fn": "deferred_work_unit_trigger",
+      "subject": "work_unit"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/phase_integration.rs:1310",
+      "fn": "integration_gives_up_with",
+      "subject": "phase_integration"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/tree_units.rs:894",
+      "fn": "reconcile_tree_units",
+      "subject": "child_task"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/tree_units.rs:1184",
+      "fn": "handle_child_infra_failure",
+      "subject": "child_task"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/child_tasks.rs:145",
+      "fn": "escalate_failed_children",
+      "subject": "task"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/phase_integration/merge_repair.rs:42",
+      "fn": "retire_if_failed",
+      "subject": "work_unit"
+    }
+  ],
+  "verdict": "different",
+  "evidence": [
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:907",
+    "crates/task-dispatch/src/dispatcher/work_units.rs:1283",
+    "crates/task-dispatch/src/dispatcher/work_units.rs:1299",
+    "crates/task-dispatch/src/dispatcher/work_units.rs:1334",
+    "crates/task-dispatch/src/dispatcher/phase_integration.rs:1327",
+    "crates/task-dispatch/src/dispatcher/phase_integration.rs:1342",
+    "crates/task-dispatch/src/dispatcher/phase_integration.rs:1362",
+    "crates/task-dispatch/src/dispatcher/tree_units.rs:948",
+    "crates/task-dispatch/src/dispatcher/tree_units.rs:958",
+    "crates/task-dispatch/src/dispatcher/tree_units.rs:1196",
+    "crates/task-dispatch/src/dispatcher/tree_units.rs:1270",
+    "crates/task-dispatch/src/dispatcher/tree_units.rs:750",
+    "crates/task-dispatch/src/dispatcher/child_tasks.rs:86",
+    "crates/task-dispatch/src/dispatcher/child_tasks.rs:178",
+    "crates/task-dispatch/src/dispatcher/child_tasks.rs:214",
+    "crates/task-dispatch/src/dispatcher/phase_integration/merge_repair.rs:43",
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:1316",
+    "crates/task-dispatch/src/dispatcher/worker_finish.rs:1336"
+  ],
+  "shared_contract": "入力・前提: worker完了時は WuDecision とcheck失敗、遅延伝播は保存WUと最後のWorkerFinished、統合は統合WUと理由/署名を読む。3箇所にfailure_signature→stalled_replans→effective_max_replansの類似した判定があり、前2者はsource=WorkUnit、統合はIntegration。遅延経路はBlocked(Question/ContinuationCap)を先に質問へ返す。統合はhealthのError/往復/上限でreplan自体を禁止する。状態・event: worker完了はWUの遷移とWorkerFinished等、遅延経路はAutoReplanRequested/QuestionRaisedを記録しTriggerを返す。統合はleaseを消しWUをFailed又はBlocked(Question)へ先に更新し、AutoReplanRequested又はQuestionRaised付きtask遷移を実行する。上限時のworker/WUはreplan_exhausted_askを使い、tree有効な節点では決定要求とContinue(Advance)、それ以外はWorkerQuestionになる。子taskの終端はschema v3のRunningなkind Task WUへ写しWorkUnitTransitionedを記録する。infra失敗だけは子を限定回数作り直し、尽きたらBlocked(Infra)と通知で段を止め兄弟は続行する。Delegated経路はglobal event idで既処理を除外し、Ignore/会話taskを除外、親attempts/max_retriesでChildFailedによる再実行又は質問を選ぶ（replan回数ではない）。merge repair失敗はCancelledへ退かせ統合をPendingに戻す。失敗: worker完了のWU自身/依存WUの遷移書き込み失敗はwarnして継続する（worker_finish.rs:1316、1336）。他の照合・判定のstore errorは原則伝播するが統合のInvalidTransitionは無視、委譲経路はfalseを返す。共有できる範囲は、署名・同一失敗回数・replan残量・replan禁止理由を入力に Replan/Ask と理由を返す純粋な上限判定で、署名生成とstalled集計は既存関数を再利用済み。WU行更新、子の作り直し、親attempts、承認・通知の書き込みは分ける。失敗を親完了へ変換せず、infraを無制限replanせず、同じ委譲失敗を重複処理しない不変条件を守る。"
+}

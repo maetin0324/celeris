@@ -11,6 +11,8 @@ pub mod auto_resolve;
 pub mod capacity;
 /// ADR-0072 D8（Phase E1）: daemon が決定的に集める mechanical checkpoint（git の読み取りだけ）。
 pub mod checkpoint;
+/// ADR 2026-11-11 dispatcher-state-ownership D1: クラスタの接続・tunnel・job の poll の状態の owner。
+pub mod cluster_runtime;
 pub mod cos_context;
 /// ADR 2026-11-11-cos-skill-sync D3: CoS の run の claim の前に KB の skill を config と照らす門。
 pub(crate) mod cos_skill_gate;
@@ -18,11 +20,17 @@ pub mod credential_resume;
 /// ADR 2026-10-07-build-tmp-hygiene D4: ディスク使用率の監視（`DiskProbe`・判定の純関数・tick の段）。
 pub mod disk_admission;
 pub mod disk_watch;
+/// ADR 2026-11-14 dispatch-admission-order: run を起こすかの順序と組み合わせの純粋関数（`admit`）。
+pub(crate) mod dispatch_admission;
 pub mod dispatcher;
+/// ADR 2026-11-11 dispatcher-state-ownership D1: task・WU の実行の調整の状態（write set・review の同期・依存・資格の待ち）の owner。
+pub(crate) mod execution_coordination;
 /// ADR-0072 D6/D11/D12/D15（Phase E2）: WorkUnit の状態遷移の決定（純粋関数）。
 pub mod execution_scheduler;
 /// ADR 2026-11-07-health-review-integration: 健全性の review（review 方針の読み込み・設計 review・health 文脈・verdict）。
 pub mod health_review;
+/// ADR 2026-11-11 dispatcher-state-ownership D1: disk・scratch・build cache・repo target の掃除の状態の owner。
+pub(crate) mod host_maintenance;
 /// ADR-0074 D1.2 / D1.4（Phase F2）: WU の worktree と工程の統合（daemon 側の git 操作だけ。LLM なし）。
 pub mod integration;
 /// ADR 2026-11-12-knowledge-usage-per-run D2: run ごとの KB の操作の台帳（run の前の用意と run の後の合計）。
@@ -32,15 +40,25 @@ pub(crate) use knowledge_usage::read_site as kb_use;
 pub mod orphan;
 mod phase_timing;
 pub mod policy;
+/// ADR 2026-11-11 dispatcher-state-ownership D1: 本番の既定を持つ注入 port（壁時計・knowledge の到達性・eval の harness の版）。
+pub(crate) mod probe_ports;
 pub mod project_controller;
 /// ADR 2026-11-04-project-controller A3: A1 の判定の口と A2 の TS の接続。
 #[path = "dispatcher/project_decider_ts.rs"]
 pub mod project_decider_ts;
+/// ADR 2026-11-11 dispatcher-state-ownership D1: 案件の停滞の見張りと CoS chat の起動の待ちの owner。
+pub(crate) mod project_orchestration;
 /// ADR-0033 D3（Phase 25）: run の終端から決定的に作る報告。
 pub(crate) mod reports;
 pub mod review;
+/// ADR 2026-11-11 dispatcher-state-ownership D3・D4: review の判定と起動の判断の純粋関数（D4 review-result の `failed_checks`）。
+pub(crate) mod review_decision;
 /// ADR 2026-11-07-root-done-tick-phase-timing: root_done_tick の段別計測と事実の収集。
 pub(crate) mod root_done_probe;
+pub mod routing_runtime;
+/// ADR 2026-11-11 dispatcher-state-ownership D3・D4: run の終わりの判断の純粋関数（D4 wu-failure の `replan_or_ask`）。
+pub(crate) mod run_settlement;
+pub(crate) mod run_supervisor;
 /// ADR-0075 D2 / D6（Phase G1）: scratch pool の走査・GC の実行・削除と測定のスレッド・状態の組み立て。
 pub mod scratch_gc;
 /// ADR 2026-11-02-ts-control-layer-boundary 付記 S2: TS 制御層の判定を呼ぶ口（`PolicyScript`）と compare の判定。

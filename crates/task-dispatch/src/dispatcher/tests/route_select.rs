@@ -2,7 +2,8 @@
 //! admission, harness/source compatibility, and the selection record.
 
 use super::*;
-use crate::dispatcher::route_select::{RouteFailure, RouteInput, RouteState, route_select};
+use crate::dispatcher::route_select::{RouteFailure, RouteInput, route_select};
+use crate::routing_runtime::route_state::RouteState;
 use std::collections::BTreeMap;
 use task_core::llm_route::{
     AccountId, CandidateKey, ExclusionReason, HarnessRule, HarnessSelectionError, HarnessSpec,
@@ -610,7 +611,8 @@ async fn route_select_dispatch_run_launches_the_selected_harness_model_and_accou
 
     assert_eq!(d.tick().unwrap().dispatched, 1);
     let run_id = d
-        .running
+        .supervisor
+        .runs()
         .get(&RunKey {
             task: task.id,
             work_unit: None,

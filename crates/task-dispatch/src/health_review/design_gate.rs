@@ -32,6 +32,7 @@ use crate::health_review::design::{
     pending_design_review, plan_summary, planner_run_before, write_paths_by_repo,
 };
 use crate::health_review::policy::{REVIEW_POLICY_TIMEOUT, load_review_policy};
+use crate::run_settlement::run_end_record;
 use task_core::ExecutionPlanSpec;
 use task_core::design_review::ReviewPolicyState;
 use task_worker::protocol::DesignReviewRequest;
@@ -355,7 +356,7 @@ impl Dispatcher {
         let artifacts_dir = self.artifacts_dir(task, &dir);
         let subject_task = task.clone();
         let (task_id, end_run_id, provider) = (task.id, run_id.clone(), source.to_string());
-        let tx = self.tx.clone();
+        let tx = self.coord.completion_sender();
         let handle = tokio::spawn(async move {
             let result =
                 run_design_reviewer(&subject_task, &dir, &artifacts_dir, request, run).await;
@@ -366,7 +367,7 @@ impl Dispatcher {
                 result,
             })));
         });
-        self.running.insert(
+        self.supervisor.register_run(
             RunKey {
                 task: task.id,
                 work_unit: None,
@@ -406,13 +407,13 @@ impl Dispatcher {
             .unwrap_or((None, None, None));
         let (run_end, outcome, usage) = run_end_of(&result, "design review");
         let model = self.started_model_of(task_id, &run_id);
-        let quota = self.resolve_quota_estimate(
+        let quota = self.routing.settle_quota(
+            &*self.store,
             task_id,
             &run_id,
             None,
-            account.as_deref(),
-            account_adapter,
-            &provider,
+            account.as_deref().zip(account_adapter),
+            provider.to_string(),
             &model,
             usage.as_ref(),
         );
@@ -422,17 +423,9 @@ impl Dispatcher {
             ..Default::default()
         });
         tracing::info!(%task_id, %run_id, %outcome, "design review run finished (the verdict is read by design_verdict, not by the final review)");
-        self.store.append_event(
-            task_id,
-            &Event::WorkerFinished {
-                run_id: run_id.clone(),
-                outcome,
-                usage,
-                role: Some(RunRole::Reviewer),
-                metrics,
-                end: run_end,
-            },
-        )?;
+        let role = Some(RunRole::Reviewer);
+        let finished = run_end_record(&run_id, outcome, usage, role, metrics, run_end);
+        self.store.append_event(task_id, &finished)?;
         self.store.append_event(task_id, &quota)?;
         let status = run_end
             .map(task_core::RunIndexStatus::from_run_end)

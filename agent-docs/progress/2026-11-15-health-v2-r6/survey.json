@@ -1,0 +1,257 @@
+{
+ "schema": "celeris.health-v2-r6.survey/1",
+ "task": "01M6TYVJT7EJ6WWHEF0EBH3JPS",
+ "work_unit": "survey",
+ "base": "$CELERIS_WU_BASE（提出時の HEAD で実行）",
+ "ts_domains": [
+  {
+   "domain": "lane_rules",
+   "rust_reference": "model_policy::match_rule",
+   "prod_mode": "compare",
+   "conditions": [
+    {
+     "condition": 1,
+     "met": false,
+     "basis": "mode は 2026-11-04T02:41:21Z から compare で、ts の日数は 0（要件は ts のまま連続 30 日）。compare の記録 124 件（match 110・ts_error 14 で全て timeout、mismatch 0・安全違反 0・自動の戻し 0）。純粋判定 1 万件以上の要件に対し 124 件。網羅（39,366 件、2026-11-04）は全件一致だが S6-3 の 1 の件数には数えない（2026-11-04 付記）。本番 DB を読み取り専用で読んだ: python3 scripts/dev/script-compare.py report --db $CELERIS_RUN_DB（sqlite3 -readonly・query_only、bounds upto_event_id 937415・upto_log_id 571、2026-11-15T13:5xZ）"
+    },
+    {
+     "condition": 2,
+     "met": false,
+     "basis": "control-ts/fixtures/lane_rules/all-features.jsonl は commit 済みだが、task-core の example dump-lane-fixtures が match_rule の出力から作り、crates/celeris/tests/script_compare_lane_rules.rs が各行を match_rule と照合する。script-host-runner（crates/script-runtime/src/bin/script-host-runner.rs）は commit 済みの JSONL の期待値で採点し Rust を呼ばないが、期待値の生成と照合が Rust 参照に依存するので「Rust の出力から生成する形から凍結 file に移す」は済んでいない"
+    },
+    {
+     "condition": 3,
+     "met": false,
+     "basis": "ADR 2026-11-02-ts-control-layer-boundary に領域ごとの fail-closed の既定の決定が無い（S6-3 の 3 の本文の例示だけ）。既定を固定する試験も無い"
+    },
+    {
+     "condition": 4,
+     "met": false,
+     "basis": "/local/celeris/state/script-bundles/ の bundle は 1 個（c7c3cce5f82c…）、script_generations は 1 行（01M6J6X3HE4Z3MXM11GHJ1B6M4、state active）。2 世代以上が要る。hash を書いた進捗も無い"
+    },
+    {
+     "condition": 5,
+     "met": false,
+     "basis": "ADR 2026-11-03-ts-intended-behavior-change D3 の手順は「旧挙動の fixture は Rust 参照の出力のまま」で、二重実装の間の手順。凍結した golden を人が review して更新する手順は書かれていない。behavior-changes は cos_digest だけで lane_rules には無い"
+    }
+   ],
+   "verdict": "keep_rust_reference",
+   "note": "条件を満たさないので Rust 参照実装を残す"
+  },
+  {
+   "domain": "route_priority",
+   "rust_reference": "llm_route::route_priority_decide",
+   "prod_mode": "rust",
+   "conditions": [
+    {
+     "condition": 1,
+     "met": false,
+     "basis": "mode は rust、generation は未設定（script_domain_modes の updated_by system:migration・version 0）。compare の記録は 0 件。本番 DB を読み取り専用で読んだ: python3 scripts/dev/script-compare.py report --db $CELERIS_RUN_DB（sqlite3 -readonly・query_only、bounds upto_event_id 937415・upto_log_id 571、2026-11-15T13:5xZ）"
+    },
+    {
+     "condition": 2,
+     "met": false,
+     "basis": "control-ts/fixtures/route_priority/cases.jsonl は dump-route-priority-fixtures が作り、crates/celeris/tests/script_compare_route_priority.rs が route_priority_decide と照合する。script-host-runner（crates/script-runtime/src/bin/script-host-runner.rs）は commit 済みの JSONL の期待値で採点し Rust を呼ばないが、期待値の生成と照合が Rust 参照に依存するので「Rust の出力から生成する形から凍結 file に移す」は済んでいない"
+    },
+    {
+     "condition": 3,
+     "met": false,
+     "basis": "ADR 2026-11-02-ts-control-layer-boundary に領域ごとの fail-closed の既定の決定が無い（S6-3 の 3 の本文の例示だけ）。既定を固定する試験も無い"
+    },
+    {
+     "condition": 4,
+     "met": false,
+     "basis": "/local/celeris/state/script-bundles/ の bundle は 1 個（c7c3cce5f82c…）、script_generations は 1 行（01M6J6X3HE4Z3MXM11GHJ1B6M4、state active）。2 世代以上が要る。hash を書いた進捗も無い"
+    },
+    {
+     "condition": 5,
+     "met": false,
+     "basis": "ADR 2026-11-03-ts-intended-behavior-change D3 の手順は「旧挙動の fixture は Rust 参照の出力のまま」で、二重実装の間の手順。凍結した golden を人が review して更新する手順は書かれていない"
+    }
+   ],
+   "verdict": "keep_rust_reference",
+   "note": "条件を満たさないので Rust 参照実装を残す"
+  },
+  {
+   "domain": "cos_digest",
+   "rust_reference": "chat::digest::cos_digest_decide",
+   "prod_mode": "compare",
+   "conditions": [
+    {
+     "condition": 1,
+     "met": false,
+     "basis": "mode は 2026-11-04T03:00:10Z から compare で、ts の日数は 0。compare の記録 571 件（match 563・ts_error 8＝timeout 7・failure 1、mismatch 0・安全違反 0・隠れた差分 0・自動の戻し 0）。CoS の経路 2,000 件以上の要件に対し 571 件。本番 DB を読み取り専用で読んだ: python3 scripts/dev/script-compare.py report --db $CELERIS_RUN_DB（sqlite3 -readonly・query_only、bounds upto_event_id 937415・upto_log_id 571、2026-11-15T13:5xZ）"
+    },
+    {
+     "condition": 2,
+     "met": false,
+     "basis": "control-ts/fixtures/cos_digest/cases.jsonl は dump-cos-digest-fixtures が作り、crates/celeris/tests/script_compare_cos_digest.rs が cos_digest_decide と byte で照合する。script-host-runner（crates/script-runtime/src/bin/script-host-runner.rs）は commit 済みの JSONL の期待値で採点し Rust を呼ばないが、期待値の生成と照合が Rust 参照に依存するので「Rust の出力から生成する形から凍結 file に移す」は済んでいない"
+    },
+    {
+     "condition": 3,
+     "met": false,
+     "basis": "ADR 2026-11-02-ts-control-layer-boundary に領域ごとの fail-closed の既定の決定が無い（S6-3 の 3 の本文の例示だけ）。既定を固定する試験も無い（「digest を出さず受信箱に知らせる」は本文の例示で決定ではない）"
+    },
+    {
+     "condition": 4,
+     "met": false,
+     "basis": "/local/celeris/state/script-bundles/ の bundle は 1 個（c7c3cce5f82c…）、script_generations は 1 行（01M6J6X3HE4Z3MXM11GHJ1B6M4、state active）。2 世代以上が要る。hash を書いた進捗も無い"
+    },
+    {
+     "condition": 5,
+     "met": false,
+     "basis": "ADR 2026-11-03-ts-intended-behavior-change D3 の手順は「旧挙動の fixture は Rust 参照の出力のまま」で、二重実装の間の手順。凍結した golden を人が review して更新する手順は書かれていない。control-ts/behavior-changes/cos_digest の期待差分 fixture と人の承認（POST /api/v1/script/behavior-changes）はあるが、`rust` 欄（Rust 参照の出力）を前提にする"
+    }
+   ],
+   "verdict": "keep_rust_reference",
+   "note": "条件を満たさないので Rust 参照実装を残す"
+  }
+ ],
+ "ts_domains_out_of_scope": "Rust の再検証と安全条件・script-guard・generation の登録・切替・drain・認可・永続状態・scheduler は S6-3 の「消さないもの」なので、この判定の対象外",
+ "eval_split": [
+  {
+   "target": "campaign",
+   "crate": "celeris-campaign",
+   "path": "crates/campaign",
+   "verdict": "keep",
+   "reproducibility": "K2・K4 の凍結 manifest（crates/campaign/fixtures/frozen-manifests/ の 5 file）・grade-cases・cases/final・grader-private が評価器と同じ commit にある。manifest は Celeris の commit を pin しない（sha256 は ops-r2-k2-input-manifest.json の入力 hash だけ）ので、1 つの commit で評価器・fixture・Celeris がそろうことが旧基準の再現の前提。別 repo にすると 2 repo の commit の組を記録する仕組みが新たに要る。IEEE Access の評価の code は repo に無く（ADR の記述だけ）、測定用 release・state dir・pin した binary で再現する。分離しても改善しない",
+   "dependency_load": {
+    "cargo_tree_normal_unique": 235,
+    "cargo_tree_with_dev_build_unique": 288,
+    "workspace_deps": "normal: routing-eval・task-core・task-worker・task-dispatch / dev: task-api・task-ops",
+    "reverse_deps": "celeris・task-dispatch の dev 依存だけ（本番 binary には入らない）",
+    "test_targets": 111,
+    "test_affected_frequency": "test-affected は dev を含む逆依存閉包で crate を選ぶので、9 crate（celeris-campaign・celeris-credentiald・celeris-script・routing-eval・task-api・task-core・task-dispatch・task-ops・task-worker）のどれかの変更で対象に入る。2026-10-15 以後の非 merge commit 2,569 件のうち crate を触った 1,143 件の 91%（1,036 件）で対象。campaign 自身の変更は 353 件"
+   },
+   "maintenance": "campaign は task-core・task-worker・task-dispatch の内部 API を使う。外に出すと内部 API の変更のたびに別 repo が壊れ、保守の責任が 2 repo に分かれる。負荷の主因は test target の数（111）で、repo の分離では減らない。対策は R6 で扱わないと決めた「celeris-campaign の 111 target の束ね」（close が提案に書く）",
+   "lines_not_counted_as_reduction": "crates/campaign の *.rs 114,638 行。外に出しても削減に数えない"
+  },
+  {
+   "target": "routing-eval",
+   "crate": "routing-eval",
+   "path": "crates/routing-eval",
+   "verdict": "keep",
+   "reproducibility": "K2 の入力 manifest（ops-r2-k2-input-manifest.json）は schema celeris.routing-eval-manifest/1 で、この crate の形式。分けると fixture と形式の定義が別の commit 系列になる",
+   "dependency_load": {
+    "cargo_tree_normal_unique": 174,
+    "cargo_tree_with_dev_build_unique": 190,
+    "workspace_deps": "normal: task-core",
+    "reverse_deps": "celeris-campaign（normal）・celeris（dev）",
+    "test_targets": 1,
+    "test_affected_frequency": "task-core か自身の変更で対象。1,143 件の 25%（287 件）、自身の変更 4 件"
+   },
+   "maintenance": "14 file・4,396 行。test target 1 個で負荷は小さい。分離で改善する点は無い",
+   "lines_not_counted_as_reduction": "4,396 行（*.rs）"
+  },
+  {
+   "target": "jev-classifier",
+   "crate": "jev-classifier",
+   "path": "crates/jev-classifier",
+   "verdict": "keep",
+   "reproducibility": "評価基盤ではない。本番 daemon の要求分類の adapter（crates/celeris/src/daemon/classify_stage.rs・config/jev.rs が使う。ADR 2026-10-15-mlsys-min-decision-assisted）",
+   "dependency_load": {
+    "cargo_tree_normal_unique": 148,
+    "cargo_tree_with_dev_build_unique": 158,
+    "workspace_deps": "無し",
+    "reverse_deps": "celeris（normal、本番）",
+    "test_targets": 1,
+    "test_affected_frequency": "自身の変更だけで対象。1,143 件の 4 件（0.3%）"
+   },
+   "maintenance": "本番の依存なので外に出すと本番 build が別 repo に依存する。負荷は小さく、分離の必要は無い",
+   "lines_not_counted_as_reduction": "2,117 行（*.rs）"
+  },
+  {
+   "target": "script-runtime vendor",
+   "crate": "deno_core（[patch.crates-io] の写し）",
+   "path": "crates/script-runtime/vendor",
+   "verdict": "keep",
+   "reproducibility": "deno_core 0.413.0 の .crate の写しで、変えたのは Cargo.toml の serde_json の features だけ。deno_core.lock.toml に版と sha256、vendor-deno-core.sh --check で写しの一致を確かめられる。固定 commit から network なしで build できる",
+   "dependency_load": {
+    "files": 130,
+    "lines": 77440,
+    "size": "2.6 MB",
+    "workspace_member": false,
+    "note": "root の exclude に入り、clippy・fmt・test の対象外。celeris-script（本番の TS isolate、celeris の normal 依存）の normal 依存 198 crate のうち deno 系 12。vendor の変更は 2 commit（2026-11-02）だけ。celeris-script は task-core の dev 依存のため 1,143 件の 27%（305 件）で test-affected に入るが、vendor の有無とは関係しない"
+   },
+   "maintenance": "外に出すと [patch] が git の source を指す形になる。ADR 2026-11-02-deno-core-vendored-serde-json-features が却下した案（版の固定が commit hash になり crates.io の sha256 で確かめられない、build に network が要る）と同じ",
+   "lines_not_counted_as_reduction": "77,440 行。外に出しても削減に数えない"
+  }
+ ],
+ "new_candidates": [
+  {
+   "id": "r6-unref-set-knowledge-probe",
+   "kind": "unreferenced_pub",
+   "files": [
+    "crates/task-dispatch/src/dispatcher.rs:1182",
+    "crates/task-dispatch/src/probe_ports.rs:69",
+    "crates/task-dispatch/src/routing_runtime.rs:451"
+   ],
+   "usage_evidence": "git grep -n -w set_knowledge_probe は定義の行と agent-docs/progress/phase-051-100.md:2939 の記述だけ。probe_ports.rs の set_knowledge と routing_runtime.rs の clear_knowledge_probe_cache はこの関数だけが呼ぶ。2026-09-21 に ADR-0052 D1（knowledge の到達性の検査）の試験の差し替え口として入り、B0 の走査では未参照に出なかった（B0 の後に呼び手の試験が消えた）。今は knowledge の probe を差し替える試験が無い",
+   "classification": "ambiguous",
+   "reason": "関数は未参照だが、ADR-0052 D1 の到達性の検査を試験で守る差し替え口でもある。消すか、到達性の検査の試験を戻すかを人が決める"
+  },
+  {
+   "id": "r6-unrun-test-architecture-map-diffs",
+   "kind": "uncalled_script",
+   "files": [
+    "scripts/tests/test_architecture_map_diffs.py"
+   ],
+   "usage_evidence": "走らせる手順が無い。check-health.sh は scripts/tests の 'test_architecture_map.py' と 'test_repo_health*.py' だけを unittest discover で走らせ、repo-health の profile（celeris.toml）は 'test_source_size*.py'、test-affected.sh は daemon-soak だけ。file は 2026-11-07 に check-architecture-map.py の find_diffs の 6 種の食い違いの試験として入った",
+   "classification": "ambiguous",
+   "reason": "試験の中身は有効だが、どの検査からも走らない。check-health.sh の pattern に足して走らせるか、消すかを人が決める（足すなら check-health の変更で、規約変更として別の review の対象）"
+  }
+ ],
+ "new_candidates_scan": {
+  "command": "python3 agent-docs/progress/2026-11-07-health-v2-b0/dup-candidates-scan.py（repo の根、提出時の HEAD）",
+  "rs_files": 1838,
+  "ts_files": 505,
+  "b0": {
+   "rs_files": 1652,
+   "ts_files": 509,
+   "unreferenced_pub": 36,
+   "unreferenced_scripts": 6
+  },
+  "head": {
+   "unreferenced_pub": 23,
+   "unreferenced_scripts": 35
+  },
+  "new_unreferenced_pub": [
+   "set_knowledge_probe"
+  ],
+  "b0_carryover_unreferenced_pub": "22 件は B0 の走査にもあった（19 件は B0 の dup-candidates.json で delete。R6 の prune 段の WU と B0 の判定に任せ、ここでは数えない）",
+  "excluded_false_positives": [
+   {
+    "files": [
+     "scripts/dev/repo-health/health/gitio.py"
+    ],
+    "reason": "module として import される（health/snapshot.py の from .gitio、rules/existing_checks.py の from health.gitio）。走査は file 名と 7 文字以上の stem だけを探すので誤検出"
+   },
+   {
+    "files": [
+     "scripts/dev/repo-health/schema/examples/*.json（10 file）",
+     "scripts/dev/repo-health/schema/bad-examples/*.json（21 file）"
+    ],
+    "reason": "scripts/tests/test_repo_health_contract.py が glob で全件読む（examples は全件通し、bad-examples は 1 件ずつ落とす）"
+   },
+   {
+    "files": [
+     "scripts/tests/test_repo_health_archmap.py",
+     "scripts/tests/test_repo_health_structure.py"
+    ],
+    "reason": "check-health.sh の 'test_repo_health*.py' の discover で走る"
+   }
+  ],
+  "config_fields": {
+   "method": "git diff <B0 の dup-candidates.json の base_sha>..HEAD の crates/celeris/src/config と crates/*/src/config.rs で足された pub 欄を拾い、各欄を git grep -w で config の外の読み手があるか確かめた",
+   "added_fields": {
+    "fallback_after_secs": "cos_launch.rs・cos_chat/fallback.rs が読む",
+    "forecast_disk_ratio": "scratch_gc.rs・task-worker scratch.rs が読む",
+    "min_free_disk_pct": "disk_admission.rs・celerisctl scratch.rs が読む",
+    "queued_wake_secs": "task-core cluster_job.rs が読む"
+   },
+   "unused": 0,
+   "note": "B0 より前からの scratch の l1_max_gb・execution の cheap_local_first は R6 の scratch・routing の WU が扱うので、ここでは数えない"
+  },
+  "same_name_types": "同名の pub struct/enum は 132 組から 144 組（+12: Case・CheckResult・Decision・DiffStat・Inputs・Kind・Ledger・OwnerRow・Policy・Reservation・Sample・UnavailableReason）。目的の 3 種に入らないので判定していない"
+ }
+}

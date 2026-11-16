@@ -1,43 +1,26 @@
-//! ADR 2026-10-07-build-tmp-hygiene D1.4: cron 雛形の `extra.action` から発火した task の**決定的な保守
-//! executor**。worker（LLM）にも reviewer にも渡さず、dispatcher の tick の中で I/O 層
-//! （`crate::target_sweep::run_sweep`）を呼び、結果の `Event::TargetSweepRan` を task に追記して `done`
-//! （走査・削除の失敗があれば `failed`）にする。**LLM は呼ばない。**
-//!
-//! 状態は既存の遷移だけで進める: `ready -(dispatch)-> running -(worker_done)-> reviewing -(review_pass)-> done`、
-//! 失敗は `running -(worker_error{retryable:false})-> failed`。どの段も lease・worktree・run を作らない。
+//! ADR 2026-10-07-build-tmp-hygiene D1.4・D4: cron 雛形の `extra.action` から発火した task の**決定的な保守
+//! executor** と disk 監視の `Dispatcher` の側の入口。状態と処理は [`HostMaintenance`]
+//! （`crate::host_maintenance`。ADR 2026-11-11 dispatcher-state-ownership D1・D2）が持ち、ここは owner の外の値
+//! （store・config・注入時計）を渡して呼ぶだけ。executor は worker（LLM）にも reviewer にも渡さず、
+//! lease・worktree・run を作らない。**LLM は呼ばない。**
 
-use std::time::SystemTime;
-
-use task_core::model::TargetSweepMode;
-use task_core::{Task, Trigger};
+use task_core::Task;
 use task_worker::target_sweep::SweepParams;
 
 use super::{DispatchError, Dispatcher};
-use crate::target_sweep::{SweepEnv, run_sweep_with_scratch, sweep_workspace_targets};
-
-/// 付記 A4: disk_watch の `critical` で止める run の genre。
-const CODING_GENRE: &str = "coding";
-
-/// 掃除の時計を dispatcher の時計（試験では差し替えた時計）に揃える。大きさ・使用時刻は `stat` のまま。
-struct DispatcherClock(SystemTime);
-
-impl SweepEnv for DispatcherClock {
-    fn now(&self) -> SystemTime {
-        self.0
-    }
-}
+use crate::host_maintenance::{HostMaintenance, MaintenanceError};
 
 impl Dispatcher {
     /// ADR 2026-10-07-build-tmp-hygiene D1.4: 掃除の roots と上限（celeris が `[maintenance.target_sweep]` から渡す）。
     /// 渡されなければ `SweepParams::default()` と `<build_cache_dir>/cargo`・（scratch が有効なら）`<scratch>/dev-targets`。
     pub fn set_target_sweep(&mut self, params: SweepParams) {
-        self.target_sweep = Some(params);
+        self.maint.set_target_sweep(params);
     }
 
     /// 付記 A2・A3（2026-10-09）: 保守 executor が足す範囲（scratch の root・終わった task の作業場所）。
     /// 渡されなければ [`crate::target_sweep::SweepScope::default`]。
     pub fn set_target_sweep_scope(&mut self, scope: crate::target_sweep::SweepScope) {
-        self.target_sweep_scope = scope;
+        self.maint.set_target_sweep_scope(scope);
     }
 
     /// ADR 2026-10-07-build-tmp-hygiene D4: 監視する path としきい値（celeris が `[[maintenance.disk_watch]]` から
@@ -75,69 +58,33 @@ impl Dispatcher {
         probe: Box<dyn crate::disk_watch::DiskProbe>,
         census: Option<Box<dyn crate::disk_watch::TargetCensus>>,
     ) {
-        self.disk_watch = Some(crate::disk_watch::DiskWatchRunner {
-            entries,
-            probe,
-            census,
-            last_at: None,
-            critical: false,
-        });
+        self.maint.set_disk_watch(entries, probe, census);
     }
 
     /// 付記 A4: 最後の測定で監視している path のどれかが `critical` か（新しい coding run を起こさない）。
     pub fn disk_watch_critical(&self) -> bool {
-        self.disk_watch.as_ref().is_some_and(|r| r.critical)
+        self.maint.disk_watch_critical()
     }
 
     /// 付記 A4: この task の run は `critical` のあいだ止める coding run か（genre が `coding` か未指定）。
     pub(super) fn held_by_disk_critical(&self, task: &Task) -> bool {
-        self.disk_watch_critical() && task.genre.as_deref().is_none_or(|g| g == CODING_GENRE)
+        self.maint.held_by_disk_critical(task)
     }
 
     /// tick の段 `disk_watch`（前回から 60 秒経っていれば測る。時計は注入時計）。
     pub(super) fn tick_disk_watch(&mut self) {
-        // ADR-0041 D5: verify は staging DB に disk の監視の通知・依頼を書かない。
-        if self.verify_smoke_only() {
-            return;
-        }
-        let now = self.now_utc();
-        let store = self.store.clone();
-        if let Some(runner) = self.disk_watch.as_mut() {
-            runner.tick(store.as_ref(), now);
-        }
-    }
-
-    fn target_sweep_params(&self) -> SweepParams {
-        self.target_sweep.clone().unwrap_or_else(|| SweepParams {
-            roots: fallback_sweep_roots(&self.config.build_cache_dir, &self.config.scratch),
-            ..SweepParams::default()
-        })
+        let (maint, inputs) = self.maintenance_parts();
+        maint.tick_disk_watch(&inputs);
     }
 
     /// `ready` の保守 task（cron 雛形の `action` ラベル付き）なら executor で走らせて `true`。
     /// それ以外（ラベル無し・`ready` でない）は何もせず `false`（通常の dispatch に回す）。
     pub(super) fn run_maintenance_task(&mut self, task: &Task) -> Result<bool, DispatchError> {
-        let Some(action) = task_ops::cron_jobs::task_action(task) else {
-            return Ok(false);
-        };
-        if task.status != task_core::Status::Ready {
-            return Ok(false);
-        }
-        match action {
-            "target_sweep" => self.run_target_sweep_task(task)?,
-            other => {
-                // task_action は実装済みの action しか返さないので来ない。来ても worker には渡さない。
-                tracing::warn!(task_id = %task.id, action = other, "unknown maintenance action");
-                self.store
-                    .apply_transition(task.id, Trigger::Dispatch, None)?;
-                self.store.apply_transition(
-                    task.id,
-                    Trigger::WorkerError { retryable: false },
-                    None,
-                )?;
-            }
-        }
-        Ok(true)
+        let (maint, inputs) = self.maintenance_parts();
+        HostMaintenance::run_maintenance_task(maint, &inputs, task).map_err(|e| match e {
+            MaintenanceError::Store(e) => DispatchError::from(e),
+            MaintenanceError::Io(e) => DispatchError::from(e),
+        })
     }
 
     /// cron で今作った task を、同じ tick のうちに executor へ回す（worker の枠の空きに依らない）。
@@ -155,134 +102,5 @@ impl Dispatcher {
                 tracing::warn!(task_id = %id, error = %error, "maintenance task failed to run");
             }
         }
-    }
-
-    fn run_target_sweep_task(&mut self, task: &Task) -> Result<(), DispatchError> {
-        let mode = if task_ops::cron_jobs::task_mode(task) == "apply" {
-            TargetSweepMode::Apply
-        } else {
-            TargetSweepMode::DryRun
-        };
-        let params = self.target_sweep_params();
-        let clock = DispatcherClock(SystemTime::from(self.now_utc()));
-        // 付記 A2: scratch の `<scratch>/targets` を owner 配置の root として足す。
-        let mut roots = params.roots.clone();
-        let scratch_roots: Vec<_> = (self.target_sweep_scope.scratch_targets
-            && self.scratch_active())
-        .then(|| self.config.scratch.pool().targets_dir())
-        .filter(|root| root.is_dir())
-        .into_iter()
-        .collect();
-        for root in scratch_roots.iter().filter(|r| !params.roots.contains(r)) {
-            roots.push(root.clone());
-        }
-        let _pool_lock = if scratch_roots.is_empty() {
-            None
-        } else {
-            let Some(lock) = self.config.scratch.pool().try_lock()? else {
-                return Ok(());
-            };
-            Some(lock)
-        };
-        self.store
-            .apply_transition(task.id, Trigger::Dispatch, None)?;
-        let lookup = task_worker::scratch::StoreLookup(self.store.as_ref());
-        let mut report =
-            run_sweep_with_scratch(&roots, &scratch_roots, &params, mode, &clock, &lookup);
-        drop(_pool_lock);
-        // 付記 A3: 終わった task の作業場所に残った cargo target（build 中は残す）。
-        if self.target_sweep_scope.workspace_target_after_secs > 0 {
-            sweep_workspace_targets(
-                &mut report,
-                self.store.as_ref(),
-                &self.config.workspace_roots,
-                self.target_sweep_scope.workspace_target_after_secs,
-                self.now_utc(),
-            );
-        }
-        // D1.5: 上限まで下げきれなければ D4 の `disk` 通知（`disk:target_sweep`）も出す。
-        if report.over_cap_unresolved {
-            let over_roots: Vec<(String, u64)> = report
-                .roots
-                .iter()
-                .filter(|r| r.after_bytes > params.max_bytes_per_root)
-                .map(|r| (r.root.display().to_string(), r.after_bytes))
-                .collect();
-            let notice = crate::disk_watch::target_sweep_notice(
-                task.id,
-                &over_roots,
-                params.max_bytes_per_root,
-                self.now_utc(),
-            );
-            if let Err(error) = self.store.notice_record(&notice) {
-                tracing::warn!(task_id = %task.id, %error, "failed to record target sweep disk notice");
-            }
-        }
-        if report.errors.is_empty() {
-            self.store
-                .apply_transition(task.id, Trigger::WorkerDone, Some(report.to_event()))?;
-            self.store
-                .apply_transition(task.id, Trigger::ReviewPass, None)?;
-            tracing::info!(
-                task_id = %task.id,
-                ?mode,
-                deleted_bytes = report.deleted_bytes(),
-                deleted_items = report.deleted.len(),
-                skipped = report.skipped.len(),
-                "target sweep finished"
-            );
-        } else {
-            self.store.apply_transition(
-                task.id,
-                Trigger::WorkerError { retryable: false },
-                Some(report.to_event()),
-            )?;
-            tracing::warn!(
-                task_id = %task.id,
-                ?mode,
-                errors = ?report.errors,
-                "target sweep finished with errors"
-            );
-        }
-        Ok(())
-    }
-}
-
-/// `[maintenance.target_sweep]` を渡されなかったときの roots: `<build_cache_dir>/cargo` と、scratch が有効なら
-/// `<scratch>/dev-targets`（ADR 2026-10-14-eval-trial-scratch-target D3。ルート fs の `/var/tmp` は使わない）。
-fn fallback_sweep_roots(
-    build_cache_dir: &std::path::Path,
-    scratch: &task_worker::scratch::ScratchSettings,
-) -> Vec<std::path::PathBuf> {
-    let mut roots = task_worker::target_sweep::default_roots(build_cache_dir, &scratch.dir);
-    if !scratch.enabled || scratch.dir.as_os_str().is_empty() {
-        roots.truncate(1);
-    }
-    roots
-}
-
-#[cfg(test)]
-mod tests {
-    use std::path::{Path, PathBuf};
-
-    use task_worker::scratch::ScratchSettings;
-
-    use super::fallback_sweep_roots;
-
-    #[test]
-    fn target_sweep_fallback_roots_use_scratch_dev_targets_not_var_tmp() {
-        let on = ScratchSettings::with_dir(PathBuf::from("/local/s"));
-        assert!(on.enabled);
-        assert_eq!(
-            fallback_sweep_roots(Path::new("/x/bc"), &on),
-            vec![
-                PathBuf::from("/x/bc/cargo"),
-                PathBuf::from("/local/s/dev-targets")
-            ]
-        );
-        assert_eq!(
-            fallback_sweep_roots(Path::new("/x/bc"), &ScratchSettings::disabled()),
-            vec![PathBuf::from("/x/bc/cargo")]
-        );
     }
 }

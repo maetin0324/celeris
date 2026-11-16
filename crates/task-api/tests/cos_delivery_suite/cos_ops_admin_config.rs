@@ -392,7 +392,8 @@ fn fake_daemon() -> (
     tokio::sync::mpsc::Sender<task_api::AdminRequest>,
     std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>,
 ) {
-    use task_api::{AccountCheckOutcome, AccountCheckResult, AdminRequest, NotifyTestOutcome};
+    use task_api::{AccountCheckOutcome, AdminRequest, NotifyTestOutcome};
+    use task_core::AccountCheckResult;
     let (tx, mut rx) = tokio::sync::mpsc::channel::<AdminRequest>(8);
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let log = seen.clone();

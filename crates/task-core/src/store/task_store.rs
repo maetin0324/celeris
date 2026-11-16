@@ -10,7 +10,7 @@ use crate::execution_plan::{
 use crate::instance::{DaemonInstance, InstanceRole};
 use crate::integrations::{IntegrationId, TaskIntegration};
 use crate::message::Message;
-use crate::model::{Event, Status, Task, TaskId, WorkspaceSpec};
+use crate::model::{Event, Lease, Status, Task, TaskId, WorkspaceSpec};
 use crate::org::{
     Milestone, MilestoneId, MilestoneStatus, OrgNode, Project, ProjectId, ProjectStatus,
 };
@@ -240,8 +240,6 @@ pub trait TaskStore:
         worker_run_id: &str,
         ttl: StdDuration,
     ) -> Result<bool, StoreError>;
-    /// worker_run_id が現在のリースと一致する場合のみ lease を None にする。status は変更しない。
-    fn release_lease(&self, task_id: TaskId, worker_run_id: &str) -> Result<(), StoreError>;
     /// status=Ready かつ depends_on が全て Done かつ（親が存在し kind=Approval の場合は親が Done）
     /// を満たすタスクを priority DESC, created_at ASC で最大 limit 件返す。
     fn ready_tasks(&self, limit: usize) -> Result<Vec<Task>, StoreError>;
@@ -275,7 +273,32 @@ pub trait TaskStore:
         task_id: TaskId,
         trigger: Trigger,
         extra_events: Vec<Event>,
+    ) -> Result<Outcome, StoreError> {
+        self.apply_transition_with_work_units(task_id, Vec::new(), trigger, extra_events)
+    }
+    /// `apply_transition_with_events` の一般形（ADR 2026-11-14-phase-integration-finish-one-write D1）。`work_units` の
+    /// `(書き込む行, その WorkUnitTransitioned)` を順に書いてから `trigger` を適用し、全体を 1 つの Immediate
+    /// transaction にする（段の統合の完了: 統合 WU の done・次の工程の WU の ready・`PhaseIntegrated`・Task の遷移）。
+    /// 遷移が通らなければ（`InvalidTransition` など）何も書かない。
+    fn apply_transition_with_work_units(
+        &self,
+        task_id: TaskId,
+        work_units: Vec<(WorkUnitRow, Event)>,
+        trigger: Trigger,
+        extra_events: Vec<Event>,
     ) -> Result<Outcome, StoreError>;
+    /// ADR 2026-11-15-lease-reclaim-compare-and-release D1・D2: lease の回収の書き込み口。1 つの Immediate transaction で
+    /// Task を読み、`status` が `Running` で `lease` が `expected`（`worker_run_id` と `expires_at` の両方）と等しいときだけ
+    /// `apply_transition_with_events` と同じ書き込み（遷移・`Transitioned`・`extra_events`）をして `Some(outcome)` を返す。
+    /// Task が無い・running でない・lease が違う（別の接続が `renew_lease` で延ばした場合を含む）なら何も書かずに `None`。
+    /// 遷移が無効なら `StoreError::InvalidTransition` を返し、何も書かない。
+    fn apply_transition_if_lease(
+        &self,
+        task_id: TaskId,
+        expected: &Lease,
+        trigger: Trigger,
+        extra_events: Vec<Event>,
+    ) -> Result<Option<Outcome>, StoreError>;
 
     /// ADR-0007 D3: Plan の子タスク群を挿入（`Created`、`accept_children` なら続けて `Accept`）し、
     /// 親に `ReviewPass` を適用して `verdict_events` を追記する。全体が 1 トランザクション。
@@ -582,7 +605,7 @@ pub trait TaskStore:
     /// ADR-0044 D1: 人の編集を書き戻す（`json` と絞り込みの列、`Event::Edited` を単一トランザクションで）。
     /// **状態機械は通らない**: `status` / `attempts` / `lease` は渡された `task` の値を**使わず**、
     /// トランザクションの中で読み直した現在の行の値を書く（編集を組み立てている間にディスパッチャが
-    /// リースを取っていても、その run を壊さないため。`acquire_lease` / `release_lease` と同じ規律）。
+    /// リースを取っていても、その run を壊さないため。`acquire_lease` / `apply_transition_if_lease` と同じ規律）。
     /// 書き込んだ後の `Task`（= 読み直した状態を持つもの）を返す。無いタスクは `StoreError::Invalid`。
     fn update_task(&self, task: &Task, event: Event) -> Result<Task, StoreError>;
 

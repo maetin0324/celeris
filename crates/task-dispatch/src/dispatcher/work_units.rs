@@ -1,11 +1,12 @@
 //! WorkUnit の gate・準備・並列・checks（ADR-0072、ADR-0074）。`ExecutionGated` と routing は同じ transaction のまま。ADR-0082 の L2。
 
 use super::*;
+use crate::run_settlement::{self, AskReason, ReplanOrAsk};
 
 impl Dispatcher {
     /// ADR-0072 D14/D6・E4 (g): `wu.spec.checks` を `review::run_work_unit_checks`（review.rs の `Check::Command` 実行を再利用）で
     /// 実行し、列の最後に health の項目（ADR 2026-11-08-health-enforcement-loop D1.2。base は `wu.base_commit`、head は WU の HEAD）を
-    /// 足して、終わったら `Completion::WorkUnitChecks` を送る。`self.running` からは既に取り除かれている（`on_worker_finished` の
+    /// 足して、終わったら `Completion::WorkUnitChecks` を送る。`RunSupervisor` の run の表からは既に取り除かれている（`on_worker_finished` の
     /// 冒頭）ので、ここでは lease の維持や snapshot への影響は無い（review run の Command 実行と同じ扱い）。
     #[allow(clippy::too_many_arguments)]
     pub(super) fn spawn_work_unit_checks(
@@ -74,7 +75,7 @@ impl Dispatcher {
         let checks = wu.spec.checks.clone();
         let health = self.work_unit_health(&task, &wu, ws.work_dir());
         let timeout = CheckLimits::new(self.config.review_timeout, &self.config.check_slots);
-        let tx = self.tx.clone();
+        let tx = self.coord.completion_sender();
         let checking_run_id = run_id.clone();
         // ADR-0079 付記 R7-5 D1: 不合格の記録に残す、check を実際に走らせる所。
         let check_cwd = ws.work_dir().to_path_buf();
@@ -124,7 +125,7 @@ impl Dispatcher {
         });
         // Phase F5-fix2: 検査の間も「手元の仕事」として数える（`in_flight`・lease の照合）。
         let (work_unit_id, key, n, terminal, account, account_adapter, provider) = entry_meta;
-        self.checking.insert(
+        self.coord.processes_mut().start_checks(
             checking_run_id,
             CheckingEntry {
                 task_id,
@@ -204,13 +205,12 @@ impl Dispatcher {
     /// 手を離す（毎 tick、完了の記録の後。active のときは何もしない）。検査は新しい active が result.json から
     /// やり直す（検査は冪等）。止めた数を返す。
     pub(super) fn hand_off_checks_in_hand(&mut self) -> Result<usize, DispatchError> {
-        if self.accepting_new_work || self.checking.is_empty() {
+        if self.coord.accepting_new_work() || !self.coord.processes().has_checks() {
             return Ok(0);
         }
-        let run_ids: Vec<String> = self.checking.keys().cloned().collect();
         let mut count = 0;
-        for run_id in run_ids {
-            let Some(entry) = self.checking.get(&run_id) else {
+        for (run_id, _) in self.coord.processes().checking_runs() {
+            let Some(entry) = self.coord.processes().checking_entry(&run_id) else {
                 continue;
             };
             let Some(task) = self.store.get(entry.task_id)? else {
@@ -225,7 +225,7 @@ impl Dispatcher {
             if !self.record_check_hand_off(&task, &wu_id, &key, n, &run_id, &terminal)? {
                 continue;
             }
-            let Some(entry) = self.checking.remove(&run_id) else {
+            let Some(entry) = self.coord.processes_mut().take_checks(&run_id) else {
                 continue;
             };
             entry.handle.abort();
@@ -309,11 +309,11 @@ impl Dispatcher {
     /// `running`、手元に無い run を `runs/<run_id>/result.json` から確定し直す（検査はそこで走る）。
     /// 検査の途中でこの instance が止まっても、WU と印は残るので次の active がやり直す（冪等）。
     pub(super) fn take_over_handed_off_checks(&mut self) -> Result<(), DispatchError> {
-        if !self.accepting_new_work {
+        if !self.coord.accepting_new_work() {
             return Ok(());
         }
         for task in self.store.list(Some(Status::Running))? {
-            if !self.is_eligible(&task) || self.just_aborted.contains(&task.id) {
+            if !self.is_eligible(&task) || self.supervisor.was_just_aborted(task.id) {
                 continue;
             }
             let candidates: Vec<String> = self
@@ -328,9 +328,7 @@ impl Dispatcher {
                         )
                 })
                 .filter_map(|u| u.lease_run_id.or(u.last_run_id))
-                .filter(|r| {
-                    !self.running.values().any(|e| &e.run_id == r) && !self.checking.contains_key(r)
-                })
+                .filter(|r| !ownerless_runs::holds_run_or_check(&self.supervisor, &self.coord, r))
                 .collect();
             if candidates.is_empty() {
                 continue;
@@ -475,9 +473,9 @@ impl Dispatcher {
         if changed {
             units = self.store.work_units_for(task_id)?;
         }
-        // ADR-0079 付記「R6-1」D2: 人の gate の間に上げなかった unit（段階の `review: human` の後の次の段階、
-        // 止めている間に子が終わって依存が満たされた unit）を、gate が解けた今 `ready` に上げる。
-        if v2 && self.promote_newly_ready(task_id, &units)? {
+        // ADR-0079 付記「R6-1」D2・ADR 2026-11-14-dependency-promotion-every-plan-version D1: 依存の満たされた pending の unit
+        // （人の gate の間・finish の途中で落ちた間に上げなかったもの）を、計画の版によらず今 `ready` に上げる。
+        if self.promote_newly_ready(task_id, &units)? {
             units = self.store.work_units_for(task_id)?;
         }
         // ADR-0079 付記「R7-9」D3: 統合済みの段階に統合されていない unit（修正前の replan が足した unit など）が
@@ -614,35 +612,21 @@ impl Dispatcher {
     }
 
     /// ADR-0079 付記「R6-1」D2: 依存と工程の障壁が満たされた `pending` の unit を `ready` に上げる
-    /// （`WorkUnitTransitioned{dependency_ready}`。`finish_phase_integration` と同じ）。人の gate の間は上げずに
-    /// おくので、gate が解けた後の最初の dispatch で上げる。上げたら `true`。
+    /// （行と event は [`super::phase_integration::ready_promotions`]。`finish_phase_integration`・子 task の状態を写した
+    /// 後の `reconcile_tree_units` と同じ）。人の gate の間は上げずにおき、gate が解けた後の最初の dispatch で上げる。
+    /// dispatch gate は計画の版によらず呼ぶ（ADR 2026-11-14-dependency-promotion-every-plan-version D1）。上げたら `true`。
     pub(super) fn promote_newly_ready(
         &self,
         task_id: TaskId,
         units: &[task_core::WorkUnitRow],
     ) -> Result<bool, DispatchError> {
-        let ids = task_core::newly_ready(units);
-        for id in &ids {
-            let Some(u) = units.iter().find(|u| &u.id == id) else {
-                continue;
-            };
-            let mut row = u.clone();
-            row.status = task_core::WorkUnitStatus::Ready;
-            row.updated_at = rfc3339(OffsetDateTime::now_utc());
-            self.store.work_unit_transition(
-                task_id,
-                row,
-                Event::WorkUnitTransitioned {
-                    work_unit_id: u.id.clone(),
-                    key: u.key.clone(),
-                    from: task_core::WorkUnitStatus::Pending,
-                    to: task_core::WorkUnitStatus::Ready,
-                    reason: "dependency_ready".to_string(),
-                    run_id: None,
-                },
-            )?;
+        let now = rfc3339(OffsetDateTime::now_utc());
+        let promotions = super::phase_integration::ready_promotions(units, &now);
+        let promoted = !promotions.is_empty();
+        for (row, event) in promotions {
+            self.store.work_unit_transition(task_id, row, event)?;
         }
-        Ok(!ids.is_empty())
+        Ok(promoted)
     }
 
     /// ADR-0079 付記「R7-9」D3: [`task_core::stale_stage_integrations`] に当たる done の統合 WU を
@@ -694,7 +678,7 @@ impl Dispatcher {
             self.store.as_ref(),
             task_id,
             units,
-            &self.integrated_deps,
+            self.coord.integrated_deps(),
         )?;
         Ok((settled.changed, settled.waiting_on_children))
     }
@@ -950,21 +934,19 @@ impl Dispatcher {
         second_pass: bool,
     ) -> Result<(), DispatchError> {
         let now = self.now_utc();
-        if !error.permanent {
-            let count = self
-                .wu_prepare_failures
-                .get(&wu.id)
-                .map_or(0, |f| f.count)
-                .saturating_add(1);
-            if count < MAX_WU_PREPARE_ATTEMPTS {
-                let retry_at = now + wu_prepare_backoff(count);
-                self.wu_prepare_failures
-                    .insert(wu.id.clone(), WuPrepareFailures { count, retry_at });
-                tracing::warn!(task_id = %task.id, work_unit = %wu.key, error = %error, attempt = count, max_attempts = MAX_WU_PREPARE_ATTEMPTS, %retry_at, "cannot prepare the work unit worktree (transient); retrying after a backoff");
-                return Ok(());
-            }
+        if !error.permanent
+            && let Some(failures) = self.coord.retry_wu_prepare(
+                &wu.id,
+                now,
+                MAX_WU_PREPARE_ATTEMPTS,
+                wu_prepare_backoff,
+            )
+        {
+            let (count, retry_at) = (failures.count, failures.retry_at);
+            tracing::warn!(task_id = %task.id, work_unit = %wu.key, error = %error, attempt = count, max_attempts = MAX_WU_PREPARE_ATTEMPTS, %retry_at, "cannot prepare the work unit worktree (transient); retrying after a backoff");
+            return Ok(());
         }
-        self.wu_prepare_failures.remove(&wu.id);
+        self.coord.clear_wu_prepare_failures(&wu.id);
         tracing::warn!(task_id = %task.id, work_unit = %wu.key, error = %error, permanent = error.permanent, "cannot prepare the work unit worktree; blocking the work unit and asking a human (reason=prepare_failed)");
         let mut row = wu.clone();
         row.status = task_core::WorkUnitStatus::Blocked;
@@ -1197,20 +1179,20 @@ impl Dispatcher {
                 vec![text],
             ));
         }
-        let replans_so_far = self.counted_replans(task_id)?;
         // ADR 2026-10-22-stalled-auto-replan D1 / D4: 同じ WU・同じ止まり方の自動 replan が進展なしに続いたら止める。
         let failure = task_ops::plan_gate::failure_signature(
             &[format!("{:?}/{:?}", wu.status, wu.blocked_reason)],
             "",
         );
-        let stalled = task_ops::plan_gate::stalled_replans(&events, &wu.key, &failure);
-        if stalled >= task_ops::plan_gate::STALLED_REPLAN_LIMIT {
+        let limits = self.replan_limits(task_id, Some((&wu.key, &failure)), None)?;
+        let verdict = run_settlement::replan_or_ask(limits);
+        if verdict == ReplanOrAsk::Ask(AskReason::Stalled) {
             let text = task_ops::plan_gate::replan_stalled_question(
                 &wu.key,
-                stalled,
+                limits.stalled,
                 &format!("work unit {} did not finish", wu.key),
             );
-            tracing::warn!(%task_id, key = %wu.key, stalled, "the same work unit failure repeated without progress; asking a human instead of replanning (ADR 2026-10-22-stalled-auto-replan)");
+            tracing::warn!(%task_id, key = %wu.key, stalled = limits.stalled, "the same work unit failure repeated without progress; asking a human instead of replanning (ADR 2026-10-22-stalled-auto-replan)");
             self.store.append_event(
                 task_id,
                 &Event::QuestionRaised {
@@ -1224,7 +1206,7 @@ impl Dispatcher {
                 vec![text],
             ));
         }
-        if replans_so_far < self.effective_max_replans(task_id)? {
+        if verdict == ReplanOrAsk::Replan {
             self.store.append_event(
                 task_id,
                 &Event::AutoReplanRequested {
@@ -1265,7 +1247,7 @@ impl Dispatcher {
             let (trigger, outcome) = self.replan_exhausted_ask(
                 &task,
                 &format!("work unit {} failed", wu.key),
-                replans_so_far,
+                limits.replans,
             )?;
             let questions = match outcome.strip_prefix("question: ") {
                 Some(q) => {
@@ -1314,7 +1296,7 @@ impl Dispatcher {
         let now = OffsetDateTime::now_utc();
         let mut holders_gone: Option<bool> = None;
         let mut tasks = self.store.list(Some(Status::Running))?;
-        if self.accepting_new_work && self.orphan_takeover.is_some() {
+        if self.coord.accepting_new_work() && self.orphan_takeover.is_some() {
             tasks.extend(self.store.list(Some(Status::Ready))?);
         }
         for task in tasks {
@@ -1348,8 +1330,8 @@ impl Dispatcher {
                     continue;
                 };
                 // Phase F5-fix2: 検査中の run（`checking`）も手元の run。
-                let ours = self.running.values().any(|e| e.run_id == run_id)
-                    || self.checking.contains_key(&run_id);
+                let ours =
+                    ownerless_runs::holds_run_or_check(&self.supervisor, &self.coord, &run_id);
                 let expired = u
                     .lease_expires_at
                     .as_deref()
@@ -1378,7 +1360,8 @@ impl Dispatcher {
                     self.requeue_orphaned_work_unit_run(&task, &run_id)?;
                 }
             }
-            if self.running_for_task(task.id) > 0 || self.integrating.contains_key(&task.id) {
+            let integrating = self.coord.processes().is_integrating(task.id);
+            if self.supervisor.runs_for_task(task.id) > 0 || integrating {
                 continue;
             }
             let units = self.store.work_units_for(task.id)?;
@@ -1465,16 +1448,15 @@ impl Dispatcher {
         self.replan_gate(task_id)
     }
 
-    /// ADR-0072 D17/D18（Phase E4）: replan の余地（`max_replans`）があれば `RunPlanner{replan:
-    /// true}`、無ければ `Skip`（進められる WU が無いまま何もしない。呼び出し元が既に上限を見て
-    /// `Continue{why: Replan}` を避けていれば通常ここには来ない防御的フォールバック）。
+    /// ADR-0072 D17/D18（Phase E4）: replan の余地（`max_replans`。判定は D4 wu-failure の `run_settlement::replan_or_ask`）があれば
+    /// `RunPlanner{replan: true}`、無ければ `Skip`（進められる WU が無いまま何もしない。呼び出し元が既に上限を見て `Continue{why: Replan}` を避けていれば通常ここには来ない防御的フォールバック）。
     pub(super) fn replan_gate(&self, task_id: TaskId) -> Result<WuDispatchGate, DispatchError> {
-        let replans_so_far = self.counted_replans(task_id)?;
-        if replans_so_far < self.effective_max_replans(task_id)? {
+        let limits = self.replan_limits(task_id, None, None)?;
+        if run_settlement::replan_or_ask(limits) == ReplanOrAsk::Replan {
             Ok(WuDispatchGate::RunPlanner { replan: true })
         } else {
             // ADR-0079 D9（Phase R2b）: 木の節点では上限の超過を人への決定の要求にする（黙って止まらない）。
-            self.raise_node_replan_limit(task_id, replans_so_far)?;
+            self.raise_node_replan_limit(task_id, limits.replans)?;
             Ok(WuDispatchGate::Skip)
         }
     }
@@ -1866,16 +1848,16 @@ impl Dispatcher {
         &mut self,
         now: Instant,
     ) -> Result<(usize, bool), DispatchError> {
-        if self.workers_in_flight() >= self.max_concurrency {
+        if self.workers_in_flight() >= self.coord.max_concurrency() {
             return Ok((0, true));
         }
         let mut dispatched = 0;
         let window = self.ready_window();
         for task in self.store.running_tasks_with_runnable_work_units(window)? {
             if !self.is_eligible(&task)
-                || self.running_for_task(task.id) == 0
-                || self.integrating.contains_key(&task.id)
-                || self.just_aborted.contains(&task.id)
+                || self.supervisor.runs_for_task(task.id) == 0
+                || self.coord.processes().is_integrating(task.id)
+                || self.supervisor.was_just_aborted(task.id)
             {
                 continue;
             }
@@ -1887,7 +1869,7 @@ impl Dispatcher {
             let mode = self.parallel_mode(&task)?;
             let mut tried: std::collections::HashSet<String> = std::collections::HashSet::new();
             loop {
-                if self.workers_in_flight() >= self.max_concurrency {
+                if self.workers_in_flight() >= self.coord.max_concurrency() {
                     return Ok((dispatched, true));
                 }
                 let units = self.store.work_units_for(task.id)?;
@@ -2015,24 +1997,15 @@ impl WorkUnitCheckRun {
         &self,
         result: &Result<RunOutcome, AdapterError>,
     ) -> Option<WorkUnitCheckFailure> {
-        let failed: Vec<task_core::FailedWorkUnitCheck> = self
-            .results
-            .iter()
-            .enumerate()
-            .filter(|(_, (pass, _))| !pass)
-            .map(|(i, (_, detail))| {
-                let (cmd, expect_exit, scope) = self
-                    .checks
-                    .get(i)
-                    .map(|c| (c.cmd.clone(), c.expect_exit, c.scope))
-                    .unwrap_or_default();
-                task_core::FailedWorkUnitCheck {
-                    cmd,
-                    expect_exit,
-                    detail: scope_check_detail(scope, detail),
-                }
-            })
-            .collect();
+        // D4 review-result: 失敗一覧は最終 review・段の統合と同じ `review_decision::failed_checks` で作る。
+        let results = self.results.iter().enumerate().map(|(i, (pass, detail))| {
+            let (cmd, expect_exit, scope) = (self.checks.get(i))
+                .map(|c| (c.cmd.clone(), c.expect_exit, c.scope))
+                .unwrap_or_default();
+            let reason = scope_check_detail(scope, detail);
+            crate::review_decision::CheckResult::command(cmd, expect_exit, *pass, reason)
+        });
+        let failed = crate::review_decision::failed_work_unit_checks(results);
         if failed.is_empty() {
             return None;
         }

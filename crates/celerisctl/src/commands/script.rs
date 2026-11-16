@@ -28,8 +28,6 @@ use super::cron::{ApiConfig, request};
 use crate::error::CliError;
 use crate::outln;
 
-const DEFAULT_CONFIG: &str = "~/.config/celeris/config.toml";
-
 #[derive(Subcommand, Debug, Clone)]
 pub enum ScriptCommand {
     /// List each domain's mode, generation, canary ratio and version, and the guard halt.
@@ -183,20 +181,7 @@ pub struct ModeArgs {
 }
 
 pub fn run(config_path: Option<PathBuf>, command: ScriptCommand) -> Result<ExitCode, CliError> {
-    let config_path = config_path.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG));
-    let config = celeris::config::Config::load(&config_path)
-        .map_err(|e| CliError::msg(format!("config {}: {e}", config_path.display())))?;
-    let listen = config
-        .api
-        .listen
-        .ok_or_else(|| CliError::msg("[api] listen is not configured"))?;
-    let api = ApiConfig {
-        base_url: format!("http://{listen}/api/v1"),
-        token: config
-            .api
-            .client_token()
-            .map_err(|e| CliError::msg(e.to_string()))?,
-    };
+    let api = ApiConfig::from_config(config_path.as_deref(), None, None)?;
     if let Some((method, path, body)) = request_of(&command) {
         let result = request(&api, method, &path, Some(body))?;
         print_json(&result)?;

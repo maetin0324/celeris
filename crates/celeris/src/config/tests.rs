@@ -1869,6 +1869,20 @@ fn removed_scratch_cache_sections_are_load_errors() {
     }
 }
 
+/// 健全性v2 R6（scratch）: 読まれなかった `[scratch] l1_max_gb`（L1 cache server は ADR-0129 で廃止）は消した欄で、
+/// 書いた config は読み込みエラー（警告して無視しない）。`bogus` の検査（未知のキー一般）では、欄を消し忘れて
+/// `l1_max_gb` だけが黙って通る戻りを検出できないため、欄の名前で固定する。
+#[test]
+fn removed_scratch_l1_max_gb_is_a_load_error() {
+    let err = toml::from_str::<Config>("[scratch]\nl1_max_gb = 40\n")
+        .expect_err("removed [scratch] l1_max_gb must be rejected")
+        .to_string();
+    assert!(
+        err.contains("unknown field") && err.contains("l1_max_gb"),
+        "{err}"
+    );
+}
+
 /// ADR-0075 D7: `[scratch] dir` の既定は `build_cache_dir` の親の `scratch/`。
 #[test]
 fn scratch_defaults_follow_the_build_cache_parent() {

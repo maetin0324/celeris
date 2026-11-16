@@ -142,7 +142,9 @@ pub mod wait;
 pub mod workspace_config;
 pub mod write_set;
 
-pub use accounts::{AccountAdapter, AccountPoolSetting, RateLimitObservation, RateWindow};
+pub use accounts::{
+    AccountAdapter, AccountCheckResult, AccountPoolSetting, RateLimitObservation, RateWindow,
+};
 pub use approval::{Approval, ApprovalId, ApprovalStore, Decision, StandingRule, StandingRuleId};
 pub use artifacts::{
     ARTIFACTS_DIR_NAME, SHARED_ARTIFACTS_PREFIX, artifacts_dir_for, artifacts_rel_for,
@@ -396,7 +398,7 @@ pub use model_policy::{
 };
 pub use retry_policy::{
     AttemptOutcome, AttemptRecord, BudgetState, EscalationAudit, EscalationPolicy,
-    EscalationThresholds, RetryDecision, attempt_history_with_interval, is_budget_outcome,
+    EscalationThresholds, RetryDecision, attempt_history_with_interval,
 };
 pub use routing_audit::{ReviewResult, RoutingAudit, routing_audit};
 

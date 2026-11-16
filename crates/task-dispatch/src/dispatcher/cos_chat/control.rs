@@ -159,7 +159,7 @@ impl CosChatLaunch {
                 if self.slot_waits.contains_key(&run.id) {
                     continue;
                 }
-                if !dispatcher.accepting_new_work || dispatcher.orphan_takeover.is_none() {
+                if !dispatcher.coord.accepting_new_work() || dispatcher.orphan_takeover.is_none() {
                     continue;
                 }
                 let gone = dispatcher.lease_holders_gone(&mut holders_gone, dispatcher.now_utc());

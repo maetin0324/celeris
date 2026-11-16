@@ -74,17 +74,6 @@ pub struct CostEstimate {
     pub assumptions: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct ScoreBreakdown {
-    pub quality: f64,
-    pub cost_term: f64,
-    pub latency_term: f64,
-    pub pressure_term: f64,
-    /// 順位用に 1 とした項（C/L/P）と品質以外の unknown flag。
-    pub unknown: Vec<&'static str>,
-    pub score: f64,
-}
-
 /// effective cost（cash・shadow・resource）と pressure を推定する。不正な数値は Err。
 pub fn estimate_cost(input: &CostInputs<'_>) -> Result<CostEstimate, &'static str> {
     input.freshness.validate()?;

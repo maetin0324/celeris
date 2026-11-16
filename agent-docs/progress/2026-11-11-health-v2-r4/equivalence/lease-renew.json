@@ -1,0 +1,44 @@
+{
+  "id": "lease-renew",
+  "sites": [
+    {
+      "at": "crates/task-dispatch/src/dispatcher/work_units.rs:50",
+      "fn": "spawn_work_unit_checks",
+      "subject": "work_unit"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/work_units.rs:293",
+      "fn": "record_check_hand_off",
+      "subject": "work_unit"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/sinks.rs:304",
+      "fn": "heartbeat",
+      "subject": "task/work_unit"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/leases.rs:252",
+      "fn": "reclaim_expired_leases",
+      "subject": "task/work_unit"
+    },
+    {
+      "at": "crates/task-dispatch/src/dispatcher/leases.rs:275",
+      "fn": "reclaim_expired_leases",
+      "subject": "work_unit"
+    }
+  ],
+  "verdict": "different",
+  "evidence": [
+    "crates/task-dispatch/src/dispatcher/work_units.rs:44",
+    "crates/task-dispatch/src/dispatcher/work_units.rs:288",
+    "crates/task-dispatch/src/dispatcher/work_units.rs:296",
+    "crates/task-dispatch/src/dispatcher/sinks.rs:292",
+    "crates/task-dispatch/src/dispatcher/sinks.rs:311",
+    "crates/task-dispatch/src/dispatcher/leases.rs:244",
+    "crates/task-dispatch/src/dispatcher/leases.rs:257",
+    "crates/task-dispatch/src/dispatcher/leases.rs:268",
+    "crates/task-dispatch/src/dispatcher/leases.rs:280",
+    "crates/task-dispatch/src/dispatcher.rs:237"
+  ],
+  "shared_contract": "5 呼び出しの store 操作は既に共通だが、呼び出し契約全体は非等価。入力は全て task id/run id/TTL。WU checks 開始は phase あり、handoff は結果の保存後で TTL=review_timeout*(2*checks+1)+grace。heartbeat は mutex と renew_every で間引き lease_ttl を渡す。回収時は手元の生存 process に max_wall_secs+grace、checking に review_timeout+grace を渡す。状態/event: 更新の委譲先は同じ renew_lease、呼び出し側が更新 event を追加するコードは無い。handoff のみ更新後に WorkUnitChecksHandedOff を追記。失敗: checks/handoff は Ok(false) を無視、Err は警告して進む（handoff event の失敗は返却）。heartbeat は false で戻り、busy だけ100ms間隔で最大3回再試行、他の Err/使い切りは警告して run を止めない。回収は true なら回収を避け、false なら後続の回収判定へ進み、Err なら次 tick へ延期。部分共有契約は renew_lease(task_id,run_id,ttl)->Result<bool,StoreError> の結果を保持する操作までで既存実装を再利用できる。bool の意味を消す共通の warn-and-continue wrapper は回収時の安全条件を壊す。store 内部は今回の読み取り範囲外で、ここでは呼び出しとその分岐を根拠とする。"
+}

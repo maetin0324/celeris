@@ -35,8 +35,8 @@ impl super::Dispatcher {
     /// 原本の場所は CoS chat の設定（`set_cos_chat_launch`）と同じ data dir・DB。CoS chat を
     /// 配線していない daemon には添付が存在しないので `None`。
     pub(super) fn input_attachment_source(&self) -> Option<InputAttachmentSource> {
-        self.cos_chat_launch
-            .as_ref()
+        self.orchestration
+            .launch()
             .map(|chat| InputAttachmentSource {
                 data_dir: chat.config.data_dir.clone(),
                 db_path: chat.config.db_path.clone(),

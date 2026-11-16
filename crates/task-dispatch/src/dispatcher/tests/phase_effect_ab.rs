@@ -15,6 +15,21 @@ mod stale_priority;
 /// expected write-set の重なりで run を待たせる gate（ADR-0130 D3、Phase 5）。
 mod write_set;
 
+/// 研究 ablation の切替（ADR 2026-11-11 dispatcher-state-ownership D6）。各 flag は新しい仕組みを切った
+/// variant（off）を再現し、本番では常にすべて `false`（本番の build にこの型は無い）。`Dispatcher` は
+/// `test_hooks.ablation` だけを読む。scenario を足すときの切替はここに足す。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(in crate::dispatcher) struct EffectAblation {
+    /// review 前の target 同期（ADR-0118）を飛ばし、未同期の HEAD を review する旧経路（review_sync の off）。
+    pub(in crate::dispatcher) skip_pre_review_sync: bool,
+    /// review 前同期の衝突を IntegrationRepair（ADR-0120）でなく `ReviewFail` で返す旧経路（review_sync の Phase 2 off）。
+    pub(in crate::dispatcher) sync_conflict_as_review_fail: bool,
+    /// write-set gate（ADR-0130 D3）を切り、重なる run も同時に起こす（write_set の off）。
+    pub(in crate::dispatcher) disable_write_set_gate: bool,
+    /// review 前 sync の stale 優先（ADR-0130 D5）を切り、待ち行列を候補の順のまま渡す（stale_priority の off）。
+    pub(in crate::dispatcher) disable_stale_priority: bool,
+}
+
 /// 1 つの variant の測り値。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct AbMetric {

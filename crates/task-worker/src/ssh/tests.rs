@@ -504,14 +504,44 @@ fn hanging_ssh_with_a_child(dir: &Path, state: &Path) -> Vec<String> {
     fake_ssh_probe(dir, &script)
 }
 
-/// `/proc/<pid>/stat` の状態が zombie 以外なら生きている（孤児の zombie は init が回収するまで見えるため）。
-fn process_running(pid: u32) -> bool {
-    let Ok(stat) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
-        return false;
-    };
+/// `/proc/<pid>/stat` の 1 行の状態の文字が生きている process を示すか。終わった process の状態（zombie の `Z`、
+/// 親が回収している間の dead の `X`、Linux 2.6.33〜3.13 の dead の `x`）と、`)` の後に状態の無い行は生きていないとみなす。
+/// 孤児の zombie は init が回収するまで `Z` で見え、回収の途中は一瞬 `X` を見せてから消える（Z → X → 消える）。
+fn proc_stat_running(stat: &str) -> bool {
     stat.rsplit_once(')')
         .and_then(|(_, rest)| rest.split_whitespace().next())
-        .is_some_and(|state| state != "Z")
+        .is_some_and(|state| !matches!(state, "Z" | "X" | "x"))
+}
+
+/// `/proc/<pid>/stat` が読めて、その状態が生きている process を示すか（`proc_stat_running`）。
+fn process_running(pid: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| proc_stat_running(&stat))
+}
+
+/// 守る不変条件: timeout の試験の helper は、終わった process（`Z`・`X`・`x`）と読めない pid を生きているとみなさない。
+/// 旧い helper は `Z` だけを終わりとし、回収中の子（`X`）を生きていると読んだ。下の 3 本の timeout 試験は実際の process の
+/// 回収の瞬間に当たったときだけこの読み違いで落ちる（2.01 秒で落ちた最終 review）ので、状態の文字ごとの判定は
+/// stat の行の例で決定的に確かめる。
+#[test]
+fn proc_stat_dead_states_are_not_running() {
+    for state in ["S", "R", "D"] {
+        let line = format!("4242 (sleep) {state} 4241 4242 4241 0 -1 4194304 0 0 0 0");
+        assert!(proc_stat_running(&line), "state {state} is a live process");
+    }
+    for state in ["Z", "X", "x"] {
+        let line = format!("4242 (sleep) {state} 1 4242 4241 0 -1 4194308 0 0 0 0");
+        assert!(
+            !proc_stat_running(&line),
+            "state {state} is a finished process"
+        );
+    }
+    // comm に `)` と空白があっても、最後の `)` の後の状態の文字で決める。
+    assert!(proc_stat_running("4242 (a) Z b) S 1 4242"));
+    assert!(!proc_stat_running("4242 (a) S b) X 1 4242"));
+    assert!(!proc_stat_running("4242 (sleep"));
+    assert!(!proc_stat_running(""));
+    // pid の上限（2^22）を超える pid の `/proc/<pid>/stat` は読めない。
+    assert!(!process_running(u32::MAX));
 }
 
 /// 試験の終わり（panic を含む）に、偽 ssh の子の `sleep` がまだ居れば SIGKILL する。直す前の実装で試験が落ちても
@@ -537,21 +567,23 @@ fn read_pid(state: &Path, name: &str) -> u32 {
 }
 
 /// shell（偽 ssh）とその子の両方が期限（10 秒）までに消えたことを確かめる。期限待ちは 20ms 間隔の確認。
+/// 1 回の観測で shell と子の生死の組を読み、loop を抜けた観測そのもので assert する（読み直すと、loop が見た状態と
+/// assert が見た状態が食い違いうる）。
 fn assert_shell_and_child_gone(state: &Path) {
     let shell = read_pid(state, "pid");
     let child = read_pid(state, "child");
     let _cleanup = KillLeftoverSleep(child);
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while (process_running(shell) || process_running(child)) && std::time::Instant::now() < deadline
-    {
+    let (shell_running, child_running) = loop {
+        let observed = (process_running(shell), process_running(child));
+        if observed == (false, false) || std::time::Instant::now() >= deadline {
+            break observed;
+        }
         std::thread::sleep(Duration::from_millis(20));
-    }
+    };
+    assert!(!shell_running, "hanging ssh process {shell} was not killed");
     assert!(
-        !process_running(shell),
-        "hanging ssh process {shell} was not killed"
-    );
-    assert!(
-        !process_running(child),
+        !child_running,
         "the child {child} of the hanging ssh was left behind (only the direct child was killed)"
     );
 }

@@ -8,7 +8,7 @@ use support::*;
 use task_core::chat::triage::CosTriageSource;
 use task_core::chat::{AuditContext, ChatActor, ChatRelayRequest, ChatRunState};
 use task_core::decision::*;
-use task_core::{Event, SqliteStore, TaskStore};
+use task_core::{Event, SqliteStore};
 
 const HUMAN_DECISION: &str = "human-budget";
 const HUMAN: &str = "human:web";

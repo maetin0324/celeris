@@ -4,7 +4,7 @@
 use super::*;
 use task_core::local_machine::WorkspaceRoots;
 
-fn set_store_root(store: &Arc<dyn TaskStore>, root: &std::path::Path) {
+fn set_store_root(store: &Arc<SqliteStore>, root: &std::path::Path) {
     store
         .local_settings_set(
             &task_core::LocalSettingsOverrides {
@@ -21,7 +21,7 @@ fn set_store_root(store: &Arc<dyn TaskStore>, root: &std::path::Path) {
 /// （走行中 run の cwd・検査ログが動かない）。子 task は親の固定を継ぐ。
 #[test]
 fn dispatcher_pins_new_task_to_store_root_and_child_inherits() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let dir = tempfile::tempdir().unwrap();
     let (cfg, first, second) = (
         dir.path().join("cfg"),
@@ -59,7 +59,7 @@ fn dispatcher_pins_new_task_to_store_root_and_child_inherits() {
 /// 設定ファイルの root から解く。
 #[test]
 fn dispatcher_keeps_existing_unpinned_workspace_on_config_root() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let dir = tempfile::tempdir().unwrap();
     let (cfg, moved) = (dir.path().join("cfg"), dir.path().join("moved"));
     let task = remote_task(dir.path(), None, vec![]);
@@ -79,7 +79,7 @@ fn dispatcher_keeps_existing_unpinned_workspace_on_config_root() {
 /// disk watch の census は設定ファイルの root と固定されうる root（監査の流れに出た store の root）を全部走査する。
 #[test]
 fn disk_watch_census_roots_cover_config_and_store_roots() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let dir = tempfile::tempdir().unwrap();
     let (cfg, first, second) = (
         dir.path().join("cfg"),

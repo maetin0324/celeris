@@ -17,7 +17,7 @@ use serde_json::Value;
 use task_core::local_machine::WorkspaceRoots;
 use task_core::{
     ArtifactRef, Check, Criterion, DaemonMode, Event, InstanceRole, Lease, LocalSettingsOverrides,
-    SharedRole, SqliteStore, Status, Task, TaskId, TaskKind, TaskStore, WorkspaceSpec,
+    SharedRole, SqliteStore, Status, Task, TaskId, TaskKind, WorkspaceSpec,
 };
 use task_ops::workspace::{WORKTREE_MARKER, WorktreeMarker, local_dir, prepare_task_dir};
 use time::OffsetDateTime;

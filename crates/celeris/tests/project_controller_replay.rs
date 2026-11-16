@@ -18,7 +18,7 @@ use support::proc_stats::{pct, status_kb, threads};
 use support::script_compare::{dist_bundle, start_policy};
 use task_core::project_wake::{ControllerMode, ProjectDecideInput};
 use task_core::store::SqliteStore;
-use task_core::{Project, ProjectId, ProjectStatus, TaskStore};
+use task_core::{Project, ProjectId, ProjectStatus};
 use task_dispatch::project_controller::ProjectDecider;
 use task_dispatch::project_decider_ts::{DeciderLimits, TsProjectDecider, build_snapshot};
 use time::OffsetDateTime;

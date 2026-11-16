@@ -95,7 +95,7 @@ pub(super) fn prepare_run_adapter(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn run_worker(
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     adapter: Arc<dyn WorkerAdapter>,
     browser_candidates: Vec<Arc<dyn WorkerAdapter>>,
     task_id: TaskId,
@@ -980,7 +980,7 @@ pub(super) fn scratch_cargo_env(
 /// stored with the task: `run_extras` reads the assignee's profile from the org for every run,
 /// so the worker intersects with the grant in force (a shrink applies to the next run).
 pub(super) fn browser_run_policy(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
 ) -> Result<Option<task_core::BrowserTaskPolicy>, AdapterError> {
     let stored = store

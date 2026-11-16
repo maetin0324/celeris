@@ -20,7 +20,7 @@ async fn synth_record(
     item: Option<BoardItem>,
 ) -> Value {
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = hinted_task(ws.path(), source);
     store.insert(&task).unwrap();
     let mut d = dispatcher(store.clone(), question_adapter(), 1);

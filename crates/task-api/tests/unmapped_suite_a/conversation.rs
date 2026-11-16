@@ -9,7 +9,7 @@ use crate::common;
 
 use common::*;
 use serde_json::json;
-use task_core::{GenreSpec, MessageRole, RoleSpec, Status, TaskStore, Tier};
+use task_core::{GenreSpec, MessageRole, RoleSpec, Status, Tier};
 
 fn env_with_token() -> TestEnv {
     TestEnv::with(EnvOptions {

@@ -6,6 +6,7 @@
 //! 鍵未登録・認証失敗は既存の credential 待ち（`credential_gate`）へ渡す。新しい待ち機構は作らない。
 
 use std::collections::HashMap;
+use task_core::OrgDirectory;
 
 use task_core::model::Tier;
 use task_core::model_policy::{Level, TaskFeatures};
@@ -46,7 +47,7 @@ pub fn lane_facts(f: &TaskFeatures) -> LaneFacts {
 /// task 欄の routing 固定（無ければ `None` = 従来どおり config に従う）。読めなければ warn して `None`
 /// （dispatch は止めない。解決結果の record に `source: config` が残るので後から分かる）。
 pub fn task_routing_override(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: task_core::TaskId,
 ) -> Option<task_core::route_select::RoutingOverride> {
     store

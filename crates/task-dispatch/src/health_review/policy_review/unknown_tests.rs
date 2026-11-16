@@ -117,7 +117,7 @@ fn stub_repo(dir: &Path, checker: Option<(Policy, Report)>, changed: &str) -> (S
 }
 
 pub(super) struct Case {
-    pub store: Arc<dyn TaskStore>,
+    pub store: Arc<SqliteStore>,
     pub d: Dispatcher,
     pub task: Task,
     pub repo: RepoId,
@@ -139,7 +139,7 @@ fn case(checker: Option<(Policy, Report)>, changed: &str) -> Case {
 pub(super) fn case_for(checker: Option<(Policy, Report)>, changed: &str, reviewer: bool) -> Case {
     let (repo_dir, scratch) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let (target, reviewed) = stub_repo(repo_dir.path(), checker, changed);
-    let store: Arc<dyn TaskStore> = Arc::new(task_core::SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(task_core::SqliteStore::open_in_memory().unwrap());
     let check = if reviewer {
         Check::Reviewer
     } else {

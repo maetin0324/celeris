@@ -30,7 +30,7 @@ async fn an_integration_failure_with_check_only_replans_stops_within_two_replans
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     // 分類に当たらない（repair を作らない）同じ stderr。compile error の repair は下の試験（D6）。
@@ -102,7 +102,7 @@ async fn the_same_integration_failure_without_commits_asks_a_human_after_two_rep
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     let mut b = v2_wu("b", "build", &[]);
@@ -166,7 +166,7 @@ async fn a_compile_error_in_the_integration_check_is_repaired() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     let mut b = v2_wu("b", "build", &[]);

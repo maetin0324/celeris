@@ -22,7 +22,7 @@ fn root(dir: &std::path::Path) -> Task {
 /// 本番 R4 の流れ: v1（`review: human` の段階で承認待ち。行は作られるが unit は起きない）を人が replan に回し、planner の v2
 /// （承認の要らない計画）を採用して最後まで走らせる。root の id と最初の版の行を返す。
 async fn hold_v1_then_adopt_v2(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     v1: String,
     v2: String,
 ) -> (TaskId, Vec<task_core::WorkUnitRow>) {
@@ -59,7 +59,7 @@ async fn hold_v1_then_adopt_v2(
 /// 行の kind は leaf になり、m は WU の run で done になる。子 task は作られず、`child_create_failed` も出ない。
 #[tokio::test]
 async fn replan_turns_a_held_task_unit_into_a_leaf_that_runs() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let v1 = v3_plan(
         vec![stage("s1", true)],
         vec![task_unit("m", "s1", &[], "true"), leaf("a", "s1", &[])],
@@ -97,7 +97,7 @@ async fn replan_turns_a_held_task_unit_into_a_leaf_that_runs() {
 /// task が作られて done になる（以前は行が leaf のまま WU の run で走り、子 task は作られなかった）。
 #[tokio::test]
 async fn replan_turns_a_held_leaf_into_a_task_unit_with_a_child() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let v1 = v3_plan(
         vec![stage("s1", true)],
         vec![leaf("m", "s1", &[]), leaf("a", "s1", &[])],
@@ -132,7 +132,7 @@ async fn replan_turns_a_held_leaf_into_a_task_unit_with_a_child() {
 #[tokio::test]
 async fn replan_cannot_turn_a_task_unit_with_a_child_into_a_leaf() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = root(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();

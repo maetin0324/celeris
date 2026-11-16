@@ -7,8 +7,9 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+use task_core::OrgDirectory;
 
-use task_core::{InstanceRole, RepoId, SharedRole, Status, TaskStore, WorkspaceSpec};
+use task_core::{InstanceRole, RepoId, SharedRole, SqliteStore, Status, WorkspaceSpec};
 use time::OffsetDateTime;
 
 pub(crate) const INTERVAL: Duration = Duration::from_secs(300);
@@ -26,7 +27,7 @@ where
     }
 }
 
-pub(crate) fn run(store: &dyn TaskStore, now: OffsetDateTime) -> Result<usize, String> {
+pub(crate) fn run(store: &SqliteStore, now: OffsetDateTime) -> Result<usize, String> {
     let tasks = store.list(Some(Status::Done)).map_err(|e| e.to_string())?;
     let mut records = Vec::new();
     let mut repos = RepoGitCache::default();
@@ -152,7 +153,7 @@ fn celeris_heads(path: &PathBuf) -> Option<HashMap<String, String>> {
 /// Local repositories. Each repository's `refs/heads/celeris/*` is read once and matched against
 /// the task ids; a task whose branch exists nowhere did not change a repository and is skipped.
 fn repoless_records(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     tasks: &[task_core::Task],
     cache: &mut RepoGitCache,
 ) -> Result<Vec<task_ops::stranded::BranchRecord>, String> {
@@ -253,7 +254,7 @@ impl Drop for FlightGuard {
     }
 }
 
-pub(crate) fn spawn(store: Arc<dyn TaskStore>, role: SharedRole) -> tokio::task::JoinHandle<()> {
+pub(crate) fn spawn(store: Arc<SqliteStore>, role: SharedRole) -> tokio::task::JoinHandle<()> {
     let flight = Arc::new(SingleFlight::default());
     tokio::spawn(periodic(INTERVAL, move || {
         if role.get() != InstanceRole::Active {

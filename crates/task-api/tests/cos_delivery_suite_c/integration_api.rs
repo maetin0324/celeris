@@ -4,7 +4,7 @@ use common::*;
 use serde_json::json;
 use task_core::{
     Project, ProjectId, ProjectRepo, ProjectStatus, RepoId, RepoKind, RepoRun, Status, TaskId,
-    TaskKind, TaskRepoIntegrationState, TaskRepoIntegrationStatus, TaskStore, WorkspaceSpec,
+    TaskKind, TaskRepoIntegrationState, TaskRepoIntegrationStatus, WorkspaceSpec,
 };
 
 #[tokio::test]

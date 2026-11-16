@@ -27,6 +27,7 @@
 //! 進み具合は daemon の状態ファイル（`<db>.knowledge-curation.json`）に task ごとに残す（worker が書ける
 //! 作業場所には置かない）。
 
+use task_core::OrgDirectory;
 mod extraction;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -36,8 +37,8 @@ use serde::{Deserialize, Serialize};
 use task_core::local_machine::WorkspaceRoots;
 use task_core::report::{self, Report, ReportKind};
 use task_core::{
-    CronJob, CronJobRun, CronRunOutcome, CronTz, DecisionStatus, Event, Status, StoreError, Task,
-    TaskId, TaskStore, WorkspaceSpec,
+    CronJob, CronJobRun, CronRunOutcome, CronTz, DecisionStatus, Event, SqliteStore, Status,
+    StoreError, Task, TaskId, WorkspaceSpec,
 };
 use task_ops::knowledge_curation::{self as curation, Action, CurationPlan, ValidatedPlan};
 use task_ops::view::ViewContext;
@@ -181,7 +182,7 @@ fn truncate_chars(s: &str, max: usize) -> String {
 /// worker の作業場所（`Local` の相対 path は task の root 基準。root は `WorkspaceRoots::task_root`、
 /// ADR 2026-10-14-local-machine-settings D5）。remote は扱わない（`Ok(None)`）。
 fn workspace_dir(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     roots: &WorkspaceRoots,
     task: &Task,
 ) -> Result<Option<PathBuf>, String> {
@@ -199,7 +200,7 @@ fn workspace_dir(
 /// 入力を初めて用意する前に task の root を固定する（dispatcher の `pin_task_root` と同じ規則: 既に固定が
 /// あるか、固定の無い root に足回りが既にある既存 task は固定しない）。
 fn pin_task_root(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     roots: &WorkspaceRoots,
     task: &Task,
     now: OffsetDateTime,
@@ -220,7 +221,7 @@ fn pin_task_root(
 /// commit・push）と、旧方式で承認待ちに残る行の再検証・反映を行う。
 /// 1 件の失敗で他を止めない（警告して次へ進む）。
 pub fn tick(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     knowledge_root: &Path,
     state_file: &Path,
     view: &ViewContext,
@@ -365,7 +366,7 @@ struct Candidate {
 
 #[allow(clippy::too_many_arguments)]
 fn prepare(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     knowledge_root: &Path,
     view: &ViewContext,
     job: &CronJob,
@@ -540,7 +541,7 @@ fn is_support(task: &Task) -> bool {
 }
 
 fn reports_since(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     roots: &WorkspaceRoots,
     since: OffsetDateTime,
     until: OffsetDateTime,
@@ -616,7 +617,7 @@ struct Checked {
 }
 
 fn artifacts_dir(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     roots: &WorkspaceRoots,
     task: &Task,
 ) -> Result<Option<PathBuf>, String> {
@@ -695,7 +696,7 @@ fn local_date(job: &CronJob, now: OffsetDateTime) -> String {
 
 /// 終端になった日次整理 task を処理する。apply で適用まで済んだら `true`。
 fn finish(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     knowledge_root: &Path,
     roots: &WorkspaceRoots,
     job: &CronJob,
@@ -914,7 +915,7 @@ fn push_inbox(out: &mut String, entry: &Entry, plan: Option<&CurationPlan>) {
 
 /// task の報告を 1 件だけ作る（既にこの task の報告があれば作らない）。
 fn append_report(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     entry: &Entry,
     summary: &str,
@@ -976,7 +977,7 @@ fn append_report(
 /// D11 (2): 検証済み計画の `human_decisions` を 1 件の決定（`curation-human`）に束ねて出す。mode を問わない。
 /// 同じ task に open・answered の決定があれば重ねない。回答で KB は変えない（記録のため）。
 fn request_human_decisions(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     items: &[curation::HumanDecision],
 ) -> Result<(), StoreError> {
@@ -1040,7 +1041,7 @@ fn request_human_decisions(
 }
 
 fn decision_path(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
 ) -> Result<Vec<task_core::DecisionPathEntry>, StoreError> {
     task_ops::tree::decision_path(store, task).map_err(|e| match e {
@@ -1050,7 +1051,7 @@ fn decision_path(
 }
 
 fn open_or_answered(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     key: &str,
 ) -> Result<Option<task_core::DecisionRow>, StoreError> {
@@ -1065,7 +1066,7 @@ fn open_or_answered(
 /// 旧方式で `AwaitingApproval` のまま残る行: 承認を待たずに、報告時の hash で再検証し、通れば適用する。
 /// 通らなければ `Stale`。開いたままの `curation-apply` の決定は取り下げる（もう答えを使わない）。
 fn apply_pending(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     knowledge_root: &Path,
     roots: &WorkspaceRoots,
     job: &CronJob,
@@ -1116,7 +1117,7 @@ fn apply_pending(
 /// 適用せず `Stale` にして `false`。push の失敗は適用を失敗にしない（報告と event に残す）。
 #[allow(clippy::too_many_arguments)]
 fn apply_validated(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     knowledge_root: &Path,
     artifacts: &Path,
     inputs: &Path,

@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 /// 予算を持つ task（自分か、`max_tokens` を持つ最も近い祖先）と、その上限。無ければ `None`。
 pub(super) fn budget_scope(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
 ) -> Result<Option<(TaskId, u64)>, StoreError> {
     let mut cur = task.clone();
@@ -29,7 +29,7 @@ pub(super) fn budget_scope(
 /// `root` とその子孫の全 run（reviewer・planner を含む）の `runs[].usage` の和。`exclude_run` の行は数えない
 /// （途中の run は呼び出し側が自分の途中値を足す）。終わった run は確定値、走っている他の run は途中値。
 pub(super) fn tree_tokens_used(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     root: TaskId,
     exclude_run: Option<&str>,
 ) -> Result<u64, StoreError> {
@@ -54,7 +54,7 @@ pub(super) fn tree_tokens_used(
 /// run の watch（`budget_scope` → `tree_tokens_used` → `TokenBudgetWatch::new`。ADR 2026-11-07-health-review-integration
 /// 付記 C2）。予算の無い task は `None`。`exclude_run` は途中値を自分で足す run。error の扱いは呼び出し側が決める。
 pub(crate) fn run_watch(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     exclude_run: Option<&str>,
 ) -> Result<Option<Arc<TokenBudgetWatch>>, StoreError> {
@@ -67,7 +67,7 @@ pub(crate) fn run_watch(
 
 /// 予算に達していれば `(used, max)`。予算の無い task は常に `None`。
 pub(super) fn exhausted(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
 ) -> Result<Option<(u64, u64)>, StoreError> {
     let watch = run_watch(store, task, None)?;

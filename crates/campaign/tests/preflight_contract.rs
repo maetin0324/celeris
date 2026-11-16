@@ -20,7 +20,6 @@ use celeris_campaign::{
 };
 use preflight_setup::*;
 use serde_json::{Map, Value, json};
-use task_core::TaskStore;
 
 /// 実 router で案件を作り（repo の既定は auto_integrate=false）、repo を足す。`auto_integrate` が真なら
 /// store で repo の欄を有効にする（API の切り替えは task-api の試験の範囲）。`(project id, detail body, repos body)`。

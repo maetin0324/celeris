@@ -2,7 +2,9 @@
 //! State is disposable; neither successful review nor scheduling writes canonical Markdown.
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, path::Path};
-use task_core::{GenreSpec, RoleSpec, Status, TaskId, TaskStore, knowledge as kb};
+use task_core::OrgDirectory;
+use task_core::TaskQuery;
+use task_core::{GenreSpec, RoleSpec, SqliteStore, Status, TaskId, knowledge as kb};
 use time::OffsetDateTime;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -230,7 +232,7 @@ const INSTRUCTIONS: &str = "CELERIS_KNOWLEDGE_GC\nOrganize ONLY the supplied exi
 /// interval (including failures), and pending work blocks the next attempt across daemon restarts.
 #[allow(clippy::too_many_arguments)]
 pub fn tick(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     root: &Path,
     state_path: &Path,
     workspace_roots: &task_core::local_machine::WorkspaceRoots,

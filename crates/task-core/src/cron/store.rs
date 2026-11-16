@@ -1,7 +1,6 @@
 //! ADR-0131 D1: `cron_jobs` / `cron_job_runs`（migration 0046）の読み書き。
 //!
-//! `TaskStore` の supertrait（`NotificationStore` 等と同じ形）なので、ディスパッチャの `Arc<dyn TaskStore>` から
-//! 使える。発火の規則（D2・D3）は持たず、行の読み書きだけを行う（規則は `task_ops::cron`）。
+//! `SqliteStore` の固有 method なので、ディスパッチャの `Arc<SqliteStore>` から使える。発火の規則（D2・D3）は持たず、行の読み書きだけを行う（規則は `task_ops::cron`）。
 //! 時刻は文字列比較せず、読んだ後に `OffsetDateTime` で比べる（RFC3339 の小数秒の有無で辞書順が崩れるため）。
 
 use rusqlite::{Connection, Row, TransactionBehavior, params};
@@ -21,51 +20,6 @@ pub struct CronJobRunUpdate {
     pub task_id: Option<TaskId>,
     pub detail: Option<String>,
     pub recorded_at: OffsetDateTime,
-}
-
-pub trait CronJobStore: Send + Sync {
-    /// job を 1 件足す。`name` が既にあれば `StoreError::InUse`（API は 409）。
-    fn cron_job_insert(&self, job: &CronJob) -> Result<(), StoreError>;
-    fn cron_job_get(&self, id: CronJobId) -> Result<Option<CronJob>, StoreError>;
-    fn cron_job_get_by_name(&self, name: &str) -> Result<Option<CronJob>, StoreError>;
-    /// 全 job（`name` 昇順）。
-    fn cron_job_list(&self) -> Result<Vec<CronJob>, StoreError>;
-    /// `id` の行の可変欄（`id`・`created_at` 以外）を書き換える。行が無ければ `Ok(false)`。
-    /// `name` が他の job と重なれば `StoreError::InUse`。
-    fn cron_job_update(&self, job: &CronJob) -> Result<bool, StoreError>;
-    /// job と履歴を消す（作った task は残る）。行が無ければ `Ok(false)`。
-    fn cron_job_delete(&self, id: CronJobId) -> Result<bool, StoreError>;
-    /// `enabled` で `next_fire_at <= now` の job（`next_fire_at` 昇順、同時刻は `name` 順）。
-    fn cron_job_due(&self, now: OffsetDateTime) -> Result<Vec<CronJob>, StoreError>;
-    /// 1 回の発火の記録: 履歴 `runs` を足し、job の `next_fire_at` と `updated_at` を書き換える（同じ
-    /// トランザクション）。`(job_id, scheduled_for, trigger)` が既にあれば何も書かず `StoreError::InUse`
-    /// （二重発火の最後の砦）。job が無ければ `StoreError::Invalid`。
-    fn cron_job_record(
-        &self,
-        job_id: CronJobId,
-        next_fire_at: Option<OffsetDateTime>,
-        updated_at: OffsetDateTime,
-        runs: &[CronJobRun],
-    ) -> Result<(), StoreError>;
-    /// 履歴 1 行を書き換える（`queued` を `created` / `skipped_overlap` に閉じる）。行が無ければ `Ok(false)`。
-    fn cron_job_run_update(
-        &self,
-        run_id: CronJobRunId,
-        update: &CronJobRunUpdate,
-    ) -> Result<bool, StoreError>;
-    /// 履歴（記録した順の新しい順）。`limit = None` なら全件。
-    fn cron_job_runs(
-        &self,
-        job_id: CronJobId,
-        limit: Option<usize>,
-    ) -> Result<Vec<CronJobRun>, StoreError>;
-    /// 溜まっている `queued` の行（高々 1 件の想定。複数あれば最も古いもの）。
-    fn cron_job_run_queued(&self, job_id: CronJobId) -> Result<Option<CronJobRun>, StoreError>;
-    /// 最後に task を作った行（`outcome = created` の最新。D2 の重ね掛け判定に使う）。
-    fn cron_job_run_last_created(
-        &self,
-        job_id: CronJobId,
-    ) -> Result<Option<CronJobRun>, StoreError>;
 }
 
 const JOB_COLUMNS: &str = "id, name, enabled, schedule, timezone, overlap, catch_up, template_json, \
@@ -351,46 +305,46 @@ pub fn cron_job_run_update_tx(
     Ok(n > 0)
 }
 
-impl CronJobStore for SqliteStore {
-    fn cron_job_insert(&self, job: &CronJob) -> Result<(), StoreError> {
+impl SqliteStore {
+    /// job を 1 件足す。`name` が既にあれば `StoreError::InUse`（API は 409）。
+    pub fn cron_job_insert(&self, job: &CronJob) -> Result<(), StoreError> {
         let conn = self.lock()?;
         cron_job_insert_tx(&conn, job)
     }
-
-    fn cron_job_get(&self, id: CronJobId) -> Result<Option<CronJob>, StoreError> {
+    pub fn cron_job_get(&self, id: CronJobId) -> Result<Option<CronJob>, StoreError> {
         self.with_read_conn(|conn| {
             Ok(query_jobs(conn, "WHERE id = ?1", &[&id.to_string()])?
                 .into_iter()
                 .next())
         })
     }
-
-    fn cron_job_get_by_name(&self, name: &str) -> Result<Option<CronJob>, StoreError> {
+    pub fn cron_job_get_by_name(&self, name: &str) -> Result<Option<CronJob>, StoreError> {
         self.with_read_conn(|conn| {
             Ok(query_jobs(conn, "WHERE name = ?1", &[&name])?
                 .into_iter()
                 .next())
         })
     }
-
-    fn cron_job_list(&self) -> Result<Vec<CronJob>, StoreError> {
+    /// 全 job（`name` 昇順）。
+    pub fn cron_job_list(&self) -> Result<Vec<CronJob>, StoreError> {
         self.with_read_conn(|conn| query_jobs(conn, "ORDER BY name ASC", &[]))
     }
-
-    fn cron_job_update(&self, job: &CronJob) -> Result<bool, StoreError> {
+    /// `id` の行の可変欄（`id`・`created_at` 以外）を書き換える。行が無ければ `Ok(false)`。
+    /// `name` が他の job と重なれば `StoreError::InUse`。
+    pub fn cron_job_update(&self, job: &CronJob) -> Result<bool, StoreError> {
         let conn = self.lock()?;
         cron_job_update_tx(&conn, job)
     }
-
-    fn cron_job_delete(&self, id: CronJobId) -> Result<bool, StoreError> {
+    /// job と履歴を消す（作った task は残る）。行が無ければ `Ok(false)`。
+    pub fn cron_job_delete(&self, id: CronJobId) -> Result<bool, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let deleted = cron_job_delete_tx(&tx, id)?;
         tx.commit()?;
         Ok(deleted)
     }
-
-    fn cron_job_due(&self, now: OffsetDateTime) -> Result<Vec<CronJob>, StoreError> {
+    /// `enabled` で `next_fire_at <= now` の job（`next_fire_at` 昇順、同時刻は `name` 順）。
+    pub fn cron_job_due(&self, now: OffsetDateTime) -> Result<Vec<CronJob>, StoreError> {
         let mut due: Vec<CronJob> = self.with_read_conn(|conn| {
             query_jobs(conn, "WHERE enabled = 1 AND next_fire_at IS NOT NULL", &[])
         })?;
@@ -402,8 +356,10 @@ impl CronJobStore for SqliteStore {
         });
         Ok(due)
     }
-
-    fn cron_job_record(
+    /// 1 回の発火の記録: 履歴 `runs` を足し、job の `next_fire_at` と `updated_at` を書き換える（同じ
+    /// トランザクション）。`(job_id, scheduled_for, trigger)` が既にあれば何も書かず `StoreError::InUse`
+    /// （二重発火の最後の砦）。job が無ければ `StoreError::Invalid`。
+    pub fn cron_job_record(
         &self,
         job_id: CronJobId,
         next_fire_at: Option<OffsetDateTime>,
@@ -435,8 +391,8 @@ impl CronJobStore for SqliteStore {
         tx.commit()?;
         Ok(())
     }
-
-    fn cron_job_run_update(
+    /// 履歴 1 行を書き換える（`queued` を `created` / `skipped_overlap` に閉じる）。行が無ければ `Ok(false)`。
+    pub fn cron_job_run_update(
         &self,
         run_id: CronJobRunId,
         update: &CronJobRunUpdate,
@@ -444,8 +400,8 @@ impl CronJobStore for SqliteStore {
         let conn = self.lock()?;
         cron_job_run_update_tx(&conn, run_id, update)
     }
-
-    fn cron_job_runs(
+    /// 履歴（記録した順の新しい順）。`limit = None` なら全件。
+    pub fn cron_job_runs(
         &self,
         job_id: CronJobId,
         limit: Option<usize>,
@@ -459,8 +415,8 @@ impl CronJobStore for SqliteStore {
             )
         })
     }
-
-    fn cron_job_run_queued(&self, job_id: CronJobId) -> Result<Option<CronJobRun>, StoreError> {
+    /// 溜まっている `queued` の行（高々 1 件の想定。複数あれば最も古いもの）。
+    pub fn cron_job_run_queued(&self, job_id: CronJobId) -> Result<Option<CronJobRun>, StoreError> {
         self.with_read_conn(|conn| {
             Ok(query_runs(
                 conn,
@@ -471,8 +427,8 @@ impl CronJobStore for SqliteStore {
             .next())
         })
     }
-
-    fn cron_job_run_last_created(
+    /// 最後に task を作った行（`outcome = created` の最新。D2 の重ね掛け判定に使う）。
+    pub fn cron_job_run_last_created(
         &self,
         job_id: CronJobId,
     ) -> Result<Option<CronJobRun>, StoreError> {

@@ -45,7 +45,7 @@ fn true_task(dir: &std::path::Path) -> Task {
 pub(super) fn setup(
     dir: &std::path::Path,
     pred_tree: Option<TreeInfo>,
-) -> (Arc<dyn TaskStore>, std::path::PathBuf, Task, Task, String) {
+) -> (Arc<SqliteStore>, std::path::PathBuf, Task, Task, String) {
     let repo = dir.join("repo");
     std::fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-b", "main"]);
@@ -53,7 +53,7 @@ pub(super) fn setup(
     git(&repo, &["add", "base"]);
     git(&repo, &["commit", "-m", "base"]);
 
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let now = OffsetDateTime::now_utc();
     let project = Project {
         auto_advance: false,

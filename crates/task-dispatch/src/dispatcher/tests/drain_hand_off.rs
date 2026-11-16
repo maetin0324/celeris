@@ -4,7 +4,7 @@
 use super::*;
 
 /// 検査 2 件（1 件目は走った印を残す・2 件目は出力を出す）を持つ葉 `a` だけの 1 段の v2 計画。
-fn adopt_checked_plan(store: &Arc<dyn TaskStore>, task_id: TaskId, marker: &Path) {
+fn adopt_checked_plan(store: &Arc<SqliteStore>, task_id: TaskId, marker: &Path) {
     let mut a = v2_wu("a", "build", &[]);
     a.checks = vec![
         task_core::WorkUnitCheck {
@@ -21,7 +21,7 @@ fn adopt_checked_plan(store: &Arc<dyn TaskStore>, task_id: TaskId, marker: &Path
     adopt_v2_plan(store, task_id, &["build"], vec![a]);
 }
 
-fn wu_a(store: &Arc<dyn TaskStore>, id: TaskId) -> task_core::WorkUnitRow {
+fn wu_a(store: &Arc<SqliteStore>, id: TaskId) -> task_core::WorkUnitRow {
     store
         .work_units_for(id)
         .unwrap()
@@ -30,7 +30,7 @@ fn wu_a(store: &Arc<dyn TaskStore>, id: TaskId) -> task_core::WorkUnitRow {
         .unwrap()
 }
 
-fn handed_off(store: &Arc<dyn TaskStore>, id: TaskId, run_id: &str) -> usize {
+fn handed_off(store: &Arc<SqliteStore>, id: TaskId, run_id: &str) -> usize {
     events_of(store, id)
         .iter()
         .filter(|e| matches!(e, Event::WorkUnitChecksHandedOff { run_id: r, key, .. } if r == run_id && key == "a"))
@@ -38,7 +38,7 @@ fn handed_off(store: &Arc<dyn TaskStore>, id: TaskId, run_id: &str) -> usize {
 }
 
 fn wu_check_starts(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     id: TaskId,
 ) -> Vec<(String, u32, u32, String, String)> {
     events_of(store, id)
@@ -68,7 +68,7 @@ async fn a_draining_instance_leaves_the_work_unit_checks_to_the_new_active() {
     let root = tempfile::tempdir().unwrap();
     let flags = tempfile::tempdir().unwrap();
     let marker = flags.path().join("checks-ran");
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     adopt_checked_plan(&store, task.id, &marker);
@@ -181,7 +181,7 @@ async fn a_draining_instance_does_not_start_the_phase_integration() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     adopt_v2_plan(&store, task.id, &["build"], vec![v2_wu("a", "build", &[])]);
@@ -214,7 +214,7 @@ async fn a_draining_instance_does_not_start_the_phase_integration() {
         wu_a(&store, task.id).status,
         task_core::WorkUnitStatus::Done
     );
-    let integrate = |s: &Arc<dyn TaskStore>| {
+    let integrate = |s: &Arc<SqliteStore>| {
         s.work_units_for(task.id)
             .unwrap()
             .into_iter()

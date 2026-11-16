@@ -20,8 +20,8 @@ use task_api::{
     GenreConfigView, ReviewerConfigView, RoleConfigView,
 };
 use task_core::{
-    Budget, Check, Criterion, Event, SqliteStore, Status, Task, TaskId, TaskKind, TaskStore, Tier,
-    WorkerHint, WorkspaceSpec,
+    Budget, Check, Criterion, Event, SqliteStore, Status, Task, TaskId, TaskKind, Tier, WorkerHint,
+    WorkspaceSpec,
 };
 use task_ops::daemon::{ClusterLive, CooldownView, DaemonSnapshot, InFlight, InFlightKind};
 use task_ops::view::ViewContext;
@@ -888,7 +888,7 @@ pub fn project_cos_thread(
         created_at: now,
         updated_at: now,
     };
-    task_core::TaskStore::project_create(store, &project).expect("project");
+    task_core::SqliteStore::project_create(store, &project).expect("project");
     store
         .cos_thread_open(
             &task_core::chat::ChatOpenThreadRequest {

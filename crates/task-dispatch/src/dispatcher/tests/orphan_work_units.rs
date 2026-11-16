@@ -24,7 +24,7 @@ impl WorkerAdapter for WaitingWorker {
 
 struct Fixture {
     dir: tempfile::TempDir,
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     task: TaskId,
     run: String,
     started: Arc<tokio::sync::Notify>,
@@ -33,7 +33,7 @@ struct Fixture {
 impl Fixture {
     fn new(v2: bool) -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> =
+        let store: Arc<SqliteStore> =
             Arc::new(SqliteStore::open(&dir.path().join("test.db")).unwrap());
         let task = new_task(dir.path(), Check::Reviewer, 2);
         store.insert(&task).unwrap();

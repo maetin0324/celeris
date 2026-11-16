@@ -90,7 +90,7 @@ fn child() {
             .map_err(|e| format!("{e:?}"))
     } else {
         let paths = Paths::under(&p.out.join("celeris.db"), &p.out);
-        let store: Arc<dyn TaskStore> = Arc::new(task_core::SqliteStore::open(&paths.db).unwrap());
+        let store: Arc<SqliteStore> = Arc::new(task_core::SqliteStore::open(&paths.db).unwrap());
         let transport = RouterTransport(router_at(&p.out));
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(4)

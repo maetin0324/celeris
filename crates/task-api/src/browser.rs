@@ -22,10 +22,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use task_core::BrowserTaskPolicy;
 use task_core::browser_wait::{
-    BrowserDecision, BrowserWait, BrowserWaitError, BrowserWaitStore, CredentialRecord,
-    HumanDecision, NewBrowserWait,
+    BrowserDecision, BrowserWait, BrowserWaitError, CredentialRecord, HumanDecision, NewBrowserWait,
 };
-use task_core::{Status, TaskId, TaskStore};
+use task_core::{Status, TaskId};
 use time::OffsetDateTime;
 use zeroize::Zeroizing;
 

@@ -285,8 +285,7 @@ mod backfill_tests {
     use super::*;
     use crate::undeclared_artifacts::backfill::{backfill_task, default_targets, latest_run_id};
     use task_core::{
-        Budget, Check, Criterion, SqliteStore, Task, TaskId, TaskKind, TaskStore, WorkerHint,
-        WorkspaceSpec,
+        Budget, Check, Criterion, SqliteStore, Task, TaskId, TaskKind, WorkerHint, WorkspaceSpec,
     };
     use time::OffsetDateTime;
 
@@ -371,7 +370,7 @@ mod backfill_tests {
         }
     }
 
-    fn produced(store: &dyn TaskStore, id: TaskId) -> Vec<(String, ArtifactRef)> {
+    fn produced(store: &SqliteStore, id: TaskId) -> Vec<(String, ArtifactRef)> {
         store
             .events_for(id)
             .unwrap()

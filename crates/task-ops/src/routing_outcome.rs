@@ -6,6 +6,7 @@
 //! 同じ `outcome_id` は二度追記しない（冪等）。events は追記のみ（書き換え・削除はしない）。
 
 use std::collections::{BTreeMap, BTreeSet};
+use task_core::TaskQuery;
 use task_core::model_router::feedback::{
     RewardNormalization, RoutingOutcome, pending_run_outcomes,
 };
@@ -13,16 +14,13 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use task_core::store::EventRow;
-use task_core::{Event, TaskId, TaskStore, estimate_cost_usd};
+use task_core::{Event, SqliteStore, TaskId, estimate_cost_usd};
 
 use crate::error::OpsError;
 
 /// task の run の outcome のうち、まだ追記されていないものを `routing_outcome_recorded` として追記する。
 /// 戻り値は今回追記した件数。
-pub fn record_routing_outcomes<S: TaskStore + ?Sized>(
-    store: &S,
-    task_id: TaskId,
-) -> Result<usize, OpsError> {
+pub fn record_routing_outcomes(store: &SqliteStore, task_id: TaskId) -> Result<usize, OpsError> {
     // 固定は campaign root から子孫へ継承される。online_update=false なら子でも追記しない。
     if store
         .task_routing_override(task_id)?
@@ -81,8 +79,8 @@ struct WindowSample {
 /// run の harness は同じ task の `routing_decided`（`record.harness`）から引き、無ければ task の
 /// `harness_id` を使う。どちらも無い run と genre の無い task は集計しない（無い値を捏造しない）。
 /// 窓は `window` 件の固定長スライド（時刻 → `seq` の降順）。LLM を呼ばない。
-pub fn route_windows<S: TaskStore + ?Sized>(
-    store: &S,
+pub fn route_windows(
+    store: &SqliteStore,
     since: OffsetDateTime,
     window: u64,
 ) -> Result<Vec<RouteWindow>, OpsError> {
@@ -206,10 +204,7 @@ fn parse_event_ts(ts: &str) -> Option<OffsetDateTime> {
 }
 
 /// 1 task の events を `ts`・global `id` 付きで全部読む（`event_rows_for` の page を繋ぐ）。
-fn event_rows<S: TaskStore + ?Sized>(
-    store: &S,
-    task_id: TaskId,
-) -> Result<Vec<EventRow>, OpsError> {
+fn event_rows(store: &SqliteStore, task_id: TaskId) -> Result<Vec<EventRow>, OpsError> {
     const BATCH: usize = 1_000;
     let mut out: Vec<EventRow> = Vec::new();
     let mut after: Option<u64> = None;

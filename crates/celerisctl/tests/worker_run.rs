@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use task_core::{
-    Budget, Check, Criterion, Event, SqliteStore, Status, Task, TaskId, TaskKind, TaskStore, Tier,
-    WorkerHint, WorkspaceSpec,
+    Budget, Check, Criterion, Event, SqliteStore, Status, Task, TaskId, TaskKind, Tier, WorkerHint,
+    WorkspaceSpec,
 };
 use time::OffsetDateTime;
 

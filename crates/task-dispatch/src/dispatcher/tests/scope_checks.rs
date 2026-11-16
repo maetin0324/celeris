@@ -65,7 +65,7 @@ async fn scope_checks_run_only_at_work_unit_time_and_not_after_integration() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     let mut a = v2_wu("a", "build", &[]);
@@ -140,7 +140,7 @@ async fn wu_env_checks_without_scope_flag_pass_at_work_unit_time_and_skip_integr
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     let mut a = v2_wu("a", "build", &[]);
@@ -202,7 +202,7 @@ async fn an_out_of_scope_write_fails_the_work_unit_check_and_prints_the_paths() 
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     let mut a = v2_wu("a", "build", &[]);
@@ -252,7 +252,7 @@ async fn an_out_of_scope_write_fails_the_work_unit_check_and_prints_the_paths() 
 #[tokio::test]
 async fn a_silent_failing_scope_check_gets_a_hint_in_its_detail() {
     let ws_dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(ws_dir.path(), "true");
     store.insert(&task).unwrap();
     let checks = vec![
@@ -327,7 +327,7 @@ fn scope_check_detail_appends_the_hint_only_for_silent_scope_checks() {
 #[test]
 fn integration_checks_for_phase_skips_scope_checks() {
     let repo = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     let mut a = v2_wu("a", "build", &[]);
@@ -473,7 +473,7 @@ async fn wu_base_dispatch_case(shared: bool, bad: bool, retry: bool) {
     let repo = tempfile::tempdir().unwrap();
     let initial = init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = parallel_task(repo.path(), "true");
     if shared {
         task.workspace = WorkspaceSpec::Local {
@@ -579,7 +579,7 @@ async fn wu_base_snapshot_prepare_failures_accumulate_and_never_start_worker() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = parallel_task(repo.path(), "true");
     task.workspace = WorkspaceSpec::Local {
         path: repo.path().into(),
@@ -652,7 +652,7 @@ async fn wu_check_log_outside_tree_shared_mode_scope_check_ignores_check_logs() 
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = parallel_task(repo.path(), "true");
     task.workspace = WorkspaceSpec::Local {
         path: repo.path().to_path_buf(),
@@ -723,7 +723,7 @@ async fn wu_check_log_outside_tree_shared_mode_after_integration() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = parallel_task(repo.path(), "true");
     task.workspace = WorkspaceSpec::Local {
         path: repo.path().to_path_buf(),
@@ -787,7 +787,7 @@ async fn wu_check_log_outside_tree_second_stage_ignores_integration_check_logs()
     init_test_repo(repo.path());
     ignore_runtime_but_not_check_logs(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     let mut a = v2_wu("a", "build", &[]);

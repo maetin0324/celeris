@@ -280,7 +280,7 @@ async fn general_cos_consult_delegate_creates_one_task_traced_to_the_origin_thre
             .expect("origin"),
         Some(thread.id.clone())
     );
-    let task = task_core::TaskStore::get(&env.store, task_id.parse().expect("task id"))
+    let task = task_core::SqliteStore::get(&env.store, task_id.parse().expect("task id"))
         .expect("get")
         .expect("task");
     let status = format!("{:?}", task.status);

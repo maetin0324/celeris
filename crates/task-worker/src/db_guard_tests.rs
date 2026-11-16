@@ -4,7 +4,7 @@ use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use task_core::{SqliteStore, TaskStore};
+use task_core::SqliteStore;
 
 use super::*;
 

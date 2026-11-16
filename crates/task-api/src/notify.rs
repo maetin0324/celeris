@@ -13,7 +13,7 @@ use axum::http::{HeaderMap, StatusCode};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use task_core::ProjectId;
-use task_core::notify::{Notification, NotificationKind, NotificationStore};
+use task_core::notify::{Notification, NotificationKind};
 
 use crate::admin::{AdminRequest, NotifyAdminError};
 use crate::handlers::{ApiResult, json_response, rfc3339};

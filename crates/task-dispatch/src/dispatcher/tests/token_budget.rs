@@ -22,7 +22,7 @@ const PASS_REVIEW: &str = r#"{"verdicts":[{"criterion":0,"pass":true,"reason":"o
 /// worker run では `UsageProgress` を `step` ずつ（累積値で）`steps` 回出し、最後まで止められなければ `done`。
 /// 2 行目の後に runs 索引の `usage_json` が途中値になっていることを、adapter 自身が store で確かめる。
 struct ProgressAdapter {
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     step: u64,
     steps: usize,
     emitted: Arc<AtomicUsize>,
@@ -80,7 +80,7 @@ fn budget_task(dir: &std::path::Path, max_tokens: u64, check: Check) -> Task {
     task
 }
 
-fn worker_finished(store: &Arc<dyn TaskStore>, task_id: TaskId) -> Vec<Event> {
+fn worker_finished(store: &Arc<SqliteStore>, task_id: TaskId) -> Vec<Event> {
     store
         .events_for(task_id)
         .unwrap()
@@ -90,7 +90,7 @@ fn worker_finished(store: &Arc<dyn TaskStore>, task_id: TaskId) -> Vec<Event> {
         .collect()
 }
 
-fn assert_runs_replay_clean(store: &Arc<dyn TaskStore>, task_id: TaskId) {
+fn assert_runs_replay_clean(store: &Arc<SqliteStore>, task_id: TaskId) {
     let event_rows = store.event_rows_for(task_id, None, usize::MAX).unwrap();
     let (_, replayed) = task_ops::replay::rebuild_work_units_and_runs(task_id, &event_rows);
     let stored = store.runs_for_task(task_id).unwrap();
@@ -110,7 +110,7 @@ fn assert_runs_replay_clean(store: &Arc<dyn TaskStore>, task_id: TaskId) {
 #[tokio::test]
 async fn token_budget_stops_run_midway() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let max = 250_000;
     let step = 100_000;
     let task = budget_task(dir.path(), max, Check::Reviewer);
@@ -268,7 +268,7 @@ async fn token_budget_exhausted_no_continuation_or_review() {
     // (b) done（300k）≥ 250k: reviewer を起こさない。
     for (first, label) in [(turns_exhausted(300_000), "turns"), (done(300_000), "done")] {
         let dir = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let task = budget_task(dir.path(), 250_000, Check::Reviewer);
         let task_id = task.id;
         store.insert(&task).unwrap();
@@ -301,7 +301,7 @@ async fn token_budget_exhausted_no_continuation_or_review() {
 
     // (c) 上限未満（300k < 1M）: continuation が 1 本起き、done（100k）の後に reviewer で done。
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = budget_task(dir.path(), 1_000_000, Check::Reviewer);
     let task_id = task.id;
     store.insert(&task).unwrap();
@@ -368,7 +368,7 @@ impl WorkerAdapter for FailingReviewerAdapter {
 #[tokio::test]
 async fn failed_reviewer_run_records_usage() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(dir.path(), Check::Reviewer, 0);
     let task_id = task.id;
     store.insert(&task).unwrap();
@@ -408,7 +408,7 @@ async fn failed_reviewer_run_records_usage() {
 #[tokio::test]
 async fn question_run_records_usage() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(dir.path(), Check::Reviewer, 0);
     let task_id = task.id;
     store.insert(&task).unwrap();

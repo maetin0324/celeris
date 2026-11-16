@@ -9,7 +9,7 @@
 use std::collections::BTreeSet;
 
 use task_core::store::SqliteStore;
-use task_core::{Check, Event, TaskStore};
+use task_core::{Check, Event};
 use task_ops::human_inbox::InboxKind;
 
 use super::{

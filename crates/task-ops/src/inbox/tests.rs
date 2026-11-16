@@ -1,9 +1,7 @@
 use super::*;
 use std::cell::Cell;
 use std::time::Duration as StdDuration;
-use task_core::{
-    Budget, Check, Criterion, DeliveryStore, SqliteStore, Task, TaskId, Tier, WorkspaceSpec,
-};
+use task_core::{Budget, Check, Criterion, SqliteStore, Task, TaskId, Tier, WorkspaceSpec};
 
 fn view_ctx() -> ViewContext {
     ViewContext {
@@ -378,7 +376,7 @@ fn inbox_questions_section_reports_question_asked_at_and_run_id() {
 /// 直接リンクできる。決定済みの approval は付かない（`pending = true` でしか引かないため）。
 #[test]
 fn inbox_questions_carry_the_id_of_their_pending_approval() {
-    use task_core::approval::{Approval, ApprovalId, ApprovalStore};
+    use task_core::approval::{Approval, ApprovalId};
 
     let store = SqliteStore::open_in_memory().expect("open store");
     let with_pending = sample_task(TaskKind::Execute, Status::Blocked);
@@ -2215,7 +2213,7 @@ fn inbox_task_snapshot_is_pass_scoped() {
 
 #[test]
 fn point_question_disappears_after_answer_and_defers_authorization() {
-    use task_core::approval::{Approval, ApprovalId, ApprovalStore};
+    use task_core::approval::{Approval, ApprovalId};
     let store = SqliteStore::open_in_memory().expect("store");
     let task = sample_task(TaskKind::Execute, Status::Blocked);
     store.insert(&task).expect("insert");

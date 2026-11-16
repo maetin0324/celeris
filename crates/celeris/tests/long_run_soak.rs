@@ -33,7 +33,7 @@ use support::script_compare::{
     Env, config_text, dist_bundle, hinted_task, start_policy, write_config,
 };
 use task_core::script_compare::ScriptMode;
-use task_core::{DaemonInstance, Event, InstanceRole, Status, TaskStore};
+use task_core::{DaemonInstance, Event, InstanceRole, SqliteStore, Status};
 use task_dispatch::Dispatcher;
 use task_dispatch::script_policy::PolicyScript;
 
@@ -272,7 +272,7 @@ fn holding_env() -> Env {
     }
 }
 
-fn register_instance(env_store: &dyn TaskStore, id: &str, pid: u32) {
+fn register_instance(env_store: &SqliteStore, id: &str, pid: u32) {
     let now = time::OffsetDateTime::now_utc();
     env_store
         .instance_register(&DaemonInstance {

@@ -246,7 +246,13 @@ impl SqliteStore {
         Ok(stored)
     }
 
-    pub(super) fn org_seed_impl(&self, nodes: &[OrgNode]) -> Result<(), StoreError> {
+    // ---- ADR-0033 D1: 組織（`org_nodes`）。DB が正で、設定は空のときの種蒔きにしか使わない ----
+    /// 監査 D-4: 設定からの種蒔き専用。`nodes` を渡された順に検証しながら**1 トランザクション**で書く
+    /// （後の要素は前の要素を `existing` に含めて検証できるので、`secretary` → `department` → `section`
+    /// の順に並んでいれば通る）。途中の 1 件でも `crate::org::validate_upsert` に落ちたら、それより前の
+    /// 分も含めて何も書かない（部分的に蒔かれた組織が残ると、次回起動時は `org_list` が空でなくなり
+    /// 補完されないため）。
+    pub fn org_seed(&self, nodes: &[OrgNode]) -> Result<(), StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut existing = Self::org_list_tx(&tx)?;
@@ -279,7 +285,9 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub(super) fn org_delete_impl(&self, id: &str) -> Result<bool, StoreError> {
+    /// 削除。そのノードを `assignee` に持つ未終了タスクがあれば `StoreError::InUse`、
+    /// 子ノードがあっても `StoreError::InUse`（木を宙ぶらりんにしない）。無い id は `Ok(false)`。
+    pub fn org_delete(&self, id: &str) -> Result<bool, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let deleted = Self::org_delete_tx(&tx, id)?;

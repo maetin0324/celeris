@@ -15,8 +15,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use task_core::{
-    Budget, Event, SqliteStore, Status, Task, TaskId, TaskKind, TaskStore, Tier, WorkerHint,
-    WorkspaceSpec,
+    Budget, Event, SqliteStore, Status, Task, TaskId, TaskKind, Tier, WorkerHint, WorkspaceSpec,
 };
 use time::OffsetDateTime;
 

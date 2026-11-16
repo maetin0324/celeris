@@ -133,18 +133,8 @@ pub struct Delivery {
     pub push_error: Option<String>,
 }
 
-pub trait DeliveryStore: Send + Sync {
-    fn delivery_get(&self, task_id: TaskId) -> Result<Option<Delivery>, StoreError>;
-    fn delivery_list(&self) -> Result<Vec<Delivery>, StoreError>;
-    /// Compare-and-swap。ワーカー判定と tick が古い状態を上書きしない。
-    fn delivery_save(
-        &self,
-        previous: Option<&Delivery>,
-        next: &Delivery,
-    ) -> Result<bool, StoreError>;
-}
-impl DeliveryStore for SqliteStore {
-    fn delivery_get(&self, task_id: TaskId) -> Result<Option<Delivery>, StoreError> {
+impl SqliteStore {
+    pub fn delivery_get(&self, task_id: TaskId) -> Result<Option<Delivery>, StoreError> {
         let json: Option<String> = self.with_read_conn(|conn| {
             Ok(conn
                 .query_row(
@@ -157,7 +147,7 @@ impl DeliveryStore for SqliteStore {
         json.map(|s| serde_json::from_str(&s).map_err(|e| StoreError::Invalid(e.to_string())))
             .transpose()
     }
-    fn delivery_list(&self) -> Result<Vec<Delivery>, StoreError> {
+    pub fn delivery_list(&self) -> Result<Vec<Delivery>, StoreError> {
         // ADR-0133 付記: 読むだけなので読み取り接続（tick ごとの通知同期が書き込み接続を取らない）。
         self.with_read_conn(|conn| {
             let mut stmt = conn.prepare("SELECT json FROM deliveries ORDER BY task_id")?;
@@ -166,7 +156,8 @@ impl DeliveryStore for SqliteStore {
                 .collect()
         })
     }
-    fn delivery_save(
+    /// Compare-and-swap。ワーカー判定と tick が古い状態を上書きしない。
+    pub fn delivery_save(
         &self,
         previous: Option<&Delivery>,
         next: &Delivery,

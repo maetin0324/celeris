@@ -3,14 +3,14 @@
 //!
 //! ADR 2026-11-10-taskstore-consumer-ports: 名簿と task の一覧だけを読む道具（`tools/org`・
 //! `tools/projects`・`resources` の組織と、`tools/tasks` の一覧）は、同じ接続を狭い trait で見る handle
-//! （`org_directory`・`node_sessions`・`task_query`）を `blocking_on` に渡す。接続は `store` の 1 つだけで、
+//! （`org_directory`・`task_query`）を `blocking_on` に渡す。接続は `store` の 1 つだけで、
 //! handle はその `Arc` の写し。store を使わない処理（知識ベースのファイル）は `run_blocking` で逃がす。
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use task_core::{NodeSessionStore, OrgDirectory, RoleSpec, SqliteStore, StoreOptions, TaskQuery};
+use task_core::{OrgDirectory, RoleSpec, SqliteStore, StoreOptions, TaskQuery};
 
 use crate::ratelimit::RateLimiter;
 use crate::tools::api::ApiTarget;
@@ -27,8 +27,6 @@ pub struct McpState {
     pub(crate) store: Arc<SqliteStore>,
     /// `store` と同じ接続を `OrgDirectory` として見る handle（新しい接続・状態ではない）。
     pub(crate) org_directory: Arc<dyn OrgDirectory>,
-    /// `store` と同じ接続を `NodeSessionStore` として見る handle（`org_list` の継続セッションの有無）。
-    pub(crate) node_sessions: Arc<dyn NodeSessionStore>,
     /// `store` と同じ接続を `TaskQuery` として見る handle（新しい接続・状態ではない）。
     pub(crate) task_query: Arc<dyn TaskQuery>,
     pub(crate) rate_limit_per_min: u32,
@@ -93,12 +91,10 @@ impl McpState {
         knowledge_root: Option<PathBuf>,
     ) -> Arc<Self> {
         let org_directory: Arc<dyn OrgDirectory> = store.clone();
-        let node_sessions: Arc<dyn NodeSessionStore> = store.clone();
         let task_query: Arc<dyn TaskQuery> = store.clone();
         Arc::new(Self {
             store,
             org_directory,
-            node_sessions,
             task_query,
             rate_limit_per_min,
             limiter: Mutex::new(RateLimiter::default()),
@@ -130,7 +126,7 @@ impl McpState {
         self.blocking_on(&self.store, f).await
     }
 
-    /// `handle`（`store` か、それを狭い trait で見る `org_directory`・`node_sessions`・`task_query`）を
+    /// `handle`（`store` か、それを狭い trait で見る `org_directory`・`task_query`）を
     /// 受ける同期の呼び出しをブロッキングスレッドへ逃がす。
     pub(crate) async fn blocking_on<P, T, F>(&self, handle: &Arc<P>, f: F) -> T
     where

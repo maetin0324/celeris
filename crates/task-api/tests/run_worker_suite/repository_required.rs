@@ -4,7 +4,7 @@ use crate::common;
 use common::*;
 use serde_json::{Value, json};
 use task_core::chat::{ChatOpenThreadRequest, ChatPostMessageRequest, ChatSendMode};
-use task_core::{Status, TaskId, TaskStore};
+use task_core::{Status, TaskId};
 use time::{Duration, OffsetDateTime};
 
 fn bearer(env: &TestEnv) -> String {

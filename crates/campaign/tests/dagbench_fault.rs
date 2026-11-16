@@ -29,7 +29,7 @@ use celeris_campaign::{
     },
 };
 use serde_json::{Value, json};
-use task_core::{Status, TaskId, TaskStore};
+use task_core::{SqliteStore, Status, TaskId};
 
 const SCENARIO: &str = "k2-mini";
 /// baseline は 1 DAG instance の実行器なので、両方式とも campaign 1 本の点で同じ条件を与える。
@@ -159,7 +159,7 @@ fn child_control() {
         }
         "celeris" => {
             let paths = celeris_paths(&dir);
-            let store: Arc<dyn TaskStore> =
+            let store: Arc<SqliteStore> =
                 Arc::new(task_core::SqliteStore::open(&paths.db).unwrap());
             let transport = RouterTransport(router_at(&dir));
             let rt = tokio::runtime::Builder::new_multi_thread()

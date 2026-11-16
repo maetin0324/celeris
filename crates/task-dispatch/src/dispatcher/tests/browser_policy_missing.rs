@@ -21,7 +21,7 @@ fn valid_ledger(dir: &std::path::Path) -> LedgerWatch {
 
 /// requirements 無しで起票した task に後から browser skill を足す（`PATCH` の skills 編集や、自動付与より前に
 /// 作られた task と同じ形）。起票時の自動付与は requirements が無いので何も付けない。
-fn browser_task_without_policy(store: &Arc<dyn TaskStore>, dir: &std::path::Path) -> Task {
+fn browser_task_without_policy(store: &Arc<SqliteStore>, dir: &std::path::Path) -> Task {
     let task = new_task(
         dir,
         Check::Command {
@@ -67,7 +67,7 @@ fn origin_policy(origin: &str) -> task_core::BrowserTaskPolicy {
 async fn browser_policy_missing_blocks_before_dispatch_without_waking_the_worker() {
     let dir = tempfile::tempdir().unwrap();
     let ledger_dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = browser_task_without_policy(&store, dir.path());
     let adapter = Arc::new(CountingBrowserAdapter {
         calls: AtomicUsize::new(0),
@@ -107,7 +107,7 @@ async fn browser_policy_missing_blocks_before_dispatch_without_waking_the_worker
 async fn browser_policy_missing_resumes_after_policy_put() {
     let dir = tempfile::tempdir().unwrap();
     let ledger_dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = browser_task_without_policy(&store, dir.path());
     let adapter = Arc::new(CountingBrowserAdapter {
         calls: AtomicUsize::new(0),
@@ -120,7 +120,7 @@ async fn browser_policy_missing_resumes_after_policy_put() {
     store
         .browser_task_policy_set(task.id, &origin_policy("https://app.example.com"))
         .unwrap();
-    let resumed = |store: &Arc<dyn TaskStore>| {
+    let resumed = |store: &Arc<SqliteStore>| {
         store.events_for(task.id).unwrap().iter().any(|(_, e)| {
             matches!(
                 e,
@@ -155,7 +155,7 @@ async fn browser_policy_missing_resumes_after_policy_put() {
 async fn browser_policy_missing_policy_outside_task_origins_blocks() {
     let dir = tempfile::tempdir().unwrap();
     let ledger_dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = new_task(
         dir.path(),
         Check::Command {
@@ -193,7 +193,7 @@ async fn browser_policy_missing_policy_outside_task_origins_blocks() {
 async fn browser_policy_missing_worker_rejection_is_not_infra_requeue() {
     let dir = tempfile::tempdir().unwrap();
     let ledger_dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     browser_org(store.as_ref(), &["https://grant-only.example.net"]);
     let mut task = new_task(
         dir.path(),

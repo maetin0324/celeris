@@ -26,7 +26,7 @@ use std::time::Instant;
 
 use serde_json::{Value, json};
 use support::script_compare::Env;
-use task_core::{Status, TaskStore};
+use task_core::Status;
 
 const SCHEMA: &str = "celeris.tick-scale-baseline/1";
 

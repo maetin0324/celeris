@@ -140,7 +140,7 @@ fn cluster(job_wait: task_core::cluster_job::ClusterJobWaitLimits) -> ClusterSpe
 
 /// 試験の組（store・dispatcher・task・アダプタ・poll の要求の控え）。
 type Setup = (
-    Arc<dyn TaskStore>,
+    Arc<SqliteStore>,
     Dispatcher,
     Task,
     Arc<ScriptedAdapter>,
@@ -152,7 +152,7 @@ fn setup(
     script: Vec<Terminal>,
     polls: Vec<task_worker::RemoteCommandOutput>,
 ) -> Setup {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir,
         Check::Command {
@@ -227,7 +227,7 @@ fn tick_starts_no_poll(d: &mut Dispatcher) {
     );
 }
 
-fn last_reason(store: &Arc<dyn TaskStore>, id: TaskId) -> Option<String> {
+fn last_reason(store: &Arc<SqliteStore>, id: TaskId) -> Option<String> {
     let events = store.events_for(id).unwrap();
     task_ops::phase_gate::last_transition_reason(&events).map(str::to_string)
 }
@@ -603,7 +603,7 @@ async fn a_wait_on_an_unknown_cluster_is_a_retryable_failure() {
     )));
 }
 
-fn inbox_questions(store: &Arc<dyn TaskStore>) -> Vec<TaskId> {
+fn inbox_questions(store: &Arc<SqliteStore>) -> Vec<TaskId> {
     let ctx = task_ops::view::ViewContext {
         workspace_roots: task_core::local_machine::WorkspaceRoots::new(
             PathBuf::from("/nonexistent"),
@@ -686,7 +686,7 @@ impl WorkerAdapter for TreeWaitAdapter {
 #[tokio::test]
 async fn a_leaf_unit_waits_alone_and_liveness_names_the_wait() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = compound_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -822,7 +822,7 @@ async fn a_leaf_unit_waits_alone_and_liveness_names_the_wait() {
 #[tokio::test]
 async fn a_leaf_unit_blocked_on_cluster_jobs_always_has_its_wait_row_after_a_halt() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = compound_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -885,7 +885,7 @@ fn failing_poller(d: &mut Dispatcher) -> Arc<StdMutex<usize>> {
     calls
 }
 
-async fn park(d: &mut Dispatcher, store: &Arc<dyn TaskStore>, id: TaskId) -> String {
+async fn park(d: &mut Dispatcher, store: &Arc<SqliteStore>, id: TaskId) -> String {
     tick_until(d, |_| {
         store.get(id).unwrap().unwrap().status == Status::Blocked
             && !store.cluster_job_waits_for_task(id).unwrap().is_empty()
@@ -896,7 +896,7 @@ async fn park(d: &mut Dispatcher, store: &Arc<dyn TaskStore>, id: TaskId) -> Str
         .clone()
 }
 
-fn finished_count(store: &Arc<dyn TaskStore>, id: TaskId) -> usize {
+fn finished_count(store: &Arc<SqliteStore>, id: TaskId) -> usize {
     store
         .events_for(id)
         .unwrap()
@@ -1263,7 +1263,7 @@ async fn partial_failure_resumes_v2_and_v3_work_units() {
         v3_plan(vec![stage("s1", false)], vec![leaf("a", "s1", &[])]),
     ] {
         let dir = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let root = compound_task(dir.path());
         store.create_task(&root, vec![]).unwrap();
         let adapter = Arc::new(TreeWaitAdapter {

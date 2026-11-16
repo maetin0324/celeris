@@ -625,7 +625,7 @@ fn workspace_can_be_switched_to_local_on_a_ready_task() {
 /// 質問の approval が閉じる（既存の「質問に答える」経路に相乗り）。
 #[test]
 fn a_blocked_unroutable_task_returns_to_ready_when_the_workspace_resolves_it() {
-    use task_core::approval::{Approval, ApprovalId, ApprovalStore};
+    use task_core::approval::{Approval, ApprovalId};
 
     let store = SqliteStore::open_in_memory().expect("store");
     let mut task = task_with(Status::Ready);

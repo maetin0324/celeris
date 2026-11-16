@@ -1779,7 +1779,7 @@ fn event_rows_for_returns_one_tasks_rows_with_ids_after_seq() {
     );
 }
 
-/// 受信箱の正本の読み出し `TaskStore::latest_event_rows(kind)`（ADR-0121 付記・ADR 2026-11-08-health-enforcement-loop
+/// 受信箱の正本の読み出し `SqliteStore::latest_event_rows(kind)`（ADR-0121 付記・ADR 2026-11-08-health-enforcement-loop
 /// D7.3）の不変条件: (1) 問い合わせは種類の部分 index `index` を使い、events を全件 SCAN しない。index が無い・式が
 /// migration の式と食い違うと SQLite は黙って events を全件読み、返る行は同じなので、行だけを比べる試験では検出
 /// できない。問い合わせと試験は同じ文字列 `events::latest_event_rows_sql(kind)` を使う。(2) task ごとに最新の 1 件だけを global `id` の
@@ -2503,7 +2503,7 @@ fn open_migrates_schema_5_db_to_the_current_version_and_reapplying_is_idempotent
 /// ADR-0034 D1）を開くと、空文字列の行が NULL になって `None` として読め、`messages.task_id` が増える。
 #[test]
 fn migration_0007_turns_the_empty_project_sentinel_into_null_and_adds_message_task_id() {
-    use crate::report::{ReportKind, ReportStore};
+    use crate::report::ReportKind;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("schema6.sqlite3");
     let report_id = crate::report::ReportId::new();
@@ -2582,7 +2582,7 @@ fn migration_0007_turns_the_empty_project_sentinel_into_null_and_adds_message_ta
 /// 使えるようになる（既存の行はそのまま）。2 回目に開いても 0008 は再適用されない。
 #[test]
 fn migration_0008_adds_the_notifications_table_to_a_schema_7_db() {
-    use crate::notify::{NotificationKind, NotificationStore};
+    use crate::notify::NotificationKind;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("schema7.sqlite3");
     {
@@ -4115,7 +4115,6 @@ fn fts5_availability_of_the_bundled_sqlite_is_recorded() {
 }
 #[test]
 fn migration_0019_resumes_notification_scan_from_the_existing_ledger() {
-    use crate::notify::NotificationStore;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("legacy.sqlite3");
     let last = OffsetDateTime::now_utc() - time::Duration::minutes(10);
@@ -4142,7 +4141,7 @@ fn migration_0019_resumes_notification_scan_from_the_existing_ledger() {
 /// `via` が足され、既存の行はそのまま（両方 `NULL`）読める。
 #[test]
 fn migration_0021_adds_retried_at_and_via_to_an_existing_knowledge_run() {
-    use crate::knowledge_run::{KnowledgeRunState, KnowledgeRunStore};
+    use crate::knowledge_run::KnowledgeRunState;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("schema20.sqlite3");
     let task_id = TaskId::new();

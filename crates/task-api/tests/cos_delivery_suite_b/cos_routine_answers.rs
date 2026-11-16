@@ -7,13 +7,13 @@ use crate::common;
 use common::cos_ops::{audit_events, cos_bearer, db};
 use common::*;
 use serde_json::{Value, json};
-use task_core::approval::{ApprovalStore, StandingRule, StandingRuleId};
+use task_core::approval::{StandingRule, StandingRuleId};
 use task_core::chat::triage::CosTriageSource;
 use task_core::decision::{
     CostOfReversal, DecisionKind, DecisionOption, DecisionOrigin, DecisionPathEntry,
     DecisionRaisedBy, DecisionRequest, DecisionStatus,
 };
-use task_core::{Event, Status, TaskKind, TaskStore};
+use task_core::{Event, Status, TaskKind};
 use time::OffsetDateTime;
 
 const ADR: &str = "agent-docs/adr/2026-10-28-cos-routine-delegated-answers.md";

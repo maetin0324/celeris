@@ -103,8 +103,8 @@ impl StatusLookup for NoDb {
     }
 }
 
-/// `dyn TaskStore` による lookup。
-pub struct StoreLookup<'a>(pub &'a dyn task_core::store::TaskStore);
+/// `SqliteStore` による lookup。
+pub struct StoreLookup<'a>(pub &'a task_core::store::SqliteStore);
 impl StatusLookup for StoreLookup<'_> {
     fn task_status(&self, task_id: &str) -> Option<Status> {
         let id: task_core::TaskId = task_id.parse().ok()?;

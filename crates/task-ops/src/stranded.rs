@@ -3,7 +3,7 @@ use std::{path::Path, process::Command};
 
 use serde::{Deserialize, Serialize};
 use task_core::{
-    RepoId, StoreError, TaskId, TaskRepoIntegrationState, TaskRepoIntegrationStatus, TaskStore,
+    RepoId, SqliteStore, StoreError, TaskId, TaskRepoIntegrationState, TaskRepoIntegrationStatus,
 };
 use time::OffsetDateTime;
 
@@ -169,7 +169,7 @@ fn release_contains(repository_path: &Path, branch_head: &str, release_sha: &str
 
 /// Explicit human disposition. Reasons are retained in the current row and append-only event log.
 pub fn discard(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
     repo_id: RepoId,
     reason: &str,
@@ -190,7 +190,7 @@ pub fn discard(
 /// [`discard`] の書き込みを `writes` に任せる。
 #[allow(clippy::too_many_arguments)]
 pub fn discard_via(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     writes: &dyn OpWrites,
     task_id: TaskId,
     repo_id: RepoId,
@@ -211,7 +211,7 @@ pub fn discard_via(
 }
 
 pub fn hold(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
     repo_id: RepoId,
     reason: &str,
@@ -232,7 +232,7 @@ pub fn hold(
 /// [`hold`] の書き込みを `writes` に任せる。
 #[allow(clippy::too_many_arguments)]
 pub fn hold_via(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     writes: &dyn OpWrites,
     task_id: TaskId,
     repo_id: RepoId,
@@ -253,7 +253,7 @@ pub fn hold_via(
 }
 
 pub fn reopen(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
     repo_id: RepoId,
     actor: &str,
@@ -264,7 +264,7 @@ pub fn reopen(
 
 /// [`reopen`] の書き込みを `writes` に任せる。
 pub fn reopen_via(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     writes: &dyn OpWrites,
     task_id: TaskId,
     repo_id: RepoId,
@@ -297,7 +297,7 @@ pub fn reopen_via(
 
 #[allow(clippy::too_many_arguments)]
 fn set_disposition(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     writes: &dyn OpWrites,
     task_id: TaskId,
     repo_id: RepoId,
@@ -348,13 +348,13 @@ pub enum MergeOutcome {
 }
 
 /// Merge the recorded task head into the configured default branch without rebasing.
-pub fn merge(store: &dyn TaskStore, input: &MergeRequest<'_>) -> Result<MergeOutcome, StoreError> {
+pub fn merge(store: &SqliteStore, input: &MergeRequest<'_>) -> Result<MergeOutcome, StoreError> {
     merge_via(store, &PlainWrites(store), input)
 }
 
 /// [`merge`] の状態の行の書き込みを `writes` に任せる。
 pub fn merge_via(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     writes: &dyn OpWrites,
     input: &MergeRequest<'_>,
 ) -> Result<MergeOutcome, StoreError> {
@@ -617,7 +617,7 @@ fn unchanged_integrated(
 /// Sweep candidates at the caller's injected timestamp. Held and discarded states are terminal
 /// until an explicit reopen operation; repeat scans only append events for actual state changes.
 pub fn sweep(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     records: &[BranchRecord],
     now: OffsetDateTime,
 ) -> Result<usize, StoreError> {
@@ -626,7 +626,7 @@ pub fn sweep(
 
 // Hook points keep interleavings deterministic in tests, without clocks or global hooks.
 fn sweep_inner(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     records: &[BranchRecord],
     now: OffsetDateTime,
     mut hook: impl FnMut(&BranchRecord, bool),

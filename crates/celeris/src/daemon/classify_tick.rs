@@ -11,7 +11,7 @@ use std::sync::Arc;
 use jev_classifier::{ClassifyInput, JevClassifier, JevError};
 use task_core::execution_plan::WorkUnitKind;
 use task_core::route_select::{ClassifierStatus, RoutingMode};
-use task_core::{Task, TaskStore, WorkUnitRow, runnable_work_units};
+use task_core::{SqliteStore, Task, WorkUnitRow, runnable_work_units};
 use task_dispatch::{ClassificationBoard, CredentialGate};
 
 use super::classify_stage::ClassificationStage;
@@ -70,7 +70,7 @@ impl ClassifyTick {
     /// mode は task ごとに解決する（task 欄 `routing_override` が config の `mode` より優先。ADR 2026-10-16-mlsys-measure-task-routing）:
     /// config が fixed でも decision_assisted に固定した task は分類し、config が decision_assisted でも fixed に
     /// 固定した task は分類しない。
-    pub(crate) async fn run(&self, store: &dyn TaskStore, mode: RoutingMode) -> usize {
+    pub(crate) async fn run(&self, store: &SqliteStore, mode: RoutingMode) -> usize {
         let mut tasks = match store.ready_tasks(WINDOW) {
             Ok(t) => t,
             Err(error) => {

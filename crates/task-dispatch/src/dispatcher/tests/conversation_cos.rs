@@ -9,7 +9,7 @@ async fn a_conversation_run_answers_in_messages_and_writes_its_memory() {
     let workspace_root = dir.path().join("workspaces");
     let memory_root = dir.path().join("memory");
     std::fs::create_dir_all(&workspace_root).unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
     // 先週覚えたこと。
     task_worker::MemoryDir::new(&memory_root)
@@ -116,7 +116,7 @@ async fn without_a_memory_dir_nothing_is_read_or_written() {
     let dir = tempfile::tempdir().unwrap();
     let workspace_root = dir.path().join("workspaces");
     std::fs::create_dir_all(&workspace_root).unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
     task_ops::conversation::start(
         store.as_ref(),
@@ -156,7 +156,7 @@ async fn a_failed_conversation_run_says_it_could_not_answer() {
     let dir = tempfile::tempdir().unwrap();
     let workspace_root = dir.path().join("workspaces");
     std::fs::create_dir_all(&workspace_root).unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
     task_ops::conversation::start(
         store.as_ref(),
@@ -196,7 +196,7 @@ async fn the_recent_turns_keep_the_past_but_drop_this_very_message() {
     let dir = tempfile::tempdir().unwrap();
     let workspace_root = dir.path().join("workspaces");
     std::fs::create_dir_all(&workspace_root).unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
     let first = task_ops::conversation::start(
         store.as_ref(),
@@ -294,7 +294,7 @@ async fn a_retried_conversation_run_answers_only_once() {
     let dir = tempfile::tempdir().unwrap();
     let workspace_root = dir.path().join("workspaces");
     std::fs::create_dir_all(&workspace_root).unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
     let started = task_ops::conversation::start(
         store.as_ref(),
@@ -344,7 +344,7 @@ async fn a_delegation_naming_other_departments_creates_children_and_drops_the_as
     let dir = tempfile::tempdir().unwrap();
     let workspace_root = dir.path().join("workspaces");
     std::fs::create_dir_all(&workspace_root).unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
     let task = assigned_task(&workspace_root, "t1", "research-survey");
     store.create_task(&task, vec![]).unwrap();
@@ -407,7 +407,7 @@ async fn a_delegation_inside_the_same_department_still_creates_children() {
     let dir = tempfile::tempdir().unwrap();
     let workspace_root = dir.path().join("workspaces");
     std::fs::create_dir_all(&workspace_root).unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
 
     let task = assigned_task(&workspace_root, "t2", "research-survey");
@@ -447,7 +447,7 @@ async fn a_conversation_run_cannot_delegate() {
     let dir = tempfile::tempdir().unwrap();
     let workspace_root = dir.path().join("workspaces");
     std::fs::create_dir_all(&workspace_root).unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
 
     let started = task_ops::conversation::start(
@@ -503,7 +503,7 @@ async fn a_conversation_run_turns_a_question_into_a_reply_without_an_approval() 
     let dir = tempfile::tempdir().unwrap();
     let workspace_root = dir.path().join("workspaces");
     std::fs::create_dir_all(&workspace_root).unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
 
     let started = task_ops::conversation::start(
@@ -549,7 +549,7 @@ fn conversation_runs_get_no_delegation_tools_but_get_the_addressee() {
     let dir = tempfile::tempdir().unwrap();
     let workspace_root = dir.path().join("workspaces");
     std::fs::create_dir_all(&workspace_root).unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
 
     let to_secretary = task_ops::conversation::start(
@@ -631,7 +631,7 @@ fn cos_conversations_carry_active_projects_but_not_frozen_milestones() {
     let dir = tempfile::tempdir().unwrap();
     let workspace_root = dir.path().join("workspaces");
     std::fs::create_dir_all(&workspace_root).unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
 
     let mut active = titled_project("進行中の案件");
@@ -722,7 +722,7 @@ fn a_continuing_cos_session_drops_the_full_preamble_and_a_fresh_one_keeps_it() {
     let dir = tempfile::tempdir().unwrap();
     let workspace_root = dir.path().join("workspaces");
     std::fs::create_dir_all(&workspace_root).unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
 
     let mut active = titled_project("進行中の案件");
@@ -824,7 +824,7 @@ fn run_extras_carry_the_projects_workspace_note() {
     let dir = tempfile::tempdir().unwrap();
     let workspace_root = dir.path().join("workspaces");
     std::fs::create_dir_all(&workspace_root).unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
 
     let now = OffsetDateTime::now_utc();
@@ -905,7 +905,7 @@ fn conversation_runs_get_the_nodes_own_work_genre_when_it_has_one() {
     let dir = tempfile::tempdir().unwrap();
     let workspace_root = dir.path().join("workspaces");
     std::fs::create_dir_all(&workspace_root).unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     for n in [
         org_node_of("secretary", None, OrgKind::Secretary, Some("secretary")),
         org_node_of("research", Some("secretary"), OrgKind::Department, None),
@@ -990,7 +990,7 @@ fn conversation_runs_get_the_nodes_own_work_genre_when_it_has_one() {
 #[tokio::test]
 async fn a_question_without_an_assignee_goes_to_the_secretary() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
     let q = new_task(
         dir.path(),
@@ -1022,7 +1022,7 @@ async fn standing_rules_for_everyone_and_the_assignee_reach_the_preamble() {
     let dir = tempfile::tempdir().unwrap();
     let workspace_root = dir.path().join("workspaces");
     std::fs::create_dir_all(&workspace_root).unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
 
     let now = OffsetDateTime::now_utc();
@@ -1101,7 +1101,7 @@ async fn standing_rules_for_everyone_and_the_assignee_reach_the_preamble() {
 /// 「更新の新しい順・案件優先・裏方（対話・まとめ・承認・レビュー）除外・最大 10 件」で集める。
 #[test]
 fn run_extras_recent_work_orders_by_project_then_recency_excludes_support_and_caps_at_ten() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
     let base = OffsetDateTime::from_unix_timestamp(1_760_000_000).unwrap();
 
@@ -1217,7 +1217,7 @@ fn run_extras_recent_work_orders_by_project_then_recency_excludes_support_and_ca
 /// CoS 以外の対話・対話でない run では何もしない。
 #[test]
 fn absorb_console_actions_executes_the_declared_actions_for_the_cos_only() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
 
     let dir = tempfile::tempdir().unwrap();
@@ -1328,7 +1328,7 @@ fn absorb_console_actions_executes_the_declared_actions_for_the_cos_only() {
 /// 書くはずだったものか、D3 の救済で回収されたものかを区別しない — それがこの救済の狙いそのもの）。
 #[test]
 fn absorb_console_actions_executes_actions_recovered_from_the_final_message() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
 
     let dir = tempfile::tempdir().unwrap();
@@ -1384,7 +1384,7 @@ fn absorb_console_actions_executes_actions_recovered_from_the_final_message() {
 /// 実行できなかった action を本文に足し、実行結果を `Message.metadata` に残す。
 #[test]
 fn record_conversation_reply_runs_actions_and_attaches_the_result() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
 
     let dir = tempfile::tempdir().unwrap();
@@ -1436,7 +1436,7 @@ fn record_conversation_reply_runs_actions_and_attaches_the_result() {
 /// （担当がいても、他に仕事があっても）。
 #[test]
 fn run_extras_recent_work_is_empty_for_ordinary_runs() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
     let base = OffsetDateTime::from_unix_timestamp(1_760_000_000).unwrap();
     let done = work_task("done work", Status::Done, "research-survey", None, base);
@@ -1604,7 +1604,7 @@ fn recent_work_outcome_reuses_the_report_wording_for_done_failed_and_blocked() {
 /// Phase 33 受け入れ 3: `recent_work` の各行に案件名・成果物名・終了時刻も乗る。
 #[test]
 fn run_extras_recent_work_carries_project_title_and_artifacts() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
     let base = OffsetDateTime::from_unix_timestamp(1_760_000_000).unwrap();
     let project = titled_project("Pluvio の新テーマ");
@@ -1680,7 +1680,7 @@ fn run_extras_recent_work_carries_project_title_and_artifacts() {
     assert_eq!(w.artifacts, vec!["survey.md".to_string()]);
 }
 
-fn coding_result(store: &Arc<dyn TaskStore>, dir: &std::path::Path, result: &str) -> String {
+fn coding_result(store: &Arc<SqliteStore>, dir: &std::path::Path, result: &str) -> String {
     let (project_id, _) = project_with_repos(store, &[("code", dir, task_core::RepoKind::Dir)]);
     let mut result: serde_json::Value = serde_json::from_str(result).unwrap();
     for action in result["actions"].as_array_mut().unwrap() {

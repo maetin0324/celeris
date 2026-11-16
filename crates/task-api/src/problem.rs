@@ -8,7 +8,7 @@ use axum::http::{HeaderName, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use serde::Serialize;
 use serde_json::{Map, Value};
-use task_core::{StoreError, TaskId, TaskStore};
+use task_core::{SqliteStore, StoreError, TaskId};
 use task_ops::OpsError;
 
 use crate::types::{Problem, ValidationError};
@@ -524,11 +524,7 @@ pub(crate) fn validation_field(message: &str) -> Option<&'static str> {
 
 /// `OpsError` → HTTP（api.md §1.5 の写像表）。`trigger` は操作名（`approve` 等）。`InvalidState` の
 /// `task_status` / `kind` は現在のタスクから読む。
-pub(crate) fn ops_problem(
-    store: &dyn TaskStore,
-    err: OpsError,
-    trigger: Option<&str>,
-) -> ApiProblem {
+pub(crate) fn ops_problem(store: &SqliteStore, err: OpsError, trigger: Option<&str>) -> ApiProblem {
     let detail = err.to_string();
     match err {
         OpsError::NotFound(id) => ApiProblem::task_not_found(id),

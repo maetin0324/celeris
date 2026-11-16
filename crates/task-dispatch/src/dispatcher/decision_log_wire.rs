@@ -16,7 +16,7 @@ use task_core::decision_log::{
 use task_core::model_router::feedback::{RequestSourceAttempt, RewardNormalization};
 use task_core::route_record::option_id;
 use task_core::route_select::{RouteAction, RouteRule};
-use task_core::{Event, RunRole, TaskStore, Usage};
+use task_core::{Event, RunRole, SqliteStore, Usage};
 
 use super::*;
 
@@ -388,7 +388,7 @@ pub(super) fn project_decision_log(
 /// 投影を書く。他の writer が入れた欄（campaign_id・arm・routing_mode・classifier・campaign_verdict など）は、
 /// こちらが持たないときに限り既存の値を残す。
 pub(super) fn write_decision_log(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     logs: Vec<RunLog>,
     now: OffsetDateTime,
 ) -> Result<(), task_core::StoreError> {
@@ -463,7 +463,7 @@ pub(super) fn write_decision_log(
 /// task の events を決定ログへ書く（run・消費・人の介入）と、CoS の実 turn を共有オーバーヘッドへ投影する。
 /// 冪等（何度呼んでも行・消費は増えない）。dispatcher の run 完了後と、通し試験が同じ経路を通る。
 pub fn record_task_decision_log(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
     now: OffsetDateTime,
 ) -> Result<(), DispatchError> {

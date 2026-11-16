@@ -6,7 +6,7 @@ use super::*;
 #[tokio::test]
 async fn three_work_units_run_in_order_and_complete_the_task() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -89,7 +89,7 @@ async fn three_work_units_run_in_order_and_complete_the_task() {
 #[tokio::test]
 async fn a_failing_work_unit_check_retries_the_work_unit_then_completes() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -168,7 +168,7 @@ async fn a_failing_work_unit_check_retries_the_work_unit_then_completes() {
 #[tokio::test]
 async fn a_failed_work_unit_triggers_a_replan_instead_of_failing_the_task() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -299,7 +299,7 @@ async fn a_failed_work_unit_triggers_a_replan_instead_of_failing_the_task() {
 #[tokio::test]
 async fn replan_delta_carries_done_units_without_restating_them() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -403,7 +403,7 @@ async fn replan_delta_carries_done_units_without_restating_them() {
 #[tokio::test]
 async fn a_plan_issue_checkpoint_triggers_a_replan_and_v2_is_adopted() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -506,7 +506,7 @@ async fn a_plan_issue_checkpoint_triggers_a_replan_and_v2_is_adopted() {
 #[tokio::test]
 async fn exceeding_the_replan_limit_blocks_with_a_question_that_a_human_can_answer() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -606,7 +606,7 @@ async fn exceeding_the_replan_limit_blocks_with_a_question_that_a_human_can_answ
 #[tokio::test]
 async fn a_work_unit_failure_at_the_retry_limit_fails_the_task_and_blocks_dependents() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -685,7 +685,7 @@ async fn a_work_unit_failure_at_the_retry_limit_fails_the_task_and_blocks_depend
 #[tokio::test]
 async fn a_work_unit_question_blocks_the_task_and_an_answer_resumes_it() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -750,7 +750,7 @@ async fn a_work_unit_question_blocks_the_task_and_an_answer_resumes_it() {
 #[tokio::test]
 async fn a_work_unit_yield_continues_with_a_checkpoint_scoped_to_that_work_unit() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -826,7 +826,7 @@ async fn a_work_unit_yield_continues_with_a_checkpoint_scoped_to_that_work_unit(
 #[tokio::test]
 async fn a_work_unit_stuck_running_after_a_restart_is_reconciled_on_lease_expiry() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = new_task(
         dir.path(),
         Check::Command {
@@ -897,7 +897,7 @@ async fn a_work_unit_stuck_running_after_a_restart_is_reconciled_on_lease_expiry
 #[tokio::test]
 async fn a_lease_expiry_requeue_closes_the_runs_row() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = new_task(
         dir.path(),
         Check::Command {
@@ -996,7 +996,7 @@ async fn a_lease_expiry_requeue_closes_the_runs_row() {
 #[tokio::test]
 async fn a_run_aborted_by_cancel_closes_its_runs_row() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -1167,7 +1167,7 @@ async fn stacked_unit_branches_from_its_dependency() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "test -f a.txt && test -f b.txt");
     store.insert(&task).unwrap();
     adopt_v2_plan(
@@ -1223,7 +1223,7 @@ async fn pause_after_design_blocks_with_awaiting_human() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = parallel_task(repo.path(), "test -f a.txt");
     task.routing = Some(task_core::TaskRouting {
         pause_after: task_core::PausePolicy::After {
@@ -1481,7 +1481,7 @@ async fn phase_integration_conflict_is_resolved_by_a_merge_repair_without_a_pers
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = parallel_task(repo.path(), "grep -q A README.md && grep -q B README.md");
     task.acceptance.push(Criterion {
         text: "両側の変更が残る".into(),
@@ -1590,7 +1590,7 @@ async fn phase_integration_request_is_the_only_inbox_item() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "grep -q A README.md && grep -q B README.md");
     store.insert(&task).unwrap();
     adopt_v2_plan(
@@ -1744,7 +1744,7 @@ async fn auto_resolve_migration_renumber_is_recorded_in_phase_integrated() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     adopt_v2_plan(
@@ -1792,7 +1792,7 @@ async fn integration_check_failure_is_repaired_when_classified() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     let scope_check = "git diff --quiet HEAD -- crates/";
@@ -1877,7 +1877,7 @@ async fn integration_check_failure_replans_when_not_classified() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     let mut b = v2_wu("b", "build", &[]);
@@ -1929,7 +1929,7 @@ async fn a_pending_human_replan_runs_the_planner_before_retrying_the_integration
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = parallel_task(repo.path(), "true");
     task.routing = Some(task_core::TaskRouting::default());
     store.insert(&task).unwrap();
@@ -2058,7 +2058,7 @@ async fn a_replan_reusing_a_removed_stage_key_is_rejected_as_an_invalid_plan() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = parallel_task(repo.path(), "true");
     task.routing = Some(task_core::TaskRouting::default());
     store.insert(&task).unwrap();
@@ -2144,7 +2144,7 @@ async fn replan_delta_after_an_integrated_phase_keeps_the_daemon_integration_uni
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     let plan = adopt_v2_plan(
@@ -2225,7 +2225,7 @@ async fn draining_dispatcher_hands_off_work_unit_checks_in_hand_to_the_new_activ
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
     let flags = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     adopt_gate_plan(&store, task.id, &flags.path().join("second"), "0.5");
@@ -2290,7 +2290,7 @@ async fn lease_expired_work_unit_run_with_a_result_json_is_finalised_instead_of_
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
     let flags = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     adopt_gate_plan(&store, task.id, &flags.path().join("second"), "30");
@@ -2375,7 +2375,7 @@ async fn result_json_finalisation_records_the_completion_end_to_end() {
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
     let flags = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     adopt_gate_plan(&store, task.id, &flags.path().join("second"), "0.2");
@@ -2443,7 +2443,7 @@ async fn result_json_finalisation_records_the_completion_end_to_end() {
 #[tokio::test]
 async fn a_finalisation_failure_is_recorded_as_an_infra_requeue() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = new_task(
         dir.path(),
         Check::Command {
@@ -2543,7 +2543,7 @@ async fn a_finalisation_failure_of_a_parallel_work_unit_resets_only_that_unit() 
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
     let flags = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     adopt_gate_plan(&store, task.id, &flags.path().join("second"), "0.2");
@@ -2609,7 +2609,7 @@ async fn terminal_work_unit_target_is_reclaimed_on_the_next_tick() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let scratch_dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = parallel_task(repo.path(), "true");
     task.status = Status::Blocked;
     store.insert(&task).unwrap();
@@ -2728,7 +2728,7 @@ async fn sibling_failure_waits_for_in_flight_units_before_replan() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     adopt_v2_plan(
@@ -2807,7 +2807,7 @@ async fn sibling_question_waits_for_in_flight_units_before_blocking() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     adopt_v2_plan(
@@ -2865,7 +2865,7 @@ async fn parallel_units_survive_dispatcher_restart() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "test -f a.txt && test -f b.txt");
     store.insert(&task).unwrap();
     adopt_v2_plan(
@@ -2945,7 +2945,7 @@ async fn an_interrupted_integration_is_redone_idempotently_after_restart() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "test -f a.txt && test -f b.txt");
     store.insert(&task).unwrap();
     adopt_v2_plan(
@@ -3037,7 +3037,7 @@ async fn cancel_stops_every_work_unit_run() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     adopt_v2_plan(
@@ -3107,7 +3107,7 @@ async fn ready_task_first_run_beats_a_second_parallel_unit() {
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
     let other_dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = parallel_task(repo.path(), "true");
     task.priority = 10;
     store.insert(&task).unwrap();
@@ -3157,7 +3157,7 @@ async fn shared_workspace_falls_back_to_serial() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = parallel_task(repo.path(), "true");
     task.workspace = WorkspaceSpec::Local {
         path: repo.path().to_path_buf(),
@@ -3197,7 +3197,7 @@ async fn shared_workspace_falls_back_to_serial() {
 #[tokio::test]
 async fn remote_workspace_falls_back_to_serial() {
     let plain = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let adapter = Arc::new(ParallelWuAdapter::new(Duration::from_millis(10)));
     let root = tempfile::tempdir().unwrap();
     let d = parallel_dispatcher(store.clone(), adapter, root.path(), 3, 3, 3);
@@ -3250,7 +3250,7 @@ async fn remote_workspace_falls_back_to_serial() {
 #[tokio::test]
 async fn replan_exhaustion_on_a_non_tree_task_asks_a_human_and_the_answer_replans() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -3340,7 +3340,7 @@ async fn integration_check_failure_without_replans_asks_with_the_failed_checks()
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     let mut b = v2_wu("b", "build", &[]);
@@ -3432,7 +3432,7 @@ fn human_git(dir: &std::path::Path, args: &[&str]) -> bool {
         .unwrap_or(false)
 }
 
-fn open_requests_of(store: &Arc<dyn TaskStore>, task_id: TaskId) -> Vec<task_core::EventRow> {
+fn open_requests_of(store: &Arc<SqliteStore>, task_id: TaskId) -> Vec<task_core::EventRow> {
     store
         .open_integration_requests()
         .unwrap()
@@ -3441,7 +3441,7 @@ fn open_requests_of(store: &Arc<dyn TaskStore>, task_id: TaskId) -> Vec<task_cor
         .collect()
 }
 
-fn inbox_integration_requests(store: &Arc<dyn TaskStore>, task_id: TaskId) -> usize {
+fn inbox_integration_requests(store: &Arc<SqliteStore>, task_id: TaskId) -> usize {
     let ctx = task_ops::view::ViewContext {
         workspace_roots: task_core::local_machine::WorkspaceRoots::new(
             PathBuf::from("/nonexistent"),
@@ -3477,7 +3477,7 @@ async fn an_integration_request_leaves_the_inbox_once_the_human_merged_and_answe
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "grep -q A README.md && grep -q B README.md");
     store.insert(&task).unwrap();
     adopt_v2_plan(
@@ -3578,7 +3578,7 @@ async fn a_clean_integration_closes_the_open_request_of_its_origin_as_integrated
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "test -f a.txt && test -f b.txt");
     store.insert(&task).unwrap();
     adopt_v2_plan(
@@ -3664,7 +3664,7 @@ async fn misplaced_wu_result_records_failure_without_infra_requeue() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     adopt_v2_plan(
@@ -3762,7 +3762,7 @@ async fn an_adapters_ok_terminal_is_not_replaced_by_a_dispatcher_misplaced_searc
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     adopt_v2_plan(
@@ -3818,7 +3818,7 @@ async fn an_adapters_ok_terminal_is_not_replaced_by_a_dispatcher_misplaced_searc
 
 /// ADR 2026-10-22-plan-issue-answer-replans: plan_issue の申告と人の回答の意図を回す計画（a → b → c）。`b` の check は
 /// `b_check`（計画に固定）。
-fn adopt_plan_with_b_check(store: &Arc<dyn TaskStore>, task_id: TaskId, b_check: &str) {
+fn adopt_plan_with_b_check(store: &Arc<SqliteStore>, task_id: TaskId, b_check: &str) {
     let mut b = wu_spec("b", &["a"]);
     b.checks = vec![task_core::WorkUnitCheck {
         cmd: b_check.to_string(),
@@ -3871,7 +3871,7 @@ fn plan_issue_reports(events: &[(u64, Event)]) -> usize {
 #[tokio::test]
 async fn a_plan_issue_answer_with_replan_intent_fixes_the_check_after_replans_are_exhausted() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -4006,7 +4006,7 @@ async fn a_plan_issue_answer_with_replan_intent_fixes_the_check_after_replans_ar
 #[tokio::test]
 async fn a_plan_issue_answer_with_resume_keeps_the_check_and_replan_needs_a_plan_issue() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {

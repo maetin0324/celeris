@@ -9,7 +9,7 @@ use task_core::integration_request::{
     DELIVERY_ORIGIN, INTEGRATE_TASK_ESCALATED, INTEGRATE_TASK_INTEGRATED, INTEGRATED_ANSWER,
     IntegrateTaskLink, IntegrationRequest, integrate_task_link,
 };
-use task_core::{Event, Status, StoreError, Task, TaskId, TaskStore, WorkspaceSpec};
+use task_core::{Event, SqliteStore, Status, StoreError, Task, TaskId, WorkspaceSpec};
 
 use crate::add::NewTaskSpec;
 
@@ -26,7 +26,7 @@ pub struct OpenRequest {
 }
 
 /// store の未回答の依頼を [`OpenRequest`] にする。
-pub fn open_requests(store: &dyn TaskStore) -> Result<Vec<OpenRequest>, StoreError> {
+pub fn open_requests(store: &SqliteStore) -> Result<Vec<OpenRequest>, StoreError> {
     Ok(store
         .open_integration_requests()?
         .into_iter()
@@ -44,7 +44,7 @@ pub fn open_requests(store: &dyn TaskStore) -> Result<Vec<OpenRequest>, StoreErr
 
 /// D2: 元の task の依頼 `request_id` の最新の結び。
 pub fn link_for(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
     request_id: &str,
 ) -> Result<Option<IntegrateTaskLink>, StoreError> {
@@ -62,7 +62,7 @@ pub fn offerable(origin: &str, link: Option<&IntegrateTaskLink>) -> bool {
 
 /// D4: 元の task に、integrate task が失敗して人に回した未回答の依頼があれば、その理由。
 pub fn escalated_reason(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
 ) -> Result<Option<String>, StoreError> {
     for open in open_requests(store)?
@@ -81,7 +81,7 @@ pub fn escalated_reason(
 }
 
 /// D1: 先頭のリポジトリの `[commands] check`（ローカルの repo だけ。読めなければ空）。
-pub fn repo_checks(store: &dyn TaskStore, task: &Task) -> Result<Vec<String>, StoreError> {
+pub fn repo_checks(store: &SqliteStore, task: &Task) -> Result<Vec<String>, StoreError> {
     let Some(first) = task.repos.first() else {
         return Ok(Vec::new());
     };
@@ -170,7 +170,7 @@ pub enum Outcome {
 
 /// D3: 結んだ integrate task の決着を記録する。done で `source_sha` が既定ブランチの祖先なら依頼を閉じ、
 /// failed / cancelled なら人に回す。それ以外（走行中・done だが未取り込み）は何もしない。
-pub fn settle(store: &dyn TaskStore) -> Result<Vec<Outcome>, StoreError> {
+pub fn settle(store: &SqliteStore) -> Result<Vec<Outcome>, StoreError> {
     let mut outcomes = Vec::new();
     for open in open_requests(store)? {
         let Some(IntegrateTaskLink::Active { task_id: worker }) =

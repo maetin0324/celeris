@@ -2,6 +2,7 @@
 //! browser ブランチの統合後に facade から移した（L1。`worker_task` と `review_spawn` が組み立てる）。
 
 use super::*;
+use task_core::OrgDirectory;
 use task_core::browser_wait::{consume_credential_approval, consume_operation_approval};
 
 /// run 途中のイベントをストアに追記するシンク。ワーカーの出力（heartbeat）があればリースを延長する（ADR-0010 D7）。
@@ -9,7 +10,7 @@ pub(super) struct StoreSink {
     pub(super) auto_leaf: Option<auto_leaf::AutoLeafWatch>,
     /// ADR 2026-10-20-mlsys-main2-fixes D1-3: 途中の累積 usage で run を止める watch（予算が無ければ `None`）。
     pub(super) token_budget: Option<Arc<token_budget::TokenBudgetWatch>>,
-    pub(super) store: Arc<dyn TaskStore>,
+    pub(super) store: Arc<SqliteStore>,
     pub(super) task_id: TaskId,
     pub(super) run_id: String,
     /// 延長後の ttl（`idle_timeout + lease_grace`）。
@@ -527,7 +528,7 @@ impl task_worker::BrowserControl for StoreSink {
 /// `reviewer run <review_run_id>: ` を付けて記録し、レビュー run の成果物は記録しない
 /// （`artifacts_for_run` が対象 run の成果物だけを返すようにするため）。
 pub(super) struct ReviewerSink {
-    pub(super) store: Arc<dyn TaskStore>,
+    pub(super) store: Arc<SqliteStore>,
     pub(super) task_id: TaskId,
     pub(super) subject_run_id: String,
     pub(super) review_run_id: String,

@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use common::*;
 use task_api::StreamTuning;
-use task_core::{Event, NoticeEvent, NoticeKind, NoticeStore, Status, TaskKind, TaskStore};
+use task_core::{Event, NoticeEvent, NoticeKind, Status, TaskKind};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

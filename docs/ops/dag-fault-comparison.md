@@ -220,7 +220,7 @@ DAGBENCH_SUITE_OUT=/absolute/fresh/output \
 `a2-restart-after-wait` は正式 harness から Supervisor / IpcExt に接続する。
 外部 job は controller と別 process にあり、停止中に observer が論理時計を進める。
 `durable_wait_saved` は seed で選んだ job の Waiting と job ID を読み直した境界。
-Celeris は TaskStore の cluster_job_waits_waiting、baseline は sync/rename 後の state.json を使う。
+Celeris は SqliteStore の cluster_job_waits_waiting、baseline は sync/rename 後の state.json を使う。
 親が再確認してから所有 controller だけを SIGKILL・回収し、外部完了の sync ack 後に再開する。
 保存前の旧 external_wait_started 停止は `a0-restart-before-wait-save` として分離する。
 旧 A2 raw は保存後停止の証拠として使用できない。

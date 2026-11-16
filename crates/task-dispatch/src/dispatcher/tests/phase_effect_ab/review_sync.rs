@@ -158,7 +158,7 @@ fn commit_file(repo: &Path, path: &str, content: &str) -> String {
 }
 
 /// reviewing の task（命令の検査 1 件 + reviewer 1 件）。store には入れない（入れた時点で review が始まる）。
-fn reviewing_task(repo: &Path, store: &Arc<dyn TaskStore>, title: &str) -> Task {
+fn reviewing_task(repo: &Path, store: &Arc<SqliteStore>, title: &str) -> Task {
     let (project, repos) = project_with_repos(store, &[("code", repo, RepoKind::Git)]);
     let mut task = git_task(
         repo,
@@ -221,7 +221,7 @@ async fn run_case(case: Case) -> (AbMetric, u32) {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let adapter = Arc::new(SyncScenarioAdapter::new());
     let mut d = worktree_dispatcher(store.clone(), adapter.clone(), ws.path(), None);
     d.test_hooks.ablation.skip_pre_review_sync = case == Case::NoPreReviewSync;

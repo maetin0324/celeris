@@ -18,7 +18,9 @@ use super::{
 use crate::local_machine::MAX_CONCURRENCY_RANGE;
 
 impl SqliteStore {
-    pub(super) fn local_settings_get_impl(&self) -> Result<Option<LocalSettings>, StoreError> {
+    // ---- ADR 2026-10-14-local-machine-settings D2/D5: ローカル設定の上書きと task ごとの root の固定 ----
+    /// ローカルマシンの上書き。行が無ければ `Ok(None)`（全欄を設定ファイルの値で解決する）。
+    pub fn local_settings_get(&self) -> Result<Option<LocalSettings>, StoreError> {
         self.with_read_conn(Self::local_settings_read)
     }
 
@@ -54,7 +56,9 @@ impl SqliteStore {
         .transpose()
     }
 
-    pub(super) fn local_settings_set_impl(
+    /// 上書きを全置換する（PUT）。全欄 `None` なら行を消す。同じ transaction で
+    /// `local_settings_events` に before/after を 1 行追記する。変更後の上書きを返す。
+    pub fn local_settings_set(
         &self,
         overrides: &LocalSettingsOverrides,
         actor: &str,
@@ -117,7 +121,8 @@ impl SqliteStore {
         Self::local_settings_read(conn)
     }
 
-    pub(super) fn local_settings_events_impl(&self) -> Result<Vec<LocalSettingsEvent>, StoreError> {
+    /// 監査の流れ（古い順）。
+    pub fn local_settings_events(&self) -> Result<Vec<LocalSettingsEvent>, StoreError> {
         self.with_read_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, ts, actor, before_json, after_json FROM local_settings_events \
@@ -147,7 +152,9 @@ impl SqliteStore {
         })
     }
 
-    pub(super) fn task_workspace_root_pin_impl(
+    /// task の足回りの root を固定する（`INSERT OR IGNORE`、1 回だけ）。既に固定があれば
+    /// それを変えない。固定された root（既存なら既存の値）を返す。
+    pub fn task_workspace_root_pin(
         &self,
         task_id: &TaskId,
         root: &str,
@@ -168,10 +175,8 @@ impl SqliteStore {
         Ok(pinned)
     }
 
-    pub(super) fn task_workspace_root_get_impl(
-        &self,
-        task_id: &TaskId,
-    ) -> Result<Option<String>, StoreError> {
+    /// task の固定された root。無ければ `Ok(None)`（この ADR 以前の task、またはまだ足回りが無い）。
+    pub fn task_workspace_root_get(&self, task_id: &TaskId) -> Result<Option<String>, StoreError> {
         let id = task_id.to_string();
         self.with_read_conn(|conn| {
             Ok(conn
@@ -188,7 +193,6 @@ impl SqliteStore {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::store::TaskStore;
 
     fn at(hour: i64) -> OffsetDateTime {
         OffsetDateTime::from_unix_timestamp(1_791_939_600 + hour * 3600).unwrap()

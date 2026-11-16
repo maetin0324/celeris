@@ -8,8 +8,8 @@ use std::path::Path;
 
 use task_core::{
     Budget, Check, Criterion, Project, ProjectId, ProjectRepo, ProjectStatus, RepoId, RepoKind,
-    RepoRef, RepoRun, SqliteStore, Status, Task, TaskId, TaskKind, TaskRepoIntegrationStatus,
-    TaskStore, Tier, WorkspaceSpec,
+    RepoRef, RepoRun, SqliteStore, Status, Task, TaskId, TaskKind, TaskRepoIntegrationStatus, Tier,
+    WorkspaceSpec,
 };
 use time::OffsetDateTime;
 

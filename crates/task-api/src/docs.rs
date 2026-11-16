@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use task_core::local_machine::WorkspaceRoots;
 use task_core::{
     OrgDirectory, Project, ProjectId, ProjectRepo, RepoId, RepoKind, RepoRun, SqliteStore, Task,
-    TaskQuery, TaskStore, WorkspaceSpec,
+    TaskQuery, WorkspaceSpec,
 };
 use task_ops::changes as ops_changes;
 use task_ops::docs::{self as ops_docs, DocCommit, PageEdit, PathError, WriteOutcome};

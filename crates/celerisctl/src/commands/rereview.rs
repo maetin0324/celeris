@@ -9,8 +9,10 @@
 use std::process::ExitCode;
 
 use clap::Args;
-use task_core::TaskStore;
+
 use task_ops::comment::rereview as ops_rereview;
+
+use task_core::SqliteStore;
 
 use crate::error::CliError;
 use crate::outln;
@@ -20,7 +22,7 @@ pub struct RereviewArgs {
     pub id: String,
 }
 
-pub fn run(store: &dyn TaskStore, args: RereviewArgs) -> Result<ExitCode, CliError> {
+pub fn run(store: &SqliteStore, args: RereviewArgs) -> Result<ExitCode, CliError> {
     let id = crate::error::parse_task_id(&args.id)?;
     let result = ops_rereview(store, id, None)?;
     outln!("{:?}", result.to);

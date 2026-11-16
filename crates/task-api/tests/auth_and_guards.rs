@@ -6,7 +6,7 @@ use axum::body::{Body, Bytes};
 use axum::http::Request;
 use common::*;
 use serde_json::json;
-use task_core::{SCHEMA_VERSION, TaskStore};
+use task_core::SCHEMA_VERSION;
 
 fn valid_task_body() -> serde_json::Value {
     // ADR-0067 D2: `human` チェックには artifacts か知識ベースの参照が要る。

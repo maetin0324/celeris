@@ -113,7 +113,7 @@ fn worker_adapter() -> Arc<dyn WorkerAdapter> {
 /// `(run_id, adapter, model, provider, account)` of a reviewer `WorkerStarted`.
 type ReviewerStart = (String, String, String, Option<String>, Option<String>);
 
-fn reviewer_started(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<ReviewerStart> {
+fn reviewer_started(store: &Arc<SqliteStore>, id: TaskId) -> Vec<ReviewerStart> {
     events_of(store, id)
         .into_iter()
         .filter_map(|e| match e {
@@ -144,7 +144,7 @@ async fn work_then_attempt_review(d: &mut Dispatcher, id: TaskId) {
 async fn route_select_dispatch_review_runs_on_the_selected_harness_model_and_account() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("db.sqlite");
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open(&db).unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open(&db).unwrap());
     let task = new_task(dir.path(), Check::Reviewer, 0);
     store.insert(&task).unwrap();
     let worker = worker_adapter();
@@ -229,7 +229,7 @@ async fn route_select_dispatch_review_runs_on_the_selected_harness_model_and_acc
 #[tokio::test]
 async fn route_select_dispatch_review_does_not_start_an_incompatible_reviewer() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(dir.path(), Check::Reviewer, 0);
     store.insert(&task).unwrap();
     let worker = worker_adapter();
@@ -277,7 +277,7 @@ async fn route_select_dispatch_review_does_not_start_an_incompatible_reviewer() 
 #[tokio::test]
 async fn route_select_dispatch_review_does_not_start_without_a_harness_adapter() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(dir.path(), Check::Reviewer, 0);
     store.insert(&task).unwrap();
     let worker = worker_adapter();

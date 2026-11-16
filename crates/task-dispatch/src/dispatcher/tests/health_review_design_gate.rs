@@ -67,7 +67,7 @@ pub(super) fn v3_plan_with(path: &str, brief: bool) -> String {
 }
 
 struct Outcome {
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     task: Task,
     seen: Vec<task_worker::RunContext>,
     _repo: tempfile::TempDir,
@@ -116,7 +116,7 @@ impl Outcome {
 async fn run(stub: &str, plans: Vec<String>, tree: bool) -> Outcome {
     let repo = checker_repo(stub);
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = compound_task(repo.path());
     task.workspace = WorkspaceSpec::Local {
         path: repo.path().to_path_buf(),

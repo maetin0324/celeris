@@ -17,6 +17,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use task_core::OrgDirectory;
 
 use task_core::knowledge::{
     self as kb, Confidence, FrontMatter, INBOX_DIR, INDEX_FILE, Index, IndexItem, PathError,
@@ -831,8 +832,8 @@ pub fn layout(root: &Path, projects: Option<Vec<kb::ProjectRef>>) -> kb::Layout 
 }
 
 /// Phase K-1: 案件の一覧を [`kb::ProjectRef`] にする（slug は [`task_core::Project::kb_slug`]）。
-pub fn project_refs<S: task_core::TaskStore + ?Sized>(
-    store: &S,
+pub fn project_refs(
+    store: &task_core::SqliteStore,
 ) -> Result<Vec<kb::ProjectRef>, task_core::StoreError> {
     Ok(store
         .project_list()?

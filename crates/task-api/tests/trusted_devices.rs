@@ -10,7 +10,6 @@ use common::*;
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::{Value, json};
 use task_api::browser::BrowserApiConfig;
-use task_core::TaskStore;
 use task_core::model::Event;
 use task_core::trusted_device::{TRUSTED_DEVICE_TTL_SECS, trusted_device_event_task_id};
 

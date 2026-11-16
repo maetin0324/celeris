@@ -52,7 +52,7 @@ impl WorkerAdapter for SkillCaptureAdapter {
 fn skill_names_for(assignee: &str) -> Vec<(TaskKind, Vec<String>)> {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let mut ui = org_node_of("ui-ux", Some("engineering"), OrgKind::Section, None);
         ui.profile.skills_mounts = UI_SKILLS.iter().map(|s| (*s).into()).collect();
         for node in [

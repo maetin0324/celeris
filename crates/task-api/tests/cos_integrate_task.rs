@@ -17,7 +17,7 @@ use task_core::chat::{ChatPostMessageRequest, ChatSendMode};
 use task_core::integration_request::{DELIVERY_ORIGIN, IntegrationRequest};
 use task_core::{
     Event, Project, ProjectId, ProjectStatus, RepoId, RepoKind, RepoRef, RepoRun, Status, Task,
-    TaskKind, TaskStore, Trigger, WorkspaceSpec,
+    TaskKind, Trigger, WorkspaceSpec,
 };
 use time::{Duration, OffsetDateTime};
 

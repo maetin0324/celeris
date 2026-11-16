@@ -32,7 +32,7 @@ use serde_json::{Value, json};
 use task_api::browser::BrowserApiConfig;
 use task_core::browser_isolation::{LiveSessionEntry as _, LiveSessions};
 use task_core::browser_live::LiveEvent;
-use task_core::{RunIndexRole, RunIndexStatus, RunRow, Status, Task, TaskKind, TaskStore};
+use task_core::{RunIndexRole, RunIndexStatus, RunRow, Status, Task, TaskKind};
 use task_worker::browser::launcher_cross_test_support::DaemonLauncherSession;
 use task_worker::browser_cdp_sink::CdpController;
 use task_worker::browser_launcher::live::{LiveTap, ScreencastFeed};

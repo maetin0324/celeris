@@ -7,8 +7,8 @@ use task_core::integration_request::{
 };
 use task_core::{
     ArtifactRef, Budget, Check, Criterion, Event, Project, ProjectId, ProjectStatus, RepoId,
-    RepoKind, RepoRef, RepoRun, SqliteStore, Status, Task, TaskId, TaskKind, TaskStore, Tier,
-    Trigger, WorkerHint, WorkspaceSpec,
+    RepoKind, RepoRef, RepoRun, SqliteStore, Status, Task, TaskId, TaskKind, Tier, Trigger,
+    WorkerHint, WorkspaceSpec,
 };
 
 use super::*;

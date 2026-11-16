@@ -419,7 +419,7 @@ candidates = [{{ source = "claude", model = "haiku" }}]
 
     fn worker_started_account(&self, task_id: &str) -> Option<String> {
         let store = task_core::SqliteStore::open(&self.root.join("celeris.sqlite3")).unwrap();
-        task_core::TaskStore::events_for(&store, task_id.parse().unwrap())
+        task_core::SqliteStore::events_for(&store, task_id.parse().unwrap())
             .unwrap()
             .into_iter()
             .find_map(|(_, e)| match e {
@@ -430,7 +430,7 @@ candidates = [{{ source = "claude", model = "haiku" }}]
 
     fn task_status(&self, task_id: &str) -> task_core::Status {
         let store = task_core::SqliteStore::open(&self.root.join("celeris.sqlite3")).unwrap();
-        task_core::TaskStore::get(&store, task_id.parse().unwrap())
+        task_core::SqliteStore::get(&store, task_id.parse().unwrap())
             .unwrap()
             .unwrap()
             .status

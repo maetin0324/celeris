@@ -9,7 +9,7 @@ mod common;
 
 use common::*;
 use serde_json::{Value, json};
-use task_core::{ListFilter, ListOrder, Status, Task, TaskKind, TaskStore};
+use task_core::{ListFilter, ListOrder, Status, Task, TaskKind};
 
 /// 案件を 1 件作り、その id を返す。
 async fn a_project(app: &axum::Router, title: &str) -> String {

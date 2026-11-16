@@ -231,7 +231,7 @@ mod tests {
 #[cfg(test)]
 mod store_tests {
     use super::*;
-    use crate::store::{SqliteStore, TaskStore};
+    use crate::store::SqliteStore;
 
     fn at(secs: i64) -> OffsetDateTime {
         OffsetDateTime::from_unix_timestamp(1_800_000_000 + secs).expect("ts")

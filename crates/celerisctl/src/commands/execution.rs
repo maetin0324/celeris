@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Args, Subcommand};
-use task_core::{ExecutionLimits, PlanOrigin, TaskStore};
+use task_core::{ExecutionLimits, PlanOrigin, SqliteStore};
 use time::OffsetDateTime;
 
 use crate::error::{CliError, parse_task_id};
@@ -134,13 +134,13 @@ fn effective_limits(config: Option<&PathBuf>) -> Result<ExecutionLimits, CliErro
     })
 }
 
-pub fn run_tree(store: &dyn TaskStore, command: TreeCommand) -> Result<ExitCode, CliError> {
+pub fn run_tree(store: &SqliteStore, command: TreeCommand) -> Result<ExitCode, CliError> {
     match command {
         TreeCommand::Adopt(args) => run_tree_adopt(store, args),
     }
 }
 
-fn run_tree_adopt(store: &dyn TaskStore, args: TreeAdoptArgs) -> Result<ExitCode, CliError> {
+fn run_tree_adopt(store: &SqliteStore, args: TreeAdoptArgs) -> Result<ExitCode, CliError> {
     let root = parse_task_id(&args.root)?;
     let task_id = parse_task_id(&args.task)?;
     let limits = effective_limits(args.config.as_ref())?;
@@ -173,7 +173,7 @@ pub struct ExecutionPlanShowArgs {
     pub task_id: String,
 }
 
-pub fn run(store: &dyn TaskStore, command: ExecutionCommand) -> Result<ExitCode, CliError> {
+pub fn run(store: &SqliteStore, command: ExecutionCommand) -> Result<ExitCode, CliError> {
     match command {
         ExecutionCommand::Plan { command } => match command {
             ExecutionPlanCommand::Set(args) => run_set(store, args),
@@ -184,10 +184,7 @@ pub fn run(store: &dyn TaskStore, command: ExecutionCommand) -> Result<ExitCode,
     }
 }
 
-fn run_phase_gate(
-    store: &dyn TaskStore,
-    args: ExecutionPhaseGateArgs,
-) -> Result<ExitCode, CliError> {
+fn run_phase_gate(store: &SqliteStore, args: ExecutionPhaseGateArgs) -> Result<ExitCode, CliError> {
     use task_ops::phase_gate::PhaseGateAction;
     let task_id = parse_task_id(&args.task_id)?;
     let action = match args.action {
@@ -220,7 +217,7 @@ pub(crate) fn read_plan_file(path: &PathBuf) -> Result<String, CliError> {
     }
 }
 
-fn run_set(store: &dyn TaskStore, args: ExecutionPlanSetArgs) -> Result<ExitCode, CliError> {
+fn run_set(store: &SqliteStore, args: ExecutionPlanSetArgs) -> Result<ExitCode, CliError> {
     let task_id = parse_task_id(&args.task_id)?;
     let text = read_plan_file(&args.file)?;
     let spec: task_core::ExecutionPlanSpec = serde_json::from_str(&text)
@@ -264,7 +261,7 @@ fn run_set(store: &dyn TaskStore, args: ExecutionPlanSetArgs) -> Result<ExitCode
     Ok(ExitCode::SUCCESS)
 }
 
-fn run_replan(store: &dyn TaskStore, args: ExecutionPlanReplanArgs) -> Result<ExitCode, CliError> {
+fn run_replan(store: &SqliteStore, args: ExecutionPlanReplanArgs) -> Result<ExitCode, CliError> {
     let task_id = parse_task_id(&args.task_id)?;
     let text = read_plan_file(&args.file)?;
     let spec: task_core::ExecutionPlanSpec = serde_json::from_str(&text)
@@ -294,7 +291,7 @@ fn run_replan(store: &dyn TaskStore, args: ExecutionPlanReplanArgs) -> Result<Ex
     Ok(ExitCode::SUCCESS)
 }
 
-fn run_show(store: &dyn TaskStore, args: ExecutionPlanShowArgs) -> Result<ExitCode, CliError> {
+fn run_show(store: &SqliteStore, args: ExecutionPlanShowArgs) -> Result<ExitCode, CliError> {
     let task_id = parse_task_id(&args.task_id)?;
     let Some(view) = task_ops::execution::active_plan(store, task_id)? else {
         outln!("{task_id}: no execution plan");

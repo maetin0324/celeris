@@ -10,7 +10,7 @@ use std::{
 
 use serde_json::{Value, json};
 use task_core::{
-    ModelCatalogStore, Tier,
+    Tier,
     model_catalog::{CatalogOverride, CatalogSource, DiscoveredModel},
 };
 

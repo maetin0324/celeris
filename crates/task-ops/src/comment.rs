@@ -17,7 +17,7 @@
 //! ここは状態とコメントだけを決定的に書く。LLM は呼ばない（DESIGN 原則 1）。
 
 use task_core::comment::{CommentAuthorKind, TaskComment};
-use task_core::{Event, Status, TaskId, TaskStore, Trigger};
+use task_core::{Event, SqliteStore, Status, TaskId, Trigger};
 use time::OffsetDateTime;
 
 use crate::error::OpsError;
@@ -63,7 +63,7 @@ pub struct CommentResult {
 /// `author_kind` はそこから決まる（ADR 2026-10-27-event-principals D3）。回答になったときの
 /// `Answered.by` も同じ主体。
 pub fn post_human_comment_as(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     author: Option<String>,
     body: String,
@@ -92,7 +92,7 @@ impl HumanCommentPlan {
 }
 
 pub fn plan_human_comment(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     author: Option<String>,
     body: String,
@@ -167,7 +167,7 @@ pub fn plan_human_comment(
 
 /// 書いた後の結果と後始末（`blocked` への回答は承認待ちを片付ける。別の書き込みで、冪等）。
 pub fn finish_human_comment(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     plan: HumanCommentPlan,
     outcome: Option<task_core::transition::Outcome>,
 ) -> Result<CommentResult, OpsError> {
@@ -206,7 +206,7 @@ pub fn finish_human_comment(
 /// 組織の「人」（ワーカーの `{"type":"comment"}` 行、秘書・lead が委譲先に書くもの）のコメント。
 /// **人を起こさない**（状態は変えない。通知は ADR-0037 の 5 種のまま）。
 pub fn post_node_comment(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     author: Option<String>,
     run_id: Option<String>,
@@ -220,7 +220,7 @@ pub fn post_node_comment(
 }
 
 /// そのタスクのコメント（古い順）。
-pub fn list_comments(store: &dyn TaskStore, id: TaskId) -> Result<Vec<TaskComment>, OpsError> {
+pub fn list_comments(store: &SqliteStore, id: TaskId) -> Result<Vec<TaskComment>, OpsError> {
     if store.get(id)?.is_none() {
         return Err(OpsError::NotFound(id));
     }
@@ -230,7 +230,7 @@ pub fn list_comments(store: &dyn TaskStore, id: TaskId) -> Result<Vec<TaskCommen
 /// ADR-0044 D2: `POST /tasks/{id}/reopen`。`done` / `failed` を `ready` に戻す（attempts は 0）。
 /// `cancelled` は worktree もブランチも消してあるので再開しない（409）。
 pub fn reopen(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     expected: Option<Status>,
 ) -> Result<TransitionResult, OpsError> {
@@ -263,7 +263,7 @@ where
 /// [`reopen`] の検証（読むだけ）。遷移前の状態を返す。書き込みは `Trigger::Reopen` の遷移
 /// （CoS の監査経路では `SqliteStore::apply_transition_tx`）。
 pub fn plan_reopen(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     expected: Option<Status>,
 ) -> Result<Status, OpsError> {
@@ -288,7 +288,7 @@ pub fn plan_reopen(
 
 /// 遷移を書いた後の後始末（冪等）と結果。
 pub fn finish_reopen(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     from: Status,
     outcome: task_core::transition::Outcome,
@@ -420,7 +420,7 @@ pub fn review_resync_resume_event(events: &[(u64, Event)]) -> Option<Event> {
 }
 
 pub fn rereview(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     expected: Option<Status>,
 ) -> Result<TransitionResult, OpsError> {
@@ -429,7 +429,7 @@ pub fn rereview(
 
 /// [`rereview`] の書き込みを `writes` に任せる。
 pub fn rereview_via(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     writes: &dyn crate::op_writes::OpWrites,
     id: TaskId,
     expected: Option<Status>,

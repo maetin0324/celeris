@@ -99,7 +99,7 @@ fn stub_pipeline_freezes_estimates_runs_aggregates_and_exports_features() {
     assert!(aggregate_out.join("evidence.md").is_file());
     let (store, _) = SqliteStore::open_client(&db).expect("store");
     assert!(
-        task_core::TaskStore::latest_routing_evidence(&store, "coding", "claude_code")
+        task_core::SqliteStore::latest_routing_evidence(&store, "coding", "claude_code")
             .expect("read evidence")
             .is_empty()
     );

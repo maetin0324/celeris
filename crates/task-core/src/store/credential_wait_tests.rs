@@ -5,7 +5,7 @@ use time::OffsetDateTime;
 
 use super::*;
 use crate::model::Status;
-use crate::store::task_store::TaskStore;
+use crate::store::SqliteStore;
 use crate::store::tests::sample_task;
 
 const SECRET: &str = "jev_api_key";

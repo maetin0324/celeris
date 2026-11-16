@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use super::{SqliteStore, TaskStore, tests::sample_task};
+use super::{SqliteStore, tests::sample_task};
 use crate::Status;
 
 #[test]

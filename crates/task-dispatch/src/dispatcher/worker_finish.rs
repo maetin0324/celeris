@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::{run_settlement, sessions};
+use task_core::OrgDirectory;
 
 fn repair_git(dir: &Path, args: &[&str]) -> Option<String> {
     let output = std::process::Command::new("git")
@@ -977,7 +978,7 @@ impl Dispatcher {
         {
             let model_for_quota = self.started_model_of(task_id, &run_id);
             let quota_event = self.routing.settle_quota(
-                &*self.store,
+                &self.store,
                 task_id,
                 &run_id,
                 current_wu.as_ref().map(|wu| wu.id.clone()),
@@ -1412,7 +1413,7 @@ impl Dispatcher {
 /// 持たないまま確定していた（E6 report 問題 3、`celerisctl replay --check` で
 /// `rebuild_work_units_and_runs` の usage と食い違う）。`usage` を引数で受け取り、そのまま渡す。
 pub(super) fn finish_reviewer_run_index(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     completed_review_run: &Option<String>,
     status: task_core::RunIndexStatus,
     usage: Option<task_core::Usage>,

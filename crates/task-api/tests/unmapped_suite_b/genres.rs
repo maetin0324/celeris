@@ -6,7 +6,7 @@ use crate::common;
 
 use common::*;
 use serde_json::json;
-use task_core::{GenreSpec, RoleSpec, TaskStore, Tier};
+use task_core::{GenreSpec, RoleSpec, Tier};
 
 fn env_with_coding_genre() -> TestEnv {
     TestEnv::with(EnvOptions {

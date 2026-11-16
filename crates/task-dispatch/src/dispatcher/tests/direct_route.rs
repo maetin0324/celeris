@@ -81,7 +81,7 @@ impl WorkerAdapter for RouteAdapter {
 }
 
 /// 秘書の下に部署 `engineering`（既定ハーネス coding）と課 `software` を仕込む。
-fn seed_coding_org(store: &Arc<dyn TaskStore>) {
+fn seed_coding_org(store: &Arc<SqliteStore>) {
     store
         .org_upsert(&org_node_of(
             "secretary",
@@ -107,7 +107,7 @@ fn seed_coding_org(store: &Arc<dyn TaskStore>) {
 /// 直行の条件を全部満たす task: 担当 `software`（coding）・repo 1 つ・command check あり・
 /// 規則表のスコアだけで compound/score になる features（文の長さに引きずられた compound を模す）。
 fn atomic_coding_task(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     root: &std::path::Path,
     repo_names: &[&str],
 ) -> Task {
@@ -155,7 +155,7 @@ fn atomic_coding_task(
 }
 
 fn route_dispatcher(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     adapter: Arc<RouteAdapter>,
     root: &std::path::Path,
     gate: task_core::GateMode,
@@ -165,7 +165,7 @@ fn route_dispatcher(
     d
 }
 
-fn recorded_route(store: &Arc<dyn TaskStore>, id: TaskId) -> task_core::RouteDecision {
+fn recorded_route(store: &Arc<SqliteStore>, id: TaskId) -> task_core::RouteDecision {
     store
         .get(id)
         .unwrap()
@@ -175,7 +175,7 @@ fn recorded_route(store: &Arc<dyn TaskStore>, id: TaskId) -> task_core::RouteDec
         .expect("route decision recorded")
 }
 
-fn routed_events(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<task_core::RouteDecision> {
+fn routed_events(store: &Arc<SqliteStore>, id: TaskId) -> Vec<task_core::RouteDecision> {
     events_of(store, id)
         .into_iter()
         .filter_map(|e| match e {
@@ -196,7 +196,7 @@ fn failed_rules(decision: &task_core::RouteDecision) -> Vec<String> {
 
 /// planned の task を planner が起きるまで回し、経路の記録と planner run を確かめる。
 async fn assert_planned_with_planner(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     adapter: &Arc<RouteAdapter>,
     d: &mut Dispatcher,
     id: TaskId,
@@ -229,7 +229,7 @@ async fn assert_planned_with_planner(
 #[tokio::test]
 async fn direct_route_fast_path_atomic_coding_task_skips_planner() {
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = atomic_coding_task(&store, root.path(), &["code"]);
     let id = task.id;
     store.insert(&task).unwrap();
@@ -321,7 +321,7 @@ async fn direct_route_fast_path_atomic_coding_task_skips_planner() {
 #[tokio::test]
 async fn direct_route_fast_path_cross_repo_uses_planner() {
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = atomic_coding_task(&store, root.path(), &["code", "bench"]);
     let id = task.id;
     store.insert(&task).unwrap();
@@ -339,7 +339,7 @@ async fn direct_route_fast_path_cross_repo_uses_planner() {
 #[tokio::test]
 async fn direct_route_fast_path_cross_department_uses_planner() {
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = atomic_coding_task(&store, root.path(), &["code"]);
     let id = task.id;
     store.insert(&task).unwrap();
@@ -371,7 +371,7 @@ async fn direct_route_fast_path_cross_department_uses_planner() {
 #[tokio::test]
 async fn direct_route_fast_path_foreign_skill_uses_planner() {
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = atomic_coding_task(&store, root.path(), &["code"]);
     task.skills = vec!["paper-survey".into()];
     let id = task.id;
@@ -390,7 +390,7 @@ async fn direct_route_fast_path_foreign_skill_uses_planner() {
 #[tokio::test]
 async fn direct_route_fast_path_human_approval_uses_planner() {
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = atomic_coding_task(&store, root.path(), &["code"]);
     task.acceptance.push(Criterion {
         text: "人が確かめる".into(),
@@ -412,7 +412,7 @@ async fn direct_route_fast_path_human_approval_uses_planner() {
 #[tokio::test]
 async fn direct_route_fast_path_human_explicit_compound_uses_planner() {
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = atomic_coding_task(&store, root.path(), &["code"]);
     task.routing = Some(task_core::TaskRouting {
         execution_hint: Some(task_core::ExecutionHintSpec {
@@ -437,7 +437,7 @@ async fn direct_route_fast_path_human_explicit_compound_uses_planner() {
 #[tokio::test]
 async fn direct_route_fast_path_shadow_records_only() {
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = atomic_coding_task(&store, root.path(), &["code"]);
     let id = task.id;
     store.insert(&task).unwrap();
@@ -467,7 +467,7 @@ async fn direct_route_fast_path_shadow_records_only() {
 #[tokio::test]
 async fn direct_route_fast_path_gate_off_records_nothing() {
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = atomic_coding_task(&store, root.path(), &["code"]);
     let id = task.id;
     store.insert(&task).unwrap();

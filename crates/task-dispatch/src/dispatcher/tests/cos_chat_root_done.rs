@@ -540,7 +540,6 @@ type PassParts = Vec<(&'static str, u64)>;
 /// delivery を持つ root の new 行を作り、待ちの pass を 3 回、delivery を Ready にした後の pass を 1 回まわす。
 /// 返すのは待ちの pass の内訳 3 つと、待ちが終わった pass の内訳。
 fn root_done_row_waiting_on_delivery(fillers: usize) -> (Vec<PassParts>, PassParts) {
-    use task_core::DeliveryStore;
     let mut f = fixture(false);
     f.tick(); // 導入: cursor は現在の末尾から
     f.d.orchestration

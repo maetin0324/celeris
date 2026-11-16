@@ -2,7 +2,7 @@
 //! `CELERIS_FEED_MEASURE_DB=<写しの path>` を与えたときだけ動く（先に写しの feed_* 表を空にしておく）。
 use std::time::Instant;
 
-use task_core::{NoticeStore, SqliteStore};
+use task_core::SqliteStore;
 use time::OffsetDateTime;
 
 #[test]
@@ -14,7 +14,7 @@ fn measure_sync_on_database_copy() {
     };
     let store = SqliteStore::open(std::path::Path::new(&path)).expect("open copy");
     let now = OffsetDateTime::now_utc();
-    let latest = task_core::TaskStore::latest_event_id(&store).expect("latest event id");
+    let latest = task_core::SqliteStore::latest_event_id(&store).expect("latest event id");
     let mut caught_up_round = None;
     for round in 0..200 {
         let before = store.lock_counts();

@@ -181,7 +181,7 @@ fn stub_repo(
 }
 
 fn work(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     review_run: &str,
     candidate: &CandidateRepo,
     out: &Path,
@@ -213,7 +213,7 @@ fn health_review_input_built_once_per_candidate() {
     let mut rep = report(true, vec![finding("new", false, 1)]);
     rep["policy"]["changed"] = false.into();
     let (_repo, candidate) = stub_repo("base", Some(rep), &log);
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut first_work = work(&store, "review-1", &candidate, scratch.path());
     let task_id = first_work.task_id;
     let first = build_health_input(&first_work).unwrap();
@@ -245,7 +245,7 @@ fn health_review_input_built_once_per_candidate() {
 /// candidate の event（`HealthReviewInputBuilt` の `definition_sha256` と `input`、candidate の
 /// `HealthReviewInputSkipped` の数）。
 fn built_and_skipped(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     task: TaskId,
     c: &CandidateRepo,
 ) -> (Vec<(String, HealthRepoInput)>, usize) {
@@ -293,7 +293,7 @@ fn health_review_input_policy_absent_builds_material_without_policy_values() {
         Some(report(true, vec![finding("new", false, 1)])),
         &log,
     );
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut w = work(&store, "review-1", &candidate, scratch.path());
     let first = build_health_input(&w).expect("absent repos get material");
     assert_eq!(log_lines(&log), 1);
@@ -352,7 +352,7 @@ fn health_review_input_reuse_is_bound_to_candidate_base_and_policy() {
     rep["policy"]["changed"] = false.into();
     let (repo, first) = stub_repo("absent", Some(rep.clone()), &log);
     let dir = repo.path();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut w = work(&store, "review-1", &first, scratch.path());
     let build = |w: &HealthInputWork| build_health_input(w).expect("material").repos.remove(0);
     let a = build(&w);
@@ -438,7 +438,7 @@ fn health_review_input_policy_absent_failed_report_is_not_reused() {
     let scratch = tempfile::tempdir().unwrap();
     let log = scratch.path().join("runs.log");
     let (_repo, candidate) = stub_repo("absent", None, &log);
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let w = work(&store, "review-1", &candidate, scratch.path());
     for n in 1..=2 {
         let input = build_health_input(&w).expect("material with an unknown policy");
@@ -463,7 +463,7 @@ fn health_review_input_failed_report_is_recorded_as_unknown() {
     let scratch = tempfile::tempdir().unwrap();
     let log = scratch.path().join("runs.log");
     let (_repo, candidate) = stub_repo("base", None, &log);
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let w = work(&store, "review-1", &candidate, scratch.path());
     let input = build_health_input(&w).unwrap();
     let findings = &input.repos[0].findings;
@@ -526,7 +526,7 @@ fn plain_repo() -> (tempfile::TempDir, CandidateRepo) {
 }
 
 /// `HealthReviewInputSkipped` の理由と policy の状態。
-fn skips(store: &Arc<dyn TaskStore>, task: TaskId) -> Vec<(String, Option<HealthPolicyState>)> {
+fn skips(store: &Arc<SqliteStore>, task: TaskId) -> Vec<(String, Option<HealthPolicyState>)> {
     store
         .events_for(task)
         .unwrap()
@@ -567,7 +567,7 @@ fn health_enforce_g2_bundled_checker_builds_material_and_policy_state() {
     };
     let (_repo, candidate) = plain_repo();
 
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let w = work(
         &store,
         "review-1",
@@ -590,7 +590,7 @@ fn health_enforce_g2_bundled_checker_builds_material_and_policy_state() {
     assert_eq!(build_health_input_with(&w, Some(&bundled)), Some(built));
     assert_eq!(log_lines(&log), 1, "the recorded material is reused");
 
-    let only: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let only: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut w = work(
         &only,
         "worker",
@@ -616,7 +616,7 @@ fn health_enforce_g2_bundled_checker_builds_material_and_policy_state() {
     );
 
     for policy_only in [false, true] {
-        let none: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let none: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let mut w = work(&none, "review-1", &candidate, &scratch.path().join("none"));
         w.policy_only = policy_only;
         assert_eq!(build_health_input_with(&w, None), None);
@@ -660,7 +660,7 @@ fn health_review_input_reuse_is_bound_to_the_checker_version() {
         },
     };
     let (_repo, candidate) = plain_repo();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let w = work(&store, "review-1", &candidate, scratch.path());
     let (old, new) = (bundled('b'), bundled('c'));
     let first = build_health_input_with(&w, Some(&old)).expect("material");
@@ -697,7 +697,7 @@ fn health_review_input_reuse_is_bound_to_the_checker_version() {
         (None, CHECKER_UNAVAILABLE),
         (Some(&unreadable), "review 方針を読めない"),
     ] {
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let w = work(&store, "review-1", &candidate, scratch.path());
         assert_eq!(build_health_input_with(&w, checker), None);
         let recorded = skips(&store, w.task_id);

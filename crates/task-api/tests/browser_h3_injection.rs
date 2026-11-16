@@ -16,11 +16,11 @@ use common::*;
 use ring::signature::KeyPair;
 use serde_json::{Value, json};
 use task_api::browser::{BrowserApiConfig, TrustedSitePolicy, UnixCredentialBrokerControl};
-use task_core::browser_wait::{BrowserWait, BrowserWaitStore, ConsumedBrowserApproval};
+use task_core::browser_wait::{BrowserWait, ConsumedBrowserApproval};
 use task_core::{
     ArtifactRef, BrowserAction, BrowserCapability, BrowserDomainMode, BrowserRun,
     BrowserTaskPolicy, EffectiveProfile, ProgressFields, SqliteStore, Status, Task, TaskId,
-    TaskKind, TaskStore,
+    TaskKind,
 };
 use task_worker::browser_credential::{CredentialSupervisor, UnixLeaseBroker};
 use task_worker::{AdapterError, EventSink, RunLimits, RunOutcome, RunRequest, WorkerAdapter};

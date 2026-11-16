@@ -6,7 +6,7 @@
 use axum::extract::{RawQuery, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
-use task_core::{TaskStore, TerminalSessionEvent};
+use task_core::TerminalSessionEvent;
 use time::OffsetDateTime;
 
 use crate::principal::{Caller, Principal};

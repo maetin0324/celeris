@@ -437,7 +437,7 @@ fn owner_checked(
     match owner_kind {
         ChatReferenceOwnerKind::Task => {
             let task = crate::query::parse_task_id(owner_id)?;
-            if task_core::TaskStore::get(store, task)
+            if task_core::SqliteStore::get(store, task)
                 .map_err(|e| ApiProblem::internal(e.to_string()))?
                 .is_none()
             {

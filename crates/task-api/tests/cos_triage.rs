@@ -10,7 +10,7 @@ use common::*;
 use serde_json::{Value, json};
 use task_core::chat::triage::CosTriageSource;
 use task_core::chat::{ChatPostMessageRequest, ChatSendMode};
-use task_core::{Event, Status, TaskKind, TaskStore};
+use task_core::{Event, Status, TaskKind};
 use time::{Duration, OffsetDateTime};
 
 const OPS: &str = "/api/v1/cos/operations";

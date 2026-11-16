@@ -12,7 +12,7 @@ struct ChildFixture {
     scratch: tempfile::TempDir,
     plain: tempfile::TempDir,
     logs: tempfile::TempDir,
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     parent_checkout: PathBuf,
     child: Task,
 }
@@ -24,7 +24,7 @@ fn child_fixture(check: Check) -> ChildFixture {
     let scratch = tempfile::tempdir().unwrap();
     let plain = tempfile::tempdir().unwrap();
     let logs = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut parent = git_task(
         repo.path(),
         None,
@@ -189,7 +189,7 @@ async fn target_env_integration_check_uses_the_task_scratch_target() {
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
     let scratch = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     let mut unit = v2_wu("a", "build", &[]);

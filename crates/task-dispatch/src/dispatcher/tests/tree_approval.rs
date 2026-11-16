@@ -69,7 +69,7 @@ impl WorkerAdapter for ScriptAdapter {
 
 /// 決定を待って止めた仕事・承認待ちの木は `idle` にならないことがある。run・判定・統合が 50 tick 続けて無ければ
 /// 落ち着いたとみなす（tree_gate / tree_decisions と同じ）。
-async fn run_until_quiet(d: &mut Dispatcher, store: &Arc<dyn TaskStore>, max_ticks: usize) {
+async fn run_until_quiet(d: &mut Dispatcher, store: &Arc<SqliteStore>, max_ticks: usize) {
     let mut quiet = 0;
     for _ in 0..max_ticks {
         let r = d.tick().unwrap();
@@ -117,7 +117,7 @@ fn with_decisions(plan: String, decisions: Vec<serde_json::Value>) -> String {
     value.to_string()
 }
 
-fn seed_secretary(store: &Arc<dyn TaskStore>) {
+fn seed_secretary(store: &Arc<SqliteStore>) {
     let now = OffsetDateTime::now_utc();
     store
         .org_upsert(&OrgNode {
@@ -135,13 +135,13 @@ fn seed_secretary(store: &Arc<dyn TaskStore>) {
         .unwrap();
 }
 
-fn plan_approval(store: &Arc<dyn TaskStore>, id: TaskId) -> Option<Vec<String>> {
+fn plan_approval(store: &Arc<SqliteStore>, id: TaskId) -> Option<Vec<String>> {
     let task = store.get(id).unwrap().unwrap();
     let events = store.events_for(id).unwrap();
     task_ops::plan_gate::latest_plan_approval(&task, &events).map(|i| i.reasons)
 }
 
-fn reports_of(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<task_core::report::Report> {
+fn reports_of(store: &Arc<SqliteStore>, id: TaskId) -> Vec<task_core::report::Report> {
     store
         .report_list(&task_core::ReportFilter {
             task_id: Some(id),
@@ -150,7 +150,7 @@ fn reports_of(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<task_core::report::
         .unwrap()
 }
 
-fn stalls(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<(String, String)> {
+fn stalls(store: &Arc<SqliteStore>, id: TaskId) -> Vec<(String, String)> {
     store
         .events_for(id)
         .unwrap()
@@ -162,7 +162,7 @@ fn stalls(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<(String, String)> {
         .collect()
 }
 
-fn stall_notifications(store: &Arc<dyn TaskStore>) -> Vec<task_core::notify::Notification> {
+fn stall_notifications(store: &Arc<SqliteStore>) -> Vec<task_core::notify::Notification> {
     store
         .notification_pending()
         .unwrap()
@@ -217,7 +217,7 @@ async fn each_approval_trigger_holds_the_root_plan() {
     ];
     for (name, plan, reasons) in cases {
         let dir = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         seed_secretary(&store);
         let root = root_task(dir.path());
         let root_id = root.id;
@@ -284,7 +284,7 @@ async fn each_approval_trigger_holds_the_root_plan() {
 async fn approve_replan_and_withdraw_have_their_effects() {
     // approve。
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = root_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -334,7 +334,7 @@ async fn approve_replan_and_withdraw_have_their_effects() {
 
     // replan（note 必須）。v2 は条件を持たないので承認なしで進み、報告が 1 件残る。
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_secretary(&store);
     let root = root_task(dir.path());
     let root_id = root.id;
@@ -400,7 +400,7 @@ async fn approve_replan_and_withdraw_have_their_effects() {
 
     // withdraw。
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = root_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -432,7 +432,7 @@ async fn approve_replan_and_withdraw_have_their_effects() {
 #[tokio::test]
 async fn small_root_plan_proceeds_with_notice() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_secretary(&store);
     let root = root_task(dir.path());
     let root_id = root.id;
@@ -521,7 +521,7 @@ async fn small_root_plan_proceeds_with_notice() {
 #[tokio::test]
 async fn liveness_flags_only_unexplained_stalls() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     // held: 決定 h1 を待つ leaf b（承認済み）。awaiting: 承認待ちの root。
     let held = root_task(dir.path());
     let held_id = held.id;
@@ -564,7 +564,7 @@ async fn liveness_flags_only_unexplained_stalls() {
 
     // 子が消えた親（子を待つ unit の `child_task_id` が存在しない task を指す）。
     let dir3 = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = root_task(dir3.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -664,7 +664,7 @@ async fn liveness_flags_only_unexplained_stalls() {
 #[tokio::test]
 async fn human_replan_whose_first_attempt_is_invalid_gets_its_second_attempt() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = root_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -785,7 +785,7 @@ async fn human_replan_whose_first_attempt_is_invalid_gets_its_second_attempt() {
 #[tokio::test]
 async fn tree_disabled_is_unchanged() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_secretary(&store);
     let task = root_task(dir.path());
     let task_id = task.id;

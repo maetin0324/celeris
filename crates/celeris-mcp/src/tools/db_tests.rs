@@ -1,7 +1,7 @@
 //! `db_query` / `db_schema` の決定的な試験（一時ファイルの DB。外部ネットワークに出ない）。
 
 use super::*;
-use task_core::{McpClient, McpClientStore, SqliteStore};
+use task_core::{McpClient, SqliteStore};
 use time::OffsetDateTime;
 
 struct Db {

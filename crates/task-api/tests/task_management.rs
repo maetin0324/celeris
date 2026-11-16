@@ -5,7 +5,7 @@ mod common;
 
 use common::*;
 use serde_json::{Value, json};
-use task_core::{Event, Status, Task, TaskId, TaskKind, TaskStore};
+use task_core::{Event, Status, Task, TaskId, TaskKind};
 
 /// `running` のタスクは**必ずリースを持つ**（`acquire_lease` がそう作る）。割り込みの
 /// `WorkerFinished` はそのリースの run にだけ付くので、テストでも同じ形にする。
@@ -744,7 +744,7 @@ async fn the_timeline_lists_the_integrations_of_this_task() {
 /// `scheduled`（未適用）では件数を出さず、適用されれば `ingested`/`inbox`/`discarded` を出す。
 #[tokio::test]
 async fn the_timeline_shows_the_knowledge_maintenance_run() {
-    use task_core::{KnowledgeRunState, KnowledgeRunStore, KnowledgeRunSummary};
+    use task_core::{KnowledgeRunState, KnowledgeRunSummary};
 
     let env = admin_env();
     let app = env.router();

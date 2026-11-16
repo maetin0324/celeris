@@ -56,7 +56,7 @@ pub(super) fn jev_pick() -> RoutePick {
 struct Env {
     _dir: tempfile::TempDir,
     secrets: PathBuf,
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
 }
 
 impl Env {
@@ -64,7 +64,7 @@ impl Env {
         let dir = tempfile::tempdir().unwrap();
         let secrets = dir.path().join("secrets");
         std::fs::create_dir_all(&secrets).unwrap();
-        let store: Arc<dyn TaskStore> =
+        let store: Arc<SqliteStore> =
             Arc::new(SqliteStore::open(&dir.path().join("db.sqlite")).unwrap());
         Env {
             _dir: dir,

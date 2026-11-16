@@ -56,7 +56,7 @@ impl WorkerAdapter for KnowledgeUsingAdapter {
 #[tokio::test]
 async fn knowledge_ops_counted_at_the_entry_are_stored_on_the_worker_run_metrics() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {

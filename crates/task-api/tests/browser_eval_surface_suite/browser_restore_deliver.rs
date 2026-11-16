@@ -23,7 +23,7 @@ use serde_json::{Value, json};
 use task_api::browser::BrowserApiConfig;
 use task_api::browser_identity::{IdentityRegisterInput, IdentityService};
 use task_core::browser_isolation::LiveSessions;
-use task_core::{RunIndexRole, RunIndexStatus, RunRow, Status, TaskKind, TaskStore};
+use task_core::{RunIndexRole, RunIndexStatus, RunRow, Status, TaskKind};
 use task_worker::browser_cdp_sink::CdpController;
 use task_worker::browser_runtime::{RestoreAdmission, RuntimeSpec, UsernsMode};
 use task_worker::browser_supervisor::{Supervisor, SupervisorOptions};

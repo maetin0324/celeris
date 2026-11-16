@@ -87,7 +87,7 @@ fn browser_task(dir: &std::path::Path) -> Task {
 }
 
 pub(super) fn prerequisite_events(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     id: TaskId,
 ) -> Vec<BrowserPrerequisiteCode> {
     store
@@ -137,7 +137,7 @@ pub(super) async fn tick_until(d: &mut Dispatcher, mut pred: impl FnMut() -> boo
 async fn browser_ledger_gate_missing_ledger_blocks_before_dispatch_without_infra_requeue() {
     let dir = tempfile::tempdir().unwrap();
     let ledger_dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = browser_task(dir.path());
     store.insert(&task).unwrap();
     let adapter = Arc::new(CountingBrowserAdapter {
@@ -176,7 +176,7 @@ async fn browser_ledger_gate_stale_release_blocks_and_resumes_after_regeneration
     let ledger_dir = tempfile::tempdir().unwrap();
     let ledger = ledger_dir.path().join("conformance.json");
     write_ledger(&ledger, "ffffffffffff", false);
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = browser_task(dir.path());
     store.insert(&task).unwrap();
     let adapter = Arc::new(CountingBrowserAdapter {
@@ -223,7 +223,7 @@ async fn verify_mode_does_not_resume_browser_prerequisite_blocked_tasks() {
     let ledger_dir = tempfile::tempdir().unwrap();
     let ledger = ledger_dir.path().join("conformance.json");
     write_ledger(&ledger, "ffffffffffff", false);
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = browser_task(dir.path());
     store.insert(&task).unwrap();
     let adapter = Arc::new(CountingBrowserAdapter {
@@ -257,7 +257,7 @@ async fn browser_ledger_gate_placed_ledger_dispatches_and_worker_ledger_error_is
     let ledger_dir = tempfile::tempdir().unwrap();
     let ledger = ledger_dir.path().join("conformance.json");
     write_ledger(&ledger, RELEASE, true);
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = browser_task(dir.path());
     store.insert(&task).unwrap();
     let adapter = Arc::new(CountingBrowserAdapter {
@@ -291,7 +291,7 @@ async fn browser_ledger_gate_placed_ledger_dispatches_and_worker_ledger_error_is
 async fn browser_ledger_gate_ignores_tasks_without_browser_skill() {
     let dir = tempfile::tempdir().unwrap();
     let ledger_dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {

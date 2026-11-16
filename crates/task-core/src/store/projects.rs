@@ -266,7 +266,9 @@ impl SqliteStore {
         })())
     }
 
-    pub(super) fn project_create_impl(&self, project: &Project) -> Result<(), StoreError> {
+    // ---- ADR-0033 D2: 案件（`projects`）と途中目標（`milestones`）----
+    /// 案件を作る（`status` は呼び出し側が決める。API は `proposed`）。
+    pub fn project_create(&self, project: &Project) -> Result<(), StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         Self::project_create_tx(&tx, project)?;
@@ -334,7 +336,8 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub(super) fn project_set_status_impl(
+    /// 状態だけを変える（`updated_at` も更新）。無い案件は `Ok(false)`。
+    pub fn project_set_status(
         &self,
         id: ProjectId,
         status: ProjectStatus,
@@ -360,9 +363,11 @@ impl SqliteStore {
         Ok(affected == 1)
     }
 
+    /// ADR-0044 D6（Phase 55）: 状態と `paused_from` を**同時に**書く（`pause` / `resume` / `cancel`）。
+    /// `paused_from` は `Some(None)` で消し、`None` なら触らない。無い案件は `Ok(false)`。
     /// ADR-0044 D6（Phase 55）: `pause` / `resume` / `cancel` は状態と `paused_from` を 1 回の UPDATE で書く
     /// （`resume` が「戻り先」を読んだ後に別の書き込みが割り込まないように）。
-    pub(super) fn project_set_lifecycle_impl(
+    pub fn project_set_lifecycle(
         &self,
         id: ProjectId,
         status: ProjectStatus,
@@ -398,7 +403,8 @@ impl SqliteStore {
         Ok(affected == 1)
     }
 
-    pub(super) fn project_set_archived_at_impl(
+    /// ADR-0044 D6（Phase 55）: アーカイブの時刻を書く（`None` で解除）。無い案件は `Ok(false)`。
+    pub fn project_set_archived_at(
         &self,
         id: ProjectId,
         at: Option<OffsetDateTime>,
@@ -424,11 +430,10 @@ impl SqliteStore {
         Ok(affected == 1)
     }
 
-    pub(super) fn project_set_slug_impl(
-        &self,
-        id: ProjectId,
-        slug: &str,
-    ) -> Result<bool, StoreError> {
+    /// ADR-0044 D7 追記（Phase K-1）: `projects.slug` を書く。綴りが違えば `StoreError::Invalid`
+    /// （API は 422）、他の案件が使っていれば `StoreError::InUse`（409）。無い案件は `Ok(false)`。
+    /// **知識ベースのディレクトリは動かさない**（`projects/<旧>/` を `projects/<新>/` へ動かすのは人）。
+    pub fn project_set_slug(&self, id: ProjectId, slug: &str) -> Result<bool, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let written = Self::project_set_slug_tx(&tx, id, slug)?;
@@ -473,7 +478,8 @@ impl SqliteStore {
         Ok(affected == 1)
     }
 
-    pub(super) fn project_set_workspace_impl(
+    /// ADR-0039 D1: 作業場所だけを変える（`None` で消す。`updated_at` も更新）。無い案件は `Ok(false)`。
+    pub fn project_set_workspace(
         &self,
         id: ProjectId,
         workspace: Option<&WorkspaceSpec>,
@@ -572,7 +578,9 @@ impl SqliteStore {
         Ok(true)
     }
 
-    pub(super) fn milestone_create_impl(
+    /// 途中目標を作る。`seq` はその案件の最大 + 1 をストアが採番し、確定した行を返す。
+    /// 案件が無ければ `StoreError::Invalid`。
+    pub fn milestone_create(
         &self,
         project_id: ProjectId,
         title: &str,
@@ -627,7 +635,9 @@ impl SqliteStore {
         Ok(milestone)
     }
 
-    pub(super) fn milestone_set_plan_key_impl(
+    /// ADR-0074 D3.3（Phase F4b）: 案件計画から作った途中目標に key を結ぶ（`milestones.plan_key`）。
+    /// 無い途中目標は `Ok(false)`。
+    pub fn milestone_set_plan_key(
         &self,
         id: MilestoneId,
         plan_key: &str,
@@ -644,10 +654,8 @@ impl SqliteStore {
         Ok(affected == 1)
     }
 
-    pub(super) fn milestone_get_impl(
-        &self,
-        id: MilestoneId,
-    ) -> Result<Option<Milestone>, StoreError> {
+    /// ADR-0044 D6（Phase 55）: 途中目標を id 1 つで引く（案件を知らなくてよい）。
+    pub fn milestone_get(&self, id: MilestoneId) -> Result<Option<Milestone>, StoreError> {
         self.with_read_conn(|conn| {
             let row = conn
                 .query_row(
@@ -661,7 +669,8 @@ impl SqliteStore {
         })
     }
 
-    pub(super) fn milestone_set_status_impl(
+    /// 状態だけを変える。無い途中目標は `Ok(false)`。
+    pub fn milestone_set_status(
         &self,
         id: MilestoneId,
         status: MilestoneStatus,
@@ -678,8 +687,10 @@ impl SqliteStore {
         Ok(affected == 1)
     }
 
+    /// ADR-0044 D6（Phase 55）: 状態と `paused_from` を**同時に**書く（`pause` / `resume` / `cancel`）。
+    /// `paused_from` は `Some(None)` で消し、`None` なら触らない。無い途中目標は `Ok(false)`。
     /// ADR-0044 D6（Phase 55）: 状態と `paused_from` を 1 回の UPDATE で書く（`project_set_lifecycle` と同じ）。
-    pub(super) fn milestone_set_lifecycle_impl(
+    pub fn milestone_set_lifecycle(
         &self,
         id: MilestoneId,
         status: MilestoneStatus,

@@ -2,7 +2,7 @@
 //! 無効であること。時計は `now` 引数で注入し、実時間の sleep は使わない。
 
 use super::*;
-use task_core::{CronJobStore, SqliteStore, Tier};
+use task_core::{SqliteStore, Tier};
 use time::format_description::well_known::Rfc3339;
 
 fn t(s: &str) -> OffsetDateTime {

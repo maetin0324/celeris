@@ -1,6 +1,6 @@
 //! `celerisctl add` の判断と検証 — DESIGN.md §5.9 / ADR-0004 D4 / ADR-0010 D4（P-17, P-19, ADR-0013 D7）。
 //!
-//! `NewTaskSpec` から `Task` を組み立て、`TaskStore::create_task` で `insert` + `Event::Created`
+//! `NewTaskSpec` から `Task` を組み立て、`SqliteStore::create_task` で `insert` + `Event::Created`
 //! を単一トランザクションとして書き込む（ADR-0010 D2）。初期 `status` は ADR-0002 D4 のとおり
 //! `kind == Approval` なら `Ready`、それ以外は `Draft`。
 //!
@@ -15,12 +15,13 @@
 //! ディスパッチャが `workspace_root` 基準で解決する（ADR-0005 D3, ADR-0010 D4, P-19）。
 
 use std::path::PathBuf;
+use task_core::OrgDirectory;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use task_core::{
-    Budget, Check, Criterion, GenreSpec, MilestoneId, ProjectId, RoleSpec, Status, Task, TaskId,
-    TaskKind, TaskStore, Tier, WorkerHint, WorkspaceSpec,
+    Budget, Check, Criterion, GenreSpec, MilestoneId, ProjectId, RoleSpec, SqliteStore, Status,
+    Task, TaskId, TaskKind, Tier, WorkerHint, WorkspaceSpec,
 };
 use time::OffsetDateTime;
 
@@ -289,7 +290,7 @@ fn default_kind() -> TaskKind {
 ///   部署にリポジトリが付いているというだけで worktree を背負わされないため
 ///   （`build_task` が `workspace_mode == Some(Shared)` かつ `cluster` 無しのときに立てる）。
 fn resolve_repos(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     project_id: Option<ProjectId>,
     parent: Option<TaskId>,
     names: &[String],
@@ -326,7 +327,7 @@ fn resolve_repos(
 }
 /// R5b-fix3 (D1): 選んだリポジトリのうちリモートにあるもの（`MixedLocalAndRemote` で高々 1 つ）の行。
 fn remote_repo_row(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     project_id: Option<ProjectId>,
     repos: &[task_core::RepoRef],
 ) -> Result<Option<task_core::ProjectRepo>, OpsError> {
@@ -345,7 +346,7 @@ fn remote_repo_row(
 /// R5b-fix3 (D1): 選んだリポジトリがリモートなら、タスクの作業場所に使う置き場。primary なら案件の
 /// workspace（`projects.workspace` = primary の写し。`delegate::project_workspace` と同じ値）を優先する。
 fn remote_repo_workspace(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     project_id: Option<ProjectId>,
     repos: &[task_core::RepoRef],
 ) -> Result<Option<WorkspaceSpec>, OpsError> {
@@ -363,7 +364,7 @@ fn remote_repo_workspace(
 }
 
 fn remote_repo_name(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     project_id: Option<ProjectId>,
     repos: &[task_core::RepoRef],
 ) -> Result<Option<String>, OpsError> {
@@ -397,7 +398,7 @@ fn build_acceptance(specs: Vec<CriterionSpec>) -> Result<Vec<Criterion>, OpsErro
 
 /// `depends_on` の各 ID が存在し、かつ `failed`/`cancelled` でないことを検証する
 /// （ADR-0010 D4）。違反があれば挿入前にエラーを返す。
-fn validate_depends_on(store: &dyn TaskStore, depends_on: &[TaskId]) -> Result<(), OpsError> {
+fn validate_depends_on(store: &SqliteStore, depends_on: &[TaskId]) -> Result<(), OpsError> {
     for dep_id in depends_on {
         match store.get(*dep_id)? {
             None => {
@@ -418,10 +419,7 @@ fn validate_depends_on(store: &dyn TaskStore, depends_on: &[TaskId]) -> Result<(
 }
 
 /// ADR-0033 D2: `project_id` / `milestone_id` の整合（存在すること、途中目標がその案件のものであること）。
-fn validate_project_and_milestone(
-    store: &dyn TaskStore,
-    spec: &NewTaskSpec,
-) -> Result<(), OpsError> {
+fn validate_project_and_milestone(store: &SqliteStore, spec: &NewTaskSpec) -> Result<(), OpsError> {
     let project = match spec.project_id {
         Some(id) => {
             let Some(project) = store.project_get(id)? else {
@@ -453,7 +451,7 @@ fn validate_project_and_milestone(
 
 /// `spec` から `Task` を組み立て、`store.create_task` で原子的に挿入する（役割・分野の既定は無し = 全体の既定だけ）。
 pub fn create_task(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     spec: NewTaskSpec,
     now: OffsetDateTime,
 ) -> Result<Task, OpsError> {
@@ -466,7 +464,7 @@ pub fn create_task(
 /// `genre` + `role` の不整合（`role` がその分野の `roles` に無い）はエラーにする（`genres` が空の設定
 /// では検証しない。celerisctl の `--config` 無しはこちらに当たる）。
 pub fn create_task_with_roles(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     spec: NewTaskSpec,
     roles: &[RoleSpec],
     genres: &[GenreSpec],
@@ -480,7 +478,7 @@ pub fn create_task_with_roles(
 /// （挿入しない）。案件の replan の `modify` が、まだ dispatch されていないマイルストーン Task を
 /// 同じ規則で組み立て直すために使う。
 pub fn build_task_with_roles(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     spec: NewTaskSpec,
     roles: &[RoleSpec],
     genres: &[GenreSpec],
@@ -495,7 +493,7 @@ pub fn build_task_with_roles(
 /// 1:1 の規則（ADR-0074 D3.8）は廃止。root task はそのまま案件に並ぶ（`milestone_id` は人が明示した・
 /// 親から継いだときだけ持つ。既存の途中目標の行は凍結）。
 pub(crate) fn insert_task(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: Task,
     extra_events: Vec<task_core::Event>,
 ) -> Result<Task, OpsError> {
@@ -511,7 +509,7 @@ pub(crate) fn insert_task(
 /// 始まる（起こしたのは人ではなく tick ループの決定的な判断）。`Event::Created` を 1 件残す。
 /// `spec.role` が `[[roles]]` に無い構成でも落ちない（既定が埋まらないだけ）。
 pub fn create_support_task(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     spec: NewTaskSpec,
     roles: &[RoleSpec],
     genres: &[GenreSpec],
@@ -572,7 +570,7 @@ fn validate_stages_hint(hints: &[task_core::StageHint]) -> Result<(), OpsError> 
 }
 
 fn build_task(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     spec: NewTaskSpec,
     roles: &[RoleSpec],
     genres: &[GenreSpec],

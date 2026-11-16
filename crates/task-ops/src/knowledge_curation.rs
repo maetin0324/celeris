@@ -32,7 +32,7 @@ pub fn is_curation_task(task: &task_core::Task) -> bool {
 
 /// Durable dispatch gate; set only after extraction and input preparation.
 pub fn inputs_ready(
-    store: &dyn task_core::TaskStore,
+    store: &task_core::SqliteStore,
     task: &task_core::Task,
 ) -> Result<bool, task_core::StoreError> {
     Ok(!is_curation_task(task)

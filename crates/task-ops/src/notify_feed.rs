@@ -1,8 +1,8 @@
 //! ADR-0133 D1/D3: 判断を要しない出来事だけをアプリ内通知へ同期する。
-//! 冪等性と束ねは `NoticeStore::notice_record` が一つの transaction で保証する。
+//! 冪等性と束ねは `SqliteStore::notice_record` が一つの transaction で保証する。
 use task_core::{
-    Event, NoticeEvent, NoticeKind, NoticeLink, NoticeRecordOutcome, NoticeStore, NoticeTarget,
-    ReportKind, ReportStore, Status, StoreError, TaskStore,
+    Event, NoticeEvent, NoticeKind, NoticeLink, NoticeRecordOutcome, NoticeTarget, ReportKind,
+    SqliteStore, Status, StoreError,
 };
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -38,10 +38,10 @@ pub enum FeedObservation {
     },
 }
 
-/// release ファイルの観測・cron 履歴・ADR-0131 の抑制結果など、`TaskStore` の
+/// release ファイルの観測・cron 履歴・ADR-0131 の抑制結果など、`SqliteStore` の
 /// event 以外から確定した通知を同じ冪等な store へ渡す入口。
 pub fn record_observations(
-    store: &impl NoticeStore,
+    store: &SqliteStore,
     now: OffsetDateTime,
     observations: &[FeedObservation],
 ) -> Result<u64, StoreError> {
@@ -168,10 +168,7 @@ fn event(
 /// store の events・reports・対話・delivery 状態のうち前回より後の分だけを読んで通知を作る。
 /// `now` より後の出来事は次の走査に残す。戻り値は新規記録した出来事の件数。
 /// 受信箱へ分類された Event はここでは無視する。
-pub fn sync_notifications<S>(store: &S, now: OffsetDateTime) -> Result<u64, StoreError>
-where
-    S: TaskStore + ReportStore + NoticeStore + ?Sized,
-{
+pub fn sync_notifications(store: &SqliteStore, now: OffsetDateTime) -> Result<u64, StoreError> {
     Ok(sync_notifications_counted(store, now)?.recorded)
 }
 
@@ -208,13 +205,10 @@ const CURSOR_MESSAGES: &str = "messages";
 /// `created_at`）に持ち、記録済みかどうかは読み取り接続で先に一括して確かめる。
 /// 書き込み（新しい出来事の記録と走査位置の更新）は最後に 1 つの transaction で行い、
 /// 何も無ければ書き込み接続を取らない。
-pub fn sync_notifications_counted<S>(
-    store: &S,
+pub fn sync_notifications_counted(
+    store: &SqliteStore,
     now: OffsetDateTime,
-) -> Result<FeedSyncStats, StoreError>
-where
-    S: TaskStore + ReportStore + NoticeStore + ?Sized,
-{
+) -> Result<FeedSyncStats, StoreError> {
     let mut stats = FeedSyncStats::default();
     let mut tasks = TaskCache::default();
     let mut out = Pending::default();
@@ -253,9 +247,9 @@ struct Pending {
 struct TaskCache(std::collections::HashMap<task_core::TaskId, Option<task_core::Task>>);
 
 impl TaskCache {
-    fn get<S: TaskStore + ?Sized>(
+    fn get(
         &mut self,
-        store: &S,
+        store: &SqliteStore,
         id: task_core::TaskId,
     ) -> Result<Option<&task_core::Task>, StoreError> {
         let task = match self.0.entry(id) {
@@ -266,16 +260,13 @@ impl TaskCache {
     }
 }
 
-fn sync_events<S>(
-    store: &S,
+fn sync_events(
+    store: &SqliteStore,
     now: OffsetDateTime,
     tasks: &mut TaskCache,
     stats: &mut FeedSyncStats,
     out: &mut Pending,
-) -> Result<(), StoreError>
-where
-    S: TaskStore + NoticeStore + ?Sized,
-{
+) -> Result<(), StoreError> {
     let start = store
         .feed_cursor_get(CURSOR_EVENTS)?
         .and_then(|s| s.parse::<u64>().ok())
@@ -351,10 +342,7 @@ where
     Ok(())
 }
 
-fn cursor_time(
-    store: &(impl NoticeStore + ?Sized),
-    name: &str,
-) -> Result<Option<OffsetDateTime>, StoreError> {
+fn cursor_time(store: &SqliteStore, name: &str) -> Result<Option<OffsetDateTime>, StoreError> {
     Ok(store
         .feed_cursor_get(name)?
         .and_then(|s| OffsetDateTime::parse(&s, &Rfc3339).ok()))
@@ -377,15 +365,12 @@ fn set_cursor_time(
     Ok(())
 }
 
-fn sync_reports<S>(
-    store: &S,
+fn sync_reports(
+    store: &SqliteStore,
     now: OffsetDateTime,
     stats: &mut FeedSyncStats,
     out: &mut Pending,
-) -> Result<(), StoreError>
-where
-    S: ReportStore + NoticeStore + ?Sized,
-{
+) -> Result<(), StoreError> {
     // 位置は閉区間で読み、同じ時刻の報告は `source_key` の既知判定で飛ばす。
     let since = cursor_time(store, CURSOR_REPORTS)?;
     let mut next = since;
@@ -432,16 +417,13 @@ where
     set_cursor_time(out, CURSOR_REPORTS, since, next)
 }
 
-fn sync_messages<S>(
-    store: &S,
+fn sync_messages(
+    store: &SqliteStore,
     now: OffsetDateTime,
     deliveries: &[task_core::Delivery],
     stats: &mut FeedSyncStats,
     out: &mut Pending,
-) -> Result<(), StoreError>
-where
-    S: TaskStore + NoticeStore + ?Sized,
-{
+) -> Result<(), StoreError> {
     let since = cursor_time(store, CURSOR_MESSAGES)?;
     // `message_page` の `after` は文字列の比較なので、小数秒の桁の違いで取りこぼさないよう 1 秒前から読み、
     // 位置より前の行は捨てる。位置が無ければ最初から（`after` 無しは新しい側の 1 頁になるので空文字を渡す）。
@@ -502,16 +484,13 @@ where
     set_cursor_time(out, CURSOR_MESSAGES, since, next)
 }
 
-fn sync_deliveries<S>(
-    store: &S,
+fn sync_deliveries(
+    store: &SqliteStore,
     now: OffsetDateTime,
     deliveries: &[task_core::Delivery],
     tasks: &mut TaskCache,
     out: &mut Pending,
-) -> Result<(), StoreError>
-where
-    S: TaskStore + NoticeStore + ?Sized,
-{
+) -> Result<(), StoreError> {
     // delivery は状態が変わるので位置を持たない。代わりに key を先に作り、記録済みなら task も読まない。
     let mut keys = Vec::new();
     for delivery in deliveries {
@@ -595,7 +574,7 @@ fn delivery_key(delivery: &task_core::Delivery) -> String {
     )
 }
 
-fn record(store: &(impl NoticeStore + ?Sized), notice: &NoticeEvent) -> Result<u64, StoreError> {
+fn record(store: &SqliteStore, notice: &NoticeEvent) -> Result<u64, StoreError> {
     Ok(u64::from(!matches!(
         store.notice_record(notice)?,
         NoticeRecordOutcome::Duplicate(_)

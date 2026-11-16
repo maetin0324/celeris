@@ -6,7 +6,7 @@ use common::*;
 use std::path::{Path, PathBuf};
 use task_core::{
     Project, ProjectId, ProjectRepo, ProjectStatus, RepoId, RepoKind, RepoRun, Status, TaskKind,
-    TaskRepoIntegrationState, TaskRepoIntegrationStatus, TaskStore, WorkspaceSpec,
+    TaskRepoIntegrationState, TaskRepoIntegrationStatus, WorkspaceSpec,
 };
 
 const REPOS: usize = 2;

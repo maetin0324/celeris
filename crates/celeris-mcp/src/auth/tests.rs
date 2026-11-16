@@ -8,7 +8,7 @@ fn generate_token_is_long_and_not_repeated() {
     assert!(a.len() >= 60, "{a}");
     assert!(a.chars().all(|c| c.is_ascii_alphanumeric()));
 }
-use task_core::{McpClient, McpClientStore, SqliteStore};
+use task_core::{McpClient, SqliteStore};
 
 fn store() -> SqliteStore {
     SqliteStore::open_in_memory().expect("open")

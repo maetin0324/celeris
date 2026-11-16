@@ -20,8 +20,8 @@ use axum::response::IntoResponse;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use task_core::{
-    CronCatchUp, CronJob, CronJobId, CronJobRun, CronJobStore, CronOverlap, CronTaskTemplate,
-    SqliteStore, StoreError, TaskId, TaskStore,
+    CronCatchUp, CronJob, CronJobId, CronJobRun, CronOverlap, CronTaskTemplate, SqliteStore,
+    StoreError, TaskId,
 };
 use task_ops::cron_jobs::{CronFireContext, CronJobPatch, NewCronJob};
 use time::OffsetDateTime;
@@ -142,7 +142,7 @@ fn cron_job_not_found(key: &str) -> ApiProblem {
 
 /// cron job の操作の失敗 → HTTP。`StoreError::InUse` は名前の重複（`cron_job`）と同じ予定時刻の二重記録
 /// （`cron_job_run`）を 409 に分け、他は既存の写像（検証は 422）に任せる。
-fn cron_problem(store: &dyn TaskStore, err: task_ops::OpsError, trigger: &str) -> ApiProblem {
+fn cron_problem(store: &SqliteStore, err: task_ops::OpsError, trigger: &str) -> ApiProblem {
     match err {
         task_ops::OpsError::Store(StoreError::InUse { kind, id, detail })
             if kind == "cron_job" || kind == "cron_job_run" =>

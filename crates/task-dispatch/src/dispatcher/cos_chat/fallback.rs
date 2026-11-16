@@ -36,7 +36,7 @@ use std::path::Path;
 use rusqlite::Connection;
 use serde_json::json;
 use task_core::chat::{ChatActor, ChatCard};
-use task_core::{NoticeId, NoticeStore, TaskId};
+use task_core::{NoticeId, SqliteStore, TaskId};
 use task_ops::cos_first_response::{FirstResponseWait, parse_ts};
 use task_ops::human_inbox::{InboxItem, InboxKind};
 use time::OffsetDateTime;
@@ -290,7 +290,7 @@ fn handoff_key(item_id: &str) -> String {
 /// title and summary of the revision as ingested. The bundle may have grown since (a later event
 /// is a new revision with its own row), so the live notice is read only for rows ingested before
 /// migration 0101 and only while it is still the same revision.
-pub(crate) fn notice_text(c: &FallbackCandidate, store: &dyn NoticeStore) -> String {
+pub(crate) fn notice_text(c: &FallbackCandidate, store: &SqliteStore) -> String {
     if !c.detail.trim().is_empty() {
         return format!("{} — {}", c.summary, c.detail);
     }

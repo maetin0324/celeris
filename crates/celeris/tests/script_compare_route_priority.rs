@@ -22,7 +22,7 @@ use task_core::script_compare::{
     CompareCandidate, CompareOutcome, RoutePriorityInput, RoutePriorityOutput, ScriptCompareRecord,
     ScriptDomain, ScriptMode, recorded_input,
 };
-use task_core::{Event, Task, TaskStore};
+use task_core::{Event, Task};
 use task_dispatch::script_policy::{
     PolicyScript, TsResult, call_route_priority, classify_route_priority,
 };

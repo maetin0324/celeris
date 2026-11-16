@@ -6,7 +6,7 @@ use crate::script_compare::{CompareError, CompareOutcome};
 use crate::script_guard::{
     self, ScriptGuardCall, ScriptGuardCounters, ScriptGuardObservation, ScriptGuardStop,
 };
-use crate::store::TaskStore;
+use crate::store::SqliteStore;
 use crate::store::tests::sample_task;
 
 fn now() -> OffsetDateTime {

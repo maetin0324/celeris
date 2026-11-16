@@ -11,7 +11,8 @@ pub struct AccountLimit {
 }
 
 impl SqliteStore {
-    pub(super) fn account_limits_impl(&self) -> Result<Vec<AccountLimit>, StoreError> {
+    /// Authoritative per-account concurrency overrides (not event projections).
+    pub fn account_limits(&self) -> Result<Vec<AccountLimit>, StoreError> {
         let conn = self.lock()?;
         let mut stmt = conn.prepare(
             "SELECT source_id, account_id, max_runs FROM account_limits ORDER BY source_id, account_id",
@@ -26,7 +27,8 @@ impl SqliteStore {
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
-    pub(super) fn set_account_limit_impl(
+    /// `None` clears an override; values must be in 1..=32.
+    pub fn set_account_limit(
         &self,
         source_id: &str,
         id: &str,
@@ -55,7 +57,7 @@ impl SqliteStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::TaskStore;
+
     #[test]
     fn account_limits_source_persist_clear_and_keep_sources_separate() {
         let dir = tempfile::tempdir().unwrap();

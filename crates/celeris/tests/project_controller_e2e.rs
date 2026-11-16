@@ -21,9 +21,7 @@ use task_core::project_proposal::{
     SnapshotDecision, SnapshotLimits,
 };
 use task_core::store::{IdempotencyLookup, SqliteStore};
-use task_core::{
-    Event, Project, ProjectId, ProjectStatus, RepoId, StoreError, TaskId, TaskStore, Trigger,
-};
+use task_core::{Event, Project, ProjectId, ProjectStatus, RepoId, StoreError, TaskId, Trigger};
 use task_dispatch::script_policy::PolicyScript;
 use task_ops::project_snapshot::{self as ps, SnapshotContext};
 use time::OffsetDateTime;

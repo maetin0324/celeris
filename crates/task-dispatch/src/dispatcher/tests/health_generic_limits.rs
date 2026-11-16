@@ -55,7 +55,7 @@ fn dep_inversion_class(kind: &str) -> String {
 /// fixture の repo の親で、試験の終わりまで持つ。
 fn reviewing_dep_inversion(
     d: &Dispatcher,
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     kind: &str,
     parent: Option<TaskId>,
 ) -> (tempfile::TempDir, Fixture, Task) {
@@ -93,7 +93,7 @@ fn dep_inversion_fails(kind: &str, events: &[Event], bundled: &CheckerId) -> Vec
 
 /// 止めた後の不変条件: `Reviewing → Blocked`（`review_blocked`）が 1 回で attempts は 0 のまま、その後に run も repair も
 /// 起こさず、`review_fail`（再実行・retry 切れの Failed）と自動 replan が無い。
-fn assert_blocked_without_more_repairs(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<Event> {
+fn assert_blocked_without_more_repairs(store: &Arc<SqliteStore>, id: TaskId) -> Vec<Event> {
     let stored = store.get(id).unwrap().unwrap();
     assert_eq!(stored.status, Status::Blocked, "{stored:?}");
     assert_eq!(stored.attempts, 0, "{stored:?}");
@@ -130,7 +130,7 @@ fn assert_blocked_without_more_repairs(store: &Arc<dyn TaskStore>, id: TaskId) -
 }
 
 /// `id` の task が上げた質問（受信箱の `questions` の本文）。
-fn inbox_questions(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<String> {
+fn inbox_questions(store: &Arc<SqliteStore>, id: TaskId) -> Vec<String> {
     task_ops::inbox::inbox(
         store.as_ref(),
         None,
@@ -158,7 +158,7 @@ fn inbox_questions(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<String> {
 async fn health_generic_limits_repair_cap_blocks() {
     let (_bundle, bundled) = configure_real_bundled_checker();
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     // `(候補が足した逆向きの import の file, 今の path)`。修復 `repair-<n>` は今の path を `<stem>-repair-<n>.<ext>` に移す。
     let moved = Arc::new(StdMutex::new((String::new(), String::new())));
     let current = moved.clone();
@@ -245,7 +245,7 @@ async fn health_generic_limits_repeat_escalates() {
 async fn repeat_escalates(kind: &str, bundled: &CheckerId) {
     let plain = tempfile::tempdir().unwrap();
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut top = new_task(
         plain.path(),
         Check::Command {
@@ -398,7 +398,7 @@ async fn health_generic_limits_inventory_skips_unchanged() {
     let dir = crate::test_support::WritableTempDir::new();
     let db = dir.path().join("celeris.db");
     let sqlite = Arc::new(SqliteStore::open(&db).unwrap());
-    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let store: Arc<SqliteStore> = sqlite.clone();
     let clock = Arc::new(StdMutex::new(at("2026-11-09T00:00:00Z")));
     let project = task_core::Project {
         auto_advance: false,

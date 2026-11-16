@@ -2,7 +2,7 @@
 //! （id・時刻・source・account・要求/上流モデル・トークン数・レイテンシ・状態・エラー種別だけ）。
 //!
 //! celeris の `SqliteStore` の migration（`task-core`）が作った同じ DB ファイルに、このクレート専用の
-//! 接続で書く（`TaskStore` トレイトには依存しない。責務を分けるため）。
+//! 接続で書く（`SqliteStore` トレイトには依存しない。責務を分けるため）。
 
 use std::path::Path;
 use std::time::Duration;

@@ -43,7 +43,14 @@ impl SqliteStore {
         Ok(outcome)
     }
 
-    pub(in crate::store) fn review_repair_apply_impl(
+    /// ADR-0072 D16（Phase E4）: reviewer repair の採用。`Trigger::ReviewRepair`
+    /// （`Reviewing → Ready`、attempts 据え置き）と、`new_plan`（`Some` のときだけ挿入。atomic な
+    /// Task で暗黙の WorkUnit を初めて実体化するときの `execution_plans` 行、D5）・`work_units`
+    /// （repair WU。atomic なら `main`（done）も含む）・`extra_events`（`WorkerFinished{role:
+    /// reviewer}` / `ReviewVerdict` / repair WU の `WorkUnitTransitioned` 等）を同じトランザクションで
+    /// 書く。呼び出し側（`dispatcher.rs`）が D16 の上限（`max_repairs`/`max_repairs_per_class`）を
+    /// 検査済みであることが前提（ここでは検査しない）。
+    pub fn review_repair_apply(
         &self,
         task_id: TaskId,
         extra_events: Vec<Event>,
@@ -59,7 +66,8 @@ impl SqliteStore {
         )
     }
 
-    pub(in crate::store) fn delivery_repair_apply_impl(
+    /// 配送の局所修復。Reopen と repair WU を同一トランザクションで保存する。
+    pub fn delivery_repair_apply(
         &self,
         task_id: TaskId,
         extra_events: Vec<Event>,
@@ -69,8 +77,15 @@ impl SqliteStore {
         self.repair_apply(task_id, Trigger::Reopen, extra_events, new_plan, work_units)
     }
 
+    /// ADR-0072 D17（Phase E4）: replan の採用。旧 `active` な計画を `superseded` にし、新しい版
+    /// （`new_plan.version = old.version + 1`）を挿入する。`updated_work_units` は既存行の書き換え
+    /// （spec が変わった未完了 WU、または `superseded` にする削除された WU）、`new_work_units` は
+    /// 新しい key の追加。`extra_events`（削除された WU の `WorkUnitTransitioned` 等）→
+    /// `plan_event`（`Event::ExecutionPlanned{supersedes: Some(old_plan_id), ..}`）の順で同じ
+    /// トランザクションに追記する。旧版が `active` でなければ `StoreError::InUse`
+    /// （並行 replan の検出）。
     #[allow(clippy::too_many_arguments)]
-    pub(in crate::store) fn execution_plan_replan_impl(
+    pub fn execution_plan_replan(
         &self,
         task_id: TaskId,
         old_plan_id: String,

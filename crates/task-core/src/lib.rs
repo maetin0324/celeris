@@ -5,7 +5,7 @@ pub mod cos_fallback;
 pub mod cos_revision;
 pub mod delivery;
 mod sqlite_process;
-pub use delivery::{Delivery, DeliverySkipReason, DeliveryState, DeliveryStore};
+pub use delivery::{Delivery, DeliverySkipReason, DeliveryState};
 pub mod accounts;
 pub mod approval;
 pub mod browser;
@@ -145,7 +145,7 @@ pub mod write_set;
 pub use accounts::{
     AccountAdapter, AccountCheckResult, AccountPoolSetting, RateLimitObservation, RateWindow,
 };
-pub use approval::{Approval, ApprovalId, ApprovalStore, Decision, StandingRule, StandingRuleId};
+pub use approval::{Approval, ApprovalId, Decision, StandingRule, StandingRuleId};
 pub use artifacts::{
     ARTIFACTS_DIR_NAME, SHARED_ARTIFACTS_PREFIX, artifacts_dir_for, artifacts_rel_for,
     owns_workspace, rel_from,
@@ -156,8 +156,7 @@ pub use comment::{
 pub use console_action::ConsoleAction;
 pub use cron::{
     CronCatchUp, CronError, CronJob, CronJobId, CronJobRun, CronJobRunId, CronJobRunUpdate,
-    CronJobStore, CronOverlap, CronRunOutcome, CronSchedule, CronTaskTemplate, CronTrigger, CronTz,
-    DueFires,
+    CronOverlap, CronRunOutcome, CronSchedule, CronTaskTemplate, CronTrigger, CronTz, DueFires,
 };
 pub use delegate::{
     DelegateDep, DelegateError, DelegateTask, DelegationLimits, OnChildFailure, WorkspaceContext,
@@ -186,8 +185,8 @@ pub use knowledge::{
 };
 // ---- ADR-0047 D4（Phase 62）: 知識整理 run の追跡 ----
 pub use knowledge_run::{
-    KnowledgeRun, KnowledgeRunState, KnowledgeRunStore, KnowledgeRunSummary, VIA_LANGMEM,
-    via_fallback, via_is_fallback,
+    KnowledgeRun, KnowledgeRunState, KnowledgeRunSummary, VIA_LANGMEM, via_fallback,
+    via_is_fallback,
 };
 // ---- ADR 2026-11-08-health-enforcement-loop D4.3: health の指摘の往復（event の payload。events.rs の隣） ----
 #[path = "model/health_repeat.rs"]
@@ -223,22 +222,18 @@ pub use provider_source::LlmSourceRef;
 pub use routing::{RoutingDecision, RoutingPolicy, RoutingSignals, StaticRoutingPolicy};
 // ---- ADR-0043 D1 / D2（Phase 52）: 案件のリポジトリ ----
 // ---- ADR-0054 D1（Phase 67）: ノードごとの継続セッション ----
-pub use node_session::{NodeSession, NodeSessionStore, SessionKind, WorkUnitSession};
+pub use node_session::{NodeSession, SessionKind, WorkUnitSession};
 // ---- ADR-0056 D1 / D4（Phase 78）: MCP サーバーの認証とログ ----
-pub use disk_watch::{DiskLevel, DiskWatchState, DiskWatchStore};
+pub use disk_watch::{DiskLevel, DiskWatchState};
 pub use feed::{
     Notice, NoticeEvent, NoticeId, NoticeKind, NoticeLink, NoticePage, NoticeQuery,
-    NoticeRecordOutcome, NoticeStore, NoticeTarget, NoticeUnreadCount,
+    NoticeRecordOutcome, NoticeTarget, NoticeUnreadCount,
 };
-pub use mcp::{
-    McpCall, McpCallStore, McpClient, McpClientStore, McpScope, scopes_from_string,
-    scopes_to_string,
-};
+pub use mcp::{McpCall, McpClient, McpScope, scopes_from_string, scopes_to_string};
 pub use notify::{
     DEFAULT_WEBHOOK_SECRET_ID, MAX_NOTIFY_ATTEMPTS, Notification, NotificationId, NotificationKind,
-    NotificationStore,
 };
-pub use script_inbox::{ScriptInboxItem, ScriptInboxStore};
+pub use script_inbox::ScriptInboxItem;
 pub mod project_brief;
 pub mod project_proposal;
 pub mod roadmap;
@@ -264,8 +259,7 @@ pub use project_plan::{
     validate_delta as validate_project_plan_delta,
 };
 pub use report::{
-    COMPACTION_ROLE, Report, ReportFilter, ReportId, ReportKind, ReportStore, ReportsLive,
-    support_kind,
+    COMPACTION_ROLE, Report, ReportFilter, ReportId, ReportKind, ReportsLive, support_kind,
 };
 pub use repos::{
     ProjectRepo, RepoError, RepoId, RepoKind, RepoRef, RepoRun, RepoSync, default_repo_name,
@@ -277,10 +271,9 @@ pub use store::{
     ClusterConnectionStats, ClusterSettings, ConfigEventRow, CredentialVerifyKind, CredentialWait,
     CredentialWaitEnter, CredentialWaitState, CredentialWaitStore, EnterWaitOutcome, EventRow,
     ListFilter, ListOrder, LocalSettings, LocalSettingsEvent, LocalSettingsOverrides, LockCounts,
-    ModelCatalogStore, NewConfigEvent, OrgDirectory, Page, RootDoneState, RootDoneSummary,
-    SCHEMA_VERSION, SqliteStore, StoreError, StoreOptions, TaskQuery, TaskStore,
-    TerminalSessionEvent, TreeAdoption, backup_database, event_row_schema_value, integrity_check,
-    is_busy_error, is_readonly_error,
+    NewConfigEvent, OrgDirectory, Page, RootDoneState, RootDoneSummary, SCHEMA_VERSION,
+    SqliteStore, StoreError, StoreOptions, TaskQuery, TerminalSessionEvent, TreeAdoption,
+    backup_database, event_row_schema_value, integrity_check, is_busy_error, is_readonly_error,
 };
 pub use transition::{InvalidTransition, Outcome, StateView, Trigger, transition};
 // ---- ADR-0072（Phase E1）: Run lifecycle / checkpoint / continuation ----

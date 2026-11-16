@@ -6,9 +6,9 @@
 use std::collections::BTreeSet;
 
 use task_core::{
-    Event, ExecutionPlanSpec, StoreError, Task, TaskDependencyContext, TaskDependencyError,
-    TaskDependencyFact, TaskDependencyResolution, TaskId, TaskStore, WorkUnitBlockedReason,
-    WorkUnitRow, WorkUnitStatus,
+    Event, ExecutionPlanSpec, SqliteStore, StoreError, Task, TaskDependencyContext,
+    TaskDependencyError, TaskDependencyFact, TaskDependencyResolution, TaskId,
+    WorkUnitBlockedReason, WorkUnitRow, WorkUnitStatus,
 };
 
 use crate::dep_integration::dependency_integration;
@@ -19,7 +19,7 @@ const MAX_CYCLE_WALK: usize = 512;
 /// D2: `task` の pending の unit が待つ `task:` 依存を解く（`units` は `task` の `work_units_for`）。依存元は計画を持つ `task`。
 /// `integrated` は M10 と同じ取り込み済みの記憶（呼び出し側が持つ）。
 pub fn resolve_pending_units(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     units: &[WorkUnitRow],
     integrated: &mut BTreeSet<TaskId>,
@@ -63,7 +63,7 @@ pub struct ExternalSettle {
 /// unit は `pending → ready`（`task_dependency_met`）。依存先の失敗では上げも止めもしない（人に知らせるのは生存確認）。
 /// dispatcher の `resolve_child_dependencies` が呼ぶ（`integrated` は M10 と同じ取り込み済みの記憶の写し）。
 pub fn settle_external(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
     units: &[WorkUnitRow],
     integrated: &BTreeSet<TaskId>,
@@ -133,7 +133,7 @@ pub fn settle_external(
 }
 
 fn transition(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
     from: &WorkUnitRow,
     row: WorkUnitRow,
@@ -157,7 +157,7 @@ fn transition(
 /// D4: 採用の前の検証。計画を持つ `task` の木（[`own_tree`]）・案件と、依存先から辿れる「待つ」辺（[`waits_on`]）を
 /// store から読み、task-core の `task_dependency_errors` に渡す。`task:` 依存の無い計画は何も読まない。
 pub fn plan_errors(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     spec: &ExecutionPlanSpec,
 ) -> Result<Vec<TaskDependencyError>, StoreError> {
@@ -199,7 +199,7 @@ pub fn plan_errors(
 /// D4: 計画を持つ `task` の木。自分、祖先（`parent_id` と木の親〈`tree.parent_unit`〉を辿る。委譲の親を含む）、子孫
 /// （`children` を辿る。委譲の子と木の子）、自分と祖先が属する木の節点（`tree_tasks`。採用で `parent_id` を書き換えない子を
 /// 含む）。祖先は子孫の完了を待つので、祖先を指す依存は必ず循環する。委譲の兄弟（同じ親の別の子）は入らない（木の外の task）。
-fn own_tree(store: &dyn TaskStore, task: &Task) -> Result<BTreeSet<TaskId>, StoreError> {
+fn own_tree(store: &SqliteStore, task: &Task) -> Result<BTreeSet<TaskId>, StoreError> {
     let parents = |t: &Task| {
         t.parent_id
             .into_iter()
@@ -236,7 +236,7 @@ fn own_tree(store: &dyn TaskStore, task: &Task) -> Result<BTreeSet<TaskId>, Stor
 
 /// `id` が待つ task: `depends_on`、委譲の子と木の子（`children`。親は子の完了を待つ）、有効な計画の終端でない unit の
 /// `task:` 依存と kind task の unit の子（採用で `parent_id` を書き換えない子を含む）。
-fn waits_on(store: &dyn TaskStore, id: TaskId) -> Result<Vec<TaskId>, StoreError> {
+fn waits_on(store: &SqliteStore, id: TaskId) -> Result<Vec<TaskId>, StoreError> {
     let Some(t) = store.get(id)? else {
         return Ok(Vec::new());
     };

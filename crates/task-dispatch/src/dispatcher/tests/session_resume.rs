@@ -30,7 +30,7 @@ enum Hook {
 const INTERRUPT_BODY: &str = "方針を変えたい。先に設計を書いて";
 
 struct ClaudeScriptAdapter {
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     plans: StdMutex<VecDeque<String>>,
     script: StdMutex<HashMap<String, VecDeque<(Terminal, Hook)>>>,
     /// `(WU の key、planner なら "planner"、RunContext)`。
@@ -42,7 +42,7 @@ struct ClaudeScriptAdapter {
 
 impl ClaudeScriptAdapter {
     fn new(
-        store: &Arc<dyn TaskStore>,
+        store: &Arc<SqliteStore>,
         plans: Vec<String>,
         script: Vec<(&str, Vec<(Terminal, Hook)>)>,
     ) -> Self {
@@ -294,11 +294,11 @@ fn yielded() -> Terminal {
     }
 }
 
-fn claude_dispatcher(store: &Arc<dyn TaskStore>, adapter: Arc<ClaudeScriptAdapter>) -> Dispatcher {
+fn claude_dispatcher(store: &Arc<SqliteStore>, adapter: Arc<ClaudeScriptAdapter>) -> Dispatcher {
     dispatcher_with_test_clock(store.clone(), adapter, 1, false)
 }
 
-fn three_step_task(dir: &std::path::Path, store: &Arc<dyn TaskStore>) -> TaskId {
+fn three_step_task(dir: &std::path::Path, store: &Arc<SqliteStore>) -> TaskId {
     let task = new_task(
         dir,
         Check::Command {
@@ -314,7 +314,7 @@ fn three_step_task(dir: &std::path::Path, store: &Arc<dyn TaskStore>) -> TaskId 
 }
 
 /// run の進行に残った continuation の session の判断の行（古い順）。
-fn session_lines(store: &Arc<dyn TaskStore>, task_id: TaskId) -> Vec<String> {
+fn session_lines(store: &Arc<SqliteStore>, task_id: TaskId) -> Vec<String> {
     store
         .events_for(task_id)
         .unwrap()
@@ -339,7 +339,7 @@ fn session_of(ctx: &task_worker::RunContext) -> &task_worker::protocol::SessionH
 #[tokio::test]
 async fn session_resume_session_reuse_same_work_unit_continuation_resumes() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task_id = three_step_task(dir.path(), &store);
     let adapter = Arc::new(ClaudeScriptAdapter::new(
         &store,
@@ -407,7 +407,7 @@ async fn session_resume_session_reuse_same_work_unit_continuation_resumes() {
 #[tokio::test]
 async fn session_resume_fresh_session_on_account_change() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task_id = three_step_task(dir.path(), &store);
     let adapter = Arc::new(ClaudeScriptAdapter::new(
         &store,
@@ -449,7 +449,7 @@ async fn session_resume_fresh_session_on_account_change() {
 #[tokio::test]
 async fn session_resume_session_reuse_adapter_change_falls_back_to_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task_id = three_step_task(dir.path(), &store);
     let adapter = Arc::new(ClaudeScriptAdapter::new(
         &store,
@@ -497,7 +497,7 @@ async fn session_resume_session_reuse_adapter_change_falls_back_to_checkpoint() 
 #[tokio::test]
 async fn session_resume_session_reuse_rejected_resume_falls_back_to_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task_id = three_step_task(dir.path(), &store);
     let adapter = Arc::new(ClaudeScriptAdapter::new(
         &store,
@@ -553,7 +553,7 @@ async fn session_resume_session_reuse_rejected_resume_falls_back_to_checkpoint()
 #[tokio::test]
 async fn session_resume_session_reuse_fresh_request_keeps_the_checkpoint_only() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task_id = three_step_task(dir.path(), &store);
     let adapter = Arc::new(ClaudeScriptAdapter::new(
         &store,
@@ -591,7 +591,7 @@ async fn session_resume_session_reuse_fresh_request_keeps_the_checkpoint_only() 
 #[tokio::test]
 async fn session_resume_fresh_session_for_planner_and_independent_work_unit() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = compound_task(dir.path());
     let task_id = task.id;
     store.insert(&task).unwrap();
@@ -629,7 +629,7 @@ async fn session_resume_fresh_session_for_planner_and_independent_work_unit() {
 
 /// 計画の無い atomic task（ADR-0140 付記 session-container）。gate を使わない既定の dispatcher では直行経路と
 /// 同じく `current_wu = None` の worker run になる。
-fn atomic_task(dir: &std::path::Path, store: &Arc<dyn TaskStore>) -> TaskId {
+fn atomic_task(dir: &std::path::Path, store: &Arc<SqliteStore>) -> TaskId {
     let task = new_task(
         dir,
         Check::Command {
@@ -650,7 +650,7 @@ fn atomic_task(dir: &std::path::Path, store: &Arc<dyn TaskStore>) -> TaskId {
 async fn session_resume_atomic_task_reuses_session() {
     // 同じ条件: budget → yield → done の 3 run が同じ session id。
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task_id = atomic_task(dir.path(), &store);
     let adapter = Arc::new(ClaudeScriptAdapter::new(
         &store,
@@ -727,7 +727,7 @@ async fn session_resume_atomic_task_reuses_session() {
 
     // 別 account: 保存 session を別 account の行に置き換えると、続きは checkpoint 前置きの新しい session。
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task_id = atomic_task(dir.path(), &store);
     let adapter = Arc::new(ClaudeScriptAdapter::new(
         &store,
@@ -796,7 +796,7 @@ async fn session_resume_container_no_session() {
         b"[run]\nmode = \"container\"\n\n[container]\nimage = \"celeris-test:latest\"\n",
     )
     .unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (project_id, repos) = project_with_repos(
         &store,
         &[("code", code.as_path(), task_core::RepoKind::Dir)],
@@ -893,7 +893,7 @@ async fn session_resume_container_no_session() {
 #[tokio::test]
 async fn session_resume_reviewer_stays_fresh() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = compound_task(dir.path());
     task.acceptance.push(Criterion {
         text: "レビューで確かめる".into(),
@@ -971,7 +971,7 @@ async fn session_resume_reviewer_stays_fresh() {
 /// dispatcher にクラスタと偽の ssh を設定する。
 fn remote_three_step(
     dir: &std::path::Path,
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     adapter: Arc<ClaudeScriptAdapter>,
 ) -> (TaskId, Dispatcher) {
     let mut task = new_task(
@@ -1003,7 +1003,7 @@ fn remote_three_step(
 }
 
 /// run が remote 経路（`push_remote_after_run`）を通ったことの印。
-fn remote_push_lines(store: &Arc<dyn TaskStore>, task_id: TaskId) -> usize {
+fn remote_push_lines(store: &Arc<SqliteStore>, task_id: TaskId) -> usize {
     store
         .events_for(task_id)
         .unwrap()
@@ -1016,7 +1016,7 @@ fn remote_push_lines(store: &Arc<dyn TaskStore>, task_id: TaskId) -> usize {
 }
 
 fn current_session_of(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     task_id: TaskId,
     key: &str,
 ) -> task_core::WorkUnitSession {
@@ -1033,7 +1033,7 @@ fn current_session_of(
 #[tokio::test]
 async fn session_resume_remote_same_account_and_local_cwd_resumes() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let adapter = Arc::new(ClaudeScriptAdapter::new(
         &store,
         Vec::new(),
@@ -1098,7 +1098,7 @@ async fn session_resume_remote_same_account_and_local_cwd_resumes() {
 #[tokio::test]
 async fn session_resume_remote_other_account_falls_back_to_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let adapter = Arc::new(ClaudeScriptAdapter::new(
         &store,
         Vec::new(),
@@ -1168,7 +1168,7 @@ async fn session_resume_remote_other_account_falls_back_to_checkpoint() {
 #[tokio::test]
 async fn session_resume_remote_rejected_resume_falls_back_to_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let adapter = Arc::new(ClaudeScriptAdapter::new(
         &store,
         Vec::new(),
@@ -1233,7 +1233,7 @@ fn session_jsonl(config: &std::path::Path, cwd: &std::path::Path, session_id: &s
 }
 
 /// 再起動を挟む試験の dispatcher。時計は注入した試験用の時計（`test_hooks.now`）。
-fn restart_dispatcher(store: &Arc<dyn TaskStore>, adapter: Arc<ClaudeScriptAdapter>) -> Dispatcher {
+fn restart_dispatcher(store: &Arc<SqliteStore>, adapter: Arc<ClaudeScriptAdapter>) -> Dispatcher {
     dispatcher_with_test_clock(store.clone(), adapter, 1, true)
 }
 
@@ -1255,7 +1255,7 @@ async fn first_daemon_until_yield(
     let state = dir.join("state");
     std::fs::create_dir_all(&state).unwrap();
     let db = state.join("celeris.db");
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open(&db).unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open(&db).unwrap());
     let task_id = three_step_task(dir, &store);
     let adapter = Arc::new(
         ClaudeScriptAdapter::new(
@@ -1327,8 +1327,8 @@ async fn first_daemon_until_yield(
 async fn second_daemon_to_idle(
     before: &BeforeRestart,
     config: &std::path::Path,
-) -> (Arc<dyn TaskStore>, Arc<ClaudeScriptAdapter>) {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open(&before.db).unwrap());
+) -> (Arc<SqliteStore>, Arc<ClaudeScriptAdapter>) {
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open(&before.db).unwrap());
     let adapter =
         Arc::new(ClaudeScriptAdapter::new(&store, Vec::new(), Vec::new()).with_config_dir(config));
     let mut d = restart_dispatcher(&store, adapter.clone());
@@ -1349,7 +1349,7 @@ async fn second_daemon_to_idle(
 
 /// ADR-0140 D4 の `fresh_fallback_by_reason`（`GET /tasks/{id}/execution` の continuation の欄）。
 fn fallback_reasons(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     task_id: TaskId,
 ) -> std::collections::BTreeMap<String, u64> {
     let task = store.get(task_id).unwrap().unwrap();
@@ -1368,7 +1368,7 @@ fn fallback_reasons(
 /// 1 回だけ試されて拒否され、retire のうえ直近の checkpoint を前置きにした新しい session でやり直し、
 /// その run は成功する（拒否された run は attempts に数えない）。
 fn assert_restart_fallback(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     adapter: &ClaudeScriptAdapter,
     before: &BeforeRestart,
     config: &std::path::Path,
@@ -1559,7 +1559,7 @@ fn comment_interrupt(drop_session: bool) -> (Terminal, Hook) {
 async fn session_resume_comment_interrupt_resumes_same_session() {
     let dir = tempfile::tempdir().unwrap();
     let config = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task_id = atomic_task(dir.path(), &store);
     let adapter = Arc::new(
         ClaudeScriptAdapter::new(
@@ -1634,7 +1634,7 @@ async fn session_resume_comment_interrupt_resumes_same_session() {
 #[tokio::test]
 async fn session_resume_comment_interrupt_resumes_work_unit_session() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task_id = three_step_task(dir.path(), &store);
     let adapter = Arc::new(ClaudeScriptAdapter::new(
         &store,
@@ -1675,7 +1675,7 @@ async fn session_resume_comment_interrupt_resumes_work_unit_session() {
 async fn session_resume_comment_interrupt_missing_session_falls_back_to_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
     let config = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task_id = atomic_task(dir.path(), &store);
     let adapter = Arc::new(
         ClaudeScriptAdapter::new(
@@ -1737,7 +1737,7 @@ async fn session_resume_comment_interrupt_resumes_phase_work_unit_session() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     let task_id = task.id;
     store.insert(&task).unwrap();

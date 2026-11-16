@@ -12,9 +12,11 @@
 use std::process::ExitCode;
 
 use clap::Args;
-use task_core::TaskStore;
+
 use task_ops::retry::retry_task as ops_retry;
 use time::OffsetDateTime;
+
+use task_core::SqliteStore;
 
 use crate::error::CliError;
 use crate::outln;
@@ -27,7 +29,7 @@ pub struct RetryArgs {
     pub draft: bool,
 }
 
-pub fn run(store: &dyn TaskStore, args: RetryArgs) -> Result<ExitCode, CliError> {
+pub fn run(store: &SqliteStore, args: RetryArgs) -> Result<ExitCode, CliError> {
     let id = crate::error::parse_task_id(&args.id)?;
     let result = ops_retry(
         store,

@@ -7,7 +7,7 @@ use std::path::Path;
 
 use common::*;
 use sha2::{Digest, Sha256};
-use task_core::{ArtifactRef, Event, Status, Task, TaskKind, TaskStore, WorkspaceSpec};
+use task_core::{ArtifactRef, Event, Status, Task, TaskKind, WorkspaceSpec};
 
 fn sha256(bytes: &[u8]) -> String {
     Sha256::digest(bytes)

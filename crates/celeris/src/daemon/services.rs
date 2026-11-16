@@ -6,7 +6,7 @@ use std::time::Duration;
 use llm_proxy::routing_context::{ProxyEventSink, ProxyRoutingEvent};
 use task_api::ApiError;
 use task_core::model_router::context_registry::RoutingContextRegistry;
-use task_core::{Event, SharedRole, TaskId, TaskStore};
+use task_core::{Event, SharedRole, SqliteStore, TaskId};
 use task_dispatch::Dispatcher;
 
 use super::api::bind_reuseport;
@@ -154,12 +154,12 @@ pub(crate) fn build_llm_proxy_state(
 
 /// proxy 要求の task event 追記。DB 操作は blocking pool へ送り、HTTP 応答を待たせない。
 struct TaskProxyEventSink {
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     append_lock: Arc<std::sync::Mutex<()>>,
 }
 
 impl TaskProxyEventSink {
-    fn new(store: Arc<dyn TaskStore>) -> Self {
+    fn new(store: Arc<SqliteStore>) -> Self {
         Self {
             store,
             append_lock: Arc::new(std::sync::Mutex::new(())),
@@ -195,7 +195,7 @@ impl ProxyEventSink for TaskProxyEventSink {
 }
 
 fn append_proxy_event(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     lock: &std::sync::Mutex<()>,
     event: ProxyRoutingEvent,
 ) -> Result<(), String> {

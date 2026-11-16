@@ -2,7 +2,7 @@
 use std::{collections::BTreeSet, process::Command};
 
 use task_core::{
-    SqliteStore, TaskStore, WorkspaceSpec,
+    SqliteStore, WorkspaceSpec,
     route_extract::ChangeCount,
     route_record::RouteOutcome,
     store::StoreError,
@@ -31,8 +31,8 @@ pub fn outcome_labels_for_run(
 
 /// Compute labels' changed_* values. Invalid, incomplete, remote, or unavailable
 /// observations return `None`, which task-core serializes as null plus missing.
-pub fn count_write_set_changes<S: TaskStore + ?Sized>(
-    store: &S,
+pub fn count_write_set_changes(
+    store: &SqliteStore,
     records: &[WriteSetRecord],
 ) -> Option<ChangeCount> {
     if records.is_empty() {

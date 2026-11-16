@@ -18,7 +18,7 @@ use task_core::model_catalog::{
     CatalogDelta, CatalogSource, DiscoveredModel, parse_codex_model_list, parse_openai_models_list,
     parse_opencode_models_stdout,
 };
-use task_core::{LlmSourceRef, ModelCatalogStore, TaskStore};
+use task_core::{LlmSourceRef, SqliteStore};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
@@ -445,8 +445,8 @@ pub async fn discover_one(target: &DiscoveryTarget) -> Result<Vec<DiscoveredMode
 }
 
 /// `targets` を順に発見して catalog に反映する。失敗は記録だけして catalog を変えない。
-pub async fn run_targets<S: ModelCatalogStore + ?Sized>(
-    store: &S,
+pub async fn run_targets(
+    store: &SqliteStore,
     targets: &[DiscoveryTarget],
     only_source: Option<&str>,
     now: i64,
@@ -476,8 +476,8 @@ pub async fn run_targets<S: ModelCatalogStore + ?Sized>(
     out
 }
 
-fn failure_summary<S: ModelCatalogStore + ?Sized>(
-    store: &S,
+fn failure_summary(
+    store: &SqliteStore,
     source: &CatalogSource,
     error: String,
     now: i64,
@@ -498,8 +498,8 @@ fn failure_summary<S: ModelCatalogStore + ?Sized>(
 }
 
 /// 設定の全 source（または `only_source` だけ）を発見して反映する。
-pub async fn run_discovery<S: ModelCatalogStore + ?Sized>(
-    store: &S,
+pub async fn run_discovery(
+    store: &SqliteStore,
     config: &Config,
     only_source: Option<&str>,
     now: i64,
@@ -540,7 +540,7 @@ impl DiscoveryTicker {
     /// 取得が終わるまで次は始めない。`after` は反映後に同期で呼ばれる。
     pub fn tick(
         &mut self,
-        store: Arc<dyn TaskStore>,
+        store: Arc<SqliteStore>,
         config: &Config,
         now: i64,
         after: impl FnOnce(&[DiscoverySummary]) + Send + 'static,
@@ -580,7 +580,7 @@ impl DiscoveryTicker {
 /// `POST /api/v1/llm/models/discover` の実体（daemon が API の設定へ差す）。起動時の設定の写しで発見し、
 /// 反映後に現在の routing 候補へ catalog の可用性と override を反映する。
 pub struct DaemonDiscoveryHook {
-    pub store: Arc<dyn TaskStore>,
+    pub store: Arc<SqliteStore>,
     pub config: Arc<Config>,
 }
 

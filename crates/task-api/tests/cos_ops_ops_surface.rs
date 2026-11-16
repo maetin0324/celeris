@@ -15,12 +15,12 @@ use serde_json::{Value, json};
 /// The project repository's document directory (a fixture repo, not this one).
 const DOCS: &str = "docs";
 use task_api::browser::BrowserApiConfig;
-use task_core::browser_wait::BrowserWaitStore;
+
 use task_core::chat::attachments::ChatAttachmentLimits;
 use task_core::chat::{ChatPostMessageRequest, ChatSendMode};
 use task_core::{
     ArtifactRef, Event, GenreSpec, RoleSpec, RunIndexRole, RunIndexStatus, RunRow, Status,
-    TaskKind, TaskStore, Tier,
+    TaskKind, Tier,
 };
 use time::OffsetDateTime;
 

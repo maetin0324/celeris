@@ -2,8 +2,8 @@
 //! 依頼で止まった統合 WU の特定と再開（受信箱の回答と sweep が共有する）、自動の解消を経ていない古い依頼を
 //! 自動の解消へ戻す sweep（D3）を持つ。判定は store だけで、LLM は呼ばない。
 use task_core::{
-    Event, Status, StoreError, TaskId, TaskStore, WorkUnitBlockedReason, WorkUnitKind, WorkUnitRow,
-    WorkUnitStatus,
+    Event, SqliteStore, Status, StoreError, TaskId, WorkUnitBlockedReason, WorkUnitKind,
+    WorkUnitRow, WorkUnitStatus,
 };
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -20,7 +20,7 @@ pub const AUTO_REPAIR_RETRY_NOTE: &str = "自動の解消へ回す: 段の統合
 /// origin `phase:<key>` の依頼で止まっている統合 WU（task が blocked、WU が blocked(question・continuation cap)）。
 /// 止まっていなければ `None`（別の経路で再開・完了した。回答の記録だけ行えばよい）。
 pub fn blocked_integration_unit(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
     origin: &str,
 ) -> Result<Option<WorkUnitRow>, StoreError> {
@@ -47,7 +47,7 @@ pub fn blocked_integration_unit(
 
 /// 止まった統合 WU を pending に戻し、task を回答（`Trigger::Answer`）で再開する。次の tick が統合をやり直す。
 pub fn resume_integration_unit(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
     mut unit: WorkUnitRow,
     note: String,
@@ -86,7 +86,7 @@ fn auto_repaired(units: &[WorkUnitRow], phase: &str) -> bool {
 /// D3: 自動の解消（merge の repair WU）を経ずに人に回した段の統合の未回答の依頼（この ADR の前に記録したもの）を
 /// `retry` で閉じ、統合 WU を再開する。やり直した統合は衝突を repair WU に解かせる。戻り値は再開した
 /// `(task, request id)`。自動の解消が尽きて人に回した依頼（同じ段に repair WU がある）は触らない。
-pub fn retry_unrepaired_requests(store: &dyn TaskStore) -> Result<Vec<(TaskId, String)>, OpsError> {
+pub fn retry_unrepaired_requests(store: &SqliteStore) -> Result<Vec<(TaskId, String)>, OpsError> {
     let mut resumed = Vec::new();
     for open in super::open_requests(store)? {
         if !open.origin.starts_with(PHASE_ORIGIN_PREFIX) {

@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use schemars::JsonSchema;
 use serde::Serialize;
-use task_core::{Task, TaskId, TaskStore};
+use task_core::{SqliteStore, Task, TaskId};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -286,7 +286,7 @@ pub fn route_attention(item: &AttentionItem) -> Option<InboxKind> {
 
 /// `inbox::inbox` を組み立て、共通形へ写す（D5 `GET /inbox/items` の元）。
 pub fn human_inbox(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     snapshot: Option<&DaemonSnapshot>,
     ctx: &ViewContext,
     now: OffsetDateTime,
@@ -300,7 +300,7 @@ pub fn human_inbox(
 /// task ごとの走査は触れた task とそれを root に持つ task だけを読むので、blocked の task の数に比例しない。
 /// `counts` は抜いた項目の数。`suppressed` は範囲内の走査の分だけ（全件の値ではない）。
 pub fn human_inbox_touching(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     snapshot: Option<&DaemonSnapshot>,
     ctx: &ViewContext,
     now: OffsetDateTime,

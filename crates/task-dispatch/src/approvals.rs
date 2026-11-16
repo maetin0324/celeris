@@ -5,12 +5,13 @@
 //! （DESIGN 原則 1）: 追記する文面は run の自己申告（または部をまたぐ委譲の質問）そのままで、判断は
 //! 「誰宛てにするか」（`task.assignee`、無ければ秘書）だけの決定的な処理。
 
+use task_core::OrgDirectory;
 use task_core::approval::{Approval, ApprovalId};
-use task_core::{OrgKind, StoreError, Task, TaskStore};
+use task_core::{OrgKind, SqliteStore, StoreError, Task};
 use time::OffsetDateTime;
 
 /// 質問の宛先ノード: `task.assignee`、無ければ秘書（組織に無ければ `None`）。SPEC §3.1 / ADR-0033 D5。
-fn question_node_id(store: &dyn TaskStore, task: &Task) -> Result<Option<String>, StoreError> {
+fn question_node_id(store: &SqliteStore, task: &Task) -> Result<Option<String>, StoreError> {
     if let Some(assignee) = &task.assignee {
         return Ok(Some(assignee.clone()));
     }
@@ -27,7 +28,7 @@ fn question_node_id(store: &dyn TaskStore, task: &Task) -> Result<Option<String>
 /// Phase 27: **同じタスク・同じ文面の未決の行があれば増やさない**（部をまたぐ委譲は run をやり直すたびに
 /// 同じ質問が上がるので、認可の一覧が同じ行で埋まらないようにする。決定的な文字列の一致だけで判断する）。
 pub(crate) fn record_question_approval(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     text: &str,
     now: OffsetDateTime,
@@ -69,7 +70,7 @@ pub(crate) fn record_question_approval(
 /// （F7 より前の残りと、遷移と追記の競合の取りこぼし。通常は終端への遷移が同じトランザクションで閉じる）。
 /// 決定的な SQL だけで、LLM は呼ばない。閉じた件数を返す。
 pub(crate) fn withdraw_stale_approvals(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     now: OffsetDateTime,
 ) -> Result<usize, StoreError> {
     let withdrawn = store.approval_withdraw_stale(now)?;

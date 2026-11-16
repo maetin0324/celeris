@@ -137,12 +137,7 @@ impl WorkerAdapter for EditAdapter {
     }
 }
 
-fn edit_task(
-    store: &Arc<dyn TaskStore>,
-    dir: &std::path::Path,
-    title: &str,
-    priority: i64,
-) -> Task {
+fn edit_task(store: &Arc<SqliteStore>, dir: &std::path::Path, title: &str, priority: i64) -> Task {
     let mut task = new_task(
         dir,
         Check::Command {
@@ -174,7 +169,7 @@ async fn run_variant_with(
 ) -> (AbMetric, u64, u64) {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("README.md"), BASE).unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let a = edit_task(&store, dir.path(), "task A", 1);
     let b = edit_task(&store, dir.path(), "task B", 0);
     let mut adapter = EditAdapter::new(dir.path().to_path_buf());

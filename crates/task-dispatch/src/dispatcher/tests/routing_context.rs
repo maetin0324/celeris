@@ -281,7 +281,7 @@ impl RoutingContextRegistry for RecordingRegistry {
 #[tokio::test]
 async fn routing_context_is_registered_recorded_once_and_released_at_run_end() {
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = new_task(
         ws.path(),
         Check::Command {

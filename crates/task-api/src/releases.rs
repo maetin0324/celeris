@@ -142,10 +142,7 @@ pub const BRANCH_COMMITS_LIMIT: usize = 500;
 pub(crate) async fn list(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> ApiResult {
     crate::handlers::no_query(&raw)?;
     let instances = state
-        .blocking(move |store| {
-            use task_core::TaskStore;
-            store.instance_list().map_err(store_problem)
-        })
+        .blocking(move |store| store.instance_list().map_err(store_problem))
         .await?;
     let fs = match state.inner.releases.clone() {
         Some(source) => tokio::task::spawn_blocking(move || source.list())
@@ -268,10 +265,7 @@ pub(crate) async fn deliveries(
 ) -> ApiResult {
     crate::handlers::no_query(&raw)?;
     let list = state
-        .blocking(move |store| {
-            use task_core::DeliveryStore;
-            store.delivery_list().map_err(store_problem)
-        })
+        .blocking(move |store| store.delivery_list().map_err(store_problem))
         .await?;
     let mut items: Vec<DeliveryHead> = list
         .into_iter()

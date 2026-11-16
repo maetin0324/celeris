@@ -18,10 +18,10 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use task_core::Tier;
 use task_core::model_catalog::{
     CatalogDelta, CatalogEntry, CatalogOverride, CatalogOverrideRow, CatalogSource, DiscoveryRecord,
 };
-use task_core::{ModelCatalogStore, Tier};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 

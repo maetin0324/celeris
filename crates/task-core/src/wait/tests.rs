@@ -5,8 +5,8 @@ use time::OffsetDateTime;
 use super::*;
 use crate::execution_plan::{WorkUnitContext, WorkUnitSpec, newly_ready, newly_ready_with};
 use crate::message::MessageId;
+use crate::store::SqliteStore;
 use crate::store::tests::sample_task;
-use crate::store::{SqliteStore, TaskStore};
 
 fn unit(
     key: &str,

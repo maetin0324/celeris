@@ -1,11 +1,10 @@
 //! ADR 2026-10-08-browser-prod-enablement D4: 起票・retry 時の最小 browser policy の自動付与と
 //! retry での引き継ぎ（`task_ops::add::create_task` と `task_ops::retry::retry_task` を本物の store で通す）。
 
-use task_core::browser_wait::BrowserWaitStore;
 use task_core::org::{OrgKind, OrgNode};
 use task_core::{
     BrowserAction, BrowserCapability, BrowserDomainMode, BrowserSitePolicy, BrowserTaskPolicy,
-    OrgDirectory, SqliteStore, Task, TaskStore, Trigger,
+    OrgDirectory, SqliteStore, Task, Trigger,
 };
 use task_ops::add::{NewTaskSpec, create_task};
 use task_ops::retry::retry_task;

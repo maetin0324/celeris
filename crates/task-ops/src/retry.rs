@@ -4,12 +4,13 @@
 //! `failed` または `cancelled` のタスクを**複製して新しいタスクを作る**（`Failed`/`Cancelled` を非終端に
 //! 戻す状態機械の遷移は足さない。DESIGN の状態機械を壊さないため）。`depends_on` は元と同じにし、
 //! 元のタスクに依存していた未終端（またはその依存の失敗で `cancelled` になった）タスクの `depends_on` を
-//! 新しい id に張り替える（後者は `draft` に戻す）。書き込みは `TaskStore::retry_task` に任せ、ここでは
+//! 新しい id に張り替える（後者は `draft` に戻す）。書き込みは `SqliteStore::retry_task` に任せ、ここでは
 //! 検証と `Task` の組み立てだけを行う。
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use task_core::{Status, Task, TaskId, TaskStore, WorkspaceSpec};
+use task_core::OrgDirectory;
+use task_core::{SqliteStore, Status, Task, TaskId, WorkspaceSpec};
 use time::OffsetDateTime;
 
 use crate::error::OpsError;
@@ -32,7 +33,7 @@ pub struct RetryResult {
 /// （`Remote.cluster` は API 層〈`validated_workspace`〉が見る。ここでは `Local.path` が空でないこと、
 /// 明示の `Remote` で元の担当が `cluster:<id>` を持たなければ 422、を見る）。
 pub fn retry_task(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     accept: bool,
     workspace: Option<WorkspaceSpec>,
@@ -54,7 +55,7 @@ pub fn retry_task(
 /// まま planner に進み、GUI にも古い判定が出た）。`execution_hint`（人の明示・CoS のヒント）は引き継ぐ。
 #[allow(clippy::too_many_arguments)]
 pub fn retry_task_with_execution(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     accept: bool,
     workspace: Option<WorkspaceSpec>,
@@ -70,7 +71,7 @@ pub fn retry_task_with_execution(
 /// [`retry_task_with_execution`] の検証と複製先の組み立て（読むだけ）。返った task を `retry_task`
 /// （CoS の監査経路では `SqliteStore::retry_task_tx`）で書き、[`finish_retry`] に渡す。
 pub fn plan_retry(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     accept: bool,
     workspace: Option<WorkspaceSpec>,
@@ -163,7 +164,7 @@ pub fn plan_retry(
 
 /// 複製を書いた後の後始末（`execution` の明示）と結果。
 pub fn finish_retry(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     new_id: TaskId,
     rewired: Vec<TaskId>,
     execution: Option<task_core::ExecutionMode>,

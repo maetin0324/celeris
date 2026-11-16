@@ -14,7 +14,7 @@ use task_core::required_checks::health::HealthVerdict;
 
 /// `id` の task の `HealthFindingsRepeated` の `(源, 位置, fingerprint)`。
 fn repeats_on(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     id: TaskId,
 ) -> Vec<(TaskId, HealthRepeatSite, Vec<String>)> {
     events_of(store, id)
@@ -68,7 +68,7 @@ fn replanned(events: &[Event]) -> bool {
 /// `parent`）に、checks（cmd は `check`）を持つ WU `a` を 1 件だけ置く。
 fn work_unit_task(
     repo: &Path,
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     (exit, check): (i32, &str),
     parent: Option<TaskId>,
 ) -> Task {
@@ -85,7 +85,7 @@ fn work_unit_task(
 
 /// 段の統合の試験の土台: base に stub の検査器を commit した repo の task に、葉の WU 2 件（checks 無し。WU の check は
 /// 走らない）を 1 段で置く。
-fn integration_task(repo: &Path, store: &Arc<dyn TaskStore>, exit: i32) -> Task {
+fn integration_task(repo: &Path, store: &Arc<SqliteStore>, exit: i32) -> Task {
     init_test_repo(repo);
     commit_base_checker(repo, exit);
     let task = parallel_task(repo, "true");
@@ -113,7 +113,7 @@ fn integration_adapter() -> ParallelWuAdapter {
 async fn health_limits_work_unit_same_fingerprint_blocks() {
     let repo = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = work_unit_task(repo.path(), &store, (1, "true"), None);
     let adapter = Arc::new(ParallelWuAdapter::new(Duration::from_millis(5)));
     let mut d = parallel_dispatcher(store.clone(), adapter, root.path(), 2, 2, 2);
@@ -168,7 +168,7 @@ async fn health_limits_work_unit_same_fingerprint_blocks() {
 async fn health_limits_work_unit_different_findings_still_retry() {
     let repo = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = work_unit_task(repo.path(), &store, (1, "true"), None);
     let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let seen = runs.clone();
@@ -209,7 +209,7 @@ async fn health_limits_work_unit_different_findings_still_retry() {
 async fn health_limits_work_unit_mixed_failure_keeps_retry() {
     let repo = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = work_unit_task(repo.path(), &store, (1, "false"), None);
     let adapter = Arc::new(ParallelWuAdapter::new(Duration::from_millis(5)));
     let mut d = parallel_dispatcher(store.clone(), adapter, root.path(), 2, 2, 2);
@@ -284,7 +284,7 @@ fn changing_findings_adapter() -> Arc<ParallelWuAdapter> {
 async fn health_limits_work_unit_retry_cap_blocks_without_replan() {
     let repo = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = work_unit_task(repo.path(), &store, (1, "true"), None);
     assert_eq!(task.budget.max_retries, 2);
     let (plans_before, _) = plans_and_planner_runs(&events_of(&store, task.id));
@@ -354,7 +354,7 @@ async fn health_limits_work_unit_retry_cap_blocks_without_replan() {
 async fn health_limits_work_unit_mixed_failure_cap_keeps_replan() {
     let repo = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = work_unit_task(repo.path(), &store, (1, "false"), None);
     let mut d = parallel_dispatcher(
         store.clone(),
@@ -402,7 +402,7 @@ async fn health_limits_same_fingerprint_escalates_once() {
     let plain = tempfile::tempdir().unwrap();
     let (repo_a, repo_b) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut top = new_task(
         plain.path(),
         Check::Command {
@@ -473,7 +473,7 @@ async fn health_limits_same_fingerprint_escalates_once() {
 async fn health_limits_integration_same_fingerprint_blocks() {
     let repo = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = integration_task(repo.path(), &store, 1);
     // 修復は commit を残すが指摘は直さない（同じ fingerprint が残る）。
     let adapter =
@@ -533,7 +533,7 @@ async fn health_limits_integration_same_fingerprint_blocks() {
 async fn health_limits_integration_repair_cap_blocks() {
     let repo = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = integration_task(repo.path(), &store, 1);
     // 修復ごとに指摘の fingerprint が変わる（1 → 2 → 3）。
     let adapter = Arc::new(
@@ -590,7 +590,7 @@ async fn health_limits_integration_repair_cap_blocks() {
 async fn health_limits_integration_error_blocks_without_repair() {
     let repo = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = integration_task(repo.path(), &store, 2);
     let adapter = Arc::new(integration_adapter());
     let mut d = parallel_dispatcher(store.clone(), adapter, root.path(), 3, 3, 3);

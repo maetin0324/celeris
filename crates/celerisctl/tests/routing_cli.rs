@@ -95,7 +95,6 @@ fn routing_export_emits_one_training_row_and_supports_text_omission() {
 }
 
 fn stage_fixture(path: &std::path::Path) -> String {
-    use task_core::TaskStore;
     use task_core::routing_evidence::{EvidenceKey, EvidenceRow};
     let store = task_core::SqliteStore::open(path).unwrap();
     let spec: task_ops::add::NewTaskSpec = serde_json::from_value(serde_json::json!({

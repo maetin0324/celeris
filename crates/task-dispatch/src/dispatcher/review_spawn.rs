@@ -5,6 +5,7 @@ use super::token_budget::run_watch;
 use super::*;
 use crate::review::RepoHealth;
 use crate::review_decision;
+use task_core::OrgDirectory;
 use task_worker::check_slots::CheckLimits;
 
 /// ADR-0118 D4 付記 / ADR 2026-10-27-review-resync-halt-visible-and-reviewer-reuse D3・D4: 直近の遷移（自動の
@@ -426,11 +427,11 @@ impl Dispatcher {
         };
 
         let delivery_requires_reviewer_run =
-            task_ops::delivery::auto_integrates(&*self.store, &task).unwrap_or(false)
+            task_ops::delivery::auto_integrates(&self.store, &task).unwrap_or(false)
                 && task_core::support_kind(&task).is_none()
                 && !task_core::tree::is_tree_child(&task);
         let reviewer = if needs_reviewer_run(&task) || delivery_requires_reviewer_run {
-            match self.pick_reviewer(&task, &run_id, run_watch(&*self.store, &task, None)) {
+            match self.pick_reviewer(&task, &run_id, run_watch(&self.store, &task, None)) {
                 Some(r) => Some(r),
                 None => {
                     tracing::debug!(%task_id, "reviewer run deferred (no admissible route)");

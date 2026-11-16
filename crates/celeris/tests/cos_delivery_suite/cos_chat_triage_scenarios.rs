@@ -4,12 +4,9 @@
 //! 時刻は固定値を渡す。待ちは webhook の受信を出来事として待ち、sleep しない。
 use celeris::notify::{self, NotifyConfig, SendResult};
 use task_core::chat::triage::CosTriageSource;
-use task_core::feed::{NoticeEvent, NoticeKind, NoticeStore};
+use task_core::feed::{NoticeEvent, NoticeKind};
 use task_core::model::{Budget, Check, Criterion, WorkerHint, WorkspaceSpec};
-use task_core::{
-    Event, NotificationKind, NotificationStore, SqliteStore, Status, Task, TaskId, TaskKind,
-    TaskStore, Tier,
-};
+use task_core::{Event, NotificationKind, SqliteStore, Status, Task, TaskId, TaskKind, Tier};
 use time::OffsetDateTime;
 
 use crate::webhook::{Hook, hook};

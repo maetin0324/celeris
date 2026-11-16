@@ -11,7 +11,7 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use task_core::{Event, SqliteStore, Status, Task, TaskId, TaskStore};
+use task_core::{Event, SqliteStore, Status, Task, TaskId};
 
 fn bin(name: &str) -> PathBuf {
     let exe = std::env::current_exe().unwrap();

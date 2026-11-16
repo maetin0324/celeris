@@ -22,7 +22,7 @@ fn org_node(id: &str, parent: Option<&str>, kind: OrgKind) -> OrgNode {
     }
 }
 
-fn store_with_org() -> Arc<dyn TaskStore> {
+fn store_with_org() -> Arc<SqliteStore> {
     let store = SqliteStore::open_in_memory().expect("open");
     for n in [
         org_node("secretary", None, OrgKind::Secretary),

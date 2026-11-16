@@ -7,11 +7,10 @@
 //! - 人が `once` / `standing` / `denied` のどれで答えても、最終的には**同じ `answers[]` の経路**
 //!   （`task_ops::gate::answer`）でタスクを再開する。二重の実装はしない（`task-ops/src/approval.rs` 参照）。
 //! - `standing` のときだけ `standing_rules` に 1 行増え、以後の run の前置きに常に注入される
-//!   （`crate::approval::StandingRuleStore` を読むのは `task-dispatch`、前置きに描くのは `task-worker::preamble`）。
+//!   （`standing_rules` を読むのは `task-dispatch`、前置きに描くのは `task-worker::preamble`）。
 //! - 自動判定・自動化は今回はやらない（ADR-0033 D5「規則がまだ無い」）。
 //!
-//! `store.rs` は `TaskStore` の supertrait として `ApprovalStore` を要求するだけで、実装（SQL）はここにある
-//! （`report.rs` と同じ形）。
+//! 読み書きの実装（SQL）は、この module の `impl SqliteStore` の固有 method にある（`report.rs` と同じ形）。
 
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{OptionalExtension, params, params_from_iter};
@@ -175,52 +174,7 @@ pub struct StandingRule {
     pub created_at: OffsetDateTime,
 }
 
-// ---- `approvals` / `standing_rules` 表の読み書き（SQL はここだけ。`store.rs` は supertrait で要求するだけ）----
-
-/// ADR-0033 D5: `approvals` と `standing_rules` の読み書き。`TaskStore` の supertrait で、実装は
-/// `SqliteStore` のみ（ディスパッチャは `Arc<dyn TaskStore>` から呼ぶ）。
-pub trait ApprovalStore: Send + Sync {
-    /// 1 件追記する（`Question` 終端のたび。ADR-0010 の既存の `answers[]` の仕組みには触れない）。
-    fn approval_append(&self, approval: &Approval) -> Result<(), StoreError>;
-    fn approval_get(&self, id: ApprovalId) -> Result<Option<Approval>, StoreError>;
-    /// 古い順（`created_at` 昇順、同値は `id` 昇順。答える順に並ぶキューとして扱う）。
-    ///
-    /// `pending`: `Some(true)` = 未決定だけ（`decision IS NULL`）、`Some(false)` = **決定済みだけ**
-    /// （`decision IS NOT NULL`。人が決めたものの履歴）、`None` = 絞り込み無し。
-    /// GUI からの依頼 R5（Phase 27）で三値にした（以前は `bool` で、`false` が「絞り込み無し」だった）。
-    fn approval_list(
-        &self,
-        pending: Option<bool>,
-        project_id: Option<ProjectId>,
-        node_id: Option<&str>,
-    ) -> Result<Vec<Approval>, StoreError>;
-    /// `decision` / `answer` / `decided_at` を書く（既に決まっていても上書きする。人が答え直せるように）。
-    /// 無い id は `Ok(None)`。
-    fn approval_decide(
-        &self,
-        id: ApprovalId,
-        decision: Decision,
-        answer: Option<String>,
-        at: OffsetDateTime,
-    ) -> Result<Option<Approval>, StoreError>;
-
-    /// Phase F7（取りこぼしの照合）: 未決のまま、認可元のタスクが既に終端（`done` / `failed` /
-    /// `cancelled`）になっている行を `Withdrawn` で閉じ、タスクごとに `Event::ApprovalsWithdrawn`
-    /// （`reason = "reconcile"`）を追記する（1 トランザクション）。通常の経路は終端への遷移
-    /// （`apply_transition` と同じトランザクション）で閉じるので、ここに来るのは F7 より前の残りと、
-    /// 遷移と追記の競合だけ。閉じたものが無ければ空。
-    fn approval_withdraw_stale(
-        &self,
-        at: OffsetDateTime,
-    ) -> Result<Vec<WithdrawnApprovals>, StoreError>;
-
-    fn standing_rule_append(&self, rule: &StandingRule) -> Result<(), StoreError>;
-    /// `node_id = Some(id)` なら「全員向け（`node_id IS NULL`）」+「そのノード向け」、`None` なら絞り込み無し
-    /// （全ノード分。GUI の一覧・編集に使う）。古い順。
-    fn standing_rule_list(&self, node_id: Option<&str>) -> Result<Vec<StandingRule>, StoreError>;
-    /// 無い id は `Ok(false)`。
-    fn standing_rule_delete(&self, id: StandingRuleId) -> Result<bool, StoreError>;
-}
+// ---- `approvals` / `standing_rules` 表の読み書き（SQL はここだけ）----
 
 /// Phase F7: `Event::ApprovalsWithdrawn.reason` — 終端への遷移と同じトランザクションで閉じた。
 pub const WITHDRAWN_BY_TRANSITION: &str = "task_terminal";
@@ -398,8 +352,10 @@ const SELECT_APPROVAL: &str = "SELECT id, project_id, node_id, task_id, question
                                created_at, decided_at FROM approvals";
 const SELECT_STANDING_RULE: &str = "SELECT id, node_id, rule, created_at FROM standing_rules";
 
-impl ApprovalStore for SqliteStore {
-    fn approval_append(&self, approval: &Approval) -> Result<(), StoreError> {
+// ADR-0033 D5: `approvals` と `standing_rules` の読み書き（ディスパッチャは `Arc<SqliteStore>` から呼ぶ）。
+impl SqliteStore {
+    /// 1 件追記する（`Question` 終端のたび。ADR-0010 の既存の `answers[]` の仕組みには触れない）。
+    pub fn approval_append(&self, approval: &Approval) -> Result<(), StoreError> {
         let conn = self.lock()?;
         conn.execute(
             "INSERT INTO approvals (id, project_id, node_id, task_id, question, decision, answer, \
@@ -418,8 +374,7 @@ impl ApprovalStore for SqliteStore {
         )?;
         Ok(())
     }
-
-    fn approval_get(&self, id: ApprovalId) -> Result<Option<Approval>, StoreError> {
+    pub fn approval_get(&self, id: ApprovalId) -> Result<Option<Approval>, StoreError> {
         let conn = self.lock()?;
         let row = conn
             .query_row(
@@ -433,8 +388,12 @@ impl ApprovalStore for SqliteStore {
             None => Ok(None),
         }
     }
-
-    fn approval_list(
+    /// 古い順（`created_at` 昇順、同値は `id` 昇順。答える順に並ぶキューとして扱う）。
+    ///
+    /// `pending`: `Some(true)` = 未決定だけ（`decision IS NULL`）、`Some(false)` = **決定済みだけ**
+    /// （`decision IS NOT NULL`。人が決めたものの履歴）、`None` = 絞り込み無し。
+    /// GUI からの依頼 R5（Phase 27）で三値にした（以前は `bool` で、`false` が「絞り込み無し」だった）。
+    pub fn approval_list(
         &self,
         pending: Option<bool>,
         project_id: Option<ProjectId>,
@@ -466,8 +425,9 @@ impl ApprovalStore for SqliteStore {
         }
         Ok(out)
     }
-
-    fn approval_decide(
+    /// `decision` / `answer` / `decided_at` を書く（既に決まっていても上書きする。人が答え直せるように）。
+    /// 無い id は `Ok(None)`。
+    pub fn approval_decide(
         &self,
         id: ApprovalId,
         decision: Decision,
@@ -477,8 +437,12 @@ impl ApprovalStore for SqliteStore {
         let conn = self.lock()?;
         Self::approval_decide_tx(&conn, id, decision, answer, at)
     }
-
-    fn approval_withdraw_stale(
+    /// Phase F7（取りこぼしの照合）: 未決のまま、認可元のタスクが既に終端（`done` / `failed` /
+    /// `cancelled`）になっている行を `Withdrawn` で閉じ、タスクごとに `Event::ApprovalsWithdrawn`
+    /// （`reason = "reconcile"`）を追記する（1 トランザクション）。通常の経路は終端への遷移
+    /// （`apply_transition` と同じトランザクション）で閉じるので、ここに来るのは F7 より前の残りと、
+    /// 遷移と追記の競合だけ。閉じたものが無ければ空。
+    pub fn approval_withdraw_stale(
         &self,
         at: OffsetDateTime,
     ) -> Result<Vec<WithdrawnApprovals>, StoreError> {
@@ -528,13 +492,16 @@ impl ApprovalStore for SqliteStore {
         tx.commit()?;
         Ok(out)
     }
-
-    fn standing_rule_append(&self, rule: &StandingRule) -> Result<(), StoreError> {
+    pub fn standing_rule_append(&self, rule: &StandingRule) -> Result<(), StoreError> {
         let conn = self.lock()?;
         Self::standing_rule_append_tx(&conn, rule)
     }
-
-    fn standing_rule_list(&self, node_id: Option<&str>) -> Result<Vec<StandingRule>, StoreError> {
+    /// `node_id = Some(id)` なら「全員向け（`node_id IS NULL`）」+「そのノード向け」、`None` なら絞り込み無し
+    /// （全ノード分。GUI の一覧・編集に使う）。古い順。
+    pub fn standing_rule_list(
+        &self,
+        node_id: Option<&str>,
+    ) -> Result<Vec<StandingRule>, StoreError> {
         let (where_sql, args): (String, Vec<SqlValue>) = match node_id {
             Some(node_id) => (
                 " WHERE node_id IS NULL OR node_id = ?".to_string(),
@@ -552,8 +519,8 @@ impl ApprovalStore for SqliteStore {
         }
         Ok(out)
     }
-
-    fn standing_rule_delete(&self, id: StandingRuleId) -> Result<bool, StoreError> {
+    /// 無い id は `Ok(false)`。
+    pub fn standing_rule_delete(&self, id: StandingRuleId) -> Result<bool, StoreError> {
         let conn = self.lock()?;
         SqliteStore::standing_rule_delete_tx(&conn, id)
     }

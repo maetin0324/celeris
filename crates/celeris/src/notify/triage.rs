@@ -4,7 +4,7 @@ use std::path::Path;
 use rusqlite::{Connection, OpenFlags, OptionalExtension};
 use serde_json::Value;
 use task_core::chat::triage::CosTriageSource;
-use task_core::{Notification, NotificationKind, NotificationStore, SqliteStore, TaskStore};
+use task_core::{Notification, NotificationKind, SqliteStore};
 use task_ops::daemon::DaemonSnapshot;
 use task_ops::human_inbox::InboxKind;
 use task_ops::view::ViewContext;
@@ -163,7 +163,7 @@ impl Sendable {
 /// stagnation kinds are `Unknown` without it, never `Resolved`.
 pub fn source_unresolved(
     db_path: &Path,
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     view: &ViewContext,
     snapshot: Option<&DaemonSnapshot>,
     row: &Notification,

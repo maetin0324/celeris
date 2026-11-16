@@ -28,7 +28,7 @@ async fn a_dependent_of_a_unit_that_committed_on_the_task_branch_dispatches() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "test -f remerge.txt && test -f reship.txt");
     store.insert(&task).unwrap();
     adopt_v2_plan(
@@ -95,7 +95,7 @@ async fn a_dependent_of_a_unit_that_made_no_commit_bases_on_the_task_branch() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "test -f reship.txt");
     store.insert(&task).unwrap();
     adopt_v2_plan(
@@ -134,7 +134,7 @@ async fn an_unresolvable_dependency_blocks_the_unit_once_and_asks_a_human() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "test -f b.txt");
     store.insert(&task).unwrap();
     adopt_v2_plan(
@@ -262,7 +262,7 @@ async fn transient_prepare_failures_retry_with_backoff_then_block() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     adopt_v2_plan(&store, task.id, &["build"], vec![v2_wu("a", "build", &[])]);

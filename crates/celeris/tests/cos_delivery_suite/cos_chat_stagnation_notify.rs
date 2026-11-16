@@ -6,7 +6,7 @@
 use celeris::notify::triage::Sendable;
 use celeris::notify::{self};
 use task_core::chat::triage::CosTriageSource;
-use task_core::{Event, NotificationStore, SqliteStore, TaskId, TaskStore};
+use task_core::{Event, SqliteStore, TaskId};
 use task_ops::daemon::DaemonSnapshot;
 use task_ops::human_inbox::InboxKind;
 use task_ops::stagnation::{StagnationFinding, StagnationKind, StagnationPolicy};

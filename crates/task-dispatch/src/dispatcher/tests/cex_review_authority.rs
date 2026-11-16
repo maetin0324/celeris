@@ -161,16 +161,16 @@ fn claim_all(task: &Task) -> Vec<Evidence> {
         .collect()
 }
 
-fn status_of(store: &Arc<dyn TaskStore>, id: TaskId) -> Status {
+fn status_of(store: &Arc<SqliteStore>, id: TaskId) -> Status {
     store.get(id).unwrap().unwrap().status
 }
 
-fn terminal(store: &Arc<dyn TaskStore>, id: TaskId) -> bool {
+fn terminal(store: &Arc<SqliteStore>, id: TaskId) -> bool {
     status_of(store, id).is_terminal()
 }
 
 /// `Transitioned` の `(to, reason)` の列。
-pub(super) fn transitions(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<(Status, String)> {
+pub(super) fn transitions(store: &Arc<SqliteStore>, id: TaskId) -> Vec<(Status, String)> {
     events_of(store, id)
         .into_iter()
         .filter_map(|e| match e {
@@ -180,7 +180,7 @@ pub(super) fn transitions(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<(Status
         .collect()
 }
 
-pub(super) fn reached_done(store: &Arc<dyn TaskStore>, id: TaskId) -> bool {
+pub(super) fn reached_done(store: &Arc<SqliteStore>, id: TaskId) -> bool {
     transitions(store, id)
         .iter()
         .any(|(to, reason)| *to == Status::Done || reason == "review_pass")
@@ -188,7 +188,7 @@ pub(super) fn reached_done(store: &Arc<dyn TaskStore>, id: TaskId) -> bool {
 
 /// `run_id` の `WorkerFinished{role: reviewer}` の終わり方（event の数 = 長さ）。
 pub(super) fn reviewer_finishes(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     id: TaskId,
     run_id: &str,
 ) -> Vec<Option<RunEnd>> {
@@ -206,7 +206,7 @@ pub(super) fn reviewer_finishes(
         .collect()
 }
 
-fn reviewer_starts(store: &Arc<dyn TaskStore>, id: TaskId) -> usize {
+fn reviewer_starts(store: &Arc<SqliteStore>, id: TaskId) -> usize {
     events_of(store, id)
         .iter()
         .filter(|e| {
@@ -221,12 +221,12 @@ fn reviewer_starts(store: &Arc<dyn TaskStore>, id: TaskId) -> usize {
         .count()
 }
 
-fn count(store: &Arc<dyn TaskStore>, id: TaskId, pred: impl Fn(&Event) -> bool) -> usize {
+fn count(store: &Arc<SqliteStore>, id: TaskId, pred: impl Fn(&Event) -> bool) -> usize {
     events_of(store, id).iter().filter(|e| pred(e)).count()
 }
 
 /// 条件 `criterion` の最後の `ReviewVerdict` の合否。
-fn last_verdict(store: &Arc<dyn TaskStore>, id: TaskId, criterion: usize) -> Option<bool> {
+fn last_verdict(store: &Arc<SqliteStore>, id: TaskId, criterion: usize) -> Option<bool> {
     events_of(store, id)
         .into_iter()
         .rev()
@@ -240,7 +240,7 @@ fn last_verdict(store: &Arc<dyn TaskStore>, id: TaskId, criterion: usize) -> Opt
         })
 }
 
-pub(super) fn merge_queued(store: &Arc<dyn TaskStore>, id: TaskId) -> bool {
+pub(super) fn merge_queued(store: &Arc<SqliteStore>, id: TaskId) -> bool {
     matches!(
         store.delivery_get(id).unwrap(),
         Some(row) if row.state == task_core::DeliveryState::MergeQueued
@@ -259,7 +259,7 @@ fn lines(first: &str, last: &str) -> String {
 /// 案件の repo を持つ git の task（`ready`、retry 無し）。条件は `cmd` の検査と reviewer（index 1）。
 pub(super) fn git_review_task(
     repo: &std::path::Path,
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     cmd: String,
 ) -> Task {
     let (project, repos) =
@@ -283,7 +283,7 @@ pub(super) fn git_review_task(
 
 /// 配送（delivery）が始まる root task にする: 案件は自動取り込み（[`git_review_task`]）、担当は部署 `engineering`。
 /// 合格すれば配送の行が `MergeQueued` になる（`target_sync.rs` の `reuse_pass_delivery_reaches_merge` と同じ組織）。
-pub(super) fn deliverable(store: &Arc<dyn TaskStore>, task: &mut Task) {
+pub(super) fn deliverable(store: &Arc<SqliteStore>, task: &mut Task) {
     let now = OffsetDateTime::now_utc();
     for (id, parent, kind) in [
         ("cos", None, task_core::OrgKind::Secretary),
@@ -321,7 +321,7 @@ async fn cex_review_late_pass_on_the_old_candidate_does_not_pass_the_rebased_can
     init_test_repo(repo.path());
     commit_file(repo.path(), "shared.txt", &lines("line1", "line30"));
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = git_review_task(
         repo.path(),
         &store,
@@ -450,7 +450,7 @@ async fn cex_review_late_pass_on_the_old_candidate_does_not_pass_the_rebased_can
 #[tokio::test]
 async fn cex_review_worker_claim_does_not_override_a_failing_check() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = new_task(
         dir.path(),
         Check::Command {
@@ -494,7 +494,7 @@ async fn cex_review_worker_claim_does_not_override_a_failing_check() {
 #[tokio::test]
 async fn cex_review_worker_claim_is_not_done_before_or_against_the_reviewer() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = new_task(
         dir.path(),
         Check::Command {
@@ -558,7 +558,7 @@ async fn cex_review_resync_cap_halts_and_starts_no_more_reviewer_runs() {
     let ws = tempfile::tempdir().unwrap();
     let marks = tempfile::tempdir().unwrap();
     let runs = marks.path().join("check-runs");
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     // 検査のたびに main を進める（並列の取り込みが続いている）。
     let task = git_review_task(
         repo.path(),
@@ -578,7 +578,7 @@ async fn cex_review_resync_cap_halts_and_starts_no_more_reviewer_runs() {
     );
     let mut d = worktree_dispatcher(store.clone(), adapter.clone(), ws.path(), None);
     let halted =
-        |s: &Arc<dyn TaskStore>| count(s, id, |e| matches!(e, Event::ReviewResyncHalted { .. }));
+        |s: &Arc<SqliteStore>| count(s, id, |e| matches!(e, Event::ReviewResyncHalted { .. }));
     let s = store.clone();
     assert!(run_until_state(&mut d, || halted(&s) == 1 || terminal(&s, id)).await);
     assert_eq!(
@@ -649,7 +649,7 @@ async fn cex_review_resync_cap_halts_and_starts_no_more_reviewer_runs() {
 /// `<marks>/first` の dir で分かる。WU `a` の作業ツリー（`a.txt` だけ）と 2 回目以降の統合では止まらない。
 /// `next_stage` なら段 `ship`（WU `c`、独立）を `build` の後に足す（`build` が最後の段でなくなる）。
 fn adopt_blocking_integration_plan(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     id: TaskId,
     marks: &Path,
     next_stage: bool,
@@ -680,7 +680,7 @@ fn adopt_blocking_integration_plan(
 
 /// 再起動後の新しい active（自分の行を登録し、孤児の回収を有効にした並列 WU の dispatcher）。
 fn restarted_parallel_dispatcher(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     adapter: Arc<dyn WorkerAdapter>,
     root: &Path,
 ) -> Dispatcher {
@@ -698,7 +698,7 @@ fn restarted_parallel_dispatcher(
 
 /// 統合 WU `key` の `(to, reason)` の列。
 fn wu_transitions(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     id: TaskId,
     key: &str,
 ) -> Vec<(WorkUnitStatus, String)> {
@@ -713,7 +713,7 @@ fn wu_transitions(
         .collect()
 }
 
-fn wu_status_of(store: &Arc<dyn TaskStore>, id: TaskId, key: &str) -> Option<WorkUnitStatus> {
+fn wu_status_of(store: &Arc<SqliteStore>, id: TaskId, key: &str) -> Option<WorkUnitStatus> {
     store
         .work_units_for(id)
         .unwrap()
@@ -731,7 +731,7 @@ fn merged_parents(repo: &Path, branch: &str) -> Vec<String> {
 }
 
 /// `PhaseIntegrated` の `(key, skipped)` の列（event ごと）。
-fn phase_integrated(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<Vec<(String, bool)>> {
+fn phase_integrated(store: &Arc<SqliteStore>, id: TaskId) -> Vec<Vec<(String, bool)>> {
     events_of(store, id)
         .into_iter()
         .filter_map(|e| match e {
@@ -752,7 +752,7 @@ struct MidIntegration {
     repo: tempfile::TempDir,
     root: tempfile::TempDir,
     marks: tempfile::TempDir,
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     adapter: Arc<ParallelWuAdapter>,
     id: TaskId,
     task_branch: String,
@@ -779,7 +779,7 @@ async fn crash_mid_integration_check_with(pause_build: bool) -> MidIntegration {
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
     let marks = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = parallel_task(repo.path(), "test -f a.txt && test -f b.txt");
     if pause_build {
         task.routing = Some(task_core::TaskRouting {
@@ -1010,7 +1010,7 @@ impl WorkerAdapter for ConflictRepairAdapter {
 }
 
 /// `IntegrationRepairScheduled` の `(work_unit_id, target_sha, before_sha, attempt)` の列。
-fn repairs_scheduled(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<(String, String, String, u32)> {
+fn repairs_scheduled(store: &Arc<SqliteStore>, id: TaskId) -> Vec<(String, String, String, u32)> {
     events_of(store, id)
         .into_iter()
         .filter_map(|e| match e {
@@ -1040,7 +1040,7 @@ async fn cex_integration_sync_conflict_schedules_one_repair_and_never_passes_the
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = git_review_task(
         repo.path(),
         &store,
@@ -1250,7 +1250,7 @@ async fn cex_integration_restart_after_the_integration_unit_is_done_does_not_int
 /// 途中確認の段 `build` の後で止まった形（[`cex_integration_restart_keeps_the_stage_pause`]）: Task は `PhaseGate` で
 /// Blocked（最後の遷移の reason は `awaiting_human`）、`PhaseIntegrated`・`PhaseReported` は 1 件ずつ、次の段 `ship` の
 /// WU `c` は pending のままで走っていない。Task は最終レビューに進んでいない。
-fn assert_paused_after_build(store: &Arc<dyn TaskStore>, id: TaskId, adapter: &ParallelWuAdapter) {
+fn assert_paused_after_build(store: &Arc<SqliteStore>, id: TaskId, adapter: &ParallelWuAdapter) {
     assert_eq!(
         status_of(store, id),
         Status::Blocked,
@@ -1385,7 +1385,7 @@ fn human_task(dir: &Path) -> Task {
 #[tokio::test]
 async fn cex_human_cancel_precedes_successful_worker_completion() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = human_task(dir.path());
     let id = task.id;
     store.insert(&task).unwrap();
@@ -1423,7 +1423,7 @@ async fn cex_human_cancel_precedes_successful_worker_completion() {
 #[tokio::test]
 async fn cex_human_pause_survives_completion_and_holds_continuation() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = human_task(dir.path());
     let id = task.id;
     store.insert(&task).unwrap();
@@ -1464,7 +1464,7 @@ async fn cex_human_unanswered_question_stays_blocked_across_housekeeping() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("human.db");
     let sqlite = Arc::new(SqliteStore::open(&db_path).unwrap());
-    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let store: Arc<SqliteStore> = sqlite.clone();
     let task = human_task(dir.path());
     let id = task.id;
     store.insert(&task).unwrap();
@@ -1965,7 +1965,7 @@ async fn cex_budget_tokens_after_credential_resume_stops_continuation_and_review
 
 async fn tree_budget_continuation(unknown: bool) {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = new_task(dir.path(), Check::Reviewer, 1);
     task.tree = Some(task_core::TreeInfo::root(task.id));
     store.insert(&task).unwrap();

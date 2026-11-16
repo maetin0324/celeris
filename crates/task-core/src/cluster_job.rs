@@ -10,7 +10,7 @@
 //!
 //! - **events が正本**。`cluster_job_waits` 表は event と同じトランザクションで書く派生の索引
 //!   （[`apply_event_tx`]）。状態の変わらない poll は event を出さず、`last_polled_at` / `last_status` だけを
-//!   直接書く（[`ClusterJobWaitStore::cluster_job_wait_touch`]）。
+//!   直接書く（[`SqliteStore::cluster_job_wait_touch`]）。
 //! - このモジュールの parser・検証は純粋関数（I/O なし・LLM なし）。
 //! - task の中止・終端では wait を `cancelled` に閉じるだけで、**job は `qdel` しない**（ADR-0090 D6）。
 
@@ -719,28 +719,8 @@ pub fn preamble_lines(statuses: &[ClusterJobStatus]) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
-// store（`SqliteStore` だけが実装する。`TaskStore` の supertrait）
+// store（`SqliteStore` の固有 method）
 // ---------------------------------------------------------------------------
-
-/// `cluster_job_waits` の読み取りと、event を出さない poll の記録。開く・閉じるは event の追記で行う
-/// （`ClusterJobWaitStarted` / `ClusterJobWaitFinished` を `apply_transition_with_events` などに渡す）。
-pub trait ClusterJobWaitStore: Send + Sync {
-    fn cluster_job_wait_get(&self, wait_id: &str) -> Result<Option<ClusterJobWait>, StoreError>;
-    /// task の wait（作成順）。
-    fn cluster_job_waits_for_task(
-        &self,
-        task_id: TaskId,
-    ) -> Result<Vec<ClusterJobWait>, StoreError>;
-    /// `waiting` の全件（作成順）。
-    fn cluster_job_waits_waiting(&self) -> Result<Vec<ClusterJobWait>, StoreError>;
-    /// 状態の変わらない poll: `last_polled_at` と `last_status` だけを書く（`waiting` の行だけ。event なし）。
-    fn cluster_job_wait_touch(
-        &self,
-        wait_id: &str,
-        polled_at: &str,
-        statuses: &[ClusterJobStatus],
-    ) -> Result<(), StoreError>;
-}
 
 const SELECT_WAIT: &str = "SELECT wait_id, task_id, work_unit_id, run_id, cluster, scheduler, jobs_json, \
      poll_secs, timeout_secs, summary, checkpoint_json, created_at, deadline, last_polled_at, finished_at, \
@@ -942,15 +922,20 @@ pub(crate) fn has_waiting_tx(conn: &Connection, task_id: TaskId) -> Result<bool,
     Ok(n.is_some())
 }
 
-impl ClusterJobWaitStore for SqliteStore {
-    fn cluster_job_wait_get(&self, wait_id: &str) -> Result<Option<ClusterJobWait>, StoreError> {
+// `cluster_job_waits` の読み取りと、event を出さない poll の記録。開く・閉じるは event の追記で行う
+// （`ClusterJobWaitStarted` / `ClusterJobWaitFinished` を `apply_transition_with_events` などに渡す）。
+impl SqliteStore {
+    pub fn cluster_job_wait_get(
+        &self,
+        wait_id: &str,
+    ) -> Result<Option<ClusterJobWait>, StoreError> {
         let conn = self.lock()?;
         Ok(query_waits(&conn, "WHERE wait_id = ?1", &[&wait_id])?
             .into_iter()
             .next())
     }
-
-    fn cluster_job_waits_for_task(
+    /// task の wait（作成順）。
+    pub fn cluster_job_waits_for_task(
         &self,
         task_id: TaskId,
     ) -> Result<Vec<ClusterJobWait>, StoreError> {
@@ -961,8 +946,8 @@ impl ClusterJobWaitStore for SqliteStore {
             &[&task_id.to_string()],
         )
     }
-
-    fn cluster_job_waits_waiting(&self) -> Result<Vec<ClusterJobWait>, StoreError> {
+    /// `waiting` の全件（作成順）。
+    pub fn cluster_job_waits_waiting(&self) -> Result<Vec<ClusterJobWait>, StoreError> {
         let conn = self.lock()?;
         query_waits(
             &conn,
@@ -970,8 +955,8 @@ impl ClusterJobWaitStore for SqliteStore {
             &[],
         )
     }
-
-    fn cluster_job_wait_touch(
+    /// 状態の変わらない poll: `last_polled_at` と `last_status` だけを書く（`waiting` の行だけ。event なし）。
+    pub fn cluster_job_wait_touch(
         &self,
         wait_id: &str,
         polled_at: &str,

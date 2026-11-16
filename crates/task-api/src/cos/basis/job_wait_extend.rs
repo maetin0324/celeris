@@ -14,10 +14,10 @@
 //! the use is written to `authority_audit` (the grant id as the human decision, `cos:<thread>` as the
 //! actor) after the answer is applied ([`record_grant_use`]).
 
-use task_core::approval::{ApprovalId, ApprovalStore};
+use task_core::Event;
+use task_core::approval::ApprovalId;
 use task_core::cluster_job::{ClusterJobState, ClusterJobStatus, ClusterJobWaitState};
 use task_core::store::SqliteStore;
-use task_core::{Event, TaskStore};
 use task_ops::human_inbox::InboxKind;
 
 use task_core::authority::{

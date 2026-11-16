@@ -97,7 +97,9 @@ impl SqliteStore {
         })())
     }
 
-    pub(super) fn message_append_impl(&self, message: &Message) -> Result<(), StoreError> {
+    // ---- ADR-0033 D4: 対話（`messages`）----
+    /// 1 行を追記する（対話は追記専用。更新も削除もしない）。
+    pub fn message_append(&self, message: &Message) -> Result<(), StoreError> {
         let conn = self.lock()?;
         let metadata_json = message
             .metadata
@@ -122,7 +124,10 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub(super) fn message_list_impl(
+    /// `node_id` とのやり取りを**古い順**（`created_at` 昇順、同時刻は `id` 昇順）で最大 `limit` 件返す。
+    /// `project_id` が `Some` ならその案件の行だけ、`None` なら案件に紐づかない行だけ（雑談）。
+    /// 件数が `limit` を超えるときは**新しい方**を残す（直近のやり取りを渡すため）。
+    pub fn message_list(
         &self,
         node_id: &str,
         project_id: Option<ProjectId>,
@@ -153,8 +158,15 @@ impl SqliteStore {
         })
     }
 
+    /// ADR-0048 D1（Phase 60a）: Console の一本の流れ用。`message_list` と違い **絞り込みは任意**で、
+    /// `node_id` / `project_id` が `None` なら「その軸では絞らない」（`message_list` の `project_id: None`
+    /// は「案件に紐づかない行だけ」なので意味が違う）。
+    ///
+    /// `after` は RFC 3339 の `created_at`。`Some` なら **その時刻以降（`>=`、閉区間）を古い順**に最大
+    /// `limit` 件（同じ時刻に複数行あっても取りこぼさないため閉区間。呼び出し側がカーソルで重複を落とす）。
+    /// `None` なら **いちばん新しい `limit` 件**を古い順に返す（Console の初期表示）。
     /// ADR-0048 D1（Phase 60a）: Console の一本の流れ用（絞り込みは任意、`after` は閉区間）。
-    pub(super) fn message_page_impl(
+    pub fn message_page(
         &self,
         node_id: Option<&str>,
         project_id: Option<ProjectId>,
@@ -199,7 +211,10 @@ impl SqliteStore {
         })
     }
 
-    pub(super) fn console_action_run_claim_impl(
+    // ---- ADR-0048 D3（Phase 60b）: CoS の actions の冪等性 ----
+    /// この `run_id` の actions をまだ実行していなければ記録して `true`、既に実行済みなら
+    /// 何もせず `false`（`console_action_runs.run_id` は一意。ADR-0048 D3「Idempotent per run」）。
+    pub fn console_action_run_claim(
         &self,
         run_id: &str,
         task_id: TaskId,
@@ -214,7 +229,10 @@ impl SqliteStore {
         Ok(affected == 1)
     }
 
-    pub(super) fn comment_add_impl(
+    /// ADR-0044 D2: コメントを 1 件追記する。`transition` が `Some((trigger, extra_events))` なら
+    /// **同じトランザクション**で状態遷移も行い、その結果を返す（人のコメントの割り込みが
+    /// 「コメントは残ったが run は止まらなかった」状態にならないようにするため）。
+    pub fn comment_add(
         &self,
         comment: &TaskComment,
         transition: Option<(Trigger, Vec<Event>)>,
@@ -226,7 +244,7 @@ impl SqliteStore {
         Ok(outcome)
     }
 
-    /// `comment_add_impl` inside a caller's transaction (ADR 2026-10-05 D3).
+    /// `comment_add` inside a caller's transaction (ADR 2026-10-05 D3).
     pub fn comment_add_tx(
         tx: &rusqlite::Connection,
         comment: &TaskComment,
@@ -271,10 +289,8 @@ impl SqliteStore {
         Ok(outcome)
     }
 
-    pub(super) fn comments_for_impl(
-        &self,
-        task_id: TaskId,
-    ) -> Result<Vec<TaskComment>, StoreError> {
+    /// ADR-0044 D2: そのタスクのコメントを古い順（`created_at`、同時刻は `id` 昇順）で返す。
+    pub fn comments_for(&self, task_id: TaskId) -> Result<Vec<TaskComment>, StoreError> {
         self.with_read_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, task_id, author_kind, author, body, run_id, created_at FROM task_comments \

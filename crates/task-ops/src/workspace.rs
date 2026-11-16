@@ -15,7 +15,7 @@
 use std::path::{Path, PathBuf};
 
 use task_core::local_machine::WorkspaceRoots;
-use task_core::{StoreError, Task, TaskStore, WorkspaceMode, WorkspaceSpec};
+use task_core::{SqliteStore, StoreError, Task, WorkspaceMode, WorkspaceSpec};
 use time::OffsetDateTime;
 
 /// worktree を切ったタスクの目印（`<root>/<task_id>/worktree.json`）。
@@ -31,8 +31,8 @@ pub const WORKTREE_DIR_NAME: &str = "tree";
 /// - `Local` で worktree を切った（目印がある）→ `<root>/<task_id>`
 /// - `Local`（従来）→ `path`（相対なら `<root>` 基準）
 /// - `Remote` → 手元の写し `<root>/<task_id>`（ADR-0018 D1。従来どおり）
-pub fn local_dir<S: TaskStore + ?Sized>(
-    store: &S,
+pub fn local_dir(
+    store: &SqliteStore,
     roots: &WorkspaceRoots,
     task: &Task,
 ) -> Result<PathBuf, StoreError> {
@@ -59,8 +59,8 @@ pub fn local_dir<S: TaskStore + ?Sized>(
 /// 足回り `<root>/<task_id>` を初めて用意するときの場所（ADR 2026-10-14-local-machine-settings D5）。
 /// root を `task_workspace_roots` に固定してから返す（root task は実効の root、子 task は親の root を継ぐ。
 /// 既に固定があればそのまま）。足回りを作る経路（worktree・写し・目印）はここで場所を決める。
-pub fn prepare_task_dir<S: TaskStore + ?Sized>(
-    store: &S,
+pub fn prepare_task_dir(
+    store: &SqliteStore,
     roots: &WorkspaceRoots,
     task: &Task,
     now: OffsetDateTime,

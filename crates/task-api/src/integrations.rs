@@ -6,7 +6,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use task_core::{RepoId, TaskId, TaskRepoIntegrationState, TaskRepoIntegrationStatus, TaskStore};
+use task_core::{RepoId, SqliteStore, TaskId, TaskRepoIntegrationState, TaskRepoIntegrationStatus};
 
 use crate::handlers::{ApiResult, Params, json_response, no_query, read_json};
 use crate::middleware::require_admin;
@@ -283,7 +283,7 @@ async fn mutate_simple(
     ))
 }
 
-fn resolve_repo(store: &dyn TaskStore, id: TaskId, name: &str) -> Result<RepoId, ApiProblem> {
+fn resolve_repo(store: &SqliteStore, id: TaskId, name: &str) -> Result<RepoId, ApiProblem> {
     let task = store
         .get(id)
         .map_err(store_problem)?
@@ -309,7 +309,7 @@ fn resolve_repo(store: &dyn TaskStore, id: TaskId, name: &str) -> Result<RepoId,
 }
 
 fn state_row(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     repo: RepoId,
 ) -> Result<TaskRepoIntegrationState, ApiProblem> {

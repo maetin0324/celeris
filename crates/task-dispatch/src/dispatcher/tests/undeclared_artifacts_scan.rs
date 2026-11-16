@@ -88,7 +88,7 @@ fn waiting() -> Terminal {
     }
 }
 
-fn produced(store: &dyn TaskStore, id: TaskId) -> Vec<(String, task_core::ArtifactRef)> {
+fn produced(store: &SqliteStore, id: TaskId) -> Vec<(String, task_core::ArtifactRef)> {
     store
         .events_for(id)
         .unwrap()
@@ -102,7 +102,7 @@ fn produced(store: &dyn TaskStore, id: TaskId) -> Vec<(String, task_core::Artifa
 
 /// remote の task の `run_worker` を偽の ssh（exit 0・shared mode）で回す。`dir` は手元の写し。
 async fn run_remote(
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     adapter: Arc<dyn WorkerAdapter>,
     task_id: TaskId,
     stub: &std::path::Path,
@@ -148,7 +148,7 @@ async fn run_remote(
 /// その run の id で登録される。`checkpoint.json` は拾わない。
 #[tokio::test]
 async fn a_remote_run_that_ends_with_a_question_registers_its_artifacts() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let tmp = tempfile::tempdir().unwrap();
     let stub = write_stub_ssh(tmp.path(), 0);
     let task = remote_task(tmp.path(), Some(WorkspaceMode::Shared), Vec::new());
@@ -217,7 +217,7 @@ async fn a_remote_run_that_ends_with_a_question_registers_its_artifacts() {
 /// 中身が変わった file だけ新しい版として登録される。`Done` でも同じ。
 #[tokio::test]
 async fn remote_runs_deduplicate_by_path_and_hash_across_wait_question_and_done() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let tmp = tempfile::tempdir().unwrap();
     let stub = write_stub_ssh(tmp.path(), 0);
     let task = remote_task(tmp.path(), Some(WorkspaceMode::Shared), Vec::new());
@@ -311,7 +311,7 @@ async fn remote_runs_deduplicate_by_path_and_hash_across_wait_question_and_done(
 /// D3-a: yield で終わった run は登録しない（中間物を一覧に混ぜない。終端で拾う）。
 #[tokio::test]
 async fn a_remote_run_that_yields_does_not_register_artifacts() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let tmp = tempfile::tempdir().unwrap();
     let stub = write_stub_ssh(tmp.path(), 0);
     let task = remote_task(tmp.path(), Some(WorkspaceMode::Shared), Vec::new());
@@ -352,7 +352,7 @@ async fn a_git_worktree_run_that_ends_with_a_question_registers_its_artifacts() 
     let repo_dir = tempfile::tempdir().unwrap();
     init_test_repo(repo_dir.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = git_task(
         repo_dir.path(),
         None,
@@ -395,7 +395,7 @@ async fn a_local_retry_registers_its_artifacts_without_original_or_sibling_files
 }
 
 async fn local_workspace_artifacts_are_isolated(has_parent: bool) {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = tempfile::tempdir().unwrap();
     let parent_id = TaskId::new();
     let workspace = root.path().join(parent_id.to_string());

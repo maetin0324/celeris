@@ -3,7 +3,7 @@
 //!
 //! `crate::notify`（`notifications` 表）は Discord 等への**送り出しの待ち行列**で、これとは別物
 //! （ADR-0133 用語「送り出し」）。名前の衝突を避けるため、ここでは `Notice` / `NoticeKind` /
-//! `NoticeStore` と呼ぶ。
+//! `SqliteStore` と呼ぶ。
 //!
 //! ここにあるのは型と SQL だけで、**どの出来事を通知にするかの判定は `task_ops::feed` にある**
 //! （ADR-0133 D3.3）。ストアは LLM を呼ばない。
@@ -197,8 +197,8 @@ impl Notice {
 /// the same revision: `Some(false)` for a read notice or a grown bundle (a newer revision), `None`
 /// when no such notice exists. The one check of the fallback and of the notifier just before the
 /// send; each decides what an unknown notice means for it.
-pub fn notice_revision_open<S: NoticeStore + ?Sized>(
-    store: &S,
+pub fn notice_revision_open(
+    store: &SqliteStore,
     key: &str,
     revision: &str,
 ) -> Result<Option<bool>, StoreError> {
@@ -210,7 +210,7 @@ pub fn notice_revision_open<S: NoticeStore + ?Sized>(
         .map(|n| n.is_unread() && n.count.to_string() == revision))
 }
 
-/// 束に足す 1 件の出来事（`NoticeStore::notice_record` の入力）。
+/// 束に足す 1 件の出来事（`SqliteStore::notice_record` の入力）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NoticeEvent {
     /// 出来事の key（`event:<seq>` / `report:<id>` / `cron_run:<id>` 等）。同じ key は 1 回だけ数える。
@@ -286,52 +286,6 @@ pub fn bundled_summary(latest: &str, count: u32) -> String {
     } else {
         format!("{latest}（ほか {} 件）", count - 1)
     }
-}
-
-/// ADR-0133 D3.2: `feed_notices` / `feed_sources` / `feed_cursor` の読み書き。実装は `SqliteStore` のみ。
-pub trait NoticeStore: Send + Sync {
-    /// 出来事を 1 件束に足す（冪等）。同じ `source_key` は 1 回だけ、同じ `group_key` の未読の束が
-    /// あれば件数を増やし、無ければ新しい束を作る。`feed_sources` の挿入と件数の加算は同じ transaction。
-    fn notice_record(&self, event: &NoticeEvent) -> Result<NoticeRecordOutcome, StoreError>;
-
-    /// ADR-0133 付記: 複数の出来事の記録と走査位置（`feed_cursor`）の更新を 1 つの書き込み transaction で行う
-    /// （同期 1 回の書き込みを 1 回にする。NFS 上の DB では commit の回数がそのまま tick の時間になる）。
-    /// 各出来事の扱いは `notice_record` と同じ。戻り値は `events` と同じ順。
-    fn notice_record_batch(
-        &self,
-        events: &[NoticeEvent],
-        cursors: &[(&str, String)],
-    ) -> Result<Vec<NoticeRecordOutcome>, StoreError>;
-
-    fn notice_get(&self, id: NoticeId) -> Result<Option<Notice>, StoreError>;
-
-    fn notice_list(&self, query: &NoticeQuery) -> Result<NoticePage, StoreError>;
-
-    /// 1 件を既読にする。既に既読・無い id は `Ok(false)`。
-    fn notice_mark_read(&self, id: NoticeId, at: OffsetDateTime) -> Result<bool, StoreError>;
-
-    /// 未読を全て（`kinds` が空でなければその種類だけ）既読にし、既読にした件数を返す。
-    fn notice_mark_all_read(
-        &self,
-        kinds: &[NoticeKind],
-        at: OffsetDateTime,
-    ) -> Result<u64, StoreError>;
-
-    fn notice_unread_count(&self) -> Result<NoticeUnreadCount, StoreError>;
-
-    /// 既読が `before` より前の束（とその出来事の記録）を消し、消した束の数を返す（D3.2 の保持）。
-    fn notice_prune_read(&self, before: OffsetDateTime) -> Result<u64, StoreError>;
-
-    /// ADR-0133 付記: `keys` のうち既に `feed_sources` にある `source_key`。読み取り接続だけを使う
-    /// （同期は記録済みの出来事に書き込みの transaction を開かない）。
-    fn notice_sources_known(
-        &self,
-        keys: &[String],
-    ) -> Result<std::collections::HashSet<String>, StoreError>;
-
-    /// 走査位置（`feed_cursor`）。
-    fn feed_cursor_get(&self, name: &str) -> Result<Option<String>, StoreError>;
-    fn feed_cursor_set(&self, name: &str, value: &str) -> Result<(), StoreError>;
 }
 
 /// `notice_sources_known` の 1 文あたりの key 数。
@@ -485,16 +439,21 @@ pub(crate) fn record_in_tx(
     Ok(outcome)
 }
 
-impl NoticeStore for SqliteStore {
-    fn notice_record(&self, event: &NoticeEvent) -> Result<NoticeRecordOutcome, StoreError> {
+// ADR-0133 D3.2: `feed_notices` / `feed_sources` / `feed_cursor` の読み書き。実装は `SqliteStore` のみ。
+impl SqliteStore {
+    /// 出来事を 1 件束に足す（冪等）。同じ `source_key` は 1 回だけ、同じ `group_key` の未読の束が
+    /// あれば件数を増やし、無ければ新しい束を作る。`feed_sources` の挿入と件数の加算は同じ transaction。
+    pub fn notice_record(&self, event: &NoticeEvent) -> Result<NoticeRecordOutcome, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let outcome = record_in_tx(&tx, event)?;
         tx.commit()?;
         Ok(outcome)
     }
-
-    fn notice_record_batch(
+    /// ADR-0133 付記: 複数の出来事の記録と走査位置（`feed_cursor`）の更新を 1 つの書き込み transaction で行う
+    /// （同期 1 回の書き込みを 1 回にする。NFS 上の DB では commit の回数がそのまま tick の時間になる）。
+    /// 各出来事の扱いは `notice_record` と同じ。戻り値は `events` と同じ順。
+    pub fn notice_record_batch(
         &self,
         events: &[NoticeEvent],
         cursors: &[(&str, String)],
@@ -518,8 +477,7 @@ impl NoticeStore for SqliteStore {
         tx.commit()?;
         Ok(outcomes)
     }
-
-    fn notice_get(&self, id: NoticeId) -> Result<Option<Notice>, StoreError> {
+    pub fn notice_get(&self, id: NoticeId) -> Result<Option<Notice>, StoreError> {
         self.with_read_conn(|conn| {
             let row = conn
                 .query_row(
@@ -531,8 +489,7 @@ impl NoticeStore for SqliteStore {
             row.transpose()
         })
     }
-
-    fn notice_list(&self, query: &NoticeQuery) -> Result<NoticePage, StoreError> {
+    pub fn notice_list(&self, query: &NoticeQuery) -> Result<NoticePage, StoreError> {
         let mut conds: Vec<String> = Vec::new();
         if query.unread_only {
             conds.push("read_at IS NULL".to_string());
@@ -575,16 +532,16 @@ impl NoticeStore for SqliteStore {
             })
         })
     }
-
-    fn notice_mark_read(&self, id: NoticeId, at: OffsetDateTime) -> Result<bool, StoreError> {
+    /// 1 件を既読にする。既に既読・無い id は `Ok(false)`。
+    pub fn notice_mark_read(&self, id: NoticeId, at: OffsetDateTime) -> Result<bool, StoreError> {
         let n = self.lock()?.execute(
             "UPDATE feed_notices SET read_at = ?2 WHERE id = ?1 AND read_at IS NULL",
             params![id.to_string(), format_rfc3339(at)?],
         )?;
         Ok(n > 0)
     }
-
-    fn notice_mark_all_read(
+    /// 未読を全て（`kinds` が空でなければその種類だけ）既読にし、既読にした件数を返す。
+    pub fn notice_mark_all_read(
         &self,
         kinds: &[NoticeKind],
         at: OffsetDateTime,
@@ -598,8 +555,7 @@ impl NoticeStore for SqliteStore {
         )?;
         Ok(n as u64)
     }
-
-    fn notice_unread_count(&self) -> Result<NoticeUnreadCount, StoreError> {
+    pub fn notice_unread_count(&self) -> Result<NoticeUnreadCount, StoreError> {
         self.with_read_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT kind, COUNT(*) FROM feed_notices WHERE read_at IS NULL GROUP BY kind",
@@ -617,8 +573,8 @@ impl NoticeStore for SqliteStore {
             Ok(out)
         })
     }
-
-    fn notice_prune_read(&self, before: OffsetDateTime) -> Result<u64, StoreError> {
+    /// 既読が `before` より前の束（とその出来事の記録）を消し、消した束の数を返す（D3.2 の保持）。
+    pub fn notice_prune_read(&self, before: OffsetDateTime) -> Result<u64, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let before = format_rfc3339(before)?;
@@ -635,8 +591,9 @@ impl NoticeStore for SqliteStore {
         tx.commit()?;
         Ok(n as u64)
     }
-
-    fn notice_sources_known(
+    /// ADR-0133 付記: `keys` のうち既に `feed_sources` にある `source_key`。読み取り接続だけを使う
+    /// （同期は記録済みの出来事に書き込みの transaction を開かない）。
+    pub fn notice_sources_known(
         &self,
         keys: &[String],
     ) -> Result<std::collections::HashSet<String>, StoreError> {
@@ -661,8 +618,8 @@ impl NoticeStore for SqliteStore {
             Ok(known)
         })
     }
-
-    fn feed_cursor_get(&self, name: &str) -> Result<Option<String>, StoreError> {
+    /// 走査位置（`feed_cursor`）。
+    pub fn feed_cursor_get(&self, name: &str) -> Result<Option<String>, StoreError> {
         self.with_read_conn(|conn| {
             Ok(conn
                 .query_row(
@@ -673,8 +630,7 @@ impl NoticeStore for SqliteStore {
                 .optional()?)
         })
     }
-
-    fn feed_cursor_set(&self, name: &str, value: &str) -> Result<(), StoreError> {
+    pub fn feed_cursor_set(&self, name: &str, value: &str) -> Result<(), StoreError> {
         self.lock()?.execute(
             "INSERT INTO feed_cursor (name, value) VALUES (?1, ?2) \
              ON CONFLICT(name) DO UPDATE SET value = excluded.value",

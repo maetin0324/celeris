@@ -7,7 +7,7 @@
 //! target の上位を載せ（[`TargetCensus`]）、`critical` のあいだは新しい coding run を起こさない
 //! （ADR-0074 の全体の停止は `[dispatch] min_free_disk_pct` の空きの下限のまま。ADR 2026-11-11-disk-aware-dispatch D2）。
 //!
-//! - 状態は SQLite の `disk_watch_state`（[`task_core::DiskWatchStore`]）。daemon のメモリに持つのは
+//! - 状態は SQLite の `disk_watch_state`（[`task_core::SqliteStore`]）。daemon のメモリに持つのは
 //!   測る間隔の時刻と直近の critical 判定。
 //! - 通知・受信箱は **level が上がったとき**だけ作る。`critical` への遷移は受信箱だけ（ADR-0133 D1.5「1 出来事 →
 //!   ちょうど 1 経路」）。同じ `warn` が続くあいだは 24 時間ごとに 1 回だけ再通知（未読の束の `count` が増える）。
@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use task_core::feed::{NoticeEvent, NoticeKind, NoticeRecordOutcome, NoticeTarget};
 use task_core::store::StoreError;
-use task_core::{DiskLevel, DiskWatchState, DiskWatchStore};
+use task_core::{DiskLevel, DiskWatchState, SqliteStore};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -116,7 +116,7 @@ pub trait TargetCensus: Send {
 /// 測るのは通知を作るときだけ（24 時間に 1 回程度）。`<root>` は [`task_workspace_roots`] の全部
 /// （ADR 2026-10-14-local-machine-settings D5）。
 pub struct FsTargetCensus {
-    pub store: std::sync::Arc<dyn task_core::TaskStore>,
+    pub store: std::sync::Arc<task_core::SqliteStore>,
     pub workspace_roots: task_core::local_machine::WorkspaceRoots,
     pub scratch_targets: Option<PathBuf>,
     pub build_cache_cargo: PathBuf,
@@ -127,7 +127,7 @@ pub struct FsTargetCensus {
 /// task の固定はどれも固定した時点の実効の root（子は親の root）なので、この集合に入る。store が読めなければ
 /// 基底の root だけ。
 pub fn task_workspace_roots(
-    store: &dyn task_core::TaskStore,
+    store: &task_core::SqliteStore,
     roots: &task_core::local_machine::WorkspaceRoots,
 ) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
@@ -460,7 +460,7 @@ pub struct DiskWatchOutcome {
 
 /// 全 entry を 1 回測って状態を進める（`statvfs` は軽いので同期）。書き込みは変化のあった path だけ。
 pub fn run_disk_watch(
-    store: &dyn DiskWatchStore,
+    store: &SqliteStore,
     probe: &dyn DiskProbe,
     entries: &[DiskWatchEntry],
     now: OffsetDateTime,
@@ -471,7 +471,7 @@ pub fn run_disk_watch(
 /// [`run_disk_watch`] に付記 A4 の census を足したもの。`warn` の通知（初回・再通知）を作るときだけ census で
 /// 大きい target の上位 [`TOP_TARGETS`] 件を測り、本文に足す（1 回の測定で複数 path が warn なら 1 回だけ測る）。
 pub fn run_disk_watch_with(
-    store: &dyn DiskWatchStore,
+    store: &SqliteStore,
     probe: &dyn DiskProbe,
     census: Option<&dyn TargetCensus>,
     entries: &[DiskWatchEntry],
@@ -549,7 +549,7 @@ impl DiskWatchRunner {
     /// 前回から [`INTERVAL_SECS`] 経っていれば測る（時計は dispatcher の注入時計）。
     pub(crate) fn tick(
         &mut self,
-        store: &dyn DiskWatchStore,
+        store: &SqliteStore,
         now: OffsetDateTime,
     ) -> Option<Vec<DiskWatchOutcome>> {
         if self.entries.is_empty()

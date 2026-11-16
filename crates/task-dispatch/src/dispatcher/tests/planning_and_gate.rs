@@ -3,7 +3,7 @@ use super::*;
 #[tokio::test]
 async fn plan_task_inserts_draft_children_and_they_run_after_accept() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let plan = plan_task(dir.path(), 0);
     store.insert(&plan).unwrap();
     let adapter = Arc::new(FileAdapter {
@@ -101,7 +101,7 @@ async fn plan_task_inserts_draft_children_and_they_run_after_accept() {
 #[tokio::test]
 async fn frozen_milestones_do_not_gate_or_advance_root_tasks() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let now = OffsetDateTime::now_utc();
     let project = task_core::Project {
         auto_advance: false,
@@ -194,7 +194,7 @@ async fn frozen_milestones_do_not_gate_or_advance_root_tasks() {
 #[tokio::test]
 async fn delegate_inserts_validated_children_and_aggregate_parent_runs_once_more() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut parent = new_task(
         dir.path(),
         Check::Command {
@@ -334,7 +334,7 @@ async fn delegation_limits_reject_with_reasons_and_do_not_fail_the_run() {
         depth: u32,
     ) -> (Vec<String>, usize, Status) {
         let dir = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         // depth 個の祖先の下に親を置く（根 = 深さ 1）。
         let mut ancestor: Option<TaskId> = None;
         for _ in 1..depth {
@@ -442,7 +442,7 @@ async fn delegation_limits_reject_with_reasons_and_do_not_fail_the_run() {
 #[tokio::test]
 async fn gate_on_compound_task_runs_a_planner_then_the_planned_work_units_in_order() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = compound_task(dir.path());
     let task_id = task.id;
     store.insert(&task).unwrap();
@@ -546,7 +546,7 @@ async fn gate_on_compound_task_runs_a_planner_then_the_planned_work_units_in_ord
 #[tokio::test]
 async fn regate_of_an_atomic_task_starts_a_planner_run_and_yields_a_plan() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = shadow_gated_task(dir.path(), task_core::ExecutionMode::Atomic);
     let task_id = task.id;
     store.insert(&task).unwrap();
@@ -615,7 +615,7 @@ async fn regate_of_an_atomic_task_starts_a_planner_run_and_yields_a_plan() {
 #[tokio::test]
 async fn regate_of_a_planned_task_is_a_replan_request() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = compound_task(dir.path());
     let task_id = task.id;
     store.insert(&task).unwrap();
@@ -690,7 +690,7 @@ async fn regate_of_a_planned_task_is_a_replan_request() {
 #[tokio::test]
 async fn retry_after_switching_gate_to_on_regates_the_copy() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = shadow_gated_task(dir.path(), task_core::ExecutionMode::Compound);
     let task_id = task.id;
     store.insert(&task).unwrap();
@@ -756,7 +756,7 @@ async fn retry_after_switching_gate_to_on_regates_the_copy() {
 #[tokio::test]
 async fn planner_children_become_delegated_child_tasks() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = compound_task(dir.path());
     let task_id = task.id;
     store.insert(&task).unwrap();
@@ -856,7 +856,7 @@ async fn planner_children_become_delegated_child_tasks() {
 #[tokio::test]
 async fn shadow_gate_adopts_a_human_explicit_compound_decision() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = compound_task(dir.path());
     let task_id = task.id;
     store.insert(&task).unwrap();
@@ -909,7 +909,7 @@ async fn shadow_gate_adopts_a_human_explicit_compound_decision() {
 #[tokio::test]
 async fn shadow_gate_does_not_adopt_a_rule_based_compound_decision() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = new_task(
         dir.path(),
         Check::Command {
@@ -976,7 +976,7 @@ async fn shadow_gate_does_not_adopt_a_rule_based_compound_decision() {
 #[tokio::test]
 async fn invalid_planner_output_retries_once_then_falls_back_to_atomic() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = compound_task(dir.path());
     let task_id = task.id;
     store.insert(&task).unwrap();
@@ -1050,7 +1050,7 @@ async fn invalid_planner_output_retries_once_then_falls_back_to_atomic() {
 #[tokio::test]
 async fn the_retry_planner_run_receives_the_previous_validation_error_and_config_limits() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = compound_task(dir.path());
     let task_id = task.id;
     store.insert(&task).unwrap();
@@ -1207,7 +1207,7 @@ fn planner_rejections_are_collected_since_the_last_adopted_plan() {
 #[tokio::test]
 async fn plan_with_unreadable_features_retries_once_then_falls_back_to_atomic() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = compound_task(dir.path());
     let task_id = task.id;
     store.insert(&task).unwrap();
@@ -1264,7 +1264,7 @@ async fn plan_with_unreadable_features_retries_once_then_falls_back_to_atomic() 
 #[tokio::test]
 async fn oversized_plan_retries_once_then_falls_back_to_atomic() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = compound_task(dir.path());
     let task_id = task.id;
     store.insert(&task).unwrap();
@@ -1317,7 +1317,7 @@ async fn oversized_plan_retries_once_then_falls_back_to_atomic() {
 #[tokio::test]
 async fn planner_run_uses_frontier_when_the_task_explicitly_sets_it() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = compound_task(dir.path());
     task.worker_hint.tier = Tier::Frontier;
     if let Some(routing) = &mut task.routing {
@@ -1362,7 +1362,7 @@ async fn planner_run_uses_frontier_when_the_task_explicitly_sets_it() {
 #[tokio::test]
 async fn reopened_delivery_task_dispatches_only_its_ready_repair_unit() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -1477,7 +1477,7 @@ async fn reopened_delivery_task_dispatches_only_its_ready_repair_unit() {
 #[tokio::test]
 async fn knowledge_curation_cron_task_skips_the_gate_and_runs_atomic() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = new_task(
         dir.path(),
         Check::Command {

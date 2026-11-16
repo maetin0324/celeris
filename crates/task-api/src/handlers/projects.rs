@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use task_core::{
     ListFilter, ListOrder, OrgDirectory, Project, ProjectBrief, ProjectBriefInput, ProjectId,
-    ProjectStatus, SqliteStore, TaskQuery, TaskStore,
+    ProjectStatus, SqliteStore, TaskQuery,
 };
 use time::format_description::well_known::Rfc3339;
 

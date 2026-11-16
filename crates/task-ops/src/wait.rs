@@ -1,14 +1,15 @@
 //! ADR 2026-10-11-task-wait-reasons D3〜D5: 一覧・詳細・木の応答に載せる task の待ちの理由（`waits`）を組む。
 //!
-//! DB の理由は task-core の `db_waits`（`TaskStore::db_waits_for`）と `plan_waits`、人の gate（D12）は events を
+//! DB の理由は task-core の `db_waits`（`SqliteStore::db_waits_for`）と `plan_waits`、人の gate（D12）は events を
 //! 読む [`human_gate_waits`]、dispatcher のメモリの理由は `DaemonSnapshot.task_waits`（[`MemoryWaits`]）から合わせる。
 //! どれも決定的（LLM なし）で、dispatcher と同じ関数を呼ぶ。画面用の別の推測は作らない。
 
 use std::collections::HashMap;
+use task_core::TaskQuery;
 
 use task_core::{
-    ChildFacts, DecisionKind, DecisionStatus, Event, ExecutionPlanRow, HumanGateKind, StageReview,
-    Status, Task, TaskId, TaskStore, TaskWait, WorkUnitRow,
+    ChildFacts, DecisionKind, DecisionStatus, Event, ExecutionPlanRow, HumanGateKind, SqliteStore,
+    StageReview, Status, Task, TaskId, TaskWait, WorkUnitRow,
 };
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -118,7 +119,7 @@ fn open_self_decision_keys(rows: &[task_core::DecisionRow], task_id: TaskId) -> 
 
 /// 計画の子 task の事実（`child_task_id` と `child-<key>` のラベルを持つ子）。
 fn child_facts(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     units: &[WorkUnitRow],
     children_by_parent: &HashMap<TaskId, Vec<&Task>>,
@@ -159,7 +160,7 @@ fn child_facts(
 
 /// 計画の待ち（D7〜D11・D13）。`units` はその task の `work_units_for`。
 fn plan_waits_of(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     units: &[WorkUnitRow],
     children_by_parent: &HashMap<TaskId, Vec<&Task>>,
@@ -189,7 +190,7 @@ fn plan_waits_of(
 /// D3/D5: task ごとの `waits`（DB → 計画 → 人の gate → メモリの順。終端の task は空）。
 /// `all_tasks` は子の事実を引くための全件（一覧で既に読んだ `list(None)`）。
 pub fn task_waits(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     tasks: &[Task],
     all_tasks: &[Task],
     memory: &MemoryWaits,
@@ -240,7 +241,7 @@ pub fn task_waits(
 
 /// 1 件分（詳細・木の節点）。
 pub fn task_waits_one(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     memory: &MemoryWaits,
 ) -> Result<Vec<TaskWait>, OpsError> {

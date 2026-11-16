@@ -427,7 +427,7 @@ fn cos_chat_run_sink_actions_become_error_card_not_executed() {
     assert!(reason.contains("ask_human"), "{reason}");
     // 何も起票されていない（actions は実行していない）。
     assert!(
-        task_core::TaskStore::list(fx.store.as_ref(), None)
+        task_core::SqliteStore::list(fx.store.as_ref(), None)
             .expect("tasks")
             .is_empty()
     );

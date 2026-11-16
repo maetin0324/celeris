@@ -8,7 +8,7 @@ use std::path::Path;
 use task_core::behind_target::{
     BehindTarget, BehindTargetObservation, BehindTargetSnapshot, summarize_behind_target,
 };
-use task_core::{RepoId, TaskId, TaskStore};
+use task_core::{RepoId, SqliteStore, TaskId};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -67,7 +67,7 @@ fn rfc3339(now: OffsetDateTime) -> Result<String, OpsError> {
 /// Measure `HEAD` of `worktree` against `target_ref` and store the snapshot (ADR-0130 D4
 /// measurement points: before dispatch / review sync and after sync).
 pub fn observe_behind_target(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
     repo_id: RepoId,
     worktree: &Path,
@@ -89,7 +89,7 @@ pub fn observe_behind_target(
 
 /// Last stored snapshots folded at `now` (API/metrics read; never touches Git).
 pub fn behind_target_of(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
     now: OffsetDateTime,
 ) -> Result<BehindTarget, OpsError> {

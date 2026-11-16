@@ -4,7 +4,7 @@ use super::*;
 
 /// 案件の Git repo 1 つ（`code`）を選んだ task。
 fn project_git_task(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     repo: &std::path::Path,
     check_cmd: &str,
 ) -> (Task, task_core::RepoId) {
@@ -22,7 +22,7 @@ async fn write_set_record_stores_committed_paths_of_completed_work_unit_runs() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (task, repo_id) = project_git_task(&store, repo.path(), "test -f a.txt && test -f b.txt");
     store.insert(&task).unwrap();
     adopt_v2_plan(
@@ -88,7 +88,7 @@ async fn write_set_record_atomic_run_counts_only_commits_from_its_start_head() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (task, repo_id) = project_git_task(&store, repo.path(), "test -f src/lib.rs");
     store.insert(&task).unwrap();
     let adapter = Arc::new(
@@ -144,7 +144,7 @@ async fn write_set_record_git_failure_keeps_the_run_and_records_unavailable() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (task, repo_id) = project_git_task(&store, repo.path(), "true");
     store.insert(&task).unwrap();
     let adapter = Arc::new(

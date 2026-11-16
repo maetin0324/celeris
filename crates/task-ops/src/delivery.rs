@@ -4,10 +4,11 @@ use std::{
     path::{Path, PathBuf},
     time::Duration,
 };
+use task_core::OrgDirectory;
 use task_core::local_machine::WorkspaceRoots;
 use task_core::{
     Check, Criterion, Delivery, DeliverySkipReason, DeliveryState, Event, OrgNode, PlanOrigin,
-    RepoId, RunIndexRole, StoreError, Task, TaskId, TaskStore,
+    RepoId, RunIndexRole, SqliteStore, StoreError, Task, TaskId,
 };
 
 /// ADR-0118 D4: target 再進行による自動の再 sync→再 check→再 review は初回に加え最大 2 回。
@@ -56,7 +57,7 @@ pub fn review_resync_halted(events: &[Event]) -> Option<&Event> {
 /// reviewer run の必須判定・再取り込み・受信箱が同じ関数を使う。条件は、`project_id` があり、`task.repos` が
 /// 1 件以上あり、すべての repo の案件のリポジトリの行が存在して `auto_integrate = true`（行が無い repo は無効）。
 /// support task・木の子を外す条件は呼び出し側に残る。
-pub fn auto_integrates(store: &dyn TaskStore, task: &Task) -> Result<bool, StoreError> {
+pub fn auto_integrates(store: &SqliteStore, task: &Task) -> Result<bool, StoreError> {
     let Some(project_id) = task.project_id else {
         return Ok(false);
     };
@@ -73,7 +74,7 @@ pub fn auto_integrates(store: &dyn TaskStore, task: &Task) -> Result<bool, Store
 /// 受信箱に DeliverySkipped を出すか。no_commits は正常な no-op、repo_not_enabled は無効のリポジトリの
 /// 意図した結果なので出さない。それ以外も、読んだ時点で `auto_integrates` が偽なら出さない。
 pub fn skip_needs_attention(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     reason: task_core::DeliverySkipReason,
 ) -> Result<bool, StoreError> {
@@ -91,7 +92,7 @@ pub struct DeliveryPolicy {
 
 /// ADR-0121 D1: only an observed owner can supply a department.
 fn resolve_department(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     policy: &DeliveryPolicy,
     org: &[OrgNode],
@@ -210,7 +211,7 @@ struct Prepared {
 }
 
 fn prepare(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     roots: &WorkspaceRoots,
     policy: &DeliveryPolicy,
@@ -414,7 +415,7 @@ fn prepare(
 
 /// ADR-0121 D3: `DeliverySkipped` を (task, reason, head) ごとに高々 1 件積む。積んだら `true`。
 fn record_skip(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     reason: DeliverySkipReason,
     detail: String,
@@ -438,7 +439,7 @@ fn record_skip(
 }
 
 pub fn begin(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &mut Task,
     roots: &WorkspaceRoots,
     policy: &DeliveryPolicy,

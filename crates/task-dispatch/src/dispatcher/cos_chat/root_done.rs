@@ -20,10 +20,7 @@ use task_core::chat::ChatRunState::{
     Queued as RunQueued, Running as RunRunning, Stopping as RunStopping,
 };
 use task_core::chat::{ChatPostMessageRequest, ChatRunState, ChatSendMode, cos_thread_label};
-use task_core::{
-    Event, NoticeStore, NotificationKind, NotificationStore, RootDoneState, RootDoneSummary,
-    TaskId, TaskStore,
-};
+use task_core::{Event, NotificationKind, RootDoneState, RootDoneSummary, TaskId};
 use task_ops::cos_first_response::{FirstResponseWait, ThreadRun, parse_ts};
 use task_ops::root_done::{self, RootDoneFacts};
 use time::OffsetDateTime;

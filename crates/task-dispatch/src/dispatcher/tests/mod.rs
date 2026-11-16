@@ -111,7 +111,7 @@ pub(super) fn test_check_slots() -> Option<task_worker::check_slots::SlotSource>
 }
 
 pub(super) fn dispatcher(
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     adapter: Arc<dyn WorkerAdapter>,
     max_concurrency: usize,
 ) -> Dispatcher {
@@ -132,7 +132,7 @@ pub(super) fn use_passing_stub_checker() {
 /// 同梱の検査器を設定しない [`dispatcher`]（同梱の検査器の無い場合を確かめる試験の土台）。同梱の検査器が
 /// 既に設定されていれば panic する（試験の前提が崩れている）。
 pub(super) fn dispatcher_without_bundled_checker(
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     adapter: Arc<dyn WorkerAdapter>,
     max_concurrency: usize,
 ) -> Dispatcher {
@@ -148,7 +148,7 @@ pub(super) fn dispatcher_without_bundled_checker(
 }
 
 fn dispatcher_with_test_clock(
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     adapter: Arc<dyn WorkerAdapter>,
     max_concurrency: usize,
     use_test_clock: bool,
@@ -158,7 +158,7 @@ fn dispatcher_with_test_clock(
 }
 
 fn new_test_dispatcher(
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     adapter: Arc<dyn WorkerAdapter>,
     max_concurrency: usize,
     use_test_clock: bool,
@@ -365,7 +365,7 @@ pub(super) async fn run_until_idle(d: &mut Dispatcher, max_ticks: usize) -> Tick
 
 pub(super) async fn run_until_task_terminal(
     d: &mut Dispatcher,
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     task_id: TaskId,
 ) {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
@@ -817,7 +817,7 @@ impl WorkerAdapter for AlwaysInfraFailingReviewAdapter {
     }
 }
 
-fn transition_reasons(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<String> {
+fn transition_reasons(store: &Arc<SqliteStore>, id: TaskId) -> Vec<String> {
     store
         .events_for(id)
         .unwrap()
@@ -830,7 +830,7 @@ fn transition_reasons(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<String> {
 }
 
 /// 監査 M-1〜M-3（ADR-0034 D2）: 報告はタスクの終端状態に合わせて作るテスト向けの、最小の組織（秘書 → coding → coding-poc）。
-fn seed_org_for_reports(store: &Arc<dyn TaskStore>) {
+fn seed_org_for_reports(store: &Arc<SqliteStore>) {
     let now = OffsetDateTime::now_utc();
     for (id, parent, kind) in [
         ("secretary", None, OrgKind::Secretary),
@@ -889,7 +889,7 @@ impl WorkerAdapter for AttemptGatedAdapter {
 
 // ---- ADR-0078: 接続の維持・再接続の抑制・切断の通知と回数（偽のフックで決定的に） ----
 
-fn instant_done_dispatcher(store: Arc<dyn TaskStore>) -> Dispatcher {
+fn instant_done_dispatcher(store: Arc<SqliteStore>) -> Dispatcher {
     let adapter = Arc::new(InstantAdapter {
         terminal: Terminal::Done {
             summary: "ok".into(),
@@ -925,7 +925,7 @@ fn liveness_round(d: &mut Dispatcher, id: &str) {
     }
 }
 
-fn connection_log(store: &Arc<dyn TaskStore>) -> Vec<task_core::ClusterConnectionRecord> {
+fn connection_log(store: &Arc<SqliteStore>) -> Vec<task_core::ClusterConnectionRecord> {
     store
         .cluster_connection_list_since(OffsetDateTime::UNIX_EPOCH)
         .unwrap()
@@ -1030,7 +1030,7 @@ pub(super) fn done_adapter() -> Arc<dyn WorkerAdapter> {
 
 #[allow(clippy::too_many_arguments)]
 async fn run_worker_for_test(
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     task_id: TaskId,
     dir: PathBuf,
     settings: SshSettings,
@@ -1154,7 +1154,7 @@ fn roles() -> Vec<RoleSpec> {
     ]
 }
 
-fn progress_msgs(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<String> {
+fn progress_msgs(store: &Arc<SqliteStore>, id: TaskId) -> Vec<String> {
     store
         .events_for(id)
         .unwrap()
@@ -1168,7 +1168,7 @@ fn progress_msgs(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<String> {
 
 async fn wait_for_approval_child(
     d: &mut Dispatcher,
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     task_id: TaskId,
 ) -> Task {
     for _ in 0..100 {
@@ -1267,7 +1267,7 @@ fn accounts_fixture() -> tempfile::TempDir {
 
 #[allow(clippy::too_many_arguments)]
 fn pool_dispatcher(
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     adapter: Arc<dyn WorkerAdapter>,
     second_provider: Option<(&str, Arc<dyn WorkerAdapter>)>,
     accounts_root: PathBuf,
@@ -1287,7 +1287,7 @@ fn pool_dispatcher(
 
 #[allow(clippy::too_many_arguments)]
 fn pool_dispatcher_with_requeues(
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     adapter: Arc<dyn WorkerAdapter>,
     second_provider: Option<(&str, Arc<dyn WorkerAdapter>)>,
     accounts_root: PathBuf,
@@ -1434,7 +1434,7 @@ fn org_node_of(id: &str, parent: Option<&str>, kind: OrgKind, genre: Option<&str
     }
 }
 
-fn seed_conversation_org(store: &dyn TaskStore) {
+fn seed_conversation_org(store: &SqliteStore) {
     for n in [
         org_node_of("secretary", None, OrgKind::Secretary, Some("secretary")),
         org_node_of("research", Some("secretary"), OrgKind::Department, None),
@@ -1448,7 +1448,7 @@ fn seed_conversation_org(store: &dyn TaskStore) {
 }
 
 fn person_dispatcher(
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     adapter: Arc<dyn WorkerAdapter>,
     workspace_root: PathBuf,
     memory_dir: Option<PathBuf>,
@@ -1754,7 +1754,7 @@ impl WorkerAdapter for RecordingAdapter {
 
 /// `workspace_root` を実体のあるディレクトリにした dispatcher（既定の `/nonexistent` では worktree を作れない）。
 fn worktree_dispatcher(
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     adapter: Arc<dyn WorkerAdapter>,
     workspace_root: &std::path::Path,
     releases_dir: Option<PathBuf>,
@@ -1842,14 +1842,14 @@ impl WorkerAdapter for WritesReportAdapter {
 
 /// 案件と `project_repos` を仕込み、その案件のタスクを返す。
 fn project_with_repos(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     repos: &[(&str, &std::path::Path, task_core::RepoKind)],
 ) -> (task_core::ProjectId, Vec<task_core::ProjectRepo>) {
     project_with_repos_integrating(store, repos, false)
 }
 
 fn project_with_repos_integrating(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     repos: &[(&str, &std::path::Path, task_core::RepoKind)],
     auto_integrate: bool,
 ) -> (task_core::ProjectId, Vec<task_core::ProjectRepo>) {
@@ -2041,10 +2041,7 @@ fn wu_spec(key: &str, depends_on: &[&str]) -> task_core::WorkUnitSpec {
     }
 }
 
-fn adopt_three_step_plan(
-    store: &Arc<dyn TaskStore>,
-    task_id: TaskId,
-) -> task_core::ExecutionPlanRow {
+fn adopt_three_step_plan(store: &Arc<SqliteStore>, task_id: TaskId) -> task_core::ExecutionPlanRow {
     let spec = task_core::ExecutionPlanSpec {
         stages: Vec::new(),
         units: Vec::new(),
@@ -2493,7 +2490,7 @@ fn v2_wu(key: &str, phase: &str, depends_on: &[&str]) -> task_core::WorkUnitSpec
 }
 
 fn adopt_v2_plan(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     task_id: TaskId,
     phases: &[&str],
     work_units: Vec<task_core::WorkUnitSpec>,
@@ -2531,7 +2528,7 @@ fn adopt_v2_plan(
 /// 並列 WU の dispatcher（`workspace_root` は実体、全体の並列度 `max_concurrency`、provider の
 /// 並列度 `provider_concurrency`、Task ごとの並列 WU の上限 `limit`）。
 fn parallel_dispatcher(
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     adapter: Arc<dyn WorkerAdapter>,
     workspace_root: &std::path::Path,
     max_concurrency: usize,
@@ -2560,7 +2557,7 @@ fn parallel_task(repo: &std::path::Path, check_cmd: &str) -> Task {
     task
 }
 
-fn events_of(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<Event> {
+fn events_of(store: &Arc<SqliteStore>, id: TaskId) -> Vec<Event> {
     store
         .events_for(id)
         .unwrap()
@@ -2585,7 +2582,7 @@ async fn run_three_independent_units(
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(
         repo.path(),
         "test -f a.txt && test -f b.txt && test -f c.txt",
@@ -2668,11 +2665,7 @@ pub(super) async fn run_until_state(d: &mut Dispatcher, mut done: impl FnMut() -
     }
 }
 
-fn wu_status(
-    store: &Arc<dyn TaskStore>,
-    id: TaskId,
-    key: &str,
-) -> Option<task_core::WorkUnitStatus> {
+fn wu_status(store: &Arc<SqliteStore>, id: TaskId, key: &str) -> Option<task_core::WorkUnitStatus> {
     store
         .work_units_for(id)
         .unwrap()
@@ -2702,7 +2695,7 @@ fn transitioned_index(events: &[Event], reason: &str) -> Option<usize> {
 /// `pause_after = after(design)` の 2 工程（design: a、build: b）の Task を、design の後の
 /// 途中確認（`awaiting_human`）まで進める。
 async fn paused_after_design() -> (
-    Arc<dyn TaskStore>,
+    Arc<SqliteStore>,
     Dispatcher,
     Arc<ParallelWuAdapter>,
     Task,
@@ -2712,7 +2705,7 @@ async fn paused_after_design() -> (
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = parallel_task(repo.path(), "test -f a.txt && test -f b.txt");
     task.routing = Some(task_core::TaskRouting {
         pause_after: task_core::PausePolicy::After {
@@ -2802,7 +2795,7 @@ impl WorkerAdapter for TargetDirAdapter {
 /// 本番の `gate` WU（kind = test、5 つの checks）と同じ形の 1 工程の v2 計画。1 回目の検査は
 /// `flag` が無いので落ち（`work_unit_retry`。本番の replan v3 で failed → ready に戻った後と同じく
 /// WU の `runs` が 2 になる）、2 回目は `flag` があるので `sleep` の後に通る（検査の窓）。
-fn adopt_gate_plan(store: &Arc<dyn TaskStore>, task_id: TaskId, flag: &Path, sleep: &str) {
+fn adopt_gate_plan(store: &Arc<SqliteStore>, task_id: TaskId, flag: &Path, sleep: &str) {
     let mut gate = v2_wu("gate", "gate", &[]);
     gate.kind = task_core::WorkUnitKind::Test;
     gate.checks = vec![
@@ -2878,7 +2871,7 @@ fn gate_done_terminal() -> Terminal {
     }
 }
 
-fn gate_row(store: &Arc<dyn TaskStore>, id: TaskId) -> task_core::WorkUnitRow {
+fn gate_row(store: &Arc<SqliteStore>, id: TaskId) -> task_core::WorkUnitRow {
     store
         .work_units_for(id)
         .unwrap()
@@ -2887,7 +2880,7 @@ fn gate_row(store: &Arc<dyn TaskStore>, id: TaskId) -> task_core::WorkUnitRow {
         .unwrap()
 }
 
-fn worker_finished_outcomes(store: &Arc<dyn TaskStore>, id: TaskId, run_id: &str) -> Vec<String> {
+fn worker_finished_outcomes(store: &Arc<SqliteStore>, id: TaskId, run_id: &str) -> Vec<String> {
     events_of(store, id)
         .into_iter()
         .filter_map(|e| match e {
@@ -2903,7 +2896,7 @@ fn worker_finished_outcomes(store: &Arc<dyn TaskStore>, id: TaskId, run_id: &str
 /// 進める。2 回目の run の id を返す。
 async fn run_gate_until_second_checks(
     d: &mut Dispatcher,
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     id: TaskId,
 ) -> String {
     let s = store.clone();
@@ -2988,7 +2981,7 @@ async fn run_scratch_env() -> (
     let scratch_dir = tempfile::tempdir().unwrap();
     let logs = tempfile::tempdir().unwrap();
     let log = logs.path().join("check-env.log");
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = git_task(
         repo_dir.path(),
         None,

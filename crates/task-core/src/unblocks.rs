@@ -56,7 +56,7 @@ pub struct UnblockLink {
     pub fired_at: Option<OffsetDateTime>,
 }
 
-/// 結びを 1 度だけ発火させる書き込み。`TaskStore::unblock_fire` が 1 つの transaction で行う:
+/// 結びを 1 度だけ発火させる書き込み。`SqliteStore::unblock_fire` が 1 つの transaction で行う:
 /// `fired_at IS NULL` の行だけを更新し、更新できたときだけ `comment`（あれば）と `reopen`（真なら
 /// `Trigger::Reopen`）を書く。
 #[derive(Debug, Clone)]

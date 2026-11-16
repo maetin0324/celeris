@@ -8,7 +8,7 @@ use task_core::decision::{
     CostOfReversal, DecisionKind, DecisionOption, DecisionOrigin, DecisionPathEntry,
     DecisionRaisedBy, DecisionRequest, DecisionStatus,
 };
-use task_core::{Event, Status, TaskKind, TaskStore};
+use task_core::{Event, Status, TaskKind};
 
 const OPS: &str = "/api/v1/cos/operations";
 

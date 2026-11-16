@@ -40,7 +40,7 @@ impl WorkerAdapter for HoldAdapter {
 }
 
 fn hinted_task(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     dir: &std::path::Path,
     hint: Option<&[&str]>,
     priority: i64,
@@ -71,7 +71,7 @@ fn is_running(d: &Dispatcher, id: TaskId) -> bool {
     })
 }
 
-fn ready_untouched(store: &Arc<dyn TaskStore>, id: TaskId) {
+fn ready_untouched(store: &Arc<SqliteStore>, id: TaskId) {
     let task = store.get(id).unwrap().unwrap();
     assert_eq!(task.status, Status::Ready, "held task stays ready");
     assert_eq!(task.attempts, 0, "a write-set hold consumes no attempt");
@@ -101,7 +101,7 @@ async fn finish_one(d: &mut Dispatcher, adapter: &HoldAdapter, id: TaskId) {
 #[tokio::test]
 async fn write_set_gate_runs_disjoint_hints_in_parallel() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let a = hinted_task(&store, dir.path(), Some(&["src/a.rs"]), 0);
     let b = hinted_task(&store, dir.path(), Some(&["src/ab.rs", "docs/"]), 0);
     let adapter = HoldAdapter::new();
@@ -120,7 +120,7 @@ async fn write_set_gate_runs_disjoint_hints_in_parallel() {
 #[tokio::test]
 async fn write_set_gate_serializes_strong_overlap_until_the_first_run_finishes() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let a = hinted_task(&store, dir.path(), Some(&["crates/task-core/"]), 1);
     let b = hinted_task(&store, dir.path(), Some(&["crates/task-core/src/x.rs"]), 0);
     let adapter = HoldAdapter::new();
@@ -159,7 +159,7 @@ async fn write_set_gate_serializes_strong_overlap_until_the_first_run_finishes()
 #[tokio::test]
 async fn write_set_gate_without_hints_keeps_the_previous_parallelism() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     // 両方 hint なし、片方だけ hint あり、の 2 組。どちらも従来どおり並列に起動する。
     let a = hinted_task(&store, dir.path(), None, 0);
     let b = hinted_task(&store, dir.path(), None, 0);
@@ -181,7 +181,7 @@ async fn write_set_gate_without_hints_keeps_the_previous_parallelism() {
 async fn write_set_gate_ignores_overlap_in_another_repo() {
     let dir_a = tempfile::tempdir().unwrap();
     let dir_b = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let a = hinted_task(&store, dir_a.path(), Some(&["src/"]), 0);
     let b = hinted_task(&store, dir_b.path(), Some(&["src/"]), 0);
     let adapter = HoldAdapter::new();
@@ -198,7 +198,7 @@ async fn write_set_gate_ignores_overlap_in_another_repo() {
 #[tokio::test]
 async fn write_set_gate_wakes_the_longest_waiter_before_a_newer_higher_priority_task() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let a = hinted_task(&store, dir.path(), Some(&["src/"]), 5);
     let b = hinted_task(&store, dir.path(), Some(&["src/lib.rs"]), 0);
     let adapter = HoldAdapter::new();
@@ -312,7 +312,7 @@ async fn write_set_gate_no_starvation() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let check = || Check::Command {
         cmd: "true".into(),
         expect_exit: 0,

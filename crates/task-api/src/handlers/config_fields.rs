@@ -5,8 +5,6 @@ use axum::body::Body;
 use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 
-use task_core::TaskStore;
-
 use crate::admin::{AdminRequest, ConfigAdminError};
 use crate::middleware::{require_active, require_admin};
 use crate::problem::ApiProblem;

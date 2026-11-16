@@ -1,5 +1,5 @@
 use super::*;
-use crate::TaskStore;
+use crate::SqliteStore;
 use crate::model::{Budget, Task, TaskKind, Tier, WorkerHint, WorkspaceSpec};
 
 const SENTINEL: &str = "SENTINEL-p4ssw0rd-9f3a";

@@ -16,9 +16,7 @@ use std::cell::Cell;
 use sha2::{Digest, Sha256};
 use task_core::required_checks::health::{HealthBlockingDetail, HealthEvidence, HealthVerdict};
 use task_core::store::{IdempotencyClaim, IdempotencyLookup};
-use task_core::{
-    GenreSpec, ProjectId, RoleSpec, SqliteStore, Status, StoreError, TaskId, TaskStore,
-};
+use task_core::{GenreSpec, ProjectId, RoleSpec, SqliteStore, Status, StoreError, TaskId};
 use time::OffsetDateTime;
 
 use crate::add::{CriterionSpec, NewTaskSpec, SpecProvenance, build_task_with_roles};

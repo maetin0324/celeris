@@ -5,7 +5,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use super::*;
-use crate::store::{SCHEMA_VERSION, SqliteStore, StoreError, TaskStore};
+use crate::store::{SCHEMA_VERSION, SqliteStore, StoreError};
 
 fn t(s: &str) -> OffsetDateTime {
     OffsetDateTime::parse(s, &Rfc3339).unwrap()

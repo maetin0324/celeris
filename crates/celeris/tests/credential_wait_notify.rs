@@ -22,8 +22,8 @@ use webhook::{Hook, hook};
 use celeris::notify::{self, SendResult};
 use celeris::{ClusterMasters, Config, build_dispatcher};
 use task_core::{
-    Budget, Check, Criterion, NotificationStore, SqliteStore, Status, Task, TaskId, TaskKind,
-    TaskStore, Tier, WorkerHint, WorkspaceSpec,
+    Budget, Check, Criterion, SqliteStore, Status, Task, TaskId, TaskKind, Tier, WorkerHint,
+    WorkspaceSpec,
 };
 use task_dispatch::Dispatcher;
 use task_dispatch::credential_resume::{

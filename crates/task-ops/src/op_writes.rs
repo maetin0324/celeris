@@ -6,7 +6,7 @@
 
 use task_core::store::SqliteStore;
 use task_core::transition::Outcome;
-use task_core::{Event, StoreError, TaskId, TaskRepoIntegrationState, TaskStore, Trigger};
+use task_core::{Event, StoreError, TaskId, TaskRepoIntegrationState, Trigger};
 
 pub trait OpWrites {
     fn transition(
@@ -20,7 +20,7 @@ pub trait OpWrites {
 }
 
 /// 足す書き込みがない経路（MCP・daemon・試験）。
-pub struct PlainWrites<'a>(pub &'a dyn TaskStore);
+pub struct PlainWrites<'a>(pub &'a SqliteStore);
 
 impl OpWrites for PlainWrites<'_> {
     fn transition(

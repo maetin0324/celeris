@@ -229,7 +229,7 @@ pub fn run(_db: Option<&Path>, command: RoutingCommand) -> Result<ExitCode, CliE
             let db = explicit_db("routing balance trips", args.db.as_deref())?;
             let store = SqliteStore::open(db)
                 .map_err(|e| CliError::msg(format!("routing balance trips: {e}")))?;
-            let trips = task_core::TaskStore::harness_balance_trips(&store)
+            let trips = task_core::SqliteStore::harness_balance_trips(&store)
                 .map_err(|e| CliError::msg(format!("routing balance trips: {e}")))?;
             if trips.is_empty() {
                 outln!("(no execution class is stopped)");
@@ -243,7 +243,7 @@ pub fn run(_db: Option<&Path>, command: RoutingCommand) -> Result<ExitCode, CliE
             let db = explicit_db("routing balance reset", args.db.as_deref())?;
             let store = SqliteStore::open(db)
                 .map_err(|e| CliError::msg(format!("routing balance reset: {e}")))?;
-            let was_stopped = task_core::TaskStore::harness_balance_reset(&store, &args.class)
+            let was_stopped = task_core::SqliteStore::harness_balance_reset(&store, &args.class)
                 .map_err(|e| CliError::msg(format!("routing balance reset: {e}")))?;
             outln!(
                 "{}",

@@ -11,7 +11,7 @@ use task_core::chat::{AuditContext, ChatActor, ChatOpenThreadRequest, ChatRunSta
 use task_core::decision::*;
 use task_core::decision_log::{CampaignIdentity, DecisionLogProposal};
 use task_core::decision_log_export::{CampaignExport, ExportParams};
-use task_core::{Event, SqliteStore, Status, Task, TaskId, TaskKind, TaskStore};
+use task_core::{Event, SqliteStore, Status, Task, TaskId, TaskKind};
 use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::io::AsyncWriteExt;
 

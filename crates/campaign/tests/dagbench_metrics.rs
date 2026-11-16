@@ -17,7 +17,7 @@ use celeris_campaign::{
     },
 };
 use serde_json::{Value, json};
-use task_core::TaskStore;
+use task_core::SqliteStore;
 
 struct RouterTransport(axum::Router);
 
@@ -125,7 +125,7 @@ fn celeris_metrics_come_from_the_same_raw_format() {
     RunHeader::from_spec(&s, "celeris", CELERIS_SCOPE)
         .write(&raw)
         .unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(task_core::SqliteStore::open(&env.db_path).unwrap());
+    let store: Arc<SqliteStore> = Arc::new(task_core::SqliteStore::open(&env.db_path).unwrap());
     let transport = RouterTransport(env.router());
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(4)

@@ -22,7 +22,7 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use task_core::{Event, ExecutionHintSpec, ExecutionMode, Status, Task, TaskId, TaskStore};
+use task_core::{Event, ExecutionHintSpec, ExecutionMode, SqliteStore, Status, Task, TaskId};
 use time::OffsetDateTime;
 
 use crate::error::OpsError;
@@ -66,7 +66,7 @@ fn out_of_scope_reason(task: &Task) -> Option<String> {
 
 /// 人（`source = "human"`）または MCP クライアント（`"mcp:<id>"`）が実行の形を決める。
 pub fn set_execution_mode(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     mode: ExecutionMode,
     source: &str,
@@ -81,7 +81,7 @@ pub fn set_execution_mode(
 /// Validate and construct the execution-mode update without writing. API operations use this
 /// plan so the task update, event, and CoS audit record can share one SQLite transaction.
 pub fn plan_execution_mode(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     mode: ExecutionMode,
     source: &str,
@@ -178,7 +178,7 @@ pub fn plan_execution_mode(
 /// - 採用そのもの（`task_ops::execution::adopt_human_plan`）とは別のトランザクション。書けなくても採用は
 ///   失敗にしない（呼び出し側が警告を出す）。
 pub fn record_human_plan_gate(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     now: OffsetDateTime,
 ) -> Result<Option<Task>, OpsError> {

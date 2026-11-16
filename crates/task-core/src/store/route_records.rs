@@ -74,12 +74,14 @@ impl SqliteStore {
         Ok(())
     }
 
+    /// Write the one `celeris.route-decision/1` row of a routing decision (options + decision).
+    /// Refuses a decision that has no task features snapshot (`features_hash` is a foreign key).
     /// Write the one `celeris.route-decision/1` row of a routing decision (ADR 2026-10-11
     /// task-routing-features D6/D7): its `celeris.route-options/1` options (content-addressed, so a
     /// repeat is a no-op) and the decision row. The features snapshot must already exist
     /// (`route_decisions.features_hash` references `route_features`), so a decision taken without
     /// one is refused rather than recorded half-way.
-    pub fn record_route_decision_impl(
+    pub fn record_route_decision(
         &self,
         decision: &crate::route_select::RouteDecision,
     ) -> Result<(), StoreError> {

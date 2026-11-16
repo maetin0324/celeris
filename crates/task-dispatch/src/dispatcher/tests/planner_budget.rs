@@ -26,7 +26,7 @@ enum PlannerStep {
     /// 計画を（あれば）書いて turn の上限（claude の `error_max_turns`）で終わる。
     TurnsOut(Option<String>),
     /// 人が comment で割り込む（API と同じ `post_human_comment_as`）。run は abort されるまで返らない。
-    CommentInterrupt(Arc<dyn TaskStore>),
+    CommentInterrupt(Arc<SqliteStore>),
 }
 
 /// planner run には振る舞いの列を順に当て（`flag` の 2 番目の値の本目の planner run では `flag` も作る）、worker の
@@ -174,7 +174,7 @@ fn assert_budgets(d: &Dispatcher, seen: &[SeenRun]) {
     }
 }
 
-fn transition_reasons(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<String> {
+fn transition_reasons(store: &Arc<SqliteStore>, id: TaskId) -> Vec<String> {
     store
         .events_for(id)
         .unwrap()
@@ -193,7 +193,7 @@ fn transition_reasons(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<String> {
 async fn review_fail_replan_planner_gets_the_planner_budget() {
     let dir = tempfile::tempdir().unwrap();
     let flag = dir.path().join("fixed.flag");
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = production_root(
         dir.path(),
         Check::Command {
@@ -235,7 +235,7 @@ async fn review_fail_replan_planner_gets_the_planner_budget() {
 #[tokio::test]
 async fn plan_invalid_replan_answer_planner_gets_the_planner_budget() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = production_root(
         dir.path(),
         Check::Command {
@@ -310,7 +310,7 @@ async fn plan_invalid_replan_answer_planner_gets_the_planner_budget() {
 }
 
 fn planner_finishes(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     id: TaskId,
 ) -> Vec<(String, Option<task_core::RunEnd>)> {
     store
@@ -329,7 +329,7 @@ fn planner_finishes(
         .collect()
 }
 
-fn plan_invalid_decisions(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<task_core::DecisionRow> {
+fn plan_invalid_decisions(store: &Arc<SqliteStore>, id: TaskId) -> Vec<task_core::DecisionRow> {
     store
         .decisions_list(Some(id))
         .unwrap()
@@ -363,7 +363,7 @@ fn rejected_plan_files(dir: &std::path::Path) -> Vec<String> {
 #[tokio::test]
 async fn planner_budget_turns_out_with_a_complete_plan_is_validated_and_adopted() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = production_root(
         dir.path(),
         Check::Command {
@@ -424,7 +424,7 @@ async fn planner_budget_turns_out_with_a_complete_plan_is_validated_and_adopted(
 #[tokio::test]
 async fn planner_budget_turns_out_without_a_valid_plan_is_an_invalid_attempt() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = production_root(
         dir.path(),
         Check::Command {
@@ -493,7 +493,7 @@ async fn planner_budget_turns_out_without_a_valid_plan_is_an_invalid_attempt() {
 #[tokio::test]
 async fn planner_budget_comment_interrupt_is_not_a_planner_attempt() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = production_root(
         dir.path(),
         Check::Command {

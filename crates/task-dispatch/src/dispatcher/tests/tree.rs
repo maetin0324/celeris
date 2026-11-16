@@ -131,7 +131,7 @@ pub(super) fn tree_limits() -> task_core::ExecutionLimits {
 }
 
 pub(super) fn tree_dispatcher(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     adapter: Arc<dyn WorkerAdapter>,
 ) -> Dispatcher {
     let mut d = dispatcher(store.clone(), adapter, 3);
@@ -179,7 +179,7 @@ fn view_ctx() -> task_ops::view::ViewContext {
 /// events から復元しきれない（木と無関係に R1b 以前からある差。PROGRESS の未解決に記録）。
 /// ADR-0079 D8（Phase R3b）: root の計画が人の承認を待っていることを確かめて承認する（API / MCP と同じ
 /// `task_ops::plan_gate::plan_gate`）。理由（`PlanApprovalRequested.reasons`）を返す。
-pub(super) fn approve_root_plan(store: &Arc<dyn TaskStore>, root_id: TaskId) -> Vec<String> {
+pub(super) fn approve_root_plan(store: &Arc<SqliteStore>, root_id: TaskId) -> Vec<String> {
     let task = store.get(root_id).unwrap().unwrap();
     let events = store.events_for(root_id).unwrap();
     let info = task_ops::plan_gate::latest_plan_approval(&task, &events)
@@ -195,7 +195,7 @@ pub(super) fn approve_root_plan(store: &Arc<dyn TaskStore>, root_id: TaskId) -> 
     info.reasons
 }
 
-pub(super) fn assert_replay_is_clean(store: &Arc<dyn TaskStore>) {
+pub(super) fn assert_replay_is_clean(store: &Arc<SqliteStore>) {
     let report = task_ops::replay::replay(store.as_ref()).unwrap();
     assert!(report.mismatches.is_empty(), "{:?}", report.mismatches);
     let (wu, _runs, plans, _) =
@@ -213,7 +213,7 @@ pub(super) fn assert_replay_is_clean(store: &Arc<dyn TaskStore>) {
 #[tokio::test]
 async fn v3_task_unit_creates_child_when_ready() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = compound_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -351,7 +351,7 @@ async fn v3_task_unit_creates_child_when_ready() {
 #[tokio::test]
 async fn child_waits_for_dependencies_and_decisions() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = compound_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -449,7 +449,7 @@ async fn child_waits_for_dependencies_and_decisions() {
 }
 
 /// 子を dispatch → running → 指定の終端へ（store の遷移だけ。LLM も adapter も使わない）。
-pub(super) fn drive_child(store: &Arc<dyn TaskStore>, id: TaskId, to: Status) {
+pub(super) fn drive_child(store: &Arc<SqliteStore>, id: TaskId, to: Status) {
     match to {
         Status::Cancelled => {
             store.apply_transition(id, Trigger::Cancel, None).unwrap();
@@ -474,7 +474,7 @@ pub(super) fn drive_child(store: &Arc<dyn TaskStore>, id: TaskId, to: Status) {
     assert_eq!(store.get(id).unwrap().unwrap().status, to);
 }
 
-pub(super) fn child_of(store: &Arc<dyn TaskStore>, root: TaskId, key: &str) -> TaskId {
+pub(super) fn child_of(store: &Arc<SqliteStore>, root: TaskId, key: &str) -> TaskId {
     let units = store.work_units_for(root).unwrap();
     unit(&units, key)
         .child_task_id
@@ -490,7 +490,7 @@ pub(super) fn child_of(store: &Arc<dyn TaskStore>, root: TaskId, key: &str) -> T
 #[tokio::test]
 async fn unit_mirrors_child_status() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = compound_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -604,7 +604,7 @@ async fn unit_mirrors_child_status() {
 #[tokio::test]
 async fn child_failure_fails_the_unit_and_the_stage_does_not_complete() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = compound_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -639,7 +639,7 @@ async fn child_failure_fails_the_unit_and_the_stage_does_not_complete() {
 /// 子の run が走っている（`child_delay` の間）まで tick する。子の id を返す。
 pub(super) async fn tick_until_child_runs(
     d: &mut Dispatcher,
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     root: TaskId,
 ) -> TaskId {
     for _ in 0..300 {
@@ -663,7 +663,7 @@ pub(super) async fn tick_until_child_runs(
 #[tokio::test]
 async fn parent_waits_without_lease() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = compound_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -713,7 +713,7 @@ async fn parent_waits_without_lease() {
 #[tokio::test]
 async fn cancel_cascades_to_subtree() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = compound_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -788,7 +788,7 @@ async fn cancel_cascades_to_subtree() {
 #[tokio::test]
 async fn tree_runs_cannot_delegate() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = compound_task(dir.path());
     store.create_task(&root, vec![]).unwrap();
     let mut child = new_task(
@@ -836,7 +836,7 @@ async fn tree_runs_cannot_delegate() {
 #[tokio::test]
 async fn review_human_stage_pauses_after_integration() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = compound_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -894,7 +894,7 @@ async fn review_human_stage_pauses_after_integration() {
 #[tokio::test]
 async fn stage_report_lists_child_summaries() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = compound_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -976,7 +976,7 @@ async fn stage_report_lists_child_summaries() {
 #[tokio::test]
 async fn task_unit_repos_must_be_a_subset_of_the_parents() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = compound_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -1011,7 +1011,7 @@ async fn task_unit_repos_must_be_a_subset_of_the_parents() {
 #[tokio::test]
 async fn tree_disabled_rejects_v3_and_creates_no_child() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = compound_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -1044,7 +1044,7 @@ async fn tree_disabled_rejects_v3_and_creates_no_child() {
 #[tokio::test]
 async fn replay_rebuilds_child_links_and_unit_statuses() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = compound_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();

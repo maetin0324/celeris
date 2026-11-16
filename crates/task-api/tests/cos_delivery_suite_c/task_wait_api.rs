@@ -8,7 +8,7 @@ use common::*;
 use serde_json::{Value, json};
 use task_core::{
     CapacityScope, Event, ExecutionPlanRow, ExecutionPlanSpec, PlanOrigin, PlanStatus, Status,
-    Task, TaskKind, TaskStore, TaskWait, WorkUnitContext, WorkUnitKind, WorkUnitRow, WorkUnitSpec,
+    Task, TaskKind, TaskWait, WorkUnitContext, WorkUnitKind, WorkUnitRow, WorkUnitSpec,
     WorkUnitStatus,
 };
 use task_ops::daemon::SnapshotTaskWait;

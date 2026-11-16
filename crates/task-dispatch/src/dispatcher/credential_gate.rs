@@ -57,7 +57,7 @@ fn wait_unit_id(task: &Task, wu: Option<&WorkUnitRow>) -> String {
 }
 
 /// 計画の無い task の `secret` の開いた wait が store（正本の `credential_waits`）にあるか。
-fn atomic_wait_open(store: &dyn TaskStore, task: &Task, secret: &str) -> Result<bool, StoreError> {
+fn atomic_wait_open(store: &SqliteStore, task: &Task, secret: &str) -> Result<bool, StoreError> {
     let unit = wait_unit_id(task, None);
     let is_open = |w: &CredentialWait| w.work_unit_id == unit && w.secret_id == secret;
     Ok(store.credential_waits_list_waiting()?.iter().any(is_open))
@@ -86,7 +86,7 @@ impl Dispatcher {
         let gate = gate.clone();
         // WU のある task は WU の Blocked 行が resume まで止める。atomic task は store の wait が正本（D1）で、
         // 開いた wait があれば入り直す物は無い（wait 行・受信箱の item は最初の入りで作ってある）。
-        if wu.is_none() && atomic_wait_open(&*self.store, task, &gate.secret_id)? {
+        if wu.is_none() && atomic_wait_open(&self.store, task, &gate.secret_id)? {
             return Ok(true);
         }
         if self.credential_gates.is_registered(&gate.secret_id) {

@@ -19,8 +19,8 @@ use std::path::Path;
 use task_core::knowledge::{self as kb, MaintenanceInput, RelatedPage};
 use task_core::report;
 use task_core::{
-    Event, GenreSpec, KnowledgeRunState, RoleSpec, Status, StoreError, Task, TaskId, TaskKind,
-    TaskStore, Tier,
+    Event, GenreSpec, KnowledgeRunState, RoleSpec, SqliteStore, Status, StoreError, Task, TaskId,
+    TaskKind, Tier,
 };
 use task_ops::add::{NewTaskSpec, PriorityInput};
 use task_worker::MemoryDir;
@@ -60,7 +60,7 @@ fn truncate_chars(s: &str, max: usize) -> String {
 /// 2 回目が `langmem` で走るか汎用ハーネスで走るかは、dispatch のときの到達性の検査が決める（D1）。
 #[allow(clippy::too_many_arguments)]
 pub fn retry_failed(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     knowledge_root: &Path,
     enabled: bool,
     max_related_pages: usize,
@@ -111,7 +111,7 @@ pub fn retry_failed(
 
 /// 元のタスク 1 件から知識整理 run の依頼（[`NewTaskSpec`]）を組む（[`retry_failed`] が使う）。報告がまだ無い・担当がいないなら `None`。**決定的**（LLM は呼ばない）。
 fn build_run_spec(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     knowledge_root: &Path,
     task: &Task,
     max_related_pages: usize,
@@ -239,7 +239,7 @@ fn build_run_spec(
 ///
 /// 判断材料は run タスクの `WorkerStarted.adapter`（= 実際に走ったアダプタ）だけ。`langmem` なら
 /// `"langmem"`、それ以外なら `"fallback:<adapter>"`。run が 1 度も始まらなかったときは `None`。
-fn via_of(store: &dyn TaskStore, run_task_id: TaskId) -> Option<String> {
+fn via_of(store: &SqliteStore, run_task_id: TaskId) -> Option<String> {
     let events = store.events_for(run_task_id).ok()?;
     let adapter = events.iter().rev().find_map(|(_, e)| match e {
         Event::WorkerStarted { adapter, .. } => Some(adapter.clone()),
@@ -262,7 +262,7 @@ struct CandidatesFile {
 /// tick ごとに 1 回呼ぶ。`knowledge_runs` が `scheduled` のまま、その run のタスクが終端になったものを
 /// 見つけて適用する。適用した件数を返す（複数を同じ tick で処理してよい。適用は決定的で軽い）。
 pub fn apply_finished(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     knowledge_root: &Path,
     workspace_roots: &task_core::local_machine::WorkspaceRoots,
     now: OffsetDateTime,

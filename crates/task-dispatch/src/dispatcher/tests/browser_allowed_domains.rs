@@ -3,7 +3,7 @@ use super::*;
 
 // ---- ADR 2026-10-05-browser-department-web-live-view D2.0: task ∩ grant at run time ----
 
-pub(super) fn browser_org(store: &dyn TaskStore, grant: &[&str]) {
+pub(super) fn browser_org(store: &SqliteStore, grant: &[&str]) {
     let mut node = org_node_of(
         "browser-execution",
         Some("secretary"),
@@ -29,7 +29,7 @@ pub(super) fn browser_org(store: &dyn TaskStore, grant: &[&str]) {
 #[tokio::test]
 async fn browser_allowed_domains_grant_shrink_reaches_next_run_context() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     browser_org(store.as_ref(), &["https://*.example.com"]);
     let mut task = new_task(
         dir.path(),

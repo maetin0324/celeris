@@ -11,7 +11,7 @@
 use std::path::{Path, PathBuf};
 
 use task_core::local_machine::WorkspaceRoots;
-use task_core::{Status, StoreError, TaskId, TaskStore};
+use task_core::{SqliteStore, Status, StoreError, TaskId};
 use time::OffsetDateTime;
 
 /// 刈る対象の候補（各 worktree のディレクトリからの相対パス）。ADR-0066 D2。
@@ -98,7 +98,7 @@ pub fn prunable_paths(task_dir: &Path) -> Vec<PathBuf> {
 /// 作業場所を、決定的な順（task id の文字列順）ですべて集める。`after_secs == 0` は「無効」（常に空）。
 /// 作業場所 `<root>/<task_id>` は `WorkspaceRoots::task_dir` で解く（ADR 2026-10-14-local-machine-settings D5）。
 pub fn find_prune_candidates(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     roots: &WorkspaceRoots,
     now: OffsetDateTime,
     after_secs: u64,
@@ -143,7 +143,7 @@ pub fn find_prune_candidates(
 
 /// `find_prune_candidates` の最初の 1 件（dispatcher の tick が「1 tick に最大 1 か所」で使う）。
 pub fn find_prune_candidate(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     roots: &WorkspaceRoots,
     now: OffsetDateTime,
     after_secs: u64,

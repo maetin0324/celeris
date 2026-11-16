@@ -1,7 +1,7 @@
 use super::*;
+use crate::SqliteStore;
 use crate::Tier;
 use crate::model::Event;
-use crate::{ModelCatalogStore, SqliteStore, TaskStore};
 
 fn models(ids: &[&str]) -> Vec<DiscoveredModel> {
     ids.iter().map(|id| DiscoveredModel::new(*id)).collect()

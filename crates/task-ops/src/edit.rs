@@ -4,7 +4,7 @@
 //! - `running` / `reviewing` は**受け付けるが次の run から効く**（走っている run は止めない。止めたければ
 //!   D2 のコメントか D6 の中止）。
 //! - 状態機械は通らない（`status` / `attempts` / `lease` は触らない）。書き込みは
-//!   `TaskStore::update_task` 1 回で、`Event::Edited{fields, by:"human"}` を同じトランザクションに積む。
+//!   `SqliteStore::update_task` 1 回で、`Event::Edited{fields, by:"human"}` を同じトランザクションに積む。
 //!
 //! LLM は呼ばない。検証は作成時（`add::build_task`）と同じ規則を使う。
 //!
@@ -15,9 +15,10 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use task_core::OrgDirectory;
 use task_core::{
-    Budget, Event, GenreSpec, MilestoneId, Status, StoreError, Task, TaskCategory, TaskId,
-    TaskStore, Tier, Trigger, WorkspaceSpec,
+    Budget, Event, GenreSpec, MilestoneId, SqliteStore, Status, StoreError, Task, TaskCategory,
+    TaskId, Tier, Trigger, WorkspaceSpec,
 };
 use time::OffsetDateTime;
 
@@ -132,7 +133,7 @@ pub struct EditResult {
 /// **作成時に 1 回**だけ効く）。`assignee` や `role` を変えても、既に焼き付いた `worker_hint` と
 /// `budget` はそのまま残る — 変えたければ同じ `PATCH` で明示的に書く（`docs/api/v1/api.md` §3.74）。
 pub fn edit_task(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     edit: TaskEdit,
     genres: &[GenreSpec],
@@ -173,7 +174,7 @@ impl EditPlan {
 }
 
 pub fn plan_edit(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     edit: TaskEdit,
     genres: &[GenreSpec],
@@ -513,7 +514,7 @@ pub fn plan_edit(
 
 /// 編集を書いた後の後始末と結果。`updated` は書いた結果の task。
 pub fn finish_edit(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     plan: EditPlan,
     mut task: Task,
 ) -> Result<EditResult, OpsError> {
@@ -567,7 +568,7 @@ pub fn finish_edit(
 /// 親が案件を持たないか同じ案件を持つ子 task も受け付ける。子で `repos` を書かなければ、同じ案件の親の
 /// repos（無ければ primary）を付ける（作成時の「親 → primary」と同じ順）。
 fn attach_project(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &mut Task,
     project_id: task_core::ProjectId,
     repos_given: bool,
@@ -642,7 +643,7 @@ fn attach_project(
 /// `starts` から `depends_on` をたどって `target` に着くか（着くなら最初に見つけた経路上の id）。
 /// 深さではなく「訪れた集合」で止めるので、既に循環している DB でも終わる。
 fn reaches(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     starts: &[TaskId],
     target: TaskId,
 ) -> Result<Option<TaskId>, OpsError> {

@@ -79,10 +79,7 @@ async fn serve_role(config: PathBuf, release: String) {
     let token = fs::read_to_string(token_file).unwrap().trim().to_string();
     {
         // B/C の候補集合・階層（daemon の model catalog。`GET /llm/models` が返す）。
-        use task_core::{
-            ModelCatalogStore,
-            model_catalog::{CatalogOverride, CatalogSource, DiscoveredModel},
-        };
+        use task_core::model_catalog::{CatalogOverride, CatalogSource, DiscoveredModel};
         let store = task_core::SqliteStore::open(&db).unwrap();
         let src = CatalogSource::new("opencode-go");
         store
@@ -174,7 +171,7 @@ fn run_cap_worker(t: &task_core::Task, ws: &Path) -> String {
 }
 
 fn stub_executor(db: &Path, config: &Path, ws: &Path) {
-    use task_core::{Event, Status, TaskStore, Trigger};
+    use task_core::{Event, Status, Trigger};
     let store = task_core::SqliteStore::open(db).unwrap();
     loop {
         // 試験の一時 dir が消えたら（試験 process が落ちた後も）残らない。
@@ -1809,10 +1806,7 @@ rules = [
     assert!(o, "prepare: {t}");
     {
         // 測定 DB の model catalog（B の候補集合。fake source には発見が無いので、発見の結果と同じ store 経路で入れる）。
-        use task_core::{
-            ModelCatalogStore,
-            model_catalog::{CatalogSource, DiscoveredModel},
-        };
+        use task_core::model_catalog::{CatalogSource, DiscoveredModel};
         let store = task_core::SqliteStore::open(&d.join("measure/celeris.db")).unwrap();
         store
             .model_catalog_apply(

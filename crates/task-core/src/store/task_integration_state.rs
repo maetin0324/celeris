@@ -15,7 +15,8 @@ type IntegrationStateRow = (
 );
 
 impl SqliteStore {
-    pub(super) fn task_integration_upsert_impl(
+    /// Idempotently upsert current done-task integration state; append an event only on state change.
+    pub fn task_integration_upsert(
         &self,
         value: &TaskRepoIntegrationState,
     ) -> Result<(), StoreError> {
@@ -26,7 +27,9 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub(super) fn task_integration_save_sweep_impl(
+    /// Sweep CAS: persist only while delivery and integration snapshots remain unchanged.
+    /// Active delivery for this repo suppresses Unintegrated, but allows Integrated reconciliation.
+    pub fn task_integration_save_sweep(
         &self,
         value: &TaskRepoIntegrationState,
         previous: Option<&TaskRepoIntegrationState>,
@@ -134,7 +137,7 @@ impl SqliteStore {
         }
         Ok(())
     }
-    pub(super) fn task_integration_get_impl(
+    pub fn task_integration_get(
         &self,
         task_id: TaskId,
         repo_id: RepoId,
@@ -167,7 +170,7 @@ impl SqliteStore {
         )
         .transpose()
     }
-    pub(super) fn task_integration_list_impl(
+    pub fn task_integration_list(
         &self,
         filter: Option<TaskRepoIntegrationStatus>,
     ) -> Result<Vec<TaskRepoIntegrationState>, StoreError> {
@@ -216,8 +219,8 @@ impl SqliteStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RepoId;
     use crate::model::TaskId;
-    use crate::{RepoId, TaskStore};
     #[test]
     fn task_integration_upsert_emits_only_on_state_change_and_lists_by_state() {
         let store = SqliteStore::open_in_memory().expect("store");

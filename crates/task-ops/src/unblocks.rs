@@ -14,7 +14,7 @@ use std::path::Path;
 
 use task_core::comment::{CommentAuthorKind, TaskComment};
 use task_core::unblocks::{MAX_UNBLOCKS, UnblockAction, UnblockFire};
-use task_core::{Status, TaskId, TaskStore};
+use task_core::{SqliteStore, Status, TaskId};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -24,7 +24,7 @@ use crate::error::OpsError;
 const ANCESTOR_DEPTH: usize = 16;
 
 /// D1: `unblocks` の検証（読むだけ）。上限・重複・存在を確かめる。
-pub fn validate_unblocks(store: &dyn TaskStore, unblocks: &[TaskId]) -> Result<(), OpsError> {
+pub fn validate_unblocks(store: &SqliteStore, unblocks: &[TaskId]) -> Result<(), OpsError> {
     if unblocks.len() > MAX_UNBLOCKS {
         return Err(OpsError::Validation(format!(
             "unblocks: at most {MAX_UNBLOCKS} tasks (got {})",
@@ -109,7 +109,7 @@ pub struct UnblockOutcome {
 /// 作成より前の昇格を見ないのは、祖先（修正 task の親）が修正の作成前に既に配送・昇格していることがあるため
 /// （付記 A1）。`promoted_at` が RFC 3339 で読めない release は前後が決まらないので見ない。
 pub fn sweep(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     releases: &[PromotedRelease],
     now: OffsetDateTime,
 ) -> Result<Vec<UnblockOutcome>, OpsError> {
@@ -188,7 +188,7 @@ pub fn sweep(
 }
 
 /// 修正 task 自身と祖先の id（子 task は親の配送で release に入るため）。
-fn ancestor_chain(store: &dyn TaskStore, fix: TaskId) -> Result<Vec<TaskId>, OpsError> {
+fn ancestor_chain(store: &SqliteStore, fix: TaskId) -> Result<Vec<TaskId>, OpsError> {
     let mut chain = vec![fix];
     let mut cursor = fix;
     for _ in 0..ANCESTOR_DEPTH {

@@ -27,10 +27,7 @@ pub(super) fn instance(id: &str, role: InstanceRole, pid: u32) -> DaemonInstance
 }
 
 /// 新しい active（自分の行を登録し、孤児の回収を有効にした dispatcher）。
-pub(super) fn new_active(
-    store: &Arc<dyn TaskStore>,
-    adapter: Arc<dyn WorkerAdapter>,
-) -> Dispatcher {
+pub(super) fn new_active(store: &Arc<SqliteStore>, adapter: Arc<dyn WorkerAdapter>) -> Dispatcher {
     store
         .instance_register(&instance(SELF_ID, InstanceRole::Active, std::process::id()))
         .unwrap();
@@ -47,7 +44,7 @@ pub(super) fn new_active(
 /// `WorkerStarted` と `runs` の行あり、`worker_finished` 無し）。`result` があれば
 /// `runs/<run_id>/result.json` に書く。`plan` なら v1 の計画の WU `a` の run にする。
 pub(super) fn running_orphan(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     dir: &std::path::Path,
     result: Option<&str>,
     plan: bool,
@@ -148,7 +145,7 @@ pub(super) fn running_orphan(
     (task_id, run_id)
 }
 
-fn events(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<Event> {
+fn events(store: &Arc<SqliteStore>, id: TaskId) -> Vec<Event> {
     store
         .events_for(id)
         .unwrap()
@@ -158,7 +155,7 @@ fn events(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<Event> {
 }
 
 fn finished_of(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     id: TaskId,
     run_id: &str,
 ) -> Vec<(String, Option<RunEnd>)> {
@@ -176,7 +173,7 @@ fn finished_of(
         .collect()
 }
 
-fn took_over(store: &Arc<dyn TaskStore>, id: TaskId, run_id: &str) -> bool {
+fn took_over(store: &Arc<SqliteStore>, id: TaskId, run_id: &str) -> bool {
     events(store, id).iter().any(|e| {
         matches!(e, Event::WorkerProgress { run_id: r, msg, .. }
             if r == run_id && msg.starts_with(ORPHAN_TAKEOVER_REASON))
@@ -201,7 +198,7 @@ pub(super) fn slow_adapter() -> Arc<dyn WorkerAdapter> {
 #[tokio::test]
 async fn an_orphaned_run_with_an_error_result_is_retried_without_waiting_for_the_lease() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (task_id, run_id) = running_orphan(&store, dir.path(), Some(SIGTERM_RESULT), false);
     let mut d = new_active(&store, slow_adapter());
     d.tick().unwrap();
@@ -237,7 +234,7 @@ async fn an_orphaned_run_with_an_error_result_is_retried_without_waiting_for_the
 #[tokio::test]
 async fn an_orphaned_run_with_a_done_result_is_finalised() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let done = serde_json::to_string(&WorkerMessage::Done {
         summary: "会話形式の表示を実装した".into(),
         evidence: vec![],
@@ -273,7 +270,7 @@ async fn an_orphaned_run_with_a_done_result_is_finalised() {
 #[tokio::test]
 async fn a_run_held_by_a_live_draining_instance_is_left_alone() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (task_id, run_id) = running_orphan(&store, dir.path(), Some(SIGTERM_RESULT), false);
     // 旧デーモン: draining、heartbeat は新しく、pid は生きている（このテストのプロセス）。
     store
@@ -327,7 +324,7 @@ async fn a_run_held_by_a_live_draining_instance_is_left_alone() {
 #[tokio::test]
 async fn an_orphaned_run_without_a_result_is_requeued_as_interrupted() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (task_id, run_id) = running_orphan(&store, dir.path(), None, true);
     let adapter = Arc::new(WuScriptAdapter::new(HashMap::new()));
     let mut d = new_active(&store, adapter);
@@ -380,7 +377,7 @@ async fn an_orphaned_run_without_a_result_is_requeued_as_interrupted() {
 #[tokio::test]
 async fn a_shutdown_records_the_interrupted_runs_before_exiting() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -429,7 +426,7 @@ async fn an_orphaned_parallel_work_unit_run_is_reconciled_without_waiting_for_it
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
     let flags = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     adopt_gate_plan(&store, task.id, &flags.path().join("second"), "0.1");

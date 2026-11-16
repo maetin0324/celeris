@@ -212,90 +212,6 @@ pub(crate) mod opt_rfc3339 {
     }
 }
 
-/// ノードごとの継続セッションの永続状態（`SqliteStore` が実装する）。
-pub trait NodeSessionStore: Send + Sync {
-    /// `(node_id, kind, project_id)` の**有効な**（`retired_at IS NULL`）セッション。無ければ `None`。
-    /// 複数あっても壊れない: `last_used_at` が最新の 1 件を返す。
-    fn node_session_active(
-        &self,
-        node_id: &str,
-        kind: SessionKind,
-        project_id: Option<ProjectId>,
-    ) -> Result<Option<NodeSession>, StoreError>;
-    /// 新しいセッションを作る。呼び出し側が先に [`NodeSessionStore::node_session_retire`] で
-    /// 既存の有効なセッションを引退させておくこと（このメソッド自身は既存行を触らない）。
-    fn node_session_create(&self, session: &NodeSession) -> Result<(), StoreError>;
-    /// `(node_id, kind, project_id)` の**有効な**セッションがあれば `retired_at = now` にする。
-    /// 無ければ何もしない（`false` を返す）。
-    fn node_session_retire(
-        &self,
-        node_id: &str,
-        kind: SessionKind,
-        project_id: Option<ProjectId>,
-        now: OffsetDateTime,
-    ) -> Result<bool, StoreError>;
-    /// run を 1 回終えるたびに、その run の usage が分かった時点で呼ぶ: `turns += 1`、
-    /// `approx_tokens += add_tokens`、`last_used_at = now`。有効なセッションが無ければ何もしない（`false`）。
-    fn node_session_touch(
-        &self,
-        node_id: &str,
-        kind: SessionKind,
-        project_id: Option<ProjectId>,
-        add_tokens: i64,
-        now: OffsetDateTime,
-    ) -> Result<bool, StoreError>;
-    /// `session_id` だけを上書きする（`turns`/`approx_tokens`/`last_used_at` は変えない）。
-    /// codex / acp のように、アダプタが run の途中で初めて確定させる id を、run 完了前の早い時点
-    /// （`EventSink::session_established`）で確定させるために使う。有効なセッションが無ければ `false`。
-    fn node_session_set_id(
-        &self,
-        node_id: &str,
-        kind: SessionKind,
-        project_id: Option<ProjectId>,
-        session_id: &str,
-    ) -> Result<bool, StoreError>;
-
-    /// ADR-0140 D2: WU 単位セッションを作る。呼び出し側が先に
-    /// [`NodeSessionStore::work_unit_session_retire`] で既存の現役行を引退させておくこと。
-    fn work_unit_session_create(&self, session: &WorkUnitSession) -> Result<(), StoreError>;
-    /// `(task_id, work_unit_id)` の現役セッションのうち、`adapter` と `account_id` が**一致する**ものだけを返す
-    /// （resume に使ってよい行。別 adapter・別 account の行は返さない）。複数あれば `last_used_at` が最新の 1 件。
-    fn work_unit_session_active(
-        &self,
-        task_id: TaskId,
-        work_unit_id: Option<&str>,
-        adapter: &str,
-        account_id: Option<&str>,
-    ) -> Result<Option<WorkUnitSession>, StoreError>;
-    /// `(task_id, work_unit_id)` の現役セッションを adapter・account を問わず返す（最新の 1 件）。
-    /// resume には使わない: dispatcher が判断表 #6 / #7（`adapter_changed` / `account_changed`）を
-    /// 判定して retire するためだけに使う。
-    fn work_unit_session_current(
-        &self,
-        task_id: TaskId,
-        work_unit_id: Option<&str>,
-    ) -> Result<Option<WorkUnitSession>, StoreError>;
-    /// `(task_id, work_unit_id)` の現役セッションを（adapter・account を問わず）すべて `retired_at = now` にする。
-    /// 1 件でも引退させたら `true`。
-    fn work_unit_session_retire(
-        &self,
-        task_id: TaskId,
-        work_unit_id: Option<&str>,
-        now: OffsetDateTime,
-    ) -> Result<bool, StoreError>;
-    /// run を 1 回終えるたびに呼ぶ: key（adapter・account を含む）が一致する現役行の
-    /// `turns += 1`、`approx_tokens += add_tokens`、`last_used_at = now`。無ければ `false`。
-    fn work_unit_session_touch(
-        &self,
-        task_id: TaskId,
-        work_unit_id: Option<&str>,
-        adapter: &str,
-        account_id: Option<&str>,
-        add_tokens: i64,
-        now: OffsetDateTime,
-    ) -> Result<bool, StoreError>;
-}
-
 const SELECT_WORK_UNIT_SESSION: &str = "SELECT id, node_id, task_id, work_unit_id, adapter, \
      account_id, provider, cwd, session_id, turns, approx_tokens, created_at, last_used_at, \
      retired_at FROM node_sessions";
@@ -419,8 +335,11 @@ fn row_to_node_session(
     }))
 }
 
-impl NodeSessionStore for SqliteStore {
-    fn node_session_active(
+// ノードごとの継続セッションの永続状態（`SqliteStore` が実装する）。
+impl SqliteStore {
+    /// `(node_id, kind, project_id)` の**有効な**（`retired_at IS NULL`）セッション。無ければ `None`。
+    /// 複数あっても壊れない: `last_used_at` が最新の 1 件を返す。
+    pub fn node_session_active(
         &self,
         node_id: &str,
         kind: SessionKind,
@@ -443,8 +362,9 @@ impl NodeSessionStore for SqliteStore {
             None => Ok(None),
         }
     }
-
-    fn node_session_create(&self, session: &NodeSession) -> Result<(), StoreError> {
+    /// 新しいセッションを作る。呼び出し側が先に [`SqliteStore::node_session_retire`] で
+    /// 既存の有効なセッションを引退させておくこと（このメソッド自身は既存行を触らない）。
+    pub fn node_session_create(&self, session: &NodeSession) -> Result<(), StoreError> {
         let created_at = format_rfc3339(session.created_at)?;
         let last_used_at = format_rfc3339(session.last_used_at)?;
         let conn = self.lock()?;
@@ -468,8 +388,9 @@ impl NodeSessionStore for SqliteStore {
         )?;
         Ok(())
     }
-
-    fn node_session_retire(
+    /// `(node_id, kind, project_id)` の**有効な**セッションがあれば `retired_at = now` にする。
+    /// 無ければ何もしない（`false` を返す）。
+    pub fn node_session_retire(
         &self,
         node_id: &str,
         kind: SessionKind,
@@ -490,8 +411,9 @@ impl NodeSessionStore for SqliteStore {
         )?;
         Ok(changed > 0)
     }
-
-    fn node_session_touch(
+    /// run を 1 回終えるたびに、その run の usage が分かった時点で呼ぶ: `turns += 1`、
+    /// `approx_tokens += add_tokens`、`last_used_at = now`。有効なセッションが無ければ何もしない（`false`）。
+    pub fn node_session_touch(
         &self,
         node_id: &str,
         kind: SessionKind,
@@ -515,8 +437,10 @@ impl NodeSessionStore for SqliteStore {
         )?;
         Ok(changed > 0)
     }
-
-    fn node_session_set_id(
+    /// `session_id` だけを上書きする（`turns`/`approx_tokens`/`last_used_at` は変えない）。
+    /// codex / acp のように、アダプタが run の途中で初めて確定させる id を、run 完了前の早い時点
+    /// （`EventSink::session_established`）で確定させるために使う。有効なセッションが無ければ `false`。
+    pub fn node_session_set_id(
         &self,
         node_id: &str,
         kind: SessionKind,
@@ -536,8 +460,9 @@ impl NodeSessionStore for SqliteStore {
         )?;
         Ok(changed > 0)
     }
-
-    fn work_unit_session_create(&self, session: &WorkUnitSession) -> Result<(), StoreError> {
+    /// ADR-0140 D2: WU 単位セッションを作る。呼び出し側が先に
+    /// [`SqliteStore::work_unit_session_retire`] で既存の現役行を引退させておくこと。
+    pub fn work_unit_session_create(&self, session: &WorkUnitSession) -> Result<(), StoreError> {
         let created_at = format_rfc3339(session.created_at)?;
         let last_used_at = format_rfc3339(session.last_used_at)?;
         let conn = self.lock()?;
@@ -565,8 +490,9 @@ impl NodeSessionStore for SqliteStore {
         )?;
         Ok(())
     }
-
-    fn work_unit_session_active(
+    /// `(task_id, work_unit_id)` の現役セッションのうち、`adapter` と `account_id` が**一致する**ものだけを返す
+    /// （resume に使ってよい行。別 adapter・別 account の行は返さない）。複数あれば `last_used_at` が最新の 1 件。
+    pub fn work_unit_session_active(
         &self,
         task_id: TaskId,
         work_unit_id: Option<&str>,
@@ -594,8 +520,10 @@ impl NodeSessionStore for SqliteStore {
             .optional()?;
         row.transpose()
     }
-
-    fn work_unit_session_current(
+    /// `(task_id, work_unit_id)` の現役セッションを adapter・account を問わず返す（最新の 1 件）。
+    /// resume には使わない: dispatcher が判断表 #6 / #7（`adapter_changed` / `account_changed`）を
+    /// 判定して retire するためだけに使う。
+    pub fn work_unit_session_current(
         &self,
         task_id: TaskId,
         work_unit_id: Option<&str>,
@@ -618,8 +546,9 @@ impl NodeSessionStore for SqliteStore {
             .optional()?;
         row.transpose()
     }
-
-    fn work_unit_session_retire(
+    /// `(task_id, work_unit_id)` の現役セッションを（adapter・account を問わず）すべて `retired_at = now` にする。
+    /// 1 件でも引退させたら `true`。
+    pub fn work_unit_session_retire(
         &self,
         task_id: TaskId,
         work_unit_id: Option<&str>,
@@ -639,8 +568,9 @@ impl NodeSessionStore for SqliteStore {
         )?;
         Ok(changed > 0)
     }
-
-    fn work_unit_session_touch(
+    /// run を 1 回終えるたびに呼ぶ: key（adapter・account を含む）が一致する現役行の
+    /// `turns += 1`、`approx_tokens += add_tokens`、`last_used_at = now`。無ければ `false`。
+    pub fn work_unit_session_touch(
         &self,
         task_id: TaskId,
         work_unit_id: Option<&str>,

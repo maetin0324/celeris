@@ -1,8 +1,8 @@
 //! ADR 2026-11-10-taskstore-consumer-ports D2: 組織のノード 1 つ・案件・途中目標の名簿を読む能力。
 //!
-//! `TaskStore` の supertrait（`dyn TaskStore`・`T: TaskStore` の呼び手は import なしで使える）。
+//! `SqliteStore` が実装する能力の trait（呼び手は trait を import して使う。ADR 2026-11-16-taskstore-trait-removal）。
 //! 名簿を読むだけの consumer（celeris-mcp の `tools/org`・`tools/projects`）はこの trait に依存する。
-//! 実装（SQL）は下の `impl OrgDirectory for SqliteStore` にだけある（前例は `model_catalog.rs`）。行の変換は
+//! 実装（SQL）は下の `impl OrgDirectory for SqliteStore` にだけある。行の変換は
 //! `org.rs` の `org_row`・`projects.rs` の `project_row`・`milestone_row` を使う。
 //! org の一覧・取得・upsert と案件/途中目標の名簿操作を集約する。SQL 本体はこの trait の実装に置く。
 

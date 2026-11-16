@@ -76,7 +76,7 @@ fn repeated_question(site: &HealthRepeatSite, fingerprints: &[String]) -> String
 /// 止める質問の文を返す。往復でなければ `None`（今の repair・retry の判定のまま）。WU の check・段の統合・task の review
 /// の 3 経路がこれだけを呼ぶ（止め方〈質問を run の結果にする・統合を止める・review を Blocked にする〉は経路が決める）。
 pub(in crate::dispatcher) fn health_repeat_stop(
-    store: &dyn task_core::TaskStore,
+    store: &task_core::SqliteStore,
     task: &Task,
     site: HealthRepeatSite,
 ) -> Result<Option<String>, DispatchError> {
@@ -343,7 +343,7 @@ pub(super) struct ItemEnd {
 /// 項目の開始を event に残す（葉の WU の check〈`observed.run_id` が `Some`〉は `WorkUnitCheckStarted`、段の統合は
 /// `IntegrationCheckStarted`）。書けなくても検査は続ける（見るための記録で、判定には使わない）。
 pub(super) fn record_start(
-    store: &dyn task_core::TaskStore,
+    store: &task_core::SqliteStore,
     task_id: TaskId,
     observed: &ObservedIntegration,
     at: &ItemAt<'_>,
@@ -380,7 +380,7 @@ pub(super) fn record_start(
 
 /// 項目の終了を event に残す（[`record_start`] と同じ event の組。health の項目は `health` 欄に証跡を持つ）。
 pub(super) fn record_finish(
-    store: &dyn task_core::TaskStore,
+    store: &task_core::SqliteStore,
     task_id: TaskId,
     observed: &ObservedIntegration,
     at: &ItemAt<'_>,
@@ -430,7 +430,7 @@ pub(super) fn record_finish(
 /// health の項目を 1 回評価し、開始・終了の event（`health` 欄に証跡）を残す。列に足す行（`(pass, reason)`）を返す
 /// （対象が無い・NotApplicable なら `None`）。評価の thread が落ちたら合格にせず Error にする（D3.4）。
 pub(super) async fn run_item(
-    store: &dyn task_core::TaskStore,
+    store: &task_core::SqliteStore,
     task_id: TaskId,
     observed: &ObservedIntegration,
     target: Option<HealthTarget>,

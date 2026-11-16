@@ -64,7 +64,7 @@ impl WorkerAdapter for GateAdapter {
 }
 
 /// 人の gate で止まった木は `idle` にならないことがある。run・判定・統合が 50 tick 続けて無ければ落ち着いたとみなす。
-async fn run_until_quiet(d: &mut Dispatcher, store: &Arc<dyn TaskStore>, max_ticks: usize) {
+async fn run_until_quiet(d: &mut Dispatcher, store: &Arc<SqliteStore>, max_ticks: usize) {
     let mut quiet = 0;
     for _ in 0..max_ticks {
         let r = d.tick().unwrap();
@@ -94,7 +94,7 @@ fn root_task(dir: &std::path::Path) -> Task {
     root
 }
 
-fn children_created(store: &Arc<dyn TaskStore>, root: TaskId) -> Vec<String> {
+fn children_created(store: &Arc<SqliteStore>, root: TaskId) -> Vec<String> {
     store
         .events_for(root)
         .unwrap()
@@ -106,7 +106,7 @@ fn children_created(store: &Arc<dyn TaskStore>, root: TaskId) -> Vec<String> {
         .collect()
 }
 
-fn gate_state(store: &Arc<dyn TaskStore>, id: TaskId) -> task_ops::plan_gate::PlanGateState {
+fn gate_state(store: &Arc<SqliteStore>, id: TaskId) -> task_ops::plan_gate::PlanGateState {
     let plan = store
         .execution_plan_active(id)
         .unwrap()
@@ -120,7 +120,7 @@ fn gate_state(store: &Arc<dyn TaskStore>, id: TaskId) -> task_ops::plan_gate::Pl
 #[tokio::test]
 async fn plan_gate_replan_does_not_dispatch_the_unapproved_version() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = root_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -192,7 +192,7 @@ async fn plan_gate_replan_does_not_dispatch_the_unapproved_version() {
 #[tokio::test]
 async fn an_unapproved_version_stays_parked_while_the_replan_is_pending() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = root_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -234,7 +234,7 @@ async fn an_unapproved_version_stays_parked_while_the_replan_is_pending() {
 #[tokio::test]
 async fn review_human_stage_holds_the_next_stage_child() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = root_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -288,7 +288,7 @@ async fn review_human_stage_holds_the_next_stage_child() {
 #[tokio::test]
 async fn task_wait_stage_gate_review_human_hold_matches_the_api_waits() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = root_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -346,7 +346,7 @@ async fn task_wait_stage_gate_review_human_hold_matches_the_api_waits() {
 #[tokio::test]
 async fn comment_on_plan_approval_keeps_the_gate_and_a_stranded_ready_task_returns_to_it() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = root_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -413,7 +413,7 @@ async fn comment_on_plan_approval_keeps_the_gate_and_a_stranded_ready_task_retur
 #[tokio::test]
 async fn comment_on_awaiting_human_keeps_the_gate_and_continue_still_works() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = root_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -469,7 +469,7 @@ async fn comment_on_awaiting_human_keeps_the_gate_and_continue_still_works() {
 #[tokio::test]
 async fn a_tree_node_leaf_failure_after_replans_are_exhausted_raises_the_limit_decision() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut root = root_task(dir.path());
     root.budget.max_retries = 0;
     let root_id = root.id;
@@ -537,7 +537,7 @@ fn open_run_row(task_id: TaskId, run_id: &str, role: task_core::RunIndexRole) ->
 #[tokio::test]
 async fn runs_index_rows_of_terminal_tasks_are_closed() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     // 1. 終端への遷移（Ready → Cancelled）が閉じる。
     let live = compound_task(dir.path());
     store.insert(&live).unwrap();
@@ -593,7 +593,7 @@ async fn runs_index_rows_of_terminal_tasks_are_closed() {
 #[tokio::test]
 async fn approval_facts_count_only_units_that_will_create_children() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = root_task(dir.path());
     store.insert(&root).unwrap();
     let mut adopted = task_unit("c2", "s1", &[], "true");
@@ -640,7 +640,7 @@ async fn approval_facts_count_only_units_that_will_create_children() {
 async fn startup_closes_only_terminal_tasks_integration_requests_once() {
     use task_core::integration_request::{IntegrationRequest, TASK_TERMINAL_ANSWER};
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut snapshots = Vec::new();
     for status in [
         Status::Done,

@@ -8,7 +8,7 @@ use task_core::chat::triage::CosTriageSource;
 use task_core::chat::{AuditContext, ChatActor, ChatOpenThreadRequest, ChatRunState};
 use task_core::decision::*;
 use task_core::decision_log::{CampaignIdentity, DecisionLogProposal};
-use task_core::{Event, Project, ProjectId, ProjectStatus, SqliteStore, TaskStore};
+use task_core::{Event, Project, ProjectId, ProjectStatus, SqliteStore};
 use task_ops::stagnation::{self, StagnationPolicy};
 
 const POLICY3: &str = "5";

@@ -443,7 +443,7 @@ async fn a_real_account_admits_cos_at_the_limit_plus_one_and_waits_beyond_it() {
     std::fs::create_dir_all(&acct).unwrap();
     std::fs::write(acct.join(".credentials.json"), "{}").unwrap();
     let store = Arc::new(SqliteStore::open(&dir.path().join("celeris.db")).expect("store"));
-    let as_dyn: Arc<dyn TaskStore> = store.clone();
+    let as_dyn: Arc<SqliteStore> = store.clone();
     let mut d = pool_dispatcher(
         as_dyn,
         Arc::new(gates.clone()),

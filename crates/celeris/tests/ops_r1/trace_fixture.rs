@@ -6,8 +6,8 @@ use serde_json::json;
 use std::path::{Path, PathBuf};
 use task_core::chat::{AuditContext, ChatActor, ChatOpenThreadRequest};
 use task_core::{
-    Budget, Check, Criterion, Event, SqliteStore, Status, Task, TaskId, TaskKind, TaskStore, Tier,
-    WorkerHint, WorkspaceSpec,
+    Budget, Check, Criterion, Event, SqliteStore, Status, Task, TaskId, TaskKind, Tier, WorkerHint,
+    WorkspaceSpec,
 };
 use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 

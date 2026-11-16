@@ -28,7 +28,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use task_core::chat::ChatRun;
 use task_core::chat::triage::CosTriageSource;
-use task_core::{Event, EventRow, Notice, NoticeKind, NoticeQuery, NoticeStore, TaskId, TaskStore};
+use task_core::{Event, EventRow, Notice, NoticeKind, NoticeQuery, SqliteStore, TaskId};
 use task_ops::human_inbox::{HumanInbox, InboxItem, InboxKind};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -49,7 +49,7 @@ const NOTICE_PAGE: usize = 100;
 
 /// Keep concurrent writes beyond the Task snapshot's head for the next pass.
 pub(crate) fn event_page_through_head(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     cursor: u64,
     head: u64,
 ) -> Result<Vec<EventRow>, String> {
@@ -435,7 +435,7 @@ impl CosChatLaunch {
         now: OffsetDateTime,
     ) -> Result<HumanInbox, String> {
         let ctx = inbox_view_context(dispatcher);
-        let store: &dyn TaskStore = self.store.as_ref();
+        let store: &SqliteStore = self.store.as_ref();
         // ADR 2026-10-29-stagnation-triage-notify-wiring D1: the stagnation kinds come from the
         // dispatcher's last stagnation check (`None` while it is unknown).
         let snapshot = dispatcher.stagnation_snapshot();

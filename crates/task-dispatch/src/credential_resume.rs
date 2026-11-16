@@ -17,7 +17,7 @@ use std::time::Duration;
 use sha2::{Digest, Sha256};
 use task_core::{
     CredentialVerifyKind, CredentialWait, CredentialWaitState, Event, SqliteStore, StoreError,
-    TaskStore, WorkUnitStatus,
+    WorkUnitStatus,
 };
 use time::OffsetDateTime;
 
@@ -313,7 +313,7 @@ impl CredentialResumer {
 /// 待っていた work unit を `blocked` から戻す（checkpoint があれば `needs_continuation`、無ければ `ready`）。
 /// unit が既に `blocked` でなければ何もしない（二重に戻さない）。
 fn requeue_work_unit(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     w: &CredentialWait,
     now: OffsetDateTime,
 ) -> Result<(), StoreError> {

@@ -11,8 +11,8 @@ use std::io::Read;
 use std::process::{Command, Stdio};
 
 use task_core::{
-    ArtifactRef, Budget, Check, Criterion, SqliteStore, Status, Task, TaskId, TaskKind, TaskStore,
-    Tier, WorkerHint, WorkspaceSpec,
+    ArtifactRef, Budget, Check, Criterion, SqliteStore, Status, Task, TaskId, TaskKind, Tier,
+    WorkerHint, WorkspaceSpec,
 };
 use time::OffsetDateTime;
 

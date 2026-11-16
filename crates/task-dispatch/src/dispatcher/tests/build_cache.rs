@@ -13,7 +13,7 @@ async fn the_preamble_notes_the_shared_build_cache_when_enabled() {
     let repo_dir = tempfile::tempdir().unwrap();
     init_test_repo(repo_dir.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = git_task(
         repo_dir.path(),
         None,
@@ -42,7 +42,7 @@ async fn the_preamble_does_not_note_the_shared_build_cache_when_disabled() {
     let repo_dir = tempfile::tempdir().unwrap();
     init_test_repo(repo_dir.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = git_task(
         repo_dir.path(),
         None,
@@ -71,7 +71,7 @@ async fn shared_build_cache_sets_cargo_target_dir_for_a_local_git_worktree_on_th
     init_test_repo(repo_dir.path());
     let root = tempfile::tempdir().unwrap();
     let cache_dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = git_task(
         repo_dir.path(),
         None,
@@ -115,7 +115,7 @@ async fn shared_build_cache_disabled_does_not_set_cargo_target_dir() {
     let repo_dir = tempfile::tempdir().unwrap();
     init_test_repo(repo_dir.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = git_task(
         repo_dir.path(),
         None,
@@ -154,7 +154,7 @@ async fn shared_build_cache_disabled_does_not_set_cargo_target_dir() {
 /// `run_worker` を直接呼ぶ（`remote_task`/`write_stub_ssh` は既存の Phase 99 のテストと同じ小道具）。
 #[tokio::test]
 async fn shared_build_cache_is_not_applied_to_remote_workspaces() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let tmp = tempfile::tempdir().unwrap();
     let stub = write_stub_ssh(tmp.path(), 0);
     let task = remote_task(tmp.path(), Some(WorkspaceMode::Shared), Vec::new());
@@ -237,7 +237,7 @@ async fn parallel_work_units_get_their_own_cargo_target_dir_and_it_is_removed_wh
     let logs = tempfile::tempdir().unwrap();
     let log = logs.path().join("check-env.log");
     let record = format!("echo \"$CARGO_TARGET_DIR\" >> {}", log.display());
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), &format!("{record} # review"));
     store.insert(&task).unwrap();
     let with_check = |key: &str| {
@@ -365,7 +365,7 @@ async fn every_cargo_path_uses_the_scratch_target_dir() {
     let logs = tempfile::tempdir().unwrap();
     let log = logs.path().join("check-env.log");
     let record = format!("echo \"$CARGO_TARGET_DIR\" >> {}", log.display());
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), &format!("{record} # review"));
     store.insert(&task).unwrap();
     let with_check = |key: &str| {
@@ -467,7 +467,7 @@ async fn every_cargo_path_uses_the_scratch_target_dir() {
     init_test_repo(repo_dir.path());
     let root = tempfile::tempdir().unwrap();
     let scratch_dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = git_task(
         repo_dir.path(),
         None,
@@ -620,7 +620,7 @@ async fn low_disk_runs_emergency_gc_before_pausing_dispatch() {
         .unwrap();
         owner
     };
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let dir = tempfile::tempdir().unwrap();
     let task = new_task(
         dir.path(),
@@ -673,7 +673,7 @@ async fn low_disk_runs_emergency_gc_before_pausing_dispatch() {
     assert!(pool.target_dir(&live).exists());
 
     // 消せるものが P0 だけ → 保留の通知に pinned の一覧。
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let scratch_dir = tempfile::tempdir().unwrap();
     let mut d = dispatcher(store.clone(), done_adapter(), 1);
     d.config.workspace_roots =
@@ -715,7 +715,7 @@ async fn scratch_on_nfs_falls_back_to_build_cache_dir() {
         init_test_repo(repo_dir.path());
         let root = tempfile::tempdir().unwrap();
         let cache_dir = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let task = git_task(
             repo_dir.path(),
             None,
@@ -756,7 +756,7 @@ async fn run_start_adopts_a_finished_target_that_predates_the_checkout() {
     init_test_repo(repo_dir.path());
     let root = tempfile::tempdir().unwrap();
     let scratch_dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = git_task(
         repo_dir.path(),
         None,
@@ -840,7 +840,7 @@ async fn seed_housekeeping_runs_on_its_interval_and_retires_stale_generations() 
     use task_worker::scratch as sc;
     let root = tempfile::tempdir().unwrap();
     let scratch_dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let captured: CapturedEnvs = Arc::new(StdMutex::new(Vec::new()));
     let mut d = worktree_dispatcher(store, done_pool_adapter(&captured), root.path(), None);
     let settings = scratch_on(&mut d, scratch_dir.path());
@@ -942,7 +942,7 @@ async fn reviewer_cargo_target_env_and_request_use_subject_owner() {
     std::fs::write(repo.path().join("Cargo.toml"), "[workspace]\n").unwrap();
     let root = tempfile::tempdir().unwrap();
     let scratch = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let parent = git_task(
         repo.path(),
         None,

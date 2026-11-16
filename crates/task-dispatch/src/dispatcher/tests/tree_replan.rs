@@ -93,7 +93,7 @@ impl WorkerAdapter for ReplanAdapter {
 
 /// 決定を待って止めた仕事がある木は `ready` の task を残すので `idle` にならない。run・判定・統合が 50 tick
 /// 続けて無ければ落ち着いたとみなす（tree_gate と同じ）。
-async fn run_until_quiet(d: &mut Dispatcher, store: &Arc<dyn TaskStore>, max_ticks: usize) {
+async fn run_until_quiet(d: &mut Dispatcher, store: &Arc<SqliteStore>, max_ticks: usize) {
     let mut quiet = 0;
     for _ in 0..max_ticks {
         let r = d.tick().unwrap();
@@ -116,7 +116,7 @@ async fn run_until_quiet(d: &mut Dispatcher, store: &Arc<dyn TaskStore>, max_tic
     panic!("the dispatcher never settled");
 }
 
-fn planner_runs(store: &Arc<dyn TaskStore>, task: TaskId) -> usize {
+fn planner_runs(store: &Arc<SqliteStore>, task: TaskId) -> usize {
     store
         .runs_for_task(task)
         .unwrap()
@@ -125,7 +125,7 @@ fn planner_runs(store: &Arc<dyn TaskStore>, task: TaskId) -> usize {
         .count()
 }
 
-fn worker_runs(store: &Arc<dyn TaskStore>, task: TaskId) -> usize {
+fn worker_runs(store: &Arc<SqliteStore>, task: TaskId) -> usize {
     store
         .runs_for_task(task)
         .unwrap()
@@ -134,11 +134,11 @@ fn worker_runs(store: &Arc<dyn TaskStore>, task: TaskId) -> usize {
         .count()
 }
 
-fn decisions_of(store: &Arc<dyn TaskStore>, root: TaskId) -> Vec<task_core::DecisionRow> {
+fn decisions_of(store: &Arc<SqliteStore>, root: TaskId) -> Vec<task_core::DecisionRow> {
     store.decisions_list(Some(root)).unwrap()
 }
 
-fn no_questions(store: &Arc<dyn TaskStore>, task: TaskId) {
+fn no_questions(store: &Arc<SqliteStore>, task: TaskId) {
     assert!(
         store.approval_list(None, None, None).unwrap().is_empty(),
         "no questions / approvals"
@@ -154,7 +154,7 @@ fn no_questions(store: &Arc<dyn TaskStore>, task: TaskId) {
 }
 
 /// 子の題名の key（`Child <key>`）の子 task を、作られた順にすべて。
-fn children_titled(store: &Arc<dyn TaskStore>, root: TaskId, key: &str) -> Vec<Task> {
+fn children_titled(store: &Arc<SqliteStore>, root: TaskId, key: &str) -> Vec<Task> {
     let mut out: Vec<Task> = store
         .children(root)
         .unwrap()
@@ -180,7 +180,7 @@ fn attempt_of(task: &Task) -> u32 {
 #[tokio::test]
 async fn tree_planner_context_is_wired_from_limits_and_counters() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut root = compound_task(dir.path());
     root.title = "browser capability".into();
     root.budget.max_turns = 30;
@@ -252,7 +252,7 @@ async fn tree_planner_context_is_wired_from_limits_and_counters() {
     assert_replay_is_clean(&store);
 
     // 木が無効: /2 の planner に `tree` は無い。
-    let store2: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store2: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let plain = compound_task(dir.path());
     store2.create_task(&plain, vec![]).unwrap();
     let v1 = serde_json::json!({
@@ -278,7 +278,7 @@ async fn tree_planner_context_is_wired_from_limits_and_counters() {
 #[tokio::test]
 async fn v3_invalid_plan_asks_instead_of_atomic() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = compound_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -340,7 +340,7 @@ async fn v3_invalid_plan_asks_instead_of_atomic() {
     assert_replay_is_clean(&store);
 
     // 木が無効（/2）: 2 回不正なら従来どおり atomic に倒れ、決定の要求は無い。
-    let store2: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store2: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let plain = compound_task(dir.path());
     let plain_id = plain.id;
     store2.create_task(&plain, vec![]).unwrap();
@@ -378,7 +378,7 @@ async fn child_failure_triggers_parent_replan() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut root = git_task(
         repo.path(),
         None,
@@ -517,7 +517,7 @@ async fn child_failure_triggers_parent_replan() {
 #[tokio::test]
 async fn child_infra_failure_is_not_a_question() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = compound_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -609,7 +609,7 @@ async fn child_replans_are_bounded_by_tree_and_node_limits() {
         ("node", 10, 1, "limit:max_replans"),
     ] {
         let dir = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let root = compound_task(dir.path());
         let root_id = root.id;
         store.create_task(&root, vec![]).unwrap();

@@ -82,7 +82,7 @@ fn run_flow(outcome: VerifyOutcome, value: &str) -> Vec<String> {
     let secrets = dir.path().join("secrets");
     std::fs::create_dir_all(&secrets).unwrap();
     let sqlite = Arc::new(SqliteStore::open(&dir.path().join("db.sqlite")).unwrap());
-    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let store: Arc<SqliteStore> = sqlite.clone();
     let now = OffsetDateTime::parse(
         "2026-10-15T00:00:00Z",
         &time::format_description::well_known::Rfc3339,

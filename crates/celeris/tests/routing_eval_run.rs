@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use celeris::{Config, RunOptions};
 use serde_json::json;
-use task_core::{DaemonMode, SqliteStore, TaskStore};
+use task_core::{DaemonMode, SqliteStore};
 
 mod daemon_port;
 

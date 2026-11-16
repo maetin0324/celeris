@@ -6,7 +6,7 @@ use common::cos_ops::{OPS, cos_run_bearer, db, op_body};
 use common::*;
 use serde_json::{Value, json};
 use task_core::chat::ChatOpenThreadRequest;
-use task_core::{ProjectId, Status, TaskKind, TaskStore};
+use task_core::{ProjectId, Status, TaskKind};
 use time::{Duration, OffsetDateTime};
 
 fn brief_body(state: &str) -> Value {

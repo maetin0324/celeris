@@ -5,7 +5,7 @@ mod common;
 use common::cos_ops::{OPS, cos_bearer, op_body};
 use common::*;
 use serde_json::{Value, json};
-use task_core::{Status, TaskKind, TaskStore};
+use task_core::{Status, TaskKind};
 
 fn body(title: &str, key: &str) -> Value {
     json!({

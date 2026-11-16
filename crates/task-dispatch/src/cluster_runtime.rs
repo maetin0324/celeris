@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use task_core::cluster_job::{self, ClusterJobWait};
-use task_core::{Event, StoreError, TaskId, TaskStore, WorkspaceMode};
+use task_core::{Event, SqliteStore, StoreError, TaskId, WorkspaceMode};
 use task_worker::{SshSettings, SyncMode};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -502,7 +502,7 @@ pub fn ssh_cluster_job_poller() -> ClusterJobPoller {
 
 /// [`ClusterRuntime`] の method が読む、owner の外の値（`Dispatcher` の config・store・時計から入口が組む）。
 pub(crate) struct ClusterInputs<'a> {
-    pub(crate) store: &'a dyn TaskStore,
+    pub(crate) store: &'a SqliteStore,
     pub(crate) clusters: &'a HashMap<String, ClusterSpec>,
     pub(crate) cooldown: Duration,
     /// `--mode verify` の煙試験（dispatch も裏方の仕事も無い）。

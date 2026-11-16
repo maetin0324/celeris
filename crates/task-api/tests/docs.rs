@@ -13,7 +13,7 @@ mod common;
 use common::*;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
-use task_core::{ArtifactRef, Event, Status, Task, TaskKind, TaskStore};
+use task_core::{ArtifactRef, Event, Status, Task, TaskKind};
 
 async fn make_project(app: &axum::Router, title: &str) -> String {
     let resp = send(

@@ -252,7 +252,7 @@ pub(super) enum ClaimSource {
 }
 
 impl Dispatcher {
-    /// Install the concrete chat store. It must be the same database as `TaskStore`.
+    /// Install the concrete chat store. It must be the same database as `SqliteStore`.
     pub fn set_cos_chat_launch(&mut self, store: Arc<SqliteStore>, config: CosChatLaunchConfig) {
         self.orchestration.install_launch(CosChatLaunch {
             store,

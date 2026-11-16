@@ -9,7 +9,8 @@ use super::{
 };
 
 impl SqliteStore {
-    pub(super) fn config_events_append_impl(
+    /// ADR 2026-10-22-dynamic-config D4: config の欄の変更を追記する（1 transaction）。
+    pub fn config_events_append(
         &self,
         events: &[NewConfigEvent],
         now: OffsetDateTime,
@@ -36,11 +37,9 @@ impl SqliteStore {
         Ok(())
     }
 
+    /// config の変更履歴（新しい順、最大 `limit` 件）。
     /// 新しい順に最大 `limit` 件。
-    pub(super) fn config_events_recent_impl(
-        &self,
-        limit: usize,
-    ) -> Result<Vec<ConfigEventRow>, StoreError> {
+    pub fn config_events_recent(&self, limit: usize) -> Result<Vec<ConfigEventRow>, StoreError> {
         self.with_read_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, ts, actor, key, class, apply_unit, before_json, after_json \

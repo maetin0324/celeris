@@ -12,10 +12,7 @@ use std::collections::HashSet;
 
 use axum::extract::{RawQuery, State};
 use axum::http::StatusCode;
-use task_core::{
-    ApprovalStore, Event, KnowledgeRunStore, ReportFilter, ReportStore, SqliteStore, Task, TaskId,
-    TaskIntegration, TaskQuery, TaskStore,
-};
+use task_core::{Event, ReportFilter, SqliteStore, Task, TaskId, TaskIntegration, TaskQuery};
 
 use crate::handlers::{ApiResult, Params, json_response, no_query};
 use crate::problem::{ApiProblem, store_problem};

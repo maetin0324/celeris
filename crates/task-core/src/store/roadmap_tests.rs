@@ -7,7 +7,7 @@ use crate::project_brief::{ProjectBrief, ProjectBriefInput};
 use crate::roadmap::{OutcomeStatus, RoadmapOutcomeSpec, RoadmapProposalInput, RoadmapStatus};
 
 use super::*;
-use crate::TaskStore;
+use crate::SqliteStore;
 
 fn project(store: &SqliteStore) -> Project {
     let now = OffsetDateTime::now_utc();

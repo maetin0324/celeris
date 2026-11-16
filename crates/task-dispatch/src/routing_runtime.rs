@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use task_core::llm_route::{AccountId, HarnessId, Registry, SourceId};
 use task_core::model_router::context_registry::RoutingContextRegistry;
 use task_core::route_select::RoutingMode;
-use task_core::{AccountAdapter, StoreError, TaskId, TaskStore};
+use task_core::{AccountAdapter, SqliteStore, StoreError, TaskId};
 
 use crate::accounts::{AccountBook, AccountCooldown, AccountDir, scan_accounts};
 use task_worker::{Reachability, WorkerAdapter};
@@ -106,7 +106,7 @@ fn limit_key(adapter: &str, id: &str) -> (SourceId, AccountId) {
     (SourceId::from(adapter), AccountId::from(id))
 }
 
-fn load_limits(store: &dyn TaskStore) -> Result<SavedLimits, StoreError> {
+fn load_limits(store: &SqliteStore) -> Result<SavedLimits, StoreError> {
     Ok(store
         .account_limits()?
         .into_iter()
@@ -126,7 +126,7 @@ fn login_pending_key(adapter: AccountAdapter, id: &str) -> String {
 impl RoutingRuntime {
     /// `account_roots`: `[accounts]` のアダプタごとの根（帳簿を読む）。保存された上限は `store` から読む。
     pub fn new(
-        store: &dyn TaskStore,
+        store: &SqliteStore,
         account_roots: Option<&HashMap<AccountAdapter, PathBuf>>,
     ) -> Self {
         let account_limits = match load_limits(store) {
@@ -228,10 +228,7 @@ impl RoutingRuntime {
     }
 
     /// 権威ある設定を読み直す。失敗したら account の起動を止めたまま。
-    pub(crate) fn reload_account_limits(
-        &mut self,
-        store: &dyn TaskStore,
-    ) -> Result<(), StoreError> {
+    pub(crate) fn reload_account_limits(&mut self, store: &SqliteStore) -> Result<(), StoreError> {
         self.account_limits = None;
         self.account_limits = Some(load_limits(store)?);
         Ok(())
@@ -240,7 +237,7 @@ impl RoutingRuntime {
     /// 上書きを SQLite に書いてから、commit の後でだけメモリを更新する。
     pub(crate) fn set_account_limit(
         &mut self,
-        store: &dyn TaskStore,
+        store: &SqliteStore,
         adapter: &str,
         id: &str,
         max_runs: Option<usize>,
@@ -633,7 +630,7 @@ mod structure_guard_tests {
             for bad in [
                 owner.clone(),
                 owner.to_lowercase(),
-                "TaskStore".to_string(),
+                "SqliteStore".to_string(),
                 "store".to_string(),
                 "&mut".to_string(),
                 "Instant".to_string(),

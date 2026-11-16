@@ -57,7 +57,7 @@ impl WorkerAdapter for FollowupAdapter {
     }
 }
 
-fn project_with_primary(store: &Arc<dyn TaskStore>, dir: &std::path::Path) -> (ProjectId, RepoId) {
+fn project_with_primary(store: &Arc<SqliteStore>, dir: &std::path::Path) -> (ProjectId, RepoId) {
     let now = OffsetDateTime::now_utc();
     let project = Project {
         auto_advance: false,
@@ -90,7 +90,7 @@ fn project_with_primary(store: &Arc<dyn TaskStore>, dir: &std::path::Path) -> (P
     (project.id, repo.id)
 }
 
-fn worker_run_id(store: &Arc<dyn TaskStore>, id: TaskId) -> String {
+fn worker_run_id(store: &Arc<SqliteStore>, id: TaskId) -> String {
     store
         .events_for(id)
         .unwrap()
@@ -107,7 +107,7 @@ fn worker_run_id(store: &Arc<dyn TaskStore>, id: TaskId) -> String {
 #[tokio::test]
 async fn a_run_declared_followup_is_created_in_the_origin_project_with_provenance() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (project, primary) = project_with_primary(&store, dir.path());
     let mut x = new_task(
         dir.path(),
@@ -179,7 +179,7 @@ async fn a_run_declared_followup_is_created_in_the_origin_project_with_provenanc
 #[test]
 fn followups_of_a_run_without_the_lease_are_not_created() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (project, _) = project_with_primary(&store, dir.path());
     let mut x = new_task(
         dir.path(),
@@ -218,7 +218,7 @@ fn followups_of_a_run_without_the_lease_are_not_created() {
 #[tokio::test]
 async fn delegated_children_inherit_the_parent_project_and_primary_repo() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (project, primary) = project_with_primary(&store, dir.path());
     let mut parent = new_task(
         dir.path(),

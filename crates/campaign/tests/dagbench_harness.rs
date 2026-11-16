@@ -56,7 +56,7 @@ use celeris_campaign::{
     },
 };
 use serde_json::{Value, json};
-use task_core::TaskStore;
+use task_core::SqliteStore;
 
 #[path = "common/dagbench_pbs_controller.rs"]
 mod pbs_controller;
@@ -209,7 +209,7 @@ fn drive_celeris(
     hook: Option<celeris_campaign::dagbench::ext::StopHook>,
 ) -> Result<(), String> {
     let paths = Paths::under(&dir.join("celeris.db"), dir);
-    let store: Arc<dyn TaskStore> =
+    let store: Arc<SqliteStore> =
         Arc::new(task_core::SqliteStore::open(&paths.db).map_err(|e| e.to_string())?);
     let transport = RouterTransport(router_at(dir));
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -964,7 +964,7 @@ fn graded_restart_child() {
             .map_err(|e| format!("{e:?}"))
     } else {
         let paths = Paths::under(&p.out.join("celeris.db"), &p.out);
-        let store: Arc<dyn TaskStore> = Arc::new(task_core::SqliteStore::open(&paths.db).unwrap());
+        let store: Arc<SqliteStore> = Arc::new(task_core::SqliteStore::open(&paths.db).unwrap());
         let transport = RouterTransport(router_at(&p.out));
         let rt = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(4)

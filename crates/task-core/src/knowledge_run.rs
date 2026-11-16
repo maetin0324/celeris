@@ -156,49 +156,6 @@ mod opt_rfc3339 {
     }
 }
 
-/// 知識整理 run の追跡（`SqliteStore` が実装する）。
-pub trait KnowledgeRunStore: Send + Sync {
-    /// 新しく作る（`state = scheduled`）。同じ `task_id` が既にあれば上書きしない
-    /// （呼び出し側が [`KnowledgeRunStore::knowledge_run_exists`] で先に確かめる）。
-    fn knowledge_run_create(
-        &self,
-        task_id: TaskId,
-        run_task_id: TaskId,
-        now: OffsetDateTime,
-    ) -> Result<(), StoreError>;
-    /// run が終端になったときに `state`/`applied_at`/`summary`/`via` を書く
-    /// （ADR-0052 D2: `via` は `"langmem"` か `"fallback:<adapter>"`。分からなければ `None`）。
-    fn knowledge_run_finish(
-        &self,
-        task_id: TaskId,
-        state: KnowledgeRunState,
-        applied_at: OffsetDateTime,
-        summary: Option<&KnowledgeRunSummary>,
-        via: Option<&str>,
-    ) -> Result<(), StoreError>;
-    /// ADR-0052 D3: 失敗した run を**一度だけ**作り直す。`run_task_id` を新しい支援タスクに差し替え、
-    /// `state` を `scheduled` に戻し、`retried_at` を書く（`applied_at`/`summary_json`/`via` は消す）。
-    /// `retried_at` が既に入っている行は**何もしない**（`false` を返す。二度目は無い）。
-    fn knowledge_run_retry(
-        &self,
-        task_id: TaskId,
-        run_task_id: TaskId,
-        now: OffsetDateTime,
-    ) -> Result<bool, StoreError>;
-    /// ADR-0052 D3: 人の手動やり直し（`celerisctl knowledge rerun`）。`state = failed` /
-    /// `retried_at = NULL` に戻し、次の tick の [`KnowledgeRunStore::knowledge_run_retry`] に拾わせる。
-    /// 行が無ければ `false`。
-    fn knowledge_run_reset(&self, task_id: TaskId) -> Result<bool, StoreError>;
-    fn knowledge_run_get(&self, task_id: TaskId) -> Result<Option<KnowledgeRun>, StoreError>;
-    fn knowledge_run_by_run_task(
-        &self,
-        run_task_id: TaskId,
-    ) -> Result<Option<KnowledgeRun>, StoreError>;
-    fn knowledge_run_exists(&self, task_id: TaskId) -> Result<bool, StoreError>;
-    /// `applied_at`（無ければ `created_at`）の新しい順、最大 `limit` 件。Console の一覧に使う。
-    fn knowledge_run_recent(&self, limit: usize) -> Result<Vec<KnowledgeRun>, StoreError>;
-}
-
 fn row_to_knowledge_run(
     row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<Result<KnowledgeRun, StoreError>> {
@@ -255,8 +212,11 @@ fn row_to_knowledge_run(
 const SELECT_KNOWLEDGE_RUN: &str = "SELECT task_id, run_task_id, state, created_at, applied_at, \
      summary_json, retried_at, via FROM knowledge_runs";
 
-impl KnowledgeRunStore for SqliteStore {
-    fn knowledge_run_create(
+// 知識整理 run の追跡（`SqliteStore` が実装する）。
+impl SqliteStore {
+    /// 新しく作る（`state = scheduled`）。同じ `task_id` が既にあれば上書きしない
+    /// （呼び出し側が [`SqliteStore::knowledge_run_exists`] で先に確かめる）。
+    pub fn knowledge_run_create(
         &self,
         task_id: TaskId,
         run_task_id: TaskId,
@@ -276,8 +236,9 @@ impl KnowledgeRunStore for SqliteStore {
         )?;
         Ok(())
     }
-
-    fn knowledge_run_finish(
+    /// run が終端になったときに `state`/`applied_at`/`summary`/`via` を書く
+    /// （ADR-0052 D2: `via` は `"langmem"` か `"fallback:<adapter>"`。分からなければ `None`）。
+    pub fn knowledge_run_finish(
         &self,
         task_id: TaskId,
         state: KnowledgeRunState,
@@ -298,8 +259,10 @@ impl KnowledgeRunStore for SqliteStore {
         )?;
         Ok(())
     }
-
-    fn knowledge_run_retry(
+    /// ADR-0052 D3: 失敗した run を**一度だけ**作り直す。`run_task_id` を新しい支援タスクに差し替え、
+    /// `state` を `scheduled` に戻し、`retried_at` を書く（`applied_at`/`summary_json`/`via` は消す）。
+    /// `retried_at` が既に入っている行は**何もしない**（`false` を返す。二度目は無い）。
+    pub fn knowledge_run_retry(
         &self,
         task_id: TaskId,
         run_task_id: TaskId,
@@ -321,8 +284,10 @@ impl KnowledgeRunStore for SqliteStore {
         )?;
         Ok(changed > 0)
     }
-
-    fn knowledge_run_reset(&self, task_id: TaskId) -> Result<bool, StoreError> {
+    /// ADR-0052 D3: 人の手動やり直し（`celerisctl knowledge rerun`）。`state = failed` /
+    /// `retried_at = NULL` に戻し、次の tick の [`SqliteStore::knowledge_run_retry`] に拾わせる。
+    /// 行が無ければ `false`。
+    pub fn knowledge_run_reset(&self, task_id: TaskId) -> Result<bool, StoreError> {
         let conn = self.lock()?;
         let changed = conn.execute(
             "UPDATE knowledge_runs SET state = ?2, retried_at = NULL, applied_at = NULL, \
@@ -331,8 +296,7 @@ impl KnowledgeRunStore for SqliteStore {
         )?;
         Ok(changed > 0)
     }
-
-    fn knowledge_run_get(&self, task_id: TaskId) -> Result<Option<KnowledgeRun>, StoreError> {
+    pub fn knowledge_run_get(&self, task_id: TaskId) -> Result<Option<KnowledgeRun>, StoreError> {
         let conn = self.lock()?;
         let row = conn
             .query_row(
@@ -346,8 +310,7 @@ impl KnowledgeRunStore for SqliteStore {
             None => Ok(None),
         }
     }
-
-    fn knowledge_run_by_run_task(
+    pub fn knowledge_run_by_run_task(
         &self,
         run_task_id: TaskId,
     ) -> Result<Option<KnowledgeRun>, StoreError> {
@@ -364,12 +327,11 @@ impl KnowledgeRunStore for SqliteStore {
             None => Ok(None),
         }
     }
-
-    fn knowledge_run_exists(&self, task_id: TaskId) -> Result<bool, StoreError> {
+    pub fn knowledge_run_exists(&self, task_id: TaskId) -> Result<bool, StoreError> {
         Ok(self.knowledge_run_get(task_id)?.is_some())
     }
-
-    fn knowledge_run_recent(&self, limit: usize) -> Result<Vec<KnowledgeRun>, StoreError> {
+    /// `applied_at`（無ければ `created_at`）の新しい順、最大 `limit` 件。Console の一覧に使う。
+    pub fn knowledge_run_recent(&self, limit: usize) -> Result<Vec<KnowledgeRun>, StoreError> {
         let limit = limit.clamp(1, 1_000);
         let sql = format!(
             "{SELECT_KNOWLEDGE_RUN} ORDER BY COALESCE(applied_at, created_at) DESC, task_id DESC LIMIT {limit}"

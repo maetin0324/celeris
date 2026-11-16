@@ -7,7 +7,7 @@ mod common;
 use std::path::Path;
 use std::process::{Command, Output};
 
-use task_core::{SqliteStore, TaskStore};
+use task_core::SqliteStore;
 
 fn ctl(args: &[&str], env: &[(&str, &Path)]) -> Output {
     let mut cmd = Command::new(common::celerisctl_path());

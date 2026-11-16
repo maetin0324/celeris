@@ -380,15 +380,18 @@ fn approval_rows(
         .collect()
 }
 
-impl BrowserWaitStore for SqliteStore {
-    fn browser_session_auth_section(
+// `BrowserWait` の読み書き（`SqliteStore` の固有 method）。
+impl SqliteStore {
+    /// ADR-0080 H3: 認証区間の開始/終了を control 状態に書く（task-api の `auth-section` と同じ op）。
+    pub fn browser_session_auth_section(
         &self,
         key: crate::browser_store::BrowserSessionKey<'_>,
         active: bool,
     ) -> Result<(), crate::browser_store::BrowserStoreError> {
         self.browser_control_auth_section(key, active).map(|_| ())
     }
-    fn browser_session_agent_action(
+    /// ADR-0113 D2: worker の agent 操作 gate（task-api の `agent/begin`・`agent/end` と同じ op）。
+    pub fn browser_session_agent_action(
         &self,
         key: crate::browser_store::BrowserSessionKey<'_>,
         op: crate::browser_control_ops::AgentActionOp,
@@ -397,20 +400,16 @@ impl BrowserWaitStore for SqliteStore {
     {
         self.browser_control_agent_action(key, op, now)
     }
-    fn browser_session_live_append(
+    /// ADR-0100: scrub 済みの live event を 1 件追記する。
+    pub fn browser_session_live_append(
         &self,
         key: crate::browser_store::BrowserSessionKey<'_>,
         event: &crate::browser_live::ScrubbedLiveEvent,
     ) -> Result<u64, StoreError> {
         self.browser_live_append(key, event)
     }
-    fn browser_site_policy_get(
-        &self,
-        policy_id: &str,
-    ) -> Result<Option<crate::BrowserSitePolicyRecord>, StoreError> {
-        SqliteStore::browser_site_policy_get(self, policy_id)
-    }
-    fn browser_task_policy_get(
+    /// A missing policy is a deny. Only a trusted administrator may write this record.
+    pub fn browser_task_policy_get(
         &self,
         task_id: TaskId,
     ) -> Result<Option<BrowserTaskPolicy>, StoreError> {
@@ -429,8 +428,7 @@ impl BrowserWaitStore for SqliteStore {
             .transpose()
         })
     }
-
-    fn browser_task_policy_set(
+    pub fn browser_task_policy_set(
         &self,
         task_id: TaskId,
         policy: &BrowserTaskPolicy,
@@ -470,8 +468,9 @@ impl BrowserWaitStore for SqliteStore {
         tx.commit()?;
         Ok(())
     }
-
-    fn browser_wait_open(
+    /// running の task に wait を開く（task → `Blocked`、worker の lease を解放、`BrowserWaitOpened`）。
+    /// 同じ `resume_key` の再送は既存の wait を返す（`created = false`）。
+    pub fn browser_wait_open(
         &self,
         task_id: TaskId,
         new: &NewBrowserWait,
@@ -612,13 +611,12 @@ impl BrowserWaitStore for SqliteStore {
             })
         })
     }
-
-    fn browser_wait_get(&self, wait_id: &str) -> Result<Option<BrowserWait>, StoreError> {
+    pub fn browser_wait_get(&self, wait_id: &str) -> Result<Option<BrowserWait>, StoreError> {
         let conn = self.lock()?;
         wait_by_id_tx(&conn, wait_id)
     }
-
-    fn browser_waits_for_task(&self, task_id: TaskId) -> Result<Vec<BrowserWait>, StoreError> {
+    /// task の wait（新しい順ではなく作成順）。
+    pub fn browser_waits_for_task(&self, task_id: TaskId) -> Result<Vec<BrowserWait>, StoreError> {
         let conn = self.lock()?;
         query_waits(
             &conn,
@@ -626,8 +624,8 @@ impl BrowserWaitStore for SqliteStore {
             &[&task_id.to_string()],
         )
     }
-
-    fn browser_waits_pending(&self) -> Result<Vec<BrowserWait>, StoreError> {
+    /// 人の対応を待つ wait（`pending`）の全件。inbox・承認一覧に出す。作成順。
+    pub fn browser_waits_pending(&self) -> Result<Vec<BrowserWait>, StoreError> {
         let conn = self.lock()?;
         query_waits(
             &conn,
@@ -635,8 +633,8 @@ impl BrowserWaitStore for SqliteStore {
             &[],
         )
     }
-
-    fn browser_wait_register(
+    /// 登録待ちに credential の参照を結び付けて一度だけ解決する（task → `Ready`）。使用承認は兼ねない。
+    pub fn browser_wait_register(
         &self,
         task_id: TaskId,
         wait_id: &str,
@@ -655,8 +653,8 @@ impl BrowserWaitStore for SqliteStore {
             |_| Ok(()),
         )
     }
-
-    fn browser_wait_decide(
+    /// 人の `approve_once` / `deny` / `revoke`。
+    pub fn browser_wait_decide(
         &self,
         task_id: TaskId,
         wait_id: &str,
@@ -665,8 +663,9 @@ impl BrowserWaitStore for SqliteStore {
     ) -> Result<BrowserWaitResolution, BrowserWaitError> {
         self.browser_wait_decide_also(task_id, wait_id, decision, now, |_| Ok(()))
     }
-
-    fn browser_wait_consume(
+    /// worker が承認済みの wait の一回の実行権を消費する（同じ run/session・`resume_key` だけ）。
+    /// 期限切れなら `expired` にして `Gone`。
+    pub fn browser_wait_consume(
         &self,
         task_id: TaskId,
         wait_id: &str,
@@ -726,8 +725,12 @@ impl BrowserWaitStore for SqliteStore {
             wait_by_id_tx(tx, wait_id)?.ok_or(BrowserWaitError::NotFound)
         })
     }
-
-    fn browser_waits_expire(&self, now: OffsetDateTime) -> Result<Vec<BrowserWait>, StoreError> {
+    /// 期限の過ぎた開いている wait を一度だけ終端化する（`pending` は task を `Failed` に）。
+    /// daemon の起動時と tick で呼ぶ。終端化した wait を返す。
+    pub fn browser_waits_expire(
+        &self,
+        now: OffsetDateTime,
+    ) -> Result<Vec<BrowserWait>, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let due = query_waits(
@@ -746,8 +749,7 @@ impl BrowserWaitStore for SqliteStore {
         tx.commit()?;
         Ok(expired)
     }
-
-    fn browser_approvals_for_wait(
+    pub fn browser_approvals_for_wait(
         &self,
         wait_id: &str,
     ) -> Result<Vec<BrowserApprovalRecord>, StoreError> {
@@ -758,8 +760,7 @@ impl BrowserWaitStore for SqliteStore {
             &[&wait_id],
         )
     }
-
-    fn browser_credential_get(
+    pub fn browser_credential_get(
         &self,
         credential_id: &str,
     ) -> Result<Option<CredentialRecord>, StoreError> {

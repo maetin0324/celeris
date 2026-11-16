@@ -16,8 +16,9 @@
 //!   `sources` は同じ案件の子報告に限る（監査 H-1。案件をまたいで混ざらない）。
 //! - 途中経過（`progress`）は作らない（通知は数時間単位なので run の途中は要らない）。
 
+use task_core::OrgDirectory;
 use task_core::report::{self, Report};
-use task_core::{Event, StoreError, Task, TaskId, TaskStore};
+use task_core::{Event, SqliteStore, StoreError, Task, TaskId};
 use task_worker::{AdapterError, Evidence, RunOutcome, Terminal};
 use time::OffsetDateTime;
 
@@ -103,7 +104,7 @@ pub(crate) fn declared_kind(declared: Option<&str>) -> report::ReportKind {
 
 /// その run が出した成果物の一覧（`ArtifactProduced` イベントから。決定的）。
 fn artifacts_of_run(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
     run_id: &str,
 ) -> Result<Vec<String>, StoreError> {
@@ -124,7 +125,7 @@ fn artifacts_of_run(
 /// 終端に達した run から、担当ノードの報告を作って追記する（`assignee` が無ければ何もしない）。
 /// 追記は `reports` 表への INSERT だけで、タスクの状態遷移とは別（ADR-0033 D3）。
 pub(crate) fn record_run_report(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     run_id: &str,
     terminal: &TerminalReport,
@@ -212,7 +213,7 @@ pub(crate) fn record_run_report(
 
 /// 報告を追記する。`bad_news` なら同じ内容を秘書まで複製する（SPEC §2.4「目立つ形で届く」）。
 fn append_with_escalation(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     org: &[task_core::OrgNode],
     report: Report,
 ) -> Result<Report, StoreError> {
@@ -242,7 +243,7 @@ fn append_with_escalation(
 /// ADR-0033 D3: クラスタに接続できないこと（`Event::ClusterUnavailable`）を `infra` 相当のノードの
 /// `bad_news` として 1 件記録する。案件に紐づかないので `project_id` は「案件なし」。
 pub(crate) fn record_cluster_unavailable_report(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     cluster: &str,
     host: &str,
     reason: &str,
@@ -266,7 +267,7 @@ pub(crate) fn record_cluster_unavailable_report(
 /// `infra` 相当のノードの `bad_news` として 1 件記録する。案件に紐づかないので `project_id` は「案件なし」。
 /// 呼び出し側（`Dispatcher::mark_login_needed`）が同じ outage の間の重複を防ぐので、ここでは間引きしない。
 pub(crate) fn record_cluster_login_needed_report(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     cluster: &str,
     host: &str,
     detail: Option<&str>,
@@ -286,7 +287,7 @@ pub(crate) fn record_cluster_login_needed_report(
 /// 同じクラスタの障害を毎 tick 報告しないための間引き（直近 `within_secs` 以内に同じ見出しの
 /// 未読の報告があれば作らない）。決定的な判定。
 pub(crate) fn cluster_report_recently_recorded(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     host: &str,
     now: OffsetDateTime,
     within_secs: i64,

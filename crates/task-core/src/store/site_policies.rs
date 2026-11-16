@@ -265,6 +265,7 @@ impl SqliteStore {
         Ok(rows)
     }
 
+    /// Current administrator-owned login policy, for supervisor credential reuse.
     pub fn browser_site_policy_get(
         &self,
         policy_id: &str,

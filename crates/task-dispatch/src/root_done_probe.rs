@@ -13,9 +13,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use task_core::{
-    Delivery, DeliveryState, DeliveryStore, SqliteStore, TaskId, TaskStore, WorkspaceSpec,
-};
+use task_core::{Delivery, DeliveryState, SqliteStore, TaskId, WorkspaceSpec};
 use task_ops::root_done::{self, ChildFact, RootDoneFacts, RootDoneInputs};
 
 /// これを超えた `root_done_tick` だけ内訳を出す（D3）。`CosChatLaunch::root_done_probe_threshold` の既定値。

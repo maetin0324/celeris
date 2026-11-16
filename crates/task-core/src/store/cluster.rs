@@ -7,7 +7,9 @@ use super::{
 };
 
 impl SqliteStore {
-    pub(super) fn cluster_settings_get_impl(
+    // ---- ADR-0059 D6（Phase 99）: クラスタの作業ディレクトリの DB 上書き ----
+    /// 1 クラスタ分の上書き。無ければ `Ok(None)`（設定ファイルの値を使う）。
+    pub fn cluster_settings_get(
         &self,
         cluster_id: &str,
     ) -> Result<Option<ClusterSettings>, StoreError> {
@@ -35,7 +37,8 @@ impl SqliteStore {
         })
     }
 
-    pub(super) fn cluster_settings_list_impl(&self) -> Result<Vec<ClusterSettings>, StoreError> {
+    /// 全クラスタの上書き一覧（`cluster_id` 昇順。`GET /clusters` が一括で使う）。
+    pub fn cluster_settings_list(&self) -> Result<Vec<ClusterSettings>, StoreError> {
         self.with_read_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT cluster_id, work_dir, updated_at FROM cluster_settings ORDER BY cluster_id ASC",
@@ -60,7 +63,8 @@ impl SqliteStore {
         })
     }
 
-    pub(super) fn cluster_settings_set_impl(
+    /// `work_dir = Some(..)` なら upsert、`None` なら行を消す（上書きの解除）。
+    pub fn cluster_settings_set(
         &self,
         cluster_id: &str,
         work_dir: Option<&str>,
@@ -97,7 +101,8 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub(super) fn cluster_connection_record_impl(
+    /// ADR-0078 D5: クラスタの接続・切断・鍵認証の試みを 1 行追記する。
+    pub fn cluster_connection_record(
         &self,
         record: &ClusterConnectionRecord,
     ) -> Result<(), StoreError> {
@@ -120,7 +125,8 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub(super) fn cluster_connection_list_since_impl(
+    /// ADR-0078 D5: `since` 以降（含む）の記録（古い順）。`GET /clusters` の `stats` が数える。
+    pub fn cluster_connection_list_since(
         &self,
         since: OffsetDateTime,
     ) -> Result<Vec<ClusterConnectionRecord>, StoreError> {

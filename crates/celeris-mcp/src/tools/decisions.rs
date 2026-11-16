@@ -39,7 +39,7 @@ fn parse_task_id(raw: &str, field: &str) -> Result<TaskId, ToolError> {
         .map_err(|_| ToolError::invalid_params(format!("{field}: {raw:?} is not a task id")))
 }
 
-async fn list_impl(
+async fn list(
     state: &Arc<McpState>,
     _client: &AuthedClient,
     args: serde_json::Value,
@@ -80,7 +80,7 @@ fn list_call<'a>(
     client: &'a AuthedClient,
     args: serde_json::Value,
 ) -> Pin<Box<dyn Future<Output = Result<ToolOutput, ToolError>> + Send + 'a>> {
-    Box::pin(list_impl(state, client, args))
+    Box::pin(list(state, client, args))
 }
 
 pub fn list_def() -> ToolDef {

@@ -6,7 +6,7 @@ use super::*;
 #[tokio::test]
 async fn cluster_and_provider_concurrency_are_both_enforced() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     // 同じクラスタを指すリモートのタスク 2 件と、ローカルのタスク 1 件。
     let mut remote_ids = Vec::new();
     for _ in 0..2 {
@@ -106,7 +106,7 @@ async fn cluster_and_provider_concurrency_are_both_enforced() {
 #[tokio::test]
 async fn offline_cluster_is_reported_in_the_snapshot_and_the_event_carries_the_host() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = new_task(
         dir.path(),
         Check::Command {
@@ -224,7 +224,7 @@ async fn offline_cluster_is_reported_in_the_snapshot_and_the_event_carries_the_h
 #[tokio::test]
 async fn assignee_without_the_cluster_tool_is_blocked_with_a_question() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let now = OffsetDateTime::now_utc();
     for (id, parent, tools) in [
         ("cos", None, vec![]),
@@ -314,7 +314,7 @@ async fn assignee_without_the_cluster_tool_is_blocked_with_a_question() {
 #[tokio::test]
 async fn a_master_that_exited_on_its_own_is_reported_once_with_its_stderr_tail() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = new_task(
         dir.path(),
         Check::Command {
@@ -400,7 +400,7 @@ async fn a_master_that_exited_on_its_own_is_reported_once_with_its_stderr_tail()
 /// 数を増やさない。probe が 1 回成功すれば接続に戻る。
 #[test]
 fn probe_failures_keep_the_master_until_three_in_a_row() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut d = instant_done_dispatcher(store.clone());
     let mut spec = cluster_spec_with_auth("sirius", "sirius", "manual");
     spec.liveness_probe_secs = 30;
@@ -465,7 +465,7 @@ fn probe_failures_keep_the_master_until_three_in_a_row() {
 /// はすぐ戻り、結果は後の tick で拾う）。
 #[test]
 fn a_slow_probe_does_not_block_the_liveness_refresh() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut d = instant_done_dispatcher(store);
     let mut spec = cluster_spec_with_auth("sirius", "sirius", "manual");
     spec.liveness_probe_secs = 30;
@@ -507,7 +507,7 @@ fn a_slow_probe_does_not_block_the_liveness_refresh() {
 /// から再び切れたら、そこでもう 1 回だけ試す。
 #[test]
 fn totp_key_auth_reconnect_is_tried_once_per_outage() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut d = instant_done_dispatcher(store.clone());
     d.config.clusters.insert(
         "pegasus".into(),
@@ -596,7 +596,7 @@ fn publickey_key_auth_reconnect_backs_off_up_to_five_minutes() {
     }
     assert_eq!(secs, vec![6, 12, 24, 48, 96, 192, 300, 300]);
 
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut d = instant_done_dispatcher(store);
     let spec = cluster_spec_with_forward(
         "fern03",
@@ -649,7 +649,7 @@ fn publickey_key_auth_reconnect_backs_off_up_to_five_minutes() {
 /// 1 件出し、本文に切れた時刻と理由を書く。
 #[test]
 fn a_lost_master_is_recorded_and_notified_once_per_transition() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut d = instant_done_dispatcher(store.clone());
     d.config.clusters.insert(
         "pegasus".into(),
@@ -712,9 +712,9 @@ fn a_lost_master_is_recorded_and_notified_once_per_transition() {
 /// 数え、鍵認証も TOTP も求めない。直近 24 時間の回数（DB から数える）は再起動をまたいで同じ。
 #[test]
 fn a_restarted_dispatcher_borrows_the_surviving_master_and_keeps_the_counts() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let connector_calls = Arc::new(AtomicUsize::new(0));
-    let make = |store: Arc<dyn TaskStore>, calls: Arc<AtomicUsize>| {
+    let make = |store: Arc<SqliteStore>, calls: Arc<AtomicUsize>| {
         let mut d = instant_done_dispatcher(store);
         d.config.clusters.insert(
             "pegasus".into(),
@@ -816,7 +816,7 @@ fn ssh_settings_shared_mode_forces_sync_none_regardless_of_cluster_sync() {
 /// > 設定ファイルの `[[clusters]] work_dir` > 無し、の順。相対パスはそこからの相対に解決する。
 #[test]
 fn cluster_of_resolves_relative_paths_against_the_db_override_then_the_config_work_dir() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let adapter: Arc<dyn WorkerAdapter> = Arc::new(InstantAdapter {
         terminal: Terminal::Done {
             summary: "ok".into(),
@@ -875,7 +875,7 @@ fn cluster_of_resolves_relative_paths_against_the_db_override_then_the_config_wo
 /// 受け取った `path` をそのまま返す（`remote_dir_is_resolved` で「解決できなかった」と判定できる形）。
 #[test]
 fn cluster_of_leaves_the_path_unresolved_when_there_is_no_work_dir_anywhere() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let adapter: Arc<dyn WorkerAdapter> = Arc::new(InstantAdapter {
         terminal: Terminal::Done {
             summary: "ok".into(),
@@ -913,7 +913,7 @@ fn cluster_of_leaves_the_path_unresolved_when_there_is_no_work_dir_anywhere() {
 /// 続けて forward が(再)確立されて `Up` イベントが立つ。
 #[tokio::test]
 async fn tunnel_down_then_key_auth_ok_brings_the_forward_up() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let adapter = Arc::new(InstantAdapter {
         terminal: Terminal::Done {
             summary: "ok".into(),
@@ -980,7 +980,7 @@ async fn tunnel_down_then_key_auth_ok_brings_the_forward_up() {
 /// （イベントも報告も 1 回だけ）。
 #[tokio::test]
 async fn tunnel_down_and_key_auth_fails_marks_login_needed_once() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let adapter = Arc::new(InstantAdapter {
         terminal: Terminal::Done {
             summary: "ok".into(),
@@ -1036,7 +1036,7 @@ async fn tunnel_down_and_key_auth_fails_marks_login_needed_once() {
 /// re-add」。Phase 85: listener の有無だけで re-add を決める。target の健康は別）。
 #[tokio::test]
 async fn tunnel_listener_absent_is_re_added() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let adapter = Arc::new(InstantAdapter {
         terminal: Terminal::Done {
             summary: "ok".into(),
@@ -1103,7 +1103,7 @@ async fn tunnel_listener_absent_is_re_added() {
 /// いた（5 分で 37 回）。この試験はその回帰を防ぐ。
 #[tokio::test]
 async fn tunnel_listener_present_target_unhealthy_does_not_re_add() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let adapter = Arc::new(InstantAdapter {
         terminal: Terminal::Done {
             summary: "ok".into(),
@@ -1171,7 +1171,7 @@ async fn tunnel_listener_present_target_unhealthy_does_not_re_add() {
 /// phases`〈`tunnel_ms`≈2000〉が 1 時間に 118 件出ていた不具合の直し）。
 #[tokio::test]
 async fn target_probe_seeds_synchronously_once_then_the_tick_stops_waiting_on_it() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let adapter = Arc::new(InstantAdapter {
         terminal: Terminal::Done {
             summary: "ok".into(),
@@ -1256,7 +1256,7 @@ fn next_probe_interval_secs_grows_on_failure_and_resets_on_success() {
 /// （Console に出る 1 行）は 1 回しか積まない（毎回 probe しても、フェーズが変わらなければスパムしない）。
 #[tokio::test]
 async fn tunnel_target_unreachable_emits_the_event_once_across_many_ticks() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let adapter = Arc::new(InstantAdapter {
         terminal: Terminal::Done {
             summary: "ok".into(),
@@ -1314,7 +1314,7 @@ async fn tunnel_target_unreachable_emits_the_event_once_across_many_ticks() {
 /// / `tunnel_probe`）を一切呼ばず、報告も書かないことを確かめる。
 #[tokio::test]
 async fn verify_mode_does_not_refresh_cluster_tunnels_or_write_a_report() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let adapter = Arc::new(InstantAdapter {
         terminal: Terminal::Done {
             summary: "ok".into(),
@@ -1416,7 +1416,7 @@ async fn verify_mode_does_not_refresh_cluster_tunnels_or_write_a_report() {
 #[tokio::test]
 async fn publickey_cluster_auto_connects_and_dispatch_continues_on_success() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = new_task(
         dir.path(),
         Check::Command {
@@ -1487,7 +1487,7 @@ async fn publickey_cluster_auto_connects_and_dispatch_continues_on_success() {
 #[tokio::test]
 async fn publickey_cluster_auto_connect_failure_gets_a_distinguishable_reason() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = new_task(
         dir.path(),
         Check::Command {
@@ -1551,7 +1551,7 @@ async fn publickey_cluster_auto_connect_failure_gets_a_distinguishable_reason() 
 async fn manual_and_totp_clusters_are_not_auto_connected_even_with_a_hook() {
     for auth in ["manual", "totp"] {
         let dir = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let mut task = new_task(
             dir.path(),
             Check::Command {
@@ -1609,7 +1609,7 @@ async fn manual_and_totp_clusters_are_not_auto_connected_even_with_a_hook() {
 /// `set_cluster_connect_pending` が `ClusterLive.connect_pending` を立てる/降ろす。
 #[tokio::test]
 async fn cluster_live_carries_auth_and_connect_pending() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let adapter = Arc::new(InstantAdapter {
         terminal: Terminal::Done {
             summary: "ok".into(),
@@ -1672,7 +1672,7 @@ async fn cluster_cooldown_is_cleared_once_the_control_master_is_back() {
         eprintln!("skip: celeris-localhost への多重接続が無い");
         return;
     }
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let adapter = Arc::new(InstantAdapter {
         terminal: Terminal::Done {
             summary: "ok".into(),
@@ -1741,7 +1741,7 @@ fn cluster_context_is_carried_into_continuing_cos_sessions() {
     let dir = tempfile::tempdir().unwrap();
     let workspace_root = dir.path().join("workspaces");
     std::fs::create_dir_all(&workspace_root).unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
 
     let to_secretary = task_ops::conversation::start(

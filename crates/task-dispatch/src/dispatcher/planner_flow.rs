@@ -37,7 +37,7 @@ impl Dispatcher {
         let quota_event = {
             let model = self.started_model_of(task_id, &run_id);
             self.routing.settle_quota(
-                &*self.store,
+                &self.store,
                 task_id,
                 &run_id,
                 None,

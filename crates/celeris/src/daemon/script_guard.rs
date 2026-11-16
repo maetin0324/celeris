@@ -33,10 +33,9 @@ use task_core::script_guard::{ScriptGuardReadiness, readiness};
 use task_core::script_inbox::{
     SCRIPT_GUARD_HALTED, SCRIPT_INBOX_ACTORS, ScriptInboxApplied, ScriptInboxBatch,
     ScriptInboxCursors, ScriptInboxItem, ScriptInboxOp, ScriptInboxResolver, ScriptInboxSource,
-    ScriptInboxStore,
 };
 use task_core::store::{ScriptDomainEventRow, ScriptGenerationEventRow};
-use task_core::{InstanceRole, SharedRole, SqliteStore, StoreError, TaskStore};
+use task_core::{InstanceRole, SharedRole, SqliteStore, StoreError};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -220,9 +219,7 @@ pub(crate) fn plan(
 }
 
 /// cursor から読み切るまで取り込む（1 page ごとに 1 transaction）。
-pub(crate) fn ingest<S: ScriptInboxStore + ?Sized>(
-    store: &S,
-) -> Result<ScriptInboxApplied, StoreError> {
+pub(crate) fn ingest(store: &SqliteStore) -> Result<ScriptInboxApplied, StoreError> {
     let mut total = ScriptInboxApplied::default();
     loop {
         let cursors = store.script_inbox_cursors()?;
@@ -428,7 +425,7 @@ pub(crate) fn sweep(
 /// active の instance で `INBOX_INTERVAL` ごとに、停止基準の見回り（`guard_store` があれば）と受信箱の取り込みを
 /// この順で行う（起動直後に 1 回。起動時の戻しの記録もここで拾う。見回りが止めた記録も同じ回で項目になる）。
 pub(crate) fn spawn(
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     guard_store: Option<Arc<SqliteStore>>,
     role: SharedRole,
 ) -> tokio::task::JoinHandle<()> {

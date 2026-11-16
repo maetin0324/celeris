@@ -297,7 +297,7 @@ async fn ticker_spawns_once_and_clears_the_flag() {
         "[[llm_proxy.sources.openai_compatible]]\nid = \"qwen\"\nbase_url = \"{base}/v1\"\n[model_catalog]\nrefresh_interval_seconds = 60\n"
     );
     let config: Config = toml::from_str(&text).unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut t = DiscoveryTicker::default();
     let (tx, rx) = tokio::sync::oneshot::channel();
     let handle = t

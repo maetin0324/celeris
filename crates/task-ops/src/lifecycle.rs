@@ -8,7 +8,7 @@
 //! | 操作 | 何が起きる |
 //! |---|---|
 //! | `cancel` | 属する**非終端タスクを全部** `cancelled` にする（`Trigger::ProjectCancelled` / `MilestoneCancelled`。理由が `Event::Transitioned.reason` に残る）。案件の中止は非終端の途中目標も `cancelled` にする。最後に自分が `cancelled` |
-//! | `pause` | 自分が `paused`。元の状態は `paused_from` に残す。**属するタスクは dispatch されない**（`ready` のまま。`TaskStore::ready_tasks` が見る）。走っている run は終わるまで走る |
+//! | `pause` | 自分が `paused`。元の状態は `paused_from` に残す。**属するタスクは dispatch されない**（`ready` のまま。`SqliteStore::ready_tasks` が見る）。走っている run は終わるまで走る |
 //! | `resume` | `paused_from` へ戻す（無ければ案件は `active`、途中目標は `in_progress`）。`paused_from` は消す |
 //! | `archive` | **終端（`done` / `cancelled`）の案件だけ**。`archived_at` を入れる。一覧から既定で隠れる |
 //! | `unarchive` | `archived_at` を消す |
@@ -25,8 +25,10 @@
 //!
 //! LLM も I/O も使わない（DESIGN 原則 1）。
 
+use task_core::OrgDirectory;
+use task_core::TaskQuery;
 use task_core::{
-    MilestoneId, MilestoneStatus, Project, ProjectId, ProjectStatus, Status, TaskStore, Trigger,
+    MilestoneId, MilestoneStatus, Project, ProjectId, ProjectStatus, SqliteStore, Status, Trigger,
 };
 use time::OffsetDateTime;
 
@@ -52,7 +54,7 @@ const CASCADE_TASK_LIMIT: usize = 5_000;
 /// `filter` に合うタスクを（アーカイブの有無に関わらず）集める。索引の効く列で絞るので
 /// 全件を読まない。
 fn tasks_matching(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     filter: task_core::ListFilter,
 ) -> Result<Vec<task_core::Task>, OpsError> {
     Ok(store
@@ -66,7 +68,7 @@ fn tasks_matching(
 }
 
 /// その案件のタスク（`tasks.project_id` の索引で引く）。
-fn project_tasks(store: &dyn TaskStore, id: ProjectId) -> Result<Vec<task_core::Task>, OpsError> {
+fn project_tasks(store: &SqliteStore, id: ProjectId) -> Result<Vec<task_core::Task>, OpsError> {
     tasks_matching(
         store,
         task_core::ListFilter {
@@ -76,7 +78,7 @@ fn project_tasks(store: &dyn TaskStore, id: ProjectId) -> Result<Vec<task_core::
     )
 }
 
-fn project_or_404(store: &dyn TaskStore, id: ProjectId) -> Result<Project, OpsError> {
+fn project_or_404(store: &SqliteStore, id: ProjectId) -> Result<Project, OpsError> {
     store.project_get(id)?.ok_or(OpsError::ProjectNotFound(id))
 }
 
@@ -157,7 +159,7 @@ const SUBTREE_LIMIT: usize = 5_000;
 /// `root` の子孫（`parent_id` の鎖と、採用で `parent_id` を書き換えない木の子〈`tree.parent_unit`〉）。
 /// 自分は含まない。幅優先で、同じ task は 1 回だけ。
 fn descendants(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     root: &task_core::Task,
 ) -> Result<Vec<task_core::Task>, OpsError> {
     let tree_members = match root.tree.as_ref() {
@@ -204,7 +206,7 @@ fn task_conflict(task: &task_core::Task, action: &str) -> OpsError {
 }
 
 fn set_paused(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &task_core::Task,
     paused_at: Option<OffsetDateTime>,
     now: OffsetDateTime,
@@ -234,7 +236,7 @@ fn paused_edit(
 
 /// 一時停止・再開の結果（書いた後の task から組み立てる。読むだけ）。
 pub fn pause_result(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     updated: &task_core::Task,
 ) -> Result<TaskPauseResult, OpsError> {
     let subtree = descendants(store, updated)?
@@ -252,7 +254,7 @@ pub fn pause_result(
 /// [`pause_task`]（`paused = true`）・[`resume_task`]（`false`）の書き込み計画（読むだけ）。返った task と
 /// event を `update_task`（CoS の監査経路では `SqliteStore::edit_task_tx`）で書く。`by` は `Edited.by`。
 pub fn plan_set_paused(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: task_core::TaskId,
     paused: bool,
     by: &str,
@@ -278,14 +280,14 @@ pub fn plan_set_paused(
 /// `POST /tasks/{id}/pause`（ADR-0079 D13、Phase R5a）: task の **subtree を一時停止**する。
 ///
 /// - 自分に `paused_at` を入れ、`Event::Edited{fields: ["paused_at"], by: "human"}` を残す（状態機械は触らない。
-///   replay の状態・attempts は変わらない）。子孫には書かない: `TaskStore::ready_tasks` が祖先を辿って見るので、
+///   replay の状態・attempts は変わらない）。子孫には書かない: `SqliteStore::ready_tasks` が祖先を辿って見るので、
 ///   一時停止の後に作られた子（計画の unit から daemon が作る子 task、委譲の子）も止まる。
 /// - **走っている run は終わるまで走る**（案件の一時停止〈ADR-0044 D6〉と同じ意味）。その後 task が `ready` に戻っても
-///   dispatch されず、`running` の task の並列 WU の 2 本目以降も起きない（`TaskStore::halted_by_pause`）。
+///   dispatch されず、`running` の task の並列 WU の 2 本目以降も起きない（`SqliteStore::halted_by_pause`）。
 ///   `reviewing` の最終レビューと人の操作（回答・承認・中止）は止めない。
 /// - 終端の task・既に一時停止中・対話（止めると人が秘書と話せなくなる）は 409。
 pub fn pause_task(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: task_core::TaskId,
     now: OffsetDateTime,
 ) -> Result<TaskPauseResult, OpsError> {
@@ -299,7 +301,7 @@ pub fn pause_task(
 /// `POST /tasks/{id}/resume`（ADR-0079 D13、Phase R5a）: `pause_task` を戻す（`paused_at` を消す）。
 /// 一時停止中でなければ 409（終端でも、一時停止中なら消せる）。祖先がまだ一時停止中なら子孫は止まったまま。
 pub fn resume_task(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: task_core::TaskId,
     now: OffsetDateTime,
 ) -> Result<TaskPauseResult, OpsError> {
@@ -343,7 +345,7 @@ pub enum ProjectChange {
 
 /// Check `action` against the project's state and return the write it needs (no write).
 pub fn plan_project_action(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: ProjectId,
     action: ProjectAction,
     now: OffsetDateTime,

@@ -8,10 +8,11 @@
 //!   Blocked の源への comment は回答 `Trigger::Answer`）。新しい表・config の欄は無く、正本は追記専用の events。
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::convert::Infallible;
+use task_core::TaskQuery;
 
 use schemars::JsonSchema;
 use serde::Serialize;
-use task_core::{Event, EventRow, HealthRepeatSite, Status, Task, TaskId, TaskStore};
+use task_core::{Event, EventRow, HealthRepeatSite, SqliteStore, Status, Task, TaskId};
 
 use super::AttentionItem;
 use crate::error::OpsError;
@@ -29,7 +30,7 @@ pub struct HealthRepeatSource {
 /// 源の task `source` の往復を木の root の events に追記し、root の id を返す。fingerprint は
 /// `Event::health_findings_repeated` が正規化する（並び・重複に依らず同じ `set_sha256`）。
 pub fn record_findings_repeated(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     source: &Task,
     site: HealthRepeatSite,
     fingerprints: &[String],
@@ -93,7 +94,7 @@ struct Group {
 /// 1 件につき 1 回。`focus` の組み立て（P4-C）では、範囲の task か root が範囲にある Blocked の task の root だけを
 /// 見る（項目が触れる task は root と源で、源は Blocked）。
 pub(super) fn attention_items(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     all_tasks: &[Task],
     by_id: &HashMap<TaskId, Task>,
     focus: Option<&HashSet<TaskId>>,
@@ -174,7 +175,7 @@ pub(super) fn attention_items(
 /// Blocked を出ていれば（人の comment で再開した後に別の理由で止まった）この往復の源ではない。
 /// `reads` に無い源（範囲つきの組み立てで範囲の外）だけを読む。
 fn still_blocked(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     reads: &BlockedReads,
     source: &Task,
     event_id: u64,

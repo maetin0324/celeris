@@ -28,7 +28,7 @@ pub(super) fn hinted_task(dir: &std::path::Path, source: task_core::TierSource) 
     task
 }
 
-pub(super) fn routing_decided(store: &Arc<dyn TaskStore>, task: &Task) -> task_core::RoutingRecord {
+pub(super) fn routing_decided(store: &Arc<SqliteStore>, task: &Task) -> task_core::RoutingRecord {
     store
         .events_for(task.id)
         .unwrap()
@@ -63,7 +63,7 @@ fn dispatch_once(
     source: task_core::TierSource,
 ) -> (task_core::RoutingRecord, Task) {
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = hinted_task(ws.path(), source);
     store.insert(&task).unwrap();
     let mut d = dispatcher(store.clone(), question_adapter(), 1);
@@ -95,7 +95,7 @@ pub(super) fn jev_ok(s: SpecificityHint) -> BoardItem {
 #[tokio::test]
 async fn default_mode_is_fixed_and_writes_no_lane_assist() {
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let d = dispatcher(store, question_adapter(), 1);
     assert_eq!(d.routing_mode(), RoutingMode::Fixed);
     drop(ws);
@@ -195,7 +195,7 @@ fn missing_key_enters_the_existing_credential_wait_for_that_unit_only() {
     let dir = tempfile::tempdir().unwrap();
     let secrets = dir.path().join("secrets");
     std::fs::create_dir_all(&secrets).unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = hinted_task(dir.path(), task_core::TierSource::Hint);
     store.insert(&task).unwrap();
     let a = unit(&task, "a", 0);
@@ -285,7 +285,7 @@ fn dispatch_with_override(
 ) -> (task_core::RoutingRecord, Task) {
     let ws = tempfile::tempdir().unwrap();
     let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let store: Arc<SqliteStore> = sqlite.clone();
     let task = hinted_task(ws.path(), task_core::TierSource::Hint);
     store.insert(&task).unwrap();
     if let Some(mode) = task_mode {
@@ -371,7 +371,7 @@ async fn jev_classification_cost_is_metered_once_per_campaign() {
     for (cost, expect) in [(Some(0.0004), Some(0.0004)), (None, None)] {
         let ws = tempfile::tempdir().unwrap();
         let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
-        let store: Arc<dyn TaskStore> = sqlite.clone();
+        let store: Arc<SqliteStore> = sqlite.clone();
         let task = hinted_task(ws.path(), task_core::TierSource::Hint);
         store.insert(&task).unwrap();
         sqlite
@@ -415,7 +415,7 @@ async fn jev_classification_cost_is_metered_once_per_campaign() {
 async fn jev_calls_are_kept_per_call_and_missing_cost_stays_null() {
     let ws = tempfile::tempdir().unwrap();
     let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let store: Arc<SqliteStore> = sqlite.clone();
     let task = hinted_task(ws.path(), task_core::TierSource::Hint);
     store.insert(&task).unwrap();
     sqlite
@@ -488,7 +488,7 @@ async fn root_routing_pin_is_inherited_by_child_grandchild_and_retry_whatever_th
     ] {
         let ws = tempfile::tempdir().unwrap();
         let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
-        let store: Arc<dyn TaskStore> = sqlite.clone();
+        let store: Arc<SqliteStore> = sqlite.clone();
         let root = hinted_task(ws.path(), task_core::TierSource::Hint);
         store.insert(&root).unwrap();
         let mut child = hinted_task(ws.path(), task_core::TierSource::Hint);
@@ -532,7 +532,7 @@ async fn root_routing_pin_is_inherited_by_child_grandchild_and_retry_whatever_th
 async fn task_override_evidence_mode_none_is_recorded_without_a_table_version() {
     let ws = tempfile::tempdir().unwrap();
     let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let store: Arc<SqliteStore> = sqlite.clone();
     let task = hinted_task(ws.path(), task_core::TierSource::Hint);
     store.insert(&task).unwrap();
     let o = task_core::route_select::RoutingOverride {
@@ -612,7 +612,7 @@ async fn normal_tick_provenance_survives_reopen_export_and_reload() {
     let mut tasks = Vec::new();
     {
         let sqlite = Arc::new(SqliteStore::open(&db).unwrap());
-        let store: Arc<dyn TaskStore> = sqlite.clone();
+        let store: Arc<SqliteStore> = sqlite.clone();
         let mut d = dispatcher(store.clone(), question_adapter(), 2);
         d.set_routing_mode(RoutingMode::DecisionAssisted);
         // task A: 1 回目 timeout fallback → 再分類が成功（応答 model あり・独立 snapshot なし）。
@@ -803,7 +803,7 @@ async fn normal_tick_provenance_survives_reopen_export_and_reload() {
     assert_eq!(la(b).call_id, None);
 }
 
-fn dispatched_count(store: &Arc<dyn TaskStore>, task: &Task) -> usize {
+fn dispatched_count(store: &Arc<SqliteStore>, task: &Task) -> usize {
     store
         .events_for(task.id)
         .unwrap()
@@ -824,7 +824,7 @@ async fn unclassified_subject_waits_for_the_classification_then_launches_with_it
         },
     ] {
         let ws = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let task = hinted_task(ws.path(), task_core::TierSource::Hint);
         store.insert(&task).unwrap();
         let mut d = dispatcher(store.clone(), question_adapter(), 1);
@@ -849,7 +849,7 @@ async fn unclassified_subject_waits_for_the_classification_then_launches_with_it
 #[tokio::test]
 async fn classification_wait_is_bounded_by_the_injected_clock() {
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = hinted_task(ws.path(), task_core::TierSource::Hint);
     store.insert(&task).unwrap();
     let mut d = dispatcher(store.clone(), question_adapter(), 1);
@@ -875,7 +875,7 @@ async fn no_classification_wait_when_the_stage_is_off_or_mode_is_fixed() {
         (RoutingMode::Fixed, Some(Duration::from_secs(20))),
     ] {
         let ws = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let task = hinted_task(ws.path(), task_core::TierSource::Hint);
         store.insert(&task).unwrap();
         let mut d = dispatcher(store.clone(), question_adapter(), 1);
@@ -891,7 +891,7 @@ async fn no_classification_wait_when_the_stage_is_off_or_mode_is_fixed() {
 #[tokio::test]
 async fn ready_work_unit_launches_only_after_its_own_unit_is_classified() {
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = hinted_task(ws.path(), task_core::TierSource::Hint);
     store.insert(&task).unwrap();
     let a = unit(&task, "a", 0);

@@ -20,7 +20,7 @@ fn git(repo: &std::path::Path, args: &[&str]) {
 }
 
 struct Fixture {
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     /// 依存先の案件の repo（依存先の branch `celeris/<id>` を持つ）。
     dep_repo: std::path::PathBuf,
     project: ProjectId,
@@ -48,7 +48,7 @@ fn fixture(
     git(&dep_repo, &["add", "base"]);
     git(&dep_repo, &["commit", "-m", "base"]);
 
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let now = OffsetDateTime::now_utc();
     let project = Project {
         auto_advance: false,
@@ -152,7 +152,7 @@ fn holding(keys: &[&str]) -> Arc<ParallelWuAdapter> {
     Arc::new(adapter)
 }
 
-fn unit_status(store: &Arc<dyn TaskStore>, task: TaskId, key: &str) -> task_core::WorkUnitStatus {
+fn unit_status(store: &Arc<SqliteStore>, task: TaskId, key: &str) -> task_core::WorkUnitStatus {
     store
         .work_units_for(task)
         .unwrap()
@@ -175,7 +175,7 @@ fn publish(d: &mut Dispatcher) -> tokio::sync::watch::Receiver<Option<DaemonSnap
 }
 
 /// 一覧・詳細の `waits`（task-ops の `task_waits`。M11 はここで組む）のうち `task_dependency`。
-fn wait_of(store: &Arc<dyn TaskStore>, id: TaskId) -> Option<TaskWait> {
+fn wait_of(store: &Arc<SqliteStore>, id: TaskId) -> Option<TaskWait> {
     let task = store.get(id).unwrap().unwrap();
     task_ops::wait::task_waits_one(
         store.as_ref(),
@@ -187,7 +187,7 @@ fn wait_of(store: &Arc<dyn TaskStore>, id: TaskId) -> Option<TaskWait> {
     .find(|w| matches!(w, TaskWait::TaskDependency { .. }))
 }
 
-fn stalls(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<String> {
+fn stalls(store: &Arc<SqliteStore>, id: TaskId) -> Vec<String> {
     store
         .events_for(id)
         .unwrap()

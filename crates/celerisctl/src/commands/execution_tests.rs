@@ -52,7 +52,7 @@ fn sample_task() -> task_core::Task {
     }
 }
 
-fn seed_task(store: &dyn TaskStore) -> TaskId {
+fn seed_task(store: &SqliteStore) -> TaskId {
     let task = sample_task();
     store.insert(&task).unwrap();
     task.id

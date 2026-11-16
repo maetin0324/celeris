@@ -1,11 +1,12 @@
 //! 実行中の委譲の検証（ADR-0016 D2 / M6 / M7）。ストアを見る検証（既存 ID の依存、祖先、木の深さ・run 数）は
 //! ここに置く。ストアを見ない検証（空欄・配列内インデックスの範囲・自己参照・閉路）は `task_core::delegate`
-//! （`validate_each`）にある。I/O は `TaskStore` の読み取りだけ。LLM 呼び出し・挿入は無い
-//! （挿入は `TaskStore::delegate_children` が行う）。
+//! （`validate_each`）にある。I/O は `SqliteStore` の読み取りだけ。LLM 呼び出し・挿入は無い
+//! （挿入は `SqliteStore::delegate_children` が行う）。
 
+use task_core::OrgDirectory;
 use task_core::{
-    DelegateDep, DelegateTask, DelegationLimits, GenreSpec, RoleSpec, Status, Task, TaskId,
-    TaskStore, WorkspaceSpec,
+    DelegateDep, DelegateTask, DelegationLimits, GenreSpec, RoleSpec, SqliteStore, Status, Task,
+    TaskId, WorkspaceSpec,
 };
 use time::OffsetDateTime;
 
@@ -16,7 +17,7 @@ pub mod child_wait;
 /// `plan_delegation` の結果。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DelegationOutcome {
-    /// 挿入してよい子（`status = Draft`。`TaskStore::delegate_children` が `Accept` する）。提案の順。
+    /// 挿入してよい子（`status = Draft`。`SqliteStore::delegate_children` が `Accept` する）。提案の順。
     pub accepted: Vec<Task>,
     /// 拒否した提案の理由。書式は `tasks[<i>] "<title>": <reason>`。ディスパッチャが `WorkerProgress` に載せる。
     pub rejected: Vec<String>,
@@ -30,7 +31,7 @@ fn reject(index: usize, title: &str, reason: impl std::fmt::Display) -> String {
 }
 
 /// 祖先の数 + 1（根 = 1）。親を辿る（64 hop で打ち切り）。
-pub fn tree_depth(store: &dyn TaskStore, task: &Task) -> Result<u32, OpsError> {
+pub fn tree_depth(store: &SqliteStore, task: &Task) -> Result<u32, OpsError> {
     let mut depth: u32 = 1;
     let mut current = task.clone();
     for _ in 0..64 {
@@ -49,7 +50,7 @@ pub fn tree_depth(store: &dyn TaskStore, task: &Task) -> Result<u32, OpsError> {
 }
 
 /// 木の根の ID。
-pub fn tree_root(store: &dyn TaskStore, task: &Task) -> Result<TaskId, OpsError> {
+pub fn tree_root(store: &SqliteStore, task: &Task) -> Result<TaskId, OpsError> {
     tree_root_by(task, |id| Ok(store.get(id)?.map(|t| t.parent_id)))
 }
 
@@ -75,7 +76,7 @@ pub fn tree_root_by<E>(
 }
 
 /// 根とその全子孫の `Event::WorkerStarted { role: None, .. }`（ワーカー run）の合計。
-pub fn tree_worker_runs(store: &dyn TaskStore, root: TaskId) -> Result<u32, OpsError> {
+pub fn tree_worker_runs(store: &SqliteStore, root: TaskId) -> Result<u32, OpsError> {
     let mut total: u32 = 0;
     let mut stack: Vec<TaskId> = vec![root];
     while let Some(id) = stack.pop() {
@@ -93,7 +94,7 @@ pub fn tree_worker_runs(store: &dyn TaskStore, root: TaskId) -> Result<u32, OpsE
 }
 
 /// `parent` の直接の子のうち終端でないものの数（`Status::is_terminal`）。
-pub fn pending_children(store: &dyn TaskStore, parent: TaskId) -> Result<usize, OpsError> {
+pub fn pending_children(store: &SqliteStore, parent: TaskId) -> Result<usize, OpsError> {
     Ok(store
         .children(parent)?
         .iter()
@@ -102,7 +103,7 @@ pub fn pending_children(store: &dyn TaskStore, parent: TaskId) -> Result<usize, 
 }
 
 /// `parent` の祖先の ID 列（親、その親、…）。
-pub fn ancestors(store: &dyn TaskStore, task: &Task) -> Result<Vec<TaskId>, OpsError> {
+pub fn ancestors(store: &SqliteStore, task: &Task) -> Result<Vec<TaskId>, OpsError> {
     let mut out = Vec::new();
     let mut current = task.clone();
     for _ in 0..64 {
@@ -123,7 +124,7 @@ pub fn ancestors(store: &dyn TaskStore, task: &Task) -> Result<Vec<TaskId>, OpsE
 /// ADR-0039 D2: そのタスクが属する案件の作業場所（`projects.workspace`）。案件に属さない・案件が
 /// 作業場所を決めていないなら `None`（従来どおり、子は親の workspace を継ぐ）。ストアの読み取りだけ。
 pub fn project_workspace(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
 ) -> Result<Option<WorkspaceSpec>, OpsError> {
     let Some(project_id) = task.project_id else {
@@ -135,7 +136,7 @@ pub fn project_workspace(
 /// ADR-0043 D1 / D2: そのタスクが属する案件のリポジトリ（primary が先頭）。案件に属さない・
 /// リポジトリを 1 つも登録していない案件では空。ストアの読み取りだけ。
 pub fn project_repos(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
 ) -> Result<Vec<task_core::ProjectRepo>, OpsError> {
     let Some(project_id) = task.project_id else {
@@ -149,7 +150,7 @@ pub fn project_repos(
 /// ときの不整合は `task_core::validate_each` が拒否する）。
 #[allow(clippy::too_many_arguments)]
 pub fn plan_delegation(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     parent: &Task,
     proposals: &[DelegateTask],
     already_delegated_this_run: usize,
@@ -313,7 +314,7 @@ pub fn plan_delegation(
 }
 
 /// 親の子のうち、まだ範囲を担っているもの（failed / cancelled 以外。done・running・ready・draft・blocked）。
-pub fn live_children(store: &dyn TaskStore, parent: &Task) -> Result<Vec<Task>, OpsError> {
+pub fn live_children(store: &SqliteStore, parent: &Task) -> Result<Vec<Task>, OpsError> {
     Ok(store
         .children(parent.id)?
         .into_iter()
@@ -376,7 +377,7 @@ pub enum ChildrenPlan {
 /// 人が認めなかったものがあれば `Err`。
 #[allow(clippy::too_many_arguments)]
 pub fn plan_children(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     parent: &Task,
     children: &[task_core::ExecutionChildSpec],
     roles: &[RoleSpec],
@@ -449,7 +450,7 @@ pub fn plan_children(
 /// （重複なし）を返す。人が認めなかったものがあれば `Err`。親に担当が無い・部署が引けないなら空。
 /// ストアの読み取りだけ（LLM なし）。
 pub fn cross_department_questions(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     parent: &Task,
     tasks: &[Task],
 ) -> Result<Vec<String>, String> {

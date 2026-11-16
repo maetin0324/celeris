@@ -225,7 +225,10 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub(super) fn repo_create_impl(&self, repo: &ProjectRepo) -> Result<(), StoreError> {
+    // ---- ADR-0043 D1（Phase 52）: 案件のリポジトリ（`project_repos`）----
+    /// 案件のリポジトリを 1 件作る。`repos::validate_upsert` に落ちれば `StoreError::Repo`（API は 422）。
+    /// `is_primary` を立てた行を作ると、同じ案件の他の行の `is_primary` は落ちる（1 案件に 1 つ）。
+    pub fn repo_create(&self, repo: &ProjectRepo) -> Result<(), StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         Self::repo_create_tx(&tx, repo)?;
@@ -261,18 +264,17 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub(super) fn repo_get_impl(&self, id: RepoId) -> Result<Option<ProjectRepo>, StoreError> {
+    pub fn repo_get(&self, id: RepoId) -> Result<Option<ProjectRepo>, StoreError> {
         self.with_read_conn(|conn| Self::repo_get_tx(conn, id))
     }
 
-    pub(super) fn repo_list_impl(
-        &self,
-        project_id: ProjectId,
-    ) -> Result<Vec<ProjectRepo>, StoreError> {
+    /// その案件のリポジトリ（primary が先、あとは作った順）。
+    pub fn repo_list(&self, project_id: ProjectId) -> Result<Vec<ProjectRepo>, StoreError> {
         self.with_read_conn(|conn| Self::repo_list_tx(conn, project_id))
     }
 
-    pub(super) fn repo_update_impl(&self, repo: &ProjectRepo) -> Result<bool, StoreError> {
+    /// 既存の 1 件を差し替える（`id` と `project_id` は変えない）。無い id は `Ok(false)`。
+    pub fn repo_update(&self, repo: &ProjectRepo) -> Result<bool, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let out = Self::repo_update_tx(&tx, repo)?;
@@ -306,7 +308,8 @@ impl SqliteStore {
         Ok(true)
     }
 
-    pub(super) fn repo_delete_impl(&self, id: RepoId) -> Result<bool, StoreError> {
+    /// 消す。未終端のタスクが参照していれば `StoreError::InUse`（API は 409）。無い id は `Ok(false)`。
+    pub fn repo_delete(&self, id: RepoId) -> Result<bool, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let out = Self::repo_delete_tx(&tx, id)?;
@@ -346,7 +349,8 @@ impl SqliteStore {
         Ok(true)
     }
 
-    pub(super) fn repo_set_primary_impl(&self, id: RepoId) -> Result<bool, StoreError> {
+    /// その案件の primary をこの行にする。無い id は `Ok(false)`。
+    pub fn repo_set_primary(&self, id: RepoId) -> Result<bool, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let Some(repo) = Self::repo_get_tx(&tx, id)? else {
@@ -362,7 +366,8 @@ impl SqliteStore {
         Ok(true)
     }
 
-    pub(super) fn repo_active_tasks_impl(&self, id: RepoId) -> Result<Vec<TaskId>, StoreError> {
+    /// そのリポジトリを参照している未終端のタスク（`DELETE` の 409 の理由に使う）。
+    pub fn repo_active_tasks(&self, id: RepoId) -> Result<Vec<TaskId>, StoreError> {
         self.with_read_conn(|conn| Self::repo_active_tasks_tx(conn, id))
     }
 }

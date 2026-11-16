@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use task_core::{
     Budget, Check, Criterion, RepoId, SqliteStore, Status, Task, TaskId, TaskKind,
-    TaskRepoIntegrationStatus, TaskStore, Tier, WorkspaceSpec,
+    TaskRepoIntegrationStatus, Tier, WorkspaceSpec,
 };
 use task_ops::stranded::{self, BranchRecord, MergeRequest};
 use time::OffsetDateTime;

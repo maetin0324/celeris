@@ -3,7 +3,7 @@
 use rusqlite::Connection;
 use time::OffsetDateTime;
 
-use super::{SqliteStore, StoreError, TaskStore};
+use super::{SqliteStore, StoreError};
 use crate::model::WorkspaceSpec;
 use crate::org::ProjectId;
 use crate::repos::{ProjectRepo, RepoError, RepoId, RepoKind, RepoRun, RepoSync};

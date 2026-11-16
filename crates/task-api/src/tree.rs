@@ -16,7 +16,7 @@ use std::path::{Component, Path, PathBuf};
 use axum::http::StatusCode;
 use axum::routing::get;
 use task_core::local_machine::WorkspaceRoots;
-use task_core::{Task, TaskStore};
+use task_core::{SqliteStore, Task};
 use task_ops::workspace::{WorktreeMarker, WorktreeMarkerRepo};
 
 use crate::handlers::{ApiResult, Params, json_response};
@@ -38,7 +38,7 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
 /// そのタスクの目印（`worktree.json`）。作業ツリーを持たないタスクは 404。
 /// 足回りの場所は `WorkspaceRoots` が task ごとに解く（ADR 2026-10-14-local-machine-settings D5）。
 pub(crate) fn marker_of(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     roots: &WorkspaceRoots,
     task: &Task,
 ) -> Result<WorktreeMarker, ApiProblem> {

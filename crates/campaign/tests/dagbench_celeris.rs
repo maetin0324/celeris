@@ -20,7 +20,7 @@ use celeris_campaign::{
     },
 };
 use serde_json::Value;
-use task_core::{Status, TaskId, TaskStore, cluster_job::ClusterJobWaitState};
+use task_core::{SqliteStore, Status, TaskId, cluster_job::ClusterJobWaitState};
 
 /// task-api の実 router への同期の Transport（要求ごとに専用 thread の runtime で oneshot する）。
 struct RouterTransport(axum::Router);
@@ -64,7 +64,7 @@ struct Outcome {
     spec: RunSpec,
     workers: Vec<WorkerEntry>,
     ext: Vec<Entry>,
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     tasks: Vec<TaskId>,
     logical_end: u64,
 }
@@ -76,7 +76,7 @@ fn run_point(scenario: &str, point: &str) -> Outcome {
     let out = env.dir.path().join("dagbench");
     std::fs::create_dir_all(&out).unwrap();
     let paths = Paths::under(&env.db_path, &out);
-    let store: Arc<dyn TaskStore> = Arc::new(task_core::SqliteStore::open(&env.db_path).unwrap());
+    let store: Arc<SqliteStore> = Arc::new(task_core::SqliteStore::open(&env.db_path).unwrap());
     let transport = RouterTransport(env.router());
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(4)

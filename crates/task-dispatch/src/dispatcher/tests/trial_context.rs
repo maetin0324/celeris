@@ -95,7 +95,7 @@ fn run_with_canaries(trial: bool) -> Fixture {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {
         let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
-        let store: Arc<dyn TaskStore> = sqlite.clone();
+        let store: Arc<SqliteStore> = sqlite.clone();
         let mut se = org_node_of(NODE, Some("engineering"), OrgKind::Section, None);
         se.profile.skills_mounts = vec!["canary-skill".into()];
         se.profile.knowledge = vec![task_core::KnowledgeMount::kb("user")];

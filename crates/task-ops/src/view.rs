@@ -7,12 +7,13 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::time::Duration;
+use task_core::TaskQuery;
 
 use schemars::JsonSchema;
 use serde::Serialize;
 use task_core::{
-    Check, Event, EventRow, ListFilter, ListOrder, RunRole, Status, Task, TaskId, TaskKind,
-    TaskStore, Tier, Usage, WorkspaceSpec,
+    Check, Event, EventRow, ListFilter, ListOrder, RunRole, SqliteStore, Status, Task, TaskId,
+    TaskKind, Tier, Usage, WorkspaceSpec,
 };
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -150,7 +151,7 @@ pub struct TaskStatusCounts {
     pub counts_by_status: BTreeMap<String, u64>,
 }
 
-pub fn task_status_counts(store: &dyn TaskStore) -> Result<TaskStatusCounts, OpsError> {
+pub fn task_status_counts(store: &SqliteStore) -> Result<TaskStatusCounts, OpsError> {
     Ok(TaskStatusCounts {
         counts_by_status: store
             .count_by_status()?
@@ -341,7 +342,7 @@ pub struct ClusterJobWaitView {
 
 /// ADR-0090 D5: task の `waiting` の wait（新しいもの）を GUI・API の形にする。
 pub fn active_cluster_job_wait(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
 ) -> Result<Option<ClusterJobWaitView>, OpsError> {
     let Some(wait) = store
@@ -1143,7 +1144,7 @@ pub fn runs(rows: &[EventRow]) -> Vec<RunSummary> {
 
 /// Fill selection from the runs index after event-based summaries have been assembled.
 pub fn run_selections(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
 ) -> Result<HashMap<String, RunSelectionView>, OpsError> {
     Ok(store
@@ -1167,7 +1168,7 @@ pub fn run_selections(
 /// ADR-0072 D20（Phase E5）: `run_id` → WorkUnit の `key`。`work_units`/`runs` の派生索引から
 /// 引く（計画の無い Task なら空の map）。`runs()` の後段で `RunSummary.work_unit` を埋めるのに使う。
 pub fn run_work_unit_keys(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
 ) -> Result<HashMap<String, String>, OpsError> {
     let units = store.work_units_for(task_id)?;
@@ -1204,7 +1205,7 @@ pub fn timers(task: &Task, rows: &[EventRow], ctx: &ViewContext, now: OffsetDate
 
 /// `docs/api/v1/api.md` §3.3。
 pub fn task_summary(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     ctx: &ViewContext,
     memory: &crate::wait::MemoryWaits,
@@ -1234,7 +1235,7 @@ const RUN_STATE_CURSOR: &str = "rs:";
 /// `run_state` があれば、`waits` を組んでから絞って位置で頁を切る（対象は ready／非終端に限るので件数は小さい）。
 #[allow(clippy::too_many_arguments)]
 pub fn task_list(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     filter: &ListFilter,
     order: ListOrder,
     cursor: Option<&str>,
@@ -1348,7 +1349,7 @@ pub fn task_list(
 
 /// `docs/api/v1/api.md` §3.5。
 pub fn task_detail(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     ctx: &ViewContext,
     memory: &crate::wait::MemoryWaits,
@@ -1651,8 +1652,8 @@ pub fn attach_integrations(
 }
 
 /// ADR-0079 D13（Phase R5a）: `task` の dispatch を subtree の一時停止で止めている task（自分か、`paused_at` を持つ
-/// 一番近い祖先。`parent_id`、無ければ `tree.parent_unit` を辿る。`TaskStore::ready_tasks` と同じ鎖）。
-pub fn paused_by(store: &dyn TaskStore, task: &Task) -> Result<Option<TaskId>, OpsError> {
+/// 一番近い祖先。`parent_id`、無ければ `tree.parent_unit` を辿る。`SqliteStore::ready_tasks` と同じ鎖）。
+pub fn paused_by(store: &SqliteStore, task: &Task) -> Result<Option<TaskId>, OpsError> {
     const MAX_ANCESTRY: usize = 32;
     let parent_of = |t: &Task| {
         t.parent_id.or_else(|| {
@@ -1688,7 +1689,7 @@ pub fn paused_by(store: &dyn TaskStore, task: &Task) -> Result<Option<TaskId>, O
 fn task_failure(
     task: &Task,
     events: &[(u64, Event)],
-    store: &dyn TaskStore,
+    store: &SqliteStore,
 ) -> Result<Option<FailureSummary>, OpsError> {
     if task.status != Status::Failed {
         return Ok(None);
@@ -1705,7 +1706,7 @@ fn task_failure(
 /// ADR-0079 D11（Phase R4a）: Execution 節の段階（[`ExecutionPhase`]）だけ（木の節点の表示用。
 /// `GET /tasks/{id}/task-tree`）。Execution 節を持たない task は `None`。
 pub fn execution_phase_of(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     events: &[(u64, Event)],
 ) -> Result<Option<ExecutionPhase>, OpsError> {
@@ -1715,7 +1716,7 @@ pub fn execution_phase_of(
 /// ADR-0072 D19/D20（Phase E5）: Execution 節の組み立て。events に E-phase 由来の活動が 1 件も
 /// 無ければ `None`（D23 の後方互換。既存の古いタスクの詳細を壊さない）。
 fn build_execution_view(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     events: &[(u64, Event)],
     now: OffsetDateTime,

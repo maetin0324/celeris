@@ -4,8 +4,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use task_core::feed::{NoticeKind, NoticeQuery, NoticeStore};
-use task_core::{DiskLevel, DiskWatchStore, SqliteStore};
+use task_core::feed::{NoticeKind, NoticeQuery};
+use task_core::{DiskLevel, SqliteStore};
 use task_ops::human_inbox::{InboxKind, disk_full_item_id};
 use time::OffsetDateTime;
 

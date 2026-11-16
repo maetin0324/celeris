@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn draining_worker_completion_leaves_review_to_the_active_dispatcher() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let dir = tempfile::tempdir().unwrap();
     let task = new_task(
         dir.path(),
@@ -44,7 +44,7 @@ async fn draining_worker_completion_leaves_review_to_the_active_dispatcher() {
 
 #[tokio::test]
 async fn overlapping_dispatchers_share_review_ownership_until_verdict_is_saved() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let dir = tempfile::tempdir().unwrap();
     let mut task = new_task(
         dir.path(),
@@ -134,7 +134,7 @@ async fn overlapping_dispatchers_share_review_ownership_until_verdict_is_saved()
 #[tokio::test]
 async fn done_then_command_review_passes_and_events_are_recorded() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -233,7 +233,7 @@ async fn a_heavy_review_check_takes_the_injected_slot_and_receives_its_path() {
         seen.display()
     );
     assert!(task_worker::check_slots::is_heavy(&cmd));
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -276,7 +276,7 @@ async fn a_heavy_review_check_takes_the_injected_slot_and_receives_its_path() {
 #[tokio::test]
 async fn a_dispatcher_raised_child_failure_question_also_becomes_an_approval() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_org_for_reports(&store);
 
     // 子: 委譲され、走って失敗する（max_retries = 0 なので 1 回で failed）。
@@ -352,7 +352,7 @@ async fn a_dispatcher_raised_child_failure_question_also_becomes_an_approval() {
 #[tokio::test]
 async fn question_blocks_task_and_review_fail_retries_until_budget() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let q = new_task(
         dir.path(),
         Check::Command {
@@ -376,7 +376,7 @@ async fn question_blocks_task_and_review_fail_retries_until_budget() {
 
     // レビュー失敗（存在しないファイル）は max_retries=1 で 2 回実行して failed。
     let dir2 = tempfile::tempdir().unwrap();
-    let store2: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store2: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let f = new_task(
         dir2.path(),
         Check::Command {
@@ -415,7 +415,7 @@ async fn question_blocks_task_and_review_fail_retries_until_budget() {
 #[tokio::test]
 async fn invalid_plan_is_retried_with_prior_review_then_children_auto_accepted() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let plan = plan_task(dir.path(), 1);
     store.insert(&plan).unwrap();
     // ADR-0067 D2: `human` チェックには artifacts か知識ベースの参照が要る（この plan.json は
@@ -489,7 +489,7 @@ async fn invalid_plan_is_retried_with_prior_review_then_children_auto_accepted()
 #[tokio::test]
 async fn reviewer_run_usage_is_recorded_in_the_runs_index_and_survives_replay_check() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(dir.path(), Check::Reviewer, 0);
     let task_id = task.id;
     store.insert(&task).unwrap();
@@ -545,7 +545,7 @@ async fn reviewer_run_usage_is_recorded_in_the_runs_index_and_survives_replay_ch
 #[tokio::test]
 async fn reviewer_run_shares_concurrency_and_is_deferred_when_at_capacity() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     // 並列度 1: 実行中のワーカーがいる間は Reviewer run を開始できず、reviewing のまま待つ。
     let r = new_task(dir.path(), Check::Reviewer, 0);
     store.insert(&r).unwrap();
@@ -586,7 +586,7 @@ async fn reviewer_run_shares_concurrency_and_is_deferred_when_at_capacity() {
 #[tokio::test]
 async fn department_reviewer_runs_share_and_continue_one_lead_session() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
 
     let file_adapter = Arc::new(FileAdapter {
@@ -708,7 +708,7 @@ async fn department_reviewer_runs_share_and_continue_one_lead_session() {
 #[tokio::test]
 async fn a_rejected_lead_session_resume_retires_it_and_the_next_review_starts_fresh() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
 
     let adapter = Arc::new(ResumeRejectingReviewAdapter {
@@ -829,7 +829,7 @@ async fn a_rejected_lead_session_resume_retires_it_and_the_next_review_starts_fr
 async fn a_resume_rejection_that_still_produced_a_result_self_heals_and_the_retry_produces_a_verdict()
  {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
 
     let adapter = Arc::new(ResumeRejectingThenSucceedingReviewAdapter {
@@ -947,7 +947,7 @@ async fn a_resume_rejection_that_still_produced_a_result_self_heals_and_the_retr
 /// UUID の新しいセッションを作る。
 #[tokio::test]
 async fn resolve_node_session_self_heals_a_non_uuid_claude_code_session_id() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let d = dispatcher(
         store.clone(),
         Arc::new(FileAdapter {
@@ -1012,7 +1012,7 @@ async fn resolve_node_session_self_heals_a_non_uuid_claude_code_session_id() {
 #[tokio::test]
 async fn human_check_creates_approval_child_and_completes_after_approval() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(dir.path(), Check::Human, 1);
     store.insert(&task).unwrap();
     let adapter = Arc::new(InstantAdapter {
@@ -1066,7 +1066,7 @@ async fn human_check_creates_approval_child_and_completes_after_approval() {
 #[tokio::test]
 async fn rereview_from_failed_reuses_the_approved_human_child_and_only_reruns_the_reviewer() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = new_task(dir.path(), Check::Human, 0);
     task.acceptance.push(Criterion {
         text: "r".into(),
@@ -1148,7 +1148,7 @@ async fn rereview_from_failed_reuses_the_approved_human_child_and_only_reruns_th
 #[tokio::test]
 async fn human_check_approval_child_inherits_the_parents_project_milestone_and_assignee() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = new_task(dir.path(), Check::Human, 1);
     task.project_id = Some(ProjectId::new());
     task.milestone_id = Some(MilestoneId::new());
@@ -1175,7 +1175,7 @@ async fn human_check_approval_child_inherits_the_parents_project_milestone_and_a
 #[tokio::test]
 async fn human_check_fails_task_after_rejection() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(dir.path(), Check::Human, 0);
     store.insert(&task).unwrap();
     let adapter = Arc::new(InstantAdapter {
@@ -1219,7 +1219,7 @@ async fn human_check_fails_task_after_rejection() {
 #[tokio::test]
 async fn approval_gate_blocks_child_dispatch_and_reject_cancels_it() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
 
     let now = OffsetDateTime::now_utc();
     let mut approval = new_task(
@@ -1301,7 +1301,7 @@ async fn approval_gate_blocks_child_dispatch_and_reject_cancels_it() {
 #[tokio::test]
 async fn human_check_requests_a_new_approval_for_each_attempt() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = new_task(dir.path(), Check::Human, 1);
     task.acceptance.push(Criterion {
         text: "second run".into(),
@@ -1312,7 +1312,7 @@ async fn human_check_requests_a_new_approval_for_each_attempt() {
     });
     store.insert(&task).unwrap();
     let task_id = task.id;
-    let approvals = |store: &Arc<dyn TaskStore>| -> Vec<Task> {
+    let approvals = |store: &Arc<SqliteStore>| -> Vec<Task> {
         let mut v: Vec<Task> = store
             .list(None)
             .unwrap()
@@ -1322,7 +1322,7 @@ async fn human_check_requests_a_new_approval_for_each_attempt() {
         v.sort_by_key(|t| t.created_at);
         v
     };
-    let approve = |store: &Arc<dyn TaskStore>, id: TaskId| {
+    let approve = |store: &Arc<SqliteStore>, id: TaskId| {
         store
             .apply_transition(
                 id,
@@ -1379,7 +1379,7 @@ async fn human_check_requests_a_new_approval_for_each_attempt() {
 #[tokio::test]
 async fn reviewer_run_provider_failure_defers_review_without_consuming_attempts() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(dir.path(), Check::Reviewer, 0);
     store.insert(&task).unwrap();
     let adapter = Arc::new(FlakyReviewerAdapter {
@@ -1433,7 +1433,7 @@ async fn reviewer_run_provider_failure_defers_review_without_consuming_attempts(
 #[tokio::test]
 async fn reviewer_run_records_worker_started_and_finished_with_reviewer_role() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let r = new_task(dir.path(), Check::Reviewer, 0);
     store.insert(&r).unwrap();
     let adapter = Arc::new(FileAdapter {
@@ -1489,7 +1489,7 @@ async fn reviewer_run_records_worker_started_and_finished_with_reviewer_role() {
 #[tokio::test]
 async fn a_review_retry_that_eventually_passes_produces_exactly_one_done_report() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_org_for_reports(&store);
     let mut task = new_task(
         dir.path(),
@@ -1530,7 +1530,7 @@ async fn a_review_retry_that_eventually_passes_produces_exactly_one_done_report(
 #[tokio::test]
 async fn reviewer_requeue_limit_fails_reviewer_criteria() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(dir.path(), Check::Reviewer, 0);
     store.insert(&task).unwrap();
     let adapter = Arc::new(AlwaysThrottledAdapter {
@@ -1563,7 +1563,7 @@ async fn reviewer_requeue_limit_fails_reviewer_criteria() {
 #[tokio::test]
 async fn reviewer_infra_failure_retry_limit_fails_reviewer_criteria() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(dir.path(), Check::Reviewer, 0);
     store.insert(&task).unwrap();
     let adapter = Arc::new(AlwaysInfraFailingReviewAdapter {
@@ -1596,7 +1596,7 @@ async fn reviewer_infra_failure_retry_limit_fails_reviewer_criteria() {
 #[tokio::test]
 async fn non_aggregate_parent_stays_reviewing_until_children_finish_then_completes() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let parent = new_task(
         dir.path(),
         Check::Command {
@@ -1687,7 +1687,7 @@ async fn a_question_from_an_assigned_run_creates_a_pending_approval() {
     let dir = tempfile::tempdir().unwrap();
     let workspace_root = dir.path().join("workspaces");
     std::fs::create_dir_all(&workspace_root).unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_conversation_org(store.as_ref());
 
     let task = assigned_task(&workspace_root, "t3", "research-survey");
@@ -1719,7 +1719,7 @@ async fn a_question_from_an_assigned_run_creates_a_pending_approval() {
 #[tokio::test]
 async fn a_format_only_review_failure_is_repaired_without_consuming_attempts() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let long_tail = "ORIGINAL_OBJECTIVE_TAIL_MARKER_".repeat(30); // 960 文字。600 文字の上限より長い。
     let mut task = new_task(
         dir.path(),
@@ -1815,7 +1815,7 @@ async fn a_format_only_review_failure_is_repaired_without_consuming_attempts() {
 #[tokio::test]
 async fn final_review_repair_includes_all_unit_paths_and_task_diff_checks() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let scope_check = "echo 'git diff --quiet HEAD -- crates/' >/dev/null; true";
     let mut task = new_task(
         dir.path(),
@@ -1883,7 +1883,7 @@ async fn final_review_repair_includes_all_unit_paths_and_task_diff_checks() {
 #[tokio::test]
 async fn exceeding_the_per_class_repair_limit_falls_back_to_review_fail() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     // このコマンドは常に失敗する（`.repair-done` を作っても、次に必要な `.repair-done-2` は
     // 作られないので repair 後も不合格のまま = 何度でも repair が起きようとする）。
     // `max_retries = 0`: repair が尽きた後の `ReviewFail` 1 回で即 `failed` になる（scheduler の
@@ -1982,7 +1982,7 @@ fn review_repair_classes(events: &[(u64, Event)]) -> Vec<String> {
 #[tokio::test]
 async fn review_repair_not_evaluated_reviewer_does_not_block_a_format_repair() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = fmt_and_reviewer_task(dir.path());
     store.insert(&task).unwrap();
     let adapter = Arc::new(
@@ -2038,7 +2038,7 @@ async fn review_repair_not_evaluated_reviewer_does_not_block_a_format_repair() {
 #[tokio::test]
 async fn review_repair_not_evaluated_only_skips_the_not_evaluated_reason() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = fmt_and_reviewer_task(dir.path());
     task.status = Status::Reviewing;
     store.insert(&task).unwrap();
@@ -2085,7 +2085,7 @@ async fn review_repair_not_evaluated_only_skips_the_not_evaluated_reason() {
 #[tokio::test]
 async fn plain_task_writes_both_a_worker_and_a_reviewer_row_to_the_runs_index() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     // `Check::Reviewer` を使うので reviewer run が実際に起動する。`review.json` を書かない
     // `InstantAdapter` では reviewer の判定は不合格になるが、`runs` の行は起動した時点で作られる。
     let task = new_task(dir.path(), Check::Reviewer, 0);
@@ -2131,7 +2131,7 @@ async fn plain_task_writes_both_a_worker_and_a_reviewer_row_to_the_runs_index() 
 /// 除く）。決定は回答の時刻順、選んだ選択肢の label と note が入る。回答は root 側から順に並ぶ。
 #[test]
 fn review_human_inputs_collect_answered_decisions_and_answers_of_the_task_and_its_ancestors() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let dir = tempfile::tempdir().unwrap();
     let check = Check::Command {
         cmd: ":".into(),
@@ -2268,7 +2268,7 @@ fn review_human_inputs_collect_answered_decisions_and_answers_of_the_task_and_it
 /// （他の run・reviewer run 自身の検出・他の event は混ぜない。順序は追記順）。
 #[test]
 fn review_policy_violations_collects_only_the_subject_runs_detections() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let dir = tempfile::tempdir().unwrap();
     let task = new_task(
         dir.path(),
@@ -2404,7 +2404,7 @@ async fn reviewer_auth_failure_does_not_consume_the_requeue_limit() {
         }
     }
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(dir.path(), Check::Reviewer, 0);
     store.insert(&task).unwrap();
     let adapter = Arc::new(AuthFailingReviewer {

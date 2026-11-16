@@ -1,8 +1,8 @@
 //! ADR-0056 D4（Phase 78）: `GET /mcp/clients` と `GET /mcp/calls?client=`。
 //!
 //! task-api は `celeris-mcp` を知らない（`crates/celeris-mcp` は `task-dispatch`/`task-worker` を
-//! 知らない側にいるのと同じ境界。ADR-0017 M2）。読むのは `task_core::McpClientStore` /
-//! `task_core::McpCallStore`（migration 0024）だけで、判断は無い（DESIGN 原則 1）。
+//! 知らない側にいるのと同じ境界。ADR-0017 M2）。読むのは `task_core::SqliteStore` /
+//! `task_core::SqliteStore`（migration 0024）だけで、判断は無い（DESIGN 原則 1）。
 //! トークンの値は `McpClient` に元から無い（`Serialize` が `token_hash` を出さない）。
 
 use axum::extract::{RawQuery, State};
@@ -28,7 +28,7 @@ pub struct McpCallsView {
 async fn list_clients(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> ApiResult {
     no_query(&raw)?;
     let items = state
-        .blocking(|store| task_core::McpClientStore::mcp_client_list(store).map_err(store_problem))
+        .blocking(|store| task_core::SqliteStore::mcp_client_list(store).map_err(store_problem))
         .await?;
     Ok(json_response(
         axum::http::StatusCode::OK,
@@ -41,7 +41,7 @@ async fn list_calls(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> A
     let client = query.single("client")?.map(str::to_string);
     let items = state
         .blocking(move |store| {
-            task_core::McpCallStore::mcp_calls_list(store, client.as_deref(), CALLS_LIMIT)
+            task_core::SqliteStore::mcp_calls_list(store, client.as_deref(), CALLS_LIMIT)
                 .map_err(store_problem)
         })
         .await?;

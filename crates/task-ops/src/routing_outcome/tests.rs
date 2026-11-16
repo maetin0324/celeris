@@ -4,7 +4,7 @@ use task_core::model_policy::{LaneCeiling, RoutingRecord, decide_for_task};
 use task_core::model_router::feedback::{
     RequestSourceAttempt, RoutingOutcome, RoutingRequestRecord,
 };
-use task_core::{Event, RunMetrics, SqliteStore, Status, TaskId, TaskStore, Usage};
+use task_core::{Event, RunMetrics, SqliteStore, Status, TaskId, Usage};
 use time::OffsetDateTime;
 
 use super::record_routing_outcomes;

@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use crate::model::TaskId;
-use crate::store::{LocalSettings, StoreError, TaskStore};
+use crate::store::{LocalSettings, SqliteStore, StoreError};
 
 /// 実効値がどこから来たか（応答の `source`。`work_dir_source` の語彙に `cli` を足したもの）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -87,10 +87,7 @@ impl WorkspaceRoots {
     }
 
     /// `effective_root` を store の今の上書きで解く。
-    pub fn effective_root_in<S: TaskStore + ?Sized>(
-        &self,
-        store: &S,
-    ) -> Result<Resolved<PathBuf>, StoreError> {
+    pub fn effective_root_in(&self, store: &SqliteStore) -> Result<Resolved<PathBuf>, StoreError> {
         if self.cli_root.is_some() {
             return Ok(self.effective_root(None));
         }
@@ -99,11 +96,7 @@ impl WorkspaceRoots {
 
     /// task の足回りの root（固定があればそれ、無ければ `unpinned_root`）。CLI の上書きがあれば
     /// 固定を無視して CLI の root。
-    pub fn task_root<S: TaskStore + ?Sized>(
-        &self,
-        store: &S,
-        task_id: &TaskId,
-    ) -> Result<PathBuf, StoreError> {
+    pub fn task_root(&self, store: &SqliteStore, task_id: &TaskId) -> Result<PathBuf, StoreError> {
         if let Some(cli) = &self.cli_root {
             return Ok(cli.clone());
         }
@@ -114,11 +107,7 @@ impl WorkspaceRoots {
     }
 
     /// task の足回り `<root>/<task_id>`。
-    pub fn task_dir<S: TaskStore + ?Sized>(
-        &self,
-        store: &S,
-        task_id: &TaskId,
-    ) -> Result<PathBuf, StoreError> {
+    pub fn task_dir(&self, store: &SqliteStore, task_id: &TaskId) -> Result<PathBuf, StoreError> {
         Ok(self.task_root(store, task_id)?.join(task_id.to_string()))
     }
 
@@ -126,9 +115,9 @@ impl WorkspaceRoots {
     /// root task は実効の root、子 task（`parent_id` あり）は親の root（親に固定が無ければ親が解決される
     /// root）を継ぐ。CLI の上書きがあるときは固定を書かず CLI の root を返す（staging は本番の写しの DB に
     /// 書かない）。固定された root を返す。
-    pub fn pin_task_root<S: TaskStore + ?Sized>(
+    pub fn pin_task_root(
         &self,
-        store: &S,
+        store: &SqliteStore,
         task_id: &TaskId,
         parent_id: Option<&TaskId>,
         now: OffsetDateTime,

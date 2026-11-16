@@ -263,7 +263,7 @@ async fn wu_check_flow(bundled: &CheckerId, kind: &str, variant: &str) -> WuFlow
     let fx = build_fixture(kind, variant, &repo);
     let changed = changed_paths(&repo, &fx);
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(&repo, "true");
     store.insert(&task).unwrap();
     adopt_v2_plan(
@@ -468,11 +468,11 @@ struct Flags {
 }
 
 /// atomic の task（計画なし、reviewing）を fixture の repo 1 つで作る。`flags` が `None` なら既定の
-/// `target_sync::reviewing_task`。案件の題名は `TaskStore` に書き込みの method が無いので、`sqlite`（`store` と
+/// `target_sync::reviewing_task`。案件の題名は `SqliteStore` に書き込みの method が無いので、`sqlite`（`store` と
 /// 同じ DB の handle）の transaction で書く。
 fn review_task(
     repo: &std::path::Path,
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     sqlite: &SqliteStore,
     flags: Option<Flags>,
 ) -> Task {
@@ -538,7 +538,7 @@ async fn review_flow(
     let changed = changed_paths(&repo, &fx);
     let ws = tempfile::tempdir().unwrap();
     let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let store: Arc<SqliteStore> = sqlite.clone();
     let mut task = review_task(&repo, &store, &sqlite, setup.flags);
     if setup.reviewer != Reviewer::None {
         task.acceptance.push(Criterion {
@@ -1287,7 +1287,7 @@ async fn integrated_flow(kind: &str, variant: &str, without_profile: bool) -> In
     };
     let changed = changed_paths(&repo, &fx);
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = parallel_task(&repo, "true");
     // review 前の同期（ADR-0118）と材料は案件の repo（`task.repos`）ごと。案件の repo の無い task は同期せず、材料も
     // 作らない（`NOT_SYNCED` の記録も無い）ので、atomic の試験（`target_sync::reviewing_task`）と同じく案件の repo にする。
@@ -1506,7 +1506,7 @@ struct MultiFlow {
 /// 根拠に blocking の health finding を書く）。
 async fn multi_repo_flow(fixtures: &[(&std::path::Path, &Fixture)], candidates: bool) -> MultiFlow {
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let specs: Vec<(&str, &std::path::Path, task_core::RepoKind)> = ["ts", "rust"]
         .iter()
         .zip(fixtures)

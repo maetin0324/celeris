@@ -1,7 +1,7 @@
 //! ADR-0079 D7（Phase R3a）: 人への決定の要求の一覧・回答・取り下げ・revise（`POST /decisions/{id}/answer` など、
 //! MCP `decision_answer` / `decision_list`、受信箱の「決定」の節）。
 //!
-//! - 回答は 1 トランザクション（`TaskStore::decision_resolve_apply`）: 決定が今も `open` であることを確かめ、
+//! - 回答は 1 トランザクション（`SqliteStore::decision_resolve_apply`）: 決定が今も `open` であることを確かめ、
 //!   `DecisionAnswered`（表の行は store が同じトランザクションで書く）と、待っていた unit の再評価
 //!   （`blocked(decision)` → `pending` / `ready`、取り下げなら `cancelled`）と、効き目の event（replan の依頼 =
 //!   `ExecutionHintSet{replan: true}`、atomic の run への注入 = `Answered`）を積む。
@@ -20,7 +20,7 @@ use task_core::decision::{
     NEEDED_BEFORE_SELF, NEEDED_BEFORE_STAGE_PREFIX,
 };
 use task_core::{
-    Event, ExecutionMode, Task, TaskId, TaskStore, WorkUnitBlockedReason, WorkUnitRow,
+    Event, ExecutionMode, SqliteStore, Task, TaskId, WorkUnitBlockedReason, WorkUnitRow,
     WorkUnitStatus,
 };
 use time::OffsetDateTime;
@@ -120,7 +120,7 @@ pub struct DecisionFilter {
 }
 
 /// `GET /decisions`（`created_at` 昇順）。
-pub fn list(store: &dyn TaskStore, filter: &DecisionFilter) -> Result<DecisionList, OpsError> {
+pub fn list(store: &SqliteStore, filter: &DecisionFilter) -> Result<DecisionList, OpsError> {
     let rows = store.decisions_list(filter.root_id)?;
     let items = rows
         .iter()
@@ -136,7 +136,7 @@ pub fn list(store: &dyn TaskStore, filter: &DecisionFilter) -> Result<DecisionLi
 
 /// `GET /tasks/{id}/decisions`: その task の subtree（その task か子孫が出した決定。`path` にその task を含む）。
 pub fn for_subtree(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
     open: Option<bool>,
 ) -> Result<DecisionList, OpsError> {
@@ -155,12 +155,12 @@ pub fn for_subtree(
 }
 
 /// 未回答の決定の数（`DaemonSnapshot.decisions_open`・受信箱の件数）。決定を出した節点が終端のものは数えない。
-pub fn open_count(store: &dyn TaskStore) -> Result<u32, OpsError> {
+pub fn open_count(store: &SqliteStore) -> Result<u32, OpsError> {
     Ok(u32::try_from(open_rows(store)?.len()).unwrap_or(u32::MAX))
 }
 
 /// 未回答で、決定を出した節点が終端でない行（受信箱・通知の対象）。
-pub fn open_rows(store: &dyn TaskStore) -> Result<Vec<DecisionRow>, OpsError> {
+pub fn open_rows(store: &SqliteStore) -> Result<Vec<DecisionRow>, OpsError> {
     let mut out = Vec::new();
     let mut terminal: BTreeMap<TaskId, bool> = BTreeMap::new();
     for row in store.decisions_list(None)? {
@@ -196,14 +196,14 @@ fn not_open(row: &DecisionRow, action: &str) -> OpsError {
     }
 }
 
-fn get_row(store: &dyn TaskStore, id: &str) -> Result<DecisionRow, OpsError> {
+fn get_row(store: &SqliteStore, id: &str) -> Result<DecisionRow, OpsError> {
     store
         .decision_get(id)?
         .ok_or_else(|| OpsError::DecisionNotFound(id.to_string()))
 }
 
 /// 決定を出した節点（終端なら 409。終端の節点の決定に答えても何も起きない）。
-fn live_node(store: &dyn TaskStore, row: &DecisionRow, action: &str) -> Result<Task, OpsError> {
+fn live_node(store: &SqliteStore, row: &DecisionRow, action: &str) -> Result<Task, OpsError> {
     let node = store
         .get(row.task_id)?
         .ok_or(OpsError::NotFound(row.task_id))?;
@@ -394,7 +394,7 @@ struct Plan {
 
 #[allow(clippy::too_many_arguments)]
 fn plan_effect(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     node: &Task,
     row: &DecisionRow,
     after_row: &DecisionRow,
@@ -482,11 +482,7 @@ fn plan_effect(
 
 /// 節点の中止（`needed_before: [self]` の取り下げ）。木の子なら先に親の unit を `cancelled` にする
 /// （子の中止を失敗として親の replan に写さない）。既に終端なら何もしない。
-fn cancel_node(
-    store: &dyn TaskStore,
-    node_id: TaskId,
-    now: OffsetDateTime,
-) -> Result<(), OpsError> {
+fn cancel_node(store: &SqliteStore, node_id: TaskId, now: OffsetDateTime) -> Result<(), OpsError> {
     let Some(node) = store.get(node_id)? else {
         return Ok(());
     };
@@ -528,7 +524,7 @@ fn cancel_node(
 ///   daemon の決定で `option` 無しは `Validation`（422）。
 /// - 1 トランザクションで `DecisionAnswered` と、待っていた unit の再評価（効き目の表どおり）と効き目の event。
 pub fn answer(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: &str,
     option: Option<&str>,
     note: Option<&str>,
@@ -576,7 +572,7 @@ impl AnswerPlan {
 }
 
 /// 計画を書く（監査なしの経路）。期待した状態でなくなっていれば 409。
-pub fn apply_plan(store: &dyn TaskStore, plan: &AnswerPlan) -> Result<(), OpsError> {
+pub fn apply_plan(store: &SqliteStore, plan: &AnswerPlan) -> Result<(), OpsError> {
     if !store.decision_resolve_apply(
         plan.node_id,
         &plan.decision_id,
@@ -621,7 +617,7 @@ where
 }
 
 pub fn plan_answer(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: &str,
     option: Option<&str>,
     note: Option<&str>,
@@ -664,7 +660,7 @@ pub fn plan_answer(
 
 /// 書いた後の後始末（`self` の取り下げなら節点を中止、訂正なら既にある子へのコメント）と結果。
 pub fn finish_answer(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     plan: AnswerPlan,
     now: OffsetDateTime,
 ) -> Result<DecisionOutcome, OpsError> {
@@ -721,7 +717,7 @@ pub fn finish_answer(
 /// `POST /decisions/{id}/withdraw`（管理系）: 人が決定を取り下げる（`DecisionWithdrawn`）。効き目は選択肢の
 /// `withdraw` と同じ（止めていた unit を取り下げ、`self` なら節点を中止）。`open` でなければ 409。
 pub fn withdraw(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: &str,
     reason: Option<&str>,
     by: &str,
@@ -734,7 +730,7 @@ pub fn withdraw(
 
 /// [`withdraw`] の書き込み計画（読むだけ）。
 pub fn plan_withdraw(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: &str,
     reason: Option<&str>,
     by: &str,
@@ -788,7 +784,7 @@ pub fn plan_withdraw(
 /// 人のコメント（ADR-0044 D2、人を起こさない node のコメント）として新しい答えを届ける。daemon の決定
 /// （limit / leaf_too_large / plan_invalid）は回答の時点で効き目を当てているので revise できない（409）。
 pub fn revise(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: &str,
     option: Option<&str>,
     note: Option<&str>,
@@ -802,7 +798,7 @@ pub fn revise(
 
 /// [`revise`] の書き込み計画（読むだけ）。
 pub fn plan_revise(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: &str,
     option: Option<&str>,
     note: Option<&str>,
@@ -887,7 +883,7 @@ pub struct DecisionInboxItem {
 
 /// 受信箱の「決定」の節（未回答・節点が終端でないもの。古い順）。
 pub fn inbox_items(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     now: OffsetDateTime,
 ) -> Result<Vec<DecisionInboxItem>, OpsError> {
     Ok(open_rows(store)?
@@ -920,7 +916,7 @@ pub fn inbox_items(
 /// ADR-0079 D7（Phase R3a）: `leaf`（WU）の前置きの「人の決定」節に入れる行（その unit が待っていた決定
 /// 〈`needs_decisions`〉と、その unit を名指しした決定〈worker の `self` を含む〉の回答。固定の書式）。
 pub fn leaf_decision_lines(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
     root_id: TaskId,
     unit: &WorkUnitRow,
@@ -943,7 +939,7 @@ pub fn leaf_decision_lines(
 /// ADR-0079 D7（Phase R3a）: 回答済みの run 時の上限（`limit:*` の `raise-once` / `replan`）の件数を種類ごとに
 /// （木全体の上限は木で、節点の replan〈`max_replans`〉は `node` の決定だけ）。daemon が上限に余裕を足すのに使う。
 pub fn limit_allowances(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     root_id: TaskId,
     node: Option<TaskId>,
 ) -> Result<BTreeMap<task_core::TreeLimitKind, u32>, OpsError> {

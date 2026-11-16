@@ -66,7 +66,7 @@ fn pass_reviewer() -> Arc<dyn WorkerAdapter> {
 
 /// 孤児の回収を有効にした active（自分の行を登録する）。`alive` が pid の生死を決める。
 fn active(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     adapter: Arc<dyn WorkerAdapter>,
     test_clock: bool,
     alive: Arc<dyn Fn(u32) -> bool + Send + Sync>,
@@ -108,7 +108,7 @@ fn reviewer_task(dir: &std::path::Path, status: Status) -> Task {
     task
 }
 
-fn insert_with_created(store: &Arc<dyn TaskStore>, task: &Task) {
+fn insert_with_created(store: &Arc<SqliteStore>, task: &Task) {
     store.insert(task).unwrap();
     store
         .append_event(
@@ -124,7 +124,7 @@ fn insert_with_created(store: &Arc<dyn TaskStore>, task: &Task) {
 
 /// 持ち主の居ない reviewer run（`WorkerStarted{role: reviewer}` と `running` の `runs` 行だけ）を足す。
 fn seed_reviewer_run(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     task_id: TaskId,
     started_at: OffsetDateTime,
 ) -> String {
@@ -165,7 +165,7 @@ fn seed_reviewer_run(
     run_id
 }
 
-fn row_status(store: &Arc<dyn TaskStore>, run_id: &str) -> task_core::RunIndexStatus {
+fn row_status(store: &Arc<SqliteStore>, run_id: &str) -> task_core::RunIndexStatus {
     store
         .run_index_get(run_id)
         .unwrap()
@@ -175,7 +175,7 @@ fn row_status(store: &Arc<dyn TaskStore>, run_id: &str) -> task_core::RunIndexSt
 
 /// その run の `WorkerFinished`（outcome, role, end）。
 fn finished(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     task_id: TaskId,
     run_id: &str,
 ) -> Vec<(String, Option<RunRole>, Option<RunEnd>)> {
@@ -196,7 +196,7 @@ fn finished(
         .collect()
 }
 
-fn reviewer_starts(store: &Arc<dyn TaskStore>, task_id: TaskId) -> Vec<String> {
+fn reviewer_starts(store: &Arc<SqliteStore>, task_id: TaskId) -> Vec<String> {
     store
         .events_for(task_id)
         .unwrap()
@@ -212,7 +212,7 @@ fn reviewer_starts(store: &Arc<dyn TaskStore>, task_id: TaskId) -> Vec<String> {
         .collect()
 }
 
-fn running_rows(store: &Arc<dyn TaskStore>) -> Vec<String> {
+fn running_rows(store: &Arc<SqliteStore>) -> Vec<String> {
     store
         .runs_running()
         .unwrap()
@@ -223,7 +223,7 @@ fn running_rows(store: &Arc<dyn TaskStore>) -> Vec<String> {
 
 /// 旧デーモン（`daemon_instances` に行を持つ）が reviewing の task のレビューを始め、reviewer run が
 /// 走っている（返らない）状態まで進める。旧の reviewer run の id を返す。
-async fn old_daemon_reviewing(store: &Arc<dyn TaskStore>, task: &Task) -> (Dispatcher, String) {
+async fn old_daemon_reviewing(store: &Arc<SqliteStore>, task: &Task) -> (Dispatcher, String) {
     store
         .instance_register(&instance(OLD_ID, InstanceRole::Active, OLD_PID))
         .unwrap();
@@ -265,7 +265,7 @@ async fn old_daemon_reviewing(store: &Arc<dyn TaskStore>, task: &Task) -> (Dispa
 #[tokio::test]
 async fn handoff_shutdown_closes_the_old_reviewer_run_and_the_new_active_rereviews() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = reviewer_task(dir.path(), Status::Reviewing);
     insert_with_created(&store, &task);
     let (mut old, old_review) = old_daemon_reviewing(&store, &task).await;
@@ -344,7 +344,7 @@ async fn handoff_shutdown_closes_the_old_reviewer_run_and_the_new_active_rerevie
 #[tokio::test]
 async fn a_crashed_old_daemons_reviewer_run_is_closed_and_the_task_rereviewed() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = reviewer_task(dir.path(), Status::Reviewing);
     insert_with_created(&store, &task);
     let (mut old, old_review) = old_daemon_reviewing(&store, &task).await;
@@ -393,7 +393,7 @@ async fn a_crashed_old_daemons_reviewer_run_is_closed_and_the_task_rereviewed() 
 #[tokio::test]
 async fn a_reviewer_run_not_launched_because_a_check_failed_is_closed() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = new_task(
         dir.path(),
         Check::Command {
@@ -462,7 +462,7 @@ async fn a_reviewer_run_not_launched_because_a_check_failed_is_closed() {
 #[tokio::test]
 async fn startup_closes_an_ownerless_reviewer_run_and_rereviews() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = reviewer_task(dir.path(), Status::Reviewing);
     insert_with_created(&store, &task);
     let stale = seed_reviewer_run(&store, task.id, OffsetDateTime::now_utc());
@@ -498,7 +498,7 @@ async fn startup_closes_an_ownerless_reviewer_run_and_rereviews() {
 #[tokio::test]
 async fn ownerless_runs_are_reconciled_again_after_the_interval() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut d = active(&store, slow_adapter(), true, all_alive());
     d.tick().unwrap();
     // 人の回答待ち（blocked）の task: dispatcher は他に何もしない。
@@ -526,7 +526,7 @@ async fn ownerless_runs_are_reconciled_again_after_the_interval() {
 #[tokio::test]
 async fn an_ownerless_run_is_kept_while_another_instance_lives_until_its_deadline() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut d = active(&store, slow_adapter(), true, all_alive());
     d.config.review_timeout = Duration::from_secs(1000);
     let t0 = clock_now(&d);
@@ -573,7 +573,7 @@ async fn an_ownerless_run_is_kept_while_another_instance_lives_until_its_deadlin
 #[tokio::test]
 async fn a_leased_worker_run_of_a_gone_daemon_is_requeued_by_the_lease_path() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (task_id, run_id) = running_orphan(&store, dir.path(), None, false);
     let mut d = active(&store, slow_adapter(), false, all_alive());
     d.tick().unwrap();
@@ -614,7 +614,7 @@ async fn runs_in_hand_under_a_live_lease_or_of_ineligible_tasks_are_not_closed()
     // (1) 手元のレビュー（期限も照合の間隔も過ぎる。他に生きているインスタンスは無い）。
     {
         let dir = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let task = reviewer_task(dir.path(), Status::Reviewing);
         insert_with_created(&store, &task);
         let started = Arc::new(tokio::sync::Notify::new());
@@ -649,7 +649,7 @@ async fn runs_in_hand_under_a_live_lease_or_of_ineligible_tasks_are_not_closed()
     // (2) 生きている draining の他のインスタンスの lease の下の worker run（期限は過ぎている）。
     {
         let dir = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let (task_id, run_id) = running_orphan(&store, dir.path(), None, false);
         store
             .instance_register(&instance(OLD_ID, InstanceRole::Draining, OLD_PID))
@@ -669,7 +669,7 @@ async fn runs_in_hand_under_a_live_lease_or_of_ineligible_tasks_are_not_closed()
     // (3) 面倒を見ない task、(4) 孤児の回収の設定が無い dispatcher（他に生きているインスタンスは無い）。
     {
         let dir = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let task = reviewer_task(dir.path(), Status::Blocked);
         insert_with_created(&store, &task);
         let stale = seed_reviewer_run(&store, task.id, OffsetDateTime::now_utc());
@@ -696,7 +696,7 @@ async fn runs_in_hand_under_a_live_lease_or_of_ineligible_tasks_are_not_closed()
 #[tokio::test]
 async fn a_dispatcher_not_accepting_new_work_does_not_reconcile_until_it_becomes_active() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = reviewer_task(dir.path(), Status::Blocked);
     insert_with_created(&store, &task);
     let stale = seed_reviewer_run(&store, task.id, OffsetDateTime::now_utc());
@@ -720,7 +720,7 @@ async fn a_dispatcher_not_accepting_new_work_does_not_reconcile_until_it_becomes
 /// 同じ instance の中でレビューを始め、reviewer run が走っている（返らない）状態まで進める。
 /// 他の instance は無い。reviewer run の id を返す。
 async fn self_reviewing(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     task: &Task,
     test_clock: bool,
 ) -> (Dispatcher, String) {
@@ -757,7 +757,7 @@ async fn self_reviewing(
 #[tokio::test]
 async fn a_review_that_ended_without_a_verdict_is_closed_and_redone_in_the_same_instance() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = reviewer_task(dir.path(), Status::Reviewing);
     insert_with_created(&store, &task);
     let (mut d, lost_run) = self_reviewing(&store, &task, false).await;
@@ -815,7 +815,7 @@ async fn a_review_that_ended_without_a_verdict_is_closed_and_redone_in_the_same_
 #[tokio::test]
 async fn a_review_that_outlives_its_deadline_is_stopped_and_redone_in_the_same_instance() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = reviewer_task(dir.path(), Status::Reviewing);
     insert_with_created(&store, &task);
     let (mut d, stuck_run) = self_reviewing(&store, &task, false).await;

@@ -7,7 +7,7 @@
 //! `declared: false` で登録する。何度流しても同じ結果（`(path, sha256)` の重複規則）。LLM も daemon も使わない。
 
 use task_core::local_machine::WorkspaceRoots;
-use task_core::{ArtifactRef, Event, StoreError, Task, TaskId, TaskStore, WorkspaceSpec};
+use task_core::{ArtifactRef, Event, SqliteStore, StoreError, Task, TaskId, WorkspaceSpec};
 
 use super::{registered_keys, scan_undeclared_artifacts_in_dir};
 
@@ -22,7 +22,7 @@ pub struct BackfillReport {
 }
 
 /// 補完の対象になる task（`--task` 無しのとき）: remote（cluster）の task 全部。
-pub fn default_targets(store: &dyn TaskStore) -> Result<Vec<Task>, StoreError> {
+pub fn default_targets(store: &SqliteStore) -> Result<Vec<Task>, StoreError> {
     let mut tasks: Vec<Task> = store
         .list(None)?
         .into_iter()
@@ -33,7 +33,7 @@ pub fn default_targets(store: &dyn TaskStore) -> Result<Vec<Task>, StoreError> {
 }
 
 /// その task の最後の run の id（`runs` 索引の `started_at` 最新 → `WorkerStarted` の最後 → 空文字）。
-pub fn latest_run_id(store: &dyn TaskStore, task_id: TaskId, events: &[Event]) -> String {
+pub fn latest_run_id(store: &SqliteStore, task_id: TaskId, events: &[Event]) -> String {
     if let Ok(rows) = store.runs_for_task(task_id)
         && let Some(last) = rows.iter().max_by(|a, b| {
             a.started_at
@@ -57,7 +57,7 @@ pub fn latest_run_id(store: &dyn TaskStore, task_id: TaskId, events: &[Event]) -
 /// 解く。`dry_run` なら登録しない。
 /// 作業場所の写しが無ければ空（エラーにしない。写しが消えた task は補完できない）。
 pub fn backfill_task(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     roots: &WorkspaceRoots,
     dry_run: bool,

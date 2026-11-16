@@ -9,7 +9,7 @@ use common::cos_ops::{audit_events, cos_bearer, db};
 use common::*;
 use serde_json::{Value, json};
 use task_core::chat::triage::CosTriageSource;
-use task_core::{Check, Criterion, Event, Status, TaskId, TaskKind, TaskStore, Trigger};
+use task_core::{Check, Criterion, Event, Status, TaskId, TaskKind, Trigger};
 use time::OffsetDateTime;
 
 /// A ready task judged by a reviewer, failing on its first rejected review.

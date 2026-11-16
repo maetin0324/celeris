@@ -23,7 +23,7 @@ use task_core::project_wake::{
     ControllerPhase, ProjectControllerState, ProjectWake, ProjectWakeKind,
 };
 use task_core::store::SqliteStore;
-use task_core::{Event, Status, TaskStore};
+use task_core::{Event, Status};
 use task_ops::project_budget::{self as budget, BudgetLimits};
 use time::OffsetDateTime;
 

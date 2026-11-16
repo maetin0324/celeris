@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 use task_core::{
     Check, Criterion, DaemonMode, Event, InstanceRole, Project, ProjectId, ProjectRepo,
     ProjectStatus, RepoId, RepoKind, RepoRef, RepoRun, SharedRole, SqliteStore, Status, Task,
-    TaskId, TaskKind, TaskStore, WorkspaceSpec,
+    TaskId, TaskKind, WorkspaceSpec,
 };
 use task_ops::workspace::{WorktreeMarker, WorktreeMarkerRepo, write_marker};
 use time::OffsetDateTime;

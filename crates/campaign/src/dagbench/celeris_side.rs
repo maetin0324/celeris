@@ -11,7 +11,7 @@
 //!   `{"type":"wait","kind":"cluster_job"}` と同じ終端）を返す。continuation の run が結果を消費する。
 //! - R3 poller の差し替え口: `Dispatcher::set_cluster_job_poller` に ext-sim を差し、`qstat -xf` 相当の出力を
 //!   返して既存の PBS parser を通す（実クラスタ・ssh には出ない）。
-//! - R13 events / runs / SQLite 永続: 状態の真実は一時 DB の SQLite（`TaskStore`）。driver は読むだけ。
+//! - R13 events / runs / SQLite 永続: 状態の真実は一時 DB の SQLite（`SqliteStore`）。driver は読むだけ。
 //! - stub worker: `tests/celeris_exec.rs`・dispatcher 試験（`dispatcher/tests/cluster_job_wait.rs` の
 //!   `ScriptedAdapter`・`TreeWaitAdapter`）と同じ「台本の `WorkerAdapter`」。LLM 呼び出しは 0。
 //! - repo health: dagbench は health を測らない（測るのは DAG の実行・待ち・障害復旧）。一時 repo の base には
@@ -40,7 +40,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use task_core::local_machine::WorkspaceRoots;
-use task_core::{Status, TaskId, TaskStore};
+use task_core::{SqliteStore, Status, TaskId};
 use task_dispatch::{
     ClusterSpec, ContainersRuntimeConfig, DispatchConfig, Dispatcher, ExecutionConfig,
     KnowledgeRuntimeConfig,
@@ -855,7 +855,7 @@ pub struct DriveReport {
 pub struct CelerisSide {
     shared: Arc<Shared>,
     paths: Paths,
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     dispatcher: Dispatcher,
     submitted: Vec<CampaignResult>,
     /// 外部 push の通知窓口（測定用の最小フック。無ければ従来どおり poll）。
@@ -877,7 +877,7 @@ impl CelerisSide {
     }
 
     /// `store` は `paths.db` を開いた SQLite（task-api の router と同じ file）。
-    pub fn new(spec: RunSpec, paths: Paths, store: Arc<dyn TaskStore>) -> Result<Self, String> {
+    pub fn new(spec: RunSpec, paths: Paths, store: Arc<SqliteStore>) -> Result<Self, String> {
         Self::with_faults(spec, paths, store, vec![], None)
     }
 
@@ -889,7 +889,7 @@ impl CelerisSide {
     pub fn with_faults(
         spec: RunSpec,
         paths: Paths,
-        store: Arc<dyn TaskStore>,
+        store: Arc<SqliteStore>,
         faults: Vec<FaultSpec>,
         stop_hook: Option<StopHook>,
     ) -> Result<Self, String> {
@@ -916,7 +916,7 @@ impl CelerisSide {
     pub fn with_backend(
         spec: RunSpec,
         paths: Paths,
-        store: Arc<dyn TaskStore>,
+        store: Arc<SqliteStore>,
         mut ext: Box<dyn ExtBackend + Send>,
     ) -> Result<Self, String> {
         std::fs::create_dir_all(&paths.workspaces).map_err(|e| e.to_string())?;
@@ -1410,7 +1410,7 @@ impl Resume {
 
 /// この制御 process を `daemon_instances` に active として載せ、既存の孤児回収（R4）を有効にする。
 /// SIGKILL された前の制御 process の行は pid が死んでいるので「持ち主の居ない run」と判定される。
-fn register_instance(d: &mut Dispatcher, store: &Arc<dyn TaskStore>) -> Result<(), String> {
+fn register_instance(d: &mut Dispatcher, store: &Arc<SqliteStore>) -> Result<(), String> {
     let pid = std::process::id();
     let now = time::OffsetDateTime::now_utc();
     let instance_id = format!("dagbench-{pid}-{}", now.unix_timestamp_nanos());
@@ -1475,7 +1475,7 @@ const QUIESCENT_TICKS: u32 = 3;
 const TICK_GAP: Duration = Duration::from_millis(10);
 
 /// 既存の公開口だけで Dispatcher を組む（本体側の口は増やさない）。
-fn build_dispatcher(shared: &Arc<Shared>, paths: &Paths, store: Arc<dyn TaskStore>) -> Dispatcher {
+fn build_dispatcher(shared: &Arc<Shared>, paths: &Paths, store: Arc<SqliteStore>) -> Dispatcher {
     use task_core::llm_route::{CandidateKey, HarnessRule, HarnessSpec, Registry, SourceSpec};
     let slots = shared.spec.scenario.resources.worker_slots;
     let mut execution = ExecutionConfig {

@@ -8,14 +8,14 @@ use crate::common;
 use common::cos_ops::db;
 use common::*;
 use serde_json::{Value, json};
-use task_core::approval::{Approval, ApprovalId, ApprovalStore, StandingRule, StandingRuleId};
+use task_core::approval::{Approval, ApprovalId, StandingRule, StandingRuleId};
 use task_core::chat::triage::CosTriageSource;
 use task_core::chat::{ChatOpenThreadRequest, ChatPostMessageRequest, ChatSendMode};
 use task_core::decision::{
     CostOfReversal, DecisionKind, DecisionOption, DecisionOrigin, DecisionPathEntry,
     DecisionRaisedBy, DecisionRequest, DecisionStatus,
 };
-use task_core::{Event, Status, TaskKind, TaskStore};
+use task_core::{Event, Status, TaskKind};
 use time::{Duration, OffsetDateTime};
 
 fn at(secs: i64) -> OffsetDateTime {

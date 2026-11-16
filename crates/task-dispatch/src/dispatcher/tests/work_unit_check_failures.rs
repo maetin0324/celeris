@@ -80,7 +80,7 @@ impl WorkerAdapter for FixOnFeedbackAdapter {
 }
 
 fn adopt_single_checked_unit(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     task_id: TaskId,
     key: &str,
     checks: Vec<task_core::WorkUnitCheck>,
@@ -118,7 +118,7 @@ fn adopt_single_checked_unit(
 #[tokio::test]
 async fn a_failed_work_unit_check_is_recorded_and_handed_to_the_next_run() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -259,7 +259,7 @@ async fn a_failed_work_unit_check_is_recorded_and_handed_to_the_next_run() {
 #[tokio::test]
 async fn a_work_unit_whose_check_keeps_failing_replans_with_the_failed_check_as_the_reason() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {

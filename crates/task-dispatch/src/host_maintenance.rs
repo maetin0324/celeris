@@ -14,10 +14,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
+use task_core::OrgDirectory;
 
 use task_core::local_machine::WorkspaceRoots;
 use task_core::model::TargetSweepMode;
-use task_core::{Event, Status, StoreError, Task, TaskId, TaskStore, Trigger, WorkspaceSpec};
+use task_core::{Event, SqliteStore, Status, StoreError, Task, TaskId, Trigger, WorkspaceSpec};
 use task_ops::derive::last_run_id;
 use task_worker::scratch::{AdoptCandidate, ScratchSettings};
 use task_worker::target_sweep::SweepParams;
@@ -34,7 +35,7 @@ const CODING_GENRE: &str = "coding";
 
 /// owner の外の値（store・config の値・注入時計・`--mode verify` の印）。`Dispatcher` の入口が組んで渡す。
 pub(crate) struct MaintenanceInputs<'a> {
-    pub(crate) store: &'a Arc<dyn TaskStore>,
+    pub(crate) store: &'a Arc<SqliteStore>,
     pub(crate) scratch: &'a ScratchSettings,
     pub(crate) shared_build_cache: bool,
     pub(crate) build_cache_dir: &'a Path,
@@ -1130,7 +1131,7 @@ impl<C> HostMaintenance<C> {
 }
 
 /// seed の対象: 登録された全案件の local の git repo（path と設定の既定ブランチ）。
-fn seed_repos(store: &dyn TaskStore) -> Vec<(PathBuf, Option<String>)> {
+fn seed_repos(store: &SqliteStore) -> Vec<(PathBuf, Option<String>)> {
     let projects = match store.project_list() {
         Ok(p) => p,
         Err(e) => {

@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use task_core::{AccountAdapter, Event, HarnessErrorClass, Lease, TaskId, TaskStore, Trigger};
+use task_core::{AccountAdapter, Event, HarnessErrorClass, Lease, SqliteStore, TaskId, Trigger};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use tokio::task::JoinHandle;
@@ -379,7 +379,7 @@ impl<S> RunSupervisor<S> {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn release_lease(
         &mut self,
-        store: &dyn TaskStore,
+        store: &SqliteStore,
         task_id: TaskId,
         expected: &Lease,
         verdict: &ReclaimVerdict,

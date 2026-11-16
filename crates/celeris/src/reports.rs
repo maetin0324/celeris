@@ -13,10 +13,12 @@
 //! まとめが失敗し続けても tick ごとに新しいタスクが積み上がることはない。
 
 use serde::Deserialize;
+use task_core::OrgDirectory;
+use task_core::TaskQuery;
 use task_core::report::{self, Report};
 use task_core::{
-    Budget, GenreSpec, ListFilter, ListOrder, OrgNode, ProjectId, RoleSpec, Status, StoreError,
-    TaskId, TaskKind, TaskStore,
+    Budget, GenreSpec, ListFilter, ListOrder, OrgNode, ProjectId, RoleSpec, SqliteStore, Status,
+    StoreError, TaskId, TaskKind,
 };
 use task_ops::add::NewTaskSpec;
 use time::OffsetDateTime;
@@ -86,7 +88,7 @@ fn group_by_project(pending: Vec<Report>) -> Vec<(Option<ProjectId>, Vec<Report>
 /// そのノード・その案件のまとめタスクが既に開いている（終端でない）か。
 /// 同じ報告を二重にまとめないための決定的な検査。
 fn has_open_compaction_task(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     node_id: &str,
     project_id: Option<ProjectId>,
 ) -> Result<bool, StoreError> {
@@ -113,7 +115,7 @@ fn has_open_compaction_task(
 /// 終わっていれば、次のまとめを作らない(バックオフ)。まとめの run が失敗し続けても、子の報告がたまる
 /// たびに無限にタスクが作られるのを防ぐ。
 fn has_recently_failed_compaction_task(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     node_id: &str,
     project_id: Option<ProjectId>,
     now: OffsetDateTime,
@@ -193,7 +195,7 @@ fn compaction_spec(
 /// tick ごとに 1 回呼ぶ。閾値を超えた親ノード × 案件ごとに、まとめのタスクを 1 件ずつ作る。
 /// 作ったタスクの id を返す（テストとログのため）。**LLM は呼ばない**。
 pub fn schedule_report_compaction(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     config: &ReportsConfig,
     roles: &[RoleSpec],
     genres: &[GenreSpec],

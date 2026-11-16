@@ -6,7 +6,7 @@ use crate::orphan::{ORPHAN_TAKEOVER_REASON, OrphanTakeover};
 fn fixture() -> (
     tempfile::TempDir,
     tempfile::TempDir,
-    Arc<dyn TaskStore>,
+    Arc<SqliteStore>,
     Task,
     Dispatcher,
 ) {
@@ -18,14 +18,14 @@ fn fixture_with_lease(
 ) -> (
     tempfile::TempDir,
     tempfile::TempDir,
-    Arc<dyn TaskStore>,
+    Arc<SqliteStore>,
     Task,
     Dispatcher,
 ) {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     adopt_v2_plan(&store, task.id, &["build"], vec![v2_wu("a", "build", &[])]);
@@ -58,7 +58,7 @@ fn fixture_with_lease(
     (repo, root, store, task, d)
 }
 
-fn integration(store: &Arc<dyn TaskStore>, task_id: TaskId) -> task_core::WorkUnitRow {
+fn integration(store: &Arc<SqliteStore>, task_id: TaskId) -> task_core::WorkUnitRow {
     store
         .work_units_for(task_id)
         .unwrap()

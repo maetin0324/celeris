@@ -5,7 +5,7 @@ use time::OffsetDateTime;
 
 use super::*;
 use crate::model::TaskId;
-use crate::node_session::{NodeSession, NodeSessionStore, SessionKind, WorkUnitSession};
+use crate::node_session::{NodeSession, SessionKind, WorkUnitSession};
 use crate::store::SqliteStore;
 
 fn at(secs: i64) -> OffsetDateTime {

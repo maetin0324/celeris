@@ -94,7 +94,7 @@ struct Outcome {
 async fn run_lane(canary: bool, ts_side: bool, script: Option<Arc<FakeScript>>) -> Outcome {
     let ws = tempfile::tempdir().unwrap();
     let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let store: Arc<SqliteStore> = sqlite.clone();
     let task = if canary {
         let generation = enter_lane_canary(&sqlite);
         task_on_side(ws.path(), &generation, ts_side)
@@ -424,7 +424,7 @@ impl ScriptDomainStore for FlakyRollback {
 async fn rollback_write_failure_treated_as_rust() {
     let ws = tempfile::tempdir().unwrap();
     let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let store: Arc<SqliteStore> = sqlite.clone();
     let generation = enter_lane_canary(&sqlite);
     let flaky = Arc::new(FlakyRollback {
         inner: sqlite.clone(),

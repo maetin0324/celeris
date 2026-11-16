@@ -167,7 +167,7 @@ impl WorkerAdapter for ReductionAdapter {
 }
 
 struct Flow {
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     task: Task,
     adapter: Arc<ReductionAdapter>,
     base: String,
@@ -235,7 +235,7 @@ async fn run(change: Change, reduction: bool, measure_base: Option<&str>) -> Flo
     git_out(repo.path(), &["commit", "-q", "-m", "base"]);
     let base = git_out(repo.path(), &["rev-parse", "HEAD"]);
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (project, repos) =
         project_with_repos(&store, &[("code", repo.path(), task_core::RepoKind::Git)]);
     let mut task = compound_task(repo.path());

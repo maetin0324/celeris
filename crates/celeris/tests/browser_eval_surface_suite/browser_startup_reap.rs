@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use celeris::{Config, InstanceIdentity, instance, start_instance};
-use task_core::{DaemonInstance, InstanceRole, SharedRole, SqliteStore, TaskStore};
+use task_core::{DaemonInstance, InstanceRole, SharedRole, SqliteStore};
 use task_worker::browser_runtime::{RecordedProcess, process_starttime, write_record};
 use time::OffsetDateTime;
 
@@ -53,7 +53,7 @@ fn startup_reaps_dead_instance_and_preserves_live_instance() {
     )
     .unwrap();
     let config = Config::load(&config_path).unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open(&config.db.path).unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open(&config.db.path).unwrap());
     let root = temp.path().join("browser-runtime");
     let dead_dir = root.join("dead-instance");
     let live_dir = root.join("live-instance");

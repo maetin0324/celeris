@@ -121,7 +121,7 @@ fn browser_allowed_domains_execution_plan_children_cannot_exceed_parent() {
 #[test]
 fn plan_children_runs_the_delegation_checks_and_asks_before_crossing_departments() {
     use task_core::OrgKind;
-    use task_core::approval::{Approval, ApprovalId, ApprovalStore, Decision};
+    use task_core::approval::{Approval, ApprovalId, Decision};
     let store = SqliteStore::open_in_memory().unwrap();
     for n in [
         profile_node("cos", None, OrgKind::Secretary, &["conversation"]),

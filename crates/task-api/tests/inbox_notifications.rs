@@ -7,8 +7,8 @@ use task_core::decision::{
     DecisionRaisedBy, DecisionRequest, DecisionStatus,
 };
 use task_core::integration_request::IntegrationRequest;
-use task_core::report::{Report, ReportId, ReportKind, ReportStore};
-use task_core::{Event, NoticeEvent, NoticeKind, NoticeStore, Status, TaskKind, TaskStore};
+use task_core::report::{Report, ReportId, ReportKind};
+use task_core::{Event, NoticeEvent, NoticeKind, Status, TaskKind};
 use time::OffsetDateTime;
 
 #[tokio::test]

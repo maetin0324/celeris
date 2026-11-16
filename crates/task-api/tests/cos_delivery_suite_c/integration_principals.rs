@@ -4,7 +4,7 @@ use common::cos_ops::cos_bearer;
 use common::*;
 use serde_json::json;
 use task_api::{ApiToken, Principal};
-use task_core::{Event, RepoId, Status, TaskKind, TaskStore};
+use task_core::{Event, RepoId, Status, TaskKind};
 
 fn env() -> TestEnv {
     TestEnv::with(EnvOptions {

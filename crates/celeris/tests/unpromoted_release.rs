@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use celeris::{Config, Exit, RunOptions};
-use task_core::{DaemonInstance, InstanceRole, SqliteStore, TaskStore};
+use task_core::{DaemonInstance, InstanceRole, SqliteStore};
 use time::OffsetDateTime;
 use wait::wait_until;
 

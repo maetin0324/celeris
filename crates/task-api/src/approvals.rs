@@ -17,9 +17,7 @@ use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use task_core::approval::{
-    Approval, ApprovalId, ApprovalStore, Decision, StandingRule, StandingRuleId,
-};
+use task_core::approval::{Approval, ApprovalId, Decision, StandingRule, StandingRuleId};
 use task_core::{ProjectId, SqliteStore};
 use task_ops::approval::Scope;
 use time::OffsetDateTime;

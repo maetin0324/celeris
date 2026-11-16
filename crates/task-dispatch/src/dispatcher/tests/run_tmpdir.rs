@@ -74,7 +74,7 @@ impl WorkerAdapter for TmpProbeAdapter {
 /// 1 run 目が終わる（adapter が返り、run の終端処理が済む）まで tick する。
 async fn run_one(fail: bool) -> (Seen, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {

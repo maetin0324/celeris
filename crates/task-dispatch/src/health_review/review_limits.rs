@@ -25,7 +25,7 @@ type Stopped = Result<Option<task_core::Outcome>, DispatchError>;
 
 /// D3.4: acceptance の外の不合格に health の Error・Unavailable があれば、その理由を `; ` でつないだ質問で止める。
 pub(super) fn stop_on_error(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     verdicts: &[Verdict],
     events: &mut Vec<Event>,
@@ -42,11 +42,7 @@ pub(super) fn stop_on_error(
 
 /// D4.3: 今の review の health の Fail が修復の前と同じ指摘の往復なら止める（木の root への 1 件の追記と質問の文は
 /// `check_item::health_repeat_stop`）。
-pub(super) fn stop_on_repeat(
-    store: &dyn TaskStore,
-    task: &Task,
-    events: &mut Vec<Event>,
-) -> Stopped {
+pub(super) fn stop_on_repeat(store: &SqliteStore, task: &Task, events: &mut Vec<Event>) -> Stopped {
     match check_item::health_repeat_stop(store, task, HealthRepeatSite::Review)? {
         Some(question) => block(store, task, question, events).map(Some),
         None => Ok(None),
@@ -56,7 +52,7 @@ pub(super) fn stop_on_repeat(
 /// D4.4: 修復の上限を使い切った。`health_bucket` は health の不合格の bucket（`health:<rule_id>` を `,` で並べたもの。
 /// health でなければ `None` で止めない）。`used` は（修復の数, `max_repairs`, bucket の修復の数, `max_repairs_per_class`）。
 pub(super) fn stop_on_cap(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     health_bucket: Option<&str>,
     used: (usize, u32, usize, u32),
@@ -80,7 +76,7 @@ pub(super) fn stop_on_cap(
 /// review を `Trigger::ReviewBlocked` で止め、受信箱に `question` を 1 件出す。`events`（review の判定の記録）は同じ
 /// transaction に入れる。質問のきっかけの run は判定した run（`ReviewVerdict.run_id`）。
 fn block(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     question: String,
     events: &mut Vec<Event>,

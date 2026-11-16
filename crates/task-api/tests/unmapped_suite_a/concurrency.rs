@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use common::*;
 use serde_json::json;
-use task_core::{SqliteStore, Status, TaskKind, TaskStore, Trigger};
+use task_core::{SqliteStore, Status, TaskKind, Trigger};
 use time::OffsetDateTime;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

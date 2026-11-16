@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, ValueEnum};
-use task_core::{GenreSpec, RoleSpec, TaskId, TaskKind, TaskStore, Tier};
+use task_core::{GenreSpec, RoleSpec, SqliteStore, TaskId, TaskKind, Tier};
 use task_ops::add::{CriterionSpec, NewTaskSpec, build_task_with_roles};
 use time::OffsetDateTime;
 
@@ -192,7 +192,7 @@ fn load_roles_and_genres(
     }
 }
 
-pub fn run(store: &dyn TaskStore, args: AddArgs) -> Result<ExitCode, CliError> {
+pub fn run(store: &SqliteStore, args: AddArgs) -> Result<ExitCode, CliError> {
     let (roles, genres) = load_roles_and_genres(
         args.config.as_ref(),
         args.role.as_deref(),

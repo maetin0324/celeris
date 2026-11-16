@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 use nix::fcntl::{Flock, FlockArg};
 use task_core::local_machine::WorkspaceRoots;
-use task_core::{Status, StoreError, TaskId, TaskStore};
+use task_core::{SqliteStore, Status, StoreError, TaskId};
 use time::OffsetDateTime;
 
 use crate::scratch::{CARGO_LOCK, profile_dirs};
@@ -167,7 +167,7 @@ pub struct FinishedScan {
 /// 消してはいけない理由を返す（`None` = 全員が終端・running の run なし・最後の終端から `after_secs` 経過）。
 /// `repos=[]` の子 task は親の checkout で cargo を走らせるので、子が 1 つでも動いていれば親の target は残す。
 pub fn tree_hold(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     root: &task_core::Task,
     running: &std::collections::HashSet<String>,
     now: OffsetDateTime,
@@ -199,7 +199,7 @@ pub fn tree_hold(
 /// 残すもの（`held`。[`tree_hold`] の理由付き）に分ける（task id の順）。終端でない task は見ない。
 /// 作業場所 `<root>/<task_id>` は `WorkspaceRoots::task_dir` で解く（ADR 2026-10-14-local-machine-settings D5）。
 pub fn scan_finished_task_targets(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     roots: &WorkspaceRoots,
     now: OffsetDateTime,
     after_secs: u64,
@@ -245,7 +245,7 @@ pub fn scan_finished_task_targets(
 /// 終端（done・cancelled・failed）の task とその子孫が全て終端になり、最後の終端から `after_secs` 以上経った
 /// task の作業場所に残る cargo の target（task id の順）。終端でない task は見ない。
 pub fn finished_task_targets(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     roots: &WorkspaceRoots,
     now: OffsetDateTime,
     after_secs: u64,

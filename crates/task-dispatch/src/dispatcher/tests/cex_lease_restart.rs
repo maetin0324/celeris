@@ -70,19 +70,19 @@ fn true_task(dir: &std::path::Path) -> Task {
     )
 }
 
-fn lease_run(store: &Arc<dyn TaskStore>, id: TaskId) -> Option<String> {
+fn lease_run(store: &Arc<SqliteStore>, id: TaskId) -> Option<String> {
     store
         .get(id)
         .unwrap()
         .and_then(|t| t.lease.map(|l| l.worker_run_id))
 }
 
-fn status_of(store: &Arc<dyn TaskStore>, id: TaskId) -> Status {
+fn status_of(store: &Arc<SqliteStore>, id: TaskId) -> Status {
     store.get(id).unwrap().unwrap().status
 }
 
 /// `run_id` の `WorkerFinished` の終わり方（event の数 = 長さ）。
-fn finishes(store: &Arc<dyn TaskStore>, id: TaskId, run_id: &str) -> Vec<Option<RunEnd>> {
+fn finishes(store: &Arc<SqliteStore>, id: TaskId, run_id: &str) -> Vec<Option<RunEnd>> {
     events_of(store, id)
         .into_iter()
         .filter_map(|e| match e {
@@ -92,7 +92,7 @@ fn finishes(store: &Arc<dyn TaskStore>, id: TaskId, run_id: &str) -> Vec<Option<
         .collect()
 }
 
-fn worker_starts(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<String> {
+fn worker_starts(store: &Arc<SqliteStore>, id: TaskId) -> Vec<String> {
     events_of(store, id)
         .into_iter()
         .filter_map(|e| match e {
@@ -102,18 +102,18 @@ fn worker_starts(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<String> {
         .collect()
 }
 
-fn index_status(store: &Arc<dyn TaskStore>, run_id: &str) -> Option<task_core::RunIndexStatus> {
+fn index_status(store: &Arc<SqliteStore>, run_id: &str) -> Option<task_core::RunIndexStatus> {
     store.run_index_get(run_id).unwrap().map(|r| r.status)
 }
 
-fn took_over(store: &Arc<dyn TaskStore>, id: TaskId) -> bool {
+fn took_over(store: &Arc<SqliteStore>, id: TaskId) -> bool {
     events_of(store, id).iter().any(|e| {
         matches!(e, Event::WorkerProgress { msg, .. } if msg.starts_with(ORPHAN_TAKEOVER_REASON))
     })
 }
 
 pub(super) fn wu_transitions(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     id: TaskId,
     key: &str,
 ) -> Vec<(WorkUnitStatus, String)> {
@@ -128,7 +128,7 @@ pub(super) fn wu_transitions(
         .collect()
 }
 
-pub(super) fn wu_row(store: &Arc<dyn TaskStore>, id: TaskId, key: &str) -> task_core::WorkUnitRow {
+pub(super) fn wu_row(store: &Arc<SqliteStore>, id: TaskId, key: &str) -> task_core::WorkUnitRow {
     store
         .work_units_for(id)
         .unwrap()
@@ -170,7 +170,7 @@ async fn drain_until_no_in_flight(d: &mut Dispatcher) -> Option<usize> {
 #[tokio::test]
 async fn cex_stale_holder_late_finish_does_not_overwrite_the_reassigned_run() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = true_task(dir.path());
     let id = task.id;
     store.insert(&task).unwrap();
@@ -257,7 +257,7 @@ async fn cex_stale_holder_late_finish_does_not_overwrite_the_reassigned_run() {
 #[tokio::test]
 async fn cex_orphan_takeover_leaves_the_run_held_in_this_instance() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = true_task(dir.path());
     let id = task.id;
     store.insert(&task).unwrap();
@@ -304,7 +304,7 @@ async fn cex_orphan_takeover_leaves_the_run_held_in_this_instance() {
 #[tokio::test]
 async fn cex_orphan_takeover_leaves_a_run_whose_active_holder_lives() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (id, run_a) = running_orphan(&store, dir.path(), None, false);
     store
         .instance_register(&instance(
@@ -346,7 +346,7 @@ async fn cex_orphan_takeover_leaves_a_run_whose_active_holder_lives() {
 #[tokio::test]
 async fn cex_draining_instance_reclaims_its_expired_lease_without_redispatching() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = true_task(dir.path());
     let id = task.id;
     store.insert(&task).unwrap();
@@ -463,7 +463,7 @@ impl WorkerAdapter for VerdictGate {
 }
 
 /// `WorkerStarted{role: reviewer}` の run id（起きた順）。
-fn reviewer_runs(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<String> {
+fn reviewer_runs(store: &Arc<SqliteStore>, id: TaskId) -> Vec<String> {
     events_of(store, id)
         .into_iter()
         .filter_map(|e| match e {
@@ -478,7 +478,7 @@ fn reviewer_runs(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<String> {
 }
 
 /// `run_id` の `WorkerFinished` の outcome（event の数 = 長さ）。
-fn finish_outcomes(store: &Arc<dyn TaskStore>, id: TaskId, run_id: &str) -> Vec<String> {
+fn finish_outcomes(store: &Arc<SqliteStore>, id: TaskId, run_id: &str) -> Vec<String> {
     events_of(store, id)
         .into_iter()
         .filter_map(|e| match e {
@@ -534,7 +534,7 @@ async fn cex_restart_old_reviewer_pass_after_ownerless_close_is_ignored() {
     const OLD_ID: &str = "01OLDREVIEWER00000000000000";
 
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = new_task(dir.path(), Check::Reviewer, 2);
     task.status = Status::Reviewing;
     let id = task.id;
@@ -690,7 +690,7 @@ async fn cex_restart_old_reviewer_pass_after_ownerless_close_is_ignored() {
 #[tokio::test]
 async fn cex_restart_after_crash_between_wu_and_task_transitions_is_idempotent() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (id, run_a) = running_orphan(&store, dir.path(), None, true);
     let a = wu_row(&store, id, "a");
     let mut done_a = a.clone();
@@ -741,7 +741,7 @@ async fn cex_restart_after_crash_between_wu_and_task_transitions_is_idempotent()
 }
 
 /// `key` の WU の `dependency_ready` の遷移の数。
-pub(super) fn dependency_ready_count(store: &Arc<dyn TaskStore>, id: TaskId, key: &str) -> usize {
+pub(super) fn dependency_ready_count(store: &Arc<SqliteStore>, id: TaskId, key: &str) -> usize {
     wu_transitions(store, id, key)
         .into_iter()
         .filter(|(to, reason)| *to == WorkUnitStatus::Ready && reason == "dependency_ready")
@@ -761,7 +761,7 @@ pub(super) fn dependency_ready_count(store: &Arc<dyn TaskStore>, id: TaskId, key
 #[tokio::test]
 async fn cex_restart_after_wu_done_promotes_dependents_once() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = true_task(dir.path());
     let id = task.id;
     store.insert(&task).unwrap();
@@ -832,7 +832,7 @@ async fn cex_restart_after_wu_done_promotes_dependents_once() {
 #[tokio::test]
 async fn cex_reclosing_a_run_after_worker_finished_does_not_write_twice() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (id, run_a) = running_orphan(&store, dir.path(), None, true);
     // 人の割り込みで Task が Ready に戻り、A の `WorkerFinished` を書いた直後に落ちた（WU a は running のまま）。
     store
@@ -890,7 +890,7 @@ async fn cex_reclosing_a_run_after_worker_finished_does_not_write_twice() {
 #[tokio::test]
 async fn cex_holder_reclosing_an_already_finished_run_does_not_write_twice() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = true_task(dir.path());
     let id = task.id;
     store.insert(&task).unwrap();
@@ -949,7 +949,7 @@ async fn cex_holder_reclosing_an_already_finished_run_does_not_write_twice() {
 }
 
 /// 2 件の WU（同じ工程 build、互いに独立）の v2 計画。`a` に検査 `a_check` があれば付ける。
-fn adopt_pair_plan(store: &Arc<dyn TaskStore>, id: TaskId, a_check: Option<String>) {
+fn adopt_pair_plan(store: &Arc<SqliteStore>, id: TaskId, a_check: Option<String>) {
     let mut a = v2_wu("a", "build", &[]);
     if let Some(cmd) = a_check {
         a.checks = vec![task_core::WorkUnitCheck {
@@ -983,7 +983,7 @@ async fn cex_two_parallel_work_unit_runs_finishing_in_one_tick_lose_no_update() 
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "test -f a.txt && test -f b.txt");
     let id = task.id;
     store.insert(&task).unwrap();
@@ -1050,7 +1050,7 @@ async fn cex_run_finish_and_work_unit_check_finish_in_one_tick() {
     let root = tempfile::tempdir().unwrap();
     let flags = tempfile::tempdir().unwrap();
     let flag = flags.path().join("open");
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "test -f a.txt && test -f b.txt");
     let id = task.id;
     store.insert(&task).unwrap();
@@ -1087,7 +1087,7 @@ async fn cex_run_finish_and_work_unit_check_finish_in_one_tick() {
     // 検査と run を同時に終わらせ、両方の完了が channel に溜まってから 1 回 tick する。
     std::fs::write(&flag, "").unwrap();
     release_held_runs_without_ticking(&adapter).await;
-    let a_checks_done = |store: &Arc<dyn TaskStore>| {
+    let a_checks_done = |store: &Arc<SqliteStore>| {
         events_of(store, id).iter().any(|e| {
             matches!(e, Event::WorkUnitCheckFinished { key, index, total, .. }
                 if key == "a" && index + 1 == *total)
@@ -1142,8 +1142,8 @@ async fn cex_lease_renew_after_expired_snapshot_keeps_the_holder() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("lease.db");
     // 保持者と回収側は同じ DB の別の接続（別の `SqliteStore`）を持つ（同じ DB の 2 instance）。
-    let holder_store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open(&db).unwrap());
-    let reclaim_store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open(&db).unwrap());
+    let holder_store: Arc<SqliteStore> = Arc::new(SqliteStore::open(&db).unwrap());
+    let reclaim_store: Arc<SqliteStore> = Arc::new(SqliteStore::open(&db).unwrap());
     let task = true_task(dir.path());
     let id = task.id;
     holder_store.insert(&task).unwrap();

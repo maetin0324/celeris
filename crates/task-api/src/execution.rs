@@ -18,7 +18,7 @@
 
 use axum::body::Body;
 use axum::http::{HeaderMap, StatusCode};
-use task_core::{ExecutionLimits, TaskStore};
+use task_core::ExecutionLimits;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 

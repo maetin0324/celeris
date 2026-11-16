@@ -123,7 +123,7 @@ fn pick(harness: &str, source: &str, api: &str, model: &str, account: &str) -> R
 
 fn launch_dispatcher(accounts_root: PathBuf) -> Dispatcher {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> =
+    let store: Arc<SqliteStore> =
         Arc::new(SqliteStore::open(&dir.path().join("db.sqlite")).unwrap());
     let mut d = pool_dispatcher(store, done_adapter(), None, accounts_root, 1, 1);
     d.set_llm_route_registry(registry());

@@ -8,7 +8,7 @@ use crate::common;
 use common::cos_ops::{OPS, audit_events, cos_bearer, db, op_body, run_domain};
 use common::*;
 use serde_json::{Value, json};
-use task_core::{CronJobStore, OrgDirectory, TaskStore};
+use task_core::OrgDirectory;
 
 fn job(env: &TestEnv, name: &str) -> Option<task_core::CronJob> {
     env.store.cron_job_get_by_name(name).expect("get")
@@ -309,7 +309,6 @@ async fn cos_ops_projects_cron_project_lifecycle_is_audited() {
 
 #[tokio::test]
 async fn cos_ops_projects_cron_standing_rules_are_audited() {
-    use task_core::ApprovalStore;
     let env = admin_env();
     let op = run_domain(
         &env,
@@ -357,7 +356,7 @@ async fn cos_ops_projects_cron_standing_rules_are_audited() {
 
 #[tokio::test]
 async fn cos_ops_projects_cron_reports_read_and_notified_are_audited() {
-    use task_core::report::{Report, ReportId, ReportKind, ReportStore};
+    use task_core::report::{Report, ReportId, ReportKind};
     let env = admin_env();
     let report = Report {
         id: ReportId::new(),

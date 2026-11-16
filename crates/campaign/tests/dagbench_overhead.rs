@@ -30,7 +30,7 @@ use celeris_campaign::{
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use task_core::TaskStore;
+use task_core::SqliteStore;
 
 const ROLE_ENV: &str = "DAGBENCH_OV_ROLE";
 const CTL_ENV: &str = "DAGBENCH_OV_CTL";
@@ -198,7 +198,7 @@ fn control_role() {
         }
         _ => {
             let paths = Paths::under(&dir.join("celeris.db"), &dir);
-            let store: Arc<dyn TaskStore> =
+            let store: Arc<SqliteStore> =
                 Arc::new(task_core::SqliteStore::open(&paths.db).expect("store"));
             let transport = RouterTransport(router_at(&dir));
             let rt = tokio::runtime::Builder::new_multi_thread()

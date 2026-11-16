@@ -5,7 +5,7 @@
 use crate::common;
 
 use common::*;
-use task_core::{McpCall, McpCallStore, McpClient, McpClientStore, McpScope};
+use task_core::{McpCall, McpClient, McpScope};
 use time::OffsetDateTime;
 
 fn seed_client(env: &TestEnv, id: &str) {

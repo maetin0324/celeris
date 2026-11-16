@@ -6,7 +6,7 @@ use task_core::script_compare::{
     NewScriptGeneration, ScriptDomain, ScriptGenerationState, ScriptGenerationTransition,
     ScriptMode, ScriptModeChange,
 };
-use task_core::script_inbox::ScriptInboxStore;
+
 use task_core::{ScriptInboxItem, SqliteStore};
 use time::OffsetDateTime;
 

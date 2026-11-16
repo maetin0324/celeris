@@ -333,7 +333,6 @@ async fn record_call(
     };
     state
         .blocking(move |store| {
-            use task_core::McpCallStore;
             if let Err(e) = store.mcp_call_record(&call) {
                 tracing::warn!(error = %e, "celeris-mcp: failed to record mcp_calls row");
             }

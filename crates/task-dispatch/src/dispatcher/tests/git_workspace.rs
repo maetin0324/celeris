@@ -5,7 +5,7 @@ use super::*;
 /// 上限は [`STATE_WAIT_GUARD`] の保険だけで、超えたら最後の状態と event を出して落とす。
 async fn run_until_terminal_and(
     d: &mut Dispatcher,
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     ids: &[TaskId],
     mut ready: impl FnMut() -> bool,
 ) {
@@ -38,7 +38,7 @@ async fn run_until_terminal_and(
 }
 
 /// [`run_until_terminal_and`] の、終端の状態だけを待つ形。
-async fn run_until_terminal(d: &mut Dispatcher, store: &Arc<dyn TaskStore>, ids: &[TaskId]) {
+async fn run_until_terminal(d: &mut Dispatcher, store: &Arc<SqliteStore>, ids: &[TaskId]) {
     run_until_terminal_and(d, store, ids, || true).await;
 }
 
@@ -47,7 +47,7 @@ async fn run_until_terminal(d: &mut Dispatcher, store: &Arc<dyn TaskStore>, ids:
 /// `task.workspace.mode` を `Some(Shared)` に書き戻す。
 #[tokio::test]
 async fn exit_65_with_no_mode_and_no_repos_downgrades_to_shared_and_continues() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let tmp = tempfile::tempdir().unwrap();
     let stub = write_stub_ssh(tmp.path(), 65);
     let task = remote_task(tmp.path(), None, Vec::new());
@@ -84,7 +84,7 @@ async fn exit_65_with_no_mode_and_no_repos_downgrades_to_shared_and_continues() 
 /// 従来どおり失敗する。
 #[tokio::test]
 async fn exit_65_with_repos_present_does_not_downgrade() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let tmp = tempfile::tempdir().unwrap();
     let stub = write_stub_ssh(tmp.path(), 65);
     let repo = task_core::RepoRef {
@@ -117,7 +117,7 @@ async fn exit_65_with_repos_present_does_not_downgrade() {
 /// 格下げしない（利用者の意図を尊重する）。
 #[tokio::test]
 async fn exit_65_with_explicit_worktree_mode_does_not_downgrade() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let tmp = tempfile::tempdir().unwrap();
     let stub = write_stub_ssh(tmp.path(), 65);
     let task = remote_task(tmp.path(), Some(WorkspaceMode::Worktree), Vec::new());
@@ -148,7 +148,7 @@ async fn a_local_git_workspace_runs_in_a_per_task_worktree_on_its_own_branch() {
     let repo_dir = tempfile::tempdir().unwrap();
     let main_sha = init_test_repo(repo_dir.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     // 判定コマンドも worktree の中で走る（ADR-0019 D1 6.）: アダプタが cwd に置いたファイルが見える。
     let task = git_task(
         repo_dir.path(),
@@ -245,7 +245,7 @@ async fn git_worktree_task_registers_report_md_as_an_artifact() {
     let repo_dir = tempfile::tempdir().unwrap();
     init_test_repo(repo_dir.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = git_task(
         repo_dir.path(),
         None,
@@ -290,7 +290,7 @@ async fn the_preamble_note_names_the_worktree_the_branch_and_the_base() {
     let repo_dir = tempfile::tempdir().unwrap();
     let main_sha = init_test_repo(repo_dir.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = git_task(
         repo_dir.path(),
         None,
@@ -367,7 +367,7 @@ async fn the_worktree_branches_from_the_current_release_when_it_is_ahead_of_main
     .unwrap();
 
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = git_task(
         repo_dir.path(),
         None,
@@ -399,7 +399,7 @@ async fn a_worktree_survives_the_terminal_state_together_with_its_branch() {
     let repo_dir = tempfile::tempdir().unwrap();
     init_test_repo(repo_dir.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = git_task(
         repo_dir.path(),
         None,
@@ -454,7 +454,7 @@ async fn cancelling_a_task_removes_its_worktree_and_branch() {
     let repo_dir = tempfile::tempdir().unwrap();
     init_test_repo(repo_dir.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = git_task(
         repo_dir.path(),
         None,
@@ -522,7 +522,7 @@ async fn a_cancelled_task_keeps_its_worktree_while_its_run_is_in_flight() {
     let repo_dir = tempfile::tempdir().unwrap();
     init_test_repo(repo_dir.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = git_task(
         repo_dir.path(),
         None,
@@ -574,7 +574,7 @@ async fn a_dirty_worktree_is_kept_and_a_progress_line_is_appended() {
     let repo_dir = tempfile::tempdir().unwrap();
     init_test_repo(repo_dir.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = git_task(
         repo_dir.path(),
         None,
@@ -633,7 +633,7 @@ async fn approved_docs_reconciliation_reuses_exact_worktree_branch_and_commit() 
     let source = root.path().join("source");
     let base = init_test_repo(&source);
     let workspace = root.path().join("workspaces");
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (project_id, repos) = project_with_repos(
         &store,
         &[("code", source.as_path(), task_core::RepoKind::Git)],
@@ -740,7 +740,7 @@ async fn a_task_with_several_repos_gets_one_worktree_per_git_repo_and_a_link_for
     std::fs::write(data.join("one.csv"), b"1\n").unwrap();
 
     let ws_root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (project_id, repos) = project_with_repos(
         &store,
         &[
@@ -854,7 +854,7 @@ async fn a_compaction_task_does_not_get_a_worktree_even_when_its_project_has_a_p
     init_test_repo(&code);
 
     let ws_root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (project_id, _repos) = project_with_repos(
         &store,
         &[("agent-platform", code.as_path(), task_core::RepoKind::Git)],
@@ -990,7 +990,7 @@ async fn a_container_task_is_blocked_with_a_question_when_no_runtime_works() {
     }
 
     let ws_root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (project_id, repos) = project_with_repos(
         &store,
         &[("benchfs", code.as_path(), task_core::RepoKind::Git)],
@@ -1060,7 +1060,7 @@ async fn a_host_task_still_runs_when_no_container_runtime_is_available() {
     let repo_dir = tempfile::tempdir().unwrap();
     init_test_repo(repo_dir.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = git_task(
         repo_dir.path(),
         None,
@@ -1118,7 +1118,7 @@ async fn the_repository_check_commands_are_the_reviewers_default() {
     }
 
     let ws_root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (project_id, repos) = project_with_repos(
         &store,
         &[("benchfs", code.as_path(), task_core::RepoKind::Git)],
@@ -1212,7 +1212,7 @@ async fn shared_mode_keeps_the_repository_itself_as_the_working_directory() {
     let repo_dir = tempfile::tempdir().unwrap();
     init_test_repo(repo_dir.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = git_task(
         repo_dir.path(),
         Some(task_core::WorkspaceMode::Shared),
@@ -1252,7 +1252,7 @@ async fn shared_mode_keeps_the_repository_itself_as_the_working_directory() {
 async fn a_local_path_that_is_not_a_git_repository_is_unchanged() {
     let plain = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = git_task(
         plain.path(),
         None,
@@ -1284,7 +1284,7 @@ async fn each_delegated_child_gets_its_own_worktree_and_the_parent_sees_the_bran
     let repo_dir = tempfile::tempdir().unwrap();
     init_test_repo(repo_dir.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut parent = git_task(
         repo_dir.path(),
         None,
@@ -1367,7 +1367,7 @@ async fn a_parallel_unit_runs_in_its_own_worktree_with_its_own_artifacts() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     adopt_v2_plan(&store, task.id, &["build"], vec![v2_wu("a", "build", &[])]);
@@ -1398,7 +1398,7 @@ async fn a_v1_plan_stays_serial_without_work_unit_worktrees() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     let spec = task_core::ExecutionPlanSpec {
@@ -1444,7 +1444,7 @@ async fn repository_required_attached_blocked_child_runs_in_registered_worktree(
     let code = root.path().join("source");
     init_test_repo(&code);
     let ws_root = root.path().join("workspaces");
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (project_id, _) = project_with_repos(
         &store,
         &[("code", code.as_path(), task_core::RepoKind::Git)],
@@ -1562,7 +1562,7 @@ async fn review_records_each_repositories_own_definition_and_worktree_results() 
             }
         }
         let ws_root = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let (project_id, repos) = project_with_repos(
             &store,
             &[

@@ -14,7 +14,7 @@ use axum::response::Response;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use task_core::local_machine::WorkspaceRoots;
-use task_core::{ArtifactRef, Event, EventRow, Task, TaskStore};
+use task_core::{ArtifactRef, Event, EventRow, SqliteStore, Task};
 use task_ops::inbox::EvidenceView;
 use task_ops::view::RunFiles;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
@@ -64,7 +64,7 @@ pub(crate) fn is_ulid_text(value: &str) -> bool {
 /// task の足回り（`task_ops::workspace::local_dir`。root は `WorkspaceRoots` が task ごとに解く。
 /// ADR 2026-10-14-local-machine-settings D5）。
 pub(crate) fn task_local_dir(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     roots: &WorkspaceRoots,
     task: &Task,
 ) -> Result<PathBuf, ApiProblem> {

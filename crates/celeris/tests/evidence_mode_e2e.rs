@@ -13,7 +13,7 @@ use celeris::Config;
 use serde_json::{Value, json};
 use task_core::route_select::{RoutingStage, RoutingStageChange};
 use task_core::routing_evidence::{EvidenceKey, EvidenceRow};
-use task_core::{DaemonMode, InstanceRole, SharedRole, SqliteStore, TaskId, TaskStore};
+use task_core::{DaemonMode, InstanceRole, SharedRole, SqliteStore, TaskId};
 use task_dispatch::Dispatcher;
 
 const TOKEN: &str = "evidence-mode-token";
@@ -119,7 +119,7 @@ rules = [{ harness = "fake", required_capabilities = [] }]
 
     /// 本番の組み立て（`build_dispatcher`）と同じ部品を、数えられる store（`self.sqlite`）で組む。
     fn dispatcher(&self) -> Dispatcher {
-        let store: Arc<dyn TaskStore> = self.sqlite.clone();
+        let store: Arc<SqliteStore> = self.sqlite.clone();
         let mut d = Dispatcher::new(store, self.config.dispatch_config());
         d.set_llm_route_registry(self.config.llm_route_registry().expect("registry"));
         d.set_harness_adapters(celeris::build_harness_adapters(&self.config).expect("adapters"));

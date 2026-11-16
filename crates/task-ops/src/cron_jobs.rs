@@ -9,11 +9,12 @@
 //! scheduled_for, trigger)` が最後の砦）。それが通ってから task を挿入し、挿入に失敗したら履歴を `error`
 //! に書き換える。
 
+use task_core::OrgDirectory;
 use task_core::cron::{CronJobRunUpdate, due_fires, render_title};
 use task_core::{
     CronCatchUp, CronJob, CronJobId, CronJobRun, CronJobRunId, CronOverlap, CronRunOutcome,
-    CronSchedule, CronTaskTemplate, CronTrigger, CronTz, GenreSpec, ProjectId, RoleSpec, Status,
-    StoreError, Task, TaskId, TaskStore,
+    CronSchedule, CronTaskTemplate, CronTrigger, CronTz, GenreSpec, ProjectId, RoleSpec,
+    SqliteStore, Status, StoreError, Task, TaskId,
 };
 use time::{Duration, OffsetDateTime};
 
@@ -255,7 +256,7 @@ pub struct CronFireOutcome {
 /// 雛形を `NewTaskSpec` に写す（`title` は呼び出し側で `{date}` を置き換えたもの）。初期状態は `ready`
 /// （人が登録した job の定時の発火で、人の Go を挟まない）。`lane` は書いたときだけ人の明示として効く。
 pub fn template_to_spec(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     template: &CronTaskTemplate,
     title: String,
 ) -> Result<NewTaskSpec, OpsError> {
@@ -321,7 +322,7 @@ pub fn template_to_spec(
 }
 
 /// 雛形の `project` は ULID か案件の題名。
-fn resolve_project(store: &dyn TaskStore, key: &str) -> Result<ProjectId, OpsError> {
+fn resolve_project(store: &SqliteStore, key: &str) -> Result<ProjectId, OpsError> {
     if let Ok(id) = key.parse::<ProjectId>() {
         if store.project_get(id)?.is_some() {
             return Ok(id);
@@ -346,7 +347,7 @@ fn resolve_project(store: &dyn TaskStore, key: &str) -> Result<ProjectId, OpsErr
 }
 
 fn build_task(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     ctx: &CronFireContext<'_>,
     job: &CronJob,
     fired_at: OffsetDateTime,
@@ -396,7 +397,7 @@ pub struct CronJobPatch {
 
 /// job を検証する: 名前・cron 式・タイムゾーン・次回時刻があること・雛形が task に組み立てられること。
 pub fn validate_job(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     ctx: &CronFireContext<'_>,
     job: &CronJob,
     now: OffsetDateTime,
@@ -439,7 +440,7 @@ pub fn validate_job(
 }
 
 /// `{id}` は ULID か `name` のどちらでも引ける（ADR-0131 D5）。
-pub fn resolve_job(store: &dyn TaskStore, key: &str) -> Result<Option<CronJob>, OpsError> {
+pub fn resolve_job(store: &SqliteStore, key: &str) -> Result<Option<CronJob>, OpsError> {
     if let Ok(id) = key.parse::<CronJobId>()
         && let Some(job) = store.cron_job_get(id)?
     {
@@ -448,14 +449,14 @@ pub fn resolve_job(store: &dyn TaskStore, key: &str) -> Result<Option<CronJob>, 
     Ok(store.cron_job_get_by_name(key)?)
 }
 
-fn require_job(store: &dyn TaskStore, id: CronJobId) -> Result<CronJob, OpsError> {
+fn require_job(store: &SqliteStore, id: CronJobId) -> Result<CronJob, OpsError> {
     store
         .cron_job_get(id)?
         .ok_or_else(|| OpsError::Validation(format!("cron job {id} not found")))
 }
 
 pub fn create_job(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     ctx: &CronFireContext<'_>,
     new: NewCronJob,
     now: OffsetDateTime,
@@ -467,7 +468,7 @@ pub fn create_job(
 
 /// 作成する job を組み立てて検証する（書き込まない）。書くのは呼び出し側（`cron_job_insert[_tx]`）。
 pub fn prepare_create(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     ctx: &CronFireContext<'_>,
     new: NewCronJob,
     now: OffsetDateTime,
@@ -496,7 +497,7 @@ pub fn prepare_create(
 
 /// 更新。schedule / timezone を変えたら（有効なら）`next_fire_at` を `now` から計算し直す。
 pub fn update_job(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     ctx: &CronFireContext<'_>,
     id: CronJobId,
     patch: CronJobPatch,
@@ -509,7 +510,7 @@ pub fn update_job(
 
 /// 更新後の job を組み立てて検証する（書き込まない）。
 pub fn prepare_update(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     ctx: &CronFireContext<'_>,
     id: CronJobId,
     patch: CronJobPatch,
@@ -548,7 +549,7 @@ pub fn prepare_update(
 
 /// 一時停止: `next_fire_at` を消し、溜まっている `queued` を `skipped_overlap`（detail "paused"）に閉じる。
 pub fn pause_job(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: CronJobId,
     now: OffsetDateTime,
 ) -> Result<CronJob, OpsError> {
@@ -565,7 +566,7 @@ pub type QueuedClose = (CronJobRunId, CronJobRunUpdate);
 
 /// 一時停止後の job と、閉じる `queued` の書き換え（あれば）を返す（書き込まない）。
 pub fn prepare_pause(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: CronJobId,
     now: OffsetDateTime,
 ) -> Result<(CronJob, Option<QueuedClose>), OpsError> {
@@ -590,7 +591,7 @@ pub fn prepare_pause(
 /// 再開: 一時停止中に過ぎた時刻は取りこぼしにしない（`next_fire_at = next_after(now)`、ADR-0131 D3）。
 /// 既に有効な job は何も変えない。
 pub fn resume_job(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: CronJobId,
     now: OffsetDateTime,
 ) -> Result<CronJob, OpsError> {
@@ -603,7 +604,7 @@ pub fn resume_job(
 
 /// 再開後の job と、書き込みが要るか（既に有効なら `false`）を返す（書き込まない）。
 pub fn prepare_resume(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: CronJobId,
     now: OffsetDateTime,
 ) -> Result<(CronJob, bool), OpsError> {
@@ -620,7 +621,7 @@ pub fn prepare_resume(
 }
 
 /// 削除（履歴も消える。作った task は残る）。無ければ `Ok(false)`。
-pub fn delete_job(store: &dyn TaskStore, id: CronJobId) -> Result<bool, OpsError> {
+pub fn delete_job(store: &SqliteStore, id: CronJobId) -> Result<bool, OpsError> {
     Ok(store.cron_job_delete(id)?)
 }
 
@@ -629,7 +630,7 @@ pub fn delete_job(store: &dyn TaskStore, id: CronJobId) -> Result<bool, OpsError
 /// tick の段: 有効な job をすべて評価する（`queued` の消化と、`next_fire_at <= now` の発火）。1 job の失敗は
 /// その job の結果に `error` として残すか `Err` を集めて、他の job は続ける。
 pub fn fire_due(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     now: OffsetDateTime,
 ) -> Vec<Result<CronFireOutcome, OpsError>> {
     fire_due_with(
@@ -641,7 +642,7 @@ pub fn fire_due(
 }
 
 pub fn fire_due_with(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     ctx: &CronFireContext<'_>,
     sink: &mut dyn CronInputSink,
     now: OffsetDateTime,
@@ -660,7 +661,7 @@ pub fn fire_due_with(
 /// job 1 件を `now` で評価する: (1) `queued` があり前回 task が終端なら task を作る、(2) 予定時刻が
 /// 過ぎていれば D2・D3 の規則で発火する。何もしなければ `runs` が空の結果を返す。
 pub fn fire_job(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     ctx: &CronFireContext<'_>,
     sink: &mut dyn CronInputSink,
     job: &CronJob,
@@ -759,7 +760,7 @@ pub fn fire_job(
 /// 変えない。同じ時刻に 2 回押したら `StoreError::InUse`（API は 409）。一時停止中の job も実行できる
 /// （ただし `queue` は溜めず `skipped_overlap`。一時停止中は `queued` を消化しないため）。
 pub fn run_now(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     job_id: CronJobId,
     now: OffsetDateTime,
 ) -> Result<CronFireOutcome, OpsError> {
@@ -767,7 +768,7 @@ pub fn run_now(
 }
 
 pub fn run_now_with(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     ctx: &CronFireContext<'_>,
     job_id: CronJobId,
     now: OffsetDateTime,
@@ -815,7 +816,7 @@ pub fn check_manual_run(job: &CronJob) -> Result<(), OpsError> {
 
 /// 前回の task がまだ動いているか（ADR-0131 D2）。動いていればその task を返す。作った task が消えて
 /// いれば動いていないとみなす。
-fn running_previous(store: &dyn TaskStore, job: &CronJob) -> Result<Option<Task>, OpsError> {
+fn running_previous(store: &SqliteStore, job: &CronJob) -> Result<Option<Task>, OpsError> {
     let Some(last) = store.cron_job_run_last_created(job.id)? else {
         return Ok(None);
     };
@@ -827,7 +828,7 @@ fn running_previous(store: &dyn TaskStore, job: &CronJob) -> Result<Option<Task>
 
 /// 1 回の発火を決める: 重ならなければ task を組み立てて `created`、重なれば `skip` / `queue` の規則。
 fn decide_fire(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     ctx: &CronFireContext<'_>,
     job: &CronJob,
     scheduled_for: OffsetDateTime,
@@ -899,7 +900,7 @@ fn decide_fire(
 /// task を作らない種類（`cos_review`・`project_reconcile`・`health_inventory`）の 1 回の発火: sink に入力を
 /// 積ませ、その結果を履歴 1 行にする（task は作らない）。
 fn decide_post(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     sink: &mut dyn CronInputSink,
     job: &CronJob,
     scheduled_for: OffsetDateTime,
@@ -935,7 +936,7 @@ fn decide_post(
 
 /// 履歴と `next_fire_at` を 1 transaction で書き、通ってから task を挿入する。
 fn record_and_create(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     job: &CronJob,
     next_fire_at: Option<OffsetDateTime>,
     runs: Vec<CronJobRun>,
@@ -953,7 +954,7 @@ fn record_and_create(
 
 /// `created` の履歴を書いた後に task を挿入する。失敗したら履歴を `error` に書き換える。
 fn insert_created(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: Task,
     now: OffsetDateTime,
     out: &mut CronFireOutcome,
@@ -988,7 +989,7 @@ fn insert_created(
 
 /// `queued` の行があり前回 task が終端なら、その行を `created` にして task を作る（ADR-0131 D2）。
 fn drain_queued(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     ctx: &CronFireContext<'_>,
     job: &CronJob,
     now: OffsetDateTime,

@@ -4,8 +4,8 @@
 use std::{collections::BTreeSet, path::Path};
 
 use task_core::{
-    DeliveryState, Event, RepoId, Status, StoreError, TaskId, TaskRepoIntegrationStatus, TaskStore,
-    Trigger,
+    DeliveryState, Event, RepoId, SqliteStore, Status, StoreError, TaskId,
+    TaskRepoIntegrationStatus, Trigger,
 };
 use time::OffsetDateTime;
 
@@ -155,7 +155,7 @@ struct Candidate<'a> {
 /// D1〜D6: sweep の後に呼ぶ。条件を満たす `unintegrated` 行を判定し、clean なら再 review へ戻し、衝突・上限は
 /// 受信箱へ理由を残す。1 回の呼び出しで再 review を始めるのは repo ごとに高々 1 件（`done_at` の古い順）。
 pub fn run(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     records: &[BranchRecord],
     now: OffsetDateTime,
 ) -> Result<Vec<Outcome>, StoreError> {
@@ -292,7 +292,7 @@ pub fn run(
 
 /// D4・D5: 行の理由を `reason` にし、同じ理由の `DoneReintegrationDeferred` が直近に無ければ追記する。
 fn defer(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     record: &BranchRecord,
     head: &str,
     target: &str,
@@ -336,7 +336,7 @@ fn defer(
 
 /// D4: 衝突は人の統合依頼（origin = delivery）にも出す。同じ両側の head では 1 件（`IntegrationRequest::id_for`）。
 fn record_conflict_request(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     c: &Candidate<'_>,
     target_sha: &str,
     files: Vec<String>,

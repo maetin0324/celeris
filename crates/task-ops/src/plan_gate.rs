@@ -1,6 +1,6 @@
 //! ADR-0079 D8（Phase R3b）: root の計画の承認（`blocked(awaiting_plan_approval)`）の判定と、人の 3 つの操作
 //! （`approve` / `replan` / `withdraw`）。途中確認（ADR-0074 D2、`crate::phase_gate`）と同じ形で、状態の変更は
-//! `TaskStore::apply_transition*` だけで行う。承認の要否の材料（[`approval_facts`]）は store の読み取りだけ。
+//! `SqliteStore::apply_transition*` だけで行う。承認の要否の材料（[`approval_facts`]）は store の読み取りだけ。
 //! LLM は使わない（DESIGN 原則 1）。
 //!
 //! - approve: `PhaseResume{PlanApprove}`（reason `plan_approved`、attempts 不変）。`note` は次の run の `answers` に
@@ -11,9 +11,11 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use task_core::OrgDirectory;
 use task_core::{
     DecisionStatus, Event, ExecutionMode, ExecutionPlanRow, PhaseResumeMode, PlanApprovalFacts,
-    Status, Task, TaskId, TaskStore, Trigger, WorkUnitBlockedReason, WorkUnitKind, WorkUnitStatus,
+    SqliteStore, Status, Task, TaskId, Trigger, WorkUnitBlockedReason, WorkUnitKind,
+    WorkUnitStatus,
 };
 
 use crate::error::OpsError;
@@ -117,7 +119,7 @@ pub const PLAN_GATE_NOTE_MAX_CHARS: usize = 2000;
 /// - 無い task は `NotFound`（404）、承認待ちでなければ `InvalidState`（409）。
 /// - `replan` で `note` が空・note が長すぎるときは `Validation`（422）。状態は変えない。
 pub fn plan_gate(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     action: PlanGateAction,
     note: Option<String>,
@@ -135,7 +137,7 @@ pub fn plan_gate(
 
 /// [`plan_gate`] の遷移を `writes` に任せる（取り下げの監査 event は遷移の前に別の transaction で書く）。
 pub fn plan_gate_via(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     writes: &dyn crate::op_writes::OpWrites,
     id: TaskId,
     action: PlanGateAction,
@@ -178,7 +180,7 @@ pub enum PlanGatePlan {
 }
 
 pub fn plan_plan_gate(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     action: PlanGateAction,
     note: Option<String>,
@@ -276,7 +278,7 @@ pub fn plan_plan_gate(
 /// D8（Phase R3b）: 採用した root の計画の承認の要否の材料（store の読み取りだけ。判定は
 /// `task_core::tree::plan_approval`）。
 pub fn approval_facts(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     plan: &ExecutionPlanRow,
 ) -> Result<PlanApprovalFacts, OpsError> {
@@ -405,7 +407,7 @@ pub fn plan_notice(spec: &task_core::ExecutionPlanSpec) -> (String, String) {
 /// bad_news でないので複製も Discord も無い。U-R3）を 1 件だけ残す。報告するノードは担当（組織にあるとき）、無ければ
 /// 秘書。組織が無い DB では書かない（`None`）。planner の計画（dispatcher）と人の計画（`PUT`）が同じ関数を使う。
 pub fn record_plan_notice(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     headline: &str,
     body: &str,

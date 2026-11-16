@@ -3,7 +3,7 @@
 //! 「codex アダプタで Phase 4 と同じドッグフードタスクが通る」）。
 //!
 //! `celerisctl add` は `Check::Human` しか作れない（ADR-0004 D3）ため、`examples/hello-crate` に対する
-//! `Check::Command` 付きの実タスクを、Phase 3 の `tests/e2e` と同じ方法（`TaskStore` API を直接呼ぶ）で
+//! `Check::Command` 付きの実タスクを、Phase 3 の `tests/e2e` と同じ方法（`SqliteStore` API を直接呼ぶ）で
 //! 1 件だけ `ready` として投入する。人間が `docs/SPEC.md` §6 Phase 4/6 の受け入れ条件を確認するための道具。
 //!
 //! 使い方:
@@ -18,8 +18,8 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use task_core::{
-    Budget, Check, Criterion, SqliteStore, Status, Task, TaskId, TaskKind, TaskStore, Tier,
-    WorkerHint, WorkspaceSpec,
+    Budget, Check, Criterion, SqliteStore, Status, Task, TaskId, TaskKind, Tier, WorkerHint,
+    WorkspaceSpec,
 };
 
 #[derive(Parser, Debug)]

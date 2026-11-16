@@ -15,8 +15,7 @@ fn notify_digest_view() -> task_ops::view::ViewContext {
 
 #[test]
 fn notify_digest_waits_for_interval_and_never_sends_notice_kind_immediately() {
-    use task_core::NotificationStore;
-    use task_core::feed::{NoticeEvent, NoticeKind, NoticeStore};
+    use task_core::feed::{NoticeEvent, NoticeKind};
     let store = task_core::SqliteStore::open_in_memory().unwrap();
     let at = OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap();
     let config = NotifyConfig::default();
@@ -309,7 +308,6 @@ fn notify_rejects_retired_link_config() {
 /// (CoS summary + links); no source wait is re-checked, and only that kind plus the two CoS kinds are selected.
 #[test]
 fn root_done_summary_is_selected_and_rendered_as_is() {
-    use task_core::NotificationStore;
     let store = task_core::SqliteStore::open_in_memory().unwrap();
     let at = OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap();
     let row = store

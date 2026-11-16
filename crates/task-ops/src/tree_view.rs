@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use schemars::JsonSchema;
 use serde::Serialize;
 use task_core::{
-    DecisionStatus, Event, RollupMetrics, RollupNodeFacts, Status, Task, TaskId, TaskStore,
+    DecisionStatus, Event, RollupMetrics, RollupNodeFacts, SqliteStore, Status, Task, TaskId,
     TreeLimits, WorkUnitBlockedReason, WorkUnitKind, WorkUnitRow, WorkUnitStatus,
 };
 
@@ -305,7 +305,7 @@ fn open_decisions_by_task(
 
 /// 1 節点の材料（`quota` は events を読むときだけ。`with_quota = false` なら空）。
 pub fn node_facts(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     open_decisions: u32,
     events: Option<&[Event]>,
@@ -338,7 +338,7 @@ fn node_phase(task: &Task, execution_phase: Option<ExecutionPhase>) -> Option<Tr
 /// subtree。木の無い task（`[execution.tree] enabled = false` の旧い task を含む）は 1 節点の木（深さ 1）。
 /// 見つからなければ `OpsError::NotFound`。
 pub fn task_tree(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
     from_root: bool,
     limits: &TreeLimits,
@@ -505,7 +505,7 @@ pub fn is_project_root_task(task: &Task) -> bool {
 
 /// D11: `GET /projects/{id}` の root task の合計（`tasks` は案件の task。root 以外は無視する）。
 pub fn project_root_totals(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     tasks: &[Task],
 ) -> Result<ProjectRootTotals, OpsError> {
     let decisions = store.decisions_list(None)?;
@@ -550,7 +550,7 @@ pub fn project_root_totals(
 /// run と定価は子の subtree（孫を含む）の合計、見出しは子の最新の報告（ADR-0034 の報告の流れ）の `headline`、
 /// 無ければ「報告なし」。子がまだ作られていない unit は `<key> <unit の題名>: 未作成（<unit の状態>）`。
 pub fn stage_child_summaries(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     units: &[WorkUnitRow],
     phase: &str,
 ) -> Result<Vec<String>, OpsError> {
@@ -625,7 +625,7 @@ pub fn stage_child_summaries(
 }
 
 /// `t` が `ancestor` の子孫か（木の親を辿る。64 段で打ち切る）。
-fn is_descendant_of(t: &Task, ancestor: TaskId, store: &dyn TaskStore) -> Result<bool, OpsError> {
+fn is_descendant_of(t: &Task, ancestor: TaskId, store: &SqliteStore) -> Result<bool, OpsError> {
     let mut parent = tree_parent(t);
     for _ in 0..64 {
         let Some(p) = parent else {
@@ -645,7 +645,7 @@ fn is_descendant_of(t: &Task, ancestor: TaskId, store: &dyn TaskStore) -> Result
 /// U-R7（`GET /metrics/execution?group_by=depth`）: 1 task の自分の分（quota は `with_quota` のときだけ events から）。
 /// `open_decisions` は呼び出し側が [`open_decision_counts`] から渡す。
 pub fn own_metrics(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     open_decisions: u32,
     with_quota: bool,
@@ -666,7 +666,7 @@ pub fn own_metrics(
 }
 
 /// 未回答の決定の数（出した節点ごと。全木）。
-pub fn open_decision_counts(store: &dyn TaskStore) -> Result<BTreeMap<TaskId, u32>, OpsError> {
+pub fn open_decision_counts(store: &SqliteStore) -> Result<BTreeMap<TaskId, u32>, OpsError> {
     Ok(open_decisions_by_task(&store.decisions_list(None)?).0)
 }
 

@@ -6,7 +6,7 @@ use crate::common;
 use std::path::Path;
 use std::process::{Command, Output};
 
-use task_core::{McpClientStore, McpScope, SqliteStore};
+use task_core::{McpScope, SqliteStore};
 
 fn ctl(db: &Path, args: &[&str]) -> Output {
     Command::new(common::celerisctl_path())

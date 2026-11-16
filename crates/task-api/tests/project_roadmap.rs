@@ -8,7 +8,7 @@ use common::cos_ops::{OPS, cos_run_bearer, op_body};
 use common::*;
 use serde_json::{Value, json};
 use task_api::{ApiToken, Principal};
-use task_core::{ProjectId, TaskId, TaskStore, Trigger};
+use task_core::{ProjectId, TaskId, Trigger};
 use time::OffsetDateTime;
 
 const OP_TOKEN: &str = "operator-token-a5";

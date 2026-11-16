@@ -94,7 +94,19 @@ impl SqliteStore {
         })())
     }
 
-    pub(in crate::store) fn execution_plan_adopt_impl(
+    // ---- ADR-0072 D5（Phase E2）: 実行層の派生索引（execution_plans / work_units / runs）----
+    //
+    // 正本は `events`（`Event::ExecutionPlanned` / `WorkUnitTransitioned` / `WorkerStarted` /
+    // `WorkerFinished` / `CheckpointSaved`）。この 3 表は対応する Event と同じトランザクションで
+    // 書く。`task_ops::execution::rebuild_from_events` で events から作り直して一致を確かめられる。
+    /// D14: 新しい計画を採用する（`Event::ExecutionPlanned` と `execution_plans` / `work_units` の
+    /// 行を同じトランザクションで書く）。E2 は新規のみ: そのタスクに既に `active` な計画があれば
+    /// `StoreError::InUse`（replan は E4。`PlanOrigin::Repair` 等で明示的に旧版を `superseded` にした
+    /// 上で採用する経路は別に用意する）。
+    /// `extra_events`（ADR-0074 D2.1（Phase F3 途中確認）: `Event::PausePointsResolved` 用）は
+    /// `event`（`ExecutionPlanned`）より先に、同じトランザクションで書く（`execution_plan_replan` と
+    /// 同じ規律）。
+    pub fn execution_plan_adopt(
         &self,
         task_id: TaskId,
         plan: ExecutionPlanRow,
@@ -109,8 +121,11 @@ impl SqliteStore {
         Ok(())
     }
 
+    /// ADR-0074 D3.7（Phase F4b (f)）: `execution_plan_adopt` と同じことを行い、**同じトランザクションで**
+    /// planner の `children` から作った子 Task（`parent_id = task_id`、draft なら `Accept`）を挿入し、
+    /// `Event::Delegated{run_id: <planner run>, task_ids}` を親に残す（`delegate_children` と同じ形）。
     #[allow(clippy::too_many_arguments)]
-    pub(in crate::store) fn execution_plan_adopt_delegating_impl(
+    pub fn execution_plan_adopt_delegating(
         &self,
         task_id: TaskId,
         plan: ExecutionPlanRow,
@@ -160,7 +175,8 @@ impl SqliteStore {
         Ok(ids)
     }
 
-    pub(in crate::store) fn execution_plan_active_impl(
+    /// そのタスクの `active` な計画（無ければ `None`）。
+    pub fn execution_plan_active(
         &self,
         task_id: TaskId,
     ) -> Result<Option<ExecutionPlanRow>, StoreError> {
@@ -176,7 +192,8 @@ impl SqliteStore {
         })
     }
 
-    pub(in crate::store) fn execution_plan_list_impl(
+    /// そのタスクの計画（`version` 昇順。履歴を含む）。
+    pub fn execution_plan_list(
         &self,
         task_id: TaskId,
     ) -> Result<Vec<ExecutionPlanRow>, StoreError> {
@@ -194,7 +211,11 @@ impl SqliteStore {
         })
     }
 
-    pub(in crate::store) fn execution_plans_replace_impl(
+    /// ADR-0072 D5/D17（Phase E4b 項目5）: 同上。`task_id` の `execution_plans` 行（版の履歴）を
+    /// 渡した集合でまるごと置き換える。`task_ops::replay::check_and_apply_execution` が
+    /// `rebuild_execution_plans`（`Event::ExecutionPlanned` からの再構築。replan で複数版になった
+    /// 履歴を含む）の結果を書き戻すのに使う。
+    pub fn execution_plans_replace(
         &self,
         task_id: TaskId,
         rows: Vec<ExecutionPlanRow>,

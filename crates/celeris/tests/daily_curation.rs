@@ -10,10 +10,10 @@ use celeris::knowledge_curation;
 use celeris::reports::{self, ReportsConfig};
 use git_support::git;
 use task_core::org::{OrgKind, OrgNode};
-use task_core::report::{Report, ReportFilter, ReportId, ReportKind, ReportStore};
+use task_core::report::{Report, ReportFilter, ReportId, ReportKind};
 use task_core::{
-    CronJobStore, CronOverlap, DecisionStatus, Event, KnowledgeRunStore, OrgDirectory, SqliteStore,
-    Status, Task, TaskStore, Tier, Trigger, WorkspaceSpec,
+    CronOverlap, DecisionStatus, Event, OrgDirectory, SqliteStore, Status, Task, Tier, Trigger,
+    WorkspaceSpec,
 };
 use task_ops::knowledge_curation::{
     self as curation, Action, CurationPlan, HumanDecision, KbAction,

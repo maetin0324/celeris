@@ -434,7 +434,7 @@ async fn target_sweep_executor_cleans_finished_workspaces_and_scratch_at_critica
 #[tokio::test]
 async fn verify_skips_ineligible_ready_tasks_before_pre_dispatch_work() {
     let tmp = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let adapter = Arc::new(InstantAdapter {
         terminal: Terminal::Done {
             summary: "ok".into(),

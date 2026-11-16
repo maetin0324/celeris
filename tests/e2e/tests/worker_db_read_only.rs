@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 
 use task_core::{
     Budget, Check, CreatedOrigin, Criterion, Event, Project, ProjectId, ProjectRepo, ProjectStatus,
-    RepoId, RepoKind, RepoRun, SCHEMA_VERSION, SqliteStore, Status, Task, TaskId, TaskKind,
-    TaskStore, Tier, Trigger, WorkerHint, WorkspaceSpec,
+    RepoId, RepoKind, RepoRun, SCHEMA_VERSION, SqliteStore, Status, Task, TaskId, TaskKind, Tier,
+    Trigger, WorkerHint, WorkspaceSpec,
 };
 use time::OffsetDateTime;
 

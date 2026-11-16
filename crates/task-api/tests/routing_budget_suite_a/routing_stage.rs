@@ -5,7 +5,7 @@ use crate::common;
 use common::*;
 use serde_json::json;
 use task_core::routing_evidence::{EvidenceKey, EvidenceRow};
-use task_core::{Status, TaskKind, TaskStore};
+use task_core::{Status, TaskKind};
 
 fn row(n: u64, pass_lower: f64) -> EvidenceRow {
     EvidenceRow {

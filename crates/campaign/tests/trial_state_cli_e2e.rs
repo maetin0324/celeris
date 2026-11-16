@@ -69,7 +69,7 @@ fn spawn_standin_dispatcher(
 ) -> std::thread::JoinHandle<()> {
     use std::io::Write;
     use std::sync::atomic::Ordering;
-    use task_core::{Event, RunEnd, SqliteStore, Status, TaskStore, Trigger};
+    use task_core::{Event, RunEnd, SqliteStore, Status, Trigger};
     std::thread::spawn(move || {
         let store = SqliteStore::open(&db).unwrap();
         while !stop.load(Ordering::SeqCst) {

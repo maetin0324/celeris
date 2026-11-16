@@ -9,7 +9,7 @@ async fn integration_checks_record_start_finish_events_and_log_files() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     let mut a = v2_wu("a", "build", &[]);
@@ -123,7 +123,7 @@ async fn integration_checks_record_start_finish_events_and_log_files() {
 #[tokio::test]
 async fn a_running_integration_check_has_a_started_event_and_a_readable_partial_log() {
     let ws_dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(ws_dir.path(), "true");
     store.insert(&task).unwrap();
     let gate = ws_dir.path().join("go");

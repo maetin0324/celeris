@@ -16,7 +16,7 @@ fn commit_file(dir: &std::path::Path, path: &str, content: &str) -> String {
 }
 
 /// Two `reviewing` tasks on the same repo; `a` is listed (and enters the queue) first.
-fn two_reviewing_tasks(repo: &std::path::Path, store: &Arc<dyn TaskStore>) -> (Task, Task) {
+fn two_reviewing_tasks(repo: &std::path::Path, store: &Arc<SqliteStore>) -> (Task, Task) {
     let (project, repos) = project_with_repos(store, &[("code", repo, RepoKind::Git)]);
     let make = |offset: i64| {
         let mut task = git_task(
@@ -40,7 +40,7 @@ fn two_reviewing_tasks(repo: &std::path::Path, store: &Arc<dyn TaskStore>) -> (T
 }
 
 /// Global event id of the task's first `ReviewTargetSynced` (the order of the syncs).
-fn synced_at(store: &Arc<dyn TaskStore>, task: &Task) -> u64 {
+fn synced_at(store: &Arc<SqliteStore>, task: &Task) -> u64 {
     store
         .events_for_with_global_ids(task.id)
         .unwrap()
@@ -71,7 +71,7 @@ async fn behind_target_stale_priority_more_commits_syncs_first() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (a, b) = two_reviewing_tasks(repo.path(), &store);
     let mut d = worktree_dispatcher(store.clone(), checks_adapter(), ws.path(), None);
     fixed_clock(&mut d);
@@ -99,7 +99,7 @@ async fn behind_target_stale_priority_older_age_beats_more_commits() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (a, b) = two_reviewing_tasks(repo.path(), &store);
     let mut d = worktree_dispatcher(store.clone(), checks_adapter(), ws.path(), None);
     let now = fixed_clock(&mut d);
@@ -139,7 +139,7 @@ async fn behind_target_stale_priority_up_to_date_keeps_wait_order() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (a, b) = two_reviewing_tasks(repo.path(), &store);
     let mut d = worktree_dispatcher(store.clone(), checks_adapter(), ws.path(), None);
     fixed_clock(&mut d);
@@ -205,7 +205,7 @@ async fn behind_target_stale_priority_counts_unselected_ticks() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (a, b) = two_reviewing_tasks(repo.path(), &store);
     let mut d = worktree_dispatcher(store.clone(), checks_adapter(), ws.path(), None);
     let ordered = d

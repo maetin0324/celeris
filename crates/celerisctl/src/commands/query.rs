@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use clap::{Args, ValueEnum};
 use task_core::local_machine::WorkspaceRoots;
-use task_core::{Check, Status, Task, TaskId, TaskStore};
+use task_core::{Check, SqliteStore, Status, Task, TaskId};
 use task_ops::view::{self, ViewContext};
 use time::OffsetDateTime;
 
@@ -132,7 +132,7 @@ fn check_kind_name(check: &Check) -> &'static str {
     }
 }
 
-fn print_events(store: &dyn TaskStore, id: TaskId) -> Result<(), CliError> {
+fn print_events(store: &SqliteStore, id: TaskId) -> Result<(), CliError> {
     let events = store.events_for(id)?;
     for (seq, event) in events {
         outln!("[{seq}] {event:?}");
@@ -140,7 +140,7 @@ fn print_events(store: &dyn TaskStore, id: TaskId) -> Result<(), CliError> {
     Ok(())
 }
 
-pub fn run_ls(store: &dyn TaskStore, args: LsArgs) -> Result<ExitCode, CliError> {
+pub fn run_ls(store: &SqliteStore, args: LsArgs) -> Result<ExitCode, CliError> {
     let status = args.status.map(Status::from);
     let tasks = store.list(status)?;
     if args.tree {
@@ -153,7 +153,7 @@ pub fn run_ls(store: &dyn TaskStore, args: LsArgs) -> Result<ExitCode, CliError>
     Ok(ExitCode::SUCCESS)
 }
 
-pub fn run_show(store: &dyn TaskStore, args: ShowArgs) -> Result<ExitCode, CliError> {
+pub fn run_show(store: &SqliteStore, args: ShowArgs) -> Result<ExitCode, CliError> {
     let id = crate::error::parse_task_id(&args.id)?;
 
     if args.json {
@@ -209,7 +209,7 @@ pub fn run_show(store: &dyn TaskStore, args: ShowArgs) -> Result<ExitCode, CliEr
 /// - `max_requeues`: 5
 /// - `clusters`: 空（`worktree` は `null` になる）
 fn task_detail_json(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     workspace_root: Option<PathBuf>,
     config: Option<&PathBuf>,
@@ -249,7 +249,7 @@ fn task_detail_json(
 }
 
 fn run_show_json(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     workspace_root: Option<PathBuf>,
     config: Option<&PathBuf>,
@@ -259,7 +259,7 @@ fn run_show_json(
     Ok(ExitCode::SUCCESS)
 }
 
-pub fn run_log(store: &dyn TaskStore, args: LogArgs) -> Result<ExitCode, CliError> {
+pub fn run_log(store: &SqliteStore, args: LogArgs) -> Result<ExitCode, CliError> {
     let id = crate::error::parse_task_id(&args.id)?;
 
     if !args.follow {

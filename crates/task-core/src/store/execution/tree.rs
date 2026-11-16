@@ -39,10 +39,10 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub(in crate::store) fn tree_tasks_impl(
-        &self,
-        root_id: TaskId,
-    ) -> Result<Vec<Task>, StoreError> {
+    /// ADR-0079 D3（Phase R2a）: 木の節点（`root_id` の task 自身と、`tasks.root_id = root_id` の子孫）。
+    /// `created_at` 昇順（同順位は rowid）。木の上限の数え上げ（`task_ops::tree::tree_counters`）に使う。
+    /// root 自身は `tree` を持たない（`root_id` 列は NULL。R1b 付記 6.）ので id で拾う。
+    pub fn tree_tasks(&self, root_id: TaskId) -> Result<Vec<Task>, StoreError> {
         self.with_read_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT json FROM tasks WHERE id = ?1 OR root_id = ?1 ORDER BY created_at ASC, rowid ASC",
@@ -58,9 +58,10 @@ impl SqliteStore {
         })
     }
 
-    pub(in crate::store) fn tasks_with_open_task_units_impl(
-        &self,
-    ) -> Result<Vec<TaskId>, StoreError> {
+    /// ADR-0079 §7 R1b: 終わっていない kind task の unit（`pending` / `ready` / `running` /
+    /// `needs_continuation` / `blocked`）を持つ task の id（重複なし、昇順）。dispatcher の tick が
+    /// 子 task の生成と状態の写しの照合に使う（木が無ければ空で、何もしない）。
+    pub fn tasks_with_open_task_units(&self) -> Result<Vec<TaskId>, StoreError> {
         self.with_read_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT DISTINCT task_id FROM work_units WHERE kind = 'task' AND status IN \
@@ -72,7 +73,15 @@ impl SqliteStore {
         })
     }
 
-    pub(in crate::store) fn tree_child_create_impl(
+    /// ADR-0079 D4 (4)（Phase R1b）: kind task の unit から子 task を作る 1 トランザクション。
+    /// 親が終端でなく、unit の行（`unit.id`）が今も `ready` で `child_task_id` を持たないことを確かめ、
+    /// 子を挿入して `Event::Created{origin: plan_unit}` を積み、unit の行を `unit`（呼び出し側が
+    /// `running`・`child_task_id` を書いたもの）に差し替え、親の events に `parent_events`
+    /// （`WorkUnitTransitioned` と `ChildTaskCreated`）を積む。条件に合わなければ何も書かず `Ok(false)`。
+    ///
+    /// ADR-0079 D9（Phase R2b）: `replaces = Some(prev)` は基盤の失敗の作り直し（同じ unit から新しい子）。
+    /// unit の行が `running` で `child_task_id = prev` であることを確かめる（`ready`・子なしの代わりに）。
+    pub fn tree_child_create(
         &self,
         parent_id: TaskId,
         child: &Task,
@@ -131,8 +140,13 @@ impl SqliteStore {
         Ok(true)
     }
 
+    /// ADR-0079 D15（Phase R5b-prep）: 人の計画（origin human）の採用と、その計画の unit の `adopt` による既存の
+    /// task の採用を 1 トランザクションで書く。`execution_plan_adopt` と同じことをした後に `after_events`
+    /// （`WorkUnitTransitioned`・`ChildAdopted`・`UnitGateOverridden`・`DecisionRequested` など。`work_units` の行は
+    /// 呼び出し側がこれらを当てた後の値で渡す）を積み、`adoptions` の各 task を書き換える。採用する task が今も
+    /// `expect_status` で木に属していない（`tree` が無い）ことを確かめ、違えば何も書かずに `Ok(false)`。
     #[allow(clippy::too_many_arguments)]
-    pub(in crate::store) fn execution_plan_adopt_tree_impl(
+    pub fn execution_plan_adopt_tree(
         &self,
         task_id: TaskId,
         plan: ExecutionPlanRow,
@@ -185,7 +199,13 @@ impl SqliteStore {
         Ok(true)
     }
 
-    pub(in crate::store) fn tree_adopt_apply_impl(
+    /// ADR-0079 D15（Phase R5b-prep）: 採用済みの計画の kind task の unit（`unit_id`）に既存の task を後から採用する
+    /// 1 トランザクション（`POST /tasks/{id}/tree/adopt`）。計画を持つ task が終端でなく、unit の行が今も
+    /// `expect_unit_status` の kind task で `child_task_id` を持たず、採用する task が `expect_status` で `tree` を
+    /// 持たないことを確かめる。`updated` の行を書き換え、計画を持つ task に `events` を積み、採用する task を書き換える。
+    /// 条件に合わなければ何も書かず `Ok(false)`。
+    #[allow(clippy::too_many_arguments)]
+    pub fn tree_adopt_apply(
         &self,
         owner_id: TaskId,
         unit_id: &str,

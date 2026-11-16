@@ -8,7 +8,7 @@ fn check_disk_space(d: &mut Dispatcher) -> bool {
 
 #[tokio::test]
 async fn disk_gate_notifies_once_and_recovers_without_a_run() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let dir = tempfile::tempdir().unwrap();
     let task = new_task(
         dir.path(),
@@ -68,7 +68,7 @@ async fn disk_gate_notifies_once_and_recovers_without_a_run() {
 /// ADR-0125 (b): 削除は背景スレッドなので、`target/` の消滅と期待の `WorkspacePruned` event の両方が
 /// 観測できるまで待つ（固定回数のループではなく出来事待ち）。[`STATE_WAIT_GUARD`] は壊れたときに止まる保険。
 async fn wait_for_prune(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     task_id: TaskId,
     target_dir: &std::path::Path,
     expected_removed: &[String],
@@ -100,7 +100,7 @@ async fn wait_for_prune(
 /// `workspace_pruned` イベントを積む（削除は背景スレッド。出来事が届くまで待つ）。
 #[tokio::test]
 async fn tick_prunes_the_oldest_terminal_workspace_and_records_an_event() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = tempfile::tempdir().unwrap();
     let mut d = dispatcher(store.clone(), done_adapter(), 1);
     d.config.workspace_roots =
@@ -159,7 +159,7 @@ async fn tick_prunes_the_oldest_terminal_workspace_and_records_an_event() {
 /// 負荷で遅れて偽の失敗を生む非同期処理が無い（待っても届かない出来事を待つ形には書き直せない）。
 #[tokio::test]
 async fn workspace_prune_after_secs_zero_disables_pruning() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = tempfile::tempdir().unwrap();
     let mut d = dispatcher(store.clone(), done_adapter(), 1);
     d.config.workspace_roots =
@@ -222,7 +222,7 @@ async fn disk_watch_tick_phase_holds_coding_until_pressure_recovers() {
     }
 
     let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let store: Arc<SqliteStore> = sqlite.clone();
     let dir = tempfile::tempdir().unwrap();
     let adapter = Arc::new(InstantAdapter {
         terminal: Terminal::Done {
@@ -351,7 +351,7 @@ async fn disk_watch_tick_phase_holds_coding_until_pressure_recovers() {
 /// cargo target を消して `workspace_pruned` を積む（workspace prune は無効にして経路を分ける）。
 #[tokio::test]
 async fn repo_target_gc_tick_removes_a_finished_task_target_without_cron() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = tempfile::tempdir().unwrap();
     let mut d = dispatcher(store.clone(), done_adapter(), 1);
     d.config.workspace_roots =

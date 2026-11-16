@@ -14,7 +14,7 @@ use task_core::model::Event;
 use task_core::script_compare::{
     NewScriptGeneration, ScriptDomain, ScriptGenerationState, ScriptMode, ScriptModeChange,
 };
-use task_core::script_inbox::ScriptInboxStore;
+
 use task_core::{DaemonMode, SqliteStore};
 use time::OffsetDateTime;
 /// actor thread の名前（`celeris_script::handle`）。

@@ -8,7 +8,7 @@ use crate::common;
 
 use common::*;
 use serde_json::{Value, json};
-use task_core::{Event, Status, Task, TaskId, TaskKind, TaskStore};
+use task_core::{Event, Status, Task, TaskId, TaskKind};
 
 fn transitions(env: &TestEnv, id: TaskId) -> usize {
     env.store.events_for(id).expect("events").len()

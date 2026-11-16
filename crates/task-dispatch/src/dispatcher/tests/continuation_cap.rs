@@ -48,7 +48,7 @@ fn adapter() -> Arc<GrowingYieldAdapter> {
     })
 }
 
-fn continue_count(store: &Arc<dyn TaskStore>, task_id: TaskId) -> usize {
+fn continue_count(store: &Arc<SqliteStore>, task_id: TaskId) -> usize {
     store
         .events_for(task_id)
         .unwrap()
@@ -57,7 +57,7 @@ fn continue_count(store: &Arc<dyn TaskStore>, task_id: TaskId) -> usize {
         .count()
 }
 
-fn last_outcome(store: &Arc<dyn TaskStore>, task_id: TaskId) -> String {
+fn last_outcome(store: &Arc<SqliteStore>, task_id: TaskId) -> String {
     store
         .events_for(task_id)
         .unwrap()
@@ -86,7 +86,7 @@ fn assert_cap_question(q: &str) {
 #[tokio::test]
 async fn task_with_progress_continues_past_the_old_count_limit_and_asks_at_the_hard_limit() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -111,7 +111,7 @@ async fn task_with_progress_continues_past_the_old_count_limit_and_asks_at_the_h
 #[tokio::test]
 async fn work_unit_with_progress_asks_only_at_the_hard_limit_and_resumes_after_an_answer() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -192,7 +192,7 @@ async fn work_unit_with_progress_asks_only_at_the_hard_limit_and_resumes_after_a
 #[tokio::test]
 async fn task_without_progress_asks_after_no_progress_limit_with_the_streak_in_the_question() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {

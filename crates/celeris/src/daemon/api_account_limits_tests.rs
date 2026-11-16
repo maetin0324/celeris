@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use serde_json::{Value, json};
-use task_core::{InstanceRole, SqliteStore, TaskStore};
+use task_core::{InstanceRole, SqliteStore};
 
 use super::*;
 use crate::daemon::admin::handle_admin_request;

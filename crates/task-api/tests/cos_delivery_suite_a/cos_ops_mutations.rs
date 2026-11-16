@@ -10,8 +10,8 @@ use task_core::decision::{
     CostOfReversal, DecisionKind, DecisionOption, DecisionOrigin, DecisionPathEntry,
     DecisionRaisedBy, DecisionRequest, DecisionStatus,
 };
-use task_core::feed::{NoticeEvent, NoticeKind, NoticeStore};
-use task_core::{Check, Criterion, Event, Status, TaskId, TaskKind, TaskRouting, TaskStore};
+use task_core::feed::{NoticeEvent, NoticeKind};
+use task_core::{Check, Criterion, Event, Status, TaskId, TaskKind, TaskRouting};
 
 fn raise_decision(env: &TestEnv, task: TaskId, id: &str) {
     let opt = |key: &str| DecisionOption {

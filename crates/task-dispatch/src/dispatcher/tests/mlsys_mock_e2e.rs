@@ -79,7 +79,7 @@ fn question_adapter() -> Arc<dyn WorkerAdapter> {
     })
 }
 
-fn routing_decided(store: &Arc<dyn TaskStore>, task: &Task) -> task_core::RoutingRecord {
+fn routing_decided(store: &Arc<SqliteStore>, task: &Task) -> task_core::RoutingRecord {
     store
         .events_for(task.id)
         .unwrap()
@@ -101,7 +101,7 @@ fn lane_assist(rec: &task_core::RoutingRecord) -> task_core::route_select::LaneA
 
 /// task を dispatch して run の終わりまで進め、(routing 記録, run_id) を返す。
 async fn dispatch_to_end(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     mode: RoutingMode,
     item: Option<BoardItem>,
     dir: &std::path::Path,
@@ -206,7 +206,7 @@ async fn no_key_wait_register_resume_once_then_classify_run_log_export() {
     // 4. 分類 → 方策 → 実行 → ログ → export（task を実際に dispatch）。
     let ws = tempfile::tempdir().unwrap();
     let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let store: Arc<SqliteStore> = sqlite.clone();
     let (t2, rec2, run_id) = dispatch_to_end(
         &store,
         RoutingMode::DecisionAssisted,
@@ -268,7 +268,7 @@ async fn no_key_wait_register_resume_once_then_classify_run_log_export() {
 
 #[tokio::test]
 async fn classifier_failures_fall_back_to_the_fixed_lane_and_still_run_and_log() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let ws = tempfile::tempdir().unwrap();
     // 比較の基準: fixed。
     let (_, fixed, _) = dispatch_to_end(&store, RoutingMode::Fixed, None, ws.path()).await;

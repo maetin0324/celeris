@@ -22,10 +22,10 @@ use std::time::Duration;
 
 use celeris::notify::{self, NotifyConfig, SendResult};
 use celeris::{ClusterMasters, Config, build_dispatcher};
-use task_core::NoticeStore;
+
 use task_core::{
-    Budget, Check, Criterion, NotificationStore, SqliteStore, Status, Task, TaskId, TaskKind,
-    TaskStore, Tier, Trigger, WorkerHint, WorkspaceSpec,
+    Budget, Check, Criterion, SqliteStore, Status, Task, TaskId, TaskKind, Tier, Trigger,
+    WorkerHint, WorkspaceSpec,
 };
 use task_dispatch::Dispatcher;
 use time::OffsetDateTime;

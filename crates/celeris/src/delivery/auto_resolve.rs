@@ -11,7 +11,7 @@
 use super::{MERGE_TIMEOUT, git_text, git_text_within, sha};
 use crate::config::Config;
 use std::path::{Path, PathBuf};
-use task_core::{Delivery, StoreError, TaskStore};
+use task_core::{Delivery, SqliteStore, StoreError};
 use task_dispatch::auto_resolve::{
     CommitIntent, ConflictKind, FileDiffStat, FileIntent, IntegrationRequest, Resolution,
     ResolutionAction, ResolveContext, SideIntent,
@@ -93,7 +93,7 @@ pub(super) fn summarize(actions: &[ResolutionAction]) -> String {
 }
 
 /// この配送で既に試した回数（comment の目印で数える）。
-pub(super) fn attempts(store: &dyn TaskStore, d: &Delivery) -> Result<u32, StoreError> {
+pub(super) fn attempts(store: &SqliteStore, d: &Delivery) -> Result<u32, StoreError> {
     Ok(store
         .comments_for(d.task_id)?
         .iter()
@@ -105,7 +105,7 @@ pub(super) fn attempts(store: &dyn TaskStore, d: &Delivery) -> Result<u32, Store
 }
 
 fn comment(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     d: &Delivery,
     body: String,
     now: OffsetDateTime,
@@ -127,7 +127,7 @@ fn comment(
 
 /// 上限と有効化を確かめてから 1 回試す。git と resolver だけを使い、LLM は呼ばない。
 pub(super) fn attempt(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     config: &Config,
     d: &Delivery,
 ) -> Result<Outcome, StoreError> {
@@ -156,7 +156,7 @@ pub(super) fn attempt(
 
 /// 解消後の配送の記録。新しい SHA を固定し、gate（`start_prepare`）を `MergeQueued` からやり直す。
 pub(super) fn requeue(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     old: &Delivery,
     base: String,
     head: String,
@@ -191,7 +191,7 @@ pub(super) fn requeue(
 
 /// 試行を記録し、人の判断が必要な場合は統合依頼を保存する。
 pub(super) fn fall_back(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     config: &Config,
     d: &Delivery,
     fallback: &Fallback,
@@ -227,7 +227,7 @@ pub(super) fn fall_back(
 /// 同じ組の両端の SHA の未回答依頼があれば追記しない（再 tick でも 1 件のまま）。一般通知には書かない
 /// （ADR parallel integration D4）。
 pub(super) fn record_request(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     d: &Delivery,
     request: &IntegrationRequest,
 ) -> Result<(), StoreError> {
@@ -245,7 +245,7 @@ pub(super) fn record_request(
 
 /// 上限時は merge を試さず、既存の固定 SHA と git の履歴から依頼を作る。
 pub(super) fn limit_request(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     config: &Config,
     d: &Delivery,
     reason: String,

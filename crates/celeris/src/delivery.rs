@@ -6,10 +6,11 @@ use std::{
     process::{Command, Stdio},
     time::Duration,
 };
+use task_core::OrgDirectory;
 use task_core::required_checks::health;
 use task_core::{
-    Delivery, DeliveryState as State, Event, Message, MessageId, MessageRole, RepairClass, Status,
-    StoreError, TaskStore, Trigger, WorkUnitKind, WorkUnitStatus,
+    Delivery, DeliveryState as State, Event, Message, MessageId, MessageRole, RepairClass,
+    SqliteStore, Status, StoreError, Trigger, WorkUnitKind, WorkUnitStatus,
 };
 use task_ops::changes::{git, git_with_env};
 use time::OffsetDateTime;
@@ -142,7 +143,7 @@ fn push_merged(repo: &Path, remote: &str, branch: &str, timeout: Duration) -> Re
 /// push が失敗して（まだ再試行の目印が付いていなければ）1度だけ再試行する。release の準備を
 /// 止めないので、これは `advance` の状態遷移そのものではなく独立した CAS 保存。
 fn maybe_retry_push(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     config: &Config,
     old: &Delivery,
     now: OffsetDateTime,
@@ -176,7 +177,7 @@ fn maybe_retry_push(
     })
 }
 /// この配送の取り込み先（task の repo 行のローカル path）。行が読めなければ自己リポジトリ。
-fn delivery_repo(store: &dyn TaskStore, config: &Config, d: &Delivery) -> PathBuf {
+fn delivery_repo(store: &SqliteStore, config: &Config, d: &Delivery) -> PathBuf {
     store
         .repo_list(d.project_id)
         .ok()
@@ -203,7 +204,7 @@ fn has_remote(repo: &Path, remote: &str) -> bool {
         .unwrap_or(false)
 }
 
-pub fn tick(store: &dyn TaskStore, config: &Config, now: OffsetDateTime) -> Result<(), StoreError> {
+pub fn tick(store: &SqliteStore, config: &Config, now: OffsetDateTime) -> Result<(), StoreError> {
     // ADR 2026-11-08-health-enforcement-loop D1.2: 同梱の検査器（process に 1 回設定する OnceLock）を読むのは
     // ここだけ。以降は引数で渡す（試験は OnceLock を共有せず、引数で同梱の検査器を与える）。
     let bundled = task_dispatch::health_review::gate::bundled_checker().map(|b| &b.id);
@@ -212,7 +213,7 @@ pub fn tick(store: &dyn TaskStore, config: &Config, now: OffsetDateTime) -> Resu
 
 /// [`tick`] の本体。`bundled` は同梱の検査器（[`check_required_evidence`] の適用判定に使う）。
 fn tick_with(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     config: &Config,
     now: OffsetDateTime,
     bundled: Option<&health::CheckerId>,
@@ -288,7 +289,7 @@ fn check_candidate(repo: &Path, d: &Delivery) -> Result<Candidate, String> {
 /// 案件・repo 名・`self_improve`・selfdeploy・task の mode では分岐しない（`mode = prototype` が外すのは
 /// `workspace.toml` の必須検査だけ）。
 fn check_required_evidence(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     repo: &Path,
     d: &Delivery,
     bundled: Option<&health::CheckerId>,
@@ -388,7 +389,7 @@ fn health_evaluated_target(
 /// はここでは見ない。dispatcher の review 入口が `ReviewResyncHalted`（受信箱・通知・自動再開）で扱う。
 /// stale はコードの不合格ではないので review の試行回数・ReviewRepair・配送の局所修復に数えない。
 fn request_rereview(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     old: &Delivery,
     target: &str,
     reason: &str,
@@ -498,7 +499,7 @@ fn merge_reviewed(repo: &Path, d: &Delivery) -> Result<(), String> {
 }
 
 fn make_repair(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     config: &Config,
     d: &Delivery,
     class: RepairClass,
@@ -666,7 +667,7 @@ fn make_repair(
 /// ref を読めない失敗は従来どおり merge_reviewed の失敗（局所修復の対象）に任せる（`None`）。
 /// 再レビューに戻すなら `(既定ブランチの SHA, 理由)` を返す。
 fn rereview_before_merge(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     repo: &Path,
     old: &Delivery,
     bundled: Option<&health::CheckerId>,
@@ -689,7 +690,7 @@ fn rereview_before_merge(
 
 /// `bundled` は同梱の検査器（[`tick`] が読んで渡す。[`check_required_evidence`] の適用判定に使う）。
 fn advance(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     config: &Config,
     old: &Delivery,
     now: OffsetDateTime,
@@ -1079,7 +1080,7 @@ fn preparation_dir(config: &Config, d: &Delivery) -> std::path::PathBuf {
         .join(d.task_id.to_string())
         .join(&d.head)
 }
-fn start_prepare(store: &dyn TaskStore, config: &Config, old: &Delivery) -> Result<(), StoreError> {
+fn start_prepare(store: &SqliteStore, config: &Config, old: &Delivery) -> Result<(), StoreError> {
     let dir = preparation_dir(config, old);
     let spawn = || -> std::io::Result<std::process::Child> {
         std::fs::create_dir_all(&dir)?;

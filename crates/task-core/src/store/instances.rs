@@ -6,10 +6,13 @@ use crate::instance::{DaemonInstance, InstanceRole, SELECT_INSTANCE, row_to_inst
 use super::{SqliteStore, StoreError, format_rfc3339};
 
 impl SqliteStore {
-    pub(super) fn instance_register_impl(
-        &self,
-        instance: &DaemonInstance,
-    ) -> Result<(), StoreError> {
+    // ---- ADR-0040 D4（Phase 47）: celeris のインスタンスの役割（`daemon_instances`）----
+    //
+    // ここにあるのは「行を読み書きする」だけの操作で、役割を決める規則（誰が active になるか、いつ
+    // drain するか）は celeris 側（`celeris::instance`）にある。`verify` のインスタンスはこの表に触れない。
+    /// 自分の行を作る（既にあれば上書きする＝同じ `instance_id` で起動し直したとき）。
+    /// `handoff_requested_at` / `drained_at` は NULL に戻る。
+    pub fn instance_register(&self, instance: &DaemonInstance) -> Result<(), StoreError> {
         let conn = self.lock()?;
         conn.execute(
             "INSERT OR REPLACE INTO daemon_instances \
@@ -29,7 +32,8 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub(super) fn instance_heartbeat_impl(
+    /// 自分の行の `heartbeat_at` を更新する。行が無ければ `Ok(false)`（呼び出し側は登録し直す）。
+    pub fn instance_heartbeat(
         &self,
         instance_id: &str,
         at: OffsetDateTime,
@@ -42,7 +46,9 @@ impl SqliteStore {
         Ok(affected == 1)
     }
 
-    pub(super) fn instance_request_handoff_impl(
+    /// `instance_id` の行に `handoff_requested_at` を書く（既に入っていれば**上書きしない**。
+    /// 引き継ぎの要求は 1 回だけ）。書いたら `Ok(true)`。
+    pub fn instance_request_handoff(
         &self,
         instance_id: &str,
         at: OffsetDateTime,
@@ -56,7 +62,8 @@ impl SqliteStore {
         Ok(affected == 1)
     }
 
-    pub(super) fn instance_set_role_impl(
+    /// 役割を変える（`heartbeat_at` も同時に更新する）。行が無ければ `Ok(false)`。
+    pub fn instance_set_role(
         &self,
         instance_id: &str,
         role: InstanceRole,
@@ -70,7 +77,8 @@ impl SqliteStore {
         Ok(affected == 1)
     }
 
-    pub(super) fn instance_mark_drained_impl(
+    /// 手元の run が 0 になったので `drained_at` を書く（役割は `draining` のまま）。行が無ければ `Ok(false)`。
+    pub fn instance_mark_drained(
         &self,
         instance_id: &str,
         at: OffsetDateTime,
@@ -84,7 +92,8 @@ impl SqliteStore {
         Ok(affected == 1)
     }
 
-    pub(super) fn instance_list_impl(&self) -> Result<Vec<DaemonInstance>, StoreError> {
+    /// 全インスタンスを `started_at` 昇順（同時刻は `instance_id` 昇順）で返す。
+    pub fn instance_list(&self) -> Result<Vec<DaemonInstance>, StoreError> {
         self.with_read_conn(|conn| {
             let mut stmt = conn.prepare(&format!(
                 "{SELECT_INSTANCE} ORDER BY started_at ASC, instance_id ASC"
@@ -98,7 +107,8 @@ impl SqliteStore {
         })
     }
 
-    pub(super) fn instance_delete_impl(&self, instance_id: &str) -> Result<bool, StoreError> {
+    /// 1 行消す。無い id は `Ok(false)`。
+    pub fn instance_delete(&self, instance_id: &str) -> Result<bool, StoreError> {
         let conn = self.lock()?;
         let affected = conn.execute(
             "DELETE FROM daemon_instances WHERE instance_id = ?1",
@@ -107,7 +117,10 @@ impl SqliteStore {
         Ok(affected == 1)
     }
 
-    pub(super) fn instance_delete_where_impl(
+    /// 他のインスタンスの行のうち `removable` が真のものを消す（`keep` は消さない）。`removable` は
+    /// 同じ transaction の中で 1 行ずつ呼ばれる。消した `instance_id` を昇順で返す。
+    /// 何を消すかの規則は celeris 側（`celeris::instance::removable_row`）にある。
+    pub fn instance_delete_where(
         &self,
         keep: &str,
         removable: &dyn Fn(&DaemonInstance) -> bool,
@@ -130,7 +143,11 @@ impl SqliteStore {
         Ok(removed)
     }
 
-    pub(super) fn instance_register_if_impl(
+    /// ADR-0040 D4 付記（2026-10-05）: `instance` の行を作る／上書きするが、**同じ transaction の中で**
+    /// 全行を `admit` に渡し、`true` を返したときだけ書く。`false` なら何も書かず `Ok(false)`。
+    /// 「active になってよいか」の判断と書き込みを 1 つの writer transaction に入れるための口
+    /// （判断の中身は celeris 側にある。store は読んで書くだけ）。
+    pub fn instance_register_if(
         &self,
         instance: &DaemonInstance,
         admit: &dyn Fn(&[DaemonInstance]) -> bool,
@@ -159,7 +176,10 @@ impl SqliteStore {
         Ok(true)
     }
 
-    pub(super) fn instance_set_role_if_impl(
+    /// ADR-0040 D4 付記（2026-10-05）: `instance_id` の行の役割を `role` にする。`admit` は
+    /// `instance_register_if` と同じく同じ transaction で全行（この行を含む）を見て、`true` のときだけ書く。
+    /// 行が無い、または `admit` が `false` なら `Ok(false)`。
+    pub fn instance_set_role_if(
         &self,
         instance_id: &str,
         role: InstanceRole,

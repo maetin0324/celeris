@@ -71,7 +71,7 @@ fn ends() -> Vec<(Terminal, task_core::RunEnd)> {
     ]
 }
 
-fn wu_plan(store: &Arc<dyn TaskStore>, task_id: TaskId) {
+fn wu_plan(store: &Arc<SqliteStore>, task_id: TaskId) {
     let spec = task_core::ExecutionPlanSpec {
         stages: Vec::new(),
         units: Vec::new(),
@@ -98,7 +98,7 @@ fn wu_plan(store: &Arc<dyn TaskStore>, task_id: TaskId) {
 /// 1 つの task を `[execution] continuation = true` で動かし、events を返す。
 async fn run_task(work_unit: bool, terminal: Terminal, continues: bool) -> Vec<(u64, Event)> {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {

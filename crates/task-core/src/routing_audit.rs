@@ -1,6 +1,6 @@
 //! ADR-0069 D5（Phase 114）: run ごとの routing の監査記録（担当・harness・lane・model・features・規則・
 //! policy の版）と、Phase 104 のメトリクス（cost・tokens・wall time・retries）とレビュー結果を
-//! 突き合わせる純粋関数。イベントは古い順に渡す（`TaskStore::events_for` の順）。
+//! 突き合わせる純粋関数。イベントは古い順に渡す（`SqliteStore::events_for` の順）。
 //!
 //! ADR 2026-10-04-multi-objective-model-routing Phase 3（§5・§6）: run の dispatch 決定に、構造化した
 //! escalation の監査（`RoutingRecord.escalation`）、dispatch 時点の特徴 snapshot（`routing_features_recorded`）、

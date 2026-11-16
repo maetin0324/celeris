@@ -1,6 +1,8 @@
 //! run の文脈の組み立て（run_extras・session・knowledge・skills・milestone）。ADR-0082 の L1。
 
 use super::*;
+use task_core::OrgDirectory;
+use task_core::TaskQuery;
 
 /// 付記 (b): worker と planner の run の作業場所の情報（review 方針）。file は size の制約で `health_review/` に置く。
 #[path = "../health_review/worker_profile.rs"]

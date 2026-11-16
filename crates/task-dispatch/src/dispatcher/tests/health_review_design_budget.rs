@@ -14,7 +14,7 @@ use super::health_review_design_gate::{DIGEST, STORE_PATH, checker_repo, stub, v
 use super::tree_gate::seed_tree_run;
 
 struct Fixture {
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     d: Dispatcher,
     task: Task,
     seen: Arc<StdMutex<Vec<task_worker::RunContext>>>,
@@ -104,7 +104,7 @@ fn pending_design_review_with(
 ) -> Fixture {
     let repo = checker_repo(&stub("base"));
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = compound_task(repo.path());
     task.workspace = WorkspaceSpec::Local {
         path: repo.path().to_path_buf(),

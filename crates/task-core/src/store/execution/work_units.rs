@@ -188,10 +188,8 @@ impl SqliteStore {
         })())
     }
 
-    pub(in crate::store) fn work_units_for_impl(
-        &self,
-        task_id: TaskId,
-    ) -> Result<Vec<WorkUnitRow>, StoreError> {
+    /// そのタスクの WorkUnit（`seq` 昇順）。
+    pub fn work_units_for(&self, task_id: TaskId) -> Result<Vec<WorkUnitRow>, StoreError> {
         self.with_read_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, task_id, plan_id, key, seq, kind, status, blocked_reason, \
@@ -210,10 +208,8 @@ impl SqliteStore {
         })
     }
 
-    pub(in crate::store) fn work_unit_get_impl(
-        &self,
-        id: &str,
-    ) -> Result<Option<WorkUnitRow>, StoreError> {
+    /// 1 件。無ければ `None`。
+    pub fn work_unit_get(&self, id: &str) -> Result<Option<WorkUnitRow>, StoreError> {
         self.with_read_conn(|conn| {
             conn.query_row(
                 "SELECT id, task_id, plan_id, key, seq, kind, status, blocked_reason, \
@@ -229,7 +225,10 @@ impl SqliteStore {
         })
     }
 
-    pub(in crate::store) fn recover_work_unit_impl(
+    /// ADR-0070/0074 付記（2026-10-06）: 持ち主の無い Running WU を checkpoint の有無で
+    /// Ready / NeedsContinuation に戻す。生死は呼び出し側が確認する。writer transaction 内で
+    /// expected の status・plan・run・更新時刻と非終端 task を再確認し、古い回収で新 run を戻さない。
+    pub fn recover_work_unit(
         &self,
         task_id: TaskId,
         expected: &WorkUnitRow,
@@ -283,7 +282,10 @@ impl SqliteStore {
         Ok(true)
     }
 
-    pub(in crate::store) fn try_start_work_unit_integration_impl(
+    /// ADR-0074 付記（2026-10-05）: Task が Running で、統合 WU が読み取ったままの
+    /// Pending / Ready なら、同じ transaction で WU を Running にして reason=integrate を残す。
+    /// Task の ready 戻し・WU の更新が先行したら何も書かず false。spawn は true のときだけ行う。
+    pub fn try_start_work_unit_integration(
         &self,
         task_id: TaskId,
         expected: &WorkUnitRow,
@@ -338,7 +340,14 @@ impl SqliteStore {
         Ok(true)
     }
 
-    pub(in crate::store) fn acquire_work_unit_lease_impl(
+    /// ADR-0074 D1.5（Phase F2）: WU の lease を取る。1 トランザクションで「Task が `Running`」
+    /// 「WU が `ready` / `needs_continuation`」を確かめ、WU を `running` にし（`runs + 1`、
+    /// `last_run_id = run_id`、lease 列）、`WorkUnitTransitioned{to: running, reason: "dispatch"}` を
+    /// 追記し、**Task の lease の期限を WU の lease の期限まで延ばす**（短くはしない）。
+    /// `branch` / `base_commit` が `Some` なら WU の行にも書く（WU の worktree を切ったとき）。
+    /// 条件に合わなければ `Ok(false)`（何も書かない）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn acquire_work_unit_lease(
         &self,
         task_id: TaskId,
         work_unit_id: &str,
@@ -426,7 +435,10 @@ impl SqliteStore {
         Ok(true)
     }
 
-    pub(in crate::store) fn work_units_apply_impl(
+    /// ADR-0074 D1.4（Phase F2b）: WU の行の追加（`inserted`）と書き換え（`updated`）と `events` を
+    /// 1 トランザクションで書く（統合の repair WU を足し、統合 WU の依存を付け足す、など）。
+    /// Task の状態は変えない。
+    pub fn work_units_apply(
         &self,
         task_id: TaskId,
         inserted: Vec<WorkUnitRow>,
@@ -448,7 +460,10 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub(in crate::store) fn running_tasks_with_runnable_work_units_impl(
+    /// ADR-0074 D1.3 3.（Phase F2）: `Running` で、`phase` のある（v2 の）WU に `ready` /
+    /// `needs_continuation` のものを持つ Task（`created_at` 昇順、最大 `limit` 件）。
+    /// 公平性: `dispatch_ready` はこの Task たちの 2 本目以降を、Ready の Task の 1 本目の後に回す。
+    pub fn running_tasks_with_runnable_work_units(
         &self,
         limit: usize,
     ) -> Result<Vec<Task>, StoreError> {
@@ -471,7 +486,11 @@ impl SqliteStore {
         })
     }
 
-    pub(in crate::store) fn work_units_replace_impl(
+    /// ADR-0072 D5/D15（Phase E2b）: `task_id` の `work_units` 行を、渡した集合でまるごと置き換える
+    /// （既存行を全て削除してから挿入。1 トランザクション）。`events` は変えない。
+    /// `celerisctl replay --apply`（`task_ops::replay::check_and_apply_execution`）が
+    /// `rebuild_work_units_and_runs` の再構築結果を書き戻すのに使う（events が正本、索引は派生。D5）。
+    pub fn work_units_replace(
         &self,
         task_id: TaskId,
         rows: Vec<WorkUnitRow>,

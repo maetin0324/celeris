@@ -10,7 +10,7 @@ use task_core::route_select::{
 };
 
 fn test_dispatcher(now: i64) -> Dispatcher {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let adapter: Arc<dyn WorkerAdapter> = Arc::new(InstantAdapter {
         terminal: Terminal::Done {
             summary: "x".into(),

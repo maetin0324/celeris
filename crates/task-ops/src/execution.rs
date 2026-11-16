@@ -8,8 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use task_core::execution_plan::{PlanContext, PlanValidationError, validate_with};
 use task_core::{
-    Event, ExecutionLimits, ExecutionPlanRow, ExecutionPlanSpec, PlanOrigin, PlanStatus, TaskId,
-    TaskStore, WorkUnitBlockedReason, WorkUnitRow, WorkUnitStatus, new_id,
+    Event, ExecutionLimits, ExecutionPlanRow, ExecutionPlanSpec, PlanOrigin, PlanStatus,
+    SqliteStore, TaskId, WorkUnitBlockedReason, WorkUnitRow, WorkUnitStatus, new_id,
 };
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -45,7 +45,7 @@ pub fn describe_validation_errors(errors: &[PlanValidationError]) -> String {
 /// 存在・自分の木の外・同じ案件・循環なし）。人・CoS の採用と replan が通る。planner の計画は dispatcher が同じ
 /// `unit_task_deps::plan_errors` で見る。
 fn validate_for_task(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &task_core::Task,
     spec: &ExecutionPlanSpec,
     limits: ExecutionLimits,
@@ -83,7 +83,7 @@ pub fn describe_task_dependency_errors(
 /// - タスクに既に `active` な計画があれば `OpsError::Store(StoreError::InUse)`（E2 は新規のみ。
 ///   replan は Phase E4）。
 pub fn adopt_plan(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
     spec: ExecutionPlanSpec,
     origin: PlanOrigin,
@@ -105,10 +105,10 @@ pub fn adopt_plan(
 
 /// ADR-0074 D3.7（Phase F4b (f)）: `adopt_plan` と同じ。`children`（`delegate::plan_children` を
 /// 通った子 Task）が空でなければ、採用と同じトランザクションで子を作り `Event::Delegated{run_id:
-/// <planner run>}` を残す（`TaskStore::execution_plan_adopt_delegating`）。
+/// <planner run>}` を残す（`SqliteStore::execution_plan_adopt_delegating`）。
 #[allow(clippy::too_many_arguments)]
 pub fn adopt_plan_with_children(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
     spec: ExecutionPlanSpec,
     origin: PlanOrigin,
@@ -244,7 +244,7 @@ pub struct PreparedHumanPlanAdoption {
 ///   1 件残す（承認が要る形なら理由も）。部をまたぐ子の認可の質問（ADR-0074 F4b）も人の計画には出さない
 ///   （書いた人が認可の主体。SPEC §3.1）。
 pub fn adopt_human_plan(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
     spec: ExecutionPlanSpec,
     limits: ExecutionLimits,
@@ -273,7 +273,7 @@ pub fn adopt_human_plan(
 
 /// Preserve the human-plan informational notice as a best-effort post-commit write.
 pub fn record_human_plan_notice(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     adopted: &HumanPlanAdopted,
     by: &str,
     now: OffsetDateTime,
@@ -298,7 +298,7 @@ pub fn record_human_plan_notice(
 
 /// Build the complete write set for a human plan adoption without mutating the store.
 pub fn prepare_human_plan_adoption(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
     spec: ExecutionPlanSpec,
     limits: ExecutionLimits,
@@ -531,7 +531,7 @@ pub struct ReplanDiff {
 /// - 旧版が並行に置き換わっていれば `OpsError::Store(StoreError::InUse)`。
 #[allow(clippy::too_many_arguments)]
 pub fn replan(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
     spec: ExecutionPlanSpec,
     reason: String,
@@ -595,7 +595,7 @@ fn only_done_checks_changed(
 /// [`replan`] の検証と書き込みの組み立て（読むだけ）。
 #[allow(clippy::too_many_arguments)]
 pub fn plan_replan(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
     spec: ExecutionPlanSpec,
     reason: String,
@@ -1191,7 +1191,7 @@ pub struct PlanView {
 }
 
 /// タスクの `active` な計画を読む。無ければ `Ok(None)`（タスク自体が無ければ `OpsError::NotFound`）。
-pub fn active_plan(store: &dyn TaskStore, task_id: TaskId) -> Result<Option<PlanView>, OpsError> {
+pub fn active_plan(store: &SqliteStore, task_id: TaskId) -> Result<Option<PlanView>, OpsError> {
     if store.get(task_id)?.is_none() {
         return Err(OpsError::NotFound(task_id));
     }

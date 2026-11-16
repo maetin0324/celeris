@@ -2,11 +2,11 @@
 //! ADR-0004 D1-D3 / ADR-0010 D3/D4（ADR-0013 D7）。
 //!
 //! 元は `celerisctl` の `commands/gate.rs` と `commands/cancel.rs` にあったロジックをそのまま移した。
-//! 状態変更は `TaskStore::apply_transition` だけで行う。`expected` が `Some` で現在の `status` と
+//! 状態変更は `SqliteStore::apply_transition` だけで行う。`expected` が `Some` で現在の `status` と
 //! 違えば、遷移を試みずに `OpsError::Conflict` を返す。
 
 use task_core::approval::Decision;
-use task_core::{Event, Status, TaskId, TaskKind, TaskStore, Trigger};
+use task_core::{Event, SqliteStore, Status, TaskId, TaskKind, Trigger};
 use time::OffsetDateTime;
 
 use crate::derive::latest_question;
@@ -34,7 +34,7 @@ pub struct TransitionResult {
 /// タスクに付いた `Transitioned{to: Cancelled, reason: "cancel" | "dependency_failed" | "parent_cancelled"}` を
 /// `TaskRef` にして返す（`docs/api/v1/api.md` §5.7）。
 fn collect_cascaded(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     subject: TaskId,
     since_id: u64,
 ) -> Result<Vec<TaskRef>, OpsError> {
@@ -76,7 +76,7 @@ fn check_expected(actual: Status, expected: Option<Status>) -> Result<(), OpsErr
 /// `status == Draft`（kind 不問）は `Trigger::Accept`、`kind == Approval && status == Ready` は
 /// `Trigger::Approve` で `Event::ApprovalDecided` を同一トランザクションに追記する。
 pub fn approve(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     note: Option<String>,
     expected: Option<Status>,
@@ -88,7 +88,7 @@ pub fn approve(
 /// MCP の `task_approve` は `mcp:<client_id>` を渡す。`approve`（GUI/HTTP の `POST
 /// /tasks/{id}/approve`）は `"human"` のまま（挙動を変えない）。
 pub fn approve_as(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     by: &str,
     note: Option<String>,
@@ -99,7 +99,7 @@ pub fn approve_as(
 
 /// [`approve_as`] の書き込みを `writes` に任せる（人の経路は `human_epoch` を同じ transaction で増やす）。
 pub fn approve_via(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     writes: &dyn OpWrites,
     id: TaskId,
     by: &str,
@@ -147,7 +147,7 @@ pub fn approve_via(
 /// 許す、`accept` と同じ意味だが承認の記録は残さない専用の道具。`approve` は `Draft` でも
 /// `Trigger::Accept` を選ぶので挙動はまったく同じ（こちらは名前で意図を明確にするための薄い別名）。
 pub fn accept(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     expected: Option<Status>,
 ) -> Result<TransitionResult, OpsError> {
@@ -156,7 +156,7 @@ pub fn accept(
 
 /// [`accept`] の書き込みを `writes` に任せる。
 pub fn accept_via(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     writes: &dyn OpWrites,
     id: TaskId,
     expected: Option<Status>,
@@ -186,7 +186,7 @@ pub fn accept_via(
 /// `kind == Approval && status == Ready` のみ許可する（`draft` への `reject` は
 /// 成功させない。ADR-0004 D2: P-5 は不採用。draft の取り消しは `cancel` を使う）。
 pub fn reject(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     note: Option<String>,
     expected: Option<Status>,
@@ -198,7 +198,7 @@ pub fn reject(
 /// MCP の `task_reject` は `mcp:<client_id>` を渡す。`reject`（GUI/HTTP の `POST
 /// /tasks/{id}/reject`）は `"human"` のまま（挙動を変えない）。
 pub fn reject_as(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     by: &str,
     note: Option<String>,
@@ -209,7 +209,7 @@ pub fn reject_as(
 
 /// [`reject_as`] の書き込みを `writes` に任せる。
 pub fn reject_via(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     writes: &dyn OpWrites,
     id: TaskId,
     by: &str,
@@ -274,7 +274,7 @@ pub enum AnswerIntent {
 pub const PLAN_ISSUE_REPLAN_HINT: &str = "（replan の上限を使い切りました。回答して再開すると同じ check のまま再開します。計画を直すなら受信箱で「計画を直す」（回答の intent=replan）を選ぶと、回答を指示に planner がこの unit の check・範囲を直します。人の replan は上限に数えません）";
 
 /// D2: active な計画で `blocked(plan_issue)` の WU の key（seq 順）。
-pub fn plan_issue_unit_keys(store: &dyn TaskStore, id: TaskId) -> Result<Vec<String>, OpsError> {
+pub fn plan_issue_unit_keys(store: &SqliteStore, id: TaskId) -> Result<Vec<String>, OpsError> {
     Ok(store
         .work_units_for(id)?
         .into_iter()
@@ -289,7 +289,7 @@ pub fn plan_issue_unit_keys(store: &dyn TaskStore, id: TaskId) -> Result<Vec<Str
 /// D2: 回答と同じ transaction に足す events（`Answered` の後）。`Resume` は無し。`Replan` は
 /// `blocked(plan_issue)` の WU が無ければ検証エラー、あれば人の replan の依頼（`ExecutionHintSet{replan: true}`）。
 pub fn answer_intent_events(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     question: &str,
     answer: &str,
@@ -328,7 +328,7 @@ pub fn answer_intent_events(
 /// `question` は直近の `WorkerFinished{outcome:"question: ..."}` から取る（無ければ空文字列）。
 /// 意図は `resume`（[`answer_with_intent`]）。
 pub fn answer(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     answer: String,
     by: &str,
@@ -340,7 +340,7 @@ pub fn answer(
 /// [`answer`] に意図を付けたもの（ADR 2026-10-22-plan-issue-answer-replans D1/D2）。`Replan` は
 /// `Answered` と同じ transaction で [`answer_intent_events`] を書く。
 pub fn answer_with_intent(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     answer: String,
     intent: AnswerIntent,
@@ -352,7 +352,7 @@ pub fn answer_with_intent(
 
 /// [`answer_with_intent`] の書き込みを `writes` に任せる。
 pub fn answer_via(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     writes: &dyn OpWrites,
     id: TaskId,
     answer: String,
@@ -421,7 +421,7 @@ pub fn answer_via(
 /// 質問への回答の検証だけ（書き込みなし）。返すのは `(元の状態, 問い)`。CoS の監査つき操作
 /// （ADR 2026-10-05 D3）が同じ検証のまま遷移を自分の transaction で書くのに使う。
 pub fn plan_answer(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     expected: Option<Status>,
 ) -> Result<(Status, String), OpsError> {
@@ -450,7 +450,7 @@ pub fn plan_answer(
 /// 汎用の回答で再開される統合 WU（`blocked(question)` の `Integrate`）が出した未回答の統合依頼を
 /// `answered` で閉じる。依頼の無い task では何もしない。
 pub fn close_phase_integration_requests(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
     answer: &str,
     by: &str,
@@ -478,7 +478,7 @@ pub fn close_phase_integration_requests(
 /// `task_ops::approval::decide` は呼ばない（そちらは決定のたびに `gate::answer` を呼び直すため、
 /// ここから呼ぶと循環する。ストアへの書き込みだけをここで完結させる）。
 pub fn settle_pending_approvals(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
     answer: &str,
 ) -> Result<(), OpsError> {
@@ -492,9 +492,9 @@ pub fn settle_pending_approvals(
 
 /// 非終端と `failed` のタスクを `Trigger::Cancel` で `cancelled` にする。
 /// `done` / `cancelled` はエラーにする（ADR-0131 D7）。子・後続への
-/// 取り消し伝播は `TaskStore::apply_transition` がストア側の同一トランザクションで行う。
+/// 取り消し伝播は `SqliteStore::apply_transition` がストア側の同一トランザクションで行う。
 pub fn cancel(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     expected: Option<Status>,
 ) -> Result<TransitionResult, OpsError> {
@@ -528,7 +528,7 @@ where
 
 /// [`cancel`] の書き込みを `writes` に任せる（phase・plan gate の取り下げ）。
 pub fn cancel_via(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     writes: &dyn OpWrites,
     id: TaskId,
     expected: Option<Status>,
@@ -541,7 +541,7 @@ pub fn cancel_via(
 
 /// [`cancel`] の検証（読むだけ）。
 fn plan_cancel(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     expected: Option<Status>,
 ) -> Result<task_core::Task, OpsError> {
@@ -559,7 +559,7 @@ fn plan_cancel(
 }
 
 fn finish_cancel(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     from: Status,
     since_id: u64,

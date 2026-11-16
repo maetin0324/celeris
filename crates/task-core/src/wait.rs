@@ -1,7 +1,7 @@
 //! ADR 2026-10-11-task-wait-reasons: task の「なぜ今走らないか」（待ちの理由）。
 //!
 //! DB だけで決まる理由（D1〜D13）はここの純粋関数（`halt_waits`・`db_waits`・`plan_waits`・`unit_waits`）で決め、
-//! `ready_tasks_impl`・`newly_ready`・dispatcher の `resolve_child_dependencies` が同じ関数を呼ぶ（画面用に別の
+//! `ready_tasks`・`newly_ready`・dispatcher の `resolve_child_dependencies` が同じ関数を呼ぶ（画面用に別の
 //! 推測を作らない）。dispatcher のメモリにしか無い理由（M1〜M8）は dispatcher が tick ごとに決め、
 //! `DaemonSnapshot.task_waits` に載せる。I/O・LLM 呼び出しはしない。
 

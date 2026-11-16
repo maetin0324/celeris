@@ -77,7 +77,7 @@ pub(crate) fn project_cos_thread(store: &task_core::SqliteStore, key: &str) -> S
         created_at: now,
         updated_at: now,
     };
-    task_core::TaskStore::project_create(store, &project).expect("project");
+    task_core::SqliteStore::project_create(store, &project).expect("project");
     store
         .cos_thread_open(
             &task_core::chat::ChatOpenThreadRequest {

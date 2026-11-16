@@ -48,8 +48,7 @@ use routing_eval::manifest::Manifest as Input;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use task_core::{
-    DaemonMode, Event, InstanceRole, RunRole, SharedRole, SqliteStore, Status, TaskId, TaskStore,
-    Trigger,
+    DaemonMode, Event, InstanceRole, RunRole, SharedRole, SqliteStore, Status, TaskId, Trigger,
     decision_log::{
         CampaignVerdict, CandidateRef, DecisionLogOutcome, DecisionLogProposal, DecisionLogUsage,
         UsageRole,

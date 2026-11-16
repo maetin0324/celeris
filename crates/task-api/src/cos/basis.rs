@@ -12,10 +12,10 @@ use std::collections::HashSet;
 
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
-use task_core::approval::{ApprovalId, ApprovalStore, Decision};
+use task_core::approval::{ApprovalId, Decision};
 use task_core::decision::DecisionStatus;
 use task_core::store::SqliteStore;
-use task_core::{Event, TaskId, TaskStore};
+use task_core::{Event, TaskId};
 use task_ops::human_inbox::InboxKind;
 
 use crate::problem::{ApiProblem, store_problem};

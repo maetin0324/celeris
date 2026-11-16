@@ -4,9 +4,9 @@ use super::{
     ChatForwardRequest, ChatMessage, ChatMessageQuery, ChatOpenThreadRequest,
     ChatPostMessageRequest, ChatSendMode,
 };
+use crate::Status;
 use crate::store::SqliteStore;
 use crate::store::tests::sample_task;
-use crate::{Status, TaskStore};
 use time::OffsetDateTime;
 
 fn at(n: i64) -> OffsetDateTime {

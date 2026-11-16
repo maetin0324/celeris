@@ -4,12 +4,12 @@
 use std::collections::BTreeMap;
 
 use super::*;
-use task_core::feed::{NoticeQuery, NoticeStore};
+use task_core::feed::NoticeQuery;
 use task_core::llm_route::{CandidateKey, HarnessId, Registry, RouteSelectionSettings};
 use task_core::model::{Budget, Check, Criterion, WorkerHint, WorkspaceSpec};
 use task_core::model_router::feedback::RoutingOutcome;
 use task_core::routing_evidence::{EvidenceKey, EvidenceRow};
-use task_core::{Event, SqliteStore, Status, Task, TaskId, TaskKind, TaskStore, Tier};
+use task_core::{Event, SqliteStore, Status, Task, TaskId, TaskKind, Tier};
 use task_ops::routing_outcome::RouteWindow;
 use time::OffsetDateTime;
 

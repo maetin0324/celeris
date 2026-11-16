@@ -1,5 +1,6 @@
 //! Daily batch orchestration. All durable claims live in SQLite; no LLM calls here.
 use super::*;
+use task_core::OrgDirectory;
 use task_core::{KnowledgeRunState, KnowledgeRunSummary};
 
 const LABEL: &str = "knowledge-daily";
@@ -37,7 +38,7 @@ pub(super) fn interval(
 /// None means the extraction is still running. Some means curation may prepare inputs.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn advance(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     root: &Path,
     roots: &WorkspaceRoots,
     task: &Task,
@@ -50,7 +51,7 @@ pub(super) fn advance(
 
 #[allow(clippy::too_many_arguments)]
 fn advance_inner(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     root: &Path,
     roots: &WorkspaceRoots,
     task: &Task,
@@ -267,7 +268,7 @@ fn retry_requested(r: &task_core::KnowledgeRun) -> bool {
 
 /// 元 task の root task の案件の slug（root に無ければ元 task 自身の案件）。
 fn source_project(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     projects: &[task_core::knowledge::ProjectRef],
     id: TaskId,
 ) -> Result<Option<String>, StoreError> {
@@ -287,7 +288,7 @@ fn source_project(
     }))
 }
 
-pub(super) fn source_count(store: &dyn TaskStore, task: &Task) -> Result<usize, StoreError> {
+pub(super) fn source_count(store: &SqliteStore, task: &Task) -> Result<usize, StoreError> {
     let Some(r) = store.knowledge_run_get(task.id)? else {
         return Ok(0);
     };
@@ -311,7 +312,7 @@ fn source_id(r: &serde_json::Value) -> Result<TaskId, StoreError> {
 }
 
 fn apply(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     root: &Path,
     roots: &WorkspaceRoots,
     extraction: &Task,
@@ -406,7 +407,7 @@ fn repair_placements(
 }
 
 pub(super) fn staged(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     summary: &KnowledgeRunSummary,
     now: OffsetDateTime,
@@ -422,7 +423,7 @@ pub(super) fn staged(
 }
 
 pub(super) fn ready(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     summary: &KnowledgeRunSummary,
     now: OffsetDateTime,
@@ -438,13 +439,13 @@ pub(super) fn ready(
 }
 
 pub(super) fn summary(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
 ) -> Result<Option<KnowledgeRunSummary>, StoreError> {
     Ok(store.knowledge_run_get(task.id)?.and_then(|r| r.summary))
 }
 
-pub(super) fn render(store: &dyn TaskStore, task: &Task) -> Result<String, StoreError> {
+pub(super) fn render(store: &SqliteStore, task: &Task) -> Result<String, StoreError> {
     let Some(s) = summary(store, task)? else {
         return Ok(String::new());
     };
@@ -466,7 +467,7 @@ pub(super) fn render(store: &dyn TaskStore, task: &Task) -> Result<String, Store
 }
 
 pub(super) fn failures(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
 ) -> Result<Vec<curation::HumanDecision>, StoreError> {
     Ok(summary(store, task)?

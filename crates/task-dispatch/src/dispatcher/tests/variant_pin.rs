@@ -7,7 +7,7 @@ use task_core::variant_wire::{CampaignOrgPin, CampaignVariantRef, effective_prof
 
 const H: &str = "b6132a44b6132a44b6132a44b6132a44b6132a44b6132a44b6132a44b6132a44";
 
-fn seed(store: &dyn TaskStore, sections: &[&str]) {
+fn seed(store: &SqliteStore, sections: &[&str]) {
     store
         .org_upsert(&org_node_of("cos", None, OrgKind::Secretary, None))
         .unwrap();
@@ -18,7 +18,7 @@ fn seed(store: &dyn TaskStore, sections: &[&str]) {
     }
 }
 
-fn pin_for(store: &dyn TaskStore, nodes: &[&str], coding: &str) -> CampaignOrgPin {
+fn pin_for(store: &SqliteStore, nodes: &[&str], coding: &str) -> CampaignOrgPin {
     let org = store.org_list().unwrap();
     CampaignOrgPin {
         nodes: nodes.iter().map(|s| s.to_string()).collect(),
@@ -50,13 +50,13 @@ fn identity(pin: CampaignOrgPin) -> CampaignIdentity {
 
 struct Fx {
     sqlite: Arc<SqliteStore>,
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     dir: tempfile::TempDir,
 }
 
 fn fx() -> Fx {
     let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let store: Arc<SqliteStore> = sqlite.clone();
     Fx {
         sqlite,
         store,

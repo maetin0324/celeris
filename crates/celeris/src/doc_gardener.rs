@@ -1,8 +1,10 @@
 //! Managed repository documentation scans. No LLM runs in the daemon.
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use task_core::OrgDirectory;
+use task_core::TaskQuery;
 use task_core::local_machine::WorkspaceRoots;
-use task_core::{GenreSpec, ListFilter, ListOrder, RoleSpec, TaskId, TaskStore, WorkspaceSpec};
+use task_core::{GenreSpec, ListFilter, ListOrder, RoleSpec, SqliteStore, TaskId, WorkspaceSpec};
 use task_ops::docs_maintenance as docs;
 use time::OffsetDateTime;
 
@@ -38,7 +40,7 @@ fn due(last: i64, now: i64, hours: u64) -> bool {
 
 /// Each repository is independent: a bad policy or inaccessible repo cannot stop dispatch.
 pub fn tick(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     config: &GardenerConfig,
     workspace_roots: &WorkspaceRoots,
     roles: &[RoleSpec],
@@ -93,7 +95,7 @@ pub fn tick(
 
 #[allow(clippy::too_many_arguments)]
 fn schedule_repo(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     config: &GardenerConfig,
     workspace_roots: &WorkspaceRoots,
     roles: &[RoleSpec],

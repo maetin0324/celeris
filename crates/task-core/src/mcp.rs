@@ -193,35 +193,9 @@ pub struct McpCall {
     pub request: Option<String>,
 }
 
-/// MCP クライアント表の永続状態（`SqliteStore` が実装する）。
-pub trait McpClientStore: Send + Sync {
-    fn mcp_client_create(&self, client: &McpClient) -> Result<(), StoreError>;
-    fn mcp_client_get(&self, id: &str) -> Result<Option<McpClient>, StoreError>;
-    fn mcp_client_by_token_hash(&self, token_hash: &str) -> Result<Option<McpClient>, StoreError>;
-    /// `created_at` の昇順。
-    fn mcp_client_list(&self) -> Result<Vec<McpClient>, StoreError>;
-    /// 無ければ `false`。
-    fn mcp_client_revoke(&self, id: &str, now: OffsetDateTime) -> Result<bool, StoreError>;
-    fn mcp_client_touch_last_used(&self, id: &str, now: OffsetDateTime)
-    -> Result<bool, StoreError>;
-    /// scope を置き換える（ADR 2026-10-23-mcp-read-only-db-and-api D1。人が `celerisctl mcp client scopes`
-    /// で行う）。無ければ `false`。
-    fn mcp_client_set_scopes(&self, id: &str, scopes: &[McpScope]) -> Result<bool, StoreError>;
-}
-
-/// MCP 呼び出しログの永続状態（`SqliteStore` が実装する）。
-pub trait McpCallStore: Send + Sync {
-    fn mcp_call_record(&self, call: &McpCall) -> Result<(), StoreError>;
-    /// `client_id` が `Some` ならその客だけ、`None` なら全客。新しい順に最大 `limit` 件。
-    fn mcp_calls_list(
-        &self,
-        client_id: Option<&str>,
-        limit: usize,
-    ) -> Result<Vec<McpCall>, StoreError>;
-}
-
-impl McpClientStore for SqliteStore {
-    fn mcp_client_create(&self, client: &McpClient) -> Result<(), StoreError> {
+// MCP クライアント表の永続状態（`SqliteStore` が実装する）。
+impl SqliteStore {
+    pub fn mcp_client_create(&self, client: &McpClient) -> Result<(), StoreError> {
         let created_at = format_rfc3339(client.created_at)?;
         let conn = self.lock()?;
         conn.execute(
@@ -237,8 +211,7 @@ impl McpClientStore for SqliteStore {
         )?;
         Ok(())
     }
-
-    fn mcp_client_get(&self, id: &str) -> Result<Option<McpClient>, StoreError> {
+    pub fn mcp_client_get(&self, id: &str) -> Result<Option<McpClient>, StoreError> {
         let conn = self.lock()?;
         let row = conn
             .query_row(
@@ -252,8 +225,10 @@ impl McpClientStore for SqliteStore {
             None => Ok(None),
         }
     }
-
-    fn mcp_client_by_token_hash(&self, token_hash: &str) -> Result<Option<McpClient>, StoreError> {
+    pub fn mcp_client_by_token_hash(
+        &self,
+        token_hash: &str,
+    ) -> Result<Option<McpClient>, StoreError> {
         let conn = self.lock()?;
         let row = conn
             .query_row(
@@ -267,8 +242,8 @@ impl McpClientStore for SqliteStore {
             None => Ok(None),
         }
     }
-
-    fn mcp_client_list(&self) -> Result<Vec<McpClient>, StoreError> {
+    /// `created_at` の昇順。
+    pub fn mcp_client_list(&self) -> Result<Vec<McpClient>, StoreError> {
         let conn = self.lock()?;
         let mut stmt = conn.prepare(&format!(
             "{SELECT_MCP_CLIENT} ORDER BY created_at ASC, id ASC"
@@ -280,8 +255,8 @@ impl McpClientStore for SqliteStore {
         }
         Ok(out)
     }
-
-    fn mcp_client_revoke(&self, id: &str, now: OffsetDateTime) -> Result<bool, StoreError> {
+    /// 無ければ `false`。
+    pub fn mcp_client_revoke(&self, id: &str, now: OffsetDateTime) -> Result<bool, StoreError> {
         let ts = format_rfc3339(now)?;
         let conn = self.lock()?;
         let changed = conn.execute(
@@ -290,8 +265,7 @@ impl McpClientStore for SqliteStore {
         )?;
         Ok(changed > 0)
     }
-
-    fn mcp_client_touch_last_used(
+    pub fn mcp_client_touch_last_used(
         &self,
         id: &str,
         now: OffsetDateTime,
@@ -304,8 +278,9 @@ impl McpClientStore for SqliteStore {
         )?;
         Ok(changed > 0)
     }
-
-    fn mcp_client_set_scopes(&self, id: &str, scopes: &[McpScope]) -> Result<bool, StoreError> {
+    /// scope を置き換える（ADR 2026-10-23-mcp-read-only-db-and-api D1。人が `celerisctl mcp client scopes`
+    /// で行う）。無ければ `false`。
+    pub fn mcp_client_set_scopes(&self, id: &str, scopes: &[McpScope]) -> Result<bool, StoreError> {
         let conn = self.lock()?;
         let changed = conn.execute(
             "UPDATE mcp_clients SET scopes = ?2 WHERE id = ?1",
@@ -350,8 +325,9 @@ fn row_to_mcp_client(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<McpClie
     }))
 }
 
-impl McpCallStore for SqliteStore {
-    fn mcp_call_record(&self, call: &McpCall) -> Result<(), StoreError> {
+// MCP 呼び出しログの永続状態（`SqliteStore` が実装する）。
+impl SqliteStore {
+    pub fn mcp_call_record(&self, call: &McpCall) -> Result<(), StoreError> {
         let at = format_rfc3339(call.at)?;
         let conn = self.lock()?;
         conn.execute(
@@ -370,8 +346,8 @@ impl McpCallStore for SqliteStore {
         )?;
         Ok(())
     }
-
-    fn mcp_calls_list(
+    /// `client_id` が `Some` ならその客だけ、`None` なら全客。新しい順に最大 `limit` 件。
+    pub fn mcp_calls_list(
         &self,
         client_id: Option<&str>,
         limit: usize,

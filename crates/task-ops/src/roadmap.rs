@@ -8,6 +8,7 @@
 
 use std::collections::BTreeMap;
 
+use task_core::Task;
 use task_core::org::ProjectId;
 use task_core::project_proposal::{self as pp, root_satisfies};
 use task_core::roadmap::{
@@ -15,7 +16,6 @@ use task_core::roadmap::{
     snapshot_outcomes,
 };
 use task_core::store::{NewOutcomeEvent, RoadmapWriteError, SqliteStore};
-use task_core::{Task, TaskStore};
 use time::OffsetDateTime;
 
 use crate::OpsError;

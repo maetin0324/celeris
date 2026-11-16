@@ -1,6 +1,6 @@
 use super::*;
 use crate::org::{OrgKind, OrgNode};
-use crate::store::{OrgDirectory, TaskStore};
+use crate::store::{OrgDirectory, SqliteStore};
 
 fn node(id: &str, parent: Option<&str>, kind: OrgKind) -> OrgNode {
     let now = OffsetDateTime::now_utc();

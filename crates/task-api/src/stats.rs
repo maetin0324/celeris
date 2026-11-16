@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, HashMap};
 
 #[cfg(test)]
 use task_core::Task;
-use task_core::{Event, EventRow, Status, StoreError, TaskStore, Tier};
+use task_core::{Event, EventRow, SqliteStore, Status, StoreError, Tier};
 use task_ops::view::RunOutcomeKind;
 use time::format_description::well_known::Rfc3339;
 use time::{Date, OffsetDateTime, UtcOffset};
@@ -101,7 +101,7 @@ pub fn classify_outcome(outcome: &str, end: Option<&task_core::RunEnd>) -> RunOu
 
 impl StatsState {
     /// 前回の続きから最新まで読む。
-    pub(crate) fn catch_up(&mut self, store: &dyn TaskStore) -> Result<(), StoreError> {
+    pub(crate) fn catch_up(&mut self, store: &SqliteStore) -> Result<(), StoreError> {
         loop {
             let rows = store.events_since(self.cursor, STATS_BATCH)?;
             let count = rows.len();
@@ -241,7 +241,7 @@ struct AccountTotals {
 }
 
 impl AccountStatsState {
-    pub(crate) fn catch_up(&mut self, store: &dyn TaskStore) -> Result<(), StoreError> {
+    pub(crate) fn catch_up(&mut self, store: &SqliteStore) -> Result<(), StoreError> {
         loop {
             let rows = store.events_since(self.cursor, STATS_BATCH)?;
             let count = rows.len();
@@ -394,7 +394,7 @@ fn execution_group_key(
 /// `runs` に lane と BudgetExhausted の種類は無いので、その値を必要とするタスクだけ
 /// events を補完する。索引が存在しない旧タスクも同様に補完する。
 pub(crate) fn execution_metrics_summary(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     since: Option<OffsetDateTime>,
     group_by: &str,
 ) -> Result<ExecutionMetricsSummary, StoreError> {
@@ -549,7 +549,7 @@ pub(crate) fn execution_metrics_summary(
 /// カーソル付きの増分キャッシュは持たない。分析用の低頻度な問い合わせという想定。ADR の逸脱節参照）。
 #[cfg(test)]
 pub(crate) fn execution_metrics_summary_from_events(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     since: Option<OffsetDateTime>,
     group_by: &str,
 ) -> Result<ExecutionMetricsSummary, StoreError> {

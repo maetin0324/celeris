@@ -57,7 +57,7 @@ impl Dispatcher {
             return;
         }
         let _ = self.routing.settle_quota(
-            &*self.store,
+            &self.store,
             task_id,
             run_id,
             None,

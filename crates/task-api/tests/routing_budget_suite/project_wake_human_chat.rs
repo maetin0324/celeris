@@ -13,8 +13,8 @@ use task_core::decision::{
 };
 use task_core::integration_request::IntegrationRequest;
 use task_core::{
-    Approval, ApprovalId, ApprovalStore, Event, ProjectId, Status, TaskKind,
-    TaskRepoIntegrationState, TaskRepoIntegrationStatus, TaskStore, Trigger, WorkspaceSpec,
+    Approval, ApprovalId, Event, ProjectId, Status, TaskKind, TaskRepoIntegrationState,
+    TaskRepoIntegrationStatus, Trigger, WorkspaceSpec,
 };
 use task_core::{ProjectRepo, RepoId, RepoKind, RepoRun};
 use time::{Duration, OffsetDateTime};

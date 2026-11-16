@@ -8,7 +8,7 @@ use task_core::decision_log::RunEndLabel;
 #[tokio::test]
 async fn dispatch_fills_decision_log_fields_at_run_time() {
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = new_task(
         ws.path(),
         Check::Command {

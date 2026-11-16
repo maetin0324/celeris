@@ -3,7 +3,7 @@
 //! injected test clock; runs are awaited by joining the worker handle, never by sleeping.
 
 use super::*;
-use task_core::approval::{Approval, ApprovalId, ApprovalStore};
+use task_core::approval::{Approval, ApprovalId};
 
 impl Fixture {
     /// A task blocked on a question with a pending approval: one `authorization` item.

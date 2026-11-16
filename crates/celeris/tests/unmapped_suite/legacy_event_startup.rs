@@ -3,8 +3,8 @@
 use celeris::{ClusterMasters, Config, build_dispatcher};
 use rusqlite::params;
 use task_core::{
-    Budget, Check, Criterion, Event, SqliteStore, Status, Task, TaskId, TaskKind, TaskStore, Tier,
-    WorkerHint, WorkspaceSpec,
+    Budget, Check, Criterion, Event, SqliteStore, Status, Task, TaskId, TaskKind, Tier, WorkerHint,
+    WorkspaceSpec,
 };
 use time::OffsetDateTime;
 

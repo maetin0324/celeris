@@ -9,7 +9,7 @@ struct Fixture {
     _repo: tempfile::TempDir,
     _root: tempfile::TempDir,
     repo: std::path::PathBuf,
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     task: Task,
     d: Dispatcher,
     ws: task_worker::TaskWorkspaces,
@@ -21,7 +21,7 @@ impl Fixture {
         let repo = tempfile::tempdir().unwrap();
         init_test_repo(repo.path());
         let root = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let task = parallel_task(repo.path(), "true");
         store.insert(&task).unwrap();
         adopt_v2_plan(

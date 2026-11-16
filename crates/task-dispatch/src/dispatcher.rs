@@ -8,7 +8,7 @@
 //! 5. 有効な cron job の期限を評価し、通常の task として作る
 //! 6. `ready_tasks` を `priority DESC, created_at ASC` で取り、route registry と並列度上限に従って dispatch
 //!
-//! review（ADR-0007）: `review_spawn` が reviewer の run を通常の run と同じ `select_route` で選んで起動し（並列度の枠は実行中 run と共有する）、`review_verdict` が判定を適用する（`Plan` kind が通れば `TaskStore::complete_plan` で子タスクを挿入する）。
+//! review（ADR-0007）: `review_spawn` が reviewer の run を通常の run と同じ `select_route` で選んで起動し（並列度の枠は実行中 run と共有する）、`review_verdict` が判定を適用する（`Plan` kind が通れば `SqliteStore::complete_plan` で子タスクを挿入する）。
 //!
 //! **LLM 呼び出しはここに書かない。** 判断は全て設定・状態機械・ストアのクエリで決まる。
 //!
@@ -57,14 +57,15 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
+use task_core::OrgDirectory;
 
 use task_core::plan::{PlanLimits, PlanOutput, materialize_logging};
 use task_core::report::{HEADLINE_MAX_CHARS, first_line, truncate_chars};
 use task_core::{
     AccountAdapter, ArtifactRef, Check, DelegateTask, DelegationLimits, Event, GenreSpec,
     ListFilter, ListOrder, NodeSession, NotificationKind, OnChildFailure, OrgKind, ProjectId,
-    ProjectStatus, RateLimitObservation, RoleSpec, RunRole, SessionKind, Status, StoreError, Task,
-    TaskId, TaskKind, TaskStore, Tier, Trigger, WorkspaceMode, WorkspaceSpec, support_kind,
+    ProjectStatus, RateLimitObservation, RoleSpec, RunRole, SessionKind, SqliteStore, Status,
+    StoreError, Task, TaskId, TaskKind, Tier, Trigger, WorkspaceMode, WorkspaceSpec, support_kind,
 };
 use task_ops::daemon::{
     AccountCheckView, AccountCooldownLive, AccountLive, AccountUsageLive, ClusterLive,
@@ -1065,7 +1066,7 @@ type Orchestration = ProjectOrchestration<cos_chat::launch::CosChatLaunch>;
 type Coordination = ExecutionCoordination<ReviewSubject, Completion>;
 
 pub struct Dispatcher {
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     config: DispatchConfig,
     /// ADR 2026-11-11 dispatcher-state-ownership D1: disk・scratch・build cache・repo target の掃除と、中止された
     /// task の作業場所の片付けの状態の owner（`crate::host_maintenance`。入口は `housekeeping.rs`・`maintenance.rs`）。
@@ -1129,7 +1130,7 @@ const KNOWLEDGE_FALLBACK_MAX_WALL_SECS: u64 = 600;
 const KNOWLEDGE_CANDIDATES_REL: &str = "artifacts/knowledge-candidates.json";
 
 impl Dispatcher {
-    pub fn new(store: Arc<dyn TaskStore>, config: DispatchConfig) -> Self {
+    pub fn new(store: Arc<SqliteStore>, config: DispatchConfig) -> Self {
         let routing = RoutingRuntime::new(
             store.as_ref(),
             config.accounts.as_ref().map(|accounts| &accounts.roots),
@@ -1337,7 +1338,7 @@ impl Dispatcher {
 
     /// ADR-0033 D3: tick ループ（celeris）が報告の圧縮のためにストアを読む。ディスパッチャ自身の
     /// 判断には使わない（ここから LLM を呼ぶこともない）。
-    pub fn store(&self) -> Arc<dyn TaskStore> {
+    pub fn store(&self) -> Arc<SqliteStore> {
         Arc::clone(&self.store)
     }
 

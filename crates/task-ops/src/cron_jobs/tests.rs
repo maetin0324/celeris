@@ -1,7 +1,7 @@
 //! ADR-0131 D9: 発火の規則を注入した時計（`now` 引数）で決定的に検査する。実時間の sleep は使わない。
 
 use super::*;
-use task_core::{CronJobStore, SqliteStore, Tier, Trigger};
+use task_core::{SqliteStore, Tier, Trigger};
 use time::format_description::well_known::Rfc3339;
 
 fn t(s: &str) -> OffsetDateTime {

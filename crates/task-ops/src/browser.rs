@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use schemars::JsonSchema;
 use serde::Serialize;
 use task_core::browser_wait::BrowserWait;
-use task_core::{BrowserRunState, Task, TaskId, TaskStore};
+use task_core::{BrowserRunState, SqliteStore, Task, TaskId};
 use time::OffsetDateTime;
 
 use crate::error::OpsError;
@@ -27,7 +27,7 @@ pub struct BrowserWaitItem {
 
 /// 人の対応を待っている（`pending`）wait を、作成順に task の参照と一緒に返す。task が消えた行は飛ばす。
 pub fn pending_items(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     by_id: &HashMap<TaskId, Task>,
 ) -> Result<Vec<BrowserWaitItem>, OpsError> {
     let mut out = Vec::new();
@@ -46,9 +46,6 @@ pub fn pending_items(
 
 /// 期限の過ぎた wait を一度だけ終端化する（登録待ち・承認待ちの `pending` は task を `failed` に、
 /// 承認済みで未消費のものは wait だけ失効）。終端化した wait を返す。
-pub fn expire_due(
-    store: &dyn TaskStore,
-    now: OffsetDateTime,
-) -> Result<Vec<BrowserWait>, OpsError> {
+pub fn expire_due(store: &SqliteStore, now: OffsetDateTime) -> Result<Vec<BrowserWait>, OpsError> {
     Ok(store.browser_waits_expire(now)?)
 }

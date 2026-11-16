@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use task_core::chat::{ChatPostMessageRequest, ChatSendMode};
 use task_core::transition::Trigger;
 use task_core::unblocks::UnblockAction;
-use task_core::{Event, Status, TaskId, TaskStore};
+use task_core::{Event, Status, TaskId};
 use time::{Duration, OffsetDateTime};
 
 const OPS: &str = "/api/v1/cos/operations";

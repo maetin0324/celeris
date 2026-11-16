@@ -133,7 +133,7 @@ impl WorkerAdapter for DesignScriptAdapter {
 }
 
 struct Fixture {
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     task: Task,
     adapter: Arc<DesignScriptAdapter>,
     repo: tempfile::TempDir,
@@ -144,7 +144,7 @@ impl Fixture {
     fn new(plans: Vec<String>, designs: Vec<Script>) -> Self {
         let repo = checker_repo();
         let root = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let mut task = compound_task(repo.path());
         task.workspace = WorkspaceSpec::Local {
             path: repo.path().to_path_buf(),

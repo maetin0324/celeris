@@ -11,7 +11,7 @@ use task_core::decision::{
 };
 use task_core::execution_plan::{WorkUnitBlockedReason, WorkUnitRow, WorkUnitSpec, WorkUnitStatus};
 use task_core::tree::{ParentUnit, TreeInfo};
-use task_core::{Event, Status, TaskKind, TaskStore};
+use task_core::{Event, Status, TaskKind};
 use time::{Duration, OffsetDateTime};
 use ulid::Ulid;
 

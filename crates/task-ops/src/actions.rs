@@ -3,11 +3,11 @@
 //! ここは `task_worker::ConsoleAction`（宣言の形。読むだけ）を受け取り、検証して実行するだけで、
 //! LLM は使わない（DESIGN 原則 1。ADR-0034 D7 / ADR-0038 D1 の `milestone_proposal` と同じ流儀）。
 //! 検証に落ちた action は実行せず、理由を残す。呼び出し側（`task-dispatch`）は run ごとに 1 回だけ
-//! これを呼ぶ（`TaskStore::console_action_run_claim` で冪等性を取る。同じ `run_id` の 2 回目は `Ok(None)`）。
+//! これを呼ぶ（`SqliteStore::console_action_run_claim` で冪等性を取る。同じ `run_id` の 2 回目は `Ok(None)`）。
 
 use task_core::{
     ConsoleAction, MilestoneId, OrgNode, Project, ProjectId, ProjectRepo, ProjectStatus, RepoId,
-    RepoRun, Status, Task, TaskId, TaskStore, WorkspaceSpec,
+    RepoRun, SqliteStore, Status, Task, TaskId, WorkspaceSpec,
 };
 use time::OffsetDateTime;
 
@@ -92,13 +92,13 @@ impl ActionsOutcome {
 
 /// CoS の対話 run の `actions` を実行する（ADR-0048 D3）。
 ///
-/// - 冪等: `run_id` を一度でも `execute` したら（`TaskStore::console_action_run_claim` が `false` を
+/// - 冪等: `run_id` を一度でも `execute` したら（`SqliteStore::console_action_run_claim` が `false` を
 ///   返したら）、2 回目以降は何もせず `Ok(None)`。
 /// - `malformed`（`ConsoleAction` の形にすら合わなかった要素。呼び出し側 = `task-worker` の
 ///   `actions_from_result_json` が JSON を読んだ時点で分けたもの）は `failed` にそのまま写る。
 #[allow(clippy::too_many_arguments)]
 pub fn execute(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     org: &[OrgNode],
     roles: &[task_core::RoleSpec],
     genres: &[task_core::GenreSpec],
@@ -158,7 +158,7 @@ pub fn execute(
 }
 
 /// CoS が書いた要約とは独立に、依頼時点の会話をワーカーとレビュアーへ渡す。
-fn source_request_context(store: &dyn TaskStore, task: &Task) -> Result<String, OpsError> {
+fn source_request_context(store: &SqliteStore, task: &Task) -> Result<String, OpsError> {
     let mut out = format!(
         "\n\n## 元の依頼（対話タスク {}）\n{}\n",
         task.id, task.objective
@@ -181,7 +181,7 @@ fn source_request_context(store: &dyn TaskStore, task: &Task) -> Result<String, 
 
 #[allow(clippy::too_many_arguments)]
 fn execute_one(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     org: &[OrgNode],
     roles: &[task_core::RoleSpec],
     genres: &[task_core::GenreSpec],
@@ -249,7 +249,7 @@ fn execute_one(
 
 #[allow(clippy::too_many_arguments)]
 fn create_task_action(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     org: &[OrgNode],
     roles: &[task_core::RoleSpec],
     genres: &[task_core::GenreSpec],
@@ -449,7 +449,7 @@ fn parse_mode(raw: &str) -> Option<task_core::TaskMode> {
 /// 名前では引けない。既存の `POST /projects/{id}/repos` と同じ決定的な既定: 名前は場所から、種類は
 /// `.git` の有無から決める）。絶対パスでない要素が 1 つでもあれば action 全体を実行しない。
 fn propose_project_action(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     title: &str,
     request: &str,
     repos: &[String],

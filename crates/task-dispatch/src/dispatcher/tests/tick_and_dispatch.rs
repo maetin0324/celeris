@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn notify_digest_tick_syncs_notice_feed_once() {
     use task_core::feed::NoticeQuery;
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = new_task(std::path::Path::new("/tmp"), Check::Human, 0);
     store.insert(&root).unwrap();
     let at = OffsetDateTime::now_utc();
@@ -40,7 +40,7 @@ fn notify_digest_tick_syncs_notice_feed_once() {
 fn tick_feed_sync_is_bounded_and_idle_ticks_do_not_scale_with_events() {
     fn idle_tick_writer_locks(events_per_task: usize) -> (u64, Vec<u64>) {
         let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
-        let store: Arc<dyn TaskStore> = sqlite.clone();
+        let store: Arc<SqliteStore> = sqlite.clone();
         for _ in 0..50 {
             let mut task = new_task(std::path::Path::new("/tmp"), Check::Human, 0);
             task.status = Status::Done;
@@ -113,7 +113,7 @@ fn tick_feed_sync_is_bounded_and_idle_ticks_do_not_scale_with_events() {
 #[tokio::test]
 async fn child_failure_question_is_not_repeated_when_the_child_has_more_events_than_the_parent() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_org_for_reports(&store);
 
     let mut parent = new_task(
@@ -222,7 +222,7 @@ async fn child_failure_question_is_not_repeated_when_the_child_has_more_events_t
 #[tokio::test]
 async fn concurrency_limit_is_respected() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     for _ in 0..3 {
         store
             .insert(&new_task(
@@ -258,7 +258,7 @@ async fn concurrency_limit_is_respected() {
 #[tokio::test]
 async fn a_standalone_task_keeps_the_plain_artifacts_dir() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::ArtifactExists {
@@ -298,7 +298,7 @@ async fn a_standalone_task_keeps_the_plain_artifacts_dir() {
 #[tokio::test]
 async fn siblings_sharing_one_workspace_do_not_mix_their_result_files_or_artifacts() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut parent = new_task(dir.path(), Check::Human, 0);
     parent.kind = TaskKind::Plan;
     parent.status = Status::Done;
@@ -371,7 +371,7 @@ async fn siblings_sharing_one_workspace_do_not_mix_their_result_files_or_artifac
 #[tokio::test]
 async fn command_timeout_check_reruns_once_with_double_timeout_and_passes() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -419,7 +419,7 @@ async fn command_timeout_check_reruns_once_with_double_timeout_and_passes() {
 #[tokio::test]
 async fn unroutable_tasks_do_not_starve_or_hide_routable_tasks_outside_the_window() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut unroutable = Vec::new();
     for _ in 0..25 {
         let mut t = new_task(
@@ -474,7 +474,7 @@ async fn unroutable_tasks_do_not_starve_or_hide_routable_tasks_outside_the_windo
 #[tokio::test]
 async fn tick_publishes_daemon_snapshot_to_watch() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -537,7 +537,7 @@ async fn tick_publishes_daemon_snapshot_to_watch() {
 async fn mid_run_rate_limit_observation_lands_in_the_book_and_the_snapshot() {
     let dir = accounts_fixture();
     let ws_dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         ws_dir.path(),
         Check::Command {
@@ -603,7 +603,7 @@ async fn merge_base_check_merges_main_deterministically_when_there_is_no_conflic
     let repo_dir = tempfile::tempdir().unwrap();
     init_test_repo(repo_dir.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = git_task(
         repo_dir.path(),
         None,
@@ -662,7 +662,7 @@ async fn merge_base_check_merges_main_deterministically_when_there_is_no_conflic
 #[tokio::test]
 async fn a_human_comment_interrupts_the_running_run_and_the_next_run_carries_it() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = new_task(dir.path(), Check::Human, 2);
     task.attempts = 1;
     store.insert(&task).unwrap();
@@ -757,7 +757,7 @@ async fn a_human_comment_interrupts_the_running_run_and_the_next_run_carries_it(
 #[tokio::test]
 async fn a_worker_comment_is_recorded_as_a_node_comment_without_touching_the_state() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = new_task(
         dir.path(),
         Check::Command {
@@ -812,7 +812,7 @@ async fn a_failing_setup_blocks_the_task_with_a_question_instead_of_starting_the
     }
 
     let ws_root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (project_id, repos) = project_with_repos(
         &store,
         &[("benchfs", code.as_path(), task_core::RepoKind::Git)],
@@ -861,7 +861,7 @@ async fn a_failing_setup_blocks_the_task_with_a_question_instead_of_starting_the
 #[tokio::test]
 async fn parent_waits_for_unfinished_children_without_counting_continuations() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let check = || Check::Command {
         cmd: "true".into(),
         expect_exit: 0,
@@ -876,7 +876,7 @@ async fn parent_waits_for_unfinished_children_without_counting_continuations() {
     store.insert(&child).unwrap();
     let mut d = dispatcher(store.clone(), Arc::new(AlwaysBudgetExhaustedAdapter), 1);
 
-    let finished = |store: &Arc<dyn TaskStore>| {
+    let finished = |store: &Arc<SqliteStore>| {
         store
             .events_for(parent_id)
             .unwrap()
@@ -885,7 +885,7 @@ async fn parent_waits_for_unfinished_children_without_counting_continuations() {
             .count()
     };
     // 1 回目の run の終わり（予算切れで ready に戻る）を状態で待つ（ADR-0125 (b)。tick の回数で打ち切らない）。
-    let status = |store: &Arc<dyn TaskStore>| store.get(parent_id).unwrap().unwrap().status;
+    let status = |store: &Arc<SqliteStore>| store.get(parent_id).unwrap().unwrap().status;
     assert!(
         run_until_state(&mut d, || finished(&store) >= 1
             && status(&store) == Status::Ready)
@@ -921,7 +921,7 @@ async fn parent_waits_for_unfinished_children_without_counting_continuations() {
 #[tokio::test]
 async fn parent_stays_asleep_for_a_failed_child_while_told_to_wait_for_its_rerun() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let check = || Check::Command {
         cmd: "true".into(),
         expect_exit: 0,
@@ -939,7 +939,7 @@ async fn parent_stays_asleep_for_a_failed_child_while_told_to_wait_for_its_rerun
     assert_eq!(store.get(child_id).unwrap().unwrap().status, Status::Failed);
     let mut d = dispatcher(store.clone(), Arc::new(AlwaysBudgetExhaustedAdapter), 1);
 
-    let runs = |store: &Arc<dyn TaskStore>| {
+    let runs = |store: &Arc<SqliteStore>| {
         store
             .events_for(parent_id)
             .unwrap()
@@ -947,12 +947,12 @@ async fn parent_stays_asleep_for_a_failed_child_while_told_to_wait_for_its_rerun
             .filter(|(_, e)| matches!(e, Event::WorkerStarted { role: None, .. }))
             .count()
     };
-    let status = |store: &Arc<dyn TaskStore>| store.get(parent_id).unwrap().unwrap().status;
+    let status = |store: &Arc<SqliteStore>| store.get(parent_id).unwrap().unwrap().status;
     // 印の無い失敗した子は終端: 親は起き、進捗なしで人に質問する（ADR-0072）。
     assert!(run_until_state(&mut d, || status(&store) == Status::Blocked).await);
     let before = runs(&store);
     assert!(before >= 1);
-    let continues = |store: &Arc<dyn TaskStore>| {
+    let continues = |store: &Arc<SqliteStore>| {
         store
             .events_for(parent_id)
             .unwrap()
@@ -1018,7 +1018,7 @@ async fn parent_stays_asleep_for_a_failed_child_while_told_to_wait_for_its_rerun
 #[tokio::test]
 async fn budget_exhausted_run_continues_without_consuming_attempts_then_blocks_on_no_progress() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -1118,7 +1118,7 @@ async fn budget_exhausted_run_continues_without_consuming_attempts_then_blocks_o
 #[tokio::test]
 async fn yielded_run_continues_and_the_next_run_context_carries_the_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -1186,7 +1186,7 @@ async fn yielded_run_continues_and_the_next_run_context_carries_the_checkpoint()
 #[tokio::test]
 async fn continuation_disabled_restores_the_legacy_worker_error() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -1236,7 +1236,7 @@ async fn continuation_disabled_restores_the_legacy_worker_error() {
 #[tokio::test]
 async fn continuation_survives_a_dispatcher_restart() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {

@@ -17,7 +17,7 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 use task_core::store::SqliteStore;
-use task_core::{Check, DecisionStatus, Event, ExecutionPlanRow, StageReview, Task, TaskStore};
+use task_core::{Check, DecisionStatus, Event, ExecutionPlanRow, StageReview, Task};
 use task_ops::human_inbox::InboxKind;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;

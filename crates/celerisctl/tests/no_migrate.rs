@@ -6,7 +6,7 @@ mod common;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use task_core::{SCHEMA_VERSION, SqliteStore, TaskStore};
+use task_core::{SCHEMA_VERSION, SqliteStore};
 
 fn ctl(db: &Path, args: &[&str]) -> Output {
     Command::new(common::celerisctl_path())

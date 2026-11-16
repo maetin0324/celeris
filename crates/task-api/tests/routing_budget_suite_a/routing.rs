@@ -4,7 +4,7 @@ use crate::common;
 
 use common::*;
 use serde_json::json;
-use task_core::{Event, Status, TaskId, TaskKind, TaskRouting, TaskStore, TierSource};
+use task_core::{Event, Status, TaskId, TaskKind, TaskRouting, TierSource};
 
 fn routing_decided(run_id: &str, escalation: Option<&str>) -> Event {
     serde_json::from_value(json!({

@@ -1,12 +1,12 @@
 use super::*;
 
-pub(super) fn reviewing_task(repo: &std::path::Path, store: &Arc<dyn TaskStore>) -> Task {
+pub(super) fn reviewing_task(repo: &std::path::Path, store: &Arc<SqliteStore>) -> Task {
     reviewing_task_integrating(repo, store, false)
 }
 
 fn reviewing_task_integrating(
     repo: &std::path::Path,
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     auto_integrate: bool,
 ) -> Task {
     let (project, repos) =
@@ -32,7 +32,7 @@ pub(super) fn commit_file(repo: &std::path::Path, path: &str, content: &str) -> 
     git_out(repo, &["rev-parse", "HEAD"])
 }
 
-fn check_snapshot(store: &Arc<dyn TaskStore>, task: &Task, target: &str, head: &str) {
+fn check_snapshot(store: &Arc<SqliteStore>, task: &Task, target: &str, head: &str) {
     let snapshots: Vec<_> = store
         .events_for(task.id)
         .unwrap()
@@ -59,7 +59,7 @@ async fn target_sync_pre_review_sync_root_reviews_the_rebased_sha() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = reviewing_task(repo.path(), &store);
     store.insert(&task).unwrap();
     let adapter = Arc::new(InstantAdapter {
@@ -126,7 +126,7 @@ async fn partially_enabled_multi_repo_task_does_not_require_a_reviewer_run() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (project, mut rows) =
         project_with_repos_integrating(&store, &[("code", repo.path(), RepoKind::Git)], true);
     let mut paper = rows[0].clone();
@@ -148,7 +148,7 @@ async fn partially_enabled_multi_repo_task_does_not_require_a_reviewer_run() {
     task.repos = rows.iter().map(RepoRef::of).collect();
     task.status = Status::Reviewing;
     store.insert(&task).unwrap();
-    assert!(!task_ops::delivery::auto_integrates(&*store, &task).unwrap());
+    assert!(!task_ops::delivery::auto_integrates(&store, &task).unwrap());
     let mut d = worktree_dispatcher(store.clone(), done_adapter(), ws.path(), None);
     assert!(
         d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
@@ -165,7 +165,7 @@ async fn partially_enabled_multi_repo_task_does_not_require_a_reviewer_run() {
     assert!(!reviewer_run_started(&store, &task));
 }
 
-fn reviewer_run_started(store: &Arc<dyn TaskStore>, task: &Task) -> bool {
+fn reviewer_run_started(store: &Arc<SqliteStore>, task: &Task) -> bool {
     events_of(store, task).iter().any(|e| {
         matches!(
             e,
@@ -186,11 +186,11 @@ async fn reviewer_run_is_required_only_for_an_enabled_repo() {
         let repo = tempfile::tempdir().unwrap();
         init_test_repo(repo.path());
         let ws = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let task = reviewing_task_integrating(repo.path(), &store, enabled);
         store.insert(&task).unwrap();
         assert_eq!(
-            task_ops::delivery::auto_integrates(&*store, &task).unwrap(),
+            task_ops::delivery::auto_integrates(&store, &task).unwrap(),
             enabled
         );
         let mut d = worktree_dispatcher(store.clone(), done_adapter(), ws.path(), None);
@@ -208,7 +208,7 @@ async fn target_sync_pre_review_sync_tree_child_uses_parent_branch() {
     let repo = tempfile::tempdir().unwrap();
     let base = init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let parent = git_task(
         repo.path(),
         None,
@@ -341,7 +341,7 @@ pub(super) fn set_check(task: &mut Task, cmd: String) {
     };
 }
 
-pub(super) fn events_of(store: &Arc<dyn TaskStore>, task: &Task) -> Vec<Event> {
+pub(super) fn events_of(store: &Arc<SqliteStore>, task: &Task) -> Vec<Event> {
     store
         .events_for(task.id)
         .unwrap()
@@ -401,7 +401,7 @@ async fn integration_repair_resumes_review_on_latest_target() {
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
     let observed = ws.path().join("checked-sha");
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = reviewing_task(repo.path(), &store);
     set_check(
         &mut task,
@@ -462,7 +462,7 @@ async fn integration_repair_resumes_without_target_advance_once() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = reviewing_task(repo.path(), &store);
     set_check(&mut task, "git merge-base --is-ancestor main HEAD".into());
     store.insert(&task).unwrap();
@@ -491,7 +491,7 @@ async fn integration_repair_resumes_reconflict_schedules_second_attempt() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = reviewing_task(repo.path(), &store);
     set_check(&mut task, ":".into());
     store.insert(&task).unwrap();
@@ -556,7 +556,7 @@ async fn integration_repair_resumes_tree_child_on_parent_target() {
     let repo = tempfile::tempdir().unwrap();
     let base = init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let parent = git_task(
         repo.path(),
         None,
@@ -622,7 +622,7 @@ async fn integration_repair_schedules_atomic_and_preserves_results() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = reviewing_task(repo.path(), &store);
     set_check(&mut task, ":".into());
     store.insert(&task).unwrap();
@@ -687,7 +687,7 @@ async fn pre_review_sync_dirty_keeps_attempts() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = reviewing_task(repo.path(), &store);
     set_check(&mut task, ":".into());
     store.insert(&task).unwrap();
@@ -729,7 +729,7 @@ async fn pre_review_sync_target_advanced_keeps_attempts() {
     let ws = tempfile::tempdir().unwrap();
     let flag = tempfile::tempdir().unwrap();
     let flag = flag.path().join("advanced");
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = reviewing_task(repo.path(), &store);
     // 1 回目の検査の最中にだけ main を進める。
     set_check(
@@ -795,7 +795,7 @@ async fn pre_review_sync_target_advanced_limit_halts_visibly_and_rereview_resume
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = reviewing_task(repo.path(), &store);
     set_check(
         &mut task,
@@ -906,11 +906,11 @@ async fn pre_review_sync_target_advanced_limit_halts_visibly_and_rereview_resume
 /// 配送からの再 review（review_pass → done → rereview → ReviewTargetAdvanced の循環）も上限で止まる。
 /// 修正前は review_pass の `Transitioned` が stale の数を 0 に戻し、N1 のように attempt が 336 まで増えても
 /// `ReviewResyncHalted` が出なかった。上限（MAX_TARGET_RESYNCS）までは従来どおり review が起動する。
-async fn delivery_rereview_cycles(cycles: u32) -> (bool, Vec<Event>, Arc<dyn TaskStore>, Task) {
+async fn delivery_rereview_cycles(cycles: u32) -> (bool, Vec<Event>, Arc<SqliteStore>, Task) {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = reviewing_task(repo.path(), &store);
     store.insert(&task).unwrap();
     let mut d = worktree_dispatcher(store.clone(), done_adapter(), ws.path(), None);
@@ -1003,7 +1003,7 @@ async fn pre_review_sync_halted_review_resumes_when_target_is_quiet() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = reviewing_task(repo.path(), &store);
     set_check(
         &mut task,
@@ -1069,7 +1069,7 @@ async fn pre_review_sync_halted_without_reviewer_resumes_by_rereview_and_lands()
     let flag = tempfile::tempdir().unwrap();
     let quiet = flag.path().join("quiet");
     let runs = flag.path().join("runs");
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = reviewing_task(repo.path(), &store);
     // `quiet` が無い間は検査のたびに main を進める（並列の取り込みが続いている）。
     set_check(
@@ -1238,7 +1238,7 @@ async fn reviewer_runs_after_target_advanced_with_store(
     u32,
     Vec<Event>,
     Status,
-    Arc<dyn TaskStore>,
+    Arc<SqliteStore>,
     task_core::TaskId,
     tempfile::TempDir,
 ) {
@@ -1248,7 +1248,7 @@ async fn reviewer_runs_after_target_advanced_with_store(
     let ws = tempfile::tempdir().unwrap();
     let flag = tempfile::tempdir().unwrap();
     let flag = flag.path().join("advanced");
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = reviewing_task_integrating(repo.path(), &store, integrate);
     set_check(&mut task, bump_main_writing(&flag, target_file, blob_cmd));
     task.acceptance.push(task_core::Criterion {
@@ -1266,11 +1266,7 @@ async fn reviewer_runs_after_target_advanced_with_store(
     commit_file(&wt.dir, task_file, task_content);
     if integrate {
         // 配送（delivery）が走る root task の目印と部署の既定。
-        let task_dir = d
-            .config
-            .workspace_roots
-            .task_dir(&*store, &task.id)
-            .unwrap();
+        let task_dir = d.config.workspace_roots.task_dir(&store, &task.id).unwrap();
         std::fs::create_dir_all(&task_dir).unwrap();
         let (source, dir) = (repo.path(), &wt.dir);
         std::fs::write(
@@ -1553,7 +1549,7 @@ async fn integration_repair_schedules_tree_child_on_parent_target() {
     let repo = tempfile::tempdir().unwrap();
     let base = init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let parent = git_task(
         repo.path(),
         None,
@@ -1620,7 +1616,7 @@ async fn integration_repair_schedules_limit_falls_back_to_unsynced_review() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = reviewing_task(repo.path(), &store);
     set_check(&mut task, ":".into());
     store.insert(&task).unwrap();
@@ -1685,7 +1681,7 @@ async fn integration_repair_schedules_limit_falls_back_to_unsynced_review() {
 #[tokio::test]
 async fn target_sync_pre_review_sync_remote_records_skip_without_local_git() {
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = remote_task(ws.path(), None, Vec::new());
     task.status = Status::Reviewing;
     store.insert(&task).unwrap();
@@ -1716,7 +1712,7 @@ fn exhausted_fixture(
 ) -> (
     tempfile::TempDir,
     tempfile::TempDir,
-    Arc<dyn TaskStore>,
+    Arc<SqliteStore>,
     Task,
     Dispatcher,
     std::path::PathBuf,
@@ -1726,7 +1722,7 @@ fn exhausted_fixture(
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = reviewing_task(repo.path(), &store);
     set_check(&mut task, ":".into());
     store.insert(&task).unwrap();
@@ -1880,7 +1876,7 @@ async fn behind_target_pre_review_sync_records_before_and_after() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = reviewing_task(repo.path(), &store);
     store.insert(&task).unwrap();
     let adapter = Arc::new(InstantAdapter {
@@ -1919,7 +1915,7 @@ async fn behind_target_is_zero_after_pre_review_sync() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = reviewing_task(repo.path(), &store);
     store.insert(&task).unwrap();
     let adapter = Arc::new(InstantAdapter {
@@ -1965,7 +1961,7 @@ async fn target_sync_two_tasks_disjoint_both_land() {
     let repo = tempfile::tempdir().unwrap();
     let base = init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task_a = reviewing_task(repo.path(), &store);
     let task_b = reviewing_task(repo.path(), &store);
     let mut d = worktree_dispatcher(store.clone(), done_adapter(), ws.path(), None);
@@ -2024,7 +2020,7 @@ async fn target_sync_merge_history_keeps_resolutions() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = reviewing_task(repo.path(), &store);
     store.insert(&task).unwrap();
     let mut d = worktree_dispatcher(store.clone(), done_adapter(), ws.path(), None);
@@ -2125,7 +2121,7 @@ async fn target_sync_merge_history_keeps_resolutions() {
 async fn fallback_then_rereview() -> (
     tempfile::TempDir,
     tempfile::TempDir,
-    Arc<dyn TaskStore>,
+    Arc<SqliteStore>,
     Task,
     Dispatcher,
     std::path::PathBuf,

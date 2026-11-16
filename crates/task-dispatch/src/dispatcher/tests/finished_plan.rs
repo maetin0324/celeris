@@ -72,7 +72,7 @@ impl WorkerAdapter for EmptyReplanAdapter {
     }
 }
 
-fn reasons(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<String> {
+fn reasons(store: &Arc<SqliteStore>, id: TaskId) -> Vec<String> {
     store
         .events_for(id)
         .unwrap()
@@ -84,7 +84,7 @@ fn reasons(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<String> {
         .collect()
 }
 
-fn stalls(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<String> {
+fn stalls(store: &Arc<SqliteStore>, id: TaskId) -> Vec<String> {
     store
         .events_for(id)
         .unwrap()
@@ -97,7 +97,7 @@ fn stalls(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<String> {
 }
 
 /// 有効な WU をすべて `to`（done / cancelled）にする（統合 WU を含む）。
-fn settle_all_units(store: &Arc<dyn TaskStore>, id: TaskId, to: task_core::WorkUnitStatus) {
+fn settle_all_units(store: &Arc<SqliteStore>, id: TaskId, to: task_core::WorkUnitStatus) {
     for u in store.work_units_for(id).unwrap() {
         if !u.status.is_active() || u.status == to {
             continue;
@@ -130,7 +130,7 @@ fn settle_all_units(store: &Arc<dyn TaskStore>, id: TaskId, to: task_core::WorkU
 async fn empty_replan_after_review_fail_goes_to_final_review() {
     let dir = tempfile::tempdir().unwrap();
     let flag = dir.path().join("fixed.flag");
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -197,7 +197,7 @@ async fn empty_replan_after_review_fail_goes_to_final_review() {
 async fn a_plan_with_no_work_left_proceeds_to_review_without_a_run() {
     for cancelled in [false, true] {
         let dir = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let task = new_task(
             dir.path(),
             Check::Command {
@@ -267,7 +267,7 @@ async fn a_plan_with_no_work_left_proceeds_to_review_without_a_run() {
 #[tokio::test]
 async fn a_stalled_non_tree_plan_is_detected() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -327,7 +327,7 @@ async fn a_stalled_non_tree_plan_is_detected() {
 #[test]
 fn liveness_does_not_flag_runnable_non_tree_plans() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -360,7 +360,7 @@ fn liveness_does_not_flag_runnable_non_tree_plans() {
 #[tokio::test]
 async fn a_plan_that_cannot_dispatch_reports_plan_stalled_and_reaches_the_inbox() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {

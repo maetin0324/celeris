@@ -52,8 +52,8 @@ use task_core::script_compare::{
     ScriptDomainModeRow, ScriptGenerationState, ScriptMode, ScriptModeChange,
 };
 use task_core::script_guard::{ScriptGuardCall, ScriptGuardObservation, readiness};
-use task_core::script_inbox::{ScriptInboxItem, ScriptInboxStore};
-use task_core::{DaemonMode, Event, Project, ProjectId, ProjectStatus, Task, TaskStore};
+use task_core::script_inbox::ScriptInboxItem;
+use task_core::{DaemonMode, Event, Project, ProjectId, ProjectStatus, SqliteStore, Task};
 use task_dispatch::script_policy::{
     CosDigestOp, CosDigestOpCall, CosDigestOpReply, CosDigestPassCall, PolicyScript,
     PolicyScriptError,
@@ -1310,7 +1310,7 @@ fn project_thread(store: &task_core::SqliteStore, key: &str) -> String {
         created_at: now,
         updated_at: now,
     };
-    TaskStore::project_create(store, &project).expect("project");
+    SqliteStore::project_create(store, &project).expect("project");
     store
         .cos_thread_open(
             &ChatOpenThreadRequest {

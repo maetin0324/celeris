@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use common::*;
 use serde_json::{Value, json};
-use task_core::{Event, Status, TaskId, TaskKind, TaskStore};
+use task_core::{Event, Status, TaskId, TaskKind};
 use time::{Duration as TimeDuration, OffsetDateTime};
 
 const REQUIRES_VIEWS: &str = "requires task-ops views (Phase 9b I1)";

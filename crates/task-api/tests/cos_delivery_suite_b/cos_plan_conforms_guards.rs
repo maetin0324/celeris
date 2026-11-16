@@ -10,14 +10,14 @@ use common::cos_ops::cos_bearer;
 use common::plan_conforms::{ago, conforms, ingest_plan_gate};
 use common::*;
 use serde_json::{Value, json};
-use task_core::approval::{ApprovalStore, StandingRule, StandingRuleId};
+use task_core::approval::{StandingRule, StandingRuleId};
 use task_core::decision::{
     CostOfReversal, DecisionKind, DecisionOption, DecisionOrigin, DecisionPathEntry,
     DecisionRaisedBy, DecisionRequest, DecisionStatus,
 };
 use task_core::{
     Check, EXECUTION_PLAN_SCHEMA_V3, Event, ExecutionPlanRow, ExecutionPlanSpec, PlanOrigin,
-    PlanStatus, StageReview, StageSpec, Status, TaskKind, TaskStore, Trigger, WorkUnitKind,
+    PlanStatus, StageReview, StageSpec, Status, TaskKind, Trigger, WorkUnitKind,
 };
 use time::OffsetDateTime;
 

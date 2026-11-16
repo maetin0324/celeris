@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Args, Subcommand};
-use task_core::{McpClient, McpClientStore, McpScope, SqliteStore};
+use task_core::{McpClient, McpScope, SqliteStore};
 use time::OffsetDateTime;
 
 use crate::error::CliError;

@@ -38,7 +38,8 @@ impl SqliteStore {
         Self::set_task_routing_override_tx(&conn, task_id, routing_override, now)
     }
 
-    pub(super) fn task_routing_override_impl(
+    /// ADR 2026-10-16-mlsys-measure-task-routing: task 欄の routing 固定（無ければ `None` = config に従う）。
+    pub fn task_routing_override(
         &self,
         task_id: TaskId,
     ) -> Result<Option<RoutingOverride>, StoreError> {
@@ -80,7 +81,7 @@ const ROUTING_ANCESTOR_LIMIT: usize = 32;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::TaskStore;
+
     use crate::route_select::RoutingMode;
 
     #[test]

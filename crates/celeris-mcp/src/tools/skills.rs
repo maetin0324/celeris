@@ -38,7 +38,7 @@ pub struct ListOutput {
     pub items: Vec<SkillSummaryView>,
 }
 
-async fn list_impl(
+async fn list(
     state: &Arc<McpState>,
     _client: &AuthedClient,
     _args: serde_json::Value,
@@ -62,7 +62,7 @@ fn list_call<'a>(
     client: &'a AuthedClient,
     args: serde_json::Value,
 ) -> Pin<Box<dyn Future<Output = Result<ToolOutput, ToolError>> + Send + 'a>> {
-    Box::pin(list_impl(state, client, args))
+    Box::pin(list(state, client, args))
 }
 
 pub fn list_def() -> ToolDef {
@@ -90,7 +90,7 @@ pub struct GetOutput {
     pub files: Vec<String>,
 }
 
-async fn get_impl(
+async fn get(
     state: &Arc<McpState>,
     _client: &AuthedClient,
     args: serde_json::Value,
@@ -114,7 +114,7 @@ fn get_call<'a>(
     client: &'a AuthedClient,
     args: serde_json::Value,
 ) -> Pin<Box<dyn Future<Output = Result<ToolOutput, ToolError>> + Send + 'a>> {
-    Box::pin(get_impl(state, client, args))
+    Box::pin(get(state, client, args))
 }
 
 pub fn get_def() -> ToolDef {

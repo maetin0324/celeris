@@ -85,7 +85,7 @@ fn set_compare(sqlite: &SqliteStore, domain: &str, generation: &str) {
         .unwrap();
 }
 
-fn records_of(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<ScriptCompareRecord> {
+fn records_of(store: &Arc<SqliteStore>, id: TaskId) -> Vec<ScriptCompareRecord> {
     events_of(store, id)
         .into_iter()
         .filter_map(|e| match e {
@@ -95,7 +95,7 @@ fn records_of(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<ScriptCompareRecord
         .collect()
 }
 
-fn route_bytes(store: &Arc<dyn TaskStore>, id: TaskId) -> String {
+fn route_bytes(store: &Arc<SqliteStore>, id: TaskId) -> String {
     let events: Vec<serde_json::Value> = events_of(store, id)
         .into_iter()
         .filter(|e| {
@@ -133,7 +133,7 @@ async fn run_once(
 ) -> Out {
     let ws = tempfile::tempdir().unwrap();
     let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let store: Arc<SqliteStore> = sqlite.clone();
     let mut task = hinted_task(ws.path(), task_core::TierSource::Hint);
     task.id = TASK_ID.parse().unwrap();
     store.insert(&task).unwrap();
@@ -386,7 +386,7 @@ async fn script_compare_route_priority_skips_lane_assist_trials() {
 async fn script_compare_route_priority_skips_cos() {
     let ws = tempfile::tempdir().unwrap();
     let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let store: Arc<SqliteStore> = sqlite.clone();
     let task = hinted_task(ws.path(), task_core::TierSource::Hint);
     store.insert(&task).unwrap();
     let generation = seed_generation(&sqlite, &["route_priority"]);
@@ -425,7 +425,7 @@ async fn script_compare_route_priority_skips_cos() {
 async fn script_compare_route_priority_skips_review_spawn() {
     let dir = tempfile::tempdir().unwrap();
     let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let store: Arc<SqliteStore> = sqlite.clone();
     let task = new_task(dir.path(), Check::Reviewer, 0);
     store.insert(&task).unwrap();
     let generation = seed_generation(&sqlite, &["route_priority"]);

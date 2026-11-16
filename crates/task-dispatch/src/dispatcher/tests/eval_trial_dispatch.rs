@@ -112,7 +112,7 @@ async fn eval_trial_reserved_slot_hides_checks_and_records_selected_version() {
     let base_commit = git(&repo, &["rev-parse", "HEAD"]);
 
     let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let store: Arc<SqliteStore> = sqlite.clone();
     let batch_id = ulid::Ulid::new().to_string();
     let specs = (0..2)
         .map(|trial_no| task_core::routing_eval_trial::EvalTrialSpec {
@@ -290,7 +290,7 @@ fn eval_fixture(
     check_cmd: &str,
 ) -> (
     tempfile::TempDir,
-    Arc<dyn TaskStore>,
+    Arc<SqliteStore>,
     Arc<SqliteStore>,
     String,
     std::path::PathBuf,
@@ -314,7 +314,7 @@ fn eval_fixture(
     );
     let base_commit = git(&repo, &["rev-parse", "HEAD"]);
     let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let store: Arc<SqliteStore> = sqlite.clone();
     let batch_id = ulid::Ulid::new().to_string();
     sqlite
         .insert_eval_trials(
@@ -338,7 +338,7 @@ fn eval_fixture(
 }
 
 fn eval_dispatcher(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     worker: ScriptedEvalWorker,
     root: &std::path::Path,
 ) -> Dispatcher {
@@ -353,7 +353,7 @@ fn eval_dispatcher(
 }
 
 fn only_trial(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     batch_id: &str,
 ) -> task_core::routing_eval_trial::EvalTrial {
     let mut trials = store.eval_trials_list(Some(batch_id), None).unwrap();
@@ -361,7 +361,7 @@ fn only_trial(
     trials.remove(0)
 }
 
-fn trial_settled(store: &Arc<dyn TaskStore>, batch_id: &str) -> bool {
+fn trial_settled(store: &Arc<SqliteStore>, batch_id: &str) -> bool {
     use task_core::routing_eval_trial::EvalTrialStatus as S;
     !matches!(
         only_trial(store, batch_id).status,
@@ -484,7 +484,7 @@ async fn eval_run_request_sets_per_trial_cargo_target_dir() {
     );
     let base_commit = git(&repo, &["rev-parse", "HEAD"]);
     let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let store: Arc<SqliteStore> = sqlite.clone();
     let batch_id = ulid::Ulid::new().to_string();
     let specs = (0..2)
         .map(|trial_no| task_core::routing_eval_trial::EvalTrialSpec {
@@ -704,7 +704,7 @@ fn eval_owner_row(
 /// once the run has started (its target is allocated off the tick, before the run).
 async fn start_hung_eval_trial(
     temp: &std::path::Path,
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     batch_id: &str,
     owner: &str,
 ) -> (Dispatcher, task_core::routing_eval_trial::EvalTrial) {
@@ -730,7 +730,7 @@ async fn start_hung_eval_trial(
 }
 
 /// The new instance after a live promotion: owns its instance id, starts nothing, only recovers.
-fn recovering_dispatcher(temp: &std::path::Path, store: &Arc<dyn TaskStore>) -> Dispatcher {
+fn recovering_dispatcher(temp: &std::path::Path, store: &Arc<SqliteStore>) -> Dispatcher {
     let mut next = eval_dispatcher(
         store,
         ScriptedEvalWorker {
@@ -897,7 +897,7 @@ fn reconcile_ownerless_now(d: &mut Dispatcher) {
     d.reconcile_ownerless_runs();
 }
 
-fn run_row_status(store: &Arc<dyn TaskStore>, run_id: &str) -> task_core::RunIndexStatus {
+fn run_row_status(store: &Arc<SqliteStore>, run_id: &str) -> task_core::RunIndexStatus {
     store.run_index_get(run_id).unwrap().unwrap().status
 }
 
@@ -1185,7 +1185,7 @@ fn eval_queue(
     sources: &[(&str, u32)],
 ) -> (
     tempfile::TempDir,
-    Arc<dyn TaskStore>,
+    Arc<SqliteStore>,
     Arc<SqliteStore>,
     String,
 ) {
@@ -1208,7 +1208,7 @@ fn eval_queue(
     );
     let base_commit = git(&repo, &["rev-parse", "HEAD"]);
     let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let store: Arc<SqliteStore> = sqlite.clone();
     let batch_id = ulid::Ulid::new().to_string();
     let specs = sources
         .iter()
@@ -1235,7 +1235,7 @@ fn eval_queue(
 /// Sources `p1` and `p2`, each with one account `default` that runs one run at a time; the
 /// runs never finish, so a started trial keeps its account for the whole test.
 fn two_source_eval_dispatcher(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     root: &std::path::Path,
     reserved_runs: usize,
 ) -> Dispatcher {
@@ -1257,7 +1257,7 @@ fn two_source_eval_dispatcher(
 }
 
 fn trial_statuses(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     batch_id: &str,
 ) -> Vec<(String, u32, task_core::routing_eval_trial::EvalTrialStatus)> {
     store
@@ -1508,7 +1508,7 @@ async fn verify_daemon_leaves_foreign_eval_trial_files() {
     // One `running` (its run is not held by anyone here), one `scoring`, one still `queued`.
     store.eval_trial_mark_scoring(&ids[1]).unwrap();
 
-    let snapshot = |store: &Arc<dyn TaskStore>| {
+    let snapshot = |store: &Arc<SqliteStore>| {
         let trials = store.eval_trials_list(Some(&batch_id), None).unwrap();
         let runs = ids
             .iter()

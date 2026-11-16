@@ -7,8 +7,10 @@
 use std::process::ExitCode;
 
 use clap::Args;
-use task_core::TaskStore;
+
 use task_ops::gate::cancel as ops_cancel;
+
+use task_core::SqliteStore;
 
 use crate::error::CliError;
 use crate::outln;
@@ -18,7 +20,7 @@ pub struct CancelArgs {
     pub id: String,
 }
 
-pub fn run(store: &dyn TaskStore, args: CancelArgs) -> Result<ExitCode, CliError> {
+pub fn run(store: &SqliteStore, args: CancelArgs) -> Result<ExitCode, CliError> {
     let id = crate::error::parse_task_id(&args.id)?;
     let result = ops_cancel(store, id, None)?;
     outln!("{:?}", result.to);

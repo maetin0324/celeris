@@ -41,7 +41,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use task_core::design_review::ReviewPolicyState;
-use task_core::{Event, Task, TaskId, TaskStore};
+use task_core::{Event, SqliteStore, Task, TaskId};
 use task_ops::changes::git;
 use task_worker::protocol::{
     DiffStat, HealthFindingsSummary, HealthPolicyState, HealthRepoInput, HealthReportFinding,
@@ -92,7 +92,7 @@ pub struct CandidateRepo {
 
 /// [`build_health_input`] の入力（tick の中で集めた値だけ）。
 pub struct HealthInputWork {
-    pub store: Arc<dyn TaskStore>,
+    pub store: Arc<SqliteStore>,
     pub task_id: TaskId,
     /// 材料を渡す reviewer run の id（event の `review_run`。`policy_only` なら worker run の id）。
     pub review_run: String,

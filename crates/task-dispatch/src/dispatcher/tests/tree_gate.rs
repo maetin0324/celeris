@@ -11,7 +11,7 @@ use super::*;
 
 /// 決定を待って止めた仕事がある木は `ready` の task を残すので `idle` にならない（子待ちの親と同じ）。
 /// run・判定・統合が 50 tick（約 1 秒）続けて無ければ落ち着いたとみなす。
-async fn run_until_quiet(d: &mut Dispatcher, store: &Arc<dyn TaskStore>, max_ticks: usize) {
+async fn run_until_quiet(d: &mut Dispatcher, store: &Arc<SqliteStore>, max_ticks: usize) {
     let mut quiet = 0;
     for _ in 0..max_ticks {
         let r = d.tick().unwrap();
@@ -38,7 +38,7 @@ async fn run_until_quiet(d: &mut Dispatcher, store: &Arc<dyn TaskStore>, max_tic
 /// 上限に近い計画は承認を挟む）。承認の理由（承認を待たなかったなら空）を返す。
 async fn run_until_quiet_approving(
     d: &mut Dispatcher,
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     root_id: TaskId,
     max_ticks: usize,
 ) -> Vec<String> {
@@ -93,7 +93,7 @@ fn gate_decision(task: &Task) -> task_core::ExecutionGateDecision {
         .unwrap_or_else(|| panic!("no gate decision on {}", task.id))
 }
 
-fn child_task(store: &Arc<dyn TaskStore>, root: TaskId, key: &str) -> Task {
+fn child_task(store: &Arc<SqliteStore>, root: TaskId, key: &str) -> Task {
     let id = super::tree::child_of(store, root, key);
     store.get(id).unwrap().unwrap()
 }
@@ -123,7 +123,7 @@ fn overrides(events: &[(u64, Event)]) -> Vec<(String, task_core::UnitGateAction,
 #[tokio::test]
 async fn tree_nodes_adopt_gate_even_in_shadow() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = gate_root(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -216,7 +216,7 @@ async fn tree_nodes_adopt_gate_even_in_shadow() {
     assert_replay_is_clean(&store);
 
     // 木でない task: 規則表の compound（ヒントの強制規則）は shadow のまま記録だけ、1 run（atomic）。
-    let store2: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store2: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut plain = new_task(
         dir.path(),
         Check::Command {
@@ -260,7 +260,7 @@ async fn tree_nodes_adopt_gate_even_in_shadow() {
 #[tokio::test]
 async fn unit_gate_promotes_and_demotes_with_override_events() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = gate_root(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -391,7 +391,7 @@ async fn unit_gate_promotes_and_demotes_with_override_events() {
 
 /// 決定の要求の行（`decisions`）と `DecisionRequested` を確かめる。`(key, kind, needed_before, raised_by)`。
 fn open_decisions(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     root: TaskId,
 ) -> Vec<(String, task_core::DecisionKind, Vec<String>, TaskId)> {
     store
@@ -412,7 +412,7 @@ fn open_decisions(
 
 /// 「その仕事を止めた以外に副作用が無い」: root は `ready` のまま（failed / blocked / done でない）、質問も
 /// approvals も無く、atomic に倒していない（gate は compound のまま）。
-fn assert_only_held(store: &Arc<dyn TaskStore>, root: TaskId) {
+fn assert_only_held(store: &Arc<SqliteStore>, root: TaskId) {
     let stored = store.get(root).unwrap().unwrap();
     assert_eq!(stored.status, Status::Ready, "{:?}", store.events_for(root));
     let gate = gate_decision(&stored);
@@ -445,7 +445,7 @@ fn held(units: &[task_core::WorkUnitRow], key: &str) -> bool {
 #[tokio::test]
 async fn leaf_too_large_at_max_depth_raises_decision() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = gate_root(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -578,7 +578,7 @@ async fn plan_limits_raise_limit_decisions_and_hold_only_the_excess() {
     ];
     for case in cases {
         let dir = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let root = gate_root(dir.path());
         let root_id = root.id;
         store.create_task(&root, vec![]).unwrap();
@@ -641,7 +641,7 @@ async fn plan_limits_raise_limit_decisions_and_hold_only_the_excess() {
 #[tokio::test]
 async fn concurrent_children_limit_waits_without_a_decision() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = gate_root(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -678,7 +678,7 @@ async fn concurrent_children_limit_waits_without_a_decision() {
 #[tokio::test]
 async fn tree_limit_breach_stops_only_that_subtree() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = gate_root(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -769,7 +769,7 @@ async fn tree_limit_breach_stops_only_that_subtree() {
 #[tokio::test]
 async fn tree_replan_limit_raises_a_decision_instead_of_a_planner_run() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = gate_root(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -921,7 +921,7 @@ impl WorkerAdapter for AutoLeafAdapter {
 #[tokio::test]
 async fn auto_leaf_at_depth_limit_executes_without_a_decision() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = gate_root(dir.path());
     store.create_task(&root, vec![]).unwrap();
     let adapter = Arc::new(AutoLeafAdapter::new(vec![AutoLeafStep::Done(0)]));
@@ -943,7 +943,7 @@ async fn auto_leaf_at_depth_limit_executes_without_a_decision() {
 async fn auto_leaf_counts_below_or_equal_threshold_do_not_request_decisions() {
     for n in [0, 1, 2] {
         let dir = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let root = gate_root(dir.path());
         store.create_task(&root, vec![]).unwrap();
         // Stream + context exhaustion in the same run must not count twice.
@@ -964,7 +964,7 @@ async fn auto_leaf_counts_below_or_equal_threshold_do_not_request_decisions() {
 #[tokio::test]
 async fn auto_leaf_excess_compaction_interrupts_live_run_and_resume_resets_window() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = gate_root(dir.path());
     store.create_task(&root, vec![]).unwrap();
     let adapter = Arc::new(AutoLeafAdapter::new(vec![
@@ -1065,7 +1065,7 @@ async fn auto_leaf_excess_compaction_interrupts_live_run_and_resume_resets_windo
 async fn auto_leaf_context_rollover_and_continuation_each_raise_a_decision() {
     for context in [true, false] {
         let dir = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let root = gate_root(dir.path());
         store.create_task(&root, vec![]).unwrap();
         let kind = if context {
@@ -1108,7 +1108,7 @@ async fn auto_leaf_context_rollover_and_continuation_each_raise_a_decision() {
 async fn auto_leaf_zero_limit_decisions_support_replan_and_withdraw() {
     for option in ["replan", "withdraw"] {
         let dir = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let root = gate_root(dir.path());
         store.create_task(&root, vec![]).unwrap();
         let mut d = tree_dispatcher(
@@ -1155,7 +1155,7 @@ async fn auto_leaf_zero_limit_decisions_support_replan_and_withdraw() {
 async fn auto_leaf_repeated_session_rollovers_and_new_context_exhaustion_are_counted() {
     for terminal in [task_core::BudgetKind::Turns, task_core::BudgetKind::Context] {
         let dir = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let root = gate_root(dir.path());
         store.create_task(&root, vec![]).unwrap();
         let mut d = tree_dispatcher(
@@ -1193,7 +1193,7 @@ async fn auto_leaf_repeated_session_rollovers_and_new_context_exhaustion_are_cou
 
 /// 木の run 1 本（model と 4 種の token を指定。保存済みの `cost_usd` は入れない）。
 pub(super) fn seed_tree_run(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     task: &Task,
     id: &str,
     model: &str,
@@ -1228,9 +1228,9 @@ pub(super) fn seed_tree_run(
 
 fn usd_hold_fixture(
     max_usd_micros: u64,
-) -> (tempfile::TempDir, Arc<dyn TaskStore>, Dispatcher, Task) {
+) -> (tempfile::TempDir, Arc<SqliteStore>, Dispatcher, Task) {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut root = gate_root(dir.path());
     // 木の節点（`tree` を持つ task）にして、上限の判定の対象にする。
     root.tree = Some(task_core::TreeInfo::root(root.id));

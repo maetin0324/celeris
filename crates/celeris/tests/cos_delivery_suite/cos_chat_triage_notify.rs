@@ -3,7 +3,7 @@ use crate::fake_http;
 
 use celeris::notify::{self, NotifyConfig, SendOutcome};
 use task_core::chat::triage::CosTriageSource;
-use task_core::{NotificationKind, NotificationStore, SqliteStore};
+use task_core::{NotificationKind, SqliteStore};
 use time::OffsetDateTime;
 
 fn at() -> OffsetDateTime {
@@ -244,7 +244,7 @@ fn cos_chat_triage_three_send_failures_keep_the_unresolved_item() {
 
 #[test]
 fn cos_chat_triage_notice_revision_is_checked_before_post() {
-    use task_core::feed::{NoticeEvent, NoticeKind, NoticeQuery, NoticeStore};
+    use task_core::feed::{NoticeEvent, NoticeKind, NoticeQuery};
     let dir = tempfile::tempdir().expect("dir");
     let db = dir.path().join("test.db");
     let store = SqliteStore::open(&db).expect("db");

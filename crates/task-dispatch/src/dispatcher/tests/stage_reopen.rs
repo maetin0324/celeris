@@ -7,11 +7,7 @@ use super::tree::assert_replay_is_clean;
 use super::*;
 
 /// `(key, merged keys with skipped)` of every `PhaseIntegrated` for `phase`, in order.
-fn integrations_of(
-    store: &Arc<dyn TaskStore>,
-    id: TaskId,
-    phase: &str,
-) -> Vec<Vec<(String, bool)>> {
+fn integrations_of(store: &Arc<SqliteStore>, id: TaskId, phase: &str) -> Vec<Vec<(String, bool)>> {
     events_of(store, id)
         .into_iter()
         .filter_map(|e| match e {
@@ -24,7 +20,7 @@ fn integrations_of(
 }
 
 /// `(key, reason)` of every `WorkUnitTransitioned{from: done, to: pending}`.
-fn reopen_events(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<(String, String)> {
+fn reopen_events(store: &Arc<SqliteStore>, id: TaskId) -> Vec<(String, String)> {
     events_of(store, id)
         .into_iter()
         .filter_map(|e| match e {
@@ -49,7 +45,7 @@ async fn blocked_repair_replan_loop_runs_the_new_leaf_once() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "test ! -f fmt-bad.txt && test -f fixed.txt");
     store.insert(&task).unwrap();
     let mut b = v2_wu("b", "core", &[]);
@@ -150,7 +146,7 @@ async fn a_replan_adding_a_unit_to_an_integrated_stage_reintegrates_that_stage()
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(
         repo.path(),
         "test -f a.txt && test -f a2.txt && test -f b.txt",
@@ -225,7 +221,7 @@ async fn a_replan_adding_a_unit_to_an_integrated_stage_reintegrates_that_stage()
 /// 修正前の replan が書いた形を store に直接書く（本番の v7 / v8 と同じ events）: 新しい版の `ExecutionPlanned` と
 /// 新しい unit の行だけを足し、done の統合 WU には触れない。足した unit は done で、自分のブランチに commit を持つ。
 fn pre_fix_replan_adding_a_done_unit(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     repo: &std::path::Path,
     task_id: TaskId,
     key: &str,
@@ -354,7 +350,7 @@ async fn reopening_a_task_whose_integrated_stage_gained_units_merges_them_before
     let root = tempfile::tempdir().unwrap();
     let marker_dir = tempfile::tempdir().unwrap();
     let marker = marker_dir.path().join("expect-late");
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(
         repo.path(),
         &format!(

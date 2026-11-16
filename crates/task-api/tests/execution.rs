@@ -12,7 +12,7 @@ mod common;
 
 use common::*;
 use serde_json::{Value, json};
-use task_core::{Event, Status, TaskKind, TaskStore};
+use task_core::{Event, Status, TaskKind};
 
 fn plan_body() -> Value {
     json!({

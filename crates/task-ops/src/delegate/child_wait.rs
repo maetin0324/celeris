@@ -4,8 +4,9 @@
 //! または子の最後の失敗より後の人・CoS・operator の回答・comment）を待つ。印の無い `failed` の子は
 //! 従来どおり終端として扱い、親を起こす。読むのはストアだけ。LLM は呼ばない（DESIGN 原則 1）。
 
+use task_core::TaskQuery;
 use task_core::comment::CommentAuthorKind;
-use task_core::{Event, Status, Task, TaskId, TaskStore};
+use task_core::{Event, SqliteStore, Status, Task, TaskId};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -61,7 +62,7 @@ pub fn is_wait_instruction(text: &str) -> bool {
 /// 指示は、親への回答（`Event::Answered`）と、親・その子への人のコメント・worker の run に依らない
 /// node のコメント（CoS・operator・lead）。
 pub fn awaited_children(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     parent: TaskId,
     children_wait_started: bool,
     escalated: &mut dyn FnMut(TaskId) -> Result<bool, OpsError>,
@@ -121,7 +122,7 @@ fn parse_ts(ts: &str) -> Option<OffsetDateTime> {
 
 /// 「待て」の指示の時刻。`answers` なら親への回答も含める。
 fn instruction_times(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: TaskId,
     answers: bool,
 ) -> Result<Vec<OffsetDateTime>, OpsError> {
@@ -149,7 +150,7 @@ fn instruction_times(
 }
 
 /// 子が最後に `failed` へ遷移した時刻。
-fn last_failed_at(store: &dyn TaskStore, task: TaskId) -> Result<Option<OffsetDateTime>, OpsError> {
+fn last_failed_at(store: &SqliteStore, task: TaskId) -> Result<Option<OffsetDateTime>, OpsError> {
     Ok(store
         .event_rows_for(task, None, usize::MAX)?
         .into_iter()
@@ -168,7 +169,7 @@ fn last_failed_at(store: &dyn TaskStore, task: TaskId) -> Result<Option<OffsetDa
 
 /// 親の最後のワーカー run の開始時刻（reviewer の run は数えない）。
 fn last_run_started_at(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: TaskId,
 ) -> Result<Option<OffsetDateTime>, OpsError> {
     Ok(store

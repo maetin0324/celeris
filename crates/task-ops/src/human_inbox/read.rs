@@ -3,7 +3,7 @@ use super::*;
 /// Current question of one Task, identical to its item in the complete inbox.
 /// The Task and root are fetched by primary key; unrelated Task payloads are not read.
 pub fn question_for_task(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     now: OffsetDateTime,
 ) -> Result<Option<InboxItem>, OpsError> {

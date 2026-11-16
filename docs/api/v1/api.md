@@ -706,7 +706,7 @@ DB 全体の status 別件数 `by_status`）。`attention[]` は `type` で区�
 | `cursor` | 不透明文字列 | — | 前応答の `next_cursor`（`Page<T>.next_cursor` をそのまま）。解読できない cursor は 400 |
 
 - 知らないクエリキー、複数可でないキーの重複は 400。
-- `task_ops::view::task_list`（`TaskStore::list_page(&ListFilter, ListOrder, cursor, limit) -> Page<Task>`）を使い、`Task` を `TaskSummary` に写す（`children` / `waits` / `runnable` / `backoff_until` の付加は task-ops）。
+- `task_ops::view::task_list`（`SqliteStore::list_page(&ListFilter, ListOrder, cursor, limit) -> Page<Task>`）を使い、`Task` を `TaskSummary` に写す（`children` / `waits` / `runnable` / `backoff_until` の付加は task-ops）。
 - `total` は `Page.total`（同じフィルタでの総件数。cursor に依らない）。
 - `items[].children` は `parent_id` で集計。`waits` は DB・計画・直近 daemon snapshot の待ち理由、`runnable` は ready かつ待ち理由が空であることを示す。`run_state=runnable|waiting` で絞り込める。`backoff_until` は §5.3。
 - `items[].role` は `Task.role`（ADR-0016 D1）。一覧の行に役割のラベルを出すための値で、`TaskDetail.role` と同じ（役割なしは `null`）。
@@ -733,7 +733,7 @@ DB 全体の status 別件数 `by_status`）。`attention[]` は `type` で区�
 ### 3.3a `GET /tasks/counts` → 200 `TaskStatusCounts`
 
 `GET /tasks/counts` → 200 `TaskStatusCounts` は `{ "counts_by_status": { "ready": 12, "running": 3 } }` を返す。
-`TaskStore::count_by_status` の SQLite `GROUP BY status` を使い、タスク行は取得しない。
+`SqliteStore::count_by_status` の SQLite `GROUP BY status` を使い、タスク行は取得しない。
 検索語・案件・状態などの一覧条件は件数に影響せず、DB 全体の各状態を数える。0 件の状態は省略する。
 クエリは受けない。読み取り専用で、`celerisctl show --json` の応答は変えない。
 
@@ -4088,7 +4088,7 @@ data: {"reason":"cursor_too_old","cursor":20000}
 | 事項 | 決め |
 |---|---|
 | 応答ヘッダ | `Content-Type: text/event-stream; charset=utf-8`、`Cache-Control: no-store`、`X-Accel-Buffering: no`。`hello`（と必要なら `reset`）は接続直後に送る |
-| 再開 | `Last-Event-ID` ヘッダ（`EventRow.id`）または `?after_id=`（ヘッダが優先）。省略時は「今」（`TaskStore::latest_event_id()`）から（過去は送らない）。`hello.cursor` が送信開始位置（この id より後を送る）。数値でない `Last-Event-ID` は 400 `bad_request` |
+| 再開 | `Last-Event-ID` ヘッダ（`EventRow.id`）または `?after_id=`（ヘッダが優先）。省略時は「今」（`SqliteStore::latest_event_id()`）から（過去は送らない）。`hello.cursor` が送信開始位置（この id より後を送る）。数値でない `Last-Event-ID` は 400 `bad_request` |
 | 取りこぼし | `最新 id − 要求 id > 10,000`（`STREAM_RESET_THRESHOLD`）なら `reset{reason: "cursor_too_old"}`、要求 id が最新より大きい（DB が入れ替わった）なら `reset{reason: "cursor_ahead"}` を `hello` の直後に送り、`cursor` = 最新 id から続ける。クライアントは全体を再取得する |
 | `task.event` | 接続ごとの購読ループが `events_since(cursor, 1000)`（`STREAM_BATCH`）を **250 ms 間隔**（`STREAM_POLL_INTERVAL`）でポーリングし、1,000 件読めたら追いつくまで続けて読む。`id:` 行に `EventRow.id`、`data` は `EventRow`。`?task_id=` で 1 タスクに絞る（`hello.cursor` は絞らない）。DB エラーは次のポーリングで再試行する |
 | `daemon` | デーモンのスナップショット（`watch`）が変わるたび（= 毎 tick）に `DaemonSnapshot`。値が `null` の間は送らない（`hello.daemon` は `null` になりうる）。`?task_id=` があっても送る |

@@ -22,7 +22,7 @@ use celeris_campaign::{
     },
 };
 use serde_json::Value;
-use task_core::{Status, TaskStore};
+use task_core::{SqliteStore, Status};
 
 use grading_fixture::{FABRICATED_REPORT, fixture, fixture_with_grader, k3_grading, write};
 #[path = "common/dagbench_grading.rs"]
@@ -119,7 +119,7 @@ fn run_celeris_graded(s: &RunSpec, raw: &Path) -> (String, Status) {
     RunHeader::from_spec(s, "celeris", CELERIS_SCOPE)
         .write(raw)
         .unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(task_core::SqliteStore::open(&env.db_path).unwrap());
+    let store: Arc<SqliteStore> = Arc::new(task_core::SqliteStore::open(&env.db_path).unwrap());
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(4)
         .enable_all()

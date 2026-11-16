@@ -7,7 +7,7 @@ mod common;
 
 use common::*;
 use serde_json::json;
-use task_core::report::{Report, ReportId, ReportKind, ReportStore};
+use task_core::report::{Report, ReportId, ReportKind};
 use task_core::{ProjectId, SqliteStore};
 use time::OffsetDateTime;
 
@@ -293,7 +293,6 @@ async fn the_daemon_snapshot_carries_the_unread_counts_and_the_notification_deci
 /// messages 1 node 600 件超）でも件数の口は一覧の上限（500）に当たらず、生の行数と一致する。
 #[tokio::test]
 async fn count_endpoints_count_every_row_beyond_the_page_limit() {
-    use task_core::TaskStore;
     let env = admin_env();
     let app = env.router();
     let now = OffsetDateTime::now_utc();

@@ -16,9 +16,8 @@ use common::*;
 use task_api::StreamTuning;
 use task_core::chat::{ChatPostMessageRequest, ChatSendMode};
 use task_core::{
-    Approval, ApprovalStore, COS_ID, Event, Message, MessageId, MessageRole, ProgressFields,
-    ProgressKind, Project, ProjectId, Report, ReportKind, ReportStore, Status, Task, TaskKind,
-    TaskStore,
+    Approval, COS_ID, Event, Message, MessageId, MessageRole, ProgressFields, ProgressKind,
+    Project, ProjectId, Report, ReportKind, Status, Task, TaskKind,
 };
 use time::OffsetDateTime;
 
@@ -476,7 +475,7 @@ async fn scopes_filter_by_project_and_by_node() {
 /// ブロックになる。`scheduled`（未適用）は出ず、案件・ノードで絞れる。
 #[tokio::test]
 async fn knowledge_blocks_show_the_applied_summary_and_respect_scope() {
-    use task_core::{KnowledgeRunState, KnowledgeRunStore, KnowledgeRunSummary};
+    use task_core::{KnowledgeRunState, KnowledgeRunSummary};
 
     let env = TestEnv::new();
     let pluvio = project(&env, "Pluvio");

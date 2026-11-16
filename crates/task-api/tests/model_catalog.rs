@@ -8,7 +8,7 @@ use std::sync::Arc;
 use common::*;
 use serde_json::json;
 use task_api::{DiscoverySummaryView, ModelDiscoveryHook};
-use task_core::ModelCatalogStore;
+
 use task_core::model_catalog::{CatalogDelta, CatalogSource, DiscoveredModel};
 
 fn seed(env: &TestEnv) {

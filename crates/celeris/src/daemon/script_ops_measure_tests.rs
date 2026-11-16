@@ -19,7 +19,7 @@ use task_core::script_compare::{
     LaneRulesInput, ScriptDomain, ScriptGenerationState, ScriptMode, ScriptModeChange,
     canary_selected,
 };
-use task_core::script_inbox::ScriptInboxStore;
+
 use task_dispatch::script_policy::{PolicyScriptSource, SCRIPT_CALL_DEADLINE};
 use time::OffsetDateTime;
 

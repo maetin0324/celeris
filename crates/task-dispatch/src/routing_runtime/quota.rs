@@ -5,7 +5,7 @@
 //! 見積りの判断は純粋関数 [`super::quota_estimate::propose_estimate`]。この module の `RoutingRuntime` の method は、
 //! 観測値を帳簿から読み、提案を受けて較正の更新と他の member の event の追記を行う（適用）。
 
-use task_core::{AccountAdapter, Event, TaskId, TaskStore, Usage};
+use task_core::{AccountAdapter, Event, SqliteStore, TaskId, Usage};
 
 use super::RoutingRuntime;
 use super::quota_estimate::{
@@ -83,7 +83,7 @@ impl RoutingRuntime {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn settle_quota(
         &mut self,
-        store: &dyn TaskStore,
+        store: &SqliteStore,
         task_id: TaskId,
         run_id: &str,
         work_unit_id: Option<String>,

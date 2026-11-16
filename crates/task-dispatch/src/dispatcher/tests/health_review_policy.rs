@@ -86,7 +86,7 @@ async fn health_review_worker_profile_reaches_planner_and_work_unit_runs() {
     )
     .unwrap();
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = compound_git_task(repo.path());
     store.insert(&task).unwrap();
     let adapter = Arc::new(PlannerScriptAdapter::new(
@@ -122,7 +122,7 @@ async fn health_review_worker_profile_reaches_planner_and_work_unit_runs() {
 async fn health_review_worker_profile_reaches_the_atomic_run() {
     let repo = checker_repo(&stub_printing("builtin", "generic"));
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = git_task(
         repo.path(),
         None,
@@ -157,7 +157,7 @@ async fn health_review_worker_profile_unreadable_policy_stays_out_of_the_run() {
         (plain.path(), false),
     ] {
         let root = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let task = git_task(
             dir,
             None,
@@ -182,7 +182,7 @@ async fn health_review_worker_profile_unreadable_policy_stays_out_of_the_run() {
     }
 
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let adapter = Arc::new(PlannerScriptAdapter::new(Vec::new(), HashMap::new()));
     let d = worktree_dispatcher(store, adapter, root.path(), None);
     let mut remote = compound_task(plain.path());

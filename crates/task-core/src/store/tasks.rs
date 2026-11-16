@@ -155,16 +155,16 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub(super) fn insert_impl(&self, task: &Task) -> Result<(), StoreError> {
+    pub fn insert(&self, task: &Task) -> Result<(), StoreError> {
         let conn = self.lock()?;
         Self::insert_tx(&conn, task)
     }
 
-    pub(super) fn get_impl(&self, id: TaskId) -> Result<Option<Task>, StoreError> {
+    pub fn get(&self, id: TaskId) -> Result<Option<Task>, StoreError> {
         self.with_read_conn(|conn| Self::get_locked(conn, id))
     }
 
-    pub(super) fn list_impl(&self, filter: Option<Status>) -> Result<Vec<Task>, StoreError> {
+    pub fn list(&self, filter: Option<Status>) -> Result<Vec<Task>, StoreError> {
         self.with_read_conn(|conn| {
             let mut tasks = Vec::new();
             match filter {
@@ -188,7 +188,10 @@ impl SqliteStore {
         })
     }
 
-    pub(super) fn acquire_lease_impl(
+    /// 排他的にリースを取得する。成功したら true を返し、task の status を Running にし、
+    /// lease = Some{worker_run_id, expires_at: now + ttl} をDBに書く。
+    /// 既にリースされている／status != Ready の場合は false を返す（エラーではない）。
+    pub fn acquire_lease(
         &self,
         task_id: TaskId,
         worker_run_id: &str,
@@ -278,7 +281,10 @@ impl SqliteStore {
         Ok(true)
     }
 
-    pub(super) fn halted_by_pause_impl(&self, task: &Task) -> Result<bool, StoreError> {
+    /// ADR-0079 D13（Phase R5a）: `task` が subtree の一時停止（自分か祖先の `paused_at`）か、祖先の案件の
+    /// 停止（paused / cancelled / archived）で止まっているか。`ready_tasks` と同じ判定を、既に `running` の
+    /// task の並列 WU の 2 本目以降（`dispatch_parallel_work_units`）にも当てるために出す。対話は常に `false`。
+    pub fn halted_by_pause(&self, task: &Task) -> Result<bool, StoreError> {
         if is_conversation(task) {
             return Ok(false);
         }
@@ -330,9 +336,10 @@ impl SqliteStore {
         }))
     }
 
+    /// ADR 2026-10-11-task-wait-reasons D3: `ready_tasks` と同じ読み方の DB の待ち（D1〜D6）。終端の task は空。
     /// ADR 2026-10-11-task-wait-reasons D3: 一覧・木の API 用。各 task の DB の待ち（`wait::db_waits`）を
     /// `ready_tasks` と同じ読み方で返す（halted 集合は 1 回だけ読む）。終端の task は空。
-    pub(crate) fn db_waits_for_impl(
+    pub fn db_waits_for(
         &self,
         tasks: &[Task],
     ) -> Result<std::collections::HashMap<TaskId, Vec<crate::wait::TaskWait>>, StoreError> {
@@ -352,7 +359,9 @@ impl SqliteStore {
         })
     }
 
-    pub(super) fn ready_tasks_impl(&self, limit: usize) -> Result<Vec<Task>, StoreError> {
+    /// status=Ready かつ depends_on が全て Done かつ（親が存在し kind=Approval の場合は親が Done）
+    /// を満たすタスクを priority DESC, created_at ASC で最大 limit 件返す。
+    pub fn ready_tasks(&self, limit: usize) -> Result<Vec<Task>, StoreError> {
         self.with_read_conn(|conn| {
             // ADR-0044 D6（Phase 55）: **一時停止・中止・アーカイブされた案件／途中目標のタスクは
             // dispatch しない**（`ready` のまま。状態機械は触らない）。案件の支援 run（計画・レビュー・
@@ -458,7 +467,10 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub(super) fn delegate_children_impl(
+    /// ADR-0016 D2 / M2: 実行中の委譲。子タスク群を挿入（`Created` → `Accept` で `ready`）し、親に
+    /// `Event::Delegated{run_id, task_ids}` を追記する。全体が 1 トランザクション。親の状態は変えない。
+    /// 子の `parent_id` が `parent_id` と違えば `StoreError::Invalid`。
+    pub fn delegate_children(
         &self,
         parent_id: TaskId,
         run_id: &str,
@@ -505,7 +517,13 @@ impl SqliteStore {
         Ok(ids)
     }
 
-    pub(super) fn retry_task_impl(
+    // ---- Phase 31: 失敗した仕事をやり直す（実機の事故、2026-09-18）----
+    /// `original` は `failed` または `cancelled` でなければ `StoreError::InvalidTransition`（`trigger = "retry"`）。
+    /// `new_task` を挿入し（`Event::Created` + `Event::Retried{from: original}`)、`original` に依存していた
+    /// 「未終端」または「`dependency_failed` で `cancelled` になった」タスクの `depends_on` を `new_task.id` に
+    /// 張り替える（後者は `draft` に戻し、`Event::Transitioned{from: cancelled, to: draft, reason: "retried"}`
+    /// を追記する）。全体を単一トランザクションで行い、張り替えたタスクの id を返す。
+    pub fn retry_task(
         &self,
         original: TaskId,
         new_task: &Task,
@@ -615,7 +633,8 @@ impl SqliteStore {
         Ok(rewired)
     }
 
-    pub(super) fn children_impl(&self, parent_id: TaskId) -> Result<Vec<Task>, StoreError> {
+    /// `parent_id` を親に持つタスク（終端を含む）を `created_at` 昇順（同時刻は挿入順）で返す（ADR-0016 M5 / M6）。
+    pub fn children(&self, parent_id: TaskId) -> Result<Vec<Task>, StoreError> {
         self.with_read_conn(|conn| {
             // 同じトランザクションで挿入した子（created_at が同じ）は挿入順（rowid）で返す。
             let mut stmt = conn.prepare(
@@ -632,7 +651,9 @@ impl SqliteStore {
         })
     }
 
-    pub(super) fn renew_lease_impl(
+    /// ADR-0010 D2 / D7（P-7）: `status = running` かつリースの run_id が一致するときだけ `expires_at = now + ttl` に
+    /// 延長して true を返す。状態遷移ではないのでイベントは追記しない。
+    pub fn renew_lease(
         &self,
         task_id: TaskId,
         worker_run_id: &str,
@@ -697,7 +718,8 @@ impl SqliteStore {
         Ok(affected == 1)
     }
 
-    pub(super) fn count_by_status_impl(&self) -> Result<Vec<(Status, u64)>, StoreError> {
+    /// ADR-0013 D10: `tasks` の件数を `status` ごとに集計する（0 件の status は含まない）。
+    pub fn count_by_status(&self) -> Result<Vec<(Status, u64)>, StoreError> {
         self.with_read_conn(|conn| {
             let mut stmt = conn.prepare("SELECT status, COUNT(*) FROM tasks GROUP BY status")?;
             let rows = stmt.query_map([], |row| {
@@ -712,7 +734,13 @@ impl SqliteStore {
         })
     }
 
-    pub(super) fn update_task_impl(&self, task: &Task, event: Event) -> Result<Task, StoreError> {
+    // ---- ADR-0044 D1/D2（Phase 53）: 人の編集とタスク単位のコメント ----
+    /// ADR-0044 D1: 人の編集を書き戻す（`json` と絞り込みの列、`Event::Edited` を単一トランザクションで）。
+    /// **状態機械は通らない**: `status` / `attempts` / `lease` は渡された `task` の値を**使わず**、
+    /// トランザクションの中で読み直した現在の行の値を書く（編集を組み立てている間にディスパッチャが
+    /// リースを取っていても、その run を壊さないため。`acquire_lease` / `apply_transition_if_lease` と同じ規律）。
+    /// 書き込んだ後の `Task`（= 読み直した状態を持つもの）を返す。無いタスクは `StoreError::Invalid`。
+    pub fn update_task(&self, task: &Task, event: Event) -> Result<Task, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let merged = Self::edit_task_tx(&tx, task, &event)?;
@@ -769,11 +797,9 @@ impl SqliteStore {
         Ok(merged)
     }
 
-    pub(super) fn extend_task_lease_impl(
-        &self,
-        task_id: TaskId,
-        ttl: StdDuration,
-    ) -> Result<bool, StoreError> {
+    /// ADR-0074 D1.4（Phase F2）: Task の lease（工程の保持者）の期限を `ttl` 先まで延ばす
+    /// （短くはしない）。`Running` でなければ `Ok(false)`。統合の間の延長に使う。
+    pub fn extend_task_lease(&self, task_id: TaskId, ttl: StdDuration) -> Result<bool, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let Some(mut task) = Self::get_locked(&tx, task_id)? else {

@@ -6,10 +6,12 @@
 //! 対話を `GET /projects/{id}?include_frozen=true` が履歴として読むための関数だけが残る（Console の `milestone`
 //! ブロックと id から引く `find` は R6 で外した）。
 //!
-//! I/O は `TaskStore` の読み取りだけ（DESIGN 原則 1）。
+//! I/O は `SqliteStore` の読み取りだけ（DESIGN 原則 1）。
 
+use task_core::OrgDirectory;
+use task_core::TaskQuery;
 use task_core::{
-    Message, MessageRole, Milestone, MilestoneId, MilestoneStatus, ProjectId, Task, TaskStore,
+    Message, MessageRole, Milestone, MilestoneId, MilestoneStatus, ProjectId, SqliteStore, Task,
 };
 
 use crate::error::OpsError;
@@ -21,7 +23,7 @@ const REVIEW_MESSAGE_SCAN: usize = 200;
 
 /// その案件の最新の `proposed` の途中目標（`seq` の大きい方。`exclude` は除く）。
 pub fn latest_proposal(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     project_id: ProjectId,
     exclude: Option<MilestoneId>,
 ) -> Result<Option<Milestone>, OpsError> {
@@ -52,7 +54,7 @@ pub struct ReviewState {
 
 /// レビューの対話とその返事を引く（決定的。無ければ空の `ReviewState`）。
 pub fn review_state(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     project_id: ProjectId,
     milestone_id: MilestoneId,
 ) -> Result<ReviewState, task_core::StoreError> {

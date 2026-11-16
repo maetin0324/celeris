@@ -468,7 +468,7 @@ impl Dispatcher {
     }
 
     /// ADR-0079 付記「R6-1」D4: 終端（done / failed / cancelled）の task なのに `runs` 索引で `running` のままの行を
-    /// 閉じる（`TaskStore::close_runs_of_terminal_tasks`。`WorkerFinished{end: Cancelled}` を積む）。起動後の最初の
+    /// 閉じる（`SqliteStore::close_runs_of_terminal_tasks`。`WorkerFinished{end: Cancelled}` を積む）。起動後の最初の
     /// tick と [`RUNS_RECONCILE_INTERVAL_SECS`] ごと。閉じた行は 1 行ずつ 1 回だけログに残す（閉じた行は二度と
     /// 見つからない）。終端への遷移は store が同じトランザクションで閉じるので、見つかるのは R6-1 より前の行だけ。
     /// 同じ周期で終端 task の未回答統合依頼も `task_terminal` で閉じる。

@@ -482,9 +482,7 @@ fn a_delegation_to_another_department_becomes_a_question_and_the_batch_is_split(
 /// `standing` は以後ずっと、`denied` は通さない。照合は鍵の前方一致で決定的。
 #[test]
 fn once_standing_and_denied_decide_whether_the_next_run_may_delegate_across_departments() {
-    use task_core::approval::{
-        Approval, ApprovalId, ApprovalStore, Decision, StandingRule, StandingRuleId,
-    };
+    use task_core::approval::{Approval, ApprovalId, Decision, StandingRule, StandingRuleId};
 
     let store = SqliteStore::open_in_memory().expect("open");
     seed_org(&store);

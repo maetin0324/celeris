@@ -250,9 +250,10 @@ fn aggregate_unit(
 }
 
 impl SqliteStore {
+    /// task とその終端の WorkUnit の完了単位を `completion_outcomes` へ冪等に書く（ADR 2026-10-22 D6）。
     /// task とその終端の WorkUnit の完了単位を冪等に書く（同じ単位は上書き）。終端でない単位は書かない。
     /// 書いた件数を返す。
-    pub(super) fn completion_outcomes_project_impl(
+    pub fn completion_outcomes_project(
         &self,
         task_id: &str,
         celeris_version: &str,
@@ -378,7 +379,8 @@ impl SqliteStore {
         Ok(outcomes.len())
     }
 
-    pub(super) fn completion_outcomes_list_impl(
+    /// 完了単位の新しい順。`leaf_only` は評価に使う葉の単位だけ。
+    pub fn completion_outcomes_list(
         &self,
         leaf_only: bool,
         limit: u32,
@@ -393,7 +395,7 @@ impl SqliteStore {
         })
     }
 
-    pub(super) fn harness_balance_trip_impl(
+    pub fn harness_balance_trip(
         &self,
         class: &str,
         reason: &str,
@@ -406,9 +408,8 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub(super) fn harness_balance_trips_impl(
-        &self,
-    ) -> Result<BTreeMap<String, String>, StoreError> {
+    /// harness 切替の guardrail が止めた実行クラス（クラス → 理由）。
+    pub fn harness_balance_trips(&self) -> Result<BTreeMap<String, String>, StoreError> {
         self.with_read_conn(|c| {
             let mut stmt =
                 c.prepare("SELECT execution_class, reason FROM harness_balance_trips")?;
@@ -417,7 +418,8 @@ impl SqliteStore {
         })
     }
 
-    pub(super) fn harness_balance_reset_impl(&self, class: &str) -> Result<bool, StoreError> {
+    /// 人の reset。止まっていたら true。
+    pub fn harness_balance_reset(&self, class: &str) -> Result<bool, StoreError> {
         let n = self.lock()?.execute(
             "DELETE FROM harness_balance_trips WHERE execution_class = ?1",
             params![class],

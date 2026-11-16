@@ -12,7 +12,7 @@ use celeris::{ClusterMasters, Config, Overrides};
 use serde_json::{Value, json};
 use task_core::local_machine::{SettingSource, WorkspaceRoots};
 use task_core::{
-    DaemonMode, InstanceRole, LocalSettingsOverrides, SharedRole, SqliteStore, TaskId, TaskStore,
+    DaemonMode, InstanceRole, LocalSettingsOverrides, SharedRole, SqliteStore, TaskId,
 };
 use time::OffsetDateTime;
 

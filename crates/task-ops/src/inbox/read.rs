@@ -12,7 +12,7 @@ impl BlockedAttention {
     /// Blocked の task の走査から作る attention（工程・前提・計画の承認と、その読み出しを使う往復の集約 D4.3）。
     pub(super) fn into_items(
         self,
-        store: &dyn TaskStore,
+        store: &SqliteStore,
         all_tasks: &[Task],
         by_id: &HashMap<TaskId, Task>,
         focus: Option<&HashSet<TaskId>>,
@@ -30,13 +30,13 @@ impl BlockedAttention {
 
 /// Task list shared only within a read pass. Never use this for leases or writes.
 pub struct InboxTaskSnapshot<'a> {
-    store: &'a dyn TaskStore,
+    store: &'a SqliteStore,
     tasks: Vec<Task>,
     by_id: HashMap<TaskId, Task>,
 }
 
 impl<'a> InboxTaskSnapshot<'a> {
-    pub fn read(store: &'a dyn TaskStore) -> Result<Self, OpsError> {
+    pub fn read(store: &'a SqliteStore) -> Result<Self, OpsError> {
         let tasks = store.list(None)?;
         let by_id = tasks.iter().map(|t| (t.id, t.clone())).collect();
         Ok(Self {
@@ -178,7 +178,7 @@ impl<'a> InboxTaskSnapshot<'a> {
 }
 
 pub(crate) fn question_for_task(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
 ) -> Result<Option<QuestionItem>, OpsError> {
     Ok(build_questions(

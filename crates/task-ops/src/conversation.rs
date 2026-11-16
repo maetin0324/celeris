@@ -5,14 +5,16 @@
 //! 既存の `tasks` に `kind = execute` の対話用タスクが 1 件できるだけ。返事はその run の
 //! `artifacts/result.json` の `summary`（ADR-0006 D3）で、ディスパッチャが `role = node` の行にする。
 //!
-//! I/O は `TaskStore` の読み書きだけ。LLM 呼び出しは無い（DESIGN 原則 1）。
+//! I/O は `SqliteStore` の読み書きだけ。LLM 呼び出しは無い（DESIGN 原則 1）。
 
 use std::path::PathBuf;
+use task_core::OrgDirectory;
+use task_core::TaskQuery;
 
 use task_core::approval::{Approval, Decision, StandingRule};
 use task_core::{
     Budget, DelegateTask, GenreSpec, ListFilter, ListOrder, Message, MessageId, MessageRole,
-    OrgNode, ProjectId, RoleSpec, Status, Task, TaskId, TaskKind, TaskStore, Tier, Trigger,
+    OrgNode, ProjectId, RoleSpec, SqliteStore, Status, Task, TaskId, TaskKind, Tier, Trigger,
     WorkerHint, WorkspaceMode, WorkspaceSpec, conversation_title, department_of, failure_reply,
 };
 use time::OffsetDateTime;
@@ -50,7 +52,7 @@ pub struct StartedConversation {
 /// → その分野の `default_role` → 役割の `tier` / `adapter`。予算は上の定数。
 #[allow(clippy::too_many_arguments)]
 pub fn start(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     node_id: &str,
     project_id: Option<ProjectId>,
     text: &str,
@@ -78,7 +80,7 @@ pub fn start(
 /// 添えて起こす。人が Console から話しかける経路（`start`）は常に `author = None`。
 #[allow(clippy::too_many_arguments)]
 pub fn start_as(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     node_id: &str,
     project_id: Option<ProjectId>,
     author: &str,
@@ -108,7 +110,7 @@ pub fn start_as(
 /// になり、仕事の木には出ない。人が話しかける経路（`start`）は常に `None` を渡す。
 #[allow(clippy::too_many_arguments)]
 pub fn start_with_milestone(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     node_id: &str,
     project_id: Option<ProjectId>,
     milestone_id: Option<task_core::MilestoneId>,
@@ -169,7 +171,7 @@ pub fn start_console_cos(
 /// `start` / `start_with_milestone` / `start_as` の共通の芯（ADR-0056 D2 で `author` を足した）。
 #[allow(clippy::too_many_arguments)]
 fn start_full(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     node_id: &str,
     project_id: Option<ProjectId>,
     milestone_id: Option<task_core::MilestoneId>,
@@ -259,7 +261,7 @@ fn start_full(
 /// 直列化そのものは Phase 27 の監査 M-3 のまま案件単位でよい。人が違う案件で同時に別々の対話をしても
 /// 待たされない）。
 fn open_conversation_tasks(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     node_id: &str,
     project_id: Option<ProjectId>,
 ) -> Result<Vec<TaskId>, OpsError> {
@@ -368,7 +370,7 @@ fn conversation_task(
 /// `task` が対話用でなければ何もしない（`Ok(None)`）。`summary` が空なら run が何も言わなかったという
 /// ことなので、その旨を残す（空行は入れない）。
 pub fn record_reply(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     run_id: &str,
     text: &str,
@@ -380,7 +382,7 @@ pub fn record_reply(
 /// ADR-0048 D3（Phase 60b）: `record_reply` と同じだが、CoS の `actions` の実行結果
 /// （`Message.metadata`）を一緒に残す。
 pub fn record_reply_with_metadata(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     run_id: &str,
     text: &str,
@@ -515,7 +517,7 @@ pub struct DelegationSplit {
 ///
 /// 読むのは `org_nodes` / `approvals` / `standing_rules` だけで、LLM は呼ばない（DESIGN 原則 1）。
 pub fn split_delegation(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     org: &[OrgNode],
     parent: &Task,
     proposals: &[DelegateTask],

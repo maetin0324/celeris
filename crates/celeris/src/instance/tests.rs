@@ -307,7 +307,7 @@ fn stale_but_alive_rows_finds_only_drained_rows_whose_pid_is_still_running() {
 }
 
 fn supervisor(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     release: &str,
     now: OffsetDateTime,
     drain: Duration,
@@ -318,7 +318,7 @@ fn supervisor(
 /// ADR-0070 D4（Phase 116）: `drain_force_abort` を選べる版。既定の `supervisor()` は常に `false`
 /// （drain timeout で abort しない、が既定の挙動）。
 fn supervisor_with(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     release: &str,
     now: OffsetDateTime,
     drain: Duration,
@@ -330,7 +330,7 @@ fn supervisor_with(
 /// pid を指定して起こす版。`pid` は `alive` で判定されるので、生きた pid（1 や自分）と死んだ pid
 /// （`DEAD_PID`）を使い分けて「生きている active」の扱いを決定的に作る。
 fn supervisor_as(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     release: &str,
     pid: u32,
     now: OffsetDateTime,
@@ -356,7 +356,7 @@ fn supervisor_as(
 /// `/proc/<pid>` が無い pid（生きていない行の再現用）。
 const DEAD_PID: u32 = 2_000_000_000;
 
-fn ids_in(store: &Arc<dyn TaskStore>) -> Vec<String> {
+fn ids_in(store: &Arc<SqliteStore>) -> Vec<String> {
     store
         .instance_list()
         .expect("list")
@@ -365,7 +365,7 @@ fn ids_in(store: &Arc<dyn TaskStore>) -> Vec<String> {
         .collect()
 }
 
-fn active_ids(store: &Arc<dyn TaskStore>) -> Vec<String> {
+fn active_ids(store: &Arc<SqliteStore>) -> Vec<String> {
     store
         .instance_list()
         .expect("list")
@@ -378,7 +378,7 @@ fn active_ids(store: &Arc<dyn TaskStore>) -> Vec<String> {
 /// (a) 新 standby → 旧 draining → 新 active、を `Supervisor` の一連の呼び出しで確かめる（DB 付き）。
 #[test]
 fn the_handoff_runs_through_the_store() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
     let Started::Running(mut old) = supervisor(&store, "old", at(0), Duration::from_secs(60))
     else {
         panic!("the first instance must become active");
@@ -435,7 +435,7 @@ fn the_handoff_runs_through_the_store() {
 /// 検出できない。
 #[test]
 fn a_handoff_request_from_a_gone_requester_is_dropped_and_the_active_stays() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
     let Started::Running(mut old) = supervisor(&store, "old", at(0), Duration::from_secs(60))
     else {
         panic!("active");
@@ -448,7 +448,7 @@ fn a_handoff_request_from_a_gone_requester_is_dropped_and_the_active_stays() {
     assert_eq!(old.step(at(2), 1).expect("step"), Step::Stay);
     assert_eq!(old.role(), InstanceRole::Active);
     assert_eq!(active_ids(&store), ["inst-old"]);
-    let old_row = |store: &Arc<dyn TaskStore>| {
+    let old_row = |store: &Arc<SqliteStore>| {
         store
             .instance_list()
             .expect("list")
@@ -491,7 +491,7 @@ fn a_handoff_request_from_a_gone_requester_is_dropped_and_the_active_stays() {
 /// (d) 同じ版をもう一度起こしたら行を書かずに `Duplicate`。
 #[test]
 fn starting_the_same_release_twice_is_refused_without_touching_the_table() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
     let Started::Running(_first) = supervisor(&store, "same", at(0), Duration::from_secs(60))
     else {
         panic!("the first instance must become active");
@@ -513,7 +513,7 @@ fn starting_the_same_release_twice_is_refused_without_touching_the_table() {
 /// run が残っていても `DrainTimedOut` になる（従来の挙動、人が明示的に強い昇格を選んだとき）。
 #[test]
 fn the_drain_timeout_ends_the_drain_with_runs_left_when_force_abort_is_set() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
     let Started::Running(mut old) =
         supervisor_with(&store, "old", at(0), Duration::from_secs(10), true)
     else {
@@ -541,7 +541,7 @@ fn the_drain_timeout_ends_the_drain_with_runs_left_when_force_abort_is_set() {
 /// `drained_at` も書かない）。手元の run が本当に 0 になったときだけ `Drained` になる。
 #[test]
 fn the_drain_timeout_does_not_abort_alive_runs_by_default() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
     let Started::Running(mut old) = supervisor(&store, "old", at(0), Duration::from_secs(10))
     else {
         panic!("active");
@@ -572,7 +572,7 @@ fn the_drain_timeout_does_not_abort_alive_runs_by_default() {
 /// 2026-10-05）。旧が手放す（draining）のを見てから昇格し、その間 active は常に 1 つ。
 #[test]
 fn a_stale_but_alive_active_keeps_the_standby_waiting_until_it_drains() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
     let Started::Running(mut old) = supervisor(&store, "old", at(0), Duration::from_secs(60))
     else {
         panic!("active");
@@ -594,7 +594,7 @@ fn a_stale_but_alive_active_keeps_the_standby_waiting_until_it_drains() {
 /// (e2) 死んだ active（SIGKILL 直後）は起動時に引き継がれ、行は次の tick で消える。
 #[test]
 fn a_killed_active_is_taken_over_at_start_and_its_row_is_removed() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
     let Started::Running(_dead) = supervisor_as(
         &store,
         "old",
@@ -619,7 +619,7 @@ fn a_killed_active_is_taken_over_at_start_and_its_row_is_removed() {
 /// 新が即 active になり、旧も active のまま残った（本番 2026-10-04 の split brain）。
 #[test]
 fn two_actives_never_coexist_when_the_old_one_is_stale_but_alive() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
     let Started::Running(_old) = supervisor(&store, "old", at(0), Duration::from_secs(60)) else {
         panic!("active");
     };
@@ -634,7 +634,7 @@ fn two_actives_never_coexist_when_the_old_one_is_stale_but_alive() {
 /// (R2) 2 つの生きた active が居たら（旧版の残りや競合の痕）、起動時の引き継ぎ要求は**全部**に出る。
 #[test]
 fn the_handoff_request_reaches_every_live_active() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
     for (id, pid) in [("inst-x", 1), ("inst-y", std::process::id())] {
         store
             .instance_register(&DaemonInstance {
@@ -668,7 +668,7 @@ fn the_handoff_request_reaches_every_live_active() {
 /// drain する。
 #[test]
 fn a_second_live_active_makes_the_older_one_drain() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
     let Started::Running(mut older) = supervisor(&store, "old", at(0), Duration::from_secs(60))
     else {
         panic!("active");
@@ -698,7 +698,7 @@ fn a_second_live_active_makes_the_older_one_drain() {
 /// (R4) 監視: 新しい active は、生きた古い active に引き継ぎを要求する（古い方が戻ってきた場合）。
 #[test]
 fn a_newer_active_asks_the_older_live_one_to_hand_off() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
     let older_row = |pid: u32, hb: i64| DaemonInstance {
         instance_id: "inst-old".into(),
         release: "old".into(),
@@ -734,7 +734,7 @@ fn a_newer_active_asks_the_older_live_one_to_hand_off() {
 /// 行が消えても heartbeat で気づいて登録し直す（`deregister` は自分の行だけ消す）。
 #[test]
 fn a_missing_row_is_registered_again_and_deregister_removes_it() {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
     let Started::Running(mut only) = supervisor(&store, "solo", at(0), Duration::from_secs(60))
     else {
         panic!("active");

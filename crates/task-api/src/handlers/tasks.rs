@@ -8,7 +8,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use std::collections::HashMap;
 use task_core::{
-    ListFilter, ListOrder, MilestoneId, ProjectId, Status, StoreError, Task, TaskKind, TaskStore,
+    ListFilter, ListOrder, MilestoneId, ProjectId, SqliteStore, Status, StoreError, Task, TaskKind,
 };
 use task_ops::OpsError;
 use task_ops::add::NewTaskSpec;
@@ -31,7 +31,7 @@ const TITLE_QUERY_MAX_CHARS: usize = 200;
 /// `task_integration_list` を 1 回だけ読み、repo の解決（`repo_get` と `resolve_default_branch`）は
 /// repo ごと、promotion の最新 release は要求ごとに 1 回だけ行う。付加は行数に比例して store・git を叩かない。
 struct IntegrationAttacher<'a> {
-    store: &'a dyn TaskStore,
+    store: &'a SqliteStore,
     states: HashMap<task_core::TaskId, Vec<task_core::TaskRepoIntegrationState>>,
     repositories: HashMap<task_core::RepoId, Option<task_ops::stranded::IntegrationRepoContext>>,
     release: Option<task_ops::stranded::NewestRelease>,
@@ -39,7 +39,7 @@ struct IntegrationAttacher<'a> {
 
 impl<'a> IntegrationAttacher<'a> {
     fn new(
-        store: &'a dyn TaskStore,
+        store: &'a SqliteStore,
         releases_dir: Option<&std::path::Path>,
     ) -> Result<Self, ApiProblem> {
         let mut states: HashMap<_, Vec<_>> = HashMap::new();

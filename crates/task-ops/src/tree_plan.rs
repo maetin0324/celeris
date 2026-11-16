@@ -10,8 +10,9 @@ use std::collections::BTreeSet;
 
 use task_core::execution_plan::{PlanContext, PlanValidationError, ValidatedPlan, validate_with};
 use task_core::{
-    DecisionOrigin, DecisionRaisedBy, Event, ExecutionLimits, ExecutionPlanRow, PlanOrigin, Task,
-    TaskStore, WorkUnitBlockedReason, WorkUnitKind, WorkUnitRow, WorkUnitSpec, WorkUnitStatus,
+    DecisionOrigin, DecisionRaisedBy, Event, ExecutionLimits, ExecutionPlanRow, PlanOrigin,
+    SqliteStore, Task, WorkUnitBlockedReason, WorkUnitKind, WorkUnitRow, WorkUnitSpec,
+    WorkUnitStatus,
 };
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -62,7 +63,7 @@ fn rfc3339(t: OffsetDateTime) -> String {
 /// 他の理由で検証に落ちれば（通常起きない）、元の spec のまま採用し、上げる・下げるは当てない（警告）。
 /// `limits` は daemon の実効の上限（`[execution.tree]` を含む）、`origin` は再検証の `PlanContext`。
 pub fn unit_gate_plan(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     validated: ValidatedPlan,
     done_work_units: &[(String, WorkUnitSpec)],
@@ -171,7 +172,7 @@ pub struct PlanHoldWrites {
 /// `decision_origin` は計画の決定の出どころ（`Planner` / `Human`）。
 #[allow(clippy::too_many_arguments)]
 pub fn plan_hold_writes(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     plan: &ExecutionPlanRow,
     units: &[WorkUnitRow],

@@ -9,9 +9,12 @@
 //! `POST /projects/{id}/project-plan/{version}/decide` の CLI 版）は削除した。
 
 use std::process::ExitCode;
+use task_core::OrgDirectory;
 
 use clap::{Args, Subcommand};
-use task_core::{MilestoneStatus, ProjectId, TaskStore};
+use task_core::{MilestoneStatus, ProjectId};
+
+use task_core::SqliteStore;
 
 use crate::error::CliError;
 use crate::outln;
@@ -36,14 +39,14 @@ pub struct ProjectsShowArgs {
     pub id: String,
 }
 
-pub fn run(store: &dyn TaskStore, command: ProjectsCommand) -> Result<ExitCode, CliError> {
+pub fn run(store: &SqliteStore, command: ProjectsCommand) -> Result<ExitCode, CliError> {
     match command {
         ProjectsCommand::Ls(args) => run_ls(store, args),
         ProjectsCommand::Show(args) => run_show(store, args),
     }
 }
 
-fn run_ls(store: &dyn TaskStore, args: ProjectsLsArgs) -> Result<ExitCode, CliError> {
+fn run_ls(store: &SqliteStore, args: ProjectsLsArgs) -> Result<ExitCode, CliError> {
     let mut projects = store.project_list()?;
     if !args.all {
         projects.retain(|p| p.archived_at.is_none());
@@ -55,7 +58,7 @@ fn run_ls(store: &dyn TaskStore, args: ProjectsLsArgs) -> Result<ExitCode, CliEr
     Ok(ExitCode::SUCCESS)
 }
 
-fn run_show(store: &dyn TaskStore, args: ProjectsShowArgs) -> Result<ExitCode, CliError> {
+fn run_show(store: &SqliteStore, args: ProjectsShowArgs) -> Result<ExitCode, CliError> {
     let id: ProjectId = args
         .id
         .parse()

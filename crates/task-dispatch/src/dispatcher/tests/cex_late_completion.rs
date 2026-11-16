@@ -132,7 +132,7 @@ fn input_usage(input: u64) -> task_core::Usage {
 
 /// `run_id` の `QuotaEstimated` の `(account, weighted_tokens, method)` の列（event の順）。
 fn quota_events(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     id: TaskId,
     run_id: &str,
 ) -> Vec<(Option<String>, f64, task_core::quota::QuotaMethod)> {
@@ -151,14 +151,14 @@ fn quota_events(
         .collect()
 }
 
-fn limit_decisions(store: &Arc<dyn TaskStore>, id: TaskId) -> usize {
+fn limit_decisions(store: &Arc<SqliteStore>, id: TaskId) -> usize {
     events_of(store, id)
         .iter()
         .filter(|e| matches!(e, Event::DecisionRequested { decision } if decision.key == "limit:max_tree_usd"))
         .count()
 }
 
-fn tree_counters_of(store: &Arc<dyn TaskStore>, root: TaskId) -> TreeCounters {
+fn tree_counters_of(store: &Arc<SqliteStore>, root: TaskId) -> TreeCounters {
     task_ops::tree::tree_counters(store.as_ref(), root, &priced_rates()).unwrap()
 }
 
@@ -187,7 +187,7 @@ async fn consecutive_group_ends(unknown: bool) {
     std::fs::create_dir_all(&acct).unwrap();
     std::fs::write(acct.join(".credentials.json"), "{}").unwrap();
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
 
     let mut root = new_task(ws.path(), Check::Reviewer, 1);
     root.title = "root".into();
@@ -395,7 +395,7 @@ async fn cex_quota_group_two_consecutive_ends_unknown_cost_stops() {
     consecutive_group_ends(true).await;
 }
 
-fn status_of(store: &Arc<dyn TaskStore>, id: TaskId) -> Status {
+fn status_of(store: &Arc<SqliteStore>, id: TaskId) -> Status {
     store.get(id).unwrap().unwrap().status
 }
 
@@ -404,7 +404,7 @@ fn status_of(store: &Arc<dyn TaskStore>, id: TaskId) -> Status {
 // ---------------------------------------------------------------------------
 
 /// `PhaseIntegrated` の各 event の取り込んだ key の列。
-fn phase_integrated_keys(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<Vec<String>> {
+fn phase_integrated_keys(store: &Arc<SqliteStore>, id: TaskId) -> Vec<Vec<String>> {
     events_of(store, id)
         .into_iter()
         .filter_map(|e| match e {
@@ -418,7 +418,7 @@ fn phase_integrated_keys(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<Vec<Stri
 
 /// 段 `build`（WU `a`・`b`）の v2 計画。`a` の検査は統合の作業ツリー（`a.txt` と `b.txt` が揃う）で最初に走ったときだけ、
 /// 試験が `<marks>/open` を置くまで（または `marks` が消えるまで）止まる。止まったことは `<marks>/first` で分かる。
-fn adopt_blocking_plan(store: &Arc<dyn TaskStore>, id: TaskId, marks: &Path) {
+fn adopt_blocking_plan(store: &Arc<SqliteStore>, id: TaskId, marks: &Path) {
     let mut a = v2_wu("a", "build", &[]);
     a.checks = vec![task_core::WorkUnitCheck {
         cmd: format!(
@@ -469,7 +469,7 @@ async fn cex_late_integration_after_stage_repair_is_dropped() {
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
     let marks = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     // Task の検査は repair の前の HEAD でも通る（旧い統合の候補は検査に受かる。捨てるのは古さの判定だけ）。
     let task = parallel_task(repo.path(), "test -f a.txt && test -f b.txt");
     let id = task.id;
@@ -595,12 +595,12 @@ async fn cex_late_integration_after_stage_repair_is_dropped() {
 
 /// 段 `build` の統合の検査を走らせたまま止め、人の replan（段 `build` に WU `c` を足す）を先に確定してから、
 /// 旧い統合の完了を届ける。Task が終端になるまで進め、event の列を返す材料（store・id・repo）を返す。
-async fn late_integration_after_human_replan() -> (tempfile::TempDir, Arc<dyn TaskStore>, TaskId) {
+async fn late_integration_after_human_replan() -> (tempfile::TempDir, Arc<SqliteStore>, TaskId) {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
     let marks = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "test -f a.txt && test -f b.txt");
     let id = task.id;
     store.insert(&task).unwrap();
@@ -790,7 +790,7 @@ impl LateChange {
     }
 
     /// 段 `build` にこの unit を足す replan を確定する（done の `a`・`b` の spec は変えない）。
-    fn apply(self, store: &Arc<dyn TaskStore>, id: TaskId) {
+    fn apply(self, store: &Arc<SqliteStore>, id: TaskId) {
         let mut spec = store.execution_plan_active(id).unwrap().unwrap().spec;
         let mut unit = v2_wu(self.key(), "build", &[]);
         let (origin, reason) = match self {
@@ -836,7 +836,7 @@ async fn late_review_pass_after(change: LateChange) {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     // 案件の repo を持つ自動取り込みの root task（`cex_review_authority.rs` と同じ組織。review 前の同期が候補を束縛し、
     // `ReviewerPassed` に候補の commit が残る）。この fixture は Task の worker run を経ない（`adopt_v2_plan`）ので
     // `worktree.json` が無く、配送の行は `DeliverySkipped{NoMarker}` で作られない。`MergeQueued` の assert は、配送の行が
@@ -1003,7 +1003,7 @@ fn reviewer_passes(events: &[Event]) -> Vec<(String, String)> {
 /// 旧い reviewer run `old_review` の合格は、変更の前の候補 `old_head` にだけ束縛して残る（`ReviewerPassed` の
 /// `reviewed_sha` は `old_head`）。新しい候補に付けず、`ReviewerPassReused` で新しい候補に持ち越さない。
 fn assert_old_pass_stays_on(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     id: TaskId,
     old_review: &str,
     old_head: &str,

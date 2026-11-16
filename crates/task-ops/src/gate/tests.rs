@@ -207,7 +207,7 @@ fn answer_on_blocked_moves_to_ready() {
 /// 他のタスクの未決の approvals は触らない。approvals が無ければ何もしない（エラーにならない）。
 #[test]
 fn answer_settles_the_tasks_pending_approvals_as_once_with_the_same_answer() {
-    use task_core::approval::{Approval, ApprovalId, ApprovalStore};
+    use task_core::approval::{Approval, ApprovalId};
 
     let store = SqliteStore::open_in_memory().expect("open store");
     let task = sample_task(TaskKind::Execute, Status::Blocked);

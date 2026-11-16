@@ -8,7 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
-use task_core::{NodeSessionStore, OrgDirectory, OrgNode, TaskStore};
+use task_core::{OrgDirectory, OrgNode};
 use time::OffsetDateTime;
 
 use crate::middleware::require_admin;
@@ -264,7 +264,7 @@ pub(super) async fn org_list(State(state): State<ApiState>, RawQuery(raw): RawQu
             let items = store.org_list().map_err(store_problem)?;
             // ADR-0054 D3（Phase 68）: 部門長（`OrgKind::Department`）の継続セッションがあれば拾う
             // （無いノードは含めない。CoS はここに出さない。
-            // `NodeSessionStore` を薄く読むだけ）。
+            // `SqliteStore` を薄く読むだけ）。
             let mut lead_sessions = Vec::new();
             for node in items
                 .iter()

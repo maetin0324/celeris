@@ -13,7 +13,7 @@ use serde::Serialize;
 use task_core::model::TaskId;
 use task_core::route_select::{RoutingStage, RoutingStageChange};
 use task_core::routing_evidence::EvidenceRow;
-use task_core::{StoreError, TaskStore};
+use task_core::{SqliteStore, StoreError};
 
 /// D1: 候補の有効な結果がこの数以上（30 問×2 のうち 24 問）。
 pub const ENFORCE_MIN_VALID_RESULTS: u64 = 24;
@@ -206,7 +206,7 @@ pub fn list_stages(
 }
 
 fn evidence_group(
-    store: &impl TaskStore,
+    store: &SqliteStore,
     genre: &str,
     harness_id: &str,
 ) -> Result<RoutingEvidenceGroup, StoreError> {
@@ -241,7 +241,7 @@ fn evidence_group(
 
 /// 最新版の根拠表。`genre`・`harness_id` で絞れる。
 pub fn list_evidence(
-    store: &impl TaskStore,
+    store: &SqliteStore,
     db_path: &Path,
     genre: Option<&str>,
     harness_id: Option<&str>,
@@ -292,7 +292,7 @@ pub enum StageChangeError {
 /// 人（actor `human`）の段階変更。`enforce` は根拠表の最新版に D1 を満たす行が要る。
 /// `since` は呼び手が渡す（RFC 3339）。返り値は変更後の段階の view。
 pub fn set_stage_by_human(
-    store: &impl TaskStore,
+    store: &SqliteStore,
     db_path: &Path,
     change: &HumanStageChange,
     since: &str,

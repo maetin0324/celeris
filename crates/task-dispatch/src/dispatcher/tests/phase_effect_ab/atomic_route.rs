@@ -94,7 +94,7 @@ impl WorkerAdapter for AtomicRouteAdapter {
     }
 }
 
-fn atomic_coding_task(store: &Arc<dyn TaskStore>, root: &std::path::Path) -> Task {
+fn atomic_coding_task(store: &Arc<SqliteStore>, root: &std::path::Path) -> Task {
     store
         .org_upsert(&org_node_of(
             "secretary",
@@ -149,7 +149,7 @@ fn atomic_coding_task(store: &Arc<dyn TaskStore>, root: &std::path::Path) -> Tas
 
 async fn run_variant(variant: Variant) -> AbMetric {
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = atomic_coding_task(&store, root.path());
     if variant == Variant::Off {
         // human/explicit compound では direct_route::evaluate の direct/gate が false。

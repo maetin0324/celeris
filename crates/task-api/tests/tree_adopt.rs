@@ -9,8 +9,8 @@ mod common;
 use common::*;
 use serde_json::{Value, json};
 use task_core::{
-    Event, Project, ProjectId, Status, Task, TaskId, TaskKind, TaskStore, Trigger,
-    WorkUnitBlockedReason, WorkUnitStatus,
+    Event, Project, ProjectId, Status, Task, TaskId, TaskKind, Trigger, WorkUnitBlockedReason,
+    WorkUnitStatus,
 };
 use time::OffsetDateTime;
 

@@ -177,7 +177,7 @@ impl SqliteStore {
 mod tests {
     use super::*;
     use crate::model::Status;
-    use crate::store::TaskStore;
+
     use crate::store::tests::sample_task;
 
     fn claim(key: &str, hash: &str) -> IdempotencyClaim {

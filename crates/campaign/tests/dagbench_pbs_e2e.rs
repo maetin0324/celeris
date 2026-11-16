@@ -36,7 +36,6 @@ use celeris_campaign::{
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use task_core::{TaskStore, cluster_job::ClusterJobWaitStore};
 
 const T0: u64 = 1_800_000_000;
 const OUTPUT: &[u8] = b"recovery payload output seed=17\n";
@@ -305,7 +304,7 @@ struct CelerisController {
 impl Controller for CelerisController {
     fn run(&mut self, ext: GatedExt) -> Result<bool, String> {
         let paths = Paths::under(&self.dir.join("celeris.db"), &self.dir);
-        let store: Arc<dyn TaskStore> =
+        let store: Arc<task_core::SqliteStore> =
             Arc::new(task_core::SqliteStore::open(&paths.db).map_err(|e| e.to_string())?);
         let transport = RouterTransport(router_at(&self.dir));
         let rt = tokio::runtime::Builder::new_multi_thread()

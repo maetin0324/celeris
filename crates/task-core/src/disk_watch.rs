@@ -74,20 +74,6 @@ pub struct DiskWatchState {
     pub updated_at: OffsetDateTime,
 }
 
-/// `disk_watch_state` の読み書き。実装は `SqliteStore` のみ。
-pub trait DiskWatchStore: Send + Sync {
-    /// 全 path の状態（path 順）。読み取り接続だけを使う。
-    fn disk_watch_states(&self) -> Result<Vec<DiskWatchState>, StoreError>;
-
-    /// 状態を 1 行書き（upsert）、`notice` があれば同じ transaction で通知の束に足す
-    /// （`NoticeStore::notice_record` と同じ扱い。同じ `source_key` は 1 回だけ）。
-    fn disk_watch_apply(
-        &self,
-        state: &DiskWatchState,
-        notice: Option<&NoticeEvent>,
-    ) -> Result<Option<NoticeRecordOutcome>, StoreError>;
-}
-
 fn query_states(conn: &Connection) -> Result<Vec<DiskWatchState>, StoreError> {
     let mut stmt = conn.prepare(
         "SELECT path, level, since, last_pct, last_notified_at, updated_at \
@@ -122,12 +108,15 @@ fn query_states(conn: &Connection) -> Result<Vec<DiskWatchState>, StoreError> {
     Ok(out)
 }
 
-impl DiskWatchStore for SqliteStore {
-    fn disk_watch_states(&self) -> Result<Vec<DiskWatchState>, StoreError> {
+// `disk_watch_state` の読み書き。実装は `SqliteStore` のみ。
+impl SqliteStore {
+    /// 全 path の状態（path 順）。読み取り接続だけを使う。
+    pub fn disk_watch_states(&self) -> Result<Vec<DiskWatchState>, StoreError> {
         self.with_read_conn(query_states)
     }
-
-    fn disk_watch_apply(
+    /// 状態を 1 行書き（upsert）、`notice` があれば同じ transaction で通知の束に足す
+    /// （`SqliteStore::notice_record` と同じ扱い。同じ `source_key` は 1 回だけ）。
+    pub fn disk_watch_apply(
         &self,
         state: &DiskWatchState,
         notice: Option<&NoticeEvent>,

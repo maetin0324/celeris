@@ -6,7 +6,7 @@ use crate::common;
 use common::*;
 use serde_json::{Value, json};
 use task_core::org::{OrgKind, OrgNode};
-use task_core::{TaskStore, profile};
+use task_core::profile;
 
 const H1: &str = "b6132a44b6132a44b6132a44b6132a44b6132a44b6132a44b6132a44b6132a44";
 

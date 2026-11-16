@@ -1,4 +1,4 @@
-//! SQLite ベースの `TaskStore` 実装。DESIGN.md §5.1 / §4.3 準拠。
+//! SQLite の store `SqliteStore`。DESIGN.md §5.1 / §4.3 準拠。
 //!
 //! - `events` テーブルは追記専用（append-only）の正典。このモジュールから
 //!   `events` に対して UPDATE/DELETE を発行することはない。
@@ -11,10 +11,10 @@
 //!
 //! ## module map（audit.md §6.2 案A、責務別の切り出し）
 //! 領域ファイルは `impl SqliteStore` ブロックに `_tx`/`_locked`/行変換の内部 helper と、
-//! 領域固有の `<method>_impl` を置く（可視性は `pub(super)`、`execution/` 配下は
-//! `pub(in crate::store)`、既存の `pub(crate)` はそのまま）。能力 trait の method は trait file の
-//! `impl … for SqliteStore` に本体を置く。残る `TaskStore` method は `task_store_impl.rs` の
-//! 1 ブロックで helper へ転送する（macro は使わない）。
+//! 領域の公開 method（`pub fn`）を置く（helper の可視性は `pub(super)`、`execution/` 配下は
+//! `pub(in crate::store)`、既存の `pub(crate)` はそのまま）。呼び手は具体型 `SqliteStore` の固有 method を
+//! 呼ぶ（全 method を宣言する trait は持たない。ADR 2026-11-16-taskstore-trait-removal）。能力 trait
+//! （`OrgDirectory`・`TaskQuery`）の method は trait file の `impl … for SqliteStore` に本体を置く。
 //!
 //! 依存の向き: 領域 → `mod.rs` 基盤、`execution/*` → `tasks`/`events`/`transition`、
 //! `approvals`/`messages` → `transition`、`transition` → `tasks`/`events`、`events` → `execution`（行変換）。
@@ -29,24 +29,24 @@
 //!
 //! - `mod.rs`: `SqliteStore` の基盤（`open`/`open_with`/pragma 設定/`ReadPool`/`migrate`/`lock`/
 //!   `parse_id`/`NON_TERMINAL_SQL`）、`StoreError`・`StoreOptions` などの共有型と列値の変換
-//!   （`TaskStore` の実装は持たない）。
+//!   （領域の method は持たない）。
 //! - `migrations.rs`: `SCHEMA_VERSION`・`apply_migration_version`（版数 → SQL の対応と飛ばす版数は
 //!   `crate::migration_registry` の表）。
 //! - `query.rs`: `TaskQuery::list_page` 系の一覧部品（`ListFilter`・`ListOrder`・`Page`・
 //!   `CursorPayload`・cursor の符号化・`filter_predicate`・keyset 述語）。
-//! - `task_store.rs`: `trait TaskStore` の宣言。
-//! - `task_store_impl.rs`: `impl TaskStore for SqliteStore`（1 ブロック、残る method の転送）。
+//! - `task_store_impl.rs`: 領域 file に属さない method（`create_task`・`apply_transition` などの薄い入口と
+//!   `record_route_features`）。
 //! - `org_directory.rs`: `OrgDirectory`（`org_list`/`org_get`/`org_upsert`、`project_list`/`project_get`/
 //!   `milestone_list`）。SQL 本体は `impl OrgDirectory for SqliteStore` にあり、`org.rs` の
 //!   `org_list_tx`・`org_upsert_tx` を使う。
 //! - `task_query.rs`: `TaskQuery`（`list_page`・`event_rows_for`）。SQL 本体は `impl TaskQuery for SqliteStore` にある。
 //! - `tasks.rs`: task 行の読み書き（`get_locked`/`insert_tx`/`update_task_tx`/`rewrite_task_tx`）と、
-//!   task・lease の `TaskStore` 本体（`insert`/`get`/`list`/`count_by_status`/`children`/
+//!   task・lease の method（`insert`/`get`/`list`/`count_by_status`/`children`/
 //!   `create_task`/`delegate_children`/`retry_task`/`update_task`/`acquire_lease`/`renew_lease`/
 //!   `extend_task_lease`/`ready_tasks`/`halted_by_pause`）。lease を照合してから書く遷移（回収）は `approvals.rs`。
 //! - `events.rs`: `append_event_tx`（events への追記）と、同じ tx で書く Event 由来の投影
 //!   （`runs` 行の終端化・木の `work_units.child_task_id`・`decisions` 行と `decisions` の行変換）、
-//!   events を読む/追記する `TaskStore` 本体（`append_event`/`events_for*`/`events_since`/
+//!   events を読む/追記する method（`append_event`/`events_for*`/`events_since`/
 //!   `latest_event_id`）。
 //! - `approvals.rs`: 遷移と判断の適用（`apply_transition_with_work_units`〈`apply_transition_with_events` はその WU の行が無い形〉、Plan の承認 `complete_plan`、
 //!   lease の回収 `apply_transition_if_lease`〈同じ tx で status と lease を照合し、違えば何も書かない。
@@ -80,10 +80,8 @@
 //!   - `repair.rs`: reviewer repair / delivery repair / replan（ADR-0072 D16/D17）。
 //! - `tests.rs`（既存）: 単体テスト。
 //!
-//! store の外にある領域別の store trait（`NodeSessionStore`（sessions）・`ApprovalStore`・
-//! `NotificationStore`・`McpClientStore`/`McpCallStore`・`BrowserWaitStore`・`DeliveryStore`・
-//! `KnowledgeRunStore`・`ReportStore`）は、各領域 module が自分の表と `impl … for SqliteStore` を持つ。
-//! `TaskStore` の method ではなく公開パスを変えないため、ここへは移さない。
+//! store の外の領域（sessions・approval・notify・mcp・browser_wait・delivery・knowledge_run・report など）は、
+//! 各領域 module が自分の表と `impl SqliteStore` の固有 method を持つ（ここへは移さない）。
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -118,7 +116,7 @@ mod messages;
 mod model_catalog;
 mod request_ledger;
 mod task_integration_state;
-pub use model_catalog::ModelCatalogStore;
+
 mod account_limits;
 pub(crate) mod authority;
 mod completion_outcomes;
@@ -175,7 +173,6 @@ pub use site_policies::{
     BrowserSitePolicy, BrowserSitePolicyDelete, BrowserSitePolicyRecord,
     BrowserSitePolicyReferences, BrowserSitePolicySource,
 };
-mod task_store;
 mod terminal_sessions;
 pub use project_wake::{
     CommitOutcome, DecideFailure, ModeChange, NewProjectDecision, ProjectLease, RootCreate,
@@ -202,10 +199,9 @@ pub use migrations::SCHEMA_VERSION;
 pub use query::{ListFilter, ListOrder, Page};
 pub use route_records::{RouteDecisionRow, StoredRouteDecision, StoredRouteOutcome};
 pub use routing_log::RoutingCorrelation;
-pub use task_store::TaskStore;
 
-/// ADR-0079 D15（Phase R5b-prep）: 既存の task を木の子として採用する書き換え（`TaskStore::execution_plan_adopt_tree`
-/// / `TaskStore::tree_adopt_apply` の入力）。`task` は `tree`（と、`parent_id` が無かったなら `parent_id`）を書いた後の
+/// ADR-0079 D15（Phase R5b-prep）: 既存の task を木の子として採用する書き換え（`SqliteStore::execution_plan_adopt_tree`
+/// / `SqliteStore::tree_adopt_apply` の入力）。`task` は `tree`（と、`parent_id` が無かったなら `parent_id`）を書いた後の
 /// 値。状態・attempts・lease はトランザクションの中で読み直した値を使う（`update_task` と同じ規律）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct TreeAdoption {
@@ -386,7 +382,7 @@ pub struct ExecutionMetricsTaskRow {
     pub has_quota_events: bool,
 }
 
-/// タスクとその `events_for`（`seq`, event）の組。`TaskStore::tasks_with_events` の要素。
+/// タスクとその `events_for`（`seq`, event）の組。`SqliteStore::tasks_with_events` の要素。
 pub type TaskWithEvents = (Task, Vec<(u64, Event)>);
 
 /// ADR-0059 D6（Phase 99）: `cluster_settings` の 1 行。`work_dir` は絶対パスか `~`/`~/…`
@@ -929,7 +925,7 @@ impl SqliteStore {
 
     /// ADR-0064 D4: 読み取り専用の接続でクロージャを実行する（読み取りプールがあればそこから、
     /// 無ければ〈インメモリ DB や `read_pool_size = 0`〉書き込み接続にフォールバックする）。
-    /// `TaskStore` の SELECT だけを行うメソッドはこれを使い、書き込みを伴うメソッドは引き続き
+    /// `SqliteStore` の SELECT だけを行うメソッドはこれを使い、書き込みを伴うメソッドは引き続き
     /// `self.lock()` を使う。
     pub(crate) fn with_read_conn<T>(
         &self,

@@ -15,7 +15,7 @@ fn parts(report: &TickReport) -> Vec<&'static str> {
 #[tokio::test]
 async fn tick_reports_dispatch_ready_phases_and_resets_each_tick() {
     let tmp = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let adapter = Arc::new(InstantAdapter {
         terminal: Terminal::Done {
             summary: "ok".into(),

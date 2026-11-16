@@ -27,7 +27,7 @@ use std::time::Duration;
 use celeris::Config;
 use clap::{Args, Subcommand};
 use task_core::llm_route::{AccountId, ModelId, Registry, SourceId};
-use task_core::{ArtifactRef, Event, Status, Task, TaskId, TaskStore, WorkspaceSpec};
+use task_core::{ArtifactRef, Event, SqliteStore, Status, Task, TaskId, WorkspaceSpec};
 use task_dispatch::{ClusterSpec, RouteInput, RouteState};
 use task_ops::derive::{AnswerNote, ReviewNote, answers_from_events, prior_review_from_events};
 use task_worker::{
@@ -104,7 +104,7 @@ struct ClusterTarget {
 /// 無ければエラー。手元の写しはデーモンと共有するため、タスクが `running`/`reviewing` なら
 /// `--workspace` の有無に関係なく拒否する。
 fn resolve_cluster_target(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     config: &Config,
     task: &Task,
     cluster_id: &str,
@@ -281,7 +281,7 @@ fn route_launch_adapter(
         .map_err(|e| CliError::msg(format!("cannot launch route: {e}")))
 }
 
-pub fn run_run(store: &dyn TaskStore, args: WorkerRunArgs) -> Result<ExitCode, CliError> {
+pub fn run_run(store: &SqliteStore, args: WorkerRunArgs) -> Result<ExitCode, CliError> {
     let task_id = crate::error::parse_task_id(&args.task)?;
     let config = Config::load(&args.config).map_err(|e| {
         CliError::msg(format!(

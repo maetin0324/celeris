@@ -408,7 +408,7 @@ impl Dispatcher {
         let (run_end, outcome, usage) = run_end_of(&result, "design review");
         let model = self.started_model_of(task_id, &run_id);
         let quota = self.routing.settle_quota(
-            &*self.store,
+            &self.store,
             task_id,
             &run_id,
             None,

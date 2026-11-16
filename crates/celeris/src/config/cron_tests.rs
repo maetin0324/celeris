@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use task_core::{CronCatchUp, CronJobStore, CronOverlap, CronTaskTemplate, SqliteStore, Tier};
+use task_core::{CronCatchUp, CronOverlap, CronTaskTemplate, SqliteStore, Tier};
 use time::OffsetDateTime;
 
 use crate::config::{Config, ConfigError};

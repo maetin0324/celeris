@@ -1,4 +1,4 @@
-//! ADR 2026-11-15-lease-reclaim-compare-and-release: `TaskStore::apply_transition_if_lease`（lease の回収の書き込み口）の試験。
+//! ADR 2026-11-15-lease-reclaim-compare-and-release: `SqliteStore::apply_transition_if_lease`（lease の回収の書き込み口）の試験。
 //! 照合が合えば遷移と終了記録を同じ transaction で書き（D1）、合わなければ何も書かない（D2）。
 
 use std::time::Duration as StdDuration;

@@ -107,15 +107,15 @@ impl SqliteStore {
         Ok(out)
     }
 
-    pub(super) fn integration_put_impl(
-        &self,
-        integration: &TaskIntegration,
-    ) -> Result<(), StoreError> {
+    // ---- ADR-0043 D5（Phase 54）: 変更の取り込み（`task_integrations`）----
+    /// 取り込みの記録を 1 件書く（同じ `id` があれば差し替える。`updated_at` は呼び出し側が入れる）。
+    /// **人（管理系 API）だけが呼ぶ**。組織の「人」がここに届く経路は無い（SPEC §3.6）。
+    pub fn integration_put(&self, integration: &TaskIntegration) -> Result<(), StoreError> {
         let conn = self.lock()?;
         Self::integration_put_tx(&conn, integration)
     }
 
-    pub(super) fn integration_get_impl(
+    pub fn integration_get(
         &self,
         id: IntegrationId,
     ) -> Result<Option<TaskIntegration>, StoreError> {
@@ -128,7 +128,8 @@ impl SqliteStore {
         })
     }
 
-    pub(super) fn integration_list_for_task_impl(
+    /// そのタスクの記録（新しい順）。ADR-0044 B1 の timeline はこれを読めばよい。
+    pub fn integration_list_for_task(
         &self,
         task_id: TaskId,
     ) -> Result<Vec<TaskIntegration>, StoreError> {
@@ -137,7 +138,8 @@ impl SqliteStore {
         })
     }
 
-    pub(super) fn integration_latest_impl(
+    /// そのタスクのそのリポジトリの**最新の** 1 件（`GET /tasks/{id}/changes` の `integration`）。
+    pub fn integration_latest(
         &self,
         task_id: TaskId,
         repo: &str,
@@ -153,7 +155,9 @@ impl SqliteStore {
         })
     }
 
-    pub(super) fn integration_list_for_project_impl(
+    /// 案件のタスクの取り込み（**タスク × リポジトリごとに最新の 1 件**。新しい順、`limit` 件まで）。
+    /// 案件画面の「PR と取り込み」（ADR-0043 D5）。
+    pub fn integration_list_for_project(
         &self,
         project_id: ProjectId,
         limit: usize,

@@ -4,7 +4,7 @@ use crate::completion_outcome::{
 };
 use crate::model::TaskId;
 use crate::route_select::{PolicyInput, RoutingStage, select};
-use crate::store::TaskStore;
+use crate::store::SqliteStore;
 
 fn task(store: &SqliteStore) -> String {
     let id = TaskId::new();

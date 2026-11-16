@@ -19,7 +19,7 @@ use task_core::route_select::{
 };
 use task_core::routing_evidence::EvidenceRow;
 use task_core::{
-    AccountAdapter, NoticeEvent, NoticeKind, NoticeRecordOutcome, NoticeTarget, TaskId, TaskStore,
+    AccountAdapter, NoticeEvent, NoticeKind, NoticeRecordOutcome, NoticeTarget, SqliteStore, TaskId,
 };
 use task_dispatch::{AccountBook, Dispatcher, account_adapter_for_source_kind};
 use task_ops::routing_outcome::RouteWindow;
@@ -300,7 +300,7 @@ pub(crate) fn select_evidence<'a>(
 
 /// 判定を書いて反映する（stage の書き込みと event の追記は store の 1 transaction、通知は受信箱の束）。
 pub(crate) fn apply(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     actions: &[GuardrailAction],
     now: OffsetDateTime,
 ) -> Result<GuardrailReport, GuardrailError> {
@@ -390,7 +390,7 @@ pub(crate) fn apply(
 }
 
 /// 通知を 1 件書く。同じ `source_key` のときは数えない（`Duplicate`）。
-fn record_notice(store: &dyn TaskStore, event: &NoticeEvent) -> Result<bool, GuardrailError> {
+fn record_notice(store: &SqliteStore, event: &NoticeEvent) -> Result<bool, GuardrailError> {
     Ok(!matches!(
         store.notice_record(event)?,
         NoticeRecordOutcome::Duplicate(_)
@@ -399,7 +399,7 @@ fn record_notice(store: &dyn TaskStore, event: &NoticeEvent) -> Result<bool, Gua
 
 /// 1 tick: 窓を集め、`enforce` の pair だけを判定し、結果を書く。
 pub(crate) fn run_tick(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     registry: &Registry,
     quota: &dyn QuotaProbe,
     live_harness_versions: &BTreeMap<String, String>,

@@ -26,7 +26,7 @@ const STATE_WAIT: Duration = Duration::from_secs(120);
 use celeris::{Config, Exit, RunOptions};
 use task_core::{
     Budget, Check, Criterion, Event, InstanceRole, SqliteStore, Status, Task, TaskId, TaskKind,
-    TaskStore, Tier, WorkerHint, WorkspaceSpec,
+    Tier, WorkerHint, WorkspaceSpec,
 };
 use time::OffsetDateTime;
 use wait::wait_until;

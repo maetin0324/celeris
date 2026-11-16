@@ -11,9 +11,11 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use task_core::OrgDirectory;
+use task_core::TaskQuery;
 use task_core::{
     Event, ListFilter, ListOrder, Milestone, MilestoneId, MilestoneStatus, Project, ProjectId,
-    ProjectStatus, ProposedMilestone, Status, Task, TaskId, TaskKind, TaskStore,
+    ProjectStatus, ProposedMilestone, SqliteStore, Status, Task, TaskId, TaskKind,
 };
 
 use crate::error::OpsError;
@@ -74,7 +76,7 @@ impl ProjectPlanState {
 
 /// 案件の plan タスク（`is_milestones_plan_task`）の events から、案件計画の全版を決定的に組み立てる。
 pub fn plan_state(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     project_id: ProjectId,
 ) -> Result<ProjectPlanState, OpsError> {
     let plan_tasks = store
@@ -217,7 +219,7 @@ pub struct ProjectPlanDagView {
 
 /// ADR-0074 D3.5（Phase F4b (h)）: 案件ページの DAG を組み立てる（案件計画の版が 1 つも無ければ `None`）。
 pub fn dag_view(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     project: &Project,
 ) -> Result<Option<ProjectPlanDagView>, OpsError> {
     let state = plan_state(store, project.id)?;
@@ -276,7 +278,7 @@ pub fn dag_view(
 }
 
 fn dag_nodes(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     project: &Project,
     version: &PlanVersion,
     milestones: &[Milestone],
@@ -355,7 +357,7 @@ fn dag_nodes(
 }
 
 fn stop_reason_of(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     project: &Project,
     task: &Task,
     milestone: Option<&Milestone>,

@@ -99,7 +99,7 @@ fn reviewing_task(repo: &Path, project: ProjectId, repos: &[RepoRef], offset: i6
 }
 
 /// task の最初の `ReviewTargetSynced` の通し event id（同期の順）。
-fn synced_at(store: &Arc<dyn TaskStore>, task: &Task) -> u64 {
+fn synced_at(store: &Arc<SqliteStore>, task: &Task) -> u64 {
     store
         .events_for_with_global_ids(task.id)
         .unwrap()
@@ -112,7 +112,7 @@ async fn run_variant(variant: Variant) -> (AbMetric, u64) {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (project, repos) = project_with_repos(&store, &[("code", repo.path(), RepoKind::Git)]);
     let repos: Vec<RepoRef> = repos.iter().map(RepoRef::of).collect();
     let fresh = reviewing_task(repo.path(), project, &repos, 0);

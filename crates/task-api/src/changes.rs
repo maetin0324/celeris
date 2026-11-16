@@ -22,8 +22,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use task_core::local_machine::WorkspaceRoots;
 use task_core::{
-    DeliveryStore, IntegrationMethod, IntegrationState, OrgDirectory, ProjectId, RepoId,
-    ReportFilter, ReportStore, Task, TaskId, TaskIntegration, TaskStore,
+    IntegrationMethod, IntegrationState, OrgDirectory, ProjectId, RepoId, ReportFilter, Task,
+    TaskId, TaskIntegration,
 };
 use task_ops::changes::{self as ops_changes, MergeOutcome};
 use time::OffsetDateTime;
@@ -98,7 +98,7 @@ impl RepoTarget {
 
 /// そのタスクの git のリポジトリを並べる（`dir` のリポジトリは対象外。ADR-0043 D5）。
 fn targets_for(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     roots: &WorkspaceRoots,
 ) -> Result<Vec<RepoTarget>, ApiProblem> {
@@ -146,7 +146,7 @@ fn pick_target(targets: &[RepoTarget], name: &str) -> Result<RepoTarget, ApiProb
         .ok_or_else(|| ApiProblem::file_not_found(format!("repo not found in this task: {name}")))
 }
 
-fn load_task(store: &dyn TaskStore, task_id: TaskId) -> Result<Task, ApiProblem> {
+fn load_task(store: &SqliteStore, task_id: TaskId) -> Result<Task, ApiProblem> {
     store
         .get(task_id)
         .map_err(store_problem)?
@@ -160,7 +160,7 @@ fn load_task(store: &dyn TaskStore, task_id: TaskId) -> Result<Task, ApiProblem>
 /// 開いている PR の状態を `gh pr view` で見直す。merge されていたら worktree とブランチを片付ける。
 /// `gh` が失敗したら**記録は触らない**（画面を開いただけで `failed` にしない）。
 fn refresh_pr(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     gh: &str,
     target: Option<&RepoTarget>,
     integration: TaskIntegration,
@@ -818,10 +818,7 @@ async fn project_integrations(
 
 /// そのタスクの最新の報告（`reports.task_id`）。無ければ `None`。
 /// `ReportFilter` に `task_id` が無いので、案件（あれば）で絞ってから突き合わせる。
-fn latest_report_for(
-    store: &(impl ReportStore + ?Sized),
-    task: &Task,
-) -> Option<task_core::Report> {
+fn latest_report_for(store: &SqliteStore, task: &Task) -> Option<task_core::Report> {
     let filter = ReportFilter {
         project_id: task.project_id,
         limit: 200,

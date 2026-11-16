@@ -14,7 +14,7 @@ use std::process::ExitCode;
 
 use celeris::Config;
 use clap::{Args, Subcommand};
-use task_core::{Event, TaskStore};
+use task_core::{Event, SqliteStore};
 use time::OffsetDateTime;
 
 use crate::error::CliError;
@@ -29,7 +29,7 @@ pub enum WorkspaceCommand {
     BackfillArtifacts(BackfillArtifactsArgs),
 }
 
-pub fn run(store: &dyn TaskStore, command: WorkspaceCommand) -> Result<ExitCode, CliError> {
+pub fn run(store: &SqliteStore, command: WorkspaceCommand) -> Result<ExitCode, CliError> {
     match command {
         WorkspaceCommand::Prune(args) => run_prune(store, args),
         WorkspaceCommand::BackfillArtifacts(args) => run_backfill_artifacts(store, args),
@@ -52,7 +52,7 @@ pub struct BackfillArtifactsArgs {
 }
 
 pub fn run_backfill_artifacts(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     args: BackfillArtifactsArgs,
 ) -> Result<ExitCode, CliError> {
     use task_dispatch::undeclared_artifacts::backfill;
@@ -134,7 +134,7 @@ pub struct PruneArgs {
     pub older_than: Option<u64>,
 }
 
-pub fn run_prune(store: &dyn TaskStore, args: PruneArgs) -> Result<ExitCode, CliError> {
+pub fn run_prune(store: &SqliteStore, args: PruneArgs) -> Result<ExitCode, CliError> {
     let config = Config::load(&args.config).map_err(|e| {
         CliError::msg(format!(
             "failed to load config {}: {e}",

@@ -14,9 +14,9 @@ use task_core::decision::{
     DecisionRaisedBy, DecisionRequest, DecisionStatus,
 };
 use task_core::{
-    ArtifactRef, Budget, Check, Criterion, Event, GenreSpec, McpClient, McpClientStore, McpScope,
-    OrgDirectory, OrgKind, OrgNode, RoleSpec, SqliteStore, Status, Task, TaskId, TaskKind,
-    TaskStore, Tier, WorkerHint, WorkspaceSpec,
+    ArtifactRef, Budget, Check, Criterion, Event, GenreSpec, McpClient, McpScope, OrgDirectory,
+    OrgKind, OrgNode, RoleSpec, SqliteStore, Status, Task, TaskId, TaskKind, Tier, WorkerHint,
+    WorkspaceSpec,
 };
 use time::OffsetDateTime;
 
@@ -407,7 +407,6 @@ async fn missing_or_revoked_token_is_401() {
     let server = spawn_token_server(60).await;
     create_client(&server.store, "c1", Some("secret"), vec![]);
     {
-        use task_core::McpClientStore;
         server
             .store
             .mcp_client_revoke("c1", OffsetDateTime::now_utc())
@@ -476,10 +475,7 @@ async fn a_fixed_none_listener_binds_every_request_to_its_named_client() {
     let body: Value = resp.json().await.expect("json");
     assert!(body["result"]["content"].is_array(), "{body}");
 
-    let calls = {
-        use task_core::McpCallStore;
-        store.mcp_calls_list(Some("chatgpt"), 100).unwrap()
-    };
+    let calls = { store.mcp_calls_list(Some("chatgpt"), 100).unwrap() };
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].client_id, "chatgpt");
     assert!(calls[0].ok);
@@ -933,10 +929,7 @@ async fn tools_call_is_recorded_in_mcp_calls() {
     )
     .await;
 
-    let calls = {
-        use task_core::McpCallStore;
-        server.store.mcp_calls_list(Some("c1"), 100).unwrap()
-    };
+    let calls = { server.store.mcp_calls_list(Some("c1"), 100).unwrap() };
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].tool, "knowledge_list");
     assert!(calls[0].ok);
@@ -2095,10 +2088,7 @@ async fn db_query_over_mcp_masks_secrets_rejects_writes_and_records_the_sql() {
             .any(|t| t["name"] == "events")
     );
 
-    let calls = {
-        use task_core::McpCallStore;
-        rs.server.store.mcp_calls_list(Some("rdc"), 100).unwrap()
-    };
+    let calls = { rs.server.store.mcp_calls_list(Some("rdc"), 100).unwrap() };
     // 新しい順: db_schema, ATTACH, UPDATE, SELECT。
     assert_eq!(calls.len(), 4);
     assert_eq!(calls[0].tool, "db_schema");
@@ -2214,10 +2204,7 @@ async fn api_get_proxies_only_safe_gets_with_the_daemon_token() {
     .await;
     assert_eq!(body["error"]["code"], -32002, "{body}");
 
-    let calls = {
-        use task_core::McpCallStore;
-        rs.server.store.mcp_calls_list(Some("rdc"), 100).unwrap()
-    };
+    let calls = { rs.server.store.mcp_calls_list(Some("rdc"), 100).unwrap() };
     let first = calls.last().unwrap();
     assert_eq!(first.tool, "api_get");
     assert_eq!(

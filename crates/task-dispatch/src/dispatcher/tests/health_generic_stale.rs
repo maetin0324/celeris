@@ -43,7 +43,7 @@ struct Flow {
     _dirs: Vec<tempfile::TempDir>,
     fx: Fixture,
     repo: PathBuf,
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     task: Task,
     events: Vec<Event>,
     status: Status,
@@ -99,7 +99,7 @@ async fn review(setup: Setup, prepare: impl FnOnce(&Path, &Fixture)) -> Flow {
     let ws = tempfile::tempdir().unwrap();
     let flags = tempfile::tempdir().unwrap();
     let flag = flags.path().join("changed");
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = reviewing_task(&repo, &store);
     if setup.change.is_some() {
         // merge-base の語を持つ check の不合格は局所の repair（MergeBase。ADR-0074 D6.2）に分類される。flag が無い間

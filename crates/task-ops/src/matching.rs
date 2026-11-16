@@ -12,7 +12,8 @@
 //!   持つ最も浅いノード。
 //! - 候補が無ければ `blocked` にして人に聞く（ADR-0021 の質問経路）。
 
-use task_core::{OrgNode, Task, TaskStore};
+use task_core::OrgDirectory;
+use task_core::{OrgNode, SqliteStore, Task};
 
 use crate::error::OpsError;
 
@@ -64,7 +65,7 @@ fn unroutable_question_with_cluster(
 }
 
 /// ストアの組織図を読んで担当を決める（ADR-0046 D5）。判断そのものは [`decide`]（純粋関数）。
-pub fn assign(store: &dyn TaskStore, task: &Task) -> Result<Assignment, OpsError> {
+pub fn assign(store: &SqliteStore, task: &Task) -> Result<Assignment, OpsError> {
     let org = store.org_list()?;
     Ok(decide(&org, task))
 }

@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use common::cos_ops::{db, run_domain};
 use common::*;
 use serde_json::{Value, json};
-use task_core::{LocalSettingsOverrides, TaskStore};
+use task_core::LocalSettingsOverrides;
 
 const LOCAL: &str = "/api/v1/clusters/local/settings";
 

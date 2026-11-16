@@ -22,7 +22,7 @@ use super::SqliteStore;
 use super::tests::sample_task;
 use super::transition::retry_successors_tx;
 use crate::model::{Event, KeptDependent, KeptReason, RestoredDependent, Status, TaskId};
-use crate::store::TaskStore;
+
 use crate::transition::{DependencyCancel, Trigger, dependency_reopen_trigger};
 
 fn status(store: &SqliteStore, id: TaskId) -> Status {

@@ -22,7 +22,7 @@ use task_core::decision_log::{
 use task_core::decision_log_export::{ExportParams, verify_connected};
 use task_core::{
     DaemonMode, Event, InstanceRole, RunEnd, RunMetrics, RunRole, SharedRole, SqliteStore, TaskId,
-    TaskStore, Usage,
+    Usage,
 };
 use time::OffsetDateTime;
 

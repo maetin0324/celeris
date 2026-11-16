@@ -8,7 +8,7 @@ use crate::common;
 
 use common::*;
 use task_api::{AdminRequest, NotifyAdminError, NotifyTestOutcome};
-use task_core::notify::{NotificationKind, NotificationStore};
+use task_core::notify::NotificationKind;
 use time::OffsetDateTime;
 use tokio::sync::mpsc;
 

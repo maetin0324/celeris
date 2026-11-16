@@ -5,14 +5,14 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use task_core::{
-    DeliverySkipReason, Event, IntegrationWaitCause, ProjectRepo, Status, StoreError, Task, TaskId,
-    TaskStore, TaskWait, WorkspaceSpec, is_conversation, support_kind, tree::is_tree_child,
+    DeliverySkipReason, Event, IntegrationWaitCause, ProjectRepo, SqliteStore, Status, StoreError,
+    Task, TaskId, TaskWait, WorkspaceSpec, is_conversation, support_kind, tree::is_tree_child,
 };
 
 /// `task` が待つべき依存先の取り込み（無ければ `None`）。`integrated` は祖先と分かった依存先の記憶
 /// （呼び出し側が持つ。既定 branch は前にしか進まない）。依存先は task_id 順に見て最初の 1 件を返す。
 pub fn integration_wait(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     integrated: &mut BTreeSet<TaskId>,
 ) -> Result<Option<TaskWait>, StoreError> {
@@ -45,7 +45,7 @@ pub fn integration_wait(
 /// 依存元が対話でない・依存先が done で support task でないときだけ git を読む。task 全体の `depends_on`（[`integration_wait`]）と
 /// 計画の unit の `task:<id>` 依存（ADR 2026-11-11-unit-task-dependencies D2。依存元は計画を持つ task）が同じこの関数を呼ぶ。
 pub fn dependency_integration(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     dependent: &Task,
     dep: &Task,
     integrated: &mut BTreeSet<TaskId>,
@@ -65,7 +65,7 @@ pub fn dependency_integration(
 
 /// `None` = 取り込み済み（または取り込む物が無い）。`Some` = まだ入っていない理由。
 fn dependency_state(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     dep: &Task,
 ) -> Result<Option<(IntegrationWaitCause, String)>, StoreError> {
     let branch = format!("celeris/{}", dep.id);
@@ -146,7 +146,7 @@ fn dependency_state(
 
 /// 依存先の Local repo（`repos` の参照、無ければ案件の登録 repo）。Remote は取り込み先が違うので対象外。
 fn local_repos(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     dep: &Task,
 ) -> Result<Vec<(task_core::RepoId, PathBuf, Option<String>)>, StoreError> {
     let mut rows: Vec<ProjectRepo> = Vec::new();

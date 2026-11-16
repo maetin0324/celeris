@@ -5,7 +5,7 @@ use crate::common;
 
 use common::*;
 use serde_json::json;
-use task_core::{RoleSpec, TaskStore, Tier};
+use task_core::{RoleSpec, Tier};
 
 fn env_with_lead_role() -> TestEnv {
     TestEnv::with(EnvOptions {

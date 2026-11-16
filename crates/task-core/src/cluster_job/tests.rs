@@ -247,7 +247,7 @@ fn wait_for(task_id: TaskId) -> ClusterJobWait {
 /// 一般の回答で `ready` に戻せない。
 #[test]
 fn events_project_into_the_table_and_terminal_transitions_cancel() {
-    use crate::{Status, TaskStore, Trigger};
+    use crate::{SqliteStore, Status, Trigger};
     let store = SqliteStore::open_in_memory().expect("open");
     let t = task(Status::Ready);
     store.insert(&t).expect("insert");
@@ -337,7 +337,7 @@ fn events_project_into_the_table_and_terminal_transitions_cancel() {
 /// `ready` に戻り、表の行は `satisfied` になる。
 #[test]
 fn a_satisfied_wait_resumes_the_task() {
-    use crate::{Status, TaskStore, Trigger};
+    use crate::{SqliteStore, Status, Trigger};
     let store = SqliteStore::open_in_memory().expect("open");
     let t = task(Status::Ready);
     store.insert(&t).expect("insert");
@@ -378,7 +378,7 @@ fn a_satisfied_wait_resumes_the_task() {
 /// 版数は 34 になる（その後の browser の 0035/0036・delivery_skipped index の 0037・通知の 0041・cron の 0046 も続けて当たり、最新版になる）。
 #[test]
 fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
-    use crate::TaskStore;
+    use crate::SqliteStore;
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("celeris.db");
     let t = task(crate::Status::Ready);

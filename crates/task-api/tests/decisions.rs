@@ -14,7 +14,7 @@ use task_core::decision::{
     CostOfReversal, DecisionKind, DecisionOption, DecisionOrigin, DecisionPathEntry,
     DecisionRaisedBy, DecisionRequest, DecisionStatus,
 };
-use task_core::{Event, Status, TaskId, TaskKind, TaskStore};
+use task_core::{Event, Status, TaskId, TaskKind};
 
 fn opt(key: &str, label: &str) -> DecisionOption {
     DecisionOption {

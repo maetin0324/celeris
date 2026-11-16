@@ -91,7 +91,7 @@ mod harnesses {
 mod run_selection {
     use super::common::*;
     use serde_json::Value;
-    use task_core::{Event, RunIndexRole, RunIndexStatus, RunRow, TaskKind, TaskStore};
+    use task_core::{Event, RunIndexRole, RunIndexStatus, RunRow, TaskKind};
     use tower::ServiceExt;
 
     #[tokio::test]

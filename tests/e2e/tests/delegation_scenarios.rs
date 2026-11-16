@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
-use task_core::{Event, SqliteStore, Status, Task, TaskId, TaskStore, Tier};
+use task_core::{Event, SqliteStore, Status, Task, TaskId, Tier};
 
 fn bin(name: &str) -> PathBuf {
     let exe = std::env::current_exe().unwrap();

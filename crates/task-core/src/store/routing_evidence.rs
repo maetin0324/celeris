@@ -59,7 +59,7 @@ fn evidence_rows_at(
 impl SqliteStore {
     /// 同じ版は丸ごと置き換え、別の版は残す（daemon が完了単位の本番結果から書く（`task_core::completion_outcome::refresh_routing_evidence`））。
     /// 行の版は引数 `version` で決まる（行の `evidence_version` は読まない）。
-    pub(super) fn replace_routing_evidence_impl(
+    pub fn replace_routing_evidence(
         &self,
         version: &str,
         rows: &[EvidenceRow],
@@ -102,7 +102,7 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub(super) fn latest_routing_evidence_impl(
+    pub fn latest_routing_evidence(
         &self,
         genre: &str,
         harness_id: &str,
@@ -119,7 +119,8 @@ impl SqliteStore {
         evidence_rows_at(&conn, genre, harness_id, &version)
     }
 
-    pub(super) fn routing_evidence_at_impl(
+    /// 指定版（`evidence_version`）の根拠表。task 欄 `routing_override.evidence_table_id` の固定読み。
+    pub fn routing_evidence_at(
         &self,
         genre: &str,
         harness_id: &str,
@@ -129,11 +130,7 @@ impl SqliteStore {
         evidence_rows_at(&conn, genre, harness_id, version)
     }
 
-    pub(super) fn routing_stage_impl(
-        &self,
-        genre: &str,
-        harness_id: &str,
-    ) -> Result<RoutingStage, StoreError> {
+    pub fn routing_stage(&self, genre: &str, harness_id: &str) -> Result<RoutingStage, StoreError> {
         let conn = self.lock()?;
         let stage: Option<String> = conn
             .query_row(
@@ -148,7 +145,7 @@ impl SqliteStore {
         }
     }
 
-    pub(super) fn set_routing_stage_impl(
+    pub fn set_routing_stage(
         &self,
         task_id: TaskId,
         change: &RoutingStageChange,
@@ -202,7 +199,7 @@ use rusqlite::OptionalExtension;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{SCHEMA_VERSION, TaskStore};
+    use crate::store::SCHEMA_VERSION;
 
     #[test]
     fn evidence_versions_replace_and_stage_is_shadow_by_default_then_event_is_appended() {

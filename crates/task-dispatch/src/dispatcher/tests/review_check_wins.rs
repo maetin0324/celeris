@@ -39,7 +39,7 @@ fn reviewing_task(dir: &std::path::Path, checks: Vec<Check>) -> Task {
     task
 }
 
-fn progress_texts(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<String> {
+fn progress_texts(store: &Arc<SqliteStore>, id: TaskId) -> Vec<String> {
     store
         .events_for(id)
         .unwrap()
@@ -54,7 +54,7 @@ fn progress_texts(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<String> {
 #[tokio::test]
 async fn failed_command_check_wins_over_reviewer_pass() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = reviewing_task(
         dir.path(),
         vec![
@@ -99,7 +99,7 @@ async fn failed_command_check_wins_over_reviewer_pass() {
 #[tokio::test]
 async fn reviewer_only_task_is_unchanged() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = reviewing_task(dir.path(), vec![Check::Reviewer]);
     store.insert(&task).unwrap();
     let mut d = instant_done_dispatcher(store.clone());
@@ -121,7 +121,7 @@ async fn reviewer_only_task_is_unchanged() {
 #[tokio::test]
 async fn command_check_record_is_written_with_the_verdicts() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = reviewing_task(
         dir.path(),
         vec![

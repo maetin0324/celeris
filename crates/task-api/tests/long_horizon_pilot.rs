@@ -8,7 +8,7 @@ use common::*;
 use serde_json::{Value, json};
 use task_api::{ApiToken, Principal};
 use task_core::project_wake::ControllerMode;
-use task_core::{Check, Status, TaskKind, TaskStore};
+use task_core::{Check, Status, TaskKind};
 use time::{Duration, OffsetDateTime};
 
 const WEB_TOKEN: &str = "web-token-value-a9";

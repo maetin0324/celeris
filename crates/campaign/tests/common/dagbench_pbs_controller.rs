@@ -16,7 +16,6 @@ use celeris_campaign::dagbench::{
     },
 };
 use serde_json::{Value, json};
-use task_core::{TaskStore, cluster_job::ClusterJobWaitStore};
 
 /// Celeris arm の測定専用 controller（子 process の中だけで走る。停止は親の SIGKILL）。
 pub struct CelerisChildController {
@@ -27,7 +26,7 @@ pub struct CelerisChildController {
 impl Controller for CelerisChildController {
     fn run(&mut self, ext: GatedExt) -> Result<bool, String> {
         let paths = Paths::under(&self.dir.join("celeris.db"), &self.dir);
-        let store: Arc<dyn TaskStore> =
+        let store: Arc<task_core::SqliteStore> =
             Arc::new(task_core::SqliteStore::open(&paths.db).map_err(|e| e.to_string())?);
         let transport = crate::RouterTransport(crate::router_at(&self.dir));
         let rt = tokio::runtime::Builder::new_multi_thread()

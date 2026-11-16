@@ -30,7 +30,7 @@ mod store_tests;
 mod tests;
 
 pub use store::{
-    CronJobRunUpdate, CronJobStore, cron_job_delete_tx, cron_job_insert_tx, cron_job_run_update_tx,
+    CronJobRunUpdate, cron_job_delete_tx, cron_job_insert_tx, cron_job_run_update_tx,
     cron_job_update_tx,
 };
 

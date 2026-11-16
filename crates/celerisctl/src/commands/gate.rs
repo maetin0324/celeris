@@ -8,7 +8,7 @@
 use std::process::ExitCode;
 
 use clap::Args;
-use task_core::TaskStore;
+use task_core::SqliteStore;
 use task_ops::gate::{answer as ops_answer, approve as ops_approve, reject as ops_reject};
 
 use crate::error::CliError;
@@ -37,7 +37,7 @@ pub struct AnswerArgs {
     pub answer: String,
 }
 
-pub fn run_approve(store: &dyn TaskStore, args: ApproveArgs) -> Result<ExitCode, CliError> {
+pub fn run_approve(store: &SqliteStore, args: ApproveArgs) -> Result<ExitCode, CliError> {
     // Under a CoS credential `main` wraps approve into `/cos/operations` (`cos_mapped`) first.
     let id = crate::error::parse_task_id(&args.id)?;
     let result = ops_approve(store, id, args.note, None)?;
@@ -45,14 +45,14 @@ pub fn run_approve(store: &dyn TaskStore, args: ApproveArgs) -> Result<ExitCode,
     Ok(ExitCode::SUCCESS)
 }
 
-pub fn run_reject(store: &dyn TaskStore, args: RejectArgs) -> Result<ExitCode, CliError> {
+pub fn run_reject(store: &SqliteStore, args: RejectArgs) -> Result<ExitCode, CliError> {
     let id = crate::error::parse_task_id(&args.id)?;
     let result = ops_reject(store, id, args.note, None)?;
     outln!("{:?}", result.to);
     Ok(ExitCode::SUCCESS)
 }
 
-pub fn run_answer(store: &dyn TaskStore, args: AnswerArgs) -> Result<ExitCode, CliError> {
+pub fn run_answer(store: &SqliteStore, args: AnswerArgs) -> Result<ExitCode, CliError> {
     let id = crate::error::parse_task_id(&args.id)?;
     let result = ops_answer(store, id, args.answer, super::CLI_ACTOR, None)?;
     outln!(

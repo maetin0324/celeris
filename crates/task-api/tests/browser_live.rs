@@ -4,7 +4,7 @@ use futures_util::StreamExt;
 use ring::signature::KeyPair;
 use serde_json::{Value, json};
 use task_api::browser::BrowserApiConfig;
-use task_core::{RunIndexRole, RunIndexStatus, RunRow, Status, TaskKind, TaskStore};
+use task_core::{RunIndexRole, RunIndexStatus, RunRow, Status, TaskKind};
 use time::OffsetDateTime;
 use tower::ServiceExt;
 

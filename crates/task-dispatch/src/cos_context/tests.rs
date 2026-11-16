@@ -5,7 +5,7 @@
 use super::*;
 use std::sync::Arc;
 use task_core::authority::{self as a, GrantScope, ScopeKind};
-use task_core::{Project, ProjectId, ProjectStatus, TaskStore};
+use task_core::{Project, ProjectId, ProjectStatus, SqliteStore};
 use time::format_description::well_known::Rfc3339;
 
 fn at(s: &str) -> OffsetDateTime {

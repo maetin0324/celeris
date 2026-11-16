@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use schemars::JsonSchema;
 use serde::Serialize;
-use task_core::{Status, Task, TaskId, TaskKind, TaskStore};
+use task_core::{SqliteStore, Status, Task, TaskId, TaskKind};
 
 use crate::error::OpsError;
 
@@ -90,7 +90,7 @@ fn reachable(all_tasks: &[Task], root: TaskId, depth: Option<u32>) -> HashSet<Ta
 
 /// `root` を指定するとその祖先・子孫（`depends_on` と `parent_id` を両方向に `depth` ホップまで）だけ。
 pub fn graph(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     root: Option<TaskId>,
     depth: Option<u32>,
     include_terminal: bool,

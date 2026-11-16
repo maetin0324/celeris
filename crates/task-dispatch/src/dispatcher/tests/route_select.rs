@@ -384,7 +384,7 @@ fn route_select_records_events_and_run_row() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("db.sqlite");
     let sqlite = Arc::new(SqliteStore::open(&db).unwrap());
-    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let store: Arc<SqliteStore> = sqlite.clone();
     let mut d = dispatcher(store.clone(), done_adapter(), 1);
     let r = registry();
     d.set_llm_route_registry(r.clone());
@@ -495,7 +495,7 @@ fn route_select_records_events_and_run_row() {
 fn route_select_offers_an_undeclared_pool_source_its_implicit_account() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("db.sqlite");
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open(&db).unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open(&db).unwrap());
     let mut d = dispatcher(store.clone(), done_adapter(), 1);
     let mut r = registry();
     r.sources.insert(
@@ -574,7 +574,7 @@ impl WorkerAdapter for RouteCapture {
 
 /// The routes of [`registry`] with `opencode` (and `claude_code` unless `claude` is false) run by
 /// `capture`.
-fn route_dispatcher(store: Arc<dyn TaskStore>, capture: &RouteCapture, claude: bool) -> Dispatcher {
+fn route_dispatcher(store: Arc<SqliteStore>, capture: &RouteCapture, claude: bool) -> Dispatcher {
     let mut d = dispatcher(store, done_adapter(), 1);
     d.set_llm_route_registry(registry());
     let adapter: Arc<dyn WorkerAdapter> = Arc::new(capture.clone());
@@ -590,7 +590,7 @@ fn route_dispatcher(store: Arc<dyn TaskStore>, capture: &RouteCapture, claude: b
 async fn route_select_dispatch_run_launches_the_selected_harness_model_and_account() {
     let dir = tempfile::tempdir().unwrap();
     let db = dir.path().join("db.sqlite");
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open(&db).unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open(&db).unwrap());
     let capture = RouteCapture::default();
     let mut d = route_dispatcher(store.clone(), &capture, true);
     let mut task = new_task(
@@ -705,7 +705,7 @@ async fn route_select_dispatch_run_launches_the_selected_harness_model_and_accou
 #[tokio::test]
 async fn route_select_dispatch_run_without_a_route_starts_nothing() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let capture = RouteCapture::default();
     let mut d = route_dispatcher(store.clone(), &capture, false);
     let check = Check::Command {
@@ -865,7 +865,7 @@ mod evidence_mode {
     #[test]
     fn none_never_reads_the_table_and_ignores_later_updates() {
         let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
-        let store: Arc<dyn TaskStore> = sqlite.clone();
+        let store: Arc<SqliteStore> = sqlite.clone();
         let mut task = new_task(std::path::Path::new("/tmp"), Check::Reviewer, 0);
         task.genre = Some("light".into());
         store.insert(&task).unwrap();
@@ -1194,7 +1194,7 @@ mod harness_balance {
 fn route_state_fills_source_remaining_and_headroom_from_the_account_book() {
     use task_core::{AccountAdapter, RateLimitObservation, RateWindow};
     let dir = accounts_fixture();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut d = pool_dispatcher(store, done_adapter(), None, dir.path().to_path_buf(), 2, 2);
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     let observe = |five_hour: f64| RateLimitObservation {
@@ -1233,7 +1233,7 @@ fn worker_is_excluded_from_the_cos_five_hour_reserve_but_cos_is_not() {
     use task_core::{AccountAdapter, RateLimitObservation, RateWindow};
     let dir = accounts_fixture();
     let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let store: Arc<SqliteStore> = sqlite.clone();
     let mut d = pool_dispatcher(store, done_adapter(), None, dir.path().to_path_buf(), 2, 2);
     d.set_cos_chat_launch(
         sqlite,
@@ -1591,7 +1591,7 @@ mod slot_wait {
     /// 実 account は +1、暗黙 account（プールを持たない source）は +1 しない。
     #[test]
     fn implicit_account_gets_no_extra_cos_slot() {
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let mut d = route_dispatcher(store, &RouteCapture::default(), true);
         let implicit = pair("qwen", "shared");
         let cos = d.route_state(true).account_max_runs[&implicit];
@@ -1602,7 +1602,7 @@ mod slot_wait {
     #[test]
     fn real_account_gets_one_extra_cos_slot() {
         let dir = accounts_fixture();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let mut d = pool_dispatcher(store, done_adapter(), None, dir.path().to_path_buf(), 2, 2);
         let source: SourceId = task_core::AccountAdapter::ClaudeCode.as_str().into();
         let key = (source, AccountId::from("a"));

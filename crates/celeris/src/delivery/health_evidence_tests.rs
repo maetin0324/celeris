@@ -11,7 +11,6 @@ pub(super) fn deliver(
     d: &Delivery,
     bundled: Option<&CheckerId>,
 ) -> Option<String> {
-    use task_core::DeliveryStore;
     register_repo(store, d, repo);
     let self_repo = tempfile::tempdir().unwrap();
     let tmp = tempfile::tempdir().unwrap();
@@ -41,7 +40,6 @@ pub(super) fn record_health(
 /// 基底に検査器（`scripts/dev/repo-health/repo_health.py`）を持つ配送。main に検査器の commit を足し、
 /// feature をその上の 1 commit にする（Celeris の repo と同じ形）。
 fn merge_queued_with_base_checker() -> (task_core::SqliteStore, tempfile::TempDir, Delivery) {
-    use task_core::DeliveryStore;
     let (store, dir, old) = merge_queued_without_evidence();
     let p = dir.path();
     fs::create_dir_all(p.join(health::CHECKER_DIR)).unwrap();
@@ -249,7 +247,6 @@ fn health_evidence_delivery_non_celeris_repo_passes_with_bundled_pass() {
 /// 「採らなかった: task の mode で外す案」）。
 #[test]
 fn health_evidence_delivery_prototype_still_requires_health() {
-    use task_core::TaskStore;
     let (store, dir, d) = merge_queued_in_mode(task_core::TaskMode::Prototype);
     assert_eq!(
         store.get(d.task_id).unwrap().unwrap().mode,

@@ -1,6 +1,6 @@
 //! ADR 2026-10-27-relayed-instructions 付記 A2 R3: the task of an inbox item read from its id, for
 //! an item that is no longer in the derived inbox (the person answered it, the wait closed).
-use task_core::{TaskId, TaskStore};
+use task_core::{SqliteStore, TaskId};
 
 /// Kinds whose id is `<kind>-<task id>[-…]` (`Builder` in `human_inbox.rs`).
 const TASK_KEYED: [&str; 12] = [
@@ -21,7 +21,7 @@ const TASK_KEYED: [&str; 12] = [
 /// The task an inbox item id stands for: the approval's task (`authorization-` /
 /// `acceptance_check-`), the decision's task (`decision-`), or the task in the id. `None` for
 /// kinds without a task (cluster login, credential, browser waits, …) or unknown ids.
-pub fn item_task_id(store: &dyn TaskStore, item_id: &str) -> Option<TaskId> {
+pub fn item_task_id(store: &SqliteStore, item_id: &str) -> Option<TaskId> {
     let (kind, rest) = item_id.split_once('-')?;
     match kind {
         "authorization" | "acceptance_check" => {

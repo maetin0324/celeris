@@ -75,7 +75,7 @@ fn account_live(d: &mut Dispatcher, id: &str) -> task_ops::daemon::AccountLive {
     items.into_iter().find(|a| a.id == id).expect("account")
 }
 
-fn auth_notices(store: &Arc<dyn TaskStore>) -> Vec<task_core::Notice> {
+fn auth_notices(store: &Arc<SqliteStore>) -> Vec<task_core::Notice> {
     store
         .notice_list(&NoticeQuery {
             kinds: vec![NoticeKind::BadNews],
@@ -102,7 +102,7 @@ fn task(dir: &std::path::Path) -> Task {
 async fn auth_failure_excludes_the_account_reroutes_notifies_and_recovers() {
     let accounts = accounts_fixture();
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let adapter = OauthAdapter::new(&["a"]);
     // max_requeues = 0: 従来なら 1 回目の失敗で通常の失敗（attempts 消費）に落ちる設定。
     let mut d = pool_dispatcher_with_requeues(
@@ -182,7 +182,7 @@ async fn auth_failure_with_no_other_account_waits_for_relogin_instead_of_failing
     std::fs::create_dir_all(&only).unwrap();
     std::fs::write(only.join(".credentials.json"), "{}").unwrap();
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let adapter = OauthAdapter::new(&["a"]);
     let mut d = pool_dispatcher_with_requeues(
         store.clone(),

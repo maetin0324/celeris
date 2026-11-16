@@ -8,7 +8,7 @@ use crate::model::{Event, Status, TaskId};
 use super::query::{u64_to_i64, usize_to_i64};
 use super::{EventRow, SqliteStore, StoreError, TaskWithEvents, format_rfc3339, status_str};
 
-/// 受信箱が task ごとの最新 1 件だけを読む event の種類（[`super::TaskStore::latest_event_rows`]）。種類ごとに
+/// 受信箱が task ごとの最新 1 件だけを読む event の種類（[`super::SqliteStore::latest_event_rows`]）。種類ごとに
 /// migration の部分 index が 1 本ある: `delivery_skipped` は 0037（ADR-0121 付記）、`dependents_reopened` は 0122
 /// （ADR 2026-11-08-health-enforcement-loop D7.3。受信箱 `dependents_reopened` の正本）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,7 +134,8 @@ impl SqliteStore {
         })
     }
 
-    pub(super) fn open_integration_requests_impl(&self) -> Result<Vec<EventRow>, StoreError> {
+    /// 未回答の統合依頼を、一組の task と両側の head につき一件返す。
+    pub fn open_integration_requests(&self) -> Result<Vec<EventRow>, StoreError> {
         self.with_read_conn(|conn| {
             Ok(fold_open_integration_requests(
                 Self::integration_request_rows_tx(conn, None)?,
@@ -142,7 +143,9 @@ impl SqliteStore {
         })
     }
 
-    pub(super) fn integration_request_record_impl(
+    /// 同じ組の未回答依頼があれば追記しない。追記したときだけ true。同じ `origin` の別の組の未回答依頼は
+    /// この依頼に置き換わったものとして `IntegrationAnswered { answer: "superseded" }` で閉じる。
+    pub fn integration_request_record(
         &self,
         task_id: TaskId,
         request: &crate::integration_request::IntegrationRequest,
@@ -194,7 +197,9 @@ impl SqliteStore {
         Ok(true)
     }
 
-    pub(super) fn integration_request_answer_impl(
+    /// 依頼 `request_id` が未回答なら `IntegrationAnswered` を追記して閉じる（追記したときだけ true。
+    /// 回答済み・未知の id には何もしない）。配送・段の統合が「統合済み」を記録する経路と、人の回答の両方が使う。
+    pub fn integration_request_answer(
         &self,
         task_id: TaskId,
         request_id: &str,
@@ -241,7 +246,8 @@ impl SqliteStore {
         Ok(true)
     }
 
-    pub(super) fn integration_requests_close_impl(
+    /// `origin`（`delivery` / `phase:<key>`）の未回答依頼を全て `answer` で閉じる。閉じた依頼 id を返す。
+    pub fn integration_requests_close(
         &self,
         task_id: TaskId,
         origin: &str,
@@ -324,7 +330,9 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub(super) fn close_integration_requests_of_terminal_tasks_impl(
+    /// 終端 task の未回答統合依頼を `task_terminal` で閉じる（旧版の取り残しの回収）。
+    /// events は追記のみ。未回答の確認・終端判定・追記は同じトランザクションで、再実行は冪等。
+    pub fn close_integration_requests_of_terminal_tasks(
         &self,
     ) -> Result<Vec<(TaskId, String)>, StoreError> {
         let mut conn = self.lock()?;
@@ -533,7 +541,7 @@ impl SqliteStore {
     /// outcome: "interrupted: …"}` を積んで閉じる（索引は events の派生なので、replay が同じ行を作れるよう行の
     /// 書き換えではなく event で閉じる。`append_event_tx` が `close_run_row_for_event_tx` で行を更新する）。
     /// 閉じた run の id を返す。終端への遷移（`apply_transition_tx`）と、終端の task の行の照合
-    /// （[`TaskStore::close_runs_of_terminal_tasks`](super::TaskStore::close_runs_of_terminal_tasks)）が使う。
+    /// （[`SqliteStore::close_runs_of_terminal_tasks`](super::SqliteStore::close_runs_of_terminal_tasks)）が使う。
     pub(super) fn close_open_runs_tx(
         conn: &Connection,
         task_id: TaskId,
@@ -616,11 +624,8 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub(super) fn append_event_impl(
-        &self,
-        task_id: TaskId,
-        event: &Event,
-    ) -> Result<u64, StoreError> {
+    /// イベントを追記し、割り当てられた `seq`（0始まり、task_id 内で単調増加）を返す。
+    pub fn append_event(&self, task_id: TaskId, event: &Event) -> Result<u64, StoreError> {
         let mut conn = self.lock()?;
         // seq の採番（SELECT）と INSERT を 1 つの IMMEDIATE トランザクションにする。別接続（celerisctl / API）が同じタスクに
         // 追記しても seq が衝突せず、書き込みロックは busy_timeout で待つ（Phase 9 監査）。
@@ -630,7 +635,12 @@ impl SqliteStore {
         Ok(seq)
     }
 
-    pub(super) fn events_for_impl(&self, task_id: TaskId) -> Result<Vec<(u64, Event)>, StoreError> {
+    /// `task_id` に紐づく全イベントを `seq` 昇順で返す。**`seq` はタスクごとに 0 始まりで単調増加する
+    /// ローカルな連番**であり、別のタスクの `seq` と大小比較することはできない（Phase 45 実機バグ:
+    /// ADR-0021 D3 の「一度扱った失敗は数え直さない」判定で、親の `seq` と子の `seq` を比較していたため、
+    /// 子の失敗が毎回「新規」と判定され、同じ質問が繰り返し出た）。タスクをまたいでイベントの前後関係を
+    /// 比較したい場合は `events_for_with_global_ids` を使うこと。
+    pub fn events_for(&self, task_id: TaskId) -> Result<Vec<(u64, Event)>, StoreError> {
         self.with_read_conn(|conn| {
             let mut stmt =
                 conn.prepare("SELECT seq, json FROM events WHERE task_id = ?1 ORDER BY seq ASC")?;
@@ -649,7 +659,10 @@ impl SqliteStore {
         })
     }
 
-    pub(super) fn tasks_with_events_impl(&self) -> Result<Vec<TaskWithEvents>, StoreError> {
+    /// 全タスクとそれぞれの `events_for` を**同じ読み取りスナップショット**で返す（`replay` 用）。
+    /// `list` と `events_for` を別々に呼ぶと、その間に稼働中の daemon が状態遷移（例: Ready→Running の
+    /// lease 取得）を書き込み、「古い tasks 行 × 新しい events」を突き合わせた偽の不一致になる。
+    pub fn tasks_with_events(&self) -> Result<Vec<TaskWithEvents>, StoreError> {
         self.with_read_conn(|conn| {
             // 1 つの読み取りトランザクション（WAL のスナップショット）で tasks と events を読む。
             let tx = conn.unchecked_transaction()?;
@@ -685,7 +698,11 @@ impl SqliteStore {
         })
     }
 
-    pub(super) fn events_for_with_global_ids_impl(
+    /// `task_id` に紐づく全イベントを、`events` テーブルの**グローバルに単調増加する id**（`seq` ではない）
+    /// と一緒に id 昇順で返す（Phase 45）。この id は全タスクを横断して単調増加するため、
+    /// 異なるタスクのイベント同士の前後関係を比較してよい（`events_for` の `seq` はタスクごとにローカルなので
+    /// 比較できない）。
+    pub fn events_for_with_global_ids(
         &self,
         task_id: TaskId,
     ) -> Result<Vec<(u64, Event)>, StoreError> {
@@ -707,11 +724,8 @@ impl SqliteStore {
         })
     }
 
-    pub(super) fn events_since_impl(
-        &self,
-        after_id: u64,
-        limit: usize,
-    ) -> Result<Vec<EventRow>, StoreError> {
+    /// ADR-0013 D6: `events` を `id` 昇順で `after_id` より後、最大 `limit` 件返す。
+    pub fn events_since(&self, after_id: u64, limit: usize) -> Result<Vec<EventRow>, StoreError> {
         self.with_read_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, task_id, seq, ts, json FROM events WHERE id > ?1 ORDER BY id ASC LIMIT ?2",
@@ -720,7 +734,9 @@ impl SqliteStore {
         })
     }
 
-    pub(super) fn latest_event_ts_impl(
+    /// ADR 2026-10-27-project-stagnation-inbox D1: 各 task の最後の event の `ts`（RFC 3339）。event の無い task は
+    /// 入らない。`(task_id, seq)` の index を task ごとに 1 回引くだけで、events 全体は走査しない。
+    pub fn latest_event_ts(
         &self,
         task_ids: &[TaskId],
     ) -> Result<std::collections::HashMap<TaskId, String>, StoreError> {
@@ -741,7 +757,8 @@ impl SqliteStore {
         })
     }
 
-    pub(super) fn latest_event_id_impl(&self) -> Result<u64, StoreError> {
+    /// ADR-0013 D6: `events` の現在の最大 `id`。行が無ければ 0。
+    pub fn latest_event_id(&self) -> Result<u64, StoreError> {
         self.with_read_conn(|conn| {
             let id: i64 = conn.query_row("SELECT COALESCE(MAX(id), 0) FROM events", [], |row| {
                 row.get(0)

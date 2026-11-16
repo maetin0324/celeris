@@ -31,7 +31,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use task_core::plan::PlanOutput;
-use task_core::{AccountAdapter, StoreError, Task, TaskId, TaskStore, TaskWait};
+use task_core::{AccountAdapter, SqliteStore, StoreError, Task, TaskId, TaskWait};
 use task_ops::daemon::{SnapshotReviewResyncHalted, SnapshotStalledTask};
 use task_worker::Terminal;
 use task_worker::browser_ledger::LedgerWatch;
@@ -538,7 +538,7 @@ impl<S, C> ExecutionCoordination<S, C> {
     /// 祖先と分かった依存先を覚える）。
     pub(crate) fn integration_wait(
         &mut self,
-        store: &dyn TaskStore,
+        store: &SqliteStore,
         task: &Task,
     ) -> Result<Option<task_core::TaskWait>, StoreError> {
         task_ops::dep_integration::integration_wait(store, task, &mut self.integrated_deps)

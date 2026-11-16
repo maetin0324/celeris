@@ -147,7 +147,7 @@ impl WorkerAdapter for HealthReviewer {
 }
 
 struct Reviewed {
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     seen: Vec<Option<HealthReviewInput>>,
     events: Vec<Event>,
     task: Task,
@@ -190,7 +190,7 @@ async fn review_flow_with(
     content: &str,
 ) -> (Reviewed, Dispatcher, tempfile::TempDir) {
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = reviewing_task(repo, &store);
     if let Some(cmd) = check {
         set_check(&mut task, cmd);
@@ -545,7 +545,7 @@ fn policy_records(events: &[Event]) -> Vec<(String, String, String, serde_json::
         .collect()
 }
 
-fn policy_approvals(store: &Arc<dyn TaskStore>, task: &Task) -> Vec<Task> {
+fn policy_approvals(store: &Arc<SqliteStore>, task: &Task) -> Vec<Task> {
     store
         .children(task.id)
         .unwrap()
@@ -723,7 +723,7 @@ async fn health_review_input_not_built_when_the_reviewer_pass_is_reused() {
 async fn health_review_input_not_built_for_work_units() {
     let (repo, _scratch, log) = health_repo("base");
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = compound_task(repo.path());
     task.workspace = WorkspaceSpec::Local {
         path: repo.path().to_path_buf(),

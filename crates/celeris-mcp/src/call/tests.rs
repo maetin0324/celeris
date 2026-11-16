@@ -11,7 +11,6 @@ async fn spawn(
 ) {
     let store = Arc::new(task_core::SqliteStore::open_in_memory().expect("open"));
     {
-        use task_core::McpClientStore;
         store
             .mcp_client_create(&task_core::McpClient {
                 id: "c1".into(),

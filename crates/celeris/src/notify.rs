@@ -33,13 +33,15 @@ use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
+use task_core::OrgDirectory;
+use task_core::TaskQuery;
 
 use serde::Deserialize;
 use task_core::message::MessageRole;
 use task_core::notify::{MAX_NOTIFY_ATTEMPTS, NotificationId, NotificationKind};
 use task_core::report::{ReportFilter, ReportKind};
 use task_core::{
-    ListFilter, ListOrder, Notification, ProjectStatus, Status, StoreError, TaskStore,
+    ListFilter, ListOrder, Notification, ProjectStatus, SqliteStore, Status, StoreError,
 };
 use time::OffsetDateTime;
 
@@ -215,7 +217,7 @@ fn node_name(org: &[task_core::OrgNode], id: &str) -> String {
 ///
 /// `started_at` は終端イベントの走査下限。schedule は永続化済みの走査時刻を渡す。
 pub fn scan(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     started_at: OffsetDateTime,
     base_url: Option<&str>,
 ) -> Result<Vec<Candidate>, StoreError> {
@@ -223,7 +225,7 @@ pub fn scan(
 }
 
 fn scan_at(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     started_at: OffsetDateTime,
     base_url: Option<&str>,
     now: OffsetDateTime,
@@ -270,7 +272,7 @@ fn scan_at(
 
 /// 未決の認可。解決するまで再起動に関係なく対象（台帳で重複排除）。
 fn scan_approval_pending(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     org: &[task_core::OrgNode],
     _started_at: OffsetDateTime,
     base_url: Option<&str>,
@@ -300,7 +302,7 @@ fn scan_approval_pending(
 
 /// 未解決の質問。同じタスクの未決認可のみを approval_pending に任せる。
 fn scan_question_blocked(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     org: &[task_core::OrgNode],
     _started_at: OffsetDateTime,
     base_url: Option<&str>,
@@ -365,7 +367,7 @@ fn scan_question_blocked(
 /// 秘書レベル（level 0）の `bad_news` 報告。**celeris の起動時刻より後にできたものだけ**（backfill 禁止。
 /// 実機 2026-09-18: 起動直後に今日の履歴 8 件が一斉送信され、429 で 3 件落ちた）。
 fn scan_bad_news(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     started_at: OffsetDateTime,
     base_url: Option<&str>,
 ) -> Result<Vec<Candidate>, StoreError> {
@@ -419,7 +421,7 @@ fn scan_bad_news(
 /// 書いた `bad_news` の中から、見出しでこれだけを拾う（`ReportKind` は増やさない）。
 /// `key` = 報告 id（Dispatcher が outage ごとに 1 回だけ報告を作るので、これで「1 outage = 1 通知」になる）。
 fn scan_cluster_login_needed(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     started_at: OffsetDateTime,
     base_url: Option<&str>,
 ) -> Result<Vec<Candidate>, StoreError> {
@@ -455,7 +457,7 @@ fn scan_cluster_login_needed(
 
 /// 全体対話と継続中の案件の最新の返事。案件ではなく message id で重複排除する。
 fn scan_secretary_reply(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     org: &[task_core::OrgNode],
     since: OffsetDateTime,
     base_url: Option<&str>,
@@ -530,7 +532,7 @@ fn transition_key(task: &task_core::Task, events: &[(u64, task_core::Event)]) ->
 /// （判定は task_ops の純粋関数、文面の組み立てだけをここで行う）。`key` は `transition_key`（同じ
 /// タスクが後で再び failed になれば新しい key になる）。
 fn scan_task_failed(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     since: OffsetDateTime,
     base_url: Option<&str>,
 ) -> Result<Vec<Candidate>, StoreError> {
@@ -632,7 +634,7 @@ fn decision_line(row: &task_core::DecisionRow) -> String {
 ///   1 回だけ再通知（`key` の先頭に `reminder:`。状態で判定するので下限は使わない）。回答・取り下げ・節点が終端の
 ///   決定は鳴らさない。
 fn scan_decisions(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     started_at: OffsetDateTime,
     base_url: Option<&str>,
     now: OffsetDateTime,
@@ -771,7 +773,7 @@ fn scan_decisions(
 /// その計画の未回答の決定（`decision_line`、パンくずと推奨）を 1 行ずつ束ねる（決定は別に鳴らさない。`scan_decisions`）。
 /// 状態で判定するので backfill の下限は使わない（`scan_phase_checkpoint` と同じ。重複排除で 1 回だけ鳴る）。
 fn scan_plan_approvals(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     base_url: Option<&str>,
 ) -> Result<Vec<Candidate>, StoreError> {
     let filter = ListFilter {
@@ -834,7 +836,7 @@ fn scan_plan_approvals(
 /// また止まれば新しい key になる）。止まっている間ずっと判定に当たるが、重複排除で 1 回だけ鳴る。
 /// 状態で判定するので backfill の下限（`started_at`）は使わない（`scan_question_blocked` と同じ）。
 fn scan_phase_checkpoint(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     base_url: Option<&str>,
 ) -> Result<Vec<Candidate>, StoreError> {
     let filter = ListFilter {
@@ -874,7 +876,7 @@ fn scan_phase_checkpoint(
 ///
 /// `started_at`（ADR-0037 D5）: celeris の起動時刻。backfill 禁止の基準（`scan` を見よ）。
 pub fn schedule(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     config: &NotifyConfig,
     started_at: OffsetDateTime,
     now: OffsetDateTime,
@@ -914,7 +916,7 @@ struct DigestOutboundState {
 /// webhook transport still uses the existing notifications queue and retry path.
 /// All time decisions use `now`, so tests never need to sleep or contact Discord.
 pub fn schedule_routes(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     config: &NotifyConfig,
     view: &task_ops::view::ViewContext,
     now: OffsetDateTime,
@@ -1236,7 +1238,7 @@ pub fn spawn_send(
 /// 送信の結果を台帳に書く（`tick_loop` が次の tick の先頭で呼ぶ）。3 回目の失敗で諦める（`ok = false`）。
 /// `RateLimited` は台帳に触れない（**attempts に数えない**。次の tick でそのまま再挑戦する）。
 pub fn record(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     pending: &[Notification],
     result: &SendResult,
     now: OffsetDateTime,
@@ -1312,7 +1314,7 @@ pub const NOT_CONFIGURED: &str = "discord webhook is not configured";
 /// 秘密が無い間は**送らず、pending も溜めない**（ADR-0037 D2）。判定はしたが送れなかったことを
 /// 台帳に残して畳む（後から秘密を登録しても、その間の出来事は蒸し返さない）。
 pub fn discard_pending(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     pending: &[Notification],
     now: OffsetDateTime,
 ) -> Result<usize, StoreError> {

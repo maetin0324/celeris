@@ -3,7 +3,7 @@ use crate::error::OpsError;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use task_core::routing_shadow_history::{ShadowKind, ShadowReason, ShadowRecord, ShadowStatus};
-use task_core::{Event, RoutingAudit, SqliteStore, TaskId, TaskStore};
+use task_core::{Event, RoutingAudit, SqliteStore, TaskId};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct RoutingShadowAudit {
@@ -52,7 +52,7 @@ pub trait RequestLog {}
 impl RequestLog for SqliteStore {}
 
 pub fn task_routing_audit_with_requests(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     _log: &dyn RequestLog,
     task_id: TaskId,
 ) -> Result<TaskRoutingAudit, OpsError> {

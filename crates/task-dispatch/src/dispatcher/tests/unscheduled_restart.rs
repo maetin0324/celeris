@@ -28,7 +28,7 @@ fn policy() -> StagnationPolicy {
 }
 
 /// 新しく起動した daemon（メモリは空）。時計は今から 1 時間後（最後の出来事から閾値 1800 秒を越えている）。
-fn restarted(store: Arc<dyn TaskStore>) -> (Dispatcher, Arc<StdMutex<OffsetDateTime>>) {
+fn restarted(store: Arc<SqliteStore>) -> (Dispatcher, Arc<StdMutex<OffsetDateTime>>) {
     let mut d = dispatcher(store, adapter(), 4);
     d.set_stagnation(policy(), 60);
     let clock = Arc::new(StdMutex::new(
@@ -63,7 +63,7 @@ fn memory_wait(d: &Dispatcher, id: TaskId) -> Option<TaskWait> {
 }
 
 /// メモリの待ちを使わない（再起動直後の最初の判定が見ていた）事実で、`task_unscheduled` に出る task。
-fn unscheduled_without_memory(store: &dyn TaskStore, now: OffsetDateTime) -> Vec<TaskId> {
+fn unscheduled_without_memory(store: &SqliteStore, now: OffsetDateTime) -> Vec<TaskId> {
     let none = std::collections::HashSet::new();
     let facts = task_ops::stagnation::gather(
         store,
@@ -112,7 +112,7 @@ async fn unscheduled_restart_first_tick_skips_parent_waiting_for_children_but_re
     stuck.genre = Some(task_ops::knowledge_curation::CURATION_HARNESS.into());
     stuck.labels = vec![task_ops::cron_jobs::CRON_TASK_LABEL.into()];
     sqlite.insert(&stuck).unwrap();
-    let store: Arc<dyn TaskStore> = sqlite;
+    let store: Arc<SqliteStore> = sqlite;
     let (mut d, clock) = restarted(store.clone());
     let mut both = vec![parent.id, stuck.id];
     both.sort();

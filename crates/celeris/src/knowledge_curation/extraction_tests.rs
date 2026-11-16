@@ -1,5 +1,4 @@
 use super::*;
-use task_core::KnowledgeRunStore;
 
 fn source(env: &Env) -> Task {
     let spec = serde_json::from_value(serde_json::json!({"title":"Reusable fact", "objective":"Implement", "acceptance":[], "assignee":"coding"})).unwrap();

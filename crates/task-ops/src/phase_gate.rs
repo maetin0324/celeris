@@ -1,11 +1,11 @@
 //! ADR-0074 D2.2/D2.4（Phase F3 途中確認）: 工程の後で止まった Task（`blocked(awaiting_human)`）の
 //! 判定と、人の 3 つの操作（`continue` / `replan` / `withdraw`）。
 //!
-//! 状態変更は `TaskStore::apply_transition` だけで行う（`gate.rs` と同じ規律）。LLM は使わない。
+//! 状態変更は `SqliteStore::apply_transition` だけで行う（`gate.rs` と同じ規律）。LLM は使わない。
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use task_core::{Event, PhaseReport, PhaseResumeMode, Status, Task, TaskId, TaskStore, Trigger};
+use task_core::{Event, PhaseReport, PhaseResumeMode, SqliteStore, Status, Task, TaskId, Trigger};
 
 use crate::error::OpsError;
 use crate::gate::TransitionResult;
@@ -120,7 +120,7 @@ pub struct PhaseGateRequest {
 ///   [`continue_note_lines`] で続く工程の「人の決定」節にも入る）。
 /// - `withdraw` は既存の `Trigger::Cancel`（後片付けは ADR-0043 D2 の中止のまま）。
 pub fn phase_gate(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     action: PhaseGateAction,
     note: Option<String>,
@@ -138,7 +138,7 @@ pub fn phase_gate(
 
 /// [`phase_gate`] の遷移を `writes` に任せる。
 pub fn phase_gate_via(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     writes: &dyn crate::op_writes::OpWrites,
     id: TaskId,
     action: PhaseGateAction,
@@ -182,7 +182,7 @@ pub enum PhaseGatePlan {
 }
 
 pub fn plan_phase_gate(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     id: TaskId,
     action: PhaseGateAction,
     note: Option<String>,

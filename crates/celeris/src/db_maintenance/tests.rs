@@ -1,5 +1,4 @@
 use super::*;
-use task_core::TaskStore;
 
 fn populated_wal_db(path: &Path) {
     let conn = rusqlite::Connection::open(path).unwrap();

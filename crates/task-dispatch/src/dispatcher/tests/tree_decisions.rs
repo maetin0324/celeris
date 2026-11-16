@@ -111,7 +111,7 @@ impl WorkerAdapter for DecisionAdapter {
 
 /// 決定を待って止めた仕事がある木は `ready` の task を残すので `idle` にならない。run・判定・統合が 50 tick
 /// 続けて無ければ落ち着いたとみなす（tree_gate と同じ）。
-async fn run_until_quiet(d: &mut Dispatcher, store: &Arc<dyn TaskStore>, max_ticks: usize) {
+async fn run_until_quiet(d: &mut Dispatcher, store: &Arc<SqliteStore>, max_ticks: usize) {
     let mut quiet = 0;
     for _ in 0..max_ticks {
         let r = d.tick().unwrap();
@@ -138,7 +138,7 @@ async fn run_until_quiet(d: &mut Dispatcher, store: &Arc<dyn TaskStore>, max_tic
 /// もう一度落ち着くまで回す。承認の理由を返す。
 async fn quiet_then_approve(
     d: &mut Dispatcher,
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     root_id: TaskId,
     max_ticks: usize,
 ) -> Vec<String> {
@@ -173,7 +173,7 @@ fn with_decisions(plan: String, decisions: Vec<serde_json::Value>) -> String {
     value.to_string()
 }
 
-fn decision(store: &Arc<dyn TaskStore>, root: TaskId, key: &str) -> task_core::DecisionRow {
+fn decision(store: &Arc<SqliteStore>, root: TaskId, key: &str) -> task_core::DecisionRow {
     store
         .decisions_list(Some(root))
         .unwrap()
@@ -183,7 +183,7 @@ fn decision(store: &Arc<dyn TaskStore>, root: TaskId, key: &str) -> task_core::D
 }
 
 fn answer(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     id: &str,
     option: Option<&str>,
     note: Option<&str>,
@@ -205,7 +205,7 @@ fn blocked_by_decision(units: &[task_core::WorkUnitRow], key: &str) -> bool {
         && u.blocked_reason == Some(task_core::WorkUnitBlockedReason::Decision)
 }
 
-fn child_named(store: &Arc<dyn TaskStore>, root: TaskId, key: &str) -> Option<Task> {
+fn child_named(store: &Arc<SqliteStore>, root: TaskId, key: &str) -> Option<Task> {
     store
         .children(root)
         .unwrap()
@@ -213,7 +213,7 @@ fn child_named(store: &Arc<dyn TaskStore>, root: TaskId, key: &str) -> Option<Ta
         .find(|c| c.title == format!("Child {key}"))
 }
 
-fn no_questions(store: &Arc<dyn TaskStore>, task: TaskId) {
+fn no_questions(store: &Arc<SqliteStore>, task: TaskId) {
     assert!(
         store.approval_list(None, None, None).unwrap().is_empty(),
         "no questions / approvals"
@@ -236,7 +236,7 @@ fn no_questions(store: &Arc<dyn TaskStore>, task: TaskId) {
 #[tokio::test]
 async fn unanswered_decision_blocks_only_dependents_and_answers_flow_into_inputs() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = root_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -357,7 +357,7 @@ async fn unanswered_decision_blocks_only_dependents_and_answers_flow_into_inputs
 async fn limit_raise_answer_resumes_subtree() {
     // 計画の採用時の上限（limit:max_tree_leaves）。
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = root_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -394,7 +394,7 @@ async fn limit_raise_answer_resumes_subtree() {
 
     // run 時の上限（limit:max_tree_runs、needed_before: self）。
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = root_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -442,7 +442,7 @@ async fn limit_raise_answer_resumes_subtree() {
 #[tokio::test]
 async fn plan_invalid_replan_feeds_the_note_and_adopts_plan_v2() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = root_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -539,7 +539,7 @@ async fn plan_invalid_replan_feeds_the_note_and_adopts_plan_v2() {
 async fn plan_invalid_atomic_runs_the_node_once_and_cancel_cancels_it() {
     for option in ["atomic", "cancel"] {
         let dir = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let root = root_task(dir.path());
         let root_id = root.id;
         store.create_task(&root, vec![]).unwrap();
@@ -584,7 +584,7 @@ async fn plan_invalid_atomic_runs_the_node_once_and_cancel_cancels_it() {
 async fn withdraw_cancels_the_held_units() {
     // withdraw の回答（leaf_too_large）。
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = root_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -613,7 +613,7 @@ async fn withdraw_cancels_the_held_units() {
 
     // 人の取り下げ（計画の決定を待つ leaf とその依存）。
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = root_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -668,7 +668,7 @@ async fn withdraw_cancels_the_held_units() {
 #[tokio::test]
 async fn worker_declared_decisions() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = root_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -799,7 +799,7 @@ async fn worker_declared_decisions() {
 #[tokio::test]
 async fn tree_disabled_ignores_worker_decisions() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -830,9 +830,9 @@ async fn tree_disabled_ignores_worker_decisions() {
 /// 何も足さない（節も出ない）。
 async fn continue_note_scenario(
     note: Option<&str>,
-) -> (Arc<DecisionAdapter>, Arc<dyn TaskStore>, TaskId) {
+) -> (Arc<DecisionAdapter>, Arc<SqliteStore>, TaskId) {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = root_task(dir.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();

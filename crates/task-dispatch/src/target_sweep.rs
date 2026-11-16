@@ -681,7 +681,7 @@ pub struct RepoTargetGc {
 /// （[`remove_moved_targets`]。dispatcher の tick では別スレッド）。
 /// task の作業場所 `<root>/<task_id>` は `roots`（ADR 2026-10-14-local-machine-settings D5）で解く。
 pub fn repo_target_gc_move_aside(
-    store: &dyn task_core::TaskStore,
+    store: &task_core::SqliteStore,
     roots: &WorkspaceRoots,
     after_secs: u64,
     now: time::OffsetDateTime,
@@ -777,7 +777,7 @@ pub fn remove_moved_targets(paths: &[PathBuf], probe: &Path) -> RemovedRepoTarge
 /// build 中（どれかの profile の lock が取れない）は `build_in_progress` で残す。`dry_run` は木を変えない。
 pub fn sweep_workspace_targets(
     report: &mut SweepReport,
-    store: &dyn task_core::TaskStore,
+    store: &task_core::SqliteStore,
     roots: &WorkspaceRoots,
     after_secs: u64,
     now: time::OffsetDateTime,

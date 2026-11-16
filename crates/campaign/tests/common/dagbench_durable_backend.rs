@@ -2,7 +2,6 @@
 use super::*;
 use celeris_campaign::dagbench::ext::{ExtBackend, Lookup, Notice, SubmitError, SubmitReply};
 use std::{collections::BTreeSet, io, io::Write};
-use task_core::cluster_job::ClusterJobWaitStore;
 
 pub fn saved(p: &Params, physical: &str) -> Result<Option<Value>, Box<dyn std::error::Error>> {
     if p.arm == "baseline" {

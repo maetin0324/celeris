@@ -5,7 +5,7 @@ use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer};
-use task_core::TaskStore;
+
 use time::OffsetDateTime;
 
 use crate::cos::operations::{Applied, OperationAudit};
@@ -388,7 +388,7 @@ pub(crate) fn retry_op(
     let now = OffsetDateTime::now_utc();
     // 複製先へ元の routing_override（evidence_mode を含む）を写す。写さないと root の retry は
     // none/pinned が config の latest に落ちる。task-core の store は変えず、API 層で写す。
-    let inherited = task_core::store::TaskStore::task_routing_override(store, id)
+    let inherited = task_core::store::SqliteStore::task_routing_override(store, id)
         .map_err(|e| reject(ops_problem(store, e.into(), Some("retry"))))?;
     let new_task =
         task_ops::retry::plan_retry(store, id, accept, workspace, execution.is_some(), now)
@@ -756,7 +756,7 @@ pub(crate) fn reopen_op(
 ) -> Result<Applied<task_ops::gate::TransitionResult>, ApiProblem> {
     let Some(audit) = audit else {
         // `plan_reopen` が読んだ task の案件を、同じ transaction の `human_epoch` に使う。
-        let project = task_core::store::TaskStore::get(store, id)
+        let project = task_core::store::SqliteStore::get(store, id)
             .map_err(|e| ops_problem(store, e.into(), Some("reopen")))?
             .and_then(|task| task.project_id);
         return task_ops::comment::reopen_with(store, id, expected_status, |tx| {

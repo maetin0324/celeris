@@ -1,12 +1,13 @@
 //! 受信箱（`docs/api/v1/api.md` §3.2 / §5.1 / §6.2）。原則 5「人間は承認待ちキューだけを見ればよい」の画面の元データ。
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use task_core::TaskQuery;
 
 use schemars::JsonSchema;
 use serde::Serialize;
 use task_core::store::LatestEventKind;
 use task_core::{
-    ArtifactRef, Check, Event, EventRow, Status, Task, TaskId, TaskKind, TaskStore, WorkerHint,
+    ArtifactRef, Check, Event, EventRow, SqliteStore, Status, Task, TaskId, TaskKind, WorkerHint,
     WorkspaceSpec,
 };
 use time::OffsetDateTime;
@@ -354,7 +355,7 @@ impl SuppressRule {
 /// ADR 2026-10-17-root-dependency-waits-for-integration D4: 取り込まれない task を待つ root の依存元（受信箱の文面に足す）。
 /// ADR 2026-11-11-unit-task-dependencies D3: 計画の pending の unit が `task:<dep>` で待つ root も同じ文面に載せる。
 fn waiting_dependents_note(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     all_tasks: &[Task],
     dep: TaskId,
 ) -> Result<String, OpsError> {
@@ -469,7 +470,7 @@ fn attention_at(item: &AttentionItem) -> &str {
 
 /// `kind == Approval && status == Ready` のタスク（Human check の Approval 子）を集める。
 fn build_approvals(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     all_tasks: &[Task],
     by_id: &HashMap<TaskId, Task>,
     evidence: &dyn Fn(&Task, &str) -> Vec<EvidenceView>,
@@ -610,7 +611,7 @@ fn build_approvals(
 
 /// `status == Blocked` のタスク。
 fn build_questions(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     all_tasks: &[Task],
     focus: Option<&HashSet<TaskId>>,
     blocked_attention: &mut read::BlockedAttention,
@@ -758,7 +759,7 @@ fn build_questions(
 /// まとめる（1 まとまり）。`plan_summary` は `Event::ProjectPlanProposed` の rationale と、
 /// マイルストーンの DAG の 1 行ずつ。
 fn build_drafts(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     all_tasks: &[Task],
     by_id: &HashMap<TaskId, Task>,
     ctx: &ViewContext,
@@ -998,7 +999,7 @@ pub(crate) fn focus_of(all_tasks: &[Task], touching: &BTreeSet<TaskId>) -> HashS
 
 /// ADR-0074 D2.4（Phase F3 途中確認）: 工程の後で止まった Task。期限は設けない（人の判断を待つ）。
 fn phase_checkpoint_item(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     t: &Task,
     rows: &[EventRow],
     events: &[(u64, Event)],
@@ -1059,7 +1060,7 @@ fn browser_prerequisite_item(
 
 /// ADR-0079 D8（Phase R3b）: root の計画の承認待ち。期限は設けない（人の判断を待つ）。
 fn plan_approval_item(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     t: &Task,
     rows: &[EventRow],
     events: &[(u64, Event)],
@@ -1128,7 +1129,7 @@ fn plan_approval_item(
 /// (a) 24h 以内に `failed`、(b) `ready` で連続 requeue が上限近く、(c) スナップショットの `unroutable`。
 #[allow(clippy::too_many_arguments)]
 fn build_attention(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     all_tasks: &[Task],
     by_id: &HashMap<TaskId, Task>,
     snapshot: Option<&DaemonSnapshot>,
@@ -1443,7 +1444,7 @@ fn build_attention(
 /// `docs/api/v1/api.md` §5.1。`evidence` は `(親タスク, run_id)` から `runs/<run_id>/result.json` の `evidence[]` を読む
 /// 呼び出し側の関数（ファイル I/O は task-api が行う）。
 pub fn inbox(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     snapshot: Option<&DaemonSnapshot>,
     ctx: &ViewContext,
     now: OffsetDateTime,

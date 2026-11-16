@@ -3,7 +3,7 @@
 mod support;
 use serde_json::{Value, json};
 use support::*;
-use task_core::{Event, TaskStore};
+use task_core::Event;
 
 #[tokio::test]
 async fn authorized_project_cos_keeps_actor_and_consumption_through_evaluation() {

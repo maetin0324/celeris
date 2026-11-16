@@ -54,7 +54,7 @@ use celeris_campaign::{
 };
 use serde_json::{Value, json};
 use task_core::{
-    DaemonMode, InstanceRole, RunRole, SharedRole, SqliteStore, Status, TaskId, TaskStore, Trigger,
+    DaemonMode, InstanceRole, RunRole, SharedRole, SqliteStore, Status, TaskId, Trigger,
 };
 
 #[path = "../../campaign/tests/preflight_setup/mod.rs"]

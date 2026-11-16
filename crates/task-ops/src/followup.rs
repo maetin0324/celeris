@@ -12,7 +12,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use task_core::{CreatedOrigin, Event, GenreSpec, RoleSpec, Status, Task, TaskId, TaskStore};
+use task_core::{CreatedOrigin, Event, GenreSpec, RoleSpec, SqliteStore, Status, Task, TaskId};
 use time::OffsetDateTime;
 
 use crate::add::{NewTaskSpec, SpecOrigin, SpecProvenance, build_task_with_roles};
@@ -81,7 +81,7 @@ pub fn append_to_file(path: &Path, spec: &NewTaskSpec) -> Result<usize, OpsError
 /// ADR-0098 D3: 元の task `origin` に結び付けた spec と、落とした欄の説明（進行に残す）を返す。
 /// 違う案件を指した spec は `OpsError::Validation`。
 pub fn bind_to_origin(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     origin: &Task,
     mut spec: NewTaskSpec,
 ) -> Result<(NewTaskSpec, Vec<String>), OpsError> {
@@ -158,7 +158,7 @@ pub fn bind_to_origin(
 
 /// ADR-0098 D4: 同じ案件（`project_id` が同じ。無ければ案件無し同士）に終端でない同じ題名の task があればその id。
 fn live_duplicate(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     project_id: Option<task_core::ProjectId>,
     title: &str,
 ) -> Result<Option<TaskId>, OpsError> {
@@ -180,7 +180,7 @@ pub enum FollowupResult {
 
 /// ADR-0098 D3〜D5: run `run_id`（task `origin` の run）が宣言した 1 件を作る。
 pub fn create_followup(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     origin: &Task,
     run_id: &str,
     spec: NewTaskSpec,
@@ -219,7 +219,7 @@ pub struct AbsorbOutcome {
 /// **lease の確認は呼び出し側**（daemon の `run_holds_lease` と同じ規則）。ファイルが無ければ `Ok(None)`。
 /// 1 件の失敗は他を止めず、理由は `origin_id` の `WorkerProgress` に残す。
 pub fn absorb_followups_file(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     origin_id: TaskId,
     run_id: &str,
     artifacts_dir: &Path,

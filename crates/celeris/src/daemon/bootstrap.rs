@@ -1,12 +1,13 @@
 //! 起動時の組み立て: DB の置き場所の検査、`Dispatcher` の構築、組織図と定期実行 job の種まき。
 
+use task_core::OrgDirectory;
 #[path = "jev_verifier.rs"]
 mod jev_verifier;
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use task_core::{SqliteStore, StoreOptions, TaskStore};
+use task_core::{SqliteStore, StoreOptions};
 use task_dispatch::Dispatcher;
 use task_worker::db_guard::{
     DaemonPaths, DbGuard, GuardDecision, PRODUCTION_IN_WORKER_RUN, ProtectedSet, ResolvedPath,
@@ -581,7 +582,7 @@ pub fn build_dispatcher(
             OffsetDateTime::now_utc() - time::Duration::seconds(COS_EXTERNAL_PENDING_GRACE_SECS),
         )
         .map_err(|error| crate::DaemonError::CosOperationRecovery(error.to_string()))?;
-    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let store: Arc<SqliteStore> = sqlite.clone();
     seed_org_if_empty(store.as_ref(), config)?;
     seed_cron_if_empty(store.as_ref(), config, OffsetDateTime::now_utc())?;
     let mut dispatcher = Dispatcher::new(store.clone(), config.dispatch_config());
@@ -720,7 +721,7 @@ pub fn build_daemon_dispatcher(
 
 /// ADR-0033 D1: 組織図の種を蒔く。**`org_nodes` が空のときだけ**書き、それ以外は何もしない
 /// （以後の編集は GUI → API → DB。設定は再読込しない）。蒔いた件数を返す。
-pub fn seed_org_if_empty(store: &dyn TaskStore, config: &Config) -> Result<usize, DaemonError> {
+pub fn seed_org_if_empty(store: &SqliteStore, config: &Config) -> Result<usize, DaemonError> {
     if config.org.is_empty() {
         return Ok(0);
     }
@@ -747,7 +748,7 @@ pub fn seed_org_if_empty(store: &dyn TaskStore, config: &Config) -> Result<usize
 /// `task_ops::cron_jobs::validate_job` / `create_job` を通し、不正な種は起動時の設定エラーにする。
 /// 全件を先に検証してから書くので、途中の 1 件が不正でも一部だけ入った状態は残らない。蒔いた件数を返す。
 pub fn seed_cron_if_empty(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     config: &Config,
     now: OffsetDateTime,
 ) -> Result<usize, DaemonError> {

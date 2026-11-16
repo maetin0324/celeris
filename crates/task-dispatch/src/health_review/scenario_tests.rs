@@ -210,7 +210,7 @@ impl WorkerAdapter for ScenarioAdapter {
 }
 
 pub(super) struct Outcome {
-    pub(super) store: Arc<dyn TaskStore>,
+    pub(super) store: Arc<SqliteStore>,
     pub(super) task: Task,
     pub(super) seen: Vec<task_worker::RunContext>,
     /// 案件の repo（remote workspace の流れでは作業場所の dir）と workspace root。試験の間だけ残す。
@@ -283,7 +283,7 @@ pub(super) async fn run_flow_with(
 ) -> Outcome {
     let repo = project_repo(with_policy);
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (project, repos) =
         project_with_repos(&store, &[("code", repo.path(), task_core::RepoKind::Git)]);
     let mut task = compound_task(repo.path());

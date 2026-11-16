@@ -21,7 +21,7 @@ fn slow_pool_adapter() -> Arc<PoolAdapter> {
     })
 }
 
-fn seed_org(store: &Arc<dyn TaskStore>) {
+fn seed_org(store: &Arc<SqliteStore>) {
     let now = OffsetDateTime::now_utc();
     for (id, parent, kind) in [
         ("cos", None, OrgKind::Secretary),
@@ -66,7 +66,7 @@ fn cos_chat(dir: &std::path::Path) -> Task {
     t
 }
 
-fn status(store: &Arc<dyn TaskStore>, id: TaskId) -> Status {
+fn status(store: &Arc<SqliteStore>, id: TaskId) -> Status {
     store.get(id).unwrap().unwrap().status
 }
 
@@ -76,7 +76,7 @@ fn status(store: &Arc<dyn TaskStore>, id: TaskId) -> Status {
 async fn cos_run_bypasses_max_concurrency_but_leaves_do_not() {
     let accounts = accounts_fixture();
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_org(&store);
     // プロバイダの concurrency は 4（効かせない）、全体の max_concurrency は 1。
     let mut d = pool_dispatcher(
@@ -118,7 +118,7 @@ async fn cos_run_bypasses_max_concurrency_but_leaves_do_not() {
 async fn max_cos_runs_zero_disables_the_exemption() {
     let accounts = accounts_fixture();
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_org(&store);
     let mut d = pool_dispatcher(
         store.clone(),
@@ -145,7 +145,7 @@ fn dispatcher_account_limits_load_on_start_and_reload() {
     let accounts = accounts_fixture();
     let db_dir = tempfile::tempdir().unwrap();
     let db = db_dir.path().join("limits.db");
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open(&db).unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open(&db).unwrap());
     let mut d = pool_dispatcher(
         store.clone(),
         slow_pool_adapter(),
@@ -171,7 +171,7 @@ fn dispatcher_account_limits_load_on_start_and_reload() {
     assert_eq!(d.account_max_runs("claude-code", "a"), Some(3));
     drop(d);
     drop(store);
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open(&db).unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open(&db).unwrap());
     let mut d = pool_dispatcher(
         store.clone(),
         slow_pool_adapter(),
@@ -200,7 +200,7 @@ fn dispatcher_account_limits_load_on_start_and_reload() {
 #[test]
 fn account_limits_source_account_and_source_limits_are_independent() {
     let accounts = accounts_fixture();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut d = pool_dispatcher(
         store,
         slow_pool_adapter(),
@@ -270,7 +270,7 @@ fn account_limits_source_cooldown_excludes_only_the_cooled_account() {
 async fn cos_account_usage_does_not_consume_leaf_capacity() {
     let accounts = accounts_fixture();
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_org(&store);
     let mut d = pool_dispatcher(
         store.clone(),
@@ -294,7 +294,7 @@ async fn cos_account_usage_does_not_consume_leaf_capacity() {
 
 /// A source without an account pool as in production Qwen: `p1` with a stored implicit
 /// limit `legacy` (`None` = not stored).
-fn non_pool_dispatcher(store: Arc<dyn TaskStore>, legacy: Option<usize>) -> Dispatcher {
+fn non_pool_dispatcher(store: Arc<SqliteStore>, legacy: Option<usize>) -> Dispatcher {
     let mut d = dispatcher(store, slow_pool_adapter(), 8);
     // 旧 `concurrency` の値を暗黙アカウントの保存値として置く（None なら保存値に触らない）。
     if let Some(n) = legacy {
@@ -310,7 +310,7 @@ fn non_pool_dispatcher(store: Arc<dyn TaskStore>, legacy: Option<usize>) -> Disp
 fn implicit_account_overrides_survive_reload_and_are_pruned_with_their_row() {
     let db_dir = tempfile::tempdir().unwrap();
     let db = db_dir.path().join("implicit.db");
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open(&db).unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open(&db).unwrap());
     let mut d = non_pool_dispatcher(store.clone(), Some(1));
     d.set_account_limit("implicit", "p1", Some(2)).unwrap();
     d.set_account_limit("claude-code", "p1", Some(5)).unwrap();
@@ -337,7 +337,7 @@ fn implicit_account_overrides_survive_reload_and_are_pruned_with_their_row() {
     assert!(d.prune_implicit_account_limits().unwrap().is_empty());
     assert_eq!(d.implicit_account_limit("p1").unwrap().0, 2);
     drop(d);
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open(&db).unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open(&db).unwrap());
     let mut d = non_pool_dispatcher(store.clone(), None);
     assert_eq!(
         d.implicit_account_limit("p1"),
@@ -364,7 +364,7 @@ fn implicit_account_overrides_survive_reload_and_are_pruned_with_their_row() {
 async fn store_max_concurrency_applies_next_tick_without_stopping_running_runs() {
     let accounts = accounts_fixture();
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     seed_org(&store);
     let mut d = pool_dispatcher(
         store.clone(),

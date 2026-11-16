@@ -8,8 +8,10 @@
 use std::process::ExitCode;
 
 use clap::Args;
-use task_core::TaskStore;
+
 use task_ops::replay::{check_and_apply_decisions, check_and_apply_execution, replay};
+
+use task_core::SqliteStore;
 
 use crate::error::CliError;
 use crate::outln;
@@ -26,7 +28,7 @@ pub struct ReplayArgs {
     pub apply: bool,
 }
 
-pub fn run(store: &dyn TaskStore, args: ReplayArgs) -> Result<ExitCode, CliError> {
+pub fn run(store: &SqliteStore, args: ReplayArgs) -> Result<ExitCode, CliError> {
     let report = replay(store)?;
 
     for m in &report.mismatches {

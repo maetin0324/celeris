@@ -61,7 +61,7 @@ impl WorkerAdapter for DoneGateAdapter {
 
 /// 自分の instance の行を登録し、孤児の回収を有効にし、注入時計（`test_hooks.now`）を持つ dispatcher
 /// （`orphan_takeover::new_active` と同じ構成に、周期の照合を進めるための時計を足したもの）。
-fn active_with_clock(store: &Arc<dyn TaskStore>, adapter: Arc<dyn WorkerAdapter>) -> Dispatcher {
+fn active_with_clock(store: &Arc<SqliteStore>, adapter: Arc<dyn WorkerAdapter>) -> Dispatcher {
     store
         .instance_register(&instance(SELF_ID, InstanceRole::Active, std::process::id()))
         .unwrap();
@@ -74,12 +74,12 @@ fn active_with_clock(store: &Arc<dyn TaskStore>, adapter: Arc<dyn WorkerAdapter>
     d
 }
 
-fn status_of(store: &Arc<dyn TaskStore>, id: TaskId) -> Status {
+fn status_of(store: &Arc<SqliteStore>, id: TaskId) -> Status {
     store.get(id).unwrap().unwrap().status
 }
 
 /// `run_id` の `WorkerFinished` の `(end, outcome)`（event の数 = 長さ）。
-fn finishes(store: &Arc<dyn TaskStore>, id: TaskId, run_id: &str) -> Vec<(Option<RunEnd>, String)> {
+fn finishes(store: &Arc<SqliteStore>, id: TaskId, run_id: &str) -> Vec<(Option<RunEnd>, String)> {
     events_of(store, id)
         .into_iter()
         .filter_map(|e| match e {
@@ -95,7 +95,7 @@ fn finishes(store: &Arc<dyn TaskStore>, id: TaskId, run_id: &str) -> Vec<(Option
 }
 
 /// `Transitioned` の `(to, reason)`（起きた順）。
-fn transitions(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<(Status, String)> {
+fn transitions(store: &Arc<SqliteStore>, id: TaskId) -> Vec<(Status, String)> {
     events_of(store, id)
         .into_iter()
         .filter_map(|e| match e {
@@ -106,7 +106,7 @@ fn transitions(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<(Status, String)> 
 }
 
 /// `WorkerStarted` の `(run_id, role)`（起きた順）。
-fn starts(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<(String, Option<RunRole>)> {
+fn starts(store: &Arc<SqliteStore>, id: TaskId) -> Vec<(String, Option<RunRole>)> {
     events_of(store, id)
         .into_iter()
         .filter_map(|e| match e {
@@ -117,7 +117,7 @@ fn starts(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<(String, Option<RunRole
 }
 
 /// 孤児の回収の記録（`orphan_takeover` の `WorkerProgress` と、`orphan_takeover` で閉じた `WorkerFinished`）の数。
-fn orphan_records(store: &Arc<dyn TaskStore>, id: TaskId) -> usize {
+fn orphan_records(store: &Arc<SqliteStore>, id: TaskId) -> usize {
     events_of(store, id)
         .iter()
         .filter(|e| match e {
@@ -128,7 +128,7 @@ fn orphan_records(store: &Arc<dyn TaskStore>, id: TaskId) -> usize {
         .count()
 }
 
-fn note_recorded(store: &Arc<dyn TaskStore>, id: TaskId, run: &str) -> bool {
+fn note_recorded(store: &Arc<SqliteStore>, id: TaskId, run: &str) -> bool {
     events_of(store, id).iter().any(|e| {
         matches!(e, Event::ArtifactProduced { run_id, artifact }
             if run_id == run && artifact.path.ends_with(NOTE))
@@ -144,7 +144,7 @@ fn note_recorded(store: &Arc<dyn TaskStore>, id: TaskId, run: &str) -> bool {
 /// 送信を終えている。
 async fn release_until_completion_sent(
     adapter: &DoneGateAdapter,
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     id: TaskId,
     run: &str,
 ) {
@@ -190,7 +190,7 @@ async fn release_until_completion_sent(
 #[tokio::test]
 async fn cex_done_and_lease_expiry_in_one_tick_close_the_run_once() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -249,7 +249,7 @@ async fn cex_done_and_lease_expiry_in_one_tick_close_the_run_once() {
     assert_eq!(report.dispatched, 0, "{report:?}");
     assert_eq!(report.in_flight, 0, "{report:?}");
 
-    let assert_closed_once = |store: &Arc<dyn TaskStore>, when: &str| {
+    let assert_closed_once = |store: &Arc<SqliteStore>, when: &str| {
         assert_eq!(
             finishes(store, id, &run_a),
             closed_by_cancel,
@@ -302,7 +302,7 @@ async fn cex_done_and_lease_expiry_in_one_tick_close_the_run_once() {
 /// v1 の計画を使う理由: v2（工程つき）の Task では、同じ tick の `reconcile_parallel_tasks` が「走っている WU も
 /// 統合も無い Running の v2 Task」を Ready に戻して次の WU を起こすので、この停止点が残らない（finish を止める
 /// hook は tick の残りを止めない。進捗の cex-tick.md の観測）。
-async fn halt_after_wu_a_done(store: &Arc<dyn TaskStore>, id: TaskId) -> (Dispatcher, String) {
+async fn halt_after_wu_a_done(store: &Arc<SqliteStore>, id: TaskId) -> (Dispatcher, String) {
     use super::cex_lease_restart::wu_row;
     adopt_three_step_plan(store, id);
     let mut old = dispatcher(store.clone(), done_adapter(), 1);
@@ -339,7 +339,7 @@ async fn halt_after_wu_a_done(store: &Arc<dyn TaskStore>, id: TaskId) -> (Dispat
 }
 
 /// WU a の遷移が dispatch と completed の 2 つだけ（戻されず、走らせ直されていない）か。
-fn assert_wu_a_kept_done(store: &Arc<dyn TaskStore>, id: TaskId, run_a: &str, when: &str) {
+fn assert_wu_a_kept_done(store: &Arc<SqliteStore>, id: TaskId, run_a: &str, when: &str) {
     use super::cex_lease_restart::{wu_row, wu_transitions};
     assert_eq!(
         wu_transitions(store, id, "a"),
@@ -374,7 +374,7 @@ fn assert_wu_a_kept_done(store: &Arc<dyn TaskStore>, id: TaskId, run_a: &str, wh
 async fn cex_human_cancel_between_wu_and_task_transitions_is_kept() {
     use super::cex_lease_restart::{dependency_ready_count, wu_row, wu_transitions};
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -418,7 +418,7 @@ async fn cex_human_cancel_between_wu_and_task_transitions_is_kept() {
     // 旧 instance を落とし、同じ store に新しい active を起こす。
     drop(old);
     let mut active = new_active(&store, done_adapter());
-    let assert_kept = |store: &Arc<dyn TaskStore>, when: &str| {
+    let assert_kept = |store: &Arc<SqliteStore>, when: &str| {
         assert_eq!(status_of(store, id), Status::Cancelled, "{when}");
         assert!(store.get(id).unwrap().unwrap().lease.is_none(), "{when}");
         assert_wu_a_kept_done(store, id, &run_a, when);
@@ -498,7 +498,7 @@ async fn cex_human_comment_between_wu_and_task_transitions_is_kept() {
     use super::cex_lease_restart::{dependency_ready_count, wu_row};
     use task_ops::comment::{CommentEffect, list_comments, post_human_comment_as};
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = new_task(
         dir.path(),
         Check::Command {

@@ -1,7 +1,7 @@
 //! Resolve human instruction evidence and enforce relay scope.
 use super::{DispatchEnv, Matched};
 use serde_json::Value;
-use task_core::{TaskStore, chat::AuditContext, store::SqliteStore};
+use task_core::{chat::AuditContext, store::SqliteStore};
 
 /// The task an operation acts on, for the scope check of a relayed instruction: the task of a
 /// `/api/v1/tasks/{id}/…` route, or the task behind an inbox item (`inbox.answer`). An item that

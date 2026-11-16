@@ -165,7 +165,7 @@ pub(crate) struct ObservedIntegration {
 /// ADR 2026-11-12-host-check-slots D3: 重い検査は `limits.slots`（daemon の起動時に決めた `DispatchConfig::check_slots`）の
 /// 枠を取ってから走らせる。`limits.timeout` は枠を取った後の実行にだけかかる。
 pub(super) async fn run_integration_checks(
-    store: &dyn task_core::TaskStore,
+    store: &task_core::SqliteStore,
     task_id: TaskId,
     observed: &ObservedIntegration,
     ws: &task_worker::LocalWorkspace,

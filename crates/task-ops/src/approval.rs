@@ -10,7 +10,7 @@
 //! と同じ役割分担）。ここは判断と、決まった後の書き込みだけ。
 
 use task_core::approval::{Approval, Decision, StandingRule, StandingRuleId};
-use task_core::{Status, TaskId, TaskStore};
+use task_core::{SqliteStore, Status, TaskId};
 use time::OffsetDateTime;
 
 use crate::error::OpsError;
@@ -52,7 +52,7 @@ pub struct DecideOutcome {
 /// 人が答える（ADR-0033 D5）。`approval` は呼び出し側が `approval_get` で引いた既存の行
 /// （404 の判定は呼び出し側の責任）。
 pub fn decide(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     approval: Approval,
     decision: Decision,
     answer: String,
@@ -73,7 +73,7 @@ pub fn decide(
 /// [`decide`] の決定の行の書き込みを `write` に任せる（人の経路は `human_epoch` を同じ transaction で増やす）。
 #[allow(clippy::too_many_arguments)]
 pub fn decide_via<F>(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     approval: Approval,
     decision: Decision,
     answer: String,
@@ -114,7 +114,7 @@ pub struct DecidePlan {
 }
 
 pub fn plan_decide(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     approval: Approval,
     decision: Decision,
     answer: String,
@@ -205,7 +205,7 @@ pub fn plan_decide(
 
 /// 決定を書いた後、紐づく `blocked` のタスクに答えて再開する（既存の「質問に答える」経路）。
 fn resume_target(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     plan: &DecidePlan,
 ) -> Result<(Option<TransitionResult>, Option<String>), OpsError> {
     // ADR-0033 D5: `denied` は「認めない: …」を答えにして、ワーカーが自分で判断できるようにする。
@@ -232,7 +232,7 @@ fn resume_target(
 
 /// CoS の監査付き決定の後始末（commit 後）。タスクの再開と `note` を返す。
 pub fn finish_decide(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     plan: &DecidePlan,
 ) -> Result<(Option<TransitionResult>, Option<String>), OpsError> {
     resume_target(store, plan)

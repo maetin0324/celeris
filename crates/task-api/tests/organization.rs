@@ -8,7 +8,7 @@ mod common;
 
 use common::*;
 use serde_json::{Value, json};
-use task_core::{GenreSpec, NodeSessionStore, RoleSpec, Status, TaskKind, TaskStore, Tier};
+use task_core::{GenreSpec, RoleSpec, Status, TaskKind, Tier};
 
 fn env_with_token() -> TestEnv {
     TestEnv::with(EnvOptions {

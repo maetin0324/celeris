@@ -55,7 +55,7 @@ pub(super) async fn clear_stale_followups(artifacts_dir: &Path, local: bool) {
 
 /// `Dispatcher::run_holds_lease` と同じ規則（v1・atomic は Task の lease、v2 は running の WU の `lease_run_id`）。
 pub(super) fn store_run_holds_lease(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     run_id: &str,
 ) -> Result<bool, task_core::StoreError> {
@@ -79,7 +79,7 @@ pub(super) fn store_run_holds_lease(
 /// ADR-0098 D1: run `run_id`（task `task_id`）が返った直後に、その run の成果物ディレクトリの宣言を取り込む。
 /// lease を失った run の宣言は作らない（ファイルは残し、次の run の開始時に消える）。失敗しても run は壊さない。
 pub(super) fn absorb_run_followups(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
     run_id: &str,
     artifacts_dir: &Path,

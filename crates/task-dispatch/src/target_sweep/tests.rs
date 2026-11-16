@@ -457,7 +457,7 @@ fn target_sweep_scratch_cap_preserves_live_owners_and_cargo_locks() {
 
 // ---- ADR 2026-10-10-local-disk-growth-paths D2: 終端の木の repo 直下 target ----
 
-use task_core::{TaskStore, Trigger};
+use task_core::Trigger;
 
 fn gc_task(
     store: &task_core::SqliteStore,

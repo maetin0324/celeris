@@ -29,7 +29,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use task_core::{DaemonInstance, InstanceRole, SharedRole, StoreError, TaskStore};
+use task_core::{DaemonInstance, InstanceRole, SharedRole, SqliteStore, StoreError};
 use time::OffsetDateTime;
 
 /// `release` を書いていないときの既定（作業チェックアウトから直接起こした場合）。
@@ -439,7 +439,7 @@ pub fn stale_but_alive_rows<'a>(
 
 /// 自分以外の、生きている `active` の行（起動時の引き継ぎ要求の対象）。
 fn store_live_actives(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     self_id: &str,
 ) -> Result<Vec<DaemonInstance>, StoreError> {
     Ok(store
@@ -477,7 +477,7 @@ pub enum Step {
 /// `daemon_instances` の自分の行を持ち、毎 tick 役割を決めるもの（ADR-0040 D4）。
 /// `--mode verify` では**作らない**（verify はこの表に触れない）。
 pub struct Supervisor {
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     identity: InstanceIdentity,
     /// API と共有する役割（API はこれを読んで `standby` の 503 を返す）。
     role: SharedRole,
@@ -499,7 +499,7 @@ impl Supervisor {
     /// 行を書かずに `Started::Duplicate` を返す。
     #[allow(clippy::too_many_arguments)]
     pub fn start(
-        store: Arc<dyn TaskStore>,
+        store: Arc<SqliteStore>,
         identity: InstanceIdentity,
         role: SharedRole,
         freshness: Duration,

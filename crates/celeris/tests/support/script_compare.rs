@@ -23,7 +23,7 @@ use task_core::script_compare::{
 };
 use task_core::{
     Budget, Check, Criterion, DaemonMode, Event, RoutingRecord, SqliteStore, Status, Task, TaskId,
-    TaskKind, TaskRouting, TaskStore, Tier, TierSource, WorkerHint, WorkspaceSpec,
+    TaskKind, TaskRouting, Tier, TierSource, WorkerHint, WorkspaceSpec,
 };
 use task_dispatch::Dispatcher;
 use time::OffsetDateTime;

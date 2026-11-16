@@ -126,11 +126,7 @@ pub(super) fn health_items(events: &[Event]) -> Vec<(String, bool, HealthEvidenc
         .collect()
 }
 
-pub(super) fn unit(
-    store: &Arc<dyn TaskStore>,
-    task_id: TaskId,
-    key: &str,
-) -> task_core::WorkUnitRow {
+pub(super) fn unit(store: &Arc<SqliteStore>, task_id: TaskId, key: &str) -> task_core::WorkUnitRow {
     store
         .work_units_for(task_id)
         .unwrap()
@@ -155,7 +151,7 @@ async fn health_enforce_work_unit_check_records_evidence() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     adopt_v2_plan(
@@ -187,7 +183,7 @@ async fn health_enforce_work_unit_check_fail_routes_to_work_unit_repair() {
     init_test_repo(repo.path());
     commit_base_checker(repo.path(), 1);
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     adopt_v2_plan(
@@ -245,7 +241,7 @@ async fn health_enforce_work_unit_check_error_blocks_task() {
     init_test_repo(repo.path());
     commit_base_checker(repo.path(), 2);
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     adopt_v2_plan(
@@ -278,7 +274,7 @@ async fn health_enforce_work_unit_check_error_blocks_task() {
 }
 
 /// 段の統合の試験の土台: 葉の WU 2 件（checks 無し。WU の check は走らない）を 1 段で統合する。
-fn integration_scenario(repo: &Path, store: &Arc<dyn TaskStore>) -> (Task, Arc<ParallelWuAdapter>) {
+fn integration_scenario(repo: &Path, store: &Arc<SqliteStore>) -> (Task, Arc<ParallelWuAdapter>) {
     init_test_repo(repo);
     let task = parallel_task(repo, "true");
     store.insert(&task).unwrap();
@@ -303,7 +299,7 @@ fn integration_scenario(repo: &Path, store: &Arc<dyn TaskStore>) -> (Task, Arc<P
 async fn health_enforce_phase_integration_records_evidence() {
     let repo = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (task, adapter) = integration_scenario(repo.path(), &store);
     let mut d = parallel_dispatcher(store.clone(), adapter, root.path(), 3, 3, 3);
     run_until_idle(&mut d, 800).await;
@@ -338,7 +334,7 @@ async fn health_enforce_phase_integration_records_evidence() {
 async fn health_enforce_phase_integration_fail_schedules_repair() {
     let repo = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (task, adapter) = integration_scenario(repo.path(), &store);
     commit_base_checker(repo.path(), 1);
     let mut d = parallel_dispatcher(store.clone(), adapter, root.path(), 3, 3, 3);
@@ -374,7 +370,7 @@ async fn health_enforce_phase_integration_fail_schedules_repair() {
 async fn health_enforce_integration_repair_reevaluates_new_head() {
     let repo = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (task, adapter) = integration_scenario(repo.path(), &store);
     commit_base_checker(repo.path(), 1);
     let mut d = parallel_dispatcher(store.clone(), adapter, root.path(), 3, 3, 3);
@@ -414,7 +410,7 @@ async fn health_enforce_integration_repair_reevaluates_new_head() {
 async fn health_enforce_phase_integration_unavailable_blocks_task() {
     let repo = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let (task, adapter) = integration_scenario(repo.path(), &store);
     let mut d = dispatcher_without_bundled_checker(store.clone(), adapter, 3);
     d.config.workspace_roots =
@@ -486,7 +482,7 @@ fn configure_failing_bundled_checker() -> (tempfile::TempDir, CheckerId) {
 
 /// 合格の stub を設定しない土台の dispatcher（同梱の検査器は [`configure_failing_bundled_checker`] が設定したもの）。
 pub(super) fn non_celeris_dispatcher(
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     adapter: Arc<dyn WorkerAdapter>,
     root: &Path,
     limit: usize,
@@ -516,7 +512,7 @@ async fn health_enforce_non_celeris_work_unit_check_routes_to_repair() {
     let repo = tempfile::tempdir().unwrap();
     init_non_celeris_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task = parallel_task(repo.path(), "true");
     store.insert(&task).unwrap();
     let mut spec = v2_wu("a", "build", &[]);
@@ -602,7 +598,7 @@ async fn health_enforce_non_celeris_direct_review_routes_to_repair() {
     let repo = tempfile::tempdir().unwrap();
     init_non_celeris_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = super::target_sync::reviewing_task(repo.path(), &store);
     super::target_sync::set_check(&mut task, format!("sh {NON_CELERIS_TEST}"));
     store.insert(&task).unwrap();
@@ -696,7 +692,7 @@ async fn review_repair_not_evaluated_reviewer_does_not_block_a_health_repair() {
     init_test_repo(repo.path());
     commit_base_checker(repo.path(), 1);
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = super::target_sync::reviewing_task(repo.path(), &store);
     super::target_sync::set_check(&mut task, "true".into());
     task.acceptance.push(Criterion {

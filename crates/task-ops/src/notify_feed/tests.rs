@@ -259,7 +259,7 @@ fn notify_feed_observed_release_cron_recovery_and_warning_are_idempotent() {
 
 #[test]
 fn notify_feed_delivery_ready_and_release_creation() {
-    use task_core::{Delivery, DeliveryState, DeliveryStore, ProjectId, RepoId};
+    use task_core::{Delivery, DeliveryState, ProjectId, RepoId};
     let store = SqliteStore::open_in_memory().unwrap();
     let task = task(Status::Done);
     store.insert(&task).unwrap();

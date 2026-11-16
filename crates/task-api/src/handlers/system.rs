@@ -5,7 +5,7 @@ use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::Response;
 use serde::Deserialize;
-use task_core::{Task, TaskStore};
+use task_core::Task;
 use time::OffsetDateTime;
 
 use crate::API_VERSION;

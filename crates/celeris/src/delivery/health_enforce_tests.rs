@@ -119,7 +119,6 @@ fn health_enforce_delivery_base_sha_mismatch_is_rejected() {
 /// 持たない）にしか残らないので、人の承認の verdict が同じ review run にあっても通さない。
 #[test]
 fn health_enforce_delivery_policy_only_is_rejected_without_bound_approval() {
-    use task_core::TaskStore;
     let (store, dir, d) = merge_queued_without_evidence();
     let evidence = health_evidence(
         dir.path(),

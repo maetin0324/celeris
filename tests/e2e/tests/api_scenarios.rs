@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use ring::signature::{Ed25519KeyPair, KeyPair};
 use serde_json::{Value, json};
-use task_core::{ArtifactRef, Event, SCHEMA_VERSION, SqliteStore, Status, Task, TaskId, TaskStore};
+use task_core::{ArtifactRef, Event, SCHEMA_VERSION, SqliteStore, Status, Task, TaskId};
 use task_core::{RunIndexRole, RunIndexStatus, RunRow};
 
 /// worker run の印（`task_worker::db_guard::WORKER_DB_GUARD_ENV`、ADR-0126 A1-1）。

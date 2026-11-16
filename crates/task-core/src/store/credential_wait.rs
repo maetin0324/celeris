@@ -472,7 +472,7 @@ impl SqliteStore {
     }
 }
 
-/// dispatcher・inbox が `dyn TaskStore` 越しに使う credential 待ちの読み書き（実装は `SqliteStore` のみ。
+/// dispatcher・inbox が `SqliteStore` 越しに使う credential 待ちの読み書き（実装は `SqliteStore` のみ。
 /// 遷移の本体は上の inherent method）。
 pub trait CredentialWaitStore: Send + Sync {
     fn credential_wait_enter(

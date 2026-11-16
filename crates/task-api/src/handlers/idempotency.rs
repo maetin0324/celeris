@@ -80,7 +80,7 @@ pub(super) fn existing_task(
     let id = task_id
         .parse()
         .map_err(|_| ApiProblem::internal("bad task id"))?;
-    task_core::TaskStore::get(store, id)
+    task_core::SqliteStore::get(store, id)
         .map_err(store_problem)?
         .ok_or_else(|| ApiProblem::internal("task vanished"))
 }

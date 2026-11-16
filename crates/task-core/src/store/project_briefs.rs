@@ -167,9 +167,9 @@ impl SqliteStore {
 mod tests {
     use time::OffsetDateTime;
 
+    use crate::SqliteStore;
     use crate::org::{Project, ProjectStatus};
     use crate::project_brief::{ProjectBriefInput, WaitingOn, WaitingOnKind};
-    use crate::{SqliteStore, TaskStore};
 
     use super::*;
 

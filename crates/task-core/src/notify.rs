@@ -4,8 +4,7 @@
 //! ここにあるのは型と SQL だけで、**何を知らせるかの判定は celeris（`celeris::notify`）にあり、
 //! 送信（HTTP）もそこにある**。task-core はネットワークに出ない（ADR-0001 D2 / DESIGN 原則 1）。
 //!
-//! `store.rs` は `TaskStore` の supertrait として `NotificationStore` を要求するだけ
-//! （`report.rs` / `approval.rs` と同じ形）。
+//! 表の読み書きは、この module の `impl SqliteStore` の固有 method にある（`report.rs` / `approval.rs` と同じ形）。
 //!
 //! `project_id`（migration 0009。ADR-0037 D6 / GUI 依頼 G13i-P1）: GUI が `milestone_ready` /
 //! `secretary_reply` から案件へリンクを張れるように、判定（`celeris::notify::scan`）が候補を作った
@@ -222,52 +221,6 @@ impl Notification {
     }
 }
 
-/// ADR-0037 D1: `notifications` 表の読み書き。`TaskStore` の supertrait で、実装は `SqliteStore` のみ。
-pub trait NotificationStore: Send + Sync {
-    /// 最後に通知候補の保存を完了した走査の開始時刻。
-    fn notification_scan_at(&self) -> Result<Option<OffsetDateTime>, StoreError>;
-    fn notification_scan_mark(&self, at: OffsetDateTime) -> Result<(), StoreError>;
-
-    /// `(kind, key)` がまだ無ければ pending の行を 1 件作り、その行を返す。既にあれば `None`
-    /// （**判定は tick ごとに何度走ってもよい**: 2 回目以降は何も起こらない）。
-    fn notification_upsert_pending(
-        &self,
-        kind: NotificationKind,
-        key: &str,
-        body: &str,
-        project_id: Option<ProjectId>,
-        at: OffsetDateTime,
-    ) -> Result<Option<Notification>, StoreError>;
-
-    /// 送信の結果を書く。
-    ///
-    /// - `ok = Some(true)`: 送れた（`sent_at = at`、`ok = 1`、`attempts += 1`）。
-    /// - `ok = None`: 失敗したがまだ諦めない（`attempts += 1`、`error` を記録、`ok` は NULL のまま）。
-    /// - `ok = Some(false)`: 諦めた（`ok = 0`、`error` を記録、`attempts` は増やさない）。
-    ///
-    /// 「何回で諦めるか」は呼び出し側（celeris）の方針で、ここは言われたとおりに書くだけ。
-    /// 無い id は `Ok(false)`。
-    fn notification_mark(
-        &self,
-        id: NotificationId,
-        ok: Option<bool>,
-        error: Option<&str>,
-        at: OffsetDateTime,
-    ) -> Result<bool, StoreError>;
-
-    /// 新しい順（`created_at` 降順、同値は id 降順）に最大 `limit` 件（GUI の「直近の送信」）。
-    fn notification_recent(&self, limit: usize) -> Result<Vec<Notification>, StoreError>;
-
-    /// Latest successful outbound send for a kind (`ok = 1` and a non-null `sent_at`).
-    fn notification_last_sent_at(
-        &self,
-        kind: NotificationKind,
-    ) -> Result<Option<OffsetDateTime>, StoreError>;
-
-    /// まだ決着していない行（`ok IS NULL`）を古い順に返す（次に送る対象）。
-    fn notification_pending(&self) -> Result<Vec<Notification>, StoreError>;
-}
-
 const SELECT_NOTIFICATION: &str = "SELECT id, kind, key, body, created_at, sent_at, attempts, ok, error, project_id FROM notifications";
 
 fn row_to_notification(
@@ -323,8 +276,10 @@ fn row_to_notification(
     })())
 }
 
-impl NotificationStore for SqliteStore {
-    fn notification_scan_at(&self) -> Result<Option<OffsetDateTime>, StoreError> {
+// ADR-0037 D1: `notifications` 表の読み書き。
+impl SqliteStore {
+    /// 最後に通知候補の保存を完了した走査の開始時刻。
+    pub fn notification_scan_at(&self) -> Result<Option<OffsetDateTime>, StoreError> {
         let conn = self.lock()?;
         let raw: Option<String> = conn
             .query_row(
@@ -335,16 +290,16 @@ impl NotificationStore for SqliteStore {
             .optional()?;
         raw.map(|s| parse_rfc3339(&s)).transpose()
     }
-
-    fn notification_scan_mark(&self, at: OffsetDateTime) -> Result<(), StoreError> {
+    pub fn notification_scan_mark(&self, at: OffsetDateTime) -> Result<(), StoreError> {
         self.lock()?.execute(
             "INSERT INTO notification_scan_state (id, scanned_at) VALUES (1, ?1) ON CONFLICT(id) DO UPDATE SET scanned_at = excluded.scanned_at WHERE julianday(excluded.scanned_at) >= julianday(scanned_at)",
             params![format_rfc3339(at)?],
         )?;
         Ok(())
     }
-
-    fn notification_upsert_pending(
+    /// `(kind, key)` がまだ無ければ pending の行を 1 件作り、その行を返す。既にあれば `None`
+    /// （**判定は tick ごとに何度走ってもよい**: 2 回目以降は何も起こらない）。
+    pub fn notification_upsert_pending(
         &self,
         kind: NotificationKind,
         key: &str,
@@ -371,8 +326,15 @@ impl NotificationStore for SqliteStore {
             .optional()?;
         row.transpose()
     }
-
-    fn notification_mark(
+    /// 送信の結果を書く。
+    ///
+    /// - `ok = Some(true)`: 送れた（`sent_at = at`、`ok = 1`、`attempts += 1`）。
+    /// - `ok = None`: 失敗したがまだ諦めない（`attempts += 1`、`error` を記録、`ok` は NULL のまま）。
+    /// - `ok = Some(false)`: 諦めた（`ok = 0`、`error` を記録、`attempts` は増やさない）。
+    ///
+    /// 「何回で諦めるか」は呼び出し側（celeris）の方針で、ここは言われたとおりに書くだけ。
+    /// 無い id は `Ok(false)`。
+    pub fn notification_mark(
         &self,
         id: NotificationId,
         ok: Option<bool>,
@@ -397,8 +359,8 @@ impl NotificationStore for SqliteStore {
         };
         Ok(changed > 0)
     }
-
-    fn notification_recent(&self, limit: usize) -> Result<Vec<Notification>, StoreError> {
+    /// 新しい順（`created_at` 降順、同値は id 降順）に最大 `limit` 件（GUI の「直近の送信」）。
+    pub fn notification_recent(&self, limit: usize) -> Result<Vec<Notification>, StoreError> {
         let conn = self.lock()?;
         let mut stmt = conn.prepare(&format!(
             "{SELECT_NOTIFICATION} ORDER BY created_at DESC, id DESC LIMIT ?1"
@@ -413,8 +375,8 @@ impl NotificationStore for SqliteStore {
         }
         Ok(out)
     }
-
-    fn notification_last_sent_at(
+    /// Latest successful outbound send for a kind (`ok = 1` and a non-null `sent_at`).
+    pub fn notification_last_sent_at(
         &self,
         kind: NotificationKind,
     ) -> Result<Option<OffsetDateTime>, StoreError> {
@@ -425,8 +387,8 @@ impl NotificationStore for SqliteStore {
         ).optional()?;
         raw.map(|value| parse_rfc3339(&value)).transpose()
     }
-
-    fn notification_pending(&self) -> Result<Vec<Notification>, StoreError> {
+    /// まだ決着していない行（`ok IS NULL`）を古い順に返す（次に送る対象）。
+    pub fn notification_pending(&self) -> Result<Vec<Notification>, StoreError> {
         let conn = self.lock()?;
         let mut stmt = conn.prepare(&format!(
             "{SELECT_NOTIFICATION} WHERE ok IS NULL ORDER BY created_at ASC, id ASC"

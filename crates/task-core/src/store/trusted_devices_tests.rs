@@ -3,7 +3,7 @@
 use sha2::{Digest, Sha256};
 
 use crate::model::Event;
-use crate::store::{SqliteStore, TaskStore};
+use crate::store::SqliteStore;
 use crate::trusted_device::{
     NewTrustedDevice, TRUSTED_DEVICE_LIMIT, TRUSTED_DEVICE_TTL_SECS, TrustedDeviceMethod,
     TrustedDeviceRejectReason, TrustedDeviceRevokeReason, TrustedDeviceVerdict,

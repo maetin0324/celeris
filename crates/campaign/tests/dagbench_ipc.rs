@@ -21,7 +21,7 @@ use celeris_campaign::{
     },
 };
 use serde_json::Value;
-use task_core::TaskStore;
+use task_core::SqliteStore;
 
 fn cfg(faults: Vec<FaultSpec>) -> ExtConfig {
     ExtConfig {
@@ -139,7 +139,7 @@ fn celeris_side_runs_over_ipc() {
     let out = env.dir.path().join("dagbench");
     std::fs::create_dir_all(&out).unwrap();
     let paths = Paths::under(&env.db_path, &out);
-    let store: Arc<dyn TaskStore> = Arc::new(task_core::SqliteStore::open(&env.db_path).unwrap());
+    let store: Arc<SqliteStore> = Arc::new(task_core::SqliteStore::open(&env.db_path).unwrap());
     let sd = sock_dir();
     let sock = sd.path().join("e.sock");
     let slots = spec.scenario.resources.external_job_slots;
@@ -446,7 +446,7 @@ fn dagbench_notice_celeris_side_resumes_by_push_with_polling_disabled() {
     let out = env.dir.path().join("dagbench");
     std::fs::create_dir_all(&out).unwrap();
     let paths = Paths::under(&env.db_path, &out);
-    let store: Arc<dyn TaskStore> = Arc::new(task_core::SqliteStore::open(&env.db_path).unwrap());
+    let store: Arc<SqliteStore> = Arc::new(task_core::SqliteStore::open(&env.db_path).unwrap());
     let sd = sock_dir();
     let sock = sd.path().join("e.sock");
     let nl = out.join("notice.jsonl");

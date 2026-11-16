@@ -132,7 +132,7 @@ impl ControlGate for InMemoryGate {
 /// ADR-0114 D2: store の control 状態を正とする gate（task-api の `agent/begin`・`agent/end` と同じ op）。
 /// store の読み書きに失敗したら操作を出さない側に倒す。
 pub struct StoreGate {
-    store: Arc<dyn task_core::browser_wait::BrowserWaitStore + Send + Sync>,
+    store: Arc<task_core::SqliteStore>,
     task_id: String,
     run_id: String,
     session_id: String,
@@ -140,7 +140,7 @@ pub struct StoreGate {
 
 impl StoreGate {
     pub fn new(
-        store: Arc<dyn task_core::browser_wait::BrowserWaitStore + Send + Sync>,
+        store: Arc<task_core::SqliteStore>,
         task_id: &str,
         run_id: &str,
         session_id: &str,

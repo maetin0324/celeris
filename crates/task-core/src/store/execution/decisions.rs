@@ -6,7 +6,10 @@ use crate::model::{Event, TaskId};
 use crate::store::{SqliteStore, StoreError};
 
 impl SqliteStore {
-    pub(in crate::store) fn decisions_list_impl(
+    /// ADR-0079 D7（Phase R1a / migration 0031）: 決定の要求の行（`created_at` 昇順、同順位は id）。
+    /// `root_id` を渡せばその木だけ。行は `Event::DecisionRequested` / `DecisionAnswered` /
+    /// `DecisionWithdrawn` の追記と同じトランザクションで store が書く（派生）。
+    pub fn decisions_list(
         &self,
         root_id: Option<TaskId>,
     ) -> Result<Vec<crate::decision::DecisionRow>, StoreError> {
@@ -40,14 +43,17 @@ impl SqliteStore {
         })
     }
 
-    pub(in crate::store) fn decision_get_impl(
+    /// ADR-0079 D7: 1 件（無ければ `None`）。
+    pub fn decision_get(
         &self,
         id: &str,
     ) -> Result<Option<crate::decision::DecisionRow>, StoreError> {
         self.with_read_conn(|conn| Self::decision_get_tx(conn, id))
     }
 
-    pub(in crate::store) fn decisions_replace_impl(
+    /// ADR-0079 D15: `decisions` の全行を渡した集合でまるごと置き換える（`events` は変えない）。
+    /// replay の再構築（`task_ops::replay::rebuild_decisions`）を書き戻すのに使う。
+    pub fn decisions_replace(
         &self,
         rows: Vec<crate::decision::DecisionRow>,
     ) -> Result<(), StoreError> {
@@ -61,7 +67,11 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub(in crate::store) fn decision_resolve_apply_impl(
+    /// ADR-0079 D7（Phase R3a）: 決定への回答・取り下げ・revise の 1 トランザクション。`decisions` の行
+    /// `decision_id` の状態が今も `expect` であることを同じトランザクションで確かめ（違えば何も書かず
+    /// `Ok(false)` = API の 409）、`task_id`（決定を出した節点）の WU の行 `updated` を書き換え、`events`
+    /// （`DecisionAnswered` / `DecisionWithdrawn`・`WorkUnitTransitioned` など）を積む。
+    pub fn decision_resolve_apply(
         &self,
         task_id: TaskId,
         decision_id: &str,
@@ -79,7 +89,7 @@ impl SqliteStore {
         Ok(applied)
     }
 
-    /// `decision_resolve_apply_impl` inside a caller's transaction (ADR 2026-10-05 D3). `false`
+    /// `decision_resolve_apply` inside a caller's transaction (ADR 2026-10-05 D3). `false`
     /// when the decision is no longer in `expect`; nothing is written then.
     pub fn decision_resolve_apply_tx(
         tx: &rusqlite::Connection,

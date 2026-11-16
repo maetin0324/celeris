@@ -1,8 +1,8 @@
 //! Fixed interleavings at the delivery snapshot and ancestry result boundaries.
 use super::*;
 use task_core::{
-    Budget, Check, Criterion, Delivery, DeliveryState, DeliveryStore, Event, ProjectId,
-    SqliteStore, Status, Task, TaskKind, Tier, WorkspaceSpec,
+    Budget, Check, Criterion, Delivery, DeliveryState, Event, ProjectId, SqliteStore, Status, Task,
+    TaskKind, Tier, WorkspaceSpec,
 };
 
 struct Fixture {

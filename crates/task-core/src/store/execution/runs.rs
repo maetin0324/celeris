@@ -101,12 +101,17 @@ impl SqliteStore {
         })())
     }
 
-    pub(in crate::store) fn run_index_start_impl(&self, row: RunRow) -> Result<(), StoreError> {
+    /// D5: run 開始時に `runs` の行を 1 件作る（`status = running`）。`Event::WorkerStarted` と同じ
+    /// トランザクションでは**ない**（既存コードの慣習に合わせ、`append_event` の直後に呼ぶ。監査上の
+    /// 実害は無い: 再起動時の照合は `work_units.status` を正とする）。
+    pub fn run_index_start(&self, row: RunRow) -> Result<(), StoreError> {
         let conn = self.lock()?;
         Self::insert_run_row_tx(&conn, &row)
     }
 
-    pub(in crate::store) fn run_record_selection_impl(
+    /// ADR 2026-10-11 llm-source-harness-selection: dispatcher が選んだ harness・source・model・account と
+    /// 選択の versioned metadata を run の行に書く。行が無ければ `Ok(false)`。
+    pub fn run_record_selection(
         &self,
         run_id: &str,
         selection: &crate::llm_route::RunSelection,
@@ -128,7 +133,8 @@ impl SqliteStore {
         Ok(n > 0)
     }
 
-    pub(in crate::store) fn run_selections_for_task_impl(
+    /// Persisted complete route selections for a task, keyed by run id. Legacy partial rows are omitted.
+    pub fn run_selections_for_task(
         &self,
         task_id: TaskId,
     ) -> Result<std::collections::HashMap<String, crate::llm_route::RunSelection>, StoreError> {
@@ -171,7 +177,9 @@ impl SqliteStore {
         })
     }
 
-    pub(in crate::store) fn run_index_finish_impl(
+    /// D5: run 終了時に `runs` の行を更新する。無ければ `Ok(false)`。
+    #[allow(clippy::too_many_arguments)]
+    pub fn run_index_finish(
         &self,
         run_id: &str,
         status: RunIndexStatus,
@@ -196,7 +204,10 @@ impl SqliteStore {
         Ok(n > 0)
     }
 
-    pub(in crate::store) fn run_index_progress_usage_impl(
+    /// ADR 2026-10-20-mlsys-main2-fixes D1-3: run の途中の累積 usage で `runs.usage_json` を上書きする
+    /// （`status = 'running'` の行だけ。events には書かない。確定値は `WorkerFinished.usage`）。
+    /// 書いた行が無ければ `Ok(false)`。
+    pub fn run_index_progress_usage(
         &self,
         run_id: &str,
         usage: &crate::model::Usage,
@@ -209,10 +220,7 @@ impl SqliteStore {
         Ok(n > 0)
     }
 
-    pub(in crate::store) fn run_index_get_impl(
-        &self,
-        run_id: &str,
-    ) -> Result<Option<RunRow>, StoreError> {
+    pub fn run_index_get(&self, run_id: &str) -> Result<Option<RunRow>, StoreError> {
         self.with_read_conn(|conn| {
             conn.query_row(
                 "SELECT run_id, task_id, work_unit_id, role, seq, status, adapter, model, \
@@ -226,10 +234,8 @@ impl SqliteStore {
         })
     }
 
-    pub(in crate::store) fn runs_for_task_impl(
-        &self,
-        task_id: TaskId,
-    ) -> Result<Vec<RunRow>, StoreError> {
+    /// そのタスクの run（`started_at` 昇順）。
+    pub fn runs_for_task(&self, task_id: TaskId) -> Result<Vec<RunRow>, StoreError> {
         self.with_read_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT run_id, task_id, work_unit_id, role, seq, status, adapter, model, \
@@ -245,7 +251,9 @@ impl SqliteStore {
         })
     }
 
-    pub(in crate::store) fn runs_running_impl(&self) -> Result<Vec<RunRow>, StoreError> {
+    /// `runs` 索引で `status = 'running'` の行すべて（`started_at` 昇順。読むだけ）。dispatcher の
+    /// 持ち主の居ない run の照合（lease を持たない reviewer run 等の取り残し）が使う。
+    pub fn runs_running(&self) -> Result<Vec<RunRow>, StoreError> {
         self.with_read_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT run_id, task_id, work_unit_id, role, seq, status, adapter, model, \
@@ -261,9 +269,11 @@ impl SqliteStore {
         })
     }
 
-    pub(in crate::store) fn close_runs_of_terminal_tasks_impl(
-        &self,
-    ) -> Result<Vec<(TaskId, String)>, StoreError> {
+    /// ADR-0079 付記「R6-1」D4: task が終端（done / failed / cancelled）なのに `runs` 索引で `running` のままの行を、
+    /// task ごとに 1 トランザクションで閉じる（`WorkerFinished{end: Cancelled, outcome: "interrupted: …"}` を積む）。
+    /// 終端への遷移は同じトランザクションで閉じるので、ここで見つかるのは R6-1 より前に残った行だけ。閉じた
+    /// `(task, run_id)` を返す（dispatcher の起動時と定期の照合が 1 行ずつログに残す）。
+    pub fn close_runs_of_terminal_tasks(&self) -> Result<Vec<(TaskId, String)>, StoreError> {
         let mut conn = self.lock()?;
         let stale: Vec<(String, String)> = {
             let mut stmt = conn.prepare(
@@ -291,10 +301,8 @@ impl SqliteStore {
         Ok(closed)
     }
 
-    pub(in crate::store) fn runs_for_work_unit_impl(
-        &self,
-        work_unit_id: &str,
-    ) -> Result<Vec<RunRow>, StoreError> {
+    /// その WorkUnit の run（`started_at` 昇順）。
+    pub fn runs_for_work_unit(&self, work_unit_id: &str) -> Result<Vec<RunRow>, StoreError> {
         self.with_read_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT run_id, task_id, work_unit_id, role, seq, status, adapter, model, \
@@ -310,7 +318,24 @@ impl SqliteStore {
         })
     }
 
-    pub(in crate::store) fn execution_metrics_task_rows_impl(
+    /// `updated_at >= since` のタスク別実行集計を派生索引から 1 回の SQL で読む。
+    ///
+    /// | API の欄 | events 版 | 索引版 |
+    /// |---|---|---|
+    /// | tasks / done / failed / other | Task と最終 status | tasks.status（API が集約） |
+    /// | completion_rate | done / (done + failed) | 同じ計算（API） |
+    /// | continuations | Transitioned `continue` | work_units.continuations の和 |
+    /// | max_turn_failures | WorkerFinished `BudgetExhausted(Turns)` | runs.status には種類が無く、最新 run の events だけでは過去 run 分も復元できない |
+    /// | repairs | repair WorkUnit の key 数 | work_units.kind = repair の行数 |
+    /// | replans | supersedes のある ExecutionPlanned 数 | execution_plans.version > 1 の行数 |
+    /// | gate_mode / genre / assignee | Task.routing / Task の欄 | tasks.json.routing / 列 |
+    /// | lane | routing_audit の最後の lane | runs に lane 列が無く、最新 run の events だけでは過去の監査結果を保証できない |
+    ///
+    /// Atomic task には work_units 行が無く、その `continue` と `worker_error` retry は索引から
+    /// 復元できない。古い run（E2 より前）も runs に埋め戻していない。API が補完する場合は
+    /// 該当タスクに限って events を読む必要があり、全タスクの events 走査へ戻さないこと。
+    /// `budget_exhausted_runs` は種類を問わない数で、turns の数として扱ってはならない。
+    pub fn execution_metrics_task_rows(
         &self,
         since: Option<OffsetDateTime>,
     ) -> Result<Vec<ExecutionMetricsTaskRow>, StoreError> {
@@ -413,11 +438,8 @@ impl SqliteStore {
         })
     }
 
-    pub(in crate::store) fn runs_replace_impl(
-        &self,
-        task_id: TaskId,
-        rows: Vec<RunRow>,
-    ) -> Result<(), StoreError> {
+    /// 同上。`task_id` の `runs` 行を渡した集合でまるごと置き換える。
+    pub fn runs_replace(&self, task_id: TaskId, rows: Vec<RunRow>) -> Result<(), StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute(

@@ -8,12 +8,13 @@
 //! `CheckpointSaved`）だけから再構築できる（D5「events が正本、3 つの表は派生の索引」）。
 
 use std::collections::{BTreeMap, BTreeSet};
+use task_core::TaskQuery;
 
 use schemars::JsonSchema;
 use serde::Serialize;
 use task_core::{
     Event, EventRow, ExecutionLimits, ExecutionPlanRow, ExecutionPlanSpec, PlanStatus,
-    RunIndexRole, RunIndexStatus, RunRole, RunRow, Status, Task, TaskId, TaskStore,
+    RunIndexRole, RunIndexStatus, RunRole, RunRow, SqliteStore, Status, Task, TaskId,
     WorkUnitBlockedReason, WorkUnitRow, WorkUnitStatus,
 };
 
@@ -101,7 +102,7 @@ fn diff_task(task: &Task, events: &[(u64, Event)]) -> Vec<ReplayMismatch> {
 }
 
 /// `store` の全タスクについて `events` から再構築した状態と `tasks` テーブルを突き合わせる。
-pub fn replay(store: &dyn TaskStore) -> Result<ReplayReport, OpsError> {
+pub fn replay(store: &SqliteStore) -> Result<ReplayReport, OpsError> {
     // tasks と events は同じスナップショットで読む（daemon 稼働中でも偽の不一致を出さない）。
     let tasks = store.tasks_with_events()?;
     let mut all_mismatches = Vec::new();
@@ -1221,7 +1222,7 @@ pub fn diff_decisions(
 /// ADR-0079 D15: `celerisctl replay --check` / `--apply` の `decisions` の分。食い違いがあり `apply` なら
 /// 表を再構築の結果でまるごと置き換える（`events` は変えない）。戻り値は `(食い違い, 書き直したか)`。
 pub fn check_and_apply_decisions(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     apply: bool,
 ) -> Result<(Vec<DecisionMismatch>, bool), OpsError> {
     let tasks = store.list(None)?;
@@ -1256,7 +1257,7 @@ pub type ExecutionCheckReport = (
 /// `execution_plans`/`work_units`/`runs` は互いに `plan_id`/`work_unit_id` で参照し合うため、
 /// 一部だけ書き直すと整合が崩れる）。
 pub fn check_and_apply_execution(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     apply: bool,
 ) -> Result<ExecutionCheckReport, OpsError> {
     let tasks = store.list(None)?;

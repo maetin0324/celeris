@@ -30,7 +30,7 @@ use task_core::required_checks::health::{
 };
 use task_core::{
     CronJob, CronJobId, GenreSpec, ProjectId, ProjectRepo, RepoId, RepoKind, RoleSpec, SqliteStore,
-    TaskStore, WorkspaceSpec,
+    WorkspaceSpec,
 };
 use task_ops::cron_jobs::{CronFireContext, CronInputPost};
 use task_ops::health_debt::{

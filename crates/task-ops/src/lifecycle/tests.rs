@@ -46,7 +46,7 @@ fn store() -> SqliteStore {
     SqliteStore::open_in_memory().unwrap_or_else(|e| panic!("open: {e}"))
 }
 
-fn a_project(store: &dyn TaskStore, status: ProjectStatus) -> Project {
+fn a_project(store: &SqliteStore, status: ProjectStatus) -> Project {
     let now = OffsetDateTime::now_utc();
     let project = Project {
         auto_advance: false,
@@ -68,7 +68,7 @@ fn a_project(store: &dyn TaskStore, status: ProjectStatus) -> Project {
 }
 
 fn a_task(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     project: Option<ProjectId>,
     milestone: Option<MilestoneId>,
     status: Status,
@@ -337,7 +337,7 @@ fn ready_ids(s: &SqliteStore) -> Vec<task_core::TaskId> {
         .collect()
 }
 
-fn rewrite(store: &dyn TaskStore, task: &Task, field: &str) -> Task {
+fn rewrite(store: &SqliteStore, task: &Task, field: &str) -> Task {
     store
         .update_task(
             task,
@@ -349,7 +349,7 @@ fn rewrite(store: &dyn TaskStore, task: &Task, field: &str) -> Task {
         .unwrap_or_else(|e| panic!("{e}"))
 }
 
-fn child_of(store: &dyn TaskStore, parent: &Task, status: Status) -> Task {
+fn child_of(store: &SqliteStore, parent: &Task, status: Status) -> Task {
     let mut child = a_task(store, parent.project_id, None, status);
     child.parent_id = Some(parent.id);
     rewrite(store, &child, "parent_id")

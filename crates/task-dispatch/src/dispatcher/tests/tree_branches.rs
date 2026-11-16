@@ -179,7 +179,7 @@ fn git_root(repo: &std::path::Path) -> Task {
 }
 
 fn git_tree_dispatcher(
-    store: &Arc<dyn TaskStore>,
+    store: &Arc<SqliteStore>,
     adapter: Arc<dyn WorkerAdapter>,
     workspace_root: &std::path::Path,
 ) -> Dispatcher {
@@ -198,7 +198,7 @@ fn unit<'a>(units: &'a [task_core::WorkUnitRow], key: &str) -> &'a task_core::Wo
         .unwrap_or_else(|| panic!("no unit {key}: {units:?}"))
 }
 
-fn child_of(store: &Arc<dyn TaskStore>, parent: TaskId, key: &str) -> Task {
+fn child_of(store: &Arc<SqliteStore>, parent: TaskId, key: &str) -> Task {
     let units = store.work_units_for(parent).unwrap();
     let id: TaskId = unit(&units, key)
         .child_task_id
@@ -210,7 +210,7 @@ fn child_of(store: &Arc<dyn TaskStore>, parent: TaskId, key: &str) -> Task {
 }
 
 /// `PhaseIntegrated{phase}` の `merged`（`(key, commit, skipped)`）。
-fn merged_of(store: &Arc<dyn TaskStore>, task: TaskId, phase: &str) -> Vec<(String, String, bool)> {
+fn merged_of(store: &Arc<SqliteStore>, task: TaskId, phase: &str) -> Vec<(String, String, bool)> {
     store
         .events_for(task)
         .unwrap()
@@ -239,7 +239,7 @@ fn branch_has(repo: &std::path::Path, branch: &str, path: &str) -> bool {
     git_ok(repo, &["cat-file", "-e", &format!("{branch}:{path}")])
 }
 
-fn assert_replay_is_clean(store: &Arc<dyn TaskStore>) {
+fn assert_replay_is_clean(store: &Arc<SqliteStore>) {
     let report = task_ops::replay::replay(store.as_ref()).unwrap();
     assert!(report.mismatches.is_empty(), "{:?}", report.mismatches);
     let (wu, _runs, plans, _) =
@@ -257,7 +257,7 @@ async fn integration_merges_child_task_branch() {
     let repo = tempfile::tempdir().unwrap();
     let main_sha = init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = git_root(repo.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -393,7 +393,7 @@ async fn same_stage_dependency_on_child_bases_on_child_head() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = git_root(repo.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -438,7 +438,7 @@ async fn child_review_ignores_main_moving() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = git_root(repo.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -517,7 +517,7 @@ async fn grandchild_integrates_into_child_which_integrates_into_root() {
     let repo = tempfile::tempdir().unwrap();
     let main_sha = init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let root = git_root(repo.path());
     let root_id = root.id;
     store.create_task(&root, vec![]).unwrap();
@@ -657,7 +657,7 @@ fn worktree_base_of_a_tree_child_is_the_parent_base() {
     let repo = tempfile::tempdir().unwrap();
     let main_sha = init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let adapter = Arc::new(GitTreeAdapter::new(Vec::new()));
     let d = git_tree_dispatcher(&store, adapter, ws.path());
     let root = git_root(repo.path());
@@ -719,7 +719,7 @@ async fn adopted_done_task_already_in_base_is_skipped_by_integration() {
     let repo = tempfile::tempdir().unwrap();
     let main_sha = init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let now = OffsetDateTime::now_utc();
     let project = task_core::Project {
         auto_advance: false,
@@ -858,7 +858,7 @@ async fn an_adopt_unit_waiting_for_its_task_never_spawns_a_new_child() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let now = OffsetDateTime::now_utc();
     let project = task_core::Project {
         auto_advance: false,
@@ -945,7 +945,7 @@ async fn merge_candidate_moved_child_branch_is_rereviewed_before_integration() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let ws = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut root = git_root(repo.path());
     // 登録済みのリポジトリ（RepoId）が無いと review は candidate を記録しない（移行前の扱い）。
     let (project, repos) = project_with_repos(&store, &[("code", repo.path(), RepoKind::Git)]);

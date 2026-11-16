@@ -107,7 +107,7 @@ impl WorkerAdapter for TokenScriptAdapter {
 }
 
 /// implement WU 1 枚だけの計画を採用した task。
-fn implement_only_task(dir: &std::path::Path, store: &Arc<dyn TaskStore>) -> TaskId {
+fn implement_only_task(dir: &std::path::Path, store: &Arc<SqliteStore>) -> TaskId {
     let task = new_task(
         dir,
         Check::Command {
@@ -144,7 +144,7 @@ fn implement_only_task(dir: &std::path::Path, store: &Arc<dyn TaskStore>) -> Tas
 
 async fn run_variant(variant: Variant) -> AbMetric {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let task_id = implement_only_task(dir.path(), &store);
     let adapter = Arc::new(TokenScriptAdapter::new(vec![
         Terminal::BudgetExhausted {

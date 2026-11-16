@@ -8,7 +8,7 @@ use crate::common;
 use common::cos_ops::{OPS, cos_bearer, db, op_body, run_domain, run_external};
 use common::*;
 use serde_json::{Value, json};
-use task_core::ModelCatalogStore;
+
 use task_core::model_catalog::{CatalogSource, DiscoveredModel};
 
 fn rejected_count(env: &TestEnv, thread: &str) -> i64 {
@@ -263,7 +263,6 @@ async fn cos_ops_admin_config_org_and_skills_are_audited() {
 
 #[tokio::test]
 async fn cos_ops_admin_config_repos_and_cluster_settings_are_audited() {
-    use task_core::TaskStore;
     let env = admin_env();
     let app = env.router();
     let created = send(

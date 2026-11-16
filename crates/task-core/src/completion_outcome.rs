@@ -74,7 +74,7 @@ use crate::route_select::{
     BalanceOutcome, BalanceTrip, evaluate_balance_guardrail, wilson_interval,
 };
 use crate::routing_evidence::{EvidenceKey, EvidenceRow};
-use crate::store::{StoreError, TaskStore};
+use crate::store::{SqliteStore, StoreError};
 
 /// 重み `1 / propensity` の上限（探索の稀な選択が根拠表を支配しないように）。
 pub const MAX_WEIGHT: f64 = 20.0;
@@ -176,7 +176,7 @@ pub fn evidence_rows(outcomes: &[CompletionOutcome], version: &str) -> Vec<Evide
 }
 
 /// 本番の完了単位から根拠表の新しい版を書く（daemon の定期処理）。書いた行数。葉の単位が無ければ書かない。
-pub fn refresh_routing_evidence(store: &dyn TaskStore, now: &str) -> Result<usize, StoreError> {
+pub fn refresh_routing_evidence(store: &SqliteStore, now: &str) -> Result<usize, StoreError> {
     let outcomes = store.completion_outcomes_list(true, EVIDENCE_WINDOW)?;
     let version = format!("{EVIDENCE_VERSION_PREFIX}{now}");
     let rows = evidence_rows(&outcomes, &version);
@@ -190,7 +190,7 @@ pub fn refresh_routing_evidence(store: &dyn TaskStore, now: &str) -> Result<usiz
 /// 有効な各クラスの guardrail を判定し、止める条件に当たったクラスを `harness_balance_trips` に記録する。
 /// 返すのは今回止めたクラスと判定の数値。既に止まっているクラスは判定しない。
 pub fn evaluate_harness_balance(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     classes: &std::collections::BTreeSet<String>,
     window: u64,
     guard_min: u32,

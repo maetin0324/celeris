@@ -65,8 +65,7 @@ fn cut(text: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use task_core::{
-        Project, ProjectBrief, ProjectBriefInput, ProjectStatus, TaskStore, WaitingOn,
-        WaitingOnKind,
+        Project, ProjectBrief, ProjectBriefInput, ProjectStatus, WaitingOn, WaitingOnKind,
     };
     use time::OffsetDateTime;
 

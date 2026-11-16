@@ -733,7 +733,7 @@ Reviewer（決定的コード。LLM 呼び出しはここには書かない）�
 task.acceptance.len()`。受け入れ条件の無い Plan〈R6 で撤去した `celerisctl plan` が作った行〉は常に `criterion 0`）、
 次回の `context.prior_review[criterion_idx].reason` に検証エラー文言（例:
 `tasks[2].depends_on[0] = 7 is out of range (0..3)`）が載ってリトライされる（`max_retries` 内）。全 pass なら子タスクの挿入と親のトランザクションが原子的に行われる
-（`TaskStore::complete_plan`。ADR-0007 D3）。
+（`SqliteStore::complete_plan`。ADR-0007 D3）。
 
 ### 10.2 `Review` run — `artifacts/review.json`
 

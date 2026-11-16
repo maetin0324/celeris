@@ -1,5 +1,5 @@
 use super::triage::CosTriageSource;
-use crate::notify::NotificationStore;
+
 use crate::store::SqliteStore;
 use rusqlite::params;
 use time::OffsetDateTime;
@@ -437,7 +437,7 @@ fn cos_chat_triage_resolve_stale_does_not_insert() {
 #[test]
 fn cos_chat_triage_items_and_escalations_follow_the_root_project() {
     use crate::Status;
-    use crate::TaskStore;
+
     use crate::store::tests::sample_task;
     let s = SqliteStore::open_in_memory().expect("store");
     let project = crate::ProjectId::new();

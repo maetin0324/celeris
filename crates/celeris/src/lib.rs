@@ -33,7 +33,7 @@ use std::path::Path;
 use std::sync::Arc;
 use task_api::ApiError;
 
-use task_core::{DaemonMode, SharedRole, StoreError, TaskStore};
+use task_core::{DaemonMode, SharedRole, SqliteStore, StoreError};
 use task_dispatch::DispatchError;
 use time::OffsetDateTime;
 
@@ -61,10 +61,7 @@ pub use instance::InstanceIdentity;
 
 /// ADR 2026-10-11 D6: one pass of the daemon's stranded-branch sweep (the same records the periodic
 /// job builds from the store and the project repositories). Returns the number of changed rows.
-pub fn sweep_stranded_branches(
-    store: &dyn TaskStore,
-    now: OffsetDateTime,
-) -> Result<usize, String> {
+pub fn sweep_stranded_branches(store: &SqliteStore, now: OffsetDateTime) -> Result<usize, String> {
     daemon::stranded_sweep::run(store, now)
 }
 
@@ -92,7 +89,7 @@ pub enum DaemonError {
 /// Register this daemon instance, then recover only runtimes owned by dead or stale instances.
 /// This is the startup path used by `run`, before the dispatcher's first tick.
 pub fn start_instance(
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     identity: InstanceIdentity,
     role: SharedRole,
     config: &Config,

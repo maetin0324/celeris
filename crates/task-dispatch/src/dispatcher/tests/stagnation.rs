@@ -29,7 +29,7 @@ async fn release_unpromoted_appears_at_threshold_once_and_closes_on_promotion() 
         serde_json::json!({"ok": true, "at": at}),
     );
 
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let adapter = Arc::new(InstantAdapter {
         terminal: Terminal::Done {
             summary: "ok".into(),

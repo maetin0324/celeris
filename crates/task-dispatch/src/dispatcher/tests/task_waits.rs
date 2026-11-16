@@ -55,7 +55,7 @@ fn snapshot_wait(
 #[tokio::test]
 async fn task_wait_full_capacity_and_unroutable_skips_are_in_the_snapshot() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut no_route = true_task(dir.path());
     no_route.priority = 10;
     // 設定に無いクラスタは route 選択より前に `Unroutable` になる（未宣言の harness は route 拒否で、wait にならない）。
@@ -109,7 +109,7 @@ async fn task_wait_full_capacity_and_unroutable_skips_are_in_the_snapshot() {
 async fn task_wait_depends_on_and_paused_ancestor_are_not_dispatched() {
     let dir = tempfile::tempdir().unwrap();
     let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let store: Arc<SqliteStore> = sqlite.clone();
     let mut paused_parent = true_task(dir.path());
     paused_parent.status = Status::Running;
     paused_parent.paused_at = Some(OffsetDateTime::now_utc());
@@ -151,7 +151,7 @@ async fn task_wait_depends_on_and_paused_ancestor_are_not_dispatched() {
 #[tokio::test]
 async fn task_wait_parent_waiting_on_child_uses_the_shared_resolution() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let parent = true_task(dir.path());
     store.insert(&parent).unwrap();
     let mut child = true_task(dir.path());
@@ -231,7 +231,7 @@ type GateCase<'a> = (
 #[tokio::test]
 async fn task_wait_stage_gate_hold_iff_waits() {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let d = dispatcher(store, slow_adapter(), 1);
     let blocked = |reason: &str| Event::Transitioned {
         from: Status::Running,

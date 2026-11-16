@@ -9,7 +9,7 @@
 use std::time::Duration;
 
 use task_core::completion_outcome::{evaluate_harness_balance, refresh_routing_evidence};
-use task_core::{NoticeEvent, NoticeKind, NoticeRecordOutcome, TaskStore};
+use task_core::{NoticeEvent, NoticeKind, NoticeRecordOutcome, SqliteStore};
 use task_dispatch::Dispatcher;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -37,7 +37,7 @@ pub(crate) struct GuardReport {
 
 /// 切替の guardrail を 1 回判定する。止めたクラスは受信箱に知らせる（同じクラスは 1 回）。
 pub(crate) fn guard_tick(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     registry: &task_core::llm_route::Registry,
     now: OffsetDateTime,
 ) -> Result<GuardReport, TickError> {
@@ -79,10 +79,7 @@ pub(crate) fn guard_tick(
 }
 
 /// 根拠表の更新を 1 回行う。書いた行数。
-pub(crate) fn evidence_tick(
-    store: &dyn TaskStore,
-    now: OffsetDateTime,
-) -> Result<usize, TickError> {
+pub(crate) fn evidence_tick(store: &SqliteStore, now: OffsetDateTime) -> Result<usize, TickError> {
     Ok(refresh_routing_evidence(store, &now.format(&Rfc3339)?)?)
 }
 

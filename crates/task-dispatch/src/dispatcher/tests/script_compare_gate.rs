@@ -123,7 +123,7 @@ async fn run(
 ) -> Out {
     let ws = tempfile::tempdir().unwrap();
     let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let store: Arc<SqliteStore> = sqlite.clone();
     let generation = enter(&sqlite, setup);
     let mut task = gate_task(ws.path());
     while !pick(&generation, &task) {
@@ -461,7 +461,7 @@ async fn script_compare_gate_oversized_text_does_not_reach_ts() {
 async fn script_compare_gate_switch_back_to_rust_stops_calling_ts() {
     let ws = tempfile::tempdir().unwrap();
     let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let store: Arc<SqliteStore> = sqlite.clone();
     let generation = enter(&sqlite, Setup::Ts);
     let script = FakeScript::new(Behavior::Echo);
     let mut d = dispatcher(store.clone(), question_adapter(), 4);

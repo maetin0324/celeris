@@ -810,7 +810,9 @@ fn spawn_account_limit_double(
                 } else {
                     task_core::SqliteStore::open(&db_path)
                         .and_then(|store| {
-                            task_core::TaskStore::set_account_limit(&store, &adapter, &id, max_runs)
+                            task_core::SqliteStore::set_account_limit(
+                                &store, &adapter, &id, max_runs,
+                            )
                         })
                         .map_err(|e| AccountAdminError::Unavailable(e.to_string()))
                 };

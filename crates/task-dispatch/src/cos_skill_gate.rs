@@ -7,7 +7,8 @@
 
 use std::path::Path;
 
-use task_core::feed::{NoticeEvent, NoticeKind, NoticeStore};
+use task_core::SqliteStore;
+use task_core::feed::{NoticeEvent, NoticeKind};
 use task_ops::cos_skill_gate::{SkillDrift, check};
 use time::OffsetDateTime;
 
@@ -22,7 +23,7 @@ impl SkillGate {
     /// `true` when CoS runs may start. `kb_root` is `[knowledge] root`.
     pub(crate) fn ready(
         &mut self,
-        store: &dyn NoticeStore,
+        store: &SqliteStore,
         kb_root: &Path,
         (policy_skill, policy_version): (&str, &str),
         now: OffsetDateTime,
@@ -44,7 +45,7 @@ impl SkillGate {
     }
 }
 
-fn record_notice(store: &dyn NoticeStore, drift: &SkillDrift, now: OffsetDateTime) {
+fn record_notice(store: &SqliteStore, drift: &SkillDrift, now: OffsetDateTime) {
     let detail = drift.describe();
     tracing::warn!(%detail, "CoS runs held: the KB's CoS skills do not fit [cos.triage]");
     let summary = format!(

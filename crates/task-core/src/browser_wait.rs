@@ -8,7 +8,7 @@
 //! - **秘密（username/password・鍵・lease の中身・dashboard token）はどの列・どの event にも置かない**。
 //!   登録された秘密は celeris-credentiald の vault だけにあり、ここには credential の参照だけが入る。
 //!
-//! 実装は `SqliteStore` のみ（`TaskStore` の supertrait）。LLM は呼ばない。
+//! 読み書きは `SqliteStore` の固有 method（`browser_wait/sql.rs`）。LLM は呼ばない。
 
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use schemars::JsonSchema;
@@ -664,100 +664,6 @@ impl BrowserWaitError {
     }
 }
 
-/// `BrowserWait` の読み書き。`TaskStore` の supertrait。
-pub trait BrowserWaitStore: Send + Sync {
-    /// Current administrator-owned login policy, for supervisor credential reuse.
-    fn browser_site_policy_get(
-        &self,
-        _policy_id: &str,
-    ) -> Result<Option<crate::BrowserSitePolicyRecord>, StoreError> {
-        Ok(None)
-    }
-
-    /// A missing policy is a deny. Only a trusted administrator may write this record.
-    fn browser_task_policy_get(
-        &self,
-        task_id: TaskId,
-    ) -> Result<Option<BrowserTaskPolicy>, StoreError>;
-    fn browser_task_policy_set(
-        &self,
-        task_id: TaskId,
-        policy: &BrowserTaskPolicy,
-    ) -> Result<(), StoreError>;
-    /// running の task に wait を開く（task → `Blocked`、worker の lease を解放、`BrowserWaitOpened`）。
-    /// 同じ `resume_key` の再送は既存の wait を返す（`created = false`）。
-    fn browser_wait_open(
-        &self,
-        task_id: TaskId,
-        new: &NewBrowserWait,
-        now: OffsetDateTime,
-    ) -> Result<BrowserWaitOpen, BrowserWaitError>;
-    fn browser_wait_get(&self, wait_id: &str) -> Result<Option<BrowserWait>, StoreError>;
-    /// ADR-0080 H3: 認証区間の開始/終了を control 状態に書く（task-api の `auth-section` と同じ op）。
-    fn browser_session_auth_section(
-        &self,
-        key: crate::browser_store::BrowserSessionKey<'_>,
-        active: bool,
-    ) -> Result<(), crate::browser_store::BrowserStoreError>;
-    /// ADR-0113 D2: worker の agent 操作 gate（task-api の `agent/begin`・`agent/end` と同じ op）。
-    fn browser_session_agent_action(
-        &self,
-        key: crate::browser_store::BrowserSessionKey<'_>,
-        op: crate::browser_control_ops::AgentActionOp,
-        now: u64,
-    ) -> Result<crate::browser_control::BrowserControl, crate::browser_store::BrowserStoreError>;
-    /// ADR-0100: scrub 済みの live event を 1 件追記する。
-    fn browser_session_live_append(
-        &self,
-        key: crate::browser_store::BrowserSessionKey<'_>,
-        event: &crate::browser_live::ScrubbedLiveEvent,
-    ) -> Result<u64, StoreError>;
-    /// task の wait（新しい順ではなく作成順）。
-    fn browser_waits_for_task(&self, task_id: TaskId) -> Result<Vec<BrowserWait>, StoreError>;
-    /// 人の対応を待つ wait（`pending`）の全件。inbox・承認一覧に出す。作成順。
-    fn browser_waits_pending(&self) -> Result<Vec<BrowserWait>, StoreError>;
-    /// 登録待ちに credential の参照を結び付けて一度だけ解決する（task → `Ready`）。使用承認は兼ねない。
-    fn browser_wait_register(
-        &self,
-        task_id: TaskId,
-        wait_id: &str,
-        expected_version: u64,
-        credential: &CredentialRecord,
-        actor_id: &str,
-        now: OffsetDateTime,
-    ) -> Result<BrowserWaitResolution, BrowserWaitError>;
-    /// 人の `approve_once` / `deny` / `revoke`。
-    fn browser_wait_decide(
-        &self,
-        task_id: TaskId,
-        wait_id: &str,
-        decision: &HumanDecision,
-        now: OffsetDateTime,
-    ) -> Result<BrowserWaitResolution, BrowserWaitError>;
-    /// worker が承認済みの wait の一回の実行権を消費する（同じ run/session・`resume_key` だけ）。
-    /// 期限切れなら `expired` にして `Gone`。
-    fn browser_wait_consume(
-        &self,
-        task_id: TaskId,
-        wait_id: &str,
-        resume_key: &str,
-        run_id: &str,
-        session_id: &str,
-        now: OffsetDateTime,
-    ) -> Result<BrowserWait, BrowserWaitError>;
-    /// 期限の過ぎた開いている wait を一度だけ終端化する（`pending` は task を `Failed` に）。
-    /// daemon の起動時と tick で呼ぶ。終端化した wait を返す。
-    fn browser_waits_expire(&self, now: OffsetDateTime) -> Result<Vec<BrowserWait>, StoreError>;
-    fn browser_approvals_for_wait(
-        &self,
-        wait_id: &str,
-    ) -> Result<Vec<BrowserApprovalRecord>, StoreError>;
-    fn browser_credential_get(
-        &self,
-        credential_id: &str,
-    ) -> Result<Option<CredentialRecord>, StoreError>;
-}
-
 /// 承認済み credential 使用の一回消費の結果（trusted supervisor が broker へ lease を求める材料）。
 /// 秘密は持たない。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -795,8 +701,8 @@ impl ConsumedBrowserApproval {
 /// 承認済みの credential 使用 wait を、それを開いた論理 run/session の continuation として一度だけ消費する。
 /// dispatch ごとの run id は変わるので、continuation の照合には wait 自身の run/session を使う
 /// （lease と browser session もその session に結び付く）。承認記録と credential 台帳が揃わなければ拒否する。
-pub fn consume_credential_approval<S: BrowserWaitStore + ?Sized>(
-    store: &S,
+pub fn consume_credential_approval(
+    store: &SqliteStore,
     task_id: TaskId,
     wait: &BrowserWait,
     now: OffsetDateTime,
@@ -877,8 +783,8 @@ pub struct ConsumedBrowserOperation {
 /// 承認済みの操作 wait（`credential_use` 以外の `waiting_for_approval`）を、それを開いた論理 run/session の
 /// continuation として一度だけ消費する（ADR 2026-10-08 D2）。store の wait と呼出し側の wait の intent が
 /// 食い違えば消費せずに拒否する。承認記録（`approve_once`、消費済み）が無ければ拒否する。
-pub fn consume_operation_approval<S: BrowserWaitStore + ?Sized>(
-    store: &S,
+pub fn consume_operation_approval(
+    store: &SqliteStore,
     task_id: TaskId,
     wait: &BrowserWait,
     now: OffsetDateTime,

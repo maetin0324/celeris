@@ -8,7 +8,7 @@
 //!   その run を起こす判断（何件たまったか、何時間たったか）は決定的で、ここの純粋関数が決める。
 //! - **悪い知らせは圧縮を待たない**。`BadNews` は生成時にそのまま各祖先へ複製する（SPEC §2.4）。
 //!
-//! `store.rs` は `TaskStore` の supertrait として `ReportStore` を要求するだけで、実装（SQL）はこのモジュールにある。
+//! 読み書きの実装（SQL）は、このモジュールの `impl SqliteStore` の固有 method にある。
 
 use rusqlite::types::Value as SqlValue;
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
@@ -623,33 +623,7 @@ pub fn notify_now(
     }
 }
 
-// ---- `reports` 表の読み書き（SQL はここだけ。`store.rs` は supertrait で要求するだけ）----
-
-/// ADR-0033 D3: 報告の追記・一覧・既読・レビュー待ちの取り出し。`TaskStore` の supertrait で、
-/// 実装は `SqliteStore` のみ（ディスパッチャは `Arc<dyn TaskStore>` から呼ぶ）。
-pub trait ReportStore: Send + Sync {
-    /// 1 件追記する（報告は追記専用で、`read_at` 以外は後から変えない）。
-    fn report_append(&self, report: &Report) -> Result<(), StoreError>;
-    /// 複数件を 1 トランザクションで追記する（悪い知らせの複製を途中で落とさないため）。
-    fn report_append_all(&self, reports: &[Report]) -> Result<(), StoreError>;
-    fn report_get(&self, id: ReportId) -> Result<Option<Report>, StoreError>;
-    /// 新しい順（`created_at` 降順、同値は id 降順）。
-    fn report_list(&self, filter: &ReportFilter) -> Result<Vec<Report>, StoreError>;
-    /// ADR-0133 付記: `level` の報告を古い順（`created_at` 昇順、同値は id 昇順）に、`since` 以後
-    /// （閉区間、`None` なら最初から）最大 `limit` 件。通知フィードの差分同期が使う（読み取り接続のみ）。
-    fn report_page_since(
-        &self,
-        level: u32,
-        since: Option<OffsetDateTime>,
-        limit: usize,
-    ) -> Result<Vec<Report>, StoreError>;
-    /// 既読にする（既に既読のものは触らない）。変えた件数を返す。
-    fn report_mark_read(&self, ids: &[ReportId], at: OffsetDateTime) -> Result<usize, StoreError>;
-    /// `parent_node_id` の子ノードの報告のうち、まだどの報告の `sources` にも入っていないもの（古い順）。
-    fn report_unreviewed_children(&self, parent_node_id: &str) -> Result<Vec<Report>, StoreError>;
-    /// `(その level の未読, そのうち bad_news)` の件数。
-    fn report_unread_counts(&self, level: u32) -> Result<(u32, u32), StoreError>;
-}
+// ---- `reports` 表の読み書き（SQL はここだけ）----
 
 fn row_to_report(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Report, StoreError>> {
     let id: String = row.get(0)?;
@@ -779,12 +753,14 @@ impl SqliteStore {
     }
 }
 
-impl ReportStore for SqliteStore {
-    fn report_append(&self, report: &Report) -> Result<(), StoreError> {
+// ADR-0033 D3: 報告の追記・一覧・既読・レビュー待ちの取り出し（ディスパッチャは `Arc<SqliteStore>` から呼ぶ）。
+impl SqliteStore {
+    /// 1 件追記する（報告は追記専用で、`read_at` 以外は後から変えない）。
+    pub fn report_append(&self, report: &Report) -> Result<(), StoreError> {
         self.report_append_all(std::slice::from_ref(report))
     }
-
-    fn report_append_all(&self, reports: &[Report]) -> Result<(), StoreError> {
+    /// 複数件を 1 トランザクションで追記する（悪い知らせの複製を途中で落とさないため）。
+    pub fn report_append_all(&self, reports: &[Report]) -> Result<(), StoreError> {
         if reports.is_empty() {
             return Ok(());
         }
@@ -796,8 +772,7 @@ impl ReportStore for SqliteStore {
         tx.commit()?;
         Ok(())
     }
-
-    fn report_get(&self, id: ReportId) -> Result<Option<Report>, StoreError> {
+    pub fn report_get(&self, id: ReportId) -> Result<Option<Report>, StoreError> {
         let conn = self.lock()?;
         let row = conn
             .query_row(
@@ -811,8 +786,8 @@ impl ReportStore for SqliteStore {
             None => Ok(None),
         }
     }
-
-    fn report_list(&self, filter: &ReportFilter) -> Result<Vec<Report>, StoreError> {
+    /// 新しい順（`created_at` 降順、同値は id 降順）。
+    pub fn report_list(&self, filter: &ReportFilter) -> Result<Vec<Report>, StoreError> {
         let mut where_sql = String::from(" WHERE 1 = 1");
         let mut args: Vec<SqlValue> = Vec::new();
         if let Some(project_id) = filter.project_id {
@@ -847,8 +822,9 @@ impl ReportStore for SqliteStore {
         }
         Ok(out)
     }
-
-    fn report_page_since(
+    /// ADR-0133 付記: `level` の報告を古い順（`created_at` 昇順、同値は id 昇順）に、`since` 以後
+    /// （閉区間、`None` なら最初から）最大 `limit` 件。通知フィードの差分同期が使う（読み取り接続のみ）。
+    pub fn report_page_since(
         &self,
         level: u32,
         since: Option<OffsetDateTime>,
@@ -871,8 +847,12 @@ impl ReportStore for SqliteStore {
             Ok(out)
         })
     }
-
-    fn report_mark_read(&self, ids: &[ReportId], at: OffsetDateTime) -> Result<usize, StoreError> {
+    /// 既読にする（既に既読のものは触らない）。変えた件数を返す。
+    pub fn report_mark_read(
+        &self,
+        ids: &[ReportId],
+        at: OffsetDateTime,
+    ) -> Result<usize, StoreError> {
         if ids.is_empty() {
             return Ok(0);
         }
@@ -882,8 +862,11 @@ impl ReportStore for SqliteStore {
         tx.commit()?;
         Ok(changed)
     }
-
-    fn report_unreviewed_children(&self, parent_node_id: &str) -> Result<Vec<Report>, StoreError> {
+    /// `parent_node_id` の子ノードの報告のうち、まだどの報告の `sources` にも入っていないもの（古い順）。
+    pub fn report_unreviewed_children(
+        &self,
+        parent_node_id: &str,
+    ) -> Result<Vec<Report>, StoreError> {
         let sql = format!(
             "{SELECT_REPORT} WHERE node_id IN (SELECT id FROM org_nodes WHERE parent_id = ?1) \
              AND id NOT IN (SELECT je.value FROM reports s, json_each(s.sources) je) \
@@ -898,8 +881,8 @@ impl ReportStore for SqliteStore {
         }
         Ok(out)
     }
-
-    fn report_unread_counts(&self, level: u32) -> Result<(u32, u32), StoreError> {
+    /// `(その level の未読, そのうち bad_news)` の件数。
+    pub fn report_unread_counts(&self, level: u32) -> Result<(u32, u32), StoreError> {
         let conn = self.lock()?;
         let unread: i64 = conn.query_row(
             "SELECT COUNT(*) FROM reports WHERE level = ?1 AND read_at IS NULL",

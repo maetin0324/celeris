@@ -168,7 +168,7 @@ fn health_review_policy_review_without_policy_change_keeps_previous_behavior() {
 }
 
 struct Gate {
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     d: Dispatcher,
     task: Task,
     repo: RepoId,
@@ -178,7 +178,7 @@ struct Gate {
 /// reviewer の条件（index 0）を持つ reviewing の task と、`changed_policy` に応じた health の材料の event。
 fn gate(changed_policy: bool) -> Gate {
     let dir = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(task_core::SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(task_core::SqliteStore::open_in_memory().unwrap());
     let mut task = new_task(dir.path(), Check::Reviewer, 2);
     task.status = Status::Reviewing;
     store.insert(&task).unwrap();

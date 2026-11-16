@@ -72,58 +72,13 @@ fn override_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<CatalogOverrideR
 
 const OVERRIDE_COLUMNS: &str = "source, model_id, disabled, tier, alias, note, updated_at";
 
-/// モデル catalog の読み書き。`TaskStore` の supertrait（ディスパッチャの `Arc<dyn TaskStore>` から使える）。
-pub trait ModelCatalogStore: Send + Sync {
+// モデル catalog の読み書き（ディスパッチャの `Arc<SqliteStore>` から使える）。
+impl SqliteStore {
     /// `source` の発見結果を反映する。新規は `available = 1`・`first_seen = last_seen = now`、既存は
     /// `last_seen = now`・`available = 1`、今回見えなかった既存は `available = 0`（行は残す）。
     /// 追加・消失・復活があれば `Event::ModelCatalogChanged` を追記する。発見記録（ok）も同じ
     /// トランザクションで書く。
-    fn model_catalog_apply(
-        &self,
-        source: &CatalogSource,
-        models: &[DiscoveredModel],
-        now: i64,
-    ) -> Result<CatalogDelta, StoreError>;
-    /// 取得に失敗したことを記録する（catalog は変えない）。直前の成功時の `count` は残す。
-    fn model_catalog_record_failure(
-        &self,
-        source: &CatalogSource,
-        error: &str,
-        now: i64,
-    ) -> Result<(), StoreError>;
-    /// 全 entry（source・model_id 昇順）。
-    fn model_catalog_list(&self) -> Result<Vec<CatalogEntry>, StoreError>;
-    /// 全上書き（source・model_id 昇順）。
-    fn model_catalog_overrides(&self) -> Result<Vec<CatalogOverrideRow>, StoreError>;
-    fn model_catalog_override_get(
-        &self,
-        source: &CatalogSource,
-        model_id: &str,
-    ) -> Result<Option<CatalogOverrideRow>, StoreError>;
-    /// source ごとの最終発見記録（source 昇順）。
-    fn model_catalog_discovery_records(&self) -> Result<Vec<DiscoveryRecord>, StoreError>;
-    /// 上書きを置く（あれば置き換える）。catalog に無いモデルにも置ける（発見前に決めておける）。
-    fn model_catalog_set_override(
-        &self,
-        source: &CatalogSource,
-        model_id: &str,
-        value: &CatalogOverride,
-        now: i64,
-    ) -> Result<(), StoreError>;
-    /// 上書きを消す。行が無ければ `Ok(false)`。
-    fn model_catalog_delete_override(
-        &self,
-        source: &CatalogSource,
-        model_id: &str,
-    ) -> Result<bool, StoreError>;
-}
-
-impl ModelCatalogStore for SqliteStore {
-    /// `source` の発見結果を反映する。新規は `available = 1`・`first_seen = last_seen = now`、既存は
-    /// `last_seen = now`・`available = 1`、今回見えなかった既存は `available = 0`（行は残す）。
-    /// 追加・消失・復活があれば `Event::ModelCatalogChanged` を追記する。発見記録（ok）も同じ
-    /// トランザクションで書く。
-    fn model_catalog_apply(
+    pub fn model_catalog_apply(
         &self,
         source: &CatalogSource,
         models: &[DiscoveredModel],
@@ -211,9 +166,8 @@ impl ModelCatalogStore for SqliteStore {
         tx.commit()?;
         Ok(delta)
     }
-
     /// 取得に失敗したことを記録する（catalog は変えない）。直前の成功時の `count` は残す。
-    fn model_catalog_record_failure(
+    pub fn model_catalog_record_failure(
         &self,
         source: &CatalogSource,
         error: &str,
@@ -228,13 +182,12 @@ impl ModelCatalogStore for SqliteStore {
         )?;
         Ok(())
     }
-
     /// 全 entry（source・model_id 昇順）。
-    fn model_catalog_list(&self) -> Result<Vec<CatalogEntry>, StoreError> {
+    pub fn model_catalog_list(&self) -> Result<Vec<CatalogEntry>, StoreError> {
         self.with_read_conn(read_entries)
     }
-
-    fn model_catalog_overrides(&self) -> Result<Vec<CatalogOverrideRow>, StoreError> {
+    /// 全上書き（source・model_id 昇順）。
+    pub fn model_catalog_overrides(&self) -> Result<Vec<CatalogOverrideRow>, StoreError> {
         self.with_read_conn(|conn| {
             let mut stmt = conn.prepare(&format!(
                 "SELECT {OVERRIDE_COLUMNS} FROM model_catalog_overrides \
@@ -248,9 +201,8 @@ impl ModelCatalogStore for SqliteStore {
             Ok(out)
         })
     }
-
     /// source ごとの最終発見記録（source 昇順）。
-    fn model_catalog_discovery_records(&self) -> Result<Vec<DiscoveryRecord>, StoreError> {
+    pub fn model_catalog_discovery_records(&self) -> Result<Vec<DiscoveryRecord>, StoreError> {
         self.with_read_conn(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT source, at, ok, error, count FROM model_catalog_discovery ORDER BY source ASC",
@@ -271,8 +223,7 @@ impl ModelCatalogStore for SqliteStore {
             Ok(out)
         })
     }
-
-    fn model_catalog_override_get(
+    pub fn model_catalog_override_get(
         &self,
         source: &CatalogSource,
         model_id: &str,
@@ -290,9 +241,8 @@ impl ModelCatalogStore for SqliteStore {
                 .optional()?)
         })
     }
-
     /// 上書きを置く（あれば置き換える）。catalog に無いモデルにも置ける（発見前に決めておける）。
-    fn model_catalog_set_override(
+    pub fn model_catalog_set_override(
         &self,
         source: &CatalogSource,
         model_id: &str,
@@ -302,9 +252,8 @@ impl ModelCatalogStore for SqliteStore {
         let conn = self.lock()?;
         Self::model_catalog_set_override_tx(&conn, source, model_id, value, now)
     }
-
     /// 上書きを消す。行が無ければ `Ok(false)`。
-    fn model_catalog_delete_override(
+    pub fn model_catalog_delete_override(
         &self,
         source: &CatalogSource,
         model_id: &str,

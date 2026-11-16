@@ -306,7 +306,7 @@ async fn authority_ledger_unreadable_source_denied() {
         rule: "repo の削除は人に聞かなくてよい".into(),
         created_at: OffsetDateTime::now_utc(),
     };
-    use task_core::approval::ApprovalStore;
+
     c.env.store.standing_rule_append(&rule).expect("rule");
     let mut body = c.grant_body("destructive", 5);
     body["source"] = json!({"kind": "standing_rule", "ref": rule.id.to_string()});

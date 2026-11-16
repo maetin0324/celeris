@@ -109,7 +109,6 @@ impl Fixture {
     }
 
     fn set_project_status(&self, status: ProjectStatus) {
-        use task_core::TaskStore;
         assert!(
             self.env
                 .store
@@ -120,7 +119,6 @@ impl Fixture {
 
     /// `route` の前提を作り、`(method, path, body)` を返す。
     fn prepare(&self, route: Route) -> (&'static str, String, Value) {
-        use task_core::TaskStore;
         let project = self.project;
         match route {
             Route::Patch => (

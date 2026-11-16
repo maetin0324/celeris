@@ -516,7 +516,7 @@ fn unknown_assignee_project_or_milestone_is_rejected() {
     assert_eq!(task.milestone_id, Some(milestone.id));
 }
 
-fn a_project(store: &dyn task_core::TaskStore) -> task_core::Project {
+fn a_project(store: &task_core::SqliteStore) -> task_core::Project {
     let now_ts = OffsetDateTime::now_utc();
     let project = task_core::Project {
         auto_advance: false,
@@ -536,7 +536,7 @@ fn a_project(store: &dyn task_core::TaskStore) -> task_core::Project {
 }
 
 fn a_project_with_workspace(
-    store: &dyn task_core::TaskStore,
+    store: &task_core::SqliteStore,
     workspace: WorkspaceSpec,
 ) -> task_core::Project {
     let now_ts = OffsetDateTime::now_utc();

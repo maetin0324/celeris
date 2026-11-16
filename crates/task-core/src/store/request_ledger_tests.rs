@@ -8,7 +8,6 @@ use super::super::SqliteStore;
 use crate::chat::triage::CosTriageSource;
 use crate::decision_log::CampaignIdentity;
 use crate::model::{Event, Status, TaskId};
-use crate::store::TaskStore;
 
 fn at(s: &str) -> OffsetDateTime {
     OffsetDateTime::parse(s, &Rfc3339).unwrap()

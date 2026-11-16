@@ -155,10 +155,12 @@ impl SqliteStore {
         Ok(inherit_write_paths(own.as_deref(), inherited.as_deref()))
     }
 
+    /// ADR-0130 D2: store an immutable per-run Git diff snapshot.
     pub fn record_run_write_set(&self, record: &WriteSetRecord) -> Result<(), StoreError> {
         self.record_write_set(record, false)
     }
 
+    /// Final cumulative snapshot from the WU base commit to its committed head.
     pub fn record_work_unit_write_set(&self, record: &WriteSetRecord) -> Result<(), StoreError> {
         self.record_write_set(record, true)
     }
@@ -361,7 +363,7 @@ mod tests {
             validate,
         };
         use crate::model::{Event, Status};
-        use crate::store::TaskStore;
+
         let store = SqliteStore::open_in_memory().unwrap();
         let task = crate::store::tests::sample_task(Status::Ready);
         store.insert(&task).unwrap();

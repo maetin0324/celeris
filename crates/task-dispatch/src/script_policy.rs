@@ -6,7 +6,7 @@
 //! - [`classify_lane_rules`]・[`classify_route_priority`] は TS の結果を Rust の出力と比べ、outcome・error・
 //!   安全違反（S2-8）を決める純粋関数。
 //! - [`CompareDraft`] は領域（[`DraftDomain`]）ごとの入力と Rust の出力を持ち、記録の共通部分を作る。
-//! - [`ScriptDomainStore`] は mode の表と記録の store の口。`TaskStore` に欄を足さずに `SqliteStore` を渡せるよう、
+//! - [`ScriptDomainStore`] は mode の表と記録の store の口。`SqliteStore` に欄を足さずに `SqliteStore` を渡せるよう、
 //!   この crate に置く。
 
 use std::collections::BTreeSet;

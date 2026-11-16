@@ -84,7 +84,9 @@ impl SqliteStore {
         Ok(())
     }
 
-    pub(super) fn unblock_pending_impl(&self) -> Result<Vec<UnblockLink>, StoreError> {
+    // ---- ADR 2026-10-27-unblocks-reopen-on-promotion: 修正 task と待っている task の結び ----
+    /// まだ発火していない結び（`fired_at IS NULL`）を、修正 task・待っている task の id 順で返す。
+    pub fn unblock_pending(&self) -> Result<Vec<UnblockLink>, StoreError> {
         self.with_read_conn(|conn| {
             query_links(
                 conn,
@@ -97,7 +99,8 @@ impl SqliteStore {
         })
     }
 
-    pub(super) fn unblocks_of_impl(&self, fix: TaskId) -> Result<Vec<UnblockLink>, StoreError> {
+    /// 修正 task `fix` の結び（発火済みを含む）を、待っている task の id 順で返す。
+    pub fn unblocks_of(&self, fix: TaskId) -> Result<Vec<UnblockLink>, StoreError> {
         self.with_read_conn(|conn| {
             query_links(
                 conn,
@@ -110,7 +113,10 @@ impl SqliteStore {
         })
     }
 
-    pub(super) fn unblock_fire_impl(&self, fire: &UnblockFire) -> Result<bool, StoreError> {
+    /// 結びを 1 度だけ発火させる（1 つの IMMEDIATE transaction）。行が無いか既に発火していれば何も書かず
+    /// `false`。発火できたら `fire.comment` を書き、`fire.action == Reopened` なら同じ transaction で
+    /// `Trigger::Reopen` を適用する（遷移に失敗すれば全体を戻す）。
+    pub fn unblock_fire(&self, fire: &UnblockFire) -> Result<bool, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         // D4: 発火していない行だけを更新する（同じ結びを二度発火させない）。

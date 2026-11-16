@@ -122,7 +122,7 @@ impl WorkerAdapter for UsageAdapter {
 struct Scenario {
     _repo: tempfile::TempDir,
     ws: tempfile::TempDir,
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     task: Task,
     d: Dispatcher,
     dir: PathBuf,
@@ -141,7 +141,7 @@ impl Scenario {
         init_test_repo(repo.path());
         commit_checker(repo.path());
         let ws = tempfile::tempdir().unwrap();
-        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
         let mut task = reviewing_task(repo.path(), &store);
         set_check(&mut task, check.to_string());
         prepare(&mut task);

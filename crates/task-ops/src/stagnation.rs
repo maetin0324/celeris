@@ -10,10 +10,11 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
+use task_core::OrgDirectory;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use task_core::{ProjectId, ProjectStatus, Status, Task, TaskId, TaskStore};
+use task_core::{ProjectId, ProjectStatus, SqliteStore, Status, Task, TaskId};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
@@ -251,7 +252,7 @@ fn parse_ts(s: &str) -> Option<OffsetDateTime> {
 /// 待ちの理由は閾値を過ぎた `ready` の task だけについて求める（読みを小さくする。判定は [`detect`] が改めて行う）。
 #[allow(clippy::too_many_arguments)]
 pub fn gather(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     releases_dir: Option<&Path>,
     policy: &StagnationPolicy,
     now: OffsetDateTime,

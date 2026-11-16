@@ -1,7 +1,7 @@
 //! ADR 2026-11-08-health-enforcement-loop D7.3・決定 p9-scope: 依存先の終端からの復帰で戻した後続を受信箱に出す。
 //!
 //! - [`attention_items`]: 受信箱の `dependents_reopened`（`AttentionItem::DependentsReopened`）を、各依存先 A の最新の
-//!   `Event::DependentsReopened`（`TaskStore::latest_event_rows` の部分 index。events の全走査をしない）から導く。
+//!   `Event::DependentsReopened`（`SqliteStore::latest_event_rows` の部分 index。events の全走査をしない）から導く。
 //!   戻した後続（`restored`）のうち、まだ動いていないもの（今 draft・ready で、最後の遷移が `dependency_reopened`）が
 //!   1 件以上あるときだけ出し、それらが動き出すか終端になれば消える。人は重複した後続を cancel する（答えは
 //!   `POST /tasks/{id}/cancel`）。
@@ -11,11 +11,12 @@
 //!
 //! 新しい表・config の欄は無く、正本は追記専用の events。
 use std::collections::{HashMap, HashSet};
+use task_core::TaskQuery;
 
 use schemars::JsonSchema;
 use serde::Serialize;
 use task_core::store::LatestEventKind;
-use task_core::{Event, Status, Task, TaskId, TaskStore, Trigger};
+use task_core::{Event, SqliteStore, Status, Task, TaskId, Trigger};
 
 use super::AttentionItem;
 use crate::error::OpsError;
@@ -33,7 +34,7 @@ pub struct PendingDependent {
 /// 最後の遷移を読むのは、`restored` のうち今 draft・ready の後続だけ（1 件につき 1 回）。`focus` の組み立て（P4-C）
 /// では、A か `restored` の後続が範囲にある event だけを見る（項目が触れる task は A・A の root・戻した後続）。
 pub(super) fn attention_items(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     by_id: &HashMap<TaskId, Task>,
     focus: Option<&HashSet<TaskId>>,
 ) -> Result<Vec<AttentionItem>, OpsError> {
@@ -80,7 +81,7 @@ pub(super) fn attention_items(
 
 /// 後続の最後の `Transitioned` の理由が `dependency_reopened` か。戻した後に一度でも動いた（dispatch・人の遷移・
 /// もう一度の cancel）後続は、今また draft・ready でも戻した後続として出さない。
-fn last_reason_is_reopen(store: &dyn TaskStore, id: TaskId) -> Result<bool, OpsError> {
+fn last_reason_is_reopen(store: &SqliteStore, id: TaskId) -> Result<bool, OpsError> {
     let reopened = Trigger::DependencyReopened { draft: false }.name();
     let rows = store.event_rows_for(id, None, view::ALL_EVENTS)?;
     let last = rows.iter().rev().find_map(|r| match &r.event {

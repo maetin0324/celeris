@@ -5,13 +5,13 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use task_core::{InstanceRole, SharedRole, TaskStore};
+use task_core::{InstanceRole, SharedRole, SqliteStore};
 use time::OffsetDateTime;
 
 use super::stranded_sweep::{INTERVAL, SingleFlight, periodic};
 
 pub(crate) fn run(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     releases_dir: &std::path::Path,
     now: OffsetDateTime,
 ) -> Result<Vec<task_ops::unblocks::UnblockOutcome>, String> {
@@ -28,7 +28,7 @@ pub(crate) fn run(
 }
 
 pub(crate) fn spawn(
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     role: SharedRole,
     releases_dir: PathBuf,
 ) -> tokio::task::JoinHandle<()> {

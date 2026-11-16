@@ -7,7 +7,7 @@
 //! - 冪等: 項目の id は `<source>-<event id>`（`source` は記録の表）。`INSERT OR IGNORE` なので、cursor が
 //!   戻っても同じ event で 2 件作らない。cursor は前へだけ進む。
 //! - 閉じる: 人の actor の後の記録が来たら `resolved_at` を書く（行は消さない）。規則は [`ScriptInboxOp`]。
-//! - 項目の作成・閉じる・cursor の更新は 1 つの IMMEDIATE transaction（[`ScriptInboxStore::script_inbox_apply`]）。
+//! - 項目の作成・閉じる・cursor の更新は 1 つの IMMEDIATE transaction（[`SqliteStore::script_inbox_apply`]）。
 
 use rusqlite::{Connection, TransactionBehavior, params};
 use schemars::JsonSchema;
@@ -142,31 +142,6 @@ pub struct ScriptInboxApplied {
     pub resolved: usize,
 }
 
-/// `script_inbox_items`・`script_inbox_cursors` の読み書き。実装は `SqliteStore` のみ。
-pub trait ScriptInboxStore: Send + Sync {
-    /// 開いている項目（古い順）。読み取り接続だけを使う。
-    fn script_inbox_open(&self) -> Result<Vec<ScriptInboxItem>, StoreError>;
-    /// 読み終えた id（行が無ければ 0）。
-    fn script_inbox_cursors(&self) -> Result<ScriptInboxCursors, StoreError>;
-    /// 操作を順に当て、cursor を進める（1 つの transaction）。
-    fn script_inbox_apply(
-        &self,
-        batch: &ScriptInboxBatch,
-    ) -> Result<ScriptInboxApplied, StoreError>;
-    /// `script_domain_events` の `after` より後の行（古い順に `limit` 行。`SqliteStore` の同名 method へ転送）。
-    fn script_inbox_domain_events_after(
-        &self,
-        after: u64,
-        limit: u32,
-    ) -> Result<Vec<ScriptDomainEventRow>, StoreError>;
-    /// `script_generation_events` の `after` より後の行（古い順に `limit` 行）。
-    fn script_inbox_generation_events_after(
-        &self,
-        after: u64,
-        limit: u32,
-    ) -> Result<Vec<ScriptGenerationEventRow>, StoreError>;
-}
-
 fn unix_ms(t: OffsetDateTime) -> i64 {
     i64::try_from(t.unix_timestamp_nanos() / 1_000_000).unwrap_or(i64::MAX)
 }
@@ -276,32 +251,34 @@ fn query_cursors(conn: &Connection) -> Result<ScriptInboxCursors, StoreError> {
     Ok(out)
 }
 
-impl ScriptInboxStore for SqliteStore {
-    fn script_inbox_domain_events_after(
+// `script_inbox_items`・`script_inbox_cursors` の読み書き。実装は `SqliteStore` のみ。
+impl SqliteStore {
+    /// `script_domain_events` の `after` より後の行（古い順に `limit` 行。`SqliteStore` の同名 method へ転送）。
+    pub fn script_inbox_domain_events_after(
         &self,
         after: u64,
         limit: u32,
     ) -> Result<Vec<ScriptDomainEventRow>, StoreError> {
         self.script_domain_events_after(after, limit)
     }
-
-    fn script_inbox_generation_events_after(
+    /// `script_generation_events` の `after` より後の行（古い順に `limit` 行）。
+    pub fn script_inbox_generation_events_after(
         &self,
         after: u64,
         limit: u32,
     ) -> Result<Vec<ScriptGenerationEventRow>, StoreError> {
         self.script_generation_events_after(after, limit)
     }
-
-    fn script_inbox_open(&self) -> Result<Vec<ScriptInboxItem>, StoreError> {
+    /// 開いている項目（古い順）。読み取り接続だけを使う。
+    pub fn script_inbox_open(&self) -> Result<Vec<ScriptInboxItem>, StoreError> {
         self.with_read_conn(query_open)
     }
-
-    fn script_inbox_cursors(&self) -> Result<ScriptInboxCursors, StoreError> {
+    /// 読み終えた id（行が無ければ 0）。
+    pub fn script_inbox_cursors(&self) -> Result<ScriptInboxCursors, StoreError> {
         self.with_read_conn(query_cursors)
     }
-
-    fn script_inbox_apply(
+    /// 操作を順に当て、cursor を進める（1 つの transaction）。
+    pub fn script_inbox_apply(
         &self,
         batch: &ScriptInboxBatch,
     ) -> Result<ScriptInboxApplied, StoreError> {

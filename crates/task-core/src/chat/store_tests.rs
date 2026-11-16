@@ -1373,7 +1373,6 @@ fn cos_chat_mcp_input_goes_to_the_general_cos_without_a_new_thread() {
 /// records only the author.
 #[test]
 fn cos_chat_relay_post_records_author_time_and_scope() {
-    use crate::TaskStore;
     use crate::store::tests::sample_task;
     let s = store();
     let project = crate::ProjectId::new();

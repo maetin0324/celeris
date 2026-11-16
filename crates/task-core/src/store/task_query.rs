@@ -1,9 +1,9 @@
 //! ADR 2026-11-10-taskstore-consumer-ports D2: task を読む能力（一覧のページ・1 task の event 行）。
-//! `get` は具体型で呼ぶ file が多く（D2）、`TaskStore` に残す。
+//! `get` は具体型で呼ぶ file が多く（D2）、`SqliteStore` の固有 method のまま。
 //!
-//! `TaskStore` の supertrait（`dyn TaskStore`・`T: TaskStore` の呼び手は import なしで使える）。
+//! `SqliteStore` が実装する能力の trait（呼び手は trait を import して使う。ADR 2026-11-16-taskstore-trait-removal）。
 //! task の一覧と event 行だけを読む consumer（celeris-mcp の `tools/tasks`・`tools/projects`）はこの trait に依存する。
-//! 実装（SQL）は下の `impl TaskQuery for SqliteStore` にだけある（前例は `model_catalog.rs`）。cursor・
+//! 実装（SQL）は下の `impl TaskQuery for SqliteStore` にだけある。cursor・
 //! 絞り込みの部品は `query.rs`、行の変換は `tasks.rs` の `row_to_task`・`events.rs` の `read_event_rows` を使う。
 
 use rusqlite::types::Value as SqlValue;

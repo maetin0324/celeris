@@ -7,8 +7,10 @@
 use std::process::ExitCode;
 
 use clap::Args;
-use task_core::TaskStore;
+
 use task_ops::gate::accept as ops_accept;
+
+use task_core::SqliteStore;
 
 use crate::error::CliError;
 use crate::outln;
@@ -18,7 +20,7 @@ pub struct AcceptArgs {
     pub id: String,
 }
 
-pub fn run(store: &dyn TaskStore, args: AcceptArgs) -> Result<ExitCode, CliError> {
+pub fn run(store: &SqliteStore, args: AcceptArgs) -> Result<ExitCode, CliError> {
     let id = crate::error::parse_task_id(&args.id)?;
     let result = ops_accept(store, id, None)?;
     outln!("{:?}", result.to);

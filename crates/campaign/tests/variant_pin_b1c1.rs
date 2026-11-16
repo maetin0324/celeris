@@ -17,7 +17,7 @@ use celeris_campaign::{
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use task_core::{
-    SqliteStore, TaskId, TaskStore,
+    SqliteStore, TaskId,
     route_select::{EvidenceMode, ModeSource, RoutingMode, RoutingOverride, resolve_routing},
 };
 

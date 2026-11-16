@@ -76,7 +76,7 @@ impl E2e {
         }
     }
 
-    pub(super) fn store(&self) -> Arc<dyn TaskStore> {
+    pub(super) fn store(&self) -> Arc<SqliteStore> {
         self.sqlite.clone()
     }
 

@@ -31,13 +31,13 @@ fn rust_task(root: &std::path::Path, name: &str) -> (Task, String) {
 
 struct Fixture {
     d: Dispatcher,
-    store: Arc<dyn TaskStore>,
+    store: Arc<SqliteStore>,
     inputs: Arc<Mutex<Inputs>>,
     _root: tempfile::TempDir,
 }
 
 fn fixture(free: u64, samples: Vec<Sample>) -> Fixture {
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     // 走り続ける run（通した run が走っている状態を保つ）。
     let adapter = Arc::new(InstantAdapter {
         terminal: Terminal::Done {
@@ -74,7 +74,7 @@ fn sample(owner: &str, repo: &str, grows: bool, size: u64) -> Sample {
     }
 }
 
-fn status(store: &Arc<dyn TaskStore>, id: TaskId) -> Status {
+fn status(store: &Arc<SqliteStore>, id: TaskId) -> Status {
     store.get(id).unwrap().unwrap().status
 }
 
@@ -321,7 +321,7 @@ async fn a_held_run_has_a_wait_reason_and_never_becomes_task_unscheduled() {
             .iter()
             .any(|x| x.kind == StagnationKind::TaskUnscheduled && x.task_id == Some(b.id))
     };
-    assert!(!unscheduled(&f.d.orchestration.stagnation_findings()));
+    assert!(!unscheduled(f.d.orchestration.stagnation_findings()));
     let none = std::collections::HashSet::new();
     let facts = |memory: &task_ops::wait::MemoryWaits| {
         task_ops::stagnation::gather(f.store.as_ref(), None, &policy, later, &none, &none, memory)

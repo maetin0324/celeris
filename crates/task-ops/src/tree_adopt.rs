@@ -24,7 +24,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use task_core::execution_plan::PlanUnitSpec;
 use task_core::{
-    Event, ExecutionPlanRow, ParentUnit, Status, Task, TaskId, TaskKind, TaskStore, TreeAdoption,
+    Event, ExecutionPlanRow, ParentUnit, SqliteStore, Status, Task, TaskId, TaskKind, TreeAdoption,
     TreeInfo, TreeLimits, WorkUnitKind, WorkUnitRow, WorkUnitStatus,
 };
 use time::OffsetDateTime;
@@ -98,7 +98,7 @@ enum TargetState {
 
 /// 祖先（`tree.parent_unit` か、無ければ `parent_id`）を辿る。32 段・循環で打ち切り。
 fn is_self_or_ancestor(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     owner: &Task,
     target: TaskId,
 ) -> Result<bool, OpsError> {
@@ -128,7 +128,7 @@ fn is_self_or_ancestor(
 
 /// D15 の対象の条件（計画の unit の側の条件は呼び出し側）。
 fn check_target(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     owner: &Task,
     unit_key: &str,
     target: &Task,
@@ -302,7 +302,7 @@ pub struct PlanAdoptions {
 /// 同じトランザクションで行う）。条件に合わない unit があれば計画全体を拒否する（422 / 409）。対象がまだ終端でない
 /// unit は結ばずに待たせる（`adopted: false`。後で `POST /tasks/{id}/tree/adopt`）。
 pub fn apply_plan_adoptions(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     owner: &Task,
     plan: &ExecutionPlanRow,
     rows: &mut [WorkUnitRow],
@@ -393,7 +393,7 @@ pub fn apply_plan_adoptions(
 /// D15: `POST /tasks/{owner}/tree/adopt`。採用済みの /3 の計画の kind task の unit に、`adopt` に書かれた既存の task を
 /// 結ぶ（上の条件）。`limits` は daemon の実効の `[execution.tree]`（無効なら 422 `tree_disabled`）。
 pub fn adopt(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     owner_id: TaskId,
     req: &AdoptRequest,
     limits: &TreeLimits,
@@ -421,7 +421,7 @@ pub fn adopt(
 /// Read and validate a late adoption without writing. The returned set can be applied atomically
 /// with operation audit rows by `tree_adopt_apply_tx`.
 pub fn prepare_adopt(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     owner_id: TaskId,
     req: &AdoptRequest,
     limits: &TreeLimits,

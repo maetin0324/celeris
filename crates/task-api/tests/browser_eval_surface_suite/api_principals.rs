@@ -9,7 +9,7 @@ use common::cos_ops::{OPS, cos_bearer, op_body};
 use common::*;
 use serde_json::json;
 use task_api::{ApiToken, Principal};
-use task_core::{Event, Status, TaskKind, TaskStore};
+use task_core::{Event, Status, TaskKind};
 
 const WEB_TOKEN: &str = "web-token-value-1";
 const OPERATOR_TOKEN: &str = "operator-token-value-2";

@@ -1,10 +1,10 @@
 use super::*;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Mutex;
-use task_core::browser_wait::{BrowserWait, BrowserWaitStore, NewBrowserWait};
+use task_core::browser_wait::{BrowserWait, NewBrowserWait};
 use task_core::{
     ArtifactRef, BrowserAction, BrowserCapability, BrowserDomainMode, BrowserTaskPolicy,
-    EffectiveProfile, SqliteStore, Status, TaskId, TaskStore,
+    EffectiveProfile, SqliteStore, Status, TaskId,
 };
 
 /// Mock ledger for unit tests of routing and the supervisor. These tests do not certify a

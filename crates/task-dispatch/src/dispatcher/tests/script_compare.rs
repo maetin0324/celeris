@@ -218,7 +218,7 @@ async fn run_once(
 ) -> Outcome {
     let ws = tempfile::tempdir().unwrap();
     let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
-    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let store: Arc<SqliteStore> = sqlite.clone();
     let mut task = hinted_task(ws.path(), source);
     edit(&mut task, &sqlite);
     store.insert(&task).unwrap();

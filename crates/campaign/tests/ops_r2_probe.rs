@@ -210,7 +210,7 @@ fn leak_check(fx: &Fixture, probes: &[PathBuf], out: &Path) -> (i32, Value) {
     cmd.arg("-I")
         .arg(scripts().join("check-ops-r1-leak.py"))
         .args(["--private", s(&fx.private), "--canary", CANARY])
-        .args(["--scan", s(&fx.public.parent().expect("inputs"))]);
+        .args(["--scan", s(fx.public.parent().expect("inputs"))]);
     let deny_file = out.with_extension("deny.list");
     let text: String = fx
         .deny

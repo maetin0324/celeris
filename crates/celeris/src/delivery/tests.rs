@@ -215,7 +215,6 @@ fn delivery_failure_classification_is_limited_to_merge_base_and_format() {
 }
 #[test]
 fn preparation_requires_all_gates_and_notifies_cos_only_when_ready() {
-    use task_core::DeliveryStore;
     let (store, mut d) = stored_delivery();
     let tmp = tempfile::tempdir().unwrap();
     let mut cfg: Config = toml::from_str("").unwrap();
@@ -261,7 +260,7 @@ fn preparation_requires_all_gates_and_notifies_cos_only_when_ready() {
 }
 #[test]
 fn other_gate_failure_keeps_legacy_reopen_once() {
-    use task_core::{DeliveryStore, Trigger};
+    use task_core::Trigger;
     let (store, mut d) = stored_delivery();
     let cfg: Config = toml::from_str("").unwrap();
     d.state = State::Blocked;
@@ -293,7 +292,6 @@ fn other_gate_failure_keeps_legacy_reopen_once() {
 
 #[test]
 fn technical_failure_is_repaired_once_with_no_cos_review_or_message() {
-    use task_core::DeliveryStore;
     let (store, mut d) = stored_delivery();
     let tmp = tempfile::tempdir().unwrap();
     let mut cfg = cfg_for(tmp.path(), &tmp.path().join("releases"));
@@ -384,7 +382,7 @@ fn technical_failure_is_repaired_once_with_no_cos_review_or_message() {
 
 #[test]
 fn merge_base_repair_revalidates_and_delivers_only_the_repaired_branch() {
-    use task_core::{DeliveryStore, Trigger};
+    use task_core::Trigger;
     let (store, dir, d) = merge_queued_delivery();
     let tmp = tempfile::tempdir().unwrap();
     let cfg = cfg_for(dir.path(), &tmp.path().join("releases"));
@@ -563,7 +561,6 @@ fn merge_queued_with(
     mode: task_core::TaskMode,
     with_repo: bool,
 ) -> (task_core::SqliteStore, tempfile::TempDir, Delivery) {
-    use task_core::DeliveryStore;
     let (store, mut d) = stored_delivery_with(mode, with_repo);
     let (dir, repo_d) = repository();
     d.base = repo_d.base;
@@ -677,7 +674,6 @@ fn record_results(
     definition: &[String],
     checker: Option<&CheckerId>,
 ) {
-    use task_core::TaskStore;
     store
         .append_event(
             d.task_id,
@@ -699,7 +695,6 @@ fn record_results(
 /// 束縛どおりの合格なら ff する。
 #[test]
 fn merge_requires_passing_evidence_bound_to_the_candidate_and_base() {
-    use task_core::DeliveryStore;
     let tmp = tempfile::tempdir().unwrap();
     let rejected = |setup: &dyn Fn(&task_core::SqliteStore, &Path, &Delivery), name: &str| {
         let (store, dir, d) = merge_queued_without_evidence();
@@ -743,7 +738,6 @@ fn merge_requires_passing_evidence_bound_to_the_candidate_and_base() {
 /// 候補の HEAD の workspace.toml が必須とする検査が証跡に無ければ（acceptance での置換など）ff しない。
 #[test]
 fn merge_rejects_evidence_missing_a_required_check_of_the_candidate() {
-    use task_core::DeliveryStore;
     let tmp = tempfile::tempdir().unwrap();
     let (store, dir, mut d) = merge_queued_delivery();
     // 候補ブランチに必須検査 2 件を宣言する commit を足し、候補をそれに進める。
@@ -789,7 +783,6 @@ fn cfg_for(repo: &Path, releases_dir: &Path) -> Config {
 
 /// 案件のリポジトリ行（`delivery_repo` が取り込み先を引く）を `dir` で登録する。
 fn register_repo(store: &task_core::SqliteStore, d: &Delivery, dir: &Path) {
-    use task_core::TaskStore;
     let location = task_core::WorkspaceSpec::Local {
         path: dir.to_path_buf(),
         mode: None,
@@ -820,7 +813,7 @@ fn register_repo(store: &task_core::SqliteStore, d: &Delivery, dir: &Path) {
 /// 取り込んで止まる。release 準備・push は起こさない。
 #[test]
 fn non_self_repo_is_merged_without_release_or_push() {
-    use task_core::{DeliveryStore, IntegrationState, TaskStore};
+    use task_core::IntegrationState;
     let (store, dir, d) = merge_queued_delivery();
     register_repo(&store, &d, dir.path());
     let self_repo = tempfile::tempdir().unwrap();
@@ -857,7 +850,6 @@ fn non_self_repo_is_merged_without_release_or_push() {
 /// remote が実在する自己リポジトリ以外は push する（remote が無ければ上の試験のとおり push しない）。
 #[test]
 fn non_self_repo_with_a_remote_is_pushed_but_still_has_no_release() {
-    use task_core::DeliveryStore;
     let (store, dir, d) = merge_queued_delivery();
     register_repo(&store, &d, dir.path());
     let bare = bare_remote();
@@ -878,7 +870,6 @@ fn non_self_repo_with_a_remote_is_pushed_but_still_has_no_release() {
 }
 
 fn set_repo_auto_integrate(store: &task_core::SqliteStore, d: &Delivery, on: bool) {
-    use task_core::TaskStore;
     let mut row = store.repo_get(d.repo_id).unwrap().unwrap();
     row.auto_integrate = on;
     assert!(store.repo_update(&row).unwrap());
@@ -887,7 +878,6 @@ fn set_repo_auto_integrate(store: &task_core::SqliteStore, d: &Delivery, on: boo
 /// `tick`（[`tick_with`]）は task の repo の `auto_integrate`（DB）が有効な配送だけを進める。無効なら取り込まない。
 #[test]
 fn tick_advances_only_repos_with_auto_integrate() {
-    use task_core::DeliveryStore;
     let (store, dir, d) = merge_queued_with(task_core::TaskMode::Production, true);
     record_evidence(&store, dir.path(), &d, &[]);
     register_repo(&store, &d, dir.path());
@@ -912,7 +902,6 @@ fn tick_advances_only_repos_with_auto_integrate() {
 /// 有効な間に進んだ後で無効にし、`Preparing` の配送が tick で変わらないことで確かめる。
 #[test]
 fn tick_stops_advancing_after_repo_is_disabled_mid_run() {
-    use task_core::DeliveryStore;
     let (store, dir, d) = merge_queued_with(task_core::TaskMode::Production, true);
     record_evidence(&store, dir.path(), &d, &[]);
     register_repo(&store, &d, dir.path());
@@ -930,7 +919,6 @@ fn tick_stops_advancing_after_repo_is_disabled_mid_run() {
 
 #[test]
 fn advance_pushes_to_origin_right_after_merge_before_release_prep() {
-    use task_core::DeliveryStore;
     let (store, dir, d) = merge_queued_delivery();
     let bare = bare_remote();
     git_text(
@@ -951,7 +939,6 @@ fn advance_pushes_to_origin_right_after_merge_before_release_prep() {
 
 #[test]
 fn push_failure_after_merge_does_not_block_release_prep_and_retries_once() {
-    use task_core::DeliveryStore;
     let (store, dir, d) = merge_queued_delivery();
     git_text(
         dir.path(),
@@ -1003,7 +990,6 @@ fn maybe_retry_push_noop_when_push_disabled() {
 /// Preparing → Ready の通知文に、pushの結果を1行足す（成功）。
 #[test]
 fn ready_notification_reports_successful_push() {
-    use task_core::DeliveryStore;
     let (store, mut d) = stored_delivery();
     let tmp = tempfile::tempdir().unwrap();
     let mut cfg: Config = toml::from_str("").unwrap();
@@ -1041,7 +1027,6 @@ fn ready_notification_reports_successful_push() {
 /// Preparing → Ready の通知文に、pushの結果を1行足す（失敗。`[retried]` の目印は見せない）。
 #[test]
 fn ready_notification_reports_push_failure_without_the_retry_marker() {
-    use task_core::DeliveryStore;
     let (store, mut d) = stored_delivery();
     let tmp = tempfile::tempdir().unwrap();
     let mut cfg: Config = toml::from_str("").unwrap();
@@ -1092,7 +1077,6 @@ fn target_advanced_events(store: &task_core::SqliteStore, d: &Delivery) -> Vec<E
 
 #[test]
 fn target_advanced_before_merge_requests_rereview_instead_of_stale_reviewed_sha() {
-    use task_core::DeliveryStore;
     let (store, dir, d) = merge_queued_delivery();
     let tmp = tempfile::tempdir().unwrap();
     let cfg = cfg_for(dir.path(), &tmp.path().join("releases"));
@@ -1130,7 +1114,7 @@ fn target_advanced_before_merge_requests_rereview_instead_of_stale_reviewed_sha(
 
 #[test]
 fn target_advanced_rereview_beyond_limit_still_requests_rereview() {
-    use task_core::{DeliveryStore, Trigger};
+    use task_core::Trigger;
     let (store, dir, d) = merge_queued_delivery();
     let tmp = tempfile::tempdir().unwrap();
     let cfg = cfg_for(dir.path(), &tmp.path().join("releases"));
@@ -1195,7 +1179,6 @@ fn target_advanced_rereview_beyond_limit_still_requests_rereview() {
 
 #[test]
 fn target_advanced_absent_merges_only_the_matching_reviewed_sha_candidate() {
-    use task_core::DeliveryStore;
     // A candidate that differs from the reviewed SHA is never fast-forwarded.
     let (store, dir, d) = merge_queued_delivery();
     let tmp = tempfile::tempdir().unwrap();
@@ -1251,7 +1234,6 @@ fn target_advanced_absent_merges_only_the_matching_reviewed_sha_candidate() {
 /// 再レビューを要求せず（無限の rereview にしない）、従来どおり [merge-base] の Blocked（局所修復の対象）に進む。
 #[test]
 fn pre_review_sync_conflict_unsynced_candidate_goes_to_merge_base_repair() {
-    use task_core::DeliveryStore;
     let (store, dir, mut d) = merge_queued_delivery();
     let mut unsynced = d.clone();
     unsynced.target_sha = None;
@@ -1298,7 +1280,7 @@ fn pre_review_sync_conflict_unsynced_candidate_goes_to_merge_base_repair() {
 /// validate_candidate・merge）は本物を通す。
 #[test]
 fn integration_repair_fallback_delivers() {
-    use task_core::{DeliveryStore, Trigger};
+    use task_core::Trigger;
     let (store, dir, d) = merge_queued_delivery();
     let p = dir.path();
     let tmp = tempfile::tempdir().unwrap();
@@ -1434,7 +1416,6 @@ fn integration_repair_fallback_delivers() {
     // ADR parallel integration D4 付記: この配送の未回答の統合依頼（上限時などに出たもの）は、main が head を
     // 取り込んだ時点で統合済みとして閉じる。
     {
-        use task_core::TaskStore;
         let request = task_core::integration_request::IntegrationRequest {
             target_branch: synced.default_branch.clone(),
             target_sha: diverged.clone(),
@@ -1496,7 +1477,6 @@ fn auto_resolve_blocked(
     main_text: &str,
     feature_text: &str,
 ) -> (task_core::SqliteStore, tempfile::TempDir, Delivery) {
-    use task_core::DeliveryStore;
     let (store, mut d) = stored_delivery();
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path();
@@ -1534,7 +1514,6 @@ fn auto_resolve_comments(store: &task_core::SqliteStore, d: &Delivery) -> Vec<St
 
 /// 未回答の統合の依頼（task の両端の head の組ごとに 1 件）の数。
 fn open_integration_count(store: &task_core::SqliteStore, task_id: TaskId) -> usize {
-    use task_core::TaskStore;
     store
         .open_integration_requests()
         .unwrap()
@@ -1548,7 +1527,6 @@ fn open_integration_request(
     store: &task_core::SqliteStore,
     task_id: TaskId,
 ) -> task_core::integration_request::IntegrationRequest {
-    use task_core::TaskStore;
     let rows = store.open_integration_requests().unwrap();
     let rows: Vec<_> = rows.iter().filter(|row| row.task_id == task_id).collect();
     assert_eq!(rows.len(), 1, "{rows:?}");
@@ -1560,7 +1538,6 @@ fn open_integration_request(
 
 /// 統合の依頼の notice が一般通知に載っていないこと。
 fn no_integration_notice(store: &task_core::SqliteStore) -> bool {
-    use task_core::NoticeStore;
     store
         .notice_list(&task_core::NoticeQuery::default())
         .unwrap()
@@ -1574,7 +1551,6 @@ fn no_integration_notice(store: &task_core::SqliteStore) -> bool {
 }
 
 fn no_notice(store: &task_core::SqliteStore) -> bool {
-    use task_core::NoticeStore;
     store
         .notice_list(&task_core::NoticeQuery::default())
         .unwrap()
@@ -1584,7 +1560,6 @@ fn no_notice(store: &task_core::SqliteStore) -> bool {
 
 #[test]
 fn auto_resolve_progress_append_conflict_is_resolved_and_regated() {
-    use task_core::DeliveryStore;
     let (store, dir, d) = auto_resolve_blocked(
         "docs/PROGRESS.md",
         "# PROGRESS\n- old\n",
@@ -1648,7 +1623,6 @@ fn auto_resolve_progress_append_conflict_is_resolved_and_regated() {
 
 #[test]
 fn auto_resolve_code_conflict_requests_integration_and_aborts_merge() {
-    use task_core::DeliveryStore;
     let (store, dir, d) = auto_resolve_blocked(
         "src/lib.rs",
         "fn f() -> u32 { 0 }\n",
@@ -1689,7 +1663,6 @@ fn auto_resolve_code_conflict_requests_integration_and_aborts_merge() {
 
 #[test]
 fn auto_resolve_stops_at_max_attempts_and_when_disabled() {
-    use task_core::DeliveryStore;
     for disabled in [false, true] {
         let (store, dir, d) = auto_resolve_blocked(
             "docs/PROGRESS.md",
@@ -1754,7 +1727,6 @@ fn auto_resolve_stops_at_max_attempts_and_when_disabled() {
 
 #[test]
 fn auto_resolve_local_repair_limit_requests_integration() {
-    use task_core::DeliveryStore;
     let (store, dir, d) = auto_resolve_blocked(
         "src/lib.rs",
         "fn f() -> u32 { 0 }\n",
@@ -1841,7 +1813,6 @@ fn cargo_member(dir: &std::path::Path, name: &str, deps: &str) {
 fn cargo_lock_blocked(
     toml_conflict: bool,
 ) -> (task_core::SqliteStore, tempfile::TempDir, Delivery) {
-    use task_core::DeliveryStore;
     let (store, mut d) = stored_delivery();
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path();
@@ -1883,7 +1854,6 @@ fn cargo_lock_blocked(
 
 #[test]
 fn auto_resolve_cargo_lock_conflict_is_regenerated_and_regated() {
-    use task_core::DeliveryStore;
     let (store, dir, d) = cargo_lock_blocked(false);
     let p = dir.path();
     let main_before = sha(p, "main").unwrap();
@@ -1940,7 +1910,6 @@ fn auto_resolve_cargo_lock_conflict_is_regenerated_and_regated() {
 
 #[test]
 fn auto_resolve_cargo_lock_with_cargo_toml_conflict_requests_integration() {
-    use task_core::DeliveryStore;
     let (store, dir, d) = cargo_lock_blocked(true);
     let p = dir.path();
     let tmp = tempfile::tempdir().unwrap();

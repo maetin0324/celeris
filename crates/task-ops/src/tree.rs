@@ -2,7 +2,7 @@
 //! 決定的な部品（LLM なし。ADR-0079 D16）。
 //!
 //! - [`build_child_task`]: unit の spec と親から子 task を組み立てる（D4 (4)。挿入は
-//!   `TaskStore::tree_child_create` が 1 トランザクションで行う）。
+//!   `SqliteStore::tree_child_create` が 1 トランザクションで行う）。
 //! - [`check_task_unit_repos`]: kind task の unit の `repos` が親の repos の部分集合か（R1a からの持ち越し）。
 //! - [`unit_mirror`]: 子の状態 → unit の状態（D4 (5)）。
 //! - [`answered_decisions`] / [`child_objective`]: 子の `objective` の末尾に足す固定の書式（D4 (4)・D7）。
@@ -10,11 +10,12 @@
 //! - Phase R2a: [`tree_counters`]（木の上限に照らす数を store から集める。D3）、[`decision_path`]
 //!   （決定の要求の path。D7）、[`open_decision`]（同じ key の未回答の決定が木にあるか）。
 //!
-//! I/O は `TaskStore` の読み取りだけ。
+//! I/O は `SqliteStore` の読み取りだけ。
 
+use task_core::OrgDirectory;
 use task_core::{
     DecisionRow, DecisionStatus, DelegateTask, ExecutionPlanSpec, GenreSpec, ParentUnit,
-    PlanUnitSpec, RoleSpec, Status, Task, TaskId, TaskStore, TreeInfo, WorkUnitStatus,
+    PlanUnitSpec, RoleSpec, SqliteStore, Status, Task, TaskId, TreeInfo, WorkUnitStatus,
 };
 use time::OffsetDateTime;
 
@@ -44,7 +45,7 @@ pub fn unit_mirror(child_status: Status) -> Option<(WorkUnitStatus, &'static str
 }
 
 /// 親の「実効の」repos（親が持てばそれ、無ければ案件の primary。子の既定と同じ規則。ADR-0043 D2）の名前。
-pub fn parent_repo_names(store: &dyn TaskStore, parent: &Task) -> Result<Vec<String>, OpsError> {
+pub fn parent_repo_names(store: &SqliteStore, parent: &Task) -> Result<Vec<String>, OpsError> {
     if !parent.repos.is_empty() {
         return Ok(parent.repos.iter().map(|r| r.name.clone()).collect());
     }
@@ -59,7 +60,7 @@ pub fn parent_repo_names(store: &dyn TaskStore, parent: &Task) -> Result<Vec<Str
 /// ADR-0079 D2 / D4 (4)（R1a からの持ち越し）: 計画のすべての kind task の unit について、`repos` が
 /// 親の repos の部分集合か。外れていれば `Err`（計画の採用を不正な試行として扱う文言）。
 pub fn check_task_unit_repos(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     parent: &Task,
     spec: &ExecutionPlanSpec,
 ) -> Result<(), String> {
@@ -79,7 +80,7 @@ pub fn check_task_unit_repos(
 /// D7: `keys` の決定のうち、`task_id` の節点が出して回答済みのもの（`keys` の順）。1 つでも回答が
 /// 無ければ `None`（その unit はまだ待つ）。
 pub fn answered_decisions(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task_id: TaskId,
     keys: &[String],
 ) -> Result<Option<Vec<DecisionRow>>, OpsError> {
@@ -103,7 +104,7 @@ pub fn answered_decisions(
 
 /// 親から root までを辿った祖先（root が先頭、`parent` が末尾）。`Task.tree.parent_unit` を辿る
 /// （`tree` の無い task は root）。64 hop で打ち切る。
-pub fn ancestors_with_self(store: &dyn TaskStore, parent: &Task) -> Result<Vec<Task>, OpsError> {
+pub fn ancestors_with_self(store: &SqliteStore, parent: &Task) -> Result<Vec<Task>, OpsError> {
     let mut chain = vec![parent.clone()];
     let mut current = parent.clone();
     for _ in 0..64 {
@@ -132,7 +133,7 @@ pub fn ancestors_with_self(store: &dyn TaskStore, parent: &Task) -> Result<Vec<T
 /// replan は `execution_plans` の版の数）。`rates` は単価表に無い model の換算単価（`[budget_rates]`。ADR
 /// 2026-11-06-budget-usd-caps D2）。
 pub fn tree_counters(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     root_id: TaskId,
     rates: &task_core::pricing::BudgetRates,
 ) -> Result<task_core::TreeCounters, OpsError> {
@@ -153,7 +154,7 @@ pub fn tree_counters(
 /// ADR-0079 D7（Phase R2a）: 決定の要求の `path`（root から `node` まで）。各段は task の id と題名、
 /// 次の節点が属する段階（`stage`）、その節点を作った親の unit（`unit`。root は無し）。
 pub fn decision_path(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     node: &Task,
 ) -> Result<Vec<task_core::DecisionPathEntry>, OpsError> {
     let chain = ancestors_with_self(store, node)?;
@@ -182,7 +183,7 @@ pub fn decision_path(
 /// ADR-0079 D3（Phase R2a）: 木（`root_id`）に同じ `key` の未回答の決定があるか（木の上限の決定は木に
 /// 1 件だけ開く。同じ超過で tick ごとに増やさない）。
 pub fn open_decision(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     root_id: TaskId,
     key: &str,
 ) -> Result<Option<DecisionRow>, OpsError> {
@@ -258,7 +259,7 @@ pub fn child_objective(
 /// `Err` はこの unit を作れない理由（unit を `failed` にする文言）。
 #[allow(clippy::too_many_arguments)]
 pub fn build_child_task(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     parent: &Task,
     plan_id: &str,
     unit: &PlanUnitSpec,
@@ -440,7 +441,7 @@ fn clip(s: &str, max: usize) -> String {
 }
 
 /// D9（Phase R2b）: 子 task の失敗を分類し、最後の checkpoint を要約する（store の読み取りだけ）。
-pub fn child_failure(store: &dyn TaskStore, child: &Task) -> Result<ChildFailure, OpsError> {
+pub fn child_failure(store: &SqliteStore, child: &Task) -> Result<ChildFailure, OpsError> {
     let events = store.events_for(child.id)?;
     let (class, reason) = if child.status == Status::Cancelled {
         let why = events
@@ -569,7 +570,7 @@ pub fn planner_pending(events: &[(u64, task_core::Event)]) -> bool {
 /// `task_core::tree::liveness`）。`eligible` は `ready_tasks` が返すか、`replans_left` は節点の replan の余地
 /// （回答の余裕込み。dispatcher が決める）。
 pub fn node_liveness_facts(
-    store: &dyn TaskStore,
+    store: &SqliteStore,
     task: &Task,
     eligible: bool,
     replans_left: bool,

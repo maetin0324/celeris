@@ -354,7 +354,7 @@ async fn run_remote_flow(change: &'static str) -> (Outcome, Arc<FlowAdapter>) {
     });
     let dir = tempfile::tempdir().unwrap();
     let root = tempfile::tempdir().unwrap();
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
     let mut task = compound_task(dir.path());
     task.workspace = WorkspaceSpec::Remote {
         cluster: "sirius".into(),

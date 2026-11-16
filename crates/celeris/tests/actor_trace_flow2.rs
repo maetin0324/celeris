@@ -12,7 +12,7 @@ use support::*;
 use task_core::chat::triage::CosTriageSource;
 use task_core::chat::{AuditContext, ChatActor, ChatRelayRequest, ChatRunState};
 use task_core::decision::*;
-use task_core::{Event, SqliteStore, TaskStore};
+use task_core::{Event, SqliteStore};
 
 /// Answered by the person on the web after the escalation.
 const D_WEB: &str = "direction-web";

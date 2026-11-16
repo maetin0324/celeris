@@ -57,16 +57,22 @@ completed: 2026-11-16
 
 ## 受け入れ条件との対応
 - 条件 0（2〜3 の独立した領域を実装で削除）: C1（`crates/task-core/src/store/` の TaskStore の trait と転送）と C3（`crates/task-core/src/` の 12 module と `store/model_catalog.rs` の store trait 15 個）。移動・改名・分割ではなく、宣言と転送を消した。before/after は上の表。
-- 条件 1（配送と reviewer の数値判定）: この run の prompt（`runs/<run id>/prompt.txt`）には目的の全文、削減目標 1,500、基点 `base e19056a1dfb9`、size check の command と閾値の読み方が入っていた。ただし、汎用規約は 1〜10 までで、B が足した規約 11 は入っていなかった。この run を起動した daemon は B より前の release（ef0aa0a25a4f、13:03Z 起動）で、B を含む release（e19056a1dfb9）は 14:03Z に起動した。reviewer の prompt と `review.json` はこの run の後に作られるので、この run からは確かめられない（未確認）。数値が届かない変更の拒否は、上の対照（exit 1）と B の reduction_flow の 5 試験で示した。
+- 条件 1（配送と reviewer の数値判定）: B の release の下で起動した、この task の worker の run と reviewer の run の両方の prompt に、目的・削減目標・base SHA・差分が届いた。数値の判定は reviewer の `review.json` にある。
+  - B の release: `e19056a1dfb9` は 14:04:15Z に昇格した（`/local/celeris/state/releases/e19056a1dfb9/promoted.json`）。本番の daemon は `--release e19056a1dfb9` で 14:03:26Z に起動した（`ps -o lstart,args` で確認）。
+  - worker の run: 修復の WorkUnit repair-1 の run 01M7JE30WXAY38GREYCE9TQV7J（prompt は 15:02:29Z）を、この daemon が起動した。`runs/01M7JE30WXAY38GREYCE9TQV7J/prompt.txt` を `grep -cF` で数えた結果は次のとおり。規約 11「11. 行数の純減」1 件。B が WorkUnit の prompt に足した「このタスク全体の目的（全文」1 件。目標「純減 1500」8 件。固定基点 `415a19a7004cb6a73b872e861fa8d1cf634dddbb` 5 件。unit 基点 `e19056a1dfb9` 4 件。size check の閾値「1500 1 - - -」2 件。差分「git diff --stat」と「624 files changed, 3161 insertions(+), 5872 deletions(-)」各 1 件。
+  - reviewer の run: 01M7JCWEC0N95TKXDW4S1AMPZK（prompt は 14:55:13Z、B の release の下）の prompt では、規約 11 が 1 件、「純減 1500」が 4 件、`415a19a7` が 7 件、`e19056a1dfb9` が 5 件、`net_reduction` が 4 件だった。`review.json` の条件 0 は、3 点の再計測の数値（prod 純減 2,701、Rust 2,701、own 2,838／2,426）で合格と判定した。
+  - 対照: 実装の worker の run 01M7J889KZH8A2M646JC1WQDZ9（13:20Z）と 01M7J9X36M9CAME5T0Z0EYV908（13:49Z）は、B より前の release `ef0aa0a25a4f` の daemon が起動した。どちらの prompt も規約 11 が 0 件、「このタスク全体の目的（全文」が 0 件、diff stat が 0 件だった。目的・目標・基点・size check は B の前から task 単位の run に届いていた。
+  - 数値が届かない変更の拒否は、上の対照（純減 0 で exit 1）と B の reduction_flow の 5 試験で示した。
+  - raw（4 run の grep の件数と daemon の起動時刻）は run の成果物 `artifacts/delivery-check.txt` に置いた（repo には入れない）。
 - 条件 2（安全を壊していない）: SQL・migration・event・transaction・lease は変えていない。試験は消していない。trait を残すか消すかは「2 つ目の実装（試験の偽物）があるか」で決め、偽物のある trait は全部残した。`CredentialWaitStore`（credential）は触っていない。
 - 高 risk の path class で変えた file: `store`（task-core の store 全体。`_impl` の改名と転送の撤去）、`credential`（`store/credential_wait.rs` の doc 1 行、`credential_wait_tests.rs` の import、`dispatcher/credential_gate.rs` の引数の型、`credential_resume.rs`）、`lease`（`dispatcher/leases.rs` の doc 1 行、`run_supervisor.rs` の import と引数の型、`task-core`・`celeris` の `instance.rs`）、`budget`（`token_budget.rs`・`quota_book.rs`・`routing_runtime/quota.rs`）、`selfdeploy`（`task-api/src/releases.rs` の trait の import 2 つ）。store 以外はどれも型・import・doc の書き換えだけで、分岐と SQL は変えていない（`git diff` で確認）。設計は ADR 2026-11-16-taskstore-trait-removal。
 - 条件 3（size check）: 上の証拠のとおり exit 0。
 
 ## 未解決
-- 条件 1 の reviewer 側（規約 11 を含む prompt と `review.json` の数値の判定）は、この run の後の review で確かめる必要がある。
+- 無し。条件 1 の worker 側と reviewer 側は、上の run の prompt と `review.json` で確かめた。
 
 ## 提案
-- `scripts/dev/repo-health/profiles/celeris.toml` の構造指標 `task_store_fn_decls`・`task_store_supertraits` は、数える file（`task_store.rs`）が無くなり `None` になる。profile は policy の file で、変えると `policy.changed` が別の review を求めるので、この task では変えなかった。別の review で 2 つの指標を消すこと。同じ file の `size.responsibility-growth` の説明（「TaskStore（…task_store.rs）」）も直す。
+- `scripts/dev/repo-health/profiles/celeris.toml` の構造指標 `task_store_fn_decls`・`task_store_supertraits` は、数える file（`task_store.rs`）が無くなり `None` になる。profile は policy の file で、変えると `policy.changed` が別の review を求めるので、この task では変えなかった。別の review で 2 つの指標を消すこと。同じ file の `size.responsibility-growth` の説明（「TaskStore（…task_store.rs）」）も直す。撤去の条件は「profile の変更の review が通ること」とする。撤去の責任者は親 01M7J3N68JRNTP5Q4G934QWF36（LoC 削減 v3 の root）で、root の closeout までに profile の変更 task を起票する（規約 7）。
 - D 以降の候補: `CredentialWaitStore`（設計 review が要る）、`KnowledgeUseStore`・`RequestLog` も実装は 1 つ。偽物が無ければ同じ形で消せる。
 
 ## 本番への移行

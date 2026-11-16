@@ -1,8 +1,9 @@
 ---
 title: LoC 削減 v3 D — task-core・task-ops の整理（production 純減 2,577 行 / 閾値 2,500 行）
 tasks: [01M7J3NKV8E6P9WAWGMJR3KB1F]
-status: review
+status: done
 updated: 2026-11-16
+completed: 2026-11-16
 ---
 # LoC 削減 v3 D — task-core・task-ops の整理
 

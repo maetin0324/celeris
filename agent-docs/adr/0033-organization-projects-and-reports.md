@@ -259,3 +259,7 @@ CoS は全道具を使う特別 worker となり、スレッドごとの継続 s
 
 `projects.secretary_summary` は書く経路が無いまま残っていたので、[ADR 2026-10-27-project-brief](2026-10-27-project-brief.md)
 で消した（migration 0095）。案件の状態の要約は `project_briefs` に構造化して持つ。
+
+## 付記（2026-11-16）
+
+D3 の報告（`reports`）と D5 の承認（`approvals`・`standing_rules`）の読み書きは、`ReportStore`・`ApprovalStore` の trait（`TaskStore` の supertrait）として置いていた。実装は `SqliteStore` だけだったので、[ADR 2026-11-16 TaskStore の trait の撤去](2026-11-16-taskstore-trait-removal.md) で trait を消し、`SqliteStore` の固有 method にした。表・SQL・報告と承認の規則は変えていない。

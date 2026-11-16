@@ -3,7 +3,7 @@ tasks: [01M6TYVJT2HG9NY5FW9FMCZS9A]
 ---
 # ADR 2026-11-10: TaskStore の consumer 駆動の port — 最初の consumer は celeris-mcp
 
-- 状態: 採用・実装済み。実装は同じ task の mcp-port・store-prune・table-writers・mcp-ports・move-org・mcp-org、前後計測は record と record-ports。D2 の 8 method は全部移した（`org_list`・`org_upsert` は move-org で移した。2 つ目の付記）。`get` は D2 のとおり移していない。D2 の「1 行転送」をやめたことは 1 つ目の付記に書いた。
+- 状態: 採用・実装済み。D2 の TaskStore の supertrait の形は [ADR 2026-11-16 TaskStore の trait の撤去](2026-11-16-taskstore-trait-removal.md) で置き換えた（末尾の付記）。実装は同じ task の mcp-port・store-prune・table-writers・mcp-ports・move-org・mcp-org、前後計測は record と record-ports。D2 の 8 method は全部移した（`org_list`・`org_upsert` は move-org で移した。2 つ目の付記）。`get` は D2 のとおり移していない。D2 の「1 行転送」をやめたことは 1 つ目の付記に書いた。
 - 計測と検査: `agent-docs/progress/2026-11-10-taskstore-consumer-ports/measure.py`（標準ライブラリだけ）、着手時の値 `baseline.json`、削除の対象 `prune-list.json`、直す file `port-fix-files.json`。基準は着手時の `$CELERIS_WU_BASE`（件名「integrate wu/final-record (phase reclose)」）。
 
 ## 文脈
@@ -151,3 +151,9 @@ tasks: [01M6TYVJT2HG9NY5FW9FMCZS9A]
 - fixture: 名簿・一覧の tool と組織の resources の本体は、fake を渡して SQLite を開かずに試す（`port_fake_` の 10 件）。SQLite を開く試験は 1 件減った（`tests/mcp_integration.rs` の `org_create_node_ignores_tools_and_permissions` を `port_fake_org_create_node_upserts_child_without_tools_and_permissions` へ移した）。`SqliteStore::open*` の数（7）は fixture の helper の数で、減っていない。残る SQLite の試験は、`mcp_clients` の行と本物の HTTP の往復（`auth/tests.rs`・`call/tests.rs`・`stdio.rs`）、file の DB を読み取り専用で開く `db_query`・`db_schema`（`tools/db_tests.rs`）、port へ移していない tool も通す結合試験（`tests/mcp_integration.rs` の 22 件）である。名簿の SQL は task-core の store の試験が確かめる。
 - 逆依存: `TaskStore` の宣言を変えたときに celeris-mcp で読む・直す file は 6 → 2 になった。compile の単位の逆依存は変わらない。celeris-mcp は task-core に依存し続け（`crates/celeris-mcp/Cargo.toml`・`Cargo.lock` は着手時から差分なし）、task-core のどの変更でも celeris-mcp は再 compile される。これを減らすには trait を別の crate に置く（crate を割る）必要があり、R3 の範囲の外。
 - D6 の目標との差: 「celeris-mcp の src の `TaskStore` の言及 1」「`TaskStore` は `tools/tasks.rs` だけ」は届いた。「mcp の file から見える method 数」は、名簿・一覧の本体では `OrgDirectory` 6・`TaskQuery` 2・`McpClientStore` 7 になった。`tools/tasks.rs` の `get` と `task_ops` への委譲は `TaskStore` の 304 method のまま。
+
+## 付記 2026-11-16: TaskStore の trait の撤去（D2 の前提の置き換え）
+- [ADR 2026-11-16 TaskStore の trait の撤去](2026-11-16-taskstore-trait-removal.md) で `TaskStore` の trait と 144 個の 1 行転送を消し、method は `SqliteStore` の固有 method になった。D2 の「TaskStore はその trait を supertrait に持ち、`dyn TaskStore`・`T: TaskStore` の consumer はそのまま動く」と「`impl <trait> for SqliteStore` は `<method>_impl` への 1 行転送」はもう成り立たない。
+- `OrgDirectory`・`TaskQuery` は celeris-mcp の偽物（`tools/fake_ports.rs`）が 2 つ目の実装なので残した。celeris-mcp はこの 2 つの trait を import して使い、`get` などそれ以外は `SqliteStore` の固有 method を呼ぶ。
+- D2 で `NodeSessionStore`・`McpClientStore`・`McpCallStore`・`ReportStore` として名指した狭い trait は、実装が `SqliteStore` だけだったので同じ ADR の D2 で消した（celeris-mcp の `McpState.node_sessions` も消した）。
+- D6 の指標の `TaskStore の fn 宣言`（`task_store.rs`）は、数える file が無くなった。

@@ -1296,23 +1296,33 @@ impl Dispatcher {
     /// （`parent_terminal`。子は store の連鎖で中止済みか終端）。
     pub(super) fn close_open_task_units(&self, task: &Task) -> Result<(), DispatchError> {
         let units = self.store.work_units_for(task.id)?;
-        let mut rows = Vec::new();
-        let mut events = Vec::new();
-        for u in units
+        let open = units
             .iter()
-            .filter(|u| u.kind == task_core::WorkUnitKind::Task && !u.status.is_terminal())
-        {
+            .filter(|u| u.kind == task_core::WorkUnitKind::Task && !u.status.is_terminal());
+        self.cancel_units(task, open, "parent_terminal")
+    }
+
+    /// `units` を cancelled にし、`reason` を `WorkUnitTransitioned` に残す（1 transaction）。
+    pub(super) fn cancel_units<'a>(
+        &self,
+        task: &Task,
+        units: impl Iterator<Item = &'a task_core::WorkUnitRow>,
+        reason: &str,
+    ) -> Result<(), DispatchError> {
+        let now = rfc3339(OffsetDateTime::now_utc());
+        let (mut rows, mut events) = (Vec::new(), Vec::new());
+        for u in units {
             let mut row = u.clone();
             row.status = task_core::WorkUnitStatus::Cancelled;
             row.blocked_reason = None;
             row.clear_lease();
-            row.updated_at = rfc3339(OffsetDateTime::now_utc());
+            row.updated_at = now.clone();
             events.push(Event::WorkUnitTransitioned {
                 work_unit_id: u.id.clone(),
                 key: u.key.clone(),
                 from: u.status,
                 to: task_core::WorkUnitStatus::Cancelled,
-                reason: "parent_terminal".to_string(),
+                reason: reason.to_string(),
                 run_id: None,
             });
             rows.push(row);

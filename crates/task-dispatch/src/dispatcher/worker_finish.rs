@@ -302,40 +302,16 @@ impl Dispatcher {
             run_since,
             provider,
             result,
+            None,
         )
     }
 
     /// `on_worker_finished`（checks が無い、または atomic な run）と `on_work_unit_checks_finished`
     /// （WU の checks が終わった後）の共通の後段。`task`/`current_wu` は呼び出し側が確定させたもの。
-    #[allow(clippy::too_many_arguments)]
-    pub(super) fn finish_worker_result(
-        &mut self,
-        task: Task,
-        current_wu: Option<task_core::WorkUnitRow>,
-        run_id: String,
-        account: Option<String>,
-        account_adapter: Option<AccountAdapter>,
-        run_since: Option<OffsetDateTime>,
-        provider: ProviderId,
-        result: Result<RunOutcome, AdapterError>,
-    ) -> Result<(), DispatchError> {
-        self.finish_worker_result_with(
-            task,
-            current_wu,
-            run_id,
-            account,
-            account_adapter,
-            run_since,
-            provider,
-            result,
-            None,
-        )
-    }
-
-    /// `finish_worker_result` の本体。`check_failure` は WU の checks が不合格で `Terminal::Done` を
+    /// `check_failure` は WU の checks が不合格で `Terminal::Done` を
     /// `Terminal::Error` にすり替えた run だけ `Some`（ADR-0079 付記 R7-5: 記録・outcome の要約・usage）。
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn finish_worker_result_with(
+    pub(super) fn finish_worker_result(
         &mut self,
         task: Task,
         current_wu: Option<task_core::WorkUnitRow>,

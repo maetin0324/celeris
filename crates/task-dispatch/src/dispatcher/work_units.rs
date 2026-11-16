@@ -35,6 +35,7 @@ impl Dispatcher {
                 run_since,
                 provider,
                 result,
+                None,
             );
         };
         // ADR-0074 D1.2（Phase F2b）: v2 の WU の checks は WU の作業ツリーで走らせ、検査の間も WU の lease（と Task の lease）を延ばしておく（検査中に照合で WU を戻さないため）。
@@ -394,7 +395,7 @@ impl Dispatcher {
                 exit_code: None,
             }),
         };
-        self.finish_worker_result_with(
+        self.finish_worker_result(
             task,
             current_wu,
             run_id,
@@ -1391,28 +1392,11 @@ impl Dispatcher {
     /// WU の worktree とブランチを消す（ADR-0043 D2 の中止の規則）。
     pub(super) fn cancel_open_work_units(&self, task: &Task) -> Result<(), DispatchError> {
         let units = self.store.work_units_for(task.id)?;
-        let mut rows = Vec::new();
-        let mut events = Vec::new();
-        for u in units.iter().filter(|u| !u.status.is_terminal()) {
-            let mut row = u.clone();
-            row.status = task_core::WorkUnitStatus::Cancelled;
-            row.blocked_reason = None;
-            row.clear_lease();
-            row.updated_at = rfc3339(OffsetDateTime::now_utc());
-            events.push(Event::WorkUnitTransitioned {
-                work_unit_id: u.id.clone(),
-                key: u.key.clone(),
-                from: u.status,
-                to: task_core::WorkUnitStatus::Cancelled,
-                reason: "cancel".to_string(),
-                run_id: None,
-            });
-            rows.push(row);
-        }
-        if !rows.is_empty() {
-            self.store
-                .work_units_apply(task.id, Vec::new(), rows, events)?;
-        }
+        self.cancel_units(
+            task,
+            units.iter().filter(|u| !u.status.is_terminal()),
+            "cancel",
+        )?;
         if let Some(ws) = self.task_workspaces_for(task) {
             for u in units.iter().filter(|u| u.branch.is_some()) {
                 for repo in ws.repos.iter().filter(|r| r.is_git()) {

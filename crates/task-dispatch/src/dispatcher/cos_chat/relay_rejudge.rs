@@ -95,24 +95,41 @@ impl CosChatLaunch {
             }
         }
         for (thread, rejudge) in per_thread {
-            if self.running.contains_key(&thread) || !self.has_capacity(dispatcher) {
-                continue;
-            }
-            let run_id = ulid::Ulid::new().to_string();
-            let Some(claim) = self
-                .store
-                .cos_triage_relay_claim(&thread, &run_id, &rejudge, now)
-                .map_err(|e| e.to_string())?
-            else {
-                continue;
-            };
-            let run = self
-                .store
-                .chat_run_get(&claim.thread_id, &claim.run_id)
-                .map_err(|e| e.to_string())?;
-            self.run_configs.insert(thread.clone(), self.config.clone());
-            self.launch_routes(dispatcher, &thread, &run, 0, None, now);
+            self.launch_rejudge(dispatcher, &thread, now, |store, run_id| {
+                store.cos_triage_relay_claim(&thread, run_id, &rejudge, now)
+            })?;
         }
+        Ok(())
+    }
+
+    /// 空いている thread で claim できたら（store が 1 transaction で item と run を結ぶ）、その run を起こす。
+    fn launch_rejudge(
+        &mut self,
+        dispatcher: &mut Dispatcher,
+        thread: &str,
+        now: time::OffsetDateTime,
+        claim: impl FnOnce(
+            &task_core::SqliteStore,
+            &str,
+        ) -> Result<
+            Option<task_core::chat::triage::CosTriageClaim>,
+            task_core::chat::ChatError,
+        >,
+    ) -> Result<(), String> {
+        if self.running.contains_key(thread) || !self.has_capacity(dispatcher) {
+            return Ok(());
+        }
+        let run_id = ulid::Ulid::new().to_string();
+        let Some(claim) = claim(&self.store, &run_id).map_err(|e| e.to_string())? else {
+            return Ok(());
+        };
+        let run = self
+            .store
+            .chat_run_get(&claim.thread_id, &claim.run_id)
+            .map_err(|e| e.to_string())?;
+        self.run_configs
+            .insert(thread.to_string(), self.config.clone());
+        self.launch_routes(dispatcher, thread, &run, 0, None, now);
         Ok(())
     }
 }
@@ -134,23 +151,9 @@ impl CosChatLaunch {
             }
         }
         for (thread, items) in per_thread {
-            if self.running.contains_key(&thread) || !self.has_capacity(dispatcher) {
-                continue;
-            }
-            let run_id = ulid::Ulid::new().to_string();
-            let Some(claim) = self
-                .store
-                .cos_triage_plan_rejudge_claim(&thread, &run_id, &items, now)
-                .map_err(|e| e.to_string())?
-            else {
-                continue;
-            };
-            let run = self
-                .store
-                .chat_run_get(&claim.thread_id, &claim.run_id)
-                .map_err(|e| e.to_string())?;
-            self.run_configs.insert(thread.clone(), self.config.clone());
-            self.launch_routes(dispatcher, &thread, &run, 0, None, now);
+            self.launch_rejudge(dispatcher, &thread, now, |store, run_id| {
+                store.cos_triage_plan_rejudge_claim(&thread, run_id, &items, now)
+            })?;
         }
         Ok(())
     }

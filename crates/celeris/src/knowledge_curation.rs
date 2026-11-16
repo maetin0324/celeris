@@ -278,12 +278,18 @@ pub fn tick(
                             ..Default::default()
                         },
                     };
-                    extraction::staged(store, &task, &summary, now)?;
+                    extraction::finish_daily_run(store, &task, &summary, now, "daily-extracted")?;
                     match prepare(store, knowledge_root, view, job, run, previous, &task, now) {
                         Ok(entry) => {
                             state.tasks.insert(key, entry);
                             save_state(state_file, &state).map_err(StoreError::Invalid)?;
-                            extraction::ready(store, &task, &summary, now)?;
+                            extraction::finish_daily_run(
+                                store,
+                                &task,
+                                &summary,
+                                now,
+                                "daily-ready",
+                            )?;
                             out.prepared.push(task_id);
                         }
                         Err(e) => {
@@ -294,7 +300,7 @@ pub fn tick(
                 (Some(Phase::Prepared), s) if !s.is_terminal() => {
                     if !curation::inputs_ready(store, &task)? {
                         let summary = extraction::summary(store, &task)?.unwrap_or_default();
-                        extraction::ready(store, &task, &summary, now)?;
+                        extraction::finish_daily_run(store, &task, &summary, now, "daily-ready")?;
                     }
                 }
                 (Some(Phase::Prepared) | None, s) if s.is_terminal() => {

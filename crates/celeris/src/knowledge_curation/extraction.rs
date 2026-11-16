@@ -405,36 +405,17 @@ fn repair_placements(
     (candidates, notes)
 }
 
-pub(super) fn staged(
+/// 日次の抽出の run を done として記録する（`label` は `daily-extracted` か `daily-ready`）。
+pub(super) fn finish_daily_run(
     store: &SqliteStore,
     task: &Task,
     summary: &KnowledgeRunSummary,
     now: OffsetDateTime,
+    label: &str,
 ) -> Result<(), StoreError> {
     store.knowledge_run_create(task.id, task.id, now)?;
-    store.knowledge_run_finish(
-        task.id,
-        KnowledgeRunState::Done,
-        now,
-        Some(summary),
-        Some("daily-extracted"),
-    )
-}
-
-pub(super) fn ready(
-    store: &SqliteStore,
-    task: &Task,
-    summary: &KnowledgeRunSummary,
-    now: OffsetDateTime,
-) -> Result<(), StoreError> {
-    store.knowledge_run_create(task.id, task.id, now)?;
-    store.knowledge_run_finish(
-        task.id,
-        KnowledgeRunState::Done,
-        now,
-        Some(summary),
-        Some("daily-ready"),
-    )
+    let done = KnowledgeRunState::Done;
+    store.knowledge_run_finish(task.id, done, now, Some(summary), Some(label))
 }
 
 pub(super) fn summary(

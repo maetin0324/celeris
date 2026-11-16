@@ -940,16 +940,7 @@ impl Dispatcher {
             );
             objective.push_str(&request.to_markdown());
         }
-        let (max_turns, max_wall_secs) = task_core::execution::RepairClass::MergeConflict.budget();
         let spec = task_core::WorkUnitSpec {
-            key: key.clone(),
-            kind: task_core::WorkUnitKind::Repair,
-            title: format!(
-                "repair (merge_conflict): {} の merge の衝突を解消",
-                conflict.key
-            ),
-            objective,
-            depends_on: vec![],
             done_when: vec![format!(
                 "`git merge-base --is-ancestor {} HEAD` が成り立つ（衝突を解消して merge 済み）",
                 conflict.branch
@@ -963,14 +954,17 @@ impl Dispatcher {
                 paths: conflict.files.clone(),
                 ..Default::default()
             },
-            harness: None,
-            features: None,
-            budget: Some(task_core::WorkUnitBudget {
-                max_turns: Some(max_turns),
-                max_wall_secs: Some(max_wall_secs),
-            }),
-            outputs: vec![],
             phase: Some(phase.clone()),
+            ..crate::review::bare_unit_spec(
+                key.clone(),
+                task_core::WorkUnitKind::Repair,
+                format!(
+                    "repair (merge_conflict): {} の merge の衝突を解消",
+                    conflict.key
+                ),
+                objective,
+                Some(task_core::execution::RepairClass::MergeConflict.budget()),
+            )
         };
         self.add_integration_repair(
             task,
@@ -1207,24 +1201,15 @@ impl Dispatcher {
             diff_stat.as_deref(),
             Some(&scope),
         );
-        let (max_turns, max_wall_secs) = class.budget();
         let spec = task_core::WorkUnitSpec {
-            key: format!("{prefix}{n}"),
-            kind: task_core::WorkUnitKind::Repair,
-            title: format!("repair ({bucket}): 工程 {phase} の統合後の検査"),
-            objective,
-            depends_on: vec![],
-            done_when: vec![],
-            checks: vec![],
-            context: Default::default(),
-            harness: None,
-            features: None,
-            budget: Some(task_core::WorkUnitBudget {
-                max_turns: Some(max_turns),
-                max_wall_secs: Some(max_wall_secs),
-            }),
-            outputs: vec![],
             phase: Some(phase.clone()),
+            ..crate::review::bare_unit_spec(
+                format!("{prefix}{n}"),
+                task_core::WorkUnitKind::Repair,
+                format!("repair ({bucket}): 工程 {phase} の統合後の検査"),
+                objective,
+                Some(class.budget()),
+            )
         };
         self.add_integration_repair(task, integ, spec, &bucket, "integration_check_failed")
     }

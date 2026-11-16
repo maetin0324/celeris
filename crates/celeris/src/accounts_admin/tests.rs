@@ -1,4 +1,5 @@
 use super::*;
+use task_core::AccountCheckResult;
 
 fn stub_command(dir: &std::path::Path, script: &str) -> String {
     use std::io::Write;

@@ -619,8 +619,6 @@ impl Dispatcher {
             let health = health.then_some(bucket.as_str());
             return review_limits::stop_on_cap(store, task, health, used, &failing_details, events);
         }
-
-        let (max_turns, max_wall_secs) = class.budget();
         let workspaces = self.task_workspaces_for(task);
         let cwd = workspaces.as_ref().and_then(|w| w.cwd());
         let branch = workspaces
@@ -641,24 +639,13 @@ impl Dispatcher {
             Some(&scope),
         );
         let n = repairs.len() + 1;
-        let spec = task_core::WorkUnitSpec {
-            key: format!("repair-{n}"),
-            kind: task_core::WorkUnitKind::Repair,
-            title: format!("repair ({bucket}): 修復"),
+        let spec = crate::review::bare_unit_spec(
+            format!("repair-{n}"),
+            task_core::WorkUnitKind::Repair,
+            format!("repair ({bucket}): 修復"),
             objective,
-            depends_on: vec![],
-            done_when: vec![],
-            checks: vec![],
-            context: Default::default(),
-            harness: None,
-            features: None,
-            budget: Some(task_core::WorkUnitBudget {
-                max_turns: Some(max_turns),
-                max_wall_secs: Some(max_wall_secs),
-            }),
-            outputs: vec![],
-            phase: None,
-        };
+            Some(class.budget()),
+        );
         self.apply_review_repair(task, &units, spec, "review_repair", None, events)
             .map(Some)
     }
@@ -714,24 +701,9 @@ impl Dispatcher {
         }
         let attempt = prior + 1;
         let class = task_core::RepairClass::IntegrationConflict;
-        let (max_turns, max_wall_secs) = class.budget();
         let conflict_files = task_core::normalize_conflict_files(files);
         let scope = Self::review_repair_scope(task, &units);
         let spec = task_core::WorkUnitSpec {
-            key: task_core::integration_repair_key(attempt),
-            kind: task_core::WorkUnitKind::Repair,
-            title: task_core::INTEGRATION_REPAIR_TITLE.to_string(),
-            objective: task_core::build_integration_repair_objective(
-                target_ref,
-                target_sha,
-                before_sha,
-                &conflict_files,
-                &task.title,
-                &task.objective,
-                Some(&scope),
-            ),
-            depends_on: vec![],
-            done_when: vec![],
             checks: vec![
                 task_core::WorkUnitCheck {
                     cmd: format!("git merge-base --is-ancestor {target_sha} HEAD"),
@@ -744,15 +716,21 @@ impl Dispatcher {
                     scope: false,
                 },
             ],
-            context: Default::default(),
-            harness: None,
-            features: None,
-            budget: Some(task_core::WorkUnitBudget {
-                max_turns: Some(max_turns),
-                max_wall_secs: Some(max_wall_secs),
-            }),
-            outputs: vec![],
-            phase: None,
+            ..crate::review::bare_unit_spec(
+                task_core::integration_repair_key(attempt),
+                task_core::WorkUnitKind::Repair,
+                task_core::INTEGRATION_REPAIR_TITLE.to_string(),
+                task_core::build_integration_repair_objective(
+                    target_ref,
+                    target_sha,
+                    before_sha,
+                    &conflict_files,
+                    &task.title,
+                    &task.objective,
+                    Some(&scope),
+                ),
+                Some(class.budget()),
+            )
         };
         self.apply_review_repair(
             task,
@@ -788,115 +766,35 @@ impl Dispatcher {
             .to_string();
 
         let now = rfc3339(OffsetDateTime::now_utc());
-        let active_plan = self.store.execution_plan_active(task_id)?;
-        let (new_plan, work_units, extra) = match active_plan {
-            Some(plan) => {
-                // D6: 計画のある Task は最終レビューまでに全 WU が done なので、既存の seq の続き。
-                let seq = units.iter().map(|u| u.seq).max().unwrap_or(0) + 1;
-                let row = task_core::WorkUnitRow::new(
-                    task_core::new_id(),
-                    task_id.to_string(),
-                    plan.id.clone(),
-                    seq,
-                    spec,
-                    task_core::WorkUnitStatus::Ready,
-                    now.clone(),
-                );
-                let ev = Event::WorkUnitTransitioned {
-                    work_unit_id: row.id.clone(),
-                    key: row.key.clone(),
-                    from: task_core::WorkUnitStatus::Pending,
-                    to: task_core::WorkUnitStatus::Ready,
-                    reason: reason.to_string(),
-                    run_id: None,
-                };
-                // ADR-0074 D6.2（Phase F1）: この repair WU の class を events に残す
-                // （`execution_metrics::summarize` が `repairs_by_class` を組み立てる材料。
-                // `unknown` を無くす）。
-                let scheduled = Event::RepairScheduled {
-                    work_unit_id: row.id.clone(),
-                    key: row.key.clone(),
-                    class: bucket.clone(),
-                    origin: task_core::execution::RepairOrigin::Review,
-                };
-                (None, vec![row], vec![ev, scheduled])
-            }
-            None => {
-                // D5: atomic な Task は、初めての WorkUnit で暗黙の WU を `main`（done）として実体化する。
-                let plan_id = task_core::new_id();
-                let main_spec = task_core::WorkUnitSpec {
-                    key: "main".to_string(),
-                    kind: task_core::WorkUnitKind::Implement,
-                    title: task.title.clone(),
-                    objective: task.objective.clone(),
-                    depends_on: vec![],
-                    done_when: vec![],
-                    checks: vec![],
-                    context: Default::default(),
-                    harness: None,
-                    features: None,
-                    budget: None,
-                    outputs: vec![],
-                    phase: None,
-                };
-                let main_row = task_core::WorkUnitRow::new(
-                    task_core::new_id(),
-                    task_id.to_string(),
-                    plan_id.clone(),
-                    0,
-                    main_spec.clone(),
-                    task_core::WorkUnitStatus::Done,
-                    now.clone(),
-                );
-                let repair_row = task_core::WorkUnitRow::new(
-                    task_core::new_id(),
-                    task_id.to_string(),
-                    plan_id.clone(),
-                    1,
-                    spec.clone(),
-                    task_core::WorkUnitStatus::Ready,
-                    now.clone(),
-                );
-                let plan_spec = task_core::ExecutionPlanSpec::v1(
-                    if integration.is_some() {
-                        "integration repair: 暗黙の WorkUnit を実体化".to_string()
-                    } else {
-                        "reviewer repair: 暗黙の WorkUnit を実体化".to_string()
-                    },
-                    vec![main_spec, spec],
-                );
-                let plan_row = task_core::ExecutionPlanRow {
-                    id: plan_id.clone(),
-                    task_id: task_id.to_string(),
-                    version: 1,
-                    origin: task_core::PlanOrigin::Repair,
-                    planner_run_id: None,
-                    status: task_core::PlanStatus::Active,
-                    spec: plan_spec.clone(),
-                    created_at: now.clone(),
-                    superseded_at: None,
-                };
-                let ev = Event::ExecutionPlanned {
-                    plan_id,
-                    version: 1,
-                    origin: task_core::PlanOrigin::Repair,
-                    supersedes: None,
-                    reason: Some(reason.to_string()),
-                    plan: Box::new(plan_spec),
-                };
-                let scheduled = Event::RepairScheduled {
-                    work_unit_id: repair_row.id.clone(),
-                    key: repair_row.key.clone(),
-                    class: bucket.clone(),
-                    origin: task_core::execution::RepairOrigin::Review,
-                };
-                (
-                    Some(plan_row),
-                    vec![main_row, repair_row],
-                    vec![ev, scheduled],
-                )
-            }
+        let rationale = if integration.is_some() {
+            "integration repair: 暗黙の WorkUnit を実体化"
+        } else {
+            "reviewer repair: 暗黙の WorkUnit を実体化"
         };
+        let (new_plan, work_units, ev) = crate::review::repair_unit_rows(
+            self.store.execution_plan_active(task_id)?,
+            task,
+            units,
+            spec,
+            (reason, rationale),
+            &now,
+        );
+        let repair = work_units.last().ok_or_else(|| {
+            StoreError::Invalid(format!(
+                "repair for task {task_id}: no repair work unit row"
+            ))
+        })?;
+        // ADR-0074 D6.2（Phase F1）: この repair WU の class を events に残す
+        // （`execution_metrics::summarize` が `repairs_by_class` を組み立てる材料。`unknown` を無くす）。
+        let extra = vec![
+            ev,
+            Event::RepairScheduled {
+                work_unit_id: repair.id.clone(),
+                key: repair.key.clone(),
+                class: bucket.clone(),
+                origin: task_core::execution::RepairOrigin::Review,
+            },
+        ];
 
         let mut all_events = std::mem::take(events);
         all_events.extend(extra);

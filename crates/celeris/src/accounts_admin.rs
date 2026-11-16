@@ -17,7 +17,7 @@ use std::time::Duration;
 use task_api::{
     AccountAdminError, AccountCheckOutcome, AccountLoginCodeOutcome, AccountLoginStartOutcome,
 };
-use task_core::{AccountAdapter, AccountCheckResult, RateLimitObservation};
+use task_core::{AccountAdapter, RateLimitObservation};
 use task_worker::{
     CodexLoginSession, LoginOutcome, LoginSession, check_account, check_account_codex,
     check_account_opencode_go, start_login, start_login_codex,
@@ -343,7 +343,9 @@ pub fn spawn_check(
             return;
         }
     };
-    match adapter {
+    let check: std::pin::Pin<
+        Box<dyn std::future::Future<Output = task_worker::AccountCheck> + Send>,
+    > = match adapter {
         AccountAdapter::ClaudeCode => {
             let check_model = config
                 .accounts
@@ -351,19 +353,9 @@ pub fn spawn_check(
                 .map(|a| a.check_model.clone())
                 .unwrap_or_default();
             let (command, env) = claude_command_and_env(config);
-            tokio::spawn(async move {
-                let check = check_account(&command, &dir, &check_model, CHECK_TIMEOUT, &env).await;
-                finish_check(
-                    adapter,
-                    id,
-                    check.result,
-                    check.detail,
-                    check.observation,
-                    events,
-                    reply,
-                )
-                .await;
-            });
+            Box::pin(async move {
+                check_account(&command, &dir, &check_model, CHECK_TIMEOUT, &env).await
+            })
         }
         AccountAdapter::OpencodeGo => {
             let usage_url = config
@@ -371,63 +363,48 @@ pub fn spawn_check(
                 .as_ref()
                 .map(|a| a.opencode_go_usage_url.clone())
                 .unwrap_or_default();
-            tokio::spawn(async move {
-                let check = check_account_opencode_go(&dir, &usage_url, CHECK_TIMEOUT).await;
-                finish_check(
-                    adapter,
-                    id,
-                    check.result,
-                    check.detail,
-                    check.observation,
-                    events,
-                    reply,
-                )
-                .await;
-            });
+            Box::pin(
+                async move { check_account_opencode_go(&dir, &usage_url, CHECK_TIMEOUT).await },
+            )
         }
         AccountAdapter::Codex => {
             let (command, env) = codex_command_and_env(config);
-            tokio::spawn(async move {
-                let check = check_account_codex(&command, &dir, CHECK_TIMEOUT, &env).await;
-                finish_check(
-                    adapter,
-                    id,
-                    check.result,
-                    check.detail,
-                    check.observation,
-                    events,
-                    reply,
-                )
-                .await;
-            });
+            Box::pin(async move { check_account_codex(&command, &dir, CHECK_TIMEOUT, &env).await })
         }
-    }
+    };
+    tokio::spawn(async move {
+        let check = check.await;
+        let outcome = AccountCheckOutcome {
+            result: check.result,
+            detail: check.detail.clone(),
+            observation: check.observation.clone(),
+        };
+        let _ = events
+            .send(AccountAdminEvent::Checked {
+                adapter,
+                id,
+                result: check.result.as_str().to_string(),
+                detail: check.detail,
+                observation: check.observation,
+            })
+            .await;
+        let _ = reply.send(Ok(outcome));
+    });
 }
 
-async fn finish_check(
+/// ログインの進行中の印（GUI の「進行中」）を tick_loop に知らせる。
+async fn login_pending(
+    events: &mpsc::Sender<AccountAdminEvent>,
     adapter: AccountAdapter,
     id: String,
-    result: AccountCheckResult,
-    detail: Option<String>,
-    observation: Option<RateLimitObservation>,
-    events: mpsc::Sender<AccountAdminEvent>,
-    reply: oneshot::Sender<Result<AccountCheckOutcome, AccountAdminError>>,
+    pending: bool,
 ) {
-    let outcome = AccountCheckOutcome {
-        result,
-        detail: detail.clone(),
-        observation: observation.clone(),
+    let event = AccountAdminEvent::LoginPending {
+        adapter,
+        id,
+        pending,
     };
-    let _ = events
-        .send(AccountAdminEvent::Checked {
-            adapter,
-            id,
-            result: result.as_str().to_string(),
-            detail,
-            observation,
-        })
-        .await;
-    let _ = reply.send(Ok(outcome));
+    let _ = events.send(event).await;
 }
 
 /// D7 / ADR-0025 D5: `POST /llm/sources/{source_id}/accounts/{account_id}/login`。既に進行中のセッションがあれば止めてから新しく始める。
@@ -469,13 +446,7 @@ pub fn spawn_login_start(
                         let url = session.url.clone();
                         let expires_at_unix = unix_now() + LOGIN_EXPIRY.as_secs() as i64;
                         sessions.lock().await.insert(id.clone(), session);
-                        let _ = events
-                            .send(AccountAdminEvent::LoginPending {
-                                adapter,
-                                id: id.clone(),
-                                pending: true,
-                            })
-                            .await;
+                        login_pending(&events, adapter, id.clone(), true).await;
                         let _ = reply.send(Ok(AccountLoginStartOutcome {
                             url,
                             expires_at_unix,
@@ -486,13 +457,7 @@ pub fn spawn_login_start(
                         // B2: 古いセッションを止めた後に新しい start_login 自体が失敗したら、login_pending を false に
                         // 戻す（そのままだと `sessions` には無いのに GUI には「進行中」が残り続ける）。
                         if had_old {
-                            let _ = events
-                                .send(AccountAdminEvent::LoginPending {
-                                    adapter,
-                                    id: id.clone(),
-                                    pending: false,
-                                })
-                                .await;
+                            login_pending(&events, adapter, id.clone(), false).await;
                         }
                         // D5: URL・認可コードは失敗時もログには出さない（アカウント id と操作名だけ）。
                         let _ = reply.send(Err(AccountAdminError::LoginFailed(e.to_string())));
@@ -527,13 +492,7 @@ pub fn spawn_login_start(
                         let user_code = session.user_code.clone();
                         let expires_at_unix = unix_now() + LOGIN_EXPIRY_CODEX.as_secs() as i64;
                         codex_sessions.lock().await.insert(id.clone(), session);
-                        let _ = events
-                            .send(AccountAdminEvent::LoginPending {
-                                adapter,
-                                id: id.clone(),
-                                pending: true,
-                            })
-                            .await;
+                        login_pending(&events, adapter, id.clone(), true).await;
                         let _ = reply.send(Ok(AccountLoginStartOutcome {
                             url,
                             expires_at_unix,
@@ -542,13 +501,7 @@ pub fn spawn_login_start(
                     }
                     Err(e) => {
                         if had_old {
-                            let _ = events
-                                .send(AccountAdminEvent::LoginPending {
-                                    adapter,
-                                    id: id.clone(),
-                                    pending: false,
-                                })
-                                .await;
+                            login_pending(&events, adapter, id.clone(), false).await;
                         }
                         let _ = reply.send(Err(AccountAdminError::LoginFailed(e.to_string())));
                     }
@@ -574,13 +527,7 @@ pub fn spawn_login_code(
             return;
         };
         let result = session.submit_code(&code, LOGIN_CODE_WAIT).await;
-        let _ = events
-            .send(AccountAdminEvent::LoginPending {
-                adapter: AccountAdapter::ClaudeCode,
-                id: id.clone(),
-                pending: false,
-            })
-            .await;
+        login_pending(&events, AccountAdapter::ClaudeCode, id.clone(), false).await;
         if result.result == LoginOutcome::Ok {
             let _ = events
                 .send(AccountAdminEvent::LoggedIn {
@@ -618,13 +565,7 @@ pub fn spawn_login_cancel(
             AccountAdapter::OpencodeGo => false,
         };
         if cancelled {
-            let _ = events
-                .send(AccountAdminEvent::LoginPending {
-                    adapter,
-                    id,
-                    pending: false,
-                })
-                .await;
+            login_pending(&events, adapter, id, false).await;
         }
         let _ = reply.send(Ok(()));
     });

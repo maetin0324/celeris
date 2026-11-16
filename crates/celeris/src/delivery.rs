@@ -544,120 +544,32 @@ fn make_repair(
         format!("既定ブランチ {}: {}", d.default_branch, main_head),
         format!("失敗した検査の出力:\n{output}"),
     ];
-    let (max_turns, max_wall_secs) = class.budget();
     let n = repairs.len() + 1;
     let key = format!("repair-{n}");
-    let spec = task_core::WorkUnitSpec {
-        key: key.clone(),
-        kind: WorkUnitKind::Repair,
-        title: format!("repair ({}): 配送の局所修復", class.bucket()),
-        objective: task_core::build_repair_objective(class, &details, "配送", "", None, None),
-        depends_on: vec![],
-        done_when: vec![],
-        checks: vec![],
-        context: Default::default(),
-        harness: None,
-        features: None,
-        budget: Some(task_core::WorkUnitBudget {
-            max_turns: Some(max_turns),
-            max_wall_secs: Some(max_wall_secs),
-        }),
-        outputs: vec![],
-        phase: None,
-    };
+    let spec = task_dispatch::review::bare_unit_spec(
+        key.clone(),
+        WorkUnitKind::Repair,
+        format!("repair ({}): 配送の局所修復", class.bucket()),
+        task_core::build_repair_objective(class, &details, "配送", "", None, None),
+        Some(class.budget()),
+    );
     let stamp = now
         .format(&time::format_description::well_known::Rfc3339)
         .map_err(|e| StoreError::Invalid(e.to_string()))?;
-    let active = store.execution_plan_active(d.task_id)?;
-    let (new_plan, rows, event) = if let Some(plan) = active {
-        let row = task_core::WorkUnitRow::new(
-            task_core::new_id(),
-            d.task_id.to_string(),
-            plan.id,
-            units.iter().map(|u| u.seq).max().unwrap_or(0) + 1,
-            spec,
-            WorkUnitStatus::Ready,
-            stamp,
-        );
-        let ev = Event::WorkUnitTransitioned {
-            work_unit_id: row.id.clone(),
-            key: key.clone(),
-            from: WorkUnitStatus::Pending,
-            to: WorkUnitStatus::Ready,
-            reason: "delivery_repair".into(),
-            run_id: None,
-        };
-        (None, vec![row], ev)
-    } else {
-        let task = store
-            .get(d.task_id)?
-            .ok_or_else(|| StoreError::Invalid("task missing".into()))?;
-        let plan_id = task_core::new_id();
-        let main = task_core::WorkUnitSpec {
-            key: "main".into(),
-            kind: WorkUnitKind::Implement,
-            title: task.title,
-            objective: task.objective,
-            depends_on: vec![],
-            done_when: vec![],
-            checks: vec![],
-            context: Default::default(),
-            harness: None,
-            features: None,
-            budget: None,
-            outputs: vec![],
-            phase: None,
-        };
-        let main_row = task_core::WorkUnitRow::new(
-            task_core::new_id(),
-            d.task_id.to_string(),
-            plan_id.clone(),
-            0,
-            main.clone(),
-            WorkUnitStatus::Done,
-            stamp.clone(),
-        );
-        let repair_row = task_core::WorkUnitRow::new(
-            task_core::new_id(),
-            d.task_id.to_string(),
-            plan_id.clone(),
-            1,
-            spec.clone(),
-            WorkUnitStatus::Ready,
-            stamp.clone(),
-        );
-        let plan_spec = task_core::ExecutionPlanSpec {
-            stages: Vec::new(),
-            units: Vec::new(),
-            decisions: Vec::new(),
-            schema: task_core::EXECUTION_PLAN_SCHEMA.into(),
-            rationale: "delivery repair: 暗黙の WorkUnit を実体化".into(),
-            work_units: vec![main, spec],
-            phases: Vec::new(),
-            children: Vec::new(),
-            design_brief: None,
-        };
-        let plan = task_core::ExecutionPlanRow {
-            id: plan_id.clone(),
-            task_id: d.task_id.to_string(),
-            version: 1,
-            origin: task_core::PlanOrigin::Repair,
-            planner_run_id: None,
-            status: task_core::PlanStatus::Active,
-            spec: plan_spec.clone(),
-            created_at: stamp,
-            superseded_at: None,
-        };
-        let ev = Event::ExecutionPlanned {
-            plan_id,
-            version: 1,
-            origin: task_core::PlanOrigin::Repair,
-            supersedes: None,
-            reason: Some("delivery_repair".into()),
-            plan: Box::new(plan_spec),
-        };
-        (Some(plan), vec![main_row, repair_row], ev)
-    };
+    let task = store
+        .get(d.task_id)?
+        .ok_or_else(|| StoreError::Invalid("task missing".into()))?;
+    let (new_plan, rows, event) = task_dispatch::review::repair_unit_rows(
+        store.execution_plan_active(d.task_id)?,
+        &task,
+        &units,
+        spec,
+        (
+            "delivery_repair",
+            "delivery repair: 暗黙の WorkUnit を実体化",
+        ),
+        &stamp,
+    );
     store.delivery_repair_apply(d.task_id, vec![event], new_plan, rows)?;
     Ok(Some(key))
 }

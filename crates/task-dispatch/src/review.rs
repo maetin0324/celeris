@@ -909,6 +909,100 @@ fn check_plan_file(
     }
 }
 
+/// 依存・完了条件・検査・作業範囲・出力の無い WorkUnit の spec（repair と暗黙の `main`）。`budget` は
+/// `(max_turns, max_wall_secs)`（repair は class の既定 `RepairClass::budget`）。
+pub fn bare_unit_spec(
+    key: String,
+    kind: task_core::WorkUnitKind,
+    title: String,
+    objective: String,
+    budget: Option<(u32, u64)>,
+) -> task_core::WorkUnitSpec {
+    task_core::WorkUnitSpec {
+        key,
+        kind,
+        title,
+        objective,
+        depends_on: vec![],
+        done_when: vec![],
+        checks: vec![],
+        context: Default::default(),
+        harness: None,
+        features: None,
+        budget: budget.map(|(turns, wall)| task_core::WorkUnitBudget {
+            max_turns: Some(turns),
+            max_wall_secs: Some(wall),
+        }),
+        outputs: vec![],
+        phase: None,
+    }
+}
+
+/// ADR-0074 D5・D6: repair の WorkUnit（ready）の行を作る。計画のある Task は既存の seq の続きに足し（事象は
+/// `WorkUnitTransitioned`）、atomic な Task は暗黙の WorkUnit を `main`（done）として実体化した計画（origin
+/// `Repair`、事象は `ExecutionPlanned`）を作る。行の最後が repair の WorkUnit。review・統合の repair と配送の
+/// 局所修復（celeris `delivery`）が同じ形で使う。
+pub fn repair_unit_rows(
+    active_plan: Option<task_core::ExecutionPlanRow>,
+    task: &Task,
+    units: &[task_core::WorkUnitRow],
+    spec: task_core::WorkUnitSpec,
+    (reason, rationale): (&str, &str),
+    now: &str,
+) -> (
+    Option<task_core::ExecutionPlanRow>,
+    Vec<task_core::WorkUnitRow>,
+    task_core::Event,
+) {
+    use task_core::WorkUnitStatus::{Done, Pending, Ready};
+    let row = |plan_id: &str, seq, spec, status| {
+        let (id, task_id) = (task_core::new_id(), task.id.to_string());
+        task_core::WorkUnitRow::new(id, task_id, plan_id.into(), seq, spec, status, now.into())
+    };
+    if let Some(plan) = active_plan {
+        let seq = units.iter().map(|u| u.seq).max().unwrap_or(0) + 1;
+        let row = row(&plan.id, seq, spec, Ready);
+        let ev = task_core::Event::WorkUnitTransitioned {
+            work_unit_id: row.id.clone(),
+            key: row.key.clone(),
+            from: Pending,
+            to: Ready,
+            reason: reason.to_string(),
+            run_id: None,
+        };
+        return (None, vec![row], ev);
+    }
+    let plan_id = task_core::new_id();
+    let kind = task_core::WorkUnitKind::Implement;
+    let (title, objective) = (task.title.clone(), task.objective.clone());
+    let main = bare_unit_spec("main".to_string(), kind, title, objective, None);
+    let rows = vec![
+        row(&plan_id, 0, main.clone(), Done),
+        row(&plan_id, 1, spec.clone(), Ready),
+    ];
+    let plan_spec = task_core::ExecutionPlanSpec::v1(rationale.to_string(), vec![main, spec]);
+    let plan_row = task_core::ExecutionPlanRow {
+        id: plan_id.clone(),
+        task_id: task.id.to_string(),
+        version: 1,
+        origin: task_core::PlanOrigin::Repair,
+        planner_run_id: None,
+        status: task_core::PlanStatus::Active,
+        spec: plan_spec.clone(),
+        created_at: now.to_string(),
+        superseded_at: None,
+    };
+    let ev = task_core::Event::ExecutionPlanned {
+        plan_id,
+        version: 1,
+        origin: task_core::PlanOrigin::Repair,
+        supersedes: None,
+        reason: Some(reason.to_string()),
+        plan: Box::new(plan_spec),
+    };
+    (Some(plan_row), rows, ev)
+}
+
 /// 合成した `Review` kind のタスク（永続化しない。ADR-0007 D5 3.）。
 pub fn synthetic_review_task(subject_task: &Task, run_id: &str, hint: &WorkerHint) -> Task {
     let now = time::OffsetDateTime::now_utc();

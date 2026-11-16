@@ -80,7 +80,7 @@ WU の `--run` から外し、release gate（`scripts/selfdeploy/release.sh`）�
 - `cap:browser-site-policy-trusted-devices#1`: store と API の試験は通るが、表と event を同じ store 関数で書くことを名指しで確かめる試験名は見つからない
 - `cap:pre-review-sync-auto-resolve-integration-repair#3`: auto_resolve の試験は scratch で merge するが、本番の checkout に触らないことを直接は確かめていない
 - `cap:routing-lane-route#0`: dispatcher が LLM を呼ばないことを検出する試験は無い。選択が決定的なことは Rust の試験で確かめた。TS 側の試験（control-ts/src/domains/lane_rules.test.ts・route_priority.test.ts）は WU の --run に入れていない。release gate の script-bundle 段は bundle と Rust 側の script 試験を回すが、vitest の単体試験を回すかは未確認
-- `cap:project-controller#0`: 判定（TS）側の試験は release gate の ts 段で走る
+- `cap:project-controller#0`: Rust 側の replay 試験は通った。判定（TS）側の試験（control-ts/src/domains/project_controller.test.ts）は WU の --run に入れていない。release gate が vitest の単体試験を回すかは未確認
 - `cap:continuation-session-resume#2`: CheckpointSaved event を名指しする試験は無い。checkpoint の読み取りと再起動後の継続は試験がある
 - `cap:workunit-scheduling-stage-integration#3`: ExecutionGated の追記は試験があるが、routing と同じ transaction であることは確かめていない
 - `cap:recursive-task-tree#1`: 子の insert と unit と親の event が 1 transaction であることは直接は確かめていない。event の書き込みは試験がある

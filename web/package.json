@@ -17,6 +17,7 @@
     "format": "biome format --write .",
     "test": "vitest run && node --test server/*.test.mjs",
     "e2e": "WEB_E2E_SCOPE=functional playwright test",
+    "e2e:chromium": "node scripts/check-e2e-chromium.mjs",
     "e2e:nfr": "WEB_E2E_SCOPE=nfr playwright test",
     "e2e:all": "WEB_E2E_SCOPE=all playwright test",
     "start": "node server/index.js",

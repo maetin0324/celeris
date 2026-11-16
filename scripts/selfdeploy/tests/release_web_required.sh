@@ -39,7 +39,8 @@ case "$1" in
 esac
 exit 0
 EOF2
-# web の pnpm は `corepack pnpm@12.6.0 …` で呼ばれる。WEB_FAIL_STEP=test なら web-pnpm-test を落とす。
+# web の pnpm は `corepack pnpm@12.6.0 …` で呼ばれる。WEB_FAIL_STEP=test なら web-pnpm-test を落とす
+# （e2e なら web-pnpm-e2e、e2e:chromium なら web-e2e-chromium）。
 cat >"$root/bin/corepack" <<'EOF2'
 #!/usr/bin/env bash
 spec="$1"; shift
@@ -87,6 +88,8 @@ printf 'pub const SCHEMA_VERSION: u32 = 7;\n' >"$repo/crates/task-core/src/store
 printf '[package]\nname = "celeris"\nversion = "0.1.0"\n' >"$repo/crates/celeris/Cargo.toml"
 printf '// v0\n' >"$repo/crates/x/src/lib.rs"
 cp "$here"/*.sh "$here"/*.py "$repo/scripts/selfdeploy/"
+# release.sh は cos-skills.txt の CoS skill を梱包する（sd_bundle_cos_skills）。偽の木は skill を持たないので空の一覧を置く。
+printf '# fixture: no CoS skills\n' >"$repo/scripts/selfdeploy/cos-skills.txt"
 chmod +x "$repo/scripts/selfdeploy/"*.sh
 mkdir -p "$repo/scripts/dev" "$repo/tools/nextest"
 cp "$here/../dev/test-parallel.sh" "$repo/scripts/dev/"
@@ -94,7 +97,7 @@ cp "$here/../dev/source-size-report.py" "$repo/scripts/dev/"
 # test-parallel.sh が読む helper と、release.sh が同梱する検査器（sd_bundle_repo_health は repo_health.py と
 # source-size-report.py の無い build を失敗にする）。
 mkdir -p "$repo/scripts/dev/lib" "$repo/scripts/dev/repo-health"
-cp "$here/../dev/lib/test-tmp-lifecycle.sh" "$repo/scripts/dev/lib/"
+cp "$here/../dev/lib/test-tmp-lifecycle.sh" "$here/../dev/lib/check-slot.sh" "$repo/scripts/dev/lib/"
 cp "$here/../dev/repo-health/repo_health.py" "$repo/scripts/dev/repo-health/"
 cp "$here/../../tools/nextest/VERSION" "$repo/tools/nextest/"
 git init -q "$repo"
@@ -122,7 +125,7 @@ sys.exit(0 if eval(sys.argv[2], {"g": g, "steps": steps}) else 1)
 PY
 }
 RUST_GATE_RAN='all(not steps[n]["skipped"] and steps[n]["exit"] == 0 for n in ("cargo-fmt-check", "cargo-test", "cargo-clippy", "cargo-build"))'
-WEB_STEP_NAMES='("web-pnpm-install", "web-pnpm-typecheck", "web-pnpm-test", "web-pnpm-release")'
+WEB_STEP_NAMES='("web-pnpm-install", "web-pnpm-typecheck", "web-pnpm-test", "web-pnpm-release", "web-e2e-chromium", "web-pnpm-e2e")'
 
 # A source tree without web must fail and leave failure evidence.
 if run_release "$c0"; then fail "release without web succeeded"; fi
@@ -146,6 +149,11 @@ gate_is "$g1" "g['web']['ok'] is True and g['web']['failed_step'] == '' and g['w
 # web の pnpm は corepack pnpm@12.6.0 で、unversioned pnpm は web/ では呼ばれない。
 grep -q $'\tpnpm@12.6.0\tinstall --frozen-lockfile$' "$root/corepack.log" || fail "web install did not use corepack pnpm@12.6.0"
 grep -q $'\tpnpm@12.6.0\trelease$' "$root/corepack.log" || fail "web release did not run"
+# e2e（functional）は配る dist/ を作る release の後に、chromium の確認の後で流れる（ADR 2026-11-16-release-gate-web-e2e）。
+gate_is "$g1" "[s['step'] for s in g['steps'] if s['step'].startswith('web-')][-3:] == ['web-pnpm-release', 'web-e2e-chromium', 'web-pnpm-e2e'] and g['web']['steps'][-2:] == ['web-e2e-chromium', 'web-pnpm-e2e']" \
+  || fail "web e2e steps are not after web-pnpm-release in gate.json"
+grep -q $'\tpnpm@12.6.0\te2e:chromium$' "$root/corepack.log" || fail "web e2e chromium check did not run"
+grep -q $'\tpnpm@12.6.0\te2e$' "$root/corepack.log" || fail "web e2e did not run"
 grep -q $'\tpnpm@12.6.0\tinstall --prod --offline --frozen-lockfile$' "$root/corepack.log" || fail "web/app was not prod-installed offline"
 if grep -q "/web	" "$root/pnpm.log"; then fail "unversioned pnpm was called under web/: $(grep '/web	' "$root/pnpm.log")"; fi
 rel1="$root/state/releases/$c1_12"
@@ -165,6 +173,24 @@ if WEB_FAIL_STEP=test run_release "$c2"; then fail "failed web test published"; 
 g2="$root/state/releases/.build/$c2_12/gate.json"
 gate_is "$g2" "g['ok'] is False and g['failed_step'] == 'web-pnpm-test' and g['web']['blocking'] is True" || fail "web failure not blocking"
 [ -f "$root/state/releases/.build/$c2_12/.gate-web-pnpm-test.log" ] || fail "failure log missing"
+# A failed web e2e prevents publication: gate.json ok=false and failed_step=web-pnpm-e2e, with the log kept.
+printf '// v2e\n' >"$repo/web/server/index.js"
+c2e="$(commit web-e2e-change)"; c2e_12="${c2e:0:12}"
+if WEB_FAIL_STEP=e2e run_release "$c2e"; then fail "failed web e2e published"; fi
+[ ! -d "$root/state/releases/$c2e_12" ] || fail "failed web e2e published a release dir"
+g2e="$root/state/releases/.build/$c2e_12/gate.json"
+gate_is "$g2e" "g['ok'] is False and g['failed_step'] == 'web-pnpm-e2e' and g['web']['ok'] is False and g['web']['failed_step'] == 'web-pnpm-e2e' and steps['web-pnpm-e2e']['exit'] != 0" \
+  || fail "web e2e failure not recorded as failed_step web-pnpm-e2e"
+[ -f "$root/state/releases/.build/$c2e_12/.gate-web-pnpm-e2e.log" ] || fail "web e2e failure log missing"
+# A host without the e2e chromium fails at web-e2e-chromium (not skipped) and e2e does not run.
+printf '// v2c\n' >"$repo/web/server/index.js"
+c2c="$(commit web-chromium-change)"; c2c_12="${c2c:0:12}"
+if WEB_FAIL_STEP=e2e:chromium run_release "$c2c"; then fail "release without e2e chromium published"; fi
+[ ! -d "$root/state/releases/$c2c_12" ] || fail "release without e2e chromium published a release dir"
+g2c="$root/state/releases/.build/$c2c_12/gate.json"
+gate_is "$g2c" "g['ok'] is False and g['failed_step'] == 'web-e2e-chromium' and g['web']['failed_step'] == 'web-e2e-chromium' and 'web-pnpm-e2e' not in steps" \
+  || fail "missing e2e chromium not recorded as failed_step web-e2e-chromium"
+if grep -q $'\tpnpm@12.6.0\te2e$' "$root/corepack.log"; then fail "web e2e ran although the chromium check failed"; fi
 # Reuse of the build checkout must not skip web checks on an unchanged web tree.
 printf '// v3\n' >"$repo/crates/x/src/lib.rs"
 c3="$(commit rust-only)"; c3_12="${c3:0:12}"

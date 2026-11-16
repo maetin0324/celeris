@@ -406,6 +406,12 @@ web_step web-pnpm-install "$BUILD/web" -- web_pnpm install --frozen-lockfile
 web_step web-pnpm-typecheck "$BUILD/web" -- web_pnpm typecheck
 web_step web-pnpm-test "$BUILD/web" -- web_pnpm test
 web_step web-pnpm-release "$BUILD/web" -- web_pnpm_release
+# ADR 2026-11-16-release-gate-web-e2e: 配る dist/（release の vite build が作った物。ensure-dist は build し直さない）で
+# e2e（`pnpm e2e` = functional、retries 0）を流す。偽 daemon と vite preview だけを使い、本番に触れない。
+# chromium は host の ~/.cache/ms-playwright の物だけを使い download しない。無ければ web-e2e-chromium で落ち、
+# e2e の不合格（web-pnpm-e2e）と区別できる。どちらも飛ばす切替は無い。
+web_step web-e2e-chromium "$BUILD/web" -- web_pnpm e2e:chromium
+web_step web-pnpm-e2e "$BUILD/web" -- web_pnpm e2e
 
 if [ "$GATE_OK" != true ]; then
   # 作業ツリーは次のリリースが作り直すので、記録は `.build/<sha12>/` に写して残す。

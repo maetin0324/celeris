@@ -82,3 +82,12 @@ D5. **旧い文言は残さない（ADR 2026-10-11 D1・D5）。** 「各 Phase 
 - 範囲外の退行の発見が release gate まで遅れうる。逆依存の閉包で直接の影響は拾えるので、残るのは workspace 外の
   経路（script・web と crate の境界など）だけで、これは gate が受け持つ。
 - 「全体を流した」という報告は release gate の結果（`checks[]`）でだけ示す。worker の報告は `test-affected.sh` の対象 crate と結果を書く。
+
+## 付記 A1（2026-11-16）: D4 の段の記述と実際の gate の食い違い
+
+D4 は gate の段を「web build・unit・e2e」と書いたが、当時の `scripts/selfdeploy/release.sh` の web の段は
+`web-config`・`web-pnpm-install`・`web-pnpm-typecheck`・`web-pnpm-test`・`web-pnpm-release` の 5 段で、e2e を流していなかった。
+D1 の「web の e2e は release gate だけ」は、実際にはどこでも e2e の全体を流さない状態だった。
+[ADR 2026-11-16-release-gate-web-e2e](2026-11-16-release-gate-web-e2e.md) が web の段に `web-e2e-chromium`（chromium の起動確認）と
+`web-pnpm-e2e`（`pnpm e2e` = functional）を足した。`e2e:nfr`・`e2e:all` は gate に入れていない（同 ADR D3）。
+D1・D2（途中の検査は影響範囲に絞り、e2e の全体は gate だけ）は変えない。

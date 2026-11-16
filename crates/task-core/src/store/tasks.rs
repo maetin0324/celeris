@@ -8,7 +8,7 @@ use crate::model::{Event, Status, Task, TaskId, TaskKind};
 use crate::transition::{InvalidTransition, Trigger};
 
 use super::query::parse_status;
-use super::{SqliteStore, StoreError, format_rfc3339, kind_str, status_str};
+use super::{SqliteStore, StoreError, format_rfc3339, kind_str};
 
 impl SqliteStore {
     pub(super) fn row_to_task(json: String) -> Result<Task, StoreError> {
@@ -68,7 +68,7 @@ impl SqliteStore {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
             params![
                 task.id.to_string(),
-                status_str(task.status),
+                task.status.as_str(),
                 kind_str(task.kind),
                 task.parent_id.map(|p| p.to_string()),
                 task.priority,
@@ -145,7 +145,7 @@ impl SqliteStore {
         tx.execute(
             "UPDATE tasks SET status = ?1, json = ?2, title = ?3, updated_at = ?4 WHERE id = ?5",
             params![
-                status_str(task.status),
+                task.status.as_str(),
                 json,
                 task.title,
                 updated_at,
@@ -171,7 +171,7 @@ impl SqliteStore {
                 Some(status) => {
                     let mut stmt = conn.prepare("SELECT json FROM tasks WHERE status = ?1")?;
                     let rows =
-                        stmt.query_map(params![status_str(status)], |row| row.get::<_, String>(0))?;
+                        stmt.query_map(params![status.as_str()], |row| row.get::<_, String>(0))?;
                     for row in rows {
                         tasks.push(Self::row_to_task(row?)?);
                     }
@@ -221,7 +221,7 @@ impl SqliteStore {
             Some(v) => v,
             None => return Ok(false),
         };
-        if status_col != status_str(Status::Ready) || kind_col == kind_str(TaskKind::Approval) {
+        if status_col != Status::Ready.as_str() || kind_col == kind_str(TaskKind::Approval) {
             return Ok(false);
         }
 
@@ -246,13 +246,13 @@ impl SqliteStore {
             "UPDATE tasks SET status = ?1, lease_worker_run_id = ?2, lease_expires_at = ?3, \
              json = ?4, updated_at = ?5 WHERE id = ?6 AND status = ?7",
             params![
-                status_str(Status::Running),
+                Status::Running.as_str(),
                 worker_run_id,
                 expires_at_str,
                 new_json,
                 updated_at_str,
                 task_id.to_string(),
-                status_str(Status::Ready),
+                Status::Ready.as_str(),
             ],
         )?;
 
@@ -379,7 +379,7 @@ impl SqliteStore {
                 "SELECT json FROM tasks WHERE status = ?1 AND kind != ?2 ORDER BY priority DESC, created_at ASC",
             )?;
             let rows = stmt.query_map(
-                params![status_str(Status::Ready), kind_str(TaskKind::Approval)],
+                params![Status::Ready.as_str(), kind_str(TaskKind::Approval)],
                 |row| row.get::<_, String>(0),
             )?;
 
@@ -710,7 +710,7 @@ impl SqliteStore {
                 format_rfc3339(expires_at)?,
                 serde_json::to_string(&task)?,
                 task_id.to_string(),
-                status_str(Status::Running),
+                Status::Running.as_str(),
                 worker_run_id,
             ],
         )?;

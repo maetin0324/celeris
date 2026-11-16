@@ -281,13 +281,6 @@ pub struct TaskTreeView {
     pub limits: Option<TreeLimitsUsage>,
 }
 
-fn tree_parent(task: &Task) -> Option<TaskId> {
-    task.tree
-        .as_ref()
-        .and_then(|t| t.parent_unit.as_ref())
-        .map(|u| u.task_id)
-}
-
 /// 未回答の決定の数（出した節点ごと）と、`self` の決定を出して止まっている節点。
 fn open_decisions_by_task(
     rows: &[task_core::DecisionRow],
@@ -316,7 +309,7 @@ pub fn node_facts(
     };
     Ok(RollupNodeFacts {
         task_id: task.id,
-        parent_id: tree_parent(task),
+        parent_id: task_core::tree::tree_parent(task),
         depth: task_core::tree::depth_of(task),
         runs: store.runs_for_task(task.id)?,
         work_units: store.work_units_for(task.id)?,
@@ -355,7 +348,7 @@ pub fn task_tree(
     // 子の一覧（作られた順 = `tree_tasks` の順）。
     let mut children_of: BTreeMap<TaskId, Vec<TaskId>> = BTreeMap::new();
     for t in &all {
-        if let Some(p) = tree_parent(t) {
+        if let Some(p) = task_core::tree::tree_parent(t) {
             children_of.entry(p).or_default().push(t.id);
         }
     }
@@ -518,7 +511,7 @@ pub fn project_root_totals(
     for root in tasks.iter().filter(|t| is_project_root_task(t)) {
         out.root_tasks += 1;
         *out.by_status
-            .entry(crate::view::status_key(root.status).to_string())
+            .entry(root.status.as_str().to_string())
             .or_default() += 1;
         let mut facts = Vec::new();
         for t in store.tree_tasks(root.id)? {
@@ -609,7 +602,7 @@ pub fn stage_child_summaries(
             "{} {}: {} / {} run（reviewer {}）/ ${:.2}{} — {}",
             u.key,
             child.title,
-            crate::view::status_key(child.status),
+            child.status.as_str(),
             sum.runs,
             sum.reviewer_runs,
             sum.cost_usd,
@@ -626,7 +619,7 @@ pub fn stage_child_summaries(
 
 /// `t` が `ancestor` の子孫か（木の親を辿る。64 段で打ち切る）。
 fn is_descendant_of(t: &Task, ancestor: TaskId, store: &SqliteStore) -> Result<bool, OpsError> {
-    let mut parent = tree_parent(t);
+    let mut parent = task_core::tree::tree_parent(t);
     for _ in 0..64 {
         let Some(p) = parent else {
             return Ok(false);
@@ -635,7 +628,7 @@ fn is_descendant_of(t: &Task, ancestor: TaskId, store: &SqliteStore) -> Result<b
             return Ok(true);
         }
         parent = match store.get(p)? {
-            Some(pt) => tree_parent(&pt),
+            Some(pt) => task_core::tree::tree_parent(&pt),
             None => None,
         };
     }

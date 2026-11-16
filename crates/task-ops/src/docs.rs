@@ -300,8 +300,8 @@ pub struct DocCommit {
 }
 
 /// 区切り（`git log --format` の中で使う。パスにもコミットメッセージにも出ない）。
-const UNIT: char = '\u{1f}';
-const RECORD: char = '\u{1e}';
+pub(crate) const UNIT: char = '\u{1f}';
+pub(crate) const RECORD: char = '\u{1e}';
 
 fn branch_ref(default_branch: &str) -> String {
     format!("refs/heads/{default_branch}")
@@ -404,7 +404,7 @@ pub fn last_commits(repo: &Path, default_branch: &str, root: &str) -> HashMap<St
     out
 }
 
-fn parse_commit(line: &str) -> Option<DocCommit> {
+pub(crate) fn parse_commit(line: &str) -> Option<DocCommit> {
     let mut parts = line.split(UNIT);
     let sha = parts.next()?.trim().to_string();
     if sha.is_empty() {

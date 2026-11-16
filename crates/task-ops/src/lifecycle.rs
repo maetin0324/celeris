@@ -196,7 +196,7 @@ fn task_conflict(task: &task_core::Task, action: &str) -> OpsError {
         subject: format!("task {}", task.id),
         context: format!(
             "status={} paused={}",
-            crate::view::status_key(task.status),
+            task.status.as_str(),
             task.paused_at.is_some()
         ),
         action: action.to_string(),

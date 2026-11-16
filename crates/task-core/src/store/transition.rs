@@ -10,7 +10,7 @@ use crate::transition::{
     transition,
 };
 
-use super::{SqliteStore, StoreError, format_rfc3339, kind_str, status_str};
+use super::{SqliteStore, StoreError, format_rfc3339, kind_str};
 
 impl SqliteStore {
     /// The current status of a task read on `tx` (`None` when it does not exist), for cascades
@@ -107,7 +107,7 @@ impl SqliteStore {
                 "UPDATE tasks SET status = ?1, lease_worker_run_id = NULL, \
                  lease_expires_at = NULL, json = ?2, title = ?3, updated_at = ?4 WHERE id = ?5",
                 params![
-                    status_str(task.status),
+                    task.status.as_str(),
                     new_json,
                     task.title,
                     updated_at_str,
@@ -117,7 +117,7 @@ impl SqliteStore {
         } else {
             tx.execute(
                 "UPDATE tasks SET status = ?1, json = ?2, title = ?3, updated_at = ?4 WHERE id = ?5",
-                params![status_str(task.status), new_json, task.title, updated_at_str, task_id.to_string()],
+                params![task.status.as_str(), new_json, task.title, updated_at_str, task_id.to_string()],
             )?;
         }
 

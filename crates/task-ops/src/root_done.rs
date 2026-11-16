@@ -241,19 +241,6 @@ fn is_none_note(body: &str) -> bool {
         && body.lines().filter(|l| !l.trim().is_empty()).count() == 1
 }
 
-fn status_label(status: Status) -> &'static str {
-    match status {
-        Status::Draft => "draft",
-        Status::Ready => "ready",
-        Status::Running => "running",
-        Status::Blocked => "blocked",
-        Status::Reviewing => "reviewing",
-        Status::Done => "done",
-        Status::Failed => "failed",
-        Status::Cancelled => "cancelled",
-    }
-}
-
 fn delivery_state_label(state: DeliveryState) -> &'static str {
     match state {
         DeliveryState::Reviewing => "reviewing",
@@ -349,7 +336,7 @@ pub fn facts_block(facts: &RootDoneFacts, base_url: Option<&str>) -> String {
             out.push_str(&format!(
                 "- {}（{}）\n",
                 excerpt(&c.title, TITLE_CHARS),
-                status_label(c.status)
+                c.status.as_str()
             ));
         }
     }

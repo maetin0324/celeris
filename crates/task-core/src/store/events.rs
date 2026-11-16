@@ -6,7 +6,7 @@ use crate::execution_plan::{RunIndexRole, RunIndexStatus};
 use crate::model::{Event, Status, TaskId};
 
 use super::query::{u64_to_i64, usize_to_i64};
-use super::{EventRow, SqliteStore, StoreError, TaskWithEvents, format_rfc3339, status_str};
+use super::{EventRow, SqliteStore, StoreError, TaskWithEvents, format_rfc3339};
 
 /// 受信箱が task ごとの最新 1 件だけを読む event の種類（[`super::SqliteStore::latest_event_rows`]）。種類ごとに
 /// migration の部分 index が 1 本ある: `delivery_skipped` は 0037（ADR-0121 付記）、`dependents_reopened` は 0122
@@ -572,7 +572,7 @@ impl SqliteStore {
                 run_id: run_id.clone(),
                 outcome: format!(
                     "interrupted: the task reached {} while this run was still open (runs index closed, ADR-0079 R6-1)",
-                    status_str(status)
+                    status.as_str()
                 ),
                 usage: None,
                 role,

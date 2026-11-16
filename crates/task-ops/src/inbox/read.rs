@@ -119,7 +119,7 @@ impl<'a> InboxTaskSnapshot<'a> {
         let by_status = store
             .count_by_status()?
             .into_iter()
-            .map(|(s, n)| (view::status_key(s).to_string(), n))
+            .map(|(s, n)| (s.as_str().to_string(), n))
             .collect();
 
         // ADR-0079 D7（Phase R3a）: 未回答の決定の要求（決定を出した節点が終端でないもの。古い順）。

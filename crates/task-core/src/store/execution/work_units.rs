@@ -9,7 +9,7 @@ use crate::execution_plan::{
 use crate::model::{Event, Status, Task, TaskId};
 
 use crate::store::query::usize_to_i64;
-use crate::store::{SqliteStore, StoreError, format_rfc3339, status_str};
+use crate::store::{SqliteStore, StoreError, format_rfc3339};
 
 impl SqliteStore {
     pub(in crate::store) fn insert_work_unit_tx(
@@ -475,7 +475,7 @@ impl SqliteStore {
                  ORDER BY t.created_at ASC LIMIT ?2",
             )?;
             let rows = stmt.query_map(
-                params![status_str(Status::Running), usize_to_i64(limit)],
+                params![Status::Running.as_str(), usize_to_i64(limit)],
                 |row| row.get::<_, String>(0),
             )?;
             let mut out = Vec::new();

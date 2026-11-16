@@ -118,13 +118,6 @@ impl LaunchRootMeta {
     }
 }
 
-fn status_str(s: Status) -> String {
-    serde_json::to_value(s)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_owned))
-        .unwrap_or_default()
-}
-
 fn check_kind(c: &Check) -> &'static str {
     match c {
         Check::Command { .. } => "command",
@@ -228,7 +221,7 @@ fn root_row(
                 Check::ArtifactExists { .. } | Check::KnowledgePage { .. }
             ) && verdicts.get(&i) == Some(&true)
         });
-    let status = status_str(task.status);
+    let status = task.status.as_str().to_string();
     let failure_class = match task.status {
         Status::Failed => Some(
             match last_fail_reason.as_deref() {

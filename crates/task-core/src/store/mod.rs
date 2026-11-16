@@ -638,19 +638,6 @@ pub fn detect_repo_kind(location: &WorkspaceSpec) -> RepoKind {
     }
 }
 
-fn status_str(s: Status) -> &'static str {
-    match s {
-        Status::Draft => "draft",
-        Status::Ready => "ready",
-        Status::Running => "running",
-        Status::Blocked => "blocked",
-        Status::Reviewing => "reviewing",
-        Status::Done => "done",
-        Status::Failed => "failed",
-        Status::Cancelled => "cancelled",
-    }
-}
-
 fn kind_str(k: TaskKind) -> &'static str {
     match k {
         TaskKind::Plan => "plan",

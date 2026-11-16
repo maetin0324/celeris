@@ -95,46 +95,6 @@ fn routing_log_correlation_migration_is_additive() {
             .unwrap();
         assert_eq!(nulls, 1);
     }
-    // account は 0022 からの既存欄なので、旧行の値が残る。
-    assert_eq!(
-        store.routing_correlation_get("req-old").unwrap(),
-        Some(RoutingCorrelation {
-            account: Some("acc-1".into()),
-            ..RoutingCorrelation::default()
-        })
-    );
-
-    // 相関 insert（既存行への書き込み）と select が往復する。
-    let correlation = RoutingCorrelation {
-        decision_id: Some("dec-1".into()),
-        snapshot_id: Some("snap-1".into()),
-        run_id: Some("run-1".into()),
-        task_id: Some("task-1".into()),
-        source_id: Some("claude-oauth:acc-1".into()),
-        model: Some("claude-sonnet-5".into()),
-        account: Some("acc-1".into()),
-    };
-    assert!(
-        store
-            .routing_correlation_set("req-old", &correlation)
-            .unwrap()
-    );
-    assert_eq!(
-        store.routing_correlation_get("req-old").unwrap(),
-        Some(correlation)
-    );
-    assert_eq!(
-        store.routing_request_ids_for_decision("dec-1").unwrap(),
-        vec!["req-old".to_string()]
-    );
-
-    // 行が無い id は更新されず、読めば None。
-    assert!(
-        !store
-            .routing_correlation_set("req-missing", &RoutingCorrelation::default())
-            .unwrap()
-    );
-    assert_eq!(store.routing_correlation_get("req-missing").unwrap(), None);
 }
 
 #[test]

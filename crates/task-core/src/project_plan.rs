@@ -223,14 +223,6 @@ impl std::fmt::Display for ProjectPlanValidationError {
 
 impl std::error::Error for ProjectPlanValidationError {}
 
-fn valid_key(key: &str) -> bool {
-    !key.is_empty()
-        && key.len() <= 32
-        && key
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-}
-
 /// 検証を通った計画（トポロジカル順を添える。`milestones` の index）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct ValidatedProjectPlan {
@@ -264,7 +256,7 @@ pub fn validate(
 
     let mut seen_keys: BTreeSet<&str> = BTreeSet::new();
     for m in &spec.milestones {
-        if !valid_key(&m.key) {
+        if !crate::decision::valid_key(&m.key) {
             errors.push(ProjectPlanValidationError::InvalidKey { key: m.key.clone() });
             continue;
         }

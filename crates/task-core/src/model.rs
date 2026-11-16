@@ -65,6 +65,20 @@ pub enum Status {
 }
 
 impl Status {
+    /// serde・DB・API の表現（snake_case）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Status::Draft => "draft",
+            Status::Ready => "ready",
+            Status::Running => "running",
+            Status::Blocked => "blocked",
+            Status::Reviewing => "reviewing",
+            Status::Done => "done",
+            Status::Failed => "failed",
+            Status::Cancelled => "cancelled",
+        }
+    }
+
     /// ADR-0002 D1: 終端状態 = `done | failed | cancelled`。
     pub fn is_terminal(self) -> bool {
         matches!(self, Status::Done | Status::Failed | Status::Cancelled)

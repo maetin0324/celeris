@@ -1139,7 +1139,7 @@ fn insert_legacy_task(conn: &Connection, task: &Task) {
          lease_worker_run_id, lease_expires_at, json) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
         params![
             task.id.to_string(),
-            status_str(task.status),
+            task.status.as_str(),
             kind_str(task.kind),
             task.parent_id.map(|p| p.to_string()),
             task.priority,
@@ -1313,7 +1313,7 @@ fn open_migrates_schema_4_db_and_old_rows_read_back_with_genre_none() {
              VALUES (?1,?2,?3,?4,?5,?6,NULL,NULL,?7,?8,?9,?10)",
             params![
                 task.id.to_string(),
-                status_str(task.status),
+                task.status.as_str(),
                 kind_str(task.kind),
                 task.parent_id.map(|p| p.to_string()),
                 task.priority,
@@ -2458,7 +2458,7 @@ fn open_migrates_schema_5_db_to_the_current_version_and_reapplying_is_idempotent
              VALUES (?1,?2,?3,?4,?5,?6,NULL,NULL,?7,?8,?9,?10,NULL)",
             params![
                 task.id.to_string(),
-                status_str(task.status),
+                task.status.as_str(),
                 kind_str(task.kind),
                 task.parent_id.map(|p| p.to_string()),
                 task.priority,
@@ -4462,7 +4462,7 @@ fn migration_31_adds_tree_columns_without_rewriting_rows() {
                  VALUES (?1, ?2, 'execute', ?3, 0, ?4, ?5, ?6, ?4)",
                 params![
                     t.id.to_string(),
-                    status_str(t.status),
+                    t.status.as_str(),
                     t.parent_id.map(|p| p.to_string()),
                     now,
                     serde_json::to_string(t).unwrap(),

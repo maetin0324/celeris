@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::model::{Status, Task, TaskId, TaskKind};
 use crate::org::{MilestoneId, ProjectId};
 
-use super::{StoreError, format_rfc3339, kind_str, status_str, tier_str};
+use super::{StoreError, format_rfc3339, kind_str, tier_str};
 
 /// `TaskQuery::list_page` のフィルタ（ADR-0013 D10）。既定は絞り込み無し。
 #[derive(Debug, Clone, Default)]
@@ -148,7 +148,7 @@ pub(crate) fn filter_predicate(filter: &ListFilter) -> (String, Vec<SqlValue>) {
         let placeholders = vec!["?"; filter.statuses.len()].join(", ");
         clauses.push(format!("status IN ({placeholders})"));
         for s in &filter.statuses {
-            params.push(SqlValue::Text(status_str(*s).to_string()));
+            params.push(SqlValue::Text(s.as_str().to_string()));
         }
     }
     if !filter.kinds.is_empty() {

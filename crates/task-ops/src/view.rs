@@ -155,7 +155,7 @@ pub fn task_status_counts(store: &SqliteStore) -> Result<TaskStatusCounts, OpsEr
         counts_by_status: store
             .count_by_status()?
             .into_iter()
-            .map(|(status, count)| (status_key(status).to_string(), count))
+            .map(|(status, count)| (status.as_str().to_string(), count))
             .collect(),
     })
 }
@@ -909,20 +909,6 @@ pub(crate) fn to_rfc3339(t: OffsetDateTime) -> String {
 
 fn std_duration_to_time_duration(d: Duration) -> time::Duration {
     time::Duration::new(d.as_secs() as i64, d.subsec_nanos() as i32)
-}
-
-/// `Status` の serde 表現（snake_case）。`counts_by_status` のキーに使う。
-pub(crate) fn status_key(status: Status) -> &'static str {
-    match status {
-        Status::Draft => "draft",
-        Status::Ready => "ready",
-        Status::Running => "running",
-        Status::Blocked => "blocked",
-        Status::Reviewing => "reviewing",
-        Status::Done => "done",
-        Status::Failed => "failed",
-        Status::Cancelled => "cancelled",
-    }
 }
 
 /// `derive` の各関数（`(seq, Event)` の組を期待する）に渡すための写像。

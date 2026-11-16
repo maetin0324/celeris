@@ -145,7 +145,7 @@ pub fn plan_decide(
             Some(task) if task.status.is_terminal() => Target::Closed {
                 note: format!(
                     "task {task_id} is already {}; decision recorded without resuming the task",
-                    status_word(task.status)
+                    task.status.as_str()
                 ),
             },
             Some(task) if task.status == Status::Blocked => {
@@ -247,19 +247,6 @@ enum Target {
     Closed { note: String },
     /// `blocked` のタスクに答えて再開する。
     Answer(TaskId),
-}
-
-fn status_word(status: Status) -> &'static str {
-    match status {
-        Status::Draft => "draft",
-        Status::Ready => "ready",
-        Status::Running => "running",
-        Status::Blocked => "blocked",
-        Status::Reviewing => "reviewing",
-        Status::Done => "done",
-        Status::Failed => "failed",
-        Status::Cancelled => "cancelled",
-    }
 }
 
 #[cfg(test)]

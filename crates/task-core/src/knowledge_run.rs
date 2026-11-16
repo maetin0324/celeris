@@ -94,7 +94,7 @@ pub struct KnowledgeRun {
     #[schemars(with = "String")]
     pub created_at: OffsetDateTime,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[serde(with = "crate::knowledge_run::opt_rfc3339")]
+    #[serde(with = "crate::node_session::opt_rfc3339")]
     #[schemars(with = "Option<String>")]
     pub applied_at: Option<OffsetDateTime>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -102,7 +102,7 @@ pub struct KnowledgeRun {
     /// ADR-0052 D3（Phase 64）: 失敗した run を**一度だけ**作り直したときの時刻。`None` ならまだ
     /// やり直していない（次の tick で 1 回だけ作り直す対象）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[serde(with = "crate::knowledge_run::opt_rfc3339")]
+    #[serde(with = "crate::node_session::opt_rfc3339")]
     #[schemars(with = "Option<String>")]
     pub retried_at: Option<OffsetDateTime>,
     /// ADR-0052 D2（Phase 64）: 実際に抽出した経路（`"langmem"` | `"fallback:<adapter>"`）。
@@ -121,39 +121,6 @@ pub fn via_fallback(adapter: &str) -> String {
 /// ADR-0052 D2: `via` が「フォールバックで抽出した」ことを表しているか（Console・タイムラインの表示）。
 pub fn via_is_fallback(via: &str) -> bool {
     via.starts_with("fallback:")
-}
-
-mod opt_rfc3339 {
-    use serde::{Deserialize, Deserializer, Serializer};
-    use time::OffsetDateTime;
-    use time::format_description::well_known::Rfc3339;
-
-    pub fn serialize<S: Serializer>(
-        value: &Option<OffsetDateTime>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        match value {
-            Some(t) => {
-                let s = t
-                    .format(&Rfc3339)
-                    .map_err(|e| serde::ser::Error::custom(e.to_string()))?;
-                serializer.serialize_some(&s)
-            }
-            None => serializer.serialize_none(),
-        }
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<Option<OffsetDateTime>, D::Error> {
-        let raw: Option<String> = Option::deserialize(deserializer)?;
-        match raw {
-            Some(s) => OffsetDateTime::parse(&s, &Rfc3339)
-                .map(Some)
-                .map_err(|e| serde::de::Error::custom(e.to_string())),
-            None => Ok(None),
-        }
-    }
 }
 
 fn row_to_knowledge_run(

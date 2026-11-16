@@ -181,24 +181,11 @@ pub const WITHDRAWN_BY_TRANSITION: &str = "task_terminal";
 /// Phase F7: `Event::ApprovalsWithdrawn.reason` — 照合（`approval_withdraw_stale`）で閉じた。
 pub const WITHDRAWN_BY_RECONCILE: &str = "reconcile";
 
-fn status_word(status: Status) -> &'static str {
-    match status {
-        Status::Draft => "draft",
-        Status::Ready => "ready",
-        Status::Running => "running",
-        Status::Blocked => "blocked",
-        Status::Reviewing => "reviewing",
-        Status::Done => "done",
-        Status::Failed => "failed",
-        Status::Cancelled => "cancelled",
-    }
-}
-
 /// Phase F7: 取り下げた行の `answer`（人が一覧で読む決定的な文面。先頭は `task <status>`）。
 pub fn withdrawn_answer(status: Status) -> String {
     format!(
         "task {}: 認可元のタスクが終わったため、celeris が自動で取り下げました",
-        status_word(status)
+        status.as_str()
     )
 }
 

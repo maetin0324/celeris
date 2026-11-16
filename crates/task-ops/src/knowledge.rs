@@ -26,7 +26,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::changes::{CmdOutput, GIT_TIMEOUT, GIT_WRITE_TIMEOUT, git};
-use crate::docs::DocCommit;
+use crate::docs::{DocCommit, RECORD, UNIT, parse_commit};
 
 /// 索引が古いと見なす閾値（daemon は起動時にこれを超えていれば作り直す）。
 pub const INDEX_STALE_SECS: i64 = 6 * 60 * 60;
@@ -516,23 +516,6 @@ pub fn last_commits(root: &Path) -> BTreeMap<String, DocCommit> {
         }
     }
     out
-}
-
-const UNIT: char = '\u{1f}';
-const RECORD: char = '\u{1e}';
-
-fn parse_commit(line: &str) -> Option<DocCommit> {
-    let mut parts = line.split(UNIT);
-    let sha = parts.next()?.trim().to_string();
-    if sha.is_empty() {
-        return None;
-    }
-    Some(DocCommit {
-        sha,
-        at: parts.next().unwrap_or_default().trim().to_string(),
-        author: parts.next().unwrap_or_default().trim().to_string(),
-        subject: parts.next().unwrap_or_default().trim().to_string(),
-    })
 }
 
 // ---------------------------------------------------------------------------

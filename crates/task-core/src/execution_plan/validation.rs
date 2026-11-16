@@ -799,14 +799,6 @@ fn operator_script_in_cmd(cmd: &str) -> Option<&'static str> {
         })
 }
 
-fn valid_key(key: &str) -> bool {
-    !key.is_empty()
-        && key.len() <= 32
-        && key
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-}
-
 fn normalize_title(title: &str) -> String {
     title
         .to_lowercase()
@@ -1047,7 +1039,7 @@ pub fn validate_with(
         }
         let mut seen_phase_keys: BTreeSet<&str> = BTreeSet::new();
         for p in &spec.phases {
-            if !valid_key(&p.key) {
+            if !crate::decision::valid_key(&p.key) {
                 errors.push(PlanValidationError::InvalidPhaseKey { key: p.key.clone() });
                 continue;
             }
@@ -1112,7 +1104,7 @@ pub fn validate_with(
 
     let mut seen_keys: BTreeSet<&str> = BTreeSet::new();
     for wu in &spec.work_units {
-        if !valid_key(&wu.key) {
+        if !crate::decision::valid_key(&wu.key) {
             errors.push(PlanValidationError::InvalidKey {
                 key: wu.key.clone(),
             });
@@ -1366,7 +1358,7 @@ fn validate_children(
     }
     let mut seen: BTreeSet<&str> = BTreeSet::new();
     for c in children {
-        if !valid_key(&c.key) {
+        if !crate::decision::valid_key(&c.key) {
             errors.push(PlanValidationError::InvalidChildKey { key: c.key.clone() });
             continue;
         }
@@ -1485,7 +1477,7 @@ fn validate_v3(
     }
     let mut seen_stage_keys: BTreeSet<&str> = BTreeSet::new();
     for s in &spec.stages {
-        if !valid_key(&s.key) {
+        if !crate::decision::valid_key(&s.key) {
             errors.push(PlanValidationError::InvalidStageKey { key: s.key.clone() });
             continue;
         }
@@ -1509,7 +1501,7 @@ fn validate_v3(
     }
     let mut seen_keys: BTreeSet<&str> = BTreeSet::new();
     for u in &spec.units {
-        if !valid_key(&u.key) {
+        if !crate::decision::valid_key(&u.key) {
             errors.push(PlanValidationError::InvalidKey { key: u.key.clone() });
             continue;
         }

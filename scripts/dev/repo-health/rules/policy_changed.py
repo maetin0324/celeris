@@ -1,7 +1,8 @@
 """rule policy.changed（ADR D2）: head が policy の file（profile・baseline・検査器）を base から変えたか。
 
 評価に使う policy は base 側。head の変更は別の review で承認する。base に profile が無い初回
-（bootstrap）は severity warning で合格を妨げない。
+（bootstrap）は severity warning で合格を妨げない。どの file を数えるか（許可の一覧の行を消すだけの変更は
+数えない）は engine の policy_changed_files が決め、この rule はその結果（ctx.policy_changed）だけを読む。
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ from health.rule import Hit, Rule
 
 
 def evaluate(ctx, tree):
-    changed = [f for f in ctx.policy_files if f["base_blob"] != f["head_blob"]]
+    changed = ctx.policy_changed
     if not changed:
         return []
     evidence = [{"path": f["path"], "ref": "head" if f["head_blob"] else "base"} for f in changed]

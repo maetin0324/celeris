@@ -19,6 +19,12 @@ policy_paths = [
     '^agent-docs/progress/2026-11-07-health-v2-b0/capability-map\.json$',
 ]
 
+# policy の file のうち許可の一覧（1 行 1 許可。check-human-text.py・check-adr-numbers.sh・統合の番号重複 resolver が
+# 行ごとに読み、列 0 の # の行と空行を許可として読まない）。行を消すだけの変更は許可が減るだけなので
+# policy.changed に数えない。行を足す・書き換える・file を足す・消す変更は今までどおり数える
+# （ADR 2026-11-16-health-policy-allowlist-shrink）。
+policy_allowlists = ['^scripts/dev/(adr-allowed-duplicates\.txt|human-text-lint\.allow)$']
+
 # crates.io の deno_core の写し（ADR 2026-11-02-deno-core-vendored-serde-json-features）。この repo の設計の対象でない。
 exclude_paths = ['^crates/script-runtime/vendor/']
 

@@ -17,8 +17,9 @@ use celeris::{ClusterMasters, Config, Exit, RunOptions, ScriptPolicy, build_disp
 use celeris_script::manifest::{VerifiedBundle, load_bundle_dir, sha256_hex};
 use celeris_script::{ScriptRuntimeHandle, ScriptSource};
 use task_core::script_compare::{
-    CompareOutcome, NewScriptGeneration, ScriptCompareRecord, ScriptGeneration,
-    ScriptGenerationState, ScriptGenerationTransition, ScriptMode, ScriptModeChange,
+    CompareOutcome, CosDigestCompareRecord, NewScriptGeneration, ScriptCompareRecord,
+    ScriptGeneration, ScriptGenerationState, ScriptGenerationTransition, ScriptMode,
+    ScriptModeChange,
 };
 use task_core::{
     Budget, Check, Criterion, DaemonMode, Event, RoutingRecord, SqliteStore, Status, Task, TaskId,
@@ -746,6 +747,12 @@ impl Env {
 }
 
 pub fn is_timeout(record: &ScriptCompareRecord) -> bool {
+    record.outcome == CompareOutcome::TsError
+        && record.error.as_ref().is_some_and(|e| e.kind == "timeout")
+}
+
+/// [`is_timeout`] の `cos_digest` 版。記録の型（`CosDigestCompareRecord`）が違うので別の関数にする。
+pub fn is_cos_digest_timeout(record: &CosDigestCompareRecord) -> bool {
     record.outcome == CompareOutcome::TsError
         && record.error.as_ref().is_some_and(|e| e.kind == "timeout")
 }

@@ -1,0 +1,9 @@
+hostname home-dev
+nproc 24
+kernel 6.8.12-9-pve
+cargo 1.98.1 (797e8a9bc 2026-08-05)
+cargo-nextest 0.9.146 (8af696ddc 2026-09-21)
+target_dir /local/celeris/data/scratch/targets/task-01M6TYVJT97XH88TEEAVRD7JK6/wu-01M7GRJKJNKP6YJYYFRDX2K0X1/target
+target_dir_size_before 1.3G
+loadavg_start 15.10 17.64 13.54 15/1788 2128875
+2026-11-15T23:29:59Z

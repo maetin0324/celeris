@@ -1,25 +1,17 @@
-//! `celerisctl plan` の判断 — DESIGN.md §5.9 / ADR-0007 D6 / ADR-0010 D4（P-19, ADR-0013 D7）。
+//! 撤去済みの `POST /plans`（ADR-0079 R5a で 410）の本文の型。
 //!
-//! 大目標を表す文字列 1 つから根の `Plan` タスクを組み立て、`TaskStore::create_task` で
-//! `insert` + `Event::Created` を単一トランザクションとして書き込む（ADR-0010 D2）。
-//! 子タスクの生成はプランナー（ワーカー）の出力を Reviewer が検証・展開する経路で行うため、
-//! ここでは `acceptance = []`（暗黙のプラン検証条件のみ。ADR-0007 D4）で `Draft` の
-//! 1 タスクを作るだけに留める。根の Plan のみを作る（`parent_id` は常に `None`）。
-//! `workspace` を省略した場合は `WorkspaceSpec::Local{ path: "<task_id>" }`（相対パス、P-19）。
+//! `kind = plan` の根の task を作る入口（`celerisctl plan` と `create_plan`）は R6 で消した。新しい仕事は root task と
+//! その計画（`celeris.execution-plan/3`、`celerisctl execution plan set`）で表す。この型は `task-api` の schema
+//! （`schema.rs` の `new_plan`）と生成 API schema だけが参照する。
 
 use std::path::PathBuf;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use task_core::{
-    Budget, Status, Task, TaskId, TaskKind, TaskStore, Tier, WorkerHint, WorkspaceSpec,
-};
-use time::OffsetDateTime;
+use task_core::Tier;
 
-use crate::error::OpsError;
-
-const TITLE_MAX_CHARS: usize = 80;
-
+// 下の `///` は生成 API schema（`docs/api/v1/api-v1.schema.json`・`web/api/generated/schema.json`）の description に
+// 写る。schema はこの unit の範囲の外なので文言を変えない（型ごと消す案は R6 の進捗の「提案」）。
 /// `celerisctl plan` から組み立てる新規 Plan タスクの指定。API の `POST /plans` の本文でもある（`docs/api/v1/api.md` §3.14）。
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -52,82 +44,3 @@ fn default_plan_max_wall_secs() -> u64 {
 fn default_plan_max_retries() -> u32 {
     1
 }
-
-/// 文字列の1行目を、char境界を保ったまま先頭 `max_chars` 文字に切り詰める。
-fn truncate_title(goal: &str, max_chars: usize) -> String {
-    let first_line = goal.lines().next().unwrap_or("");
-    first_line.chars().take(max_chars).collect()
-}
-
-/// `spec` から `Plan` kind の `Task` を組み立て、`store.create_task` で原子的に挿入する。
-pub fn create_plan(
-    store: &dyn TaskStore,
-    spec: NewPlanSpec,
-    now: OffsetDateTime,
-) -> Result<Task, OpsError> {
-    if spec.goal.trim().is_empty() {
-        return Err(OpsError::Validation("goal must not be blank".to_string()));
-    }
-
-    let title = truncate_title(&spec.goal, TITLE_MAX_CHARS);
-
-    let id = TaskId::new();
-    let workspace = match spec.workspace {
-        Some(path) => WorkspaceSpec::Local { path, mode: None },
-        None => WorkspaceSpec::Local {
-            path: PathBuf::from(id.to_string()),
-            mode: None,
-        },
-    };
-
-    let budget = Budget {
-        max_turns: spec.max_turns,
-        max_wall_secs: spec.max_wall_secs,
-        max_retries: spec.max_retries,
-        max_tokens: None,
-    };
-
-    let task = Task {
-        harness_id: None,
-        requirements: Default::default(),
-        tree: None,
-        paused_at: None,
-        routing: None,
-        repos: Vec::new(),
-        id,
-        parent_id: None,
-        kind: TaskKind::Plan,
-        title,
-        objective: spec.goal,
-        acceptance: vec![],
-        inputs: vec![],
-        depends_on: vec![],
-        status: Status::Draft,
-        priority: spec.priority,
-        worker_hint: WorkerHint { tier: spec.tier },
-        workspace,
-        budget,
-        attempts: 0,
-        lease: None,
-        created_at: now,
-        updated_at: now,
-        role: None,
-        genre: None,
-        aggregate: false,
-        // ADR-0046 D2 / D4（Phase 59）: `celerisctl plan` の根は既定（能力タグ無し・production）。
-        skills: Vec::new(),
-        mode: task_core::TaskMode::default(),
-        project_id: None,
-        milestone_id: None,
-        assignee: None,
-        conversation: None,
-        labels: Vec::new(),
-        category: Default::default(),
-    };
-
-    store.create_task(&task, vec![])?;
-    Ok(task)
-}
-
-#[cfg(test)]
-mod tests;

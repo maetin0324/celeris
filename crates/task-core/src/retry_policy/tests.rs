@@ -235,6 +235,11 @@ fn history_is_derived_from_events() {
     let mut with_reopen = events.clone();
     with_reopen.push(tr("reopen"));
     assert!(attempt_history(&t, &with_reopen).is_empty());
+    // ADR 2026-11-14-review-verdict-after-plan-reopen D3: 計画が開き直された review の破棄は試行に数えない。
+    let reopened = crate::transition::Trigger::ReviewPlanReopened.reason();
+    let mut with_plan_reopened = events.clone();
+    with_plan_reopened.push(tr(reopened));
+    assert_eq!(attempt_history(&t, &with_plan_reopened), h);
 }
 
 #[test]
@@ -390,4 +395,78 @@ fn routing_trajectory_escalates_one_lane_and_respects_caps() {
             .counted_failures,
         1
     );
+}
+
+/// ADR 2026-11-15-research-adapter-deadline D5 の付記: 試行の履歴は追記専用の events の
+/// `WorkerFinished.outcome` の文で予算切れを数える（`end` は読まない）。研究 harness の wall clock を
+/// `BudgetExhausted{WallClock}` に揃え（D1）、continuation から外した（D3）後も、過去と今の文の分類は
+/// 変わらない。既存の `history_is_derived_from_events` は文 1 つ（`wall-clock budget exceeded`）しか見ず、
+/// `end` の無い古い研究 harness の文・構造化した予算切れの文・`(continuation disabled)` の文・yield の文の
+/// 分類を固定していなかった。
+#[test]
+fn past_worker_finished_outcomes_keep_their_attempt_classification() {
+    use crate::model::Status;
+    let t = crate::model_policy::tests::task("x", vec![]);
+    let cases: [(&str, AttemptOutcome); 9] = [
+        // D1 より前の研究 harness・`run_subprocess` の wall clock（文言の `Error`）。
+        (
+            "error(retryable=true): wall clock exceeded",
+            BudgetExhausted,
+        ),
+        // 構造化した予算切れ（`settle_terminal` の `BudgetExhausted` の枝）。
+        (
+            "error(retryable=true): budget exhausted (WallClock): wall clock exceeded",
+            BudgetExhausted,
+        ),
+        (
+            "error(retryable=true): budget exhausted (Turns): claude result: error_max_turns",
+            BudgetExhausted,
+        ),
+        // D3: continuation を使えない run（研究 harness・`[execution] continuation = false`）。
+        (
+            "error(retryable=true): budget_exhausted(wall_clock) (continuation disabled)",
+            BudgetExhausted,
+        ),
+        // yield は予算切れの語を持たないので失敗として数える（これまでと同じ）。
+        (
+            "error(retryable=true): yielded (continuation disabled)",
+            WorkerError,
+        ),
+        // context 超過の語彙（`looks_like_context_exceeded`）。
+        (
+            "error(retryable=true): acp agent returned an error for prompt: prompt is too long",
+            BudgetExhausted,
+        ),
+        ("error(retryable=true): idle timeout", WorkerError),
+        (
+            "error(retryable=false): result.json misplaced: expected a; found b, c; reports were not adopted",
+            WorkerError,
+        ),
+        (
+            "error(retryable=true): paperqa adapter could not write artifacts/result.json: denied",
+            WorkerError,
+        ),
+    ];
+    for (outcome, expected) in cases {
+        let events = vec![
+            Event::WorkerFinished {
+                run_id: "w".into(),
+                outcome: outcome.into(),
+                usage: None,
+                role: None,
+                metrics: None,
+                end: None,
+            },
+            Event::Transitioned {
+                from: Status::Running,
+                to: Status::Ready,
+                reason: "worker_error".into(),
+            },
+        ];
+        let got: Vec<AttemptOutcome> = attempt_history(&t, &events)
+            .iter()
+            .map(|r| r.outcome)
+            .collect();
+        assert_eq!(got, vec![expected], "{outcome}");
+    }
 }

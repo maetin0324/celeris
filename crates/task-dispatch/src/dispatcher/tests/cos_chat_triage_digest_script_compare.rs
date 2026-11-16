@@ -291,8 +291,8 @@ async fn run_digest(setup: Setup) -> World {
     f.d.wait_script_compares().await;
     let world = f.world();
     // 再配送: もう一度 digest pass が立っても message も記録も増えない。
-    f.d.cos_chat_launch
-        .as_mut()
+    f.d.orchestration
+        .launch_mut()
         .expect("launch")
         .triage
         .digest_due = true;

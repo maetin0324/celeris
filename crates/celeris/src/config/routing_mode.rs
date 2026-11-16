@@ -20,14 +20,7 @@ pub struct RoutingConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
-
-    fn load(extra: &str) -> Result<Config, crate::config::ConfigError> {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("config.toml");
-        std::fs::write(&path, format!("db = \"t.sqlite3\"\n{extra}")).expect("write config");
-        Config::load(&path)
-    }
+    use crate::config::test_support::load;
 
     #[test]
     fn mode_defaults_to_fixed_without_the_table_or_the_field() {

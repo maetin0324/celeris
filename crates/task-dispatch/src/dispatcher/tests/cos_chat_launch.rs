@@ -75,8 +75,8 @@ pub(super) fn post(store: &SqliteStore, thread: &str, key: &str) {
 
 pub(super) async fn join(d: &mut Dispatcher, thread: &str) {
     let task = d
-        .cos_chat_launch
-        .as_mut()
+        .orchestration
+        .launch_mut()
         .expect("launch configured")
         .running
         .remove(thread)
@@ -102,7 +102,7 @@ async fn cos_chat_run_control_stop_kills_group_pauses_queue_and_late_stop_isolat
     let command = vec!["sh".into(), "-c".into(),
         "cat >/dev/null; printf '%s' \"$CELERIS_COS_RUN_CREDENTIAL\" > .token; printf '%s' \"$$\" > ready.fifo; read x < release.fifo; echo '{\"type\":\"done\",\"summary\":\"done\",\"evidence\":[]}'".into()];
     let (dir, store, mut d) = fixture(command, 1);
-    d.test_now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
+    d.test_hooks.now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
     d.config.kill_grace = std::time::Duration::from_millis(20);
     let t = thread(&store, "control-stop");
     post(&store, &t, "first");
@@ -227,7 +227,7 @@ async fn cos_chat_run_control_stop_kills_group_pauses_queue_and_late_stop_isolat
 #[tokio::test]
 async fn cos_chat_run_control_interrupt_precedes_queue_without_changing_pause() {
     let (_dir, store, mut d) = fixture(FakeAdapter::default_command(), 1);
-    d.test_now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
+    d.test_hooks.now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
     let t = thread(&store, "control-interrupt");
     post(&store, &t, "first");
     post(&store, &t, "queued");
@@ -313,7 +313,7 @@ async fn cos_chat_run_control_live_interrupt_waits_for_old_worker_exit() {
         "cat >/dev/null; printf ready > ready.fifo; read x < release.fifo; echo '{\"type\":\"done\",\"summary\":\"done\",\"evidence\":[]}'".into(),
     ];
     let (dir, store, mut d) = fixture(command, 1);
-    d.test_now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
+    d.test_hooks.now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
     d.config.kill_grace = std::time::Duration::from_millis(20);
     let t = thread(&store, "control-live-interrupt");
     post(&store, &t, "first");
@@ -417,7 +417,7 @@ async fn cos_chat_run_control_live_interrupt_waits_for_old_worker_exit() {
 #[tokio::test]
 async fn cos_chat_run_control_restart_waits_for_orphan_then_continues_input() {
     let (dir, store, mut d) = fixture(FakeAdapter::default_command(), 1);
-    d.test_now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
+    d.test_hooks.now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
     let t = thread(&store, "control-orphan");
     post(&store, &t, "original");
     let old = store
@@ -434,13 +434,7 @@ async fn cos_chat_run_control_restart_waits_for_orphan_then_continues_input() {
         store.chat_run_get(&t, &old.id).expect("old").state,
         ChatRunState::Running
     );
-    assert!(
-        d.cos_chat_launch
-            .as_ref()
-            .expect("launch")
-            .running
-            .is_empty()
-    );
+    assert!(d.orchestration.launch().expect("launch").running.is_empty());
     d.set_orphan_takeover(crate::orphan::OrphanTakeover {
         instance_id: "this-daemon".into(),
         freshness: std::time::Duration::from_secs(60),
@@ -505,7 +499,7 @@ async fn cos_chat_run_control_restart_waits_for_orphan_then_continues_input() {
 #[tokio::test]
 async fn cos_chat_run_control_pending_side_effect_waits_for_human() {
     let (dir, store, mut d) = fixture(FakeAdapter::default_command(), 1);
-    d.test_now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
+    d.test_hooks.now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
     let t = thread(&store, "control-pending");
     post(&store, &t, "original");
     let old = store
@@ -548,13 +542,7 @@ async fn cos_chat_run_control_pending_side_effect_waits_for_human() {
             .expect("exists")
             .queue_paused
     );
-    assert!(
-        d.cos_chat_launch
-            .as_ref()
-            .expect("launch")
-            .running
-            .is_empty()
-    );
+    assert!(d.orchestration.launch().expect("launch").running.is_empty());
     let messages = store
         .chat_message_list(
             &t,
@@ -580,11 +568,7 @@ async fn cos_chat_run_control_pending_side_effect_waits_for_human() {
     .expect("human established outcome");
     d.tick_cos_chat_launch();
     assert!(
-        d.cos_chat_launch
-            .as_ref()
-            .expect("launch")
-            .running
-            .is_empty(),
+        d.orchestration.launch().expect("launch").running.is_empty(),
         "an explicit queue resume is still required"
     );
     let revision = store
@@ -719,10 +703,10 @@ async fn cos_chat_run_launch_two_threads_fifo_and_capacity() {
     post(&store, &a, "a2");
     post(&store, &b, "b1");
     d.tick_cos_chat_launch();
-    assert_eq!(d.cos_chat_launch.as_ref().expect("launch").running.len(), 1);
+    assert_eq!(d.orchestration.launch().expect("launch").running.len(), 1);
     let first = d
-        .cos_chat_launch
-        .as_ref()
+        .orchestration
+        .launch()
         .expect("launch")
         .running
         .keys()
@@ -731,10 +715,10 @@ async fn cos_chat_run_launch_two_threads_fifo_and_capacity() {
         .expect("thread");
     join(&mut d, &first).await;
     d.tick_cos_chat_launch();
-    assert_eq!(d.cos_chat_launch.as_ref().expect("launch").running.len(), 1);
+    assert_eq!(d.orchestration.launch().expect("launch").running.len(), 1);
     let second = d
-        .cos_chat_launch
-        .as_ref()
+        .orchestration
+        .launch()
         .expect("launch")
         .running
         .keys()
@@ -744,8 +728,8 @@ async fn cos_chat_run_launch_two_threads_fifo_and_capacity() {
     join(&mut d, &second).await;
     d.tick_cos_chat_launch();
     let third = d
-        .cos_chat_launch
-        .as_ref()
+        .orchestration
+        .launch()
         .expect("launch")
         .running
         .keys()
@@ -787,7 +771,7 @@ async fn cos_chat_run_launch_two_threads_start_in_one_tick() {
     post(&store, &a, "one");
     post(&store, &b, "two");
     d.tick_cos_chat_launch();
-    assert_eq!(d.cos_chat_launch.as_ref().expect("launch").running.len(), 2);
+    assert_eq!(d.orchestration.launch().expect("launch").running.len(), 2);
     assert_eq!(d.cos_in_flight(), 2);
     join(&mut d, &a).await;
     join(&mut d, &b).await;
@@ -812,8 +796,8 @@ async fn cos_chat_run_launch_max_cos_zero_disables_global_exception() {
 #[tokio::test]
 async fn cos_chat_run_launch_no_candidate_records_unavailable() {
     let (_dir, store, mut d) = fixture(FakeAdapter::default_command(), 2);
-    d.cos_chat_launch
-        .as_mut()
+    d.orchestration
+        .launch_mut()
         .expect("launch")
         .config
         .unavailable_reason = Some("no compatible provider".into());
@@ -970,7 +954,7 @@ async fn cos_chat_run_e2e_send_stream_interrupt_stop_resume_and_restart() {
             progress_sent,
         }) as Arc<dyn WorkerAdapter>,
     )]));
-    d.test_now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
+    d.test_hooks.now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
     d.config.kill_grace = std::time::Duration::from_millis(20);
     let t = thread(&store, "e2e");
     let workspace = dir.path().join("cos/threads").join(&t).join("workspace");
@@ -1341,8 +1325,8 @@ async fn cos_workspace_files_limits_do_not_fail_reply() {
         let command = vec!["sh".into(), "-c".into(),
             "cat >/dev/null; printf aa > a.md; printf bbbb > b.md; printf cc > c.csv; printf '%s\\n' '{\"type\":\"done\",\"summary\":\"a.md b.md c.csv\",\"evidence\":[]}'".into()];
         let (_dir, store, mut d) = fixture(command, 1);
-        d.cos_chat_launch
-            .as_mut()
+        d.orchestration
+            .launch_mut()
             .expect("launch")
             .config
             .attachment_limits = limits;

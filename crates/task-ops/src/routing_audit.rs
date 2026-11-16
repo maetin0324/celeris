@@ -51,19 +51,6 @@ pub struct TaskRoutingAudit {
 pub trait RequestLog {}
 impl RequestLog for SqliteStore {}
 
-pub fn task_routing_audit(
-    store: &dyn TaskStore,
-    task_id: TaskId,
-) -> Result<Vec<RoutingAudit>, OpsError> {
-    let task = store.get(task_id)?.ok_or(OpsError::NotFound(task_id))?;
-    let events: Vec<Event> = store
-        .events_for(task_id)?
-        .into_iter()
-        .map(|(_, event)| event)
-        .collect();
-    Ok(task_core::routing_audit(&task, &events))
-}
-
 pub fn task_routing_audit_with_requests(
     store: &dyn TaskStore,
     _log: &dyn RequestLog,

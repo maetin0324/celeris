@@ -36,7 +36,7 @@ async fn draining_worker_completion_leaves_review_to_the_active_dispatcher() {
         store.get(task.id).unwrap().unwrap().status,
         Status::Reviewing
     );
-    assert!(old.reviewing.is_empty());
+    assert!(old.supervisor.reviews().is_empty());
     let mut active = dispatcher(store.clone(), adapter, 1);
     assert!(run_until_idle(&mut active, 100).await.idle);
     assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
@@ -78,7 +78,12 @@ async fn overlapping_dispatchers_share_review_ownership_until_verdict_is_saved()
     );
     // The completed review keeps its lock until the dispatcher persists the verdict.
     // Await the actual review task, leaving its completion queued and verdict unsaved.
-    (&mut old.reviewing.get_mut(&task.id).unwrap().handle)
+    (&mut old
+        .supervisor
+        .reviews_mut_for_test()
+        .get_mut(&task.id)
+        .unwrap()
+        .handle)
         .await
         .unwrap();
     assert_eq!(
@@ -92,7 +97,7 @@ async fn overlapping_dispatchers_share_review_ownership_until_verdict_is_saved()
             .iter()
             .any(|(_, event)| matches!(event, Event::ReviewVerdict { .. }))
     );
-    assert!(old.reviewing.contains_key(&task.id));
+    assert!(old.supervisor.reviews().contains_key(&task.id));
     assert!(
         !active
             .spawn_review(task.id, "subject".into(), &ReviewSubject::default())
@@ -103,7 +108,7 @@ async fn overlapping_dispatchers_share_review_ownership_until_verdict_is_saved()
     assert!(report.idle);
     assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
     active.tick().unwrap();
-    assert!(active.reviewing.is_empty());
+    assert!(active.supervisor.reviews().is_empty());
     assert_eq!(
         store
             .events_for(task.id)
@@ -1628,9 +1633,7 @@ async fn non_aggregate_parent_stays_reviewing_until_children_finish_then_complet
             .unwrap()
             .iter()
             .any(|c| c.status == Status::Running);
-        if p.status == Status::Reviewing
-            && child_running
-            && d.awaiting_children.contains_key(&parent.id)
+        if p.status == Status::Reviewing && child_running && d.coord.is_awaiting_children(parent.id)
         {
             observed_waiting = true;
             break;

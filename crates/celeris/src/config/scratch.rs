@@ -25,8 +25,6 @@ pub struct ScratchConfig {
     pub seed_reflink: bool,
     #[serde(default = "default_scratch_targets_max_gb")]
     pub targets_max_gb: u64,
-    #[serde(default = "default_scratch_l1_max_gb")]
-    pub l1_max_gb: u64,
     #[serde(default = "default_scratch_total_max_gb")]
     pub total_max_gb: u64,
     #[serde(default = "default_scratch_high_watermark")]
@@ -93,7 +91,6 @@ impl Default for ScratchConfig {
             mount: None,
             seed_reflink: false,
             targets_max_gb: default_scratch_targets_max_gb(),
-            l1_max_gb: default_scratch_l1_max_gb(),
             total_max_gb: default_scratch_total_max_gb(),
             high_watermark: default_scratch_high_watermark(),
             low_watermark: default_scratch_low_watermark(),
@@ -117,9 +114,6 @@ fn default_scratch_enabled() -> bool {
 }
 fn default_scratch_targets_max_gb() -> u64 {
     160
-}
-fn default_scratch_l1_max_gb() -> u64 {
-    40
 }
 fn default_scratch_total_max_gb() -> u64 {
     200

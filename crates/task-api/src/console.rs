@@ -10,7 +10,7 @@
 //! `task_ops::conversation::start` に委ねる。LLM はここでは呼ばない。
 //!
 //! 読み取りは状態を変えない。`events` / `messages` / `chat_messages` / `approvals` /
-//! `reports` / `milestones` はどれも上限付き（`EVENT_WINDOW` / `limit`）。LLM も判断も無い。
+//! `reports` はどれも上限付き（`EVENT_WINDOW` / `limit`）。LLM も判断も無い。
 //!
 //! ブロックの束ね方・1 行の作り方・カーソルは `task_ops::console` にある（`GET /tasks/{id}/timeline`
 //! と同じ「時刻で 1 本に並べる」規則を共有する）。
@@ -24,8 +24,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use task_core::{
     ApprovalStore, COS_ID, Event, EventRow, KnowledgeRunState, KnowledgeRunStore, ListFilter,
-    ListOrder, Message, MessageRole, MilestoneStatus, OrgDirectory, OrgKind, ProjectId,
-    ReportFilter, ReportStore, SqliteStore, Status, Task, TaskId, TaskQuery, TaskStore,
+    ListOrder, Message, MessageRole, OrgDirectory, OrgKind, ProjectId, ReportFilter, ReportStore,
+    SqliteStore, Status, Task, TaskId, TaskQuery, TaskStore,
 };
 use task_ops::console::{ConsoleCursor, at_nanos, group_progress, task_line};
 use time::OffsetDateTime;
@@ -35,7 +35,7 @@ use crate::middleware::require_admin;
 use crate::problem::{ApiProblem, ops_problem, store_problem};
 use crate::query::{QueryParams, parse_task_id};
 use crate::state::ApiState;
-use crate::types::{ConsoleBlock, ConsolePage, MilestoneReviewView};
+use crate::types::{ConsoleBlock, ConsolePage};
 
 /// `GET /console` の既定の件数。
 pub(crate) const DEFAULT_LIMIT: usize = 100;
@@ -306,7 +306,7 @@ pub(crate) fn collect(
         .map_err(store_problem)?;
     blocks.extend(event_blocks(store, scope, &rows, &mut tasks)?);
 
-    // 2. イベントに無いもの（対話・認可・途中目標・報告）。
+    // 2. イベントに無いもの（対話・認可・報告・知識整理）。
     let side_limit = limit
         .saturating_mul(4)
         .clamp(DEFAULT_LIMIT, SIDE_WINDOW_MAX);
@@ -528,9 +528,10 @@ fn event_cursor(row: &EventRow) -> ConsoleCursor {
     ConsoleCursor::new(at_nanos(&row.ts), format!("e{}", row.id), row.id)
 }
 
-// ---- イベント以外のブロック（対話・認可・途中目標・報告）----
+// ---- イベント以外のブロック（対話・認可・報告・知識整理）----
 
-/// `after_nanos` より後（同時刻は取りこぼさないため閉区間）の対話・認可・途中目標・報告。
+/// `after_nanos` より後（同時刻は取りこぼさないため閉区間）の対話・認可・報告・知識整理。
+/// 途中目標（ADR-0038）は ADR-0079 D13 で凍結し、Console には出さない（行は `GET /projects/{id}?include_frozen=true` で読む）。
 /// `after_nanos` が `None` なら、それぞれ新しい方から `limit` 件。
 pub(crate) fn side_blocks(
     store: &SqliteStore,
@@ -573,33 +574,7 @@ pub(crate) fn side_blocks(
         });
     }
 
-    // 3. 途中目標の提案（ADR-0038）。ノードの範囲には出さない（途中目標は案件のもの）。
-    if !matches!(scope, Scope::Node(_)) {
-        for milestone in proposed_milestones(store, scope)? {
-            let at = rfc3339(milestone.created_at);
-            let nanos = at_nanos(&at);
-            if after_nanos.is_some_and(|a| nanos < a) {
-                continue;
-            }
-            let review =
-                task_ops::milestone_review::review_state(store, milestone.project_id, milestone.id)
-                    .map_err(store_problem)?
-                    .reply
-                    .map(|reply| MilestoneReviewView {
-                        message_id: reply.id.to_string(),
-                        text: reply.text,
-                        at: rfc3339(reply.created_at),
-                    });
-            blocks.push(ConsoleBlock::Milestone {
-                cursor: ConsoleCursor::new(nanos, format!("ms{}", milestone.id), 0).encode(),
-                at,
-                milestone,
-                review,
-            });
-        }
-    }
-
-    // 4. 報告（ADR-0034）。`node_id` / `project_id` は SQL で絞る。
+    // 3. 報告（ADR-0034）。`node_id` / `project_id` は SQL で絞る。
     let filter = ReportFilter {
         project_id: scope.project(),
         node_id: scope.node().map(str::to_string),
@@ -619,7 +594,7 @@ pub(crate) fn side_blocks(
         });
     }
 
-    // 5. 知識整理 run（ADR-0047 D4 / D5。Phase 62）。`knowledge_runs` に `project_id`/`node_id` の
+    // 4. 知識整理 run（ADR-0047 D4 / D5。Phase 62）。`knowledge_runs` に `project_id`/`node_id` の
     // 列は無いので、元のタスク（`TaskCache` 経由）で絞る。`scheduled`（まだ適用されていない）は出さない。
     for run in store.knowledge_run_recent(limit).map_err(store_problem)? {
         if run.state == KnowledgeRunState::Scheduled {
@@ -664,31 +639,6 @@ pub(crate) fn side_blocks(
     }
 
     Ok(blocks)
-}
-
-/// 提案中（`proposed`）の途中目標。`all` のときは案件をなめる（案件の数は人が作る数なので小さい）。
-fn proposed_milestones(
-    store: &SqliteStore,
-    scope: &Scope,
-) -> Result<Vec<task_core::Milestone>, ApiProblem> {
-    let project_ids: Vec<ProjectId> = match scope.project() {
-        Some(id) => vec![id],
-        None => store
-            .project_list()
-            .map_err(store_problem)?
-            .into_iter()
-            .map(|p| p.id)
-            .collect(),
-    };
-    let mut out = Vec::new();
-    for project_id in project_ids {
-        for milestone in store.milestone_list(project_id).map_err(store_problem)? {
-            if milestone.status == MilestoneStatus::Proposed {
-                out.push(milestone);
-            }
-        }
-    }
-    Ok(out)
 }
 
 fn message_block(message: &Message) -> ConsoleBlock {
@@ -743,7 +693,6 @@ pub(crate) fn cursor_of(block: &ConsoleBlock) -> &str {
         | ConsoleBlock::Progress { cursor, .. }
         | ConsoleBlock::Question { cursor, .. }
         | ConsoleBlock::Approval { cursor, .. }
-        | ConsoleBlock::Milestone { cursor, .. }
         | ConsoleBlock::Report { cursor, .. }
         | ConsoleBlock::Knowledge { cursor, .. } => cursor,
     }
@@ -875,7 +824,7 @@ fn project_task_ids(
 
 /// `progress` の更新をまとめる最小間隔（ADR-0048 D1: run ごとに 1 秒に 1 回まで）。
 pub const PROGRESS_COALESCE: std::time::Duration = std::time::Duration::from_secs(1);
-/// イベント以外（対話・認可・途中目標・報告）を見に行く間隔。
+/// イベント以外（対話・認可・報告・知識整理）を見に行く間隔。
 pub const SIDE_POLL: std::time::Duration = std::time::Duration::from_secs(1);
 /// 送った「イベント以外」のカーソルを覚えておく上限（同じものを 2 回流さないため）。
 const SENT_SIDE_MAX: usize = 2_000;

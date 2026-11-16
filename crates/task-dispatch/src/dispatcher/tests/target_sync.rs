@@ -641,7 +641,7 @@ async fn integration_repair_schedules_atomic_and_preserves_results() {
         std::fs::read_to_string(wt.dir.join("README.md")).unwrap(),
         "task\n"
     );
-    assert!(d.reviewing.is_empty());
+    assert!(d.supervisor.reviews().is_empty());
     let current = store.get(task.id).unwrap().unwrap();
     assert_eq!(current.status, Status::Ready);
     assert_eq!(current.attempts, task.attempts);
@@ -850,9 +850,10 @@ async fn pre_review_sync_target_advanced_limit_halts_visibly_and_rereview_resume
         !d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
             .unwrap()
     );
-    assert!(d.reviewing.is_empty());
+    assert!(d.supervisor.reviews().is_empty());
     let snapshot = d
-        .review_resync_halted
+        .coord
+        .review_resync_halted()
         .get(&task.id)
         .expect("snapshot entry");
     assert_eq!(snapshot.target_sha, halted[0].0);
@@ -895,7 +896,7 @@ async fn pre_review_sync_target_advanced_limit_halts_visibly_and_rereview_resume
         d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
             .unwrap()
     );
-    assert!(d.review_resync_halted.is_empty());
+    assert!(d.coord.review_resync_halted().is_empty());
     assert_eq!(
         store.get(task.id).unwrap().unwrap().status,
         Status::Reviewing
@@ -954,7 +955,7 @@ async fn delivery_rereview_cycles(cycles: u32) -> (bool, Vec<Event>, Arc<dyn Tas
         .spawn_review(task.id, "worker".into(), &ReviewSubject::default())
         .unwrap();
     if !started {
-        assert!(d.review_resync_halted.contains_key(&task.id));
+        assert!(d.coord.review_resync_halted().contains_key(&task.id));
     }
     let events = events_of(&store, &task);
     (started, events, store, task)
@@ -996,7 +997,7 @@ async fn delivery_rereview_below_the_cap_still_reviews() {
 }
 
 /// 同 ADR D4: 止めている間に target が静かになれば（先頭 commit が `review_resync_quiet` 以上古い）、
-/// `ReviewResyncResumed{target_quiet}` を残して自動で再開する。時計は dispatcher の `test_now` で進める。
+/// `ReviewResyncResumed{target_quiet}` を残して自動で再開する。時計は dispatcher の `test_hooks.now` で進める。
 #[tokio::test]
 async fn pre_review_sync_halted_review_resumes_when_target_is_quiet() {
     let repo = tempfile::tempdir().unwrap();
@@ -1012,7 +1013,7 @@ async fn pre_review_sync_halted_review_resumes_when_target_is_quiet() {
     store.insert(&task).unwrap();
     let mut d = worktree_dispatcher(store.clone(), done_adapter(), ws.path(), None);
     let clock = Arc::new(StdMutex::new(OffsetDateTime::now_utc()));
-    d.test_now = Some(clock.clone());
+    d.test_hooks.now = Some(clock.clone());
     let wt = d.local_worktree_for(&task).unwrap();
     wt.ensure_blocking().unwrap();
     commit_file(&wt.dir, "task.txt", "task\n");
@@ -1040,7 +1041,7 @@ async fn pre_review_sync_halted_review_resumes_when_target_is_quiet() {
         !d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
             .unwrap()
     );
-    assert!(d.review_resync_halted.contains_key(&task.id));
+    assert!(d.coord.review_resync_halted().contains_key(&task.id));
     // 時計だけ quiet より先へ進める（git は触らない）。
     *clock.lock().unwrap() =
         OffsetDateTime::now_utc() + d.config.review_resync_quiet + Duration::from_secs(1);
@@ -1048,7 +1049,7 @@ async fn pre_review_sync_halted_review_resumes_when_target_is_quiet() {
         d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
             .unwrap()
     );
-    assert!(d.review_resync_halted.is_empty());
+    assert!(d.coord.review_resync_halted().is_empty());
     let events = events_of(&store, &task);
     assert!(events.iter().any(|e| matches!(
         e,
@@ -1113,7 +1114,7 @@ async fn pre_review_sync_halted_without_reviewer_resumes_by_rereview_and_lands()
             .count(),
         1
     );
-    assert!(d.review_resync_halted.contains_key(&task.id));
+    assert!(d.coord.review_resync_halted().contains_key(&task.id));
     let halted_runs = std::fs::read_to_string(&runs).unwrap().lines().count();
     // 他の取り込みが止んだ。人が受信箱から rereview（reviewer 条件が無くても 422 にしない）。
     std::fs::write(&quiet, "").unwrap();
@@ -1602,7 +1603,7 @@ async fn integration_repair_schedules_tree_child_on_parent_target() {
     let current = store.get(child.id).unwrap().unwrap();
     assert_eq!(current.status, Status::Ready);
     assert_eq!(current.attempts, child.attempts);
-    assert!(d.reviewing.is_empty());
+    assert!(d.supervisor.reviews().is_empty());
     let events = events_of(&store, &child);
     assert!(no_review_fail(&events));
     assert!(events.iter().any(|e| matches!(e, Event::IntegrationRepairScheduled { target_ref, before_sha, .. } if target_ref == &format!("refs/heads/{parent_branch}") && before_sha == &before)));
@@ -1657,7 +1658,7 @@ async fn integration_repair_schedules_limit_falls_back_to_unsynced_review() {
         d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
             .unwrap()
     );
-    assert!(d.reviewing.contains_key(&task.id));
+    assert!(d.supervisor.reviews().contains_key(&task.id));
     assert_eq!(
         store.get(task.id).unwrap().unwrap().status,
         Status::Reviewing
@@ -1892,7 +1893,7 @@ async fn behind_target_pre_review_sync_records_before_and_after() {
     });
     let mut d = worktree_dispatcher(store.clone(), adapter, ws.path(), None);
     let t0 = OffsetDateTime::parse("2026-10-02T00:00:00Z", &Rfc3339).unwrap();
-    d.test_now = Some(Arc::new(StdMutex::new(t0)));
+    d.test_hooks.now = Some(Arc::new(StdMutex::new(t0)));
     let wt = d.local_worktree_for(&task).unwrap();
     wt.ensure_blocking().unwrap();
     commit_file(&wt.dir, "task.txt", "task\n");

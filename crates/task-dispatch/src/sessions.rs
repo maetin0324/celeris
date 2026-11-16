@@ -4,7 +4,8 @@
 //! `Dispatcher::resolve_node_session`（`dispatcher.rs`）が行う。ここに置くのは、テストしやすい形の
 //! 「続けるか、新しく作るか」の判断と、前置きに出す差分・要約の行の組み立てだけ。
 
-use task_core::{BudgetKind, MessageRole, NodeSession, RunEnd, WorkUnitSession};
+use task_core::{BudgetKind, Event, MessageRole, NodeSession, RunEnd, WorkUnitSession};
+use task_worker::WorkerAdapter;
 use time::OffsetDateTime;
 
 pub mod cos_chat;
@@ -149,6 +150,47 @@ pub fn session_id_is_valid_for_adapter(adapter_id: &str, session_id: &str) -> bo
     } else {
         true
     }
+}
+
+/// [`stored_session_fresh_reason`] が返す、保存 session を続けずに新しく作る理由
+/// （ADR 2026-11-13-continuation-resume-shared-inputs D1）。呼び出し元が自分の理由の enum に写す。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoredSessionFreshReason {
+    /// 保存された id がこの adapter では使えない（[`session_id_is_valid_for_adapter`]）。
+    InvalidId,
+    /// 前回の run で harness が context の枯渇を報告した。
+    ContextExhausted,
+    /// 測った token が `[sessions] rollover_tokens` に達した。
+    TokenRollover,
+}
+
+/// [`stored_session_fresh_reason`] の入力。照合 key・前回の拒否・cache の有無・cwd は含めない
+/// （照合の順が呼び出し元ごとに違うので、各関数に残す。ADR 2026-11-13-continuation-resume-shared-inputs D2）。
+#[derive(Debug, Clone, Copy)]
+pub struct StoredSessionFacts<'a> {
+    /// 保存 session を続ける adapter（呼び出し元が照合 key で一致を確かめた後の値）。
+    pub adapter: &'a str,
+    pub session_id: &'a str,
+    pub context_exhausted: bool,
+    /// 呼び出し元が自分の測り方で測った token（task・WU は `approx_tokens`、CoS chat は `rollover_measure`）。
+    pub measured_tokens: u64,
+    pub rollover_tokens: u64,
+}
+
+/// 保存 session の id・context・token の照合（ADR 2026-11-13-continuation-resume-shared-inputs D1。純粋関数）。
+/// 順は id → context → token。`None` なら Resume してよい。task・WU（[`decide_continuation`]）と
+/// CoS chat（[`cos_chat::decide_cos_chat_session`]）がこれを呼ぶ。
+pub fn stored_session_fresh_reason(f: &StoredSessionFacts<'_>) -> Option<StoredSessionFreshReason> {
+    if !session_id_is_valid_for_adapter(f.adapter, f.session_id) {
+        return Some(StoredSessionFreshReason::InvalidId);
+    }
+    if f.context_exhausted {
+        return Some(StoredSessionFreshReason::ContextExhausted);
+    }
+    if f.measured_tokens >= f.rollover_tokens {
+        return Some(StoredSessionFreshReason::TokenRollover);
+    }
+    None
 }
 
 /// ADR-0054 Phase 67b 追記: このアダプタでこれから使うセッション id を決める（純粋関数）。
@@ -387,21 +429,52 @@ pub fn decide_continuation(f: &ContinuationFacts<'_>) -> ContinuationDecision {
     if stored.cwd.as_deref() != f.cwd {
         return fresh(R::SurfaceUnsupported);
     }
-    // #9: 壊れた id（claude-code は UUID 必須。ADR-0054 Phase 67b）。
-    if !session_id_is_valid_for_adapter(f.adapter, &stored.session_id) {
-        return fresh(R::SessionMissing);
-    }
-    // #10
-    if stored.approx_tokens.max(0) as u64 >= f.rollover_tokens
-        || previous_end
+    // #9（壊れた id。claude-code は UUID 必須。ADR-0054 Phase 67b）と #10（context の枯渇・token の上限）は
+    // CoS chat と共有の照合（ADR 2026-11-13-continuation-resume-shared-inputs）。
+    let shared = stored_session_fresh_reason(&StoredSessionFacts {
+        adapter: f.adapter,
+        session_id: &stored.session_id,
+        context_exhausted: previous_end
             == (RunEnd::BudgetExhausted {
                 kind: BudgetKind::Context,
-            })
-    {
-        return fresh(R::ContextRollover);
+            }),
+        measured_tokens: stored.approx_tokens.max(0) as u64,
+        rollover_tokens: f.rollover_tokens,
+    });
+    match shared {
+        Some(StoredSessionFreshReason::InvalidId) => fresh(R::SessionMissing),
+        Some(
+            StoredSessionFreshReason::ContextExhausted | StoredSessionFreshReason::TokenRollover,
+        ) => fresh(R::ContextRollover),
+        // #11
+        None => ContinuationDecision::Resume,
     }
-    // #11
-    ContinuationDecision::Resume
+}
+
+/// ADR 2026-11-15-research-adapter-deadline D2: run の adapter（`WorkerStarted.adapter`）が checkpoint から続けられるか。
+/// 性質の正本は `WorkerAdapter::continues_from_checkpoint` で、`adapters` は宣言された harness の adapter（dispatcher が
+/// `RoutingRuntime::harness_adapters` を渡す）。同じ id の adapter は同じ型で、性質も同じ。記録が無い run・宣言に同じ id の
+/// adapter が無い run は、続けられると確かめられないので `false`（continuation ではなく最初からのやり直しにする）。
+/// `SUPPORTED_ADAPTERS`（継続 session）とは別の性質で、session を持てる adapter は checkpoint からも続けられるが逆は成り立たない。
+pub fn run_continues_from_checkpoint<'a>(
+    adapters: impl IntoIterator<Item = &'a dyn WorkerAdapter>,
+    events: &[(u64, Event)],
+    run_id: &str,
+) -> bool {
+    let Some(adapter_id) = events.iter().rev().find_map(|(_, e)| match e {
+        Event::WorkerStarted {
+            run_id: started,
+            adapter,
+            ..
+        } if started == run_id => Some(adapter.as_str()),
+        _ => None,
+    }) else {
+        return false;
+    };
+    adapters
+        .into_iter()
+        .find(|adapter| adapter.id() == adapter_id)
+        .is_some_and(|adapter| adapter.continues_from_checkpoint())
 }
 
 #[cfg(test)]

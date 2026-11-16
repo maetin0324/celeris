@@ -11,7 +11,7 @@ use crate::execution_plan::{
 use crate::instance::{DaemonInstance, InstanceRole};
 use crate::integrations::{IntegrationId, TaskIntegration};
 use crate::message::Message;
-use crate::model::{Event, Status, Task, TaskId, WorkspaceSpec};
+use crate::model::{Event, Lease, Status, Task, TaskId, WorkspaceSpec};
 use crate::org::{
     Milestone, MilestoneId, MilestoneStatus, OrgNode, Project, ProjectId, ProjectStatus,
 };
@@ -309,10 +309,6 @@ impl TaskStore for SqliteStore {
         self.acquire_lease_impl(task_id, worker_run_id, ttl)
     }
 
-    fn release_lease(&self, task_id: TaskId, worker_run_id: &str) -> Result<(), StoreError> {
-        self.release_lease_impl(task_id, worker_run_id)
-    }
-
     fn halted_by_pause(&self, task: &Task) -> Result<bool, StoreError> {
         self.halted_by_pause_impl(task)
     }
@@ -327,13 +323,24 @@ impl TaskStore for SqliteStore {
         self.ready_tasks_impl(limit)
     }
 
-    fn apply_transition_with_events(
+    fn apply_transition_with_work_units(
         &self,
         task_id: TaskId,
+        work_units: Vec<(WorkUnitRow, Event)>,
         trigger: Trigger,
         extra_events: Vec<Event>,
     ) -> Result<Outcome, StoreError> {
-        self.apply_transition_with_events_impl(task_id, trigger, extra_events)
+        self.apply_transition_with_work_units_impl(task_id, work_units, trigger, extra_events)
+    }
+
+    fn apply_transition_if_lease(
+        &self,
+        task_id: TaskId,
+        expected: &Lease,
+        trigger: Trigger,
+        extra_events: Vec<Event>,
+    ) -> Result<Option<Outcome>, StoreError> {
+        self.apply_transition_if_lease_impl(task_id, expected, trigger, extra_events)
     }
 
     fn complete_plan(
@@ -893,7 +900,7 @@ impl TaskStore for SqliteStore {
         updated: WorkUnitRow,
         event: Event,
     ) -> Result<(), StoreError> {
-        self.work_unit_transition_impl(task_id, updated, vec![event])
+        self.work_units_apply_impl(task_id, Vec::new(), vec![updated], vec![event])
     }
 
     fn work_unit_transition_with_events(
@@ -902,7 +909,7 @@ impl TaskStore for SqliteStore {
         updated: WorkUnitRow,
         events: Vec<Event>,
     ) -> Result<(), StoreError> {
-        self.work_unit_transition_impl(task_id, updated, events)
+        self.work_units_apply_impl(task_id, Vec::new(), vec![updated], events)
     }
 
     fn recover_work_unit(

@@ -1,0 +1,2185 @@
+{
+ "schema": "celeris.health-v2-v0.loc/1",
+ "method": {
+  "loc": "scripts/dev/source-size-report.py --exclusive-classes --rev <rev>（run_exclusive_report を同じ config で呼ぶ）",
+  "deps": "agent-docs/progress/2026-11-07-health-v2-b0/module-deps-measure.py <rev> を git archive で展開した <rev> の tree で実行（B0 と同じ引数）",
+  "attribution": "健全性 v2 の各 slice の task branch の first-parent 上で、その slice の WU の統合と直接の commit の差（親 1 → commit）を class × 言語で足す。Merge commit/sync: main の取り込みは除く",
+  "moves": "slice 自身の commit の中で、ある file から消えて別の file に現れた行（strip 後 12 文字以上、完全一致）を file の主な class の組で数える",
+  "reclassified": "base と head の両方にある path で主な class が変わったもの（分類の付け替え）"
+ },
+ "revs": {
+  "base": "5923a76c9aa0ec5a7b3f58abd06b456f2bdaaf93",
+  "merge_base": "bae3149de83409e4d20a0f4ed9941067e4d27e12",
+  "head": "bae3149de83409e4d20a0f4ed9941067e4d27e12"
+ },
+ "view_classes": {
+  "product_only": [
+   "production"
+  ],
+  "own_total_with_tests": [
+   "production",
+   "inline_test",
+   "external_test",
+   "tooling",
+   "evaluation_infra",
+   "migration"
+  ],
+  "all_tracked": [
+   "production",
+   "inline_test",
+   "external_test",
+   "generated",
+   "vendor",
+   "fixture",
+   "evaluation_infra",
+   "tooling",
+   "docs",
+   "schema",
+   "migration",
+   "lockfile"
+  ],
+  "external_split_candidates": [
+   "evaluation_infra",
+   "vendor"
+  ]
+ },
+ "counts": {
+  "base": {
+   "sha": "5923a76c9aa0ec5a7b3f58abd06b456f2bdaaf93",
+   "config_sha256": "a0d5eca1025f123c6ee7a71caf108979eda391c3322b8c3db352c771059145d5",
+   "classification": "source-size-exclusive/1",
+   "views": {
+    "product_only": {
+     "lines": 366177,
+     "rust_lines": 320064
+    },
+    "own_total_with_tests": {
+     "lines": 967314,
+     "rust_lines": 828913
+    },
+    "all_tracked": {
+     "lines": 1512205,
+     "rust_lines": 897685
+    },
+    "external_split_candidates": {
+     "lines": 256886,
+     "rust_lines": 189185
+    }
+   },
+   "matrix": {
+    "production": {
+     "rust": 320064,
+     "typescript": 34834,
+     "javascript": 4044,
+     "python": 4596,
+     "shell": 51,
+     "sql": 0,
+     "markdown": 0,
+     "json": 136,
+     "toml": 2125,
+     "yaml": 0,
+     "other": 327
+    },
+    "external_test": {
+     "rust": 368793,
+     "typescript": 26571,
+     "javascript": 8050,
+     "python": 2977,
+     "shell": 7696,
+     "sql": 0,
+     "markdown": 0,
+     "json": 0,
+     "toml": 18,
+     "yaml": 0,
+     "other": 0
+    },
+    "inline_test": {
+     "rust": 19266,
+     "typescript": 0,
+     "javascript": 0,
+     "python": 0,
+     "shell": 0,
+     "sql": 0,
+     "markdown": 0,
+     "json": 0,
+     "toml": 0,
+     "yaml": 0,
+     "other": 0
+    },
+    "generated": {
+     "rust": 0,
+     "typescript": 7855,
+     "javascript": 0,
+     "python": 0,
+     "shell": 0,
+     "sql": 0,
+     "markdown": 0,
+     "json": 36040,
+     "toml": 0,
+     "yaml": 0,
+     "other": 0
+    },
+    "vendor": {
+     "rust": 68395,
+     "typescript": 1469,
+     "javascript": 3284,
+     "python": 24287,
+     "shell": 70,
+     "sql": 0,
+     "markdown": 9342,
+     "json": 314,
+     "toml": 328,
+     "yaml": 5,
+     "other": 4442
+    },
+    "fixture": {
+     "rust": 143,
+     "typescript": 397,
+     "javascript": 7,
+     "python": 1625,
+     "shell": 747,
+     "sql": 0,
+     "markdown": 331,
+     "json": 30170,
+     "toml": 13,
+     "yaml": 0,
+     "other": 2705
+    },
+    "evaluation_infra": {
+     "rust": 120790,
+     "typescript": 0,
+     "javascript": 0,
+     "python": 16595,
+     "shell": 6541,
+     "sql": 0,
+     "markdown": 0,
+     "json": 919,
+     "toml": 71,
+     "yaml": 0,
+     "other": 34
+    },
+    "tooling": {
+     "rust": 0,
+     "typescript": 177,
+     "javascript": 572,
+     "python": 4642,
+     "shell": 12530,
+     "sql": 0,
+     "markdown": 0,
+     "json": 517,
+     "toml": 474,
+     "yaml": 21,
+     "other": 654
+    },
+    "docs": {
+     "rust": 234,
+     "typescript": 0,
+     "javascript": 0,
+     "python": 7078,
+     "shell": 2191,
+     "sql": 0,
+     "markdown": 181566,
+     "json": 75712,
+     "toml": 1119,
+     "yaml": 20,
+     "other": 20475
+    },
+    "schema": {
+     "rust": 0,
+     "typescript": 0,
+     "javascript": 0,
+     "python": 0,
+     "shell": 0,
+     "sql": 0,
+     "markdown": 0,
+     "json": 54438,
+     "toml": 0,
+     "yaml": 0,
+     "other": 0
+    },
+    "migration": {
+     "rust": 0,
+     "typescript": 0,
+     "javascript": 0,
+     "python": 0,
+     "shell": 0,
+     "sql": 3229,
+     "markdown": 0,
+     "json": 0,
+     "toml": 0,
+     "yaml": 0,
+     "other": 0
+    },
+    "lockfile": {
+     "rust": 0,
+     "typescript": 0,
+     "javascript": 0,
+     "python": 0,
+     "shell": 0,
+     "sql": 0,
+     "markdown": 0,
+     "json": 0,
+     "toml": 0,
+     "yaml": 5813,
+     "other": 4276
+    }
+   },
+   "class_totals": {
+    "production": 366177,
+    "external_test": 414105,
+    "inline_test": 19266,
+    "generated": 43895,
+    "vendor": 111936,
+    "fixture": 36138,
+    "evaluation_infra": 144950,
+    "tooling": 19587,
+    "docs": 288395,
+    "schema": 54438,
+    "migration": 3229,
+    "lockfile": 10089
+   },
+   "language_totals": {
+    "rust": 897685,
+    "typescript": 71303,
+    "javascript": 15957,
+    "python": 61800,
+    "shell": 29826,
+    "sql": 3229,
+    "markdown": 191239,
+    "json": 198246,
+    "toml": 4148,
+    "yaml": 5859,
+    "other": 32913
+   },
+   "totals": {
+    "files": 6849,
+    "binary_or_symlink_files": 22,
+    "tracked_lines": 1512205,
+    "classified_lines": 1512205,
+    "consistent": true
+   }
+  },
+  "merge_base": {
+   "sha": "bae3149de83409e4d20a0f4ed9941067e4d27e12",
+   "config_sha256": "a0d5eca1025f123c6ee7a71caf108979eda391c3322b8c3db352c771059145d5",
+   "classification": "source-size-exclusive/1",
+   "views": {
+    "product_only": {
+     "lines": 386112,
+     "rust_lines": 340001
+    },
+    "own_total_with_tests": {
+     "lines": 1042476,
+     "rust_lines": 894253
+    },
+    "all_tracked": {
+     "lines": 1887008,
+     "rust_lines": 963025
+    },
+    "external_split_candidates": {
+     "lines": 257152,
+     "rust_lines": 189425
+    }
+   },
+   "matrix": {
+    "production": {
+     "rust": 340001,
+     "typescript": 34840,
+     "javascript": 4044,
+     "python": 4596,
+     "shell": 51,
+     "sql": 0,
+     "markdown": 0,
+     "json": 136,
+     "toml": 2117,
+     "yaml": 0,
+     "other": 327
+    },
+    "external_test": {
+     "rust": 411596,
+     "typescript": 26617,
+     "javascript": 8050,
+     "python": 6524,
+     "shell": 8203,
+     "sql": 0,
+     "markdown": 0,
+     "json": 0,
+     "toml": 18,
+     "yaml": 0,
+     "other": 0
+    },
+    "inline_test": {
+     "rust": 21626,
+     "typescript": 0,
+     "javascript": 0,
+     "python": 0,
+     "shell": 0,
+     "sql": 0,
+     "markdown": 0,
+     "json": 0,
+     "toml": 0,
+     "yaml": 0,
+     "other": 0
+    },
+    "generated": {
+     "rust": 0,
+     "typescript": 8014,
+     "javascript": 0,
+     "python": 0,
+     "shell": 0,
+     "sql": 0,
+     "markdown": 0,
+     "json": 36878,
+     "toml": 0,
+     "yaml": 0,
+     "other": 0
+    },
+    "vendor": {
+     "rust": 68395,
+     "typescript": 1469,
+     "javascript": 3284,
+     "python": 24287,
+     "shell": 70,
+     "sql": 0,
+     "markdown": 9342,
+     "json": 314,
+     "toml": 328,
+     "yaml": 5,
+     "other": 4442
+    },
+    "fixture": {
+     "rust": 143,
+     "typescript": 397,
+     "javascript": 7,
+     "python": 1709,
+     "shell": 747,
+     "sql": 0,
+     "markdown": 331,
+     "json": 30253,
+     "toml": 13,
+     "yaml": 0,
+     "other": 2705
+    },
+    "evaluation_infra": {
+     "rust": 121030,
+     "typescript": 0,
+     "javascript": 0,
+     "python": 16595,
+     "shell": 6567,
+     "sql": 0,
+     "markdown": 0,
+     "json": 919,
+     "toml": 71,
+     "yaml": 0,
+     "other": 34
+    },
+    "tooling": {
+     "rust": 0,
+     "typescript": 177,
+     "javascript": 572,
+     "python": 9336,
+     "shell": 13035,
+     "sql": 0,
+     "markdown": 0,
+     "json": 517,
+     "toml": 850,
+     "yaml": 21,
+     "other": 658
+    },
+    "docs": {
+     "rust": 234,
+     "typescript": 0,
+     "javascript": 0,
+     "python": 16148,
+     "shell": 3299,
+     "sql": 0,
+     "markdown": 213262,
+     "json": 277885,
+     "toml": 1119,
+     "yaml": 20,
+     "other": 62143
+    },
+    "schema": {
+     "rust": 0,
+     "typescript": 0,
+     "javascript": 0,
+     "python": 0,
+     "shell": 0,
+     "sql": 0,
+     "markdown": 0,
+     "json": 67199,
+     "toml": 0,
+     "yaml": 0,
+     "other": 0
+    },
+    "migration": {
+     "rust": 0,
+     "typescript": 0,
+     "javascript": 0,
+     "python": 0,
+     "shell": 0,
+     "sql": 3348,
+     "markdown": 0,
+     "json": 0,
+     "toml": 0,
+     "yaml": 0,
+     "other": 0
+    },
+    "lockfile": {
+     "rust": 0,
+     "typescript": 0,
+     "javascript": 0,
+     "python": 0,
+     "shell": 0,
+     "sql": 0,
+     "markdown": 0,
+     "json": 0,
+     "toml": 0,
+     "yaml": 5813,
+     "other": 4277
+    }
+   },
+   "class_totals": {
+    "production": 386112,
+    "external_test": 461008,
+    "inline_test": 21626,
+    "generated": 44892,
+    "vendor": 111936,
+    "fixture": 36305,
+    "evaluation_infra": 145216,
+    "tooling": 25166,
+    "docs": 574110,
+    "schema": 67199,
+    "migration": 3348,
+    "lockfile": 10090
+   },
+   "language_totals": {
+    "rust": 963025,
+    "typescript": 71514,
+    "javascript": 15957,
+    "python": 79195,
+    "shell": 31972,
+    "sql": 3348,
+    "markdown": 222935,
+    "json": 414101,
+    "toml": 4516,
+    "yaml": 5859,
+    "other": 74586
+   },
+   "totals": {
+    "files": 8173,
+    "binary_or_symlink_files": 22,
+    "tracked_lines": 1887008,
+    "classified_lines": 1887008,
+    "consistent": true
+   }
+  },
+  "head": {
+   "sha": "bae3149de83409e4d20a0f4ed9941067e4d27e12",
+   "config_sha256": "a0d5eca1025f123c6ee7a71caf108979eda391c3322b8c3db352c771059145d5",
+   "classification": "source-size-exclusive/1",
+   "views": {
+    "product_only": {
+     "lines": 386112,
+     "rust_lines": 340001
+    },
+    "own_total_with_tests": {
+     "lines": 1042476,
+     "rust_lines": 894253
+    },
+    "all_tracked": {
+     "lines": 1887008,
+     "rust_lines": 963025
+    },
+    "external_split_candidates": {
+     "lines": 257152,
+     "rust_lines": 189425
+    }
+   },
+   "matrix": {
+    "production": {
+     "rust": 340001,
+     "typescript": 34840,
+     "javascript": 4044,
+     "python": 4596,
+     "shell": 51,
+     "sql": 0,
+     "markdown": 0,
+     "json": 136,
+     "toml": 2117,
+     "yaml": 0,
+     "other": 327
+    },
+    "external_test": {
+     "rust": 411596,
+     "typescript": 26617,
+     "javascript": 8050,
+     "python": 6524,
+     "shell": 8203,
+     "sql": 0,
+     "markdown": 0,
+     "json": 0,
+     "toml": 18,
+     "yaml": 0,
+     "other": 0
+    },
+    "inline_test": {
+     "rust": 21626,
+     "typescript": 0,
+     "javascript": 0,
+     "python": 0,
+     "shell": 0,
+     "sql": 0,
+     "markdown": 0,
+     "json": 0,
+     "toml": 0,
+     "yaml": 0,
+     "other": 0
+    },
+    "generated": {
+     "rust": 0,
+     "typescript": 8014,
+     "javascript": 0,
+     "python": 0,
+     "shell": 0,
+     "sql": 0,
+     "markdown": 0,
+     "json": 36878,
+     "toml": 0,
+     "yaml": 0,
+     "other": 0
+    },
+    "vendor": {
+     "rust": 68395,
+     "typescript": 1469,
+     "javascript": 3284,
+     "python": 24287,
+     "shell": 70,
+     "sql": 0,
+     "markdown": 9342,
+     "json": 314,
+     "toml": 328,
+     "yaml": 5,
+     "other": 4442
+    },
+    "fixture": {
+     "rust": 143,
+     "typescript": 397,
+     "javascript": 7,
+     "python": 1709,
+     "shell": 747,
+     "sql": 0,
+     "markdown": 331,
+     "json": 30253,
+     "toml": 13,
+     "yaml": 0,
+     "other": 2705
+    },
+    "evaluation_infra": {
+     "rust": 121030,
+     "typescript": 0,
+     "javascript": 0,
+     "python": 16595,
+     "shell": 6567,
+     "sql": 0,
+     "markdown": 0,
+     "json": 919,
+     "toml": 71,
+     "yaml": 0,
+     "other": 34
+    },
+    "tooling": {
+     "rust": 0,
+     "typescript": 177,
+     "javascript": 572,
+     "python": 9336,
+     "shell": 13035,
+     "sql": 0,
+     "markdown": 0,
+     "json": 517,
+     "toml": 850,
+     "yaml": 21,
+     "other": 658
+    },
+    "docs": {
+     "rust": 234,
+     "typescript": 0,
+     "javascript": 0,
+     "python": 16148,
+     "shell": 3299,
+     "sql": 0,
+     "markdown": 213262,
+     "json": 277885,
+     "toml": 1119,
+     "yaml": 20,
+     "other": 62143
+    },
+    "schema": {
+     "rust": 0,
+     "typescript": 0,
+     "javascript": 0,
+     "python": 0,
+     "shell": 0,
+     "sql": 0,
+     "markdown": 0,
+     "json": 67199,
+     "toml": 0,
+     "yaml": 0,
+     "other": 0
+    },
+    "migration": {
+     "rust": 0,
+     "typescript": 0,
+     "javascript": 0,
+     "python": 0,
+     "shell": 0,
+     "sql": 3348,
+     "markdown": 0,
+     "json": 0,
+     "toml": 0,
+     "yaml": 0,
+     "other": 0
+    },
+    "lockfile": {
+     "rust": 0,
+     "typescript": 0,
+     "javascript": 0,
+     "python": 0,
+     "shell": 0,
+     "sql": 0,
+     "markdown": 0,
+     "json": 0,
+     "toml": 0,
+     "yaml": 5813,
+     "other": 4277
+    }
+   },
+   "class_totals": {
+    "production": 386112,
+    "external_test": 461008,
+    "inline_test": 21626,
+    "generated": 44892,
+    "vendor": 111936,
+    "fixture": 36305,
+    "evaluation_infra": 145216,
+    "tooling": 25166,
+    "docs": 574110,
+    "schema": 67199,
+    "migration": 3348,
+    "lockfile": 10090
+   },
+   "language_totals": {
+    "rust": 963025,
+    "typescript": 71514,
+    "javascript": 15957,
+    "python": 79195,
+    "shell": 31972,
+    "sql": 3348,
+    "markdown": 222935,
+    "json": 414101,
+    "toml": 4516,
+    "yaml": 5859,
+    "other": 74586
+   },
+   "totals": {
+    "files": 8173,
+    "binary_or_symlink_files": 22,
+    "tracked_lines": 1887008,
+    "classified_lines": 1887008,
+    "consistent": true
+   }
+  }
+ },
+ "diffs": {
+  "head_minus_base": {
+   "views": {
+    "product_only": {
+     "lines": 19935,
+     "rust_lines": 19937
+    },
+    "own_total_with_tests": {
+     "lines": 75162,
+     "rust_lines": 65340
+    },
+    "all_tracked": {
+     "lines": 374803,
+     "rust_lines": 65340
+    },
+    "external_split_candidates": {
+     "lines": 266,
+     "rust_lines": 240
+    }
+   },
+   "matrix": {
+    "docs": {
+     "javascript": 0,
+     "json": 202173,
+     "markdown": 31696,
+     "other": 41668,
+     "python": 9070,
+     "rust": 0,
+     "shell": 1108,
+     "sql": 0,
+     "toml": 0,
+     "typescript": 0,
+     "yaml": 0
+    },
+    "evaluation_infra": {
+     "javascript": 0,
+     "json": 0,
+     "markdown": 0,
+     "other": 0,
+     "python": 0,
+     "rust": 240,
+     "shell": 26,
+     "sql": 0,
+     "toml": 0,
+     "typescript": 0,
+     "yaml": 0
+    },
+    "external_test": {
+     "javascript": 0,
+     "json": 0,
+     "markdown": 0,
+     "other": 0,
+     "python": 3547,
+     "rust": 42803,
+     "shell": 507,
+     "sql": 0,
+     "toml": 0,
+     "typescript": 46,
+     "yaml": 0
+    },
+    "fixture": {
+     "javascript": 0,
+     "json": 83,
+     "markdown": 0,
+     "other": 0,
+     "python": 84,
+     "rust": 0,
+     "shell": 0,
+     "sql": 0,
+     "toml": 0,
+     "typescript": 0,
+     "yaml": 0
+    },
+    "generated": {
+     "javascript": 0,
+     "json": 838,
+     "markdown": 0,
+     "other": 0,
+     "python": 0,
+     "rust": 0,
+     "shell": 0,
+     "sql": 0,
+     "toml": 0,
+     "typescript": 159,
+     "yaml": 0
+    },
+    "inline_test": {
+     "javascript": 0,
+     "json": 0,
+     "markdown": 0,
+     "other": 0,
+     "python": 0,
+     "rust": 2360,
+     "shell": 0,
+     "sql": 0,
+     "toml": 0,
+     "typescript": 0,
+     "yaml": 0
+    },
+    "lockfile": {
+     "javascript": 0,
+     "json": 0,
+     "markdown": 0,
+     "other": 1,
+     "python": 0,
+     "rust": 0,
+     "shell": 0,
+     "sql": 0,
+     "toml": 0,
+     "typescript": 0,
+     "yaml": 0
+    },
+    "migration": {
+     "javascript": 0,
+     "json": 0,
+     "markdown": 0,
+     "other": 0,
+     "python": 0,
+     "rust": 0,
+     "shell": 0,
+     "sql": 119,
+     "toml": 0,
+     "typescript": 0,
+     "yaml": 0
+    },
+    "production": {
+     "javascript": 0,
+     "json": 0,
+     "markdown": 0,
+     "other": 0,
+     "python": 0,
+     "rust": 19937,
+     "shell": 0,
+     "sql": 0,
+     "toml": -8,
+     "typescript": 6,
+     "yaml": 0
+    },
+    "schema": {
+     "javascript": 0,
+     "json": 12761,
+     "markdown": 0,
+     "other": 0,
+     "python": 0,
+     "rust": 0,
+     "shell": 0,
+     "sql": 0,
+     "toml": 0,
+     "typescript": 0,
+     "yaml": 0
+    },
+    "tooling": {
+     "javascript": 0,
+     "json": 0,
+     "markdown": 0,
+     "other": 4,
+     "python": 4694,
+     "rust": 0,
+     "shell": 505,
+     "sql": 0,
+     "toml": 376,
+     "typescript": 0,
+     "yaml": 0
+    },
+    "vendor": {
+     "javascript": 0,
+     "json": 0,
+     "markdown": 0,
+     "other": 0,
+     "python": 0,
+     "rust": 0,
+     "shell": 0,
+     "sql": 0,
+     "toml": 0,
+     "typescript": 0,
+     "yaml": 0
+    }
+   },
+   "class_totals": {
+    "production": 19935,
+    "external_test": 46903,
+    "inline_test": 2360,
+    "generated": 997,
+    "vendor": 0,
+    "fixture": 167,
+    "evaluation_infra": 266,
+    "tooling": 5579,
+    "docs": 285715,
+    "schema": 12761,
+    "migration": 119,
+    "lockfile": 1
+   }
+  },
+  "head_minus_merge_base": {
+   "views": {
+    "product_only": {
+     "lines": 0,
+     "rust_lines": 0
+    },
+    "own_total_with_tests": {
+     "lines": 0,
+     "rust_lines": 0
+    },
+    "all_tracked": {
+     "lines": 0,
+     "rust_lines": 0
+    },
+    "external_split_candidates": {
+     "lines": 0,
+     "rust_lines": 0
+    }
+   }
+  }
+ },
+ "attribution": {
+  "slices": {
+   "B0": {
+    "task_id": "01M6TYVJSPEYA2P8B7G56HSQ73",
+    "own_commits": 7,
+    "views": {
+     "product_only": {
+      "lines": 0,
+      "rust_lines": 0
+     },
+     "own_total_with_tests": {
+      "lines": 993,
+      "rust_lines": 0
+     },
+     "all_tracked": {
+      "lines": 51887,
+      "rust_lines": 0
+     },
+     "external_split_candidates": {
+      "lines": 0,
+      "rust_lines": 0
+     }
+    },
+    "matrix": {
+     "docs": {
+      "json": 47597,
+      "markdown": 776,
+      "other": 790,
+      "python": 1652,
+      "shell": 44
+     },
+     "external_test": {
+      "python": 370
+     },
+     "fixture": {
+      "json": 35
+     },
+     "tooling": {
+      "python": 525,
+      "toml": 98
+     }
+    },
+    "moved_lines_by_class_pair": {},
+    "moved_lines_top_paths": []
+   },
+   "G1": {
+    "task_id": "01M6TYVJSRM3SFQ3VHWQE4MZ9M",
+    "own_commits": 6,
+    "views": {
+     "product_only": {
+      "lines": 0,
+      "rust_lines": 0
+     },
+     "own_total_with_tests": {
+      "lines": 5741,
+      "rust_lines": 0
+     },
+     "all_tracked": {
+      "lines": 14870,
+      "rust_lines": 0
+     },
+     "external_split_candidates": {
+      "lines": 0,
+      "rust_lines": 0
+     }
+    },
+    "matrix": {
+     "docs": {
+      "markdown": 524
+     },
+     "external_test": {
+      "python": 1518,
+      "shell": 126
+     },
+     "fixture": {
+      "python": 84
+     },
+     "schema": {
+      "json": 8521
+     },
+     "tooling": {
+      "python": 3861,
+      "shell": 65,
+      "toml": 171
+     }
+    },
+    "moved_lines_by_class_pair": {
+     "tooling->tooling": 2,
+     "tooling->external_test": 1,
+     "external_test->external_test": 1
+    },
+    "moved_lines_top_paths": [
+     {
+      "pair": "scripts/dev/repo-health/profiles/default.toml -> scripts/dev/repo-health/profiles/celeris.toml",
+      "lines": 2
+     },
+     {
+      "pair": "scripts/dev/repo-health/profiles/default.toml -> scripts/dev/tests/repo_health_gate.sh",
+      "lines": 1
+     },
+     {
+      "pair": "scripts/tests/test_repo_health_core.py -> scripts/tests/test_repo_health_structure.py",
+      "lines": 1
+     }
+    ]
+   },
+   "G2": {
+    "task_id": "01M6TYVJSTYGRPHERB93MM7J59",
+    "own_commits": 60,
+    "views": {
+     "product_only": {
+      "lines": 3945,
+      "rust_lines": 3935
+     },
+     "own_total_with_tests": {
+      "lines": 11626,
+      "rust_lines": 11613
+     },
+     "all_tracked": {
+      "lines": 14263,
+      "rust_lines": 11613
+     },
+     "external_split_candidates": {
+      "lines": 0,
+      "rust_lines": 0
+     }
+    },
+    "matrix": {
+     "docs": {
+      "markdown": 1848
+     },
+     "external_test": {
+      "rust": 7644
+     },
+     "generated": {
+      "json": 167,
+      "typescript": 35
+     },
+     "inline_test": {
+      "rust": 34
+     },
+     "lockfile": {
+      "other": 1
+     },
+     "production": {
+      "rust": 3935,
+      "typescript": 10
+     },
+     "schema": {
+      "json": 586
+     },
+     "tooling": {
+      "toml": 3
+     }
+    },
+    "moved_lines_by_class_pair": {
+     "production->production": 143,
+     "external_test->external_test": 5,
+     "production->external_test": 4,
+     "external_test->production": 1
+    },
+    "moved_lines_top_paths": [
+     {
+      "pair": "crates/task-core/src/execution_plan.rs -> crates/task-core/src/design_review.rs",
+      "lines": 49
+     },
+     {
+      "pair": "crates/task-dispatch/src/dispatcher/planner_flow.rs -> crates/task-dispatch/src/health_review/plan_adoption.rs",
+      "lines": 40
+     },
+     {
+      "pair": "crates/task-dispatch/src/review.rs -> crates/task-dispatch/src/health_review/verdict.rs",
+      "lines": 15
+     },
+     {
+      "pair": "crates/task-core/src/design_review.rs -> crates/task-core/src/execution_plan/design_brief.rs",
+      "lines": 15
+     },
+     {
+      "pair": "crates/task-worker/src/claude_code/prompt.rs -> crates/task-worker/src/change_rules/review.rs",
+      "lines": 6
+     },
+     {
+      "pair": "crates/task-dispatch/src/health_review/policy_review.rs -> crates/task-dispatch/src/health_review/input.rs",
+      "lines": 5
+     },
+     {
+      "pair": "crates/task-dispatch/src/dispatcher/planner_flow.rs -> crates/task-dispatch/src/health_review/design_gate.rs",
+      "lines": 4
+     },
+     {
+      "pair": "crates/task-worker/src/change_rules/tests.rs -> crates/task-worker/src/change_rules/worker_profile_tests.rs",
+      "lines": 3
+     }
+    ]
+   },
+   "G3": {
+    "task_id": "01M6TYVJSWEY3ZE50S02ETYDNM",
+    "own_commits": 12,
+    "views": {
+     "product_only": {
+      "lines": 5074,
+      "rust_lines": 5059
+     },
+     "own_total_with_tests": {
+      "lines": 16149,
+      "rust_lines": 15900
+     },
+     "all_tracked": {
+      "lines": 21537,
+      "rust_lines": 15900
+     },
+     "external_split_candidates": {
+      "lines": 7,
+      "rust_lines": 7
+     }
+    },
+    "matrix": {
+     "docs": {
+      "markdown": 3946
+     },
+     "evaluation_infra": {
+      "rust": 7
+     },
+     "external_test": {
+      "rust": 10684,
+      "shell": 156,
+      "typescript": 13
+     },
+     "generated": {
+      "json": 493,
+      "typescript": 91
+     },
+     "inline_test": {
+      "rust": 150
+     },
+     "migration": {
+      "sql": 22
+     },
+     "production": {
+      "rust": 5059,
+      "typescript": 15
+     },
+     "schema": {
+      "json": 858
+     },
+     "tooling": {
+      "shell": 43
+     }
+    },
+    "moved_lines_by_class_pair": {
+     "production->production": 103,
+     "external_test->external_test": 5,
+     "production->external_test": 4
+    },
+    "moved_lines_top_paths": [
+     {
+      "pair": "crates/task-dispatch/src/health_review/input.rs -> crates/task-dispatch/src/health_review/gate.rs",
+      "lines": 52
+     },
+     {
+      "pair": "crates/task-core/src/store/migrations.rs -> crates/task-core/src/migration_registry.rs",
+      "lines": 16
+     },
+     {
+      "pair": "crates/task-dispatch/src/dispatcher/phase_integration.rs -> crates/task-dispatch/src/health_review/check_item.rs",
+      "lines": 14
+     },
+     {
+      "pair": "crates/task-ops/src/cron_jobs.rs -> crates/task-ops/src/cron_jobs/input_kind.rs",
+      "lines": 9
+     },
+     {
+      "pair": "crates/task-core/src/store/tests.rs -> crates/task-core/src/store/dependency_reopen_tests.rs",
+      "lines": 4
+     },
+     {
+      "pair": "crates/task-core/src/required_checks.rs -> crates/task-core/src/required_checks/health.rs",
+      "lines": 3
+     },
+     {
+      "pair": "crates/task-dispatch/src/dispatcher/review_verdict.rs -> crates/task-dispatch/src/health_review/check_item.rs",
+      "lines": 2
+     },
+     {
+      "pair": "crates/task-dispatch/src/health_review/policy.rs -> crates/task-core/src/required_checks/health.rs",
+      "lines": 2
+     }
+    ]
+   },
+   "G4": {
+    "task_id": "01M6TYVJSXBZMSBC0YGAT2TTX0",
+    "own_commits": 12,
+    "views": {
+     "product_only": {
+      "lines": 0,
+      "rust_lines": 0
+     },
+     "own_total_with_tests": {
+      "lines": 4588,
+      "rust_lines": 3818
+     },
+     "all_tracked": {
+      "lines": 6625,
+      "rust_lines": 3818
+     },
+     "external_split_candidates": {
+      "lines": 0,
+      "rust_lines": 0
+     }
+    },
+    "matrix": {
+     "docs": {
+      "markdown": 1689,
+      "python": 348
+     },
+     "external_test": {
+      "python": 770,
+      "rust": 3818
+     }
+    },
+    "moved_lines_by_class_pair": {
+     "external_test->external_test": 5,
+     "production->production": 4,
+     "production->external_test": 1
+    },
+    "moved_lines_top_paths": [
+     {
+      "pair": "crates/task-dispatch/src/dispatcher/review_verdict.rs -> crates/task-dispatch/src/review.rs",
+      "lines": 4
+     },
+     {
+      "pair": "crates/task-dispatch/src/dispatcher/tests/health_generic.rs -> crates/task-dispatch/src/dispatcher/tests/health_review_input.rs",
+      "lines": 1
+     },
+     {
+      "pair": "crates/task-dispatch/src/dispatcher/tests/health_review_input.rs -> crates/task-dispatch/src/dispatcher/tests/health_generic.rs",
+      "lines": 1
+     },
+     {
+      "pair": "crates/task-dispatch/src/health_review/input.rs -> crates/task-dispatch/src/health_review/input/tests.rs",
+      "lines": 1
+     },
+     {
+      "pair": "crates/task-dispatch/src/health_review/input/tests.rs -> crates/task-dispatch/src/dispatcher/tests/health_review_input.rs",
+      "lines": 1
+     },
+     {
+      "pair": "crates/task-dispatch/src/health_review/input/tests.rs -> crates/task-dispatch/src/dispatcher/tests/health_generic.rs",
+      "lines": 1
+     },
+     {
+      "pair": "crates/task-dispatch/src/health_review/input/tests.rs -> crates/task-dispatch/src/health_review/policy_review/unknown_tests.rs",
+      "lines": 1
+     }
+    ]
+   },
+   "R1": {
+    "task_id": "01M6TYVJSZDSCB697193J01FYW",
+    "own_commits": 5,
+    "views": {
+     "product_only": {
+      "lines": -369,
+      "rust_lines": -369
+     },
+     "own_total_with_tests": {
+      "lines": -175,
+      "rust_lines": -175
+     },
+     "all_tracked": {
+      "lines": 421,
+      "rust_lines": -175
+     },
+     "external_split_candidates": {
+      "lines": 0,
+      "rust_lines": 0
+     }
+    },
+    "matrix": {
+     "docs": {
+      "markdown": 596
+     },
+     "external_test": {
+      "rust": 188
+     },
+     "inline_test": {
+      "rust": 6
+     },
+     "production": {
+      "rust": -369
+     }
+    },
+    "moved_lines_by_class_pair": {
+     "production->inline_test": 30,
+     "production->production": 26,
+     "production->external_test": 11,
+     "external_test->external_test": 8
+    },
+    "moved_lines_top_paths": [
+     {
+      "pair": "crates/task-worker/src/acp.rs -> crates/task-worker/src/result_report.rs",
+      "lines": 26
+     },
+     {
+      "pair": "crates/task-worker/src/acp.rs -> crates/task-worker/src/adapter.rs",
+      "lines": 11
+     },
+     {
+      "pair": "crates/task-worker/src/acp.rs -> crates/task-worker/src/subprocess.rs",
+      "lines": 10
+     },
+     {
+      "pair": "crates/task-worker/src/aider.rs -> crates/task-worker/src/adapter_tests.rs",
+      "lines": 6
+     },
+     {
+      "pair": "crates/task-worker/src/aider.rs -> crates/task-worker/src/adapter.rs",
+      "lines": 4
+     },
+     {
+      "pair": "crates/task-worker/src/claude_code.rs -> crates/task-worker/src/subprocess/tests.rs",
+      "lines": 3
+     },
+     {
+      "pair": "crates/task-worker/src/acp/tests.rs -> crates/task-worker/src/result_report_tests.rs",
+      "lines": 3
+     },
+     {
+      "pair": "crates/task-worker/src/claude_code.rs -> crates/task-worker/src/result_report.rs",
+      "lines": 3
+     }
+    ]
+   },
+   "R2": {
+    "task_id": "01M6TYVJT0Z1CBGNK8VTNK8ZJH",
+    "own_commits": 12,
+    "views": {
+     "product_only": {
+      "lines": 276,
+      "rust_lines": 276
+     },
+     "own_total_with_tests": {
+      "lines": 2105,
+      "rust_lines": 2105
+     },
+     "all_tracked": {
+      "lines": 4075,
+      "rust_lines": 2105
+     },
+     "external_split_candidates": {
+      "lines": 0,
+      "rust_lines": 0
+     }
+    },
+    "matrix": {
+     "docs": {
+      "json": 274,
+      "markdown": 1227,
+      "python": 469
+     },
+     "external_test": {
+      "rust": 1379
+     },
+     "inline_test": {
+      "rust": 450
+     },
+     "production": {
+      "rust": 276
+     }
+    },
+    "moved_lines_by_class_pair": {
+     "production->external_test": 45,
+     "production->production": 9,
+     "production->inline_test": 3,
+     "external_test->production": 1
+    },
+    "moved_lines_top_paths": [
+     {
+      "pair": "crates/task-worker/src/adapter.rs -> crates/task-worker/src/browser_launcher_run/live_frame_tests.rs",
+      "lines": 16
+     },
+     {
+      "pair": "crates/task-worker/src/browser.rs -> crates/task-worker/src/browser_launcher_run_tests.rs",
+      "lines": 10
+     },
+     {
+      "pair": "crates/task-worker/src/adapter.rs -> crates/task-worker/src/browser_launcher_run_tests.rs",
+      "lines": 9
+     },
+     {
+      "pair": "crates/task-worker/src/adapter.rs -> crates/task-api/tests/browser_e2e.rs",
+      "lines": 7
+     },
+     {
+      "pair": "crates/task-worker/src/browser.rs -> crates/task-worker/src/browser_live.rs",
+      "lines": 7
+     },
+     {
+      "pair": "crates/task-worker/src/browser.rs -> crates/task-worker/src/browser_policy.rs",
+      "lines": 3
+     },
+     {
+      "pair": "crates/task-worker/src/adapter.rs -> crates/task-api/tests/browser_h3_injection.rs",
+      "lines": 2
+     },
+     {
+      "pair": "crates/celeris-credentiald/tests/injection_ipc.rs -> crates/celeris-credentiald/src/ipc.rs",
+      "lines": 1
+     }
+    ]
+   },
+   "R3": {
+    "task_id": "01M6TYVJT2HG9NY5FW9FMCZS9A",
+    "own_commits": 9,
+    "views": {
+     "product_only": {
+      "lines": 298,
+      "rust_lines": 298
+     },
+     "own_total_with_tests": {
+      "lines": 600,
+      "rust_lines": 600
+     },
+     "all_tracked": {
+      "lines": 10924,
+      "rust_lines": 600
+     },
+     "external_split_candidates": {
+      "lines": 205,
+      "rust_lines": 205
+     }
+    },
+    "matrix": {
+     "docs": {
+      "json": 8959,
+      "markdown": 655,
+      "python": 710
+     },
+     "evaluation_infra": {
+      "rust": 205
+     },
+     "external_test": {
+      "rust": 65
+     },
+     "inline_test": {
+      "rust": 32
+     },
+     "production": {
+      "rust": 298
+     }
+    },
+    "moved_lines_by_class_pair": {
+     "production->production": 127,
+     "external_test->external_test": 4,
+     "external_test->production": 3
+    },
+    "moved_lines_top_paths": [
+     {
+      "pair": "crates/task-core/src/store/tasks.rs -> crates/task-core/src/store/task_query.rs",
+      "lines": 33
+     },
+     {
+      "pair": "crates/task-core/src/store/projects.rs -> crates/task-core/src/store/org_directory.rs",
+      "lines": 30
+     },
+     {
+      "pair": "crates/task-core/src/store/task_store.rs -> crates/task-core/src/store/task_query.rs",
+      "lines": 14
+     },
+     {
+      "pair": "crates/task-core/src/store/task_store.rs -> crates/task-core/src/store/org_directory.rs",
+      "lines": 10
+     },
+     {
+      "pair": "crates/task-core/src/store/org.rs -> crates/task-core/src/store/org_directory.rs",
+      "lines": 9
+     },
+     {
+      "pair": "crates/task-core/src/store/events.rs -> crates/task-core/src/store/task_query.rs",
+      "lines": 7
+     },
+     {
+      "pair": "crates/task-core/src/store/task_store_impl.rs -> crates/task-core/src/store/task_query.rs",
+      "lines": 7
+     },
+     {
+      "pair": "crates/task-core/src/store/task_store_impl.rs -> crates/task-core/src/store/org_directory.rs",
+      "lines": 4
+     }
+    ]
+   },
+   "R4": {
+    "task_id": "01M6TYVJT4S29ZMP6P0D4831JG",
+    "own_commits": 21,
+    "views": {
+     "product_only": {
+      "lines": 9789,
+      "rust_lines": 9805
+     },
+     "own_total_with_tests": {
+      "lines": 31766,
+      "rust_lines": 30275
+     },
+     "all_tracked": {
+      "lines": 240768,
+      "rust_lines": 30275
+     },
+     "external_split_candidates": {
+      "lines": -3,
+      "rust_lines": -3
+     }
+    },
+    "matrix": {
+     "docs": {
+      "json": 142810,
+      "markdown": 17238,
+      "other": 40786,
+      "python": 6043,
+      "shell": 1064
+     },
+     "evaluation_infra": {
+      "rust": -3
+     },
+     "external_test": {
+      "python": 964,
+      "rust": 18963,
+      "shell": 104,
+      "typescript": 19
+     },
+     "fixture": {
+      "json": 48
+     },
+     "generated": {
+      "json": 359,
+      "typescript": 61
+     },
+     "inline_test": {
+      "rust": 1510
+     },
+     "migration": {
+      "sql": 86
+     },
+     "production": {
+      "rust": 9805,
+      "toml": 2,
+      "typescript": -18
+     },
+     "schema": {
+      "json": 593
+     },
+     "tooling": {
+      "other": 4,
+      "python": 75,
+      "shell": 247,
+      "toml": 8
+     }
+    },
+    "moved_lines_by_class_pair": {
+     "external_test->external_test": 19358,
+     "production->production": 2377,
+     "production->external_test": 30,
+     "external_test->production": 30,
+     "external_test->docs": 18,
+     "docs->docs": 2,
+     "production->docs": 2,
+     "evaluation_infra->external_test": 1,
+     "evaluation_infra->production": 1,
+     "external_test->evaluation_infra": 1,
+     "tooling->docs": 1
+    },
+    "moved_lines_top_paths": [
+     {
+      "pair": "crates/task-dispatch/src/dispatcher/cluster.rs -> crates/task-dispatch/src/cluster_runtime.rs",
+      "lines": 813
+     },
+     {
+      "pair": "crates/task-worker/tests/browser_live_cross.rs -> crates/task-worker/tests/browser_eval_surface_suite/browser_live_cross.rs",
+      "lines": 734
+     },
+     {
+      "pair": "crates/task-api/tests/operations.rs -> crates/task-api/tests/cos_delivery_suite_c/operations.rs",
+      "lines": 576
+     },
+     {
+      "pair": "crates/task-api/tests/project_wake_human_chat.rs -> crates/task-api/tests/routing_budget_suite/project_wake_human_chat.rs",
+      "lines": 509
+     },
+     {
+      "pair": "crates/task-api/tests/console.rs -> crates/task-api/tests/unmapped_suite_a/console.rs",
+      "lines": 480
+     },
+     {
+      "pair": "crates/celeris/tests/releases_api.rs -> crates/celeris/tests/cos_delivery_suite/releases_api.rs",
+      "lines": 463
+     },
+     {
+      "pair": "crates/task-api/tests/files.rs -> crates/task-api/tests/unmapped_suite_a/files.rs",
+      "lines": 403
+     },
+     {
+      "pair": "crates/task-api/tests/cos_ops_mutations.rs -> crates/task-api/tests/cos_delivery_suite_a/cos_ops_mutations.rs",
+      "lines": 368
+     }
+    ]
+   },
+   "R5": {
+    "task_id": "01M6TYVJT53598CPKMGSQGA7XM",
+    "own_commits": 22,
+    "views": {
+     "product_only": {
+      "lines": 612,
+      "rust_lines": 612
+     },
+     "own_total_with_tests": {
+      "lines": 2352,
+      "rust_lines": 2294
+     },
+     "all_tracked": {
+      "lines": 200240,
+      "rust_lines": 2294
+     },
+     "external_split_candidates": {
+      "lines": 205,
+      "rust_lines": 205
+     }
+    },
+    "matrix": {
+     "docs": {
+      "json": 143512,
+      "markdown": 6627,
+      "other": 40693,
+      "python": 5992,
+      "shell": 1064
+     },
+     "evaluation_infra": {
+      "rust": 205
+     },
+     "external_test": {
+      "rust": 995,
+      "shell": 48
+     },
+     "inline_test": {
+      "rust": 482
+     },
+     "production": {
+      "rust": 612
+     },
+     "tooling": {
+      "shell": 10
+     }
+    },
+    "moved_lines_by_class_pair": {
+     "external_test->external_test": 19751,
+     "production->production": 157,
+     "production->external_test": 47,
+     "external_test->production": 16,
+     "production->inline_test": 3,
+     "docs->docs": 1,
+     "production->evaluation_infra": 1
+    },
+    "moved_lines_top_paths": [
+     {
+      "pair": "crates/task-worker/tests/browser_live_cross.rs -> crates/task-worker/tests/browser_eval_surface_suite/browser_live_cross.rs",
+      "lines": 750
+     },
+     {
+      "pair": "crates/task-api/tests/operations.rs -> crates/task-api/tests/cos_delivery_suite_c/operations.rs",
+      "lines": 574
+     },
+     {
+      "pair": "crates/task-api/tests/project_wake_human_chat.rs -> crates/task-api/tests/routing_budget_suite/project_wake_human_chat.rs",
+      "lines": 510
+     },
+     {
+      "pair": "crates/task-api/tests/console.rs -> crates/task-api/tests/unmapped_suite_a/console.rs",
+      "lines": 489
+     },
+     {
+      "pair": "crates/celeris/tests/releases_api.rs -> crates/celeris/tests/cos_delivery_suite/releases_api.rs",
+      "lines": 464
+     },
+     {
+      "pair": "crates/task-api/tests/files.rs -> crates/task-api/tests/unmapped_suite_a/files.rs",
+      "lines": 407
+     },
+     {
+      "pair": "crates/task-api/tests/cos_ops_mutations.rs -> crates/task-api/tests/cos_delivery_suite_a/cos_ops_mutations.rs",
+      "lines": 384
+     },
+     {
+      "pair": "crates/celeris/tests/script_compare_report.rs -> crates/celeris/tests/routing_budget_suite/script_compare_report.rs",
+      "lines": 369
+     }
+    ]
+   },
+   "R6": {
+    "task_id": "01M6TYVJT7EJ6WWHEF0EBH3JPS",
+    "own_commits": 10,
+    "views": {
+     "product_only": {
+      "lines": -741,
+      "rust_lines": -722
+     },
+     "own_total_with_tests": {
+      "lines": -210,
+      "rust_lines": -184
+     },
+     "all_tracked": {
+      "lines": 996,
+      "rust_lines": -184
+     },
+     "external_split_candidates": {
+      "lines": 0,
+      "rust_lines": 0
+     }
+    },
+    "matrix": {
+     "docs": {
+      "json": 262,
+      "markdown": 1591
+     },
+     "external_test": {
+      "rust": 588
+     },
+     "generated": {
+      "json": -299,
+      "typescript": -49
+     },
+     "inline_test": {
+      "rust": -50
+     },
+     "production": {
+      "rust": -722,
+      "toml": -10,
+      "typescript": -9
+     },
+     "schema": {
+      "json": -299
+     },
+     "tooling": {
+      "python": -7
+     }
+    },
+    "moved_lines_by_class_pair": {
+     "external_test->external_test": 61,
+     "production->external_test": 36,
+     "production->production": 35,
+     "inline_test->production": 4
+    },
+    "moved_lines_top_paths": [
+     {
+      "pair": "crates/celeris/tests/campaign_acceptance_e2e.rs -> crates/celeris/tests/support/campaign_e2e.rs",
+      "lines": 31
+     },
+     {
+      "pair": "crates/task-ops/src/plan.rs -> tests/e2e/tests/plan_scenarios.rs",
+      "lines": 27
+     },
+     {
+      "pair": "crates/task-api/tests/browser_e2e.rs -> crates/task-api/tests/common/browser.rs",
+      "lines": 13
+     },
+     {
+      "pair": "crates/celeris/src/daemon/adapters.rs -> crates/celeris/src/test_support.rs",
+      "lines": 8
+     },
+     {
+      "pair": "crates/celerisctl/src/commands/browser_doctor.rs -> crates/celerisctl/src/commands/cron.rs",
+      "lines": 8
+     },
+     {
+      "pair": "crates/celeris/tests/cap_probe_real_daemon.rs -> crates/celeris/tests/support/executable.rs",
+      "lines": 7
+     },
+     {
+      "pair": "crates/task-api/src/admin.rs -> crates/task-core/src/accounts.rs",
+      "lines": 5
+     },
+     {
+      "pair": "crates/celeris/src/config/jev.rs -> crates/celeris/src/config/test_support.rs",
+      "lines": 4
+     }
+    ]
+   }
+  },
+  "slices_total": {
+   "views": {
+    "product_only": {
+     "lines": 18884,
+     "rust_lines": 18894
+    },
+    "own_total_with_tests": {
+     "lines": 75535,
+     "rust_lines": 66246
+    },
+    "all_tracked": {
+     "lines": 566606,
+     "rust_lines": 66246
+    },
+    "external_split_candidates": {
+     "lines": 414,
+     "rust_lines": 414
+    }
+   },
+   "matrix": {
+    "docs": {
+     "json": 343414,
+     "markdown": 36717,
+     "other": 82269,
+     "python": 15214,
+     "shell": 2172
+    },
+    "evaluation_infra": {
+     "rust": 414
+    },
+    "external_test": {
+     "python": 3622,
+     "rust": 44324,
+     "shell": 434,
+     "typescript": 32
+    },
+    "fixture": {
+     "json": 83,
+     "python": 84
+    },
+    "generated": {
+     "json": 720,
+     "typescript": 138
+    },
+    "inline_test": {
+     "rust": 2614
+    },
+    "lockfile": {
+     "other": 1
+    },
+    "migration": {
+     "sql": 108
+    },
+    "production": {
+     "rust": 18894,
+     "toml": -8,
+     "typescript": -2
+    },
+    "schema": {
+     "json": 10259
+    },
+    "tooling": {
+     "other": 4,
+     "python": 4454,
+     "shell": 365,
+     "toml": 280
+    }
+   }
+  },
+  "other_tasks_and_merges": {
+   "views": {
+    "product_only": {
+     "lines": 1051,
+     "rust_lines": 1043
+    },
+    "own_total_with_tests": {
+     "lines": -373,
+     "rust_lines": -906
+    },
+    "all_tracked": {
+     "lines": -191803,
+     "rust_lines": -906
+    },
+    "external_split_candidates": {
+     "lines": -148,
+     "rust_lines": -174
+    }
+   },
+   "matrix": {
+    "docs": {
+     "json": -141241,
+     "markdown": -5021,
+     "other": -40601,
+     "python": -6144,
+     "shell": -1064
+    },
+    "evaluation_infra": {
+     "rust": -174,
+     "shell": 26
+    },
+    "external_test": {
+     "python": -75,
+     "rust": -1521,
+     "shell": 73,
+     "typescript": 14
+    },
+    "generated": {
+     "json": 118,
+     "typescript": 21
+    },
+    "inline_test": {
+     "rust": -254
+    },
+    "migration": {
+     "sql": 11
+    },
+    "production": {
+     "rust": 1043,
+     "typescript": 8
+    },
+    "schema": {
+     "json": 2502
+    },
+    "tooling": {
+     "python": 240,
+     "shell": 140,
+     "toml": 96
+    }
+   }
+  }
+ },
+ "reclassified": {
+  "by_pair": {
+   "inline_test->production": 147
+  },
+  "files": [
+   {
+    "path": "crates/celeris/src/config/jev.rs",
+    "from": "inline_test",
+    "to": "production",
+    "lines_base": 154,
+    "lines_head": 147
+   }
+  ]
+ },
+ "deps": {
+  "b0": {
+   "summary": {
+    "crate_deps": 49,
+    "module_uses": 1157,
+    "module_cycles": 3,
+    "crate_cycles": 0,
+    "tables": 135,
+    "tables_live": 120,
+    "tables_multi_writer": 14,
+    "tables_multi_crate": 3,
+    "tables_live_without_writer": [],
+    "tables_written_by_triggers": [
+     "chat_search",
+     "task_roadmap_specs"
+    ],
+    "event_kinds": 108,
+    "event_kinds_multi_writer": 20,
+    "event_kinds_multi_crate": 17,
+    "event_kinds_without_writer": [
+     "model_role_assignment_changed",
+     "project_plan_decided",
+     "project_plan_proposed",
+     "routing_shadow_recorded"
+    ],
+    "files": 6,
+    "files_multi_writer": 5
+   },
+   "cycles": [
+    {
+     "level": "module",
+     "crate": "task-core",
+     "modules": [
+      "chat",
+      "completion_outcome",
+      "decision_log",
+      "instance",
+      "local_machine",
+      "script_behavior_change",
+      "script_compare",
+      "script_exhaustive",
+      "script_guard",
+      "store"
+     ],
+     "size": 10
+    },
+    {
+     "level": "module",
+     "crate": "task-api",
+     "modules": [
+      "middleware",
+      "state"
+     ],
+     "size": 2
+    },
+    {
+     "level": "module",
+     "crate": "task-api",
+     "modules": [
+      "approvals",
+      "conversation",
+      "cos",
+      "handlers",
+      "inbox_notifications",
+      "memory",
+      "milestones",
+      "project_plan",
+      "schema"
+     ],
+     "size": 9
+    }
+   ],
+   "multi_writer": {
+    "event_kind": [
+     "answered",
+     "approval_decided",
+     "approval_requested",
+     "artifact_produced",
+     "cluster_job_wait_finished",
+     "created",
+     "decision_requested",
+     "decision_withdrawn",
+     "edited",
+     "execution_gated",
+     "execution_hint_set",
+     "execution_planned",
+     "repair_scheduled",
+     "review_resync_resumed",
+     "review_target_advanced",
+     "routing_features_recorded",
+     "transitioned",
+     "work_unit_transitioned",
+     "worker_finished",
+     "workspace_pruned"
+    ],
+    "file": [
+     "<artifacts_dir>/delegate.json",
+     "<artifacts_dir>/followups.json",
+     "<artifacts_dir>/result.json",
+     "<data>/runs/<run_id>/result.json",
+     "<scratch root>/<lease>（scratch pool の CARGO_TARGET_DIR・.lock・lease）"
+    ],
+    "sqlite_table": [
+     "approvals",
+     "browser_control_state",
+     "browser_task_policies",
+     "chat_client_requests",
+     "chat_messages",
+     "chat_threads",
+     "cos_inbox_items",
+     "feed_cursor",
+     "llm_proxy_requests",
+     "node_sessions",
+     "notifications",
+     "standing_rules",
+     "tasks",
+     "work_units"
+    ]
+   }
+  },
+  "head": {
+   "summary": {
+    "crate_deps": 49,
+    "module_uses": 1296,
+    "module_cycles": 3,
+    "crate_cycles": 0,
+    "tables": 138,
+    "tables_live": 121,
+    "tables_multi_writer": 15,
+    "tables_multi_crate": 1,
+    "tables_live_without_writer": [
+     "route_judgments"
+    ],
+    "tables_written_by_triggers": [
+     "chat_search",
+     "task_roadmap_specs"
+    ],
+    "event_kinds": 114,
+    "event_kinds_multi_writer": 25,
+    "event_kinds_multi_crate": 17,
+    "event_kinds_without_writer": [
+     "model_role_assignment_changed",
+     "project_plan_decided",
+     "project_plan_proposed",
+     "routing_shadow_recorded"
+    ],
+    "files": 6,
+    "files_multi_writer": 5
+   },
+   "cycles": [
+    {
+     "level": "module",
+     "crate": "task-core",
+     "modules": [
+      "chat",
+      "completion_outcome",
+      "decision_log",
+      "instance",
+      "local_machine",
+      "script_behavior_change",
+      "script_compare",
+      "script_exhaustive",
+      "script_guard",
+      "store"
+     ],
+     "size": 10
+    },
+    {
+     "level": "module",
+     "crate": "task-api",
+     "modules": [
+      "middleware",
+      "state"
+     ],
+     "size": 2
+    },
+    {
+     "level": "module",
+     "crate": "task-api",
+     "modules": [
+      "approvals",
+      "conversation",
+      "cos",
+      "handlers",
+      "inbox_notifications",
+      "memory",
+      "milestones",
+      "project_plan",
+      "schema"
+     ],
+     "size": 9
+    }
+   ],
+   "multi_writer": {
+    "event_kind": [
+     "answered",
+     "approval_decided",
+     "approval_requested",
+     "artifact_produced",
+     "auto_replan_requested",
+     "browser_prerequisite_blocked",
+     "cluster_job_wait_finished",
+     "created",
+     "decision_requested",
+     "decision_withdrawn",
+     "edited",
+     "execution_gated",
+     "execution_hint_set",
+     "execution_planned",
+     "plan_approval_requested",
+     "question_raised",
+     "repair_scheduled",
+     "review_resync_resumed",
+     "review_target_advanced",
+     "routing_features_recorded",
+     "transitioned",
+     "work_unit_transitioned",
+     "worker_finished",
+     "worker_started",
+     "workspace_pruned"
+    ],
+    "file": [
+     "<artifacts_dir>/delegate.json",
+     "<artifacts_dir>/followups.json",
+     "<artifacts_dir>/result.json",
+     "<data>/runs/<run_id>/result.json",
+     "<scratch root>/<lease>（scratch pool の CARGO_TARGET_DIR・.lock・lease）"
+    ],
+    "sqlite_table": [
+     "approvals",
+     "browser_control_state",
+     "browser_task_policies",
+     "chat_messages",
+     "chat_runs",
+     "chat_threads",
+     "cos_inbox_items",
+     "cos_notification_routes",
+     "feed_cursor",
+     "llm_proxy_requests",
+     "node_sessions",
+     "notifications",
+     "standing_rules",
+     "tasks",
+     "work_units"
+    ]
+   }
+  }
+ }
+}

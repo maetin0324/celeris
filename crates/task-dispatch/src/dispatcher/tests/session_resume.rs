@@ -1232,7 +1232,7 @@ fn session_jsonl(config: &std::path::Path, cwd: &std::path::Path, session_id: &s
         .join(format!("{session_id}.jsonl"))
 }
 
-/// 再起動を挟む試験の dispatcher。時計は注入した試験用の時計（`test_now`）。
+/// 再起動を挟む試験の dispatcher。時計は注入した試験用の時計（`test_hooks.now`）。
 fn restart_dispatcher(store: &Arc<dyn TaskStore>, adapter: Arc<ClaudeScriptAdapter>) -> Dispatcher {
     dispatcher_with_test_clock(store.clone(), adapter, 1, true)
 }
@@ -1268,14 +1268,18 @@ async fn first_daemon_until_yield(
     let mut d = restart_dispatcher(&store, adapter.clone());
     for _ in 0..50 {
         d.tick().unwrap();
-        if !d.running.is_empty() {
+        if !d.supervisor.runs().is_empty() {
             break;
         }
     }
-    assert_eq!(d.running.len(), 1, "the first run of a was dispatched");
+    assert_eq!(
+        d.supervisor.runs().len(),
+        1,
+        "the first run of a was dispatched"
+    );
     d.set_accepting_new_work(false);
     for _ in 0..50 {
-        for entry in d.running.values_mut() {
+        for entry in d.supervisor.runs_mut_for_test().values_mut() {
             if !entry.handle.is_finished() {
                 (&mut entry.handle).await.expect("worker task panicked");
             }
@@ -1328,7 +1332,7 @@ async fn second_daemon_to_idle(
     let adapter =
         Arc::new(ClaudeScriptAdapter::new(&store, Vec::new(), Vec::new()).with_config_dir(config));
     let mut d = restart_dispatcher(&store, adapter.clone());
-    if let Some(clock) = &d.test_now {
+    if let Some(clock) = &d.test_hooks.now {
         *clock.lock().unwrap() += Duration::from_secs(3600);
     }
     let report = run_until_idle(&mut d, 400).await;

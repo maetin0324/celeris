@@ -360,7 +360,7 @@ async fn fire(
 ) {
     *clock.lock().unwrap() = at(&format!("2026-11-09T{hour:02}:00:30Z"));
     d.tick().unwrap();
-    d.health_inventory.join_all().await;
+    d.maint.health_inventory_mut().join_all().await;
     let runs = store.cron_job_runs(job, None).unwrap();
     assert_eq!(runs.len(), usize::from(hour), "{runs:?}");
 }
@@ -468,7 +468,7 @@ async fn health_generic_limits_inventory_skips_unchanged() {
         Arc::new(task_worker::fake::FakeAdapter::new(vec!["false".into()]));
     let ws = tempfile::tempdir().unwrap();
     let mut d = non_celeris_dispatcher(store.clone(), adapter, ws.path(), 1);
-    d.test_now = Some(clock.clone());
+    d.test_hooks.now = Some(clock.clone());
     d.config.execution.max_cos_runs = 0;
     d.set_cos_chat_launch(
         sqlite.clone(),

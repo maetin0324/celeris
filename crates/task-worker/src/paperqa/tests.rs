@@ -458,7 +458,9 @@ async fn empty_output_is_retryable_error() {
     assert!(!dir.path().join("artifacts/result.json").exists());
 }
 
-/// 壁時計の超過でプロセスグループごと SIGKILL する（acp.rs と同じ確認方法: `/proc/<pid>` の消滅）。
+/// 壁時計の超過でプロセスグループごと SIGKILL し（acp.rs と同じ確認方法: `/proc/<pid>` の消滅）、終端は
+/// 予算切れ `BudgetExhausted{WallClock}` にする（ADR 2026-11-15-research-adapter-deadline D1。
+/// `runs/<run_id>/result.json` の行も `budget_exhausted`）。
 #[tokio::test]
 async fn wall_clock_exceeded_kills_the_process_group() {
     let dir = tempfile::tempdir().unwrap();
@@ -483,15 +485,7 @@ while true; do sleep 0.1; done
     let start = Instant::now();
     let outcome = adapter.run(req, "run-4", limits, &sink).await.unwrap();
     assert!(start.elapsed() < Duration::from_secs(5));
-    match outcome.terminal {
-        Terminal::Error {
-            retryable, message, ..
-        } => {
-            assert!(retryable);
-            assert!(message.contains("wall clock exceeded"), "{message}");
-        }
-        other => panic!("expected error, got {other:?}"),
-    }
+    assert_wall_clock_budget_exhausted(&outcome.terminal, dir.path(), "run-4");
     let pid_text = std::fs::read_to_string(&pid_file)
         .expect("stub should have recorded its pid before looping");
     let pid: i32 = pid_text
@@ -502,6 +496,110 @@ while true; do sleep 0.1; done
         !std::path::Path::new(&format!("/proc/{pid}")).exists(),
         "process {pid} should have been killed"
     );
+}
+
+/// 壁時計の超過の終端（`BudgetExhausted{WallClock}`）と、`runs/<run_id>/result.json` の `budget_exhausted` の行、
+/// `artifacts/result.json` を書かないことを確かめる（ADR 2026-11-15-research-adapter-deadline D1・D4）。
+fn assert_wall_clock_budget_exhausted(terminal: &Terminal, dir: &Path, run_id: &str) {
+    match terminal {
+        Terminal::BudgetExhausted {
+            kind,
+            message,
+            usage,
+        } => {
+            assert_eq!(*kind, task_core::BudgetKind::WallClock);
+            assert_eq!(message, "wall clock exceeded");
+            assert_eq!(*usage, None);
+        }
+        other => panic!("expected budget_exhausted, got {other:?}"),
+    }
+    let run_result =
+        std::fs::read_to_string(dir.join("runs").join(run_id).join("result.json")).unwrap();
+    assert!(
+        matches!(
+            serde_json::from_str::<crate::protocol::WorkerMessage>(run_result.trim()).unwrap(),
+            crate::protocol::WorkerMessage::BudgetExhausted {
+                kind: task_core::BudgetKind::WallClock,
+                ..
+            }
+        ),
+        "{run_result}"
+    );
+    assert!(!dir.join("artifacts/result.json").exists());
+}
+
+/// 不変条件: 壁時計は取得の段から run 全体で数え、取得の段で超えれば `BudgetExhausted{WallClock}` で終わって
+/// 回答の段（`pqa`）を起こさない（ADR 2026-11-15-research-adapter-deadline D1）。上の試験は取得の段の無い構成
+/// （`max_candidates = 0`）だけを見るので、取得の段の締め切りの終端と、2 段目を起こさないことを検出できない。
+#[tokio::test]
+async fn wall_clock_exceeded_in_the_acquire_stage_stops_before_the_answer_stage() {
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("acquire-pid.txt");
+    let ask_marker = dir.path().join("ask-started.txt");
+    let config = stub_pqa_with_acquire(
+        dir.path(),
+        &format!("touch {marker}\n", marker = ask_marker.display()),
+        &format!(
+            "echo $$ > {pid}\nwhile true; do sleep 0.1; done\n",
+            pid = pid_file.display()
+        ),
+    );
+    let adapter = PaperQaAdapter::new(config);
+    let req = sample_req(dir.path().to_path_buf());
+    let sink = RecordingSink::default();
+    let limits = RunLimits {
+        wall_clock: Duration::from_millis(300),
+        idle_timeout: Duration::from_secs(30),
+        kill_grace: Duration::from_millis(200),
+    };
+    let outcome = adapter.run(req, "run-4b", limits, &sink).await.unwrap();
+    assert_wall_clock_budget_exhausted(&outcome.terminal, dir.path(), "run-4b");
+    assert!(
+        !ask_marker.exists(),
+        "the answer stage must not start once the wall clock ran out"
+    );
+    let pid: i32 = std::fs::read_to_string(&pid_file)
+        .expect("the acquire stub should have recorded its pid before looping")
+        .trim()
+        .parse()
+        .expect("acquire-pid.txt should contain a pid");
+    assert!(
+        !std::path::Path::new(&format!("/proc/{pid}")).exists(),
+        "acquire process {pid} should have been killed"
+    );
+}
+
+/// 不変条件: 成功の枝は `artifacts/result.json` を書けたときだけ `Done` で、書けなければ `read_result_file` に
+/// 進まず retryable な `Error` になる（ADR 2026-11-15-research-adapter-deadline D4）。これまでは warn だけで
+/// `Done` にしていて、既存の試験は書ける置き場だけを使うので、reviewer が読む file の無い `Done` を検出できない。
+/// 置き場に同名の directory を置いて書き込みを失敗させる。
+#[tokio::test]
+async fn an_unwritable_result_file_is_a_retryable_error_not_done() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("artifacts/result.json")).unwrap();
+    let config = stub_pqa(
+        dir.path(),
+        &ask_stub_script("PaperQA2 finds no evidence of prior work on X.", ""),
+    );
+    let adapter = PaperQaAdapter::new(config);
+    let req = sample_req(dir.path().to_path_buf());
+    let sink = RecordingSink::default();
+    let outcome = adapter
+        .run(req, "run-4c", default_limits(), &sink)
+        .await
+        .unwrap();
+    match outcome.terminal {
+        Terminal::Error {
+            retryable, message, ..
+        } => {
+            assert!(retryable);
+            assert!(
+                message.contains("could not write artifacts/result.json"),
+                "{message}"
+            );
+        }
+        other => panic!("expected error, got {other:?}"),
+    }
 }
 
 /// settings / paper_directory / index_directory / index_name の組み立てを `ask_input.json`

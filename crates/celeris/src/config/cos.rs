@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use task_core::chat::attachments::ChatAttachmentLimits;
-use task_worker::cos_chat::{HarnessCapabilities, MissingCapability, capability_reason};
 
 use super::{Config, ConfigError};
 
@@ -82,29 +81,6 @@ impl CosHarness {
             Self::Opencode => "acp",
         }
     }
-}
-
-/// ADR 2026-10-05-cos-chat-home D2: task-worker の能力表（`HarnessCapabilities::for_adapter`）を
-/// 読んで、この harness がまだ確認していない能力の reason を返す。足りない能力があっても harness や
-/// provider を変えない（呼び出し側は警告として扱う）。
-fn harness_capability_warnings(harness: CosHarness) -> Vec<String> {
-    let Some(caps) = HarnessCapabilities::for_adapter(harness.adapter()) else {
-        return Vec::new();
-    };
-    let mut reasons = Vec::new();
-    if !caps.shell {
-        reasons.push(capability_reason(MissingCapability::Shell).to_owned());
-    }
-    if !caps.filesystem {
-        reasons.push(capability_reason(MissingCapability::Filesystem).to_owned());
-    }
-    if !caps.mcp {
-        reasons.push(capability_reason(MissingCapability::Mcp).to_owned());
-    }
-    if !caps.native_image_input && !caps.image_read_tool {
-        reasons.push(capability_reason(MissingCapability::Image).to_owned());
-    }
-    reasons
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -357,11 +333,6 @@ impl Config {
             ));
         }
         Ok(())
-    }
-
-    /// D2 harness capability table: non-fatal reasons for abilities the fixed adapter does not confirm.
-    pub fn cos_harness_capability_warnings(&self) -> Vec<String> {
-        harness_capability_warnings(CosHarness::ClaudeCode)
     }
 
     /// 添付上限の `[cos.attachments]` を task-core の型で返す。

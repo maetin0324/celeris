@@ -23,8 +23,8 @@ fn usage(cost_usd: Option<f64>) -> Option<Usage> {
     })
 }
 
-/// 不変条件: wall clock の超過は `BudgetExhausted{WallClock}`、文言 `wall clock exceeded`（dispatcher の
-/// `classify_budget_kind_from_text`・`is_budget_outcome` が見る語）で、idle も超過していても wall clock が勝つ。
+/// 不変条件: wall clock の超過は `BudgetExhausted{WallClock}`、文言 `wall clock exceeded`（試行の履歴の
+/// `retry_policy::is_budget_outcome` が outcome の文で見る語）で、idle も超過していても wall clock が勝つ。
 /// adapter の試験は実時間の打ち切りを 1 経路ずつしか見ず、両方の超過の優先順位を固定していなかった。
 #[test]
 fn run_common_deadline_wall_clock_is_budget_exhausted() {
@@ -87,4 +87,48 @@ fn run_common_cost_estimate_keeps_reported_cost() {
         usage(None)
     );
     assert_eq!(with_estimated_cost(None, Some("claude-sonnet-5")), None);
+}
+
+/// 不変条件（ADR 2026-11-15-research-adapter-deadline D2 の表）: checkpoint から続けられないのは目的文だけを入力にする
+/// 研究 harness の 3 本で、他の adapter（prompt を `claude_code::build_prompt` 系で組む 5 本・`fake`・既定値）は続けられる。
+/// `browser-specialist` は上書きせず既定値（daemon が包む内側は acp だけ）。既存の試験はこの性質を持たず（dispatcher は
+/// 全 run を continuation に回していた）、上書きを消しても既定値を変えても検出できなかった。
+#[test]
+fn research_deadline_continues_from_checkpoint_per_adapter() {
+    use crate::{
+        AcpAdapter, AcpConfig, AiderAdapter, AiderConfig, BrowserSpecialistAdapter,
+        ClaudeCodeAdapter, ClaudeCodeConfig, CodexAdapter, CodexConfig, FakeAdapter,
+        LangMemAdapter, LangMemConfig, LdrAdapter, LdrConfig, PaperQaAdapter, PaperQaConfig,
+        PiAdapter, PiConfig,
+    };
+    let acp: Arc<dyn WorkerAdapter> = Arc::new(AcpAdapter::new(AcpConfig::default()));
+    let table: Vec<(Arc<dyn WorkerAdapter>, bool)> = vec![
+        (
+            Arc::new(ClaudeCodeAdapter::new(ClaudeCodeConfig::default())),
+            true,
+        ),
+        (Arc::new(CodexAdapter::new(CodexConfig::default())), true),
+        (Arc::clone(&acp), true),
+        (Arc::new(PiAdapter::new(PiConfig::default())), true),
+        (Arc::new(AiderAdapter::new(AiderConfig::default())), true),
+        (Arc::new(FakeAdapter::default()), true),
+        (Arc::new(BrowserSpecialistAdapter::new(acp)), true),
+        (
+            Arc::new(LangMemAdapter::new(LangMemConfig::default())),
+            false,
+        ),
+        (Arc::new(LdrAdapter::new(LdrConfig::default())), false),
+        (
+            Arc::new(PaperQaAdapter::new(PaperQaConfig::default())),
+            false,
+        ),
+    ];
+    for (adapter, expected) in &table {
+        assert_eq!(
+            adapter.continues_from_checkpoint(),
+            *expected,
+            "{}",
+            adapter.id()
+        );
+    }
 }

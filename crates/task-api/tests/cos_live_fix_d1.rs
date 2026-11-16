@@ -13,15 +13,6 @@ use time::{Duration, OffsetDateTime};
 
 const OPS: &str = "/api/v1/cos/operations";
 
-fn env_with_attachments() -> TestEnv {
-    let mut env = admin_env();
-    env.state = env.state.clone().with_chat_attachments(
-        env.dir.path().to_path_buf(),
-        ChatAttachmentLimits::default(),
-    );
-    env
-}
-
 fn thread(env: &TestEnv, client_id: &str) -> String {
     common::project_cos_thread(&env.store, client_id).id
 }
@@ -85,11 +76,6 @@ fn task_body(attachment_ids: &[&str]) -> Value {
         "acceptance": [{"type": "artifact_exists", "name": "result.md"}],
         "attachment_ids": attachment_ids,
     })
-}
-
-fn count(env: &TestEnv, sql: &str) -> i64 {
-    let conn = rusqlite::Connection::open(&env.db_path).expect("db");
-    conn.query_row(sql, [], |r| r.get(0)).expect("count")
 }
 
 fn task_pins(env: &TestEnv, task: &str) -> Vec<String> {

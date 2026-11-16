@@ -254,7 +254,7 @@ pub(super) enum ClaimSource {
 impl Dispatcher {
     /// Install the concrete chat store. It must be the same database as `TaskStore`.
     pub fn set_cos_chat_launch(&mut self, store: Arc<SqliteStore>, config: CosChatLaunchConfig) {
-        self.cos_chat_launch = Some(CosChatLaunch {
+        self.orchestration.install_launch(CosChatLaunch {
             store,
             config,
             run_configs: HashMap::new(),
@@ -273,19 +273,19 @@ impl Dispatcher {
     /// Unlike `enabled=false`, removing the pipeline also omits reconciliation,
     /// fallback and root-done processing. Call before the first tick.
     pub fn disable_cos_chat_for_verify(&mut self) {
-        self.cos_chat_launch = None;
+        self.orchestration.remove_launch();
     }
 
     /// Change only future runs; keep handles, capacity reservations and triage state intact.
     pub fn reload_cos_chat_launch(&mut self, config: CosChatLaunchConfig) {
-        if let Some(launch) = &mut self.cos_chat_launch {
+        if let Some(launch) = self.orchestration.launch_mut() {
             launch.config = config;
         }
     }
 
     /// One non-blocking tick: each eligible thread may start at most one run.
     pub(crate) fn tick_cos_chat_launch(&mut self) -> Vec<(&'static str, u64)> {
-        let Some(mut launch) = self.cos_chat_launch.take() else {
+        let Some(mut launch) = self.orchestration.take_launch() else {
             return Vec::new();
         };
         let mut parts: Vec<(&'static str, u64)> = Vec::new();
@@ -333,8 +333,8 @@ impl Dispatcher {
         let ready = launch.config.enabled && launch.skill_gate.ready(store, kb, policy, now);
         // ADR 2026-11-11-cos-fallback-timing D3: why no CoS run may start now (logged per thread).
         let gate = Skip::gate(
-            self.accepting_new_work,
-            self.disk_ready,
+            self.coord.accepting_new_work(),
+            self.maint.disk_ready(),
             launch.config.enabled,
             ready,
         );
@@ -368,7 +368,7 @@ impl Dispatcher {
                     || retries.iter().any(|retry| &retry.thread_id == thread)
             });
         }
-        self.cos_chat_launch = Some(launch);
+        self.orchestration.restore_launch(launch);
         parts.extend(root_done_parts);
         parts
     }
@@ -417,10 +417,9 @@ impl CosChatLaunch {
 
     /// ADR-0089: the CoS slot (or the general slot when `max_cos_runs = 0`).
     pub(super) fn has_capacity(&self, dispatcher: &Dispatcher) -> bool {
-        let in_flight =
-            self.running.len() + dispatcher.running.values().filter(|run| run.cos).count();
+        let in_flight = self.running.len() + dispatcher.supervisor.cos_run_count();
         if dispatcher.config.execution.max_cos_runs == 0 {
-            dispatcher.workers_in_flight() + in_flight < dispatcher.max_concurrency
+            dispatcher.workers_in_flight() + in_flight < dispatcher.coord.max_concurrency()
         } else {
             in_flight < dispatcher.config.execution.max_cos_runs
         }
@@ -735,7 +734,7 @@ impl CosChatLaunch {
         let clock: ChatClock = {
             #[cfg(test)]
             {
-                if let Some(test_now) = &dispatcher.test_now {
+                if let Some(test_now) = &dispatcher.test_hooks.now {
                     let test_now = Arc::clone(test_now);
                     Arc::new(move || *test_now.lock().unwrap_or_else(|e| e.into_inner()))
                 } else {

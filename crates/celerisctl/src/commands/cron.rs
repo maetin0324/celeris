@@ -2,7 +2,7 @@
 
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Args, Subcommand};
@@ -11,7 +11,7 @@ use serde_json::{Map, Value, json};
 use crate::error::CliError;
 use crate::outln;
 
-const DEFAULT_CONFIG: &str = "~/.config/celeris/config.toml";
+pub(crate) const DEFAULT_CONFIG: &str = "~/.config/celeris/config.toml";
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum CronCommand {
@@ -80,21 +80,71 @@ pub struct ApiConfig {
     pub token: Option<String>,
 }
 
+impl ApiConfig {
+    /// Explicit URL > daemon URL environment > config. Explicit token file overrides the token.
+    pub(crate) fn from_config(
+        path: Option<&Path>,
+        url: Option<&str>,
+        token_file: Option<&Path>,
+    ) -> Result<Self, CliError> {
+        let from_env = std::env::var("CELERIS_API_URL")
+            .ok()
+            .filter(|s| !s.is_empty());
+        let chosen = url
+            .map(|url| (url, "--api-url"))
+            .or_else(|| from_env.as_deref().map(|url| (url, "CELERIS_API_URL")));
+        let mut api = if let Some((url, source)) = chosen {
+            if !url.trim_end_matches('/').ends_with("/api/v1") {
+                return Err(CliError::msg(format!("{source} must end in /api/v1")));
+            }
+            Self {
+                base_url: url.trim_end_matches('/').to_owned(),
+                token: None,
+            }
+        } else {
+            let path = path
+                .map(Path::to_path_buf)
+                .or_else(|| std::env::var_os("CELERIS_CONFIG").map(PathBuf::from))
+                .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG));
+            let config = celeris::Config::load(&path)
+                .map_err(|e| CliError::msg(format!("config {}: {e}", path.display())))?;
+            let listen = config
+                .api
+                .listen
+                .ok_or_else(|| CliError::msg("[api] listen is not configured"))?;
+            Self {
+                base_url: format!("http://{listen}/api/v1"),
+                token: if super::cos_ops::credential().is_some() {
+                    None
+                } else {
+                    config
+                        .api
+                        .client_token()
+                        .map_err(|e| CliError::msg(e.to_string()))?
+                },
+            }
+        };
+        if let Some(path) = token_file {
+            api.token = Some(
+                std::fs::read_to_string(path)
+                    .map_err(|_| CliError::msg("cannot read API token"))?
+                    .trim()
+                    .to_owned(),
+            );
+        }
+        if api
+            .token
+            .as_ref()
+            .is_some_and(|t| t.is_empty() || t.chars().any(char::is_control))
+        {
+            return Err(CliError::msg("invalid token"));
+        }
+        Ok(api)
+    }
+}
+
 pub fn run(config_path: Option<PathBuf>, command: CronCommand) -> Result<ExitCode, CliError> {
-    let config_path = config_path.unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG));
-    let config = celeris::config::Config::load(&config_path)
-        .map_err(|e| CliError::msg(format!("config {}: {e}", config_path.display())))?;
-    let listen = config
-        .api
-        .listen
-        .ok_or_else(|| CliError::msg("[api] listen is not configured"))?;
-    let api = ApiConfig {
-        base_url: format!("http://{listen}/api/v1"),
-        token: config
-            .api
-            .client_token()
-            .map_err(|e| CliError::msg(e.to_string()))?,
-    };
+    let api = ApiConfig::from_config(config_path.as_deref(), None, None)?;
     let (method, path, body) = request_of(command)?;
     let result = request(&api, method, &path, body)?;
     outln!(

@@ -18,8 +18,6 @@ use task_core::execution_plan::WorkUnitStatus;
 
 /// `lease.json` の schema 名（ADR-0075 D1）。
 pub const LEASE_SCHEMA: &str = "celeris.scratch-lease/1";
-/// `scratch status --json` と `GET /api/v1/metrics/scratch` の schema 名（D6）。
-pub const STATUS_SCHEMA: &str = "celeris.scratch-status/1";
 pub const LEASE_FILE: &str = "lease.json";
 /// owner のディレクトリの中の `CARGO_TARGET_DIR`。
 pub const TARGET_SUBDIR: &str = "target";

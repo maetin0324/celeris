@@ -229,22 +229,6 @@ impl SqliteStore {
         })
     }
 
-    pub(in crate::store) fn work_unit_transition_impl(
-        &self,
-        task_id: TaskId,
-        updated: WorkUnitRow,
-        events: Vec<Event>,
-    ) -> Result<(), StoreError> {
-        let mut conn = self.lock()?;
-        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::update_work_unit_tx(&tx, &updated)?;
-        for event in &events {
-            Self::append_event_tx(&tx, task_id, event)?;
-        }
-        tx.commit()?;
-        Ok(())
-    }
-
     pub(in crate::store) fn recover_work_unit_impl(
         &self,
         task_id: TaskId,

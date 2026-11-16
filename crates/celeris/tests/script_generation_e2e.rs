@@ -38,7 +38,9 @@ use celeris::{Config, DaemonTestHooks, Exit, RunOptions, ScriptPolicy};
 use celeris_script::manifest::{deploy_bundle, deployed_dir, sha256_hex};
 use celeris_script::{GenerationRegistry, ManualClock, RuntimeLimits};
 use serde_json::{Value, json};
-use support::script_compare::{Env, dist_bundle, dist_dir, load_config, repo_root};
+use support::script_compare::{
+    Env, dist_bundle, dist_dir, is_cos_digest_timeout, load_config, repo_root,
+};
 use task_core::chat::digest::CosDigestInput;
 use task_core::chat::triage::CosTriageSource;
 use task_core::chat::{
@@ -591,7 +593,7 @@ impl World {
                 self.ts_applied.push(id);
                 return Ok(());
             }
-            assert!(is_timeout(&record), "{record:?}");
+            assert!(is_cos_digest_timeout(&record), "{record:?}");
         }
         Err(Slow(format!("{prefix}: no pass applied TS")))
     }
@@ -739,7 +741,7 @@ impl World {
         assert_eq!(record.generation, id, "{record:?}");
         assert_eq!(record.applied_by, CosDigestAppliedBy::Rust, "{record:?}");
         assert!(
-            record.outcome == CompareOutcome::Match || is_timeout(&record),
+            record.outcome == CompareOutcome::Match || is_cos_digest_timeout(&record),
             "{record:?}"
         );
 
@@ -1204,11 +1206,6 @@ where
         );
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-}
-
-fn is_timeout(record: &CosDigestCompareRecord) -> bool {
-    record.outcome == CompareOutcome::TsError
-        && record.error.as_ref().is_some_and(|e| e.kind == "timeout")
 }
 
 fn general_thread(store: &task_core::SqliteStore) -> String {

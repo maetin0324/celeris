@@ -31,7 +31,7 @@ fn fixture(script: &str) -> Fixture {
         script.into(),
     ]));
     let mut d = dispatcher_with_test_clock(store.clone(), adapter, 2, true);
-    d.test_now = Some(Arc::new(StdMutex::new(
+    d.test_hooks.now = Some(Arc::new(StdMutex::new(
         OffsetDateTime::from_unix_timestamp(1_790_000_000).expect("clock"),
     )));
     d.config.execution.max_cos_runs = 1;
@@ -78,7 +78,7 @@ fn fixture(script: &str) -> Fixture {
 
 impl Fixture {
     fn tick(&mut self) {
-        if let Some(clock) = &self.d.test_now {
+        if let Some(clock) = &self.d.test_hooks.now {
             let mut now = clock.lock().expect("clock");
             *now += time::Duration::seconds(1);
         }
@@ -87,7 +87,7 @@ impl Fixture {
 
     /// Move the clock past every lease and wall-clock deadline of a CoS run.
     fn expire_leases(&mut self) {
-        if let Some(clock) = &self.d.test_now {
+        if let Some(clock) = &self.d.test_hooks.now {
             let mut now = clock.lock().expect("clock");
             *now += time::Duration::hours(2);
         }
@@ -165,8 +165,8 @@ impl Fixture {
     async fn wait_finished(&mut self, thread: &str) {
         let handle = self
             .d
-            .cos_chat_launch
-            .as_mut()
+            .orchestration
+            .launch_mut()
             .expect("launch")
             .running
             .get_mut(thread)
@@ -178,7 +178,7 @@ impl Fixture {
     }
 
     fn slot_held(&self, thread: &str) -> bool {
-        let launch = self.d.cos_chat_launch.as_ref().expect("launch");
+        let launch = self.d.orchestration.launch().expect("launch");
         launch.running.contains_key(thread) || launch.route_reservations.contains_key(thread)
     }
 

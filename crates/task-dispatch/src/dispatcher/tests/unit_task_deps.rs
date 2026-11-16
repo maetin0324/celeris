@@ -315,7 +315,7 @@ async fn ended_task_dependency_keeps_the_unit_and_notifies_once() {
         );
         let t0 = OffsetDateTime::now_utc() + time::Duration::minutes(5);
         let clock = Arc::new(StdMutex::new(t0));
-        d.test_now = Some(clock.clone());
+        d.test_hooks.now = Some(clock.clone());
         assert_eq!(d.tick().unwrap().dispatched, 0);
         *clock.lock().unwrap() = t0 + time::Duration::seconds(599);
         d.tick().unwrap();
@@ -332,8 +332,13 @@ async fn ended_task_dependency_keeps_the_unit_and_notifies_once() {
             vec!["task_dependency_ended".to_string()],
             "{status:?}: exactly one notice"
         );
-        assert_eq!(d.stalled_tasks.len(), 1);
-        let snap = d.stalled_tasks.get(&fx.owner.id).expect("stalled task");
+        assert_eq!(d.coord.liveness().stalled_tasks().len(), 1);
+        let snap = d
+            .coord
+            .liveness()
+            .stalled_tasks()
+            .get(&fx.owner.id)
+            .expect("stalled task");
         assert_eq!(snap.reason, "task_dependency_ended");
         assert_eq!(
             unit_status(&fx.store, fx.owner.id, "final"),
@@ -363,7 +368,7 @@ async fn task_dependency_wait_does_not_raise_human_wait_aging() {
     let rx = publish(&mut d);
     let t0 = OffsetDateTime::now_utc();
     let clock = Arc::new(StdMutex::new(t0));
-    d.test_now = Some(clock.clone());
+    d.test_hooks.now = Some(clock.clone());
     d.tick().unwrap();
     let later = t0 + time::Duration::hours(15);
     *clock.lock().unwrap() = later;

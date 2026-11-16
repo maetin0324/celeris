@@ -607,9 +607,7 @@ async fn wu_base_snapshot_prepare_failures_accumulate_and_never_start_worker() {
     // Advance only the prepare retry deadline, without sleeps or clock races.
     for _ in 0..super::super::MAX_WU_PREPARE_ATTEMPTS {
         d.tick().unwrap();
-        if let Some(f) = d.wu_prepare_failures.get_mut(&wu.id) {
-            f.retry_at = OffsetDateTime::UNIX_EPOCH;
-        }
+        d.coord.expire_wu_prepare_backoff(&wu.id);
     }
     assert!(adapter.seen.lock().unwrap().is_empty());
     let row = store

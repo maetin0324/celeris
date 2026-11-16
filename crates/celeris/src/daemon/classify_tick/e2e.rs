@@ -9,10 +9,14 @@
 #[allow(clippy::duplicate_mod)] // 同じ支援 file を試験 crate ごとに読む
 #[path = "../../../../../tests/support/http_async.rs"]
 mod fake_http;
+#[path = "../../../tests/support/webhook.rs"]
+#[allow(dead_code)] // この file は `Hook::seen` を読まない
+mod webhook;
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use webhook::{Hook, hook};
 
 use task_core::route_select::{ClassifierStatus, RoutingMode};
 use task_core::{
@@ -36,39 +40,6 @@ const DUMMY: &str = "sk-dummy-jev-e2e-never-leak-4242";
 const OBJECTIVE: &str = "Jev で分類する";
 const PURPOSE: &str = "Jev で依頼を分類する";
 const OK: &str = r#"{"model":"typesafe/jev-1.14","answers":{"specificity":{"choice":"specified"},"work_nature":{"choice":"implementation"}}}"#;
-
-/// 偽 webhook: 204 を返し、受けた本文を残す。
-struct Hook {
-    url: String,
-    bodies: Arc<Mutex<Vec<String>>>,
-}
-
-async fn hook() -> Hook {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind");
-    let url = format!("http://{}/hook", listener.local_addr().expect("addr"));
-    let bodies = Arc::new(Mutex::new(Vec::new()));
-    let kept = bodies.clone();
-    tokio::spawn(async move {
-        while let Ok((mut stream, _)) = listener.accept().await {
-            let kept = kept.clone();
-            tokio::spawn(async move {
-                let Some(raw) =
-                    fake_http::read(&mut stream, |r| fake_http::matches(r, "POST", "/hook")).await
-                else {
-                    return;
-                };
-                let body = raw.split_once("\r\n\r\n").unwrap().1.to_owned();
-                kept.lock().expect("bodies").push(body);
-                let _ = stream
-                    .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
-                    .await;
-            });
-        }
-    });
-    Hook { url, bodies }
-}
 
 fn new_task(dir: &std::path::Path, title: &str) -> Task {
     let id = TaskId::new();

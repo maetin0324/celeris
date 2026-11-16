@@ -971,7 +971,7 @@ async fn cos_digest_script_ts_policy_version_bump_session_fresh() {
         f.tick();
         assert!(f.join_inbox().await, "first triage run");
         f.tick();
-        let mut cfg = f.d.cos_chat_launch.as_ref().expect("launch").config.clone();
+        let mut cfg = f.d.orchestration.launch().expect("launch").config.clone();
         cfg.triage.policy_version = "7".into();
         let skills = f.d.config.knowledge.root.join("skills");
         task_ops::cos_skill_gate::write_fixture(&skills, "cos-inbox-triage", "7").expect("v7");

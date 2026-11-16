@@ -575,7 +575,8 @@ async fn runs_index_rows_of_terminal_tasks_are_closed() {
     d.tick().unwrap();
     let row = store.run_index_get("run-stale").unwrap().unwrap();
     assert_eq!(row.status, task_core::RunIndexStatus::Cancelled, "{row:?}");
-    d.terminal_records_reconciled_at = None;
+    d.supervisor
+        .reset_reconcile(crate::run_supervisor::Reconcile::TerminalRecords);
     d.tick().unwrap();
     let closes = store
         .events_for(stale.id)
@@ -685,7 +686,8 @@ async fn startup_closes_only_terminal_tasks_integration_requests_once() {
     for _ in 0..2 {
         let mut d = tree_dispatcher(&store, Arc::new(GateAdapter::new(Vec::new())));
         d.tick().unwrap();
-        d.terminal_records_reconciled_at = None;
+        d.supervisor
+            .reset_reconcile(crate::run_supervisor::Reconcile::TerminalRecords);
         d.tick().unwrap();
         for (id, status, before) in &snapshots {
             let after = store.event_rows_for(*id, None, 100).unwrap();

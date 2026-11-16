@@ -53,7 +53,7 @@ fn fixture_on(
     )
     .expect("CoS skills");
     let now = OffsetDateTime::from_unix_timestamp(1_791_158_400).expect("clock");
-    d.test_now = Some(Arc::new(StdMutex::new(now)));
+    d.test_hooks.now = Some(Arc::new(StdMutex::new(now)));
     d.set_cos_chat_launch(
         store.clone(),
         CosChatLaunchConfig {
@@ -106,8 +106,8 @@ async fn run(d: &mut Dispatcher, store: &SqliteStore, thread: &str) -> task_core
         .active_run_id
         .expect("claimed run");
     let handle = d
-        .cos_chat_launch
-        .as_mut()
+        .orchestration
+        .launch_mut()
         .expect("launch")
         .running
         .remove(thread)
@@ -406,8 +406,8 @@ async fn run_any(
         .active_run_id
         .expect("claimed run");
     let handle = d
-        .cos_chat_launch
-        .as_mut()
+        .orchestration
+        .launch_mut()
         .expect("launch")
         .running
         .remove(thread)

@@ -216,8 +216,8 @@ fn new_test_dispatcher(
     #[cfg(test)]
     {
         if use_test_clock {
-            dispatcher.test_now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
-            dispatcher.test_policy_clock = Some(policy_clock);
+            dispatcher.test_hooks.now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
+            dispatcher.test_hooks.policy_clock = Some(policy_clock);
         }
     }
     install_test_routes(&mut dispatcher, adapter, &[("p1", "test")], max_concurrency);
@@ -241,7 +241,7 @@ fn install_test_routes(
     let mut kinds = std::collections::BTreeSet::new();
     for (id, kind) in sources {
         let oauth =
-            crate::dispatcher::route_select::account_adapter_for_source_kind(kind).is_some();
+            crate::routing_runtime::route_state::account_adapter_for_source_kind(kind).is_some();
         r.sources.insert(
             (*id).into(),
             SourceSpec {
@@ -304,10 +304,9 @@ fn install_test_routes(
         .cloned()
         .unwrap_or_default();
     for (id, kind) in sources {
-        if crate::dispatcher::route_select::account_adapter_for_source_kind(kind).is_none()
-            && let Some(limits) = d.account_limits.as_mut()
-        {
-            limits.insert(((*id).into(), "default".into()), max_runs);
+        if crate::routing_runtime::route_state::account_adapter_for_source_kind(kind).is_none() {
+            d.routing
+                .set_stored_limit_for_test((*id).into(), "default".into(), max_runs);
         }
     }
     d.set_llm_route_registry(r);
@@ -325,7 +324,8 @@ async fn await_worker_completion(d: &mut Dispatcher, task_id: TaskId) {
         work_unit: None,
     };
     (&mut d
-        .running
+        .supervisor
+        .runs_mut_for_test()
         .get_mut(&key)
         .expect("worker was dispatched")
         .handle)
@@ -339,7 +339,8 @@ async fn finish_worker_and_review(d: &mut Dispatcher, task_id: TaskId) {
     await_worker_completion(d, task_id).await;
     assert_eq!(d.tick().unwrap().finished, 1);
     (&mut d
-        .reviewing
+        .supervisor
+        .reviews_mut_for_test()
         .get_mut(&task_id)
         .expect("review was spawned")
         .handle)
@@ -904,12 +905,13 @@ fn instant_done_dispatcher(store: Arc<dyn TaskStore>) -> Dispatcher {
 /// 始まったら、その結果を拾い終わるまで呼び続ける（SIGSTOP stutter の教訓: 固定の sleep で待たず、
 /// 結果を読み切ってから判定する）。
 fn liveness_round(d: &mut Dispatcher, id: &str) {
-    d.last_cluster_liveness = None;
-    d.last_cluster_command_probe.clear();
+    *d.cluster.last_liveness_mut() = None;
+    d.cluster.last_command_probe_mut().clear();
     d.refresh_cluster_liveness();
     let deadline = Instant::now() + Duration::from_secs(30);
     while d
-        .cluster_conn
+        .cluster
+        .conn_map()
         .get(id)
         .is_some_and(|s| s.probe_inflight.is_some())
     {
@@ -918,7 +920,7 @@ fn liveness_round(d: &mut Dispatcher, id: &str) {
             "the liveness probe did not finish"
         );
         std::thread::sleep(Duration::from_millis(2));
-        d.last_cluster_liveness = None;
+        *d.cluster.last_liveness_mut() = None;
         d.refresh_cluster_liveness();
     }
 }
@@ -951,8 +953,8 @@ fn cluster_spec_with_auth(id: &str, host: &str, auth: &str) -> ClusterSpec {
 
 /// ADR-0053 D3（Phase 66）: forward 付きの `ClusterSpec` を作る（`refresh_cluster_tunnels` 用）。
 /// `probe_interval_secs` は既定（`DEFAULT_TUNNEL_PROBE_INTERVAL_SECS`）にしておく。ADR-0066 D3
-/// 以降、target probe のバックオフは `d.tunnel_probe_state`（専用スレッドが書く）に移った。
-/// 間引きを避けたいテストは `d.last_cluster_tunnel_refresh` を過去にずらす（`CLUSTER_LIVENESS_INTERVAL`
+/// 以降、target probe のバックオフは `ClusterRuntime` の `tunnel_probe_state`（専用スレッドが書く）に移った。
+/// 間引きを避けたいテストは `d.cluster.last_tunnel_refresh_mut()` を過去にずらす（`CLUSTER_LIVENESS_INTERVAL`
 /// の間引きだけがテストから直接いじれる。target probe 側は 1 forward につき最初の 1 回だけ同期に
 /// 種を蒔くので、通常のテストはそれだけで足りる）。
 fn cluster_spec_with_forward(
@@ -2918,12 +2920,12 @@ async fn run_gate_until_second_checks(
     // 2 回目の run の完了を受け取り、検査を spawn するまで（run は `running` から外れる）。
     for _ in 0..200 {
         d.tick().unwrap();
-        if d.running.is_empty() {
+        if d.supervisor.runs().is_empty() {
             break;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
-    assert!(d.running.is_empty());
+    assert!(d.supervisor.runs().is_empty());
     let u = gate_row(store, id);
     assert_eq!(u.status, task_core::WorkUnitStatus::Running, "{u:?}");
     assert!(worker_finished_outcomes(store, id, &run_id).is_empty());
@@ -3114,6 +3116,7 @@ mod jev_synth_e2e;
 mod mlsys_mock_e2e;
 mod planning_and_gate;
 mod project_wake;
+mod research_deadline;
 mod review;
 mod review_route;
 mod route_failure_escalation;
@@ -3231,6 +3234,17 @@ mod browser_ledger_gate;
 /// ADR 2026-10-08-browser-prod-enablement D2 末尾・D4: 保存 policy の無い browser task は
 /// `browser_policy_missing` で止まり、PUT で戻る（`src/dispatcher/tests/browser_policy_missing.rs`）。
 mod browser_policy_missing;
+/// 健全性v2 R4 cex-late: replan・段の repair の後に遅れて届く旧い完了と、同じ quota group の run の続けての終わりの反例試験
+/// （`src/dispatcher/tests/cex_late_completion.rs`）。
+mod cex_late_completion;
+/// 健全性v2 R4 cex-lease: lease・restart・同時完了の反例試験（`src/dispatcher/tests/cex_lease_restart.rs`）。
+mod cex_lease_restart;
+/// 健全性v2 R4 cex-review: review の権限（検査した候補の同一性・自己申告で完了しないこと・再同期の上限）の反例試験
+/// （`src/dispatcher/tests/cex_review_authority.rs`）。
+mod cex_review_authority;
+/// 健全性v2 R4 cex-tick: 同じ tick の Done と lease の期限、先に確定した人の操作の反例試験
+/// （`src/dispatcher/tests/cex_same_tick.rs`）。
+mod cex_same_tick;
 /// 判断・実行・成果ログの配線（`src/dispatcher/tests/decision_log.rs`）。
 mod decision_log;
 /// ADR-0124: atomic coding task の planner なし直行経路（`src/dispatcher/tests/direct_route.rs`）。
@@ -3238,10 +3252,12 @@ mod direct_route;
 /// ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）: draining の旧 instance は run の終わりで手を離す
 /// （`src/dispatcher/tests/drain_hand_off.rs`）。
 mod drain_hand_off;
+/// ADR 2026-11-11 dispatcher-state-ownership D6: `Dispatcher` の唯一の `#[cfg(test)]` の field の型。
+pub(super) mod hooks;
 mod lane_assist;
 /// 工程の効き目の A/B 試験（off/on の `ab-metric` 行と効き目の assert）
 /// （`src/dispatcher/tests/phase_effect_ab.rs`）。
-mod phase_effect_ab;
+pub(super) mod phase_effect_ab;
 /// 多目的 routing Phase 3: run 開始時の RoutingContext（`src/dispatcher/tests/routing_context.rs`）。
 mod routing_context;
 /// ADR-0074 付記 2026-10-05: 範囲 check（`WorkUnitCheck.scope`）は WU の作業時だけ流す
@@ -3255,6 +3271,8 @@ mod script_compare;
 mod session_resume;
 /// ADR-0130 D5: review 前 sync の待ち行列の stale 優先（`src/dispatcher/tests/stale_priority.rs`）。
 mod stale_priority;
+/// D6: `#[cfg(test)]` の field が `test_hooks` 1 個だけであること、owner の struct に無いこと。
+mod structure_guard;
 /// ADR-0130 D3: 同じ repo の expected write-set の重なりで run の起動を待たせる
 /// （`src/dispatcher/tests/write_set_gate.rs`）。
 mod write_set_gate;

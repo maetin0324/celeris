@@ -142,7 +142,7 @@ impl Dispatcher {
     /// Ask the next tick to compare the current derived inbox with stored rows
     /// again (a reconcile pass; the startup pass happens on its own).
     pub fn request_cos_triage_reconcile(&mut self) {
-        if let Some(launch) = self.cos_chat_launch.as_mut() {
+        if let Some(launch) = self.orchestration.launch_mut() {
             launch.triage.reconciled = false;
         }
     }

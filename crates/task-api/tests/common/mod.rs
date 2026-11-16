@@ -3,6 +3,7 @@
 
 #![allow(dead_code)]
 
+pub mod browser;
 pub mod cos_ops;
 pub mod plan_conforms;
 
@@ -544,6 +545,22 @@ pub fn admin_env() -> TestEnv {
         token: Some(TOKEN.to_string()),
         ..EnvOptions::default()
     })
+}
+
+/// `admin_env` に chat 添付の置き場所（env の一時 dir）と既定の上限を足した env。
+pub fn env_with_attachments() -> TestEnv {
+    let mut env = admin_env();
+    env.state = env.state.clone().with_chat_attachments(
+        env.dir.path().to_path_buf(),
+        task_core::chat::attachments::ChatAttachmentLimits::default(),
+    );
+    env
+}
+
+/// env の DB を開き、`sql` が返す 1 値（`COUNT(*)` など）を読む。
+pub fn count(env: &TestEnv, sql: &str) -> i64 {
+    let conn = rusqlite::Connection::open(&env.db_path).expect("db");
+    conn.query_row(sql, [], |r| r.get(0)).expect("count")
 }
 
 /// `TOKEN` を持たず、名前付きの token 2 本（web の人 `human:web` と外部 operator

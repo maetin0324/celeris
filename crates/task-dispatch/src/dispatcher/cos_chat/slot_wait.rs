@@ -120,8 +120,8 @@ impl CosChatLaunch {
                 continue;
             }
             // 停止中・ディスク不足・設定で無効の間、CoS 全体の上限（max_cos_runs）に達している間は選び直さない。
-            if !dispatcher.accepting_new_work
-                || !dispatcher.disk_ready
+            if !dispatcher.coord.accepting_new_work()
+                || !dispatcher.maint.disk_ready()
                 || !config.enabled
                 || !self.has_capacity(dispatcher)
             {

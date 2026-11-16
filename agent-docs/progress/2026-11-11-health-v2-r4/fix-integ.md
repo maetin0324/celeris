@@ -1,0 +1,174 @@
+---
+title: "健全性v2 R4 fix-integ: 統合の完了（統合 WU の done・PhaseIntegrated・Task の遷移）を再起動に耐える形にする"
+tasks: [01M6TYVJT4S29ZMP6P0D4831JG]
+status: done
+updated: 2026-11-14
+completed: 2026-11-14
+---
+# 健全性v2 R4 fix-integ
+
+完了日: 2026-11-14
+
+store-scope: a
+
+## 概要
+
+- 反例（`cex-review.md` の未解決 1、試験 7）を owner で直した。`finish_phase_integration` は統合 WU の done・次の段の WU の
+  ready・`PhaseIntegrated` と Task の遷移を別々に書いていたので、統合 WU の done の後で落ちると `PhaseIntegrated` が残らず、
+  途中確認の段では `PhaseGate` を飛ばす窓があった。
+- 決定 store-scope の答えは a（operator の判断。人は 2026-11-14 08:07Z から不在中の inbox 対応を operator に任せた）。
+  `TaskStore::apply_transition_with_work_units` を 1 つ足し、統合 WU の done・promote の行とその `WorkUnitTransitioned`・
+  `PhaseIntegrated` などの events・Task の遷移を 1 つの Immediate transaction で書く。中身は既存の `update_work_unit_tx`・
+  `append_event_tx`・`apply_transition_tx` を組むだけ。SQL 文・migration・列は足していない。`repair_apply` は変えていない。
+- 判断は ADR [2026-11-14-phase-integration-finish-one-write](../../adr/2026-11-14-phase-integration-finish-one-write.md) に書いた。
+
+## 作業前 brief
+
+1. 根本原因: `dispatcher/phase_integration.rs` の `finish_phase_integration` が、統合 WU の done（`work_unit_transition`）、
+   次の段の promote（`promote_newly_ready`、WU ごとに `work_unit_transition`）、`PhaseIntegrated` と Task の遷移
+   （`apply_transition_with_events`）を 3 回に分けて書いていた。症状は再起動の後に出る（`PhaseIntegrated` 0 件、途中確認の
+   段では次の dispatch の `promote_newly_ready` が次の段を ready にし、`PhaseGate` を飛ばす）。
+2. 責務 owner: 判断は `finish_phase_integration`、原子的な書き込みは store（`task-core/src/store/execution/work_units.rs`）。
+3. 既存の再利用先: tx 関数 `update_work_unit_tx`・`append_event_tx`・`apply_transition_tx`（`execution_plan_replan_tx` と同じ
+   組み方）、`task_core::newly_ready`、`reconcile_integration`。試験は `cex_review_authority.rs` の `crash_mid_integration_check`・
+   `restarted_parallel_dispatcher`・`phase_integrated`。
+4. 選択肢: a（store の method 1 つで 1 transaction）と b（store を変えず、再起動の照合で記録し直す）。決定どおり a。b は窓を
+   残し、照合の経路を 1 本増やす。
+5. 新しい状態・分岐・fallback・port: store の method 1 つ（`apply_transition_with_work_units`。同じ組み方の
+   `apply_transition_with_events_impl`・`work_unit_transition_impl` を畳んだ）。Task の遷移が通らないときに統合 WU を
+   pending に戻す分岐（ADR D3。以前は統合 WU の done だけが残った）と、その reason の定数
+   `INTEGRATION_RESULT_NOT_APPLIED`。新しい状態・列・fallback は無し。
+6. 撤去対象: `finish_phase_integration` の中の 3 回の書き込み（`work_unit_transition`・`promote_newly_ready`・
+   `apply_transition_with_events` の呼び出し）。`promote_newly_ready` の行と event の組み立ては `ready_promotions` に移し、
+   `promote_newly_ready`（人の gate の後の dispatch で使う）はそれを書くだけにした。`reconcile_tree_units`（子 task の状態を
+   写した後）に同じ昇格のループがもう 1 つあったので、`promote_newly_ready` の呼び出しに畳んだ。試験 7 の旧い準備（統合 WU の done を
+   store に直接書く）は、修正の後は起きない状態なので消した。
+7. 不変条件: 統合の完了は 1 回の書き込みで、再起動の後に `PhaseIntegrated` はちょうど 1 件、merge は二重にならず、途中確認の
+   段の `PhaseGate` を飛ばさない。試験は試験 7・`cex_integration_restart_keeps_the_stage_pause`・
+   `apply_transition_with_work_units_writes_nothing_when_the_transition_is_rejected`。
+
+## 変更
+
+- `crates/task-core/src/store/task_store.rs`・`task_store_impl.rs`・`approvals.rs`: `apply_transition_with_work_units` と
+  その本体 `apply_transition_with_work_units_impl`（旧 `apply_transition_with_events_impl` を一般にした）。
+  `apply_transition_with_events` は trait の既定の method で `work_units` が空の形を渡す。
+- `crates/task-core/src/store/execution/work_units.rs`: `work_unit_transition_impl` を消した（挿入の無い
+  `work_units_apply_impl` と同じ transaction。`work_unit_transition`・`work_unit_transition_with_events` はそちらに渡す）。
+  最初の版は store の行を 33 行、`SqliteStore` の method を 2 つ増やし、repo health の `size.responsibility-growth` が
+  fail-grade 2 件（store の module の行 19364 → 19397、method 705 → 707）で落ちた。重複 2 つを畳んだ後は 19364 → 19364、
+  705 → 704。
+- `crates/task-dispatch/src/dispatcher/phase_integration.rs`: `finish_phase_integration` は、統合 WU を done に置いた行の集合
+  から trigger・events・promote の行を組み立て、`apply_transition_with_work_units` で 1 回だけ書く。worktree の削除
+  （中身は以前と同じ。同じ関数の中で書き込みの後へ移した）と最終レビューの起動は commit の後。遷移が通らなければ
+  `reconcile_integration(task, "integration_result_not_applied")`。同じ file に `ready_promotions`（純粋関数。
+  `promote_newly_ready` と `finish_phase_integration` が共有）を置いた。
+- `crates/task-dispatch/src/dispatcher/work_units.rs`: `promote_newly_ready` は `ready_promotions` の行を 1 行ずつ書くだけ。
+- `crates/task-dispatch/src/dispatcher/tree_units.rs`: `reconcile_tree_units` の昇格のループ（`promote_newly_ready` の旧い
+  中身と同じ。`newly_ready`・`Ready`・`dependency_ready`・行ごとの `work_unit_transition`）を `promote_newly_ready` の呼び出しに
+  畳んだ。`updated_at` は tick の始めの時刻から呼び出しの時刻になる（どちらも `OffsetDateTime::now_utc()`）。
+- 試験: `cex_review_authority.rs` の試験 7 と `cex_integration_restart_keeps_the_stage_pause`、fixture の
+  `crash_mid_integration_check_with`（途中確認の段 `build` と次の段 `ship`）・`finish_crashed_integration_checks`。
+  `task-core/src/store/tests.rs` の `apply_transition_with_work_units_writes_nothing_when_the_transition_is_rejected`。
+
+## 試験 7 の修正の前と後
+
+- 修正の前（基準 `$CELERIS_WU_BASE` の本体のまま、試験 7 に `PhaseIntegrated` 1 件の assert だけを足した）:
+  `cargo nextest run -p task-dispatch -E 'test(cex_integration_restart_after_the_integration_unit_is_done_does_not_integrate_again)'`
+  は exit 100。`cex_review_authority.rs:1161` の `assert_eq!` が `left: 0`・`right: 1` で落ちた（再起動の後に
+  `PhaseIntegrated` が 0 件）。
+- 修正の後: 同じ試験は PASS。準備は答え a なので「1 回の書き込みの前で落ちた形」に変えた（落ちた daemon の統合は merge と
+  検査を終え、最後の `IntegrationCheckFinished` まで残ったが、完了は書いていない。統合 WU は running）。再起動の後に
+  `PhaseIntegrated` はちょうど 1 件（merged の a・b は両方 skipped）、統合 WU の done は 1 回、merge commit は WU のブランチ
+  ごとに 1 つ、最終レビューは 1 回。準備を変えた理由は試験の doc comment に書いた。
+- `cex_integration_restart_keeps_the_stage_pause`: `pause_after = after(build)` の段 `build` の統合の完了の前で落ちた後、再起動
+  した dispatcher は `PhaseGate` で Blocked（`awaiting_human`）にし、`PhaseIntegrated`・`PhaseReported` は 1 件ずつ、段 `ship`
+  の WU `c` は pending のままで走らない。完了を書いた後にもう一度作り直して 3 tick 回しても同じ。
+
+## attempt 2: 前回の run の後の check（repo health）の不合格と直し方
+
+- 前回の run の後、celeris の check `celeris:repo-health/1`（基点はこの WU の base。前の unit の最後の commit
+  「fix-cred: 進捗に提出時の HEAD の test-affected・clippy の結果を書く」）が fail-grade 4 件で落ちた。手元で
+  `python3 scripts/dev/repo-health/repo_health.py --repo scripts/dev --base <その commit> --head worktree --policy-version 1`
+  を走らせて同じ 4 件を再現した（exit 1）。
+  - `size.responsibility-growth`: `dispatcher/work_units.rs` の本体の行 2098 → 2110（閾値 2000）。
+  - `size.responsibility-growth`: `Dispatcher` の method の数 382 → 383（`remove_phase_worktrees` を足した）。
+  - `size.responsibility-growth`: `dispatcher` module の本体の行 31605 → 31618。
+  - `source-size`: `work_units.rs` の production_size 2111（許容 2099）。
+- 直し方（振る舞いは変えていない。試験は変えていない）:
+  - `remove_phase_worktrees` を消し、中身を `finish_phase_integration` の書き込みの後に戻した（method 383 → 382）。
+  - `ready_promotions` を `work_units.rs` から `phase_integration.rs` へ移した（`work_units.rs` 2110 → 2084）。
+    意味の上の owner は WU の遷移の決定を持つ `crate::execution_scheduler`（純粋関数）だが、この WU の範囲 check が
+    `crates/task-dispatch/src/execution_scheduler.rs` を許していないので、dispatcher の中に置いた（提案に書いた）。
+  - `reconcile_tree_units` の重複した昇格のループを `promote_newly_ready` に畳んだ（規約 2。module 31618 → 31597、
+    `reconcile_tree_units` の行 282 → 263）。
+- 直した後の同じ検査: verdict=pass、exit 0、fail_grade=0、new=0、worsened=0。
+
+## 統合 WU を done にするほかの経路（目的 (4)）
+
+統合 WU（kind `integrate`）を done にする書き手は `finish_phase_integration` だけ（`reason: "integrated"` は 1 か所。
+`grep -rn '"integrated"' crates --include=*.rs` で確認）。ほかに WU を done にする経路は寄せない。理由:
+
+- `tree_units.rs` の子 task の done（kind task の WU）と `task_ops::tree_adopt` の子 task の採用は、行と events を
+  `work_unit_transition_with_events` などの 1 回の書き込みで書き、Task の遷移を伴わない。
+- `review_verdict.rs` の atomic task の暗黙の WU `main`（done）の実体化は、`repair_apply` の 1 transaction で計画・行・遷移を書く。
+
+## 確かめられない事項
+
+- 書き込みを再び分ける退行は、dispatcher の試験では検出できない（書き込みの間で落とすには試験用の hook が要り、本体に試験用の
+  分岐を足さない方針に反する）。代わりに store の試験が 1 transaction であることを、試験 7 と段の確認の試験が書き込みの前と
+  後の再起動を固定する。`finish_phase_integration` の中に `work_unit_transition`・`promote_newly_ready`・
+  `apply_transition_with_events` の呼び出しが無いことは下の grep で確かめた。
+- ADR D3 の分岐（Task の遷移が通らない）は、統合の結果を読んだ後に人が Task を変える競合でだけ通り、試験で決定的に作れない。
+  store が何も書かないことは store の試験で確かめた。
+
+## 本番への移行
+
+config の変更は無い。更新前の版の daemon が窓の中で落ちて残した行（`PhaseIntegrated` の無い done の統合 WU）を新しい版は
+記録し直さない（ADR D4）。人は本番に入れる前に、本番 DB に対して read only で次を実行し、0 件であることを確かめる。1 件以上
+なら、その task の次の段が人の確認の段かを見て、必要なら task を止めて確認する。
+
+```sh
+sqlite3 -readonly <本番 DB の path> "SELECT w.task_id, w.key FROM work_units w JOIN tasks t ON t.id = w.task_id \
+ WHERE w.kind = 'integrate' AND w.status = 'done' AND w.phase IS NOT NULL \
+ AND t.status NOT IN ('done','failed','cancelled') AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = w.task_id \
+ AND json_extract(e.json,'$.type') = 'phase_integrated' AND json_extract(e.json,'$.work_unit_id') = w.id);"
+```
+
+## 証拠（提出時の HEAD で実行）
+
+commit: 「fix-integ: 統合の完了（統合 WU の done・promote・PhaseIntegrated・Task の遷移）を 1 つの transaction で書く」、
+「fix-integ: 遷移と WU の行を 1 transaction で書く store の実装を 1 つにする（apply_transition_with_events と work_unit_transition の重複を畳む）」、
+「fix-integ: 進捗に提出時の HEAD の検査結果を書く」、
+「fix-integ: repo health の責務の増加を出さない（ready_promotions を phase_integration.rs へ移し、worktree の削除を finish に戻し、reconcile_tree_units の昇格の重複を promote_newly_ready に畳む）」、
+「fix-integ: 進捗の attempt 2 の節で WU の base を件名で書く」、この節を書いた commit。基準は `$CELERIS_WU_BASE`。
+下の検査は attempt 2 の最後のコードの commit の後に実行した（その後の commit は この進捗の file だけ）。
+
+- 計画の check 0: `awk … | grep -q 'PhaseIntegrated' && cargo nextest run -p task-dispatch -E 'test(/cex_/) | test(/phase_integration/) | test(/stage_reopen/) | test(/tree_branches/) | test(/health_enforce/) | test(/work_units::/)'`:
+  exit 0、150 passed（試験 7 と `cex_integration_restart_keeps_the_stage_pause` を含む）。
+- 計画の check 1（ADR・`store-scope: a` の行・試験の名）: exit 0。
+- 計画の check 2: `cargo nextest run -p task-core -E 'test(/store::/)'`: exit 0、310 passed。
+- 計画の check 3: `bash scripts/dev/test-affected.sh`: exit 0。8497 tests run: 8497 passed、23 skipped。ts-verify 20 passed。
+  その中の repo health（基点 auto）は verdict=pass、fail_grade=0、new=1（`host_maintenance.rs` の `migration.remnant` の
+  warning。この変更とは無関係）、worsened=0。`cargo clippy --workspace -- -D warnings`: exit 0。
+  `cargo fmt --all -- --check`: exit 0。
+- 前回落ちた check と同じ基点（この WU の base）の repo health:
+  `python3 scripts/dev/repo-health/repo_health.py --repo scripts/dev --base <WU の base> --head worktree --policy-version 1`:
+  exit 0、verdict=pass、fail_grade=0、new=0、worsened=0（`work_units.rs` 2084、module 31597、method 382）。
+- 計画の check 4・5（範囲、`sh "$CELERIS_WU_SCOPE_PATHS"`）: exit 0。変えた path は ADR・この進捗・
+  `crates/task-core/src/store/` の 6 file・`crates/task-dispatch/src/dispatcher/` の 4 file（`phase_integration.rs`・
+  `tests/cex_review_authority.rs`・`tree_units.rs`・`work_units.rs`）。
+- `awk '/pub\(super\) fn finish_phase_integration/,/^    }$/' crates/task-dispatch/src/dispatcher/phase_integration.rs | grep -c "work_unit_transition\|promote_newly_ready\|apply_transition_with_events"`: 0。
+- `sh scripts/dev/progress-index.sh --check`: exit 0。
+
+## 未解決事項
+
+- 無し（上の「確かめられない事項」の 2 点は試験の限界として記録した）。
+
+## 提案
+
+- `ready_promotions`（pending の WU を ready にした行と `WorkUnitTransitioned{dependency_ready}`）は WU の遷移の決定なので、
+  `crate::execution_scheduler`（`decide` が同じ `newly_ready` から `newly_ready` の行を作る）へ移すのがよい。この WU の範囲
+  check の外なので、record-fix か別 task で移す。
+
+- `on_integration_finished` の stale discard（Task が running でない統合の結果を捨てる）も、統合 WU を running のまま残す。
+  同じ `reconcile_integration` で pending に戻すかを別 task で決める（この WU の範囲外。今回は変えていない）。

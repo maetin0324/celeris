@@ -1,6 +1,12 @@
 //! run の起動（`dispatch_one`・`spawn_worker`）と、その前段の担当・lane・harness の決定。lease の取得から `running.insert` までは一続きに保つ。ADR-0082 の L4。
 
 use super::*;
+use crate::dispatch_admission::{
+    self, AdmissionCluster, AdmissionFact, AdmissionInput, AdmissionProposal, AdmissionStop,
+    AdmissionTaskValues, AdmissionUnit, BackoffClock, ClusterCooldown, ClusterFact, WorkUnitFact,
+    planner_lane,
+};
+use crate::execution_coordination::WriteSetAdmission;
 
 /// 付記 S2: `lane_rules` の compare の結線（`decide_lane` から呼ぶ）。`dispatcher.rs` を大きくしないよう、ここで宣言する。
 #[path = "script_compare.rs"]
@@ -11,12 +17,6 @@ pub(in crate::dispatcher) use script_compare::script_canary::unit_selected as sc
 pub(in crate::dispatcher) use script_compare::{
     SCRIPT_TICK_WAIT_BUDGET, ScriptTickWait, script_canary_target_for_test,
 };
-
-/// lane の決定（`decide_lane`）が使う routing の設定（retry の escalation の閾値）。
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct DispatchRoutingSettings {
-    pub escalation: task_core::EscalationThresholds,
-}
 
 impl Dispatcher {
     // Verify must skip snapshot tasks before dependency/child lookups and maintenance.
@@ -38,654 +38,560 @@ impl Dispatcher {
         forced_wu: Option<task_core::WorkUnitRow>,
         now: Instant,
     ) -> Result<bool, DispatchError> {
-        if !task_ops::knowledge_curation::inputs_ready(self.store.as_ref(), &task)? {
-            return Ok(false);
-        }
-        // ADR-0074 D1.3（Phase F2b）: 並列 WU の 2 本目以降（Task は既に Running。担当・gate・
-        // バックオフは 1 本目で済んでいる）。
+        // ADR 2026-11-14 dispatch-admission-order: 起こすかの順序と組み合わせ（どの gate をどの順で見るか、並列 WU の
+        // 2 本目以降が飛ばす gate、planner run か、予算の上書き）は `dispatch_admission::admit` が決める。ここは admit が
+        // 求めた fact を既存の関数で集め、止めるなら止め方を適用して見送り、進むなら lease 以降を今のとおり行う。
+        // ADR-0074 D1.3（Phase F2b）: 並列 WU の 2 本目以降は `forced_wu` で WU を受ける（Task は既に Running）。
         let second_pass = forced_wu.is_some();
-        if !second_pass && self.running_for_task(task.id) > 0 {
-            return Ok(false);
-        }
-        // ADR-0089（Phase R6-5）: CoS の対話 run は `max_concurrency` ではなく `max_cos_runs` で数える。
-        let cos = !second_pass && self.is_cos_task(&task)?;
-        if !self.run_load().admits(cos) {
-            let scope = if cos {
-                task_core::CapacityScope::Cos
-            } else {
-                task_core::CapacityScope::Global
-            };
-            self.note_dispatch_wait(task.id, task_core::TaskWait::Capacity { scope, id: None });
-            return Ok(false);
-        }
-        // ADR-0044 D2: この tick で打ち切ったばかりの run と同じ worktree に、すぐ次の run を
-        // 入れない（孫プロセスが片付く猶予を 1 tick 置く）。
-        if self.just_aborted.contains(&task.id) {
-            return Ok(false);
-        }
-        // ADR-0041 D5: verify モードは `genre = "smoke"` の煙試験だけを起こす（他は ready のまま）。
-        if !self.is_eligible(&task) {
-            return Ok(false);
-        }
-        // ADR 2026-10-07-build-tmp-hygiene 付記 A4: 監視している path が `critical` のあいだは新しい coding run を
-        // 起こさない（ready のまま。attempts を消費しない。並列 WU の 2 本目以降も同じ）。
-        if self.held_by_disk_critical(&task) {
-            let path = crate::disk_watch::paths_label(self.disk_watch.as_ref());
-            self.note_dispatch_wait(task.id, task_core::TaskWait::DiskCritical { path });
-            return Ok(false);
-        }
-        // ADR-0046 D5（Phase 59）: 担当が決まっていないタスクは dispatch の前に matching で決める
-        // （計画 run の子、人が作ったタスク、Console から作られたタスクが全部ここを通る）。
-        let mut task = if second_pass {
-            task
-        } else {
-            match self.assign_if_needed(task)? {
-                Some(task) => task,
-                // 候補が無くて `blocked` にした（人に聞いた）。この tick では dispatch しない。
-                None => return Ok(false),
-            }
+        let mut gate = forced_wu.map(|wu| WuDispatchGate::RunWorkUnit(Box::new(wu)));
+        let mut input = AdmissionInput {
+            forced_unit: gate.as_ref().map(admission_unit),
+            ..AdmissionInput::default()
         };
-        // ADR-0072 D13（Phase E3）: Complexity Gate（assign_if_needed の後、decide_lane の前。
-        // 最初の dispatch で 1 回だけ判定する）。
-        if !second_pass {
-            task = self.execution_gate_if_needed(task)?;
-            // ADR-0079 D9 / D7（Phase R3a）: `plan_invalid` に atomic と答えた節点は 1 run で走らせる。
-            task = self.apply_plan_invalid_atomic(task)?;
-        }
-        // ADR-0072 D6/D15（Phase E2）: 計画のある Task は、次に走らせる WorkUnit を
-        // 決定的な scheduler（`task_core::next_work_unit`）で選ぶ。計画が無ければ従来どおり
-        // （`current_wu = None`。プロンプト・遷移は E1 までと 1 バイトも変わらない。(i)）。
-        let mut replan_dispatch = false;
-        let gate = match forced_wu {
-            Some(wu) => WuDispatchGate::RunWorkUnit(Box::new(wu)),
-            None => self.wu_dispatch_gate(task.id)?,
-        };
-        // ADR-0079 D9（Phase R2b）/ D7（Phase R3a）: `needed_before: [self]` の未回答の決定（plan_invalid・run 時の木の上限・worker の self）
-        // を待つ task と、設計 review を待つ task（ADR 2026-11-07-health-review-integration D3.5。`design_review_hold`）は run を起こさない。
-        if !second_pass && (self.decision_self_hold(&task)? || self.design_review_hold(&task)?) {
-            return Ok(false);
-        }
-        if let Some(next) = tree_units::next_run(&gate)
-            && self.tree_limit_hold_for(&task, next)?
-        {
-            return Ok(false);
-        }
-        let current_wu = match gate {
-            WuDispatchGate::Atomic => None,
-            WuDispatchGate::RunWorkUnit(wu) => Some(*wu),
-            WuDispatchGate::StartIntegration(wu) => {
-                self.start_integration_from_ready(&task, &wu)?;
-                return Ok(false);
-            }
-            // ADR-0074「F5-fix8 実装時の明確化」: 仕事の残っていない計画の最終レビュー（run は起こさない）。
-            WuDispatchGate::FinalReview => {
-                self.start_final_review_from_ready(&task)?;
-                return Ok(false);
-            }
-            // ADR-0072 D17（Phase E4）: replan の planner run。既存の `is_planner_dispatch` の
-            // 配線（budget/lane/role の上書き）をそのまま使うが、`ExecutionPlannerContext.replan`
-            // を `true` にする（下）。
-            WuDispatchGate::RunPlanner { replan } => {
-                replan_dispatch = replan;
-                None
-            }
-            WuDispatchGate::Skip => return Ok(false),
-        };
-        // ADR-0072 D14（Phase E3）/ D17（Phase E4）: gate が compound と判定し、`gate = "on"` で、
-        // まだ計画が無い（`current_wu` が None = atomic 経路）なら、この run は task-local な
-        // planner run にする。`replan_dispatch` は既に計画がある Task の replan（`wu_dispatch_gate`
-        // が上限まで確認済み）。
-        // ADR-0074「Phase F3（途中確認）実装時の逸脱・明確化」: `gate = "shadow"` でも、人が
-        // `execution: compound` を明示した Task（`ExecutionGateDecision.source = Human`、
-        // `rule_id = human/explicit`）は採用して planner run に進む（F5-1 dogfood で見つかった
-        // 不具合の修正）。CoS のヒント（source = Hint）と規則表の判定（source = Policy）は
-        // shadow では従来どおり記録だけ（採用しない）。
-        let gate_decision = task.routing.as_ref().and_then(|r| r.execution.as_ref());
-        let decision_is_compound =
-            gate_decision.map(|d| d.mode) == Some(task_core::ExecutionMode::Compound);
-        let shadow_human_explicit_compound = self.config.execution.gate
-            == task_core::GateMode::Shadow
-            && decision_is_compound
-            && gate_decision.map(|d| d.source) == Some(task_core::GateSource::Human);
-        // ADR-0079 D4 (1)（Phase R2a）: 木の子 task の compound は `[execution] gate` に関わらず採用する
-        // （root が compound で分けると決めた木を途中で 1 run に潰さない）。root は従来どおり（U-R5）。
-        let tree_child_compound = decision_is_compound && task_core::tree::is_tree_child(&task);
-        // ADR-0124 D3: 直行経路（`route = direct`・shadow でない）と記録した Task は planner を挟まず、
-        // 計画の無い 1 本の implementation run で走る（その後は従来の review 前同期 → command checks →
-        // reviewer）。`replan_dispatch` は計画を持つ Task だけなので触らない。
-        let direct_route = task
-            .routing
-            .as_ref()
-            .and_then(|r| r.route.as_ref())
-            .filter(|r| r.route == task_core::Route::Direct && !r.shadow);
-        let is_planner_dispatch = replan_dispatch
-            || (current_wu.is_none()
-                && direct_route.is_none()
-                && decision_is_compound
-                && (self.config.execution.gate == task_core::GateMode::On
-                    || shadow_human_explicit_compound
-                    || tree_child_compound));
-        // D18/D14: 上書きする前の Task の予算（WU/planner の既定の計算に使う。ADR-0072 D14）。
-        let original_task_budget = task.budget;
-        // ADR-0074 D5.3（Phase F1）: planner run は `[execution.planner] tier`（既定 standard）で
-        // 走る。人が Task に `tier:frontier` を明示していれば、それが優先される
-        // （`TierSource::Human` かつ `worker_hint.tier == Frontier`）。
-        let planner_human_frontier = task
-            .routing
-            .as_ref()
-            .is_some_and(|r| r.tier_source == task_core::TierSource::Human)
-            && task.worker_hint.tier == task_core::Tier::Frontier;
-        if is_planner_dispatch {
-            // D14: harness/adapter は `[execution.planner]`、lane は固定（下の `lane_decision` で
-            // `TierSource::System`／人の明示なら `TierSource::Human` にする）。
-            task.worker_hint.tier = if planner_human_frontier {
-                task_core::Tier::Frontier
-            } else {
-                self.config.execution.planner.tier
-            };
-            task.budget.max_turns = self.config.execution.planner.max_turns;
-            task.budget.max_wall_secs = self.config.execution.planner.max_wall_secs;
-        } else if let Some(wu) = &current_wu {
-            // ADR-0072 D18/E2 申し送り（Phase E3）: WU の予算（`WorkUnitSpec.budget`）を実際の
-            // run の wall-clock/turn 上限に反映する。書かなければ D18 の既定
-            // （`max(task.budget.*, 既定)`）。
-            let default_max_turns = task.budget.max_turns.max(30);
-            let default_max_wall = task.budget.max_wall_secs.max(1800);
-            task.budget.max_turns = wu
-                .spec
-                .budget
-                .and_then(|b| b.max_turns)
-                .unwrap_or(default_max_turns);
-            task.budget.max_wall_secs = wu
-                .spec
-                .budget
-                .and_then(|b| b.max_wall_secs)
-                .unwrap_or(default_max_wall);
-        }
-        // ADR-0010 D6（P-3）: ready に入った時刻（DB の updated_at）からのバックオフ。
-        // 並列 WU の 2 本目以降（Task は Running）は 1 本目で済んでいるので見ない。
-        if !second_pass && task.attempts > 0 {
-            let delay = retry_backoff(
-                self.config.retry_backoff_base,
-                self.config.retry_backoff_max,
-                task.attempts,
-            );
-            if self.now_utc() < task.updated_at + delay {
-                tracing::debug!(task_id = %task.id, attempts = task.attempts, delay_ms = delay.as_millis() as u64, "retry backoff; not dispatching yet");
-                self.note_dispatch_wait(
-                    task.id,
-                    task_core::TaskWait::Backoff {
-                        until: rfc3339(task.updated_at + delay),
-                        cause: task_core::BackoffCause::Retry,
-                    },
-                );
-                return Ok(false);
-            }
-        }
-        // ADR-0070 D3（Phase 116）: インフラ都合の再試行のバックオフ（`self.infra_backoff`。
-        // `task.attempts` に依らない別軸。上のバックオフとは独立にゲートする）。期限を過ぎたら
-        // このタスクへのゲートは外す（次に infra 失敗すればまた立て直す）。
-        if !second_pass && let Some(until) = self.infra_backoff.get(&task.id).copied() {
-            if self.now_utc() < until {
-                tracing::debug!(task_id = %task.id, %until, "infra backoff; not dispatching yet");
-                self.note_dispatch_wait(
-                    task.id,
-                    task_core::TaskWait::Backoff {
-                        until: rfc3339(until),
-                        cause: task_core::BackoffCause::Infra,
-                    },
-                );
-                return Ok(false);
-            }
-            self.infra_backoff.remove(&task.id);
-        }
-        // ADR 2026-10-08-browser-prod-enablement D2: browser の前提（適合台帳）が無い・古いなら、lease・worker の
-        // 前に理由つきで止める（worker 起動後の infra_requeue を繰り返さない）。
-        if !second_pass
-            && Self::browser_prereq_applies(&task, is_planner_dispatch)
-            && self.browser_prereq_hold(&task)?
-        {
-            return Ok(false);
-        }
-        // ADR-0130 D3: 同じ repo で走っている run と expected write-set が強く重なれば、起動を次 tick に回す
-        // （lease・遷移・attempts の前。見送りは `Ok(false)` だけ）。planner run は書き込みを予約しない。
-        let run_key = RunKey {
-            task: task.id,
-            work_unit: current_wu
-                .as_ref()
-                .filter(|w| w.phase.is_some())
-                .map(|w| w.id.clone()),
-        };
-        let write_reservation = if is_planner_dispatch || self.write_set_gate_disabled() {
-            None
-        } else {
-            self.write_reservation_for(&task, current_wu.as_ref())?
-        };
-        if let Some(reservation) = &write_reservation
-            && let Some(blocker) = self.write_set_blocker(&run_key, reservation)
-        {
-            self.note_write_set_hold(&run_key, &blocker, reservation);
-            self.note_dispatch_wait(
-                task.id,
-                task_core::TaskWait::WriteSet {
-                    blocking_task_ids: vec![blocker.task],
-                },
-            );
-            return Ok(false);
-        }
-        // ADR-0018: リモート実行のタスクは、クラスタの設定・cooldown・並列度・多重接続を先に確かめる。
-        // ADR-0062 B1（Phase 107）: `cluster_of` が `None` の理由を分ける。(a) 設定に無いクラスタ
-        // → 従来どおり `unroutable`（人が設定を直すまで進まない）。(b) 担当が `cluster:<id>` を
-        // 持たない → `blocked` にして人に質問を 1 件作る（設定の問題ではなく担当の問題なので、
-        // 「no such cluster in the config」という誤解を招く文言は出さない）。
-        let cluster = match self.resolve_cluster(&task) {
-            ClusterResolution::Local => None,
-            ClusterResolution::Resolved(spec, path, mode) => Some((spec, path, mode)),
-            ClusterResolution::NotConfigured => {
-                if self.warned_unroutable.insert(task.id) {
-                    let cluster_id = match &task.workspace {
-                        WorkspaceSpec::Remote { cluster, .. } => cluster.clone(),
-                        WorkspaceSpec::Local { .. } => String::new(),
-                    };
-                    tracing::warn!(task_id = %task.id, cluster = %cluster_id, "no such cluster in the config; task left ready");
-                }
-                self.unroutable.insert(task.id);
-                self.note_dispatch_wait(
-                    task.id,
-                    task_core::TaskWait::Unroutable {
-                        detail: "no such cluster in the config".to_string(),
-                    },
-                );
-                return Ok(false);
-            }
-            ClusterResolution::AssigneeLacksTool { cluster } => {
-                self.block_task_missing_cluster_tool(&task, &cluster)?;
-                return Ok(false);
-            }
-        };
-        if let Some((spec, _, _)) = &cluster {
-            if self
-                .cluster_cooldown
-                .get(&spec.id)
-                .is_some_and(|until| *until > now)
-            {
-                // ADR-0018 D2: 人がログインするまで進まないので、待ち対象には数えない（`--until-idle` を止めない）。
-                self.cluster_waiting.insert(task.id);
-                self.note_dispatch_wait(task.id, cluster_wait(&spec.id, "cooldown"));
-                return Ok(false);
-            }
-            if self.cluster_in_use(&spec.id) >= spec.concurrency {
-                self.note_dispatch_wait(task.id, cluster_wait(&spec.id, "concurrency full"));
-                return Ok(false);
-            }
-            // この tick の `refresh_cluster_liveness` の結果を使う（1 tick に 1 回だけ `ssh -O check` を呼ぶ）。
-            let alive = self
-                .cluster_connected
-                .get(&spec.id)
-                .copied()
-                .unwrap_or(false);
-            if !alive {
-                let spec = spec.clone();
-                // ADR-0032 D3: `auth = "publickey"` かつ接続フックがあれば、cooldown にする前に
-                // 1 回だけ接続を試みる（cooldown 中はここに来ないので、tick ごとに ssh は湧かない。
-                // 同じ tick の別タスクが同じクラスタを指していても、成功時は `cluster_connected` の
-                // キャッシュが true になり、失敗時は下で cooldown が立つので、2 本目は走らない）。
-                let attempt = self.try_auto_connect_cluster(&spec);
-                if let Some(result) = &attempt {
-                    self.note_key_auth_attempt(&spec, result.is_ok());
-                }
-                match attempt {
-                    Some(Ok(())) => {
-                        self.set_cluster_connected(&spec.id, true, ClusterConnChange::KeyAuth);
+        let mut task = task;
+        // admit が求めた置き場所の fact を集めたときに決まる値（起動で使う）。
+        let mut original_task_budget = task.budget;
+        let mut dir = None;
+        let mut cluster: Option<(Box<ClusterSpec>, PathBuf, WorkspaceMode)> = None;
+        let mut worktree = None;
+        let mut wu_workspace: Option<WorkUnitWorkspace> = None;
+        let (mut wu_scope_env, mut prepare_error) = (Vec::new(), None);
+        // admit が求めた lane・route・variant の pin の fact を集めたときに決まる値（止め方と起動で使う）。
+        let (mut fallback_reason, mut lane_decision, mut escalation_audit) = (None, None, None);
+        let (mut lane_assist_record, mut route, mut launched) = (None, None, None);
+        let (mut refused, mut campaign_pin) = (None::<Option<RouteLaunchError>>, None);
+        let admitted = loop {
+            let fact = match dispatch_admission::admit(&input) {
+                AdmissionProposal::Need(fact) => fact,
+                AdmissionProposal::Launch(admitted) => break admitted,
+                AdmissionProposal::Stop(how) => {
+                    match how {
+                        AdmissionStop::Quiet => {}
+                        AdmissionStop::Wait(wait) => self.note_dispatch_wait(task.id, wait),
+                        AdmissionStop::Backoff { until, cause } => {
+                            tracing::debug!(task_id = %task.id, %until, ?cause, "backoff; not dispatching yet");
+                            let until = rfc3339(until);
+                            let wait = task_core::TaskWait::Backoff { until, cause };
+                            self.note_dispatch_wait(task.id, wait);
+                        }
+                        AdmissionStop::StartIntegration => {
+                            if let Some(WuDispatchGate::StartIntegration(wu)) = &gate {
+                                self.start_integration_from_ready(&task, wu)?;
+                            }
+                        }
+                        AdmissionStop::StartFinalReview => {
+                            self.start_final_review_from_ready(&task)?
+                        }
+                        AdmissionStop::ClusterNotConfigured { wait } => {
+                            // `resolve_cluster` は remote の作業場所にだけ設定に無いクラスタを返す。
+                            if self.routing.warn_unroutable_once(task.id)
+                                && let WorkspaceSpec::Remote { cluster, .. } = &task.workspace
+                            {
+                                tracing::warn!(task_id = %task.id, %cluster, "no such cluster in the config; task left ready");
+                            }
+                            self.routing.mark_unroutable(task.id);
+                            self.note_dispatch_wait(task.id, wait);
+                        }
+                        AdmissionStop::ClusterToolMissing { cluster } => {
+                            self.block_task_missing_cluster_tool(&task, &cluster)?
+                        }
+                        AdmissionStop::Cluster {
+                            unavailable,
+                            waiting,
+                            wait,
+                        } => {
+                            if let (Some(reason), Some((spec, ..))) = (unavailable, &cluster) {
+                                self.mark_cluster_unavailable(task.id, spec, reason)?;
+                            }
+                            if waiting {
+                                self.coord.note_cluster_waiting(task.id);
+                            }
+                            self.note_dispatch_wait(task.id, wait);
+                        }
+                        AdmissionStop::NoTaskDir => {
+                            tracing::warn!(task_id = %task.id, "cannot resolve the workspace directory; task left ready");
+                        }
+                        AdmissionStop::WuPrepareBackoff { failures, retry_at } => {
+                            if let Some(wu) = gate_wu(&gate) {
+                                tracing::debug!(task_id = %task.id, work_unit = %wu.key, failures, %retry_at, "work unit worktree backoff; not dispatching yet");
+                            }
+                        }
+                        AdmissionStop::WuPrepareFailed { forced } => {
+                            if let (Some(wu), Some(e)) = (gate_wu(&gate), &prepare_error) {
+                                self.on_work_unit_prepare_failed(&task, wu, e, forced)?;
+                            }
+                        }
+                        AdmissionStop::RouteRefused => {
+                            if let (Some((_, req, _, out, trace)), Some(e)) = (&route, &refused) {
+                                self.note_route_refusal(task.id, req, out, trace, e.as_ref())?;
+                            }
+                        }
+                        AdmissionStop::VariantPinFailed => {
+                            if let Some(Err(reason)) = campaign_pin.take() {
+                                self.block_variant_task(&task, reason)?;
+                            }
+                        }
                     }
-                    Some(Err(detail)) => {
-                        self.mark_cluster_unavailable(
-                            task.id,
-                            &spec,
-                            format!("auto-connect failed: {detail}"),
-                        )?;
-                        self.cluster_waiting.insert(task.id);
-                        self.note_dispatch_wait(
-                            task.id,
-                            cluster_wait(&spec.id, &format!("auto-connect failed: {detail}")),
-                        );
-                        return Ok(false);
-                    }
-                    None => {
-                        self.mark_cluster_unavailable(
-                            task.id,
-                            &spec,
-                            format!(
-                                "no ssh ControlMaster connection to {} (host {})",
-                                spec.id, spec.host
-                            ),
-                        )?;
-                        self.cluster_waiting.insert(task.id);
-                        self.note_dispatch_wait(
-                            task.id,
-                            cluster_wait(&spec.id, "no ssh ControlMaster connection"),
-                        );
-                        return Ok(false);
-                    }
-                }
-            }
-        }
-        let dir_started = Instant::now();
-        // ADR-0041 D1 / ADR-0043 D2: ローカルの作業場所（1 つ以上のリポジトリ）を用意する
-        // （`dir` はその親 = `runs/` `artifacts/` の置き場）。足回りの root はここで初めて固定する
-        // （ADR 2026-10-14-local-machine-settings D5。以後の解決は固定された root を見る）。
-        self.pin_task_root(&task)?;
-        let worktree = self.task_workspaces_for(&task);
-        let dir = match &worktree {
-            Some(ws) => ws.task_dir.clone(),
-            None => match self.task_dir(&task) {
-                Some(d) => d,
-                None => {
-                    tracing::warn!(task_id = %task.id, "cannot resolve the workspace directory; task left ready");
                     return Ok(false);
                 }
-            },
+            };
+            match fact {
+                AdmissionFact::KnowledgeInputs => {
+                    let ready =
+                        task_ops::knowledge_curation::inputs_ready(self.store.as_ref(), &task)?;
+                    input.knowledge_inputs_ready = Some(ready);
+                }
+                AdmissionFact::TaskRuns => {
+                    input.task_runs = Some(self.supervisor.runs_for_task(task.id))
+                }
+                AdmissionFact::CosRun => input.cos_run = Some(self.is_cos_task(&task)?),
+                AdmissionFact::Capacity { cos } => {
+                    input.capacity_admits = Some(self.run_load().admits(cos))
+                }
+                AdmissionFact::JustAborted => {
+                    input.just_aborted = Some(self.supervisor.was_just_aborted(task.id))
+                }
+                AdmissionFact::Eligible => input.eligible = Some(self.is_eligible(&task)),
+                AdmissionFact::DiskCritical => {
+                    input.disk_critical = Some(self.held_by_disk_critical(&task))
+                }
+                AdmissionFact::DiskWatchPaths => {
+                    input.disk_watch_paths = Some(self.maint.disk_watch_paths())
+                }
+                // ADR-0046 D5（Phase 59）: 候補が無ければ blocked にして人に聞き `None` を返す（その後は見送るだけ）。
+                AdmissionFact::Assignee => {
+                    let assigned = self.assign_if_needed(task.clone())?;
+                    input.assigned = Some(assigned.is_some());
+                    task = assigned.unwrap_or(task);
+                }
+                AdmissionFact::ExecutionGate => {
+                    task = self.execution_gate_if_needed(task)?;
+                    task = self.apply_plan_invalid_atomic(task)?;
+                    input.execution_gate_applied = true;
+                }
+                AdmissionFact::Unit => {
+                    let unit = self.wu_dispatch_gate(task.id)?;
+                    input.unit = Some(admission_unit(&unit));
+                    gate = Some(unit);
+                }
+                AdmissionFact::DecisionSelfHold => {
+                    input.decision_self_hold = Some(self.decision_self_hold(&task)?)
+                }
+                AdmissionFact::DesignReviewHold => {
+                    input.design_review_hold = Some(self.design_review_hold(&task)?)
+                }
+                AdmissionFact::TreeLimit => {
+                    let hold = match gate.as_ref().and_then(tree_units::next_run) {
+                        Some(next) => self.tree_limit_hold_for(&task, next)?,
+                        None => false,
+                    };
+                    input.tree_limit_hold = Some(hold);
+                }
+                AdmissionFact::TaskValues => {
+                    let ex = &self.config.execution;
+                    let budget = (ex.planner.max_turns, ex.planner.max_wall_secs);
+                    let values = AdmissionTaskValues::read(&task, ex.gate, ex.planner.tier, budget);
+                    input.task_values = Some(values);
+                }
+                AdmissionFact::RetryBackoff => {
+                    let c = &self.config;
+                    let delay =
+                        retry_backoff(c.retry_backoff_base, c.retry_backoff_max, task.attempts);
+                    let (until, now) = (task.updated_at + delay, self.now_utc());
+                    input.retry_backoff = Some(BackoffClock { until, now });
+                }
+                AdmissionFact::InfraBackoff => {
+                    let until = self.supervisor.infra_backoff_until(task.id);
+                    input.infra_backoff = Some(until.map(|until| BackoffClock {
+                        until,
+                        now: self.now_utc(),
+                    }));
+                }
+                AdmissionFact::ClearInfraBackoff => {
+                    self.supervisor.clear_infra_backoff(task.id);
+                    input.infra_backoff_cleared = true;
+                }
+                AdmissionFact::BrowserPrereq { planner_run } => {
+                    input.browser_prereq_needed =
+                        Some(Self::browser_prereq_applies(&task, planner_run));
+                }
+                AdmissionFact::BrowserPrereqHold => {
+                    input.browser_prereq_hold = Some(self.browser_prereq_hold(&task)?)
+                }
+                AdmissionFact::RunOverride { tier, budget } => {
+                    // D18/D14: 上書きする前の Task の予算（WU/planner の既定の計算に使う。ADR-0072 D14）。
+                    original_task_budget = task.budget;
+                    task.worker_hint.tier = tier.unwrap_or(task.worker_hint.tier);
+                    if let Some((max_turns, max_wall_secs)) = budget {
+                        (task.budget.max_turns, task.budget.max_wall_secs) =
+                            (max_turns, max_wall_secs);
+                    }
+                    input.place.run_override_applied = true;
+                }
+                // ADR-0130 D3: lease・遷移・attempts の前。planner run は書き込みを予約しない。
+                AdmissionFact::WriteSet { planner_run } => {
+                    let wu = gate_wu(&gate);
+                    let work_unit = wu.filter(|w| w.phase.is_some()).map(|w| w.id.clone());
+                    let key = RunKey {
+                        task: task.id,
+                        work_unit,
+                    };
+                    let admission = self.admit_write_set(&task, &key, wu, planner_run)?;
+                    input.place.write_set = Some(admission);
+                }
+                AdmissionFact::Cluster => {
+                    let resolved = self.resolve_cluster(&task);
+                    input.place.cluster = Some(AdmissionCluster::of(&resolved));
+                    if let ClusterResolution::Resolved(spec, path, mode) = resolved {
+                        cluster = Some((spec, path, mode));
+                    }
+                }
+                // admit は `resolve_cluster` が remote のクラスタを返した後でだけ求める。
+                AdmissionFact::ClusterState(step) => {
+                    let Some((spec, ..)) = &cluster else {
+                        return admission_contract_broken(task.id, "ClusterState: cluster");
+                    };
+                    let (id, place) = (spec.id.as_str(), &mut input.place);
+                    match step {
+                        ClusterFact::Cooldown => {
+                            let until = self.cluster.cooldown_until(id);
+                            place.cluster_cooldown = Some(ClusterCooldown { until, now });
+                        }
+                        ClusterFact::Load => place.cluster_in_use = Some(self.cluster_in_use(id)),
+                        // この tick の `refresh_cluster_liveness` の結果を使う（1 tick に 1 回だけ `ssh -O check` を呼ぶ）。
+                        ClusterFact::Connected => {
+                            place.cluster_connected = Some(self.cluster.connected(id))
+                        }
+                        // ADR-0032 D3: `auth = "publickey"` かつ接続フックがあれば、cooldown にする前に 1 回だけ接続を
+                        // 試みる（cooldown 中は求められないので、tick ごとに ssh は湧かない。同じ tick の別タスクが同じ
+                        // クラスタを指していても、成功時は `cluster_connected` のキャッシュが true になり、失敗時は
+                        // cooldown が立つので、2 本目は走らない）。
+                        ClusterFact::AutoConnect => {
+                            let attempt = self.try_auto_connect_cluster(spec);
+                            if let Some(result) = &attempt {
+                                self.note_key_auth_attempt(spec, result.is_ok());
+                            }
+                            place.cluster_auto_connect = Some(attempt);
+                        }
+                        ClusterFact::MarkConnected => {
+                            self.set_cluster_connected(id, true, ClusterConnChange::KeyAuth);
+                            place.cluster_marked_connected = true;
+                        }
+                    }
+                }
+                // ADR-0041 D1 / ADR-0043 D2: ローカルの作業場所（1 つ以上のリポジトリ）を用意する
+                // （`dir` はその親 = `runs/` `artifacts/` の置き場）。足回りの root はここで初めて固定する
+                // （ADR 2026-10-14-local-machine-settings D5。以後の解決は固定された root を見る）。
+                AdmissionFact::TaskDir => {
+                    let dir_started = Instant::now();
+                    self.pin_task_root(&task)?;
+                    worktree = self.task_workspaces_for(&task);
+                    dir = worktree.as_ref().map(|ws| ws.task_dir.clone());
+                    dir = dir.or_else(|| self.task_dir(&task));
+                    if dir.is_some() {
+                        log_slow_step("task_dir", dir_started);
+                    }
+                    input.place.task_dir_resolved = Some(dir.is_some());
+                }
+                // admit は WU の run で、作業場所の dir を解決した後でだけ求める。
+                AdmissionFact::WorkUnit(step) => {
+                    let (Some(wu), Some(dir)) = (gate_wu(&gate), dir.as_deref()) else {
+                        return admission_contract_broken(task.id, "WorkUnit: work unit or dir");
+                    };
+                    let place = &mut input.place;
+                    match step {
+                        WorkUnitFact::PrepareBackoff => {
+                            let backoff = self.coord.wu_prepare_backoff(&wu.id, self.now_utc());
+                            place.wu_prepare_backoff = Some(backoff.map(|f| (f.count, f.retry_at)));
+                        }
+                        WorkUnitFact::Workspace => {
+                            let prepared =
+                                self.prepare_work_unit_workspace(&task, wu, worktree.as_ref());
+                            place.wu_workspace_ready = Some(prepared.is_ok());
+                            match prepared {
+                                Ok(prepared) => wu_workspace = prepared,
+                                Err(e) => prepare_error = Some(e),
+                            }
+                        }
+                        // Capture before any worker can write; retries load the same WU-id snapshot.
+                        WorkUnitFact::ScopeEnv => {
+                            // WU の worktree を用意したら、その作業場所で確かめる。
+                            let ws = wu_workspace.as_ref().map(|w| &w.workspaces);
+                            let ws = ws.or(worktree.as_ref());
+                            let prepared = (|| {
+                                if let Some(ws) = ws {
+                                    for repo in &ws.repos {
+                                        if let Some(wt) = &repo.worktree {
+                                            wt.ensure_blocking().map_err(|e| {
+                                                WuPrepareError::transient(e.to_string())
+                                            })?;
+                                        }
+                                    }
+                                }
+                                // A shared repository's workspace symlink is installed by the
+                                // worker later; its source resolves to the same git directory.
+                                let cwd = ws
+                                    .and_then(|ws| ws.repos.first())
+                                    .map(|repo| {
+                                        if repo.worktree.is_some() {
+                                            repo.dir.as_path()
+                                        } else {
+                                            repo.source.as_path()
+                                        }
+                                    })
+                                    .unwrap_or(dir);
+                                super::wu_base::scope_env(cwd, &wu.id, true)
+                                    .map_err(|e| WuPrepareError::transient(e.to_string()))
+                            })();
+                            place.wu_scope_env_ready = Some(prepared.is_ok());
+                            match prepared {
+                                Ok(env) => {
+                                    self.coord.clear_wu_prepare_failures(&wu.id);
+                                    wu_scope_env = env;
+                                }
+                                Err(e) => prepare_error = Some(e),
+                            }
+                        }
+                    }
+                }
+                // ADR 2026-11-11-disk-aware-dispatch D1: 予備を割るなら待たせ（M12）、通した見込みは起動した後で数える。
+                AdmissionFact::Disk => {
+                    let v2 = gate_wu(&gate).filter(|w| w.phase.is_some());
+                    let target_wu = wu_workspace.as_ref().and(v2);
+                    let (view, gate) = (self.maint.scratch_view(), self.maint.admission());
+                    let repo_of = || self.cargo_target_repo(&task).map(|r| r.source);
+                    let wu = v2.map(|w| w.id.as_str());
+                    input.place.disk = Some(gate.judge_run(view, &task, wu, target_wu, repo_of));
+                }
+                // ADR-0052 D1 / D2（Phase 64）: 知識整理 run は lane を決める前に `langmem` の接続先へ
+                // `GET /models` を当て、届かなければ tier `cheap` の**汎用**ハーネスへ倒す
+                // （task harness の固定を外すだけで、通常の route 選択へ戻す）。LLM は呼ばない。
+                // ADR-0069 D3 / D6（Phase 114）: `routing` を持つ execute タスクは、lane を決定的な policy
+                // （TaskFeatures → 規則表 → 組織の天井）とリトライのエスカレーションで決める。人の明示・
+                // System の tier はそのまま（記録だけ）。残量による調整はこの後の `select_tier`（別の層）。
+                // planner run は `planner_lane`（admit が決めた tier の記録）。D21: WU の run は WU の view
+                // （objective/acceptance/budget/genre/features を差し替えたもの）で lane を決める。
+                AdmissionFact::Lane(shape) => {
+                    if !task_ops::knowledge_curation::is_daily_extraction(&task) {
+                        fallback_reason = self.knowledge_fallback_reason(&task, now);
+                    }
+                    if let Some(reason) = &fallback_reason
+                        && let Some(tier) = self.config.knowledge.fallback_tier
+                    {
+                        task.harness_id = None;
+                        task.worker_hint.tier = tier;
+                        task.budget.max_turns = KNOWLEDGE_FALLBACK_MAX_TURNS;
+                        task.budget.max_wall_secs = KNOWLEDGE_FALLBACK_MAX_WALL_SECS;
+                        tracing::info!(task_id = %task.id, %reason, ?tier, "knowledge: falling back to a generic harness");
+                    }
+                    (lane_decision, escalation_audit) = if shape.planner_run {
+                        (
+                            Some(planner_lane(&task, shape.planner_human_frontier)),
+                            None,
+                        )
+                    } else if let Some(wu) = gate_wu(&gate) {
+                        // WU の lane は task の lane を上限にする（ADR-0074 D5.2）。軌跡 escalation は task の
+                        // run だけに掛け、WU の retry では上げない（ADR-0072 D21）。
+                        (self.decide_lane_for_work_unit(&task, wu)?, None)
+                    } else {
+                        self.decide_lane(&task)?
+                            .map_or((None, None), |(decision, audit)| (Some(decision), audit))
+                    };
+                    input.route.lane_decided = Some(lane_decision.is_some());
+                }
+                // `routing.mode = decision_assisted`（既定 fixed では何もしない）: 分類段の結果で lane を引き上げ得る。
+                AdmissionFact::ClassificationDefer => {
+                    let deferred = self.defer_for_classification(&task, gate_wu(&gate));
+                    input.route.classification_deferred = Some(deferred);
+                }
+                // admit は lane を決めた run でだけ求める。
+                AdmissionFact::LaneAssist => {
+                    let Some(decision) = lane_decision.as_mut() else {
+                        return admission_contract_broken(task.id, "LaneAssist: lane decision");
+                    };
+                    let (record, held) = self.apply_lane_assist(&task, gate_wu(&gate), decision)?;
+                    (lane_assist_record, input.route.lane_assist_held) = (record, Some(held));
+                }
+                // ADR 2026-10-11 llm-source-harness-selection: harness → 宣言順の source×model →
+                // `(source, account)` の admission を `select_route` だけで決め、その route の adapter と
+                // worker に渡す `SelectedLlmRoute` を作る。選べなければ起動しない（別の source へ倒さない）。
+                AdmissionFact::Route(shape) => {
+                    if let Some(decision) = &lane_decision {
+                        task.worker_hint.tier = decision.lane;
+                    }
+                    let current_wu = gate_wu(&gate);
+                    let route_input = route_select::RouteInput {
+                        task_id: task.id.to_string(),
+                        harness: {
+                            let mut request = route_select::harness_request_for(&task);
+                            if shape.planner_run {
+                                request.execution_class = Some("planner".into());
+                            }
+                            request
+                        },
+                        model_hint: None,
+                        lane: Some(tier_label(task.worker_hint.tier).to_string()),
+                        cos: shape.cos_run,
+                    };
+                    let run_id = ulid::Ulid::new().to_string();
+                    // Capture the task-features snapshot before selection. The selector, route_decisions row,
+                    // and RoutingDecided event must all refer to this same content-addressed input.
+                    let route_features = lane_decision.as_ref().and_then(|decision| {
+                        match self.store.record_route_features(
+                            task_core::route_extract::Subject {
+                                kind: if current_wu.is_some() { "work_unit" } else { "task" }.to_owned(),
+                                id: current_wu
+                                    .map(|wu| wu.id.clone())
+                                    .unwrap_or_else(|| task.id.to_string()),
+                            },
+                            Some(task_core::route_extract::RouteFeatureContext {
+                                lane: Some(
+                                    task_core::model_catalog::assignments::tier_str(task.worker_hint.tier)
+                                        .to_owned(),
+                                ),
+                                harness: task.harness_id.as_ref().map(ToString::to_string),
+                                task_features_v69: Some(decision.features),
+                            }),
+                        ) {
+                            Ok(features) => Some(task_core::RouteFeaturesRef {
+                                schema: features.schema,
+                                template: features.template,
+                                hash: features.hash,
+                                decision: None,
+                            }),
+                            Err(error) => {
+                                tracing::warn!(task_id = %task.id, %error, "routing feature extraction failed; dispatch continues without snapshot");
+                                None
+                            }
+                        }
+                    });
+                    // task 欄の routing 固定（ADR 2026-10-16-mlsys-measure-task-routing）。無ければ従来（config）。
+                    let routing_override =
+                        lane_assist::task_routing_override(self.store.as_ref(), task.id);
+                    let route_context = route_select::RouteContext {
+                        run_id: Some(run_id.clone()),
+                        features: route_features.clone(),
+                        work_unit_id: current_wu.map(|wu| wu.id.clone()),
+                        evidence_mode: routing_override
+                            .as_ref()
+                            .map(|o| o.evidence_mode)
+                            .unwrap_or_default(),
+                        evidence_version: routing_override
+                            .as_ref()
+                            .and_then(|o| o.evidence_table_id.clone()),
+                        priority_override: None,
+                    };
+                    let (mut route_outcome, mut route_trace) =
+                        self.select_route_with(&route_input, &route_context);
+                    // 付記 S2-11・S5-3: `route_priority` の compare と canary。compare と canary の Rust の側は記録だけ。
+                    // TS の側で検証を通った TS の候補列が Rust と違えば、その列で同じ harness を選び直す。
+                    if let Some(column) =
+                        self.compare_route_priority(task.id, &run_id, &route_input, &route_trace)
+                    {
+                        let context = route_select::RouteContext {
+                            priority_override: Some(column),
+                            ..route_context
+                        };
+                        (route_outcome, route_trace) =
+                            self.select_route_with(&route_input, &context);
+                    }
+                    if let (Some(record), Some(decision)) =
+                        (lane_assist_record.take(), route_trace.decision.as_mut())
+                    {
+                        decision.lane_assist = Some(record);
+                    }
+                    // task 欄で routing を固定した task だけ、解決結果（mode・出自・下段・根拠表・online 更新）を判断 record に残す。
+                    if routing_override.is_some()
+                        && let Some(decision) = route_trace.decision.as_mut()
+                    {
+                        decision.routing_resolved = Some(task_core::route_select::resolve_routing(
+                            self.routing.mode(),
+                            routing_override.as_ref(),
+                        ));
+                    }
+                    let launch = match &route_outcome {
+                        Ok(pick) => self
+                            .route_adapter(pick)
+                            .and_then(|adapter| Ok((adapter, self.route_launch_target(pick)?)))
+                            .map(|(adapter, selected)| (pick.clone(), adapter, selected))
+                            .map_err(Some),
+                        Err(_) => Err(None),
+                    };
+                    // 受けた route は、拒否を 1 回だけ記録する印を消す（`note_route_refusal` の対）。
+                    match launch {
+                        Ok(launch) => {
+                            self.routing.clear_warned_unroutable(&task.id);
+                            launched = Some(launch);
+                        }
+                        Err(error) => refused = Some(error),
+                    }
+                    input.route.route_launched = Some(launched.is_some());
+                    route = Some((
+                        run_id,
+                        route_input,
+                        route_features,
+                        route_outcome,
+                        route_trace,
+                    ));
+                }
+                // ADR 2026-10-15-mlsys-min D4: 未登録の credential を要する経路は、この unit だけを待機へ移す。
+                // admit は route を受けた後でだけ求める。
+                AdmissionFact::CredentialGate => {
+                    let Some((pick, ..)) = &launched else {
+                        return admission_contract_broken(task.id, "CredentialGate: launch");
+                    };
+                    let hold = self.credential_gate_hold(&task, gate_wu(&gate), pick)?;
+                    input.route.credential_hold = Some(hold);
+                }
+                // variant 付き試行は、lease と run 記録の前にもう一度 pin を確かめる（割当後に org が変わっていたら起動しない）。
+                AdmissionFact::VariantPin => {
+                    let Some((.., llm_route)) = &launched else {
+                        return admission_contract_broken(task.id, "VariantPin: launch");
+                    };
+                    let pin = self.variant_run_pin(&task, Some(llm_route));
+                    input.route.variant_pinned = Some(pin.is_ok());
+                    campaign_pin = Some(pin);
+                }
+            }
         };
-        log_slow_step("task_dir", dir_started);
+        // admit は作業場所の dir を起動の前に求め、解決できなければ止める。
+        let Some(dir) = dir else {
+            return admission_contract_broken(task.id, "launch: task dir");
+        };
+        let current_wu = match gate {
+            Some(WuDispatchGate::RunWorkUnit(wu)) => Some(*wu),
+            _ => None,
+        };
         // ADR-0074 D1.2（Phase F2b）: v2 の WU の run は、WU ごとの worktree
         // （`<task_dir>/wu/<key>/repos/<name>`、ブランチ `celeris-wu/<task_id>/<key>`）で走る。並列 1 に
         // 倒した Task・統合の repair WU は Task の worktree を共有する（`None`）。
         let v2_wu = current_wu.as_ref().filter(|w| w.phase.is_some()).cloned();
         let task_worktree = worktree.clone();
-        let mut wu_workspace: Option<WorkUnitWorkspace> = None;
-        if let Some(wu) = &current_wu {
-            // ADR-0074「Phase F5-fix7 実装時の明確化」: 一時的な失敗の後のバックオフ中は試さない。
-            if let Some(f) = self.wu_prepare_failures.get(&wu.id)
-                && self.now_utc() < f.retry_at
-            {
-                tracing::debug!(task_id = %task.id, work_unit = %wu.key, failures = f.count, retry_at = %f.retry_at, "work unit worktree backoff; not dispatching yet");
-                return Ok(false);
-            }
-        }
-        if let Some(wu) = &v2_wu {
-            match self.prepare_work_unit_workspace(&task, wu, task_worktree.as_ref()) {
-                Ok(prepared) => {
-                    wu_workspace = prepared;
-                }
-                Err(e) => {
-                    self.on_work_unit_prepare_failed(&task, wu, &e, second_pass)?;
-                    return Ok(false);
-                }
-            }
-        }
         let worktree = match &wu_workspace {
             Some(w) => Some(w.workspaces.clone()),
             None => worktree,
         };
-        // ADR 2026-11-11-disk-aware-dispatch D1: 予備を割るなら待たせ（M12）、通した見込みは起動した後で数える。
         let target_wu = wu_workspace.as_ref().and(v2_wu.as_ref());
-        let (view, wu) = (self.scratch.view.as_ref(), run_key.work_unit.as_deref());
-        let repo_of = || self.cargo_target_repo(&task).map(|r| r.source);
-        let gate = (!is_planner_dispatch).then_some(&self.scratch.admission);
-        let disk = gate.and_then(|g| g.judge_run(view, &task, wu, target_wu, repo_of));
-        if let Some(crate::disk_admission::Admission::Wait(wait)) = disk {
-            self.note_dispatch_wait(task.id, wait);
-            return Ok(false);
-        }
-        // Capture before any worker can write; retries load the same WU-id snapshot.
-        let mut wu_scope_env = Vec::new();
-        if let Some(wu) = &current_wu
-            && !matches!(task.workspace, WorkspaceSpec::Remote { .. })
-        {
-            let prepared = (|| {
-                if let Some(ws) = &worktree {
-                    for repo in &ws.repos {
-                        if let Some(wt) = &repo.worktree {
-                            wt.ensure_blocking()
-                                .map_err(|e| WuPrepareError::transient(e.to_string()))?;
-                        }
-                    }
-                }
-                // A shared repository's workspace symlink is installed by the
-                // worker later; its source resolves to the same git directory.
-                let cwd = worktree
-                    .as_ref()
-                    .and_then(|ws| ws.repos.first())
-                    .map(|repo| {
-                        if repo.worktree.is_some() {
-                            repo.dir.as_path()
-                        } else {
-                            repo.source.as_path()
-                        }
-                    })
-                    .unwrap_or(&dir);
-                super::wu_base::scope_env(cwd, &wu.id, true)
-                    .map_err(|e| WuPrepareError::transient(e.to_string()))
-            })();
-            match prepared {
-                Ok(env) => {
-                    self.wu_prepare_failures.remove(&wu.id);
-                    wu_scope_env = env;
-                }
-                Err(e) => {
-                    self.on_work_unit_prepare_failed(&task, wu, &e, second_pass)?;
-                    return Ok(false);
-                }
-            }
-        }
-        // ADR-0052 D1 / D2（Phase 64）: 知識整理 run は dispatch の直前に `langmem` の接続先へ
-        // `GET /models` を当て、届かなければ tier `cheap` の**汎用**ハーネスへ倒す
-        // （task harness の固定を外すだけで、通常の route 選択へ戻す）。LLM は呼ばない。
-        let fallback_reason = if task_ops::knowledge_curation::is_daily_extraction(&task) {
-            None
-        } else {
-            self.knowledge_fallback_reason(&task, now)
+        // 通した write-set の予約と disk の見込みは、起動した後で数える（ADR-0130 D3・ADR 2026-11-11-disk-aware-dispatch D1）。
+        let write_reservation = match input.place.write_set.take() {
+            Some(WriteSetAdmission::Admit(reservation)) => reservation,
+            _ => None,
         };
-        if let Some(reason) = &fallback_reason
-            && let Some(tier) = self.config.knowledge.fallback_tier
-        {
-            task.harness_id = None;
-            task.worker_hint.tier = tier;
-            task.budget.max_turns = KNOWLEDGE_FALLBACK_MAX_TURNS;
-            task.budget.max_wall_secs = KNOWLEDGE_FALLBACK_MAX_WALL_SECS;
-            tracing::info!(task_id = %task.id, %reason, ?tier, "knowledge: falling back to a generic harness");
-        }
-        // ADR-0069 D3 / D6（Phase 114）: `routing` を持つ execute タスクは、lane を決定的な policy
-        // （TaskFeatures → 規則表 → 組織の天井）とリトライのエスカレーションで決める。人の明示・
-        // System の tier はそのまま（記録だけ）。残量による調整はこの後の `select_tier`（別の層）。
-        // ADR-0074 D5.3（Phase F1）: planner run は lane を丸めない固定の `[execution.planner]
-        // tier`（既定 standard。E3〜E6 は frontier 固定だった）。人が Task に `tier:frontier` を
-        // 明示していれば `TierSource::Human` として記録する。D21: WU の run は WU の view
-        // （objective/acceptance/budget/genre/features を差し替えたもの）で lane を決める。
-        let (mut lane_decision, escalation_audit) = if is_planner_dispatch {
-            let tier = task.worker_hint.tier;
-            let (source, rule_id, reason) = if planner_human_frontier {
-                (
-                    task_core::TierSource::Human,
-                    "planner/human-frontier".to_string(),
-                    "human explicitly set tier:frontier on this task; the planner run \
-                     inherits it (ADR-0074 D5.3)"
-                        .to_string(),
-                )
-            } else {
-                (
-                    task_core::TierSource::System,
-                    format!("planner/system-{}", tier_label(tier)),
-                    "ADR-0074 D5.3: planner run runs at [execution.planner] tier, fixed by \
-                     celeris code"
-                        .to_string(),
-                )
-            };
-            (
-                Some(task_core::LaneDecision {
-                    lane: tier,
-                    proposed: tier,
-                    source,
-                    rule_id,
-                    policy_version: task_core::LANE_POLICY_VERSION.to_string(),
-                    features: task_core::TaskFeatures::infer(&task),
-                    reasons: vec![reason],
-                    clamped_by: None,
-                    hint: None,
-                    escalation: None,
-                }),
-                None,
-            )
-        } else if let Some(wu) = &current_wu {
-            // WU の lane は task の lane を上限にする（ADR-0074 D5.2）。軌跡 escalation は task の
-            // run だけに掛け、WU の retry では上げない（ADR-0072 D21）。
-            (self.decide_lane_for_work_unit(&task, wu)?, None)
-        } else {
-            self.decide_lane(&task)?
-                .map_or((None, None), |(decision, audit)| (Some(decision), audit))
+        let disk = input.place.disk.take().flatten();
+        let is_planner_dispatch = admitted.planner_run;
+        // admit は route を受け、variant の pin を確かめた後でだけ起動へ進む。
+        let (Some(route), Some((pick, adapter, llm_route)), Some(Ok(campaign_pin))) =
+            (route, launched, campaign_pin)
+        else {
+            return admission_contract_broken(task.id, "launch: route, launch or variant pin");
         };
-        // `routing.mode = decision_assisted`（既定 fixed では何もしない）: 分類段の結果で lane を引き上げ得る。
-        let mut lane_assist_record = None;
-        if !is_planner_dispatch && let Some(decision) = lane_decision.as_mut() {
-            if self.defer_for_classification(&task, current_wu.as_ref()) {
-                return Ok(false);
-            }
-            let (record, held) = self.apply_lane_assist(&task, current_wu.as_ref(), decision)?;
-            if held {
-                return Ok(false);
-            }
-            lane_assist_record = record;
-        }
-        if let Some(decision) = &lane_decision {
-            task.worker_hint.tier = decision.lane;
-        }
-        // ADR 2026-10-11 llm-source-harness-selection: harness → 宣言順の source×model →
-        // `(source, account)` の admission を `select_route` だけで決め、その route の adapter と
-        // worker に渡す `SelectedLlmRoute` を作る。選べなければ起動しない（別の source へ倒さない）。
-        let route_input = route_select::RouteInput {
-            task_id: task.id.to_string(),
-            harness: {
-                let mut request = route_select::harness_request_for(&task);
-                if is_planner_dispatch {
-                    request.execution_class = Some("planner".into());
-                }
-                request
-            },
-            model_hint: None,
-            lane: Some(tier_label(task.worker_hint.tier).to_string()),
-            cos,
-        };
-        let run_id = ulid::Ulid::new().to_string();
-        // Capture the task-features snapshot before selection. The selector, route_decisions row,
-        // and RoutingDecided event must all refer to this same content-addressed input.
-        let route_features = lane_decision.as_ref().and_then(|decision| {
-            match self.store.record_route_features(
-                task_core::route_extract::Subject {
-                    kind: if current_wu.is_some() { "work_unit" } else { "task" }.to_owned(),
-                    id: current_wu
-                        .as_ref()
-                        .map(|wu| wu.id.clone())
-                        .unwrap_or_else(|| task.id.to_string()),
-                },
-                Some(task_core::route_extract::RouteFeatureContext {
-                    lane: Some(
-                        task_core::model_catalog::assignments::tier_str(task.worker_hint.tier)
-                            .to_owned(),
-                    ),
-                    harness: task.harness_id.as_ref().map(ToString::to_string),
-                    task_features_v69: Some(decision.features),
-                }),
-            ) {
-                Ok(features) => Some(task_core::RouteFeaturesRef {
-                    schema: features.schema,
-                    template: features.template,
-                    hash: features.hash,
-                    decision: None,
-                }),
-                Err(error) => {
-                    tracing::warn!(task_id = %task.id, %error, "routing feature extraction failed; dispatch continues without snapshot");
-                    None
-                }
-            }
-        });
-        // task 欄の routing 固定（ADR 2026-10-16-mlsys-measure-task-routing）。無ければ従来（config）。
-        let routing_override = lane_assist::task_routing_override(self.store.as_ref(), task.id);
-        let route_context = route_select::RouteContext {
-            run_id: Some(run_id.clone()),
-            features: route_features.clone(),
-            work_unit_id: current_wu.as_ref().map(|wu| wu.id.clone()),
-            evidence_mode: routing_override
-                .as_ref()
-                .map(|o| o.evidence_mode)
-                .unwrap_or_default(),
-            evidence_version: routing_override
-                .as_ref()
-                .and_then(|o| o.evidence_table_id.clone()),
-            priority_override: None,
-        };
-        let (mut route_outcome, mut route_trace) =
-            self.select_route_with(&route_input, &route_context);
-        // 付記 S2-11・S5-3: `route_priority` の compare と canary。compare と canary の Rust の側は記録だけ。
-        // TS の側で検証を通った TS の候補列が Rust と違えば、その列で同じ harness を選び直す。
-        if let Some(column) =
-            self.compare_route_priority(task.id, &run_id, &route_input, &route_trace)
-        {
-            let context = route_select::RouteContext {
-                priority_override: Some(column),
-                ..route_context
-            };
-            (route_outcome, route_trace) = self.select_route_with(&route_input, &context);
-        }
-        if let (Some(record), Some(decision)) = (lane_assist_record, route_trace.decision.as_mut())
-        {
-            decision.lane_assist = Some(record);
-        }
-        // task 欄で routing を固定した task だけ、解決結果（mode・出自・下段・根拠表・online 更新）を判断 record に残す。
-        if routing_override.is_some()
-            && let Some(decision) = route_trace.decision.as_mut()
-        {
-            decision.routing_resolved = Some(task_core::route_select::resolve_routing(
-                self.routing_mode,
-                routing_override.as_ref(),
-            ));
-        }
-        let launch = match &route_outcome {
-            Ok(pick) => self
-                .route_adapter(pick)
-                .and_then(|adapter| Ok((adapter, self.route_launch_target(pick)?)))
-                .map(|(adapter, selected)| (pick.clone(), adapter, selected))
-                .map_err(Some),
-            Err(_) => Err(None),
-        };
-        let (pick, adapter, llm_route) = match launch {
-            Ok(launch) => {
-                self.warned_unroutable.remove(&task.id);
-                launch
-            }
-            Err(launch_error) => {
-                self.note_route_refusal(
-                    task.id,
-                    &route_input,
-                    &route_outcome,
-                    &route_trace,
-                    launch_error.as_ref(),
-                )?;
-                return Ok(false);
-            }
-        };
-        // ADR 2026-10-15-mlsys-min D4: 未登録の credential を要する経路は、この unit だけを待機へ移す。
-        if self.credential_gate_hold(&task, current_wu.as_ref(), &pick)? {
-            return Ok(false);
-        }
+        let (run_id, route_input, route_features, route_outcome, mut route_trace) = route;
         let adapter_id = adapter.id().to_string();
         let source_id = pick.candidate.source.to_string();
         let model = pick.candidate.model.to_string();
-        let account_adapter = self
-            .llm_route_registry
-            .sources
-            .get(&pick.candidate.source)
-            .and_then(|s| route_select::account_adapter_for_source_kind(s.kind.as_ref()));
+        let account_adapter = self.routing.source_account_adapter(&pick.candidate.source);
         // The pool account of an OAuth source (other sources book `(source, account)` on the route only).
         let account = account_adapter.map(|_| pick.account.to_string());
-
-        // variant 付き試行は、lease と run 記録の前にもう一度 pin を確かめる（割当後に org が変わっていたら起動しない）。
-        let campaign_pin = match self.variant_run_pin(&task, Some(&llm_route)) {
-            Ok(pin) => pin,
-            Err(reason) => {
-                self.block_variant_task(&task, reason)?;
-                return Ok(false);
-            }
-        };
         let wall = Duration::from_secs(task.budget.max_wall_secs);
         let ttl = wall + self.config.lease_grace;
         let lease_started = Instant::now();
@@ -730,11 +636,7 @@ impl Dispatcher {
                 account: account.clone(),
                 // ADR-0072 D14（Phase E3）: planner run だけ `Some(Planner)`（ワーカー run は
                 // 従来どおり `None`）。
-                role: if is_planner_dispatch {
-                    Some(RunRole::Planner)
-                } else {
-                    None
-                },
+                role: is_planner_dispatch.then_some(RunRole::Planner),
                 task_role: task.role.clone(),
             },
         )?;
@@ -966,7 +868,10 @@ impl Dispatcher {
         // ADR-0079 D7（Phase R3a）: 木の節点の worker の run は `result.json` の `decisions` で決定の要求を出せる。
         // ADR-0124 D4: 直行経路の implementation run にだけ worker への節を渡す。
         if current_wu.is_none() && !is_planner_dispatch {
-            extras.direct_route = direct_route.map(direct_route_context);
+            let route = task.routing.as_ref().and_then(|r| r.route.as_ref());
+            extras.direct_route = route
+                .filter(|_| admitted.direct_route)
+                .map(direct_route_context);
         }
         extras.decision_requests = !is_planner_dispatch
             && self.config.execution.limits.tree.enabled
@@ -980,7 +885,7 @@ impl Dispatcher {
             extras.execution_planner = Some(self.execution_planner_context(
                 &task,
                 original_task_budget,
-                replan_dispatch,
+                admitted.replan,
             )?);
             // ADR-0072 D14（Phase E4b 項目3）: `[execution.planner].permission_mode`
             // （既定 `"plan"`）を、この run の実際の CLI 引数として `run_worker` に反映させる
@@ -1026,11 +931,7 @@ impl Dispatcher {
                 && let Some(dept_node) = org.iter().find(|n| n.id == dept_id)
             {
                 let effective = task_core::resolve_profile(&org, &dept_node.id);
-                extras.profile = if effective.is_trivial() {
-                    None
-                } else {
-                    Some(effective.with_task(&task))
-                };
+                extras.profile = (!effective.is_trivial()).then(|| effective.with_task(&task));
                 extras.node = Some(NodeContext {
                     id: dept_node.id.clone(),
                     name: dept_node.name.clone(),
@@ -1065,10 +966,10 @@ impl Dispatcher {
         }
         // ADR-0043 D2: 中止されたときに片付けられるよう、この run で使う作業場所を覚えておく。
         if let Some(ws) = &task_worktree {
-            self.task_workspaces.insert(task.id, ws.clone());
+            self.maint.remember_task_workspaces(task.id, ws.clone());
         }
         // ADR-0074 D4（Phase F3 quota）: 観測の `before` を記録する。ADR-0076: planner run も同じく
-        // 登録する（`on_planner_finished` が `resolve_quota_estimate` で閉じる）。
+        // 登録する（`on_planner_finished` が `RoutingRuntime::settle_quota` で閉じる）。
         self.quota_begin(account.as_deref(), account_adapter, &run_id);
         // ADR-0074「R7-11 実装時の明確化」: 上で書いた予算（planner / WU / 知識整理のフォールバック）は手元の写しにしか
         // 無い。`run_worker` は DB から task を読み直すので、実効の予算を必ず渡す（`wall` だけでなく `max_turns` も効かせる）。
@@ -1123,8 +1024,8 @@ impl Dispatcher {
             task: task.id,
             work_unit: v2_wu.as_ref().map(|w| w.id.clone()),
         };
-        self.reserve_write_set(key.clone(), write_reservation);
-        self.running.insert(
+        self.coord.reserve_write_set(key.clone(), write_reservation);
+        self.supervisor.register_run(
             key,
             RunEntry {
                 run_id,
@@ -1135,11 +1036,11 @@ impl Dispatcher {
                 account,
                 account_adapter,
                 container: container_stop,
-                cos,
+                cos: admitted.cos_run,
                 route: Some((pick.candidate.source, pick.account)),
             },
         );
-        self.scratch.admission.started(disk);
+        self.maint.admission().started(disk);
         Ok(true)
     }
 
@@ -1226,7 +1127,7 @@ impl Dispatcher {
         let mut excluded: Vec<String> = Vec::new();
         let mut candidates: Vec<(String, String, Arc<dyn WorkerAdapter>)> = Vec::new();
         let mut harnesses: Vec<(&task_core::llm_route::HarnessId, &Arc<dyn WorkerAdapter>)> =
-            self.harness_adapters.iter().collect();
+            self.routing.harness_adapters().collect();
         harnesses.sort_by(|a, b| a.0.cmp(b.0));
         for (harness, adapter) in harnesses {
             let id = adapter.id();
@@ -1315,7 +1216,7 @@ impl Dispatcher {
             adapter.id(),
             task_worker::browser::conformance_record_path().as_deref(),
         );
-        let tx = self.tx.clone();
+        let tx = self.coord.completion_sender();
         let lease = LeaseRenewal {
             ttl: self.config.idle_timeout + self.config.lease_grace,
             every: self.config.lease_grace / 2,
@@ -1331,13 +1232,13 @@ impl Dispatcher {
         } else if self.scratch_active() {
             CargoTargetPlan::Scratch {
                 settings: Box::new(self.config.scratch.clone()),
-                candidates: self.scratch.candidates.clone(),
+                candidates: self.maint.scratch_candidates(),
             }
         } else {
             CargoTargetPlan::Legacy(self.config.build_cache_dir.clone())
         };
         #[cfg(test)]
-        let test_worker_start_delay = self.test_worker_start_delay;
+        let test_worker_start_delay = self.test_hooks.worker_start_delay;
         tokio::spawn(async move {
             #[cfg(test)]
             if let Some(delay) = test_worker_start_delay {
@@ -1377,7 +1278,7 @@ impl Dispatcher {
     /// `ready_tasks` の取得件数。経路なしと分かっているタスク（`warned_unroutable`）の分だけ広げ、それらが窓を埋めて
     /// 後ろの実行可能なタスクが dispatch されない・`is_idle` が誤って真になることを防ぐ（ADR-0012 監査）。
     pub(super) fn ready_window(&self) -> usize {
-        self.max_concurrency * 4 + 16 + self.warned_unroutable.len()
+        self.coord.max_concurrency() * 4 + 16 + self.routing.warned_unroutable_count()
     }
 
     /// ADR-0043 D4: レビュー担当の必須の検査コマンド（ADR 2026-10-23-required-checks-bound-to-candidate:
@@ -1431,7 +1332,7 @@ impl Dispatcher {
                 task_core::retry_policy::attempt_history_with_interval(task, &events);
             let thresholds = task_core::EscalationThresholds {
                 org_ceiling: ceiling.clone(),
-                ..self.dispatch_routing.escalation.clone()
+                ..self.routing.escalation().clone()
             };
             let policy = task_core::EscalationPolicy::for_task_with_thresholds(
                 task,
@@ -1626,9 +1527,9 @@ impl Dispatcher {
         launch_error: Option<&RouteLaunchError>,
     ) -> Result<(), DispatchError> {
         if !matches!(outcome, Err(route_select::RouteFailure::NoEligible(_))) {
-            self.unroutable.insert(task_id);
+            self.routing.mark_unroutable(task_id);
         }
-        if !self.warned_unroutable.insert(task_id) {
+        if !self.routing.warn_unroutable_once(task_id) {
             return Ok(());
         }
         match (outcome, launch_error) {
@@ -1712,14 +1613,6 @@ fn describe_escalation(audit: &task_core::EscalationAudit) -> String {
     }
 }
 
-/// ADR 2026-10-11-task-wait-reasons M3: クラスタ待ち。
-fn cluster_wait(cluster_id: &str, detail: &str) -> task_core::TaskWait {
-    task_core::TaskWait::Cluster {
-        cluster_id: cluster_id.to_string(),
-        detail: detail.to_string(),
-    }
-}
-
 /// The lane label kept on the routing request (the default route policy does not read it).
 pub(super) fn tier_label(tier: task_core::Tier) -> &'static str {
     match tier {
@@ -1727,4 +1620,34 @@ pub(super) fn tier_label(tier: task_core::Tier) -> &'static str {
         task_core::Tier::Standard => "standard",
         task_core::Tier::Cheap => "cheap",
     }
+}
+
+/// ADR 2026-11-14 dispatch-admission-order D2: WU の gate（dispatcher の非公開の型）を admit の要る値に落とす。
+fn admission_unit(gate: &WuDispatchGate) -> AdmissionUnit {
+    match gate {
+        WuDispatchGate::Atomic => AdmissionUnit::Atomic,
+        WuDispatchGate::RunWorkUnit(wu) => AdmissionUnit::WorkUnit {
+            budget: wu.spec.budget,
+            phased: wu.phase.is_some(),
+        },
+        WuDispatchGate::RunPlanner { replan } => AdmissionUnit::Planner { replan: *replan },
+        WuDispatchGate::StartIntegration(_) => AdmissionUnit::StartIntegration,
+        WuDispatchGate::FinalReview => AdmissionUnit::FinalReview,
+        WuDispatchGate::Skip => AdmissionUnit::Skip,
+    }
+}
+
+/// WU の gate が走らせる WU（`RunWorkUnit` のときだけ）。
+fn gate_wu(gate: &Option<WuDispatchGate>) -> Option<&task_core::WorkUnitRow> {
+    match gate {
+        Some(WuDispatchGate::RunWorkUnit(wu)) => Some(wu),
+        _ => None,
+    }
+}
+
+/// admit の契約（fact を求める前と起動の前に、前提の値を dispatch_one が集めている）が崩れたときの見送り。
+/// `Err` は tick の後ろの task の dispatch も打ち切るので返さず、記録して task を ready のまま次の tick に回す。
+fn admission_contract_broken(task_id: TaskId, missing: &str) -> Result<bool, DispatchError> {
+    tracing::error!(%task_id, missing, "dispatch admission contract broken; task left ready");
+    Ok(false)
 }

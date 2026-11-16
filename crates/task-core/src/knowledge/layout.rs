@@ -28,9 +28,6 @@ use super::{CandidateOp, IndexItem, PathError, page_path, slugify};
 /// ディレクトリも分類として通る（[`Layout::new`]）。
 pub const ENVIRONMENT_CATEGORIES: [&str; 5] = ["celeris", "clusters", "hosts", "servers", "tools"];
 
-/// 知識のページを置いてよい最上位のディレクトリ（`skills/`・`_inbox/`・`_retired/` は別の道具の場所）。
-pub const TOP_DIRS: [&str; 4] = ["user", "environment", "projects", "experience"];
-
 /// `user/` の正準ページ（`celerisctl knowledge init` の雛形。ファイル名の stem と題名）。
 /// ここに当たる候補は**必ずこのページに入れる**（別のページを作らない）。
 pub const USER_CANONICAL: [(&str, &str); 4] = [
@@ -86,13 +83,6 @@ impl Layout {
             pages,
             today: today.into(),
         }
-    }
-
-    /// 知っている案件の slug（`None` は案件を知らない）。
-    pub fn project_slugs(&self) -> Option<Vec<String>> {
-        self.projects
-            .as_ref()
-            .map(|ps| ps.iter().map(|p| p.slug.clone()).collect())
     }
 }
 

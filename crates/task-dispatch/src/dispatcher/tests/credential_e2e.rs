@@ -548,7 +548,7 @@ async fn credential_wait_notifies_through_the_outbox_without_any_run_over_full_t
     let e = E2e::new();
     let mut d = e.dispatcher();
     let clock = Arc::new(StdMutex::new(*e.clock.lock().unwrap()));
-    d.test_now = Some(clock.clone());
+    d.test_hooks.now = Some(clock.clone());
     d.config.min_free_disk_pct = 0.0;
     // ADR 2026-11-11-cos-skill-sync D3: CoS skills that fit, so the only notice is the wait's.
     d.config.knowledge.root = e.dir.path().join("knowledge");

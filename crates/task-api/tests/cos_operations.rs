@@ -29,10 +29,6 @@ fn cos_events(env: &TestEnv) -> Vec<(String, Value)> {
     .collect()
 }
 
-fn count(env: &TestEnv, sql: &str) -> i64 {
-    db(env).query_row(sql, [], |row| row.get(0)).expect("count")
-}
-
 #[tokio::test]
 async fn cos_chat_ops_api_rejects_paths_outside_the_allowlist_with_reasoned_events() {
     let env = admin_env();

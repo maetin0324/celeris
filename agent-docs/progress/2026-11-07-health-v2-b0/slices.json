@@ -1436,6 +1436,11 @@
    "write_set": [
     "^crates/[a-z-]+/src/[a-z_/]+\\.rs$",
     "^crates/[a-z-]+/(tests/[a-z_/]+)\\.rs$",
+    "^crates/[a-z-]+/src/[a-z0-9_/]+\\.rs$",
+    "^crates/[a-z-]+/(tests/[a-z0-9_/]+)\\.rs$",
+    "^docs/api/v1/[a-z0-9_.-]+\\.json$",
+    "^web/api/generated/schema\\.json$",
+    "^tests/e2e/tests/plan_scenarios\\.rs$",
     "^crates/task-core/migrations/[0-9]{4}_[a-z0-9_]+\\.sql$",
     "^config/[a-z0-9_.-]+\\.toml$",
     "^scripts/scratch/.*$",

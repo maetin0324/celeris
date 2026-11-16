@@ -46,11 +46,6 @@ fn general(env: &TestEnv) -> task_core::chat::ChatThread {
         .thread
 }
 
-fn count(env: &TestEnv, sql: &str) -> i64 {
-    let conn = rusqlite::Connection::open(&env.db_path).expect("db");
-    conn.query_row(sql, [], |r| r.get(0)).expect("count")
-}
-
 fn assistant_replies(env: &TestEnv, thread: &str) -> i64 {
     let conn = rusqlite::Connection::open(&env.db_path).expect("db");
     conn.query_row(

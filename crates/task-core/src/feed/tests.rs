@@ -331,3 +331,30 @@ fn notification_feed_batch_records_in_one_write_and_skips_known_sources() {
     assert!(s.notice_record_batch(&[], &[]).unwrap().is_empty());
     assert_eq!(s.lock_counts().since(before).writer, 0);
 }
+
+/// 不変条件: 走査位置（`feed_cursor_put`）は、それが覆う行と同じ transaction で動く。途中で失敗すれば
+/// 記録も走査位置も残らない。上の試験は成功の経路しか見ないので、走査位置を別の接続や autocommit で
+/// 書く退行（rollback 後も位置だけ進む）を検出できない。
+#[test]
+fn notification_feed_batch_rolls_back_rows_and_cursors_together() {
+    let s = store();
+    s.feed_cursor_set("events", "1").unwrap();
+    s.lock()
+        .unwrap()
+        .execute_batch(
+            "CREATE TRIGGER reject_bad_cursor BEFORE INSERT ON feed_cursor \
+             WHEN NEW.name = 'bad' BEGIN SELECT RAISE(ABORT, 'rejected'); END;",
+        )
+        .unwrap();
+    let failed = s.notice_record_batch(
+        &[ev("event:7", NoticeKind::TaskDone, "g", "七", T0)],
+        &[("events", "7".to_string()), ("bad", "x".to_string())],
+    );
+    assert!(failed.is_err());
+    assert_eq!(s.feed_cursor_get("events").unwrap().as_deref(), Some("1"));
+    assert!(
+        s.notice_sources_known(&["event:7".into()])
+            .unwrap()
+            .is_empty()
+    );
+}

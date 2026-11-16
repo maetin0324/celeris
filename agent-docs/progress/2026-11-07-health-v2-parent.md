@@ -22,6 +22,17 @@ closeout では、子がすべて Done であること、各子の成果が main
   （V0 の run の成果物。置き場所は下の「V0 の最終報告」）。release 候補は `bae3149de834` で、2026-11-15T23:51:27Z から本番の current。
 - 本番昇格・credential・予算・他 repo について、健全性v2 の task と worker は本番昇格・credential の値の変更・予算の増額・他 repo の改変をしていない（根拠は下の節）。
 
+## 受け入れ条件との対応
+条件の原文は本番 DB の `tasks.json` の `acceptance`（task 01M6TYV9DTZESAJJMXRQVGZ56V、python3 の sqlite3 で `mode=ro` で読んだ）。
+
+| # | 条件（原文） | 根拠（この file の節） |
+|---|---|---|
+| 0 | 子 12 件（B0・G1〜G4・R1〜R6・V0）がすべて done で、各子の成果が main に入っている | 「結論」1〜3 番目、「子 12 件」の表、「証拠」の `celerisctl show`・`git merge-base --is-ancestor`・`git rev-list --count`・`git grep` |
+| 1 | V0 の最終報告が成果物にあり、機能を保持したまま meaningful simplification を示している（file 分割・行の付け替え・テストの削除だけを成功としていない） | 「結論」4 番目、「V0 の最終報告」と「meaningful simplification の要点（V0 の進捗からの引用）」 |
+| 2 | 本番昇格・credential 変更・予算増額・他の実ユーザー repo の改変をしていない | 「結論」5 番目、「本番昇格・credential・予算・他 repo の改変」。未確認の 1 点は「未解決」4 |
+
+web e2e を含む条件は V0（01M6TYVJT97XH88TEEAVRD7JK6）の受け入れ条件 0 で、上の表の 3 条件には無い。V0 の受け入れ条件 0 の web e2e の部分の状態は「未解決」2。
+
 ## 子 12 件
 | 子 | task id | status | 進捗 file | branch が main の祖先 |
 |---|---|---|---|---|
@@ -85,6 +96,7 @@ G1 の進捗 file の front matter は `status: running` のまま（task は Do
 - `Merge branch 'main' into celeris-wu/01M6TYV9DTZESAJJMXRQVGZ56V/closeout` — main の取り込み（衝突なし）。
 - `health-v2 親 closeout: 子 12 件の取り込みを確かめ、親の進捗 file を書く` — この file を足した。変更は `agent-docs/progress/` の下だけ。
 - `health-v2 親 closeout: 進捗に提出時の HEAD の検査の結果を書く` — 検査の結果の節に clippy の結果を書いた。
+- `health-v2 親 record-fix: 未解決 2 を V0 の受け入れ条件 0 の記述に直し、受け入れ条件との対応の節を足す` — final review の差し戻し（未解決 2 が web e2e の条件の持ち主の task を取り違えていた）を直した。変えた path はこの file だけ。
 
 ## 証拠（提出時の HEAD で実行。基準は `git merge-base HEAD main`、WU は `$CELERIS_WU_BASE`）
 - `celerisctl show <id>`（子 12 件）→ 12 件とも `status: Done`。
@@ -92,6 +104,7 @@ G1 の進捗 file の front matter は `status: running` のまま（task は Do
 - `git merge-base --is-ancestor celeris/<id> main`（子 12 件）→ 12 件とも exit 0。`git rev-list --count main..celeris/<id>` → 12 件とも 0。
 - `git grep -l "^tasks:.*<id>" main -- agent-docs/progress` と同じ command の `HEAD` 版 → 子 12 件とも main と HEAD で同じ file の一覧（上の表の file を含む）。
 - 本番 DB の読み取り（python3 の sqlite3、`mode=ro`）: 子孫 53 task の status と repo、events の種類、`config_events`。
+- record-fix（2026-11-16）: 本番 DB の `tasks.json` の `acceptance` を python3 の sqlite3（`mode=ro`）で読んだ。親 01M6TYV9DTZESAJJMXRQVGZ56V の条件 0〜2 と、V0 01M6TYVJT97XH88TEEAVRD7JK6 の条件 0 の原文は、この file の文字列と完全に一致する（python3 の `in` で 4 件とも True）。web e2e を含むのは V0 の条件 0 だけ。
 - 検査の結果は下の節。
 
 ## 検査の結果（提出時の HEAD で実行）
@@ -107,13 +120,23 @@ G1 の進捗 file の front matter は `status: running` のまま（task は Do
 - 範囲: `git diff --name-only main HEAD` → この file の 1 path。`sh "$CELERIS_WU_SCOPE_PATHS"` は main の取り込みを含むので 458 path を出す
   （取り込んだ main の path とこの file）。
 
+### record-fix の検査（提出時の HEAD で実行。基準は `$CELERIS_WU_BASE`）
+- `sh scripts/dev/check-doc-links.sh` → exit 0。`sh scripts/dev/check-adr-numbers.sh` → exit 0（448 files）。
+- `sh scripts/dev/progress-index.sh --check` → exit 0。`python3 scripts/dev/check-human-text.py --root .` → exit 0（0 findings）。
+- `bash scripts/dev/test-affected.sh` → exit 0（repo-health verdict=pass、new=0・worsened=0、docs だけで試験対象なし）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（54 秒）。`cargo fmt --all -- --check` → exit 0。
+- 範囲: `git diff --name-only $CELERIS_WU_BASE HEAD` と `sh "$CELERIS_WU_SCOPE_PATHS"` → この file の 1 path。
+
 ## 未解決
 1. G1 の進捗 file の front matter が `status: running`・`updated: 2026-11-07` のまま（task は Done、branch は main の祖先）。G1 の記録の更新は
    この closeout の範囲外として変えていない。
-2. 親 task の受け入れ条件 0 の「web e2e が通る」は文字どおりには満たしていない。web の e2e の 18 件は健全性v2 の基準 `5923a76c9aa0` でも落ちる
-   既存の不合格で、修正と release gate への追加は task 01M7H1RNG5C5AA76HNB2M9M098 が扱う（V0 の進捗、人の決定）。
-3. V0 の未解決 1〜6（scratch の target の引き継ぎの v8 の link-search、gate.json の `cargo_test.passed`、不変条件の未検証 2 行と一部だけの 12 行、
-   複数の書き手の event 種類の増加と `route_judgments`、R4 と R5 の帰属の重なり）は V0 の進捗のとおり残っている。
+2. V0（01M6TYVJT97XH88TEEAVRD7JK6）の受け入れ条件 0「最新候補 SHA で release gate（全体 tests/web e2e を含む）が通り、検証済みの release 候補と rollback/導入手順がある。本番昇格はしていない」のうち、web e2e の部分は文字どおりには満たしていない。
+   release gate に web の e2e の段は無い。運用者が `bae3149de834` で流した web の e2e は 297 合格・8 skip・19 不合格で、再実行で 18 件が同じく落ちた。
+   18 件はすべて健全性v2 の基準 `5923a76c9aa0` でも落ちる既存の不合格で、健全性v2 の退行ではない。修正と release gate への web の e2e の追加は
+   task 01M7H1RNG5C5AA76HNB2M9M098 が扱う（人が「gate に足す」を選んだ）。根拠は V0 の進捗 [2026-11-15-health-v2-v0.md](2026-11-15-health-v2-v0.md) の
+   「結論」「人の決定」「未解決」2。
+3. V0 の未解決 1・3〜6（scratch の target の引き継ぎの v8 の link-search、gate.json の `cargo_test.passed`、不変条件の未検証 2 行と一部だけの 12 行、
+   複数の書き手の event 種類の増加と `route_judgments`、R4 と R5 の帰属の重なり）は V0 の進捗のとおり残っている。V0 の未解決 2（web の e2e）は上の 2。
 4. 案件の予算の上限を config 以外の経路で変えたかは未確認（上の「予算」）。
 
 ## 提案

@@ -25,6 +25,7 @@ use task_ops::cos_first_response::{FirstResponseWait, ThreadRun, parse_ts};
 use task_ops::root_done::{self, RootDoneFacts};
 use time::OffsetDateTime;
 
+use super::fallback::truncate;
 use super::launch::CosChatLaunch;
 use crate::dispatcher::Dispatcher;
 use crate::root_done_probe::{
@@ -56,15 +57,6 @@ project.status_put）に書くこと。";
 
 fn message_key(task_id: TaskId, seq: u64) -> String {
     format!("root-done:{}", root_done::summary_key(task_id, seq))
-}
-
-fn truncate(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_owned();
-    }
-    let mut out: String = text.chars().take(max.saturating_sub(1)).collect();
-    out.push('…');
-    out
 }
 
 impl CosChatLaunch {

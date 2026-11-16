@@ -19,12 +19,10 @@ use task_core::local_machine::WorkspaceRoots;
 use task_core::{Status, StoreError, TaskId, TaskStore};
 use time::OffsetDateTime;
 
-use crate::scratch::DELETING_PREFIX;
+use crate::scratch::{CARGO_LOCK, profile_dirs};
 
 /// cargo が target の根に置く印。
 pub const CACHEDIR_TAG: &str = "CACHEDIR.TAG";
-/// cargo が profile dir に置き、build の間 flock する file。
-pub const CARGO_LOCK: &str = ".cargo-lock";
 /// Only this cleaner owns these tombstones.
 pub const TARGET_DELETING_PREFIX: &str = ".deleting-cargo-target-";
 /// 作業場所の中で探す target の相対 path（各 worktree の直下）。
@@ -51,29 +49,6 @@ fn sorted_children(dir: &Path) -> Vec<(String, PathBuf)> {
         .map(|e| (e.file_name().to_string_lossy().into_owned(), e.path()))
         .collect();
     out.sort();
-    out
-}
-
-/// `<target>/<profile>` と `<target>/<triple>/<profile>` のうち `.cargo-lock` を持つ実 dir（名前順）。
-pub fn profile_dirs(target: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    for (name, p) in sorted_children(target) {
-        if name.starts_with(DELETING_PREFIX) || !is_real_dir(&p) {
-            continue;
-        }
-        if is_real_file(&p.join(CARGO_LOCK)) {
-            out.push(p);
-            continue;
-        }
-        for (sub, q) in sorted_children(&p) {
-            if !sub.starts_with(DELETING_PREFIX)
-                && is_real_dir(&q)
-                && is_real_file(&q.join(CARGO_LOCK))
-            {
-                out.push(q);
-            }
-        }
-    }
     out
 }
 

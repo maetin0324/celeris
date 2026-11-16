@@ -19,9 +19,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use super::build_outputs::{RemovedBuildOutput, remove_stale_build_outputs};
+use super::build_outputs::{RemovedBuildOutput, profile_dirs, remove_stale_build_outputs};
 use super::{CargoTuning, Pool, TARGET_SUBDIR, rfc3339};
-use crate::workspace_targets::profile_dirs;
 
 pub const SEEDS_DIR: &str = "seeds";
 /// `seeds/<repo-key>/current`（世代ディレクトリへの symlink）。
@@ -668,7 +667,7 @@ pub(super) fn unit_hash(stem: &str) -> Option<&str> {
 }
 
 /// 写した target から workspace member の成果物を消す（seed の checkout の path を焼いているため）。
-/// `target/` の下の profile dir（`.cargo-lock` を持つ dir。`<triple>/<profile>` も。`workspace_targets::profile_dirs`）
+/// `target/` の下の profile dir（`.cargo-lock` を持つ dir。`<triple>/<profile>` も。`build_outputs::profile_dirs`）
 /// ごとに、dep-info が member を
 /// 指す unit の `deps/<unit>.*`・`.fingerprint/*-<hash>`・`build/<pkg>-*` と、`incremental/`・`examples/`・profile
 /// 直下の bin を消す。

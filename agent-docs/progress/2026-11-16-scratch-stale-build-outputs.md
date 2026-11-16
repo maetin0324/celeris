@@ -20,7 +20,8 @@ completed: 2026-11-16
 ## 変更（commit の件名）
 - `ADR: scratch の引き継ぎ・seed の写しの後に元の場所を指す build 出力を消す` — 実装より先に ADR を置いた。
 - `phase 1: scratch の引き継ぎ・seed の写しの後に元の場所を指す build 出力を消す` — `crates/task-worker/src/scratch/build_outputs.rs`（新規。`remove_stale_build_outputs`・`RemovedBuildOutput`）、`scratch.rs` の `allocate_locked`、`scratch/reflink.rs` の `seed_target`・`TargetOrigin`・`TargetOriginRecord`、試験 `crates/task-worker/src/scratch/tests/stale_build_outputs.rs`、`docs/architecture-map.md` の scratch の行、`docs/ops/local-disk-growth.md` の `target-origin.json` の説明。
-- `phase 1: profile の dir の走査を workspace_targets::profile_dirs に一本化する` — repo-health の `dup.public-surface` が新しい `profile_dirs` と既存の `workspace_targets::profile_dirs` の重複を new で出したので、既存の方（`.cargo-lock` を持つ dir）を `build_outputs` と `prune_workspace_artifacts` の両方で使うようにした。
+- `phase 1: profile の dir の走査を workspace_targets::profile_dirs に一本化する` — repo-health の `dup.public-surface` が新しい `profile_dirs` と既存の `workspace_targets::profile_dirs` の重複を new で出したので、既存の方（`.cargo-lock` を持つ dir）を `build_outputs` と `prune_workspace_artifacts` の両方で使うようにした。この形では `scratch` から `workspace_targets` への依存が増え、repo-health の `deps.cycle` が worsened（task-worker の 6 module の循環）で落ちた。
+- `phase 1: profile_dirs と CARGO_LOCK を scratch::build_outputs へ移し workspace_targets から使う` — 上の循環を直した。`workspace_targets` は前から `scratch` に依存するので、関数を `scratch` 側へ移して向きを揃えた。実装は 1 つ（`.cargo-lock` を持つ実 dir、`.deleting-*` と symlink は見ない）で、`workspace_targets`・`prune_workspace_artifacts`・新しい処理が使う。
 - `phase 1: 進捗ファイルに検査の結果と本番への移行を書く` — この file。
 
 ## 試験（守る不変条件と、既存の試験で検出できない理由）

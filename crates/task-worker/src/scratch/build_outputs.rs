@@ -2,7 +2,8 @@
 //! cargo が付け替えない build script の出力（`root-output` の OUT_DIR の外を指す `rustc-link-search`）が pool の
 //! 別の場所（`targets/`・`seeds/` の下。引き継ぎ元・seed の世代）を指す package の build の出力を消す。
 //! 次の build で cargo は build script を再実行し、その package を作り直す（`cargo clean -p <pkg>` と同じ効果）。
-//! 判定は path だけで行い、dir が今在るかは見ない。**LLM は呼ばない**。
+//! 判定は path だけで行い、dir が今在るかは見ない。cargo の profile の dir の見つけ方（`profile_dirs`）もここに置く。
+//! **LLM は呼ばない**。
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -11,8 +12,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::reflink::{remove_any, unit_hash};
-use super::{Pool, seeds_dir};
-use crate::workspace_targets::profile_dirs;
+use super::{DELETING_PREFIX, Pool, seeds_dir};
 
 /// `rustc-link-search` の値の前置き（cargo の `-L KIND=PATH`）。
 const LINK_SEARCH_KINDS: [&str; 5] = ["native=", "dependency=", "crate=", "framework=", "all="];
@@ -27,6 +27,49 @@ pub struct RemovedBuildOutput {
     pub link_search: Vec<String>,
     /// 消した `build/`・`.fingerprint/` の dir と `deps/` の file の数。
     pub removed_entries: usize,
+}
+
+/// cargo が profile の dir に置き、build の間 flock する file（`workspace_targets` の lock もこれを見る）。
+pub const CARGO_LOCK: &str = ".cargo-lock";
+
+/// `<target>/<profile>` と `<target>/<triple>/<profile>` のうち `.cargo-lock` を持つ実 dir（名前順。symlink は辿らず、
+/// `.deleting-*` は見ない）。scratch の写しの掃除（`prune_workspace_artifacts`・`remove_stale_build_outputs`）と
+/// 作業場所の target の掃除（`workspace_targets`）が使う。
+pub fn profile_dirs(target: &Path) -> Vec<PathBuf> {
+    fn real(path: &Path, dir: bool) -> bool {
+        std::fs::symlink_metadata(path)
+            .map(|m| {
+                let t = m.file_type();
+                if dir { t.is_dir() } else { t.is_file() }
+            })
+            .unwrap_or(false)
+    }
+    fn children(dir: &Path) -> Vec<PathBuf> {
+        let Ok(rd) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        let mut out: Vec<PathBuf> = rd
+            .flatten()
+            .filter(|e| !e.file_name().to_string_lossy().starts_with(DELETING_PREFIX))
+            .map(|e| e.path())
+            .filter(|p| real(p, true))
+            .collect();
+        out.sort();
+        out
+    }
+    let mut out = Vec::new();
+    for p in children(target) {
+        if real(&p.join(CARGO_LOCK), false) {
+            out.push(p);
+            continue;
+        }
+        out.extend(
+            children(&p)
+                .into_iter()
+                .filter(|q| real(&q.join(CARGO_LOCK), false)),
+        );
+    }
+    out
 }
 
 /// 元の場所の根（pool の `targets/` と `seeds/`。設定の path と実体の path の両方）。

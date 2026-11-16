@@ -8,9 +8,8 @@
 //! （root-output の下・外で元の場所でない・外で元の場所）。本物の cargo は走らせず、偽の build 出力を置く。
 
 use super::*;
-use crate::workspace_targets::CARGO_LOCK;
 
-/// cargo の profile の dir（`.cargo-lock` と `.fingerprint/`。`workspace_targets::profile_dirs` が見る印）を作る。
+/// cargo の profile の dir（`.cargo-lock` と `.fingerprint/`。`profile_dirs` が見る印）を作る。
 fn make_profile(profile: &Path) {
     std::fs::create_dir_all(profile.join(".fingerprint")).unwrap();
     std::fs::write(profile.join(CARGO_LOCK), b"").unwrap();

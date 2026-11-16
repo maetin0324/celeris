@@ -92,6 +92,8 @@ WU の `--run` から外し、release gate（`scripts/selfdeploy/release.sh`）�
 
 ## 証拠コマンドと結果（提出時の HEAD で実行）
 - `python3 agent-docs/progress/2026-11-15-health-v2-v0/invariants.py --run agent-docs/progress/2026-11-15-health-v2-v0/invariants.json --record`: exit 0、`rows: pass=133 fail=0 release_gate=4 unverified=2`、`commands: ok=142 fail=0`、901 秒
+- 同じ command を `--record` 無しで再実行（control-ts の 2 行の書き直しの後、build の cache が温まった状態）: exit 0、`commands: ok=142 fail=0`、951 件、214 秒
+- `bash scripts/dev/test-affected.sh`: exit 0（試験対象の変更なし。docs のみ）。`cargo clippy --workspace -- -D warnings`: exit 0。`cargo fmt --all -- --check`: exit 0。`sh scripts/dev/progress-index.sh --check`: ok
 - `cargo nextest list`（13 crate）: 7,575 件、190 binary、build 130 秒
 
 ## 未解決事項

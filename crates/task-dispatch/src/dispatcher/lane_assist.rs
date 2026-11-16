@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use task_core::model::Tier;
-use task_core::model_policy::{Level, TaskFeatures};
+use task_core::model_policy::{LaneCeiling, Level, TaskFeatures};
 use task_core::route_select::{
     AssistInput, ClassifierStatus, Fact, LaneAssistRecord, LaneFacts, LaneLimits, ResolvedRouting,
     RoutingMode, WorkClass, assist_lane, resolve_routing,
@@ -138,14 +138,23 @@ impl Dispatcher {
         self.routing.defer_until_classified(&subject, now, max)
     }
 
-    fn lane_limits_for(&self, task: &Task) -> Result<LaneLimits, DispatchError> {
+    /// 担当の実効 profile と、その lane の天井（`allowed_tiers` / `budget.max_lane`。担当・組織が無ければ既定）。
+    pub(super) fn assignee_ceiling(
+        &self,
+        task: &Task,
+    ) -> Result<(Option<task_core::profile::EffectiveProfile>, LaneCeiling), DispatchError> {
         let org = self.store.org_list()?;
-        let ceiling = task
-            .assignee
-            .as_deref()
-            .filter(|_| !org.is_empty())
-            .map(|a| task_core::profile::resolve(&org, a).lane_ceiling())
+        let profile = task.assignee.as_deref().filter(|_| !org.is_empty());
+        let profile = profile.map(|a| task_core::profile::resolve(&org, a));
+        let ceiling = profile
+            .as_ref()
+            .map(|p| p.lane_ceiling())
             .unwrap_or_default();
+        Ok((profile, ceiling))
+    }
+
+    fn lane_limits_for(&self, task: &Task) -> Result<LaneLimits, DispatchError> {
+        let (_, ceiling) = self.assignee_ceiling(task)?;
         Ok(LaneLimits {
             allowed: ceiling.allowed,
             max_lane: ceiling.max_lane,

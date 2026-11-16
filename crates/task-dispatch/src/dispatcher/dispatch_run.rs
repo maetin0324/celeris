@@ -1335,16 +1335,7 @@ impl Dispatcher {
         if task.routing.is_none() || task.kind != TaskKind::Execute {
             return Ok(None);
         }
-        let org = self.store.org_list()?;
-        let profile = task
-            .assignee
-            .as_deref()
-            .filter(|_| !org.is_empty())
-            .map(|a| task_core::profile::resolve(&org, a));
-        let ceiling = profile
-            .as_ref()
-            .map(|p| p.lane_ceiling())
-            .unwrap_or_default();
+        let (profile, ceiling) = self.assignee_ceiling(task)?;
         let Some(mut decision) = task_core::model_policy::decide_for_task(task, &ceiling) else {
             return Ok(None);
         };

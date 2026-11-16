@@ -206,7 +206,11 @@ async fn work_unit_checks_pass_and_fail_like_command_criteria() {
             scope: false,
         },
     ];
-    let results = run_work_unit_checks(&ws, &checks, Duration::from_secs(5)).await;
+    let mut results = Vec::new();
+    for c in &checks {
+        let o = exec_check_outcome(&ws, &c.cmd, c.expect_exit, Duration::from_secs(5), "").await;
+        results.push((o.pass, o.reason));
+    }
     assert_eq!(
         results.iter().map(|(pass, _)| *pass).collect::<Vec<_>>(),
         vec![true, false, true]
@@ -223,10 +227,9 @@ async fn work_unit_checks_time_out() {
         expect_exit: 0,
         scope: false,
     }];
-    let results = run_work_unit_checks(&ws, &checks, Duration::from_millis(300)).await;
-    assert_eq!(results.len(), 1);
-    assert!(!results[0].0);
-    assert!(results[0].1.contains("timed out"));
+    let o = exec_check_outcome(&ws, &checks[0].cmd, 0, Duration::from_millis(300), "").await;
+    assert!(!o.pass);
+    assert!(o.reason.contains("timed out"));
 }
 
 // ---- ADR-0074 §6 F1 (g)(h): 決定的な検査の技術的な不合格を daemon がその場で直す ----
@@ -298,8 +301,8 @@ async fn review_timeout_reruns_once_with_double_timeout_before_repair() {
     let ws = ScriptedWorkspace::default();
     ws.push("cargo test", exec_timeout());
     ws.push("cargo test", exec_ok(0));
-    let (pass, reason) =
-        exec_check_with_repair_retries(&ws, "cargo test", 0, Duration::from_secs(60), "").await;
+    let CheckOutcome { pass, reason, .. } =
+        exec_check_outcome(&ws, "cargo test", 0, Duration::from_secs(60), "").await;
     assert!(pass, "{reason}");
     let calls = ws.calls.lock().unwrap();
     assert_eq!(calls.len(), 2, "{calls:?}");
@@ -320,8 +323,8 @@ async fn review_timeout_still_times_out_after_the_retry_keeps_the_timeout_reason
     let ws = ScriptedWorkspace::default();
     ws.push("cargo test", exec_timeout());
     ws.push("cargo test", exec_timeout());
-    let (pass, reason) =
-        exec_check_with_repair_retries(&ws, "cargo test", 0, Duration::from_secs(60), "").await;
+    let CheckOutcome { pass, reason, .. } =
+        exec_check_outcome(&ws, "cargo test", 0, Duration::from_secs(60), "").await;
     assert!(!pass);
     assert!(
         reason.starts_with("command timed out after 120s"),
@@ -348,8 +351,11 @@ async fn review_timeout_still_times_out_after_the_retry_keeps_the_timeout_reason
 async fn review_timeout_retry_is_capped_at_1800_seconds() {
     let ws = ScriptedWorkspace::default();
     ws.push("slow", exec_timeout());
-    let (pass, _reason) =
-        exec_check_with_repair_retries(&ws, "slow", 0, Duration::from_secs(1800), "").await;
+    let CheckOutcome {
+        pass,
+        reason: _reason,
+        ..
+    } = exec_check_outcome(&ws, "slow", 0, Duration::from_secs(1800), "").await;
     assert!(!pass);
     assert_eq!(
         ws.calls.lock().unwrap().len(),
@@ -403,7 +409,7 @@ fn only_tree_children_get_the_parent_branch_review_view() {
         }],
         dir.path(),
     );
-    let same = tree_child_review_view(root.clone(), "celeris/");
+    let same = review_view(root.clone(), "celeris/", None);
     assert_eq!(same, root);
     let parent_id = TaskId::new();
     root.tree = Some(task_core::TreeInfo {
@@ -418,7 +424,7 @@ fn only_tree_children_get_the_parent_branch_review_view() {
         }),
         base_commit: Some("0123456789abcdef0123456789abcdef01234567".into()),
     });
-    let view = tree_child_review_view(root.clone(), "celeris/");
+    let view = review_view(root.clone(), "celeris/", None);
     assert_eq!(view.acceptance.len(), root.acceptance.len());
     assert_eq!(
         view.acceptance[0].check,
@@ -535,8 +541,8 @@ async fn merge_base_failure_merges_base_deterministically() {
     ws.push(check_cmd, exec_ok(1)); // 不成立（main が先行している）
     ws.push("git merge --no-edit main", exec_ok(0)); // 衝突なく merge できた
     ws.push(check_cmd, exec_ok(0)); // 再実行したら成立
-    let (pass, reason) =
-        exec_check_with_repair_retries(&ws, check_cmd, 0, Duration::from_secs(60), "").await;
+    let CheckOutcome { pass, reason, .. } =
+        exec_check_outcome(&ws, check_cmd, 0, Duration::from_secs(60), "").await;
     assert!(pass, "{reason}");
     let calls = ws.calls.lock().unwrap();
     assert_eq!(
@@ -553,8 +559,8 @@ async fn merge_base_conflict_aborts_the_merge_and_keeps_the_failure() {
     ws.push(check_cmd, exec_ok(1));
     ws.push("git merge --no-edit main", exec_ok(1)); // 衝突
     ws.push("git merge --abort", exec_ok(0));
-    let (pass, reason) =
-        exec_check_with_repair_retries(&ws, check_cmd, 0, Duration::from_secs(60), "").await;
+    let CheckOutcome { pass, reason, .. } =
+        exec_check_outcome(&ws, check_cmd, 0, Duration::from_secs(60), "").await;
     assert!(!pass);
     assert_eq!(
         task_core::execution::classify_review_failure(&[task_core::execution::FailedCheck {

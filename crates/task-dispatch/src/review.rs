@@ -454,24 +454,14 @@ pub fn rebase_merge_base_ref(cmd: &str, parent_branch: &str) -> Option<String> {
     changed.then_some(out)
 }
 
-/// ADR-0079 D6（Phase R1c）: 最終レビューに渡す対象の task。木の子 task（`tree.parent_unit` を持つ）なら、
-/// - `Check::Command` の `merge-base --is-ancestor <main 等>` を親のブランチ `parent_branch` に置き換え
-///   （[`rebase_merge_base_ref`]。条件の数と順は変えないので `criterion_idx` はそのまま）、
-/// - 目的（reviewer run の前置きに出る）の末尾に、取り込み先と差分の基点を固定の書式で足す
-///   （[`TREE_CHILD_REVIEW_HEADING`]。main が進んでいても不合格の理由にしない）。
-///
-/// 親のブランチは段階の途中では動かない（動くのは段階末尾の統合だけ）ので、子の最終レビュー中に基点が
-/// ずれない（人の決定 4）。木の子でなければ `task` をそのまま返す（root は今どおり main と比べる）。
-pub fn tree_child_review_view(task: Task, branch_prefix: &str) -> Task {
-    review_view(task, branch_prefix, None)
-}
-
 /// ADR-0079 R5b-fix2: remote workspace の木の子の取り込み先の注記（ブランチ統合が無いので親のブランチの
 /// 行は出さない）。
 pub const TREE_CHILD_REMOTE_NOTE: &str =
     "remote workspace: ブランチ統合なし。検査はクラスタ側の worktree（remote-exec）で行う";
 
-/// 最終レビューに渡す対象の task（[`tree_child_review_view`] に remote の扱いを足したもの）。
+/// ADR-0079 D6（Phase R1c）: 最終レビューに渡す対象の task。木の子でなければ `task` をそのまま返す
+/// （root は今どおり main と比べる）。親のブランチは段階の途中では動かない（動くのは段階末尾の統合だけ）
+/// ので、子の最終レビュー中に基点がずれない（人の決定 4）。
 ///
 /// - 木の子で local: 従来どおり（`merge-base` の相手を親のブランチに置き換え、取り込み先を足す）。
 /// - 木の子で remote（`remote` が `Some` か、`task.workspace` が `Remote`）: ADR-0079 D5 のとおり
@@ -525,7 +515,7 @@ pub fn review_view(
     view
 }
 
-/// 1 回だけ command を実行して判定する（`review_task`/`run_work_unit_checks` の元の判定ロジック）。
+/// 1 回だけ command を実行して判定する（`review_task` と WU の checks の元の判定ロジック）。
 /// `label` は理由の頭に付ける接頭辞（`workspace.toml` の check だけ `"workspace.toml check: "`。
 /// それ以外は空文字で、既存の文面と 1 バイトも変わらない）。
 async fn exec_check_once(
@@ -575,7 +565,7 @@ pub(crate) struct CheckOutcome {
 }
 
 /// ADR-0074 D6.1/D6.2（Phase F1）: 決定的な検査を実行し、2 種類の技術的な不合格を daemon が
-/// その場で直してから最終判定する（LLM は使わない）。
+/// その場で直してから最終判定する（LLM は使わない）。判定と、最後に走らせたコマンドの exit・timeout を返す。
 ///
 /// - **timeout**（`command timed out after` で不合格）: 同じコマンドを 1 回だけ、timeout を 2 倍
 ///   （上限 [`REVIEW_TIMEOUT_RETRY_CAP_SECS`]）にして再実行する。通れば判定を差し替える。それでも
@@ -585,18 +575,6 @@ pub(crate) struct CheckOutcome {
 ///   衝突なく合流できれば同じ検査を再実行して判定を差し替える。衝突（または merge 自体の失敗）なら
 ///   `git merge --abort` して元の不合格のまま返す（`classify_review_failure` が `merge_base` の
 ///   repair に倒す）。
-async fn exec_check_with_repair_retries(
-    workspace: &dyn Workspace,
-    cmd: &str,
-    expect_exit: i32,
-    timeout: Duration,
-    label: &str,
-) -> (bool, String) {
-    let o = exec_check_outcome(workspace, cmd, expect_exit, timeout, label).await;
-    (o.pass, o.reason)
-}
-
-/// [`exec_check_with_repair_retries`] と同じ判定（再実行・merge-base の修復を含む）で、exit・timeout も返す。
 pub(crate) async fn exec_check_outcome(
     workspace: &dyn Workspace,
     cmd: &str,
@@ -899,25 +877,6 @@ pub async fn review_task(
         required_checks,
         command_checks,
     }
-}
-
-/// ADR-0072 D14/D6・E4 (g): WU の決定的な `checks`（`Check::Command` と同じ意味論の `Command` だけ）を
-/// 実行する。`review_task` の `Check::Command` 分岐と同じ判定（`workspace.exec` でワークスペースの中で
-/// 実際に再実行し、exit を比較する）を再利用する。呼び出し側（`dispatcher.rs`）は、1 つでも
-/// `pass = false` があれば、その run を `RunEnd::Failed{retryable: true}`（WU の retry）として扱う。
-pub async fn run_work_unit_checks(
-    workspace: &dyn Workspace,
-    checks: &[task_core::WorkUnitCheck],
-    command_timeout: Duration,
-) -> Vec<(bool, String)> {
-    let mut out = Vec::with_capacity(checks.len());
-    for c in checks {
-        let (pass, reason) =
-            exec_check_with_repair_retries(workspace, &c.cmd, c.expect_exit, command_timeout, "")
-                .await;
-        out.push((pass, reason));
-    }
-    out
 }
 
 fn check_plan_file(

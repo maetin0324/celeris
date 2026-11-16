@@ -725,7 +725,7 @@ enum Completion {
         run_since: Option<OffsetDateTime>,
         provider: ProviderId,
         result: Box<Result<RunOutcome, AdapterError>>,
-        /// `(pass, reason)` の 1 件ずつ（`review::run_work_unit_checks` の結果そのまま）。
+        /// `(pass, reason)` の 1 件ずつ（`review::exec_check_outcome` の判定）。
         check_results: Vec<(bool, String)>,
         /// ADR-0079 付記 R7-5 D1: 走らせた checks（`check_results` と同じ順）と、走らせた所。
         checks: Vec<task_core::WorkUnitCheck>,

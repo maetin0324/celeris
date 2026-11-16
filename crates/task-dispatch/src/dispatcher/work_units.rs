@@ -4,7 +4,7 @@ use super::*;
 use crate::run_settlement::{self, AskReason, ReplanOrAsk};
 
 impl Dispatcher {
-    /// ADR-0072 D14/D6・E4 (g): `wu.spec.checks` を `review::run_work_unit_checks`（review.rs の `Check::Command` 実行を再利用）で
+    /// ADR-0072 D14/D6・E4 (g): `wu.spec.checks` を `review::exec_check_outcome`（review.rs の `Check::Command` 実行を再利用）で
     /// 実行し、列の最後に health の項目（ADR 2026-11-08-health-enforcement-loop D1.2。base は `wu.base_commit`、head は WU の HEAD）を
     /// 足して、終わったら `Completion::WorkUnitChecks` を送る。`RunSupervisor` の run の表からは既に取り除かれている（`on_worker_finished` の
     /// 冒頭）ので、ここでは lease の維持や snapshot への影響は無い（review run の Command 実行と同じ扱い）。
@@ -1985,7 +1985,7 @@ const CHECK_FAILURE_SUMMARY_MAX_CHARS: usize = 1500;
 pub(super) struct WorkUnitCheckRun {
     /// 走らせた checks（`results` と同じ順）。
     pub(super) checks: Vec<task_core::WorkUnitCheck>,
-    /// `(pass, reason)` の 1 件ずつ（`review::run_work_unit_checks` の結果そのまま）。
+    /// `(pass, reason)` の 1 件ずつ（`review::exec_check_outcome` の判定）。
     pub(super) results: Vec<(bool, String)>,
     /// check を実際に走らせた所。
     pub(super) cwd: PathBuf,

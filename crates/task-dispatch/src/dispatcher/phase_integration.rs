@@ -154,7 +154,7 @@ pub(crate) struct ObservedIntegration {
 }
 
 /// 2026-10-04 統合の検査の進み具合 D1/D2: 統合の検査を順に走らせ、1 件ごとに `IntegrationCheckStarted` /
-/// `IntegrationCheckFinished` を追記し、出力をログファイルへ逐次書く。判定は `run_work_unit_checks` と同じ
+/// `IntegrationCheckFinished` を追記し、出力をログファイルへ逐次書く。判定は `exec_check_outcome` と同じ
 /// （再実行・merge-base の修復を含む）。event を書けなくても検査は続ける（見るための記録で、判定には使わない）。
 ///
 /// ADR 2026-11-08-health-enforcement-loop D1.2・D2.2: `health` があれば、検査の後に経路共通の入口で repo health を 1 回

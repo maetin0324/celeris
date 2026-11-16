@@ -11,7 +11,7 @@
 //! D4 review-result: [`failed_checks`] は決定的 check の結果の列から失敗一覧（`FailedCheck`）を作る唯一の関数で、
 //! 最終 review（verdict）・WU の checks・段の統合の checks が使う。一覧が空でなければどの経路も成功にしない
 //! （最終 review は [`judge_review`]、WU は `WorkUnitCheckRun::failure`、段の統合は repair か replan へ回す）。
-//! check の実行は今の共通実装（`review::run_work_unit_checks` など）のまま。
+//! check の実行は今の共通実装（`review::exec_check_outcome` など）のまま。
 
 use task_core::{
     Check, Criterion, Event, FailedCheck, FailedWorkUnitCheck, RepairClass, RepairDecision, RepoId,
